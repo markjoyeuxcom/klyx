@@ -13,7 +13,7 @@ import { CLUSTER_RISK_REFS, riskFor } from "./resourceRisk";
 import type { EventRowDTO, ResourceRef } from "../store/fleet";
 
 type BoardEntry = FleetBoardEntry | undefined;
-const ellipsis: React.CSSProperties = { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" };
+import { ellipsis, StatusDot } from "../chrome/primitives";
 
 export function Overview({ c }: { c: ClusterDTO }) {
   const tags = [c.env, c.region, c.provider, c.group].filter(Boolean);
@@ -48,7 +48,7 @@ export function Overview({ c }: { c: ClusterDTO }) {
       <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 16, borderBottom: "0.5px solid var(--color-border-tertiary)", paddingBottom: 12 }}>
         <div style={{ minWidth: 0 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-            <span style={{ width: 8, height: 8, borderRadius: "50%", background: stateColor[c.state] ?? "var(--color-text-tertiary)" }} />
+            <StatusDot size={8} color={stateColor[c.state] ?? "var(--color-text-tertiary)"} />
             <span style={{ fontFamily: "var(--font-mono)", fontWeight: 600, fontSize: 16 }}>{c.name}</span>
             {c.version && <Badge>{c.version}</Badge>}
           </div>
