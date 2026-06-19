@@ -1,6 +1,7 @@
 package appbridge
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -11,12 +12,16 @@ type fakeCertManagerConn struct {
 	opened, closed int
 	certs          []certmanager.Certificate
 	iss            []certmanager.Issuer
+	chain          certmanager.Chain
 }
 
 func (f *fakeCertManagerConn) OpenCertManager()                                   { f.opened++ }
 func (f *fakeCertManagerConn) CloseCertManager()                                  { f.closed++ }
 func (f *fakeCertManagerConn) CertManagerCertificates() []certmanager.Certificate { return f.certs }
 func (f *fakeCertManagerConn) CertManagerIssuers() []certmanager.Issuer           { return f.iss }
+func (f *fakeCertManagerConn) GetCertificateChain(ctx context.Context, ns, name string) (certmanager.Chain, error) {
+	return f.chain, nil
+}
 
 func TestToCertificateDTOComputesExpiry(t *testing.T) {
 	now := time.Date(2026, 6, 19, 0, 0, 0, 0, time.UTC)
@@ -57,6 +62,39 @@ func TestCertManagerServiceSnapshot(t *testing.T) {
 	}
 	if p.Issuers[0].Kind != "ClusterIssuer" || p.Issuers[0].Ready != "Failed" {
 		t.Fatalf("issuer dto: %+v", p.Issuers[0])
+	}
+}
+
+func TestGetCertificateChainMapsTree(t *testing.T) {
+	failing := &certmanager.ChainNode{Kind: certmanager.ChallengeKind, Name: "chal", Ready: certmanager.Failed, Reason: "DNSError"}
+	conn := &fakeCertManagerConn{chain: certmanager.Chain{
+		Certificate: certmanager.Certificate{Namespace: "payments", Name: "acme-demo", Ready: certmanager.Failed},
+		Issuer:      &certmanager.Issuer{Kind: certmanager.ClusterIssuerKind, Name: "lab-acme-staging", Ready: certmanager.Failed, Reason: "ACMEAccountRegistrationFailed"},
+		Requests: []certmanager.ChainNode{{
+			Kind: certmanager.CertificateRequestKind, Name: "acme-demo-1", Ready: certmanager.Failed,
+			Children: []certmanager.ChainNode{{Kind: certmanager.OrderKind, Name: "ord", Ready: certmanager.Failed,
+				Children: []certmanager.ChainNode{*failing}}},
+		}},
+		FailingLink: failing,
+	}}
+	svc := NewCertManagerService(func(string) (CertManagerConn, bool) { return conn, true }, &fakeEmitter{}, func() time.Time { return time.Now() }, time.Second)
+	dto := svc.GetCertificateChain("nelli", "payments", "acme-demo")
+	if dto.Issuer == nil || dto.Issuer.Reason != "ACMEAccountRegistrationFailed" {
+		t.Fatalf("issuer headline: %+v", dto.Issuer)
+	}
+	if len(dto.Requests) != 1 || len(dto.Requests[0].Children) != 1 || len(dto.Requests[0].Children[0].Children) != 1 {
+		t.Fatalf("chain tree not mapped: %+v", dto.Requests)
+	}
+	if dto.FailingLink == nil || dto.FailingLink.Kind != "Challenge" || dto.FailingLink.Reason != "DNSError" {
+		t.Fatalf("failing link: %+v", dto.FailingLink)
+	}
+}
+
+func TestGetCertificateChainClusterMiss(t *testing.T) {
+	svc := NewCertManagerService(func(string) (CertManagerConn, bool) { return nil, false }, &fakeEmitter{}, func() time.Time { return time.Now() }, time.Second)
+	dto := svc.GetCertificateChain("gone", "ns", "n")
+	if len(dto.Warnings) == 0 {
+		t.Fatal("expected a warning on cluster miss")
 	}
 }
 

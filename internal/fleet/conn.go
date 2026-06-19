@@ -51,6 +51,7 @@ type Conn interface {
 	CertManagerCertificates() []certmanager.Certificate
 	CertManagerIssuers() []certmanager.Issuer
 	CertManagerObject(kind, namespace, name string) (*unstructured.Unstructured, bool)
+	GetCertificateChain(ctx context.Context, ns, name string) (certmanager.Chain, error)
 	FluxEvents(ctx context.Context, kind, ns, name string) ([]workloads.EventSummary, error)
 	FluxAvailable() bool
 	FluxDiffKustomization(ctx context.Context, ns, name, path string) (fluxcli.DiffResult, error)

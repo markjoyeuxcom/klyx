@@ -158,12 +158,30 @@ export type IssuerDTO = {
   reason: string;
   message: string;
 };
+export type ChainNodeDTO = {
+  kind: string;
+  namespace: string;
+  name: string;
+  ready: string;
+  reason: string;
+  message: string;
+  children: ChainNodeDTO[];
+};
+export type CertChainDTO = {
+  certificate: CertificateDTO;
+  issuer: IssuerDTO | null;
+  requests: ChainNodeDTO[];
+  failingLink: ChainNodeDTO | null;
+  warnings: string[];
+};
 export type CertManagerSlice = {
   cluster: string | null;
   certificates: CertificateDTO[];
   issuers: IssuerDTO[];
   loading: boolean;
   selectedKey: string | null; // "<namespace>/<name>" of the inspected certificate
+  chain: CertChainDTO | null; // resolved on demand for the selected cert
+  chainLoading: boolean;
 };
 
 // "observability" removed 2026-06-10: metrics ship inline in overview/workloads/network lanes
@@ -456,6 +474,7 @@ type FleetState = {
   setCertManagerLoading: (cluster: string) => void;
   clearCertManager: () => void;
   selectCertificate: (key: string | null) => void;
+  setCertChain: (chain: CertChainDTO) => void;
   actionStatus: ActionStatus | null;
   setActionStatus: (s: ActionStatus) => void;
   clearActionStatus: () => void;
@@ -615,11 +634,12 @@ export const useFleet = create<FleetState>((set) => ({
   collapse: () => set((s) => ({ gitops: { ...s.gitops, expandedKey: null, detail: null } })),
   setDetail: (d) => set((s) => ({ gitops: { ...s.gitops, detail: d } })),
 
-  certmanager: { cluster: null, certificates: [], issuers: [], loading: false, selectedKey: null },
+  certmanager: { cluster: null, certificates: [], issuers: [], loading: false, selectedKey: null, chain: null, chainLoading: false },
   setCertManager: (cluster, certificates, issuers) => set((s) => ({ certmanager: { ...s.certmanager, cluster, certificates, issuers, loading: false } })),
-  setCertManagerLoading: (cluster) => set((s) => ({ certmanager: { ...s.certmanager, cluster, certificates: [], issuers: [], loading: true } })),
-  clearCertManager: () => set({ certmanager: { cluster: null, certificates: [], issuers: [], loading: false, selectedKey: null } }),
-  selectCertificate: (key) => set((s) => ({ certmanager: { ...s.certmanager, selectedKey: key } })),
+  setCertManagerLoading: (cluster) => set((s) => ({ certmanager: { ...s.certmanager, cluster, certificates: [], issuers: [], loading: true, selectedKey: null, chain: null, chainLoading: false } })),
+  clearCertManager: () => set({ certmanager: { cluster: null, certificates: [], issuers: [], loading: false, selectedKey: null, chain: null, chainLoading: false } }),
+  selectCertificate: (key) => set((s) => ({ certmanager: { ...s.certmanager, selectedKey: key, chain: null, chainLoading: key !== null } })),
+  setCertChain: (chain) => set((s) => ({ certmanager: { ...s.certmanager, chain, chainLoading: false } })),
   actionStatus: null,
   setActionStatus: (actionStatus) => set({ actionStatus }),
   clearActionStatus: () => set({ actionStatus: null }),

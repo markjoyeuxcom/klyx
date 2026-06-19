@@ -8,12 +8,14 @@ import (
 	"github.com/moomora/klyx/internal/certmanager"
 )
 
-// CertManagerConn is the per-cluster watch surface CertManagerService needs.
+// CertManagerConn is the per-cluster surface CertManagerService needs: the lazy
+// watch (list) plus the on-demand chain resolver.
 type CertManagerConn interface {
 	OpenCertManager()
 	CloseCertManager()
 	CertManagerCertificates() []certmanager.Certificate
 	CertManagerIssuers() []certmanager.Issuer
+	GetCertificateChain(ctx context.Context, ns, name string) (certmanager.Chain, error)
 }
 
 // CertManagerUpdatedEvent is emitted with { cluster, certificates, issuers }.
@@ -84,6 +86,23 @@ func (s *CertManagerService) pushLoop(ctx context.Context, cluster string, conn 
 			s.em.Emit(CertManagerUpdatedEvent, s.snapshot(cluster, conn))
 		}
 	}
+}
+
+// GetCertificateChain resolves a certificate's issuance chain on demand (the
+// inspector calls it when a cert is selected). Cluster-miss or resolve error
+// degrades to a warnings-only DTO so the UI can show the message.
+func (s *CertManagerService) GetCertificateChain(cluster, ns, name string) CertChainDTO {
+	conn, ok := s.lookup(cluster)
+	if !ok {
+		return CertChainDTO{Warnings: []string{"cluster not connected"}}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
+	defer cancel()
+	chain, err := conn.GetCertificateChain(ctx, ns, name)
+	if err != nil {
+		return CertChainDTO{Warnings: []string{err.Error()}}
+	}
+	return toChainDTO(chain, s.now())
 }
 
 func (s *CertManagerService) snapshot(cluster string, conn CertManagerConn) certManagerPayload {

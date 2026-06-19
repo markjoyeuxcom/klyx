@@ -54,6 +54,9 @@ func (f *fakeConn) CertManagerIssuers() []certmanager.Issuer           { return 
 func (f *fakeConn) CertManagerObject(kind, namespace, name string) (*unstructured.Unstructured, bool) {
 	return nil, false
 }
+func (f *fakeConn) GetCertificateChain(ctx context.Context, ns, name string) (certmanager.Chain, error) {
+	return certmanager.Chain{}, nil
+}
 func (f *fakeConn) FluxEvents(ctx context.Context, kind, ns, name string) ([]workloads.EventSummary, error) {
 	return nil, nil
 }

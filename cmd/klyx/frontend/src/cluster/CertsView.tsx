@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { useFleet } from "../store/fleet";
-import type { CertificateDTO, IssuerDTO } from "../store/fleet";
-import { openCertManager, closeCertManager } from "../bridge/certmanager";
+import type { CertificateDTO, IssuerDTO, ChainNodeDTO, CertChainDTO } from "../store/fleet";
+import { openCertManager, closeCertManager, getCertificateChain } from "../bridge/certmanager";
 
 const readyColor: Record<string, string> = {
   Ready: "var(--color-text-success)",
@@ -106,6 +106,15 @@ export function CertsView({ cluster }: { cluster: string }) {
     };
   }, [cluster, absent]);
 
+  // Resolve the issuance chain on demand when a certificate is selected.
+  useEffect(() => {
+    if (!cm.selectedKey || cm.cluster !== cluster) return;
+    const slash = cm.selectedKey.indexOf("/");
+    const ns = cm.selectedKey.slice(0, slash);
+    const name = cm.selectedKey.slice(slash + 1);
+    void getCertificateChain(cluster, ns, name).catch((e) => console.error("getCertificateChain", e));
+  }, [cluster, cm.selectedKey, cm.cluster]);
+
   const certs = cm.cluster === cluster ? cm.certificates : [];
   const issuers = cm.cluster === cluster ? cm.issuers : [];
   const orderedCerts = useMemo(
@@ -130,6 +139,7 @@ export function CertsView({ cluster }: { cluster: string }) {
   const expiring = certs.filter((c) => expiringSoon(c) || expired(c)).length;
   const ready = certs.filter((c) => c.ready === "Ready" && !expired(c)).length;
   const selected = visibleCerts.find((c) => keyOf(c) === cm.selectedKey) ?? null;
+  const chain = cm.chain && keyOf(cm.chain.certificate) === cm.selectedKey ? cm.chain : null;
 
   return (
     <div style={{ padding: "14px 16px", display: "flex", flexDirection: "column", gap: 12, height: "100%", minHeight: 0, overflow: "hidden", boxSizing: "border-box" }}>
@@ -193,7 +203,7 @@ export function CertsView({ cluster }: { cluster: string }) {
           </div>
 
           <div data-testid="cert-inspector" style={{ minHeight: 0, overflowY: "auto" }}>
-            {selected ? <CertInspector c={selected} issuer={resolveIssuer(selected, issuers)} /> : <EmptyInspector attention={attention} />}
+            {selected ? <CertInspector c={selected} issuer={resolveIssuer(selected, issuers)} chain={chain} chainLoading={cm.chainLoading} /> : <EmptyInspector attention={attention} />}
           </div>
         </div>
       )}
@@ -230,8 +240,13 @@ function CertRow({ c, open, onClick }: { c: CertificateDTO; open: boolean; onCli
   );
 }
 
-function CertInspector({ c, issuer }: { c: CertificateDTO; issuer: IssuerDTO | undefined }) {
-  const issuerBroken = issuer && issuer.ready !== "Ready";
+function CertInspector({ c, issuer, chain, chainLoading }: { c: CertificateDTO; issuer: IssuerDTO | undefined; chain: CertChainDTO | null; chainLoading: boolean }) {
+  // Prefer the server-resolved bound issuer (chain.issuer); fall back to the one
+  // resolved from the watched issuers list before the chain lands.
+  const boundIssuer = chain?.issuer ?? issuer;
+  const issuerBroken = boundIssuer && boundIssuer.ready !== "Ready";
+  const failing = chain?.failingLink ?? null;
+  const failKey = failing ? `${failing.kind}/${failing.namespace}/${failing.name}` : null;
   return (
     <div style={{ ...frame, padding: 14, display: "flex", flexDirection: "column", gap: 12 }}>
       <div>
@@ -246,15 +261,30 @@ function CertInspector({ c, issuer }: { c: CertificateDTO; issuer: IssuerDTO | u
       {/* A failing bound issuer is the headline for a stuck cert (M10 source pattern). */}
       {issuerBroken && (
         <div style={{ border: "0.5px solid var(--color-text-danger)", borderRadius: "var(--border-radius-md)", padding: "8px 10px", background: "var(--color-background-secondary)" }}>
-          <div style={{ fontSize: 11, color: "var(--color-text-danger)", fontWeight: 500 }}>issuer not ready: {issuer!.reason || "unknown"}</div>
-          <div style={{ ...mono, fontSize: 11, color: "var(--color-text-secondary)", marginTop: 2 }}>{issuer!.kind}/{issuer!.name}</div>
-          {issuer!.message && <div style={{ fontSize: 11, color: "var(--color-text-secondary)", marginTop: 3 }}>{issuer!.message}</div>}
+          <div style={{ fontSize: 11, color: "var(--color-text-danger)", fontWeight: 500 }}>issuer not ready: {boundIssuer!.reason || "unknown"}</div>
+          <div style={{ ...mono, fontSize: 11, color: "var(--color-text-secondary)", marginTop: 2 }}>{boundIssuer!.kind}/{boundIssuer!.name}</div>
+          {boundIssuer!.message && <div style={{ fontSize: 11, color: "var(--color-text-secondary)", marginTop: 3 }}>{boundIssuer!.message}</div>}
         </div>
       )}
 
+      <Section title="issuance chain">
+        {chainLoading ? (
+          <div style={{ fontSize: 11, color: "var(--color-text-tertiary)" }}>resolving chain…</div>
+        ) : chain && chain.requests.length > 0 ? (
+          <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+            {chain.requests.map((r) => <ChainNodeView key={`${r.kind}/${r.name}`} node={r} depth={0} failKey={failKey} />)}
+          </div>
+        ) : (
+          <div style={{ fontSize: 11, color: "var(--color-text-tertiary)" }}>no active issuance request.</div>
+        )}
+        {chain && chain.warnings.length > 0 && chain.warnings.map((w) => (
+          <div key={w} style={{ fontSize: 10, color: "var(--color-text-warning)", marginTop: 3 }}>{w}</div>
+        ))}
+      </Section>
+
       <Section title="issuer">
         <Field label="ref" value={`${c.issuerKind}/${c.issuerName}`} />
-        <Field label="health" value={issuer ? issuer.ready : "not found"} tone={issuer ? (issuer.ready === "Ready" ? "success" : "danger") : "muted"} />
+        <Field label="health" value={boundIssuer ? boundIssuer.ready : "not found"} tone={boundIssuer ? (boundIssuer.ready === "Ready" ? "success" : "danger") : "muted"} />
       </Section>
 
       <Section title="secret">
@@ -278,6 +308,32 @@ function CertInspector({ c, issuer }: { c: CertificateDTO; issuer: IssuerDTO | u
         </Section>
       )}
     </div>
+  );
+}
+
+const chainKindLabel: Record<string, string> = {
+  CertificateRequest: "request",
+  Order: "order",
+  Challenge: "challenge",
+};
+
+function ChainNodeView({ node, depth, failKey }: { node: ChainNodeDTO; depth: number; failKey: string | null }) {
+  const isFail = failKey === `${node.kind}/${node.namespace}/${node.name}`;
+  const bad = node.ready === "Failed";
+  const issuing = node.ready === "Issuing";
+  return (
+    <>
+      <div style={{ display: "flex", alignItems: "center", gap: 6, paddingLeft: depth * 14, fontSize: 11 }}>
+        <span style={{ width: 6, height: 6, borderRadius: "50%", background: readyColor[node.ready] ?? readyColor.Unknown, flexShrink: 0 }} />
+        <span style={{ color: "var(--color-text-tertiary)", width: 60, flexShrink: 0 }}>{chainKindLabel[node.kind] ?? node.kind.toLowerCase()}</span>
+        <span style={{ ...mono, ...ellipsis, color: isFail ? "var(--color-text-danger)" : "var(--color-text-secondary)" }} title={node.name}>{node.name}</span>
+        {(bad || issuing) && node.reason && (
+          <span style={{ ...mono, fontSize: 10, color: bad ? "var(--color-text-danger)" : "var(--color-text-warning)", flexShrink: 0 }} title={node.message}>{node.reason}</span>
+        )}
+        {isFail && <span style={{ fontSize: 9, padding: "0 5px", borderRadius: 3, background: "var(--color-text-danger)", color: "var(--color-background-primary)", flexShrink: 0 }}>stuck here</span>}
+      </div>
+      {node.children.map((ch) => <ChainNodeView key={`${ch.kind}/${ch.name}`} node={ch} depth={depth + 1} failKey={failKey} />)}
+    </>
   );
 }
 

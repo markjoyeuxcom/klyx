@@ -70,3 +70,60 @@ func toIssuerDTO(i certmanager.Issuer) IssuerDTO {
 		Message:   i.Message,
 	}
 }
+
+// ChainNodeDTO is one object in a certificate's issuance chain
+// (CertificateRequest / Order / Challenge) plus the objects it owns.
+type ChainNodeDTO struct {
+	Kind      string         `json:"kind"`
+	Namespace string         `json:"namespace"`
+	Name      string         `json:"name"`
+	Ready     string         `json:"ready"`
+	Reason    string         `json:"reason"`
+	Message   string         `json:"message"`
+	Children  []ChainNodeDTO `json:"children"`
+}
+
+// CertChainDTO is a Certificate's resolved issuance chain: the bound issuer's
+// health (the headline), the CertificateRequest -> Order -> Challenge tree, and
+// the deepest stuck node (failingLink). Warnings carries soft resolution errors.
+type CertChainDTO struct {
+	Certificate CertificateDTO `json:"certificate"`
+	Issuer      *IssuerDTO     `json:"issuer"`
+	Requests    []ChainNodeDTO `json:"requests"`
+	FailingLink *ChainNodeDTO  `json:"failingLink"`
+	Warnings    []string       `json:"warnings"`
+}
+
+func toChainNodeDTO(n certmanager.ChainNode) ChainNodeDTO {
+	dto := ChainNodeDTO{
+		Kind:      string(n.Kind),
+		Namespace: n.Namespace,
+		Name:      n.Name,
+		Ready:     string(n.Ready),
+		Reason:    n.Reason,
+		Message:   n.Message,
+	}
+	for _, ch := range n.Children {
+		dto.Children = append(dto.Children, toChainNodeDTO(ch))
+	}
+	return dto
+}
+
+func toChainDTO(c certmanager.Chain, now time.Time) CertChainDTO {
+	dto := CertChainDTO{
+		Certificate: toCertificateDTO(c.Certificate, now),
+		Warnings:    c.Warnings,
+	}
+	if c.Issuer != nil {
+		i := toIssuerDTO(*c.Issuer)
+		dto.Issuer = &i
+	}
+	for _, r := range c.Requests {
+		dto.Requests = append(dto.Requests, toChainNodeDTO(r))
+	}
+	if c.FailingLink != nil {
+		fl := toChainNodeDTO(*c.FailingLink)
+		dto.FailingLink = &fl
+	}
+	return dto
+}
