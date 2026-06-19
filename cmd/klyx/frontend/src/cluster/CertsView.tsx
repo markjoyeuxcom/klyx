@@ -1,22 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
-import type { CSSProperties, ReactNode } from "react";
 import { useFleet } from "../store/fleet";
 import type { CertificateDTO, IssuerDTO, ChainNodeDTO, CertChainDTO } from "../store/fleet";
 import { openCertManager, closeCertManager, getCertificateChain } from "../bridge/certmanager";
-
-const readyColor: Record<string, string> = {
-  Ready: "var(--color-text-success)",
-  Issuing: "var(--color-text-info)",
-  Failed: "var(--color-text-danger)",
-  Unknown: "var(--color-text-tertiary)",
-};
-const ellipsis: CSSProperties = { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" };
-const frame: CSSProperties = {
-  border: "0.5px solid var(--color-border-tertiary)",
-  borderRadius: "var(--border-radius-md)",
-  background: "var(--color-background-primary)",
-};
-const mono: CSSProperties = { fontFamily: "var(--font-mono)" };
+import { Badge, FilterButton, SummaryCell, Section, Field, StatusDot, frame, ellipsis, mono, readyColor } from "../chrome/primitives";
 
 type CertFilter = "all" | "attention" | "expiring" | "issuers";
 
@@ -233,7 +219,7 @@ function CertRow({ c, open, onClick }: { c: CertificateDTO; open: boolean; onCli
       <span style={{ ...mono, ...ellipsis, fontSize: 11, color: "var(--color-text-secondary)" }} title={c.secretName}>{c.secretName}</span>
       <span style={{ ...mono, fontSize: 11, color: expired(c) ? "var(--color-text-danger)" : soon ? "var(--color-text-warning)" : "var(--color-text-secondary)" }}>{expiryText(c)}</span>
       <span style={{ display: "flex", alignItems: "center", gap: 5, minWidth: 0 }}>
-        <span style={{ width: 6, height: 6, borderRadius: "50%", background: readyColor[c.ready] ?? readyColor.Unknown, flexShrink: 0 }} />
+        <StatusDot size={6} color={readyColor[c.ready] ?? readyColor.Unknown} />
         <span style={{ ...ellipsis, fontSize: 11, color: "var(--color-text-secondary)" }}>{statusText(c)}</span>
       </span>
     </button>
@@ -252,7 +238,7 @@ function CertInspector({ c, issuer, chain, chainLoading }: { c: CertificateDTO; 
       <div>
         <div style={{ ...mono, fontSize: 13, fontWeight: 500 }}>{c.namespace}/{c.name}</div>
         <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 4 }}>
-          <span style={{ width: 7, height: 7, borderRadius: "50%", background: readyColor[c.ready] ?? readyColor.Unknown }} />
+          <StatusDot color={readyColor[c.ready] ?? readyColor.Unknown} />
           <span style={{ fontSize: 12, color: "var(--color-text-secondary)" }}>{statusText(c)}</span>
           {c.reason && <span style={{ ...mono, fontSize: 10, padding: "1px 6px", borderRadius: 4, background: "var(--color-background-secondary)", color: c.ready === "Failed" ? "var(--color-text-danger)" : "var(--color-text-secondary)" }}>{c.reason}</span>}
         </div>
@@ -324,7 +310,7 @@ function ChainNodeView({ node, depth, failKey }: { node: ChainNodeDTO; depth: nu
   return (
     <>
       <div style={{ display: "flex", alignItems: "center", gap: 6, paddingLeft: depth * 14, fontSize: 11 }}>
-        <span style={{ width: 6, height: 6, borderRadius: "50%", background: readyColor[node.ready] ?? readyColor.Unknown, flexShrink: 0 }} />
+        <StatusDot size={6} color={readyColor[node.ready] ?? readyColor.Unknown} />
         <span style={{ color: "var(--color-text-tertiary)", width: 60, flexShrink: 0 }}>{chainKindLabel[node.kind] ?? node.kind.toLowerCase()}</span>
         <span style={{ ...mono, ...ellipsis, color: isFail ? "var(--color-text-danger)" : "var(--color-text-secondary)" }} title={node.name}>{node.name}</span>
         {(bad || issuing) && node.reason && (
@@ -352,7 +338,7 @@ function IssuersPanel({ issuers }: { issuers: IssuerDTO[] }) {
             </span>
             <span style={{ fontSize: 10, color: "var(--color-text-tertiary)" }}>{i.kind}</span>
             <span style={{ display: "flex", alignItems: "center", gap: 5 }}>
-              <span style={{ width: 6, height: 6, borderRadius: "50%", background: readyColor[i.ready] ?? readyColor.Unknown }} />
+              <StatusDot size={6} color={readyColor[i.ready] ?? readyColor.Unknown} />
               <span style={{ ...ellipsis, fontSize: 11, color: i.ready === "Failed" ? "var(--color-text-danger)" : "var(--color-text-secondary)" }} title={i.message}>{i.ready !== "Ready" && i.reason ? i.reason : i.ready.toLowerCase()}</span>
             </span>
           </div>
@@ -370,58 +356,3 @@ function EmptyInspector({ attention }: { attention: number }) {
   );
 }
 
-type Tone = "success" | "warning" | "danger" | "info" | "muted";
-const toneColor: Record<Tone, string> = {
-  success: "var(--color-text-success)",
-  warning: "var(--color-text-warning)",
-  danger: "var(--color-text-danger)",
-  info: "var(--color-text-info)",
-  muted: "var(--color-text-tertiary)",
-};
-
-function Badge({ tone, children }: { tone: Tone; children: ReactNode }) {
-  return <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 4, border: `0.5px solid ${toneColor[tone]}`, color: toneColor[tone] }}>{children}</span>;
-}
-
-function SummaryCell({ label, value, tone = "muted" }: { label: string; value: string; tone?: Tone }) {
-  return (
-    <div style={{ padding: "8px 12px", borderRight: "0.5px solid var(--color-border-tertiary)" }}>
-      <div style={{ fontSize: 10, color: "var(--color-text-tertiary)" }}>{label}</div>
-      <div style={{ fontSize: 15, fontWeight: 500, color: tone === "muted" ? "var(--color-text-primary)" : toneColor[tone] }}>{value}</div>
-    </div>
-  );
-}
-
-function FilterButton({ label, active, count, onClick }: { label: string; active: boolean; count: number; onClick: () => void }) {
-  return (
-    <button
-      onClick={onClick}
-      style={{
-        fontSize: 11, padding: "3px 9px", borderRadius: 4, cursor: "pointer",
-        border: `0.5px solid ${active ? "var(--color-text-info)" : "var(--color-border-tertiary)"}`,
-        background: active ? "var(--color-background-secondary)" : "var(--color-background-primary)",
-        color: active ? "var(--color-text-primary)" : "var(--color-text-secondary)",
-      }}
-    >
-      {label}{count > 0 ? ` ${count}` : ""}
-    </button>
-  );
-}
-
-function Section({ title, children }: { title: string; children: ReactNode }) {
-  return (
-    <div>
-      <div style={{ fontSize: 10, color: "var(--color-text-tertiary)", textTransform: "lowercase", marginBottom: 5 }}>{title}</div>
-      <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>{children}</div>
-    </div>
-  );
-}
-
-function Field({ label, value, tone = "muted" }: { label: string; value: string; tone?: Tone }) {
-  return (
-    <div style={{ display: "flex", justifyContent: "space-between", gap: 10, fontSize: 11 }}>
-      <span style={{ color: "var(--color-text-tertiary)" }}>{label}</span>
-      <span style={{ ...mono, ...ellipsis, color: tone === "muted" ? "var(--color-text-secondary)" : toneColor[tone], textAlign: "right" }}>{value}</span>
-    </div>
-  );
-}

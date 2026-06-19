@@ -26,6 +26,28 @@
   --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
   --border-radius-md: 8px;
   --border-radius-lg: 12px;
+
+  /* --- Design-system scales (M11 polish pass) ---------------------------- */
+  /* Spacing rhythm — replaces ad-hoc gap/padding magic numbers (6/8/10/12). */
+  --space-1: 4px;
+  --space-2: 6px;
+  --space-3: 8px;
+  --space-4: 10px;
+  --space-5: 12px;
+  --space-6: 16px;
+  /* Type scale — the four sizes the UI actually uses (10/11/12/13). */
+  --text-2xs: 10px;
+  --text-xs: 11px;
+  --text-sm: 12px;
+  --text-md: 13px;
+  /* Small radii for chips/buttons (cards keep --border-radius-md/lg). */
+  --radius-xs: 3px;
+  --radius-sm: 4px;
+  /* Motion — one fast tier for rows, one base tier for buttons/panels. */
+  --motion-fast: 100ms;
+  --motion-base: 120ms;
+  /* Hairline border width (the deliberate 0.5px component edge). */
+  --border-hairline: 0.5px;
 }
 [data-theme="dark"] {
   color-scheme: dark;
@@ -239,8 +261,15 @@ button:not(:disabled):active {
 [data-theme="violet"] button:not(:disabled):active {
   filter: brightness(1.25);
 }
-button:disabled {
+button:disabled,
+button[aria-disabled="true"],
+[aria-disabled="true"] {
   cursor: not-allowed;
+  opacity: 0.45;
+}
+button:disabled:hover,
+button[aria-disabled="true"]:hover {
+  filter: none; /* don't fake interactivity on a disabled control */
 }
 
 /* List rows (divs with role=button: pods, workloads, argo apps, flux rows,
@@ -291,6 +320,17 @@ div[role="button"]:hover {
 }
 .klyx-skeleton {
   background: var(--color-background-secondary);
-  border-radius: 3px;
+  border-radius: var(--radius-xs);
   animation: klyx-pulse 1.3s ease-in-out infinite;
+}
+
+/* Respect users who ask for less motion: drop transitions + the shimmer. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
 }
