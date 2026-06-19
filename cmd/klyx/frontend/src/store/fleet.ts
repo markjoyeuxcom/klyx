@@ -133,9 +133,42 @@ export type GitOpsSlice = {
   detail: ResourceDetailDTO | null;
 };
 
+// cert-manager lens (M11). NotAfterUnix/RenewalUnix are 0 when unknown; expiry is
+// derived client-side from the absolute timestamps. A failing bound issuer is the
+// headline for a stuck cert, exactly as a failing source is for a stuck Kustomization.
+export type CertificateDTO = {
+  namespace: string;
+  name: string;
+  ready: string;
+  reason: string;
+  message: string;
+  issuerKind: string;
+  issuerName: string;
+  secretName: string;
+  dnsNames: string[];
+  notAfterUnix: number;
+  expiresInSeconds: number;
+  renewalUnix: number;
+};
+export type IssuerDTO = {
+  kind: string;
+  namespace: string;
+  name: string;
+  ready: string;
+  reason: string;
+  message: string;
+};
+export type CertManagerSlice = {
+  cluster: string | null;
+  certificates: CertificateDTO[];
+  issuers: IssuerDTO[];
+  loading: boolean;
+  selectedKey: string | null; // "<namespace>/<name>" of the inspected certificate
+};
+
 // "observability" removed 2026-06-10: metrics ship inline in overview/workloads/network lanes
 // (design principle 5); a dedicated surface can return when it has real content.
-export type ClusterSection = "overview" | "gitops" | "argo" | "helm" | "network" | "resources" | "crds" | "workloads" | "pods" | "events" | "nodes";
+export type ClusterSection = "overview" | "gitops" | "argo" | "helm" | "certs" | "network" | "resources" | "crds" | "workloads" | "pods" | "events" | "nodes";
 
 export type OwnerDTO = { kind: string; namespace: string; name: string };
 export type PodDTO = { name: string; ready: boolean; restarts: number; reason: string; node: string; ageSeconds: number };
@@ -230,6 +263,7 @@ export const SECTION_LABELS: Record<ClusterSection, string> = {
   // Argo's own vocabulary throughout (synced/degraded), per design principle 8.
   argo: "Argo CD",
   helm: "Helm",
+  certs: "Certificates",
   network: "Network",
   resources: "Resources",
   crds: "CRDs",
@@ -417,6 +451,11 @@ type FleetState = {
   expand: (key: string) => void;
   collapse: () => void;
   setDetail: (d: ResourceDetailDTO) => void;
+  certmanager: CertManagerSlice;
+  setCertManager: (cluster: string, certificates: CertificateDTO[], issuers: IssuerDTO[]) => void;
+  setCertManagerLoading: (cluster: string) => void;
+  clearCertManager: () => void;
+  selectCertificate: (key: string | null) => void;
   actionStatus: ActionStatus | null;
   setActionStatus: (s: ActionStatus) => void;
   clearActionStatus: () => void;
@@ -575,6 +614,12 @@ export const useFleet = create<FleetState>((set) => ({
   expand: (key) => set((s) => ({ gitops: { ...s.gitops, expandedKey: key, detail: null } })),
   collapse: () => set((s) => ({ gitops: { ...s.gitops, expandedKey: null, detail: null } })),
   setDetail: (d) => set((s) => ({ gitops: { ...s.gitops, detail: d } })),
+
+  certmanager: { cluster: null, certificates: [], issuers: [], loading: false, selectedKey: null },
+  setCertManager: (cluster, certificates, issuers) => set((s) => ({ certmanager: { ...s.certmanager, cluster, certificates, issuers, loading: false } })),
+  setCertManagerLoading: (cluster) => set((s) => ({ certmanager: { ...s.certmanager, cluster, certificates: [], issuers: [], loading: true } })),
+  clearCertManager: () => set({ certmanager: { cluster: null, certificates: [], issuers: [], loading: false, selectedKey: null } }),
+  selectCertificate: (key) => set((s) => ({ certmanager: { ...s.certmanager, selectedKey: key } })),
   actionStatus: null,
   setActionStatus: (actionStatus) => set({ actionStatus }),
   clearActionStatus: () => set({ actionStatus: null }),

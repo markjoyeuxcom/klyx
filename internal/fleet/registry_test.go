@@ -10,16 +10,17 @@ import (
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
+	"github.com/moomora/klyx/internal/certmanager"
 	"github.com/moomora/klyx/internal/clustermesh"
 	"github.com/moomora/klyx/internal/config"
 	"github.com/moomora/klyx/internal/crd"
+	"github.com/moomora/klyx/internal/fluxcli"
 	"github.com/moomora/klyx/internal/gitops/argo"
 	"github.com/moomora/klyx/internal/gitops/flux"
 	"github.com/moomora/klyx/internal/gwapi"
 	"github.com/moomora/klyx/internal/helmcli"
 	"github.com/moomora/klyx/internal/metrics"
 	"github.com/moomora/klyx/internal/routemetrics"
-	"github.com/moomora/klyx/internal/fluxcli"
 	"github.com/moomora/klyx/internal/workloads"
 )
 
@@ -44,6 +45,13 @@ func (f *fakeConn) GitOpsObject(kind, namespace, name string) (*unstructured.Uns
 }
 func (f *fakeConn) GitOpsSources() []flux.Source { return nil }
 func (f *fakeConn) GitOpsSourceObject(kind, namespace, name string) (*unstructured.Unstructured, bool) {
+	return nil, false
+}
+func (f *fakeConn) OpenCertManager()                                   {}
+func (f *fakeConn) CloseCertManager()                                  {}
+func (f *fakeConn) CertManagerCertificates() []certmanager.Certificate { return nil }
+func (f *fakeConn) CertManagerIssuers() []certmanager.Issuer           { return nil }
+func (f *fakeConn) CertManagerObject(kind, namespace, name string) (*unstructured.Unstructured, bool) {
 	return nil, false
 }
 func (f *fakeConn) FluxEvents(ctx context.Context, kind, ns, name string) ([]workloads.EventSummary, error) {

@@ -4,7 +4,7 @@ import {
   IconArrowsLeftRight, IconLayoutDashboard, IconStack2, IconGitBranch, IconGitMerge,
   IconRoute, IconTerminal2, IconSettings, IconBox, IconCircleDot,
   IconAlertTriangle, IconServer, IconAnchor, IconChevronRight, IconChevronLeft,
-  IconComponents,
+  IconComponents, IconCertificate,
 } from "@tabler/icons-react";
 import { useFleet, SECTION_LABELS } from "../store/fleet";
 import type { ClusterDTO, ClusterSection, FleetBoardEntry, MeshGraphDTO, MetricsDTO } from "../store/fleet";
@@ -32,6 +32,7 @@ const SECTION_GROUPS: { section: ClusterSection; Icon: typeof IconLayoutDashboar
     { section: "gitops",    Icon: IconGitBranch },
     { section: "argo",      Icon: IconGitMerge },
     { section: "helm",      Icon: IconAnchor },
+    { section: "certs",     Icon: IconCertificate },
   ],
   [
     { section: "network",   Icon: IconRoute },

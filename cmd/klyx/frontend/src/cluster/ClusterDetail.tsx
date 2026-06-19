@@ -3,6 +3,7 @@ import { Overview } from "./Overview";
 import { GitOps } from "./GitOps";
 import { ArgoView } from "./ArgoView";
 import { HelmView } from "./HelmView";
+import { CertsView } from "./CertsView";
 import { CRDBrowser } from "./CRDBrowser";
 import { BuiltinsView } from "./BuiltinsView";
 import { InstanceList } from "./InstanceList";
@@ -34,6 +35,7 @@ export function ClusterDetail() {
   if (route.section === "gitops") return <GitOps cluster={cluster.name} />;
   if (route.section === "argo") return <ArgoView cluster={cluster.name} />;
   if (route.section === "helm") return <HelmView cluster={cluster.name} />;
+  if (route.section === "certs") return <CertsView cluster={cluster.name} />;
   if (route.section === "resources") {
     if (route.resource && route.instance) return <InstanceDetail cluster={cluster.name} resource={route.resource} instance={route.instance} />;
     if (route.resource) return <InstanceList cluster={cluster.name} resource={route.resource} />;

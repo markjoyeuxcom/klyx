@@ -20,6 +20,8 @@ function message(section: ClusterSection, c: ClusterDTO): string {
       return "";
     case "argo":
       return "";
+    case "certs":
+      return "";
     case "workloads":
       return "";
     case "pods":

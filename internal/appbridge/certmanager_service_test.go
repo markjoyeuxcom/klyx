@@ -1,0 +1,93 @@
+package appbridge
+
+import (
+	"testing"
+	"time"
+
+	"github.com/moomora/klyx/internal/certmanager"
+)
+
+type fakeCertManagerConn struct {
+	opened, closed int
+	certs          []certmanager.Certificate
+	iss            []certmanager.Issuer
+}
+
+func (f *fakeCertManagerConn) OpenCertManager()                                   { f.opened++ }
+func (f *fakeCertManagerConn) CloseCertManager()                                  { f.closed++ }
+func (f *fakeCertManagerConn) CertManagerCertificates() []certmanager.Certificate { return f.certs }
+func (f *fakeCertManagerConn) CertManagerIssuers() []certmanager.Issuer           { return f.iss }
+
+func TestToCertificateDTOComputesExpiry(t *testing.T) {
+	now := time.Date(2026, 6, 19, 0, 0, 0, 0, time.UTC)
+	notAfter := now.Add(72 * time.Hour)
+	dto := toCertificateDTO(certmanager.Certificate{
+		Namespace: "payments", Name: "acme-demo", Ready: certmanager.Failed, Reason: "DoesNotExist",
+		IssuerKind: "ClusterIssuer", IssuerName: "lab-acme-staging", SecretName: "acme-demo-tls",
+		DNSNames: []string{"acme-demo.klustr.io"}, NotAfter: notAfter,
+	}, now)
+	if dto.Ready != "Failed" || dto.Reason != "DoesNotExist" {
+		t.Fatalf("status: %+v", dto)
+	}
+	if dto.IssuerKind != "ClusterIssuer" || dto.IssuerName != "lab-acme-staging" || dto.SecretName != "acme-demo-tls" {
+		t.Fatalf("issuer/secret: %+v", dto)
+	}
+	if dto.NotAfterUnix != notAfter.Unix() || dto.ExpiresInSeconds != int64(72*3600) {
+		t.Fatalf("expiry: notAfter=%d expires=%d", dto.NotAfterUnix, dto.ExpiresInSeconds)
+	}
+}
+
+func TestToCertificateDTONoExpiryWhenUnissued(t *testing.T) {
+	dto := toCertificateDTO(certmanager.Certificate{Name: "x"}, time.Now())
+	if dto.NotAfterUnix != 0 || dto.ExpiresInSeconds != 0 {
+		t.Fatalf("want zero expiry for an unissued cert: %+v", dto)
+	}
+}
+
+func TestCertManagerServiceSnapshot(t *testing.T) {
+	now := time.Date(2026, 6, 19, 0, 0, 0, 0, time.UTC)
+	conn := &fakeCertManagerConn{
+		certs: []certmanager.Certificate{{Namespace: "payments", Name: "acme-demo", Ready: certmanager.Failed}},
+		iss:   []certmanager.Issuer{{Kind: certmanager.ClusterIssuerKind, Name: "lab-acme-staging", Ready: certmanager.Failed}},
+	}
+	svc := NewCertManagerService(func(string) (CertManagerConn, bool) { return conn, true }, &fakeEmitter{}, func() time.Time { return now }, time.Second)
+	p := svc.snapshot("nelli", conn)
+	if p.Cluster != "nelli" || len(p.Certificates) != 1 || len(p.Issuers) != 1 {
+		t.Fatalf("payload: %+v", p)
+	}
+	if p.Issuers[0].Kind != "ClusterIssuer" || p.Issuers[0].Ready != "Failed" {
+		t.Fatalf("issuer dto: %+v", p.Issuers[0])
+	}
+}
+
+func TestCertManagerServiceOpenEmitsAndCloses(t *testing.T) {
+	now := time.Now()
+	conn := &fakeCertManagerConn{}
+	em := &fakeEmitter{}
+	svc := NewCertManagerService(func(string) (CertManagerConn, bool) { return conn, true }, em, func() time.Time { return now }, 10*time.Millisecond)
+
+	svc.Open("nelli")
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		em.mu.Lock()
+		n := em.events
+		em.mu.Unlock()
+		if n > 0 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	em.mu.Lock()
+	n := em.events
+	em.mu.Unlock()
+	if n == 0 {
+		t.Fatal("expected at least one certmanager:updated emit")
+	}
+	if conn.opened == 0 {
+		t.Fatal("expected OpenCertManager to be called")
+	}
+	svc.Close("nelli")
+	if conn.closed == 0 {
+		t.Fatal("expected CloseCertManager to be called")
+	}
+}

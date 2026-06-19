@@ -19,15 +19,16 @@ import (
 	"k8s.io/client-go/tools/cache"
 
 	"github.com/moomora/klyx/internal/capability"
+	"github.com/moomora/klyx/internal/certmanager"
 	"github.com/moomora/klyx/internal/clock"
 	"github.com/moomora/klyx/internal/cluster"
 	"github.com/moomora/klyx/internal/clustermesh"
 	"github.com/moomora/klyx/internal/config"
 	"github.com/moomora/klyx/internal/crd"
+	"github.com/moomora/klyx/internal/fluxcli"
 	"github.com/moomora/klyx/internal/gitops/argo"
 	"github.com/moomora/klyx/internal/gitops/flux"
 	"github.com/moomora/klyx/internal/gwapi"
-	"github.com/moomora/klyx/internal/fluxcli"
 	"github.com/moomora/klyx/internal/helmcli"
 	"github.com/moomora/klyx/internal/metrics"
 	"github.com/moomora/klyx/internal/routemetrics"
@@ -45,6 +46,11 @@ type Conn interface {
 	GitOpsObject(kind, namespace, name string) (*unstructured.Unstructured, bool)
 	GitOpsSources() []flux.Source
 	GitOpsSourceObject(kind, namespace, name string) (*unstructured.Unstructured, bool)
+	OpenCertManager()
+	CloseCertManager()
+	CertManagerCertificates() []certmanager.Certificate
+	CertManagerIssuers() []certmanager.Issuer
+	CertManagerObject(kind, namespace, name string) (*unstructured.Unstructured, bool)
 	FluxEvents(ctx context.Context, kind, ns, name string) ([]workloads.EventSummary, error)
 	FluxAvailable() bool
 	FluxDiffKustomization(ctx context.Context, ns, name, path string) (fluxcli.DiffResult, error)
@@ -121,9 +127,10 @@ type ClusterConn struct {
 	snapVersion    string
 	connectTimeout time.Duration
 	metricsCfg     config.MetricsConfig
-	refresh        chan struct{}   // buffered(1); coalesces informer events
-	ctx            context.Context // captured in Start; scopes lazy watches
-	gitops         *gitopsWatch    // lazy; nil until OpenGitOps
+	refresh        chan struct{}     // buffered(1); coalesces informer events
+	ctx            context.Context   // captured in Start; scopes lazy watches
+	gitops         *gitopsWatch      // lazy; nil until OpenGitOps
+	certmgr        *certmanagerWatch // lazy; nil until OpenCertManager
 
 	// metricsMu guards the metrics cache. Note: ClusterMetrics holds it across
 	// the probe + sample network I/O (up to a few seconds). This serializes
