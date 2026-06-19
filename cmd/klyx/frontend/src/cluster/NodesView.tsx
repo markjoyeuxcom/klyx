@@ -6,6 +6,7 @@ import { listNodes, openNodeDetail, cordonNode, startDrain, cancelDrain } from "
 import { ConfirmDialog } from "../chrome/ConfirmDialog";
 import { fmtMem } from "./saturation";
 import { useResizablePanel } from "../chrome/useResizablePanel";
+import { ellipsis, frame, btn, FilterButton, SummaryCell, StatusDot } from "../chrome/primitives";
 
 function ago(s: number): string {
   return s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)}m` : s < 86400 ? `${Math.floor(s / 3600)}h` : `${Math.floor(s / 86400)}d`;
@@ -18,9 +19,6 @@ function nodeDotColor(n: NodeSummaryDTO): string {
   return "var(--color-text-tertiary)";
 }
 
-const ellipsis: React.CSSProperties = { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" };
-const btn: React.CSSProperties = { fontSize: 11, padding: "3px 10px", borderRadius: 4, cursor: "pointer", border: "0.5px solid var(--color-border-tertiary)", background: "var(--color-background-primary)", color: "var(--color-text-secondary)" };
-const frame: React.CSSProperties = { border: "0.5px solid var(--color-border-tertiary)", borderRadius: "var(--border-radius-md)", background: "var(--color-background-primary)" };
 
 // columns: dot | name | roles | status | version | cpu alloc/cap | mem alloc/cap | taints | age
 const gridCols = "12px minmax(170px,1.5fr) 86px minmax(120px,1fr) 82px 112px 132px 48px 44px";
@@ -216,7 +214,7 @@ function DrainModal({ cluster, node, onClose }: { cluster: string; node: string;
           <div style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11 }}>
             {status === "running" && (
               <>
-                <span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--color-text-success)", display: "inline-block" }} />
+                <StatusDot size={6} color="var(--color-text-success)" />
                 <span style={{ color: "var(--color-text-success)" }}>draining</span>
               </>
             )}
@@ -384,7 +382,7 @@ export function NodesView({ cluster }: { cluster: string }) {
                       background: isSelected ? "var(--color-background-secondary)" : undefined,
                     }}
                   >
-                    <span style={{ width: 8, height: 8, borderRadius: "50%", background: dotColor, display: "inline-block" }} />
+                    <StatusDot size={8} color={dotColor} />
                     <span style={{ fontWeight: 500, ...ellipsis }} title={n.name}>{n.name}</span>
                     <span style={{ color: "var(--color-text-tertiary)", ...ellipsis }}>
                       {n.roles.length > 0 ? n.roles.join(", ") : "-"}
@@ -468,48 +466,6 @@ export function NodesView({ cluster }: { cluster: string }) {
         />
       )}
     </div>
-  );
-}
-
-function SummaryCell({ label, value, tone = "default" }: { label: string; value: string; tone?: "default" | "success" | "warning" | "danger" | "muted" }) {
-  const color = tone === "success"
-    ? "var(--color-text-success)"
-    : tone === "warning"
-      ? "var(--color-text-warning)"
-      : tone === "danger"
-        ? "var(--color-text-danger)"
-        : tone === "muted"
-          ? "var(--color-text-tertiary)"
-          : "var(--color-text-primary)";
-  return (
-    <div style={{ padding: "8px 10px", borderRight: "0.5px solid var(--color-border-tertiary)", minWidth: 0 }}>
-      <div style={{ fontSize: 10, color: "var(--color-text-tertiary)", marginBottom: 2 }}>{label}</div>
-      <div title={value} style={{ fontFamily: "var(--font-mono)", fontWeight: 600, fontSize: 13, lineHeight: 1.2, color, ...ellipsis }}>{value}</div>
-    </div>
-  );
-}
-
-function FilterButton({ label, count, active, onClick }: { label: string; count: number; active: boolean; onClick: () => void }) {
-  return (
-    <button
-      onClick={onClick}
-      style={{
-        display: "inline-flex",
-        alignItems: "center",
-        gap: 5,
-        padding: "3px 9px",
-        fontSize: 11,
-        borderRadius: 4,
-        cursor: "pointer",
-        fontFamily: "var(--font-mono)",
-        border: active ? "0.5px solid var(--color-border-info)" : "0.5px solid var(--color-border-tertiary)",
-        background: active ? "var(--color-background-info)" : "var(--color-background-primary)",
-        color: active ? "var(--color-text-info)" : "var(--color-text-secondary)",
-      }}
-    >
-      {label}
-      <span style={{ fontSize: 9, opacity: 0.72 }}>{count}</span>
-    </button>
   );
 }
 
@@ -710,7 +666,7 @@ function InfoTab({ detail, cluster, labelsExpanded, onToggleLabels, onCordon, on
             const conditionMessage = c.message || c.reason || "-";
             return (
               <div key={c.type} style={{ display: "grid", gridTemplateColumns: "7px minmax(130px, 0.46fr) minmax(0, 1fr)", gap: 8, alignItems: "baseline", fontSize: 11 }}>
-                <span style={{ width: 7, height: 7, borderRadius: "50%", background: condColor(c), display: "inline-block" }} />
+                <StatusDot color={condColor(c)} />
                 <span style={{ fontWeight: 500, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={c.type}>{c.type}</span>
                 <span style={{ color: "var(--color-text-secondary)", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={conditionMessage}>{conditionMessage}</span>
               </div>

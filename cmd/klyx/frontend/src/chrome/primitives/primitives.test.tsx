@@ -12,11 +12,12 @@ describe("primitives", () => {
     expect(getByText("degraded")).toBeTruthy();
   });
 
-  it("FilterButton shows the count, reflects active, and fires onClick", () => {
+  it("FilterButton shows the label + count, reflects active, and fires onClick", () => {
     const onClick = vi.fn();
-    const { getByRole } = render(<FilterButton label="failed" active count={2} onClick={onClick} />);
-    const btn = getByRole("button", { name: /failed 2/i });
+    const { getByRole, getByText } = render(<FilterButton label="failed" active count={2} onClick={onClick} />);
+    const btn = getByRole("button", { name: /failed/i });
     expect(btn.getAttribute("aria-pressed")).toBe("true");
+    expect(getByText("2")).toBeTruthy();
     fireEvent.click(btn);
     expect(onClick).toHaveBeenCalledOnce();
   });
