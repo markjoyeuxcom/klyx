@@ -4,10 +4,9 @@ import { useFleet } from "../store/fleet";
 import type { GatewayRefDTO } from "../store/fleet";
 import { listGateways } from "../bridge/gateway";
 import { NetworkTopology } from "./NetworkTopology";
+import { frame, ellipsis, SummaryCell, FilterButton } from "../chrome/primitives";
 
 const empty: CSSProperties = { padding: 24, color: "var(--color-text-secondary)", fontSize: 13 };
-const frame: CSSProperties = { border: "0.5px solid var(--color-border-tertiary)", borderRadius: "var(--border-radius-md)", background: "var(--color-background-primary)" };
-const ellipsis: CSSProperties = { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" };
 
 type GatewayMode = "all" | "pending" | "programmed";
 
@@ -90,9 +89,9 @@ export function NetworkView({ cluster }: { cluster: string }) {
       </div>
 
       <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
-        <ModeButton label="all" count={net.gateways.length} active={mode === "all"} onClick={() => setMode("all")} />
-        <ModeButton label="pending" count={pending} active={mode === "pending"} onClick={() => setMode("pending")} />
-        <ModeButton label="programmed" count={programmed} active={mode === "programmed"} onClick={() => setMode("programmed")} />
+        <FilterButton label="all" count={net.gateways.length} active={mode === "all"} onClick={() => setMode("all")} />
+        <FilterButton label="pending" count={pending} active={mode === "pending"} onClick={() => setMode("pending")} />
+        <FilterButton label="programmed" count={programmed} active={mode === "programmed"} onClick={() => setMode("programmed")} />
         <input
           value={query}
           onChange={(e) => setQuery(e.target.value)}
@@ -157,42 +156,4 @@ export function NetworkView({ cluster }: { cluster: string }) {
   );
 }
 
-function SummaryCell({ label, value, tone = "default" }: { label: string; value: string; tone?: "default" | "success" | "warning" | "muted" }) {
-  const color = tone === "success"
-    ? "var(--color-text-success)"
-    : tone === "warning"
-      ? "var(--color-text-warning)"
-      : tone === "muted"
-        ? "var(--color-text-tertiary)"
-        : "var(--color-text-primary)";
-  return (
-    <div style={{ padding: "9px 12px", borderRight: "0.5px solid var(--color-border-tertiary)", minWidth: 0 }}>
-      <div style={{ fontSize: 10, color: "var(--color-text-tertiary)", marginBottom: 3 }}>{label}</div>
-      <div style={{ fontFamily: "var(--font-mono)", color, fontWeight: 600, ...ellipsis }}>{value}</div>
-    </div>
-  );
-}
-
-function ModeButton({ label, count, active, onClick }: { label: string; count: number; active: boolean; onClick: () => void }) {
-  return (
-    <button
-      onClick={onClick}
-      style={{
-        display: "inline-flex",
-        alignItems: "center",
-        gap: 5,
-        padding: "3px 9px",
-        fontSize: 11,
-        borderRadius: 4,
-        cursor: "pointer",
-        fontFamily: "var(--font-mono)",
-        border: active ? "0.5px solid var(--color-border-info)" : "0.5px solid var(--color-border-tertiary)",
-        background: active ? "var(--color-background-info)" : "var(--color-background-primary)",
-        color: active ? "var(--color-text-info)" : "var(--color-text-secondary)",
-      }}
-    >
-      {label}
-      <span style={{ fontSize: 9, opacity: 0.72 }}>{count}</span>
-    </button>
-  );
-}
+// SummaryCell + filter pills now come from the shared primitive set.
