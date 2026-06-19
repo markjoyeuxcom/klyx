@@ -132,6 +132,7 @@ describe("Sidebar cluster capabilities", () => {
     expect(within(block).getByText("mesh")).toBeTruthy();
     expect(within(block).getByText("gateway api")).toBeTruthy();
     expect(within(block).getByText("v1")).toBeTruthy();
+    expect(within(block).getByText("cert-manager")).toBeTruthy();
     expect(within(block).getByText("prometheus")).toBeTruthy();
     expect(within(block).getByText("lgtm")).toBeTruthy();
   });

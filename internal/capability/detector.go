@@ -17,6 +17,8 @@ const (
 	fluxKustomizeController = "kustomize-controller"
 	argoNamespace           = "argocd"
 	argoAppController       = "argocd-application-controller"
+	certManagerNamespace    = "cert-manager"
+	certManagerController   = "cert-manager"
 )
 
 // workloadKind distinguishes the two workload types the health probe supports.
@@ -93,13 +95,15 @@ func (d *Detector) Detect(ctx context.Context) Set {
 		// surface ServerGroups errors via PrependReactor.
 		msg := fmt.Sprintf("capability detection failed: %v", err)
 		return Set{
-			GitOps:  GitOpsCapability{Base: Base{Tier: Absent, Reason: msg}},
-			Network: NetworkCapability{Base: Base{Tier: Absent, Reason: msg}},
+			GitOps:      GitOpsCapability{Base: Base{Tier: Absent, Reason: msg}},
+			Network:     NetworkCapability{Base: Base{Tier: Absent, Reason: msg}},
+			CertManager: CertManagerCapability{Base: Base{Tier: Absent, Reason: msg}},
 		}
 	}
 	return Set{
-		GitOps:  d.detectGitOps(ctx, served),
-		Network: d.detectNetwork(ctx, served),
+		GitOps:      d.detectGitOps(ctx, served),
+		Network:     d.detectNetwork(ctx, served),
+		CertManager: d.detectCertManager(ctx, served),
 	}
 }
 
@@ -165,6 +169,26 @@ func (d *Detector) detectNetwork(ctx context.Context, served map[string]bool) Ne
 		} else if !gwPresent {
 			out.Base.Reason = "Cilium present but Gateway API not installed"
 		}
+	}
+	return out
+}
+
+// detectCertManager classifies cert-manager: present iff the cert-manager.io
+// CRDs are served, healthy iff the cert-manager controller Deployment is ready.
+// HasACME records whether the acme.cert-manager.io group (Order/Challenge) is
+// also served, so the chain resolver knows to walk it.
+func (d *Detector) detectCertManager(ctx context.Context, served map[string]bool) CertManagerCapability {
+	out := CertManagerCapability{}
+	out.Present = served["cert-manager.io"]
+	out.HasACME = served["acme.cert-manager.io"]
+	if !out.Present {
+		out.Base = Base{Tier: Absent, Reason: "no cert-manager CRDs installed"}
+		return out
+	}
+	out.Healthy = d.controllerReady(ctx, deploymentWorkload, certManagerNamespace, certManagerController)
+	out.Base.Tier = Classify(true, out.Healthy)
+	if !out.Healthy {
+		out.Base.Reason = "cert-manager installed but " + certManagerController + " is not ready"
 	}
 	return out
 }

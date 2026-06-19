@@ -321,8 +321,18 @@ function capabilityRows(cluster: ClusterDTO, board: FleetBoardEntry | undefined,
     fluxCapability(cluster, board),
     ciliumCapability(cluster, mesh),
     gatewayCapability(cluster, board),
+    certManagerCapability(cluster),
     prometheusCapability(metrics),
   ];
+}
+
+function certManagerCapability(cluster: ClusterDTO): CapabilityRow {
+  if (cluster.certManagerPresent === false || cluster.certManagerTier === "Absent") {
+    return { label: "cert-manager", value: "absent", tone: "muted", title: cluster.certManagerReason || undefined };
+  }
+  if (cluster.certManagerPresent && cluster.certManagerHealthy) return { label: "cert-manager", value: "ready", tone: "success" };
+  if (cluster.certManagerPresent) return { label: "cert-manager", value: "degraded", tone: "warning", title: cluster.certManagerReason || undefined };
+  return { label: "cert-manager", value: "unknown", tone: "muted" };
 }
 
 function fluxCapability(cluster: ClusterDTO, board: FleetBoardEntry | undefined): CapabilityRow {

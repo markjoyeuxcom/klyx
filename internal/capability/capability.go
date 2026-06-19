@@ -76,8 +76,20 @@ type NetworkCapability struct {
 	IngressControllers []string
 }
 
+// CertManagerCapability models cert-manager: presence of the cert-manager.io
+// CRDs plus controller health. HasACME notes the acme.cert-manager.io group
+// (the Order/Challenge issuance chain) so the lens knows whether to resolve it.
+// Flattened like NetworkCapability because cert-manager is a single tool.
+type CertManagerCapability struct {
+	Base
+	Present bool
+	Healthy bool
+	HasACME bool
+}
+
 // Set is the full per-cluster capability snapshot handed to the view layer.
 type Set struct {
-	GitOps  GitOpsCapability
-	Network NetworkCapability
+	GitOps      GitOpsCapability
+	Network     NetworkCapability
+	CertManager CertManagerCapability
 }

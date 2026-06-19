@@ -17,6 +17,10 @@ export type ClusterDTO = {
   gatewayAPIVersion?: string;
   ciliumPresent?: boolean;
   clusterMesh?: boolean;
+  certManagerTier?: string;
+  certManagerReason?: string;
+  certManagerPresent?: boolean;
+  certManagerHealthy?: boolean;
   env: string;
   region: string;
   provider: string;
