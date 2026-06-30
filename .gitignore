@@ -33,3 +33,6 @@
 # Visual brainstorm companion
 /.superpowers/
 .env
+
+# Reference screenshots (local design material, not source)
+/images/
