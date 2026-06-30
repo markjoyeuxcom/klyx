@@ -52,6 +52,7 @@ const broken: PodSummaryDTO = {
 const fakeDetail: PodDetailDTO = {
   summary: healthy,
   labels: { app: "grafana", team: "ops" },
+  annotations: { "reloader.stakater.com/auto": "true" },
   conditions: [
     { type: "Ready", status: "True", reason: "PodCompleted", message: "all containers ready" },
   ],
@@ -142,6 +143,24 @@ describe("PodsView", () => {
     expect(getByText("back-off restarting")).toBeTruthy();
     // Labels
     expect(getByText("app=grafana")).toBeTruthy();
+    // Annotations start collapsed.
+    expect(getByText("Annotations (1)")).toBeTruthy();
+  });
+
+  it("detail panel renders annotations as collapsed metadata", () => {
+    seed([healthy]);
+    useFleet.setState((s) => ({
+      pods: {
+        ...s.pods,
+        selected: { namespace: "monitoring", name: "grafana-xyz" },
+        detail: fakeDetail,
+        detailLoading: false,
+      },
+    }));
+    const { getByText, queryByText } = render(<PodsView cluster="homelab" />);
+    expect(queryByText("reloader.stakater.com/auto=true")).toBeNull();
+    fireEvent.click(getByText("Annotations (1)"));
+    expect(getByText("reloader.stakater.com/auto=true")).toBeTruthy();
   });
 
   it("detail panel tabs are info and yaml (no logs tab)", () => {

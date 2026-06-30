@@ -94,15 +94,23 @@ func (s *CertManagerService) pushLoop(ctx context.Context, cluster string, conn 
 func (s *CertManagerService) GetCertificateChain(cluster, ns, name string) CertChainDTO {
 	conn, ok := s.lookup(cluster)
 	if !ok {
-		return CertChainDTO{Warnings: []string{"cluster not connected"}}
+		return warningCertChainDTO("cluster not connected")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
 	defer cancel()
 	chain, err := conn.GetCertificateChain(ctx, ns, name)
 	if err != nil {
-		return CertChainDTO{Warnings: []string{err.Error()}}
+		return warningCertChainDTO(err.Error())
 	}
 	return toChainDTO(chain, s.now())
+}
+
+func warningCertChainDTO(warning string) CertChainDTO {
+	return CertChainDTO{
+		Certificate: CertificateDTO{DNSNames: []string{}},
+		Requests:    []ChainNodeDTO{},
+		Warnings:    []string{warning},
+	}
 }
 
 func (s *CertManagerService) snapshot(cluster string, conn CertManagerConn) certManagerPayload {

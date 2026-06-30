@@ -17,6 +17,7 @@ import (
 type PodDetail struct {
 	Summary        workloads.PodSummary
 	Labels         map[string]string
+	Annotations    map[string]string
 	Conditions     []crd.Condition
 	Events         []crd.Event
 	YAML           string
@@ -46,6 +47,10 @@ func (c *ClusterConn) PodDetail(ctx context.Context, namespace, name string) (Po
 	labels := p.GetLabels()
 	if labels == nil {
 		labels = map[string]string{}
+	}
+	annotations := p.GetAnnotations()
+	if annotations == nil {
+		annotations = map[string]string{}
 	}
 
 	conds := make([]crd.Condition, 0, len(p.Status.Conditions))
@@ -79,6 +84,7 @@ func (c *ClusterConn) PodDetail(ctx context.Context, namespace, name string) (Po
 	return PodDetail{
 		Summary:        summary,
 		Labels:         labels,
+		Annotations:    annotations,
 		Conditions:     conds,
 		Events:         events,
 		YAML:           yamlStr,

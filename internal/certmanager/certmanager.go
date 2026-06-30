@@ -40,6 +40,7 @@ type Certificate struct {
 	IssuerName  string
 	SecretName  string
 	DNSNames    []string
+	NotBefore   time.Time
 	NotAfter    time.Time
 	RenewalTime time.Time
 }
@@ -55,6 +56,7 @@ func ParseCertificate(u *unstructured.Unstructured) Certificate {
 	}
 	c.SecretName, _, _ = unstructured.NestedString(u.Object, "spec", "secretName")
 	c.DNSNames, _, _ = unstructured.NestedStringSlice(u.Object, "spec", "dnsNames")
+	c.NotBefore = parseTime(u, "status", "notBefore")
 	c.NotAfter = parseTime(u, "status", "notAfter")
 	c.RenewalTime = parseTime(u, "status", "renewalTime")
 	return c

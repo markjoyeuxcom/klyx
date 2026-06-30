@@ -15,13 +15,14 @@ import (
 
 // NodeDetail is the drill-down for one node.
 type NodeDetail struct {
-	Summary    workloads.NodeSummary
-	Labels     map[string]string
-	Taints     []NodeTaint
-	Conditions []crd.Condition
-	Events     []crd.Event
-	YAML       string
-	PodsOnNode []PodOnNode
+	Summary     workloads.NodeSummary
+	Labels      map[string]string
+	Annotations map[string]string
+	Taints      []NodeTaint
+	Conditions  []crd.Condition
+	Events      []crd.Event
+	YAML        string
+	PodsOnNode  []PodOnNode
 }
 
 // NodeTaint is a single taint.
@@ -71,6 +72,10 @@ func (c *ClusterConn) NodeDetail(ctx context.Context, name string) (NodeDetail, 
 	if labels == nil {
 		labels = map[string]string{}
 	}
+	annotations := n.GetAnnotations()
+	if annotations == nil {
+		annotations = map[string]string{}
+	}
 
 	taints := make([]NodeTaint, 0, len(n.Spec.Taints))
 	for _, t := range n.Spec.Taints {
@@ -106,13 +111,14 @@ func (c *ClusterConn) NodeDetail(ctx context.Context, name string) (NodeDetail, 
 	podsOnNode, _ := c.podsOnNode(ctx, name)
 
 	return NodeDetail{
-		Summary:    summary,
-		Labels:     labels,
-		Taints:     taints,
-		Conditions: conds,
-		Events:     events,
-		YAML:       yamlStr,
-		PodsOnNode: podsOnNode,
+		Summary:     summary,
+		Labels:      labels,
+		Annotations: annotations,
+		Taints:      taints,
+		Conditions:  conds,
+		Events:      events,
+		YAML:        yamlStr,
+		PodsOnNode:  podsOnNode,
 	}, nil
 }
 

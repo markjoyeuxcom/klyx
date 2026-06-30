@@ -112,7 +112,7 @@ describe("buildCommands", () => {
     // triage-first order keeps Nodes in the operational loop and Network as its own lane.
     const ids = sections.map((c) => c.id.replace("section:", ""));
     expect(ids).toEqual(["overview", "workloads", "pods", "nodes", "events", "gitops",
-      "argo", "helm", "network", "resources", "crds"]);
+      "argo", "helm", "gatewayApi", "resources", "crds"]);
   });
 
   it("omits Pods when the pods slice is empty", () => {
@@ -306,7 +306,7 @@ describe("buildCommands", () => {
     const openGateway = vi.fn();
     const selectRoute = vi.fn();
     const s = makeStore({
-      route: { name: "cluster", cluster: "dev", section: "network" } as never,
+      route: { name: "cluster", cluster: "dev", section: "gatewayApi" } as never,
       openGateway,
       selectRoute,
       network: {

@@ -36,7 +36,7 @@ const SECTION_ORDER: ClusterSection[] = [
   "gitops",
   "argo",
   "helm",
-  "network",
+  "gatewayApi",
   "resources",
   "crds",
 ];
@@ -337,7 +337,7 @@ export function buildCommands(s: FleetStore): Command[] {
         title: `${g.namespace}/${g.name}`,
         hint: [g.className, g.accepted ? "accepted" : "not accepted", g.programmed ? "programmed" : "pending"].filter(Boolean).join(" · "),
         run: () => {
-          openSection(s, "network", cluster);
+          openSection(s, "gatewayApi", cluster);
           s.openGateway(g.namespace, g.name);
         },
       });
@@ -354,7 +354,7 @@ export function buildCommands(s: FleetStore): Command[] {
         title: `HTTPRoute ${key}`,
         hint: routeHint(r),
         run: () => {
-          openSection(s, "network", cluster);
+          openSection(s, "gatewayApi", cluster);
           s.openGateway(gw.namespace, gw.name);
           s.selectRoute(key);
         },

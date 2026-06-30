@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, fireEvent, act, waitFor } from "@testing-library/react";
-import { LogsPane } from "./LogsPane";
+import { LogsPane, filterLogLinesByLevel, getLogLineDetail } from "./LogsPane";
 import type { ContainerSummaryDTO } from "../store/fleet";
 
 // ---------------------------------------------------------------------------
@@ -103,6 +103,30 @@ describe("LogsPane", () => {
   // -------------------------------------------------------------------------
   // Existing tests (preserved)
   // -------------------------------------------------------------------------
+
+  it("filters log lines by detected level", () => {
+    const lines = [
+      "I0609 22:26:09.000000  1 foo.go:1] all good",
+      "W0609 22:26:09.000000  1 foo.go:2] degraded",
+      "E0609 22:26:09.000000  1 foo.go:3] failed",
+      "plain neutral line",
+    ];
+
+    expect(filterLogLinesByLevel(lines, { error: false, warn: false, info: false, debug: false })).toEqual(lines);
+    expect(filterLogLinesByLevel(lines, { error: true, warn: false, info: false, debug: false })).toEqual([lines[2]]);
+    expect(filterLogLinesByLevel(lines, { error: true, warn: true, info: false, debug: false })).toEqual([lines[1], lines[2]]);
+  });
+
+  it("extracts selected log line detail from the shared parser", () => {
+    const line = "\x1b[31mE0609 22:26:09.000000  1 bar.go:99] failed to connect\x1b[0m";
+    const detail = getLogLineDetail(line);
+
+    expect(detail.level).toBe("error");
+    expect(detail.source).toBe("bar.go:99");
+    expect(detail.message).toBe("failed to connect");
+    expect(detail.hasAnsi).toBe(true);
+    expect(detail.stripped).toBe("E0609 22:26:09.000000  1 bar.go:99] failed to connect");
+  });
 
   it("calls OpenLogStream with defaults on mount (500 tail, first regular container)", async () => {
     mockOpenLogStream.mockImplementation(() => openSuccess());
@@ -384,6 +408,110 @@ describe("LogsPane", () => {
 
     await waitFor(() => expect(mockClipboardWrite).toHaveBeenCalledWith("line A\nline B\nline C"));
     await waitFor(() => expect(getByText("copied")).toBeTruthy());
+  });
+
+  it("copies an individual visible log line", async () => {
+    mockOpenLogStream.mockImplementation(() => openSuccess("s-copy-line"));
+    const { getAllByTestId, getByRole, getByText } = render(<LogsPane cluster="homelab" pod={defaultPod} />);
+    await waitFor(() => expect(eventHandlers["podlogs:s-copy-line"]).toBeDefined());
+
+    act(() => {
+      fireChunk("podlogs:s-copy-line", ["line A", "line B", "line C"]);
+    });
+    await waitFor(() => expect(getByText("line B")).toBeTruthy());
+
+    const rows = getAllByTestId("log-line");
+    act(() => {
+      fireEvent.click(rows[1]);
+    });
+
+    expect((rows[1] as HTMLElement).style.background).toContain("var(--color-background-info)");
+
+    const copyLineButton = getByRole("button", { name: "copy log line: line B" });
+    act(() => {
+      fireEvent.click(copyLineButton);
+    });
+
+    await waitFor(() => expect(mockClipboardWrite).toHaveBeenCalledWith("line B"));
+    expect(mockClipboardWrite).not.toHaveBeenCalledWith("line A\nline B\nline C");
+    expect(copyLineButton.getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("shows selected line detail with copy actions and level filtering", async () => {
+    mockOpenLogStream.mockImplementation(() => openSuccess("s-line-detail"));
+    const { getAllByTestId, getAllByText, getByRole, getByTestId, getByText, queryByText } = render(
+      <LogsPane cluster="homelab" pod={defaultPod} />,
+    );
+    await waitFor(() => expect(eventHandlers["podlogs:s-line-detail"]).toBeDefined());
+
+    const infoLine = "I0609 22:26:09.000000  1 foo.go:1] all good";
+    const errorLine = "E0609 22:26:09.000000  1 bar.go:99] failed to connect";
+
+    act(() => {
+      fireChunk("podlogs:s-line-detail", [infoLine, errorLine]);
+    });
+    await waitFor(() => expect(getByText(/failed to connect/)).toBeTruthy());
+
+    act(() => {
+      fireEvent.click(getAllByTestId("log-line")[1]);
+    });
+
+    const detail = getByTestId("log-line-detail");
+    expect(detail.textContent).toContain("selected line");
+    expect(detail.textContent).toContain("error");
+    expect(detail.textContent).toContain("bar.go:99");
+    expect(detail.textContent).toContain("failed to connect");
+
+    act(() => {
+      fireEvent.click(getByRole("button", { name: "copy log message" }));
+    });
+    await waitFor(() => expect(mockClipboardWrite).toHaveBeenCalledWith("failed to connect"));
+
+    act(() => {
+      fireEvent.click(getByRole("button", { name: "copy raw log line" }));
+    });
+    await waitFor(() => expect(mockClipboardWrite).toHaveBeenCalledWith(errorLine));
+
+    act(() => {
+      fireEvent.click(getByRole("button", { name: "filter error logs" }));
+    });
+
+    expect(queryByText(/all good/)).toBeNull();
+    expect(getAllByText(/failed to connect/).length).toBeGreaterThan(0);
+  });
+
+  it("level chips filter visible logs and copy uses the visible set", async () => {
+    mockOpenLogStream.mockImplementation(() => openSuccess("s-level-filter"));
+    const { getByText, queryByText, getByRole } = render(<LogsPane cluster="homelab" pod={defaultPod} />);
+    await waitFor(() => expect(eventHandlers["podlogs:s-level-filter"]).toBeDefined());
+
+    const infoLine = "I0609 22:26:09.000000  1 foo.go:1] all good";
+    const warnLine = "W0609 22:26:09.000000  1 foo.go:2] degraded";
+    const errorLine = "E0609 22:26:09.000000  1 foo.go:3] failed";
+    const neutralLine = "plain neutral line";
+
+    act(() => {
+      fireChunk("podlogs:s-level-filter", [infoLine, warnLine, errorLine, neutralLine]);
+    });
+    await waitFor(() => expect(getByText(/all good/)).toBeTruthy());
+    expect(getByText(/degraded/)).toBeTruthy();
+    expect(getByText(/failed/)).toBeTruthy();
+    expect(getByText(neutralLine)).toBeTruthy();
+
+    act(() => {
+      fireEvent.click(getByText("error"));
+    });
+
+    expect(queryByText(/all good/)).toBeNull();
+    expect(queryByText(/degraded/)).toBeNull();
+    expect(getByText(/failed/)).toBeTruthy();
+    expect(queryByText(neutralLine)).toBeNull();
+
+    act(() => {
+      fireEvent.click(getByRole("button", { name: /copy logs/i }));
+    });
+
+    await waitFor(() => expect(mockClipboardWrite).toHaveBeenCalledWith(errorLine));
   });
 
   // -------------------------------------------------------------------------

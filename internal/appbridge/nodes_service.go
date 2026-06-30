@@ -51,11 +51,12 @@ func (s *NodesService) ListNodes(cluster string) NodesResultDTO {
 // zero DTO with empty-but-non-nil collections (never panics on null).
 func (s *NodesService) GetNodeDetail(cluster, name string) NodeDetailDTO {
 	empty := NodeDetailDTO{
-		Labels:     map[string]string{},
-		Taints:     []NodeTaintDTO{},
-		Conditions: []ConditionDTO{},
-		Events:     []EventDTO{},
-		PodsOnNode: []PodOnNodeDTO{},
+		Labels:      map[string]string{},
+		Annotations: map[string]string{},
+		Taints:      []NodeTaintDTO{},
+		Conditions:  []ConditionDTO{},
+		Events:      []EventDTO{},
+		PodsOnNode:  []PodOnNodeDTO{},
 	}
 	conn, ok := s.lookup(cluster)
 	if !ok {
@@ -71,6 +72,10 @@ func (s *NodesService) GetNodeDetail(cluster, name string) NodeDetailDTO {
 	labels := d.Labels
 	if labels == nil {
 		labels = map[string]string{}
+	}
+	annotations := d.Annotations
+	if annotations == nil {
+		annotations = map[string]string{}
 	}
 
 	taints := make([]NodeTaintDTO, 0, len(d.Taints))
@@ -94,13 +99,14 @@ func (s *NodesService) GetNodeDetail(cluster, name string) NodeDetailDTO {
 	}
 
 	return NodeDetailDTO{
-		Summary:    toNodeSummaryDTO(d.Summary),
-		Labels:     labels,
-		Taints:     taints,
-		Conditions: conds,
-		Events:     events,
-		YAML:       d.YAML,
-		PodsOnNode: pods,
+		Summary:     toNodeSummaryDTO(d.Summary),
+		Labels:      labels,
+		Annotations: annotations,
+		Taints:      taints,
+		Conditions:  conds,
+		Events:      events,
+		YAML:        d.YAML,
+		PodsOnNode:  pods,
 	}
 }
 

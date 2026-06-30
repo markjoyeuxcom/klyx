@@ -1,6 +1,6 @@
 import { type Tone, toneColor, ellipsis } from "./styles";
 
-// SummaryCell: one cell in a summary strip (GitOps/NodesView/NetworkView/
+// SummaryCell: one cell in a summary strip (GitOps/NodesView/GatewayApiView/
 // CertsView). Uniform sizing. The value colour follows the tone: the default
 // `neutral` reads at primary weight, `muted` dims to tertiary (for zero/idle
 // counts), and a status tone colours it.

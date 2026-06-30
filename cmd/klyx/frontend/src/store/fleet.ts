@@ -84,15 +84,31 @@ type TapeSlice = { cluster: string | null; loading: boolean; counts: TapeCounts 
 const emptyTapeCounts: TapeCounts = { workloads: "unreadable", pods: "unreadable", events: "unreadable", nodes: "unreadable", helm: "unreadable", flux: "unreadable", argo: "unreadable" };
 
 export type ArgoConditionDTO = { type: string; message: string };
+export type ArgoResourceDTO = { group: string; kind: string; namespace: string; name: string; status: string; health: string };
+export type ArgoResourceRuleDTO = { group: string; kind: string };
+export type ArgoProjectDTO = {
+  namespace: string; name: string; description: string;
+  sourceRepos: string[]; destinations: string[]; roles: number; roleNames?: string[]; orphanWarn: boolean;
+  clusterResourceWhitelist?: ArgoResourceRuleDTO[]; clusterResourceBlacklist?: ArgoResourceRuleDTO[];
+  namespaceResourceWhitelist?: ArgoResourceRuleDTO[]; namespaceResourceBlacklist?: ArgoResourceRuleDTO[];
+};
+export type ArgoAppSetConditionDTO = { type: string; status: string; reason: string; message: string };
+export type ArgoApplicationSetDTO = {
+  namespace: string; name: string; generators: string[]; templateName: string;
+  project: string; repoURL: string; path: string; targetRevision: string; destNamespace: string;
+  destServer?: string; generatedApps: number; generatedNames?: string[]; healthy: boolean; conditions: ArgoAppSetConditionDTO[];
+};
 export type ArgoAppDTO = {
   namespace: string; name: string; project: string;
   syncStatus: string; healthStatus: string; broken: boolean;
   revision: string; repoURL: string; path: string; chart: string; targetRevision: string;
-  extraSources: number; destNamespace: string; autoSync: boolean;
+  extraSources: number; destNamespace: string; applicationSet?: string; autoSync: boolean;
   opPhase: string; opMessage: string;
-  conditions: ArgoConditionDTO[]; reconciledUnix: number;
+  conditions: ArgoConditionDTO[]; resources?: ArgoResourceDTO[]; reconciledUnix: number;
 };
 export type ArgoResultDTO = { available: boolean; message?: string; apps: ArgoAppDTO[] };
+export type ArgoProjectsResultDTO = { available: boolean; message?: string; projects: ArgoProjectDTO[] };
+export type ArgoApplicationSetsResultDTO = { available: boolean; message?: string; applicationSets: ArgoApplicationSetDTO[] };
 
 export type ConditionDTO = { type: string; status: string; reason: string; message: string };
 export type InventoryEntryDTO = { group: string; version: string; kind: string; namespace: string; name: string };
@@ -146,6 +162,7 @@ export type CertificateDTO = {
   issuerName: string;
   secretName: string;
   dnsNames: string[];
+  notBeforeUnix?: number;
   notAfterUnix: number;
   expiresInSeconds: number;
   renewalUnix: number;
@@ -186,7 +203,8 @@ export type CertManagerSlice = {
 
 // "observability" removed 2026-06-10: metrics ship inline in overview/workloads/network lanes
 // (design principle 5); a dedicated surface can return when it has real content.
-export type ClusterSection = "overview" | "gitops" | "argo" | "helm" | "certs" | "network" | "resources" | "crds" | "workloads" | "pods" | "events" | "nodes";
+export type ClusterSection = "overview" | "gitops" | "argo" | "helm" | "certs" | "gatewayApi" | "resources" | "crds" | "workloads" | "pods" | "events" | "nodes";
+export type ArgoViewMode = "applications" | "projects" | "applicationsets";
 
 export type OwnerDTO = { kind: string; namespace: string; name: string };
 export type PodDTO = { name: string; ready: boolean; restarts: number; reason: string; node: string; ageSeconds: number };
@@ -197,7 +215,8 @@ export type WorkloadUsageDTO = { cpuUsage: number | null; memUsage: number | nul
 export type WorkloadMetricsStatusDTO = { available: boolean; message: string; updatedAt: string };
 export type WorkloadMetricsResultDTO = { status: WorkloadMetricsStatusDTO; usage: Record<string, WorkloadUsageDTO> };
 export type WorkloadsResultDTO = { fluxPresent: boolean; namespaces: string[]; workloads: WorkloadDTO[] };
-export type WorkloadKind = "Deployment" | "StatefulSet" | "DaemonSet";
+export const WORKLOAD_KINDS = ["Deployment", "StatefulSet", "DaemonSet"] as const;
+export type WorkloadKind = typeof WORKLOAD_KINDS[number];
 export type WorkloadsSlice = {
   cluster: string | null;
   namespace: string;        // "" = all
@@ -216,12 +235,21 @@ export type WorkloadsSlice = {
   live: boolean;
 };
 
+function workloadKindFilterFor(kinds: readonly WorkloadKind[]): Record<WorkloadKind, boolean> {
+  const selected = new Set(kinds.length === 0 ? WORKLOAD_KINDS : kinds);
+  return {
+    Deployment: selected.has("Deployment"),
+    StatefulSet: selected.has("StatefulSet"),
+    DaemonSet: selected.has("DaemonSet"),
+  };
+}
+
 export type ContainerPortDTO = { name: string; port: number; protocol: string };
 // ports is optional in the type (older fixtures omit it); the backend always sends it.
 export type ContainerSummaryDTO = { name: string; image: string; ready: boolean; restarts: number; state: string; init: boolean; ports?: ContainerPortDTO[] };
 export type PodSummaryDTO = { namespace: string; name: string; ready: boolean; phase: string; reason: string; rank: "unhealthy"|"degraded"|"restarts"|"healthy"; restarts: number; node: string; ip: string; ownerKind: string; ownerName: string; ageSeconds: number; containers: ContainerSummaryDTO[] };
 export type PodsResultDTO = { namespaces: string[]; pods: PodSummaryDTO[] };
-export type PodDetailDTO = { summary: PodSummaryDTO; labels: Record<string, string>; conditions: ConditionDTO[]; events: EventDTO[]; yaml: string; qosClass: string; serviceAccount: string };
+export type PodDetailDTO = { summary: PodSummaryDTO; labels: Record<string, string>; annotations?: Record<string, string>; conditions: ConditionDTO[]; events: EventDTO[]; yaml: string; qosClass: string; serviceAccount: string };
 
 export type PodRef = { namespace: string; name: string };
 export type PodsSlice = {
@@ -264,14 +292,14 @@ export type ServiceBackingDTO = { ports: ServicePortDTO[]; ready: number; notRea
 export type HPAMetricDTO = { name: string; type: string; target: string; current: string };
 export type HPAScalingDTO = { minReplicas: number; maxReplicas: number; currentReplicas: number; desiredReplicas: number; targetKind: string; targetName: string; lastScaleUnix: number; metrics: HPAMetricDTO[] };
 export type RelatedRefDTO = { kind: string; namespace: string; name: string; group: string; version: string; plural: string; scope: string; relation: string };
-export type InstanceDetailDTO = { kind: string; namespace: string; name: string; created: string; labels: Record<string, string>; conditions: ConditionDTO[]; events: EventDTO[]; yaml: string; secretKeys?: SecretKeyDTO[]; serviceBacking?: ServiceBackingDTO | null; hpaScaling?: HPAScalingDTO | null; related?: RelatedRefDTO[] };
+export type InstanceDetailDTO = { kind: string; namespace: string; name: string; created: string; labels: Record<string, string>; annotations?: Record<string, string>; conditions: ConditionDTO[]; events: EventDTO[]; yaml: string; secretKeys?: SecretKeyDTO[]; serviceBacking?: ServiceBackingDTO | null; hpaScaling?: HPAScalingDTO | null; related?: RelatedRefDTO[] };
 export type InstanceDetailSlice = { ref: InstanceRef | null; detail: InstanceDetailDTO | null; loading: boolean };
 
 export type Route =
   | { name: "fleet" }
   | { name: "forwards" }
   | { name: "settings" }
-  | { name: "cluster"; cluster: string; section: ClusterSection; resource?: ResourceRef; instance?: InstanceRef; gateway?: GatewayRef };
+  | { name: "cluster"; cluster: string; section: ClusterSection; resource?: ResourceRef; instance?: InstanceRef; gateway?: GatewayRef; argoView?: ArgoViewMode };
 
 export const SECTION_LABELS: Record<ClusterSection, string> = {
   overview: "Overview",
@@ -282,7 +310,7 @@ export const SECTION_LABELS: Record<ClusterSection, string> = {
   argo: "Argo CD",
   helm: "Helm",
   certs: "Certificates",
-  network: "Network",
+  gatewayApi: "Gateway API",
   resources: "Resources",
   crds: "CRDs",
   workloads: "Workloads",
@@ -314,13 +342,14 @@ export type GatewayRefDTO = { namespace: string; name: string; className: string
 export type GatewayListDTO = { gatewayAPIServed: boolean; gateways: GatewayRefDTO[] };
 export type PolicyDetailDTO = { key: string; value: string };
 export type PolicyRefDTO = { kind: string; namespace: string; name: string; targetKind: string; targetNamespace: string; targetName: string; targetSectionName: string; summary: string; details: PolicyDetailDTO[]; inferred: boolean; match: string };
-export type ListenerDTO = { name: string; protocol: string; hostname: string; port: number };
+export type CertificateRefDTO = { group: string; kind: string; namespace: string; name: string };
+export type ListenerDTO = { name: string; protocol: string; hostname: string; port: number; certificateRefs?: CertificateRefDTO[] };
 export type MatchDTO = { pathType: string; pathValue: string; method: string };
 export type BackendDTO = { kind: string; name: string; namespace: string; port: number; weight: number };
 export type PodCountDTO = { ready: number; total: number; unknown: boolean };
 export type ServiceNodeDTO = { namespace: string; name: string; type: string; port: number; resolved: boolean; global: boolean; meshClusters: string[]; meshUnconfirmed: boolean; policies: PolicyRefDTO[]; cnps: PolicyRefDTO[] };
 export type GatewayNodeDTO = { namespace: string; name: string; className: string; listeners: ListenerDTO[]; addresses?: GatewayAddressDTO[]; accepted: boolean; programmed: boolean; policies: PolicyRefDTO[] };
-export type RouteNodeDTO = { namespace: string; name: string; hostnames: string[]; matches: MatchDTO[]; accepted: boolean; resolvedRefs: boolean; backends: BackendDTO[]; services: ServiceNodeDTO[]; pods: PodCountDTO; policies: PolicyRefDTO[] };
+export type RouteNodeDTO = { namespace: string; name: string; hostnames: string[]; matches: MatchDTO[]; parentSectionName?: string; accepted: boolean; resolvedRefs: boolean; backends: BackendDTO[]; services: ServiceNodeDTO[]; pods: PodCountDTO; policies: PolicyRefDTO[] };
 export type TopologyDTO = { gateway: GatewayNodeDTO; routes: RouteNodeDTO[]; clusterPolicies?: PolicyRefDTO[]; warnings?: string[]; error?: string };
 export type GatewayRef = { namespace: string; name: string };
 
@@ -353,7 +382,7 @@ export type NodeSummaryDTO = { name: string; roles: string[]; ready: boolean; un
 export type NodesResultDTO = { nodes: NodeSummaryDTO[] };
 export type NodeTaintDTO = { key: string; value: string; effect: string };
 export type PodOnNodeDTO = { namespace: string; name: string; phase: string };
-export type NodeDetailDTO = { summary: NodeSummaryDTO; labels: Record<string, string>; taints: NodeTaintDTO[]; conditions: ConditionDTO[]; events: EventDTO[]; yaml: string; podsOnNode: PodOnNodeDTO[] };
+export type NodeDetailDTO = { summary: NodeSummaryDTO; labels: Record<string, string>; annotations?: Record<string, string>; taints: NodeTaintDTO[]; conditions: ConditionDTO[]; events: EventDTO[]; yaml: string; podsOnNode: PodOnNodeDTO[] };
 
 export type NodeRef = { name: string };
 export type NodesSlice = {
@@ -403,9 +432,17 @@ export type HelmSlice = {
 type ArgoSlice = {
   cluster: string | null;
   apps: ArgoAppDTO[];
+  projects: ArgoProjectDTO[];
+  applicationSets: ArgoApplicationSetDTO[];
   available: boolean;
+  projectsAvailable: boolean;
+  applicationSetsAvailable: boolean;
   message: string;
+  projectsMessage: string;
+  applicationSetsMessage: string;
   loading: boolean;
+  projectsLoading: boolean;
+  applicationSetsLoading: boolean;
   expanded: string[]; // "<ns>/<name>" keys
 };
 
@@ -446,6 +483,7 @@ type FleetState = {
   clearTape: () => void;
   openCluster: (name: string) => void;
   setSection: (s: ClusterSection) => void;
+  openArgo: (mode?: ArgoViewMode) => void;
   openResource: (ref: ResourceRef) => void;
   closeResource: () => void;
   instances: InstancesSlice;
@@ -509,6 +547,8 @@ type FleetState = {
   setWorkloadsLoading: (cluster: string, namespace: string) => void;
   setWorkloads: (cluster: string, namespace: string, result: WorkloadsResultDTO) => void;
   toggleWorkloadKind: (k: WorkloadKind) => void;
+  setWorkloadKindFilter: (kinds: readonly WorkloadKind[]) => void;
+  openWorkloads: (kinds?: readonly WorkloadKind[]) => void;
   toggleNeedsAttention: () => void;
   setWorkloadsNeedsAttention: (v: boolean) => void;
   setWorkloadsSearch: (s: string) => void;
@@ -545,6 +585,10 @@ type FleetState = {
   argo: ArgoSlice;
   setArgoLoading: (cluster: string) => void;
   setArgo: (cluster: string, r: ArgoResultDTO) => void;
+  setArgoProjectsLoading: (cluster: string) => void;
+  setArgoProjects: (cluster: string, r: ArgoProjectsResultDTO) => void;
+  setArgoApplicationSetsLoading: (cluster: string) => void;
+  setArgoApplicationSets: (cluster: string, r: ArgoApplicationSetsResultDTO) => void;
   toggleArgoExpand: (key: string) => void;
   clearArgo: () => void;
   setHelmLoading: (cluster: string) => void;
@@ -581,6 +625,19 @@ export const useFleet = create<FleetState>((set) => ({
   openCluster: (name) => set({ route: { name: "cluster", cluster: name, section: "overview" } }),
   setSection: (section) =>
     set((s) => (s.route.name === "cluster" ? { route: { name: "cluster", cluster: s.route.cluster, section } } : {})),
+  openArgo: (mode = "applications") =>
+    set((s) => (s.route.name === "cluster" ? { route: { name: "cluster", cluster: s.route.cluster, section: "argo", argoView: mode } } : {})),
+  openWorkloads: (kinds) =>
+    set((s) => {
+      if (s.route.name !== "cluster") return {};
+      return {
+        route: { name: "cluster", cluster: s.route.cluster, section: "workloads" },
+        workloads: {
+          ...s.workloads,
+          kindFilter: kinds ? workloadKindFilterFor(kinds) : s.workloads.kindFilter,
+        },
+      };
+    }),
   openResource: (resource) =>
     set((s) => {
       if (s.route.name !== "cluster") return {};
@@ -623,7 +680,11 @@ export const useFleet = create<FleetState>((set) => ({
         ? { route: { name: "cluster", cluster: s.route.cluster, section: s.route.section, resource: s.route.resource } }
         : {}),
   instanceDetail: { ref: null, detail: null, loading: false },
-  setInstanceDetailLoading: (ref) => set({ instanceDetail: { ref, detail: null, loading: true } }),
+  setInstanceDetailLoading: (ref) => set((s) => {
+    const current = s.instanceDetail;
+    const sameRef = current.ref?.namespace === ref.namespace && current.ref?.name === ref.name;
+    return { instanceDetail: { ref, detail: sameRef ? current.detail : null, loading: true } };
+  }),
   setInstanceDetail: (detail) => set((s) => ({ instanceDetail: { ...s.instanceDetail, detail, loading: false } })),
   clearInstanceDetail: () => set({ instanceDetail: { ref: null, detail: null, loading: false } }),
   gitops: { cluster: null, resources: [], sources: [], loading: false, expandedKey: null, detail: null },
@@ -660,12 +721,12 @@ export const useFleet = create<FleetState>((set) => ({
     set((s) =>
       s.route.name === "cluster"
         ? {
-            route: { name: "cluster", cluster: s.route.cluster, section: "network", gateway: { namespace, name } },
+            route: { name: "cluster", cluster: s.route.cluster, section: "gatewayApi", gateway: { namespace, name } },
             network: { ...s.network, selected: { namespace, name }, topology: null, topologyLoading: true, selectedRoute: null, routeMetrics: {}, routeMetricsStatus: null, routeMetricsStale: false },
           }
         : {}),
   closeGateway: () =>
-    set((s) => (s.route.name === "cluster" ? { route: { name: "cluster", cluster: s.route.cluster, section: "network" } } : {})),
+    set((s) => (s.route.name === "cluster" ? { route: { name: "cluster", cluster: s.route.cluster, section: "gatewayApi" } } : {})),
   network: { served: false, gateways: [], listLoading: false, selected: null, topology: null, topologyLoading: false, selectedRoute: null, routeMetrics: {}, routeMetricsStatus: null, routeMetricsStale: false },
   setGatewaysLoading: () => set((s) => ({ network: { ...s.network, listLoading: true } })),
   setGateways: (l) => set((s) => ({ network: { ...s.network, served: l.gatewayAPIServed, gateways: l.gateways ?? [], listLoading: false } })),
@@ -696,7 +757,7 @@ export const useFleet = create<FleetState>((set) => ({
   setMetrics: (cluster, dto) => set({ metrics: { cluster, dto, loading: false } }),
   clearMetrics: () => set({ metrics: { cluster: null, dto: null, loading: false } }),
   workloads: { cluster: null, namespace: "", items: [], namespaces: [], fluxPresent: false, loading: false,
-    kindFilter: { Deployment: true, StatefulSet: true, DaemonSet: true }, needsAttention: false, search: "", expanded: [],
+    kindFilter: workloadKindFilterFor(WORKLOAD_KINDS), needsAttention: false, search: "", expanded: [],
     metricsAvailable: false, metricsStatus: null, metricsStale: false, nearLimitSort: false, live: false },
   setWorkloadsLoading: (cluster, namespace) => set((s) => ({ workloads: { ...s.workloads, cluster, namespace, loading: true } })),
   setWorkloads: (cluster, namespace, result) => set((s) => {
@@ -707,6 +768,7 @@ export const useFleet = create<FleetState>((set) => ({
     return { workloads: { ...s.workloads, cluster, namespace, items: result.workloads ?? [], namespaces, fluxPresent: result.fluxPresent, loading: false } };
   }),
   toggleWorkloadKind: (k) => set((s) => ({ workloads: { ...s.workloads, kindFilter: { ...s.workloads.kindFilter, [k]: !s.workloads.kindFilter[k] } } })),
+  setWorkloadKindFilter: (kinds) => set((s) => ({ workloads: { ...s.workloads, kindFilter: workloadKindFilterFor(kinds) } })),
   toggleNeedsAttention: () => set((s) => ({ workloads: { ...s.workloads, needsAttention: !s.workloads.needsAttention } })),
   setWorkloadsNeedsAttention: (v) => set((s) => ({ workloads: { ...s.workloads, needsAttention: v } })),
   setWorkloadsSearch: (search) => set((s) => ({ workloads: { ...s.workloads, search } })),
@@ -734,7 +796,7 @@ export const useFleet = create<FleetState>((set) => ({
       if (s.workloads.cluster !== cluster || s.workloads.namespace !== namespace) return {};
       return { workloads: { ...s.workloads, live } };
     }),
-  clearWorkloads: () => set((s) => ({ workloads: { ...s.workloads, cluster: null, items: [], namespaces: [], expanded: [], needsAttention: false, search: "", namespace: "", kindFilter: { Deployment: true, StatefulSet: true, DaemonSet: true }, metricsAvailable: false, metricsStatus: null, metricsStale: false, nearLimitSort: false, live: false } })),
+  clearWorkloads: () => set((s) => ({ workloads: { ...s.workloads, cluster: null, items: [], namespaces: [], expanded: [], needsAttention: false, search: "", namespace: "", metricsAvailable: false, metricsStatus: null, metricsStale: false, nearLimitSort: false, live: false } })),
   pods: { cluster: null, namespace: "", items: [], namespaces: [], loading: false, needsAttention: false, search: "", selected: null, detail: null, detailLoading: false, live: false },
   setPodsLoading: (cluster, namespace) => set((s) => ({ pods: { ...s.pods, cluster, namespace, loading: true } })),
   setPods: (cluster, namespace, result) => set((s) => {
@@ -786,11 +848,47 @@ export const useFleet = create<FleetState>((set) => ({
   }),
   clearNodes: () => set({ nodes: { cluster: null, items: [], loading: false, selected: null, detail: null, detailLoading: false } }),
   helm: { cluster: null, releases: [], available: true, message: "", loading: false, selected: null, history: [], values: "", detailLoading: false },
-  argo: { cluster: null, apps: [], available: true, message: "", loading: false, expanded: [] },
+  argo: {
+    cluster: null,
+    apps: [],
+    projects: [],
+    applicationSets: [],
+    available: true,
+    projectsAvailable: true,
+    applicationSetsAvailable: true,
+    message: "",
+    projectsMessage: "",
+    applicationSetsMessage: "",
+    loading: false,
+    projectsLoading: false,
+    applicationSetsLoading: false,
+    expanded: [],
+  },
   setArgoLoading: (cluster) => set((s) => ({ argo: { ...s.argo, cluster, loading: true } })),
   setArgo: (cluster, r) => set((s) => ({ argo: { ...s.argo, cluster, apps: r.apps ?? [], available: r.available, message: r.message ?? "", loading: false } })),
+  setArgoProjectsLoading: (cluster) => set((s) => ({ argo: { ...s.argo, cluster, projectsLoading: true } })),
+  setArgoProjects: (cluster, r) => set((s) => ({ argo: { ...s.argo, cluster, projects: r.projects ?? [], projectsAvailable: r.available, projectsMessage: r.message ?? "", projectsLoading: false } })),
+  setArgoApplicationSetsLoading: (cluster) => set((s) => ({ argo: { ...s.argo, cluster, applicationSetsLoading: true } })),
+  setArgoApplicationSets: (cluster, r) => set((s) => ({ argo: { ...s.argo, cluster, applicationSets: r.applicationSets ?? [], applicationSetsAvailable: r.available, applicationSetsMessage: r.message ?? "", applicationSetsLoading: false } })),
   toggleArgoExpand: (key) => set((s) => ({ argo: { ...s.argo, expanded: s.argo.expanded.includes(key) ? s.argo.expanded.filter((k) => k !== key) : [...s.argo.expanded, key] } })),
-  clearArgo: () => set({ argo: { cluster: null, apps: [], available: true, message: "", loading: false, expanded: [] } }),
+  clearArgo: () => set({
+    argo: {
+      cluster: null,
+      apps: [],
+      projects: [],
+      applicationSets: [],
+      available: true,
+      projectsAvailable: true,
+      applicationSetsAvailable: true,
+      message: "",
+      projectsMessage: "",
+      applicationSetsMessage: "",
+      loading: false,
+      projectsLoading: false,
+      applicationSetsLoading: false,
+      expanded: [],
+    },
+  }),
   setHelmLoading: (cluster) => set((s) => ({ helm: { ...s.helm, cluster, loading: true } })),
   setHelm: (cluster, available, message, releases) => set((s) => ({ helm: { ...s.helm, cluster, available, message, releases, loading: false } })),
   selectHelmRelease: (ref) => set((s) => ({ helm: { ...s.helm, selected: ref, history: [], values: "", detailLoading: ref !== null } })),

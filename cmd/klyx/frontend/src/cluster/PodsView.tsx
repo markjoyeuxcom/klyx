@@ -16,6 +16,7 @@ import { useResizableDock } from "../chrome/useResizableDock";
 import { useListKeys } from "../chrome/useListKeys";
 import { EmptyState } from "../chrome/EmptyState";
 import { SkeletonRows } from "../chrome/SkeletonRows";
+import { InspectorSection, InspectorTabButton, MetadataChips, inspectorStateBox } from "./ResourceInspector";
 
 const rankDot: Record<string, string> = {
   unhealthy: "var(--color-text-danger)",
@@ -403,24 +404,14 @@ function PodDetailPanel({
 
       {/* Tabs: info | yaml (logs moved to dock) */}
       <div style={{ display: "flex", gap: 2, marginBottom: 12 }}>
-        {(["info", "yaml"] as const).map((t) => (
-          <button
-            key={t}
-            onClick={() => setTab(t)}
-            style={{
-              fontSize: 10, padding: "3px 10px", borderRadius: 4, cursor: "pointer",
-              border: tab === t ? "0.5px solid var(--color-text-info)" : "0.5px solid var(--color-border-tertiary)",
-              background: tab === t ? "var(--color-background-info, transparent)" : "transparent",
-              color: tab === t ? "var(--color-text-info)" : "var(--color-text-tertiary)",
-            }}
-          >{t}</button>
-        ))}
+        <InspectorTabButton active={tab === "info"} onClick={() => setTab("info")}>info</InspectorTabButton>
+        <InspectorTabButton active={tab === "yaml"} onClick={() => setTab("yaml")}>yaml</InspectorTabButton>
       </div>
 
       {loading && !detail ? (
-        <div style={{ color: "var(--color-text-secondary)" }}>Loading detail…</div>
+        <div style={inspectorStateBox}>Loading detail...</div>
       ) : !detail ? (
-        <div style={{ color: "var(--color-text-secondary)" }}>Could not load pod detail.</div>
+        <div style={inspectorStateBox}>Could not load pod detail.</div>
       ) : (
         <>
           {tab === "info" && (
@@ -625,28 +616,20 @@ function InfoTab({ detail, cluster, namespace, name, onRestart, onDelete }: {
       </div>
 
       {/* Summary header */}
-      <Section title="Summary">
+      <InspectorSection title="Summary">
         <InfoRow label="phase">{p.phase}{p.reason ? ` · ${p.reason}` : ""}</InfoRow>
         {p.ownerKind && <InfoRow label="owner">{p.ownerKind}/{p.ownerName}</InfoRow>}
         {p.node && <InfoRow label="node">{p.node}</InfoRow>}
         {p.ip && <InfoRow label="ip">{p.ip}</InfoRow>}
         {detail.qosClass && <InfoRow label="qos">{detail.qosClass}</InfoRow>}
         {detail.serviceAccount && <InfoRow label="sa">{detail.serviceAccount}</InfoRow>}
-      </Section>
+      </InspectorSection>
 
-      {/* Labels */}
-      {Object.keys(detail.labels).length > 0 && (
-        <Section title="Labels">
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
-            {Object.entries(detail.labels).map(([k, v]) => (
-              <span key={k} style={{ background: "var(--color-background-secondary)", color: "var(--color-text-secondary)", fontSize: 10, padding: "1px 5px", borderRadius: 3 }}>{k}={v}</span>
-            ))}
-          </div>
-        </Section>
-      )}
+      <MetadataChips title="Labels" values={detail.labels} />
+      <MetadataChips title="Annotations" values={detail.annotations} defaultCollapsed />
 
       {/* Containers */}
-      <Section title={`Containers (${p.containers.length})`}>
+      <InspectorSection title="Containers" count={p.containers.length} collapsible>
         <div style={{ display: "grid", gridTemplateColumns: containerGridCols, gap: 6, fontSize: 9, marginBottom: 2, color: "var(--color-text-tertiary)", textTransform: "uppercase" }}>
           <span>name</span><span>state</span><span>image</span><span>rst</span>
         </div>
@@ -661,11 +644,11 @@ function InfoTab({ detail, cluster, namespace, name, onRestart, onDelete }: {
             <span style={{ color: c.restarts > 0 ? "var(--color-text-warning)" : "var(--color-text-tertiary)" }}>{c.restarts}</span>
           </div>
         ))}
-      </Section>
+      </InspectorSection>
 
       {/* Conditions */}
       {detail.conditions.length > 0 && (
-        <Section title="Conditions">
+        <InspectorSection title="Conditions" collapsible>
           {detail.conditions.map((c) => (
             <div key={c.type} style={{ display: "flex", gap: 8, alignItems: "baseline", fontSize: 11 }}>
               <span style={{ width: 7, height: 7, borderRadius: "50%", background: condColor(c.status), display: "inline-block", flexShrink: 0 }} />
@@ -673,11 +656,11 @@ function InfoTab({ detail, cluster, namespace, name, onRestart, onDelete }: {
               <span style={{ color: "var(--color-text-secondary)", ...ellipsis }} title={c.message}>{c.message || c.reason}</span>
             </div>
           ))}
-        </Section>
+        </InspectorSection>
       )}
 
       {/* Events */}
-      <Section title={`Events (${detail.events.length})`}>
+      <InspectorSection title="Events" count={detail.events.length} collapsible>
         {detail.events.length === 0 ? (
           <span style={{ color: "var(--color-text-tertiary)" }}>No events for this pod.</span>
         ) : (
@@ -690,7 +673,7 @@ function InfoTab({ detail, cluster, namespace, name, onRestart, onDelete }: {
             </div>
           ))
         )}
-      </Section>
+      </InspectorSection>
     </>
   );
 }
@@ -872,15 +855,6 @@ function DebugShellButton({
           ))}
         </div>
       )}
-    </div>
-  );
-}
-
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <div style={{ marginBottom: 14 }}>
-      <div style={{ fontSize: 9, textTransform: "uppercase", letterSpacing: 0.5, color: "var(--color-text-tertiary)", marginBottom: 5 }}>{title}</div>
-      <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>{children}</div>
     </div>
   );
 }

@@ -73,14 +73,15 @@ type RelatedRefDTO struct {
 
 // InstanceDetailDTO is the full per-instance detail.
 type InstanceDetailDTO struct {
-	Kind       string            `json:"kind"`
-	Namespace  string            `json:"namespace"`
-	Name       string            `json:"name"`
-	Created    string            `json:"created"` // RFC3339; "" when unset
-	Labels     map[string]string `json:"labels"`
-	Conditions []ConditionDTO    `json:"conditions"`
-	Events     []EventDTO        `json:"events"`
-	YAML       string            `json:"yaml"`
+	Kind        string            `json:"kind"`
+	Namespace   string            `json:"namespace"`
+	Name        string            `json:"name"`
+	Created     string            `json:"created"` // RFC3339; "" when unset
+	Labels      map[string]string `json:"labels"`
+	Annotations map[string]string `json:"annotations"`
+	Conditions  []ConditionDTO    `json:"conditions"`
+	Events      []EventDTO        `json:"events"`
+	YAML        string            `json:"yaml"`
 	// SecretKeys is non-empty only for v1 Secrets. YAML values are masked;
 	// call RevealSecretKey to fetch an individual decoded value.
 	SecretKeys []SecretKeyDTO `json:"secretKeys,omitempty"`

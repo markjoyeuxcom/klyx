@@ -114,7 +114,7 @@ func TestNodesService_ListNodes_NonNilRolesAndProblems(t *testing.T) {
 func TestNodesService_GetNodeDetail_ClusterMiss_NonNilEmpties(t *testing.T) {
 	svc := NewNodesService(func(string) (NodesConn, bool) { return nil, false })
 	d := svc.GetNodeDetail("nope", "node-1")
-	if d.Labels == nil || d.Taints == nil || d.Conditions == nil || d.Events == nil || d.PodsOnNode == nil {
+	if d.Labels == nil || d.Annotations == nil || d.Taints == nil || d.Conditions == nil || d.Events == nil || d.PodsOnNode == nil {
 		t.Fatal("all collections must be non-nil on cluster miss")
 	}
 }
@@ -127,7 +127,8 @@ func TestNodesService_GetNodeDetail_Mapping(t *testing.T) {
 			Ready:   true,
 			Version: "v1.30.0",
 		},
-		Labels: map[string]string{"region": "westeurope"},
+		Labels:      map[string]string{"region": "westeurope"},
+		Annotations: map[string]string{"owner": "platform"},
 		Taints: []fleet.NodeTaint{
 			{Key: "dedicated", Value: "gpu", Effect: "NoSchedule"},
 		},
@@ -152,6 +153,9 @@ func TestNodesService_GetNodeDetail_Mapping(t *testing.T) {
 	if d.Labels["region"] != "westeurope" {
 		t.Errorf("labels: %+v", d.Labels)
 	}
+	if d.Annotations["owner"] != "platform" {
+		t.Errorf("annotations: %+v", d.Annotations)
+	}
 	if len(d.Taints) != 1 || d.Taints[0].Key != "dedicated" || d.Taints[0].Effect != "NoSchedule" {
 		t.Errorf("taints: %+v", d.Taints)
 	}
@@ -173,7 +177,7 @@ func TestNodesService_GetNodeDetail_ErrorReturnsEmpties(t *testing.T) {
 	conn := &fakeNodeConn{detErr: context.DeadlineExceeded}
 	svc := NewNodesService(func(string) (NodesConn, bool) { return conn, true })
 	d := svc.GetNodeDetail("c", "missing")
-	if d.Labels == nil || d.Taints == nil || d.Conditions == nil || d.Events == nil || d.PodsOnNode == nil {
+	if d.Labels == nil || d.Annotations == nil || d.Taints == nil || d.Conditions == nil || d.Events == nil || d.PodsOnNode == nil {
 		t.Fatal("collections must be non-nil on error")
 	}
 	if d.Summary.Name != "" {

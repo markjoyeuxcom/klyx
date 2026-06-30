@@ -3,7 +3,7 @@ import type { CSSProperties } from "react";
 import { useFleet } from "../store/fleet";
 import type { GatewayRefDTO } from "../store/fleet";
 import { listGateways } from "../bridge/gateway";
-import { NetworkTopology } from "./NetworkTopology";
+import { GatewayTopology } from "./GatewayTopology";
 import { frame, ellipsis, SummaryCell, FilterButton } from "../chrome/primitives";
 
 const empty: CSSProperties = { padding: 24, color: "var(--color-text-secondary)", fontSize: 13 };
@@ -35,7 +35,7 @@ function gatewayListeners(g: GatewayRefDTO): string {
   }).join(", ");
 }
 
-export function NetworkView({ cluster }: { cluster: string }) {
+export function GatewayApiView({ cluster }: { cluster: string }) {
   const route = useFleet((s) => s.route);
   const net = useFleet((s) => s.network);
   const openGateway = useFleet((s) => s.openGateway);
@@ -63,7 +63,7 @@ export function NetworkView({ cluster }: { cluster: string }) {
   const programmed = net.gateways.length - pending;
   const classes = new Set(net.gateways.map((g) => g.className).filter(Boolean)).size;
 
-  if (gateway) return <NetworkTopology cluster={cluster} gateway={gateway} />;
+  if (gateway) return <GatewayTopology cluster={cluster} gateway={gateway} />;
 
   if (net.listLoading && net.gateways.length === 0) return <div style={empty}>Loading Gateways…</div>;
   if (!net.served) return <div style={empty}>Gateway API is not installed on this cluster.</div>;
@@ -73,8 +73,8 @@ export function NetworkView({ cluster }: { cluster: string }) {
     <div style={{ padding: "14px 16px", display: "flex", flexDirection: "column", gap: 12, height: "100%", minHeight: 0, overflow: "hidden", boxSizing: "border-box" }}>
       <div style={{ display: "flex", justifyContent: "space-between", gap: 16, alignItems: "flex-start" }}>
         <div>
-          <div style={{ fontSize: 10, color: "var(--color-text-tertiary)", marginBottom: 3 }}>Gateway API</div>
-          <div style={{ fontSize: 18, fontWeight: 600 }}>Network</div>
+          <div style={{ fontSize: 10, color: "var(--color-text-tertiary)", marginBottom: 3 }}>Gateway topology</div>
+          <div style={{ fontSize: 18, fontWeight: 600 }}>Gateway API</div>
         </div>
         <span style={{ fontFamily: "var(--font-mono)", color: pending > 0 ? "var(--color-text-warning)" : "var(--color-text-success)", fontSize: 12 }}>
           {pending > 0 ? `${pending} pending` : "all programmed"}

@@ -174,6 +174,9 @@ func TestRouteForGatewaySectionNameScopesStatus(t *testing.T) {
 	if !rn.Accepted {
 		t.Fatalf("status must be scoped to the https listener (accepted): %+v", rn)
 	}
+	if rn.ParentSectionName != "https" {
+		t.Fatalf("parent section should be projected: %+v", rn)
+	}
 }
 
 func TestRouteForGatewayFloat64Ports(t *testing.T) {

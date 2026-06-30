@@ -17,6 +17,9 @@ type CertificateDTO struct {
 	IssuerName string   `json:"issuerName"`
 	SecretName string   `json:"secretName"`
 	DNSNames   []string `json:"dnsNames"`
+	// NotBeforeUnix is the certificate's start time as a unix timestamp; 0 when
+	// the cert has not been issued yet (status.notBefore empty).
+	NotBeforeUnix int64 `json:"notBeforeUnix"`
 	// NotAfterUnix is the certificate's expiry as a unix timestamp; 0 when the
 	// cert has not been issued yet (status.notAfter empty).
 	NotAfterUnix int64 `json:"notAfterUnix"`
@@ -38,7 +41,13 @@ func toCertificateDTO(c certmanager.Certificate, now time.Time) CertificateDTO {
 		IssuerKind: c.IssuerKind,
 		IssuerName: c.IssuerName,
 		SecretName: c.SecretName,
-		DNSNames:   c.DNSNames,
+		DNSNames:   []string{},
+	}
+	if c.DNSNames != nil {
+		dto.DNSNames = c.DNSNames
+	}
+	if !c.NotBefore.IsZero() {
+		dto.NotBeforeUnix = c.NotBefore.Unix()
 	}
 	if !c.NotAfter.IsZero() {
 		dto.NotAfterUnix = c.NotAfter.Unix()
@@ -102,6 +111,7 @@ func toChainNodeDTO(n certmanager.ChainNode) ChainNodeDTO {
 		Ready:     string(n.Ready),
 		Reason:    n.Reason,
 		Message:   n.Message,
+		Children:  []ChainNodeDTO{},
 	}
 	for _, ch := range n.Children {
 		dto.Children = append(dto.Children, toChainNodeDTO(ch))
@@ -112,7 +122,11 @@ func toChainNodeDTO(n certmanager.ChainNode) ChainNodeDTO {
 func toChainDTO(c certmanager.Chain, now time.Time) CertChainDTO {
 	dto := CertChainDTO{
 		Certificate: toCertificateDTO(c.Certificate, now),
-		Warnings:    c.Warnings,
+		Requests:    []ChainNodeDTO{},
+		Warnings:    []string{},
+	}
+	if c.Warnings != nil {
+		dto.Warnings = c.Warnings
 	}
 	if c.Issuer != nil {
 		i := toIssuerDTO(*c.Issuer)

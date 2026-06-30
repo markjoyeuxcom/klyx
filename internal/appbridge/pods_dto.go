@@ -48,6 +48,7 @@ type PodsResultDTO struct {
 type PodDetailDTO struct {
 	Summary        PodSummaryDTO     `json:"summary"`
 	Labels         map[string]string `json:"labels"`
+	Annotations    map[string]string `json:"annotations"`
 	Conditions     []ConditionDTO    `json:"conditions"`
 	Events         []EventDTO        `json:"events"`
 	YAML           string            `json:"yaml"`

@@ -78,6 +78,7 @@ type Conn interface {
 	CountResource(ctx context.Context, group, version, plural string) (int, bool, error)
 	ListInstances(ctx context.Context, group, version, plural string, limit int64, continueToken string) ([]crd.InstanceMeta, string, error)
 	GetInstanceDetail(ctx context.Context, group, version, plural, ns, name string) (crd.InstanceDetail, error)
+	ApplyResourceYAML(ctx context.Context, group, version, plural, kind, scope, ns, name, yaml string, dryRun bool) error
 	RevealSecretKey(ctx context.Context, ns, name, key string) (string, error)
 	ListGateways(ctx context.Context) ([]gwapi.GatewayRef, bool, error)
 	GetGatewayTopology(ctx context.Context, namespace, name string) (gwapi.Topology, error)
@@ -96,8 +97,10 @@ type Conn interface {
 	HelmValues(ctx context.Context, namespace, release string) (string, error)
 	HelmRollback(ctx context.Context, namespace, release string, revision int) error
 	ListArgoApps(ctx context.Context) ([]argo.App, error)
+	ListArgoProjects(ctx context.Context) ([]argo.Project, error)
+	ListArgoApplicationSets(ctx context.Context) ([]argo.ApplicationSet, error)
 	RefreshArgoApp(ctx context.Context, namespace, name string) error
-	SyncArgoApp(ctx context.Context, namespace, name, revision string) error
+	SyncArgoApp(ctx context.Context, namespace, name string, opts argo.SyncOptions) error
 	GitOpsSummary(ctx context.Context) (GitOpsSummary, error)
 	GitOpsSummaryFlux(ctx context.Context) (fluxPresent bool, total, notReady, suspended int, err error)
 }

@@ -24,6 +24,7 @@ func certObj(ready, reason string, issuing bool) *unstructured.Unstructured {
 			"issuerRef":  map[string]interface{}{"name": "lab-acme-staging", "kind": "ClusterIssuer", "group": "cert-manager.io"},
 		},
 		"status": map[string]interface{}{
+			"notBefore":   "2026-06-01T00:00:00Z",
 			"notAfter":    "2026-09-01T00:00:00Z",
 			"renewalTime": "2026-08-01T00:00:00Z",
 			"conditions":  conds,
@@ -48,8 +49,8 @@ func TestParseCertificateReady(t *testing.T) {
 	if len(c.DNSNames) != 1 || c.DNSNames[0] != "acme-demo.klustr.io" {
 		t.Fatalf("dnsNames: %v", c.DNSNames)
 	}
-	if c.NotAfter.IsZero() || c.RenewalTime.IsZero() {
-		t.Fatalf("times: notAfter=%v renewal=%v", c.NotAfter, c.RenewalTime)
+	if c.NotBefore.IsZero() || c.NotAfter.IsZero() || c.RenewalTime.IsZero() {
+		t.Fatalf("times: notBefore=%v notAfter=%v renewal=%v", c.NotBefore, c.NotAfter, c.RenewalTime)
 	}
 }
 

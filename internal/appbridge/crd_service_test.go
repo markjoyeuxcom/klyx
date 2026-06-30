@@ -16,6 +16,13 @@ type fakeCRDConn struct {
 	nextToken  string
 	detail     crd.InstanceDetail
 	secretData map[string]string // key -> decoded value, for RevealSecretKey tests
+	apply      applyCall
+	applyErr   error
+}
+
+type applyCall struct {
+	group, version, plural, kind, scope, ns, name, yaml string
+	dryRun                                              bool
 }
 
 func (f *fakeCRDConn) ListCRDs(ctx context.Context) ([]crd.Info, error) { return f.infos, nil }
@@ -32,6 +39,10 @@ func (f *fakeCRDConn) ListInstances(ctx context.Context, group, version, plural 
 func (f *fakeCRDConn) GetInstanceDetail(ctx context.Context, group, version, plural, ns, name string) (crd.InstanceDetail, error) {
 	return f.detail, nil
 }
+func (f *fakeCRDConn) ApplyResourceYAML(ctx context.Context, group, version, plural, kind, scope, ns, name, yaml string, dryRun bool) error {
+	f.apply = applyCall{group: group, version: version, plural: plural, kind: kind, scope: scope, ns: ns, name: name, yaml: yaml, dryRun: dryRun}
+	return f.applyErr
+}
 func (f *fakeCRDConn) RevealSecretKey(ctx context.Context, ns, name, key string) (string, error) {
 	if f.secretData == nil {
 		return "", errors.New("key not found")
@@ -41,6 +52,23 @@ func (f *fakeCRDConn) RevealSecretKey(ctx context.Context, ns, name, key string)
 		return "", errors.New("key not found")
 	}
 	return v, nil
+}
+
+func TestApplyResourceYAMLMapsToConn(t *testing.T) {
+	conn := &fakeCRDConn{}
+	svc := NewCRDService(func(string) (CRDConn, bool) { return conn, true })
+
+	r := svc.ApplyResourceYAML("x", "", "v1", "configmaps", "ConfigMap", "Namespaced", "default", "app", "kind: ConfigMap\n", true)
+
+	if !r.OK || r.Error != "" {
+		t.Fatalf("apply result: %+v", r)
+	}
+	if conn.apply.group != "" || conn.apply.version != "v1" || conn.apply.plural != "configmaps" || conn.apply.kind != "ConfigMap" {
+		t.Fatalf("resource args not forwarded: %+v", conn.apply)
+	}
+	if conn.apply.ns != "default" || conn.apply.name != "app" || conn.apply.yaml != "kind: ConfigMap\n" || !conn.apply.dryRun {
+		t.Fatalf("object args not forwarded: %+v", conn.apply)
+	}
 }
 
 func TestListCRDsGroupsAndAttributes(t *testing.T) {
@@ -114,10 +142,11 @@ func TestGetInstanceDetailMapsDTO(t *testing.T) {
 	last := time.Date(2026, 6, 2, 10, 0, 0, 0, time.UTC)
 	conn := &fakeCRDConn{detail: crd.InstanceDetail{
 		Kind: "Widget", Namespace: "team-a", Name: "w1", Created: created,
-		Labels:     map[string]string{"app": "w"},
-		Conditions: []crd.Condition{{Type: "Ready", Status: "True", Reason: "OK", Message: "ready"}},
-		Events:     []crd.Event{{Type: "Warning", Reason: "Failed", Message: "boom", Count: 2, Last: last}},
-		YAML:       "kind: Widget\n",
+		Labels:      map[string]string{"app": "w"},
+		Annotations: map[string]string{"owner": "platform"},
+		Conditions:  []crd.Condition{{Type: "Ready", Status: "True", Reason: "OK", Message: "ready"}},
+		Events:      []crd.Event{{Type: "Warning", Reason: "Failed", Message: "boom", Count: 2, Last: last}},
+		YAML:        "kind: Widget\n",
 	}}
 	svc := NewCRDService(func(string) (CRDConn, bool) { return conn, true })
 
@@ -131,8 +160,8 @@ func TestGetInstanceDetailMapsDTO(t *testing.T) {
 	if len(d.Events) != 1 || d.Events[0].Count != 2 || d.Events[0].LastSeen != "2026-06-02T10:00:00Z" {
 		t.Fatalf("events: %+v", d.Events)
 	}
-	if d.YAML != "kind: Widget\n" || d.Labels["app"] != "w" {
-		t.Fatalf("yaml/labels: %+v", d)
+	if d.YAML != "kind: Widget\n" || d.Labels["app"] != "w" || d.Annotations["owner"] != "platform" {
+		t.Fatalf("yaml/metadata: %+v", d)
 	}
 }
 

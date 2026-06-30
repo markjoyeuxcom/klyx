@@ -82,7 +82,7 @@ describe("BUILTIN_CATALOG sanity", () => {
   });
 
   it("lens entries have a valid section string", () => {
-    const validSections = ["overview","gitops","helm","network","resources","crds","observability","workloads","pods","events","nodes"];
+    const validSections = ["overview","gitops","helm","gatewayApi","resources","crds","observability","workloads","pods","events","nodes"];
     for (const entry of allLensEntries) {
       expect(validSections, `"${entry.label}" has unknown section "${entry.section}"`).toContain(entry.section);
     }

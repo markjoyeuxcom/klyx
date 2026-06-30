@@ -80,6 +80,7 @@ const cordoned: NodeSummaryDTO = {
 const fakeDetail: NodeDetailDTO = {
   summary: healthy,
   labels: { "kubernetes.io/hostname": "node-healthy", region: "westeurope" },
+  annotations: { "cluster-autoscaler.kubernetes.io/scale-down-disabled": "true" },
   taints: [{ key: "dedicated", value: "gpu", effect: "NoSchedule" }],
   conditions: [
     { type: "Ready", status: "True", reason: "KubeletReady", message: "kubelet is posting ready status" },
@@ -241,9 +242,16 @@ describe("NodesView", () => {
     const { getByText, queryByText } = render(<NodesView cluster="homelab" />);
     // Labels collapsed: values not visible
     expect(queryByText(/kubernetes\.io\/hostname=node-healthy/)).toBeNull();
-    // Click expand
-    fireEvent.click(getByText("expand"));
+    fireEvent.click(getByText("Labels (2)"));
     expect(getByText(/kubernetes\.io\/hostname=node-healthy/)).toBeTruthy();
+  });
+
+  it("annotations section is collapsed by default, expandable", () => {
+    seedWithDetail(healthy, fakeDetail);
+    const { getByText, queryByText } = render(<NodesView cluster="homelab" />);
+    expect(queryByText("cluster-autoscaler.kubernetes.io/scale-down-disabled=true")).toBeNull();
+    fireEvent.click(getByText("Annotations (1)"));
+    expect(getByText("cluster-autoscaler.kubernetes.io/scale-down-disabled=true")).toBeTruthy();
   });
 
   it("yaml tab renders yaml content", () => {

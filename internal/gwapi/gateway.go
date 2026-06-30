@@ -33,6 +33,7 @@ func ParseGateway(u *unstructured.Unstructured) GatewayNode {
 func parseListeners(obj map[string]interface{}) []Listener {
 	ls, _, _ := unstructured.NestedSlice(obj, "spec", "listeners")
 	out := make([]Listener, 0, len(ls))
+	gwNS, _, _ := unstructured.NestedString(obj, "metadata", "namespace")
 	for _, l := range ls {
 		m, ok := l.(map[string]interface{})
 		if !ok {
@@ -45,7 +46,35 @@ func parseListeners(obj map[string]interface{}) []Listener {
 		if p, ok, _ := unstructured.NestedNumberAsFloat64(m, "port"); ok {
 			lis.Port = int32(p)
 		}
+		lis.CertificateRefs = parseCertificateRefs(m, gwNS)
 		out = append(out, lis)
+	}
+	return out
+}
+
+func parseCertificateRefs(listener map[string]interface{}, gwNS string) []CertificateRef {
+	refs, _, _ := unstructured.NestedSlice(listener, "tls", "certificateRefs")
+	out := make([]CertificateRef, 0, len(refs))
+	for _, r := range refs {
+		m, ok := r.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		ref := CertificateRef{}
+		ref.Group, _ = m["group"].(string)
+		ref.Kind, _ = m["kind"].(string)
+		if ref.Kind == "" {
+			ref.Kind = "Secret"
+		}
+		ref.Namespace, _ = m["namespace"].(string)
+		if ref.Namespace == "" {
+			ref.Namespace = gwNS
+		}
+		ref.Name, _ = m["name"].(string)
+		if ref.Name == "" {
+			continue
+		}
+		out = append(out, ref)
 	}
 	return out
 }

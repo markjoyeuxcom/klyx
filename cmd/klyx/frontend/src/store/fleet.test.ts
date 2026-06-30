@@ -17,6 +17,22 @@ describe("fleet store routing", () => {
     useFleet.getState().setSection("gitops");
     expect(useFleet.getState().route).toEqual({ name: "fleet" });
   });
+  it("openArgo selects an Argo subview in cluster scope", () => {
+    useFleet.getState().openCluster("x");
+    useFleet.getState().openArgo("applicationsets");
+    expect(useFleet.getState().route).toEqual({ name: "cluster", cluster: "x", section: "argo", argoView: "applicationsets" });
+  });
+  it("openWorkloads drops a generic resource route and applies the requested kind filter atomically", () => {
+    useFleet.getState().openCluster("x");
+    useFleet.getState().openResource({ group: "apps", version: "v1", plural: "replicasets", kind: "ReplicaSet", scope: "Namespaced" });
+    useFleet.getState().openWorkloads(["StatefulSet"]);
+    expect(useFleet.getState().route).toEqual({ name: "cluster", cluster: "x", section: "workloads" });
+    expect(useFleet.getState().workloads.kindFilter).toEqual({
+      Deployment: false,
+      StatefulSet: true,
+      DaemonSet: false,
+    });
+  });
   it("openFleet returns to the grid", () => {
     useFleet.getState().openCluster("x");
     useFleet.getState().openFleet();
@@ -116,6 +132,9 @@ test("instance detail drill-in route + slice", () => {
   uf3.getState().setInstanceDetail({ kind: "Certificate", namespace: "default", name: "web-tls", created: "", labels: {}, conditions: [], events: [], yaml: "kind: Certificate\n" });
   expect(uf3.getState().instanceDetail.detail?.yaml).toContain("Certificate");
   expect(uf3.getState().instanceDetail.loading).toBe(false);
+  uf3.getState().setInstanceDetailLoading({ namespace: "default", name: "web-tls" });
+  expect(uf3.getState().instanceDetail.detail?.yaml).toContain("Certificate");
+  expect(uf3.getState().instanceDetail.loading).toBe(true);
 
   uf3.getState().closeInstance();
   const r2 = uf3.getState().route;
@@ -144,10 +163,10 @@ import { useFleet as uf4 } from "./fleet";
 
 test("network gateway drill-in route + slice", () => {
   uf4.getState().openCluster("x");
-  uf4.getState().setSection("network");
+  uf4.getState().setSection("gatewayApi");
   uf4.getState().openGateway("infra", "eg");
   const r = uf4.getState().route;
-  expect(r).toMatchObject({ name: "cluster", section: "network", gateway: { namespace: "infra", name: "eg" } });
+  expect(r).toMatchObject({ name: "cluster", section: "gatewayApi", gateway: { namespace: "infra", name: "eg" } });
   expect(uf4.getState().network.selected).toEqual({ namespace: "infra", name: "eg" });
   expect(uf4.getState().network.topologyLoading).toBe(true);
 

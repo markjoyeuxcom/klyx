@@ -4,9 +4,10 @@ import type { CertificateDTO, IssuerDTO, ChainNodeDTO, CertChainDTO } from "../s
 import { openCertManager, closeCertManager, getCertificateChain } from "../bridge/certmanager";
 import { Badge, FilterButton, SummaryCell, Section, Field, StatusDot, frame, ellipsis, mono, readyColor } from "../chrome/primitives";
 
-type CertFilter = "all" | "attention" | "expiring" | "issuers";
+type CertFilter = "all" | "attention" | "expiring" | "issuing" | "issuerProblem" | "issuers";
 
 const keyOf = (c: { namespace: string; name: string }) => `${c.namespace}/${c.name}`;
+const arrayOf = <T,>(value: T[] | null | undefined): T[] => (Array.isArray(value) ? value : []);
 
 const nowSec = () => Math.floor(Date.now() / 1000);
 
@@ -27,6 +28,10 @@ function expiryText(c: CertificateDTO): string {
   if (secs < 3600) return `${Math.floor(secs / 60)}m`;
   if (secs < 86400) return `${Math.floor(secs / 3600)}h`;
   return `${Math.floor(secs / 86400)}d`;
+}
+
+function dateText(unix?: number): string {
+  return unix && unix > 0 ? new Date(unix * 1000).toISOString().slice(0, 10) : "—";
 }
 
 // A Ready cert that is merely in the renewal window is NOT attention (cert-manager
@@ -62,16 +67,23 @@ function resolveIssuer(c: CertificateDTO, issuers: IssuerDTO[]): IssuerDTO | und
   );
 }
 
-function matchesFilter(c: CertificateDTO, filter: CertFilter): boolean {
+function issuerProblem(c: CertificateDTO, issuers: IssuerDTO[]): boolean {
+  const issuer = resolveIssuer(c, issuers);
+  return !issuer || issuer.ready !== "Ready";
+}
+
+function matchesFilter(c: CertificateDTO, filter: CertFilter, issuers: IssuerDTO[]): boolean {
   if (filter === "attention") return needsAttention(c);
   if (filter === "expiring") return expiringSoon(c) || expired(c);
+  if (filter === "issuing") return c.ready === "Issuing";
+  if (filter === "issuerProblem") return issuerProblem(c, issuers);
   return true;
 }
 
 function matchesQuery(c: CertificateDTO, query: string): boolean {
   const q = query.trim().toLowerCase();
   if (!q) return true;
-  return [c.namespace, c.name, c.issuerName, c.secretName, c.reason, ...c.dnsNames].some((v) => v.toLowerCase().includes(q));
+  return [c.namespace, c.name, c.issuerName, c.secretName, c.reason, ...arrayOf(c.dnsNames)].some((v) => v.toLowerCase().includes(q));
 }
 
 export function CertsView({ cluster }: { cluster: string }) {
@@ -80,6 +92,7 @@ export function CertsView({ cluster }: { cluster: string }) {
   const select = useFleet((s) => s.selectCertificate);
   const [filter, setFilter] = useState<CertFilter>("all");
   const [query, setQuery] = useState("");
+  const [namespace, setNamespace] = useState("");
   const absent = tier === "Absent";
 
   useEffect(() => {
@@ -107,9 +120,10 @@ export function CertsView({ cluster }: { cluster: string }) {
     () => [...certs].sort((a, b) => certRank(a) - certRank(b) || a.namespace.localeCompare(b.namespace) || a.name.localeCompare(b.name)),
     [certs],
   );
+  const namespaces = useMemo(() => Array.from(new Set(certs.map((c) => c.namespace))).sort(), [certs]);
   const visibleCerts = useMemo(
-    () => orderedCerts.filter((c) => matchesFilter(c, filter) && matchesQuery(c, query)),
-    [orderedCerts, filter, query],
+    () => orderedCerts.filter((c) => (!namespace || c.namespace === namespace) && matchesFilter(c, filter, issuers) && matchesQuery(c, query)),
+    [orderedCerts, filter, issuers, namespace, query],
   );
   const orderedIssuers = useMemo(
     () => [...issuers].sort((a, b) => issuerRank(a) - issuerRank(b) || a.kind.localeCompare(b.kind) || a.name.localeCompare(b.name)),
@@ -123,6 +137,7 @@ export function CertsView({ cluster }: { cluster: string }) {
   const attention = certs.filter(needsAttention).length;
   const issuing = certs.filter((c) => c.ready === "Issuing").length;
   const expiring = certs.filter((c) => expiringSoon(c) || expired(c)).length;
+  const issuerProblems = certs.filter((c) => issuerProblem(c, issuers)).length;
   const ready = certs.filter((c) => c.ready === "Ready" && !expired(c)).length;
   const selected = visibleCerts.find((c) => keyOf(c) === cm.selectedKey) ?? null;
   const chain = cm.chain && keyOf(cm.chain.certificate) === cm.selectedKey ? cm.chain : null;
@@ -150,7 +165,18 @@ export function CertsView({ cluster }: { cluster: string }) {
         <FilterButton label="all" active={filter === "all"} count={certs.length} onClick={() => setFilter("all")} />
         <FilterButton label="needs attention" active={filter === "attention"} count={attention} onClick={() => setFilter("attention")} />
         <FilterButton label="expiring" active={filter === "expiring"} count={expiring} onClick={() => setFilter("expiring")} />
+        <FilterButton label="issuing" active={filter === "issuing"} count={issuing} onClick={() => setFilter("issuing")} />
+        <FilterButton label="issuer problem" active={filter === "issuerProblem"} count={issuerProblems} onClick={() => setFilter("issuerProblem")} />
         <FilterButton label="issuers" active={filter === "issuers"} count={issuers.length} onClick={() => setFilter("issuers")} />
+        <select
+          value={namespace}
+          onChange={(e) => setNamespace(e.target.value)}
+          aria-label="filter certificate namespace"
+          style={{ fontSize: 11, padding: "3px 8px", borderRadius: 4, border: "0.5px solid var(--color-border-tertiary)", background: "var(--color-background-primary)", color: "var(--color-text-primary)" }}
+        >
+          <option value="">all namespaces</option>
+          {namespaces.map((ns) => <option key={ns} value={ns}>{ns}</option>)}
+        </select>
         <input
           value={query}
           onChange={(e) => setQuery(e.target.value)}
@@ -158,7 +184,7 @@ export function CertsView({ cluster }: { cluster: string }) {
           aria-label="filter certificates"
           style={{ marginLeft: "auto", fontSize: 11, padding: "3px 8px", borderRadius: 4, border: "0.5px solid var(--color-border-tertiary)", background: "var(--color-background-primary)", color: "var(--color-text-primary)", width: 180 }}
         />
-        {visibleCerts.length !== certs.length && filter !== "issuers" && <span style={{ fontSize: 10, color: "var(--color-text-tertiary)" }}>{visibleCerts.length} of {certs.length}</span>}
+        {(visibleCerts.length !== certs.length || namespace) && filter !== "issuers" && <span style={{ fontSize: 10, color: "var(--color-text-tertiary)" }}>{visibleCerts.length} of {certs.length}</span>}
       </div>
 
       {cm.loading && certs.length === 0 && issuers.length === 0 ? (
@@ -233,16 +259,29 @@ function CertInspector({ c, issuer, chain, chainLoading }: { c: CertificateDTO; 
   const issuerBroken = boundIssuer && boundIssuer.ready !== "Ready";
   const failing = chain?.failingLink ?? null;
   const failKey = failing ? `${failing.kind}/${failing.namespace}/${failing.name}` : null;
+  const requests = arrayOf(chain?.requests);
+  const warnings = arrayOf(chain?.warnings);
+  const dnsNames = arrayOf(c.dnsNames);
+  const cause = failureHint(c, boundIssuer, failing, warnings);
   return (
     <div style={{ ...frame, padding: 14, display: "flex", flexDirection: "column", gap: 12 }}>
       <div>
         <div style={{ ...mono, fontSize: 13, fontWeight: 500 }}>{c.namespace}/{c.name}</div>
-        <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 4 }}>
-          <StatusDot color={readyColor[c.ready] ?? readyColor.Unknown} />
-          <span style={{ fontSize: 12, color: "var(--color-text-secondary)" }}>{statusText(c)}</span>
-          {c.reason && <span style={{ ...mono, fontSize: 10, padding: "1px 6px", borderRadius: 4, background: "var(--color-background-secondary)", color: c.ready === "Failed" ? "var(--color-text-danger)" : "var(--color-text-secondary)" }}>{c.reason}</span>}
+        <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 5, marginTop: 6 }}>
+          <CertBadge tone={c.ready === "Ready" && !expired(c) ? "success" : c.ready === "Issuing" ? "info" : "danger"}>{statusText(c)}</CertBadge>
+          {expiringSoon(c) && <CertBadge tone="warning">renewal window</CertBadge>}
+          {expired(c) && <CertBadge tone="danger">expired</CertBadge>}
+          {issuerBroken && <CertBadge tone="danger">issuer problem</CertBadge>}
+          {c.reason && <CertBadge tone={c.ready === "Failed" ? "danger" : "muted"}>{c.reason}</CertBadge>}
         </div>
       </div>
+
+      {cause && (
+        <div style={{ border: "0.5px solid var(--color-text-warning)", borderRadius: "var(--border-radius-md)", padding: "8px 10px", background: "var(--color-background-secondary)" }}>
+          <div style={{ fontSize: 11, color: "var(--color-text-warning)", fontWeight: 600 }}>likely cause</div>
+          <div style={{ fontSize: 11, color: "var(--color-text-secondary)", marginTop: 3 }}>{cause}</div>
+        </div>
+      )}
 
       {/* A failing bound issuer is the headline for a stuck cert (M10 source pattern). */}
       {issuerBroken && (
@@ -254,16 +293,21 @@ function CertInspector({ c, issuer, chain, chainLoading }: { c: CertificateDTO; 
       )}
 
       <Section title="issuance chain">
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 6, marginBottom: 8 }}>
+          <MiniMetric label="requests" value={String(requests.length)} />
+          <MiniMetric label="warnings" value={String(warnings.length)} tone={warnings.length > 0 ? "warning" : undefined} />
+          <MiniMetric label="stuck" value={failing ? chainKindLabel[failing.kind] ?? failing.kind : "—"} tone={failing ? "warning" : undefined} />
+        </div>
         {chainLoading ? (
           <div style={{ fontSize: 11, color: "var(--color-text-tertiary)" }}>resolving chain…</div>
-        ) : chain && chain.requests.length > 0 ? (
+        ) : requests.length > 0 ? (
           <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-            {chain.requests.map((r) => <ChainNodeView key={`${r.kind}/${r.name}`} node={r} depth={0} failKey={failKey} />)}
+            {requests.map((r) => <ChainNodeView key={`${r.kind}/${r.name}`} node={r} depth={0} failKey={failKey} />)}
           </div>
         ) : (
           <div style={{ fontSize: 11, color: "var(--color-text-tertiary)" }}>no active issuance request.</div>
         )}
-        {chain && chain.warnings.length > 0 && chain.warnings.map((w) => (
+        {warnings.length > 0 && warnings.map((w) => (
           <div key={w} style={{ fontSize: 10, color: "var(--color-text-warning)", marginTop: 3 }}>{w}</div>
         ))}
       </Section>
@@ -271,6 +315,7 @@ function CertInspector({ c, issuer, chain, chainLoading }: { c: CertificateDTO; 
       <Section title="issuer">
         <Field label="ref" value={`${c.issuerKind}/${c.issuerName}`} />
         <Field label="health" value={boundIssuer ? boundIssuer.ready : "not found"} tone={boundIssuer ? (boundIssuer.ready === "Ready" ? "success" : "danger") : "muted"} />
+        {boundIssuer?.message && <div style={{ fontSize: 11, color: "var(--color-text-secondary)" }}>{boundIssuer.message}</div>}
       </Section>
 
       <Section title="secret">
@@ -278,13 +323,14 @@ function CertInspector({ c, issuer, chain, chainLoading }: { c: CertificateDTO; 
       </Section>
 
       <Section title="validity">
-        <Field label="expiry" value={c.notAfterUnix ? `${expiryText(c)} (${new Date(c.notAfterUnix * 1000).toISOString().slice(0, 10)})` : "not issued"} tone={expired(c) ? "danger" : expiringSoon(c) ? "warning" : "muted"} />
-        <Field label="renews" value={c.renewalUnix ? new Date(c.renewalUnix * 1000).toISOString().slice(0, 10) : "—"} />
+        <Field label="valid from" value={dateText(c.notBeforeUnix)} />
+        <Field label="expires" value={c.notAfterUnix ? `${expiryText(c)} (${dateText(c.notAfterUnix)})` : "not issued"} tone={expired(c) ? "danger" : expiringSoon(c) ? "warning" : "muted"} />
+        <Field label="renews" value={dateText(c.renewalUnix)} tone={expiringSoon(c) ? "warning" : "muted"} />
       </Section>
 
-      {c.dnsNames.length > 0 && (
+      {dnsNames.length > 0 && (
         <Section title="dns names">
-          {c.dnsNames.map((d) => <div key={d} style={{ ...mono, fontSize: 11, color: "var(--color-text-secondary)" }}>{d}</div>)}
+          {dnsNames.map((d) => <div key={d} style={{ ...mono, fontSize: 11, color: "var(--color-text-secondary)" }}>{d}</div>)}
         </Section>
       )}
 
@@ -303,22 +349,52 @@ const chainKindLabel: Record<string, string> = {
   Challenge: "challenge",
 };
 
+function failureHint(c: CertificateDTO, issuer: IssuerDTO | undefined, failing: ChainNodeDTO | null, warnings: string[]): string {
+  if (issuer && issuer.ready !== "Ready") return `${issuer.kind}/${issuer.name} is not ready${issuer.reason ? `: ${issuer.reason}` : ""}.`;
+  if (!issuer) return `${c.issuerKind}/${c.issuerName} was not found in the watched issuer list.`;
+  if (failing) {
+    const kind = chainKindLabel[failing.kind] ?? failing.kind.toLowerCase();
+    return `${kind} ${failing.name} is ${failing.ready.toLowerCase()}${failing.reason ? `: ${failing.reason}` : ""}.`;
+  }
+  if (c.reason === "DoesNotExist") return `The target secret ${c.secretName || "(unset)"} does not exist yet or cert-manager has not issued the certificate.`;
+  if (c.ready === "Issuing") return "cert-manager is actively issuing or renewing this certificate.";
+  if (warnings.length > 0) return warnings[0];
+  if (expired(c)) return "The certificate is past its notAfter time.";
+  return "";
+}
+
+function CertBadge({ children, tone }: { children: React.ReactNode; tone: "success" | "info" | "warning" | "danger" | "muted" }) {
+  const color = tone === "success" ? "var(--color-text-success)" : tone === "info" ? "var(--color-text-info)" : tone === "warning" ? "var(--color-text-warning)" : tone === "danger" ? "var(--color-text-danger)" : "var(--color-text-tertiary)";
+  return <span style={{ ...mono, fontSize: 10, border: "0.5px solid var(--color-border-tertiary)", borderRadius: 4, padding: "1px 6px", background: "var(--color-background-secondary)", color }}>{children}</span>;
+}
+
+function MiniMetric({ label, value, tone }: { label: string; value: string; tone?: "warning" }) {
+  return (
+    <div style={{ border: "0.5px solid var(--color-border-tertiary)", borderRadius: 5, padding: "6px 7px", background: "var(--color-background-secondary)", minWidth: 0 }}>
+      <div style={{ fontSize: 9, color: "var(--color-text-tertiary)", textTransform: "uppercase" }}>{label}</div>
+      <div style={{ ...mono, ...ellipsis, fontSize: 12, marginTop: 3, color: tone === "warning" ? "var(--color-text-warning)" : "var(--color-text-primary)" }} title={value}>{value}</div>
+    </div>
+  );
+}
+
 function ChainNodeView({ node, depth, failKey }: { node: ChainNodeDTO; depth: number; failKey: string | null }) {
   const isFail = failKey === `${node.kind}/${node.namespace}/${node.name}`;
   const bad = node.ready === "Failed";
   const issuing = node.ready === "Issuing";
+  const kind = node.kind || "Unknown";
+  const children = arrayOf(node.children);
   return (
     <>
       <div style={{ display: "flex", alignItems: "center", gap: 6, paddingLeft: depth * 14, fontSize: 11 }}>
         <StatusDot size={6} color={readyColor[node.ready] ?? readyColor.Unknown} />
-        <span style={{ color: "var(--color-text-tertiary)", width: 60, flexShrink: 0 }}>{chainKindLabel[node.kind] ?? node.kind.toLowerCase()}</span>
+        <span style={{ color: "var(--color-text-tertiary)", width: 60, flexShrink: 0 }}>{chainKindLabel[kind] ?? kind.toLowerCase()}</span>
         <span style={{ ...mono, ...ellipsis, color: isFail ? "var(--color-text-danger)" : "var(--color-text-secondary)" }} title={node.name}>{node.name}</span>
         {(bad || issuing) && node.reason && (
           <span style={{ ...mono, fontSize: 10, color: bad ? "var(--color-text-danger)" : "var(--color-text-warning)", flexShrink: 0 }} title={node.message}>{node.reason}</span>
         )}
         {isFail && <span style={{ fontSize: 9, padding: "0 5px", borderRadius: 3, background: "var(--color-text-danger)", color: "var(--color-background-primary)", flexShrink: 0 }}>stuck here</span>}
       </div>
-      {node.children.map((ch) => <ChainNodeView key={`${ch.kind}/${ch.name}`} node={ch} depth={depth + 1} failKey={failKey} />)}
+      {children.map((ch) => <ChainNodeView key={`${ch.kind}/${ch.name}`} node={ch} depth={depth + 1} failKey={failKey} />)}
     </>
   );
 }
@@ -355,4 +431,3 @@ function EmptyInspector({ attention }: { attention: number }) {
     </div>
   );
 }
-

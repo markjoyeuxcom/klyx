@@ -50,7 +50,7 @@ func (s *GatewayService) ListGateways(cluster string) GatewayListDTO {
 			g.Addresses = append(g.Addresses, GatewayAddressDTO{Type: a.Type, Value: a.Value})
 		}
 		for _, l := range r.Listeners {
-			g.Listeners = append(g.Listeners, ListenerDTO{Name: l.Name, Protocol: l.Protocol, Hostname: l.Hostname, Port: l.Port})
+			g.Listeners = append(g.Listeners, ListenerDTO{Name: l.Name, Protocol: l.Protocol, Hostname: l.Hostname, Port: l.Port, CertificateRefs: certificateRefDTOs(l.CertificateRefs)})
 		}
 		out.Gateways = append(out.Gateways, g)
 	}

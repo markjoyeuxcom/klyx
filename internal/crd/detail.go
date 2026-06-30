@@ -49,14 +49,15 @@ type RelatedRef struct {
 
 // InstanceDetail is the full per-instance detail: header, conditions, events, YAML.
 type InstanceDetail struct {
-	Kind       string
-	Namespace  string
-	Name       string
-	Created    time.Time
-	Labels     map[string]string
-	Conditions []Condition
-	Events     []Event
-	YAML       string
+	Kind        string
+	Namespace   string
+	Name        string
+	Created     time.Time
+	Labels      map[string]string
+	Annotations map[string]string
+	Conditions  []Condition
+	Events      []Event
+	YAML        string
 	// SecretKeys is populated only for v1 Secrets. The YAML has values replaced
 	// with "<masked>"; this list gives key names + decoded byte-lengths so the
 	// frontend can render a key list without any value data crossing the bridge.

@@ -22,6 +22,7 @@ func makeFakePod(ns, name string) *corev1.Pod {
 			Name:              name,
 			UID:               "uid-test-1",
 			Labels:            map[string]string{"app": "web"},
+			Annotations:       map[string]string{"owner": "platform"},
 			CreationTimestamp: metav1.NewTime(time.Unix(100_000, 0)),
 			OwnerReferences: []metav1.OwnerReference{
 				{Kind: "ReplicaSet", Name: "web-rs", Controller: &ctrl},
@@ -89,6 +90,9 @@ func TestPodDetail_BasicFields(t *testing.T) {
 	if d.Labels["app"] != "web" {
 		t.Errorf("labels: %+v", d.Labels)
 	}
+	if d.Annotations["owner"] != "platform" {
+		t.Errorf("annotations: %+v", d.Annotations)
+	}
 	if d.ServiceAccount != "web-sa" {
 		t.Errorf("serviceAccount: %q", d.ServiceAccount)
 	}
@@ -145,5 +149,8 @@ func TestPodDetail_EmptyLabelsNonNil(t *testing.T) {
 	}
 	if d.Labels == nil {
 		t.Error("Labels must be non-nil even when pod has no labels")
+	}
+	if d.Annotations == nil {
+		t.Error("Annotations must be non-nil even when pod has no annotations")
 	}
 }

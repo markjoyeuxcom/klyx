@@ -24,6 +24,7 @@ type RouteNode struct {
 	Namespace, Name        string
 	Hostnames              []string
 	Matches                []Match
+	ParentSectionName      string
 	Accepted, ResolvedRefs bool // scoped to THIS Gateway's parentRef
 	Backends               []Backend
 	Policies               []PolicyRef   // M5-b; empty in M5-a
@@ -44,8 +45,12 @@ type ServiceNode struct {
 type Listener struct {
 	Name, Protocol, Hostname string
 	Port                     int32
+	CertificateRefs          []CertificateRef
 }
 type GatewayAddress struct{ Type, Value string }
+type CertificateRef struct {
+	Group, Kind, Namespace, Name string
+}
 type Match struct{ PathType, PathValue, Method string }
 type Backend struct {
 	Kind, Name, Namespace string

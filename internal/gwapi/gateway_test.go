@@ -22,7 +22,10 @@ func gwObj(name, ns, class string, listeners, conds []interface{}) *unstructured
 func TestParseGateway(t *testing.T) {
 	u := gwObj("eg-external", "envoy-gateway-system", "envoy-gateway",
 		[]interface{}{
-			map[string]interface{}{"name": "https", "protocol": "HTTPS", "port": int64(443), "hostname": "*.example.com"},
+			map[string]interface{}{
+				"name": "https", "protocol": "HTTPS", "port": int64(443), "hostname": "*.example.com",
+				"tls": map[string]interface{}{"certificateRefs": []interface{}{map[string]interface{}{"name": "wildcard-example-com"}}},
+			},
 			map[string]interface{}{"name": "http", "protocol": "HTTP", "port": int64(80)},
 		},
 		[]interface{}{
@@ -38,6 +41,9 @@ func TestParseGateway(t *testing.T) {
 	}
 	if len(g.Listeners) != 2 || g.Listeners[0].Port != 443 || g.Listeners[0].Hostname != "*.example.com" || g.Listeners[1].Protocol != "HTTP" {
 		t.Fatalf("listeners: %+v", g.Listeners)
+	}
+	if len(g.Listeners[0].CertificateRefs) != 1 || g.Listeners[0].CertificateRefs[0].Kind != "Secret" || g.Listeners[0].CertificateRefs[0].Namespace != "envoy-gateway-system" || g.Listeners[0].CertificateRefs[0].Name != "wildcard-example-com" {
+		t.Fatalf("listener certificate refs: %+v", g.Listeners[0].CertificateRefs)
 	}
 	if len(g.Addresses) != 1 || g.Addresses[0].Value != "192.0.2.10" {
 		t.Fatalf("addresses: %+v", g.Addresses)

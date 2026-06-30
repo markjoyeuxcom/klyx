@@ -2,6 +2,8 @@ package fleet
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -16,6 +18,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"sigs.k8s.io/yaml"
 
 	"github.com/moomora/klyx/internal/crd"
 )
@@ -111,6 +114,71 @@ func (c *ClusterConn) ListInstances(ctx context.Context, group, version, plural 
 		})
 	}
 	return out, list.GetContinue(), nil
+}
+
+// ApplyResourceYAML applies the YAML currently shown in the generic resource
+// detail. The expected GVR/GVK/name/namespace checks prevent a sidebar detail
+// edit from silently creating or mutating a different object.
+func (c *ClusterConn) ApplyResourceYAML(ctx context.Context, group, version, plural, kind, scope, ns, name, yamlDoc string, dryRun bool) error {
+	if c.dyn == nil {
+		return errors.New("dynamic client unavailable")
+	}
+	jsonDoc, err := yaml.YAMLToJSON([]byte(yamlDoc))
+	if err != nil {
+		return fmt.Errorf("parse yaml: %w", err)
+	}
+	var obj map[string]interface{}
+	if err := json.Unmarshal(jsonDoc, &obj); err != nil {
+		return fmt.Errorf("parse yaml: %w", err)
+	}
+	u := &unstructured.Unstructured{Object: obj}
+	if err := validateApplyTarget(u, group, version, kind, scope, ns, name); err != nil {
+		return err
+	}
+	if kind == "Secret" && strings.Contains(yamlDoc, "<masked>") {
+		return errors.New("masked Secret YAML cannot be applied - reveal or edit secret data outside Klyx")
+	}
+
+	opts := metav1.ApplyOptions{FieldManager: "klyx", Force: true}
+	if dryRun {
+		opts.DryRun = []string{metav1.DryRunAll}
+	}
+	gvr := schema.GroupVersionResource{Group: group, Version: version, Resource: plural}
+	resource := c.dyn.Resource(gvr)
+	if ns != "" {
+		_, err = resource.Namespace(ns).Apply(ctx, name, u, opts)
+	} else {
+		_, err = resource.Apply(ctx, name, u, opts)
+	}
+	if err != nil {
+		return err
+	}
+	if !dryRun {
+		c.signalRefresh()
+	}
+	return nil
+}
+
+func validateApplyTarget(u *unstructured.Unstructured, group, version, kind, scope, ns, name string) error {
+	gvk := u.GroupVersionKind()
+	if gvk.Group != group || gvk.Version != version || gvk.Kind != kind {
+		wantAPI := version
+		if group != "" {
+			wantAPI = group + "/" + version
+		}
+		return fmt.Errorf("yaml target mismatch: want %s %s, got %s %s", wantAPI, kind, u.GetAPIVersion(), u.GetKind())
+	}
+	if u.GetName() != name {
+		return fmt.Errorf("yaml name mismatch: want %q, got %q", name, u.GetName())
+	}
+	gotNS := u.GetNamespace()
+	if scope == "Namespaced" && gotNS != ns {
+		return fmt.Errorf("yaml namespace mismatch: want %q, got %q", ns, gotNS)
+	}
+	if scope == "Cluster" && gotNS != "" {
+		return fmt.Errorf("cluster-scoped %s must not set metadata.namespace", kind)
+	}
+	return nil
 }
 
 func (c *ClusterConn) listServiceInstances(ctx context.Context, limit int64, continueToken string) ([]crd.InstanceMeta, string, error) {
@@ -1148,6 +1216,7 @@ func (c *ClusterConn) GetInstanceDetail(ctx context.Context, group, version, plu
 		Name:           name,
 		Created:        u.GetCreationTimestamp().Time,
 		Labels:         u.GetLabels(),
+		Annotations:    u.GetAnnotations(),
 		Conditions:     crd.ParseConditions(u.Object),
 		YAML:           y,
 		SecretKeys:     secretKeys,

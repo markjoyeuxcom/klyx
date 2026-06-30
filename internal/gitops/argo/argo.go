@@ -5,6 +5,7 @@
 package argo
 
 import (
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -14,11 +15,24 @@ import (
 
 // AppGVR is the Application resource group-version-resource.
 var AppGVR = schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "applications"}
+var ProjectGVR = schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "appprojects"}
+var ApplicationSetGVR = schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "applicationsets"}
 
 // Condition is one status condition (Argo uses type+message, no status field).
 type Condition struct {
 	Type    string
 	Message string
+}
+
+// Resource is one resource Argo reports under status.resources. It is enough
+// to drive selective sync without fetching the full Application tree.
+type Resource struct {
+	Group     string
+	Kind      string
+	Namespace string
+	Name      string
+	Status    string
+	Health    string
 }
 
 // App is one Argo CD Application.
@@ -36,12 +50,78 @@ type App struct {
 	ExtraSources   int // multi-source apps: number of sources beyond the first
 	DestNamespace  string
 	DestServer     string
+	ApplicationSet string
 	AutoSync       bool // spec.syncPolicy.automated present
 	OpPhase        string
 	OpMessage      string
 	Conditions     []Condition
+	Resources      []Resource
 	ReconciledAt   time.Time
 	CreatedAt      time.Time
+}
+
+type SyncStrategy string
+
+const (
+	SyncStrategyHook  SyncStrategy = "hook"
+	SyncStrategyApply SyncStrategy = "apply"
+)
+
+// SyncOptions maps Klyx's sync modal to Argo's Application operation field.
+// Defaults match argocd app sync: hook strategy, prune enabled, no force.
+type SyncOptions struct {
+	Revision        string
+	Strategy        SyncStrategy
+	Prune           bool
+	DryRun          bool
+	Force           bool
+	Replace         bool
+	ServerSideApply bool
+	Resources       []Resource
+}
+
+type ResourceRule struct {
+	Group string
+	Kind  string
+}
+
+type Project struct {
+	Namespace                  string
+	Name                       string
+	Description                string
+	SourceRepos                []string
+	Destinations               []string
+	Roles                      int
+	RoleNames                  []string
+	OrphanWarn                 bool
+	ClusterResourceWhitelist   []ResourceRule
+	ClusterResourceBlacklist   []ResourceRule
+	NamespaceResourceWhitelist []ResourceRule
+	NamespaceResourceBlacklist []ResourceRule
+}
+
+type ApplicationSetCondition struct {
+	Type    string
+	Status  string
+	Reason  string
+	Message string
+}
+
+type ApplicationSet struct {
+	Namespace      string
+	Name           string
+	Generators     []string
+	TemplateName   string
+	Project        string
+	RepoURL        string
+	Path           string
+	TargetRevision string
+	DestNamespace  string
+	DestServer     string
+	GeneratedApps  int
+	GeneratedNames []string
+	Healthy        bool
+	Conditions     []ApplicationSetCondition
 }
 
 // Broken reports whether the app needs attention: not synced or unhealthy.
@@ -86,6 +166,12 @@ func Parse(u *unstructured.Unstructured) App {
 
 	a.DestNamespace, _, _ = unstructured.NestedString(u.Object, "spec", "destination", "namespace")
 	a.DestServer, _, _ = unstructured.NestedString(u.Object, "spec", "destination", "server")
+	for _, owner := range u.GetOwnerReferences() {
+		if owner.Kind == "ApplicationSet" && owner.Name != "" {
+			a.ApplicationSet = owner.Name
+			break
+		}
+	}
 	if _, ok, _ := unstructured.NestedMap(u.Object, "spec", "syncPolicy", "automated"); ok {
 		a.AutoSync = true
 	}
@@ -111,9 +197,139 @@ func Parse(u *unstructured.Unstructured) App {
 			}
 		}
 	}
+	if resources, ok, _ := unstructured.NestedSlice(u.Object, "status", "resources"); ok {
+		for _, r := range resources {
+			if m, ok := r.(map[string]interface{}); ok {
+				res := Resource{}
+				res.Group, _ = m["group"].(string)
+				res.Kind, _ = m["kind"].(string)
+				res.Namespace, _ = m["namespace"].(string)
+				res.Name, _ = m["name"].(string)
+				res.Status, _ = m["status"].(string)
+				if h, ok := m["health"].(map[string]interface{}); ok {
+					res.Health, _ = h["status"].(string)
+				}
+				if res.Kind != "" && res.Name != "" {
+					a.Resources = append(a.Resources, res)
+				}
+			}
+		}
+	}
 	if ts, ok, _ := unstructured.NestedString(u.Object, "status", "reconciledAt"); ok && ts != "" {
 		if t, err := time.Parse(time.RFC3339, ts); err == nil {
 			a.ReconciledAt = t
+		}
+	}
+	return a
+}
+
+func ParseProject(u *unstructured.Unstructured) Project {
+	p := Project{Namespace: u.GetNamespace(), Name: u.GetName()}
+	p.Description, _, _ = unstructured.NestedString(u.Object, "spec", "description")
+	if repos, ok, _ := unstructured.NestedStringSlice(u.Object, "spec", "sourceRepos"); ok {
+		p.SourceRepos = repos
+	}
+	if roles, ok, _ := unstructured.NestedSlice(u.Object, "spec", "roles"); ok {
+		p.Roles = len(roles)
+		for _, r := range roles {
+			if m, ok := r.(map[string]interface{}); ok {
+				if name, _ := m["name"].(string); name != "" {
+					p.RoleNames = append(p.RoleNames, name)
+				}
+			}
+		}
+	}
+	if warn, ok, _ := unstructured.NestedBool(u.Object, "spec", "orphanedResources", "warn"); ok {
+		p.OrphanWarn = warn
+	}
+	if dests, ok, _ := unstructured.NestedSlice(u.Object, "spec", "destinations"); ok {
+		for _, d := range dests {
+			if m, ok := d.(map[string]interface{}); ok {
+				server, _ := m["server"].(string)
+				name, _ := m["name"].(string)
+				ns, _ := m["namespace"].(string)
+				target := server
+				if name != "" {
+					target = name
+				}
+				if ns != "" {
+					target += "/" + ns
+				}
+				if target != "" {
+					p.Destinations = append(p.Destinations, target)
+				}
+			}
+		}
+	}
+	p.ClusterResourceWhitelist = parseResourceRules(u, "spec", "clusterResourceWhitelist")
+	p.ClusterResourceBlacklist = parseResourceRules(u, "spec", "clusterResourceBlacklist")
+	p.NamespaceResourceWhitelist = parseResourceRules(u, "spec", "namespaceResourceWhitelist")
+	p.NamespaceResourceBlacklist = parseResourceRules(u, "spec", "namespaceResourceBlacklist")
+	return p
+}
+
+func parseResourceRules(u *unstructured.Unstructured, fields ...string) []ResourceRule {
+	items, ok, _ := unstructured.NestedSlice(u.Object, fields...)
+	if !ok {
+		return nil
+	}
+	out := make([]ResourceRule, 0, len(items))
+	for _, item := range items {
+		m, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		r := ResourceRule{}
+		r.Group, _ = m["group"].(string)
+		r.Kind, _ = m["kind"].(string)
+		if r.Group != "" || r.Kind != "" {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+func ParseApplicationSet(u *unstructured.Unstructured) ApplicationSet {
+	a := ApplicationSet{Namespace: u.GetNamespace(), Name: u.GetName(), Healthy: true}
+	if gens, ok, _ := unstructured.NestedSlice(u.Object, "spec", "generators"); ok {
+		for _, g := range gens {
+			if m, ok := g.(map[string]interface{}); ok {
+				for k := range m {
+					a.Generators = append(a.Generators, k)
+				}
+			}
+		}
+	}
+	a.TemplateName, _, _ = unstructured.NestedString(u.Object, "spec", "template", "metadata", "name")
+	a.Project, _, _ = unstructured.NestedString(u.Object, "spec", "template", "spec", "project")
+	a.RepoURL, _, _ = unstructured.NestedString(u.Object, "spec", "template", "spec", "source", "repoURL")
+	a.Path, _, _ = unstructured.NestedString(u.Object, "spec", "template", "spec", "source", "path")
+	a.TargetRevision, _, _ = unstructured.NestedString(u.Object, "spec", "template", "spec", "source", "targetRevision")
+	a.DestNamespace, _, _ = unstructured.NestedString(u.Object, "spec", "template", "spec", "destination", "namespace")
+	a.DestServer, _, _ = unstructured.NestedString(u.Object, "spec", "template", "spec", "destination", "server")
+	if resources, ok, _ := unstructured.NestedSlice(u.Object, "status", "resources"); ok {
+		a.GeneratedApps = len(resources)
+		for _, r := range resources {
+			if m, ok := r.(map[string]interface{}); ok {
+				if name, _ := m["name"].(string); name != "" {
+					a.GeneratedNames = append(a.GeneratedNames, name)
+				}
+			}
+		}
+	}
+	if conds, ok, _ := unstructured.NestedSlice(u.Object, "status", "conditions"); ok {
+		for _, c := range conds {
+			if m, ok := c.(map[string]interface{}); ok {
+				cond := ApplicationSetCondition{}
+				cond.Type, _ = m["type"].(string)
+				cond.Status, _ = m["status"].(string)
+				cond.Reason, _ = m["reason"].(string)
+				cond.Message, _ = m["message"].(string)
+				a.Conditions = append(a.Conditions, cond)
+				if cond.Status != "True" {
+					a.Healthy = false
+				}
+			}
 		}
 	}
 	return a
@@ -127,13 +343,60 @@ func RefreshPatch() []byte {
 
 // SyncPatch is the merge patch that starts a sync operation. Setting the
 // .operation field is the documented headless trigger (the argocd CLI's API
-// server route ends in the same field); the controller picks it up. Prune is
-// deliberately NOT set - prune stays an explicit human decision in Argo's UI
-// or CLI.
-func SyncPatch(revision string) []byte {
-	if revision == "" {
-		revision = "HEAD"
+// server route ends in the same field); the controller picks it up.
+func SyncPatch(opts SyncOptions) []byte {
+	if opts.Revision == "" {
+		opts.Revision = "HEAD"
 	}
-	return []byte(fmt.Sprintf(
-		`{"operation":{"initiatedBy":{"username":"klyx"},"sync":{"revision":%q}}}`, revision))
+	if opts.Strategy == "" {
+		opts.Strategy = SyncStrategyHook
+	}
+	sync := map[string]interface{}{
+		"revision": opts.Revision,
+		"prune":    opts.Prune,
+	}
+	if opts.DryRun {
+		sync["dryRun"] = true
+	}
+	if opts.Strategy == SyncStrategyApply {
+		sync["syncStrategy"] = map[string]interface{}{"apply": map[string]interface{}{}}
+	} else {
+		sync["syncStrategy"] = map[string]interface{}{"hook": map[string]interface{}{}}
+	}
+	syncOptions := []string{}
+	if opts.Force {
+		syncOptions = append(syncOptions, "Force=true")
+	}
+	if opts.Replace {
+		syncOptions = append(syncOptions, "Replace=true")
+	}
+	if opts.ServerSideApply {
+		syncOptions = append(syncOptions, "ServerSideApply=true")
+	}
+	if len(syncOptions) > 0 {
+		sync["syncOptions"] = syncOptions
+	}
+	if len(opts.Resources) > 0 {
+		resources := make([]map[string]string, 0, len(opts.Resources))
+		for _, r := range opts.Resources {
+			resources = append(resources, map[string]string{
+				"group":     r.Group,
+				"kind":      r.Kind,
+				"namespace": r.Namespace,
+				"name":      r.Name,
+			})
+		}
+		sync["resources"] = resources
+	}
+	patch := map[string]interface{}{
+		"operation": map[string]interface{}{
+			"initiatedBy": map[string]interface{}{"username": "klyx"},
+			"sync":        sync,
+		},
+	}
+	b, err := json.Marshal(patch)
+	if err != nil {
+		return []byte(fmt.Sprintf(`{"operation":{"initiatedBy":{"username":"klyx"},"sync":{"revision":%q,"prune":%t}}}`, opts.Revision, opts.Prune))
+	}
+	return b
 }

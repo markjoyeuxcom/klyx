@@ -7,6 +7,7 @@ import { ConfirmDialog } from "../chrome/ConfirmDialog";
 import { fmtMem } from "./saturation";
 import { useResizablePanel } from "../chrome/useResizablePanel";
 import { ellipsis, frame, btn, FilterButton, SummaryCell, StatusDot } from "../chrome/primitives";
+import { InspectorSection, InspectorTabButton, MetadataChips, inspectorStateBox } from "./ResourceInspector";
 
 function ago(s: number): string {
   return s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)}m` : s < 86400 ? `${Math.floor(s / 3600)}h` : `${Math.floor(s / 86400)}d`;
@@ -511,7 +512,6 @@ function NodeDetailPanel({
   onClose: () => void;
 }) {
   const [tab, setTab] = useState<"info" | "yaml">("info");
-  const [labelsExpanded, setLabelsExpanded] = useState(false);
   const { width, handleProps } = useResizablePanel();
 
   // suppress unused warning — isProtected propagated for cordon/drain callers above
@@ -545,32 +545,20 @@ function NodeDetailPanel({
 
       {/* Tabs */}
       <div style={{ display: "flex", gap: 2, marginBottom: 12 }}>
-        {(["info", "yaml"] as const).map((t) => (
-          <button
-            key={t}
-            onClick={() => setTab(t)}
-            style={{
-              fontSize: 10, padding: "3px 10px", borderRadius: 4, cursor: "pointer",
-              border: tab === t ? "0.5px solid var(--color-text-info)" : "0.5px solid var(--color-border-tertiary)",
-              background: tab === t ? "var(--color-background-info, transparent)" : "transparent",
-              color: tab === t ? "var(--color-text-info)" : "var(--color-text-tertiary)",
-            }}
-          >{t}</button>
-        ))}
+        <InspectorTabButton active={tab === "info"} onClick={() => setTab("info")}>info</InspectorTabButton>
+        <InspectorTabButton active={tab === "yaml"} onClick={() => setTab("yaml")}>yaml</InspectorTabButton>
       </div>
 
       {loading && !detail ? (
-        <div style={{ color: "var(--color-text-secondary)" }}>Loading detail…</div>
+        <div style={inspectorStateBox}>Loading detail...</div>
       ) : !detail ? (
-        <div style={{ color: "var(--color-text-secondary)" }}>Could not load node detail.</div>
+        <div style={inspectorStateBox}>Could not load node detail.</div>
       ) : (
         <>
           {tab === "info" && (
             <InfoTab
               detail={detail}
               cluster={cluster}
-              labelsExpanded={labelsExpanded}
-              onToggleLabels={() => setLabelsExpanded((x) => !x)}
               onCordon={onCordon}
               onDrain={onDrain}
             />
@@ -592,11 +580,9 @@ function NodeDetailPanel({
   );
 }
 
-function InfoTab({ detail, cluster, labelsExpanded, onToggleLabels, onCordon, onDrain }: {
+function InfoTab({ detail, cluster, onCordon, onDrain }: {
   detail: NodeDetailDTO;
   cluster: string;
-  labelsExpanded: boolean;
-  onToggleLabels: () => void;
   onCordon: (node: string, cordon: boolean) => void;
   onDrain: (node: string) => void;
 }) {
@@ -614,7 +600,7 @@ function InfoTab({ detail, cluster, labelsExpanded, onToggleLabels, onCordon, on
   return (
     <>
       {/* Actions row */}
-      <NodeSection title="Actions">
+      <InspectorSection title="Actions">
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           {n.unschedulable ? (
             <button
@@ -641,10 +627,10 @@ function InfoTab({ detail, cluster, labelsExpanded, onToggleLabels, onCordon, on
             drain
           </button>
         </div>
-      </NodeSection>
+      </InspectorSection>
 
       {/* Summary header */}
-      <NodeSection title="Summary">
+      <InspectorSection title="Summary">
         <NodeInfoRow label="ready">{n.ready ? "True" : "False"}</NodeInfoRow>
         {n.unschedulable && <NodeInfoRow label="cordoned"><span style={{ color: "var(--color-text-warning)" }}>yes</span></NodeInfoRow>}
         {n.roles.length > 0 && <NodeInfoRow label="roles">{n.roles.join(", ")}</NodeInfoRow>}
@@ -657,11 +643,11 @@ function InfoTab({ detail, cluster, labelsExpanded, onToggleLabels, onCordon, on
         {n.problems.length > 0 && (
           <NodeInfoRow label="problems"><span style={{ color: "var(--color-text-danger)" }}>{n.problems.join(", ")}</span></NodeInfoRow>
         )}
-      </NodeSection>
+      </InspectorSection>
 
       {/* Conditions */}
       {detail.conditions.length > 0 && (
-        <NodeSection title="Conditions">
+        <InspectorSection title="Conditions" collapsible>
           {[...detail.conditions].sort((a, b) => Number(conditionIsProblem(b)) - Number(conditionIsProblem(a)) || a.type.localeCompare(b.type)).map((c) => {
             const conditionMessage = c.message || c.reason || "-";
             return (
@@ -672,12 +658,12 @@ function InfoTab({ detail, cluster, labelsExpanded, onToggleLabels, onCordon, on
               </div>
             );
           })}
-        </NodeSection>
+        </InspectorSection>
       )}
 
       {/* Taints */}
       {detail.taints.length > 0 && (
-        <NodeSection title={`Taints (${detail.taints.length})`}>
+        <InspectorSection title="Taints" count={detail.taints.length} collapsible>
           <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) minmax(0,0.6fr) 80px", gap: 6, fontSize: 9, marginBottom: 2, color: "var(--color-text-tertiary)", textTransform: "uppercase" }}>
             <span>key</span><span>value</span><span>effect</span>
           </div>
@@ -688,28 +674,14 @@ function InfoTab({ detail, cluster, labelsExpanded, onToggleLabels, onCordon, on
               <span style={{ color: "var(--color-text-secondary)" }}>{t.effect}</span>
             </div>
           ))}
-        </NodeSection>
+        </InspectorSection>
       )}
 
-      {/* Labels (collapsed by default) */}
-      {Object.keys(detail.labels).length > 0 && (
-        <NodeSection title={`Labels (${Object.keys(detail.labels).length})`} action={
-          <button onClick={onToggleLabels} style={{ ...btn, fontSize: 9, padding: "1px 6px" }}>
-            {labelsExpanded ? "collapse" : "expand"}
-          </button>
-        }>
-          {labelsExpanded && (
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
-              {Object.entries(detail.labels).map(([k, v]) => (
-                <span key={k} style={{ background: "var(--color-background-secondary)", color: "var(--color-text-secondary)", fontSize: 10, padding: "1px 5px", borderRadius: 3 }}>{k}{v ? `=${v}` : ""}</span>
-              ))}
-            </div>
-          )}
-        </NodeSection>
-      )}
+      <MetadataChips title="Labels" values={detail.labels} defaultCollapsed />
+      <MetadataChips title="Annotations" values={detail.annotations} defaultCollapsed />
 
       {/* Pods on node */}
-      <NodeSection title={`Pods on node (${detail.podsOnNode.length})`}>
+      <InspectorSection title="Pods on node" count={detail.podsOnNode.length} collapsible>
         {detail.podsOnNode.length === 0 ? (
           <span style={{ color: "var(--color-text-tertiary)" }}>No pods scheduled on this node.</span>
         ) : (
@@ -725,10 +697,10 @@ function InfoTab({ detail, cluster, labelsExpanded, onToggleLabels, onCordon, on
             </div>
           ))
         )}
-      </NodeSection>
+      </InspectorSection>
 
       {/* Events */}
-      <NodeSection title={`Events (${detail.events.length})`}>
+      <InspectorSection title="Events" count={detail.events.length} collapsible>
         {detail.events.length === 0 ? (
           <span style={{ color: "var(--color-text-tertiary)" }}>No events for this node.</span>
         ) : (
@@ -741,20 +713,8 @@ function InfoTab({ detail, cluster, labelsExpanded, onToggleLabels, onCordon, on
             </div>
           ))
         )}
-      </NodeSection>
+      </InspectorSection>
     </>
-  );
-}
-
-function NodeSection({ title, children, action }: { title: string; children: React.ReactNode; action?: React.ReactNode }) {
-  return (
-    <div style={{ marginBottom: 14 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 5 }}>
-        <span style={{ fontSize: 9, textTransform: "uppercase", letterSpacing: 0.5, color: "var(--color-text-tertiary)" }}>{title}</span>
-        {action}
-      </div>
-      <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>{children}</div>
-    </div>
   );
 }
 

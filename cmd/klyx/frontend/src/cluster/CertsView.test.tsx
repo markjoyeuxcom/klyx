@@ -19,7 +19,7 @@ const cluster = (tier: string): ClusterDTO => ({
 const cert = (over: Partial<CertificateDTO>): CertificateDTO => ({
   namespace: "payments", name: "acme-demo", ready: "Ready", reason: "", message: "",
   issuerKind: "ClusterIssuer", issuerName: "lab-acme-staging", secretName: "acme-demo-tls",
-  dnsNames: ["acme-demo.klustr.io"], notAfterUnix: 0, expiresInSeconds: 0, renewalUnix: 0, ...over,
+  dnsNames: ["acme-demo.klustr.io"], notBeforeUnix: 0, notAfterUnix: 0, expiresInSeconds: 0, renewalUnix: 0, ...over,
 });
 
 const issuer = (over: Partial<IssuerDTO>): IssuerDTO => ({
@@ -82,6 +82,61 @@ describe("CertsView", () => {
     expect(within(inspector).getByText(/stuck here/i)).toBeTruthy();
     // The server-resolved bound issuer drives the headline.
     expect(within(inspector).getByText(/issuer not ready: ACMEAccountRegistrationFailed/i)).toBeTruthy();
+    expect(within(inspector).getByText(/likely cause/i)).toBeTruthy();
+  });
+
+  it("filters certificates by issuing, issuer problem, and namespace", () => {
+    setup("Healthy", [
+      cert({ namespace: "payments", name: "issuing-cert", ready: "Issuing" }),
+      cert({ namespace: "cnpg-system", name: "ready-cert", ready: "Ready", issuerName: "missing-issuer" }),
+    ], [issuer({})]);
+    const { getAllByRole, getByRole, getByTestId, queryByText } = render(<CertsView cluster="x" />);
+    fireEvent.click(getAllByRole("button", { name: /issuing/i })[0]);
+    expect(within(getByTestId("cert-scroll")).getByText("issuing-cert")).toBeTruthy();
+    expect(queryByText("ready-cert")).toBeNull();
+
+    fireEvent.click(getByRole("button", { name: /issuer problem/i }));
+    expect(within(getByTestId("cert-scroll")).getByText("ready-cert")).toBeTruthy();
+
+    fireEvent.change(getByRole("combobox", { name: /filter certificate namespace/i }), { target: { value: "payments" } });
+    expect(queryByText("ready-cert")).toBeNull();
+  });
+
+  it("shows validity timeline and missing secret cause", () => {
+    const c = cert({
+      name: "secret-missing",
+      ready: "Failed",
+      reason: "DoesNotExist",
+      notBeforeUnix: 1780272000,
+      notAfterUnix: 1782864000,
+      renewalUnix: 1782259200,
+    });
+    setup("Healthy", [c], [issuer({})], "payments/secret-missing");
+    const { getByTestId } = render(<CertsView cluster="x" />);
+    const inspector = getByTestId("cert-inspector");
+    expect(within(inspector).getByText(/likely cause/i)).toBeTruthy();
+    expect(within(inspector).getByText(/target secret acme-demo-tls/i)).toBeTruthy();
+    expect(within(inspector).getByText("2026-06-01")).toBeTruthy();
+    expect(within(inspector).getByText("2026-06-24")).toBeTruthy();
+  });
+
+  it("keeps rendering when a chain payload has null arrays", () => {
+    const c = cert({ namespace: "cnpg-system", name: "cnpg-ca", dnsNames: null as unknown as string[] });
+    const chain: CertChainDTO = {
+      certificate: c,
+      issuer: null,
+      requests: [{
+        kind: "CertificateRequest", namespace: "cnpg-system", name: "cnpg-ca-1", ready: "Ready", reason: "", message: "",
+        children: null as unknown as [],
+      }],
+      failingLink: null,
+      warnings: null as unknown as string[],
+    };
+    setup("Healthy", [c], [], "cnpg-system/cnpg-ca", chain);
+    const { getByTestId } = render(<CertsView cluster="x" />);
+    const inspector = getByTestId("cert-inspector");
+    expect(within(inspector).getByText("cnpg-system/cnpg-ca")).toBeTruthy();
+    expect(within(inspector).getByText("cnpg-ca-1")).toBeTruthy();
   });
 
   it("lists issuer health under the issuers filter", () => {

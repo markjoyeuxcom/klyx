@@ -162,7 +162,7 @@ function AttentionStrip({
     nav.setSection("argo");
   }
   function goNetwork() {
-    nav.setSection("network");
+    nav.setSection("gatewayApi");
   }
 
   const fluxTileTitle = (() => {
@@ -297,7 +297,7 @@ function NextActions({
   if ((summary?.warningEvents ?? 0) > 0) actions.push({ label: "events", detail: `${summary?.warningEvents} warnings`, run: () => { nav.setSection("events"); nav.setWarningsOnly(true); }, tone: "var(--color-text-warning)" });
   if ((summary?.flux?.notReady ?? 0) > 0 || (summary?.flux?.suspended ?? 0) > 0) actions.push({ label: "flux", detail: `${summary?.flux?.notReady ?? 0} not ready · ${summary?.flux?.suspended ?? 0} suspended`, run: () => nav.setSection("gitops"), tone: "var(--color-text-warning)" });
   if ((board?.argo?.broken ?? 0) > 0) actions.push({ label: "argo", detail: `${board?.argo?.broken} degraded`, run: () => nav.setSection("argo"), tone: "var(--color-text-warning)" });
-  if (((board?.gateway?.brokenRoutes ?? 0) + (board?.gateway?.unprogrammed ?? 0)) > 0) actions.push({ label: "gateway", detail: `${(board?.gateway?.brokenRoutes ?? 0) + (board?.gateway?.unprogrammed ?? 0)} issues`, run: () => nav.setSection("network"), tone: "var(--color-text-warning)" });
+  if (((board?.gateway?.brokenRoutes ?? 0) + (board?.gateway?.unprogrammed ?? 0)) > 0) actions.push({ label: "gateway", detail: `${(board?.gateway?.brokenRoutes ?? 0) + (board?.gateway?.unprogrammed ?? 0)} issues`, run: () => nav.setSection("gatewayApi"), tone: "var(--color-text-warning)" });
   if (clusterState !== "Synced") actions.push({ label: "watch", detail: clusterState.toLowerCase(), run: () => nav.setSection("overview"), tone: "var(--color-text-warning)" });
 
   return (

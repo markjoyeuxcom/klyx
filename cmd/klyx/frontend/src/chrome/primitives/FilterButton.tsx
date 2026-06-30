@@ -1,5 +1,5 @@
 // FilterButton: a toggleable filter pill with an optional dim count, replacing
-// the FilterButton/ModeButton copies in GitOps/NodesView/NetworkView/CertsView.
+// the FilterButton/ModeButton copies in GitOps/NodesView/GatewayApiView/CertsView.
 // A real <button> (inherits the global hover/active/focus rules); active reads as
 // an info-tinted fill — the clearest "selected" treatment of the prior variants.
 // label + count are separate spans so the count stays de-emphasised and tests can

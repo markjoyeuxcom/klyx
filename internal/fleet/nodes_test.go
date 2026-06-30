@@ -84,6 +84,7 @@ func TestNodeDetail_BasicFields(t *testing.T) {
 			Name:              "node-1",
 			UID:               "uid-node-1",
 			Labels:            map[string]string{"node-role.kubernetes.io/control-plane": ""},
+			Annotations:       map[string]string{"owner": "platform"},
 			CreationTimestamp: metav1.NewTime(time.Unix(100_000, 0)),
 		},
 		Spec: corev1.NodeSpec{
@@ -150,6 +151,9 @@ func TestNodeDetail_BasicFields(t *testing.T) {
 	}
 	if _, ok := d.Labels["node-role.kubernetes.io/control-plane"]; !ok {
 		t.Error("expected role label in Labels map")
+	}
+	if d.Annotations["owner"] != "platform" {
+		t.Errorf("annotations: %+v", d.Annotations)
 	}
 
 	// Taints.
@@ -245,5 +249,8 @@ func TestNodeDetail_EmptyLabelsNonNil(t *testing.T) {
 	}
 	if d.Labels == nil {
 		t.Error("Labels must be non-nil even when node has no labels")
+	}
+	if d.Annotations == nil {
+		t.Error("Annotations must be non-nil even when node has no annotations")
 	}
 }
