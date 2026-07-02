@@ -12,7 +12,7 @@ func TestToFluxDTO(t *testing.T) {
 	r := flux.Resource{
 		Kind: flux.KustomizationKind, Namespace: "flux-system", Name: "flux-system",
 		Ready: flux.Ready, Message: "", Revision: "main@sha1:abc",
-		LastApplied: now.Add(-30 * time.Second), Suspended: false,
+		ReadySince: now.Add(-30 * time.Second), Suspended: false,
 		SourceKind: "GitRepository", SourceName: "flux-system",
 	}
 	d := ToFluxDTO(r, now)
@@ -22,8 +22,8 @@ func TestToFluxDTO(t *testing.T) {
 	if d.Ready != "Ready" || d.Revision != "main@sha1:abc" {
 		t.Fatalf("fields: %+v", d)
 	}
-	if d.LastAppliedAgeSeconds != 30 {
-		t.Fatalf("age: %d", d.LastAppliedAgeSeconds)
+	if d.ReadySinceSeconds != 30 {
+		t.Fatalf("age: %d", d.ReadySinceSeconds)
 	}
 	if d.SourceKind != "GitRepository" || d.SourceName != "flux-system" {
 		t.Fatalf("source: kind=%q name=%q", d.SourceKind, d.SourceName)
@@ -41,8 +41,8 @@ func TestToFluxDTOCarriesReason(t *testing.T) {
 func TestToFluxDTOZeroTimeAge(t *testing.T) {
 	now := time.Now()
 	d := ToFluxDTO(flux.Resource{Kind: flux.HelmReleaseKind, Name: "x", Ready: flux.Failed}, now)
-	if d.LastAppliedAgeSeconds != 0 {
-		t.Fatalf("want 0 age for zero time, got %d", d.LastAppliedAgeSeconds)
+	if d.ReadySinceSeconds != 0 {
+		t.Fatalf("want 0 age for zero time, got %d", d.ReadySinceSeconds)
 	}
 }
 

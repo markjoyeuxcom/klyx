@@ -71,3 +71,34 @@ func TestParseGatewayNotProgrammed(t *testing.T) {
 		t.Fatalf("want accepted, not programmed: %+v", g)
 	}
 }
+
+func TestGatewayRefStalenessFromProgrammedCondition(t *testing.T) {
+	gw := func(gen int64, condObserved interface{}) *unstructured.Unstructured {
+		cond := map[string]interface{}{"type": "Programmed", "status": "True"}
+		if condObserved != nil {
+			cond["observedGeneration"] = condObserved
+		}
+		u := &unstructured.Unstructured{Object: map[string]interface{}{
+			"apiVersion": "gateway.networking.k8s.io/v1",
+			"kind":       "Gateway",
+			"metadata":   map[string]interface{}{"name": "eg", "namespace": "infra"},
+			"spec":       map[string]interface{}{"gatewayClassName": "envoy"},
+			"status":     map[string]interface{}{"conditions": []interface{}{cond}},
+		}}
+		u.SetGeneration(gen)
+		return u
+	}
+
+	// Listener edit (gen 7) not yet observed (gen 6): stale - Programmed=true
+	// describes the previous spec.
+	r := ParseGatewayRef(gw(7, int64(6)))
+	if !r.Stale || r.Generation != 7 || r.ObservedGeneration != 6 {
+		t.Fatalf("stale: %+v", r)
+	}
+	if r := ParseGatewayRef(gw(7, int64(7))); r.Stale {
+		t.Fatalf("caught-up gateway must not be stale: %+v", r)
+	}
+	if r := ParseGatewayRef(gw(7, nil)); r.Stale {
+		t.Fatalf("missing observedGeneration must read not-stale: %+v", r)
+	}
+}

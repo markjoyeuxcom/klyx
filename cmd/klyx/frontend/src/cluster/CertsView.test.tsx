@@ -35,6 +35,17 @@ function setup(tier: string, certs: CertificateDTO[], issuers: IssuerDTO[], sele
 }
 
 describe("CertsView", () => {
+  it("a stale certificate dims and shows the Syncing chip", () => {
+    setup("Healthy", [cert({ name: "edited-tls", ready: "Ready", stale: true, generation: 3, observedGeneration: 2 })], [issuer({})]);
+    const { getByText, getByTitle } = render(<CertsView cluster="x" />);
+    const row = getByText("edited-tls").closest("button") as HTMLButtonElement;
+    expect(getByText("Syncing…")).toBeTruthy();
+    expect(row.textContent).not.toContain("ready");
+    expect(getByTitle(/Observed Gen: 2 vs Current: 3/)).toBeTruthy();
+    expect(row.style.opacity).toBe("0.6");
+  });
+
+
   it("renders an honest empty state when cert-manager is absent", () => {
     setup("Absent", [], []);
     const { getByText } = render(<CertsView cluster="x" />);

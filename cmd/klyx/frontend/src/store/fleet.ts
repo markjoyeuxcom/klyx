@@ -38,10 +38,15 @@ export type FluxResourceDTO = {
   reason: string;
   message: string;
   revision: string;
-  lastAppliedAgeSeconds: number;
+  readySinceSeconds: number;
   suspended: boolean;
   sourceKind: string;
   sourceName: string;
+  // stale: spec changed, controller has not observed it - ready reflects the
+  // previous spec; render the row as transitioning ("dim = not yet realized").
+  stale?: boolean;
+  generation?: number;
+  observedGeneration?: number;
 };
 
 export type ForwardDTO = {
@@ -168,6 +173,9 @@ export type CertificateDTO = {
   notAfterUnix: number;
   expiresInSeconds: number;
   renewalUnix: number;
+  stale?: boolean;
+  generation?: number;
+  observedGeneration?: number;
 };
 export type IssuerDTO = {
   kind: string;
@@ -346,7 +354,7 @@ export type CRDSlice = {
 export const crdCountKey = (group: string, version: string, plural: string) => `${group}/${version}/${plural}`;
 
 export type GatewayAddressDTO = { type: string; value: string };
-export type GatewayRefDTO = { namespace: string; name: string; className: string; addresses?: GatewayAddressDTO[]; listeners?: ListenerDTO[]; accepted: boolean; programmed: boolean };
+export type GatewayRefDTO = { namespace: string; name: string; className: string; addresses?: GatewayAddressDTO[]; listeners?: ListenerDTO[]; accepted: boolean; programmed: boolean; stale?: boolean; generation?: number; observedGeneration?: number };
 export type GatewayListDTO = { gatewayAPIServed: boolean; gateways: GatewayRefDTO[]; error?: string };
 export type PolicyDetailDTO = { key: string; value: string };
 export type PolicyRefDTO = { kind: string; namespace: string; name: string; targetKind: string; targetNamespace: string; targetName: string; targetSectionName: string; summary: string; details: PolicyDetailDTO[]; inferred: boolean; match: string };

@@ -43,12 +43,21 @@ type Certificate struct {
 	NotBefore   time.Time
 	NotAfter    time.Time
 	RenewalTime time.Time
+	// Stale reports that the spec changed and the controller has not observed
+	// it yet. cert-manager stamps observedGeneration on the Ready condition
+	// (not at status top level), so staleness compares metadata.generation
+	// against that. While stale, Ready reflects the PREVIOUS spec - the UI
+	// must present the row as transitioning, never as confidently green.
+	Stale              bool
+	Generation         int64
+	ObservedGeneration int64
 }
 
 // ParseCertificate extracts a Certificate's issuance state from a watched CR.
 func ParseCertificate(u *unstructured.Unstructured) Certificate {
 	c := Certificate{Namespace: u.GetNamespace(), Name: u.GetName()}
 	c.Ready, c.Reason, c.Message = readyFromConditions(u)
+	c.Stale, c.Generation, c.ObservedGeneration = staleness(u)
 	c.IssuerName, _, _ = unstructured.NestedString(u.Object, "spec", "issuerRef", "name")
 	c.IssuerKind, _, _ = unstructured.NestedString(u.Object, "spec", "issuerRef", "kind")
 	if c.IssuerKind == "" {
@@ -78,6 +87,34 @@ func ParseIssuer(u *unstructured.Unstructured) Issuer {
 	i := Issuer{Kind: Kind(u.GetKind()), Namespace: u.GetNamespace(), Name: u.GetName()}
 	i.Ready, i.Reason, i.Message = readyFromConditions(u)
 	return i
+}
+
+// staleness compares metadata.generation with the Ready condition's
+// observedGeneration (cert-manager stamps it per condition, not at status top
+// level). found=false (no Ready condition, or one without observedGeneration)
+// reads as not-stale rather than guessing.
+func staleness(u *unstructured.Unstructured) (stale bool, gen, observed int64) {
+	gen = u.GetGeneration()
+	if gen == 0 {
+		return false, gen, 0
+	}
+	conds, _, _ := unstructured.NestedSlice(u.Object, "status", "conditions")
+	for _, c := range conds {
+		cm, ok := c.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if t, _ := cm["type"].(string); t != "Ready" {
+			continue
+		}
+		switch og := cm["observedGeneration"].(type) {
+		case int64:
+			return gen > og, gen, og
+		case float64:
+			return gen > int64(og), gen, int64(og)
+		}
+	}
+	return false, gen, 0
 }
 
 // readyFromConditions derives the issuance state, the headline reason, and the

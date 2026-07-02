@@ -114,3 +114,37 @@ func TestParseTimeTolerant(t *testing.T) {
 		t.Fatalf("parseTime: %v want %v", got, want)
 	}
 }
+
+func TestCertificateStalenessFromReadyConditionObservedGeneration(t *testing.T) {
+	cert := func(gen int64, condObserved interface{}) *unstructured.Unstructured {
+		cond := map[string]interface{}{"type": "Ready", "status": "True", "reason": "Ready"}
+		if condObserved != nil {
+			cond["observedGeneration"] = condObserved
+		}
+		u := &unstructured.Unstructured{Object: map[string]interface{}{
+			"apiVersion": "cert-manager.io/v1",
+			"kind":       "Certificate",
+			"metadata":   map[string]interface{}{"name": "web-tls", "namespace": "apps"},
+			"spec":       map[string]interface{}{"secretName": "web-tls"},
+			"status":     map[string]interface{}{"conditions": []interface{}{cond}},
+		}}
+		u.SetGeneration(gen)
+		return u
+	}
+
+	// cert-manager stamps observedGeneration on the Ready condition.
+	c := ParseCertificate(cert(3, int64(2)))
+	if !c.Stale || c.Generation != 3 || c.ObservedGeneration != 2 {
+		t.Fatalf("stale: %+v", c)
+	}
+	if c := ParseCertificate(cert(3, int64(3))); c.Stale {
+		t.Fatalf("caught-up cert must not be stale: %+v", c)
+	}
+	// JSON round-trips may deliver float64.
+	if c := ParseCertificate(cert(3, float64(2))); !c.Stale {
+		t.Fatalf("float64 observedGeneration must work: %+v", c)
+	}
+	if c := ParseCertificate(cert(3, nil)); c.Stale {
+		t.Fatalf("missing observedGeneration must read not-stale: %+v", c)
+	}
+}

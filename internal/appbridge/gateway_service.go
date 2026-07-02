@@ -46,7 +46,7 @@ func (s *GatewayService) ListGateways(cluster string) GatewayListDTO {
 	}
 	out := GatewayListDTO{GatewayAPIServed: served, Gateways: make([]GatewayRefDTO, 0, len(refs))}
 	for _, r := range refs {
-		g := GatewayRefDTO{Namespace: r.Namespace, Name: r.Name, ClassName: r.ClassName, Accepted: r.Accepted, Programmed: r.Programmed}
+		g := GatewayRefDTO{Namespace: r.Namespace, Name: r.Name, ClassName: r.ClassName, Accepted: r.Accepted, Programmed: r.Programmed, Stale: r.Stale, Generation: r.Generation, ObservedGeneration: r.ObservedGeneration}
 		for _, a := range r.Addresses {
 			g.Addresses = append(g.Addresses, GatewayAddressDTO{Type: a.Type, Value: a.Value})
 		}

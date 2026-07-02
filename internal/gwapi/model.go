@@ -99,4 +99,11 @@ type GatewayRef struct {
 	Accepted, Programmed       bool
 	Addresses                  []GatewayAddress
 	Listeners                  []Listener
+	// Stale reports that the spec changed and the controller has not observed
+	// it yet (the Programmed condition's observedGeneration lags
+	// metadata.generation). While stale, Accepted/Programmed reflect the
+	// PREVIOUS spec - the UI must present the row as transitioning.
+	Stale              bool
+	Generation         int64
+	ObservedGeneration int64
 }

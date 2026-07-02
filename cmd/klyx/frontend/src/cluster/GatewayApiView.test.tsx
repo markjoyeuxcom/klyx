@@ -12,6 +12,18 @@ function net(over: Partial<ReturnType<typeof useFleet.getState>["network"]> = {}
 beforeEach(() => vi.clearAllMocks());
 
 describe("GatewayApiView", () => {
+  it("a stale gateway dims and shows the Syncing chip instead of programmed", () => {
+    net({ served: true, gateways: [{ namespace: "infra", name: "eg", className: "envoy-gateway", accepted: true, programmed: true, stale: true, generation: 7, observedGeneration: 6 }] });
+    const { getByText, getByTitle } = render(<GatewayApiView cluster="x" />);
+    const row = getByText("eg").closest("button") as HTMLButtonElement;
+    expect(getByText("Syncing…")).toBeTruthy();
+    // The programmed=true state describes the previous spec - never shown while stale.
+    expect(row.textContent).not.toContain("programmed");
+    expect(getByTitle(/Observed Gen: 6 vs Current: 7/)).toBeTruthy();
+    expect(row.style.opacity).toBe("0.6");
+  });
+
+
   it("shows 'Gateway API not installed' when not served", () => {
     net({ served: false, gateways: [] });
     const { getByText } = render(<GatewayApiView cluster="x" />);

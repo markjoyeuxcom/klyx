@@ -5,6 +5,7 @@ import type { GatewayRefDTO } from "../store/fleet";
 import { listGateways } from "../bridge/gateway";
 import { GatewayTopology } from "./GatewayTopology";
 import { frame, ellipsis, SummaryCell, FilterButton } from "../chrome/primitives";
+import { SyncingChip, staleStyle } from "./staleness";
 
 const empty: CSSProperties = { padding: 24, color: "var(--color-text-secondary)", fontSize: 13 };
 
@@ -146,6 +147,7 @@ export function GatewayApiView({ cluster }: { cluster: string }) {
                   fontSize: 12,
                   cursor: "pointer",
                   textAlign: "left",
+                  ...staleStyle(g.stale),
                 }}
               >
                 <span style={{ alignSelf: "stretch", background: pendingGateway ? "var(--color-text-warning)" : "transparent" }} />
@@ -157,7 +159,11 @@ export function GatewayApiView({ cluster }: { cluster: string }) {
                 <span style={{ color: gatewayAddress(g) === "—" ? "var(--color-text-tertiary)" : "var(--color-text-primary)", fontFamily: "var(--font-mono)", fontSize: 11, ...ellipsis }} title={gatewayAddress(g)}>{gatewayAddress(g)}</span>
                 <span style={{ color: "var(--color-text-secondary)", fontFamily: "var(--font-mono)", fontSize: 11, ...ellipsis }} title={gatewayListeners(g)}>{gatewayListeners(g)}</span>
                 <span style={{ fontSize: 11, color: g.accepted ? "var(--color-text-success)" : "var(--color-text-danger)" }}>{g.accepted ? "accepted" : "not accepted"}</span>
-                <span style={{ fontSize: 11, color: g.programmed ? "var(--color-text-success)" : "var(--color-text-warning)" }}>{g.programmed ? "programmed" : "pending"}</span>
+                {g.stale ? (
+                  <SyncingChip generation={g.generation} observedGeneration={g.observedGeneration} />
+                ) : (
+                  <span style={{ fontSize: 11, color: g.programmed ? "var(--color-text-success)" : "var(--color-text-warning)" }}>{g.programmed ? "programmed" : "pending"}</span>
+                )}
               </button>
             );
           })}

@@ -22,7 +22,12 @@ type FluxResourceDTO struct {
 	Reason                string `json:"reason"`
 	Message               string `json:"message"`
 	Revision              string `json:"revision"`
-	LastAppliedAgeSeconds int64  `json:"lastAppliedAgeSeconds"`
+	ReadySinceSeconds int64  `json:"readySinceSeconds"`
+	// Stale: the spec changed and the controller has not observed it yet -
+	// Ready reflects the previous spec; the row renders as transitioning.
+	Stale              bool  `json:"stale"`
+	Generation         int64 `json:"generation"`
+	ObservedGeneration int64 `json:"observedGeneration"`
 	Suspended             bool   `json:"suspended"`
 	SourceKind            string `json:"sourceKind"`
 	SourceName            string `json:"sourceName"`
@@ -30,8 +35,8 @@ type FluxResourceDTO struct {
 
 func ToFluxDTO(r flux.Resource, now time.Time) FluxResourceDTO {
 	age := int64(0)
-	if !r.LastApplied.IsZero() {
-		age = int64(now.Sub(r.LastApplied).Seconds())
+	if !r.ReadySince.IsZero() {
+		age = int64(now.Sub(r.ReadySince).Seconds())
 		if age < 0 {
 			age = 0
 		}
@@ -44,7 +49,10 @@ func ToFluxDTO(r flux.Resource, now time.Time) FluxResourceDTO {
 		Reason:                r.Reason,
 		Message:               r.Message,
 		Revision:              r.Revision,
-		LastAppliedAgeSeconds: age,
+		ReadySinceSeconds: age,
+		Stale:              r.Stale,
+		Generation:         r.Generation,
+		ObservedGeneration: r.ObservedGeneration,
 		Suspended:             r.Suspended,
 		SourceKind:            r.SourceKind,
 		SourceName:            r.SourceName,

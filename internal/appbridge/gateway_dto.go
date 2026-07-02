@@ -103,6 +103,12 @@ type GatewayRefDTO struct {
 	Listeners  []ListenerDTO       `json:"listeners"`
 	Accepted   bool                `json:"accepted"`
 	Programmed bool                `json:"programmed"`
+	// Stale: the spec changed and the controller has not observed it yet -
+	// Accepted/Programmed reflect the previous spec; the row renders as
+	// transitioning.
+	Stale              bool  `json:"stale"`
+	Generation         int64 `json:"generation"`
+	ObservedGeneration int64 `json:"observedGeneration"`
 }
 type GatewayListDTO struct {
 	GatewayAPIServed bool            `json:"gatewayAPIServed"`

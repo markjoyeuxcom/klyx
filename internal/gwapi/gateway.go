@@ -100,10 +100,44 @@ func parseAddresses(obj map[string]interface{}) []GatewayAddress {
 // ParseGatewayRef maps a Gateway to the lightweight list item.
 func ParseGatewayRef(u *unstructured.Unstructured) GatewayRef {
 	cls, _, _ := unstructured.NestedString(u.Object, "spec", "gatewayClassName")
+	stale, gen, observed := gatewayStaleness(u)
 	return GatewayRef{
 		Namespace: u.GetNamespace(), Name: u.GetName(), ClassName: cls,
 		Accepted: condTrue(u.Object, "Accepted"), Programmed: condTrue(u.Object, "Programmed"),
 		Addresses: parseAddresses(u.Object),
 		Listeners: parseListeners(u.Object),
+		Stale:     stale, Generation: gen, ObservedGeneration: observed,
 	}
+}
+
+// gatewayStaleness compares metadata.generation with the Programmed (falling
+// back to Accepted) condition's observedGeneration - Gateway API stamps it per
+// condition (metav1.Condition). Missing conditions read as not-stale rather
+// than guessing.
+func gatewayStaleness(u *unstructured.Unstructured) (stale bool, gen, observed int64) {
+	gen = u.GetGeneration()
+	if gen == 0 {
+		return false, gen, 0
+	}
+	conds, _, _ := unstructured.NestedSlice(u.Object, "status", "conditions")
+	byType := map[string]int64{}
+	for _, c := range conds {
+		m, ok := c.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		t, _ := m["type"].(string)
+		switch og := m["observedGeneration"].(type) {
+		case int64:
+			byType[t] = og
+		case float64:
+			byType[t] = int64(og)
+		}
+	}
+	for _, t := range []string{"Programmed", "Accepted"} {
+		if og, ok := byType[t]; ok {
+			return gen > og, gen, og
+		}
+	}
+	return false, gen, 0
 }

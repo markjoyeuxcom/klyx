@@ -29,6 +29,11 @@ type CertificateDTO struct {
 	// RenewalUnix is when cert-manager will renew (status.renewalTime); 0 unknown.
 	// now >= renewalTime is the "in the renewal window" signal the UI flags amber.
 	RenewalUnix int64 `json:"renewalUnix"`
+	// Stale: the spec changed and the controller has not observed it yet -
+	// Ready reflects the previous spec; the row renders as transitioning.
+	Stale              bool  `json:"stale"`
+	Generation         int64 `json:"generation"`
+	ObservedGeneration int64 `json:"observedGeneration"`
 }
 
 func toCertificateDTO(c certmanager.Certificate, now time.Time) CertificateDTO {
@@ -43,6 +48,9 @@ func toCertificateDTO(c certmanager.Certificate, now time.Time) CertificateDTO {
 		SecretName: c.SecretName,
 		DNSNames:   []string{},
 	}
+	dto.Stale = c.Stale
+	dto.Generation = c.Generation
+	dto.ObservedGeneration = c.ObservedGeneration
 	if c.DNSNames != nil {
 		dto.DNSNames = c.DNSNames
 	}

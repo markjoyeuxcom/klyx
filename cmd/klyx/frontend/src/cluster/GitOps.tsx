@@ -6,6 +6,7 @@ import { openGitOps, closeGitOps, getResourceDetail, reconcile, reconcileWithSou
 import type { FluxDiffDTO } from "../bridge/gitops";
 import { ConfirmDialog } from "../chrome/ConfirmDialog";
 import { Badge, FilterButton, SummaryCell, Section, StatusDot, readyColor, ellipsis, actionBtn, frame } from "../chrome/primitives";
+import { SyncingChip, staleStyle } from "./staleness";
 
 type FluxFilter = "all" | "attention" | "suspended" | "kustomizations" | "helmreleases" | "sources";
 
@@ -210,7 +211,7 @@ export function GitOps({ cluster }: { cluster: string }) {
               <span>resource</span>
               <span>source</span>
               <span>revision</span>
-              <span>applied</span>
+              <span>since</span>
               <span>status</span>
             </div>
             <div data-testid="flux-resource-scroll" style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
@@ -304,6 +305,7 @@ function RowSummary({ r, open, onClick }: { r: FluxResourceDTO; open: boolean; o
         textAlign: "left",
         color: "var(--color-text-primary)",
         background: open ? "var(--color-background-secondary)" : "transparent",
+        ...staleStyle(r.stale),
       }}
     >
       <span style={{ alignSelf: "stretch", background: isBad ? "var(--color-text-danger)" : isReconciling ? "var(--color-text-info)" : r.suspended ? "var(--color-text-warning)" : "transparent" }} />
@@ -317,8 +319,10 @@ function RowSummary({ r, open, onClick }: { r: FluxResourceDTO; open: boolean; o
       </div>
       <div style={{ color: "var(--color-text-secondary)", ...ellipsis }} title={sourceText(r)}>{sourceText(r) || "—"}</div>
       <div style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--color-text-secondary)", ...ellipsis }} title={r.revision}>{shortRev(r.revision) || "—"}</div>
-      <div style={{ color: "var(--color-text-tertiary)", fontSize: 11, ...ellipsis }}>{ago(r.lastAppliedAgeSeconds) || "—"}</div>
-      <div style={{ ...ellipsis, color }}>{statusText(r)}</div>
+      <div style={{ color: "var(--color-text-tertiary)", fontSize: 11, ...ellipsis }}>{ago(r.readySinceSeconds) || "—"}</div>
+      <div style={{ ...ellipsis, color }}>
+        {r.stale ? <SyncingChip generation={r.generation} observedGeneration={r.observedGeneration} /> : statusText(r)}
+      </div>
     </button>
   );
 }

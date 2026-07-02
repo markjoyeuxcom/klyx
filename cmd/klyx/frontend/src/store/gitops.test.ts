@@ -3,7 +3,7 @@ import { useFleet, FluxResourceDTO, FluxSourceDTO } from "./fleet";
 
 const r = (over: Partial<FluxResourceDTO>): FluxResourceDTO => ({
   kind: "Kustomization", namespace: "flux-system", name: "flux-system",
-  ready: "Ready", reason: "", message: "", revision: "main@abc", lastAppliedAgeSeconds: 1, suspended: false,
+  ready: "Ready", reason: "", message: "", revision: "main@abc", readySinceSeconds: 1, suspended: false,
   sourceKind: "", sourceName: "", ...over,
 });
 

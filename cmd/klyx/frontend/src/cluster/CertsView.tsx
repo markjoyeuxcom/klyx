@@ -3,6 +3,7 @@ import { useFleet } from "../store/fleet";
 import type { CertificateDTO, IssuerDTO, ChainNodeDTO, CertChainDTO } from "../store/fleet";
 import { openCertManager, closeCertManager, getCertificateChain } from "../bridge/certmanager";
 import { Badge, FilterButton, SummaryCell, Section, Field, StatusDot, frame, ellipsis, mono, readyColor, toneColor } from "../chrome/primitives";
+import { SyncingChip, staleStyle } from "./staleness";
 
 type CertFilter = "all" | "attention" | "expiring" | "issuing" | "issuerProblem" | "issuers";
 
@@ -246,6 +247,7 @@ function CertRow({ c, open, onClick }: { c: CertificateDTO; open: boolean; onCli
         gap: 10, alignItems: "center", padding: "7px 12px", cursor: "pointer",
         border: "none", borderBottom: "0.5px solid var(--color-border-tertiary)",
         background: open ? "var(--color-background-secondary)" : "transparent", color: "var(--color-text-primary)",
+        ...staleStyle(c.stale),
       }}
     >
       <span style={{ alignSelf: "stretch", background: bad ? "var(--color-text-danger)" : c.ready === "Issuing" ? "var(--color-text-info)" : soon ? "var(--color-text-warning)" : "transparent" }} />
@@ -256,8 +258,14 @@ function CertRow({ c, open, onClick }: { c: CertificateDTO; open: boolean; onCli
       <span style={{ ...mono, ...ellipsis, fontSize: 11, color: "var(--color-text-secondary)" }} title={c.secretName}>{c.secretName}</span>
       <span style={{ ...mono, fontSize: 11, color: expired(c) ? "var(--color-text-danger)" : soon ? "var(--color-text-warning)" : "var(--color-text-secondary)" }}>{expiryText(c)}</span>
       <span style={{ display: "flex", alignItems: "center", gap: 5, minWidth: 0 }}>
-        <StatusDot size={6} color={readyColor[c.ready] ?? readyColor.Unknown} />
-        <span style={{ ...ellipsis, fontSize: 11, color: "var(--color-text-secondary)" }}>{statusText(c)}</span>
+        {c.stale ? (
+          <SyncingChip generation={c.generation} observedGeneration={c.observedGeneration} />
+        ) : (
+          <>
+            <StatusDot size={6} color={readyColor[c.ready] ?? readyColor.Unknown} />
+            <span style={{ ...ellipsis, fontSize: 11, color: "var(--color-text-secondary)" }}>{statusText(c)}</span>
+          </>
+        )}
       </span>
     </button>
   );
