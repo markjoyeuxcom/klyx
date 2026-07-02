@@ -13,7 +13,7 @@ import { CLUSTER_RISK_REFS, riskFor } from "./resourceRisk";
 import type { EventRowDTO, ResourceRef } from "../store/fleet";
 
 type BoardEntry = FleetBoardEntry | undefined;
-import { ellipsis, StatusDot } from "../chrome/primitives";
+import { Badge, ellipsis, StatusDot } from "../chrome/primitives";
 
 export function Overview({ c }: { c: ClusterDTO }) {
   const tags = [c.env, c.region, c.provider, c.group].filter(Boolean);
@@ -50,10 +50,10 @@ export function Overview({ c }: { c: ClusterDTO }) {
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
             <StatusDot size={8} color={stateColor[c.state] ?? "var(--color-text-tertiary)"} />
             <span style={{ fontFamily: "var(--font-mono)", fontWeight: 600, fontSize: 16 }}>{c.name}</span>
-            {c.version && <Badge>{c.version}</Badge>}
+            {c.version && <Badge variant="soft" tone="muted">{c.version}</Badge>}
           </div>
           <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
-            {tags.map((t) => <Badge key={t}>{t}</Badge>)}
+            {tags.map((t) => <Badge key={t} variant="soft" tone="muted">{t}</Badge>)}
           </div>
         </div>
         <span style={{ fontFamily: "var(--font-mono)", color: freshnessTone(c), fontSize: 12, whiteSpace: "nowrap" }}>
@@ -461,9 +461,6 @@ function ClusterRisks({ cluster }: { cluster: string }) {
 
 // ---- shared sub-components (unchanged) ----------------------------------------
 
-function Badge({ children }: { children: React.ReactNode }) {
-  return <span style={{ background: "var(--color-background-secondary)", color: "var(--color-text-secondary)", fontSize: 11, padding: "1px 6px", borderRadius: 3 }}>{children}</span>;
-}
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div style={{ marginBottom: 16 }}>

@@ -5,8 +5,7 @@ import { listArgoApplicationSets, listArgoApps, listArgoProjects, refreshArgoApp
 import { armProtected } from "../bridge/configsvc";
 import type { ArgoSyncOptions } from "../bridge/argo";
 import { ConfirmDialog } from "../chrome/ConfirmDialog";
-import { EmptyState } from "../chrome/EmptyState";
-import { SkeletonRows } from "../chrome/SkeletonRows";
+import { EmptyState, SkeletonRows, btn, ellipsis } from "../chrome/primitives";
 import { IconGitMerge } from "@tabler/icons-react";
 import { InspectorEmpty, InspectorSection, InspectorTitle } from "./ResourceInspector";
 
@@ -1061,10 +1060,8 @@ const splitPaneWide: React.CSSProperties = { display: "grid", gridTemplateColumn
 const inspector: React.CSSProperties = { border: "0.5px solid var(--color-border-secondary)", borderRadius: 6, background: "var(--color-background-primary)", padding: 14, minWidth: 0, display: "grid", gap: 13, position: "sticky", top: 12 };
 const mutedLine: React.CSSProperties = { color: "var(--color-text-tertiary)", fontSize: 11 };
 const monoLine: React.CSSProperties = { fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--color-text-secondary)" };
-const btn: React.CSSProperties = { fontSize: 11, padding: "3px 10px", borderRadius: 4, cursor: "pointer", border: "0.5px solid var(--color-border-tertiary)", background: "var(--color-background-primary)", color: "var(--color-text-secondary)" };
 const smallBtn: React.CSSProperties = { ...btn, padding: "2px 7px", fontSize: 10 };
 const smallPrimaryBtn: React.CSSProperties = { ...smallBtn, color: "var(--color-text-info)", borderColor: "var(--color-border-info)", background: "var(--color-background-info)" };
-const ellipsis: React.CSSProperties = { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" };
 const emptyStyle: React.CSSProperties = { color: "var(--color-text-secondary)", fontSize: 13 };
 const fieldLabel: React.CSSProperties = { color: "var(--color-text-tertiary)", fontSize: 10, textTransform: "uppercase", fontWeight: 600, letterSpacing: 0.2 };
 const inputStyle: React.CSSProperties = { width: "100%", boxSizing: "border-box", padding: "8px 10px", fontFamily: "var(--font-mono)", fontSize: 12, background: "var(--color-background-secondary)", border: "0.5px solid var(--color-border-tertiary)", borderRadius: 5, color: "var(--color-text-primary)", outline: "none" };

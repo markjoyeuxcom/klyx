@@ -82,7 +82,7 @@ func (f *fakeGitOpsSummaryConn) GitOpsResources() []flux.Resource { return nil }
 func (f *fakeGitOpsSummaryConn) GitOpsObject(kind, namespace, name string) (*unstructured.Unstructured, bool) {
 	return nil, false
 }
-func (f *fakeGitOpsSummaryConn) GitOpsSources() []flux.Source { return nil }
+func (f *fakeGitOpsSummaryConn) GitOpsSources() []flux.Source      { return nil }
 func (f *fakeGitOpsSummaryConn) GitOpsWatchHealth() (bool, string) { return true, "" }
 func (f *fakeGitOpsSummaryConn) GitOpsSourceObject(kind, namespace, name string) (*unstructured.Unstructured, bool) {
 	return nil, false

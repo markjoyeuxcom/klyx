@@ -1,8 +1,7 @@
 import { useEffect } from "react";
 import { useFleet, CRDGroupDTO, CRDKindDTO, CRDGroupBy, crdCountKey } from "../store/fleet";
 import { listCRDs, countKind } from "../bridge/crd";
-
-const ellipsis: React.CSSProperties = { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" };
+import { ellipsis } from "../chrome/primitives";
 
 type FlatKind = CRDKindDTO & { group: string; category: string };
 

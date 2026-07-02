@@ -87,7 +87,11 @@ func TestBrokenSemantics(t *testing.T) {
 		{"OutOfSync", "Healthy", true},
 		{"Synced", "Degraded", true},
 		{"Synced", "Missing", true},
-		{"Synced", "Suspended", true},
+		// Suspended is a deliberate operator pause (e.g. a paused Rollout), not
+		// a failure. Argo's UI shows it as a distinct paused state and the Flux
+		// side keeps Suspended out of broken too - previously this pinned
+		// Suspended as broken, which reddened triage permanently.
+		{"Synced", "Suspended", false},
 	}
 	for _, tc := range cases {
 		a := App{SyncStatus: tc.sync, HealthStatus: tc.health}
@@ -107,6 +111,34 @@ func TestParseMultiSource(t *testing.T) {
 	a := Parse(u)
 	if a.RepoURL != "https://r1" || a.Chart != "grafana" || a.ExtraSources != 1 {
 		t.Fatalf("multi-source: %+v", a)
+	}
+}
+
+func TestParseDeployedRevision(t *testing.T) {
+	multiSourceSpec := map[string]interface{}{
+		"sources": []interface{}{
+			map[string]interface{}{"repoURL": "https://r1", "chart": "grafana", "targetRevision": "8.x"},
+			map[string]interface{}{"repoURL": "https://r2", "path": "values"},
+		},
+	}
+	cases := []struct {
+		name string
+		spec map[string]interface{}
+		sync map[string]interface{}
+		want string
+	}{
+		{"single-source revision", map[string]interface{}{}, map[string]interface{}{"revision": "abc1234"}, "abc1234"},
+		// Multi-source apps leave status.sync.revision empty and report
+		// status.sync.revisions[] parallel to spec.sources.
+		{"multi-source revisions[0]", multiSourceSpec, map[string]interface{}{"revisions": []interface{}{"8.5.1", "def5678"}}, "8.5.1"},
+		{"revision wins when both set", multiSourceSpec, map[string]interface{}{"revision": "abc1234", "revisions": []interface{}{"8.5.1"}}, "abc1234"},
+		{"no revision at all stays empty", map[string]interface{}{}, map[string]interface{}{}, ""},
+	}
+	for _, tc := range cases {
+		a := Parse(app(tc.spec, map[string]interface{}{"sync": tc.sync}))
+		if a.Revision != tc.want {
+			t.Errorf("%s: Revision=%q, want %q", tc.name, a.Revision, tc.want)
+		}
 	}
 }
 
@@ -178,6 +210,27 @@ func TestParseApplicationSet(t *testing.T) {
 	}
 	if len(a.Conditions) != 3 {
 		t.Fatalf("conditions: %+v", a.Conditions)
+	}
+}
+
+func TestParseApplicationSetGeneratorNames(t *testing.T) {
+	u := &unstructured.Unstructured{Object: map[string]interface{}{
+		"metadata": map[string]interface{}{"name": "s", "namespace": "argocd"},
+		"spec": map[string]interface{}{
+			"generators": []interface{}{
+				// `selector` is a sibling filter key inside a generator entry,
+				// not a generator - it must not be listed or counted.
+				map[string]interface{}{
+					"git":      map[string]interface{}{"repoURL": "https://git"},
+					"selector": map[string]interface{}{"matchLabels": map[string]interface{}{"env": "dev"}},
+				},
+				map[string]interface{}{"clusters": map[string]interface{}{}},
+			},
+		},
+	}}
+	a := ParseApplicationSet(u)
+	if len(a.Generators) != 2 || a.Generators[0] != "clusters" || a.Generators[1] != "git" {
+		t.Fatalf("want sorted generator types [clusters git], got %+v", a.Generators)
 	}
 }
 

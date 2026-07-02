@@ -36,13 +36,21 @@ const (
 
 // Resource is a Flux-managed object's reconciliation state.
 type Resource struct {
-	Kind        Kind
-	Namespace   string
-	Name        string
-	Ready       ReadyState
-	Reason      string
-	Message     string
-	Revision    string
+	Kind      Kind
+	Namespace string
+	Name      string
+	Ready     ReadyState
+	Reason    string
+	Message   string
+	Revision  string
+	// LastApplied is NOT a per-apply timestamp - Flux status carries none.
+	// It is the Ready condition's lastTransitionTime: when the resource last
+	// CHANGED Ready state. A resource reconciling cleanly for weeks keeps the
+	// timestamp of that weeks-old flip. Read it as "ready/failed since", never
+	// "applied N ago". The field keeps its legacy name because appbridge maps
+	// it to the lastAppliedAgeSeconds DTO field; renaming both (ReadyTransition
+	// / readySinceSeconds) plus the UI copy is the follow-up that finishes
+	// this fix.
 	LastApplied time.Time
 	Suspended   bool
 	SourceKind  string
@@ -156,7 +164,9 @@ func common(u *unstructured.Unstructured, kind Kind) Resource {
 	}
 	r.Ready, r.Reason, r.Message = readyFromConditions(u)
 	r.DependsOn = parseDependsOn(u)
-	// lastTransitionTime of the Ready condition → LastApplied (only common needs it).
+	// LastApplied <- the Ready condition's lastTransitionTime, i.e. the moment
+	// the ready STATE last flipped - see the field doc for why that is the
+	// honest best Flux offers (no per-apply timestamp exists in status).
 	conds, _, _ := unstructured.NestedSlice(u.Object, "status", "conditions")
 	for _, c := range conds {
 		cm, ok := c.(map[string]interface{})

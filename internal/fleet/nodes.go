@@ -39,16 +39,34 @@ type PodOnNode struct {
 	Phase     string
 }
 
-// ListNodes lists all nodes and classifies them with the shared node-summary engine.
+// ListNodes classifies all nodes with the shared node-summary engine. Served
+// from the eager node informer's cache once it has synced - the conn already
+// watches exactly this data, so a fresh LIST per render was pure apiserver
+// load. Before sync (or in conns built without Start, e.g. tests) it falls
+// back to a direct LIST.
 func (c *ClusterConn) ListNodes(ctx context.Context) ([]workloads.NodeSummary, error) {
-	list, err := c.typed.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
-	if err != nil {
-		return nil, err
-	}
-
 	clk := c.clk
 	if clk == nil {
 		clk = clock.Real{}
+	}
+
+	c.mu.RLock()
+	inf := c.nodeInf
+	c.mu.RUnlock()
+	if inf != nil && inf.HasSynced() {
+		items := inf.GetStore().List()
+		nodes := make([]corev1.Node, 0, len(items))
+		for _, obj := range items {
+			if n, ok := obj.(*corev1.Node); ok {
+				nodes = append(nodes, *n)
+			}
+		}
+		return workloads.SummarizeNodes(nodes, clk.Now()), nil
+	}
+
+	list, err := c.typed.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, err
 	}
 	return workloads.SummarizeNodes(list.Items, clk.Now()), nil
 }

@@ -11,11 +11,14 @@ import {
 import { LogsService } from "../../bindings/github.com/moomora/klyx/internal/appbridge/index.js";
 import type { ContainerSummaryDTO } from "../store/fleet";
 import { parseLine, stripAnsi, splitHighlight } from "./logline";
-import type { LogLevel } from "./logline";
+import type { LogLevel, ParsedLine } from "./logline";
 
 // TODO(DD5): virtualize line rendering for very large buffers. Currently capped
-// at 10000 stored lines / 2000 rendered lines. Roadmap: react-virtual or a
-// custom windowed scroller once real-world usage confirms the threshold.
+// at 10000 stored lines / 2000 rendered lines; lines are parsed ONCE at ingest
+// (raw + parsed stored together in the buffer) so renders and level filters
+// never re-run the level/prefix regexes over the whole buffer. Roadmap:
+// react-virtual or a custom windowed scroller once real-world usage confirms
+// the threshold.
 
 const LOG_BUF_CAP = 10_000;
 const DOM_RENDER_CAP = 2_000;
@@ -50,6 +53,20 @@ interface LogLineDetail {
   hasAnsi: boolean;
 }
 
+// A buffered line carries its parse result, computed once at ingest —
+// re-parsing the whole buffer per render was the hot path.
+interface BufferedLine {
+  raw: string;
+  parsed: ParsedLine;
+}
+
+function toBuffered(line: string): BufferedLine {
+  return { raw: line, parsed: parseLine(stripAnsi(line)) };
+}
+
+// Reference implementation of the level filter over raw lines. The component
+// itself filters pre-parsed BufferedLines (same semantics, no re-parse); this
+// export remains the documented/tested contract for that behavior.
 export function filterLogLinesByLevel(lines: string[], filters: Record<LogLevelFilter, boolean>): string[] {
   const active = LOG_LEVEL_FILTERS.some((level) => filters[level]);
   if (!active) return lines;
@@ -136,7 +153,7 @@ export function LogsPane({
   const [copiedLine, setCopiedLine] = useState<{ index: number; text: string } | null>(null);
 
   // -- buffer (OUTSIDE zustand) --
-  const bufRef = useRef<string[]>([]);
+  const bufRef = useRef<BufferedLine[]>([]);
   const droppedRef = useRef(false);
   // version counter: bump once per batch to trigger a re-render
   const [version, setVersion] = useState(0);
@@ -154,9 +171,13 @@ export function LogsPane({
   const searchInputRef = useRef<HTMLInputElement>(null);
   const [activeMatchIdx, setActiveMatchIdx] = useState(0);
 
-  // derive which lines to render (last DOM_RENDER_CAP from buffer)
+  // derive which lines to render (last DOM_RENDER_CAP from buffer). Level
+  // filtering reads the parse result stored at ingest — no per-render regexes.
   const buf = bufRef.current;
-  const filteredLines = filterLogLinesByLevel(buf, levelFilters);
+  const levelFilterActive = LOG_LEVEL_FILTERS.some((level) => levelFilters[level]);
+  const filteredLines = levelFilterActive
+    ? buf.filter((l) => l.parsed.level !== "none" && levelFilters[l.parsed.level as LogLevelFilter] === true)
+    : buf;
   const totalVisibleLines = filteredLines.length;
   const renderLines = filteredLines.length > DOM_RENDER_CAP ? filteredLines.slice(filteredLines.length - DOM_RENDER_CAP) : filteredLines;
   const truncated = totalVisibleLines > DOM_RENDER_CAP;
@@ -168,13 +189,13 @@ export function LogsPane({
   const matchLineIndices: number[] = [];
   if (searchLc) {
     for (let i = 0; i < renderLines.length; i++) {
-      if (renderLines[i].toLowerCase().includes(searchLc)) matchLineIndices.push(i);
+      if (renderLines[i].raw.toLowerCase().includes(searchLc)) matchLineIndices.push(i);
     }
   }
   const matchCount = searchLc
     ? (() => {
         let n = 0;
-        for (const l of filteredLines) if (l.toLowerCase().includes(searchLc)) n++;
+        for (const l of filteredLines) if (l.raw.toLowerCase().includes(searchLc)) n++;
         return n;
       })()
     : 0;
@@ -273,14 +294,15 @@ export function LogsPane({
         if (stale) return;
         const chunk = ev.data;
         if (chunk.lines && chunk.lines.length > 0) {
+          // Parse each line once at ingest, and mutate the ref'd buffer in
+          // place — copying the whole 10k-line buffer per chunk was pure
+          // overhead. Nothing memoizes on the array identity; the version
+          // counter is the render trigger.
           const buf = bufRef.current;
-          const combined = buf.length + chunk.lines.length;
-          if (combined > LOG_BUF_CAP) {
-            const drop = combined - LOG_BUF_CAP;
-            bufRef.current = [...buf.slice(drop), ...chunk.lines];
+          for (const line of chunk.lines) buf.push(toBuffered(line));
+          if (buf.length > LOG_BUF_CAP) {
+            buf.splice(0, buf.length - LOG_BUF_CAP);
             droppedRef.current = true;
-          } else {
-            bufRef.current = [...buf, ...chunk.lines];
           }
           setVersion((v) => v + 1);
         }
@@ -354,7 +376,7 @@ export function LogsPane({
 
   const handleCopy = async () => {
     try {
-      await navigator.clipboard.writeText(filteredLines.join("\n"));
+      await navigator.clipboard.writeText(filteredLines.map((l) => l.raw).join("\n"));
       setCopyState("copied");
       setTimeout(() => setCopyState("idle"), 1500);
     } catch {
@@ -613,20 +635,21 @@ export function LogsPane({
         const isActiveMatch = searchLc
           ? matchLineIndices[clampedActive] === i
           : false;
-        const isSelected = selectedLine?.index === i && selectedLine.text === line;
-        const isCopied = copiedLine?.index === i && copiedLine.text === line;
+        const isSelected = selectedLine?.index === i && selectedLine.text === line.raw;
+        const isCopied = copiedLine?.index === i && copiedLine.text === line.raw;
         return (
           <LogLine
             key={i}
             ref={(el) => { rowRefs.current[i] = el; }}
-            line={line}
+            line={line.raw}
+            parsed={line.parsed}
             search={searchLc}
             wrap={wrap}
             activeMatch={isActiveMatch}
             selected={isSelected}
             copied={isCopied}
-            onSelect={() => setSelectedLine({ index: i, text: line })}
-            onCopy={() => void handleCopyLine(line, i)}
+            onSelect={() => setSelectedLine({ index: i, text: line.raw })}
+            onCopy={() => void handleCopyLine(line.raw, i)}
           />
         );
       })}
@@ -797,6 +820,8 @@ const LogLine = React.forwardRef<
   HTMLDivElement,
   {
     line: string;
+    /** Parse result computed once at buffer ingest — never re-parsed here. */
+    parsed: ParsedLine;
     search: string;
     wrap: boolean;
     activeMatch: boolean;
@@ -805,9 +830,7 @@ const LogLine = React.forwardRef<
     onSelect: () => void;
     onCopy: () => void;
   }
->(function LogLine({ line, search, wrap, activeMatch, selected, copied, onSelect, onCopy }, ref) {
-  const parsed = parseLine(stripAnsi(line));
-
+>(function LogLine({ line, parsed, search, wrap, activeMatch, selected, copied, onSelect, onCopy }, ref) {
   const levelColor = ((): string => {
     switch (parsed.level) {
       case "error": return "var(--color-text-danger)";

@@ -2,9 +2,7 @@ import { useEffect } from "react";
 import { useFleet, ResourceRef, crdCountKey } from "../store/fleet";
 import { countKind } from "../bridge/crd";
 import { BUILTIN_CATALOG, BuiltinEntry } from "./builtins";
-import { Chip } from "../chrome/Chip";
-
-const ellipsis: React.CSSProperties = { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" };
+import { Chip, ellipsis } from "../chrome/primitives";
 
 function matchesEntry(entry: BuiltinEntry, q: string): boolean {
   if (!q) return true;

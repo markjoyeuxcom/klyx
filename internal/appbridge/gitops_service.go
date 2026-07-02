@@ -2,6 +2,7 @@ package appbridge
 
 import (
 	"context"
+	"reflect"
 	"sync"
 	"time"
 
@@ -115,28 +116,51 @@ func (s *GitOpsService) Close(cluster string) {
 	}
 }
 
+// pushHeartbeat bounds how long an unchanged push payload may be skipped. The
+// DTOs carry relative ages (seconds since applied / until expiry) that the
+// frontend renders as-is, so a periodic re-emit keeps them honest even when
+// nothing on the cluster changed; every tick in between that carries no domain
+// change is skipped instead of re-serialized into the webview.
+const pushHeartbeat = 30 * time.Second
+
+// gitopsDomainSnap is the change-detection unit for the gitops push loop: the
+// parsed domain values (absolute timestamps - stable between ticks), not the
+// DTOs (relative ages - different every second).
+type gitopsDomainSnap struct {
+	res      []flux.Resource
+	srcs     []flux.Source
+	watchErr string
+}
+
 func (s *GitOpsService) pushLoop(ctx context.Context, cluster string, conn GitOpsConn) {
 	t := time.NewTicker(s.interval)
 	defer t.Stop()
+	var last *gitopsDomainSnap
+	var lastEmit time.Time
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-t.C:
 			now := s.now()
-			res := conn.GitOpsResources()
-			dtos := make([]FluxResourceDTO, 0, len(res))
-			for _, r := range res {
-				dtos = append(dtos, ToFluxDTO(r, now))
-			}
-			srcs := conn.GitOpsSources()
-			srcDTOs := make([]FluxSourceDTO, 0, len(srcs))
-			for _, sr := range srcs {
-				srcDTOs = append(srcDTOs, toSourceDTO(sr))
-			}
 			watchErr := ""
 			if synced, lastErr := conn.GitOpsWatchHealth(); !synced && lastErr != "" {
 				watchErr = lastErr
+			}
+			snap := gitopsDomainSnap{res: conn.GitOpsResources(), srcs: conn.GitOpsSources(), watchErr: watchErr}
+			if last != nil && now.Sub(lastEmit) < pushHeartbeat && reflect.DeepEqual(*last, snap) {
+				continue
+			}
+			last = &snap
+			lastEmit = now
+
+			dtos := make([]FluxResourceDTO, 0, len(snap.res))
+			for _, r := range snap.res {
+				dtos = append(dtos, ToFluxDTO(r, now))
+			}
+			srcDTOs := make([]FluxSourceDTO, 0, len(snap.srcs))
+			for _, sr := range snap.srcs {
+				srcDTOs = append(srcDTOs, toSourceDTO(sr))
 			}
 			s.em.Emit(GitOpsUpdatedEvent, gitOpsPayload{Cluster: cluster, Resources: dtos, Sources: srcDTOs, WatchError: watchErr})
 		}

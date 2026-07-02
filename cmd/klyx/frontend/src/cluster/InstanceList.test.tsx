@@ -306,6 +306,43 @@ describe("InstanceList", () => {
     expect(listInstancePage).not.toHaveBeenCalled();
   });
 
+  it("windows large fleet-scope lists instead of rendering every row", async () => {
+    useFleet.setState({ clusters: [cluster("blue"), cluster("orange")] });
+    const many = (target: string) =>
+      Array.from({ length: 300 }, (_, i) => ({
+        namespace: "apps",
+        name: `inst-${String(i).padStart(3, "0")}-${target}`,
+        created: "",
+        fields: { type: "ClusterIP" },
+      }));
+    vi.mocked(listInstancePage).mockImplementation(async (target) => ({
+      items: many(target),
+      nextToken: "",
+    }));
+
+    const { getByText, queryByText, getByRole } = render(<InstanceList cluster="blue" resource={serviceRef} />);
+    fireEvent.click(getByText("fleet"));
+    await waitFor(() => expect(getByText("inst-000-blue")).toBeTruthy());
+
+    // 600 merged rows: the window (jsdom fallback 600px / 28px rows + overscan)
+    // renders the head of the list, not the full fleet.
+    expect(getByRole("tab", { name: "all 600" })).toBeTruthy();
+    expect(queryByText("inst-299-orange")).toBeNull();
+  });
+
+  it("windows large cluster-scope lists too", () => {
+    seed(nsRef, {
+      rows: Array.from({ length: 400 }, (_, i) => ({
+        namespace: "apps",
+        name: `ep-${String(i).padStart(3, "0")}`,
+        created: "",
+      })),
+    });
+    const { getByText, queryByText } = render(<InstanceList cluster="x" resource={nsRef} />);
+    expect(getByText("ep-000")).toBeTruthy();
+    expect(queryByText("ep-399")).toBeNull();
+  });
+
   it("opens the right cluster when a fleet resource row is selected", async () => {
     useFleet.setState({
       clusters: [cluster("blue"), cluster("orange")],

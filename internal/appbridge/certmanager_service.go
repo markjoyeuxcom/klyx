@@ -2,6 +2,7 @@ package appbridge
 
 import (
 	"context"
+	"reflect"
 	"sync"
 	"time"
 
@@ -93,15 +94,37 @@ func (s *CertManagerService) Close(cluster string) {
 	}
 }
 
+// certmanagerDomainSnap is the change-detection unit for the cert-manager push
+// loop: parsed domain values (absolute timestamps), not the DTOs (relative
+// expiry seconds - different every tick). Same pattern as the gitops loop.
+type certmanagerDomainSnap struct {
+	certs    []certmanager.Certificate
+	issuers  []certmanager.Issuer
+	watchErr string
+}
+
 func (s *CertManagerService) pushLoop(ctx context.Context, cluster string, conn CertManagerConn) {
 	t := time.NewTicker(s.interval)
 	defer t.Stop()
+	var last *certmanagerDomainSnap
+	var lastEmit time.Time
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			s.em.Emit(CertManagerUpdatedEvent, s.snapshot(cluster, conn))
+			now := s.now()
+			watchErr := ""
+			if synced, lastErr := conn.CertManagerWatchHealth(); !synced && lastErr != "" {
+				watchErr = lastErr
+			}
+			snap := certmanagerDomainSnap{certs: conn.CertManagerCertificates(), issuers: conn.CertManagerIssuers(), watchErr: watchErr}
+			if last != nil && now.Sub(lastEmit) < pushHeartbeat && reflect.DeepEqual(*last, snap) {
+				continue
+			}
+			last = &snap
+			lastEmit = now
+			s.em.Emit(CertManagerUpdatedEvent, s.buildPayload(cluster, snap, now))
 		}
 	}
 }
@@ -131,21 +154,14 @@ func warningCertChainDTO(warning string) CertChainDTO {
 	}
 }
 
-func (s *CertManagerService) snapshot(cluster string, conn CertManagerConn) certManagerPayload {
-	now := s.now()
-	certs := conn.CertManagerCertificates()
-	certDTOs := make([]CertificateDTO, 0, len(certs))
-	for _, c := range certs {
+func (s *CertManagerService) buildPayload(cluster string, snap certmanagerDomainSnap, now time.Time) certManagerPayload {
+	certDTOs := make([]CertificateDTO, 0, len(snap.certs))
+	for _, c := range snap.certs {
 		certDTOs = append(certDTOs, toCertificateDTO(c, now))
 	}
-	iss := conn.CertManagerIssuers()
-	issDTOs := make([]IssuerDTO, 0, len(iss))
-	for _, i := range iss {
+	issDTOs := make([]IssuerDTO, 0, len(snap.issuers))
+	for _, i := range snap.issuers {
 		issDTOs = append(issDTOs, toIssuerDTO(i))
 	}
-	watchErr := ""
-	if synced, lastErr := conn.CertManagerWatchHealth(); !synced && lastErr != "" {
-		watchErr = lastErr
-	}
-	return certManagerPayload{Cluster: cluster, Certificates: certDTOs, Issuers: issDTOs, WatchError: watchErr}
+	return certManagerPayload{Cluster: cluster, Certificates: certDTOs, Issuers: issDTOs, WatchError: snap.watchErr}
 }

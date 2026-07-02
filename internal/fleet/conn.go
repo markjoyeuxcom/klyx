@@ -8,6 +8,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
@@ -131,14 +132,16 @@ type ClusterConn struct {
 	snapVersion    string
 	connectTimeout time.Duration
 	metricsCfg     config.MetricsConfig
-	refresh        chan struct{}     // buffered(1); coalesces informer events
-	ctx            context.Context   // captured in Start; scopes lazy watches
-	gitops         *gitopsWatch      // lazy; nil until OpenGitOps
-	gitopsOpening  bool              // single-flights OpenGitOps' out-of-lock install
-	gitopsWanted   bool              // desired state; an in-flight open aborts if false
-	certmgr        *certmanagerWatch // lazy; nil until OpenCertManager
-	certmgrOpening bool              // single-flights OpenCertManager's out-of-lock install
-	certmgrWanted  bool              // desired state; an in-flight open aborts if false
+	refresh        chan struct{}             // buffered(1); coalesces informer events
+	ctx            context.Context           // captured in Start; scopes lazy watches
+	nodeInf        cache.SharedIndexInformer // eager node informer; ListNodes serves from its cache once synced
+	disc           discoveryLike             // TTL-cached discovery; built lazily via c.discovery()
+	gitops         *gitopsWatch              // lazy; nil until OpenGitOps
+	gitopsOpening  bool                      // single-flights OpenGitOps' out-of-lock install
+	gitopsWanted   bool                      // desired state; an in-flight open aborts if false
+	certmgr        *certmanagerWatch         // lazy; nil until OpenCertManager
+	certmgrOpening bool                      // single-flights OpenCertManager's out-of-lock install
+	certmgrWanted  bool                      // desired state; an in-flight open aborts if false
 
 	// metricsMu guards the metrics cache. Note: ClusterMetrics holds it across
 	// the probe + sample network I/O (up to a few seconds). This serializes
@@ -240,6 +243,9 @@ func (c *ClusterConn) Start(ctx context.Context) {
 	// Register handlers BEFORE starting the informers. SetWatchErrorHandler
 	// errors only if called after Start, which we do not do; ignore defensively.
 	for _, inf := range []cache.SharedIndexInformer{nodeInformer, podInformer} {
+		// Strip managedFields before caching: the eager set lives for the app's
+		// lifetime and nothing in Klyx reads them (same for every cached kind).
+		_ = inf.SetTransform(stripManagedFields)
 		_ = inf.SetWatchErrorHandler(func(_ *cache.Reflector, err error) {
 			c.onWatchError(err)
 		})
@@ -250,11 +256,27 @@ func (c *ClusterConn) Start(ctx context.Context) {
 		})
 	}
 
+	c.mu.Lock()
+	c.nodeInf = nodeInformer
+	c.mu.Unlock()
+
 	nodeFactory.Start(ctx.Done())
 	metaFactory.Start(ctx.Done())
 
 	go c.refreshLoop(ctx, nodeInformer, podInformer)
 	go c.connectLoop(ctx, nodeInformer, podInformer)
+}
+
+// stripManagedFields is a cache.TransformFunc that drops ObjectMeta.ManagedFields
+// before an object enters an informer store. managedFields are server-side-apply
+// bookkeeping nothing in Klyx reads, and on busy objects they can dominate the
+// cached size. Non-metav1 objects (e.g. DeletedFinalStateUnknown tombstones)
+// pass through untouched.
+func stripManagedFields(obj interface{}) (interface{}, error) {
+	if m, ok := obj.(metav1.Object); ok {
+		m.SetManagedFields(nil)
+	}
+	return obj, nil
 }
 
 // connectLoop owns the initial connect. It bounds each sync attempt by

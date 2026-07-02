@@ -52,7 +52,7 @@ func (c *ClusterConn) OpenCertManager() {
 		return
 	}
 
-	ver := preferredVersion(c.typed.Discovery(), "cert-manager.io", "v1")
+	ver := preferredVersion(c.discovery(), "cert-manager.io", "v1")
 	certGVR := schema.GroupVersionResource{Group: "cert-manager.io", Version: ver, Resource: "certificates"}
 
 	gctx, cancel := context.WithCancel(parent)
@@ -184,12 +184,5 @@ func (c *ClusterConn) CertManagerObject(kind, namespace, name string) (*unstruct
 	if inf == nil {
 		return nil, false
 	}
-	for _, obj := range inf.GetStore().List() {
-		if u, ok := obj.(*unstructured.Unstructured); ok {
-			if u.GetNamespace() == namespace && u.GetName() == name {
-				return u, true
-			}
-		}
-	}
-	return nil, false
+	return storeGet(inf, namespace, name)
 }

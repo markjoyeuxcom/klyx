@@ -43,11 +43,13 @@ func BuildHPAScaling(u *unstructured.Unstructured) (*HPAScaling, error) {
 		return nil, fmt.Errorf("hpa_scaling: spec.maxReplicas missing or invalid")
 	}
 
-	// spec.minReplicas: defaults to 1 when absent — that IS the Kubernetes API
-	// default (HPA spec says "defaults to 1 if not set").
-	minRaw, _, _ := unstructured.NestedInt64(obj, "spec", "minReplicas")
+	// spec.minReplicas: defaults to 1 only when ABSENT — that IS the Kubernetes
+	// API default (HPA spec says "defaults to 1 if not set"). An explicit 0 is
+	// legal under the HPAScaleToZero feature gate and must be preserved, so we
+	// key off NestedInt64's found flag, never the zero value.
+	minRaw, minFound, _ := unstructured.NestedInt64(obj, "spec", "minReplicas")
 	min := int32(minRaw)
-	if min == 0 {
+	if !minFound {
 		min = 1
 	}
 

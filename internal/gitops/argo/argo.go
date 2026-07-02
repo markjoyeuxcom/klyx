@@ -7,6 +7,7 @@ package argo
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"time"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -125,13 +126,17 @@ type ApplicationSet struct {
 }
 
 // Broken reports whether the app needs attention: not synced or unhealthy.
-// Progressing is transitional, not broken.
+// Progressing is transitional, not broken. Suspended means an operator paused
+// the resource on purpose (e.g. a paused Rollout) - Argo's own UI renders it
+// as a distinct paused state, not a failure, and the Flux side treats
+// Suspended the same way, so it does not count as broken; it stays visible
+// via HealthStatus.
 func (a App) Broken() bool {
 	if a.SyncStatus != "Synced" {
 		return true
 	}
 	switch a.HealthStatus {
-	case "Healthy", "Progressing":
+	case "Healthy", "Progressing", "Suspended":
 		return false
 	}
 	return true
@@ -181,6 +186,14 @@ func Parse(u *unstructured.Unstructured) App {
 		a.SyncStatus = "Unknown"
 	}
 	a.Revision, _, _ = unstructured.NestedString(u.Object, "status", "sync", "revision")
+	if a.Revision == "" {
+		// Multi-source apps leave status.sync.revision empty and report
+		// status.sync.revisions[] instead (parallel to spec.sources). The first
+		// entry matches the headline source parsed above.
+		if revs, ok, _ := unstructured.NestedStringSlice(u.Object, "status", "sync", "revisions"); ok && len(revs) > 0 {
+			a.Revision = revs[0]
+		}
+	}
 	a.HealthStatus, _, _ = unstructured.NestedString(u.Object, "status", "health", "status")
 	if a.HealthStatus == "" {
 		a.HealthStatus = "Unknown"
@@ -289,16 +302,37 @@ func parseResourceRules(u *unstructured.Unstructured, fields ...string) []Resour
 	return out
 }
 
+// generatorTypes are the generator keys the ApplicationSet spec defines. A
+// spec.generators[] entry can carry sibling keys next to the generator itself
+// (e.g. `selector` for post-generation filtering), so only these count when
+// naming generators - iterating all keys would list `selector` as a generator
+// and overcount.
+var generatorTypes = map[string]bool{
+	"clusterDecisionResource": true,
+	"clusters":                true,
+	"git":                     true,
+	"list":                    true,
+	"matrix":                  true,
+	"merge":                   true,
+	"plugin":                  true,
+	"pullRequest":             true,
+	"scmProvider":             true,
+}
+
 func ParseApplicationSet(u *unstructured.Unstructured) ApplicationSet {
 	a := ApplicationSet{Namespace: u.GetNamespace(), Name: u.GetName(), Healthy: true}
 	if gens, ok, _ := unstructured.NestedSlice(u.Object, "spec", "generators"); ok {
 		for _, g := range gens {
 			if m, ok := g.(map[string]interface{}); ok {
 				for k := range m {
-					a.Generators = append(a.Generators, k)
+					if generatorTypes[k] {
+						a.Generators = append(a.Generators, k)
+					}
 				}
 			}
 		}
+		// Map iteration order is random; sort for stable output run-to-run.
+		sort.Strings(a.Generators)
 	}
 	a.TemplateName, _, _ = unstructured.NestedString(u.Object, "spec", "template", "metadata", "name")
 	a.Project, _, _ = unstructured.NestedString(u.Object, "spec", "template", "spec", "project")

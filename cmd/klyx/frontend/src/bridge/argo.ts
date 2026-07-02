@@ -31,9 +31,8 @@ export async function listArgoApps(cluster: string): Promise<void> {
 
 export async function listArgoProjects(cluster: string): Promise<void> {
   useFleet.getState().setArgoProjectsLoading(cluster);
-  const listProjects = (ArgoService as unknown as { ListProjects: (cluster: string) => Promise<unknown> }).ListProjects;
   try {
-    const r = (await listProjects(cluster)) as ArgoProjectsResultDTO;
+    const r = (await ArgoService.ListProjects(cluster)) as ArgoProjectsResultDTO;
     if (useFleet.getState().argo.cluster !== cluster) return;
     useFleet.getState().setArgoProjects(cluster, r ?? { available: false, message: "no response", projects: [] });
   } catch (e) {
@@ -45,9 +44,8 @@ export async function listArgoProjects(cluster: string): Promise<void> {
 
 export async function listArgoApplicationSets(cluster: string): Promise<void> {
   useFleet.getState().setArgoApplicationSetsLoading(cluster);
-  const listApplicationSets = (ArgoService as unknown as { ListApplicationSets: (cluster: string) => Promise<unknown> }).ListApplicationSets;
   try {
-    const r = (await listApplicationSets(cluster)) as ArgoApplicationSetsResultDTO;
+    const r = (await ArgoService.ListApplicationSets(cluster)) as ArgoApplicationSetsResultDTO;
     if (useFleet.getState().argo.cluster !== cluster) return;
     useFleet.getState().setArgoApplicationSets(cluster, r ?? { available: false, message: "no response", applicationSets: [] });
   } catch (e) {
@@ -71,8 +69,7 @@ export async function refreshArgoApp(cluster: string, namespace: string, name: s
 // syncArgoApp starts an Argo sync operation with the options selected in the
 // sync modal.
 export async function syncArgoApp(cluster: string, namespace: string, name: string, options: ArgoSyncOptions): Promise<void> {
-  const syncApp = ArgoService.SyncApp as unknown as (cluster: string, namespace: string, name: string, options: ArgoSyncOptions) => Promise<unknown>;
-  const r = (await syncApp(cluster, namespace, name, options)) as ActionResultDTO;
+  const r = (await ArgoService.SyncApp(cluster, namespace, name, options)) as ActionResultDTO;
   useFleet.getState().setActionStatus(
     r.ok
       ? { kind: "success", message: `sync started for ${name}` }

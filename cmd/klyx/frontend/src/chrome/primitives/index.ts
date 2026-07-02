@@ -23,4 +23,5 @@ export {
 // Re-export the already-shared chrome primitives so callers have one import site.
 export { Chip } from "../Chip";
 export { EmptyState } from "../EmptyState";
+export { LiveIndicator } from "../LiveIndicator";
 export { SkeletonRows } from "../SkeletonRows";

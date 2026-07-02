@@ -12,11 +12,14 @@ import { Sparkline } from "../chrome/Sparkline";
 import { ConfirmDialog } from "../chrome/ConfirmDialog";
 import { LogsPane } from "./LogsPane";
 import { saturation, nearLimitSort, fmtCpu, fmtMem } from "./saturation";
+import { VirtualList } from "../chrome/VirtualList";
+import type { VirtualListHandle } from "../chrome/VirtualList";
 import { useListKeys } from "../chrome/useListKeys";
 import { useResizableDock } from "../chrome/useResizableDock";
 import { Chip } from "../chrome/Chip";
 import { EmptyState } from "../chrome/EmptyState";
 import { SkeletonRows } from "../chrome/SkeletonRows";
+import { LiveIndicator, btn, ellipsis } from "../chrome/primitives";
 
 const rankDot: Record<string, string> = {
   unhealthy: "var(--color-text-danger)",
@@ -27,6 +30,9 @@ const rankDot: Record<string, string> = {
 const KINDS: WorkloadKind[] = ["Deployment", "StatefulSet", "DaemonSet"];
 const kindShort: Record<WorkloadKind, string> = { Deployment: "deploy", StatefulSet: "sts", DaemonSet: "daemonset" };
 const keyOf = (w: WorkloadDTO) => `${w.kind}/${w.namespace}/${w.name}`;
+// Fixed row height (px, incl. border) — must match the VirtualList rowHeight so
+// the windowing math lines up with the real DOM rows.
+const ROW_HEIGHT = 32;
 
 const tierColor: Record<string, string | undefined> = {
   none: undefined, neutral: "var(--color-text-success)", warn: "var(--color-text-warning)", danger: "var(--color-text-danger)",
@@ -69,10 +75,14 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
   const wl = useFleet((s) => s.workloads);
   const isProtected = useFleet((s) => s.clusters.find((c) => c.name === cluster)?.protected ?? false);
   const [pending, setPending] = useState<Pending | null>(null);
-  const [selectedIdx, setSelectedIdx] = useState(-1);
+  // Selection is tracked by stable key (kind/namespace/name), never by array
+  // index — live emits re-rank the rows, and an index-bound selection silently
+  // retargets the context panel (and the day-2 verbs derived from it).
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
   // Aggregate-logs dock target. Persists across row selection; closed via ✕ only.
   const [logsTarget, setLogsTarget] = useState<{ namespace: string; name: string; kind: WorkloadKind } | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
+  const listRef = useRef<VirtualListHandle>(null);
   // Holds the cleanup for the current live subscription so namespace changes
   // can close the old sub before opening the new one.
   const liveCleanupRef = useRef<(() => void) | null>(null);
@@ -124,18 +134,17 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
   });
   const rows = showMetrics && wl.nearLimitSort ? nearLimitSort(filtered) : filtered;
 
-  // Clamp selection when list changes.
-  const effectiveIdx = rows.length === 0 ? -1 : selectedIdx >= rows.length ? rows.length - 1 : selectedIdx;
+  // Derive the selected row from the key. When the selected workload leaves the
+  // visible set (filter change, delete) this resolves to -1 — no selection —
+  // instead of silently pointing at whatever row took its index.
+  const effectiveIdx = selectedKey === null ? -1 : rows.findIndex((w) => keyOf(w) === selectedKey);
 
   const handleSelect = useCallback((idx: number) => {
-    setSelectedIdx(idx);
-    // WorkloadsView renders a plain list (no VirtualList), so no scrollToIndex needed —
-    // the selected row uses scrollIntoView via data-wl-row attribute.
-    const el = document.querySelector(`[data-wl-row="${idx}"]`);
-    if (el && typeof (el as HTMLElement).scrollIntoView === "function") {
-      (el as HTMLElement).scrollIntoView({ block: "nearest" });
-    }
-  }, []);
+    const w = rows[idx];
+    if (!w) return;
+    setSelectedKey(keyOf(w));
+    listRef.current?.scrollToIndex(idx);
+  }, [rows]);
 
   const handleActivate = useCallback((idx: number) => {
     const w = rows[idx];
@@ -166,15 +175,6 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
     searchRef,
     extraKeys: { l: handleLogsKey },
   });
-
-  // Reset selection on filter change.
-  useEffect(() => {
-    setSelectedIdx((prev) => {
-      if (rows.length === 0) return -1;
-      return prev >= rows.length ? rows.length - 1 : prev;
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [wl.search, wl.needsAttention, wl.kindFilter, wl.namespace, wl.nearLimitSort]);
 
   const selectedWorkload = effectiveIdx >= 0 ? rows[effectiveIdx] : null;
   const visibleKinds = KINDS.filter((k) => wl.kindFilter[k]).map((k) => kindShort[k]).join(", ");
@@ -212,7 +212,7 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
               )}
               <WorkloadStatusTrail
                 shown={rows.length}
-                filtered={filtered.length}
+                total={wl.items.length}
                 attention={attentionCount}
                 kinds={visibleKinds || "none"}
                 live={wl.live}
@@ -232,7 +232,7 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
             </div>
           </div>
 
-          <div style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
+          <div style={{ flex: 1, minHeight: 0, overflowX: "auto", overflowY: "hidden", display: "flex", flexDirection: "column" }}>
             {wl.loading && wl.items.length === 0 ? (
               <div style={{ padding: "16px 20px" }}>
                 <SkeletonRows rows={8} label="loading workloads" />
@@ -246,74 +246,89 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
                 />
               </div>
             ) : (
-              <div style={{ fontFamily: "var(--font-mono)", fontSize: 12, minWidth: showMetrics ? 980 : 760 }}>
-                <div style={{ display: "grid", gridTemplateColumns: gridCols, gap: 10, padding: "0 8px 6px", fontSize: 10, color: "var(--color-text-tertiary)", borderBottom: "0.5px solid var(--color-border-secondary)", position: "sticky", top: 0, zIndex: 1, background: "var(--color-background-primary)" }}>
+              <div style={{ fontFamily: "var(--font-mono)", fontSize: 12, minWidth: showMetrics ? 980 : 760, flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+                <div style={{ display: "grid", gridTemplateColumns: gridCols, gap: 10, padding: "0 8px 6px", fontSize: 10, color: "var(--color-text-tertiary)", borderBottom: "0.5px solid var(--color-border-secondary)", flexShrink: 0, background: "var(--color-background-primary)" }}>
                   <span /><span>kind</span><span>workload</span><span>ready</span><span>restarts</span><span>status</span>
                   {showMetrics && <span>cpu</span>}
                   {showMetrics && <span>mem</span>}
                   <span>gitops</span>
                   <span />
                 </div>
-                {rows.map((w, i) => {
-                  const expanded = wl.expanded.includes(keyOf(w));
-                  const isKbSelected = i === effectiveIdx;
-                  return (
-                    <div key={keyOf(w)}>
-                      <div
-                        data-wl-row={i}
-                        role="button"
-                        tabIndex={0}
-                        aria-expanded={expanded}
-                        aria-selected={isKbSelected}
-                        onClick={() => {
-                          setSelectedIdx(i);
-                          useFleet.getState().toggleWorkloadExpand(keyOf(w));
-                        }}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter" || e.key === " ") {
-                            e.preventDefault();
-                            setSelectedIdx(i);
+                {/*
+                 * VirtualList windows >=100 rows. Expanded rows have variable
+                 * height (metrics + sparklines), which breaks fixed-row
+                 * windowing math, so any expansion forces the plain path —
+                 * users expand rows to read details, at which point full
+                 * rendering is the correct tradeoff.
+                 */}
+                <VirtualList
+                  ref={listRef}
+                  items={rows}
+                  rowHeight={ROW_HEIGHT}
+                  forcePlain={wl.expanded.length > 0}
+                  rowKey={(w) => keyOf(w)}
+                  style={{ flex: 1, minHeight: 0 }}
+                  render={(w, i) => {
+                    const expanded = wl.expanded.includes(keyOf(w));
+                    const isKbSelected = i === effectiveIdx;
+                    return (
+                      <div key={keyOf(w)}>
+                        <div
+                          role="button"
+                          tabIndex={0}
+                          aria-expanded={expanded}
+                          aria-selected={isKbSelected}
+                          onClick={() => {
+                            setSelectedKey(keyOf(w));
                             useFleet.getState().toggleWorkloadExpand(keyOf(w));
-                          }
-                        }}
-                        style={{
-                          display: "grid", gridTemplateColumns: gridCols, gap: 10, alignItems: "center",
-                          padding: isKbSelected ? "7px 8px 7px 6px" : "7px 8px",
-                          borderBottom: "0.5px solid var(--color-border-tertiary)",
-                          borderLeft: isKbSelected ? "2px solid var(--color-text-info)" : "2px solid transparent",
-                          cursor: "pointer",
-                          background: isKbSelected ? "var(--color-background-secondary)" : undefined,
-                          outline: "none",
-                        }}
-                      >
-                        <span style={{ width: 8, height: 8, borderRadius: "50%", background: rankDot[w.rank] }} />
-                        <span style={{ color: "var(--color-text-tertiary)" }}>{kindShort[w.kind as WorkloadKind]}</span>
-                        <span style={ellipsis}><span style={{ color: "var(--color-text-tertiary)" }}>{w.namespace}</span> / <span style={{ fontWeight: 500 }}>{w.name}</span></span>
-                        <span style={{ color: w.ready < w.desired ? "var(--color-text-warning)" : "var(--color-text-secondary)" }}>{w.ready} / {w.desired}</span>
-                        <span style={{ color: w.restarts > 0 ? "var(--color-text-warning)" : "var(--color-text-tertiary)" }}>{w.restarts}</span>
-                        <span style={{ ...ellipsis, color: w.rank === "unhealthy" ? "var(--color-text-danger)" : "var(--color-text-secondary)" }} title={w.reason}>{w.reason}</span>
-                        {showMetrics && <ResourceCellView resource="cpu" cell={w.resources.cpu} hasPods={w.pods.length > 0} />}
-                        {showMetrics && <ResourceCellView resource="mem" cell={w.resources.mem} hasPods={w.pods.length > 0} />}
-                        <span style={{ ...ellipsis, color: "var(--color-text-tertiary)" }} title={w.gitops ? `Flux ownership label: ${w.gitops.kind} ${w.gitops.namespace}/${w.gitops.name}` : undefined}>
-                          {w.gitops ? `flux ${w.gitops.kind === "HelmRelease" ? "hr" : "ks"}/${w.gitops.name}` : "—"}
-                        </span>
-                        <LogsIconButton
-                          label={`aggregate logs for ${w.namespace}/${w.name}`}
-                          onClick={() => setLogsTarget({ namespace: w.namespace, name: w.name, kind: w.kind as WorkloadKind })}
-                        />
-                      </div>
-                      {expanded && showMetrics && (
-                        <div style={{ display: "flex", gap: 28, fontSize: 11, padding: "6px 8px 6px 32px", background: "var(--color-background-secondary)", fontFamily: "var(--font-mono)", borderBottom: "0.5px solid var(--color-border-tertiary)" }}>
-                          <span><span style={{ color: "var(--color-text-tertiary)" }}>cpu</span> {w.pods.length === 0 ? "—" : `usage ${w.resources.cpu.usage == null ? "—" : fmtCpu(w.resources.cpu.usage)} · req ${w.resources.cpu.request == null ? "—" : fmtCpu(w.resources.cpu.request)} · ${w.resources.cpu.limit == null ? "no limit" : `lim ${fmtCpu(w.resources.cpu.limit)}`}`} <span style={{ color: tierColor[saturation("cpu", w.resources.cpu.usage, w.resources.cpu.limit).tier] }}>{riskLabel("cpu", w.resources.cpu)}</span></span>
-                          <span><span style={{ color: "var(--color-text-tertiary)" }}>mem</span> {w.pods.length === 0 ? "—" : `usage ${w.resources.mem.usage == null ? "—" : fmtMem(w.resources.mem.usage)} · req ${w.resources.mem.request == null ? "—" : fmtMem(w.resources.mem.request)} · ${w.resources.mem.limit == null ? "no limit" : `lim ${fmtMem(w.resources.mem.limit)}`}`} <span style={{ color: tierColor[saturation("mem", w.resources.mem.usage, w.resources.mem.limit).tier] }}>{riskLabel("mem", w.resources.mem)}</span></span>
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" || e.key === " ") {
+                              e.preventDefault();
+                              setSelectedKey(keyOf(w));
+                              useFleet.getState().toggleWorkloadExpand(keyOf(w));
+                            }
+                          }}
+                          style={{
+                            display: "grid", gridTemplateColumns: gridCols, gap: 10, alignItems: "center",
+                            height: ROW_HEIGHT, boxSizing: "border-box",
+                            padding: isKbSelected ? "7px 8px 7px 6px" : "7px 8px",
+                            borderBottom: "0.5px solid var(--color-border-tertiary)",
+                            borderLeft: isKbSelected ? "2px solid var(--color-text-info)" : "2px solid transparent",
+                            cursor: "pointer",
+                            background: isKbSelected ? "var(--color-background-secondary)" : undefined,
+                            outline: "none",
+                          }}
+                        >
+                          <span style={{ width: 8, height: 8, borderRadius: "50%", background: rankDot[w.rank] }} />
+                          <span style={{ color: "var(--color-text-tertiary)" }}>{kindShort[w.kind as WorkloadKind]}</span>
+                          <span style={ellipsis}><span style={{ color: "var(--color-text-tertiary)" }}>{w.namespace}</span> / <span style={{ fontWeight: 500 }}>{w.name}</span></span>
+                          <span style={{ color: w.ready < w.desired ? "var(--color-text-warning)" : "var(--color-text-secondary)" }}>{w.ready} / {w.desired}</span>
+                          <span style={{ color: w.restarts > 0 ? "var(--color-text-warning)" : "var(--color-text-tertiary)" }}>{w.restarts}</span>
+                          <span style={{ ...ellipsis, color: w.rank === "unhealthy" ? "var(--color-text-danger)" : "var(--color-text-secondary)" }} title={w.reason}>{w.reason}</span>
+                          {showMetrics && <ResourceCellView resource="cpu" cell={w.resources.cpu} hasPods={w.pods.length > 0} />}
+                          {showMetrics && <ResourceCellView resource="mem" cell={w.resources.mem} hasPods={w.pods.length > 0} />}
+                          <span style={{ ...ellipsis, color: "var(--color-text-tertiary)" }} title={w.gitops ? `Flux ownership label: ${w.gitops.kind} ${w.gitops.namespace}/${w.gitops.name}` : undefined}>
+                            {w.gitops ? `flux ${w.gitops.kind === "HelmRelease" ? "hr" : "ks"}/${w.gitops.name}` : "—"}
+                          </span>
+                          <LogsIconButton
+                            label={`aggregate logs for ${w.namespace}/${w.name}`}
+                            onClick={() => setLogsTarget({ namespace: w.namespace, name: w.name, kind: w.kind as WorkloadKind })}
+                          />
                         </div>
-                      )}
-                      {expanded && showMetrics && (
-                        <WorkloadSparkRow cluster={cluster} kind={w.kind} namespace={w.namespace} name={w.name} />
-                      )}
-                    </div>
-                  );
-                })}
+                        {expanded && showMetrics && (
+                          <div style={{ display: "flex", gap: 28, fontSize: 11, padding: "6px 8px 6px 32px", background: "var(--color-background-secondary)", fontFamily: "var(--font-mono)", borderBottom: "0.5px solid var(--color-border-tertiary)" }}>
+                            <span><span style={{ color: "var(--color-text-tertiary)" }}>cpu</span> {w.pods.length === 0 ? "—" : `usage ${w.resources.cpu.usage == null ? "—" : fmtCpu(w.resources.cpu.usage)} · req ${w.resources.cpu.request == null ? "—" : fmtCpu(w.resources.cpu.request)} · ${w.resources.cpu.limit == null ? "no limit" : `lim ${fmtCpu(w.resources.cpu.limit)}`}`} <span style={{ color: tierColor[saturation("cpu", w.resources.cpu.usage, w.resources.cpu.limit).tier] }}>{riskLabel("cpu", w.resources.cpu)}</span></span>
+                            <span><span style={{ color: "var(--color-text-tertiary)" }}>mem</span> {w.pods.length === 0 ? "—" : `usage ${w.resources.mem.usage == null ? "—" : fmtMem(w.resources.mem.usage)} · req ${w.resources.mem.request == null ? "—" : fmtMem(w.resources.mem.request)} · ${w.resources.mem.limit == null ? "no limit" : `lim ${fmtMem(w.resources.mem.limit)}`}`} <span style={{ color: tierColor[saturation("mem", w.resources.mem.usage, w.resources.mem.limit).tier] }}>{riskLabel("mem", w.resources.mem)}</span></span>
+                          </div>
+                        )}
+                        {expanded && showMetrics && (
+                          <WorkloadSparkRow cluster={cluster} kind={w.kind} namespace={w.namespace} name={w.name} />
+                        )}
+                      </div>
+                    );
+                  }}
+                />
               </div>
             )}
           </div>
@@ -407,13 +422,15 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
 
 function WorkloadStatusTrail({
   shown,
-  filtered,
+  total,
   attention,
   kinds,
   live,
 }: {
+  /** Rows surviving the current filters. */
   shown: number;
-  filtered: number;
+  /** All loaded workloads, pre-filter. */
+  total: number;
   attention: number;
   kinds: string;
   live: boolean;
@@ -429,7 +446,7 @@ function WorkloadStatusTrail({
       marginLeft: 4,
       whiteSpace: "nowrap",
     }}>
-      <span>{shown}/{filtered}</span>
+      <span>{shown}/{total}</span>
       <span style={{ color: attention > 0 ? "var(--color-text-danger)" : "var(--color-text-success)" }}>{attention} attention</span>
       <span>{kinds}</span>
       <span style={{ color: live ? "var(--color-text-success)" : "var(--color-text-warning)" }}>{live ? "watch-backed" : "manual refresh"}</span>
@@ -493,8 +510,11 @@ function WorkloadContextPanel({
         <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
           <button onClick={() => onLogs(workload)} style={{ ...btn, color: "var(--color-text-info)", borderColor: "var(--color-border-info)", background: "var(--color-background-info)" }}>tail logs</button>
           <button onClick={() => onRestart(workload)} style={btn}>restart</button>
+          {/* Match the pending action by stable key, not DTO identity — live
+              emits replace the DTOs, and an identity match dismissed the open
+              popover on every update. */}
           {(workload.kind === "Deployment" || workload.kind === "StatefulSet") && (
-            pending?.kind === "scale-input" && pending.w === workload ? (
+            pending?.kind === "scale-input" && keyOf(pending.w) === keyOf(workload) ? (
               <ScalePopover
                 initial={workload.desired}
                 onConfirm={(n) => onScaleConfirm(workload, n)}
@@ -731,24 +751,3 @@ function ScalePopover({ initial, onConfirm, onCancel }: { initial: number; onCon
 }
 
 
-const btn: React.CSSProperties = { fontSize: 11, padding: "3px 10px", borderRadius: 4, cursor: "pointer", border: "0.5px solid var(--color-border-tertiary)", background: "var(--color-background-primary)", color: "var(--color-text-secondary)" };
-const ellipsis: React.CSSProperties = { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" };
-
-function LiveIndicator({ live }: { live: boolean }) {
-  if (live) {
-    return (
-      <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 10, color: "var(--color-text-success)" }}>
-        <span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--color-text-success)", display: "inline-block", flexShrink: 0 }} />
-        live
-      </span>
-    );
-  }
-  return (
-    <span
-      style={{ fontSize: 10, color: "var(--color-text-tertiary)", cursor: "default" }}
-      title="live updates unavailable - use refresh"
-    >
-      ○ manual
-    </span>
-  );
-}

@@ -26,7 +26,12 @@ func configPath() string {
 	if p := os.Getenv("KLYX_CONFIG"); p != "" {
 		return p
 	}
-	home, _ := os.UserHomeDir()
+	home, err := os.UserHomeDir()
+	if err != nil {
+		// No resolvable home: fail loudly instead of silently degrading to
+		// "/.config/klyx/fleet.yaml" (a root-anchored path nobody intends).
+		log.Fatalf("cannot resolve home directory for the fleet config: %v (set KLYX_CONFIG to override)", err)
+	}
 	return home + "/.config/klyx/fleet.yaml"
 }
 
@@ -269,6 +274,15 @@ func main() {
 	app := application.New(application.Options{
 		Name:        "Klyx",
 		Description: "Platform-engineer-grade Kubernetes desktop client",
+		// One Klyx per machine: a second instance would double the informer
+		// load on every cluster and race the first on fleet.yaml writes. The
+		// second launch exits after waking the running instance.
+		SingleInstance: &application.SingleInstanceOptions{
+			UniqueID: "com.moomora.klyx",
+			OnSecondInstanceLaunch: func(application.SecondInstanceData) {
+				log.Printf("second Klyx launch redirected to this instance")
+			},
+		},
 		Services: []application.Service{
 			application.NewService(svc),
 			application.NewService(gitopsSvc),
@@ -314,7 +328,7 @@ func main() {
 	em.app = app
 	winOpener.app = app
 
-	go svc.Run(ctx, em, time.Second)
+	go appbridge.RunFleetPush(ctx, svc, em, time.Second)
 
 	app.Window.NewWithOptions(application.WebviewWindowOptions{
 		Title: "Klyx",

@@ -162,6 +162,13 @@ func (s *ConfigService) AddClusters(contexts []string) ActionResultDTO {
 	if len(contexts) == 0 {
 		return ActionResultDTO{Error: "no contexts selected"}
 	}
+	// Serialize the whole add: appendClusters is a read-modify-write of
+	// fleet.yaml, and two concurrent calls would each read the same original
+	// and one would silently lose the other's entries. Adds are rare,
+	// user-driven Settings actions - holding the lock across the file write
+	// and connects is fine.
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if err := s.appendClusters(s.path, contexts); err != nil {
 		return ActionResultDTO{Error: err.Error()}
 	}
@@ -174,9 +181,7 @@ func (s *ConfigService) AddClusters(contexts []string) ActionResultDTO {
 				continue
 			}
 		}
-		s.mu.Lock()
 		s.added = append(s.added, cc)
-		s.mu.Unlock()
 	}
 	if len(failed) > 0 {
 		return ActionResultDTO{Error: "added to fleet.yaml, but connecting failed - " + strings.Join(failed, "; ") + ". Restart Klyx to retry."}

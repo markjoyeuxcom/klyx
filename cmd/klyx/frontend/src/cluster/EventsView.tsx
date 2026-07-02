@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from "react";
-import { SkeletonRows } from "../chrome/SkeletonRows";
+import { Chip, LiveIndicator, SkeletonRows, btn, ellipsis } from "../chrome/primitives";
 import { useFleet } from "../store/fleet";
 import type { EventRowDTO } from "../store/fleet";
 import { listEvents, openLiveEvents } from "../bridge/events";
@@ -13,13 +13,6 @@ function ago(unix: number): string {
   if (s < 0) return "just now";
   return s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)}m` : s < 86400 ? `${Math.floor(s / 3600)}h` : `${Math.floor(s / 86400)}d`;
 }
-
-const ellipsis: React.CSSProperties = { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" };
-const btn: React.CSSProperties = {
-  fontSize: 11, padding: "3px 10px", borderRadius: 4, cursor: "pointer",
-  border: "0.5px solid var(--color-border-tertiary)",
-  background: "var(--color-background-primary)", color: "var(--color-text-secondary)",
-};
 
 // type dot · count · age · ns · kind/name · reason · message
 const gridCols = "10px 32px 44px minmax(0,0.9fr) minmax(0,1.1fr) 90px minmax(0,2fr)";
@@ -64,7 +57,10 @@ export function EventsView({ cluster }: { cluster: string }) {
     return true;
   });
 
-  const rowKey = (e: EventRowDTO, i: number) => `${e.namespace}/${e.kind}/${e.name}/${e.reason}/${i}`;
+  // Stable identity — never the array index (live prepends would shift every
+  // key and make the expanded row jump). firstSeenUnix disambiguates repeats of
+  // the same reason and, unlike lastSeenUnix, does not change on recurrence.
+  const rowKey = (e: EventRowDTO) => `${e.namespace}/${e.kind}/${e.name}/${e.reason}/${e.firstSeenUnix}`;
 
   const toggleExpand = (key: string) => {
     setExpanded((prev) => {
@@ -85,7 +81,7 @@ export function EventsView({ cluster }: { cluster: string }) {
 
   const handleActivate = useCallback((idx: number) => {
     const e = filtered[idx];
-    if (e) toggleExpand(rowKey(e, idx));
+    if (e) toggleExpand(rowKey(e));
   }, [filtered]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleEscape = useCallback(() => {
@@ -93,7 +89,7 @@ export function EventsView({ cluster }: { cluster: string }) {
     if (effectiveIdx >= 0) {
       const e = filtered[effectiveIdx];
       if (e) {
-        const key = rowKey(e, effectiveIdx);
+        const key = rowKey(e);
         if (expanded.has(key)) toggleExpand(key);
       }
     }
@@ -129,7 +125,7 @@ export function EventsView({ cluster }: { cluster: string }) {
           <option value="">all namespaces</option>
           {events.namespaces.map((ns) => <option key={ns} value={ns}>{ns}</option>)}
         </select>
-        <Chip on={events.warningsOnly} onClick={() => useFleet.getState().toggleWarningsOnly()}>warnings only</Chip>
+        <Chip on={events.warningsOnly} tone="warning" onClick={() => useFleet.getState().toggleWarningsOnly()}>warnings only</Chip>
         <input
           ref={searchRef}
           value={events.search}
@@ -171,10 +167,11 @@ export function EventsView({ cluster }: { cluster: string }) {
             ref={listRef}
             items={filtered}
             rowHeight={30}
+            rowKey={rowKey}
             forcePlain={expanded.size > 0}
             style={{ flex: 1, minHeight: 0, ...(expanded.size > 0 ? { overflowY: "auto" } : {}) }}
             render={(e, i) => {
-              const key = rowKey(e, i);
+              const key = rowKey(e);
               const isKbSelected = i === effectiveIdx;
               const isExpanded = expanded.has(key);
               return (
@@ -300,35 +297,5 @@ function EventRow({ event: e, cluster, expanded, kbSelected, onToggle, onKbSelec
         </div>
       )}
     </>
-  );
-}
-
-function Chip({ on, onClick, children }: { on: boolean; onClick: () => void; children: React.ReactNode }) {
-  return (
-    <button onClick={onClick} style={{
-      fontSize: 10, padding: "3px 9px", borderRadius: 11, cursor: "pointer",
-      border: on ? "0.5px solid var(--color-text-warning)" : "0.5px solid var(--color-border-tertiary)",
-      background: on ? "var(--color-background-warning, transparent)" : "transparent",
-      color: on ? "var(--color-text-warning)" : "var(--color-text-tertiary)",
-    }}>{children}</button>
-  );
-}
-
-function LiveIndicator({ live }: { live: boolean }) {
-  if (live) {
-    return (
-      <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 10, color: "var(--color-text-success)" }}>
-        <span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--color-text-success)", display: "inline-block", flexShrink: 0 }} />
-        live
-      </span>
-    );
-  }
-  return (
-    <span
-      style={{ fontSize: 10, color: "var(--color-text-tertiary)", cursor: "default" }}
-      title="live updates unavailable - use refresh"
-    >
-      ○ manual
-    </span>
   );
 }

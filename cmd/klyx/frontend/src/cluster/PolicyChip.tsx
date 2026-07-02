@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { PolicyRefDTO } from "../store/fleet";
+import { type Tone, toneColor, toneBg } from "../chrome/primitives";
 
 const ABBREV: Record<string, string> = {
   ClientTrafficPolicy: "CTP",
@@ -11,14 +12,16 @@ const ABBREV: Record<string, string> = {
   CiliumClusterwideNetworkPolicy: "CCNP",
 };
 
-const COLOUR: Record<string, { fg: string; bg: string }> = {
-  ClientTrafficPolicy: { fg: "#58a6ff", bg: "rgba(56,139,253,.16)" },
-  BackendTrafficPolicy: { fg: "#a371f7", bg: "rgba(163,113,247,.16)" },
-  SecurityPolicy: { fg: "#3fb950", bg: "rgba(46,160,67,.16)" },
-  EnvoyExtensionPolicy: { fg: "#d29922", bg: "rgba(210,153,34,.16)" },
-  BackendTLSPolicy: { fg: "#ec6547", bg: "rgba(236,101,71,.16)" },
-  CiliumNetworkPolicy: { fg: "#8b949e", bg: "rgba(139,148,158,.10)" },
-  CiliumClusterwideNetworkPolicy: { fg: "#8b949e", bg: "rgba(139,148,158,.10)" },
+// Policy kinds map onto the shared tone system (theme-aware in every mode) —
+// the tones are categorical here, one per kind family, not semantic states.
+const TONE: Record<string, Tone> = {
+  ClientTrafficPolicy: "info",
+  BackendTrafficPolicy: "neutral",
+  SecurityPolicy: "success",
+  EnvoyExtensionPolicy: "warning",
+  BackendTLSPolicy: "danger",
+  CiliumNetworkPolicy: "muted",
+  CiliumClusterwideNetworkPolicy: "muted",
 };
 
 // The chip summary is feature names joined by " + " (the delimiter never appears
@@ -34,7 +37,8 @@ export function chipSummary(summary: string): string {
 
 export function PolicyChip({ p, align = "left" }: { p: PolicyRefDTO; align?: "left" | "right" }) {
   const abbr = ABBREV[p.kind] ?? p.kind;
-  const c = COLOUR[p.kind] ?? { fg: "var(--color-text-secondary)", bg: "var(--color-background-secondary)" };
+  const tone = TONE[p.kind] ?? "muted";
+  const c = { fg: toneColor[tone], bg: toneBg[tone] };
   const [hover, setHover] = useState(false);
   return (
     <span

@@ -218,6 +218,34 @@ func TestBuildHPAScalingMinReplicasAbsent(t *testing.T) {
 	}
 }
 
+// TestBuildHPAScalingMinReplicasExplicitZero verifies that an explicit
+// spec.minReplicas: 0 (legal under the HPAScaleToZero feature gate) is
+// preserved, not conflated with "absent" and bumped to 1.
+func TestBuildHPAScalingMinReplicasExplicitZero(t *testing.T) {
+	u := hpaObj(
+		map[string]interface{}{
+			"minReplicas": int64(0),
+			"maxReplicas": int64(3),
+			"scaleTargetRef": map[string]interface{}{
+				"kind": "Deployment",
+				"name": "app",
+			},
+		},
+		map[string]interface{}{
+			"currentReplicas": int64(0),
+			"desiredReplicas": int64(0),
+		},
+	)
+
+	s, err := BuildHPAScaling(u)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if s.MinReplicas != 0 {
+		t.Errorf("MinReplicas must stay 0 when explicitly set, got %d", s.MinReplicas)
+	}
+}
+
 // TestBuildHPAScalingLastScaleTimeAbsent verifies that an absent
 // status.lastScaleTime yields LastScaleUnix=0.
 func TestBuildHPAScalingLastScaleTimeAbsent(t *testing.T) {

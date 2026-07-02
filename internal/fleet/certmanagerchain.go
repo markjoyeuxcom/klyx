@@ -23,7 +23,7 @@ import (
 func (c *ClusterConn) GetCertificateChain(ctx context.Context, ns, name string) (certmanager.Chain, error) {
 	certU, ok := c.CertManagerObject(string(certmanager.CertificateKind), ns, name)
 	if !ok {
-		ver := preferredVersion(c.typed.Discovery(), "cert-manager.io", "v1")
+		ver := preferredVersion(c.discovery(), "cert-manager.io", "v1")
 		gvr := schema.GroupVersionResource{Group: "cert-manager.io", Version: ver, Resource: "certificates"}
 		u, err := c.dyn.Resource(gvr).Namespace(ns).Get(ctx, name, metav1.GetOptions{})
 		if err != nil {
@@ -42,7 +42,7 @@ func (c *ClusterConn) GetCertificateChain(ctx context.Context, ns, name string) 
 		}
 	}
 
-	cmVer := preferredVersion(c.typed.Discovery(), "cert-manager.io", "v1")
+	cmVer := preferredVersion(c.discovery(), "cert-manager.io", "v1")
 	crGVR := schema.GroupVersionResource{Group: "cert-manager.io", Version: cmVer, Resource: "certificaterequests"}
 	reqs, err := c.dyn.Resource(crGVR).Namespace(ns).List(ctx, metav1.ListOptions{})
 	if err != nil {
@@ -77,7 +77,7 @@ func (c *ClusterConn) GetCertificateChain(ctx context.Context, ns, name string) 
 // Challenges. Non-ACME issuers have no Orders: a list error is expected there,
 // so it is swallowed (not a warning) and the subtree is simply empty.
 func (c *ClusterConn) resolveOrders(ctx context.Context, ns, requestName string) []certmanager.ChainNode {
-	acmeVer := preferredVersion(c.typed.Discovery(), "acme.cert-manager.io", "v1")
+	acmeVer := preferredVersion(c.discovery(), "acme.cert-manager.io", "v1")
 	orderGVR := schema.GroupVersionResource{Group: "acme.cert-manager.io", Version: acmeVer, Resource: "orders"}
 	orders, err := c.dyn.Resource(orderGVR).Namespace(ns).List(ctx, metav1.ListOptions{})
 	if err != nil {
@@ -96,7 +96,7 @@ func (c *ClusterConn) resolveOrders(ctx context.Context, ns, requestName string)
 }
 
 func (c *ClusterConn) resolveChallenges(ctx context.Context, ns, orderName string) []certmanager.ChainNode {
-	acmeVer := preferredVersion(c.typed.Discovery(), "acme.cert-manager.io", "v1")
+	acmeVer := preferredVersion(c.discovery(), "acme.cert-manager.io", "v1")
 	challengeGVR := schema.GroupVersionResource{Group: "acme.cert-manager.io", Version: acmeVer, Resource: "challenges"}
 	challenges, err := c.dyn.Resource(challengeGVR).Namespace(ns).List(ctx, metav1.ListOptions{})
 	if err != nil {

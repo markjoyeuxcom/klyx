@@ -1,9 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
 import { useFleet, ResourceRef, InstanceDTO } from "../store/fleet";
 import { loadInstances, listInstancePage } from "../bridge/crd";
+import { VirtualList } from "../chrome/VirtualList";
 import { riskFor, supportsRiskFilter } from "./resourceRisk";
 
 const ellipsis: React.CSSProperties = { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" };
+
+// Fixed row height (px, incl. border) — must match the VirtualList rowHeight so
+// the windowing math lines up with the real DOM rows. Fleet scope merges first
+// pages from every connected cluster, so the list can reach thousands of rows.
+const ROW_HEIGHT = 28;
 
 type ExtraColumn = { key: string; label: string; width: string };
 type BrowserScope = "cluster" | "fleet";
@@ -214,42 +220,54 @@ export function InstanceList({ cluster, resource }: { cluster: string; resource:
       ) : all.length === 0 ? (
         <div style={stateBox}>No {resource.kind} instances found{fleetMode ? " across the fleet" : ""}.</div>
       ) : (
-        <div data-testid="instance-list-scroll" style={{ border: "0.5px solid var(--color-border-tertiary)", borderRadius: "var(--border-radius-md)", overflowY: "auto", overflowX: "auto", flex: 1, minHeight: 0 }}>
-          <div
-            data-testid="instance-list-header"
-            style={{ display: "grid", gridTemplateColumns: cols, gap: 10, padding: "6px 12px", minWidth: tableMinWidth, background: "var(--color-background-secondary)", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5, color: "var(--color-text-tertiary)", position: "sticky", top: 0, zIndex: 1, borderBottom: "0.5px solid var(--color-border-tertiary)" }}
-          >
-            {fleetMode && <span>cluster</span>}
-            {namespaced && <span>namespace</span>}
-            <span>name</span>
-            {extraColumns.map((c) => <span key={c.key}>{c.label}</span>)}
-            <span>age</span>
+        <div data-testid="instance-list-scroll" style={{ border: "0.5px solid var(--color-border-tertiary)", borderRadius: "var(--border-radius-md)", overflowY: "auto", overflowX: "auto", flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+          {/* minWidth wrapper: header + rows share it, so horizontal scrolling
+              (on the outer div) moves them together while the VirtualList owns
+              vertical scrolling for the windowed rows. */}
+          <div style={{ minWidth: tableMinWidth, flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+            <div
+              data-testid="instance-list-header"
+              style={{ display: "grid", gridTemplateColumns: cols, gap: 10, padding: "6px 12px", background: "var(--color-background-secondary)", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5, color: "var(--color-text-tertiary)", position: "sticky", top: 0, zIndex: 1, flexShrink: 0, borderBottom: "0.5px solid var(--color-border-tertiary)" }}
+            >
+              {fleetMode && <span>cluster</span>}
+              {namespaced && <span>namespace</span>}
+              <span>name</span>
+              {extraColumns.map((c) => <span key={c.key}>{c.label}</span>)}
+              <span>age</span>
+            </div>
+            {rows.length === 0 ? (
+              <div style={{ padding: 14, color: "var(--color-text-secondary)", fontSize: 13 }}>No {resource.kind} instances match the current filter.</div>
+            ) : (
+              <VirtualList
+                items={rows}
+                rowHeight={ROW_HEIGHT}
+                rowKey={({ row }) => `${row.cluster}/${row.namespace}/${row.name}`}
+                style={{ flex: 1, minHeight: 0 }}
+                render={({ row: r, risk }) => (
+                  <div
+                    key={`${r.cluster}/${r.namespace}/${r.name}`}
+                    onClick={() => openRow(r)}
+                    title={risk.bad ? risk.reason : undefined}
+                    style={{
+                      display: "grid", gridTemplateColumns: cols, gap: 10, alignItems: "center", padding: "6px 12px",
+                      height: ROW_HEIGHT, boxSizing: "border-box",
+                      borderTop: "0.5px solid var(--color-border-tertiary)", fontSize: 11, cursor: "pointer",
+                      boxShadow: risk.bad ? "inset 2px 0 0 var(--color-text-warning)" : undefined,
+                    }}
+                  >
+                    {fleetMode && <span style={{ color: "var(--color-text-info)", fontFamily: "var(--font-mono)", ...ellipsis }}>{r.cluster}</span>}
+                    {namespaced && <span style={{ color: "var(--color-text-secondary)", ...ellipsis }}>{r.namespace}</span>}
+                    <span style={{ fontFamily: "var(--font-mono)", ...ellipsis }}>{r.name}</span>
+                    {extraColumns.map((c) => {
+                      const value = r.fields?.[c.key] || "-";
+                      return <span key={c.key} style={{ color: "var(--color-text-secondary)", fontFamily: "var(--font-mono)", ...ellipsis }} title={value}>{value}</span>;
+                    })}
+                    <span style={{ color: "var(--color-text-tertiary)" }}>{age(r.created)}</span>
+                  </div>
+                )}
+              />
+            )}
           </div>
-          {rows.length === 0 ? (
-            <div style={{ padding: 14, color: "var(--color-text-secondary)", fontSize: 13 }}>No {resource.kind} instances match the current filter.</div>
-          ) : (
-            rows.map(({ row: r, risk }) => (
-              <div
-                key={`${r.cluster}/${r.namespace}/${r.name}`}
-                onClick={() => openRow(r)}
-                title={risk.bad ? risk.reason : undefined}
-                style={{
-                  display: "grid", gridTemplateColumns: cols, gap: 10, alignItems: "center", padding: "6px 12px",
-                  minWidth: tableMinWidth, borderTop: "0.5px solid var(--color-border-tertiary)", fontSize: 11, cursor: "pointer",
-                  boxShadow: risk.bad ? "inset 2px 0 0 var(--color-text-warning)" : undefined,
-                }}
-              >
-                {fleetMode && <span style={{ color: "var(--color-text-info)", fontFamily: "var(--font-mono)", ...ellipsis }}>{r.cluster}</span>}
-                {namespaced && <span style={{ color: "var(--color-text-secondary)", ...ellipsis }}>{r.namespace}</span>}
-                <span style={{ fontFamily: "var(--font-mono)", ...ellipsis }}>{r.name}</span>
-                {extraColumns.map((c) => {
-                  const value = r.fields?.[c.key] || "-";
-                  return <span key={c.key} style={{ color: "var(--color-text-secondary)", fontFamily: "var(--font-mono)", ...ellipsis }} title={value}>{value}</span>;
-                })}
-                <span style={{ color: "var(--color-text-tertiary)" }}>{age(r.created)}</span>
-              </div>
-            ))
-          )}
         </div>
       )}
 

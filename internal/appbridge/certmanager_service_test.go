@@ -18,7 +18,7 @@ type fakeCertManagerConn struct {
 func (f *fakeCertManagerConn) OpenCertManager()                                   { f.opened++ }
 func (f *fakeCertManagerConn) CloseCertManager()                                  { f.closed++ }
 func (f *fakeCertManagerConn) CertManagerCertificates() []certmanager.Certificate { return f.certs }
-func (f *fakeCertManagerConn) CertManagerWatchHealth() (bool, string)              { return true, "" }
+func (f *fakeCertManagerConn) CertManagerWatchHealth() (bool, string)             { return true, "" }
 func (f *fakeCertManagerConn) CertManagerIssuers() []certmanager.Issuer           { return f.iss }
 func (f *fakeCertManagerConn) GetCertificateChain(ctx context.Context, ns, name string) (certmanager.Chain, error) {
 	return f.chain, nil
@@ -61,7 +61,8 @@ func TestCertManagerServiceSnapshot(t *testing.T) {
 		iss:   []certmanager.Issuer{{Kind: certmanager.ClusterIssuerKind, Name: "lab-acme-staging", Ready: certmanager.Failed}},
 	}
 	svc := NewCertManagerService(func(string) (CertManagerConn, bool) { return conn, true }, &fakeEmitter{}, func() time.Time { return now }, time.Second)
-	p := svc.snapshot("nelli", conn)
+	snap := certmanagerDomainSnap{certs: conn.CertManagerCertificates(), issuers: conn.CertManagerIssuers()}
+	p := svc.buildPayload("nelli", snap, now)
 	if p.Cluster != "nelli" || len(p.Certificates) != 1 || len(p.Issuers) != 1 {
 		t.Fatalf("payload: %+v", p)
 	}

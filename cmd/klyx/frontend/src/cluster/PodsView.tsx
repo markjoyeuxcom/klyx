@@ -14,8 +14,7 @@ import type { VirtualListHandle } from "../chrome/VirtualList";
 import { useResizablePanel } from "../chrome/useResizablePanel";
 import { useResizableDock } from "../chrome/useResizableDock";
 import { useListKeys } from "../chrome/useListKeys";
-import { EmptyState } from "../chrome/EmptyState";
-import { SkeletonRows } from "../chrome/SkeletonRows";
+import { Chip, EmptyState, LiveIndicator, SkeletonRows, btn, ellipsis } from "../chrome/primitives";
 import { InspectorSection, InspectorTabButton, MetadataChips, inspectorStateBox } from "./ResourceInspector";
 
 const rankDot: Record<string, string> = {
@@ -31,9 +30,6 @@ function ago(s: number): string {
 
 const condColor = (status: string) =>
   status === "True" ? "var(--color-text-success)" : status === "False" ? "var(--color-text-danger)" : "var(--color-text-info)";
-
-const ellipsis: React.CSSProperties = { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" };
-const btn: React.CSSProperties = { fontSize: 11, padding: "3px 10px", borderRadius: 4, cursor: "pointer", border: "0.5px solid var(--color-border-tertiary)", background: "var(--color-background-primary)", color: "var(--color-text-secondary)" };
 
 const gridCols = "12px minmax(0,1.2fr) 60px minmax(110px,0.8fr) 55px minmax(0,1.1fr) 52px 28px";
 
@@ -197,6 +193,7 @@ export function PodsView({ cluster }: { cluster: string }) {
                 ref={listRef}
                 items={filtered}
                 rowHeight={32}
+                rowKey={(p) => `${p.namespace}/${p.name}`}
                 style={{ flex: 1, minHeight: 0 }}
                 render={(p, i) => {
                   const isKbSelected = i === effectiveIdx;
@@ -872,35 +869,5 @@ function InfoRow({ label, children }: { label: string; children: React.ReactNode
       <span style={{ color: "var(--color-text-tertiary)", width: 60, flexShrink: 0 }}>{label}</span>
       <span style={{ color: "var(--color-text-primary)" }}>{children}</span>
     </div>
-  );
-}
-
-function Chip({ on, onClick, children }: { on: boolean; onClick: () => void; children: React.ReactNode }) {
-  return (
-    <button onClick={onClick} style={{
-      fontSize: 10, padding: "3px 9px", borderRadius: 11, cursor: "pointer",
-      border: on ? "0.5px solid var(--color-text-info)" : "0.5px solid var(--color-border-tertiary)",
-      background: on ? "var(--color-background-info, transparent)" : "transparent",
-      color: on ? "var(--color-text-info)" : "var(--color-text-tertiary)",
-    }}>{children}</button>
-  );
-}
-
-function LiveIndicator({ live }: { live: boolean }) {
-  if (live) {
-    return (
-      <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 10, color: "var(--color-text-success)" }}>
-        <span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--color-text-success)", display: "inline-block", flexShrink: 0 }} />
-        live
-      </span>
-    );
-  }
-  return (
-    <span
-      style={{ fontSize: 10, color: "var(--color-text-tertiary)", cursor: "default" }}
-      title="live updates unavailable - use refresh"
-    >
-      ○ manual
-    </span>
   );
 }

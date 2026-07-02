@@ -63,9 +63,10 @@ type LogsService struct {
 
 	seq atomic.Uint64
 
-	mu      sync.Mutex
-	streams map[string]*logStream
-	order   []string // insertion order, for oldest-first eviction
+	mu       sync.Mutex
+	streams  map[string]*logStream
+	draining map[string]*logStream // evicted at cap; reader still exiting, finish() closes done
+	order    []string              // insertion order, for oldest-first eviction
 }
 
 // NewLogsService wires the cluster lookup and the event emitter. It mirrors the
@@ -73,9 +74,10 @@ type LogsService struct {
 // can push live updates to the frontend.
 func NewLogsService(lookup func(string) (LogsConn, bool), em Emitter) *LogsService {
 	return &LogsService{
-		lookup:  lookup,
-		em:      em,
-		streams: map[string]*logStream{},
+		lookup:   lookup,
+		em:       em,
+		streams:  map[string]*logStream{},
+		draining: map[string]*logStream{},
 	}
 }
 
@@ -105,14 +107,16 @@ func (s *LogsService) OpenLogStream(cluster, namespace, pod, container string, p
 	// Cap: synchronously evict the oldest stream(s) before registering the new
 	// one. Removing both the map entry and the order slot here means concurrent
 	// or rapid sequential opens can never blow past maxConcurrentLogStreams - the
-	// invariant holds at registration time, not eventually. The evicted reader's
-	// finish() is tolerant: its delete(s.streams, streamID) and order scan will
-	// find the entry already gone and no-op cleanly.
+	// invariant holds at registration time, not eventually. The evicted stream
+	// moves to draining so its reader's finish() can still find it and close
+	// done - otherwise a CloseAll racing an eviction would wait the full
+	// closeWaitTimeout on a stream whose reader had already exited.
 	for len(s.order) >= maxConcurrentLogStreams {
 		oldest := s.order[0]
 		s.order = s.order[1:]
 		if ev := s.streams[oldest]; ev != nil {
 			delete(s.streams, oldest)
+			s.draining[oldest] = ev
 			ev.cancel() // supervisor closes its rc; its reader exits via finish()
 		}
 	}
@@ -211,11 +215,15 @@ func (s *LogsService) finish(streamID string, rc io.ReadCloser, errMsg string) {
 	_ = rc.Close()
 
 	s.mu.Lock()
-	// st may already be nil if synchronous eviction in OpenLogStream removed
-	// this entry before finish() ran - both the delete and the order scan
-	// are no-ops in that case.
+	// An evicted stream lives in draining (moved there by OpenLogStream's cap
+	// eviction); a live one in streams. Either way the entry is removed here
+	// and its done closed below, so CloseAll/CloseLogStream waits end promptly.
 	st := s.streams[streamID]
 	delete(s.streams, streamID)
+	if st == nil {
+		st = s.draining[streamID]
+	}
+	delete(s.draining, streamID)
 	for i, id := range s.order {
 		if id == streamID {
 			s.order = append(s.order[:i], s.order[i+1:]...)
@@ -251,8 +259,11 @@ func (s *LogsService) CloseLogStream(streamID string) {
 // on app shutdown or when the frontend unmounts the logs view.
 func (s *LogsService) CloseAll() {
 	s.mu.Lock()
-	sts := make([]*logStream, 0, len(s.streams))
+	sts := make([]*logStream, 0, len(s.streams)+len(s.draining))
 	for _, st := range s.streams {
+		sts = append(sts, st)
+	}
+	for _, st := range s.draining {
 		sts = append(sts, st)
 	}
 	s.mu.Unlock()

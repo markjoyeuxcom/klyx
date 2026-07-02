@@ -308,6 +308,51 @@ describe("WorkloadsView", () => {
     expect(await findByText(/sparklines unavailable: metrics unavailable: no source/)).toBeTruthy();
   });
 
+  // --- Live-update stability (selection + pending action by stable key) ---
+
+  it("selection follows the workload when a live emit re-orders the rows", () => {
+    seed([broken, healthy]);
+    const { getByText, getAllByText } = render(<WorkloadsView cluster="homelab-nelli" />);
+    // Select grafana (second row) via click.
+    fireEvent.click(getByText("grafana"));
+    // Context panel shows grafana (name appears in row + panel).
+    expect(getAllByText("grafana").length).toBeGreaterThan(1);
+    // Live emit re-ranks: grafana now first, ollama second.
+    act(() => { seed([healthy, broken]); });
+    // The panel must still show grafana, not silently retarget to index 1 (ollama).
+    expect(getAllByText("grafana").length).toBeGreaterThan(1);
+    expect(getAllByText("ollama").length).toBe(1); // row only, not the panel
+  });
+
+  it("selection clears when the selected workload leaves the visible set", () => {
+    seed([broken, healthy]);
+    const { getByText, getByPlaceholderText, queryByText } = render(<WorkloadsView cluster="homelab-nelli" />);
+    fireEvent.click(getByText("grafana")); // select
+    fireEvent.change(getByPlaceholderText("filter workloads"), { target: { value: "ollama" } });
+    // grafana filtered out — no selection, so no action buttons for a wrong row.
+    expect(queryByText("restart")).toBeNull();
+    expect(getByText(/select a workload/i)).toBeTruthy();
+  });
+
+  it("open scale popover survives a live emit that replaces the DTOs", () => {
+    seed([broken]);
+    const { getByText, getByRole } = render(<WorkloadsView cluster="homelab-nelli" />);
+    fireEvent.click(getByText("ollama")); // select + expand
+    fireEvent.click(getByText("scale")); // open popover
+    expect(getByRole("spinbutton", { name: /replica count/i })).toBeTruthy();
+    // Live emit replaces the workload DTO (same identity key, new object).
+    act(() => { seed([{ ...broken, restarts: 8 }]); });
+    // Popover must still be open — the pending match is by key, not object identity.
+    expect(getByRole("spinbutton", { name: /replica count/i })).toBeTruthy();
+  });
+
+  it("status trail reads shown/total, not shown/shown", () => {
+    seed([broken, healthy]);
+    const { getByText } = render(<WorkloadsView cluster="homelab-nelli" />);
+    fireEvent.click(getByText(/needs attention/i)); // hides healthy → 1 of 2
+    expect(getByText("1/2")).toBeTruthy();
+  });
+
   it("pop-out calls openWorkloadLogsWindow and closes the dock on success", async () => {
     seed([broken]);
     const { getByRole, queryByTestId, findByTestId } = render(<WorkloadsView cluster="homelab-nelli" />);

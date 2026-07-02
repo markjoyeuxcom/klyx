@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useFleet } from "../store/fleet";
 import type { CertificateDTO, IssuerDTO, ChainNodeDTO, CertChainDTO } from "../store/fleet";
 import { openCertManager, closeCertManager, getCertificateChain } from "../bridge/certmanager";
-import { Badge, FilterButton, SummaryCell, Section, Field, StatusDot, frame, ellipsis, mono, readyColor } from "../chrome/primitives";
+import { Badge, FilterButton, SummaryCell, Section, Field, StatusDot, frame, ellipsis, mono, readyColor, toneColor } from "../chrome/primitives";
 
 type CertFilter = "all" | "attention" | "expiring" | "issuing" | "issuerProblem" | "issuers";
 
@@ -374,9 +374,11 @@ function failureHint(c: CertificateDTO, issuer: IssuerDTO | undefined, failing: 
   return "";
 }
 
+// CertBadge is deliberately NOT the Badge primitive: it is a mono 10px chip on
+// a neutral border/surface with only the text toned — none of Badge's variants
+// (toned border, toned bg) renders that. It does share the primitive tone map.
 function CertBadge({ children, tone }: { children: React.ReactNode; tone: "success" | "info" | "warning" | "danger" | "muted" }) {
-  const color = tone === "success" ? "var(--color-text-success)" : tone === "info" ? "var(--color-text-info)" : tone === "warning" ? "var(--color-text-warning)" : tone === "danger" ? "var(--color-text-danger)" : "var(--color-text-tertiary)";
-  return <span style={{ ...mono, fontSize: 10, border: "0.5px solid var(--color-border-tertiary)", borderRadius: 4, padding: "1px 6px", background: "var(--color-background-secondary)", color }}>{children}</span>;
+  return <span style={{ ...mono, fontSize: 10, border: "0.5px solid var(--color-border-tertiary)", borderRadius: 4, padding: "1px 6px", background: "var(--color-background-secondary)", color: toneColor[tone] }}>{children}</span>;
 }
 
 function MiniMetric({ label, value, tone }: { label: string; value: string; tone?: "warning" }) {

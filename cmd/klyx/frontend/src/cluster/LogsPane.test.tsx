@@ -38,6 +38,21 @@ vi.mock("../../bindings/github.com/moomora/klyx/internal/appbridge/index.js", ()
   },
 }));
 
+// Count parseLine invocations (pass-through wrapper) so tests can pin the
+// parse-once-at-ingest behavior — re-parsing the buffer per render was the
+// LogsPane hot path.
+const parseSpy = vi.hoisted(() => ({ count: 0 }));
+vi.mock("./logline", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./logline")>();
+  return {
+    ...actual,
+    parseLine: (raw: string) => {
+      parseSpy.count += 1;
+      return actual.parseLine(raw);
+    },
+  };
+});
+
 // Mock clipboard
 const mockClipboardWrite = vi.fn();
 Object.defineProperty(navigator, "clipboard", {
@@ -512,6 +527,35 @@ describe("LogsPane", () => {
     });
 
     await waitFor(() => expect(mockClipboardWrite).toHaveBeenCalledWith(errorLine));
+  });
+
+  // -------------------------------------------------------------------------
+  // Parse memoization: each line is parsed once at ingest, never per render
+  // -------------------------------------------------------------------------
+
+  it("parses each line once at ingest, not on every render", async () => {
+    mockOpenLogStream.mockImplementation(() => openSuccess("s-parse-once"));
+    const { getByText } = render(<LogsPane cluster="homelab" pod={defaultPod} />);
+    await waitFor(() => expect(eventHandlers["podlogs:s-parse-once"]).toBeDefined());
+
+    parseSpy.count = 0;
+    act(() => {
+      fireChunk("podlogs:s-parse-once", [
+        "I0609 22:26:09.000000  1 foo.go:1] one",
+        "W0609 22:26:09.000000  1 foo.go:2] two",
+        "plain three",
+      ]);
+    });
+    await waitFor(() => expect(getByText(/plain three/)).toBeTruthy());
+    expect(parseSpy.count).toBe(3); // once per ingested line
+
+    // Force re-renders that repaint every visible line + re-evaluate the level
+    // filter: none of them may re-run the parser over the buffer.
+    act(() => { fireEvent.click(getByText("wrap")); });
+    act(() => { fireEvent.click(getByText("wrap")); });
+    act(() => { fireEvent.click(getByText("warn")); }); // level filter on
+    act(() => { fireEvent.click(getByText("warn")); }); // and off again
+    expect(parseSpy.count).toBe(3);
   });
 
   // -------------------------------------------------------------------------

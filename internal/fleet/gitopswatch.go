@@ -7,7 +7,6 @@ import (
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic/dynamicinformer"
 	"k8s.io/client-go/tools/cache"
 
@@ -46,8 +45,11 @@ func (t *watchErrTracker) lastError() string {
 }
 
 // trackWatchErrors replaces an informer's default watch-error handler (which
-// only logs) with one that records into the tracker. Must run before Start.
+// only logs) with one that records into the tracker, and strips managedFields
+// before objects enter the cache (the lazy sets watch full objects and live as
+// long as the view is open). Must run before Start.
 func trackWatchErrors(inf cache.SharedIndexInformer, t *watchErrTracker) {
+	_ = inf.SetTransform(stripManagedFields)
 	_ = inf.SetWatchErrorHandler(func(_ *cache.Reflector, err error) {
 		t.record(err)
 	})
@@ -56,7 +58,7 @@ func trackWatchErrors(inf cache.SharedIndexInformer, t *watchErrTracker) {
 // preferredVersion returns the served preferred version for a CRD group, or
 // fallback when the group is not advertised (the fake discovery in tests has no
 // groups, so the fallback is used there).
-func preferredVersion(disc discovery.DiscoveryInterface, group, fallback string) string {
+func preferredVersion(disc discoveryLike, group, fallback string) string {
 	groups, err := disc.ServerGroups()
 	if err != nil || groups == nil {
 		return fallback
@@ -99,8 +101,8 @@ func (c *ClusterConn) OpenGitOps() {
 		return
 	}
 
-	ksVer := preferredVersion(c.typed.Discovery(), "kustomize.toolkit.fluxcd.io", "v1")
-	hrVer := preferredVersion(c.typed.Discovery(), "helm.toolkit.fluxcd.io", "v2")
+	ksVer := preferredVersion(c.discovery(), "kustomize.toolkit.fluxcd.io", "v1")
+	hrVer := preferredVersion(c.discovery(), "helm.toolkit.fluxcd.io", "v2")
 	ksGVR := schema.GroupVersionResource{Group: "kustomize.toolkit.fluxcd.io", Version: ksVer, Resource: "kustomizations"}
 	hrGVR := schema.GroupVersionResource{Group: "helm.toolkit.fluxcd.io", Version: hrVer, Resource: "helmreleases"}
 
@@ -116,7 +118,7 @@ func (c *ClusterConn) OpenGitOps() {
 	// (a source that is not pulling) is visible without a separate API read.
 	srcInf := make(map[flux.Kind]cache.SharedIndexInformer, len(sourceKinds))
 	for _, s := range sourceKinds {
-		ver := preferredVersion(c.typed.Discovery(), s.group, s.fallback)
+		ver := preferredVersion(c.discovery(), s.group, s.fallback)
 		gvr := schema.GroupVersionResource{Group: s.group, Version: ver, Resource: s.resource}
 		inf := factory.ForResource(gvr).Informer()
 		trackWatchErrors(inf, errs)
@@ -200,14 +202,23 @@ func (c *ClusterConn) GitOpsObject(kind, namespace, name string) (*unstructured.
 	if inf == nil {
 		return nil, false
 	}
-	for _, obj := range inf.GetStore().List() {
-		if u, ok := obj.(*unstructured.Unstructured); ok {
-			if u.GetNamespace() == namespace && u.GetName() == name {
-				return u, true
-			}
-		}
+	return storeGet(inf, namespace, name)
+}
+
+// storeGet looks an object up by its cache key (ns/name; bare name for
+// cluster-scoped objects) - O(1) against the informer index, replacing the
+// full-store scans these detail lookups used to do on every push tick.
+func storeGet(inf cache.SharedIndexInformer, namespace, name string) (*unstructured.Unstructured, bool) {
+	key := name
+	if namespace != "" {
+		key = namespace + "/" + name
 	}
-	return nil, false
+	obj, exists, err := inf.GetStore().GetByKey(key)
+	if err != nil || !exists {
+		return nil, false
+	}
+	u, ok := obj.(*unstructured.Unstructured)
+	return u, ok
 }
 
 // GitOpsSources reads the source informer stores and parses them. nil when not
@@ -253,14 +264,7 @@ func (c *ClusterConn) GitOpsSourceObject(kind, namespace, name string) (*unstruc
 	if !ok || inf == nil {
 		return nil, false
 	}
-	for _, obj := range inf.GetStore().List() {
-		if u, ok := obj.(*unstructured.Unstructured); ok {
-			if u.GetNamespace() == namespace && u.GetName() == name {
-				return u, true
-			}
-		}
-	}
-	return nil, false
+	return storeGet(inf, namespace, name)
 }
 
 // GitOpsResources reads the informer stores and parses them. nil when not open.

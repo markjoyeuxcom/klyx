@@ -81,8 +81,71 @@ export function summarise(
 
 // ---- fetch orchestration -------------------------------------------------------
 
+// unwrapSources turns the six settled binding results into summarise() inputs:
+// the row array (or raw DTO) on success, null when the fetch failed. Shared
+// with fetchTape (bridge/tape.ts) so both surfaces derive from one place.
+export type UnwrappedSources = {
+  workloads: RankedRow[] | null;
+  pods: Array<RankedRow & { namespace?: string }> | null;
+  events: EventRow[] | null;
+  nodes: NodeRow[] | null;
+  helm: { available: boolean; releases: HelmRow[] } | null;
+  flux: { fluxPresent: boolean; notReady: number; suspended?: number } | null;
+};
+
+// value: the fulfilled result cast to its DTO shape, null on rejection (or a
+// falsy value — the bindings never resolve to one, but stay defensive).
+function value<T>(r: PromiseSettledResult<unknown>): T | null {
+  return r.status === "fulfilled" && r.value ? (r.value as T) : null;
+}
+
+export function unwrapSources(
+  results: readonly [
+    PromiseSettledResult<unknown>,
+    PromiseSettledResult<unknown>,
+    PromiseSettledResult<unknown>,
+    PromiseSettledResult<unknown>,
+    PromiseSettledResult<unknown>,
+    PromiseSettledResult<unknown>,
+  ],
+): UnwrappedSources {
+  const [workloadsResult, podsResult, eventsResult, nodesResult, helmResult, fluxResult] = results;
+  const workloads = value<{ workloads?: RankedRow[] }>(workloadsResult);
+  const pods = value<{ pods?: Array<RankedRow & { namespace?: string }> }>(podsResult);
+  const events = value<{ events?: EventRow[] }>(eventsResult);
+  const nodes = value<{ nodes?: NodeRow[] }>(nodesResult);
+  return {
+    workloads: workloads ? workloads.workloads ?? [] : null,
+    pods: pods ? pods.pods ?? [] : null,
+    events: events ? events.events ?? [] : null,
+    nodes: nodes ? nodes.nodes ?? [] : null,
+    helm: value<{ available: boolean; releases: HelmRow[] }>(helmResult),
+    flux: value<{ fluxPresent: boolean; notReady: number; suspended?: number }>(fluxResult),
+  };
+}
+
+// summariseSources feeds the unwrapped sources through summarise() — THE
+// counting logic, unit-tested in overview.test.ts. Failed sources go in as
+// empty arrays; callers null/mark them from the UnwrappedSources fields.
+export function summariseSources(src: UnwrappedSources, nsSet: Set<string>): SummariseOutput {
+  return summarise(
+    {
+      workloads: src.workloads ?? [],
+      pods: src.pods ?? [],
+      events: src.events ?? [],
+      nodes: src.nodes ?? [],
+      helmAvailable: src.helm?.available ?? false,
+      releases: src.helm?.releases ?? [],
+      flux: src.flux
+        ? { present: src.flux.fluxPresent, notReady: src.flux.notReady ?? 0, suspended: src.flux.suspended ?? 0 }
+        : null,
+    },
+    nsSet,
+  );
+}
+
 /**
- * fetchOverviewSummary fetches all five data sources in parallel, derives counts
+ * fetchOverviewSummary fetches all six data sources in parallel, derives counts
  * via summarise(), and writes the result into overviewSummary in the fleet store.
  * Stale-guarded: if the cluster changes before all promises settle, the result is
  * silently dropped.
@@ -90,91 +153,40 @@ export function summarise(
 export async function fetchOverviewSummary(cluster: string): Promise<void> {
   useFleet.getState().setOverviewSummaryLoading(cluster);
 
-  const [workloadsResult, podsResult, eventsResult, nodesResult, helmResult, fluxResult] =
-    await Promise.allSettled([
-      WorkloadsService.ListWorkloads(cluster, ""),
-      PodsService.ListPods(cluster, ""),
-      EventsService.ListEvents(cluster, ""),
-      NodesService.ListNodes(cluster),
-      HelmService.ListHelmReleases(cluster),
-      GitOpsService.GetGitOpsSummary(cluster),
-    ]);
+  const results = await Promise.allSettled([
+    WorkloadsService.ListWorkloads(cluster, ""),
+    PodsService.ListPods(cluster, ""),
+    EventsService.ListEvents(cluster, ""),
+    NodesService.ListNodes(cluster),
+    HelmService.ListHelmReleases(cluster),
+    GitOpsService.GetGitOpsSummary(cluster),
+  ]);
 
   // Stale guard — cluster may have changed while requests were in flight.
   if (useFleet.getState().overviewSummary.cluster !== cluster) return;
 
-  // Extract per-tile values, null on failure.
-  let unhealthyWorkloads: number | null = null;
-  let podsNotReady: number | null = null;
-  let warningEvents: number | null = null;
-  let nodeProblems: number | null = null;
-  let helmAvailable = false;
-  let failedReleases: number | null = null;
-  let namespaces: number | null = null;
-  let flux: { present: boolean; notReady: number; suspended: number } | null = null;
+  const src = unwrapSources(results);
+
+  // Distinct namespaces come from the pods list (the all-namespaces load).
   const nsSet = new Set<string>();
-
-  // Pods — also source for namespace derivation.
-  if (podsResult.status === "fulfilled" && podsResult.value) {
-    const pods = (podsResult.value as { pods: RankedRow[] }).pods ?? [];
-    podsNotReady = pods.filter(
-      (p) => p.rank === "unhealthy" || p.rank === "degraded",
-    ).length;
-    // Derive distinct namespaces from the pods list (all-namespaces load).
-    const rawPods = (podsResult.value as { pods: Array<{ rank: string; namespace?: string }> }).pods ?? [];
-    for (const p of rawPods) {
-      if (p.namespace) nsSet.add(p.namespace);
-    }
-    namespaces = nsSet.size > 0 ? nsSet.size : null;
+  for (const p of src.pods ?? []) {
+    if (p.namespace) nsSet.add(p.namespace);
   }
 
-  if (workloadsResult.status === "fulfilled" && workloadsResult.value) {
-    const workloads = (workloadsResult.value as { workloads: RankedRow[] }).workloads ?? [];
-    unhealthyWorkloads = workloads.filter(
-      (w) => w.rank === "unhealthy" || w.rank === "degraded",
-    ).length;
-  }
+  const out = summariseSources(src, nsSet);
 
-  if (eventsResult.status === "fulfilled" && eventsResult.value) {
-    const events = (eventsResult.value as { events: EventRow[] }).events ?? [];
-    warningEvents = events.filter((e) => e.type === "Warning").length;
-  }
-
-  if (nodesResult.status === "fulfilled" && nodesResult.value) {
-    const nodes = (nodesResult.value as { nodes: NodeRow[] }).nodes ?? [];
-    nodeProblems = nodes.filter(
-      (n) => !n.ready || n.problems.length > 0 || n.unschedulable,
-    ).length;
-  }
-
-  if (helmResult.status === "fulfilled" && helmResult.value) {
-    const hr = helmResult.value as { available: boolean; releases: HelmRow[] };
-    helmAvailable = hr.available ?? false;
-    if (helmAvailable) {
-      failedReleases = (hr.releases ?? []).filter((r) => r.status === "failed").length;
-    }
-  }
-
-  if (fluxResult.status === "fulfilled" && fluxResult.value) {
-    const fr = fluxResult.value as { fluxPresent: boolean; notReady: number; suspended: number };
-    if (fr.fluxPresent) {
-      flux = { present: true, notReady: fr.notReady ?? 0, suspended: fr.suspended ?? 0 };
-    }
-    // fluxPresent=false → flux stays null → tile is hidden
-  }
-  // fluxResult rejected → flux stays null → tile hides (same as "absent")
-
+  // Per-tile degradation: a failed source renders null ("?"), never a fake 0.
   const summary: OverviewSummary = {
     cluster,
     loading: false,
-    unhealthyWorkloads,
-    podsNotReady,
-    warningEvents,
-    nodeProblems,
-    helmAvailable,
-    failedReleases,
-    namespaces,
-    flux,
+    unhealthyWorkloads: src.workloads ? out.unhealthyWorkloads : null,
+    podsNotReady: src.pods ? out.podsNotReady : null,
+    warningEvents: src.events ? out.warningEvents : null,
+    nodeProblems: src.nodes ? out.nodeProblems : null,
+    helmAvailable: out.helmAvailable,
+    failedReleases: out.failedReleases,
+    namespaces: out.namespaces > 0 ? out.namespaces : null,
+    flux: out.flux,
   };
 
   useFleet.getState().setOverviewSummary(summary);

@@ -5,8 +5,8 @@ import { armProtected } from "../bridge/configsvc";
 import { openPodDetail } from "../bridge/pods";
 import { ForwardPopover } from "./ForwardPopover";
 import { InspectorSection, InspectorTabButton, MetadataChips, inspectorStateBox } from "./ResourceInspector";
+import { actionBtn, ellipsis } from "../chrome/primitives";
 
-const ellipsis: React.CSSProperties = { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" };
 type DetailTab = "summary" | "related" | "events" | "yaml";
 
 function age(created: string): string {
@@ -718,7 +718,7 @@ export function InstanceDetail({ cluster, resource, instance }: { cluster: strin
         </span>
         {d && d.created && <span style={{ fontSize: 11, color: "var(--color-text-tertiary)" }}>{age(d.created)}</span>}
         <div style={{ flex: 1 }} />
-        <button onClick={() => void getInstanceDetail(cluster, resource, instance)} style={btn}>Refresh</button>
+        <button onClick={() => void getInstanceDetail(cluster, resource, instance)} style={actionBtn}>Refresh</button>
       </div>
 
       {id.loading && !d ? (
@@ -1218,13 +1218,8 @@ function noticeStyle(tone: "success" | "warning" | "danger"): React.CSSPropertie
   };
 }
 
-const btn: React.CSSProperties = {
-  padding: "3px 10px", fontSize: 11, borderRadius: 4, cursor: "pointer",
-  border: "0.5px solid var(--color-border-tertiary)", background: "var(--color-background-primary)", color: "var(--color-text-primary)",
-};
-
 const btnSm: React.CSSProperties = {
-  ...btn, padding: "2px 8px", fontSize: 10,
+  ...actionBtn, padding: "2px 8px", fontSize: 10,
 };
 
 const editorShell: React.CSSProperties = {

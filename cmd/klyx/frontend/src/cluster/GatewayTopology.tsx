@@ -3,8 +3,8 @@ import { useFleet, GatewayRef, RouteNodeDTO, RouteMetricDTO } from "../store/fle
 import type { CertificateDTO, ListenerDTO, PolicyRefDTO, ResourceRef } from "../store/fleet";
 import { getGatewayTopology, getRouteMetrics } from "../bridge/gateway";
 import { PolicyChip } from "./PolicyChip";
+import { FilterButton, ellipsis } from "../chrome/primitives";
 
-const ellipsis: React.CSSProperties = { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" };
 const nb: React.CSSProperties = { background: "var(--color-background-primary)", border: "0.5px solid var(--color-border-tertiary)", borderRadius: "var(--border-radius-md)", padding: "8px 9px", minWidth: 0 };
 const lab: React.CSSProperties = { fontSize: 9, letterSpacing: 0.4, textTransform: "uppercase", color: "var(--color-text-tertiary)", marginBottom: 3 };
 const nm: React.CSSProperties = { fontSize: 11, fontWeight: 600, fontFamily: "var(--font-mono)", ...ellipsis };
@@ -255,17 +255,17 @@ export function GatewayTopology({ cluster, gateway }: { cluster: string; gateway
       {(showFilter || t.routes.length > 0) && (
         <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center", flexShrink: 0 }}>
           <span style={{ fontSize: 9, color: "var(--color-text-tertiary)", marginRight: 2 }}>routes</span>
-          <Chip label="all routes" count={t.routes.length} active={activeMode === "all"} onClick={() => setRouteMode("all")} />
-          {brokenCount > 0 && <Chip label="issues" count={brokenCount} active={activeMode === "issues"} onClick={() => setRouteMode("issues")} />}
-          {globalCount > 0 && <Chip label="global" count={globalCount} active={activeMode === "global"} onClick={() => setRouteMode("global")} />}
-          {policyRouteCount > 0 && <Chip label="policies" count={policyRouteCount} active={activeMode === "policies"} onClick={() => setRouteMode("policies")} />}
+          <FilterButton label="all routes" count={t.routes.length} active={activeMode === "all"} onClick={() => setRouteMode("all")} />
+          {brokenCount > 0 && <FilterButton label="issues" count={brokenCount} active={activeMode === "issues"} onClick={() => setRouteMode("issues")} />}
+          {globalCount > 0 && <FilterButton label="global" count={globalCount} active={activeMode === "global"} onClick={() => setRouteMode("global")} />}
+          {policyRouteCount > 0 && <FilterButton label="policies" count={policyRouteCount} active={activeMode === "policies"} onClick={() => setRouteMode("policies")} />}
           {showFilter && (<>
           <span style={{ fontSize: 9, color: "var(--color-text-tertiary)", marginRight: 2 }}>namespace</span>
           {namespaces.length <= NS_CHIP_LIMIT ? (
             <>
-              <Chip label="All" active={activeNs === null} onClick={() => setNsFilter(null)} />
+              <FilterButton label="All" active={activeNs === null} onClick={() => setNsFilter(null)} />
               {namespaces.map((ns) => (
-                <Chip key={ns} label={ns} count={nsCounts.get(ns)} active={activeNs === ns} onClick={() => setNsFilter(ns)} />
+                <FilterButton key={ns} label={ns} count={nsCounts.get(ns)} active={activeNs === ns} onClick={() => setNsFilter(ns)} />
               ))}
             </>
           ) : (
@@ -488,30 +488,6 @@ function TopologyCell({ label, value, tone = "default" }: { label: string; value
       <div style={{ fontSize: 10, color: "var(--color-text-tertiary)", marginBottom: 2 }}>{label}</div>
       <div style={{ fontFamily: "var(--font-mono)", fontWeight: 600, color, ...ellipsis }}>{value}</div>
     </div>
-  );
-}
-
-function Chip({ label, count, active, onClick }: { label: string; count?: number; active: boolean; onClick: () => void }) {
-  return (
-    <button
-      onClick={onClick}
-      style={{
-        display: "inline-flex",
-        alignItems: "center",
-        gap: 4,
-        padding: "2px 9px",
-        fontSize: 11,
-        borderRadius: 999,
-        cursor: "pointer",
-        fontFamily: "var(--font-mono)",
-        border: active ? "0.5px solid var(--color-border-info)" : "0.5px solid var(--color-border-tertiary)",
-        background: active ? "var(--color-background-info)" : "var(--color-background-primary)",
-        color: active ? "var(--color-text-info)" : "var(--color-text-secondary)",
-      }}
-    >
-      {label}
-      {count !== undefined && <span style={{ fontSize: 9, opacity: 0.7 }}>{count}</span>}
-    </button>
   );
 }
 

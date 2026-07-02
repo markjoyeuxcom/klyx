@@ -49,7 +49,7 @@ var policyCandidateVersions = map[string][]string{
 // servedResourceGVR finds the served GVR for a (group, resource), probing the
 // candidate versions in order. ok=false means the CRD is not installed.
 func (c *ClusterConn) servedResourceGVR(group, resource string) (schema.GroupVersionResource, bool) {
-	disc := c.typed.Discovery()
+	disc := c.discovery()
 	for _, v := range policyCandidateVersions[group] {
 		rl, err := disc.ServerResourcesForGroupVersion(group + "/" + v)
 		if err != nil || rl == nil {
@@ -150,13 +150,13 @@ func attachOneCiliumPolicy(u *unstructured.Unstructured, kind string, cluster bo
 }
 
 func (c *ClusterConn) gwGVR(resource string) schema.GroupVersionResource {
-	v := preferredVersion(c.typed.Discovery(), gwGroup, "v1")
+	v := preferredVersion(c.discovery(), gwGroup, "v1")
 	return schema.GroupVersionResource{Group: gwGroup, Version: v, Resource: resource}
 }
 
 // gatewayAPIServed reports whether the Gateway API group is advertised.
 func (c *ClusterConn) gatewayAPIServed() bool {
-	groups, err := c.typed.Discovery().ServerGroups()
+	groups, err := c.discovery().ServerGroups()
 	if err != nil || groups == nil {
 		return false
 	}

@@ -47,9 +47,12 @@ func (s *FleetService) GetFleet() []ClusterDTO {
 	return out
 }
 
-// Run emits FleetUpdatedEvent on a coalescing ticker until ctx is cancelled.
-// One emit per tick carries the full current fleet (the frontend replaces state).
-func (s *FleetService) Run(ctx context.Context, em Emitter, interval time.Duration) {
+// RunFleetPush emits FleetUpdatedEvent on a coalescing ticker until ctx is
+// cancelled. One emit per tick carries the full current fleet (the frontend
+// replaces state). A free function rather than a FleetService method on
+// purpose: every exported method on a bound service lands in the JS binding
+// surface, and this is a Go lifecycle hook, not an RPC.
+func RunFleetPush(ctx context.Context, s *FleetService, em Emitter, interval time.Duration) {
 	t := time.NewTicker(interval)
 	defer t.Stop()
 	for {
