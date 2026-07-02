@@ -164,6 +164,12 @@ export function GitOps({ cluster }: { cluster: string }) {
         </div>
       </div>
 
+      {gitops.cluster === cluster && gitops.watchError && (
+        <div style={{ padding: "8px 12px", borderRadius: "var(--border-radius-md)", border: "0.5px solid var(--color-text-danger)", color: "var(--color-text-danger)", fontSize: 12 }}>
+          Flux watch is failing - this list may be empty or stale, not clean: {gitops.watchError}
+        </div>
+      )}
+
       <div style={{ ...frame, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", overflow: "hidden" }}>
         <SummaryCell label="health" value={attention > 0 ? `${attention} attention` : "ready"} tone={attention > 0 ? "warning" : "success"} />
         <SummaryCell label="kustomizations" value={String(ks)} />

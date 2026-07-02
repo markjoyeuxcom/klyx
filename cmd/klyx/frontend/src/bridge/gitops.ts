@@ -7,10 +7,10 @@ const GITOPS_UPDATED = "gitops:updated";
 export async function openGitOps(cluster: string): Promise<() => void> {
   useFleet.getState().setGitOpsLoading(cluster);
   await GitOpsService.Open(cluster);
-  const off = Events.On(GITOPS_UPDATED, (ev: { data: { cluster: string; resources: FluxResourceDTO[]; sources: FluxSourceDTO[] } }) => {
+  const off = Events.On(GITOPS_UPDATED, (ev: { data: { cluster: string; resources: FluxResourceDTO[]; sources: FluxSourceDTO[]; watchError?: string } }) => {
     const d = ev.data;
     if (d && d.cluster === cluster) {
-      useFleet.getState().setGitOps(cluster, d.resources ?? [], d.sources ?? []);
+      useFleet.getState().setGitOps(cluster, d.resources ?? [], d.sources ?? [], d.watchError);
     }
   });
   return typeof off === "function" ? off : () => {};
@@ -25,9 +25,20 @@ export async function closeGitOps(cluster: string): Promise<void> {
 }
 
 export async function getResourceDetail(cluster: string, kind: string, namespace: string, name: string): Promise<void> {
-  const d = (await GitOpsService.GetResourceDetail(cluster, kind, namespace, name)) as ResourceDetailDTO;
-  if (d && d.name) {
-    useFleet.getState().setDetail(d);
+  try {
+    const d = (await GitOpsService.GetResourceDetail(cluster, kind, namespace, name)) as ResourceDetailDTO;
+    if (d && d.name) {
+      useFleet.getState().setDetail(d);
+    }
+  } catch (e) {
+    console.error("getResourceDetail", e);
+    // The expanded panel shows "Loading detail…" until a detail lands (there is
+    // no separate loading flag) — collapse it and surface the failure so it
+    // doesn't spin forever.
+    if (useFleet.getState().gitops.expandedKey === `${kind}/${namespace}/${name}`) {
+      useFleet.getState().collapse();
+      useFleet.getState().setActionStatus({ kind: "error", message: `Failed to load detail for ${namespace}/${name}` });
+    }
   }
 }
 

@@ -158,6 +158,9 @@ func (s *PodsService) GetPodDetail(cluster, namespace, name string) PodDetailDTO
 // DeletePod deletes a single pod via the cluster connection. The owning
 // controller recreates it; this is the standard imperative bounce.
 func (s *PodsService) DeletePod(cluster, namespace, name string) ActionResultDTO {
+	if err := checkProtected(cluster); err != nil {
+		return ActionResultDTO{Error: err.Error()}
+	}
 	conn, ok := s.lookup(cluster)
 	if !ok {
 		return ActionResultDTO{Error: "cluster not connected: " + cluster}

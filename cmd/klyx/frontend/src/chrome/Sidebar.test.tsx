@@ -341,3 +341,55 @@ describe("Sidebar expanded resource navigation", () => {
     expect(configMaps.disabled).toBe(true);
   });
 });
+
+// --- capability gating (design principle 7: render only what's installed) ---
+
+describe("Sidebar capability gating", () => {
+  const cluster = (over: Record<string, unknown>) => ({
+    name: "x", state: "Synced", reason: "", nodesReady: 1, nodesTotal: 1, pods: 1, version: "v1.31",
+    gitopsTier: "Absent", gitopsReason: "", networkTier: "Absent", networkReason: "",
+    env: "", region: "", provider: "", group: "", ageSeconds: 0,
+    ...over,
+  });
+
+  it("hides tool sections detection says are absent (collapsed rail)", () => {
+    useFleet.setState({ clusters: [cluster({ fluxPresent: false, argoPresent: false, certManagerPresent: false, gatewayAPIVersion: "" })] as never });
+    useFleet.getState().openCluster("x");
+    const { queryByLabelText } = render(<Sidebar />);
+    expect(queryByLabelText("Flux")).toBeNull();
+    expect(queryByLabelText("Argo CD")).toBeNull();
+    expect(queryByLabelText("Certificates")).toBeNull();
+    expect(queryByLabelText("Gateway API")).toBeNull();
+    // Non-tool sections stay.
+    expect(queryByLabelText("Pods")).toBeTruthy();
+    expect(queryByLabelText("Helm")).toBeTruthy();
+  });
+
+  it("shows tool sections that are present (collapsed rail)", () => {
+    useFleet.setState({ clusters: [cluster({ fluxPresent: true, argoPresent: true, certManagerPresent: true, gatewayAPIVersion: "v1" })] as never });
+    useFleet.getState().openCluster("x");
+    const { queryByLabelText } = render(<Sidebar />);
+    expect(queryByLabelText("Flux")).toBeTruthy();
+    expect(queryByLabelText("Argo CD")).toBeTruthy();
+    expect(queryByLabelText("Certificates")).toBeTruthy();
+    expect(queryByLabelText("Gateway API")).toBeTruthy();
+  });
+
+  it("hides absent tool groups in the expanded menu", () => {
+    localStorage.setItem("klyx-sidebar-expanded", "1");
+    useFleet.setState({ clusters: [cluster({ fluxPresent: true, argoPresent: false, certManagerPresent: false, gatewayAPIVersion: "" })] as never });
+    useFleet.getState().openCluster("x");
+    const { queryByText } = render(<Sidebar />);
+    expect(queryByText("Flux CD")).toBeTruthy();
+    expect(queryByText("Argo CD")).toBeNull();
+    expect(queryByText("cert-manager")).toBeNull();
+    expect(queryByText("Gateway API")).toBeNull();
+  });
+
+  it("shows everything outside a cluster (fleet root, disabled)", () => {
+    useFleet.setState({ clusters: [cluster({ fluxPresent: false, argoPresent: false, certManagerPresent: false })] as never });
+    const { queryByLabelText } = render(<Sidebar />);
+    expect(queryByLabelText("Flux")).toBeTruthy();
+    expect(queryByLabelText("Certificates")).toBeTruthy();
+  });
+});

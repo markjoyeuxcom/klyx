@@ -31,6 +31,6 @@ describe("gitops store", () => {
   it("clearGitOps resets the slice", () => {
     useFleet.getState().setGitOps("x", [r({})], [src({})]);
     useFleet.getState().clearGitOps();
-    expect(useFleet.getState().gitops).toEqual({ cluster: null, resources: [], sources: [], loading: false, expandedKey: null, detail: null });
+    expect(useFleet.getState().gitops).toEqual({ cluster: null, resources: [], sources: [], loading: false, watchError: null, expandedKey: null, detail: null });
   });
 });

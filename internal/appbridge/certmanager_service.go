@@ -15,6 +15,9 @@ type CertManagerConn interface {
 	CloseCertManager()
 	CertManagerCertificates() []certmanager.Certificate
 	CertManagerIssuers() []certmanager.Issuer
+	// CertManagerWatchHealth reports informer sync + the last watch error, so a
+	// failing watch renders as an error instead of an empty list.
+	CertManagerWatchHealth() (synced bool, lastErr string)
 	GetCertificateChain(ctx context.Context, ns, name string) (certmanager.Chain, error)
 }
 
@@ -25,6 +28,9 @@ type certManagerPayload struct {
 	Cluster      string           `json:"cluster"`
 	Certificates []CertificateDTO `json:"certificates"`
 	Issuers      []IssuerDTO      `json:"issuers"`
+	// WatchError is set while the watch has not synced AND has recorded an
+	// error - the view must show the failure, not an empty list.
+	WatchError string `json:"watchError,omitempty"`
 }
 
 // CertManagerService is bound to JS. Open starts a cluster's lazy cert-manager
@@ -137,5 +143,9 @@ func (s *CertManagerService) snapshot(cluster string, conn CertManagerConn) cert
 	for _, i := range iss {
 		issDTOs = append(issDTOs, toIssuerDTO(i))
 	}
-	return certManagerPayload{Cluster: cluster, Certificates: certDTOs, Issuers: issDTOs}
+	watchErr := ""
+	if synced, lastErr := conn.CertManagerWatchHealth(); !synced && lastErr != "" {
+		watchErr = lastErr
+	}
+	return certManagerPayload{Cluster: cluster, Certificates: certDTOs, Issuers: issDTOs, WatchError: watchErr}
 }

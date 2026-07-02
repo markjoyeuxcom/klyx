@@ -3,10 +3,18 @@ import { MetricsService } from "../../bindings/github.com/moomora/klyx/internal/
 
 export async function getClusterMetrics(cluster: string, forceReprobe: boolean): Promise<void> {
   useFleet.getState().setMetricsLoading(cluster);
-  const dto = (await MetricsService.GetClusterMetrics(cluster, forceReprobe)) as MetricsDTO;
-  // Ignore a stale response if the user navigated to another cluster.
-  if (useFleet.getState().metrics.cluster !== cluster) return;
-  useFleet.getState().setMetrics(cluster, dto);
+  try {
+    const dto = (await MetricsService.GetClusterMetrics(cluster, forceReprobe)) as MetricsDTO;
+    // Ignore a stale response if the user navigated to another cluster.
+    if (useFleet.getState().metrics.cluster !== cluster) return;
+    useFleet.getState().setMetrics(cluster, dto);
+  } catch (e) {
+    console.error("getClusterMetrics", e);
+    // Clear the loading flag so the overview doesn't get stuck on "Loading…".
+    if (useFleet.getState().metrics.cluster === cluster) {
+      useFleet.setState((s) => ({ metrics: { ...s.metrics, loading: false } }));
+    }
+  }
 }
 
 // Sparkline DTOs — 30m range series. available=false carries the reason; an

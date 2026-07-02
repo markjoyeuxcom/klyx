@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useFleet, ResourceRef, InstanceRef, InstanceDetailDTO, SecretKeyDTO, ServiceBackingDTO, HPAScalingDTO, RelatedRefDTO, EventDTO } from "../store/fleet";
 import { getInstanceDetail, revealSecretKey, copyText, dryRunInstanceYAML, applyInstanceYAML, ActionResult } from "../bridge/crd";
+import { armProtected } from "../bridge/configsvc";
 import { openPodDetail } from "../bridge/pods";
 import { ForwardPopover } from "./ForwardPopover";
 import { InspectorSection, InspectorTabButton, MetadataChips, inspectorStateBox } from "./ResourceInspector";
@@ -881,6 +882,11 @@ function YamlPanel({
   const [status, setStatus] = useState<ActionResult | null>(null);
   const [busy, setBusy] = useState<"dry-run" | "apply" | null>(null);
   const [confirmApply, setConfirmApply] = useState(false);
+  // prd lock: applying YAML on a protected cluster requires the typed cluster
+  // name (same arming as ConfirmDialog) and registers a one-shot backend grant.
+  const isProtected = useFleet((s) => s.clusters.find((c) => c.name === cluster)?.protected ?? false);
+  const [typedConfirm, setTypedConfirm] = useState("");
+  const applyArmed = !isProtected || typedConfirm === cluster;
   const [showDiff, setShowDiff] = useState(false);
   const [cursor, setCursor] = useState<CursorPosition>({ line: 1, column: 1 });
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -1020,9 +1026,35 @@ function YamlPanel({
       {confirmApply && (
         <div style={confirmBand}>
           <span>Apply these YAML changes to {target}? <span style={{ fontFamily: "var(--font-mono)" }}>+{diff.added} -{diff.removed}</span></span>
+          {isProtected && (
+            <input
+              aria-label="protected cluster confirmation"
+              placeholder={cluster}
+              value={typedConfirm}
+              onChange={(e) => setTypedConfirm(e.target.value)}
+              style={{ padding: "3px 8px", fontFamily: "var(--font-mono)", fontSize: 11, background: "var(--color-background-secondary)", border: "0.5px solid var(--color-border-tertiary)", borderRadius: 4, color: "var(--color-text-primary)", width: 160 }}
+            />
+          )}
           <div style={{ flex: 1 }} />
-          <button onClick={() => setConfirmApply(false)} style={btnSm}>Cancel</button>
-          <button onClick={() => void runApply()} style={btnSm}>{busy === "apply" ? "Applying" : "Apply changes"}</button>
+          <button onClick={() => { setConfirmApply(false); setTypedConfirm(""); }} style={btnSm}>Cancel</button>
+          <button
+            onClick={() => {
+              // Register the typed confirmation with the backend first - a real
+              // apply on a protected cluster consumes a one-shot grant there.
+              if (isProtected) {
+                void armProtected(cluster, typedConfirm).then((r) => {
+                  if (r.ok) void runApply();
+                  else setStatus({ ok: false, error: r.error || "could not arm protected action" });
+                });
+              } else {
+                void runApply();
+              }
+            }}
+            disabled={!applyArmed || busy !== null}
+            style={btnSm}
+          >
+            {busy === "apply" ? "Applying" : "Apply changes"}
+          </button>
         </div>
       )}
       <div style={editorShell}>

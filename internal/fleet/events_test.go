@@ -37,7 +37,7 @@ func TestListEvents_WarningFirst(t *testing.T) {
 	cs := fake.NewSimpleClientset(warn, normal)
 	c := &ClusterConn{typed: cs}
 
-	out, err := c.ListEvents(context.Background(), "")
+	out, _, err := c.ListEvents(context.Background(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +74,7 @@ func TestListEvents_NamespaceScope(t *testing.T) {
 	cs := fake.NewSimpleClientset(evA, evB)
 	c := &ClusterConn{typed: cs}
 
-	out, err := c.ListEvents(context.Background(), "ns-a")
+	out, _, err := c.ListEvents(context.Background(), "ns-a")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +105,7 @@ func TestListEvents_FieldMapping(t *testing.T) {
 	cs := fake.NewSimpleClientset(ev)
 	c := &ClusterConn{typed: cs}
 
-	out, err := c.ListEvents(context.Background(), "")
+	out, _, err := c.ListEvents(context.Background(), "")
 	if err != nil {
 		t.Fatal(err)
 	}

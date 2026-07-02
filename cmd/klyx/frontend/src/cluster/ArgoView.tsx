@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useFleet } from "../store/fleet";
 import type { ArgoApplicationSetDTO, ArgoAppDTO, ArgoProjectDTO, ArgoResourceDTO, ArgoResourceRuleDTO, ArgoViewMode, CRDGroupDTO, ResourceRef } from "../store/fleet";
 import { listArgoApplicationSets, listArgoApps, listArgoProjects, refreshArgoApp, syncArgoApp } from "../bridge/argo";
+import { armProtected } from "../bridge/configsvc";
 import type { ArgoSyncOptions } from "../bridge/argo";
 import { ConfirmDialog } from "../chrome/ConfirmDialog";
 import { EmptyState } from "../chrome/EmptyState";
@@ -809,7 +810,10 @@ function SyncApplicationDialog({
   const [revision, setRevision] = useState(defaultRevision);
   const [strategy, setStrategy] = useState<"hook" | "apply">("hook");
   const [dryRun, setDryRun] = useState(false);
-  const [prune, setPrune] = useState(true);
+  // Prune deletes live resources - default OFF, matching Argo's own UI. The
+  // M6 contract shipped "sync (never prune)"; the tile is a deliberate
+  // post-M6 addition, but it must always be an explicit opt-in per sync.
+  const [prune, setPrune] = useState(false);
   const [force, setForce] = useState(false);
   const [replace, setReplace] = useState(false);
   const [serverSideApply, setServerSideApply] = useState(false);
@@ -963,16 +967,27 @@ function SyncApplicationDialog({
         <div style={{ padding: "14px 20px", borderTop: "0.5px solid var(--color-border-tertiary)", display: "flex", justifyContent: "flex-end", gap: 8, background: "var(--color-background-secondary)" }}>
           <button onClick={onCancel} style={btn}>Cancel</button>
           <button
-            onClick={() => onConfirm({
-              revision: revision.trim(),
-              strategy,
-              prune,
-              dryRun,
-              force,
-              replace,
-              serverSideApply,
-              resources: syncResources,
-            })}
+            onClick={() => {
+              const options = {
+                revision: revision.trim(),
+                strategy,
+                prune,
+                dryRun,
+                force,
+                replace,
+                serverSideApply,
+                resources: syncResources,
+              };
+              // On a protected cluster, register the typed confirmation with
+              // the backend first - SyncApp consumes a one-shot grant there.
+              if (isProtected) {
+                void armProtected(cluster, typed).then((r) => {
+                  if (r.ok) onConfirm(options);
+                });
+              } else {
+                onConfirm(options);
+              }
+            }}
             disabled={!armed}
             style={syncBtn(!armed)}
           >

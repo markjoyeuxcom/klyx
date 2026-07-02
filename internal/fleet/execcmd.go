@@ -12,9 +12,14 @@ import "fmt"
 // on nodes that have bash (most distros) while remaining safe on minimal images.
 //
 // Returns an error if kubeContext is empty ("cluster has no kubeconfig context").
+// Names are validated so a flag-shaped or control-character-bearing argument
+// can never reach the argv (or the shell quoting layer above it).
 func (c *ClusterConn) ExecCommand(namespace, pod, container string) ([]string, error) {
 	if c.kubeContext == "" {
 		return nil, fmt.Errorf("cluster has no kubeconfig context")
+	}
+	if err := validateExecNames(namespace, pod, container); err != nil {
+		return nil, err
 	}
 	argv := []string{
 		"kubectl",
@@ -44,6 +49,9 @@ func (c *ClusterConn) DebugCommand(namespace, pod, container string) ([]string, 
 	if c.kubeContext == "" {
 		return nil, fmt.Errorf("cluster has no kubeconfig context")
 	}
+	if err := validateExecNames(namespace, pod, container); err != nil {
+		return nil, err
+	}
 	argv := []string{
 		"kubectl",
 		"--context", c.kubeContext,
@@ -56,4 +64,21 @@ func (c *ClusterConn) DebugCommand(namespace, pod, container string) ([]string, 
 	}
 	argv = append(argv, "--", "sh")
 	return argv, nil
+}
+
+// validateExecNames guards the exec/debug argv builders: namespace and pod are
+// required names; container is optional (empty = default container).
+func validateExecNames(namespace, pod, container string) error {
+	if err := validateK8sName("namespace", namespace); err != nil {
+		return err
+	}
+	if err := validateK8sName("pod", pod); err != nil {
+		return err
+	}
+	if container != "" {
+		if err := validateK8sName("container", container); err != nil {
+			return err
+		}
+	}
+	return nil
 }

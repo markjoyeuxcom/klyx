@@ -165,6 +165,12 @@ func (s *CRDService) GetInstanceDetail(cluster, group, version, plural, namespac
 // currently open in the generic resource detail. dryRun=true asks the apiserver
 // to validate/admit without persisting.
 func (s *CRDService) ApplyResourceYAML(cluster, group, version, plural, kind, scope, namespace, name, yaml string, dryRun bool) ActionResultDTO {
+	// Dry-run mutates nothing; only a real apply consumes the protection grant.
+	if !dryRun {
+		if err := checkProtected(cluster); err != nil {
+			return ActionResultDTO{Error: err.Error()}
+		}
+	}
 	conn, ok := s.lookup(cluster)
 	if !ok {
 		return ActionResultDTO{Error: "cluster not connected: " + cluster}

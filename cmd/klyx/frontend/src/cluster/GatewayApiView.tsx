@@ -73,6 +73,10 @@ export function GatewayApiView({ cluster }: { cluster: string }) {
   if (gateway) return <GatewayTopology cluster={cluster} gateway={gateway} />;
 
   if (listLoading && gateways.length === 0) return <div style={empty}>Loading Gateways…</div>;
+  // A failed list on a served API is an error, never "no Gateways".
+  if (sameCluster && net.listError) {
+    return <div style={{ ...empty, color: "var(--color-text-danger)" }}>Could not list Gateways: {net.listError}</div>;
+  }
   if (!served) return <div style={empty}>Gateway API is not installed on this cluster.</div>;
   if (gateways.length === 0) return <div style={empty}>No Gateways found.</div>;
 

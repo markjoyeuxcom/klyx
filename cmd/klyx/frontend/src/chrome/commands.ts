@@ -9,7 +9,6 @@ import type { ResourceRef, RouteNodeDTO } from "../store/fleet";
 import { openPodDetail } from "../bridge/pods";
 import { openNodeDetail } from "../bridge/nodes";
 import { openHelmRelease } from "../bridge/helm";
-import { listPods } from "../bridge/pods";
 import { getResourceDetail } from "../bridge/gitops";
 import { copyText, getInstanceDetail } from "../bridge/crd";
 import { setThemeChoice, THEMES, toggleTheme } from "../theme/ThemeProvider";
@@ -409,7 +408,10 @@ export function buildCommands(s: FleetStore): Command[] {
       hint: [...n.sources].sort().join(" · "),
       run: () => {
         openSection(s, "pods", n.cluster);
-        void listPods(n.cluster, n.name);
+        // Route the namespace through the store: PodsView re-opens its live
+        // subscription for it. A direct listPods here would be discarded by
+        // the live sub's stale guard (or silently desync the live stream).
+        s.requestPodsNamespace(n.cluster, n.name);
       },
     });
   }

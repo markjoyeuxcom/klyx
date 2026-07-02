@@ -137,6 +137,9 @@ func (s *HelmService) GetHelmValues(cluster, namespace, release string) HelmValu
 
 // HelmRollback rolls back a release to the specified revision.
 func (s *HelmService) HelmRollback(cluster, namespace, release string, revision int) ActionResultDTO {
+	if err := checkProtected(cluster); err != nil {
+		return ActionResultDTO{Error: err.Error()}
+	}
 	conn, ok := s.lookup(cluster)
 	if !ok {
 		return ActionResultDTO{Error: "cluster not connected: " + cluster}

@@ -139,6 +139,11 @@ export function EventsView({ cluster }: { cluster: string }) {
         />
         <button onClick={onRefresh} style={btn}>refresh</button>
         <LiveIndicator live={events.live} />
+        {events.truncated && (
+          <span title="The apiserver returned the 500-event cap in arbitrary order - the newest warnings may be missing. Narrow to a namespace for the full set." style={{ fontSize: 10, color: "var(--color-text-warning)" }}>
+            first 500 only
+          </span>
+        )}
       </div>
 
       {/* Table */}

@@ -65,7 +65,7 @@ type Conn interface {
 	NodeDetail(ctx context.Context, name string) (NodeDetail, error)
 	ListPods(ctx context.Context, namespace string) ([]workloads.PodSummary, error)
 	DeletePod(ctx context.Context, namespace, name string) error
-	ListEvents(ctx context.Context, namespace string) ([]workloads.EventSummary, error)
+	ListEvents(ctx context.Context, namespace string) ([]workloads.EventSummary, bool, error)
 	WatchDirty(ctx context.Context, namespace string, kinds []string, onDirty func(), onLive func(bool)) (stop func(), err error)
 	PodDetail(ctx context.Context, namespace, name string) (PodDetail, error)
 	PodLogStream(ctx context.Context, namespace, pod, container string, previous bool, tailLines int64) (io.ReadCloser, error)

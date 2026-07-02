@@ -12,6 +12,7 @@ export type ClusterDTO = {
   gitopsReason: string;
   fluxPresent?: boolean;
   fluxHealthy?: boolean;
+  argoPresent?: boolean;
   networkTier: string;
   networkReason: string;
   gatewayAPIVersion?: string;
@@ -145,6 +146,7 @@ export type GitOpsSlice = {
   resources: FluxResourceDTO[];
   sources: FluxSourceDTO[];
   loading: boolean;
+  watchError?: string | null; // watch failing before sync (RBAC, CRD mismatch) - not an empty list
   expandedKey: string | null;
   detail: ResourceDetailDTO | null;
 };
@@ -196,6 +198,7 @@ export type CertManagerSlice = {
   certificates: CertificateDTO[];
   issuers: IssuerDTO[];
   loading: boolean;
+  watchError?: string | null; // watch failing before sync (RBAC, CRD mismatch) - not an empty list
   selectedKey: string | null; // "<namespace>/<name>" of the inspected certificate
   chain: CertChainDTO | null; // resolved on demand for the selected cert
   chainLoading: boolean;
@@ -264,10 +267,14 @@ export type PodsSlice = {
   detail: PodDetailDTO | null;
   detailLoading: boolean;
   live: boolean;
+  // Palette "jump to namespace": consumed by PodsView, which re-opens its live
+  // subscription for the namespace. A raced one-shot list would be discarded
+  // by the live sub's stale guard - the subscription itself must move.
+  nsRequest?: { cluster: string; namespace: string } | null;
 };
 
 export type EventRowDTO = { type: "Normal" | "Warning"; reason: string; message: string; count: number; namespace: string; kind: string; name: string; lastSeenUnix: number; firstSeenUnix: number };
-export type EventsResultDTO = { namespaces: string[]; events: EventRowDTO[] };
+export type EventsResultDTO = { namespaces: string[]; events: EventRowDTO[]; truncated?: boolean };
 export type EventsSlice = {
   cluster: string | null;
   namespace: string;
@@ -277,6 +284,7 @@ export type EventsSlice = {
   warningsOnly: boolean;
   search: string;
   live: boolean;
+  truncated?: boolean; // the 500-event cap hit: newest warnings may be missing
 };
 
 export type ResourceRef = { group: string; version: string; plural: string; kind: string; scope: string };
@@ -339,7 +347,7 @@ export const crdCountKey = (group: string, version: string, plural: string) => `
 
 export type GatewayAddressDTO = { type: string; value: string };
 export type GatewayRefDTO = { namespace: string; name: string; className: string; addresses?: GatewayAddressDTO[]; listeners?: ListenerDTO[]; accepted: boolean; programmed: boolean };
-export type GatewayListDTO = { gatewayAPIServed: boolean; gateways: GatewayRefDTO[] };
+export type GatewayListDTO = { gatewayAPIServed: boolean; gateways: GatewayRefDTO[]; error?: string };
 export type PolicyDetailDTO = { key: string; value: string };
 export type PolicyRefDTO = { kind: string; namespace: string; name: string; targetKind: string; targetNamespace: string; targetName: string; targetSectionName: string; summary: string; details: PolicyDetailDTO[]; inferred: boolean; match: string };
 export type CertificateRefDTO = { group: string; kind: string; namespace: string; name: string };
@@ -362,6 +370,7 @@ export type NetworkSlice = {
   served: boolean;
   gateways: GatewayRefDTO[];
   listLoading: boolean;
+  listError?: string | null; // list failed on a served API - distinct from "no Gateways"
   selected: GatewayRef | null;
   topology: TopologyDTO | null;
   topologyLoading: boolean;
@@ -502,14 +511,14 @@ type FleetState = {
   setInstanceDetail: (d: InstanceDetailDTO) => void;
   clearInstanceDetail: () => void;
   gitops: GitOpsSlice;
-  setGitOps: (cluster: string, resources: FluxResourceDTO[], sources: FluxSourceDTO[]) => void;
+  setGitOps: (cluster: string, resources: FluxResourceDTO[], sources: FluxSourceDTO[], watchError?: string) => void;
   setGitOpsLoading: (cluster: string) => void;
   clearGitOps: () => void;
   expand: (key: string) => void;
   collapse: () => void;
   setDetail: (d: ResourceDetailDTO) => void;
   certmanager: CertManagerSlice;
-  setCertManager: (cluster: string, certificates: CertificateDTO[], issuers: IssuerDTO[]) => void;
+  setCertManager: (cluster: string, certificates: CertificateDTO[], issuers: IssuerDTO[], watchError?: string) => void;
   setCertManagerLoading: (cluster: string) => void;
   clearCertManager: () => void;
   selectCertificate: (key: string | null) => void;
@@ -568,6 +577,8 @@ type FleetState = {
   setPodDetail: (ref: PodRef, detail: PodDetailDTO) => void;
   setPodsLive: (cluster: string, namespace: string, live: boolean) => void;
   clearPods: () => void;
+  requestPodsNamespace: (cluster: string, namespace: string) => void;
+  clearPodsNsRequest: () => void;
   events: EventsSlice;
   setEventsLoading: (cluster: string, namespace: string) => void;
   setEvents: (cluster: string, namespace: string, result: EventsResultDTO) => void;
@@ -688,18 +699,18 @@ export const useFleet = create<FleetState>((set) => ({
   }),
   setInstanceDetail: (detail) => set((s) => ({ instanceDetail: { ...s.instanceDetail, detail, loading: false } })),
   clearInstanceDetail: () => set({ instanceDetail: { ref: null, detail: null, loading: false } }),
-  gitops: { cluster: null, resources: [], sources: [], loading: false, expandedKey: null, detail: null },
-  setGitOps: (cluster, resources, sources) => set((s) => ({ gitops: { ...s.gitops, cluster, resources, sources, loading: false } })),
-  setGitOpsLoading: (cluster) => set((s) => ({ gitops: { ...s.gitops, cluster, resources: [], sources: [], loading: true } })),
-  clearGitOps: () => set({ gitops: { cluster: null, resources: [], sources: [], loading: false, expandedKey: null, detail: null } }),
+  gitops: { cluster: null, resources: [], sources: [], loading: false, watchError: null, expandedKey: null, detail: null },
+  setGitOps: (cluster, resources, sources, watchError) => set((s) => ({ gitops: { ...s.gitops, cluster, resources, sources, loading: false, watchError: watchError || null } })),
+  setGitOpsLoading: (cluster) => set((s) => ({ gitops: { ...s.gitops, cluster, resources: [], sources: [], loading: true, watchError: null } })),
+  clearGitOps: () => set({ gitops: { cluster: null, resources: [], sources: [], loading: false, watchError: null, expandedKey: null, detail: null } }),
   expand: (key) => set((s) => ({ gitops: { ...s.gitops, expandedKey: key, detail: null } })),
   collapse: () => set((s) => ({ gitops: { ...s.gitops, expandedKey: null, detail: null } })),
   setDetail: (d) => set((s) => ({ gitops: { ...s.gitops, detail: d } })),
 
-  certmanager: { cluster: null, certificates: [], issuers: [], loading: false, selectedKey: null, chain: null, chainLoading: false },
-  setCertManager: (cluster, certificates, issuers) => set((s) => ({ certmanager: { ...s.certmanager, cluster, certificates, issuers, loading: false } })),
-  setCertManagerLoading: (cluster) => set((s) => ({ certmanager: { ...s.certmanager, cluster, certificates: [], issuers: [], loading: true, selectedKey: null, chain: null, chainLoading: false } })),
-  clearCertManager: () => set({ certmanager: { cluster: null, certificates: [], issuers: [], loading: false, selectedKey: null, chain: null, chainLoading: false } }),
+  certmanager: { cluster: null, certificates: [], issuers: [], loading: false, watchError: null, selectedKey: null, chain: null, chainLoading: false },
+  setCertManager: (cluster, certificates, issuers, watchError) => set((s) => ({ certmanager: { ...s.certmanager, cluster, certificates, issuers, loading: false, watchError: watchError || null } })),
+  setCertManagerLoading: (cluster) => set((s) => ({ certmanager: { ...s.certmanager, cluster, certificates: [], issuers: [], loading: true, watchError: null, selectedKey: null, chain: null, chainLoading: false } })),
+  clearCertManager: () => set({ certmanager: { cluster: null, certificates: [], issuers: [], loading: false, watchError: null, selectedKey: null, chain: null, chainLoading: false } }),
   selectCertificate: (key) => set((s) => ({ certmanager: { ...s.certmanager, selectedKey: key, chain: null, chainLoading: key !== null } })),
   setCertChain: (chain) => set((s) => ({ certmanager: { ...s.certmanager, chain, chainLoading: false } })),
   actionStatus: null,
@@ -723,7 +734,7 @@ export const useFleet = create<FleetState>((set) => ({
       if (s.route.name !== "cluster") return {};
       // Crossing clusters (palette jump straight to a topology): drop the
       // previous cluster's gateway list along with stamping the new owner.
-      const base = s.network.cluster === s.route.cluster ? s.network : { ...s.network, cluster: s.route.cluster, served: false, gateways: [], listLoading: false };
+      const base = s.network.cluster === s.route.cluster ? s.network : { ...s.network, cluster: s.route.cluster, served: false, gateways: [], listLoading: false, listError: null };
       return {
         route: { name: "cluster", cluster: s.route.cluster, section: "gatewayApi", gateway: { namespace, name } },
         network: { ...base, selected: { namespace, name }, topology: null, topologyLoading: true, selectedRoute: null, routeMetrics: {}, routeMetricsStatus: null, routeMetricsStale: false },
@@ -731,19 +742,19 @@ export const useFleet = create<FleetState>((set) => ({
     }),
   closeGateway: () =>
     set((s) => (s.route.name === "cluster" ? { route: { name: "cluster", cluster: s.route.cluster, section: "gatewayApi" } } : {})),
-  network: { cluster: null, served: false, gateways: [], listLoading: false, selected: null, topology: null, topologyLoading: false, selectedRoute: null, routeMetrics: {}, routeMetricsStatus: null, routeMetricsStale: false },
+  network: { cluster: null, served: false, gateways: [], listLoading: false, listError: null, selected: null, topology: null, topologyLoading: false, selectedRoute: null, routeMetrics: {}, routeMetricsStatus: null, routeMetricsStale: false },
   setGatewaysLoading: (cluster) => set((s) => {
-    if (s.network.cluster === cluster) return { network: { ...s.network, listLoading: true } };
+    if (s.network.cluster === cluster) return { network: { ...s.network, listLoading: true, listError: null } };
     // Cluster switch: drop the previous cluster's gateways instead of rendering
     // them under the new cluster while the fresh list is in flight.
-    return { network: { cluster, served: false, gateways: [], listLoading: true, selected: null, topology: null, topologyLoading: false, selectedRoute: null, routeMetrics: {}, routeMetricsStatus: null, routeMetricsStale: false } };
+    return { network: { cluster, served: false, gateways: [], listLoading: true, listError: null, selected: null, topology: null, topologyLoading: false, selectedRoute: null, routeMetrics: {}, routeMetricsStatus: null, routeMetricsStale: false } };
   }),
   setGateways: (cluster, l) => set((s) => {
     if (s.network.cluster !== cluster) return {}; // stale in-flight response
-    return { network: { ...s.network, served: l.gatewayAPIServed, gateways: l.gateways ?? [], listLoading: false } };
+    return { network: { ...s.network, served: l.gatewayAPIServed, gateways: l.gateways ?? [], listLoading: false, listError: l.error || null } };
   }),
   setTopologyLoading: (cluster, ref) => set((s) => {
-    const base = s.network.cluster === cluster ? s.network : { ...s.network, cluster, served: false, gateways: [], listLoading: false };
+    const base = s.network.cluster === cluster ? s.network : { ...s.network, cluster, served: false, gateways: [], listLoading: false, listError: null };
     return { network: { ...base, selected: ref, topology: null, topologyLoading: true, selectedRoute: null, routeMetrics: {}, routeMetricsStatus: null, routeMetricsStale: false } };
   }),
   setTopology: (topology) => set((s) => ({ network: { ...s.network, topology, topologyLoading: false } })),
@@ -834,14 +845,16 @@ export const useFleet = create<FleetState>((set) => ({
       if (s.pods.cluster !== cluster || s.pods.namespace !== namespace) return {};
       return { pods: { ...s.pods, live } };
     }),
-  clearPods: () => set({ pods: { cluster: null, namespace: "", items: [], namespaces: [], loading: false, needsAttention: false, search: "", selected: null, detail: null, detailLoading: false, live: false } }),
-  events: { cluster: null, namespace: "", items: [], namespaces: [], loading: false, warningsOnly: false, search: "", live: false },
+  clearPods: () => set((s) => ({ pods: { cluster: null, namespace: "", items: [], namespaces: [], loading: false, needsAttention: false, search: "", selected: null, detail: null, detailLoading: false, live: false, nsRequest: s.pods.nsRequest } })),
+  requestPodsNamespace: (cluster, namespace) => set((s) => ({ pods: { ...s.pods, nsRequest: { cluster, namespace } } })),
+  clearPodsNsRequest: () => set((s) => ({ pods: { ...s.pods, nsRequest: null } })),
+  events: { cluster: null, namespace: "", items: [], namespaces: [], loading: false, warningsOnly: false, search: "", live: false, truncated: false },
   setEventsLoading: (cluster, namespace) => set((s) => ({ events: { ...s.events, cluster, namespace, loading: true } })),
   setEvents: (cluster, namespace, result) => set((s) => {
     let namespaces = s.events.namespaces;
     if (namespace === "") namespaces = result.namespaces ?? [];
     if (namespaces.length === 0 && namespace !== "") namespaces = [namespace];
-    return { events: { ...s.events, cluster, namespace, items: result.events ?? [], namespaces, loading: false } };
+    return { events: { ...s.events, cluster, namespace, items: result.events ?? [], namespaces, loading: false, truncated: result.truncated ?? false } };
   }),
   toggleWarningsOnly: () => set((s) => ({ events: { ...s.events, warningsOnly: !s.events.warningsOnly } })),
   setWarningsOnly: (v) => set((s) => ({ events: { ...s.events, warningsOnly: v } })),
@@ -851,7 +864,7 @@ export const useFleet = create<FleetState>((set) => ({
       if (s.events.cluster !== cluster || s.events.namespace !== namespace) return {};
       return { events: { ...s.events, live } };
     }),
-  clearEvents: () => set({ events: { cluster: null, namespace: "", items: [], namespaces: [], loading: false, warningsOnly: false, search: "", live: false } }),
+  clearEvents: () => set({ events: { cluster: null, namespace: "", items: [], namespaces: [], loading: false, warningsOnly: false, search: "", live: false, truncated: false } }),
   nodes: { cluster: null, items: [], loading: false, selected: null, detail: null, detailLoading: false },
   setNodesLoading: (cluster) => set((s) => ({ nodes: { ...s.nodes, cluster, loading: true } })),
   setNodes: (cluster, result) => set((s) => ({ nodes: { ...s.nodes, cluster, items: result.nodes ?? [], loading: false } })),

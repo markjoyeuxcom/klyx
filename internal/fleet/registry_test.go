@@ -88,8 +88,8 @@ func (f *fakeConn) ListPods(context.Context, string) ([]workloads.PodSummary, er
 	return nil, nil
 }
 func (f *fakeConn) DeletePod(context.Context, string, string) error { return nil }
-func (f *fakeConn) ListEvents(context.Context, string) ([]workloads.EventSummary, error) {
-	return nil, nil
+func (f *fakeConn) ListEvents(context.Context, string) ([]workloads.EventSummary, bool, error) {
+	return nil, false, nil
 }
 func (f *fakeConn) WatchDirty(context.Context, string, []string, func(), func(bool)) (func(), error) {
 	return func() {}, nil

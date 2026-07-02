@@ -73,4 +73,35 @@ func TestDrainNodeCmd_BuildsArgs(t *testing.T) {
 	checkArg("--ignore-daemonsets")
 	checkArg("--delete-emptydir-data")
 	checkArg("--timeout=120s")
+	// The node name must come after the "--" flag terminator so it can never
+	// be parsed as a flag.
+	sep := -1
+	for i, a := range args {
+		if a == "--" {
+			sep = i
+		}
+	}
+	if sep == -1 || args[len(args)-1] != "node-3" || sep != len(args)-2 {
+		t.Errorf("expected trailing \"-- node-3\", got %v", args)
+	}
+}
+
+func TestDrainNodeCmd_RefusesEmptyContext(t *testing.T) {
+	// Empty kubeContext would make kubectl fall back to current-context - a
+	// drain aimed at whatever cluster the user's terminal happens to point at.
+	conn := &ClusterConn{name: "test", kubeContext: ""}
+	if _, err := conn.DrainNodeCmd("node-3"); err == nil {
+		t.Fatal("expected error for empty kubeContext")
+	}
+}
+
+func TestDrainNodeCmd_RefusesInvalidNames(t *testing.T) {
+	conn := &ClusterConn{name: "test", kubeContext: "my-ctx"}
+	// Flag-shaped and control-character names must be refused before they can
+	// reach an argv ("--all" would drain every node in the cluster).
+	for _, name := range []string{"--all", "-l", "node 3", "node\nreboot", "Node3", ""} {
+		if _, err := conn.DrainNodeCmd(name); err == nil {
+			t.Errorf("expected error for node name %q", name)
+		}
+	}
 }

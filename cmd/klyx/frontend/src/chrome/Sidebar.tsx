@@ -216,6 +216,28 @@ const EXPANDED_MENU: ExpandedGroup[] = [
   },
 ];
 
+// Capability gating (design principle 7: render only what's installed).
+// Inside a cluster, tool-specific nav is hidden when detection says the tool
+// is absent; outside a cluster (fleet/settings) everything shows disabled as
+// before. Detection lag just means a group appears when the cluster syncs.
+type ClusterCaps = { flux: boolean; argo: boolean; certManager: boolean; gatewayAPI: boolean };
+
+const ALL_CAPS: ClusterCaps = { flux: true, argo: true, certManager: true, gatewayAPI: true };
+
+// Groups/sections owned by a single tool; everything else is always shown.
+const GROUP_CAPS: Record<string, keyof ClusterCaps> = {
+  "Flux CD": "flux",
+  "Argo CD": "argo",
+  "cert-manager": "certManager",
+  "Gateway API": "gatewayAPI",
+};
+const SECTION_CAPS: Partial<Record<ClusterSection, keyof ClusterCaps>> = {
+  gitops: "flux",
+  argo: "argo",
+  certs: "certManager",
+  gatewayApi: "gatewayAPI",
+};
+
 function readPersistedExpanded(): boolean {
   try { return localStorage.getItem("klyx-sidebar-expanded") === "1"; } catch { return false; }
 }
@@ -244,6 +266,17 @@ export function Sidebar() {
   const openWorkloads = useFleet((s) => s.openWorkloads);
   const workloadKindFilter = useFleet((s) => s.workloads.kindFilter);
   const inCluster = route.name === "cluster";
+  const current = useFleet((s) => (route.name === "cluster" ? s.clusters.find((c) => c.name === route.cluster) : undefined));
+  // Outside a cluster (or before its DTO lands) show everything - gating only
+  // ever applies to a cluster whose capabilities have been detected.
+  const caps: ClusterCaps = inCluster && current
+    ? {
+        flux: current.fluxPresent ?? false,
+        argo: current.argoPresent ?? false,
+        certManager: current.certManagerPresent ?? false,
+        gatewayAPI: Boolean(current.gatewayAPIVersion),
+      }
+    : ALL_CAPS;
 
   const [expanded, setExpanded] = useState<boolean>(readPersistedExpanded);
 
@@ -296,6 +329,7 @@ export function Sidebar() {
           <ExpandedMenu
             route={route}
             inCluster={inCluster}
+            caps={caps}
             forwardsCount={forwardsCount}
             onFleet={openFleet}
             onForwards={openForwards}
@@ -310,6 +344,7 @@ export function Sidebar() {
           <CollapsedMenu
             route={route}
             inCluster={inCluster}
+            caps={caps}
             forwardsCount={forwardsCount}
             onFleet={openFleet}
             onForwards={openForwards}
@@ -365,6 +400,7 @@ export function Sidebar() {
 function CollapsedMenu({
   route,
   inCluster,
+  caps,
   forwardsCount,
   onFleet,
   onForwards,
@@ -372,11 +408,20 @@ function CollapsedMenu({
 }: {
   route: Route;
   inCluster: boolean;
+  caps: ClusterCaps;
   forwardsCount: number;
   onFleet: () => void;
   onForwards: () => void;
   onSection: (section: ClusterSection) => void;
 }) {
+  // Capability-gate the rail: hide tool sections detection says are absent.
+  const groups = SECTION_GROUPS
+    .map((group) => group.filter(({ section }) => {
+      const cap = SECTION_CAPS[section];
+      return !cap || caps[cap];
+    }))
+    .filter((group) => group.length > 0);
+
   return (
     <>
       <RailButton label="Fleet" active={route.name === "fleet"} onClick={onFleet} expanded={false}>
@@ -391,7 +436,7 @@ function CollapsedMenu({
         <IconArrowsLeftRight size={16} stroke={1.5} />
       </RailButton>
 
-      {SECTION_GROUPS.map((group, gi) => (
+      {groups.map((group, gi) => (
         <div key={gi}>
           {gi > 0 && <SidebarSeparator />}
           {group.map(({ section, Icon }) => (
@@ -415,6 +460,7 @@ function CollapsedMenu({
 function ExpandedMenu({
   route,
   inCluster,
+  caps,
   forwardsCount,
   onFleet,
   onForwards,
@@ -427,6 +473,7 @@ function ExpandedMenu({
 }: {
   route: Route;
   inCluster: boolean;
+  caps: ClusterCaps;
   forwardsCount: number;
   onFleet: () => void;
   onForwards: () => void;
@@ -438,6 +485,13 @@ function ExpandedMenu({
   workloadKindFilter: Record<WorkloadKind, boolean>;
 }) {
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(() => new Set(readPersistedCollapsedGroups()));
+
+  // Capability-gate whole tool groups: a cluster without cert-manager gets no
+  // cert-manager menu that dead-ends in "not detected" screens.
+  const menu = EXPANDED_MENU.filter((group) => {
+    const cap = GROUP_CAPS[group.label];
+    return !cap || caps[cap];
+  });
 
   const toggleGroup = (label: string) => {
     setCollapsedGroups((prev) => {
@@ -480,7 +534,7 @@ function ExpandedMenu({
 
   return (
     <div style={{ width: "100%", paddingBottom: 4 }}>
-      {EXPANDED_MENU.map((group, gi) => {
+      {menu.map((group, gi) => {
         const collapsed = collapsedGroups.has(group.label);
         const groupActive = group.items.some((item) => item.active !== "none" && isExpandedItemActive(route, item, workloadKindFilter));
         return (

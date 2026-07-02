@@ -57,6 +57,9 @@ func NewNodeOpsService(lookup func(string) (NodeOpsConn, bool), em Emitter) *Nod
 
 // Cordon cordons (unschedulable=true) or uncordons (unschedulable=false) a node.
 func (s *NodeOpsService) Cordon(cluster, node string, cordon bool) ActionResultDTO {
+	if err := checkProtected(cluster); err != nil {
+		return ActionResultDTO{Error: err.Error()}
+	}
 	conn, ok := s.lookup(cluster)
 	if !ok {
 		return ActionResultDTO{Error: "cluster not connected: " + cluster}
@@ -91,6 +94,9 @@ func (p *drainPipe) Close() error {
 // would leave its node cordoned and half-drained while reporting a clean
 // stream end (same policy as forwards: never silently kill user-managed work).
 func (s *NodeOpsService) StartDrain(cluster, node string) OpenLogStreamResultDTO {
+	if err := checkProtected(cluster); err != nil {
+		return OpenLogStreamResultDTO{Error: err.Error()}
+	}
 	conn, ok := s.lookup(cluster)
 	if !ok {
 		return OpenLogStreamResultDTO{Error: "cluster not connected: " + cluster}

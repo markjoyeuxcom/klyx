@@ -25,6 +25,9 @@ func (c *ClusterConn) HelmHistory(ctx context.Context, namespace, release string
 	if c.kubeContext == "" {
 		return nil, fmt.Errorf("HelmHistory: kubeContext not set on conn %q", c.name)
 	}
+	if err := validateHelmNames(namespace, release); err != nil {
+		return nil, err
+	}
 	return helmcli.History(ctx, helmRunner, c.kubeContext, namespace, release)
 }
 
@@ -34,6 +37,9 @@ func (c *ClusterConn) HelmValues(ctx context.Context, namespace, release string)
 	if c.kubeContext == "" {
 		return "", fmt.Errorf("HelmValues: kubeContext not set on conn %q", c.name)
 	}
+	if err := validateHelmNames(namespace, release); err != nil {
+		return "", err
+	}
 	return helmcli.GetValues(ctx, helmRunner, c.kubeContext, namespace, release)
 }
 
@@ -42,5 +48,18 @@ func (c *ClusterConn) HelmRollback(ctx context.Context, namespace, release strin
 	if c.kubeContext == "" {
 		return fmt.Errorf("HelmRollback: kubeContext not set on conn %q", c.name)
 	}
+	if err := validateHelmNames(namespace, release); err != nil {
+		return err
+	}
 	return helmcli.Rollback(ctx, helmRunner, c.kubeContext, namespace, release, revision)
+}
+
+// validateHelmNames guards the helm CLI argv: namespace and release names come
+// from the webview and are spliced into a command line. Helm release names are
+// a strict subset of DNS-1123 subdomains, so real inputs always pass.
+func validateHelmNames(namespace, release string) error {
+	if err := validateK8sName("namespace", namespace); err != nil {
+		return err
+	}
+	return validateK8sName("release", release)
 }

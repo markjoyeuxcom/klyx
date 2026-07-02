@@ -40,12 +40,12 @@ const makeContainer = (overrides = {}) => ({
 
 const healthy: PodSummaryDTO = {
   namespace: "monitoring", name: "grafana-xyz", ready: true, phase: "Running", reason: "", rank: "healthy",
-  restarts: 0, node: "node-1", ip: "10.0.0.1", ownerKind: "ReplicaSet", ownerName: "grafana-rs",
+  restarts: 0, node: "node-1", ip: "10.0.0.1", ownerKind: "Deployment", ownerName: "grafana",
   ageSeconds: 3600, containers: [makeContainer()],
 };
 const broken: PodSummaryDTO = {
   namespace: "default", name: "api-crash", ready: false, phase: "Running", reason: "CrashLoopBackOff", rank: "unhealthy",
-  restarts: 7, node: "node-2", ip: "10.0.0.2", ownerKind: "ReplicaSet", ownerName: "api-rs",
+  restarts: 7, node: "node-2", ip: "10.0.0.2", ownerKind: "Deployment", ownerName: "api",
   ageSeconds: 600, containers: [makeContainer({ ready: false, restarts: 7, state: "waiting:CrashLoopBackOff" })],
 };
 
@@ -356,7 +356,7 @@ describe("PodsView", () => {
   }
 
   it("delete pod button opens confirm dialog with controller-recreate body", () => {
-    openDetailPanel(healthy); // healthy has ownerKind="ReplicaSet"
+    openDetailPanel(healthy); // healthy has ownerKind="Deployment" (backend-resolved)
     const { getByText } = render(<PodsView cluster="homelab" />);
     fireEvent.click(getByText("delete pod"));
     expect(getByText(/the controller will recreate it/i)).toBeTruthy();
@@ -381,10 +381,20 @@ describe("PodsView", () => {
     expect(deletePod).toHaveBeenCalledWith("homelab", "monitoring", "grafana-xyz");
   });
 
-  it("restart owner button is visible for ReplicaSet owner", () => {
-    openDetailPanel(healthy); // healthy has ownerKind="ReplicaSet"
+  it("restart owner button is visible for Deployment owner", () => {
+    openDetailPanel(healthy); // healthy has ownerKind="Deployment" (backend-resolved)
     const { getByText } = render(<PodsView cluster="homelab" />);
     expect(getByText("restart owner")).toBeTruthy();
+  });
+
+  it("restart owner button is NOT visible for a bare ReplicaSet owner", () => {
+    // The backend resolves RS -> Deployment; a pod still showing ReplicaSet is
+    // under a bare RS with no restartable controller.
+    const bareRs: PodSummaryDTO = { ...healthy, ownerKind: "ReplicaSet", ownerName: "web-7d4b9c6f9" };
+    const detailRs = { ...fakeDetail, summary: bareRs };
+    openDetailPanel(bareRs, detailRs);
+    const { queryByText } = render(<PodsView cluster="homelab" />);
+    expect(queryByText("restart owner")).toBeNull();
   });
 
   it("restart owner button is NOT visible for ownerKind='' (standalone pod)", () => {
@@ -403,23 +413,21 @@ describe("PodsView", () => {
     expect(queryByText("restart owner")).toBeNull();
   });
 
-  it("RS->Deployment name derivation: strips pod-template-hash suffix", () => {
-    // Pod owned by RS "web-7d4b9c6f9" — restart should target Deployment "web".
-    const rsPod: PodSummaryDTO = {
+  it("restart dispatches the backend-resolved owner verbatim (no name guessing)", () => {
+    const deployPod: PodSummaryDTO = {
       ...healthy,
       namespace: "prod", name: "web-7d4b9c6f9-abc",
-      ownerKind: "ReplicaSet", ownerName: "web-7d4b9c6f9",
+      ownerKind: "Deployment", ownerName: "web",
     };
-    const detailRs = { ...fakeDetail, summary: rsPod };
-    seed([rsPod]);
+    const detailDeploy = { ...fakeDetail, summary: deployPod };
+    seed([deployPod]);
     useFleet.setState((s) => ({
-      pods: { ...s.pods, selected: { namespace: "prod", name: "web-7d4b9c6f9-abc" }, detail: detailRs, detailLoading: false },
+      pods: { ...s.pods, selected: { namespace: "prod", name: "web-7d4b9c6f9-abc" }, detail: detailDeploy, detailLoading: false },
     }));
     const { getByText, getAllByRole } = render(<PodsView cluster="homelab" />);
     fireEvent.click(getByText("restart owner"));
     const confirmBtns = getAllByRole("button", { name: "Restart" });
     fireEvent.click(confirmBtns[confirmBtns.length - 1]);
-    // Strip trailing hash segment "7d4b9c6f9" -> "web"
     expect(rolloutRestart).toHaveBeenCalledWith("homelab", "Deployment", "prod", "web");
   });
 
@@ -540,6 +548,24 @@ describe("PodsView", () => {
   it("openLivePods is called on mount (replaces listPods)", () => {
     render(<PodsView cluster="homelab" />);
     expect(openLivePods).toHaveBeenCalledWith("homelab", "");
+  });
+
+  it("palette namespace request re-opens the live subscription for that namespace", () => {
+    // A pending nsRequest (set by the ⌘K namespace jump before the view
+    // mounts) must move the live subscription - a one-shot list would be
+    // dropped by the sub's stale guard.
+    useFleet.getState().requestPodsNamespace("homelab", "payments");
+    render(<PodsView cluster="homelab" />);
+    expect(openLivePods).toHaveBeenCalledWith("homelab", "payments");
+    // The request is consumed.
+    expect(useFleet.getState().pods.nsRequest).toBeNull();
+  });
+
+  it("a namespace request for another cluster is discarded", () => {
+    useFleet.getState().requestPodsNamespace("other-cluster", "payments");
+    render(<PodsView cluster="homelab" />);
+    expect(openLivePods).not.toHaveBeenCalledWith("homelab", "payments");
+    expect(useFleet.getState().pods.nsRequest).toBeNull();
   });
 
   it("live=true renders green live indicator", () => {

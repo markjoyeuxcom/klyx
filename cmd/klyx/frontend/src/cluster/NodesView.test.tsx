@@ -15,6 +15,12 @@ vi.mock("../bridge/nodes", () => ({
 }));
 import { openNodeDetail, cordonNode, startDrain, cancelDrain } from "../bridge/nodes";
 
+// ConfirmDialog registers protected-cluster grants via the config bridge;
+// mock it so no Wails runtime (bindings chain) is needed.
+vi.mock("../bridge/configsvc", () => ({
+  armProtected: vi.fn(async () => ({ ok: true, error: "" })),
+}));
+
 // Mock the Wails Events.On used by DrainModal.
 vi.mock("@wailsio/runtime", () => ({
   Events: {

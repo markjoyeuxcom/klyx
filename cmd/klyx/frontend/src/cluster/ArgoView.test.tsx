@@ -77,6 +77,9 @@ describe("ArgoView", () => {
     expect(getByText("Prune")).toBeTruthy();
     fireEvent.change(getByLabelText("revision git ref"), { target: { value: "feature/test" } });
     fireEvent.click(getByText("Dry-run"));
+    // Prune deletes live resources: it must default OFF and require an
+    // explicit opt-in click per sync.
+    fireEvent.click(getByText("Prune"));
     fireEvent.click(getByLabelText("select Deployment console-dev/console"));
     fireEvent.click(getByRole("button", { name: "Synchronize" }));
     expect(syncArgoApp).toHaveBeenCalledWith("homelab-nelli", "argocd", "ollama-prod", expect.objectContaining({
@@ -88,6 +91,16 @@ describe("ArgoView", () => {
       replace: false,
       serverSideApply: false,
       resources: [expect.objectContaining({ kind: "Deployment", namespace: "console-dev", name: "console" })],
+    }));
+  });
+
+  it("sync defaults to prune off", () => {
+    seed([broken]);
+    const { getAllByRole, getByRole } = render(<ArgoView cluster="homelab-nelli" />);
+    fireEvent.click(getAllByRole("button", { name: "sync" })[0]);
+    fireEvent.click(getByRole("button", { name: "Synchronize" }));
+    expect(syncArgoApp).toHaveBeenCalledWith("homelab-nelli", "argocd", "ollama-prod", expect.objectContaining({
+      prune: false,
     }));
   });
 

@@ -19,6 +19,9 @@ type GitOpsConn interface {
 	GitOpsResources() []flux.Resource
 	GitOpsObject(kind, namespace, name string) (*unstructured.Unstructured, bool)
 	GitOpsSources() []flux.Source
+	// GitOpsWatchHealth reports informer sync + the last watch error, so a
+	// failing watch renders as an error instead of an empty list.
+	GitOpsWatchHealth() (synced bool, lastErr string)
 	GitOpsSourceObject(kind, namespace, name string) (*unstructured.Unstructured, bool)
 	FluxEvents(ctx context.Context, kind, ns, name string) ([]workloads.EventSummary, error)
 	FluxAvailable() bool
@@ -47,6 +50,10 @@ type gitOpsPayload struct {
 	Cluster   string            `json:"cluster"`
 	Resources []FluxResourceDTO `json:"resources"`
 	Sources   []FluxSourceDTO   `json:"sources"`
+	// WatchError is set while the watch has not synced AND has recorded an
+	// error (RBAC denied, CRD mismatch): the view must show the failure, not
+	// an empty list. Empty once the informers sync.
+	WatchError string `json:"watchError,omitempty"`
 }
 
 // GitOpsService is bound to JS. Open starts a cluster's lazy watch and pushes
@@ -127,7 +134,11 @@ func (s *GitOpsService) pushLoop(ctx context.Context, cluster string, conn GitOp
 			for _, sr := range srcs {
 				srcDTOs = append(srcDTOs, toSourceDTO(sr))
 			}
-			s.em.Emit(GitOpsUpdatedEvent, gitOpsPayload{Cluster: cluster, Resources: dtos, Sources: srcDTOs})
+			watchErr := ""
+			if synced, lastErr := conn.GitOpsWatchHealth(); !synced && lastErr != "" {
+				watchErr = lastErr
+			}
+			s.em.Emit(GitOpsUpdatedEvent, gitOpsPayload{Cluster: cluster, Resources: dtos, Sources: srcDTOs, WatchError: watchErr})
 		}
 	}
 }

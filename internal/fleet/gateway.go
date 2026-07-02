@@ -169,11 +169,19 @@ func (c *ClusterConn) gatewayAPIServed() bool {
 }
 
 // ListGateways lists Gateways (refs) and whether the Gateway API is served.
+// A list failure on a served API is a real error (auth, network, RBAC) and is
+// returned as one - rendering it as "no Gateways" would be indistinguishable
+// from a genuinely empty cluster. A failure when the group is not advertised
+// is the expected not-installed case (and the fake-discovery fallback in
+// tests) and stays an empty list.
 func (c *ClusterConn) ListGateways(ctx context.Context) ([]gwapi.GatewayRef, bool, error) {
 	served := c.gatewayAPIServed()
 	list, err := c.dyn.Resource(c.gwGVR("gateways")).List(ctx, metav1.ListOptions{})
 	if err != nil {
-		return nil, served, nil // not served / not installed → empty, no hard error
+		if !served {
+			return nil, false, nil
+		}
+		return nil, served, fmt.Errorf("list gateways: %w", err)
 	}
 	out := make([]gwapi.GatewayRef, 0, len(list.Items))
 	for i := range list.Items {

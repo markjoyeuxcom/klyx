@@ -49,6 +49,23 @@ func main() {
 	reg := fleet.NewRegistry(cfg, fleet.DefaultConnFactory(clock.Real{}))
 	reg.Start(ctx)
 
+	// Backend gate for destructive verbs on protected clusters: the frontend
+	// ConfirmDialog arms a one-shot grant (ConfigService.ArmProtected) and each
+	// destructive service method consumes it. The protection set is read once
+	// from the startup config; hot-added clusters are never protected (marking
+	// one protected is a fleet.yaml edit + restart, like the rest of the
+	// startup config).
+	protected := map[string]bool{}
+	for _, cc := range cfg.Clusters {
+		if cc.Protected {
+			protected[cc.Name] = true
+		}
+	}
+	appbridge.SetProtectGuard(appbridge.NewProtectGuard(
+		func(name string) bool { return protected[name] },
+		time.Now,
+	))
+
 	svc := appbridge.NewFleetService(reg, cfg, time.Now)
 
 	em := &emitterAdapter{}

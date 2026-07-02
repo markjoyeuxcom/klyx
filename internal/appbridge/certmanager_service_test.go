@@ -18,6 +18,7 @@ type fakeCertManagerConn struct {
 func (f *fakeCertManagerConn) OpenCertManager()                                   { f.opened++ }
 func (f *fakeCertManagerConn) CloseCertManager()                                  { f.closed++ }
 func (f *fakeCertManagerConn) CertManagerCertificates() []certmanager.Certificate { return f.certs }
+func (f *fakeCertManagerConn) CertManagerWatchHealth() (bool, string)              { return true, "" }
 func (f *fakeCertManagerConn) CertManagerIssuers() []certmanager.Issuer           { return f.iss }
 func (f *fakeCertManagerConn) GetCertificateChain(ctx context.Context, ns, name string) (certmanager.Chain, error) {
 	return f.chain, nil

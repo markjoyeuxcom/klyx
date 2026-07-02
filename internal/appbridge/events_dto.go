@@ -20,4 +20,8 @@ type EventRowDTO struct {
 type EventsResultDTO struct {
 	Namespaces []string      `json:"namespaces"`
 	Events     []EventRowDTO `json:"events"`
+	// Truncated reports that the apiserver held more events than the 500 cap.
+	// The cap slices in etcd key order, so the newest warnings can be missing -
+	// the view must say so rather than present the subset as complete.
+	Truncated bool `json:"truncated"`
 }

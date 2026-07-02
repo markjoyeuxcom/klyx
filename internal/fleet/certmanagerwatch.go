@@ -16,6 +16,7 @@ type certmanagerWatch struct {
 	cancel  context.CancelFunc
 	certInf cache.SharedIndexInformer
 	issInf  map[certmanager.Kind]cache.SharedIndexInformer // Issuer + ClusterIssuer
+	errs    *watchErrTracker
 }
 
 // issuerKinds is the set of cert-manager issuer CRDs Klyx watches alongside
@@ -56,12 +57,16 @@ func (c *ClusterConn) OpenCertManager() {
 
 	gctx, cancel := context.WithCancel(parent)
 	factory := dynamicinformer.NewDynamicSharedInformerFactory(dyn, defaultResync)
+	errs := &watchErrTracker{}
 	certInf := factory.ForResource(certGVR).Informer()
+	trackWatchErrors(certInf, errs)
 
 	issInf := make(map[certmanager.Kind]cache.SharedIndexInformer, len(issuerKinds))
 	for _, k := range issuerKinds {
 		gvr := schema.GroupVersionResource{Group: "cert-manager.io", Version: ver, Resource: k.resource}
-		issInf[k.kind] = factory.ForResource(gvr).Informer()
+		inf := factory.ForResource(gvr).Informer()
+		trackWatchErrors(inf, errs)
+		issInf[k.kind] = inf
 	}
 
 	factory.Start(gctx.Done())
@@ -74,8 +79,22 @@ func (c *ClusterConn) OpenCertManager() {
 		cancel()
 		return
 	}
-	c.certmgr = &certmanagerWatch{cancel: cancel, certInf: certInf, issInf: issInf}
+	c.certmgr = &certmanagerWatch{cancel: cancel, certInf: certInf, issInf: issInf, errs: errs}
 	c.mu.Unlock()
+}
+
+// CertManagerWatchHealth reports whether the Certificate informer has synced
+// and the most recent watch error - the "permanently failing" signal that must
+// render as an error, never as an empty certificate list. Mirrors
+// GitOpsWatchHealth.
+func (c *ClusterConn) CertManagerWatchHealth() (synced bool, lastErr string) {
+	c.mu.RLock()
+	g := c.certmgr
+	c.mu.RUnlock()
+	if g == nil {
+		return false, ""
+	}
+	return g.certInf.HasSynced(), g.errs.lastError()
 }
 
 // CloseCertManager stops the cert-manager informers. Clearing certmgrWanted

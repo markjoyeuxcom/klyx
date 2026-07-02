@@ -309,8 +309,18 @@ func (s *ArgoService) RefreshApp(cluster, namespace, name string) ActionResultDT
 }
 
 // SyncApp starts a sync at the app's target revision (""=HEAD) with Argo's
-// operation options. Prune/force/etc are explicit user choices from the modal.
+// operation options. Prune/force/etc are explicit user choices from the modal
+// (prune defaults OFF there and is never set implicitly - it deletes live
+// resources, so it must be an opt-in per sync; the M6 "never prune" contract
+// was relaxed to opt-in when the sync modal shipped).
 func (s *ArgoService) SyncApp(cluster, namespace, name string, opts ArgoSyncOptionsDTO) ActionResultDTO {
+	// Dry-run mutates nothing; a real sync (prune/force/replace included)
+	// consumes the protection grant.
+	if !opts.DryRun {
+		if err := checkProtected(cluster); err != nil {
+			return ActionResultDTO{Error: err.Error()}
+		}
+	}
 	conn, ok := s.lookup(cluster)
 	if !ok {
 		return ActionResultDTO{Error: "cluster not connected: " + cluster}

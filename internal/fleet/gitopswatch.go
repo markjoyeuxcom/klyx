@@ -3,6 +3,7 @@ package fleet
 import (
 	"context"
 	"sort"
+	"sync"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -18,6 +19,38 @@ type gitopsWatch struct {
 	ksInf  cache.SharedIndexInformer
 	hrInf  cache.SharedIndexInformer
 	srcInf map[flux.Kind]cache.SharedIndexInformer
+	errs   *watchErrTracker
+}
+
+// watchErrTracker records the most recent reflector error for a lazy watch
+// group, so a permanently failing list/watch (RBAC denied, CRD version
+// mismatch) can be surfaced instead of rendering as an empty, error-free view.
+type watchErrTracker struct {
+	mu   sync.Mutex
+	last string
+}
+
+func (t *watchErrTracker) record(err error) {
+	if err == nil {
+		return
+	}
+	t.mu.Lock()
+	t.last = err.Error()
+	t.mu.Unlock()
+}
+
+func (t *watchErrTracker) lastError() string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.last
+}
+
+// trackWatchErrors replaces an informer's default watch-error handler (which
+// only logs) with one that records into the tracker. Must run before Start.
+func trackWatchErrors(inf cache.SharedIndexInformer, t *watchErrTracker) {
+	_ = inf.SetWatchErrorHandler(func(_ *cache.Reflector, err error) {
+		t.record(err)
+	})
 }
 
 // preferredVersion returns the served preferred version for a CRD group, or
@@ -73,8 +106,11 @@ func (c *ClusterConn) OpenGitOps() {
 
 	gctx, cancel := context.WithCancel(parent)
 	factory := dynamicinformer.NewDynamicSharedInformerFactory(dyn, defaultResync)
+	errs := &watchErrTracker{}
 	ksInf := factory.ForResource(ksGVR).Informer()
 	hrInf := factory.ForResource(hrGVR).Informer()
+	trackWatchErrors(ksInf, errs)
+	trackWatchErrors(hrInf, errs)
 
 	// Watch the source kinds alongside ks/hr so a stuck resource's root cause
 	// (a source that is not pulling) is visible without a separate API read.
@@ -82,7 +118,9 @@ func (c *ClusterConn) OpenGitOps() {
 	for _, s := range sourceKinds {
 		ver := preferredVersion(c.typed.Discovery(), s.group, s.fallback)
 		gvr := schema.GroupVersionResource{Group: s.group, Version: ver, Resource: s.resource}
-		srcInf[s.kind] = factory.ForResource(gvr).Informer()
+		inf := factory.ForResource(gvr).Informer()
+		trackWatchErrors(inf, errs)
+		srcInf[s.kind] = inf
 	}
 
 	factory.Start(gctx.Done())
@@ -95,8 +133,22 @@ func (c *ClusterConn) OpenGitOps() {
 		cancel()
 		return
 	}
-	c.gitops = &gitopsWatch{cancel: cancel, ksInf: ksInf, hrInf: hrInf, srcInf: srcInf}
+	c.gitops = &gitopsWatch{cancel: cancel, ksInf: ksInf, hrInf: hrInf, srcInf: srcInf, errs: errs}
 	c.mu.Unlock()
+}
+
+// GitOpsWatchHealth reports whether the primary Flux informers have synced and
+// the most recent watch error. A not-synced watch with an error is the
+// "permanently failing" signal (RBAC denied, CRD mismatch) that must render as
+// an error, never as an empty resource list.
+func (c *ClusterConn) GitOpsWatchHealth() (synced bool, lastErr string) {
+	c.mu.RLock()
+	g := c.gitops
+	c.mu.RUnlock()
+	if g == nil {
+		return false, ""
+	}
+	return g.ksInf.HasSynced() && g.hrInf.HasSynced(), g.errs.lastError()
 }
 
 // sourceKinds is the set of Flux source CRDs Klyx watches, with the fallback

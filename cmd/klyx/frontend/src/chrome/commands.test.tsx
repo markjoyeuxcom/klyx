@@ -20,7 +20,7 @@ vi.mock("../bridge/crd", () => ({
   copyText: vi.fn(),
   getInstanceDetail: vi.fn(),
 }));
-import { openPodDetail, listPods } from "../bridge/pods";
+import { openPodDetail } from "../bridge/pods";
 import { openNodeDetail } from "../bridge/nodes";
 import { openHelmRelease } from "../bridge/helm";
 import { getResourceDetail } from "../bridge/gitops";
@@ -138,13 +138,17 @@ describe("buildCommands", () => {
     expect(openPodDetail).toHaveBeenCalledWith("dev", "team", "api-1");
   });
 
-  it("includes a Namespaces command that lists pods for that namespace", () => {
+  it("includes a Namespaces command that requests the pods namespace", () => {
+    const requestPodsNamespace = vi.fn();
     const s = makeStore({
+      requestPodsNamespace,
       pods: { cluster: "dev", namespaces: ["team"], items: [{ namespace: "team", name: "api-1", phase: "Running", rank: "healthy" }] } as never,
     });
     const ns = buildCommands(s).find((c) => c.id === "ns:team")!;
     ns.run();
-    expect(listPods).toHaveBeenCalledWith("dev", "team");
+    // The jump routes through the store; PodsView moves its live subscription.
+    // A direct listPods would be dropped by the live sub's stale guard.
+    expect(requestPodsNamespace).toHaveBeenCalledWith("dev", "team");
   });
 
   it("collects namespaces from non-pod slices too", () => {

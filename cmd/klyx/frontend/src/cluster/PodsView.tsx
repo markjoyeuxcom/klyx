@@ -76,6 +76,18 @@ export function PodsView({ cluster }: { cluster: string }) {
     };
   }, [cluster]);
 
+  // Palette "jump to namespace": honor the request by re-opening the live
+  // subscription for it (same path as the namespace select). Runs after the
+  // mount effect above, so the request wins over the initial all-namespaces sub.
+  const nsRequest = useFleet((s) => s.pods.nsRequest);
+  useEffect(() => {
+    if (!nsRequest) return;
+    useFleet.getState().clearPodsNsRequest();
+    if (nsRequest.cluster !== cluster) return; // stale request from another cluster
+    if (liveCleanupRef.current) { liveCleanupRef.current(); liveCleanupRef.current = null; }
+    liveCleanupRef.current = openLivePods(cluster, nsRequest.namespace);
+  }, [nsRequest, cluster]);
+
   const onNamespace = (ns: string) => {
     // Close the current live sub, then open the new one for the selected namespace.
     // The backend immediate emit means the view updates without a separate listPods call.
@@ -457,17 +469,10 @@ function PodDetailPanel({
             if (verb === "delete") {
               void deletePod(cluster, summary.namespace, summary.name);
             } else {
-              // Restart the owner workload. For ReplicaSet, derive the Deployment name
-              // by stripping the trailing pod-template-hash segment (the last dash-separated
-              // segment added by the ReplicaSet controller), e.g. "web-7d4b9c6f9" -> "web".
-              const { ownerKind, ownerName } = summary;
-              let targetKind = ownerKind;
-              let targetName = ownerName;
-              if (ownerKind === "ReplicaSet") {
-                targetKind = "Deployment";
-                targetName = ownerName.split("-").slice(0, -1).join("-");
-              }
-              void rolloutRestart(cluster, targetKind, summary.namespace, targetName);
+              // Restart the owner workload. The backend resolves the real
+              // controller chain (ReplicaSet -> Deployment) into ownerKind/
+              // ownerName, so no name guessing happens here.
+              void rolloutRestart(cluster, summary.ownerKind, summary.namespace, summary.ownerName);
             }
           }}
         />
@@ -574,9 +579,11 @@ function InfoTab({ detail, cluster, namespace, name, onRestart, onDelete }: {
 }) {
   const p = detail.summary;
   const [forwarding, setForwarding] = useState(false);
-  // Restart is meaningful when the pod is owned by a ReplicaSet (-> Deployment),
-  // StatefulSet, or DaemonSet. Standalone pods (ownerKind="") have no controller to restart.
-  const showRestart = p.ownerKind === "ReplicaSet" || p.ownerKind === "StatefulSet" || p.ownerKind === "DaemonSet";
+  // Restart is meaningful only for owners rollout-restart supports. The
+  // backend resolves ReplicaSet -> Deployment, so a pod still showing
+  // ownerKind=ReplicaSet is under a BARE ReplicaSet (nothing to restart), and
+  // Argo Rollouts surface as kind Rollout (restart is Argo's verb, not ours).
+  const showRestart = p.ownerKind === "Deployment" || p.ownerKind === "StatefulSet" || p.ownerKind === "DaemonSet";
 
   return (
     <>

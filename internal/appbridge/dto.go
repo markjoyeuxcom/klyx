@@ -22,6 +22,7 @@ type ClusterDTO struct {
 	GitopsReason       string `json:"gitopsReason"`
 	FluxPresent        bool   `json:"fluxPresent"`
 	FluxHealthy        bool   `json:"fluxHealthy"`
+	ArgoPresent        bool   `json:"argoPresent"`
 	NetworkTier        string `json:"networkTier"`
 	NetworkReason      string `json:"networkReason"`
 	GatewayAPIVersion  string `json:"gatewayAPIVersion"`
@@ -62,6 +63,7 @@ func ToDTO(s fleet.Snapshot, cc config.ClusterConfig, now time.Time) ClusterDTO 
 		GitopsReason:       s.Capabilities.GitOps.Reason,
 		FluxPresent:        s.Capabilities.GitOps.Flux.Present,
 		FluxHealthy:        s.Capabilities.GitOps.Flux.Healthy,
+		ArgoPresent:        s.Capabilities.GitOps.Argo.Present,
 		NetworkTier:        s.Capabilities.Network.Tier.String(),
 		NetworkReason:      s.Capabilities.Network.Reason,
 		GatewayAPIVersion:  s.Capabilities.Network.GatewayAPIVersion,

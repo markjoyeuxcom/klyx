@@ -136,6 +136,23 @@ func (s *ConfigService) NewContextCount() int {
 	return n
 }
 
+// ArmProtected records the user's typed confirmation for a protected cluster,
+// unlocking exactly one destructive backend verb for the next 30 seconds. The
+// ConfirmDialog (and the custom confirm modals) call this on confirm; the
+// destructive service methods consume the grant via checkProtected. Arming an
+// unprotected cluster is a no-op success, so the frontend calls this
+// unconditionally.
+func (s *ConfigService) ArmProtected(cluster, typed string) ActionResultDTO {
+	g := activeProtectGuard.Load()
+	if g == nil {
+		return ActionResultDTO{OK: true} // gating not configured (tests, klyxctl)
+	}
+	if err := g.Arm(cluster, typed); err != nil {
+		return ActionResultDTO{Error: err.Error()}
+	}
+	return ActionResultDTO{OK: true}
+}
+
 // AddClusters appends the given kubeconfig contexts to the fleet file
 // (validated before write; comments preserved), then hot-adds each one to the
 // running registry so no restart is needed. A connect failure after a
