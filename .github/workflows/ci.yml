@@ -1,0 +1,77 @@
+name: ci
+
+# Tests on every push and PR - not just at release time. The release workflow
+# runs the same suites, but a failing test must surface when it lands, not
+# weeks later when a tag is cut.
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: "24"
+
+jobs:
+  go:
+    name: go vet + test (-race)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      # cmd/klyx imports Wails, which needs the GTK/WebKit headers to compile
+      # on Linux (same dependency set the release workflow installs).
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            pkg-config \
+            libgtk-4-dev \
+            libwebkitgtk-6.0-dev
+
+      - name: go vet
+        run: go vet $(go list ./... | grep -v '/cmd/klyx/build/')
+
+      - name: go test -race
+        run: go test -race $(go list ./... | grep -v '/cmd/klyx/build/')
+
+      - name: gofmt
+        run: |
+          out="$(gofmt -l internal/ cmd/klyx/main.go cmd/klyxctl/)"
+          if [ -n "${out}" ]; then
+            echo "gofmt needed on:" >&2
+            echo "${out}" >&2
+            exit 1
+          fi
+
+  frontend:
+    name: tsc + vitest
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: cmd/klyx/frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: cmd/klyx/frontend
+        run: npm ci
+
+      - name: Typecheck
+        working-directory: cmd/klyx/frontend
+        run: npx tsc --noEmit
+
+      - name: Tests
+        working-directory: cmd/klyx/frontend
+        run: npm test -- --run
