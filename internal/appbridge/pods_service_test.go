@@ -113,7 +113,7 @@ func TestPodsService_ListPods_MappingAndRankString(t *testing.T) {
 func TestPodsService_GetPodDetail_ClusterMiss_NonNilEmpties(t *testing.T) {
 	svc := NewPodsService(func(string) (PodsConn, bool) { return nil, false }, nil)
 	d := svc.GetPodDetail("nope", "ns", "pod")
-	if d.Labels == nil || d.Conditions == nil || d.Events == nil {
+	if d.Labels == nil || d.Annotations == nil || d.Conditions == nil || d.Events == nil {
 		t.Fatal("collections must be non-nil on cluster miss")
 	}
 }
@@ -128,6 +128,7 @@ func TestPodsService_GetPodDetail_Mapping(t *testing.T) {
 			Containers: []workloads.ContainerSummary{{Name: "web", Image: "nginx:1", Ready: true, State: "running"}},
 		},
 		Labels:         map[string]string{"env": "prod"},
+		Annotations:    map[string]string{"owner": "platform"},
 		Conditions:     []crd.Condition{{Type: "Ready", Status: "True", Reason: "OK", Message: "ready"}},
 		Events:         []crd.Event{{Type: "Normal", Reason: "Started", Message: "started", Count: 1, Last: last}},
 		YAML:           "kind: Pod\n",
@@ -143,6 +144,9 @@ func TestPodsService_GetPodDetail_Mapping(t *testing.T) {
 	}
 	if d.Labels["env"] != "prod" {
 		t.Errorf("labels: %+v", d.Labels)
+	}
+	if d.Annotations["owner"] != "platform" {
+		t.Errorf("annotations: %+v", d.Annotations)
 	}
 	if len(d.Conditions) != 1 || d.Conditions[0].Type != "Ready" {
 		t.Errorf("conditions: %+v", d.Conditions)
@@ -162,7 +166,7 @@ func TestPodsService_GetPodDetail_ErrorReturnsEmpties(t *testing.T) {
 	conn := &fakePodConn{detErr: context.DeadlineExceeded}
 	svc := NewPodsService(func(string) (PodsConn, bool) { return conn, true }, nil)
 	d := svc.GetPodDetail("c", "ns", "missing")
-	if d.Labels == nil || d.Conditions == nil || d.Events == nil {
+	if d.Labels == nil || d.Annotations == nil || d.Conditions == nil || d.Events == nil {
 		t.Fatal("collections must be non-nil on error")
 	}
 	if d.Summary.Name != "" {

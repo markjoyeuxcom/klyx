@@ -9,7 +9,6 @@ import type { ResourceRef, RouteNodeDTO } from "../store/fleet";
 import { openPodDetail } from "../bridge/pods";
 import { openNodeDetail } from "../bridge/nodes";
 import { openHelmRelease } from "../bridge/helm";
-import { listPods } from "../bridge/pods";
 import { getResourceDetail } from "../bridge/gitops";
 import { copyText, getInstanceDetail } from "../bridge/crd";
 import { setThemeChoice, THEMES, toggleTheme } from "../theme/ThemeProvider";
@@ -36,7 +35,7 @@ const SECTION_ORDER: ClusterSection[] = [
   "gitops",
   "argo",
   "helm",
-  "network",
+  "gatewayApi",
   "resources",
   "crds",
 ];
@@ -329,7 +328,9 @@ export function buildCommands(s: FleetStore): Command[] {
   }
 
   // --- Gateway API (when loaded) ---------------------------------------------
-  if (cluster && s.network.gateways.length > 0) {
+  // Only index the slice when it belongs to the current cluster - a stale slice
+  // from a previous cluster must not surface foreign gateways here.
+  if (cluster && s.network.cluster === cluster && s.network.gateways.length > 0) {
     for (const g of s.network.gateways) {
       cmds.push({
         id: `gateway:${g.namespace}/${g.name}`,
@@ -337,14 +338,14 @@ export function buildCommands(s: FleetStore): Command[] {
         title: `${g.namespace}/${g.name}`,
         hint: [g.className, g.accepted ? "accepted" : "not accepted", g.programmed ? "programmed" : "pending"].filter(Boolean).join(" · "),
         run: () => {
-          openSection(s, "network", cluster);
+          openSection(s, "gatewayApi", cluster);
           s.openGateway(g.namespace, g.name);
         },
       });
     }
   }
 
-  if (cluster && s.network.topology?.routes?.length) {
+  if (cluster && s.network.cluster === cluster && s.network.topology?.routes?.length) {
     const gw = s.network.topology.gateway;
     for (const r of s.network.topology.routes) {
       const key = routeKey(r);
@@ -354,7 +355,7 @@ export function buildCommands(s: FleetStore): Command[] {
         title: `HTTPRoute ${key}`,
         hint: routeHint(r),
         run: () => {
-          openSection(s, "network", cluster);
+          openSection(s, "gatewayApi", cluster);
           s.openGateway(gw.namespace, gw.name);
           s.selectRoute(key);
         },
@@ -387,8 +388,8 @@ export function buildCommands(s: FleetStore): Command[] {
     addNamespace(s.argo.cluster, a.destNamespace, "argo destination");
   });
   s.network.topology?.routes?.forEach((r) => {
-    addNamespace(cluster, r.namespace, "gateway routes");
-    r.services.forEach((svc) => addNamespace(cluster, svc.namespace, "gateway backends"));
+    addNamespace(s.network.cluster, r.namespace, "gateway routes");
+    r.services.forEach((svc) => addNamespace(s.network.cluster, svc.namespace, "gateway backends"));
   });
   if (s.instances.ref?.kind === "Namespace") {
     s.instances.rows.forEach((r) => addNamespace(cluster, r.name, "namespaces"));
@@ -407,7 +408,10 @@ export function buildCommands(s: FleetStore): Command[] {
       hint: [...n.sources].sort().join(" · "),
       run: () => {
         openSection(s, "pods", n.cluster);
-        void listPods(n.cluster, n.name);
+        // Route the namespace through the store: PodsView re-opens its live
+        // subscription for it. A direct listPods here would be discarded by
+        // the live sub's stale guard (or silently desync the live stream).
+        s.requestPodsNamespace(n.cluster, n.name);
       },
     });
   }

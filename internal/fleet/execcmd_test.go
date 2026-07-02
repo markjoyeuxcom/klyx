@@ -107,3 +107,28 @@ func TestDebugCommandNoContext(t *testing.T) {
 		t.Fatal("want error without kube context")
 	}
 }
+
+func TestExecDebugCommandRefuseInvalidNames(t *testing.T) {
+	c := &ClusterConn{kubeContext: "ctx"}
+	// Flag-shaped or control-character names must never reach the argv (or the
+	// shell-quoting layer above it, which trusts its inputs are names).
+	bad := []struct{ ns, pod, container string }{
+		{"--all-namespaces", "pod", ""},
+		{"ns", "--all", ""},
+		{"ns", "pod\nreboot", ""},
+		{"ns", "pod", "-c evil"},
+		{"ns", "", ""},
+	}
+	for _, b := range bad {
+		if _, err := c.ExecCommand(b.ns, b.pod, b.container); err == nil {
+			t.Errorf("ExecCommand(%q,%q,%q): want error", b.ns, b.pod, b.container)
+		}
+		if _, err := c.DebugCommand(b.ns, b.pod, b.container); err == nil {
+			t.Errorf("DebugCommand(%q,%q,%q): want error", b.ns, b.pod, b.container)
+		}
+	}
+	// Real names still pass.
+	if _, err := c.ExecCommand("kube-system", "coredns-5d78c9869d-x2m4p", "coredns"); err != nil {
+		t.Fatalf("valid names refused: %v", err)
+	}
+}

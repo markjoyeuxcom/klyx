@@ -15,6 +15,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/moomora/klyx/internal/clibin"
 )
 
 // Runner executes a helm invocation and returns stdout. The real runner shells
@@ -28,11 +30,13 @@ type Runner interface {
 // it to the UI without a separate stderr read.
 type ExecRunner struct{}
 
-var (
-	lookPath          = exec.LookPath
-	executableExists  = defaultExecutableExists
-	helmFallbackPaths = defaultHelmFallbackPaths
-)
+// helmBin is the shared binary-resolution stack (env override -> PATH ->
+// package-manager fallbacks). Tests swap its lookup hooks.
+var helmBin = clibin.Binary{
+	Name:          "helm",
+	EnvVar:        "KLYX_HELM_PATH",
+	FallbackPaths: defaultHelmFallbackPaths,
+}
 
 // Run executes helm with the given args. If helm exits non-zero it returns an
 // error whose message includes the combined stderr text.
@@ -57,39 +61,14 @@ func (ExecRunner) Run(ctx context.Context, args ...string) ([]byte, error) {
 
 // Detect reports whether the helm binary is available to Klyx.
 func Detect() bool {
-	_, ok := Resolve()
-	return ok
+	return helmBin.Detect()
 }
 
 // Resolve returns the helm executable Klyx should use. macOS .app launches do
-// not inherit the user's interactive shell PATH, so we also check the usual
-// Homebrew and package-manager locations.
+// not inherit the user's interactive shell PATH, so resolution also checks the
+// usual Homebrew and package-manager locations (see internal/clibin).
 func Resolve() (string, bool) {
-	if configured := strings.TrimSpace(os.Getenv("KLYX_HELM_PATH")); configured != "" {
-		if executableExists(configured) {
-			return configured, true
-		}
-	}
-	if p, err := lookPath("helm"); err == nil {
-		return p, true
-	}
-	for _, candidate := range helmFallbackPaths() {
-		if executableExists(candidate) {
-			return candidate, true
-		}
-	}
-	return "", false
-}
-
-func defaultExecutableExists(path string) bool {
-	info, err := os.Stat(path)
-	if err != nil || info.IsDir() {
-		return false
-	}
-	if runtime.GOOS == "windows" {
-		return true
-	}
-	return info.Mode()&0111 != 0
+	return helmBin.Resolve()
 }
 
 func defaultHelmFallbackPaths() []string {
@@ -197,9 +176,10 @@ func parseUpdated(s string) int64 {
 }
 
 // ListReleases returns all releases across all namespaces for the given
-// kubeContext.
+// kubeContext. `--max 0` lifts helm's default cap of 256 releases, which would
+// otherwise silently truncate the list on large clusters.
 func ListReleases(ctx context.Context, r Runner, kubeContext string) ([]Release, error) {
-	out, err := r.Run(ctx, "list", "-A", "-o", "json", "--kube-context", kubeContext)
+	out, err := r.Run(ctx, "list", "-A", "-o", "json", "--max", "0", "--kube-context", kubeContext)
 	if err != nil {
 		return nil, err
 	}

@@ -164,6 +164,14 @@ func (r *liveRegistry) open(
 	// Liveness still waits for the watch's own onLive(true) edge; watchStart
 	// merely spawned the watch supervisors and is not itself proof that a watch
 	// was established.
+	//
+	// Clear the coalescing flag BEFORE computing (the tick loop's own
+	// clear-before-compute discipline): an onDirty that lands mid-compute must
+	// survive so the next tick re-lists - clearing after the compute would
+	// erase it and leave the list stale until the next watch event.
+	mu.Lock()
+	dirty = false
+	mu.Unlock()
 	if payload, ok := compute(); ok {
 		// Guard: if a replace arrived while compute ran, drop the stale emit.
 		select {
@@ -181,9 +189,6 @@ func (r *liveRegistry) open(
 		mu.Unlock()
 		report()
 	}
-	mu.Lock()
-	dirty = false
-	mu.Unlock()
 
 	go func() {
 		t := time.NewTicker(interval)

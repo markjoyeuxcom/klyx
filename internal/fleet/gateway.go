@@ -49,7 +49,7 @@ var policyCandidateVersions = map[string][]string{
 // servedResourceGVR finds the served GVR for a (group, resource), probing the
 // candidate versions in order. ok=false means the CRD is not installed.
 func (c *ClusterConn) servedResourceGVR(group, resource string) (schema.GroupVersionResource, bool) {
-	disc := c.typed.Discovery()
+	disc := c.discovery()
 	for _, v := range policyCandidateVersions[group] {
 		rl, err := disc.ServerResourcesForGroupVersion(group + "/" + v)
 		if err != nil || rl == nil {
@@ -150,13 +150,13 @@ func attachOneCiliumPolicy(u *unstructured.Unstructured, kind string, cluster bo
 }
 
 func (c *ClusterConn) gwGVR(resource string) schema.GroupVersionResource {
-	v := preferredVersion(c.typed.Discovery(), gwGroup, "v1")
+	v := preferredVersion(c.discovery(), gwGroup, "v1")
 	return schema.GroupVersionResource{Group: gwGroup, Version: v, Resource: resource}
 }
 
 // gatewayAPIServed reports whether the Gateway API group is advertised.
 func (c *ClusterConn) gatewayAPIServed() bool {
-	groups, err := c.typed.Discovery().ServerGroups()
+	groups, err := c.discovery().ServerGroups()
 	if err != nil || groups == nil {
 		return false
 	}
@@ -169,11 +169,19 @@ func (c *ClusterConn) gatewayAPIServed() bool {
 }
 
 // ListGateways lists Gateways (refs) and whether the Gateway API is served.
+// A list failure on a served API is a real error (auth, network, RBAC) and is
+// returned as one - rendering it as "no Gateways" would be indistinguishable
+// from a genuinely empty cluster. A failure when the group is not advertised
+// is the expected not-installed case (and the fake-discovery fallback in
+// tests) and stays an empty list.
 func (c *ClusterConn) ListGateways(ctx context.Context) ([]gwapi.GatewayRef, bool, error) {
 	served := c.gatewayAPIServed()
 	list, err := c.dyn.Resource(c.gwGVR("gateways")).List(ctx, metav1.ListOptions{})
 	if err != nil {
-		return nil, served, nil // not served / not installed → empty, no hard error
+		if !served {
+			return nil, false, nil
+		}
+		return nil, served, fmt.Errorf("list gateways: %w", err)
 	}
 	out := make([]gwapi.GatewayRef, 0, len(list.Items))
 	for i := range list.Items {

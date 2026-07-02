@@ -26,7 +26,12 @@ func configPath() string {
 	if p := os.Getenv("KLYX_CONFIG"); p != "" {
 		return p
 	}
-	home, _ := os.UserHomeDir()
+	home, err := os.UserHomeDir()
+	if err != nil {
+		// No resolvable home: fail loudly instead of silently degrading to
+		// "/.config/klyx/fleet.yaml" (a root-anchored path nobody intends).
+		log.Fatalf("cannot resolve home directory for the fleet config: %v (set KLYX_CONFIG to override)", err)
+	}
 	return home + "/.config/klyx/fleet.yaml"
 }
 
@@ -49,6 +54,23 @@ func main() {
 	reg := fleet.NewRegistry(cfg, fleet.DefaultConnFactory(clock.Real{}))
 	reg.Start(ctx)
 
+	// Backend gate for destructive verbs on protected clusters: the frontend
+	// ConfirmDialog arms a one-shot grant (ConfigService.ArmProtected) and each
+	// destructive service method consumes it. The protection set is read once
+	// from the startup config; hot-added clusters are never protected (marking
+	// one protected is a fleet.yaml edit + restart, like the rest of the
+	// startup config).
+	protected := map[string]bool{}
+	for _, cc := range cfg.Clusters {
+		if cc.Protected {
+			protected[cc.Name] = true
+		}
+	}
+	appbridge.SetProtectGuard(appbridge.NewProtectGuard(
+		func(name string) bool { return protected[name] },
+		time.Now,
+	))
+
 	svc := appbridge.NewFleetService(reg, cfg, time.Now)
 
 	em := &emitterAdapter{}
@@ -56,6 +78,17 @@ func main() {
 
 	gitopsSvc := appbridge.NewGitOpsService(
 		func(name string) (appbridge.GitOpsConn, bool) {
+			c, ok := reg.Conn(name)
+			if !ok {
+				return nil, false
+			}
+			return c, true
+		},
+		em, time.Now, time.Second,
+	)
+
+	certManagerSvc := appbridge.NewCertManagerService(
+		func(name string) (appbridge.CertManagerConn, bool) {
 			c, ok := reg.Conn(name)
 			if !ok {
 				return nil, false
@@ -241,9 +274,19 @@ func main() {
 	app := application.New(application.Options{
 		Name:        "Klyx",
 		Description: "Platform-engineer-grade Kubernetes desktop client",
+		// One Klyx per machine: a second instance would double the informer
+		// load on every cluster and race the first on fleet.yaml writes. The
+		// second launch exits after waking the running instance.
+		SingleInstance: &application.SingleInstanceOptions{
+			UniqueID: "com.moomora.klyx",
+			OnSecondInstanceLaunch: func(application.SecondInstanceData) {
+				log.Printf("second Klyx launch redirected to this instance")
+			},
+		},
 		Services: []application.Service{
 			application.NewService(svc),
 			application.NewService(gitopsSvc),
+			application.NewService(certManagerSvc),
 			application.NewService(crdSvc),
 			application.NewService(gatewaySvc),
 			application.NewService(meshSvc),
@@ -285,7 +328,7 @@ func main() {
 	em.app = app
 	winOpener.app = app
 
-	go svc.Run(ctx, em, time.Second)
+	go appbridge.RunFleetPush(ctx, svc, em, time.Second)
 
 	app.Window.NewWithOptions(application.WebviewWindowOptions{
 		Title: "Klyx",

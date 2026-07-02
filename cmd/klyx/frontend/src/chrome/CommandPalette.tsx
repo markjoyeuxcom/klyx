@@ -24,6 +24,9 @@ type Ranked = { cmd: Command; positions: number[] };
 
 const LIMIT = 50;
 
+// DOM ids for the listbox options, referenced by aria-activedescendant.
+const optionId = (id: string) => `command-option-${id}`;
+
 // Returns true when the event originated in a text input we should not hijack
 // — unless it's the palette's own search box (data-palette-input).
 function inEditable(t: EventTarget | null): boolean {
@@ -133,6 +136,15 @@ export function CommandPalette() {
     if (sel >= results.length) setSel(results.length === 0 ? 0 : results.length - 1);
   }, [results.length, sel]);
 
+  // Keep the selected row visible as arrow keys move it past the list's fold.
+  useEffect(() => {
+    const el = listRef.current?.querySelector('[data-selected="true"]');
+    // guard: jsdom does not implement scrollIntoView
+    if (el && typeof (el as HTMLElement).scrollIntoView === "function") {
+      (el as HTMLElement).scrollIntoView({ block: "nearest" });
+    }
+  }, [sel, results]);
+
   const run = useCallback(
     (i: number) => {
       const r = results[i];
@@ -205,6 +217,11 @@ export function CommandPalette() {
           ref={inputRef}
           data-palette-input="true"
           data-testid="command-palette-input"
+          role="combobox"
+          aria-expanded={true}
+          aria-controls="command-palette-list"
+          aria-activedescendant={results[sel] ? optionId(results[sel].cmd.id) : undefined}
+          aria-autocomplete="list"
           value={query}
           onChange={(e) => {
             setQuery(e.target.value);
@@ -227,7 +244,7 @@ export function CommandPalette() {
           }}
         />
 
-        <div ref={listRef} style={{ maxHeight: "50vh", overflowY: "auto", padding: "4px 0" }}>
+        <div ref={listRef} id="command-palette-list" role="listbox" style={{ maxHeight: "50vh", overflowY: "auto", padding: "4px 0" }}>
           {results.length === 0 ? (
             <div style={{ padding: "16px", fontSize: 13, color: "var(--color-text-tertiary)" }}>
               No matches.
@@ -251,6 +268,9 @@ export function CommandPalette() {
                   return (
                     <div
                       key={r.cmd.id}
+                      id={optionId(r.cmd.id)}
+                      role="option"
+                      aria-selected={selected}
                       data-testid={`command-row-${r.cmd.id}`}
                       data-selected={selected ? "true" : "false"}
                       onMouseMove={() => setSel(idx)}

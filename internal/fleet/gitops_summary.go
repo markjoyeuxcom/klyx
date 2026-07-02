@@ -40,8 +40,8 @@ func (c *ClusterConn) GitOpsSummary(ctx context.Context) (GitOpsSummary, error) 
 		return GitOpsSummary{FluxPresent: false}, nil
 	}
 
-	ksVer := preferredVersion(c.typed.Discovery(), "kustomize.toolkit.fluxcd.io", "v1")
-	hrVer := preferredVersion(c.typed.Discovery(), "helm.toolkit.fluxcd.io", "v2")
+	ksVer := preferredVersion(c.discovery(), "kustomize.toolkit.fluxcd.io", "v1")
+	hrVer := preferredVersion(c.discovery(), "helm.toolkit.fluxcd.io", "v2")
 	ksGVR := schema.GroupVersionResource{Group: "kustomize.toolkit.fluxcd.io", Version: ksVer, Resource: "kustomizations"}
 	hrGVR := schema.GroupVersionResource{Group: "helm.toolkit.fluxcd.io", Version: hrVer, Resource: "helmreleases"}
 

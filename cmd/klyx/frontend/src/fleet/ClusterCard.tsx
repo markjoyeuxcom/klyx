@@ -2,8 +2,7 @@ import type { CSSProperties, ReactNode } from "react";
 import { IconLock } from "@tabler/icons-react";
 import type { ClusterDTO, FleetBoardEntry, MeshGraphDTO } from "../store/fleet";
 import { useFleet } from "../store/fleet";
-
-type Tone = "success" | "warning" | "danger" | "info" | "muted";
+import { type Tone, toneColor, toneBg, toneBorder } from "../chrome/primitives";
 
 type Signal = {
   label: string;
@@ -82,7 +81,7 @@ export function ClusterCard({ c }: { c: ClusterDTO }) {
       style={{
         background: "var(--color-background-primary)",
         border: "0.5px solid var(--color-border-tertiary)",
-        borderLeft: `3px solid ${toneColor(rail)}`,
+        borderLeft: `3px solid ${toneColor[rail]}`,
         borderRadius: 3,
         padding: 0,
         cursor: "pointer",
@@ -93,8 +92,8 @@ export function ClusterCard({ c }: { c: ClusterDTO }) {
         overflow: "hidden",
         boxSizing: "border-box",
       }}
-      onMouseEnter={(e) => { e.currentTarget.style.borderColor = "var(--color-border-secondary)"; e.currentTarget.style.borderLeftColor = toneColor(rail); }}
-      onMouseLeave={(e) => { e.currentTarget.style.borderColor = "var(--color-border-tertiary)"; e.currentTarget.style.borderLeftColor = toneColor(rail); }}
+      onMouseEnter={(e) => { e.currentTarget.style.borderColor = "var(--color-border-secondary)"; e.currentTarget.style.borderLeftColor = toneColor[rail]; }}
+      onMouseLeave={(e) => { e.currentTarget.style.borderColor = "var(--color-border-tertiary)"; e.currentTarget.style.borderLeftColor = toneColor[rail]; }}
     >
       <div style={{ display: "flex", alignItems: "flex-start", gap: 8, padding: "11px 12px 10px", borderBottom: "0.5px solid var(--color-border-tertiary)", minWidth: 0 }}>
         <div style={{ minWidth: 0, flex: 1 }}>
@@ -145,19 +144,22 @@ function SignalRow({ signal }: { signal: Signal }) {
     <div title={signal.title ?? signal.value} style={{ display: "grid", gridTemplateColumns: "86px minmax(44px, 1fr) minmax(0, 46%)", alignItems: "center", gap: 10, fontFamily: "var(--font-mono)", fontSize: 11, minWidth: 0 }}>
       <span style={{ color: "var(--color-text-secondary)", ...ellipsis }}>{signal.label}</span>
       <span style={{ height: 5, background: "var(--color-background-secondary)", border: "0.5px solid var(--color-border-tertiary)", overflow: "hidden", minWidth: 0 }}>
-        <span style={{ display: "block", width, maxWidth: "100%", height: "100%", background: toneColor(signal.tone), opacity: signal.fraction == null ? 0.25 : 1 }} />
+        <span style={{ display: "block", width, maxWidth: "100%", height: "100%", background: toneColor[signal.tone], opacity: signal.fraction == null ? 0.25 : 1 }} />
       </span>
-      <span style={{ color: toneColor(signal.tone), ...ellipsis }}>{signal.value}</span>
+      <span style={{ color: toneColor[signal.tone], ...ellipsis }}>{signal.value}</span>
     </div>
   );
 }
 
+// Deliberately NOT the Badge primitive: the fleet-board verdict chip is mono,
+// 10px, square-cornered, and ellipsis-clipped inside a 46%-max header slot —
+// visually distinct from Badge's filled variant. It shares the tone maps.
 function Badge({ tone, children }: { tone: Tone; children: ReactNode }) {
   return (
     <span style={{
-      color: toneColor(tone),
-      border: `0.5px solid ${toneBorder(tone)}`,
-      background: toneBackground(tone),
+      color: toneColor[tone],
+      border: `0.5px solid ${toneBorder[tone]}`,
+      background: toneBg[tone],
       fontFamily: "var(--font-mono)",
       fontSize: 10,
       padding: "2px 7px",
@@ -296,42 +298,14 @@ function clusterDisplayName(name: string): string {
   return name.slice(markerAt + eksClusterMarker.length) || name;
 }
 
+// Deliberately NOT the primitive ellipsis: this one adds minWidth: 0 because
+// every use here is a grid/flex child that must be allowed to shrink.
 const ellipsis: CSSProperties = {
   minWidth: 0,
   overflow: "hidden",
   textOverflow: "ellipsis",
   whiteSpace: "nowrap",
 };
-
-function toneColor(tone: Tone): string {
-  switch (tone) {
-    case "success": return "var(--color-text-success)";
-    case "warning": return "var(--color-text-warning)";
-    case "danger": return "var(--color-text-danger)";
-    case "info": return "var(--color-text-info)";
-    case "muted": return "var(--color-text-tertiary)";
-  }
-}
-
-function toneBorder(tone: Tone): string {
-  switch (tone) {
-    case "success": return "var(--color-border-success)";
-    case "warning": return "var(--color-border-warning)";
-    case "danger": return "var(--color-border-danger)";
-    case "info": return "var(--color-border-info)";
-    case "muted": return "var(--color-border-tertiary)";
-  }
-}
-
-function toneBackground(tone: Tone): string {
-  switch (tone) {
-    case "success": return "var(--color-background-success)";
-    case "warning": return "var(--color-background-warning)";
-    case "danger": return "var(--color-background-danger)";
-    case "info": return "var(--color-background-info)";
-    case "muted": return "var(--color-background-secondary)";
-  }
-}
 
 function ago(s: number): string {
   return s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)}m` : `${Math.floor(s / 3600)}h`;

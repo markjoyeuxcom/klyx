@@ -46,6 +46,20 @@ export async function addClusters(contexts: string[]): Promise<ActionResultDTO> 
   }
 }
 
+// armProtected records the typed confirmation for a protected cluster with the
+// backend, unlocking exactly one destructive verb for the next 30s. Confirm
+// dialogs call this before dispatching the action; without it the backend
+// refuses destructive verbs on protected clusters (defense in depth - the
+// frontend gate alone must never be the only thing standing before a PRD
+// cluster). Arming an unprotected cluster is a no-op success.
+export async function armProtected(cluster: string, typed: string): Promise<ActionResultDTO> {
+  try {
+    return (await ConfigService.ArmProtected(cluster, typed)) as ActionResultDTO;
+  } catch (e) {
+    return { ok: false, error: String(e) };
+  }
+}
+
 // refreshNewContextCount updates the sidebar's Settings badge (kubeconfig
 // contexts not in the fleet). Called once at startup; Settings refreshes it on
 // every add. Errors leave the badge at 0 — it never invents a count.

@@ -204,3 +204,49 @@ func TestNodeOps_StartDrain_ClusterMiss(t *testing.T) {
 		t.Error("expected empty streamID on error")
 	}
 }
+
+func TestNodeOps_StartDrain_RefusesAtCap(t *testing.T) {
+	conn := &fakeNodeOpsConn{
+		cmdFunc: func(_ string) (*exec.Cmd, error) {
+			return exec.Command("sh", "-c", "sleep 60"), nil
+		},
+	}
+	svc, em := newNodeOpsTestSvc(conn)
+	defer svc.CancelAll()
+
+	running := make([]string, 0, maxConcurrentDrains)
+	for i := 0; i < maxConcurrentDrains; i++ {
+		r := svc.StartDrain("test", "node-cap")
+		if r.Error != "" {
+			t.Fatalf("StartDrain %d error: %s", i, r.Error)
+		}
+		running = append(running, r.StreamID)
+	}
+
+	// At cap: the next drain must be refused, not evict a running one.
+	r := svc.StartDrain("test", "node-over-cap")
+	if r.Error == "" {
+		t.Fatal("expected refusal at cap, got a streamID")
+	}
+	if r.StreamID != "" {
+		t.Errorf("expected empty streamID on refusal, got %q", r.StreamID)
+	}
+
+	// The running drains must be untouched: no terminal EOF chunk emitted.
+	for _, ev := range em.events_() {
+		for _, id := range running {
+			if ev.name == "nodedrain:"+id {
+				if c, ok := ev.data.(LogChunkDTO); ok && c.EOF {
+					t.Errorf("running drain %s was terminated by the refused start", id)
+				}
+			}
+		}
+	}
+
+	// Cancelling one frees a slot.
+	svc.CancelDrain(running[0])
+	r = svc.StartDrain("test", "node-after-cancel")
+	if r.Error != "" {
+		t.Fatalf("StartDrain after cancel error: %s", r.Error)
+	}
+}

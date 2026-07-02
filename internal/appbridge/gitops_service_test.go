@@ -51,7 +51,8 @@ func (f *fakeGitOpsConn) GitOpsObject(kind, namespace, name string) (*unstructur
 	return f.obj, true
 }
 
-func (f *fakeGitOpsConn) GitOpsSources() []flux.Source { return f.srcs }
+func (f *fakeGitOpsConn) GitOpsSources() []flux.Source      { return f.srcs }
+func (f *fakeGitOpsConn) GitOpsWatchHealth() (bool, string) { return true, "" }
 func (f *fakeGitOpsConn) GitOpsSourceObject(kind, namespace, name string) (*unstructured.Unstructured, bool) {
 	if f.srcObj == nil {
 		return nil, false

@@ -103,7 +103,7 @@ func TestRunEmitsOnTick(t *testing.T) {
 	em := &fakeEmitter{}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	go svc.Run(ctx, em, 10*time.Millisecond)
+	go RunFleetPush(ctx, svc, em, 10*time.Millisecond)
 
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {

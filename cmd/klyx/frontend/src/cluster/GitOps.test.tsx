@@ -22,7 +22,7 @@ const cluster = (tier: string): ClusterDTO => ({
 });
 const res = (over: Partial<FluxResourceDTO>): FluxResourceDTO => ({
   kind: "Kustomization", namespace: "flux-system", name: "flux-system", ready: "Ready",
-  reason: "", message: "", revision: "main@abc", lastAppliedAgeSeconds: 1, suspended: false,
+  reason: "", message: "", revision: "main@abc", readySinceSeconds: 1, suspended: false,
   sourceKind: "", sourceName: "", ...over,
 });
 
@@ -50,6 +50,21 @@ beforeEach(() => useFleet.setState({
 }));
 
 describe("GitOps view", () => {
+  it("a stale resource dims and shows the Syncing chip instead of a confident status", () => {
+    useFleet.setState({ gitops: { cluster: "x", resources: [
+      res({ name: "edited", ready: "Ready", stale: true, generation: 5, observedGeneration: 4 }),
+    ], sources: [], loading: false, expandedKey: null, detail: null } });
+    const { getByText, getByTitle } = render(<GitOps cluster="x" />);
+    const row = getByText("flux-system/edited").closest("button") as HTMLButtonElement;
+    // The status cell must not read as confirmed while changes are unrealized.
+    expect(getByText("Syncing…")).toBeTruthy();
+    expect(row.textContent).not.toContain("ready");
+    expect(getByTitle(/Observed Gen: 4 vs Current: 5/)).toBeTruthy();
+    // Dim = not yet realized.
+    expect(row.style.opacity).toBe("0.6");
+  });
+
+
   it("renders the resource table from the store", () => {
     useFleet.setState({ gitops: { cluster: "x", resources: [
       res({ name: "flux-system", ready: "Ready" }),

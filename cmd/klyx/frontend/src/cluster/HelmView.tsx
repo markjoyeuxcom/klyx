@@ -1,5 +1,5 @@
 import { useEffect, useCallback, useState } from "react";
-import { SkeletonRows } from "../chrome/SkeletonRows";
+import { SkeletonRows, btn, ellipsis } from "../chrome/primitives";
 import { useFleet } from "../store/fleet";
 import type { HelmReleaseDTO, HelmHistoryEntryDTO } from "../store/fleet";
 import { listHelmReleases, openHelmRelease, helmRollback } from "../bridge/helm";
@@ -43,13 +43,6 @@ function fmtUnix(unix: number): string {
   if (secs < 86400) return `${Math.floor(secs / 3600)}h ago`;
   return `${Math.floor(secs / 86400)}d ago`;
 }
-
-const ellipsis: React.CSSProperties = { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" };
-const btn: React.CSSProperties = {
-  fontSize: 11, padding: "3px 10px", borderRadius: 4, cursor: "pointer",
-  border: "0.5px solid var(--color-border-tertiary)", background: "var(--color-background-primary)",
-  color: "var(--color-text-secondary)",
-};
 
 // columns: dot | name | namespace | chart | appVersion | revision | updated
 const gridCols = "12px minmax(0,1.4fr) minmax(0,0.8fr) minmax(0,1.2fr) 80px 52px 80px";

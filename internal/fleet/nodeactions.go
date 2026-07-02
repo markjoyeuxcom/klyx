@@ -36,16 +36,28 @@ func (c *ClusterConn) SetCordon(ctx context.Context, nodeName string, cordon boo
 //
 // Requires kubectl on PATH. Returns an error if LookPath fails so the caller can
 // surface "kubectl not found" before trying to start the process.
+//
+// An empty kubeContext is refused (same guard as ExecCommand/Helm*): kubectl
+// would silently fall back to the kubeconfig's current-context, and this is the
+// one destructive verb where "wrong cluster" is unrecoverable. The node name is
+// validated and placed after "--" so it can never parse as a flag.
 func (c *ClusterConn) DrainNodeCmd(nodeName string) (*exec.Cmd, error) {
+	if c.kubeContext == "" {
+		return nil, fmt.Errorf("cluster has no kubeconfig context")
+	}
+	if err := validateK8sName("node", nodeName); err != nil {
+		return nil, err
+	}
 	if _, err := exec.LookPath("kubectl"); err != nil {
 		return nil, fmt.Errorf("kubectl not found in PATH: %w", err)
 	}
 	args := []string{
 		"--context", c.kubeContext,
-		"drain", nodeName,
+		"drain",
 		"--ignore-daemonsets",
 		"--delete-emptydir-data",
 		"--timeout=120s",
+		"--", nodeName,
 	}
 	return exec.Command("kubectl", args...), nil //nolint:gosec // args are validated, not user-controlled raw input
 }

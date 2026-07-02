@@ -1,4 +1,4 @@
-import { useRef, useState, useCallback, forwardRef, useImperativeHandle } from "react";
+import { Fragment, useRef, useState, useEffect, useCallback, forwardRef, useImperativeHandle } from "react";
 
 /**
  * VirtualList — lightweight windowed list renderer.
@@ -19,6 +19,9 @@ import { useRef, useState, useCallback, forwardRef, useImperativeHandle } from "
  */
 
 const PLAIN_THRESHOLD = 100;
+// Height assumed until the container has been measured (and permanently in
+// environments without layout, e.g. jsdom, where clientHeight is always 0).
+const FALLBACK_HEIGHT = 600;
 
 export type VirtualListHandle = {
   scrollToIndex: (idx: number) => void;
@@ -37,26 +40,60 @@ interface VirtualListProps<T> {
    * fixed-row windowing math.
    */
   forcePlain?: boolean;
+  /**
+   * Stable per-item key. Without it rows are keyed by index, so row-local
+   * state (hover, inputs, expansion) misattributes when live updates reorder
+   * the list. Callers with reorderable data should always provide it.
+   */
+  rowKey?: (item: T, index: number) => string;
 }
 
 // forwardRef with generics requires the inner function to be typed carefully.
 // We export a wrapper that re-asserts the generic so call sites remain typed.
 function VirtualListInner<T>(
-  { items, rowHeight, overscan = 8, render, style, forcePlain = false }: VirtualListProps<T>,
+  { items, rowHeight, overscan = 8, render, style, forcePlain = false, rowKey }: VirtualListProps<T>,
   ref: React.Ref<VirtualListHandle>,
 ) {
   const [scrollTop, setScrollTop] = useState(0);
   const rafRef = useRef<number | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  const onScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
-    const top = (e.currentTarget as HTMLDivElement).scrollTop;
-    if (rafRef.current !== null) return; // already queued
+  const plain = forcePlain || items.length < PLAIN_THRESHOLD;
+
+  // Throttle scroll handling to one state update per frame. The frame callback
+  // reads the element's CURRENT scrollTop rather than a value captured when
+  // the frame was queued — during fast scrolls several scroll events land per
+  // frame and the queue-time value is one event stale.
+  const onScroll = useCallback(() => {
+    if (rafRef.current !== null) return; // frame queued — it reads the latest value
     rafRef.current = requestAnimationFrame(() => {
       rafRef.current = null;
-      setScrollTop(top);
+      const el = containerRef.current;
+      if (el) setScrollTop(el.scrollTop);
     });
   }, []);
+
+  // Cancel any queued frame on unmount.
+  useEffect(() => () => {
+    if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
+  }, []);
+
+  // Track the container's height so enlarging the window extends the rendered
+  // window immediately — a DOM read during render never re-fires on resize,
+  // which left blank rows until the next scroll. jsdom does not implement
+  // ResizeObserver (typeof guard), so tests keep the fallback height.
+  const [containerHeight, setContainerHeight] = useState(FALLBACK_HEIGHT);
+  useEffect(() => {
+    if (plain) return;
+    const el = containerRef.current;
+    if (!el) return;
+    const measure = () => setContainerHeight(el.clientHeight || FALLBACK_HEIGHT);
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [plain]);
 
   useImperativeHandle(ref, () => ({
     scrollToIndex(idx: number) {
@@ -79,11 +116,11 @@ function VirtualListInner<T>(
   // owns its scrolling (overflowY) — without it, rows overflow the flex box
   // visibly and spill into the nearest ancestor scroll container, which then
   // scrolls the WHOLE view (list + any side panel) together.
-  if (forcePlain || items.length < PLAIN_THRESHOLD) {
+  if (plain) {
     return (
       <div ref={containerRef} style={{ overflowY: "auto", ...style }}>
         {items.map((item, i) => (
-          <div key={i} data-vl-idx={i} style={{ display: "contents" }}>
+          <div key={rowKey ? rowKey(item, i) : i} data-vl-idx={i} style={{ display: "contents" }}>
             {render(item, i)}
           </div>
         ))}
@@ -92,7 +129,6 @@ function VirtualListInner<T>(
   }
 
   const totalHeight = items.length * rowHeight;
-  const containerHeight = containerRef.current?.clientHeight ?? 600;
 
   const firstVisible = Math.max(0, Math.floor(scrollTop / rowHeight) - overscan);
   const lastVisible = Math.min(
@@ -113,7 +149,14 @@ function VirtualListInner<T>(
       <div style={{ height: totalHeight, position: "relative" }}>
         {/* Visible window, absolutely positioned to the current scroll position */}
         <div style={{ position: "absolute", top: offsetY, left: 0, right: 0 }}>
-          {visibleItems.map((item, i) => render(item, firstVisible + i))}
+          {visibleItems.map((item, i) => {
+            const idx = firstVisible + i;
+            // With rowKey the wrapper carries the stable key; without it the
+            // caller's own key on the rendered element applies (legacy path).
+            return rowKey
+              ? <Fragment key={rowKey(item, idx)}>{render(item, idx)}</Fragment>
+              : render(item, idx);
+          })}
         </div>
       </div>
     </div>

@@ -112,9 +112,13 @@ func openCommandInTerminal(argv []string) ActionResultDTO {
 	// Build the AppleScript. The inner do script argument is the quoted kubectl
 	// command; we escape double quotes for the AppleScript string context.
 	cmdStr := shellQuoteArgv(argv)
-	// Escape double quotes and backslashes for embedding in an AppleScript string.
+	// Escape backslashes, double quotes, and line breaks for embedding in an
+	// AppleScript string literal - a raw newline would end the literal and let
+	// the remainder run as a second AppleScript statement.
 	escaped := strings.ReplaceAll(cmdStr, `\`, `\\`)
 	escaped = strings.ReplaceAll(escaped, `"`, `\"`)
+	escaped = strings.ReplaceAll(escaped, "\n", `\n`)
+	escaped = strings.ReplaceAll(escaped, "\r", `\r`)
 	script := fmt.Sprintf(
 		`tell application "Terminal" to do script "%s"`,
 		escaped,
@@ -131,11 +135,8 @@ func openCommandInTerminal(argv []string) ActionResultDTO {
 	return ActionResultDTO{OK: true}
 }
 
-// shellQuoteArgv joins argv into a single string, wrapping any argument that
-// contains shell-special characters in single quotes and escaping embedded
-// single quotes as '\”.
-//
-// Characters that trigger quoting: space, $, &, |, ;, <, >, *, ?, ', ", `.
+// shellQuoteArgv joins argv into a single string, single-quoting any argument
+// that is not provably safe to leave bare.
 func shellQuoteArgv(argv []string) string {
 	parts := make([]string, len(argv))
 	for i, arg := range argv {
@@ -144,21 +145,31 @@ func shellQuoteArgv(argv []string) string {
 	return strings.Join(parts, " ")
 }
 
-// shellSpecial contains the characters that require single-quote wrapping.
-const shellSpecial = " \t$&|;<>*?'\"`"
-
-func shellQuoteArg(arg string) string {
-	needsQuote := false
-	for _, ch := range shellSpecial {
-		if strings.ContainsRune(arg, ch) {
-			needsQuote = true
-			break
+// shellSafe reports whether every rune of arg is in the conservative allowlist
+// of characters that never need quoting in a POSIX shell. An allowlist, not a
+// special-character denylist: a denylist that forgets one character (newline,
+// backslash, ~) turns into a command-splitting bug; an allowlist fails closed.
+func shellSafe(arg string) bool {
+	if arg == "" {
+		return false // an empty argument only survives as ''
+	}
+	for _, ch := range arg {
+		switch {
+		case ch >= 'a' && ch <= 'z', ch >= 'A' && ch <= 'Z', ch >= '0' && ch <= '9':
+		case strings.ContainsRune("@%_+=:,./-", ch):
+		default:
+			return false
 		}
 	}
-	if !needsQuote {
+	return true
+}
+
+func shellQuoteArg(arg string) string {
+	if shellSafe(arg) {
 		return arg
 	}
 	// Single-quote the whole argument; escape embedded single quotes as '\''.
+	// Newlines and every other character are literal inside single quotes.
 	return "'" + strings.ReplaceAll(arg, "'", `'\''`) + "'"
 }
 

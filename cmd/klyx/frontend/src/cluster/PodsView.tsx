@@ -14,8 +14,8 @@ import type { VirtualListHandle } from "../chrome/VirtualList";
 import { useResizablePanel } from "../chrome/useResizablePanel";
 import { useResizableDock } from "../chrome/useResizableDock";
 import { useListKeys } from "../chrome/useListKeys";
-import { EmptyState } from "../chrome/EmptyState";
-import { SkeletonRows } from "../chrome/SkeletonRows";
+import { Chip, EmptyState, LiveIndicator, SkeletonRows, btn, ellipsis } from "../chrome/primitives";
+import { InspectorSection, InspectorTabButton, MetadataChips, inspectorStateBox } from "./ResourceInspector";
 
 const rankDot: Record<string, string> = {
   unhealthy: "var(--color-text-danger)",
@@ -30,9 +30,6 @@ function ago(s: number): string {
 
 const condColor = (status: string) =>
   status === "True" ? "var(--color-text-success)" : status === "False" ? "var(--color-text-danger)" : "var(--color-text-info)";
-
-const ellipsis: React.CSSProperties = { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" };
-const btn: React.CSSProperties = { fontSize: 11, padding: "3px 10px", borderRadius: 4, cursor: "pointer", border: "0.5px solid var(--color-border-tertiary)", background: "var(--color-background-primary)", color: "var(--color-text-secondary)" };
 
 const gridCols = "12px minmax(0,1.2fr) 60px minmax(110px,0.8fr) 55px minmax(0,1.1fr) 52px 28px";
 
@@ -74,6 +71,18 @@ export function PodsView({ cluster }: { cluster: string }) {
       useFleet.getState().clearPods();
     };
   }, [cluster]);
+
+  // Palette "jump to namespace": honor the request by re-opening the live
+  // subscription for it (same path as the namespace select). Runs after the
+  // mount effect above, so the request wins over the initial all-namespaces sub.
+  const nsRequest = useFleet((s) => s.pods.nsRequest);
+  useEffect(() => {
+    if (!nsRequest) return;
+    useFleet.getState().clearPodsNsRequest();
+    if (nsRequest.cluster !== cluster) return; // stale request from another cluster
+    if (liveCleanupRef.current) { liveCleanupRef.current(); liveCleanupRef.current = null; }
+    liveCleanupRef.current = openLivePods(cluster, nsRequest.namespace);
+  }, [nsRequest, cluster]);
 
   const onNamespace = (ns: string) => {
     // Close the current live sub, then open the new one for the selected namespace.
@@ -184,6 +193,7 @@ export function PodsView({ cluster }: { cluster: string }) {
                 ref={listRef}
                 items={filtered}
                 rowHeight={32}
+                rowKey={(p) => `${p.namespace}/${p.name}`}
                 style={{ flex: 1, minHeight: 0 }}
                 render={(p, i) => {
                   const isKbSelected = i === effectiveIdx;
@@ -403,24 +413,14 @@ function PodDetailPanel({
 
       {/* Tabs: info | yaml (logs moved to dock) */}
       <div style={{ display: "flex", gap: 2, marginBottom: 12 }}>
-        {(["info", "yaml"] as const).map((t) => (
-          <button
-            key={t}
-            onClick={() => setTab(t)}
-            style={{
-              fontSize: 10, padding: "3px 10px", borderRadius: 4, cursor: "pointer",
-              border: tab === t ? "0.5px solid var(--color-text-info)" : "0.5px solid var(--color-border-tertiary)",
-              background: tab === t ? "var(--color-background-info, transparent)" : "transparent",
-              color: tab === t ? "var(--color-text-info)" : "var(--color-text-tertiary)",
-            }}
-          >{t}</button>
-        ))}
+        <InspectorTabButton active={tab === "info"} onClick={() => setTab("info")}>info</InspectorTabButton>
+        <InspectorTabButton active={tab === "yaml"} onClick={() => setTab("yaml")}>yaml</InspectorTabButton>
       </div>
 
       {loading && !detail ? (
-        <div style={{ color: "var(--color-text-secondary)" }}>Loading detail…</div>
+        <div style={inspectorStateBox}>Loading detail...</div>
       ) : !detail ? (
-        <div style={{ color: "var(--color-text-secondary)" }}>Could not load pod detail.</div>
+        <div style={inspectorStateBox}>Could not load pod detail.</div>
       ) : (
         <>
           {tab === "info" && (
@@ -466,17 +466,10 @@ function PodDetailPanel({
             if (verb === "delete") {
               void deletePod(cluster, summary.namespace, summary.name);
             } else {
-              // Restart the owner workload. For ReplicaSet, derive the Deployment name
-              // by stripping the trailing pod-template-hash segment (the last dash-separated
-              // segment added by the ReplicaSet controller), e.g. "web-7d4b9c6f9" -> "web".
-              const { ownerKind, ownerName } = summary;
-              let targetKind = ownerKind;
-              let targetName = ownerName;
-              if (ownerKind === "ReplicaSet") {
-                targetKind = "Deployment";
-                targetName = ownerName.split("-").slice(0, -1).join("-");
-              }
-              void rolloutRestart(cluster, targetKind, summary.namespace, targetName);
+              // Restart the owner workload. The backend resolves the real
+              // controller chain (ReplicaSet -> Deployment) into ownerKind/
+              // ownerName, so no name guessing happens here.
+              void rolloutRestart(cluster, summary.ownerKind, summary.namespace, summary.ownerName);
             }
           }}
         />
@@ -583,9 +576,11 @@ function InfoTab({ detail, cluster, namespace, name, onRestart, onDelete }: {
 }) {
   const p = detail.summary;
   const [forwarding, setForwarding] = useState(false);
-  // Restart is meaningful when the pod is owned by a ReplicaSet (-> Deployment),
-  // StatefulSet, or DaemonSet. Standalone pods (ownerKind="") have no controller to restart.
-  const showRestart = p.ownerKind === "ReplicaSet" || p.ownerKind === "StatefulSet" || p.ownerKind === "DaemonSet";
+  // Restart is meaningful only for owners rollout-restart supports. The
+  // backend resolves ReplicaSet -> Deployment, so a pod still showing
+  // ownerKind=ReplicaSet is under a BARE ReplicaSet (nothing to restart), and
+  // Argo Rollouts surface as kind Rollout (restart is Argo's verb, not ours).
+  const showRestart = p.ownerKind === "Deployment" || p.ownerKind === "StatefulSet" || p.ownerKind === "DaemonSet";
 
   return (
     <>
@@ -625,28 +620,20 @@ function InfoTab({ detail, cluster, namespace, name, onRestart, onDelete }: {
       </div>
 
       {/* Summary header */}
-      <Section title="Summary">
+      <InspectorSection title="Summary">
         <InfoRow label="phase">{p.phase}{p.reason ? ` · ${p.reason}` : ""}</InfoRow>
         {p.ownerKind && <InfoRow label="owner">{p.ownerKind}/{p.ownerName}</InfoRow>}
         {p.node && <InfoRow label="node">{p.node}</InfoRow>}
         {p.ip && <InfoRow label="ip">{p.ip}</InfoRow>}
         {detail.qosClass && <InfoRow label="qos">{detail.qosClass}</InfoRow>}
         {detail.serviceAccount && <InfoRow label="sa">{detail.serviceAccount}</InfoRow>}
-      </Section>
+      </InspectorSection>
 
-      {/* Labels */}
-      {Object.keys(detail.labels).length > 0 && (
-        <Section title="Labels">
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
-            {Object.entries(detail.labels).map(([k, v]) => (
-              <span key={k} style={{ background: "var(--color-background-secondary)", color: "var(--color-text-secondary)", fontSize: 10, padding: "1px 5px", borderRadius: 3 }}>{k}={v}</span>
-            ))}
-          </div>
-        </Section>
-      )}
+      <MetadataChips title="Labels" values={detail.labels} />
+      <MetadataChips title="Annotations" values={detail.annotations} defaultCollapsed />
 
       {/* Containers */}
-      <Section title={`Containers (${p.containers.length})`}>
+      <InspectorSection title="Containers" count={p.containers.length} collapsible>
         <div style={{ display: "grid", gridTemplateColumns: containerGridCols, gap: 6, fontSize: 9, marginBottom: 2, color: "var(--color-text-tertiary)", textTransform: "uppercase" }}>
           <span>name</span><span>state</span><span>image</span><span>rst</span>
         </div>
@@ -661,11 +648,11 @@ function InfoTab({ detail, cluster, namespace, name, onRestart, onDelete }: {
             <span style={{ color: c.restarts > 0 ? "var(--color-text-warning)" : "var(--color-text-tertiary)" }}>{c.restarts}</span>
           </div>
         ))}
-      </Section>
+      </InspectorSection>
 
       {/* Conditions */}
       {detail.conditions.length > 0 && (
-        <Section title="Conditions">
+        <InspectorSection title="Conditions" collapsible>
           {detail.conditions.map((c) => (
             <div key={c.type} style={{ display: "flex", gap: 8, alignItems: "baseline", fontSize: 11 }}>
               <span style={{ width: 7, height: 7, borderRadius: "50%", background: condColor(c.status), display: "inline-block", flexShrink: 0 }} />
@@ -673,11 +660,11 @@ function InfoTab({ detail, cluster, namespace, name, onRestart, onDelete }: {
               <span style={{ color: "var(--color-text-secondary)", ...ellipsis }} title={c.message}>{c.message || c.reason}</span>
             </div>
           ))}
-        </Section>
+        </InspectorSection>
       )}
 
       {/* Events */}
-      <Section title={`Events (${detail.events.length})`}>
+      <InspectorSection title="Events" count={detail.events.length} collapsible>
         {detail.events.length === 0 ? (
           <span style={{ color: "var(--color-text-tertiary)" }}>No events for this pod.</span>
         ) : (
@@ -690,7 +677,7 @@ function InfoTab({ detail, cluster, namespace, name, onRestart, onDelete }: {
             </div>
           ))
         )}
-      </Section>
+      </InspectorSection>
     </>
   );
 }
@@ -876,50 +863,11 @@ function DebugShellButton({
   );
 }
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <div style={{ marginBottom: 14 }}>
-      <div style={{ fontSize: 9, textTransform: "uppercase", letterSpacing: 0.5, color: "var(--color-text-tertiary)", marginBottom: 5 }}>{title}</div>
-      <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>{children}</div>
-    </div>
-  );
-}
-
 function InfoRow({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div style={{ display: "flex", gap: 8, fontSize: 11 }}>
       <span style={{ color: "var(--color-text-tertiary)", width: 60, flexShrink: 0 }}>{label}</span>
       <span style={{ color: "var(--color-text-primary)" }}>{children}</span>
     </div>
-  );
-}
-
-function Chip({ on, onClick, children }: { on: boolean; onClick: () => void; children: React.ReactNode }) {
-  return (
-    <button onClick={onClick} style={{
-      fontSize: 10, padding: "3px 9px", borderRadius: 11, cursor: "pointer",
-      border: on ? "0.5px solid var(--color-text-info)" : "0.5px solid var(--color-border-tertiary)",
-      background: on ? "var(--color-background-info, transparent)" : "transparent",
-      color: on ? "var(--color-text-info)" : "var(--color-text-tertiary)",
-    }}>{children}</button>
-  );
-}
-
-function LiveIndicator({ live }: { live: boolean }) {
-  if (live) {
-    return (
-      <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 10, color: "var(--color-text-success)" }}>
-        <span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--color-text-success)", display: "inline-block", flexShrink: 0 }} />
-        live
-      </span>
-    );
-  }
-  return (
-    <span
-      style={{ fontSize: 10, color: "var(--color-text-tertiary)", cursor: "default" }}
-      title="live updates unavailable - use refresh"
-    >
-      ○ manual
-    </span>
   );
 }

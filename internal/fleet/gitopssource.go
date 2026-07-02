@@ -35,7 +35,7 @@ func (c *ClusterConn) SourceURL(ctx context.Context, kind, ns, name string) (str
 	if !ok {
 		return "", false
 	}
-	version := preferredVersion(c.typed.Discovery(), group, fallback)
+	version := preferredVersion(c.discovery(), group, fallback)
 	gvr := schema.GroupVersionResource{Group: group, Version: version, Resource: resource}
 	u, err := c.dyn.Resource(gvr).Namespace(ns).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {

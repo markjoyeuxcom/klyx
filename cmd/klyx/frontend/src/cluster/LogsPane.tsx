@@ -1,13 +1,24 @@
-import { useEffect, useRef, useState, useLayoutEffect, useCallback } from "react";
+import React, { useEffect, useRef, useState, useLayoutEffect, useCallback } from "react";
 import { Events } from "@wailsio/runtime";
-import { IconArrowsDiagonal, IconArrowsDiagonalMinimize } from "@tabler/icons-react";
+import {
+  IconArrowsDiagonal,
+  IconArrowsDiagonalMinimize,
+  IconCheck,
+  IconCopy,
+  IconFilter,
+  IconX,
+} from "@tabler/icons-react";
 import { LogsService } from "../../bindings/github.com/moomora/klyx/internal/appbridge/index.js";
 import type { ContainerSummaryDTO } from "../store/fleet";
 import { parseLine, stripAnsi, splitHighlight } from "./logline";
+import type { LogLevel, ParsedLine } from "./logline";
 
 // TODO(DD5): virtualize line rendering for very large buffers. Currently capped
-// at 10000 stored lines / 2000 rendered lines. Roadmap: react-virtual or a
-// custom windowed scroller once real-world usage confirms the threshold.
+// at 10000 stored lines / 2000 rendered lines; lines are parsed ONCE at ingest
+// (raw + parsed stored together in the buffer) so renders and level filters
+// never re-run the level/prefix regexes over the whole buffer. Roadmap:
+// react-virtual or a custom windowed scroller once real-world usage confirms
+// the threshold.
 
 const LOG_BUF_CAP = 10_000;
 const DOM_RENDER_CAP = 2_000;
@@ -16,6 +27,9 @@ const DOM_RENDER_CAP = 2_000;
 const EXPAND_Z = 900;
 
 type StreamStatus = "connecting" | "streaming" | "ended" | "error";
+type LogLevelFilter = Extract<LogLevel, "error" | "warn" | "info" | "debug">;
+
+const LOG_LEVEL_FILTERS: LogLevelFilter[] = ["error", "warn", "info", "debug"];
 
 interface LogChunkDTO {
   lines: string[];
@@ -27,6 +41,57 @@ interface PodRef {
   namespace: string;
   name: string;
   containers: ContainerSummaryDTO[];
+}
+
+interface LogLineDetail {
+  raw: string;
+  stripped: string;
+  level: LogLevel;
+  prefix: string;
+  message: string;
+  source?: string;
+  hasAnsi: boolean;
+}
+
+// A buffered line carries its parse result, computed once at ingest —
+// re-parsing the whole buffer per render was the hot path.
+interface BufferedLine {
+  raw: string;
+  parsed: ParsedLine;
+}
+
+function toBuffered(line: string): BufferedLine {
+  return { raw: line, parsed: parseLine(stripAnsi(line)) };
+}
+
+// Reference implementation of the level filter over raw lines. The component
+// itself filters pre-parsed BufferedLines (same semantics, no re-parse); this
+// export remains the documented/tested contract for that behavior.
+export function filterLogLinesByLevel(lines: string[], filters: Record<LogLevelFilter, boolean>): string[] {
+  const active = LOG_LEVEL_FILTERS.some((level) => filters[level]);
+  if (!active) return lines;
+  return lines.filter((line) => {
+    const level = parseLine(stripAnsi(line)).level;
+    return level !== "none" && filters[level as LogLevelFilter] === true;
+  });
+}
+
+export function getLogLineDetail(line: string): LogLineDetail {
+  const stripped = stripAnsi(line);
+  const parsed = parseLine(stripped);
+  const prefix = parsed.dimPrefixLen > 0 ? stripped.slice(0, parsed.dimPrefixLen) : "";
+  const message = stripped.slice(parsed.dimPrefixLen).trimStart() || stripped;
+  const sourceMatch = prefix.match(/([A-Za-z0-9_.-]+\.[A-Za-z0-9]+:\d+)\]?$/);
+
+  return {
+    raw: line,
+    stripped,
+    level: parsed.level,
+    prefix,
+    message,
+    source: sourceMatch?.[1],
+    hasAnsi: stripped !== line,
+  };
 }
 
 export function LogsPane({
@@ -76,11 +141,19 @@ export function LogsPane({
   const [follow, setFollow] = useState(true);
   const [wrap, setWrap] = useState(true);
   const [search, setSearch] = useState("");
+  const [levelFilters, setLevelFilters] = useState<Record<LogLevelFilter, boolean>>({
+    error: false,
+    warn: false,
+    info: false,
+    debug: false,
+  });
   const [expanded, setExpanded] = useState(false);
   const [copyState, setCopyState] = useState<"idle" | "copied">("idle");
+  const [selectedLine, setSelectedLine] = useState<{ index: number; text: string } | null>(null);
+  const [copiedLine, setCopiedLine] = useState<{ index: number; text: string } | null>(null);
 
   // -- buffer (OUTSIDE zustand) --
-  const bufRef = useRef<string[]>([]);
+  const bufRef = useRef<BufferedLine[]>([]);
   const droppedRef = useRef(false);
   // version counter: bump once per batch to trigger a re-render
   const [version, setVersion] = useState(0);
@@ -98,11 +171,16 @@ export function LogsPane({
   const searchInputRef = useRef<HTMLInputElement>(null);
   const [activeMatchIdx, setActiveMatchIdx] = useState(0);
 
-  // derive which lines to render (last DOM_RENDER_CAP from buffer)
+  // derive which lines to render (last DOM_RENDER_CAP from buffer). Level
+  // filtering reads the parse result stored at ingest — no per-render regexes.
   const buf = bufRef.current;
-  const totalLines = buf.length;
-  const renderLines = buf.length > DOM_RENDER_CAP ? buf.slice(buf.length - DOM_RENDER_CAP) : buf;
-  const truncated = totalLines > DOM_RENDER_CAP;
+  const levelFilterActive = LOG_LEVEL_FILTERS.some((level) => levelFilters[level]);
+  const filteredLines = levelFilterActive
+    ? buf.filter((l) => l.parsed.level !== "none" && levelFilters[l.parsed.level as LogLevelFilter] === true)
+    : buf;
+  const totalVisibleLines = filteredLines.length;
+  const renderLines = filteredLines.length > DOM_RENDER_CAP ? filteredLines.slice(filteredLines.length - DOM_RENDER_CAP) : filteredLines;
+  const truncated = totalVisibleLines > DOM_RENDER_CAP;
 
   // search highlight helpers
   const searchLc = search.toLowerCase();
@@ -111,13 +189,13 @@ export function LogsPane({
   const matchLineIndices: number[] = [];
   if (searchLc) {
     for (let i = 0; i < renderLines.length; i++) {
-      if (renderLines[i].toLowerCase().includes(searchLc)) matchLineIndices.push(i);
+      if (renderLines[i].raw.toLowerCase().includes(searchLc)) matchLineIndices.push(i);
     }
   }
   const matchCount = searchLc
     ? (() => {
         let n = 0;
-        for (const l of bufRef.current) if (l.toLowerCase().includes(searchLc)) n++;
+        for (const l of filteredLines) if (l.raw.toLowerCase().includes(searchLc)) n++;
         return n;
       })()
     : 0;
@@ -171,6 +249,8 @@ export function LogsPane({
       // reset buffer
       bufRef.current = [];
       droppedRef.current = false;
+      setSelectedLine(null);
+      setCopiedLine(null);
       setVersion((v) => v + 1);
       setStatus("connecting");
       setErrorMsg(undefined);
@@ -214,14 +294,15 @@ export function LogsPane({
         if (stale) return;
         const chunk = ev.data;
         if (chunk.lines && chunk.lines.length > 0) {
+          // Parse each line once at ingest, and mutate the ref'd buffer in
+          // place — copying the whole 10k-line buffer per chunk was pure
+          // overhead. Nothing memoizes on the array identity; the version
+          // counter is the render trigger.
           const buf = bufRef.current;
-          const combined = buf.length + chunk.lines.length;
-          if (combined > LOG_BUF_CAP) {
-            const drop = combined - LOG_BUF_CAP;
-            bufRef.current = [...buf.slice(drop), ...chunk.lines];
+          for (const line of chunk.lines) buf.push(toBuffered(line));
+          if (buf.length > LOG_BUF_CAP) {
+            buf.splice(0, buf.length - LOG_BUF_CAP);
             droppedRef.current = true;
-          } else {
-            bufRef.current = [...buf, ...chunk.lines];
           }
           setVersion((v) => v + 1);
         }
@@ -288,18 +369,45 @@ export function LogsPane({
   const clearBuffer = () => {
     bufRef.current = [];
     droppedRef.current = false;
+    setSelectedLine(null);
+    setCopiedLine(null);
     setVersion((v) => v + 1);
   };
 
   const handleCopy = async () => {
     try {
-      await navigator.clipboard.writeText(bufRef.current.join("\n"));
+      await navigator.clipboard.writeText(filteredLines.map((l) => l.raw).join("\n"));
       setCopyState("copied");
       setTimeout(() => setCopyState("idle"), 1500);
     } catch {
       // clipboard not available (e.g. jsdom) — silently ignore
     }
   };
+
+  const handleCopyLine = async (line: string, index: number) => {
+    try {
+      await navigator.clipboard.writeText(line);
+      setSelectedLine({ index, text: line });
+      setCopiedLine({ index, text: line });
+      setTimeout(() => setCopiedLine(null), 1500);
+    } catch {
+      // clipboard not available (e.g. jsdom) — silently ignore
+    }
+  };
+
+  const handleCopySelected = async (value: string) => {
+    try {
+      await navigator.clipboard.writeText(value);
+    } catch {
+      // clipboard not available (e.g. jsdom) — silently ignore
+    }
+  };
+
+  const selectedDetail = selectedLine ? getLogLineDetail(selectedLine.text) : null;
+  const selectedLevelFilter =
+    selectedDetail?.level && selectedDetail.level !== "none"
+      ? selectedDetail.level as LogLevelFilter
+      : null;
 
   const jumpMatch = useCallback((dir: 1 | -1) => {
     if (matchLineIndices.length === 0) return;
@@ -318,7 +426,7 @@ export function LogsPane({
   };
 
   // Reset active match index when search changes
-  useEffect(() => { setActiveMatchIdx(0); }, [searchLc]);
+  useEffect(() => { setActiveMatchIdx(0); }, [searchLc, levelFilters.error, levelFilters.warn, levelFilters.info, levelFilters.debug]);
 
   // --------------------------------------------------------------------------
   // Styles
@@ -342,6 +450,12 @@ export function LogsPane({
     ...btnStyle,
     display: "flex", alignItems: "center", justifyContent: "center",
     padding: "3px 5px",
+  };
+
+  const detailBtnStyle: React.CSSProperties = {
+    ...iconBtnStyle,
+    minWidth: 0,
+    height: 24,
   };
 
   const selectStyle: React.CSSProperties = {
@@ -407,6 +521,17 @@ export function LogsPane({
       >follow</button>
       <button style={chipStyle(wrap)} onClick={() => setWrap((w) => !w)}>wrap</button>
 
+      {/* Level filters. No active level means "all"; active chips narrow output. */}
+      {LOG_LEVEL_FILTERS.map((level) => (
+        <button
+          key={level}
+          style={chipStyle(levelFilters[level])}
+          onClick={() => setLevelFilters((current) => ({ ...current, [level]: !current[level] }))}
+        >
+          {level}
+        </button>
+      ))}
+
       {/* Search */}
       <input
         ref={searchInputRef}
@@ -439,7 +564,7 @@ export function LogsPane({
         style={btnStyle}
         aria-label="copy logs"
       >
-        {copyState === "copied" ? "copied" : "copy"}
+        {copyState === "copied" ? "copied" : "copy visible"}
       </button>
 
       {/* Expand / collapse — hidden in a pop-out window (fixed-overlay expand is
@@ -502,7 +627,7 @@ export function LogsPane({
       )}
       {truncated && (
         <div style={{ color: "var(--color-text-tertiary)", fontSize: 10, marginBottom: 2, userSelect: "none" }}>
-          · showing last {DOM_RENDER_CAP} of {totalLines} lines
+          · showing last {DOM_RENDER_CAP} of {totalVisibleLines} visible lines
         </div>
       )}
 
@@ -510,17 +635,117 @@ export function LogsPane({
         const isActiveMatch = searchLc
           ? matchLineIndices[clampedActive] === i
           : false;
+        const isSelected = selectedLine?.index === i && selectedLine.text === line.raw;
+        const isCopied = copiedLine?.index === i && copiedLine.text === line.raw;
         return (
           <LogLine
             key={i}
             ref={(el) => { rowRefs.current[i] = el; }}
-            line={line}
+            line={line.raw}
+            parsed={line.parsed}
             search={searchLc}
             wrap={wrap}
             activeMatch={isActiveMatch}
+            selected={isSelected}
+            copied={isCopied}
+            onSelect={() => setSelectedLine({ index: i, text: line.raw })}
+            onCopy={() => void handleCopyLine(line.raw, i)}
           />
         );
       })}
+    </div>
+  );
+
+  const selectedLineInspector = selectedDetail && (
+    <div
+      data-testid="log-line-detail"
+      style={{
+        display: "grid",
+        gridTemplateColumns: "minmax(0, 1fr) auto",
+        gap: 8,
+        border: "0.5px solid var(--color-border-tertiary)",
+        borderRadius: 4,
+        background: "var(--color-background-secondary)",
+        padding: "8px 10px",
+        fontSize: 11,
+        color: "var(--color-text-secondary)",
+      }}
+    >
+      <div style={{ minWidth: 0, display: "flex", flexDirection: "column", gap: 6 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+          <span style={{ fontSize: 10, color: "var(--color-text-tertiary)" }}>selected line</span>
+          <span style={selectedLevelPillStyle(selectedDetail.level)}>{selectedDetail.level}</span>
+          {selectedDetail.source && (
+            <span style={{ fontFamily: "var(--font-mono)", color: "var(--color-text-tertiary)" }}>
+              {selectedDetail.source}
+            </span>
+          )}
+          {selectedDetail.hasAnsi && (
+            <span style={{ fontSize: 10, color: "var(--color-text-tertiary)" }}>ansi stripped</span>
+          )}
+        </div>
+        {selectedDetail.prefix && (
+          <div style={detailFieldStyle}>
+            <span style={detailLabelStyle}>prefix</span>
+            <span style={detailMonoValueStyle}>{selectedDetail.prefix}</span>
+          </div>
+        )}
+        <div style={detailFieldStyle}>
+          <span style={detailLabelStyle}>message</span>
+          <span style={detailMonoValueStyle}>{selectedDetail.message}</span>
+        </div>
+        {selectedDetail.hasAnsi && (
+          <div style={detailFieldStyle}>
+            <span style={detailLabelStyle}>stripped</span>
+            <span style={detailMonoValueStyle}>{selectedDetail.stripped}</span>
+          </div>
+        )}
+      </div>
+      <div style={{ display: "flex", alignItems: "flex-start", gap: 5, flexWrap: "wrap", justifyContent: "flex-end" }}>
+        <button
+          type="button"
+          style={detailBtnStyle}
+          onClick={() => void handleCopySelected(selectedDetail.raw)}
+          title="copy raw line"
+          aria-label="copy raw log line"
+        >
+          <IconCopy size={13} stroke={1.6} />
+        </button>
+        <button
+          type="button"
+          style={detailBtnStyle}
+          onClick={() => void handleCopySelected(selectedDetail.message)}
+          title="copy message"
+          aria-label="copy log message"
+        >
+          msg
+        </button>
+        {selectedLevelFilter && (
+          <button
+            type="button"
+            style={detailBtnStyle}
+            onClick={() => setLevelFilters({
+              error: selectedLevelFilter === "error",
+              warn: selectedLevelFilter === "warn",
+              info: selectedLevelFilter === "info",
+              debug: selectedLevelFilter === "debug",
+            })}
+            title={`filter ${selectedLevelFilter} logs`}
+            aria-label={`filter ${selectedLevelFilter} logs`}
+          >
+            <IconFilter size={13} stroke={1.6} />
+          </button>
+        )}
+        <button
+          type="button"
+          style={detailBtnStyle}
+          onClick={() => setSelectedLine(null)}
+          title="close"
+          aria-label="close log line detail"
+        >
+          <IconX size={13} stroke={1.6} />
+        </button>
+      </div>
     </div>
   );
 
@@ -566,6 +791,7 @@ export function LogsPane({
             {controlsBar}
           </div>
         </div>
+        {selectedLineInspector}
         {logViewport}
       </div>
     );
@@ -580,6 +806,7 @@ export function LogsPane({
       <div style={{ marginBottom: 8 }}>
         {controlsBar}
       </div>
+      {selectedLineInspector && <div style={{ marginBottom: 8 }}>{selectedLineInspector}</div>}
       {logViewport}
     </div>
   );
@@ -589,14 +816,21 @@ export function LogsPane({
 // LogLine component
 // --------------------------------------------------------------------------
 
-import React from "react";
-
 const LogLine = React.forwardRef<
   HTMLDivElement,
-  { line: string; search: string; wrap: boolean; activeMatch: boolean }
->(function LogLine({ line, search, wrap, activeMatch }, ref) {
-  const parsed = parseLine(stripAnsi(line));
-
+  {
+    line: string;
+    /** Parse result computed once at buffer ingest — never re-parsed here. */
+    parsed: ParsedLine;
+    search: string;
+    wrap: boolean;
+    activeMatch: boolean;
+    selected: boolean;
+    copied: boolean;
+    onSelect: () => void;
+    onCopy: () => void;
+  }
+>(function LogLine({ line, parsed, search, wrap, activeMatch, selected, copied, onSelect, onCopy }, ref) {
   const levelColor = ((): string => {
     switch (parsed.level) {
       case "error": return "var(--color-text-danger)";
@@ -612,8 +846,13 @@ const LogLine = React.forwardRef<
     color: levelColor,
     paddingTop: 2,
     paddingBottom: 2,
+    paddingLeft: 2,
+    paddingRight: 2,
     userSelect: "text",
-    background: activeMatch ? "var(--color-background-secondary)" : undefined,
+    background: selected
+      ? "var(--color-background-info)"
+      : activeMatch ? "var(--color-background-secondary)" : undefined,
+    borderRadius: selected ? 3 : undefined,
     // In no-wrap mode the row must NOT scroll itself (a per-line overflow gives
     // every long line its own macOS overlay scrollbar - dark bars across the
     // text). The row grows to its content width and the VIEWPORT provides the
@@ -632,24 +871,121 @@ const LogLine = React.forwardRef<
 
   if (!search) {
     return (
-      <div ref={ref} style={rowStyle}>
-        {prefix && <span style={{ color: "var(--color-text-tertiary)" }}>{prefix || "​"}</span>}
-        {body || (!prefix ? "​" : "")}
-      </div>
+      <LogLineShell ref={ref} style={rowStyle} line={line} copied={copied} onSelect={onSelect} onCopy={onCopy}>
+        <>
+          {prefix && <span style={{ color: "var(--color-text-tertiary)" }}>{prefix || "​"}</span>}
+          {body || (!prefix ? "​" : "")}
+        </>
+      </LogLineShell>
     );
   }
 
   return (
-    <div ref={ref} style={rowStyle}>
-      {prefix && (
-        <span style={{ color: "var(--color-text-tertiary)" }}>
-          {renderHighlighted(prefix, search)}
-        </span>
-      )}
-      {renderHighlighted(body, search)}
+    <LogLineShell ref={ref} style={rowStyle} line={line} copied={copied} onSelect={onSelect} onCopy={onCopy}>
+      <>
+        {prefix && (
+          <span style={{ color: "var(--color-text-tertiary)" }}>
+            {renderHighlighted(prefix, search)}
+          </span>
+        )}
+        {renderHighlighted(body, search)}
+      </>
+    </LogLineShell>
+  );
+});
+
+const LogLineShell = React.forwardRef<
+  HTMLDivElement,
+  {
+    style: React.CSSProperties;
+    line: string;
+    copied: boolean;
+    onSelect: () => void;
+    onCopy: () => void;
+    children: React.ReactNode;
+  }
+>(function LogLineShell({ style, line, copied, onSelect, onCopy, children }, ref) {
+  return (
+    <div
+      ref={ref}
+      style={{ ...style, display: "flex", alignItems: "baseline", gap: 6 }}
+      onClick={onSelect}
+      data-testid="log-line"
+    >
+      <button
+        type="button"
+        aria-label={`copy log line: ${line}`}
+        aria-pressed={copied}
+        title={copied ? "copied" : "copy line"}
+        onClick={(e) => {
+          e.stopPropagation();
+          onCopy();
+        }}
+        style={lineActionBtn}
+      >
+        {copied ? <IconCheck size={11} stroke={1.8} /> : <IconCopy size={11} stroke={1.6} />}
+      </button>
+      <span style={{ minWidth: 0, flex: 1 }}>{children}</span>
     </div>
   );
 });
+
+const lineActionBtn: React.CSSProperties = {
+  flex: "0 0 auto",
+  width: 20,
+  height: 18,
+  padding: 0,
+  border: "0.5px solid var(--color-border-tertiary)",
+  borderRadius: 3,
+  background: "var(--color-background-primary)",
+  color: "var(--color-text-tertiary)",
+  cursor: "pointer",
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  fontFamily: "var(--font-mono)",
+  fontSize: 9,
+  lineHeight: 1.3,
+};
+
+const detailFieldStyle: React.CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "58px minmax(0, 1fr)",
+  gap: 8,
+  alignItems: "baseline",
+};
+
+const detailLabelStyle: React.CSSProperties = {
+  color: "var(--color-text-tertiary)",
+  fontSize: 10,
+};
+
+const detailMonoValueStyle: React.CSSProperties = {
+  minWidth: 0,
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
+  fontFamily: "var(--font-mono)",
+  color: "var(--color-text-secondary)",
+};
+
+function selectedLevelPillStyle(level: LogLevel): React.CSSProperties {
+  const color =
+    level === "error" ? "var(--color-text-danger)" :
+    level === "warn" ? "var(--color-text-warning)" :
+    level === "info" ? "var(--color-text-info)" :
+    level === "debug" ? "var(--color-text-tertiary)" :
+    "var(--color-text-tertiary)";
+
+  return {
+    border: "0.5px solid var(--color-border-tertiary)",
+    borderRadius: 999,
+    padding: "1px 7px",
+    fontSize: 10,
+    color,
+    background: "var(--color-background-primary)",
+  };
+}
 
 function renderHighlighted(text: string, searchLc: string): React.ReactNode {
   if (!text) return null;

@@ -111,9 +111,10 @@ func (s *PodsService) CloseAll() { s.live.closeAll() }
 // zero DTO with empty-but-non-nil collections (never panics on null).
 func (s *PodsService) GetPodDetail(cluster, namespace, name string) PodDetailDTO {
 	empty := PodDetailDTO{
-		Labels:     map[string]string{},
-		Conditions: []ConditionDTO{},
-		Events:     []EventDTO{},
+		Labels:      map[string]string{},
+		Annotations: map[string]string{},
+		Conditions:  []ConditionDTO{},
+		Events:      []EventDTO{},
 	}
 	conn, ok := s.lookup(cluster)
 	if !ok {
@@ -130,6 +131,10 @@ func (s *PodsService) GetPodDetail(cluster, namespace, name string) PodDetailDTO
 	if labels == nil {
 		labels = map[string]string{}
 	}
+	annotations := d.Annotations
+	if annotations == nil {
+		annotations = map[string]string{}
+	}
 	conds := make([]ConditionDTO, 0, len(d.Conditions))
 	for _, c := range d.Conditions {
 		conds = append(conds, ConditionDTO{Type: c.Type, Status: c.Status, Reason: c.Reason, Message: c.Message})
@@ -141,6 +146,7 @@ func (s *PodsService) GetPodDetail(cluster, namespace, name string) PodDetailDTO
 	return PodDetailDTO{
 		Summary:        toPodSummaryDTO(d.Summary),
 		Labels:         labels,
+		Annotations:    annotations,
 		Conditions:     conds,
 		Events:         events,
 		YAML:           d.YAML,
@@ -152,6 +158,9 @@ func (s *PodsService) GetPodDetail(cluster, namespace, name string) PodDetailDTO
 // DeletePod deletes a single pod via the cluster connection. The owning
 // controller recreates it; this is the standard imperative bounce.
 func (s *PodsService) DeletePod(cluster, namespace, name string) ActionResultDTO {
+	if err := checkProtected(cluster); err != nil {
+		return ActionResultDTO{Error: err.Error()}
+	}
 	conn, ok := s.lookup(cluster)
 	if !ok {
 		return ActionResultDTO{Error: "cluster not connected: " + cluster}

@@ -3,11 +3,11 @@ import type { CSSProperties } from "react";
 import { useFleet } from "../store/fleet";
 import type { GatewayRefDTO } from "../store/fleet";
 import { listGateways } from "../bridge/gateway";
-import { NetworkTopology } from "./NetworkTopology";
+import { GatewayTopology } from "./GatewayTopology";
+import { frame, ellipsis, SummaryCell, FilterButton } from "../chrome/primitives";
+import { SyncingChip, staleStyle } from "./staleness";
 
 const empty: CSSProperties = { padding: 24, color: "var(--color-text-secondary)", fontSize: 13 };
-const frame: CSSProperties = { border: "0.5px solid var(--color-border-tertiary)", borderRadius: "var(--border-radius-md)", background: "var(--color-background-primary)" };
-const ellipsis: CSSProperties = { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" };
 
 type GatewayMode = "all" | "pending" | "programmed";
 
@@ -36,7 +36,7 @@ function gatewayListeners(g: GatewayRefDTO): string {
   }).join(", ");
 }
 
-export function NetworkView({ cluster }: { cluster: string }) {
+export function GatewayApiView({ cluster }: { cluster: string }) {
   const route = useFleet((s) => s.route);
   const net = useFleet((s) => s.network);
   const openGateway = useFleet((s) => s.openGateway);
@@ -49,9 +49,16 @@ export function NetworkView({ cluster }: { cluster: string }) {
     if (!gateway) listGateways(cluster).catch((e) => console.error("listGateways", e));
   }, [cluster, gateway]);
 
+  // Until the slice belongs to this cluster, render the loading state rather
+  // than another cluster's gateways (one frame before the effect's fetch lands).
+  const sameCluster = net.cluster === cluster;
+  const gateways = sameCluster ? net.gateways : [];
+  const listLoading = !sameCluster || net.listLoading;
+  const served = sameCluster && net.served;
+
   const orderedGateways = useMemo(
-    () => [...net.gateways].sort((a, b) => Number(isPending(b)) - Number(isPending(a)) || a.namespace.localeCompare(b.namespace) || a.name.localeCompare(b.name)),
-    [net.gateways],
+    () => [...gateways].sort((a, b) => Number(isPending(b)) - Number(isPending(a)) || a.namespace.localeCompare(b.namespace) || a.name.localeCompare(b.name)),
+    [gateways],
   );
   const q = query.trim().toLowerCase();
   const visibleGateways = orderedGateways.filter((g) => {
@@ -60,22 +67,26 @@ export function NetworkView({ cluster }: { cluster: string }) {
     if (!q) return true;
     return [g.namespace, g.name, g.className, gatewayStatus(g), gatewayAddress(g), gatewayListeners(g)].some((v) => v.toLowerCase().includes(q));
   });
-  const pending = net.gateways.filter(isPending).length;
-  const programmed = net.gateways.length - pending;
-  const classes = new Set(net.gateways.map((g) => g.className).filter(Boolean)).size;
+  const pending = gateways.filter(isPending).length;
+  const programmed = gateways.length - pending;
+  const classes = new Set(gateways.map((g) => g.className).filter(Boolean)).size;
 
-  if (gateway) return <NetworkTopology cluster={cluster} gateway={gateway} />;
+  if (gateway) return <GatewayTopology cluster={cluster} gateway={gateway} />;
 
-  if (net.listLoading && net.gateways.length === 0) return <div style={empty}>Loading Gateways…</div>;
-  if (!net.served) return <div style={empty}>Gateway API is not installed on this cluster.</div>;
-  if (net.gateways.length === 0) return <div style={empty}>No Gateways found.</div>;
+  if (listLoading && gateways.length === 0) return <div style={empty}>Loading Gateways…</div>;
+  // A failed list on a served API is an error, never "no Gateways".
+  if (sameCluster && net.listError) {
+    return <div style={{ ...empty, color: "var(--color-text-danger)" }}>Could not list Gateways: {net.listError}</div>;
+  }
+  if (!served) return <div style={empty}>Gateway API is not installed on this cluster.</div>;
+  if (gateways.length === 0) return <div style={empty}>No Gateways found.</div>;
 
   return (
     <div style={{ padding: "14px 16px", display: "flex", flexDirection: "column", gap: 12, height: "100%", minHeight: 0, overflow: "hidden", boxSizing: "border-box" }}>
       <div style={{ display: "flex", justifyContent: "space-between", gap: 16, alignItems: "flex-start" }}>
         <div>
-          <div style={{ fontSize: 10, color: "var(--color-text-tertiary)", marginBottom: 3 }}>Gateway API</div>
-          <div style={{ fontSize: 18, fontWeight: 600 }}>Network</div>
+          <div style={{ fontSize: 10, color: "var(--color-text-tertiary)", marginBottom: 3 }}>Gateway topology</div>
+          <div style={{ fontSize: 18, fontWeight: 600 }}>Gateway API</div>
         </div>
         <span style={{ fontFamily: "var(--font-mono)", color: pending > 0 ? "var(--color-text-warning)" : "var(--color-text-success)", fontSize: 12 }}>
           {pending > 0 ? `${pending} pending` : "all programmed"}
@@ -83,16 +94,16 @@ export function NetworkView({ cluster }: { cluster: string }) {
       </div>
 
       <div style={{ ...frame, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", overflow: "hidden" }}>
-        <SummaryCell label="gateways" value={String(net.gateways.length)} />
+        <SummaryCell label="gateways" value={String(gateways.length)} />
         <SummaryCell label="programmed" value={String(programmed)} tone="success" />
         <SummaryCell label="pending" value={String(pending)} tone={pending > 0 ? "warning" : "muted"} />
         <SummaryCell label="classes" value={String(classes)} />
       </div>
 
       <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
-        <ModeButton label="all" count={net.gateways.length} active={mode === "all"} onClick={() => setMode("all")} />
-        <ModeButton label="pending" count={pending} active={mode === "pending"} onClick={() => setMode("pending")} />
-        <ModeButton label="programmed" count={programmed} active={mode === "programmed"} onClick={() => setMode("programmed")} />
+        <FilterButton label="all" count={gateways.length} active={mode === "all"} onClick={() => setMode("all")} />
+        <FilterButton label="pending" count={pending} active={mode === "pending"} onClick={() => setMode("pending")} />
+        <FilterButton label="programmed" count={programmed} active={mode === "programmed"} onClick={() => setMode("programmed")} />
         <input
           value={query}
           onChange={(e) => setQuery(e.target.value)}
@@ -100,7 +111,7 @@ export function NetworkView({ cluster }: { cluster: string }) {
           aria-label="filter gateways"
           style={{ marginLeft: "auto", fontSize: 11, padding: "3px 8px", borderRadius: 4, border: "0.5px solid var(--color-border-tertiary)", background: "var(--color-background-primary)", color: "var(--color-text-primary)", width: 180 }}
         />
-        {visibleGateways.length !== net.gateways.length && <span style={{ fontSize: 10, color: "var(--color-text-tertiary)" }}>{visibleGateways.length} of {net.gateways.length}</span>}
+        {visibleGateways.length !== gateways.length && <span style={{ fontSize: 10, color: "var(--color-text-tertiary)" }}>{visibleGateways.length} of {gateways.length}</span>}
       </div>
 
       <div style={{ ...frame, overflow: "hidden", minHeight: 0, display: "flex", flexDirection: "column", flex: 1 }}>
@@ -136,6 +147,7 @@ export function NetworkView({ cluster }: { cluster: string }) {
                   fontSize: 12,
                   cursor: "pointer",
                   textAlign: "left",
+                  ...staleStyle(g.stale),
                 }}
               >
                 <span style={{ alignSelf: "stretch", background: pendingGateway ? "var(--color-text-warning)" : "transparent" }} />
@@ -147,7 +159,11 @@ export function NetworkView({ cluster }: { cluster: string }) {
                 <span style={{ color: gatewayAddress(g) === "—" ? "var(--color-text-tertiary)" : "var(--color-text-primary)", fontFamily: "var(--font-mono)", fontSize: 11, ...ellipsis }} title={gatewayAddress(g)}>{gatewayAddress(g)}</span>
                 <span style={{ color: "var(--color-text-secondary)", fontFamily: "var(--font-mono)", fontSize: 11, ...ellipsis }} title={gatewayListeners(g)}>{gatewayListeners(g)}</span>
                 <span style={{ fontSize: 11, color: g.accepted ? "var(--color-text-success)" : "var(--color-text-danger)" }}>{g.accepted ? "accepted" : "not accepted"}</span>
-                <span style={{ fontSize: 11, color: g.programmed ? "var(--color-text-success)" : "var(--color-text-warning)" }}>{g.programmed ? "programmed" : "pending"}</span>
+                {g.stale ? (
+                  <SyncingChip generation={g.generation} observedGeneration={g.observedGeneration} />
+                ) : (
+                  <span style={{ fontSize: 11, color: g.programmed ? "var(--color-text-success)" : "var(--color-text-warning)" }}>{g.programmed ? "programmed" : "pending"}</span>
+                )}
               </button>
             );
           })}
@@ -157,42 +173,4 @@ export function NetworkView({ cluster }: { cluster: string }) {
   );
 }
 
-function SummaryCell({ label, value, tone = "default" }: { label: string; value: string; tone?: "default" | "success" | "warning" | "muted" }) {
-  const color = tone === "success"
-    ? "var(--color-text-success)"
-    : tone === "warning"
-      ? "var(--color-text-warning)"
-      : tone === "muted"
-        ? "var(--color-text-tertiary)"
-        : "var(--color-text-primary)";
-  return (
-    <div style={{ padding: "9px 12px", borderRight: "0.5px solid var(--color-border-tertiary)", minWidth: 0 }}>
-      <div style={{ fontSize: 10, color: "var(--color-text-tertiary)", marginBottom: 3 }}>{label}</div>
-      <div style={{ fontFamily: "var(--font-mono)", color, fontWeight: 600, ...ellipsis }}>{value}</div>
-    </div>
-  );
-}
-
-function ModeButton({ label, count, active, onClick }: { label: string; count: number; active: boolean; onClick: () => void }) {
-  return (
-    <button
-      onClick={onClick}
-      style={{
-        display: "inline-flex",
-        alignItems: "center",
-        gap: 5,
-        padding: "3px 9px",
-        fontSize: 11,
-        borderRadius: 4,
-        cursor: "pointer",
-        fontFamily: "var(--font-mono)",
-        border: active ? "0.5px solid var(--color-border-info)" : "0.5px solid var(--color-border-tertiary)",
-        background: active ? "var(--color-background-info)" : "var(--color-background-primary)",
-        color: active ? "var(--color-text-info)" : "var(--color-text-secondary)",
-      }}
-    >
-      {label}
-      <span style={{ fontSize: 9, opacity: 0.72 }}>{count}</span>
-    </button>
-  );
-}
+// SummaryCell + filter pills now come from the shared primitive set.

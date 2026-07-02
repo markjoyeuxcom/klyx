@@ -33,7 +33,71 @@ func argoControllerStatefulSet(name string, ready int32) *appsv1.StatefulSet {
 	}
 }
 
+func certManagerControllerDeploy(name string, ready int32) *appsv1.Deployment {
+	return &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "cert-manager"},
+		Status:     appsv1.DeploymentStatus{AvailableReplicas: ready},
+		Spec:       appsv1.DeploymentSpec{Replicas: ptr(int32(1))},
+	}
+}
+
 func ptr[T any](v T) *T { return &v }
+
+func TestDetectCertManagerAbsent(t *testing.T) {
+	cs := newFake(nil)
+	set := NewDetector(cs).Detect(context.Background())
+	if set.CertManager.Tier != Absent {
+		t.Fatalf("want Absent, got %v", set.CertManager.Tier)
+	}
+	if set.CertManager.Present {
+		t.Fatal("want not present")
+	}
+}
+
+func TestDetectCertManagerPresentButUnhealthy(t *testing.T) {
+	groups := []*metav1.APIResourceList{{GroupVersion: "cert-manager.io/v1"}}
+	cs := newFake(groups, certManagerControllerDeploy("cert-manager", 0))
+	set := NewDetector(cs).Detect(context.Background())
+	if set.CertManager.Tier != Degraded {
+		t.Fatalf("want Degraded, got %v (%s)", set.CertManager.Tier, set.CertManager.Reason)
+	}
+	if set.CertManager.Reason == "" {
+		t.Fatal("expected a reason for degraded cert-manager")
+	}
+	if !set.CertManager.Present {
+		t.Fatal("want present")
+	}
+}
+
+func TestDetectCertManagerHealthyWithACME(t *testing.T) {
+	groups := []*metav1.APIResourceList{
+		{GroupVersion: "cert-manager.io/v1"},
+		{GroupVersion: "acme.cert-manager.io/v1"},
+	}
+	cs := newFake(groups, certManagerControllerDeploy("cert-manager", 1))
+	set := NewDetector(cs).Detect(context.Background())
+	if set.CertManager.Tier != Healthy {
+		t.Fatalf("want Healthy, got %v (%s)", set.CertManager.Tier, set.CertManager.Reason)
+	}
+	if !set.CertManager.Present || !set.CertManager.Healthy {
+		t.Fatalf("want present+healthy, got %+v", set.CertManager)
+	}
+	if !set.CertManager.HasACME {
+		t.Fatal("want HasACME true when acme.cert-manager.io served")
+	}
+}
+
+func TestDetectCertManagerHealthyWithoutACME(t *testing.T) {
+	groups := []*metav1.APIResourceList{{GroupVersion: "cert-manager.io/v1"}}
+	cs := newFake(groups, certManagerControllerDeploy("cert-manager", 1))
+	set := NewDetector(cs).Detect(context.Background())
+	if set.CertManager.Tier != Healthy {
+		t.Fatalf("want Healthy, got %v", set.CertManager.Tier)
+	}
+	if set.CertManager.HasACME {
+		t.Fatal("want HasACME false when only cert-manager.io served")
+	}
+}
 
 func TestDetectFluxAbsent(t *testing.T) {
 	cs := newFake(nil)

@@ -2,12 +2,14 @@ package metrics
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/url"
 	"strconv"
 	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/client-go/rest"
 )
 
@@ -80,42 +82,46 @@ func NewProxyTransport(r rest.Interface, c ServiceCandidate) Querier {
 }
 
 func (t *proxyTransport) InstantQuery(ctx context.Context, promql string) (int, []byte, error) {
-	name := schemeOr(t.c.Scheme) + ":" + t.c.Name + ":" + t.c.Port
-	var status int
-	body, err := t.rest.Get().
-		Namespace(t.c.Namespace).
-		Resource("services").
-		Name(name).
-		SubResource("proxy").
-		Suffix("api/v1/query").
-		Param("query", promql).
-		Do(ctx).
-		StatusCode(&status).
-		Raw()
-	if status != 0 {
-		return status, body, nil // let the Client interpret non-200
-	}
-	return status, body, err // genuine transport error (no status); keep any body for diagnostics
+	return t.get(ctx, "api/v1/query", [][2]string{{"query", promql}})
 }
 
 func (t *proxyTransport) RangeQuery(ctx context.Context, promql string, start, end time.Time, step time.Duration) (int, []byte, error) {
+	return t.get(ctx, "api/v1/query_range", [][2]string{
+		{"query", promql},
+		{"start", strconv.FormatInt(start.Unix(), 10)},
+		{"end", strconv.FormatInt(end.Unix(), 10)},
+		{"step", strconv.FormatInt(int64(step.Seconds()), 10)},
+	})
+}
+
+// get streams the proxied response and caps the read at maxResponseBytes -
+// the same guard the direct transport has (Raw() would buffer an arbitrarily
+// large body from a misbehaving in-cluster Prometheus into memory).
+func (t *proxyTransport) get(ctx context.Context, suffix string, params [][2]string) (int, []byte, error) {
 	name := schemeOr(t.c.Scheme) + ":" + t.c.Name + ":" + t.c.Port
-	var status int
-	body, err := t.rest.Get().
+	req := t.rest.Get().
 		Namespace(t.c.Namespace).
 		Resource("services").
 		Name(name).
 		SubResource("proxy").
-		Suffix("api/v1/query_range").
-		Param("query", promql).
-		Param("start", strconv.FormatInt(start.Unix(), 10)).
-		Param("end", strconv.FormatInt(end.Unix(), 10)).
-		Param("step", strconv.FormatInt(int64(step.Seconds()), 10)).
-		Do(ctx).
-		StatusCode(&status).
-		Raw()
-	if status != 0 {
-		return status, body, nil // let the Client interpret non-200
+		Suffix(suffix)
+	for _, p := range params {
+		req = req.Param(p[0], p[1])
 	}
-	return status, body, err
+	rc, err := req.Stream(ctx)
+	if err != nil {
+		// Stream folds a non-2xx response into a StatusError; recover the code
+		// so the Client keeps reporting "prometheus returned HTTP <n>".
+		var se *apierrors.StatusError
+		if errors.As(err, &se) && se.Status().Code != 0 {
+			return int(se.Status().Code), nil, nil
+		}
+		return 0, nil, err // genuine transport error (no status)
+	}
+	defer rc.Close()
+	body, err := io.ReadAll(io.LimitReader(rc, maxResponseBytes))
+	if err != nil {
+		return 0, nil, err
+	}
+	return 200, body, nil
 }

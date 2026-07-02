@@ -136,6 +136,23 @@ func (s *ConfigService) NewContextCount() int {
 	return n
 }
 
+// ArmProtected records the user's typed confirmation for a protected cluster,
+// unlocking exactly one destructive backend verb for the next 30 seconds. The
+// ConfirmDialog (and the custom confirm modals) call this on confirm; the
+// destructive service methods consume the grant via checkProtected. Arming an
+// unprotected cluster is a no-op success, so the frontend calls this
+// unconditionally.
+func (s *ConfigService) ArmProtected(cluster, typed string) ActionResultDTO {
+	g := activeProtectGuard.Load()
+	if g == nil {
+		return ActionResultDTO{OK: true} // gating not configured (tests, klyxctl)
+	}
+	if err := g.Arm(cluster, typed); err != nil {
+		return ActionResultDTO{Error: err.Error()}
+	}
+	return ActionResultDTO{OK: true}
+}
+
 // AddClusters appends the given kubeconfig contexts to the fleet file
 // (validated before write; comments preserved), then hot-adds each one to the
 // running registry so no restart is needed. A connect failure after a
@@ -145,6 +162,13 @@ func (s *ConfigService) AddClusters(contexts []string) ActionResultDTO {
 	if len(contexts) == 0 {
 		return ActionResultDTO{Error: "no contexts selected"}
 	}
+	// Serialize the whole add: appendClusters is a read-modify-write of
+	// fleet.yaml, and two concurrent calls would each read the same original
+	// and one would silently lose the other's entries. Adds are rare,
+	// user-driven Settings actions - holding the lock across the file write
+	// and connects is fine.
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if err := s.appendClusters(s.path, contexts); err != nil {
 		return ActionResultDTO{Error: err.Error()}
 	}
@@ -157,9 +181,7 @@ func (s *ConfigService) AddClusters(contexts []string) ActionResultDTO {
 				continue
 			}
 		}
-		s.mu.Lock()
 		s.added = append(s.added, cc)
-		s.mu.Unlock()
 	}
 	if len(failed) > 0 {
 		return ActionResultDTO{Error: "added to fleet.yaml, but connecting failed - " + strings.Join(failed, "; ") + ". Restart Klyx to retry."}

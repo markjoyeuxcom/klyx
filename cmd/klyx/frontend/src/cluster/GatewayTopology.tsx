@@ -1,9 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useFleet, GatewayRef, RouteNodeDTO, RouteMetricDTO } from "../store/fleet";
+import type { CertificateDTO, ListenerDTO, PolicyRefDTO, ResourceRef } from "../store/fleet";
 import { getGatewayTopology, getRouteMetrics } from "../bridge/gateway";
 import { PolicyChip } from "./PolicyChip";
+import { FilterButton, ellipsis } from "../chrome/primitives";
 
-const ellipsis: React.CSSProperties = { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" };
 const nb: React.CSSProperties = { background: "var(--color-background-primary)", border: "0.5px solid var(--color-border-tertiary)", borderRadius: "var(--border-radius-md)", padding: "8px 9px", minWidth: 0 };
 const lab: React.CSSProperties = { fontSize: 9, letterSpacing: 0.4, textTransform: "uppercase", color: "var(--color-text-tertiary)", marginBottom: 3 };
 const nm: React.CSSProperties = { fontSize: 11, fontWeight: 600, fontFamily: "var(--font-mono)", ...ellipsis };
@@ -11,18 +12,48 @@ const chev: React.CSSProperties = { display: "flex", alignItems: "center", justi
 
 const routeKey = (r: { namespace: string; name: string }) => `${r.namespace}/${r.name}`;
 type RouteMode = "all" | "issues" | "global" | "policies";
+type CertLookup = Map<string, CertificateDTO>;
+type OpenObject = (ref: ResourceRef, namespace: string, name: string) => void;
+
+const httpRouteRef: ResourceRef = { group: "gateway.networking.k8s.io", version: "v1", plural: "httproutes", kind: "HTTPRoute", scope: "Namespaced" };
+const serviceRef: ResourceRef = { group: "", version: "v1", plural: "services", kind: "Service", scope: "Namespaced" };
+const secretRef: ResourceRef = { group: "", version: "v1", plural: "secrets", kind: "Secret", scope: "Namespaced" };
+const certificateRef: ResourceRef = { group: "cert-manager.io", version: "v1", plural: "certificates", kind: "Certificate", scope: "Namespaced" };
+
+const policyRefs: Record<string, ResourceRef> = {
+  BackendTLSPolicy: { group: "gateway.networking.k8s.io", version: "v1alpha3", plural: "backendtlspolicies", kind: "BackendTLSPolicy", scope: "Namespaced" },
+  ClientTrafficPolicy: { group: "gateway.envoyproxy.io", version: "v1alpha1", plural: "clienttrafficpolicies", kind: "ClientTrafficPolicy", scope: "Namespaced" },
+  BackendTrafficPolicy: { group: "gateway.envoyproxy.io", version: "v1alpha1", plural: "backendtrafficpolicies", kind: "BackendTrafficPolicy", scope: "Namespaced" },
+  SecurityPolicy: { group: "gateway.envoyproxy.io", version: "v1alpha1", plural: "securitypolicies", kind: "SecurityPolicy", scope: "Namespaced" },
+  EnvoyExtensionPolicy: { group: "gateway.envoyproxy.io", version: "v1alpha1", plural: "envoyextensionpolicies", kind: "EnvoyExtensionPolicy", scope: "Namespaced" },
+  CiliumNetworkPolicy: { group: "cilium.io", version: "v2", plural: "ciliumnetworkpolicies", kind: "CiliumNetworkPolicy", scope: "Namespaced" },
+  CiliumClusterwideNetworkPolicy: { group: "cilium.io", version: "v2", plural: "ciliumclusterwidenetworkpolicies", kind: "CiliumClusterwideNetworkPolicy", scope: "Cluster" },
+};
 
 // laneRank orders lanes for the topology: 0 = broken (rejected, unresolved
 // refs, or no backend at all), 1 = healthy. Sort is stable, so within each
 // tier the API order is preserved.
-function laneRank(r: RouteNodeDTO): number {
-  return routeBroken(r) ? 0 : 1;
+function laneRank(r: RouteNodeDTO, listeners: ListenerDTO[]): number {
+  return routeBroken(r, listeners) ? 0 : 1;
 }
 const dot = (ok: boolean) => (ok ? "var(--color-text-success)" : "var(--color-text-danger)");
 
-function routeBroken(r: RouteNodeDTO): boolean {
+function routeBroken(r: RouteNodeDTO, listeners: ListenerDTO[] = []): boolean {
+  return routeIssueReasons(r, listeners).length > 0;
+}
+
+function routeIssueReasons(r: RouteNodeDTO, listeners: ListenerDTO[] = []): string[] {
   const svc = r.services[0];
-  return !r.accepted || !r.resolvedRefs || !svc || !svc.resolved;
+  const issues: string[] = [];
+  const listenerNames = new Set(listeners.map((l) => l.name).filter(Boolean));
+  if (!r.accepted) issues.push("not accepted by Gateway");
+  if (!r.resolvedRefs) issues.push("unresolved refs - check backendRef, ReferenceGrant, or listener section");
+  if (r.parentSectionName && listenerNames.size > 0 && !listenerNames.has(r.parentSectionName)) issues.push(`listener ${r.parentSectionName} not found`);
+  if (!svc) issues.push("no backend service");
+  else if (!svc.resolved) issues.push(`backend Service ${svc.namespace}/${svc.name} not found`);
+  else if (!r.pods.unknown && r.pods.total === 0) issues.push("backend has no ready endpoints");
+  else if (!r.pods.unknown && r.pods.ready < r.pods.total) issues.push(`backend pods ${r.pods.ready}/${r.pods.total} ready`);
+  return issues;
 }
 
 function routeHasGlobal(r: RouteNodeDTO): boolean {
@@ -37,6 +68,43 @@ function routePolicyRefCount(r: RouteNodeDTO): number {
   return r.policies.length + r.services.reduce((n, svc) => n + svc.policies.length + svc.cnps.length, 0);
 }
 
+function tlsRefCount(listeners: ListenerDTO[]): number {
+  return listeners.reduce((n, l) => n + (l.certificateRefs?.length ?? 0), 0);
+}
+
+function certKey(ns: string, name: string): string {
+  return `${ns}/${name}`;
+}
+
+function certBySecret(certs: CertificateDTO[]): CertLookup {
+  const out: CertLookup = new Map();
+  for (const c of certs) {
+    if (c.secretName) out.set(certKey(c.namespace, c.secretName), c);
+  }
+  return out;
+}
+
+function certStatus(c: CertificateDTO | undefined): { text: string; color: string } {
+  if (!c) return { text: "no cert-manager match", color: "var(--color-text-tertiary)" };
+  if (c.ready === "Ready") return { text: "cert ready", color: "var(--color-text-success)" };
+  if (c.ready === "Issuing") return { text: "cert issuing", color: "var(--color-text-info)" };
+  return { text: `cert ${c.ready.toLowerCase() || "unknown"}`, color: "var(--color-text-warning)" };
+}
+
+function openBtn(): React.CSSProperties {
+  return {
+    padding: "1px 6px",
+    borderRadius: 4,
+    border: "0.5px solid var(--color-border-tertiary)",
+    background: "var(--color-background-secondary)",
+    color: "var(--color-text-info)",
+    fontSize: 10,
+    fontFamily: "var(--font-mono)",
+    cursor: "pointer",
+    whiteSpace: "nowrap",
+  };
+}
+
 function gatewayAddress(t: { gateway: { addresses?: { value: string }[] } }): string {
   const values = (t.gateway.addresses ?? []).map((a) => a.value).filter(Boolean);
   return values.length > 0 ? values.join(", ") : "—";
@@ -47,23 +115,32 @@ function gatewayAddress(t: { gateway: { addresses?: { value: string }[] } }): st
 // searchable combobox primitive replaces this select in a later slice.
 const NS_CHIP_LIMIT = 8;
 
-export function NetworkTopology({ cluster, gateway }: { cluster: string; gateway: GatewayRef }) {
+export function GatewayTopology({ cluster, gateway }: { cluster: string; gateway: GatewayRef }) {
   const net = useFleet((s) => s.network);
   const selectRoute = useFleet((s) => s.selectRoute);
+  const openResource = useFleet((s) => s.openResource);
+  const openInstance = useFleet((s) => s.openInstance);
   const routeMetrics = useFleet((s) => s.network.routeMetrics);
   const rmStatus = useFleet((s) => s.network.routeMetricsStatus);
   const rmStale = useFleet((s) => s.network.routeMetricsStale);
+  const cm = useFleet((s) => s.certmanager);
   const [nsFilter, setNsFilter] = useState<string | null>(null);
   const [routeQuery, setRouteQuery] = useState("");
   const [routeMode, setRouteMode] = useState<RouteMode>("all");
 
   useEffect(() => {
-    void getGatewayTopology(cluster, gateway);
+    getGatewayTopology(cluster, gateway).catch((e) => console.error("getGatewayTopology", e));
     return () => useFleet.getState().clearNetwork();
   }, [cluster, gateway.namespace, gateway.name]);
 
   const isCurrent = net.selected && net.selected.namespace === gateway.namespace && net.selected.name === gateway.name;
   const t = isCurrent ? net.topology : null;
+  const certs = cm.cluster === cluster ? cm.certificates : [];
+  const certLookup = useMemo(() => certBySecret(certs), [certs]);
+  const openObject: OpenObject = (ref, namespace, name) => {
+    openResource(ref);
+    openInstance(namespace, name);
+  };
 
   // Poll the live route metrics (~20s) while a topology is open. The structural
   // topology is static (fetched on gateway-select); only these numbers poll.
@@ -95,7 +172,7 @@ export function NetworkTopology({ cluster, gateway }: { cluster: string; gateway
   const showFilter = namespaces.length > 1;
   const activeNs = showFilter && nsFilter && nsCounts.has(nsFilter) ? nsFilter : null;
   const nsRoutes = activeNs ? t.routes.filter((r) => r.namespace === activeNs) : t.routes;
-  const brokenCount = t.routes.filter(routeBroken).length;
+  const brokenCount = t.routes.filter((r) => routeBroken(r, t.gateway.listeners)).length;
   const globalCount = t.routes.filter(routeHasGlobal).length;
   const policyRouteCount = t.routes.filter(routeHasPolicies).length;
   const policyRefCount = t.routes.reduce((n, r) => n + routePolicyRefCount(r), 0) + t.gateway.policies.length + (t.clusterPolicies?.length ?? 0);
@@ -107,7 +184,7 @@ export function NetworkTopology({ cluster, gateway }: { cluster: string; gateway
         ? "all"
         : routeMode;
   const modeRoutes = activeMode === "issues"
-    ? nsRoutes.filter(routeBroken)
+    ? nsRoutes.filter((r) => routeBroken(r, t.gateway.listeners))
     : activeMode === "global"
       ? nsRoutes.filter(routeHasGlobal)
       : activeMode === "policies"
@@ -127,10 +204,11 @@ export function NetworkTopology({ cluster, gateway }: { cluster: string; gateway
 
   // Diagnostic default ordering: broken lanes (rejected, unresolved refs, or no
   // backend) float to the top so they are never buried under healthy routes.
-  const visibleRoutes = [...filteredRoutes].sort((a, b) => laneRank(a) - laneRank(b));
+  const visibleRoutes = [...filteredRoutes].sort((a, b) => laneRank(a, t.gateway.listeners) - laneRank(b, t.gateway.listeners));
 
   const selected = visibleRoutes.find((r) => routeKey(r) === net.selectedRoute) ?? null;
   const listeners = t.gateway.listeners.length;
+  const tlsRefs = tlsRefCount(t.gateway.listeners);
 
   return (
     <div style={{ padding: "14px 16px", display: "flex", flexDirection: "column", gap: 12, height: "100%", minHeight: 0, overflow: "hidden", boxSizing: "border-box" }}>
@@ -156,7 +234,7 @@ export function NetworkTopology({ cluster, gateway }: { cluster: string; gateway
           </div>
         )}
         <div style={{ flex: 1 }} />
-        <button onClick={() => void getGatewayTopology(cluster, gateway)} style={{ padding: "3px 10px", fontSize: 11, borderRadius: 4, cursor: "pointer", border: "0.5px solid var(--color-border-tertiary)", background: "var(--color-background-primary)", color: "var(--color-text-primary)" }}>Refresh</button>
+        <button onClick={() => getGatewayTopology(cluster, gateway).catch((e) => console.error("getGatewayTopology", e))} style={{ padding: "3px 10px", fontSize: 11, borderRadius: 4, cursor: "pointer", border: "0.5px solid var(--color-border-tertiary)", background: "var(--color-background-primary)", color: "var(--color-text-primary)" }}>Refresh</button>
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", border: "0.5px solid var(--color-border-tertiary)", borderRadius: "var(--border-radius-md)", overflow: "hidden", background: "var(--color-background-primary)", flexShrink: 0 }}>
@@ -166,6 +244,7 @@ export function NetworkTopology({ cluster, gateway }: { cluster: string; gateway
         <TopologyCell label="global" value={String(globalCount)} tone={globalCount > 0 ? "info" : "muted"} />
         <TopologyCell label="policies" value={String(policyRefCount)} tone={policyRefCount > 0 ? "info" : "muted"} />
         <TopologyCell label="listeners" value={String(listeners)} />
+        <TopologyCell label="tls refs" value={String(tlsRefs)} tone={tlsRefs > 0 ? "info" : "muted"} />
         <TopologyCell label="address" value={gatewayAddress(t)} tone={gatewayAddress(t) === "—" ? "muted" : "default"} />
       </div>
 
@@ -176,17 +255,17 @@ export function NetworkTopology({ cluster, gateway }: { cluster: string; gateway
       {(showFilter || t.routes.length > 0) && (
         <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center", flexShrink: 0 }}>
           <span style={{ fontSize: 9, color: "var(--color-text-tertiary)", marginRight: 2 }}>routes</span>
-          <Chip label="all routes" count={t.routes.length} active={activeMode === "all"} onClick={() => setRouteMode("all")} />
-          {brokenCount > 0 && <Chip label="issues" count={brokenCount} active={activeMode === "issues"} onClick={() => setRouteMode("issues")} />}
-          {globalCount > 0 && <Chip label="global" count={globalCount} active={activeMode === "global"} onClick={() => setRouteMode("global")} />}
-          {policyRouteCount > 0 && <Chip label="policies" count={policyRouteCount} active={activeMode === "policies"} onClick={() => setRouteMode("policies")} />}
+          <FilterButton label="all routes" count={t.routes.length} active={activeMode === "all"} onClick={() => setRouteMode("all")} />
+          {brokenCount > 0 && <FilterButton label="issues" count={brokenCount} active={activeMode === "issues"} onClick={() => setRouteMode("issues")} />}
+          {globalCount > 0 && <FilterButton label="global" count={globalCount} active={activeMode === "global"} onClick={() => setRouteMode("global")} />}
+          {policyRouteCount > 0 && <FilterButton label="policies" count={policyRouteCount} active={activeMode === "policies"} onClick={() => setRouteMode("policies")} />}
           {showFilter && (<>
           <span style={{ fontSize: 9, color: "var(--color-text-tertiary)", marginRight: 2 }}>namespace</span>
           {namespaces.length <= NS_CHIP_LIMIT ? (
             <>
-              <Chip label="All" active={activeNs === null} onClick={() => setNsFilter(null)} />
+              <FilterButton label="All" active={activeNs === null} onClick={() => setNsFilter(null)} />
               {namespaces.map((ns) => (
-                <Chip key={ns} label={ns} count={nsCounts.get(ns)} active={activeNs === ns} onClick={() => setNsFilter(ns)} />
+                <FilterButton key={ns} label={ns} count={nsCounts.get(ns)} active={activeNs === ns} onClick={() => setNsFilter(ns)} />
               ))}
             </>
           ) : (
@@ -229,6 +308,7 @@ export function NetworkTopology({ cluster, gateway }: { cluster: string; gateway
                   route={r}
                   selected={net.selectedRoute === routeKey(r)}
                   metric={routeMetrics[routeKey(r)]}
+                  listeners={t.gateway.listeners}
                   onSelect={() => selectRoute(routeKey(r))}
                 />
               ))
@@ -254,7 +334,7 @@ export function NetworkTopology({ cluster, gateway }: { cluster: string; gateway
         </div>
         <aside data-testid="gateway-route-inspector-scroll" style={{ minHeight: 0, overflowY: "auto" }}>
           {selected ? (
-            <RouteDetail route={selected} metric={routeMetrics[routeKey(selected)]} />
+            <RouteDetail route={selected} metric={routeMetrics[routeKey(selected)]} listeners={t.gateway.listeners} certLookup={certLookup} certsLoaded={cm.cluster === cluster} onOpenObject={openObject} />
           ) : (
             <EmptyRouteInspector routeCount={visibleRoutes.length} totalRoutes={t.routes.length} />
           )}
@@ -264,9 +344,10 @@ export function NetworkTopology({ cluster, gateway }: { cluster: string; gateway
   );
 }
 
-function RouteLane({ route, selected, metric, onSelect }: { route: RouteNodeDTO; selected: boolean; metric: RouteMetricDTO | undefined; onSelect: () => void }) {
+function RouteLane({ route, selected, metric, listeners, onSelect }: { route: RouteNodeDTO; selected: boolean; metric: RouteMetricDTO | undefined; listeners: ListenerDTO[]; onSelect: () => void }) {
   const svc = route.services[0];
-  const broken = routeBroken(route);
+  const issues = routeIssueReasons(route, listeners);
+  const broken = issues.length > 0;
   return (
     <div style={{ display: "grid", gridTemplateColumns: "3px minmax(0,1.2fr) 20px minmax(0,1fr) 20px minmax(0,0.9fr)", gap: 6, alignItems: "stretch", marginBottom: 8 }}>
       <div style={{ background: broken ? "var(--color-text-danger)" : "transparent", borderRadius: 0 }} />
@@ -286,8 +367,11 @@ function RouteLane({ route, selected, metric, onSelect }: { route: RouteNodeDTO;
         <div style={{ ...nm, color: "var(--color-text-info)" }}>{route.name}</div>
         <div style={{ fontSize: 9, marginTop: 2, ...ellipsis }}>
           <span style={{ width: 6, height: 6, borderRadius: "50%", background: dot(route.accepted), display: "inline-block", marginRight: 4 }} />
-          {route.accepted ? "accepted" : "rejected"} · {route.matches[0]?.pathValue ?? "/"}
+          {route.accepted ? "accepted" : "rejected"} · {route.parentSectionName ? `listener ${route.parentSectionName}` : "all listeners"} · {route.matches[0]?.pathValue ?? "/"}
         </div>
+        {issues.length > 0 && (
+          <div style={{ fontSize: 9, color: "var(--color-text-warning)", marginTop: 3, ...ellipsis }}>{issues[0]}</div>
+        )}
         {route.policies.length > 0 && (
           <div style={{ display: "flex", flexWrap: "wrap", gap: 3, marginTop: 4 }}>
             {route.policies.map((p) => (
@@ -407,31 +491,60 @@ function TopologyCell({ label, value, tone = "default" }: { label: string; value
   );
 }
 
-function Chip({ label, count, active, onClick }: { label: string; count?: number; active: boolean; onClick: () => void }) {
+function OpenObjectButton({ label, onClick }: { label: string; onClick: () => void }) {
   return (
-    <button
-      onClick={onClick}
-      style={{
-        display: "inline-flex",
-        alignItems: "center",
-        gap: 4,
-        padding: "2px 9px",
-        fontSize: 11,
-        borderRadius: 999,
-        cursor: "pointer",
-        fontFamily: "var(--font-mono)",
-        border: active ? "0.5px solid var(--color-border-info)" : "0.5px solid var(--color-border-tertiary)",
-        background: active ? "var(--color-background-info)" : "var(--color-background-primary)",
-        color: active ? "var(--color-text-info)" : "var(--color-text-secondary)",
-      }}
-    >
-      {label}
-      {count !== undefined && <span style={{ fontSize: 9, opacity: 0.7 }}>{count}</span>}
+    <button type="button" aria-label={`open ${label}`} onClick={onClick} style={openBtn()}>
+      open {label}
     </button>
   );
 }
 
-function RouteDetail({ route, metric }: { route: RouteNodeDTO; metric: RouteMetricDTO | undefined }) {
+function OpenPolicyButton({ policy, onOpenObject }: { policy: PolicyRefDTO; onOpenObject: OpenObject }) {
+  const ref = policyRefs[policy.kind];
+  if (!ref) return null;
+  return <OpenObjectButton label={policy.kind} onClick={() => onOpenObject(ref, policy.namespace, policy.name)} />;
+}
+
+function ListenerTLS({ route, listeners, certLookup, certsLoaded, onOpenObject }: { route: RouteNodeDTO; listeners: ListenerDTO[]; certLookup: CertLookup; certsLoaded: boolean; onOpenObject: OpenObject }) {
+  const scoped = route.parentSectionName ? listeners.filter((l) => l.name === route.parentSectionName) : listeners;
+  return (
+    <div style={{ marginTop: 12, paddingTop: 10, borderTop: "0.5px solid var(--color-border-tertiary)" }}>
+      <div style={{ fontSize: 9, textTransform: "uppercase", letterSpacing: 0.5, color: "var(--color-text-tertiary)", marginBottom: 6 }}>listener tls</div>
+      {scoped.length === 0 ? (
+        <div style={{ fontSize: 11, color: "var(--color-text-warning)" }}>No Gateway listener matches this route section.</div>
+      ) : (
+        <div style={{ display: "grid", gap: 8 }}>
+          {scoped.map((l) => {
+            const refs = l.certificateRefs ?? [];
+            return (
+              <div key={l.name || `${l.protocol}:${l.port}`}>
+                <div style={{ fontFamily: "var(--font-mono)", fontSize: 11, fontWeight: 600 }}>
+                  {l.name || "unnamed"} · {l.protocol}:{l.port}{l.hostname ? ` · ${l.hostname}` : ""}
+                </div>
+                {refs.length === 0 ? (
+                  <div style={{ fontSize: 10, color: "var(--color-text-tertiary)" }}>No certificateRefs on this listener.</div>
+                ) : refs.map((ref) => {
+                  const cert = ref.kind === "Secret" ? certLookup.get(certKey(ref.namespace, ref.name)) : undefined;
+                  const st = certsLoaded ? certStatus(cert) : { text: "cert-manager state unavailable", color: "var(--color-text-tertiary)" };
+                  return (
+                    <div key={`${ref.kind}/${ref.namespace}/${ref.name}`} style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", fontSize: 10, color: "var(--color-text-secondary)", fontFamily: "var(--font-mono)" }}>
+                      <span>{ref.kind} {ref.namespace}/{ref.name} · <span style={{ color: st.color }}>{st.text}</span></span>
+                      {ref.kind === "Secret" && <OpenObjectButton label="Secret" onClick={() => onOpenObject(secretRef, ref.namespace, ref.name)} />}
+                      {cert && <OpenObjectButton label="Certificate" onClick={() => onOpenObject(certificateRef, cert.namespace, cert.name)} />}
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function RouteDetail({ route, metric, listeners, certLookup, certsLoaded, onOpenObject }: { route: RouteNodeDTO; metric: RouteMetricDTO | undefined; listeners: ListenerDTO[]; certLookup: CertLookup; certsLoaded: boolean; onOpenObject: OpenObject }) {
+  const issues = routeIssueReasons(route, listeners);
   return (
     <div style={{ background: "var(--color-background-primary)", border: "0.5px solid var(--color-border-tertiary)", borderRadius: "var(--border-radius-md)", padding: "10px 12px" }}>
       <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8 }}>
@@ -439,18 +552,39 @@ function RouteDetail({ route, metric }: { route: RouteNodeDTO; metric: RouteMetr
         <span style={{ fontFamily: "var(--font-mono)", fontWeight: 600, fontSize: 12 }}>{route.name}</span>
         <span style={{ fontSize: 10, padding: "1px 6px", borderRadius: 4, background: "var(--color-background-secondary)", color: "var(--color-text-secondary)" }}>HTTPRoute</span>
         <span style={{ fontSize: 10, padding: "1px 6px", borderRadius: 4, background: route.accepted ? "var(--color-background-success)" : "var(--color-background-danger)", color: route.accepted ? "var(--color-text-success)" : "var(--color-text-danger)" }}>{route.accepted ? "accepted" : "rejected"} · {route.resolvedRefs ? "resolvedRefs" : "unresolved"}</span>
+        <span style={{ fontSize: 10, padding: "1px 6px", borderRadius: 4, background: issues.length > 0 ? "var(--color-background-warning)" : "var(--color-background-success)", color: issues.length > 0 ? "var(--color-text-warning)" : "var(--color-text-success)" }}>{issues.length > 0 ? `${issues.length} issue${issues.length === 1 ? "" : "s"}` : "path healthy"}</span>
+        <OpenObjectButton label="HTTPRoute" onClick={() => onOpenObject(httpRouteRef, route.namespace, route.name)} />
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, fontSize: 11, fontFamily: "var(--font-mono)" }}>
         <div>
           <div style={{ fontSize: 9, textTransform: "uppercase", letterSpacing: 0.5, color: "var(--color-text-tertiary)", marginBottom: 5 }}>matches</div>
+          <div style={{ color: "var(--color-text-secondary)", marginBottom: 4 }}>listener: {route.parentSectionName || "all matching listeners"}</div>
           {route.matches.map((m, i) => (<div key={i}>{m.pathType} {m.pathValue}{m.method ? ` · ${m.method}` : ""}</div>))}
           {route.hostnames.length > 0 && <div style={{ color: "var(--color-text-secondary)", marginTop: 4 }}>hostnames: {route.hostnames.join(", ")}</div>}
         </div>
         <div>
           <div style={{ fontSize: 9, textTransform: "uppercase", letterSpacing: 0.5, color: "var(--color-text-tertiary)", marginBottom: 5 }}>backends</div>
-          {route.backends.map((b, i) => (<div key={i}>{b.name}:{b.port}{b.weight ? ` · weight ${b.weight}` : ""}</div>))}
+          {route.backends.map((b, i) => (
+            <div key={i} style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+              <span>{b.name}:{b.port}{b.weight ? ` · weight ${b.weight}` : ""}</span>
+              {b.kind === "Service" && <OpenObjectButton label="Service" onClick={() => onOpenObject(serviceRef, b.namespace, b.name)} />}
+            </div>
+          ))}
         </div>
       </div>
+      <div style={{ marginTop: 12, paddingTop: 10, borderTop: "0.5px solid var(--color-border-tertiary)" }}>
+        <div style={{ fontSize: 9, textTransform: "uppercase", letterSpacing: 0.5, color: "var(--color-text-tertiary)", marginBottom: 6 }}>path health</div>
+        {issues.length === 0 ? (
+          <div style={{ fontSize: 11, color: "var(--color-text-success)" }}>Gateway attachment, references, backend Service, and endpoints are usable.</div>
+        ) : (
+          <div style={{ display: "grid", gap: 4 }}>
+            {issues.map((issue) => (
+              <div key={issue} style={{ fontSize: 11, color: "var(--color-text-warning)" }}>{issue}</div>
+            ))}
+          </div>
+        )}
+      </div>
+      <ListenerTLS route={route} listeners={listeners} certLookup={certLookup} certsLoaded={certsLoaded} onOpenObject={onOpenObject} />
       <div style={{ marginTop: 12, paddingTop: 10, borderTop: "0.5px solid var(--color-border-tertiary)" }}>
         <div style={{ fontSize: 9, textTransform: "uppercase", letterSpacing: 0.5, color: "var(--color-text-tertiary)", marginBottom: 6 }}>traffic</div>
         <div style={{ display: "flex", gap: 14, fontFamily: "var(--font-mono)", fontSize: 11 }}>
@@ -480,6 +614,7 @@ function RouteDetail({ route, metric }: { route: RouteNodeDTO; metric: RouteMetr
             >
               <div style={{ display: "flex", gap: 6, alignItems: "center", fontFamily: "var(--font-mono)", fontSize: 11 }}>
                 <span style={{ fontWeight: 600 }}>{p.kind} {p.namespace}/{p.name}</span>
+                <OpenPolicyButton policy={p} onOpenObject={onOpenObject} />
               </div>
               <div style={{ fontSize: 10, color: "var(--color-text-secondary)" }}>
                 Target: {p.targetKind} {p.targetNamespace}/{p.targetName}{p.targetSectionName ? ` (Section: ${p.targetSectionName})` : ""}
@@ -503,7 +638,10 @@ function RouteDetail({ route, metric }: { route: RouteNodeDTO; metric: RouteMetr
               <div style={{ fontSize: 9, textTransform: "uppercase", letterSpacing: 0.5, color: "var(--color-text-tertiary)", marginBottom: 6 }}>inferred network policies</div>
               {cnps.map((p) => (
                 <div key={`${p.kind}/${p.namespace}/${p.name}`} style={{ marginBottom: 8 }}>
-                  <div style={{ fontFamily: "var(--font-mono)", fontSize: 11, fontWeight: 600 }}>{`${p.kind} ${p.namespace}/${p.name}`}</div>
+                  <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", fontFamily: "var(--font-mono)", fontSize: 11, fontWeight: 600 }}>
+                    <span>{`${p.kind} ${p.namespace}/${p.name}`}</span>
+                    <OpenPolicyButton policy={p} onOpenObject={onOpenObject} />
+                  </div>
                   <div style={{ fontSize: 10, color: "var(--color-text-secondary)" }}>{`Target: Pods selected via Service ${p.targetNamespace}/${p.targetName}`}</div>
                   <div style={{ fontSize: 10, color: "var(--color-text-secondary)" }}>{`Inferred via: ${p.match}`}</div>
                   {p.summary && <div style={{ fontSize: 10, color: "var(--color-text-secondary)" }}>{`Features: ${p.summary}`}</div>}

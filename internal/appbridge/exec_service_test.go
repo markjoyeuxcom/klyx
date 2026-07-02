@@ -76,6 +76,19 @@ func TestShellQuoteArg(t *testing.T) {
 		{"it's", `'it'\''s'`},
 		// Multiple special chars.
 		{"a|b;c", "'a|b;c'"},
+		// Allowlist quoting: anything outside the safe set is wrapped, not just
+		// a known-special denylist. A bare newline would otherwise split the
+		// command string into a second shell command.
+		{"x\nreboot", "'x\nreboot'"},
+		{"x\rreboot", "'x\rreboot'"},
+		{`back\slash`, `'back\slash'`},
+		{"tilde~", "'tilde~'"},
+		{"paren(s)", "'paren(s)'"},
+		{"", "''"},
+		// Safe punctuation stays bare (flags, paths, images, timeouts).
+		{"--timeout=120s", "--timeout=120s"},
+		{"--image=busybox:1.36", "--image=busybox:1.36"},
+		{"/bin/sh", "/bin/sh"},
 	}
 	for _, tc := range cases {
 		got := shellQuoteArg(tc.in)

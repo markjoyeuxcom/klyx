@@ -150,6 +150,9 @@ func TestListReleases_KubeContextArg(t *testing.T) {
 	assertArg(t, r.args[0], "-A")
 	assertArg(t, r.args[0], "-o")
 	assertArg(t, r.args[0], "json")
+	// --max 0 lifts helm's default 256-release cap (silent truncation otherwise).
+	assertArg(t, r.args[0], "--max")
+	assertArg(t, r.args[0], "0")
 }
 
 // ---------- History tests ----------
@@ -396,6 +399,9 @@ func assertArg(t *testing.T, args []string, want string) {
 	t.Errorf("expected arg %q in %v", want, args)
 }
 
+// withHelmResolution swaps helmBin's lookup hooks (see clibin.Binary) so
+// resolution behavior stays covered at the helmcli level after the extraction
+// into internal/clibin.
 func withHelmResolution(
 	t *testing.T,
 	lp func(string) (string, error),
@@ -403,17 +409,11 @@ func withHelmResolution(
 	fallbacks func() []string,
 ) {
 	t.Helper()
-	oldLookPath := lookPath
-	oldExecutableExists := executableExists
-	oldHelmFallbackPaths := helmFallbackPaths
-	t.Cleanup(func() {
-		lookPath = oldLookPath
-		executableExists = oldExecutableExists
-		helmFallbackPaths = oldHelmFallbackPaths
-	})
-	lookPath = lp
-	executableExists = exists
-	helmFallbackPaths = fallbacks
+	old := helmBin
+	t.Cleanup(func() { helmBin = old })
+	helmBin.LookPath = lp
+	helmBin.ExecutableExists = exists
+	helmBin.FallbackPaths = fallbacks
 	t.Setenv("KLYX_HELM_PATH", "")
 }
 

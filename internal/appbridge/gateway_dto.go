@@ -3,10 +3,17 @@ package appbridge
 import "github.com/moomora/klyx/internal/gwapi"
 
 type ListenerDTO struct {
-	Name     string `json:"name"`
-	Protocol string `json:"protocol"`
-	Hostname string `json:"hostname"`
-	Port     int32  `json:"port"`
+	Name            string              `json:"name"`
+	Protocol        string              `json:"protocol"`
+	Hostname        string              `json:"hostname"`
+	Port            int32               `json:"port"`
+	CertificateRefs []CertificateRefDTO `json:"certificateRefs"`
+}
+type CertificateRefDTO struct {
+	Group     string `json:"group"`
+	Kind      string `json:"kind"`
+	Namespace string `json:"namespace"`
+	Name      string `json:"name"`
 }
 type GatewayAddressDTO struct {
 	Type  string `json:"type"`
@@ -69,16 +76,17 @@ type ServiceNodeDTO struct {
 	CNPs            []PolicyRefDTO `json:"cnps"`
 }
 type RouteNodeDTO struct {
-	Namespace    string           `json:"namespace"`
-	Name         string           `json:"name"`
-	Hostnames    []string         `json:"hostnames"`
-	Matches      []MatchDTO       `json:"matches"`
-	Accepted     bool             `json:"accepted"`
-	ResolvedRefs bool             `json:"resolvedRefs"`
-	Backends     []BackendDTO     `json:"backends"`
-	Services     []ServiceNodeDTO `json:"services"`
-	Pods         PodCountDTO      `json:"pods"`
-	Policies     []PolicyRefDTO   `json:"policies"`
+	Namespace         string           `json:"namespace"`
+	Name              string           `json:"name"`
+	Hostnames         []string         `json:"hostnames"`
+	Matches           []MatchDTO       `json:"matches"`
+	ParentSectionName string           `json:"parentSectionName"`
+	Accepted          bool             `json:"accepted"`
+	ResolvedRefs      bool             `json:"resolvedRefs"`
+	Backends          []BackendDTO     `json:"backends"`
+	Services          []ServiceNodeDTO `json:"services"`
+	Pods              PodCountDTO      `json:"pods"`
+	Policies          []PolicyRefDTO   `json:"policies"`
 }
 type TopologyDTO struct {
 	Gateway         GatewayNodeDTO `json:"gateway"`
@@ -95,10 +103,19 @@ type GatewayRefDTO struct {
 	Listeners  []ListenerDTO       `json:"listeners"`
 	Accepted   bool                `json:"accepted"`
 	Programmed bool                `json:"programmed"`
+	// Stale: the spec changed and the controller has not observed it yet -
+	// Accepted/Programmed reflect the previous spec; the row renders as
+	// transitioning.
+	Stale              bool  `json:"stale"`
+	Generation         int64 `json:"generation"`
+	ObservedGeneration int64 `json:"observedGeneration"`
 }
 type GatewayListDTO struct {
 	GatewayAPIServed bool            `json:"gatewayAPIServed"`
 	Gateways         []GatewayRefDTO `json:"gateways"`
+	// Error is set when the list failed on a served API (auth, network, RBAC) -
+	// distinct from an empty list, which means "no Gateways exist".
+	Error string `json:"error,omitempty"`
 }
 
 // RouteMetricDTO is a route's traffic readout. Nil fractions serialize as JSON
@@ -137,18 +154,26 @@ func policyDTOs(ps []gwapi.PolicyRef) []PolicyRefDTO {
 	return out
 }
 
+func certificateRefDTOs(refs []gwapi.CertificateRef) []CertificateRefDTO {
+	out := make([]CertificateRefDTO, 0, len(refs))
+	for _, r := range refs {
+		out = append(out, CertificateRefDTO{Group: r.Group, Kind: r.Kind, Namespace: r.Namespace, Name: r.Name})
+	}
+	return out
+}
+
 func toTopologyDTO(t gwapi.Topology) TopologyDTO {
 	g := t.Gateway
 	gd := GatewayNodeDTO{Namespace: g.Namespace, Name: g.Name, ClassName: g.ClassName, Accepted: g.Accepted, Programmed: g.Programmed, Policies: policyDTOs(g.Policies)}
 	for _, l := range g.Listeners {
-		gd.Listeners = append(gd.Listeners, ListenerDTO{Name: l.Name, Protocol: l.Protocol, Hostname: l.Hostname, Port: l.Port})
+		gd.Listeners = append(gd.Listeners, ListenerDTO{Name: l.Name, Protocol: l.Protocol, Hostname: l.Hostname, Port: l.Port, CertificateRefs: certificateRefDTOs(l.CertificateRefs)})
 	}
 	for _, a := range g.Addresses {
 		gd.Addresses = append(gd.Addresses, GatewayAddressDTO{Type: a.Type, Value: a.Value})
 	}
 	out := TopologyDTO{Gateway: gd, Warnings: t.Warnings, ClusterPolicies: policyDTOs(t.ClusterPolicies)}
 	for _, r := range t.Routes {
-		rd := RouteNodeDTO{Namespace: r.Namespace, Name: r.Name, Hostnames: r.Hostnames, Accepted: r.Accepted, ResolvedRefs: r.ResolvedRefs, Pods: PodCountDTO{Ready: r.Pods.Ready, Total: r.Pods.Total, Unknown: r.Pods.Unknown}, Policies: policyDTOs(r.Policies)}
+		rd := RouteNodeDTO{Namespace: r.Namespace, Name: r.Name, Hostnames: r.Hostnames, ParentSectionName: r.ParentSectionName, Accepted: r.Accepted, ResolvedRefs: r.ResolvedRefs, Pods: PodCountDTO{Ready: r.Pods.Ready, Total: r.Pods.Total, Unknown: r.Pods.Unknown}, Policies: policyDTOs(r.Policies)}
 		for _, m := range r.Matches {
 			rd.Matches = append(rd.Matches, MatchDTO{PathType: m.PathType, PathValue: m.PathValue, Method: m.Method})
 		}

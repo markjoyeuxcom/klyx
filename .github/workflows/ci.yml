@@ -1,0 +1,114 @@
+name: ci
+
+# Tests on every push and PR - not just at release time. The release workflow
+# runs the same suites, but a failing test must surface when it lands, not
+# weeks later when a tag is cut.
+#
+# Two gitignored artifacts need recreating on a fresh checkout:
+#   - cmd/klyx/frontend/dist  (the //go:embed target; stubbed for vet/test)
+#   - cmd/klyx/frontend/bindings (wails3-generated TS; needed by tsc/vitest)
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: "24"
+  WAILS_VERSION: "v3.0.0-alpha2.103"
+
+jobs:
+  go:
+    name: go vet + test (-race)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      # cmd/klyx imports Wails, which needs the GTK/WebKit headers to compile
+      # on Linux (same dependency set the release workflow installs).
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            pkg-config \
+            libgtk-4-dev \
+            libwebkitgtk-6.0-dev
+
+      # The //go:embed all:frontend/dist pattern needs at least one file. Vet
+      # and tests never serve assets, so a stub keeps this job node-free.
+      - name: Stub frontend dist for the Go embed
+        run: |
+          mkdir -p cmd/klyx/frontend/dist
+          touch cmd/klyx/frontend/dist/.ci-stub
+
+      - name: go vet
+        run: go vet $(go list ./... | grep -v '/cmd/klyx/build/')
+
+      - name: go test -race
+        run: go test -race $(go list ./... | grep -v '/cmd/klyx/build/')
+
+      - name: gofmt
+        run: |
+          out="$(gofmt -l internal/ cmd/klyx/main.go cmd/klyxctl/)"
+          if [ -n "${out}" ]; then
+            echo "gofmt needed on:" >&2
+            echo "${out}" >&2
+            exit 1
+          fi
+
+  frontend:
+    name: tsc + vitest
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: cmd/klyx/frontend/package-lock.json
+
+      # Binding generation loads the Go packages, which import the Wails
+      # runtime - the GTK/WebKit headers are needed even here.
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            pkg-config \
+            libgtk-4-dev \
+            libwebkitgtk-6.0-dev
+
+      - name: Install Wails CLI
+        run: |
+          echo "$(go env GOPATH)/bin" >> "${GITHUB_PATH}"
+          go install github.com/wailsapp/wails/v3/cmd/wails3@${WAILS_VERSION}
+
+      - name: Install frontend dependencies
+        working-directory: cmd/klyx/frontend
+        run: npm ci
+
+      - name: Generate Wails bindings
+        working-directory: cmd/klyx
+        run: wails3 generate bindings -clean=true -ts
+
+      - name: Typecheck
+        working-directory: cmd/klyx/frontend
+        run: npx tsc --noEmit
+
+      - name: Tests
+        working-directory: cmd/klyx/frontend
+        run: npm test -- --run

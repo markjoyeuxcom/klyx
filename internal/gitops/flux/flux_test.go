@@ -198,3 +198,37 @@ func TestParseHelmReleaseChartSourceRef(t *testing.T) {
 		t.Fatalf("chart sourceRef kind: %q", r.SourceKind)
 	}
 }
+
+func TestStalenessFromObservedGeneration(t *testing.T) {
+	ks := func(gen, observed int64, withObserved bool) *unstructured.Unstructured {
+		status := map[string]interface{}{
+			"conditions": []interface{}{map[string]interface{}{"type": "Ready", "status": "True"}},
+		}
+		if withObserved {
+			status["observedGeneration"] = observed
+		}
+		u := &unstructured.Unstructured{Object: map[string]interface{}{
+			"apiVersion": "kustomize.toolkit.fluxcd.io/v1",
+			"kind":       "Kustomization",
+			"metadata":   map[string]interface{}{"name": "app", "namespace": "flux-system"},
+			"status":     status,
+		}}
+		u.SetGeneration(gen)
+		return u
+	}
+
+	// Spec edited (gen 5) but controller last observed gen 4: the row is stale
+	// and Ready must not be presented as confirmed.
+	r := ParseKustomization(ks(5, 4, true))
+	if !r.Stale || r.Generation != 5 || r.ObservedGeneration != 4 {
+		t.Fatalf("stale: %+v", r)
+	}
+	// Observed caught up: not stale.
+	if r := ParseKustomization(ks(5, 5, true)); r.Stale {
+		t.Fatalf("caught-up resource must not be stale: %+v", r)
+	}
+	// No observedGeneration in status: not-stale (never guess).
+	if r := ParseKustomization(ks(5, 0, false)); r.Stale {
+		t.Fatalf("missing observedGeneration must read not-stale: %+v", r)
+	}
+}

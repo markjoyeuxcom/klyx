@@ -13,7 +13,7 @@ import { CLUSTER_RISK_REFS, riskFor } from "./resourceRisk";
 import type { EventRowDTO, ResourceRef } from "../store/fleet";
 
 type BoardEntry = FleetBoardEntry | undefined;
-const ellipsis: React.CSSProperties = { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" };
+import { Badge, ellipsis, StatusDot } from "../chrome/primitives";
 
 export function Overview({ c }: { c: ClusterDTO }) {
   const tags = [c.env, c.region, c.provider, c.group].filter(Boolean);
@@ -48,12 +48,12 @@ export function Overview({ c }: { c: ClusterDTO }) {
       <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 16, borderBottom: "0.5px solid var(--color-border-tertiary)", paddingBottom: 12 }}>
         <div style={{ minWidth: 0 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-            <span style={{ width: 8, height: 8, borderRadius: "50%", background: stateColor[c.state] ?? "var(--color-text-tertiary)" }} />
+            <StatusDot size={8} color={stateColor[c.state] ?? "var(--color-text-tertiary)"} />
             <span style={{ fontFamily: "var(--font-mono)", fontWeight: 600, fontSize: 16 }}>{c.name}</span>
-            {c.version && <Badge>{c.version}</Badge>}
+            {c.version && <Badge variant="soft" tone="muted">{c.version}</Badge>}
           </div>
           <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
-            {tags.map((t) => <Badge key={t}>{t}</Badge>)}
+            {tags.map((t) => <Badge key={t} variant="soft" tone="muted">{t}</Badge>)}
           </div>
         </div>
         <span style={{ fontFamily: "var(--font-mono)", color: freshnessTone(c), fontSize: 12, whiteSpace: "nowrap" }}>
@@ -162,7 +162,7 @@ function AttentionStrip({
     nav.setSection("argo");
   }
   function goNetwork() {
-    nav.setSection("network");
+    nav.setSection("gatewayApi");
   }
 
   const fluxTileTitle = (() => {
@@ -297,7 +297,7 @@ function NextActions({
   if ((summary?.warningEvents ?? 0) > 0) actions.push({ label: "events", detail: `${summary?.warningEvents} warnings`, run: () => { nav.setSection("events"); nav.setWarningsOnly(true); }, tone: "var(--color-text-warning)" });
   if ((summary?.flux?.notReady ?? 0) > 0 || (summary?.flux?.suspended ?? 0) > 0) actions.push({ label: "flux", detail: `${summary?.flux?.notReady ?? 0} not ready · ${summary?.flux?.suspended ?? 0} suspended`, run: () => nav.setSection("gitops"), tone: "var(--color-text-warning)" });
   if ((board?.argo?.broken ?? 0) > 0) actions.push({ label: "argo", detail: `${board?.argo?.broken} degraded`, run: () => nav.setSection("argo"), tone: "var(--color-text-warning)" });
-  if (((board?.gateway?.brokenRoutes ?? 0) + (board?.gateway?.unprogrammed ?? 0)) > 0) actions.push({ label: "gateway", detail: `${(board?.gateway?.brokenRoutes ?? 0) + (board?.gateway?.unprogrammed ?? 0)} issues`, run: () => nav.setSection("network"), tone: "var(--color-text-warning)" });
+  if (((board?.gateway?.brokenRoutes ?? 0) + (board?.gateway?.unprogrammed ?? 0)) > 0) actions.push({ label: "gateway", detail: `${(board?.gateway?.brokenRoutes ?? 0) + (board?.gateway?.unprogrammed ?? 0)} issues`, run: () => nav.setSection("gatewayApi"), tone: "var(--color-text-warning)" });
   if (clusterState !== "Synced") actions.push({ label: "watch", detail: clusterState.toLowerCase(), run: () => nav.setSection("overview"), tone: "var(--color-text-warning)" });
 
   return (
@@ -461,9 +461,6 @@ function ClusterRisks({ cluster }: { cluster: string }) {
 
 // ---- shared sub-components (unchanged) ----------------------------------------
 
-function Badge({ children }: { children: React.ReactNode }) {
-  return <span style={{ background: "var(--color-background-secondary)", color: "var(--color-text-secondary)", fontSize: 11, padding: "1px 6px", borderRadius: 3 }}>{children}</span>;
-}
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div style={{ marginBottom: 16 }}>

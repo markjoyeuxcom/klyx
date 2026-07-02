@@ -35,22 +35,23 @@ func (s *GatewayService) SetGlobalReach(f func(cluster, ns, name string) ([]stri
 func (s *GatewayService) ListGateways(cluster string) GatewayListDTO {
 	conn, ok := s.lookup(cluster)
 	if !ok {
-		return GatewayListDTO{Gateways: []GatewayRefDTO{}}
+		return GatewayListDTO{Gateways: []GatewayRefDTO{}, Error: "cluster not connected: " + cluster}
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), gatewayTimeout)
 	defer cancel()
 	refs, served, err := conn.ListGateways(ctx)
 	if err != nil {
-		return GatewayListDTO{Gateways: []GatewayRefDTO{}}
+		// Served but unlistable is an error state, not an empty cluster.
+		return GatewayListDTO{GatewayAPIServed: served, Gateways: []GatewayRefDTO{}, Error: err.Error()}
 	}
 	out := GatewayListDTO{GatewayAPIServed: served, Gateways: make([]GatewayRefDTO, 0, len(refs))}
 	for _, r := range refs {
-		g := GatewayRefDTO{Namespace: r.Namespace, Name: r.Name, ClassName: r.ClassName, Accepted: r.Accepted, Programmed: r.Programmed}
+		g := GatewayRefDTO{Namespace: r.Namespace, Name: r.Name, ClassName: r.ClassName, Accepted: r.Accepted, Programmed: r.Programmed, Stale: r.Stale, Generation: r.Generation, ObservedGeneration: r.ObservedGeneration}
 		for _, a := range r.Addresses {
 			g.Addresses = append(g.Addresses, GatewayAddressDTO{Type: a.Type, Value: a.Value})
 		}
 		for _, l := range r.Listeners {
-			g.Listeners = append(g.Listeners, ListenerDTO{Name: l.Name, Protocol: l.Protocol, Hostname: l.Hostname, Port: l.Port})
+			g.Listeners = append(g.Listeners, ListenerDTO{Name: l.Name, Protocol: l.Protocol, Hostname: l.Hostname, Port: l.Port, CertificateRefs: certificateRefDTOs(l.CertificateRefs)})
 		}
 		out.Gateways = append(out.Gateways, g)
 	}

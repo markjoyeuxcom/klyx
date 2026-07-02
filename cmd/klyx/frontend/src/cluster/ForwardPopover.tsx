@@ -1,10 +1,6 @@
 import { useState } from "react";
 import { startForward } from "../bridge/forwards";
-
-const btn: React.CSSProperties = {
-  fontSize: 11, padding: "3px 10px", borderRadius: 4, cursor: "pointer",
-  border: "0.5px solid var(--color-border-tertiary)", background: "var(--color-background-primary)", color: "var(--color-text-secondary)",
-};
+import { btn } from "../chrome/primitives";
 
 // PortSuggestion is a declared container/service port offered as a one-click
 // target. name is the spec port name ("http", "metrics"), "" when unnamed.

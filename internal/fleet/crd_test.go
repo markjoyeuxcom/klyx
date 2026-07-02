@@ -80,6 +80,56 @@ func TestGetInstanceDetailNoUIDSkipsEvents(t *testing.T) {
 	}
 }
 
+func TestApplyResourceYAMLDryRun(t *testing.T) {
+	gvr := schema.GroupVersionResource{Group: "", Version: "v1", Resource: "configmaps"}
+	scheme := dynScheme()
+	listKinds := map[schema.GroupVersionResource]string{gvr: "ConfigMapList"}
+	obj := &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "v1", "kind": "ConfigMap",
+		"metadata": map[string]interface{}{"namespace": "default", "name": "app"},
+	}}
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(scheme, listKinds, obj)
+	patched := false
+	dyn.PrependReactor("patch", "configmaps", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		patched = true
+		if action.GetNamespace() != "default" {
+			t.Fatalf("patch namespace = %q", action.GetNamespace())
+		}
+		return true, obj, nil
+	})
+	c := NewClusterConn("x", nil, nil, dyn, nil, clock.Real{}, config.MetricsConfig{})
+
+	err := c.ApplyResourceYAML(context.Background(), "", "v1", "configmaps", "ConfigMap", "Namespaced", "default", "app", "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  namespace: default\n  name: app\n", true)
+	if err != nil {
+		t.Fatalf("dry-run apply: %v", err)
+	}
+	if !patched {
+		t.Fatal("want dynamic patch")
+	}
+}
+
+func TestApplyResourceYAMLRejectsTargetMismatch(t *testing.T) {
+	gvr := schema.GroupVersionResource{Group: "", Version: "v1", Resource: "configmaps"}
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(dynScheme(), map[schema.GroupVersionResource]string{gvr: "ConfigMapList"})
+	c := NewClusterConn("x", nil, nil, dyn, nil, clock.Real{}, config.MetricsConfig{})
+
+	err := c.ApplyResourceYAML(context.Background(), "", "v1", "configmaps", "ConfigMap", "Namespaced", "default", "app", "apiVersion: v1\nkind: Secret\nmetadata:\n  namespace: default\n  name: app\n", true)
+	if err == nil || !strings.Contains(err.Error(), "target mismatch") {
+		t.Fatalf("want target mismatch, got %v", err)
+	}
+}
+
+func TestApplyResourceYAMLRejectsMaskedSecret(t *testing.T) {
+	gvr := schema.GroupVersionResource{Group: "", Version: "v1", Resource: "secrets"}
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(dynScheme(), map[schema.GroupVersionResource]string{gvr: "SecretList"})
+	c := NewClusterConn("x", nil, nil, dyn, nil, clock.Real{}, config.MetricsConfig{})
+
+	err := c.ApplyResourceYAML(context.Background(), "", "v1", "secrets", "Secret", "Namespaced", "default", "app", "apiVersion: v1\nkind: Secret\nmetadata:\n  namespace: default\n  name: app\ndata:\n  password: <masked>\n", true)
+	if err == nil || !strings.Contains(err.Error(), "masked Secret") {
+		t.Fatalf("want masked secret rejection, got %v", err)
+	}
+}
+
 func crdUnstructured(group, kind, plural, scope string) *unstructured.Unstructured {
 	return &unstructured.Unstructured{Object: map[string]interface{}{
 		"apiVersion": "apiextensions.k8s.io/v1",
@@ -467,8 +517,12 @@ func TestGetInstanceDetail(t *testing.T) {
 	obj := &unstructured.Unstructured{Object: map[string]interface{}{
 		"apiVersion": "example.com/v1",
 		"kind":       "Widget",
-		"metadata":   map[string]interface{}{"name": "w1", "namespace": "team-a", "uid": "uid-1", "labels": map[string]interface{}{"app": "w"}},
-		"status":     map[string]interface{}{"conditions": []interface{}{map[string]interface{}{"type": "Ready", "status": "True", "reason": "OK", "message": "ready"}}},
+		"metadata": map[string]interface{}{
+			"name": "w1", "namespace": "team-a", "uid": "uid-1",
+			"labels":      map[string]interface{}{"app": "w"},
+			"annotations": map[string]interface{}{"owner": "platform"},
+		},
+		"status": map[string]interface{}{"conditions": []interface{}{map[string]interface{}{"type": "Ready", "status": "True", "reason": "OK", "message": "ready"}}},
 	}}
 	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(scheme, listKinds, obj)
 
@@ -500,6 +554,9 @@ func TestGetInstanceDetail(t *testing.T) {
 	}
 	if d.Labels["app"] != "w" {
 		t.Fatalf("labels: %+v", d.Labels)
+	}
+	if d.Annotations["owner"] != "platform" {
+		t.Fatalf("annotations: %+v", d.Annotations)
 	}
 }
 

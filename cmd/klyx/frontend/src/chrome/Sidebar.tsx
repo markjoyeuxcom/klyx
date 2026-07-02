@@ -1,20 +1,20 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import {
   IconLayoutGrid,
   IconArrowsLeftRight, IconLayoutDashboard, IconStack2, IconGitBranch, IconGitMerge,
   IconRoute, IconTerminal2, IconSettings, IconBox, IconCircleDot,
   IconAlertTriangle, IconServer, IconAnchor, IconChevronRight, IconChevronLeft,
-  IconComponents,
+  IconComponents, IconCertificate, IconFolder, IconDatabase, IconShieldLock,
+  IconNetwork, IconKey, IconScale, IconWebhook, IconCpu, IconPackage,
 } from "@tabler/icons-react";
-import { useFleet, SECTION_LABELS } from "../store/fleet";
-import type { ClusterDTO, ClusterSection, FleetBoardEntry, MeshGraphDTO, MetricsDTO } from "../store/fleet";
+import { useFleet, SECTION_LABELS, WORKLOAD_KINDS } from "../store/fleet";
+import type { ArgoViewMode, ClusterSection, ResourceRef, Route, WorkloadKind } from "../store/fleet";
 import { openTerminal } from "../bridge/configsvc";
-import { getClusterMetrics } from "../bridge/metrics";
-import { BUILTIN_CATALOG } from "../cluster/builtins";
 import { KlyxMark } from "./KlyxMark";
 
 const COLLAPSED_WIDTH = 46;
-const EXPANDED_WIDTH = 190;
+const EXPANDED_WIDTH = 224;
+const COLLAPSED_GROUPS_KEY = "klyx-sidebar-collapsed-groups";
 
 // Grouped triage-first order (design principle 2: GitOps in the top five).
 // Each inner array is a visual group separated by a thin divider.
@@ -32,9 +32,10 @@ const SECTION_GROUPS: { section: ClusterSection; Icon: typeof IconLayoutDashboar
     { section: "gitops",    Icon: IconGitBranch },
     { section: "argo",      Icon: IconGitMerge },
     { section: "helm",      Icon: IconAnchor },
+    { section: "certs",     Icon: IconCertificate },
   ],
   [
-    { section: "network",   Icon: IconRoute },
+    { section: "gatewayApi", Icon: IconRoute },
   ],
   [
     { section: "resources", Icon: IconStack2 },
@@ -42,8 +43,214 @@ const SECTION_GROUPS: { section: ClusterSection; Icon: typeof IconLayoutDashboar
   ],
 ];
 
+type SidebarTarget =
+  | { kind: "fleet" }
+  | { kind: "forwards" }
+  | { kind: "settings" }
+  | { kind: "terminal" }
+  | { kind: "section"; section: ClusterSection; workloadKinds?: readonly WorkloadKind[]; argoView?: ArgoViewMode }
+  | { kind: "resource"; ref: ResourceRef };
+
+type ExpandedItem = {
+  label: string;
+  Icon: typeof IconLayoutDashboard;
+  target: SidebarTarget;
+  active?: "target" | "none";
+};
+
+type ExpandedGroup = { label: string; items: ExpandedItem[] };
+
+const r = (group: string, version: string, plural: string, kind: string, scope: "Namespaced" | "Cluster"): ResourceRef =>
+  ({ group, version, plural, kind, scope });
+
+const EXPANDED_MENU: ExpandedGroup[] = [
+  {
+    label: "Fleet",
+    items: [
+      { label: "Fleet", Icon: IconLayoutGrid, target: { kind: "fleet" } },
+      { label: "Port-forwards", Icon: IconArrowsLeftRight, target: { kind: "forwards" } },
+    ],
+  },
+  {
+    label: "Cluster",
+    items: [
+      { label: "Overview", Icon: IconLayoutDashboard, target: { kind: "section", section: "overview" } },
+      { label: "Nodes", Icon: IconServer, target: { kind: "section", section: "nodes" } },
+      { label: "Namespaces", Icon: IconFolder, target: { kind: "resource", ref: r("", "v1", "namespaces", "Namespace", "Cluster") } },
+      { label: "API Services", Icon: IconComponents, target: { kind: "resource", ref: r("apiregistration.k8s.io", "v1", "apiservices", "APIService", "Cluster") } },
+      { label: "Events", Icon: IconAlertTriangle, target: { kind: "section", section: "events" } },
+    ],
+  },
+  {
+    label: "Workloads",
+    items: [
+      { label: "All workloads", Icon: IconBox, target: { kind: "section", section: "workloads", workloadKinds: WORKLOAD_KINDS } },
+      { label: "Pods", Icon: IconCircleDot, target: { kind: "section", section: "pods" } },
+      { label: "Deployments", Icon: IconBox, target: { kind: "section", section: "workloads", workloadKinds: ["Deployment"] } },
+      { label: "StatefulSets", Icon: IconDatabase, target: { kind: "section", section: "workloads", workloadKinds: ["StatefulSet"] } },
+      { label: "DaemonSets", Icon: IconCpu, target: { kind: "section", section: "workloads", workloadKinds: ["DaemonSet"] } },
+      { label: "ReplicaSets", Icon: IconStack2, target: { kind: "resource", ref: r("apps", "v1", "replicasets", "ReplicaSet", "Namespaced") } },
+      { label: "Jobs", Icon: IconPackage, target: { kind: "resource", ref: r("batch", "v1", "jobs", "Job", "Namespaced") } },
+      { label: "CronJobs", Icon: IconPackage, target: { kind: "resource", ref: r("batch", "v1", "cronjobs", "CronJob", "Namespaced") } },
+    ],
+  },
+  {
+    label: "Config",
+    items: [
+      { label: "ConfigMaps", Icon: IconStack2, target: { kind: "resource", ref: r("", "v1", "configmaps", "ConfigMap", "Namespaced") } },
+      { label: "Secrets", Icon: IconShieldLock, target: { kind: "resource", ref: r("", "v1", "secrets", "Secret", "Namespaced") } },
+      { label: "ResourceQuotas", Icon: IconScale, target: { kind: "resource", ref: r("", "v1", "resourcequotas", "ResourceQuota", "Namespaced") } },
+      { label: "LimitRanges", Icon: IconScale, target: { kind: "resource", ref: r("", "v1", "limitranges", "LimitRange", "Namespaced") } },
+      { label: "PriorityClasses", Icon: IconCpu, target: { kind: "resource", ref: r("scheduling.k8s.io", "v1", "priorityclasses", "PriorityClass", "Cluster") } },
+      { label: "RuntimeClasses", Icon: IconCpu, target: { kind: "resource", ref: r("node.k8s.io", "v1", "runtimeclasses", "RuntimeClass", "Cluster") } },
+      { label: "Leases", Icon: IconKey, target: { kind: "resource", ref: r("coordination.k8s.io", "v1", "leases", "Lease", "Namespaced") } },
+    ],
+  },
+  {
+    label: "Autoscaling",
+    items: [
+      { label: "HorizontalPodAutoscalers", Icon: IconScale, target: { kind: "resource", ref: r("autoscaling", "v2", "horizontalpodautoscalers", "HorizontalPodAutoscaler", "Namespaced") } },
+      { label: "PodDisruptionBudgets", Icon: IconShieldLock, target: { kind: "resource", ref: r("policy", "v1", "poddisruptionbudgets", "PodDisruptionBudget", "Namespaced") } },
+    ],
+  },
+  {
+    label: "Network",
+    items: [
+      { label: "Services", Icon: IconNetwork, target: { kind: "resource", ref: r("", "v1", "services", "Service", "Namespaced") } },
+      { label: "Ingresses", Icon: IconRoute, target: { kind: "resource", ref: r("networking.k8s.io", "v1", "ingresses", "Ingress", "Namespaced") } },
+      { label: "NetworkPolicies", Icon: IconShieldLock, target: { kind: "resource", ref: r("networking.k8s.io", "v1", "networkpolicies", "NetworkPolicy", "Namespaced") } },
+      { label: "EndpointSlices", Icon: IconNetwork, target: { kind: "resource", ref: r("discovery.k8s.io", "v1", "endpointslices", "EndpointSlice", "Namespaced") } },
+      { label: "IngressClasses", Icon: IconRoute, target: { kind: "resource", ref: r("networking.k8s.io", "v1", "ingressclasses", "IngressClass", "Cluster") } },
+    ],
+  },
+  {
+    label: "Storage",
+    items: [
+      { label: "PersistentVolumeClaims", Icon: IconDatabase, target: { kind: "resource", ref: r("", "v1", "persistentvolumeclaims", "PersistentVolumeClaim", "Namespaced") } },
+      { label: "PersistentVolumes", Icon: IconDatabase, target: { kind: "resource", ref: r("", "v1", "persistentvolumes", "PersistentVolume", "Cluster") } },
+      { label: "StorageClasses", Icon: IconDatabase, target: { kind: "resource", ref: r("storage.k8s.io", "v1", "storageclasses", "StorageClass", "Cluster") } },
+      { label: "CSI Drivers", Icon: IconDatabase, target: { kind: "resource", ref: r("storage.k8s.io", "v1", "csidrivers", "CSIDriver", "Cluster") } },
+      { label: "CSI Nodes", Icon: IconServer, target: { kind: "resource", ref: r("storage.k8s.io", "v1", "csinodes", "CSINode", "Cluster") } },
+      { label: "Volume Attachments", Icon: IconStack2, target: { kind: "resource", ref: r("storage.k8s.io", "v1", "volumeattachments", "VolumeAttachment", "Cluster") } },
+    ],
+  },
+  {
+    label: "Access control",
+    items: [
+      { label: "Service Accounts", Icon: IconKey, target: { kind: "resource", ref: r("", "v1", "serviceaccounts", "ServiceAccount", "Namespaced") } },
+      { label: "Cluster Roles", Icon: IconShieldLock, target: { kind: "resource", ref: r("rbac.authorization.k8s.io", "v1", "clusterroles", "ClusterRole", "Cluster") } },
+      { label: "Roles", Icon: IconShieldLock, target: { kind: "resource", ref: r("rbac.authorization.k8s.io", "v1", "roles", "Role", "Namespaced") } },
+      { label: "Cluster Role Bindings", Icon: IconKey, target: { kind: "resource", ref: r("rbac.authorization.k8s.io", "v1", "clusterrolebindings", "ClusterRoleBinding", "Cluster") } },
+      { label: "Role Bindings", Icon: IconKey, target: { kind: "resource", ref: r("rbac.authorization.k8s.io", "v1", "rolebindings", "RoleBinding", "Namespaced") } },
+      { label: "CSRs", Icon: IconCertificate, target: { kind: "resource", ref: r("certificates.k8s.io", "v1", "certificatesigningrequests", "CertificateSigningRequest", "Cluster") } },
+    ],
+  },
+  {
+    label: "Gateway API",
+    items: [
+      { label: "Gateway topology", Icon: IconRoute, target: { kind: "section", section: "gatewayApi" } },
+      { label: "Gateways", Icon: IconRoute, target: { kind: "resource", ref: r("gateway.networking.k8s.io", "v1", "gateways", "Gateway", "Namespaced") } },
+      { label: "HTTPRoutes", Icon: IconRoute, target: { kind: "resource", ref: r("gateway.networking.k8s.io", "v1", "httproutes", "HTTPRoute", "Namespaced") } },
+      { label: "GRPCRoutes", Icon: IconRoute, target: { kind: "resource", ref: r("gateway.networking.k8s.io", "v1", "grpcroutes", "GRPCRoute", "Namespaced") } },
+      { label: "GatewayClasses", Icon: IconRoute, target: { kind: "resource", ref: r("gateway.networking.k8s.io", "v1", "gatewayclasses", "GatewayClass", "Cluster") } },
+      { label: "ReferenceGrants", Icon: IconRoute, target: { kind: "resource", ref: r("gateway.networking.k8s.io", "v1beta1", "referencegrants", "ReferenceGrant", "Namespaced") } },
+      { label: "BackendTLSPolicies", Icon: IconCertificate, target: { kind: "resource", ref: r("gateway.networking.k8s.io", "v1alpha3", "backendtlspolicies", "BackendTLSPolicy", "Namespaced") } },
+      { label: "ClientTrafficPolicies", Icon: IconRoute, target: { kind: "resource", ref: r("gateway.envoyproxy.io", "v1alpha1", "clienttrafficpolicies", "ClientTrafficPolicy", "Namespaced") } },
+      { label: "BackendTrafficPolicies", Icon: IconRoute, target: { kind: "resource", ref: r("gateway.envoyproxy.io", "v1alpha1", "backendtrafficpolicies", "BackendTrafficPolicy", "Namespaced") } },
+      { label: "SecurityPolicies", Icon: IconShieldLock, target: { kind: "resource", ref: r("gateway.envoyproxy.io", "v1alpha1", "securitypolicies", "SecurityPolicy", "Namespaced") } },
+    ],
+  },
+  {
+    label: "cert-manager",
+    items: [
+      { label: "Certificates", Icon: IconCertificate, target: { kind: "section", section: "certs" } },
+      { label: "Requests", Icon: IconCertificate, target: { kind: "resource", ref: r("cert-manager.io", "v1", "certificaterequests", "CertificateRequest", "Namespaced") } },
+      { label: "Orders", Icon: IconCertificate, target: { kind: "resource", ref: r("acme.cert-manager.io", "v1", "orders", "Order", "Namespaced") } },
+      { label: "Challenges", Icon: IconCertificate, target: { kind: "resource", ref: r("acme.cert-manager.io", "v1", "challenges", "Challenge", "Namespaced") } },
+      { label: "Issuers", Icon: IconCertificate, target: { kind: "resource", ref: r("cert-manager.io", "v1", "issuers", "Issuer", "Namespaced") } },
+      { label: "ClusterIssuers", Icon: IconCertificate, target: { kind: "resource", ref: r("cert-manager.io", "v1", "clusterissuers", "ClusterIssuer", "Cluster") } },
+    ],
+  },
+  {
+    label: "Argo CD",
+    items: [
+      { label: "Applications", Icon: IconGitMerge, target: { kind: "section", section: "argo" } },
+      { label: "Projects", Icon: IconFolder, target: { kind: "section", section: "argo", argoView: "projects" } },
+      { label: "ApplicationSets", Icon: IconStack2, target: { kind: "section", section: "argo", argoView: "applicationsets" } },
+    ],
+  },
+  {
+    label: "Flux CD",
+    items: [
+      { label: "Kustomizations", Icon: IconGitBranch, target: { kind: "section", section: "gitops" } },
+      { label: "HelmReleases", Icon: IconPackage, target: { kind: "resource", ref: r("helm.toolkit.fluxcd.io", "v2", "helmreleases", "HelmRelease", "Namespaced") } },
+      { label: "GitRepositories", Icon: IconGitBranch, target: { kind: "resource", ref: r("source.toolkit.fluxcd.io", "v1", "gitrepositories", "GitRepository", "Namespaced") } },
+      { label: "HelmRepositories", Icon: IconPackage, target: { kind: "resource", ref: r("source.toolkit.fluxcd.io", "v1", "helmrepositories", "HelmRepository", "Namespaced") } },
+      { label: "OCIRepositories", Icon: IconPackage, target: { kind: "resource", ref: r("source.toolkit.fluxcd.io", "v1beta2", "ocirepositories", "OCIRepository", "Namespaced") } },
+      { label: "Buckets", Icon: IconDatabase, target: { kind: "resource", ref: r("source.toolkit.fluxcd.io", "v1", "buckets", "Bucket", "Namespaced") } },
+      { label: "Providers", Icon: IconWebhook, target: { kind: "resource", ref: r("notification.toolkit.fluxcd.io", "v1beta3", "providers", "Provider", "Namespaced") } },
+      { label: "Alerts", Icon: IconAlertTriangle, target: { kind: "resource", ref: r("notification.toolkit.fluxcd.io", "v1beta3", "alerts", "Alert", "Namespaced") } },
+      { label: "Receivers", Icon: IconWebhook, target: { kind: "resource", ref: r("notification.toolkit.fluxcd.io", "v1", "receivers", "Receiver", "Namespaced") } },
+    ],
+  },
+  {
+    label: "Helm",
+    items: [
+      { label: "Releases", Icon: IconAnchor, target: { kind: "section", section: "helm" } },
+      { label: "Repositories", Icon: IconPackage, target: { kind: "section", section: "helm" }, active: "none" },
+    ],
+  },
+  {
+    label: "Custom resources",
+    items: [
+      { label: "Browse CRDs", Icon: IconComponents, target: { kind: "section", section: "crds" } },
+      { label: "Built-in resources", Icon: IconStack2, target: { kind: "section", section: "resources" } },
+    ],
+  },
+  {
+    label: "Tools",
+    items: [
+      { label: "Terminal", Icon: IconTerminal2, target: { kind: "terminal" }, active: "none" },
+      { label: "Settings", Icon: IconSettings, target: { kind: "settings" } },
+    ],
+  },
+];
+
+// Capability gating (design principle 7: render only what's installed).
+// Inside a cluster, tool-specific nav is hidden when detection says the tool
+// is absent; outside a cluster (fleet/settings) everything shows disabled as
+// before. Detection lag just means a group appears when the cluster syncs.
+type ClusterCaps = { flux: boolean; argo: boolean; certManager: boolean; gatewayAPI: boolean };
+
+const ALL_CAPS: ClusterCaps = { flux: true, argo: true, certManager: true, gatewayAPI: true };
+
+// Groups/sections owned by a single tool; everything else is always shown.
+const GROUP_CAPS: Record<string, keyof ClusterCaps> = {
+  "Flux CD": "flux",
+  "Argo CD": "argo",
+  "cert-manager": "certManager",
+  "Gateway API": "gatewayAPI",
+};
+const SECTION_CAPS: Partial<Record<ClusterSection, keyof ClusterCaps>> = {
+  gitops: "flux",
+  argo: "argo",
+  certs: "certManager",
+  gatewayApi: "gatewayAPI",
+};
+
 function readPersistedExpanded(): boolean {
   try { return localStorage.getItem("klyx-sidebar-expanded") === "1"; } catch { return false; }
+}
+
+function readPersistedCollapsedGroups(): string[] {
+  try {
+    const raw = localStorage.getItem(COLLAPSED_GROUPS_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter((v): v is string => typeof v === "string") : [];
+  } catch {
+    return [];
+  }
 }
 
 export function Sidebar() {
@@ -54,28 +261,24 @@ export function Sidebar() {
   const openSettings = useFleet((s) => s.openSettings);
   const newContexts = useFleet((s) => s.newContexts);
   const setSection = useFleet((s) => s.setSection);
-  const builtinCategory = useFleet((s) => s.crd.builtinCategory);
-  const setBuiltinCategory = useFleet((s) => s.setBuiltinCategory);
-  const cluster = useFleet((s) => {
-    const r = s.route;
-    return r.name === "cluster" ? s.clusters.find((c) => c.name === r.cluster) ?? null : null;
-  });
-  const board = useFleet((s) => {
-    const r = s.route;
-    return r.name === "cluster" ? s.fleetBoard[r.cluster] : undefined;
-  });
-  const mesh = useFleet((s) => s.mesh);
-  const metrics = useFleet((s) => s.metrics);
+  const openResource = useFleet((s) => s.openResource);
+  const openArgo = useFleet((s) => s.openArgo);
+  const openWorkloads = useFleet((s) => s.openWorkloads);
+  const workloadKindFilter = useFleet((s) => s.workloads.kindFilter);
   const inCluster = route.name === "cluster";
-  const metricsForCluster = cluster && metrics.cluster === cluster.name ? metrics.dto : null;
+  const current = useFleet((s) => (route.name === "cluster" ? s.clusters.find((c) => c.name === route.cluster) : undefined));
+  // Outside a cluster (or before its DTO lands) show everything - gating only
+  // ever applies to a cluster whose capabilities have been detected.
+  const caps: ClusterCaps = inCluster && current
+    ? {
+        flux: current.fluxPresent ?? false,
+        argo: current.argoPresent ?? false,
+        certManager: current.certManagerPresent ?? false,
+        gatewayAPI: Boolean(current.gatewayAPIVersion),
+      }
+    : ALL_CAPS;
 
   const [expanded, setExpanded] = useState<boolean>(readPersistedExpanded);
-
-  useEffect(() => {
-    if (!expanded || !cluster) return;
-    const metricsAlreadyCurrent = metrics.cluster === cluster.name && (metrics.loading || metrics.dto);
-    if (!metricsAlreadyCurrent) void getClusterMetrics(cluster.name, false);
-  }, [expanded, cluster, metrics.cluster, metrics.dto, metrics.loading]);
 
   function toggle() {
     setExpanded((prev) => {
@@ -122,99 +325,49 @@ export function Sidebar() {
           gap: 4,
         }}
       >
-        {/* Fleet home */}
-        <RailButton
-          label="Fleet"
-          active={route.name === "fleet"}
-          onClick={openFleet}
-          expanded={expanded}
-        >
-          <IconLayoutGrid size={16} stroke={1.5} />
-        </RailButton>
-
-        {/* Port-forwards — fleet-level (tunnels span clusters) */}
-        <RailButton
-          label={forwardsCount > 0 ? `Forwards · ${forwardsCount}` : "Forwards"}
-          active={route.name === "forwards"}
-          onClick={openForwards}
-          expanded={expanded}
-        >
-          <IconArrowsLeftRight size={16} stroke={1.5} />
-        </RailButton>
-
-        {/* Section nav — grouped with semantic dividers */}
-        {SECTION_GROUPS.map((group, gi) => (
-          <div key={gi}>
-            {gi > 0 && (
-              <div role="separator" style={{
-                height: 0,
-                borderTop: "0.5px solid var(--color-border-tertiary)",
-                margin: "6px 8px",
-              }} />
-            )}
-            {group.map(({ section, Icon }) => (
-              <div key={section}>
-                <RailButton
-                  label={SECTION_LABELS[section]}
-                  disabled={!inCluster}
-                  active={inCluster && route.section === section}
-                  onClick={() => setSection(section)}
-                  expanded={expanded}
-                >
-                  <Icon size={16} stroke={1.5} />
-                </RailButton>
-                {expanded && inCluster && route.section === section && section === "resources" && (
-                  <div style={{ display: "flex", flexDirection: "column", gap: 1 }}>
-                    {BUILTIN_CATALOG.map((cat) => (
-                      <button
-                        key={cat.label}
-                        aria-label={`category ${cat.label}`}
-                        onClick={() => { setSection("resources"); setBuiltinCategory(builtinCategory === cat.label ? null : cat.label); }}
-                        style={{
-                          display: "flex", alignItems: "center",
-                          width: "calc(100% - 18px)",
-                          height: 24,
-                          margin: "0 9px",
-                          paddingLeft: 28,
-                          borderRadius: 4,
-                          cursor: "pointer",
-                          background: builtinCategory === cat.label ? "var(--color-background-primary)" : "transparent",
-                          border: builtinCategory === cat.label ? "0.5px solid var(--color-border-secondary)" : "0.5px solid transparent",
-                          color: builtinCategory === cat.label ? "var(--color-text-primary)" : "var(--color-text-secondary)",
-                          fontSize: 11,
-                          textAlign: "left",
-                          whiteSpace: "nowrap",
-                          overflow: "hidden",
-                          textOverflow: "ellipsis",
-                        }}
-                      >
-                        {cat.label}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-        ))}
-
-        {expanded && inCluster && cluster && (
-          <CapabilitiesBlock cluster={cluster} board={board} mesh={mesh} metrics={metricsForCluster} />
+        {expanded ? (
+          <ExpandedMenu
+            route={route}
+            inCluster={inCluster}
+            caps={caps}
+            forwardsCount={forwardsCount}
+            onFleet={openFleet}
+            onForwards={openForwards}
+            onSettings={openSettings}
+            onSection={setSection}
+            onResource={openResource}
+            onArgo={openArgo}
+            onWorkloads={openWorkloads}
+            workloadKindFilter={workloadKindFilter}
+          />
+        ) : (
+          <CollapsedMenu
+            route={route}
+            inCluster={inCluster}
+            caps={caps}
+            forwardsCount={forwardsCount}
+            onFleet={openFleet}
+            onForwards={openForwards}
+            onSection={setSection}
+          />
         )}
       </div>
 
-      {/* Bottom placeholders */}
-      <RailButton label="Terminal" onClick={() => void openTerminal()} expanded={expanded}>
-        <IconTerminal2 size={16} stroke={1.5} />
-      </RailButton>
-      <RailButton
-        label={newContexts > 0 ? `Settings · ${newContexts}` : "Settings"}
-        active={route.name === "settings"}
-        onClick={openSettings}
-        expanded={expanded}
-      >
-        <IconSettings size={16} stroke={1.5} />
-      </RailButton>
+      {!expanded && (
+        <>
+          <RailButton label="Terminal" onClick={() => void openTerminal()} expanded={expanded}>
+            <IconTerminal2 size={16} stroke={1.5} />
+          </RailButton>
+          <RailButton
+            label={newContexts > 0 ? `Settings · ${newContexts}` : "Settings"}
+            active={route.name === "settings"}
+            onClick={openSettings}
+            expanded={expanded}
+          >
+            <IconSettings size={16} stroke={1.5} />
+          </RailButton>
+        </>
+      )}
 
       {/* Collapse/expand toggle */}
       <button
@@ -244,155 +397,310 @@ export function Sidebar() {
   );
 }
 
-type CapabilityTone = "success" | "warning" | "danger" | "info" | "muted";
-type CapabilityRow = { label: string; value: string; tone: CapabilityTone; title?: string };
+function CollapsedMenu({
+  route,
+  inCluster,
+  caps,
+  forwardsCount,
+  onFleet,
+  onForwards,
+  onSection,
+}: {
+  route: Route;
+  inCluster: boolean;
+  caps: ClusterCaps;
+  forwardsCount: number;
+  onFleet: () => void;
+  onForwards: () => void;
+  onSection: (section: ClusterSection) => void;
+}) {
+  // Capability-gate the rail: hide tool sections detection says are absent.
+  const groups = SECTION_GROUPS
+    .map((group) => group.filter(({ section }) => {
+      const cap = SECTION_CAPS[section];
+      return !cap || caps[cap];
+    }))
+    .filter((group) => group.length > 0);
 
-function CapabilitiesBlock({ cluster, board, mesh, metrics }: { cluster: ClusterDTO; board: FleetBoardEntry | undefined; mesh: MeshGraphDTO | null; metrics: MetricsDTO | null }) {
-  const rows = capabilityRows(cluster, board, mesh, metrics);
   return (
-    <div
-      aria-label="cluster capabilities"
-      style={{
-        margin: "8px 9px 0",
-        padding: "10px 0 2px",
-        borderTop: "0.5px solid var(--color-border-tertiary)",
-        display: "grid",
-        gap: 8,
-        flexShrink: 0,
-      }}
-    >
-      <div style={{
-        fontSize: 10,
-        fontFamily: "var(--font-mono)",
-        color: "var(--color-text-tertiary)",
-        textTransform: "lowercase",
-      }}>
-        capabilities
-      </div>
-      <div style={{ display: "grid", gap: 7 }}>
-        {rows.map((row) => (
-          <div
-            key={row.label}
-            title={row.title}
-            style={{
-              display: "grid",
-              gridTemplateColumns: "8px minmax(0, 1fr) auto",
-              alignItems: "center",
-              gap: 8,
-              minHeight: 18,
-              fontFamily: "var(--font-mono)",
-              fontSize: 11,
-            }}
-          >
-            <span style={{
-              width: 7,
-              height: 7,
-              borderRadius: "50%",
-              background: toneColor(row.tone),
-            }} />
-            <span style={{
-              minWidth: 0,
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
-              color: "var(--color-text-secondary)",
-            }}>
-              {row.label}
-            </span>
-            <span style={{
-              color: toneColor(row.tone),
-              whiteSpace: "nowrap",
-              textAlign: "right",
-              maxWidth: 72,
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-            }}>
-              {row.value}
-            </span>
+    <>
+      <RailButton label="Fleet" active={route.name === "fleet"} onClick={onFleet} expanded={false}>
+        <IconLayoutGrid size={16} stroke={1.5} />
+      </RailButton>
+      <RailButton
+        label={forwardsCount > 0 ? `Forwards · ${forwardsCount}` : "Forwards"}
+        active={route.name === "forwards"}
+        onClick={onForwards}
+        expanded={false}
+      >
+        <IconArrowsLeftRight size={16} stroke={1.5} />
+      </RailButton>
+
+      {groups.map((group, gi) => (
+        <div key={gi}>
+          {gi > 0 && <SidebarSeparator />}
+          {group.map(({ section, Icon }) => (
+            <RailButton
+              key={section}
+              label={SECTION_LABELS[section]}
+              disabled={!inCluster}
+              active={inCluster && route.name === "cluster" && route.section === section}
+              onClick={() => onSection(section)}
+              expanded={false}
+            >
+              <Icon size={16} stroke={1.5} />
+            </RailButton>
+          ))}
+        </div>
+      ))}
+    </>
+  );
+}
+
+function ExpandedMenu({
+  route,
+  inCluster,
+  caps,
+  forwardsCount,
+  onFleet,
+  onForwards,
+  onSettings,
+  onSection,
+  onResource,
+  onArgo,
+  onWorkloads,
+  workloadKindFilter,
+}: {
+  route: Route;
+  inCluster: boolean;
+  caps: ClusterCaps;
+  forwardsCount: number;
+  onFleet: () => void;
+  onForwards: () => void;
+  onSettings: () => void;
+  onSection: (section: ClusterSection) => void;
+  onResource: (ref: ResourceRef) => void;
+  onArgo: (mode?: ArgoViewMode) => void;
+  onWorkloads: (kinds?: readonly WorkloadKind[]) => void;
+  workloadKindFilter: Record<WorkloadKind, boolean>;
+}) {
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(() => new Set(readPersistedCollapsedGroups()));
+
+  // Capability-gate whole tool groups: a cluster without cert-manager gets no
+  // cert-manager menu that dead-ends in "not detected" screens.
+  const menu = EXPANDED_MENU.filter((group) => {
+    const cap = GROUP_CAPS[group.label];
+    return !cap || caps[cap];
+  });
+
+  const toggleGroup = (label: string) => {
+    setCollapsedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(label)) next.delete(label);
+      else next.add(label);
+      try { localStorage.setItem(COLLAPSED_GROUPS_KEY, JSON.stringify([...next])); } catch { /* noop */ }
+      return next;
+    });
+  };
+
+  const activate = (target: SidebarTarget) => {
+    switch (target.kind) {
+      case "fleet":
+        onFleet();
+        break;
+      case "forwards":
+        onForwards();
+        break;
+      case "settings":
+        onSettings();
+        break;
+      case "terminal":
+        void openTerminal();
+        break;
+      case "section":
+        if (target.section === "workloads" && target.workloadKinds) {
+          onWorkloads(target.workloadKinds);
+        } else if (target.section === "argo") {
+          onArgo(target.argoView ?? "applications");
+        } else {
+          onSection(target.section);
+        }
+        break;
+      case "resource":
+        onResource(target.ref);
+        break;
+    }
+  };
+
+  return (
+    <div style={{ width: "100%", paddingBottom: 4 }}>
+      {menu.map((group, gi) => {
+        const collapsed = collapsedGroups.has(group.label);
+        const groupActive = group.items.some((item) => item.active !== "none" && isExpandedItemActive(route, item, workloadKindFilter));
+        return (
+          <div key={group.label}>
+            {gi > 0 && <SidebarSeparator />}
+            <button
+              aria-label={`${collapsed ? "expand" : "collapse"} ${group.label}`}
+              aria-expanded={!collapsed}
+              onClick={() => toggleGroup(group.label)}
+              style={groupLabelStyle(groupActive)}
+            >
+              <IconChevronRight
+                size={12}
+                stroke={1.7}
+                style={{ transform: collapsed ? "rotate(0deg)" : "rotate(90deg)", transition: "transform 100ms ease" }}
+              />
+              <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {group.label}
+              </span>
+            </button>
+            {!collapsed && (
+              <div style={{ display: "grid", gap: 1 }}>
+                {group.items.map((item) => {
+                  const label = item.target.kind === "forwards" && forwardsCount > 0
+                    ? `${item.label} · ${forwardsCount}`
+                    : item.label;
+                  const disabled = requiresCluster(item.target) && !inCluster;
+                  return (
+                    <ExpandedMenuButton
+                      key={`${group.label}/${item.label}`}
+                      item={item}
+                      label={label}
+                      active={item.active !== "none" && isExpandedItemActive(route, item, workloadKindFilter)}
+                      disabled={disabled}
+                      onClick={() => activate(item.target)}
+                    />
+                  );
+                })}
+              </div>
+            )}
           </div>
-        ))}
-      </div>
+        );
+      })}
     </div>
   );
 }
 
-function capabilityRows(cluster: ClusterDTO, board: FleetBoardEntry | undefined, mesh: MeshGraphDTO | null, metrics: MetricsDTO | null): CapabilityRow[] {
-  return [
-    fluxCapability(cluster, board),
-    ciliumCapability(cluster, mesh),
-    gatewayCapability(cluster, board),
-    prometheusCapability(metrics),
-  ];
+function ExpandedMenuButton({
+  item,
+  label,
+  active,
+  disabled,
+  onClick,
+}: {
+  item: ExpandedItem;
+  label: string;
+  active: boolean;
+  disabled: boolean;
+  onClick: () => void;
+}) {
+  const Icon = item.Icon;
+  return (
+    <button
+      aria-label={label}
+      title={label}
+      disabled={disabled}
+      onClick={onClick}
+      style={{
+        display: "grid",
+        gridTemplateColumns: "18px minmax(0, 1fr)",
+        alignItems: "center",
+        gap: 8,
+        height: 25,
+        width: "calc(100% - 16px)",
+        margin: "0 8px",
+        padding: "0 8px",
+        borderRadius: 5,
+        cursor: disabled ? "default" : "pointer",
+        textAlign: "left",
+        background: active ? "var(--color-background-primary)" : "transparent",
+        border: active ? "0.5px solid var(--color-border-secondary)" : "0.5px solid transparent",
+        color: disabled ? "var(--color-text-tertiary)" : active ? "var(--color-text-primary)" : "var(--color-text-secondary)",
+        opacity: disabled ? 0.48 : 1,
+        fontSize: 12,
+        fontWeight: active ? 500 : 400,
+      }}
+    >
+      <Icon size={15} stroke={1.5} />
+      <span
+        style={{
+          minWidth: 0,
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
+        }}
+      >
+        {label}
+      </span>
+    </button>
+  );
 }
 
-function fluxCapability(cluster: ClusterDTO, board: FleetBoardEntry | undefined): CapabilityRow {
-  const flux = board?.flux;
-  if (flux) {
-    if (flux.notReady > 0) return { label: "flux", value: `${flux.notReady} bad`, tone: "warning" };
-    return { label: "flux", value: "ready", tone: "success" };
-  }
-  if (cluster.fluxPresent === false || cluster.gitopsTier === "Absent") {
-    return { label: "flux", value: "absent", tone: "muted", title: cluster.gitopsReason || undefined };
-  }
-  if (cluster.fluxPresent && cluster.fluxHealthy) return { label: "flux", value: "ready", tone: "success" };
-  if (cluster.fluxPresent) return { label: "flux", value: "degraded", tone: "warning", title: cluster.gitopsReason || undefined };
-  return { label: "flux", value: "unknown", tone: "muted" };
+function SidebarSeparator() {
+  return (
+    <div
+      role="separator"
+      style={{
+        height: 0,
+        borderTop: "0.5px solid var(--color-border-tertiary)",
+        margin: "7px 8px 6px",
+      }}
+    />
+  );
 }
 
-function meshNodeForCluster(mesh: MeshGraphDTO | null, clusterName: string) {
-  return mesh?.nodes.find((n) => n.cluster === clusterName || n.name === clusterName);
+function requiresCluster(target: SidebarTarget): boolean {
+  return target.kind === "section" || target.kind === "resource";
 }
 
-function ciliumCapability(cluster: ClusterDTO, mesh: MeshGraphDTO | null): CapabilityRow {
-  const meshNode = meshNodeForCluster(mesh, cluster.name);
-  if (meshNode && meshNode.present && meshNode.state !== "unavailable") {
-    const meshed = meshNode.state === "peered";
-    return { label: "cilium", value: meshed ? "mesh" : "present", tone: meshed ? "success" : "info" };
+function isExpandedItemActive(route: Route, item: ExpandedItem, workloadKindFilter: Record<WorkloadKind, boolean>): boolean {
+  const target = item.target;
+  if (target.kind === "fleet") return route.name === "fleet";
+  if (target.kind === "forwards") return route.name === "forwards";
+  if (target.kind === "settings") return route.name === "settings";
+  if (target.kind === "section") {
+    if (route.name !== "cluster" || route.section !== target.section || route.resource !== undefined) return false;
+    if (target.section === "workloads" && target.workloadKinds) return sameWorkloadKindFilter(workloadKindFilter, target.workloadKinds);
+    if (target.section === "argo") return (route.argoView ?? "applications") === (target.argoView ?? "applications");
+    return true;
   }
-  if (cluster.ciliumPresent === true) {
-    return { label: "cilium", value: cluster.clusterMesh ? "mesh" : "present", tone: cluster.clusterMesh ? "success" : "info" };
+  if (target.kind === "resource") {
+    return route.name === "cluster" && route.resource !== undefined && sameRef(route.resource, target.ref);
   }
-  if (cluster.ciliumPresent === false) {
-    return { label: "cilium", value: "absent", tone: "muted" };
-  }
-  return { label: "cilium", value: "unknown", tone: "muted" };
+  return false;
 }
 
-function gatewayCapability(cluster: ClusterDTO, board: FleetBoardEntry | undefined): CapabilityRow {
-  const g = board?.gateway;
-  const issueCount = (g?.unprogrammed ?? 0) + (g?.brokenRoutes ?? 0);
-  if (issueCount > 0) return { label: "gateway api", value: `${issueCount} issue${issueCount === 1 ? "" : "s"}`, tone: "warning" };
-  if (cluster.networkTier && cluster.networkTier !== "Healthy" && cluster.gatewayAPIVersion) {
-    return { label: "gateway api", value: cluster.networkTier.toLowerCase(), tone: "warning", title: cluster.networkReason || undefined };
-  }
-  if (cluster.gatewayAPIVersion) return { label: "gateway api", value: cluster.gatewayAPIVersion, tone: "success" };
-  if (g?.served && g.routes != null) return { label: "gateway api", value: `${g.routes} route${g.routes === 1 ? "" : "s"}`, tone: "success" };
-  if (g?.served) return { label: "gateway api", value: "served", tone: "success" };
-  if (g?.served === false || (cluster.networkTier === "Absent" && !cluster.gatewayAPIVersion)) {
-    return { label: "gateway api", value: "absent", tone: "muted", title: cluster.networkReason || undefined };
-  }
-  if (cluster.networkTier === "Healthy") return { label: "gateway api", value: "ready", tone: "success" };
-  return { label: "gateway api", value: "unknown", tone: "muted", title: cluster.networkReason || undefined };
+function sameWorkloadKindFilter(filter: Record<WorkloadKind, boolean>, kinds: readonly WorkloadKind[]): boolean {
+  const selected = new Set(kinds.length === 0 ? WORKLOAD_KINDS : kinds);
+  return WORKLOAD_KINDS.every((kind) => filter[kind] === selected.has(kind));
 }
 
-function prometheusCapability(metrics: MetricsDTO | null): CapabilityRow {
-  if (!metrics) return { label: "prometheus", value: "unknown", tone: "muted" };
-  if (!metrics.available) return { label: "prometheus", value: "unavailable", tone: "warning", title: metrics.reason || metrics.warning || undefined };
-  const source = `${metrics.mode} ${metrics.source}`.toLowerCase();
-  const value = source.includes("prometheus") || source.includes("grafana") || source.includes("mimir") || source.includes("lgtm")
-    ? "lgtm"
-    : "ready";
-  return { label: "prometheus", value, tone: "info", title: metrics.source || undefined };
+function sameRef(a: ResourceRef, b: ResourceRef): boolean {
+  return a.group === b.group && a.version === b.version && a.plural === b.plural && a.kind === b.kind && a.scope === b.scope;
 }
 
-function toneColor(tone: CapabilityTone): string {
-  switch (tone) {
-    case "success": return "var(--color-text-success)";
-    case "warning": return "var(--color-text-warning)";
-    case "danger": return "var(--color-text-danger)";
-    case "info": return "var(--color-text-info)";
-    case "muted": return "var(--color-text-tertiary)";
-  }
+function groupLabelStyle(active: boolean): React.CSSProperties {
+  return {
+    display: "grid",
+    gridTemplateColumns: "12px minmax(0, 1fr)",
+    alignItems: "center",
+    gap: 4,
+    width: "calc(100% - 16px)",
+    minHeight: 22,
+    margin: "0 8px",
+    padding: "1px 6px 3px",
+    borderRadius: 4,
+    cursor: "pointer",
+    background: active ? "var(--color-background-primary)" : "transparent",
+    border: "0.5px solid transparent",
+    color: active ? "var(--color-text-primary)" : "var(--color-text-tertiary)",
+    fontSize: 10,
+    fontWeight: active ? 700 : 600,
+    textTransform: "uppercase",
+    letterSpacing: 0.2,
+    textAlign: "left",
+  };
 }
 
 function RailButton({ label, active, disabled, onClick, children, expanded }: {

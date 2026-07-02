@@ -6,7 +6,7 @@ function message(section: ClusterSection, c: ClusterDTO): string {
       return c.gitopsTier === "Absent"
         ? "No Flux or Argo installed on this cluster."
         : "GitOps reconciliation + inline drift arrives in M3.";
-    case "network":
+    case "gatewayApi":
       return c.networkTier === "Absent"
         ? "No Gateway API or Cilium installed on this cluster."
         : "Gateway topology arrives in M5.";
@@ -19,6 +19,8 @@ function message(section: ClusterSection, c: ClusterDTO): string {
     case "helm":
       return "";
     case "argo":
+      return "";
+    case "certs":
       return "";
     case "workloads":
       return "";

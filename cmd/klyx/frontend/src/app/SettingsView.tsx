@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { getFleetConfig, addClusters, refreshNewContextCount } from "../bridge/configsvc";
 import type { FleetConfigDTO } from "../bridge/configsvc";
+import { btn, ellipsis } from "../chrome/primitives";
 
 // SettingsView is the fleet-configuration surface: the loaded fleet.yaml
 // (path, clusters, load warnings) and a fresh kubeconfig context scan with
@@ -175,6 +176,3 @@ function Section({ title, children }: { title: string; children: React.ReactNode
     </div>
   );
 }
-
-const btn: React.CSSProperties = { fontSize: 11, padding: "3px 10px", borderRadius: 4, border: "0.5px solid var(--color-border-tertiary)", background: "var(--color-background-primary)", color: "var(--color-text-secondary)" };
-const ellipsis: React.CSSProperties = { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" };

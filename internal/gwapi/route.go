@@ -43,7 +43,7 @@ func RouteForGateway(u *unstructured.Unstructured, gwNamespace, gwName string) (
 		return RouteNode{}, false
 	}
 
-	rn := RouteNode{Namespace: routeNS, Name: u.GetName()}
+	rn := RouteNode{Namespace: routeNS, Name: u.GetName(), ParentSectionName: sectionName}
 	rn.Hostnames, _, _ = unstructured.NestedStringSlice(u.Object, "spec", "hostnames")
 
 	rules, _, _ := unstructured.NestedSlice(u.Object, "spec", "rules")

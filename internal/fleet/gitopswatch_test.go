@@ -129,6 +129,46 @@ func TestGitOpsObjectReturnsWatchedObject(t *testing.T) {
 	}
 }
 
+// TestOpenCloseGitOpsInterleaved storms Open/Close from concurrent goroutines.
+// Guards the opening/wanted flags: overlapping Opens must not double-install,
+// a Close landing mid-open must win (final Close leaves the watch closed), and
+// the whole dance must be race-clean under -race.
+func TestOpenCloseGitOpsInterleaved(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	typed := fake.NewSimpleClientset()
+	scheme := runtime.NewScheme()
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(scheme, sourceGVRToListKinds(), ksObj("flux-system"))
+
+	det := capability.NewDetector(typed)
+	c := NewClusterConn("x", typed, nil, dyn, det, clock.Real{}, config.MetricsConfig{})
+	c.ctx = ctx
+
+	done := make(chan struct{})
+	for g := 0; g < 4; g++ {
+		go func() {
+			defer func() { done <- struct{}{} }()
+			for i := 0; i < 50; i++ {
+				c.OpenGitOps()
+				c.CloseGitOps()
+			}
+		}()
+	}
+	for g := 0; g < 4; g++ {
+		<-done
+	}
+
+	// The storm ends with Closes: the watch must be closed and re-openable.
+	c.CloseGitOps()
+	if rs := c.GitOpsResources(); rs != nil {
+		t.Fatalf("watch still installed after final Close: %d resources", len(rs))
+	}
+	c.OpenGitOps()
+	defer c.CloseGitOps()
+	waitFor(t, 2*time.Second, func() bool { return len(c.GitOpsResources()) == 1 })
+}
+
 func TestGitOpsResourcesAreStablySorted(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

@@ -36,18 +36,44 @@ const (
 
 // Resource is a Flux-managed object's reconciliation state.
 type Resource struct {
-	Kind        Kind
-	Namespace   string
-	Name        string
-	Ready       ReadyState
-	Reason      string
-	Message     string
-	Revision    string
-	LastApplied time.Time
-	Suspended   bool
-	SourceKind  string
-	SourceName  string
-	DependsOn   []DependencyRef
+	Kind      Kind
+	Namespace string
+	Name      string
+	Ready     ReadyState
+	Reason    string
+	Message   string
+	Revision  string
+	// ReadySince is the Ready condition's lastTransitionTime: when the
+	// resource last CHANGED Ready state. It is NOT a per-apply timestamp -
+	// Flux status carries none. A resource reconciling cleanly for weeks
+	// keeps the timestamp of that weeks-old flip; read it as "ready/failed
+	// since", never "applied N ago".
+	ReadySince time.Time
+	Suspended  bool
+	SourceKind string
+	SourceName string
+	DependsOn  []DependencyRef
+	// Stale reports that the spec changed and the controller has not observed
+	// it yet (metadata.generation > status.observedGeneration). While stale,
+	// Ready reflects the PREVIOUS spec - the UI must present the row as
+	// transitioning, never as confidently green. ObservedGeneration/Generation
+	// feed the explanatory tooltip.
+	Stale              bool
+	Generation         int64
+	ObservedGeneration int64
+}
+
+// staleness compares metadata.generation with status.observedGeneration. found
+// is false when status carries no observedGeneration (brand-new object, or a
+// controller that does not stamp it) - callers treat that as not-stale rather
+// than guessing.
+func staleness(u *unstructured.Unstructured) (stale bool, gen, observed int64) {
+	gen = u.GetGeneration()
+	observed, found, _ := unstructured.NestedInt64(u.Object, "status", "observedGeneration")
+	if !found || gen == 0 {
+		return false, gen, observed
+	}
+	return gen > observed, gen, observed
 }
 
 // DependencyRef is a spec.dependsOn entry (another Kustomization/HelmRelease the
@@ -156,7 +182,10 @@ func common(u *unstructured.Unstructured, kind Kind) Resource {
 	}
 	r.Ready, r.Reason, r.Message = readyFromConditions(u)
 	r.DependsOn = parseDependsOn(u)
-	// lastTransitionTime of the Ready condition → LastApplied (only common needs it).
+	r.Stale, r.Generation, r.ObservedGeneration = staleness(u)
+	// ReadySince <- the Ready condition's lastTransitionTime, i.e. the moment
+	// the ready STATE last flipped - see the field doc for why that is the
+	// honest best Flux offers (no per-apply timestamp exists in status).
 	conds, _, _ := unstructured.NestedSlice(u.Object, "status", "conditions")
 	for _, c := range conds {
 		cm, ok := c.(map[string]interface{})
@@ -166,7 +195,7 @@ func common(u *unstructured.Unstructured, kind Kind) Resource {
 		if t, _ := cm["type"].(string); t == "Ready" {
 			if lt, ok := cm["lastTransitionTime"].(string); ok {
 				if ts, err := time.Parse(time.RFC3339, lt); err == nil {
-					r.LastApplied = ts
+					r.ReadySince = ts
 				}
 			}
 		}

@@ -35,7 +35,7 @@ func (c *ClusterConn) gvrForKind(kind flux.Kind) (schema.GroupVersionResource, e
 	if !ok {
 		return schema.GroupVersionResource{}, fmt.Errorf("unsupported kind %q", kind)
 	}
-	version := preferredVersion(c.typed.Discovery(), group, fallback)
+	version := preferredVersion(c.discovery(), group, fallback)
 	return schema.GroupVersionResource{Group: group, Version: version, Resource: resource}, nil
 }
 
@@ -63,7 +63,7 @@ func (c *ClusterConn) ReconcileWithSource(ctx context.Context, kind, ns, name st
 		if u, err := c.dyn.Resource(gvr).Namespace(ns).Get(ctx, name, metav1.GetOptions{}); err == nil {
 			if ref, ok := flux.BoundSource(u); ok {
 				if group, fallback, resource, ok := sourceGVR(ref.Kind); ok {
-					version := preferredVersion(c.typed.Discovery(), group, fallback)
+					version := preferredVersion(c.discovery(), group, fallback)
 					sgvr := schema.GroupVersionResource{Group: group, Version: version, Resource: resource}
 					body := flux.ReconcilePatch(c.clk.Now())
 					_, _ = c.dyn.Resource(sgvr).Namespace(ref.Namespace).Patch(ctx, ref.Name, types.MergePatchType, body, metav1.PatchOptions{})

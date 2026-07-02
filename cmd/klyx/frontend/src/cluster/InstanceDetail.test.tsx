@@ -1,14 +1,16 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, fireEvent, waitFor, act } from "@testing-library/react";
 import { useFleet, ResourceRef, InstanceRef, InstanceDetailDTO, ServiceBackingDTO, HPAScalingDTO } from "../store/fleet";
-import { InstanceDetail } from "./InstanceDetail";
+import { InstanceDetail, buildFoldedDiffRows, buildLineDiff, cursorPositionForOffset, detectGitOwner, formatDiffPlainText, formatKubernetesActionError, validateResourceYAML } from "./InstanceDetail";
 
 vi.mock("../bridge/crd", () => ({
   getInstanceDetail: vi.fn(async () => {}),
   copyText: vi.fn(async () => {}),
   revealSecretKey: vi.fn(async () => "hunter2"),
+  dryRunInstanceYAML: vi.fn(async () => ({ ok: true, error: "" })),
+  applyInstanceYAML: vi.fn(async () => ({ ok: true, error: "" })),
 }));
-import { getInstanceDetail, copyText, revealSecretKey } from "../bridge/crd";
+import { getInstanceDetail, copyText, revealSecretKey, dryRunInstanceYAML, applyInstanceYAML } from "../bridge/crd";
 
 vi.mock("../bridge/pods", () => ({
   openPodDetail: vi.fn(async () => {}),
@@ -28,6 +30,7 @@ const resource: ResourceRef = { group: "cert-manager.io", version: "v1", plural:
 const instance: InstanceRef = { namespace: "default", name: "web-tls" };
 const detail: InstanceDetailDTO = {
   kind: "Certificate", namespace: "default", name: "web-tls", created: "", labels: { app: "web" },
+  annotations: { owner: "platform" },
   conditions: [{ type: "Ready", status: "True", reason: "Issued", message: "Certificate is up to date" }],
   events: [{ type: "Warning", reason: "Failed", message: "order failed", count: 2, lastSeen: "" }],
   yaml: "apiVersion: cert-manager.io/v1\nkind: Certificate\n",
@@ -56,9 +59,112 @@ function seedSecret(over: Partial<{ ref: InstanceRef | null; detail: InstanceDet
 beforeEach(() => { vi.clearAllMocks(); seed(); });
 
 describe("InstanceDetail", () => {
+  it("detects GitOps and Helm ownership markers", () => {
+    expect(detectGitOwner({ "argocd.argoproj.io/instance": "console-dev" }, {})?.tool).toBe("Argo CD");
+    expect(detectGitOwner({ "kustomize.toolkit.fluxcd.io/name": "apps", "kustomize.toolkit.fluxcd.io/namespace": "flux-system" }, {})?.detail).toBe("flux-system/apps");
+    expect(detectGitOwner({}, { "meta.helm.sh/release-name": "grafana", "meta.helm.sh/release-namespace": "monitoring" })?.tool).toBe("Helm");
+    expect(detectGitOwner({ app: "web" }, { owner: "platform" })).toBeNull();
+  });
+
+  it("builds a lightweight YAML line diff", () => {
+    const diff = buildLineDiff("a\nb\nc", "a\nbeta\nc");
+    expect(diff.added).toBe(1);
+    expect(diff.removed).toBe(1);
+    expect(diff.lines.some((l) => l.type === "removed" && l.text === "b")).toBe(true);
+    expect(diff.lines.some((l) => l.type === "added" && l.text === "beta")).toBe(true);
+  });
+
+  it("folds long unchanged diff context with expandable blocks", () => {
+    const before = Array.from({ length: 24 }, (_, i) => `line-${i + 1}`);
+    const after = [...before];
+    after[11] = "line-12-changed";
+    const diff = buildLineDiff(before.join("\n"), after.join("\n"));
+
+    const folded = buildFoldedDiffRows(diff, new Set(), 3, 8);
+    const folds = folded.filter((row) => row.kind === "fold");
+    expect(folds.map((row) => row.hidden)).toEqual([8, 9]);
+    expect(folded.some((row) => row.kind === "line" && row.line.text === "line-1")).toBe(false);
+    expect(folded.some((row) => row.kind === "line" && row.line.text === "line-11")).toBe(true);
+
+    const firstFold = folds[0];
+    if (firstFold.kind !== "fold") throw new Error("expected folded row");
+    const expanded = buildFoldedDiffRows(diff, new Set([firstFold.id]), 3, 8);
+    expect(expanded.some((row) => row.kind === "line" && row.line.text === "line-1")).toBe(true);
+  });
+
+  it("formats a YAML diff for clipboard review", () => {
+    const diff = buildLineDiff("kind: Certificate\nspec:\n  secretName: old\n", "kind: Certificate\nspec:\n  secretName: new\n");
+    expect(formatDiffPlainText(diff, "default/web-tls")).toBe([
+      "YAML diff for default/web-tls",
+      "+1 -1",
+      "",
+      "    1     1   kind: Certificate",
+      "    2     2   spec:",
+      "    3       -   secretName: old",
+      "          3 +   secretName: new",
+      "    4     4   ",
+    ].join("\n"));
+  });
+
+  it("formats common Kubernetes action errors", () => {
+    expect(formatKubernetesActionError('certificates.cert-manager.io "web-tls" is forbidden: User "alice@example.com" cannot patch resource "certificates" in API group "cert-manager.io" in the namespace "default"')).toBe(
+      "Permission denied: alice@example.com cannot patch certificates.cert-manager.io in namespace default. Check RBAC for this cluster context.",
+    );
+    expect(formatKubernetesActionError('admission webhook "validate.nginx.ingress.kubernetes.io" denied the request: host is already defined')).toBe(
+      "Admission denied by validate.nginx.ingress.kubernetes.io: host is already defined",
+    );
+    expect(formatKubernetesActionError('failed calling webhook "validate.cert-manager.io": Post "https://webhook": context deadline exceeded')).toBe(
+      "Admission webhook timed out: validate.cert-manager.io. This is usually transient; retry after the webhook/controller recovers.",
+    );
+    expect(formatKubernetesActionError('Deployment.apps "web" is invalid: spec.selector: Invalid value: field is immutable')).toBe(
+      "Immutable field: Kubernetes rejected this because one or more fields cannot be changed after creation. spec.selector: Invalid value: field is immutable",
+    );
+    expect(formatKubernetesActionError("Operation cannot be fulfilled on certificates.cert-manager.io \"web-tls\": the object has been modified; please apply your changes to the latest version")).toBe(
+      "Conflict: live object changed while editing. Review the latest YAML, then reapply.",
+    );
+    expect(formatKubernetesActionError('Certificate.cert-manager.io "web-tls" is invalid: spec.dnsNames: Required value')).toBe(
+      "Field validation failed: spec.dnsNames: Required value",
+    );
+  });
+
+  it("calculates YAML editor cursor line and column", () => {
+    expect(cursorPositionForOffset("apiVersion: v1\nkind: Pod\n", 0)).toEqual({ line: 1, column: 1 });
+    expect(cursorPositionForOffset("apiVersion: v1\nkind: Pod\n", 15)).toEqual({ line: 2, column: 1 });
+    expect(cursorPositionForOffset("apiVersion: v1\nkind: Pod\n", 20)).toEqual({ line: 2, column: 6 });
+    expect(cursorPositionForOffset("apiVersion: v1\nkind: Pod\n", 999)).toEqual({ line: 3, column: 1 });
+  });
+
+  it("validates the local Kubernetes YAML identity envelope", () => {
+    const result = validateResourceYAML("apiVersion: cert-manager.io/v1\nkind: Certificate\nmetadata:\n  name: web-tls\n  namespace: default\n  resourceVersion: \"10\"\n", resource, instance);
+    expect(result.blocking).toBe(false);
+    expect(result.issues.length).toBe(0);
+    expect(result.identity.metadataName).toBe("web-tls");
+    expect(result.identity.metadataResourceVersion).toBe("10");
+  });
+
+  it("returns blocking local YAML errors for malformed or incomplete YAML", () => {
+    const malformed = validateResourceYAML("apiVersion cert-manager.io/v1\nkind: Certificate\nmetadata:\n  name: web-tls\n", resource, instance);
+    expect(malformed.blocking).toBe(true);
+    expect(malformed.issues.some((issue) => issue.message.includes("expected key: value") && issue.line === 1)).toBe(true);
+
+    const incomplete = validateResourceYAML("apiVersion: cert-manager.io/v1\nkind: Certificate\n", resource, instance);
+    expect(incomplete.blocking).toBe(true);
+    expect(incomplete.issues.some((issue) => issue.message === "Missing required field: metadata.name")).toBe(true);
+  });
+
+  it("warns when edited YAML changes object identity", () => {
+    const result = validateResourceYAML("apiVersion: v1\nkind: Secret\nmetadata:\n  name: other\n  namespace: kube-system\n", resource, instance);
+    expect(result.blocking).toBe(false);
+    expect(result.issues.some((issue) => issue.message === "apiVersion changed from cert-manager.io/v1 to v1")).toBe(true);
+    expect(result.issues.some((issue) => issue.message === "kind changed from Certificate to Secret")).toBe(true);
+    expect(result.issues.some((issue) => issue.message === "metadata.name changed from web-tls to other")).toBe(true);
+    expect(result.issues.some((issue) => issue.message === "metadata.namespace changed from default to kube-system")).toBe(true);
+  });
+
   it("renders header, conditions, events, and YAML", () => {
     const { getByText } = render(<InstanceDetail cluster="x" resource={resource} instance={instance} />);
     expect(getByText("Certificate")).toBeTruthy();
+    expect(getByText("app=web")).toBeTruthy();
     expect(getByText("Ready")).toBeTruthy();
     expect(getByText(/Certificate is up to date/)).toBeTruthy();
     fireEvent.click(getByText(/events 1/));
@@ -67,11 +173,269 @@ describe("InstanceDetail", () => {
     expect(getByText(/kind: Certificate/)).toBeTruthy();
   });
 
+  it("renders annotations as collapsed metadata", () => {
+    const { getByText, queryByText } = render(<InstanceDetail cluster="x" resource={resource} instance={instance} />);
+    expect(getByText("Annotations (1)")).toBeTruthy();
+    expect(queryByText("owner=platform")).toBeNull();
+    fireEvent.click(getByText("Annotations (1)"));
+    expect(getByText("owner=platform")).toBeTruthy();
+  });
+
   it("copy calls the bridge with the YAML", () => {
     const { getByText } = render(<InstanceDetail cluster="x" resource={resource} instance={instance} />);
     fireEvent.click(getByText("yaml"));
     fireEvent.click(getByText("Copy"));
     expect(copyText).toHaveBeenCalledWith(detail.yaml);
+  });
+
+  it("renders YAML editor metadata and dirty state", () => {
+    const { getByText, getAllByText, getByLabelText } = render(<InstanceDetail cluster="x" resource={resource} instance={instance} />);
+    fireEvent.click(getByText("yaml"));
+
+    expect(getAllByText("default/web-tls").length).toBeGreaterThan(0);
+    expect(getByText("saved")).toBeTruthy();
+    expect(getByText(/3 lines/)).toBeTruthy();
+
+    fireEvent.change(getByLabelText("resource yaml"), { target: { value: `${detail.yaml}metadata:\n  name: web-tls\n` } });
+    expect(getByText("modified")).toBeTruthy();
+    expect(getByText(/server dry-run required before trust/)).toBeTruthy();
+  });
+
+  it("shows cursor line and column in the YAML editor footer", () => {
+    const { getByText, getByLabelText } = render(<InstanceDetail cluster="x" resource={resource} instance={instance} />);
+    fireEvent.click(getByText("yaml"));
+    const editor = getByLabelText("resource yaml") as HTMLTextAreaElement;
+
+    const secondLineOffset = detail.yaml.indexOf("\n") + 1;
+    editor.setSelectionRange(secondLineOffset, secondLineOffset);
+    fireEvent.click(editor);
+    expect(getByText("Ln 2, Col 1")).toBeTruthy();
+  });
+
+  it("shows diff counts and preview for edited YAML", () => {
+    const next = `${detail.yaml}metadata:\n  name: web-tls\n`;
+    const { getByText, getByLabelText } = render(<InstanceDetail cluster="x" resource={resource} instance={instance} />);
+    fireEvent.click(getByText("yaml"));
+    expect(() => getByText(/Diff \+/)).toThrow();
+
+    fireEvent.change(getByLabelText("resource yaml"), { target: { value: next } });
+    expect(getByText("Diff +2 -0")).toBeTruthy();
+    expect(getByText("+2 -0")).toBeTruthy();
+    fireEvent.click(getByText("Diff +2 -0"));
+
+    expect(getByLabelText("yaml diff preview")).toBeTruthy();
+    expect(getByText("metadata:")).toBeTruthy();
+    expect(getByText("name: web-tls")).toBeTruthy();
+  });
+
+  it("copies the rendered YAML diff as plain text", async () => {
+    const next = `${detail.yaml}metadata:\n  name: web-tls\n`;
+    const { getByText, getByLabelText, findByText } = render(<InstanceDetail cluster="x" resource={resource} instance={instance} />);
+    fireEvent.click(getByText("yaml"));
+    fireEvent.change(getByLabelText("resource yaml"), { target: { value: next } });
+    fireEvent.click(getByText("Diff +2 -0"));
+    fireEvent.click(getByText("Copy diff"));
+
+    await waitFor(() => expect(copyText).toHaveBeenCalledWith(formatDiffPlainText(buildLineDiff(detail.yaml, next), "default/web-tls")));
+    expect(await findByText("Copied")).toBeTruthy();
+  });
+
+  it("folds and expands unchanged YAML diff context", () => {
+    const before = [
+      "apiVersion: cert-manager.io/v1",
+      "kind: Certificate",
+      "metadata:",
+      "  name: web-tls",
+      "  namespace: default",
+      "spec:",
+      ...Array.from({ length: 20 }, (_, i) => `  field${i + 1}: old${i + 1}`),
+      "",
+    ].join("\n");
+    const after = before.replace("  field10: old10", "  field10: new10");
+    seed({ detail: { ...detail, yaml: before } });
+
+    const { getByText, getAllByText, getByLabelText, queryByText } = render(<InstanceDetail cluster="x" resource={resource} instance={instance} />);
+    fireEvent.click(getByText("yaml"));
+    fireEvent.change(getByLabelText("resource yaml"), { target: { value: after } });
+    fireEvent.click(getByText(/Diff \+/));
+
+    expect(getAllByText(/unchanged lines/).length).toBeGreaterThan(0);
+    expect(queryByText("field1: old1")).toBeNull();
+    expect(getByText("field10: old10")).toBeTruthy();
+    expect(getByText("field10: new10")).toBeTruthy();
+
+    fireEvent.click(getAllByText(/unchanged lines/)[0]);
+    expect(getByText("field1: old1")).toBeTruthy();
+  });
+
+  it("shows GitOps ownership warning only in the YAML editor", () => {
+    seed({ detail: { ...detail, labels: { ...detail.labels, "argocd.argoproj.io/instance": "console-dev" } } });
+    const { getByText, queryByText } = render(<InstanceDetail cluster="x" resource={resource} instance={instance} />);
+    expect(queryByText(/Live edits may be reverted/)).toBeNull();
+    fireEvent.click(getByText("yaml"));
+    expect(getByText(/Argo CD-managed/)).toBeTruthy();
+    expect(getByText(/Live edits may be reverted by GitOps or release reconciliation/)).toBeTruthy();
+  });
+
+  it("shows Flux ownership warning in the YAML editor", () => {
+    seed({ detail: { ...detail, labels: { ...detail.labels, "kustomize.toolkit.fluxcd.io/name": "platform", "kustomize.toolkit.fluxcd.io/namespace": "flux-system" } } });
+    const { getByText } = render(<InstanceDetail cluster="x" resource={resource} instance={instance} />);
+    fireEvent.click(getByText("yaml"));
+    expect(getByText(/Flux-managed \(flux-system\/platform\)/)).toBeTruthy();
+  });
+
+  it("does not show GitOps ownership warning for unmanaged YAML", () => {
+    const { getByText, queryByText } = render(<InstanceDetail cluster="x" resource={resource} instance={instance} />);
+    fireEvent.click(getByText("yaml"));
+    expect(queryByText(/Live edits may be reverted/)).toBeNull();
+  });
+
+  it("dry-runs edited YAML", async () => {
+    const { getByText, getByLabelText, findByText } = render(<InstanceDetail cluster="x" resource={resource} instance={instance} />);
+    fireEvent.click(getByText("yaml"));
+    fireEvent.change(getByLabelText("resource yaml"), { target: { value: `${detail.yaml}metadata:\n  name: web-tls\n  namespace: default\n` } });
+    fireEvent.click(getByText("Dry-run"));
+
+    expect(await findByText("Server dry-run passed")).toBeTruthy();
+    expect(dryRunInstanceYAML).toHaveBeenCalledWith("x", resource, instance, `${detail.yaml}metadata:\n  name: web-tls\n  namespace: default\n`);
+  });
+
+  it("shows formatted server dry-run errors", async () => {
+    vi.mocked(dryRunInstanceYAML).mockResolvedValueOnce({
+      ok: false,
+      error: 'certificates.cert-manager.io "web-tls" is forbidden: User "alice@example.com" cannot patch resource "certificates" in API group "cert-manager.io" in the namespace "default"',
+    });
+    const { getByText, getByLabelText, findByText } = render(<InstanceDetail cluster="x" resource={resource} instance={instance} />);
+    fireEvent.click(getByText("yaml"));
+    fireEvent.change(getByLabelText("resource yaml"), { target: { value: `${detail.yaml}metadata:\n  name: web-tls\n  namespace: default\n` } });
+    fireEvent.click(getByText("Dry-run"));
+
+    expect(await findByText("Permission denied: alice@example.com cannot patch certificates.cert-manager.io in namespace default. Check RBAC for this cluster context.")).toBeTruthy();
+  });
+
+  it("blocks dry-run and apply for local YAML errors", () => {
+    const { getByText, getByLabelText } = render(<InstanceDetail cluster="x" resource={resource} instance={instance} />);
+    fireEvent.click(getByText("yaml"));
+    fireEvent.change(getByLabelText("resource yaml"), { target: { value: "apiVersion cert-manager.io/v1\nkind: Certificate\nmetadata:\n  name: web-tls\n" } });
+
+    expect(getByText("Local YAML errors")).toBeTruthy();
+    expect(getByText(/YAML parse error: expected key: value/)).toBeTruthy();
+    expect(getByText(/local YAML errors must be fixed first/)).toBeTruthy();
+    expect((getByText("Dry-run") as HTMLButtonElement).disabled).toBe(true);
+    expect((getByText("Apply") as HTMLButtonElement).disabled).toBe(true);
+    expect(dryRunInstanceYAML).not.toHaveBeenCalled();
+  });
+
+  it("jumps to the first local YAML validation error", () => {
+    const badYaml = "apiVersion: cert-manager.io/v1\nkind: Certificate\nmetadata:\n\tname: web-tls\n";
+    const { getByText, getByLabelText } = render(<InstanceDetail cluster="x" resource={resource} instance={instance} />);
+    fireEvent.click(getByText("yaml"));
+    fireEvent.change(getByLabelText("resource yaml"), { target: { value: badYaml } });
+
+    fireEvent.click(getByText("Jump to line 4"));
+    const editor = getByLabelText("resource yaml") as HTMLTextAreaElement;
+    expect(document.activeElement).toBe(editor);
+    expect(editor.selectionStart).toBe(badYaml.indexOf("\t"));
+    expect(editor.selectionEnd).toBe(badYaml.indexOf("\n", editor.selectionStart));
+    expect(getByText("Ln 4, Col 1")).toBeTruthy();
+  });
+
+  it("shows identity warnings without blocking dry-run", () => {
+    const { getByText, getByLabelText } = render(<InstanceDetail cluster="x" resource={resource} instance={instance} />);
+    fireEvent.click(getByText("yaml"));
+    fireEvent.change(getByLabelText("resource yaml"), { target: { value: "apiVersion: cert-manager.io/v1\nkind: Certificate\nmetadata:\n  name: other\n  namespace: kube-system\n" } });
+
+    expect(getByText("Local YAML warnings")).toBeTruthy();
+    expect(getByText("metadata.name changed from web-tls to other")).toBeTruthy();
+    expect(getByText("metadata.namespace changed from default to kube-system")).toBeTruthy();
+    expect((getByText("Dry-run") as HTMLButtonElement).disabled).toBe(false);
+    expect((getByText("Apply") as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("blocks stale edited YAML when live resourceVersion changes", () => {
+    const baseline = "apiVersion: cert-manager.io/v1\nkind: Certificate\nmetadata:\n  name: web-tls\n  namespace: default\n  resourceVersion: \"10\"\n";
+    const latest = "apiVersion: cert-manager.io/v1\nkind: Certificate\nmetadata:\n  name: web-tls\n  namespace: default\n  resourceVersion: \"11\"\n";
+    const draft = `${baseline}spec:\n  secretName: web-tls\n`;
+    seed({ detail: { ...detail, yaml: baseline } });
+
+    const { getByText, getByLabelText, queryByText } = render(<InstanceDetail cluster="x" resource={resource} instance={instance} />);
+    fireEvent.click(getByText("yaml"));
+    fireEvent.change(getByLabelText("resource yaml"), { target: { value: draft } });
+    expect((getByText("Dry-run") as HTMLButtonElement).disabled).toBe(false);
+
+    act(() => {
+      useFleet.setState({ instanceDetail: { ref: instance, detail: { ...detail, yaml: latest }, loading: false } });
+    });
+
+    expect(getByText(/Live object changed since this editor opened/)).toBeTruthy();
+    expect(getByText(/10 -> 11/)).toBeTruthy();
+    expect(getByText(/live object changed; review latest YAML first/)).toBeTruthy();
+    expect((getByText("Dry-run") as HTMLButtonElement).disabled).toBe(true);
+    expect((getByText("Apply") as HTMLButtonElement).disabled).toBe(true);
+    expect((getByLabelText("resource yaml") as HTMLTextAreaElement).value).toBe(draft);
+
+    fireEvent.click(getByText("Review latest"));
+    expect(queryByText(/Live object changed since this editor opened/)).toBeNull();
+    expect((getByLabelText("resource yaml") as HTMLTextAreaElement).value).toBe(latest);
+    expect(getByText("saved")).toBeTruthy();
+  });
+
+  it("applies edited YAML behind confirmation", async () => {
+    const next = `${detail.yaml}metadata:\n  name: web-tls\n`;
+    const { getByText, getByLabelText, getAllByText } = render(<InstanceDetail cluster="x" resource={resource} instance={instance} />);
+    fireEvent.click(getByText("yaml"));
+    fireEvent.change(getByLabelText("resource yaml"), { target: { value: next } });
+    fireEvent.click(getByText("Apply"));
+    expect(getByText(/Apply these YAML changes/)).toBeTruthy();
+    expect(getAllByText(/\+2 -0/).length).toBeGreaterThanOrEqual(1);
+    fireEvent.click(getByText("Apply changes"));
+
+    await waitFor(() => expect(applyInstanceYAML).toHaveBeenCalledWith("x", resource, instance, next));
+  });
+
+  it("shows formatted server apply errors", async () => {
+    vi.mocked(applyInstanceYAML).mockResolvedValueOnce({
+      ok: false,
+      error: 'admission webhook "validate.cert-manager.io" denied the request: spec.secretName is required',
+    });
+    const next = `${detail.yaml}metadata:\n  name: web-tls\n  namespace: default\n`;
+    const { getByText, getByLabelText, findByText } = render(<InstanceDetail cluster="x" resource={resource} instance={instance} />);
+    fireEvent.click(getByText("yaml"));
+    fireEvent.change(getByLabelText("resource yaml"), { target: { value: next } });
+    fireEvent.click(getByText("Apply"));
+    fireEvent.click(getByText("Apply changes"));
+
+    expect(await findByText("Admission denied by validate.cert-manager.io: spec.secretName is required")).toBeTruthy();
+  });
+
+  it("shows post-apply refresh state and refreshed resourceVersion", async () => {
+    const baseline = "apiVersion: cert-manager.io/v1\nkind: Certificate\nmetadata:\n  name: web-tls\n  namespace: default\n  resourceVersion: \"10\"\nspec:\n  secretName: web-tls\n";
+    const draft = baseline.replace("secretName: web-tls", "secretName: web-tls-next");
+    const refreshed = draft.replace("resourceVersion: \"10\"", "resourceVersion: \"11\"");
+    seed({ detail: { ...detail, yaml: baseline } });
+
+    let finishRefresh: (() => void) | null = null;
+    const refreshPromise = new Promise<void>((resolve) => {
+      finishRefresh = () => {
+        useFleet.setState({ instanceDetail: { ref: instance, detail: { ...detail, yaml: refreshed }, loading: false } });
+        resolve();
+      };
+    });
+
+    const { findByText, getByText, getByLabelText } = render(<InstanceDetail cluster="x" resource={resource} instance={instance} />);
+    fireEvent.click(getByText("yaml"));
+    vi.mocked(getInstanceDetail).mockImplementationOnce(async () => refreshPromise);
+    fireEvent.change(getByLabelText("resource yaml"), { target: { value: draft } });
+    fireEvent.click(getByText("Apply"));
+    fireEvent.click(getByText("Apply changes"));
+
+    expect(await findByText("Applied, refreshing live object...")).toBeTruthy();
+    act(() => finishRefresh?.());
+
+    expect(await findByText("Applied and refreshed live object (resourceVersion 10 -> 11)")).toBeTruthy();
+    expect((getByLabelText("resource yaml") as HTMLTextAreaElement).value).toBe(refreshed);
+    expect(getByText("saved")).toBeTruthy();
+    expect(getByText("rv 11")).toBeTruthy();
   });
 
   it("refresh re-fetches", () => {
@@ -178,6 +542,16 @@ describe("InstanceDetail — secrets", () => {
     const { getByText } = render(<InstanceDetail cluster="x" resource={secretResource} instance={secretInstance} />);
     fireEvent.click(getByText("yaml"));
     expect(getByText(/<masked>/)).toBeTruthy();
+  });
+
+  it("blocks applying masked Secret YAML", () => {
+    const { getByText, getByLabelText } = render(<InstanceDetail cluster="x" resource={secretResource} instance={secretInstance} />);
+    fireEvent.click(getByText("yaml"));
+    fireEvent.change(getByLabelText("resource yaml"), { target: { value: `${secretDetail.yaml}metadata:\n  name: app-secret\n` } });
+
+    expect(getByText(/Masked Secret YAML cannot be applied/)).toBeTruthy();
+    expect((getByText("Dry-run") as HTMLButtonElement).disabled).toBe(true);
+    expect((getByText("Apply") as HTMLButtonElement).disabled).toBe(true);
   });
 
   it("non-secret detail has no data section", () => {

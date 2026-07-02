@@ -18,6 +18,9 @@ func (s *WorkloadsService) ScaleWorkload(cluster, kind, namespace, name string, 
 	if replicas < 0 || replicas > maxScaleReplicas {
 		return ActionResultDTO{Error: fmt.Sprintf("replicas %d out of range [0, %d]", replicas, maxScaleReplicas)}
 	}
+	if err := checkProtected(cluster); err != nil {
+		return ActionResultDTO{Error: err.Error()}
+	}
 	conn, ok := s.lookup(cluster)
 	if !ok {
 		return ActionResultDTO{Error: "cluster not connected: " + cluster}
@@ -34,6 +37,9 @@ func (s *WorkloadsService) ScaleWorkload(cluster, kind, namespace, name string, 
 // pod-template restartedAt annotation. kind must be Deployment, StatefulSet,
 // or DaemonSet.
 func (s *WorkloadsService) RolloutRestart(cluster, kind, namespace, name string) ActionResultDTO {
+	if err := checkProtected(cluster); err != nil {
+		return ActionResultDTO{Error: err.Error()}
+	}
 	conn, ok := s.lookup(cluster)
 	if !ok {
 		return ActionResultDTO{Error: "cluster not connected: " + cluster}

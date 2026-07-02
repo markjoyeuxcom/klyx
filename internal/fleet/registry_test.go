@@ -10,16 +10,17 @@ import (
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
+	"github.com/moomora/klyx/internal/certmanager"
 	"github.com/moomora/klyx/internal/clustermesh"
 	"github.com/moomora/klyx/internal/config"
 	"github.com/moomora/klyx/internal/crd"
+	"github.com/moomora/klyx/internal/fluxcli"
 	"github.com/moomora/klyx/internal/gitops/argo"
 	"github.com/moomora/klyx/internal/gitops/flux"
 	"github.com/moomora/klyx/internal/gwapi"
 	"github.com/moomora/klyx/internal/helmcli"
 	"github.com/moomora/klyx/internal/metrics"
 	"github.com/moomora/klyx/internal/routemetrics"
-	"github.com/moomora/klyx/internal/fluxcli"
 	"github.com/moomora/klyx/internal/workloads"
 )
 
@@ -42,9 +43,21 @@ func (f *fakeConn) GitOpsResources() []flux.Resource { return nil }
 func (f *fakeConn) GitOpsObject(kind, namespace, name string) (*unstructured.Unstructured, bool) {
 	return nil, false
 }
-func (f *fakeConn) GitOpsSources() []flux.Source { return nil }
+func (f *fakeConn) GitOpsWatchHealth() (bool, string)      { return true, "" }
+func (f *fakeConn) CertManagerWatchHealth() (bool, string) { return true, "" }
+func (f *fakeConn) GitOpsSources() []flux.Source           { return nil }
 func (f *fakeConn) GitOpsSourceObject(kind, namespace, name string) (*unstructured.Unstructured, bool) {
 	return nil, false
+}
+func (f *fakeConn) OpenCertManager()                                   {}
+func (f *fakeConn) CloseCertManager()                                  {}
+func (f *fakeConn) CertManagerCertificates() []certmanager.Certificate { return nil }
+func (f *fakeConn) CertManagerIssuers() []certmanager.Issuer           { return nil }
+func (f *fakeConn) CertManagerObject(kind, namespace, name string) (*unstructured.Unstructured, bool) {
+	return nil, false
+}
+func (f *fakeConn) GetCertificateChain(ctx context.Context, ns, name string) (certmanager.Chain, error) {
+	return certmanager.Chain{}, nil
 }
 func (f *fakeConn) FluxEvents(ctx context.Context, kind, ns, name string) ([]workloads.EventSummary, error) {
 	return nil, nil
@@ -77,8 +90,8 @@ func (f *fakeConn) ListPods(context.Context, string) ([]workloads.PodSummary, er
 	return nil, nil
 }
 func (f *fakeConn) DeletePod(context.Context, string, string) error { return nil }
-func (f *fakeConn) ListEvents(context.Context, string) ([]workloads.EventSummary, error) {
-	return nil, nil
+func (f *fakeConn) ListEvents(context.Context, string) ([]workloads.EventSummary, bool, error) {
+	return nil, false, nil
 }
 func (f *fakeConn) WatchDirty(context.Context, string, []string, func(), func(bool)) (func(), error) {
 	return func() {}, nil
@@ -113,6 +126,9 @@ func (f *fakeConn) ListInstances(ctx context.Context, group, version, plural str
 }
 func (f *fakeConn) GetInstanceDetail(ctx context.Context, group, version, plural, ns, name string) (crd.InstanceDetail, error) {
 	return crd.InstanceDetail{}, nil
+}
+func (f *fakeConn) ApplyResourceYAML(ctx context.Context, group, version, plural, kind, scope, ns, name, yaml string, dryRun bool) error {
+	return nil
 }
 func (f *fakeConn) ListGateways(ctx context.Context) ([]gwapi.GatewayRef, bool, error) {
 	return nil, false, nil
@@ -156,8 +172,14 @@ func (f *fakeConn) HelmHistory(context.Context, string, string) ([]helmcli.Histo
 func (f *fakeConn) HelmValues(context.Context, string, string) (string, error) { return "", nil }
 func (f *fakeConn) HelmRollback(context.Context, string, string, int) error    { return nil }
 func (f *fakeConn) ListArgoApps(context.Context) ([]argo.App, error)           { return nil, nil }
-func (f *fakeConn) RefreshArgoApp(context.Context, string, string) error       { return nil }
-func (f *fakeConn) SyncArgoApp(context.Context, string, string, string) error  { return nil }
+func (f *fakeConn) ListArgoProjects(context.Context) ([]argo.Project, error)   { return nil, nil }
+func (f *fakeConn) ListArgoApplicationSets(context.Context) ([]argo.ApplicationSet, error) {
+	return nil, nil
+}
+func (f *fakeConn) RefreshArgoApp(context.Context, string, string) error { return nil }
+func (f *fakeConn) SyncArgoApp(context.Context, string, string, argo.SyncOptions) error {
+	return nil
+}
 func (f *fakeConn) GitOpsSummary(context.Context) (GitOpsSummary, error) {
 	return GitOpsSummary{}, nil
 }

@@ -10,6 +10,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
+	metadatafake "k8s.io/client-go/metadata/fake"
 )
 
 func TestListPods(t *testing.T) {
@@ -141,5 +142,62 @@ func TestListPods_NamespaceScope(t *testing.T) {
 	}
 	if out[0].Namespace != "ns-a" || out[0].Name != "pod-a" {
 		t.Errorf("namespace scope failed: got %+v", out[0])
+	}
+}
+
+func TestListPodsResolvesReplicaSetOwner(t *testing.T) {
+	now := time.Unix(200_000, 0)
+	truth := true
+
+	rsPod := func(name, rsName string) *corev1.Pod {
+		return &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Namespace: "team", Name: name,
+				CreationTimestamp: metav1.NewTime(now.Add(-time.Hour)),
+				OwnerReferences: []metav1.OwnerReference{
+					{APIVersion: "apps/v1", Kind: "ReplicaSet", Name: rsName, Controller: &truth},
+				},
+			},
+			Spec:   corev1.PodSpec{Containers: []corev1.Container{{Name: "c", Image: "i"}}},
+			Status: corev1.PodStatus{Phase: corev1.PodRunning},
+		}
+	}
+	cs := fake.NewSimpleClientset(rsPod("web-7d4b9c6f9-abc", "web-7d4b9c6f9"), rsPod("bare-5c9d8-xyz", "bare-5c9d8"))
+
+	mscheme := metadatafake.NewTestScheme()
+	_ = metav1.AddMetaToScheme(mscheme)
+	// "web-7d4b9c6f9" is Deployment-owned; "bare-5c9d8" has no controller.
+	deployOwned := &metav1.PartialObjectMetadata{
+		TypeMeta: metav1.TypeMeta{APIVersion: "apps/v1", Kind: "ReplicaSet"},
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "team", Name: "web-7d4b9c6f9",
+			OwnerReferences: []metav1.OwnerReference{
+				{APIVersion: "apps/v1", Kind: "Deployment", Name: "web", Controller: &truth},
+			},
+		},
+	}
+	bare := &metav1.PartialObjectMetadata{
+		TypeMeta:   metav1.TypeMeta{APIVersion: "apps/v1", Kind: "ReplicaSet"},
+		ObjectMeta: metav1.ObjectMeta{Namespace: "team", Name: "bare-5c9d8"},
+	}
+	mclient := metadatafake.NewSimpleMetadataClient(mscheme, deployOwned, bare)
+
+	c := &ClusterConn{typed: cs, meta: mclient, clk: clock.NewFake(now)}
+	sums, err := c.ListPods(context.Background(), "team")
+	if err != nil {
+		t.Fatalf("ListPods: %v", err)
+	}
+	byName := map[string]workloads.PodSummary{}
+	for _, s := range sums {
+		byName[s.Name] = s
+	}
+	// Deployment-owned RS resolves to the Deployment - the UI restart verb must
+	// never have to guess the name by stripping the pod-template-hash.
+	if got := byName["web-7d4b9c6f9-abc"]; got.OwnerKind != "Deployment" || got.OwnerName != "web" {
+		t.Fatalf("resolved owner: %s/%s", got.OwnerKind, got.OwnerName)
+	}
+	// A bare ReplicaSet keeps its own identity (nothing to restart).
+	if got := byName["bare-5c9d8-xyz"]; got.OwnerKind != "ReplicaSet" || got.OwnerName != "bare-5c9d8" {
+		t.Fatalf("bare RS owner: %s/%s", got.OwnerKind, got.OwnerName)
 	}
 }

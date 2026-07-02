@@ -1,32 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
-import type { CSSProperties, ReactNode } from "react";
+import type { ReactNode } from "react";
 import { useFleet } from "../store/fleet";
 import type { DependencyRefDTO, EventRowDTO, FluxResourceDTO, FluxSourceDTO, ResourceDetailDTO } from "../store/fleet";
 import { openGitOps, closeGitOps, getResourceDetail, reconcile, reconcileWithSource, setSuspend, resolveGitLink, fluxDiff } from "../bridge/gitops";
 import type { FluxDiffDTO } from "../bridge/gitops";
 import { ConfirmDialog } from "../chrome/ConfirmDialog";
-
-const readyColor: Record<string, string> = {
-  Ready: "var(--color-text-success)",
-  Reconciling: "var(--color-text-info)",
-  Failed: "var(--color-text-danger)",
-  Unknown: "var(--color-text-tertiary)",
-};
-const ellipsis: CSSProperties = { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" };
-const actionBtn: CSSProperties = {
-  padding: "3px 10px",
-  fontSize: 11,
-  borderRadius: 4,
-  cursor: "pointer",
-  border: "0.5px solid var(--color-border-tertiary)",
-  background: "var(--color-background-primary)",
-  color: "var(--color-text-primary)",
-};
-const frame: CSSProperties = {
-  border: "0.5px solid var(--color-border-tertiary)",
-  borderRadius: "var(--border-radius-md)",
-  background: "var(--color-background-primary)",
-};
+import { Badge, FilterButton, SummaryCell, Section, StatusDot, readyColor, ellipsis, actionBtn, frame } from "../chrome/primitives";
+import { SyncingChip, staleStyle } from "./staleness";
 
 type FluxFilter = "all" | "attention" | "suspended" | "kustomizations" | "helmreleases" | "sources";
 
@@ -120,9 +100,14 @@ export function GitOps({ cluster }: { cluster: string }) {
 
   useEffect(() => {
     if (absent) return;
+    // If cleanup runs before openGitOps resolves, invoke the late-arriving
+    // unsubscriber immediately - otherwise its listener leaks for the app's
+    // lifetime and duplicates store writes on every reopen.
+    let cancelled = false;
     let off = () => {};
-    openGitOps(cluster).then((u) => (off = u)).catch((e) => console.error("openGitOps", e));
+    openGitOps(cluster).then((u) => (cancelled ? u() : (off = u))).catch((e) => console.error("openGitOps", e));
     return () => {
+      cancelled = true;
       off();
       void closeGitOps(cluster);
     };
@@ -175,10 +160,16 @@ export function GitOps({ cluster }: { cluster: string }) {
           <div style={{ fontSize: 18, fontWeight: 600 }}>Reconciliation</div>
         </div>
         <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-          {isProtected && <Badge tone="warning">prd lock</Badge>}
-          <Badge tone={attention > 0 ? "warning" : "success"}>{attention > 0 ? `${attention} need attention` : "ready"}</Badge>
+          {isProtected && <Badge tone="warning" variant="filled">prd lock</Badge>}
+          <Badge tone={attention > 0 ? "warning" : "success"} variant="filled">{attention > 0 ? `${attention} need attention` : "ready"}</Badge>
         </div>
       </div>
+
+      {gitops.cluster === cluster && gitops.watchError && (
+        <div style={{ padding: "8px 12px", borderRadius: "var(--border-radius-md)", border: "0.5px solid var(--color-text-danger)", color: "var(--color-text-danger)", fontSize: 12 }}>
+          Flux watch is failing - this list may be empty or stale, not clean: {gitops.watchError}
+        </div>
+      )}
 
       <div style={{ ...frame, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", overflow: "hidden" }}>
         <SummaryCell label="health" value={attention > 0 ? `${attention} attention` : "ready"} tone={attention > 0 ? "warning" : "success"} />
@@ -220,7 +211,7 @@ export function GitOps({ cluster }: { cluster: string }) {
               <span>resource</span>
               <span>source</span>
               <span>revision</span>
-              <span>applied</span>
+              <span>since</span>
               <span>status</span>
             </div>
             <div data-testid="flux-resource-scroll" style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
@@ -314,6 +305,7 @@ function RowSummary({ r, open, onClick }: { r: FluxResourceDTO; open: boolean; o
         textAlign: "left",
         color: "var(--color-text-primary)",
         background: open ? "var(--color-background-secondary)" : "transparent",
+        ...staleStyle(r.stale),
       }}
     >
       <span style={{ alignSelf: "stretch", background: isBad ? "var(--color-text-danger)" : isReconciling ? "var(--color-text-info)" : r.suspended ? "var(--color-text-warning)" : "transparent" }} />
@@ -327,8 +319,10 @@ function RowSummary({ r, open, onClick }: { r: FluxResourceDTO; open: boolean; o
       </div>
       <div style={{ color: "var(--color-text-secondary)", ...ellipsis }} title={sourceText(r)}>{sourceText(r) || "—"}</div>
       <div style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--color-text-secondary)", ...ellipsis }} title={r.revision}>{shortRev(r.revision) || "—"}</div>
-      <div style={{ color: "var(--color-text-tertiary)", fontSize: 11, ...ellipsis }}>{ago(r.lastAppliedAgeSeconds) || "—"}</div>
-      <div style={{ ...ellipsis, color }}>{statusText(r)}</div>
+      <div style={{ color: "var(--color-text-tertiary)", fontSize: 11, ...ellipsis }}>{ago(r.readySinceSeconds) || "—"}</div>
+      <div style={{ ...ellipsis, color }}>
+        {r.stale ? <SyncingChip generation={r.generation} observedGeneration={r.observedGeneration} /> : statusText(r)}
+      </div>
     </button>
   );
 }
@@ -424,7 +418,7 @@ function DetailPanel({ cluster, resource, detail, deps, onReconcile, onReconcile
       <Section title="Conditions">
         {detail.conditions.length === 0 ? <Muted>none reported</Muted> : detail.conditions.map((c) => (
           <div key={c.type} style={{ display: "grid", gridTemplateColumns: "9px 76px minmax(0, 1fr)", gap: 8, alignItems: "baseline" }}>
-            <span style={{ width: 7, height: 7, borderRadius: "50%", background: condColor(c), display: "inline-block" }} />
+            <StatusDot color={condColor(c)} />
             <span style={{ fontWeight: 500 }}>{c.type}</span>
             <span style={{ color: "var(--color-text-secondary)", ...ellipsis }} title={c.message}>{c.message || c.reason}</span>
           </div>
@@ -489,7 +483,7 @@ function SourceSection({ source }: { source: FluxSourceDTO }) {
         </div>
       )}
       <div style={{ display: "grid", gridTemplateColumns: "9px minmax(0,1fr)", gap: 8, alignItems: "baseline" }}>
-        <span style={{ width: 7, height: 7, borderRadius: "50%", background: dot, display: "inline-block" }} />
+        <StatusDot color={dot} />
         <div style={{ minWidth: 0 }}>
           <span style={{ fontFamily: "var(--font-mono)" }}>{label} · {source.namespace}/{source.name}</span>
           {source.revision && (
@@ -525,7 +519,7 @@ function DependsOnSection({ deps, kind, resolve, blocked }: {
         const dot = state ? (readyColor[state] ?? "var(--color-text-tertiary)") : "var(--color-text-tertiary)";
         return (
           <div key={`${d.namespace}/${d.name}`} style={{ display: "grid", gridTemplateColumns: "9px minmax(0,1fr) auto", gap: 8, alignItems: "baseline" }}>
-            <span style={{ width: 7, height: 7, borderRadius: "50%", background: dot, display: "inline-block" }} />
+            <StatusDot color={dot} />
             <span style={{ fontFamily: "var(--font-mono)", ...ellipsis }}>{d.namespace}/{d.name}</span>
             <span style={{ color: "var(--color-text-tertiary)", fontSize: 11 }}>{state ? state.toLowerCase() : "not found"}</span>
           </div>
@@ -551,7 +545,7 @@ function EventsSection({ events }: { events: EventRowDTO[] }) {
         const sec = e.lastSeenUnix > 0 ? Math.max(0, nowSec - e.lastSeenUnix) : 0;
         return (
           <div key={i} style={{ display: "grid", gridTemplateColumns: "9px minmax(0,1fr)", gap: 8, alignItems: "baseline" }}>
-            <span style={{ width: 7, height: 7, borderRadius: "50%", background: dot, display: "inline-block" }} />
+            <StatusDot color={dot} />
             <div style={{ minWidth: 0 }}>
               <span style={{ color: warn ? "var(--color-text-danger)" : "var(--color-text-primary)", fontWeight: 500 }}>{e.reason}</span>
               <span style={{ color: "var(--color-text-tertiary)", fontSize: 11, marginLeft: 6 }}>· {ago(sec) || "just now"}</span>
@@ -612,65 +606,6 @@ function EmptyInspector({ attention }: { attention: number }) {
         {attention > 0 ? `${attention} resources need attention` : "all reconciliations ready"}
       </div>
       <div style={{ marginTop: 8 }}>Select a Flux resource to inspect conditions, inventory, and day-2 actions.</div>
-    </div>
-  );
-}
-
-function SummaryCell({ label, value, tone = "default" }: { label: string; value: string; tone?: "default" | "success" | "warning" | "info" | "muted" }) {
-  const color = tone === "success"
-    ? "var(--color-text-success)"
-    : tone === "warning"
-      ? "var(--color-text-warning)"
-      : tone === "info"
-        ? "var(--color-text-info)"
-        : tone === "muted"
-          ? "var(--color-text-tertiary)"
-          : "var(--color-text-primary)";
-  return (
-    <div style={{ padding: "9px 12px", borderRight: "0.5px solid var(--color-border-tertiary)", minWidth: 0 }}>
-      <div style={{ fontSize: 10, color: "var(--color-text-tertiary)", marginBottom: 3 }}>{label}</div>
-      <div style={{ fontFamily: "var(--font-mono)", color, fontWeight: 600, ...ellipsis }}>{value}</div>
-    </div>
-  );
-}
-
-function FilterButton({ label, count, active, onClick }: { label: string; count: number; active: boolean; onClick: () => void }) {
-  return (
-    <button
-      onClick={onClick}
-      style={{
-        display: "inline-flex",
-        alignItems: "center",
-        gap: 5,
-        padding: "3px 9px",
-        fontSize: 11,
-        borderRadius: 4,
-        cursor: "pointer",
-        fontFamily: "var(--font-mono)",
-        border: active ? "0.5px solid var(--color-border-info)" : "0.5px solid var(--color-border-tertiary)",
-        background: active ? "var(--color-background-info)" : "var(--color-background-primary)",
-        color: active ? "var(--color-text-info)" : "var(--color-text-secondary)",
-      }}
-    >
-      {label}
-      <span style={{ fontSize: 9, opacity: 0.72 }}>{count}</span>
-    </button>
-  );
-}
-
-function Badge({ children, tone }: { children: ReactNode; tone: "success" | "warning" }) {
-  return (
-    <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 3, border: `0.5px solid ${tone === "success" ? "var(--color-border-success)" : "var(--color-border-warning)"}`, color: tone === "success" ? "var(--color-text-success)" : "var(--color-text-warning)", background: tone === "success" ? "var(--color-background-success)" : "var(--color-background-warning)" }}>
-      {children}
-    </span>
-  );
-}
-
-function Section({ title, children }: { title: string; children: ReactNode }) {
-  return (
-    <div style={{ marginTop: 12 }}>
-      <div style={{ fontSize: 10, color: "var(--color-text-tertiary)", marginBottom: 5 }}>{title}</div>
-      <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>{children}</div>
     </div>
   );
 }

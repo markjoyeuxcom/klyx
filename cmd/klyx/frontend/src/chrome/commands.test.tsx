@@ -20,7 +20,7 @@ vi.mock("../bridge/crd", () => ({
   copyText: vi.fn(),
   getInstanceDetail: vi.fn(),
 }));
-import { openPodDetail, listPods } from "../bridge/pods";
+import { openPodDetail } from "../bridge/pods";
 import { openNodeDetail } from "../bridge/nodes";
 import { openHelmRelease } from "../bridge/helm";
 import { getResourceDetail } from "../bridge/gitops";
@@ -53,7 +53,7 @@ function makeStore(over: Partial<FleetStore>): FleetStore {
     gitops: { cluster: null, resources: [] },
     argo: { cluster: null, apps: [], expanded: [] },
     helm: { cluster: null, releases: [] },
-    network: { gateways: [], topology: null },
+    network: { cluster: null, gateways: [], topology: null },
     instances: { ref: null, rows: [], riskOnly: false },
     instanceDetail: { ref: null, detail: null, loading: false },
   };
@@ -112,7 +112,7 @@ describe("buildCommands", () => {
     // triage-first order keeps Nodes in the operational loop and Network as its own lane.
     const ids = sections.map((c) => c.id.replace("section:", ""));
     expect(ids).toEqual(["overview", "workloads", "pods", "nodes", "events", "gitops",
-      "argo", "helm", "network", "resources", "crds"]);
+      "argo", "helm", "gatewayApi", "resources", "crds"]);
   });
 
   it("omits Pods when the pods slice is empty", () => {
@@ -138,13 +138,17 @@ describe("buildCommands", () => {
     expect(openPodDetail).toHaveBeenCalledWith("dev", "team", "api-1");
   });
 
-  it("includes a Namespaces command that lists pods for that namespace", () => {
+  it("includes a Namespaces command that requests the pods namespace", () => {
+    const requestPodsNamespace = vi.fn();
     const s = makeStore({
+      requestPodsNamespace,
       pods: { cluster: "dev", namespaces: ["team"], items: [{ namespace: "team", name: "api-1", phase: "Running", rank: "healthy" }] } as never,
     });
     const ns = buildCommands(s).find((c) => c.id === "ns:team")!;
     ns.run();
-    expect(listPods).toHaveBeenCalledWith("dev", "team");
+    // The jump routes through the store; PodsView moves its live subscription.
+    // A direct listPods would be dropped by the live sub's stale guard.
+    expect(requestPodsNamespace).toHaveBeenCalledWith("dev", "team");
   });
 
   it("collects namespaces from non-pod slices too", () => {
@@ -306,10 +310,11 @@ describe("buildCommands", () => {
     const openGateway = vi.fn();
     const selectRoute = vi.fn();
     const s = makeStore({
-      route: { name: "cluster", cluster: "dev", section: "network" } as never,
+      route: { name: "cluster", cluster: "dev", section: "gatewayApi" } as never,
       openGateway,
       selectRoute,
       network: {
+        cluster: "dev",
         gateways: [],
         topology: {
           gateway: { namespace: "gateway-system", name: "shared", className: "envoy", listeners: [], accepted: true, programmed: true, policies: [] },

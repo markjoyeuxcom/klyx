@@ -12,7 +12,7 @@ const eventsTimeout = 30 * time.Second
 
 // EventsConn is the per-cluster read surface EventsService needs.
 type EventsConn interface {
-	ListEvents(ctx context.Context, namespace string) ([]workloads.EventSummary, error)
+	ListEvents(ctx context.Context, namespace string) (events []workloads.EventSummary, truncated bool, err error)
 	WatchDirty(ctx context.Context, namespace string, kinds []string, onDirty func(), onLive func(bool)) (stop func(), err error)
 }
 
@@ -53,10 +53,11 @@ func computeEvents(conn EventsConn, namespace string) (EventsResultDTO, bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), eventsTimeout)
 	defer cancel()
 
-	events, err := conn.ListEvents(ctx, namespace)
+	events, truncated, err := conn.ListEvents(ctx, namespace)
 	if err != nil {
 		return out, false
 	}
+	out.Truncated = truncated
 
 	nsSet := map[string]bool{}
 	for _, e := range events {

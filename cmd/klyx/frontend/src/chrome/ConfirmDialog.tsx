@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { armProtected } from "../bridge/configsvc";
 
 export function ConfirmDialog({
   title,
@@ -20,7 +21,25 @@ export function ConfirmDialog({
   onCancel: () => void;
 }) {
   const [typed, setTyped] = useState("");
+  const [armError, setArmError] = useState<string | null>(null);
+  const [arming, setArming] = useState(false);
   const armed = !isProtected || typed === cluster;
+
+  // On a protected cluster, register the typed confirmation with the backend
+  // before dispatching: destructive verbs there consume a one-shot grant and
+  // refuse without it (defense in depth over the UI-side gate).
+  const confirm = async () => {
+    if (isProtected) {
+      setArming(true);
+      const r = await armProtected(cluster, typed);
+      setArming(false);
+      if (!r.ok) {
+        setArmError(r.error || "could not arm protected action");
+        return;
+      }
+    }
+    onConfirm();
+  };
 
   return (
     <div
@@ -51,9 +70,12 @@ export function ConfirmDialog({
             />
           </div>
         )}
+        {armError && (
+          <div style={{ color: "var(--color-text-danger)", fontSize: 12, marginBottom: 10 }}>{armError}</div>
+        )}
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
           <button onClick={onCancel} style={btnStyle(false, false)}>Cancel</button>
-          <button onClick={onConfirm} disabled={!armed} style={btnStyle(true, danger, !armed)}>{confirmLabel}</button>
+          <button onClick={() => void confirm()} disabled={!armed || arming} style={btnStyle(true, danger, !armed || arming)}>{confirmLabel}</button>
         </div>
       </div>
     </div>

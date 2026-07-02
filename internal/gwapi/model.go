@@ -24,6 +24,7 @@ type RouteNode struct {
 	Namespace, Name        string
 	Hostnames              []string
 	Matches                []Match
+	ParentSectionName      string
 	Accepted, ResolvedRefs bool // scoped to THIS Gateway's parentRef
 	Backends               []Backend
 	Policies               []PolicyRef   // M5-b; empty in M5-a
@@ -44,8 +45,12 @@ type ServiceNode struct {
 type Listener struct {
 	Name, Protocol, Hostname string
 	Port                     int32
+	CertificateRefs          []CertificateRef
 }
 type GatewayAddress struct{ Type, Value string }
+type CertificateRef struct {
+	Group, Kind, Namespace, Name string
+}
 type Match struct{ PathType, PathValue, Method string }
 type Backend struct {
 	Kind, Name, Namespace string
@@ -94,4 +99,11 @@ type GatewayRef struct {
 	Accepted, Programmed       bool
 	Addresses                  []GatewayAddress
 	Listeners                  []Listener
+	// Stale reports that the spec changed and the controller has not observed
+	// it yet (the Programmed condition's observedGeneration lags
+	// metadata.generation). While stale, Accepted/Programmed reflect the
+	// PREVIOUS spec - the UI must present the row as transitioning.
+	Stale              bool
+	Generation         int64
+	ObservedGeneration int64
 }

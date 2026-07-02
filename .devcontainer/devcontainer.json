@@ -42,11 +42,22 @@
       "helm": "latest",
       "minikube": "none"
     },
+    "ghcr.io/devcontainers/features/go:1": {
+      "version": "latest" 
+    },
     "ghcr.io/devcontainers/features/github-cli:1": {},
     // Official Claude Code Feature: cached, pins the install script, and adds
     // the VS Code extension. Replaces the old `curl | bash` in postCreate.
     "ghcr.io/anthropics/devcontainer-features/claude-code:1.0": {}
   },
+
+  // Claude Code is installed by the Feature globally (as root) into the nvm
+  // prefix, which the in-app auto-updater (running as `vscode`) can't write to
+  // — updates fail with `no_permissions`. Reinstall it here as the `vscode`
+  // user into a prefix on the persisted ~/.claude volume; `remoteEnv.PATH`
+  // below puts it first so it shadows the Feature's root-owned binary. Result:
+  // auto-updates work and survive rebuilds.
+  "postCreateCommand": "npm install -g @openai/codex && npm install -g --prefix /home/vscode/.claude/.npm-global @anthropic-ai/claude-code@latest",
 
   "mounts": [
     // --- Agent config: per-project named volumes (NOT host bind-mounts) -----
@@ -71,16 +82,22 @@
     //
     // GitHub CLI auth (alternative: run `gh auth login` inside the container,
     // or inject a short-lived token via containerEnv GH_TOKEN below):
-    // , "source=${localEnv:HOME}/.config/gh,target=/home/vscode/.config/gh,type=bind,readonly"
+    , "source=${localEnv:HOME}/.config/gh,target=/home/vscode/.config/gh,type=bind,readonly"
     //
     // Kubeconfig (only if this project talks to your cluster):
-    // , "source=${localEnv:HOME}/.kube,target=/home/vscode/.kube,type=bind,readonly"
+    , "source=${localEnv:HOME}/.kube,target=/home/vscode/.kube,type=bind,readonly"
   ],
 
   // MCP servers: define them per-project in a checked-in .mcp.json at the repo
   // root (project scope), and install any stdio-server binaries in a Dockerfile.
   // This replaces inheriting the host's global ~/.claude.json. See:
   // https://code.claude.com/docs/en/mcp#mcp-installation-scopes
+
+  // Put the user-local claude-code (installed into the ~/.claude volume by
+  // postCreateCommand) ahead of the Feature's root-owned binary on PATH.
+  "remoteEnv": {
+    "PATH": "/home/vscode/.claude/.npm-global/bin:${containerEnv:PATH}"
+  },
 
   "containerEnv": {
     "LOCAL_WORKSPACE_FOLDER": "${localWorkspaceFolder}"

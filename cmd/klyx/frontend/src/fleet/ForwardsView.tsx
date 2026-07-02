@@ -4,7 +4,7 @@ import { IconExternalLink, IconCopy, IconCheck } from "@tabler/icons-react";
 import { useFleet } from "../store/fleet";
 import type { ForwardDTO } from "../store/fleet";
 import { stopForward, stopAllForwards } from "../bridge/forwards";
-import { EmptyState } from "../chrome/EmptyState";
+import { EmptyState, btn, ellipsis } from "../chrome/primitives";
 import { IconArrowsLeftRight } from "@tabler/icons-react";
 
 // ForwardsView is the fleet-level port-forwards section: every active tunnel
@@ -114,6 +114,4 @@ function ForwardRow({ f }: { f: ForwardDTO }) {
   );
 }
 
-const btn: React.CSSProperties = { fontSize: 11, padding: "3px 10px", borderRadius: 4, cursor: "pointer", border: "0.5px solid var(--color-border-tertiary)", background: "var(--color-background-primary)", color: "var(--color-text-secondary)" };
 const iconBtn: React.CSSProperties = { ...btn, padding: "2px 6px", display: "flex", alignItems: "center" };
-const ellipsis: React.CSSProperties = { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" };

@@ -3,11 +3,12 @@ import { Overview } from "./Overview";
 import { GitOps } from "./GitOps";
 import { ArgoView } from "./ArgoView";
 import { HelmView } from "./HelmView";
+import { CertsView } from "./CertsView";
 import { CRDBrowser } from "./CRDBrowser";
 import { BuiltinsView } from "./BuiltinsView";
 import { InstanceList } from "./InstanceList";
 import { InstanceDetail } from "./InstanceDetail";
-import { NetworkView } from "./NetworkView";
+import { GatewayApiView } from "./GatewayApiView";
 import { WorkloadsView } from "./WorkloadsView";
 import { PodsView } from "./PodsView";
 import { EventsView } from "./EventsView";
@@ -32,8 +33,9 @@ export function ClusterDetail() {
   }
   if (route.section === "overview") return <Overview c={cluster} />;
   if (route.section === "gitops") return <GitOps cluster={cluster.name} />;
-  if (route.section === "argo") return <ArgoView cluster={cluster.name} />;
+  if (route.section === "argo") return <ArgoView cluster={cluster.name} mode={route.argoView ?? "applications"} />;
   if (route.section === "helm") return <HelmView cluster={cluster.name} />;
+  if (route.section === "certs") return <CertsView cluster={cluster.name} />;
   if (route.section === "resources") {
     if (route.resource && route.instance) return <InstanceDetail cluster={cluster.name} resource={route.resource} instance={route.instance} />;
     if (route.resource) return <InstanceList cluster={cluster.name} resource={route.resource} />;
@@ -44,7 +46,7 @@ export function ClusterDetail() {
     if (route.resource) return <InstanceList cluster={cluster.name} resource={route.resource} />;
     return <CRDBrowser cluster={cluster.name} />;
   }
-  if (route.section === "network") return <NetworkView cluster={cluster.name} />;
+  if (route.section === "gatewayApi") return <GatewayApiView cluster={cluster.name} />;
   if (route.section === "workloads") return <WorkloadsView cluster={cluster.name} />;
   if (route.section === "pods") return <PodsView cluster={cluster.name} />;
   if (route.section === "events") return <EventsView cluster={cluster.name} />;

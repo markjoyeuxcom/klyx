@@ -14,6 +14,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	"github.com/moomora/klyx/internal/clibin"
 )
 
 // Runner executes a flux invocation. Unlike a plain runner it returns stdout AND
@@ -27,11 +29,13 @@ type Runner interface {
 // ExecRunner is the production Runner that executes flux via exec.CommandContext.
 type ExecRunner struct{}
 
-var (
-	lookPath          = exec.LookPath
-	executableExists  = defaultExecutableExists
-	fluxFallbackPaths = defaultFluxFallbackPaths
-)
+// fluxBin is the shared binary-resolution stack (env override -> PATH ->
+// package-manager fallbacks). Tests swap its lookup hooks.
+var fluxBin = clibin.Binary{
+	Name:          "flux",
+	EnvVar:        "KLYX_FLUX_PATH",
+	FallbackPaths: defaultFluxFallbackPaths,
+}
 
 func (ExecRunner) Run(ctx context.Context, args ...string) ([]byte, string, error) {
 	bin, ok := Resolve()
@@ -48,39 +52,14 @@ func (ExecRunner) Run(ctx context.Context, args ...string) ([]byte, string, erro
 
 // Detect reports whether the flux binary is available to Klyx.
 func Detect() bool {
-	_, ok := Resolve()
-	return ok
+	return fluxBin.Detect()
 }
 
 // Resolve returns the flux executable Klyx should use. macOS .app launches do
-// not inherit the user's interactive shell PATH, so we also check the usual
-// package-manager locations.
+// not inherit the user's interactive shell PATH, so resolution also checks the
+// usual package-manager locations (see internal/clibin).
 func Resolve() (string, bool) {
-	if configured := strings.TrimSpace(os.Getenv("KLYX_FLUX_PATH")); configured != "" {
-		if executableExists(configured) {
-			return configured, true
-		}
-	}
-	if p, err := lookPath("flux"); err == nil {
-		return p, true
-	}
-	for _, candidate := range fluxFallbackPaths() {
-		if executableExists(candidate) {
-			return candidate, true
-		}
-	}
-	return "", false
-}
-
-func defaultExecutableExists(path string) bool {
-	info, err := os.Stat(path)
-	if err != nil || info.IsDir() {
-		return false
-	}
-	if runtime.GOOS == "windows" {
-		return true
-	}
-	return info.Mode()&0111 != 0
+	return fluxBin.Resolve()
 }
 
 func defaultFluxFallbackPaths() []string {
@@ -107,6 +86,7 @@ func defaultFluxFallbackPaths() []string {
 type DiffResult struct {
 	Output     string // the diff text (when HasChanges)
 	HasChanges bool
+	Warning    string // stderr from an errored run that still produced output: the diff may be incomplete
 	Err        string // a real failure (flux missing, build/decrypt/auth error)
 }
 
@@ -114,9 +94,12 @@ type DiffResult struct {
 // against the given kubeContext. path is a LOCAL filesystem path to the built
 // manifests (flux builds locally and dry-runs against the cluster - no clone).
 //
-// flux writes the diff to stdout and may exit non-zero when drift exists, so we
+// flux writes the diff to stdout and exits non-zero when drift exists, so we
 // treat any stdout content as the diff (HasChanges) regardless of exit code, and
-// only surface an error when there is no diff output and the command failed.
+// only surface Err when there is no diff output and the command failed. A run
+// that errored mid-diff (e.g. one resource failing its dry-run) leaves partial
+// stdout plus an explanatory stderr: that stderr becomes Warning so the UI can
+// flag the diff as possibly incomplete instead of silently trusting it.
 func DiffKustomization(ctx context.Context, r Runner, kubeContext, ns, name, path string) DiffResult {
 	args := []string{"diff", "kustomization", name, "-n", ns, "--path", path}
 	if kubeContext != "" {
@@ -125,7 +108,11 @@ func DiffKustomization(ctx context.Context, r Runner, kubeContext, ns, name, pat
 	stdout, stderr, err := r.Run(ctx, args...)
 	out := strings.TrimSpace(string(stdout))
 	if out != "" {
-		return DiffResult{Output: out, HasChanges: true}
+		res := DiffResult{Output: out, HasChanges: true}
+		if err != nil && stderr != "" && !isDriftExit(stderr) {
+			res.Warning = stderr
+		}
+		return res
 	}
 	if err != nil {
 		msg := stderr
@@ -135,4 +122,12 @@ func DiffKustomization(ctx context.Context, r Runner, kubeContext, ns, name, pat
 		return DiffResult{Err: msg}
 	}
 	return DiffResult{HasChanges: false}
+}
+
+// isDriftExit reports whether stderr is flux's expected drift signal. On drift
+// flux exits 1 and prints "identified at least one change, exited with non-zero
+// exit code" to stderr - that is the normal HasChanges outcome, not a warning
+// about an incomplete diff.
+func isDriftExit(stderr string) bool {
+	return strings.Contains(stderr, "identified at least one change")
 }

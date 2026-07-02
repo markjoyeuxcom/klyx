@@ -9,12 +9,13 @@ import (
 
 // fakeEventsConn satisfies EventsConn without fleet dependency.
 type fakeEventsConn struct {
-	events []workloads.EventSummary
-	err    error
+	events    []workloads.EventSummary
+	truncated bool
+	err       error
 }
 
-func (f *fakeEventsConn) ListEvents(_ context.Context, _ string) ([]workloads.EventSummary, error) {
-	return f.events, f.err
+func (f *fakeEventsConn) ListEvents(_ context.Context, _ string) ([]workloads.EventSummary, bool, error) {
+	return f.events, f.truncated, f.err
 }
 
 func (f *fakeEventsConn) WatchDirty(context.Context, string, []string, func(), func(bool)) (func(), error) {
@@ -31,6 +32,17 @@ func TestEventsService_ClusterMiss_NonNilEmpties(t *testing.T) {
 	}
 	if len(dto.Events) != 0 || len(dto.Namespaces) != 0 {
 		t.Fatalf("want empty slices, got events=%d ns=%d", len(dto.Events), len(dto.Namespaces))
+	}
+}
+
+// --- truncation ---
+
+func TestEventsService_ListEvents_TruncationSurfaced(t *testing.T) {
+	conn := &fakeEventsConn{events: []workloads.EventSummary{{Type: "Normal", Reason: "x"}}, truncated: true}
+	svc := NewEventsService(func(string) (EventsConn, bool) { return conn, true }, nil)
+	dto := svc.ListEvents("c", "")
+	if !dto.Truncated {
+		t.Fatal("a capped list must report Truncated - the subset is not the full event set")
 	}
 }
 

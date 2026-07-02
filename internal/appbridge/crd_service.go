@@ -13,6 +13,7 @@ type CRDConn interface {
 	CountResource(ctx context.Context, group, version, plural string) (int, bool, error)
 	ListInstances(ctx context.Context, group, version, plural string, limit int64, continueToken string) ([]crd.InstanceMeta, string, error)
 	GetInstanceDetail(ctx context.Context, group, version, plural, ns, name string) (crd.InstanceDetail, error)
+	ApplyResourceYAML(ctx context.Context, group, version, plural, kind, scope, ns, name, yaml string, dryRun bool) error
 	RevealSecretKey(ctx context.Context, ns, name, key string) (string, error)
 }
 
@@ -84,6 +85,10 @@ func (s *CRDService) GetInstanceDetail(cluster, group, version, plural, namespac
 	if labels == nil {
 		labels = map[string]string{}
 	}
+	annotations := d.Annotations
+	if annotations == nil {
+		annotations = map[string]string{}
+	}
 	conds := make([]ConditionDTO, 0, len(d.Conditions))
 	for _, c := range d.Conditions {
 		conds = append(conds, ConditionDTO{Type: c.Type, Status: c.Status, Reason: c.Reason, Message: c.Message})
@@ -147,13 +152,35 @@ func (s *CRDService) GetInstanceDetail(cluster, group, version, plural, namespac
 	}
 	return InstanceDetailDTO{
 		Kind: d.Kind, Namespace: d.Namespace, Name: d.Name,
-		Created: rfc3339(d.Created), Labels: labels,
+		Created: rfc3339(d.Created), Labels: labels, Annotations: annotations,
 		Conditions: conds, Events: events, YAML: d.YAML,
 		SecretKeys:     secretKeys,
 		ServiceBacking: serviceBacking,
 		HPAScaling:     hpaScaling,
 		Related:        related,
 	}
+}
+
+// ApplyResourceYAML validates and server-side-applies the YAML for the resource
+// currently open in the generic resource detail. dryRun=true asks the apiserver
+// to validate/admit without persisting.
+func (s *CRDService) ApplyResourceYAML(cluster, group, version, plural, kind, scope, namespace, name, yaml string, dryRun bool) ActionResultDTO {
+	// Dry-run mutates nothing; only a real apply consumes the protection grant.
+	if !dryRun {
+		if err := checkProtected(cluster); err != nil {
+			return ActionResultDTO{Error: err.Error()}
+		}
+	}
+	conn, ok := s.lookup(cluster)
+	if !ok {
+		return ActionResultDTO{Error: "cluster not connected: " + cluster}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), crdTimeout)
+	defer cancel()
+	if err := conn.ApplyResourceYAML(ctx, group, version, plural, kind, scope, namespace, name, yaml, dryRun); err != nil {
+		return ActionResultDTO{Error: err.Error()}
+	}
+	return ActionResultDTO{OK: true}
 }
 
 // RevealSecretKey fetches the decoded value of one key from a Secret and

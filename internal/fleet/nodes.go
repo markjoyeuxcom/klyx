@@ -15,13 +15,14 @@ import (
 
 // NodeDetail is the drill-down for one node.
 type NodeDetail struct {
-	Summary    workloads.NodeSummary
-	Labels     map[string]string
-	Taints     []NodeTaint
-	Conditions []crd.Condition
-	Events     []crd.Event
-	YAML       string
-	PodsOnNode []PodOnNode
+	Summary     workloads.NodeSummary
+	Labels      map[string]string
+	Annotations map[string]string
+	Taints      []NodeTaint
+	Conditions  []crd.Condition
+	Events      []crd.Event
+	YAML        string
+	PodsOnNode  []PodOnNode
 }
 
 // NodeTaint is a single taint.
@@ -38,16 +39,34 @@ type PodOnNode struct {
 	Phase     string
 }
 
-// ListNodes lists all nodes and classifies them with the shared node-summary engine.
+// ListNodes classifies all nodes with the shared node-summary engine. Served
+// from the eager node informer's cache once it has synced - the conn already
+// watches exactly this data, so a fresh LIST per render was pure apiserver
+// load. Before sync (or in conns built without Start, e.g. tests) it falls
+// back to a direct LIST.
 func (c *ClusterConn) ListNodes(ctx context.Context) ([]workloads.NodeSummary, error) {
-	list, err := c.typed.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
-	if err != nil {
-		return nil, err
-	}
-
 	clk := c.clk
 	if clk == nil {
 		clk = clock.Real{}
+	}
+
+	c.mu.RLock()
+	inf := c.nodeInf
+	c.mu.RUnlock()
+	if inf != nil && inf.HasSynced() {
+		items := inf.GetStore().List()
+		nodes := make([]corev1.Node, 0, len(items))
+		for _, obj := range items {
+			if n, ok := obj.(*corev1.Node); ok {
+				nodes = append(nodes, *n)
+			}
+		}
+		return workloads.SummarizeNodes(nodes, clk.Now()), nil
+	}
+
+	list, err := c.typed.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, err
 	}
 	return workloads.SummarizeNodes(list.Items, clk.Now()), nil
 }
@@ -70,6 +89,10 @@ func (c *ClusterConn) NodeDetail(ctx context.Context, name string) (NodeDetail, 
 	labels := n.GetLabels()
 	if labels == nil {
 		labels = map[string]string{}
+	}
+	annotations := n.GetAnnotations()
+	if annotations == nil {
+		annotations = map[string]string{}
 	}
 
 	taints := make([]NodeTaint, 0, len(n.Spec.Taints))
@@ -106,13 +129,14 @@ func (c *ClusterConn) NodeDetail(ctx context.Context, name string) (NodeDetail, 
 	podsOnNode, _ := c.podsOnNode(ctx, name)
 
 	return NodeDetail{
-		Summary:    summary,
-		Labels:     labels,
-		Taints:     taints,
-		Conditions: conds,
-		Events:     events,
-		YAML:       yamlStr,
-		PodsOnNode: podsOnNode,
+		Summary:     summary,
+		Labels:      labels,
+		Annotations: annotations,
+		Taints:      taints,
+		Conditions:  conds,
+		Events:      events,
+		YAML:        yamlStr,
+		PodsOnNode:  podsOnNode,
 	}, nil
 }
 

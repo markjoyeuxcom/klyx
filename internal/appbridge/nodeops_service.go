@@ -57,6 +57,9 @@ func NewNodeOpsService(lookup func(string) (NodeOpsConn, bool), em Emitter) *Nod
 
 // Cordon cordons (unschedulable=true) or uncordons (unschedulable=false) a node.
 func (s *NodeOpsService) Cordon(cluster, node string, cordon bool) ActionResultDTO {
+	if err := checkProtected(cluster); err != nil {
+		return ActionResultDTO{Error: err.Error()}
+	}
 	conn, ok := s.lookup(cluster)
 	if !ok {
 		return ActionResultDTO{Error: "cluster not connected: " + cluster}
@@ -86,9 +89,14 @@ func (p *drainPipe) Close() error {
 // events. The terminal chunk has EOF=true; Error is set if kubectl exited
 // non-zero or was killed.
 //
-// Cap: if maxConcurrentDrains drains are already running, the oldest is
-// evicted (process killed) before registering the new one.
+// Cap: if maxConcurrentDrains drains are already running, StartDrain refuses.
+// A drain is a user-initiated destructive operation mid-flight - evicting one
+// would leave its node cordoned and half-drained while reporting a clean
+// stream end (same policy as forwards: never silently kill user-managed work).
 func (s *NodeOpsService) StartDrain(cluster, node string) OpenLogStreamResultDTO {
+	if err := checkProtected(cluster); err != nil {
+		return OpenLogStreamResultDTO{Error: err.Error()}
+	}
 	conn, ok := s.lookup(cluster)
 	if !ok {
 		return OpenLogStreamResultDTO{Error: "cluster not connected: " + cluster}
@@ -108,7 +116,26 @@ func (s *NodeOpsService) StartDrain(cluster, node string) OpenLogStreamResultDTO
 	cmd.Stderr = pw
 	rc := &drainPipe{PipeReader: pr, pw: pw}
 
+	streamID := fmt.Sprintf("drain/%s/%s#%d", cluster, node, s.seq.Add(1))
+	ctx, cancel := context.WithCancel(context.Background())
+	ds := &drainStream{cancel: cancel, cmd: cmd, done: make(chan struct{})}
+
+	// Reserve the slot before starting the process: the cap check and the add
+	// happen under one lock, and a registered stream can never miss CancelAll.
+	s.mu.Lock()
+	if len(s.order) >= maxConcurrentDrains {
+		s.mu.Unlock()
+		cancel()
+		_ = rc.Close()
+		return OpenLogStreamResultDTO{Error: fmt.Sprintf("too many active drains (max %d); wait for one to finish or cancel it first", maxConcurrentDrains)}
+	}
+	s.drains[streamID] = ds
+	s.order = append(s.order, streamID)
+	s.mu.Unlock()
+
 	if err := cmd.Start(); err != nil {
+		s.deregister(streamID)
+		cancel()
 		_ = rc.Close()
 		return OpenLogStreamResultDTO{Error: "start drain: " + err.Error()}
 	}
@@ -121,27 +148,6 @@ func (s *NodeOpsService) StartDrain(cluster, node string) OpenLogStreamResultDTO
 		_ = pw.Close()
 		close(waitDone)
 	}()
-
-	streamID := fmt.Sprintf("drain/%s/%s#%d", cluster, node, s.seq.Add(1))
-	ctx, cancel := context.WithCancel(context.Background())
-	ds := &drainStream{cancel: cancel, cmd: cmd, done: make(chan struct{})}
-
-	s.mu.Lock()
-	// Evict oldest if at cap (same invariant as LogsService).
-	for len(s.order) >= maxConcurrentDrains {
-		oldest := s.order[0]
-		s.order = s.order[1:]
-		if ev := s.drains[oldest]; ev != nil {
-			delete(s.drains, oldest)
-			ev.cancel()
-			if ev.cmd.Process != nil {
-				_ = ev.cmd.Process.Kill()
-			}
-		}
-	}
-	s.drains[streamID] = ds
-	s.order = append(s.order, streamID)
-	s.mu.Unlock()
 
 	// Supervisor: kill process and close the pipe on cancel so the reader
 	// goroutine unblocks. rc.Close is idempotent with the wait goroutine close.
@@ -261,11 +267,11 @@ func (s *NodeOpsService) drainExitMsg(streamID string) string {
 	return ""
 }
 
-func (s *NodeOpsService) finishDrain(streamID string, rc io.ReadCloser, errMsg string) {
-	s.em.Emit("nodedrain:"+streamID, LogChunkDTO{Lines: []string{}, EOF: true, Error: errMsg})
-	_ = rc.Close()
-
+// deregister removes a stream from the registry (map + order) and returns it.
+// Safe to call for ids that are already gone.
+func (s *NodeOpsService) deregister(streamID string) *drainStream {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	ds := s.drains[streamID]
 	delete(s.drains, streamID)
 	for i, id := range s.order {
@@ -274,9 +280,14 @@ func (s *NodeOpsService) finishDrain(streamID string, rc io.ReadCloser, errMsg s
 			break
 		}
 	}
-	s.mu.Unlock()
+	return ds
+}
 
-	if ds != nil {
+func (s *NodeOpsService) finishDrain(streamID string, rc io.ReadCloser, errMsg string) {
+	s.em.Emit("nodedrain:"+streamID, LogChunkDTO{Lines: []string{}, EOF: true, Error: errMsg})
+	_ = rc.Close()
+
+	if ds := s.deregister(streamID); ds != nil {
 		ds.cancel() // idempotent; release context
 		close(ds.done)
 	}

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
@@ -19,15 +20,16 @@ import (
 	"k8s.io/client-go/tools/cache"
 
 	"github.com/moomora/klyx/internal/capability"
+	"github.com/moomora/klyx/internal/certmanager"
 	"github.com/moomora/klyx/internal/clock"
 	"github.com/moomora/klyx/internal/cluster"
 	"github.com/moomora/klyx/internal/clustermesh"
 	"github.com/moomora/klyx/internal/config"
 	"github.com/moomora/klyx/internal/crd"
+	"github.com/moomora/klyx/internal/fluxcli"
 	"github.com/moomora/klyx/internal/gitops/argo"
 	"github.com/moomora/klyx/internal/gitops/flux"
 	"github.com/moomora/klyx/internal/gwapi"
-	"github.com/moomora/klyx/internal/fluxcli"
 	"github.com/moomora/klyx/internal/helmcli"
 	"github.com/moomora/klyx/internal/metrics"
 	"github.com/moomora/klyx/internal/routemetrics"
@@ -45,6 +47,14 @@ type Conn interface {
 	GitOpsObject(kind, namespace, name string) (*unstructured.Unstructured, bool)
 	GitOpsSources() []flux.Source
 	GitOpsSourceObject(kind, namespace, name string) (*unstructured.Unstructured, bool)
+	GitOpsWatchHealth() (synced bool, lastErr string)
+	OpenCertManager()
+	CloseCertManager()
+	CertManagerCertificates() []certmanager.Certificate
+	CertManagerIssuers() []certmanager.Issuer
+	CertManagerObject(kind, namespace, name string) (*unstructured.Unstructured, bool)
+	CertManagerWatchHealth() (synced bool, lastErr string)
+	GetCertificateChain(ctx context.Context, ns, name string) (certmanager.Chain, error)
 	FluxEvents(ctx context.Context, kind, ns, name string) ([]workloads.EventSummary, error)
 	FluxAvailable() bool
 	FluxDiffKustomization(ctx context.Context, ns, name, path string) (fluxcli.DiffResult, error)
@@ -58,7 +68,7 @@ type Conn interface {
 	NodeDetail(ctx context.Context, name string) (NodeDetail, error)
 	ListPods(ctx context.Context, namespace string) ([]workloads.PodSummary, error)
 	DeletePod(ctx context.Context, namespace, name string) error
-	ListEvents(ctx context.Context, namespace string) ([]workloads.EventSummary, error)
+	ListEvents(ctx context.Context, namespace string) ([]workloads.EventSummary, bool, error)
 	WatchDirty(ctx context.Context, namespace string, kinds []string, onDirty func(), onLive func(bool)) (stop func(), err error)
 	PodDetail(ctx context.Context, namespace, name string) (PodDetail, error)
 	PodLogStream(ctx context.Context, namespace, pod, container string, previous bool, tailLines int64) (io.ReadCloser, error)
@@ -71,6 +81,7 @@ type Conn interface {
 	CountResource(ctx context.Context, group, version, plural string) (int, bool, error)
 	ListInstances(ctx context.Context, group, version, plural string, limit int64, continueToken string) ([]crd.InstanceMeta, string, error)
 	GetInstanceDetail(ctx context.Context, group, version, plural, ns, name string) (crd.InstanceDetail, error)
+	ApplyResourceYAML(ctx context.Context, group, version, plural, kind, scope, ns, name, yaml string, dryRun bool) error
 	RevealSecretKey(ctx context.Context, ns, name, key string) (string, error)
 	ListGateways(ctx context.Context) ([]gwapi.GatewayRef, bool, error)
 	GetGatewayTopology(ctx context.Context, namespace, name string) (gwapi.Topology, error)
@@ -89,8 +100,10 @@ type Conn interface {
 	HelmValues(ctx context.Context, namespace, release string) (string, error)
 	HelmRollback(ctx context.Context, namespace, release string, revision int) error
 	ListArgoApps(ctx context.Context) ([]argo.App, error)
+	ListArgoProjects(ctx context.Context) ([]argo.Project, error)
+	ListArgoApplicationSets(ctx context.Context) ([]argo.ApplicationSet, error)
 	RefreshArgoApp(ctx context.Context, namespace, name string) error
-	SyncArgoApp(ctx context.Context, namespace, name, revision string) error
+	SyncArgoApp(ctx context.Context, namespace, name string, opts argo.SyncOptions) error
 	GitOpsSummary(ctx context.Context) (GitOpsSummary, error)
 	GitOpsSummaryFlux(ctx context.Context) (fluxPresent bool, total, notReady, suspended int, err error)
 }
@@ -121,9 +134,16 @@ type ClusterConn struct {
 	snapVersion    string
 	connectTimeout time.Duration
 	metricsCfg     config.MetricsConfig
-	refresh        chan struct{}   // buffered(1); coalesces informer events
-	ctx            context.Context // captured in Start; scopes lazy watches
-	gitops         *gitopsWatch    // lazy; nil until OpenGitOps
+	refresh        chan struct{}             // buffered(1); coalesces informer events
+	ctx            context.Context           // captured in Start; scopes lazy watches
+	nodeInf        cache.SharedIndexInformer // eager node informer; ListNodes serves from its cache once synced
+	disc           discoveryLike             // TTL-cached discovery; built lazily via c.discovery()
+	gitops         *gitopsWatch              // lazy; nil until OpenGitOps
+	gitopsOpening  bool                      // single-flights OpenGitOps' out-of-lock install
+	gitopsWanted   bool                      // desired state; an in-flight open aborts if false
+	certmgr        *certmanagerWatch         // lazy; nil until OpenCertManager
+	certmgrOpening bool                      // single-flights OpenCertManager's out-of-lock install
+	certmgrWanted  bool                      // desired state; an in-flight open aborts if false
 
 	// metricsMu guards the metrics cache. Note: ClusterMetrics holds it across
 	// the probe + sample network I/O (up to a few seconds). This serializes
@@ -225,6 +245,9 @@ func (c *ClusterConn) Start(ctx context.Context) {
 	// Register handlers BEFORE starting the informers. SetWatchErrorHandler
 	// errors only if called after Start, which we do not do; ignore defensively.
 	for _, inf := range []cache.SharedIndexInformer{nodeInformer, podInformer} {
+		// Strip managedFields before caching: the eager set lives for the app's
+		// lifetime and nothing in Klyx reads them (same for every cached kind).
+		_ = inf.SetTransform(stripManagedFields)
 		_ = inf.SetWatchErrorHandler(func(_ *cache.Reflector, err error) {
 			c.onWatchError(err)
 		})
@@ -235,11 +258,27 @@ func (c *ClusterConn) Start(ctx context.Context) {
 		})
 	}
 
+	c.mu.Lock()
+	c.nodeInf = nodeInformer
+	c.mu.Unlock()
+
 	nodeFactory.Start(ctx.Done())
 	metaFactory.Start(ctx.Done())
 
 	go c.refreshLoop(ctx, nodeInformer, podInformer)
 	go c.connectLoop(ctx, nodeInformer, podInformer)
+}
+
+// stripManagedFields is a cache.TransformFunc that drops ObjectMeta.ManagedFields
+// before an object enters an informer store. managedFields are server-side-apply
+// bookkeeping nothing in Klyx reads, and on busy objects they can dominate the
+// cached size. Non-metav1 objects (e.g. DeletedFinalStateUnknown tombstones)
+// pass through untouched.
+func stripManagedFields(obj interface{}) (interface{}, error) {
+	if m, ok := obj.(metav1.Object); ok {
+		m.SetManagedFields(nil)
+	}
+	return obj, nil
 }
 
 // connectLoop owns the initial connect. It bounds each sync attempt by

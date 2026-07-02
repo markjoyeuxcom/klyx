@@ -3,10 +3,10 @@ package fleet
 import (
 	"context"
 	"sort"
+	"sync"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic/dynamicinformer"
 	"k8s.io/client-go/tools/cache"
 
@@ -18,12 +18,47 @@ type gitopsWatch struct {
 	ksInf  cache.SharedIndexInformer
 	hrInf  cache.SharedIndexInformer
 	srcInf map[flux.Kind]cache.SharedIndexInformer
+	errs   *watchErrTracker
+}
+
+// watchErrTracker records the most recent reflector error for a lazy watch
+// group, so a permanently failing list/watch (RBAC denied, CRD version
+// mismatch) can be surfaced instead of rendering as an empty, error-free view.
+type watchErrTracker struct {
+	mu   sync.Mutex
+	last string
+}
+
+func (t *watchErrTracker) record(err error) {
+	if err == nil {
+		return
+	}
+	t.mu.Lock()
+	t.last = err.Error()
+	t.mu.Unlock()
+}
+
+func (t *watchErrTracker) lastError() string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.last
+}
+
+// trackWatchErrors replaces an informer's default watch-error handler (which
+// only logs) with one that records into the tracker, and strips managedFields
+// before objects enter the cache (the lazy sets watch full objects and live as
+// long as the view is open). Must run before Start.
+func trackWatchErrors(inf cache.SharedIndexInformer, t *watchErrTracker) {
+	_ = inf.SetTransform(stripManagedFields)
+	_ = inf.SetWatchErrorHandler(func(_ *cache.Reflector, err error) {
+		t.record(err)
+	})
 }
 
 // preferredVersion returns the served preferred version for a CRD group, or
 // fallback when the group is not advertised (the fake discovery in tests has no
 // groups, so the fallback is used there).
-func preferredVersion(disc discovery.DiscoveryInterface, group, fallback string) string {
+func preferredVersion(disc discoveryLike, group, fallback string) string {
 	groups, err := disc.ServerGroups()
 	if err != nil || groups == nil {
 		return fallback
@@ -42,43 +77,80 @@ func preferredVersion(disc discovery.DiscoveryInterface, group, fallback string)
 }
 
 // OpenGitOps starts (idempotently) the lazy dynamic informers on the Flux CRDs.
+//
+// The discovery + factory build happens outside the lock (network I/O), so the
+// check-and-install is guarded by two flags: gitopsOpening single-flights
+// concurrent Opens, and gitopsWanted records the desired state so a Close that
+// lands mid-open makes the install abort and tear the factory down instead of
+// leaking its watches.
 func (c *ClusterConn) OpenGitOps() {
 	c.mu.Lock()
-	if c.gitops != nil {
+	c.gitopsWanted = true
+	if c.gitops != nil || c.gitopsOpening {
 		c.mu.Unlock()
 		return
 	}
+	c.gitopsOpening = true
 	dyn := c.dyn
 	parent := c.ctx
 	c.mu.Unlock()
 	if dyn == nil || parent == nil {
+		c.mu.Lock()
+		c.gitopsOpening = false
+		c.mu.Unlock()
 		return
 	}
 
-	ksVer := preferredVersion(c.typed.Discovery(), "kustomize.toolkit.fluxcd.io", "v1")
-	hrVer := preferredVersion(c.typed.Discovery(), "helm.toolkit.fluxcd.io", "v2")
+	ksVer := preferredVersion(c.discovery(), "kustomize.toolkit.fluxcd.io", "v1")
+	hrVer := preferredVersion(c.discovery(), "helm.toolkit.fluxcd.io", "v2")
 	ksGVR := schema.GroupVersionResource{Group: "kustomize.toolkit.fluxcd.io", Version: ksVer, Resource: "kustomizations"}
 	hrGVR := schema.GroupVersionResource{Group: "helm.toolkit.fluxcd.io", Version: hrVer, Resource: "helmreleases"}
 
 	gctx, cancel := context.WithCancel(parent)
 	factory := dynamicinformer.NewDynamicSharedInformerFactory(dyn, defaultResync)
+	errs := &watchErrTracker{}
 	ksInf := factory.ForResource(ksGVR).Informer()
 	hrInf := factory.ForResource(hrGVR).Informer()
+	trackWatchErrors(ksInf, errs)
+	trackWatchErrors(hrInf, errs)
 
 	// Watch the source kinds alongside ks/hr so a stuck resource's root cause
 	// (a source that is not pulling) is visible without a separate API read.
 	srcInf := make(map[flux.Kind]cache.SharedIndexInformer, len(sourceKinds))
 	for _, s := range sourceKinds {
-		ver := preferredVersion(c.typed.Discovery(), s.group, s.fallback)
+		ver := preferredVersion(c.discovery(), s.group, s.fallback)
 		gvr := schema.GroupVersionResource{Group: s.group, Version: ver, Resource: s.resource}
-		srcInf[s.kind] = factory.ForResource(gvr).Informer()
+		inf := factory.ForResource(gvr).Informer()
+		trackWatchErrors(inf, errs)
+		srcInf[s.kind] = inf
 	}
 
 	factory.Start(gctx.Done())
 
 	c.mu.Lock()
-	c.gitops = &gitopsWatch{cancel: cancel, ksInf: ksInf, hrInf: hrInf, srcInf: srcInf}
+	c.gitopsOpening = false
+	if !c.gitopsWanted {
+		// Closed while we were starting: don't install; stop the factory.
+		c.mu.Unlock()
+		cancel()
+		return
+	}
+	c.gitops = &gitopsWatch{cancel: cancel, ksInf: ksInf, hrInf: hrInf, srcInf: srcInf, errs: errs}
 	c.mu.Unlock()
+}
+
+// GitOpsWatchHealth reports whether the primary Flux informers have synced and
+// the most recent watch error. A not-synced watch with an error is the
+// "permanently failing" signal (RBAC denied, CRD mismatch) that must render as
+// an error, never as an empty resource list.
+func (c *ClusterConn) GitOpsWatchHealth() (synced bool, lastErr string) {
+	c.mu.RLock()
+	g := c.gitops
+	c.mu.RUnlock()
+	if g == nil {
+		return false, ""
+	}
+	return g.ksInf.HasSynced() && g.hrInf.HasSynced(), g.errs.lastError()
 }
 
 // sourceKinds is the set of Flux source CRDs Klyx watches, with the fallback
@@ -96,9 +168,11 @@ var sourceKinds = []struct {
 	{flux.HelmChartKind, "source.toolkit.fluxcd.io", "helmcharts", "v1"},
 }
 
-// CloseGitOps stops the Flux informers.
+// CloseGitOps stops the Flux informers. Clearing gitopsWanted also aborts an
+// in-flight OpenGitOps install (see OpenGitOps).
 func (c *ClusterConn) CloseGitOps() {
 	c.mu.Lock()
+	c.gitopsWanted = false
 	g := c.gitops
 	c.gitops = nil
 	c.mu.Unlock()
@@ -128,14 +202,23 @@ func (c *ClusterConn) GitOpsObject(kind, namespace, name string) (*unstructured.
 	if inf == nil {
 		return nil, false
 	}
-	for _, obj := range inf.GetStore().List() {
-		if u, ok := obj.(*unstructured.Unstructured); ok {
-			if u.GetNamespace() == namespace && u.GetName() == name {
-				return u, true
-			}
-		}
+	return storeGet(inf, namespace, name)
+}
+
+// storeGet looks an object up by its cache key (ns/name; bare name for
+// cluster-scoped objects) - O(1) against the informer index, replacing the
+// full-store scans these detail lookups used to do on every push tick.
+func storeGet(inf cache.SharedIndexInformer, namespace, name string) (*unstructured.Unstructured, bool) {
+	key := name
+	if namespace != "" {
+		key = namespace + "/" + name
 	}
-	return nil, false
+	obj, exists, err := inf.GetStore().GetByKey(key)
+	if err != nil || !exists {
+		return nil, false
+	}
+	u, ok := obj.(*unstructured.Unstructured)
+	return u, ok
 }
 
 // GitOpsSources reads the source informer stores and parses them. nil when not
@@ -181,14 +264,7 @@ func (c *ClusterConn) GitOpsSourceObject(kind, namespace, name string) (*unstruc
 	if !ok || inf == nil {
 		return nil, false
 	}
-	for _, obj := range inf.GetStore().List() {
-		if u, ok := obj.(*unstructured.Unstructured); ok {
-			if u.GetNamespace() == namespace && u.GetName() == name {
-				return u, true
-			}
-		}
-	}
-	return nil, false
+	return storeGet(inf, namespace, name)
 }
 
 // GitOpsResources reads the informer stores and parses them. nil when not open.

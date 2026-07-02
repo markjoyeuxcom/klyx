@@ -104,4 +104,18 @@ describe("CommandPalette", () => {
     expect(getByTestId("command-row-cluster:dev-we").getAttribute("data-selected")).toBe("false");
     expect(getByTestId("command-row-cluster:prd-ne").getAttribute("data-selected")).toBe("true");
   });
+
+  it("scrolls the selected row into view when navigating", () => {
+    // jsdom does not implement scrollIntoView; install a spy so the palette's
+    // guarded call is observable.
+    const scrollSpy = vi.fn();
+    window.HTMLElement.prototype.scrollIntoView = scrollSpy;
+    seedClusters();
+    const { getByTestId } = render(<CommandPalette />);
+    pressCmdK();
+    scrollSpy.mockClear();
+    fireEvent.keyDown(getByTestId("command-palette-input"), { key: "ArrowDown" });
+    expect(getByTestId("command-row-cluster:prd-ne").getAttribute("data-selected")).toBe("true");
+    expect(scrollSpy).toHaveBeenCalledWith({ block: "nearest" });
+  });
 });

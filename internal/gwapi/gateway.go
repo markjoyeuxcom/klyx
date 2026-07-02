@@ -33,6 +33,7 @@ func ParseGateway(u *unstructured.Unstructured) GatewayNode {
 func parseListeners(obj map[string]interface{}) []Listener {
 	ls, _, _ := unstructured.NestedSlice(obj, "spec", "listeners")
 	out := make([]Listener, 0, len(ls))
+	gwNS, _, _ := unstructured.NestedString(obj, "metadata", "namespace")
 	for _, l := range ls {
 		m, ok := l.(map[string]interface{})
 		if !ok {
@@ -45,7 +46,35 @@ func parseListeners(obj map[string]interface{}) []Listener {
 		if p, ok, _ := unstructured.NestedNumberAsFloat64(m, "port"); ok {
 			lis.Port = int32(p)
 		}
+		lis.CertificateRefs = parseCertificateRefs(m, gwNS)
 		out = append(out, lis)
+	}
+	return out
+}
+
+func parseCertificateRefs(listener map[string]interface{}, gwNS string) []CertificateRef {
+	refs, _, _ := unstructured.NestedSlice(listener, "tls", "certificateRefs")
+	out := make([]CertificateRef, 0, len(refs))
+	for _, r := range refs {
+		m, ok := r.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		ref := CertificateRef{}
+		ref.Group, _ = m["group"].(string)
+		ref.Kind, _ = m["kind"].(string)
+		if ref.Kind == "" {
+			ref.Kind = "Secret"
+		}
+		ref.Namespace, _ = m["namespace"].(string)
+		if ref.Namespace == "" {
+			ref.Namespace = gwNS
+		}
+		ref.Name, _ = m["name"].(string)
+		if ref.Name == "" {
+			continue
+		}
+		out = append(out, ref)
 	}
 	return out
 }
@@ -71,10 +100,44 @@ func parseAddresses(obj map[string]interface{}) []GatewayAddress {
 // ParseGatewayRef maps a Gateway to the lightweight list item.
 func ParseGatewayRef(u *unstructured.Unstructured) GatewayRef {
 	cls, _, _ := unstructured.NestedString(u.Object, "spec", "gatewayClassName")
+	stale, gen, observed := gatewayStaleness(u)
 	return GatewayRef{
 		Namespace: u.GetNamespace(), Name: u.GetName(), ClassName: cls,
 		Accepted: condTrue(u.Object, "Accepted"), Programmed: condTrue(u.Object, "Programmed"),
 		Addresses: parseAddresses(u.Object),
 		Listeners: parseListeners(u.Object),
+		Stale:     stale, Generation: gen, ObservedGeneration: observed,
 	}
+}
+
+// gatewayStaleness compares metadata.generation with the Programmed (falling
+// back to Accepted) condition's observedGeneration - Gateway API stamps it per
+// condition (metav1.Condition). Missing conditions read as not-stale rather
+// than guessing.
+func gatewayStaleness(u *unstructured.Unstructured) (stale bool, gen, observed int64) {
+	gen = u.GetGeneration()
+	if gen == 0 {
+		return false, gen, 0
+	}
+	conds, _, _ := unstructured.NestedSlice(u.Object, "status", "conditions")
+	byType := map[string]int64{}
+	for _, c := range conds {
+		m, ok := c.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		t, _ := m["type"].(string)
+		switch og := m["observedGeneration"].(type) {
+		case int64:
+			byType[t] = og
+		case float64:
+			byType[t] = int64(og)
+		}
+	}
+	for _, t := range []string{"Programmed", "Accepted"} {
+		if og, ok := byType[t]; ok {
+			return gen > og, gen, og
+		}
+	}
+	return false, gen, 0
 }

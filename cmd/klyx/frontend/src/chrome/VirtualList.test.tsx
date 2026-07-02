@@ -1,11 +1,12 @@
-import { describe, it, expect } from "vitest";
-import { render, fireEvent } from "@testing-library/react";
+import { describe, it, expect, vi, afterEach } from "vitest";
+import { useState } from "react";
+import { render, fireEvent, act } from "@testing-library/react";
 import { VirtualList } from "./VirtualList";
 
-// jsdom doesn't layout — clientHeight is 0 by default, so the virtual window
-// calculation sees containerHeight=0 and renders overscan rows from index 0.
-// The tests below control behaviour via list size (short vs. large) and verify
-// the documented threshold + scroll wiring.
+// jsdom doesn't layout — clientHeight is 0, so the component falls back to a
+// 600px assumed height (FALLBACK_HEIGHT), and neither requestAnimationFrame
+// nor ResizeObserver fire on their own. Tests that exercise the scroll/resize
+// wiring stub those globals to drive the callbacks deterministically.
 
 const PLAIN_THRESHOLD = 100; // must match the constant in VirtualList.tsx
 
@@ -13,7 +14,19 @@ function makeItems(n: number): string[] {
   return Array.from({ length: n }, (_, i) => `item-${i}`);
 }
 
+// Queue-based rAF stub: scroll events queue frames, flushFrames() runs them.
+function stubRaf() {
+  const frames: FrameRequestCallback[] = [];
+  vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => {
+    frames.push(cb);
+    return frames.length;
+  });
+  vi.stubGlobal("cancelAnimationFrame", () => {});
+  return () => act(() => { frames.splice(0).forEach((cb) => cb(0)); });
+}
+
 describe("VirtualList", () => {
+  afterEach(() => vi.unstubAllGlobals());
   it("renders all items when count < threshold (plain path)", () => {
     const items = makeItems(PLAIN_THRESHOLD - 1);
     const { getAllByTestId } = render(
@@ -59,6 +72,7 @@ describe("VirtualList", () => {
   });
 
   it("scroll event triggers re-render and updates the window", () => {
+    const flushFrames = stubRaf();
     const items = makeItems(200);
     const { container, getAllByTestId } = render(
       <VirtualList
@@ -71,13 +85,99 @@ describe("VirtualList", () => {
     );
     const scrollEl = container.firstElementChild as HTMLElement;
     // Simulate scrolling to row 100 (offset = 100 * 40 = 4000px)
-    Object.defineProperty(scrollEl, "scrollTop", { value: 4000, writable: true });
+    Object.defineProperty(scrollEl, "scrollTop", { value: 4000, writable: true, configurable: true });
     fireEvent.scroll(scrollEl);
-    // After scroll, the rendered items should include items around index 100
+    flushFrames();
+    // After the frame runs, the window starts at firstVisible = max(0, floor(4000/40) - 4) = 96
     const renderedTexts = getAllByTestId("row").map((el) => el.textContent ?? "");
-    // The first visible item should be near index 100 (minus overscan)
-    // With overscan=4 and scrollTop=4000, firstVisible = max(0, floor(4000/40) - 4) = 96
-    expect(renderedTexts.some((t) => t.startsWith("item-9") || t.startsWith("item-10"))).toBe(true);
+    expect(renderedTexts[0]).toBe("item-96");
+    expect(renderedTexts).toContain("item-100");
+    expect(renderedTexts).not.toContain("item-0");
+  });
+
+  it("applies the LATEST scrollTop when scroll events arrive while a frame is queued", () => {
+    const flushFrames = stubRaf();
+    const items = makeItems(500);
+    const { container, getAllByTestId } = render(
+      <VirtualList
+        items={items}
+        rowHeight={40}
+        overscan={4}
+        style={{ height: 300 }}
+        render={(item, i) => <div key={i} data-testid="row">{item}</div>}
+      />,
+    );
+    const scrollEl = container.firstElementChild as HTMLElement;
+    Object.defineProperty(scrollEl, "scrollTop", { value: 2000, writable: true, configurable: true });
+    fireEvent.scroll(scrollEl);
+    // Second event lands while the first frame is still queued (fast scroll).
+    scrollEl.scrollTop = 8000;
+    fireEvent.scroll(scrollEl);
+    flushFrames();
+    // 8000/40 = row 200 — the window must reflect the SECOND event, not the
+    // stale value captured when the frame was queued (row 50).
+    const renderedTexts = getAllByTestId("row").map((el) => el.textContent ?? "");
+    expect(renderedTexts).toContain("item-200");
+    expect(renderedTexts).not.toContain("item-50");
+  });
+
+  it("extends the window when the container grows (ResizeObserver)", () => {
+    const instances: { cb: () => void; el?: Element }[] = [];
+    class ROStub {
+      inst: { cb: () => void; el?: Element };
+      constructor(cb: () => void) {
+        this.inst = { cb };
+        instances.push(this.inst);
+      }
+      observe(el: Element) { this.inst.el = el; }
+      disconnect() {}
+    }
+    vi.stubGlobal("ResizeObserver", ROStub);
+    const items = makeItems(1000);
+    const { container, getAllByTestId } = render(
+      <VirtualList
+        items={items}
+        rowHeight={40}
+        overscan={0}
+        style={{ height: 300 }}
+        render={(item, i) => <div key={i} data-testid="row">{item}</div>}
+      />,
+    );
+    // Initial: clientHeight=0 in jsdom → fallback 600px → 16 rows.
+    const before = getAllByTestId("row").length;
+    const el = container.firstElementChild as HTMLElement;
+    Object.defineProperty(el, "clientHeight", { value: 1200, configurable: true });
+    act(() => { instances[0].cb(); });
+    // 1200px window → more rows rendered without any scroll event.
+    const after = getAllByTestId("row").length;
+    expect(after).toBeGreaterThan(before);
+  });
+
+  it("rowKey keeps row-local state attached to the item across reorder (plain path)", () => {
+    function StatefulRow({ label }: { label: string }) {
+      const [clicked, setClicked] = useState(false);
+      return (
+        <div data-testid="srow" data-clicked={clicked ? "yes" : "no"} onClick={() => setClicked(true)}>
+          {label}
+        </div>
+      );
+    }
+    const list = (items: string[]) => (
+      <VirtualList
+        items={items}
+        rowHeight={32}
+        rowKey={(it) => it}
+        render={(it) => <StatefulRow key={it} label={it} />}
+      />
+    );
+    const { rerender, getAllByTestId } = render(list(["a", "b"]));
+    fireEvent.click(getAllByTestId("srow")[0]); // mark "a"
+    rerender(list(["b", "a"])); // live update re-ranks the rows
+    const rows = getAllByTestId("srow");
+    expect(rows[0].textContent).toBe("b");
+    expect(rows[0].getAttribute("data-clicked")).toBe("no");
+    expect(rows[1].textContent).toBe("a");
+    expect(rows[1].getAttribute("data-clicked")).toBe("yes");
   });
 
   it("passes index correctly to render function", () => {

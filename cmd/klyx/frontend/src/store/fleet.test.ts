@@ -17,6 +17,22 @@ describe("fleet store routing", () => {
     useFleet.getState().setSection("gitops");
     expect(useFleet.getState().route).toEqual({ name: "fleet" });
   });
+  it("openArgo selects an Argo subview in cluster scope", () => {
+    useFleet.getState().openCluster("x");
+    useFleet.getState().openArgo("applicationsets");
+    expect(useFleet.getState().route).toEqual({ name: "cluster", cluster: "x", section: "argo", argoView: "applicationsets" });
+  });
+  it("openWorkloads drops a generic resource route and applies the requested kind filter atomically", () => {
+    useFleet.getState().openCluster("x");
+    useFleet.getState().openResource({ group: "apps", version: "v1", plural: "replicasets", kind: "ReplicaSet", scope: "Namespaced" });
+    useFleet.getState().openWorkloads(["StatefulSet"]);
+    expect(useFleet.getState().route).toEqual({ name: "cluster", cluster: "x", section: "workloads" });
+    expect(useFleet.getState().workloads.kindFilter).toEqual({
+      Deployment: false,
+      StatefulSet: true,
+      DaemonSet: false,
+    });
+  });
   it("openFleet returns to the grid", () => {
     useFleet.getState().openCluster("x");
     useFleet.getState().openFleet();
@@ -116,6 +132,9 @@ test("instance detail drill-in route + slice", () => {
   uf3.getState().setInstanceDetail({ kind: "Certificate", namespace: "default", name: "web-tls", created: "", labels: {}, conditions: [], events: [], yaml: "kind: Certificate\n" });
   expect(uf3.getState().instanceDetail.detail?.yaml).toContain("Certificate");
   expect(uf3.getState().instanceDetail.loading).toBe(false);
+  uf3.getState().setInstanceDetailLoading({ namespace: "default", name: "web-tls" });
+  expect(uf3.getState().instanceDetail.detail?.yaml).toContain("Certificate");
+  expect(uf3.getState().instanceDetail.loading).toBe(true);
 
   uf3.getState().closeInstance();
   const r2 = uf3.getState().route;
@@ -144,12 +163,14 @@ import { useFleet as uf4 } from "./fleet";
 
 test("network gateway drill-in route + slice", () => {
   uf4.getState().openCluster("x");
-  uf4.getState().setSection("network");
+  uf4.getState().setSection("gatewayApi");
   uf4.getState().openGateway("infra", "eg");
   const r = uf4.getState().route;
-  expect(r).toMatchObject({ name: "cluster", section: "network", gateway: { namespace: "infra", name: "eg" } });
+  expect(r).toMatchObject({ name: "cluster", section: "gatewayApi", gateway: { namespace: "infra", name: "eg" } });
   expect(uf4.getState().network.selected).toEqual({ namespace: "infra", name: "eg" });
   expect(uf4.getState().network.topologyLoading).toBe(true);
+  // openGateway stamps the slice with the route's cluster.
+  expect(uf4.getState().network.cluster).toBe("x");
 
   uf4.getState().setTopology({ gateway: { listeners: [], policies: [] } as any, routes: [], warnings: [] });
   expect(uf4.getState().network.topology?.routes.length).toBe(0);
@@ -159,7 +180,30 @@ test("network gateway drill-in route + slice", () => {
   const r2 = uf4.getState().route;
   expect(r2.name === "cluster" && r2.gateway).toBeUndefined();
 
-  uf4.getState().setGateways({ gatewayAPIServed: true, gateways: [{ namespace: "infra", name: "eg", className: "envoy-gateway", accepted: true, programmed: true }] });
+  uf4.getState().setGatewaysLoading("x");
+  uf4.getState().setGateways("x", { gatewayAPIServed: true, gateways: [{ namespace: "infra", name: "eg", className: "envoy-gateway", accepted: true, programmed: true }] });
   expect(uf4.getState().network.gateways.length).toBe(1);
+  expect(uf4.getState().network.served).toBe(true);
+});
+
+test("network slice is scoped to its cluster", () => {
+  uf4.getState().setGatewaysLoading("a");
+  uf4.getState().setGateways("a", { gatewayAPIServed: true, gateways: [{ namespace: "infra", name: "eg", className: "envoy-gateway", accepted: true, programmed: true }] });
+  expect(uf4.getState().network.cluster).toBe("a");
+
+  // Switching to cluster b drops a's gateways instead of rendering them under b.
+  uf4.getState().setGatewaysLoading("b");
+  expect(uf4.getState().network.cluster).toBe("b");
+  expect(uf4.getState().network.gateways.length).toBe(0);
+  expect(uf4.getState().network.served).toBe(false);
+  expect(uf4.getState().network.listLoading).toBe(true);
+
+  // A stale in-flight response from cluster a is dropped.
+  uf4.getState().setGateways("a", { gatewayAPIServed: true, gateways: [{ namespace: "infra", name: "eg", className: "envoy-gateway", accepted: true, programmed: true }] });
+  expect(uf4.getState().network.gateways.length).toBe(0);
+  expect(uf4.getState().network.cluster).toBe("b");
+
+  uf4.getState().setGateways("b", { gatewayAPIServed: true, gateways: [] });
+  expect(uf4.getState().network.listLoading).toBe(false);
   expect(uf4.getState().network.served).toBe(true);
 });

@@ -40,11 +40,12 @@ type PodOnNodeDTO struct {
 
 // NodeDetailDTO is the full per-node detail view.
 type NodeDetailDTO struct {
-	Summary    NodeSummaryDTO    `json:"summary"`
-	Labels     map[string]string `json:"labels"`
-	Taints     []NodeTaintDTO    `json:"taints"`
-	Conditions []ConditionDTO    `json:"conditions"`
-	Events     []EventDTO        `json:"events"`
-	YAML       string            `json:"yaml"`
-	PodsOnNode []PodOnNodeDTO    `json:"podsOnNode"`
+	Summary     NodeSummaryDTO    `json:"summary"`
+	Labels      map[string]string `json:"labels"`
+	Annotations map[string]string `json:"annotations"`
+	Taints      []NodeTaintDTO    `json:"taints"`
+	Conditions  []ConditionDTO    `json:"conditions"`
+	Events      []EventDTO        `json:"events"`
+	YAML        string            `json:"yaml"`
+	PodsOnNode  []PodOnNodeDTO    `json:"podsOnNode"`
 }
