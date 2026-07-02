@@ -30,17 +30,24 @@ var issuerKinds = []struct {
 }
 
 // OpenCertManager starts (idempotently) the lazy dynamic informers on the
-// cert-manager CRDs (Certificate + Issuer + ClusterIssuer). Mirrors OpenGitOps.
+// cert-manager CRDs (Certificate + Issuer + ClusterIssuer). Mirrors OpenGitOps,
+// including the opening/wanted flags that keep a Close landing mid-open from
+// leaking the freshly started factory.
 func (c *ClusterConn) OpenCertManager() {
 	c.mu.Lock()
-	if c.certmgr != nil {
+	c.certmgrWanted = true
+	if c.certmgr != nil || c.certmgrOpening {
 		c.mu.Unlock()
 		return
 	}
+	c.certmgrOpening = true
 	dyn := c.dyn
 	parent := c.ctx
 	c.mu.Unlock()
 	if dyn == nil || parent == nil {
+		c.mu.Lock()
+		c.certmgrOpening = false
+		c.mu.Unlock()
 		return
 	}
 
@@ -60,13 +67,22 @@ func (c *ClusterConn) OpenCertManager() {
 	factory.Start(gctx.Done())
 
 	c.mu.Lock()
+	c.certmgrOpening = false
+	if !c.certmgrWanted {
+		// Closed while we were starting: don't install; stop the factory.
+		c.mu.Unlock()
+		cancel()
+		return
+	}
 	c.certmgr = &certmanagerWatch{cancel: cancel, certInf: certInf, issInf: issInf}
 	c.mu.Unlock()
 }
 
-// CloseCertManager stops the cert-manager informers.
+// CloseCertManager stops the cert-manager informers. Clearing certmgrWanted
+// also aborts an in-flight OpenCertManager install (see OpenGitOps).
 func (c *ClusterConn) CloseCertManager() {
 	c.mu.Lock()
+	c.certmgrWanted = false
 	g := c.certmgr
 	c.certmgr = nil
 	c.mu.Unlock()

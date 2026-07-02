@@ -31,6 +31,12 @@ func (c *ClusterConn) startCapHealth(ctx context.Context, set capability.Set) {
 
 	h := &capHealth{set: set, apply: c.applyGitOpsHealth}
 
+	// Two passes: assign every informer field and register handlers first, start
+	// factories second. A started informer's handler runs recompute() on an
+	// informer goroutine and reads BOTH h.fluxInf and h.argoInf - starting the
+	// first factory while the second field is still being assigned is a data
+	// race (and a tier computed without the other tool) on Flux+Argo clusters.
+	var factories []informers.SharedInformerFactory
 	for _, ref := range refs {
 		factory := informers.NewSharedInformerFactoryWithOptions(c.typed, defaultResync,
 			informers.WithNamespace(ref.Namespace),
@@ -58,6 +64,9 @@ func (c *ClusterConn) startCapHealth(ctx context.Context, set capability.Set) {
 			UpdateFunc: func(interface{}, interface{}) { h.recompute() },
 			DeleteFunc: func(interface{}) { h.recompute() },
 		})
+		factories = append(factories, factory)
+	}
+	for _, factory := range factories {
 		factory.Start(ctx.Done())
 	}
 

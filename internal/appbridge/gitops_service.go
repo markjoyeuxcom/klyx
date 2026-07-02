@@ -80,6 +80,18 @@ func (s *GitOpsService) Open(cluster string) {
 	s.mu.Unlock()
 
 	conn.OpenGitOps()
+
+	// Re-check after the (slow, discovery-bound) open: a Close that landed in
+	// between already cancelled our entry, and the watch it closed at the conn
+	// may have been re-opened by the line above - tear it down again so no
+	// consumer-less watch survives.
+	s.mu.Lock()
+	_, stillActive := s.cancels[cluster]
+	s.mu.Unlock()
+	if !stillActive {
+		conn.CloseGitOps()
+		return
+	}
 	go s.pushLoop(ctx, cluster, conn)
 }
 

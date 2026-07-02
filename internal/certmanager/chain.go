@@ -61,6 +61,13 @@ type Chain struct {
 func ParseChainNode(u *unstructured.Unstructured) ChainNode {
 	n := ChainNode{Kind: Kind(u.GetKind()), Namespace: u.GetNamespace(), Name: u.GetName()}
 	n.Ready, n.Reason, n.Message = readyFromConditions(u)
+	if n.Kind == CertificateRequestKind && n.Ready == Failed && n.Reason == "Pending" {
+		// Ready=False reason=Pending is a CertificateRequest's normal in-flight
+		// state, not a failure - its terminal reasons are Failed and Denied.
+		// Certificates signal in-flight via a separate Issuing condition, so
+		// this remap applies only to requests.
+		n.Ready = Issuing
+	}
 	if n.Ready == Unknown {
 		if st, _, _ := unstructured.NestedString(u.Object, "status", "state"); st != "" {
 			n.Ready = acmeStateToReady(st)

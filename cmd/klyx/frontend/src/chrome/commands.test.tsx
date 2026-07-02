@@ -53,7 +53,7 @@ function makeStore(over: Partial<FleetStore>): FleetStore {
     gitops: { cluster: null, resources: [] },
     argo: { cluster: null, apps: [], expanded: [] },
     helm: { cluster: null, releases: [] },
-    network: { gateways: [], topology: null },
+    network: { cluster: null, gateways: [], topology: null },
     instances: { ref: null, rows: [], riskOnly: false },
     instanceDetail: { ref: null, detail: null, loading: false },
   };
@@ -310,6 +310,7 @@ describe("buildCommands", () => {
       openGateway,
       selectRoute,
       network: {
+        cluster: "dev",
         gateways: [],
         topology: {
           gateway: { namespace: "gateway-system", name: "shared", className: "envoy", listeners: [], accepted: true, programmed: true, policies: [] },

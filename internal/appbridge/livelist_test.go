@@ -85,13 +85,18 @@ type fakeLivePodConn struct {
 	noInitialUp bool
 	computeFail bool
 	listCalls   int
+	listHook    func() // if set, invoked (outside the lock) during each ListPods
 }
 
 func (f *fakeLivePodConn) ListPods(context.Context, string) ([]workloads.PodSummary, error) {
 	f.mu.Lock()
 	f.listCalls++
 	fail := f.computeFail
+	hook := f.listHook
 	f.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
 	if fail {
 		return nil, context.DeadlineExceeded
 	}
@@ -182,6 +187,30 @@ func TestLiveList_DirtyTriggersEmit(t *testing.T) {
 	conn.fireDirty()
 	if !liveWaitUntil(t, time.Second, func() bool { return em.countOf("livePods:c:ns") > base }) {
 		t.Fatalf("dirty did not trigger a re-emit; count stuck at %d", em.countOf("livePods:c:ns"))
+	}
+}
+
+// TestLiveList_DirtyDuringInitialComputeSurvives fires a watch event while the
+// initial compute is listing. The coalescing flag must be cleared BEFORE that
+// compute, so the mid-compute event survives and drives a re-list on the next
+// tick - clearing after the compute would swallow it and the list would stay
+// stale until the next (possibly never) watch event.
+func TestLiveList_DirtyDuringInitialComputeSurvives(t *testing.T) {
+	em := &anyEmitter{}
+	conn := &fakeLivePodConn{}
+	var once sync.Once
+	conn.listHook = func() {
+		once.Do(conn.fireDirty) // pod flips while the initial LIST is in flight
+	}
+	svc := newFastPodsSvc(conn, em)
+
+	svc.OpenLivePods("c", "ns")
+	defer svc.CloseLivePods("c", "ns")
+
+	// The immediate emit plus the dirty-driven re-emit: count must reach 2
+	// without any further dirty signals.
+	if !liveWaitUntil(t, time.Second, func() bool { return em.countOf("livePods:c:ns") >= 2 }) {
+		t.Fatalf("dirty fired during the initial compute was swallowed; emits: %d", em.countOf("livePods:c:ns"))
 	}
 }
 

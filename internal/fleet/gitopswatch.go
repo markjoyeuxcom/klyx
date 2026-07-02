@@ -42,16 +42,27 @@ func preferredVersion(disc discovery.DiscoveryInterface, group, fallback string)
 }
 
 // OpenGitOps starts (idempotently) the lazy dynamic informers on the Flux CRDs.
+//
+// The discovery + factory build happens outside the lock (network I/O), so the
+// check-and-install is guarded by two flags: gitopsOpening single-flights
+// concurrent Opens, and gitopsWanted records the desired state so a Close that
+// lands mid-open makes the install abort and tear the factory down instead of
+// leaking its watches.
 func (c *ClusterConn) OpenGitOps() {
 	c.mu.Lock()
-	if c.gitops != nil {
+	c.gitopsWanted = true
+	if c.gitops != nil || c.gitopsOpening {
 		c.mu.Unlock()
 		return
 	}
+	c.gitopsOpening = true
 	dyn := c.dyn
 	parent := c.ctx
 	c.mu.Unlock()
 	if dyn == nil || parent == nil {
+		c.mu.Lock()
+		c.gitopsOpening = false
+		c.mu.Unlock()
 		return
 	}
 
@@ -77,6 +88,13 @@ func (c *ClusterConn) OpenGitOps() {
 	factory.Start(gctx.Done())
 
 	c.mu.Lock()
+	c.gitopsOpening = false
+	if !c.gitopsWanted {
+		// Closed while we were starting: don't install; stop the factory.
+		c.mu.Unlock()
+		cancel()
+		return
+	}
 	c.gitops = &gitopsWatch{cancel: cancel, ksInf: ksInf, hrInf: hrInf, srcInf: srcInf}
 	c.mu.Unlock()
 }
@@ -96,9 +114,11 @@ var sourceKinds = []struct {
 	{flux.HelmChartKind, "source.toolkit.fluxcd.io", "helmcharts", "v1"},
 }
 
-// CloseGitOps stops the Flux informers.
+// CloseGitOps stops the Flux informers. Clearing gitopsWanted also aborts an
+// in-flight OpenGitOps install (see OpenGitOps).
 func (c *ClusterConn) CloseGitOps() {
 	c.mu.Lock()
+	c.gitopsWanted = false
 	g := c.gitops
 	c.gitops = nil
 	c.mu.Unlock()

@@ -99,9 +99,14 @@ export function GitOps({ cluster }: { cluster: string }) {
 
   useEffect(() => {
     if (absent) return;
+    // If cleanup runs before openGitOps resolves, invoke the late-arriving
+    // unsubscriber immediately - otherwise its listener leaks for the app's
+    // lifetime and duplicates store writes on every reopen.
+    let cancelled = false;
     let off = () => {};
-    openGitOps(cluster).then((u) => (off = u)).catch((e) => console.error("openGitOps", e));
+    openGitOps(cluster).then((u) => (cancelled ? u() : (off = u))).catch((e) => console.error("openGitOps", e));
     return () => {
+      cancelled = true;
       off();
       void closeGitOps(cluster);
     };

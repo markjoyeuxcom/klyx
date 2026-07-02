@@ -97,9 +97,14 @@ export function CertsView({ cluster }: { cluster: string }) {
 
   useEffect(() => {
     if (absent) return;
+    // If cleanup runs before openCertManager resolves, invoke the late-arriving
+    // unsubscriber immediately - otherwise its listener leaks for the app's
+    // lifetime and duplicates store writes on every reopen.
+    let cancelled = false;
     let off = () => {};
-    openCertManager(cluster).then((u) => (off = u)).catch((e) => console.error("openCertManager", e));
+    openCertManager(cluster).then((u) => (cancelled ? u() : (off = u))).catch((e) => console.error("openCertManager", e));
     return () => {
+      cancelled = true;
       off();
       void closeCertManager(cluster);
     };

@@ -48,9 +48,16 @@ export function GatewayApiView({ cluster }: { cluster: string }) {
     if (!gateway) listGateways(cluster).catch((e) => console.error("listGateways", e));
   }, [cluster, gateway]);
 
+  // Until the slice belongs to this cluster, render the loading state rather
+  // than another cluster's gateways (one frame before the effect's fetch lands).
+  const sameCluster = net.cluster === cluster;
+  const gateways = sameCluster ? net.gateways : [];
+  const listLoading = !sameCluster || net.listLoading;
+  const served = sameCluster && net.served;
+
   const orderedGateways = useMemo(
-    () => [...net.gateways].sort((a, b) => Number(isPending(b)) - Number(isPending(a)) || a.namespace.localeCompare(b.namespace) || a.name.localeCompare(b.name)),
-    [net.gateways],
+    () => [...gateways].sort((a, b) => Number(isPending(b)) - Number(isPending(a)) || a.namespace.localeCompare(b.namespace) || a.name.localeCompare(b.name)),
+    [gateways],
   );
   const q = query.trim().toLowerCase();
   const visibleGateways = orderedGateways.filter((g) => {
@@ -59,15 +66,15 @@ export function GatewayApiView({ cluster }: { cluster: string }) {
     if (!q) return true;
     return [g.namespace, g.name, g.className, gatewayStatus(g), gatewayAddress(g), gatewayListeners(g)].some((v) => v.toLowerCase().includes(q));
   });
-  const pending = net.gateways.filter(isPending).length;
-  const programmed = net.gateways.length - pending;
-  const classes = new Set(net.gateways.map((g) => g.className).filter(Boolean)).size;
+  const pending = gateways.filter(isPending).length;
+  const programmed = gateways.length - pending;
+  const classes = new Set(gateways.map((g) => g.className).filter(Boolean)).size;
 
   if (gateway) return <GatewayTopology cluster={cluster} gateway={gateway} />;
 
-  if (net.listLoading && net.gateways.length === 0) return <div style={empty}>Loading Gateways…</div>;
-  if (!net.served) return <div style={empty}>Gateway API is not installed on this cluster.</div>;
-  if (net.gateways.length === 0) return <div style={empty}>No Gateways found.</div>;
+  if (listLoading && gateways.length === 0) return <div style={empty}>Loading Gateways…</div>;
+  if (!served) return <div style={empty}>Gateway API is not installed on this cluster.</div>;
+  if (gateways.length === 0) return <div style={empty}>No Gateways found.</div>;
 
   return (
     <div style={{ padding: "14px 16px", display: "flex", flexDirection: "column", gap: 12, height: "100%", minHeight: 0, overflow: "hidden", boxSizing: "border-box" }}>
@@ -82,14 +89,14 @@ export function GatewayApiView({ cluster }: { cluster: string }) {
       </div>
 
       <div style={{ ...frame, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", overflow: "hidden" }}>
-        <SummaryCell label="gateways" value={String(net.gateways.length)} />
+        <SummaryCell label="gateways" value={String(gateways.length)} />
         <SummaryCell label="programmed" value={String(programmed)} tone="success" />
         <SummaryCell label="pending" value={String(pending)} tone={pending > 0 ? "warning" : "muted"} />
         <SummaryCell label="classes" value={String(classes)} />
       </div>
 
       <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
-        <FilterButton label="all" count={net.gateways.length} active={mode === "all"} onClick={() => setMode("all")} />
+        <FilterButton label="all" count={gateways.length} active={mode === "all"} onClick={() => setMode("all")} />
         <FilterButton label="pending" count={pending} active={mode === "pending"} onClick={() => setMode("pending")} />
         <FilterButton label="programmed" count={programmed} active={mode === "programmed"} onClick={() => setMode("programmed")} />
         <input
@@ -99,7 +106,7 @@ export function GatewayApiView({ cluster }: { cluster: string }) {
           aria-label="filter gateways"
           style={{ marginLeft: "auto", fontSize: 11, padding: "3px 8px", borderRadius: 4, border: "0.5px solid var(--color-border-tertiary)", background: "var(--color-background-primary)", color: "var(--color-text-primary)", width: 180 }}
         />
-        {visibleGateways.length !== net.gateways.length && <span style={{ fontSize: 10, color: "var(--color-text-tertiary)" }}>{visibleGateways.length} of {net.gateways.length}</span>}
+        {visibleGateways.length !== gateways.length && <span style={{ fontSize: 10, color: "var(--color-text-tertiary)" }}>{visibleGateways.length} of {gateways.length}</span>}
       </div>
 
       <div style={{ ...frame, overflow: "hidden", minHeight: 0, display: "flex", flexDirection: "column", flex: 1 }}>

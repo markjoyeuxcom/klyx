@@ -28,7 +28,7 @@ const multiTopo: TopologyDTO = {
 function seed(t: TopologyDTO | null, loading = false, metrics?: { routeMetrics?: Record<string, RouteMetricDTO>; routeMetricsStatus?: RouteMetricsStatusDTO | null; routeMetricsStale?: boolean }) {
   useFleet.setState({
     route: { name: "cluster", cluster: "x", section: "gatewayApi", gateway },
-    network: { served: true, gateways: [], listLoading: false, selected: gateway, topology: t, topologyLoading: loading, selectedRoute: null, routeMetrics: metrics?.routeMetrics ?? {}, routeMetricsStatus: metrics?.routeMetricsStatus ?? null, routeMetricsStale: metrics?.routeMetricsStale ?? false },
+    network: { cluster: "x", served: true, gateways: [], listLoading: false, selected: gateway, topology: t, topologyLoading: loading, selectedRoute: null, routeMetrics: metrics?.routeMetrics ?? {}, routeMetricsStatus: metrics?.routeMetricsStatus ?? null, routeMetricsStale: metrics?.routeMetricsStale ?? false },
     certmanager: { cluster: null, certificates: [], issuers: [], loading: false, selectedKey: null, chain: null, chainLoading: false },
   });
 }

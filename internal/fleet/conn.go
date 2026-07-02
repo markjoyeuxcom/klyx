@@ -134,7 +134,11 @@ type ClusterConn struct {
 	refresh        chan struct{}     // buffered(1); coalesces informer events
 	ctx            context.Context   // captured in Start; scopes lazy watches
 	gitops         *gitopsWatch      // lazy; nil until OpenGitOps
+	gitopsOpening  bool              // single-flights OpenGitOps' out-of-lock install
+	gitopsWanted   bool              // desired state; an in-flight open aborts if false
 	certmgr        *certmanagerWatch // lazy; nil until OpenCertManager
+	certmgrOpening bool              // single-flights OpenCertManager's out-of-lock install
+	certmgrWanted  bool              // desired state; an in-flight open aborts if false
 
 	// metricsMu guards the metrics cache. Note: ClusterMetrics holds it across
 	// the probe + sample network I/O (up to a few seconds). This serializes

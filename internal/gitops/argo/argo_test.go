@@ -159,8 +159,14 @@ func TestParseApplicationSet(t *testing.T) {
 			},
 		},
 		"status": map[string]interface{}{
-			"resources":  []interface{}{map[string]interface{}{"name": "dev-platform"}, map[string]interface{}{"name": "prd-platform"}},
-			"conditions": []interface{}{map[string]interface{}{"type": "ResourcesUpToDate", "status": "True", "reason": "ok", "message": "generated"}},
+			"resources": []interface{}{map[string]interface{}{"name": "dev-platform"}, map[string]interface{}{"name": "prd-platform"}},
+			// The full condition set a healthy ApplicationSet controller emits:
+			// ErrorOccurred is False on success - inverse polarity to the rest.
+			"conditions": []interface{}{
+				map[string]interface{}{"type": "ErrorOccurred", "status": "False", "reason": "ApplicationSetUpToDate", "message": "Successfully generated parameters for all Applications"},
+				map[string]interface{}{"type": "ParametersGenerated", "status": "True", "reason": "ParametersGenerated", "message": "Successfully generated parameters for all Applications"},
+				map[string]interface{}{"type": "ResourcesUpToDate", "status": "True", "reason": "ApplicationSetUpToDate", "message": "ApplicationSet up to date"},
+			},
 		},
 	}}
 	a := ParseApplicationSet(u)
@@ -169,6 +175,54 @@ func TestParseApplicationSet(t *testing.T) {
 	}
 	if a.DestServer != "https://kubernetes.default.svc" || len(a.GeneratedNames) != 2 || a.GeneratedNames[0] != "dev-platform" {
 		t.Fatalf("applicationset details: %+v", a)
+	}
+	if len(a.Conditions) != 3 {
+		t.Fatalf("conditions: %+v", a.Conditions)
+	}
+}
+
+func TestParseApplicationSetConditionPolarity(t *testing.T) {
+	appSet := func(conds ...map[string]interface{}) *unstructured.Unstructured {
+		items := make([]interface{}, 0, len(conds))
+		for _, c := range conds {
+			items = append(items, map[string]interface{}(c))
+		}
+		return &unstructured.Unstructured{Object: map[string]interface{}{
+			"metadata": map[string]interface{}{"name": "s", "namespace": "argocd"},
+			"status":   map[string]interface{}{"conditions": items},
+		}}
+	}
+	cases := []struct {
+		name    string
+		u       *unstructured.Unstructured
+		healthy bool
+	}{
+		{"error occurred true is broken", appSet(
+			map[string]interface{}{"type": "ErrorOccurred", "status": "True", "reason": "ApplicationGenerationError"},
+		), false},
+		{"error occurred false is healthy", appSet(
+			map[string]interface{}{"type": "ErrorOccurred", "status": "False", "reason": "ApplicationSetUpToDate"},
+		), true},
+		{"resources not up to date is broken", appSet(
+			map[string]interface{}{"type": "ErrorOccurred", "status": "False", "reason": "ApplicationSetUpToDate"},
+			map[string]interface{}{"type": "ResourcesUpToDate", "status": "False", "reason": "ErrorOccurred"},
+		), false},
+		{"parameters not generated is broken", appSet(
+			map[string]interface{}{"type": "ParametersGenerated", "status": "False", "reason": "ErrorOccurred"},
+		), false},
+		{"rollout progressing is neutral", appSet(
+			map[string]interface{}{"type": "ErrorOccurred", "status": "False", "reason": "ApplicationSetUpToDate"},
+			map[string]interface{}{"type": "ResourcesUpToDate", "status": "True", "reason": "ApplicationSetUpToDate"},
+			map[string]interface{}{"type": "RolloutProgressing", "status": "True", "reason": "ApplicationSetRolloutProgressing"},
+		), true},
+		{"unknown condition type is neutral", appSet(
+			map[string]interface{}{"type": "SomeFutureCondition", "status": "False", "reason": "x"},
+		), true},
+	}
+	for _, tc := range cases {
+		if got := ParseApplicationSet(tc.u).Healthy; got != tc.healthy {
+			t.Errorf("%s: Healthy=%v, want %v", tc.name, got, tc.healthy)
+		}
 	}
 }
 

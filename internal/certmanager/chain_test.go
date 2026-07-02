@@ -50,16 +50,45 @@ func TestParseChainNodeACMEState(t *testing.T) {
 }
 
 func TestParseChainNodeCertificateRequestCondition(t *testing.T) {
+	req := func(status, reason, message string) *unstructured.Unstructured {
+		return &unstructured.Unstructured{Object: map[string]interface{}{
+			"kind":     "CertificateRequest",
+			"metadata": map[string]interface{}{"name": "acme-demo-1", "namespace": "payments"},
+			"status": map[string]interface{}{"conditions": []interface{}{
+				map[string]interface{}{"type": "Ready", "status": status, "reason": reason, "message": message},
+			}},
+		}}
+	}
+	// Ready=False reason=Pending is the request's normal in-flight state - it
+	// must read Issuing, not Failed (a plain renewal is not a broken chain).
+	n := ParseChainNode(req("False", "Pending", "Waiting on order"))
+	if n.Ready != Issuing || n.Reason != "Pending" {
+		t.Fatalf("pending request node: %+v", n)
+	}
+	// Failed and Denied are the terminal reasons.
+	if n := ParseChainNode(req("False", "Failed", "order errored")); n.Ready != Failed {
+		t.Fatalf("failed request node: %+v", n)
+	}
+	if n := ParseChainNode(req("False", "Denied", "denied by approver")); n.Ready != Failed {
+		t.Fatalf("denied request node: %+v", n)
+	}
+	if n := ParseChainNode(req("True", "Issued", "issued")); n.Ready != Ready {
+		t.Fatalf("issued request node: %+v", n)
+	}
+}
+
+func TestParseChainNodePendingRemapOnlyForRequests(t *testing.T) {
+	// The Pending remap is request-specific: any other kind with Ready=False
+	// reason=Pending keeps Failed semantics.
 	u := &unstructured.Unstructured{Object: map[string]interface{}{
-		"kind":     "CertificateRequest",
-		"metadata": map[string]interface{}{"name": "acme-demo-1", "namespace": "payments"},
+		"kind":     "Order",
+		"metadata": map[string]interface{}{"name": "ord", "namespace": "payments"},
 		"status": map[string]interface{}{"conditions": []interface{}{
-			map[string]interface{}{"type": "Ready", "status": "False", "reason": "Pending", "message": "Waiting on order"},
+			map[string]interface{}{"type": "Ready", "status": "False", "reason": "Pending", "message": "x"},
 		}},
 	}}
-	n := ParseChainNode(u)
-	if n.Ready != Failed || n.Reason != "Pending" {
-		t.Fatalf("request node: %+v", n)
+	if n := ParseChainNode(u); n.Ready != Failed {
+		t.Fatalf("order node: %+v", n)
 	}
 }
 

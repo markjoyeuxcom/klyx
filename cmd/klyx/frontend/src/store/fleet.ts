@@ -358,6 +358,7 @@ export type RouteMetricsStatusDTO = { available: boolean; message: string; updat
 export type RouteMetricsResultDTO = { status: RouteMetricsStatusDTO; routes: Record<string, RouteMetricDTO> };
 
 export type NetworkSlice = {
+  cluster: string | null;
   served: boolean;
   gateways: GatewayRefDTO[];
   listLoading: boolean;
@@ -530,9 +531,9 @@ type FleetState = {
   openGateway: (namespace: string, name: string) => void;
   closeGateway: () => void;
   network: NetworkSlice;
-  setGatewaysLoading: () => void;
-  setGateways: (l: GatewayListDTO) => void;
-  setTopologyLoading: (ref: GatewayRef) => void;
+  setGatewaysLoading: (cluster: string) => void;
+  setGateways: (cluster: string, l: GatewayListDTO) => void;
+  setTopologyLoading: (cluster: string, ref: GatewayRef) => void;
   setTopology: (t: TopologyDTO) => void;
   selectRoute: (key: string | null) => void;
   clearNetwork: () => void;
@@ -718,19 +719,33 @@ export const useFleet = create<FleetState>((set) => ({
   setCRDSearch: (search) => set((s) => ({ crd: { ...s.crd, search } })),
   setBuiltinCategory: (builtinCategory) => set((s) => ({ crd: { ...s.crd, builtinCategory } })),
   openGateway: (namespace, name) =>
-    set((s) =>
-      s.route.name === "cluster"
-        ? {
-            route: { name: "cluster", cluster: s.route.cluster, section: "gatewayApi", gateway: { namespace, name } },
-            network: { ...s.network, selected: { namespace, name }, topology: null, topologyLoading: true, selectedRoute: null, routeMetrics: {}, routeMetricsStatus: null, routeMetricsStale: false },
-          }
-        : {}),
+    set((s) => {
+      if (s.route.name !== "cluster") return {};
+      // Crossing clusters (palette jump straight to a topology): drop the
+      // previous cluster's gateway list along with stamping the new owner.
+      const base = s.network.cluster === s.route.cluster ? s.network : { ...s.network, cluster: s.route.cluster, served: false, gateways: [], listLoading: false };
+      return {
+        route: { name: "cluster", cluster: s.route.cluster, section: "gatewayApi", gateway: { namespace, name } },
+        network: { ...base, selected: { namespace, name }, topology: null, topologyLoading: true, selectedRoute: null, routeMetrics: {}, routeMetricsStatus: null, routeMetricsStale: false },
+      };
+    }),
   closeGateway: () =>
     set((s) => (s.route.name === "cluster" ? { route: { name: "cluster", cluster: s.route.cluster, section: "gatewayApi" } } : {})),
-  network: { served: false, gateways: [], listLoading: false, selected: null, topology: null, topologyLoading: false, selectedRoute: null, routeMetrics: {}, routeMetricsStatus: null, routeMetricsStale: false },
-  setGatewaysLoading: () => set((s) => ({ network: { ...s.network, listLoading: true } })),
-  setGateways: (l) => set((s) => ({ network: { ...s.network, served: l.gatewayAPIServed, gateways: l.gateways ?? [], listLoading: false } })),
-  setTopologyLoading: (ref) => set((s) => ({ network: { ...s.network, selected: ref, topology: null, topologyLoading: true, selectedRoute: null, routeMetrics: {}, routeMetricsStatus: null, routeMetricsStale: false } })),
+  network: { cluster: null, served: false, gateways: [], listLoading: false, selected: null, topology: null, topologyLoading: false, selectedRoute: null, routeMetrics: {}, routeMetricsStatus: null, routeMetricsStale: false },
+  setGatewaysLoading: (cluster) => set((s) => {
+    if (s.network.cluster === cluster) return { network: { ...s.network, listLoading: true } };
+    // Cluster switch: drop the previous cluster's gateways instead of rendering
+    // them under the new cluster while the fresh list is in flight.
+    return { network: { cluster, served: false, gateways: [], listLoading: true, selected: null, topology: null, topologyLoading: false, selectedRoute: null, routeMetrics: {}, routeMetricsStatus: null, routeMetricsStale: false } };
+  }),
+  setGateways: (cluster, l) => set((s) => {
+    if (s.network.cluster !== cluster) return {}; // stale in-flight response
+    return { network: { ...s.network, served: l.gatewayAPIServed, gateways: l.gateways ?? [], listLoading: false } };
+  }),
+  setTopologyLoading: (cluster, ref) => set((s) => {
+    const base = s.network.cluster === cluster ? s.network : { ...s.network, cluster, served: false, gateways: [], listLoading: false };
+    return { network: { ...base, selected: ref, topology: null, topologyLoading: true, selectedRoute: null, routeMetrics: {}, routeMetricsStatus: null, routeMetricsStale: false } };
+  }),
   setTopology: (topology) => set((s) => ({ network: { ...s.network, topology, topologyLoading: false } })),
   selectRoute: (selectedRoute) => set((s) => ({ network: { ...s.network, selectedRoute } })),
   clearNetwork: () => set((s) => ({ network: { ...s.network, selected: null, topology: null, topologyLoading: false, selectedRoute: null, routeMetrics: {}, routeMetricsStatus: null, routeMetricsStale: false } })),
@@ -796,7 +811,7 @@ export const useFleet = create<FleetState>((set) => ({
       if (s.workloads.cluster !== cluster || s.workloads.namespace !== namespace) return {};
       return { workloads: { ...s.workloads, live } };
     }),
-  clearWorkloads: () => set((s) => ({ workloads: { ...s.workloads, cluster: null, items: [], namespaces: [], expanded: [], needsAttention: false, search: "", namespace: "", metricsAvailable: false, metricsStatus: null, metricsStale: false, nearLimitSort: false, live: false } })),
+  clearWorkloads: () => set((s) => ({ workloads: { ...s.workloads, cluster: null, items: [], namespaces: [], expanded: [], kindFilter: workloadKindFilterFor(WORKLOAD_KINDS), needsAttention: false, search: "", namespace: "", metricsAvailable: false, metricsStatus: null, metricsStale: false, nearLimitSort: false, live: false } })),
   pods: { cluster: null, namespace: "", items: [], namespaces: [], loading: false, needsAttention: false, search: "", selected: null, detail: null, detailLoading: false, live: false },
   setPodsLoading: (cluster, namespace) => set((s) => ({ pods: { ...s.pods, cluster, namespace, loading: true } })),
   setPods: (cluster, namespace, result) => set((s) => {

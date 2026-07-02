@@ -329,7 +329,9 @@ export function buildCommands(s: FleetStore): Command[] {
   }
 
   // --- Gateway API (when loaded) ---------------------------------------------
-  if (cluster && s.network.gateways.length > 0) {
+  // Only index the slice when it belongs to the current cluster - a stale slice
+  // from a previous cluster must not surface foreign gateways here.
+  if (cluster && s.network.cluster === cluster && s.network.gateways.length > 0) {
     for (const g of s.network.gateways) {
       cmds.push({
         id: `gateway:${g.namespace}/${g.name}`,
@@ -344,7 +346,7 @@ export function buildCommands(s: FleetStore): Command[] {
     }
   }
 
-  if (cluster && s.network.topology?.routes?.length) {
+  if (cluster && s.network.cluster === cluster && s.network.topology?.routes?.length) {
     const gw = s.network.topology.gateway;
     for (const r of s.network.topology.routes) {
       const key = routeKey(r);
@@ -387,8 +389,8 @@ export function buildCommands(s: FleetStore): Command[] {
     addNamespace(s.argo.cluster, a.destNamespace, "argo destination");
   });
   s.network.topology?.routes?.forEach((r) => {
-    addNamespace(cluster, r.namespace, "gateway routes");
-    r.services.forEach((svc) => addNamespace(cluster, svc.namespace, "gateway backends"));
+    addNamespace(s.network.cluster, r.namespace, "gateway routes");
+    r.services.forEach((svc) => addNamespace(s.network.cluster, svc.namespace, "gateway backends"));
   });
   if (s.instances.ref?.kind === "Namespace") {
     s.instances.rows.forEach((r) => addNamespace(cluster, r.name, "namespaces"));

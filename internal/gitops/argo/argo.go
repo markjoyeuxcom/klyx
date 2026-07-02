@@ -326,13 +326,30 @@ func ParseApplicationSet(u *unstructured.Unstructured) ApplicationSet {
 				cond.Reason, _ = m["reason"].(string)
 				cond.Message, _ = m["message"].(string)
 				a.Conditions = append(a.Conditions, cond)
-				if cond.Status != "True" {
+				if appSetConditionBroken(cond) {
 					a.Healthy = false
 				}
 			}
 		}
 	}
 	return a
+}
+
+// appSetConditionBroken applies per-type condition polarity. The ApplicationSet
+// controller emits ErrorOccurred with status False on success (reason
+// ApplicationSetUpToDate) - True means an error, the inverse of the other
+// types. RolloutProgressing is progressive-sync progress info, not health.
+// Unknown types stay neutral: we cannot know their polarity, and the known
+// trio is what the controller drives health with.
+func appSetConditionBroken(cond ApplicationSetCondition) bool {
+	switch cond.Type {
+	case "ErrorOccurred":
+		return cond.Status == "True"
+	case "ParametersGenerated", "ResourcesUpToDate":
+		return cond.Status != "True"
+	default:
+		return false
+	}
 }
 
 // RefreshPatch is the merge patch that asks the controller to re-compare the

@@ -6,7 +6,7 @@ import { GatewayApiView } from "./GatewayApiView";
 vi.mock("../bridge/gateway", () => ({ listGateways: vi.fn(async () => {}), getGatewayTopology: vi.fn(async () => {}) }));
 
 function net(over: Partial<ReturnType<typeof useFleet.getState>["network"]> = {}) {
-  useFleet.setState({ route: { name: "cluster", cluster: "x", section: "gatewayApi" }, network: { served: true, gateways: [], listLoading: false, selected: null, topology: null, topologyLoading: false, selectedRoute: null, routeMetrics: {}, routeMetricsStatus: null, routeMetricsStale: false, ...over } });
+  useFleet.setState({ route: { name: "cluster", cluster: "x", section: "gatewayApi" }, network: { cluster: "x", served: true, gateways: [], listLoading: false, selected: null, topology: null, topologyLoading: false, selectedRoute: null, routeMetrics: {}, routeMetricsStatus: null, routeMetricsStale: false, ...over } });
 }
 
 beforeEach(() => vi.clearAllMocks());

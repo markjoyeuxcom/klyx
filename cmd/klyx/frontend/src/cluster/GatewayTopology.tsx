@@ -129,7 +129,7 @@ export function GatewayTopology({ cluster, gateway }: { cluster: string; gateway
   const [routeMode, setRouteMode] = useState<RouteMode>("all");
 
   useEffect(() => {
-    void getGatewayTopology(cluster, gateway);
+    getGatewayTopology(cluster, gateway).catch((e) => console.error("getGatewayTopology", e));
     return () => useFleet.getState().clearNetwork();
   }, [cluster, gateway.namespace, gateway.name]);
 
@@ -234,7 +234,7 @@ export function GatewayTopology({ cluster, gateway }: { cluster: string; gateway
           </div>
         )}
         <div style={{ flex: 1 }} />
-        <button onClick={() => void getGatewayTopology(cluster, gateway)} style={{ padding: "3px 10px", fontSize: 11, borderRadius: 4, cursor: "pointer", border: "0.5px solid var(--color-border-tertiary)", background: "var(--color-background-primary)", color: "var(--color-text-primary)" }}>Refresh</button>
+        <button onClick={() => getGatewayTopology(cluster, gateway).catch((e) => console.error("getGatewayTopology", e))} style={{ padding: "3px 10px", fontSize: 11, borderRadius: 4, cursor: "pointer", border: "0.5px solid var(--color-border-tertiary)", background: "var(--color-background-primary)", color: "var(--color-text-primary)" }}>Refresh</button>
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", border: "0.5px solid var(--color-border-tertiary)", borderRadius: "var(--border-radius-md)", overflow: "hidden", background: "var(--color-background-primary)", flexShrink: 0 }}>
