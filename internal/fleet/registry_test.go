@@ -43,7 +43,9 @@ func (f *fakeConn) GitOpsResources() []flux.Resource { return nil }
 func (f *fakeConn) GitOpsObject(kind, namespace, name string) (*unstructured.Unstructured, bool) {
 	return nil, false
 }
-func (f *fakeConn) GitOpsSources() []flux.Source { return nil }
+func (f *fakeConn) GitOpsWatchHealth() (bool, string)      { return true, "" }
+func (f *fakeConn) CertManagerWatchHealth() (bool, string) { return true, "" }
+func (f *fakeConn) GitOpsSources() []flux.Source           { return nil }
 func (f *fakeConn) GitOpsSourceObject(kind, namespace, name string) (*unstructured.Unstructured, bool) {
 	return nil, false
 }

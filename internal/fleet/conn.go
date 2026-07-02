@@ -47,11 +47,13 @@ type Conn interface {
 	GitOpsObject(kind, namespace, name string) (*unstructured.Unstructured, bool)
 	GitOpsSources() []flux.Source
 	GitOpsSourceObject(kind, namespace, name string) (*unstructured.Unstructured, bool)
+	GitOpsWatchHealth() (synced bool, lastErr string)
 	OpenCertManager()
 	CloseCertManager()
 	CertManagerCertificates() []certmanager.Certificate
 	CertManagerIssuers() []certmanager.Issuer
 	CertManagerObject(kind, namespace, name string) (*unstructured.Unstructured, bool)
+	CertManagerWatchHealth() (synced bool, lastErr string)
 	GetCertificateChain(ctx context.Context, ns, name string) (certmanager.Chain, error)
 	FluxEvents(ctx context.Context, kind, ns, name string) ([]workloads.EventSummary, error)
 	FluxAvailable() bool
