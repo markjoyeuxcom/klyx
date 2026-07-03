@@ -64,6 +64,7 @@ describe("Sidebar section order", () => {
       "Access control",
       "Gateway API",
       "cert-manager",
+      "External Secrets",
       "Argo CD",
       "Flux CD",
       "Helm",
@@ -110,11 +111,11 @@ describe("Sidebar section order", () => {
     expect(dividers).toHaveLength(4);
   });
 
-  it("renders 14 dividers between the 15 expanded groups", () => {
+  it("renders 15 dividers between the 16 expanded groups", () => {
     localStorage.setItem("klyx-sidebar-expanded", "1");
     const { getAllByRole } = render(<Sidebar />);
     const dividers = getAllByRole("separator");
-    expect(dividers).toHaveLength(14);
+    expect(dividers).toHaveLength(15);
   });
 
   it("collapses expanded menu groups and persists the state", () => {
@@ -353,12 +354,13 @@ describe("Sidebar capability gating", () => {
   });
 
   it("hides tool sections detection says are absent (collapsed rail)", () => {
-    useFleet.setState({ clusters: [cluster({ fluxPresent: false, argoPresent: false, certManagerPresent: false, gatewayAPIVersion: "" })] as never });
+    useFleet.setState({ clusters: [cluster({ fluxPresent: false, argoPresent: false, certManagerPresent: false, externalSecretsPresent: false, gatewayAPIVersion: "" })] as never });
     useFleet.getState().openCluster("x");
     const { queryByLabelText } = render(<Sidebar />);
     expect(queryByLabelText("Flux")).toBeNull();
     expect(queryByLabelText("Argo CD")).toBeNull();
     expect(queryByLabelText("Certificates")).toBeNull();
+    expect(queryByLabelText("External Secrets")).toBeNull();
     expect(queryByLabelText("Gateway API")).toBeNull();
     // Non-tool sections stay.
     expect(queryByLabelText("Pods")).toBeTruthy();
@@ -366,23 +368,25 @@ describe("Sidebar capability gating", () => {
   });
 
   it("shows tool sections that are present (collapsed rail)", () => {
-    useFleet.setState({ clusters: [cluster({ fluxPresent: true, argoPresent: true, certManagerPresent: true, gatewayAPIVersion: "v1" })] as never });
+    useFleet.setState({ clusters: [cluster({ fluxPresent: true, argoPresent: true, certManagerPresent: true, externalSecretsPresent: true, gatewayAPIVersion: "v1" })] as never });
     useFleet.getState().openCluster("x");
     const { queryByLabelText } = render(<Sidebar />);
     expect(queryByLabelText("Flux")).toBeTruthy();
     expect(queryByLabelText("Argo CD")).toBeTruthy();
     expect(queryByLabelText("Certificates")).toBeTruthy();
+    expect(queryByLabelText("External Secrets")).toBeTruthy();
     expect(queryByLabelText("Gateway API")).toBeTruthy();
   });
 
   it("hides absent tool groups in the expanded menu", () => {
     localStorage.setItem("klyx-sidebar-expanded", "1");
-    useFleet.setState({ clusters: [cluster({ fluxPresent: true, argoPresent: false, certManagerPresent: false, gatewayAPIVersion: "" })] as never });
+    useFleet.setState({ clusters: [cluster({ fluxPresent: true, argoPresent: false, certManagerPresent: false, externalSecretsPresent: false, gatewayAPIVersion: "" })] as never });
     useFleet.getState().openCluster("x");
     const { queryByText } = render(<Sidebar />);
     expect(queryByText("Flux CD")).toBeTruthy();
     expect(queryByText("Argo CD")).toBeNull();
     expect(queryByText("cert-manager")).toBeNull();
+    expect(queryByText("External Secrets")).toBeNull();
     expect(queryByText("Gateway API")).toBeNull();
   });
 

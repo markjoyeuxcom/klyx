@@ -207,3 +207,51 @@ test("network slice is scoped to its cluster", () => {
   expect(uf4.getState().network.listLoading).toBe(false);
   expect(uf4.getState().network.served).toBe(true);
 });
+
+describe("externalsecrets slice", () => {
+  const es = { namespace: "payments", name: "stripe-api", state: "Synced", reason: "", message: "", storeKind: "ClusterSecretStore", storeName: "azure-kv", targetSecret: "stripe-api-secret", refreshIntervalSeconds: 3600, lastRefreshAgeSeconds: 60 };
+  const st = { kind: "ClusterSecretStore", namespace: "", name: "azure-kv", state: "Synced", reason: "", message: "", provider: "azurekv" };
+
+  it("loading resets the slice for the claimed cluster", () => {
+    useFleet.getState().setExternalSecrets("x", [es], [st]);
+    useFleet.getState().selectExternalSecret("payments/stripe-api");
+    useFleet.getState().setExternalSecretsLoading("y");
+    const s = useFleet.getState().externalsecrets;
+    expect(s.cluster).toBe("y");
+    expect(s.secrets).toEqual([]);
+    expect(s.stores).toEqual([]);
+    expect(s.loading).toBe(true);
+    expect(s.watchError).toBeNull();
+    expect(s.selectedKey).toBeNull();
+  });
+
+  it("set stamps the cluster and stores the watch error", () => {
+    useFleet.getState().setExternalSecretsLoading("x");
+    useFleet.getState().setExternalSecrets("x", [es], [st], "watch forbidden");
+    const s = useFleet.getState().externalsecrets;
+    expect(s.cluster).toBe("x");
+    expect(s.secrets.length).toBe(1);
+    expect(s.stores.length).toBe(1);
+    expect(s.loading).toBe(false);
+    expect(s.watchError).toBe("watch forbidden");
+    // A following clean push clears the error.
+    useFleet.getState().setExternalSecrets("x", [es], [st]);
+    expect(useFleet.getState().externalsecrets.watchError).toBeNull();
+  });
+
+  it("clear resets everything", () => {
+    useFleet.getState().setExternalSecrets("x", [es], [st]);
+    useFleet.getState().selectExternalSecret("payments/stripe-api");
+    useFleet.getState().clearExternalSecrets();
+    const s = useFleet.getState().externalsecrets;
+    expect(s).toEqual({ cluster: null, secrets: [], stores: [], loading: false, watchError: null, selectedKey: null });
+  });
+
+  it("select toggles the inspected key", () => {
+    useFleet.getState().setExternalSecrets("x", [es], [st]);
+    useFleet.getState().selectExternalSecret("payments/stripe-api");
+    expect(useFleet.getState().externalsecrets.selectedKey).toBe("payments/stripe-api");
+    useFleet.getState().selectExternalSecret(null);
+    expect(useFleet.getState().externalsecrets.selectedKey).toBeNull();
+  });
+});

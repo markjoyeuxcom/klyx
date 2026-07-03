@@ -26,6 +26,7 @@ import (
 	"github.com/moomora/klyx/internal/clustermesh"
 	"github.com/moomora/klyx/internal/config"
 	"github.com/moomora/klyx/internal/crd"
+	"github.com/moomora/klyx/internal/externalsecrets"
 	"github.com/moomora/klyx/internal/fluxcli"
 	"github.com/moomora/klyx/internal/gitops/argo"
 	"github.com/moomora/klyx/internal/gitops/flux"
@@ -55,6 +56,11 @@ type Conn interface {
 	CertManagerObject(kind, namespace, name string) (*unstructured.Unstructured, bool)
 	CertManagerWatchHealth() (synced bool, lastErr string)
 	GetCertificateChain(ctx context.Context, ns, name string) (certmanager.Chain, error)
+	OpenExternalSecrets()
+	CloseExternalSecrets()
+	ExternalSecretsList() []externalsecrets.ExternalSecret
+	ExternalSecretsStores() []externalsecrets.Store
+	ExternalSecretsWatchHealth() (synced bool, lastErr string)
 	FluxEvents(ctx context.Context, kind, ns, name string) ([]workloads.EventSummary, error)
 	FluxAvailable() bool
 	FluxDiffKustomization(ctx context.Context, ns, name, path string) (fluxcli.DiffResult, error)
@@ -144,6 +150,9 @@ type ClusterConn struct {
 	certmgr        *certmanagerWatch         // lazy; nil until OpenCertManager
 	certmgrOpening bool                      // single-flights OpenCertManager's out-of-lock install
 	certmgrWanted  bool                      // desired state; an in-flight open aborts if false
+	eso            *esoWatch                 // lazy; nil until OpenExternalSecrets
+	esoOpening     bool                      // single-flights OpenExternalSecrets' out-of-lock install
+	esoWanted      bool                      // desired state; an in-flight open aborts if false
 
 	// metricsMu guards the metrics cache. Note: ClusterMetrics holds it across
 	// the probe + sample network I/O (up to a few seconds). This serializes

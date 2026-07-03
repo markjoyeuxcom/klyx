@@ -32,10 +32,11 @@ export const toneBorder: Record<Tone, string> = {
 };
 
 // readyColor maps a reconciliation/health state word to a text colour. Shared by
-// the Flux / Argo / Helm / cert-manager lenses. Distinct from `stateColor`
-// (cluster/stateColors.ts), which is cluster *connection* state.
+// the Flux / Argo / Helm / cert-manager / external-secrets lenses. Distinct from
+// `stateColor` (cluster/stateColors.ts), which is cluster *connection* state.
 export const readyColor: Record<string, string> = {
   Ready: "var(--color-text-success)",
+  Synced: "var(--color-text-success)",
   Reconciling: "var(--color-text-info)",
   Issuing: "var(--color-text-info)",
   Failed: "var(--color-text-danger)",

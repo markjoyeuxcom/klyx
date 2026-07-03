@@ -41,6 +41,14 @@ func certManagerControllerDeploy(name string, ready int32) *appsv1.Deployment {
 	}
 }
 
+func externalSecretsControllerDeploy(name string, ready int32) *appsv1.Deployment {
+	return &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "external-secrets"},
+		Status:     appsv1.DeploymentStatus{AvailableReplicas: ready},
+		Spec:       appsv1.DeploymentSpec{Replicas: ptr(int32(1))},
+	}
+}
+
 func ptr[T any](v T) *T { return &v }
 
 func TestDetectCertManagerAbsent(t *testing.T) {
@@ -96,6 +104,44 @@ func TestDetectCertManagerHealthyWithoutACME(t *testing.T) {
 	}
 	if set.CertManager.HasACME {
 		t.Fatal("want HasACME false when only cert-manager.io served")
+	}
+}
+
+func TestDetectExternalSecretsAbsent(t *testing.T) {
+	cs := newFake(nil)
+	set := NewDetector(cs).Detect(context.Background())
+	if set.ExternalSecrets.Tier != Absent {
+		t.Fatalf("want Absent, got %v", set.ExternalSecrets.Tier)
+	}
+	if set.ExternalSecrets.Present {
+		t.Fatal("want not present")
+	}
+}
+
+func TestDetectExternalSecretsPresentButUnhealthy(t *testing.T) {
+	groups := []*metav1.APIResourceList{{GroupVersion: "external-secrets.io/v1"}}
+	cs := newFake(groups, externalSecretsControllerDeploy("external-secrets", 0))
+	set := NewDetector(cs).Detect(context.Background())
+	if set.ExternalSecrets.Tier != Degraded {
+		t.Fatalf("want Degraded, got %v (%s)", set.ExternalSecrets.Tier, set.ExternalSecrets.Reason)
+	}
+	if set.ExternalSecrets.Reason == "" {
+		t.Fatal("expected a reason for degraded external-secrets")
+	}
+	if !set.ExternalSecrets.Present {
+		t.Fatal("want present")
+	}
+}
+
+func TestDetectExternalSecretsHealthy(t *testing.T) {
+	groups := []*metav1.APIResourceList{{GroupVersion: "external-secrets.io/v1beta1"}}
+	cs := newFake(groups, externalSecretsControllerDeploy("external-secrets", 1))
+	set := NewDetector(cs).Detect(context.Background())
+	if set.ExternalSecrets.Tier != Healthy {
+		t.Fatalf("want Healthy, got %v (%s)", set.ExternalSecrets.Tier, set.ExternalSecrets.Reason)
+	}
+	if !set.ExternalSecrets.Present || !set.ExternalSecrets.Healthy {
+		t.Fatalf("want present+healthy, got %+v", set.ExternalSecrets)
 	}
 }
 

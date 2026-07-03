@@ -22,6 +22,8 @@ function message(section: ClusterSection, c: ClusterDTO): string {
       return "";
     case "certs":
       return "";
+    case "externalsecrets":
+      return "";
     case "workloads":
       return "";
     case "pods":

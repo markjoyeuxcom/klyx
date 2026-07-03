@@ -22,6 +22,10 @@ export type ClusterDTO = {
   certManagerReason?: string;
   certManagerPresent?: boolean;
   certManagerHealthy?: boolean;
+  externalSecretsTier?: string;
+  externalSecretsReason?: string;
+  externalSecretsPresent?: boolean;
+  externalSecretsHealthy?: boolean;
   env: string;
   region: string;
   provider: string;
@@ -212,9 +216,45 @@ export type CertManagerSlice = {
   chainLoading: boolean;
 };
 
+// External Secrets Operator lens (M12). Refresh staleness is ESO-native: a
+// Synced secret whose last successful sync is more than 2x its refresh
+// interval old is Stale - the controller has stopped refreshing. A failing
+// bound (Cluster)SecretStore is the headline for a stuck secret, exactly as a
+// failing issuer is for a stuck certificate.
+export type ExternalSecretDTO = {
+  namespace: string;
+  name: string;
+  state: string;
+  reason: string;
+  message: string;
+  storeKind: string;
+  storeName: string;
+  targetSecret: string;
+  refreshIntervalSeconds: number; // 0 = refresh disabled
+  lastRefreshAgeSeconds: number; // 0 = never synced
+  stale?: boolean;
+};
+export type ExternalSecretStoreDTO = {
+  kind: string;
+  namespace: string;
+  name: string;
+  state: string;
+  reason: string;
+  message: string;
+  provider: string;
+};
+export type ExternalSecretsSlice = {
+  cluster: string | null;
+  secrets: ExternalSecretDTO[];
+  stores: ExternalSecretStoreDTO[];
+  loading: boolean;
+  watchError?: string | null; // watch failing before sync (RBAC, CRD mismatch) - not an empty list
+  selectedKey: string | null; // "<namespace>/<name>" of the inspected secret
+};
+
 // "observability" removed 2026-06-10: metrics ship inline in overview/workloads/network lanes
 // (design principle 5); a dedicated surface can return when it has real content.
-export type ClusterSection = "overview" | "gitops" | "argo" | "helm" | "certs" | "gatewayApi" | "resources" | "crds" | "workloads" | "pods" | "events" | "nodes";
+export type ClusterSection = "overview" | "gitops" | "argo" | "helm" | "certs" | "externalsecrets" | "gatewayApi" | "resources" | "crds" | "workloads" | "pods" | "events" | "nodes";
 export type ArgoViewMode = "applications" | "projects" | "applicationsets";
 
 export type OwnerDTO = { kind: string; namespace: string; name: string };
@@ -326,6 +366,7 @@ export const SECTION_LABELS: Record<ClusterSection, string> = {
   argo: "Argo CD",
   helm: "Helm",
   certs: "Certificates",
+  externalsecrets: "External Secrets",
   gatewayApi: "Gateway API",
   resources: "Resources",
   crds: "CRDs",
@@ -531,6 +572,11 @@ type FleetState = {
   clearCertManager: () => void;
   selectCertificate: (key: string | null) => void;
   setCertChain: (chain: CertChainDTO) => void;
+  externalsecrets: ExternalSecretsSlice;
+  setExternalSecrets: (cluster: string, secrets: ExternalSecretDTO[], stores: ExternalSecretStoreDTO[], watchError?: string) => void;
+  setExternalSecretsLoading: (cluster: string) => void;
+  clearExternalSecrets: () => void;
+  selectExternalSecret: (key: string | null) => void;
   actionStatus: ActionStatus | null;
   setActionStatus: (s: ActionStatus) => void;
   clearActionStatus: () => void;
@@ -721,6 +767,12 @@ export const useFleet = create<FleetState>((set) => ({
   clearCertManager: () => set({ certmanager: { cluster: null, certificates: [], issuers: [], loading: false, watchError: null, selectedKey: null, chain: null, chainLoading: false } }),
   selectCertificate: (key) => set((s) => ({ certmanager: { ...s.certmanager, selectedKey: key, chain: null, chainLoading: key !== null } })),
   setCertChain: (chain) => set((s) => ({ certmanager: { ...s.certmanager, chain, chainLoading: false } })),
+
+  externalsecrets: { cluster: null, secrets: [], stores: [], loading: false, watchError: null, selectedKey: null },
+  setExternalSecrets: (cluster, secrets, stores, watchError) => set((s) => ({ externalsecrets: { ...s.externalsecrets, cluster, secrets, stores, loading: false, watchError: watchError || null } })),
+  setExternalSecretsLoading: (cluster) => set((s) => ({ externalsecrets: { ...s.externalsecrets, cluster, secrets: [], stores: [], loading: true, watchError: null, selectedKey: null } })),
+  clearExternalSecrets: () => set({ externalsecrets: { cluster: null, secrets: [], stores: [], loading: false, watchError: null, selectedKey: null } }),
+  selectExternalSecret: (key) => set((s) => ({ externalsecrets: { ...s.externalsecrets, selectedKey: key } })),
   actionStatus: null,
   setActionStatus: (actionStatus) => set({ actionStatus }),
   clearActionStatus: () => set({ actionStatus: null }),
