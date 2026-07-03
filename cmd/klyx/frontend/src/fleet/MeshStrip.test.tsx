@@ -48,4 +48,49 @@ describe("MeshStrip", () => {
     expect(meshed.length).toBe(2);
     expect(meshed[0].textContent).not.toContain("⬡");
   });
+
+  // --- M5-c: peering EDGES drawn as arcs (design principle 4) ---
+
+  it("draws a solid arc for a mutual edge with a mutual-peering title", () => {
+    const { container } = render(<MeshStrip graph={graph} />);
+    const arc = container.querySelector('path[data-kind="mutual"]') as SVGPathElement;
+    expect(arc).toBeTruthy();
+    expect(arc.getAttribute("stroke-dasharray")).toBeNull(); // solid
+    expect(arc.querySelector("title")?.textContent).toBe("ctx-blue ⇄ ctx-orange — mutual peering");
+  });
+
+  it("draws a dashed muted arc to an off-fleet peer and never calls it mutual", () => {
+    const { container } = render(<MeshStrip graph={graph} />);
+    const arc = container.querySelector('path[data-kind="offFleet"]') as SVGPathElement;
+    expect(arc).toBeTruthy();
+    expect(arc.getAttribute("stroke-dasharray")).toBeTruthy(); // dashed
+    expect(arc.querySelector("title")?.textContent).toContain("off-fleet peer");
+    expect(arc.querySelector("title")?.textContent).not.toContain("mutual peering");
+  });
+
+  it("draws a dashed warning arc for a one-way edge naming the missing side", () => {
+    const g: MeshGraphDTO = {
+      nodes: [
+        { cluster: "ctx-blue", name: "homelab-blue", clusterId: 1, state: "peered", present: true },
+        { cluster: "ctx-orange", name: "homelab-orange", clusterId: 2, state: "enabled", present: true },
+      ],
+      edges: [{ a: "ctx-blue", b: "ctx-orange", mutual: false, from: "ctx-blue" }],
+    };
+    const { container, getByText } = render(<MeshStrip graph={g} />);
+    const arc = container.querySelector('path[data-kind="oneWay"]') as SVGPathElement;
+    expect(arc).toBeTruthy();
+    expect(arc.getAttribute("stroke-dasharray")).toBeTruthy();
+    // Direction matters: the title says who configured it and who is missing.
+    expect(arc.querySelector("title")?.textContent).toBe("ctx-blue → ctx-orange — one-way: ctx-orange does not list ctx-blue");
+    expect(getByText(/one-way peering/)).toBeTruthy(); // legend appears
+  });
+
+  it("renders no svg when there are no edges", () => {
+    const g: MeshGraphDTO = {
+      nodes: [{ cluster: "ctx-blue", name: "homelab-blue", clusterId: 1, state: "enabled", present: true }],
+      edges: [],
+    };
+    const { container } = render(<MeshStrip graph={g} />);
+    expect(container.querySelector('[data-testid="mesh-arcs"]')).toBeNull();
+  });
 });

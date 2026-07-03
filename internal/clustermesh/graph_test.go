@@ -54,6 +54,25 @@ func TestBuildGraphAsymmetric(t *testing.T) {
 	if !ok || e.Mutual {
 		t.Fatalf("want asymmetric (non-mutual) edge: %+v", g.Edges)
 	}
+	// One-way edges record the configuring side, so the UI can say who is
+	// missing the return peering.
+	if e.From != "ctx-blue" {
+		t.Fatalf("one-way edge must record From=ctx-blue: %+v", e)
+	}
+}
+
+func TestBuildGraphMutualEdgeHasNoFrom(t *testing.T) {
+	g := BuildGraph([]Member{
+		mem("ctx-blue", "homelab-blue", []string{"homelab-orange"}, true),
+		mem("ctx-orange", "homelab-orange", []string{"homelab-blue"}, true),
+	})
+	e, ok := findEdge(g, "ctx-blue", "ctx-orange")
+	if !ok || !e.Mutual {
+		t.Fatalf("want mutual edge: %+v", g.Edges)
+	}
+	if e.From != "" {
+		t.Fatalf("mutual edges are undirected - From must be empty: %+v", e)
+	}
 }
 
 func TestBuildGraphIdentityNameDiffersFromFleetKey(t *testing.T) {
