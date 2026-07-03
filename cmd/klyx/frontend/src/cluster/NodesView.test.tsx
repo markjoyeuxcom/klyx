@@ -358,32 +358,75 @@ describe("NodesView", () => {
     expect(getByLabelText("drain")).toBeTruthy();
   });
 
-  it("drain button shows confirm dialog on click", () => {
+  it("drain button opens the drain composer with safe defaults", () => {
     seedWithDetail(healthy, fakeDetail);
-    const { getByLabelText, getByText } = render(<NodesView cluster="homelab" />);
+    const { getByLabelText, getByRole } = render(<NodesView cluster="homelab" />);
     fireEvent.click(getByLabelText("drain"));
-    expect(getByText("Drain node")).toBeTruthy();
-    expect(getByText("Drain")).toBeTruthy();
+    expect(getByRole("dialog", { name: "Drain node node-healthy" })).toBeTruthy();
+    // Safe default: DaemonSets tolerated ON; emptyDir destruction and force OFF.
+    expect(getByRole("button", { name: /Tolerate DaemonSets/ }).getAttribute("aria-pressed")).toBe("true");
+    expect(getByRole("button", { name: /Delete emptyDir data/ }).getAttribute("aria-pressed")).toBe("false");
+    expect(getByRole("button", { name: /^Force/ }).getAttribute("aria-pressed")).toBe("false");
   });
 
-  it("confirming drain opens drain modal and calls startDrain", async () => {
+  it("command preview shows exactly the composed kubectl drain flags", () => {
     seedWithDetail(healthy, fakeDetail);
-    const { getByLabelText, getByText } = render(<NodesView cluster="homelab" />);
+    const { getByLabelText, getByRole, getByTestId } = render(<NodesView cluster="homelab" />);
+    fireEvent.click(getByLabelText("drain"));
+    const preview = getByTestId("drain-command-preview");
+    expect(preview.textContent).toBe("kubectl drain node-healthy --ignore-daemonsets --timeout=120s");
+    fireEvent.click(getByRole("button", { name: /Delete emptyDir data/ }));
+    fireEvent.click(getByRole("button", { name: /^Force/ }));
+    expect(preview.textContent).toBe("kubectl drain node-healthy --ignore-daemonsets --delete-emptydir-data --force --timeout=120s");
+    fireEvent.click(getByRole("button", { name: /Tolerate DaemonSets/ }));
+    fireEvent.change(getByLabelText("drain timeout"), { target: { value: "300" } });
+    expect(preview.textContent).toBe("kubectl drain node-healthy --delete-emptydir-data --force --timeout=300s");
+  });
+
+  it("confirming drain with defaults calls startDrain with the safe options and opens the modal", async () => {
+    seedWithDetail(healthy, fakeDetail);
+    const { getByLabelText, getByRole, getByText } = render(<NodesView cluster="homelab" />);
     fireEvent.click(getByLabelText("drain"));
     await act(async () => {
-      fireEvent.click(getByText("Drain"));
+      fireEvent.click(getByRole("button", { name: "Drain" }));
     });
-    expect(startDrain).toHaveBeenCalledWith("homelab", "node-healthy");
+    expect(startDrain).toHaveBeenCalledWith("homelab", "node-healthy", {
+      ignoreDaemonSets: true,
+      deleteEmptyDirData: false,
+      force: false,
+      timeoutSeconds: 120,
+    });
     // Drain modal title should be visible
     expect(getByText(/Drain node:/)).toBeTruthy();
   });
 
-  it("drain modal: Events.On subscribes to nodedrain:<streamId>", async () => {
+  it("opting into emptyDir destruction threads deleteEmptyDirData to startDrain", async () => {
+    seedWithDetail(healthy, fakeDetail);
+    const { getByLabelText, getByRole } = render(<NodesView cluster="homelab" />);
+    fireEvent.click(getByLabelText("drain"));
+    fireEvent.click(getByRole("button", { name: /Delete emptyDir data/ }));
+    await act(async () => {
+      fireEvent.click(getByRole("button", { name: "Drain" }));
+    });
+    expect(startDrain).toHaveBeenCalledWith("homelab", "node-healthy", expect.objectContaining({
+      deleteEmptyDirData: true,
+    }));
+  });
+
+  it("cancelling the drain composer starts no drain", () => {
     seedWithDetail(healthy, fakeDetail);
     const { getByLabelText, getByText } = render(<NodesView cluster="homelab" />);
     fireEvent.click(getByLabelText("drain"));
+    fireEvent.click(getByText("Cancel"));
+    expect(startDrain).not.toHaveBeenCalled();
+  });
+
+  it("drain modal: Events.On subscribes to nodedrain:<streamId>", async () => {
+    seedWithDetail(healthy, fakeDetail);
+    const { getByLabelText, getByRole } = render(<NodesView cluster="homelab" />);
+    fireEvent.click(getByLabelText("drain"));
     await act(async () => {
-      fireEvent.click(getByText("Drain"));
+      fireEvent.click(getByRole("button", { name: "Drain" }));
     });
     // After startDrain resolves, Events.On should be called with nodedrain:test-stream-1
     expect(Events.On).toHaveBeenCalledWith(
@@ -394,10 +437,10 @@ describe("NodesView", () => {
 
   it("drain modal: cancel button calls cancelDrain", async () => {
     seedWithDetail(healthy, fakeDetail);
-    const { getByLabelText, getByText } = render(<NodesView cluster="homelab" />);
+    const { getByLabelText, getByRole, getByText } = render(<NodesView cluster="homelab" />);
     fireEvent.click(getByLabelText("drain"));
     await act(async () => {
-      fireEvent.click(getByText("Drain"));
+      fireEvent.click(getByRole("button", { name: "Drain" }));
     });
     // Cancel drain button is in the modal
     await act(async () => {
@@ -415,10 +458,10 @@ describe("NodesView", () => {
     });
 
     seedWithDetail(healthy, fakeDetail);
-    const { getByLabelText, getByText, queryByText } = render(<NodesView cluster="homelab" />);
+    const { getByLabelText, getByRole, getByText, queryByText } = render(<NodesView cluster="homelab" />);
     fireEvent.click(getByLabelText("drain"));
     await act(async () => {
-      fireEvent.click(getByText("Drain"));
+      fireEvent.click(getByRole("button", { name: "Drain" }));
     });
 
     // Fire a log chunk event

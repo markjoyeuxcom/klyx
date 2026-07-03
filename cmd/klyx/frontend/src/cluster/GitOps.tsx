@@ -5,6 +5,7 @@ import type { DependencyRefDTO, EventRowDTO, FluxResourceDTO, FluxSourceDTO, Res
 import { openGitOps, closeGitOps, getResourceDetail, reconcile, reconcileWithSource, setSuspend, resolveGitLink, fluxDiff } from "../bridge/gitops";
 import type { FluxDiffDTO } from "../bridge/gitops";
 import { ConfirmDialog } from "../chrome/ConfirmDialog";
+import { MetaTile, OperationDialog, OptionTile } from "../chrome/OperationDialog";
 import { useListKeys } from "../chrome/useListKeys";
 import { Badge, FilterButton, SummaryCell, Section, StatusDot, readyColor, ellipsis, actionBtn, frame } from "../chrome/primitives";
 import { SyncingChip, staleStyle } from "./staleness";
@@ -94,7 +95,10 @@ export function GitOps({ cluster }: { cluster: string }) {
   const expand = useFleet((s) => s.expand);
   const collapse = useFleet((s) => s.collapse);
   const isProtected = useFleet((s) => s.clusters.find((c) => c.name === cluster)?.protected ?? false);
-  const [pending, setPending] = useState<null | { verb: "reconcile" | "reconcile-source" | "suspend" | "resume"; r: FluxResourceDTO }>(null);
+  // suspend/resume stay on ConfirmDialog (no options to compose); reconcile
+  // opens the composer dialog where re-fetching the source is a per-run choice.
+  const [pending, setPending] = useState<null | { verb: "suspend" | "resume"; r: FluxResourceDTO }>(null);
+  const [reconcileTarget, setReconcileTarget] = useState<FluxResourceDTO | null>(null);
   const [filter, setFilter] = useState<FluxFilter>("all");
   const [query, setQuery] = useState("");
   const [kbKey, setKbKey] = useState<string | null>(null);
@@ -278,8 +282,7 @@ export function GitOps({ cluster }: { cluster: string }) {
                 resource={selectedResource}
                 detail={selectedDetail}
                 deps={byKey}
-                onReconcile={() => setPending({ verb: "reconcile", r: selectedResource })}
-                onReconcileWithSource={() => setPending({ verb: "reconcile-source", r: selectedResource })}
+                onReconcile={() => setReconcileTarget(selectedResource)}
                 onToggleSuspend={(isSuspended) => setPending({ verb: isSuspended ? "resume" : "suspend", r: selectedResource })}
                 onViewGit={() => void resolveGitLink(cluster, selectedResource.kind, selectedResource.namespace, selectedResource.name)}
               />
@@ -292,33 +295,73 @@ export function GitOps({ cluster }: { cluster: string }) {
 
       {pending && (
         <ConfirmDialog
-          title={
-            pending.verb === "reconcile" ? "Reconcile"
-              : pending.verb === "reconcile-source" ? "Reconcile with source"
-                : pending.verb === "suspend" ? "Suspend reconciliation"
-                  : "Resume reconciliation"
-          }
+          title={pending.verb === "suspend" ? "Suspend reconciliation" : "Resume reconciliation"}
           cluster={cluster}
           detail={`${pending.r.kind} ${pending.r.namespace}/${pending.r.name}`}
           protected={isProtected}
           danger={pending.verb === "suspend"}
-          confirmLabel={
-            pending.verb === "reconcile" ? "Reconcile"
-              : pending.verb === "reconcile-source" ? "Reconcile + source"
-                : pending.verb === "suspend" ? "Suspend"
-                  : "Resume"
-          }
+          confirmLabel={pending.verb === "suspend" ? "Suspend" : "Resume"}
           onCancel={() => setPending(null)}
           onConfirm={() => {
             const { verb, r } = pending;
             setPending(null);
-            if (verb === "reconcile") void reconcile(cluster, r.kind, r.namespace, r.name);
-            else if (verb === "reconcile-source") void reconcileWithSource(cluster, r.kind, r.namespace, r.name);
-            else void setSuspend(cluster, r.kind, r.namespace, r.name, verb === "suspend");
+            void setSuspend(cluster, r.kind, r.namespace, r.name, verb === "suspend");
+          }}
+        />
+      )}
+
+      {reconcileTarget && (
+        <ReconcileDialog
+          cluster={cluster}
+          resource={reconcileTarget}
+          isProtected={isProtected}
+          onCancel={() => setReconcileTarget(null)}
+          onConfirm={(withSource) => {
+            const r = reconcileTarget;
+            setReconcileTarget(null);
+            if (withSource) void reconcileWithSource(cluster, r.kind, r.namespace, r.name);
+            else void reconcile(cluster, r.kind, r.namespace, r.name);
           }}
         />
       )}
     </div>
+  );
+}
+
+// ReconcileDialog is the one reconcile verb: the former separate "reconcile
+// with source" action is now a per-run option here, because whether the
+// source needs a re-fetch is a property of this reconcile, not a different
+// operation.
+function ReconcileDialog({ cluster, resource, isProtected, onCancel, onConfirm }: {
+  cluster: string;
+  resource: FluxResourceDTO;
+  isProtected: boolean;
+  onCancel: () => void;
+  onConfirm: (withSource: boolean) => void;
+}) {
+  const [withSource, setWithSource] = useState(false);
+  return (
+    <OperationDialog
+      title={`Reconcile "${resource.namespace}/${resource.name}"`}
+      ariaLabel={`Reconcile ${resource.namespace}/${resource.name}`}
+      subtitle="Annotates the resource so Flux reconciles it now instead of waiting for the next interval."
+      cluster={cluster}
+      protected={isProtected}
+      confirmLabel="Reconcile"
+      onCancel={onCancel}
+      onConfirm={() => onConfirm(withSource)}
+    >
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+        <MetaTile label="resource" value={`${resource.kind} ${resource.namespace}/${resource.name}`} />
+        <MetaTile label="bound source" value={sourceText(resource) || "—"} />
+      </div>
+      <OptionTile
+        active={withSource}
+        title="Re-fetch source first"
+        body="Also annotate the bound source so Flux pulls a fresh artifact before reconciling; use when the source itself is stale."
+        onClick={() => setWithSource((v) => !v)}
+      />
+    </OperationDialog>
   );
 }
 
@@ -415,13 +458,12 @@ function SourceRow({ s }: { s: FluxSourceDTO }) {
   );
 }
 
-function DetailPanel({ cluster, resource, detail, deps, onReconcile, onReconcileWithSource, onToggleSuspend, onViewGit }: {
+function DetailPanel({ cluster, resource, detail, deps, onReconcile, onToggleSuspend, onViewGit }: {
   cluster: string;
   resource: FluxResourceDTO;
   detail: ResourceDetailDTO | null;
   deps: Map<string, FluxResourceDTO>;
   onReconcile: () => void;
-  onReconcileWithSource: () => void;
   onToggleSuspend: (suspended: boolean) => void;
   onViewGit: () => void;
 }) {
@@ -443,7 +485,6 @@ function DetailPanel({ cluster, resource, detail, deps, onReconcile, onReconcile
       <InspectorHeader resource={resource} color={headerColor} />
       <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 10, marginBottom: 8, flexWrap: "wrap" }}>
         <button onClick={onReconcile} style={actionBtn}>Reconcile</button>
-        <button onClick={onReconcileWithSource} style={actionBtn}>Reconcile with source</button>
         <button onClick={() => onToggleSuspend(detail.suspended ?? false)} style={actionBtn}>
           {detail.suspended ? "Resume" : "Suspend"}
         </button>

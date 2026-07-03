@@ -15,6 +15,12 @@ vi.mock("../bridge/gitops", () => ({
   fluxDiff: vi.fn(async () => ({ available: true, hasChanges: true, output: "± spec.replicas: 2 -> 3", error: "" })),
 }));
 
+// The reconcile composer (OperationDialog) registers protected-cluster grants
+// via the config bridge; mock it so no Wails runtime is needed.
+vi.mock("../bridge/configsvc", () => ({
+  armProtected: vi.fn(async () => ({ ok: true, error: "" })),
+}));
+
 const cluster = (tier: string): ClusterDTO => ({
   name: "x", state: "Synced", reason: "", nodesReady: 1, nodesTotal: 1, pods: 1, version: "v1",
   gitopsTier: tier, gitopsReason: "", networkTier: "Healthy", networkReason: "",
@@ -44,10 +50,13 @@ const expandedDetail = (over: Partial<import("../store/fleet").ResourceDetailDTO
   },
 });
 
-beforeEach(() => useFleet.setState({
-  clusters: [cluster("Healthy")],
-  gitops: { cluster: "x", resources: [], sources: [], loading: false, expandedKey: null, detail: null },
-}));
+beforeEach(() => {
+  vi.clearAllMocks();
+  useFleet.setState({
+    clusters: [cluster("Healthy")],
+    gitops: { cluster: "x", resources: [], sources: [], loading: false, expandedKey: null, detail: null },
+  });
+});
 
 describe("GitOps view", () => {
   it("a stale resource dims and shows the Syncing chip instead of a confident status", () => {
@@ -145,22 +154,30 @@ describe("GitOps view", () => {
     expect(getByText(/apply failed at/i)).toBeTruthy();
   });
 
-  it("reconcile flows through the confirm dialog on a non-protected cluster", () => {
+  it("one Reconcile action opens the composer; confirming with the tile off calls reconcile", () => {
     useFleet.setState({ clusters: [cluster("Healthy")], gitops: expandedDetail() });
-    const { getByText, getAllByRole } = render(<GitOps cluster="x" />);
+    const { getByText, getByRole, getAllByRole, queryByText } = render(<GitOps cluster="x" />);
+    // The former separate verb is gone - re-fetching the source is an option
+    // inside the one Reconcile dialog, not a second action.
+    expect(queryByText("Reconcile with source")).toBeNull();
     fireEvent.click(getByText("Reconcile"));               // panel button opens the dialog
+    expect(getByRole("dialog", { name: "Reconcile flux-system/flux-system" })).toBeTruthy();
+    expect(getByRole("button", { name: /Re-fetch source first/ }).getAttribute("aria-pressed")).toBe("false");
     const reconcileButtons = getAllByRole("button", { name: "Reconcile" });
     fireEvent.click(reconcileButtons[reconcileButtons.length - 1]); // dialog confirm is last in DOM
     expect(reconcile).toHaveBeenCalledWith("x", "Kustomization", "flux-system", "flux-system");
+    expect(reconcileWithSource).not.toHaveBeenCalled();
   });
 
-  it("reconcile-with-source flows through the confirm dialog", () => {
+  it("toggling the re-fetch-source tile routes the confirm to reconcileWithSource", () => {
     useFleet.setState({ clusters: [cluster("Healthy")], gitops: expandedDetail() });
-    const { getByText, getAllByRole } = render(<GitOps cluster="x" />);
-    fireEvent.click(getByText("Reconcile with source"));            // panel button opens the dialog
-    const confirmButtons = getAllByRole("button", { name: "Reconcile + source" });
-    fireEvent.click(confirmButtons[confirmButtons.length - 1]);      // dialog confirm
+    const { getByText, getByRole, getAllByRole } = render(<GitOps cluster="x" />);
+    fireEvent.click(getByText("Reconcile"));               // panel button opens the dialog
+    fireEvent.click(getByRole("button", { name: /Re-fetch source first/ }));
+    const reconcileButtons = getAllByRole("button", { name: "Reconcile" });
+    fireEvent.click(reconcileButtons[reconcileButtons.length - 1]); // dialog confirm
     expect(reconcileWithSource).toHaveBeenCalledWith("x", "Kustomization", "flux-system", "flux-system");
+    expect(reconcile).not.toHaveBeenCalled();
   });
 
   it("shows Resume + a suspended badge when detail.suspended is true", () => {

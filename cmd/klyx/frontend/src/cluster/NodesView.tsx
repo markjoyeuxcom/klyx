@@ -3,7 +3,9 @@ import { Events } from "@wailsio/runtime";
 import { useFleet } from "../store/fleet";
 import type { ConditionDTO, NodeDetailDTO, NodeSummaryDTO, PodOnNodeDTO } from "../store/fleet";
 import { listNodes, openNodeDetail, cordonNode, startDrain, cancelDrain } from "../bridge/nodes";
+import type { DrainOptions } from "../bridge/nodes";
 import { ConfirmDialog } from "../chrome/ConfirmDialog";
+import { MetaTile, OperationDialog, OptionTile } from "../chrome/OperationDialog";
 import { fmtMem } from "./saturation";
 import { useResizablePanel } from "../chrome/useResizablePanel";
 import { ellipsis, frame, btn, FilterButton, SummaryCell, StatusDot } from "../chrome/primitives";
@@ -98,7 +100,7 @@ interface LogChunkDTO {
 
 type DrainStatus = "starting" | "running" | "ended" | "error";
 
-function DrainModal({ cluster, node, onClose }: { cluster: string; node: string; onClose: () => void }) {
+function DrainModal({ cluster, node, opts, onClose }: { cluster: string; node: string; opts: DrainOptions; onClose: () => void }) {
   const [status, setStatus] = useState<DrainStatus>("starting");
   const [errorMsg, setErrorMsg] = useState<string | undefined>(undefined);
   const streamIdRef = useRef<string>("");
@@ -125,7 +127,7 @@ function DrainModal({ cluster, node, onClose }: { cluster: string; node: string;
     let stale = false;
 
     async function open() {
-      const result = await startDrain(cluster, node);
+      const result = await startDrain(cluster, node, opts);
       if (stale) return;
       if (result.error || !result.streamId) {
         setStatus("error");
@@ -169,7 +171,9 @@ function DrainModal({ cluster, node, onClose }: { cluster: string; node: string;
         void cancelDrain(sid);
       }
     };
-  }, [cluster, node]);
+    // opts is composed once in the drain dialog and set with the node in one
+    // state write, so its identity is stable for this modal's lifetime.
+  }, [cluster, node, opts]);
 
   const handleCancel = useCallback(() => {
     if (offRef.current) { offRef.current(); offRef.current = null; }
@@ -267,13 +271,108 @@ function DrainModal({ cluster, node, onClose }: { cluster: string; node: string;
   );
 }
 
+// --- Drain composer ----------------------------------------------------------------
+
+const drainTimeouts = [60, 120, 300, 600];
+
+// DrainComposerDialog assembles the kubectl drain flags per drain. The safe
+// default only tolerates DaemonSets; destroying emptyDir data and forcing
+// eviction of controller-less pods are explicit per-drain opt-ins
+// (deleteEmptyDirData was silently always-on until 2026-07-03 - this dialog
+// exists so that choice is made by the operator, every time).
+function DrainComposerDialog({ cluster, node, isProtected, onCancel, onConfirm }: {
+  cluster: string;
+  node: string;
+  isProtected: boolean;
+  onCancel: () => void;
+  onConfirm: (opts: DrainOptions) => void;
+}) {
+  const [ignoreDaemonSets, setIgnoreDaemonSets] = useState(true);
+  const [deleteEmptyDirData, setDeleteEmptyDirData] = useState(false);
+  const [force, setForce] = useState(false);
+  const [timeoutSeconds, setTimeoutSeconds] = useState(120);
+
+  // Honesty: the preview line is exactly the command the backend runs.
+  const preview = [
+    "kubectl drain",
+    node,
+    ...(ignoreDaemonSets ? ["--ignore-daemonsets"] : []),
+    ...(deleteEmptyDirData ? ["--delete-emptydir-data"] : []),
+    ...(force ? ["--force"] : []),
+    `--timeout=${timeoutSeconds}s`,
+  ].join(" ");
+
+  return (
+    <OperationDialog
+      title={`Drain node "${node}"`}
+      ariaLabel={`Drain node ${node}`}
+      subtitle="Evicts every pod from the node and cordons it (unschedulable) until you uncordon it."
+      cluster={cluster}
+      protected={isProtected}
+      confirmLabel="Drain"
+      danger
+      onCancel={onCancel}
+      onConfirm={() => onConfirm({ ignoreDaemonSets, deleteEmptyDirData, force, timeoutSeconds })}
+    >
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+        <MetaTile label="node" value={node} />
+        <MetaTile label="cluster" value={cluster} />
+      </div>
+
+      <div style={{ display: "grid", gap: 8 }}>
+        <div style={composerLabel}>options</div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 10 }}>
+          <OptionTile
+            active={ignoreDaemonSets}
+            title="Tolerate DaemonSets"
+            body="DaemonSet pods can't be evicted and respawn anyway; without this, drain fails on any node running DaemonSets."
+            onClick={() => setIgnoreDaemonSets((v) => !v)}
+          />
+          <OptionTile
+            active={deleteEmptyDirData}
+            title="Delete emptyDir data"
+            body="Pods' local emptyDir scratch data is DESTROYED. Without this, drain refuses to evict pods that use emptyDir."
+            onClick={() => setDeleteEmptyDirData((v) => !v)}
+          />
+          <OptionTile
+            active={force}
+            title="Force"
+            body="Evict pods with no controller; they will NOT be recreated."
+            onClick={() => setForce((v) => !v)}
+          />
+        </div>
+      </div>
+
+      <label style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <span style={composerLabel}>timeout</span>
+        <select
+          aria-label="drain timeout"
+          value={timeoutSeconds}
+          onChange={(e) => setTimeoutSeconds(Number(e.target.value))}
+          style={composerSelect}
+        >
+          {drainTimeouts.map((t) => <option key={t} value={t}>{t}s</option>)}
+        </select>
+      </label>
+
+      <div data-testid="drain-command-preview" style={commandPreview}>{preview}</div>
+    </OperationDialog>
+  );
+}
+
+const composerLabel: React.CSSProperties = { color: "var(--color-text-tertiary)", fontSize: 10, textTransform: "uppercase", fontWeight: 600, letterSpacing: 0.2 };
+const composerSelect: React.CSSProperties = { padding: "4px 8px", fontSize: 12, fontFamily: "var(--font-mono)", background: "var(--color-background-secondary)", border: "0.5px solid var(--color-border-tertiary)", borderRadius: 4, color: "var(--color-text-primary)" };
+const commandPreview: React.CSSProperties = { fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--color-text-secondary)", background: "var(--color-background-secondary)", border: "0.5px solid var(--color-border-tertiary)", borderRadius: 4, padding: "7px 10px", whiteSpace: "pre-wrap", wordBreak: "break-all" };
+
 // --- Main view -------------------------------------------------------------------
 
 export function NodesView({ cluster }: { cluster: string }) {
   const nodes = useFleet((s) => s.nodes);
   const isProtected = useFleet((s) => s.clusters.find((c) => c.name === cluster)?.protected ?? false);
 
-  const [drainNode, setDrainNode] = useState<string | null>(null);
+  // drainPending holds the node while the composer dialog is open; confirming
+  // moves node + composed options into drainActive, which mounts the modal.
+  const [drainActive, setDrainActive] = useState<{ node: string; opts: DrainOptions } | null>(null);
   const [cordonPending, setCordonPending] = useState<{ node: string; cordon: boolean } | null>(null);
   const [drainPending, setDrainPending] = useState<string | null>(null);
   const [filter, setFilter] = useState<NodeFilter>("all");
@@ -437,31 +536,29 @@ export function NodesView({ cluster }: { cluster: string }) {
         />
       )}
 
-      {/* Drain confirm dialog */}
+      {/* Drain composer dialog */}
       {drainPending && (
-        <ConfirmDialog
-          title="Drain node"
+        <DrainComposerDialog
           cluster={cluster}
-          detail={`kubectl drain ${drainPending} --ignore-daemonsets --delete-emptydir-data`}
-          protected={isProtected}
-          danger
-          confirmLabel="Drain"
-          onConfirm={() => {
+          node={drainPending}
+          isProtected={isProtected}
+          onConfirm={(opts) => {
             const node = drainPending;
             setDrainPending(null);
-            setDrainNode(node);
+            setDrainActive({ node, opts });
           }}
           onCancel={() => setDrainPending(null)}
         />
       )}
 
       {/* Drain modal */}
-      {drainNode && (
+      {drainActive && (
         <DrainModal
           cluster={cluster}
-          node={drainNode}
+          node={drainActive.node}
+          opts={drainActive.opts}
           onClose={() => {
-            setDrainNode(null);
+            setDrainActive(null);
             void listNodes(cluster);
           }}
         />
