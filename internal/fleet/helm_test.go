@@ -151,7 +151,7 @@ func TestHelmRollback_ContextThreaded(t *testing.T) {
 	defer withHelmRunner(r)()
 
 	conn := newHelmTestConn("prd-ctx")
-	err := conn.HelmRollback(context.Background(), "prod", "my-app", 3)
+	err := conn.HelmRollback(context.Background(), "prod", "my-app", 3, helmcli.RollbackOptions{Wait: true})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -166,7 +166,7 @@ func TestHelmRollback_PropagatesError(t *testing.T) {
 	defer withHelmRunner(r)()
 
 	conn := newHelmTestConn("ctx")
-	err := conn.HelmRollback(context.Background(), "ns", "rel", 1)
+	err := conn.HelmRollback(context.Background(), "ns", "rel", 1, helmcli.RollbackOptions{})
 	if err == nil {
 		t.Fatal("want error")
 	}
@@ -180,7 +180,7 @@ func TestHelmRollback_EmptyKubeContext(t *testing.T) {
 	defer withHelmRunner(r)()
 
 	conn := newHelmTestConn("")
-	err := conn.HelmRollback(context.Background(), "ns", "rel", 1)
+	err := conn.HelmRollback(context.Background(), "ns", "rel", 1, helmcli.RollbackOptions{})
 	if err == nil {
 		t.Fatal("want error for empty kubeContext")
 	}

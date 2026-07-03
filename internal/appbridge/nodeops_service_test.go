@@ -6,6 +6,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/moomora/klyx/internal/fleet"
 )
 
 // fakeNodeOpsConn is a test double for NodeOpsConn.
@@ -13,6 +15,7 @@ type fakeNodeOpsConn struct {
 	mu          sync.Mutex
 	cordonCalls []cordonCall
 	cmdFunc     func(nodeName string) (*exec.Cmd, error)
+	lastOpts    fleet.DrainOptions
 }
 
 type cordonCall struct {
@@ -27,7 +30,10 @@ func (f *fakeNodeOpsConn) SetCordon(_ context.Context, node string, cordon bool)
 	return nil
 }
 
-func (f *fakeNodeOpsConn) DrainNodeCmd(nodeName string) (*exec.Cmd, error) {
+func (f *fakeNodeOpsConn) DrainNodeCmd(nodeName string, opts fleet.DrainOptions) (*exec.Cmd, error) {
+	f.mu.Lock()
+	f.lastOpts = opts
+	f.mu.Unlock()
 	if f.cmdFunc != nil {
 		return f.cmdFunc(nodeName)
 	}
@@ -119,7 +125,7 @@ func TestNodeOps_StartDrain_LinesAppend(t *testing.T) {
 	}
 	svc, em := newNodeOpsTestSvc(conn)
 
-	result := svc.StartDrain("test", "node-drain")
+	result := svc.StartDrain("test", "node-drain", DrainOptionsDTO{})
 	if result.Error != "" {
 		t.Fatalf("StartDrain error: %s", result.Error)
 	}
@@ -174,7 +180,7 @@ func TestNodeOps_CancelDrain_KillsProcess(t *testing.T) {
 	}
 	svc, _ := newNodeOpsTestSvc(conn)
 
-	result := svc.StartDrain("test", "node-cancel")
+	result := svc.StartDrain("test", "node-cancel", DrainOptionsDTO{})
 	if result.Error != "" {
 		t.Fatalf("StartDrain error: %s", result.Error)
 	}
@@ -196,13 +202,29 @@ func TestNodeOps_CancelDrain_KillsProcess(t *testing.T) {
 func TestNodeOps_StartDrain_ClusterMiss(t *testing.T) {
 	conn := &fakeNodeOpsConn{}
 	svc, _ := newNodeOpsTestSvc(conn)
-	r := svc.StartDrain("missing", "node-1")
+	r := svc.StartDrain("missing", "node-1", DrainOptionsDTO{})
 	if r.Error == "" {
 		t.Error("expected error for missing cluster")
 	}
 	if r.StreamID != "" {
 		t.Error("expected empty streamID on error")
 	}
+}
+
+func TestNodeOps_StartDrain_ThreadsOptions(t *testing.T) {
+	conn := &fakeNodeOpsConn{}
+	svc, _ := newNodeOpsTestSvc(conn)
+	r := svc.StartDrain("test", "node-1", DrainOptionsDTO{IgnoreDaemonSets: true, DeleteEmptyDirData: true, TimeoutSeconds: 60})
+	if r.Error != "" {
+		t.Fatalf("StartDrain: %s", r.Error)
+	}
+	conn.mu.Lock()
+	got := conn.lastOpts
+	conn.mu.Unlock()
+	if !got.IgnoreDaemonSets || !got.DeleteEmptyDirData || got.Force || got.TimeoutSeconds != 60 {
+		t.Fatalf("options not threaded: %+v", got)
+	}
+	svc.CancelAll()
 }
 
 func TestNodeOps_StartDrain_RefusesAtCap(t *testing.T) {
@@ -216,7 +238,7 @@ func TestNodeOps_StartDrain_RefusesAtCap(t *testing.T) {
 
 	running := make([]string, 0, maxConcurrentDrains)
 	for i := 0; i < maxConcurrentDrains; i++ {
-		r := svc.StartDrain("test", "node-cap")
+		r := svc.StartDrain("test", "node-cap", DrainOptionsDTO{})
 		if r.Error != "" {
 			t.Fatalf("StartDrain %d error: %s", i, r.Error)
 		}
@@ -224,7 +246,7 @@ func TestNodeOps_StartDrain_RefusesAtCap(t *testing.T) {
 	}
 
 	// At cap: the next drain must be refused, not evict a running one.
-	r := svc.StartDrain("test", "node-over-cap")
+	r := svc.StartDrain("test", "node-over-cap", DrainOptionsDTO{})
 	if r.Error == "" {
 		t.Fatal("expected refusal at cap, got a streamID")
 	}
@@ -245,7 +267,7 @@ func TestNodeOps_StartDrain_RefusesAtCap(t *testing.T) {
 
 	// Cancelling one frees a slot.
 	svc.CancelDrain(running[0])
-	r = svc.StartDrain("test", "node-after-cancel")
+	r = svc.StartDrain("test", "node-after-cancel", DrainOptionsDTO{})
 	if r.Error != "" {
 		t.Fatalf("StartDrain after cancel error: %s", r.Error)
 	}

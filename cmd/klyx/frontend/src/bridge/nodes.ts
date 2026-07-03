@@ -32,8 +32,19 @@ export async function cordonNode(cluster: string, node: string, cordon: boolean)
   }
 }
 
-export async function startDrain(cluster: string, node: string): Promise<OpenLogStreamResultDTO> {
-  return (await NodeOpsService.StartDrain(cluster, node)) as OpenLogStreamResultDTO;
+// DrainOptions are the user-composed kubectl drain flags from the drain
+// composer. The zero-ish default is the SAFE drain: emptyDir data preserved
+// (an explicit opt-in since 2026-07-03 - it was silently always-on before),
+// no force, daemonsets not tolerated unless chosen.
+export type DrainOptions = {
+  ignoreDaemonSets: boolean;
+  deleteEmptyDirData: boolean;
+  force: boolean;
+  timeoutSeconds: number;
+};
+
+export async function startDrain(cluster: string, node: string, opts: DrainOptions): Promise<OpenLogStreamResultDTO> {
+  return (await NodeOpsService.StartDrain(cluster, node, opts)) as OpenLogStreamResultDTO;
 }
 
 export async function cancelDrain(streamId: string): Promise<void> {

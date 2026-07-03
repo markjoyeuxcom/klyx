@@ -156,7 +156,7 @@ func (f *fakeConn) RevealSecretKey(ctx context.Context, ns, name, key string) (s
 	return "", nil
 }
 func (f *fakeConn) SetCordon(context.Context, string, bool) error { return nil }
-func (f *fakeConn) DrainNodeCmd(nodeName string) (*exec.Cmd, error) {
+func (f *fakeConn) DrainNodeCmd(nodeName string, opts DrainOptions) (*exec.Cmd, error) {
 	return exec.Command("true"), nil
 }
 func (f *fakeConn) DebugCommand(namespace, pod, container string) ([]string, error) {
@@ -176,9 +176,11 @@ func (f *fakeConn) HelmHistory(context.Context, string, string) ([]helmcli.Histo
 	return nil, nil
 }
 func (f *fakeConn) HelmValues(context.Context, string, string) (string, error) { return "", nil }
-func (f *fakeConn) HelmRollback(context.Context, string, string, int) error    { return nil }
-func (f *fakeConn) ListArgoApps(context.Context) ([]argo.App, error)           { return nil, nil }
-func (f *fakeConn) ListArgoProjects(context.Context) ([]argo.Project, error)   { return nil, nil }
+func (f *fakeConn) HelmRollback(context.Context, string, string, int, helmcli.RollbackOptions) error {
+	return nil
+}
+func (f *fakeConn) ListArgoApps(context.Context) ([]argo.App, error)         { return nil, nil }
+func (f *fakeConn) ListArgoProjects(context.Context) ([]argo.Project, error) { return nil, nil }
 func (f *fakeConn) ListArgoApplicationSets(context.Context) ([]argo.ApplicationSet, error) {
 	return nil, nil
 }

@@ -249,7 +249,7 @@ func TestGetValues_Args(t *testing.T) {
 
 func TestRollback_Args(t *testing.T) {
 	r := &fakeRunner{out: []byte("")}
-	err := Rollback(context.Background(), r, "stg-ctx", "staging", "my-release", 4)
+	err := Rollback(context.Background(), r, "stg-ctx", "staging", "my-release", 4, RollbackOptions{Wait: true})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -271,7 +271,7 @@ func TestRollback_Args(t *testing.T) {
 
 func TestRollback_PropagatesError(t *testing.T) {
 	r := &fakeRunner{err: errors.New("rollback failed: pod timeout")}
-	err := Rollback(context.Background(), r, "ctx", "ns", "rel", 1)
+	err := Rollback(context.Background(), r, "ctx", "ns", "rel", 1, RollbackOptions{})
 	if err == nil {
 		t.Fatal("want error, got nil")
 	}
@@ -447,4 +447,26 @@ func TestExecRunner_StderrInError(t *testing.T) {
 	if err.Error() == fmt.Sprintf("helm __no_such_command__: exit status 1") {
 		t.Logf("note: got bare exit status (acceptable if helm gave no stderr)")
 	}
+}
+
+func TestRollback_OptionFlags(t *testing.T) {
+	// No wait: neither --wait nor --timeout appear; no-hooks appears when set.
+	r := &fakeRunner{out: []byte("")}
+	if err := Rollback(context.Background(), r, "ctx", "ns", "rel", 2, RollbackOptions{NoHooks: true}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	for _, a := range r.args[0] {
+		if a == "--wait" || a == "--timeout" {
+			t.Fatalf("no-wait rollback must not pass %q: %v", a, r.args[0])
+		}
+	}
+	assertArg(t, r.args[0], "--no-hooks")
+
+	// Wait with a custom timeout.
+	r2 := &fakeRunner{out: []byte("")}
+	if err := Rollback(context.Background(), r2, "ctx", "ns", "rel", 2, RollbackOptions{Wait: true, TimeoutSeconds: 300}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	assertArg(t, r2.args[0], "--wait")
+	assertArg(t, r2.args[0], "300s")
 }
