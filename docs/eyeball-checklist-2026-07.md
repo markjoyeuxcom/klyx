@@ -50,4 +50,4 @@ patience allows) against nelli + at least one AKS cluster.
 - [ ] Legend appears only when dashed arcs exist; readable in dark themes.
 
 ## Sign-off actions
-- Veto anything above → file it; approve → delete this file and unblock M11-d Renew.
+- Veto anything above → file it; approve → delete this file. (M11-d Renew: ruled out 2026-07-03.)
