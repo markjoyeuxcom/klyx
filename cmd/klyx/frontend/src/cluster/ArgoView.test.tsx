@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, fireEvent } from "@testing-library/react";
+import { render, fireEvent, act } from "@testing-library/react";
 import { ArgoView, resolveArgoResourceRef } from "./ArgoView";
 import { useFleet } from "../store/fleet";
 import type { ArgoAppDTO, ArgoResourceDTO } from "../store/fleet";
@@ -117,6 +117,24 @@ describe("ArgoView", () => {
   it("fetches on mount", () => {
     render(<ArgoView cluster="homelab-nelli" />);
     expect(listArgoApps).toHaveBeenCalledWith("homelab-nelli");
+  });
+
+  // --- Keyboard nav (applications mode only) ---
+
+  it("j/k + Enter selects an app like a click, Esc returns to the broken-first default", () => {
+    seed([broken, healthy]);
+    const { getByText, queryByText } = render(<ArgoView cluster="homelab-nelli" />);
+    // Default inspector selection is the first (broken) app.
+    expect(getByText(/repo unreachable/)).toBeTruthy();
+    // j → index 0 (ollama-prod); j → index 1 (console-dev); Enter → select it
+    act(() => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "j", bubbles: true, cancelable: true })); });
+    act(() => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "j", bubbles: true, cancelable: true })); });
+    act(() => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })); });
+    // The inspector now shows console-dev - the same action as clicking its row.
+    expect(queryByText(/repo unreachable/)).toBeNull();
+    // Esc collapses the explicit selection back to the broken-first default.
+    act(() => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })); });
+    expect(getByText(/repo unreachable/)).toBeTruthy();
   });
 
   it("renders projects as an Argo-native view", () => {

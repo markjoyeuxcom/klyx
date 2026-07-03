@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render, fireEvent } from "@testing-library/react";
+import { render, fireEvent, act } from "@testing-library/react";
 import { useFleet, FluxResourceDTO, FluxSourceDTO, ClusterDTO } from "../store/fleet";
 import { reconcile, reconcileWithSource, setSuspend, resolveGitLink } from "../bridge/gitops";
 import { GitOps } from "./GitOps";
@@ -279,6 +279,31 @@ describe("GitOps view", () => {
     fireEvent.click(getByText("sources"));
     expect(getByTestId("flux-sources-scroll")).toBeTruthy();
     expect(getByText("flux-system/cilium")).toBeTruthy();
+  });
+
+  // --- Keyboard nav ---
+
+  it("j/k + Enter expands the selected row like a click, Esc collapses", () => {
+    useFleet.setState({ gitops: { cluster: "x", resources: [
+      res({ name: "aaa" }),
+      res({ name: "bbb" }),
+    ], sources: [], loading: false, expandedKey: null, detail: null } });
+    render(<GitOps cluster="x" />);
+    // j → index 0 (aaa); j → index 1 (bbb); Enter → expand(keyOf(bbb))
+    act(() => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "j", bubbles: true, cancelable: true })); });
+    act(() => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "j", bubbles: true, cancelable: true })); });
+    act(() => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })); });
+    expect(useFleet.getState().gitops.expandedKey).toBe("Kustomization/flux-system/bbb");
+    // Esc collapses the open panel.
+    act(() => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })); });
+    expect(useFleet.getState().gitops.expandedKey).toBeNull();
+  });
+
+  it("/ focuses the flux filter input", () => {
+    useFleet.setState({ gitops: { cluster: "x", resources: [res({})], sources: [], loading: false, expandedKey: null, detail: null } });
+    const { getByPlaceholderText } = render(<GitOps cluster="x" />);
+    act(() => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "/", bubbles: true, cancelable: true })); });
+    expect(document.activeElement).toBe(getByPlaceholderText("filter flux"));
   });
 
   it("sets the action-status in the store (global ActionToast renders it)", () => {
