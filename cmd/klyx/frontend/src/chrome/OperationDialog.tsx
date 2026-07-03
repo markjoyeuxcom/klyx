@@ -228,8 +228,12 @@ function footerBtn(primary: boolean, danger: boolean, disabled: boolean): React.
     borderRadius: 4,
     cursor: disabled ? "not-allowed" : "pointer",
     opacity: disabled ? 0.5 : 1,
-    border: "0.5px solid var(--color-border-tertiary)",
-    background: primary ? (danger ? "var(--color-text-danger)" : "var(--color-background-accent, var(--color-background-secondary))") : "transparent",
-    color: primary && danger ? "#fff" : "var(--color-text-primary)",
+    // Danger uses the badge pairing (danger-toned text on the danger tint):
+    // white on --color-text-danger measures ~2.2:1 in every dark theme, where
+    // that token is a LIGHT red designed as text, not as a surface.
+    border: primary && danger ? "1px solid var(--color-border-danger)" : "0.5px solid var(--color-border-tertiary)",
+    background: primary ? (danger ? "var(--color-background-danger)" : "var(--color-background-accent, var(--color-background-secondary))") : "transparent",
+    color: primary && danger ? "var(--color-text-danger)" : "var(--color-text-primary)",
+    fontWeight: primary && danger ? 600 : undefined,
   };
 }
