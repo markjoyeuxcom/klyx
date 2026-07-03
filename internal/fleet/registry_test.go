@@ -14,6 +14,7 @@ import (
 	"github.com/moomora/klyx/internal/clustermesh"
 	"github.com/moomora/klyx/internal/config"
 	"github.com/moomora/klyx/internal/crd"
+	"github.com/moomora/klyx/internal/externalsecrets"
 	"github.com/moomora/klyx/internal/fluxcli"
 	"github.com/moomora/klyx/internal/gitops/argo"
 	"github.com/moomora/klyx/internal/gitops/flux"
@@ -59,6 +60,11 @@ func (f *fakeConn) CertManagerObject(kind, namespace, name string) (*unstructure
 func (f *fakeConn) GetCertificateChain(ctx context.Context, ns, name string) (certmanager.Chain, error) {
 	return certmanager.Chain{}, nil
 }
+func (f *fakeConn) OpenExternalSecrets()                                  {}
+func (f *fakeConn) CloseExternalSecrets()                                 {}
+func (f *fakeConn) ExternalSecretsList() []externalsecrets.ExternalSecret { return nil }
+func (f *fakeConn) ExternalSecretsStores() []externalsecrets.Store        { return nil }
+func (f *fakeConn) ExternalSecretsWatchHealth() (bool, string)            { return true, "" }
 func (f *fakeConn) FluxEvents(ctx context.Context, kind, ns, name string) ([]workloads.EventSummary, error) {
 	return nil, nil
 }

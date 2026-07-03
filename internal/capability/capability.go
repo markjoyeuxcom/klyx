@@ -87,9 +87,19 @@ type CertManagerCapability struct {
 	HasACME bool
 }
 
+// ExternalSecretsCapability models the External Secrets Operator: presence of
+// the external-secrets.io CRDs plus controller health. Flattened like
+// CertManagerCapability because ESO is a single tool.
+type ExternalSecretsCapability struct {
+	Base
+	Present bool
+	Healthy bool
+}
+
 // Set is the full per-cluster capability snapshot handed to the view layer.
 type Set struct {
-	GitOps      GitOpsCapability
-	Network     NetworkCapability
-	CertManager CertManagerCapability
+	GitOps          GitOpsCapability
+	Network         NetworkCapability
+	CertManager     CertManagerCapability
+	ExternalSecrets ExternalSecretsCapability
 }

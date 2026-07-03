@@ -35,6 +35,8 @@ const SECTION_ORDER: ClusterSection[] = [
   "gitops",
   "argo",
   "helm",
+  "certs",
+  "externalsecrets",
   "gatewayApi",
   "resources",
   "crds",

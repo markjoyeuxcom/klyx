@@ -33,6 +33,7 @@ const SECTION_GROUPS: { section: ClusterSection; Icon: typeof IconLayoutDashboar
     { section: "argo",      Icon: IconGitMerge },
     { section: "helm",      Icon: IconAnchor },
     { section: "certs",     Icon: IconCertificate },
+    { section: "externalsecrets", Icon: IconShieldLock },
   ],
   [
     { section: "gatewayApi", Icon: IconRoute },
@@ -172,6 +173,14 @@ const EXPANDED_MENU: ExpandedGroup[] = [
     ],
   },
   {
+    label: "External Secrets",
+    items: [
+      { label: "ExternalSecrets", Icon: IconShieldLock, target: { kind: "section", section: "externalsecrets" } },
+      { label: "SecretStores", Icon: IconDatabase, target: { kind: "resource", ref: r("external-secrets.io", "v1", "secretstores", "SecretStore", "Namespaced") } },
+      { label: "ClusterSecretStores", Icon: IconDatabase, target: { kind: "resource", ref: r("external-secrets.io", "v1", "clustersecretstores", "ClusterSecretStore", "Cluster") } },
+    ],
+  },
+  {
     label: "Argo CD",
     items: [
       { label: "Applications", Icon: IconGitMerge, target: { kind: "section", section: "argo" } },
@@ -220,21 +229,23 @@ const EXPANDED_MENU: ExpandedGroup[] = [
 // Inside a cluster, tool-specific nav is hidden when detection says the tool
 // is absent; outside a cluster (fleet/settings) everything shows disabled as
 // before. Detection lag just means a group appears when the cluster syncs.
-type ClusterCaps = { flux: boolean; argo: boolean; certManager: boolean; gatewayAPI: boolean };
+type ClusterCaps = { flux: boolean; argo: boolean; certManager: boolean; externalSecrets: boolean; gatewayAPI: boolean };
 
-const ALL_CAPS: ClusterCaps = { flux: true, argo: true, certManager: true, gatewayAPI: true };
+const ALL_CAPS: ClusterCaps = { flux: true, argo: true, certManager: true, externalSecrets: true, gatewayAPI: true };
 
 // Groups/sections owned by a single tool; everything else is always shown.
 const GROUP_CAPS: Record<string, keyof ClusterCaps> = {
   "Flux CD": "flux",
   "Argo CD": "argo",
   "cert-manager": "certManager",
+  "External Secrets": "externalSecrets",
   "Gateway API": "gatewayAPI",
 };
 const SECTION_CAPS: Partial<Record<ClusterSection, keyof ClusterCaps>> = {
   gitops: "flux",
   argo: "argo",
   certs: "certManager",
+  externalsecrets: "externalSecrets",
   gatewayApi: "gatewayAPI",
 };
 
@@ -274,6 +285,7 @@ export function Sidebar() {
         flux: current.fluxPresent ?? false,
         argo: current.argoPresent ?? false,
         certManager: current.certManagerPresent ?? false,
+        externalSecrets: current.externalSecretsPresent ?? false,
         gatewayAPI: Boolean(current.gatewayAPIVersion),
       }
     : ALL_CAPS;

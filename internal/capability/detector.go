@@ -13,12 +13,14 @@ import (
 // Official install-default namespaces and controller names.
 // Non-default install paths (e.g. renamed namespaces) are not yet supported.
 const (
-	fluxNamespace           = "flux-system"
-	fluxKustomizeController = "kustomize-controller"
-	argoNamespace           = "argocd"
-	argoAppController       = "argocd-application-controller"
-	certManagerNamespace    = "cert-manager"
-	certManagerController   = "cert-manager"
+	fluxNamespace             = "flux-system"
+	fluxKustomizeController   = "kustomize-controller"
+	argoNamespace             = "argocd"
+	argoAppController         = "argocd-application-controller"
+	certManagerNamespace      = "cert-manager"
+	certManagerController     = "cert-manager"
+	externalSecretsNamespace  = "external-secrets"
+	externalSecretsController = "external-secrets"
 )
 
 // workloadKind distinguishes the two workload types the health probe supports.
@@ -95,15 +97,17 @@ func (d *Detector) Detect(ctx context.Context) Set {
 		// surface ServerGroups errors via PrependReactor.
 		msg := fmt.Sprintf("capability detection failed: %v", err)
 		return Set{
-			GitOps:      GitOpsCapability{Base: Base{Tier: Absent, Reason: msg}},
-			Network:     NetworkCapability{Base: Base{Tier: Absent, Reason: msg}},
-			CertManager: CertManagerCapability{Base: Base{Tier: Absent, Reason: msg}},
+			GitOps:          GitOpsCapability{Base: Base{Tier: Absent, Reason: msg}},
+			Network:         NetworkCapability{Base: Base{Tier: Absent, Reason: msg}},
+			CertManager:     CertManagerCapability{Base: Base{Tier: Absent, Reason: msg}},
+			ExternalSecrets: ExternalSecretsCapability{Base: Base{Tier: Absent, Reason: msg}},
 		}
 	}
 	return Set{
-		GitOps:      d.detectGitOps(ctx, served),
-		Network:     d.detectNetwork(ctx, served),
-		CertManager: d.detectCertManager(ctx, served),
+		GitOps:          d.detectGitOps(ctx, served),
+		Network:         d.detectNetwork(ctx, served),
+		CertManager:     d.detectCertManager(ctx, served),
+		ExternalSecrets: d.detectExternalSecrets(ctx, served),
 	}
 }
 
@@ -189,6 +193,24 @@ func (d *Detector) detectCertManager(ctx context.Context, served map[string]bool
 	out.Base.Tier = Classify(true, out.Healthy)
 	if !out.Healthy {
 		out.Base.Reason = "cert-manager installed but " + certManagerController + " is not ready"
+	}
+	return out
+}
+
+// detectExternalSecrets classifies the External Secrets Operator: present iff
+// the external-secrets.io CRDs are served, healthy iff the external-secrets
+// controller Deployment is ready. Mirrors detectCertManager.
+func (d *Detector) detectExternalSecrets(ctx context.Context, served map[string]bool) ExternalSecretsCapability {
+	out := ExternalSecretsCapability{}
+	out.Present = served["external-secrets.io"]
+	if !out.Present {
+		out.Base = Base{Tier: Absent, Reason: "no External Secrets Operator CRDs installed"}
+		return out
+	}
+	out.Healthy = d.controllerReady(ctx, deploymentWorkload, externalSecretsNamespace, externalSecretsController)
+	out.Base.Tier = Classify(true, out.Healthy)
+	if !out.Healthy {
+		out.Base.Reason = "External Secrets Operator installed but " + externalSecretsController + " is not ready"
 	}
 	return out
 }

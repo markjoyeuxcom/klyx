@@ -98,9 +98,10 @@ describe("buildCommands", () => {
     const setSection = vi.fn();
     const s = makeStore({ route: { name: "cluster", cluster: "dev", section: "overview" } as never, setSection });
     const sections = buildCommands(s).filter((c) => c.group === "Sections");
-    // 11 sections: observability removed; gitops label is "Flux" but id stays
-    // "gitops"; Argo CD added as its own section.
-    expect(sections.length).toBe(11);
+    // 13 sections: observability removed; gitops label is "Flux" but id stays
+    // "gitops"; Argo CD added as its own section; External Secrets added in
+    // M12, and Certificates joined the palette alongside it (M11 gap).
+    expect(sections.length).toBe(13);
     expect(sections[0].hint).toBe("dev");
     // gitops section is still reachable by id
     sections.find((c) => c.id === "section:gitops")!.run();
@@ -112,7 +113,7 @@ describe("buildCommands", () => {
     // triage-first order keeps Nodes in the operational loop and Network as its own lane.
     const ids = sections.map((c) => c.id.replace("section:", ""));
     expect(ids).toEqual(["overview", "workloads", "pods", "nodes", "events", "gitops",
-      "argo", "helm", "gatewayApi", "resources", "crds"]);
+      "argo", "helm", "certs", "externalsecrets", "gatewayApi", "resources", "crds"]);
   });
 
   it("omits Pods when the pods slice is empty", () => {

@@ -11,33 +11,37 @@ import (
 
 // ClusterDTO is the JSON-friendly per-cluster shape the frontend consumes.
 type ClusterDTO struct {
-	Name               string `json:"name"`
-	State              string `json:"state"`
-	Reason             string `json:"reason"`
-	NodesReady         int    `json:"nodesReady"`
-	NodesTotal         int    `json:"nodesTotal"`
-	Pods               int    `json:"pods"`
-	Version            string `json:"version"`
-	GitopsTier         string `json:"gitopsTier"`
-	GitopsReason       string `json:"gitopsReason"`
-	FluxPresent        bool   `json:"fluxPresent"`
-	FluxHealthy        bool   `json:"fluxHealthy"`
-	ArgoPresent        bool   `json:"argoPresent"`
-	NetworkTier        string `json:"networkTier"`
-	NetworkReason      string `json:"networkReason"`
-	GatewayAPIVersion  string `json:"gatewayAPIVersion"`
-	CiliumPresent      bool   `json:"ciliumPresent"`
-	ClusterMesh        bool   `json:"clusterMesh"`
-	CertManagerTier    string `json:"certManagerTier"`
-	CertManagerReason  string `json:"certManagerReason"`
-	CertManagerPresent bool   `json:"certManagerPresent"`
-	CertManagerHealthy bool   `json:"certManagerHealthy"`
-	Env                string `json:"env"`
-	Region             string `json:"region"`
-	Provider           string `json:"provider"`
-	Group              string `json:"group"`
-	Protected          bool   `json:"protected"`
-	AgeSeconds         int64  `json:"ageSeconds"`
+	Name                   string `json:"name"`
+	State                  string `json:"state"`
+	Reason                 string `json:"reason"`
+	NodesReady             int    `json:"nodesReady"`
+	NodesTotal             int    `json:"nodesTotal"`
+	Pods                   int    `json:"pods"`
+	Version                string `json:"version"`
+	GitopsTier             string `json:"gitopsTier"`
+	GitopsReason           string `json:"gitopsReason"`
+	FluxPresent            bool   `json:"fluxPresent"`
+	FluxHealthy            bool   `json:"fluxHealthy"`
+	ArgoPresent            bool   `json:"argoPresent"`
+	NetworkTier            string `json:"networkTier"`
+	NetworkReason          string `json:"networkReason"`
+	GatewayAPIVersion      string `json:"gatewayAPIVersion"`
+	CiliumPresent          bool   `json:"ciliumPresent"`
+	ClusterMesh            bool   `json:"clusterMesh"`
+	CertManagerTier        string `json:"certManagerTier"`
+	CertManagerReason      string `json:"certManagerReason"`
+	CertManagerPresent     bool   `json:"certManagerPresent"`
+	CertManagerHealthy     bool   `json:"certManagerHealthy"`
+	ExternalSecretsTier    string `json:"externalSecretsTier"`
+	ExternalSecretsReason  string `json:"externalSecretsReason"`
+	ExternalSecretsPresent bool   `json:"externalSecretsPresent"`
+	ExternalSecretsHealthy bool   `json:"externalSecretsHealthy"`
+	Env                    string `json:"env"`
+	Region                 string `json:"region"`
+	Provider               string `json:"provider"`
+	Group                  string `json:"group"`
+	Protected              bool   `json:"protected"`
+	AgeSeconds             int64  `json:"ageSeconds"`
 }
 
 // ToDTO projects a snapshot + its config into a ClusterDTO. now is injected so
@@ -52,33 +56,37 @@ func ToDTO(s fleet.Snapshot, cc config.ClusterConfig, now time.Time) ClusterDTO 
 	}
 	tags := cc.EffectiveTags()
 	return ClusterDTO{
-		Name:               s.Name,
-		State:              s.State.String(),
-		Reason:             s.Reason,
-		NodesReady:         s.NodesReady,
-		NodesTotal:         s.NodesTotal,
-		Pods:               s.Pods,
-		Version:            s.Version,
-		GitopsTier:         s.Capabilities.GitOps.Tier.String(),
-		GitopsReason:       s.Capabilities.GitOps.Reason,
-		FluxPresent:        s.Capabilities.GitOps.Flux.Present,
-		FluxHealthy:        s.Capabilities.GitOps.Flux.Healthy,
-		ArgoPresent:        s.Capabilities.GitOps.Argo.Present,
-		NetworkTier:        s.Capabilities.Network.Tier.String(),
-		NetworkReason:      s.Capabilities.Network.Reason,
-		GatewayAPIVersion:  s.Capabilities.Network.GatewayAPIVersion,
-		CiliumPresent:      s.Capabilities.Network.CiliumPresent,
-		ClusterMesh:        s.Capabilities.Network.ClusterMesh,
-		CertManagerTier:    s.Capabilities.CertManager.Tier.String(),
-		CertManagerReason:  s.Capabilities.CertManager.Reason,
-		CertManagerPresent: s.Capabilities.CertManager.Present,
-		CertManagerHealthy: s.Capabilities.CertManager.Healthy,
-		Env:                firstNonEmpty(cc.Environment, tags["env"]),
-		Protected:          cc.Protected,
-		Region:             tags["region"],
-		Provider:           tags["provider"],
-		Group:              cc.Group,
-		AgeSeconds:         age,
+		Name:                   s.Name,
+		State:                  s.State.String(),
+		Reason:                 s.Reason,
+		NodesReady:             s.NodesReady,
+		NodesTotal:             s.NodesTotal,
+		Pods:                   s.Pods,
+		Version:                s.Version,
+		GitopsTier:             s.Capabilities.GitOps.Tier.String(),
+		GitopsReason:           s.Capabilities.GitOps.Reason,
+		FluxPresent:            s.Capabilities.GitOps.Flux.Present,
+		FluxHealthy:            s.Capabilities.GitOps.Flux.Healthy,
+		ArgoPresent:            s.Capabilities.GitOps.Argo.Present,
+		NetworkTier:            s.Capabilities.Network.Tier.String(),
+		NetworkReason:          s.Capabilities.Network.Reason,
+		GatewayAPIVersion:      s.Capabilities.Network.GatewayAPIVersion,
+		CiliumPresent:          s.Capabilities.Network.CiliumPresent,
+		ClusterMesh:            s.Capabilities.Network.ClusterMesh,
+		CertManagerTier:        s.Capabilities.CertManager.Tier.String(),
+		CertManagerReason:      s.Capabilities.CertManager.Reason,
+		CertManagerPresent:     s.Capabilities.CertManager.Present,
+		CertManagerHealthy:     s.Capabilities.CertManager.Healthy,
+		ExternalSecretsTier:    s.Capabilities.ExternalSecrets.Tier.String(),
+		ExternalSecretsReason:  s.Capabilities.ExternalSecrets.Reason,
+		ExternalSecretsPresent: s.Capabilities.ExternalSecrets.Present,
+		ExternalSecretsHealthy: s.Capabilities.ExternalSecrets.Healthy,
+		Env:                    firstNonEmpty(cc.Environment, tags["env"]),
+		Protected:              cc.Protected,
+		Region:                 tags["region"],
+		Provider:               tags["provider"],
+		Group:                  cc.Group,
+		AgeSeconds:             age,
 	}
 }
 

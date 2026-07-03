@@ -96,7 +96,11 @@ func TestCertManagerIssuersAndObject(t *testing.T) {
 	c.OpenCertManager()
 	defer c.CloseCertManager()
 
-	waitFor(t, 2*time.Second, func() bool { return len(c.CertManagerIssuers()) == 1 })
+	// Wait for BOTH informers: the object lookups below read the certificate
+	// store too, and its list can lag the issuer list (observed flake).
+	waitFor(t, 2*time.Second, func() bool {
+		return len(c.CertManagerIssuers()) == 1 && len(c.CertManagerCertificates()) == 1
+	})
 
 	iss := c.CertManagerIssuers()
 	if iss[0].Kind != certmanager.ClusterIssuerKind || iss[0].Namespace != "" || iss[0].Ready != certmanager.Failed {
