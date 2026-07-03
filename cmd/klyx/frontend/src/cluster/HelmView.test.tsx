@@ -12,6 +12,12 @@ vi.mock("../bridge/helm", () => ({
 }));
 import { openHelmRelease, helmRollback } from "../bridge/helm";
 
+// The rollback composer (OperationDialog) registers protected-cluster grants
+// via the config bridge; mock it so no Wails runtime is needed.
+vi.mock("../bridge/configsvc", () => ({
+  armProtected: vi.fn(async () => ({ ok: true, error: "" })),
+}));
+
 const deployed: HelmReleaseDTO = {
   name: "nginx-ingress",
   namespace: "ingress-nginx",
@@ -183,23 +189,46 @@ describe("HelmView", () => {
     expect(queryAllByText("rollback")).toHaveLength(2);
   });
 
-  it("rollback button click opens confirm dialog with correct detail text", () => {
+  it("rollback button opens the composer with from → to tiles naming revision, chart, appVersion", () => {
     seedWithDetail(deployed, historyEntries, "");
-    const { getAllByText, getByText } = render(<HelmView cluster="homelab" />);
+    const { getAllByText, getByRole, getByText } = render(<HelmView cluster="homelab" />);
     const rollbackBtns = getAllByText("rollback");
     // Click the first one (revision 2 after sort desc: rev3, rev2, rev1)
     fireEvent.click(rollbackBtns[0]);
-    // Confirm dialog should appear
-    expect(getByText("rollback release")).toBeTruthy();
-    expect(getByText(/roll back ingress-nginx\/nginx-ingress to revision 2/)).toBeTruthy();
+    expect(getByRole("dialog", { name: "Roll back nginx-ingress" })).toBeTruthy();
+    // From/to context: current vs target, chart included - the target running
+    // a different chart version is the interesting fact of this rollback.
+    expect(getByText("rev 3 · ingress-nginx-4.10.0 (1.10.0)")).toBeTruthy();
+    expect(getByText("rev 2 · ingress-nginx-4.9.0 (1.9.1)")).toBeTruthy();
   });
 
-  it("confirming rollback calls helmRollback bridge", () => {
+  it("confirming rollback passes the default options: wait on, hooks on, 120s", () => {
     seedWithDetail(deployed, historyEntries, "");
-    const { getAllByText, getByText } = render(<HelmView cluster="homelab" />);
+    const { getAllByText, getByRole } = render(<HelmView cluster="homelab" />);
     fireEvent.click(getAllByText("rollback")[0]);
-    fireEvent.click(getByText("Rollback"));
-    expect(helmRollback).toHaveBeenCalledWith("homelab", "ingress-nginx", "nginx-ingress", 2);
+    fireEvent.click(getByRole("button", { name: "Roll back" }));
+    expect(helmRollback).toHaveBeenCalledWith("homelab", "ingress-nginx", "nginx-ingress", 2, {
+      wait: true,
+      noHooks: false,
+      timeoutSeconds: 120,
+    });
+  });
+
+  it("toggling wait/skip-hooks and timeout threads through to helmRollback", () => {
+    seedWithDetail(deployed, historyEntries, "");
+    const { getAllByText, getByRole, getByLabelText } = render(<HelmView cluster="homelab" />);
+    fireEvent.click(getAllByText("rollback")[0]);
+    fireEvent.change(getByLabelText("rollback timeout"), { target: { value: "300" } });
+    fireEvent.click(getByRole("button", { name: /Skip hooks/ }));
+    fireEvent.click(getByRole("button", { name: /Wait for readiness/ }));
+    // Timeout only applies while waiting; with wait off the select is disabled.
+    expect((getByLabelText("rollback timeout") as HTMLSelectElement).disabled).toBe(true);
+    fireEvent.click(getByRole("button", { name: "Roll back" }));
+    expect(helmRollback).toHaveBeenCalledWith("homelab", "ingress-nginx", "nginx-ingress", 2, {
+      wait: false,
+      noHooks: true,
+      timeoutSeconds: 300,
+    });
   });
 
   it("cancelling rollback dialog does not call helmRollback", () => {

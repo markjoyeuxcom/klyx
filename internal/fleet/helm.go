@@ -43,15 +43,16 @@ func (c *ClusterConn) HelmValues(ctx context.Context, namespace, release string)
 	return helmcli.GetValues(ctx, helmRunner, c.kubeContext, namespace, release)
 }
 
-// HelmRollback rolls back a release to the given revision.
-func (c *ClusterConn) HelmRollback(ctx context.Context, namespace, release string, revision int) error {
+// HelmRollback rolls back a release to the given revision with the
+// user-composed options.
+func (c *ClusterConn) HelmRollback(ctx context.Context, namespace, release string, revision int, opts helmcli.RollbackOptions) error {
 	if c.kubeContext == "" {
 		return fmt.Errorf("HelmRollback: kubeContext not set on conn %q", c.name)
 	}
 	if err := validateHelmNames(namespace, release); err != nil {
 		return err
 	}
-	return helmcli.Rollback(ctx, helmRunner, c.kubeContext, namespace, release, revision)
+	return helmcli.Rollback(ctx, helmRunner, c.kubeContext, namespace, release, revision, opts)
 }
 
 // validateHelmNames guards the helm CLI argv: namespace and release names come

@@ -96,7 +96,7 @@ type Conn interface {
 	ClusterMetrics(ctx context.Context, forceReprobe bool) (metrics.ClusterMetrics, metrics.MetricsCapability)
 	RouteMetrics(ctx context.Context, routeKeys []string) (map[string]routemetrics.RouteMetrics, routemetrics.Status)
 	SetCordon(ctx context.Context, nodeName string, cordon bool) error
-	DrainNodeCmd(nodeName string) (*exec.Cmd, error)
+	DrainNodeCmd(nodeName string, opts DrainOptions) (*exec.Cmd, error)
 	ExecCommand(namespace, pod, container string) ([]string, error)
 	DebugCommand(namespace, pod, container string) ([]string, error)
 	PortForward(ctx context.Context, namespace, pod string, localPort, targetPort int) (stop func(), actualLocal int, done <-chan error, err error)
@@ -104,7 +104,7 @@ type Conn interface {
 	HelmReleases(ctx context.Context) ([]helmcli.Release, error)
 	HelmHistory(ctx context.Context, namespace, release string) ([]helmcli.HistoryEntry, error)
 	HelmValues(ctx context.Context, namespace, release string) (string, error)
-	HelmRollback(ctx context.Context, namespace, release string, revision int) error
+	HelmRollback(ctx context.Context, namespace, release string, revision int, opts helmcli.RollbackOptions) error
 	ListArgoApps(ctx context.Context) ([]argo.App, error)
 	ListArgoProjects(ctx context.Context) ([]argo.Project, error)
 	ListArgoApplicationSets(ctx context.Context) ([]argo.ApplicationSet, error)

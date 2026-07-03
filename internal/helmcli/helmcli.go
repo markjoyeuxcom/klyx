@@ -273,13 +273,30 @@ func GetValues(ctx context.Context, r Runner, kubeContext, namespace, release st
 
 // Rollback rolls back a release to the specified revision. It passes --wait
 // and --timeout 120s matching the kubectl drain pattern used in DrainNodeCmd.
-func Rollback(ctx context.Context, r Runner, kubeContext, namespace, release string, revision int) error {
-	_, err := r.Run(ctx,
+// RollbackOptions are the user-composed helm rollback flags (previously
+// hardcoded to --wait --timeout 120s).
+type RollbackOptions struct {
+	Wait           bool // wait for resources to become ready before returning
+	NoHooks        bool // skip pre/post-rollback hooks
+	TimeoutSeconds int  // 0 -> 120s default; only meaningful with Wait
+}
+
+func Rollback(ctx context.Context, r Runner, kubeContext, namespace, release string, revision int, opts RollbackOptions) error {
+	timeout := opts.TimeoutSeconds
+	if timeout <= 0 {
+		timeout = 120
+	}
+	args := []string{
 		"rollback", release, fmt.Sprintf("%d", revision),
 		"-n", namespace,
 		"--kube-context", kubeContext,
-		"--wait",
-		"--timeout", "120s",
-	)
+	}
+	if opts.Wait {
+		args = append(args, "--wait", "--timeout", fmt.Sprintf("%ds", timeout))
+	}
+	if opts.NoHooks {
+		args = append(args, "--no-hooks")
+	}
+	_, err := r.Run(ctx, args...)
 	return err
 }

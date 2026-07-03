@@ -50,9 +50,17 @@ export async function openHelmRelease(cluster: string, namespace: string, name: 
   }
 }
 
-export async function helmRollback(cluster: string, namespace: string, name: string, revision: number): Promise<void> {
+// RollbackOptions are the user-composed helm rollback flags from the rollback
+// composer (previously hardcoded to --wait --timeout 120s).
+export type RollbackOptions = {
+  wait: boolean;
+  noHooks: boolean;
+  timeoutSeconds: number;
+};
+
+export async function helmRollback(cluster: string, namespace: string, name: string, revision: number, opts: RollbackOptions): Promise<void> {
   try {
-    const r = (await HelmService.HelmRollback(cluster, namespace, name, revision)) as ActionResultDTO;
+    const r = (await HelmService.HelmRollback(cluster, namespace, name, revision, opts)) as ActionResultDTO;
     useFleet.getState().setActionStatus(
       r.ok
         ? { kind: "success", message: `rolled back ${namespace}/${name} to revision ${revision}` }

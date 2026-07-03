@@ -9,12 +9,23 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/moomora/klyx/internal/fleet"
 )
 
 // NodeOpsConn is the per-cluster surface NodeOpsService needs.
 type NodeOpsConn interface {
 	SetCordon(ctx context.Context, nodeName string, cordon bool) error
-	DrainNodeCmd(nodeName string) (*exec.Cmd, error)
+	DrainNodeCmd(nodeName string, opts fleet.DrainOptions) (*exec.Cmd, error)
+}
+
+// DrainOptionsDTO carries the user-composed drain flags from the drain
+// composer dialog. Zero value = the safe drain (see fleet.DrainOptions).
+type DrainOptionsDTO struct {
+	IgnoreDaemonSets   bool `json:"ignoreDaemonSets"`
+	DeleteEmptyDirData bool `json:"deleteEmptyDirData"`
+	Force              bool `json:"force"`
+	TimeoutSeconds     int  `json:"timeoutSeconds"`
 }
 
 // drainStream is one live drain process.
@@ -93,7 +104,7 @@ func (p *drainPipe) Close() error {
 // A drain is a user-initiated destructive operation mid-flight - evicting one
 // would leave its node cordoned and half-drained while reporting a clean
 // stream end (same policy as forwards: never silently kill user-managed work).
-func (s *NodeOpsService) StartDrain(cluster, node string) OpenLogStreamResultDTO {
+func (s *NodeOpsService) StartDrain(cluster, node string, opts DrainOptionsDTO) OpenLogStreamResultDTO {
 	if err := checkProtected(cluster); err != nil {
 		return OpenLogStreamResultDTO{Error: err.Error()}
 	}
@@ -102,7 +113,12 @@ func (s *NodeOpsService) StartDrain(cluster, node string) OpenLogStreamResultDTO
 		return OpenLogStreamResultDTO{Error: "cluster not connected: " + cluster}
 	}
 
-	cmd, err := conn.DrainNodeCmd(node)
+	cmd, err := conn.DrainNodeCmd(node, fleet.DrainOptions{
+		IgnoreDaemonSets:   opts.IgnoreDaemonSets,
+		DeleteEmptyDirData: opts.DeleteEmptyDirData,
+		Force:              opts.Force,
+		TimeoutSeconds:     opts.TimeoutSeconds,
+	})
 	if err != nil {
 		return OpenLogStreamResultDTO{Error: err.Error()}
 	}

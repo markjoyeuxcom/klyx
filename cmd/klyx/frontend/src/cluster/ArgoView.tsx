@@ -2,9 +2,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useFleet } from "../store/fleet";
 import type { ArgoApplicationSetDTO, ArgoAppDTO, ArgoProjectDTO, ArgoResourceDTO, ArgoResourceRuleDTO, ArgoViewMode, CRDGroupDTO, ResourceRef } from "../store/fleet";
 import { listArgoApplicationSets, listArgoApps, listArgoProjects, refreshArgoApp, syncArgoApp } from "../bridge/argo";
-import { armProtected } from "../bridge/configsvc";
 import type { ArgoSyncOptions } from "../bridge/argo";
 import { ConfirmDialog } from "../chrome/ConfirmDialog";
+import { MetaTile, OperationDialog, OptionTile } from "../chrome/OperationDialog";
 import { useListKeys } from "../chrome/useListKeys";
 import { EmptyState, SkeletonRows, btn, ellipsis } from "../chrome/primitives";
 import { IconGitMerge } from "@tabler/icons-react";
@@ -858,217 +858,107 @@ function SyncApplicationDialog({
   const [replace, setReplace] = useState(false);
   const [serverSideApply, setServerSideApply] = useState(false);
   const [selectedResources, setSelectedResources] = useState<string[]>([]);
-  const [typed, setTyped] = useState("");
-  const armed = !isProtected || typed === cluster;
   const source = app.chart ? `chart ${app.chart}` : app.path || "root";
   const selected = new Set(selectedResources);
   const syncResources = resources.filter((r) => selected.has(resourceKey(r)));
 
   return (
-    <div
-      onClick={onCancel}
-      style={{
-        position: "fixed",
-        inset: 0,
-        zIndex: 1000,
-        background: "rgba(0,0,0,0.48)",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        padding: 24,
-      }}
+    <OperationDialog
+      title={`Sync Application "${app.name}"`}
+      ariaLabel={`Sync Application ${app.name}`}
+      subtitle="Starts an Argo CD sync operation with explicit Argo options and fast Klyx defaults."
+      cluster={cluster}
+      protected={isProtected}
+      confirmLabel="Synchronize"
+      onCancel={onCancel}
+      onConfirm={() => onConfirm({
+        revision: revision.trim(),
+        strategy,
+        prune,
+        dryRun,
+        force,
+        replace,
+        serverSideApply,
+        resources: syncResources,
+      })}
     >
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-label={`Sync Application ${app.name}`}
-        onClick={(e) => e.stopPropagation()}
-        style={{
-          width: "min(720px, calc(100vw - 48px))",
-          maxHeight: "calc(100vh - 64px)",
-          overflow: "auto",
-          background: "var(--color-background-primary)",
-          border: "0.5px solid var(--color-border-secondary)",
-          borderRadius: 6,
-          boxShadow: "0 18px 50px rgba(0,0,0,0.35)",
-          color: "var(--color-text-primary)",
-          fontSize: 13,
-        }}
-      >
-        <div style={{ padding: "18px 20px 14px", borderBottom: "0.5px solid var(--color-border-tertiary)" }}>
-          <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
-            <div style={{ minWidth: 0 }}>
-              <div style={{ fontSize: 17, fontWeight: 600, marginBottom: 5 }}>
-                Sync Application "{app.name}"
-              </div>
-              <div style={{ color: "var(--color-text-secondary)", lineHeight: 1.45 }}>
-                Starts an Argo CD sync operation with explicit Argo options and fast Klyx defaults.
-              </div>
-            </div>
-            <button aria-label="close sync dialog" onClick={onCancel} style={iconBtn}>x</button>
-          </div>
-        </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+        <MetaTile label="application" value={`${app.namespace}/${app.name}`} />
+        <MetaTile label="destination" value={app.destNamespace || "-"} />
+        <MetaTile label="source" value={`${app.repoURL || "-"} - ${source}`} />
+        <MetaTile label="current revision" value={app.revision ? short(app.revision) : "-"} title={app.revision} />
+      </div>
 
-        <div style={{ padding: 20, display: "grid", gap: 16 }}>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-            <MetaTile label="application" value={`${app.namespace}/${app.name}`} />
-            <MetaTile label="destination" value={app.destNamespace || "-"} />
-            <MetaTile label="source" value={`${app.repoURL || "-"} - ${source}`} />
-            <MetaTile label="current revision" value={app.revision ? short(app.revision) : "-"} title={app.revision} />
-          </div>
+      <label style={{ display: "grid", gap: 6 }}>
+        <span style={fieldLabel}>revision (git ref)</span>
+        <input
+          autoFocus={!isProtected}
+          aria-label="revision git ref"
+          value={revision}
+          onChange={(e) => setRevision(e.target.value)}
+          placeholder="default: spec.source.targetRevision"
+          style={inputStyle}
+        />
+      </label>
 
-          <label style={{ display: "grid", gap: 6 }}>
-            <span style={fieldLabel}>revision (git ref)</span>
-            <input
-              autoFocus={!isProtected}
-              aria-label="revision git ref"
-              value={revision}
-              onChange={(e) => setRevision(e.target.value)}
-              placeholder="default: spec.source.targetRevision"
-              style={inputStyle}
-            />
-          </label>
-
-          <div style={{ display: "grid", gap: 8 }}>
-            <div style={fieldLabel}>strategy</div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-              <OptionTile
-                active={strategy === "hook"}
-                title="Hook (recommended)"
-                body="Respect sync waves and pre/post-sync hooks. This matches Argo CD's normal operation."
-                onClick={() => setStrategy("hook")}
-              />
-              <OptionTile
-                active={strategy === "apply"}
-                title="Apply"
-                body="Apply resources directly. Skips hooks and is useful when hooks are the problem."
-                onClick={() => setStrategy("apply")}
-              />
-            </div>
-          </div>
-
-          <div style={{ display: "grid", gap: 8 }}>
-            <div style={fieldLabel}>options</div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 10 }}>
-              <OptionTile active={dryRun} title="Dry-run" body="Ask the apiserver what would happen without applying changes." onClick={() => setDryRun((v) => !v)} />
-              <OptionTile active={prune} title="Prune" body="Delete resources that are in cluster but no longer in Git." onClick={() => setPrune((v) => !v)} />
-              <OptionTile active={force} title="Force" body="Pass Force=true to Argo syncOptions for conflict override." onClick={() => setForce((v) => !v)} />
-              <OptionTile active={replace} title="Replace" body="Use replace semantics via Replace=true syncOption." onClick={() => setReplace((v) => !v)} />
-              <OptionTile active={serverSideApply} title="Server-side apply" body="Use ServerSideApply=true for field ownership-aware apply." onClick={() => setServerSideApply((v) => !v)} />
-            </div>
-          </div>
-
-          <div style={{ display: "grid", gap: 8 }}>
-            <div style={fieldLabel}>selective sync {selectedResources.length > 0 ? `(${selectedResources.length})` : "(all)"}</div>
-            {resources.length === 0 ? (
-              <div style={{ color: "var(--color-text-tertiary)", fontSize: 12, border: "0.5px solid var(--color-border-tertiary)", borderRadius: 5, padding: "9px 10px", background: "var(--color-background-secondary)" }}>
-                Argo has not reported resource inventory for this application yet. Synchronize applies all resources.
-              </div>
-            ) : (
-              <div style={{ border: "0.5px solid var(--color-border-tertiary)", borderRadius: 5, overflow: "hidden", maxHeight: 168, overflowY: "auto", background: "var(--color-background-secondary)" }}>
-                {resources.map((r) => {
-                  const key = resourceKey(r);
-                  const checked = selected.has(key);
-                  return (
-                    <label key={key} style={{ display: "grid", gridTemplateColumns: "18px 110px minmax(0, 1fr) 82px", gap: 8, alignItems: "center", padding: "7px 10px", borderBottom: "0.5px solid var(--color-border-tertiary)", fontFamily: "var(--font-mono)", fontSize: 11, cursor: "pointer" }}>
-                      <input
-                        aria-label={`select ${r.kind} ${r.namespace}/${r.name}`}
-                        type="checkbox"
-                        checked={checked}
-                        onChange={() => setSelectedResources((prev) => checked ? prev.filter((v) => v !== key) : [...prev, key])}
-                      />
-                      <span>{r.kind}</span>
-                      <span style={ellipsis}>{r.namespace ? `${r.namespace}/` : ""}{r.name}</span>
-                      <span style={{ color: resourceTone(r), textAlign: "right" }}>{r.status || r.health || "-"}</span>
-                    </label>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-
-          {isProtected && (
-            <div style={{ display: "grid", gap: 6 }}>
-              <div style={{ color: "var(--color-text-warning)", fontSize: 12 }}>
-                <span style={{ fontFamily: "var(--font-mono)", fontWeight: 600 }}>prd lock</span>
-                {" "}active. Type <b>{cluster}</b> to confirm.
-              </div>
-              <input
-                aria-label="protected cluster confirmation"
-                placeholder={cluster}
-                value={typed}
-                onChange={(e) => setTyped(e.target.value)}
-                style={inputStyle}
-              />
-            </div>
-          )}
-        </div>
-
-        <div style={{ padding: "14px 20px", borderTop: "0.5px solid var(--color-border-tertiary)", display: "flex", justifyContent: "flex-end", gap: 8, background: "var(--color-background-secondary)" }}>
-          <button onClick={onCancel} style={btn}>Cancel</button>
-          <button
-            onClick={() => {
-              const options = {
-                revision: revision.trim(),
-                strategy,
-                prune,
-                dryRun,
-                force,
-                replace,
-                serverSideApply,
-                resources: syncResources,
-              };
-              // On a protected cluster, register the typed confirmation with
-              // the backend first - SyncApp consumes a one-shot grant there.
-              if (isProtected) {
-                void armProtected(cluster, typed).then((r) => {
-                  if (r.ok) onConfirm(options);
-                });
-              } else {
-                onConfirm(options);
-              }
-            }}
-            disabled={!armed}
-            style={syncBtn(!armed)}
-          >
-            Synchronize
-          </button>
+      <div style={{ display: "grid", gap: 8 }}>
+        <div style={fieldLabel}>strategy</div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+          <OptionTile
+            active={strategy === "hook"}
+            title="Hook (recommended)"
+            body="Respect sync waves and pre/post-sync hooks. This matches Argo CD's normal operation."
+            onClick={() => setStrategy("hook")}
+          />
+          <OptionTile
+            active={strategy === "apply"}
+            title="Apply"
+            body="Apply resources directly. Skips hooks and is useful when hooks are the problem."
+            onClick={() => setStrategy("apply")}
+          />
         </div>
       </div>
-    </div>
-  );
-}
 
-function MetaTile({ label, value, title }: { label: string; value: string; title?: string }) {
-  return (
-    <div style={{ border: "0.5px solid var(--color-border-tertiary)", background: "var(--color-background-secondary)", borderRadius: 5, padding: "8px 10px", minWidth: 0 }}>
-      <div style={fieldLabel}>{label}</div>
-      <div title={title ?? value} style={{ ...ellipsis, fontFamily: "var(--font-mono)", fontSize: 11, marginTop: 4 }}>{value}</div>
-    </div>
-  );
-}
+      <div style={{ display: "grid", gap: 8 }}>
+        <div style={fieldLabel}>options</div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 10 }}>
+          <OptionTile active={dryRun} title="Dry-run" body="Ask the apiserver what would happen without applying changes." onClick={() => setDryRun((v) => !v)} />
+          <OptionTile active={prune} title="Prune" body="Delete resources that are in cluster but no longer in Git." onClick={() => setPrune((v) => !v)} />
+          <OptionTile active={force} title="Force" body="Pass Force=true to Argo syncOptions for conflict override." onClick={() => setForce((v) => !v)} />
+          <OptionTile active={replace} title="Replace" body="Use replace semantics via Replace=true syncOption." onClick={() => setReplace((v) => !v)} />
+          <OptionTile active={serverSideApply} title="Server-side apply" body="Use ServerSideApply=true for field ownership-aware apply." onClick={() => setServerSideApply((v) => !v)} />
+        </div>
+      </div>
 
-function OptionTile({ title, body, active = false, disabled = false, onClick }: { title: string; body: string; active?: boolean; disabled?: boolean; onClick?: () => void }) {
-  return (
-    <button
-      type="button"
-      aria-disabled={disabled}
-      onClick={disabled ? undefined : onClick}
-      style={{
-        cursor: disabled ? "default" : "pointer",
-        textAlign: "left",
-        border: active ? "0.5px solid var(--color-border-info)" : "0.5px solid var(--color-border-tertiary)",
-        background: active ? "var(--color-background-info)" : "var(--color-background-secondary)",
-        opacity: disabled ? 0.58 : 1,
-        color: "var(--color-text-primary)",
-        borderRadius: 5,
-        padding: "10px 12px",
-        minHeight: 72,
-      }}
-    >
-      <div style={{ fontWeight: 600, marginBottom: 5 }}>{title}</div>
-      <div style={{ color: "var(--color-text-secondary)", fontSize: 12, lineHeight: 1.35 }}>{body}</div>
-    </button>
+      <div style={{ display: "grid", gap: 8 }}>
+        <div style={fieldLabel}>selective sync {selectedResources.length > 0 ? `(${selectedResources.length})` : "(all)"}</div>
+        {resources.length === 0 ? (
+          <div style={{ color: "var(--color-text-tertiary)", fontSize: 12, border: "0.5px solid var(--color-border-tertiary)", borderRadius: 5, padding: "9px 10px", background: "var(--color-background-secondary)" }}>
+            Argo has not reported resource inventory for this application yet. Synchronize applies all resources.
+          </div>
+        ) : (
+          <div style={{ border: "0.5px solid var(--color-border-tertiary)", borderRadius: 5, overflow: "hidden", maxHeight: 168, overflowY: "auto", background: "var(--color-background-secondary)" }}>
+            {resources.map((r) => {
+              const key = resourceKey(r);
+              const checked = selected.has(key);
+              return (
+                <label key={key} style={{ display: "grid", gridTemplateColumns: "18px 110px minmax(0, 1fr) 82px", gap: 8, alignItems: "center", padding: "7px 10px", borderBottom: "0.5px solid var(--color-border-tertiary)", fontFamily: "var(--font-mono)", fontSize: 11, cursor: "pointer" }}>
+                  <input
+                    aria-label={`select ${r.kind} ${r.namespace}/${r.name}`}
+                    type="checkbox"
+                    checked={checked}
+                    onChange={() => setSelectedResources((prev) => checked ? prev.filter((v) => v !== key) : [...prev, key])}
+                  />
+                  <span>{r.kind}</span>
+                  <span style={ellipsis}>{r.namespace ? `${r.namespace}/` : ""}{r.name}</span>
+                  <span style={{ color: resourceTone(r), textAlign: "right" }}>{r.status || r.health || "-"}</span>
+                </label>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </OperationDialog>
   );
 }
 
@@ -1106,12 +996,3 @@ const smallPrimaryBtn: React.CSSProperties = { ...smallBtn, color: "var(--color-
 const emptyStyle: React.CSSProperties = { color: "var(--color-text-secondary)", fontSize: 13 };
 const fieldLabel: React.CSSProperties = { color: "var(--color-text-tertiary)", fontSize: 10, textTransform: "uppercase", fontWeight: 600, letterSpacing: 0.2 };
 const inputStyle: React.CSSProperties = { width: "100%", boxSizing: "border-box", padding: "8px 10px", fontFamily: "var(--font-mono)", fontSize: 12, background: "var(--color-background-secondary)", border: "0.5px solid var(--color-border-tertiary)", borderRadius: 5, color: "var(--color-text-primary)", outline: "none" };
-const iconBtn: React.CSSProperties = { border: "0.5px solid transparent", background: "transparent", color: "var(--color-text-tertiary)", cursor: "pointer", fontSize: 16, lineHeight: 1, padding: "2px 6px", borderRadius: 4 };
-const syncBtn = (disabled: boolean): React.CSSProperties => ({
-  ...btn,
-  padding: "5px 12px",
-  color: "var(--color-text-primary)",
-  background: "var(--color-background-accent, var(--color-background-info))",
-  opacity: disabled ? 0.5 : 1,
-  cursor: disabled ? "not-allowed" : "pointer",
-});

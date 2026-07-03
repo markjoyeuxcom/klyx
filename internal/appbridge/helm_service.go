@@ -17,7 +17,7 @@ type HelmConn interface {
 	HelmReleases(ctx context.Context) ([]helmcli.Release, error)
 	HelmHistory(ctx context.Context, namespace, release string) ([]helmcli.HistoryEntry, error)
 	HelmValues(ctx context.Context, namespace, release string) (string, error)
-	HelmRollback(ctx context.Context, namespace, release string, revision int) error
+	HelmRollback(ctx context.Context, namespace, release string, revision int, opts helmcli.RollbackOptions) error
 }
 
 // HelmService is bound to JS. It provides read-only release inspection and
@@ -135,8 +135,16 @@ func (s *HelmService) GetHelmValues(cluster, namespace, release string) HelmValu
 	return HelmValuesResultDTO{Values: values}
 }
 
+// RollbackOptionsDTO carries the user-composed rollback flags from the
+// rollback composer dialog.
+type RollbackOptionsDTO struct {
+	Wait           bool `json:"wait"`
+	NoHooks        bool `json:"noHooks"`
+	TimeoutSeconds int  `json:"timeoutSeconds"`
+}
+
 // HelmRollback rolls back a release to the specified revision.
-func (s *HelmService) HelmRollback(cluster, namespace, release string, revision int) ActionResultDTO {
+func (s *HelmService) HelmRollback(cluster, namespace, release string, revision int, opts RollbackOptionsDTO) ActionResultDTO {
 	if err := checkProtected(cluster); err != nil {
 		return ActionResultDTO{Error: err.Error()}
 	}
@@ -148,7 +156,7 @@ func (s *HelmService) HelmRollback(cluster, namespace, release string, revision 
 	ctx, cancel := context.WithTimeout(context.Background(), helmRollbackTimeout)
 	defer cancel()
 
-	if err := conn.HelmRollback(ctx, namespace, release, revision); err != nil {
+	if err := conn.HelmRollback(ctx, namespace, release, revision, helmcli.RollbackOptions{Wait: opts.Wait, NoHooks: opts.NoHooks, TimeoutSeconds: opts.TimeoutSeconds}); err != nil {
 		return ActionResultDTO{Error: err.Error()}
 	}
 	return ActionResultDTO{OK: true}

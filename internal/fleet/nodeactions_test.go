@@ -48,7 +48,7 @@ func TestSetCordon_Uncordon(t *testing.T) {
 
 func TestDrainNodeCmd_BuildsArgs(t *testing.T) {
 	conn := &ClusterConn{name: "test", kubeContext: "my-ctx"}
-	cmd, err := conn.DrainNodeCmd("node-3")
+	cmd, err := conn.DrainNodeCmd("node-3", DrainOptions{IgnoreDaemonSets: true, DeleteEmptyDirData: true, Force: true, TimeoutSeconds: 300})
 	if err != nil {
 		// If kubectl is not in PATH in the test environment, skip gracefully.
 		t.Skipf("kubectl not in PATH: %v", err)
@@ -72,7 +72,8 @@ func TestDrainNodeCmd_BuildsArgs(t *testing.T) {
 	checkArg("node-3")
 	checkArg("--ignore-daemonsets")
 	checkArg("--delete-emptydir-data")
-	checkArg("--timeout=120s")
+	checkArg("--force")
+	checkArg("--timeout=300s")
 	// The node name must come after the "--" flag terminator so it can never
 	// be parsed as a flag.
 	sep := -1
@@ -90,7 +91,7 @@ func TestDrainNodeCmd_RefusesEmptyContext(t *testing.T) {
 	// Empty kubeContext would make kubectl fall back to current-context - a
 	// drain aimed at whatever cluster the user's terminal happens to point at.
 	conn := &ClusterConn{name: "test", kubeContext: ""}
-	if _, err := conn.DrainNodeCmd("node-3"); err == nil {
+	if _, err := conn.DrainNodeCmd("node-3", DrainOptions{}); err == nil {
 		t.Fatal("expected error for empty kubeContext")
 	}
 }
@@ -100,8 +101,33 @@ func TestDrainNodeCmd_RefusesInvalidNames(t *testing.T) {
 	// Flag-shaped and control-character names must be refused before they can
 	// reach an argv ("--all" would drain every node in the cluster).
 	for _, name := range []string{"--all", "-l", "node 3", "node\nreboot", "Node3", ""} {
-		if _, err := conn.DrainNodeCmd(name); err == nil {
+		if _, err := conn.DrainNodeCmd(name, DrainOptions{}); err == nil {
 			t.Errorf("expected error for node name %q", name)
 		}
+	}
+}
+
+func TestDrainNodeCmd_SafeDefaults(t *testing.T) {
+	// The zero-value options are the SAFE drain: no emptyDir destruction
+	// (flipped from hardcoded-on 2026-07-03), no force, no daemonset toleration,
+	// 120s timeout.
+	conn := &ClusterConn{name: "test", kubeContext: "my-ctx"}
+	cmd, err := conn.DrainNodeCmd("node-3", DrainOptions{})
+	if err != nil {
+		t.Skipf("kubectl not in PATH: %v", err)
+	}
+	for _, a := range cmd.Args {
+		if a == "--delete-emptydir-data" || a == "--force" || a == "--ignore-daemonsets" {
+			t.Fatalf("safe default must not include %q: %v", a, cmd.Args)
+		}
+	}
+	found := false
+	for _, a := range cmd.Args {
+		if a == "--timeout=120s" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("want default --timeout=120s: %v", cmd.Args)
 	}
 }

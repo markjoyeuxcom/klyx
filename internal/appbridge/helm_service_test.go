@@ -40,7 +40,7 @@ func (f *fakeHelmConn) HelmValues(_ context.Context, _, _ string) (string, error
 	return f.values, f.valuesErr
 }
 
-func (f *fakeHelmConn) HelmRollback(_ context.Context, namespace, release string, revision int) error {
+func (f *fakeHelmConn) HelmRollback(_ context.Context, namespace, release string, revision int, opts helmcli.RollbackOptions) error {
 	f.rollbackCalls = append(f.rollbackCalls, rollbackCall{namespace: namespace, release: release, revision: revision})
 	return f.rollbackErr
 }
@@ -245,7 +245,7 @@ func TestHelmRollback_Success(t *testing.T) {
 	conn := &fakeHelmConn{}
 	svc := newHelmTestSvc(conn)
 
-	result := svc.HelmRollback("test", "staging", "my-app", 3)
+	result := svc.HelmRollback("test", "staging", "my-app", 3, RollbackOptionsDTO{Wait: true})
 	if !result.OK {
 		t.Fatalf("want OK, got error: %q", result.Error)
 	}
@@ -262,7 +262,7 @@ func TestHelmRollback_ClusterMiss(t *testing.T) {
 	conn := &fakeHelmConn{}
 	svc := newHelmTestSvc(conn)
 
-	result := svc.HelmRollback("missing", "ns", "rel", 1)
+	result := svc.HelmRollback("missing", "ns", "rel", 1, RollbackOptionsDTO{})
 	if result.OK {
 		t.Error("want error for cluster miss")
 	}
@@ -275,7 +275,7 @@ func TestHelmRollback_PropagatesError(t *testing.T) {
 	conn := &fakeHelmConn{rollbackErr: errors.New("pod stuck in Terminating")}
 	svc := newHelmTestSvc(conn)
 
-	result := svc.HelmRollback("test", "ns", "rel", 2)
+	result := svc.HelmRollback("test", "ns", "rel", 2, RollbackOptionsDTO{})
 	if result.OK {
 		t.Error("want error")
 	}
