@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useFleet } from "../store/fleet";
 import type { CertificateDTO, IssuerDTO, ChainNodeDTO, CertChainDTO } from "../store/fleet";
 import { openCertManager, closeCertManager, getCertificateChain } from "../bridge/certmanager";
+import { useListKeys } from "../chrome/useListKeys";
 import { Badge, FilterButton, SummaryCell, Section, Field, StatusDot, frame, ellipsis, mono, readyColor, toneColor } from "../chrome/primitives";
 import { SyncingChip, staleStyle } from "./staleness";
 
@@ -94,6 +95,8 @@ export function CertsView({ cluster }: { cluster: string }) {
   const [filter, setFilter] = useState<CertFilter>("all");
   const [query, setQuery] = useState("");
   const [namespace, setNamespace] = useState("");
+  const [kbKey, setKbKey] = useState<string | null>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
   const absent = tier === "Absent";
 
   useEffect(() => {
@@ -135,6 +138,38 @@ export function CertsView({ cluster }: { cluster: string }) {
     () => [...issuers].sort((a, b) => issuerRank(a) - issuerRank(b) || a.kind.localeCompare(b.kind) || a.name.localeCompare(b.name)),
     [issuers],
   );
+
+  // Keyboard nav (j/k/Enter/Esc, "/" focuses the filter) over the visible
+  // certificates. Selection is keyed by keyOf: when the selected certificate
+  // leaves the visible set (filter change) this resolves to -1 — no selection
+  // — instead of silently pointing at whatever row took its index.
+  const kbIdx = kbKey === null ? -1 : visibleCerts.findIndex((c) => keyOf(c) === kbKey);
+
+  const handleSelect = useCallback((idx: number) => {
+    const c = visibleCerts[idx];
+    if (c) setKbKey(keyOf(c));
+  }, [visibleCerts]);
+
+  const handleActivate = useCallback((idx: number) => {
+    const c = visibleCerts[idx];
+    if (!c) return;
+    const k = keyOf(c);
+    select(cm.selectedKey === k ? null : k);
+  }, [visibleCerts, cm.selectedKey, select]);
+
+  const handleEscape = useCallback(() => {
+    if (cm.selectedKey) select(null);
+  }, [cm.selectedKey, select]);
+
+  useListKeys({
+    // The issuers filter renders a different list; suspend row nav there.
+    count: filter === "issuers" ? 0 : visibleCerts.length,
+    selected: kbIdx,
+    onSelect: handleSelect,
+    onActivate: handleActivate,
+    onEscape: handleEscape,
+    searchRef,
+  });
 
   if (absent) {
     return <div style={{ padding: 24, color: "var(--color-text-secondary)", fontSize: 13 }}>cert-manager not detected on this cluster.</div>;
@@ -190,6 +225,7 @@ export function CertsView({ cluster }: { cluster: string }) {
           {namespaces.map((ns) => <option key={ns} value={ns}>{ns}</option>)}
         </select>
         <input
+          ref={searchRef}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder="filter certificates"
@@ -219,9 +255,9 @@ export function CertsView({ cluster }: { cluster: string }) {
             <div data-testid="cert-scroll" style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
               {visibleCerts.length === 0 ? (
                 <div style={{ padding: 14, color: "var(--color-text-secondary)", fontSize: 13 }}>No certificates match the current filter.</div>
-              ) : visibleCerts.map((c) => {
+              ) : visibleCerts.map((c, i) => {
                 const k = keyOf(c);
-                return <CertRow key={k} c={c} open={cm.selectedKey === k} onClick={() => (cm.selectedKey === k ? select(null) : select(k))} />;
+                return <CertRow key={k} c={c} open={cm.selectedKey === k} kbSelected={i === kbIdx} onClick={() => (cm.selectedKey === k ? select(null) : select(k))} />;
               })}
             </div>
           </div>
@@ -235,18 +271,27 @@ export function CertsView({ cluster }: { cluster: string }) {
   );
 }
 
-function CertRow({ c, open, onClick }: { c: CertificateDTO; open: boolean; onClick: () => void }) {
+function CertRow({ c, open, kbSelected, onClick }: { c: CertificateDTO; open: boolean; kbSelected: boolean; onClick: () => void }) {
   const bad = c.ready === "Failed" || expired(c);
   const soon = expiringSoon(c);
+  // Keep the kb-selected row visible - the list scrolls, there is no
+  // VirtualList handle here. Optional call: jsdom has no scrollIntoView.
+  const ref = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (kbSelected) ref.current?.scrollIntoView?.({ block: "nearest" });
+  }, [kbSelected]);
   return (
     <button
+      ref={ref}
+      aria-selected={kbSelected}
       onClick={onClick}
       style={{
         width: "100%", textAlign: "left", display: "grid",
         gridTemplateColumns: "3px minmax(180px,1.3fr) minmax(120px,1fr) 96px 64px 84px",
         gap: 10, alignItems: "center", padding: "7px 12px", cursor: "pointer",
         border: "none", borderBottom: "0.5px solid var(--color-border-tertiary)",
-        background: open ? "var(--color-background-secondary)" : "transparent", color: "var(--color-text-primary)",
+        background: kbSelected || open ? "var(--color-background-secondary)" : "transparent", color: "var(--color-text-primary)",
+        boxShadow: kbSelected ? "inset 2px 0 0 var(--color-text-info)" : undefined,
         ...staleStyle(c.stale),
       }}
     >

@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useFleet } from "../store/fleet";
 import type { ArgoApplicationSetDTO, ArgoAppDTO, ArgoProjectDTO, ArgoResourceDTO, ArgoResourceRuleDTO, ArgoViewMode, CRDGroupDTO, ResourceRef } from "../store/fleet";
 import { listArgoApplicationSets, listArgoApps, listArgoProjects, refreshArgoApp, syncArgoApp } from "../bridge/argo";
 import { armProtected } from "../bridge/configsvc";
 import type { ArgoSyncOptions } from "../bridge/argo";
 import { ConfirmDialog } from "../chrome/ConfirmDialog";
+import { useListKeys } from "../chrome/useListKeys";
 import { EmptyState, SkeletonRows, btn, ellipsis } from "../chrome/primitives";
 import { IconGitMerge } from "@tabler/icons-react";
 import { InspectorEmpty, InspectorSection, InspectorTitle } from "./ResourceInspector";
@@ -216,10 +217,41 @@ function ArgoModeTabs({ mode }: { mode: ArgoViewMode }) {
 
 function ApplicationsView({ cluster, argo, onRefresh, onSync }: { cluster: string; argo: ReturnType<typeof useFleet.getState>["argo"]; onRefresh: (app: ArgoAppDTO) => void; onSync: (app: ArgoAppDTO) => void }) {
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const [kbKey, setKbKey] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [attentionOnly, setAttentionOnly] = useState(false);
   const apps = useMemo(() => argo.apps.filter((a) => matchesAppQuery(a, query) && (!attentionOnly || a.broken)), [argo.apps, attentionOnly, query]);
   const selected = apps.find((a) => keyOf(a) === selectedKey) ?? apps[0] ?? null;
+
+  // Keyboard nav (j/k/Enter/Esc) over the visible app rows - applications
+  // mode only; projects and applicationsets stay mouse-driven. Selection is
+  // keyed by keyOf: when the kb-selected app leaves the visible set (filter
+  // change) this resolves to -1 — no selection — instead of silently pointing
+  // at whatever row took its index.
+  const kbIdx = kbKey === null ? -1 : apps.findIndex((a) => keyOf(a) === kbKey);
+
+  const handleKbSelect = useCallback((idx: number) => {
+    const a = apps[idx];
+    if (a) setKbKey(keyOf(a));
+  }, [apps]);
+
+  const handleActivate = useCallback((idx: number) => {
+    const a = apps[idx];
+    if (a) setSelectedKey(keyOf(a));
+  }, [apps]);
+
+  const handleEscape = useCallback(() => {
+    if (selectedKey) setSelectedKey(null);
+  }, [selectedKey]);
+
+  useListKeys({
+    count: apps.length,
+    selected: kbIdx,
+    onSelect: handleKbSelect,
+    onActivate: handleActivate,
+    onEscape: handleEscape,
+  });
+
   return (
     <div style={splitPaneWide}>
       <div style={{ minWidth: 0, fontFamily: "var(--font-mono)", fontSize: 12 }}>
@@ -234,11 +266,12 @@ function ApplicationsView({ cluster, argo, onRefresh, onSync }: { cluster: strin
         <div style={{ display: "grid", gridTemplateColumns: gridCols, gap: 10, padding: "0 8px 6px", fontSize: 9, textTransform: "uppercase", letterSpacing: 0.5, color: "var(--color-text-tertiary)", borderBottom: "0.5px solid var(--color-border-secondary)" }}>
           <span /><span>application</span><span>sync</span><span>health</span><span>destination</span><span>revision</span><span>reconciled</span><span>actions</span>
         </div>
-        {apps.length === 0 ? <EmptyInline text="No applications match the current filter." /> : apps.map((a) => (
+        {apps.length === 0 ? <EmptyInline text="No applications match the current filter." /> : apps.map((a, i) => (
           <ApplicationRow
             key={keyOf(a)}
             app={a}
             selected={selected ? keyOf(selected) === keyOf(a) : false}
+            kbSelected={i === kbIdx}
             onSelect={() => setSelectedKey(keyOf(a))}
             onRefresh={() => onRefresh(a)}
             onSync={() => onSync(a)}
@@ -257,14 +290,22 @@ function ApplicationsView({ cluster, argo, onRefresh, onSync }: { cluster: strin
   );
 }
 
-function ApplicationRow({ app: a, selected, onSelect, onRefresh, onSync }: { app: ArgoAppDTO; selected: boolean; onSelect: () => void; onRefresh: () => void; onSync: () => void }) {
+function ApplicationRow({ app: a, selected, kbSelected, onSelect, onRefresh, onSync }: { app: ArgoAppDTO; selected: boolean; kbSelected: boolean; onSelect: () => void; onRefresh: () => void; onSync: () => void }) {
+  // Keep the kb-selected row visible while j/k walks the list. Optional call:
+  // jsdom has no scrollIntoView.
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (kbSelected) ref.current?.scrollIntoView?.({ block: "nearest" });
+  }, [kbSelected]);
   return (
     <div
+      ref={ref}
       role="button"
       tabIndex={0}
+      aria-selected={kbSelected}
       onClick={onSelect}
       onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onSelect(); } }}
-      style={{ display: "grid", gridTemplateColumns: gridCols, gap: 10, alignItems: "center", width: "100%", padding: "7px 8px", border: "none", borderBottom: "0.5px solid var(--color-border-tertiary)", background: selected ? "var(--color-background-secondary)" : "transparent", color: "var(--color-text-primary)", textAlign: "left", cursor: "pointer" }}
+      style={{ display: "grid", gridTemplateColumns: gridCols, gap: 10, alignItems: "center", width: "100%", padding: "7px 8px", border: "none", borderBottom: "0.5px solid var(--color-border-tertiary)", background: kbSelected || selected ? "var(--color-background-secondary)" : "transparent", boxShadow: kbSelected ? "inset 2px 0 0 var(--color-text-info)" : undefined, color: "var(--color-text-primary)", textAlign: "left", cursor: "pointer" }}
     >
       <span style={{ width: 8, height: 8, borderRadius: "50%", background: a.broken ? "var(--color-text-danger)" : "var(--color-text-success)" }} />
       <span style={ellipsis} title={keyOf(a)}>
