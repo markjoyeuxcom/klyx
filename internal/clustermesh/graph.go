@@ -57,11 +57,16 @@ func BuildGraph(members []Member) Graph {
 			if idx, ok := edgeAt[key]; ok {
 				if mutual {
 					g.Edges[idx].Mutual = true
+					g.Edges[idx].From = ""
 				}
 				continue
 			}
 			edgeAt[key] = len(g.Edges)
-			g.Edges = append(g.Edges, MeshEdge{A: a, B: b, Mutual: mutual})
+			from := ""
+			if !mutual {
+				from = m.Cluster
+			}
+			g.Edges = append(g.Edges, MeshEdge{A: a, B: b, Mutual: mutual, From: from})
 		}
 	}
 	return g

@@ -389,7 +389,7 @@ export type NetworkSlice = {
 };
 
 export type MeshNodeDTO = { cluster: string; name: string; clusterId: number | null; state: string; present: boolean };
-export type MeshEdgeDTO = { a: string; b: string; mutual: boolean };
+export type MeshEdgeDTO = { a: string; b: string; mutual: boolean; from?: string };
 export type MeshGraphDTO = { nodes: MeshNodeDTO[]; edges: MeshEdgeDTO[] };
 
 export type MetricsDTO = { available: boolean; mode: string; source: string; warning: string; reason: string; cpuFraction: number | null; memFraction: number | null };

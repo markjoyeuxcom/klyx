@@ -44,6 +44,10 @@ type MeshNode struct {
 type MeshEdge struct {
 	A, B   string
 	Mutual bool // both sides configure each other; off-fleet edges are never mutual
+	// From is the side that configured the peering, only meaningful when
+	// !Mutual - it lets the UI say "A -> B one-way: B does not list A" instead
+	// of an undirected shrug. Empty on mutual edges.
+	From string
 }
 
 type Graph struct {
