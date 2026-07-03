@@ -3,15 +3,21 @@
   // Devcontainer template (hardened) — rendered by `vibe-devcontainer`.
   // --------------------------------------------------------------------------
   // Design choices:
-  //   1. Claude Code installed via the official Feature (pinned), not curl.
+  //   1. Claude Code installed via Anthropic's NATIVE installer (curl script),
+  //      not the npm Feature. No Node.js dependency for Claude Code itself,
+  //      no npm global-prefix mismatch, and auto-update runs as the `vscode`
+  //      user against user-owned paths — the no_permissions failure mode
+  //      this replaced can't happen here. Node is kept only because other
+  //      tooling (e.g. @openai/codex) still needs it.
   //   2. ~/.claude is a per-project NAMED VOLUME, not a host bind-mount —
   //      project code can't read/exfiltrate your real host credentials, and
-  //      parallel containers can't clobber one shared config.
+  //      parallel containers can't clobber one shared config. This is also
+  //      where the native installer keeps its session/auth/settings.
   //   3. Host secret mounts (SSH key, gh token, kubeconfig) are OPT-IN,
   //      commented out by default. Uncomment per-project only when needed.
   //   4. Non-root remoteUser made explicit (required for --dangerously-skip-
-  //      permissions and for the Feature's VS Code extension install).
-  //   5. Optional egress firewall + telemetry opt-out shown as comments.
+  //      permissions and to run the installer as a non-root user).
+  //   5. Optional egress firewall shown as a comment.
   // ==========================================================================
   "name": "moomorqklyx",
   "image": "mcr.microsoft.com/devcontainers/base:trixie",
@@ -24,8 +30,9 @@
     // , "--cap-add=NET_ADMIN", "--cap-add=NET_RAW"
   ],
 
-  // Non-root user — lets you safely pass --dangerously-skip-permissions and is
-  // required by the Claude Code Feature's VS Code extension install.
+  // Non-root user — lets you safely pass --dangerously-skip-permissions and
+  // keeps the native installer's writes (and its auto-updater) entirely
+  // inside user-owned paths.
   "remoteUser": "vscode",
 
   "features": {
@@ -34,6 +41,8 @@
       "enableNonRootDocker": "true",
       "moby": "false"
     },
+    // Kept for other npm-delivered tooling (e.g. @openai/codex below).
+    // No longer required by Claude Code itself.
     "ghcr.io/devcontainers/features/node:1": {
       "version": "24"
     },
@@ -43,27 +52,31 @@
       "minikube": "none"
     },
     "ghcr.io/devcontainers/features/go:1": {
-      "version": "latest" 
+      "version": "latest"
     },
-    "ghcr.io/devcontainers/features/github-cli:1": {},
-    // Official Claude Code Feature: cached, pins the install script, and adds
-    // the VS Code extension. Replaces the old `curl | bash` in postCreate.
-    "ghcr.io/anthropics/devcontainer-features/claude-code:1.0": {}
+    "ghcr.io/devcontainers/features/github-cli:1": {}
+    // Removed: ghcr.io/anthropics/devcontainer-features/claude-code:1.0
+    // That Feature installs via npm into a root-owned global prefix, which is
+    // what caused "Auto-update failed (no_permissions)" — the auto-updater
+    // calls `npm i -g @anthropic-ai/claude-code` against npm's *default*
+    // prefix, not wherever you actually installed it. The native installer
+    // below sidesteps npm entirely.
   },
 
-  // Claude Code is installed by the Feature globally (as root) into the nvm
-  // prefix, which the in-app auto-updater (running as `vscode`) can't write to
-  // — updates fail with `no_permissions`. Reinstall it here as the `vscode`
-  // user into a prefix on the persisted ~/.claude volume; `remoteEnv.PATH`
-  // below puts it first so it shadows the Feature's root-owned binary. Result:
-  // auto-updates work and survive rebuilds.
-  "postCreateCommand": "npm install -g @openai/codex && npm install -g --prefix /home/vscode/.claude/.npm-global @anthropic-ai/claude-code@latest",
+  // Native installer: downloads the claude binary straight into
+  // ~/.local/bin as the `vscode` user — no npm, no root-owned prefix, no
+  // prefix-mismatch bug. It self-updates in the background from the same
+  // user-owned location, so "Auto-updates: enabled" will actually succeed.
+  // @openai/codex still goes through npm since it has no native installer.
+  "postCreateCommand": "curl -fsSL https://claude.ai/install.sh | bash && npm install -g @openai/codex",
 
   "mounts": [
     // --- Agent config: per-project named volumes (NOT host bind-mounts) -----
     // ${devcontainerId} isolates each project's auth/session state. You sign in
     // to Claude once per project; your real host credentials are never exposed
-    // to project code. State survives container rebuilds.
+    // to project code. State survives container rebuilds. The native
+    // installer reads/writes its session, settings, and memory here by
+    // default (same ~/.claude path as before — no CLAUDE_CONFIG_DIR needed).
     "source=claude-code-config-${devcontainerId},target=/home/vscode/.claude,type=volume",
 
     // --- Git identity (config only, not a secret) — safe to share read-only --
@@ -93,10 +106,11 @@
   // This replaces inheriting the host's global ~/.claude.json. See:
   // https://code.claude.com/docs/en/mcp#mcp-installation-scopes
 
-  // Put the user-local claude-code (installed into the ~/.claude volume by
-  // postCreateCommand) ahead of the Feature's root-owned binary on PATH.
+  // ~/.local/bin (the native installer's target) isn't guaranteed to be on
+  // PATH in every non-interactive shell a devcontainer spawns, so put it
+  // first explicitly.
   "remoteEnv": {
-    "PATH": "/home/vscode/.claude/.npm-global/bin:${containerEnv:PATH}"
+    "PATH": "/home/vscode/.local/bin:${containerEnv:PATH}"
   },
 
   "containerEnv": {
@@ -105,9 +119,12 @@
     // (requires GH_TOKEN exported on the host):
     // , "GH_TOKEN": "${localEnv:GH_TOKEN}"
     //
-    // Optional: opt out of non-essential traffic / pin behavior:
+    // Optional: opt out of non-essential traffic / pin behavior. With the
+    // native installer, auto-updates are the whole point of this migration,
+    // so leave DISABLE_AUTOUPDATER unset unless you deliberately want to pin
+    // a version for reproducible builds (see Anthropic's devcontainer docs
+    // on pinning + DISABLE_AUTOUPDATER for that case).
     // , "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"
-    // , "DISABLE_AUTOUPDATER": "1"
   },
 
   "customizations": {
