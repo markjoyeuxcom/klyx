@@ -10,7 +10,7 @@
   --color-background-warning: #faeeda;
   --color-text-primary: #1f1e1d;
   --color-text-secondary: #6b6a64;
-  --color-text-tertiary: #9c9a92;
+  --color-text-tertiary: #716e66;
   --color-text-info: #185fa5;
   --color-text-danger: #a32d2d;
   --color-text-success: #3b6d11;
@@ -60,7 +60,7 @@
   --color-background-warning: rgba(133,79,11,0.25);
   --color-text-primary: #f5f4ed;
   --color-text-secondary: #b4b2a9;
-  --color-text-tertiary: #888780;
+  --color-text-tertiary: #92918b;
   --color-text-info: #85b7eb;
   --color-text-danger: #f09595;
   --color-text-success: #97c459;
@@ -84,7 +84,7 @@
   --color-background-warning: rgba(236,176,67,0.20);
   --color-text-primary: #e8f1fb;
   --color-text-secondary: #a9b9c8;
-  --color-text-tertiary: #718397;
+  --color-text-tertiary: #7a8b9d;
   --color-text-info: #8cc8ff;
   --color-text-danger: #ff8994;
   --color-text-success: #9ad46b;
@@ -108,7 +108,7 @@
   --color-background-warning: rgba(239,181,78,0.20);
   --color-text-primary: #edf1f5;
   --color-text-secondary: #aeb8c4;
-  --color-text-tertiary: #768391;
+  --color-text-tertiary: #7d8a97;
   --color-text-info: #8fc7ff;
   --color-text-danger: #ff8585;
   --color-text-success: #91d16a;
@@ -132,7 +132,7 @@
   --color-background-warning: rgba(239,180,94,0.19);
   --color-text-primary: #fff0f1;
   --color-text-secondary: #cdb5b8;
-  --color-text-tertiary: #92797d;
+  --color-text-tertiary: #978083;
   --color-text-info: #9cc9ff;
   --color-text-danger: #ff9aa3;
   --color-text-success: #a9d66f;
@@ -180,7 +180,7 @@
   --color-background-warning: rgba(238,177,70,0.23);
   --color-text-primary: #fff3df;
   --color-text-secondary: #ccb99a;
-  --color-text-tertiary: #927f5c;
+  --color-text-tertiary: #9b8661;
   --color-text-info: #8cc8ff;
   --color-text-danger: #ff8d8d;
   --color-text-success: #a9d76f;
@@ -204,7 +204,7 @@
   --color-background-warning: rgba(235,178,78,0.19);
   --color-text-primary: #f3eefe;
   --color-text-secondary: #bdb0cf;
-  --color-text-tertiary: #877796;
+  --color-text-tertiary: #8f809d;
   --color-text-info: #a8c7ff;
   --color-text-danger: #ff8fa3;
   --color-text-success: #9fd37a;
