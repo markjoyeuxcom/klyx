@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { useFleet } from "../store/fleet";
 import type { DependencyRefDTO, EventRowDTO, FluxResourceDTO, FluxSourceDTO, ResourceDetailDTO } from "../store/fleet";
 import { openGitOps, closeGitOps, getResourceDetail, reconcile, reconcileWithSource, setSuspend, resolveGitLink, fluxDiff } from "../bridge/gitops";
 import type { FluxDiffDTO } from "../bridge/gitops";
 import { ConfirmDialog } from "../chrome/ConfirmDialog";
+import { useListKeys } from "../chrome/useListKeys";
 import { Badge, FilterButton, SummaryCell, Section, StatusDot, readyColor, ellipsis, actionBtn, frame } from "../chrome/primitives";
 import { SyncingChip, staleStyle } from "./staleness";
 
@@ -96,6 +97,8 @@ export function GitOps({ cluster }: { cluster: string }) {
   const [pending, setPending] = useState<null | { verb: "reconcile" | "reconcile-source" | "suspend" | "resume"; r: FluxResourceDTO }>(null);
   const [filter, setFilter] = useState<FluxFilter>("all");
   const [query, setQuery] = useState("");
+  const [kbKey, setKbKey] = useState<string | null>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
   const absent = tier === "Absent";
 
   useEffect(() => {
@@ -132,6 +135,39 @@ export function GitOps({ cluster }: { cluster: string }) {
     () => [...allSources].sort((a, b) => srcRank(a) - srcRank(b) || a.kind.localeCompare(b.kind) || a.namespace.localeCompare(b.namespace) || a.name.localeCompare(b.name)),
     [allSources],
   );
+
+  // Keyboard nav (j/k/Enter/Esc, "/" focuses the filter) over the visible
+  // rows. Selection is keyed by keyOf: when the selected resource leaves the
+  // visible set (filter change) this resolves to -1 — no selection — instead
+  // of silently pointing at whatever row took its index.
+  const kbIdx = kbKey === null ? -1 : visibleRows.findIndex((r) => keyOf(r) === kbKey);
+
+  const handleSelect = useCallback((idx: number) => {
+    const r = visibleRows[idx];
+    if (r) setKbKey(keyOf(r));
+  }, [visibleRows]);
+
+  const handleActivate = useCallback((idx: number) => {
+    const r = visibleRows[idx];
+    if (!r) return;
+    const k = keyOf(r);
+    if (gitops.expandedKey === k) collapse();
+    else expand(k);
+  }, [visibleRows, gitops.expandedKey, collapse, expand]);
+
+  const handleEscape = useCallback(() => {
+    if (gitops.expandedKey) collapse();
+  }, [gitops.expandedKey, collapse]);
+
+  useListKeys({
+    // The sources filter renders a different list; suspend row nav there.
+    count: filter === "sources" ? 0 : visibleRows.length,
+    selected: kbIdx,
+    onSelect: handleSelect,
+    onActivate: handleActivate,
+    onEscape: handleEscape,
+    searchRef,
+  });
 
   useEffect(() => {
     if (!gitops.expandedKey) return;
@@ -188,6 +224,7 @@ export function GitOps({ cluster }: { cluster: string }) {
         <FilterButton label="hr" active={filter === "helmreleases"} count={hr} onClick={() => setFilter("helmreleases")} />
         <FilterButton label="sources" active={filter === "sources"} count={allSources.length} onClick={() => setFilter("sources")} />
         <input
+          ref={searchRef}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder="filter flux"
@@ -217,7 +254,7 @@ export function GitOps({ cluster }: { cluster: string }) {
             <div data-testid="flux-resource-scroll" style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
               {visibleRows.length === 0 ? (
                 <div style={{ padding: 14, color: "var(--color-text-secondary)", fontSize: 13 }}>No Flux resources match the current filter.</div>
-              ) : visibleRows.map((r) => {
+              ) : visibleRows.map((r, i) => {
                 const k = keyOf(r);
                 const open = gitops.expandedKey === k;
                 return (
@@ -225,6 +262,7 @@ export function GitOps({ cluster }: { cluster: string }) {
                     key={k}
                     r={r}
                     open={open}
+                    kbSelected={i === kbIdx}
                     onClick={() => (open ? collapse() : expand(k))}
                   />
                 );
@@ -284,12 +322,20 @@ export function GitOps({ cluster }: { cluster: string }) {
   );
 }
 
-function RowSummary({ r, open, onClick }: { r: FluxResourceDTO; open: boolean; onClick: () => void }) {
+function RowSummary({ r, open, kbSelected, onClick }: { r: FluxResourceDTO; open: boolean; kbSelected: boolean; onClick: () => void }) {
   const isBad = r.ready === "Failed";
   const isReconciling = r.ready === "Reconciling";
   const color = r.suspended ? "var(--color-text-warning)" : (readyColor[r.ready] ?? "var(--color-text-tertiary)");
+  // Keep the kb-selected row visible - the list scrolls, there is no
+  // VirtualList handle here. Optional call: jsdom has no scrollIntoView.
+  const ref = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (kbSelected) ref.current?.scrollIntoView?.({ block: "nearest" });
+  }, [kbSelected]);
   return (
     <button
+      ref={ref}
+      aria-selected={kbSelected}
       onClick={onClick}
       style={{
         width: "100%",
@@ -304,7 +350,8 @@ function RowSummary({ r, open, onClick }: { r: FluxResourceDTO; open: boolean; o
         cursor: "pointer",
         textAlign: "left",
         color: "var(--color-text-primary)",
-        background: open ? "var(--color-background-secondary)" : "transparent",
+        background: kbSelected || open ? "var(--color-background-secondary)" : "transparent",
+        boxShadow: kbSelected ? "inset 2px 0 0 var(--color-text-info)" : undefined,
         ...staleStyle(r.stale),
       }}
     >

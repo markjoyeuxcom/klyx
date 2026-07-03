@@ -13,6 +13,8 @@ type MeshEdgeDTO struct {
 	A      string `json:"a"`
 	B      string `json:"b"`
 	Mutual bool   `json:"mutual"`
+	// From: the configuring side, set only on one-way (non-mutual) edges.
+	From string `json:"from,omitempty"`
 }
 type MeshGraphDTO struct {
 	Nodes []MeshNodeDTO `json:"nodes"`
@@ -36,7 +38,7 @@ func (s *MeshService) GetMeshGraph() MeshGraphDTO {
 		out.Nodes = append(out.Nodes, MeshNodeDTO{Cluster: n.Cluster, Name: n.Name, ClusterID: n.ClusterID, State: string(n.State), Present: n.Present})
 	}
 	for _, e := range g.Edges {
-		out.Edges = append(out.Edges, MeshEdgeDTO{A: e.A, B: e.B, Mutual: e.Mutual})
+		out.Edges = append(out.Edges, MeshEdgeDTO{A: e.A, B: e.B, Mutual: e.Mutual, From: e.From})
 	}
 	return out
 }

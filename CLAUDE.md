@@ -104,7 +104,7 @@ After M1, milestones in priority order:
 - M2: Multi-cluster fleet view (the killer feature)
 - M3: GitOps view with Flux support
 - M4: CRD browser grouped by API group
-- M5: Gateway API topology view (M5-a lanes, M5-b-i Envoy policies, M5-b-ii Cilium inference shipped; M5-c ClusterMesh edges next)
+- M5: Gateway API topology view (M5-a lanes, M5-b-i Envoy policies, M5-b-ii Cilium inference shipped; M5-c ClusterMesh edges shipped 2026-07-03 — the fleet MeshStrip draws peering arcs: solid=mutual, dashed amber=one-way (edge records the configuring side), dashed grey=off-fleet; pending native eyeball)
 - M7: Inline observability (Prom queries) — shipped through M7-c-ii (workloads health + cpu/mem)
 - M9: Daily driver — SHIPPED 2026-06-10 (pods + live logs, events, standard resources incl. masked secrets, nodes + cordon/drain, scale, port-forward, exec escape hatch, helm releases, cmd+K palette, layout polish). Roadmap + eyeball checklist: `docs/superpowers/plans/2026-06-09-klyx-daily-driver-roadmap.md`
 - M8: `klyx serve` headless mode (after M9)
@@ -114,6 +114,7 @@ After M1, milestones in priority order:
 - Full-codebase review remediation — 2026-07-02, on `feat/m11-certmanager`. Five commits: P0 correctness (triage-semantics inversions, informer races, listener leaks), P1 hardening (backend protected-cluster gating via one-shot typed-confirmation grants, kubectl argv validation, error honesty - failing watches/lists render as errors, never as empty), P2/P3 (informer-cache-served nodes, TTL discovery cache, `internal/clibin`, design-system completion, virtualized workloads/instances), push/PR CI (`.github/workflows/ci.yml`), and observedGeneration staleness. Staleness visual language (ratified): when `metadata.generation > observedGeneration`, the row dims to 0.6 opacity and the status chip becomes a grey "Syncing…" chip whose tooltip names both generations — "dim = not yet realized"; Ready is never shown as confirmed while changes are pending (Flux resources, Certificates, Gateways; shared `src/cluster/staleness.tsx`). Naming ratified: the Ready condition's transition time is `ReadySince`/`readySinceSeconds` (never "last applied" — Flux status has no per-apply timestamp).
 - M12: External Secrets Operator diagnosis — SHIPPED 2026-07-03 (branch `feat/m12-eso-lens`, pending native eyeball). The M10/M11 diagnosis pattern applied to ESO: capability-gated "External Secrets" section (external-secrets.io served + `external-secrets` Deployment health), a broken-first ExternalSecret triage list with a stores filter and a per-secret inspector where the bound (Cluster)SecretStore's health is the headline, and ESO-native refresh staleness (`now - refreshTime > 2×refreshInterval` renders an amber "stale" chip — never confidently synced). New pure pkg `internal/externalsecrets`; lazy watch in `internal/fleet`; `ExternalSecretsService`. Read-only. Plan: `docs/superpowers/plans/2026-07-03-klyx-eso-diagnosis.md`. Deferred: Reloader awareness, ClusterExternalSecret/PushSecret kinds, day-2 force-refresh verb.
 - Next: M5-c (ClusterMesh edges) and M8 (`klyx serve` headless) remain; M11-d (cert-manager Renew) is an optional follow-up.
+- Next: M12 (ESO/Reloader lens - the M10/M11 diagnosis pattern applied to ExternalSecrets), M11-d (cert-manager Renew), then M8 (`klyx serve` headless).
 
 ## References
 

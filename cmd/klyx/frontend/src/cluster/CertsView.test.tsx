@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { render, fireEvent, within } from "@testing-library/react";
+import { render, fireEvent, within, act } from "@testing-library/react";
 import { useFleet } from "../store/fleet";
 import type { CertificateDTO, IssuerDTO, CertChainDTO, ClusterDTO } from "../store/fleet";
 import { CertsView } from "./CertsView";
@@ -148,6 +148,28 @@ describe("CertsView", () => {
     const inspector = getByTestId("cert-inspector");
     expect(within(inspector).getByText("cnpg-system/cnpg-ca")).toBeTruthy();
     expect(within(inspector).getByText("cnpg-ca-1")).toBeTruthy();
+  });
+
+  // --- Keyboard nav ---
+
+  it("j/k + Enter selects the certificate like a click, Esc clears the selection", () => {
+    setup("Healthy", [cert({ name: "a-cert" }), cert({ name: "b-cert" })], [issuer({})]);
+    render(<CertsView cluster="x" />);
+    // j → index 0 (a-cert); j → index 1 (b-cert); Enter → select(keyOf(b-cert))
+    act(() => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "j", bubbles: true, cancelable: true })); });
+    act(() => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "j", bubbles: true, cancelable: true })); });
+    act(() => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })); });
+    expect(useFleet.getState().certmanager.selectedKey).toBe("payments/b-cert");
+    // Esc clears the selection.
+    act(() => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })); });
+    expect(useFleet.getState().certmanager.selectedKey).toBeNull();
+  });
+
+  it("/ focuses the certificates filter input", () => {
+    setup("Healthy", [cert({})], [issuer({})]);
+    const { getByPlaceholderText } = render(<CertsView cluster="x" />);
+    act(() => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "/", bubbles: true, cancelable: true })); });
+    expect(document.activeElement).toBe(getByPlaceholderText("filter certificates"));
   });
 
   it("lists issuer health under the issuers filter", () => {
