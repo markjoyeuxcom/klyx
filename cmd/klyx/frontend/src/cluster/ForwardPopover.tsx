@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { IconX } from "@tabler/icons-react";
 import { startForward } from "../bridge/forwards";
 import { btn } from "../chrome/primitives";
 
@@ -89,7 +90,7 @@ export function ForwardPopover({
         style={inputStyle}
       />
       <button onClick={submit} disabled={!valid} data-testid="forward-start" style={{ ...btn, padding: "2px 7px", opacity: valid ? 1 : 0.4, cursor: valid ? "pointer" : "not-allowed" }}>forward</button>
-      <button onClick={onClose} style={{ ...btn, padding: "2px 6px" }}>✕</button>
+      <button onClick={onClose} aria-label="close forward popover" style={{ ...btn, padding: "2px 6px", display: "inline-flex", alignItems: "center" }}><IconX size={12} stroke={1.5} /></button>
     </span>
   );
 }

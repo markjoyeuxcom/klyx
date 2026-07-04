@@ -322,8 +322,8 @@ describe("NodesView", () => {
         detailLoading: false,
       },
     }));
-    const { getByText } = render(<NodesView cluster="homelab" />);
-    fireEvent.click(getByText("✕"));
+    const { getByRole } = render(<NodesView cluster="homelab" />);
+    fireEvent.click(getByRole("button", { name: "close node detail panel" }));
     expect(useFleet.getState().nodes.selected).toBeNull();
   });
 

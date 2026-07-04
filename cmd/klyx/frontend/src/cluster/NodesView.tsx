@@ -14,7 +14,7 @@ import { CopyButton } from "../chrome/CopyButton";
 import { EmptyState } from "../chrome/EmptyState";
 import { SkeletonRows } from "../chrome/SkeletonRows";
 import { UpdatedAt, useReceivedAt } from "../chrome/Age";
-import { IconServer } from "@tabler/icons-react";
+import { IconServer, IconX } from "@tabler/icons-react";
 import { ellipsis, frame, btn, FilterButton, SummaryCell, StatusDot } from "../chrome/primitives";
 import { InspectorSection, InspectorTabButton, MetadataChips, inspectorStateBox } from "./ResourceInspector";
 
@@ -701,7 +701,7 @@ function NodeDetailPanel({
       {/* Panel header */}
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, position: "sticky", top: 0, background: "var(--color-background-primary)", paddingTop: 2, paddingBottom: 6, borderBottom: "0.5px solid var(--color-border-tertiary)" }}>
         <span style={{ fontWeight: 500, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={name}>{name}</span>
-        <button onClick={onClose} style={{ ...btn, padding: "2px 8px", fontSize: 12 }}>✕</button>
+        <button onClick={onClose} aria-label="close node detail panel" style={{ ...btn, padding: "2px 8px", display: "inline-flex", alignItems: "center" }}><IconX size={13} stroke={1.5} /></button>
       </div>
 
       {/* Tabs */}

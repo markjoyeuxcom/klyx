@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from "react";
-import { IconTerminal2, IconExternalLink, IconCircleDot } from "@tabler/icons-react";
+import { IconTerminal2, IconExternalLink, IconCircleDot, IconChevronDown, IconX } from "@tabler/icons-react";
 import { useFleet } from "../store/fleet";
 import type { PodDetailDTO, PodSummaryDTO, ContainerSummaryDTO } from "../store/fleet";
 import { listPods, openLivePods, openPodDetail, deletePod } from "../bridge/pods";
@@ -450,7 +450,7 @@ function PodDetailPanel({
           aria-label="open logs dock"
           title="Open logs in bottom dock"
         >logs</button>
-        <button onClick={onClose} style={{ ...btn, padding: "2px 8px", fontSize: 12 }} aria-label="close pod detail panel">✕</button>
+        <button onClick={onClose} style={{ ...btn, padding: "2px 8px", display: "inline-flex", alignItems: "center" }} aria-label="close pod detail panel"><IconX size={13} stroke={1.5} /></button>
       </div>
 
       {/* Tabs: info | yaml (logs moved to dock) */}
@@ -594,9 +594,9 @@ function LogsDock({
           </button>
           <button
             onClick={onClose}
-            style={{ ...btn, padding: "2px 8px", fontSize: 12 }}
+            style={{ ...btn, padding: "2px 8px", display: "inline-flex", alignItems: "center" }}
             aria-label="close logs dock"
-          >✕</button>
+          ><IconX size={13} stroke={1.5} /></button>
         </div>
       </div>
 
@@ -813,7 +813,7 @@ function ExecButtons({
             style={btn}
             title="Open interactive shell in container"
           >
-            open shell ▾
+            open shell <IconChevronDown size={11} stroke={1.7} style={{ verticalAlign: "-1px" }} />
           </button>
           {pickerOpen && (
             <div style={{
@@ -908,7 +908,7 @@ function DebugShellButton({
   return (
     <div ref={pickerRef} style={{ position: "relative" }}>
       <button onClick={() => setPickerOpen((v) => !v)} style={btn} title={tip}>
-        debug shell ▾
+        debug shell <IconChevronDown size={11} stroke={1.7} style={{ verticalAlign: "-1px" }} />
       </button>
       {pickerOpen && (
         <div style={{

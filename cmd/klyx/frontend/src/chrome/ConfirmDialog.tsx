@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, useState } from "react";
+import { IconAlertTriangle } from "@tabler/icons-react";
 import { armProtected } from "../bridge/configsvc";
 
 export function ConfirmDialog({
@@ -98,7 +99,12 @@ export function ConfirmDialog({
         onKeyDown={onDialogKeyDown}
         style={{ background: "var(--color-background-primary)", border: "0.5px solid var(--color-border-secondary)", borderRadius: "var(--border-radius-md)", padding: 20, width: 380, fontSize: 13 }}
       >
-        <div id={titleId} style={{ fontWeight: 600, marginBottom: 8 }}>{title}</div>
+        <div id={titleId} style={{ fontWeight: 600, marginBottom: 8, display: "flex", alignItems: "center", gap: 6 }}>
+          {/* Destructive intent gets a shape, not just a colour - the danger
+              tint alone is invisible to colour-blind operators. */}
+          {danger && <IconAlertTriangle size={15} stroke={1.8} style={{ color: "var(--color-text-danger)", flexShrink: 0 }} aria-hidden />}
+          {title}
+        </div>
         <div style={{ color: "var(--color-text-secondary)", marginBottom: 6 }}>{detail}</div>
         <div style={{ color: "var(--color-text-tertiary)", fontSize: 12, marginBottom: 14 }}>
           on <span style={{ fontFamily: "var(--font-mono)" }}>{cluster}</span>

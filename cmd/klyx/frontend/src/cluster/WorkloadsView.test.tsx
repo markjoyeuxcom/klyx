@@ -222,10 +222,10 @@ describe("WorkloadsView", () => {
 
   it("cancelling scale popover hides the input", () => {
     seed([broken]);
-    const { getByText, queryByRole } = render(<WorkloadsView cluster="homelab-nelli" />);
+    const { getByText, getByRole, queryByRole } = render(<WorkloadsView cluster="homelab-nelli" />);
     fireEvent.click(getByText("ollama")); // expand
     fireEvent.click(getByText("scale")); // open popover
-    fireEvent.click(getByText("✕")); // cancel
+    fireEvent.click(getByRole("button", { name: "cancel scale" })); // cancel
     expect(queryByRole("spinbutton", { name: /replica count/i })).toBeNull();
     expect(getByText("scale")).toBeTruthy(); // button back
   });

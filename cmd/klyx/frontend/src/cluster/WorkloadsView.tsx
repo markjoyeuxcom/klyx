@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from "react";
-import { IconTerminal2, IconExternalLink, IconBox } from "@tabler/icons-react";
+import { IconTerminal2, IconExternalLink, IconBox, IconX } from "@tabler/icons-react";
 import { useFleet } from "../store/fleet";
 import type { WorkloadDTO, PodDTO, WorkloadKind, ResourceCellDTO } from "../store/fleet";
 import { listWorkloads, openLiveWorkloads, rolloutRestart, scaleWorkload } from "../bridge/workloads";
@@ -833,9 +833,9 @@ function WorkloadLogsDock({
           </button>
           <button
             onClick={onClose}
-            style={{ ...btn, padding: "2px 8px", fontSize: 12 }}
+            style={{ ...btn, padding: "2px 8px", display: "inline-flex", alignItems: "center" }}
             aria-label="close logs dock"
-          >✕</button>
+          ><IconX size={13} stroke={1.5} /></button>
         </div>
       </div>
 
@@ -874,7 +874,7 @@ function ScalePopover({ initial, onConfirm, onCancel }: { initial: number; onCon
         style={{ width: 52, fontSize: 11, padding: "2px 4px", fontFamily: "var(--font-mono)", background: "var(--color-background-secondary)", border: "0.5px solid var(--color-border-tertiary)", borderRadius: 3, color: "var(--color-text-primary)" }}
       />
       <button onClick={() => { if (valid) onConfirm(n); }} disabled={!valid} aria-label="apply scale" style={{ ...btn, padding: "2px 8px", opacity: valid ? 1 : 0.4, cursor: valid ? "pointer" : "not-allowed" }}>apply</button>
-      <button onClick={onCancel} aria-label="cancel scale" style={{ ...btn, padding: "2px 8px" }}>✕</button>
+      <button onClick={onCancel} aria-label="cancel scale" style={{ ...btn, padding: "2px 8px", display: "inline-flex", alignItems: "center" }}><IconX size={12} stroke={1.5} /></button>
     </span>
   );
 }

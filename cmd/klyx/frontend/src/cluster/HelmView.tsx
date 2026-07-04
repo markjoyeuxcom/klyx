@@ -1,5 +1,5 @@
 import { useEffect, useCallback, useMemo, useRef, useState } from "react";
-import { IconAnchor } from "@tabler/icons-react";
+import { IconAnchor, IconX } from "@tabler/icons-react";
 import { EmptyState, FilterButton, SkeletonRows, SummaryCell, btn, ellipsis, frame } from "../chrome/primitives";
 import { useFleet } from "../store/fleet";
 import type { HelmReleaseDTO, HelmHistoryEntryDTO } from "../store/fleet";
@@ -322,7 +322,7 @@ function HelmDetailPanel({
             </div>
           )}
         </div>
-        <button onClick={onClose} style={{ ...btn, padding: "2px 8px", fontSize: 12, flexShrink: 0 }}>✕</button>
+        <button onClick={onClose} aria-label="close release detail panel" style={{ ...btn, padding: "2px 8px", flexShrink: 0, display: "inline-flex", alignItems: "center" }}><IconX size={13} stroke={1.5} /></button>
       </div>
 
       {detailLoading && history.length === 0 ? (

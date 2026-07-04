@@ -261,8 +261,8 @@ describe("HelmView", () => {
 
   it("close button clears selected release", () => {
     seedWithDetail(deployed, historyEntries, "");
-    const { getByText } = render(<HelmView cluster="homelab" />);
-    fireEvent.click(getByText("✕"));
+    const { getByRole } = render(<HelmView cluster="homelab" />);
+    fireEvent.click(getByRole("button", { name: "close release detail panel" }));
     expect(useFleet.getState().helm.selected).toBeNull();
   });
 

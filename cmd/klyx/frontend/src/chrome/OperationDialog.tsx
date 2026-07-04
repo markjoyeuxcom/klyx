@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState } from "react";
 import type { ReactNode } from "react";
+import { IconAlertTriangle, IconX } from "@tabler/icons-react";
 import { armProtected } from "../bridge/configsvc";
 
 // OperationDialog is the operation-COMPOSER chrome shared by every
@@ -138,10 +139,15 @@ export function OperationDialog({
         <div style={{ padding: "18px 20px 14px", borderBottom: "0.5px solid var(--color-border-tertiary)", flexShrink: 0 }}>
           <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
             <div style={{ minWidth: 0 }}>
-              <div id={titleId} style={{ fontSize: 17, fontWeight: 600, marginBottom: subtitle ? 5 : 0 }}>{title}</div>
+              <div id={titleId} style={{ fontSize: 17, fontWeight: 600, marginBottom: subtitle ? 5 : 0, display: "flex", alignItems: "center", gap: 7 }}>
+                {/* Destructive intent gets a shape, not just a colour - the
+                    danger tint alone is invisible to colour-blind operators. */}
+                {danger && <IconAlertTriangle size={16} stroke={1.8} style={{ color: "var(--color-text-danger)", flexShrink: 0 }} aria-hidden />}
+                {title}
+              </div>
               {subtitle && <div style={{ color: "var(--color-text-secondary)", lineHeight: 1.45 }}>{subtitle}</div>}
             </div>
-            <button aria-label={`close ${title.toLowerCase()} dialog`} onClick={onCancel} style={closeBtn}>x</button>
+            <button aria-label={`close ${title.toLowerCase()} dialog`} onClick={onCancel} style={{ ...closeBtn, display: "inline-flex", alignItems: "center" }}><IconX size={14} stroke={1.5} /></button>
           </div>
         </div>
 
