@@ -131,7 +131,7 @@ export function restoreRouteOnBoot(clusterNames: string[]): void {
 export type PodsViewPrefs = { namespace?: string; needsAttention?: boolean };
 export type WorkloadsViewPrefs = { namespace?: string; needsAttention?: boolean; kinds?: WorkloadKind[]; nearLimitSort?: boolean };
 export type EventsViewPrefs = { namespace?: string; warningsOnly?: boolean };
-export type HelmViewPrefs = { namespace?: string; brokenOnly?: boolean };
+export type HelmViewPrefs = { namespace?: string };
 
 type ClusterPrefs = {
   pods?: PodsViewPrefs;

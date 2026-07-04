@@ -1,12 +1,14 @@
-import { useEffect, useCallback, useState } from "react";
-import { SkeletonRows, btn, ellipsis } from "../chrome/primitives";
+import { useEffect, useCallback, useMemo, useRef, useState } from "react";
+import { FilterButton, SkeletonRows, SummaryCell, btn, ellipsis, frame } from "../chrome/primitives";
 import { useFleet } from "../store/fleet";
 import type { HelmReleaseDTO, HelmHistoryEntryDTO } from "../store/fleet";
 import { listHelmReleases, openHelmRelease, helmRollback } from "../bridge/helm";
 import type { RollbackOptions } from "../bridge/helm";
 import { MetaTile, OperationDialog, OptionTile } from "../chrome/OperationDialog";
 import { useResizablePanel } from "../chrome/useResizablePanel";
+import { useListKeys } from "../chrome/useListKeys";
 import { CopyButton } from "../chrome/CopyButton";
+import { loadClusterPrefs, loadSearch, saveHelmViewPrefs, saveSearch } from "../store/persist";
 
 // Helm status color map — deployed/failed/superseded/pending-*
 const statusColor = (status: string): string => {
@@ -46,6 +48,24 @@ function fmtUnix(unix: number): string {
   return `${Math.floor(secs / 86400)}d ago`;
 }
 
+// statusGroup buckets helm's statuses for triage: failed floats first,
+// in-flight pending-*/uninstalling states next, settled releases last.
+type HelmStatusGroup = "failed" | "pending" | "ok";
+export function statusGroup(status: string): HelmStatusGroup {
+  if (status === "failed") return "failed";
+  if (status === "deployed" || status === "superseded") return "ok";
+  return "pending";
+}
+const groupRank: Record<HelmStatusGroup, number> = { failed: 0, pending: 1, ok: 2 };
+
+type HelmFilter = "all" | HelmStatusGroup;
+
+function matchesQuery(r: HelmReleaseDTO, query: string): boolean {
+  const q = query.trim().toLowerCase();
+  if (!q) return true;
+  return [r.name, r.namespace, r.chart, r.appVersion, r.status].some((v) => v.toLowerCase().includes(q));
+}
+
 // columns: dot | name | namespace | chart | appVersion | revision | updated
 const gridCols = "12px minmax(0,1.4fr) minmax(0,0.8fr) minmax(0,1.2fr) 80px 52px 80px";
 
@@ -53,12 +73,65 @@ export function HelmView({ cluster }: { cluster: string }) {
   const helm = useFleet((s) => s.helm);
   const isProtected = useFleet((s) => s.clusters.find((c) => c.name === cluster)?.protected ?? false);
 
+  // Filters follow the persistence rules of the other triage views: the
+  // namespace survives a relaunch, the free-text query survives section
+  // switches within this run.
+  const [filter, setFilter] = useState<HelmFilter>("all");
+  const [namespace, setNamespace] = useState<string>(() => loadClusterPrefs(cluster).helm?.namespace ?? "");
+  const [query, setQuery] = useState<string>(() => loadSearch(cluster, "helm"));
+  const [kbKey, setKbKey] = useState<string | null>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
+
   useEffect(() => {
     void listHelmReleases(cluster);
     return () => { useFleet.getState().clearHelm(); };
   }, [cluster]);
 
+  useEffect(() => {
+    saveHelmViewPrefs(cluster, { namespace });
+    saveSearch(cluster, "helm", query);
+  }, [cluster, namespace, query]);
+
   const onRefresh = () => { void listHelmReleases(cluster); };
+
+  const releases = helm.cluster === cluster ? helm.releases : [];
+  const namespaces = useMemo(() => Array.from(new Set(releases.map((r) => r.namespace))).sort(), [releases]);
+  // Broken-first: a failed release floats to the top like every other lens;
+  // the backend returns helm's own ordering, which buries failures.
+  const orderedReleases = useMemo(
+    () => [...releases].sort((a, b) => groupRank[statusGroup(a.status)] - groupRank[statusGroup(b.status)] || a.namespace.localeCompare(b.namespace) || a.name.localeCompare(b.name)),
+    [releases],
+  );
+  const visibleReleases = useMemo(
+    () => orderedReleases.filter((r) => (!namespace || r.namespace === namespace) && (filter === "all" || statusGroup(r.status) === filter) && matchesQuery(r, query)),
+    [orderedReleases, namespace, filter, query],
+  );
+  const failed = releases.filter((r) => statusGroup(r.status) === "failed").length;
+  const pendingCount = releases.filter((r) => statusGroup(r.status) === "pending").length;
+  const deployed = releases.filter((r) => statusGroup(r.status) === "ok").length;
+
+  // Keyboard parity: j/k moves a key-stable selection, Enter opens the
+  // release, Esc closes the panel, / focuses the filter.
+  const kbIdx = kbKey === null ? -1 : visibleReleases.findIndex((r) => `${r.namespace}/${r.name}` === kbKey);
+  const handleKbSelect = useCallback((idx: number) => {
+    const r = visibleReleases[idx];
+    if (r) setKbKey(`${r.namespace}/${r.name}`);
+  }, [visibleReleases]);
+  const handleKbActivate = useCallback((idx: number) => {
+    const r = visibleReleases[idx];
+    if (r) void openHelmRelease(cluster, r.namespace, r.name);
+  }, [visibleReleases, cluster]);
+  const handleKbEscape = useCallback(() => {
+    if (useFleet.getState().helm.selected) useFleet.getState().selectHelmRelease(null);
+  }, []);
+  useListKeys({
+    count: visibleReleases.length,
+    selected: kbIdx,
+    onSelect: handleKbSelect,
+    onActivate: handleKbActivate,
+    onEscape: handleKbEscape,
+    searchRef,
+  });
 
   // availability gate
   if (!helm.loading && !helm.available) {
@@ -74,36 +147,73 @@ export function HelmView({ cluster }: { cluster: string }) {
 
   return (
     <div style={{ padding: "16px 20px", display: "flex", gap: 0, height: "100%", boxSizing: "border-box" }}>
-      <div style={{ flex: 1, minWidth: 0 }}>
+      <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", minHeight: 0 }}>
+        {/* Health strip - the at-a-glance block every other lens already has */}
+        <div style={{ ...frame, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", overflow: "hidden", marginBottom: 12, flexShrink: 0 }}>
+          <SummaryCell label="releases" value={String(releases.length)} />
+          <SummaryCell label="deployed" value={String(deployed)} tone="success" />
+          <SummaryCell label="failed" value={String(failed)} tone={failed > 0 ? "danger" : "muted"} />
+          <SummaryCell label="pending" value={String(pendingCount)} tone={pendingCount > 0 ? "warning" : "muted"} />
+          <SummaryCell label="namespaces" value={String(namespaces.length)} />
+        </div>
+
         {/* Controls row */}
-        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, flexWrap: "wrap", flexShrink: 0 }}>
+          <select
+            value={namespace}
+            onChange={(e) => setNamespace(e.target.value)}
+            aria-label="filter release namespace"
+            style={{ fontSize: 12, padding: "3px 6px", background: "var(--color-background-primary)", color: "var(--color-text-primary)", border: "0.5px solid var(--color-border-tertiary)", borderRadius: 4 }}
+          >
+            <option value="">all namespaces</option>
+            {namespaces.map((ns) => <option key={ns} value={ns}>{ns}</option>)}
+          </select>
+          <FilterButton label="all" count={releases.length} active={filter === "all"} onClick={() => setFilter("all")} />
+          <FilterButton label="failed" count={failed} active={filter === "failed"} onClick={() => setFilter("failed")} />
+          <FilterButton label="pending" count={pendingCount} active={filter === "pending"} onClick={() => setFilter("pending")} />
+          <FilterButton label="deployed" count={deployed} active={filter === "ok"} onClick={() => setFilter("ok")} />
+          <input
+            ref={searchRef}
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="filter releases"
+            aria-label="filter releases"
+            style={{ marginLeft: "auto", fontSize: 11, padding: "3px 8px", borderRadius: 4, border: "0.5px solid var(--color-border-tertiary)", background: "var(--color-background-primary)", color: "var(--color-text-primary)", width: 180 }}
+          />
           <button onClick={onRefresh} style={btn}>refresh</button>
         </div>
 
         {/* List */}
-        {helm.loading && helm.releases.length === 0 ? (
+        {helm.loading && releases.length === 0 ? (
           <SkeletonRows rows={6} label="loading releases" />
-        ) : helm.releases.length === 0 ? (
+        ) : releases.length === 0 ? (
           <div style={{ color: "var(--color-text-secondary)", fontSize: 13 }}>No Helm releases found.</div>
         ) : (
-          <div style={{ fontFamily: "var(--font-mono)", fontSize: 12 }}>
+          <div style={{ fontFamily: "var(--font-mono)", fontSize: 12, flex: 1, minHeight: 0, overflowY: "auto" }}>
             {/* Header */}
             <div style={{ display: "grid", gridTemplateColumns: gridCols, gap: 10, padding: "0 8px 6px", fontSize: 9, textTransform: "uppercase", letterSpacing: 0.5, color: "var(--color-text-tertiary)", borderBottom: "0.5px solid var(--color-border-secondary)" }}>
               <span /><span>release</span><span>namespace</span><span>chart</span><span>app version</span><span>rev</span><span>updated</span>
             </div>
+            {visibleReleases.length === 0 && (
+              <div style={{ padding: 14, color: "var(--color-text-secondary)", fontSize: 13 }}>No releases match the current filter.</div>
+            )}
             {/* Rows */}
-            {helm.releases.map((r) => {
+            {visibleReleases.map((r) => {
               const isSelected = helm.selected?.namespace === r.namespace && helm.selected?.name === r.name;
+              const isKb = kbIdx >= 0 && kbKey === `${r.namespace}/${r.name}`;
               return (
                 <div
                   key={`${r.namespace}/${r.name}`}
                   data-rowhost="true"
+                  aria-selected={isKb}
+                  ref={isKb ? (el) => el?.scrollIntoView?.({ block: "nearest" }) : undefined}
                   onClick={() => void openHelmRelease(cluster, r.namespace, r.name)}
                   style={{
                     display: "grid", gridTemplateColumns: gridCols, gap: 10, alignItems: "center",
                     padding: "7px 8px", borderBottom: "0.5px solid var(--color-border-tertiary)",
                     cursor: "pointer",
-                    background: isSelected ? "var(--color-background-secondary)" : undefined,
+                    background: isKb || isSelected ? "var(--color-background-secondary)" : undefined,
+                    boxShadow: isKb ? "inset 2px 0 0 var(--color-text-info)" : undefined,
                   }}
                 >
                   <span style={{ width: 8, height: 8, borderRadius: "50%", background: statusDot(r.status), display: "inline-block" }} />
