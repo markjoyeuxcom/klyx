@@ -75,6 +75,15 @@ export function OperationDialog({
     if (!isProtected) confirmRef.current?.focus();
   }, [isProtected]);
 
+  // Restore focus to whatever invoked the dialog once it closes - without
+  // this, focus falls to <body> and a keyboard flow loses its place.
+  useEffect(() => {
+    const prev = document.activeElement as HTMLElement | null;
+    return () => {
+      prev?.focus?.();
+    };
+  }, []);
+
   // Modal key handling: swallow keys at the dialog boundary so window-level
   // list navigation (useListKeys) never acts behind the overlay. Escape
   // cancels; Tab wraps between the dialog's first and last focusable elements

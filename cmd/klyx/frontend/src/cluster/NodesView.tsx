@@ -9,6 +9,7 @@ import { MetaTile, OperationDialog, OptionTile } from "../chrome/OperationDialog
 import { fmtMem } from "./saturation";
 import { useResizablePanel } from "../chrome/useResizablePanel";
 import { useNavIntent } from "../chrome/useNavIntent";
+import { useListKeys } from "../chrome/useListKeys";
 import { CopyButton } from "../chrome/CopyButton";
 import { ellipsis, frame, btn, FilterButton, SummaryCell, StatusDot } from "../chrome/primitives";
 import { InspectorSection, InspectorTabButton, MetadataChips, inspectorStateBox } from "./ResourceInspector";
@@ -407,6 +408,31 @@ export function NodesView({ cluster }: { cluster: string }) {
     () => orderedNodes.filter((n) => nodeMatchesFilter(n, filter) && nodeMatchesQuery(n, query, roleFilter)),
     [orderedNodes, filter, query, roleFilter],
   );
+
+  // Keyboard parity with the triage views: j/k moves a key-stable selection,
+  // Enter opens the node inspector, Esc closes it, / focuses the filter.
+  const [kbName, setKbName] = useState<string | null>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
+  const kbIdx = kbName === null ? -1 : visibleNodes.findIndex((n) => n.name === kbName);
+  const handleKbSelect = useCallback((idx: number) => {
+    const n = visibleNodes[idx];
+    if (n) setKbName(n.name);
+  }, [visibleNodes]);
+  const handleKbActivate = useCallback((idx: number) => {
+    const n = visibleNodes[idx];
+    if (n) void openNodeDetail(cluster, n.name);
+  }, [visibleNodes, cluster]);
+  const handleKbEscape = useCallback(() => {
+    if (useFleet.getState().nodes.selected) useFleet.getState().selectNode(null);
+  }, []);
+  useListKeys({
+    count: visibleNodes.length,
+    selected: kbIdx,
+    onSelect: handleKbSelect,
+    onActivate: handleKbActivate,
+    onEscape: handleKbEscape,
+    searchRef,
+  });
   const roles = useMemo(
     () => [...new Set(nodes.items.flatMap((n) => n.roles))].sort(),
     [nodes.items],
@@ -461,6 +487,7 @@ export function NodesView({ cluster }: { cluster: string }) {
             </>
           )}
           <input
+            ref={searchRef}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="filter nodes"
@@ -484,17 +511,21 @@ export function NodesView({ cluster }: { cluster: string }) {
                 <div style={{ padding: 14, color: "var(--color-text-secondary)", fontSize: 13 }}>No nodes match the current filter.</div>
               ) : visibleNodes.map((n) => {
                 const isSelected = nodes.selected?.name === n.name;
+                const isKb = kbName === n.name && kbIdx >= 0;
                 const dotColor = nodeDotColor(n);
                 return (
                   <div
                     key={n.name}
                     data-rowhost="true"
+                    aria-selected={isKb}
+                    ref={isKb ? (el) => el?.scrollIntoView?.({ block: "nearest" }) : undefined}
                     onClick={() => void openNodeDetail(cluster, n.name)}
                     style={{
                       display: "grid", gridTemplateColumns: gridCols, gap: 10, alignItems: "center",
                       padding: "7px 8px", borderBottom: "0.5px solid var(--color-border-tertiary)",
                       cursor: "pointer",
-                      background: isSelected ? "var(--color-background-secondary)" : undefined,
+                      background: isKb || isSelected ? "var(--color-background-secondary)" : undefined,
+                      boxShadow: isKb ? "inset 2px 0 0 var(--color-text-info)" : undefined,
                     }}
                   >
                     <StatusDot size={8} color={dotColor} />

@@ -1,7 +1,9 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useFleet, ResourceRef, InstanceDTO } from "../store/fleet";
 import { loadInstances, listInstancePage } from "../bridge/crd";
 import { VirtualList } from "../chrome/VirtualList";
+import type { VirtualListHandle } from "../chrome/VirtualList";
+import { useListKeys } from "../chrome/useListKeys";
 import { CopyButton } from "../chrome/CopyButton";
 import { riskFor, supportsRiskFilter } from "./resourceRisk";
 
@@ -141,6 +143,29 @@ export function InstanceList({ cluster, resource }: { cluster: string; resource:
     nav.openInstance(r.namespace, r.name);
   }
 
+  // Keyboard parity for the generic table backing every Resources/CRDs list:
+  // j/k moves the selection, Enter opens the instance, / focuses the filter.
+  const [kbIdx, setKbIdx] = useState(-1);
+  const searchRef = useRef<HTMLInputElement>(null);
+  const listRef = useRef<VirtualListHandle>(null);
+  const effectiveKbIdx = rows.length === 0 ? -1 : Math.min(kbIdx, rows.length - 1);
+  const handleKbSelect = useCallback((idx: number) => {
+    setKbIdx(idx);
+    listRef.current?.scrollToIndex(idx);
+  }, []);
+  const handleKbActivate = useCallback((idx: number) => {
+    const r = rows[idx];
+    if (r) openRow(r.row);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rows]);
+  useListKeys({
+    count: rows.length,
+    selected: effectiveKbIdx,
+    onSelect: handleKbSelect,
+    onActivate: handleKbActivate,
+    searchRef,
+  });
+
   return (
     <div style={{ padding: "14px 16px", height: "100%", minHeight: 0, overflow: "hidden", boxSizing: "border-box", display: "flex", flexDirection: "column" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, flexShrink: 0 }}>
@@ -185,6 +210,7 @@ export function InstanceList({ cluster, resource }: { cluster: string; resource:
           </button>
         )}
         <input
+          ref={searchRef}
           value={instances.filter}
           onChange={(e) => setFilter(e.target.value)}
           placeholder={fleetMode ? "cluster, name, namespace…" : "name, namespace…"}
@@ -240,21 +266,24 @@ export function InstanceList({ cluster, resource }: { cluster: string; resource:
               <div style={{ padding: 14, color: "var(--color-text-secondary)", fontSize: 13 }}>No {resource.kind} instances match the current filter.</div>
             ) : (
               <VirtualList
+                ref={listRef}
                 items={rows}
                 rowHeight={ROW_HEIGHT}
                 rowKey={({ row }) => `${row.cluster}/${row.namespace}/${row.name}`}
                 style={{ flex: 1, minHeight: 0 }}
-                render={({ row: r, risk }) => (
+                render={({ row: r, risk }, i) => (
                   <div
                     key={`${r.cluster}/${r.namespace}/${r.name}`}
                     data-rowhost="true"
+                    aria-selected={i === effectiveKbIdx}
                     onClick={() => openRow(r)}
                     title={risk.bad ? risk.reason : undefined}
                     style={{
                       display: "grid", gridTemplateColumns: cols, gap: 10, alignItems: "center", padding: "6px 12px",
                       height: ROW_HEIGHT, boxSizing: "border-box",
                       borderTop: "0.5px solid var(--color-border-tertiary)", fontSize: 11, cursor: "pointer",
-                      boxShadow: risk.bad ? "inset 2px 0 0 var(--color-text-warning)" : undefined,
+                      background: i === effectiveKbIdx ? "var(--color-background-secondary)" : undefined,
+                      boxShadow: i === effectiveKbIdx ? "inset 2px 0 0 var(--color-text-info)" : risk.bad ? "inset 2px 0 0 var(--color-text-warning)" : undefined,
                     }}
                   >
                     {fleetMode && <span style={{ color: "var(--color-text-info)", fontFamily: "var(--font-mono)", ...ellipsis }}>{r.cluster}</span>}

@@ -26,6 +26,11 @@ vi.mock("../bridge/crd", () => ({
   copyText: vi.fn().mockResolvedValue(undefined),
 }));
 
+// useListKeys -> CommandPalette -> commands.ts pulls every bridge, whose
+// generated bindings import runtime.Create; stub the bindings module so the
+// chain never reaches the Wails runtime.
+vi.mock("../../bindings/github.com/moomora/klyx/internal/appbridge/index.js", () => ({}));
+
 // Mock the Wails Events.On used by DrainModal.
 vi.mock("@wailsio/runtime", () => ({
   Events: {

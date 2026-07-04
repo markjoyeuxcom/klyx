@@ -92,16 +92,21 @@ export function CommandPalette() {
   const [boost, setBoost] = useState<(id: string) => number>(() => () => 0);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  // Focus returns to whatever had it before ⌘K - a keyboard flow keeps its place.
+  const prevFocusRef = useRef<HTMLElement | null>(null);
 
   const close = useCallback(() => {
     _paletteOpen = false;
     setOpen(false);
     setQuery("");
     setSel(0);
+    prevFocusRef.current?.focus?.();
+    prevFocusRef.current = null;
   }, []);
 
   const openPalette = useCallback(() => {
     _paletteOpen = true;
+    prevFocusRef.current = document.activeElement as HTMLElement | null;
     setCommands(buildCommands(useFleet.getState())); // fresh index, no stale data
     setBoost(() => loadBoosts());
     setQuery("");

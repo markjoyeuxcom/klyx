@@ -40,6 +40,22 @@ describe("ExternalSecretsView", () => {
     expect(getByText(/External Secrets Operator not detected/i)).toBeTruthy();
   });
 
+  it("j then Enter opens the inspector for the second row (keyboard parity with Certs)", () => {
+    setup("Healthy", [
+      secret({ name: "broken-secret", state: "Failed", reason: "SecretSyncedError" }),
+      secret({ name: "healthy-secret", state: "Synced" }),
+    ], [store({})]);
+    const { getByTestId } = render(<ExternalSecretsView cluster="x" />);
+    fireEvent.keyDown(window, { key: "j" }); // selects first
+    fireEvent.keyDown(window, { key: "j" }); // moves to second
+    fireEvent.keyDown(window, { key: "Enter" });
+    expect(useFleet.getState().externalsecrets.selectedKey).toBe("payments/healthy-secret");
+    // Esc closes the inspector.
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(useFleet.getState().externalsecrets.selectedKey).toBeNull();
+    expect(getByTestId("eso-scroll")).toBeTruthy();
+  });
+
   it("sorts failing secrets first, then stale, then unknown (broken-first triage)", () => {
     setup("Healthy", [
       secret({ name: "healthy-secret", state: "Synced" }),

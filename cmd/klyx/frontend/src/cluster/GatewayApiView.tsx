@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { useFleet } from "../store/fleet";
 import type { GatewayRefDTO } from "../store/fleet";
 import { listGateways } from "../bridge/gateway";
 import { GatewayTopology } from "./GatewayTopology";
+import { useListKeys } from "../chrome/useListKeys";
 import { frame, ellipsis, SummaryCell, FilterButton } from "../chrome/primitives";
 import { SyncingChip, staleStyle } from "./staleness";
 
@@ -42,6 +43,8 @@ export function GatewayApiView({ cluster }: { cluster: string }) {
   const openGateway = useFleet((s) => s.openGateway);
   const [mode, setMode] = useState<GatewayMode>("all");
   const [query, setQuery] = useState("");
+  const [kbKey, setKbKey] = useState<string | null>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
 
   const gateway = route.name === "cluster" ? route.gateway : undefined;
 
@@ -70,6 +73,25 @@ export function GatewayApiView({ cluster }: { cluster: string }) {
   const pending = gateways.filter(isPending).length;
   const programmed = gateways.length - pending;
   const classes = new Set(gateways.map((g) => g.className).filter(Boolean)).size;
+
+  // Keyboard parity with the triage views: j/k moves a key-stable selection,
+  // Enter opens the topology, / focuses the filter.
+  const kbIdx = kbKey === null ? -1 : visibleGateways.findIndex((g) => `${g.namespace}/${g.name}` === kbKey);
+  const handleKbSelect = useCallback((idx: number) => {
+    const g = visibleGateways[idx];
+    if (g) setKbKey(`${g.namespace}/${g.name}`);
+  }, [visibleGateways]);
+  const handleKbActivate = useCallback((idx: number) => {
+    const g = visibleGateways[idx];
+    if (g) openGateway(g.namespace, g.name);
+  }, [visibleGateways, openGateway]);
+  useListKeys({
+    count: gateway ? 0 : visibleGateways.length, // suspend list nav inside the topology
+    selected: kbIdx,
+    onSelect: handleKbSelect,
+    onActivate: handleKbActivate,
+    searchRef,
+  });
 
   if (gateway) return <GatewayTopology cluster={cluster} gateway={gateway} />;
 
@@ -105,6 +127,7 @@ export function GatewayApiView({ cluster }: { cluster: string }) {
         <FilterButton label="pending" count={pending} active={mode === "pending"} onClick={() => setMode("pending")} />
         <FilterButton label="programmed" count={programmed} active={mode === "programmed"} onClick={() => setMode("programmed")} />
         <input
+          ref={searchRef}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder="filter gateways"
@@ -129,9 +152,12 @@ export function GatewayApiView({ cluster }: { cluster: string }) {
             <div style={{ padding: 14, color: "var(--color-text-secondary)", fontSize: 13 }}>No Gateways match the current filter.</div>
           ) : visibleGateways.map((g) => {
             const pendingGateway = isPending(g);
+            const isKb = kbIdx >= 0 && kbKey === `${g.namespace}/${g.name}`;
             return (
               <button
                 key={`${g.namespace}/${g.name}`}
+                aria-selected={isKb}
+                ref={isKb ? (el) => el?.scrollIntoView?.({ block: "nearest" }) : undefined}
                 onClick={() => openGateway(g.namespace, g.name)}
                 style={{
                   width: "100%",
@@ -142,7 +168,8 @@ export function GatewayApiView({ cluster }: { cluster: string }) {
                   padding: "8px 12px",
                   border: 0,
                   borderTop: "0.5px solid var(--color-border-tertiary)",
-                  background: "transparent",
+                  background: isKb ? "var(--color-background-secondary)" : "transparent",
+                  boxShadow: isKb ? "inset 2px 0 0 var(--color-text-info)" : undefined,
                   color: "var(--color-text-primary)",
                   fontSize: 12,
                   cursor: "pointer",

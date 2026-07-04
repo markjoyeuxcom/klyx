@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useFleet } from "../store/fleet";
 import type { ExternalSecretDTO, ExternalSecretStoreDTO } from "../store/fleet";
 import { openExternalSecrets, closeExternalSecrets } from "../bridge/externalsecrets";
+import { useListKeys } from "../chrome/useListKeys";
 import { Badge, FilterButton, SummaryCell, Section, Field, StatusDot, frame, ellipsis, mono, readyColor, toneColor } from "../chrome/primitives";
 import { CopyButton } from "../chrome/CopyButton";
 
@@ -73,6 +74,8 @@ export function ExternalSecretsView({ cluster }: { cluster: string }) {
   const [filter, setFilter] = useState<EsoFilter>("all");
   const [query, setQuery] = useState("");
   const [namespace, setNamespace] = useState("");
+  const [kbKey, setKbKey] = useState<string | null>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
   const absent = tier === "Absent";
 
   useEffect(() => {
@@ -105,6 +108,33 @@ export function ExternalSecretsView({ cluster }: { cluster: string }) {
     () => [...stores].sort((a, b) => storeRank(a) - storeRank(b) || a.kind.localeCompare(b.kind) || a.name.localeCompare(b.name)),
     [stores],
   );
+
+  // Keyboard parity with the Certs lens (j/k, Enter opens the inspector,
+  // Esc closes it, / focuses the filter) - ESO is a near-clone of Certs and
+  // was the one lens without it.
+  const kbIdx = kbKey === null ? -1 : visibleSecrets.findIndex((e) => keyOf(e) === kbKey);
+  const handleKbSelect = useCallback((idx: number) => {
+    const e = visibleSecrets[idx];
+    if (e) setKbKey(keyOf(e));
+  }, [visibleSecrets]);
+  const handleKbActivate = useCallback((idx: number) => {
+    const e = visibleSecrets[idx];
+    if (!e) return;
+    const k = keyOf(e);
+    select(useFleet.getState().externalsecrets.selectedKey === k ? null : k);
+  }, [visibleSecrets, select]);
+  const handleKbEscape = useCallback(() => {
+    if (useFleet.getState().externalsecrets.selectedKey) select(null);
+  }, [select]);
+  useListKeys({
+    // The stores filter renders a different list; suspend row nav there.
+    count: filter === "stores" ? 0 : visibleSecrets.length,
+    selected: kbIdx,
+    onSelect: handleKbSelect,
+    onActivate: handleKbActivate,
+    onEscape: handleKbEscape,
+    searchRef,
+  });
 
   if (absent) {
     return <div style={{ padding: 24, color: "var(--color-text-secondary)", fontSize: 13 }}>External Secrets Operator not detected on this cluster.</div>;
@@ -156,6 +186,7 @@ export function ExternalSecretsView({ cluster }: { cluster: string }) {
           {namespaces.map((ns) => <option key={ns} value={ns}>{ns}</option>)}
         </select>
         <input
+          ref={searchRef}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder="filter external secrets"
@@ -187,7 +218,15 @@ export function ExternalSecretsView({ cluster }: { cluster: string }) {
                 <div style={{ padding: 14, color: "var(--color-text-secondary)", fontSize: 13 }}>No external secrets match the current filter.</div>
               ) : visibleSecrets.map((e) => {
                 const k = keyOf(e);
-                return <SecretRow key={k} e={e} open={eso.selectedKey === k} onClick={() => (eso.selectedKey === k ? select(null) : select(k))} />;
+                return (
+                  <SecretRow
+                    key={k}
+                    e={e}
+                    open={eso.selectedKey === k}
+                    kbSelected={kbKey === k}
+                    onClick={() => (eso.selectedKey === k ? select(null) : select(k))}
+                  />
+                );
               })}
             </div>
           </div>
@@ -201,17 +240,26 @@ export function ExternalSecretsView({ cluster }: { cluster: string }) {
   );
 }
 
-function SecretRow({ e, open, onClick }: { e: ExternalSecretDTO; open: boolean; onClick: () => void }) {
+function SecretRow({ e, open, kbSelected, onClick }: { e: ExternalSecretDTO; open: boolean; kbSelected: boolean; onClick: () => void }) {
   const bad = e.state === "Failed";
+  // Keep the keyboard selection visible as j/k moves it past the fold.
+  // Optional call: jsdom has no scrollIntoView.
+  const ref = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (kbSelected) ref.current?.scrollIntoView?.({ block: "nearest" });
+  }, [kbSelected]);
   return (
     <button
+      ref={ref}
+      aria-selected={kbSelected}
       onClick={onClick}
       style={{
         width: "100%", textAlign: "left", display: "grid",
         gridTemplateColumns: "3px minmax(180px,1.3fr) minmax(120px,1fr) 96px 64px 84px",
         gap: 10, alignItems: "center", padding: "7px 12px", cursor: "pointer",
         border: "none", borderBottom: "0.5px solid var(--color-border-tertiary)",
-        background: open ? "var(--color-background-secondary)" : "transparent", color: "var(--color-text-primary)",
+        background: kbSelected || open ? "var(--color-background-secondary)" : "transparent", color: "var(--color-text-primary)",
+        boxShadow: kbSelected ? "inset 2px 0 0 var(--color-text-info)" : undefined,
       }}
     >
       <span style={{ alignSelf: "stretch", background: bad ? "var(--color-text-danger)" : e.stale ? "var(--color-text-warning)" : "transparent" }} />

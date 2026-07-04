@@ -12,6 +12,7 @@ import { openHelmRelease } from "../bridge/helm";
 import { getResourceDetail } from "../bridge/gitops";
 import { copyText, getInstanceDetail } from "../bridge/crd";
 import { stopForward } from "../bridge/forwards";
+import { openShortcutsOverlay } from "./ShortcutsOverlay";
 import { setThemeChoice, THEMES, toggleTheme } from "../theme/ThemeProvider";
 import { BUILTIN_CATALOG } from "../cluster/builtins";
 import { supportsRiskFilter } from "../cluster/resourceRisk";
@@ -513,6 +514,14 @@ export function buildCommands(s: FleetStore): Command[] {
       },
     });
   }
+
+  cmds.push({
+    id: "shortcuts",
+    group: "Clusters",
+    title: "Keyboard shortcuts",
+    hint: "also on ?",
+    run: () => openShortcutsOverlay(),
+  });
 
   // --- Theme ------------------------------------------------------------------
   cmds.push({
