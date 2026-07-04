@@ -220,7 +220,7 @@ describe("ArgoView", () => {
   it("filters applications by attention and query", () => {
     seed([broken, healthy]);
     const { getByRole, getByText, getAllByText, queryByText } = render(<ArgoView cluster="homelab-nelli" />);
-    fireEvent.click(getByRole("button", { name: /needs attention 1/i }));
+    fireEvent.click(getByRole("button", { name: /needs attention\s*1/i }));
     expect(getAllByText("ollama-prod").length).toBeGreaterThanOrEqual(1);
     expect(queryByText("console-dev")).toBeNull();
     fireEvent.change(getByRole("textbox", { name: "filter applications" }), { target: { value: "nope" } });

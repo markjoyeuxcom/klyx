@@ -58,6 +58,12 @@ type WorkloadDTO struct {
 	GitOps    *OwnerDTO            `json:"gitops"`
 	Pods      []PodDTO             `json:"pods"`
 	Resources WorkloadResourcesDTO `json:"resources"`
+	// Stale: spec changed, controller has not observed it - status/rank reflect
+	// the previous spec; render the row as transitioning ("dim = not yet
+	// realized"), same staleness language as Flux resources and Gateways.
+	Stale              bool  `json:"stale,omitempty"`
+	Generation         int64 `json:"generation,omitempty"`
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 }
 
 type WorkloadsResultDTO struct {

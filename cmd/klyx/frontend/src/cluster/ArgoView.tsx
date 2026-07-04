@@ -7,7 +7,7 @@ import { ConfirmDialog } from "../chrome/ConfirmDialog";
 import { MetaTile, OperationDialog, OptionTile } from "../chrome/OperationDialog";
 import { useListKeys } from "../chrome/useListKeys";
 import { useNavIntent } from "../chrome/useNavIntent";
-import { EmptyState, SkeletonRows, btn, ellipsis } from "../chrome/primitives";
+import { EmptyState, FilterButton, SkeletonRows, btn, ellipsis } from "../chrome/primitives";
 import { IconGitMerge } from "@tabler/icons-react";
 import { Age, UpdatedAt, useReceivedAt } from "../chrome/Age";
 import { InspectorEmpty, InspectorSection, InspectorTitle } from "./ResourceInspector";
@@ -550,10 +550,10 @@ type FilterToggle = { label: string; active: boolean; count: number; onClick: ()
 function FilterBar({ query, onQuery, placeholder, toggles, visible, total }: { query: string; onQuery: (value: string) => void; placeholder: string; toggles: FilterToggle[]; visible: number; total: number }) {
   return (
     <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center", marginBottom: 10 }}>
+      {/* The shared FilterButton pill - Argo was the one lens whose filter
+          buttons didn't match its siblings visually. */}
       {toggles.map((t) => (
-        <button key={t.label} onClick={t.onClick} style={{ ...smallBtn, background: t.active ? "var(--color-background-secondary)" : "var(--color-background-primary)", color: t.active ? "var(--color-text-primary)" : "var(--color-text-secondary)" }}>
-          {t.label} {t.count}
-        </button>
+        <FilterButton key={t.label} label={t.label} count={t.count} active={t.active} onClick={t.onClick} />
       ))}
       <input
         value={query}

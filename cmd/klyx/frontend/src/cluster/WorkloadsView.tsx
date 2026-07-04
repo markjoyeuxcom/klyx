@@ -23,6 +23,8 @@ import { EmptyState } from "../chrome/EmptyState";
 import { SkeletonRows } from "../chrome/SkeletonRows";
 import { LiveIndicator, btn, ellipsis } from "../chrome/primitives";
 import { loadClusterPrefs, loadSearch, saveSearch, saveWorkloadsViewPrefs } from "../store/persist";
+import { SyncingChip, staleStyle } from "./staleness";
+import { wellKnownResourceRef } from "./resourceRefs";
 
 const rankDot: Record<string, string> = {
   unhealthy: "var(--color-text-danger)",
@@ -53,7 +55,7 @@ function ResourceCellView({ resource, cell, hasPods }: { resource: "cpu" | "mem"
   return (
     <span style={{ color }}>{usage} / {fmt(cell.limit)}
       {sat.pct != null && (
-        <span style={{ display: "inline-block", width: 46, height: 6, background: "var(--color-background-tertiary, #8883)", borderRadius: 3, verticalAlign: "middle", marginLeft: 6 }}>
+        <span style={{ display: "inline-block", width: 46, height: 6, background: "var(--color-background-tertiary)", borderRadius: 3, verticalAlign: "middle", marginLeft: 6 }}>
           <span style={{ display: "block", width: `${Math.min(100, sat.pct * 100)}%`, height: "100%", background: color ?? "var(--color-text-success)", borderRadius: 3 }} />
         </span>
       )}
@@ -355,6 +357,7 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
                             cursor: "pointer",
                             background: isKbSelected ? "var(--color-background-secondary)" : undefined,
                             outline: "none",
+                            ...staleStyle(w.stale),
                           }}
                         >
                           <span style={{ width: 8, height: 8, borderRadius: "50%", background: rankDot[w.rank] }} />
@@ -365,7 +368,9 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
                           </span>
                           <span style={{ color: w.ready < w.desired ? "var(--color-text-warning)" : "var(--color-text-secondary)" }}>{w.ready} / {w.desired}</span>
                           <span style={{ color: w.restarts > 0 ? "var(--color-text-warning)" : "var(--color-text-tertiary)" }}>{w.restarts}</span>
-                          <span style={{ ...ellipsis, color: w.rank === "unhealthy" ? "var(--color-text-danger)" : "var(--color-text-secondary)" }} title={w.reason}>{w.reason}</span>
+                          <span style={{ ...ellipsis, color: w.rank === "unhealthy" ? "var(--color-text-danger)" : "var(--color-text-secondary)" }} title={w.reason}>
+                            {w.stale ? <SyncingChip generation={w.generation} observedGeneration={w.observedGeneration} /> : w.reason}
+                          </span>
                           {showMetrics && <ResourceCellView resource="cpu" cell={w.resources.cpu} hasPods={w.pods.length > 0} />}
                           {showMetrics && <ResourceCellView resource="mem" cell={w.resources.mem} hasPods={w.pods.length > 0} />}
                           <span style={{ ...ellipsis, color: "var(--color-text-tertiary)" }} title={w.gitops ? `Flux ownership label: ${w.gitops.kind} ${w.gitops.namespace}/${w.gitops.name}` : undefined}>
@@ -609,6 +614,19 @@ function WorkloadContextPanel({
               style={{ ...btn, color: "var(--color-text-danger)", borderColor: "var(--color-border-danger)", background: "var(--color-background-danger)" }}
             >delete pod</button>
           )}
+          {/* One manifest surface: jump to InstanceDetail (YAML, labels,
+              annotations, edit) instead of duplicating a YAML tab here. */}
+          <button
+            onClick={() => {
+              const ref = wellKnownResourceRef("apps", workload.kind);
+              if (!ref) return;
+              const nav = useFleet.getState();
+              nav.openResource(ref);
+              nav.openInstance(workload.namespace, workload.name);
+            }}
+            style={btn}
+            title="Open the manifest (YAML, labels, edit) in Resources"
+          >manifest</button>
           <span style={{ color: "var(--color-text-tertiary)", fontSize: 11 }}>
             {expanded ? "expanded" : "enter expands"}
           </span>

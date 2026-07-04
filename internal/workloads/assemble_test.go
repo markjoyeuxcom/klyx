@@ -331,3 +331,31 @@ func TestAssembleOverlappingSelectorsDoubleCount(t *testing.T) {
 		t.Fatalf("expected the shared pod under both (known behavior): a=%d b=%d", len(byName["a"].Pods), len(byName["b"].Pods))
 	}
 }
+
+func TestAssembleCarriesGenerations(t *testing.T) {
+	now := time.Unix(600, 0)
+	// Spec edited (generation 3) but the controller has not observed it yet
+	// (observedGeneration 2): status reflects the previous spec, so the UI
+	// must render the row as transitioning, never as confidently Ready.
+	edited := appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "web", Name: "api", Generation: 3},
+		Spec:       appsv1.DeploymentSpec{Replicas: i32(1), Selector: sel(map[string]string{"app": "api"})},
+		Status:     appsv1.DeploymentStatus{ReadyReplicas: 1, AvailableReplicas: 1, ObservedGeneration: 2},
+	}
+	ds := appsv1.DaemonSet{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "kube-system", Name: "cilium", Generation: 5},
+		Spec:       appsv1.DaemonSetSpec{Selector: sel(map[string]string{"app": "cilium"})},
+		Status:     appsv1.DaemonSetStatus{DesiredNumberScheduled: 1, NumberReady: 1, ObservedGeneration: 5},
+	}
+	out := Assemble([]appsv1.Deployment{edited}, nil, []appsv1.DaemonSet{ds}, nil, false, now)
+	byName := map[string]Workload{}
+	for _, w := range out {
+		byName[w.Name] = w
+	}
+	if byName["api"].Generation != 3 || byName["api"].ObservedGeneration != 2 {
+		t.Fatalf("deployment generations not carried: %+v", byName["api"])
+	}
+	if byName["cilium"].Generation != 5 || byName["cilium"].ObservedGeneration != 5 {
+		t.Fatalf("daemonset generations not carried: %+v", byName["cilium"])
+	}
+}
