@@ -9,6 +9,7 @@ import { MetaTile, OperationDialog, OptionTile } from "../chrome/OperationDialog
 import { useResizablePanel } from "../chrome/useResizablePanel";
 import { useListKeys } from "../chrome/useListKeys";
 import { CopyButton } from "../chrome/CopyButton";
+import { YamlBlock } from "../chrome/YamlBlock";
 import { Age, UpdatedAt, useReceivedAt } from "../chrome/Age";
 import { loadClusterPrefs, loadSearch, saveHelmViewPrefs, saveSearch } from "../store/persist";
 
@@ -377,23 +378,7 @@ function HelmDetailPanel({
             {values === "" ? (
               <span style={{ color: "var(--color-text-tertiary)" }}>no user-supplied values</span>
             ) : (
-              <div style={{ position: "relative" }}>
-                <CopyButton
-                  text={values}
-                  label="copy release values"
-                  style={{ position: "absolute", top: 6, right: 6, background: "var(--color-background-secondary)" }}
-                />
-                <pre style={{
-                  margin: 0, padding: 10,
-                  background: "var(--color-background-secondary)",
-                  border: "0.5px solid var(--color-border-tertiary)",
-                  borderRadius: 4,
-                  fontFamily: "var(--font-mono)", fontSize: 11, lineHeight: 1.5,
-                  overflowX: "auto", overflowY: "auto", maxHeight: 400,
-                  whiteSpace: "pre-wrap", wordBreak: "break-all",
-                  color: "var(--color-text-primary)",
-                }}>{values}</pre>
-              </div>
+              <YamlBlock text={values} copyLabel="release values" maxHeight={400} />
             )}
           </HelmSection>
         </>

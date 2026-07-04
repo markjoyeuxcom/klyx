@@ -249,8 +249,8 @@ describe("HelmView", () => {
 
   it("renders values content in pre block when present", () => {
     seedWithDetail(deployed, historyEntries, "replicaCount: 2\nimage:\n  tag: latest");
-    const { getByText } = render(<HelmView cluster="homelab" />);
-    expect(getByText(/replicaCount: 2/)).toBeTruthy();
+    render(<HelmView cluster="homelab" />);
+    expect(document.body.textContent).toContain("replicaCount: 2");
   });
 
   it("renders sensitive data hint above values pane", () => {

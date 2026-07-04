@@ -309,7 +309,7 @@ describe("NodesView", () => {
     }));
     const { getByText } = render(<NodesView cluster="homelab" />);
     fireEvent.click(getByText("yaml"));
-    expect(getByText(/apiVersion: v1/)).toBeTruthy();
+    expect(document.body.textContent).toContain("apiVersion: v1");
   });
 
   it("close button clears selected node", () => {

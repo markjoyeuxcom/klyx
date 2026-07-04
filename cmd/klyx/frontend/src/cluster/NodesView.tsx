@@ -11,6 +11,7 @@ import { useResizablePanel } from "../chrome/useResizablePanel";
 import { useNavIntent } from "../chrome/useNavIntent";
 import { useListKeys } from "../chrome/useListKeys";
 import { CopyButton } from "../chrome/CopyButton";
+import { YamlBlock } from "../chrome/YamlBlock";
 import { EmptyState } from "../chrome/EmptyState";
 import { SkeletonRows } from "../chrome/SkeletonRows";
 import { UpdatedAt, useReceivedAt } from "../chrome/Age";
@@ -724,24 +725,7 @@ function NodeDetailPanel({
               onDrain={onDrain}
             />
           )}
-          {tab === "yaml" && (
-            <div style={{ position: "relative" }}>
-              <CopyButton
-                text={detail.yaml}
-                label="copy node YAML"
-                style={{ position: "absolute", top: 6, right: 6, background: "var(--color-background-secondary)" }}
-              />
-              <pre style={{
-                margin: 0, padding: 10,
-                background: "var(--color-background-secondary)",
-                border: "0.5px solid var(--color-border-tertiary)",
-                borderRadius: 4,
-                fontFamily: "var(--font-mono)", fontSize: 11, lineHeight: 1.5,
-                overflowX: "auto", whiteSpace: "pre-wrap", wordBreak: "break-all",
-                color: "var(--color-text-primary)",
-              }}>{detail.yaml}</pre>
-            </div>
-          )}
+          {tab === "yaml" && <YamlBlock text={detail.yaml} copyLabel="node YAML" />}
         </>
       )}
     </div>

@@ -5,6 +5,7 @@ import type { PodDetailDTO, PodSummaryDTO, ContainerSummaryDTO } from "../store/
 import { listPods, openLivePods, openPodDetail, deletePod } from "../bridge/pods";
 import { openLogsWindow } from "../bridge/windows";
 import { rolloutRestart } from "../bridge/workloads";
+import { armProtected } from "../bridge/configsvc";
 import { copyExecCommand, openExecTerminal, openDebugTerminal } from "../bridge/exec";
 import { ConfirmDialog } from "../chrome/ConfirmDialog";
 import { LogsPane } from "./LogsPane";
@@ -17,6 +18,7 @@ import { useListKeys } from "../chrome/useListKeys";
 import { useNavIntent } from "../chrome/useNavIntent";
 import { Chip, EmptyState, LiveIndicator, SkeletonRows, btn, ellipsis } from "../chrome/primitives";
 import { CopyButton } from "../chrome/CopyButton";
+import { YamlBlock } from "../chrome/YamlBlock";
 import { InspectorSection, InspectorTabButton, MetadataChips, inspectorStateBox } from "./ResourceInspector";
 import { loadClusterPrefs, loadSearch, savePodsViewPrefs, saveSearch } from "../store/persist";
 
@@ -59,6 +61,11 @@ export function PodsView({ cluster }: { cluster: string }) {
 
   const [selectedIdx, setSelectedIdx] = useState(-1);
   const [logsTarget, setLogsTarget] = useState<{ namespace: string; name: string; containers: ContainerSummaryDTO[] } | null>(null);
+  // Bulk selection ("ns/name" keys): deleting three crash-looping pods should
+  // be one confirm, not three select->confirm cycles. x toggles the keyboard
+  // row; the checkbox reveals on row hover and stays put once checked.
+  const [bulk, setBulk] = useState<Set<string>>(new Set());
+  const [bulkConfirm, setBulkConfirm] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<VirtualListHandle>(null);
   // Holds the cleanup for the current live subscription so namespace changes
@@ -156,6 +163,25 @@ export function PodsView({ cluster }: { cluster: string }) {
     if (p) setLogsTarget({ namespace: p.namespace, name: p.name, containers: p.containers });
   }, [filtered]);
 
+  const toggleBulk = useCallback((key: string) => {
+    setBulk((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }, []);
+
+  const handleBulkKey = useCallback((idx: number) => {
+    const p = filtered[idx];
+    if (p) toggleBulk(`${p.namespace}/${p.name}`);
+  }, [filtered, toggleBulk]);
+
+  // Bulk selection never survives a cluster switch.
+  useEffect(() => {
+    setBulk(new Set());
+  }, [cluster]);
+
   useListKeys({
     count: filtered.length,
     selected: effectiveIdx,
@@ -163,8 +189,32 @@ export function PodsView({ cluster }: { cluster: string }) {
     onActivate: handleActivate,
     onEscape: handleEscape,
     searchRef,
-    extraKeys: { l: handleLogsKey },
+    extraKeys: { l: handleLogsKey, x: handleBulkKey },
   });
+
+  // Resolve bulk keys against the LIVE list at confirm time - pods deleted or
+  // rescheduled since selection silently drop out instead of erroring.
+  const bulkTargets = pods.items.filter((p) => bulk.has(`${p.namespace}/${p.name}`));
+
+  const runBulkDelete = useCallback(async (typed: string) => {
+    const targets = useFleet.getState().pods.items.filter((p) => bulk.has(`${p.namespace}/${p.name}`));
+    setBulkConfirm(false);
+    setBulk(new Set());
+    for (let i = 0; i < targets.length; i++) {
+      const p = targets[i];
+      // The dialog's own arming covers exactly one backend grant; every
+      // subsequent destructive call on a protected cluster re-arms with the
+      // same typed confirmation. A failed re-arm stops the batch honestly.
+      if (isProtected && i > 0) {
+        const r = await armProtected(cluster, typed);
+        if (!r.ok) {
+          useFleet.getState().setActionStatus({ kind: "error", message: `bulk delete stopped at ${p.namespace}/${p.name}: ${r.error || "could not re-arm protected action"}` });
+          return;
+        }
+      }
+      await deletePod(cluster, p.namespace, p.name);
+    }
+  }, [bulk, cluster, isProtected]);
 
   // Reset selection when filter changes.
   useEffect(() => {
@@ -202,6 +252,22 @@ export function PodsView({ cluster }: { cluster: string }) {
             <button onClick={onRefresh} style={btn}>refresh</button>
             <LiveIndicator live={pods.live} />
           </div>
+
+          {/* Bulk action bar - appears only while a selection exists */}
+          {bulk.size > 0 && (
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10, padding: "6px 10px", border: "0.5px solid var(--color-border-warning)", background: "var(--color-background-warning)", borderRadius: 4, fontSize: 12, flexShrink: 0 }}>
+              <span style={{ color: "var(--color-text-warning)", fontWeight: 600 }}>
+                {bulkTargets.length} pod{bulkTargets.length === 1 ? "" : "s"} selected
+              </span>
+              <button
+                onClick={() => setBulkConfirm(true)}
+                disabled={bulkTargets.length === 0}
+                style={{ ...btn, color: "var(--color-text-danger)", borderColor: "var(--color-border-danger)", background: "var(--color-background-danger)" }}
+              >delete selected</button>
+              <button onClick={() => setBulk(new Set())} style={btn}>clear</button>
+              <span style={{ color: "var(--color-text-tertiary)", fontSize: 10 }}>x toggles the highlighted row</span>
+            </div>
+          )}
 
           {/* Table */}
           {pods.loading && pods.items.length === 0 ? (
@@ -242,6 +308,8 @@ export function PodsView({ cluster }: { cluster: string }) {
                       p={p}
                       isKbSelected={isKbSelected}
                       isSelected={isSelected}
+                      bulkSelected={bulk.has(`${p.namespace}/${p.name}`)}
+                      onToggleBulk={() => toggleBulk(`${p.namespace}/${p.name}`)}
                       readyCount={readyCount}
                       nonInitCount={nonInitContainers.length}
                       onRowClick={() => {
@@ -272,6 +340,20 @@ export function PodsView({ cluster }: { cluster: string }) {
         )}
       </div>
 
+      {bulkConfirm && bulkTargets.length > 0 && (
+        <ConfirmDialog
+          title={`delete ${bulkTargets.length} pod${bulkTargets.length === 1 ? "" : "s"}`}
+          cluster={cluster}
+          detail={`${bulkTargets.slice(0, 5).map((p) => `${p.namespace}/${p.name}`).join(", ")}${bulkTargets.length > 5 ? ` and ${bulkTargets.length - 5} more` : ""} — controllers recreate owned pods; bare pods are NOT recreated.`}
+          protected={isProtected}
+          danger
+          confirmLabel={`Delete ${bulkTargets.length}`}
+          onConfirm={() => void runBulkDelete("")}
+          onConfirmTyped={(typed) => void runBulkDelete(typed)}
+          onCancel={() => setBulkConfirm(false)}
+        />
+      )}
+
       {/* Logs dock — persists across pod selection changes; close via ✕ only */}
       {logsTarget && (
         <LogsDock
@@ -295,11 +377,13 @@ export function PodsView({ cluster }: { cluster: string }) {
 // ---------------------------------------------------------------------------
 
 function PodRow({
-  p, isKbSelected, isSelected, readyCount, nonInitCount, onRowClick, onLogsClick,
+  p, isKbSelected, isSelected, bulkSelected, onToggleBulk, readyCount, nonInitCount, onRowClick, onLogsClick,
 }: {
   p: PodSummaryDTO;
   isKbSelected: boolean;
   isSelected: boolean;
+  bulkSelected: boolean;
+  onToggleBulk: () => void;
   readyCount: number;
   nonInitCount: number;
   onRowClick: () => void;
@@ -332,6 +416,15 @@ function PodRow({
     >
       <span style={{ width: 8, height: 8, borderRadius: "50%", background: rankDot[p.rank] }} />
       <span style={{ display: "flex", alignItems: "center", gap: 2, minWidth: 0 }}>
+        <input
+          type="checkbox"
+          checked={bulkSelected}
+          data-rowcopy={bulkSelected ? undefined : "true"}
+          aria-label={`select pod ${p.name} for bulk actions`}
+          onClick={(e) => e.stopPropagation()}
+          onChange={onToggleBulk}
+          style={{ margin: 0, flexShrink: 0, accentColor: "var(--color-text-info)" }}
+        />
         <span style={ellipsis}>
           <span style={{ color: "var(--color-text-tertiary)" }}>{p.namespace}</span>
           {" / "}
@@ -475,24 +568,7 @@ function PodDetailPanel({
               onDelete={(s) => setPending({ verb: "delete", summary: s })}
             />
           )}
-          {tab === "yaml" && (
-            <div style={{ position: "relative" }}>
-              <CopyButton
-                text={detail.yaml}
-                label="copy pod YAML"
-                style={{ position: "absolute", top: 6, right: 6, background: "var(--color-background-secondary)" }}
-              />
-              <pre style={{
-                margin: 0, padding: 10,
-                background: "var(--color-background-secondary)",
-                border: "0.5px solid var(--color-border-tertiary)",
-                borderRadius: 4,
-                fontFamily: "var(--font-mono)", fontSize: 11, lineHeight: 1.5,
-                overflowX: "auto", whiteSpace: "pre-wrap", wordBreak: "break-all",
-                color: "var(--color-text-primary)",
-              }}>{detail.yaml}</pre>
-            </div>
-          )}
+          {tab === "yaml" && <YamlBlock text={detail.yaml} copyLabel="pod YAML" />}
         </>
       )}
 

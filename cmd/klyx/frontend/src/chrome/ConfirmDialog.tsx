@@ -10,6 +10,7 @@ export function ConfirmDialog({
   confirmLabel = "Confirm",
   danger = false,
   onConfirm,
+  onConfirmTyped,
   onCancel,
 }: {
   title: string;
@@ -19,6 +20,13 @@ export function ConfirmDialog({
   confirmLabel?: string;
   danger?: boolean;
   onConfirm: () => void;
+  /**
+   * Bulk verbs need the typed confirmation back: the dialog's own arming
+   * covers exactly ONE backend grant, so a caller dispatching N destructive
+   * calls re-arms with this value before each subsequent call. When present
+   * it is called INSTEAD of onConfirm.
+   */
+  onConfirmTyped?: (typed: string) => void;
   onCancel: () => void;
 }) {
   const [typed, setTyped] = useState("");
@@ -57,7 +65,8 @@ export function ConfirmDialog({
         return;
       }
     }
-    onConfirm();
+    if (onConfirmTyped) onConfirmTyped(typed);
+    else onConfirm();
   };
 
   // Modal key handling: swallow keys at the dialog boundary so window-level
