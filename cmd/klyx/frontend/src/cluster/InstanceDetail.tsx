@@ -6,6 +6,7 @@ import { openPodDetail } from "../bridge/pods";
 import { ForwardPopover } from "./ForwardPopover";
 import { InspectorSection, InspectorTabButton, MetadataChips, inspectorStateBox } from "./ResourceInspector";
 import { actionBtn, ellipsis } from "../chrome/primitives";
+import { compactCount } from "../chrome/format";
 
 type DetailTab = "summary" | "related" | "events" | "yaml";
 
@@ -851,7 +852,7 @@ function EventsPanel({ events }: { events: EventDTO[] }) {
             <span style={{ width: 56, fontSize: 10, textTransform: "uppercase" }}>{e.type}</span>
             <span style={{ fontWeight: 500, width: 120, ...ellipsis }}>{e.reason}</span>
             <span style={{ ...ellipsis }} title={e.message}>{e.message}</span>
-            {e.count > 1 && <span style={{ color: "var(--color-text-tertiary)" }}>x{e.count}</span>}
+            {e.count > 1 && <span title={`${e.count.toLocaleString()} occurrences`} style={{ color: "var(--color-text-tertiary)" }}>×{compactCount(e.count)}</span>}
             <span style={{ color: "var(--color-text-tertiary)" }}>{age(e.lastSeen)}</span>
           </div>
         ))

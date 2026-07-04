@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import { IconAlertTriangle } from "@tabler/icons-react";
 import { Age } from "../chrome/Age";
+import { compactCount } from "../chrome/format";
 import { Chip, EmptyState, LiveIndicator, SkeletonRows, btn, ellipsis } from "../chrome/primitives";
 import { useFleet } from "../store/fleet";
 import type { EventRowDTO } from "../store/fleet";
@@ -12,7 +13,9 @@ import { useListKeys } from "../chrome/useListKeys";
 import { loadClusterPrefs, loadSearch, saveEventsViewPrefs, saveSearch } from "../store/persist";
 
 // type dot · count · age · ns · kind/name · reason · message
-const gridCols = "10px 32px 44px minmax(0,0.9fr) minmax(0,1.1fr) 90px minmax(0,2fr)";
+// count is 40px: the widest compact render is "×999k" - never the raw number,
+// which a year-old flux reconcile event overflows (see chrome/format.ts).
+const gridCols = "10px 40px 44px minmax(0,0.9fr) minmax(0,1.1fr) 90px minmax(0,2fr)";
 
 export function EventsView({ cluster }: { cluster: string }) {
   const events = useFleet((s) => s.events);
@@ -286,8 +289,11 @@ function EventRow({ event: e, cluster, expanded, kbSelected, onToggle, onKbSelec
           title={e.type}
         />
         {/* Count */}
-        <span style={{ color: e.count > 1 ? "var(--color-text-secondary)" : "var(--color-text-tertiary)" }}>
-          {e.count > 1 ? `×${e.count}` : ""}
+        <span
+          title={e.count > 1 ? `${e.count.toLocaleString()} occurrences` : undefined}
+          style={{ color: e.count > 1 ? "var(--color-text-secondary)" : "var(--color-text-tertiary)" }}
+        >
+          {e.count > 1 ? `×${compactCount(e.count)}` : ""}
         </span>
         {/* Age */}
         <span style={{ color: "var(--color-text-tertiary)" }}>

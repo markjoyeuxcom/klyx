@@ -17,6 +17,7 @@ import { SkeletonRows } from "../chrome/SkeletonRows";
 import { UpdatedAt, useReceivedAt } from "../chrome/Age";
 import { IconServer, IconX } from "@tabler/icons-react";
 import { ellipsis, frame, btn, FilterButton, SummaryCell, StatusDot } from "../chrome/primitives";
+import { compactCount } from "../chrome/format";
 import { InspectorSection, InspectorTabButton, MetadataChips, inspectorStateBox } from "./ResourceInspector";
 
 function ago(s: number): string {
@@ -861,7 +862,7 @@ function InfoTab({ detail, cluster, onCordon, onDrain }: {
               <span style={{ width: 50, fontSize: 9, textTransform: "uppercase", flexShrink: 0 }}>{e.type}</span>
               <span style={{ fontWeight: 500, width: 100, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flexShrink: 0 }}>{e.reason}</span>
               <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }} title={e.message}>{e.message}</span>
-              {e.count > 1 && <span style={{ color: "var(--color-text-tertiary)", flexShrink: 0 }}>×{e.count}</span>}
+              {e.count > 1 && <span title={`${e.count.toLocaleString()} occurrences`} style={{ color: "var(--color-text-tertiary)", flexShrink: 0 }}>×{compactCount(e.count)}</span>}
             </div>
           ))
         )}

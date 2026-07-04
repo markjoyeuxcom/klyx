@@ -15,6 +15,7 @@ import { WatchErrorBanner } from "../chrome/WatchErrorBanner";
 import { IconGitBranch } from "@tabler/icons-react";
 import { wellKnownResourceRef } from "./resourceRefs";
 import { Badge, FilterButton, SummaryCell, Section, StatusDot, readyColor, ellipsis, actionBtn, frame } from "../chrome/primitives";
+import { compactCount } from "../chrome/format";
 import { SyncingChip, staleStyle } from "./staleness";
 
 type FluxFilter = "all" | "attention" | "suspended" | "kustomizations" | "helmreleases" | "sources";
@@ -691,7 +692,7 @@ function EventsSection({ events }: { events: EventRowDTO[] }) {
               <span style={{ color: warn ? "var(--color-text-danger)" : "var(--color-text-primary)", fontWeight: 500 }}>{e.reason}</span>
               <span style={{ color: "var(--color-text-tertiary)", fontSize: 11, marginLeft: 6 }}>· {ago(sec) || "just now"}</span>
               {drift && <span style={{ fontFamily: "var(--font-mono)", fontSize: 9, padding: "1px 5px", borderRadius: 3, marginLeft: 6, border: "0.5px solid var(--color-border-info)", color: "var(--color-text-info)", background: "var(--color-background-info)" }}>drift</span>}
-              {e.count > 1 && <span style={{ color: "var(--color-text-tertiary)", fontSize: 10, marginLeft: 6 }}>×{e.count}</span>}
+              {e.count > 1 && <span title={`${e.count.toLocaleString()} occurrences`} style={{ color: "var(--color-text-tertiary)", fontSize: 10, marginLeft: 6 }}>×{compactCount(e.count)}</span>}
               {e.message && <div style={{ color: "var(--color-text-secondary)", fontSize: 11, marginTop: 1, ...ellipsis }} title={e.message}>{e.message}</div>}
             </div>
           </div>

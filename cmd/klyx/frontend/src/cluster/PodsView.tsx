@@ -17,6 +17,7 @@ import { useResizableDock } from "../chrome/useResizableDock";
 import { useListKeys } from "../chrome/useListKeys";
 import { useNavIntent } from "../chrome/useNavIntent";
 import { Chip, EmptyState, LiveIndicator, SkeletonRows, btn, ellipsis } from "../chrome/primitives";
+import { compactCount } from "../chrome/format";
 import { CopyButton } from "../chrome/CopyButton";
 import { YamlBlock } from "../chrome/YamlBlock";
 import { InspectorSection, InspectorTabButton, MetadataChips, inspectorStateBox } from "./ResourceInspector";
@@ -827,7 +828,7 @@ function InfoTab({ detail, cluster, namespace, name, onRestart, onDelete }: {
               <span style={{ width: 50, fontSize: 9, textTransform: "uppercase", flexShrink: 0 }}>{e.type}</span>
               <span style={{ fontWeight: 500, width: 100, ...ellipsis, flexShrink: 0 }}>{e.reason}</span>
               <span style={{ ...ellipsis, flex: 1 }} title={e.message}>{e.message}</span>
-              {e.count > 1 && <span style={{ color: "var(--color-text-tertiary)", flexShrink: 0 }}>×{e.count}</span>}
+              {e.count > 1 && <span title={`${e.count.toLocaleString()} occurrences`} style={{ color: "var(--color-text-tertiary)", flexShrink: 0 }}>×{compactCount(e.count)}</span>}
             </div>
           ))
         )}
