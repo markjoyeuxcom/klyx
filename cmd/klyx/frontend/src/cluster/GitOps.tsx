@@ -8,6 +8,7 @@ import { ConfirmDialog } from "../chrome/ConfirmDialog";
 import { MetaTile, OperationDialog, OptionTile } from "../chrome/OperationDialog";
 import { useListKeys } from "../chrome/useListKeys";
 import { useNavIntent } from "../chrome/useNavIntent";
+import { CopyButton } from "../chrome/CopyButton";
 import { Badge, FilterButton, SummaryCell, Section, StatusDot, readyColor, ellipsis, actionBtn, frame } from "../chrome/primitives";
 import { SyncingChip, staleStyle } from "./staleness";
 
@@ -670,6 +671,7 @@ function InspectorHeader({ resource, color }: { resource: FluxResourceDTO; color
       <div style={{ color: "var(--color-text-tertiary)", fontSize: 11 }}>{resource.kind} / {resource.namespace}</div>
       <div style={{ display: "flex", gap: 8, alignItems: "center", minWidth: 0, marginTop: 2 }}>
         <span style={{ fontFamily: "var(--font-mono)", fontSize: 15, fontWeight: 600, ...ellipsis }}>{resource.name}</span>
+        <CopyButton text={resource.name} label={`copy name ${resource.name}`} />
         <span style={{ color, fontSize: 11 }}>{statusText(resource)}</span>
         {needsAttention(resource) && resource.reason && <ReasonChip reason={resource.reason} bad={resource.ready === "Failed"} />}
       </div>

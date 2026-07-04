@@ -18,6 +18,7 @@ import { useListKeys } from "../chrome/useListKeys";
 import { useNavIntent } from "../chrome/useNavIntent";
 import { useResizableDock } from "../chrome/useResizableDock";
 import { Chip } from "../chrome/Chip";
+import { CopyButton } from "../chrome/CopyButton";
 import { EmptyState } from "../chrome/EmptyState";
 import { SkeletonRows } from "../chrome/SkeletonRows";
 import { LiveIndicator, btn, ellipsis } from "../chrome/primitives";
@@ -335,6 +336,7 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
                               useFleet.getState().toggleWorkloadExpand(keyOf(w));
                             }
                           }}
+                          data-rowhost="true"
                           style={{
                             display: "grid", gridTemplateColumns: gridCols, gap: 10, alignItems: "center",
                             height: ROW_HEIGHT, boxSizing: "border-box",
@@ -348,7 +350,10 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
                         >
                           <span style={{ width: 8, height: 8, borderRadius: "50%", background: rankDot[w.rank] }} />
                           <span style={{ color: "var(--color-text-tertiary)" }}>{kindShort[w.kind as WorkloadKind]}</span>
-                          <span style={ellipsis}><span style={{ color: "var(--color-text-tertiary)" }}>{w.namespace}</span> / <span style={{ fontWeight: 500 }}>{w.name}</span></span>
+                          <span style={{ display: "flex", alignItems: "center", gap: 2, minWidth: 0 }}>
+                            <span style={ellipsis}><span style={{ color: "var(--color-text-tertiary)" }}>{w.namespace}</span> / <span style={{ fontWeight: 500 }}>{w.name}</span></span>
+                            <CopyButton text={w.name} label={`copy workload name ${w.name}`} appearOnRowHover />
+                          </span>
                           <span style={{ color: w.ready < w.desired ? "var(--color-text-warning)" : "var(--color-text-secondary)" }}>{w.ready} / {w.desired}</span>
                           <span style={{ color: w.restarts > 0 ? "var(--color-text-warning)" : "var(--color-text-tertiary)" }}>{w.restarts}</span>
                           <span style={{ ...ellipsis, color: w.rank === "unhealthy" ? "var(--color-text-danger)" : "var(--color-text-secondary)" }} title={w.reason}>{w.reason}</span>

@@ -4,6 +4,7 @@ import type { CertificateDTO, IssuerDTO, ChainNodeDTO, CertChainDTO } from "../s
 import { openCertManager, closeCertManager, getCertificateChain } from "../bridge/certmanager";
 import { useListKeys } from "../chrome/useListKeys";
 import { Badge, FilterButton, SummaryCell, Section, Field, StatusDot, frame, ellipsis, mono, readyColor, toneColor } from "../chrome/primitives";
+import { CopyButton } from "../chrome/CopyButton";
 import { SyncingChip, staleStyle } from "./staleness";
 
 type CertFilter = "all" | "attention" | "expiring" | "issuing" | "issuerProblem" | "issuers";
@@ -330,7 +331,10 @@ function CertInspector({ c, issuer, chain, chainLoading }: { c: CertificateDTO; 
   return (
     <div style={{ ...frame, padding: 14, display: "flex", flexDirection: "column", gap: 12 }}>
       <div>
-        <div style={{ ...mono, fontSize: 13, fontWeight: 500 }}>{c.namespace}/{c.name}</div>
+        <div style={{ display: "flex", alignItems: "center", gap: 2 }}>
+          <div style={{ ...mono, fontSize: 13, fontWeight: 500 }}>{c.namespace}/{c.name}</div>
+          <CopyButton text={c.name} label={`copy certificate name ${c.name}`} />
+        </div>
         <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 5, marginTop: 6 }}>
           <CertBadge tone={c.ready === "Ready" && !expired(c) ? "success" : c.ready === "Issuing" ? "info" : "danger"}>{statusText(c)}</CertBadge>
           {expiringSoon(c) && <CertBadge tone="warning">renewal window</CertBadge>}

@@ -21,6 +21,11 @@ vi.mock("../bridge/configsvc", () => ({
   armProtected: vi.fn(async () => ({ ok: true, error: "" })),
 }));
 
+// CopyButton copies via the crd bridge; mock it so no bindings chain loads.
+vi.mock("../bridge/crd", () => ({
+  copyText: vi.fn().mockResolvedValue(undefined),
+}));
+
 // Mock the Wails Events.On used by DrainModal.
 vi.mock("@wailsio/runtime", () => ({
   Events: {

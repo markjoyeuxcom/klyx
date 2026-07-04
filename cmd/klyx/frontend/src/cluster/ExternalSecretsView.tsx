@@ -3,6 +3,7 @@ import { useFleet } from "../store/fleet";
 import type { ExternalSecretDTO, ExternalSecretStoreDTO } from "../store/fleet";
 import { openExternalSecrets, closeExternalSecrets } from "../bridge/externalsecrets";
 import { Badge, FilterButton, SummaryCell, Section, Field, StatusDot, frame, ellipsis, mono, readyColor, toneColor } from "../chrome/primitives";
+import { CopyButton } from "../chrome/CopyButton";
 
 type EsoFilter = "all" | "attention" | "stale" | "stores";
 
@@ -253,7 +254,10 @@ function SecretInspector({ e, store }: { e: ExternalSecretDTO; store: ExternalSe
   return (
     <div style={{ ...frame, padding: 14, display: "flex", flexDirection: "column", gap: 12 }}>
       <div>
-        <div style={{ ...mono, fontSize: 13, fontWeight: 500 }}>{e.namespace}/{e.name}</div>
+        <div style={{ display: "flex", alignItems: "center", gap: 2 }}>
+          <div style={{ ...mono, fontSize: 13, fontWeight: 500 }}>{e.namespace}/{e.name}</div>
+          <CopyButton text={e.name} label={`copy external secret name ${e.name}`} />
+        </div>
         <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 5, marginTop: 6 }}>
           <EsoBadge tone={e.state === "Synced" && !e.stale ? "success" : e.state === "Failed" ? "danger" : "warning"}>{e.stale ? "stale" : e.state.toLowerCase()}</EsoBadge>
           {e.stale && e.state === "Synced" && <EsoBadge tone="warning">last sync ok, refresh stopped</EsoBadge>}

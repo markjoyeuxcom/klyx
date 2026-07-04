@@ -9,6 +9,7 @@ import { MetaTile, OperationDialog, OptionTile } from "../chrome/OperationDialog
 import { fmtMem } from "./saturation";
 import { useResizablePanel } from "../chrome/useResizablePanel";
 import { useNavIntent } from "../chrome/useNavIntent";
+import { CopyButton } from "../chrome/CopyButton";
 import { ellipsis, frame, btn, FilterButton, SummaryCell, StatusDot } from "../chrome/primitives";
 import { InspectorSection, InspectorTabButton, MetadataChips, inspectorStateBox } from "./ResourceInspector";
 
@@ -487,6 +488,7 @@ export function NodesView({ cluster }: { cluster: string }) {
                 return (
                   <div
                     key={n.name}
+                    data-rowhost="true"
                     onClick={() => void openNodeDetail(cluster, n.name)}
                     style={{
                       display: "grid", gridTemplateColumns: gridCols, gap: 10, alignItems: "center",
@@ -496,7 +498,10 @@ export function NodesView({ cluster }: { cluster: string }) {
                     }}
                   >
                     <StatusDot size={8} color={dotColor} />
-                    <span style={{ fontWeight: 500, ...ellipsis }} title={n.name}>{n.name}</span>
+                    <span style={{ display: "flex", alignItems: "center", gap: 2, minWidth: 0 }}>
+                      <span style={{ fontWeight: 500, ...ellipsis }} title={n.name}>{n.name}</span>
+                      <CopyButton text={n.name} label={`copy node name ${n.name}`} appearOnRowHover />
+                    </span>
                     <span style={{ color: "var(--color-text-tertiary)", ...ellipsis }}>
                       {n.roles.length > 0 ? n.roles.join(", ") : "-"}
                     </span>
@@ -674,15 +679,22 @@ function NodeDetailPanel({
             />
           )}
           {tab === "yaml" && (
-            <pre style={{
-              margin: 0, padding: 10,
-              background: "var(--color-background-secondary)",
-              border: "0.5px solid var(--color-border-tertiary)",
-              borderRadius: 4,
-              fontFamily: "var(--font-mono)", fontSize: 11, lineHeight: 1.5,
-              overflowX: "auto", whiteSpace: "pre-wrap", wordBreak: "break-all",
-              color: "var(--color-text-primary)",
-            }}>{detail.yaml}</pre>
+            <div style={{ position: "relative" }}>
+              <CopyButton
+                text={detail.yaml}
+                label="copy node YAML"
+                style={{ position: "absolute", top: 6, right: 6, background: "var(--color-background-secondary)" }}
+              />
+              <pre style={{
+                margin: 0, padding: 10,
+                background: "var(--color-background-secondary)",
+                border: "0.5px solid var(--color-border-tertiary)",
+                borderRadius: 4,
+                fontFamily: "var(--font-mono)", fontSize: 11, lineHeight: 1.5,
+                overflowX: "auto", whiteSpace: "pre-wrap", wordBreak: "break-all",
+                color: "var(--color-text-primary)",
+              }}>{detail.yaml}</pre>
+            </div>
           )}
         </>
       )}

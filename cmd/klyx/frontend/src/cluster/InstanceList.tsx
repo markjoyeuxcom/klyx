@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useFleet, ResourceRef, InstanceDTO } from "../store/fleet";
 import { loadInstances, listInstancePage } from "../bridge/crd";
 import { VirtualList } from "../chrome/VirtualList";
+import { CopyButton } from "../chrome/CopyButton";
 import { riskFor, supportsRiskFilter } from "./resourceRisk";
 
 const ellipsis: React.CSSProperties = { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" };
@@ -246,6 +247,7 @@ export function InstanceList({ cluster, resource }: { cluster: string; resource:
                 render={({ row: r, risk }) => (
                   <div
                     key={`${r.cluster}/${r.namespace}/${r.name}`}
+                    data-rowhost="true"
                     onClick={() => openRow(r)}
                     title={risk.bad ? risk.reason : undefined}
                     style={{
@@ -257,7 +259,10 @@ export function InstanceList({ cluster, resource }: { cluster: string; resource:
                   >
                     {fleetMode && <span style={{ color: "var(--color-text-info)", fontFamily: "var(--font-mono)", ...ellipsis }}>{r.cluster}</span>}
                     {namespaced && <span style={{ color: "var(--color-text-secondary)", ...ellipsis }}>{r.namespace}</span>}
-                    <span style={{ fontFamily: "var(--font-mono)", ...ellipsis }}>{r.name}</span>
+                    <span style={{ display: "flex", alignItems: "center", gap: 2, minWidth: 0 }}>
+                      <span style={{ fontFamily: "var(--font-mono)", ...ellipsis }}>{r.name}</span>
+                      <CopyButton text={r.name} label={`copy name ${r.name}`} size={11} appearOnRowHover />
+                    </span>
                     {extraColumns.map((c) => {
                       const value = r.fields?.[c.key] || "-";
                       return <span key={c.key} style={{ color: "var(--color-text-secondary)", fontFamily: "var(--font-mono)", ...ellipsis }} title={value}>{value}</span>;

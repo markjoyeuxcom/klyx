@@ -6,6 +6,7 @@ import { listHelmReleases, openHelmRelease, helmRollback } from "../bridge/helm"
 import type { RollbackOptions } from "../bridge/helm";
 import { MetaTile, OperationDialog, OptionTile } from "../chrome/OperationDialog";
 import { useResizablePanel } from "../chrome/useResizablePanel";
+import { CopyButton } from "../chrome/CopyButton";
 
 // Helm status color map — deployed/failed/superseded/pending-*
 const statusColor = (status: string): string => {
@@ -96,6 +97,7 @@ export function HelmView({ cluster }: { cluster: string }) {
               return (
                 <div
                   key={`${r.namespace}/${r.name}`}
+                  data-rowhost="true"
                   onClick={() => void openHelmRelease(cluster, r.namespace, r.name)}
                   style={{
                     display: "grid", gridTemplateColumns: gridCols, gap: 10, alignItems: "center",
@@ -105,7 +107,10 @@ export function HelmView({ cluster }: { cluster: string }) {
                   }}
                 >
                   <span style={{ width: 8, height: 8, borderRadius: "50%", background: statusDot(r.status), display: "inline-block" }} />
-                  <span style={{ fontWeight: 500, ...ellipsis }} title={r.name}>{r.name}</span>
+                  <span style={{ display: "flex", alignItems: "center", gap: 2, minWidth: 0 }}>
+                    <span style={{ fontWeight: 500, ...ellipsis }} title={r.name}>{r.name}</span>
+                    <CopyButton text={r.name} label={`copy release name ${r.name}`} appearOnRowHover />
+                  </span>
                   <span style={{ color: "var(--color-text-tertiary)", ...ellipsis }} title={r.namespace}>{r.namespace}</span>
                   <span style={{ color: "var(--color-text-tertiary)", ...ellipsis }} title={r.chart}>{r.chart}</span>
                   <span style={{ color: "var(--color-text-secondary)", ...ellipsis }} title={r.appVersion}>{r.appVersion || "—"}</span>
@@ -261,16 +266,23 @@ function HelmDetailPanel({
             {values === "" ? (
               <span style={{ color: "var(--color-text-tertiary)" }}>no user-supplied values</span>
             ) : (
-              <pre style={{
-                margin: 0, padding: 10,
-                background: "var(--color-background-secondary)",
-                border: "0.5px solid var(--color-border-tertiary)",
-                borderRadius: 4,
-                fontFamily: "var(--font-mono)", fontSize: 11, lineHeight: 1.5,
-                overflowX: "auto", overflowY: "auto", maxHeight: 400,
-                whiteSpace: "pre-wrap", wordBreak: "break-all",
-                color: "var(--color-text-primary)",
-              }}>{values}</pre>
+              <div style={{ position: "relative" }}>
+                <CopyButton
+                  text={values}
+                  label="copy release values"
+                  style={{ position: "absolute", top: 6, right: 6, background: "var(--color-background-secondary)" }}
+                />
+                <pre style={{
+                  margin: 0, padding: 10,
+                  background: "var(--color-background-secondary)",
+                  border: "0.5px solid var(--color-border-tertiary)",
+                  borderRadius: 4,
+                  fontFamily: "var(--font-mono)", fontSize: 11, lineHeight: 1.5,
+                  overflowX: "auto", overflowY: "auto", maxHeight: 400,
+                  whiteSpace: "pre-wrap", wordBreak: "break-all",
+                  color: "var(--color-text-primary)",
+                }}>{values}</pre>
+              </div>
             )}
           </HelmSection>
         </>

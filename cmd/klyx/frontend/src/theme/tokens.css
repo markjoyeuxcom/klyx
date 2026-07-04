@@ -313,6 +313,19 @@ div[role="button"]:hover {
   background: var(--color-background-info);
 }
 
+/* Row copy affordance (CopyButton appearOnRowHover): invisible until the row
+   (any ancestor carrying data-rowhost) is hovered or the button is focused.
+   Keyboard users always reach it via focus; pointer users get no per-row
+   icon noise until they aim at a row. */
+[data-rowcopy] {
+  opacity: 0;
+  transition: opacity var(--motion-fast) ease;
+}
+[data-rowhost]:hover [data-rowcopy],
+[data-rowcopy]:focus-visible {
+  opacity: 1;
+}
+
 /* Skeleton loading shimmer (SkeletonRows component). */
 @keyframes klyx-pulse {
   0%, 100% { opacity: 0.45; }

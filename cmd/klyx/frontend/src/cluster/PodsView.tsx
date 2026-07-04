@@ -16,6 +16,7 @@ import { useResizableDock } from "../chrome/useResizableDock";
 import { useListKeys } from "../chrome/useListKeys";
 import { useNavIntent } from "../chrome/useNavIntent";
 import { Chip, EmptyState, LiveIndicator, SkeletonRows, btn, ellipsis } from "../chrome/primitives";
+import { CopyButton } from "../chrome/CopyButton";
 import { InspectorSection, InspectorTabButton, MetadataChips, inspectorStateBox } from "./ResourceInspector";
 import { loadClusterPrefs, loadSearch, savePodsViewPrefs, saveSearch } from "../store/persist";
 
@@ -304,6 +305,7 @@ function PodRow({
       role="button"
       tabIndex={0}
       aria-selected={isKbSelected}
+      data-rowhost="true"
       onClick={onRowClick}
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") {
@@ -323,10 +325,13 @@ function PodRow({
       }}
     >
       <span style={{ width: 8, height: 8, borderRadius: "50%", background: rankDot[p.rank] }} />
-      <span>
-        <span style={{ color: "var(--color-text-tertiary)" }}>{p.namespace}</span>
-        {" / "}
-        <span style={{ fontWeight: 500 }}>{p.name}</span>
+      <span style={{ display: "flex", alignItems: "center", gap: 2, minWidth: 0 }}>
+        <span style={ellipsis}>
+          <span style={{ color: "var(--color-text-tertiary)" }}>{p.namespace}</span>
+          {" / "}
+          <span style={{ fontWeight: 500 }}>{p.name}</span>
+        </span>
+        <CopyButton text={p.name} label={`copy pod name ${p.name}`} appearOnRowHover />
       </span>
       <span style={{ color: readyCount === nonInitCount ? "var(--color-text-success)" : "var(--color-text-warning)" }}>
         {readyCount}/{nonInitCount}
@@ -426,6 +431,8 @@ function PodDetailPanel({
         <span style={{ fontWeight: 500, ...ellipsis, flex: 1 }} title={`${namespace}/${name}`}>
           <span style={{ color: "var(--color-text-tertiary)" }}>{namespace}</span>/{name}
         </span>
+        <CopyButton text={name} label="copy pod name" />
+
         {/* Logs button — opens / re-targets the dock */}
         <button
           onClick={() => {
@@ -463,15 +470,22 @@ function PodDetailPanel({
             />
           )}
           {tab === "yaml" && (
-            <pre style={{
-              margin: 0, padding: 10,
-              background: "var(--color-background-secondary)",
-              border: "0.5px solid var(--color-border-tertiary)",
-              borderRadius: 4,
-              fontFamily: "var(--font-mono)", fontSize: 11, lineHeight: 1.5,
-              overflowX: "auto", whiteSpace: "pre-wrap", wordBreak: "break-all",
-              color: "var(--color-text-primary)",
-            }}>{detail.yaml}</pre>
+            <div style={{ position: "relative" }}>
+              <CopyButton
+                text={detail.yaml}
+                label="copy pod YAML"
+                style={{ position: "absolute", top: 6, right: 6, background: "var(--color-background-secondary)" }}
+              />
+              <pre style={{
+                margin: 0, padding: 10,
+                background: "var(--color-background-secondary)",
+                border: "0.5px solid var(--color-border-tertiary)",
+                borderRadius: 4,
+                fontFamily: "var(--font-mono)", fontSize: 11, lineHeight: 1.5,
+                overflowX: "auto", whiteSpace: "pre-wrap", wordBreak: "break-all",
+                color: "var(--color-text-primary)",
+              }}>{detail.yaml}</pre>
+            </div>
           )}
         </>
       )}
@@ -667,13 +681,16 @@ function InfoTab({ detail, cluster, namespace, name, onRestart, onDelete }: {
           <span>name</span><span>state</span><span>image</span><span>rst</span>
         </div>
         {p.containers.map((c) => (
-          <div key={c.name} style={{ display: "grid", gridTemplateColumns: containerGridCols, gap: 6, fontSize: 11, padding: "2px 0", alignItems: "center" }}>
+          <div key={c.name} data-rowhost="true" style={{ display: "grid", gridTemplateColumns: containerGridCols, gap: 6, fontSize: 11, padding: "2px 0", alignItems: "center" }}>
             <span style={{ ...ellipsis }} title={c.name}>
               {c.name}
               {c.init && <span style={{ marginLeft: 4, fontSize: 9, color: "var(--color-text-tertiary)", background: "var(--color-background-secondary)", padding: "0 4px", borderRadius: 3 }}>init</span>}
             </span>
             <span style={{ color: c.ready ? "var(--color-text-success)" : "var(--color-text-danger)", ...ellipsis }} title={c.state}>{c.state || "—"}</span>
-            <span style={{ ...ellipsis, color: "var(--color-text-tertiary)" }} title={c.image}>{imageShort(c.image)}</span>
+            <span style={{ display: "flex", alignItems: "center", gap: 2, minWidth: 0 }}>
+              <span style={{ ...ellipsis, color: "var(--color-text-tertiary)" }} title={c.image}>{imageShort(c.image)}</span>
+              <CopyButton text={c.image} label={`copy image ref ${imageShort(c.image)}`} size={11} appearOnRowHover />
+            </span>
             <span style={{ color: c.restarts > 0 ? "var(--color-text-warning)" : "var(--color-text-tertiary)" }}>{c.restarts}</span>
           </div>
         ))}
