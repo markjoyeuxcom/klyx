@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import { IconAlertTriangle } from "@tabler/icons-react";
+import { Age } from "../chrome/Age";
 import { Chip, EmptyState, LiveIndicator, SkeletonRows, btn, ellipsis } from "../chrome/primitives";
 import { useFleet } from "../store/fleet";
 import type { EventRowDTO } from "../store/fleet";
@@ -9,12 +10,6 @@ import { VirtualList } from "../chrome/VirtualList";
 import type { VirtualListHandle } from "../chrome/VirtualList";
 import { useListKeys } from "../chrome/useListKeys";
 import { loadClusterPrefs, loadSearch, saveEventsViewPrefs, saveSearch } from "../store/persist";
-
-function ago(unix: number): string {
-  const s = Math.floor(Date.now() / 1000) - unix;
-  if (s < 0) return "just now";
-  return s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)}m` : s < 86400 ? `${Math.floor(s / 3600)}h` : `${Math.floor(s / 86400)}d`;
-}
 
 // type dot · count · age · ns · kind/name · reason · message
 const gridCols = "10px 32px 44px minmax(0,0.9fr) minmax(0,1.1fr) 90px minmax(0,2fr)";
@@ -296,7 +291,7 @@ function EventRow({ event: e, cluster, expanded, kbSelected, onToggle, onKbSelec
         </span>
         {/* Age */}
         <span style={{ color: "var(--color-text-tertiary)" }}>
-          {e.lastSeenUnix === 0 ? "—" : ago(e.lastSeenUnix)}
+          <Age unixSeconds={e.lastSeenUnix} />
         </span>
         {/* Namespace */}
         <span style={{ ...ellipsis, color: "var(--color-text-tertiary)" }} title={e.namespace}>{e.namespace}</span>

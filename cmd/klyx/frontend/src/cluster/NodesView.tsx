@@ -13,6 +13,7 @@ import { useListKeys } from "../chrome/useListKeys";
 import { CopyButton } from "../chrome/CopyButton";
 import { EmptyState } from "../chrome/EmptyState";
 import { SkeletonRows } from "../chrome/SkeletonRows";
+import { UpdatedAt, useReceivedAt } from "../chrome/Age";
 import { IconServer } from "@tabler/icons-react";
 import { ellipsis, frame, btn, FilterButton, SummaryCell, StatusDot } from "../chrome/primitives";
 import { InspectorSection, InspectorTabButton, MetadataChips, inspectorStateBox } from "./ResourceInspector";
@@ -403,6 +404,7 @@ export function NodesView({ cluster }: { cluster: string }) {
   }, [nodes.items, nodes.loading]);
 
   const onRefresh = () => { void listNodes(cluster); };
+  const receivedAt = useReceivedAt(nodes.cluster === cluster && !nodes.loading && nodes.items.length > 0 ? nodes.items : null);
   const orderedNodes = useMemo(
     () => [...nodes.items].sort((a, b) => nodeRank(a) - nodeRank(b) || a.name.localeCompare(b.name)),
     [nodes.items],
@@ -460,7 +462,10 @@ export function NodesView({ cluster }: { cluster: string }) {
             <div style={{ fontSize: 10, color: "var(--color-text-tertiary)", marginBottom: 3 }}>Nodes</div>
             <div style={{ fontSize: 18, fontWeight: 600 }}>Node board</div>
           </div>
-          <button onClick={onRefresh} style={btn}>refresh</button>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <UpdatedAt at={receivedAt} />
+            <button onClick={onRefresh} style={btn}>refresh</button>
+          </div>
         </div>
 
         <div style={{ ...frame, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(132px, 1fr))", overflow: "hidden", flexShrink: 0 }}>

@@ -9,6 +9,7 @@ import { useListKeys } from "../chrome/useListKeys";
 import { useNavIntent } from "../chrome/useNavIntent";
 import { EmptyState, SkeletonRows, btn, ellipsis } from "../chrome/primitives";
 import { IconGitMerge } from "@tabler/icons-react";
+import { Age, UpdatedAt, useReceivedAt } from "../chrome/Age";
 import { InspectorEmpty, InspectorSection, InspectorTitle } from "./ResourceInspector";
 import { wellKnownResourceRef } from "./resourceRefs";
 
@@ -32,12 +33,6 @@ const healthColor: Record<string, string> = {
   Missing: "var(--color-text-danger)",
   Suspended: "var(--color-text-warning)",
 };
-
-function ago(unix: number): string {
-  if (unix === 0) return "never";
-  const s = Math.max(0, Math.floor(Date.now() / 1000) - unix);
-  return s < 60 ? `${s}s ago` : s < 3600 ? `${Math.floor(s / 60)}m ago` : `${Math.floor(s / 3600)}h ago`;
-}
 
 const short = (rev: string) => (rev.length > 8 ? rev.slice(0, 8) : rev);
 
@@ -94,6 +89,7 @@ export function ArgoView({ cluster, mode = "applications" }: { cluster: string; 
     return () => useFleet.getState().clearArgo();
   }, [cluster, mode]);
 
+  const receivedAt = useReceivedAt(argo.cluster === cluster && !argo.loading && argo.apps.length > 0 ? argo.apps : null);
   const broken = argo.apps.filter((a) => a.broken).length;
   const brokenAppSets = argo.applicationSets.filter((a) => !a.healthy).length;
   const count = mode === "projects" ? argo.projects.length : mode === "applicationsets" ? argo.applicationSets.length : argo.apps.length;
@@ -113,6 +109,7 @@ export function ArgoView({ cluster, mode = "applications" }: { cluster: string; 
           {mode === "applicationsets" && brokenAppSets > 0 && <span style={{ color: "var(--color-text-danger)" }}> · {brokenAppSets} need attention</span>}
         </span>
         <button onClick={refresh} style={btn}>refresh</button>
+        <UpdatedAt at={receivedAt} />
       </div>
       <ArgoModeTabs mode={mode} />
 
@@ -303,7 +300,7 @@ function ApplicationRow({ app: a, selected, kbSelected, onSelect, onRefresh, onS
       <span style={{ color: healthColor[a.healthStatus] ?? "var(--color-text-tertiary)" }}>{a.healthStatus}</span>
       <span style={{ ...ellipsis, color: "var(--color-text-tertiary)" }} title={a.destNamespace}>{a.destNamespace || "-"}</span>
       <span style={{ color: "var(--color-text-tertiary)" }} title={a.revision}>{a.revision ? short(a.revision) : "-"}</span>
-      <span style={{ color: "var(--color-text-tertiary)" }}>{ago(a.reconciledUnix)}</span>
+      <span style={{ color: "var(--color-text-tertiary)" }}><Age unixSeconds={a.reconciledUnix} suffix=" ago" fallback="never" /></span>
       <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
         <button onClick={(e) => { e.stopPropagation(); onRefresh(); }} style={smallBtn}>refresh</button>
         <button onClick={(e) => { e.stopPropagation(); onSync(); }} style={smallPrimaryBtn}>sync</button>
@@ -617,7 +614,7 @@ function ApplicationInspector({ cluster, app, project, appSet, onRefresh, onSync
       <InspectorSection title="operation">
         <MetaLine label="last" value={app.opPhase || "-"} tone={app.opPhase && app.opPhase !== "Succeeded" ? "warning" : undefined} />
         <MetaLine label="message" value={app.opMessage || "-"} />
-        <MetaLine label="reconciled" value={ago(app.reconciledUnix)} />
+        <MetaLine label="reconciled" value={<Age unixSeconds={app.reconciledUnix} suffix=" ago" fallback="never" />} />
       </InspectorSection>
       {conditions.length > 0 && (
         <InspectorSection title="conditions" collapsible>
@@ -809,11 +806,11 @@ function LinkedApps({ apps }: { apps: ArgoAppDTO[] }) {
   );
 }
 
-function MetaLine({ label, value, tone }: { label: string; value: string; tone?: "warning" }) {
+function MetaLine({ label, value, tone }: { label: string; value: React.ReactNode; tone?: "warning" }) {
   return (
     <div style={{ display: "grid", gridTemplateColumns: "72px minmax(0,1fr)", gap: 8, alignItems: "center" }}>
       <span style={{ color: "var(--color-text-tertiary)", fontSize: 10 }}>{label}</span>
-      <span title={value} style={{ ...monoLine, ...ellipsis, color: tone === "warning" ? "var(--color-text-warning)" : monoLine.color }}>{value}</span>
+      <span title={typeof value === "string" ? value : undefined} style={{ ...monoLine, ...ellipsis, color: tone === "warning" ? "var(--color-text-warning)" : monoLine.color }}>{value}</span>
     </div>
   );
 }

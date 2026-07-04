@@ -5,6 +5,7 @@ import { VirtualList } from "../chrome/VirtualList";
 import type { VirtualListHandle } from "../chrome/VirtualList";
 import { useListKeys } from "../chrome/useListKeys";
 import { CopyButton } from "../chrome/CopyButton";
+import { Age } from "../chrome/Age";
 import { EmptyState, SkeletonRows } from "../chrome/primitives";
 import { IconStack2 } from "@tabler/icons-react";
 import { riskFor, supportsRiskFilter } from "./resourceRisk";
@@ -20,17 +21,6 @@ type ExtraColumn = { key: string; label: string; width: string };
 type BrowserScope = "cluster" | "fleet";
 type FleetInstanceRow = InstanceDTO & { cluster: string };
 type FleetInstanceState = { rows: FleetInstanceRow[]; loading: boolean; errors: string[] };
-
-function age(created: string): string {
-  if (!created) return "";
-  const ms = Date.now() - Date.parse(created);
-  if (Number.isNaN(ms) || ms < 0) return "";
-  const sec = Math.floor(ms / 1000);
-  if (sec < 60) return `${sec}s`;
-  if (sec < 3600) return `${Math.floor(sec / 60)}m`;
-  if (sec < 86400) return `${Math.floor(sec / 3600)}h`;
-  return `${Math.floor(sec / 86400)}d`;
-}
 
 export function InstanceList({ cluster, resource }: { cluster: string; resource: ResourceRef }) {
   const instances = useFleet((s) => s.instances);
@@ -304,7 +294,7 @@ export function InstanceList({ cluster, resource }: { cluster: string; resource:
                       const value = r.fields?.[c.key] || "-";
                       return <span key={c.key} style={{ color: "var(--color-text-secondary)", fontFamily: "var(--font-mono)", ...ellipsis }} title={value}>{value}</span>;
                     })}
-                    <span style={{ color: "var(--color-text-tertiary)" }}>{age(r.created)}</span>
+                    <span style={{ color: "var(--color-text-tertiary)" }}><Age iso={r.created} fallback="" /></span>
                   </div>
                 )}
               />

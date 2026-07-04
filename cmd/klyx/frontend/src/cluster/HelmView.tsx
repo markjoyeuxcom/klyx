@@ -9,6 +9,7 @@ import { MetaTile, OperationDialog, OptionTile } from "../chrome/OperationDialog
 import { useResizablePanel } from "../chrome/useResizablePanel";
 import { useListKeys } from "../chrome/useListKeys";
 import { CopyButton } from "../chrome/CopyButton";
+import { Age, UpdatedAt, useReceivedAt } from "../chrome/Age";
 import { loadClusterPrefs, loadSearch, saveHelmViewPrefs, saveSearch } from "../store/persist";
 
 // Helm status color map — deployed/failed/superseded/pending-*
@@ -38,16 +39,6 @@ const statusDot = (status: string): string => {
       return "var(--color-text-warning)";
   }
 };
-
-function fmtUnix(unix: number): string {
-  if (!unix || unix === 0) return "—";
-  const secs = Math.floor(Date.now() / 1000) - unix;
-  if (secs < 0) return "—";
-  if (secs < 60) return `${secs}s ago`;
-  if (secs < 3600) return `${Math.floor(secs / 60)}m ago`;
-  if (secs < 86400) return `${Math.floor(secs / 3600)}h ago`;
-  return `${Math.floor(secs / 86400)}d ago`;
-}
 
 // statusGroup buckets helm's statuses for triage: failed floats first,
 // in-flight pending-*/uninstalling states next, settled releases last.
@@ -96,6 +87,7 @@ export function HelmView({ cluster }: { cluster: string }) {
   const onRefresh = () => { void listHelmReleases(cluster); };
 
   const releases = helm.cluster === cluster ? helm.releases : [];
+  const receivedAt = useReceivedAt(helm.cluster === cluster && !helm.loading ? helm.releases : null);
   const namespaces = useMemo(() => Array.from(new Set(releases.map((r) => r.namespace))).sort(), [releases]);
   // Broken-first: a failed release floats to the top like every other lens;
   // the backend returns helm's own ordering, which buries failures.
@@ -182,6 +174,7 @@ export function HelmView({ cluster }: { cluster: string }) {
             style={{ marginLeft: "auto", fontSize: 11, padding: "3px 8px", borderRadius: 4, border: "0.5px solid var(--color-border-tertiary)", background: "var(--color-background-primary)", color: "var(--color-text-primary)", width: 180 }}
           />
           <button onClick={onRefresh} style={btn}>refresh</button>
+          <UpdatedAt at={receivedAt} />
         </div>
 
         {/* List */}
@@ -233,7 +226,7 @@ export function HelmView({ cluster }: { cluster: string }) {
                   <span style={{ color: "var(--color-text-tertiary)", ...ellipsis }} title={r.chart}>{r.chart}</span>
                   <span style={{ color: "var(--color-text-secondary)", ...ellipsis }} title={r.appVersion}>{r.appVersion || "—"}</span>
                   <span style={{ color: "var(--color-text-secondary)" }}>{r.revision}</span>
-                  <span style={{ color: "var(--color-text-tertiary)" }}>{fmtUnix(r.updatedUnix)}</span>
+                  <span style={{ color: "var(--color-text-tertiary)" }}><Age unixSeconds={r.updatedUnix} suffix=" ago" /></span>
                 </div>
               );
             })}
@@ -358,7 +351,7 @@ function HelmDetailPanel({
                       <span style={{ color: statusColor(e.status), ...ellipsis }} title={e.status}>{e.status}</span>
                       <span style={{ color: "var(--color-text-tertiary)", ...ellipsis }} title={e.chart}>{e.chart}</span>
                       <span style={{ color: "var(--color-text-secondary)", ...ellipsis }} title={e.description}>{e.description || "—"}</span>
-                      <span style={{ color: "var(--color-text-tertiary)" }}>{fmtUnix(e.updatedUnix)}</span>
+                      <span style={{ color: "var(--color-text-tertiary)" }}><Age unixSeconds={e.updatedUnix} suffix=" ago" /></span>
                       <span>
                         {!isCurrent && (
                           <button
