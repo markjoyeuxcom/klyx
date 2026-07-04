@@ -9,6 +9,7 @@ import { MetaTile, OperationDialog, OptionTile } from "../chrome/OperationDialog
 import { useListKeys } from "../chrome/useListKeys";
 import { useNavIntent } from "../chrome/useNavIntent";
 import { CopyButton } from "../chrome/CopyButton";
+import { wellKnownResourceRef } from "./resourceRefs";
 import { Badge, FilterButton, SummaryCell, Section, StatusDot, readyColor, ellipsis, actionBtn, frame } from "../chrome/primitives";
 import { SyncingChip, staleStyle } from "./staleness";
 
@@ -531,11 +532,37 @@ function DetailPanel({ cluster, resource, detail, deps, onReconcile, onToggleSus
       </Section>
       {resource.kind === "Kustomization" ? (
         <Section title={`Inventory (${detail.inventory.length})`}>
-          {detail.inventory.length === 0 ? <Muted>no managed objects</Muted> : detail.inventory.map((e) => (
-            <div key={`${e.kind}/${e.namespace}/${e.name}`} style={{ fontFamily: "var(--font-mono)", color: "var(--color-text-secondary)", ...ellipsis }}>
-              {e.kind} · {e.namespace ? `${e.namespace}/` : ""}{e.name}
-            </div>
-          ))}
+          {detail.inventory.length === 0 ? <Muted>no managed objects</Muted> : detail.inventory.map((e) => {
+            // Argo's app resources walk to the live object; Flux's inventory
+            // now does the same for every kind Klyx can route to.
+            const ref = wellKnownResourceRef(e.group, e.kind);
+            const label = <>{e.kind} · {e.namespace ? `${e.namespace}/` : ""}{e.name}</>;
+            if (!ref) {
+              return (
+                <div key={`${e.kind}/${e.namespace}/${e.name}`} style={{ fontFamily: "var(--font-mono)", color: "var(--color-text-secondary)", ...ellipsis }}>
+                  {label}
+                </div>
+              );
+            }
+            return (
+              <button
+                key={`${e.kind}/${e.namespace}/${e.name}`}
+                onClick={() => {
+                  const nav = useFleet.getState();
+                  nav.openResource(ref);
+                  nav.openInstance(ref.scope === "Cluster" ? "" : e.namespace, e.name);
+                }}
+                title={`open ${e.kind} ${e.namespace ? `${e.namespace}/` : ""}${e.name}`}
+                style={{
+                  display: "block", width: "100%", background: "transparent", border: "none", padding: 0,
+                  cursor: "pointer", textAlign: "left", fontFamily: "var(--font-mono)", fontSize: "inherit",
+                  color: "var(--color-text-info)", ...ellipsis,
+                }}
+              >
+                {label}
+              </button>
+            );
+          })}
         </Section>
       ) : (
         <Section title="Inventory"><Muted>no inventory in the HelmRelease CR</Muted></Section>

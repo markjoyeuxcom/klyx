@@ -12,7 +12,10 @@ vi.mock("../bridge/workloads", () => ({
 }));
 vi.mock("../bridge/workload-metrics", () => ({ getWorkloadMetrics: vi.fn().mockResolvedValue(undefined) }));
 vi.mock("../bridge/windows", () => ({ openWorkloadLogsWindow: vi.fn().mockResolvedValue(true) }));
-vi.mock("../bridge/pods", () => ({ deletePod: vi.fn().mockResolvedValue(undefined) }));
+vi.mock("../bridge/pods", () => ({
+  deletePod: vi.fn().mockResolvedValue(undefined),
+  openPodDetail: vi.fn().mockResolvedValue(undefined),
+}));
 import type { SparklinesDTO } from "../bridge/metrics";
 const mockGetWorkloadSparklines = vi.fn<(c: string, ns: string, kind: string, name: string) => Promise<SparklinesDTO>>(() =>
   Promise.resolve({ available: true, cpu: [{ t: 0, v: 0.1 }, { t: 60, v: 0.2 }], mem: [{ t: 0, v: 100 }, { t: 60, v: 120 }] }),
@@ -351,6 +354,29 @@ describe("WorkloadsView", () => {
     const { getByText } = render(<WorkloadsView cluster="homelab-nelli" />);
     fireEvent.click(getByText(/needs attention/i)); // hides healthy → 1 of 2
     expect(getByText("1/2")).toBeTruthy();
+  });
+
+  it("context-panel pod rows open the pod detail in the Pods section", async () => {
+    const { openPodDetail } = await import("../bridge/pods");
+    useFleet.getState().openCluster("homelab-nelli");
+    seed([broken]);
+    const { getByText, getByRole } = render(<WorkloadsView cluster="homelab-nelli" />);
+    fireEvent.click(getByText("ollama")); // select -> context panel
+    fireEvent.click(getByRole("button", { name: "open pod ollama-x" }));
+    expect(useFleet.getState().route).toMatchObject({ name: "cluster", section: "pods" });
+    expect(openPodDetail).toHaveBeenCalledWith("homelab-nelli", "ollama-prod", "ollama-x");
+  });
+
+  it("context-panel flux owner jumps to the GitOps lens with a select intent", () => {
+    useFleet.getState().openCluster("homelab-nelli");
+    seed([broken]);
+    const { getByText, getByTitle } = render(<WorkloadsView cluster="homelab-nelli" />);
+    fireEvent.click(getByText("ollama"));
+    fireEvent.click(getByTitle(/open Kustomization flux-system\/ollama in the Flux lens/));
+    expect(useFleet.getState().route).toMatchObject({ name: "cluster", section: "gitops" });
+    expect(useFleet.getState().navIntent).toEqual({
+      kind: "select-flux", cluster: "homelab-nelli", fluxKind: "Kustomization", namespace: "flux-system", name: "ollama",
+    });
   });
 
   it("pop-out calls openWorkloadLogsWindow and closes the dock on success", async () => {

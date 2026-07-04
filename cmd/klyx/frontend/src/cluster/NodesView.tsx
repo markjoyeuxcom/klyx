@@ -743,11 +743,11 @@ function InfoTab({ detail, cluster, onCordon, onDrain }: {
   const setSection = useFleet((s) => s.setSection);
 
   const handlePodClick = (pod: PodOnNodeDTO) => {
-    // Cross-link to pods section: set section and let PodsView load
+    // Cross-link straight to the pod: the parked select-pod intent survives
+    // until PodsView's list has loaded, then opens the detail panel - no more
+    // "navigate and re-find it yourself".
     setSection("pods");
-    // Note: actual pod detail opening requires a full pods load first.
-    // We navigate to pods section; the user can click the pod from there.
-    void cluster; // cluster is used by the parent; this nav is section-only
+    useFleet.getState().requestNavIntent({ kind: "select-pod", cluster, namespace: pod.namespace, name: pod.name });
   };
 
   return (

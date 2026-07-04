@@ -5,6 +5,7 @@ import { openExternalSecrets, closeExternalSecrets } from "../bridge/externalsec
 import { useListKeys } from "../chrome/useListKeys";
 import { Badge, FilterButton, SummaryCell, Section, Field, StatusDot, frame, ellipsis, mono, readyColor, toneColor } from "../chrome/primitives";
 import { CopyButton } from "../chrome/CopyButton";
+import { SECRET_REF } from "./resourceRefs";
 
 type EsoFilter = "all" | "attention" | "stale" | "stores";
 
@@ -338,7 +339,22 @@ function SecretInspector({ e, store }: { e: ExternalSecretDTO; store: ExternalSe
       </Section>
 
       <Section title="target secret">
-        <Field label="name" value={e.targetSecret || "—"} />
+        {e.targetSecret ? (
+          <div style={{ display: "flex", gap: 8, alignItems: "baseline", fontSize: 11 }}>
+            <span style={{ color: "var(--color-text-tertiary)", width: 72, flexShrink: 0 }}>name</span>
+            <button
+              onClick={() => {
+                const nav = useFleet.getState();
+                nav.openResource(SECRET_REF);
+                nav.openInstance(e.namespace, e.targetSecret);
+              }}
+              title={`open Secret ${e.namespace}/${e.targetSecret}`}
+              style={{ background: "transparent", border: "none", padding: 0, cursor: "pointer", textAlign: "left", color: "var(--color-text-info)", fontFamily: "var(--font-mono)", fontSize: 11, overflowWrap: "anywhere", textDecoration: "underline", textDecorationColor: "var(--color-border-secondary)", textUnderlineOffset: 2 }}
+            >{e.targetSecret}</button>
+          </div>
+        ) : (
+          <Field label="name" value="—" />
+        )}
       </Section>
 
       <Section title="refresh">

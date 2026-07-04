@@ -5,6 +5,7 @@ import { openCertManager, closeCertManager, getCertificateChain } from "../bridg
 import { useListKeys } from "../chrome/useListKeys";
 import { Badge, FilterButton, SummaryCell, Section, Field, StatusDot, frame, ellipsis, mono, readyColor, toneColor } from "../chrome/primitives";
 import { CopyButton } from "../chrome/CopyButton";
+import { SECRET_REF } from "./resourceRefs";
 import { SyncingChip, staleStyle } from "./staleness";
 
 type CertFilter = "all" | "attention" | "expiring" | "issuing" | "issuerProblem" | "issuers";
@@ -387,7 +388,22 @@ function CertInspector({ c, issuer, chain, chainLoading }: { c: CertificateDTO; 
       </Section>
 
       <Section title="secret">
-        <Field label="name" value={c.secretName || "—"} />
+        {c.secretName ? (
+          <div style={{ display: "flex", gap: 8, alignItems: "baseline", fontSize: 11 }}>
+            <span style={{ color: "var(--color-text-tertiary)", width: 72, flexShrink: 0 }}>name</span>
+            <button
+              onClick={() => {
+                const nav = useFleet.getState();
+                nav.openResource(SECRET_REF);
+                nav.openInstance(c.namespace, c.secretName);
+              }}
+              title={`open Secret ${c.namespace}/${c.secretName}`}
+              style={{ background: "transparent", border: "none", padding: 0, cursor: "pointer", textAlign: "left", color: "var(--color-text-info)", fontFamily: "var(--font-mono)", fontSize: 11, overflowWrap: "anywhere", textDecoration: "underline", textDecorationColor: "var(--color-border-secondary)", textUnderlineOffset: 2 }}
+            >{c.secretName}</button>
+          </div>
+        ) : (
+          <Field label="name" value="—" />
+        )}
       </Section>
 
       <Section title="validity">

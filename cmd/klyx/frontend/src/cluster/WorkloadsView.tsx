@@ -3,7 +3,7 @@ import { IconTerminal2, IconExternalLink, IconBox } from "@tabler/icons-react";
 import { useFleet } from "../store/fleet";
 import type { WorkloadDTO, PodDTO, WorkloadKind, ResourceCellDTO } from "../store/fleet";
 import { listWorkloads, openLiveWorkloads, rolloutRestart, scaleWorkload } from "../bridge/workloads";
-import { deletePod } from "../bridge/pods";
+import { deletePod, openPodDetail } from "../bridge/pods";
 import { getWorkloadMetrics } from "../bridge/workload-metrics";
 import { getWorkloadSparklines } from "../bridge/metrics";
 import type { SparklinesDTO } from "../bridge/metrics";
@@ -403,6 +403,19 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
           }}
           onCancelScale={() => setPending(null)}
           onDeletePod={(w, pod) => setPending({ kind: "delete-pod", w, pod })}
+          onOpenPod={(w, pod) => {
+            useFleet.getState().setSection("pods");
+            void openPodDetail(cluster, w.namespace, pod.name);
+          }}
+          onOpenNode={(node) => {
+            useFleet.getState().setSection("nodes");
+            useFleet.getState().requestNavIntent({ kind: "select-node", cluster, node });
+          }}
+          onOpenFluxOwner={(w) => {
+            if (!w.gitops) return;
+            useFleet.getState().setSection("gitops");
+            useFleet.getState().requestNavIntent({ kind: "select-flux", cluster, fluxKind: w.gitops.kind, namespace: w.gitops.namespace, name: w.gitops.name });
+          }}
         />
       </div>
 
@@ -516,6 +529,9 @@ function WorkloadContextPanel({
   onScaleConfirm,
   onCancelScale,
   onDeletePod,
+  onOpenPod,
+  onOpenNode,
+  onOpenFluxOwner,
 }: {
   workload: WorkloadDTO | null;
   expanded: boolean;
@@ -527,6 +543,9 @@ function WorkloadContextPanel({
   onScaleConfirm: (w: WorkloadDTO, replicas: number) => void;
   onCancelScale: () => void;
   onDeletePod: (w: WorkloadDTO, pod: PodDTO) => void;
+  onOpenPod: (w: WorkloadDTO, pod: PodDTO) => void;
+  onOpenNode: (node: string) => void;
+  onOpenFluxOwner: (w: WorkloadDTO) => void;
 }) {
   if (!workload) {
     return (
@@ -593,7 +612,16 @@ function WorkloadContextPanel({
           <span style={{ color: "var(--color-text-tertiary)" }}>ready</span><span style={{ color: workload.ready < workload.desired ? "var(--color-text-warning)" : "var(--color-text-secondary)" }}>{workload.ready} / {workload.desired}</span>
           <span style={{ color: "var(--color-text-tertiary)" }}>restarts</span><span style={{ color: workload.restarts > 0 ? "var(--color-text-warning)" : "var(--color-text-secondary)" }}>{workload.restarts}</span>
           <span style={{ color: "var(--color-text-tertiary)" }}>reason</span><span style={{ color: workload.rank === "unhealthy" ? "var(--color-text-danger)" : "var(--color-text-secondary)", overflowWrap: "anywhere" }}>{workload.reason}</span>
-          <span style={{ color: "var(--color-text-tertiary)" }}>owner</span><span style={{ color: workload.gitops ? "var(--color-text-info)" : "var(--color-text-tertiary)", overflowWrap: "anywhere" }}>{owner}</span>
+          <span style={{ color: "var(--color-text-tertiary)" }}>owner</span>
+          {workload.gitops ? (
+            <button
+              onClick={() => onOpenFluxOwner(workload)}
+              title={`open ${owner} in the Flux lens`}
+              style={{ background: "transparent", border: "none", padding: 0, cursor: "pointer", textAlign: "left", color: "var(--color-text-info)", fontFamily: "var(--font-mono)", fontSize: 11, overflowWrap: "anywhere", textDecoration: "underline", textDecorationColor: "var(--color-border-secondary)", textUnderlineOffset: 2 }}
+            >{owner}</button>
+          ) : (
+            <span style={{ color: "var(--color-text-tertiary)", overflowWrap: "anywhere" }}>{owner}</span>
+          )}
         </div>
       </div>
 
@@ -603,13 +631,36 @@ function WorkloadContextPanel({
           {badPods > 0 ? `${badPods} affected / ${workload.pods.length} total` : `${workload.pods.length} healthy`}
         </div>
         <div style={{ display: "grid", gap: 6 }}>
+          {/* Every other pod-adjacent surface links pods; this one was the
+              exception. Click opens the pod detail in the Pods section; the
+              node name jumps to the Nodes board. */}
           {workload.pods.slice(0, 6).map((p) => (
-            <div key={p.name} style={{ display: "grid", gridTemplateColumns: "8px minmax(0, 1fr) auto", gap: 8, alignItems: "center", border: "0.5px solid var(--color-border-tertiary)", background: "var(--color-background-primary)", padding: "7px 8px", fontFamily: "var(--font-mono)", fontSize: 11 }}>
+            <div
+              key={p.name}
+              role="button"
+              tabIndex={0}
+              aria-label={`open pod ${p.name}`}
+              onClick={() => onOpenPod(workload, p)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  onOpenPod(workload, p);
+                }
+              }}
+              style={{ display: "grid", gridTemplateColumns: "8px minmax(0, 1fr) auto", gap: 8, alignItems: "center", border: "0.5px solid var(--color-border-tertiary)", background: "var(--color-background-primary)", padding: "7px 8px", fontFamily: "var(--font-mono)", fontSize: 11, cursor: "pointer" }}
+            >
               <span style={{ width: 7, height: 7, borderRadius: "50%", background: p.ready ? "var(--color-text-success)" : "var(--color-text-danger)" }} />
-              <span style={ellipsis} title={p.name}>{p.name}</span>
+              <span style={{ ...ellipsis, color: "var(--color-text-info)" }} title={`open pod ${p.name}`}>{p.name}</span>
               <span style={{ color: p.ready ? "var(--color-text-secondary)" : "var(--color-text-danger)" }}>{p.ready ? "ready" : p.reason || "not ready"}</span>
               <span />
-              <span style={{ ...ellipsis, color: "var(--color-text-tertiary)" }} title={p.node}>{p.node}</span>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onOpenNode(p.node);
+                }}
+                title={`open node ${p.node}`}
+                style={{ background: "transparent", border: "none", padding: 0, cursor: "pointer", textAlign: "left", color: "var(--color-text-tertiary)", fontFamily: "var(--font-mono)", fontSize: 11, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", textDecoration: "underline", textDecorationColor: "var(--color-border-secondary)", textUnderlineOffset: 2 }}
+              >{p.node}</button>
               <span style={{ color: p.restarts > 0 ? "var(--color-text-warning)" : "var(--color-text-tertiary)" }}>{p.restarts}</span>
             </div>
           ))}

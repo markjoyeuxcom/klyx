@@ -665,8 +665,34 @@ function InfoTab({ detail, cluster, namespace, name, onRestart, onDelete }: {
       {/* Summary header */}
       <InspectorSection title="Summary">
         <InfoRow label="phase">{p.phase}{p.reason ? ` · ${p.reason}` : ""}</InfoRow>
-        {p.ownerKind && <InfoRow label="owner">{p.ownerKind}/{p.ownerName}</InfoRow>}
-        {p.node && <InfoRow label="node">{p.node}</InfoRow>}
+        {p.ownerKind && (
+          <InfoRow label="owner">
+            {showRestart ? (
+              <InfoLink
+                label={`${p.ownerKind}/${p.ownerName}`}
+                title="open in Workloads"
+                onClick={() => {
+                  useFleet.getState().setSection("workloads");
+                  useFleet.getState().requestNavIntent({ kind: "select-workload", cluster, workloadKind: p.ownerKind, namespace: p.namespace, name: p.ownerName });
+                }}
+              />
+            ) : (
+              `${p.ownerKind}/${p.ownerName}`
+            )}
+          </InfoRow>
+        )}
+        {p.node && (
+          <InfoRow label="node">
+            <InfoLink
+              label={p.node}
+              title="open in Nodes"
+              onClick={() => {
+                useFleet.getState().setSection("nodes");
+                useFleet.getState().requestNavIntent({ kind: "select-node", cluster, node: p.node });
+              }}
+            />
+          </InfoRow>
+        )}
         {p.ip && <InfoRow label="ip">{p.ip}</InfoRow>}
         {detail.qosClass && <InfoRow label="qos">{detail.qosClass}</InfoRow>}
         {detail.serviceAccount && <InfoRow label="sa">{detail.serviceAccount}</InfoRow>}
@@ -915,5 +941,21 @@ function InfoRow({ label, children }: { label: string; children: React.ReactNode
       <span style={{ color: "var(--color-text-tertiary)", width: 60, flexShrink: 0 }}>{label}</span>
       <span style={{ color: "var(--color-text-primary)" }}>{children}</span>
     </div>
+  );
+}
+
+// InfoLink: an InfoRow value that navigates (owner -> Workloads, node -> Nodes).
+function InfoLink({ label, title, onClick }: { label: string; title: string; onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      title={title}
+      style={{
+        background: "transparent", border: "none", padding: 0, cursor: "pointer",
+        color: "var(--color-text-info)", fontFamily: "var(--font-mono)", fontSize: 11,
+        textAlign: "left", overflowWrap: "anywhere",
+        textDecoration: "underline", textDecorationColor: "var(--color-border-secondary)", textUnderlineOffset: 2,
+      }}
+    >{label}</button>
   );
 }
