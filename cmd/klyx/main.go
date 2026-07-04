@@ -5,6 +5,7 @@ import (
 	"embed"
 	"log"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/moomora/klyx/internal/appbridge"
@@ -13,7 +14,10 @@ import (
 	"github.com/moomora/klyx/internal/config"
 	"github.com/moomora/klyx/internal/execenv"
 	"github.com/moomora/klyx/internal/fleet"
+	"github.com/moomora/klyx/internal/winstate"
 	"github.com/wailsapp/wails/v3/pkg/application"
+	"github.com/wailsapp/wails/v3/pkg/services/dock"
+	"github.com/wailsapp/wails/v3/pkg/services/notifications"
 )
 
 // assets embeds the Vite-built frontend. At build time, wails3 build
@@ -33,6 +37,12 @@ func configPath() string {
 		log.Fatalf("cannot resolve home directory for the fleet config: %v (set KLYX_CONFIG to override)", err)
 	}
 	return home + "/.config/klyx/fleet.yaml"
+}
+
+// windowStatePath lives beside the fleet config so a KLYX_CONFIG override
+// relocates both together.
+func windowStatePath() string {
+	return filepath.Join(filepath.Dir(configPath()), "window.json")
 }
 
 func main() {
@@ -282,6 +292,28 @@ func main() {
 		return c, true
 	})
 
+	// Native shell: window title context, dock/taskbar badge, OS notifications.
+	// mainWin is assigned after window creation below; the closures are nil-safe
+	// until then.
+	var mainWin application.Window
+	dockSvc := dock.New()
+	notifySvc := notifications.New()
+	shellSvc := appbridge.NewShellService(
+		func(title string) {
+			if mainWin != nil {
+				mainWin.SetTitle(title)
+			}
+		},
+		dockSvc.SetBadge,
+		dockSvc.RemoveBadge,
+		func(title, body string) error {
+			return notifySvc.SendNotification(notifications.NotificationOptions{
+				ID: "klyx-action", Title: title, Body: body,
+			})
+		},
+		notifySvc.RequestNotificationAuthorization,
+	)
+
 	app := application.New(application.Options{
 		Name:        "Klyx",
 		Description: "Platform-engineer-grade Kubernetes desktop client",
@@ -315,6 +347,9 @@ func main() {
 			application.NewService(windowsSvc),
 			application.NewService(configSvc),
 			application.NewService(argoSvc),
+			application.NewService(dockSvc),
+			application.NewService(notifySvc),
+			application.NewService(shellSvc),
 		},
 		Assets: application.AssetOptions{
 			Handler: application.AssetFileServerFS(assets),
@@ -326,6 +361,14 @@ func main() {
 		// sockets/SPDY tunnels, log tails hold apiserver streams, and drains own
 		// child kubectl processes - none may outlive the app.
 		OnShutdown: func() {
+			// Remember the window geometry for the next launch (best-effort).
+			if mainWin != nil {
+				x, y := mainWin.Position()
+				w, h := mainWin.Size()
+				if err := winstate.Save(windowStatePath(), winstate.Bounds{X: x, Y: y, Width: w, Height: h}); err != nil {
+					log.Printf("warn: could not persist window state: %v", err)
+				}
+			}
 			forwardsSvc.StopAll()
 			logsSvc.CloseAll()
 			nodeOpsSvc.CancelAll()
@@ -342,7 +385,7 @@ func main() {
 
 	go appbridge.RunFleetPush(ctx, svc, em, time.Second)
 
-	app.Window.NewWithOptions(application.WebviewWindowOptions{
+	mainOpts := application.WebviewWindowOptions{
 		Title: "Klyx",
 		Mac: application.MacWindow{
 			InvisibleTitleBarHeight: 0,
@@ -351,7 +394,15 @@ func main() {
 		},
 		BackgroundColour: application.NewRGB(15, 20, 30),
 		URL:              "/",
-	})
+	}
+	// Restore the last run's geometry: a daily driver that forgets its window
+	// every morning reads as a prototype. Insane/missing state -> defaults.
+	if b, ok := winstate.Load(windowStatePath()); ok {
+		mainOpts.Width, mainOpts.Height = b.Width, b.Height
+		mainOpts.X, mainOpts.Y = b.X, b.Y
+		mainOpts.InitialPosition = application.WindowXY
+	}
+	mainWin = app.Window.NewWithOptions(mainOpts)
 
 	if err := app.Run(); err != nil {
 		log.Fatal(err)
