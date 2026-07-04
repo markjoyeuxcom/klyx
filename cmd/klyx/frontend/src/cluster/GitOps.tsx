@@ -7,6 +7,7 @@ import type { FluxDiffDTO } from "../bridge/gitops";
 import { ConfirmDialog } from "../chrome/ConfirmDialog";
 import { MetaTile, OperationDialog, OptionTile } from "../chrome/OperationDialog";
 import { useListKeys } from "../chrome/useListKeys";
+import { useNavIntent } from "../chrome/useNavIntent";
 import { Badge, FilterButton, SummaryCell, Section, StatusDot, readyColor, ellipsis, actionBtn, frame } from "../chrome/primitives";
 import { SyncingChip, staleStyle } from "./staleness";
 
@@ -121,6 +122,21 @@ export function GitOps({ cluster }: { cluster: string }) {
   }, [cluster, absent]);
 
   const rows = gitops.cluster === cluster ? gitops.resources : [];
+
+  // Palette verbs / cross-links land here as one-shot intents once the watch
+  // has synced. Reconcile opens the composer; suspend/resume their confirm.
+  useNavIntent(cluster, ["reconcile-flux", "suspend-flux", "select-flux"], (intent) => {
+    if (gitops.loading || rows.length === 0) return "wait";
+    if (!("fluxKind" in intent)) return "missing";
+    const r = rows.find((x) => x.kind === intent.fluxKind && x.namespace === intent.namespace && x.name === intent.name);
+    if (!r) return "missing";
+    expand(keyOf(r));
+    void getResourceDetail(cluster, r.kind, r.namespace, r.name);
+    if (intent.kind === "reconcile-flux") setReconcileTarget(r);
+    else if (intent.kind === "suspend-flux") setPending({ verb: intent.suspend ? "suspend" : "resume", r });
+    return "consumed";
+  }, [rows, gitops.loading]);
+
   const orderedRows = useMemo(
     () => [...rows].sort((a, b) => rank(a) - rank(b) || a.namespace.localeCompare(b.namespace) || a.name.localeCompare(b.name)),
     [rows],

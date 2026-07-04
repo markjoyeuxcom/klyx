@@ -6,6 +6,7 @@ import type { ArgoSyncOptions } from "../bridge/argo";
 import { ConfirmDialog } from "../chrome/ConfirmDialog";
 import { MetaTile, OperationDialog, OptionTile } from "../chrome/OperationDialog";
 import { useListKeys } from "../chrome/useListKeys";
+import { useNavIntent } from "../chrome/useNavIntent";
 import { EmptyState, SkeletonRows, btn, ellipsis } from "../chrome/primitives";
 import { IconGitMerge } from "@tabler/icons-react";
 import { InspectorEmpty, InspectorSection, InspectorTitle } from "./ResourceInspector";
@@ -92,6 +93,19 @@ export function ArgoView({ cluster, mode = "applications" }: { cluster: string; 
   const isProtected = useFleet((s) => s.clusters.find((c) => c.name === cluster)?.protected ?? false);
   const [pending, setPending] = useState<Pending | null>(null);
   const [syncTarget, setSyncTarget] = useState<ArgoAppDTO | null>(null);
+
+  // Palette verbs land here as one-shot intents once the app list is loaded.
+  // Sync opens the composer (prune/selective options + prd arming); refresh
+  // its confirm - the palette never bypasses either.
+  useNavIntent(cluster, ["sync-argo", "refresh-argo"], (intent) => {
+    if (argo.loading || argo.apps.length === 0) return "wait";
+    if (!("namespace" in intent)) return "missing";
+    const app = argo.apps.find((a) => a.namespace === intent.namespace && a.name === intent.name);
+    if (!app) return "missing";
+    if (intent.kind === "sync-argo") setSyncTarget(app);
+    else setPending({ verb: "refresh", app });
+    return "consumed";
+  }, [argo.apps, argo.loading]);
 
   useEffect(() => {
     if (mode === "projects") {

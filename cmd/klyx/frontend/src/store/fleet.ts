@@ -509,6 +509,27 @@ type ArgoSlice = {
 
 export type ActionStatus = { kind: "success" | "error"; message: string };
 
+// NavIntent is a one-shot cross-view request (the pods nsRequest pattern,
+// generalized): the palette or a cross-link navigates to a section and parks
+// an intent; the target view consumes it once its data is loaded and opens
+// the matching dialog/selection. Verbs only ever OPEN the existing confirm or
+// operation composer - the intent channel never fires an API call itself, so
+// protected-cluster arming and danger confirms are never bypassed.
+export type NavIntent =
+  | { kind: "drain-node"; cluster: string; node: string }
+  | { kind: "cordon-node"; cluster: string; node: string; cordon: boolean }
+  | { kind: "restart-workload"; cluster: string; workloadKind: WorkloadKind; namespace: string; name: string }
+  | { kind: "scale-workload"; cluster: string; workloadKind: WorkloadKind; namespace: string; name: string }
+  | { kind: "reconcile-flux"; cluster: string; fluxKind: string; namespace: string; name: string }
+  | { kind: "suspend-flux"; cluster: string; fluxKind: string; namespace: string; name: string; suspend: boolean }
+  | { kind: "sync-argo"; cluster: string; namespace: string; name: string }
+  | { kind: "refresh-argo"; cluster: string; namespace: string; name: string }
+  | { kind: "logs-pod"; cluster: string; namespace: string; name: string }
+  | { kind: "select-pod"; cluster: string; namespace: string; name: string }
+  | { kind: "select-workload"; cluster: string; workloadKind: string; namespace: string; name: string }
+  | { kind: "select-node"; cluster: string; node: string }
+  | { kind: "select-flux"; cluster: string; fluxKind: string; namespace: string; name: string };
+
 // Overview triage summary — fetched once per cluster open, never mutated by the view slices.
 export type OverviewSummary = {
   cluster: string | null;
@@ -580,6 +601,9 @@ type FleetState = {
   actionStatus: ActionStatus | null;
   setActionStatus: (s: ActionStatus) => void;
   clearActionStatus: () => void;
+  navIntent: NavIntent | null;
+  requestNavIntent: (i: NavIntent) => void;
+  clearNavIntent: () => void;
   forwards: ForwardDTO[];
   setForwards: (f: ForwardDTO[]) => void;
   crd: CRDSlice;
@@ -776,6 +800,9 @@ export const useFleet = create<FleetState>((set) => ({
   actionStatus: null,
   setActionStatus: (actionStatus) => set({ actionStatus }),
   clearActionStatus: () => set({ actionStatus: null }),
+  navIntent: null,
+  requestNavIntent: (navIntent) => set({ navIntent }),
+  clearNavIntent: () => set({ navIntent: null }),
   forwards: [],
   setForwards: (forwards) => set({ forwards }),
   crd: { cluster: null, groups: [], loading: false, expanded: [], counts: {}, groupBy: "group", search: "", builtinCategory: null },

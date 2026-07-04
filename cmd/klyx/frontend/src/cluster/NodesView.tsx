@@ -8,6 +8,7 @@ import { ConfirmDialog } from "../chrome/ConfirmDialog";
 import { MetaTile, OperationDialog, OptionTile } from "../chrome/OperationDialog";
 import { fmtMem } from "./saturation";
 import { useResizablePanel } from "../chrome/useResizablePanel";
+import { useNavIntent } from "../chrome/useNavIntent";
 import { ellipsis, frame, btn, FilterButton, SummaryCell, StatusDot } from "../chrome/primitives";
 import { InspectorSection, InspectorTabButton, MetadataChips, inspectorStateBox } from "./ResourceInspector";
 
@@ -383,6 +384,18 @@ export function NodesView({ cluster }: { cluster: string }) {
     void listNodes(cluster);
     return () => { useFleet.getState().clearNodes(); };
   }, [cluster]);
+
+  // Palette verbs land here as one-shot intents once the node list is loaded.
+  useNavIntent(cluster, ["drain-node", "cordon-node", "select-node"], (intent) => {
+    if (nodes.loading || nodes.items.length === 0) return "wait";
+    const name = "node" in intent ? intent.node : "";
+    const n = nodes.items.find((x) => x.name === name);
+    if (!n) return "missing";
+    if (intent.kind === "drain-node") setDrainPending(n.name);
+    else if (intent.kind === "cordon-node") setCordonPending({ node: n.name, cordon: intent.cordon });
+    else void openNodeDetail(cluster, n.name);
+    return "consumed";
+  }, [nodes.items, nodes.loading]);
 
   const onRefresh = () => { void listNodes(cluster); };
   const orderedNodes = useMemo(

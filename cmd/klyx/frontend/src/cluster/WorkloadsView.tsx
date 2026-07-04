@@ -15,6 +15,7 @@ import { saturation, nearLimitSort, fmtCpu, fmtMem } from "./saturation";
 import { VirtualList } from "../chrome/VirtualList";
 import type { VirtualListHandle } from "../chrome/VirtualList";
 import { useListKeys } from "../chrome/useListKeys";
+import { useNavIntent } from "../chrome/useNavIntent";
 import { useResizableDock } from "../chrome/useResizableDock";
 import { Chip } from "../chrome/Chip";
 import { EmptyState } from "../chrome/EmptyState";
@@ -129,6 +130,24 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
     });
     saveSearch(cluster, "workloads", wl.search);
   }, [cluster, wl.cluster, wl.namespace, wl.needsAttention, wl.kindFilter, wl.nearLimitSort, wl.search]);
+
+  // Palette verbs / cross-links land here as one-shot intents once the list
+  // is loaded. Scale opens the inline popover in the expanded row, so the row
+  // is expanded first; restart's confirm renders at the root.
+  useNavIntent(cluster, ["restart-workload", "scale-workload", "select-workload"], (intent) => {
+    if (wl.loading || wl.items.length === 0) return "wait";
+    if (!("workloadKind" in intent)) return "missing";
+    const w = wl.items.find((x) => x.kind === intent.workloadKind && x.namespace === intent.namespace && x.name === intent.name);
+    if (!w) return "missing";
+    const key = keyOf(w);
+    setSelectedKey(key);
+    if (!useFleet.getState().workloads.expanded.includes(key)) {
+      useFleet.getState().toggleWorkloadExpand(key);
+    }
+    if (intent.kind === "restart-workload") setPending({ kind: "restart", w });
+    else if (intent.kind === "scale-workload") setPending({ kind: "scale-input", w });
+    return "consumed";
+  }, [wl.items, wl.loading]);
 
   const onNamespace = (ns: string) => {
     // Close the current live sub, then reopen for the selected namespace.

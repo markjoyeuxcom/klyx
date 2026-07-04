@@ -14,6 +14,7 @@ import type { VirtualListHandle } from "../chrome/VirtualList";
 import { useResizablePanel } from "../chrome/useResizablePanel";
 import { useResizableDock } from "../chrome/useResizableDock";
 import { useListKeys } from "../chrome/useListKeys";
+import { useNavIntent } from "../chrome/useNavIntent";
 import { Chip, EmptyState, LiveIndicator, SkeletonRows, btn, ellipsis } from "../chrome/primitives";
 import { InspectorSection, InspectorTabButton, MetadataChips, inspectorStateBox } from "./ResourceInspector";
 import { loadClusterPrefs, loadSearch, savePodsViewPrefs, saveSearch } from "../store/persist";
@@ -99,6 +100,18 @@ export function PodsView({ cluster }: { cluster: string }) {
     if (liveCleanupRef.current) { liveCleanupRef.current(); liveCleanupRef.current = null; }
     liveCleanupRef.current = openLivePods(cluster, nsRequest.namespace);
   }, [nsRequest, cluster]);
+
+  // Palette verbs / cross-links land here as one-shot intents once the pod
+  // list is loaded.
+  useNavIntent(cluster, ["logs-pod", "select-pod"], (intent) => {
+    if (pods.loading || pods.items.length === 0) return "wait";
+    if (!("namespace" in intent)) return "missing";
+    const p = pods.items.find((x) => x.namespace === intent.namespace && x.name === intent.name);
+    if (!p) return "missing";
+    if (intent.kind === "logs-pod") setLogsTarget({ namespace: p.namespace, name: p.name, containers: p.containers });
+    else void openPodDetail(cluster, p.namespace, p.name);
+    return "consumed";
+  }, [pods.items, pods.loading]);
 
   const onNamespace = (ns: string) => {
     // Close the current live sub, then open the new one for the selected namespace.
