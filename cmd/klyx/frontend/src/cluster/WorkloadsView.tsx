@@ -20,6 +20,7 @@ import { Chip } from "../chrome/Chip";
 import { EmptyState } from "../chrome/EmptyState";
 import { SkeletonRows } from "../chrome/SkeletonRows";
 import { LiveIndicator, btn, ellipsis } from "../chrome/primitives";
+import { loadClusterPrefs, loadSearch, saveSearch, saveWorkloadsViewPrefs } from "../store/persist";
 
 const rankDot: Record<string, string> = {
   unhealthy: "var(--color-text-danger)",
@@ -89,9 +90,22 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
 
   useEffect(() => {
     // Open live subscription for the list. getWorkloadMetrics for usage stays
-    // separate (polling, not watch-driven).
-    liveCleanupRef.current = openLiveWorkloads(cluster, "");
-    void getWorkloadMetrics(cluster, "");
+    // separate (polling, not watch-driven). Hydration fills only fields still
+    // at their reset defaults, so a palette openWorkloads(kinds) or an
+    // Overview needs-attention intent set just before mount always wins.
+    const st = useFleet.getState();
+    const prefs = loadClusterPrefs(cluster).workloads ?? {};
+    if (prefs.needsAttention && !st.workloads.needsAttention) st.setWorkloadsNeedsAttention(true);
+    if (prefs.nearLimitSort && !st.workloads.nearLimitSort) st.toggleNearLimitSort();
+    const kindsAtDefault = KINDS.every((k) => st.workloads.kindFilter[k]);
+    if (prefs.kinds && prefs.kinds.length > 0 && prefs.kinds.length < KINDS.length && kindsAtDefault) {
+      st.setWorkloadKindFilter(prefs.kinds);
+    }
+    const savedSearch = loadSearch(cluster, "workloads");
+    if (savedSearch && st.workloads.search === "") st.setWorkloadsSearch(savedSearch);
+    const ns = st.workloads.namespace || (prefs.namespace ?? "");
+    liveCleanupRef.current = openLiveWorkloads(cluster, ns);
+    void getWorkloadMetrics(cluster, ns);
     const id = setInterval(() => {
       const cur = useFleet.getState().workloads;
       if (cur.cluster === cluster) getWorkloadMetrics(cluster, cur.namespace);
@@ -102,6 +116,19 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
       useFleet.getState().clearWorkloads();
     };
   }, [cluster]);
+
+  // Mirror filters into per-cluster prefs (namespace + toggles survive a
+  // relaunch; search survives section switches within this run).
+  useEffect(() => {
+    if (wl.cluster !== cluster) return; // transient state during open/switch
+    saveWorkloadsViewPrefs(cluster, {
+      namespace: wl.namespace,
+      needsAttention: wl.needsAttention,
+      kinds: KINDS.filter((k) => wl.kindFilter[k]),
+      nearLimitSort: wl.nearLimitSort,
+    });
+    saveSearch(cluster, "workloads", wl.search);
+  }, [cluster, wl.cluster, wl.namespace, wl.needsAttention, wl.kindFilter, wl.nearLimitSort, wl.search]);
 
   const onNamespace = (ns: string) => {
     // Close the current live sub, then reopen for the selected namespace.

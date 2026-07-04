@@ -7,6 +7,7 @@ import { openPodDetail } from "../bridge/pods";
 import { VirtualList } from "../chrome/VirtualList";
 import type { VirtualListHandle } from "../chrome/VirtualList";
 import { useListKeys } from "../chrome/useListKeys";
+import { loadClusterPrefs, loadSearch, saveEventsViewPrefs, saveSearch } from "../store/persist";
 
 function ago(unix: number): string {
   const s = Math.floor(Date.now() / 1000) - unix;
@@ -27,14 +28,29 @@ export function EventsView({ cluster }: { cluster: string }) {
   // can close the old sub before opening the new one.
   const liveCleanupRef = useRef<(() => void) | null>(null);
 
-  // Live subscription effect — opens the all-namespaces sub on mount.
+  // Live subscription effect — opens the sub on mount for the persisted
+  // namespace (or all namespaces). Hydration fills only fields still at their
+  // reset defaults, so an intent set just before mount always wins.
   useEffect(() => {
-    liveCleanupRef.current = openLiveEvents(cluster, "");
+    const st = useFleet.getState();
+    const prefs = loadClusterPrefs(cluster).events ?? {};
+    if (prefs.warningsOnly && !st.events.warningsOnly) st.setWarningsOnly(true);
+    const savedSearch = loadSearch(cluster, "events");
+    if (savedSearch && st.events.search === "") st.setEventsSearch(savedSearch);
+    liveCleanupRef.current = openLiveEvents(cluster, st.events.namespace || (prefs.namespace ?? ""));
     return () => {
       if (liveCleanupRef.current) { liveCleanupRef.current(); liveCleanupRef.current = null; }
       useFleet.getState().clearEvents();
     };
   }, [cluster]);
+
+  // Mirror filters into per-cluster prefs (namespace + toggles survive a
+  // relaunch; search survives section switches within this run).
+  useEffect(() => {
+    if (events.cluster !== cluster) return; // transient state during open/switch
+    saveEventsViewPrefs(cluster, { namespace: events.namespace, warningsOnly: events.warningsOnly });
+    saveSearch(cluster, "events", events.search);
+  }, [cluster, events.cluster, events.namespace, events.warningsOnly, events.search]);
 
   const onNamespace = (ns: string) => {
     // Close the current live sub, then reopen for the selected namespace.

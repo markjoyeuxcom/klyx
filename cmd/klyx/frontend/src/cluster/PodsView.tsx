@@ -16,6 +16,7 @@ import { useResizableDock } from "../chrome/useResizableDock";
 import { useListKeys } from "../chrome/useListKeys";
 import { Chip, EmptyState, LiveIndicator, SkeletonRows, btn, ellipsis } from "../chrome/primitives";
 import { InspectorSection, InspectorTabButton, MetadataChips, inspectorStateBox } from "./ResourceInspector";
+import { loadClusterPrefs, loadSearch, savePodsViewPrefs, saveSearch } from "../store/persist";
 
 const rankDot: Record<string, string> = {
   unhealthy: "var(--color-text-danger)",
@@ -62,15 +63,30 @@ export function PodsView({ cluster }: { cluster: string }) {
   // can close the old sub before opening the new one.
   const liveCleanupRef = useRef<(() => void) | null>(null);
 
-  // Live subscription effect — opens the all-namespaces sub on mount.
-  // Namespace changes are handled inline in onNamespace.
+  // Live subscription effect — opens the sub on mount for the persisted
+  // namespace (or all namespaces). Namespace changes are handled inline in
+  // onNamespace. Hydration fills only fields still at their reset defaults, so
+  // an Overview/TriageTape/palette intent set just before mount always wins.
   useEffect(() => {
-    liveCleanupRef.current = openLivePods(cluster, "");
+    const st = useFleet.getState();
+    const prefs = loadClusterPrefs(cluster).pods ?? {};
+    if (prefs.needsAttention && !st.pods.needsAttention) st.setPodsNeedsAttention(true);
+    const savedSearch = loadSearch(cluster, "pods");
+    if (savedSearch && st.pods.search === "") st.setPodsSearch(savedSearch);
+    liveCleanupRef.current = openLivePods(cluster, st.pods.namespace || (prefs.namespace ?? ""));
     return () => {
       if (liveCleanupRef.current) { liveCleanupRef.current(); liveCleanupRef.current = null; }
       useFleet.getState().clearPods();
     };
   }, [cluster]);
+
+  // Mirror filters into per-cluster prefs (namespace + toggles survive a
+  // relaunch; search survives section switches within this run).
+  useEffect(() => {
+    if (pods.cluster !== cluster) return; // transient state during open/switch
+    savePodsViewPrefs(cluster, { namespace: pods.namespace, needsAttention: pods.needsAttention });
+    saveSearch(cluster, "pods", pods.search);
+  }, [cluster, pods.cluster, pods.namespace, pods.needsAttention, pods.search]);
 
   // Palette "jump to namespace": honor the request by re-opening the live
   // subscription for it (same path as the namespace select). Runs after the
