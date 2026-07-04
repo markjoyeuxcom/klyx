@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback, useRef } from "react";
-import { Chip, LiveIndicator, SkeletonRows, btn, ellipsis } from "../chrome/primitives";
+import { IconAlertTriangle } from "@tabler/icons-react";
+import { Chip, EmptyState, LiveIndicator, SkeletonRows, btn, ellipsis } from "../chrome/primitives";
 import { useFleet } from "../store/fleet";
 import type { EventRowDTO } from "../store/fleet";
 import { listEvents, openLiveEvents } from "../bridge/events";
@@ -162,11 +163,20 @@ export function EventsView({ cluster }: { cluster: string }) {
       {events.loading && events.items.length === 0 ? (
         <SkeletonRows rows={8} label="loading events" />
       ) : filtered.length === 0 ? (
-        <div style={{ color: "var(--color-text-secondary)", fontSize: 13 }}>
-          {events.items.length === 0
+        <EmptyState
+          icon={<IconAlertTriangle size={28} stroke={1.2} />}
+          title={events.items.length === 0
             ? `No events${events.namespace ? ` in ${events.namespace}` : ""}.`
             : "No events match the current filter."}
-        </div>
+          hint={events.items.length === 0 ? "Events age out of the API server after roughly an hour - quiet can be real." : undefined}
+          action={events.items.length > 0 ? {
+            label: "Clear filters",
+            onClick: () => {
+              useFleet.getState().setEventsSearch("");
+              useFleet.getState().setWarningsOnly(false);
+            },
+          } : undefined}
+        />
       ) : (
         <div style={{ fontFamily: "var(--font-mono)", fontSize: 12, flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>
           {/* Header */}

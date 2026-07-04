@@ -5,6 +5,10 @@ import { openExternalSecrets, closeExternalSecrets } from "../bridge/externalsec
 import { useListKeys } from "../chrome/useListKeys";
 import { Badge, FilterButton, SummaryCell, Section, Field, StatusDot, frame, ellipsis, mono, readyColor, toneColor } from "../chrome/primitives";
 import { CopyButton } from "../chrome/CopyButton";
+import { EmptyState } from "../chrome/EmptyState";
+import { SkeletonRows } from "../chrome/SkeletonRows";
+import { WatchErrorBanner } from "../chrome/WatchErrorBanner";
+import { IconShieldLock } from "@tabler/icons-react";
 import { SECRET_REF } from "./resourceRefs";
 
 type EsoFilter = "all" | "attention" | "stale" | "stores";
@@ -158,9 +162,7 @@ export function ExternalSecretsView({ cluster }: { cluster: string }) {
       </div>
 
       {eso.cluster === cluster && eso.watchError && (
-        <div style={{ padding: "8px 12px", borderRadius: "var(--border-radius-md)", border: "0.5px solid var(--color-text-danger)", color: "var(--color-text-danger)", fontSize: 12 }}>
-          external-secrets watch is failing - this list may be empty or stale, not clean: {eso.watchError}
-        </div>
+        <WatchErrorBanner tool="external-secrets" error={eso.watchError} />
       )}
 
       <div style={{ ...frame, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", overflow: "hidden" }}>
@@ -198,11 +200,15 @@ export function ExternalSecretsView({ cluster }: { cluster: string }) {
       </div>
 
       {eso.loading && secrets.length === 0 && stores.length === 0 ? (
-        <div style={{ color: "var(--color-text-secondary)", fontSize: 13 }}>Loading external secret state…</div>
+        <SkeletonRows rows={7} label="loading external secret state" />
       ) : filter === "stores" ? (
         <StoresPanel stores={orderedStores} />
       ) : secrets.length === 0 ? (
-        <div style={{ color: "var(--color-text-secondary)", fontSize: 13 }}>No external secrets found.</div>
+        <EmptyState
+          icon={<IconShieldLock size={28} stroke={1.2} />}
+          title="No ExternalSecrets on this cluster."
+          hint="The operator is installed but no ExternalSecret objects exist yet."
+        />
       ) : (
         <div style={{ flex: 1, minHeight: 0, display: "grid", gridTemplateColumns: "minmax(440px, 1.25fr) minmax(320px, 0.75fr)", gap: 12, alignItems: "stretch", overflow: "hidden" }}>
           <div style={{ ...frame, overflow: "hidden", minHeight: 0, display: "flex", flexDirection: "column" }}>
@@ -216,7 +222,10 @@ export function ExternalSecretsView({ cluster }: { cluster: string }) {
             </div>
             <div data-testid="eso-scroll" style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
               {visibleSecrets.length === 0 ? (
-                <div style={{ padding: 14, color: "var(--color-text-secondary)", fontSize: 13 }}>No external secrets match the current filter.</div>
+                <EmptyState
+                  title="No external secrets match the current filter."
+                  action={{ label: "Clear filters", onClick: () => { setFilter("all"); setQuery(""); setNamespace(""); } }}
+                />
               ) : visibleSecrets.map((e) => {
                 const k = keyOf(e);
                 return (

@@ -5,6 +5,9 @@ import type { GatewayRefDTO } from "../store/fleet";
 import { listGateways } from "../bridge/gateway";
 import { GatewayTopology } from "./GatewayTopology";
 import { useListKeys } from "../chrome/useListKeys";
+import { EmptyState } from "../chrome/EmptyState";
+import { SkeletonRows } from "../chrome/SkeletonRows";
+import { IconRoute } from "@tabler/icons-react";
 import { frame, ellipsis, SummaryCell, FilterButton } from "../chrome/primitives";
 import { SyncingChip, staleStyle } from "./staleness";
 
@@ -95,13 +98,21 @@ export function GatewayApiView({ cluster }: { cluster: string }) {
 
   if (gateway) return <GatewayTopology cluster={cluster} gateway={gateway} />;
 
-  if (listLoading && gateways.length === 0) return <div style={empty}>Loading Gateways…</div>;
+  if (listLoading && gateways.length === 0) return <div style={{ padding: "14px 16px" }}><SkeletonRows rows={5} label="loading gateways" /></div>;
   // A failed list on a served API is an error, never "no Gateways".
   if (sameCluster && net.listError) {
     return <div style={{ ...empty, color: "var(--color-text-danger)" }}>Could not list Gateways: {net.listError}</div>;
   }
   if (!served) return <div style={empty}>Gateway API is not installed on this cluster.</div>;
-  if (gateways.length === 0) return <div style={empty}>No Gateways found.</div>;
+  if (gateways.length === 0) {
+    return (
+      <EmptyState
+        icon={<IconRoute size={28} stroke={1.2} />}
+        title="No Gateways on this cluster."
+        hint="Gateway API is served but no Gateway objects exist yet."
+      />
+    );
+  }
 
   return (
     <div style={{ padding: "14px 16px", display: "flex", flexDirection: "column", gap: 12, height: "100%", minHeight: 0, overflow: "hidden", boxSizing: "border-box" }}>
@@ -149,7 +160,10 @@ export function GatewayApiView({ cluster }: { cluster: string }) {
         </div>
         <div data-testid="gateway-list-scroll" style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
           {visibleGateways.length === 0 ? (
-            <div style={{ padding: 14, color: "var(--color-text-secondary)", fontSize: 13 }}>No Gateways match the current filter.</div>
+            <EmptyState
+              title="No Gateways match the current filter."
+              action={{ label: "Clear filters", onClick: () => { setMode("all"); setQuery(""); } }}
+            />
           ) : visibleGateways.map((g) => {
             const pendingGateway = isPending(g);
             const isKb = kbIdx >= 0 && kbKey === `${g.namespace}/${g.name}`;

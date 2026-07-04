@@ -9,6 +9,10 @@ import { MetaTile, OperationDialog, OptionTile } from "../chrome/OperationDialog
 import { useListKeys } from "../chrome/useListKeys";
 import { useNavIntent } from "../chrome/useNavIntent";
 import { CopyButton } from "../chrome/CopyButton";
+import { EmptyState } from "../chrome/EmptyState";
+import { SkeletonRows } from "../chrome/SkeletonRows";
+import { WatchErrorBanner } from "../chrome/WatchErrorBanner";
+import { IconGitBranch } from "@tabler/icons-react";
 import { wellKnownResourceRef } from "./resourceRefs";
 import { Badge, FilterButton, SummaryCell, Section, StatusDot, readyColor, ellipsis, actionBtn, frame } from "../chrome/primitives";
 import { SyncingChip, staleStyle } from "./staleness";
@@ -224,9 +228,7 @@ export function GitOps({ cluster }: { cluster: string }) {
       </div>
 
       {gitops.cluster === cluster && gitops.watchError && (
-        <div style={{ padding: "8px 12px", borderRadius: "var(--border-radius-md)", border: "0.5px solid var(--color-text-danger)", color: "var(--color-text-danger)", fontSize: 12 }}>
-          Flux watch is failing - this list may be empty or stale, not clean: {gitops.watchError}
-        </div>
+        <WatchErrorBanner tool="Flux" error={gitops.watchError} />
       )}
 
       <div style={{ ...frame, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", overflow: "hidden" }}>
@@ -257,11 +259,15 @@ export function GitOps({ cluster }: { cluster: string }) {
       </div>
 
       {gitops.loading && rows.length === 0 && allSources.length === 0 ? (
-        <div style={{ color: "var(--color-text-secondary)", fontSize: 13 }}>Loading reconciliation state…</div>
+        <SkeletonRows rows={7} label="loading reconciliation state" />
       ) : filter === "sources" ? (
         <SourcesPanel sources={orderedSources} />
       ) : rows.length === 0 ? (
-        <div style={{ color: "var(--color-text-secondary)", fontSize: 13 }}>No Flux resources found.</div>
+        <EmptyState
+          icon={<IconGitBranch size={28} stroke={1.2} />}
+          title="No Flux resources on this cluster."
+          hint="Flux is installed but no Kustomizations or HelmReleases exist yet."
+        />
       ) : (
         <div style={{ flex: 1, minHeight: 0, display: "grid", gridTemplateColumns: "minmax(440px, 1.25fr) minmax(320px, 0.75fr)", gap: 12, alignItems: "stretch", overflow: "hidden" }}>
           <div style={{ ...frame, overflow: "hidden", minHeight: 0, display: "flex", flexDirection: "column" }}>
@@ -275,7 +281,10 @@ export function GitOps({ cluster }: { cluster: string }) {
             </div>
             <div data-testid="flux-resource-scroll" style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
               {visibleRows.length === 0 ? (
-                <div style={{ padding: 14, color: "var(--color-text-secondary)", fontSize: 13 }}>No Flux resources match the current filter.</div>
+                <EmptyState
+                  title="No Flux resources match the current filter."
+                  action={{ label: "Clear filters", onClick: () => { setFilter("all"); setQuery(""); } }}
+                />
               ) : visibleRows.map((r, i) => {
                 const k = keyOf(r);
                 const open = gitops.expandedKey === k;

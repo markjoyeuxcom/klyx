@@ -1,5 +1,6 @@
 import { useEffect, useCallback, useMemo, useRef, useState } from "react";
-import { FilterButton, SkeletonRows, SummaryCell, btn, ellipsis, frame } from "../chrome/primitives";
+import { IconAnchor } from "@tabler/icons-react";
+import { EmptyState, FilterButton, SkeletonRows, SummaryCell, btn, ellipsis, frame } from "../chrome/primitives";
 import { useFleet } from "../store/fleet";
 import type { HelmReleaseDTO, HelmHistoryEntryDTO } from "../store/fleet";
 import { listHelmReleases, openHelmRelease, helmRollback } from "../bridge/helm";
@@ -187,7 +188,11 @@ export function HelmView({ cluster }: { cluster: string }) {
         {helm.loading && releases.length === 0 ? (
           <SkeletonRows rows={6} label="loading releases" />
         ) : releases.length === 0 ? (
-          <div style={{ color: "var(--color-text-secondary)", fontSize: 13 }}>No Helm releases found.</div>
+          <EmptyState
+            icon={<IconAnchor size={28} stroke={1.2} />}
+            title="No Helm releases on this cluster."
+            hint="Nothing installed via helm - Flux HelmReleases appear in the Flux lens instead."
+          />
         ) : (
           <div style={{ fontFamily: "var(--font-mono)", fontSize: 12, flex: 1, minHeight: 0, overflowY: "auto" }}>
             {/* Header */}
@@ -195,7 +200,10 @@ export function HelmView({ cluster }: { cluster: string }) {
               <span /><span>release</span><span>namespace</span><span>chart</span><span>app version</span><span>rev</span><span>updated</span>
             </div>
             {visibleReleases.length === 0 && (
-              <div style={{ padding: 14, color: "var(--color-text-secondary)", fontSize: 13 }}>No releases match the current filter.</div>
+              <EmptyState
+                title="No releases match the current filter."
+                action={{ label: "Clear filters", onClick: () => { setFilter("all"); setNamespace(""); setQuery(""); } }}
+              />
             )}
             {/* Rows */}
             {visibleReleases.map((r) => {

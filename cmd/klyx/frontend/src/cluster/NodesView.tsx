@@ -11,6 +11,9 @@ import { useResizablePanel } from "../chrome/useResizablePanel";
 import { useNavIntent } from "../chrome/useNavIntent";
 import { useListKeys } from "../chrome/useListKeys";
 import { CopyButton } from "../chrome/CopyButton";
+import { EmptyState } from "../chrome/EmptyState";
+import { SkeletonRows } from "../chrome/SkeletonRows";
+import { IconServer } from "@tabler/icons-react";
 import { ellipsis, frame, btn, FilterButton, SummaryCell, StatusDot } from "../chrome/primitives";
 import { InspectorSection, InspectorTabButton, MetadataChips, inspectorStateBox } from "./ResourceInspector";
 
@@ -498,9 +501,13 @@ export function NodesView({ cluster }: { cluster: string }) {
         </div>
 
         {nodes.loading && nodes.items.length === 0 ? (
-          <div style={{ color: "var(--color-text-secondary)", fontSize: 13 }}>Loading nodes…</div>
+          <SkeletonRows rows={6} label="loading nodes" />
         ) : nodes.items.length === 0 ? (
-          <div style={{ color: "var(--color-text-secondary)", fontSize: 13 }}>No nodes found.</div>
+          <EmptyState
+            icon={<IconServer size={28} stroke={1.2} />}
+            title="No nodes visible."
+            hint="Either the list failed or RBAC hides nodes from this identity - refresh to retry."
+          />
         ) : (
           <div style={{ ...frame, overflow: "hidden", flex: 1, minHeight: 0, display: "flex", flexDirection: "column", fontFamily: "var(--font-mono)", fontSize: 12 }}>
             <div style={{ display: "grid", gridTemplateColumns: gridCols, gap: 10, padding: "5px 8px", fontSize: 9, color: "var(--color-text-tertiary)", borderBottom: "0.5px solid var(--color-border-secondary)", flexShrink: 0 }}>
@@ -508,7 +515,10 @@ export function NodesView({ cluster }: { cluster: string }) {
             </div>
             <div data-testid="nodes-list-scroll" style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
               {visibleNodes.length === 0 ? (
-                <div style={{ padding: 14, color: "var(--color-text-secondary)", fontSize: 13 }}>No nodes match the current filter.</div>
+                <EmptyState
+                  title="No nodes match the current filter."
+                  action={{ label: "Clear filters", onClick: () => { setFilter("all"); setRoleFilter(null); setQuery(""); } }}
+                />
               ) : visibleNodes.map((n) => {
                 const isSelected = nodes.selected?.name === n.name;
                 const isKb = kbName === n.name && kbIdx >= 0;

@@ -41,7 +41,7 @@ describe("ClusterDetail", () => {
       gitops: { cluster: "x", resources: [], sources: [], loading: false, expandedKey: null, detail: null },
     });
     const { getByText } = render(<ClusterDetail />);
-    expect(getByText(/No Flux resources found/i)).toBeTruthy();
+    expect(getByText(/No Flux resources on this cluster/i)).toBeTruthy();
   });
   it("shows a notice when the cluster is gone", () => {
     useFleet.setState({ clusters: [], route: { name: "cluster", cluster: "ghost", section: "overview" } });

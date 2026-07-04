@@ -5,6 +5,8 @@ import { VirtualList } from "../chrome/VirtualList";
 import type { VirtualListHandle } from "../chrome/VirtualList";
 import { useListKeys } from "../chrome/useListKeys";
 import { CopyButton } from "../chrome/CopyButton";
+import { EmptyState, SkeletonRows } from "../chrome/primitives";
+import { IconStack2 } from "@tabler/icons-react";
 import { riskFor, supportsRiskFilter } from "./resourceRisk";
 
 const ellipsis: React.CSSProperties = { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" };
@@ -243,9 +245,12 @@ export function InstanceList({ cluster, resource }: { cluster: string; resource:
       )}
 
       {loading && all.length === 0 ? (
-        <div style={stateBox}>Loading {fleetMode ? "fleet " : ""}{resource.kind} instances…</div>
+        <SkeletonRows rows={8} label={`loading ${resource.kind} instances`} />
       ) : all.length === 0 ? (
-        <div style={stateBox}>No {resource.kind} instances found{fleetMode ? " across the fleet" : ""}.</div>
+        <EmptyState
+          icon={<IconStack2 size={28} stroke={1.2} />}
+          title={`No ${resource.kind} instances found${fleetMode ? " across the fleet" : ""}.`}
+        />
       ) : (
         <div data-testid="instance-list-scroll" style={{ border: "0.5px solid var(--color-border-tertiary)", borderRadius: "var(--border-radius-md)", overflowY: "auto", overflowX: "auto", flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
           {/* minWidth wrapper: header + rows share it, so horizontal scrolling
@@ -263,7 +268,10 @@ export function InstanceList({ cluster, resource }: { cluster: string; resource:
               <span>age</span>
             </div>
             {rows.length === 0 ? (
-              <div style={{ padding: 14, color: "var(--color-text-secondary)", fontSize: 13 }}>No {resource.kind} instances match the current filter.</div>
+              <EmptyState
+                title={`No ${resource.kind} instances match the current filter.`}
+                action={{ label: "Clear filters", onClick: () => { setFilter(""); setRiskOnly(false); } }}
+              />
             ) : (
               <VirtualList
                 ref={listRef}
@@ -519,15 +527,6 @@ function columnsFor(resource: ResourceRef): ExtraColumn[] {
   }
   return [];
 }
-
-const stateBox: React.CSSProperties = {
-  color: "var(--color-text-secondary)",
-  fontSize: 13,
-  padding: 18,
-  border: "0.5px solid var(--color-border-tertiary)",
-  borderRadius: "var(--border-radius-md)",
-  background: "var(--color-background-primary)",
-};
 
 const linkBtn: React.CSSProperties = {
   background: "transparent",

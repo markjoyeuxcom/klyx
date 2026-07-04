@@ -5,6 +5,10 @@ import { openCertManager, closeCertManager, getCertificateChain } from "../bridg
 import { useListKeys } from "../chrome/useListKeys";
 import { Badge, FilterButton, SummaryCell, Section, Field, StatusDot, frame, ellipsis, mono, readyColor, toneColor } from "../chrome/primitives";
 import { CopyButton } from "../chrome/CopyButton";
+import { EmptyState } from "../chrome/EmptyState";
+import { SkeletonRows } from "../chrome/SkeletonRows";
+import { WatchErrorBanner } from "../chrome/WatchErrorBanner";
+import { IconCertificate } from "@tabler/icons-react";
 import { SECRET_REF } from "./resourceRefs";
 import { SyncingChip, staleStyle } from "./staleness";
 
@@ -196,9 +200,7 @@ export function CertsView({ cluster }: { cluster: string }) {
       </div>
 
       {cm.cluster === cluster && cm.watchError && (
-        <div style={{ padding: "8px 12px", borderRadius: "var(--border-radius-md)", border: "0.5px solid var(--color-text-danger)", color: "var(--color-text-danger)", fontSize: 12 }}>
-          cert-manager watch is failing - this list may be empty or stale, not clean: {cm.watchError}
-        </div>
+        <WatchErrorBanner tool="cert-manager" error={cm.watchError} />
       )}
 
       <div style={{ ...frame, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", overflow: "hidden" }}>
@@ -238,11 +240,15 @@ export function CertsView({ cluster }: { cluster: string }) {
       </div>
 
       {cm.loading && certs.length === 0 && issuers.length === 0 ? (
-        <div style={{ color: "var(--color-text-secondary)", fontSize: 13 }}>Loading certificate state…</div>
+        <SkeletonRows rows={7} label="loading certificate state" />
       ) : filter === "issuers" ? (
         <IssuersPanel issuers={orderedIssuers} />
       ) : certs.length === 0 ? (
-        <div style={{ color: "var(--color-text-secondary)", fontSize: 13 }}>No certificates found.</div>
+        <EmptyState
+          icon={<IconCertificate size={28} stroke={1.2} />}
+          title="No Certificates on this cluster."
+          hint="cert-manager is installed but no Certificate objects exist yet."
+        />
       ) : (
         <div style={{ flex: 1, minHeight: 0, display: "grid", gridTemplateColumns: "minmax(440px, 1.25fr) minmax(320px, 0.75fr)", gap: 12, alignItems: "stretch", overflow: "hidden" }}>
           <div style={{ ...frame, overflow: "hidden", minHeight: 0, display: "flex", flexDirection: "column" }}>
@@ -256,7 +262,10 @@ export function CertsView({ cluster }: { cluster: string }) {
             </div>
             <div data-testid="cert-scroll" style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
               {visibleCerts.length === 0 ? (
-                <div style={{ padding: 14, color: "var(--color-text-secondary)", fontSize: 13 }}>No certificates match the current filter.</div>
+                <EmptyState
+                  title="No certificates match the current filter."
+                  action={{ label: "Clear filters", onClick: () => { setFilter("all"); setQuery(""); setNamespace(""); } }}
+                />
               ) : visibleCerts.map((c, i) => {
                 const k = keyOf(c);
                 return <CertRow key={k} c={c} open={cm.selectedKey === k} kbSelected={i === kbIdx} onClick={() => (cm.selectedKey === k ? select(null) : select(k))} />;

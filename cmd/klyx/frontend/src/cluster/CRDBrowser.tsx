@@ -1,7 +1,8 @@
 import { useEffect } from "react";
+import { IconComponents } from "@tabler/icons-react";
 import { useFleet, CRDGroupDTO, CRDKindDTO, CRDGroupBy, crdCountKey } from "../store/fleet";
 import { listCRDs, countKind } from "../bridge/crd";
-import { ellipsis } from "../chrome/primitives";
+import { EmptyState, SkeletonRows, ellipsis } from "../chrome/primitives";
 
 type FlatKind = CRDKindDTO & { group: string; category: string };
 
@@ -58,10 +59,17 @@ export function CRDBrowser({ cluster }: { cluster: string }) {
   const totalKinds = flatten(groups).length;
 
   if (crd.loading && groups.length === 0) {
-    return <div style={{ padding: 24, color: "var(--color-text-secondary)", fontSize: 13 }}>Loading custom resources…</div>;
+    return <div style={{ padding: "14px 16px" }}><SkeletonRows rows={7} label="loading custom resources" /></div>;
   }
   if (groups.length === 0 || (crd.search && sections.length === 0)) {
-    return <div style={{ padding: 24, color: "var(--color-text-secondary)", fontSize: 13 }}>No custom resources found on this cluster.</div>;
+    return (
+      <EmptyState
+        icon={<IconComponents size={28} stroke={1.2} />}
+        title={groups.length === 0 ? "No custom resources on this cluster." : "No custom resources match the search."}
+        hint={groups.length === 0 ? "Only built-in kinds are served here." : undefined}
+        action={groups.length > 0 ? { label: "Clear search", onClick: () => setSearch("") } : undefined}
+      />
+    );
   }
 
   return (

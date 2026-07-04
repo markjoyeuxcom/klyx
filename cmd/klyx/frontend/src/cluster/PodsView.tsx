@@ -210,7 +210,13 @@ export function PodsView({ cluster }: { cluster: string }) {
             <EmptyState
               icon={<IconCircleDot size={28} stroke={1.2} />}
               title={pods.items.length === 0 ? `No pods${pods.namespace ? ` in ${pods.namespace}` : ""}.` : "No pods match the current filter."}
-              hint={pods.items.length === 0 ? undefined : "Adjust the filter text or the needs-attention chip."}
+              action={pods.items.length > 0 ? {
+                label: "Clear filters",
+                onClick: () => {
+                  useFleet.getState().setPodsSearch("");
+                  useFleet.getState().setPodsNeedsAttention(false);
+                },
+              } : undefined}
             />
           ) : (
             <div style={{ fontFamily: "var(--font-mono)", fontSize: 12, display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}>

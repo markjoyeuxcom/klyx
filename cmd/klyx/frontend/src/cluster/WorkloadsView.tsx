@@ -289,7 +289,16 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
                 <EmptyState
                   icon={<IconBox size={28} stroke={1.2} />}
                   title={`No workloads${wl.namespace ? ` in ${wl.namespace}` : ""}.`}
-                  hint={wl.search ? "Adjust the filter text." : wl.needsAttention ? "The needs-attention filter is on - everything here is healthy." : undefined}
+                  hint={wl.needsAttention && !wl.search ? "The needs-attention filter is on - everything here is healthy." : undefined}
+                  action={(wl.search || wl.needsAttention || !KINDS.every((k) => wl.kindFilter[k])) ? {
+                    label: "Clear filters",
+                    onClick: () => {
+                      const st = useFleet.getState();
+                      st.setWorkloadsSearch("");
+                      st.setWorkloadsNeedsAttention(false);
+                      st.setWorkloadKindFilter(KINDS);
+                    },
+                  } : undefined}
                 />
               </div>
             ) : (

@@ -121,7 +121,7 @@ describe("HelmView", () => {
   it("shows empty state when no releases", () => {
     seedReleases([]);
     const { getByText } = render(<HelmView cluster="homelab" />);
-    expect(getByText("No Helm releases found.")).toBeTruthy();
+    expect(getByText(/No Helm releases on this cluster/)).toBeTruthy();
   });
 
   it("deployed status dot renders with success color", () => {
