@@ -130,6 +130,13 @@ export function buildCommands(s: FleetStore): Command[] {
     hint: (s.forwards?.length ?? 0) > 0 ? `${s.forwards.length} active` : undefined,
     run: () => s.openForwards(),
   });
+  cmds.push({
+    id: "activity",
+    group: "Clusters",
+    title: "Activity log",
+    hint: "recent action outcomes",
+    run: () => s.openActivity(),
+  });
   // Stopping a forward is the one palette verb that acts directly - it is how
   // the forwards popover already behaves (low-risk, instantly re-creatable).
   for (const f of s.forwards ?? []) {

@@ -45,6 +45,7 @@ type PersistedRoute =
   | { name: "fleet" }
   | { name: "forwards" }
   | { name: "settings" }
+  | { name: "activity" }
   | { name: "cluster"; cluster: string; section: string; argoView?: string };
 
 // Sections that exist today; a persisted route naming an unknown section (from
@@ -69,7 +70,7 @@ export function loadRoute(): PersistedRoute | null {
   if (!raw) return null;
   try {
     const parsed = JSON.parse(raw) as PersistedRoute;
-    if (parsed.name === "fleet" || parsed.name === "forwards" || parsed.name === "settings") return { name: parsed.name };
+    if (parsed.name === "fleet" || parsed.name === "forwards" || parsed.name === "settings" || parsed.name === "activity") return { name: parsed.name };
     if (parsed.name === "cluster" && typeof parsed.cluster === "string" && parsed.cluster !== "") {
       return {
         name: "cluster",
@@ -105,7 +106,7 @@ export function restoreRouteOnBoot(clusterNames: string[]): void {
   const saved = loadRoute();
   if (!saved) return;
   if (saved.name === "fleet") return;
-  if (saved.name === "forwards" || saved.name === "settings") {
+  if (saved.name === "forwards" || saved.name === "settings" || saved.name === "activity") {
     useFleet.setState({ route: { name: saved.name } });
     return;
   }

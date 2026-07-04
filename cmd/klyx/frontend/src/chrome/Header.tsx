@@ -9,7 +9,7 @@ export function Header() {
   const clusters = useFleet((s) => s.clusters);
   const regions = new Set(clusters.map((c) => c.region).filter(Boolean));
   const cluster = route.name === "cluster" ? clusters.find((c) => c.name === route.cluster) : null;
-  const title = route.name === "fleet" ? "Fleet" : route.name === "forwards" ? "Port-forwards" : route.name === "settings" ? "Settings" : SECTION_LABELS[route.section];
+  const title = route.name === "fleet" ? "Fleet" : route.name === "forwards" ? "Port-forwards" : route.name === "activity" ? "Activity" : route.name === "settings" ? "Settings" : SECTION_LABELS[route.section];
 
   return (
     <div style={{ padding: "11px 16px", borderBottom: "0.5px solid var(--color-border-tertiary)", background: "var(--color-background-primary)" }}>

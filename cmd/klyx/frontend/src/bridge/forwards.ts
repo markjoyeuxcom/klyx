@@ -21,6 +21,19 @@ export async function initForwardsBridge(): Promise<() => void> {
 
   const off = Events.On(FORWARDS_CHANGED, (ev) => {
     const data = (ev.data ?? []) as ForwardDTO[];
+    // A forward that flips active→broken died in the background. Without a
+    // toast the only signal is a chip changing colour in a view nobody is
+    // looking at - surface it through the action queue (and activity log).
+    const prev = useFleet.getState().forwards;
+    for (const f of data) {
+      const before = prev.find((p) => p.id === f.id);
+      if (before && before.status === "active" && f.status === "broken") {
+        useFleet.getState().setActionStatus({
+          kind: "error",
+          message: `port-forward localhost:${f.localPort} → ${f.targetName}:${f.targetPort} broke`,
+        });
+      }
+    }
     useFleet.getState().setForwards(data);
   });
 

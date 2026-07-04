@@ -6,6 +6,7 @@ import { Header } from "../chrome/Header";
 import { TriageTape } from "../chrome/TriageTape";
 import { FleetView } from "../fleet/FleetView";
 import { ForwardsView } from "../fleet/ForwardsView";
+import { ActivityView } from "../fleet/ActivityView";
 import { SettingsView } from "./SettingsView";
 import { ClusterDetail } from "../cluster/ClusterDetail";
 import { CommandPalette } from "../chrome/CommandPalette";
@@ -24,7 +25,7 @@ export function AppShell() {
           <Header />
           {route.name === "cluster" && <TriageTape cluster={route.cluster} />}
           <div style={{ flex: 1, minHeight: 0, overflow: route.name === "cluster" ? "hidden" : "auto" }}>
-            {route.name === "fleet" ? <FleetView /> : route.name === "forwards" ? <ForwardsView /> : route.name === "settings" ? <SettingsView /> : <ClusterDetail />}
+            {route.name === "fleet" ? <FleetView /> : route.name === "forwards" ? <ForwardsView /> : route.name === "activity" ? <ActivityView /> : route.name === "settings" ? <SettingsView /> : <ClusterDetail />}
           </div>
         </div>
       </div>

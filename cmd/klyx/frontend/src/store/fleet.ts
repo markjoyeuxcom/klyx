@@ -355,6 +355,7 @@ export type Route =
   | { name: "fleet" }
   | { name: "forwards" }
   | { name: "settings" }
+  | { name: "activity" }
   | { name: "cluster"; cluster: string; section: ClusterSection; resource?: ResourceRef; instance?: InstanceRef; gateway?: GatewayRef; argoView?: ArgoViewMode };
 
 export const SECTION_LABELS: Record<ClusterSection, string> = {
@@ -508,6 +509,38 @@ type ArgoSlice = {
 // ---- / Helm types -------------------------------------------------------------
 
 export type ActionStatus = { kind: "success" | "error"; message: string };
+// One toast on screen / one row in the activity log. `at` is epoch ms.
+export type ActionEvent = ActionStatus & { id: number; at: number };
+
+// The activity log survives relaunches: "what did I do and did it succeed"
+// must be answerable the morning after, especially on protected clusters.
+// Storage helpers live here (not store/persist.ts) to avoid an import cycle.
+const ACTION_LOG_KEY = "klyx-action-log";
+const ACTION_LOG_MAX = 200;
+const MAX_VISIBLE_TOASTS = 4;
+let nextActionId = 1;
+
+function loadActionLog(): ActionEvent[] {
+  try {
+    const raw = localStorage.getItem(ACTION_LOG_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    const entries = parsed.filter((e): e is ActionEvent => e && typeof e.message === "string" && typeof e.at === "number");
+    nextActionId = entries.reduce((m, e) => Math.max(m, e.id), 0) + 1;
+    return entries.slice(0, ACTION_LOG_MAX);
+  } catch {
+    return [];
+  }
+}
+
+function saveActionLog(log: ActionEvent[]): void {
+  try {
+    localStorage.setItem(ACTION_LOG_KEY, JSON.stringify(log));
+  } catch {
+    // best-effort - a full or unavailable storage must never block an action
+  }
+}
 
 // NavIntent is a one-shot cross-view request (the pods nsRequest pattern,
 // generalized): the palette or a cross-link navigates to a section and parks
@@ -598,9 +631,18 @@ type FleetState = {
   setExternalSecretsLoading: (cluster: string) => void;
   clearExternalSecrets: () => void;
   selectExternalSecret: (key: string | null) => void;
+  // actionStatus keeps the latest result (convenient for tests and callers);
+  // actionToasts is the on-screen queue - concurrent results stack instead of
+  // overwriting each other; actionLog is the persisted history behind the
+  // Activity view.
   actionStatus: ActionStatus | null;
+  actionToasts: ActionEvent[];
+  actionLog: ActionEvent[];
   setActionStatus: (s: ActionStatus) => void;
+  dismissActionToast: (id: number) => void;
   clearActionStatus: () => void;
+  clearActionLog: () => void;
+  openActivity: () => void;
   navIntent: NavIntent | null;
   requestNavIntent: (i: NavIntent) => void;
   clearNavIntent: () => void;
@@ -798,8 +840,26 @@ export const useFleet = create<FleetState>((set) => ({
   clearExternalSecrets: () => set({ externalsecrets: { cluster: null, secrets: [], stores: [], loading: false, watchError: null, selectedKey: null } }),
   selectExternalSecret: (key) => set((s) => ({ externalsecrets: { ...s.externalsecrets, selectedKey: key } })),
   actionStatus: null,
-  setActionStatus: (actionStatus) => set({ actionStatus }),
-  clearActionStatus: () => set({ actionStatus: null }),
+  actionToasts: [],
+  actionLog: loadActionLog(),
+  setActionStatus: (actionStatus) =>
+    set((s) => {
+      const event: ActionEvent = { ...actionStatus, id: nextActionId++, at: Date.now() };
+      const actionLog = [event, ...s.actionLog].slice(0, ACTION_LOG_MAX);
+      saveActionLog(actionLog);
+      return {
+        actionStatus,
+        actionToasts: [...s.actionToasts, event].slice(-MAX_VISIBLE_TOASTS),
+        actionLog,
+      };
+    }),
+  dismissActionToast: (id) => set((s) => ({ actionToasts: s.actionToasts.filter((t) => t.id !== id) })),
+  clearActionStatus: () => set({ actionStatus: null, actionToasts: [] }),
+  clearActionLog: () => {
+    saveActionLog([]);
+    set({ actionLog: [] });
+  },
+  openActivity: () => set({ route: { name: "activity" } }),
   navIntent: null,
   requestNavIntent: (navIntent) => set({ navIntent }),
   clearNavIntent: () => set({ navIntent: null }),
