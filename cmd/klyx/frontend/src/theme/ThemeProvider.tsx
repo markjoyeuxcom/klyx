@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useState, ReactNode } from "react";
 
-export type Theme = "system" | "light" | "dark" | "midnight" | "graphite" | "crimson" | "forest" | "amber" | "violet";
+export type Theme = "system" | "bench" | "bench-light" | "light" | "dark" | "midnight" | "graphite" | "crimson" | "forest" | "amber" | "violet";
 export type EffectiveTheme = Exclude<Theme, "system">;
 type Ctx = { theme: Theme; effectiveTheme: EffectiveTheme; setTheme: (theme: Theme) => void; toggle: () => void };
 
@@ -10,6 +10,8 @@ const STORAGE_KEY = "klyx-theme";
 const CHANGE_EVENT = "klyx:theme-change";
 export const THEMES: ReadonlyArray<{ id: Theme; label: string }> = [
   { id: "system", label: "System" },
+  { id: "bench", label: "Bench" },
+  { id: "bench-light", label: "Bench Light" },
   { id: "light", label: "Light" },
   { id: "dark", label: "Dark" },
   { id: "midnight", label: "Midnight" },
@@ -21,13 +23,16 @@ export const THEMES: ReadonlyArray<{ id: Theme; label: string }> = [
 ];
 
 function isTheme(value: string | null): value is Theme {
-  return value === "system" || value === "light" || value === "dark" || value === "midnight" ||
+  return value === "system" || value === "bench" || value === "bench-light" ||
+    value === "light" || value === "dark" || value === "midnight" ||
     value === "graphite" || value === "crimson" || value === "forest" || value === "amber" || value === "violet";
 }
 
 function initial(): Theme {
   const saved = localStorage.getItem(STORAGE_KEY);
-  return isTheme(saved) ? saved : "light";
+  // Bench is the flagship look (direction C, 2026-07-05); a saved choice
+  // always wins, so nobody's picked theme changes out from under them.
+  return isTheme(saved) ? saved : "bench";
 }
 
 function prefersDark(): boolean {
@@ -44,7 +49,7 @@ function applyTheme(theme: Theme): EffectiveTheme {
   const effective = resolveTheme(theme);
   document.documentElement.setAttribute("data-theme-choice", theme);
   document.documentElement.setAttribute("data-theme", effective);
-  document.documentElement.style.colorScheme = effective === "light" ? "light" : "dark";
+  document.documentElement.style.colorScheme = effective === "light" || effective === "bench-light" ? "light" : "dark";
   localStorage.setItem(STORAGE_KEY, theme);
   return effective;
 }
@@ -61,8 +66,8 @@ export function setThemeChoice(theme: Theme): EffectiveTheme {
 // moves through the concrete palettes.
 export function toggleTheme(): Theme {
   const stored = document.documentElement.getAttribute("data-theme-choice") ?? localStorage.getItem(STORAGE_KEY);
-  const current: Theme = isTheme(stored) ? stored : "light";
-  const order: Theme[] = ["light", "dark", "midnight", "graphite", "crimson", "forest", "amber", "violet"];
+  const current: Theme = isTheme(stored) ? stored : "bench";
+  const order: Theme[] = ["bench", "bench-light", "light", "dark", "midnight", "graphite", "crimson", "forest", "amber", "violet"];
   const next = order[(Math.max(0, order.indexOf(current)) + 1) % order.length];
   setThemeChoice(next);
   return next;
@@ -77,7 +82,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   }, [theme]);
 
   const toggle = () => setTheme((t) => {
-    const order: Theme[] = ["light", "dark", "midnight", "graphite", "crimson", "forest", "amber", "violet"];
+    const order: Theme[] = ["bench", "bench-light", "light", "dark", "midnight", "graphite", "crimson", "forest", "amber", "violet"];
     return order[(Math.max(0, order.indexOf(t)) + 1) % order.length];
   });
   const choose = (next: Theme) => setTheme(next);

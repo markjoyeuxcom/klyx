@@ -24,17 +24,17 @@ describe("ThemeProvider", () => {
     })));
   });
 
-  it("defaults to light and sets data-theme on the root", () => {
+  it("defaults to bench (direction C) and sets data-theme on the root", () => {
     render(<ThemeProvider><Toggle /></ThemeProvider>);
-    expect(document.documentElement.getAttribute("data-theme")).toBe("light");
-    expect(document.documentElement.getAttribute("data-theme-choice")).toBe("light");
+    expect(document.documentElement.getAttribute("data-theme")).toBe("bench");
+    expect(document.documentElement.getAttribute("data-theme-choice")).toBe("bench");
   });
 
-  it("toggles to dark and persists", () => {
+  it("toggles to the next concrete theme and persists", () => {
     const { getByText } = render(<ThemeProvider><Toggle /></ThemeProvider>);
-    act(() => getByText("light/light").click());
-    expect(document.documentElement.getAttribute("data-theme")).toBe("dark");
-    expect(localStorage.getItem("klyx-theme")).toBe("dark");
+    act(() => getByText("bench/bench").click());
+    expect(document.documentElement.getAttribute("data-theme")).toBe("bench-light");
+    expect(localStorage.getItem("klyx-theme")).toBe("bench-light");
   });
 
   it("can select midnight as a concrete theme", () => {

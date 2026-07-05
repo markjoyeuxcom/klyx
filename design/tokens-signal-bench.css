@@ -1,0 +1,115 @@
+/* tokens-signal-bench.css — "Signal Bench" theme for Klyx
+ *
+ * Drop-in themes in the existing tokens.css vocabulary, plus the small set
+ * of NEW component tokens the bench direction needs. Everything that can be
+ * a variable is; the three genuinely new primitives (lamp, well, fkeys bar)
+ * are described in signal-bench-implementation-notes.md.
+ *
+ * Mockup of record: docs/direction-c-signal-bench.html
+ */
+
+/* ---------------------------------------------------------------- dark --- */
+[data-theme="bench"] {
+  color-scheme: dark;
+
+  /* surfaces: tertiary = the desk, primary = module face, secondary = raised strip */
+  --color-background-tertiary: #141517;
+  --color-background-primary: #1c1e21;
+  --color-background-secondary: #222428;
+
+  /* tone tints (chip/badge/banner fills) */
+  --color-background-info: rgba(127,184,238,0.11);
+  --color-background-danger: rgba(255,125,125,0.12);
+  --color-background-success: rgba(143,199,94,0.12);
+  --color-background-warning: rgba(240,168,50,0.12);
+
+  --color-text-primary: #e9eaeb;
+  --color-text-secondary: #9ea1a6;
+  --color-text-tertiary: #71747a;
+  --color-text-info: #7fb8ee;
+  --color-text-danger: #ff7d7d;
+  --color-text-success: #8fc75e;
+  --color-text-warning: #f0a832;
+
+  /* neutral borders become "lines" (bench rules) */
+  --color-border-tertiary: rgba(255,255,255,0.08);
+  --color-border-secondary: rgba(255,255,255,0.16);
+  --color-border-primary: rgba(255,255,255,0.28);
+  /* tone borders: the bench draws tone edges as a 1px inset ring of the FULL
+     tone colour (box-shadow: inset 0 0 0 1px), not a translucent border. */
+  --color-border-info: #7fb8ee;
+  --color-border-danger: #ff7d7d;
+  --color-border-success: #8fc75e;
+  --color-border-warning: #f0a832;
+
+  /* --- NEW: bench machining -------------------------------------------- */
+  /* module: border-top edge-hi + shadow-lo; well: inset shadow on well bg  */
+  --bench-edge-hi: rgba(255,255,255,0.07);
+  --bench-edge-lo: rgba(0,0,0,0.55);
+  --bench-well-bg: #0e0f11;
+  --bench-well-shadow: inset 0 2px 4px rgba(0,0,0,0.35), inset 0 0 0 1px var(--color-border-tertiary);
+  --bench-module-shadow: 0 1px 0 var(--bench-edge-lo), 0 6px 18px rgba(0,0,0,0.18);
+
+  /* --- NEW: lamps (replaces StatusDot) --------------------------------- */
+  /* rule: ONLY faults glow — success/muted lamps never carry a glow token */
+  --lamp-off: #3a3d42;
+  --lamp-glow-warning: 0 0 5px rgba(240,168,50,0.45), 0 0 10px rgba(240,168,50,0.18);
+  --lamp-glow-danger: 0 0 5px rgba(255,125,125,0.5), 0 0 12px rgba(255,125,125,0.22);
+
+  /* selection: illuminated inset edge (row/palette/nav share it) */
+  --bench-selection-bg: rgba(127,184,238,0.09);
+  --bench-selection-edge: var(--color-text-info);
+}
+
+/* --------------------------------------------------------------- light --- */
+[data-theme="bench-light"] {
+  color-scheme: light;
+
+  --color-background-tertiary: #d8d7d2;
+  --color-background-primary: #eceae5;
+  --color-background-secondary: #f4f2ec;
+
+  --color-background-info: rgba(29,100,168,0.08);
+  --color-background-danger: rgba(178,51,51,0.09);
+  --color-background-success: rgba(74,125,28,0.10);
+  --color-background-warning: rgba(154,95,10,0.10);
+
+  --color-text-primary: #232323;
+  --color-text-secondary: #63656a;
+  --color-text-tertiary: #8e9095;
+  --color-text-info: #1d64a8;
+  --color-text-danger: #b23333;
+  --color-text-success: #4a7d1c;
+  --color-text-warning: #9a5f0a;
+
+  --color-border-tertiary: rgba(0,0,0,0.10);
+  --color-border-secondary: rgba(0,0,0,0.20);
+  --color-border-primary: rgba(0,0,0,0.34);
+  --color-border-info: #1d64a8;
+  --color-border-danger: #b23333;
+  --color-border-success: #4a7d1c;
+  --color-border-warning: #9a5f0a;
+
+  --bench-edge-hi: rgba(255,255,255,0.85);
+  --bench-edge-lo: rgba(0,0,0,0.18);
+  --bench-well-bg: #fbfaf7;
+  --bench-well-shadow: inset 0 1px 3px rgba(0,0,0,0.14), inset 0 0 0 1px var(--color-border-tertiary);
+  --bench-module-shadow: 0 1px 0 var(--bench-edge-lo), 0 4px 14px rgba(0,0,0,0.08);
+
+  --lamp-off: #b9b7b0;
+  --lamp-glow-warning: 0 0 5px rgba(200,130,20,0.4), 0 0 9px rgba(200,130,20,0.16);
+  --lamp-glow-danger: 0 0 5px rgba(190,60,60,0.42), 0 0 10px rgba(190,60,60,0.18);
+
+  --bench-selection-bg: rgba(29,100,168,0.08);
+  --bench-selection-edge: var(--color-text-info);
+}
+
+/* -------------------------------------------------- motion discipline --- */
+/* .klyx-lamp-blink is legal ONLY inside FleetSpine (the peripheral pager).
+   In-content lamps are steady — the user is already looking at them. */
+@keyframes klyx-lamp-blink { 0%, 70% { opacity: 1; } 85% { opacity: 0.35; } 100% { opacity: 1; } }
+.klyx-lamp-blink { animation: klyx-lamp-blink 1.6s ease-in-out infinite; }
+
+@media (prefers-reduced-motion: reduce) {
+  .klyx-lamp-blink { animation: none; }
+}

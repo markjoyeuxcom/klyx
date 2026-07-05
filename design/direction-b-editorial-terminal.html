@@ -1,0 +1,1302 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=1480">
+<title>Klyx — Direction B: Editorial Terminal</title>
+<style>
+/* ============================================================
+   DIRECTION B — EDITORIAL TERMINAL
+   The terminal heritage, typeset. One family (ui-monospace)
+   with real hierarchy: 20/13/11/9.5px, weights 400–700, small
+   caps with wide tracking. Ruled lines replace boxes: a double
+   rule opens a section, hairlines separate rows, nothing is a
+   card. Status is a glyph + a word — shape before colour:
+   ● ok  ◆ warning  ▲ danger  ◌ syncing  ‖ suspended  ⊘ unreachable
+   Selection is the terminal's own idiom: a ❯ prompt in the
+   gutter and faint reverse video.
+   ============================================================ */
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --paper: #161513;          /* the page */
+  --paper2: #1d1c19;         /* input wells, command blocks */
+  --ink:  #edebdf;
+  --ink2: #a8a698;
+  --ink3: #7c7a6e;
+  --ok:  #9cc75e;
+  --warn:#eda42f;
+  --bad: #f09a9a;
+  --info:#8abbec;
+  --rule:  rgba(237,235,223,0.14);
+  --rule2: rgba(237,235,223,0.34);
+  --rule3: rgba(237,235,223,0.60);
+  --rev: rgba(237,235,223,0.065);   /* reverse-video selection */
+  --scrim: rgba(0,0,0,0.62);
+  --ok-dim: rgba(156,199,94,0.13);
+  --warn-dim: rgba(237,164,47,0.13);
+  --bad-dim: rgba(240,154,154,0.13);
+  --info-dim: rgba(138,187,236,0.12);
+}
+:root[data-theme="light"] {
+  color-scheme: light;
+  --paper: #f7f5ee;
+  --paper2: #efede4;
+  --ink:  #201f1b;
+  --ink2: #66655c;
+  --ink3: #91907f;
+  --ok:  #3b6d11;
+  --warn:#854f0b;
+  --bad: #a32d2d;
+  --info:#185fa5;
+  --rule:  rgba(32,31,27,0.14);
+  --rule2: rgba(32,31,27,0.34);
+  --rule3: rgba(32,31,27,0.65);
+  --rev: rgba(32,31,27,0.055);
+  --scrim: rgba(40,38,32,0.5);
+  --ok-dim: rgba(59,109,17,0.10);
+  --warn-dim: rgba(133,79,11,0.10);
+  --bad-dim: rgba(163,45,45,0.09);
+  --info-dim: rgba(24,95,165,0.09);
+}
+
+* { box-sizing: border-box; }
+html { background: var(--paper); }
+body {
+  margin: 0;
+  font-family: ui-monospace, monospace;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--ink);
+  background: var(--paper);
+  font-variant-numeric: tabular-nums;
+}
+.sans { font-family: ui-sans-serif, system-ui, sans-serif; }
+
+/* glyph tones */
+.g-ok { color: var(--ok); } .g-warn { color: var(--warn); } .g-bad { color: var(--bad); }
+.g-info { color: var(--info); } .g-mut { color: var(--ink3); }
+
+/* status word: glyph + word, no box */
+.st { white-space: nowrap; letter-spacing: 0.02em; }
+.st i { font-style: normal; margin-right: 6px; }
+.st.ok { color: var(--ok); } .st.warn { color: var(--warn); } .st.bad { color: var(--bad); font-weight: 700; }
+.st.info { color: var(--info); } .st.mut { color: var(--ink2); }
+
+kbd {
+  font-size: 10px; color: var(--ink2);
+  border: 1px solid var(--rule2); border-radius: 0;
+  padding: 0 5px; line-height: 1.5;
+}
+
+/* ---- page scaffolding ---- */
+.page { width: 1440px; margin: 0 auto; padding: 32px 0 96px; }
+.pagehead { display: flex; align-items: baseline; gap: 16px; padding: 8px 4px 28px; border-bottom: 3px double var(--rule2); margin-bottom: 40px; }
+.pagehead h1 { font-size: 15px; font-weight: 700; margin: 0; letter-spacing: 0.01em; }
+.pagehead .sub { color: var(--ink2); font-size: 11px; }
+.pagehead button {
+  margin-left: auto; cursor: pointer; font: inherit; font-size: 11px;
+  color: var(--ink); background: transparent; border: 1px solid var(--rule2); padding: 5px 14px;
+}
+.pagehead button:hover { background: var(--rev); }
+.screen { margin-bottom: 84px; }
+.screenhead { padding: 0 4px 14px; }
+.screenhead h2 {
+  font-size: 10px; font-weight: 700; letter-spacing: 0.16em; text-transform: uppercase;
+  color: var(--ink3); margin: 0 0 6px;
+}
+.screenhead p { margin: 0; color: var(--ink2); font-size: 12px; max-width: 880px; line-height: 1.6; }
+.screenhead p b { color: var(--ink); }
+
+/* ---- app frame ---- */
+.app {
+  display: flex; height: 780px; overflow: hidden; position: relative;
+  background: var(--paper);
+  border-top: 3px double var(--rule3);
+  border-bottom: 3px double var(--rule3);
+}
+
+/* ---- fleet spine: a typeset rail, full names ---- */
+.spine {
+  width: 128px; flex-shrink: 0; padding: 14px 0;
+  border-right: 1px solid var(--rule2);
+  display: flex; flex-direction: column;
+}
+.spine .cap { font-size: 9.5px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--ink3); padding: 0 12px 8px; }
+.spine .cl {
+  display: flex; align-items: baseline; gap: 7px; padding: 4px 12px; font-size: 11px;
+  color: var(--ink2); cursor: pointer; border-left: 2px solid transparent; text-decoration: none;
+}
+.spine .cl:hover { background: var(--rev); }
+.spine .cl.cur { color: var(--ink); font-weight: 700; border-left-color: var(--ink); background: var(--rev); }
+.spine .cl .n { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.spine .cl .c { margin-left: auto; font-size: 10px; }
+.spine .foot { margin-top: auto; padding: 8px 12px 0; border-top: 1px solid var(--rule); font-size: 9.5px; color: var(--ink3); line-height: 1.8; }
+
+/* ---- masthead (topbar) ---- */
+.main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.mast {
+  flex-shrink: 0; display: flex; align-items: baseline; gap: 16px;
+  padding: 14px 20px 10px; border-bottom: 1px solid var(--rule2);
+}
+.mast h3 { margin: 0; font-size: 19px; font-weight: 700; letter-spacing: -0.01em; }
+.mast h3 .path { color: var(--ink3); font-weight: 400; }
+.mast .live { font-size: 10px; color: var(--ink3); letter-spacing: 0.06em; }
+.mast .live b { color: var(--ok); font-weight: 400; }
+.mast .right { margin-left: auto; display: flex; align-items: baseline; gap: 14px; }
+.mast .palhint { font-size: 11px; color: var(--ink2); cursor: pointer; }
+.mast .palhint:hover { color: var(--ink); }
+
+/* ---- lens nav: a ruled index line, not a sidebar ---- */
+.lensnav {
+  flex-shrink: 0; display: flex; gap: 0; padding: 0 20px; border-bottom: 1px solid var(--rule);
+  font-size: 11px; overflow-x: auto;
+}
+.lensnav a {
+  color: var(--ink2); text-decoration: none; padding: 7px 12px 6px; border-bottom: 2px solid transparent;
+  margin-bottom: -1px; white-space: nowrap;
+}
+.lensnav a:first-child { padding-left: 0; }
+.lensnav a:hover { color: var(--ink); }
+.lensnav a.cur { color: var(--ink); font-weight: 700; border-bottom-color: var(--ink); }
+.lensnav a .b { color: var(--bad); font-weight: 700; }
+.lensnav.sub { border-bottom: 1px solid var(--rule); }
+.lensnav.sub a { font-size: 10.5px; padding-top: 6px; padding-bottom: 5px; }
+
+.content { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; padding: 14px 20px 10px; gap: 12px; overflow: hidden; }
+
+/* ---- summary line: a sentence, not stat cards ---- */
+.sums { display: flex; gap: 0; align-items: baseline; flex-shrink: 0; font-size: 12px; color: var(--ink2); flex-wrap: wrap; }
+.sums .s { white-space: nowrap; }
+.sums .s b { font-size: 15px; font-weight: 700; color: var(--ink); letter-spacing: -0.01em; }
+.sums .s b.ok { color: var(--ok); } .sums .s b.warn { color: var(--warn); } .sums .s b.bad { color: var(--bad); } .sums .s b.dim { color: var(--ink3); }
+.sums .sep { color: var(--ink3); padding: 0 10px; }
+
+/* ---- filters: bracketed verbs ---- */
+.filters { display: flex; gap: 14px; flex-shrink: 0; font-size: 11px; align-items: baseline; }
+.f { color: var(--ink2); cursor: pointer; white-space: nowrap; }
+.f:hover { color: var(--ink); }
+.f.cur { color: var(--ink); font-weight: 700; text-decoration: underline; text-underline-offset: 3px; text-decoration-thickness: 1.5px; }
+.f.bad { color: var(--bad); }
+.f .n { color: var(--ink3); font-weight: 400; }
+.filters .free { margin-left: auto; font-size: 10px; color: var(--ink3); letter-spacing: 0.06em; }
+
+/* ---- ruled table ---- */
+.board { flex: 1; min-height: 0; display: grid; grid-template-columns: 1fr 420px; gap: 0; border-top: 3px double var(--rule2); }
+.listcol { display: flex; flex-direction: column; min-width: 0; min-height: 0; border-right: 1px solid var(--rule2); }
+.thead {
+  display: grid; align-items: baseline; gap: 10px; padding: 8px 12px 6px; flex-shrink: 0;
+  font-size: 9.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink3);
+  border-bottom: 1px solid var(--rule2);
+}
+.rows { overflow-y: auto; flex: 1; min-height: 0; }
+.row {
+  display: grid; align-items: baseline; gap: 10px; padding: 7px 12px;
+  font-size: 12px; border-bottom: 1px solid var(--rule);
+  cursor: pointer; min-width: 0; position: relative;
+}
+.row:hover { background: var(--rev); }
+.row.sel { background: var(--rev); }
+.row .gut { color: transparent; width: 10px; }
+.row.sel .gut { color: var(--ink); font-weight: 700; }
+.row.stale { opacity: 0.6; }
+.row .name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row .dim { color: var(--ink2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row .num { text-align: right; color: var(--ink2); }
+.row .num.bad { color: var(--bad); font-weight: 700; }
+.row .age { text-align: right; color: var(--ink3); font-size: 11px; }
+.cbx { color: var(--ink3); }
+.cbx.on { color: var(--info); font-weight: 700; }
+.listfoot {
+  flex-shrink: 0; display: flex; gap: 18px; padding: 7px 12px;
+  border-top: 1px solid var(--rule2); font-size: 10px; color: var(--ink3); letter-spacing: 0.04em;
+}
+.listfoot b { color: var(--ink2); font-weight: 400; }
+
+/* bulk line */
+.bulk {
+  flex-shrink: 0; display: flex; align-items: baseline; gap: 16px; padding: 7px 12px;
+  border-bottom: 1px solid var(--rule2); font-size: 12px; background: var(--info-dim);
+}
+.bulk b { color: var(--info); }
+.verb { color: var(--ink); cursor: pointer; white-space: nowrap; }
+.verb:hover { text-decoration: underline; text-underline-offset: 3px; }
+.verb.danger { color: var(--bad); }
+.verb kbd { margin-left: 4px; }
+.bulk .esc { margin-left: auto; font-size: 10px; color: var(--ink3); }
+
+/* ---- inspector: typeset panel, generous leading ---- */
+.insp { min-width: 0; min-height: 0; overflow-y: auto; padding: 0 0 12px; }
+.insp-head { padding: 14px 18px 12px; border-bottom: 1px solid var(--rule2); }
+.insp-kind { font-size: 9.5px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--ink3); margin-bottom: 4px; }
+.insp-title { font-size: 16px; font-weight: 700; word-break: break-all; line-height: 1.35; }
+.insp-meta { margin-top: 3px; font-size: 11px; color: var(--ink2); line-height: 1.65; }
+.insp-verdict { margin-top: 10px; font-size: 13px; line-height: 1.65; }
+.insp-verdict .why { color: var(--ink2); font-size: 11.5px; }
+.actions { padding: 9px 18px; border-bottom: 1px solid var(--rule); display: flex; gap: 14px; flex-wrap: wrap; font-size: 11.5px; }
+.isec { padding: 12px 18px 14px; border-bottom: 1px solid var(--rule); line-height: 1.65; }
+.isec:last-child { border-bottom: none; }
+.isec h4 { margin: 0 0 8px; font-size: 9.5px; font-weight: 700; letter-spacing: 0.16em; text-transform: uppercase; color: var(--ink3); }
+.kv { display: grid; grid-template-columns: 118px 1fr; gap: 2px 14px; font-size: 11.5px; margin: 0; }
+.kv dt { color: var(--ink3); }
+.kv dd { margin: 0; color: var(--ink); word-break: break-all; }
+.kv dd.d2 { color: var(--ink2); }
+a.ln { color: var(--info); text-decoration: none; border-bottom: 1px solid var(--info-dim); }
+a.ln:hover { border-bottom-color: var(--info); }
+.evline { display: grid; grid-template-columns: 14px 52px 1fr 44px; gap: 10px; font-size: 11.5px; padding: 3px 0; align-items: baseline; }
+.evline .cnt { color: var(--ink2); }
+.evline .cnt.hot { color: var(--bad); font-weight: 700; }
+.evline .msg { color: var(--ink2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.evline .when { color: var(--ink3); text-align: right; font-size: 10.5px; }
+
+/* ---- fleet ledger (no cards: stanzas ruled into a grid) ---- */
+.ledger {
+  flex: 1; min-height: 0; overflow-y: auto; display: grid; grid-template-columns: repeat(4, 1fr);
+  border-top: 3px double var(--rule2); border-left: 1px solid var(--rule);
+  align-content: start;
+}
+.stanza {
+  border-right: 1px solid var(--rule); border-bottom: 1px solid var(--rule);
+  padding: 12px 14px 10px; cursor: pointer; min-width: 0; min-height: 224px;
+  display: flex; flex-direction: column;
+}
+.stanza:hover { background: var(--rev); }
+.stanza .nm { font-size: 15px; font-weight: 700; letter-spacing: -0.01em; display: flex; align-items: baseline; gap: 8px; }
+.stanza .nm .g { font-size: 12px; }
+.stanza .meta { font-size: 10px; color: var(--ink3); margin-top: 2px; letter-spacing: 0.03em; }
+.stanza .verdict { margin: 8px 0 8px; font-size: 11.5px; line-height: 1.5; }
+.stanza table { width: 100%; border-collapse: collapse; font-size: 10.5px; margin-top: auto; }
+.stanza td { padding: 2.5px 0; border-top: 1px solid var(--rule); vertical-align: baseline; }
+.stanza td.l { color: var(--ink3); width: 72px; }
+.stanza td.v { text-align: right; }
+.stanza .foot { margin-top: 8px; padding-top: 6px; border-top: 1px solid var(--rule); font-size: 10px; color: var(--ink3); line-height: 1.5; }
+.stanza.off { color: var(--ink3); }
+.stanza.off .nm { color: var(--ink2); }
+
+/* mesh strip */
+.mesh { flex-shrink: 0; border-top: 3px double var(--rule2); padding: 8px 4px 2px; }
+.mesh .cap { font-size: 9.5px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--ink3); display: flex; gap: 14px; align-items: baseline; padding: 0 8px; }
+.mesh .cap .note { text-transform: none; letter-spacing: 0.02em; color: var(--warn); font-size: 10.5px; }
+
+/* legend */
+.legend { flex-shrink: 0; font-size: 10px; color: var(--ink3); letter-spacing: 0.04em; padding: 2px 4px 0; }
+
+/* ---- palette ---- */
+.overlay { position: absolute; inset: 0; background: var(--scrim); display: flex; align-items: flex-start; justify-content: center; padding-top: 90px; z-index: 10; }
+.overlay.center { align-items: center; padding-top: 0; }
+.pal {
+  width: 620px; background: var(--paper); overflow: hidden;
+  border-top: 3px double var(--rule3); border-bottom: 3px double var(--rule3);
+  border-left: 1px solid var(--rule2); border-right: 1px solid var(--rule2);
+  box-shadow: 0 24px 60px rgba(0,0,0,0.5);
+}
+.pal-in { display: flex; align-items: baseline; gap: 10px; padding: 14px 18px 12px; border-bottom: 1px solid var(--rule2); font-size: 15px; }
+.pal-in .pr { color: var(--info); font-weight: 700; }
+.pal-in .caret { display: inline-block; width: 8px; height: 15px; background: var(--ink); vertical-align: text-bottom; animation: blink 1.1s steps(1) infinite; }
+@keyframes blink { 50% { opacity: 0; } }
+.pal-in .esc { margin-left: auto; }
+.pal-grp { padding: 8px 0 4px; }
+.pal-grp h5 { margin: 0; padding: 2px 18px 6px; font-size: 9.5px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--ink3); font-weight: 700; }
+.pal-row { display: flex; align-items: baseline; gap: 12px; padding: 6px 18px; font-size: 12.5px; cursor: pointer; }
+.pal-row:hover { background: var(--rev); }
+.pal-row.sel { background: var(--rev); }
+.pal-row .gut { width: 12px; color: transparent; font-weight: 700; }
+.pal-row.sel .gut { color: var(--ink); }
+.pal-row mark { background: transparent; color: var(--info); font-weight: 700; text-decoration: underline; text-underline-offset: 3px; }
+.pal-row .hint { margin-left: auto; font-size: 10px; color: var(--ink3); white-space: nowrap; }
+.pal-row .hint .lock { color: var(--warn); }
+.pal-foot { display: flex; gap: 18px; padding: 9px 18px; border-top: 1px solid var(--rule2); font-size: 10px; color: var(--ink3); letter-spacing: 0.04em; }
+.pal-foot .more { color: var(--ink2); }
+.pal-foot .right { margin-left: auto; display: flex; gap: 14px; }
+
+/* ---- dialog: a typeset order form ---- */
+.dlg {
+  width: 740px; max-height: 92%; background: var(--paper); display: flex; flex-direction: column; overflow: hidden;
+  border-top: 3px double var(--bad); border-bottom: 3px double var(--bad);
+  border-left: 1px solid var(--rule2); border-right: 1px solid var(--rule2);
+  box-shadow: 0 24px 60px rgba(0,0,0,0.5);
+}
+.dlg-head { padding: 18px 24px 14px; border-bottom: 1px solid var(--rule2); display: flex; align-items: flex-start; gap: 14px; }
+.dlg-head .tri { color: var(--bad); font-size: 18px; line-height: 1.3; }
+.dlg-head h3 { margin: 0; font-size: 19px; font-weight: 700; letter-spacing: -0.01em; }
+.dlg-head .sub { color: var(--ink2); font-size: 12px; margin-top: 4px; line-height: 1.6; }
+.dlg-head .sub b { color: var(--ink); }
+.dlg-x { margin-left: auto; cursor: pointer; color: var(--ink3); font-size: 13px; border: none; background: none; font-family: inherit; padding: 2px 4px; }
+.dlg-x:hover { color: var(--ink); }
+.dlg-body { padding: 4px 24px 18px; overflow-y: auto; }
+.facts { display: grid; grid-template-columns: repeat(4, 1fr); border-bottom: 1px solid var(--rule2); }
+.fact { padding: 12px 0 10px; border-right: 1px solid var(--rule); padding-right: 14px; min-width: 0; }
+.fact:last-child { border-right: none; }
+.fact .l { font-size: 9.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink3); }
+.fact .v { font-size: 12px; margin-top: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.optrow { display: grid; grid-template-columns: 34px 220px 1fr; gap: 0 14px; padding: 10px 0; border-bottom: 1px solid var(--rule); align-items: baseline; cursor: pointer; }
+.optrow:hover { background: var(--rev); }
+.optrow .tick { font-weight: 700; }
+.optrow .tick.on { color: var(--info); }
+.optrow .tick.off { color: var(--ink3); }
+.optrow .tt { font-weight: 700; font-size: 12.5px; }
+.optrow .bd { color: var(--ink2); font-size: 11.5px; line-height: 1.6; }
+.optrow .bd b { color: var(--warn); font-weight: 400; }
+.cmd {
+  margin-top: 16px; background: var(--paper2); border-left: 3px solid var(--rule2);
+  padding: 12px 16px; font-size: 12px; line-height: 1.7; color: var(--ink2); overflow-x: auto; white-space: nowrap;
+}
+.cmd .pr { color: var(--ink3); }
+.cmd .kw { color: var(--ink); font-weight: 700; }
+.cmd .fl { color: var(--info); }
+.lockblock { margin-top: 16px; padding-top: 14px; border-top: 3px double var(--warn); }
+.lockblock .ln1 { color: var(--warn); font-size: 12px; }
+.lockblock .ln1 b { font-weight: 700; }
+.lockblock input {
+  margin-top: 8px; width: 100%; font: inherit; font-size: 13px; padding: 8px 12px;
+  background: var(--paper2); border: none; border-bottom: 1px solid var(--rule2); color: var(--ink);
+  letter-spacing: 0.04em;
+}
+.lockblock input:focus { outline: none; border-bottom-color: var(--warn); }
+.lockblock .prog { margin-top: 6px; font-size: 10px; color: var(--ink3); letter-spacing: 0.04em; }
+.dlg-foot { padding: 14px 24px; border-top: 1px solid var(--rule2); display: flex; align-items: baseline; gap: 20px; }
+.dlg-foot .why { font-size: 10px; color: var(--ink3); }
+.dlg-foot .btns { margin-left: auto; display: flex; gap: 18px; font-size: 13px; }
+.dlg-foot .b { cursor: pointer; }
+.dlg-foot .b:hover { text-decoration: underline; text-underline-offset: 3px; }
+.dlg-foot .b.go { color: var(--bad); font-weight: 700; opacity: 0.45; cursor: not-allowed; }
+.dlg-foot .b.go:hover { text-decoration: none; }
+
+/* issuance chain */
+.chain { font-size: 11.5px; line-height: 1.7; }
+.chain .nd { display: grid; grid-template-columns: 18px 1fr; }
+.chain .nd .g { color: var(--ink3); }
+.chain .nd .k { color: var(--ink3); }
+.chain .nd .why { color: var(--ink2); font-size: 10.5px; }
+.chain .nd.stuck { background: var(--bad-dim); border-left: 3px solid var(--bad); padding: 6px 10px; margin: 4px 0 2px -13px; }
+.chain .nd.stuck .why { color: var(--bad); }
+.chain .pipe { color: var(--ink3); padding-left: 4px; line-height: 1.1; }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <div class="pagehead">
+    <h1>Klyx · Direction B — Editorial Terminal</h1>
+    <span class="sub">beautifully typeset htop · one mono family, real hierarchy · rules instead of boxes · glyph + word status</span>
+    <button onclick="toggleTheme()">◐ light / dark</button>
+  </div>
+
+  <!-- ============ 01 FLEET OVERVIEW ============ -->
+  <section class="screen" id="s1">
+    <div class="screenhead">
+      <h2>01 · Fleet overview</h2>
+      <p class="sans"><b>What changed:</b> cards become ruled stanzas on one shared surface — no card chrome at all, just hairlines and a double rule opening the board. Each stanza leads with a plain-language verdict sentence set at reading size, then a small ruled table of signals. Status is always a glyph plus a word (● ◆ ▲ ◌ ‖ ⊘), so severity survives colour-blindness and monochrome screenshots; the legend line makes the vocabulary explicit.</p>
+    </div>
+    <div class="app" style="height: 740px;">
+      <div class="spine">
+        <div class="cap">fleet</div>
+        <a class="cl" href="#s1"><span class="g-mut">⊘</span><span class="n">nelli</span></a>
+        <a class="cl" href="#s1"><span class="g-warn">◆</span><span class="n">aks-stg-neu</span></a>
+        <a class="cl" href="#s1"><span class="g-warn">◆</span><span class="n">aks-stg-weu</span></a>
+        <a class="cl" href="#s1"><span class="g-ok">●</span><span class="n">aks-prd-weu</span></a>
+        <a class="cl" href="#s1"><span class="g-ok">●</span><span class="n">aks-prd-neu</span></a>
+        <a class="cl" href="#s1"><span class="g-ok">●</span><span class="n">aks-dev-weu</span></a>
+        <a class="cl" href="#s1"><span class="g-ok">●</span><span class="n">aks-dev-neu</span></a>
+        <div class="foot">● ok<br>◆ warning<br>▲ danger<br>⊘ unreachable</div>
+      </div>
+      <div class="main">
+        <div class="mast">
+          <h3>fleet <span class="path">/ 7 clusters</span></h3>
+          <span class="live"><b>●</b> live · 5 watching · 1 unreachable</span>
+          <div class="right"><span class="palhint">❯ jump or run a command <kbd>⌘K</kbd></span></div>
+        </div>
+        <div class="content">
+          <div class="sums">
+            <span class="s"><b>7</b> clusters</span><span class="sep">·</span>
+            <span class="s"><b class="bad">1</b> unreachable</span><span class="sep">·</span>
+            <span class="s"><b class="warn">1</b> degraded</span><span class="sep">·</span>
+            <span class="s"><b class="ok">5</b> healthy</span><span class="sep">·</span>
+            <span class="s"><b>41</b> nodes</span><span class="sep">·</span>
+            <span class="s"><b>1284</b> pods</span><span class="sep">·</span>
+            <span class="s"><b>96</b> gitops objects</span>
+          </div>
+
+          <div class="ledger">
+            <!-- unreachable first -->
+            <div class="stanza off">
+              <div class="nm"><span class="g g-mut">⊘</span>nelli</div>
+              <div class="meta">k3s / homelab / v1.32.1</div>
+              <div class="verdict">unreachable for <span title="since 2026-07-05 09:12:44 CEST">4h</span> — dial tcp 192.168.1.40:6443: i/o timeout</div>
+              <table>
+                <tr><td class="l">last seen</td><td class="v" title="2026-07-05 09:12:44 CEST">09:12 CEST</td></tr>
+                <tr><td class="l">last state</td><td class="v">3/3 nodes · 74 pods</td></tr>
+                <tr><td class="l">retry</td><td class="v">next in 42s</td></tr>
+              </table>
+              <div class="foot">reconnects automatically when reachable</div>
+            </div>
+
+            <!-- degraded -->
+            <div class="stanza">
+              <div class="nm"><span class="g g-warn">◆</span>aks-stg-neu</div>
+              <div class="meta">AKS / northeurope / v1.31.7</div>
+              <div class="verdict st warn">a node is NotReady and watches are stale</div>
+              <table>
+                <tr><td class="l">nodes</td><td class="v st warn">◆ 2/3 ready</td></tr>
+                <tr><td class="l">workloads</td><td class="v st ok">● 42 ok</td></tr>
+                <tr><td class="l">gitops</td><td class="v st ok">● flux 21 ready</td></tr>
+                <tr><td class="l">gateway</td><td class="v st warn">◆ 1 pending</td></tr>
+                <tr><td class="l">mesh</td><td class="v st warn" title="asymmetric: stg-weu → stg-neu handshake missing">◆ sw peer · asym</td></tr>
+                <tr><td class="l">freshness</td><td class="v st warn">◆ watch stale</td></tr>
+              </table>
+              <div class="foot">148 pods · raised above healthy clusters</div>
+            </div>
+
+            <!-- stg-weu -->
+            <div class="stanza">
+              <div class="nm"><span class="g g-warn">◆</span>aks-stg-weu</div>
+              <div class="meta">AKS / westeurope / v1.31.7</div>
+              <div class="verdict st warn">ClusterMesh peering with stg-neu is asymmetric</div>
+              <table>
+                <tr><td class="l">nodes</td><td class="v st mut">3/3 ready</td></tr>
+                <tr><td class="l">workloads</td><td class="v st ok">● 44 ok</td></tr>
+                <tr><td class="l">gitops</td><td class="v st ok">● flux 21 ready</td></tr>
+                <tr><td class="l">gateway</td><td class="v st ok">● 12 routes</td></tr>
+                <tr><td class="l">mesh</td><td class="v st warn">◆ sn peer · asym</td></tr>
+                <tr><td class="l">freshness</td><td class="v st ok">● live</td></tr>
+              </table>
+              <div class="foot">151 pods</div>
+            </div>
+
+            <!-- prd-weu -->
+            <div class="stanza">
+              <div class="nm"><span class="g g-ok">●</span>aks-prd-weu <span class="st warn" style="font-size:10px; margin-left:auto;" title="destructive verbs require typed confirmation">⌂ prd lock</span></div>
+              <div class="meta">AKS / westeurope / protected / v1.31.7</div>
+              <div class="verdict st mut">healthy — nothing needs attention</div>
+              <table>
+                <tr><td class="l">nodes</td><td class="v st mut">9/9 ready</td></tr>
+                <tr><td class="l">workloads</td><td class="v st ok">● 86 ok</td></tr>
+                <tr><td class="l">gitops</td><td class="v st ok">● flux 34 ready</td></tr>
+                <tr><td class="l">gateway</td><td class="v st ok">● 18 routes</td></tr>
+                <tr><td class="l">mesh</td><td class="v st ok">● pn peer</td></tr>
+                <tr><td class="l">freshness</td><td class="v st ok">● live</td></tr>
+              </table>
+              <div class="foot">312 pods</div>
+            </div>
+
+            <!-- prd-neu -->
+            <div class="stanza">
+              <div class="nm"><span class="g g-ok">●</span>aks-prd-neu <span class="st warn" style="font-size:10px; margin-left:auto;">⌂ prd lock</span></div>
+              <div class="meta">AKS / northeurope / protected / v1.31.7</div>
+              <div class="verdict st mut">healthy — nothing needs attention</div>
+              <table>
+                <tr><td class="l">nodes</td><td class="v st mut">9/9 ready</td></tr>
+                <tr><td class="l">workloads</td><td class="v st ok">● 83 ok</td></tr>
+                <tr><td class="l">gitops</td><td class="v st ok">● flux 34 ready</td></tr>
+                <tr><td class="l">gateway</td><td class="v st ok">● 18 routes</td></tr>
+                <tr><td class="l">mesh</td><td class="v st ok">● pw peer</td></tr>
+                <tr><td class="l">freshness</td><td class="v st ok">● live</td></tr>
+              </table>
+              <div class="foot">298 pods</div>
+            </div>
+
+            <!-- dev-weu -->
+            <div class="stanza">
+              <div class="nm"><span class="g g-ok">●</span>aks-dev-weu</div>
+              <div class="meta">AKS / westeurope / v1.32.0</div>
+              <div class="verdict st mut">healthy — nothing needs attention</div>
+              <table>
+                <tr><td class="l">nodes</td><td class="v st mut">6/6 ready</td></tr>
+                <tr><td class="l">workloads</td><td class="v st ok">● 61 ok</td></tr>
+                <tr><td class="l">gitops</td><td class="v st ok">● flux 18 · argo 6</td></tr>
+                <tr><td class="l">gateway</td><td class="v st ok">● 9 routes</td></tr>
+                <tr><td class="l">mesh</td><td class="v st ok">● dn peer</td></tr>
+                <tr><td class="l">freshness</td><td class="v st ok">● live</td></tr>
+              </table>
+              <div class="foot">214 pods</div>
+            </div>
+
+            <!-- dev-neu -->
+            <div class="stanza">
+              <div class="nm"><span class="g g-ok">●</span>aks-dev-neu</div>
+              <div class="meta">AKS / northeurope / v1.32.0</div>
+              <div class="verdict st mut">healthy — nothing needs attention</div>
+              <table>
+                <tr><td class="l">nodes</td><td class="v st mut">6/6 ready</td></tr>
+                <tr><td class="l">workloads</td><td class="v st ok">● 57 ok</td></tr>
+                <tr><td class="l">gitops</td><td class="v st ok">● flux 17 ready</td></tr>
+                <tr><td class="l">gateway</td><td class="v st mut">not detected</td></tr>
+                <tr><td class="l">mesh</td><td class="v st ok">● dw peer</td></tr>
+                <tr><td class="l">freshness</td><td class="v st ok">● live</td></tr>
+              </table>
+              <div class="foot">161 pods</div>
+            </div>
+          </div>
+
+          <div class="mesh">
+            <div class="cap">clustermesh <span class="note">◆ 1 asymmetric peering — stg-weu → stg-neu handshake missing</span></div>
+            <svg width="100%" height="70" viewBox="0 0 1200 70" preserveAspectRatio="xMidYMid meet">
+              <line x1="40" y1="52" x2="1160" y2="52" stroke="var(--rule2)" stroke-width="1"/>
+              <path d="M 140 52 Q 250 8 360 52" fill="none" stroke="var(--ok)" stroke-width="1.2"/>
+              <path d="M 360 52 Q 470 8 580 52" fill="none" stroke="var(--warn)" stroke-width="1.2" stroke-dasharray="5 4"/>
+              <path d="M 580 52 Q 745 -6 910 52" fill="none" stroke="var(--ok)" stroke-width="1.2"/>
+              <g font-size="10" font-family="ui-monospace, monospace">
+                <circle cx="140" cy="52" r="3.5" fill="var(--ok)"/><text x="140" y="67" text-anchor="middle" fill="var(--ink2)">dev-weu⇄dev-neu</text>
+                <circle cx="360" cy="52" r="3.5" fill="var(--ok)"/><text x="360" y="67" text-anchor="middle" fill="var(--ink2)">stg-weu</text>
+                <circle cx="580" cy="52" r="3.5" fill="var(--warn)"/><text x="580" y="67" text-anchor="middle" fill="var(--warn)">stg-neu · asym</text>
+                <circle cx="910" cy="52" r="3.5" fill="var(--ok)"/><text x="910" y="67" text-anchor="middle" fill="var(--ink2)">prd-weu⇄prd-neu</text>
+                <circle cx="1100" cy="52" r="3.5" fill="none" stroke="var(--ink3)" stroke-dasharray="2 2"/><text x="1100" y="67" text-anchor="middle" fill="var(--ink3)">nelli · no mesh</text>
+              </g>
+            </svg>
+          </div>
+          <div class="legend">status vocabulary — ● ok · ◆ warning · ▲ danger · ◌ syncing · ‖ suspended · ⊘ unreachable</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 02 PODS TRIAGE ============ -->
+  <section class="screen" id="s2">
+    <div class="screenhead">
+      <h2>02 · Pods triage — master-detail</h2>
+      <p class="sans"><b>What changed:</b> the list is a ruled table with tabular numerals; broken rows announce themselves through the ▲ glyph and bold status word, not row tinting. Selection is the terminal's own idiom — a ❯ prompt in the gutter plus faint reverse video — and checkboxes are typed [x] marks. The inspector reads top-to-bottom like a report: verdict sentence first, verbs as bracketed links, then containers, conditions and events at a generous 1.65 leading.</p>
+    </div>
+    <div class="app">
+      <div class="spine">
+        <div class="cap">fleet</div>
+        <a class="cl cur" href="#s2"><span class="g-bad">▲</span><span class="n">aks-dev-weu</span><span class="c g-bad">2</span></a>
+        <a class="cl" href="#s2"><span class="g-mut">⊘</span><span class="n">nelli</span></a>
+        <a class="cl" href="#s2"><span class="g-warn">◆</span><span class="n">aks-stg-neu</span></a>
+        <a class="cl" href="#s2"><span class="g-warn">◆</span><span class="n">aks-stg-weu</span></a>
+        <a class="cl" href="#s2"><span class="g-ok">●</span><span class="n">aks-prd-weu</span></a>
+        <a class="cl" href="#s2"><span class="g-ok">●</span><span class="n">aks-prd-neu</span></a>
+        <a class="cl" href="#s2"><span class="g-ok">●</span><span class="n">aks-dev-neu</span></a>
+        <div class="foot">● ok<br>◆ warning<br>▲ danger<br>⊘ unreachable</div>
+      </div>
+      <div class="main">
+        <div class="mast">
+          <h3>aks-dev-weu <span class="path">/ pods</span></h3>
+          <span class="live"><b>●</b> live · watch ok</span>
+          <div class="right"><span class="palhint">❯ jump or run a command <kbd>⌘K</kbd></span></div>
+        </div>
+        <div class="lensnav">
+          <a href="#s1">cluster</a>
+          <a href="#s2" class="cur">workloads <span class="b">2</span></a>
+          <a href="#s2">config</a>
+          <a href="#s2">autoscaling</a>
+          <a href="#s2">network</a>
+          <a href="#s2">storage</a>
+          <a href="#s2">access control</a>
+          <a href="#s2">gateway api</a>
+          <a href="#s5">cert-manager</a>
+          <a href="#s2">ext-secrets</a>
+          <a href="#s2">argo cd</a>
+          <a href="#s3">flux cd</a>
+          <a href="#s2">helm</a>
+          <a href="#s2">crds</a>
+        </div>
+        <div class="lensnav sub">
+          <a href="#s2">all workloads <span class="b">2</span></a>
+          <a href="#s2" class="cur">pods <span class="b">2</span></a>
+          <a href="#s2">deployments</a>
+          <a href="#s2">statefulsets</a>
+          <a href="#s2">daemonsets</a>
+          <a href="#s2">replicasets</a>
+          <a href="#s2">jobs</a>
+          <a href="#s2">cronjobs</a>
+        </div>
+        <div class="content">
+          <div class="sums">
+            <span class="s"><b>214</b> pods</span><span class="sep">·</span>
+            <span class="s"><b class="bad">1</b> crashloop</span><span class="sep">·</span>
+            <span class="s"><b class="bad">1</b> imagepull</span><span class="sep">·</span>
+            <span class="s"><b class="warn">2</b> pending</span><span class="sep">·</span>
+            <span class="s"><b class="dim">1</b> syncing</span><span class="sep">·</span>
+            <span class="s"><b class="ok">209</b> running</span>
+          </div>
+          <div class="filters">
+            <span class="f cur">all <span class="n">214</span></span>
+            <span class="f bad">broken <span class="n">2</span></span>
+            <span class="f">pending <span class="n">2</span></span>
+            <span class="f">running <span class="n">209</span></span>
+            <span class="f">ns: all ▾</span>
+            <span class="free">broken first · sorted by severity</span>
+          </div>
+          <div class="board">
+            <div class="listcol">
+              <div class="bulk">
+                <span><b>3 pods</b> selected</span>
+                <span class="verb danger">[delete selected]</span>
+                <span class="verb">[restart owners]</span>
+                <span class="esc">esc clears selection</span>
+              </div>
+              <div class="thead" style="grid-template-columns: 10px 18px minmax(180px,1.4fr) 96px 40px 170px 30px 40px 90px;">
+                <span></span><span></span><span>name</span><span>namespace</span><span>ready</span><span>status</span><span style="text-align:right;">↻</span><span style="text-align:right;">age</span><span>node</span>
+              </div>
+              <div class="rows">
+                <div class="row sel" style="grid-template-columns: 10px 18px minmax(180px,1.4fr) 96px 40px 170px 30px 40px 90px;">
+                  <span class="gut">❯</span><span class="cbx on">[x]</span>
+                  <span class="name">api-6f9d84c7b5-2xkqv</span>
+                  <span class="dim">web</span>
+                  <span class="num bad">0/1</span>
+                  <span class="st bad"><i>▲</i>CrashLoopBackOff</span>
+                  <span class="num bad">7</span>
+                  <span class="age" title="started 2026-07-05 12:58:11 CEST">22m</span>
+                  <span class="dim">aks-user-8</span>
+                </div>
+                <div class="row" style="grid-template-columns: 10px 18px minmax(180px,1.4fr) 96px 40px 170px 30px 40px 90px;">
+                  <span class="gut">❯</span><span class="cbx on">[x]</span>
+                  <span class="name">checkout-59c6bd7f4d-hw2pl</span>
+                  <span class="dim">shop</span>
+                  <span class="num bad">0/1</span>
+                  <span class="st bad"><i>▲</i>ImagePullBackOff</span>
+                  <span class="num">0</span>
+                  <span class="age" title="started 2026-07-05 13:11:02 CEST">9m</span>
+                  <span class="dim">aks-user-4</span>
+                </div>
+                <div class="row" style="grid-template-columns: 10px 18px minmax(180px,1.4fr) 96px 40px 170px 30px 40px 90px;">
+                  <span class="gut">❯</span><span class="cbx on">[x]</span>
+                  <span class="name">prometheus-kps-1</span>
+                  <span class="dim">monitoring</span>
+                  <span class="num">0/2</span>
+                  <span class="st warn"><i>◆</i>Pending·Unschedulable</span>
+                  <span class="num">0</span>
+                  <span class="age" title="created 2026-07-05 12:33:40 CEST">46m</span>
+                  <span class="dim">—</span>
+                </div>
+                <div class="row" style="grid-template-columns: 10px 18px minmax(180px,1.4fr) 96px 40px 170px 30px 40px 90px;">
+                  <span class="gut">❯</span><span class="cbx">[ ]</span>
+                  <span class="name">loki-write-2</span>
+                  <span class="dim">monitoring</span>
+                  <span class="num">0/1</span>
+                  <span class="st warn"><i>◆</i>Pending</span>
+                  <span class="num">0</span>
+                  <span class="age" title="created 2026-07-05 13:16:55 CEST">3m</span>
+                  <span class="dim">—</span>
+                </div>
+                <div class="row stale" title="spec changed 40s ago — controller has not observed generation 12 yet" style="grid-template-columns: 10px 18px minmax(180px,1.4fr) 96px 40px 170px 30px 40px 90px;">
+                  <span class="gut">❯</span><span class="cbx">[ ]</span>
+                  <span class="name" style="font-weight:400;">envoy-gateway-7bd549d97c-fmm2s</span>
+                  <span class="dim">ingress</span>
+                  <span class="num">1/1</span>
+                  <span class="st mut"><i>◌</i>Syncing…</span>
+                  <span class="num">0</span>
+                  <span class="age" title="started 2026-07-01 08:14:03 CEST">4d</span>
+                  <span class="dim">aks-sys-2</span>
+                </div>
+                <div class="row" style="grid-template-columns: 10px 18px minmax(180px,1.4fr) 96px 40px 170px 30px 40px 90px;">
+                  <span class="gut">❯</span><span class="cbx">[ ]</span><span class="name" style="font-weight:400;">web-frontend-857fd44b6c-qp8zn</span><span class="dim">web</span><span class="num">1/1</span>
+                  <span class="st ok"><i>●</i>Running</span><span class="num">0</span><span class="age" title="started 2026-07-03 17:40:19 CEST">2d</span><span class="dim">aks-user-2</span>
+                </div>
+                <div class="row" style="grid-template-columns: 10px 18px minmax(180px,1.4fr) 96px 40px 170px 30px 40px 90px;">
+                  <span class="gut">❯</span><span class="cbx">[ ]</span><span class="name" style="font-weight:400;">cart-6b8f4dd9c8-x4mfw</span><span class="dim">shop</span><span class="num">1/1</span>
+                  <span class="st ok"><i>●</i>Running</span><span class="num">1</span><span class="age" title="started 2026-07-02 10:03:52 CEST">3d</span><span class="dim">aks-user-6</span>
+                </div>
+                <div class="row" style="grid-template-columns: 10px 18px minmax(180px,1.4fr) 96px 40px 170px 30px 40px 90px;">
+                  <span class="gut">❯</span><span class="cbx">[ ]</span><span class="name" style="font-weight:400;">source-controller-6c9bd7c8d4-pl2wn</span><span class="dim">flux-system</span><span class="num">1/1</span>
+                  <span class="st ok"><i>●</i>Running</span><span class="num">0</span><span class="age" title="started 2026-06-21 06:12:30 CEST">14d</span><span class="dim">aks-sys-1</span>
+                </div>
+                <div class="row" style="grid-template-columns: 10px 18px minmax(180px,1.4fr) 96px 40px 170px 30px 40px 90px;">
+                  <span class="gut">❯</span><span class="cbx">[ ]</span><span class="name" style="font-weight:400;">kustomize-controller-7d8dd5cf55-8kkzt</span><span class="dim">flux-system</span><span class="num">1/1</span>
+                  <span class="st ok"><i>●</i>Running</span><span class="num">0</span><span class="age" title="started 2026-06-21 06:12:31 CEST">14d</span><span class="dim">aks-sys-1</span>
+                </div>
+                <div class="row" style="grid-template-columns: 10px 18px minmax(180px,1.4fr) 96px 40px 170px 30px 40px 90px;">
+                  <span class="gut">❯</span><span class="cbx">[ ]</span><span class="name" style="font-weight:400;">grafana-64d99cd6c6-tt5rh</span><span class="dim">monitoring</span><span class="num">2/2</span>
+                  <span class="st ok"><i>●</i>Running</span><span class="num">0</span><span class="age" title="started 2026-06-28 22:51:07 CEST">7d</span><span class="dim">aks-user-1</span>
+                </div>
+                <div class="row" style="grid-template-columns: 10px 18px minmax(180px,1.4fr) 96px 40px 170px 30px 40px 90px;">
+                  <span class="gut">❯</span><span class="cbx">[ ]</span><span class="name" style="font-weight:400;">cilium-x2ldr</span><span class="dim">kube-system</span><span class="num">1/1</span>
+                  <span class="st ok"><i>●</i>Running</span><span class="num">0</span><span class="age" title="started 2026-06-14 04:20:11 CEST">21d</span><span class="dim">aks-sys-3</span>
+                </div>
+                <div class="row" style="grid-template-columns: 10px 18px minmax(180px,1.4fr) 96px 40px 170px 30px 40px 90px;">
+                  <span class="gut">❯</span><span class="cbx">[ ]</span><span class="name" style="font-weight:400;">cert-manager-5f6cc8c4dd-mvjq7</span><span class="dim">cert-manager</span><span class="num">1/1</span>
+                  <span class="st ok"><i>●</i>Running</span><span class="num">0</span><span class="age" title="started 2026-06-21 06:14:02 CEST">14d</span><span class="dim">aks-sys-2</span>
+                </div>
+                <div class="row" style="grid-template-columns: 10px 18px minmax(180px,1.4fr) 96px 40px 170px 30px 40px 90px;">
+                  <span class="gut">❯</span><span class="cbx">[ ]</span><span class="name" style="font-weight:400;">external-secrets-79dd9c6f6b-nb4kd</span><span class="dim">external-secrets</span><span class="num">1/1</span>
+                  <span class="st ok"><i>●</i>Running</span><span class="num">0</span><span class="age" title="started 2026-06-21 06:14:40 CEST">14d</span><span class="dim">aks-sys-2</span>
+                </div>
+                <div class="row" style="grid-template-columns: 10px 18px minmax(180px,1.4fr) 96px 40px 170px 30px 40px 90px;">
+                  <span class="gut">❯</span><span class="cbx">[ ]</span><span class="name" style="font-weight:400;">loki-read-0</span><span class="dim">monitoring</span><span class="num">1/1</span>
+                  <span class="st ok"><i>●</i>Running</span><span class="num">0</span><span class="age" title="started 2026-06-28 22:52:18 CEST">7d</span><span class="dim">aks-user-3</span>
+                </div>
+              </div>
+              <div class="listfoot">
+                <span><b>j/k</b> navigate</span>
+                <span><b>space</b> select</span>
+                <span><b>↵</b> inspect</span>
+                <span><b>l</b> logs</span>
+                <span style="margin-left:auto;">showing 14 of 214 · broken first</span>
+              </div>
+            </div>
+            <div class="insp">
+              <div class="insp-head">
+                <div class="insp-kind">pod · web · aks-user-8 · 10.244.3.117</div>
+                <div class="insp-title">api-6f9d84c7b5-2xkqv</div>
+                <div class="insp-verdict">
+                  <span class="st bad"><i>▲</i>CrashLoopBackOff</span> — <span style="color:var(--ink2);">0/1 ready · 7 restarts · up <span title="started 2026-07-05 12:58:11 CEST">22m</span></span>
+                  <div class="why">container <b style="color:var(--ink); font-weight:700;">api</b> was OOMKilled (exit 137) and is in a 5m back-off; reason BackOff.</div>
+                </div>
+              </div>
+              <div class="actions">
+                <span class="verb">[logs<kbd>l</kbd>]</span>
+                <span class="verb">[shell]</span>
+                <span class="verb">[describe]</span>
+                <span class="verb">[port-fwd]</span>
+                <span class="verb danger">[restart]</span>
+                <span class="verb danger">[delete]</span>
+              </div>
+              <div class="isec">
+                <h4>containers — 1</h4>
+                <dl class="kv">
+                  <dt>api</dt><dd><span class="st bad"><i>▲</i>waiting · CrashLoopBackOff</span></dd>
+                  <dt>image</dt><dd class="d2">ghcr.io/acme/api:1.42.3</dd>
+                  <dt>last state</dt><dd><span class="g-bad">OOMKilled (exit 137)</span> · <span class="d2" title="2026-07-05 13:17:44 CEST">3m ago</span></dd>
+                  <dt>restarts</dt><dd class="d2">7 · back-off 5m0s</dd>
+                  <dt>memory</dt><dd class="d2">limit 512Mi · last peak 511Mi</dd>
+                </dl>
+              </div>
+              <div class="isec">
+                <h4>conditions</h4>
+                <dl class="kv">
+                  <dt>PodScheduled</dt><dd class="st ok"><i>●</i>True</dd>
+                  <dt>Initialized</dt><dd class="st ok"><i>●</i>True</dd>
+                  <dt>ContainersReady</dt><dd class="st bad"><i>▲</i>False · ContainersNotReady</dd>
+                  <dt>Ready</dt><dd class="st bad"><i>▲</i>False</dd>
+                </dl>
+              </div>
+              <div class="isec">
+                <h4>events</h4>
+                <div class="evline"><span class="g-bad">▲</span><span class="cnt hot" title="28,412 occurrences">×28k</span><span class="msg" title="Back-off restarting failed container api in pod api-6f9d84c7b5-2xkqv">BackOff · restarting failed container api</span><span class="when" title="last 2026-07-05 13:19:58 CEST">41s</span></div>
+                <div class="evline"><span class="g-warn">◆</span><span class="cnt" title="112 occurrences">×112</span><span class="msg" title="Readiness probe failed: dial tcp 10.244.3.117:8080: connect: connection refused">Unhealthy · readiness probe: connection refused</span><span class="when">2m</span></div>
+                <div class="evline"><span class="g-mut">·</span><span class="cnt">×7</span><span class="msg">Pulled · image already present on machine</span><span class="when">3m</span></div>
+                <div class="evline"><span class="g-mut">·</span><span class="cnt">×7</span><span class="msg">Started · container api</span><span class="when">3m</span></div>
+              </div>
+              <div class="isec">
+                <h4>owner</h4>
+                <dl class="kv">
+                  <dt>ReplicaSet</dt><dd><a class="ln" href="#s2">api-6f9d84c7b5</a></dd>
+                  <dt>Deployment</dt><dd><a class="ln" href="#s2">web/api</a> <span class="d2">· 0/1 available</span></dd>
+                  <dt>managed by</dt><dd class="d2">flux · <a class="ln" href="#s3">ks apps-web</a></dd>
+                </dl>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 03 FLUX LENS ============ -->
+  <section class="screen" id="s3">
+    <div class="screenhead">
+      <h2>03 · Flux lens</h2>
+      <p class="sans"><b>What changed:</b> Flux speaks its own vocabulary in its own glyphs — ● ready, ◌ syncing, ‖ suspended (a pause mark, deliberately not a warning triangle), ▲ failed with the reason word set bold beside it. Revisions are first-class typography: the in-flight upgrade reads as “4.10.0 → 4.10.1” right in the row. The inspector orders cause before effect — source, dependsOn, inventory with the one unhealthy object bolded — at reading leading.</p>
+    </div>
+    <div class="app">
+      <div class="spine">
+        <div class="cap">fleet</div>
+        <a class="cl cur" href="#s3"><span class="g-bad">▲</span><span class="n">aks-stg-weu</span><span class="c g-bad">1</span></a>
+        <a class="cl" href="#s3"><span class="g-mut">⊘</span><span class="n">nelli</span></a>
+        <a class="cl" href="#s3"><span class="g-warn">◆</span><span class="n">aks-stg-neu</span></a>
+        <a class="cl" href="#s3"><span class="g-ok">●</span><span class="n">aks-prd-weu</span></a>
+        <a class="cl" href="#s3"><span class="g-ok">●</span><span class="n">aks-prd-neu</span></a>
+        <a class="cl" href="#s3"><span class="g-ok">●</span><span class="n">aks-dev-weu</span></a>
+        <a class="cl" href="#s3"><span class="g-ok">●</span><span class="n">aks-dev-neu</span></a>
+        <div class="foot">● ok<br>◆ warning<br>▲ danger<br>⊘ unreachable</div>
+      </div>
+      <div class="main">
+        <div class="mast">
+          <h3>aks-stg-weu <span class="path">/ flux</span></h3>
+          <span class="live"><b>●</b> live · source-controller ok</span>
+          <div class="right"><span class="palhint">❯ jump or run a command <kbd>⌘K</kbd></span></div>
+        </div>
+        <div class="lensnav">
+          <a href="#s1">cluster</a>
+          <a href="#s2">workloads</a>
+          <a href="#s2">config</a>
+          <a href="#s2">autoscaling</a>
+          <a href="#s2">network</a>
+          <a href="#s2">storage</a>
+          <a href="#s2">access control</a>
+          <a href="#s2">gateway api</a>
+          <a href="#s5">cert-manager</a>
+          <a href="#s2">ext-secrets</a>
+          <a href="#s2">argo cd</a>
+          <a href="#s3" class="cur">flux cd <span class="b">1</span></a>
+          <a href="#s2">helm</a>
+          <a href="#s2">crds</a>
+        </div>
+        <div class="lensnav sub">
+          <a href="#s3" class="cur">kustomizations <span class="b">1</span></a>
+          <a href="#s3">helmreleases</a>
+          <a href="#s3">gitrepositories</a>
+          <a href="#s3">helmrepositories</a>
+          <a href="#s3">ocirepositories</a>
+          <a href="#s3">buckets</a>
+          <a href="#s3">providers</a>
+          <a href="#s3">alerts</a>
+          <a href="#s3">receivers</a>
+        </div>
+        <div class="content">
+          <div class="sums">
+            <span class="s"><b>21</b> kustomizations</span><span class="sep">·</span>
+            <span class="s"><b>9</b> helmreleases</span><span class="sep">·</span>
+            <span class="s"><b class="bad">1</b> failed</span><span class="sep">·</span>
+            <span class="s"><b class="warn">1</b> suspended</span><span class="sep">·</span>
+            <span class="s"><b class="dim">1</b> reconciling</span><span class="sep">·</span>
+            <span class="s"><b class="ok">27</b> ready</span>
+          </div>
+          <div class="filters">
+            <span class="f cur">all <span class="n">30</span></span>
+            <span class="f bad">failed <span class="n">1</span></span>
+            <span class="f">suspended <span class="n">1</span></span>
+            <span class="f">kustomizations <span class="n">21</span></span>
+            <span class="f">helmreleases <span class="n">9</span></span>
+            <span class="free">broken first</span>
+          </div>
+          <div class="board">
+            <div class="listcol">
+              <div class="thead" style="grid-template-columns: 10px 26px minmax(160px,1.2fr) 96px minmax(140px,1fr) 220px 40px;">
+                <span></span><span>kind</span><span>name</span><span>namespace</span><span>revision</span><span>status</span><span style="text-align:right;">age</span>
+              </div>
+              <div class="rows">
+                <div class="row sel" style="grid-template-columns: 10px 26px minmax(160px,1.2fr) 96px minmax(140px,1fr) 220px 40px;">
+                  <span class="gut">❯</span><span class="dim">hr</span>
+                  <span class="name">kube-prometheus-stack</span>
+                  <span class="dim">monitoring</span>
+                  <span class="dim">58.2.1</span>
+                  <span class="st bad"><i>▲</i>Failed · HealthCheckFailed</span>
+                  <span class="age" title="created 2026-03-02">125d</span>
+                </div>
+                <div class="row" style="grid-template-columns: 10px 26px minmax(160px,1.2fr) 96px minmax(140px,1fr) 220px 40px;">
+                  <span class="gut">❯</span><span class="dim">ks</span>
+                  <span class="name">tenants</span>
+                  <span class="dim">flux-system</span>
+                  <span class="dim">main@sha1:44b1a20</span>
+                  <span class="st warn" title="paused on purpose — resume with s"><i>‖</i>suspended</span>
+                  <span class="age" title="created 2026-01-18">168d</span>
+                </div>
+                <div class="row stale" title="new revision fetched 55s ago — kustomize-controller reconciling" style="grid-template-columns: 10px 26px minmax(160px,1.2fr) 96px minmax(140px,1fr) 220px 40px;">
+                  <span class="gut">❯</span><span class="dim">hr</span>
+                  <span class="name" style="font-weight:400;">ingress-nginx</span>
+                  <span class="dim">ingress</span>
+                  <span class="dim">4.10.0 → 4.10.1</span>
+                  <span class="st mut"><i>◌</i>Syncing…</span>
+                  <span class="age" title="created 2026-02-11">144d</span>
+                </div>
+                <div class="row" style="grid-template-columns: 10px 26px minmax(160px,1.2fr) 96px minmax(140px,1fr) 220px 40px;">
+                  <span class="gut">❯</span><span class="dim">ks</span><span class="name" style="font-weight:400;">flux-system</span><span class="dim">flux-system</span><span class="dim">main@sha1:8f3c21d</span>
+                  <span class="st ok"><i>●</i>Ready</span><span class="age" title="created 2026-01-18">168d</span>
+                </div>
+                <div class="row" style="grid-template-columns: 10px 26px minmax(160px,1.2fr) 96px minmax(140px,1fr) 220px 40px;">
+                  <span class="gut">❯</span><span class="dim">ks</span><span class="name" style="font-weight:400;">infra-cilium</span><span class="dim">flux-system</span><span class="dim">main@sha1:8f3c21d</span>
+                  <span class="st ok"><i>●</i>Ready</span><span class="age">168d</span>
+                </div>
+                <div class="row" style="grid-template-columns: 10px 26px minmax(160px,1.2fr) 96px minmax(140px,1fr) 220px 40px;">
+                  <span class="gut">❯</span><span class="dim">ks</span><span class="name" style="font-weight:400;">infra-monitoring-crds</span><span class="dim">flux-system</span><span class="dim">main@sha1:8f3c21d</span>
+                  <span class="st ok"><i>●</i>Ready</span><span class="age">121d</span>
+                </div>
+                <div class="row" style="grid-template-columns: 10px 26px minmax(160px,1.2fr) 96px minmax(140px,1fr) 220px 40px;">
+                  <span class="gut">❯</span><span class="dim">hr</span><span class="name" style="font-weight:400;">cert-manager</span><span class="dim">cert-manager</span><span class="dim">v1.15.3</span>
+                  <span class="st ok"><i>●</i>Ready</span><span class="age">168d</span>
+                </div>
+                <div class="row" style="grid-template-columns: 10px 26px minmax(160px,1.2fr) 96px minmax(140px,1fr) 220px 40px;">
+                  <span class="gut">❯</span><span class="dim">hr</span><span class="name" style="font-weight:400;">external-secrets</span><span class="dim">external-secrets</span><span class="dim">0.10.4</span>
+                  <span class="st ok"><i>●</i>Ready</span><span class="age">150d</span>
+                </div>
+                <div class="row" style="grid-template-columns: 10px 26px minmax(160px,1.2fr) 96px minmax(140px,1fr) 220px 40px;">
+                  <span class="gut">❯</span><span class="dim">hr</span><span class="name" style="font-weight:400;">envoy-gateway</span><span class="dim">ingress</span><span class="dim">1.2.0</span>
+                  <span class="st ok"><i>●</i>Ready</span><span class="age">98d</span>
+                </div>
+                <div class="row" style="grid-template-columns: 10px 26px minmax(160px,1.2fr) 96px minmax(140px,1fr) 220px 40px;">
+                  <span class="gut">❯</span><span class="dim">ks</span><span class="name" style="font-weight:400;">apps-web</span><span class="dim">flux-system</span><span class="dim">main@sha1:8f3c21d</span>
+                  <span class="st ok"><i>●</i>Ready</span><span class="age">140d</span>
+                </div>
+                <div class="row" style="grid-template-columns: 10px 26px minmax(160px,1.2fr) 96px minmax(140px,1fr) 220px 40px;">
+                  <span class="gut">❯</span><span class="dim">ks</span><span class="name" style="font-weight:400;">apps-shop</span><span class="dim">flux-system</span><span class="dim">main@sha1:8f3c21d</span>
+                  <span class="st ok"><i>●</i>Ready</span><span class="age">140d</span>
+                </div>
+              </div>
+              <div class="listfoot">
+                <span><b>j/k</b> navigate</span>
+                <span><b>↵</b> inspect</span>
+                <span><b>r</b> reconcile</span>
+                <span><b>s</b> suspend/resume</span>
+                <span style="margin-left:auto;">showing 11 of 30 · broken first</span>
+              </div>
+            </div>
+            <div class="insp">
+              <div class="insp-head">
+                <div class="insp-kind">helmrelease · monitoring · chart 58.2.1 · 125d</div>
+                <div class="insp-title">kube-prometheus-stack</div>
+                <div class="insp-verdict">
+                  <span class="st bad"><i>▲</i>Failed · HealthCheckFailed</span> <span style="color:var(--ink2);" title="attempt 3 of 5 · next retry in 4m">· retry 3/5</span>
+                  <div class="why">upgrade to 58.2.1 installed, but StatefulSet <b style="color:var(--ink); font-weight:700;">prometheus-kps</b> never became ready within 5m0s.</div>
+                </div>
+              </div>
+              <div class="actions">
+                <span class="verb">[reconcile<kbd>r</kbd>]</span>
+                <span class="verb">[reconcile with source]</span>
+                <span class="verb">[suspend<kbd>s</kbd>]</span>
+                <span class="verb">[diff]</span>
+              </div>
+              <div class="isec">
+                <h4>source</h4>
+                <dl class="kv">
+                  <dt>HelmRepository</dt><dd><a class="ln" href="#s3">prometheus-community</a> <span class="st ok" style="font-size:11px;"><i>●</i>Ready</span></dd>
+                  <dt>chart</dt><dd class="d2">kube-prometheus-stack-58.2.1</dd>
+                  <dt>fetched</dt><dd class="d2"><span title="2026-07-05 13:04:11 CEST">17m ago</span></dd>
+                </dl>
+              </div>
+              <div class="isec">
+                <h4>dependsOn</h4>
+                <dl class="kv">
+                  <dt>ks</dt><dd><a class="ln" href="#s3">flux-system/infra-monitoring-crds</a> <span class="st ok" style="font-size:11px;"><i>●</i>Ready</span></dd>
+                </dl>
+              </div>
+              <div class="isec">
+                <h4>inventory — 4 of 38 shown</h4>
+                <dl class="kv">
+                  <dt>Deployment</dt><dd><a class="ln" href="#s2">monitoring/kps-operator</a> <span class="st ok" style="font-size:11px;"><i>●</i>ok</span></dd>
+                  <dt>StatefulSet</dt><dd><a class="ln" href="#s2"><b>monitoring/prometheus-kps</b></a> <span class="st bad" style="font-size:11px;"><i>▲</i>1/2 ready</span></dd>
+                  <dt>Deployment</dt><dd><a class="ln" href="#s2">monitoring/kps-grafana</a> <span class="st ok" style="font-size:11px;"><i>●</i>ok</span></dd>
+                  <dt>DaemonSet</dt><dd><a class="ln" href="#s2">monitoring/kps-node-exporter</a> <span class="st ok" style="font-size:11px;"><i>●</i>ok</span></dd>
+                </dl>
+                <div style="font-size:10px; color:var(--ink3); margin-top:6px;">+34 more — all healthy</div>
+              </div>
+              <div class="isec">
+                <h4>events</h4>
+                <div class="evline"><span class="g-bad">▲</span><span class="cnt hot" title="14 occurrences">×14</span><span class="msg" title="health check failed after 5m0s: timed out waiting for StatefulSet monitoring/prometheus-kps to become ready">HealthCheckFailed · prometheus-kps not ready in 5m0s</span><span class="when" title="last 2026-07-05 13:18:20 CEST">2m</span></div>
+                <div class="evline"><span class="g-mut">·</span><span class="cnt">×3</span><span class="msg">UpgradeAttempt · helm upgrade started</span><span class="when">18m</span></div>
+                <div class="evline"><span class="g-mut">·</span><span class="cnt">×1</span><span class="msg">ArtifactUpToDate · chart 58.2.1 verified</span><span class="when">17m</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 04 COMMAND PALETTE ============ -->
+  <section class="screen" id="s4">
+    <div class="screenhead">
+      <h2>04 · Command palette — “dra”</h2>
+      <p class="sans"><b>What changed:</b> the palette is literally a prompt — ❯ dra with a block caret — and results are typeset lines, matched letters underlined in the accent. Destructive verbs carry their cluster and its prd-lock warning in the margin column before you can commit. The footer stays honest: “+12 more — keep typing”, “showing loaded data”.</p>
+    </div>
+    <div class="app" style="height: 560px;">
+      <div class="spine" style="opacity:0.45;">
+        <div class="cap">fleet</div>
+        <a class="cl cur" href="#s4"><span class="g-bad">▲</span><span class="n">aks-dev-weu</span><span class="c g-bad">2</span></a>
+        <a class="cl" href="#s4"><span class="g-mut">⊘</span><span class="n">nelli</span></a>
+        <a class="cl" href="#s4"><span class="g-warn">◆</span><span class="n">aks-stg-neu</span></a>
+        <a class="cl" href="#s4"><span class="g-warn">◆</span><span class="n">aks-stg-weu</span></a>
+        <a class="cl" href="#s4"><span class="g-ok">●</span><span class="n">aks-prd-weu</span></a>
+        <a class="cl" href="#s4"><span class="g-ok">●</span><span class="n">aks-prd-neu</span></a>
+        <a class="cl" href="#s4"><span class="g-ok">●</span><span class="n">aks-dev-neu</span></a>
+      </div>
+      <div class="main" style="opacity:0.45;">
+        <div class="mast">
+          <h3>aks-dev-weu <span class="path">/ pods</span></h3>
+          <span class="live"><b>●</b> live</span>
+        </div>
+        <div class="content">
+          <div class="sums">
+            <span class="s"><b>214</b> pods</span><span class="sep">·</span>
+            <span class="s"><b class="bad">2</b> broken</span><span class="sep">·</span>
+            <span class="s"><b class="warn">2</b> pending</span>
+          </div>
+          <div style="flex:1; border-top: 3px double var(--rule2);"></div>
+        </div>
+      </div>
+      <div class="overlay">
+        <div class="pal">
+          <div class="pal-in">
+            <span class="pr">❯</span>
+            <span>dra<span class="caret"></span></span>
+            <span class="esc"><kbd>esc</kbd></span>
+          </div>
+          <div class="pal-grp">
+            <h5>actions</h5>
+            <div class="pal-row sel">
+              <span class="gut">❯</span>
+              <span class="t"><mark>d</mark><mark>r</mark><mark>a</mark>in node aks-sys-3-vmss000002</span>
+              <span class="hint"><span class="lock">⌂ prd lock</span> · aks-prd-weu · ↵</span>
+            </div>
+            <div class="pal-row">
+              <span class="gut">❯</span>
+              <span class="t"><mark>d</mark><mark>r</mark><mark>a</mark>in node aks-user-12-vmss000011</span>
+              <span class="hint">aks-dev-weu</span>
+            </div>
+            <div class="pal-row">
+              <span class="gut">❯</span>
+              <span class="t">restart deployment web/api</span>
+              <span class="hint" title="matched on hint: day-2 restart"><mark>d</mark>ay-2 <mark>r</mark>est<mark>a</mark>rt · aks-dev-weu</span>
+            </div>
+            <div class="pal-row">
+              <span class="gut">❯</span>
+              <span class="t"><mark>d</mark>esc<mark>r</mark>ibe pod <mark>a</mark>pi-6f9d84c7b5-2xkqv</span>
+              <span class="hint">web · aks-dev-weu</span>
+            </div>
+            <div class="pal-row">
+              <span class="gut">❯</span>
+              <span class="t"><mark>d</mark>iff helm<mark>r</mark>elease <mark>a</mark>pps/ingress-nginx</span>
+              <span class="hint">aks-stg-weu</span>
+            </div>
+          </div>
+          <div class="pal-foot">
+            <span class="more">+12 more — keep typing</span>
+            <span>showing loaded data</span>
+            <span class="right"><span>↑↓ navigate</span><span>↵ run</span><span>esc close</span></span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 05 CERTIFICATES LENS ============ -->
+  <section class="screen" id="s5">
+    <div class="screenhead">
+      <h2>05 · Certificates lens</h2>
+      <p class="sans"><b>What changed:</b> the list distinguishes “will expire” (◆ amber countdown) from “cannot issue” (▲ red, reason word) — different problems, different urgency. The issuance chain is typeset as an indented outline; the deepest stuck node is the only red passage on the page, set in a ruled callout with the exact resolver error and the operator's next move (check external-dns credentials).</p>
+    </div>
+    <div class="app">
+      <div class="spine">
+        <div class="cap">fleet</div>
+        <a class="cl cur" href="#s5"><span class="g-bad">▲</span><span class="n">aks-prd-weu</span><span class="c g-bad">1</span></a>
+        <a class="cl" href="#s5"><span class="g-mut">⊘</span><span class="n">nelli</span></a>
+        <a class="cl" href="#s5"><span class="g-warn">◆</span><span class="n">aks-stg-neu</span></a>
+        <a class="cl" href="#s5"><span class="g-warn">◆</span><span class="n">aks-stg-weu</span></a>
+        <a class="cl" href="#s5"><span class="g-ok">●</span><span class="n">aks-prd-neu</span></a>
+        <a class="cl" href="#s5"><span class="g-ok">●</span><span class="n">aks-dev-weu</span></a>
+        <a class="cl" href="#s5"><span class="g-ok">●</span><span class="n">aks-dev-neu</span></a>
+        <div class="foot">● ok<br>◆ warning<br>▲ danger<br>⊘ unreachable</div>
+      </div>
+      <div class="main">
+        <div class="mast">
+          <h3>aks-prd-weu <span class="path">/ certificates</span></h3>
+          <span class="live"><b>●</b> live · cert-manager v1.15.3</span>
+          <div class="right"><span class="palhint">❯ jump or run a command <kbd>⌘K</kbd></span></div>
+        </div>
+        <div class="lensnav">
+          <a href="#s1">cluster</a>
+          <a href="#s2">workloads</a>
+          <a href="#s2">config</a>
+          <a href="#s2">autoscaling</a>
+          <a href="#s2">network</a>
+          <a href="#s2">storage</a>
+          <a href="#s2">access control</a>
+          <a href="#s2">gateway api</a>
+          <a href="#s5" class="cur">cert-manager <span class="b">1</span></a>
+          <a href="#s2">ext-secrets</a>
+          <a href="#s2">argo cd</a>
+          <a href="#s3">flux cd</a>
+          <a href="#s2">helm</a>
+          <a href="#s2">crds</a>
+        </div>
+        <div class="lensnav sub">
+          <a href="#s5" class="cur">certificates <span class="b">1</span></a>
+          <a href="#s5">requests</a>
+          <a href="#s5">orders</a>
+          <a href="#s5">challenges <span class="b">1</span></a>
+          <a href="#s5">issuers</a>
+          <a href="#s5">clusterissuers</a>
+        </div>
+        <div class="content">
+          <div class="sums">
+            <span class="s"><b>23</b> certificates</span><span class="sep">·</span>
+            <span class="s"><b class="bad">1</b> failing</span><span class="sep">·</span>
+            <span class="s"><b class="warn">1</b> expiring &lt; 14d</span><span class="sep">·</span>
+            <span class="s"><b class="ok">21</b> healthy</span><span class="sep">·</span>
+            <span class="s"><b>2</b> issuers</span>
+          </div>
+          <div class="filters">
+            <span class="f cur">all <span class="n">23</span></span>
+            <span class="f bad">failing <span class="n">1</span></span>
+            <span class="f">expiring <span class="n">1</span></span>
+            <span class="f">ns: all ▾</span>
+            <span class="free">broken first · then soonest expiry</span>
+          </div>
+          <div class="board">
+            <div class="listcol">
+              <div class="thead" style="grid-template-columns: 10px minmax(180px,1.3fr) 96px minmax(130px,1fr) 230px 66px;">
+                <span></span><span>certificate</span><span>namespace</span><span>issuer</span><span>status</span><span style="text-align:right;">renews</span>
+              </div>
+              <div class="rows">
+                <div class="row sel" style="grid-template-columns: 10px minmax(180px,1.3fr) 96px minmax(130px,1fr) 230px 66px;">
+                  <span class="gut">❯</span>
+                  <span class="name">wildcard-shop-acme-io</span>
+                  <span class="dim">ingress</span>
+                  <span class="dim">letsencrypt-prod</span>
+                  <span class="st bad"><i>▲</i>Failed · ChallengeStuck</span>
+                  <span class="age g-bad">blocked</span>
+                </div>
+                <div class="row" style="grid-template-columns: 10px minmax(180px,1.3fr) 96px minmax(130px,1fr) 230px 66px;">
+                  <span class="gut">❯</span>
+                  <span class="name">api-acme-io</span>
+                  <span class="dim">web</span>
+                  <span class="dim">letsencrypt-prod</span>
+                  <span class="st warn"><i>◆</i>expires in 6d</span>
+                  <span class="age" title="renewal window opens 2026-07-09 00:00 UTC">4d</span>
+                </div>
+                <div class="row" style="grid-template-columns: 10px minmax(180px,1.3fr) 96px minmax(130px,1fr) 230px 66px;">
+                  <span class="gut">❯</span><span class="name" style="font-weight:400;">grafana-acme-io</span><span class="dim">monitoring</span><span class="dim">letsencrypt-prod</span>
+                  <span class="st ok"><i>●</i>Ready</span><span class="age" title="renews 2026-09-21">78d</span>
+                </div>
+                <div class="row" style="grid-template-columns: 10px minmax(180px,1.3fr) 96px minmax(130px,1fr) 230px 66px;">
+                  <span class="gut">❯</span><span class="name" style="font-weight:400;">webhook-cert</span><span class="dim">flux-system</span><span class="dim">selfsigned-ca</span>
+                  <span class="st ok"><i>●</i>Ready</span><span class="age" title="renews 2026-09-25">82d</span>
+                </div>
+                <div class="row" style="grid-template-columns: 10px minmax(180px,1.3fr) 96px minmax(130px,1fr) 230px 66px;">
+                  <span class="gut">❯</span><span class="name" style="font-weight:400;">gateway-tls-prd</span><span class="dim">ingress</span><span class="dim">letsencrypt-prod</span>
+                  <span class="st ok"><i>●</i>Ready</span><span class="age" title="renews 2026-08-30">56d</span>
+                </div>
+                <div class="row" style="grid-template-columns: 10px minmax(180px,1.3fr) 96px minmax(130px,1fr) 230px 66px;">
+                  <span class="gut">❯</span><span class="name" style="font-weight:400;">argocd-server-tls</span><span class="dim">argocd</span><span class="dim">letsencrypt-prod</span>
+                  <span class="st ok"><i>●</i>Ready</span><span class="age" title="renews 2026-08-18">44d</span>
+                </div>
+                <div class="row" style="grid-template-columns: 10px minmax(180px,1.3fr) 96px minmax(130px,1fr) 230px 66px;">
+                  <span class="gut">❯</span><span class="name" style="font-weight:400;">loki-gateway-tls</span><span class="dim">monitoring</span><span class="dim">selfsigned-ca</span>
+                  <span class="st ok"><i>●</i>Ready</span><span class="age" title="renews 2026-10-02">89d</span>
+                </div>
+              </div>
+              <div class="listfoot">
+                <span><b>j/k</b> navigate</span>
+                <span><b>↵</b> inspect</span>
+                <span><b>r</b> renew now</span>
+                <span style="margin-left:auto;">showing 7 of 23 · broken first</span>
+              </div>
+            </div>
+            <div class="insp">
+              <div class="insp-head">
+                <div class="insp-kind">certificate · ingress · *.shop.acme.io · secret wildcard-shop-tls</div>
+                <div class="insp-title">wildcard-shop-acme-io</div>
+                <div class="insp-verdict">
+                  <span class="st bad"><i>▲</i>Failed · ChallengeStuck</span> <span style="color:var(--ink2);" title="issued 2026-05-05 · serving cert still valid 29d">· serving cert ok 29d</span>
+                  <div class="why">renewal is blocked two levels down: the DNS-01 challenge has not propagated for 2 days.</div>
+                </div>
+              </div>
+              <div class="actions">
+                <span class="verb">[renew now<kbd>r</kbd>]</span>
+                <span class="verb">[describe]</span>
+                <span class="verb danger">[delete challenge]</span>
+              </div>
+              <div class="isec">
+                <h4>issuance chain — deepest stuck node flagged</h4>
+                <div class="chain">
+                  <div class="nd"><span class="g g-ok">●</span><span><span class="k">ClusterIssuer</span> letsencrypt-prod · <span class="g-ok">Ready</span><div class="why">ACME account registered · acme-v02.api.letsencrypt.org</div></span></div>
+                  <div class="pipe">│</div>
+                  <div class="nd"><span class="g g-mut">○</span><span><span class="k">Certificate</span> wildcard-shop-acme-io · <span style="color:var(--ink2);">Ready False</span><div class="why">waiting on CertificateRequest</div></span></div>
+                  <div class="pipe">│</div>
+                  <div class="nd"><span class="g g-mut">○</span><span><span class="k">CertificateRequest</span> wildcard-shop-acme-io-1 · <span style="color:var(--ink2);">Pending</span><div class="why">waiting on Order</div></span></div>
+                  <div class="pipe">│</div>
+                  <div class="nd"><span class="g g-mut">○</span><span><span class="k">Order</span> wildcard-shop-acme-io-1-482 · <span style="color:var(--ink2);">pending</span><div class="why">1 of 1 authorizations pending</div></span></div>
+                  <div class="pipe">│</div>
+                  <div class="nd stuck"><span class="g g-bad">▲</span><span><span class="k">Challenge</span> dns-01 · _acme-challenge.shop.acme.io · <b class="g-bad">stuck 2d</b><div class="why">propagation check failed: NXDOMAIN — TXT record not visible from 8.8.8.8; check external-dns credentials for zone acme.io</div></span></div>
+                </div>
+              </div>
+              <div class="isec">
+                <h4>events</h4>
+                <div class="evline"><span class="g-bad">▲</span><span class="cnt hot" title="1,904 occurrences">×1.9k</span><span class="msg" title="Waiting for DNS-01 challenge propagation: NXDOMAIN looking up TXT _acme-challenge.shop.acme.io">PresentError · DNS-01 propagation: NXDOMAIN</span><span class="when">55s</span></div>
+                <div class="evline"><span class="g-mut">·</span><span class="cnt">×1</span><span class="msg">Created · Order wildcard-shop-acme-io-1-482</span><span class="when">2d</span></div>
+                <div class="evline"><span class="g-mut">·</span><span class="cnt">×1</span><span class="msg">Requested · new CertificateRequest</span><span class="when">2d</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 06 DANGER DIALOG ============ -->
+  <section class="screen" id="s6">
+    <div class="screenhead">
+      <h2>06 · Danger dialog — drain on a prd-locked cluster</h2>
+      <p class="sans"><b>What changed:</b> the composer is a typeset order form: double red rules bound the document, the ▲ leads the title, facts sit in a ruled four-column line, and options are a checklist with their consequences set as running text (the emptyDir warning names the actual data at risk). The command preview is a real prompt line, and the prd-lock section opens with its own double amber rule — typing the cluster name is part of the document, not a popup afterthought.</p>
+    </div>
+    <div class="app" style="height: 660px;">
+      <div class="spine" style="opacity:0.4;">
+        <div class="cap">fleet</div>
+        <a class="cl cur" href="#s6"><span class="g-ok">●</span><span class="n">aks-prd-weu</span></a>
+        <a class="cl" href="#s6"><span class="g-mut">⊘</span><span class="n">nelli</span></a>
+        <a class="cl" href="#s6"><span class="g-warn">◆</span><span class="n">aks-stg-neu</span></a>
+        <a class="cl" href="#s6"><span class="g-warn">◆</span><span class="n">aks-stg-weu</span></a>
+        <a class="cl" href="#s6"><span class="g-ok">●</span><span class="n">aks-prd-neu</span></a>
+        <a class="cl" href="#s6"><span class="g-ok">●</span><span class="n">aks-dev-weu</span></a>
+        <a class="cl" href="#s6"><span class="g-ok">●</span><span class="n">aks-dev-neu</span></a>
+      </div>
+      <div class="main" style="opacity:0.4;">
+        <div class="mast">
+          <h3>aks-prd-weu <span class="path">/ nodes</span></h3>
+          <span class="live"><b>●</b> live</span>
+        </div>
+        <div class="content"><div style="flex:1; border-top: 3px double var(--rule2);"></div></div>
+      </div>
+      <div class="overlay center">
+        <div class="dlg">
+          <div class="dlg-head">
+            <span class="tri">▲</span>
+            <div>
+              <h3>drain node aks-sys-3</h3>
+              <div class="sub">aks-prd-weu · cordons the node, then evicts <b>23 pods</b> — 4 daemonset pods stay behind</div>
+            </div>
+            <button class="dlg-x">[esc]</button>
+          </div>
+          <div class="dlg-body">
+            <div class="facts">
+              <div class="fact"><div class="l">node</div><div class="v">aks-sys-3-vmss000002</div></div>
+              <div class="fact"><div class="l">cluster</div><div class="v g-warn">aks-prd-weu · ⌂ prd lock</div></div>
+              <div class="fact"><div class="l">pods to evict</div><div class="v">23 · 2 with PDBs</div></div>
+              <div class="fact"><div class="l">kubelet</div><div class="v">v1.31.7 · Ready</div></div>
+            </div>
+            <div class="optrow">
+              <span class="tick on">[x]</span>
+              <span class="tt">ignore daemonsets</span>
+              <span class="bd">DaemonSet pods (cilium, node-exporter) are recreated by their controller and cannot be evicted. Keep this on unless you know why.</span>
+            </div>
+            <div class="optrow">
+              <span class="tick off">[ ]</span>
+              <span class="tt">delete emptydir data</span>
+              <span class="bd">evicts pods that use emptyDir volumes, destroying that data. <b>loki-write-2 on this node holds 1.2Gi in emptyDir.</b></span>
+            </div>
+            <div class="optrow">
+              <span class="tick off">[ ]</span>
+              <span class="tt">force</span>
+              <span class="bd">also evicts unmanaged pods and ignores PodDisruptionBudgets. <b>on prd this can violate availability guarantees</b> — last resort.</span>
+            </div>
+            <div class="optrow">
+              <span class="tick on">[=]</span>
+              <span class="tt">timeout · 120s</span>
+              <span class="bd">abort the drain if eviction hasn't finished within this window. the node stays cordoned either way.</span>
+            </div>
+            <div class="cmd">
+              <span class="pr">$</span> <span class="kw">kubectl</span> --context aks-prd-weu <span class="kw">drain</span> aks-sys-3-vmss000002 <span class="fl">--ignore-daemonsets</span> <span class="fl">--timeout=120s</span>
+            </div>
+            <div class="lockblock">
+              <div class="ln1">⌂ <b>prd lock</b> active — type <b>aks-prd-weu</b> to confirm</div>
+              <input value="aks-prd-" aria-label="protected cluster confirmation">
+              <div class="prog">8 of 11 characters · confirm stays disabled until the name matches</div>
+            </div>
+          </div>
+          <div class="dlg-foot">
+            <span class="why">grant is one-shot · verified again by the backend</span>
+            <div class="btns">
+              <span class="b">[cancel]</span>
+              <span class="b go" title="disabled — confirmation incomplete">[▲ drain node]</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+</div>
+<script>
+function toggleTheme() {
+  var r = document.documentElement;
+  var next = r.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+  r.setAttribute('data-theme', next);
+  try { localStorage.setItem('klyx-dirB-theme', next); } catch (e) {}
+}
+try {
+  var saved = localStorage.getItem('klyx-dirB-theme');
+  if (saved) document.documentElement.setAttribute('data-theme', saved);
+} catch (e) {}
+</script>
+</body>
+</html>

@@ -1,0 +1,1807 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=1480">
+<title>Klyx — Direction C: Signal Bench</title>
+<style>
+/* ============================================================
+   DIRECTION C — SIGNAL BENCH
+   The app as bench hardware: an anodized rack panel with
+   machined bevels, inset counter wells, and status LAMPS.
+   The one rule that makes it an instrument, not a toy:
+   ONLY FAULTS GLOW. Healthy is a dim, unlit lamp; warning and
+   danger are lit with a soft corona — so the 5-second triage
+   test is literally "find the lit lamp". A permanent function-
+   key bar (htop heritage) keeps the keyboard layer visible.
+   Bevels and glows are the only gradients — both functional.
+   ============================================================ */
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bench: #141517;              /* the desk */
+  --panel: #1c1e21;              /* module face */
+  --panel2:#222428;              /* raised strip */
+  --well:  #0e0f11;              /* inset counter/list wells */
+  --tx0: #e9eaeb;
+  --tx1: #9ea1a6;
+  --tx2: #71747a;
+  --ok:  #8fc75e;
+  --warn:#f0a832;
+  --bad: #ff7d7d;
+  --info:#7fb8ee;
+  --edge-hi: rgba(255,255,255,0.07);   /* machined top edge */
+  --edge-lo: rgba(0,0,0,0.55);         /* shadowed bottom edge */
+  --line: rgba(255,255,255,0.08);
+  --line2: rgba(255,255,255,0.16);
+  --glow-warn: 0 0 5px rgba(240,168,50,0.45), 0 0 10px rgba(240,168,50,0.18);
+  --glow-bad: 0 0 5px rgba(255,125,125,0.5), 0 0 12px rgba(255,125,125,0.22);
+  --lamp-off: #3a3d42;
+  --scrim: rgba(6,7,8,0.68);
+  --sel: rgba(127,184,238,0.09);
+  --ok-dim: rgba(143,199,94,0.12);
+  --warn-dim: rgba(240,168,50,0.12);
+  --bad-dim: rgba(255,125,125,0.12);
+  --info-dim: rgba(127,184,238,0.11);
+}
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bench: #d8d7d2;
+  --panel: #eceae5;
+  --panel2:#f4f2ec;
+  --well:  #fbfaf7;
+  --tx0: #232323;
+  --tx1: #63656a;
+  --tx2: #8e9095;
+  --ok:  #4a7d1c;
+  --warn:#9a5f0a;
+  --bad: #b23333;
+  --info:#1d64a8;
+  --edge-hi: rgba(255,255,255,0.85);
+  --edge-lo: rgba(0,0,0,0.18);
+  --line: rgba(0,0,0,0.10);
+  --line2: rgba(0,0,0,0.20);
+  --glow-warn: 0 0 5px rgba(200,130,20,0.4), 0 0 9px rgba(200,130,20,0.16);
+  --glow-bad: 0 0 5px rgba(190,60,60,0.42), 0 0 10px rgba(190,60,60,0.18);
+  --lamp-off: #b9b7b0;
+  --scrim: rgba(60,58,52,0.5);
+  --sel: rgba(29,100,168,0.08);
+  --ok-dim: rgba(74,125,28,0.10);
+  --warn-dim: rgba(154,95,10,0.10);
+  --bad-dim: rgba(178,51,51,0.09);
+  --info-dim: rgba(29,100,168,0.08);
+}
+
+* { box-sizing: border-box; }
+html { background: var(--bench); }
+body {
+  margin: 0;
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  font-size: 13px; line-height: 1.45;
+  color: var(--tx0); background: var(--bench);
+}
+.mono { font-family: ui-monospace, monospace; font-variant-numeric: tabular-nums; }
+
+/* engraved micro label */
+.lbl {
+  font-size: 9px; font-weight: 600; letter-spacing: 0.14em; text-transform: uppercase;
+  color: var(--tx2);
+}
+
+/* LAMPS — the core vocabulary. Only faults glow. */
+.lamp { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex-shrink: 0;
+  background: var(--lamp-off); box-shadow: inset 0 1px 1px rgba(0,0,0,0.4); vertical-align: baseline; }
+.lamp.ok   { background: var(--ok); box-shadow: inset 0 -1px 1px rgba(0,0,0,0.25); opacity: 0.75; }
+.lamp.warn { background: var(--warn); box-shadow: var(--glow-warn); }
+.lamp.bad  { background: var(--bad);  box-shadow: var(--glow-bad); }
+.lamp.info { background: var(--info); opacity: 0.8; }
+.lamp.off2 { background: transparent; border: 1px dashed var(--tx2); }
+@keyframes lampblink { 0%,70% { opacity: 1; } 85% { opacity: 0.35; } 100% { opacity: 1; } }
+/* blink discipline: .blink is legal ONLY in the fleet spine — the peripheral
+   attention channel. In-content lamps are steady; you are already looking. */
+.lamp.blink { animation: lampblink 1.6s ease-in-out infinite; }
+
+/* status text next to lamp */
+.stx { font-family: ui-monospace, monospace; font-size: 11px; white-space: nowrap; }
+.stx.ok { color: var(--ok); } .stx.warn { color: var(--warn); } .stx.bad { color: var(--bad); font-weight: 700; }
+.stx.info { color: var(--info); } .stx.mut { color: var(--tx1); }
+/* danger gets shape, not just colour — red vs amber must survive colour-blindness */
+.stx.bad::before { content: "▲ "; font-size: 9px; }
+
+/* keyboard focus ring */
+:focus-visible { outline: 1.5px solid var(--info); outline-offset: 1px; border-radius: 3px; }
+
+/* slim themed scrollbars */
+::-webkit-scrollbar { width: 9px; height: 9px; }
+::-webkit-scrollbar-thumb { background: var(--line2); border-radius: 5px; border: 2px solid transparent; background-clip: content-box; }
+::-webkit-scrollbar-corner { background: transparent; }
+
+/* respect reduced motion: no blink, no caret pulse */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.001ms !important; animation-iteration-count: 1 !important; transition-duration: 0.001ms !important; }
+}
+
+kbd {
+  font-family: ui-monospace, monospace; font-size: 10px; color: var(--tx1);
+  background: var(--panel2); border-radius: 3px; padding: 1px 6px;
+  border: 1px solid var(--line2); border-bottom: 2px solid var(--edge-lo);
+}
+
+/* machined module */
+.module {
+  background: var(--panel);
+  border-radius: 6px;
+  border-top: 1px solid var(--edge-hi);
+  box-shadow: 0 1px 0 var(--edge-lo), 0 6px 18px rgba(0,0,0,0.18);
+}
+/* inset well */
+.wellbox {
+  background: var(--well);
+  border-radius: 4px;
+  box-shadow: inset 0 2px 4px rgba(0,0,0,0.35), inset 0 0 0 1px var(--line);
+}
+:root[data-theme="light"] .wellbox { box-shadow: inset 0 1px 3px rgba(0,0,0,0.14), inset 0 0 0 1px var(--line); }
+
+/* ---- page scaffolding ---- */
+.page { width: 1440px; margin: 0 auto; padding: 32px 0 96px; }
+.pagehead { display: flex; align-items: baseline; gap: 16px; padding: 8px 4px 28px; }
+.pagehead h1 { font-size: 15px; font-weight: 700; margin: 0; }
+.pagehead .sub { color: var(--tx1); font-size: 12px; }
+.pagehead button {
+  margin-left: auto; cursor: pointer; font: inherit; font-size: 12px; color: var(--tx0);
+  background: var(--panel); border: 1px solid var(--line2); border-radius: 4px; padding: 6px 14px;
+  border-top-color: var(--edge-hi);
+}
+.screen { margin-bottom: 72px; }
+.screenhead { padding: 0 4px 12px; }
+.screenhead h2 { font-size: 10px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; color: var(--tx2); margin: 0 0 6px; font-family: ui-monospace, monospace; }
+.screenhead p { margin: 0; color: var(--tx1); font-size: 12px; max-width: 880px; }
+.screenhead p b { color: var(--tx0); }
+
+/* ---- app frame: the bench ---- */
+.app { display: flex; height: 780px; overflow: hidden; position: relative; gap: 8px; padding: 8px; background: var(--bench); border-radius: 8px; box-shadow: inset 0 0 0 1px var(--line); }
+
+/* ---- spine: channel strip ---- */
+.spine { width: 46px; flex-shrink: 0; display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 12px 0; }
+.spine.module { border-radius: 6px; }
+.ch { display: flex; flex-direction: column; align-items: center; gap: 3px; cursor: pointer; padding: 4px 0; width: 34px; border-radius: 4px; }
+.ch:hover { background: var(--sel); }
+.ch.cur { background: var(--well); box-shadow: inset 0 1px 3px rgba(0,0,0,0.35), inset 0 0 0 1px var(--line2); }
+.ch .cd { font-family: ui-monospace, monospace; font-size: 9px; color: var(--tx1); letter-spacing: 0.04em; }
+.ch.cur .cd { color: var(--tx0); font-weight: 700; }
+.spine .cap { font-size: 8px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--tx2); margin-bottom: 2px; }
+
+/* ---- main column ---- */
+.main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+.mast { flex-shrink: 0; display: flex; align-items: center; gap: 14px; padding: 10px 16px; }
+.mast .title { font-family: ui-monospace, monospace; font-size: 13px; font-weight: 700; }
+.mast .title .path { color: var(--tx2); font-weight: 400; }
+.mast .live { display: flex; align-items: center; gap: 7px; font-size: 9px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--tx2); }
+.mast .right { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+.palhint { display: flex; align-items: center; gap: 10px; font-size: 11px; color: var(--tx1); padding: 5px 12px; min-width: 230px; cursor: pointer; }
+.palhint kbd { margin-left: auto; }
+
+/* lens nav: labelled selector row */
+.lensnav { display: flex; gap: 2px; padding: 4px; flex-shrink: 0; overflow-x: auto; }
+.lensnav a {
+  color: var(--tx1); text-decoration: none; font-size: 11px; padding: 5px 11px; border-radius: 4px;
+  display: flex; gap: 7px; align-items: center; white-space: nowrap;
+}
+.lensnav a:hover { color: var(--tx0); }
+.lensnav a.cur { background: var(--well); color: var(--tx0); font-weight: 600; box-shadow: inset 0 1px 3px rgba(0,0,0,0.35), inset 0 0 0 1px var(--line2); }
+.lensnav .n { font-family: ui-monospace, monospace; font-size: 9px; color: var(--tx2); }
+.lensnav .n.bad { color: var(--bad); font-weight: 700; }
+.lensnav.sub a { font-size: 10.5px; padding: 4px 9px; }
+
+.content { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; gap: 8px; overflow: hidden; }
+
+/* ---- meter strip: counter wells ---- */
+.meters { display: flex; gap: 8px; padding: 8px 12px; flex-shrink: 0; align-items: stretch; }
+.meter { display: flex; flex-direction: column; gap: 4px; min-width: 86px; }
+.meter .win { padding: 4px 10px 3px; font-family: ui-monospace, monospace; font-size: 16px; font-weight: 600; text-align: right; letter-spacing: 0.04em; color: var(--tx0); }
+.meter .win.ok { color: var(--ok); } .meter .win.warn { color: var(--warn); } .meter .win.bad { color: var(--bad); } .meter .win.dim { color: var(--tx2); }
+.meter .lbl { text-align: right; padding-right: 2px; }
+.meters .free { margin-left: auto; align-self: flex-end; font-size: 9px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--tx2); font-family: ui-monospace, monospace; }
+
+/* filter switches */
+.filters { display: flex; gap: 4px; padding: 0 12px; flex-shrink: 0; }
+.fsw { font-size: 11px; color: var(--tx1); padding: 3px 11px; border-radius: 3px; cursor: pointer; display: flex; gap: 7px; align-items: center; }
+.fsw:hover { color: var(--tx0); }
+.fsw.cur { background: var(--well); color: var(--tx0); box-shadow: inset 0 1px 3px rgba(0,0,0,0.3), inset 0 0 0 1px var(--line2); }
+.fsw .n { font-family: ui-monospace, monospace; font-size: 9px; color: var(--tx2); }
+.fsw.bad { color: var(--bad); } .fsw.bad .n { color: var(--bad); }
+
+/* ---- list well + inspector ---- */
+.board { flex: 1; min-height: 0; display: grid; grid-template-columns: 1fr 404px; gap: 8px; margin: 0 8px 0; }
+.listcol { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
+.thead {
+  display: grid; align-items: center; gap: 8px; padding: 7px 12px 5px; flex-shrink: 0;
+  font-size: 9px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--tx2); font-weight: 600;
+  border-bottom: 1px solid var(--line);
+}
+.rows { overflow-y: auto; flex: 1; min-height: 0; }
+.row {
+  display: grid; align-items: center; gap: 8px; padding: 0 12px; height: 30px;
+  font-size: 12px; border-bottom: 1px solid var(--line); cursor: pointer; min-width: 0; position: relative;
+}
+.row:hover { background: var(--sel); }
+.row.sel { background: var(--sel); box-shadow: inset 2px 0 0 var(--info); }
+.row.stale { opacity: 0.6; }
+.row .name { font-family: ui-monospace, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row .dim { font-family: ui-monospace, monospace; color: var(--tx1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row .num { font-family: ui-monospace, monospace; color: var(--tx1); text-align: right; }
+.row .num.bad { color: var(--bad); font-weight: 700; }
+.row .age { font-family: ui-monospace, monospace; color: var(--tx2); text-align: right; font-size: 11px; }
+.stcell { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.cb { width: 12px; height: 12px; border-radius: 3px; flex-shrink: 0; background: var(--well); box-shadow: inset 0 1px 2px rgba(0,0,0,0.4), inset 0 0 0 1px var(--line2); position: relative; }
+.cb.on { background: var(--info); box-shadow: none; }
+.cb.on::after { content: ""; position: absolute; left: 3.5px; top: 1.5px; width: 3px; height: 6px; border: solid var(--well); border-width: 0 1.5px 1.5px 0; transform: rotate(45deg); }
+
+/* function-key bar — the keyboard made physical */
+.fkeys { flex-shrink: 0; display: flex; gap: 2px; padding: 6px 8px; align-items: center; }
+.fk { display: flex; align-items: center; gap: 7px; padding: 3px 10px; font-size: 10px; color: var(--tx1); }
+.fk kbd { font-size: 9px; }
+.fkeys .free { margin-left: auto; font-family: ui-monospace, monospace; font-size: 9px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--tx2); padding-right: 6px; }
+
+/* bulk bar */
+.bulk { flex-shrink: 0; display: flex; align-items: center; gap: 12px; padding: 6px 12px; background: var(--info-dim); border-bottom: 1px solid var(--line2); font-size: 12px; }
+.bulk b { color: var(--info); font-family: ui-monospace, monospace; }
+.bbtn { font: inherit; font-size: 11px; cursor: pointer; padding: 3px 11px; border-radius: 4px; background: var(--panel2); color: var(--tx0); border: 1px solid var(--line2); border-top-color: var(--edge-hi); }
+.bbtn.danger { color: var(--bad); }
+.bulk .esc { margin-left: auto; font-size: 9px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--tx2); }
+
+/* inspector */
+.insp { min-width: 0; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; }
+.insp-head { padding: 14px 16px 12px; border-bottom: 1px solid var(--line); }
+.insp-title { font-family: ui-monospace, monospace; font-size: 13px; font-weight: 700; word-break: break-all; }
+.insp-meta { margin-top: 3px; font-size: 11px; color: var(--tx1); font-family: ui-monospace, monospace; }
+.verdict { margin-top: 10px; display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+.verdict .big { display: inline-flex; align-items: center; gap: 8px; font-family: ui-monospace, monospace; font-size: 12px; font-weight: 700; padding: 5px 10px; border-radius: 4px; }
+.verdict .big.bad { color: var(--bad); background: var(--bad-dim); box-shadow: inset 0 0 0 1px var(--bad); }
+.verdict .sub2 { font-family: ui-monospace, monospace; font-size: 10px; color: var(--tx1); }
+.actions { padding: 8px 16px; border-bottom: 1px solid var(--line); display: flex; gap: 4px; flex-wrap: wrap; }
+.abtn {
+  font: inherit; font-size: 11px; cursor: pointer; padding: 3px 10px; border-radius: 4px;
+  background: var(--panel2); color: var(--tx0); border: 1px solid var(--line2); border-top-color: var(--edge-hi);
+  display: inline-flex; gap: 6px; align-items: center;
+}
+.abtn.danger { color: var(--bad); }
+.abtn kbd { font-size: 8px; padding: 0 4px; }
+.isec { padding: 10px 16px 12px; border-bottom: 1px solid var(--line); }
+.isec:last-child { border-bottom: none; }
+.isec h4 { margin: 0 0 8px; font-size: 9px; font-weight: 600; letter-spacing: 0.14em; text-transform: uppercase; color: var(--tx2); }
+.kv { display: grid; grid-template-columns: 110px 1fr; gap: 3px 12px; font-size: 11px; margin: 0; }
+.kv dt { color: var(--tx2); font-family: ui-monospace, monospace; }
+.kv dd { margin: 0; font-family: ui-monospace, monospace; color: var(--tx0); word-break: break-all; }
+.kv dd.d2 { color: var(--tx1); }
+a.ln { color: var(--info); text-decoration: none; border-bottom: 1px solid var(--info-dim); }
+.evline { display: grid; grid-template-columns: 14px 48px 1fr 42px; gap: 8px; font-size: 11px; padding: 4px 0; align-items: center; border-bottom: 1px solid var(--line); }
+.evline:last-child { border-bottom: none; }
+.evline .cnt { font-family: ui-monospace, monospace; color: var(--tx1); }
+.evline .cnt.hot { color: var(--bad); font-weight: 700; }
+.evline .msg { font-family: ui-monospace, monospace; color: var(--tx1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.evline .when { font-family: ui-monospace, monospace; color: var(--tx2); text-align: right; font-size: 10px; }
+
+/* ---- fleet modules ---- */
+.fleetgrid { flex: 1; min-height: 0; overflow-y: auto; display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; align-content: start; padding: 0 8px; }
+.cmod { cursor: pointer; display: flex; flex-direction: column; min-height: 226px; min-width: 0; }
+.cmod .head { display: flex; align-items: center; gap: 9px; padding: 10px 12px 8px; }
+.cmod .head .nm { font-family: ui-monospace, monospace; font-weight: 700; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cmod .head .tag { margin-left: auto; font-family: ui-monospace, monospace; font-size: 9px; padding: 2px 7px; border-radius: 3px; white-space: nowrap; }
+.cmod .head .tag.warn { color: var(--warn); background: var(--warn-dim); box-shadow: inset 0 0 0 1px var(--warn); }
+.cmod .meta { padding: 0 12px 8px; font-family: ui-monospace, monospace; font-size: 9.5px; color: var(--tx2); }
+.cmod .wells { display: flex; gap: 6px; padding: 0 12px 10px; }
+.cmod .wl { flex: 1; padding: 3px 8px 2px; text-align: right; }
+.cmod .wl .v { font-family: ui-monospace, monospace; font-size: 13px; font-weight: 600; }
+.cmod .wl .v.warn { color: var(--warn); }
+.cmod .wl .k { font-size: 8px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--tx2); }
+.cmod .sigs { padding: 2px 12px 10px; display: grid; gap: 6px; }
+.cmod .sig { display: grid; grid-template-columns: 12px 70px 1fr; gap: 8px; align-items: center; font-family: ui-monospace, monospace; font-size: 10px; }
+.cmod .sig .k { color: var(--tx2); }
+.cmod .sig .v { text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--tx1); }
+.cmod .sig .v.ok { color: var(--ok); } .cmod .sig .v.warn { color: var(--warn); } .cmod .sig .v.bad { color: var(--bad); } .cmod .sig .v.mut { color: var(--tx2); }
+.cmod .foot { margin-top: auto; padding: 7px 12px; border-top: 1px solid var(--line); font-family: ui-monospace, monospace; font-size: 9.5px; color: var(--tx2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cmod.off { border: 1px dashed var(--line2); background: transparent; box-shadow: none; color: var(--tx2); }
+.cmod.off .head .nm { color: var(--tx1); }
+
+/* mesh patch-bay */
+.mesh { flex-shrink: 0; margin: 0 8px 8px; padding: 8px 16px 8px; }
+.mesh .cap { display: flex; gap: 12px; align-items: baseline; }
+.mesh .cap .note { font-size: 10px; color: var(--warn); font-family: ui-monospace, monospace; letter-spacing: 0; text-transform: none; }
+
+/* ---- palette ---- */
+.overlay { position: absolute; inset: 0; background: var(--scrim); display: flex; align-items: flex-start; justify-content: center; padding-top: 92px; z-index: 10; border-radius: 8px; }
+.overlay.center { align-items: center; padding-top: 0; }
+.pal { width: 600px; overflow: hidden; box-shadow: 0 26px 70px rgba(0,0,0,0.55), 0 1px 0 var(--edge-lo); }
+.pal-in { display: flex; align-items: center; gap: 10px; margin: 12px; padding: 9px 12px; font-family: ui-monospace, monospace; font-size: 14px; }
+.pal-in .caret { display: inline-block; width: 8px; height: 15px; background: var(--info); vertical-align: text-bottom; animation: blink 1.1s steps(1) infinite; }
+@keyframes blink { 50% { opacity: 0; } }
+.pal-in .esc { margin-left: auto; }
+.pal-grp { padding: 0 6px 6px; }
+.pal-grp h5 { margin: 0; padding: 4px 12px 5px; font-size: 9px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--tx2); font-weight: 600; }
+.pal-row { display: flex; align-items: center; gap: 10px; padding: 7px 12px; border-radius: 4px; cursor: pointer; }
+.pal-row:hover { background: var(--sel); }
+.pal-row.sel { background: var(--sel); box-shadow: inset 2px 0 0 var(--info); }
+.pal-row .t { font-family: ui-monospace, monospace; font-size: 12.5px; }
+.pal-row mark { background: transparent; color: var(--info); font-weight: 700; }
+.pal-row .hint { margin-left: auto; font-family: ui-monospace, monospace; font-size: 10px; color: var(--tx2); white-space: nowrap; }
+.pal-row .hint .lock { color: var(--warn); }
+.pal-foot { display: flex; gap: 16px; padding: 8px 18px 10px; border-top: 1px solid var(--line); font-family: ui-monospace, monospace; font-size: 10px; color: var(--tx2); }
+.pal-foot .more { color: var(--tx1); }
+.pal-foot .right { margin-left: auto; display: flex; gap: 12px; }
+
+/* ---- danger dialog: arming panel ---- */
+.dlg { width: 740px; max-height: 92%; display: flex; flex-direction: column; overflow: hidden; box-shadow: 0 26px 70px rgba(0,0,0,0.55); }
+.dlg .stripe { height: 6px; background: repeating-linear-gradient(-45deg, var(--bad) 0 10px, transparent 10px 20px); opacity: 0.65; flex-shrink: 0; }
+.dlg-head { padding: 14px 20px 12px; border-bottom: 1px solid var(--line); display: flex; align-items: flex-start; gap: 12px; }
+.dlg-head .tri { color: var(--bad); flex-shrink: 0; margin-top: 1px; }
+.dlg-head h3 { margin: 0; font-size: 16px; font-weight: 700; }
+.dlg-head .sub { color: var(--tx1); font-size: 12px; margin-top: 3px; }
+.dlg-head .sub b { color: var(--tx0); }
+.dlg-x { margin-left: auto; width: 24px; height: 24px; cursor: pointer; color: var(--tx1); background: var(--panel2); border: 1px solid var(--line2); border-top-color: var(--edge-hi); border-radius: 4px; }
+.dlg-body { padding: 14px 20px 16px; overflow-y: auto; display: grid; gap: 12px; }
+.facts { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+.fact { padding: 7px 10px; min-width: 0; }
+.fact .l { font-size: 8.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--tx2); font-weight: 600; }
+.fact .v { font-family: ui-monospace, monospace; font-size: 11px; margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.opts { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.otile { text-align: left; cursor: pointer; padding: 10px 12px; font: inherit; color: var(--tx0); background: var(--panel2); border: 1px solid var(--line2); border-top-color: var(--edge-hi); border-radius: 5px; }
+.otile .tt { font-weight: 600; font-size: 12px; display: flex; align-items: center; gap: 9px; }
+.otile .tt .sw { margin-left: auto; width: 26px; height: 14px; border-radius: 7px; background: var(--well); box-shadow: inset 0 1px 3px rgba(0,0,0,0.4); position: relative; flex-shrink: 0; }
+.otile .tt .sw::after { content: ""; position: absolute; top: 2px; left: 2px; width: 10px; height: 10px; border-radius: 50%; background: var(--tx2); }
+.otile.on .tt .sw { background: var(--info-dim); box-shadow: inset 0 0 0 1px var(--info); }
+.otile.on .tt .sw::after { left: auto; right: 2px; background: var(--info); }
+.otile .bd { color: var(--tx1); font-size: 11px; margin-top: 5px; line-height: 1.4; }
+.otile .bd b { color: var(--warn); font-weight: 500; }
+.cmd { padding: 10px 14px; font-family: ui-monospace, monospace; font-size: 11.5px; line-height: 1.65; color: var(--tx1); overflow-x: auto; white-space: nowrap; }
+.cmd .pr { color: var(--tx2); }
+.cmd .kw { color: var(--tx0); font-weight: 700; }
+.cmd .fl { color: var(--info); }
+.arm { padding: 12px 14px; border-radius: 5px; background: var(--warn-dim); box-shadow: inset 0 0 0 1px var(--warn); }
+.arm .ln1 { display: flex; align-items: center; gap: 9px; font-size: 12px; color: var(--warn); }
+.arm .ln1 b { font-family: ui-monospace, monospace; font-weight: 700; }
+.arm input { margin-top: 9px; width: 100%; font-family: ui-monospace, monospace; font-size: 12px; padding: 7px 11px; background: var(--well); border: none; border-radius: 4px; color: var(--tx0); box-shadow: inset 0 2px 4px rgba(0,0,0,0.35), inset 0 0 0 1px var(--line2); }
+.arm .prog { margin-top: 6px; font-family: ui-monospace, monospace; font-size: 9.5px; color: var(--tx2); display: flex; gap: 10px; align-items: center; }
+.armled { display: flex; gap: 3px; }
+.armled i { width: 10px; height: 4px; border-radius: 1px; background: var(--lamp-off); }
+.armled i.on { background: var(--warn); box-shadow: var(--glow-warn); }
+.dlg-foot { padding: 12px 20px; border-top: 1px solid var(--line); display: flex; align-items: center; gap: 14px; background: var(--panel2); }
+.dlg-foot .why { font-size: 9.5px; color: var(--tx2); font-family: ui-monospace, monospace; }
+.dlg-foot .btns { margin-left: auto; display: flex; gap: 8px; }
+.fbtn { font: inherit; font-size: 12px; padding: 6px 16px; border-radius: 4px; cursor: pointer; background: var(--panel); color: var(--tx0); border: 1px solid var(--line2); border-top-color: var(--edge-hi); }
+.fbtn.armbtn { color: var(--bad); font-weight: 700; background: var(--bad-dim); box-shadow: inset 0 0 0 1px var(--bad); opacity: 0.4; cursor: not-allowed; display: inline-flex; gap: 8px; align-items: center; }
+
+/* chain */
+.chain { display: grid; }
+.chnode { display: grid; grid-template-columns: 16px 1fr; gap: 10px; padding: 3px 0; }
+.chnode .rail { position: relative; }
+.chnode .rail::before { content: ""; position: absolute; left: 7px; top: -3px; bottom: -3px; width: 1px; background: var(--line2); }
+.chnode:first-child .rail::before { top: 11px; }
+.chnode:last-child .rail::before { height: 12px; bottom: auto; }
+.chnode .rail .lamp { position: absolute; left: 3.5px; top: 8px; }
+.chnode .body { font-family: ui-monospace, monospace; font-size: 11px; padding: 2px 0; min-width: 0; }
+.chnode .body .k { color: var(--tx2); }
+.chnode .body .why { color: var(--tx1); font-size: 10px; margin-top: 1px; }
+.chnode.stuck .body { background: var(--bad-dim); box-shadow: inset 0 0 0 1px var(--bad); border-radius: 4px; padding: 6px 9px; margin: 2px 0; }
+.chnode.stuck .body .why { color: var(--bad); }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <div class="pagehead">
+    <h1>Klyx · Direction C — Signal Bench</h1>
+    <span class="sub">the app as bench hardware · lamps that only glow on faults · counter wells · a permanent function-key row</span>
+    <button onclick="toggleTheme()">◐ light / dark</button>
+  </div>
+
+  <!-- ============ 01 FLEET OVERVIEW ============ -->
+  <section class="screen" id="s1">
+    <div class="screenhead">
+      <h2>01 · Fleet overview</h2>
+      <p><b>What changed:</b> clusters are hardware modules on a bench: name plate, two counter wells, and a lamp per signal. The physics rule does the triage — healthy lamps are dim and unlit, so the two lit lamps (amber stg-neu, and the amber asym pair) are findable from across the room; the unreachable cluster is a dashed, unpowered socket. The mesh strip is a patch bay: cables only take colour when a peering is wrong.</p>
+    </div>
+    <div class="app" style="height: 740px;">
+      <div class="spine module">
+        <span class="cap">fleet</span>
+        <div class="ch" title="nelli — unconnected"><span class="lamp off2"></span><span class="cd">ne</span></div>
+        <div class="ch" title="aks-stg-neu — degraded"><span class="lamp warn"></span><span class="cd">sn</span></div>
+        <div class="ch" title="aks-stg-weu — mesh asym"><span class="lamp warn"></span><span class="cd">sw</span></div>
+        <div class="ch" title="aks-prd-weu — healthy"><span class="lamp ok"></span><span class="cd">pw</span></div>
+        <div class="ch" title="aks-prd-neu — healthy"><span class="lamp ok"></span><span class="cd">pn</span></div>
+        <div class="ch" title="aks-dev-weu — healthy"><span class="lamp ok"></span><span class="cd">dw</span></div>
+        <div class="ch" title="aks-dev-neu — healthy"><span class="lamp ok"></span><span class="cd">dn</span></div>
+      </div>
+      <div class="main">
+        <div class="mast module">
+          <span class="title mono">fleet <span class="path">/ 7 clusters</span></span>
+          <span class="live"><span class="lamp ok"></span> live · 5 watching · 1 unreachable</span>
+          <div class="right"><div class="palhint wellbox">⌘K — jump or run a command <kbd>⌘K</kbd></div></div>
+        </div>
+        <div class="module" style="flex:1; min-height:0; display:flex; flex-direction:column; overflow:hidden;">
+          <div class="meters">
+            <div class="meter"><div class="win wellbox">7</div><span class="lbl">clusters</span></div>
+            <div class="meter"><div class="win wellbox bad">1</div><span class="lbl">unreachable</span></div>
+            <div class="meter"><div class="win wellbox warn">1</div><span class="lbl">degraded</span></div>
+            <div class="meter"><div class="win wellbox ok">5</div><span class="lbl">healthy</span></div>
+            <div class="meter"><div class="win wellbox">41</div><span class="lbl">nodes</span></div>
+            <div class="meter"><div class="win wellbox">1284</div><span class="lbl">pods</span></div>
+            <div class="meter"><div class="win wellbox">96</div><span class="lbl">gitops</span></div>
+            <span class="free">broken first · diagnostic order</span>
+          </div>
+          <div class="fleetgrid">
+            <!-- unreachable -->
+            <div class="cmod off">
+              <div class="head"><span class="lamp off2"></span><span class="nm">nelli</span></div>
+              <div class="meta">k3s / homelab / v1.32.1</div>
+              <div style="padding:0 12px; font-family:ui-monospace,monospace; font-size:10px; color:var(--tx2); line-height:1.6;">
+                unreachable <span title="since 2026-07-05 09:12:44 CEST">4h</span><br>
+                dial tcp 192.168.1.40:6443: i/o timeout<br>
+                last state 3/3 nodes · 74 pods · retry in 42s
+              </div>
+              <div class="foot">reconnects automatically when reachable</div>
+            </div>
+
+            <!-- degraded -->
+            <div class="cmod module">
+              <div class="head"><span class="lamp warn"></span><span class="nm">aks-stg-neu</span><span class="tag warn">degraded</span></div>
+              <div class="meta">AKS / northeurope / v1.31.7</div>
+              <div class="wells">
+                <div class="wl wellbox"><div class="v warn">2/3</div><div class="k">nodes</div></div>
+                <div class="wl wellbox"><div class="v">148</div><div class="k">pods</div></div>
+              </div>
+              <div class="sigs">
+                <div class="sig"><span class="lamp ok"></span><span class="k">workloads</span><span class="v ok">42 ok</span></div>
+                <div class="sig"><span class="lamp ok"></span><span class="k">gitops</span><span class="v ok">flux 21 ready</span></div>
+                <div class="sig"><span class="lamp warn"></span><span class="k">gateway</span><span class="v warn">1 pending</span></div>
+                <div class="sig" title="asymmetric: stg-weu → stg-neu handshake missing"><span class="lamp warn"></span><span class="k">mesh</span><span class="v warn">sw peer · asym</span></div>
+                <div class="sig"><span class="lamp warn"></span><span class="k">freshness</span><span class="v warn">watch stale</span></div>
+              </div>
+              <div class="foot">raised — a node is NotReady, watches stale</div>
+            </div>
+
+            <!-- stg-weu -->
+            <div class="cmod module">
+              <div class="head"><span class="lamp warn"></span><span class="nm">aks-stg-weu</span><span class="tag warn">mesh asym</span></div>
+              <div class="meta">AKS / westeurope / v1.31.7</div>
+              <div class="wells">
+                <div class="wl wellbox"><div class="v">3/3</div><div class="k">nodes</div></div>
+                <div class="wl wellbox"><div class="v">151</div><div class="k">pods</div></div>
+              </div>
+              <div class="sigs">
+                <div class="sig"><span class="lamp ok"></span><span class="k">workloads</span><span class="v ok">44 ok</span></div>
+                <div class="sig"><span class="lamp ok"></span><span class="k">gitops</span><span class="v ok">flux 21 ready</span></div>
+                <div class="sig"><span class="lamp ok"></span><span class="k">gateway</span><span class="v ok">12 routes</span></div>
+                <div class="sig"><span class="lamp warn"></span><span class="k">mesh</span><span class="v warn">sn peer · asym</span></div>
+                <div class="sig"><span class="lamp ok"></span><span class="k">freshness</span><span class="v ok">live</span></div>
+              </div>
+              <div class="foot">raised — ClusterMesh peering asymmetric</div>
+            </div>
+
+            <!-- prd-weu -->
+            <div class="cmod module">
+              <div class="head"><span class="lamp ok"></span><span class="nm">aks-prd-weu</span><span class="tag warn" title="destructive verbs require typed confirmation">prd lock</span></div>
+              <div class="meta">AKS / westeurope / protected / v1.31.7</div>
+              <div class="wells">
+                <div class="wl wellbox"><div class="v">9/9</div><div class="k">nodes</div></div>
+                <div class="wl wellbox"><div class="v">312</div><div class="k">pods</div></div>
+              </div>
+              <div class="sigs">
+                <div class="sig"><span class="lamp ok"></span><span class="k">workloads</span><span class="v ok">86 ok</span></div>
+                <div class="sig"><span class="lamp ok"></span><span class="k">gitops</span><span class="v ok">flux 34 ready</span></div>
+                <div class="sig"><span class="lamp ok"></span><span class="k">gateway</span><span class="v ok">18 routes</span></div>
+                <div class="sig"><span class="lamp ok"></span><span class="k">mesh</span><span class="v ok">pn peer</span></div>
+                <div class="sig"><span class="lamp ok"></span><span class="k">freshness</span><span class="v ok">live</span></div>
+              </div>
+              <div class="foot">healthy — nothing needs attention</div>
+            </div>
+
+            <!-- prd-neu -->
+            <div class="cmod module">
+              <div class="head"><span class="lamp ok"></span><span class="nm">aks-prd-neu</span><span class="tag warn">prd lock</span></div>
+              <div class="meta">AKS / northeurope / protected / v1.31.7</div>
+              <div class="wells">
+                <div class="wl wellbox"><div class="v">9/9</div><div class="k">nodes</div></div>
+                <div class="wl wellbox"><div class="v">298</div><div class="k">pods</div></div>
+              </div>
+              <div class="sigs">
+                <div class="sig"><span class="lamp ok"></span><span class="k">workloads</span><span class="v ok">83 ok</span></div>
+                <div class="sig"><span class="lamp ok"></span><span class="k">gitops</span><span class="v ok">flux 34 ready</span></div>
+                <div class="sig"><span class="lamp ok"></span><span class="k">gateway</span><span class="v ok">18 routes</span></div>
+                <div class="sig"><span class="lamp ok"></span><span class="k">mesh</span><span class="v ok">pw peer</span></div>
+                <div class="sig"><span class="lamp ok"></span><span class="k">freshness</span><span class="v ok">live</span></div>
+              </div>
+              <div class="foot">healthy — nothing needs attention</div>
+            </div>
+
+            <!-- dev-weu -->
+            <div class="cmod module">
+              <div class="head"><span class="lamp ok"></span><span class="nm">aks-dev-weu</span></div>
+              <div class="meta">AKS / westeurope / v1.32.0</div>
+              <div class="wells">
+                <div class="wl wellbox"><div class="v">6/6</div><div class="k">nodes</div></div>
+                <div class="wl wellbox"><div class="v">214</div><div class="k">pods</div></div>
+              </div>
+              <div class="sigs">
+                <div class="sig"><span class="lamp ok"></span><span class="k">workloads</span><span class="v ok">61 ok</span></div>
+                <div class="sig"><span class="lamp ok"></span><span class="k">gitops</span><span class="v ok">flux 18 · argo 6</span></div>
+                <div class="sig"><span class="lamp ok"></span><span class="k">gateway</span><span class="v ok">9 routes</span></div>
+                <div class="sig"><span class="lamp ok"></span><span class="k">mesh</span><span class="v ok">dn peer</span></div>
+                <div class="sig"><span class="lamp ok"></span><span class="k">freshness</span><span class="v ok">live</span></div>
+              </div>
+              <div class="foot">healthy — nothing needs attention</div>
+            </div>
+
+            <!-- dev-neu -->
+            <div class="cmod module">
+              <div class="head"><span class="lamp ok"></span><span class="nm">aks-dev-neu</span></div>
+              <div class="meta">AKS / northeurope / v1.32.0</div>
+              <div class="wells">
+                <div class="wl wellbox"><div class="v">6/6</div><div class="k">nodes</div></div>
+                <div class="wl wellbox"><div class="v">161</div><div class="k">pods</div></div>
+              </div>
+              <div class="sigs">
+                <div class="sig"><span class="lamp ok"></span><span class="k">workloads</span><span class="v ok">57 ok</span></div>
+                <div class="sig"><span class="lamp ok"></span><span class="k">gitops</span><span class="v ok">flux 17 ready</span></div>
+                <div class="sig"><span class="lamp"></span><span class="k">gateway</span><span class="v mut">not detected</span></div>
+                <div class="sig"><span class="lamp ok"></span><span class="k">mesh</span><span class="v ok">dw peer</span></div>
+                <div class="sig"><span class="lamp ok"></span><span class="k">freshness</span><span class="v ok">live</span></div>
+              </div>
+              <div class="foot">healthy — nothing needs attention</div>
+            </div>
+          </div>
+
+          <div class="mesh wellbox">
+            <div class="cap"><span class="lbl">clustermesh · patch bay</span><span class="note">1 asymmetric peering — stg-weu → stg-neu handshake missing</span></div>
+            <svg width="100%" height="66" viewBox="0 0 1200 66" preserveAspectRatio="xMidYMid meet">
+              <path d="M 140 50 Q 250 8 360 50" fill="none" stroke="var(--tx2)" stroke-width="1.4" opacity="0.7"/>
+              <path d="M 360 50 Q 470 8 580 50" fill="none" stroke="var(--warn)" stroke-width="1.4" stroke-dasharray="5 4"/>
+              <path d="M 580 50 Q 745 -4 910 50" fill="none" stroke="var(--tx2)" stroke-width="1.4" opacity="0.7"/>
+              <g font-size="9.5" font-family="ui-monospace, monospace">
+                <circle cx="140" cy="50" r="5" fill="var(--well)" stroke="var(--tx2)"/><circle cx="140" cy="50" r="1.8" fill="var(--ok)"/><text x="140" y="63" text-anchor="middle" fill="var(--tx1)">dev-weu⇄dev-neu</text>
+                <circle cx="360" cy="50" r="5" fill="var(--well)" stroke="var(--tx2)"/><circle cx="360" cy="50" r="1.8" fill="var(--ok)"/><text x="360" y="63" text-anchor="middle" fill="var(--tx1)">stg-weu</text>
+                <circle cx="580" cy="50" r="5" fill="var(--well)" stroke="var(--warn)"/><circle cx="580" cy="50" r="1.8" fill="var(--warn)"/><text x="580" y="63" text-anchor="middle" fill="var(--warn)">stg-neu · asym</text>
+                <circle cx="910" cy="50" r="5" fill="var(--well)" stroke="var(--tx2)"/><circle cx="910" cy="50" r="1.8" fill="var(--ok)"/><text x="910" y="63" text-anchor="middle" fill="var(--tx1)">prd-weu⇄prd-neu</text>
+                <circle cx="1100" cy="50" r="5" fill="none" stroke="var(--tx2)" stroke-dasharray="2 2"/><text x="1100" y="63" text-anchor="middle" fill="var(--tx2)">nelli · no mesh</text>
+              </g>
+            </svg>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 02 PODS TRIAGE ============ -->
+  <section class="screen" id="s2">
+    <div class="screenhead">
+      <h2>02 · Pods triage — master-detail</h2>
+      <p><b>What changed:</b> the list sits in an inset well like a meter window; every row carries a lamp, and only the CrashLoop (blinking red), ImagePull and Pending lamps are lit — 209 healthy rows stay dark. Selection is an illuminated left edge; checkboxes are physical toggles. The function-key bar at the bottom is permanent chrome, htop-style: the keyboard layer is furniture, not a tooltip. The ×28k event count keeps its exact figure on hover.</p>
+    </div>
+    <div class="app">
+      <div class="spine module">
+        <span class="cap">fleet</span>
+        <div class="ch cur" title="aks-dev-weu — 2 broken workloads"><span class="lamp bad blink"></span><span class="cd">dw</span></div>
+        <div class="ch" title="nelli"><span class="lamp off2"></span><span class="cd">ne</span></div>
+        <div class="ch" title="aks-stg-neu"><span class="lamp warn"></span><span class="cd">sn</span></div>
+        <div class="ch" title="aks-stg-weu"><span class="lamp warn"></span><span class="cd">sw</span></div>
+        <div class="ch" title="aks-prd-weu"><span class="lamp ok"></span><span class="cd">pw</span></div>
+        <div class="ch" title="aks-prd-neu"><span class="lamp ok"></span><span class="cd">pn</span></div>
+        <div class="ch" title="aks-dev-neu"><span class="lamp ok"></span><span class="cd">dn</span></div>
+      </div>
+      <div class="main">
+        <div class="mast module">
+          <span class="title mono">aks-dev-weu <span class="path">/ pods</span></span>
+          <span class="live"><span class="lamp ok"></span> live · watch ok</span>
+          <div class="right"><div class="palhint wellbox">⌘K — jump or run a command <kbd>⌘K</kbd></div></div>
+        </div>
+        <div class="lensnav module">
+          <a href="#s1">cluster</a>
+          <a href="#s2" class="cur"><span class="lamp bad" style="width:6px;height:6px;"></span>workloads <span class="n bad">2</span></a>
+          <a href="#s2">config</a>
+          <a href="#s2">autoscaling</a>
+          <a href="#s2">network</a>
+          <a href="#s2">storage</a>
+          <a href="#s2">access control</a>
+          <a href="#s2">gateway api</a>
+          <a href="#s5">cert-manager</a>
+          <a href="#s2">ext-secrets</a>
+          <a href="#s2">argo cd</a>
+          <a href="#s3">flux cd</a>
+          <a href="#s2">helm</a>
+          <a href="#s2">crds</a>
+        </div>
+        <div class="lensnav sub module">
+          <a href="#s2">all workloads <span class="n bad">2</span></a>
+          <a href="#s2" class="cur"><span class="lamp bad" style="width:6px;height:6px;"></span>pods <span class="n bad">2</span></a>
+          <a href="#s2">deployments</a>
+          <a href="#s2">statefulsets</a>
+          <a href="#s2">daemonsets</a>
+          <a href="#s2">replicasets</a>
+          <a href="#s2">jobs</a>
+          <a href="#s2">cronjobs</a>
+        </div>
+        <div class="module" style="flex:1; min-height:0; display:flex; flex-direction:column; overflow:hidden;">
+          <div class="meters">
+            <div class="meter"><div class="win wellbox">214</div><span class="lbl">pods</span></div>
+            <div class="meter"><div class="win wellbox bad">1</div><span class="lbl">crashloop</span></div>
+            <div class="meter"><div class="win wellbox bad">1</div><span class="lbl">imagepull</span></div>
+            <div class="meter"><div class="win wellbox warn">2</div><span class="lbl">pending</span></div>
+            <div class="meter"><div class="win wellbox dim">1</div><span class="lbl">syncing</span></div>
+            <div class="meter"><div class="win wellbox ok">209</div><span class="lbl">running</span></div>
+            <span class="free">broken first · severity order</span>
+          </div>
+          <div class="filters">
+            <span class="fsw cur">all <span class="n">214</span></span>
+            <span class="fsw bad">broken <span class="n">2</span></span>
+            <span class="fsw">pending <span class="n">2</span></span>
+            <span class="fsw">running <span class="n">209</span></span>
+            <span class="fsw">ns: all ▾</span>
+          </div>
+          <div class="board" style="margin-top:8px;">
+            <div class="listcol wellbox">
+              <div class="bulk">
+                <span><b>3 pods</b> selected</span>
+                <button class="bbtn danger">delete selected</button>
+                <button class="bbtn">restart owners</button>
+                <span class="esc">esc clears</span>
+              </div>
+              <div class="thead" style="grid-template-columns: 18px 14px minmax(180px,1.4fr) 96px 40px 158px 30px 40px 88px;">
+                <span></span><span></span><span>name</span><span>namespace</span><span>ready</span><span>status</span><span style="text-align:right;">↻</span><span style="text-align:right;">age</span><span>node</span>
+              </div>
+              <div class="rows">
+                <div class="row sel" style="grid-template-columns: 18px 14px minmax(180px,1.4fr) 96px 40px 158px 30px 40px 88px;">
+                  <span class="cb on"></span><span class="lamp bad"></span>
+                  <span class="name">api-6f9d84c7b5-2xkqv</span>
+                  <span class="dim">web</span>
+                  <span class="num bad">0/1</span>
+                  <span class="stx bad">CrashLoopBackOff</span>
+                  <span class="num bad">7</span>
+                  <span class="age" title="started 2026-07-05 12:58:11 CEST">22m</span>
+                  <span class="dim">aks-user-8</span>
+                </div>
+                <div class="row" style="grid-template-columns: 18px 14px minmax(180px,1.4fr) 96px 40px 158px 30px 40px 88px;">
+                  <span class="cb on"></span><span class="lamp bad"></span>
+                  <span class="name">checkout-59c6bd7f4d-hw2pl</span>
+                  <span class="dim">shop</span>
+                  <span class="num bad">0/1</span>
+                  <span class="stx bad">ImagePullBackOff</span>
+                  <span class="num">0</span>
+                  <span class="age" title="started 2026-07-05 13:11:02 CEST">9m</span>
+                  <span class="dim">aks-user-4</span>
+                </div>
+                <div class="row" style="grid-template-columns: 18px 14px minmax(180px,1.4fr) 96px 40px 158px 30px 40px 88px;">
+                  <span class="cb on"></span><span class="lamp warn"></span>
+                  <span class="name">prometheus-kps-1</span>
+                  <span class="dim">monitoring</span>
+                  <span class="num">0/2</span>
+                  <span class="stx warn">Pending·Unschedulable</span>
+                  <span class="num">0</span>
+                  <span class="age" title="created 2026-07-05 12:33:40 CEST">46m</span>
+                  <span class="dim">—</span>
+                </div>
+                <div class="row" style="grid-template-columns: 18px 14px minmax(180px,1.4fr) 96px 40px 158px 30px 40px 88px;">
+                  <span class="cb"></span><span class="lamp warn"></span>
+                  <span class="name">loki-write-2</span>
+                  <span class="dim">monitoring</span>
+                  <span class="num">0/1</span>
+                  <span class="stx warn">Pending</span>
+                  <span class="num">0</span>
+                  <span class="age" title="created 2026-07-05 13:16:55 CEST">3m</span>
+                  <span class="dim">—</span>
+                </div>
+                <div class="row stale" title="spec changed 40s ago — controller has not observed generation 12 yet" style="grid-template-columns: 18px 14px minmax(180px,1.4fr) 96px 40px 158px 30px 40px 88px;">
+                  <span class="cb"></span><span class="lamp"></span>
+                  <span class="name">envoy-gateway-7bd549d97c-fmm2s</span>
+                  <span class="dim">ingress</span>
+                  <span class="num">1/1</span>
+                  <span class="stx mut">Syncing…</span>
+                  <span class="num">0</span>
+                  <span class="age" title="started 2026-07-01 08:14:03 CEST">4d</span>
+                  <span class="dim">aks-sys-2</span>
+                </div>
+                <div class="row" style="grid-template-columns: 18px 14px minmax(180px,1.4fr) 96px 40px 158px 30px 40px 88px;">
+                  <span class="cb"></span><span class="lamp ok"></span><span class="name">web-frontend-857fd44b6c-qp8zn</span><span class="dim">web</span><span class="num">1/1</span>
+                  <span class="stx mut">Running</span><span class="num">0</span><span class="age" title="started 2026-07-03 17:40:19 CEST">2d</span><span class="dim">aks-user-2</span>
+                </div>
+                <div class="row" style="grid-template-columns: 18px 14px minmax(180px,1.4fr) 96px 40px 158px 30px 40px 88px;">
+                  <span class="cb"></span><span class="lamp ok"></span><span class="name">cart-6b8f4dd9c8-x4mfw</span><span class="dim">shop</span><span class="num">1/1</span>
+                  <span class="stx mut">Running</span><span class="num">1</span><span class="age" title="started 2026-07-02 10:03:52 CEST">3d</span><span class="dim">aks-user-6</span>
+                </div>
+                <div class="row" style="grid-template-columns: 18px 14px minmax(180px,1.4fr) 96px 40px 158px 30px 40px 88px;">
+                  <span class="cb"></span><span class="lamp ok"></span><span class="name">source-controller-6c9bd7c8d4-pl2wn</span><span class="dim">flux-system</span><span class="num">1/1</span>
+                  <span class="stx mut">Running</span><span class="num">0</span><span class="age" title="started 2026-06-21 06:12:30 CEST">14d</span><span class="dim">aks-sys-1</span>
+                </div>
+                <div class="row" style="grid-template-columns: 18px 14px minmax(180px,1.4fr) 96px 40px 158px 30px 40px 88px;">
+                  <span class="cb"></span><span class="lamp ok"></span><span class="name">kustomize-controller-7d8dd5cf55-8kkzt</span><span class="dim">flux-system</span><span class="num">1/1</span>
+                  <span class="stx mut">Running</span><span class="num">0</span><span class="age" title="started 2026-06-21 06:12:31 CEST">14d</span><span class="dim">aks-sys-1</span>
+                </div>
+                <div class="row" style="grid-template-columns: 18px 14px minmax(180px,1.4fr) 96px 40px 158px 30px 40px 88px;">
+                  <span class="cb"></span><span class="lamp ok"></span><span class="name">grafana-64d99cd6c6-tt5rh</span><span class="dim">monitoring</span><span class="num">2/2</span>
+                  <span class="stx mut">Running</span><span class="num">0</span><span class="age" title="started 2026-06-28 22:51:07 CEST">7d</span><span class="dim">aks-user-1</span>
+                </div>
+                <div class="row" style="grid-template-columns: 18px 14px minmax(180px,1.4fr) 96px 40px 158px 30px 40px 88px;">
+                  <span class="cb"></span><span class="lamp ok"></span><span class="name">cilium-x2ldr</span><span class="dim">kube-system</span><span class="num">1/1</span>
+                  <span class="stx mut">Running</span><span class="num">0</span><span class="age" title="started 2026-06-14 04:20:11 CEST">21d</span><span class="dim">aks-sys-3</span>
+                </div>
+                <div class="row" style="grid-template-columns: 18px 14px minmax(180px,1.4fr) 96px 40px 158px 30px 40px 88px;">
+                  <span class="cb"></span><span class="lamp ok"></span><span class="name">cert-manager-5f6cc8c4dd-mvjq7</span><span class="dim">cert-manager</span><span class="num">1/1</span>
+                  <span class="stx mut">Running</span><span class="num">0</span><span class="age" title="started 2026-06-21 06:14:02 CEST">14d</span><span class="dim">aks-sys-2</span>
+                </div>
+                <div class="row" style="grid-template-columns: 18px 14px minmax(180px,1.4fr) 96px 40px 158px 30px 40px 88px;">
+                  <span class="cb"></span><span class="lamp ok"></span><span class="name">external-secrets-79dd9c6f6b-nb4kd</span><span class="dim">external-secrets</span><span class="num">1/1</span>
+                  <span class="stx mut">Running</span><span class="num">0</span><span class="age" title="started 2026-06-21 06:14:40 CEST">14d</span><span class="dim">aks-sys-2</span>
+                </div>
+                <div class="row" style="grid-template-columns: 18px 14px minmax(180px,1.4fr) 96px 40px 158px 30px 40px 88px;">
+                  <span class="cb"></span><span class="lamp ok"></span><span class="name">loki-read-0</span><span class="dim">monitoring</span><span class="num">1/1</span>
+                  <span class="stx mut">Running</span><span class="num">0</span><span class="age" title="started 2026-06-28 22:52:18 CEST">7d</span><span class="dim">aks-user-3</span>
+                </div>
+              </div>
+              <div class="fkeys" style="border-top: 1px solid var(--line);">
+                <span class="fk"><kbd>j k</kbd> nav</span>
+                <span class="fk"><kbd>space</kbd> select</span>
+                <span class="fk"><kbd>↵</kbd> inspect</span>
+                <span class="fk"><kbd>l</kbd> logs</span>
+                <span class="fk"><kbd>⌘k</kbd> commands</span>
+                <span class="free">14 of 214 · broken first</span>
+              </div>
+            </div>
+            <div class="insp wellbox">
+              <div class="insp-head">
+                <div class="insp-title">api-6f9d84c7b5-2xkqv</div>
+                <div class="insp-meta">web · aks-user-8 · <span title="started 2026-07-05 12:58:11 CEST">22m</span> · 10.244.3.117</div>
+                <div class="verdict">
+                  <span class="big bad"><span class="lamp bad"></span>CrashLoopBackOff</span>
+                  <span class="sub2">BackOff · 0/1 ready · 7 restarts</span>
+                </div>
+              </div>
+              <div class="actions">
+                <button class="abtn">logs <kbd>l</kbd></button>
+                <button class="abtn">shell</button>
+                <button class="abtn">describe</button>
+                <button class="abtn">port-fwd</button>
+                <button class="abtn danger">restart</button>
+                <button class="abtn danger">delete</button>
+              </div>
+              <div class="isec">
+                <h4>containers — 1</h4>
+                <dl class="kv">
+                  <dt>api</dt><dd style="color:var(--bad); font-weight:700;">waiting · CrashLoopBackOff</dd>
+                  <dt>image</dt><dd class="d2">ghcr.io/acme/api:1.42.3</dd>
+                  <dt>last state</dt><dd style="color:var(--bad);">OOMKilled (exit 137) · <span class="d2" title="2026-07-05 13:17:44 CEST">3m ago</span></dd>
+                  <dt>restarts</dt><dd class="d2">7 · back-off 5m0s</dd>
+                  <dt>memory</dt><dd class="d2">limit 512Mi · last peak 511Mi</dd>
+                </dl>
+              </div>
+              <div class="isec">
+                <h4>conditions</h4>
+                <dl class="kv">
+                  <dt>PodScheduled</dt><dd style="color:var(--ok);">True</dd>
+                  <dt>Initialized</dt><dd style="color:var(--ok);">True</dd>
+                  <dt>ContainersReady</dt><dd style="color:var(--bad);">False · ContainersNotReady</dd>
+                  <dt>Ready</dt><dd style="color:var(--bad);">False</dd>
+                </dl>
+              </div>
+              <div class="isec">
+                <h4>events</h4>
+                <div class="evline"><span class="lamp bad"></span><span class="cnt hot" title="28,412 occurrences">×28k</span><span class="msg" title="Back-off restarting failed container api in pod api-6f9d84c7b5-2xkqv">BackOff · restarting failed container api</span><span class="when" title="last 2026-07-05 13:19:58 CEST">41s</span></div>
+                <div class="evline"><span class="lamp warn"></span><span class="cnt" title="112 occurrences">×112</span><span class="msg" title="Readiness probe failed: dial tcp 10.244.3.117:8080: connect: connection refused">Unhealthy · readiness probe refused</span><span class="when">2m</span></div>
+                <div class="evline"><span class="lamp"></span><span class="cnt">×7</span><span class="msg">Pulled · image already present</span><span class="when">3m</span></div>
+                <div class="evline"><span class="lamp"></span><span class="cnt">×7</span><span class="msg">Started · container api</span><span class="when">3m</span></div>
+              </div>
+              <div class="isec">
+                <h4>owner</h4>
+                <dl class="kv">
+                  <dt>ReplicaSet</dt><dd><a class="ln" href="#s2">api-6f9d84c7b5</a></dd>
+                  <dt>Deployment</dt><dd><a class="ln" href="#s2">web/api</a> <span class="d2">· 0/1 available</span></dd>
+                  <dt>managed by</dt><dd class="d2">flux · <a class="ln" href="#s3">ks apps-web</a></dd>
+                </dl>
+              </div>
+            </div>
+          </div>
+          <div style="height:8px; flex-shrink:0;"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 03 FLUX LENS ============ -->
+  <section class="screen" id="s3">
+    <div class="screenhead">
+      <h2>03 · Flux lens</h2>
+      <p><b>What changed:</b> Flux's own vocabulary drives the lamps — ready is dark green, reconciling dims the row behind a grey “Syncing…”, suspended is a steady (never blinking) amber pause, and the one Failed release is the only lit red on the bench, its reason word beside it. The inspector traces cause to effect: source lamp, dependsOn lamp, then the inventory where exactly one object is lit.</p>
+    </div>
+    <div class="app">
+      <div class="spine module">
+        <span class="cap">fleet</span>
+        <div class="ch cur" title="aks-stg-weu — 1 flux failure"><span class="lamp bad blink"></span><span class="cd">sw</span></div>
+        <div class="ch" title="nelli"><span class="lamp off2"></span><span class="cd">ne</span></div>
+        <div class="ch" title="aks-stg-neu"><span class="lamp warn"></span><span class="cd">sn</span></div>
+        <div class="ch" title="aks-prd-weu"><span class="lamp ok"></span><span class="cd">pw</span></div>
+        <div class="ch" title="aks-prd-neu"><span class="lamp ok"></span><span class="cd">pn</span></div>
+        <div class="ch" title="aks-dev-weu"><span class="lamp ok"></span><span class="cd">dw</span></div>
+        <div class="ch" title="aks-dev-neu"><span class="lamp ok"></span><span class="cd">dn</span></div>
+      </div>
+      <div class="main">
+        <div class="mast module">
+          <span class="title mono">aks-stg-weu <span class="path">/ flux</span></span>
+          <span class="live"><span class="lamp ok"></span> live · source-controller ok</span>
+          <div class="right"><div class="palhint wellbox">⌘K — jump or run a command <kbd>⌘K</kbd></div></div>
+        </div>
+        <div class="lensnav module">
+          <a href="#s1">cluster</a>
+          <a href="#s2">workloads</a>
+          <a href="#s2">config</a>
+          <a href="#s2">autoscaling</a>
+          <a href="#s2">network</a>
+          <a href="#s2">storage</a>
+          <a href="#s2">access control</a>
+          <a href="#s2">gateway api</a>
+          <a href="#s5">cert-manager</a>
+          <a href="#s2">ext-secrets</a>
+          <a href="#s2">argo cd</a>
+          <a href="#s3" class="cur"><span class="lamp bad" style="width:6px;height:6px;"></span>flux cd <span class="n bad">1</span></a>
+          <a href="#s2">helm</a>
+          <a href="#s2">crds</a>
+        </div>
+        <div class="lensnav sub module">
+          <a href="#s3" class="cur">kustomizations <span class="n bad">1</span></a>
+          <a href="#s3">helmreleases</a>
+          <a href="#s3">gitrepositories</a>
+          <a href="#s3">helmrepositories</a>
+          <a href="#s3">ocirepositories</a>
+          <a href="#s3">buckets</a>
+          <a href="#s3">providers</a>
+          <a href="#s3">alerts</a>
+          <a href="#s3">receivers</a>
+        </div>
+        <div class="module" style="flex:1; min-height:0; display:flex; flex-direction:column; overflow:hidden;">
+          <div class="meters">
+            <div class="meter"><div class="win wellbox">21</div><span class="lbl">kustomizations</span></div>
+            <div class="meter"><div class="win wellbox">9</div><span class="lbl">helmreleases</span></div>
+            <div class="meter"><div class="win wellbox bad">1</div><span class="lbl">failed</span></div>
+            <div class="meter"><div class="win wellbox warn">1</div><span class="lbl">suspended</span></div>
+            <div class="meter"><div class="win wellbox dim">1</div><span class="lbl">reconciling</span></div>
+            <div class="meter"><div class="win wellbox ok">27</div><span class="lbl">ready</span></div>
+            <span class="free">broken first</span>
+          </div>
+          <div class="filters">
+            <span class="fsw cur">all <span class="n">30</span></span>
+            <span class="fsw bad">failed <span class="n">1</span></span>
+            <span class="fsw">suspended <span class="n">1</span></span>
+            <span class="fsw">kustomizations <span class="n">21</span></span>
+            <span class="fsw">helmreleases <span class="n">9</span></span>
+          </div>
+          <div class="board" style="margin-top:8px;">
+            <div class="listcol wellbox">
+              <div class="thead" style="grid-template-columns: 14px 24px minmax(150px,1.2fr) 92px minmax(130px,1fr) 216px 40px;">
+                <span></span><span>kind</span><span>name</span><span>namespace</span><span>revision</span><span>status</span><span style="text-align:right;">age</span>
+              </div>
+              <div class="rows">
+                <div class="row sel" style="grid-template-columns: 14px 24px minmax(150px,1.2fr) 92px minmax(130px,1fr) 216px 40px;">
+                  <span class="lamp bad"></span><span class="dim">hr</span>
+                  <span class="name">kube-prometheus-stack</span>
+                  <span class="dim">monitoring</span>
+                  <span class="dim">58.2.1</span>
+                  <span class="stx bad">Failed · HealthCheckFailed</span>
+                  <span class="age" title="created 2026-03-02">125d</span>
+                </div>
+                <div class="row" style="grid-template-columns: 14px 24px minmax(150px,1.2fr) 92px minmax(130px,1fr) 216px 40px;">
+                  <span class="lamp warn"></span><span class="dim">ks</span>
+                  <span class="name">tenants</span>
+                  <span class="dim">flux-system</span>
+                  <span class="dim">main@sha1:44b1a20</span>
+                  <span class="stx warn" title="paused on purpose — resume with s">‖ suspended</span>
+                  <span class="age" title="created 2026-01-18">168d</span>
+                </div>
+                <div class="row stale" title="new revision fetched 55s ago — kustomize-controller reconciling" style="grid-template-columns: 14px 24px minmax(150px,1.2fr) 92px minmax(130px,1fr) 216px 40px;">
+                  <span class="lamp"></span><span class="dim">hr</span>
+                  <span class="name">ingress-nginx</span>
+                  <span class="dim">ingress</span>
+                  <span class="dim">4.10.0 → 4.10.1</span>
+                  <span class="stx mut">Syncing…</span>
+                  <span class="age" title="created 2026-02-11">144d</span>
+                </div>
+                <div class="row" style="grid-template-columns: 14px 24px minmax(150px,1.2fr) 92px minmax(130px,1fr) 216px 40px;">
+                  <span class="lamp ok"></span><span class="dim">ks</span><span class="name">flux-system</span><span class="dim">flux-system</span><span class="dim">main@sha1:8f3c21d</span>
+                  <span class="stx mut">Ready</span><span class="age" title="created 2026-01-18">168d</span>
+                </div>
+                <div class="row" style="grid-template-columns: 14px 24px minmax(150px,1.2fr) 92px minmax(130px,1fr) 216px 40px;">
+                  <span class="lamp ok"></span><span class="dim">ks</span><span class="name">infra-cilium</span><span class="dim">flux-system</span><span class="dim">main@sha1:8f3c21d</span>
+                  <span class="stx mut">Ready</span><span class="age">168d</span>
+                </div>
+                <div class="row" style="grid-template-columns: 14px 24px minmax(150px,1.2fr) 92px minmax(130px,1fr) 216px 40px;">
+                  <span class="lamp ok"></span><span class="dim">ks</span><span class="name">infra-monitoring-crds</span><span class="dim">flux-system</span><span class="dim">main@sha1:8f3c21d</span>
+                  <span class="stx mut">Ready</span><span class="age">121d</span>
+                </div>
+                <div class="row" style="grid-template-columns: 14px 24px minmax(150px,1.2fr) 92px minmax(130px,1fr) 216px 40px;">
+                  <span class="lamp ok"></span><span class="dim">hr</span><span class="name">cert-manager</span><span class="dim">cert-manager</span><span class="dim">v1.15.3</span>
+                  <span class="stx mut">Ready</span><span class="age">168d</span>
+                </div>
+                <div class="row" style="grid-template-columns: 14px 24px minmax(150px,1.2fr) 92px minmax(130px,1fr) 216px 40px;">
+                  <span class="lamp ok"></span><span class="dim">hr</span><span class="name">external-secrets</span><span class="dim">external-secrets</span><span class="dim">0.10.4</span>
+                  <span class="stx mut">Ready</span><span class="age">150d</span>
+                </div>
+                <div class="row" style="grid-template-columns: 14px 24px minmax(150px,1.2fr) 92px minmax(130px,1fr) 216px 40px;">
+                  <span class="lamp ok"></span><span class="dim">hr</span><span class="name">envoy-gateway</span><span class="dim">ingress</span><span class="dim">1.2.0</span>
+                  <span class="stx mut">Ready</span><span class="age">98d</span>
+                </div>
+                <div class="row" style="grid-template-columns: 14px 24px minmax(150px,1.2fr) 92px minmax(130px,1fr) 216px 40px;">
+                  <span class="lamp ok"></span><span class="dim">ks</span><span class="name">apps-web</span><span class="dim">flux-system</span><span class="dim">main@sha1:8f3c21d</span>
+                  <span class="stx mut">Ready</span><span class="age">140d</span>
+                </div>
+                <div class="row" style="grid-template-columns: 14px 24px minmax(150px,1.2fr) 92px minmax(130px,1fr) 216px 40px;">
+                  <span class="lamp ok"></span><span class="dim">ks</span><span class="name">apps-shop</span><span class="dim">flux-system</span><span class="dim">main@sha1:8f3c21d</span>
+                  <span class="stx mut">Ready</span><span class="age">140d</span>
+                </div>
+              </div>
+              <div class="fkeys" style="border-top: 1px solid var(--line);">
+                <span class="fk"><kbd>j k</kbd> nav</span>
+                <span class="fk"><kbd>↵</kbd> inspect</span>
+                <span class="fk"><kbd>r</kbd> reconcile</span>
+                <span class="fk"><kbd>s</kbd> suspend/resume</span>
+                <span class="free">11 of 30 · broken first</span>
+              </div>
+            </div>
+            <div class="insp wellbox">
+              <div class="insp-head">
+                <div class="insp-title">kube-prometheus-stack</div>
+                <div class="insp-meta">HelmRelease · monitoring · chart 58.2.1 · 125d</div>
+                <div class="verdict">
+                  <span class="big bad"><span class="lamp bad"></span>Failed</span>
+                  <span class="sub2">HealthCheckFailed · <span title="attempt 3 of 5 · next retry in 4m">retry 3/5</span></span>
+                </div>
+              </div>
+              <div class="actions">
+                <button class="abtn">reconcile <kbd>r</kbd></button>
+                <button class="abtn">with source</button>
+                <button class="abtn">suspend <kbd>s</kbd></button>
+                <button class="abtn">diff</button>
+              </div>
+              <div class="isec">
+                <h4>source</h4>
+                <dl class="kv">
+                  <dt>HelmRepository</dt><dd><a class="ln" href="#s3">prometheus-community</a> <span style="color:var(--ok);">· Ready</span></dd>
+                  <dt>chart</dt><dd class="d2">kube-prometheus-stack-58.2.1</dd>
+                  <dt>fetched</dt><dd class="d2"><span title="2026-07-05 13:04:11 CEST">17m ago</span></dd>
+                </dl>
+              </div>
+              <div class="isec">
+                <h4>dependsOn</h4>
+                <dl class="kv">
+                  <dt>ks</dt><dd><a class="ln" href="#s3">flux-system/infra-monitoring-crds</a> <span style="color:var(--ok);">· Ready</span></dd>
+                </dl>
+              </div>
+              <div class="isec">
+                <h4>inventory — 4 of 38 shown</h4>
+                <div style="display:grid; gap:5px; font-family:ui-monospace,monospace; font-size:11px;">
+                  <div style="display:flex; gap:8px; align-items:center;"><span class="lamp ok"></span><span style="color:var(--tx2);">Deployment</span><a class="ln" href="#s2">monitoring/kps-operator</a></div>
+                  <div style="display:flex; gap:8px; align-items:center;"><span class="lamp bad"></span><span style="color:var(--tx2);">StatefulSet</span><a class="ln" href="#s2"><b>monitoring/prometheus-kps</b></a><span style="color:var(--bad); margin-left:auto;">1/2 ready</span></div>
+                  <div style="display:flex; gap:8px; align-items:center;"><span class="lamp ok"></span><span style="color:var(--tx2);">Deployment</span><a class="ln" href="#s2">monitoring/kps-grafana</a></div>
+                  <div style="display:flex; gap:8px; align-items:center;"><span class="lamp ok"></span><span style="color:var(--tx2);">DaemonSet</span><a class="ln" href="#s2">monitoring/kps-node-exporter</a></div>
+                </div>
+                <div style="font-family:ui-monospace,monospace; font-size:9.5px; color:var(--tx2); margin-top:7px;">+34 more — all healthy</div>
+              </div>
+              <div class="isec">
+                <h4>events</h4>
+                <div class="evline"><span class="lamp bad"></span><span class="cnt hot" title="14 occurrences">×14</span><span class="msg" title="health check failed after 5m0s: timed out waiting for StatefulSet monitoring/prometheus-kps to become ready">HealthCheckFailed · prometheus-kps not ready</span><span class="when" title="last 2026-07-05 13:18:20 CEST">2m</span></div>
+                <div class="evline"><span class="lamp"></span><span class="cnt">×3</span><span class="msg">UpgradeAttempt · helm upgrade started</span><span class="when">18m</span></div>
+                <div class="evline"><span class="lamp"></span><span class="cnt">×1</span><span class="msg">ArtifactUpToDate · chart 58.2.1 verified</span><span class="when">17m</span></div>
+              </div>
+            </div>
+          </div>
+          <div style="height:8px; flex-shrink:0;"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 04 COMMAND PALETTE ============ -->
+  <section class="screen" id="s4">
+    <div class="screenhead">
+      <h2>04 · Command palette — “dra”</h2>
+      <p><b>What changed:</b> the palette is a module lifted off the bench — same machined face, its input an inset well with a block caret. Destructive verbs carry an amber prd-lock marker in the margin before you can run them; matched letters take the accent. Footer honesty is unchanged: “+12 more — keep typing”, “showing loaded data”.</p>
+    </div>
+    <div class="app" style="height: 560px;">
+      <div class="spine module" style="opacity:0.5;">
+        <span class="cap">fleet</span>
+        <div class="ch cur"><span class="lamp bad"></span><span class="cd">dw</span></div>
+        <div class="ch"><span class="lamp off2"></span><span class="cd">ne</span></div>
+        <div class="ch"><span class="lamp warn"></span><span class="cd">sn</span></div>
+        <div class="ch"><span class="lamp warn"></span><span class="cd">sw</span></div>
+        <div class="ch"><span class="lamp ok"></span><span class="cd">pw</span></div>
+        <div class="ch"><span class="lamp ok"></span><span class="cd">pn</span></div>
+        <div class="ch"><span class="lamp ok"></span><span class="cd">dn</span></div>
+      </div>
+      <div class="main" style="opacity:0.5;">
+        <div class="mast module">
+          <span class="title mono">aks-dev-weu <span class="path">/ pods</span></span>
+          <span class="live"><span class="lamp ok"></span> live</span>
+        </div>
+        <div class="module" style="flex:1;"></div>
+      </div>
+      <div class="overlay">
+        <div class="pal module">
+          <div class="pal-in wellbox">
+            <span style="color:var(--tx2);">⌘K</span>
+            <span>dra<span class="caret"></span></span>
+            <span class="esc"><kbd>esc</kbd></span>
+          </div>
+          <div class="pal-grp">
+            <h5>actions</h5>
+            <div class="pal-row sel">
+              <span class="lamp warn"></span>
+              <span class="t"><mark>d</mark><mark>r</mark><mark>a</mark>in node aks-sys-3-vmss000002</span>
+              <span class="hint"><span class="lock">prd lock</span> · aks-prd-weu · ↵</span>
+            </div>
+            <div class="pal-row">
+              <span class="lamp"></span>
+              <span class="t"><mark>d</mark><mark>r</mark><mark>a</mark>in node aks-user-12-vmss000011</span>
+              <span class="hint">aks-dev-weu</span>
+            </div>
+            <div class="pal-row">
+              <span class="lamp"></span>
+              <span class="t">restart deployment web/api</span>
+              <span class="hint" title="matched on hint: day-2 restart"><mark>d</mark>ay-2 <mark>r</mark>est<mark>a</mark>rt · aks-dev-weu</span>
+            </div>
+            <div class="pal-row">
+              <span class="lamp"></span>
+              <span class="t"><mark>d</mark>esc<mark>r</mark>ibe pod <mark>a</mark>pi-6f9d84c7b5-2xkqv</span>
+              <span class="hint">web · aks-dev-weu</span>
+            </div>
+            <div class="pal-row">
+              <span class="lamp"></span>
+              <span class="t"><mark>d</mark>iff helm<mark>r</mark>elease <mark>a</mark>pps/ingress-nginx</span>
+              <span class="hint">aks-stg-weu</span>
+            </div>
+          </div>
+          <div class="pal-foot">
+            <span class="more">+12 more — keep typing</span>
+            <span>showing loaded data</span>
+            <span class="right"><span>↑↓ nav</span><span>↵ run</span><span>esc close</span></span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 05 CERTIFICATES LENS ============ -->
+  <section class="screen" id="s5">
+    <div class="screenhead">
+      <h2>05 · Certificates lens</h2>
+      <p><b>What changed:</b> two different failures get two different lights — “expires in 6d” is a steady amber countdown, “cannot issue” is the lit red lamp. The issuance chain is a signal path down the inspector: dark lamps for the pending stages, and the deepest stuck node — the DNS-01 challenge — is the one lit element, boxed with the exact resolver error and the next move.</p>
+    </div>
+    <div class="app">
+      <div class="spine module">
+        <span class="cap">fleet</span>
+        <div class="ch cur" title="aks-prd-weu — 1 failing certificate"><span class="lamp bad blink"></span><span class="cd">pw</span></div>
+        <div class="ch" title="nelli"><span class="lamp off2"></span><span class="cd">ne</span></div>
+        <div class="ch" title="aks-stg-neu"><span class="lamp warn"></span><span class="cd">sn</span></div>
+        <div class="ch" title="aks-stg-weu"><span class="lamp warn"></span><span class="cd">sw</span></div>
+        <div class="ch" title="aks-prd-neu"><span class="lamp ok"></span><span class="cd">pn</span></div>
+        <div class="ch" title="aks-dev-weu"><span class="lamp ok"></span><span class="cd">dw</span></div>
+        <div class="ch" title="aks-dev-neu"><span class="lamp ok"></span><span class="cd">dn</span></div>
+      </div>
+      <div class="main">
+        <div class="mast module">
+          <span class="title mono">aks-prd-weu <span class="path">/ certificates</span></span>
+          <span class="live"><span class="lamp ok"></span> live · cert-manager v1.15.3</span>
+          <div class="right"><div class="palhint wellbox">⌘K — jump or run a command <kbd>⌘K</kbd></div></div>
+        </div>
+        <div class="lensnav module">
+          <a href="#s1">cluster</a>
+          <a href="#s2">workloads</a>
+          <a href="#s2">config</a>
+          <a href="#s2">autoscaling</a>
+          <a href="#s2">network</a>
+          <a href="#s2">storage</a>
+          <a href="#s2">access control</a>
+          <a href="#s2">gateway api</a>
+          <a href="#s5" class="cur"><span class="lamp bad" style="width:6px;height:6px;"></span>cert-manager <span class="n bad">1</span></a>
+          <a href="#s2">ext-secrets</a>
+          <a href="#s2">argo cd</a>
+          <a href="#s3">flux cd</a>
+          <a href="#s2">helm</a>
+          <a href="#s2">crds</a>
+        </div>
+        <div class="lensnav sub module">
+          <a href="#s5" class="cur">certificates <span class="n bad">1</span></a>
+          <a href="#s5">requests</a>
+          <a href="#s5">orders</a>
+          <a href="#s5">challenges <span class="n bad">1</span></a>
+          <a href="#s5">issuers</a>
+          <a href="#s5">clusterissuers</a>
+        </div>
+        <div class="module" style="flex:1; min-height:0; display:flex; flex-direction:column; overflow:hidden;">
+          <div class="meters">
+            <div class="meter"><div class="win wellbox">23</div><span class="lbl">certificates</span></div>
+            <div class="meter"><div class="win wellbox bad">1</div><span class="lbl">failing</span></div>
+            <div class="meter"><div class="win wellbox warn">1</div><span class="lbl">expiring &lt;14d</span></div>
+            <div class="meter"><div class="win wellbox ok">21</div><span class="lbl">healthy</span></div>
+            <div class="meter"><div class="win wellbox">2</div><span class="lbl">issuers</span></div>
+            <span class="free">broken first · then soonest expiry</span>
+          </div>
+          <div class="filters">
+            <span class="fsw cur">all <span class="n">23</span></span>
+            <span class="fsw bad">failing <span class="n">1</span></span>
+            <span class="fsw">expiring <span class="n">1</span></span>
+            <span class="fsw">ns: all ▾</span>
+          </div>
+          <div class="board" style="margin-top:8px;">
+            <div class="listcol wellbox">
+              <div class="thead" style="grid-template-columns: 14px minmax(170px,1.3fr) 92px minmax(120px,1fr) 210px 64px;">
+                <span></span><span>certificate</span><span>namespace</span><span>issuer</span><span>status</span><span style="text-align:right;">renews</span>
+              </div>
+              <div class="rows">
+                <div class="row sel" style="grid-template-columns: 14px minmax(170px,1.3fr) 92px minmax(120px,1fr) 210px 64px;">
+                  <span class="lamp bad"></span>
+                  <span class="name">wildcard-shop-acme-io</span>
+                  <span class="dim">ingress</span>
+                  <span class="dim">letsencrypt-prod</span>
+                  <span class="stx bad">Failed · ChallengeStuck</span>
+                  <span class="age" style="color:var(--bad);">blocked</span>
+                </div>
+                <div class="row" style="grid-template-columns: 14px minmax(170px,1.3fr) 92px minmax(120px,1fr) 210px 64px;">
+                  <span class="lamp warn"></span>
+                  <span class="name">api-acme-io</span>
+                  <span class="dim">web</span>
+                  <span class="dim">letsencrypt-prod</span>
+                  <span class="stx warn">expires in 6d</span>
+                  <span class="age" title="renewal window opens 2026-07-09 00:00 UTC">4d</span>
+                </div>
+                <div class="row" style="grid-template-columns: 14px minmax(170px,1.3fr) 92px minmax(120px,1fr) 210px 64px;">
+                  <span class="lamp ok"></span><span class="name">grafana-acme-io</span><span class="dim">monitoring</span><span class="dim">letsencrypt-prod</span>
+                  <span class="stx mut">Ready</span><span class="age" title="renews 2026-09-21">78d</span>
+                </div>
+                <div class="row" style="grid-template-columns: 14px minmax(170px,1.3fr) 92px minmax(120px,1fr) 210px 64px;">
+                  <span class="lamp ok"></span><span class="name">webhook-cert</span><span class="dim">flux-system</span><span class="dim">selfsigned-ca</span>
+                  <span class="stx mut">Ready</span><span class="age" title="renews 2026-09-25">82d</span>
+                </div>
+                <div class="row" style="grid-template-columns: 14px minmax(170px,1.3fr) 92px minmax(120px,1fr) 210px 64px;">
+                  <span class="lamp ok"></span><span class="name">gateway-tls-prd</span><span class="dim">ingress</span><span class="dim">letsencrypt-prod</span>
+                  <span class="stx mut">Ready</span><span class="age" title="renews 2026-08-30">56d</span>
+                </div>
+                <div class="row" style="grid-template-columns: 14px minmax(170px,1.3fr) 92px minmax(120px,1fr) 210px 64px;">
+                  <span class="lamp ok"></span><span class="name">argocd-server-tls</span><span class="dim">argocd</span><span class="dim">letsencrypt-prod</span>
+                  <span class="stx mut">Ready</span><span class="age" title="renews 2026-08-18">44d</span>
+                </div>
+                <div class="row" style="grid-template-columns: 14px minmax(170px,1.3fr) 92px minmax(120px,1fr) 210px 64px;">
+                  <span class="lamp ok"></span><span class="name">loki-gateway-tls</span><span class="dim">monitoring</span><span class="dim">selfsigned-ca</span>
+                  <span class="stx mut">Ready</span><span class="age" title="renews 2026-10-02">89d</span>
+                </div>
+              </div>
+              <div class="fkeys" style="border-top: 1px solid var(--line);">
+                <span class="fk"><kbd>j k</kbd> nav</span>
+                <span class="fk"><kbd>↵</kbd> inspect</span>
+                <span class="fk"><kbd>r</kbd> renew now</span>
+                <span class="free">7 of 23 · broken first</span>
+              </div>
+            </div>
+            <div class="insp wellbox">
+              <div class="insp-head">
+                <div class="insp-title">wildcard-shop-acme-io</div>
+                <div class="insp-meta">ingress · *.shop.acme.io · secret wildcard-shop-tls</div>
+                <div class="verdict">
+                  <span class="big bad"><span class="lamp bad"></span>Failed</span>
+                  <span class="sub2">ChallengeStuck · <span title="issued 2026-05-05 · serving cert still valid 29d">serving cert ok 29d</span></span>
+                </div>
+              </div>
+              <div class="actions">
+                <button class="abtn">renew now <kbd>r</kbd></button>
+                <button class="abtn">describe</button>
+                <button class="abtn danger">delete challenge</button>
+              </div>
+              <div class="isec">
+                <h4>issuance chain — deepest stuck node flagged</h4>
+                <div class="chain">
+                  <div class="chnode">
+                    <span class="rail"><span class="lamp ok"></span></span>
+                    <div class="body"><span class="k">ClusterIssuer</span> letsencrypt-prod <span style="color:var(--ok);">· Ready</span><div class="why">ACME account registered · acme-v02.api.letsencrypt.org</div></div>
+                  </div>
+                  <div class="chnode">
+                    <span class="rail"><span class="lamp"></span></span>
+                    <div class="body"><span class="k">Certificate</span> wildcard-shop-acme-io <span style="color:var(--tx1);">· Ready False</span><div class="why">waiting on CertificateRequest</div></div>
+                  </div>
+                  <div class="chnode">
+                    <span class="rail"><span class="lamp"></span></span>
+                    <div class="body"><span class="k">CertificateRequest</span> wildcard-shop-acme-io-1 <span style="color:var(--tx1);">· Pending</span><div class="why">waiting on Order</div></div>
+                  </div>
+                  <div class="chnode">
+                    <span class="rail"><span class="lamp"></span></span>
+                    <div class="body"><span class="k">Order</span> wildcard-shop-acme-io-1-482 <span style="color:var(--tx1);">· pending</span><div class="why">1 of 1 authorizations pending</div></div>
+                  </div>
+                  <div class="chnode stuck">
+                    <span class="rail"><span class="lamp bad"></span></span>
+                    <div class="body"><span class="k">Challenge</span> dns-01 · _acme-challenge.shop.acme.io <b style="color:var(--bad);">· stuck 2d</b><div class="why">propagation check failed: NXDOMAIN — TXT record not visible from 8.8.8.8; check external-dns credentials for zone acme.io</div></div>
+                  </div>
+                </div>
+              </div>
+              <div class="isec">
+                <h4>events</h4>
+                <div class="evline"><span class="lamp bad"></span><span class="cnt hot" title="1,904 occurrences">×1.9k</span><span class="msg" title="Waiting for DNS-01 challenge propagation: NXDOMAIN looking up TXT _acme-challenge.shop.acme.io">PresentError · DNS-01: NXDOMAIN</span><span class="when">55s</span></div>
+                <div class="evline"><span class="lamp"></span><span class="cnt">×1</span><span class="msg">Created · Order wildcard-shop-acme-io-1-482</span><span class="when">2d</span></div>
+                <div class="evline"><span class="lamp"></span><span class="cnt">×1</span><span class="msg">Requested · new CertificateRequest</span><span class="when">2d</span></div>
+              </div>
+            </div>
+          </div>
+          <div style="height:8px; flex-shrink:0;"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 06 DANGER DIALOG ============ -->
+  <section class="screen" id="s6">
+    <div class="screenhead">
+      <h2>06 · Danger dialog — drain on a prd-locked cluster</h2>
+      <p><b>What changed:</b> the composer is an arming panel: hazard striping across the top (shape before colour), physical toggle switches whose consequences are printed beside them, the exact command on the face, and a typed interlock that fills an LED progress strip as you type the cluster name. The drain button reads LOCKED until the interlock completes — the disabled state is the safety design, not an afterthought.</p>
+    </div>
+    <div class="app" style="height: 680px;">
+      <div class="spine module" style="opacity:0.45;">
+        <span class="cap">fleet</span>
+        <div class="ch cur"><span class="lamp ok"></span><span class="cd">pw</span></div>
+        <div class="ch"><span class="lamp off2"></span><span class="cd">ne</span></div>
+        <div class="ch"><span class="lamp warn"></span><span class="cd">sn</span></div>
+        <div class="ch"><span class="lamp warn"></span><span class="cd">sw</span></div>
+        <div class="ch"><span class="lamp ok"></span><span class="cd">pn</span></div>
+        <div class="ch"><span class="lamp ok"></span><span class="cd">dw</span></div>
+        <div class="ch"><span class="lamp ok"></span><span class="cd">dn</span></div>
+      </div>
+      <div class="main" style="opacity:0.45;">
+        <div class="mast module">
+          <span class="title mono">aks-prd-weu <span class="path">/ nodes</span></span>
+          <span class="live"><span class="lamp ok"></span> live</span>
+        </div>
+        <div class="module" style="flex:1;"></div>
+      </div>
+      <div class="overlay center">
+        <div class="dlg module">
+          <div class="stripe"></div>
+          <div class="dlg-head">
+            <svg class="tri" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3 2.5 20h19L12 3z"/><path d="M12 10v4"/><path d="M12 17.5v.5"/></svg>
+            <div>
+              <h3>Drain node aks-sys-3</h3>
+              <div class="sub">aks-prd-weu · cordons the node, then evicts <b>23 pods</b> — 4 daemonset pods stay behind</div>
+            </div>
+            <button class="dlg-x">✕</button>
+          </div>
+          <div class="dlg-body">
+            <div class="facts">
+              <div class="fact wellbox"><div class="l">node</div><div class="v">aks-sys-3-vmss000002</div></div>
+              <div class="fact wellbox"><div class="l">cluster</div><div class="v" style="color:var(--warn);">aks-prd-weu · prd lock</div></div>
+              <div class="fact wellbox"><div class="l">pods to evict</div><div class="v">23 · 2 with PDBs</div></div>
+              <div class="fact wellbox"><div class="l">kubelet</div><div class="v">v1.31.7 · Ready</div></div>
+            </div>
+            <div class="opts">
+              <button class="otile on">
+                <div class="tt">Ignore DaemonSets <span class="sw"></span></div>
+                <div class="bd">DaemonSet pods (cilium, node-exporter) are recreated by their controller and cannot be evicted. Keep on unless you know why.</div>
+              </button>
+              <button class="otile">
+                <div class="tt">Delete emptyDir data <span class="sw"></span></div>
+                <div class="bd">Evicts pods using emptyDir volumes, destroying that data. <b>loki-write-2 on this node holds 1.2Gi in emptyDir.</b></div>
+              </button>
+              <button class="otile">
+                <div class="tt">Force <span class="sw"></span></div>
+                <div class="bd">Also evicts unmanaged pods and ignores PodDisruptionBudgets. <b>On prd this can violate availability guarantees</b> — last resort.</div>
+              </button>
+              <button class="otile on">
+                <div class="tt">Timeout — 120s <span class="sw"></span></div>
+                <div class="bd">Abort the drain if eviction hasn't finished within this window. The node stays cordoned either way.</div>
+              </button>
+            </div>
+            <div class="cmd wellbox">
+              <span class="pr">$</span> <span class="kw">kubectl</span> --context aks-prd-weu <span class="kw">drain</span> aks-sys-3-vmss000002 <span class="fl">--ignore-daemonsets</span> <span class="fl">--timeout=120s</span>
+            </div>
+            <div class="arm">
+              <div class="ln1">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>
+                <span><b>prd lock</b> — type <b>aks-prd-weu</b> to arm this action</span>
+              </div>
+              <input value="aks-prd-" aria-label="protected cluster confirmation">
+              <div class="prog">
+                <span class="armled"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i></i><i></i><i></i></span>
+                <span>8 / 11 · interlock open — drain stays locked</span>
+              </div>
+            </div>
+          </div>
+          <div class="dlg-foot">
+            <span class="why">grant is one-shot · verified again by the backend</span>
+            <div class="btns">
+              <button class="fbtn">Cancel</button>
+              <button class="fbtn armbtn" disabled title="locked — confirmation incomplete">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>
+                Drain node — locked
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  <!-- ============ 07 GATEWAY API TOPOLOGY ============ -->
+  <section class="screen" id="s7">
+    <div class="screenhead">
+      <h2>07 · Gateway API — data path</h2>
+      <p><b>What changed:</b> routes render as signal paths across the bench — listener → route → backend, one per row, in the patch-bay idiom — instead of raw CRD YAML. Each hop has its own lamp, so a dark path is healthy end-to-end and the one lit hop (checkout's backend has 0 ready endpoints) locates the fault to a layer, not just a resource. Envoy policy attachments ride the row as quiet annotations.</p>
+    </div>
+    <div class="app" style="height: 620px;">
+      <div class="spine module">
+        <span class="cap">fleet</span>
+        <div class="ch cur" title="aks-dev-weu — 2 broken workloads"><span class="lamp bad blink"></span><span class="cd">dw</span></div>
+        <div class="ch" title="nelli"><span class="lamp off2"></span><span class="cd">ne</span></div>
+        <div class="ch" title="aks-stg-neu"><span class="lamp warn"></span><span class="cd">sn</span></div>
+        <div class="ch" title="aks-stg-weu"><span class="lamp warn"></span><span class="cd">sw</span></div>
+        <div class="ch" title="aks-prd-weu"><span class="lamp ok"></span><span class="cd">pw</span></div>
+        <div class="ch" title="aks-prd-neu"><span class="lamp ok"></span><span class="cd">pn</span></div>
+        <div class="ch" title="aks-dev-neu"><span class="lamp ok"></span><span class="cd">dn</span></div>
+      </div>
+      <div class="main">
+        <div class="mast module">
+          <span class="title mono">aks-dev-weu <span class="path">/ gateway api / topology</span></span>
+          <span class="live"><span class="lamp ok"></span> live · envoy-gateway 1.2.0</span>
+          <div class="right"><div class="palhint wellbox">⌘K — jump or run a command <kbd>⌘K</kbd></div></div>
+        </div>
+        <div class="lensnav module">
+          <a href="#s1">cluster</a>
+          <a href="#s2">workloads</a>
+          <a href="#s2">config</a>
+          <a href="#s2">autoscaling</a>
+          <a href="#s2">network</a>
+          <a href="#s2">storage</a>
+          <a href="#s2">access control</a>
+          <a href="#s7" class="cur"><span class="lamp warn" style="width:6px;height:6px;"></span>gateway api <span class="n bad">1</span></a>
+          <a href="#s5">cert-manager</a>
+          <a href="#s2">ext-secrets</a>
+          <a href="#s2">argo cd</a>
+          <a href="#s3">flux cd</a>
+          <a href="#s2">helm</a>
+          <a href="#s2">crds</a>
+        </div>
+        <div class="lensnav sub module">
+          <a href="#s7" class="cur">topology <span class="n bad">1</span></a>
+          <a href="#s7">gateways</a>
+          <a href="#s7">httproutes</a>
+          <a href="#s7">grpcroutes</a>
+          <a href="#s7">gatewayclasses</a>
+          <a href="#s7">referencegrants</a>
+          <a href="#s7">backendtlspolicies</a>
+          <a href="#s7">securitypolicies</a>
+        </div>
+        <div class="module" style="flex:1; min-height:0; display:flex; flex-direction:column; overflow:hidden;">
+          <div class="meters">
+            <div class="meter"><div class="win wellbox">1</div><span class="lbl">gateway</span></div>
+            <div class="meter"><div class="win wellbox">2</div><span class="lbl">listeners</span></div>
+            <div class="meter"><div class="win wellbox">9</div><span class="lbl">httproutes</span></div>
+            <div class="meter"><div class="win wellbox bad">1</div><span class="lbl">no endpoints</span></div>
+            <div class="meter"><div class="win wellbox">3</div><span class="lbl">policies</span></div>
+            <span class="free">broken paths first</span>
+          </div>
+          <!-- gateway plate -->
+          <div class="wellbox" style="margin: 0 8px 8px; padding: 9px 14px; display:flex; align-items:center; gap:16px; font-family:ui-monospace,monospace; font-size:11px;">
+            <span class="lamp ok"></span>
+            <span style="font-weight:700;">Gateway ingress/edge</span>
+            <span style="color:var(--tx2);">class envoy · programmed · 20.101.44.7</span>
+            <span style="color:var(--tx1);">listener https:443 <span style="color:var(--tx2);">(9 routes · TLS gateway-tls-dev)</span></span>
+            <span style="color:var(--tx1);">listener http:80 <span style="color:var(--tx2);">(redirect)</span></span>
+          </div>
+          <div class="board" style="grid-template-columns: 1fr; margin-top:0;">
+            <div class="listcol wellbox">
+              <div class="thead" style="grid-template-columns: 14px 64px minmax(160px,1fr) 26px minmax(170px,1fr) 90px minmax(150px,1fr);">
+                <span></span><span>listener</span><span>httproute</span><span></span><span>backend</span><span>endpoints</span><span>attached policies</span>
+              </div>
+              <div class="rows">
+                <div class="row sel" style="grid-template-columns: 14px 64px minmax(160px,1fr) 26px minmax(170px,1fr) 90px minmax(150px,1fr); height: 32px;">
+                  <span class="lamp bad"></span>
+                  <span class="dim">443</span>
+                  <span class="name">shop/checkout-route</span>
+                  <span style="color:var(--tx2);">─▶</span>
+                  <span class="name" style="font-weight:400;">Service shop/checkout:8080</span>
+                  <span class="stx bad">0/2 ready</span>
+                  <span class="dim" title="BackendTrafficPolicy shop/checkout-retries">retries · timeout 5s</span>
+                </div>
+                <div class="row" style="grid-template-columns: 14px 64px minmax(160px,1fr) 26px minmax(170px,1fr) 90px minmax(150px,1fr); height: 32px;">
+                  <span class="lamp ok"></span>
+                  <span class="dim">443</span>
+                  <span class="name" style="font-weight:400;">web/api-route</span>
+                  <span style="color:var(--tx2);">─▶</span>
+                  <span class="name" style="font-weight:400;">Service web/api:8080</span>
+                  <span class="stx mut" title="1 endpoint excluded: api-6f9d84c7b5-2xkqv is CrashLoopBackOff">1/2 ready</span>
+                  <span class="dim" title="SecurityPolicy web/api-jwt">jwt auth</span>
+                </div>
+                <div class="row" style="grid-template-columns: 14px 64px minmax(160px,1fr) 26px minmax(170px,1fr) 90px minmax(150px,1fr); height: 32px;">
+                  <span class="lamp ok"></span>
+                  <span class="dim">443</span>
+                  <span class="name" style="font-weight:400;">web/frontend-route</span>
+                  <span style="color:var(--tx2);">─▶</span>
+                  <span class="name" style="font-weight:400;">Service web/web-frontend:80</span>
+                  <span class="stx mut">3/3 ready</span>
+                  <span class="dim"></span>
+                </div>
+                <div class="row" style="grid-template-columns: 14px 64px minmax(160px,1fr) 26px minmax(170px,1fr) 90px minmax(150px,1fr); height: 32px;">
+                  <span class="lamp ok"></span>
+                  <span class="dim">443</span>
+                  <span class="name" style="font-weight:400;">shop/cart-route</span>
+                  <span style="color:var(--tx2);">─▶</span>
+                  <span class="name" style="font-weight:400;">Service shop/cart:8080</span>
+                  <span class="stx mut">2/2 ready</span>
+                  <span class="dim" title="BackendTrafficPolicy shop/cart-retries">retries</span>
+                </div>
+                <div class="row" style="grid-template-columns: 14px 64px minmax(160px,1fr) 26px minmax(170px,1fr) 90px minmax(150px,1fr); height: 32px;">
+                  <span class="lamp ok"></span>
+                  <span class="dim">443</span>
+                  <span class="name" style="font-weight:400;">monitoring/grafana-route</span>
+                  <span style="color:var(--tx2);">─▶</span>
+                  <span class="name" style="font-weight:400;">Service monitoring/grafana:3000</span>
+                  <span class="stx mut">1/1 ready</span>
+                  <span class="dim" title="SecurityPolicy monitoring/grafana-oidc">oidc</span>
+                </div>
+                <div class="row" style="grid-template-columns: 14px 64px minmax(160px,1fr) 26px minmax(170px,1fr) 90px minmax(150px,1fr); height: 32px;">
+                  <span class="lamp ok"></span>
+                  <span class="dim">80</span>
+                  <span class="name" style="font-weight:400;">web/http-redirect</span>
+                  <span style="color:var(--tx2);">─▶</span>
+                  <span class="name" style="font-weight:400;">RequestRedirect https:443</span>
+                  <span class="stx mut">—</span>
+                  <span class="dim"></span>
+                </div>
+              </div>
+              <div class="fkeys" style="border-top: 1px solid var(--line);">
+                <span class="fk"><kbd>j k</kbd> nav</span>
+                <span class="fk"><kbd>↵</kbd> inspect route</span>
+                <span class="fk"><kbd>b</kbd> jump to backend</span>
+                <span class="free">6 of 9 paths · broken first</span>
+              </div>
+            </div>
+          </div>
+          <div style="height:8px; flex-shrink:0;"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 08 NODES ============ -->
+  <section class="screen" id="s8">
+    <div class="screenhead">
+      <h2>08 · Nodes — with a drain in progress</h2>
+      <p><b>What changed:</b> the drain armed in screen 06 is now a live operation, not a fire-and-forget: the cordoned node holds an amber lamp with an eviction counter that ticks in the row, and the inspector carries the drain's progress well, remaining PDB-blocked pods, and an abort verb. CPU and memory are inset meter bars — filled amber only past 80%, never as decoration.</p>
+    </div>
+    <div class="app" style="height: 700px;">
+      <div class="spine module">
+        <span class="cap">fleet</span>
+        <div class="ch cur" title="aks-prd-weu — drain in progress"><span class="lamp warn"></span><span class="cd">pw</span></div>
+        <div class="ch" title="nelli"><span class="lamp off2"></span><span class="cd">ne</span></div>
+        <div class="ch" title="aks-stg-neu"><span class="lamp warn"></span><span class="cd">sn</span></div>
+        <div class="ch" title="aks-stg-weu"><span class="lamp warn"></span><span class="cd">sw</span></div>
+        <div class="ch" title="aks-prd-neu"><span class="lamp ok"></span><span class="cd">pn</span></div>
+        <div class="ch" title="aks-dev-weu"><span class="lamp ok"></span><span class="cd">dw</span></div>
+        <div class="ch" title="aks-dev-neu"><span class="lamp ok"></span><span class="cd">dn</span></div>
+      </div>
+      <div class="main">
+        <div class="mast module">
+          <span class="title mono">aks-prd-weu <span class="path">/ nodes</span></span>
+          <span class="live"><span class="lamp ok"></span> live · metrics-server ok</span>
+          <div class="right"><div class="palhint wellbox">⌘K — jump or run a command <kbd>⌘K</kbd></div></div>
+        </div>
+        <div class="lensnav module">
+          <a href="#s1" class="cur">cluster</a>
+          <a href="#s2">workloads</a>
+          <a href="#s2">config</a>
+          <a href="#s2">autoscaling</a>
+          <a href="#s2">network</a>
+          <a href="#s2">storage</a>
+          <a href="#s2">access control</a>
+          <a href="#s7">gateway api</a>
+          <a href="#s5">cert-manager</a>
+          <a href="#s2">ext-secrets</a>
+          <a href="#s2">argo cd</a>
+          <a href="#s3">flux cd</a>
+          <a href="#s2">helm</a>
+          <a href="#s2">crds</a>
+        </div>
+        <div class="lensnav sub module">
+          <a href="#s1">overview</a>
+          <a href="#s8" class="cur">nodes <span class="n">9</span></a>
+          <a href="#s8">namespaces</a>
+          <a href="#s8">api services</a>
+          <a href="#s8">events</a>
+        </div>
+        <div class="module" style="flex:1; min-height:0; display:flex; flex-direction:column; overflow:hidden;">
+          <div class="meters">
+            <div class="meter"><div class="win wellbox">9</div><span class="lbl">nodes</span></div>
+            <div class="meter"><div class="win wellbox warn">1</div><span class="lbl">draining</span></div>
+            <div class="meter"><div class="win wellbox ok">8</div><span class="lbl">ready</span></div>
+            <div class="meter"><div class="win wellbox">312</div><span class="lbl">pods</span></div>
+            <div class="meter"><div class="win wellbox">62%</div><span class="lbl">cpu req</span></div>
+            <div class="meter"><div class="win wellbox">71%</div><span class="lbl">mem req</span></div>
+            <span class="free">broken first · then by name</span>
+          </div>
+          <div class="board" style="margin-top:8px;">
+            <div class="listcol wellbox">
+              <div class="thead" style="grid-template-columns: 14px minmax(150px,1.2fr) 50px 168px 74px 74px 40px 62px 40px;">
+                <span></span><span>node</span><span>role</span><span>status</span><span>cpu</span><span>mem</span><span style="text-align:right;">pods</span><span>version</span><span style="text-align:right;">age</span>
+              </div>
+              <div class="rows">
+                <div class="row sel" style="grid-template-columns: 14px minmax(150px,1.2fr) 50px 168px 74px 74px 40px 62px 40px; height: 32px;">
+                  <span class="lamp warn"></span>
+                  <span class="name">aks-sys-3-vmss000002</span>
+                  <span class="dim">sys</span>
+                  <span class="stx warn">draining · 14/23 evicted</span>
+                  <span class="wellbox" style="height:6px; position:relative;"><i style="position:absolute; inset:1px auto 1px 1px; width:22%; background:var(--tx2); border-radius:1px;"></i></span>
+                  <span class="wellbox" style="height:6px; position:relative;"><i style="position:absolute; inset:1px auto 1px 1px; width:31%; background:var(--tx2); border-radius:1px;"></i></span>
+                  <span class="num">9</span>
+                  <span class="dim">v1.31.7</span>
+                  <span class="age" title="created 2026-02-14">141d</span>
+                </div>
+                <div class="row" style="grid-template-columns: 14px minmax(150px,1.2fr) 50px 168px 74px 74px 40px 62px 40px; height: 32px;">
+                  <span class="lamp ok"></span><span class="name" style="font-weight:400;">aks-sys-1-vmss000000</span><span class="dim">sys</span>
+                  <span class="stx mut">Ready</span>
+                  <span class="wellbox" style="height:6px; position:relative;"><i style="position:absolute; inset:1px auto 1px 1px; width:48%; background:var(--tx2); border-radius:1px;"></i></span>
+                  <span class="wellbox" style="height:6px; position:relative;"><i style="position:absolute; inset:1px auto 1px 1px; width:66%; background:var(--tx2); border-radius:1px;"></i></span>
+                  <span class="num">34</span><span class="dim">v1.31.7</span><span class="age" title="created 2026-02-14">141d</span>
+                </div>
+                <div class="row" style="grid-template-columns: 14px minmax(150px,1.2fr) 50px 168px 74px 74px 40px 62px 40px; height: 32px;">
+                  <span class="lamp ok"></span><span class="name" style="font-weight:400;">aks-sys-2-vmss000001</span><span class="dim">sys</span>
+                  <span class="stx mut">Ready</span>
+                  <span class="wellbox" style="height:6px; position:relative;"><i style="position:absolute; inset:1px auto 1px 1px; width:52%; background:var(--tx2); border-radius:1px;"></i></span>
+                  <span class="wellbox" style="height:6px; position:relative;"><i style="position:absolute; inset:1px auto 1px 1px; width:61%; background:var(--tx2); border-radius:1px;"></i></span>
+                  <span class="num">31</span><span class="dim">v1.31.7</span><span class="age">141d</span>
+                </div>
+                <div class="row" style="grid-template-columns: 14px minmax(150px,1.2fr) 50px 168px 74px 74px 40px 62px 40px; height: 32px;">
+                  <span class="lamp ok"></span><span class="name" style="font-weight:400;">aks-user-1-vmss00000a</span><span class="dim">user</span>
+                  <span class="stx mut">Ready</span>
+                  <span class="wellbox" style="height:6px; position:relative;" title="cpu requests 87% of allocatable"><i style="position:absolute; inset:1px auto 1px 1px; width:87%; background:var(--warn); border-radius:1px;"></i></span>
+                  <span class="wellbox" style="height:6px; position:relative;"><i style="position:absolute; inset:1px auto 1px 1px; width:74%; background:var(--tx2); border-radius:1px;"></i></span>
+                  <span class="num">41</span><span class="dim">v1.31.7</span><span class="age">141d</span>
+                </div>
+                <div class="row" style="grid-template-columns: 14px minmax(150px,1.2fr) 50px 168px 74px 74px 40px 62px 40px; height: 32px;">
+                  <span class="lamp ok"></span><span class="name" style="font-weight:400;">aks-user-2-vmss00000b</span><span class="dim">user</span>
+                  <span class="stx mut">Ready</span>
+                  <span class="wellbox" style="height:6px; position:relative;"><i style="position:absolute; inset:1px auto 1px 1px; width:58%; background:var(--tx2); border-radius:1px;"></i></span>
+                  <span class="wellbox" style="height:6px; position:relative;"><i style="position:absolute; inset:1px auto 1px 1px; width:69%; background:var(--tx2); border-radius:1px;"></i></span>
+                  <span class="num">38</span><span class="dim">v1.31.7</span><span class="age">141d</span>
+                </div>
+                <div class="row" style="grid-template-columns: 14px minmax(150px,1.2fr) 50px 168px 74px 74px 40px 62px 40px; height: 32px;">
+                  <span class="lamp ok"></span><span class="name" style="font-weight:400;">aks-user-3-vmss00000c</span><span class="dim">user</span>
+                  <span class="stx mut">Ready</span>
+                  <span class="wellbox" style="height:6px; position:relative;"><i style="position:absolute; inset:1px auto 1px 1px; width:44%; background:var(--tx2); border-radius:1px;"></i></span>
+                  <span class="wellbox" style="height:6px; position:relative;"><i style="position:absolute; inset:1px auto 1px 1px; width:57%; background:var(--tx2); border-radius:1px;"></i></span>
+                  <span class="num">36</span><span class="dim">v1.31.7</span><span class="age">141d</span>
+                </div>
+                <div class="row" style="grid-template-columns: 14px minmax(150px,1.2fr) 50px 168px 74px 74px 40px 62px 40px; height: 32px;">
+                  <span class="lamp ok"></span><span class="name" style="font-weight:400;">aks-user-4-vmss00000d</span><span class="dim">user</span>
+                  <span class="stx mut">Ready</span>
+                  <span class="wellbox" style="height:6px; position:relative;"><i style="position:absolute; inset:1px auto 1px 1px; width:63%; background:var(--tx2); border-radius:1px;"></i></span>
+                  <span class="wellbox" style="height:6px; position:relative;"><i style="position:absolute; inset:1px auto 1px 1px; width:72%; background:var(--tx2); border-radius:1px;"></i></span>
+                  <span class="num">40</span><span class="dim">v1.31.7</span><span class="age">141d</span>
+                </div>
+                <div class="row" style="grid-template-columns: 14px minmax(150px,1.2fr) 50px 168px 74px 74px 40px 62px 40px; height: 32px;">
+                  <span class="lamp ok"></span><span class="name" style="font-weight:400;">aks-user-5-vmss00000e</span><span class="dim">user</span>
+                  <span class="stx mut">Ready</span>
+                  <span class="wellbox" style="height:6px; position:relative;"><i style="position:absolute; inset:1px auto 1px 1px; width:51%; background:var(--tx2); border-radius:1px;"></i></span>
+                  <span class="wellbox" style="height:6px; position:relative;"><i style="position:absolute; inset:1px auto 1px 1px; width:64%; background:var(--tx2); border-radius:1px;"></i></span>
+                  <span class="num">39</span><span class="dim">v1.31.7</span><span class="age">141d</span>
+                </div>
+                <div class="row" style="grid-template-columns: 14px minmax(150px,1.2fr) 50px 168px 74px 74px 40px 62px 40px; height: 32px;">
+                  <span class="lamp ok"></span><span class="name" style="font-weight:400;">aks-user-6-vmss00000f</span><span class="dim">user</span>
+                  <span class="stx mut">Ready</span>
+                  <span class="wellbox" style="height:6px; position:relative;"><i style="position:absolute; inset:1px auto 1px 1px; width:39%; background:var(--tx2); border-radius:1px;"></i></span>
+                  <span class="wellbox" style="height:6px; position:relative;"><i style="position:absolute; inset:1px auto 1px 1px; width:55%; background:var(--tx2); border-radius:1px;"></i></span>
+                  <span class="num">35</span><span class="dim">v1.31.7</span><span class="age">141d</span>
+                </div>
+              </div>
+              <div class="fkeys" style="border-top: 1px solid var(--line);">
+                <span class="fk"><kbd>j k</kbd> nav</span>
+                <span class="fk"><kbd>↵</kbd> inspect</span>
+                <span class="fk"><kbd>c</kbd> cordon</span>
+                <span class="fk"><kbd>d</kbd> drain</span>
+                <span class="free">9 of 9 · broken first</span>
+              </div>
+            </div>
+            <div class="insp wellbox">
+              <div class="insp-head">
+                <div class="insp-title">aks-sys-3-vmss000002</div>
+                <div class="insp-meta">sys pool · Standard_D4s_v5 · westeurope-1 · v1.31.7</div>
+                <div class="verdict">
+                  <span class="big bad" style="color:var(--warn); background:var(--warn-dim); box-shadow: inset 0 0 0 1px var(--warn);"><span class="lamp warn"></span>Draining</span>
+                  <span class="sub2">cordoned · started <span title="2026-07-05 13:41:22 CEST">2m ago</span> by you</span>
+                </div>
+              </div>
+              <div class="actions">
+                <button class="abtn">watch evictions</button>
+                <button class="abtn">uncordon</button>
+                <button class="abtn danger">abort drain</button>
+              </div>
+              <div class="isec">
+                <h4>drain progress</h4>
+                <div class="wellbox" style="height:10px; position:relative; margin-bottom:8px;" title="14 of 23 pods evicted">
+                  <i style="position:absolute; inset:2px auto 2px 2px; width:61%; background:var(--warn); border-radius:1px;"></i>
+                </div>
+                <dl class="kv">
+                  <dt>evicted</dt><dd>14 of 23</dd>
+                  <dt>blocked</dt><dd style="color:var(--warn);">2 · PDB web/api-pdb allows 0 more disruptions</dd>
+                  <dt>daemonsets</dt><dd class="d2">4 stay (cilium, node-exporter, csi, kube-proxy)</dd>
+                  <dt>timeout</dt><dd class="d2">120s · 74s remaining</dd>
+                </dl>
+              </div>
+              <div class="isec">
+                <h4>conditions</h4>
+                <dl class="kv">
+                  <dt>Ready</dt><dd style="color:var(--ok);">True</dd>
+                  <dt>MemoryPressure</dt><dd class="d2">False</dd>
+                  <dt>DiskPressure</dt><dd class="d2">False</dd>
+                  <dt>PIDPressure</dt><dd class="d2">False</dd>
+                </dl>
+              </div>
+              <div class="isec">
+                <h4>taints</h4>
+                <dl class="kv">
+                  <dt>unschedulable</dt><dd style="color:var(--warn);">node.kubernetes.io/unschedulable:NoSchedule</dd>
+                  <dt>pool</dt><dd class="d2">CriticalAddonsOnly=true:NoSchedule</dd>
+                </dl>
+              </div>
+              <div class="isec">
+                <h4>events</h4>
+                <div class="evline"><span class="lamp warn"></span><span class="cnt">×1</span><span class="msg">NodeNotSchedulable · cordoned by klyx (you)</span><span class="when">2m</span></div>
+                <div class="evline"><span class="lamp"></span><span class="cnt" title="14 occurrences">×14</span><span class="msg">Evicted · pod moved off node</span><span class="when">10s</span></div>
+              </div>
+            </div>
+          </div>
+          <div style="height:8px; flex-shrink:0;"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 09 LOGS PANE ============ -->
+  <section class="screen" id="s9">
+    <div class="screenhead">
+      <h2>09 · Logs — terminal adjacent</h2>
+      <p><b>What changed:</b> logs are the one surface that IS a terminal, so the bench recedes: a deep well, unstyled mono text, and colour only on level words. Restart boundaries are ruled and labelled so the 7th crash is legible as history, grep is a physical filter on the face, and follow is a lamp — lit while tailing, dark the moment you scroll up into the past.</p>
+    </div>
+    <div class="app" style="height: 620px;">
+      <div class="spine module">
+        <span class="cap">fleet</span>
+        <div class="ch cur" title="aks-dev-weu"><span class="lamp bad blink"></span><span class="cd">dw</span></div>
+        <div class="ch" title="nelli"><span class="lamp off2"></span><span class="cd">ne</span></div>
+        <div class="ch" title="aks-stg-neu"><span class="lamp warn"></span><span class="cd">sn</span></div>
+        <div class="ch" title="aks-stg-weu"><span class="lamp warn"></span><span class="cd">sw</span></div>
+        <div class="ch" title="aks-prd-weu"><span class="lamp ok"></span><span class="cd">pw</span></div>
+        <div class="ch" title="aks-prd-neu"><span class="lamp ok"></span><span class="cd">pn</span></div>
+        <div class="ch" title="aks-dev-neu"><span class="lamp ok"></span><span class="cd">dn</span></div>
+      </div>
+      <div class="main">
+        <div class="mast module">
+          <span class="title mono">aks-dev-weu <span class="path">/ pods / api-6f9d84c7b5-2xkqv / logs</span></span>
+          <span class="live"><span class="lamp warn"></span> container restarting</span>
+          <div class="right"><div class="palhint wellbox">⌘K — jump or run a command <kbd>⌘K</kbd></div></div>
+        </div>
+        <div class="module" style="flex:1; min-height:0; display:flex; flex-direction:column; overflow:hidden;">
+          <div class="meters" style="align-items:center;">
+            <span class="fsw cur" style="display:flex;">container: api ▾</span>
+            <span class="fsw"><span class="lamp ok" style="width:6px;height:6px;"></span>follow</span>
+            <span class="fsw">wrap</span>
+            <span class="fsw">timestamps</span>
+            <div class="wellbox" style="padding:4px 12px; font-family:ui-monospace,monospace; font-size:11px; color:var(--tx1); min-width:200px;">grep: level=error<span style="color:var(--tx2);"> · 41 matches dimmed out</span></div>
+            <span class="free" style="align-self:center;">tail 500 · since restart</span>
+          </div>
+          <div class="wellbox" style="flex:1; min-height:0; margin: 0 8px; overflow-y:auto; padding: 10px 14px; font-family:ui-monospace,monospace; font-size:11.5px; line-height:1.75; color:var(--tx1);">
+            <div><span style="color:var(--tx2);">13:12:04.221</span> <span style="color:var(--info);">info</span>  starting api v1.42.3 commit 8f3c21d</div>
+            <div><span style="color:var(--tx2);">13:12:04.309</span> <span style="color:var(--info);">info</span>  connected to postgres pool=10 host=pg-dev.internal</div>
+            <div><span style="color:var(--tx2);">13:12:04.512</span> <span style="color:var(--info);">info</span>  listening on :8080</div>
+            <div><span style="color:var(--tx2);">13:12:31.877</span> <span style="color:var(--warn);">warn</span>  cache warm-up incomplete: 21841 of 400000 keys, continuing</div>
+            <div><span style="color:var(--tx2);">13:13:02.104</span> <span style="color:var(--bad);">error</span> order-index rebuild: arena alloc failed request=512MiB</div>
+            <div><span style="color:var(--tx2);">13:13:02.105</span> <span style="color:var(--bad);">error</span> runtime: out of memory: cannot allocate 536870912-byte block (498202624 in use)</div>
+            <div><span style="color:var(--tx2);">13:13:02.106</span> <span style="color:var(--bad);">error</span> fatal error: out of memory</div>
+            <div style="color:var(--tx2); white-space:pre;">goroutine 214 [running]:
+  internal/index.(*Builder).grow(0xc000b1c000, 0x20000000)
+      /src/internal/index/builder.go:141 +0x9c
+  internal/index.(*Builder).Rebuild(0xc000b1c000, {0x1a4c3e0, 0xc0004a2f00})
+      /src/internal/index/builder.go:88 +0x2e4</span>
+            <div style="display:flex; align-items:center; gap:10px; color:var(--warn); margin: 6px 0;">
+              <span style="flex:1; border-top:1px solid var(--warn); opacity:0.4;"></span>
+              container killed — OOMKilled (exit 137) · restart 7 of ∞ · backoff 5m0s
+              <span style="flex:1; border-top:1px solid var(--warn); opacity:0.4;"></span>
+            </div>
+            <div style="color:var(--tx2);">waiting for next start… back-off ends in <span title="2026-07-05 13:24:44 CEST">4m12s</span></div>
+          </div>
+          <div class="fkeys">
+            <span class="fk"><kbd>g G</kbd> top / bottom</span>
+            <span class="fk"><kbd>/</kbd> grep</span>
+            <span class="fk"><kbd>f</kbd> follow</span>
+            <span class="fk"><kbd>p</kbd> previous restart</span>
+            <span class="fk"><kbd>s</kbd> save</span>
+            <span class="free">restart 7 · 500 lines buffered</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 10 HONEST STATES ============ -->
+  <section class="screen" id="s10">
+    <div class="screenhead">
+      <h2>10 · Honest states — failing watch &amp; empty view</h2>
+      <p><b>What changed:</b> the two states most tools fake, made honest in bench vocabulary. A failing watch never renders a clean list: the panel keeps its last-good data behind a lit amber banner with the exact error, the last-good timestamp, and the retry countdown. An empty view says why it's empty, proves the operator (ESO) is healthy, and offers the two useful next moves — it is never mistaken for "loading" or "broken".</p>
+    </div>
+    <div class="app" style="height: 560px;">
+      <div class="spine module">
+        <span class="cap">fleet</span>
+        <div class="ch" title="nelli"><span class="lamp off2"></span><span class="cd">ne</span></div>
+        <div class="ch cur" title="aks-stg-neu — watches stale"><span class="lamp warn blink"></span><span class="cd">sn</span></div>
+        <div class="ch" title="aks-stg-weu"><span class="lamp warn"></span><span class="cd">sw</span></div>
+        <div class="ch" title="aks-prd-weu"><span class="lamp ok"></span><span class="cd">pw</span></div>
+        <div class="ch" title="aks-prd-neu"><span class="lamp ok"></span><span class="cd">pn</span></div>
+        <div class="ch" title="aks-dev-weu"><span class="lamp ok"></span><span class="cd">dw</span></div>
+        <div class="ch" title="aks-dev-neu"><span class="lamp ok"></span><span class="cd">dn</span></div>
+      </div>
+      <div class="main">
+        <div class="mast module">
+          <span class="title mono">aks-stg-neu <span class="path">/ pods · ext-secrets</span></span>
+          <span class="live"><span class="lamp warn"></span> watch degraded</span>
+          <div class="right"><div class="palhint wellbox">⌘K — jump or run a command <kbd>⌘K</kbd></div></div>
+        </div>
+        <div style="flex:1; min-height:0; display:grid; grid-template-columns: 1.15fr 1fr; gap:8px;">
+          <!-- failing watch -->
+          <div class="module" style="display:flex; flex-direction:column; overflow:hidden;">
+            <div style="padding:10px 14px; display:flex; align-items:center; gap:10px; background:var(--warn-dim); box-shadow: inset 0 0 0 1px var(--warn); margin:8px; border-radius:5px;">
+              <span class="lamp warn"></span>
+              <div style="font-size:11.5px; line-height:1.5;">
+                <div style="color:var(--warn); font-weight:600;">pods watch failed — showing last good data</div>
+                <div class="mono" style="font-size:10px; color:var(--tx1);">watch error: http2: connection reset by peer · last good <span title="2026-07-05 13:22:41 CEST">13:22:41 (3m ago)</span> · retry 3 in <span>4s</span></div>
+              </div>
+              <button class="abtn" style="margin-left:auto;">retry now</button>
+            </div>
+            <div class="wellbox" style="flex:1; margin: 0 8px 8px; overflow:hidden; opacity:0.6;" title="stale — from 13:22:41">
+              <div class="thead" style="grid-template-columns: 14px minmax(160px,1.4fr) 90px 40px 120px 40px;">
+                <span></span><span>name</span><span>namespace</span><span>ready</span><span>status</span><span style="text-align:right;">age</span>
+              </div>
+              <div class="row" style="grid-template-columns: 14px minmax(160px,1.4fr) 90px 40px 120px 40px;">
+                <span class="lamp ok"></span><span class="name" style="font-weight:400;">payments-5c77dd94b6-mm4tk</span><span class="dim">shop</span><span class="num">1/1</span><span class="stx mut">Running</span><span class="age">6d</span>
+              </div>
+              <div class="row" style="grid-template-columns: 14px minmax(160px,1.4fr) 90px 40px 120px 40px;">
+                <span class="lamp ok"></span><span class="name" style="font-weight:400;">search-7f6c4b8d9d-t2vxn</span><span class="dim">shop</span><span class="num">1/1</span><span class="stx mut">Running</span><span class="age">6d</span>
+              </div>
+              <div class="row" style="grid-template-columns: 14px minmax(160px,1.4fr) 90px 40px 120px 40px;">
+                <span class="lamp ok"></span><span class="name" style="font-weight:400;">grafana-64d99cd6c6-9wkfd</span><span class="dim">monitoring</span><span class="num">2/2</span><span class="stx mut">Running</span><span class="age">7d</span>
+              </div>
+              <div class="row" style="grid-template-columns: 14px minmax(160px,1.4fr) 90px 40px 120px 40px;">
+                <span class="lamp ok"></span><span class="name" style="font-weight:400;">cilium-8kd2m</span><span class="dim">kube-system</span><span class="num">1/1</span><span class="stx mut">Running</span><span class="age">21d</span>
+              </div>
+              <div style="padding: 8px 12px; font-family:ui-monospace,monospace; font-size:10px; color:var(--tx2);">ages frozen at last good snapshot — not ticking</div>
+            </div>
+          </div>
+          <!-- empty state -->
+          <div class="module" style="display:flex; flex-direction:column; overflow:hidden;">
+            <div style="padding: 10px 14px 0; font-family:ui-monospace,monospace; font-size:11px; color:var(--tx2);">external secrets · namespace web</div>
+            <div style="flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:10px; text-align:center; padding: 0 32px;">
+              <span class="lamp" style="width:12px; height:12px;"></span>
+              <div style="font-size:13px; font-weight:600;">No ExternalSecrets in namespace web</div>
+              <div style="font-size:11.5px; color:var(--tx1); line-height:1.6; max-width:340px;">
+                The operator is installed and healthy — <span class="mono">external-secrets 0.10.4</span>, ClusterSecretStore <span class="mono">azure-kv-stg</span> <span style="color:var(--ok);">reachable</span>. This namespace simply defines none.
+              </div>
+              <div style="display:flex; gap:6px; margin-top:4px;">
+                <button class="abtn">view all namespaces · 12</button>
+                <button class="abtn">create from template</button>
+              </div>
+              <div class="mono" style="font-size:9.5px; color:var(--tx2); margin-top:6px;">empty ≠ broken — the watch is live and returned zero items</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+</div>
+<script>
+function toggleTheme() {
+  var r = document.documentElement;
+  var next = r.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+  r.setAttribute('data-theme', next);
+  try { localStorage.setItem('klyx-dirC-theme', next); } catch (e) {}
+}
+try {
+  var saved = localStorage.getItem('klyx-dirC-theme');
+  if (saved) document.documentElement.setAttribute('data-theme', saved);
+} catch (e) {}
+</script>
+</body>
+</html>
