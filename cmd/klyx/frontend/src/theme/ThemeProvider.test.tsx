@@ -51,11 +51,22 @@ describe("ThemeProvider", () => {
     expect(localStorage.getItem("klyx-theme")).toBe("crimson");
   });
 
-  it("resolves system to the OS dark preference while storing system", () => {
+  it("resolves system to the OS-matching bench face while storing system", () => {
     const { getByText } = render(<ThemeProvider><Toggle /></ThemeProvider>);
     act(() => getByText("system").click());
     expect(document.documentElement.getAttribute("data-theme-choice")).toBe("system");
-    expect(document.documentElement.getAttribute("data-theme")).toBe("dark");
+    expect(document.documentElement.getAttribute("data-theme")).toBe("bench"); // matchMedia stub prefers dark
     expect(localStorage.getItem("klyx-theme")).toBe("system");
+  });
+
+  it("migrates a pre-redesign saved theme onto its bench face exactly once", () => {
+    localStorage.setItem("klyx-theme", "midnight");
+    const first = render(<ThemeProvider><Toggle /></ThemeProvider>);
+    expect(document.documentElement.getAttribute("data-theme")).toBe("bench");
+    first.unmount();
+    // A choice made after the migration sticks - the flag is never re-consulted.
+    localStorage.setItem("klyx-theme", "midnight");
+    render(<ThemeProvider><Toggle /></ThemeProvider>);
+    expect(document.documentElement.getAttribute("data-theme")).toBe("midnight");
   });
 });

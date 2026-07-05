@@ -66,8 +66,12 @@ export function FleetSpine() {
       style={{
         width: expanded ? 118 : 38,
         flexShrink: 0,
-        borderRight: "0.5px solid var(--color-border-tertiary)",
-        background: "var(--color-background-secondary)",
+        // Channel-strip module on the desk (Signal Bench).
+        border: "var(--border-hairline) solid var(--color-border-tertiary)",
+        borderTop: "1px solid var(--bench-edge-hi, var(--color-border-tertiary))",
+        borderRadius: 6,
+        boxShadow: "var(--bench-module-shadow, none)",
+        background: "var(--color-background-primary)",
         display: "flex",
         flexDirection: "column",
         alignItems: expanded ? "stretch" : "center",

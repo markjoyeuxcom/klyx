@@ -28,11 +28,21 @@ function isTheme(value: string | null): value is Theme {
     value === "graphite" || value === "crimson" || value === "forest" || value === "amber" || value === "violet";
 }
 
+const MIGRATED_KEY = "klyx-theme-bench-migrated";
+
 function initial(): Theme {
   const saved = localStorage.getItem(STORAGE_KEY);
-  // Bench is the flagship look (direction C, 2026-07-05); a saved choice
-  // always wins, so nobody's picked theme changes out from under them.
-  return isTheme(saved) ? saved : "bench";
+  if (!isTheme(saved)) return "bench";
+  // One-time migration to direction C (2026-07-05): a palette saved before
+  // the redesign maps onto its bench face ONCE - otherwise the redesign is
+  // invisible to everyone with a stored theme. Any choice made after this
+  // sticks permanently (the flag is never consulted again).
+  if (!localStorage.getItem(MIGRATED_KEY)) {
+    localStorage.setItem(MIGRATED_KEY, "1");
+    if (saved === "light") return "bench-light";
+    if (saved !== "bench" && saved !== "bench-light" && saved !== "system") return "bench";
+  }
+  return saved;
 }
 
 function prefersDark(): boolean {
@@ -42,7 +52,9 @@ function prefersDark(): boolean {
 }
 
 export function resolveTheme(theme: Theme): EffectiveTheme {
-  return theme === "system" ? (prefersDark() ? "dark" : "light") : theme;
+  // "system" follows the OS into the bench faces - direction C is the app's
+  // look; the OS only chooses dark or light.
+  return theme === "system" ? (prefersDark() ? "bench" : "bench-light") : theme;
 }
 
 function applyTheme(theme: Theme): EffectiveTheme {

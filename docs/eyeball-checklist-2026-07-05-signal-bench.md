@@ -31,3 +31,8 @@ design rules (notes §Design rules) are the review bar.
 - [ ] ClusterCard: name-plate lamp carries severity (rail is gone), counter wells legible at a glance, verdict footer unchanged.
 - [ ] Palette: mono input in a well, selected row shows the illuminated left edge, verbs on the prd cluster carry "· prd lock" in the hint.
 - [ ] Row selection everywhere uses the same illuminated inset edge; stale rows still dim 0.6 with the grey Syncing… chip.
+
+## The bench itself (added after "looks nothing like C" - the shell was the identity)
+- [ ] The app is modules floating on a darker desk with 8px gutters: mast, spine, nav, and content are separate machined blocks - nothing is joined by a hairline anymore.
+- [ ] Lens lists (pods/flux/certs/eso/nodes/gateways/instances) sit IN inset wells inside the content module - list=well, inspector=module (rule 4, both directions).
+- [ ] First boot after upgrade lands in Bench even with an old saved theme (one-time migration); choosing any theme afterwards sticks. "System" now follows the OS into bench/bench-light.

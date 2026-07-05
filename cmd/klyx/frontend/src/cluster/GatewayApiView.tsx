@@ -8,7 +8,7 @@ import { useListKeys } from "../chrome/useListKeys";
 import { EmptyState } from "../chrome/EmptyState";
 import { SkeletonRows } from "../chrome/SkeletonRows";
 import { IconRoute } from "@tabler/icons-react";
-import { frame, ellipsis, SummaryCell, FilterButton } from "../chrome/primitives";
+import { well, frame, ellipsis, SummaryCell, FilterButton } from "../chrome/primitives";
 import { SyncingChip, staleStyle } from "./staleness";
 
 const empty: CSSProperties = { padding: 24, color: "var(--color-text-secondary)", fontSize: 13 };
@@ -148,7 +148,7 @@ export function GatewayApiView({ cluster }: { cluster: string }) {
         {visibleGateways.length !== gateways.length && <span style={{ fontSize: 10, color: "var(--color-text-tertiary)" }}>{visibleGateways.length} of {gateways.length}</span>}
       </div>
 
-      <div style={{ ...frame, overflow: "hidden", minHeight: 0, display: "flex", flexDirection: "column", flex: 1 }}>
+      <div style={{ ...well, overflow: "hidden", minHeight: 0, display: "flex", flexDirection: "column", flex: 1 }}>
         <div style={{ display: "grid", gridTemplateColumns: "3px minmax(160px,1fr) 150px minmax(140px,0.8fr) minmax(120px,0.7fr) 100px 100px", gap: 10, alignItems: "center", padding: "5px 12px", borderBottom: "0.5px solid var(--color-border-tertiary)", fontSize: 10, color: "var(--color-text-tertiary)", flexShrink: 0 }}>
           <span />
           <span>gateway</span>

@@ -7,7 +7,7 @@ import { useListKeys } from "../chrome/useListKeys";
 import { useResizablePanel } from "../chrome/useResizablePanel";
 import { CopyButton } from "../chrome/CopyButton";
 import { Age } from "../chrome/Age";
-import { EmptyState, SkeletonRows } from "../chrome/primitives";
+import { well, EmptyState, SkeletonRows } from "../chrome/primitives";
 import { IconStack2 } from "@tabler/icons-react";
 import { InstanceDetail } from "./InstanceDetail";
 import { riskFor, supportsRiskFilter } from "./resourceRisk";
@@ -255,7 +255,7 @@ export function InstanceList({ cluster, resource }: { cluster: string; resource:
           title={`No ${resource.kind} instances found${fleetMode ? " across the fleet" : ""}.`}
         />
       ) : (
-        <div data-testid="instance-list-scroll" style={{ border: "0.5px solid var(--color-border-tertiary)", borderRadius: "var(--border-radius-md)", overflowY: "auto", overflowX: "auto", flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+        <div data-testid="instance-list-scroll" style={{ ...well, overflowY: "auto", overflowX: "auto", flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
           {/* minWidth wrapper: header + rows share it, so horizontal scrolling
               (on the outer div) moves them together while the VirtualList owns
               vertical scrolling for the windowed rows. */}

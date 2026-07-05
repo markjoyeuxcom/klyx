@@ -27,8 +27,12 @@ export function TopBar() {
         flexShrink: 0,
         paddingLeft: 84,
         paddingRight: 12,
-        background: "var(--color-background-secondary)",
-        borderBottom: "0.5px solid var(--color-border-tertiary)",
+        // Mast module on the desk (Signal Bench) - machined, not joined.
+        background: "var(--color-background-primary)",
+        border: "var(--border-hairline) solid var(--color-border-tertiary)",
+        borderTop: "1px solid var(--bench-edge-hi, var(--color-border-tertiary))",
+        borderRadius: 6,
+        boxShadow: "var(--bench-module-shadow, none)",
       }}
     >
       <div style={{ display: "flex", alignItems: "center", gap: 8, color: "var(--color-text-primary)", fontWeight: 500, fontSize: 13 }}>
