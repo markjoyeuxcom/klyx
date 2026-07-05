@@ -1,4 +1,9 @@
 import { useState } from "react";
+import { IconChevronRight } from "@tabler/icons-react";
+import { Badge, type Tone } from "../chrome/primitives";
+import { Age } from "../chrome/Age";
+import { compactCount } from "../chrome/format";
+import type { ConditionDTO, EventDTO } from "../store/fleet";
 
 export const inspectorStateBox: React.CSSProperties = {
   color: "var(--color-text-secondary)",
@@ -42,7 +47,9 @@ export function InspectorSection({
         aria-expanded={!collapsed}
         style={sectionToggle}
       >
-        <span style={{ width: 12, color: "var(--color-text-tertiary)" }}>{collapsed ? ">" : "v"}</span>
+        <span style={{ width: 12, color: "var(--color-text-tertiary)", display: "inline-flex" }}>
+          <IconChevronRight size={11} stroke={1.7} style={{ transform: collapsed ? "none" : "rotate(90deg)", transition: "transform 100ms ease" }} />
+        </span>
         <span style={sectionTitle}>{label}</span>
       </button>
       {!collapsed && <div style={sectionBody}>{children}</div>}
@@ -77,6 +84,105 @@ export function InspectorTitle({ title, sub }: { title: string; sub: string }) {
 
 export function InspectorEmpty({ text, style }: { text: string; style?: React.CSSProperties }) {
   return <div style={{ ...inspectorStateBox, ...style }}>{text}</div>;
+}
+
+// ---------------------------------------------------------------------------
+// Shared panel anatomy. Every side panel presents the same three shapes -
+// a headline state, a conditions list, an events list - and each grew its
+// own markup. One vocabulary: the state is a tone Badge with an optional
+// reason chip (scannable at the top, not buried in key-value rows);
+// conditions and events render identically everywhere, with ages ticking
+// and counts compact.
+// ---------------------------------------------------------------------------
+
+/** InspectorStatus — the state-first opening line of a panel. */
+export function InspectorStatus({ tone, label, reason, detail }: {
+  tone: Tone;
+  label: string;
+  reason?: string;
+  detail?: string;
+}) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", marginBottom: 12 }}>
+      <Badge tone={tone} variant="filled">{label}</Badge>
+      {reason && <Badge tone={tone === "success" ? "muted" : tone}>{reason}</Badge>}
+      {detail && (
+        <span style={{ fontSize: 11, color: "var(--color-text-secondary)", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={detail}>
+          {detail}
+        </span>
+      )}
+    </div>
+  );
+}
+
+// Conditions where True means trouble and False is the healthy state - the
+// inverse of the usual Ready-style polarity (HPA ScalingLimited, node
+// pressure conditions). Without this a healthy HPA renders a red dot.
+export const NEGATIVE_POLARITY = new Set([
+  "ScalingLimited",
+  "MemoryPressure",
+  "DiskPressure",
+  "PIDPressure",
+  "NetworkUnavailable",
+]);
+
+export function conditionColor(status: string, type?: string): string {
+  const negative = type !== undefined && NEGATIVE_POLARITY.has(type);
+  const healthy = negative ? status === "False" : status === "True";
+  const unhealthy = negative ? status === "True" : status === "False";
+  return healthy ? "var(--color-text-success)" : unhealthy ? "var(--color-text-danger)" : "var(--color-text-info)";
+}
+
+/**
+ * InspectorConditions — one conditions rendering for every panel. `colorOf`
+ * overrides the polarity rule where a kind has stricter semantics (nodes
+ * treat Unknown pressure as a problem, not merely indeterminate).
+ */
+export function InspectorConditions({ conditions, colorOf }: { conditions: ConditionDTO[]; colorOf?: (c: ConditionDTO) => string }) {
+  if (conditions.length === 0) {
+    return <span style={{ color: "var(--color-text-tertiary)", fontSize: 11 }}>No conditions reported.</span>;
+  }
+  const dotColor = colorOf ?? ((c: ConditionDTO) => conditionColor(c.status, c.type));
+  return (
+    <>
+      {conditions.map((c) => (
+        <div key={c.type} style={{ display: "flex", gap: 8, alignItems: "baseline", fontSize: 11, padding: "1px 0" }}>
+          <span style={{ width: 7, height: 7, borderRadius: "50%", background: dotColor(c), display: "inline-block", flexShrink: 0, alignSelf: "center" }} />
+          <span style={{ fontWeight: 500, flexShrink: 0, whiteSpace: "nowrap" }}>{c.type}</span>
+          {c.reason && (
+            <span style={{ flexShrink: 0, fontSize: 10, color: "var(--color-text-tertiary)", background: "var(--color-background-secondary)", padding: "0 5px", borderRadius: 3, fontFamily: "var(--font-mono)" }}>
+              {c.reason}
+            </span>
+          )}
+          <span style={{ color: "var(--color-text-secondary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={c.message}>
+            {c.message}
+          </span>
+        </div>
+      ))}
+    </>
+  );
+}
+
+/** InspectorEvents — one event rendering for every panel. */
+export function InspectorEvents({ events, emptyText = "No events." }: { events: EventDTO[]; emptyText?: string }) {
+  if (events.length === 0) {
+    return <span style={{ color: "var(--color-text-tertiary)", fontSize: 11 }}>{emptyText}</span>;
+  }
+  return (
+    <>
+      {events.map((e, i) => (
+        <div key={i} style={{ display: "flex", gap: 6, alignItems: "baseline", fontSize: 11, padding: "1px 0", color: e.type === "Warning" ? "var(--color-text-danger)" : "var(--color-text-secondary)" }}>
+          <span style={{ width: 7, height: 7, borderRadius: "50%", background: e.type === "Warning" ? "var(--color-text-danger)" : "var(--color-text-tertiary)", display: "inline-block", flexShrink: 0, alignSelf: "center" }} />
+          <span style={{ fontWeight: 500, flexShrink: 0, maxWidth: 130, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={e.reason}>{e.reason}</span>
+          <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, minWidth: 0 }} title={e.message}>{e.message}</span>
+          {e.count > 1 && (
+            <span title={`${e.count.toLocaleString()} occurrences`} style={{ color: "var(--color-text-tertiary)", flexShrink: 0 }}>×{compactCount(e.count)}</span>
+          )}
+          <span style={{ color: "var(--color-text-tertiary)", flexShrink: 0 }}><Age iso={e.lastSeen} fallback="" /></span>
+        </div>
+      ))}
+    </>
+  );
 }
 
 export function MetadataChips({

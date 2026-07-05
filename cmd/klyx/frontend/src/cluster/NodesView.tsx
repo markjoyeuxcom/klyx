@@ -17,8 +17,7 @@ import { SkeletonRows } from "../chrome/SkeletonRows";
 import { UpdatedAt, useReceivedAt } from "../chrome/Age";
 import { IconServer, IconX } from "@tabler/icons-react";
 import { ellipsis, frame, btn, FilterButton, SummaryCell, StatusDot } from "../chrome/primitives";
-import { compactCount } from "../chrome/format";
-import { InspectorSection, InspectorTabButton, MetadataChips, inspectorStateBox } from "./ResourceInspector";
+import { InspectorConditions, InspectorEvents, InspectorSection, InspectorStatus, InspectorTabButton, MetadataChips, inspectorStateBox } from "./ResourceInspector";
 
 function ago(s: number): string {
   return s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)}m` : s < 86400 ? `${Math.floor(s / 3600)}h` : `${Math.floor(s / 86400)}d`;
@@ -752,6 +751,15 @@ function InfoTab({ detail, cluster, onCordon, onDrain }: {
 
   return (
     <>
+      {/* State first: the node's headline condition, scannable before any
+          key-value rows. */}
+      <InspectorStatus
+        tone={!n.ready || n.problems.length > 0 ? "danger" : n.unschedulable || n.taintCount > 0 ? "warning" : "success"}
+        label={nodeStatusText(n)}
+        reason={n.problems.length > 0 ? n.problems.join(", ") : undefined}
+        detail={[n.roles.join(", "), n.version].filter(Boolean).join(" · ")}
+      />
+
       {/* Actions row */}
       <InspectorSection title="Actions">
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -798,19 +806,14 @@ function InfoTab({ detail, cluster, onCordon, onDrain }: {
         )}
       </InspectorSection>
 
-      {/* Conditions */}
+      {/* Conditions - problems sort first; the node-specific severity rule
+          (Unknown pressure is a problem) rides in via colorOf. */}
       {detail.conditions.length > 0 && (
         <InspectorSection title="Conditions" collapsible>
-          {[...detail.conditions].sort((a, b) => Number(conditionIsProblem(b)) - Number(conditionIsProblem(a)) || a.type.localeCompare(b.type)).map((c) => {
-            const conditionMessage = c.message || c.reason || "-";
-            return (
-              <div key={c.type} style={{ display: "grid", gridTemplateColumns: "7px minmax(130px, 0.46fr) minmax(0, 1fr)", gap: 8, alignItems: "baseline", fontSize: 11 }}>
-                <StatusDot color={condColor(c)} />
-                <span style={{ fontWeight: 500, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={c.type}>{c.type}</span>
-                <span style={{ color: "var(--color-text-secondary)", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={conditionMessage}>{conditionMessage}</span>
-              </div>
-            );
-          })}
+          <InspectorConditions
+            conditions={[...detail.conditions].sort((a, b) => Number(conditionIsProblem(b)) - Number(conditionIsProblem(a)) || a.type.localeCompare(b.type))}
+            colorOf={condColor}
+          />
         </InspectorSection>
       )}
 
@@ -854,18 +857,7 @@ function InfoTab({ detail, cluster, onCordon, onDrain }: {
 
       {/* Events */}
       <InspectorSection title="Events" count={detail.events.length} collapsible>
-        {detail.events.length === 0 ? (
-          <span style={{ color: "var(--color-text-tertiary)" }}>No events for this node.</span>
-        ) : (
-          detail.events.map((e, i) => (
-            <div key={i} style={{ display: "flex", gap: 6, alignItems: "baseline", fontSize: 11, color: e.type === "Warning" ? "var(--color-text-danger)" : "var(--color-text-secondary)" }}>
-              <span style={{ width: 50, fontSize: 9, textTransform: "uppercase", flexShrink: 0 }}>{e.type}</span>
-              <span style={{ fontWeight: 500, width: 100, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flexShrink: 0 }}>{e.reason}</span>
-              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }} title={e.message}>{e.message}</span>
-              {e.count > 1 && <span title={`${e.count.toLocaleString()} occurrences`} style={{ color: "var(--color-text-tertiary)", flexShrink: 0 }}>×{compactCount(e.count)}</span>}
-            </div>
-          ))
-        )}
+        <InspectorEvents events={detail.events} emptyText="No events for this node." />
       </InspectorSection>
     </>
   );

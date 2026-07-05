@@ -16,11 +16,10 @@ import { useResizablePanel } from "../chrome/useResizablePanel";
 import { useResizableDock } from "../chrome/useResizableDock";
 import { useListKeys } from "../chrome/useListKeys";
 import { useNavIntent } from "../chrome/useNavIntent";
-import { Chip, EmptyState, LiveIndicator, SkeletonRows, btn, ellipsis } from "../chrome/primitives";
-import { compactCount } from "../chrome/format";
+import { Chip, EmptyState, LiveIndicator, SkeletonRows, btn, ellipsis, type Tone } from "../chrome/primitives";
 import { CopyButton } from "../chrome/CopyButton";
 import { YamlBlock } from "../chrome/YamlBlock";
-import { InspectorSection, InspectorTabButton, MetadataChips, inspectorStateBox } from "./ResourceInspector";
+import { InspectorConditions, InspectorEvents, InspectorSection, InspectorStatus, InspectorTabButton, MetadataChips, inspectorStateBox } from "./ResourceInspector";
 import { loadClusterPrefs, loadSearch, savePodsViewPrefs, saveSearch } from "../store/persist";
 
 const rankDot: Record<string, string> = {
@@ -29,13 +28,22 @@ const rankDot: Record<string, string> = {
   restarts: "var(--color-text-info)",
   healthy: "var(--color-text-tertiary)",
 };
+const rankTone: Record<string, Tone> = {
+  unhealthy: "danger",
+  degraded: "warning",
+  restarts: "info",
+  healthy: "success",
+};
+
+// readyOf renders the panel's "N/M ready" from non-init containers.
+function readyOf(p: PodSummaryDTO): string {
+  const nonInit = p.containers.filter((c) => !c.init);
+  return `${nonInit.filter((c) => c.ready).length}/${nonInit.length}`;
+}
 
 function ago(s: number): string {
   return s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)}m` : s < 86400 ? `${Math.floor(s / 3600)}h` : `${Math.floor(s / 86400)}d`;
 }
-
-const condColor = (status: string) =>
-  status === "True" ? "var(--color-text-success)" : status === "False" ? "var(--color-text-danger)" : "var(--color-text-info)";
 
 const gridCols = "12px minmax(0,1.2fr) 60px minmax(110px,0.8fr) 55px minmax(0,1.1fr) 52px 28px";
 
@@ -710,6 +718,15 @@ function InfoTab({ detail, cluster, namespace, name, onRestart, onDelete }: {
 
   return (
     <>
+      {/* State first: the phase/rank/reason headline, scannable before any
+          key-value rows. */}
+      <InspectorStatus
+        tone={rankTone[p.rank] ?? "muted"}
+        label={p.phase || p.rank}
+        reason={p.reason || undefined}
+        detail={`${readyOf(p)} ready`}
+      />
+
       {/* Action buttons */}
       <div style={{ display: "flex", gap: 8, marginBottom: 12, alignItems: "center", flexWrap: "wrap" }}>
         {showRestart && (
@@ -747,7 +764,6 @@ function InfoTab({ detail, cluster, namespace, name, onRestart, onDelete }: {
 
       {/* Summary header */}
       <InspectorSection title="Summary">
-        <InfoRow label="phase">{p.phase}{p.reason ? ` · ${p.reason}` : ""}</InfoRow>
         {p.ownerKind && (
           <InfoRow label="owner">
             {showRestart ? (
@@ -808,30 +824,13 @@ function InfoTab({ detail, cluster, namespace, name, onRestart, onDelete }: {
       {/* Conditions */}
       {detail.conditions.length > 0 && (
         <InspectorSection title="Conditions" collapsible>
-          {detail.conditions.map((c) => (
-            <div key={c.type} style={{ display: "flex", gap: 8, alignItems: "baseline", fontSize: 11 }}>
-              <span style={{ width: 7, height: 7, borderRadius: "50%", background: condColor(c.status), display: "inline-block", flexShrink: 0 }} />
-              <span style={{ fontWeight: 500, flexShrink: 0, whiteSpace: "nowrap" }}>{c.type}</span>
-              <span style={{ color: "var(--color-text-secondary)", ...ellipsis }} title={c.message}>{c.message || c.reason}</span>
-            </div>
-          ))}
+          <InspectorConditions conditions={detail.conditions} />
         </InspectorSection>
       )}
 
       {/* Events */}
       <InspectorSection title="Events" count={detail.events.length} collapsible>
-        {detail.events.length === 0 ? (
-          <span style={{ color: "var(--color-text-tertiary)" }}>No events for this pod.</span>
-        ) : (
-          detail.events.map((e, i) => (
-            <div key={i} style={{ display: "flex", gap: 6, alignItems: "baseline", fontSize: 11, color: e.type === "Warning" ? "var(--color-text-danger)" : "var(--color-text-secondary)" }}>
-              <span style={{ width: 50, fontSize: 9, textTransform: "uppercase", flexShrink: 0 }}>{e.type}</span>
-              <span style={{ fontWeight: 500, width: 100, ...ellipsis, flexShrink: 0 }}>{e.reason}</span>
-              <span style={{ ...ellipsis, flex: 1 }} title={e.message}>{e.message}</span>
-              {e.count > 1 && <span title={`${e.count.toLocaleString()} occurrences`} style={{ color: "var(--color-text-tertiary)", flexShrink: 0 }}>×{compactCount(e.count)}</span>}
-            </div>
-          ))
-        )}
+        <InspectorEvents events={detail.events} emptyText="No events for this pod." />
       </InspectorSection>
     </>
   );

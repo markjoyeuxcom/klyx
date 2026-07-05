@@ -72,3 +72,10 @@ behaviors that need real eyes on a real cluster before merging or releasing.
 - [ ] The panel's YAML editor / secret reveal / related objects all work at panel width; drag the divider - width persists (shared with the pod/node panels).
 - [ ] Deep links still land right: palette jump to an instance, Argo app resource click, Flux inventory click - all open list + panel, not a full-page swap.
 - [ ] Fleet-scope browsing: clicking a row from another cluster switches cluster and opens list + panel there.
+
+## Panel presentation pass (added with master-detail)
+- [ ] Pod/node/helm/workload/instance panels open with a tone badge headline (state + reason chip + detail) before any key-value rows; tones read correctly in light and dark.
+- [ ] Conditions look identical across pod/node/instance panels: dot, type, mono reason chip, ellipsised message; node pressure conditions still redden on Unknown.
+- [ ] Events look identical across panels: dot, reason, message, compact ×count with exact hover, ticking age.
+- [ ] A stale (Syncing…) workload's panel headline goes muted "syncing…" instead of a confident rank.
+- [ ] InspectorSection collapse chevrons are rotating Tabler icons now (no ASCII > / v).

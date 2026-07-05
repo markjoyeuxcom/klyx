@@ -4,11 +4,10 @@ import { getInstanceDetail, revealSecretKey, copyText, dryRunInstanceYAML, apply
 import { armProtected } from "../bridge/configsvc";
 import { openPodDetail } from "../bridge/pods";
 import { ForwardPopover } from "./ForwardPopover";
-import { InspectorSection, InspectorTabButton, MetadataChips, inspectorStateBox } from "./ResourceInspector";
+import { InspectorConditions, InspectorEvents, InspectorSection, InspectorTabButton, MetadataChips, inspectorStateBox } from "./ResourceInspector";
 import { actionBtn, ellipsis } from "../chrome/primitives";
 import { CopyButton } from "../chrome/CopyButton";
 import { IconX } from "@tabler/icons-react";
-import { compactCount } from "../chrome/format";
 
 type DetailTab = "summary" | "related" | "events" | "yaml";
 
@@ -22,25 +21,6 @@ function age(created: string): string {
   if (sec < 86400) return `${Math.floor(sec / 3600)}h`;
   return `${Math.floor(sec / 86400)}d`;
 }
-
-// Conditions where True means trouble and False is the healthy state - the
-// inverse of the usual Ready-style polarity. HPA's ScalingLimited=False means
-// "the desired count is within range" (good); node pressure conditions are the
-// same family. Without this, a healthy HPA renders a red dot.
-const NEGATIVE_POLARITY = new Set([
-  "ScalingLimited",
-  "MemoryPressure",
-  "DiskPressure",
-  "PIDPressure",
-  "NetworkUnavailable",
-]);
-
-const condColor = (status: string, type?: string) => {
-  const negative = type !== undefined && NEGATIVE_POLARITY.has(type);
-  const healthy = negative ? status === "False" : status === "True";
-  const unhealthy = negative ? status === "True" : status === "False";
-  return healthy ? "var(--color-text-success)" : unhealthy ? "var(--color-text-danger)" : "var(--color-text-info)";
-};
 
 type GitOwner = { tool: "Argo CD" | "Flux" | "Helm"; detail: string };
 type DiffLine = { type: "context" | "added" | "removed"; text: string; oldLine?: number; newLine?: number };
@@ -759,13 +739,7 @@ export function InstanceDetail({ cluster, resource, instance }: { cluster: strin
 
                 {d.conditions.length > 0 && (
                   <InspectorSection title="Conditions" collapsible>
-                    {d.conditions.map((c) => (
-                      <div key={c.type} style={{ display: "flex", gap: 8, alignItems: "baseline" }}>
-                        <span style={{ width: 7, height: 7, borderRadius: "50%", background: condColor(c.status, c.type), display: "inline-block" }} />
-                        <span style={{ fontWeight: 500, flexShrink: 0, whiteSpace: "nowrap" }}>{c.type}</span>
-                        <span style={{ color: "var(--color-text-secondary)", ...ellipsis }} title={c.message}>{c.message || c.reason}</span>
-                      </div>
-                    ))}
+                    <InspectorConditions conditions={d.conditions} />
                   </InspectorSection>
                 )}
               </>
@@ -848,19 +822,7 @@ function RelatedSection({ cluster, related }: { cluster: string; related: Relate
 function EventsPanel({ events }: { events: EventDTO[] }) {
   return (
     <InspectorSection title="Events" count={events.length}>
-      {events.length === 0 ? (
-        <span style={{ color: "var(--color-text-tertiary)" }}>No events for this object.</span>
-      ) : (
-        events.map((e, i) => (
-          <div key={i} style={{ display: "flex", gap: 8, alignItems: "baseline", color: e.type === "Warning" ? "var(--color-text-danger)" : "var(--color-text-secondary)" }}>
-            <span style={{ width: 56, fontSize: 10, textTransform: "uppercase" }}>{e.type}</span>
-            <span style={{ fontWeight: 500, width: 120, ...ellipsis }}>{e.reason}</span>
-            <span style={{ ...ellipsis }} title={e.message}>{e.message}</span>
-            {e.count > 1 && <span title={`${e.count.toLocaleString()} occurrences`} style={{ color: "var(--color-text-tertiary)" }}>×{compactCount(e.count)}</span>}
-            <span style={{ color: "var(--color-text-tertiary)" }}>{age(e.lastSeen)}</span>
-          </div>
-        ))
-      )}
+      <InspectorEvents events={events} emptyText="No events for this object." />
     </InspectorSection>
   );
 }

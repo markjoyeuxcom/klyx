@@ -8,6 +8,7 @@ import type { RollbackOptions } from "../bridge/helm";
 import { MetaTile, OperationDialog, OptionTile } from "../chrome/OperationDialog";
 import { useResizablePanel } from "../chrome/useResizablePanel";
 import { useListKeys } from "../chrome/useListKeys";
+import { InspectorStatus } from "./ResourceInspector";
 import { CopyButton } from "../chrome/CopyButton";
 import { YamlBlock } from "../chrome/YamlBlock";
 import { Age, UpdatedAt, useReceivedAt } from "../chrome/Age";
@@ -315,16 +316,19 @@ function HelmDetailPanel({
               <span style={{ color: "var(--color-text-tertiary)" }}>{namespace}</span>/{name}
             </span>
           </div>
-          {release && (
-            <div style={{ fontSize: 10, color: "var(--color-text-tertiary)", marginTop: 2 }}>
-              <span style={{ color: statusColor(release.status) }}>{release.status}</span>
-              {" · "}{release.chart}
-              {release.appVersion ? ` · ${release.appVersion}` : ""}
-            </div>
-          )}
         </div>
         <button onClick={onClose} aria-label="close release detail panel" style={{ ...btn, padding: "2px 8px", flexShrink: 0, display: "inline-flex", alignItems: "center" }}><IconX size={13} stroke={1.5} /></button>
       </div>
+
+      {/* State first: helm's own status as the tone badge, revision + chart
+          as the scannable detail line. */}
+      {release && (
+        <InspectorStatus
+          tone={statusGroup(release.status) === "failed" ? "danger" : statusGroup(release.status) === "pending" ? "warning" : "success"}
+          label={release.status}
+          detail={`rev ${release.revision} · ${release.chart}${release.appVersion ? ` · ${release.appVersion}` : ""}`}
+        />
+      )}
 
       {detailLoading && history.length === 0 ? (
         <div style={{ color: "var(--color-text-secondary)" }}>Loading detail…</div>

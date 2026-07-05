@@ -21,7 +21,8 @@ import { Chip } from "../chrome/Chip";
 import { CopyButton } from "../chrome/CopyButton";
 import { EmptyState } from "../chrome/EmptyState";
 import { SkeletonRows } from "../chrome/SkeletonRows";
-import { LiveIndicator, btn, ellipsis } from "../chrome/primitives";
+import { LiveIndicator, btn, ellipsis, type Tone } from "../chrome/primitives";
+import { InspectorStatus } from "./ResourceInspector";
 import { loadClusterPrefs, loadSearch, saveSearch, saveWorkloadsViewPrefs } from "../store/persist";
 import { SyncingChip, staleStyle } from "./staleness";
 import { wellKnownResourceRef } from "./resourceRefs";
@@ -31,6 +32,12 @@ const rankDot: Record<string, string> = {
   degraded: "var(--color-text-warning)",
   restarts: "var(--color-text-info)",
   healthy: "var(--color-text-tertiary)",
+};
+const rankTone: Record<string, Tone> = {
+  unhealthy: "danger",
+  degraded: "warning",
+  restarts: "info",
+  healthy: "success",
 };
 const KINDS: WorkloadKind[] = ["Deployment", "StatefulSet", "DaemonSet"];
 const kindShort: Record<WorkloadKind, string> = { Deployment: "deploy", StatefulSet: "sts", DaemonSet: "daemonset" };
@@ -591,6 +598,14 @@ function WorkloadContextPanel({
             </span>
           )}
         </div>
+        {/* State first: the rank + reason headline, scannable before the
+            status grid below. */}
+        <InspectorStatus
+          tone={workload.stale ? "muted" : rankTone[workload.rank] ?? "muted"}
+          label={workload.stale ? "syncing…" : workload.rank}
+          reason={workload.stale ? undefined : (workload.reason || undefined)}
+          detail={`${workload.ready}/${workload.desired} ready`}
+        />
         <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
           <button onClick={() => onLogs(workload)} style={{ ...btn, color: "var(--color-text-info)", borderColor: "var(--color-border-info)", background: "var(--color-background-info)" }}>tail logs</button>
           <button onClick={() => onRestart(workload)} style={btn}>restart</button>
