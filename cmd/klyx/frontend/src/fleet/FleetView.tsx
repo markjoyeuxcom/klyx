@@ -1,6 +1,7 @@
 import { useEffect, type ReactNode } from "react";
 import { IconLayoutGrid } from "@tabler/icons-react";
 import { useFleet } from "../store/fleet";
+import { MetersStrip } from "../chrome/primitives";
 import { EmptyState } from "../chrome/EmptyState";
 import { ClusterCard, clusterDiagnosticScore } from "./ClusterCard";
 import { MeshStrip } from "./MeshStrip";
@@ -44,7 +45,23 @@ export function FleetView() {
         />
       ) : (
         <>
-          {mesh && <MeshStrip graph={mesh} />}
+          <MetersStrip
+            note="broken first · diagnostic order"
+            meters={[
+              { label: "clusters", value: clusters.length },
+              clusters.length - connected > 0 && { label: "unreachable", value: clusters.length - connected, tone: "danger" as const },
+              clusters.filter((c) => c.state === "Degraded").length > 0 && { label: "degraded", value: clusters.filter((c) => c.state === "Degraded").length, tone: "warning" as const },
+              { label: "healthy", value: clusters.filter((c) => c.state === "Synced").length, tone: "success" as const },
+              { label: "nodes", value: clusters.reduce((n, c) => n + c.nodesTotal, 0) },
+              { label: "pods", value: clusters.reduce((n, c) => n + c.pods, 0) },
+            ]}
+          />
+          {mesh && (
+            <div style={{ background: "var(--bench-well-bg, transparent)", boxShadow: "var(--bench-well-shadow, none)", borderRadius: "var(--radius-sm)", padding: "8px 14px" }}>
+              <div style={{ fontSize: 9, letterSpacing: "0.14em", textTransform: "uppercase", fontWeight: 600, color: "var(--color-text-tertiary)", marginBottom: 2 }}>clustermesh · patch bay</div>
+              <MeshStrip graph={mesh} />
+            </div>
+          )}
           <div style={{
             display: "flex",
             alignItems: "center",

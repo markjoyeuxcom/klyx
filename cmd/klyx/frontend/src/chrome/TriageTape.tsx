@@ -3,6 +3,7 @@ import type { CSSProperties } from "react";
 import { IconRefresh } from "@tabler/icons-react";
 import { useFleet } from "../store/fleet";
 import { fetchTape } from "../bridge/tape";
+import { StatusDot } from "./primitives";
 
 // Gentle re-poll cadence: the tape stays honest about a cluster that breaks
 // while you are tailing logs, without hammering seven list endpoints.
@@ -70,20 +71,29 @@ export function TriageTape({ cluster }: { cluster: string }) {
     ? [...preferred.slice(0, Math.max(0, 5 - extraAlerts.length)), ...extraAlerts]
     : preferred.slice(0, 5);
 
+  // Signal-strip rendering (Signal Bench): one compact row, a lamp per lens,
+  // and only faults are lit - a quiet cluster is a row of unlit glass, not
+  // five boxes shouting "quiet". No band background, no column dividers; the
+  // tape is part of the module it sits in.
   return (
     <div
       data-testid="triage-tape"
       style={{
-        display: "grid",
-        gridTemplateRows: "24px minmax(64px, auto)",
+        display: "flex",
+        alignItems: "center",
+        gap: 18,
+        flexWrap: "wrap",
+        padding: "7px 16px",
         borderBottom: "0.5px solid var(--color-border-tertiary)",
-        background: "var(--color-background-secondary)",
         flexShrink: 0,
+        minHeight: 30,
+        boxSizing: "border-box",
       }}
     >
-      <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "0 16px", borderBottom: "0.5px solid var(--color-border-tertiary)", fontSize: 11 }}>
-        <span style={{ color: "var(--color-text-tertiary)" }}>triage</span>
-        <span style={{ marginLeft: "auto", color: "var(--color-text-tertiary)" }}>{trailer}</span>
+      <span style={{ fontSize: 9, letterSpacing: "0.14em", textTransform: "uppercase", fontWeight: 600, color: "var(--color-text-tertiary)" }}>triage</span>
+      {cells.map((c) => <TriageSignal key={c.key} chip={c} />)}
+      <span style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 6, fontFamily: "var(--font-mono)", fontSize: 9, letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--color-text-tertiary)", whiteSpace: "nowrap" }}>
+        {trailer}
         <button
           onClick={() => void fetchTape(cluster)}
           aria-label="refresh triage"
@@ -102,48 +112,45 @@ export function TriageTape({ cluster }: { cluster: string }) {
         >
           <IconRefresh size={11} stroke={1.5} />
         </button>
-      </div>
-      <div style={{ display: "grid", gridTemplateColumns: `repeat(${Math.max(1, cells.length)}, minmax(120px, 1fr))` }}>
-        {cells.map((c) => <TriageCell key={c.key} chip={c} />)}
-      </div>
+      </span>
     </div>
   );
 }
 
-function TriageCell({ chip }: { chip: Chip }) {
+function TriageSignal({ chip }: { chip: Chip }) {
   const count = chip.count;
   const isNumber = typeof count === "number";
   const active = isNumber && count > 0;
-  const color = !isNumber
+  const tone = !isNumber ? "muted" : active ? chip.variant : "muted";
+  const valueColor = !isNumber
     ? "var(--color-text-tertiary)"
     : active
       ? chip.variant === "danger" ? "var(--color-text-danger)" : "var(--color-text-warning)"
-      : "var(--color-text-success)";
+      : "var(--color-text-tertiary)";
   const value = !isNumber
     ? String(count)
     : active
       ? `${count} ${count === 1 ? chip.valueLabel[0] : chip.valueLabel[1]}`
       : "quiet";
   const common: CSSProperties = {
-    minHeight: 64,
-    padding: "10px 16px",
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 7,
+    padding: 0,
     border: "none",
-    borderRight: "0.5px solid var(--color-border-tertiary)",
     background: "transparent",
-    textAlign: "left",
-    display: "grid",
-    gap: 4,
-    alignContent: "center",
     color: "var(--color-text-secondary)",
+    whiteSpace: "nowrap",
   };
   const body = (
     <>
-      <span style={{ color: "var(--color-text-tertiary)", fontSize: 11 }}>{chip.tileLabel}</span>
-      <span style={{ color, fontFamily: "var(--font-mono)", fontSize: 17, fontWeight: 500 }}>{value}</span>
+      <StatusDot size={7} tone={tone} />
+      <span style={{ fontSize: 9, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--color-text-tertiary)" }}>{chip.tileLabel}</span>
+      <span style={{ color: valueColor, fontFamily: "var(--font-mono)", fontSize: 11, fontWeight: active ? 700 : 400 }}>{value}</span>
     </>
   );
 
-  if (!active) return <div style={common}>{body}</div>;
+  if (!active) return <span style={common}>{body}</span>;
 
   return (
     <button

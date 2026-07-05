@@ -3,7 +3,7 @@ import { useFleet } from "../store/fleet";
 import type { ExternalSecretDTO, ExternalSecretStoreDTO } from "../store/fleet";
 import { openExternalSecrets, closeExternalSecrets } from "../bridge/externalsecrets";
 import { useListKeys } from "../chrome/useListKeys";
-import { well, Badge, FilterButton, SummaryCell, Section, Field, StatusDot, frame, ellipsis, mono, readyColor, toneColor } from "../chrome/primitives";
+import { inputWell, MetersStrip, well, Badge, FilterButton, Section, Field, StatusDot, frame, ellipsis, mono, readyColor, toneColor } from "../chrome/primitives";
 import { CopyButton } from "../chrome/CopyButton";
 import { EmptyState } from "../chrome/EmptyState";
 import { SkeletonRows } from "../chrome/SkeletonRows";
@@ -165,13 +165,17 @@ export function ExternalSecretsView({ cluster }: { cluster: string }) {
         <WatchErrorBanner tool="external-secrets" error={eso.watchError} />
       )}
 
-      <div style={{ ...frame, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", overflow: "hidden" }}>
-        <SummaryCell label="health" value={attention > 0 ? `${attention} attention` : "synced"} tone={attention > 0 ? "warning" : "success"} />
-        <SummaryCell label="secrets" value={String(secrets.length)} />
-        <SummaryCell label="failed" value={String(failed)} tone={failed > 0 ? "danger" : "muted"} />
-        <SummaryCell label="stale" value={String(stale)} tone={stale > 0 ? "warning" : "muted"} />
-        <SummaryCell label="stores" value={String(stores.length)} />
-        <SummaryCell label="synced" value={String(synced)} tone="success" />
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", overflow: "hidden" }}>
+        <MetersStrip
+          note="broken first · then staleness"
+          meters={[
+            { label: "externalsecrets", value: secrets.length },
+            failed > 0 && { label: "failed", value: failed, tone: "danger" as const },
+            stale > 0 && { label: "stale", value: stale, tone: "warning" as const },
+            { label: "stores", value: stores.length },
+            { label: "synced", value: synced, tone: "success" as const },
+          ]}
+        />
       </div>
 
       <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
@@ -194,7 +198,7 @@ export function ExternalSecretsView({ cluster }: { cluster: string }) {
           onChange={(e) => setQuery(e.target.value)}
           placeholder="filter external secrets"
           aria-label="filter external secrets"
-          style={{ marginLeft: "auto", fontSize: 11, padding: "3px 8px", borderRadius: 4, border: "0.5px solid var(--color-border-tertiary)", background: "var(--color-background-primary)", color: "var(--color-text-primary)", width: 180 }}
+          style={{ ...inputWell, marginLeft: "auto", width: 180 }}
         />
         {(visibleSecrets.length !== secrets.length || namespace) && filter !== "stores" && <span style={{ fontSize: 10, color: "var(--color-text-tertiary)" }}>{visibleSecrets.length} of {secrets.length}</span>}
       </div>
@@ -310,7 +314,7 @@ function SecretInspector({ e, store }: { e: ExternalSecretDTO; store: ExternalSe
   const storeBroken = store && store.state !== "Synced";
   const cause = failureHint(e, store);
   return (
-    <div style={{ ...frame, padding: 14, display: "flex", flexDirection: "column", gap: 12 }}>
+    <div style={{ ...well, padding: 14, display: "flex", flexDirection: "column", gap: 12 }}>
       <div>
         <div style={{ display: "flex", alignItems: "center", gap: 2 }}>
           <div style={{ ...mono, fontSize: 13, fontWeight: 500 }}>{e.namespace}/{e.name}</div>
@@ -428,7 +432,7 @@ function StoresPanel({ stores }: { stores: ExternalSecretStoreDTO[] }) {
 
 function EmptyInspector({ attention }: { attention: number }) {
   return (
-    <div style={{ ...frame, padding: 18, color: "var(--color-text-secondary)", fontSize: 12, height: "100%", boxSizing: "border-box" }}>
+    <div style={{ ...well, padding: 18, color: "var(--color-text-secondary)", fontSize: 12, height: "100%", boxSizing: "border-box" }}>
       {attention > 0 ? "Select an external secret to inspect its store and refresh state." : "All external secrets are synced. Select one to inspect it."}
     </div>
   );

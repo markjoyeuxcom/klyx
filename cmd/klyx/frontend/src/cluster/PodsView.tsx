@@ -17,7 +17,7 @@ import { useResizableDock } from "../chrome/useResizableDock";
 import { useListKeys } from "../chrome/useListKeys";
 import { useNavIntent } from "../chrome/useNavIntent";
 import { FKeysBar } from "../chrome/FKeysBar";
-import { well, Chip, EmptyState, LiveIndicator, SkeletonRows, btn, ellipsis, type Tone } from "../chrome/primitives";
+import { inputWell, selectWell, FilterButton, MetersStrip, well, EmptyState, LiveIndicator, SkeletonRows, btn, ellipsis, type Tone } from "../chrome/primitives";
 import { CopyButton } from "../chrome/CopyButton";
 import { YamlBlock } from "../chrome/YamlBlock";
 import { InspectorConditions, InspectorEvents, InspectorSection, InspectorStatus, InspectorTabButton, MetadataChips, inspectorStateBox } from "./ResourceInspector";
@@ -139,6 +139,12 @@ export function PodsView({ cluster }: { cluster: string }) {
   };
   const onRefresh = () => { void listPods(cluster, pods.namespace); };
 
+  const crashloop = pods.items.filter((p) => p.reason === "CrashLoopBackOff").length;
+  const imagepull = pods.items.filter((p) => p.reason === "ImagePullBackOff" || p.reason === "ErrImagePull").length;
+  const pendingPods = pods.items.filter((p) => p.phase === "Pending").length;
+  const restartsRank = pods.items.filter((p) => p.rank === "restarts").length;
+  const runningPods = pods.items.filter((p) => p.rank === "healthy" && p.phase === "Running").length;
+
   const filtered = pods.items.filter((p) => {
     if (pods.needsAttention && p.rank === "healthy") return false;
     if (pods.search) {
@@ -241,23 +247,37 @@ export function PodsView({ cluster }: { cluster: string }) {
       <div style={{ flex: 1, minHeight: 0, padding: "16px 20px", display: "flex", gap: 0, position: "relative" }}>
         <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", minHeight: 0 }}>
           {/* Controls row */}
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, flexWrap: "wrap", flexShrink: 0 }}>
+          {/* Meters (Signal Bench): the pod population by severity, faults only
+            when they exist - 209 healthy rows stay dark. */}
+        <MetersStrip
+          note="broken first · severity order"
+          meters={[
+            { label: "pods", value: pods.items.length },
+            crashloop > 0 && { label: "crashloop", value: crashloop, tone: "danger" as const },
+            imagepull > 0 && { label: "imagepull", value: imagepull, tone: "danger" as const },
+            pendingPods > 0 && { label: "pending", value: pendingPods, tone: "warning" as const },
+            restartsRank > 0 && { label: "restarts", value: restartsRank, tone: "info" as const },
+            { label: "running", value: runningPods, tone: "success" as const },
+          ]}
+        />
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, flexWrap: "wrap", flexShrink: 0 }}>
 
             <select
               value={pods.namespace}
               onChange={(e) => onNamespace(e.target.value)}
-              style={{ fontSize: 12, padding: "3px 6px", background: "var(--color-background-primary)", color: "var(--color-text-primary)", border: "0.5px solid var(--color-border-tertiary)", borderRadius: 4 }}
+              style={selectWell}
             >
               <option value="">all namespaces</option>
               {pods.namespaces.map((ns) => <option key={ns} value={ns}>{ns}</option>)}
             </select>
-            <Chip on={pods.needsAttention} onClick={() => useFleet.getState().togglePodsNeedsAttention()}>needs attention</Chip>
+            <FilterButton label="all" count={pods.items.length} active={!pods.needsAttention} onClick={() => { if (pods.needsAttention) useFleet.getState().togglePodsNeedsAttention(); }} />
+            <FilterButton label="broken" count={pods.items.filter((x) => x.rank !== "healthy").length} active={pods.needsAttention} onClick={() => { if (!pods.needsAttention) useFleet.getState().togglePodsNeedsAttention(); }} />
             <input
               ref={searchRef}
               value={pods.search}
               onChange={(e) => useFleet.getState().setPodsSearch(e.target.value)}
               placeholder="filter pods"
-              style={{ fontSize: 11, padding: "3px 8px", borderRadius: 4, border: "0.5px solid var(--color-border-tertiary)", background: "var(--color-background-primary)", color: "var(--color-text-primary)", width: 160 }}
+              style={{ ...inputWell, width: 160 }}
             />
             <button onClick={onRefresh} style={btn}>refresh</button>
             <LiveIndicator live={pods.live} />
@@ -450,14 +470,19 @@ function PodRow({
         {readyCount}/{nonInitCount}
       </span>
       <span style={ellipsis} title={p.reason ? `${p.phase} · ${p.reason}` : p.phase}>
-        <span style={{ color: p.rank === "unhealthy" ? "var(--color-text-danger)" : "var(--color-text-secondary)" }}>
-          {p.phase}
+        {/* stx idiom (Signal Bench): mono status word, bold red + triangle
+            when broken, muted when it is just Running. */}
+        <span
+          className={p.rank === "unhealthy" ? "klyx-danger-prefix" : undefined}
+          style={{
+            fontFamily: "var(--font-mono)",
+            fontSize: 11,
+            color: p.rank === "unhealthy" ? "var(--color-text-danger)" : p.rank === "degraded" ? "var(--color-text-warning)" : "var(--color-text-tertiary)",
+            fontWeight: p.rank === "unhealthy" ? 700 : undefined,
+          }}
+        >
+          {p.reason || p.phase}
         </span>
-        {p.reason && (
-          <span style={{ color: p.rank === "unhealthy" ? "var(--color-text-danger)" : "var(--color-text-secondary)", marginLeft: 4, fontSize: 10 }}>
-            {p.reason}
-          </span>
-        )}
       </span>
       <span style={{ color: p.restarts > 0 ? "var(--color-text-warning)" : "var(--color-text-tertiary)" }}>
         {p.restarts}
@@ -529,7 +554,7 @@ function PodDetailPanel({
   return (
     <div style={{
       width, flexShrink: 0, position: "relative",
-      borderLeft: "0.5px solid var(--color-border-tertiary)",
+      background: "var(--bench-well-bg, transparent)", boxShadow: "var(--bench-well-shadow, none)", borderRadius: "var(--radius-sm)", padding: "12px 16px",
       overflowY: "auto",
       fontFamily: "var(--font-mono)",
       fontSize: 12,

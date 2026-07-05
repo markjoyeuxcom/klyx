@@ -36,3 +36,21 @@ design rules (notes §Design rules) are the review bar.
 - [ ] The app is modules floating on a darker desk with 8px gutters: mast, spine, nav, and content are separate machined blocks - nothing is joined by a hairline anymore.
 - [ ] Lens lists (pods/flux/certs/eso/nodes/gateways/instances) sit IN inset wells inside the content module - list=well, inspector=module (rule 4, both directions).
 - [ ] First boot after upgrade lands in Bench even with an old saved theme (one-time migration); choosing any theme afterwards sticks. "System" now follows the OS into bench/bench-light.
+
+## Meters (first-class per-type summaries)
+- [ ] Every lens opens with a meters strip of counter wells + its ordering note: fleet (diagnostic order), pods (severity order), workloads (rank), flux, argo (argo vocabulary), certs (soonest expiry), eso (staleness), nodes (by name), gateway (broken paths), helm (helm status), events (newest first).
+- [ ] Fault cells appear ONLY when the count is non-zero - a healthy view shows totals + green, never a row of red zeros.
+- [ ] Argo meters speak Argo words (degraded/outofsync/progressing/synced), Flux meters speak Flux words - never blended.
+
+## Screenshot-diff polish (pic1 vs pic2, 2026-07-05)
+- [ ] No breadcrumb/big-title header inside the content module - the mast alone carries "cluster / lens" (display name, not the raw kubeconfig context), with the amber prd-lock chip beside it on protected clusters.
+- [ ] Spine spans beside the nav rows with its "fleet" cap label.
+- [ ] Tabs carry fault lamps + red counts when loaded data has faults (workloads/pods/flux/argo); labels read "ext-secrets"/"crds".
+- [ ] Meter wells read as counter windows: 16px values, ≥86px, labels beneath.
+- [ ] Pods filters are counted switches (all N / broken N), pressed-well when active.
+
+## Seamless pass (pic3 feedback)
+- [ ] Triage is one compact signal row: unlit lamps + "quiet" for healthy lenses, lit lamp + bold toned count for faults; no boxed cells, no column dividers, no band background. Clicking a lit signal still jumps to the filtered lens.
+- [ ] Panel verdicts are one element: lamp + state word in a toned ringed box, mono sub-line "reason · detail" - not three disconnected chips.
+- [ ] Every namespace select and filter input is an inset well (mono, no OS chrome, chevron on selects) - pods, workloads, events, gateway, certs, eso, flux, helm, argo, instances, logs grep.
+- [ ] The workloads status caption reads as an engraved note (small tracked uppercase), not a second row of body text.

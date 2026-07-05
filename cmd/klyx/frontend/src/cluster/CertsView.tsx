@@ -4,7 +4,7 @@ import type { CertificateDTO, IssuerDTO, ChainNodeDTO, CertChainDTO } from "../s
 import { openCertManager, closeCertManager, getCertificateChain } from "../bridge/certmanager";
 import { useListKeys } from "../chrome/useListKeys";
 import { FKeysBar } from "../chrome/FKeysBar";
-import { well, Badge, FilterButton, SummaryCell, Section, Field, StatusDot, frame, ellipsis, mono, readyColor, toneColor } from "../chrome/primitives";
+import { inputWell, MetersStrip, well, Badge, FilterButton, Section, Field, StatusDot, frame, ellipsis, mono, readyColor, toneColor } from "../chrome/primitives";
 import { CopyButton } from "../chrome/CopyButton";
 import { EmptyState } from "../chrome/EmptyState";
 import { SkeletonRows } from "../chrome/SkeletonRows";
@@ -204,13 +204,18 @@ export function CertsView({ cluster }: { cluster: string }) {
         <WatchErrorBanner tool="cert-manager" error={cm.watchError} />
       )}
 
-      <div style={{ ...frame, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", overflow: "hidden" }}>
-        <SummaryCell label="health" value={attention > 0 ? `${attention} attention` : "ready"} tone={attention > 0 ? "warning" : "success"} />
-        <SummaryCell label="certificates" value={String(certs.length)} />
-        <SummaryCell label="issuing" value={String(issuing)} tone={issuing > 0 ? "info" : "muted"} />
-        <SummaryCell label="expiring" value={String(expiring)} tone={expiring > 0 ? "warning" : "muted"} />
-        <SummaryCell label="issuers" value={String(issuers.length)} />
-        <SummaryCell label="ready" value={String(ready)} tone="success" />
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", overflow: "hidden" }}>
+        <MetersStrip
+          note="broken first · then soonest expiry"
+          meters={[
+            { label: "certificates", value: certs.length },
+            attention > 0 && { label: "failing", value: attention, tone: "danger" as const },
+            issuing > 0 && { label: "issuing", value: issuing, tone: "info" as const },
+            expiring > 0 && { label: "expiring", value: expiring, tone: "warning" as const },
+            { label: "issuers", value: issuers.length },
+            { label: "ready", value: ready, tone: "success" as const },
+          ]}
+        />
       </div>
 
       <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
@@ -235,7 +240,7 @@ export function CertsView({ cluster }: { cluster: string }) {
           onChange={(e) => setQuery(e.target.value)}
           placeholder="filter certificates"
           aria-label="filter certificates"
-          style={{ marginLeft: "auto", fontSize: 11, padding: "3px 8px", borderRadius: 4, border: "0.5px solid var(--color-border-tertiary)", background: "var(--color-background-primary)", color: "var(--color-text-primary)", width: 180 }}
+          style={{ ...inputWell, marginLeft: "auto", width: 180 }}
         />
         {(visibleCerts.length !== certs.length || namespace) && filter !== "issuers" && <span style={{ fontSize: 10, color: "var(--color-text-tertiary)" }}>{visibleCerts.length} of {certs.length}</span>}
       </div>
@@ -344,7 +349,7 @@ function CertInspector({ c, issuer, chain, chainLoading }: { c: CertificateDTO; 
   const dnsNames = arrayOf(c.dnsNames);
   const cause = failureHint(c, boundIssuer, failing, warnings);
   return (
-    <div style={{ ...frame, padding: 14, display: "flex", flexDirection: "column", gap: 12 }}>
+    <div style={{ ...well, padding: 14, display: "flex", flexDirection: "column", gap: 12 }}>
       <div>
         <div style={{ display: "flex", alignItems: "center", gap: 2 }}>
           <div style={{ ...mono, fontSize: 13, fontWeight: 500 }}>{c.namespace}/{c.name}</div>
@@ -526,7 +531,7 @@ function IssuersPanel({ issuers }: { issuers: IssuerDTO[] }) {
 
 function EmptyInspector({ attention }: { attention: number }) {
   return (
-    <div style={{ ...frame, padding: 18, color: "var(--color-text-secondary)", fontSize: 12, height: "100%", boxSizing: "border-box" }}>
+    <div style={{ ...well, padding: 18, color: "var(--color-text-secondary)", fontSize: 12, height: "100%", boxSizing: "border-box" }}>
       {attention > 0 ? "Select a certificate to inspect its issuer and validity." : "All certificates are ready. Select one to inspect it."}
     </div>
   );

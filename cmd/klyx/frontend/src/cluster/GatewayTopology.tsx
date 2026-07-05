@@ -4,7 +4,7 @@ import { useFleet, GatewayRef, RouteNodeDTO, RouteMetricDTO } from "../store/fle
 import type { CertificateDTO, ListenerDTO, PolicyRefDTO, ResourceRef } from "../store/fleet";
 import { getGatewayTopology, getRouteMetrics } from "../bridge/gateway";
 import { PolicyChip } from "./PolicyChip";
-import { FilterButton, ellipsis } from "../chrome/primitives";
+import { inputWell, selectWell, FilterButton, ellipsis } from "../chrome/primitives";
 
 const nb: React.CSSProperties = { background: "var(--color-background-primary)", border: "0.5px solid var(--color-border-tertiary)", borderRadius: "var(--border-radius-md)", padding: "8px 9px", minWidth: 0 };
 const lab: React.CSSProperties = { fontSize: 9, letterSpacing: 0.4, textTransform: "uppercase", color: "var(--color-text-tertiary)", marginBottom: 3 };
@@ -273,7 +273,7 @@ export function GatewayTopology({ cluster, gateway }: { cluster: string; gateway
             <select
               value={activeNs ?? ""}
               onChange={(e) => setNsFilter(e.target.value || null)}
-              style={{ fontSize: 12, fontFamily: "var(--font-mono)", padding: "3px 8px", borderRadius: 4, cursor: "pointer", border: "0.5px solid var(--color-border-tertiary)", background: "var(--color-background-primary)", color: "var(--color-text-primary)", maxWidth: 280 }}
+              style={{ ...selectWell, maxWidth: 280 }}
             >
               <option value="">All namespaces ({t.routes.length})</option>
               {namespaces.map((ns) => (
@@ -287,7 +287,7 @@ export function GatewayTopology({ cluster, gateway }: { cluster: string; gateway
             onChange={(e) => setRouteQuery(e.target.value)}
             placeholder="filter routes"
             aria-label="filter routes"
-            style={{ fontSize: 11, padding: "3px 8px", borderRadius: 4, border: "0.5px solid var(--color-border-tertiary)", background: "var(--color-background-primary)", color: "var(--color-text-primary)", width: 160 }}
+            style={{ ...inputWell, width: 160 }}
           />
           {visibleRoutes.length !== modeRoutes.length && (
             <span style={{ fontSize: 10, color: "var(--color-text-tertiary)" }}>{visibleRoutes.length} of {modeRoutes.length} routes</span>

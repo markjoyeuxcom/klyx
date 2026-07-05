@@ -15,7 +15,7 @@ import { SkeletonRows } from "../chrome/SkeletonRows";
 import { WatchErrorBanner } from "../chrome/WatchErrorBanner";
 import { IconGitBranch } from "@tabler/icons-react";
 import { wellKnownResourceRef } from "./resourceRefs";
-import { well, Badge, FilterButton, SummaryCell, Section, StatusDot, readyColor, ellipsis, actionBtn, frame } from "../chrome/primitives";
+import { inputWell, MetersStrip, well, Badge, FilterButton, Section, StatusDot, readyColor, ellipsis, actionBtn } from "../chrome/primitives";
 import { compactCount } from "../chrome/format";
 import { SyncingChip, staleStyle } from "./staleness";
 
@@ -233,14 +233,17 @@ export function GitOps({ cluster }: { cluster: string }) {
         <WatchErrorBanner tool="Flux" error={gitops.watchError} />
       )}
 
-      <div style={{ ...frame, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", overflow: "hidden" }}>
-        <SummaryCell label="health" value={attention > 0 ? `${attention} attention` : "ready"} tone={attention > 0 ? "warning" : "success"} />
-        <SummaryCell label="kustomizations" value={String(ks)} />
-        <SummaryCell label="helmreleases" value={String(hr)} />
-        <SummaryCell label="reconciling" value={String(reconciling)} tone={reconciling > 0 ? "info" : "muted"} />
-        <SummaryCell label="suspended" value={String(suspended)} tone={suspended > 0 ? "warning" : "muted"} />
-        <SummaryCell label="ready" value={String(ready)} tone="success" />
-      </div>
+      <MetersStrip
+        note="broken first"
+        meters={[
+          { label: "kustomizations", value: ks },
+          { label: "helmreleases", value: hr },
+          attention > 0 && { label: "attention", value: attention, tone: "danger" as const },
+          reconciling > 0 && { label: "reconciling", value: reconciling, tone: "info" as const },
+          suspended > 0 && { label: "suspended", value: suspended, tone: "warning" as const },
+          { label: "ready", value: ready, tone: "success" as const },
+        ]}
+      />
 
       <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
         <FilterButton label="all" active={filter === "all"} count={rows.length} onClick={() => setFilter("all")} />
@@ -255,7 +258,7 @@ export function GitOps({ cluster }: { cluster: string }) {
           onChange={(e) => setQuery(e.target.value)}
           placeholder="filter flux"
           aria-label="filter flux"
-          style={{ marginLeft: "auto", fontSize: 11, padding: "3px 8px", borderRadius: 4, border: "0.5px solid var(--color-border-tertiary)", background: "var(--color-background-primary)", color: "var(--color-text-primary)", width: 170 }}
+          style={{ ...inputWell, marginLeft: "auto", width: 170 }}
         />
         {visibleRows.length !== rows.length && <span style={{ fontSize: 10, color: "var(--color-text-tertiary)" }}>{visibleRows.length} of {rows.length}</span>}
       </div>
@@ -443,7 +446,7 @@ function RowSummary({ r, open, kbSelected, onClick }: { r: FluxResourceDTO; open
       <div style={{ color: "var(--color-text-secondary)", ...ellipsis }} title={sourceText(r)}>{sourceText(r) || "—"}</div>
       <div style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--color-text-secondary)", ...ellipsis }} title={r.revision}>{shortRev(r.revision) || "—"}</div>
       <div style={{ color: "var(--color-text-tertiary)", fontSize: 11, ...ellipsis }}>{ago(r.readySinceSeconds) || "—"}</div>
-      <div className={!r.stale && r.ready === "Failed" ? "klyx-danger-prefix" : undefined} style={{ ...ellipsis, color }}>
+      <div className={!r.stale && r.ready === "Failed" ? "klyx-danger-prefix" : undefined} style={{ ...ellipsis, color, fontFamily: "var(--font-mono)", fontSize: 11, fontWeight: !r.stale && r.ready === "Failed" ? 700 : undefined }}>
         {r.stale ? <SyncingChip generation={r.generation} observedGeneration={r.observedGeneration} /> : statusText(r)}
       </div>
     </button>
@@ -455,7 +458,7 @@ function SourcesPanel({ sources }: { sources: FluxSourceDTO[] }) {
     return <div style={{ color: "var(--color-text-secondary)", fontSize: 13 }}>No Flux sources found.</div>;
   }
   return (
-    <div style={{ flex: 1, minHeight: 0, ...frame, overflow: "hidden", display: "flex", flexDirection: "column" }}>
+    <div style={{ flex: 1, minHeight: 0, ...well, overflow: "hidden", display: "flex", flexDirection: "column" }}>
       <div style={{ display: "grid", gridTemplateColumns: "3px minmax(180px,1.4fr) 90px minmax(120px,1fr) 92px", gap: 10, alignItems: "center", padding: "5px 12px", borderBottom: "0.5px solid var(--color-border-tertiary)", fontSize: 10, color: "var(--color-text-tertiary)", flexShrink: 0 }}>
         <span />
         <span>source</span>
@@ -503,7 +506,7 @@ function DetailPanel({ cluster, resource, detail, deps, onReconcile, onToggleSus
   const headerColor = resource.suspended ? "var(--color-text-warning)" : (readyColor[resource.ready] ?? "var(--color-text-tertiary)");
   if (!detail) {
     return (
-      <div style={{ ...frame, padding: "10px 12px", fontSize: 12, color: "var(--color-text-secondary)" }}>
+      <div style={{ ...well, padding: "10px 12px", fontSize: 12, color: "var(--color-text-secondary)" }}>
         <InspectorHeader resource={resource} color={headerColor} />
         <div style={{ marginTop: 12 }}>Loading detail…</div>
       </div>
@@ -514,7 +517,7 @@ function DetailPanel({ cluster, resource, detail, deps, onReconcile, onToggleSus
   // stuck (apply-failing); a healthy resource's diff is empty/misleading.
   const canDiff = resource.kind === "Kustomization" && (detail.suspended || resource.ready === "Failed");
   return (
-    <div style={{ ...frame, padding: "10px 12px", fontSize: 12 }}>
+    <div style={{ ...well, padding: "10px 12px", fontSize: 12 }}>
       <InspectorHeader resource={resource} color={headerColor} />
       <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 10, marginBottom: 8, flexWrap: "wrap" }}>
         <button onClick={onReconcile} style={actionBtn}>Reconcile</button>
@@ -749,7 +752,7 @@ function ReasonChip({ reason, bad }: { reason: string; bad: boolean }) {
 
 function EmptyInspector({ attention }: { attention: number }) {
   return (
-    <div style={{ ...frame, padding: "10px 12px", fontSize: 12, color: "var(--color-text-secondary)" }}>
+    <div style={{ ...well, padding: "10px 12px", fontSize: 12, color: "var(--color-text-secondary)" }}>
       <div style={{ color: attention > 0 ? "var(--color-text-warning)" : "var(--color-text-success)", fontFamily: "var(--font-mono)", fontWeight: 600 }}>
         {attention > 0 ? `${attention} resources need attention` : "all reconciliations ready"}
       </div>

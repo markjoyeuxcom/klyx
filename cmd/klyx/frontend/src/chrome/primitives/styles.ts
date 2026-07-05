@@ -66,6 +66,32 @@ export const well: CSSProperties = {
   boxShadow: "var(--bench-well-shadow, inset 0 0 0 1px var(--color-border-tertiary))",
 };
 
+// inputWell / selectWell: form controls sit IN the bench like every other
+// data surface - inset, mono, no OS chrome fighting the module face. The
+// select keeps a neutral chevron via a data-URI (currentColor is not legal
+// in url() images; the grey reads in both light and dark).
+export const inputWell: CSSProperties = {
+  fontFamily: "var(--font-mono)",
+  fontSize: 11,
+  padding: "4px 9px",
+  border: "none",
+  borderRadius: "var(--radius-sm)",
+  background: "var(--bench-well-bg, var(--color-background-secondary))",
+  boxShadow: "var(--bench-well-shadow, inset 0 0 0 1px var(--color-border-tertiary))",
+  color: "var(--color-text-primary)",
+};
+
+export const selectWell: CSSProperties = {
+  ...inputWell,
+  appearance: "none",
+  WebkitAppearance: "none",
+  cursor: "pointer",
+  paddingRight: 22,
+  backgroundImage: `url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='5' viewBox='0 0 8 5'%3E%3Cpath d='M1 1l3 3 3-3' fill='none' stroke='%23888c92' stroke-width='1.4'/%3E%3C/svg%3E")`,
+  backgroundRepeat: "no-repeat",
+  backgroundPosition: "right 8px center",
+};
+
 // btn: the small secondary control (filter inputs, row actions), machined as
 // a raised key on bench themes. Inherits the global hover/active/disabled/
 // focus rules from tokens.css — keep it a <button>.

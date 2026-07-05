@@ -1,3 +1,4 @@
+import { inputWell } from "../chrome/primitives";
 import React, { useEffect, useRef, useState, useLayoutEffect, useCallback } from "react";
 import { Events } from "@wailsio/runtime";
 import {
@@ -539,7 +540,7 @@ export function LogsPane({
         onChange={(e) => setSearch(e.target.value)}
         onKeyDown={handleSearchKey}
         placeholder="search"
-        style={{ fontSize: 11, padding: "3px 8px", borderRadius: 4, border: "0.5px solid var(--color-border-tertiary)", background: "var(--color-background-primary)", color: "var(--color-text-primary)", width: 120 }}
+        style={{ ...inputWell, width: 120 }}
         aria-label="search logs"
       />
       {search && (

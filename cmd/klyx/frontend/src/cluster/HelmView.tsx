@@ -1,6 +1,6 @@
 import { useEffect, useCallback, useMemo, useRef, useState } from "react";
 import { IconAnchor, IconX } from "@tabler/icons-react";
-import { EmptyState, FilterButton, SkeletonRows, SummaryCell, btn, ellipsis, frame } from "../chrome/primitives";
+import { inputWell, EmptyState, FilterButton, MetersStrip, SkeletonRows, btn, ellipsis } from "../chrome/primitives";
 import { useFleet } from "../store/fleet";
 import type { HelmReleaseDTO, HelmHistoryEntryDTO } from "../store/fleet";
 import { listHelmReleases, openHelmRelease, helmRollback } from "../bridge/helm";
@@ -143,14 +143,16 @@ export function HelmView({ cluster }: { cluster: string }) {
   return (
     <div style={{ padding: "16px 20px", display: "flex", gap: 0, height: "100%", boxSizing: "border-box" }}>
       <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", minHeight: 0 }}>
-        {/* Health strip - the at-a-glance block every other lens already has */}
-        <div style={{ ...frame, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", overflow: "hidden", marginBottom: 12, flexShrink: 0 }}>
-          <SummaryCell label="releases" value={String(releases.length)} />
-          <SummaryCell label="deployed" value={String(deployed)} tone="success" />
-          <SummaryCell label="failed" value={String(failed)} tone={failed > 0 ? "danger" : "muted"} />
-          <SummaryCell label="pending" value={String(pendingCount)} tone={pendingCount > 0 ? "warning" : "muted"} />
-          <SummaryCell label="namespaces" value={String(namespaces.length)} />
-        </div>
+        <MetersStrip
+          note="broken first · helm status"
+          meters={[
+            { label: "releases", value: releases.length },
+            failed > 0 && { label: "failed", value: failed, tone: "danger" as const },
+            pendingCount > 0 && { label: "pending", value: pendingCount, tone: "warning" as const },
+            { label: "deployed", value: deployed, tone: "success" as const },
+            { label: "namespaces", value: namespaces.length },
+          ]}
+        />
 
         {/* Controls row */}
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, flexWrap: "wrap", flexShrink: 0 }}>
@@ -173,7 +175,7 @@ export function HelmView({ cluster }: { cluster: string }) {
             onChange={(e) => setQuery(e.target.value)}
             placeholder="filter releases"
             aria-label="filter releases"
-            style={{ marginLeft: "auto", fontSize: 11, padding: "3px 8px", borderRadius: 4, border: "0.5px solid var(--color-border-tertiary)", background: "var(--color-background-primary)", color: "var(--color-text-primary)", width: 180 }}
+            style={{ ...inputWell, marginLeft: "auto", width: 180 }}
           />
           <button onClick={onRefresh} style={btn}>refresh</button>
           <UpdatedAt at={receivedAt} />
@@ -295,7 +297,7 @@ function HelmDetailPanel({
   return (
     <div style={{
       width, flexShrink: 0, position: "relative",
-      borderLeft: "0.5px solid var(--color-border-tertiary)",
+      background: "var(--bench-well-bg, transparent)", boxShadow: "var(--bench-well-shadow, none)", borderRadius: "var(--radius-sm)", padding: "12px 16px",
       overflowY: "auto",
       fontFamily: "var(--font-mono)",
       fontSize: 12,

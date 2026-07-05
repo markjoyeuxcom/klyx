@@ -7,7 +7,7 @@ import { ConfirmDialog } from "../chrome/ConfirmDialog";
 import { MetaTile, OperationDialog, OptionTile } from "../chrome/OperationDialog";
 import { useListKeys } from "../chrome/useListKeys";
 import { useNavIntent } from "../chrome/useNavIntent";
-import { EmptyState, FilterButton, SkeletonRows, btn, ellipsis } from "../chrome/primitives";
+import { MetersStrip, EmptyState, FilterButton, SkeletonRows, btn, ellipsis } from "../chrome/primitives";
 import { IconGitMerge } from "@tabler/icons-react";
 import { Age, UpdatedAt, useReceivedAt } from "../chrome/Age";
 import { InspectorEmpty, InspectorSection, InspectorTitle } from "./ResourceInspector";
@@ -203,6 +203,8 @@ function ApplicationsView({ cluster, argo, onRefresh, onSync }: { cluster: strin
   const [kbKey, setKbKey] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [attentionOnly, setAttentionOnly] = useState(false);
+  const argoCount = (health: string) => argo.apps.filter((a) => a.healthStatus === health).length;
+  const outOfSync = argo.apps.filter((a) => a.syncStatus === "OutOfSync").length;
   const apps = useMemo(() => argo.apps.filter((a) => matchesAppQuery(a, query) && (!attentionOnly || a.broken)), [argo.apps, attentionOnly, query]);
   const selected = apps.find((a) => keyOf(a) === selectedKey) ?? apps[0] ?? null;
 
@@ -238,6 +240,19 @@ function ApplicationsView({ cluster, argo, onRefresh, onSync }: { cluster: strin
   return (
     <div style={splitPaneWide}>
       <div style={{ minWidth: 0, fontFamily: "var(--font-mono)", fontSize: 12 }}>
+        {/* Meters in Argo's own vocabulary - never Flux words here. */}
+        <MetersStrip
+          note="broken first · argo vocabulary"
+          meters={[
+            { label: "applications", value: argo.apps.length },
+            argoCount("Degraded") > 0 && { label: "degraded", value: argoCount("Degraded"), tone: "danger" as const },
+            argoCount("Missing") > 0 && { label: "missing", value: argoCount("Missing"), tone: "danger" as const },
+            outOfSync > 0 && { label: "outofsync", value: outOfSync, tone: "warning" as const },
+            argoCount("Progressing") > 0 && { label: "progressing", value: argoCount("Progressing"), tone: "info" as const },
+            argoCount("Suspended") > 0 && { label: "suspended", value: argoCount("Suspended"), tone: "warning" as const },
+            { label: "synced", value: argo.apps.filter((a) => a.syncStatus === "Synced").length, tone: "success" as const },
+          ]}
+        />
         <FilterBar
           query={query}
           onQuery={setQuery}

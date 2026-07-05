@@ -300,7 +300,7 @@ function clusterMeta(c: ClusterDTO): string {
   return [c.provider, c.region, c.protected ? "protected" : "", c.version].filter(Boolean).join(" / ");
 }
 
-function clusterDisplayName(name: string): string {
+export function clusterDisplayName(name: string): string {
   const eksClusterMarker = ":cluster/";
   const markerAt = name.lastIndexOf(eksClusterMarker);
   if (markerAt < 0) return name;

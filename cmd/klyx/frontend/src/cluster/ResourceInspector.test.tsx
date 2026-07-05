@@ -4,13 +4,12 @@ import { InspectorConditions, InspectorEvents, InspectorStatus, conditionColor }
 import type { ConditionDTO, EventDTO } from "../store/fleet";
 
 describe("InspectorStatus", () => {
-  it("renders the tone badge, reason chip, and detail line", () => {
+  it("renders the verdict box and joins reason and detail into the sub-line", () => {
     const { getByText } = render(
       <InspectorStatus tone="danger" label="CrashLoopBackOff" reason="BackOff" detail="0/1 ready" />,
     );
     expect(getByText("CrashLoopBackOff")).toBeTruthy();
-    expect(getByText("BackOff")).toBeTruthy();
-    expect(getByText("0/1 ready")).toBeTruthy();
+    expect(getByText("BackOff · 0/1 ready")).toBeTruthy();
   });
 });
 

@@ -8,7 +8,7 @@ import { useListKeys } from "../chrome/useListKeys";
 import { EmptyState } from "../chrome/EmptyState";
 import { SkeletonRows } from "../chrome/SkeletonRows";
 import { IconRoute } from "@tabler/icons-react";
-import { well, frame, ellipsis, SummaryCell, FilterButton } from "../chrome/primitives";
+import { inputWell, well, ellipsis, MetersStrip, FilterButton } from "../chrome/primitives";
 import { SyncingChip, staleStyle } from "./staleness";
 
 const empty: CSSProperties = { padding: 24, color: "var(--color-text-secondary)", fontSize: 13 };
@@ -126,12 +126,15 @@ export function GatewayApiView({ cluster }: { cluster: string }) {
         </span>
       </div>
 
-      <div style={{ ...frame, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", overflow: "hidden" }}>
-        <SummaryCell label="gateways" value={String(gateways.length)} />
-        <SummaryCell label="programmed" value={String(programmed)} tone="success" />
-        <SummaryCell label="pending" value={String(pending)} tone={pending > 0 ? "warning" : "muted"} />
-        <SummaryCell label="classes" value={String(classes)} />
-      </div>
+      <MetersStrip
+        note="broken paths first"
+        meters={[
+          { label: "gateways", value: gateways.length },
+          { label: "programmed", value: programmed, tone: "success" as const },
+          pending > 0 && { label: "pending", value: pending, tone: "warning" as const },
+          { label: "classes", value: classes },
+        ]}
+      />
 
       <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
         <FilterButton label="all" count={gateways.length} active={mode === "all"} onClick={() => setMode("all")} />
@@ -143,7 +146,7 @@ export function GatewayApiView({ cluster }: { cluster: string }) {
           onChange={(e) => setQuery(e.target.value)}
           placeholder="filter gateways"
           aria-label="filter gateways"
-          style={{ marginLeft: "auto", fontSize: 11, padding: "3px 8px", borderRadius: 4, border: "0.5px solid var(--color-border-tertiary)", background: "var(--color-background-primary)", color: "var(--color-text-primary)", width: 180 }}
+          style={{ ...inputWell, marginLeft: "auto", width: 180 }}
         />
         {visibleGateways.length !== gateways.length && <span style={{ fontSize: 10, color: "var(--color-text-tertiary)" }}>{visibleGateways.length} of {gateways.length}</span>}
       </div>

@@ -79,6 +79,7 @@ export function FleetSpine() {
         padding: expanded ? "10px 6px" : "10px 0",
       }}
     >
+      <span style={{ fontSize: 8, letterSpacing: "0.16em", textTransform: "uppercase", color: "var(--color-text-tertiary)", marginBottom: 2 }}>fleet</span>
       {clusters.map((c) => {
         const unreachable = c.state === "Failed" || c.state === "Unconnected";
         const broken = (board[c.name]?.broken ?? 0) > 0;

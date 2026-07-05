@@ -8,13 +8,13 @@ import { type Tone, toneColor, ellipsis } from "./styles";
 // the old flat cell via the token fallbacks.
 export function SummaryCell({ label, value, tone = "neutral" }: { label: string; value: string; tone?: Tone }) {
   return (
-    <div style={{ padding: "8px 12px", minWidth: 0, display: "flex", flexDirection: "column", gap: 4 }}>
+    <div style={{ padding: "8px 12px 8px 0", minWidth: 86, display: "flex", flexDirection: "column", gap: 4 }}>
       <div style={{
-        padding: "3px 10px 2px",
+        padding: "4px 10px 3px",
         textAlign: "right",
         fontFamily: "var(--font-mono)",
         fontVariantNumeric: "tabular-nums",
-        fontSize: "var(--text-md)",
+        fontSize: 16,
         fontWeight: 600,
         letterSpacing: "0.04em",
         color: toneColor[tone],

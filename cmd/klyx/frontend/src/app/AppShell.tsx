@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import { useFleet } from "../store/fleet";
-import { Sidebar } from "../chrome/Sidebar";
+import { LensNav } from "../chrome/LensNav";
 import { ShortcutsOverlay } from "../chrome/ShortcutsOverlay";
 import { frame } from "../chrome/primitives";
 
@@ -8,7 +8,6 @@ import { frame } from "../chrome/primitives";
 const moduleShell: React.CSSProperties = { ...frame, overflow: "hidden" };
 import { FleetSpine } from "../chrome/FleetSpine";
 import { TopBar } from "../chrome/TopBar";
-import { Header } from "../chrome/Header";
 import { TriageTape } from "../chrome/TriageTape";
 import { FleetView } from "../fleet/FleetView";
 import { ForwardsView } from "../fleet/ForwardsView";
@@ -49,12 +48,13 @@ export function AppShell() {
       <TopBar />
       <div style={{ flex: 1, display: "flex", minHeight: 0, gap: 8 }}>
         <FleetSpine />
-        <Sidebar />
-        <div style={{ ...moduleShell, flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
-          <Header />
-          {route.name === "cluster" && <TriageTape cluster={route.cluster} />}
-          <div style={{ flex: 1, minHeight: 0, overflow: route.name === "cluster" ? "hidden" : "auto" }}>
-            {route.name === "fleet" ? <FleetView /> : route.name === "forwards" ? <ForwardsView /> : route.name === "activity" ? <ActivityView /> : route.name === "settings" ? <SettingsView /> : <ClusterDetail />}
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0, gap: 8 }}>
+          <LensNav />
+          <div style={{ ...moduleShell, flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
+            {route.name === "cluster" && <TriageTape cluster={route.cluster} />}
+            <div style={{ flex: 1, minHeight: 0, overflow: route.name === "cluster" ? "hidden" : "auto" }}>
+              {route.name === "fleet" ? <FleetView /> : route.name === "forwards" ? <ForwardsView /> : route.name === "activity" ? <ActivityView /> : route.name === "settings" ? <SettingsView /> : <ClusterDetail />}
+            </div>
           </div>
         </div>
       </div>
