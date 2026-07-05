@@ -4,7 +4,7 @@ import type { CertificateDTO, IssuerDTO, ChainNodeDTO, CertChainDTO } from "../s
 import { openCertManager, closeCertManager, getCertificateChain } from "../bridge/certmanager";
 import { useListKeys } from "../chrome/useListKeys";
 import { FKeysBar } from "../chrome/FKeysBar";
-import { well, Badge, FilterButton, SummaryCell, Section, Field, StatusDot, frame, ellipsis, mono, readyColor, toneColor } from "../chrome/primitives";
+import { MetersStrip, well, Badge, FilterButton, Section, Field, StatusDot, frame, ellipsis, mono, readyColor, toneColor } from "../chrome/primitives";
 import { CopyButton } from "../chrome/CopyButton";
 import { EmptyState } from "../chrome/EmptyState";
 import { SkeletonRows } from "../chrome/SkeletonRows";
@@ -205,12 +205,17 @@ export function CertsView({ cluster }: { cluster: string }) {
       )}
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", overflow: "hidden" }}>
-        <SummaryCell label="health" value={attention > 0 ? `${attention} attention` : "ready"} tone={attention > 0 ? "warning" : "success"} />
-        <SummaryCell label="certificates" value={String(certs.length)} />
-        <SummaryCell label="issuing" value={String(issuing)} tone={issuing > 0 ? "info" : "muted"} />
-        <SummaryCell label="expiring" value={String(expiring)} tone={expiring > 0 ? "warning" : "muted"} />
-        <SummaryCell label="issuers" value={String(issuers.length)} />
-        <SummaryCell label="ready" value={String(ready)} tone="success" />
+        <MetersStrip
+          note="broken first · then soonest expiry"
+          meters={[
+            { label: "certificates", value: certs.length },
+            attention > 0 && { label: "failing", value: attention, tone: "danger" as const },
+            issuing > 0 && { label: "issuing", value: issuing, tone: "info" as const },
+            expiring > 0 && { label: "expiring", value: expiring, tone: "warning" as const },
+            { label: "issuers", value: issuers.length },
+            { label: "ready", value: ready, tone: "success" as const },
+          ]}
+        />
       </div>
 
       <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>

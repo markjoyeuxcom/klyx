@@ -1,6 +1,6 @@
 import { useEffect, useCallback, useMemo, useRef, useState } from "react";
 import { IconAnchor, IconX } from "@tabler/icons-react";
-import { EmptyState, FilterButton, SkeletonRows, SummaryCell, btn, ellipsis, frame } from "../chrome/primitives";
+import { EmptyState, FilterButton, MetersStrip, SkeletonRows, btn, ellipsis } from "../chrome/primitives";
 import { useFleet } from "../store/fleet";
 import type { HelmReleaseDTO, HelmHistoryEntryDTO } from "../store/fleet";
 import { listHelmReleases, openHelmRelease, helmRollback } from "../bridge/helm";
@@ -143,14 +143,16 @@ export function HelmView({ cluster }: { cluster: string }) {
   return (
     <div style={{ padding: "16px 20px", display: "flex", gap: 0, height: "100%", boxSizing: "border-box" }}>
       <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", minHeight: 0 }}>
-        {/* Health strip - the at-a-glance block every other lens already has */}
-        <div style={{ ...frame, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", overflow: "hidden", marginBottom: 12, flexShrink: 0 }}>
-          <SummaryCell label="releases" value={String(releases.length)} />
-          <SummaryCell label="deployed" value={String(deployed)} tone="success" />
-          <SummaryCell label="failed" value={String(failed)} tone={failed > 0 ? "danger" : "muted"} />
-          <SummaryCell label="pending" value={String(pendingCount)} tone={pendingCount > 0 ? "warning" : "muted"} />
-          <SummaryCell label="namespaces" value={String(namespaces.length)} />
-        </div>
+        <MetersStrip
+          note="broken first · helm status"
+          meters={[
+            { label: "releases", value: releases.length },
+            failed > 0 && { label: "failed", value: failed, tone: "danger" as const },
+            pendingCount > 0 && { label: "pending", value: pendingCount, tone: "warning" as const },
+            { label: "deployed", value: deployed, tone: "success" as const },
+            { label: "namespaces", value: namespaces.length },
+          ]}
+        />
 
         {/* Controls row */}
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, flexWrap: "wrap", flexShrink: 0 }}>

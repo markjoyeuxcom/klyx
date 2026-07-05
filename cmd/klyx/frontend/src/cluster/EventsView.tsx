@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import { IconAlertTriangle } from "@tabler/icons-react";
 import { Age } from "../chrome/Age";
 import { compactCount } from "../chrome/format";
-import { Chip, EmptyState, LiveIndicator, SkeletonRows, btn, ellipsis } from "../chrome/primitives";
+import { MetersStrip, Chip, EmptyState, LiveIndicator, SkeletonRows, btn, ellipsis } from "../chrome/primitives";
 import { useFleet } from "../store/fleet";
 import type { EventRowDTO } from "../store/fleet";
 import { listEvents, openLiveEvents } from "../bridge/events";
@@ -57,6 +57,8 @@ export function EventsView({ cluster }: { cluster: string }) {
     liveCleanupRef.current = openLiveEvents(cluster, ns);
   };
   const onRefresh = () => { void listEvents(cluster, events.namespace); };
+
+  const warningCount = events.items.filter((e) => e.type === "Warning").length;
 
   const filtered = events.items.filter((e) => {
     if (events.warningsOnly && e.type !== "Warning") return false;
@@ -131,6 +133,15 @@ export function EventsView({ cluster }: { cluster: string }) {
   return (
     <div style={{ padding: "16px 20px", display: "flex", flexDirection: "column", height: "100%", boxSizing: "border-box" }}>
       {/* Controls row */}
+      {/* Meters: the event stream at a glance - warnings are the fault lamp. */}
+      <MetersStrip
+        note="newest first"
+        meters={[
+          { label: "events", value: events.items.length },
+          warningCount > 0 && { label: "warnings", value: warningCount, tone: "warning" as const },
+          { label: "namespaces", value: events.namespaces.length },
+        ]}
+      />
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
         <select
           value={events.namespace}

@@ -17,7 +17,7 @@ import { EmptyState } from "../chrome/EmptyState";
 import { SkeletonRows } from "../chrome/SkeletonRows";
 import { UpdatedAt, useReceivedAt } from "../chrome/Age";
 import { IconServer, IconX } from "@tabler/icons-react";
-import { well, ellipsis, btn, FilterButton, SummaryCell, StatusDot } from "../chrome/primitives";
+import { well, ellipsis, btn, FilterButton, MetersStrip, StatusDot } from "../chrome/primitives";
 import { InspectorConditions, InspectorEvents, InspectorSection, InspectorStatus, InspectorTabButton, MetadataChips, inspectorStateBox } from "./ResourceInspector";
 
 function ago(s: number): string {
@@ -470,17 +470,20 @@ export function NodesView({ cluster }: { cluster: string }) {
           </div>
         </div>
 
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(132px, 1fr))", overflow: "hidden", flexShrink: 0 }}>
-          <SummaryCell label="ready" value={`${ready}/${nodes.items.length}`} tone={attention > 0 ? "warning" : "success"} />
-          <SummaryCell label="attention" value={String(attention)} tone={attention > 0 ? "danger" : "muted"} />
-          <SummaryCell label="cordoned" value={String(cordonedCount)} tone={cordonedCount > 0 ? "warning" : "muted"} />
-          <SummaryCell label="tainted" value={String(taintedCount)} tone={taintedCount > 0 ? "warning" : "muted"} />
-          <SummaryCell label="pressure" value={String(pressureCount)} tone={pressureCount > 0 ? "danger" : "muted"} />
-          <SummaryCell label="versions" value={String(versionCount)} />
-          <SummaryCell label="cpu alloc" value={`${cpuAlloc.toFixed(1)}/${cpuCap.toFixed(1)}`} />
-          <SummaryCell label="mem alloc" value={`${fmtMem(memAlloc)}/${fmtMem(memCap)}`} />
-          <SummaryCell label="pod cap" value={String(podCap)} />
-        </div>
+        <MetersStrip
+          note="broken first · then by name"
+          meters={[
+            { label: "ready", value: `${ready}/${nodes.items.length}`, tone: attention > 0 ? ("warning" as const) : ("success" as const) },
+            attention > 0 && { label: "attention", value: attention, tone: "danger" as const },
+            cordonedCount > 0 && { label: "cordoned", value: cordonedCount, tone: "warning" as const },
+            taintedCount > 0 && { label: "tainted", value: taintedCount, tone: "warning" as const },
+            pressureCount > 0 && { label: "pressure", value: pressureCount, tone: "danger" as const },
+            { label: "versions", value: versionCount },
+            { label: "cpu alloc", value: `${cpuAlloc.toFixed(1)}/${cpuCap.toFixed(1)}` },
+            { label: "mem alloc", value: `${fmtMem(memAlloc)}/${fmtMem(memCap)}` },
+            { label: "pod cap", value: podCap },
+          ]}
+        />
 
         <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center", flexShrink: 0 }}>
           <FilterButton label="all" count={nodes.items.length} active={filter === "all"} onClick={() => setFilter("all")} />

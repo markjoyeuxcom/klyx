@@ -17,7 +17,7 @@ import { useResizableDock } from "../chrome/useResizableDock";
 import { useListKeys } from "../chrome/useListKeys";
 import { useNavIntent } from "../chrome/useNavIntent";
 import { FKeysBar } from "../chrome/FKeysBar";
-import { well, Chip, EmptyState, LiveIndicator, SkeletonRows, btn, ellipsis, type Tone } from "../chrome/primitives";
+import { MetersStrip, well, Chip, EmptyState, LiveIndicator, SkeletonRows, btn, ellipsis, type Tone } from "../chrome/primitives";
 import { CopyButton } from "../chrome/CopyButton";
 import { YamlBlock } from "../chrome/YamlBlock";
 import { InspectorConditions, InspectorEvents, InspectorSection, InspectorStatus, InspectorTabButton, MetadataChips, inspectorStateBox } from "./ResourceInspector";
@@ -139,6 +139,12 @@ export function PodsView({ cluster }: { cluster: string }) {
   };
   const onRefresh = () => { void listPods(cluster, pods.namespace); };
 
+  const crashloop = pods.items.filter((p) => p.reason === "CrashLoopBackOff").length;
+  const imagepull = pods.items.filter((p) => p.reason === "ImagePullBackOff" || p.reason === "ErrImagePull").length;
+  const pendingPods = pods.items.filter((p) => p.phase === "Pending").length;
+  const restartsRank = pods.items.filter((p) => p.rank === "restarts").length;
+  const runningPods = pods.items.filter((p) => p.rank === "healthy" && p.phase === "Running").length;
+
   const filtered = pods.items.filter((p) => {
     if (pods.needsAttention && p.rank === "healthy") return false;
     if (pods.search) {
@@ -241,7 +247,20 @@ export function PodsView({ cluster }: { cluster: string }) {
       <div style={{ flex: 1, minHeight: 0, padding: "16px 20px", display: "flex", gap: 0, position: "relative" }}>
         <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", minHeight: 0 }}>
           {/* Controls row */}
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, flexWrap: "wrap", flexShrink: 0 }}>
+          {/* Meters (Signal Bench): the pod population by severity, faults only
+            when they exist - 209 healthy rows stay dark. */}
+        <MetersStrip
+          note="broken first · severity order"
+          meters={[
+            { label: "pods", value: pods.items.length },
+            crashloop > 0 && { label: "crashloop", value: crashloop, tone: "danger" as const },
+            imagepull > 0 && { label: "imagepull", value: imagepull, tone: "danger" as const },
+            pendingPods > 0 && { label: "pending", value: pendingPods, tone: "warning" as const },
+            restartsRank > 0 && { label: "restarts", value: restartsRank, tone: "info" as const },
+            { label: "running", value: runningPods, tone: "success" as const },
+          ]}
+        />
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, flexWrap: "wrap", flexShrink: 0 }}>
 
             <select
               value={pods.namespace}

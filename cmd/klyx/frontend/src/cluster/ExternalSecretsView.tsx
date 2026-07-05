@@ -3,7 +3,7 @@ import { useFleet } from "../store/fleet";
 import type { ExternalSecretDTO, ExternalSecretStoreDTO } from "../store/fleet";
 import { openExternalSecrets, closeExternalSecrets } from "../bridge/externalsecrets";
 import { useListKeys } from "../chrome/useListKeys";
-import { well, Badge, FilterButton, SummaryCell, Section, Field, StatusDot, frame, ellipsis, mono, readyColor, toneColor } from "../chrome/primitives";
+import { MetersStrip, well, Badge, FilterButton, Section, Field, StatusDot, frame, ellipsis, mono, readyColor, toneColor } from "../chrome/primitives";
 import { CopyButton } from "../chrome/CopyButton";
 import { EmptyState } from "../chrome/EmptyState";
 import { SkeletonRows } from "../chrome/SkeletonRows";
@@ -166,12 +166,16 @@ export function ExternalSecretsView({ cluster }: { cluster: string }) {
       )}
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", overflow: "hidden" }}>
-        <SummaryCell label="health" value={attention > 0 ? `${attention} attention` : "synced"} tone={attention > 0 ? "warning" : "success"} />
-        <SummaryCell label="secrets" value={String(secrets.length)} />
-        <SummaryCell label="failed" value={String(failed)} tone={failed > 0 ? "danger" : "muted"} />
-        <SummaryCell label="stale" value={String(stale)} tone={stale > 0 ? "warning" : "muted"} />
-        <SummaryCell label="stores" value={String(stores.length)} />
-        <SummaryCell label="synced" value={String(synced)} tone="success" />
+        <MetersStrip
+          note="broken first · then staleness"
+          meters={[
+            { label: "externalsecrets", value: secrets.length },
+            failed > 0 && { label: "failed", value: failed, tone: "danger" as const },
+            stale > 0 && { label: "stale", value: stale, tone: "warning" as const },
+            { label: "stores", value: stores.length },
+            { label: "synced", value: synced, tone: "success" as const },
+          ]}
+        />
       </div>
 
       <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>

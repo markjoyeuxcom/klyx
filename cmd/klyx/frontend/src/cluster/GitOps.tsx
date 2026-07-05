@@ -15,7 +15,7 @@ import { SkeletonRows } from "../chrome/SkeletonRows";
 import { WatchErrorBanner } from "../chrome/WatchErrorBanner";
 import { IconGitBranch } from "@tabler/icons-react";
 import { wellKnownResourceRef } from "./resourceRefs";
-import { well, Badge, FilterButton, SummaryCell, Section, StatusDot, readyColor, ellipsis, actionBtn } from "../chrome/primitives";
+import { MetersStrip, well, Badge, FilterButton, Section, StatusDot, readyColor, ellipsis, actionBtn } from "../chrome/primitives";
 import { compactCount } from "../chrome/format";
 import { SyncingChip, staleStyle } from "./staleness";
 
@@ -233,14 +233,17 @@ export function GitOps({ cluster }: { cluster: string }) {
         <WatchErrorBanner tool="Flux" error={gitops.watchError} />
       )}
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", overflow: "hidden" }}>
-        <SummaryCell label="health" value={attention > 0 ? `${attention} attention` : "ready"} tone={attention > 0 ? "warning" : "success"} />
-        <SummaryCell label="kustomizations" value={String(ks)} />
-        <SummaryCell label="helmreleases" value={String(hr)} />
-        <SummaryCell label="reconciling" value={String(reconciling)} tone={reconciling > 0 ? "info" : "muted"} />
-        <SummaryCell label="suspended" value={String(suspended)} tone={suspended > 0 ? "warning" : "muted"} />
-        <SummaryCell label="ready" value={String(ready)} tone="success" />
-      </div>
+      <MetersStrip
+        note="broken first"
+        meters={[
+          { label: "kustomizations", value: ks },
+          { label: "helmreleases", value: hr },
+          attention > 0 && { label: "attention", value: attention, tone: "danger" as const },
+          reconciling > 0 && { label: "reconciling", value: reconciling, tone: "info" as const },
+          suspended > 0 && { label: "suspended", value: suspended, tone: "warning" as const },
+          { label: "ready", value: ready, tone: "success" as const },
+        ]}
+      />
 
       <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
         <FilterButton label="all" active={filter === "all"} count={rows.length} onClick={() => setFilter("all")} />

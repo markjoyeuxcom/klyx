@@ -21,7 +21,7 @@ import { Chip } from "../chrome/Chip";
 import { CopyButton } from "../chrome/CopyButton";
 import { EmptyState } from "../chrome/EmptyState";
 import { SkeletonRows } from "../chrome/SkeletonRows";
-import { LiveIndicator, btn, ellipsis, type Tone } from "../chrome/primitives";
+import { MetersStrip, LiveIndicator, btn, ellipsis, type Tone } from "../chrome/primitives";
 import { InspectorStatus } from "./ResourceInspector";
 import { loadClusterPrefs, loadSearch, saveSearch, saveWorkloadsViewPrefs } from "../store/persist";
 import { SyncingChip, staleStyle } from "./staleness";
@@ -168,6 +168,7 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
   const onRefresh = () => { listWorkloads(cluster, wl.namespace).then(() => getWorkloadMetrics(cluster, wl.namespace)); };
 
   const showMetrics = wl.metricsAvailable;
+  const rankCount = (rank: string) => wl.items.filter((w) => w.rank === rank).length;
   const gridCols = showMetrics
     ? "12px 90px 1fr 70px 64px 1.1fr 140px 140px 130px 28px"
     : "12px 90px 1fr 70px 64px 1.2fr 160px 28px";
@@ -242,6 +243,17 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
       {/* Workloads workspace - the logs dock pins below it. */}
       <div style={{ flex: 1, minHeight: 0, overflow: "hidden", display: "grid", gridTemplateColumns: "minmax(620px, 1fr) minmax(320px, 380px)" }}>
         <div style={{ minWidth: 0, minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column", borderRight: "0.5px solid var(--color-border-tertiary)" }}>
+          {/* Meters: workload population by rank - the same buckets the rows sort by. */}
+          <MetersStrip
+            note="broken first · rank order"
+            meters={[
+              { label: "workloads", value: wl.items.length },
+              rankCount("unhealthy") > 0 && { label: "unhealthy", value: rankCount("unhealthy"), tone: "danger" as const },
+              rankCount("degraded") > 0 && { label: "degraded", value: rankCount("degraded"), tone: "warning" as const },
+              rankCount("restarts") > 0 && { label: "restarts", value: rankCount("restarts"), tone: "info" as const },
+              { label: "healthy", value: rankCount("healthy"), tone: "success" as const },
+            ]}
+          />
           <div style={{
             display: "flex",
             alignItems: "center",

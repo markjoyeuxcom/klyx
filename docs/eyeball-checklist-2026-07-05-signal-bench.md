@@ -36,3 +36,8 @@ design rules (notes §Design rules) are the review bar.
 - [ ] The app is modules floating on a darker desk with 8px gutters: mast, spine, nav, and content are separate machined blocks - nothing is joined by a hairline anymore.
 - [ ] Lens lists (pods/flux/certs/eso/nodes/gateways/instances) sit IN inset wells inside the content module - list=well, inspector=module (rule 4, both directions).
 - [ ] First boot after upgrade lands in Bench even with an old saved theme (one-time migration); choosing any theme afterwards sticks. "System" now follows the OS into bench/bench-light.
+
+## Meters (first-class per-type summaries)
+- [ ] Every lens opens with a meters strip of counter wells + its ordering note: fleet (diagnostic order), pods (severity order), workloads (rank), flux, argo (argo vocabulary), certs (soonest expiry), eso (staleness), nodes (by name), gateway (broken paths), helm (helm status), events (newest first).
+- [ ] Fault cells appear ONLY when the count is non-zero - a healthy view shows totals + green, never a row of red zeros.
+- [ ] Argo meters speak Argo words (degraded/outofsync/progressing/synced), Flux meters speak Flux words - never blended.
