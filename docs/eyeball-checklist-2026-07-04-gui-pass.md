@@ -66,3 +66,9 @@ behaviors that need real eyes on a real cluster before merging or releasing.
 - [ ] All close/expand affordances are Tabler icons now (no ✕ / ▸ glyphs); CRD group chevron rotates.
 - [ ] TopBar right side no longer shifts when the fleet seeds.
 - [ ] YAML highlighting is readable in light AND a dark theme; find highlights + cycles with Enter.
+
+## Master-detail resources (added after the event-count fix)
+- [ ] Open any Resources/CRD list (Secrets, Services, a CRD): clicking a row opens a resizable side panel; the list stays put, j/k keeps moving, Esc closes the panel.
+- [ ] The panel's YAML editor / secret reveal / related objects all work at panel width; drag the divider - width persists (shared with the pod/node panels).
+- [ ] Deep links still land right: palette jump to an instance, Argo app resource click, Flux inventory click - all open list + panel, not a full-page swap.
+- [ ] Fleet-scope browsing: clicking a row from another cluster switches cluster and opens list + panel there.

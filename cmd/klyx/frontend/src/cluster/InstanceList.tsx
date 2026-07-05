@@ -4,10 +4,12 @@ import { loadInstances, listInstancePage } from "../bridge/crd";
 import { VirtualList } from "../chrome/VirtualList";
 import type { VirtualListHandle } from "../chrome/VirtualList";
 import { useListKeys } from "../chrome/useListKeys";
+import { useResizablePanel } from "../chrome/useResizablePanel";
 import { CopyButton } from "../chrome/CopyButton";
 import { Age } from "../chrome/Age";
 import { EmptyState, SkeletonRows } from "../chrome/primitives";
 import { IconStack2 } from "@tabler/icons-react";
+import { InstanceDetail } from "./InstanceDetail";
 import { riskFor, supportsRiskFilter } from "./resourceRisk";
 
 const ellipsis: React.CSSProperties = { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" };
@@ -29,6 +31,10 @@ export function InstanceList({ cluster, resource }: { cluster: string; resource:
   const setRiskOnly = useFleet((s) => s.setInstanceRiskOnly);
   const openInstance = useFleet((s) => s.openInstance);
   const closeResource = useFleet((s) => s.closeResource);
+  // The open instance renders as a resizable side panel beside the list
+  // (master-detail, the Pods pattern) - the list never leaves the screen.
+  const openRef = useFleet((s) => (s.route.name === "cluster" ? s.route.instance ?? null : null));
+  const { width: panelWidth, handleProps } = useResizablePanel();
   const [scope, setScope] = useState<BrowserScope>("cluster");
   const [fleetClusterFilter, setFleetClusterFilter] = useState("");
   const [fleetState, setFleetState] = useState<FleetInstanceState>({ rows: [], loading: false, errors: [] });
@@ -150,16 +156,23 @@ export function InstanceList({ cluster, resource }: { cluster: string; resource:
     if (r) openRow(r.row);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rows]);
+  const handleKbEscape = useCallback(() => {
+    if (useFleet.getState().route.name === "cluster" && (useFleet.getState().route as { instance?: unknown }).instance) {
+      useFleet.getState().closeInstance();
+    }
+  }, []);
   useListKeys({
     count: rows.length,
     selected: effectiveKbIdx,
     onSelect: handleKbSelect,
     onActivate: handleKbActivate,
+    onEscape: handleKbEscape,
     searchRef,
   });
 
   return (
-    <div style={{ padding: "14px 16px", height: "100%", minHeight: 0, overflow: "hidden", boxSizing: "border-box", display: "flex", flexDirection: "column" }}>
+    <div style={{ padding: "14px 16px", height: "100%", minHeight: 0, overflow: "hidden", boxSizing: "border-box", display: "flex", gap: 0, position: "relative" }}>
+      <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, flexShrink: 0 }}>
         <button
           aria-label="back to resources"
@@ -269,7 +282,9 @@ export function InstanceList({ cluster, resource }: { cluster: string; resource:
                 rowHeight={ROW_HEIGHT}
                 rowKey={({ row }) => `${row.cluster}/${row.namespace}/${row.name}`}
                 style={{ flex: 1, minHeight: 0 }}
-                render={({ row: r, risk }, i) => (
+                render={({ row: r, risk }, i) => {
+                  const isOpen = openRef !== null && r.namespace === openRef.namespace && r.name === openRef.name && (!fleetMode || r.cluster === cluster);
+                  return (
                   <div
                     key={`${r.cluster}/${r.namespace}/${r.name}`}
                     data-rowhost="true"
@@ -280,7 +295,7 @@ export function InstanceList({ cluster, resource }: { cluster: string; resource:
                       display: "grid", gridTemplateColumns: cols, gap: 10, alignItems: "center", padding: "6px 12px",
                       height: ROW_HEIGHT, boxSizing: "border-box",
                       borderTop: "0.5px solid var(--color-border-tertiary)", fontSize: 11, cursor: "pointer",
-                      background: i === effectiveKbIdx ? "var(--color-background-secondary)" : undefined,
+                      background: i === effectiveKbIdx || isOpen ? "var(--color-background-secondary)" : undefined,
                       boxShadow: i === effectiveKbIdx ? "inset 2px 0 0 var(--color-text-info)" : risk.bad ? "inset 2px 0 0 var(--color-text-warning)" : undefined,
                     }}
                   >
@@ -296,7 +311,8 @@ export function InstanceList({ cluster, resource }: { cluster: string; resource:
                     })}
                     <span style={{ color: "var(--color-text-tertiary)" }}><Age iso={r.created} fallback="" /></span>
                   </div>
-                )}
+                  );
+                }}
               />
             )}
           </div>
@@ -310,6 +326,18 @@ export function InstanceList({ cluster, resource }: { cluster: string; resource:
         >
           Load more
         </button>
+      )}
+      </div>
+
+      {/* Detail panel - resizable, shares klyx-panel-width with the other panels */}
+      {openRef && (
+        <div
+          data-testid="instance-detail-panel"
+          style={{ width: panelWidth, flexShrink: 0, position: "relative", borderLeft: "0.5px solid var(--color-border-tertiary)", paddingLeft: 16, marginLeft: 16, minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column" }}
+        >
+          <div {...handleProps} />
+          <InstanceDetail cluster={cluster} resource={resource} instance={openRef} />
+        </div>
       )}
     </div>
   );

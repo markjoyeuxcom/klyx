@@ -6,6 +6,8 @@ import { openPodDetail } from "../bridge/pods";
 import { ForwardPopover } from "./ForwardPopover";
 import { InspectorSection, InspectorTabButton, MetadataChips, inspectorStateBox } from "./ResourceInspector";
 import { actionBtn, ellipsis } from "../chrome/primitives";
+import { CopyButton } from "../chrome/CopyButton";
+import { IconX } from "@tabler/icons-react";
 import { compactCount } from "../chrome/format";
 
 type DetailTab = "summary" | "related" | "events" | "yaml";
@@ -684,10 +686,13 @@ function ServiceBackingSection({
   );
 }
 
+// InstanceDetail renders as a resizable side panel inside InstanceList
+// (master-detail, the Pods pattern) - never as a full-page swap that throws
+// the list away. The panel header carries kind + name + refresh + close; the
+// drill path lives in the Header breadcrumb and the list beside it.
 export function InstanceDetail({ cluster, resource, instance }: { cluster: string; resource: ResourceRef; instance: InstanceRef }) {
   const id = useFleet((s) => s.instanceDetail);
   const closeInstance = useFleet((s) => s.closeInstance);
-  const closeResource = useFleet((s) => s.closeResource);
   const [copied, setCopied] = useState(false);
   const [tab, setTab] = useState<DetailTab>("summary");
 
@@ -708,18 +713,17 @@ export function InstanceDetail({ cluster, resource, instance }: { cluster: strin
   };
 
   return (
-    <div style={{ padding: "14px 16px", height: "100%", minHeight: 0, overflow: "hidden", boxSizing: "border-box", display: "flex", flexDirection: "column" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, flexShrink: 0 }}>
-        <button aria-label="back to resources" onClick={closeResource} style={{ ...linkBtn, color: "var(--color-text-info)" }}>resources</button>
-        <span style={{ color: "var(--color-text-tertiary)" }}>/</span>
-        <button aria-label="back to resource list" onClick={closeInstance} style={{ ...linkBtn, color: "var(--color-text-info)" }}>{resource.kind}</button>
-        <span style={{ color: "var(--color-text-tertiary)" }}>/</span>
-        <span style={{ fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--color-text-secondary)" }}>
-          {instance.namespace ? `${instance.namespace}/` : ""}{instance.name}
+    <div style={{ height: "100%", minHeight: 0, overflow: "hidden", boxSizing: "border-box", display: "flex", flexDirection: "column" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, flexShrink: 0, paddingBottom: 6, borderBottom: "0.5px solid var(--color-border-tertiary)" }}>
+        <span style={{ fontSize: 10, color: "var(--color-text-tertiary)", flexShrink: 0 }}>{resource.kind}</span>
+        <span style={{ fontFamily: "var(--font-mono)", fontSize: 12, fontWeight: 500, color: "var(--color-text-primary)", ...ellipsis }} title={`${instance.namespace ? `${instance.namespace}/` : ""}${instance.name}`}>
+          {instance.namespace ? <span style={{ color: "var(--color-text-tertiary)" }}>{instance.namespace}/</span> : null}{instance.name}
         </span>
-        {d && d.created && <span style={{ fontSize: 11, color: "var(--color-text-tertiary)" }}>{age(d.created)}</span>}
+        <CopyButton text={instance.name} label={`copy name ${instance.name}`} />
+        {d && d.created && <span style={{ fontSize: 11, color: "var(--color-text-tertiary)", flexShrink: 0 }}>{age(d.created)}</span>}
         <div style={{ flex: 1 }} />
         <button onClick={() => void getInstanceDetail(cluster, resource, instance)} style={actionBtn}>Refresh</button>
+        <button onClick={closeInstance} aria-label="close instance panel" style={{ ...actionBtn, display: "inline-flex", alignItems: "center" }}><IconX size={13} stroke={1.5} /></button>
       </div>
 
       {id.loading && !d ? (
@@ -1446,10 +1450,3 @@ const conflictBand: React.CSSProperties = {
   color: "var(--color-text-danger)",
 };
 
-const linkBtn: React.CSSProperties = {
-  background: "transparent",
-  border: 0,
-  padding: 0,
-  cursor: "pointer",
-  fontSize: 12,
-};
