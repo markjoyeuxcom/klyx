@@ -450,14 +450,19 @@ function PodRow({
         {readyCount}/{nonInitCount}
       </span>
       <span style={ellipsis} title={p.reason ? `${p.phase} · ${p.reason}` : p.phase}>
-        <span style={{ color: p.rank === "unhealthy" ? "var(--color-text-danger)" : "var(--color-text-secondary)" }}>
-          {p.phase}
+        {/* stx idiom (Signal Bench): mono status word, bold red + triangle
+            when broken, muted when it is just Running. */}
+        <span
+          className={p.rank === "unhealthy" ? "klyx-danger-prefix" : undefined}
+          style={{
+            fontFamily: "var(--font-mono)",
+            fontSize: 11,
+            color: p.rank === "unhealthy" ? "var(--color-text-danger)" : p.rank === "degraded" ? "var(--color-text-warning)" : "var(--color-text-tertiary)",
+            fontWeight: p.rank === "unhealthy" ? 700 : undefined,
+          }}
+        >
+          {p.reason || p.phase}
         </span>
-        {p.reason && (
-          <span style={{ color: p.rank === "unhealthy" ? "var(--color-text-danger)" : "var(--color-text-secondary)", marginLeft: 4, fontSize: 10 }}>
-            {p.reason}
-          </span>
-        )}
       </span>
       <span style={{ color: p.restarts > 0 ? "var(--color-text-warning)" : "var(--color-text-tertiary)" }}>
         {p.restarts}
@@ -529,7 +534,7 @@ function PodDetailPanel({
   return (
     <div style={{
       width, flexShrink: 0, position: "relative",
-      borderLeft: "0.5px solid var(--color-border-tertiary)",
+      background: "var(--bench-well-bg, transparent)", boxShadow: "var(--bench-well-shadow, none)", borderRadius: "var(--radius-sm)", padding: "12px 16px",
       overflowY: "auto",
       fontFamily: "var(--font-mono)",
       fontSize: 12,

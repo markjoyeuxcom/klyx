@@ -165,7 +165,7 @@ export function ExternalSecretsView({ cluster }: { cluster: string }) {
         <WatchErrorBanner tool="external-secrets" error={eso.watchError} />
       )}
 
-      <div style={{ ...frame, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", overflow: "hidden" }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", overflow: "hidden" }}>
         <SummaryCell label="health" value={attention > 0 ? `${attention} attention` : "synced"} tone={attention > 0 ? "warning" : "success"} />
         <SummaryCell label="secrets" value={String(secrets.length)} />
         <SummaryCell label="failed" value={String(failed)} tone={failed > 0 ? "danger" : "muted"} />
@@ -310,7 +310,7 @@ function SecretInspector({ e, store }: { e: ExternalSecretDTO; store: ExternalSe
   const storeBroken = store && store.state !== "Synced";
   const cause = failureHint(e, store);
   return (
-    <div style={{ ...frame, padding: 14, display: "flex", flexDirection: "column", gap: 12 }}>
+    <div style={{ ...well, padding: 14, display: "flex", flexDirection: "column", gap: 12 }}>
       <div>
         <div style={{ display: "flex", alignItems: "center", gap: 2 }}>
           <div style={{ ...mono, fontSize: 13, fontWeight: 500 }}>{e.namespace}/{e.name}</div>
@@ -428,7 +428,7 @@ function StoresPanel({ stores }: { stores: ExternalSecretStoreDTO[] }) {
 
 function EmptyInspector({ attention }: { attention: number }) {
   return (
-    <div style={{ ...frame, padding: 18, color: "var(--color-text-secondary)", fontSize: 12, height: "100%", boxSizing: "border-box" }}>
+    <div style={{ ...well, padding: 18, color: "var(--color-text-secondary)", fontSize: 12, height: "100%", boxSizing: "border-box" }}>
       {attention > 0 ? "Select an external secret to inspect its store and refresh state." : "All external secrets are synced. Select one to inspect it."}
     </div>
   );

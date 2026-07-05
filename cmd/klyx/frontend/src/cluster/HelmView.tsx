@@ -295,7 +295,7 @@ function HelmDetailPanel({
   return (
     <div style={{
       width, flexShrink: 0, position: "relative",
-      borderLeft: "0.5px solid var(--color-border-tertiary)",
+      background: "var(--bench-well-bg, transparent)", boxShadow: "var(--bench-well-shadow, none)", borderRadius: "var(--radius-sm)", padding: "12px 16px",
       overflowY: "auto",
       fontFamily: "var(--font-mono)",
       fontSize: 12,

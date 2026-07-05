@@ -17,7 +17,7 @@ import { EmptyState } from "../chrome/EmptyState";
 import { SkeletonRows } from "../chrome/SkeletonRows";
 import { UpdatedAt, useReceivedAt } from "../chrome/Age";
 import { IconServer, IconX } from "@tabler/icons-react";
-import { well, ellipsis, frame, btn, FilterButton, SummaryCell, StatusDot } from "../chrome/primitives";
+import { well, ellipsis, btn, FilterButton, SummaryCell, StatusDot } from "../chrome/primitives";
 import { InspectorConditions, InspectorEvents, InspectorSection, InspectorStatus, InspectorTabButton, MetadataChips, inspectorStateBox } from "./ResourceInspector";
 
 function ago(s: number): string {
@@ -470,7 +470,7 @@ export function NodesView({ cluster }: { cluster: string }) {
           </div>
         </div>
 
-        <div style={{ ...frame, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(132px, 1fr))", overflow: "hidden", flexShrink: 0 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(132px, 1fr))", overflow: "hidden", flexShrink: 0 }}>
           <SummaryCell label="ready" value={`${ready}/${nodes.items.length}`} tone={attention > 0 ? "warning" : "success"} />
           <SummaryCell label="attention" value={String(attention)} tone={attention > 0 ? "danger" : "muted"} />
           <SummaryCell label="cordoned" value={String(cordonedCount)} tone={cordonedCount > 0 ? "warning" : "muted"} />
@@ -654,7 +654,7 @@ function CapacityCell({ value, total, format }: { value: number; total: number; 
 
 function EmptyNodeInspector({ nodeCount, attention }: { nodeCount: number; attention: number }) {
   return (
-    <aside style={{ width: 360, flexShrink: 0, borderLeft: "0.5px solid var(--color-border-tertiary)", paddingLeft: 16, fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--color-text-secondary)" }}>
+    <aside style={{ width: 360, flexShrink: 0, background: "var(--bench-well-bg, transparent)", boxShadow: "var(--bench-well-shadow, none)", borderRadius: "var(--radius-sm)", padding: "12px 16px", paddingLeft: 16, fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--color-text-secondary)" }}>
       <div style={{ position: "sticky", top: 0, background: "var(--color-background-primary)", paddingTop: 2, paddingBottom: 6, borderBottom: "0.5px solid var(--color-border-tertiary)", marginBottom: 12 }}>
         <div style={{ color: "var(--color-text-tertiary)", fontSize: 11 }}>selected node</div>
         <div style={{ color: attention > 0 ? "var(--color-text-warning)" : "var(--color-text-success)", fontWeight: 600, marginTop: 2 }}>
@@ -695,7 +695,7 @@ function NodeDetailPanel({
   return (
     <div style={{
       width, flexShrink: 0, position: "relative", minHeight: 0,
-      borderLeft: "0.5px solid var(--color-border-tertiary)",
+      background: "var(--bench-well-bg, transparent)", boxShadow: "var(--bench-well-shadow, none)", borderRadius: "var(--radius-sm)", padding: "12px 16px",
       overflowY: "auto",
       fontFamily: "var(--font-mono)",
       fontSize: 12,

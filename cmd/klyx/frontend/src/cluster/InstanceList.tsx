@@ -333,7 +333,7 @@ export function InstanceList({ cluster, resource }: { cluster: string; resource:
       {openRef && (
         <div
           data-testid="instance-detail-panel"
-          style={{ width: panelWidth, flexShrink: 0, position: "relative", borderLeft: "0.5px solid var(--color-border-tertiary)", paddingLeft: 16, marginLeft: 16, minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column" }}
+          style={{ width: panelWidth, flexShrink: 0, position: "relative", background: "var(--bench-well-bg, transparent)", boxShadow: "var(--bench-well-shadow, none)", borderRadius: "var(--radius-sm)", padding: "12px 16px", marginLeft: 8, minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column" }}
         >
           <div {...handleProps} />
           <InstanceDetail cluster={cluster} resource={resource} instance={openRef} />

@@ -324,7 +324,13 @@ export function CommandPalette() {
                             flexShrink: 0,
                           }}
                         >
-                          {r.cmd.hint}
+                          {r.cmd.hint.includes("prd lock") ? (
+                            <>
+                              {r.cmd.hint.slice(0, r.cmd.hint.indexOf("prd lock"))}
+                              <span style={{ color: "var(--color-text-warning)", fontWeight: 600 }}>prd lock</span>
+                              {r.cmd.hint.slice(r.cmd.hint.indexOf("prd lock") + "prd lock".length)}
+                            </>
+                          ) : r.cmd.hint}
                         </span>
                       )}
                     </div>

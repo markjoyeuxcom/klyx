@@ -204,7 +204,7 @@ export function CertsView({ cluster }: { cluster: string }) {
         <WatchErrorBanner tool="cert-manager" error={cm.watchError} />
       )}
 
-      <div style={{ ...frame, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", overflow: "hidden" }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", overflow: "hidden" }}>
         <SummaryCell label="health" value={attention > 0 ? `${attention} attention` : "ready"} tone={attention > 0 ? "warning" : "success"} />
         <SummaryCell label="certificates" value={String(certs.length)} />
         <SummaryCell label="issuing" value={String(issuing)} tone={issuing > 0 ? "info" : "muted"} />
@@ -344,7 +344,7 @@ function CertInspector({ c, issuer, chain, chainLoading }: { c: CertificateDTO; 
   const dnsNames = arrayOf(c.dnsNames);
   const cause = failureHint(c, boundIssuer, failing, warnings);
   return (
-    <div style={{ ...frame, padding: 14, display: "flex", flexDirection: "column", gap: 12 }}>
+    <div style={{ ...well, padding: 14, display: "flex", flexDirection: "column", gap: 12 }}>
       <div>
         <div style={{ display: "flex", alignItems: "center", gap: 2 }}>
           <div style={{ ...mono, fontSize: 13, fontWeight: 500 }}>{c.namespace}/{c.name}</div>
@@ -526,7 +526,7 @@ function IssuersPanel({ issuers }: { issuers: IssuerDTO[] }) {
 
 function EmptyInspector({ attention }: { attention: number }) {
   return (
-    <div style={{ ...frame, padding: 18, color: "var(--color-text-secondary)", fontSize: 12, height: "100%", boxSizing: "border-box" }}>
+    <div style={{ ...well, padding: 18, color: "var(--color-text-secondary)", fontSize: 12, height: "100%", boxSizing: "border-box" }}>
       {attention > 0 ? "Select a certificate to inspect its issuer and validity." : "All certificates are ready. Select one to inspect it."}
     </div>
   );

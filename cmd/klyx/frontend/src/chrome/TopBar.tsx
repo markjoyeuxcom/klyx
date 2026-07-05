@@ -2,7 +2,9 @@ import { useState, useRef, useEffect } from "react";
 import { IconCommand } from "@tabler/icons-react";
 import { ThemeToggle } from "./ThemeToggle";
 import { KlyxMark } from "./KlyxMark";
-import { useFleet } from "../store/fleet";
+import { useFleet, SECTION_LABELS } from "../store/fleet";
+import type { Route } from "../store/fleet";
+import { StatusDot } from "./primitives";
 import { stopAllForwards } from "../bridge/forwards";
 import { openCommandPalette } from "./CommandPalette";
 
@@ -13,8 +15,21 @@ const noDrag = { "--wails-draggable": "no-drag" } as React.CSSProperties;
 // TopBar is the full-width title bar: macOS traffic lights sit on its left (the
 // padding clears them), the forwards indicator + theme toggle on its right, and
 // the empty middle drags the window. The breadcrumb lives in the content Header.
+// mastTitleFor renders the route as the mast readout - same shape as the OS
+// window title ("cluster / lens").
+function mastTitleFor(route: Route): { head: string; path: string } {
+  if (route.name === "cluster") {
+    const lens = route.resource ? route.resource.plural : SECTION_LABELS[route.section]?.toLowerCase() ?? route.section;
+    return { head: route.cluster, path: lens };
+  }
+  if (route.name === "fleet") return { head: "fleet", path: "" };
+  return { head: route.name, path: "" };
+}
+
 export function TopBar() {
   const clusters = useFleet((s) => s.clusters);
+  const route = useFleet((s) => s.route);
+  const mastTitle = mastTitleFor(route);
   const liveClusters = clusters.filter((c) => c.state !== "Failed" && c.state !== "Unconnected").length;
   return (
     <div
@@ -35,47 +50,51 @@ export function TopBar() {
         boxShadow: "var(--bench-module-shadow, none)",
       }}
     >
-      <div style={{ display: "flex", alignItems: "center", gap: 8, color: "var(--color-text-primary)", fontWeight: 500, fontSize: 13 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
         <KlyxMark size={20} />
-        Klyx
+        {/* Mast title (Signal Bench): mono "context / lens" readout. */}
+        <span style={{ fontFamily: "var(--font-mono)", fontSize: 13, fontWeight: 700, ...noDrag, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {mastTitle.head}
+          {mastTitle.path && <span style={{ color: "var(--color-text-tertiary)", fontWeight: 400 }}> / {mastTitle.path}</span>}
+        </span>
       </div>
-      <button
-        type="button"
-        aria-label="open command palette"
-        data-testid="command-bar"
-        onClick={openCommandPalette}
-        title="open command palette with cmd+k or ctrl+k"
-        style={{
-          ...noDrag,
-          justifySelf: "start",
-          width: "min(500px, 42vw)",
-          height: 26,
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          gap: 10,
-          padding: "0 9px",
-          border: "0.5px solid var(--color-border-tertiary)",
-          background: "var(--color-background-primary)",
-          color: "var(--color-text-tertiary)",
-          fontFamily: "var(--font-mono)",
-          fontSize: 11,
-          cursor: "pointer",
-          textAlign: "left",
-        }}
-      >
-        <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-          <IconCommand size={13} stroke={1.5} />
-          jump to resource, namespace, action
-        </span>
-        <span>cmd/ctrl+k</span>
-      </button>
+      <div style={{ display: "flex", alignItems: "center", gap: 7, justifySelf: "start", fontSize: 9, letterSpacing: "0.12em", textTransform: "uppercase", color: "var(--color-text-tertiary)" }}>
+        {clusters.length > 0 && (
+          <>
+            <StatusDot size={8} tone={liveClusters === clusters.length ? "success" : liveClusters === 0 ? "danger" : "warning"} />
+            live · {liveClusters}/{clusters.length} watching
+          </>
+        )}
+      </div>
       <div style={{ ...noDrag, display: "flex", alignItems: "center", gap: 8, justifySelf: "end" }}>
-        {/* Reserve the slot even before the fleet seeds - the chip popping in
-            after load shifted the whole right-side chrome. */}
-        <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--color-text-tertiary)", minWidth: 130, textAlign: "right" }}>
-          {clusters.length > 0 ? `${liveClusters}/${clusters.length} clusters watched` : " "}
-        </span>
+        <button
+          type="button"
+          aria-label="open command palette"
+          data-testid="command-bar"
+          onClick={openCommandPalette}
+          title="open command palette with cmd+k or ctrl+k"
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 10,
+            minWidth: 230,
+            padding: "5px 12px",
+            fontSize: 11,
+            color: "var(--color-text-secondary)",
+            cursor: "pointer",
+            textAlign: "left",
+            border: "none",
+            borderRadius: "var(--radius-sm)",
+            background: "var(--bench-well-bg, var(--color-background-secondary))",
+            boxShadow: "var(--bench-well-shadow, inset 0 0 0 1px var(--color-border-tertiary))",
+          }}
+        >
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 6, flex: 1 }}>
+            <IconCommand size={13} stroke={1.5} />
+            jump or run a command
+          </span>
+          <kbd style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--color-text-tertiary)" }}>⌘K</kbd>
+        </button>
         <ForwardsIndicator />
         <ThemeToggle />
       </div>
