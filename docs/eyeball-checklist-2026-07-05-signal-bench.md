@@ -41,3 +41,10 @@ design rules (notes §Design rules) are the review bar.
 - [ ] Every lens opens with a meters strip of counter wells + its ordering note: fleet (diagnostic order), pods (severity order), workloads (rank), flux, argo (argo vocabulary), certs (soonest expiry), eso (staleness), nodes (by name), gateway (broken paths), helm (helm status), events (newest first).
 - [ ] Fault cells appear ONLY when the count is non-zero - a healthy view shows totals + green, never a row of red zeros.
 - [ ] Argo meters speak Argo words (degraded/outofsync/progressing/synced), Flux meters speak Flux words - never blended.
+
+## Screenshot-diff polish (pic1 vs pic2, 2026-07-05)
+- [ ] No breadcrumb/big-title header inside the content module - the mast alone carries "cluster / lens" (display name, not the raw kubeconfig context), with the amber prd-lock chip beside it on protected clusters.
+- [ ] Spine spans beside the nav rows with its "fleet" cap label.
+- [ ] Tabs carry fault lamps + red counts when loaded data has faults (workloads/pods/flux/argo); labels read "ext-secrets"/"crds".
+- [ ] Meter wells read as counter windows: 16px values, ≥86px, labels beneath.
+- [ ] Pods filters are counted switches (all N / broken N), pressed-well when active.

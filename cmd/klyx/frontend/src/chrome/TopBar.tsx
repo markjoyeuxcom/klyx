@@ -5,6 +5,7 @@ import { KlyxMark } from "./KlyxMark";
 import { useFleet, SECTION_LABELS } from "../store/fleet";
 import type { Route } from "../store/fleet";
 import { StatusDot } from "./primitives";
+import { clusterDisplayName } from "../fleet/ClusterCard";
 import { stopAllForwards } from "../bridge/forwards";
 import { openCommandPalette } from "./CommandPalette";
 
@@ -20,7 +21,7 @@ const noDrag = { "--wails-draggable": "no-drag" } as React.CSSProperties;
 function mastTitleFor(route: Route): { head: string; path: string } {
   if (route.name === "cluster") {
     const lens = route.resource ? route.resource.plural : SECTION_LABELS[route.section]?.toLowerCase() ?? route.section;
-    return { head: route.cluster, path: lens };
+    return { head: clusterDisplayName(route.cluster), path: lens };
   }
   if (route.name === "fleet") return { head: "fleet", path: "" };
   return { head: route.name, path: "" };
@@ -30,6 +31,7 @@ export function TopBar() {
   const clusters = useFleet((s) => s.clusters);
   const route = useFleet((s) => s.route);
   const mastTitle = mastTitleFor(route);
+  const currentProtected = route.name === "cluster" && (clusters.find((c) => c.name === route.cluster)?.protected ?? false);
   const liveClusters = clusters.filter((c) => c.state !== "Failed" && c.state !== "Unconnected").length;
   return (
     <div
@@ -57,6 +59,13 @@ export function TopBar() {
           {mastTitle.head}
           {mastTitle.path && <span style={{ color: "var(--color-text-tertiary)", fontWeight: 400 }}> / {mastTitle.path}</span>}
         </span>
+        {/* The prd-lock cue moved here from the retired Header - the mast is
+            the one always-visible place. */}
+        {currentProtected && (
+          <span style={{ ...noDrag, fontFamily: "var(--font-mono)", fontSize: 9, padding: "2px 7px", borderRadius: 3, whiteSpace: "nowrap", color: "var(--color-text-warning)", background: "var(--color-background-warning)", boxShadow: "inset 0 0 0 1px var(--color-border-warning)" }}>
+            prd lock
+          </span>
+        )}
       </div>
       <div style={{ display: "flex", alignItems: "center", gap: 7, justifySelf: "start", fontSize: 9, letterSpacing: "0.12em", textTransform: "uppercase", color: "var(--color-text-tertiary)" }}>
         {clusters.length > 0 && (

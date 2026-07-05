@@ -285,6 +285,12 @@ function TabCount({ n, bad }: { n: number; bad?: boolean }) {
   );
 }
 
+// Mockup vocabulary for the strip - shorter than the menu labels.
+const DISPLAY_LABEL: Record<string, string> = {
+  "External Secrets": "ext-secrets",
+  "Custom resources": "crds",
+};
+
 export function LensNav() {
   const route = useFleet((s) => s.route);
   const openFleet = useFleet((s) => s.openFleet);
@@ -341,20 +347,37 @@ export function LensNav() {
     ? groups.find((g) => g.items.some((item) => item.active !== "none" && isExpandedItemActive(route, item, workloadKindFilter)))
     : undefined;
 
-  // The one live fault count the store always has: broken workloads for the
-  // current cluster (fleet board). Honest counts only - no zeros faked in.
-  const brokenWorkloads = inCluster ? (board[route.name === "cluster" ? route.cluster : ""]?.broken ?? 0) : 0;
+  // Fault counts, from data that is actually loaded - a lens that has not
+  // been opened contributes nothing rather than a fake zero. Workloads come
+  // from the fleet board (fetched fleet-wide); the rest read their lens
+  // stores when they hold the current cluster.
+  const clusterName = route.name === "cluster" ? route.cluster : "";
+  const brokenWorkloads = inCluster ? (board[clusterName]?.broken ?? 0) : 0;
+  const brokenPods = useFleet((s) => (inCluster && s.pods.cluster === clusterName ? s.pods.items.filter((p) => p.rank === "unhealthy").length : 0));
+  const brokenFlux = useFleet((s) => (inCluster && s.gitops.cluster === clusterName ? s.gitops.resources.filter((r) => r.ready === "Failed" && !r.suspended).length : 0));
+  const brokenArgo = useFleet((s) => (inCluster && s.argo.cluster === clusterName ? s.argo.apps.filter((a) => a.broken).length : 0));
+  const groupFault: Record<string, number> = {
+    Workloads: Math.max(brokenWorkloads, brokenPods),
+    "Flux CD": brokenFlux,
+    "Argo CD": brokenArgo,
+  };
+  const itemFault: Record<string, number> = {
+    "All workloads": brokenWorkloads,
+    Pods: brokenPods,
+    Kustomizations: brokenFlux,
+    Applications: brokenArgo,
+  };
 
   return (
     <>
       <nav aria-label="lenses" style={navRow}>
         <button onClick={openFleet} aria-current={route.name === "fleet" ? "true" : undefined} style={tabStyle(route.name === "fleet", false)}>
-          <IconLayoutGrid size={13} stroke={1.5} /> fleet
+          fleet
         </button>
         {inCluster && groups.map((g) => {
           const isCur = activeGroup?.label === g.label;
-          const label = g.label.toLowerCase();
-          const bad = g.label === "Workloads" ? brokenWorkloads : 0;
+          const label = (DISPLAY_LABEL[g.label] ?? g.label).toLowerCase();
+          const bad = groupFault[g.label] ?? 0;
           return (
             <button key={g.label} onClick={() => activate(g.items[0].target)} aria-current={isCur ? "true" : undefined} style={tabStyle(isCur, false)}>
               {bad > 0 && <span aria-hidden style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--color-text-danger)", boxShadow: "var(--lamp-glow-danger, none)", display: "inline-block" }} />}
@@ -382,9 +405,12 @@ export function LensNav() {
         <nav aria-label={`${activeGroup.label.toLowerCase()} lenses`} style={navRow}>
           {activeGroup.items.map((item) => {
             const active = item.active !== "none" && isExpandedItemActive(route, item, workloadKindFilter);
+            const bad = itemFault[item.label] ?? 0;
             return (
               <button key={item.label} onClick={() => activate(item.target)} aria-current={active ? "true" : undefined} style={tabStyle(active, true)}>
+                {bad > 0 && <span aria-hidden style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--color-text-danger)", boxShadow: "var(--lamp-glow-danger, none)", display: "inline-block" }} />}
                 {item.label.toLowerCase()}
+                <TabCount n={bad} bad />
               </button>
             );
           })}

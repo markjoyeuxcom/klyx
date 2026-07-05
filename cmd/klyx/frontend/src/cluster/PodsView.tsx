@@ -17,7 +17,7 @@ import { useResizableDock } from "../chrome/useResizableDock";
 import { useListKeys } from "../chrome/useListKeys";
 import { useNavIntent } from "../chrome/useNavIntent";
 import { FKeysBar } from "../chrome/FKeysBar";
-import { MetersStrip, well, Chip, EmptyState, LiveIndicator, SkeletonRows, btn, ellipsis, type Tone } from "../chrome/primitives";
+import { FilterButton, MetersStrip, well, EmptyState, LiveIndicator, SkeletonRows, btn, ellipsis, type Tone } from "../chrome/primitives";
 import { CopyButton } from "../chrome/CopyButton";
 import { YamlBlock } from "../chrome/YamlBlock";
 import { InspectorConditions, InspectorEvents, InspectorSection, InspectorStatus, InspectorTabButton, MetadataChips, inspectorStateBox } from "./ResourceInspector";
@@ -270,7 +270,8 @@ export function PodsView({ cluster }: { cluster: string }) {
               <option value="">all namespaces</option>
               {pods.namespaces.map((ns) => <option key={ns} value={ns}>{ns}</option>)}
             </select>
-            <Chip on={pods.needsAttention} onClick={() => useFleet.getState().togglePodsNeedsAttention()}>needs attention</Chip>
+            <FilterButton label="all" count={pods.items.length} active={!pods.needsAttention} onClick={() => { if (pods.needsAttention) useFleet.getState().togglePodsNeedsAttention(); }} />
+            <FilterButton label="broken" count={pods.items.filter((x) => x.rank !== "healthy").length} active={pods.needsAttention} onClick={() => { if (!pods.needsAttention) useFleet.getState().togglePodsNeedsAttention(); }} />
             <input
               ref={searchRef}
               value={pods.search}

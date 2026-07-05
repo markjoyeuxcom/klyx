@@ -91,10 +91,12 @@ describe("PodsView", () => {
     expect(getByText("CrashLoopBackOff")).toBeTruthy();
   });
 
-  it("needs-attention chip filters out healthy rows", () => {
+  it("the broken filter switch hides healthy rows and carries the honest count", () => {
     seed([broken, healthy]);
-    const { getByText, queryByText } = render(<PodsView cluster="homelab" />);
-    fireEvent.click(getByText(/needs attention/i));
+    const { getByRole, getByText, queryByText } = render(<PodsView cluster="homelab" />);
+    const sw = getByRole("button", { name: /broken\s*1/i });
+    expect(sw.getAttribute("aria-pressed")).toBe("false");
+    fireEvent.click(sw);
     expect(getByText("api-crash")).toBeTruthy();
     expect(queryByText("grafana-xyz")).toBeNull();
   });
