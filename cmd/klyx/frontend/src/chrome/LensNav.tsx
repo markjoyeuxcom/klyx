@@ -177,10 +177,12 @@ const EXPANDED_MENU: ExpandedGroup[] = [
     ],
   },
   {
+    // Releases only: repo/chart browsing is a non-goal (stays with `helm` and
+    // Flux - HelmRepositories live under the flux cd lens). A single-item
+    // group renders no sub-row.
     label: "Helm",
     items: [
       { label: "Releases", Icon: IconAnchor, target: { kind: "section", section: "helm" } },
-      { label: "Repositories", Icon: IconPackage, target: { kind: "section", section: "helm" }, active: "none" },
     ],
   },
   {
