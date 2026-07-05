@@ -6,6 +6,13 @@ import { InstanceList } from "./InstanceList";
 vi.mock("../bridge/crd", () => ({
   loadInstances: vi.fn(async () => {}),
   listInstancePage: vi.fn(async () => ({ items: [], nextToken: "" })),
+  // The open instance now renders as a side panel inside the list, so the
+  // detail bridge loads too.
+  getInstanceDetail: vi.fn(async () => {}),
+  copyText: vi.fn(async () => {}),
+  revealSecretKey: vi.fn(async () => null),
+  dryRunInstanceYAML: vi.fn(async () => ({ ok: true, error: "" })),
+  applyInstanceYAML: vi.fn(async () => ({ ok: true, error: "" })),
 }));
 import { loadInstances, listInstancePage } from "../bridge/crd";
 
@@ -243,6 +250,22 @@ describe("InstanceList", () => {
     fireEvent.click(getByText("coredns-abc"));
     const r = useFleet.getState().route;
     expect(r.name === "cluster" && r.instance).toEqual({ namespace: "kube-system", name: "coredns-abc" });
+  });
+
+  it("the open instance renders as a side panel - the list never leaves the screen", () => {
+    useFleet.setState({ route: { name: "cluster", cluster: "x", section: "resources", resource: nsRef } });
+    seed(nsRef);
+    const { getByText, getByTestId, queryByTestId, getAllByText } = render(<InstanceList cluster="x" resource={nsRef} />);
+    expect(queryByTestId("instance-detail-panel")).toBeNull();
+    fireEvent.click(getByText("coredns-abc"));
+    // panel and list coexist: the name appears in both the row and the panel header
+    expect(getByTestId("instance-detail-panel")).toBeTruthy();
+    expect(getByTestId("instance-list-header")).toBeTruthy();
+    expect(getAllByText("coredns-abc").length).toBeGreaterThanOrEqual(2);
+    // Esc closes the panel, list stays
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(queryByTestId("instance-detail-panel")).toBeNull();
+    expect(getByTestId("instance-list-header")).toBeTruthy();
   });
 
   it("can browse a generic resource across connected clusters", async () => {

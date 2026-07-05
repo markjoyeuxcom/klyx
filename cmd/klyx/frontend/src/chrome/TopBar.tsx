@@ -67,11 +67,11 @@ export function TopBar() {
         <span>cmd/ctrl+k</span>
       </button>
       <div style={{ ...noDrag, display: "flex", alignItems: "center", gap: 8, justifySelf: "end" }}>
-        {clusters.length > 0 && (
-          <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--color-text-tertiary)" }}>
-            {liveClusters}/{clusters.length} clusters watched
-          </span>
-        )}
+        {/* Reserve the slot even before the fleet seeds - the chip popping in
+            after load shifted the whole right-side chrome. */}
+        <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--color-text-tertiary)", minWidth: 130, textAlign: "right" }}>
+          {clusters.length > 0 ? `${liveClusters}/${clusters.length} clusters watched` : " "}
+        </span>
         <ForwardsIndicator />
         <ThemeToggle />
       </div>

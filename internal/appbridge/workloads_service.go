@@ -154,7 +154,8 @@ func toWorkloadDTO(w workloads.Workload) WorkloadDTO {
 		Kind: w.Kind, Namespace: w.Namespace, Name: w.Name,
 		Desired: w.Desired, Ready: w.Ready, Available: w.Available, Updated: w.Updated,
 		Restarts: w.Restarts, Reason: w.Reason, Rank: w.Rank.String(),
-		Pods: make([]PodDTO, 0, len(w.Pods)),
+		Pods:  make([]PodDTO, 0, len(w.Pods)),
+		Stale: w.Generation > w.ObservedGeneration, Generation: w.Generation, ObservedGeneration: w.ObservedGeneration,
 	}
 	if w.GitOps != nil {
 		d.GitOps = &OwnerDTO{Kind: w.GitOps.Kind, Namespace: w.GitOps.Namespace, Name: w.GitOps.Name}

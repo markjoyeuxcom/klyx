@@ -20,7 +20,11 @@ vi.mock("../bridge/crd", () => ({
   copyText: vi.fn(),
   getInstanceDetail: vi.fn(),
 }));
+vi.mock("../bridge/forwards", () => ({
+  stopForward: vi.fn(),
+}));
 import { openPodDetail } from "../bridge/pods";
+import { stopForward } from "../bridge/forwards";
 import { openNodeDetail } from "../bridge/nodes";
 import { openHelmRelease } from "../bridge/helm";
 import { getResourceDetail } from "../bridge/gitops";
@@ -46,6 +50,8 @@ function makeStore(over: Partial<FleetStore>): FleetStore {
     toggleArgoExpand: vi.fn(),
     openGateway: vi.fn(),
     selectRoute: vi.fn(),
+    requestNavIntent: vi.fn(),
+    forwards: [],
     pods: { cluster: null, items: [], namespaces: [] },
     workloads: { cluster: null, items: [], namespaces: [], expanded: [] },
     events: { cluster: null, items: [], namespaces: [] },
@@ -77,7 +83,7 @@ describe("buildCommands", () => {
     });
     const cmds = buildCommands(s);
     const clusterCmds = cmds.filter((c) => c.group === "Clusters");
-    expect(clusterCmds.map((c) => c.title)).toEqual(["dev", "prd", "Fleet overview", "Settings", "Port-forwards"]);
+    expect(clusterCmds.map((c) => c.title)).toEqual(["dev", "prd", "Fleet overview", "Settings", "Port-forwards", "Activity log", "Keyboard shortcuts"]);
     expect(clusterCmds[0].hint).toBe("DEV · westeurope");
   });
 
@@ -351,5 +357,100 @@ describe("buildCommands", () => {
     midnight.run();
     expect(document.documentElement.getAttribute("data-theme")).toBe("midnight");
     expect(localStorage.getItem("klyx-theme")).toBe("midnight");
+  });
+});
+
+describe("action verbs", () => {
+  it("drain verb navigates to nodes and parks a drain intent - never calls a bridge", () => {
+    const requestNavIntent = vi.fn();
+    const setSection = vi.fn();
+    const openCluster = vi.fn();
+    const s = makeStore({
+      requestNavIntent, setSection, openCluster,
+      nodes: { cluster: "dev", items: [{ name: "aks-sys-1", ready: true, unschedulable: false, problems: [], roles: ["agent"], version: "v1.31.0" }] } as never,
+    });
+    const cmd = buildCommands(s).find((c) => c.id === "verb:drain:dev/aks-sys-1")!;
+    expect(cmd.title).toBe("drain node aks-sys-1");
+    expect(cmd.group).toBe("Actions");
+    cmd.run();
+    expect(openCluster).toHaveBeenCalledWith("dev");
+    expect(setSection).toHaveBeenCalledWith("nodes");
+    expect(requestNavIntent).toHaveBeenCalledWith({ kind: "drain-node", cluster: "dev", node: "aks-sys-1" });
+    expect(openNodeDetail).not.toHaveBeenCalled();
+  });
+
+  it("cordon verb flips to uncordon for an already-cordoned node", () => {
+    const requestNavIntent = vi.fn();
+    const s = makeStore({
+      requestNavIntent,
+      nodes: { cluster: "dev", items: [{ name: "n1", ready: true, unschedulable: true, problems: [], roles: [], version: "" }] } as never,
+    });
+    const cmd = buildCommands(s).find((c) => c.id === "verb:cordon:dev/n1")!;
+    expect(cmd.title).toBe("uncordon node n1");
+    cmd.run();
+    expect(requestNavIntent).toHaveBeenCalledWith({ kind: "cordon-node", cluster: "dev", node: "n1", cordon: false });
+  });
+
+  it("scale verb exists for Deployments but not DaemonSets", () => {
+    const s = makeStore({
+      workloads: { cluster: "dev", items: [
+        { kind: "Deployment", namespace: "web", name: "api", rank: "healthy", ready: 2, desired: 2 },
+        { kind: "DaemonSet", namespace: "kube-system", name: "cilium", rank: "healthy", ready: 3, desired: 3 },
+      ], expanded: [] } as never,
+    });
+    const cmds = buildCommands(s);
+    expect(cmds.some((c) => c.id === "verb:scale:dev/Deployment/web/api")).toBe(true);
+    expect(cmds.some((c) => c.id === "verb:scale:dev/DaemonSet/kube-system/cilium")).toBe(false);
+    expect(cmds.some((c) => c.id === "verb:restart:dev/DaemonSet/kube-system/cilium")).toBe(true);
+  });
+
+  it("suspend verb reads resume for suspended flux resources", () => {
+    const requestNavIntent = vi.fn();
+    const s = makeStore({
+      requestNavIntent,
+      gitops: { cluster: "dev", resources: [
+        { kind: "Kustomization", namespace: "flux-system", name: "apps", ready: "True", suspended: true, sourceKind: "", sourceName: "" },
+      ] } as never,
+    });
+    const cmd = buildCommands(s).find((c) => c.id === "verb:suspend:dev/Kustomization/flux-system/apps")!;
+    expect(cmd.title).toBe("resume kustomization flux-system/apps");
+    cmd.run();
+    expect(requestNavIntent).toHaveBeenCalledWith({ kind: "suspend-flux", cluster: "dev", fluxKind: "Kustomization", namespace: "flux-system", name: "apps", suspend: false });
+  });
+
+  it("argo sync verb parks a sync intent for the composer", () => {
+    const requestNavIntent = vi.fn();
+    const s = makeStore({
+      requestNavIntent,
+      argo: { cluster: "nelli", apps: [
+        { namespace: "argocd", name: "media", syncStatus: "OutOfSync", healthStatus: "Healthy", project: "default" },
+      ], expanded: [] } as never,
+    });
+    const cmd = buildCommands(s).find((c) => c.id === "verb:argo-sync:nelli/argocd/media")!;
+    expect(cmd.hint).toContain("sync composer");
+    cmd.run();
+    expect(requestNavIntent).toHaveBeenCalledWith({ kind: "sync-argo", cluster: "nelli", namespace: "argocd", name: "media" });
+  });
+
+  it("pod logs verb parks a logs intent", () => {
+    const requestNavIntent = vi.fn();
+    const s = makeStore({
+      requestNavIntent,
+      pods: { cluster: "dev", items: [{ namespace: "web", name: "api-1", phase: "Running", rank: "healthy" }], namespaces: [] } as never,
+    });
+    const cmd = buildCommands(s).find((c) => c.id === "verb:logs:dev/web/api-1")!;
+    cmd.run();
+    expect(requestNavIntent).toHaveBeenCalledWith({ kind: "logs-pod", cluster: "dev", namespace: "web", name: "api-1" });
+    expect(openPodDetail).not.toHaveBeenCalled();
+  });
+
+  it("stop-forward verb acts directly (the one confirmed-safe direct verb)", () => {
+    const s = makeStore({
+      forwards: [{ id: "f1", cluster: "dev", namespace: "web", targetKind: "Service", targetName: "api", localPort: 8080, targetPort: 80, startedUnix: 0, status: "active" }] as never,
+    });
+    const cmd = buildCommands(s).find((c) => c.id === "verb:stop-forward:f1")!;
+    expect(cmd.title).toBe("stop forward web/api :8080");
+    cmd.run();
+    expect(stopForward).toHaveBeenCalledWith("f1");
   });
 });

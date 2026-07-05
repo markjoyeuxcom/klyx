@@ -1,7 +1,15 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useFleet, ResourceRef, InstanceDTO } from "../store/fleet";
 import { loadInstances, listInstancePage } from "../bridge/crd";
 import { VirtualList } from "../chrome/VirtualList";
+import type { VirtualListHandle } from "../chrome/VirtualList";
+import { useListKeys } from "../chrome/useListKeys";
+import { useResizablePanel } from "../chrome/useResizablePanel";
+import { CopyButton } from "../chrome/CopyButton";
+import { Age } from "../chrome/Age";
+import { EmptyState, SkeletonRows } from "../chrome/primitives";
+import { IconStack2 } from "@tabler/icons-react";
+import { InstanceDetail } from "./InstanceDetail";
 import { riskFor, supportsRiskFilter } from "./resourceRisk";
 
 const ellipsis: React.CSSProperties = { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" };
@@ -16,17 +24,6 @@ type BrowserScope = "cluster" | "fleet";
 type FleetInstanceRow = InstanceDTO & { cluster: string };
 type FleetInstanceState = { rows: FleetInstanceRow[]; loading: boolean; errors: string[] };
 
-function age(created: string): string {
-  if (!created) return "";
-  const ms = Date.now() - Date.parse(created);
-  if (Number.isNaN(ms) || ms < 0) return "";
-  const sec = Math.floor(ms / 1000);
-  if (sec < 60) return `${sec}s`;
-  if (sec < 3600) return `${Math.floor(sec / 60)}m`;
-  if (sec < 86400) return `${Math.floor(sec / 3600)}h`;
-  return `${Math.floor(sec / 86400)}d`;
-}
-
 export function InstanceList({ cluster, resource }: { cluster: string; resource: ResourceRef }) {
   const instances = useFleet((s) => s.instances);
   const clusters = useFleet((s) => s.clusters);
@@ -34,6 +31,10 @@ export function InstanceList({ cluster, resource }: { cluster: string; resource:
   const setRiskOnly = useFleet((s) => s.setInstanceRiskOnly);
   const openInstance = useFleet((s) => s.openInstance);
   const closeResource = useFleet((s) => s.closeResource);
+  // The open instance renders as a resizable side panel beside the list
+  // (master-detail, the Pods pattern) - the list never leaves the screen.
+  const openRef = useFleet((s) => (s.route.name === "cluster" ? s.route.instance ?? null : null));
+  const { width: panelWidth, handleProps } = useResizablePanel();
   const [scope, setScope] = useState<BrowserScope>("cluster");
   const [fleetClusterFilter, setFleetClusterFilter] = useState("");
   const [fleetState, setFleetState] = useState<FleetInstanceState>({ rows: [], loading: false, errors: [] });
@@ -140,8 +141,38 @@ export function InstanceList({ cluster, resource }: { cluster: string; resource:
     nav.openInstance(r.namespace, r.name);
   }
 
+  // Keyboard parity for the generic table backing every Resources/CRDs list:
+  // j/k moves the selection, Enter opens the instance, / focuses the filter.
+  const [kbIdx, setKbIdx] = useState(-1);
+  const searchRef = useRef<HTMLInputElement>(null);
+  const listRef = useRef<VirtualListHandle>(null);
+  const effectiveKbIdx = rows.length === 0 ? -1 : Math.min(kbIdx, rows.length - 1);
+  const handleKbSelect = useCallback((idx: number) => {
+    setKbIdx(idx);
+    listRef.current?.scrollToIndex(idx);
+  }, []);
+  const handleKbActivate = useCallback((idx: number) => {
+    const r = rows[idx];
+    if (r) openRow(r.row);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rows]);
+  const handleKbEscape = useCallback(() => {
+    if (useFleet.getState().route.name === "cluster" && (useFleet.getState().route as { instance?: unknown }).instance) {
+      useFleet.getState().closeInstance();
+    }
+  }, []);
+  useListKeys({
+    count: rows.length,
+    selected: effectiveKbIdx,
+    onSelect: handleKbSelect,
+    onActivate: handleKbActivate,
+    onEscape: handleKbEscape,
+    searchRef,
+  });
+
   return (
-    <div style={{ padding: "14px 16px", height: "100%", minHeight: 0, overflow: "hidden", boxSizing: "border-box", display: "flex", flexDirection: "column" }}>
+    <div style={{ padding: "14px 16px", height: "100%", minHeight: 0, overflow: "hidden", boxSizing: "border-box", display: "flex", gap: 0, position: "relative" }}>
+      <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, flexShrink: 0 }}>
         <button
           aria-label="back to resources"
@@ -184,6 +215,7 @@ export function InstanceList({ cluster, resource }: { cluster: string; resource:
           </button>
         )}
         <input
+          ref={searchRef}
           value={instances.filter}
           onChange={(e) => setFilter(e.target.value)}
           placeholder={fleetMode ? "cluster, name, namespace…" : "name, namespace…"}
@@ -216,9 +248,12 @@ export function InstanceList({ cluster, resource }: { cluster: string; resource:
       )}
 
       {loading && all.length === 0 ? (
-        <div style={stateBox}>Loading {fleetMode ? "fleet " : ""}{resource.kind} instances…</div>
+        <SkeletonRows rows={8} label={`loading ${resource.kind} instances`} />
       ) : all.length === 0 ? (
-        <div style={stateBox}>No {resource.kind} instances found{fleetMode ? " across the fleet" : ""}.</div>
+        <EmptyState
+          icon={<IconStack2 size={28} stroke={1.2} />}
+          title={`No ${resource.kind} instances found${fleetMode ? " across the fleet" : ""}.`}
+        />
       ) : (
         <div data-testid="instance-list-scroll" style={{ border: "0.5px solid var(--color-border-tertiary)", borderRadius: "var(--border-radius-md)", overflowY: "auto", overflowX: "auto", flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
           {/* minWidth wrapper: header + rows share it, so horizontal scrolling
@@ -236,35 +271,48 @@ export function InstanceList({ cluster, resource }: { cluster: string; resource:
               <span>age</span>
             </div>
             {rows.length === 0 ? (
-              <div style={{ padding: 14, color: "var(--color-text-secondary)", fontSize: 13 }}>No {resource.kind} instances match the current filter.</div>
+              <EmptyState
+                title={`No ${resource.kind} instances match the current filter.`}
+                action={{ label: "Clear filters", onClick: () => { setFilter(""); setRiskOnly(false); } }}
+              />
             ) : (
               <VirtualList
+                ref={listRef}
                 items={rows}
                 rowHeight={ROW_HEIGHT}
                 rowKey={({ row }) => `${row.cluster}/${row.namespace}/${row.name}`}
                 style={{ flex: 1, minHeight: 0 }}
-                render={({ row: r, risk }) => (
+                render={({ row: r, risk }, i) => {
+                  const isOpen = openRef !== null && r.namespace === openRef.namespace && r.name === openRef.name && (!fleetMode || r.cluster === cluster);
+                  return (
                   <div
                     key={`${r.cluster}/${r.namespace}/${r.name}`}
+                    data-rowhost="true"
+                    aria-selected={i === effectiveKbIdx}
                     onClick={() => openRow(r)}
                     title={risk.bad ? risk.reason : undefined}
                     style={{
                       display: "grid", gridTemplateColumns: cols, gap: 10, alignItems: "center", padding: "6px 12px",
                       height: ROW_HEIGHT, boxSizing: "border-box",
                       borderTop: "0.5px solid var(--color-border-tertiary)", fontSize: 11, cursor: "pointer",
-                      boxShadow: risk.bad ? "inset 2px 0 0 var(--color-text-warning)" : undefined,
+                      background: i === effectiveKbIdx || isOpen ? "var(--color-background-secondary)" : undefined,
+                      boxShadow: i === effectiveKbIdx ? "inset 2px 0 0 var(--color-text-info)" : risk.bad ? "inset 2px 0 0 var(--color-text-warning)" : undefined,
                     }}
                   >
                     {fleetMode && <span style={{ color: "var(--color-text-info)", fontFamily: "var(--font-mono)", ...ellipsis }}>{r.cluster}</span>}
                     {namespaced && <span style={{ color: "var(--color-text-secondary)", ...ellipsis }}>{r.namespace}</span>}
-                    <span style={{ fontFamily: "var(--font-mono)", ...ellipsis }}>{r.name}</span>
+                    <span style={{ display: "flex", alignItems: "center", gap: 2, minWidth: 0 }}>
+                      <span style={{ fontFamily: "var(--font-mono)", ...ellipsis }}>{r.name}</span>
+                      <CopyButton text={r.name} label={`copy name ${r.name}`} size={11} appearOnRowHover />
+                    </span>
                     {extraColumns.map((c) => {
                       const value = r.fields?.[c.key] || "-";
                       return <span key={c.key} style={{ color: "var(--color-text-secondary)", fontFamily: "var(--font-mono)", ...ellipsis }} title={value}>{value}</span>;
                     })}
-                    <span style={{ color: "var(--color-text-tertiary)" }}>{age(r.created)}</span>
+                    <span style={{ color: "var(--color-text-tertiary)" }}><Age iso={r.created} fallback="" /></span>
                   </div>
-                )}
+                  );
+                }}
               />
             )}
           </div>
@@ -278,6 +326,18 @@ export function InstanceList({ cluster, resource }: { cluster: string; resource:
         >
           Load more
         </button>
+      )}
+      </div>
+
+      {/* Detail panel - resizable, shares klyx-panel-width with the other panels */}
+      {openRef && (
+        <div
+          data-testid="instance-detail-panel"
+          style={{ width: panelWidth, flexShrink: 0, position: "relative", borderLeft: "0.5px solid var(--color-border-tertiary)", paddingLeft: 16, marginLeft: 16, minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column" }}
+        >
+          <div {...handleProps} />
+          <InstanceDetail cluster={cluster} resource={resource} instance={openRef} />
+        </div>
       )}
     </div>
   );
@@ -485,15 +545,6 @@ function columnsFor(resource: ResourceRef): ExtraColumn[] {
   }
   return [];
 }
-
-const stateBox: React.CSSProperties = {
-  color: "var(--color-text-secondary)",
-  fontSize: 13,
-  padding: 18,
-  border: "0.5px solid var(--color-border-tertiary)",
-  borderRadius: "var(--border-radius-md)",
-  background: "var(--color-background-primary)",
-};
 
 const linkBtn: React.CSSProperties = {
   background: "transparent",

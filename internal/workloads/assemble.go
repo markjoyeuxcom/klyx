@@ -20,15 +20,15 @@ func Assemble(deploys []appsv1.Deployment, stss []appsv1.StatefulSet, dss []apps
 	out := make([]Workload, 0, len(deploys)+len(stss)+len(dss))
 	for i := range deploys {
 		d := &deploys[i]
-		out = append(out, build("Deployment", d.Namespace, d.Name, d.Labels, d.Spec.Selector, classifyDeployment(d), pods, fluxPresent, now))
+		out = append(out, build("Deployment", d.Namespace, d.Name, d.Labels, d.Spec.Selector, classifyDeployment(d), pods, fluxPresent, now, d.Generation, d.Status.ObservedGeneration))
 	}
 	for i := range stss {
 		s := &stss[i]
-		out = append(out, build("StatefulSet", s.Namespace, s.Name, s.Labels, s.Spec.Selector, classifyStatefulSet(s), pods, fluxPresent, now))
+		out = append(out, build("StatefulSet", s.Namespace, s.Name, s.Labels, s.Spec.Selector, classifyStatefulSet(s), pods, fluxPresent, now, s.Generation, s.Status.ObservedGeneration))
 	}
 	for i := range dss {
 		ds := &dss[i]
-		out = append(out, build("DaemonSet", ds.Namespace, ds.Name, ds.Labels, ds.Spec.Selector, classifyDaemonSet(ds), pods, fluxPresent, now))
+		out = append(out, build("DaemonSet", ds.Namespace, ds.Name, ds.Labels, ds.Spec.Selector, classifyDaemonSet(ds), pods, fluxPresent, now, ds.Generation, ds.Status.ObservedGeneration))
 	}
 
 	sort.SliceStable(out, func(a, b int) bool {
@@ -44,10 +44,12 @@ func Assemble(deploys []appsv1.Deployment, stss []appsv1.StatefulSet, dss []apps
 }
 
 func build(kind, ns, name string, objLabels map[string]string, selector *metav1.LabelSelector,
-	c classified, allPods []corev1.Pod, fluxPresent bool, now time.Time) Workload {
+	c classified, allPods []corev1.Pod, fluxPresent bool, now time.Time,
+	generation, observedGeneration int64) Workload {
 
 	w := Workload{Kind: kind, Namespace: ns, Name: name,
-		Desired: c.desired, Ready: c.ready, Available: c.available, Updated: c.updated}
+		Desired: c.desired, Ready: c.ready, Available: c.available, Updated: c.updated,
+		Generation: generation, ObservedGeneration: observedGeneration}
 
 	matched := matchPods(ns, selector, allPods)
 	w.Pods = make([]Pod, 0, len(matched))

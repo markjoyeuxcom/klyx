@@ -6,9 +6,12 @@ import type { ArgoSyncOptions } from "../bridge/argo";
 import { ConfirmDialog } from "../chrome/ConfirmDialog";
 import { MetaTile, OperationDialog, OptionTile } from "../chrome/OperationDialog";
 import { useListKeys } from "../chrome/useListKeys";
-import { EmptyState, SkeletonRows, btn, ellipsis } from "../chrome/primitives";
+import { useNavIntent } from "../chrome/useNavIntent";
+import { EmptyState, FilterButton, SkeletonRows, btn, ellipsis } from "../chrome/primitives";
 import { IconGitMerge } from "@tabler/icons-react";
+import { Age, UpdatedAt, useReceivedAt } from "../chrome/Age";
 import { InspectorEmpty, InspectorSection, InspectorTitle } from "./ResourceInspector";
+import { wellKnownResourceRef } from "./resourceRefs";
 
 // ArgoView is the Argo CD lens, speaking Argo's vocabulary (synced/degraded,
 // never translated into Flux terms). Apps arrive broken-first from the
@@ -31,46 +34,11 @@ const healthColor: Record<string, string> = {
   Suspended: "var(--color-text-warning)",
 };
 
-function ago(unix: number): string {
-  if (unix === 0) return "never";
-  const s = Math.max(0, Math.floor(Date.now() / 1000) - unix);
-  return s < 60 ? `${s}s ago` : s < 3600 ? `${Math.floor(s / 60)}m ago` : `${Math.floor(s / 3600)}h ago`;
-}
-
 const short = (rev: string) => (rev.length > 8 ? rev.slice(0, 8) : rev);
 
 type Pending = { verb: "refresh"; app: ArgoAppDTO };
 
 const gridCols = "12px minmax(0,1.2fr) 90px 110px minmax(0,1fr) 90px 90px 132px";
-
-const argoResourceRefs: Record<string, ResourceRef> = {
-  "apps/Deployment": { group: "apps", version: "v1", plural: "deployments", kind: "Deployment", scope: "Namespaced" },
-  "apps/StatefulSet": { group: "apps", version: "v1", plural: "statefulsets", kind: "StatefulSet", scope: "Namespaced" },
-  "apps/DaemonSet": { group: "apps", version: "v1", plural: "daemonsets", kind: "DaemonSet", scope: "Namespaced" },
-  "apps/ReplicaSet": { group: "apps", version: "v1", plural: "replicasets", kind: "ReplicaSet", scope: "Namespaced" },
-  "/Pod": { group: "", version: "v1", plural: "pods", kind: "Pod", scope: "Namespaced" },
-  "/Service": { group: "", version: "v1", plural: "services", kind: "Service", scope: "Namespaced" },
-  "/ConfigMap": { group: "", version: "v1", plural: "configmaps", kind: "ConfigMap", scope: "Namespaced" },
-  "/Secret": { group: "", version: "v1", plural: "secrets", kind: "Secret", scope: "Namespaced" },
-  "/ServiceAccount": { group: "", version: "v1", plural: "serviceaccounts", kind: "ServiceAccount", scope: "Namespaced" },
-  "/Namespace": { group: "", version: "v1", plural: "namespaces", kind: "Namespace", scope: "Cluster" },
-  "networking.k8s.io/Ingress": { group: "networking.k8s.io", version: "v1", plural: "ingresses", kind: "Ingress", scope: "Namespaced" },
-  "networking.k8s.io/NetworkPolicy": { group: "networking.k8s.io", version: "v1", plural: "networkpolicies", kind: "NetworkPolicy", scope: "Namespaced" },
-  "batch/Job": { group: "batch", version: "v1", plural: "jobs", kind: "Job", scope: "Namespaced" },
-  "batch/CronJob": { group: "batch", version: "v1", plural: "cronjobs", kind: "CronJob", scope: "Namespaced" },
-  "autoscaling/HorizontalPodAutoscaler": { group: "autoscaling", version: "v2", plural: "horizontalpodautoscalers", kind: "HorizontalPodAutoscaler", scope: "Namespaced" },
-  "policy/PodDisruptionBudget": { group: "policy", version: "v1", plural: "poddisruptionbudgets", kind: "PodDisruptionBudget", scope: "Namespaced" },
-  "gateway.networking.k8s.io/Gateway": { group: "gateway.networking.k8s.io", version: "v1", plural: "gateways", kind: "Gateway", scope: "Namespaced" },
-  "gateway.networking.k8s.io/HTTPRoute": { group: "gateway.networking.k8s.io", version: "v1", plural: "httproutes", kind: "HTTPRoute", scope: "Namespaced" },
-  "gateway.networking.k8s.io/GRPCRoute": { group: "gateway.networking.k8s.io", version: "v1", plural: "grpcroutes", kind: "GRPCRoute", scope: "Namespaced" },
-  "cert-manager.io/Certificate": { group: "cert-manager.io", version: "v1", plural: "certificates", kind: "Certificate", scope: "Namespaced" },
-  "cert-manager.io/CertificateRequest": { group: "cert-manager.io", version: "v1", plural: "certificaterequests", kind: "CertificateRequest", scope: "Namespaced" },
-  "cert-manager.io/Issuer": { group: "cert-manager.io", version: "v1", plural: "issuers", kind: "Issuer", scope: "Namespaced" },
-  "cert-manager.io/ClusterIssuer": { group: "cert-manager.io", version: "v1", plural: "clusterissuers", kind: "ClusterIssuer", scope: "Cluster" },
-  "external-secrets.io/ExternalSecret": { group: "external-secrets.io", version: "v1beta1", plural: "externalsecrets", kind: "ExternalSecret", scope: "Namespaced" },
-  "external-secrets.io/SecretStore": { group: "external-secrets.io", version: "v1beta1", plural: "secretstores", kind: "SecretStore", scope: "Namespaced" },
-  "external-secrets.io/ClusterSecretStore": { group: "external-secrets.io", version: "v1beta1", plural: "clustersecretstores", kind: "ClusterSecretStore", scope: "Cluster" },
-};
 
 export function resolveArgoResourceRef(resource: ArgoResourceDTO, crdGroups: CRDGroupDTO[] = []): ResourceRef | null {
   const crdGroup = crdGroups.find((g) => g.group === resource.group);
@@ -84,7 +52,7 @@ export function resolveArgoResourceRef(resource: ArgoResourceDTO, crdGroups: CRD
       scope: crdKind.scope,
     };
   }
-  return argoResourceRefs[`${resource.group || ""}/${resource.kind}`] ?? null;
+  return wellKnownResourceRef(resource.group, resource.kind);
 }
 
 export function ArgoView({ cluster, mode = "applications" }: { cluster: string; mode?: ArgoViewMode }) {
@@ -92,6 +60,19 @@ export function ArgoView({ cluster, mode = "applications" }: { cluster: string; 
   const isProtected = useFleet((s) => s.clusters.find((c) => c.name === cluster)?.protected ?? false);
   const [pending, setPending] = useState<Pending | null>(null);
   const [syncTarget, setSyncTarget] = useState<ArgoAppDTO | null>(null);
+
+  // Palette verbs land here as one-shot intents once the app list is loaded.
+  // Sync opens the composer (prune/selective options + prd arming); refresh
+  // its confirm - the palette never bypasses either.
+  useNavIntent(cluster, ["sync-argo", "refresh-argo"], (intent) => {
+    if (argo.loading || argo.apps.length === 0) return "wait";
+    if (!("namespace" in intent)) return "missing";
+    const app = argo.apps.find((a) => a.namespace === intent.namespace && a.name === intent.name);
+    if (!app) return "missing";
+    if (intent.kind === "sync-argo") setSyncTarget(app);
+    else setPending({ verb: "refresh", app });
+    return "consumed";
+  }, [argo.apps, argo.loading]);
 
   useEffect(() => {
     if (mode === "projects") {
@@ -108,6 +89,7 @@ export function ArgoView({ cluster, mode = "applications" }: { cluster: string; 
     return () => useFleet.getState().clearArgo();
   }, [cluster, mode]);
 
+  const receivedAt = useReceivedAt(argo.cluster === cluster && !argo.loading && argo.apps.length > 0 ? argo.apps : null);
   const broken = argo.apps.filter((a) => a.broken).length;
   const brokenAppSets = argo.applicationSets.filter((a) => !a.healthy).length;
   const count = mode === "projects" ? argo.projects.length : mode === "applicationsets" ? argo.applicationSets.length : argo.apps.length;
@@ -127,6 +109,7 @@ export function ArgoView({ cluster, mode = "applications" }: { cluster: string; 
           {mode === "applicationsets" && brokenAppSets > 0 && <span style={{ color: "var(--color-text-danger)" }}> · {brokenAppSets} need attention</span>}
         </span>
         <button onClick={refresh} style={btn}>refresh</button>
+        <UpdatedAt at={receivedAt} />
       </div>
       <ArgoModeTabs mode={mode} />
 
@@ -317,7 +300,7 @@ function ApplicationRow({ app: a, selected, kbSelected, onSelect, onRefresh, onS
       <span style={{ color: healthColor[a.healthStatus] ?? "var(--color-text-tertiary)" }}>{a.healthStatus}</span>
       <span style={{ ...ellipsis, color: "var(--color-text-tertiary)" }} title={a.destNamespace}>{a.destNamespace || "-"}</span>
       <span style={{ color: "var(--color-text-tertiary)" }} title={a.revision}>{a.revision ? short(a.revision) : "-"}</span>
-      <span style={{ color: "var(--color-text-tertiary)" }}>{ago(a.reconciledUnix)}</span>
+      <span style={{ color: "var(--color-text-tertiary)" }}><Age unixSeconds={a.reconciledUnix} suffix=" ago" fallback="never" /></span>
       <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
         <button onClick={(e) => { e.stopPropagation(); onRefresh(); }} style={smallBtn}>refresh</button>
         <button onClick={(e) => { e.stopPropagation(); onSync(); }} style={smallPrimaryBtn}>sync</button>
@@ -567,10 +550,10 @@ type FilterToggle = { label: string; active: boolean; count: number; onClick: ()
 function FilterBar({ query, onQuery, placeholder, toggles, visible, total }: { query: string; onQuery: (value: string) => void; placeholder: string; toggles: FilterToggle[]; visible: number; total: number }) {
   return (
     <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center", marginBottom: 10 }}>
+      {/* The shared FilterButton pill - Argo was the one lens whose filter
+          buttons didn't match its siblings visually. */}
       {toggles.map((t) => (
-        <button key={t.label} onClick={t.onClick} style={{ ...smallBtn, background: t.active ? "var(--color-background-secondary)" : "var(--color-background-primary)", color: t.active ? "var(--color-text-primary)" : "var(--color-text-secondary)" }}>
-          {t.label} {t.count}
-        </button>
+        <FilterButton key={t.label} label={t.label} count={t.count} active={t.active} onClick={t.onClick} />
       ))}
       <input
         value={query}
@@ -631,7 +614,7 @@ function ApplicationInspector({ cluster, app, project, appSet, onRefresh, onSync
       <InspectorSection title="operation">
         <MetaLine label="last" value={app.opPhase || "-"} tone={app.opPhase && app.opPhase !== "Succeeded" ? "warning" : undefined} />
         <MetaLine label="message" value={app.opMessage || "-"} />
-        <MetaLine label="reconciled" value={ago(app.reconciledUnix)} />
+        <MetaLine label="reconciled" value={<Age unixSeconds={app.reconciledUnix} suffix=" ago" fallback="never" />} />
       </InspectorSection>
       {conditions.length > 0 && (
         <InspectorSection title="conditions" collapsible>
@@ -823,11 +806,11 @@ function LinkedApps({ apps }: { apps: ArgoAppDTO[] }) {
   );
 }
 
-function MetaLine({ label, value, tone }: { label: string; value: string; tone?: "warning" }) {
+function MetaLine({ label, value, tone }: { label: string; value: React.ReactNode; tone?: "warning" }) {
   return (
     <div style={{ display: "grid", gridTemplateColumns: "72px minmax(0,1fr)", gap: 8, alignItems: "center" }}>
       <span style={{ color: "var(--color-text-tertiary)", fontSize: 10 }}>{label}</span>
-      <span title={value} style={{ ...monoLine, ...ellipsis, color: tone === "warning" ? "var(--color-text-warning)" : monoLine.color }}>{value}</span>
+      <span title={typeof value === "string" ? value : undefined} style={{ ...monoLine, ...ellipsis, color: tone === "warning" ? "var(--color-text-warning)" : monoLine.color }}>{value}</span>
     </div>
   );
 }

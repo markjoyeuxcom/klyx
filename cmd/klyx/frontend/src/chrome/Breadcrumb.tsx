@@ -34,6 +34,15 @@ export function Breadcrumb() {
       </div>
     );
   }
+  if (route.name === "activity") {
+    return (
+      <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "var(--color-text-tertiary)" }}>
+        <button onClick={openFleet} style={crumbBtn}>Fleet</button>
+        <span>/</span>
+        <span style={{ color: "var(--color-text-primary)" }}>Activity</span>
+      </div>
+    );
+  }
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "var(--color-text-tertiary)" }}>
       <button onClick={openFleet} style={crumbBtn}>Fleet</button>

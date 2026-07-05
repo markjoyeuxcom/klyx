@@ -1,7 +1,8 @@
 import { useEffect } from "react";
+import { IconChevronRight, IconComponents } from "@tabler/icons-react";
 import { useFleet, CRDGroupDTO, CRDKindDTO, CRDGroupBy, crdCountKey } from "../store/fleet";
 import { listCRDs, countKind } from "../bridge/crd";
-import { ellipsis } from "../chrome/primitives";
+import { EmptyState, SkeletonRows, ellipsis } from "../chrome/primitives";
 
 type FlatKind = CRDKindDTO & { group: string; category: string };
 
@@ -58,10 +59,17 @@ export function CRDBrowser({ cluster }: { cluster: string }) {
   const totalKinds = flatten(groups).length;
 
   if (crd.loading && groups.length === 0) {
-    return <div style={{ padding: 24, color: "var(--color-text-secondary)", fontSize: 13 }}>Loading custom resources…</div>;
+    return <div style={{ padding: "14px 16px" }}><SkeletonRows rows={7} label="loading custom resources" /></div>;
   }
   if (groups.length === 0 || (crd.search && sections.length === 0)) {
-    return <div style={{ padding: 24, color: "var(--color-text-secondary)", fontSize: 13 }}>No custom resources found on this cluster.</div>;
+    return (
+      <EmptyState
+        icon={<IconComponents size={28} stroke={1.2} />}
+        title={groups.length === 0 ? "No custom resources on this cluster." : "No custom resources match the search."}
+        hint={groups.length === 0 ? "Only built-in kinds are served here." : undefined}
+        action={groups.length > 0 ? { label: "Clear search", onClick: () => setSearch("") } : undefined}
+      />
+    );
   }
 
   return (
@@ -135,7 +143,7 @@ function Section({ cluster, label, category, kinds, grouped }: { cluster: string
         onClick={() => grouped && toggle(label)}
         style={{ display: "grid", gridTemplateColumns: "18px 1fr 90px 70px 1fr", gap: 10, alignItems: "center", padding: "8px 12px", background: "var(--color-background-secondary)", cursor: grouped ? "pointer" : "default", borderTop: "0.5px solid var(--color-border-tertiary)" }}
       >
-        <span style={{ color: "var(--color-text-secondary)", fontSize: 12 }}>{grouped ? (open ? "▾" : "▸") : ""}</span>
+        <span style={{ color: "var(--color-text-secondary)", display: "inline-flex" }}>{grouped ? <IconChevronRight size={13} stroke={1.7} style={{ transform: open ? "rotate(90deg)" : "none", transition: "transform 100ms ease" }} /> : null}</span>
         <div style={{ fontFamily: "var(--font-mono)", fontSize: 12, fontWeight: 500, ...ellipsis }}>{label}</div>
         {category ? <span style={{ background: "var(--color-background-primary)", color: "var(--color-text-secondary)", fontSize: 9, padding: "1px 6px", borderRadius: 3, letterSpacing: 0.3, justifySelf: "start" }}>{category}</span> : <span />}
         <span style={{ fontSize: 11, color: "var(--color-text-secondary)" }}>{kinds.length} kinds</span>

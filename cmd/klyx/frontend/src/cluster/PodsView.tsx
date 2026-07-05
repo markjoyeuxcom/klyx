@@ -1,10 +1,11 @@
 import { useEffect, useState, useCallback, useRef } from "react";
-import { IconTerminal2, IconExternalLink, IconCircleDot } from "@tabler/icons-react";
+import { IconTerminal2, IconExternalLink, IconCircleDot, IconChevronDown, IconX } from "@tabler/icons-react";
 import { useFleet } from "../store/fleet";
 import type { PodDetailDTO, PodSummaryDTO, ContainerSummaryDTO } from "../store/fleet";
 import { listPods, openLivePods, openPodDetail, deletePod } from "../bridge/pods";
 import { openLogsWindow } from "../bridge/windows";
 import { rolloutRestart } from "../bridge/workloads";
+import { armProtected } from "../bridge/configsvc";
 import { copyExecCommand, openExecTerminal, openDebugTerminal } from "../bridge/exec";
 import { ConfirmDialog } from "../chrome/ConfirmDialog";
 import { LogsPane } from "./LogsPane";
@@ -14,8 +15,12 @@ import type { VirtualListHandle } from "../chrome/VirtualList";
 import { useResizablePanel } from "../chrome/useResizablePanel";
 import { useResizableDock } from "../chrome/useResizableDock";
 import { useListKeys } from "../chrome/useListKeys";
-import { Chip, EmptyState, LiveIndicator, SkeletonRows, btn, ellipsis } from "../chrome/primitives";
-import { InspectorSection, InspectorTabButton, MetadataChips, inspectorStateBox } from "./ResourceInspector";
+import { useNavIntent } from "../chrome/useNavIntent";
+import { Chip, EmptyState, LiveIndicator, SkeletonRows, btn, ellipsis, type Tone } from "../chrome/primitives";
+import { CopyButton } from "../chrome/CopyButton";
+import { YamlBlock } from "../chrome/YamlBlock";
+import { InspectorConditions, InspectorEvents, InspectorSection, InspectorStatus, InspectorTabButton, MetadataChips, inspectorStateBox } from "./ResourceInspector";
+import { loadClusterPrefs, loadSearch, savePodsViewPrefs, saveSearch } from "../store/persist";
 
 const rankDot: Record<string, string> = {
   unhealthy: "var(--color-text-danger)",
@@ -23,13 +28,22 @@ const rankDot: Record<string, string> = {
   restarts: "var(--color-text-info)",
   healthy: "var(--color-text-tertiary)",
 };
+const rankTone: Record<string, Tone> = {
+  unhealthy: "danger",
+  degraded: "warning",
+  restarts: "info",
+  healthy: "success",
+};
+
+// readyOf renders the panel's "N/M ready" from non-init containers.
+function readyOf(p: PodSummaryDTO): string {
+  const nonInit = p.containers.filter((c) => !c.init);
+  return `${nonInit.filter((c) => c.ready).length}/${nonInit.length}`;
+}
 
 function ago(s: number): string {
   return s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)}m` : s < 86400 ? `${Math.floor(s / 3600)}h` : `${Math.floor(s / 86400)}d`;
 }
-
-const condColor = (status: string) =>
-  status === "True" ? "var(--color-text-success)" : status === "False" ? "var(--color-text-danger)" : "var(--color-text-info)";
 
 const gridCols = "12px minmax(0,1.2fr) 60px minmax(110px,0.8fr) 55px minmax(0,1.1fr) 52px 28px";
 
@@ -56,21 +70,41 @@ export function PodsView({ cluster }: { cluster: string }) {
 
   const [selectedIdx, setSelectedIdx] = useState(-1);
   const [logsTarget, setLogsTarget] = useState<{ namespace: string; name: string; containers: ContainerSummaryDTO[] } | null>(null);
+  // Bulk selection ("ns/name" keys): deleting three crash-looping pods should
+  // be one confirm, not three select->confirm cycles. x toggles the keyboard
+  // row; the checkbox reveals on row hover and stays put once checked.
+  const [bulk, setBulk] = useState<Set<string>>(new Set());
+  const [bulkConfirm, setBulkConfirm] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<VirtualListHandle>(null);
   // Holds the cleanup for the current live subscription so namespace changes
   // can close the old sub before opening the new one.
   const liveCleanupRef = useRef<(() => void) | null>(null);
 
-  // Live subscription effect — opens the all-namespaces sub on mount.
-  // Namespace changes are handled inline in onNamespace.
+  // Live subscription effect — opens the sub on mount for the persisted
+  // namespace (or all namespaces). Namespace changes are handled inline in
+  // onNamespace. Hydration fills only fields still at their reset defaults, so
+  // an Overview/TriageTape/palette intent set just before mount always wins.
   useEffect(() => {
-    liveCleanupRef.current = openLivePods(cluster, "");
+    const st = useFleet.getState();
+    const prefs = loadClusterPrefs(cluster).pods ?? {};
+    if (prefs.needsAttention && !st.pods.needsAttention) st.setPodsNeedsAttention(true);
+    const savedSearch = loadSearch(cluster, "pods");
+    if (savedSearch && st.pods.search === "") st.setPodsSearch(savedSearch);
+    liveCleanupRef.current = openLivePods(cluster, st.pods.namespace || (prefs.namespace ?? ""));
     return () => {
       if (liveCleanupRef.current) { liveCleanupRef.current(); liveCleanupRef.current = null; }
       useFleet.getState().clearPods();
     };
   }, [cluster]);
+
+  // Mirror filters into per-cluster prefs (namespace + toggles survive a
+  // relaunch; search survives section switches within this run).
+  useEffect(() => {
+    if (pods.cluster !== cluster) return; // transient state during open/switch
+    savePodsViewPrefs(cluster, { namespace: pods.namespace, needsAttention: pods.needsAttention });
+    saveSearch(cluster, "pods", pods.search);
+  }, [cluster, pods.cluster, pods.namespace, pods.needsAttention, pods.search]);
 
   // Palette "jump to namespace": honor the request by re-opening the live
   // subscription for it (same path as the namespace select). Runs after the
@@ -83,6 +117,18 @@ export function PodsView({ cluster }: { cluster: string }) {
     if (liveCleanupRef.current) { liveCleanupRef.current(); liveCleanupRef.current = null; }
     liveCleanupRef.current = openLivePods(cluster, nsRequest.namespace);
   }, [nsRequest, cluster]);
+
+  // Palette verbs / cross-links land here as one-shot intents once the pod
+  // list is loaded.
+  useNavIntent(cluster, ["logs-pod", "select-pod"], (intent) => {
+    if (pods.loading || pods.items.length === 0) return "wait";
+    if (!("namespace" in intent)) return "missing";
+    const p = pods.items.find((x) => x.namespace === intent.namespace && x.name === intent.name);
+    if (!p) return "missing";
+    if (intent.kind === "logs-pod") setLogsTarget({ namespace: p.namespace, name: p.name, containers: p.containers });
+    else void openPodDetail(cluster, p.namespace, p.name);
+    return "consumed";
+  }, [pods.items, pods.loading]);
 
   const onNamespace = (ns: string) => {
     // Close the current live sub, then open the new one for the selected namespace.
@@ -126,6 +172,25 @@ export function PodsView({ cluster }: { cluster: string }) {
     if (p) setLogsTarget({ namespace: p.namespace, name: p.name, containers: p.containers });
   }, [filtered]);
 
+  const toggleBulk = useCallback((key: string) => {
+    setBulk((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }, []);
+
+  const handleBulkKey = useCallback((idx: number) => {
+    const p = filtered[idx];
+    if (p) toggleBulk(`${p.namespace}/${p.name}`);
+  }, [filtered, toggleBulk]);
+
+  // Bulk selection never survives a cluster switch.
+  useEffect(() => {
+    setBulk(new Set());
+  }, [cluster]);
+
   useListKeys({
     count: filtered.length,
     selected: effectiveIdx,
@@ -133,8 +198,32 @@ export function PodsView({ cluster }: { cluster: string }) {
     onActivate: handleActivate,
     onEscape: handleEscape,
     searchRef,
-    extraKeys: { l: handleLogsKey },
+    extraKeys: { l: handleLogsKey, x: handleBulkKey },
   });
+
+  // Resolve bulk keys against the LIVE list at confirm time - pods deleted or
+  // rescheduled since selection silently drop out instead of erroring.
+  const bulkTargets = pods.items.filter((p) => bulk.has(`${p.namespace}/${p.name}`));
+
+  const runBulkDelete = useCallback(async (typed: string) => {
+    const targets = useFleet.getState().pods.items.filter((p) => bulk.has(`${p.namespace}/${p.name}`));
+    setBulkConfirm(false);
+    setBulk(new Set());
+    for (let i = 0; i < targets.length; i++) {
+      const p = targets[i];
+      // The dialog's own arming covers exactly one backend grant; every
+      // subsequent destructive call on a protected cluster re-arms with the
+      // same typed confirmation. A failed re-arm stops the batch honestly.
+      if (isProtected && i > 0) {
+        const r = await armProtected(cluster, typed);
+        if (!r.ok) {
+          useFleet.getState().setActionStatus({ kind: "error", message: `bulk delete stopped at ${p.namespace}/${p.name}: ${r.error || "could not re-arm protected action"}` });
+          return;
+        }
+      }
+      await deletePod(cluster, p.namespace, p.name);
+    }
+  }, [bulk, cluster, isProtected]);
 
   // Reset selection when filter changes.
   useEffect(() => {
@@ -173,6 +262,22 @@ export function PodsView({ cluster }: { cluster: string }) {
             <LiveIndicator live={pods.live} />
           </div>
 
+          {/* Bulk action bar - appears only while a selection exists */}
+          {bulk.size > 0 && (
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10, padding: "6px 10px", border: "0.5px solid var(--color-border-warning)", background: "var(--color-background-warning)", borderRadius: 4, fontSize: 12, flexShrink: 0 }}>
+              <span style={{ color: "var(--color-text-warning)", fontWeight: 600 }}>
+                {bulkTargets.length} pod{bulkTargets.length === 1 ? "" : "s"} selected
+              </span>
+              <button
+                onClick={() => setBulkConfirm(true)}
+                disabled={bulkTargets.length === 0}
+                style={{ ...btn, color: "var(--color-text-danger)", borderColor: "var(--color-border-danger)", background: "var(--color-background-danger)" }}
+              >delete selected</button>
+              <button onClick={() => setBulk(new Set())} style={btn}>clear</button>
+              <span style={{ color: "var(--color-text-tertiary)", fontSize: 10 }}>x toggles the highlighted row</span>
+            </div>
+          )}
+
           {/* Table */}
           {pods.loading && pods.items.length === 0 ? (
             <SkeletonRows rows={8} label="loading pods" />
@@ -180,7 +285,13 @@ export function PodsView({ cluster }: { cluster: string }) {
             <EmptyState
               icon={<IconCircleDot size={28} stroke={1.2} />}
               title={pods.items.length === 0 ? `No pods${pods.namespace ? ` in ${pods.namespace}` : ""}.` : "No pods match the current filter."}
-              hint={pods.items.length === 0 ? undefined : "Adjust the filter text or the needs-attention chip."}
+              action={pods.items.length > 0 ? {
+                label: "Clear filters",
+                onClick: () => {
+                  useFleet.getState().setPodsSearch("");
+                  useFleet.getState().setPodsNeedsAttention(false);
+                },
+              } : undefined}
             />
           ) : (
             <div style={{ fontFamily: "var(--font-mono)", fontSize: 12, display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}>
@@ -206,6 +317,8 @@ export function PodsView({ cluster }: { cluster: string }) {
                       p={p}
                       isKbSelected={isKbSelected}
                       isSelected={isSelected}
+                      bulkSelected={bulk.has(`${p.namespace}/${p.name}`)}
+                      onToggleBulk={() => toggleBulk(`${p.namespace}/${p.name}`)}
                       readyCount={readyCount}
                       nonInitCount={nonInitContainers.length}
                       onRowClick={() => {
@@ -236,6 +349,20 @@ export function PodsView({ cluster }: { cluster: string }) {
         )}
       </div>
 
+      {bulkConfirm && bulkTargets.length > 0 && (
+        <ConfirmDialog
+          title={`delete ${bulkTargets.length} pod${bulkTargets.length === 1 ? "" : "s"}`}
+          cluster={cluster}
+          detail={`${bulkTargets.slice(0, 5).map((p) => `${p.namespace}/${p.name}`).join(", ")}${bulkTargets.length > 5 ? ` and ${bulkTargets.length - 5} more` : ""} — controllers recreate owned pods; bare pods are NOT recreated.`}
+          protected={isProtected}
+          danger
+          confirmLabel={`Delete ${bulkTargets.length}`}
+          onConfirm={() => void runBulkDelete("")}
+          onConfirmTyped={(typed) => void runBulkDelete(typed)}
+          onCancel={() => setBulkConfirm(false)}
+        />
+      )}
+
       {/* Logs dock — persists across pod selection changes; close via ✕ only */}
       {logsTarget && (
         <LogsDock
@@ -259,11 +386,13 @@ export function PodsView({ cluster }: { cluster: string }) {
 // ---------------------------------------------------------------------------
 
 function PodRow({
-  p, isKbSelected, isSelected, readyCount, nonInitCount, onRowClick, onLogsClick,
+  p, isKbSelected, isSelected, bulkSelected, onToggleBulk, readyCount, nonInitCount, onRowClick, onLogsClick,
 }: {
   p: PodSummaryDTO;
   isKbSelected: boolean;
   isSelected: boolean;
+  bulkSelected: boolean;
+  onToggleBulk: () => void;
   readyCount: number;
   nonInitCount: number;
   onRowClick: () => void;
@@ -275,6 +404,7 @@ function PodRow({
       role="button"
       tabIndex={0}
       aria-selected={isKbSelected}
+      data-rowhost="true"
       onClick={onRowClick}
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") {
@@ -294,10 +424,22 @@ function PodRow({
       }}
     >
       <span style={{ width: 8, height: 8, borderRadius: "50%", background: rankDot[p.rank] }} />
-      <span>
-        <span style={{ color: "var(--color-text-tertiary)" }}>{p.namespace}</span>
-        {" / "}
-        <span style={{ fontWeight: 500 }}>{p.name}</span>
+      <span style={{ display: "flex", alignItems: "center", gap: 2, minWidth: 0 }}>
+        <input
+          type="checkbox"
+          checked={bulkSelected}
+          data-rowcopy={bulkSelected ? undefined : "true"}
+          aria-label={`select pod ${p.name} for bulk actions`}
+          onClick={(e) => e.stopPropagation()}
+          onChange={onToggleBulk}
+          style={{ margin: 0, flexShrink: 0, accentColor: "var(--color-text-info)" }}
+        />
+        <span style={ellipsis}>
+          <span style={{ color: "var(--color-text-tertiary)" }}>{p.namespace}</span>
+          {" / "}
+          <span style={{ fontWeight: 500 }}>{p.name}</span>
+        </span>
+        <CopyButton text={p.name} label={`copy pod name ${p.name}`} appearOnRowHover />
       </span>
       <span style={{ color: readyCount === nonInitCount ? "var(--color-text-success)" : "var(--color-text-warning)" }}>
         {readyCount}/{nonInitCount}
@@ -397,6 +539,8 @@ function PodDetailPanel({
         <span style={{ fontWeight: 500, ...ellipsis, flex: 1 }} title={`${namespace}/${name}`}>
           <span style={{ color: "var(--color-text-tertiary)" }}>{namespace}</span>/{name}
         </span>
+        <CopyButton text={name} label="copy pod name" />
+
         {/* Logs button — opens / re-targets the dock */}
         <button
           onClick={() => {
@@ -408,7 +552,7 @@ function PodDetailPanel({
           aria-label="open logs dock"
           title="Open logs in bottom dock"
         >logs</button>
-        <button onClick={onClose} style={{ ...btn, padding: "2px 8px", fontSize: 12 }} aria-label="close pod detail panel">✕</button>
+        <button onClick={onClose} style={{ ...btn, padding: "2px 8px", display: "inline-flex", alignItems: "center" }} aria-label="close pod detail panel"><IconX size={13} stroke={1.5} /></button>
       </div>
 
       {/* Tabs: info | yaml (logs moved to dock) */}
@@ -433,17 +577,7 @@ function PodDetailPanel({
               onDelete={(s) => setPending({ verb: "delete", summary: s })}
             />
           )}
-          {tab === "yaml" && (
-            <pre style={{
-              margin: 0, padding: 10,
-              background: "var(--color-background-secondary)",
-              border: "0.5px solid var(--color-border-tertiary)",
-              borderRadius: 4,
-              fontFamily: "var(--font-mono)", fontSize: 11, lineHeight: 1.5,
-              overflowX: "auto", whiteSpace: "pre-wrap", wordBreak: "break-all",
-              color: "var(--color-text-primary)",
-            }}>{detail.yaml}</pre>
-          )}
+          {tab === "yaml" && <YamlBlock text={detail.yaml} copyLabel="pod YAML" />}
         </>
       )}
 
@@ -545,9 +679,9 @@ function LogsDock({
           </button>
           <button
             onClick={onClose}
-            style={{ ...btn, padding: "2px 8px", fontSize: 12 }}
+            style={{ ...btn, padding: "2px 8px", display: "inline-flex", alignItems: "center" }}
             aria-label="close logs dock"
-          >✕</button>
+          ><IconX size={13} stroke={1.5} /></button>
         </div>
       </div>
 
@@ -584,6 +718,15 @@ function InfoTab({ detail, cluster, namespace, name, onRestart, onDelete }: {
 
   return (
     <>
+      {/* State first: the phase/rank/reason headline, scannable before any
+          key-value rows. */}
+      <InspectorStatus
+        tone={rankTone[p.rank] ?? "muted"}
+        label={p.phase || p.rank}
+        reason={p.reason || undefined}
+        detail={`${readyOf(p)} ready`}
+      />
+
       {/* Action buttons */}
       <div style={{ display: "flex", gap: 8, marginBottom: 12, alignItems: "center", flexWrap: "wrap" }}>
         {showRestart && (
@@ -621,9 +764,34 @@ function InfoTab({ detail, cluster, namespace, name, onRestart, onDelete }: {
 
       {/* Summary header */}
       <InspectorSection title="Summary">
-        <InfoRow label="phase">{p.phase}{p.reason ? ` · ${p.reason}` : ""}</InfoRow>
-        {p.ownerKind && <InfoRow label="owner">{p.ownerKind}/{p.ownerName}</InfoRow>}
-        {p.node && <InfoRow label="node">{p.node}</InfoRow>}
+        {p.ownerKind && (
+          <InfoRow label="owner">
+            {showRestart ? (
+              <InfoLink
+                label={`${p.ownerKind}/${p.ownerName}`}
+                title="open in Workloads"
+                onClick={() => {
+                  useFleet.getState().setSection("workloads");
+                  useFleet.getState().requestNavIntent({ kind: "select-workload", cluster, workloadKind: p.ownerKind, namespace: p.namespace, name: p.ownerName });
+                }}
+              />
+            ) : (
+              `${p.ownerKind}/${p.ownerName}`
+            )}
+          </InfoRow>
+        )}
+        {p.node && (
+          <InfoRow label="node">
+            <InfoLink
+              label={p.node}
+              title="open in Nodes"
+              onClick={() => {
+                useFleet.getState().setSection("nodes");
+                useFleet.getState().requestNavIntent({ kind: "select-node", cluster, node: p.node });
+              }}
+            />
+          </InfoRow>
+        )}
         {p.ip && <InfoRow label="ip">{p.ip}</InfoRow>}
         {detail.qosClass && <InfoRow label="qos">{detail.qosClass}</InfoRow>}
         {detail.serviceAccount && <InfoRow label="sa">{detail.serviceAccount}</InfoRow>}
@@ -638,13 +806,16 @@ function InfoTab({ detail, cluster, namespace, name, onRestart, onDelete }: {
           <span>name</span><span>state</span><span>image</span><span>rst</span>
         </div>
         {p.containers.map((c) => (
-          <div key={c.name} style={{ display: "grid", gridTemplateColumns: containerGridCols, gap: 6, fontSize: 11, padding: "2px 0", alignItems: "center" }}>
+          <div key={c.name} data-rowhost="true" style={{ display: "grid", gridTemplateColumns: containerGridCols, gap: 6, fontSize: 11, padding: "2px 0", alignItems: "center" }}>
             <span style={{ ...ellipsis }} title={c.name}>
               {c.name}
               {c.init && <span style={{ marginLeft: 4, fontSize: 9, color: "var(--color-text-tertiary)", background: "var(--color-background-secondary)", padding: "0 4px", borderRadius: 3 }}>init</span>}
             </span>
             <span style={{ color: c.ready ? "var(--color-text-success)" : "var(--color-text-danger)", ...ellipsis }} title={c.state}>{c.state || "—"}</span>
-            <span style={{ ...ellipsis, color: "var(--color-text-tertiary)" }} title={c.image}>{imageShort(c.image)}</span>
+            <span style={{ display: "flex", alignItems: "center", gap: 2, minWidth: 0 }}>
+              <span style={{ ...ellipsis, color: "var(--color-text-tertiary)" }} title={c.image}>{imageShort(c.image)}</span>
+              <CopyButton text={c.image} label={`copy image ref ${imageShort(c.image)}`} size={11} appearOnRowHover />
+            </span>
             <span style={{ color: c.restarts > 0 ? "var(--color-text-warning)" : "var(--color-text-tertiary)" }}>{c.restarts}</span>
           </div>
         ))}
@@ -653,30 +824,13 @@ function InfoTab({ detail, cluster, namespace, name, onRestart, onDelete }: {
       {/* Conditions */}
       {detail.conditions.length > 0 && (
         <InspectorSection title="Conditions" collapsible>
-          {detail.conditions.map((c) => (
-            <div key={c.type} style={{ display: "flex", gap: 8, alignItems: "baseline", fontSize: 11 }}>
-              <span style={{ width: 7, height: 7, borderRadius: "50%", background: condColor(c.status), display: "inline-block", flexShrink: 0 }} />
-              <span style={{ fontWeight: 500, flexShrink: 0, whiteSpace: "nowrap" }}>{c.type}</span>
-              <span style={{ color: "var(--color-text-secondary)", ...ellipsis }} title={c.message}>{c.message || c.reason}</span>
-            </div>
-          ))}
+          <InspectorConditions conditions={detail.conditions} />
         </InspectorSection>
       )}
 
       {/* Events */}
       <InspectorSection title="Events" count={detail.events.length} collapsible>
-        {detail.events.length === 0 ? (
-          <span style={{ color: "var(--color-text-tertiary)" }}>No events for this pod.</span>
-        ) : (
-          detail.events.map((e, i) => (
-            <div key={i} style={{ display: "flex", gap: 6, alignItems: "baseline", fontSize: 11, color: e.type === "Warning" ? "var(--color-text-danger)" : "var(--color-text-secondary)" }}>
-              <span style={{ width: 50, fontSize: 9, textTransform: "uppercase", flexShrink: 0 }}>{e.type}</span>
-              <span style={{ fontWeight: 500, width: 100, ...ellipsis, flexShrink: 0 }}>{e.reason}</span>
-              <span style={{ ...ellipsis, flex: 1 }} title={e.message}>{e.message}</span>
-              {e.count > 1 && <span style={{ color: "var(--color-text-tertiary)", flexShrink: 0 }}>×{e.count}</span>}
-            </div>
-          ))
-        )}
+        <InspectorEvents events={detail.events} emptyText="No events for this pod." />
       </InspectorSection>
     </>
   );
@@ -735,7 +889,7 @@ function ExecButtons({
             style={btn}
             title="Open interactive shell in container"
           >
-            open shell ▾
+            open shell <IconChevronDown size={11} stroke={1.7} style={{ verticalAlign: "-1px" }} />
           </button>
           {pickerOpen && (
             <div style={{
@@ -830,7 +984,7 @@ function DebugShellButton({
   return (
     <div ref={pickerRef} style={{ position: "relative" }}>
       <button onClick={() => setPickerOpen((v) => !v)} style={btn} title={tip}>
-        debug shell ▾
+        debug shell <IconChevronDown size={11} stroke={1.7} style={{ verticalAlign: "-1px" }} />
       </button>
       {pickerOpen && (
         <div style={{
@@ -869,5 +1023,21 @@ function InfoRow({ label, children }: { label: string; children: React.ReactNode
       <span style={{ color: "var(--color-text-tertiary)", width: 60, flexShrink: 0 }}>{label}</span>
       <span style={{ color: "var(--color-text-primary)" }}>{children}</span>
     </div>
+  );
+}
+
+// InfoLink: an InfoRow value that navigates (owner -> Workloads, node -> Nodes).
+function InfoLink({ label, title, onClick }: { label: string; title: string; onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      title={title}
+      style={{
+        background: "transparent", border: "none", padding: 0, cursor: "pointer",
+        color: "var(--color-text-info)", fontFamily: "var(--font-mono)", fontSize: 11,
+        textAlign: "left", overflowWrap: "anywhere",
+        textDecoration: "underline", textDecorationColor: "var(--color-border-secondary)", textUnderlineOffset: 2,
+      }}
+    >{label}</button>
   );
 }

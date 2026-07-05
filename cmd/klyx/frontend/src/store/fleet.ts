@@ -261,7 +261,9 @@ export type OwnerDTO = { kind: string; namespace: string; name: string };
 export type PodDTO = { name: string; ready: boolean; restarts: number; reason: string; node: string; ageSeconds: number };
 export type ResourceCellDTO = { usage: number | null; request: number | null; limit: number | null };
 export type WorkloadResourcesDTO = { cpu: ResourceCellDTO; mem: ResourceCellDTO };
-export type WorkloadDTO = { kind: string; namespace: string; name: string; desired: number; ready: number; available: number; updated: number; restarts: number; reason: string; rank: "unhealthy"|"degraded"|"restarts"|"healthy"; gitops: OwnerDTO | null; pods: PodDTO[]; resources: WorkloadResourcesDTO };
+// stale: spec changed, controller has not observed it - status/rank reflect
+// the previous spec; render as transitioning ("dim = not yet realized").
+export type WorkloadDTO = { kind: string; namespace: string; name: string; desired: number; ready: number; available: number; updated: number; restarts: number; reason: string; rank: "unhealthy"|"degraded"|"restarts"|"healthy"; gitops: OwnerDTO | null; pods: PodDTO[]; resources: WorkloadResourcesDTO; stale?: boolean; generation?: number; observedGeneration?: number };
 export type WorkloadUsageDTO = { cpuUsage: number | null; memUsage: number | null };
 export type WorkloadMetricsStatusDTO = { available: boolean; message: string; updatedAt: string };
 export type WorkloadMetricsResultDTO = { status: WorkloadMetricsStatusDTO; usage: Record<string, WorkloadUsageDTO> };
@@ -355,6 +357,7 @@ export type Route =
   | { name: "fleet" }
   | { name: "forwards" }
   | { name: "settings" }
+  | { name: "activity" }
   | { name: "cluster"; cluster: string; section: ClusterSection; resource?: ResourceRef; instance?: InstanceRef; gateway?: GatewayRef; argoView?: ArgoViewMode };
 
 export const SECTION_LABELS: Record<ClusterSection, string> = {
@@ -508,6 +511,59 @@ type ArgoSlice = {
 // ---- / Helm types -------------------------------------------------------------
 
 export type ActionStatus = { kind: "success" | "error"; message: string };
+// One toast on screen / one row in the activity log. `at` is epoch ms.
+export type ActionEvent = ActionStatus & { id: number; at: number };
+
+// The activity log survives relaunches: "what did I do and did it succeed"
+// must be answerable the morning after, especially on protected clusters.
+// Storage helpers live here (not store/persist.ts) to avoid an import cycle.
+const ACTION_LOG_KEY = "klyx-action-log";
+const ACTION_LOG_MAX = 200;
+const MAX_VISIBLE_TOASTS = 4;
+let nextActionId = 1;
+
+function loadActionLog(): ActionEvent[] {
+  try {
+    const raw = localStorage.getItem(ACTION_LOG_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    const entries = parsed.filter((e): e is ActionEvent => e && typeof e.message === "string" && typeof e.at === "number");
+    nextActionId = entries.reduce((m, e) => Math.max(m, e.id), 0) + 1;
+    return entries.slice(0, ACTION_LOG_MAX);
+  } catch {
+    return [];
+  }
+}
+
+function saveActionLog(log: ActionEvent[]): void {
+  try {
+    localStorage.setItem(ACTION_LOG_KEY, JSON.stringify(log));
+  } catch {
+    // best-effort - a full or unavailable storage must never block an action
+  }
+}
+
+// NavIntent is a one-shot cross-view request (the pods nsRequest pattern,
+// generalized): the palette or a cross-link navigates to a section and parks
+// an intent; the target view consumes it once its data is loaded and opens
+// the matching dialog/selection. Verbs only ever OPEN the existing confirm or
+// operation composer - the intent channel never fires an API call itself, so
+// protected-cluster arming and danger confirms are never bypassed.
+export type NavIntent =
+  | { kind: "drain-node"; cluster: string; node: string }
+  | { kind: "cordon-node"; cluster: string; node: string; cordon: boolean }
+  | { kind: "restart-workload"; cluster: string; workloadKind: WorkloadKind; namespace: string; name: string }
+  | { kind: "scale-workload"; cluster: string; workloadKind: WorkloadKind; namespace: string; name: string }
+  | { kind: "reconcile-flux"; cluster: string; fluxKind: string; namespace: string; name: string }
+  | { kind: "suspend-flux"; cluster: string; fluxKind: string; namespace: string; name: string; suspend: boolean }
+  | { kind: "sync-argo"; cluster: string; namespace: string; name: string }
+  | { kind: "refresh-argo"; cluster: string; namespace: string; name: string }
+  | { kind: "logs-pod"; cluster: string; namespace: string; name: string }
+  | { kind: "select-pod"; cluster: string; namespace: string; name: string }
+  | { kind: "select-workload"; cluster: string; workloadKind: string; namespace: string; name: string }
+  | { kind: "select-node"; cluster: string; node: string }
+  | { kind: "select-flux"; cluster: string; fluxKind: string; namespace: string; name: string };
 
 // Overview triage summary — fetched once per cluster open, never mutated by the view slices.
 export type OverviewSummary = {
@@ -577,9 +633,21 @@ type FleetState = {
   setExternalSecretsLoading: (cluster: string) => void;
   clearExternalSecrets: () => void;
   selectExternalSecret: (key: string | null) => void;
+  // actionStatus keeps the latest result (convenient for tests and callers);
+  // actionToasts is the on-screen queue - concurrent results stack instead of
+  // overwriting each other; actionLog is the persisted history behind the
+  // Activity view.
   actionStatus: ActionStatus | null;
+  actionToasts: ActionEvent[];
+  actionLog: ActionEvent[];
   setActionStatus: (s: ActionStatus) => void;
+  dismissActionToast: (id: number) => void;
   clearActionStatus: () => void;
+  clearActionLog: () => void;
+  openActivity: () => void;
+  navIntent: NavIntent | null;
+  requestNavIntent: (i: NavIntent) => void;
+  clearNavIntent: () => void;
   forwards: ForwardDTO[];
   setForwards: (f: ForwardDTO[]) => void;
   crd: CRDSlice;
@@ -774,8 +842,29 @@ export const useFleet = create<FleetState>((set) => ({
   clearExternalSecrets: () => set({ externalsecrets: { cluster: null, secrets: [], stores: [], loading: false, watchError: null, selectedKey: null } }),
   selectExternalSecret: (key) => set((s) => ({ externalsecrets: { ...s.externalsecrets, selectedKey: key } })),
   actionStatus: null,
-  setActionStatus: (actionStatus) => set({ actionStatus }),
-  clearActionStatus: () => set({ actionStatus: null }),
+  actionToasts: [],
+  actionLog: loadActionLog(),
+  setActionStatus: (actionStatus) =>
+    set((s) => {
+      const event: ActionEvent = { ...actionStatus, id: nextActionId++, at: Date.now() };
+      const actionLog = [event, ...s.actionLog].slice(0, ACTION_LOG_MAX);
+      saveActionLog(actionLog);
+      return {
+        actionStatus,
+        actionToasts: [...s.actionToasts, event].slice(-MAX_VISIBLE_TOASTS),
+        actionLog,
+      };
+    }),
+  dismissActionToast: (id) => set((s) => ({ actionToasts: s.actionToasts.filter((t) => t.id !== id) })),
+  clearActionStatus: () => set({ actionStatus: null, actionToasts: [] }),
+  clearActionLog: () => {
+    saveActionLog([]);
+    set({ actionLog: [] });
+  },
+  openActivity: () => set({ route: { name: "activity" } }),
+  navIntent: null,
+  requestNavIntent: (navIntent) => set({ navIntent }),
+  clearNavIntent: () => set({ navIntent: null }),
   forwards: [],
   setForwards: (forwards) => set({ forwards }),
   crd: { cluster: null, groups: [], loading: false, expanded: [], counts: {}, groupBy: "group", search: "", builtinCategory: null },

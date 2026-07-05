@@ -182,7 +182,7 @@ describe("PodsView", () => {
     // Verify no tab with role=button and exact text "logs" in the tabs row by
     // checking the yaml tab switches content correctly instead.
     fireEvent.click(getByText("yaml"));
-    expect(getByText(/apiVersion: v1/)).toBeTruthy();
+    expect(document.body.textContent).toContain("apiVersion: v1");
     // No container selector visible at this point (dock not open yet)
     expect(queryByRole("combobox", { name: /container/i })).toBeNull();
   });
@@ -328,7 +328,7 @@ describe("PodsView", () => {
     }));
     const { getByText } = render(<PodsView cluster="homelab" />);
     fireEvent.click(getByText("yaml"));
-    expect(getByText(/apiVersion: v1/)).toBeTruthy();
+    expect(document.body.textContent).toContain("apiVersion: v1");
   });
 
   it("close button clears selected pod", () => {
@@ -597,6 +597,36 @@ describe("PodsView", () => {
     const confirmBtns = getAllByRole("button", { name: "Restart" });
     fireEvent.click(confirmBtns[confirmBtns.length - 1]);
     expect(rolloutRestart).toHaveBeenCalledWith("homelab", "StatefulSet", "db", "postgres");
+  });
+
+  // --- Bulk selection -------------------------------------------------------
+
+  it("checkbox selection raises the bulk bar; one confirm deletes every target", async () => {
+    seed([healthy, broken]);
+    const { getByRole, getByText, getAllByRole, findByText } = render(<PodsView cluster="homelab" />);
+    fireEvent.click(getByRole("checkbox", { name: "select pod grafana-xyz for bulk actions" }));
+    fireEvent.click(getByRole("checkbox", { name: "select pod api-crash for bulk actions" }));
+    expect(getByText("2 pods selected")).toBeTruthy();
+    fireEvent.click(getByText("delete selected"));
+    await findByText("delete 2 pods");
+    const confirmBtns = getAllByRole("button", { name: "Delete 2" });
+    await act(async () => {
+      fireEvent.click(confirmBtns[confirmBtns.length - 1]);
+    });
+    expect(deletePod).toHaveBeenCalledWith("homelab", "monitoring", "grafana-xyz");
+    expect(deletePod).toHaveBeenCalledWith("homelab", "default", "api-crash");
+    // selection cleared after the batch
+    expect(useFleet.getState().pods.items.length).toBe(2);
+  });
+
+  it("x toggles bulk selection of the keyboard row", () => {
+    seed([broken, healthy]);
+    const { getByText } = render(<PodsView cluster="homelab" />);
+    fireEvent.keyDown(window, { key: "j" }); // select first row
+    fireEvent.keyDown(window, { key: "x" }); // toggle bulk
+    expect(getByText("1 pod selected")).toBeTruthy();
+    fireEvent.keyDown(window, { key: "x" }); // toggle off
+    expect(useFleet.getState().pods.items.length).toBe(2);
   });
 });
 

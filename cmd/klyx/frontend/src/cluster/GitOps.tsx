@@ -7,7 +7,15 @@ import type { FluxDiffDTO } from "../bridge/gitops";
 import { ConfirmDialog } from "../chrome/ConfirmDialog";
 import { MetaTile, OperationDialog, OptionTile } from "../chrome/OperationDialog";
 import { useListKeys } from "../chrome/useListKeys";
+import { useNavIntent } from "../chrome/useNavIntent";
+import { CopyButton } from "../chrome/CopyButton";
+import { EmptyState } from "../chrome/EmptyState";
+import { SkeletonRows } from "../chrome/SkeletonRows";
+import { WatchErrorBanner } from "../chrome/WatchErrorBanner";
+import { IconGitBranch } from "@tabler/icons-react";
+import { wellKnownResourceRef } from "./resourceRefs";
 import { Badge, FilterButton, SummaryCell, Section, StatusDot, readyColor, ellipsis, actionBtn, frame } from "../chrome/primitives";
+import { compactCount } from "../chrome/format";
 import { SyncingChip, staleStyle } from "./staleness";
 
 type FluxFilter = "all" | "attention" | "suspended" | "kustomizations" | "helmreleases" | "sources";
@@ -121,6 +129,21 @@ export function GitOps({ cluster }: { cluster: string }) {
   }, [cluster, absent]);
 
   const rows = gitops.cluster === cluster ? gitops.resources : [];
+
+  // Palette verbs / cross-links land here as one-shot intents once the watch
+  // has synced. Reconcile opens the composer; suspend/resume their confirm.
+  useNavIntent(cluster, ["reconcile-flux", "suspend-flux", "select-flux"], (intent) => {
+    if (gitops.loading || rows.length === 0) return "wait";
+    if (!("fluxKind" in intent)) return "missing";
+    const r = rows.find((x) => x.kind === intent.fluxKind && x.namespace === intent.namespace && x.name === intent.name);
+    if (!r) return "missing";
+    expand(keyOf(r));
+    void getResourceDetail(cluster, r.kind, r.namespace, r.name);
+    if (intent.kind === "reconcile-flux") setReconcileTarget(r);
+    else if (intent.kind === "suspend-flux") setPending({ verb: intent.suspend ? "suspend" : "resume", r });
+    return "consumed";
+  }, [rows, gitops.loading]);
+
   const orderedRows = useMemo(
     () => [...rows].sort((a, b) => rank(a) - rank(b) || a.namespace.localeCompare(b.namespace) || a.name.localeCompare(b.name)),
     [rows],
@@ -206,9 +229,7 @@ export function GitOps({ cluster }: { cluster: string }) {
       </div>
 
       {gitops.cluster === cluster && gitops.watchError && (
-        <div style={{ padding: "8px 12px", borderRadius: "var(--border-radius-md)", border: "0.5px solid var(--color-text-danger)", color: "var(--color-text-danger)", fontSize: 12 }}>
-          Flux watch is failing - this list may be empty or stale, not clean: {gitops.watchError}
-        </div>
+        <WatchErrorBanner tool="Flux" error={gitops.watchError} />
       )}
 
       <div style={{ ...frame, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", overflow: "hidden" }}>
@@ -239,11 +260,15 @@ export function GitOps({ cluster }: { cluster: string }) {
       </div>
 
       {gitops.loading && rows.length === 0 && allSources.length === 0 ? (
-        <div style={{ color: "var(--color-text-secondary)", fontSize: 13 }}>Loading reconciliation state…</div>
+        <SkeletonRows rows={7} label="loading reconciliation state" />
       ) : filter === "sources" ? (
         <SourcesPanel sources={orderedSources} />
       ) : rows.length === 0 ? (
-        <div style={{ color: "var(--color-text-secondary)", fontSize: 13 }}>No Flux resources found.</div>
+        <EmptyState
+          icon={<IconGitBranch size={28} stroke={1.2} />}
+          title="No Flux resources on this cluster."
+          hint="Flux is installed but no Kustomizations or HelmReleases exist yet."
+        />
       ) : (
         <div style={{ flex: 1, minHeight: 0, display: "grid", gridTemplateColumns: "minmax(440px, 1.25fr) minmax(320px, 0.75fr)", gap: 12, alignItems: "stretch", overflow: "hidden" }}>
           <div style={{ ...frame, overflow: "hidden", minHeight: 0, display: "flex", flexDirection: "column" }}>
@@ -257,7 +282,10 @@ export function GitOps({ cluster }: { cluster: string }) {
             </div>
             <div data-testid="flux-resource-scroll" style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
               {visibleRows.length === 0 ? (
-                <div style={{ padding: 14, color: "var(--color-text-secondary)", fontSize: 13 }}>No Flux resources match the current filter.</div>
+                <EmptyState
+                  title="No Flux resources match the current filter."
+                  action={{ label: "Clear filters", onClick: () => { setFilter("all"); setQuery(""); } }}
+                />
               ) : visibleRows.map((r, i) => {
                 const k = keyOf(r);
                 const open = gitops.expandedKey === k;
@@ -514,11 +542,37 @@ function DetailPanel({ cluster, resource, detail, deps, onReconcile, onToggleSus
       </Section>
       {resource.kind === "Kustomization" ? (
         <Section title={`Inventory (${detail.inventory.length})`}>
-          {detail.inventory.length === 0 ? <Muted>no managed objects</Muted> : detail.inventory.map((e) => (
-            <div key={`${e.kind}/${e.namespace}/${e.name}`} style={{ fontFamily: "var(--font-mono)", color: "var(--color-text-secondary)", ...ellipsis }}>
-              {e.kind} · {e.namespace ? `${e.namespace}/` : ""}{e.name}
-            </div>
-          ))}
+          {detail.inventory.length === 0 ? <Muted>no managed objects</Muted> : detail.inventory.map((e) => {
+            // Argo's app resources walk to the live object; Flux's inventory
+            // now does the same for every kind Klyx can route to.
+            const ref = wellKnownResourceRef(e.group, e.kind);
+            const label = <>{e.kind} · {e.namespace ? `${e.namespace}/` : ""}{e.name}</>;
+            if (!ref) {
+              return (
+                <div key={`${e.kind}/${e.namespace}/${e.name}`} style={{ fontFamily: "var(--font-mono)", color: "var(--color-text-secondary)", ...ellipsis }}>
+                  {label}
+                </div>
+              );
+            }
+            return (
+              <button
+                key={`${e.kind}/${e.namespace}/${e.name}`}
+                onClick={() => {
+                  const nav = useFleet.getState();
+                  nav.openResource(ref);
+                  nav.openInstance(ref.scope === "Cluster" ? "" : e.namespace, e.name);
+                }}
+                title={`open ${e.kind} ${e.namespace ? `${e.namespace}/` : ""}${e.name}`}
+                style={{
+                  display: "block", width: "100%", background: "transparent", border: "none", padding: 0,
+                  cursor: "pointer", textAlign: "left", fontFamily: "var(--font-mono)", fontSize: "inherit",
+                  color: "var(--color-text-info)", ...ellipsis,
+                }}
+              >
+                {label}
+              </button>
+            );
+          })}
         </Section>
       ) : (
         <Section title="Inventory"><Muted>no inventory in the HelmRelease CR</Muted></Section>
@@ -638,7 +692,7 @@ function EventsSection({ events }: { events: EventRowDTO[] }) {
               <span style={{ color: warn ? "var(--color-text-danger)" : "var(--color-text-primary)", fontWeight: 500 }}>{e.reason}</span>
               <span style={{ color: "var(--color-text-tertiary)", fontSize: 11, marginLeft: 6 }}>· {ago(sec) || "just now"}</span>
               {drift && <span style={{ fontFamily: "var(--font-mono)", fontSize: 9, padding: "1px 5px", borderRadius: 3, marginLeft: 6, border: "0.5px solid var(--color-border-info)", color: "var(--color-text-info)", background: "var(--color-background-info)" }}>drift</span>}
-              {e.count > 1 && <span style={{ color: "var(--color-text-tertiary)", fontSize: 10, marginLeft: 6 }}>×{e.count}</span>}
+              {e.count > 1 && <span title={`${e.count.toLocaleString()} occurrences`} style={{ color: "var(--color-text-tertiary)", fontSize: 10, marginLeft: 6 }}>×{compactCount(e.count)}</span>}
               {e.message && <div style={{ color: "var(--color-text-secondary)", fontSize: 11, marginTop: 1, ...ellipsis }} title={e.message}>{e.message}</div>}
             </div>
           </div>
@@ -654,6 +708,7 @@ function InspectorHeader({ resource, color }: { resource: FluxResourceDTO; color
       <div style={{ color: "var(--color-text-tertiary)", fontSize: 11 }}>{resource.kind} / {resource.namespace}</div>
       <div style={{ display: "flex", gap: 8, alignItems: "center", minWidth: 0, marginTop: 2 }}>
         <span style={{ fontFamily: "var(--font-mono)", fontSize: 15, fontWeight: 600, ...ellipsis }}>{resource.name}</span>
+        <CopyButton text={resource.name} label={`copy name ${resource.name}`} />
         <span style={{ color, fontSize: 11 }}>{statusText(resource)}</span>
         {needsAttention(resource) && resource.reason && <ReasonChip reason={resource.reason} bad={resource.ready === "Failed"} />}
       </div>

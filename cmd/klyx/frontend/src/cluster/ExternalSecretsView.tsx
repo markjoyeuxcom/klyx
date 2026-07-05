@@ -1,8 +1,15 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useFleet } from "../store/fleet";
 import type { ExternalSecretDTO, ExternalSecretStoreDTO } from "../store/fleet";
 import { openExternalSecrets, closeExternalSecrets } from "../bridge/externalsecrets";
+import { useListKeys } from "../chrome/useListKeys";
 import { Badge, FilterButton, SummaryCell, Section, Field, StatusDot, frame, ellipsis, mono, readyColor, toneColor } from "../chrome/primitives";
+import { CopyButton } from "../chrome/CopyButton";
+import { EmptyState } from "../chrome/EmptyState";
+import { SkeletonRows } from "../chrome/SkeletonRows";
+import { WatchErrorBanner } from "../chrome/WatchErrorBanner";
+import { IconShieldLock } from "@tabler/icons-react";
+import { SECRET_REF } from "./resourceRefs";
 
 type EsoFilter = "all" | "attention" | "stale" | "stores";
 
@@ -72,6 +79,8 @@ export function ExternalSecretsView({ cluster }: { cluster: string }) {
   const [filter, setFilter] = useState<EsoFilter>("all");
   const [query, setQuery] = useState("");
   const [namespace, setNamespace] = useState("");
+  const [kbKey, setKbKey] = useState<string | null>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
   const absent = tier === "Absent";
 
   useEffect(() => {
@@ -105,6 +114,33 @@ export function ExternalSecretsView({ cluster }: { cluster: string }) {
     [stores],
   );
 
+  // Keyboard parity with the Certs lens (j/k, Enter opens the inspector,
+  // Esc closes it, / focuses the filter) - ESO is a near-clone of Certs and
+  // was the one lens without it.
+  const kbIdx = kbKey === null ? -1 : visibleSecrets.findIndex((e) => keyOf(e) === kbKey);
+  const handleKbSelect = useCallback((idx: number) => {
+    const e = visibleSecrets[idx];
+    if (e) setKbKey(keyOf(e));
+  }, [visibleSecrets]);
+  const handleKbActivate = useCallback((idx: number) => {
+    const e = visibleSecrets[idx];
+    if (!e) return;
+    const k = keyOf(e);
+    select(useFleet.getState().externalsecrets.selectedKey === k ? null : k);
+  }, [visibleSecrets, select]);
+  const handleKbEscape = useCallback(() => {
+    if (useFleet.getState().externalsecrets.selectedKey) select(null);
+  }, [select]);
+  useListKeys({
+    // The stores filter renders a different list; suspend row nav there.
+    count: filter === "stores" ? 0 : visibleSecrets.length,
+    selected: kbIdx,
+    onSelect: handleKbSelect,
+    onActivate: handleKbActivate,
+    onEscape: handleKbEscape,
+    searchRef,
+  });
+
   if (absent) {
     return <div style={{ padding: 24, color: "var(--color-text-secondary)", fontSize: 13 }}>External Secrets Operator not detected on this cluster.</div>;
   }
@@ -126,9 +162,7 @@ export function ExternalSecretsView({ cluster }: { cluster: string }) {
       </div>
 
       {eso.cluster === cluster && eso.watchError && (
-        <div style={{ padding: "8px 12px", borderRadius: "var(--border-radius-md)", border: "0.5px solid var(--color-text-danger)", color: "var(--color-text-danger)", fontSize: 12 }}>
-          external-secrets watch is failing - this list may be empty or stale, not clean: {eso.watchError}
-        </div>
+        <WatchErrorBanner tool="external-secrets" error={eso.watchError} />
       )}
 
       <div style={{ ...frame, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", overflow: "hidden" }}>
@@ -155,6 +189,7 @@ export function ExternalSecretsView({ cluster }: { cluster: string }) {
           {namespaces.map((ns) => <option key={ns} value={ns}>{ns}</option>)}
         </select>
         <input
+          ref={searchRef}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder="filter external secrets"
@@ -165,11 +200,15 @@ export function ExternalSecretsView({ cluster }: { cluster: string }) {
       </div>
 
       {eso.loading && secrets.length === 0 && stores.length === 0 ? (
-        <div style={{ color: "var(--color-text-secondary)", fontSize: 13 }}>Loading external secret state…</div>
+        <SkeletonRows rows={7} label="loading external secret state" />
       ) : filter === "stores" ? (
         <StoresPanel stores={orderedStores} />
       ) : secrets.length === 0 ? (
-        <div style={{ color: "var(--color-text-secondary)", fontSize: 13 }}>No external secrets found.</div>
+        <EmptyState
+          icon={<IconShieldLock size={28} stroke={1.2} />}
+          title="No ExternalSecrets on this cluster."
+          hint="The operator is installed but no ExternalSecret objects exist yet."
+        />
       ) : (
         <div style={{ flex: 1, minHeight: 0, display: "grid", gridTemplateColumns: "minmax(440px, 1.25fr) minmax(320px, 0.75fr)", gap: 12, alignItems: "stretch", overflow: "hidden" }}>
           <div style={{ ...frame, overflow: "hidden", minHeight: 0, display: "flex", flexDirection: "column" }}>
@@ -183,10 +222,21 @@ export function ExternalSecretsView({ cluster }: { cluster: string }) {
             </div>
             <div data-testid="eso-scroll" style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
               {visibleSecrets.length === 0 ? (
-                <div style={{ padding: 14, color: "var(--color-text-secondary)", fontSize: 13 }}>No external secrets match the current filter.</div>
+                <EmptyState
+                  title="No external secrets match the current filter."
+                  action={{ label: "Clear filters", onClick: () => { setFilter("all"); setQuery(""); setNamespace(""); } }}
+                />
               ) : visibleSecrets.map((e) => {
                 const k = keyOf(e);
-                return <SecretRow key={k} e={e} open={eso.selectedKey === k} onClick={() => (eso.selectedKey === k ? select(null) : select(k))} />;
+                return (
+                  <SecretRow
+                    key={k}
+                    e={e}
+                    open={eso.selectedKey === k}
+                    kbSelected={kbKey === k}
+                    onClick={() => (eso.selectedKey === k ? select(null) : select(k))}
+                  />
+                );
               })}
             </div>
           </div>
@@ -200,17 +250,26 @@ export function ExternalSecretsView({ cluster }: { cluster: string }) {
   );
 }
 
-function SecretRow({ e, open, onClick }: { e: ExternalSecretDTO; open: boolean; onClick: () => void }) {
+function SecretRow({ e, open, kbSelected, onClick }: { e: ExternalSecretDTO; open: boolean; kbSelected: boolean; onClick: () => void }) {
   const bad = e.state === "Failed";
+  // Keep the keyboard selection visible as j/k moves it past the fold.
+  // Optional call: jsdom has no scrollIntoView.
+  const ref = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (kbSelected) ref.current?.scrollIntoView?.({ block: "nearest" });
+  }, [kbSelected]);
   return (
     <button
+      ref={ref}
+      aria-selected={kbSelected}
       onClick={onClick}
       style={{
         width: "100%", textAlign: "left", display: "grid",
         gridTemplateColumns: "3px minmax(180px,1.3fr) minmax(120px,1fr) 96px 64px 84px",
         gap: 10, alignItems: "center", padding: "7px 12px", cursor: "pointer",
         border: "none", borderBottom: "0.5px solid var(--color-border-tertiary)",
-        background: open ? "var(--color-background-secondary)" : "transparent", color: "var(--color-text-primary)",
+        background: kbSelected || open ? "var(--color-background-secondary)" : "transparent", color: "var(--color-text-primary)",
+        boxShadow: kbSelected ? "inset 2px 0 0 var(--color-text-info)" : undefined,
       }}
     >
       <span style={{ alignSelf: "stretch", background: bad ? "var(--color-text-danger)" : e.stale ? "var(--color-text-warning)" : "transparent" }} />
@@ -253,7 +312,10 @@ function SecretInspector({ e, store }: { e: ExternalSecretDTO; store: ExternalSe
   return (
     <div style={{ ...frame, padding: 14, display: "flex", flexDirection: "column", gap: 12 }}>
       <div>
-        <div style={{ ...mono, fontSize: 13, fontWeight: 500 }}>{e.namespace}/{e.name}</div>
+        <div style={{ display: "flex", alignItems: "center", gap: 2 }}>
+          <div style={{ ...mono, fontSize: 13, fontWeight: 500 }}>{e.namespace}/{e.name}</div>
+          <CopyButton text={e.name} label={`copy external secret name ${e.name}`} />
+        </div>
         <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 5, marginTop: 6 }}>
           <EsoBadge tone={e.state === "Synced" && !e.stale ? "success" : e.state === "Failed" ? "danger" : "warning"}>{e.stale ? "stale" : e.state.toLowerCase()}</EsoBadge>
           {e.stale && e.state === "Synced" && <EsoBadge tone="warning">last sync ok, refresh stopped</EsoBadge>}
@@ -286,7 +348,22 @@ function SecretInspector({ e, store }: { e: ExternalSecretDTO; store: ExternalSe
       </Section>
 
       <Section title="target secret">
-        <Field label="name" value={e.targetSecret || "—"} />
+        {e.targetSecret ? (
+          <div style={{ display: "flex", gap: 8, alignItems: "baseline", fontSize: 11 }}>
+            <span style={{ color: "var(--color-text-tertiary)", width: 72, flexShrink: 0 }}>name</span>
+            <button
+              onClick={() => {
+                const nav = useFleet.getState();
+                nav.openResource(SECRET_REF);
+                nav.openInstance(e.namespace, e.targetSecret);
+              }}
+              title={`open Secret ${e.namespace}/${e.targetSecret}`}
+              style={{ background: "transparent", border: "none", padding: 0, cursor: "pointer", textAlign: "left", color: "var(--color-text-info)", fontFamily: "var(--font-mono)", fontSize: 11, overflowWrap: "anywhere", textDecoration: "underline", textDecorationColor: "var(--color-border-secondary)", textUnderlineOffset: 2 }}
+            >{e.targetSecret}</button>
+          </div>
+        ) : (
+          <Field label="name" value="—" />
+        )}
       </Section>
 
       <Section title="refresh">

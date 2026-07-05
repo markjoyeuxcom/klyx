@@ -4,8 +4,10 @@ import { getInstanceDetail, revealSecretKey, copyText, dryRunInstanceYAML, apply
 import { armProtected } from "../bridge/configsvc";
 import { openPodDetail } from "../bridge/pods";
 import { ForwardPopover } from "./ForwardPopover";
-import { InspectorSection, InspectorTabButton, MetadataChips, inspectorStateBox } from "./ResourceInspector";
+import { InspectorConditions, InspectorEvents, InspectorSection, InspectorTabButton, MetadataChips, inspectorStateBox } from "./ResourceInspector";
 import { actionBtn, ellipsis } from "../chrome/primitives";
+import { CopyButton } from "../chrome/CopyButton";
+import { IconX } from "@tabler/icons-react";
 
 type DetailTab = "summary" | "related" | "events" | "yaml";
 
@@ -19,25 +21,6 @@ function age(created: string): string {
   if (sec < 86400) return `${Math.floor(sec / 3600)}h`;
   return `${Math.floor(sec / 86400)}d`;
 }
-
-// Conditions where True means trouble and False is the healthy state - the
-// inverse of the usual Ready-style polarity. HPA's ScalingLimited=False means
-// "the desired count is within range" (good); node pressure conditions are the
-// same family. Without this, a healthy HPA renders a red dot.
-const NEGATIVE_POLARITY = new Set([
-  "ScalingLimited",
-  "MemoryPressure",
-  "DiskPressure",
-  "PIDPressure",
-  "NetworkUnavailable",
-]);
-
-const condColor = (status: string, type?: string) => {
-  const negative = type !== undefined && NEGATIVE_POLARITY.has(type);
-  const healthy = negative ? status === "False" : status === "True";
-  const unhealthy = negative ? status === "True" : status === "False";
-  return healthy ? "var(--color-text-success)" : unhealthy ? "var(--color-text-danger)" : "var(--color-text-info)";
-};
 
 type GitOwner = { tool: "Argo CD" | "Flux" | "Helm"; detail: string };
 type DiffLine = { type: "context" | "added" | "removed"; text: string; oldLine?: number; newLine?: number };
@@ -683,10 +666,13 @@ function ServiceBackingSection({
   );
 }
 
+// InstanceDetail renders as a resizable side panel inside InstanceList
+// (master-detail, the Pods pattern) - never as a full-page swap that throws
+// the list away. The panel header carries kind + name + refresh + close; the
+// drill path lives in the Header breadcrumb and the list beside it.
 export function InstanceDetail({ cluster, resource, instance }: { cluster: string; resource: ResourceRef; instance: InstanceRef }) {
   const id = useFleet((s) => s.instanceDetail);
   const closeInstance = useFleet((s) => s.closeInstance);
-  const closeResource = useFleet((s) => s.closeResource);
   const [copied, setCopied] = useState(false);
   const [tab, setTab] = useState<DetailTab>("summary");
 
@@ -707,18 +693,17 @@ export function InstanceDetail({ cluster, resource, instance }: { cluster: strin
   };
 
   return (
-    <div style={{ padding: "14px 16px", height: "100%", minHeight: 0, overflow: "hidden", boxSizing: "border-box", display: "flex", flexDirection: "column" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, flexShrink: 0 }}>
-        <button aria-label="back to resources" onClick={closeResource} style={{ ...linkBtn, color: "var(--color-text-info)" }}>resources</button>
-        <span style={{ color: "var(--color-text-tertiary)" }}>/</span>
-        <button aria-label="back to resource list" onClick={closeInstance} style={{ ...linkBtn, color: "var(--color-text-info)" }}>{resource.kind}</button>
-        <span style={{ color: "var(--color-text-tertiary)" }}>/</span>
-        <span style={{ fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--color-text-secondary)" }}>
-          {instance.namespace ? `${instance.namespace}/` : ""}{instance.name}
+    <div style={{ height: "100%", minHeight: 0, overflow: "hidden", boxSizing: "border-box", display: "flex", flexDirection: "column" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, flexShrink: 0, paddingBottom: 6, borderBottom: "0.5px solid var(--color-border-tertiary)" }}>
+        <span style={{ fontSize: 10, color: "var(--color-text-tertiary)", flexShrink: 0 }}>{resource.kind}</span>
+        <span style={{ fontFamily: "var(--font-mono)", fontSize: 12, fontWeight: 500, color: "var(--color-text-primary)", ...ellipsis }} title={`${instance.namespace ? `${instance.namespace}/` : ""}${instance.name}`}>
+          {instance.namespace ? <span style={{ color: "var(--color-text-tertiary)" }}>{instance.namespace}/</span> : null}{instance.name}
         </span>
-        {d && d.created && <span style={{ fontSize: 11, color: "var(--color-text-tertiary)" }}>{age(d.created)}</span>}
+        <CopyButton text={instance.name} label={`copy name ${instance.name}`} />
+        {d && d.created && <span style={{ fontSize: 11, color: "var(--color-text-tertiary)", flexShrink: 0 }}>{age(d.created)}</span>}
         <div style={{ flex: 1 }} />
         <button onClick={() => void getInstanceDetail(cluster, resource, instance)} style={actionBtn}>Refresh</button>
+        <button onClick={closeInstance} aria-label="close instance panel" style={{ ...actionBtn, display: "inline-flex", alignItems: "center" }}><IconX size={13} stroke={1.5} /></button>
       </div>
 
       {id.loading && !d ? (
@@ -754,13 +739,7 @@ export function InstanceDetail({ cluster, resource, instance }: { cluster: strin
 
                 {d.conditions.length > 0 && (
                   <InspectorSection title="Conditions" collapsible>
-                    {d.conditions.map((c) => (
-                      <div key={c.type} style={{ display: "flex", gap: 8, alignItems: "baseline" }}>
-                        <span style={{ width: 7, height: 7, borderRadius: "50%", background: condColor(c.status, c.type), display: "inline-block" }} />
-                        <span style={{ fontWeight: 500, flexShrink: 0, whiteSpace: "nowrap" }}>{c.type}</span>
-                        <span style={{ color: "var(--color-text-secondary)", ...ellipsis }} title={c.message}>{c.message || c.reason}</span>
-                      </div>
-                    ))}
+                    <InspectorConditions conditions={d.conditions} />
                   </InspectorSection>
                 )}
               </>
@@ -843,19 +822,7 @@ function RelatedSection({ cluster, related }: { cluster: string; related: Relate
 function EventsPanel({ events }: { events: EventDTO[] }) {
   return (
     <InspectorSection title="Events" count={events.length}>
-      {events.length === 0 ? (
-        <span style={{ color: "var(--color-text-tertiary)" }}>No events for this object.</span>
-      ) : (
-        events.map((e, i) => (
-          <div key={i} style={{ display: "flex", gap: 8, alignItems: "baseline", color: e.type === "Warning" ? "var(--color-text-danger)" : "var(--color-text-secondary)" }}>
-            <span style={{ width: 56, fontSize: 10, textTransform: "uppercase" }}>{e.type}</span>
-            <span style={{ fontWeight: 500, width: 120, ...ellipsis }}>{e.reason}</span>
-            <span style={{ ...ellipsis }} title={e.message}>{e.message}</span>
-            {e.count > 1 && <span style={{ color: "var(--color-text-tertiary)" }}>x{e.count}</span>}
-            <span style={{ color: "var(--color-text-tertiary)" }}>{age(e.lastSeen)}</span>
-          </div>
-        ))
-      )}
+      <InspectorEvents events={events} emptyText="No events for this object." />
     </InspectorSection>
   );
 }
@@ -1445,10 +1412,3 @@ const conflictBand: React.CSSProperties = {
   color: "var(--color-text-danger)",
 };
 
-const linkBtn: React.CSSProperties = {
-  background: "transparent",
-  border: 0,
-  padding: 0,
-  cursor: "pointer",
-  fontSize: 12,
-};

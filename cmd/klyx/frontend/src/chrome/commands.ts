@@ -5,12 +5,14 @@
 // jump-to-resource bridge call) as a side effect.
 
 import { useFleet, SECTION_LABELS, ClusterSection } from "../store/fleet";
-import type { ResourceRef, RouteNodeDTO } from "../store/fleet";
+import type { NavIntent, ResourceRef, RouteNodeDTO, WorkloadKind } from "../store/fleet";
 import { openPodDetail } from "../bridge/pods";
 import { openNodeDetail } from "../bridge/nodes";
 import { openHelmRelease } from "../bridge/helm";
 import { getResourceDetail } from "../bridge/gitops";
 import { copyText, getInstanceDetail } from "../bridge/crd";
+import { stopForward } from "../bridge/forwards";
+import { openShortcutsOverlay } from "./ShortcutsOverlay";
 import { setThemeChoice, THEMES, toggleTheme } from "../theme/ThemeProvider";
 import { BUILTIN_CATALOG } from "../cluster/builtins";
 import { supportsRiskFilter } from "../cluster/resourceRisk";
@@ -47,6 +49,15 @@ function openSection(s: FleetStore, section: ClusterSection, targetCluster?: str
     s.openCluster(targetCluster);
   }
   s.setSection(section);
+}
+
+// Verb commands navigate to the owning section and park a one-shot NavIntent;
+// the view consumes it once its data is loaded and opens its existing confirm
+// or operation composer. The palette never fires a day-2 API call directly -
+// protected-cluster arming and danger confirms are never bypassed.
+function openWithIntent(s: FleetStore, section: ClusterSection, targetCluster: string, intent: NavIntent): void {
+  openSection(s, section, targetCluster);
+  s.requestNavIntent(intent);
 }
 
 function fluxKey(r: { kind: string; namespace: string; name: string }): string {
@@ -120,6 +131,24 @@ export function buildCommands(s: FleetStore): Command[] {
     hint: (s.forwards?.length ?? 0) > 0 ? `${s.forwards.length} active` : undefined,
     run: () => s.openForwards(),
   });
+  cmds.push({
+    id: "activity",
+    group: "Clusters",
+    title: "Activity log",
+    hint: "recent action outcomes",
+    run: () => s.openActivity(),
+  });
+  // Stopping a forward is the one palette verb that acts directly - it is how
+  // the forwards popover already behaves (low-risk, instantly re-creatable).
+  for (const f of s.forwards ?? []) {
+    cmds.push({
+      id: `verb:stop-forward:${f.id}`,
+      group: "Actions",
+      title: `stop forward ${f.namespace}/${f.targetName} :${f.localPort}`,
+      hint: `${f.cluster} · ${f.status}`,
+      run: () => void stopForward(f.id),
+    });
+  }
 
   // --- Sections (only inside a cluster) --------------------------------------
   if (cluster) {
@@ -230,6 +259,13 @@ export function buildCommands(s: FleetStore): Command[] {
           void openPodDetail(podCluster, p.namespace, p.name);
         },
       });
+      cmds.push({
+        id: `verb:logs:${podCluster}/${p.namespace}/${p.name}`,
+        group: "Actions",
+        title: `logs ${p.namespace}/${p.name}`,
+        hint: podCluster,
+        run: () => openWithIntent(s, "pods", podCluster, { kind: "logs-pod", cluster: podCluster, namespace: p.namespace, name: p.name }),
+      });
     }
   }
 
@@ -248,6 +284,20 @@ export function buildCommands(s: FleetStore): Command[] {
           openSection(s, "nodes", nodeCluster);
           void openNodeDetail(nodeCluster, n.name);
         },
+      });
+      cmds.push({
+        id: `verb:drain:${nodeCluster}/${n.name}`,
+        group: "Actions",
+        title: `drain node ${n.name}`,
+        hint: `${nodeCluster} · opens the drain composer`,
+        run: () => openWithIntent(s, "nodes", nodeCluster, { kind: "drain-node", cluster: nodeCluster, node: n.name }),
+      });
+      cmds.push({
+        id: `verb:cordon:${nodeCluster}/${n.name}`,
+        group: "Actions",
+        title: n.unschedulable ? `uncordon node ${n.name}` : `cordon node ${n.name}`,
+        hint: nodeCluster,
+        run: () => openWithIntent(s, "nodes", nodeCluster, { kind: "cordon-node", cluster: nodeCluster, node: n.name, cordon: !n.unschedulable }),
       });
     }
   }
@@ -270,6 +320,25 @@ export function buildCommands(s: FleetStore): Command[] {
           }
         },
       });
+      if (workloadCluster) {
+        cmds.push({
+          id: `verb:restart:${workloadCluster}/${key}`,
+          group: "Actions",
+          title: `restart ${w.kind.toLowerCase()} ${w.namespace}/${w.name}`,
+          hint: workloadCluster,
+          run: () => openWithIntent(s, "workloads", workloadCluster, { kind: "restart-workload", cluster: workloadCluster, workloadKind: w.kind as WorkloadKind, namespace: w.namespace, name: w.name }),
+        });
+        // DaemonSets have no replica count - scale does not apply.
+        if (w.kind !== "DaemonSet") {
+          cmds.push({
+            id: `verb:scale:${workloadCluster}/${key}`,
+            group: "Actions",
+            title: `scale ${w.kind.toLowerCase()} ${w.namespace}/${w.name}`,
+            hint: `${workloadCluster} · ${w.ready}/${w.desired} ready`,
+            run: () => openWithIntent(s, "workloads", workloadCluster, { kind: "scale-workload", cluster: workloadCluster, workloadKind: w.kind as WorkloadKind, namespace: w.namespace, name: w.name }),
+          });
+        }
+      }
     }
   }
 
@@ -306,6 +375,20 @@ export function buildCommands(s: FleetStore): Command[] {
           void getResourceDetail(gitopsCluster, r.kind, r.namespace, r.name);
         },
       });
+      cmds.push({
+        id: `verb:reconcile:${gitopsCluster}/${key}`,
+        group: "Actions",
+        title: `reconcile ${r.kind.toLowerCase()} ${r.namespace}/${r.name}`,
+        hint: gitopsCluster,
+        run: () => openWithIntent(s, "gitops", gitopsCluster, { kind: "reconcile-flux", cluster: gitopsCluster, fluxKind: r.kind, namespace: r.namespace, name: r.name }),
+      });
+      cmds.push({
+        id: `verb:suspend:${gitopsCluster}/${key}`,
+        group: "Actions",
+        title: r.suspended ? `resume ${r.kind.toLowerCase()} ${r.namespace}/${r.name}` : `suspend ${r.kind.toLowerCase()} ${r.namespace}/${r.name}`,
+        hint: gitopsCluster,
+        run: () => openWithIntent(s, "gitops", gitopsCluster, { kind: "suspend-flux", cluster: gitopsCluster, fluxKind: r.kind, namespace: r.namespace, name: r.name, suspend: !r.suspended }),
+      });
     }
   }
 
@@ -325,6 +408,20 @@ export function buildCommands(s: FleetStore): Command[] {
             s.toggleArgoExpand(key);
           }
         },
+      });
+      cmds.push({
+        id: `verb:argo-sync:${argoCluster}/${key}`,
+        group: "Actions",
+        title: `sync app ${a.namespace}/${a.name}`,
+        hint: `${argoCluster} · opens the sync composer`,
+        run: () => openWithIntent(s, "argo", argoCluster, { kind: "sync-argo", cluster: argoCluster, namespace: a.namespace, name: a.name }),
+      });
+      cmds.push({
+        id: `verb:argo-refresh:${argoCluster}/${key}`,
+        group: "Actions",
+        title: `refresh app ${a.namespace}/${a.name}`,
+        hint: argoCluster,
+        run: () => openWithIntent(s, "argo", argoCluster, { kind: "refresh-argo", cluster: argoCluster, namespace: a.namespace, name: a.name }),
       });
     }
   }
@@ -417,6 +514,14 @@ export function buildCommands(s: FleetStore): Command[] {
       },
     });
   }
+
+  cmds.push({
+    id: "shortcuts",
+    group: "Clusters",
+    title: "Keyboard shortcuts",
+    hint: "also on ?",
+    run: () => openShortcutsOverlay(),
+  });
 
   // --- Theme ------------------------------------------------------------------
   cmds.push({

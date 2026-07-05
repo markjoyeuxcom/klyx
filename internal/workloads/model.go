@@ -49,4 +49,10 @@ type Workload struct {
 	GitOps                             *Owner
 	Pods                               []Pod
 	Resources                          WorkloadResources
+	// Generation vs ObservedGeneration: when spec changed but the controller
+	// has not observed it yet, status (and Rank) reflects the PREVIOUS spec.
+	// The UI renders such rows as transitioning ("dim = not yet realized"),
+	// the same staleness language as Flux resources and Gateways.
+	Generation         int64
+	ObservedGeneration int64
 }

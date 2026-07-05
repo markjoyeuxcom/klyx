@@ -1,5 +1,8 @@
 import { useEffect, useState, useCallback, useRef } from "react";
-import { Chip, LiveIndicator, SkeletonRows, btn, ellipsis } from "../chrome/primitives";
+import { IconAlertTriangle } from "@tabler/icons-react";
+import { Age } from "../chrome/Age";
+import { compactCount } from "../chrome/format";
+import { Chip, EmptyState, LiveIndicator, SkeletonRows, btn, ellipsis } from "../chrome/primitives";
 import { useFleet } from "../store/fleet";
 import type { EventRowDTO } from "../store/fleet";
 import { listEvents, openLiveEvents } from "../bridge/events";
@@ -7,15 +10,12 @@ import { openPodDetail } from "../bridge/pods";
 import { VirtualList } from "../chrome/VirtualList";
 import type { VirtualListHandle } from "../chrome/VirtualList";
 import { useListKeys } from "../chrome/useListKeys";
-
-function ago(unix: number): string {
-  const s = Math.floor(Date.now() / 1000) - unix;
-  if (s < 0) return "just now";
-  return s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)}m` : s < 86400 ? `${Math.floor(s / 3600)}h` : `${Math.floor(s / 86400)}d`;
-}
+import { loadClusterPrefs, loadSearch, saveEventsViewPrefs, saveSearch } from "../store/persist";
 
 // type dot · count · age · ns · kind/name · reason · message
-const gridCols = "10px 32px 44px minmax(0,0.9fr) minmax(0,1.1fr) 90px minmax(0,2fr)";
+// count is 40px: the widest compact render is "×999k" - never the raw number,
+// which a year-old flux reconcile event overflows (see chrome/format.ts).
+const gridCols = "10px 40px 44px minmax(0,0.9fr) minmax(0,1.1fr) 90px minmax(0,2fr)";
 
 export function EventsView({ cluster }: { cluster: string }) {
   const events = useFleet((s) => s.events);
@@ -27,14 +27,29 @@ export function EventsView({ cluster }: { cluster: string }) {
   // can close the old sub before opening the new one.
   const liveCleanupRef = useRef<(() => void) | null>(null);
 
-  // Live subscription effect — opens the all-namespaces sub on mount.
+  // Live subscription effect — opens the sub on mount for the persisted
+  // namespace (or all namespaces). Hydration fills only fields still at their
+  // reset defaults, so an intent set just before mount always wins.
   useEffect(() => {
-    liveCleanupRef.current = openLiveEvents(cluster, "");
+    const st = useFleet.getState();
+    const prefs = loadClusterPrefs(cluster).events ?? {};
+    if (prefs.warningsOnly && !st.events.warningsOnly) st.setWarningsOnly(true);
+    const savedSearch = loadSearch(cluster, "events");
+    if (savedSearch && st.events.search === "") st.setEventsSearch(savedSearch);
+    liveCleanupRef.current = openLiveEvents(cluster, st.events.namespace || (prefs.namespace ?? ""));
     return () => {
       if (liveCleanupRef.current) { liveCleanupRef.current(); liveCleanupRef.current = null; }
       useFleet.getState().clearEvents();
     };
   }, [cluster]);
+
+  // Mirror filters into per-cluster prefs (namespace + toggles survive a
+  // relaunch; search survives section switches within this run).
+  useEffect(() => {
+    if (events.cluster !== cluster) return; // transient state during open/switch
+    saveEventsViewPrefs(cluster, { namespace: events.namespace, warningsOnly: events.warningsOnly });
+    saveSearch(cluster, "events", events.search);
+  }, [cluster, events.cluster, events.namespace, events.warningsOnly, events.search]);
 
   const onNamespace = (ns: string) => {
     // Close the current live sub, then reopen for the selected namespace.
@@ -146,11 +161,20 @@ export function EventsView({ cluster }: { cluster: string }) {
       {events.loading && events.items.length === 0 ? (
         <SkeletonRows rows={8} label="loading events" />
       ) : filtered.length === 0 ? (
-        <div style={{ color: "var(--color-text-secondary)", fontSize: 13 }}>
-          {events.items.length === 0
+        <EmptyState
+          icon={<IconAlertTriangle size={28} stroke={1.2} />}
+          title={events.items.length === 0
             ? `No events${events.namespace ? ` in ${events.namespace}` : ""}.`
             : "No events match the current filter."}
-        </div>
+          hint={events.items.length === 0 ? "Events age out of the API server after roughly an hour - quiet can be real." : undefined}
+          action={events.items.length > 0 ? {
+            label: "Clear filters",
+            onClick: () => {
+              useFleet.getState().setEventsSearch("");
+              useFleet.getState().setWarningsOnly(false);
+            },
+          } : undefined}
+        />
       ) : (
         <div style={{ fontFamily: "var(--font-mono)", fontSize: 12, flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>
           {/* Header */}
@@ -265,12 +289,15 @@ function EventRow({ event: e, cluster, expanded, kbSelected, onToggle, onKbSelec
           title={e.type}
         />
         {/* Count */}
-        <span style={{ color: e.count > 1 ? "var(--color-text-secondary)" : "var(--color-text-tertiary)" }}>
-          {e.count > 1 ? `×${e.count}` : ""}
+        <span
+          title={e.count > 1 ? `${e.count.toLocaleString()} occurrences` : undefined}
+          style={{ color: e.count > 1 ? "var(--color-text-secondary)" : "var(--color-text-tertiary)" }}
+        >
+          {e.count > 1 ? `×${compactCount(e.count)}` : ""}
         </span>
         {/* Age */}
         <span style={{ color: "var(--color-text-tertiary)" }}>
-          {e.lastSeenUnix === 0 ? "—" : ago(e.lastSeenUnix)}
+          <Age unixSeconds={e.lastSeenUnix} />
         </span>
         {/* Namespace */}
         <span style={{ ...ellipsis, color: "var(--color-text-tertiary)" }} title={e.namespace}>{e.namespace}</span>

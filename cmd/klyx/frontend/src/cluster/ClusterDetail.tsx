@@ -8,7 +8,6 @@ import { ExternalSecretsView } from "./ExternalSecretsView";
 import { CRDBrowser } from "./CRDBrowser";
 import { BuiltinsView } from "./BuiltinsView";
 import { InstanceList } from "./InstanceList";
-import { InstanceDetail } from "./InstanceDetail";
 import { GatewayApiView } from "./GatewayApiView";
 import { WorkloadsView } from "./WorkloadsView";
 import { PodsView } from "./PodsView";
@@ -39,12 +38,12 @@ export function ClusterDetail() {
   if (route.section === "certs") return <CertsView cluster={cluster.name} />;
   if (route.section === "externalsecrets") return <ExternalSecretsView cluster={cluster.name} />;
   if (route.section === "resources") {
-    if (route.resource && route.instance) return <InstanceDetail cluster={cluster.name} resource={route.resource} instance={route.instance} />;
+    // An open instance renders as a side panel INSIDE the list (master-detail,
+    // the Pods pattern) - never as a full-page swap that throws the list away.
     if (route.resource) return <InstanceList cluster={cluster.name} resource={route.resource} />;
     return <BuiltinsView cluster={cluster.name} />;
   }
   if (route.section === "crds") {
-    if (route.resource && route.instance) return <InstanceDetail cluster={cluster.name} resource={route.resource} instance={route.instance} />;
     if (route.resource) return <InstanceList cluster={cluster.name} resource={route.resource} />;
     return <CRDBrowser cluster={cluster.name} />;
   }

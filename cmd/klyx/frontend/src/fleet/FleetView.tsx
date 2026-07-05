@@ -1,5 +1,7 @@
 import { useEffect, type ReactNode } from "react";
+import { IconLayoutGrid } from "@tabler/icons-react";
 import { useFleet } from "../store/fleet";
+import { EmptyState } from "../chrome/EmptyState";
 import { ClusterCard, clusterDiagnosticScore } from "./ClusterCard";
 import { MeshStrip } from "./MeshStrip";
 import { getMeshGraph } from "../bridge/mesh";
@@ -34,7 +36,12 @@ export function FleetView() {
   return (
     <div style={{ padding: "14px 16px", display: "grid", gap: 12, minWidth: 0, overflowX: "hidden" }}>
       {clusters.length === 0 ? (
-        <div style={{ color: "var(--color-text-secondary)", fontSize: 13 }}>No clusters connected yet.</div>
+        <EmptyState
+          icon={<IconLayoutGrid size={28} stroke={1.2} />}
+          title="No clusters connected yet."
+          hint="Klyx reads standard kubeconfig contexts - add or enable them in Settings."
+          action={{ label: "Open Settings", onClick: () => useFleet.getState().openSettings() }}
+        />
       ) : (
         <>
           {mesh && <MeshStrip graph={mesh} />}

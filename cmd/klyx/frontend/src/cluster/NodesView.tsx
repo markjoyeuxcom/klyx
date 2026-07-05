@@ -8,8 +8,16 @@ import { ConfirmDialog } from "../chrome/ConfirmDialog";
 import { MetaTile, OperationDialog, OptionTile } from "../chrome/OperationDialog";
 import { fmtMem } from "./saturation";
 import { useResizablePanel } from "../chrome/useResizablePanel";
+import { useNavIntent } from "../chrome/useNavIntent";
+import { useListKeys } from "../chrome/useListKeys";
+import { CopyButton } from "../chrome/CopyButton";
+import { YamlBlock } from "../chrome/YamlBlock";
+import { EmptyState } from "../chrome/EmptyState";
+import { SkeletonRows } from "../chrome/SkeletonRows";
+import { UpdatedAt, useReceivedAt } from "../chrome/Age";
+import { IconServer, IconX } from "@tabler/icons-react";
 import { ellipsis, frame, btn, FilterButton, SummaryCell, StatusDot } from "../chrome/primitives";
-import { InspectorSection, InspectorTabButton, MetadataChips, inspectorStateBox } from "./ResourceInspector";
+import { InspectorConditions, InspectorEvents, InspectorSection, InspectorStatus, InspectorTabButton, MetadataChips, inspectorStateBox } from "./ResourceInspector";
 
 function ago(s: number): string {
   return s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)}m` : s < 86400 ? `${Math.floor(s / 3600)}h` : `${Math.floor(s / 86400)}d`;
@@ -384,7 +392,20 @@ export function NodesView({ cluster }: { cluster: string }) {
     return () => { useFleet.getState().clearNodes(); };
   }, [cluster]);
 
+  // Palette verbs land here as one-shot intents once the node list is loaded.
+  useNavIntent(cluster, ["drain-node", "cordon-node", "select-node"], (intent) => {
+    if (nodes.loading || nodes.items.length === 0) return "wait";
+    const name = "node" in intent ? intent.node : "";
+    const n = nodes.items.find((x) => x.name === name);
+    if (!n) return "missing";
+    if (intent.kind === "drain-node") setDrainPending(n.name);
+    else if (intent.kind === "cordon-node") setCordonPending({ node: n.name, cordon: intent.cordon });
+    else void openNodeDetail(cluster, n.name);
+    return "consumed";
+  }, [nodes.items, nodes.loading]);
+
   const onRefresh = () => { void listNodes(cluster); };
+  const receivedAt = useReceivedAt(nodes.cluster === cluster && !nodes.loading && nodes.items.length > 0 ? nodes.items : null);
   const orderedNodes = useMemo(
     () => [...nodes.items].sort((a, b) => nodeRank(a) - nodeRank(b) || a.name.localeCompare(b.name)),
     [nodes.items],
@@ -393,6 +414,31 @@ export function NodesView({ cluster }: { cluster: string }) {
     () => orderedNodes.filter((n) => nodeMatchesFilter(n, filter) && nodeMatchesQuery(n, query, roleFilter)),
     [orderedNodes, filter, query, roleFilter],
   );
+
+  // Keyboard parity with the triage views: j/k moves a key-stable selection,
+  // Enter opens the node inspector, Esc closes it, / focuses the filter.
+  const [kbName, setKbName] = useState<string | null>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
+  const kbIdx = kbName === null ? -1 : visibleNodes.findIndex((n) => n.name === kbName);
+  const handleKbSelect = useCallback((idx: number) => {
+    const n = visibleNodes[idx];
+    if (n) setKbName(n.name);
+  }, [visibleNodes]);
+  const handleKbActivate = useCallback((idx: number) => {
+    const n = visibleNodes[idx];
+    if (n) void openNodeDetail(cluster, n.name);
+  }, [visibleNodes, cluster]);
+  const handleKbEscape = useCallback(() => {
+    if (useFleet.getState().nodes.selected) useFleet.getState().selectNode(null);
+  }, []);
+  useListKeys({
+    count: visibleNodes.length,
+    selected: kbIdx,
+    onSelect: handleKbSelect,
+    onActivate: handleKbActivate,
+    onEscape: handleKbEscape,
+    searchRef,
+  });
   const roles = useMemo(
     () => [...new Set(nodes.items.flatMap((n) => n.roles))].sort(),
     [nodes.items],
@@ -417,7 +463,10 @@ export function NodesView({ cluster }: { cluster: string }) {
             <div style={{ fontSize: 10, color: "var(--color-text-tertiary)", marginBottom: 3 }}>Nodes</div>
             <div style={{ fontSize: 18, fontWeight: 600 }}>Node board</div>
           </div>
-          <button onClick={onRefresh} style={btn}>refresh</button>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <UpdatedAt at={receivedAt} />
+            <button onClick={onRefresh} style={btn}>refresh</button>
+          </div>
         </div>
 
         <div style={{ ...frame, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(132px, 1fr))", overflow: "hidden", flexShrink: 0 }}>
@@ -447,6 +496,7 @@ export function NodesView({ cluster }: { cluster: string }) {
             </>
           )}
           <input
+            ref={searchRef}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="filter nodes"
@@ -457,9 +507,13 @@ export function NodesView({ cluster }: { cluster: string }) {
         </div>
 
         {nodes.loading && nodes.items.length === 0 ? (
-          <div style={{ color: "var(--color-text-secondary)", fontSize: 13 }}>Loading nodes…</div>
+          <SkeletonRows rows={6} label="loading nodes" />
         ) : nodes.items.length === 0 ? (
-          <div style={{ color: "var(--color-text-secondary)", fontSize: 13 }}>No nodes found.</div>
+          <EmptyState
+            icon={<IconServer size={28} stroke={1.2} />}
+            title="No nodes visible."
+            hint="Either the list failed or RBAC hides nodes from this identity - refresh to retry."
+          />
         ) : (
           <div style={{ ...frame, overflow: "hidden", flex: 1, minHeight: 0, display: "flex", flexDirection: "column", fontFamily: "var(--font-mono)", fontSize: 12 }}>
             <div style={{ display: "grid", gridTemplateColumns: gridCols, gap: 10, padding: "5px 8px", fontSize: 9, color: "var(--color-text-tertiary)", borderBottom: "0.5px solid var(--color-border-secondary)", flexShrink: 0 }}>
@@ -467,23 +521,34 @@ export function NodesView({ cluster }: { cluster: string }) {
             </div>
             <div data-testid="nodes-list-scroll" style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
               {visibleNodes.length === 0 ? (
-                <div style={{ padding: 14, color: "var(--color-text-secondary)", fontSize: 13 }}>No nodes match the current filter.</div>
+                <EmptyState
+                  title="No nodes match the current filter."
+                  action={{ label: "Clear filters", onClick: () => { setFilter("all"); setRoleFilter(null); setQuery(""); } }}
+                />
               ) : visibleNodes.map((n) => {
                 const isSelected = nodes.selected?.name === n.name;
+                const isKb = kbName === n.name && kbIdx >= 0;
                 const dotColor = nodeDotColor(n);
                 return (
                   <div
                     key={n.name}
+                    data-rowhost="true"
+                    aria-selected={isKb}
+                    ref={isKb ? (el) => el?.scrollIntoView?.({ block: "nearest" }) : undefined}
                     onClick={() => void openNodeDetail(cluster, n.name)}
                     style={{
                       display: "grid", gridTemplateColumns: gridCols, gap: 10, alignItems: "center",
                       padding: "7px 8px", borderBottom: "0.5px solid var(--color-border-tertiary)",
                       cursor: "pointer",
-                      background: isSelected ? "var(--color-background-secondary)" : undefined,
+                      background: isKb || isSelected ? "var(--color-background-secondary)" : undefined,
+                      boxShadow: isKb ? "inset 2px 0 0 var(--color-text-info)" : undefined,
                     }}
                   >
                     <StatusDot size={8} color={dotColor} />
-                    <span style={{ fontWeight: 500, ...ellipsis }} title={n.name}>{n.name}</span>
+                    <span style={{ display: "flex", alignItems: "center", gap: 2, minWidth: 0 }}>
+                      <span style={{ fontWeight: 500, ...ellipsis }} title={n.name}>{n.name}</span>
+                      <CopyButton text={n.name} label={`copy node name ${n.name}`} appearOnRowHover />
+                    </span>
                     <span style={{ color: "var(--color-text-tertiary)", ...ellipsis }}>
                       {n.roles.length > 0 ? n.roles.join(", ") : "-"}
                     </span>
@@ -637,7 +702,7 @@ function NodeDetailPanel({
       {/* Panel header */}
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, position: "sticky", top: 0, background: "var(--color-background-primary)", paddingTop: 2, paddingBottom: 6, borderBottom: "0.5px solid var(--color-border-tertiary)" }}>
         <span style={{ fontWeight: 500, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={name}>{name}</span>
-        <button onClick={onClose} style={{ ...btn, padding: "2px 8px", fontSize: 12 }}>✕</button>
+        <button onClick={onClose} aria-label="close node detail panel" style={{ ...btn, padding: "2px 8px", display: "inline-flex", alignItems: "center" }}><IconX size={13} stroke={1.5} /></button>
       </div>
 
       {/* Tabs */}
@@ -660,17 +725,7 @@ function NodeDetailPanel({
               onDrain={onDrain}
             />
           )}
-          {tab === "yaml" && (
-            <pre style={{
-              margin: 0, padding: 10,
-              background: "var(--color-background-secondary)",
-              border: "0.5px solid var(--color-border-tertiary)",
-              borderRadius: 4,
-              fontFamily: "var(--font-mono)", fontSize: 11, lineHeight: 1.5,
-              overflowX: "auto", whiteSpace: "pre-wrap", wordBreak: "break-all",
-              color: "var(--color-text-primary)",
-            }}>{detail.yaml}</pre>
-          )}
+          {tab === "yaml" && <YamlBlock text={detail.yaml} copyLabel="node YAML" />}
         </>
       )}
     </div>
@@ -687,15 +742,24 @@ function InfoTab({ detail, cluster, onCordon, onDrain }: {
   const setSection = useFleet((s) => s.setSection);
 
   const handlePodClick = (pod: PodOnNodeDTO) => {
-    // Cross-link to pods section: set section and let PodsView load
+    // Cross-link straight to the pod: the parked select-pod intent survives
+    // until PodsView's list has loaded, then opens the detail panel - no more
+    // "navigate and re-find it yourself".
     setSection("pods");
-    // Note: actual pod detail opening requires a full pods load first.
-    // We navigate to pods section; the user can click the pod from there.
-    void cluster; // cluster is used by the parent; this nav is section-only
+    useFleet.getState().requestNavIntent({ kind: "select-pod", cluster, namespace: pod.namespace, name: pod.name });
   };
 
   return (
     <>
+      {/* State first: the node's headline condition, scannable before any
+          key-value rows. */}
+      <InspectorStatus
+        tone={!n.ready || n.problems.length > 0 ? "danger" : n.unschedulable || n.taintCount > 0 ? "warning" : "success"}
+        label={nodeStatusText(n)}
+        reason={n.problems.length > 0 ? n.problems.join(", ") : undefined}
+        detail={[n.roles.join(", "), n.version].filter(Boolean).join(" · ")}
+      />
+
       {/* Actions row */}
       <InspectorSection title="Actions">
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -742,19 +806,14 @@ function InfoTab({ detail, cluster, onCordon, onDrain }: {
         )}
       </InspectorSection>
 
-      {/* Conditions */}
+      {/* Conditions - problems sort first; the node-specific severity rule
+          (Unknown pressure is a problem) rides in via colorOf. */}
       {detail.conditions.length > 0 && (
         <InspectorSection title="Conditions" collapsible>
-          {[...detail.conditions].sort((a, b) => Number(conditionIsProblem(b)) - Number(conditionIsProblem(a)) || a.type.localeCompare(b.type)).map((c) => {
-            const conditionMessage = c.message || c.reason || "-";
-            return (
-              <div key={c.type} style={{ display: "grid", gridTemplateColumns: "7px minmax(130px, 0.46fr) minmax(0, 1fr)", gap: 8, alignItems: "baseline", fontSize: 11 }}>
-                <StatusDot color={condColor(c)} />
-                <span style={{ fontWeight: 500, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={c.type}>{c.type}</span>
-                <span style={{ color: "var(--color-text-secondary)", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={conditionMessage}>{conditionMessage}</span>
-              </div>
-            );
-          })}
+          <InspectorConditions
+            conditions={[...detail.conditions].sort((a, b) => Number(conditionIsProblem(b)) - Number(conditionIsProblem(a)) || a.type.localeCompare(b.type))}
+            colorOf={condColor}
+          />
         </InspectorSection>
       )}
 
@@ -798,18 +857,7 @@ function InfoTab({ detail, cluster, onCordon, onDrain }: {
 
       {/* Events */}
       <InspectorSection title="Events" count={detail.events.length} collapsible>
-        {detail.events.length === 0 ? (
-          <span style={{ color: "var(--color-text-tertiary)" }}>No events for this node.</span>
-        ) : (
-          detail.events.map((e, i) => (
-            <div key={i} style={{ display: "flex", gap: 6, alignItems: "baseline", fontSize: 11, color: e.type === "Warning" ? "var(--color-text-danger)" : "var(--color-text-secondary)" }}>
-              <span style={{ width: 50, fontSize: 9, textTransform: "uppercase", flexShrink: 0 }}>{e.type}</span>
-              <span style={{ fontWeight: 500, width: 100, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flexShrink: 0 }}>{e.reason}</span>
-              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }} title={e.message}>{e.message}</span>
-              {e.count > 1 && <span style={{ color: "var(--color-text-tertiary)", flexShrink: 0 }}>×{e.count}</span>}
-            </div>
-          ))
-        )}
+        <InspectorEvents events={detail.events} emptyText="No events for this node." />
       </InspectorSection>
     </>
   );

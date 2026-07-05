@@ -5,7 +5,7 @@ import {
   IconRoute, IconTerminal2, IconSettings, IconBox, IconCircleDot,
   IconAlertTriangle, IconServer, IconAnchor, IconChevronRight, IconChevronLeft,
   IconComponents, IconCertificate, IconFolder, IconDatabase, IconShieldLock,
-  IconNetwork, IconKey, IconScale, IconWebhook, IconCpu, IconPackage,
+  IconNetwork, IconKey, IconScale, IconWebhook, IconCpu, IconPackage, IconHistory,
 } from "@tabler/icons-react";
 import { useFleet, SECTION_LABELS, WORKLOAD_KINDS } from "../store/fleet";
 import type { ArgoViewMode, ClusterSection, ResourceRef, Route, WorkloadKind } from "../store/fleet";
@@ -47,6 +47,7 @@ const SECTION_GROUPS: { section: ClusterSection; Icon: typeof IconLayoutDashboar
 type SidebarTarget =
   | { kind: "fleet" }
   | { kind: "forwards" }
+  | { kind: "activity" }
   | { kind: "settings" }
   | { kind: "terminal" }
   | { kind: "section"; section: ClusterSection; workloadKinds?: readonly WorkloadKind[]; argoView?: ArgoViewMode }
@@ -70,6 +71,7 @@ const EXPANDED_MENU: ExpandedGroup[] = [
     items: [
       { label: "Fleet", Icon: IconLayoutGrid, target: { kind: "fleet" } },
       { label: "Port-forwards", Icon: IconArrowsLeftRight, target: { kind: "forwards" } },
+      { label: "Activity", Icon: IconHistory, target: { kind: "activity" } },
     ],
   },
   {
@@ -523,6 +525,9 @@ function ExpandedMenu({
       case "forwards":
         onForwards();
         break;
+      case "activity":
+        useFleet.getState().openActivity();
+        break;
       case "settings":
         onSettings();
         break;
@@ -670,6 +675,7 @@ function isExpandedItemActive(route: Route, item: ExpandedItem, workloadKindFilt
   const target = item.target;
   if (target.kind === "fleet") return route.name === "fleet";
   if (target.kind === "forwards") return route.name === "forwards";
+  if (target.kind === "activity") return route.name === "activity";
   if (target.kind === "settings") return route.name === "settings";
   if (target.kind === "section") {
     if (route.name !== "cluster" || route.section !== target.section || route.resource !== undefined) return false;

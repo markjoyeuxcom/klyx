@@ -457,10 +457,10 @@ describe("InstanceDetail", () => {
     expect(getByText(/Loading/i)).toBeTruthy();
   });
 
-  it("breadcrumb back returns to the resource instance list", () => {
+  it("closing the panel returns to the resource instance list", () => {
     useFleet.setState({ route: { name: "cluster", cluster: "x", section: "resources", resource, instance } });
     const { getByLabelText } = render(<InstanceDetail cluster="x" resource={resource} instance={instance} />);
-    fireEvent.click(getByLabelText("back to resource list"));
+    fireEvent.click(getByLabelText("close instance panel"));
     const r = useFleet.getState().route;
     expect(r.name === "cluster" && r.instance).toBeUndefined();
     expect(r.name === "cluster" && r.resource).toEqual(resource);

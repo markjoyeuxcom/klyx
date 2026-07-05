@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { IconAlertTriangle } from "@tabler/icons-react";
 import { useFleet, GatewayRef, RouteNodeDTO, RouteMetricDTO } from "../store/fleet";
 import type { CertificateDTO, ListenerDTO, PolicyRefDTO, ResourceRef } from "../store/fleet";
 import { getGatewayTopology, getRouteMetrics } from "../bridge/gateway";
@@ -326,7 +327,7 @@ export function GatewayTopology({ cluster, gateway }: { cluster: string; gateway
             {t.warnings && t.warnings.length > 0 && (
               <div style={{ marginTop: 10 }}>
                 {t.warnings.map((w, i) => (
-                  <div key={i} style={{ fontSize: 11, color: "var(--color-text-warning)", padding: "2px 0" }}>⚠︎ {w}</div>
+                  <div key={i} style={{ fontSize: 11, color: "var(--color-text-warning)", padding: "2px 0", display: "flex", alignItems: "baseline", gap: 4 }}><IconAlertTriangle size={11} stroke={1.7} style={{ flexShrink: 0, alignSelf: "center" }} /> {w}</div>
                 ))}
               </div>
             )}

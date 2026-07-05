@@ -1,9 +1,9 @@
 import { useEffect, useState, useCallback, useRef } from "react";
-import { IconTerminal2, IconExternalLink, IconBox } from "@tabler/icons-react";
+import { IconTerminal2, IconExternalLink, IconBox, IconX } from "@tabler/icons-react";
 import { useFleet } from "../store/fleet";
 import type { WorkloadDTO, PodDTO, WorkloadKind, ResourceCellDTO } from "../store/fleet";
 import { listWorkloads, openLiveWorkloads, rolloutRestart, scaleWorkload } from "../bridge/workloads";
-import { deletePod } from "../bridge/pods";
+import { deletePod, openPodDetail } from "../bridge/pods";
 import { getWorkloadMetrics } from "../bridge/workload-metrics";
 import { getWorkloadSparklines } from "../bridge/metrics";
 import type { SparklinesDTO } from "../bridge/metrics";
@@ -15,17 +15,29 @@ import { saturation, nearLimitSort, fmtCpu, fmtMem } from "./saturation";
 import { VirtualList } from "../chrome/VirtualList";
 import type { VirtualListHandle } from "../chrome/VirtualList";
 import { useListKeys } from "../chrome/useListKeys";
+import { useNavIntent } from "../chrome/useNavIntent";
 import { useResizableDock } from "../chrome/useResizableDock";
 import { Chip } from "../chrome/Chip";
+import { CopyButton } from "../chrome/CopyButton";
 import { EmptyState } from "../chrome/EmptyState";
 import { SkeletonRows } from "../chrome/SkeletonRows";
-import { LiveIndicator, btn, ellipsis } from "../chrome/primitives";
+import { LiveIndicator, btn, ellipsis, type Tone } from "../chrome/primitives";
+import { InspectorStatus } from "./ResourceInspector";
+import { loadClusterPrefs, loadSearch, saveSearch, saveWorkloadsViewPrefs } from "../store/persist";
+import { SyncingChip, staleStyle } from "./staleness";
+import { wellKnownResourceRef } from "./resourceRefs";
 
 const rankDot: Record<string, string> = {
   unhealthy: "var(--color-text-danger)",
   degraded: "var(--color-text-warning)",
   restarts: "var(--color-text-info)",
   healthy: "var(--color-text-tertiary)",
+};
+const rankTone: Record<string, Tone> = {
+  unhealthy: "danger",
+  degraded: "warning",
+  restarts: "info",
+  healthy: "success",
 };
 const KINDS: WorkloadKind[] = ["Deployment", "StatefulSet", "DaemonSet"];
 const kindShort: Record<WorkloadKind, string> = { Deployment: "deploy", StatefulSet: "sts", DaemonSet: "daemonset" };
@@ -50,7 +62,7 @@ function ResourceCellView({ resource, cell, hasPods }: { resource: "cpu" | "mem"
   return (
     <span style={{ color }}>{usage} / {fmt(cell.limit)}
       {sat.pct != null && (
-        <span style={{ display: "inline-block", width: 46, height: 6, background: "var(--color-background-tertiary, #8883)", borderRadius: 3, verticalAlign: "middle", marginLeft: 6 }}>
+        <span style={{ display: "inline-block", width: 46, height: 6, background: "var(--color-background-tertiary)", borderRadius: 3, verticalAlign: "middle", marginLeft: 6 }}>
           <span style={{ display: "block", width: `${Math.min(100, sat.pct * 100)}%`, height: "100%", background: color ?? "var(--color-text-success)", borderRadius: 3 }} />
         </span>
       )}
@@ -89,9 +101,22 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
 
   useEffect(() => {
     // Open live subscription for the list. getWorkloadMetrics for usage stays
-    // separate (polling, not watch-driven).
-    liveCleanupRef.current = openLiveWorkloads(cluster, "");
-    void getWorkloadMetrics(cluster, "");
+    // separate (polling, not watch-driven). Hydration fills only fields still
+    // at their reset defaults, so a palette openWorkloads(kinds) or an
+    // Overview needs-attention intent set just before mount always wins.
+    const st = useFleet.getState();
+    const prefs = loadClusterPrefs(cluster).workloads ?? {};
+    if (prefs.needsAttention && !st.workloads.needsAttention) st.setWorkloadsNeedsAttention(true);
+    if (prefs.nearLimitSort && !st.workloads.nearLimitSort) st.toggleNearLimitSort();
+    const kindsAtDefault = KINDS.every((k) => st.workloads.kindFilter[k]);
+    if (prefs.kinds && prefs.kinds.length > 0 && prefs.kinds.length < KINDS.length && kindsAtDefault) {
+      st.setWorkloadKindFilter(prefs.kinds);
+    }
+    const savedSearch = loadSearch(cluster, "workloads");
+    if (savedSearch && st.workloads.search === "") st.setWorkloadsSearch(savedSearch);
+    const ns = st.workloads.namespace || (prefs.namespace ?? "");
+    liveCleanupRef.current = openLiveWorkloads(cluster, ns);
+    void getWorkloadMetrics(cluster, ns);
     const id = setInterval(() => {
       const cur = useFleet.getState().workloads;
       if (cur.cluster === cluster) getWorkloadMetrics(cluster, cur.namespace);
@@ -102,6 +127,37 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
       useFleet.getState().clearWorkloads();
     };
   }, [cluster]);
+
+  // Mirror filters into per-cluster prefs (namespace + toggles survive a
+  // relaunch; search survives section switches within this run).
+  useEffect(() => {
+    if (wl.cluster !== cluster) return; // transient state during open/switch
+    saveWorkloadsViewPrefs(cluster, {
+      namespace: wl.namespace,
+      needsAttention: wl.needsAttention,
+      kinds: KINDS.filter((k) => wl.kindFilter[k]),
+      nearLimitSort: wl.nearLimitSort,
+    });
+    saveSearch(cluster, "workloads", wl.search);
+  }, [cluster, wl.cluster, wl.namespace, wl.needsAttention, wl.kindFilter, wl.nearLimitSort, wl.search]);
+
+  // Palette verbs / cross-links land here as one-shot intents once the list
+  // is loaded. Scale opens the inline popover in the expanded row, so the row
+  // is expanded first; restart's confirm renders at the root.
+  useNavIntent(cluster, ["restart-workload", "scale-workload", "select-workload"], (intent) => {
+    if (wl.loading || wl.items.length === 0) return "wait";
+    if (!("workloadKind" in intent)) return "missing";
+    const w = wl.items.find((x) => x.kind === intent.workloadKind && x.namespace === intent.namespace && x.name === intent.name);
+    if (!w) return "missing";
+    const key = keyOf(w);
+    setSelectedKey(key);
+    if (!useFleet.getState().workloads.expanded.includes(key)) {
+      useFleet.getState().toggleWorkloadExpand(key);
+    }
+    if (intent.kind === "restart-workload") setPending({ kind: "restart", w });
+    else if (intent.kind === "scale-workload") setPending({ kind: "scale-input", w });
+    return "consumed";
+  }, [wl.items, wl.loading]);
 
   const onNamespace = (ns: string) => {
     // Close the current live sub, then reopen for the selected namespace.
@@ -242,7 +298,16 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
                 <EmptyState
                   icon={<IconBox size={28} stroke={1.2} />}
                   title={`No workloads${wl.namespace ? ` in ${wl.namespace}` : ""}.`}
-                  hint={wl.search ? "Adjust the filter text." : wl.needsAttention ? "The needs-attention filter is on - everything here is healthy." : undefined}
+                  hint={wl.needsAttention && !wl.search ? "The needs-attention filter is on - everything here is healthy." : undefined}
+                  action={(wl.search || wl.needsAttention || !KINDS.every((k) => wl.kindFilter[k])) ? {
+                    label: "Clear filters",
+                    onClick: () => {
+                      const st = useFleet.getState();
+                      st.setWorkloadsSearch("");
+                      st.setWorkloadsNeedsAttention(false);
+                      st.setWorkloadKindFilter(KINDS);
+                    },
+                  } : undefined}
                 />
               </div>
             ) : (
@@ -289,6 +354,7 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
                               useFleet.getState().toggleWorkloadExpand(keyOf(w));
                             }
                           }}
+                          data-rowhost="true"
                           style={{
                             display: "grid", gridTemplateColumns: gridCols, gap: 10, alignItems: "center",
                             height: ROW_HEIGHT, boxSizing: "border-box",
@@ -298,14 +364,20 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
                             cursor: "pointer",
                             background: isKbSelected ? "var(--color-background-secondary)" : undefined,
                             outline: "none",
+                            ...staleStyle(w.stale),
                           }}
                         >
                           <span style={{ width: 8, height: 8, borderRadius: "50%", background: rankDot[w.rank] }} />
                           <span style={{ color: "var(--color-text-tertiary)" }}>{kindShort[w.kind as WorkloadKind]}</span>
-                          <span style={ellipsis}><span style={{ color: "var(--color-text-tertiary)" }}>{w.namespace}</span> / <span style={{ fontWeight: 500 }}>{w.name}</span></span>
+                          <span style={{ display: "flex", alignItems: "center", gap: 2, minWidth: 0 }}>
+                            <span style={ellipsis}><span style={{ color: "var(--color-text-tertiary)" }}>{w.namespace}</span> / <span style={{ fontWeight: 500 }}>{w.name}</span></span>
+                            <CopyButton text={w.name} label={`copy workload name ${w.name}`} appearOnRowHover />
+                          </span>
                           <span style={{ color: w.ready < w.desired ? "var(--color-text-warning)" : "var(--color-text-secondary)" }}>{w.ready} / {w.desired}</span>
                           <span style={{ color: w.restarts > 0 ? "var(--color-text-warning)" : "var(--color-text-tertiary)" }}>{w.restarts}</span>
-                          <span style={{ ...ellipsis, color: w.rank === "unhealthy" ? "var(--color-text-danger)" : "var(--color-text-secondary)" }} title={w.reason}>{w.reason}</span>
+                          <span style={{ ...ellipsis, color: w.rank === "unhealthy" ? "var(--color-text-danger)" : "var(--color-text-secondary)" }} title={w.reason}>
+                            {w.stale ? <SyncingChip generation={w.generation} observedGeneration={w.observedGeneration} /> : w.reason}
+                          </span>
                           {showMetrics && <ResourceCellView resource="cpu" cell={w.resources.cpu} hasPods={w.pods.length > 0} />}
                           {showMetrics && <ResourceCellView resource="mem" cell={w.resources.mem} hasPods={w.pods.length > 0} />}
                           <span style={{ ...ellipsis, color: "var(--color-text-tertiary)" }} title={w.gitops ? `Flux ownership label: ${w.gitops.kind} ${w.gitops.namespace}/${w.gitops.name}` : undefined}>
@@ -352,6 +424,19 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
           }}
           onCancelScale={() => setPending(null)}
           onDeletePod={(w, pod) => setPending({ kind: "delete-pod", w, pod })}
+          onOpenPod={(w, pod) => {
+            useFleet.getState().setSection("pods");
+            void openPodDetail(cluster, w.namespace, pod.name);
+          }}
+          onOpenNode={(node) => {
+            useFleet.getState().setSection("nodes");
+            useFleet.getState().requestNavIntent({ kind: "select-node", cluster, node });
+          }}
+          onOpenFluxOwner={(w) => {
+            if (!w.gitops) return;
+            useFleet.getState().setSection("gitops");
+            useFleet.getState().requestNavIntent({ kind: "select-flux", cluster, fluxKind: w.gitops.kind, namespace: w.gitops.namespace, name: w.gitops.name });
+          }}
         />
       </div>
 
@@ -465,6 +550,9 @@ function WorkloadContextPanel({
   onScaleConfirm,
   onCancelScale,
   onDeletePod,
+  onOpenPod,
+  onOpenNode,
+  onOpenFluxOwner,
 }: {
   workload: WorkloadDTO | null;
   expanded: boolean;
@@ -476,6 +564,9 @@ function WorkloadContextPanel({
   onScaleConfirm: (w: WorkloadDTO, replicas: number) => void;
   onCancelScale: () => void;
   onDeletePod: (w: WorkloadDTO, pod: PodDTO) => void;
+  onOpenPod: (w: WorkloadDTO, pod: PodDTO) => void;
+  onOpenNode: (node: string) => void;
+  onOpenFluxOwner: (w: WorkloadDTO) => void;
 }) {
   if (!workload) {
     return (
@@ -507,6 +598,14 @@ function WorkloadContextPanel({
             </span>
           )}
         </div>
+        {/* State first: the rank + reason headline, scannable before the
+            status grid below. */}
+        <InspectorStatus
+          tone={workload.stale ? "muted" : rankTone[workload.rank] ?? "muted"}
+          label={workload.stale ? "syncing…" : workload.rank}
+          reason={workload.stale ? undefined : (workload.reason || undefined)}
+          detail={`${workload.ready}/${workload.desired} ready`}
+        />
         <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
           <button onClick={() => onLogs(workload)} style={{ ...btn, color: "var(--color-text-info)", borderColor: "var(--color-border-info)", background: "var(--color-background-info)" }}>tail logs</button>
           <button onClick={() => onRestart(workload)} style={btn}>restart</button>
@@ -530,6 +629,19 @@ function WorkloadContextPanel({
               style={{ ...btn, color: "var(--color-text-danger)", borderColor: "var(--color-border-danger)", background: "var(--color-background-danger)" }}
             >delete pod</button>
           )}
+          {/* One manifest surface: jump to InstanceDetail (YAML, labels,
+              annotations, edit) instead of duplicating a YAML tab here. */}
+          <button
+            onClick={() => {
+              const ref = wellKnownResourceRef("apps", workload.kind);
+              if (!ref) return;
+              const nav = useFleet.getState();
+              nav.openResource(ref);
+              nav.openInstance(workload.namespace, workload.name);
+            }}
+            style={btn}
+            title="Open the manifest (YAML, labels, edit) in Resources"
+          >manifest</button>
           <span style={{ color: "var(--color-text-tertiary)", fontSize: 11 }}>
             {expanded ? "expanded" : "enter expands"}
           </span>
@@ -542,7 +654,16 @@ function WorkloadContextPanel({
           <span style={{ color: "var(--color-text-tertiary)" }}>ready</span><span style={{ color: workload.ready < workload.desired ? "var(--color-text-warning)" : "var(--color-text-secondary)" }}>{workload.ready} / {workload.desired}</span>
           <span style={{ color: "var(--color-text-tertiary)" }}>restarts</span><span style={{ color: workload.restarts > 0 ? "var(--color-text-warning)" : "var(--color-text-secondary)" }}>{workload.restarts}</span>
           <span style={{ color: "var(--color-text-tertiary)" }}>reason</span><span style={{ color: workload.rank === "unhealthy" ? "var(--color-text-danger)" : "var(--color-text-secondary)", overflowWrap: "anywhere" }}>{workload.reason}</span>
-          <span style={{ color: "var(--color-text-tertiary)" }}>owner</span><span style={{ color: workload.gitops ? "var(--color-text-info)" : "var(--color-text-tertiary)", overflowWrap: "anywhere" }}>{owner}</span>
+          <span style={{ color: "var(--color-text-tertiary)" }}>owner</span>
+          {workload.gitops ? (
+            <button
+              onClick={() => onOpenFluxOwner(workload)}
+              title={`open ${owner} in the Flux lens`}
+              style={{ background: "transparent", border: "none", padding: 0, cursor: "pointer", textAlign: "left", color: "var(--color-text-info)", fontFamily: "var(--font-mono)", fontSize: 11, overflowWrap: "anywhere", textDecoration: "underline", textDecorationColor: "var(--color-border-secondary)", textUnderlineOffset: 2 }}
+            >{owner}</button>
+          ) : (
+            <span style={{ color: "var(--color-text-tertiary)", overflowWrap: "anywhere" }}>{owner}</span>
+          )}
         </div>
       </div>
 
@@ -552,13 +673,36 @@ function WorkloadContextPanel({
           {badPods > 0 ? `${badPods} affected / ${workload.pods.length} total` : `${workload.pods.length} healthy`}
         </div>
         <div style={{ display: "grid", gap: 6 }}>
+          {/* Every other pod-adjacent surface links pods; this one was the
+              exception. Click opens the pod detail in the Pods section; the
+              node name jumps to the Nodes board. */}
           {workload.pods.slice(0, 6).map((p) => (
-            <div key={p.name} style={{ display: "grid", gridTemplateColumns: "8px minmax(0, 1fr) auto", gap: 8, alignItems: "center", border: "0.5px solid var(--color-border-tertiary)", background: "var(--color-background-primary)", padding: "7px 8px", fontFamily: "var(--font-mono)", fontSize: 11 }}>
+            <div
+              key={p.name}
+              role="button"
+              tabIndex={0}
+              aria-label={`open pod ${p.name}`}
+              onClick={() => onOpenPod(workload, p)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  onOpenPod(workload, p);
+                }
+              }}
+              style={{ display: "grid", gridTemplateColumns: "8px minmax(0, 1fr) auto", gap: 8, alignItems: "center", border: "0.5px solid var(--color-border-tertiary)", background: "var(--color-background-primary)", padding: "7px 8px", fontFamily: "var(--font-mono)", fontSize: 11, cursor: "pointer" }}
+            >
               <span style={{ width: 7, height: 7, borderRadius: "50%", background: p.ready ? "var(--color-text-success)" : "var(--color-text-danger)" }} />
-              <span style={ellipsis} title={p.name}>{p.name}</span>
+              <span style={{ ...ellipsis, color: "var(--color-text-info)" }} title={`open pod ${p.name}`}>{p.name}</span>
               <span style={{ color: p.ready ? "var(--color-text-secondary)" : "var(--color-text-danger)" }}>{p.ready ? "ready" : p.reason || "not ready"}</span>
               <span />
-              <span style={{ ...ellipsis, color: "var(--color-text-tertiary)" }} title={p.node}>{p.node}</span>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onOpenNode(p.node);
+                }}
+                title={`open node ${p.node}`}
+                style={{ background: "transparent", border: "none", padding: 0, cursor: "pointer", textAlign: "left", color: "var(--color-text-tertiary)", fontFamily: "var(--font-mono)", fontSize: 11, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", textDecoration: "underline", textDecorationColor: "var(--color-border-secondary)", textUnderlineOffset: 2 }}
+              >{p.node}</button>
               <span style={{ color: p.restarts > 0 ? "var(--color-text-warning)" : "var(--color-text-tertiary)" }}>{p.restarts}</span>
             </div>
           ))}
@@ -704,9 +848,9 @@ function WorkloadLogsDock({
           </button>
           <button
             onClick={onClose}
-            style={{ ...btn, padding: "2px 8px", fontSize: 12 }}
+            style={{ ...btn, padding: "2px 8px", display: "inline-flex", alignItems: "center" }}
             aria-label="close logs dock"
-          >✕</button>
+          ><IconX size={13} stroke={1.5} /></button>
         </div>
       </div>
 
@@ -745,7 +889,7 @@ function ScalePopover({ initial, onConfirm, onCancel }: { initial: number; onCon
         style={{ width: 52, fontSize: 11, padding: "2px 4px", fontFamily: "var(--font-mono)", background: "var(--color-background-secondary)", border: "0.5px solid var(--color-border-tertiary)", borderRadius: 3, color: "var(--color-text-primary)" }}
       />
       <button onClick={() => { if (valid) onConfirm(n); }} disabled={!valid} aria-label="apply scale" style={{ ...btn, padding: "2px 8px", opacity: valid ? 1 : 0.4, cursor: valid ? "pointer" : "not-allowed" }}>apply</button>
-      <button onClick={onCancel} aria-label="cancel scale" style={{ ...btn, padding: "2px 8px" }}>✕</button>
+      <button onClick={onCancel} aria-label="cancel scale" style={{ ...btn, padding: "2px 8px", display: "inline-flex", alignItems: "center" }}><IconX size={12} stroke={1.5} /></button>
     </span>
   );
 }

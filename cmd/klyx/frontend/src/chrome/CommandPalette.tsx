@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { useFleet } from "../store/fleet";
 import { buildCommands, Command } from "./commands";
 import { fuzzyMatch } from "./fuzzy";
+import { loadBoosts, recordUse } from "./frecency";
 
 // CommandPalette is the ⌘K primary-nav surface (design principle #6). It mounts
 // once in AppShell and installs a single window keydown handler:
@@ -37,11 +38,17 @@ function inEditable(t: EventTarget | null): boolean {
   return tag === "INPUT" || tag === "TEXTAREA" || el.isContentEditable === true;
 }
 
-// Rank commands against the query. Empty query keeps source order (every command
-// matches with score 0). Title is full-weight; hint contributes at half weight.
-function rank(commands: Command[], query: string): Ranked[] {
+// Rank commands against the query. Title is full-weight; hint contributes at
+// half weight. Frecency (loadBoosts) reorders the empty-query list toward
+// recently used commands and tiebreaks fuzzy matches at 0.75 weight - enough
+// to float a habit, never enough to outrank a clearly better match.
+// `total` counts every match so the footer can be honest about truncation.
+export type RankResult = { rows: Ranked[]; total: number };
+
+export function rank(commands: Command[], query: string, boost: (id: string) => number = () => 0): RankResult {
   if (query.trim() === "") {
-    return commands.slice(0, LIMIT).map((cmd) => ({ cmd, positions: [] }));
+    const sorted = [...commands].sort((a, b) => boost(b.id) - boost(a.id)); // stable: untouched keep source order
+    return { rows: sorted.slice(0, LIMIT).map((cmd) => ({ cmd, positions: [] })), total: commands.length };
   }
   const q = query.trim();
   const scored: { cmd: Command; positions: number[]; score: number }[] = [];
@@ -49,11 +56,11 @@ function rank(commands: Command[], query: string): Ranked[] {
     const t = fuzzyMatch(q, cmd.title);
     const h = cmd.hint ? fuzzyMatch(q, cmd.hint) : null;
     if (!t && !h) continue;
-    const score = (t?.score ?? 0) + (h ? h.score * 0.5 : 0);
+    const score = (t?.score ?? 0) + (h ? h.score * 0.5 : 0) + boost(cmd.id) * 0.75;
     scored.push({ cmd, positions: t?.positions ?? [], score });
   }
   scored.sort((a, b) => b.score - a.score);
-  return scored.slice(0, LIMIT).map(({ cmd, positions }) => ({ cmd, positions }));
+  return { rows: scored.slice(0, LIMIT).map(({ cmd, positions }) => ({ cmd, positions })), total: scored.length };
 }
 
 // Splits a title into <mark>-highlighted runs at the matched positions.
@@ -80,19 +87,28 @@ export function CommandPalette() {
   const [query, setQuery] = useState("");
   const [sel, setSel] = useState(0);
   const [commands, setCommands] = useState<Command[]>([]);
+  // Frecency boosts snapshot, taken once per open - rank() runs per keystroke
+  // and must not re-read localStorage each time.
+  const [boost, setBoost] = useState<(id: string) => number>(() => () => 0);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  // Focus returns to whatever had it before ⌘K - a keyboard flow keeps its place.
+  const prevFocusRef = useRef<HTMLElement | null>(null);
 
   const close = useCallback(() => {
     _paletteOpen = false;
     setOpen(false);
     setQuery("");
     setSel(0);
+    prevFocusRef.current?.focus?.();
+    prevFocusRef.current = null;
   }, []);
 
   const openPalette = useCallback(() => {
     _paletteOpen = true;
+    prevFocusRef.current = document.activeElement as HTMLElement | null;
     setCommands(buildCommands(useFleet.getState())); // fresh index, no stale data
+    setBoost(() => loadBoosts());
     setQuery("");
     setSel(0);
     setOpen(true);
@@ -129,7 +145,9 @@ export function CommandPalette() {
     if (open) inputRef.current?.focus();
   }, [open]);
 
-  const results = useMemo(() => rank(commands, query), [commands, query]);
+  const ranked = useMemo(() => rank(commands, query, boost), [commands, query, boost]);
+  const results = ranked.rows;
+  const dropped = ranked.total - results.length;
 
   // Keep selection in range as the result set shrinks/grows.
   useEffect(() => {
@@ -149,6 +167,7 @@ export function CommandPalette() {
     (i: number) => {
       const r = results[i];
       if (!r) return;
+      recordUse(r.cmd.id);
       close();
       r.cmd.run();
     },
@@ -228,7 +247,7 @@ export function CommandPalette() {
             setSel(0);
           }}
           onKeyDown={onInputKey}
-          placeholder="jump to cluster, section, pod, release…"
+          placeholder="jump or act: cluster, pod, drain, sync, scale…"
           spellCheck={false}
           autoComplete="off"
           style={{
@@ -321,7 +340,7 @@ export function CommandPalette() {
             background: "var(--color-background-secondary)",
           }}
         >
-          ↑↓ navigate · ↵ open · esc close · showing loaded data
+          {dropped > 0 ? `+${dropped} more — keep typing · ` : ""}↑↓ navigate · ↵ open · esc close · showing loaded data
         </div>
       </div>
     </div>

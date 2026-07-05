@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, useState } from "react";
+import { IconAlertTriangle } from "@tabler/icons-react";
 import { armProtected } from "../bridge/configsvc";
 
 export function ConfirmDialog({
@@ -9,6 +10,7 @@ export function ConfirmDialog({
   confirmLabel = "Confirm",
   danger = false,
   onConfirm,
+  onConfirmTyped,
   onCancel,
 }: {
   title: string;
@@ -18,6 +20,13 @@ export function ConfirmDialog({
   confirmLabel?: string;
   danger?: boolean;
   onConfirm: () => void;
+  /**
+   * Bulk verbs need the typed confirmation back: the dialog's own arming
+   * covers exactly ONE backend grant, so a caller dispatching N destructive
+   * calls re-arms with this value before each subsequent call. When present
+   * it is called INSTEAD of onConfirm.
+   */
+  onConfirmTyped?: (typed: string) => void;
   onCancel: () => void;
 }) {
   const [typed, setTyped] = useState("");
@@ -34,6 +43,15 @@ export function ConfirmDialog({
     if (!isProtected) confirmRef.current?.focus();
   }, [isProtected]);
 
+  // Restore focus to whatever invoked the dialog once it closes - without
+  // this, focus falls to <body> and a keyboard flow loses its place.
+  useEffect(() => {
+    const prev = document.activeElement as HTMLElement | null;
+    return () => {
+      prev?.focus?.();
+    };
+  }, []);
+
   // On a protected cluster, register the typed confirmation with the backend
   // before dispatching: destructive verbs there consume a one-shot grant and
   // refuse without it (defense in depth over the UI-side gate).
@@ -47,7 +65,8 @@ export function ConfirmDialog({
         return;
       }
     }
-    onConfirm();
+    if (onConfirmTyped) onConfirmTyped(typed);
+    else onConfirm();
   };
 
   // Modal key handling: swallow keys at the dialog boundary so window-level
@@ -89,7 +108,12 @@ export function ConfirmDialog({
         onKeyDown={onDialogKeyDown}
         style={{ background: "var(--color-background-primary)", border: "0.5px solid var(--color-border-secondary)", borderRadius: "var(--border-radius-md)", padding: 20, width: 380, fontSize: 13 }}
       >
-        <div id={titleId} style={{ fontWeight: 600, marginBottom: 8 }}>{title}</div>
+        <div id={titleId} style={{ fontWeight: 600, marginBottom: 8, display: "flex", alignItems: "center", gap: 6 }}>
+          {/* Destructive intent gets a shape, not just a colour - the danger
+              tint alone is invisible to colour-blind operators. */}
+          {danger && <IconAlertTriangle size={15} stroke={1.8} style={{ color: "var(--color-text-danger)", flexShrink: 0 }} aria-hidden />}
+          {title}
+        </div>
         <div style={{ color: "var(--color-text-secondary)", marginBottom: 6 }}>{detail}</div>
         <div style={{ color: "var(--color-text-tertiary)", fontSize: 12, marginBottom: 14 }}>
           on <span style={{ fontFamily: "var(--font-mono)" }}>{cluster}</span>

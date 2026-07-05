@@ -121,7 +121,7 @@ describe("HelmView", () => {
   it("shows empty state when no releases", () => {
     seedReleases([]);
     const { getByText } = render(<HelmView cluster="homelab" />);
-    expect(getByText("No Helm releases found.")).toBeTruthy();
+    expect(getByText(/No Helm releases on this cluster/)).toBeTruthy();
   });
 
   it("deployed status dot renders with success color", () => {
@@ -249,8 +249,8 @@ describe("HelmView", () => {
 
   it("renders values content in pre block when present", () => {
     seedWithDetail(deployed, historyEntries, "replicaCount: 2\nimage:\n  tag: latest");
-    const { getByText } = render(<HelmView cluster="homelab" />);
-    expect(getByText(/replicaCount: 2/)).toBeTruthy();
+    render(<HelmView cluster="homelab" />);
+    expect(document.body.textContent).toContain("replicaCount: 2");
   });
 
   it("renders sensitive data hint above values pane", () => {
@@ -261,8 +261,52 @@ describe("HelmView", () => {
 
   it("close button clears selected release", () => {
     seedWithDetail(deployed, historyEntries, "");
-    const { getByText } = render(<HelmView cluster="homelab" />);
-    fireEvent.click(getByText("✕"));
+    const { getByRole } = render(<HelmView cluster="homelab" />);
+    fireEvent.click(getByRole("button", { name: "close release detail panel" }));
     expect(useFleet.getState().helm.selected).toBeNull();
+  });
+
+  it("sorts failed releases first (broken-first triage)", () => {
+    seedReleases([deployed, superseded, failed]);
+    const { getAllByTitle } = render(<HelmView cluster="homelab" />);
+    const names = getAllByTitle(/^(nginx-ingress|cert-manager|monitoring)$/).map((el) => el.textContent);
+    expect(names[0]).toBe("cert-manager");
+  });
+
+  it("status filter narrows to failed releases", () => {
+    seedReleases([deployed, failed]);
+    const { getByRole, queryByTitle } = render(<HelmView cluster="homelab" />);
+    fireEvent.click(getByRole("button", { name: /^failed/ }));
+    expect(queryByTitle("nginx-ingress")).toBeNull();
+    expect(queryByTitle("cert-manager-1.14.2")).toBeTruthy(); // failed release's chart cell
+  });
+
+  it("namespace select and search narrow the list", () => {
+    seedReleases([deployed, failed]);
+    const { getByLabelText, queryByTitle, getByPlaceholderText } = render(<HelmView cluster="homelab" />);
+    fireEvent.change(getByLabelText("filter release namespace"), { target: { value: "ingress-nginx" } });
+    expect(queryByTitle("cert-manager")).toBeNull();
+    fireEvent.change(getByLabelText("filter release namespace"), { target: { value: "" } });
+    fireEvent.change(getByPlaceholderText("filter releases"), { target: { value: "prometheus" } });
+    expect(queryByTitle("nginx-ingress")).toBeNull();
+  });
+
+  it("summary strip counts deployed and failed", () => {
+    seedReleases([deployed, superseded, failed]);
+    const { getByText } = render(<HelmView cluster="homelab" />);
+    // deployed + superseded both count as settled
+    const strip = getByText("releases").parentElement?.parentElement;
+    expect(strip?.textContent).toContain("deployed");
+    expect(strip?.textContent).toContain("failed");
+    expect(strip?.textContent).toContain("3"); // total releases
+  });
+
+  it("j then Enter opens the keyboard-selected release", () => {
+    seedReleases([failed, deployed]);
+    render(<HelmView cluster="homelab" />);
+    fireEvent.keyDown(window, { key: "j" });
+    fireEvent.keyDown(window, { key: "Enter" });
+    // failed sorts first, so the first kb selection is cert-manager
+    expect(openHelmRelease).toHaveBeenCalledWith("homelab", "cert-manager", "cert-manager");
   });
 });

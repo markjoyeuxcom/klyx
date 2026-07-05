@@ -21,6 +21,16 @@ vi.mock("../bridge/configsvc", () => ({
   armProtected: vi.fn(async () => ({ ok: true, error: "" })),
 }));
 
+// CopyButton copies via the crd bridge; mock it so no bindings chain loads.
+vi.mock("../bridge/crd", () => ({
+  copyText: vi.fn().mockResolvedValue(undefined),
+}));
+
+// useListKeys -> CommandPalette -> commands.ts pulls every bridge, whose
+// generated bindings import runtime.Create; stub the bindings module so the
+// chain never reaches the Wails runtime.
+vi.mock("../../bindings/github.com/moomora/klyx/internal/appbridge/index.js", () => ({}));
+
 // Mock the Wails Events.On used by DrainModal.
 vi.mock("@wailsio/runtime", () => ({
   Events: {
@@ -135,6 +145,7 @@ function seedWithDetail(summary: NodeSummaryDTO, detail: NodeDetailDTO) {
 describe("NodesView", () => {
   beforeEach(() => {
     useFleet.getState().clearNodes();
+    useFleet.setState({ navIntent: null, actionStatus: null });
     vi.clearAllMocks();
   });
 
@@ -143,6 +154,32 @@ describe("NodesView", () => {
     const { getByText } = render(<NodesView cluster="homelab" />);
     expect(getByText("node-healthy")).toBeTruthy();
     expect(getByText("a-notready")).toBeTruthy();
+  });
+
+  it("consumes a parked drain-node intent by opening the drain composer", () => {
+    seed([healthy]);
+    useFleet.getState().requestNavIntent({ kind: "drain-node", cluster: "homelab", node: "node-healthy" });
+    const { getByRole } = render(<NodesView cluster="homelab" />);
+    expect(getByRole("dialog", { name: "Drain node node-healthy" })).toBeTruthy();
+    expect(useFleet.getState().navIntent).toBeNull(); // one-shot: consumed
+    expect(startDrain).not.toHaveBeenCalled(); // opening the composer never starts the drain
+  });
+
+  it("a drain intent for a vanished node clears with an error toast, not a dialog", () => {
+    seed([healthy]);
+    useFleet.getState().requestNavIntent({ kind: "drain-node", cluster: "homelab", node: "gone-node" });
+    const { queryByRole } = render(<NodesView cluster="homelab" />);
+    expect(queryByRole("dialog")).toBeNull();
+    expect(useFleet.getState().navIntent).toBeNull();
+    expect(useFleet.getState().actionStatus).toMatchObject({ kind: "error" });
+  });
+
+  it("ignores an intent addressed to another cluster", () => {
+    seed([healthy]);
+    useFleet.getState().requestNavIntent({ kind: "drain-node", cluster: "other", node: "node-healthy" });
+    const { queryByRole } = render(<NodesView cluster="homelab" />);
+    expect(queryByRole("dialog")).toBeNull();
+    expect(useFleet.getState().navIntent).not.toBeNull(); // parked for its owner
   });
 
   it("shows problem text for not-ready node", () => {
@@ -272,7 +309,7 @@ describe("NodesView", () => {
     }));
     const { getByText } = render(<NodesView cluster="homelab" />);
     fireEvent.click(getByText("yaml"));
-    expect(getByText(/apiVersion: v1/)).toBeTruthy();
+    expect(document.body.textContent).toContain("apiVersion: v1");
   });
 
   it("close button clears selected node", () => {
@@ -285,8 +322,8 @@ describe("NodesView", () => {
         detailLoading: false,
       },
     }));
-    const { getByText } = render(<NodesView cluster="homelab" />);
-    fireEvent.click(getByText("✕"));
+    const { getByRole } = render(<NodesView cluster="homelab" />);
+    fireEvent.click(getByRole("button", { name: "close node detail panel" }));
     expect(useFleet.getState().nodes.selected).toBeNull();
   });
 

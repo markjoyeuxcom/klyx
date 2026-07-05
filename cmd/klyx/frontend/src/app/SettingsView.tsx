@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { IconAlertTriangle } from "@tabler/icons-react";
 import { getFleetConfig, addClusters, refreshNewContextCount } from "../bridge/configsvc";
 import type { FleetConfigDTO } from "../bridge/configsvc";
 import { btn, ellipsis } from "../chrome/primitives";
@@ -73,7 +74,7 @@ export function SettingsView() {
         {cfg.warnings.length > 0 && (
           <div style={{ marginBottom: 8 }}>
             {cfg.warnings.map((w, i) => (
-              <div key={i} style={{ fontSize: 11, color: "var(--color-text-warning)", padding: "2px 0" }}>⚠︎ {w}</div>
+              <div key={i} style={{ fontSize: 11, color: "var(--color-text-warning)", padding: "2px 0", display: "flex", alignItems: "baseline", gap: 4 }}><IconAlertTriangle size={11} stroke={1.7} style={{ flexShrink: 0, alignSelf: "center" }} /> {w}</div>
             ))}
           </div>
         )}

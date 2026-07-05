@@ -33,7 +33,7 @@ describe("GatewayApiView", () => {
   it("shows 'No Gateways' when served but empty", () => {
     net({ served: true, gateways: [] });
     const { getByText } = render(<GatewayApiView cluster="x" />);
-    expect(getByText(/No Gateways found/i)).toBeTruthy();
+    expect(getByText(/No Gateways on this cluster/i)).toBeTruthy();
   });
 
   it("lists gateways and selecting one opens the topology route", () => {
