@@ -8,7 +8,7 @@ import { useListKeys } from "../chrome/useListKeys";
 import { EmptyState } from "../chrome/EmptyState";
 import { SkeletonRows } from "../chrome/SkeletonRows";
 import { IconRoute } from "@tabler/icons-react";
-import { well, ellipsis, MetersStrip, FilterButton } from "../chrome/primitives";
+import { inputWell, well, ellipsis, MetersStrip, FilterButton } from "../chrome/primitives";
 import { SyncingChip, staleStyle } from "./staleness";
 
 const empty: CSSProperties = { padding: 24, color: "var(--color-text-secondary)", fontSize: 13 };
@@ -146,7 +146,7 @@ export function GatewayApiView({ cluster }: { cluster: string }) {
           onChange={(e) => setQuery(e.target.value)}
           placeholder="filter gateways"
           aria-label="filter gateways"
-          style={{ marginLeft: "auto", fontSize: 11, padding: "3px 8px", borderRadius: 4, border: "0.5px solid var(--color-border-tertiary)", background: "var(--color-background-primary)", color: "var(--color-text-primary)", width: 180 }}
+          style={{ ...inputWell, marginLeft: "auto", width: 180 }}
         />
         {visibleGateways.length !== gateways.length && <span style={{ fontSize: 10, color: "var(--color-text-tertiary)" }}>{visibleGateways.length} of {gateways.length}</span>}
       </div>

@@ -7,7 +7,7 @@ import { useListKeys } from "../chrome/useListKeys";
 import { useResizablePanel } from "../chrome/useResizablePanel";
 import { CopyButton } from "../chrome/CopyButton";
 import { Age } from "../chrome/Age";
-import { well, EmptyState, SkeletonRows } from "../chrome/primitives";
+import { inputWell, well, EmptyState, SkeletonRows } from "../chrome/primitives";
 import { IconStack2 } from "@tabler/icons-react";
 import { InstanceDetail } from "./InstanceDetail";
 import { riskFor, supportsRiskFilter } from "./resourceRisk";
@@ -219,7 +219,7 @@ export function InstanceList({ cluster, resource }: { cluster: string; resource:
           value={instances.filter}
           onChange={(e) => setFilter(e.target.value)}
           placeholder={fleetMode ? "cluster, name, namespace…" : "name, namespace…"}
-          style={{ width: 200, height: 28, paddingLeft: 10, fontSize: 12, background: "var(--color-background-secondary)", border: "0.5px solid var(--color-border-tertiary)", borderRadius: 4, color: "var(--color-text-primary)" }}
+          style={{ ...inputWell, width: 200, height: 28, boxSizing: "border-box" }}
         />
       </div>
 

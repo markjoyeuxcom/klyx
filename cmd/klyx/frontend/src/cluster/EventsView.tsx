@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import { IconAlertTriangle } from "@tabler/icons-react";
 import { Age } from "../chrome/Age";
 import { compactCount } from "../chrome/format";
-import { MetersStrip, Chip, EmptyState, LiveIndicator, SkeletonRows, btn, ellipsis } from "../chrome/primitives";
+import { inputWell, selectWell, MetersStrip, Chip, EmptyState, LiveIndicator, SkeletonRows, btn, ellipsis } from "../chrome/primitives";
 import { useFleet } from "../store/fleet";
 import type { EventRowDTO } from "../store/fleet";
 import { listEvents, openLiveEvents } from "../bridge/events";
@@ -146,7 +146,7 @@ export function EventsView({ cluster }: { cluster: string }) {
         <select
           value={events.namespace}
           onChange={(e) => onNamespace(e.target.value)}
-          style={{ fontSize: 12, padding: "3px 6px", background: "var(--color-background-primary)", color: "var(--color-text-primary)", border: "0.5px solid var(--color-border-tertiary)", borderRadius: 4 }}
+          style={selectWell}
         >
           <option value="">all namespaces</option>
           {events.namespaces.map((ns) => <option key={ns} value={ns}>{ns}</option>)}
@@ -157,7 +157,7 @@ export function EventsView({ cluster }: { cluster: string }) {
           value={events.search}
           onChange={(e) => useFleet.getState().setEventsSearch(e.target.value)}
           placeholder="filter events"
-          style={{ fontSize: 11, padding: "3px 8px", borderRadius: 4, border: "0.5px solid var(--color-border-tertiary)", background: "var(--color-background-primary)", color: "var(--color-text-primary)", width: 160 }}
+          style={{ ...inputWell, width: 160 }}
         />
         <button onClick={onRefresh} style={btn}>refresh</button>
         <LiveIndicator live={events.live} />

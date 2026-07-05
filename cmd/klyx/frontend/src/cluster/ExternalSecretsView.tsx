@@ -3,7 +3,7 @@ import { useFleet } from "../store/fleet";
 import type { ExternalSecretDTO, ExternalSecretStoreDTO } from "../store/fleet";
 import { openExternalSecrets, closeExternalSecrets } from "../bridge/externalsecrets";
 import { useListKeys } from "../chrome/useListKeys";
-import { MetersStrip, well, Badge, FilterButton, Section, Field, StatusDot, frame, ellipsis, mono, readyColor, toneColor } from "../chrome/primitives";
+import { inputWell, MetersStrip, well, Badge, FilterButton, Section, Field, StatusDot, frame, ellipsis, mono, readyColor, toneColor } from "../chrome/primitives";
 import { CopyButton } from "../chrome/CopyButton";
 import { EmptyState } from "../chrome/EmptyState";
 import { SkeletonRows } from "../chrome/SkeletonRows";
@@ -198,7 +198,7 @@ export function ExternalSecretsView({ cluster }: { cluster: string }) {
           onChange={(e) => setQuery(e.target.value)}
           placeholder="filter external secrets"
           aria-label="filter external secrets"
-          style={{ marginLeft: "auto", fontSize: 11, padding: "3px 8px", borderRadius: 4, border: "0.5px solid var(--color-border-tertiary)", background: "var(--color-background-primary)", color: "var(--color-text-primary)", width: 180 }}
+          style={{ ...inputWell, marginLeft: "auto", width: 180 }}
         />
         {(visibleSecrets.length !== secrets.length || namespace) && filter !== "stores" && <span style={{ fontSize: 10, color: "var(--color-text-tertiary)" }}>{visibleSecrets.length} of {secrets.length}</span>}
       </div>

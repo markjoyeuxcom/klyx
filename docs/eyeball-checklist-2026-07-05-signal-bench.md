@@ -48,3 +48,9 @@ design rules (notes §Design rules) are the review bar.
 - [ ] Tabs carry fault lamps + red counts when loaded data has faults (workloads/pods/flux/argo); labels read "ext-secrets"/"crds".
 - [ ] Meter wells read as counter windows: 16px values, ≥86px, labels beneath.
 - [ ] Pods filters are counted switches (all N / broken N), pressed-well when active.
+
+## Seamless pass (pic3 feedback)
+- [ ] Triage is one compact signal row: unlit lamps + "quiet" for healthy lenses, lit lamp + bold toned count for faults; no boxed cells, no column dividers, no band background. Clicking a lit signal still jumps to the filtered lens.
+- [ ] Panel verdicts are one element: lamp + state word in a toned ringed box, mono sub-line "reason · detail" - not three disconnected chips.
+- [ ] Every namespace select and filter input is an inset well (mono, no OS chrome, chevron on selects) - pods, workloads, events, gateway, certs, eso, flux, helm, argo, instances, logs grep.
+- [ ] The workloads status caption reads as an engraved note (small tracked uppercase), not a second row of body text.

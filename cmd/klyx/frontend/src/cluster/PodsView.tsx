@@ -17,7 +17,7 @@ import { useResizableDock } from "../chrome/useResizableDock";
 import { useListKeys } from "../chrome/useListKeys";
 import { useNavIntent } from "../chrome/useNavIntent";
 import { FKeysBar } from "../chrome/FKeysBar";
-import { FilterButton, MetersStrip, well, EmptyState, LiveIndicator, SkeletonRows, btn, ellipsis, type Tone } from "../chrome/primitives";
+import { inputWell, selectWell, FilterButton, MetersStrip, well, EmptyState, LiveIndicator, SkeletonRows, btn, ellipsis, type Tone } from "../chrome/primitives";
 import { CopyButton } from "../chrome/CopyButton";
 import { YamlBlock } from "../chrome/YamlBlock";
 import { InspectorConditions, InspectorEvents, InspectorSection, InspectorStatus, InspectorTabButton, MetadataChips, inspectorStateBox } from "./ResourceInspector";
@@ -265,7 +265,7 @@ export function PodsView({ cluster }: { cluster: string }) {
             <select
               value={pods.namespace}
               onChange={(e) => onNamespace(e.target.value)}
-              style={{ fontSize: 12, padding: "3px 6px", background: "var(--color-background-primary)", color: "var(--color-text-primary)", border: "0.5px solid var(--color-border-tertiary)", borderRadius: 4 }}
+              style={selectWell}
             >
               <option value="">all namespaces</option>
               {pods.namespaces.map((ns) => <option key={ns} value={ns}>{ns}</option>)}
@@ -277,7 +277,7 @@ export function PodsView({ cluster }: { cluster: string }) {
               value={pods.search}
               onChange={(e) => useFleet.getState().setPodsSearch(e.target.value)}
               placeholder="filter pods"
-              style={{ fontSize: 11, padding: "3px 8px", borderRadius: 4, border: "0.5px solid var(--color-border-tertiary)", background: "var(--color-background-primary)", color: "var(--color-text-primary)", width: 160 }}
+              style={{ ...inputWell, width: 160 }}
             />
             <button onClick={onRefresh} style={btn}>refresh</button>
             <LiveIndicator live={pods.live} />

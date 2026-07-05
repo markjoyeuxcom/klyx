@@ -4,7 +4,7 @@ import type { CertificateDTO, IssuerDTO, ChainNodeDTO, CertChainDTO } from "../s
 import { openCertManager, closeCertManager, getCertificateChain } from "../bridge/certmanager";
 import { useListKeys } from "../chrome/useListKeys";
 import { FKeysBar } from "../chrome/FKeysBar";
-import { MetersStrip, well, Badge, FilterButton, Section, Field, StatusDot, frame, ellipsis, mono, readyColor, toneColor } from "../chrome/primitives";
+import { inputWell, MetersStrip, well, Badge, FilterButton, Section, Field, StatusDot, frame, ellipsis, mono, readyColor, toneColor } from "../chrome/primitives";
 import { CopyButton } from "../chrome/CopyButton";
 import { EmptyState } from "../chrome/EmptyState";
 import { SkeletonRows } from "../chrome/SkeletonRows";
@@ -240,7 +240,7 @@ export function CertsView({ cluster }: { cluster: string }) {
           onChange={(e) => setQuery(e.target.value)}
           placeholder="filter certificates"
           aria-label="filter certificates"
-          style={{ marginLeft: "auto", fontSize: 11, padding: "3px 8px", borderRadius: 4, border: "0.5px solid var(--color-border-tertiary)", background: "var(--color-background-primary)", color: "var(--color-text-primary)", width: 180 }}
+          style={{ ...inputWell, marginLeft: "auto", width: 180 }}
         />
         {(visibleCerts.length !== certs.length || namespace) && filter !== "issuers" && <span style={{ fontSize: 10, color: "var(--color-text-tertiary)" }}>{visibleCerts.length} of {certs.length}</span>}
       </div>

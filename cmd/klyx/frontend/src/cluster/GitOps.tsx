@@ -15,7 +15,7 @@ import { SkeletonRows } from "../chrome/SkeletonRows";
 import { WatchErrorBanner } from "../chrome/WatchErrorBanner";
 import { IconGitBranch } from "@tabler/icons-react";
 import { wellKnownResourceRef } from "./resourceRefs";
-import { MetersStrip, well, Badge, FilterButton, Section, StatusDot, readyColor, ellipsis, actionBtn } from "../chrome/primitives";
+import { inputWell, MetersStrip, well, Badge, FilterButton, Section, StatusDot, readyColor, ellipsis, actionBtn } from "../chrome/primitives";
 import { compactCount } from "../chrome/format";
 import { SyncingChip, staleStyle } from "./staleness";
 
@@ -258,7 +258,7 @@ export function GitOps({ cluster }: { cluster: string }) {
           onChange={(e) => setQuery(e.target.value)}
           placeholder="filter flux"
           aria-label="filter flux"
-          style={{ marginLeft: "auto", fontSize: 11, padding: "3px 8px", borderRadius: 4, border: "0.5px solid var(--color-border-tertiary)", background: "var(--color-background-primary)", color: "var(--color-text-primary)", width: 170 }}
+          style={{ ...inputWell, marginLeft: "auto", width: 170 }}
         />
         {visibleRows.length !== rows.length && <span style={{ fontSize: 10, color: "var(--color-text-tertiary)" }}>{visibleRows.length} of {rows.length}</span>}
       </div>

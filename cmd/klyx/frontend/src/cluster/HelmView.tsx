@@ -1,6 +1,6 @@
 import { useEffect, useCallback, useMemo, useRef, useState } from "react";
 import { IconAnchor, IconX } from "@tabler/icons-react";
-import { EmptyState, FilterButton, MetersStrip, SkeletonRows, btn, ellipsis } from "../chrome/primitives";
+import { inputWell, EmptyState, FilterButton, MetersStrip, SkeletonRows, btn, ellipsis } from "../chrome/primitives";
 import { useFleet } from "../store/fleet";
 import type { HelmReleaseDTO, HelmHistoryEntryDTO } from "../store/fleet";
 import { listHelmReleases, openHelmRelease, helmRollback } from "../bridge/helm";
@@ -175,7 +175,7 @@ export function HelmView({ cluster }: { cluster: string }) {
             onChange={(e) => setQuery(e.target.value)}
             placeholder="filter releases"
             aria-label="filter releases"
-            style={{ marginLeft: "auto", fontSize: 11, padding: "3px 8px", borderRadius: 4, border: "0.5px solid var(--color-border-tertiary)", background: "var(--color-background-primary)", color: "var(--color-text-primary)", width: 180 }}
+            style={{ ...inputWell, marginLeft: "auto", width: 180 }}
           />
           <button onClick={onRefresh} style={btn}>refresh</button>
           <UpdatedAt at={receivedAt} />

@@ -21,7 +21,7 @@ import { Chip } from "../chrome/Chip";
 import { CopyButton } from "../chrome/CopyButton";
 import { EmptyState } from "../chrome/EmptyState";
 import { SkeletonRows } from "../chrome/SkeletonRows";
-import { MetersStrip, LiveIndicator, btn, ellipsis, type Tone } from "../chrome/primitives";
+import { inputWell, selectWell, MetersStrip, LiveIndicator, btn, ellipsis, type Tone } from "../chrome/primitives";
 import { InspectorStatus } from "./ResourceInspector";
 import { loadClusterPrefs, loadSearch, saveSearch, saveWorkloadsViewPrefs } from "../store/persist";
 import { SyncingChip, staleStyle } from "./staleness";
@@ -267,7 +267,7 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
           }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
               <select value={wl.namespace} onChange={(e) => onNamespace(e.target.value)}
-                style={{ fontSize: 12, padding: "3px 6px", background: "var(--color-background-primary)", color: "var(--color-text-primary)", border: "0.5px solid var(--color-border-tertiary)", borderRadius: 3 }}>
+                style={selectWell}>
                 <option value="">all namespaces</option>
                 {wl.namespaces.map((ns) => <option key={ns} value={ns}>{ns}</option>)}
               </select>
@@ -293,7 +293,7 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
                 onChange={(e) => useFleet.getState().setWorkloadsSearch(e.target.value)}
                 aria-label="filter workloads"
                 placeholder="filter workloads"
-                style={{ fontSize: 11, padding: "3px 8px", borderRadius: 3, border: "0.5px solid var(--color-border-tertiary)", background: "var(--color-background-primary)", color: "var(--color-text-primary)", width: 180, fontFamily: "var(--font-mono)" }}
+                style={{ ...inputWell, width: 180 }}
               />
               <button onClick={onRefresh} style={btn}>refresh</button>
               <LiveIndicator live={wl.live} />
@@ -539,14 +539,16 @@ function WorkloadStatusTrail({
       gap: 8,
       color: "var(--color-text-tertiary)",
       fontFamily: "var(--font-mono)",
-      fontSize: 11,
+      fontSize: 9,
+      letterSpacing: "0.08em",
+      textTransform: "uppercase",
       marginLeft: 4,
       whiteSpace: "nowrap",
     }}>
       <span>{shown}/{total}</span>
-      <span style={{ color: attention > 0 ? "var(--color-text-danger)" : "var(--color-text-success)" }}>{attention} attention</span>
+      <span style={{ color: attention > 0 ? "var(--color-text-danger)" : undefined }}>{attention} attention</span>
       <span>{kinds}</span>
-      <span style={{ color: live ? "var(--color-text-success)" : "var(--color-text-warning)" }}>{live ? "watch-backed" : "manual refresh"}</span>
+      <span style={{ color: live ? undefined : "var(--color-text-warning)" }}>{live ? "watch-backed" : "manual refresh"}</span>
     </span>
   );
 }

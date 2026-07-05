@@ -18,6 +18,8 @@ export {
   mono,
   frame,
   well,
+  inputWell,
+  selectWell,
   btn,
   actionBtn,
   twoPaneGrid,

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { IconChevronRight } from "@tabler/icons-react";
-import { Badge, type Tone } from "../chrome/primitives";
+import { StatusDot, toneBg, toneBorder, toneColor, type Tone } from "../chrome/primitives";
 import { Age } from "../chrome/Age";
 import { compactCount } from "../chrome/format";
 import type { ConditionDTO, EventDTO } from "../store/fleet";
@@ -96,19 +96,38 @@ export function InspectorEmpty({ text, style }: { text: string; style?: React.CS
 // ---------------------------------------------------------------------------
 
 /** InspectorStatus — the state-first opening line of a panel. */
+// InspectorStatus is the mockup's verdict (Signal Bench): ONE big element -
+// lamp + state word in a toned box with an inset ring - and a mono sub-line
+// joining reason and detail. Not a row of disconnected chips.
 export function InspectorStatus({ tone, label, reason, detail }: {
   tone: Tone;
   label: string;
   reason?: string;
   detail?: string;
 }) {
+  const sub = [reason, detail].filter(Boolean).join(" · ");
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", marginBottom: 12 }}>
-      <Badge tone={tone} variant="filled"><span className={tone === "danger" ? "klyx-danger-prefix" : undefined}>{label}</span></Badge>
-      {reason && <Badge tone={tone === "success" ? "muted" : tone}>{reason}</Badge>}
-      {detail && (
-        <span style={{ fontSize: 11, color: "var(--color-text-secondary)", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={detail}>
-          {detail}
+    <div style={{ display: "flex", alignItems: "center", gap: 9, flexWrap: "wrap", marginBottom: 12 }}>
+      <span style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 8,
+        fontFamily: "var(--font-mono)",
+        fontSize: 12,
+        fontWeight: 700,
+        padding: "5px 10px",
+        borderRadius: 4,
+        color: toneColor[tone],
+        background: toneBg[tone],
+        boxShadow: `inset 0 0 0 1px ${toneBorder[tone]}`,
+        whiteSpace: "nowrap",
+      }}>
+        <StatusDot size={8} tone={tone} />
+        <span className={tone === "danger" ? "klyx-danger-prefix" : undefined}>{label}</span>
+      </span>
+      {sub && (
+        <span style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--color-text-secondary)", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={sub}>
+          {sub}
         </span>
       )}
     </div>
