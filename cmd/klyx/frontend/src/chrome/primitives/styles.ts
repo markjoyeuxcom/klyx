@@ -46,21 +46,37 @@ export const readyColor: Record<string, string> = {
 export const ellipsis: CSSProperties = { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" };
 export const mono: CSSProperties = { fontFamily: "var(--font-mono)" };
 
-// frame: the standard card surface — a hairline edge, md radius, primary bg.
+// frame: the module face (Signal Bench) — machined top edge + drop shadow.
+// "Wells hold data, modules hold chrome": panels/navs/dialogs are modules.
+// Non-bench themes have no machining tokens; the fallbacks render the old
+// flat hairline card.
 export const frame: CSSProperties = {
   border: "var(--border-hairline) solid var(--color-border-tertiary)",
+  borderTop: "1px solid var(--bench-edge-hi, var(--color-border-tertiary))",
   borderRadius: "var(--border-radius-md)",
   background: "var(--color-background-primary)",
+  boxShadow: "var(--bench-module-shadow, none)",
 };
 
-// btn: the small secondary control (filter inputs, row actions). Inherits the
-// global hover/active/disabled/focus rules from tokens.css — keep it a <button>.
+// well: the inset data surface (Signal Bench) — lists, log panes, counter
+// windows, command previews and inputs sit IN the bench, not on it.
+export const well: CSSProperties = {
+  background: "var(--bench-well-bg, var(--color-background-secondary))",
+  borderRadius: "var(--radius-sm)",
+  boxShadow: "var(--bench-well-shadow, inset 0 0 0 1px var(--color-border-tertiary))",
+};
+
+// btn: the small secondary control (filter inputs, row actions), machined as
+// a raised key on bench themes. Inherits the global hover/active/disabled/
+// focus rules from tokens.css — keep it a <button>.
 export const btn: CSSProperties = {
   fontSize: "var(--text-xs)",
   padding: "3px 10px",
   borderRadius: "var(--radius-sm)",
   cursor: "pointer",
   border: "var(--border-hairline) solid var(--color-border-tertiary)",
+  borderTop: "1px solid var(--bench-edge-hi, var(--color-border-tertiary))",
+  borderBottom: "1px solid var(--bench-edge-lo, var(--color-border-tertiary))",
   background: "var(--color-background-primary)",
   color: "var(--color-text-secondary)",
 };
