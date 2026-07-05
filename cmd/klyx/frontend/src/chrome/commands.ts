@@ -55,6 +55,12 @@ function openSection(s: FleetStore, section: ClusterSection, targetCluster?: str
 // the view consumes it once its data is loaded and opens its existing confirm
 // or operation composer. The palette never fires a day-2 API call directly -
 // protected-cluster arming and danger confirms are never bypassed.
+// lockMark flags verbs aimed at a prd-locked cluster right in the palette
+// hint, so the typed-confirmation is never a surprise.
+function lockMark(s: FleetStore, cluster: string): string {
+  return s.clusters.find((c) => c.name === cluster)?.protected ? " · prd lock" : "";
+}
+
 function openWithIntent(s: FleetStore, section: ClusterSection, targetCluster: string, intent: NavIntent): void {
   openSection(s, section, targetCluster);
   s.requestNavIntent(intent);
@@ -289,14 +295,14 @@ export function buildCommands(s: FleetStore): Command[] {
         id: `verb:drain:${nodeCluster}/${n.name}`,
         group: "Actions",
         title: `drain node ${n.name}`,
-        hint: `${nodeCluster} · opens the drain composer`,
+        hint: `${nodeCluster} · opens the drain composer${lockMark(s, nodeCluster)}`,
         run: () => openWithIntent(s, "nodes", nodeCluster, { kind: "drain-node", cluster: nodeCluster, node: n.name }),
       });
       cmds.push({
         id: `verb:cordon:${nodeCluster}/${n.name}`,
         group: "Actions",
         title: n.unschedulable ? `uncordon node ${n.name}` : `cordon node ${n.name}`,
-        hint: nodeCluster,
+        hint: `${nodeCluster}${lockMark(s, nodeCluster)}`,
         run: () => openWithIntent(s, "nodes", nodeCluster, { kind: "cordon-node", cluster: nodeCluster, node: n.name, cordon: !n.unschedulable }),
       });
     }
@@ -325,7 +331,7 @@ export function buildCommands(s: FleetStore): Command[] {
           id: `verb:restart:${workloadCluster}/${key}`,
           group: "Actions",
           title: `restart ${w.kind.toLowerCase()} ${w.namespace}/${w.name}`,
-          hint: workloadCluster,
+          hint: `${workloadCluster}${lockMark(s, workloadCluster)}`,
           run: () => openWithIntent(s, "workloads", workloadCluster, { kind: "restart-workload", cluster: workloadCluster, workloadKind: w.kind as WorkloadKind, namespace: w.namespace, name: w.name }),
         });
         // DaemonSets have no replica count - scale does not apply.
@@ -334,7 +340,7 @@ export function buildCommands(s: FleetStore): Command[] {
             id: `verb:scale:${workloadCluster}/${key}`,
             group: "Actions",
             title: `scale ${w.kind.toLowerCase()} ${w.namespace}/${w.name}`,
-            hint: `${workloadCluster} · ${w.ready}/${w.desired} ready`,
+            hint: `${workloadCluster} · ${w.ready}/${w.desired} ready${lockMark(s, workloadCluster)}`,
             run: () => openWithIntent(s, "workloads", workloadCluster, { kind: "scale-workload", cluster: workloadCluster, workloadKind: w.kind as WorkloadKind, namespace: w.namespace, name: w.name }),
           });
         }
@@ -379,14 +385,14 @@ export function buildCommands(s: FleetStore): Command[] {
         id: `verb:reconcile:${gitopsCluster}/${key}`,
         group: "Actions",
         title: `reconcile ${r.kind.toLowerCase()} ${r.namespace}/${r.name}`,
-        hint: gitopsCluster,
+        hint: `${gitopsCluster}${lockMark(s, gitopsCluster)}`,
         run: () => openWithIntent(s, "gitops", gitopsCluster, { kind: "reconcile-flux", cluster: gitopsCluster, fluxKind: r.kind, namespace: r.namespace, name: r.name }),
       });
       cmds.push({
         id: `verb:suspend:${gitopsCluster}/${key}`,
         group: "Actions",
         title: r.suspended ? `resume ${r.kind.toLowerCase()} ${r.namespace}/${r.name}` : `suspend ${r.kind.toLowerCase()} ${r.namespace}/${r.name}`,
-        hint: gitopsCluster,
+        hint: `${gitopsCluster}${lockMark(s, gitopsCluster)}`,
         run: () => openWithIntent(s, "gitops", gitopsCluster, { kind: "suspend-flux", cluster: gitopsCluster, fluxKind: r.kind, namespace: r.namespace, name: r.name, suspend: !r.suspended }),
       });
     }
@@ -413,7 +419,7 @@ export function buildCommands(s: FleetStore): Command[] {
         id: `verb:argo-sync:${argoCluster}/${key}`,
         group: "Actions",
         title: `sync app ${a.namespace}/${a.name}`,
-        hint: `${argoCluster} · opens the sync composer`,
+        hint: `${argoCluster} · opens the sync composer${lockMark(s, argoCluster)}`,
         run: () => openWithIntent(s, "argo", argoCluster, { kind: "sync-argo", cluster: argoCluster, namespace: a.namespace, name: a.name }),
       });
       cmds.push({

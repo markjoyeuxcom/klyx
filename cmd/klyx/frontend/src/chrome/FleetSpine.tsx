@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { IconChevronRight, IconChevronLeft } from "@tabler/icons-react";
 import { useFleet } from "../store/fleet";
+import { StatusDot } from "./primitives";
 
 // spineCodes derives a short (2-char) identifying code per cluster so the
 // spine blocks are readable at a glance, not just on hover. First choice is
@@ -79,30 +80,24 @@ export function FleetSpine() {
         const broken = (board[c.name]?.broken ?? 0) > 0;
         const isSelected = c.name === selected;
 
-        let background = "var(--color-background-success)";
-        let border = "0.5px solid var(--color-border-success)";
-        let color = "var(--color-text-success)";
-        // Selection thickens the block's OWN severity color - no foreign accent.
-        let selectedBorder = "1.5px solid var(--color-text-success)";
         let title = `${c.name} — ${c.state.toLowerCase()}`;
-        if (unreachable) {
-          background = "transparent";
-          border = "0.5px dashed var(--color-border-secondary)";
-          color = "var(--color-text-tertiary)";
-          selectedBorder = "1.5px dashed var(--color-border-primary)";
-          title = `${c.name} — ${c.state.toLowerCase()}${c.reason ? `: ${c.reason}` : ""}`;
-        } else if (broken) {
-          background = "var(--color-background-danger)";
-          border = "0.5px solid var(--color-border-danger)";
-          color = "var(--color-text-danger)";
-          selectedBorder = "1.5px solid var(--color-text-danger)";
-          title = `${c.name} — ${board[c.name]!.broken} broken workload${board[c.name]!.broken === 1 ? "" : "s"}`;
-        } else if (c.state === "Degraded") {
-          background = "var(--color-background-warning)";
-          border = "0.5px solid var(--color-border-warning)";
-          color = "var(--color-text-warning)";
-          selectedBorder = "1.5px solid var(--color-text-warning)";
-        }
+        if (unreachable) title = `${c.name} — ${c.state.toLowerCase()}${c.reason ? `: ${c.reason}` : ""}`;
+        else if (broken) title = `${c.name} — ${board[c.name]!.broken} broken workload${board[c.name]!.broken === 1 ? "" : "s"}`;
+
+        // Channel-strip lamp (Signal Bench): healthy lamps sit dim, faults
+        // glow, an unreachable cluster is an unpowered socket (dashed ring).
+        // This is the ONE place blink is legal - the spine is the peripheral
+        // pager; a broken cluster must be findable from across the room.
+        const lamp = unreachable ? (
+          <span aria-hidden style={{ width: 8, height: 8, borderRadius: "50%", background: "transparent", border: "1px dashed var(--color-text-tertiary)", flexShrink: 0 }} />
+        ) : (
+          <StatusDot size={8} tone={broken ? "danger" : c.state === "Degraded" ? "warning" : "success"} blink={broken} />
+        );
+        const codeColor = unreachable ? "var(--color-text-tertiary)" : isSelected ? "var(--color-text-primary)" : "var(--color-text-secondary)";
+        // Current channel is pressed into a well.
+        const pressed: React.CSSProperties = isSelected
+          ? { background: "var(--bench-well-bg, var(--color-background-primary))", boxShadow: "var(--bench-well-shadow, inset 0 0 0 1px var(--color-border-secondary))" }
+          : { background: "transparent" };
 
         if (expanded) {
           const brokenCount = board[c.name]?.broken ?? null;
@@ -120,16 +115,16 @@ export function FleetSpine() {
                 padding: "3px 6px",
                 borderRadius: 4,
                 cursor: "pointer",
-                // Sidebar active-item idiom: the selected row becomes a card.
-                background: isSelected ? "var(--color-background-primary)" : "transparent",
-                border: isSelected ? "0.5px solid var(--color-border-secondary)" : "0.5px solid transparent",
+                border: "none",
                 textAlign: "left",
+                ...pressed,
               }}
             >
-              <span style={{ width: 10, height: 10, borderRadius: 3, flexShrink: 0, background, border }} />
+              {lamp}
               <span style={{
                 fontFamily: "var(--font-mono)", fontSize: 10, lineHeight: 1,
-                color: unreachable ? "var(--color-text-tertiary)" : isSelected ? "var(--color-text-primary)" : "var(--color-text-secondary)",
+                fontWeight: isSelected ? 700 : 400,
+                color: codeColor,
                 overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1,
               }}>{c.name}</span>
               {brokenCount != null && brokenCount > 0 && (
@@ -146,19 +141,25 @@ export function FleetSpine() {
             aria-current={isSelected ? "true" : undefined}
             title={title}
             style={{
-              width: 26,
-              height: 22,
+              width: 34,
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              gap: 3,
+              padding: "4px 0",
               borderRadius: 4,
-              padding: 0,
+              border: "none",
               cursor: "pointer",
-              background,
-              border: isSelected ? selectedBorder : border,
-              color,
-              fontSize: 10,
+              fontSize: 9,
               fontFamily: "var(--font-mono)",
+              letterSpacing: "0.04em",
               lineHeight: 1,
+              color: codeColor,
+              fontWeight: isSelected ? 700 : 400,
+              ...pressed,
             }}
           >
+            {lamp}
             {codes[c.name]}
           </button>
         );

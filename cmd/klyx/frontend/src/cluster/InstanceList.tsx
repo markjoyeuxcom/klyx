@@ -296,7 +296,7 @@ export function InstanceList({ cluster, resource }: { cluster: string; resource:
                       height: ROW_HEIGHT, boxSizing: "border-box",
                       borderTop: "0.5px solid var(--color-border-tertiary)", fontSize: 11, cursor: "pointer",
                       background: i === effectiveKbIdx || isOpen ? "var(--color-background-secondary)" : undefined,
-                      boxShadow: i === effectiveKbIdx ? "inset 2px 0 0 var(--color-text-info)" : risk.bad ? "inset 2px 0 0 var(--color-text-warning)" : undefined,
+                      boxShadow: i === effectiveKbIdx ? "inset 2px 0 0 var(--bench-selection-edge, var(--color-text-info))" : risk.bad ? "inset 2px 0 0 var(--color-text-warning)" : undefined,
                     }}
                   >
                     {fleetMode && <span style={{ color: "var(--color-text-info)", fontFamily: "var(--font-mono)", ...ellipsis }}>{r.cluster}</span>}

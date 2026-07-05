@@ -269,7 +269,7 @@ function SecretRow({ e, open, kbSelected, onClick }: { e: ExternalSecretDTO; ope
         gap: 10, alignItems: "center", padding: "7px 12px", cursor: "pointer",
         border: "none", borderBottom: "0.5px solid var(--color-border-tertiary)",
         background: kbSelected || open ? "var(--color-background-secondary)" : "transparent", color: "var(--color-text-primary)",
-        boxShadow: kbSelected ? "inset 2px 0 0 var(--color-text-info)" : undefined,
+        boxShadow: kbSelected ? "inset 2px 0 0 var(--bench-selection-edge, var(--color-text-info))" : undefined,
       }}
     >
       <span style={{ alignSelf: "stretch", background: bad ? "var(--color-text-danger)" : e.stale ? "var(--color-text-warning)" : "transparent" }} />

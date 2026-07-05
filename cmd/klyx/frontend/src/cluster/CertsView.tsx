@@ -3,6 +3,7 @@ import { useFleet } from "../store/fleet";
 import type { CertificateDTO, IssuerDTO, ChainNodeDTO, CertChainDTO } from "../store/fleet";
 import { openCertManager, closeCertManager, getCertificateChain } from "../bridge/certmanager";
 import { useListKeys } from "../chrome/useListKeys";
+import { FKeysBar } from "../chrome/FKeysBar";
 import { Badge, FilterButton, SummaryCell, Section, Field, StatusDot, frame, ellipsis, mono, readyColor, toneColor } from "../chrome/primitives";
 import { CopyButton } from "../chrome/CopyButton";
 import { EmptyState } from "../chrome/EmptyState";
@@ -271,6 +272,10 @@ export function CertsView({ cluster }: { cluster: string }) {
                 return <CertRow key={k} c={c} open={cm.selectedKey === k} kbSelected={i === kbIdx} onClick={() => (cm.selectedKey === k ? select(null) : select(k))} />;
               })}
             </div>
+            <FKeysBar
+              keys={[["j k", "nav"], ["\u21B5", "inspect"], ["/", "filter"], ["esc", "close"]]}
+              status={`${visibleCerts.length} of ${certs.length} \u00B7 broken first`}
+            />
           </div>
 
           <div data-testid="cert-inspector" style={{ minHeight: 0, overflowY: "auto" }}>
@@ -302,7 +307,7 @@ function CertRow({ c, open, kbSelected, onClick }: { c: CertificateDTO; open: bo
         gap: 10, alignItems: "center", padding: "7px 12px", cursor: "pointer",
         border: "none", borderBottom: "0.5px solid var(--color-border-tertiary)",
         background: kbSelected || open ? "var(--color-background-secondary)" : "transparent", color: "var(--color-text-primary)",
-        boxShadow: kbSelected ? "inset 2px 0 0 var(--color-text-info)" : undefined,
+        boxShadow: kbSelected ? "inset 2px 0 0 var(--bench-selection-edge, var(--color-text-info))" : undefined,
         ...staleStyle(c.stale),
       }}
     >

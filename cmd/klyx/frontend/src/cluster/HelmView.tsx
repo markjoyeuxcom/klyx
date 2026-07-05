@@ -216,7 +216,7 @@ export function HelmView({ cluster }: { cluster: string }) {
                     padding: "7px 8px", borderBottom: "0.5px solid var(--color-border-tertiary)",
                     cursor: "pointer",
                     background: isKb || isSelected ? "var(--color-background-secondary)" : undefined,
-                    boxShadow: isKb ? "inset 2px 0 0 var(--color-text-info)" : undefined,
+                    boxShadow: isKb ? "inset 2px 0 0 var(--bench-selection-edge, var(--color-text-info))" : undefined,
                   }}
                 >
                   <span style={{ width: 8, height: 8, borderRadius: "50%", background: statusDot(r.status), display: "inline-block" }} />

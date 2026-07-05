@@ -232,36 +232,39 @@ export function CommandPalette() {
           flexDirection: "column",
         }}
       >
-        <input
-          ref={inputRef}
-          data-palette-input="true"
-          data-testid="command-palette-input"
-          role="combobox"
-          aria-expanded={true}
-          aria-controls="command-palette-list"
-          aria-activedescendant={results[sel] ? optionId(results[sel].cmd.id) : undefined}
-          aria-autocomplete="list"
-          value={query}
-          onChange={(e) => {
-            setQuery(e.target.value);
-            setSel(0);
-          }}
-          onKeyDown={onInputKey}
-          placeholder="jump or act: cluster, pod, drain, sync, scale…"
-          spellCheck={false}
-          autoComplete="off"
-          style={{
-            border: "none",
-            borderBottom: "0.5px solid var(--color-border-tertiary)",
-            outline: "none",
-            background: "transparent",
-            color: "var(--color-text-primary)",
-            fontSize: 15,
-            padding: "14px 16px",
-            width: "100%",
-            boxSizing: "border-box",
-          }}
-        />
+        {/* The input sits IN a well (Signal Bench): data surfaces are inset. */}
+        <div style={{ margin: 12, borderRadius: "var(--radius-sm)", background: "var(--bench-well-bg, transparent)", boxShadow: "var(--bench-well-shadow, none)", borderBottom: "0.5px solid var(--color-border-tertiary)" }}>
+          <input
+            ref={inputRef}
+            data-palette-input="true"
+            data-testid="command-palette-input"
+            role="combobox"
+            aria-expanded={true}
+            aria-controls="command-palette-list"
+            aria-activedescendant={results[sel] ? optionId(results[sel].cmd.id) : undefined}
+            aria-autocomplete="list"
+            value={query}
+            onChange={(e) => {
+              setQuery(e.target.value);
+              setSel(0);
+            }}
+            onKeyDown={onInputKey}
+            placeholder="jump or act: cluster, pod, drain, sync, scale…"
+            spellCheck={false}
+            autoComplete="off"
+            style={{
+              border: "none",
+              outline: "none",
+              background: "transparent",
+              color: "var(--color-text-primary)",
+              fontFamily: "var(--font-mono)",
+              fontSize: 14,
+              padding: "11px 14px",
+              width: "100%",
+              boxSizing: "border-box",
+            }}
+          />
+        </div>
 
         <div ref={listRef} id="command-palette-list" role="listbox" style={{ maxHeight: "50vh", overflowY: "auto", padding: "4px 0" }}>
           {results.length === 0 ? (
@@ -305,7 +308,8 @@ export function CommandPalette() {
                         cursor: "pointer",
                         fontSize: 13,
                         color: "var(--color-text-primary)",
-                        background: selected ? "var(--color-background-secondary)" : "transparent",
+                        background: selected ? "var(--bench-selection-bg, var(--color-background-secondary))" : "transparent",
+                        boxShadow: selected ? "inset 2px 0 0 var(--bench-selection-edge, var(--color-text-info))" : undefined,
                       }}
                     >
                       <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>

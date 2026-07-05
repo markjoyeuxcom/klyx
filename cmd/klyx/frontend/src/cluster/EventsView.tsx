@@ -276,7 +276,7 @@ function EventRow({ event: e, cluster, expanded, kbSelected, onToggle, onKbSelec
           background: kbSelected
             ? "var(--color-background-secondary)"
             : expanded ? "var(--color-background-secondary)" : undefined,
-          boxShadow: kbSelected ? "inset 2px 0 0 var(--color-text-info)" : undefined,
+          boxShadow: kbSelected ? "inset 2px 0 0 var(--bench-selection-edge, var(--color-text-info))" : undefined,
           outline: "none",
         }}
       >

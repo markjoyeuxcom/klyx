@@ -183,7 +183,7 @@ export function GatewayApiView({ cluster }: { cluster: string }) {
                   border: 0,
                   borderTop: "0.5px solid var(--color-border-tertiary)",
                   background: isKb ? "var(--color-background-secondary)" : "transparent",
-                  boxShadow: isKb ? "inset 2px 0 0 var(--color-text-info)" : undefined,
+                  boxShadow: isKb ? "inset 2px 0 0 var(--bench-selection-edge, var(--color-text-info))" : undefined,
                   color: "var(--color-text-primary)",
                   fontSize: 12,
                   cursor: "pointer",

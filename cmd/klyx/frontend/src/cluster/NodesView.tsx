@@ -10,6 +10,7 @@ import { fmtMem } from "./saturation";
 import { useResizablePanel } from "../chrome/useResizablePanel";
 import { useNavIntent } from "../chrome/useNavIntent";
 import { useListKeys } from "../chrome/useListKeys";
+import { FKeysBar } from "../chrome/FKeysBar";
 import { CopyButton } from "../chrome/CopyButton";
 import { YamlBlock } from "../chrome/YamlBlock";
 import { EmptyState } from "../chrome/EmptyState";
@@ -541,7 +542,7 @@ export function NodesView({ cluster }: { cluster: string }) {
                       padding: "7px 8px", borderBottom: "0.5px solid var(--color-border-tertiary)",
                       cursor: "pointer",
                       background: isKb || isSelected ? "var(--color-background-secondary)" : undefined,
-                      boxShadow: isKb ? "inset 2px 0 0 var(--color-text-info)" : undefined,
+                      boxShadow: isKb ? "inset 2px 0 0 var(--bench-selection-edge, var(--color-text-info))" : undefined,
                     }}
                   >
                     <StatusDot size={8} color={dotColor} />
@@ -564,6 +565,10 @@ export function NodesView({ cluster }: { cluster: string }) {
                 );
               })}
             </div>
+            <FKeysBar
+              keys={[["j k", "nav"], ["\u21B5", "inspect"], ["/", "filter"]]}
+              status={`${visibleNodes.length} of ${nodes.items.length} \u00B7 broken first`}
+            />
           </div>
         )}
       </div>

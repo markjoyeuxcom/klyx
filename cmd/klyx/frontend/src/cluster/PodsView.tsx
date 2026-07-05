@@ -16,6 +16,7 @@ import { useResizablePanel } from "../chrome/useResizablePanel";
 import { useResizableDock } from "../chrome/useResizableDock";
 import { useListKeys } from "../chrome/useListKeys";
 import { useNavIntent } from "../chrome/useNavIntent";
+import { FKeysBar } from "../chrome/FKeysBar";
 import { Chip, EmptyState, LiveIndicator, SkeletonRows, btn, ellipsis, type Tone } from "../chrome/primitives";
 import { CopyButton } from "../chrome/CopyButton";
 import { YamlBlock } from "../chrome/YamlBlock";
@@ -330,6 +331,10 @@ export function PodsView({ cluster }: { cluster: string }) {
                   );
                 }}
               />
+              <FKeysBar
+                keys={[["j k", "nav"], ["↵", "inspect"], ["l", "logs"], ["x", "select"], ["/", "filter"]]}
+                status={`${filtered.length} of ${pods.items.length} · broken first`}
+              />
             </div>
           )}
         </div>
@@ -419,7 +424,7 @@ function PodRow({
         background: isKbSelected
           ? "var(--color-background-secondary)"
           : isSelected ? "var(--color-background-secondary)" : undefined,
-        boxShadow: isKbSelected ? "inset 2px 0 0 var(--color-text-info)" : undefined,
+        boxShadow: isKbSelected ? "inset 2px 0 0 var(--bench-selection-edge, var(--color-text-info))" : undefined,
         outline: "none",
       }}
     >

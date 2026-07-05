@@ -7,6 +7,7 @@ import type { FluxDiffDTO } from "../bridge/gitops";
 import { ConfirmDialog } from "../chrome/ConfirmDialog";
 import { MetaTile, OperationDialog, OptionTile } from "../chrome/OperationDialog";
 import { useListKeys } from "../chrome/useListKeys";
+import { FKeysBar } from "../chrome/FKeysBar";
 import { useNavIntent } from "../chrome/useNavIntent";
 import { CopyButton } from "../chrome/CopyButton";
 import { EmptyState } from "../chrome/EmptyState";
@@ -300,6 +301,10 @@ export function GitOps({ cluster }: { cluster: string }) {
                 );
               })}
             </div>
+            <FKeysBar
+              keys={[["j k", "nav"], ["\u21B5", "expand"], ["/", "filter"], ["esc", "collapse"]]}
+              status={`${visibleRows.length} of ${rows.length} \u00B7 broken first`}
+            />
           </div>
 
           <div data-testid="flux-inspector-scroll" style={{ minHeight: 0, overflowY: "auto" }}>
@@ -422,7 +427,7 @@ function RowSummary({ r, open, kbSelected, onClick }: { r: FluxResourceDTO; open
         textAlign: "left",
         color: "var(--color-text-primary)",
         background: kbSelected || open ? "var(--color-background-secondary)" : "transparent",
-        boxShadow: kbSelected ? "inset 2px 0 0 var(--color-text-info)" : undefined,
+        boxShadow: kbSelected ? "inset 2px 0 0 var(--bench-selection-edge, var(--color-text-info))" : undefined,
         ...staleStyle(r.stale),
       }}
     >
@@ -438,7 +443,7 @@ function RowSummary({ r, open, kbSelected, onClick }: { r: FluxResourceDTO; open
       <div style={{ color: "var(--color-text-secondary)", ...ellipsis }} title={sourceText(r)}>{sourceText(r) || "—"}</div>
       <div style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--color-text-secondary)", ...ellipsis }} title={r.revision}>{shortRev(r.revision) || "—"}</div>
       <div style={{ color: "var(--color-text-tertiary)", fontSize: 11, ...ellipsis }}>{ago(r.readySinceSeconds) || "—"}</div>
-      <div style={{ ...ellipsis, color }}>
+      <div className={!r.stale && r.ready === "Failed" ? "klyx-danger-prefix" : undefined} style={{ ...ellipsis, color }}>
         {r.stale ? <SyncingChip generation={r.generation} observedGeneration={r.observedGeneration} /> : statusText(r)}
       </div>
     </button>
