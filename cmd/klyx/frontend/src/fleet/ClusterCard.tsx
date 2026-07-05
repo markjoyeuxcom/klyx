@@ -2,7 +2,7 @@ import type { CSSProperties, ReactNode } from "react";
 import { IconLock } from "@tabler/icons-react";
 import type { ClusterDTO, FleetBoardEntry, MeshGraphDTO } from "../store/fleet";
 import { useFleet } from "../store/fleet";
-import { type Tone, toneColor, toneBg, toneBorder } from "../chrome/primitives";
+import { type Tone, StatusDot, toneColor, toneBg, toneBorder } from "../chrome/primitives";
 
 type Signal = {
   label: string;
@@ -79,10 +79,13 @@ export function ClusterCard({ c }: { c: ClusterDTO }) {
       data-testid={`cluster-card-${c.name}`}
       onClick={() => openCluster(c.name)}
       style={{
+        // Module face (Signal Bench): the lamp in the name plate carries the
+        // severity the 3px rail used to - the machining is the card's edge.
         background: "var(--color-background-primary)",
         border: "0.5px solid var(--color-border-tertiary)",
-        borderLeft: `3px solid ${toneColor[rail]}`,
-        borderRadius: 3,
+        borderTop: "1px solid var(--bench-edge-hi, var(--color-border-tertiary))",
+        boxShadow: "var(--bench-module-shadow, none)",
+        borderRadius: 6,
         padding: 0,
         cursor: "pointer",
         display: "grid",
@@ -92,19 +95,25 @@ export function ClusterCard({ c }: { c: ClusterDTO }) {
         overflow: "hidden",
         boxSizing: "border-box",
       }}
-      onMouseEnter={(e) => { e.currentTarget.style.borderColor = "var(--color-border-secondary)"; e.currentTarget.style.borderLeftColor = toneColor[rail]; }}
-      onMouseLeave={(e) => { e.currentTarget.style.borderColor = "var(--color-border-tertiary)"; e.currentTarget.style.borderLeftColor = toneColor[rail]; }}
     >
-      <div style={{ display: "flex", alignItems: "flex-start", gap: 8, padding: "11px 12px 10px", borderBottom: "0.5px solid var(--color-border-tertiary)", minWidth: 0 }}>
+      <div style={{ display: "flex", alignItems: "flex-start", gap: 9, padding: "11px 12px 10px", borderBottom: "0.5px solid var(--color-border-tertiary)", minWidth: 0 }}>
+        <span style={{ marginTop: 4 }}><StatusDot size={8} tone={rail} /></span>
         <div style={{ minWidth: 0, flex: 1 }}>
-          <div title={c.name} style={{ fontFamily: "var(--font-mono)", fontWeight: 600, fontSize: 14, ...ellipsis }}>{displayName}</div>
-          <div style={{ marginTop: 3, fontSize: 11, color: "var(--color-text-tertiary)", fontFamily: "var(--font-mono)", ...ellipsis }}>
+          <div title={c.name} style={{ fontFamily: "var(--font-mono)", fontWeight: 700, fontSize: 13, ...ellipsis }}>{displayName}</div>
+          <div style={{ marginTop: 3, fontSize: 10, color: "var(--color-text-tertiary)", fontFamily: "var(--font-mono)", ...ellipsis }}>
             {clusterMeta(c)}
           </div>
-          <div style={{ marginTop: 8, display: "flex", gap: 14, fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--color-text-secondary)", minWidth: 0 }}>
-            <span style={{ color: c.nodesReady < c.nodesTotal ? "var(--color-text-warning)" : undefined, flexShrink: 0 }}>{c.nodesReady}/{c.nodesTotal} nodes</span>
-            <span style={{ flexShrink: 0 }}>{c.pods} pods</span>
-            {c.env && <span style={{ color: "var(--color-text-tertiary)", ...ellipsis }}>{c.env}</span>}
+          {/* Counter wells: the two numbers an operator reads first sit IN
+              the bench, not in a text run. */}
+          <div style={{ marginTop: 8, display: "flex", gap: 6, minWidth: 0 }}>
+            <span style={{ flex: 1, minWidth: 0, textAlign: "right", padding: "3px 8px 2px", borderRadius: "var(--radius-sm)", background: "var(--bench-well-bg, var(--color-background-secondary))", boxShadow: "var(--bench-well-shadow, inset 0 0 0 1px var(--color-border-tertiary))" }}>
+              <span style={{ display: "block", fontFamily: "var(--font-mono)", fontSize: 13, fontWeight: 600, color: c.nodesReady < c.nodesTotal ? "var(--color-text-warning)" : "var(--color-text-primary)" }}>{c.nodesReady}/{c.nodesTotal}</span>
+              <span style={{ display: "block", fontSize: 8, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--color-text-tertiary)" }}>nodes</span>
+            </span>
+            <span style={{ flex: 1, minWidth: 0, textAlign: "right", padding: "3px 8px 2px", borderRadius: "var(--radius-sm)", background: "var(--bench-well-bg, var(--color-background-secondary))", boxShadow: "var(--bench-well-shadow, inset 0 0 0 1px var(--color-border-tertiary))" }}>
+              <span style={{ display: "block", fontFamily: "var(--font-mono)", fontSize: 13, fontWeight: 600 }}>{c.pods}</span>
+              <span style={{ display: "block", fontSize: 8, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--color-text-tertiary)" }}>pods</span>
+            </span>
           </div>
         </div>
         <div style={{ display: "flex", alignItems: "flex-start", gap: 6, flexShrink: 0, maxWidth: "46%", minWidth: 0 }}>

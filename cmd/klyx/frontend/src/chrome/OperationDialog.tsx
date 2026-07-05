@@ -136,6 +136,11 @@ export function OperationDialog({
           fontSize: 13,
         }}
       >
+        {/* Hazard stripe (Signal Bench): destructive composers wear the tape.
+            Shape + pattern, never hue alone. */}
+        {danger && (
+          <div aria-hidden style={{ height: 6, flexShrink: 0, opacity: 0.65, borderRadius: "6px 6px 0 0", background: "repeating-linear-gradient(-45deg, var(--color-text-danger) 0 10px, transparent 10px 20px)" }} />
+        )}
         <div style={{ padding: "18px 20px 14px", borderBottom: "0.5px solid var(--color-border-tertiary)", flexShrink: 0 }}>
           <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
             <div style={{ minWidth: 0 }}>
@@ -154,10 +159,10 @@ export function OperationDialog({
         <div style={{ padding: 20, display: "grid", gap: 16, overflow: "auto", minHeight: 0 }}>
           {children}
           {isProtected && (
-            <div style={{ display: "grid", gap: 6 }}>
+            <div style={{ display: "grid", gap: 6, padding: "12px 14px", borderRadius: 5, background: "var(--color-background-warning)", boxShadow: "inset 0 0 0 1px var(--color-border-warning)" }}>
               <div style={{ color: "var(--color-text-warning)", fontSize: 12 }}>
-                <span style={{ fontFamily: "var(--font-mono)", fontWeight: 600 }}>prd lock</span>
-                {" "}active. Type <b>{cluster}</b> to confirm.
+                <span style={{ fontFamily: "var(--font-mono)", fontWeight: 700 }}>prd lock</span>
+                {" "}active. Type <b style={{ fontFamily: "var(--font-mono)" }}>{cluster}</b> to arm.
               </div>
               <input
                 autoFocus
@@ -169,8 +174,19 @@ export function OperationDialog({
                   // Enter dispatches once armed; before that it must do nothing.
                   if (e.key === "Enter" && canConfirm) void confirm();
                 }}
-                style={{ width: "100%", boxSizing: "border-box", padding: "6px 8px", fontFamily: "var(--font-mono)", fontSize: 12, background: "var(--color-background-secondary)", border: "0.5px solid var(--color-border-tertiary)", borderRadius: 4, color: "var(--color-text-primary)" }}
+                style={{ width: "100%", boxSizing: "border-box", padding: "7px 11px", fontFamily: "var(--font-mono)", fontSize: 12, background: "var(--bench-well-bg, var(--color-background-secondary))", border: "none", boxShadow: "var(--bench-well-shadow, inset 0 0 0 1px var(--color-border-tertiary))", borderRadius: 4, color: "var(--color-text-primary)" }}
               />
+              {/* LED interlock: one segment per typed-correct character - the
+                  arming state is visible progress, not a silent gate. */}
+              <div aria-hidden style={{ display: "flex", gap: 10, alignItems: "center", fontFamily: "var(--font-mono)", fontSize: 9.5, color: "var(--color-text-tertiary)" }}>
+                <span style={{ display: "flex", gap: 3 }}>
+                  {Array.from({ length: cluster.length }, (_, i) => {
+                    const lit = i < typed.length && cluster.startsWith(typed.slice(0, i + 1));
+                    return <i key={i} style={{ width: 10, height: 4, borderRadius: 1, background: lit ? "var(--color-text-warning)" : "var(--lamp-off, var(--color-border-secondary))", boxShadow: lit ? "var(--lamp-glow-warning, none)" : undefined }} />;
+                  })}
+                </span>
+                {armed ? "armed" : "interlock engaged"}
+              </div>
             </div>
           )}
           {armError && <div style={{ color: "var(--color-text-danger)", fontSize: 12 }}>{armError}</div>}
@@ -179,7 +195,7 @@ export function OperationDialog({
         <div style={{ padding: "14px 20px", borderTop: "0.5px solid var(--color-border-tertiary)", display: "flex", justifyContent: "flex-end", gap: 8, background: "var(--color-background-secondary)", flexShrink: 0 }}>
           <button onClick={onCancel} style={footerBtn(false, false, false)}>Cancel</button>
           <button ref={confirmRef} onClick={() => void confirm()} disabled={!canConfirm} style={footerBtn(true, danger, !canConfirm)}>
-            {confirmLabel}
+            {isProtected && !armed ? `${confirmLabel} — locked` : confirmLabel}
           </button>
         </div>
       </div>
@@ -209,7 +225,22 @@ export function OptionTile({ title, body, active = false, disabled = false, onCl
         minHeight: 72,
       }}
     >
-      <div style={{ fontWeight: 600, marginBottom: 5 }}>{title}</div>
+      <div style={{ fontWeight: 600, marginBottom: 5, display: "flex", alignItems: "center", gap: 9 }}>
+        <span style={{ flex: 1, minWidth: 0 }}>{title}</span>
+        {/* Physical toggle (Signal Bench): the option's state is a switch you
+            can read at a glance, not just a tinted border. */}
+        <span aria-hidden style={{
+          width: 26, height: 14, borderRadius: 7, position: "relative", flexShrink: 0,
+          background: active ? "var(--color-background-info)" : "var(--bench-well-bg, var(--color-background-primary))",
+          boxShadow: active ? "inset 0 0 0 1px var(--color-border-info)" : "var(--bench-well-shadow, inset 0 0 0 1px var(--color-border-secondary))",
+        }}>
+          <span style={{
+            position: "absolute", top: 2, width: 10, height: 10, borderRadius: "50%",
+            left: active ? undefined : 2, right: active ? 2 : undefined,
+            background: active ? "var(--color-text-info)" : "var(--color-text-tertiary)",
+          }} />
+        </span>
+      </div>
       <div style={{ color: "var(--color-text-secondary)", fontSize: 12, lineHeight: 1.35 }}>{body}</div>
     </button>
   );

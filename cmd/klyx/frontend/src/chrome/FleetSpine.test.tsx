@@ -35,15 +35,16 @@ describe("FleetSpine", () => {
     expect(getByLabelText("cluster blue").getAttribute("aria-current")).toBeNull();
   });
 
-  it("an unreachable cluster gets a dashed block with the reason in the tooltip", () => {
+  it("an unreachable cluster is an unpowered socket - dashed lamp, reason in the tooltip", () => {
     useFleet.setState({ clusters: [cluster("orange", "Failed", "connect timed out")] });
     const { getByLabelText } = render(<FleetSpine />);
     const block = getByLabelText("cluster orange");
-    expect(block.style.border).toContain("dashed");
+    const lamp = block.querySelector("span") as HTMLElement;
+    expect(lamp.style.border).toContain("dashed");
     expect(block.title).toContain("connect timed out");
   });
 
-  it("broken workloads (from the fleet board) upgrade the block to danger", () => {
+  it("broken workloads (from the fleet board) light the lamp danger and blink it - the spine is the one legal blink site", () => {
     useFleet.setState({
       clusters: [cluster("prd")],
       fleetBoard: { prd: { cpuFraction: null, memFraction: null, broken: 2, flux: null, argo: null } },
@@ -51,7 +52,9 @@ describe("FleetSpine", () => {
     const { getByLabelText } = render(<FleetSpine />);
     const block = getByLabelText("cluster prd");
     expect(block.title).toContain("2 broken workloads");
-    expect(block.style.background).toContain("danger");
+    const lamp = block.querySelector("span") as HTMLElement;
+    expect(lamp.style.background).toContain("danger");
+    expect(lamp.className).toContain("klyx-lamp-blink");
   });
 
   it("expand toggle shows full names and persists the choice", () => {

@@ -1,0 +1,38 @@
+# Native eyeball checklist — Signal Bench (2026-07-05)
+
+Branch `feat/signal-bench`, direction C from `design/direction-c-signal-bench.html`.
+Everything below is a visual language change verified headless-only; the four
+design rules (notes §Design rules) are the review bar.
+
+## Rule 1 — only faults glow
+- [ ] Fleet with one broken and five healthy clusters: the red/amber lamps are findable from across the room; healthy lamps are dim, unlit, glow-free.
+- [ ] In lists, success dots read dim (0.75) and muted dots read as unlit glass - no green glow anywhere.
+
+## Rule 2 — blink is spine-only
+- [ ] A cluster with broken workloads blinks red in the spine; the same cluster's in-content lamps are steady.
+- [ ] macOS Reduce Motion on: nothing blinks anywhere.
+
+## Rule 3 — danger gets shape
+- [ ] Failed Flux rows and danger InspectorStatus badges lead with the small ▲.
+- [ ] Drain/rollback (danger composers) wear the hazard tape stripe; delete confirms keep the triangle icon.
+- [ ] prd-lock arming: LEDs fill per correct character, wrong characters stop the fill, the confirm reads "Drain — locked" until armed, then drops the suffix.
+
+## Rule 4 — wells hold data, modules hold chrome
+- [ ] Panels/dialogs/spine read raised (top edge + drop); the palette input, counter windows (summary strips, cluster card nodes/pods), and active filter pills read inset.
+- [ ] Active FilterButton = pressed into a well; Chip on-state = inset tone ring; Badge edges are 1px full-tone rings on bench.
+
+## Themes
+- [ ] Fresh profile boots into Bench (dark); Bench Light passes the same checks (wells/edges/lamps visible on the warm light desk).
+- [ ] Flip through the eight legacy themes: everything still renders flat-but-correct (no missing shadows/rings artifacts).
+
+## Chrome
+- [ ] FKeysBar shows under Pods/Flux/Certs/Nodes lists with correct counts and "broken first"; keys match reality (j/k, ↵, l, x, /).
+- [ ] FleetSpine collapsed: lamp-over-code channels; current channel pressed; expanded rows same language.
+- [ ] ClusterCard: name-plate lamp carries severity (rail is gone), counter wells legible at a glance, verdict footer unchanged.
+- [ ] Palette: mono input in a well, selected row shows the illuminated left edge, verbs on the prd cluster carry "· prd lock" in the hint.
+- [ ] Row selection everywhere uses the same illuminated inset edge; stale rows still dim 0.6 with the grey Syncing… chip.
+
+## The bench itself (added after "looks nothing like C" - the shell was the identity)
+- [ ] The app is modules floating on a darker desk with 8px gutters: mast, spine, nav, and content are separate machined blocks - nothing is joined by a hairline anymore.
+- [ ] Lens lists (pods/flux/certs/eso/nodes/gateways/instances) sit IN inset wells inside the content module - list=well, inspector=module (rule 4, both directions).
+- [ ] First boot after upgrade lands in Bench even with an old saved theme (one-time migration); choosing any theme afterwards sticks. "System" now follows the OS into bench/bench-light.

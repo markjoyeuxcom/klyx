@@ -7,6 +7,7 @@ import type { FluxDiffDTO } from "../bridge/gitops";
 import { ConfirmDialog } from "../chrome/ConfirmDialog";
 import { MetaTile, OperationDialog, OptionTile } from "../chrome/OperationDialog";
 import { useListKeys } from "../chrome/useListKeys";
+import { FKeysBar } from "../chrome/FKeysBar";
 import { useNavIntent } from "../chrome/useNavIntent";
 import { CopyButton } from "../chrome/CopyButton";
 import { EmptyState } from "../chrome/EmptyState";
@@ -14,7 +15,7 @@ import { SkeletonRows } from "../chrome/SkeletonRows";
 import { WatchErrorBanner } from "../chrome/WatchErrorBanner";
 import { IconGitBranch } from "@tabler/icons-react";
 import { wellKnownResourceRef } from "./resourceRefs";
-import { Badge, FilterButton, SummaryCell, Section, StatusDot, readyColor, ellipsis, actionBtn, frame } from "../chrome/primitives";
+import { well, Badge, FilterButton, SummaryCell, Section, StatusDot, readyColor, ellipsis, actionBtn, frame } from "../chrome/primitives";
 import { compactCount } from "../chrome/format";
 import { SyncingChip, staleStyle } from "./staleness";
 
@@ -271,7 +272,7 @@ export function GitOps({ cluster }: { cluster: string }) {
         />
       ) : (
         <div style={{ flex: 1, minHeight: 0, display: "grid", gridTemplateColumns: "minmax(440px, 1.25fr) minmax(320px, 0.75fr)", gap: 12, alignItems: "stretch", overflow: "hidden" }}>
-          <div style={{ ...frame, overflow: "hidden", minHeight: 0, display: "flex", flexDirection: "column" }}>
+          <div style={{ ...well, overflow: "hidden", minHeight: 0, display: "flex", flexDirection: "column" }}>
             <div style={{ display: "grid", gridTemplateColumns: "3px minmax(180px,1.2fr) 120px minmax(110px,0.9fr) 84px 92px", gap: 10, alignItems: "center", padding: "5px 12px", borderBottom: "0.5px solid var(--color-border-tertiary)", fontSize: 10, color: "var(--color-text-tertiary)", flexShrink: 0 }}>
               <span />
               <span>resource</span>
@@ -300,6 +301,10 @@ export function GitOps({ cluster }: { cluster: string }) {
                 );
               })}
             </div>
+            <FKeysBar
+              keys={[["j k", "nav"], ["\u21B5", "expand"], ["/", "filter"], ["esc", "collapse"]]}
+              status={`${visibleRows.length} of ${rows.length} \u00B7 broken first`}
+            />
           </div>
 
           <div data-testid="flux-inspector-scroll" style={{ minHeight: 0, overflowY: "auto" }}>
@@ -422,7 +427,7 @@ function RowSummary({ r, open, kbSelected, onClick }: { r: FluxResourceDTO; open
         textAlign: "left",
         color: "var(--color-text-primary)",
         background: kbSelected || open ? "var(--color-background-secondary)" : "transparent",
-        boxShadow: kbSelected ? "inset 2px 0 0 var(--color-text-info)" : undefined,
+        boxShadow: kbSelected ? "inset 2px 0 0 var(--bench-selection-edge, var(--color-text-info))" : undefined,
         ...staleStyle(r.stale),
       }}
     >
@@ -438,7 +443,7 @@ function RowSummary({ r, open, kbSelected, onClick }: { r: FluxResourceDTO; open
       <div style={{ color: "var(--color-text-secondary)", ...ellipsis }} title={sourceText(r)}>{sourceText(r) || "—"}</div>
       <div style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--color-text-secondary)", ...ellipsis }} title={r.revision}>{shortRev(r.revision) || "—"}</div>
       <div style={{ color: "var(--color-text-tertiary)", fontSize: 11, ...ellipsis }}>{ago(r.readySinceSeconds) || "—"}</div>
-      <div style={{ ...ellipsis, color }}>
+      <div className={!r.stale && r.ready === "Failed" ? "klyx-danger-prefix" : undefined} style={{ ...ellipsis, color }}>
         {r.stale ? <SyncingChip generation={r.generation} observedGeneration={r.observedGeneration} /> : statusText(r)}
       </div>
     </button>

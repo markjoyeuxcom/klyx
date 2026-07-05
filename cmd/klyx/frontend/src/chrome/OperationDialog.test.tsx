@@ -39,13 +39,15 @@ describe("OperationDialog", () => {
     expect(armProtected).not.toHaveBeenCalled();
   });
 
-  it("protected: dispatch stays disabled until the cluster name is typed, then arms the backend", async () => {
+  it("protected: dispatch reads '— locked' and stays disabled until the cluster name is typed, then arms the backend", async () => {
     const { onConfirm, getByRole, getByPlaceholderText } = dialog({ protected: true });
-    const btn = getByRole("button", { name: "Drain" }) as HTMLButtonElement;
+    // The interlock is visible in the label itself, not just the disabled state.
+    const btn = getByRole("button", { name: "Drain — locked" }) as HTMLButtonElement;
     expect(btn.disabled).toBe(true);
     fireEvent.change(getByPlaceholderText("prd-we"), { target: { value: "prd-we" } });
-    expect(btn.disabled).toBe(false);
-    fireEvent.click(btn);
+    const armedBtn = getByRole("button", { name: "Drain" }) as HTMLButtonElement;
+    expect(armedBtn.disabled).toBe(false);
+    fireEvent.click(armedBtn);
     await waitFor(() => expect(onConfirm).toHaveBeenCalledTimes(1));
     expect(armProtected).toHaveBeenCalledWith("prd-we", "prd-we");
   });

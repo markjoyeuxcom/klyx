@@ -288,7 +288,7 @@ function ApplicationRow({ app: a, selected, kbSelected, onSelect, onRefresh, onS
       aria-selected={kbSelected}
       onClick={onSelect}
       onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onSelect(); } }}
-      style={{ display: "grid", gridTemplateColumns: gridCols, gap: 10, alignItems: "center", width: "100%", padding: "7px 8px", border: "none", borderBottom: "0.5px solid var(--color-border-tertiary)", background: kbSelected || selected ? "var(--color-background-secondary)" : "transparent", boxShadow: kbSelected ? "inset 2px 0 0 var(--color-text-info)" : undefined, color: "var(--color-text-primary)", textAlign: "left", cursor: "pointer" }}
+      style={{ display: "grid", gridTemplateColumns: gridCols, gap: 10, alignItems: "center", width: "100%", padding: "7px 8px", border: "none", borderBottom: "0.5px solid var(--color-border-tertiary)", background: kbSelected || selected ? "var(--color-background-secondary)" : "transparent", boxShadow: kbSelected ? "inset 2px 0 0 var(--bench-selection-edge, var(--color-text-info))" : undefined, color: "var(--color-text-primary)", textAlign: "left", cursor: "pointer" }}
     >
       <span style={{ width: 8, height: 8, borderRadius: "50%", background: a.broken ? "var(--color-text-danger)" : "var(--color-text-success)" }} />
       <span style={ellipsis} title={keyOf(a)}>

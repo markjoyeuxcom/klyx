@@ -22,7 +22,10 @@ export function Badge({ tone = "neutral", variant = "outline", clip = false, chi
     whiteSpace: "nowrap" as const,
     ...(clip ? { ...ellipsis, display: "inline-block", maxWidth: "100%" } : {}),
   };
+  // Tone edges draw as a 1px INSET RING (Signal Bench) rather than a border:
+  // on bench themes the border-tone vars are the full tone colour, so the
+  // ring reads as a machined edge; prior themes keep their translucent tint.
   if (variant === "soft") return <span style={{ ...base, background: toneBg[tone] }}>{children}</span>;
-  if (variant === "filled") return <span style={{ ...base, background: toneBg[tone], border: `var(--border-hairline) solid ${toneBorder[tone]}` }}>{children}</span>;
-  return <span style={{ ...base, border: `var(--border-hairline) solid ${toneBorder[tone]}` }}>{children}</span>;
+  if (variant === "filled") return <span style={{ ...base, background: toneBg[tone], boxShadow: `inset 0 0 0 1px ${toneBorder[tone]}` }}>{children}</span>;
+  return <span style={{ ...base, boxShadow: `inset 0 0 0 1px ${toneBorder[tone]}` }}>{children}</span>;
 }

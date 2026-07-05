@@ -2,6 +2,10 @@ import { useEffect } from "react";
 import { useFleet } from "../store/fleet";
 import { Sidebar } from "../chrome/Sidebar";
 import { ShortcutsOverlay } from "../chrome/ShortcutsOverlay";
+import { frame } from "../chrome/primitives";
+
+// The content module: the machined face the active view renders inside.
+const moduleShell: React.CSSProperties = { ...frame, overflow: "hidden" };
 import { FleetSpine } from "../chrome/FleetSpine";
 import { TopBar } from "../chrome/TopBar";
 import { Header } from "../chrome/Header";
@@ -34,14 +38,19 @@ export function AppShell() {
   }, []);
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+    // The bench (Signal Bench): the outermost surface is the DESK
+    // (background-tertiary); every region floats on it as a machined module
+    // with 8px gutters instead of being joined by hairlines. On legacy themes
+    // the machining tokens fall back to hairline borders - same composition,
+    // flat finish.
+    <div style={{ display: "flex", flexDirection: "column", height: "100%", gap: 8, padding: 8, boxSizing: "border-box", background: "var(--color-background-tertiary)" }}>
       <CommandPalette />
       <ShortcutsOverlay />
       <TopBar />
-      <div style={{ flex: 1, display: "flex", minHeight: 0 }}>
+      <div style={{ flex: 1, display: "flex", minHeight: 0, gap: 8 }}>
         <FleetSpine />
         <Sidebar />
-        <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0, background: "var(--color-background-primary)" }}>
+        <div style={{ ...moduleShell, flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
           <Header />
           {route.name === "cluster" && <TriageTape cluster={route.cluster} />}
           <div style={{ flex: 1, minHeight: 0, overflow: route.name === "cluster" ? "hidden" : "auto" }}>

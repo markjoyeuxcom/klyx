@@ -360,7 +360,7 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
                             height: ROW_HEIGHT, boxSizing: "border-box",
                             padding: isKbSelected ? "7px 8px 7px 6px" : "7px 8px",
                             borderBottom: "0.5px solid var(--color-border-tertiary)",
-                            borderLeft: isKbSelected ? "2px solid var(--color-text-info)" : "2px solid transparent",
+                            borderLeft: isKbSelected ? "2px solid var(--bench-selection-edge, var(--color-text-info))" : "2px solid transparent",
                             cursor: "pointer",
                             background: isKbSelected ? "var(--color-background-secondary)" : undefined,
                             outline: "none",

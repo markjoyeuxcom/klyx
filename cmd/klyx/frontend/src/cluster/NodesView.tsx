@@ -10,13 +10,14 @@ import { fmtMem } from "./saturation";
 import { useResizablePanel } from "../chrome/useResizablePanel";
 import { useNavIntent } from "../chrome/useNavIntent";
 import { useListKeys } from "../chrome/useListKeys";
+import { FKeysBar } from "../chrome/FKeysBar";
 import { CopyButton } from "../chrome/CopyButton";
 import { YamlBlock } from "../chrome/YamlBlock";
 import { EmptyState } from "../chrome/EmptyState";
 import { SkeletonRows } from "../chrome/SkeletonRows";
 import { UpdatedAt, useReceivedAt } from "../chrome/Age";
 import { IconServer, IconX } from "@tabler/icons-react";
-import { ellipsis, frame, btn, FilterButton, SummaryCell, StatusDot } from "../chrome/primitives";
+import { well, ellipsis, frame, btn, FilterButton, SummaryCell, StatusDot } from "../chrome/primitives";
 import { InspectorConditions, InspectorEvents, InspectorSection, InspectorStatus, InspectorTabButton, MetadataChips, inspectorStateBox } from "./ResourceInspector";
 
 function ago(s: number): string {
@@ -515,7 +516,7 @@ export function NodesView({ cluster }: { cluster: string }) {
             hint="Either the list failed or RBAC hides nodes from this identity - refresh to retry."
           />
         ) : (
-          <div style={{ ...frame, overflow: "hidden", flex: 1, minHeight: 0, display: "flex", flexDirection: "column", fontFamily: "var(--font-mono)", fontSize: 12 }}>
+          <div style={{ ...well, overflow: "hidden", flex: 1, minHeight: 0, display: "flex", flexDirection: "column", fontFamily: "var(--font-mono)", fontSize: 12 }}>
             <div style={{ display: "grid", gridTemplateColumns: gridCols, gap: 10, padding: "5px 8px", fontSize: 9, color: "var(--color-text-tertiary)", borderBottom: "0.5px solid var(--color-border-secondary)", flexShrink: 0 }}>
               <span /><span>node</span><span>roles</span><span>status</span><span>version</span><span>cpu alloc/cap</span><span>mem alloc/cap</span><span>taints</span><span>age</span>
             </div>
@@ -541,7 +542,7 @@ export function NodesView({ cluster }: { cluster: string }) {
                       padding: "7px 8px", borderBottom: "0.5px solid var(--color-border-tertiary)",
                       cursor: "pointer",
                       background: isKb || isSelected ? "var(--color-background-secondary)" : undefined,
-                      boxShadow: isKb ? "inset 2px 0 0 var(--color-text-info)" : undefined,
+                      boxShadow: isKb ? "inset 2px 0 0 var(--bench-selection-edge, var(--color-text-info))" : undefined,
                     }}
                   >
                     <StatusDot size={8} color={dotColor} />
@@ -564,6 +565,10 @@ export function NodesView({ cluster }: { cluster: string }) {
                 );
               })}
             </div>
+            <FKeysBar
+              keys={[["j k", "nav"], ["\u21B5", "inspect"], ["/", "filter"]]}
+              status={`${visibleNodes.length} of ${nodes.items.length} \u00B7 broken first`}
+            />
           </div>
         )}
       </div>

@@ -103,6 +103,8 @@ export function ThemeToggle() {
 }
 
 function swatch(theme: Theme): React.CSSProperties {
+  if (theme === "bench") return { background: "#1c1e21" };
+  if (theme === "bench-light") return { background: "#eceae5" };
   if (theme === "light") return { background: "#f5f4ed" };
   if (theme === "dark") return { background: "#262624" };
   if (theme === "midnight") return { background: "#0a1724" };

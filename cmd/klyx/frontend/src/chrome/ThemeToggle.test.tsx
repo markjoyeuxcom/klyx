@@ -15,8 +15,8 @@ beforeEach(() => {
 describe("ThemeToggle", () => {
   it("opens a theme menu and selects midnight", () => {
     const { getByLabelText, getByRole } = render(<ThemeProvider><ThemeToggle /></ThemeProvider>);
-    expect(document.documentElement.getAttribute("data-theme")).toBe("light");
-    fireEvent.click(getByLabelText("Theme: Light"));
+    expect(document.documentElement.getAttribute("data-theme")).toBe("bench");
+    fireEvent.click(getByLabelText("Theme: Bench"));
     expect(getByRole("menuitemradio", { name: "Crimson" })).toBeTruthy();
     fireEvent.click(getByRole("menuitemradio", { name: "Midnight" }));
     expect(document.documentElement.getAttribute("data-theme")).toBe("midnight");

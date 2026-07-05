@@ -10,6 +10,9 @@ export function FilterButton({ label, active, count, onClick }: {
   count?: number;
   onClick: () => void;
 }) {
+  // Active = pressed INTO a well (Signal Bench): a filter that is on reads as
+  // a latched switch, not a lit pill. Non-bench themes fall back to the old
+  // info tint via the token fallbacks.
   return (
     <button
       onClick={onClick}
@@ -22,9 +25,11 @@ export function FilterButton({ label, active, count, onClick }: {
         padding: "3px 9px",
         borderRadius: "var(--radius-sm)",
         cursor: "pointer",
-        border: `var(--border-hairline) solid ${active ? "var(--color-border-info)" : "var(--color-border-tertiary)"}`,
-        background: active ? "var(--color-background-info)" : "var(--color-background-primary)",
+        border: `var(--border-hairline) solid ${active ? "transparent" : "var(--color-border-tertiary)"}`,
+        background: active ? "var(--bench-well-bg, var(--color-background-info))" : "var(--color-background-primary)",
+        boxShadow: active ? "var(--bench-well-shadow, inset 0 0 0 1px var(--color-border-info))" : undefined,
         color: active ? "var(--color-text-info)" : "var(--color-text-secondary)",
+        fontWeight: active ? 600 : undefined,
       }}
     >
       <span>{label}</span>

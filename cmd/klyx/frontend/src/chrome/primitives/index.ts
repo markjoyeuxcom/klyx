@@ -15,6 +15,7 @@ export {
   ellipsis,
   mono,
   frame,
+  well,
   btn,
   actionBtn,
   twoPaneGrid,

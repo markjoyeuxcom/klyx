@@ -104,7 +104,7 @@ export function InspectorStatus({ tone, label, reason, detail }: {
 }) {
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", marginBottom: 12 }}>
-      <Badge tone={tone} variant="filled">{label}</Badge>
+      <Badge tone={tone} variant="filled"><span className={tone === "danger" ? "klyx-danger-prefix" : undefined}>{label}</span></Badge>
       {reason && <Badge tone={tone === "success" ? "muted" : tone}>{reason}</Badge>}
       {detail && (
         <span style={{ fontSize: 11, color: "var(--color-text-secondary)", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={detail}>

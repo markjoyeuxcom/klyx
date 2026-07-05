@@ -20,8 +20,10 @@ describe("ClusterCard", () => {
     const { getByText } = render(<ClusterCard c={base} />);
     expect(getByText("plt-sea-prd-we-aks-01")).toBeTruthy();
     expect(getByText(/v1\.30\.4/)).toBeTruthy(); // provider · version joined in the header
-    expect(getByText(/12\/12 nodes/)).toBeTruthy();
-    expect(getByText(/487 pods/)).toBeTruthy();
+    // counter wells split value and label into separate elements
+    expect(getByText("12/12")).toBeTruthy();
+    expect(getByText("487")).toBeTruthy();
+    expect(getByText("pods")).toBeTruthy();
   });
 
   it("shows the reason for a failed cluster", () => {
