@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render, fireEvent, act } from "@testing-library/react";
+import { render, fireEvent, act, within } from "@testing-library/react";
 import { useFleet, FluxResourceDTO, FluxSourceDTO, ClusterDTO } from "../store/fleet";
 import { reconcile, reconcileWithSource, setSuspend, resolveGitLink } from "../bridge/gitops";
 import { GitOps } from "./GitOps";
@@ -131,7 +131,48 @@ describe("GitOps view", () => {
     });
     const { getByText } = render(<GitOps cluster="x" />);
     expect(getByText(/Health check passed/i)).toBeTruthy();
-    expect(getByText("ConfigMap · monitoring/my-cm")).toBeTruthy();
+    // Inventory rows split kind and namespace/name (dot + kind + link).
+    expect(getByText("ConfigMap")).toBeTruthy();
+    expect(getByText("monitoring/my-cm")).toBeTruthy();
+  });
+
+  it("truncates the inventory to 8 entries with an honest +N more (no health claim)", () => {
+    useFleet.setState({
+      clusters: [cluster("Healthy")],
+      gitops: expandedDetail({
+        inventory: Array.from({ length: 11 }, (_, i) => ({ group: "", version: "v1", kind: "ConfigMap", namespace: "ns", name: `cm-${i}` })),
+      }),
+    });
+    const { getByText, queryByText } = render(<GitOps cluster="x" />);
+    expect(getByText("Inventory (11)")).toBeTruthy();
+    expect(getByText("ns/cm-7")).toBeTruthy();
+    expect(queryByText("ns/cm-8")).toBeNull();
+    expect(getByText("+3 more")).toBeTruthy();
+    // Inventory entries carry no health - the truncation line must not claim it.
+    expect(queryByText(/all healthy/i)).toBeNull();
+  });
+
+  it("the inspector opens with the shared verdict: state word plus failing reason", () => {
+    useFleet.setState({
+      clusters: [cluster("Healthy")],
+      gitops: {
+        cluster: "x",
+        resources: [res({ kind: "Kustomization", namespace: "flux-system", name: "flux-system", ready: "Failed", reason: "HealthCheckFailed", message: "health check failed after 2m0s" })],
+        sources: [],
+        loading: false,
+        expandedKey: "Kustomization/flux-system/flux-system",
+        detail: {
+          kind: "Kustomization", namespace: "flux-system", name: "flux-system",
+          suspended: false, appliedRevision: "main@a", attemptedRevision: "main@a", applyFailed: false,
+          conditions: [], inventory: [],
+        },
+      },
+    });
+    const { getByTestId } = render(<GitOps cluster="x" />);
+    const inspector = getByTestId("flux-inspector-scroll");
+    expect(within(inspector).getByText("Failed")).toBeTruthy();
+    expect(within(inspector).getByText(/HealthCheckFailed/)).toBeTruthy();
+    expect(within(inspector).getByText(/health check failed after 2m0s/)).toBeTruthy();
   });
 
   it("shows an apply-failed line when applyFailed", () => {
@@ -156,11 +197,12 @@ describe("GitOps view", () => {
 
   it("one Reconcile action opens the composer; confirming with the tile off calls reconcile", () => {
     useFleet.setState({ clusters: [cluster("Healthy")], gitops: expandedDetail() });
-    const { getByText, getByRole, getAllByRole, queryByText } = render(<GitOps cluster="x" />);
+    const { getByRole, getAllByRole, getByTestId, queryByText } = render(<GitOps cluster="x" />);
     // The former separate verb is gone - re-fetching the source is an option
     // inside the one Reconcile dialog, not a second action.
     expect(queryByText("Reconcile with source")).toBeNull();
-    fireEvent.click(getByText("Reconcile"));               // panel button opens the dialog
+    // Scoped to the inspector: the FKeysBar also carries a "reconcile" hint label.
+    fireEvent.click(within(getByTestId("flux-inspector-scroll")).getByText("reconcile")); // panel button opens the dialog
     expect(getByRole("dialog", { name: "Reconcile flux-system/flux-system" })).toBeTruthy();
     expect(getByRole("button", { name: /Re-fetch source first/ }).getAttribute("aria-pressed")).toBe("false");
     const reconcileButtons = getAllByRole("button", { name: "Reconcile" });
@@ -171,8 +213,8 @@ describe("GitOps view", () => {
 
   it("toggling the re-fetch-source tile routes the confirm to reconcileWithSource", () => {
     useFleet.setState({ clusters: [cluster("Healthy")], gitops: expandedDetail() });
-    const { getByText, getByRole, getAllByRole } = render(<GitOps cluster="x" />);
-    fireEvent.click(getByText("Reconcile"));               // panel button opens the dialog
+    const { getByRole, getAllByRole, getByTestId } = render(<GitOps cluster="x" />);
+    fireEvent.click(within(getByTestId("flux-inspector-scroll")).getByText("reconcile")); // panel button opens the dialog
     fireEvent.click(getByRole("button", { name: /Re-fetch source first/ }));
     const reconcileButtons = getAllByRole("button", { name: "Reconcile" });
     fireEvent.click(reconcileButtons[reconcileButtons.length - 1]); // dialog confirm
@@ -182,10 +224,12 @@ describe("GitOps view", () => {
 
   it("shows Resume + a suspended badge when detail.suspended is true", () => {
     useFleet.setState({ clusters: [cluster("Healthy")], gitops: expandedDetail({ suspended: true }) });
-    const { getByText, queryByText, getAllByRole } = render(<GitOps cluster="x" />);
-    expect(getByText("Resume")).toBeTruthy();
-    expect(queryByText("Suspend")).toBeNull();
-    fireEvent.click(getByText("Resume"));                  // panel button opens the dialog
+    const { getAllByRole, getByTestId } = render(<GitOps cluster="x" />);
+    // Scoped to the inspector: the FKeysBar also carries a "suspend" hint label.
+    const inspector = within(getByTestId("flux-inspector-scroll"));
+    expect(inspector.getByText("resume")).toBeTruthy();
+    expect(inspector.queryByText("suspend")).toBeNull();
+    fireEvent.click(inspector.getByText("resume"));        // panel button opens the dialog
     const resumeButtons = getAllByRole("button", { name: "Resume" });
     fireEvent.click(resumeButtons[resumeButtons.length - 1]); // dialog confirm is last in DOM
     expect(setSuspend).toHaveBeenCalledWith("x", "Kustomization", "flux-system", "flux-system", false);
@@ -194,7 +238,7 @@ describe("GitOps view", () => {
   it("view-in-git button calls resolveGitLink for a Kustomization", () => {
     useFleet.setState({ clusters: [cluster("Healthy")], gitops: expandedDetail() });
     const { getByText } = render(<GitOps cluster="x" />);
-    fireEvent.click(getByText("View in Git"));
+    fireEvent.click(getByText("view in git"));
     expect(resolveGitLink).toHaveBeenCalledWith("x", "Kustomization", "flux-system", "flux-system");
   });
 
@@ -211,7 +255,7 @@ describe("GitOps view", () => {
       },
     });
     const { queryByText } = render(<GitOps cluster="x" />);
-    expect(queryByText("View in Git")).toBeNull();
+    expect(queryByText("view in git")).toBeNull();
   });
 
   it("renders a failing bound source as the headline in the detail panel", () => {
@@ -314,6 +358,39 @@ describe("GitOps view", () => {
     // Esc collapses the open panel.
     act(() => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })); });
     expect(useFleet.getState().gitops.expandedKey).toBeNull();
+  });
+
+  it("r on the keyboard-selected row opens the reconcile composer; confirming calls reconcile", () => {
+    useFleet.setState({ gitops: { cluster: "x", resources: [
+      res({ name: "aaa" }),
+    ], sources: [], loading: false, expandedKey: null, detail: null } });
+    const { getByRole, getAllByRole, queryByRole } = render(<GitOps cluster="x" />);
+    // No row selected yet: r must be inert (no dialog, no bridge call).
+    act(() => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "r", bubbles: true, cancelable: true })); });
+    expect(queryByRole("dialog")).toBeNull();
+    // j selects the first row; r opens the SAME composer the panel button opens.
+    act(() => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "j", bubbles: true, cancelable: true })); });
+    act(() => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "r", bubbles: true, cancelable: true })); });
+    expect(getByRole("dialog", { name: "Reconcile flux-system/aaa" })).toBeTruthy();
+    expect(reconcile).not.toHaveBeenCalled();               // the key never bypasses the confirm
+    const reconcileButtons = getAllByRole("button", { name: "Reconcile" });
+    fireEvent.click(reconcileButtons[reconcileButtons.length - 1]); // dialog confirm is last in DOM
+    expect(reconcile).toHaveBeenCalledWith("x", "Kustomization", "flux-system", "aaa");
+  });
+
+  it("s on the keyboard-selected row opens the suspend confirm; a suspended row gets resume", () => {
+    useFleet.setState({ gitops: { cluster: "x", resources: [
+      res({ name: "aaa", suspended: true, ready: "Ready" }),
+    ], sources: [], loading: false, expandedKey: null, detail: null } });
+    const { getByText, getAllByRole } = render(<GitOps cluster="x" />);
+    act(() => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "j", bubbles: true, cancelable: true })); });
+    act(() => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "s", bubbles: true, cancelable: true })); });
+    // The row is suspended, so s offers Resume - the same ConfirmDialog the button opens.
+    expect(getByText("Resume reconciliation")).toBeTruthy();
+    expect(setSuspend).not.toHaveBeenCalled();
+    const resumeButtons = getAllByRole("button", { name: "Resume" });
+    fireEvent.click(resumeButtons[resumeButtons.length - 1]);
+    expect(setSuspend).toHaveBeenCalledWith("x", "Kustomization", "flux-system", "aaa", false);
   });
 
   it("/ focuses the flux filter input", () => {

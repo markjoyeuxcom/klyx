@@ -4,7 +4,8 @@ import type { CertificateDTO, IssuerDTO, ChainNodeDTO, CertChainDTO } from "../s
 import { openCertManager, closeCertManager, getCertificateChain } from "../bridge/certmanager";
 import { useListKeys } from "../chrome/useListKeys";
 import { FKeysBar } from "../chrome/FKeysBar";
-import { inputWell, MetersStrip, well, Badge, FilterButton, Section, Field, StatusDot, frame, ellipsis, mono, readyColor, toneColor } from "../chrome/primitives";
+import { inputWell, MetersStrip, well, Badge, FilterButton, StatusDot, frame, ellipsis, mono, readyColor, toneColor, type Tone } from "../chrome/primitives";
+import { InspectorFacts, InspectorSection, InspectorStatus } from "./ResourceInspector";
 import { CopyButton } from "../chrome/CopyButton";
 import { EmptyState } from "../chrome/EmptyState";
 import { SkeletonRows } from "../chrome/SkeletonRows";
@@ -351,17 +352,16 @@ function CertInspector({ c, issuer, chain, chainLoading }: { c: CertificateDTO; 
   return (
     <div style={{ ...well, padding: 14, display: "flex", flexDirection: "column", gap: 12 }}>
       <div>
-        <div style={{ display: "flex", alignItems: "center", gap: 2 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 2, marginBottom: 8 }}>
           <div style={{ ...mono, fontSize: 13, fontWeight: 500 }}>{c.namespace}/{c.name}</div>
           <CopyButton text={c.name} label={`copy certificate name ${c.name}`} />
         </div>
-        <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 5, marginTop: 6 }}>
-          <CertBadge tone={c.ready === "Ready" && !expired(c) ? "success" : c.ready === "Issuing" ? "info" : "danger"}>{statusText(c)}</CertBadge>
-          {expiringSoon(c) && <CertBadge tone="warning">renewal window</CertBadge>}
-          {expired(c) && <CertBadge tone="danger">expired</CertBadge>}
-          {issuerBroken && <CertBadge tone="danger">issuer problem</CertBadge>}
-          {c.reason && <CertBadge tone={c.ready === "Failed" ? "danger" : "muted"}>{c.reason}</CertBadge>}
-        </div>
+        <InspectorStatus
+          tone={certTone(c)}
+          label={expired(c) ? "Expired" : c.ready}
+          reason={needsAttention(c) || c.ready === "Issuing" ? c.reason || undefined : expiringSoon(c) ? "renewal window" : undefined}
+          detail={c.notAfterUnix > 0 && !expired(c) ? `expires ${expiryText(c)}` : undefined}
+        />
       </div>
 
       {cause && (
@@ -380,36 +380,38 @@ function CertInspector({ c, issuer, chain, chainLoading }: { c: CertificateDTO; 
         </div>
       )}
 
-      <Section title="issuance chain">
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 6, marginBottom: 8 }}>
-          <MiniMetric label="requests" value={String(requests.length)} />
-          <MiniMetric label="warnings" value={String(warnings.length)} tone={warnings.length > 0 ? "warning" : undefined} />
-          <MiniMetric label="stuck" value={failing ? chainKindLabel[failing.kind] ?? failing.kind : "—"} tone={failing ? "warning" : undefined} />
+      <InspectorSection title={failing ? "Issuance chain — deepest stuck node flagged" : "Issuance chain"}>
+        <div style={{ marginBottom: 6 }}>
+          <InspectorFacts
+            facts={[
+              { label: "requests", value: requests.length },
+              { label: "warnings", value: warnings.length, tone: warnings.length > 0 ? "warning" : undefined },
+              { label: "stuck", value: failing ? chainKindLabel[failing.kind] ?? failing.kind : "—", tone: failing ? "danger" : undefined },
+            ]}
+          />
         </div>
         {chainLoading ? (
           <div style={{ fontSize: 11, color: "var(--color-text-tertiary)" }}>resolving chain…</div>
         ) : requests.length > 0 ? (
-          <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-            {requests.map((r) => <ChainNodeView key={`${r.kind}/${r.name}`} node={r} depth={0} failKey={failKey} />)}
-          </div>
+          <ChainRail nodes={requests} failKey={failKey} />
         ) : (
           <div style={{ fontSize: 11, color: "var(--color-text-tertiary)" }}>no active issuance request.</div>
         )}
         {warnings.length > 0 && warnings.map((w) => (
           <div key={w} style={{ fontSize: 10, color: "var(--color-text-warning)", marginTop: 3 }}>{w}</div>
         ))}
-      </Section>
+      </InspectorSection>
 
-      <Section title="issuer">
-        <Field label="ref" value={`${c.issuerKind}/${c.issuerName}`} />
-        <Field label="health" value={boundIssuer ? boundIssuer.ready : "not found"} tone={boundIssuer ? (boundIssuer.ready === "Ready" ? "success" : "danger") : "muted"} />
+      <InspectorSection title="Issuer">
+        <Kv label="ref" value={`${c.issuerKind}/${c.issuerName}`} />
+        <Kv label="health" value={boundIssuer ? boundIssuer.ready : "not found"} tone={boundIssuer ? (boundIssuer.ready === "Ready" ? "success" : "danger") : "muted"} />
         {boundIssuer?.message && <div style={{ fontSize: 11, color: "var(--color-text-secondary)" }}>{boundIssuer.message}</div>}
-      </Section>
+      </InspectorSection>
 
-      <Section title="secret">
-        {c.secretName ? (
-          <div style={{ display: "flex", gap: 8, alignItems: "baseline", fontSize: 11 }}>
-            <span style={{ color: "var(--color-text-tertiary)", width: 72, flexShrink: 0 }}>name</span>
+      <InspectorSection title="Secret">
+        <Kv
+          label="name"
+          value={c.secretName ? (
             <button
               onClick={() => {
                 const nav = useFleet.getState();
@@ -419,29 +421,48 @@ function CertInspector({ c, issuer, chain, chainLoading }: { c: CertificateDTO; 
               title={`open Secret ${c.namespace}/${c.secretName}`}
               style={{ background: "transparent", border: "none", padding: 0, cursor: "pointer", textAlign: "left", color: "var(--color-text-info)", fontFamily: "var(--font-mono)", fontSize: 11, overflowWrap: "anywhere", textDecoration: "underline", textDecorationColor: "var(--color-border-secondary)", textUnderlineOffset: 2 }}
             >{c.secretName}</button>
-          </div>
-        ) : (
-          <Field label="name" value="—" />
-        )}
-      </Section>
+          ) : "—"}
+        />
+      </InspectorSection>
 
-      <Section title="validity">
-        <Field label="valid from" value={dateText(c.notBeforeUnix)} />
-        <Field label="expires" value={c.notAfterUnix ? `${expiryText(c)} (${dateText(c.notAfterUnix)})` : "not issued"} tone={expired(c) ? "danger" : expiringSoon(c) ? "warning" : "muted"} />
-        <Field label="renews" value={dateText(c.renewalUnix)} tone={expiringSoon(c) ? "warning" : "muted"} />
-      </Section>
+      <InspectorSection title="Validity">
+        <Kv label="valid from" value={dateText(c.notBeforeUnix)} />
+        <Kv label="expires" value={c.notAfterUnix ? `${expiryText(c)} (${dateText(c.notAfterUnix)})` : "not issued"} tone={expired(c) ? "danger" : expiringSoon(c) ? "warning" : undefined} />
+        <Kv label="renews" value={dateText(c.renewalUnix)} tone={expiringSoon(c) ? "warning" : undefined} />
+      </InspectorSection>
 
       {dnsNames.length > 0 && (
-        <Section title="dns names">
+        <InspectorSection title="DNS names">
           {dnsNames.map((d) => <div key={d} style={{ ...mono, fontSize: 11, color: "var(--color-text-secondary)" }}>{d}</div>)}
-        </Section>
+        </InspectorSection>
       )}
 
       {c.message && (
-        <Section title="message">
+        <InspectorSection title="Message">
           <div style={{ fontSize: 11, color: "var(--color-text-secondary)" }}>{c.message}</div>
-        </Section>
+        </InspectorSection>
       )}
+    </div>
+  );
+}
+
+// certTone maps the triage semantics onto the verdict tone: failed/expired are
+// faults, issuing is activity, the renewal window is a caution, ready is quiet.
+function certTone(c: CertificateDTO): Tone {
+  if (expired(c) || c.ready === "Failed") return "danger";
+  if (c.ready === "Issuing") return "info";
+  if (expiringSoon(c)) return "warning";
+  if (c.ready === "Ready") return "success";
+  return "muted";
+}
+
+// Kv: label + left-adjacent value on the shared 88px grid. The Field primitive
+// right-aligns its value across the full panel width, which breaks scanning.
+function Kv({ label, value, tone }: { label: string; value: React.ReactNode; tone?: Tone }) {
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "88px 1fr", gap: 8, fontSize: 11, alignItems: "baseline" }}>
+      <span style={{ color: "var(--color-text-tertiary)" }}>{label}</span>
+      <span style={{ ...mono, fontSize: 11, color: tone ? toneColor[tone] : "var(--color-text-secondary)", overflowWrap: "anywhere" }}>{value}</span>
     </div>
   );
 }
@@ -466,41 +487,55 @@ function failureHint(c: CertificateDTO, issuer: IssuerDTO | undefined, failing: 
   return "";
 }
 
-// CertBadge is deliberately NOT the Badge primitive: it is a mono 10px chip on
-// a neutral border/surface with only the text toned — none of Badge's variants
-// (toned border, toned bg) renders that. It does share the primitive tone map.
-function CertBadge({ children, tone }: { children: React.ReactNode; tone: "success" | "info" | "warning" | "danger" | "muted" }) {
-  return <span style={{ ...mono, fontSize: 10, border: "0.5px solid var(--color-border-tertiary)", borderRadius: 4, padding: "1px 6px", background: "var(--color-background-secondary)", color: toneColor[tone] }}>{children}</span>;
+// flattenChain walks the request tree depth-first onto one rail: the chain is
+// linear in practice (request → order → challenge) and the rail reads
+// top-to-bottom in the order the controllers process it.
+function flattenChain(nodes: ChainNodeDTO[]): ChainNodeDTO[] {
+  const out: ChainNodeDTO[] = [];
+  const walk = (n: ChainNodeDTO) => {
+    out.push(n);
+    arrayOf(n.children).forEach(walk);
+  };
+  nodes.forEach(walk);
+  return out;
 }
 
-function MiniMetric({ label, value, tone }: { label: string; value: string; tone?: "warning" }) {
+// ChainRail: one vertical rail, a lamp per node. Only the deepest stuck node
+// gets loud - its message in a red-ringed box; healthy links stay quiet.
+function ChainRail({ nodes, failKey }: { nodes: ChainNodeDTO[]; failKey: string | null }) {
+  const flat = flattenChain(nodes);
   return (
-    <div style={{ border: "0.5px solid var(--color-border-tertiary)", borderRadius: 5, padding: "6px 7px", background: "var(--color-background-secondary)", minWidth: 0 }}>
-      <div style={{ fontSize: 9, color: "var(--color-text-tertiary)", textTransform: "uppercase" }}>{label}</div>
-      <div style={{ ...mono, ...ellipsis, fontSize: 12, marginTop: 3, color: tone === "warning" ? "var(--color-text-warning)" : "var(--color-text-primary)" }} title={value}>{value}</div>
-    </div>
-  );
-}
-
-function ChainNodeView({ node, depth, failKey }: { node: ChainNodeDTO; depth: number; failKey: string | null }) {
-  const isFail = failKey === `${node.kind}/${node.namespace}/${node.name}`;
-  const bad = node.ready === "Failed";
-  const issuing = node.ready === "Issuing";
-  const kind = node.kind || "Unknown";
-  const children = arrayOf(node.children);
-  return (
-    <>
-      <div style={{ display: "flex", alignItems: "center", gap: 6, paddingLeft: depth * 14, fontSize: 11 }}>
-        <StatusDot size={6} color={readyColor[node.ready] ?? readyColor.Unknown} />
-        <span style={{ color: "var(--color-text-tertiary)", width: 60, flexShrink: 0 }}>{chainKindLabel[kind] ?? kind.toLowerCase()}</span>
-        <span style={{ ...mono, ...ellipsis, color: isFail ? "var(--color-text-danger)" : "var(--color-text-secondary)" }} title={node.name}>{node.name}</span>
-        {(bad || issuing) && node.reason && (
-          <span style={{ ...mono, fontSize: 10, color: bad ? "var(--color-text-danger)" : "var(--color-text-warning)", flexShrink: 0 }} title={node.message}>{node.reason}</span>
-        )}
-        {isFail && <span style={{ fontSize: 9, padding: "0 5px", borderRadius: 3, background: "var(--color-text-danger)", color: "var(--color-background-primary)", flexShrink: 0 }}>stuck here</span>}
+    <div style={{ position: "relative" }}>
+      <span aria-hidden style={{ position: "absolute", left: 3, top: 6, bottom: 6, width: 1, background: "var(--color-border-secondary)" }} />
+      <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+        {flat.map((node) => {
+          const key = `${node.kind}/${node.namespace}/${node.name}`;
+          const isFail = failKey === key;
+          const bad = node.ready === "Failed";
+          const issuing = node.ready === "Issuing";
+          const kind = node.kind || "Unknown";
+          const stuckText = node.message || node.reason;
+          return (
+            <div key={key} style={{ position: "relative" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 11 }}>
+                <StatusDot size={7} color={readyColor[node.ready] ?? readyColor.Unknown} />
+                <span style={{ color: "var(--color-text-tertiary)", width: 60, flexShrink: 0 }}>{chainKindLabel[kind] ?? kind.toLowerCase()}</span>
+                <span style={{ ...mono, ...ellipsis, color: isFail ? "var(--color-text-danger)" : "var(--color-text-secondary)" }} title={node.name}>{node.name}</span>
+                {(bad || issuing) && node.reason && !isFail && (
+                  <span style={{ ...mono, fontSize: 10, color: bad ? "var(--color-text-danger)" : "var(--color-text-warning)", flexShrink: 0 }} title={node.message}>{node.reason}</span>
+                )}
+                {isFail && <span style={{ fontSize: 9, padding: "0 5px", borderRadius: 3, background: "var(--color-text-danger)", color: "var(--color-background-primary)", flexShrink: 0 }}>stuck here</span>}
+              </div>
+              {isFail && stuckText && (
+                <div style={{ marginLeft: 14, marginTop: 4, padding: "6px 9px", borderRadius: 4, background: "var(--color-background-danger)", boxShadow: "inset 0 0 0 1px var(--color-border-danger)", fontSize: 11, color: "var(--color-text-danger)", overflowWrap: "anywhere" }}>
+                  {stuckText}
+                </div>
+              )}
+            </div>
+          );
+        })}
       </div>
-      {children.map((ch) => <ChainNodeView key={`${ch.kind}/${ch.name}`} node={ch} depth={depth + 1} failKey={failKey} />)}
-    </>
+    </div>
   );
 }
 

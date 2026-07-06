@@ -4,6 +4,7 @@ import { Clipboard } from "@wailsio/runtime";
 
 type ExecCommandDTO = { command: string; argv: string[]; error: string };
 type ActionResultDTO = { ok: boolean; error: string };
+export type DescribeResultDTO = { ok: boolean; output: string; error: string };
 
 // getExecCommand fetches the kubectl exec argv and display command string.
 // Returns null on bridge error (bridge-level throw).
@@ -61,6 +62,25 @@ export async function openExecTerminal(
     });
   }
   // Success: terminal opened — no toast needed.
+}
+
+// describeResource runs `kubectl describe` for one object and returns the raw
+// output. kindArg is "pod"/"node" for the core panels and plural.group
+// (plural alone when group is "") for typed instances. Read-only; failures
+// come back as a value ({ok:false, error}), never a throw - the pane renders
+// them honestly.
+export async function describeResource(
+  cluster: string,
+  kindArg: string,
+  namespace: string,
+  name: string,
+): Promise<DescribeResultDTO> {
+  try {
+    const r = (await ExecService.Describe(cluster, kindArg, namespace, name)) as DescribeResultDTO;
+    return r ?? { ok: false, output: "", error: "describe returned nothing" };
+  } catch (e) {
+    return { ok: false, output: "", error: e instanceof Error ? e.message : String(e) };
+  }
 }
 
 // copyDebugCommand copies the kubectl debug command (ephemeral busybox shell

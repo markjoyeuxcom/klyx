@@ -63,6 +63,40 @@ describe("CertsView", () => {
     expect(rows[1].textContent).toContain("healthy-cert");
   });
 
+  it("the inspector opens with the shared verdict: state word plus reason, facts as counters", () => {
+    const c = cert({ name: "acme-demo", ready: "Failed", reason: "DoesNotExist" });
+    setup("Healthy", [c], [issuer({})], "payments/acme-demo");
+    const { getByTestId } = render(<CertsView cluster="x" />);
+    const inspector = getByTestId("cert-inspector");
+    expect(within(inspector).getByText("Failed")).toBeTruthy();
+    expect(within(inspector).getByText(/DoesNotExist/)).toBeTruthy();
+    // The requests/warnings/stuck tiles are now InspectorFacts counter wells.
+    expect(within(inspector).getByText("requests")).toBeTruthy();
+    expect(within(inspector).getByText("stuck")).toBeTruthy();
+  });
+
+  it("renders the deepest stuck node's message in the flagged box", () => {
+    const c = cert({ name: "acme-demo", ready: "Issuing", reason: "DoesNotExist" });
+    const chain: CertChainDTO = {
+      certificate: c,
+      issuer: issuer({}),
+      requests: [{
+        kind: "CertificateRequest", namespace: "payments", name: "acme-demo-1", ready: "Failed", reason: "Pending",
+        message: "propagation check failed: NXDOMAIN", children: [],
+      }],
+      failingLink: {
+        kind: "CertificateRequest", namespace: "payments", name: "acme-demo-1", ready: "Failed", reason: "Pending",
+        message: "propagation check failed: NXDOMAIN", children: [],
+      },
+      warnings: [],
+    };
+    setup("Healthy", [c], [issuer({})], "payments/acme-demo", chain);
+    const { getByTestId } = render(<CertsView cluster="x" />);
+    const inspector = getByTestId("cert-inspector");
+    expect(within(inspector).getByText(/deepest stuck node flagged/i)).toBeTruthy();
+    expect(within(inspector).getByText("propagation check failed: NXDOMAIN")).toBeTruthy();
+  });
+
   it("headlines a failing bound issuer in the inspector", () => {
     const c = cert({ name: "acme-demo", ready: "Failed", reason: "DoesNotExist" });
     setup("Healthy", [c], [issuer({ ready: "False", reason: "ACMEAccountRegistrationFailed" })], "payments/acme-demo");

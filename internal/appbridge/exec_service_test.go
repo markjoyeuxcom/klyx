@@ -1,6 +1,8 @@
 package appbridge
 
 import (
+	"context"
+	"os/exec"
 	"strings"
 	"testing"
 )
@@ -8,6 +10,23 @@ import (
 // fakeExecConn implements ExecConn for testing.
 type fakeExecConn struct {
 	kubeContext string
+	// describeCmd, when set, is returned by DescribeCmd (a real innocuous
+	// process the service can actually run); describeErr wins if set.
+	describeCmd func(ctx context.Context) *exec.Cmd
+	describeErr error
+	// gotDescribe records the arguments DescribeCmd was called with.
+	gotDescribe []string
+}
+
+func (f *fakeExecConn) DescribeCmd(ctx context.Context, kindArg, namespace, name string) (*exec.Cmd, error) {
+	f.gotDescribe = []string{kindArg, namespace, name}
+	if f.describeErr != nil {
+		return nil, f.describeErr
+	}
+	if f.describeCmd != nil {
+		return f.describeCmd(ctx), nil
+	}
+	return exec.CommandContext(ctx, "true"), nil
 }
 
 func (f *fakeExecConn) DebugCommand(namespace, pod, container string) ([]string, error) {
@@ -209,6 +228,73 @@ func TestShellQuoteArgv_FullCommand(t *testing.T) {
 	// Shell expression must be single-quoted.
 	if !strings.Contains(got, "'command -v bash >/dev/null && exec bash || exec sh'") {
 		t.Errorf("expected shell expression single-quoted, got: %s", got)
+	}
+}
+
+// --- ExecService.Describe unit tests ---
+
+func TestDescribe_Success(t *testing.T) {
+	conn := &fakeExecConn{
+		kubeContext: "ctx",
+		describeCmd: func(ctx context.Context) *exec.Cmd {
+			return exec.CommandContext(ctx, "sh", "-c", "echo 'Name:  web-abc'; echo 'ignored warning' >&2")
+		},
+	}
+	svc := NewExecService(func(string) (ExecConn, bool) { return conn, true })
+	r := svc.Describe("prod", "pod", "default", "web-abc")
+	if !r.OK || r.Error != "" {
+		t.Fatalf("expected ok, got ok=%v error=%q", r.OK, r.Error)
+	}
+	if r.Output != "Name:  web-abc" {
+		t.Errorf("output: got %q", r.Output)
+	}
+	// stderr noise (deprecation warnings) must NOT corrupt the report text
+	if strings.Contains(r.Output, "ignored warning") {
+		t.Errorf("stderr leaked into output: %q", r.Output)
+	}
+	want := []string{"pod", "default", "web-abc"}
+	for i, w := range want {
+		if conn.gotDescribe[i] != w {
+			t.Errorf("DescribeCmd arg[%d]: got %q want %q", i, conn.gotDescribe[i], w)
+		}
+	}
+}
+
+func TestDescribe_NonZeroExitReportsStderr(t *testing.T) {
+	conn := &fakeExecConn{
+		kubeContext: "ctx",
+		describeCmd: func(ctx context.Context) *exec.Cmd {
+			return exec.CommandContext(ctx, "sh", "-c", "echo 'partial output'; echo 'Error from server (NotFound)' >&2; exit 1")
+		},
+	}
+	svc := NewExecService(func(string) (ExecConn, bool) { return conn, true })
+	r := svc.Describe("prod", "pod", "default", "gone")
+	if r.OK {
+		t.Fatal("expected failure")
+	}
+	if !strings.Contains(r.Error, "NotFound") {
+		t.Errorf("error should carry stderr, got %q", r.Error)
+	}
+	// partial stdout still comes back so the pane can show what kubectl printed
+	if r.Output != "partial output" {
+		t.Errorf("output: got %q", r.Output)
+	}
+}
+
+func TestDescribe_CmdBuildErrorIsHonest(t *testing.T) {
+	conn := &fakeExecConn{kubeContext: "ctx", describeErr: errEmptyContext}
+	svc := NewExecService(func(string) (ExecConn, bool) { return conn, true })
+	r := svc.Describe("prod", "pod", "default", "web-abc")
+	if r.OK || r.Error == "" {
+		t.Fatalf("expected error result, got ok=%v error=%q", r.OK, r.Error)
+	}
+}
+
+func TestDescribe_ClusterMiss(t *testing.T) {
+	svc := NewExecService(func(string) (ExecConn, bool) { return nil, false })
+	r := svc.Describe("nope", "pod", "default", "web-abc")
+	if r.OK || !strings.Contains(r.Error, "cluster not connected") {
+		t.Fatalf("expected cluster-miss error, got ok=%v error=%q", r.OK, r.Error)
 	}
 }
 

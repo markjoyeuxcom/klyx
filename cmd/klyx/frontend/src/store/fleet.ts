@@ -298,8 +298,10 @@ function workloadKindFilterFor(kinds: readonly WorkloadKind[]): Record<WorkloadK
 }
 
 export type ContainerPortDTO = { name: string; port: number; protocol: string };
-// ports is optional in the type (older fixtures omit it); the backend always sends it.
-export type ContainerSummaryDTO = { name: string; image: string; ready: boolean; restarts: number; state: string; init: boolean; ports?: ContainerPortDTO[] };
+// ports and the last* trio are optional in the type (older fixtures omit them);
+// the backend always sends them - last* are zero values when the container
+// never terminated (lastReason "" means "no last state", never fabricate one).
+export type ContainerSummaryDTO = { name: string; image: string; ready: boolean; restarts: number; state: string; init: boolean; ports?: ContainerPortDTO[]; lastReason?: string; lastExitCode?: number; lastFinishedUnix?: number };
 export type PodSummaryDTO = { namespace: string; name: string; ready: boolean; phase: string; reason: string; rank: "unhealthy"|"degraded"|"restarts"|"healthy"; restarts: number; node: string; ip: string; ownerKind: string; ownerName: string; ageSeconds: number; containers: ContainerSummaryDTO[] };
 export type PodsResultDTO = { namespaces: string[]; pods: PodSummaryDTO[] };
 export type PodDetailDTO = { summary: PodSummaryDTO; labels: Record<string, string>; annotations?: Record<string, string>; conditions: ConditionDTO[]; events: EventDTO[]; yaml: string; qosClass: string; serviceAccount: string };

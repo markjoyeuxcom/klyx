@@ -26,6 +26,13 @@ vi.mock("../bridge/forwards", () => ({
   stopForward: vi.fn(async () => {}),
 }));
 
+// DescribePane runs kubectl describe via the exec bridge; mocked so the
+// describe test never needs a Wails runtime.
+vi.mock("../bridge/exec", () => ({
+  describeResource: vi.fn(async () => ({ ok: true, output: "Name:         web-tls", error: "" })),
+}));
+import { describeResource } from "../bridge/exec";
+
 const resource: ResourceRef = { group: "cert-manager.io", version: "v1", plural: "certificates", kind: "Certificate", scope: "Namespaced" };
 const instance: InstanceRef = { namespace: "default", name: "web-tls" };
 const detail: InstanceDetailDTO = {
@@ -159,6 +166,16 @@ describe("InstanceDetail", () => {
     expect(result.issues.some((issue) => issue.message === "kind changed from Certificate to Secret")).toBe(true);
     expect(result.issues.some((issue) => issue.message === "metadata.name changed from web-tls to other")).toBe(true);
     expect(result.issues.some((issue) => issue.message === "metadata.namespace changed from default to kube-system")).toBe(true);
+  });
+
+  it("describe button opens the read-only describe pane via the bridge", async () => {
+    const { getByRole, findByText } = render(<InstanceDetail cluster="x" resource={resource} instance={instance} />);
+    fireEvent.click(getByRole("button", { name: "describe" }));
+    // typed instances describe by the unambiguous plural.group resource arg
+    expect(describeResource).toHaveBeenCalledWith("x", "certificates.cert-manager.io", "default", "web-tls");
+    expect(await findByText(/Name:\s+web-tls/)).toBeTruthy();
+    fireEvent.keyDown(getByRole("dialog"), { key: "Escape" });
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
   });
 
   it("renders header, conditions, events, and YAML", () => {

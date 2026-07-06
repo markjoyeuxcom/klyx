@@ -159,6 +159,9 @@ func (f *fakeConn) SetCordon(context.Context, string, bool) error { return nil }
 func (f *fakeConn) DrainNodeCmd(nodeName string, opts DrainOptions) (*exec.Cmd, error) {
 	return exec.Command("true"), nil
 }
+func (f *fakeConn) DescribeCmd(ctx context.Context, kindArg, namespace, name string) (*exec.Cmd, error) {
+	return exec.CommandContext(ctx, "true"), nil
+}
 func (f *fakeConn) DebugCommand(namespace, pod, container string) ([]string, error) {
 	return nil, nil
 }

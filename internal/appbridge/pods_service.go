@@ -181,13 +181,16 @@ func toPodSummaryDTO(p workloads.PodSummary) PodSummaryDTO {
 			ports = append(ports, ContainerPortDTO{Name: pt.Name, Port: pt.Port, Protocol: pt.Protocol})
 		}
 		containers = append(containers, ContainerSummaryDTO{
-			Name:     c.Name,
-			Image:    c.Image,
-			Ready:    c.Ready,
-			Restarts: c.Restarts,
-			State:    c.State,
-			Init:     c.Init,
-			Ports:    ports,
+			Name:             c.Name,
+			Image:            c.Image,
+			Ready:            c.Ready,
+			Restarts:         c.Restarts,
+			State:            c.State,
+			Init:             c.Init,
+			Ports:            ports,
+			LastReason:       c.LastReason,
+			LastExitCode:     c.LastExitCode,
+			LastFinishedUnix: c.LastFinishedUnix,
 		})
 	}
 	return PodSummaryDTO{

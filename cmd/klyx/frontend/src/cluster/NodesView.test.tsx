@@ -26,6 +26,13 @@ vi.mock("../bridge/crd", () => ({
   copyText: vi.fn().mockResolvedValue(undefined),
 }));
 
+// DescribePane runs kubectl describe via the exec bridge; mocked so the
+// describe test never needs a Wails runtime.
+vi.mock("../bridge/exec", () => ({
+  describeResource: vi.fn().mockResolvedValue({ ok: true, output: "Name:               node-healthy", error: "" }),
+}));
+import { describeResource } from "../bridge/exec";
+
 // useListKeys -> CommandPalette -> commands.ts pulls every bridge, whose
 // generated bindings import runtime.Create; stub the bindings module so the
 // chain never reaches the Wails runtime.
@@ -248,6 +255,17 @@ describe("NodesView", () => {
     expect(getByText("NoSchedule")).toBeTruthy();
     // Events
     expect(getByText("Starting")).toBeTruthy();
+  });
+
+  it("describe button opens the read-only describe pane via the bridge", async () => {
+    seedWithDetail(healthy, fakeDetail);
+    const { getByRole, findByText } = render(<NodesView cluster="homelab" />);
+    fireEvent.click(getByRole("button", { name: "describe" }));
+    // nodes are cluster-scoped: namespace is ""
+    expect(describeResource).toHaveBeenCalledWith("homelab", "node", "", "node-healthy");
+    expect(await findByText(/Name:\s+node-healthy/)).toBeTruthy();
+    fireEvent.keyDown(getByRole("dialog"), { key: "Escape" });
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
   });
 
   it("renders healthy False pressure conditions as healthy", () => {

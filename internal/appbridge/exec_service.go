@@ -1,16 +1,20 @@
 package appbridge
 
 import (
+	"bytes"
+	"context"
 	"fmt"
 	"os/exec"
 	"runtime"
 	"strings"
+	"time"
 )
 
 // ExecConn is the per-cluster surface ExecService needs (lookup seam).
 type ExecConn interface {
 	ExecCommand(namespace, pod, container string) ([]string, error)
 	DebugCommand(namespace, pod, container string) ([]string, error)
+	DescribeCmd(ctx context.Context, kindArg, namespace, name string) (*exec.Cmd, error)
 }
 
 // ExecCommandDTO is the response from GetExecCommand.
@@ -23,9 +27,10 @@ type ExecCommandDTO struct {
 	Error string   `json:"error"`
 }
 
-// ExecService is bound to JS. It provides two operations:
+// ExecService is bound to JS - the kubectl escape-hatch verbs:
 //   - GetExecCommand: returns the kubectl exec argv and a display/copy command string.
 //   - OpenExecTerminal: launches the OS terminal running the kubectl exec command.
+//   - Describe: runs kubectl describe and returns the output (read-only).
 type ExecService struct {
 	lookup func(string) (ExecConn, bool)
 }
@@ -171,6 +176,57 @@ func shellQuoteArg(arg string) string {
 	// Single-quote the whole argument; escape embedded single quotes as '\''.
 	// Newlines and every other character are literal inside single quotes.
 	return "'" + strings.ReplaceAll(arg, "'", `'\''`) + "'"
+}
+
+// DescribeResultDTO is the outcome of a kubectl describe run. Output carries
+// whatever kubectl printed to stdout (possibly partial on a failed run);
+// Error is set when the run could not happen or exited non-zero.
+type DescribeResultDTO struct {
+	OK     bool   `json:"ok"`
+	Output string `json:"output"`
+	Error  string `json:"error"`
+}
+
+// describeTimeout bounds one kubectl describe run. Same 30s budget as the
+// other request/response verbs.
+const describeTimeout = 30 * time.Second
+
+// Describe runs `kubectl describe <kindArg> <name>` against the cluster's
+// kubeconfig context and returns the raw output. Read-only: describe never
+// mutates, so no protected-cluster gate applies. kindArg is "pod"/"node" for
+// the core panels and plural.group (plural alone when group is "") for typed
+// instances; the fleet layer validates every argument and resolves the
+// kubectl binary, so a missing kubectl comes back as an actionable Error -
+// never as silently empty output.
+func (s *ExecService) Describe(cluster, kindArg, namespace, name string) DescribeResultDTO {
+	conn, ok := s.lookup(cluster)
+	if !ok {
+		return DescribeResultDTO{Error: "cluster not connected: " + cluster}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), describeTimeout)
+	defer cancel()
+	cmd, err := conn.DescribeCmd(ctx, kindArg, namespace, name)
+	if err != nil {
+		return DescribeResultDTO{Error: err.Error()}
+	}
+	// Stdout and stderr stay separate: describe writes the report to stdout and
+	// real errors to stderr. Combining them would let a deprecation warning
+	// corrupt the report text.
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	runErr := cmd.Run()
+	out := strings.TrimRight(stdout.String(), "\n")
+	if runErr != nil {
+		msg := strings.TrimSpace(stderr.String())
+		if ctx.Err() == context.DeadlineExceeded {
+			msg = fmt.Sprintf("kubectl describe timed out after %s", describeTimeout)
+		} else if msg == "" {
+			msg = runErr.Error()
+		}
+		return DescribeResultDTO{Output: out, Error: msg}
+	}
+	return DescribeResultDTO{OK: true, Output: out}
 }
 
 // OpenTerminal opens a plain OS terminal window (no command) - the sidebar's
