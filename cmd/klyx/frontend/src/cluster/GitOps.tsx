@@ -17,7 +17,7 @@ import { IconGitBranch } from "@tabler/icons-react";
 import { wellKnownResourceRef } from "./resourceRefs";
 import { inputWell, MetersStrip, well, Badge, FilterButton, StatusDot, readyColor, ellipsis, actionBtn, type Tone } from "../chrome/primitives";
 import { compactCount } from "../chrome/format";
-import { InspectorConditions, InspectorSection, InspectorStatus } from "./ResourceInspector";
+import { InspectorConditions, InspectorSection, InspectorStatus, Kbd } from "./ResourceInspector";
 import { SyncingChip, staleStyle } from "./staleness";
 
 type FluxFilter = "all" | "attention" | "suspended" | "kustomizations" | "helmreleases" | "sources";
@@ -188,6 +188,19 @@ export function GitOps({ cluster }: { cluster: string }) {
     if (gitops.expandedKey) collapse();
   }, [gitops.expandedKey, collapse]);
 
+  // r / s drive the SAME dialogs the panel buttons open (ReconcileDialog and
+  // the suspend/resume ConfirmDialog) - the keys never bypass a confirm flow.
+  // useListKeys keeps them inert while no row is keyboard-selected.
+  const handleReconcileKey = useCallback((idx: number) => {
+    const r = visibleRows[idx];
+    if (r) setReconcileTarget(r);
+  }, [visibleRows]);
+
+  const handleSuspendKey = useCallback((idx: number) => {
+    const r = visibleRows[idx];
+    if (r) setPending({ verb: r.suspended ? "resume" : "suspend", r });
+  }, [visibleRows]);
+
   useListKeys({
     // The sources filter renders a different list; suspend row nav there.
     count: filter === "sources" ? 0 : visibleRows.length,
@@ -196,6 +209,7 @@ export function GitOps({ cluster }: { cluster: string }) {
     onActivate: handleActivate,
     onEscape: handleEscape,
     searchRef,
+    extraKeys: { r: handleReconcileKey, s: handleSuspendKey },
   });
 
   useEffect(() => {
@@ -300,13 +314,18 @@ export function GitOps({ cluster }: { cluster: string }) {
                     r={r}
                     open={open}
                     kbSelected={i === kbIdx}
-                    onClick={() => (open ? collapse() : expand(k))}
+                    onClick={() => {
+                      // A click also moves the keyboard selection so the r/s
+                      // hints on the panel act on the row the panel shows.
+                      setKbKey(k);
+                      if (open) collapse(); else expand(k);
+                    }}
                   />
                 );
               })}
             </div>
             <FKeysBar
-              keys={[["j k", "nav"], ["\u21B5", "expand"], ["/", "filter"], ["esc", "collapse"]]}
+              keys={[["j k", "nav"], ["\u21B5", "expand"], ["r", "reconcile"], ["s", "suspend"], ["/", "filter"], ["esc", "collapse"]]}
               status={`${visibleRows.length} of ${rows.length} \u00B7 broken first`}
             />
           </div>
@@ -519,9 +538,10 @@ function DetailPanel({ cluster, resource, detail, deps, onReconcile, onToggleSus
     <div style={{ ...well, padding: "10px 12px", fontSize: 12 }}>
       <InspectorHeader resource={resource} />
       <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 12, flexWrap: "wrap" }}>
-        <button onClick={onReconcile} style={actionBtn}>reconcile</button>
-        <button onClick={() => onToggleSuspend(detail.suspended ?? false)} style={actionBtn}>
-          {detail.suspended ? "resume" : "suspend"}
+        {/* r / s are live via useListKeys on the keyboard-selected row */}
+        <button onClick={onReconcile} style={{ ...actionBtn, display: "inline-flex", alignItems: "center", gap: 5 }}>reconcile <Kbd k="r" /></button>
+        <button onClick={() => onToggleSuspend(detail.suspended ?? false)} style={{ ...actionBtn, display: "inline-flex", alignItems: "center", gap: 5 }}>
+          {detail.suspended ? "resume" : "suspend"} <Kbd k="s" />
         </button>
         {resource.kind === "Kustomization" && (
           <button onClick={onViewGit} style={actionBtn}>view in git</button>
