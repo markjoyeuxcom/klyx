@@ -250,6 +250,11 @@ export function InspectorConditions({ conditions, colorOf }: { conditions: Condi
         <div key={c.type} style={{ display: "flex", gap: 8, alignItems: "baseline", fontSize: 11, padding: "1px 0" }}>
           <span style={{ width: 7, height: 7, borderRadius: "50%", background: dotColor(c), display: "inline-block", flexShrink: 0, alignSelf: "center" }} />
           <span style={{ fontWeight: 500, flexShrink: 0, whiteSpace: "nowrap" }}>{c.type}</span>
+          {/* The status value itself, not just its dot encoding - "Ready False"
+              must be readable, colour stays the severity channel. */}
+          {c.status && (
+            <span style={{ fontFamily: "var(--font-mono)", fontSize: 10, flexShrink: 0, color: dotColor(c) }}>{c.status}</span>
+          )}
           {c.reason && (
             <span style={{ flexShrink: 0, fontSize: 10, color: "var(--color-text-tertiary)", background: "var(--color-background-secondary)", padding: "0 5px", borderRadius: 3, fontFamily: "var(--font-mono)" }}>
               {c.reason}
@@ -283,6 +288,23 @@ export function InspectorEvents({ events, emptyText = "No events." }: { events: 
         </div>
       ))}
     </>
+  );
+}
+
+// Kbd — the inline key hint on a primary action button. Only advertise a key
+// that a live binding in the same view actually handles (never a dead key).
+export function Kbd({ k }: { k: string }) {
+  return (
+    <kbd style={{
+      fontFamily: "var(--font-mono)",
+      fontSize: 9,
+      padding: "0 4px",
+      background: "var(--color-background-secondary)",
+      border: "1px solid var(--color-border-secondary)",
+      borderBottom: "2px solid var(--bench-edge-lo, var(--color-border-secondary))",
+      borderRadius: 3,
+      color: "var(--color-text-tertiary)",
+    }}>{k}</kbd>
   );
 }
 

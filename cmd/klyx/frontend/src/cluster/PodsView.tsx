@@ -20,7 +20,7 @@ import { FKeysBar } from "../chrome/FKeysBar";
 import { inputWell, selectWell, FilterButton, MetersStrip, well, EmptyState, LiveIndicator, SkeletonRows, btn, ellipsis, type Tone } from "../chrome/primitives";
 import { CopyButton } from "../chrome/CopyButton";
 import { YamlBlock } from "../chrome/YamlBlock";
-import { InspectorFacts, InspectorIdle, InspectorConditions, InspectorEvents, InspectorSection, InspectorStatus, InspectorTabButton, MetadataChips, inspectorStateBox } from "./ResourceInspector";
+import { InspectorFacts, InspectorIdle, InspectorConditions, InspectorEvents, InspectorSection, InspectorStatus, InspectorTabButton, Kbd, MetadataChips, inspectorStateBox } from "./ResourceInspector";
 import { loadClusterPrefs, loadSearch, savePodsViewPrefs, saveSearch } from "../store/persist";
 
 const rankDot: Record<string, string> = {
@@ -48,9 +48,9 @@ function ago(s: number): string {
 
 const gridCols = "12px minmax(0,1.2fr) 60px minmax(110px,0.8fr) 55px minmax(0,1.1fr) 52px 28px";
 
-// Containers table in the detail panel: state must fit "terminated" untruncated
-// and image gets real flexible space (it shares the title-attr full ref).
-const containerGridCols = "minmax(0,1.1fr) 76px minmax(0,1fr) 28px";
+// kv grid shared by the panel's per-container blocks - labels in a fixed 88px
+// column, values left-adjacent (never right-aligned across the panel width).
+const kvGridCols = "88px 1fr";
 
 // imageShort strips the registry/repository path from an image ref, keeping the
 // final segment with its tag ("docker.io/grafana/grafana:12.4.1" -> "grafana:12.4.1").
@@ -559,7 +559,7 @@ function PodDetailPanel({
   }, [handleKey]);
 
   return (
-    <div style={{
+    <div data-testid="pod-detail-panel" style={{
       width, flexShrink: 0, position: "relative",
       background: "var(--bench-well-bg, transparent)", boxShadow: "var(--bench-well-shadow, none)", borderRadius: "var(--radius-sm)", padding: "12px 16px",
       overflowY: "auto",
@@ -576,20 +576,46 @@ function PodDetailPanel({
         <span style={{ minWidth: 0, flex: 1 }}>
           <span style={{ display: "block", fontSize: 10, color: "var(--color-text-tertiary)", fontFamily: "var(--font-mono)" }}>Pod / {namespace}</span>
           <span style={{ display: "block", fontWeight: 600, ...ellipsis }} title={`${namespace}/${name}`}>{name}</span>
+          {/* One mono meta line: where the pod lives. Node keeps its Nodes
+              cross-link here - it left the Summary kv to avoid duplication. */}
+          {detail && (
+            <span style={{ display: "block", fontSize: 10, color: "var(--color-text-secondary)", fontFamily: "var(--font-mono)", marginTop: 2, ...ellipsis }}>
+              {namespace}
+              {detail.summary.node && (
+                <>
+                  {" · "}
+                  <button
+                    onClick={() => {
+                      useFleet.getState().setSection("nodes");
+                      useFleet.getState().requestNavIntent({ kind: "select-node", cluster, node: detail.summary.node });
+                    }}
+                    title="open in Nodes"
+                    style={{
+                      background: "transparent", border: "none", padding: 0, cursor: "pointer",
+                      color: "var(--color-text-info)", fontFamily: "inherit", fontSize: "inherit",
+                      textDecoration: "underline", textDecorationColor: "var(--color-border-secondary)", textUnderlineOffset: 2,
+                    }}
+                  >{detail.summary.node}</button>
+                </>
+              )}
+              {` · ${ago(detail.summary.ageSeconds)}`}
+              {detail.summary.ip ? ` · ${detail.summary.ip}` : ""}
+            </span>
+          )}
         </span>
         <CopyButton text={name} label="copy pod name" />
 
-        {/* Logs button — opens / re-targets the dock */}
+        {/* Logs button — opens / re-targets the dock; l is live via useListKeys */}
         <button
           onClick={() => {
             if (detail) {
               onOpenLogs({ namespace, name, containers: detail.summary.containers });
             }
           }}
-          style={{ ...btn, padding: "2px 8px", fontSize: 11 }}
+          style={{ ...btn, padding: "2px 8px", fontSize: 11, display: "inline-flex", alignItems: "center", gap: 5 }}
           aria-label="open logs dock"
           title="Open logs in bottom dock"
-        >logs</button>
+        >logs <Kbd k="l" /></button>
         <button onClick={onClose} style={{ ...btn, padding: "2px 8px", display: "inline-flex", alignItems: "center" }} aria-label="close pod detail panel"><IconX size={13} stroke={1.5} /></button>
       </div>
 
@@ -829,19 +855,8 @@ function InfoTab({ detail, cluster, namespace, name, onRestart, onDelete }: {
             )}
           </InfoRow>
         )}
-        {p.node && (
-          <InfoRow label="node">
-            <InfoLink
-              label={p.node}
-              title="open in Nodes"
-              onClick={() => {
-                useFleet.getState().setSection("nodes");
-                useFleet.getState().requestNavIntent({ kind: "select-node", cluster, node: p.node });
-              }}
-            />
-          </InfoRow>
-        )}
-        {p.ip && <InfoRow label="ip">{p.ip}</InfoRow>}
+        {/* node + ip live on the header meta line - repeating them here would
+            be the duplication the meta line exists to remove */}
         {detail.qosClass && <InfoRow label="qos">{detail.qosClass}</InfoRow>}
         {detail.serviceAccount && <InfoRow label="sa">{detail.serviceAccount}</InfoRow>}
       </InspectorSection>
@@ -849,25 +864,10 @@ function InfoTab({ detail, cluster, namespace, name, onRestart, onDelete }: {
       <MetadataChips title="Labels" values={detail.labels} />
       <MetadataChips title="Annotations" values={detail.annotations} defaultCollapsed />
 
-      {/* Containers */}
+      {/* Containers — a kv block per container, not a table: the state word
+          with its reason is the headline fact and needs a full line. */}
       <InspectorSection title="Containers" count={p.containers.length} collapsible>
-        <div style={{ display: "grid", gridTemplateColumns: containerGridCols, gap: 6, fontSize: 9, marginBottom: 2, color: "var(--color-text-tertiary)", textTransform: "uppercase" }}>
-          <span>name</span><span>state</span><span>image</span><span>rst</span>
-        </div>
-        {p.containers.map((c) => (
-          <div key={c.name} data-rowhost="true" style={{ display: "grid", gridTemplateColumns: containerGridCols, gap: 6, fontSize: 11, padding: "2px 0", alignItems: "center" }}>
-            <span style={{ ...ellipsis }} title={c.name}>
-              {c.name}
-              {c.init && <span style={{ marginLeft: 4, fontSize: 9, color: "var(--color-text-tertiary)", background: "var(--color-background-secondary)", padding: "0 4px", borderRadius: 3 }}>init</span>}
-            </span>
-            <span style={{ color: c.ready ? "var(--color-text-success)" : "var(--color-text-danger)", ...ellipsis }} title={c.state}>{c.state || "—"}</span>
-            <span style={{ display: "flex", alignItems: "center", gap: 2, minWidth: 0 }}>
-              <span style={{ ...ellipsis, color: "var(--color-text-tertiary)" }} title={c.image}>{imageShort(c.image)}</span>
-              <CopyButton text={c.image} label={`copy image ref ${imageShort(c.image)}`} size={11} appearOnRowHover />
-            </span>
-            <span style={{ color: c.restarts > 0 ? "var(--color-text-warning)" : "var(--color-text-tertiary)" }}>{c.restarts}</span>
-          </div>
-        ))}
+        {p.containers.map((c) => <ContainerBlock key={c.name} c={c} />)}
       </InspectorSection>
 
       {/* Conditions */}
@@ -1062,6 +1062,41 @@ function DebugShellButton({
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+// containerStateParts splits the backend's canonical state string ("running" |
+// "waiting:<Reason>" | "terminated:<Reason>" | "") into word + reason. The DTO
+// carries no lastState/exit-code data, so the block renders only these fields.
+function containerStateParts(state: string): { word: string; reason: string } {
+  const i = state.indexOf(":");
+  return i < 0 ? { word: state, reason: "" } : { word: state.slice(0, i), reason: state.slice(i + 1) };
+}
+
+function ContainerBlock({ c }: { c: ContainerSummaryDTO }) {
+  const { word, reason } = containerStateParts(c.state);
+  // terminated:Completed is the normal init-container end state, not a fault.
+  const faulted = word !== "" && word !== "running" && reason !== "Completed";
+  const stateColor = word === "running"
+    ? "var(--color-text-success)"
+    : faulted ? "var(--color-text-danger)" : "var(--color-text-tertiary)";
+  return (
+    <div data-rowhost="true" style={{ display: "grid", gridTemplateColumns: kvGridCols, gap: "2px 8px", fontSize: 11, padding: "3px 0", alignItems: "baseline" }}>
+      <span style={{ ...ellipsis, color: "var(--color-text-tertiary)" }} title={c.name}>
+        {c.name}
+        {c.init && <span style={{ marginLeft: 4, fontSize: 9, background: "var(--color-background-secondary)", padding: "0 4px", borderRadius: 3 }}>init</span>}
+      </span>
+      <span style={{ ...ellipsis, color: stateColor, fontWeight: faulted ? 600 : undefined }} title={c.state}>
+        {word || "—"}{reason ? ` · ${reason}` : ""}
+      </span>
+      <span style={{ color: "var(--color-text-tertiary)" }}>image</span>
+      <span style={{ display: "flex", alignItems: "center", gap: 2, minWidth: 0 }}>
+        <span style={{ ...ellipsis, color: "var(--color-text-secondary)" }} title={c.image}>{imageShort(c.image)}</span>
+        <CopyButton text={c.image} label={`copy image ref ${imageShort(c.image)}`} size={11} appearOnRowHover />
+      </span>
+      <span style={{ color: "var(--color-text-tertiary)" }}>restarts</span>
+      <span style={{ color: c.restarts > 0 ? "var(--color-text-warning)" : "var(--color-text-tertiary)" }}>{c.restarts}</span>
     </div>
   );
 }

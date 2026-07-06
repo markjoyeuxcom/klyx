@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, fireEvent, act } from "@testing-library/react";
+import { render, fireEvent, act, within } from "@testing-library/react";
 import { PodsView, imageShort } from "./PodsView";
 import { useFleet } from "../store/fleet";
 import type { PodSummaryDTO, PodDetailDTO } from "../store/fleet";
@@ -147,6 +147,49 @@ describe("PodsView", () => {
     expect(getByText("app=grafana")).toBeTruthy();
     // Annotations start collapsed.
     expect(getByText("Annotations (1)")).toBeTruthy();
+  });
+
+  it("panel header carries one mono meta line: namespace, node, age, ip", () => {
+    seed([healthy]);
+    useFleet.setState((s) => ({
+      pods: {
+        ...s.pods,
+        selected: { namespace: "monitoring", name: "grafana-xyz" },
+        detail: fakeDetail,
+        detailLoading: false,
+      },
+    }));
+    const { getByTestId } = render(<PodsView cluster="homelab" />);
+    const panel = within(getByTestId("pod-detail-panel"));
+    // Node keeps its Nodes cross-link, now on the meta line.
+    const nodeLink = panel.getByRole("button", { name: "node-1" });
+    const meta = nodeLink.parentElement as HTMLElement;
+    expect(meta.textContent).toContain("monitoring");
+    expect(meta.textContent).toContain("1h");
+    expect(meta.textContent).toContain("10.0.0.1");
+    // node/ip left the Summary kv - the meta line owns them now.
+    expect(panel.queryByText("node")).toBeNull();
+    expect(panel.queryByText("ip")).toBeNull();
+  });
+
+  it("containers render as kv blocks with state · reason from the DTO", () => {
+    const detailCrash: PodDetailDTO = { ...fakeDetail, summary: broken };
+    seed([broken]);
+    useFleet.setState((s) => ({
+      pods: {
+        ...s.pods,
+        selected: { namespace: "default", name: "api-crash" },
+        detail: detailCrash,
+        detailLoading: false,
+      },
+    }));
+    const { getByTestId } = render(<PodsView cluster="homelab" />);
+    const panel = within(getByTestId("pod-detail-panel"));
+    expect(panel.getByText("waiting · CrashLoopBackOff")).toBeTruthy();
+    expect(panel.getByText("image")).toBeTruthy();
+    // "restarts" appears as the facts-well label AND the container kv label.
+    expect(panel.getAllByText("restarts").length).toBeGreaterThanOrEqual(2);
+    expect(panel.getByTitle("nginx:latest")).toBeTruthy();
   });
 
   it("detail panel renders annotations as collapsed metadata", () => {
