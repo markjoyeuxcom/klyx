@@ -58,3 +58,8 @@ design rules (notes §Design rules) are the review bar.
 ## Always-on inspector (2026-07-06)
 - [ ] Every master-detail section (pods, nodes, workloads, helm, instances, flux, certs, eso) shows the right panel permanently; idle it reads the attention count (amber lamp when >0, unlit when quiet), what selecting shows, and "j k nav · ↵ inspect".
 - [ ] Selecting/deselecting a row never reflows the list width.
+
+## Panel dialect unification (A3-A6 feedback, 2026-07-06)
+- [ ] Every panel opens caption (kind / namespace) → name + copy → verdict → actions → shared uppercase sections; workloads gained copy + close, pods gained the kind caption.
+- [ ] Instance panels (replicasets, HPAs, any CR with conditions) open with a conditions-derived verdict ("Ready True", "AbleToScale True"); objects with no conditions show no fabricated verdict.
+- [ ] Helm history/values render in the shared section idiom.

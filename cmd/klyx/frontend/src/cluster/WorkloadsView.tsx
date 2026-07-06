@@ -418,6 +418,7 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
         <WorkloadContextPanel
           workload={selectedWorkload}
           attention={rankCount("unhealthy") + rankCount("degraded")}
+          onClose={() => setSelectedKey(null)}
           expanded={selectedExpanded}
           isProtected={isProtected}
           pending={pending}
@@ -555,6 +556,7 @@ function WorkloadContextPanel({
   workload,
   attention,
   expanded,
+  onClose,
   isProtected,
   pending,
   onLogs,
@@ -570,6 +572,7 @@ function WorkloadContextPanel({
   workload: WorkloadDTO | null;
   attention: number;
   expanded: boolean;
+  onClose: () => void;
   isProtected: boolean;
   pending: Pending | null;
   onLogs: (w: WorkloadDTO) => void;
@@ -603,15 +606,17 @@ function WorkloadContextPanel({
     <aside style={{ minWidth: 0, minHeight: 0, overflowY: "auto", background: "var(--color-background-secondary)", display: "flex", flexDirection: "column" }}>
       <div style={{ padding: 14, borderBottom: "0.5px solid var(--color-border-tertiary)", display: "grid", gap: 10 }}>
         <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10 }}>
-          <div style={{ minWidth: 0 }}>
-            <div style={{ color: "var(--color-text-tertiary)", fontFamily: "var(--font-mono)", fontSize: 11 }}>{workload.kind} / {workload.namespace}</div>
-            <div style={{ fontFamily: "var(--font-mono)", fontSize: 15, fontWeight: 500, overflowWrap: "anywhere" }}>{workload.name}</div>
+          <div style={{ minWidth: 0, flex: 1 }}>
+            <div style={{ color: "var(--color-text-tertiary)", fontFamily: "var(--font-mono)", fontSize: 10 }}>{workload.kind} / {workload.namespace}</div>
+            <div style={{ fontFamily: "var(--font-mono)", fontSize: 15, fontWeight: 600, overflowWrap: "anywhere" }}>{workload.name}</div>
           </div>
+          <CopyButton text={`${workload.namespace}/${workload.name}`} label="copy workload name" />
           {isProtected && (
-            <span style={{ border: "0.5px solid var(--color-border-warning)", background: "var(--color-background-warning)", color: "var(--color-text-warning)", fontFamily: "var(--font-mono)", fontSize: 10, padding: "2px 6px", flexShrink: 0 }}>
+            <span style={{ boxShadow: "inset 0 0 0 1px var(--color-border-warning)", background: "var(--color-background-warning)", color: "var(--color-text-warning)", fontFamily: "var(--font-mono)", fontSize: 10, padding: "2px 6px", borderRadius: 3, flexShrink: 0 }}>
               prd lock
             </span>
           )}
+          <button onClick={onClose} aria-label="close workload panel" style={{ ...btn, padding: "2px 8px", flexShrink: 0, display: "inline-flex", alignItems: "center" }}><IconX size={13} stroke={1.5} /></button>
         </div>
         {/* State first: the rank + reason headline, scannable before the
             status grid below. */}
@@ -664,7 +669,7 @@ function WorkloadContextPanel({
       </div>
 
       <div style={{ padding: "12px 14px", borderBottom: "0.5px solid var(--color-border-tertiary)", display: "grid", gap: 8 }}>
-        <div style={{ color: "var(--color-text-tertiary)", fontSize: 10 }}>status</div>
+        <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5, color: "var(--color-text-tertiary)" }}>status</div>
         <div style={{ display: "grid", gridTemplateColumns: "88px 1fr", gap: "5px 10px", fontFamily: "var(--font-mono)", fontSize: 11 }}>
           <span style={{ color: "var(--color-text-tertiary)" }}>ready</span><span style={{ color: workload.ready < workload.desired ? "var(--color-text-warning)" : "var(--color-text-secondary)" }}>{workload.ready} / {workload.desired}</span>
           <span style={{ color: "var(--color-text-tertiary)" }}>restarts</span><span style={{ color: workload.restarts > 0 ? "var(--color-text-warning)" : "var(--color-text-secondary)" }}>{workload.restarts}</span>
@@ -683,7 +688,7 @@ function WorkloadContextPanel({
       </div>
 
       <div style={{ padding: "12px 14px", borderBottom: "0.5px solid var(--color-border-tertiary)", display: "grid", gap: 8 }}>
-        <div style={{ color: "var(--color-text-tertiary)", fontSize: 10 }}>pods</div>
+        <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5, color: "var(--color-text-tertiary)" }}>pods</div>
         <div style={{ fontFamily: "var(--font-mono)", fontSize: 12, color: badPods > 0 ? "var(--color-text-warning)" : "var(--color-text-success)" }}>
           {badPods > 0 ? `${badPods} affected / ${workload.pods.length} total` : `${workload.pods.length} healthy`}
         </div>
@@ -728,7 +733,7 @@ function WorkloadContextPanel({
       </div>
 
       <div style={{ padding: "12px 14px", display: "grid", gap: 8 }}>
-        <div style={{ color: "var(--color-text-tertiary)", fontSize: 10 }}>resources</div>
+        <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5, color: "var(--color-text-tertiary)" }}>resources</div>
         <div style={{ display: "grid", gridTemplateColumns: "88px 1fr", gap: "5px 10px", fontFamily: "var(--font-mono)", fontSize: 11 }}>
           <span style={{ color: "var(--color-text-tertiary)" }}>cpu</span>
           <span><ResourceCellView resource="cpu" cell={workload.resources.cpu} hasPods={workload.pods.length > 0} /></span>

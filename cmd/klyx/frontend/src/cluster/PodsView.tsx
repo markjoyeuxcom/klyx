@@ -573,8 +573,9 @@ function PodDetailPanel({
 
       {/* Panel header */}
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, position: "sticky", top: 0, background: "var(--color-background-primary)", paddingTop: 2, paddingBottom: 6, borderBottom: "0.5px solid var(--color-border-tertiary)" }}>
-        <span style={{ fontWeight: 500, ...ellipsis, flex: 1 }} title={`${namespace}/${name}`}>
-          <span style={{ color: "var(--color-text-tertiary)" }}>{namespace}</span>/{name}
+        <span style={{ minWidth: 0, flex: 1 }}>
+          <span style={{ display: "block", fontSize: 10, color: "var(--color-text-tertiary)", fontFamily: "var(--font-mono)" }}>Pod / {namespace}</span>
+          <span style={{ display: "block", fontWeight: 600, ...ellipsis }} title={`${namespace}/${name}`}>{name}</span>
         </span>
         <CopyButton text={name} label="copy pod name" />
 
