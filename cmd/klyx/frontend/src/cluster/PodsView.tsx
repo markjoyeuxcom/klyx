@@ -20,7 +20,7 @@ import { FKeysBar } from "../chrome/FKeysBar";
 import { inputWell, selectWell, FilterButton, MetersStrip, well, EmptyState, LiveIndicator, SkeletonRows, btn, ellipsis, type Tone } from "../chrome/primitives";
 import { CopyButton } from "../chrome/CopyButton";
 import { YamlBlock } from "../chrome/YamlBlock";
-import { InspectorConditions, InspectorEvents, InspectorSection, InspectorStatus, InspectorTabButton, MetadataChips, inspectorStateBox } from "./ResourceInspector";
+import { InspectorIdle, InspectorConditions, InspectorEvents, InspectorSection, InspectorStatus, InspectorTabButton, MetadataChips, inspectorStateBox } from "./ResourceInspector";
 import { loadClusterPrefs, loadSearch, savePodsViewPrefs, saveSearch } from "../store/persist";
 
 const rankDot: Record<string, string> = {
@@ -359,7 +359,14 @@ export function PodsView({ cluster }: { cluster: string }) {
           )}
         </div>
 
-        {/* Detail panel */}
+        {/* Detail panel - always present; idle when nothing is selected */}
+        {!pods.selected && (
+          <InspectorIdle
+            subject="pods"
+            attention={pods.items.filter((x) => x.rank !== "healthy").length}
+            hint="Select a pod for containers, conditions, events, logs, and day-2 actions."
+          />
+        )}
         {pods.selected && (
           <PodDetailPanel
             cluster={cluster}

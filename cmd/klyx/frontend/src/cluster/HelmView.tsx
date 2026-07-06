@@ -8,7 +8,7 @@ import type { RollbackOptions } from "../bridge/helm";
 import { MetaTile, OperationDialog, OptionTile } from "../chrome/OperationDialog";
 import { useResizablePanel } from "../chrome/useResizablePanel";
 import { useListKeys } from "../chrome/useListKeys";
-import { InspectorStatus } from "./ResourceInspector";
+import { InspectorIdle, InspectorStatus } from "./ResourceInspector";
 import { CopyButton } from "../chrome/CopyButton";
 import { YamlBlock } from "../chrome/YamlBlock";
 import { Age, UpdatedAt, useReceivedAt } from "../chrome/Age";
@@ -239,6 +239,13 @@ export function HelmView({ cluster }: { cluster: string }) {
       </div>
 
       {/* Detail panel */}
+      {!helm.selected && !helm.loading && helm.available && (
+        <InspectorIdle
+          subject="releases"
+          attention={failed + pendingCount}
+          hint="Select a release for history, rollback, and values."
+        />
+      )}
       {helm.selected && (
         <HelmDetailPanel
           cluster={cluster}

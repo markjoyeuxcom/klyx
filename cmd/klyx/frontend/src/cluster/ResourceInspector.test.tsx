@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { render } from "@testing-library/react";
-import { InspectorConditions, InspectorEvents, InspectorStatus, conditionColor } from "./ResourceInspector";
+import { InspectorConditions, InspectorEvents, InspectorIdle, InspectorStatus, conditionColor } from "./ResourceInspector";
 import type { ConditionDTO, EventDTO } from "../store/fleet";
 
 describe("InspectorStatus", () => {
@@ -10,6 +10,19 @@ describe("InspectorStatus", () => {
     );
     expect(getByText("CrashLoopBackOff")).toBeTruthy();
     expect(getByText("BackOff · 0/1 ready")).toBeTruthy();
+  });
+});
+
+describe("InspectorIdle", () => {
+  it("shows the attention count and keyboard hints when faults exist", () => {
+    const { getByText } = render(<InspectorIdle subject="pods" attention={3} hint="Select a pod." />);
+    expect(getByText("3 pods need attention")).toBeTruthy();
+    expect(getByText("j k nav · ↵ inspect")).toBeTruthy();
+  });
+
+  it("reads quiet when nothing needs attention", () => {
+    const { getByText } = render(<InspectorIdle subject="releases" attention={0} hint="Select a release." />);
+    expect(getByText("all releases quiet")).toBeTruthy();
   });
 });
 

@@ -54,3 +54,7 @@ design rules (notes §Design rules) are the review bar.
 - [ ] Panel verdicts are one element: lamp + state word in a toned ringed box, mono sub-line "reason · detail" - not three disconnected chips.
 - [ ] Every namespace select and filter input is an inset well (mono, no OS chrome, chevron on selects) - pods, workloads, events, gateway, certs, eso, flux, helm, argo, instances, logs grep.
 - [ ] The workloads status caption reads as an engraved note (small tracked uppercase), not a second row of body text.
+
+## Always-on inspector (2026-07-06)
+- [ ] Every master-detail section (pods, nodes, workloads, helm, instances, flux, certs, eso) shows the right panel permanently; idle it reads the attention count (amber lamp when >0, unlit when quiet), what selecting shows, and "j k nav · ↵ inspect".
+- [ ] Selecting/deselecting a row never reflows the list width.

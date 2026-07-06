@@ -22,7 +22,7 @@ import { CopyButton } from "../chrome/CopyButton";
 import { EmptyState } from "../chrome/EmptyState";
 import { SkeletonRows } from "../chrome/SkeletonRows";
 import { inputWell, selectWell, MetersStrip, LiveIndicator, btn, ellipsis, type Tone } from "../chrome/primitives";
-import { InspectorStatus } from "./ResourceInspector";
+import { InspectorIdle, InspectorStatus } from "./ResourceInspector";
 import { loadClusterPrefs, loadSearch, saveSearch, saveWorkloadsViewPrefs } from "../store/persist";
 import { SyncingChip, staleStyle } from "./staleness";
 import { wellKnownResourceRef } from "./resourceRefs";
@@ -420,6 +420,7 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
 
         <WorkloadContextPanel
           workload={selectedWorkload}
+          attention={rankCount("unhealthy") + rankCount("degraded")}
           expanded={selectedExpanded}
           isProtected={isProtected}
           pending={pending}
@@ -555,6 +556,7 @@ function WorkloadStatusTrail({
 
 function WorkloadContextPanel({
   workload,
+  attention,
   expanded,
   isProtected,
   pending,
@@ -569,6 +571,7 @@ function WorkloadContextPanel({
   onOpenFluxOwner,
 }: {
   workload: WorkloadDTO | null;
+  attention: number;
   expanded: boolean;
   isProtected: boolean;
   pending: Pending | null;
@@ -584,11 +587,12 @@ function WorkloadContextPanel({
 }) {
   if (!workload) {
     return (
-      <aside style={{ minWidth: 0, minHeight: 0, overflow: "hidden", background: "var(--color-background-secondary)", display: "grid", placeItems: "center", padding: 18 }}>
-        <div style={{ color: "var(--color-text-tertiary)", fontSize: 12, textAlign: "center" }}>
-          select a workload for ownership, freshness, and action context
-        </div>
-      </aside>
+      <InspectorIdle
+        subject="workloads"
+        attention={attention}
+        hint="Select a workload for ownership, freshness, pods, and day-2 actions."
+        width="100%"
+      />
     );
   }
 
