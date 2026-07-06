@@ -96,6 +96,88 @@ export function InspectorEmpty({ text, style }: { text: string; style?: React.CS
 // ---------------------------------------------------------------------------
 
 /** InspectorStatus — the state-first opening line of a panel. */
+// InspectorFacts — the panel's numeric facts as mini counter wells (Signal
+// Bench): value in an inset window with tabular numerals, engraved label
+// beneath, tone carrying state. Prose stays in kv rows; NUMBERS get physical
+// form so the eye finds "7 restarts" without reading four lines of text.
+export function InspectorFacts({ facts }: {
+  facts: ReadonlyArray<{ label: string; value: string | number; tone?: Tone } | null | false>;
+}) {
+  const cells = facts.filter((f): f is { label: string; value: string | number; tone?: Tone } => Boolean(f));
+  if (cells.length === 0) return null;
+  return (
+    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+      {cells.map((f) => (
+        <span key={f.label} style={{ minWidth: 64, display: "flex", flexDirection: "column", gap: 3 }}>
+          <span style={{
+            padding: "3px 9px 2px",
+            textAlign: "right",
+            fontFamily: "var(--font-mono)",
+            fontVariantNumeric: "tabular-nums",
+            fontSize: 13,
+            fontWeight: 600,
+            color: f.tone ? toneColor[f.tone] : "var(--color-text-primary)",
+            borderRadius: "var(--radius-sm)",
+            background: "var(--bench-well-bg, var(--color-background-secondary))",
+            boxShadow: "var(--bench-well-shadow, inset 0 0 0 1px var(--color-border-tertiary))",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }} title={String(f.value)}>{f.value}</span>
+          <span style={{ fontSize: 8, letterSpacing: "0.1em", textTransform: "uppercase", fontWeight: 600, textAlign: "right", paddingRight: 2, color: "var(--color-text-tertiary)" }}>{f.label}</span>
+        </span>
+      ))}
+    </div>
+  );
+}
+
+// InspectorIdle — the inspector well when nothing is selected. The panel is
+// ALWAYS present (mockup rule: the board is list + inspector, permanently),
+// so selecting a row never reflows the list. Idle it stays honest: the
+// attention count, what selecting shows, and the keys that do it.
+export function InspectorIdle({ subject, attention, hint, width }: {
+  subject: string;
+  attention: number;
+  hint: string;
+  width?: number | string;
+}) {
+  return (
+    <aside
+      data-testid="inspector-idle"
+      style={{
+        width: width ?? 360,
+        flexShrink: 0,
+        minHeight: 0,
+        boxSizing: "border-box",
+        // grid-hosted callers pass width="100%" and own the gutter themselves
+        background: "var(--bench-well-bg, transparent)",
+        boxShadow: "var(--bench-well-shadow, none)",
+        borderRadius: "var(--radius-sm)",
+        padding: "12px 16px",
+        marginLeft: width ? 0 : 8,
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: 10,
+        textAlign: "center",
+        fontFamily: "var(--font-mono)",
+        fontSize: 12,
+        color: "var(--color-text-secondary)",
+      }}
+    >
+      <span aria-hidden style={{ width: 12, height: 12, borderRadius: "50%", background: attention > 0 ? "var(--color-text-warning)" : "var(--lamp-off, var(--color-border-secondary))", boxShadow: attention > 0 ? "var(--lamp-glow-warning, none)" : "inset 0 1px 1px rgba(0,0,0,0.35)" }} />
+      <div style={{ fontWeight: 600, color: attention > 0 ? "var(--color-text-warning)" : "var(--color-text-secondary)" }}>
+        {attention > 0 ? `${attention} ${subject} need attention` : `all ${subject} quiet`}
+      </div>
+      <div style={{ fontSize: 11, color: "var(--color-text-tertiary)", maxWidth: 260, lineHeight: 1.6 }}>{hint}</div>
+      <div style={{ fontSize: 9, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--color-text-tertiary)" }}>
+        j k nav · ↵ inspect
+      </div>
+    </aside>
+  );
+}
+
 // InspectorStatus is the mockup's verdict (Signal Bench): ONE big element -
 // lamp + state word in a toned box with an inset ring - and a mono sub-line
 // joining reason and detail. Not a row of disconnected chips.

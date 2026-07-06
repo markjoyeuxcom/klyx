@@ -20,7 +20,7 @@ import { FKeysBar } from "../chrome/FKeysBar";
 import { inputWell, selectWell, FilterButton, MetersStrip, well, EmptyState, LiveIndicator, SkeletonRows, btn, ellipsis, type Tone } from "../chrome/primitives";
 import { CopyButton } from "../chrome/CopyButton";
 import { YamlBlock } from "../chrome/YamlBlock";
-import { InspectorConditions, InspectorEvents, InspectorSection, InspectorStatus, InspectorTabButton, MetadataChips, inspectorStateBox } from "./ResourceInspector";
+import { InspectorIdle, InspectorConditions, InspectorEvents, InspectorSection, InspectorStatus, InspectorTabButton, MetadataChips, inspectorStateBox } from "./ResourceInspector";
 import { loadClusterPrefs, loadSearch, savePodsViewPrefs, saveSearch } from "../store/persist";
 
 const rankDot: Record<string, string> = {
@@ -359,7 +359,14 @@ export function PodsView({ cluster }: { cluster: string }) {
           )}
         </div>
 
-        {/* Detail panel */}
+        {/* Detail panel - always present; idle when nothing is selected */}
+        {!pods.selected && (
+          <InspectorIdle
+            subject="pods"
+            attention={pods.items.filter((x) => x.rank !== "healthy").length}
+            hint="Select a pod for containers, conditions, events, logs, and day-2 actions."
+          />
+        )}
         {pods.selected && (
           <PodDetailPanel
             cluster={cluster}
@@ -566,8 +573,9 @@ function PodDetailPanel({
 
       {/* Panel header */}
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, position: "sticky", top: 0, background: "var(--color-background-primary)", paddingTop: 2, paddingBottom: 6, borderBottom: "0.5px solid var(--color-border-tertiary)" }}>
-        <span style={{ fontWeight: 500, ...ellipsis, flex: 1 }} title={`${namespace}/${name}`}>
-          <span style={{ color: "var(--color-text-tertiary)" }}>{namespace}</span>/{name}
+        <span style={{ minWidth: 0, flex: 1 }}>
+          <span style={{ display: "block", fontSize: 10, color: "var(--color-text-tertiary)", fontFamily: "var(--font-mono)" }}>Pod / {namespace}</span>
+          <span style={{ display: "block", fontWeight: 600, ...ellipsis }} title={`${namespace}/${name}`}>{name}</span>
         </span>
         <CopyButton text={name} label="copy pod name" />
 

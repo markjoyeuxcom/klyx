@@ -4,7 +4,7 @@ import { getInstanceDetail, revealSecretKey, copyText, dryRunInstanceYAML, apply
 import { armProtected } from "../bridge/configsvc";
 import { openPodDetail } from "../bridge/pods";
 import { ForwardPopover } from "./ForwardPopover";
-import { InspectorConditions, InspectorEvents, InspectorSection, InspectorTabButton, MetadataChips, inspectorStateBox } from "./ResourceInspector";
+import { InspectorStatus, conditionColor, InspectorConditions, InspectorEvents, InspectorSection, InspectorTabButton, MetadataChips, inspectorStateBox } from "./ResourceInspector";
 import { actionBtn, ellipsis } from "../chrome/primitives";
 import { CopyButton } from "../chrome/CopyButton";
 import { IconX } from "@tabler/icons-react";
@@ -712,6 +712,18 @@ export function InstanceDetail({ cluster, resource, instance }: { cluster: strin
         <div style={inspectorStateBox}>Could not load {instance.namespace ? `${instance.namespace}/` : ""}{instance.name}.</div>
       ) : (
         <div style={{ minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column", flex: 1 }}>
+          {(() => {
+            // Verdict parity with the pod/workload panels: derive the headline
+            // from the object's own conditions when it has any. No conditions
+            // means no verdict - never a fabricated "healthy".
+            const primary = ["Ready", "Available", "Established", "Synced", "AbleToScale", "Progressing"]
+              .map((t) => d.conditions.find((c) => c.type === t))
+              .find(Boolean) ?? d.conditions[0];
+            if (!primary) return null;
+            const color = conditionColor(primary.status, primary.type);
+            const tone = color.includes("success") ? ("success" as const) : color.includes("danger") ? ("danger" as const) : ("info" as const);
+            return <InspectorStatus tone={tone} label={`${primary.type} ${primary.status}`} reason={primary.reason || undefined} />;
+          })()}
           <div style={{ display: "flex", gap: 6, marginBottom: 12, flexShrink: 0 }}>
             <InspectorTabButton active={tab === "summary"} onClick={() => setTab("summary")}>summary</InspectorTabButton>
             <InspectorTabButton active={tab === "related"} onClick={() => setTab("related")}>related {d.related?.length ?? 0}</InspectorTabButton>

@@ -18,7 +18,7 @@ import { SkeletonRows } from "../chrome/SkeletonRows";
 import { UpdatedAt, useReceivedAt } from "../chrome/Age";
 import { IconServer, IconX } from "@tabler/icons-react";
 import { well, ellipsis, btn, FilterButton, MetersStrip, StatusDot } from "../chrome/primitives";
-import { InspectorConditions, InspectorEvents, InspectorSection, InspectorStatus, InspectorTabButton, MetadataChips, inspectorStateBox } from "./ResourceInspector";
+import { InspectorIdle, InspectorConditions, InspectorEvents, InspectorSection, InspectorStatus, InspectorTabButton, MetadataChips, inspectorStateBox } from "./ResourceInspector";
 
 function ago(s: number): string {
   return s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)}m` : s < 86400 ? `${Math.floor(s / 3600)}h` : `${Math.floor(s / 86400)}d`;
@@ -657,15 +657,11 @@ function CapacityCell({ value, total, format }: { value: number; total: number; 
 
 function EmptyNodeInspector({ nodeCount, attention }: { nodeCount: number; attention: number }) {
   return (
-    <aside style={{ width: 360, flexShrink: 0, background: "var(--bench-well-bg, transparent)", boxShadow: "var(--bench-well-shadow, none)", borderRadius: "var(--radius-sm)", padding: "12px 16px", paddingLeft: 16, fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--color-text-secondary)" }}>
-      <div style={{ position: "sticky", top: 0, background: "var(--color-background-primary)", paddingTop: 2, paddingBottom: 6, borderBottom: "0.5px solid var(--color-border-tertiary)", marginBottom: 12 }}>
-        <div style={{ color: "var(--color-text-tertiary)", fontSize: 11 }}>selected node</div>
-        <div style={{ color: attention > 0 ? "var(--color-text-warning)" : "var(--color-text-success)", fontWeight: 600, marginTop: 2 }}>
-          {attention > 0 ? `${attention} need attention` : "all nodes quiet"}
-        </div>
-      </div>
-      <div>{nodeCount === 0 ? "No nodes are visible with the current filters." : "Select a node to inspect conditions, taints, pods, events, and day-2 actions."}</div>
-    </aside>
+    <InspectorIdle
+      subject="nodes"
+      attention={attention}
+      hint={nodeCount === 0 ? "No nodes are visible with the current filters." : "Select a node for conditions, taints, pods, events, and day-2 actions."}
+    />
   );
 }
 

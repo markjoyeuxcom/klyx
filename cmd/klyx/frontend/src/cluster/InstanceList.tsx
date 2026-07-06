@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { InspectorIdle } from "./ResourceInspector";
 import { useFleet, ResourceRef, InstanceDTO } from "../store/fleet";
 import { loadInstances, listInstancePage } from "../bridge/crd";
 import { VirtualList } from "../chrome/VirtualList";
@@ -330,6 +331,13 @@ export function InstanceList({ cluster, resource }: { cluster: string; resource:
       </div>
 
       {/* Detail panel - resizable, shares klyx-panel-width with the other panels */}
+      {!openRef && (
+        <InspectorIdle
+          subject={resource.plural}
+          attention={0}
+          hint="Select an instance for summary, YAML, and events."
+        />
+      )}
       {openRef && (
         <div
           data-testid="instance-detail-panel"

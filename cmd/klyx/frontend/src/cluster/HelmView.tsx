@@ -8,7 +8,7 @@ import type { RollbackOptions } from "../bridge/helm";
 import { MetaTile, OperationDialog, OptionTile } from "../chrome/OperationDialog";
 import { useResizablePanel } from "../chrome/useResizablePanel";
 import { useListKeys } from "../chrome/useListKeys";
-import { InspectorStatus } from "./ResourceInspector";
+import { InspectorSection, InspectorIdle, InspectorStatus } from "./ResourceInspector";
 import { CopyButton } from "../chrome/CopyButton";
 import { YamlBlock } from "../chrome/YamlBlock";
 import { Age, UpdatedAt, useReceivedAt } from "../chrome/Age";
@@ -239,6 +239,13 @@ export function HelmView({ cluster }: { cluster: string }) {
       </div>
 
       {/* Detail panel */}
+      {!helm.selected && !helm.loading && helm.available && (
+        <InspectorIdle
+          subject="releases"
+          attention={failed + pendingCount}
+          hint="Select a release for history, rollback, and values."
+        />
+      )}
       {helm.selected && (
         <HelmDetailPanel
           cluster={cluster}
@@ -337,7 +344,7 @@ function HelmDetailPanel({
       ) : (
         <>
           {/* History section */}
-          <HelmSection title="History">
+          <InspectorSection title="History">
             {history.length === 0 ? (
               <span style={{ color: "var(--color-text-tertiary)" }}>No history available.</span>
             ) : (
@@ -374,10 +381,10 @@ function HelmDetailPanel({
                 })}
               </div>
             )}
-          </HelmSection>
+          </InspectorSection>
 
           {/* Values section */}
-          <HelmSection title="Values">
+          <InspectorSection title="Values">
             <div style={{ fontSize: 10, color: "var(--color-text-tertiary)", marginBottom: 6, fontFamily: "var(--font-sans, sans-serif)" }}>
               values may contain sensitive data
             </div>
@@ -386,7 +393,7 @@ function HelmDetailPanel({
             ) : (
               <YamlBlock text={values} copyLabel="release values" maxHeight={400} />
             )}
-          </HelmSection>
+          </InspectorSection>
         </>
       )}
 
@@ -496,11 +503,3 @@ function RollbackComposerDialog({ cluster, namespace, name, current, target, tar
 const composerLabel: React.CSSProperties = { color: "var(--color-text-tertiary)", fontSize: 10, textTransform: "uppercase", fontWeight: 600, letterSpacing: 0.2 };
 const composerSelect: React.CSSProperties = { padding: "4px 8px", fontSize: 12, fontFamily: "var(--font-mono)", background: "var(--color-background-secondary)", border: "0.5px solid var(--color-border-tertiary)", borderRadius: 4, color: "var(--color-text-primary)" };
 
-function HelmSection({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <div style={{ marginBottom: 16 }}>
-      <div style={{ fontSize: 9, textTransform: "uppercase", letterSpacing: 0.5, color: "var(--color-text-tertiary)", marginBottom: 6 }}>{title}</div>
-      {children}
-    </div>
-  );
-}
