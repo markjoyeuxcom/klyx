@@ -43,6 +43,17 @@ describe("LensNav", () => {
     expect((getByText("pods").closest("button") as HTMLButtonElement).getAttribute("aria-current")).toBe("true");
   });
 
+  it("keeps the sub-row mounted when a custom kind filter matches no tab exactly", () => {
+    useFleet.setState({
+      route: { name: "cluster", cluster: "dev", section: "workloads" },
+      workloads: { ...useFleet.getState().workloads, kindFilter: { Deployment: false, StatefulSet: true, DaemonSet: true } },
+    });
+    const { getByText } = render(<LensNav />);
+    // no tab is pressed, but the row is still there
+    expect(getByText("all workloads")).toBeTruthy();
+    expect((getByText("all workloads").closest("button") as HTMLButtonElement).getAttribute("aria-current")).toBeNull();
+  });
+
   it("activates a group by opening its first item", () => {
     useFleet.setState({ route: { name: "cluster", cluster: "dev", section: "overview" } });
     const { getByText } = render(<LensNav />);

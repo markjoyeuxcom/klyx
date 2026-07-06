@@ -271,9 +271,6 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
                 <option value="">all namespaces</option>
                 {wl.namespaces.map((ns) => <option key={ns} value={ns}>{ns}</option>)}
               </select>
-              {KINDS.map((k) => (
-                <Chip key={k} on={wl.kindFilter[k]} onClick={() => useFleet.getState().toggleWorkloadKind(k)}>{kindShort[k]}</Chip>
-              ))}
               <Chip on={wl.needsAttention} onClick={() => useFleet.getState().toggleNeedsAttention()}>needs attention</Chip>
               {showMetrics && (
                 <Chip on={wl.nearLimitSort} onClick={() => useFleet.getState().toggleNearLimitSort()}>near limit</Chip>

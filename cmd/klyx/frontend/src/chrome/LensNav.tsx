@@ -345,8 +345,14 @@ export function LensNav() {
     }
   };
 
+  // Exact item match first; else the group that owns the current section -
+  // a persisted custom workload-kind filter must dim the sub-row's pressed
+  // state, never unmount the whole row.
+  const ownsSection = (g: ExpandedGroup) =>
+    route.name === "cluster" && g.items.some((item) => item.target.kind === "section" && item.target.section === route.section);
   const activeGroup = inCluster
     ? groups.find((g) => g.items.some((item) => item.active !== "none" && isExpandedItemActive(route, item, workloadKindFilter)))
+      ?? groups.find(ownsSection)
     : undefined;
 
   // Fault counts, from data that is actually loaded - a lens that has not
