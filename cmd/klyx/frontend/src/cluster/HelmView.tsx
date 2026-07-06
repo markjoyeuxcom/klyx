@@ -8,7 +8,7 @@ import type { RollbackOptions } from "../bridge/helm";
 import { MetaTile, OperationDialog, OptionTile } from "../chrome/OperationDialog";
 import { useResizablePanel } from "../chrome/useResizablePanel";
 import { useListKeys } from "../chrome/useListKeys";
-import { InspectorSection, InspectorIdle, InspectorStatus } from "./ResourceInspector";
+import { InspectorFacts, InspectorSection, InspectorIdle, InspectorStatus } from "./ResourceInspector";
 import { CopyButton } from "../chrome/CopyButton";
 import { YamlBlock } from "../chrome/YamlBlock";
 import { Age, UpdatedAt, useReceivedAt } from "../chrome/Age";
@@ -335,8 +335,18 @@ function HelmDetailPanel({
         <InspectorStatus
           tone={statusGroup(release.status) === "failed" ? "danger" : statusGroup(release.status) === "pending" ? "warning" : "success"}
           label={release.status}
-          detail={`rev ${release.revision} · ${release.chart}${release.appVersion ? ` · ${release.appVersion}` : ""}`}
+          detail={`${release.chart}${release.appVersion ? ` · ${release.appVersion}` : ""}`}
         />
+      )}
+      {release && (
+        <div style={{ marginBottom: 12 }}>
+          <InspectorFacts
+            facts={[
+              { label: "revision", value: release.revision },
+              history.length > 0 && { label: "history", value: history.length },
+            ]}
+          />
+        </div>
       )}
 
       {detailLoading && history.length === 0 ? (
