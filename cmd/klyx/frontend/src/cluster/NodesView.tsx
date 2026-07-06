@@ -5,6 +5,7 @@ import type { ConditionDTO, NodeDetailDTO, NodeSummaryDTO, PodOnNodeDTO } from "
 import { listNodes, openNodeDetail, cordonNode, startDrain, cancelDrain } from "../bridge/nodes";
 import type { DrainOptions } from "../bridge/nodes";
 import { ConfirmDialog } from "../chrome/ConfirmDialog";
+import { DescribePane } from "../chrome/DescribePane";
 import { MetaTile, OperationDialog, OptionTile } from "../chrome/OperationDialog";
 import { fmtMem } from "./saturation";
 import { useResizablePanel } from "../chrome/useResizablePanel";
@@ -744,6 +745,7 @@ function InfoTab({ detail, cluster, onCordon, onDrain }: {
 }) {
   const n = detail.summary;
   const setSection = useFleet((s) => s.setSection);
+  const [describing, setDescribing] = useState(false);
 
   const handlePodClick = (pod: PodOnNodeDTO) => {
     // Cross-link straight to the pod: the parked select-pod intent survives
@@ -791,8 +793,19 @@ function InfoTab({ detail, cluster, onCordon, onDrain }: {
           >
             drain
           </button>
+          <button onClick={() => setDescribing(true)} style={btn}>describe</button>
         </div>
       </InspectorSection>
+
+      {describing && (
+        <DescribePane
+          cluster={cluster}
+          kindArg="node"
+          namespace=""
+          name={n.name}
+          onClose={() => setDescribing(false)}
+        />
+      )}
 
       {/* Summary header */}
       <InspectorSection title="Summary">

@@ -97,6 +97,7 @@ type Conn interface {
 	RouteMetrics(ctx context.Context, routeKeys []string) (map[string]routemetrics.RouteMetrics, routemetrics.Status)
 	SetCordon(ctx context.Context, nodeName string, cordon bool) error
 	DrainNodeCmd(nodeName string, opts DrainOptions) (*exec.Cmd, error)
+	DescribeCmd(ctx context.Context, kindArg, namespace, name string) (*exec.Cmd, error)
 	ExecCommand(namespace, pod, container string) ([]string, error)
 	DebugCommand(namespace, pod, container string) ([]string, error)
 	PortForward(ctx context.Context, namespace, pod string, localPort, targetPort int) (stop func(), actualLocal int, done <-chan error, err error)

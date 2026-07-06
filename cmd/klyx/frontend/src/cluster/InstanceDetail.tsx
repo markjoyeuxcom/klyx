@@ -7,6 +7,7 @@ import { ForwardPopover } from "./ForwardPopover";
 import { InspectorStatus, conditionColor, InspectorConditions, InspectorEvents, InspectorSection, InspectorTabButton, MetadataChips, inspectorStateBox } from "./ResourceInspector";
 import { actionBtn, ellipsis } from "../chrome/primitives";
 import { CopyButton } from "../chrome/CopyButton";
+import { DescribePane } from "../chrome/DescribePane";
 import { IconX } from "@tabler/icons-react";
 
 type DetailTab = "summary" | "related" | "events" | "yaml";
@@ -674,6 +675,7 @@ export function InstanceDetail({ cluster, resource, instance }: { cluster: strin
   const id = useFleet((s) => s.instanceDetail);
   const closeInstance = useFleet((s) => s.closeInstance);
   const [copied, setCopied] = useState(false);
+  const [describing, setDescribing] = useState(false);
   const [tab, setTab] = useState<DetailTab>("summary");
 
   useEffect(() => {
@@ -702,9 +704,22 @@ export function InstanceDetail({ cluster, resource, instance }: { cluster: strin
         <CopyButton text={instance.name} label={`copy name ${instance.name}`} />
         {d && d.created && <span style={{ fontSize: 11, color: "var(--color-text-tertiary)", flexShrink: 0 }}>{age(d.created)}</span>}
         <div style={{ flex: 1 }} />
+        <button onClick={() => setDescribing(true)} style={actionBtn}>describe</button>
         <button onClick={() => void getInstanceDetail(cluster, resource, instance)} style={actionBtn}>Refresh</button>
         <button onClick={closeInstance} aria-label="close instance panel" style={{ ...actionBtn, display: "inline-flex", alignItems: "center" }}><IconX size={13} stroke={1.5} /></button>
       </div>
+
+      {describing && (
+        <DescribePane
+          cluster={cluster}
+          // kubectl's unambiguous resource argument: plural.group for CRDs and
+          // any grouped kind, plural alone for the core "" group.
+          kindArg={resource.group ? `${resource.plural}.${resource.group}` : resource.plural}
+          namespace={instance.namespace}
+          name={instance.name}
+          onClose={() => setDescribing(false)}
+        />
+      )}
 
       {id.loading && !d ? (
         <div style={inspectorStateBox}>Loading {resource.kind} detail…</div>

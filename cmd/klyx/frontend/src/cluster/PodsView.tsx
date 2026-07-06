@@ -8,6 +8,7 @@ import { rolloutRestart } from "../bridge/workloads";
 import { armProtected } from "../bridge/configsvc";
 import { copyExecCommand, openExecTerminal, openDebugTerminal } from "../bridge/exec";
 import { ConfirmDialog } from "../chrome/ConfirmDialog";
+import { DescribePane } from "../chrome/DescribePane";
 import { LogsPane } from "./LogsPane";
 import { ForwardPopover } from "./ForwardPopover";
 import { VirtualList } from "../chrome/VirtualList";
@@ -774,6 +775,7 @@ function InfoTab({ detail, cluster, namespace, name, onRestart, onDelete }: {
 }) {
   const p = detail.summary;
   const [forwarding, setForwarding] = useState(false);
+  const [describing, setDescribing] = useState(false);
   // Restart is meaningful only for owners rollout-restart supports. The
   // backend resolves ReplicaSet -> Deployment, so a pod still showing
   // ownerKind=ReplicaSet is under a BARE ReplicaSet (nothing to restart), and
@@ -820,11 +822,22 @@ function InfoTab({ detail, cluster, namespace, name, onRestart, onDelete }: {
           pod={name}
           containers={p.containers.filter((c) => !c.init)}
         />
+        <button onClick={() => setDescribing(true)} style={btn}>describe</button>
         <button
           onClick={() => onDelete(p)}
           style={{ ...btn, color: "var(--color-text-danger)" }}
         >delete pod</button>
       </div>
+
+      {describing && (
+        <DescribePane
+          cluster={cluster}
+          kindArg="pod"
+          namespace={namespace}
+          name={name}
+          onClose={() => setDescribing(false)}
+        />
+      )}
 
       {/* Numbers get physical form; prose stays in the Summary kv rows. */}
       <div style={{ marginBottom: 12 }}>

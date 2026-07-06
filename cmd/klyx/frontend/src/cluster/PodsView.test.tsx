@@ -17,9 +17,16 @@ vi.mock("../bridge/workloads", () => ({
 vi.mock("../bridge/windows", () => ({
   openLogsWindow: vi.fn().mockResolvedValue(true),
 }));
+vi.mock("../bridge/exec", () => ({
+  copyExecCommand: vi.fn().mockResolvedValue("copied"),
+  openExecTerminal: vi.fn().mockResolvedValue(undefined),
+  openDebugTerminal: vi.fn().mockResolvedValue(undefined),
+  describeResource: vi.fn().mockResolvedValue({ ok: true, output: "Name:         grafana-xyz", error: "" }),
+}));
 import { openLivePods, openPodDetail, deletePod } from "../bridge/pods";
 import { rolloutRestart } from "../bridge/workloads";
 import { openLogsWindow } from "../bridge/windows";
+import { describeResource } from "../bridge/exec";
 
 // LogsPane uses LogsService and Wails Events — stub them out so PodsView tests
 // don't need a Wails runtime.
@@ -147,6 +154,26 @@ describe("PodsView", () => {
     expect(getByText("app=grafana")).toBeTruthy();
     // Annotations start collapsed.
     expect(getByText("Annotations (1)")).toBeTruthy();
+  });
+
+  it("describe button opens the read-only describe pane via the bridge", async () => {
+    seed([healthy]);
+    useFleet.setState((s) => ({
+      pods: {
+        ...s.pods,
+        selected: { namespace: "monitoring", name: "grafana-xyz" },
+        detail: fakeDetail,
+        detailLoading: false,
+      },
+    }));
+    const { getByRole, findByText } = render(<PodsView cluster="homelab" />);
+    fireEvent.click(getByRole("button", { name: "describe" }));
+    expect(describeResource).toHaveBeenCalledWith("homelab", "pod", "monitoring", "grafana-xyz");
+    // the kubectl output lands in the pane
+    expect(await findByText(/Name:\s+grafana-xyz/)).toBeTruthy();
+    // Escape closes it again
+    fireEvent.keyDown(getByRole("dialog"), { key: "Escape" });
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
   });
 
   it("panel header carries one mono meta line: namespace, node, age, ip", () => {
