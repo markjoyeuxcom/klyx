@@ -20,7 +20,7 @@ import { FKeysBar } from "../chrome/FKeysBar";
 import { inputWell, selectWell, FilterButton, MetersStrip, well, EmptyState, LiveIndicator, SkeletonRows, btn, ellipsis, type Tone } from "../chrome/primitives";
 import { CopyButton } from "../chrome/CopyButton";
 import { YamlBlock } from "../chrome/YamlBlock";
-import { InspectorIdle, InspectorConditions, InspectorEvents, InspectorSection, InspectorStatus, InspectorTabButton, MetadataChips, inspectorStateBox } from "./ResourceInspector";
+import { InspectorFacts, InspectorIdle, InspectorConditions, InspectorEvents, InspectorSection, InspectorStatus, InspectorTabButton, MetadataChips, inspectorStateBox } from "./ResourceInspector";
 import { loadClusterPrefs, loadSearch, savePodsViewPrefs, saveSearch } from "../store/persist";
 
 const rankDot: Record<string, string> = {
@@ -798,6 +798,17 @@ function InfoTab({ detail, cluster, namespace, name, onRestart, onDelete }: {
           onClick={() => onDelete(p)}
           style={{ ...btn, color: "var(--color-text-danger)" }}
         >delete pod</button>
+      </div>
+
+      {/* Numbers get physical form; prose stays in the Summary kv rows. */}
+      <div style={{ marginBottom: 12 }}>
+        <InspectorFacts
+          facts={[
+            { label: "restarts", value: p.restarts, tone: p.restarts > 0 ? "warning" : undefined },
+            { label: "containers", value: readyOf(p) },
+            { label: "age", value: ago(p.ageSeconds) },
+          ]}
+        />
       </div>
 
       {/* Summary header */}
