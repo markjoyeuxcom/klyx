@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { useFleet } from "../store/fleet";
-import type { DependencyRefDTO, EventRowDTO, FluxResourceDTO, FluxSourceDTO, ResourceDetailDTO } from "../store/fleet";
+import type { DependencyRefDTO, EventRowDTO, FluxResourceDTO, FluxSourceDTO, InventoryEntryDTO, ResourceDetailDTO } from "../store/fleet";
 import { openGitOps, closeGitOps, getResourceDetail, reconcile, reconcileWithSource, setSuspend, resolveGitLink, fluxDiff } from "../bridge/gitops";
 import type { FluxDiffDTO } from "../bridge/gitops";
 import { ConfirmDialog } from "../chrome/ConfirmDialog";
@@ -15,8 +15,9 @@ import { SkeletonRows } from "../chrome/SkeletonRows";
 import { WatchErrorBanner } from "../chrome/WatchErrorBanner";
 import { IconGitBranch } from "@tabler/icons-react";
 import { wellKnownResourceRef } from "./resourceRefs";
-import { inputWell, MetersStrip, well, Badge, FilterButton, Section, StatusDot, readyColor, ellipsis, actionBtn } from "../chrome/primitives";
+import { inputWell, MetersStrip, well, Badge, FilterButton, StatusDot, readyColor, ellipsis, actionBtn, type Tone } from "../chrome/primitives";
 import { compactCount } from "../chrome/format";
+import { InspectorConditions, InspectorSection, InspectorStatus } from "./ResourceInspector";
 import { SyncingChip, staleStyle } from "./staleness";
 
 type FluxFilter = "all" | "attention" | "suspended" | "kustomizations" | "helmreleases" | "sources";
@@ -503,29 +504,27 @@ function DetailPanel({ cluster, resource, detail, deps, onReconcile, onToggleSus
   onToggleSuspend: (suspended: boolean) => void;
   onViewGit: () => void;
 }) {
-  const headerColor = resource.suspended ? "var(--color-text-warning)" : (readyColor[resource.ready] ?? "var(--color-text-tertiary)");
   if (!detail) {
     return (
       <div style={{ ...well, padding: "10px 12px", fontSize: 12, color: "var(--color-text-secondary)" }}>
-        <InspectorHeader resource={resource} color={headerColor} />
+        <InspectorHeader resource={resource} />
         <div style={{ marginTop: 12 }}>Loading detail…</div>
       </div>
     );
   }
-  const condColor = (c: { status: string }) => (c.status === "True" ? "var(--color-text-success)" : c.status === "False" ? "var(--color-text-danger)" : "var(--color-text-info)");
   // M10-f: a real diff only helps when Flux isn't auto-healing (suspended) or is
   // stuck (apply-failing); a healthy resource's diff is empty/misleading.
   const canDiff = resource.kind === "Kustomization" && (detail.suspended || resource.ready === "Failed");
   return (
     <div style={{ ...well, padding: "10px 12px", fontSize: 12 }}>
-      <InspectorHeader resource={resource} color={headerColor} />
-      <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 10, marginBottom: 8, flexWrap: "wrap" }}>
-        <button onClick={onReconcile} style={actionBtn}>Reconcile</button>
+      <InspectorHeader resource={resource} />
+      <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 12, flexWrap: "wrap" }}>
+        <button onClick={onReconcile} style={actionBtn}>reconcile</button>
         <button onClick={() => onToggleSuspend(detail.suspended ?? false)} style={actionBtn}>
-          {detail.suspended ? "Resume" : "Suspend"}
+          {detail.suspended ? "resume" : "suspend"}
         </button>
         {resource.kind === "Kustomization" && (
-          <button onClick={onViewGit} style={actionBtn}>View in Git</button>
+          <button onClick={onViewGit} style={actionBtn}>view in git</button>
         )}
         {detail.suspended && (
           <span style={{ color: "var(--color-text-warning)", fontSize: 11, fontWeight: 500 }}>suspended</span>
@@ -539,54 +538,67 @@ function DetailPanel({ cluster, resource, detail, deps, onReconcile, onToggleSus
       {detail.applyFailed && (
         <div style={{ color: "var(--color-text-danger)", marginBottom: 8 }}>apply failed at <span style={{ fontFamily: "var(--font-mono)" }}>{shortRev(detail.attemptedRevision)}</span></div>
       )}
-      <Section title="Conditions">
-        {detail.conditions.length === 0 ? <Muted>none reported</Muted> : detail.conditions.map((c) => (
-          <div key={c.type} style={{ display: "grid", gridTemplateColumns: "9px 76px minmax(0, 1fr)", gap: 8, alignItems: "baseline" }}>
-            <StatusDot color={condColor(c)} />
-            <span style={{ fontWeight: 500 }}>{c.type}</span>
-            <span style={{ color: "var(--color-text-secondary)", ...ellipsis }} title={c.message}>{c.message || c.reason}</span>
-          </div>
-        ))}
-      </Section>
+      <InspectorSection title="Conditions">
+        <InspectorConditions conditions={detail.conditions} />
+      </InspectorSection>
       {resource.kind === "Kustomization" ? (
-        <Section title={`Inventory (${detail.inventory.length})`}>
-          {detail.inventory.length === 0 ? <Muted>no managed objects</Muted> : detail.inventory.map((e) => {
-            // Argo's app resources walk to the live object; Flux's inventory
-            // now does the same for every kind Klyx can route to.
-            const ref = wellKnownResourceRef(e.group, e.kind);
-            const label = <>{e.kind} · {e.namespace ? `${e.namespace}/` : ""}{e.name}</>;
-            if (!ref) {
-              return (
-                <div key={`${e.kind}/${e.namespace}/${e.name}`} style={{ fontFamily: "var(--font-mono)", color: "var(--color-text-secondary)", ...ellipsis }}>
-                  {label}
-                </div>
-              );
-            }
-            return (
+        <InspectorSection title="Inventory" count={detail.inventory.length}>
+          {detail.inventory.length === 0 ? <Muted>no managed objects</Muted> : <InventoryList entries={detail.inventory} />}
+        </InspectorSection>
+      ) : (
+        <InspectorSection title="Inventory"><Muted>no inventory in the HelmRelease CR</Muted></InspectorSection>
+      )}
+      {canDiff && <DiffSection cluster={cluster} namespace={resource.namespace} name={resource.name} />}
+    </div>
+  );
+}
+
+// Inventory entries carry no health in the Kustomization CR (group/kind/ns/name
+// only), so the list truncates without claiming "all healthy" and the dots stay
+// unlit - a health suffix or green lamp here would be fabricated.
+const INVENTORY_SHOWN = 8;
+
+function InventoryList({ entries }: { entries: InventoryEntryDTO[] }) {
+  const shown = entries.slice(0, INVENTORY_SHOWN);
+  const hidden = entries.length - shown.length;
+  return (
+    <>
+      {shown.map((e) => {
+        const key = `${e.kind}/${e.namespace}/${e.name}`;
+        const name = `${e.namespace ? `${e.namespace}/` : ""}${e.name}`;
+        // Argo's app resources walk to the live object; Flux's inventory
+        // does the same for every kind Klyx can route to.
+        const ref = wellKnownResourceRef(e.group, e.kind);
+        return (
+          <div key={key} style={{ display: "flex", gap: 7, alignItems: "center", minWidth: 0 }}>
+            <StatusDot size={6} color="var(--color-text-tertiary)" />
+            <span style={{ color: "var(--color-text-tertiary)", fontSize: 11, flexShrink: 0 }}>{e.kind}</span>
+            {ref ? (
               <button
-                key={`${e.kind}/${e.namespace}/${e.name}`}
                 onClick={() => {
                   const nav = useFleet.getState();
                   nav.openResource(ref);
                   nav.openInstance(ref.scope === "Cluster" ? "" : e.namespace, e.name);
                 }}
-                title={`open ${e.kind} ${e.namespace ? `${e.namespace}/` : ""}${e.name}`}
+                title={`open ${e.kind} ${name}`}
                 style={{
-                  display: "block", width: "100%", background: "transparent", border: "none", padding: 0,
-                  cursor: "pointer", textAlign: "left", fontFamily: "var(--font-mono)", fontSize: "inherit",
+                  background: "transparent", border: "none", padding: 0, cursor: "pointer",
+                  textAlign: "left", fontFamily: "var(--font-mono)", fontSize: "inherit", minWidth: 0,
                   color: "var(--color-text-info)", ...ellipsis,
                 }}
               >
-                {label}
+                {name}
               </button>
-            );
-          })}
-        </Section>
-      ) : (
-        <Section title="Inventory"><Muted>no inventory in the HelmRelease CR</Muted></Section>
+            ) : (
+              <span style={{ fontFamily: "var(--font-mono)", color: "var(--color-text-secondary)", ...ellipsis }}>{name}</span>
+            )}
+          </div>
+        );
+      })}
+      {hidden > 0 && (
+        <div style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--color-text-tertiary)" }}>+{hidden} more</div>
       )}
-      {canDiff && <DiffSection cluster={cluster} namespace={resource.namespace} name={resource.name} />}
-    </div>
+    </>
   );
 }
 
@@ -601,7 +613,7 @@ function DiffSection({ cluster, namespace, name }: { cluster: string; namespace:
       .finally(() => setRunning(false));
   };
   return (
-    <Section title="Live diff (flux diff)">
+    <InspectorSection title="Live diff (flux diff)">
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
         <button onClick={run} disabled={running} style={{ ...actionBtn, opacity: running ? 0.6 : 1 }}>
           {running ? "Computing…" : "Compute diff"}
@@ -617,7 +629,7 @@ function DiffSection({ cluster, namespace, name }: { cluster: string; namespace:
       {result && result.hasChanges && (
         <pre style={{ marginTop: 6, padding: 8, maxHeight: 280, overflow: "auto", background: "var(--color-background-secondary)", border: "0.5px solid var(--color-border-tertiary)", borderRadius: 4, fontFamily: "var(--font-mono)", fontSize: 11, whiteSpace: "pre", lineHeight: 1.4 }}>{result.output}</pre>
       )}
-    </Section>
+    </InspectorSection>
   );
 }
 
@@ -626,7 +638,7 @@ function SourceSection({ source }: { source: FluxSourceDTO }) {
   const dot = source.suspended ? "var(--color-text-warning)" : (readyColor[source.ready] ?? "var(--color-text-tertiary)");
   const label = sourceKindLabel[source.kind] ?? source.kind;
   return (
-    <Section title="Source">
+    <InspectorSection title="Source">
       {!ready && (
         <div style={{ color: "var(--color-text-danger)", fontWeight: 500, marginBottom: 4 }}>
           source not ready{source.reason ? `: ${source.reason}` : ""}
@@ -644,7 +656,7 @@ function SourceSection({ source }: { source: FluxSourceDTO }) {
           )}
         </div>
       </div>
-    </Section>
+    </InspectorSection>
   );
 }
 
@@ -658,7 +670,7 @@ function DependsOnSection({ deps, kind, resolve, blocked }: {
   const stateOf = (d: DependencyRefDTO): string | null => resolve.get(`${kind}/${d.namespace}/${d.name}`)?.ready ?? null;
   const blocker = blocked ? deps.find((d) => stateOf(d) !== "Ready") : undefined;
   return (
-    <Section title="Depends on">
+    <InspectorSection title="Depends on">
       {blocker && (
         <div style={{ color: "var(--color-text-danger)", fontWeight: 500, marginBottom: 4 }}>
           blocked by <span style={{ fontFamily: "var(--font-mono)" }}>{blocker.namespace}/{blocker.name}</span>
@@ -675,7 +687,7 @@ function DependsOnSection({ deps, kind, resolve, blocked }: {
           </div>
         );
       })}
-    </Section>
+    </InspectorSection>
   );
 }
 
@@ -684,44 +696,65 @@ function isDriftEvent(e: EventRowDTO): boolean {
   return s.includes("drift") || s.includes("configured");
 }
 
+// EventsSection mirrors the InspectorEvents evline (dot, reason, ellipsized
+// message, ×count, age right) but cannot reuse it: EventRowDTO ages are unix
+// (not ISO) and drift events carry the M10 drift chip, which the shared
+// component has no slot for.
 function EventsSection({ events }: { events: EventRowDTO[] }) {
   const nowSec = Math.floor(Date.now() / 1000);
   return (
-    <Section title="Drift / events">
+    <InspectorSection title="Drift / events">
       {events.length === 0 ? <Muted>no recent events</Muted> : events.map((e, i) => {
         const warn = e.type === "Warning";
         const drift = isDriftEvent(e);
         const dot = warn ? "var(--color-text-danger)" : drift ? "var(--color-text-info)" : "var(--color-text-tertiary)";
         const sec = e.lastSeenUnix > 0 ? Math.max(0, nowSec - e.lastSeenUnix) : 0;
         return (
-          <div key={i} style={{ display: "grid", gridTemplateColumns: "9px minmax(0,1fr)", gap: 8, alignItems: "baseline" }}>
-            <StatusDot color={dot} />
-            <div style={{ minWidth: 0 }}>
-              <span style={{ color: warn ? "var(--color-text-danger)" : "var(--color-text-primary)", fontWeight: 500 }}>{e.reason}</span>
-              <span style={{ color: "var(--color-text-tertiary)", fontSize: 11, marginLeft: 6 }}>· {ago(sec) || "just now"}</span>
-              {drift && <span style={{ fontFamily: "var(--font-mono)", fontSize: 9, padding: "1px 5px", borderRadius: 3, marginLeft: 6, border: "0.5px solid var(--color-border-info)", color: "var(--color-text-info)", background: "var(--color-background-info)" }}>drift</span>}
-              {e.count > 1 && <span title={`${e.count.toLocaleString()} occurrences`} style={{ color: "var(--color-text-tertiary)", fontSize: 10, marginLeft: 6 }}>×{compactCount(e.count)}</span>}
-              {e.message && <div style={{ color: "var(--color-text-secondary)", fontSize: 11, marginTop: 1, ...ellipsis }} title={e.message}>{e.message}</div>}
-            </div>
+          <div key={i} style={{ display: "flex", gap: 6, alignItems: "baseline", fontSize: 11, padding: "1px 0", color: warn ? "var(--color-text-danger)" : "var(--color-text-secondary)" }}>
+            <span style={{ width: 7, height: 7, borderRadius: "50%", background: dot, display: "inline-block", flexShrink: 0, alignSelf: "center" }} />
+            <span style={{ fontWeight: 500, flexShrink: 0, maxWidth: 130, ...ellipsis }} title={e.reason}>{e.reason}</span>
+            {drift && <span style={{ fontFamily: "var(--font-mono)", fontSize: 9, padding: "1px 5px", borderRadius: 3, border: "0.5px solid var(--color-border-info)", color: "var(--color-text-info)", background: "var(--color-background-info)", flexShrink: 0, alignSelf: "center" }}>drift</span>}
+            <span style={{ ...ellipsis, flex: 1, minWidth: 0 }} title={e.message}>{e.message}</span>
+            {e.count > 1 && <span title={`${e.count.toLocaleString()} occurrences`} style={{ color: "var(--color-text-tertiary)", flexShrink: 0 }}>×{compactCount(e.count)}</span>}
+            <span style={{ color: "var(--color-text-tertiary)", flexShrink: 0 }}>{ago(sec) || "now"}</span>
           </div>
         );
       })}
-    </Section>
+    </InspectorSection>
   );
 }
 
-function InspectorHeader({ resource, color }: { resource: FluxResourceDTO; color: string }) {
+// fluxTone maps readyColor semantics onto the verdict tone: Failed=danger,
+// Ready=success, Reconciling=info, suspended=warning (an intended pause).
+function fluxTone(r: FluxResourceDTO): Tone {
+  if (r.suspended) return "warning";
+  if (r.ready === "Failed") return "danger";
+  if (r.ready === "Ready") return "success";
+  if (r.ready === "Reconciling") return "info";
+  return "muted";
+}
+
+function InspectorHeader({ resource }: { resource: FluxResourceDTO }) {
   return (
     <div style={{ minWidth: 0 }}>
       <div style={{ color: "var(--color-text-tertiary)", fontSize: 11 }}>{resource.kind} / {resource.namespace}</div>
-      <div style={{ display: "flex", gap: 8, alignItems: "center", minWidth: 0, marginTop: 2 }}>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", minWidth: 0, marginTop: 2, marginBottom: 10 }}>
         <span style={{ fontFamily: "var(--font-mono)", fontSize: 15, fontWeight: 600, ...ellipsis }}>{resource.name}</span>
         <CopyButton text={resource.name} label={`copy name ${resource.name}`} />
-        <span style={{ color, fontSize: 11 }}>{statusText(resource)}</span>
-        {needsAttention(resource) && resource.reason && <ReasonChip reason={resource.reason} bad={resource.ready === "Failed"} />}
       </div>
+      <InspectorStatus
+        tone={fluxTone(resource)}
+        label={resource.suspended ? "Suspended" : resource.ready}
+        reason={needsAttention(resource) ? resource.reason || undefined : undefined}
+        detail={shortRev(resource.revision) || undefined}
+      />
+      {/* The controller's message hangs directly under the verdict (the -6
+          eats half the verdict's built-in 12px margin). */}
       {resource.message && needsAttention(resource) && (
-        <div style={{ color: resource.ready === "Failed" ? "var(--color-text-danger)" : "var(--color-text-warning)", marginTop: 6, ...ellipsis }} title={resource.message}>{resource.message}</div>
+        <div
+          style={{ color: resource.ready === "Failed" ? "var(--color-text-danger)" : "var(--color-text-warning)", fontSize: 11, marginTop: -6, marginBottom: 10, ...ellipsis }}
+          title={resource.message}
+        >{resource.message}</div>
       )}
     </div>
   );
