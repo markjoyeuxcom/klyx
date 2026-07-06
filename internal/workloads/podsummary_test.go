@@ -415,6 +415,60 @@ func TestSummarizePods_ContainerStateStrings(t *testing.T) {
 	}
 }
 
+func TestSummarizePods_LastTerminationState(t *testing.T) {
+	finished := metav1.NewTime(psNow.Add(-5 * time.Minute))
+	p := makePod("default", "oomy", corev1.PodRunning, true)
+	p.Spec.InitContainers = []corev1.Container{{Name: "setup", Image: "busybox:1.36"}}
+	p.Spec.Containers = []corev1.Container{
+		{Name: "app", Image: "app:1"},
+		{Name: "clean", Image: "clean:1"},
+	}
+	p.Status.InitContainerStatuses = []corev1.ContainerStatus{
+		{Name: "setup", State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{Reason: "Completed"}},
+			LastTerminationState: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{Reason: "Error", ExitCode: 1}}},
+	}
+	p.Status.ContainerStatuses = []corev1.ContainerStatus{
+		{Name: "app", Ready: true, RestartCount: 3,
+			State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}},
+			LastTerminationState: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{
+				Reason: "OOMKilled", ExitCode: 137, FinishedAt: finished,
+			}}},
+		// No LastTerminationState: the fields must stay zero, never fabricated.
+		{Name: "clean", Ready: true, State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}}},
+	}
+
+	out := SummarizePods([]corev1.Pod{p}, psNow)
+	byName := map[string]ContainerSummary{}
+	for _, c := range out[0].Containers {
+		byName[c.Name] = c
+	}
+
+	app := byName["app"]
+	if app.LastReason != "OOMKilled" {
+		t.Errorf("app LastReason: got %q, want OOMKilled", app.LastReason)
+	}
+	if app.LastExitCode != 137 {
+		t.Errorf("app LastExitCode: got %d, want 137", app.LastExitCode)
+	}
+	if app.LastFinishedUnix != finished.Unix() {
+		t.Errorf("app LastFinishedUnix: got %d, want %d", app.LastFinishedUnix, finished.Unix())
+	}
+
+	// Init containers map last termination too.
+	setup := byName["setup"]
+	if setup.LastReason != "Error" || setup.LastExitCode != 1 {
+		t.Errorf("setup last termination: got %q/%d, want Error/1", setup.LastReason, setup.LastExitCode)
+	}
+	if setup.LastFinishedUnix != 0 {
+		t.Errorf("setup LastFinishedUnix: got %d, want 0 (FinishedAt unset)", setup.LastFinishedUnix)
+	}
+
+	clean := byName["clean"]
+	if clean.LastReason != "" || clean.LastExitCode != 0 || clean.LastFinishedUnix != 0 {
+		t.Errorf("clean must carry zero last-termination values, got %q/%d/%d", clean.LastReason, clean.LastExitCode, clean.LastFinishedUnix)
+	}
+}
+
 func TestSummarizePods_Fields(t *testing.T) {
 	// Validate that Node, IP, Namespace, Name, Phase, AgeSeconds are all populated.
 	p := makePod("mynamespace", "mypod", corev1.PodRunning, true)

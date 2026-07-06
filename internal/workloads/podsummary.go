@@ -32,6 +32,12 @@ type ContainerSummary struct {
 	State    string // "running" | "waiting:<Reason>" | "terminated:<Reason>" | ""
 	Init     bool
 	Ports    []ContainerPort // declared spec ports (may be empty - not all containers declare them)
+	// Last termination (ContainerStatus.LastTerminationState.Terminated):
+	// why the previous run died ("OOMKilled") without opening the YAML.
+	// Zero values when the container has never terminated.
+	LastReason       string
+	LastExitCode     int
+	LastFinishedUnix int64 // FinishedAt.Unix(), 0 when absent
 }
 
 // ContainerPort is one declared port on a container spec. Port-forward
@@ -148,6 +154,7 @@ func buildContainerSummaries(p *corev1.Pod) []ContainerSummary {
 			sum.Ready = cs.Ready
 			sum.Restarts = int(cs.RestartCount)
 			sum.State = containerStateString(cs.State)
+			applyLastTermination(&sum, cs)
 		}
 		out = append(out, sum)
 	}
@@ -164,6 +171,7 @@ func buildContainerSummaries(p *corev1.Pod) []ContainerSummary {
 			sum.Ready = cs.Ready
 			sum.Restarts = int(cs.RestartCount)
 			sum.State = containerStateString(cs.State)
+			applyLastTermination(&sum, cs)
 		}
 		out = append(out, sum)
 	}
@@ -187,6 +195,22 @@ func containerPorts(ports []corev1.ContainerPort) []ContainerPort {
 		out = append(out, ContainerPort{Name: p.Name, Port: int(p.ContainerPort), Protocol: proto})
 	}
 	return out
+}
+
+// applyLastTermination copies the previous run's termination record onto the
+// summary. Only Terminated carries data (the API leaves the other members nil
+// for a prior run); everything stays zero when the container never terminated,
+// so the UI can never fabricate a "last state".
+func applyLastTermination(sum *ContainerSummary, cs corev1.ContainerStatus) {
+	t := cs.LastTerminationState.Terminated
+	if t == nil {
+		return
+	}
+	sum.LastReason = t.Reason
+	sum.LastExitCode = int(t.ExitCode)
+	if !t.FinishedAt.IsZero() {
+		sum.LastFinishedUnix = t.FinishedAt.Unix()
+	}
 }
 
 // containerStateString encodes a ContainerState as the canonical state string.

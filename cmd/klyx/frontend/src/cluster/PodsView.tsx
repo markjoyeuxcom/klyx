@@ -1067,8 +1067,7 @@ function DebugShellButton({
 }
 
 // containerStateParts splits the backend's canonical state string ("running" |
-// "waiting:<Reason>" | "terminated:<Reason>" | "") into word + reason. The DTO
-// carries no lastState/exit-code data, so the block renders only these fields.
+// "waiting:<Reason>" | "terminated:<Reason>" | "") into word + reason.
 function containerStateParts(state: string): { word: string; reason: string } {
   const i = state.indexOf(":");
   return i < 0 ? { word: state, reason: "" } : { word: state.slice(0, i), reason: state.slice(i + 1) };
@@ -1081,6 +1080,10 @@ function ContainerBlock({ c }: { c: ContainerSummaryDTO }) {
   const stateColor = word === "running"
     ? "var(--color-text-success)"
     : faulted ? "var(--color-text-danger)" : "var(--color-text-tertiary)";
+  // Last termination: lastReason "" means the container never terminated - the
+  // row only exists when the backend has a real record, never fabricated.
+  const lastFinished = c.lastFinishedUnix ?? 0;
+  const lastAgo = lastFinished > 0 ? ago(Math.max(0, Math.floor(Date.now() / 1000) - lastFinished)) : "";
   return (
     <div data-rowhost="true" style={{ display: "grid", gridTemplateColumns: kvGridCols, gap: "2px 8px", fontSize: 11, padding: "3px 0", alignItems: "baseline" }}>
       <span style={{ ...ellipsis, color: "var(--color-text-tertiary)" }} title={c.name}>
@@ -1097,6 +1100,17 @@ function ContainerBlock({ c }: { c: ContainerSummaryDTO }) {
       </span>
       <span style={{ color: "var(--color-text-tertiary)" }}>restarts</span>
       <span style={{ color: c.restarts > 0 ? "var(--color-text-warning)" : "var(--color-text-tertiary)" }}>{c.restarts}</span>
+      {c.lastReason && (
+        <>
+          <span style={{ color: "var(--color-text-tertiary)" }}>last state</span>
+          <span style={{ ...ellipsis, minWidth: 0 }}>
+            <span style={{ color: "var(--color-text-danger)", fontWeight: 600 }}>
+              {c.lastReason}{c.lastExitCode ? ` (exit ${c.lastExitCode})` : ""}
+            </span>
+            {lastAgo && <span style={{ color: "var(--color-text-tertiary)" }}>{` · ${lastAgo} ago`}</span>}
+          </span>
+        </>
+      )}
     </div>
   );
 }

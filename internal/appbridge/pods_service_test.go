@@ -59,7 +59,8 @@ func TestPodsService_ListPods_MappingAndRankString(t *testing.T) {
 			OwnerKind: "ReplicaSet", OwnerName: "crash-rs",
 			AgeSeconds: 60,
 			Containers: []workloads.ContainerSummary{
-				{Name: "app", Image: "app:1", Ready: false, Restarts: 5, State: "waiting:CrashLoopBackOff"},
+				{Name: "app", Image: "app:1", Ready: false, Restarts: 5, State: "waiting:CrashLoopBackOff",
+					LastReason: "OOMKilled", LastExitCode: 137, LastFinishedUnix: 1_700_000_000},
 			},
 		},
 		{
@@ -95,6 +96,9 @@ func TestPodsService_ListPods_MappingAndRankString(t *testing.T) {
 	}
 	if len(p.Containers) != 1 || p.Containers[0].State != "waiting:CrashLoopBackOff" {
 		t.Errorf("containers: %+v", p.Containers)
+	}
+	if c := p.Containers[0]; c.LastReason != "OOMKilled" || c.LastExitCode != 137 || c.LastFinishedUnix != 1_700_000_000 {
+		t.Errorf("last termination not mapped: %+v", c)
 	}
 
 	// Namespaces populated (sorted distinct) only on all-ns.

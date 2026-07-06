@@ -9,6 +9,10 @@ type ContainerSummaryDTO struct {
 	State    string             `json:"state"` // "running" | "waiting:<Reason>" | "terminated:<Reason>" | ""
 	Init     bool               `json:"init"`
 	Ports    []ContainerPortDTO `json:"ports"`
+	// Last termination state - zero values when the container never terminated.
+	LastReason       string `json:"lastReason"` // e.g. "OOMKilled"
+	LastExitCode     int    `json:"lastExitCode"`
+	LastFinishedUnix int64  `json:"lastFinishedUnix"` // FinishedAt.Unix(), 0 when absent
 }
 
 // ContainerPortDTO is one declared container port - the forward popover offers
