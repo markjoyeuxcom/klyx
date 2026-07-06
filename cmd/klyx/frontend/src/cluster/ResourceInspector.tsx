@@ -96,6 +96,41 @@ export function InspectorEmpty({ text, style }: { text: string; style?: React.CS
 // ---------------------------------------------------------------------------
 
 /** InspectorStatus — the state-first opening line of a panel. */
+// InspectorFacts — the panel's numeric facts as mini counter wells (Signal
+// Bench): value in an inset window with tabular numerals, engraved label
+// beneath, tone carrying state. Prose stays in kv rows; NUMBERS get physical
+// form so the eye finds "7 restarts" without reading four lines of text.
+export function InspectorFacts({ facts }: {
+  facts: ReadonlyArray<{ label: string; value: string | number; tone?: Tone } | null | false>;
+}) {
+  const cells = facts.filter((f): f is { label: string; value: string | number; tone?: Tone } => Boolean(f));
+  if (cells.length === 0) return null;
+  return (
+    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+      {cells.map((f) => (
+        <span key={f.label} style={{ minWidth: 64, display: "flex", flexDirection: "column", gap: 3 }}>
+          <span style={{
+            padding: "3px 9px 2px",
+            textAlign: "right",
+            fontFamily: "var(--font-mono)",
+            fontVariantNumeric: "tabular-nums",
+            fontSize: 13,
+            fontWeight: 600,
+            color: f.tone ? toneColor[f.tone] : "var(--color-text-primary)",
+            borderRadius: "var(--radius-sm)",
+            background: "var(--bench-well-bg, var(--color-background-secondary))",
+            boxShadow: "var(--bench-well-shadow, inset 0 0 0 1px var(--color-border-tertiary))",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }} title={String(f.value)}>{f.value}</span>
+          <span style={{ fontSize: 8, letterSpacing: "0.1em", textTransform: "uppercase", fontWeight: 600, textAlign: "right", paddingRight: 2, color: "var(--color-text-tertiary)" }}>{f.label}</span>
+        </span>
+      ))}
+    </div>
+  );
+}
+
 // InspectorIdle — the inspector well when nothing is selected. The panel is
 // ALWAYS present (mockup rule: the board is list + inspector, permanently),
 // so selecting a row never reflows the list. Idle it stays honest: the

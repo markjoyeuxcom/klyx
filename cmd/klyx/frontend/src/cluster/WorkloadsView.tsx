@@ -22,7 +22,7 @@ import { CopyButton } from "../chrome/CopyButton";
 import { EmptyState } from "../chrome/EmptyState";
 import { SkeletonRows } from "../chrome/SkeletonRows";
 import { inputWell, selectWell, MetersStrip, LiveIndicator, btn, ellipsis, type Tone } from "../chrome/primitives";
-import { InspectorIdle, InspectorStatus } from "./ResourceInspector";
+import { InspectorFacts, InspectorIdle, InspectorStatus } from "./ResourceInspector";
 import { loadClusterPrefs, loadSearch, saveSearch, saveWorkloadsViewPrefs } from "../store/persist";
 import { SyncingChip, staleStyle } from "./staleness";
 import { wellKnownResourceRef } from "./resourceRefs";
@@ -670,9 +670,15 @@ function WorkloadContextPanel({
 
       <div style={{ padding: "12px 14px", borderBottom: "0.5px solid var(--color-border-tertiary)", display: "grid", gap: 8 }}>
         <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5, color: "var(--color-text-tertiary)" }}>status</div>
+        <InspectorFacts
+          facts={[
+            { label: "ready", value: `${workload.ready}/${workload.desired}`, tone: workload.ready < workload.desired ? "warning" : undefined },
+            { label: "restarts", value: workload.restarts, tone: workload.restarts > 0 ? "warning" : undefined },
+            { label: "updated", value: workload.updated },
+            { label: "available", value: workload.available },
+          ]}
+        />
         <div style={{ display: "grid", gridTemplateColumns: "88px 1fr", gap: "5px 10px", fontFamily: "var(--font-mono)", fontSize: 11 }}>
-          <span style={{ color: "var(--color-text-tertiary)" }}>ready</span><span style={{ color: workload.ready < workload.desired ? "var(--color-text-warning)" : "var(--color-text-secondary)" }}>{workload.ready} / {workload.desired}</span>
-          <span style={{ color: "var(--color-text-tertiary)" }}>restarts</span><span style={{ color: workload.restarts > 0 ? "var(--color-text-warning)" : "var(--color-text-secondary)" }}>{workload.restarts}</span>
           <span style={{ color: "var(--color-text-tertiary)" }}>reason</span><span style={{ color: workload.rank === "unhealthy" ? "var(--color-text-danger)" : "var(--color-text-secondary)", overflowWrap: "anywhere" }}>{workload.reason}</span>
           <span style={{ color: "var(--color-text-tertiary)" }}>owner</span>
           {workload.gitops ? (
