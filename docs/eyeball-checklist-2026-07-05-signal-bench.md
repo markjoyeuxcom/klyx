@@ -63,3 +63,11 @@ design rules (notes §Design rules) are the review bar.
 - [ ] Every panel opens caption (kind / namespace) → name + copy → verdict → actions → shared uppercase sections; workloads gained copy + close, pods gained the kind caption.
 - [ ] Instance panels (replicasets, HPAs, any CR with conditions) open with a conditions-derived verdict ("Ready True", "AbleToScale True"); objects with no conditions show no fabricated verdict.
 - [ ] Helm history/values render in the shared section idiom.
+
+## Panel refit (panels/ screenshots, 2026-07-06)
+- [ ] Flux inspector opens with the shared verdict (Failed=danger with the failing reason, Ready=success, Reconciling=info, suspended=warning; revision on the sub-line), the controller message as one line beneath, and uppercase InspectorSection headers; drift/events rows read as evlines (dot, reason, drift chip, ellipsized message, ×count, age right).
+- [ ] Flux inventory shows at most 8 entries (dot + kind + namespace/name link) then a mono "+N more" - no "all healthy" claim because inventory entries carry no health.
+- [ ] Cert inspector opens with the verdict (Failed/expired=danger, Issuing=info, renewal window=warning), requests/warnings/stuck as counter wells, kv rows on the 88px grid with left-adjacent values, and the issuance chain as a rail (one vertical line, lamp per node, deepest stuck node's message in a red-ringed box).
+- [ ] Pod containers render as kv blocks per container: state word coloured (running=success, faulted waiting/terminated=danger) with "waiting · CrashLoopBackOff" reason join, image, restarts (amber >0); no last-state row (not in the DTO).
+- [ ] Pod header carries one mono meta line "namespace · node · age · ip" under the name (node keeps its Nodes cross-link); Summary kv keeps owner/qos/sa only; conditions show the True/False status value next to the type.
+- [ ] Pod panel "logs" button carries the ⟨l⟩ key hint (binding is live); flux actions read lowercase ("reconcile", "suspend", "view in git") with NO key hints - no r/s bindings exist in that view yet.
