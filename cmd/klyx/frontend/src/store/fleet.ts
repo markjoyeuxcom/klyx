@@ -272,7 +272,7 @@ export type WorkloadDTO = { kind: string; namespace: string; name: string; desir
 export type WorkloadUsageDTO = { cpuUsage: number | null; memUsage: number | null };
 export type WorkloadMetricsStatusDTO = { available: boolean; message: string; updatedAt: string };
 export type WorkloadMetricsResultDTO = { status: WorkloadMetricsStatusDTO; usage: Record<string, WorkloadUsageDTO> };
-export type WorkloadsResultDTO = { fluxPresent: boolean; namespaces: string[]; workloads: WorkloadDTO[] };
+export type WorkloadsResultDTO = { fluxPresent: boolean; namespaces: string[]; workloads: WorkloadDTO[]; truncated?: boolean };
 export const WORKLOAD_KINDS = ["Deployment", "StatefulSet", "DaemonSet"] as const;
 export type WorkloadKind = typeof WORKLOAD_KINDS[number];
 export type WorkloadsSlice = {
@@ -291,6 +291,7 @@ export type WorkloadsSlice = {
   metricsStale: boolean;
   nearLimitSort: boolean;
   live: boolean;
+  truncated?: boolean; // a list hit the server cap: rows are incomplete, scope by namespace
 };
 
 function workloadKindFilterFor(kinds: readonly WorkloadKind[]): Record<WorkloadKind, boolean> {
@@ -308,7 +309,7 @@ export type ContainerPortDTO = { name: string; port: number; protocol: string };
 // never terminated (lastReason "" means "no last state", never fabricate one).
 export type ContainerSummaryDTO = { name: string; image: string; ready: boolean; restarts: number; state: string; init: boolean; ports?: ContainerPortDTO[]; lastReason?: string; lastExitCode?: number; lastFinishedUnix?: number };
 export type PodSummaryDTO = { namespace: string; name: string; ready: boolean; phase: string; reason: string; rank: "unhealthy"|"degraded"|"restarts"|"healthy"; restarts: number; node: string; ip: string; ownerKind: string; ownerName: string; ageSeconds: number; containers: ContainerSummaryDTO[] };
-export type PodsResultDTO = { namespaces: string[]; pods: PodSummaryDTO[] };
+export type PodsResultDTO = { namespaces: string[]; pods: PodSummaryDTO[]; truncated?: boolean };
 export type PodDetailDTO = { summary: PodSummaryDTO; labels: Record<string, string>; annotations?: Record<string, string>; conditions: ConditionDTO[]; events: EventDTO[]; yaml: string; qosClass: string; serviceAccount: string };
 
 export type PodRef = { namespace: string; name: string };
@@ -324,6 +325,7 @@ export type PodsSlice = {
   detail: PodDetailDTO | null;
   detailLoading: boolean;
   live: boolean;
+  truncated?: boolean; // the pod list hit the server cap: rows are incomplete, scope by namespace
   // Palette "jump to namespace": consumed by PodsView, which re-opens its live
   // subscription for the namespace. A raced one-shot list would be discarded
   // by the live sub's stale guard - the subscription itself must move.
@@ -957,7 +959,7 @@ export const useFleet = create<FleetState>((set) => ({
     let namespaces = s.workloads.namespaces;
     if (namespace === "") namespaces = result.namespaces ?? [];
     if (namespaces.length === 0 && namespace !== "") namespaces = [namespace];
-    return { workloads: { ...s.workloads, cluster, namespace, items: result.workloads ?? [], namespaces, fluxPresent: result.fluxPresent, loading: false } };
+    return { workloads: { ...s.workloads, cluster, namespace, items: result.workloads ?? [], namespaces, fluxPresent: result.fluxPresent, truncated: result.truncated ?? false, loading: false } };
   }),
   toggleWorkloadKind: (k) => set((s) => ({ workloads: { ...s.workloads, kindFilter: { ...s.workloads.kindFilter, [k]: !s.workloads.kindFilter[k] } } })),
   setWorkloadKindFilter: (kinds) => set((s) => ({ workloads: { ...s.workloads, kindFilter: workloadKindFilterFor(kinds) } })),
@@ -995,7 +997,7 @@ export const useFleet = create<FleetState>((set) => ({
     let namespaces = s.pods.namespaces;
     if (namespace === "") namespaces = result.namespaces ?? [];
     if (namespaces.length === 0 && namespace !== "") namespaces = [namespace];
-    return { pods: { ...s.pods, cluster, namespace, items: result.pods ?? [], namespaces, loading: false } };
+    return { pods: { ...s.pods, cluster, namespace, items: result.pods ?? [], namespaces, truncated: result.truncated ?? false, loading: false } };
   }),
   togglePodsNeedsAttention: () => set((s) => ({ pods: { ...s.pods, needsAttention: !s.pods.needsAttention } })),
   setPodsNeedsAttention: (v) => set((s) => ({ pods: { ...s.pods, needsAttention: v } })),

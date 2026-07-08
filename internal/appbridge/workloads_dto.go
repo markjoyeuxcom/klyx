@@ -82,4 +82,8 @@ type WorkloadsResultDTO struct {
 	FluxPresent bool          `json:"fluxPresent"`
 	Namespaces  []string      `json:"namespaces"` // populated only when namespace==""
 	Workloads   []WorkloadDTO `json:"workloads"`
+	// Truncated: a list hit the server cap, so these rows are an incomplete
+	// (pre-ranking) slice - the UI must tell the user to scope by namespace for
+	// complete broken-first triage, never imply this is the whole picture.
+	Truncated bool `json:"truncated,omitempty"`
 }

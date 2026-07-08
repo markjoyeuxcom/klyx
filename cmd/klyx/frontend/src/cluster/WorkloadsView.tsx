@@ -298,6 +298,15 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
             </div>
           </div>
 
+          {/* Truncation banner - LOUD: broken-first ranking happens after the
+              list, so a truncated view can hide a fault past the cap. */}
+          {wl.truncated && (
+            <div role="status" style={{ display: "flex", alignItems: "center", gap: 8, margin: "0 0 10px", padding: "7px 11px", border: "0.5px solid var(--color-border-warning)", background: "var(--color-background-warning)", borderRadius: 4, fontSize: 12, color: "var(--color-text-warning)", flexShrink: 0 }}>
+              <IconAlertTriangle size={14} stroke={1.5} />
+              <span>Showing the first 5000 workloads — this list is incomplete, so broken-first triage may miss a fault. Scope by namespace for the full picture.</span>
+            </div>
+          )}
+
           <div style={{ flex: 1, minHeight: 0, overflowX: "auto", overflowY: "hidden", display: "flex", flexDirection: "column" }}>
             {wl.loading && wl.items.length === 0 ? (
               <div style={{ padding: "16px 20px" }}>

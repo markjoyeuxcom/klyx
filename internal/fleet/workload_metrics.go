@@ -28,7 +28,7 @@ func (c *ClusterConn) WorkloadMetrics(ctx context.Context, namespace string) (ma
 	}
 	now := clk.Now()
 
-	ws, _, err := c.ListWorkloads(ctx, namespace)
+	ws, _, _, err := c.ListWorkloads(ctx, namespace)
 	if err != nil {
 		return nil, workloads.UsageStatus{Available: false, Message: "workload list failed: " + err.Error()}
 	}

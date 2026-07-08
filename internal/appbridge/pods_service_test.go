@@ -13,14 +13,15 @@ import (
 // fakePodConn satisfies PodsConn without importing the real fleet.ClusterConn.
 type fakePodConn struct {
 	pods      []workloads.PodSummary
+	truncated bool
 	detail    fleet.PodDetail
 	detErr    error
 	deleteErr error
 	deleted   []string // records "<namespace>/<name>" for assertion
 }
 
-func (f *fakePodConn) ListPods(_ context.Context, _ string) ([]workloads.PodSummary, error) {
-	return f.pods, nil
+func (f *fakePodConn) ListPods(_ context.Context, _ string) ([]workloads.PodSummary, bool, error) {
+	return f.pods, f.truncated, nil
 }
 
 func (f *fakePodConn) PodDetail(_ context.Context, _, _ string) (fleet.PodDetail, error) {
@@ -46,6 +47,18 @@ func TestPodsService_ClusterMiss_NonNilEmpties(t *testing.T) {
 	}
 	if len(dto.Pods) != 0 || len(dto.Namespaces) != 0 {
 		t.Fatalf("want empty slices, got pods=%d ns=%d", len(dto.Pods), len(dto.Namespaces))
+	}
+}
+
+func TestPodsService_Truncated(t *testing.T) {
+	conn := &fakePodConn{pods: []workloads.PodSummary{{Namespace: "a", Name: "p", Rank: workloads.Healthy}}, truncated: true}
+	svc := NewPodsService(func(string) (PodsConn, bool) { return conn, true }, nil)
+	if dto := svc.ListPods("c", ""); !dto.Truncated {
+		t.Fatalf("truncated must propagate to the DTO, got %+v", dto)
+	}
+	conn.truncated = false
+	if dto := svc.ListPods("c", ""); dto.Truncated {
+		t.Fatal("non-truncated list must not set Truncated")
 	}
 }
 

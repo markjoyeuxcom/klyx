@@ -88,7 +88,7 @@ type fakeLivePodConn struct {
 	listHook    func() // if set, invoked (outside the lock) during each ListPods
 }
 
-func (f *fakeLivePodConn) ListPods(context.Context, string) ([]workloads.PodSummary, error) {
+func (f *fakeLivePodConn) ListPods(context.Context, string) ([]workloads.PodSummary, bool, error) {
 	f.mu.Lock()
 	f.listCalls++
 	fail := f.computeFail
@@ -98,9 +98,9 @@ func (f *fakeLivePodConn) ListPods(context.Context, string) ([]workloads.PodSumm
 		hook()
 	}
 	if fail {
-		return nil, context.DeadlineExceeded
+		return nil, false, context.DeadlineExceeded
 	}
-	return []workloads.PodSummary{{Namespace: "ns", Name: "p1", Rank: workloads.Healthy}}, nil
+	return []workloads.PodSummary{{Namespace: "ns", Name: "p1", Rank: workloads.Healthy}}, false, nil
 }
 
 func (f *fakeLivePodConn) PodDetail(context.Context, string, string) (fleet.PodDetail, error) {

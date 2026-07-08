@@ -74,7 +74,7 @@ func TestListPods(t *testing.T) {
 	cs := fake.NewSimpleClientset(crashPod, healthyPod)
 	c := &ClusterConn{typed: cs, clk: clock.NewFake(now)}
 
-	out, err := c.ListPods(context.Background(), "")
+	out, _, err := c.ListPods(context.Background(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -133,7 +133,7 @@ func TestListPods_NamespaceScope(t *testing.T) {
 	c := &ClusterConn{typed: cs, clk: clock.NewFake(now)}
 
 	// Scoped to ns-a only.
-	out, err := c.ListPods(context.Background(), "ns-a")
+	out, _, err := c.ListPods(context.Background(), "ns-a")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -183,7 +183,7 @@ func TestListPodsResolvesReplicaSetOwner(t *testing.T) {
 	mclient := metadatafake.NewSimpleMetadataClient(mscheme, deployOwned, bare)
 
 	c := &ClusterConn{typed: cs, meta: mclient, clk: clock.NewFake(now)}
-	sums, err := c.ListPods(context.Background(), "team")
+	sums, _, err := c.ListPods(context.Background(), "team")
 	if err != nil {
 		t.Fatalf("ListPods: %v", err)
 	}

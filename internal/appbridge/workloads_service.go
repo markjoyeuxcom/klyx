@@ -55,7 +55,7 @@ func (s *WorkloadsService) RolloutRestart(cluster, kind, namespace, name string)
 const workloadsTimeout = 30 * time.Second
 
 type WorkloadsConn interface {
-	ListWorkloads(ctx context.Context, namespace string) ([]workloads.Workload, bool, error)
+	ListWorkloads(ctx context.Context, namespace string) ([]workloads.Workload, bool, bool, error)
 	WorkloadMetrics(ctx context.Context, namespace string) (map[string]workloads.Usage, workloads.UsageStatus)
 	RolloutRestart(ctx context.Context, kind, namespace, name string) error
 	ScaleWorkload(ctx context.Context, kind, namespace, name string, replicas int32) error
@@ -92,11 +92,12 @@ func computeWorkloads(conn WorkloadsConn, namespace string) (WorkloadsResultDTO,
 	out := WorkloadsResultDTO{Namespaces: []string{}, Workloads: []WorkloadDTO{}}
 	ctx, cancel := context.WithTimeout(context.Background(), workloadsTimeout)
 	defer cancel()
-	wl, fluxPresent, err := conn.ListWorkloads(ctx, namespace)
+	wl, fluxPresent, truncated, err := conn.ListWorkloads(ctx, namespace)
 	if err != nil {
 		return out, false
 	}
 	out.FluxPresent = fluxPresent
+	out.Truncated = truncated
 
 	nsSet := map[string]bool{}
 	for _, w := range wl {

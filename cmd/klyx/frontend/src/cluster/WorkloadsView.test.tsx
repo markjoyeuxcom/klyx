@@ -175,6 +175,15 @@ describe("WorkloadsView", () => {
     expect(scaleWorkload).toHaveBeenCalledWith("homelab-nelli", "Deployment", "ollama-prod", "ollama", 3);
   });
 
+  it("shows a loud truncation banner only when the list was capped", () => {
+    seed([healthy]);
+    const { queryByText, rerender } = render(<WorkloadsView cluster="homelab-nelli" />);
+    expect(queryByText(/broken-first triage may miss a fault/)).toBeNull();
+    act(() => { useFleet.setState((s) => ({ workloads: { ...s.workloads, truncated: true } })); });
+    rerender(<WorkloadsView cluster="homelab-nelli" />);
+    expect(queryByText(/broken-first triage may miss a fault/)).toBeTruthy();
+  });
+
   // --- Reloader forward "reloads on" view ---
 
   it("shows the reloads-on well with an auto chip and the reload-target chips", () => {
