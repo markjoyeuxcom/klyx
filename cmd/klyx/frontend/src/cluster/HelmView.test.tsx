@@ -253,10 +253,10 @@ describe("HelmView", () => {
     expect(document.body.textContent).toContain("replicaCount: 2");
   });
 
-  it("renders sensitive data hint above values pane", () => {
-    seedWithDetail(deployed, historyEntries, "secret: hunter2");
+  it("renders the masking hint above the values pane", () => {
+    seedWithDetail(deployed, historyEntries, "secret: <redacted>");
     const { getByText } = render(<HelmView cluster="homelab" />);
-    expect(getByText("values may contain sensitive data")).toBeTruthy();
+    expect(getByText("secret-shaped values are masked; the source chart in Git holds the full set")).toBeTruthy();
   });
 
   it("close button clears selected release", () => {
