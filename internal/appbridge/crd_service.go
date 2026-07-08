@@ -91,7 +91,11 @@ func (s *CRDService) GetInstanceDetail(cluster, group, version, plural, namespac
 	}
 	conds := make([]ConditionDTO, 0, len(d.Conditions))
 	for _, c := range d.Conditions {
-		conds = append(conds, ConditionDTO{Type: c.Type, Status: c.Status, Reason: c.Reason, Message: c.Message})
+		conds = append(conds, ConditionDTO{Type: c.Type, Status: c.Status, Reason: c.Reason, Message: c.Message, Scope: c.Scope})
+	}
+	facts := make([]FactDTO, 0, len(d.Facts))
+	for _, f := range d.Facts {
+		facts = append(facts, FactDTO{Group: f.Group, Label: f.Label, Value: f.Value, Tone: f.Tone, Kind: f.Kind})
 	}
 	events := make([]EventDTO, 0, len(d.Events))
 	for _, e := range d.Events {
@@ -158,6 +162,7 @@ func (s *CRDService) GetInstanceDetail(cluster, group, version, plural, namespac
 		ServiceBacking: serviceBacking,
 		HPAScaling:     hpaScaling,
 		Related:        related,
+		Facts:          facts,
 	}
 }
 

@@ -14,6 +14,25 @@ type Condition struct {
 	Status  string
 	Reason  string
 	Message string
+	// Scope identifies the sub-object a nested condition came from (e.g.
+	// "parent envoy-gw/eg", "listener https"); "" for a standard
+	// status.conditions[] entry. The real condition Type is never flattened
+	// into this - "Accepted" stays "Accepted".
+	Scope string
+}
+
+// Fact is one salient, human-readable summary value pulled from a resource's
+// spec/status - the data path the resource describes, surfaced without opening
+// the YAML tab. Group is an optional section header ("Routing", "Data"; "" =
+// headline facts, no header). Kind is "well" for short scalars/counts (rendered
+// as inset counter wells) or "row" for prose/lists (rendered as labeled rows).
+// Tone is "" | success | warning | danger | info | neutral.
+type Fact struct {
+	Group string
+	Label string
+	Value string
+	Tone  string
+	Kind  string
 }
 
 // Event is a describe-style event for an instance.
@@ -69,6 +88,10 @@ type InstanceDetail struct {
 	HPAScaling *HPAScaling
 	// Related contains direct object relationships for drill-in tabs.
 	Related []RelatedRef
+	// Facts are per-kind salient summary values (the data path) for kinds with a
+	// registered builder (see facts.go). Empty for kinds without one, which then
+	// render metadata-only exactly as before.
+	Facts []Fact
 }
 
 // ParseConditions maps status.conditions[] (a near-universal convention). Empty
@@ -89,6 +112,92 @@ func ParseConditions(obj map[string]interface{}) []Condition {
 		out = append(out, cond)
 	}
 	return out
+}
+
+// condPath describes where a kind stores nested per-sub-object conditions when
+// they are NOT in the standard status.conditions[]. slice is the path to a list
+// of sub-objects (e.g. status.parents), nameKey the field inside each carrying
+// its identity (e.g. parentRef.name), and label the scope prefix ("parent").
+type condPath struct {
+	slice   []string
+	nameKey []string
+	label   string
+}
+
+// condPaths maps group/plural to a nested-condition location. Absent = standard
+// status.conditions[] only, so the hundreds of ordinary kinds are unaffected.
+// Gateway API routes report health per attached parent; Gateways per listener
+// (in addition to a top-level status.conditions).
+var condPaths = map[string]condPath{
+	"gateway.networking.k8s.io/httproutes": {slice: []string{"status", "parents"}, nameKey: []string{"parentRef", "name"}, label: "parent"},
+	"gateway.networking.k8s.io/grpcroutes": {slice: []string{"status", "parents"}, nameKey: []string{"parentRef", "name"}, label: "parent"},
+	"gateway.networking.k8s.io/gateways":   {slice: []string{"status", "listeners"}, nameKey: []string{"name"}, label: "listener"},
+	// Gateway API / Envoy Gateway policies report per-target health under
+	// status.ancestors[].conditions[] (the attached Gateway/Route is the ancestor).
+	"gateway.networking.k8s.io/backendtlspolicies": {slice: []string{"status", "ancestors"}, nameKey: []string{"ancestorRef", "name"}, label: "ancestor"},
+	"gateway.envoyproxy.io/securitypolicies":       {slice: []string{"status", "ancestors"}, nameKey: []string{"ancestorRef", "name"}, label: "ancestor"},
+	"gateway.envoyproxy.io/backendtrafficpolicies": {slice: []string{"status", "ancestors"}, nameKey: []string{"ancestorRef", "name"}, label: "ancestor"},
+	"gateway.envoyproxy.io/clienttrafficpolicies":  {slice: []string{"status", "ancestors"}, nameKey: []string{"ancestorRef", "name"}, label: "ancestor"},
+	"gateway.envoyproxy.io/envoyextensionpolicies": {slice: []string{"status", "ancestors"}, nameKey: []string{"ancestorRef", "name"}, label: "ancestor"},
+}
+
+// ParseConditionsDeep returns status.conditions[] PLUS any nested per-sub-object
+// conditions the kind reports elsewhere (Gateway API routes/gateways), each
+// tagged with a Scope so the frontend can attribute and de-collide them. Kinds
+// with no nested-path entry behave exactly like ParseConditions.
+func ParseConditionsDeep(group, plural string, obj map[string]interface{}) []Condition {
+	out := ParseConditions(obj)
+	cp, ok := condPaths[group+"/"+plural]
+	if !ok {
+		return out
+	}
+	subs, _, _ := unstructured.NestedSlice(obj, cp.slice...)
+	for _, s := range subs {
+		m, ok := s.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		name, _ := nestedStringPath(m, cp.nameKey...)
+		scope := cp.label
+		if name != "" {
+			scope = cp.label + " " + name
+		}
+		conds, _, _ := unstructured.NestedSlice(m, "conditions")
+		for _, c := range conds {
+			cm, ok := c.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			cond := Condition{Scope: scope}
+			cond.Type, _ = cm["type"].(string)
+			cond.Status, _ = cm["status"].(string)
+			cond.Reason, _ = cm["reason"].(string)
+			cond.Message, _ = cm["message"].(string)
+			out = append(out, cond)
+		}
+	}
+	return out
+}
+
+// nestedStringPath reads a dotted path off a plain map (unstructured.NestedString
+// needs the top-level object; this works from an arbitrary sub-map).
+func nestedStringPath(m map[string]interface{}, path ...string) (string, bool) {
+	cur := m
+	for i, k := range path {
+		v, ok := cur[k]
+		if !ok {
+			return "", false
+		}
+		if i == len(path)-1 {
+			s, ok := v.(string)
+			return s, ok
+		}
+		cur, ok = v.(map[string]interface{})
+		if !ok {
+			return "", false
+		}
+	}
+	return "", false
 }
 
 // ToYAML marshals an unstructured Object map to kubectl-style YAML.

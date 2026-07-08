@@ -120,7 +120,7 @@ export type ArgoResultDTO = { available: boolean; message?: string; apps: ArgoAp
 export type ArgoProjectsResultDTO = { available: boolean; message?: string; projects: ArgoProjectDTO[] };
 export type ArgoApplicationSetsResultDTO = { available: boolean; message?: string; applicationSets: ArgoApplicationSetDTO[] };
 
-export type ConditionDTO = { type: string; status: string; reason: string; message: string };
+export type ConditionDTO = { type: string; status: string; reason: string; message: string; scope?: string };
 export type InventoryEntryDTO = { group: string; version: string; kind: string; namespace: string; name: string };
 export type FluxSourceDTO = {
   kind: string;
@@ -352,7 +352,10 @@ export type ServiceBackingDTO = { ports: ServicePortDTO[]; ready: number; notRea
 export type HPAMetricDTO = { name: string; type: string; target: string; current: string };
 export type HPAScalingDTO = { minReplicas: number; maxReplicas: number; currentReplicas: number; desiredReplicas: number; targetKind: string; targetName: string; lastScaleUnix: number; metrics: HPAMetricDTO[] };
 export type RelatedRefDTO = { kind: string; namespace: string; name: string; group: string; version: string; plural: string; scope: string; relation: string };
-export type InstanceDetailDTO = { kind: string; namespace: string; name: string; created: string; labels: Record<string, string>; annotations?: Record<string, string>; conditions: ConditionDTO[]; events: EventDTO[]; yaml: string; secretKeys?: SecretKeyDTO[]; serviceBacking?: ServiceBackingDTO | null; hpaScaling?: HPAScalingDTO | null; related?: RelatedRefDTO[] };
+// FactDTO is one salient Summary value (the data path). kind "well" = counter
+// well, "row" = labeled row; group "" = headline facts (no section header).
+export type FactDTO = { group: string; label: string; value: string; tone: string; kind: string };
+export type InstanceDetailDTO = { kind: string; namespace: string; name: string; created: string; labels: Record<string, string>; annotations?: Record<string, string>; conditions: ConditionDTO[]; events: EventDTO[]; yaml: string; secretKeys?: SecretKeyDTO[]; serviceBacking?: ServiceBackingDTO | null; hpaScaling?: HPAScalingDTO | null; related?: RelatedRefDTO[]; facts?: FactDTO[] };
 export type InstanceDetailSlice = { ref: InstanceRef | null; detail: InstanceDetailDTO | null; loading: boolean };
 
 export type Route =
