@@ -4,7 +4,9 @@ import (
 	"context"
 
 	rbacv1 "k8s.io/api/rbac/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
 
 	"github.com/moomora/klyx/internal/crd"
@@ -85,6 +87,39 @@ func (c *ClusterConn) pdbGuardedRefs(ctx context.Context, ns string, matchLabels
 		out = append(out, resourceRef("Pod", ns, pods.Items[i].Name, "", "v1", "pods", "Namespaced", "guarded pod"))
 	}
 	return out
+}
+
+// rbacDanglingFacts returns a danger fact when a (Cluster)RoleBinding's roleRef
+// points at a Role/ClusterRole that does not exist - a real broken-permission
+// state: the binding grants nothing. One Get; the fact is emitted ONLY on a
+// definitive NotFound, never on an RBAC-denied or transient list error (which
+// must not be misreported as "missing").
+func (c *ClusterConn) rbacDanglingFacts(ctx context.Context, group, plural, ns string, u *unstructured.Unstructured) []crd.Fact {
+	if c.typed == nil || group != "rbac.authorization.k8s.io" {
+		return nil
+	}
+	if plural != "rolebindings" && plural != "clusterrolebindings" {
+		return nil
+	}
+	roleName := nestedString(u.Object, "roleRef", "name")
+	if roleName == "" {
+		return nil
+	}
+	roleKind := nestedString(u.Object, "roleRef", "kind")
+	var err error
+	if roleKind == "ClusterRole" || plural == "clusterrolebindings" {
+		_, err = c.typed.RbacV1().ClusterRoles().Get(ctx, roleName, metav1.GetOptions{})
+		roleKind = "ClusterRole"
+	} else {
+		_, err = c.typed.RbacV1().Roles(ns).Get(ctx, roleName, metav1.GetOptions{})
+		if roleKind == "" {
+			roleKind = "Role"
+		}
+	}
+	if apierrors.IsNotFound(err) {
+		return []crd.Fact{{Group: "", Label: "roleRef", Value: "missing: " + roleKind + "/" + roleName, Tone: "danger", Kind: "row"}}
+	}
+	return nil
 }
 
 // serviceAccountBindingRefs finds the RoleBindings + ClusterRoleBindings whose

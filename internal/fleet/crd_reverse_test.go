@@ -7,6 +7,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/client-go/kubernetes/fake"
 
 	"github.com/moomora/klyx/internal/crd"
@@ -103,5 +104,32 @@ func TestServiceAccountBindingRefs(t *testing.T) {
 	}
 	if hasRef(refs, "ClusterRoleBinding", "crb-other", "granted by") {
 		t.Fatal("a ClusterRoleBinding subject in another namespace must not match")
+	}
+}
+
+func TestRBACDanglingFacts(t *testing.T) {
+	existing := &rbacv1.Role{ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "reader"}}
+	c := &ClusterConn{typed: fake.NewSimpleClientset(existing)}
+
+	// roleRef -> an existing Role: no dangling fact.
+	rbOK := &unstructured.Unstructured{Object: map[string]interface{}{
+		"roleRef": map[string]interface{}{"kind": "Role", "name": "reader"},
+	}}
+	if f := c.rbacDanglingFacts(context.Background(), "rbac.authorization.k8s.io", "rolebindings", "ns", rbOK); f != nil {
+		t.Fatalf("existing roleRef must not flag dangling: %+v", f)
+	}
+
+	// roleRef -> a missing Role: a danger fact.
+	rbBad := &unstructured.Unstructured{Object: map[string]interface{}{
+		"roleRef": map[string]interface{}{"kind": "Role", "name": "ghost"},
+	}}
+	f := c.rbacDanglingFacts(context.Background(), "rbac.authorization.k8s.io", "rolebindings", "ns", rbBad)
+	if len(f) != 1 || f[0].Tone != "danger" || f[0].Value != "missing: Role/ghost" {
+		t.Fatalf("missing roleRef must flag danger, got %+v", f)
+	}
+
+	// A non-RBAC kind is never touched.
+	if f := c.rbacDanglingFacts(context.Background(), "", "configmaps", "ns", rbBad); f != nil {
+		t.Fatalf("non-RBAC kind must be ignored: %+v", f)
 	}
 }

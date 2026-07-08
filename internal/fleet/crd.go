@@ -1227,6 +1227,7 @@ func (c *ClusterConn) GetInstanceDetail(ctx context.Context, group, version, plu
 		// reach a fact even via a future buggy builder.
 		Facts: crd.BuildFacts(group, plural, &unstructured.Unstructured{Object: obj}),
 	}
+	d.Facts = append(d.Facts, c.rbacDanglingFacts(ctx, group, plural, ns, u)...)
 	d.Events = c.instanceEvents(ctx, string(u.GetUID()))
 	return d, nil
 }
