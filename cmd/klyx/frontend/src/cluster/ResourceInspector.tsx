@@ -171,8 +171,8 @@ export function InspectorIdle({ subject, attention, hint, width }: {
         minHeight: 0,
         boxSizing: "border-box",
         // grid-hosted callers pass width="100%" and own the gutter themselves
-        background: "var(--bench-well-bg, transparent)",
-        boxShadow: "var(--bench-well-shadow, none)",
+        background: "var(--bench-well-bg, var(--color-background-secondary))",
+        boxShadow: "var(--bench-well-shadow, inset 0 0 0 1px var(--color-border-tertiary))",
         borderRadius: "var(--radius-sm)",
         padding: "12px 16px",
         marginLeft: width ? 0 : 8,

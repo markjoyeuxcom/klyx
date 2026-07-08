@@ -112,3 +112,23 @@ func TestBuildFacts_LimitRange(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildFacts_ResourceQuota_SubOnePercent(t *testing.T) {
+	// 3 / 1000 = 0.3% rounds to "0%", which reads as untouched; a quota with
+	// real (small) usage must show "<1%" instead, and stay untoned.
+	u := &unstructured.Unstructured{Object: map[string]interface{}{
+		"kind": "ResourceQuota",
+		"status": map[string]interface{}{
+			"hard": map[string]interface{}{"pods": "1k"},
+			"used": map[string]interface{}{"pods": "3"},
+		},
+	}}
+	facts := BuildFacts("", "resourcequotas", u)
+	f, ok := factByLabel(facts, "pods")
+	if !ok || f.Value != "3 / 1k (<1%)" {
+		t.Fatalf("sub-1%% usage should render <1%%, got %+v", f)
+	}
+	if f.Tone != "" {
+		t.Fatalf("sub-1%% usage is not a problem; tone must be empty: %+v", f)
+	}
+}
