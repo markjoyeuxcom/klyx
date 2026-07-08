@@ -802,10 +802,11 @@ describe("InstanceDetail facts (the data path)", () => {
   });
 
   it("renders nothing extra for a kind with no facts (graceful degrade)", () => {
-    // The default Certificate detail has no facts; summary still renders.
+    // The default Certificate detail has no facts; the panel still renders its
+    // verdict, and no fact section appears.
     seed();
     const { getByText, queryByText } = render(<InstanceDetail cluster="x" resource={resource} instance={instance} />);
-    expect(getByText("Labels")).toBeTruthy();
+    expect(getByText(/Ready True/)).toBeTruthy();
     expect(queryByText("Routing")).toBeNull();
   });
 });
