@@ -26,6 +26,10 @@ export type ClusterDTO = {
   externalSecretsReason?: string;
   externalSecretsPresent?: boolean;
   externalSecretsHealthy?: boolean;
+  reloaderTier?: string;
+  reloaderReason?: string;
+  reloaderPresent?: boolean;
+  reloaderHealthy?: boolean;
   env: string;
   region: string;
   provider: string;
@@ -263,7 +267,8 @@ export type ResourceCellDTO = { usage: number | null; request: number | null; li
 export type WorkloadResourcesDTO = { cpu: ResourceCellDTO; mem: ResourceCellDTO };
 // stale: spec changed, controller has not observed it - status/rank reflect
 // the previous spec; render as transitioning ("dim = not yet realized").
-export type WorkloadDTO = { kind: string; namespace: string; name: string; desired: number; ready: number; available: number; updated: number; restarts: number; reason: string; rank: "unhealthy"|"degraded"|"restarts"|"healthy"; gitops: OwnerDTO | null; pods: PodDTO[]; resources: WorkloadResourcesDTO; stale?: boolean; generation?: number; observedGeneration?: number };
+export type ReloadTargetsDTO = { auto: boolean; configMaps: string[]; secrets: string[] };
+export type WorkloadDTO = { kind: string; namespace: string; name: string; desired: number; ready: number; available: number; updated: number; restarts: number; reason: string; rank: "unhealthy"|"degraded"|"restarts"|"healthy"; gitops: OwnerDTO | null; pods: PodDTO[]; resources: WorkloadResourcesDTO; stale?: boolean; generation?: number; observedGeneration?: number; reloader?: ReloadTargetsDTO | null };
 export type WorkloadUsageDTO = { cpuUsage: number | null; memUsage: number | null };
 export type WorkloadMetricsStatusDTO = { available: boolean; message: string; updatedAt: string };
 export type WorkloadMetricsResultDTO = { status: WorkloadMetricsStatusDTO; usage: Record<string, WorkloadUsageDTO> };
@@ -354,7 +359,7 @@ export type HPAScalingDTO = { minReplicas: number; maxReplicas: number; currentR
 export type RelatedRefDTO = { kind: string; namespace: string; name: string; group: string; version: string; plural: string; scope: string; relation: string };
 // FactDTO is one salient Summary value (the data path). kind "well" = counter
 // well, "row" = labeled row; group "" = headline facts (no section header).
-export type FactDTO = { group: string; label: string; value: string; tone: string; kind: string };
+export type FactDTO = { group: string; label: string; value: string; tone: string; kind: string; pct?: number };
 export type InstanceDetailDTO = { kind: string; namespace: string; name: string; created: string; labels: Record<string, string>; annotations?: Record<string, string>; conditions: ConditionDTO[]; events: EventDTO[]; yaml: string; secretKeys?: SecretKeyDTO[]; serviceBacking?: ServiceBackingDTO | null; hpaScaling?: HPAScalingDTO | null; related?: RelatedRefDTO[]; facts?: FactDTO[] };
 export type InstanceDetailSlice = { ref: InstanceRef | null; detail: InstanceDetailDTO | null; loading: boolean };
 

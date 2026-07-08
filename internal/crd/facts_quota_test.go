@@ -45,6 +45,29 @@ func TestBuildFacts_ResourceQuota(t *testing.T) {
 	if f, ok := factByLabel(facts, "pods"); !ok || f.Value != "0 / 50 (0%)" || f.Tone != "" {
 		t.Fatalf("pods quota row (used absent -> 0) wrong: %+v", f)
 	}
+	// Computable ratios render as meters carrying the fill percentage.
+	if f, _ := factByLabel(facts, "requests.cpu"); f.Kind != "meter" || f.Pct < 99 || f.Pct > 101 {
+		t.Fatalf("requests.cpu should be a meter at ~100%%: %+v", f)
+	}
+	if f, _ := factByLabel(facts, "pods"); f.Kind != "meter" || f.Pct != 0 {
+		t.Fatalf("pods should be a meter at 0%% (genuine zero usage, not a phantom): %+v", f)
+	}
+}
+
+func TestBuildFacts_ResourceQuota_UnparseableFallsBackToRow(t *testing.T) {
+	// A hard value that cannot be parsed as a quantity has no computable ratio, so
+	// it must render as a plain row, never a phantom 0%-width meter.
+	u := &unstructured.Unstructured{Object: map[string]interface{}{
+		"kind": "ResourceQuota",
+		"status": map[string]interface{}{
+			"hard": map[string]interface{}{"count/widgets.example.com": "not-a-quantity"},
+			"used": map[string]interface{}{"count/widgets.example.com": "also-bad"},
+		},
+	}}
+	facts := BuildFacts("", "resourcequotas", u)
+	if f, ok := factByLabel(facts, "count/widgets.example.com"); !ok || f.Kind != "row" {
+		t.Fatalf("unparseable quota must be a plain row, not a meter: %+v", f)
+	}
 }
 
 func TestBuildFacts_ResourceQuota_PressureFirst(t *testing.T) {

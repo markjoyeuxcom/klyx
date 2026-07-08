@@ -168,7 +168,7 @@ func TestReloaderConsumerRefs(t *testing.T) {
 	}}})
 	c := &ClusterConn{typed: fake.NewSimpleClientset(explicit, autoMounted, autoUnrelated, plain)}
 
-	refs := c.reloaderConsumerRefs(context.Background(), "app", "app-config", "ConfigMap")
+	refs := c.reloaderConsumerRefs(context.Background(), "app", "app-config", "ConfigMap", nil)
 	if !hasRef(refs, "Deployment", "api", "reloads") {
 		t.Errorf("explicit reload annotation must match, got %+v", refs)
 	}
@@ -200,7 +200,7 @@ func TestReloaderConsumerRefsSecretEnvFrom(t *testing.T) {
 	}, corev1.PodSpec{})
 	c := &ClusterConn{typed: fake.NewSimpleClientset(autoEnv, wrongKind)}
 
-	refs := c.reloaderConsumerRefs(context.Background(), "app", "app-secret", "Secret")
+	refs := c.reloaderConsumerRefs(context.Background(), "app", "app-secret", "Secret", nil)
 	if !hasRef(refs, "Deployment", "api", "reloads") {
 		t.Errorf("auto + envFrom secret must match, got %+v", refs)
 	}
@@ -209,5 +209,42 @@ func TestReloaderConsumerRefsSecretEnvFrom(t *testing.T) {
 	}
 	if len(refs) != 1 {
 		t.Fatalf("want exactly api, got %+v", refs)
+	}
+}
+
+func TestReloaderConsumerRefsSearchMatch(t *testing.T) {
+	// search mode: the workload opts in, and reloads on any mounted CM labeled match=true.
+	searchMounted := deploy("app", "api", map[string]string{
+		"reloader.stakater.com/search": "true",
+	}, corev1.PodSpec{Volumes: []corev1.Volume{{
+		Name:         "cfg",
+		VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{LocalObjectReference: corev1.LocalObjectReference{Name: "app-config"}}},
+	}}})
+	// search-annotated but does NOT mount app-config -> must not match.
+	searchUnrelated := deploy("app", "worker", map[string]string{
+		"reloader.stakater.com/search": "true",
+	}, corev1.PodSpec{Volumes: []corev1.Volume{{
+		Name:         "cfg",
+		VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{LocalObjectReference: corev1.LocalObjectReference{Name: "different-cm"}}},
+	}}})
+	c := &ClusterConn{typed: fake.NewSimpleClientset(searchMounted, searchUnrelated)}
+
+	// Object carries the match label: the search-mode workload that mounts it matches.
+	labeled := map[string]string{"reloader.stakater.com/match": "true"}
+	refs := c.reloaderConsumerRefs(context.Background(), "app", "app-config", "ConfigMap", labeled)
+	if !hasRef(refs, "Deployment", "api", "reloads") {
+		t.Errorf("search + match label + mounted must match, got %+v", refs)
+	}
+	if hasRef(refs, "Deployment", "worker", "reloads") {
+		t.Error("search mode must still require the object to be mounted")
+	}
+	if len(refs) != 1 {
+		t.Fatalf("want exactly api, got %+v", refs)
+	}
+
+	// Honesty guard: without the match label, search mode matches nothing - even
+	// though api mounts the ConfigMap.
+	if refs := c.reloaderConsumerRefs(context.Background(), "app", "app-config", "ConfigMap", nil); len(refs) != 0 {
+		t.Fatalf("search mode must not match an unlabeled object, got %+v", refs)
 	}
 }

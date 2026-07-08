@@ -801,6 +801,22 @@ describe("InstanceDetail facts (the data path)", () => {
     expect(getByText("parent envoy-gateway-system/eg")).toBeTruthy();
   });
 
+  it("renders a meter fact as a bar keeping the value text", () => {
+    const quota: InstanceDetailDTO = {
+      kind: "ResourceQuota", namespace: "team", name: "compute", created: "", labels: {},
+      conditions: [], events: [], yaml: "kind: ResourceQuota\n",
+      facts: [
+        { group: "Quota", label: "requests.cpu", value: "10 / 10 (100%)", tone: "danger", kind: "meter", pct: 100 },
+        { group: "Quota", label: "pods", value: "3 / 50 (6%)", tone: "", kind: "meter", pct: 6 },
+      ],
+    };
+    seed({ detail: quota });
+    const { getByText } = render(<InstanceDetail cluster="x" resource={resource} instance={instance} />);
+    // The precise reading (value text) is preserved next to the bar.
+    expect(getByText("10 / 10 (100%)")).toBeTruthy();
+    expect(getByText("3 / 50 (6%)")).toBeTruthy();
+  });
+
   it("renders nothing extra for a kind with no facts (graceful degrade)", () => {
     // The default Certificate detail has no facts; the panel still renders its
     // verdict, and no fact section appears.

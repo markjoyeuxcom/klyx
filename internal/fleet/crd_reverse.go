@@ -167,14 +167,18 @@ func (c *ClusterConn) serviceAccountBindingRefs(ctx context.Context, ns, name st
 
 // reloaderConsumerRefs answers "if I change this ConfigMap/Secret, what restarts"
 // for clusters running Stakater Reloader: it finds the Deployments, StatefulSets,
-// and DaemonSets in ns that reload on this object. Two Reloader modes are honored:
+// and DaemonSets in ns that reload on this object. Three Reloader modes are honored:
 //   - explicit: the workload's configmap|secret.reloader.stakater.com/reload
 //     annotation lists this object's name (comma-separated).
 //   - auto: reloader.stakater.com/auto="true" reloads on ANY mounted CM/Secret, so
 //     the workload matches when its pod template mounts this object (reloaderPodMounts).
+//   - search: the workload opts in with reloader.stakater.com/search="true" and
+//     reloads on any mounted CM/Secret LABELED reloader.stakater.com/match="true";
+//     so the inspected object (objLabels) must carry that label AND be mounted.
 //
-// kind is "ConfigMap" or "Secret". Capped, namespace-scoped lists; nil on error.
-func (c *ClusterConn) reloaderConsumerRefs(ctx context.Context, ns, name, kind string) []crd.RelatedRef {
+// kind is "ConfigMap" or "Secret"; objLabels are the inspected object's labels
+// (nil-safe). Capped, namespace-scoped lists; nil on error.
+func (c *ClusterConn) reloaderConsumerRefs(ctx context.Context, ns, name, kind string, objLabels map[string]string) []crd.RelatedRef {
 	if c.typed == nil {
 		return nil
 	}
@@ -182,6 +186,9 @@ func (c *ClusterConn) reloaderConsumerRefs(ctx context.Context, ns, name, kind s
 	if kind == "Secret" {
 		explicitKey = "secret.reloader.stakater.com/reload"
 	}
+	// Search mode is only eligible when the inspected object opts in via the match
+	// label; without it, a search-annotated workload never matches this object.
+	matchEligible := objLabels["reloader.stakater.com/match"] == "true"
 	reloadsOn := func(ann map[string]string, tmpl corev1.PodSpec) bool {
 		if v := ann[explicitKey]; v != "" {
 			for _, n := range strings.Split(v, ",") {
@@ -190,7 +197,10 @@ func (c *ClusterConn) reloaderConsumerRefs(ctx context.Context, ns, name, kind s
 				}
 			}
 		}
-		return ann["reloader.stakater.com/auto"] == "true" && reloaderPodMounts(tmpl, kind, name)
+		if ann["reloader.stakater.com/auto"] == "true" && reloaderPodMounts(tmpl, kind, name) {
+			return true
+		}
+		return matchEligible && ann["reloader.stakater.com/search"] == "true" && reloaderPodMounts(tmpl, kind, name)
 	}
 	var out []crd.RelatedRef
 	if deps, err := c.typed.AppsV1().Deployments(ns).List(ctx, metav1.ListOptions{Limit: reverseLookupCap}); err == nil && deps != nil {

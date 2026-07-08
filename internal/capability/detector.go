@@ -21,6 +21,9 @@ const (
 	certManagerController     = "cert-manager"
 	externalSecretsNamespace  = "external-secrets"
 	externalSecretsController = "external-secrets"
+	// Reloader ships no CRD; its controller carries this label in both the chart
+	// ("reloader-reloader") and raw-manifest ("reloader") install layouts.
+	reloaderNameSelector = "app.kubernetes.io/name=reloader"
 )
 
 // workloadKind distinguishes the two workload types the health probe supports.
@@ -101,6 +104,7 @@ func (d *Detector) Detect(ctx context.Context) Set {
 			Network:         NetworkCapability{Base: Base{Tier: Absent, Reason: msg}},
 			CertManager:     CertManagerCapability{Base: Base{Tier: Absent, Reason: msg}},
 			ExternalSecrets: ExternalSecretsCapability{Base: Base{Tier: Absent, Reason: msg}},
+			Reloader:        ReloaderCapability{Base: Base{Tier: Absent, Reason: msg}},
 		}
 	}
 	return Set{
@@ -108,6 +112,7 @@ func (d *Detector) Detect(ctx context.Context) Set {
 		Network:         d.detectNetwork(ctx, served),
 		CertManager:     d.detectCertManager(ctx, served),
 		ExternalSecrets: d.detectExternalSecrets(ctx, served),
+		Reloader:        d.detectReloader(ctx),
 	}
 }
 
@@ -211,6 +216,36 @@ func (d *Detector) detectExternalSecrets(ctx context.Context, served map[string]
 	out.Base.Tier = Classify(true, out.Healthy)
 	if !out.Healthy {
 		out.Base.Reason = "External Secrets Operator installed but " + externalSecretsController + " is not ready"
+	}
+	return out
+}
+
+// detectReloader classifies Stakater Reloader. It cannot use discovery (no served
+// group) or controllerReady (namespace/name vary by install), so it lists
+// Deployments cluster-wide by the reloader name label: present iff any match,
+// healthy iff any matched Deployment is ready. A list error is reported as
+// Absent WITH the failure reason (error honesty) - never silently "not installed".
+func (d *Detector) detectReloader(ctx context.Context) ReloaderCapability {
+	out := ReloaderCapability{}
+	deps, err := d.cs.AppsV1().Deployments(metav1.NamespaceAll).List(ctx, metav1.ListOptions{LabelSelector: reloaderNameSelector})
+	if err != nil {
+		out.Base = Base{Tier: Absent, Reason: "could not list Deployments to detect Reloader: " + err.Error()}
+		return out
+	}
+	if len(deps.Items) == 0 {
+		out.Base = Base{Tier: Absent, Reason: "no Stakater Reloader controller found (" + reloaderNameSelector + ")"}
+		return out
+	}
+	out.Present = true
+	for i := range deps.Items {
+		if DeploymentReady(&deps.Items[i]) {
+			out.Healthy = true
+			break
+		}
+	}
+	out.Base.Tier = Classify(out.Present, out.Healthy)
+	if !out.Healthy {
+		out.Base.Reason = "Reloader controller present but not ready"
 	}
 	return out
 }

@@ -152,6 +152,40 @@ export function InspectorKV({ rows }: {
   );
 }
 
+// InspectorMeters — used/total ratios as inset bars (Signal Bench: data in a
+// well). The value text is kept for the precise reading; the bar is the glance.
+// Fill is clamped to 100% so an over-budget quota never overflows the track -
+// the danger tone + the real "(NNN%)" in the value still convey the overage.
+export function InspectorMeters({ meters }: {
+  meters: ReadonlyArray<{ label: string; value: string; pct: number; tone?: Tone }>;
+}) {
+  if (meters.length === 0) return null;
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+      {meters.map((m, i) => {
+        const fill = Math.max(0, Math.min(100, m.pct));
+        return (
+          <div key={`${m.label}-${i}`} style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0 }}>
+            <div style={{ display: "flex", gap: 8, alignItems: "baseline", fontSize: 11, minWidth: 0 }}>
+              <span style={{ fontSize: 9, letterSpacing: "0.08em", textTransform: "uppercase", fontWeight: 600, color: "var(--color-text-tertiary)", flexShrink: 0, minWidth: 92, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={m.label}>{m.label}</span>
+              <span style={{ marginLeft: "auto", fontFamily: "var(--font-mono)", fontVariantNumeric: "tabular-nums", color: m.tone ? toneColor[m.tone] : "var(--color-text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={m.value}>{m.value}</span>
+            </div>
+            <span style={{
+              height: 5,
+              borderRadius: "var(--radius-sm)",
+              overflow: "hidden",
+              background: "var(--bench-well-bg, var(--color-background-secondary))",
+              boxShadow: "var(--bench-well-shadow, inset 0 0 0 1px var(--color-border-tertiary))",
+            }}>
+              <span style={{ display: "block", height: "100%", width: `${fill}%`, background: m.tone ? toneColor[m.tone] : "var(--color-text-success)" }} />
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 // InspectorIdle — the inspector well when nothing is selected. The panel is
 // ALWAYS present (mockup rule: the board is list + inspector, permanently),
 // so selecting a row never reflows the list. Idle it stays honest: the

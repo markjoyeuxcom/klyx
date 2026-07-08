@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from "react";
-import { IconTerminal2, IconExternalLink, IconBox, IconX } from "@tabler/icons-react";
+import { IconTerminal2, IconExternalLink, IconBox, IconX, IconAlertTriangle } from "@tabler/icons-react";
 import { useFleet } from "../store/fleet";
 import type { WorkloadDTO, PodDTO, WorkloadKind, ResourceCellDTO } from "../store/fleet";
 import { listWorkloads, openLiveWorkloads, rolloutRestart, scaleWorkload } from "../bridge/workloads";
@@ -86,6 +86,7 @@ type Pending = PendingRestart | PendingScale | PendingScaleInput | PendingDelete
 export function WorkloadsView({ cluster }: { cluster: string }) {
   const wl = useFleet((s) => s.workloads);
   const isProtected = useFleet((s) => s.clusters.find((c) => c.name === cluster)?.protected ?? false);
+  const reloaderDetected = useFleet((s) => s.clusters.find((c) => c.name === cluster)?.reloaderPresent ?? false);
   const [pending, setPending] = useState<Pending | null>(null);
   // Selection is tracked by stable key (kind/namespace/name), never by array
   // index — live emits re-rank the rows, and an index-bound selection silently
@@ -421,6 +422,7 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
           onClose={() => setSelectedKey(null)}
           expanded={selectedExpanded}
           isProtected={isProtected}
+          reloaderDetected={reloaderDetected}
           pending={pending}
           onLogs={(w) => setLogsTarget({ namespace: w.namespace, name: w.name, kind: w.kind as WorkloadKind })}
           onRestart={(w) => setPending({ kind: "restart", w })}
@@ -558,6 +560,7 @@ function WorkloadContextPanel({
   expanded,
   onClose,
   isProtected,
+  reloaderDetected,
   pending,
   onLogs,
   onRestart,
@@ -574,6 +577,7 @@ function WorkloadContextPanel({
   expanded: boolean;
   onClose: () => void;
   isProtected: boolean;
+  reloaderDetected: boolean;
   pending: Pending | null;
   onLogs: (w: WorkloadDTO) => void;
   onRestart: (w: WorkloadDTO) => void;
@@ -692,6 +696,38 @@ function WorkloadContextPanel({
           )}
         </div>
       </div>
+
+      {workload.reloader && (
+        <div style={{ padding: "12px 14px", borderBottom: "0.5px solid var(--color-border-tertiary)", display: "grid", gap: 8 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5, color: "var(--color-text-tertiary)" }}>reloads on</div>
+            {workload.reloader.auto && (
+              <span title="reloader.stakater.com/auto: reloads on any mounted ConfigMap/Secret" style={{ fontFamily: "var(--font-mono)", fontSize: 9, textTransform: "uppercase", letterSpacing: 0.5, padding: "1px 5px", borderRadius: 3, color: "var(--color-text-info)", boxShadow: "inset 0 0 0 1px var(--color-border-info)", background: "var(--color-background-info)" }}>auto</span>
+            )}
+          </div>
+          {/* Honesty: reload annotations declare intent; if the operator is not
+              detected on this cluster they are inert. */}
+          {!reloaderDetected && (
+            <div style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, color: "var(--color-text-warning)", overflowWrap: "anywhere" }}>
+              <IconAlertTriangle size={12} stroke={1.5} />
+              Reloader operator not detected on this cluster — these annotations may be inert.
+            </div>
+          )}
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
+            {workload.reloader.configMaps.map((n) => (
+              <ReloadChip key={`cm-${n}`} kind="ConfigMap" name={n} namespace={workload.namespace} />
+            ))}
+            {workload.reloader.secrets.map((n) => (
+              <ReloadChip key={`sec-${n}`} kind="Secret" name={n} namespace={workload.namespace} />
+            ))}
+            {workload.reloader.configMaps.length === 0 && workload.reloader.secrets.length === 0 && (
+              <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--color-text-tertiary)" }}>
+                {workload.reloader.auto ? "no mounted config" : "—"}
+              </span>
+            )}
+          </div>
+        </div>
+      )}
 
       <div style={{ padding: "12px 14px", borderBottom: "0.5px solid var(--color-border-tertiary)", display: "grid", gap: 8 }}>
         <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5, color: "var(--color-text-tertiary)" }}>pods</div>
@@ -891,6 +927,29 @@ function WorkloadLogsDock({
         />
       </div>
     </div>
+  );
+}
+
+// ReloadChip is one reload-target ConfigMap/Secret, cross-linked to its manifest
+// in Resources (same openResource+openInstance pattern as the workload manifest
+// button). A kind tag (CM/SEC) disambiguates the two lists in one row.
+function ReloadChip({ kind, name, namespace }: { kind: "ConfigMap" | "Secret"; name: string; namespace: string }) {
+  const open = () => {
+    const ref = wellKnownResourceRef("", kind);
+    if (!ref) return;
+    const nav = useFleet.getState();
+    nav.openResource(ref);
+    nav.openInstance(namespace, name);
+  };
+  return (
+    <button
+      onClick={open}
+      title={`open ${kind} ${namespace}/${name} in Resources`}
+      style={{ display: "inline-flex", alignItems: "center", gap: 5, fontFamily: "var(--font-mono)", fontSize: 11, padding: "2px 7px", borderRadius: 3, cursor: "pointer", border: "none", color: "var(--color-text-info)", maxWidth: "100%", overflow: "hidden", background: "var(--bench-well-bg, var(--color-background-secondary))", boxShadow: "var(--bench-well-shadow, inset 0 0 0 1px var(--color-border-tertiary))" }}
+    >
+      <span style={{ fontSize: 8, textTransform: "uppercase", letterSpacing: 0.5, color: "var(--color-text-tertiary)", flexShrink: 0 }}>{kind === "ConfigMap" ? "cm" : "sec"}</span>
+      <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{name}</span>
+    </button>
   );
 }
 

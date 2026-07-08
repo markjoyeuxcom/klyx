@@ -1292,11 +1292,11 @@ func (c *ClusterConn) relatedRefs(ctx context.Context, group, version, plural, n
 			add(ref)
 		}
 	case group == "" && version == "v1" && plural == "configmaps":
-		for _, ref := range c.reloaderConsumerRefs(ctx, ns, name, "ConfigMap") {
+		for _, ref := range c.reloaderConsumerRefs(ctx, ns, name, "ConfigMap", u.GetLabels()) {
 			add(ref)
 		}
 	case group == "" && version == "v1" && plural == "secrets":
-		for _, ref := range c.reloaderConsumerRefs(ctx, ns, name, "Secret") {
+		for _, ref := range c.reloaderConsumerRefs(ctx, ns, name, "Secret", u.GetLabels()) {
 			add(ref)
 		}
 	case group == "rbac.authorization.k8s.io" && plural == "rolebindings":

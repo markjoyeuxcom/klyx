@@ -167,6 +167,17 @@ func toWorkloadDTO(w workloads.Workload) WorkloadDTO {
 		CPU: ResourceCellDTO{Usage: w.Resources.CPU.Usage, Request: w.Resources.CPU.Request, Limit: w.Resources.CPU.Limit},
 		Mem: ResourceCellDTO{Usage: w.Resources.Mem.Usage, Request: w.Resources.Mem.Request, Limit: w.Resources.Mem.Limit},
 	}
+	if w.Reloader != nil {
+		// Default the slices to [] so the frontend never sees a null array.
+		cms, secs := w.Reloader.ConfigMaps, w.Reloader.Secrets
+		if cms == nil {
+			cms = []string{}
+		}
+		if secs == nil {
+			secs = []string{}
+		}
+		d.Reloader = &ReloadTargetsDTO{Auto: w.Reloader.Auto, ConfigMaps: cms, Secrets: secs}
+	}
 	return d
 }
 

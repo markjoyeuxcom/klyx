@@ -175,6 +175,50 @@ describe("WorkloadsView", () => {
     expect(scaleWorkload).toHaveBeenCalledWith("homelab-nelli", "Deployment", "ollama-prod", "ollama", 3);
   });
 
+  // --- Reloader forward "reloads on" view ---
+
+  it("shows the reloads-on well with an auto chip and the reload-target chips", () => {
+    const w: WorkloadDTO = {
+      ...healthy, name: "api", namespace: "app",
+      reloader: { auto: true, configMaps: ["app-config"], secrets: ["app-secret"] },
+    };
+    seed([w]);
+    const { getByText, getByTitle } = render(<WorkloadsView cluster="homelab-nelli" />);
+    fireEvent.click(getByText("api")); // select -> panel
+    expect(getByText("reloads on")).toBeTruthy();
+    expect(getByText("auto")).toBeTruthy();
+    // Chips are cross-links into Resources (title carries the target identity).
+    expect(getByTitle("open ConfigMap app/app-config in Resources")).toBeTruthy();
+    expect(getByTitle("open Secret app/app-secret in Resources")).toBeTruthy();
+  });
+
+  it("warns when reload annotations exist but the Reloader operator is not detected", () => {
+    const w: WorkloadDTO = { ...healthy, name: "api", namespace: "app", reloader: { auto: true, configMaps: [], secrets: [] } };
+    seed([w]); // no cluster entry -> reloaderPresent defaults false
+    const { getByText } = render(<WorkloadsView cluster="homelab-nelli" />);
+    fireEvent.click(getByText("api"));
+    expect(getByText(/annotations may be inert/)).toBeTruthy();
+  });
+
+  it("does not warn when the Reloader operator is detected on the cluster", () => {
+    useFleet.setState((s) => ({
+      clusters: [{ name: "homelab-nelli", state: "connected", reason: "", nodesReady: 1, nodesTotal: 1, pods: 1, version: "v1.30", gitopsTier: "Absent", gitopsReason: "", networkTier: "Absent", networkReason: "", env: "", region: "", provider: "", group: "", ageSeconds: 1, reloaderPresent: true } as (typeof s.clusters)[number]],
+    }));
+    const w: WorkloadDTO = { ...healthy, name: "api", namespace: "app", reloader: { auto: false, configMaps: ["only-this"], secrets: [] } };
+    seed([w]);
+    const { getByText, queryByText } = render(<WorkloadsView cluster="homelab-nelli" />);
+    fireEvent.click(getByText("api"));
+    expect(getByText("reloads on")).toBeTruthy();
+    expect(queryByText(/annotations may be inert/)).toBeNull();
+  });
+
+  it("renders no reloads-on well for a workload without Reloader annotations", () => {
+    seed([{ ...healthy, name: "plain", namespace: "app" }]); // reloader undefined
+    const { getByText, queryByText } = render(<WorkloadsView cluster="homelab-nelli" />);
+    fireEvent.click(getByText("plain"));
+    expect(queryByText("reloads on")).toBeNull();
+  });
+
   // --- Keyboard nav + a11y ---
 
   it("j then Enter expands the second row", () => {

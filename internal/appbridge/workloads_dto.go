@@ -44,6 +44,15 @@ type WorkloadMetricsResultDTO struct {
 	Usage  map[string]WorkloadUsageDTO `json:"usage"` // keyed "<kind>/<ns>/<name>"
 }
 
+// ReloadTargetsDTO declares the ConfigMaps/Secrets a workload reloads on via
+// Stakater Reloader annotations. Slices are always non-nil ([] not null) for
+// clean JSON. Auto is the reload-on-any-mounted mode.
+type ReloadTargetsDTO struct {
+	Auto       bool     `json:"auto"`
+	ConfigMaps []string `json:"configMaps"`
+	Secrets    []string `json:"secrets"`
+}
+
 type WorkloadDTO struct {
 	Kind      string               `json:"kind"`
 	Namespace string               `json:"namespace"`
@@ -64,6 +73,9 @@ type WorkloadDTO struct {
 	Stale              bool  `json:"stale,omitempty"`
 	Generation         int64 `json:"generation,omitempty"`
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+	// Reloader is the forward "reloads on" declaration; nil when the workload
+	// carries no Reloader annotation.
+	Reloader *ReloadTargetsDTO `json:"reloader,omitempty"`
 }
 
 type WorkloadsResultDTO struct {

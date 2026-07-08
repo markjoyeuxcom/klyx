@@ -96,10 +96,23 @@ type ExternalSecretsCapability struct {
 	Healthy bool
 }
 
+// ReloaderCapability models Stakater Reloader. Unlike every other capability,
+// Reloader serves NO CRD/API group - it is just a controller Deployment that
+// watches ConfigMap/Secret annotations - so presence is detected by the
+// controller workload (label app.kubernetes.io/name=reloader), not discovery.
+// Its value is context: it tells the inspector whether a workload's reload
+// annotations actually have an operator behind them.
+type ReloaderCapability struct {
+	Base
+	Present bool
+	Healthy bool
+}
+
 // Set is the full per-cluster capability snapshot handed to the view layer.
 type Set struct {
 	GitOps          GitOpsCapability
 	Network         NetworkCapability
 	CertManager     CertManagerCapability
 	ExternalSecrets ExternalSecretsCapability
+	Reloader        ReloaderCapability
 }
