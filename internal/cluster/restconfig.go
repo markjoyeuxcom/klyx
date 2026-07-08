@@ -19,6 +19,14 @@ import (
 func RESTConfig(cc config.ClusterConfig) (*rest.Config, error) {
 	execenv.ApplyDesktopToolPath()
 
+	// Fail closed on an empty context: an empty CurrentContext override lets
+	// client-go silently fall back to the kubeconfig's current-context, which
+	// could be the wrong (or a protected prd) cluster. This matches the empty-
+	// context refusal the day-2 kubectl verbs already enforce.
+	if cc.Context == "" {
+		return nil, fmt.Errorf("cluster %q has no kubeconfig context", cc.Name)
+	}
+
 	kubeconfigPath := cc.Kubeconfig
 	loadingRules := kubeconfigLoadingRules(kubeconfigPath)
 	overrides := &clientcmd.ConfigOverrides{CurrentContext: cc.Context}

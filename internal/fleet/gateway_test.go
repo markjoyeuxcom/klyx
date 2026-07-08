@@ -150,6 +150,98 @@ func TestListGatewaysServedFlag(t *testing.T) {
 	}
 }
 
+// hrBackends builds an HTTPRoute with an arbitrary ordered list of backendRefs,
+// each a {kind, name} pair, so a route can mix non-Service and Service kinds.
+func hrBackends(name, ns, gwName, gwNS string, backends []map[string]interface{}) *unstructured.Unstructured {
+	refs := make([]interface{}, 0, len(backends))
+	for _, b := range backends {
+		ref := map[string]interface{}{"name": b["name"], "port": int64(80), "weight": int64(100)}
+		if k, ok := b["kind"]; ok {
+			ref["kind"] = k
+		}
+		refs = append(refs, ref)
+	}
+	return &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "gateway.networking.k8s.io/v1", "kind": "HTTPRoute",
+		"metadata": map[string]interface{}{"name": name, "namespace": ns},
+		"spec": map[string]interface{}{
+			"parentRefs": []interface{}{map[string]interface{}{"name": gwName, "namespace": gwNS}},
+			"rules":      []interface{}{map[string]interface{}{"backendRefs": refs}},
+		},
+		"status": map[string]interface{}{"parents": []interface{}{map[string]interface{}{"parentRef": map[string]interface{}{"name": gwName, "namespace": gwNS}, "conditions": []interface{}{map[string]interface{}{"type": "Accepted", "status": "True"}, map[string]interface{}{"type": "ResolvedRefs", "status": "True"}}}}},
+	}}
+}
+
+// A route whose FIRST backendRef is a non-Service kind must still get a real pod
+// count for its real (later) Service backend - the count follows the first
+// resolved Service, not array position 0.
+func TestGetGatewayTopologyNonServiceFirstBackendCounts(t *testing.T) {
+	dyn := seedGW(t, map[schema.GroupVersionResource][]*unstructured.Unstructured{
+		gwGVR(): {gw("eg", "infra")},
+		hrGVR(): {hrBackends("share", "apps", "eg", "infra", []map[string]interface{}{
+			{"kind": "Backend", "name": "raw-backend"},
+			{"kind": "Service", "name": "api"},
+		})},
+	})
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: "api", Namespace: "apps"},
+		Spec:       corev1.ServiceSpec{Type: corev1.ServiceTypeClusterIP, Ports: []corev1.ServicePort{{Port: 80}}},
+	}
+	ready := true
+	pod := &corev1.ObjectReference{Kind: "Pod", Namespace: "apps", Name: "api-1", UID: "uid-api-1"}
+	eps := &discoveryv1.EndpointSlice{
+		ObjectMeta: metav1.ObjectMeta{Name: "api-abc", Namespace: "apps", Labels: map[string]string{"kubernetes.io/service-name": "api"}},
+		Endpoints:  []discoveryv1.Endpoint{{Conditions: discoveryv1.EndpointConditions{Ready: &ready}, TargetRef: pod}},
+	}
+	typed := typedfake.NewSimpleClientset(svc, eps)
+	c := NewClusterConn("x", typed, nil, dyn, nil, clock.Real{}, config.MetricsConfig{})
+
+	topo, err := c.GetGatewayTopology(context.Background(), "infra", "eg")
+	if err != nil {
+		t.Fatalf("topology: %v", err)
+	}
+	r := topo.Routes[0]
+	if r.Pods.Ready != 1 || r.Pods.Total != 1 || r.Pods.Unknown {
+		t.Fatalf("primary pod count must follow the Service backend, not array index 0: %+v", r.Pods)
+	}
+}
+
+// A dual-stack Service lists the same pods in its IPv4 and IPv6 EndpointSlices;
+// each pod must be counted once, not once per slice.
+func TestGetGatewayTopologyDualStackCountsPodsOnce(t *testing.T) {
+	dyn := seedGW(t, map[schema.GroupVersionResource][]*unstructured.Unstructured{
+		gwGVR(): {gw("eg", "infra")},
+		hrGVR(): {hr("share", "apps", "eg", "infra", "share-api")},
+	})
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: "share-api", Namespace: "apps"},
+		Spec:       corev1.ServiceSpec{Type: corev1.ServiceTypeClusterIP, Ports: []corev1.ServicePort{{Port: 80}}},
+	}
+	ready := true
+	pod := &corev1.ObjectReference{Kind: "Pod", Namespace: "apps", Name: "share-api-1", UID: "uid-share-1"}
+	v4 := &discoveryv1.EndpointSlice{
+		ObjectMeta:  metav1.ObjectMeta{Name: "share-api-v4", Namespace: "apps", Labels: map[string]string{"kubernetes.io/service-name": "share-api"}},
+		AddressType: discoveryv1.AddressTypeIPv4,
+		Endpoints:   []discoveryv1.Endpoint{{Conditions: discoveryv1.EndpointConditions{Ready: &ready}, TargetRef: pod}},
+	}
+	v6 := &discoveryv1.EndpointSlice{
+		ObjectMeta:  metav1.ObjectMeta{Name: "share-api-v6", Namespace: "apps", Labels: map[string]string{"kubernetes.io/service-name": "share-api"}},
+		AddressType: discoveryv1.AddressTypeIPv6,
+		Endpoints:   []discoveryv1.Endpoint{{Conditions: discoveryv1.EndpointConditions{Ready: &ready}, TargetRef: pod}},
+	}
+	typed := typedfake.NewSimpleClientset(svc, v4, v6)
+	c := NewClusterConn("x", typed, nil, dyn, nil, clock.Real{}, config.MetricsConfig{})
+
+	topo, err := c.GetGatewayTopology(context.Background(), "infra", "eg")
+	if err != nil {
+		t.Fatalf("topology: %v", err)
+	}
+	r := topo.Routes[0]
+	if r.Pods.Ready != 1 || r.Pods.Total != 1 {
+		t.Fatalf("dual-stack pod must be counted once across slices: %+v", r.Pods)
+	}
+}
+
 func TestGetGatewayTopologyGlobalService(t *testing.T) {
 	dyn := seedGW(t, map[schema.GroupVersionResource][]*unstructured.Unstructured{
 		gwGVR(): {gw("eg", "infra")},

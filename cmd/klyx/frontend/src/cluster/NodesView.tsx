@@ -102,6 +102,10 @@ function nodeMatchesQuery(n: NodeSummaryDTO, query: string, role: string | null)
 
 // --- Drain modal -----------------------------------------------------------------
 
+// Drain output is bounded in practice, but cap the buffer so a chatty drain
+// (many evicted pods) can never grow the DOM unbounded — mirrors LogsPane.
+const DRAIN_BUF_CAP = 2_000;
+
 interface LogChunkDTO {
   lines: string[];
   eof: boolean;
@@ -116,6 +120,7 @@ function DrainModal({ cluster, node, opts, onClose }: { cluster: string; node: s
   const streamIdRef = useRef<string>("");
   const offRef = useRef<(() => void) | null>(null);
   const bufRef = useRef<string[]>([]);
+  const droppedRef = useRef(false);
   const [version, setVersion] = useState(0);
   const scrollRef = useRef<HTMLDivElement>(null);
   const [follow, setFollow] = useState(true);
@@ -152,7 +157,12 @@ function DrainModal({ cluster, node, opts, onClose }: { cluster: string; node: s
         if (stale) return;
         const chunk = ev.data;
         if (chunk.lines && chunk.lines.length > 0) {
-          bufRef.current = [...bufRef.current, ...chunk.lines];
+          const buf = [...bufRef.current, ...chunk.lines];
+          if (buf.length > DRAIN_BUF_CAP) {
+            buf.splice(0, buf.length - DRAIN_BUF_CAP);
+            droppedRef.current = true;
+          }
+          bufRef.current = buf;
           setVersion((v) => v + 1);
         }
         if (chunk.eof) {
@@ -259,6 +269,11 @@ function DrainModal({ cluster, node, opts, onClose }: { cluster: string; node: s
         >
           {lines.length === 0 && status === "starting" && (
             <span style={{ color: "var(--color-text-tertiary)" }}>starting…</span>
+          )}
+          {droppedRef.current && (
+            <div style={{ color: "var(--color-text-tertiary)", fontStyle: "italic" }}>
+              · older lines dropped (buffer capped at {DRAIN_BUF_CAP})
+            </div>
           )}
           {lines.map((line, i) => (
             <div key={i} style={{ whiteSpace: "pre-wrap", wordBreak: "break-all" }}>{line || "​"}</div>

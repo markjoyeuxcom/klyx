@@ -43,6 +43,7 @@ function seedSummary(cluster: string, partial: Partial<OverviewSummary> = {}) {
       failedReleases: null,
       namespaces: null,
       flux: null,
+      fluxError: false,
       ...partial,
     },
   });
@@ -140,7 +141,7 @@ describe("Overview attention strip", () => {
   });
 
   it("shows — (muted) for all tiles while loading", () => {
-    useFleet.setState({ overviewSummary: { cluster: "homelab-nelli", loading: true, unhealthyWorkloads: null, podsNotReady: null, warningEvents: null, nodeProblems: null, helmAvailable: false, failedReleases: null, namespaces: null, flux: null } });
+    useFleet.setState({ overviewSummary: { cluster: "homelab-nelli", loading: true, unhealthyWorkloads: null, podsNotReady: null, warningEvents: null, nodeProblems: null, helmAvailable: false, failedReleases: null, namespaces: null, flux: null, fluxError: false } });
     const { getAllByText } = render(<Overview c={dto} />);
     // During loading, all tiles show "—".
     const dashes = getAllByText("—");

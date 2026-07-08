@@ -49,6 +49,23 @@ func TestParseChainNodeACMEState(t *testing.T) {
 	}
 }
 
+func TestParseChainNodeMessageFallbackDistinctFromReason(t *testing.T) {
+	// An ACME node with no Ready condition falls back to status - reason and
+	// message must not collapse onto the same field.
+	u := &unstructured.Unstructured{Object: map[string]interface{}{
+		"kind":     "Challenge",
+		"metadata": map[string]interface{}{"name": "acme-demo-1-abc", "namespace": "payments"},
+		"status":   map[string]interface{}{"state": "pending", "reason": "DNS01", "message": "Waiting for DNS-01 propagation"},
+	}}
+	n := ParseChainNode(u)
+	if n.Reason != "DNS01" {
+		t.Fatalf("reason: %q", n.Reason)
+	}
+	if n.Message != "Waiting for DNS-01 propagation" {
+		t.Fatalf("message: %q", n.Message)
+	}
+}
+
 func TestParseChainNodeCertificateRequestCondition(t *testing.T) {
 	req := func(status, reason, message string) *unstructured.Unstructured {
 		return &unstructured.Unstructured{Object: map[string]interface{}{

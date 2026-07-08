@@ -48,8 +48,9 @@ type DrainOptions struct {
 // the appbridge layer owns the lifecycle. The command pipes combined stdout+stderr
 // so the caller can stream output directly to the UI.
 //
-// Requires kubectl on PATH. Returns an error if LookPath fails so the caller can
-// surface "kubectl not found" before trying to start the process.
+// Resolves kubectl through the shared clibin stack (env override -> PATH ->
+// package-manager fallbacks), same as DescribeCmd. Returns an error if kubectl
+// can't be found so the caller can surface it before trying to start the process.
 //
 // An empty kubeContext is refused (same guard as ExecCommand/Helm*): kubectl
 // would silently fall back to the kubeconfig's current-context, and this is the
@@ -62,8 +63,9 @@ func (c *ClusterConn) DrainNodeCmd(nodeName string, opts DrainOptions) (*exec.Cm
 	if err := validateK8sName("node", nodeName); err != nil {
 		return nil, err
 	}
-	if _, err := exec.LookPath("kubectl"); err != nil {
-		return nil, fmt.Errorf("kubectl not found in PATH: %w", err)
+	bin, ok := kubectlBin.Resolve()
+	if !ok {
+		return nil, fmt.Errorf("kubectl not found: install kubectl or point KLYX_KUBECTL_PATH at the binary")
 	}
 	timeout := opts.TimeoutSeconds
 	if timeout <= 0 {
@@ -80,5 +82,5 @@ func (c *ClusterConn) DrainNodeCmd(nodeName string, opts DrainOptions) (*exec.Cm
 		args = append(args, "--force")
 	}
 	args = append(args, fmt.Sprintf("--timeout=%ds", timeout), "--", nodeName)
-	return exec.Command("kubectl", args...), nil //nolint:gosec // args are validated, not user-controlled raw input
+	return exec.Command(bin, args...), nil //nolint:gosec // argv validated above, binary resolved via clibin
 }

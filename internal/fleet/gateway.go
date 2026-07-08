@@ -222,7 +222,8 @@ func (c *ClusterConn) GetGatewayTopology(ctx context.Context, namespace, name st
 // resolveBackends fills a route's Services + primary Pods from the typed client,
 // appending warnings for anything it can't resolve.
 func (c *ClusterConn) resolveBackends(ctx context.Context, rn *gwapi.RouteNode, topo *gwapi.Topology) {
-	for i, b := range rn.Backends {
+	primaryCounted := false // the first RESOLVED Service backend owns the pod count, not array position 0
+	for _, b := range rn.Backends {
 		if b.Kind != "Service" {
 			topo.Warnings = append(topo.Warnings, fmt.Sprintf("route %s/%s: backend %q is a %s, not a Service", rn.Namespace, rn.Name, b.Name, b.Kind))
 			continue
@@ -242,8 +243,9 @@ func (c *ClusterConn) resolveBackends(ctx context.Context, rn *gwapi.RouteNode, 
 			sn.Port = svc.Spec.Ports[0].Port
 		}
 		rn.Services = append(rn.Services, sn)
-		if i == 0 {
+		if !primaryCounted {
 			rn.Pods = c.podCount(ctx, b.Namespace, b.Name, topo, rn)
+			primaryCounted = true
 		}
 	}
 	if len(rn.Backends) > 1 {
@@ -257,9 +259,25 @@ func (c *ClusterConn) podCount(ctx context.Context, ns, svc string, topo *gwapi.
 		topo.Warnings = append(topo.Warnings, fmt.Sprintf("route %s/%s: EndpointSlices unavailable for %s", rn.Namespace, rn.Name, svc))
 		return gwapi.PodCount{Unknown: true}
 	}
+	// Dedup by TargetRef across slices: a dual-stack Service lists the same pods
+	// in its IPv4 and IPv6 slices, so counting every endpoint doubles the total.
+	// Endpoints without a TargetRef (rare, non-pod backends) can't be deduped, so
+	// they're counted individually via a synthetic key.
 	pc := gwapi.PodCount{}
+	seen := make(map[string]bool)
 	for i := range slices.Items {
-		for _, e := range slices.Items[i].Endpoints {
+		for j, e := range slices.Items[i].Endpoints {
+			key := fmt.Sprintf("slice%d/ep%d", i, j) // fallback: no TargetRef, treat as distinct
+			if e.TargetRef != nil {
+				key = string(e.TargetRef.UID)
+				if key == "" {
+					key = e.TargetRef.Namespace + "/" + e.TargetRef.Name
+				}
+			}
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
 			pc.Total++
 			if e.Conditions.Ready != nil && *e.Conditions.Ready {
 				pc.Ready++

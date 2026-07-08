@@ -454,7 +454,7 @@ function RowSummary({ r, open, kbSelected, onClick }: { r: FluxResourceDTO; open
         color: "var(--color-text-primary)",
         background: kbSelected || open ? "var(--color-background-secondary)" : "transparent",
         boxShadow: kbSelected ? "inset 2px 0 0 var(--bench-selection-edge, var(--color-text-info))" : undefined,
-        ...staleStyle(r.stale),
+        ...staleStyle(!r.suspended && r.stale),
       }}
     >
       <span style={{ alignSelf: "stretch", background: isBad ? "var(--color-text-danger)" : isReconciling ? "var(--color-text-info)" : r.suspended ? "var(--color-text-warning)" : "transparent" }} />
@@ -470,7 +470,7 @@ function RowSummary({ r, open, kbSelected, onClick }: { r: FluxResourceDTO; open
       <div style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--color-text-secondary)", ...ellipsis }} title={r.revision}>{shortRev(r.revision) || "—"}</div>
       <div style={{ color: "var(--color-text-tertiary)", fontSize: 11, ...ellipsis }}>{ago(r.readySinceSeconds) || "—"}</div>
       <div className={!r.stale && r.ready === "Failed" ? "klyx-danger-prefix" : undefined} style={{ ...ellipsis, color, fontFamily: "var(--font-mono)", fontSize: 11, fontWeight: !r.stale && r.ready === "Failed" ? 700 : undefined }}>
-        {r.stale ? <SyncingChip generation={r.generation} observedGeneration={r.observedGeneration} /> : statusText(r)}
+        {r.suspended ? statusText(r) : r.stale ? <SyncingChip generation={r.generation} observedGeneration={r.observedGeneration} /> : statusText(r)}
       </div>
     </button>
   );

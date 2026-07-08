@@ -20,6 +20,10 @@ export async function closeExternalSecrets(cluster: string): Promise<void> {
   try {
     await ExternalSecretsService.Close(cluster);
   } finally {
-    useFleet.getState().clearExternalSecrets();
+    // A delayed close must not clobber a freshly-opened cluster's slice: only
+    // clear when the slice still names the cluster being closed.
+    if (useFleet.getState().externalsecrets.cluster === cluster) {
+      useFleet.getState().clearExternalSecrets();
+    }
   }
 }

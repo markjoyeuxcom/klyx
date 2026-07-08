@@ -35,6 +35,22 @@ func TestRESTConfigErrorsOnMissingContext(t *testing.T) {
 	}
 }
 
+func TestRESTConfigFailsClosedOnEmptyContext(t *testing.T) {
+	// An empty context must be refused before building the config, never fall
+	// back to the kubeconfig's current-context (possibly a protected cluster).
+	cc := config.ClusterConfig{
+		Name:       "plt-sea-prd-we-aks-01",
+		Kubeconfig: filepath.Join("testdata", "kubeconfig.yaml"),
+	}
+	_, err := RESTConfig(cc)
+	if err == nil {
+		t.Fatal("expected error for empty context")
+	}
+	if !strings.Contains(err.Error(), "no kubeconfig context") {
+		t.Fatalf("want no-context error, got %v", err)
+	}
+}
+
 func TestRESTConfigMergesKUBECONFIGPathList(t *testing.T) {
 	dir := t.TempDir()
 	first := filepath.Join(dir, "one.yaml")

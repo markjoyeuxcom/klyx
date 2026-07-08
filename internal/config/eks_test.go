@@ -19,6 +19,9 @@ func TestParseEKSContextRejectsNonEKS(t *testing.T) {
 		"arn:aws:iam::934692410245:role/admin",
 		"arn:aws:eks:us-east-1:934692410245:nodegroup/eks-tooling/ng/abc",
 		"arn:aws:eks:us-east-1:934692410245:cluster/",
+		"arn:aws:eks:not-a-region:934692410245:cluster/eks-tooling", // malformed region
+		"arn:aws:eks:us-east-1:12345:cluster/eks-tooling",           // short account
+		"arn:aws:eks:us-east-1:934692410245:cluster/foo:bar",        // extra ':' in resource
 	} {
 		if got, ok := ParseEKSContext(ctx); ok {
 			t.Fatalf("%q parsed unexpectedly as %+v", ctx, got)

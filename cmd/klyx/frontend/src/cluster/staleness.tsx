@@ -25,7 +25,7 @@ export function SyncingChip({ generation, observedGeneration }: { generation?: n
       style={{
         display: "inline-block",
         padding: "1px 7px",
-        borderRadius: "var(--border-radius-sm)",
+        borderRadius: "var(--radius-sm)",
         border: "0.5px solid var(--color-border-tertiary)",
         background: "var(--color-background-secondary)",
         color: "var(--color-text-tertiary)",

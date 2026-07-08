@@ -18,6 +18,7 @@ type fakeArgoConn struct {
 	appSets  []argo.ApplicationSet
 	listErr  error
 	calls    []string
+	syncOpts []argo.SyncOptions // full options captured per SyncArgoApp call
 }
 
 func (f *fakeArgoConn) ListArgoApps(context.Context) ([]argo.App, error) {
@@ -35,6 +36,7 @@ func (f *fakeArgoConn) RefreshArgoApp(_ context.Context, ns, name string) error 
 }
 func (f *fakeArgoConn) SyncArgoApp(_ context.Context, ns, name string, opts argo.SyncOptions) error {
 	f.calls = append(f.calls, "sync:"+ns+"/"+name+"@"+opts.Revision)
+	f.syncOpts = append(f.syncOpts, opts)
 	return nil
 }
 
@@ -128,5 +130,78 @@ func TestRefreshAndSync(t *testing.T) {
 	miss := NewArgoService(func(string) (ArgoConn, bool) { return nil, false })
 	if r := miss.RefreshApp("nope", "ns", "n"); r.OK {
 		t.Fatal("cluster miss must fail")
+	}
+}
+
+// TestSyncApp_ProtectedGrant asserts SyncApp consumes the typed-confirmation
+// grant on a protected cluster exactly like every other destructive verb: an
+// unarmed real sync is refused, an armed one passes exactly once (one-shot),
+// and a dry-run mutates nothing so it never touches (or needs) the grant.
+func TestSyncApp_ProtectedGrant(t *testing.T) {
+	now := time.Now()
+	g := newTestGuard("prd-cluster", &now)
+	SetProtectGuard(g)
+	t.Cleanup(func() { SetProtectGuard(nil) })
+
+	conn := &fakeArgoConn{}
+	s := NewArgoService(func(string) (ArgoConn, bool) { return conn, true })
+
+	// Unarmed real sync (prune is a real mutation): refused before the conn.
+	if r := s.SyncApp("prd-cluster", "argocd", "app", ArgoSyncOptionsDTO{Prune: true}); r.OK || r.Error == "" {
+		t.Fatalf("unarmed sync on protected cluster must refuse, got %+v", r)
+	}
+	if len(conn.calls) != 0 {
+		t.Fatalf("refused sync still reached the conn: %v", conn.calls)
+	}
+
+	// Armed: passes exactly once.
+	if err := g.Arm("prd-cluster", "prd-cluster"); err != nil {
+		t.Fatalf("arm: %v", err)
+	}
+	if r := s.SyncApp("prd-cluster", "argocd", "app", ArgoSyncOptionsDTO{Prune: true}); !r.OK {
+		t.Fatalf("armed sync must pass the gate, got %+v", r)
+	}
+	// One-shot: the grant was consumed, the next call refuses again.
+	if r := s.SyncApp("prd-cluster", "argocd", "app", ArgoSyncOptionsDTO{Prune: true}); r.OK {
+		t.Fatal("second sync must be refused (one-shot grant)")
+	}
+	if len(conn.calls) != 1 {
+		t.Fatalf("exactly one sync should have reached the conn, got %v", conn.calls)
+	}
+
+	// Dry-run mutates nothing: it succeeds without an arm and without consuming
+	// any grant.
+	if r := s.SyncApp("prd-cluster", "argocd", "app", ArgoSyncOptionsDTO{DryRun: true}); !r.OK {
+		t.Fatalf("dry-run must succeed without a grant, got %+v", r)
+	}
+	if err := g.Arm("prd-cluster", "prd-cluster"); err != nil {
+		t.Fatalf("arm after dry-run: %v", err)
+	}
+	// The dry-run left the freshly-armed grant untouched, so a real sync passes.
+	if r := s.SyncApp("prd-cluster", "argocd", "app", ArgoSyncOptionsDTO{Prune: true}); !r.OK {
+		t.Fatalf("dry-run must not consume the grant, got %+v", r)
+	}
+}
+
+// TestSyncApp_OptionsThread asserts the prune/force/replace flags thread through
+// toArgoSyncOptions to the conn, and default false when the modal omits them.
+func TestSyncApp_OptionsThread(t *testing.T) {
+	conn := &fakeArgoConn{}
+	s := NewArgoService(func(string) (ArgoConn, bool) { return conn, true })
+
+	if r := s.SyncApp("c", "argocd", "app", ArgoSyncOptionsDTO{Prune: true, Force: true, Replace: true}); !r.OK {
+		t.Fatalf("sync: %+v", r)
+	}
+	if r := s.SyncApp("c", "argocd", "app", ArgoSyncOptionsDTO{}); !r.OK {
+		t.Fatalf("sync (defaults): %+v", r)
+	}
+	if len(conn.syncOpts) != 2 {
+		t.Fatalf("want 2 captured sync options, got %d", len(conn.syncOpts))
+	}
+	if got := conn.syncOpts[0]; !got.Prune || !got.Force || !got.Replace {
+		t.Fatalf("flags must thread through: %+v", got)
+	}
+	if got := conn.syncOpts[1]; got.Prune || got.Force || got.Replace {
+		t.Fatalf("omitted flags must default false: %+v", got)
 	}
 }

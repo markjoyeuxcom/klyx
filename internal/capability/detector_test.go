@@ -2,6 +2,7 @@ package capability
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -9,6 +10,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	discoveryfake "k8s.io/client-go/discovery/fake"
 	"k8s.io/client-go/kubernetes/fake"
+	clienttesting "k8s.io/client-go/testing"
 )
 
 func newFake(groups []*metav1.APIResourceList, objs ...runtime.Object) *fake.Clientset {
@@ -142,6 +144,34 @@ func TestDetectExternalSecretsHealthy(t *testing.T) {
 	}
 	if !set.ExternalSecrets.Present || !set.ExternalSecrets.Healthy {
 		t.Fatalf("want present+healthy, got %+v", set.ExternalSecrets)
+	}
+}
+
+// TestDetectDiscoveryError proves the error-honesty branch: when ServerGroups()
+// fails, every capability reads Absent with the discovery failure reason -- a
+// discovery-degraded cluster must never render as "nothing installed".
+func TestDetectDiscoveryError(t *testing.T) {
+	cs := newFake(nil)
+	cs.Discovery().(*discoveryfake.FakeDiscovery).PrependReactor("get", "group",
+		func(clienttesting.Action) (bool, runtime.Object, error) {
+			return true, nil, errors.New("discovery unreachable")
+		})
+
+	set := NewDetector(cs).Detect(context.Background())
+
+	caps := map[string]Base{
+		"GitOps":          set.GitOps.Base,
+		"Network":         set.Network.Base,
+		"CertManager":     set.CertManager.Base,
+		"ExternalSecrets": set.ExternalSecrets.Base,
+	}
+	for name, b := range caps {
+		if b.Tier != Absent {
+			t.Errorf("%s: want Absent on discovery error, got %v", name, b.Tier)
+		}
+		if b.Reason == "" {
+			t.Errorf("%s: want a failure reason on discovery error, got empty", name)
+		}
 	}
 }
 
