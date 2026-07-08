@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -131,5 +132,82 @@ func TestRBACDanglingFacts(t *testing.T) {
 	// A non-RBAC kind is never touched.
 	if f := c.rbacDanglingFacts(context.Background(), "", "configmaps", "ns", rbBad); f != nil {
 		t.Fatalf("non-RBAC kind must be ignored: %+v", f)
+	}
+}
+
+func deploy(ns, name string, ann map[string]string, spec corev1.PodSpec) *appsv1.Deployment {
+	return &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name, Annotations: ann},
+		Spec:       appsv1.DeploymentSpec{Template: corev1.PodTemplateSpec{Spec: spec}},
+	}
+}
+
+func TestReloaderConsumerRefs(t *testing.T) {
+	// Explicit annotation lists this ConfigMap by name (comma-separated).
+	explicit := deploy("app", "api", map[string]string{
+		"configmap.reloader.stakater.com/reload": "other-cm,app-config",
+	}, corev1.PodSpec{})
+	// Auto mode + the ConfigMap is mounted as a volume -> reloads.
+	autoMounted := deploy("app", "web", map[string]string{
+		"reloader.stakater.com/auto": "true",
+	}, corev1.PodSpec{Volumes: []corev1.Volume{{
+		Name:         "cfg",
+		VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{LocalObjectReference: corev1.LocalObjectReference{Name: "app-config"}}},
+	}}})
+	// Auto mode but does NOT mount this ConfigMap -> must not match.
+	autoUnrelated := deploy("app", "worker", map[string]string{
+		"reloader.stakater.com/auto": "true",
+	}, corev1.PodSpec{Volumes: []corev1.Volume{{
+		Name:         "cfg",
+		VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{LocalObjectReference: corev1.LocalObjectReference{Name: "different-cm"}}},
+	}}})
+	// No Reloader annotation, even though it mounts the ConfigMap -> must not match.
+	plain := deploy("app", "legacy", nil, corev1.PodSpec{Volumes: []corev1.Volume{{
+		Name:         "cfg",
+		VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{LocalObjectReference: corev1.LocalObjectReference{Name: "app-config"}}},
+	}}})
+	c := &ClusterConn{typed: fake.NewSimpleClientset(explicit, autoMounted, autoUnrelated, plain)}
+
+	refs := c.reloaderConsumerRefs(context.Background(), "app", "app-config", "ConfigMap")
+	if !hasRef(refs, "Deployment", "api", "reloads") {
+		t.Errorf("explicit reload annotation must match, got %+v", refs)
+	}
+	if !hasRef(refs, "Deployment", "web", "reloads") {
+		t.Errorf("auto + mounted must match, got %+v", refs)
+	}
+	if hasRef(refs, "Deployment", "worker", "reloads") {
+		t.Error("auto without mounting this ConfigMap must not match")
+	}
+	if hasRef(refs, "Deployment", "legacy", "reloads") {
+		t.Error("mounting without a Reloader annotation must not match")
+	}
+	if len(refs) != 2 {
+		t.Fatalf("want exactly api + web, got %+v", refs)
+	}
+}
+
+func TestReloaderConsumerRefsSecretEnvFrom(t *testing.T) {
+	// Auto mode + the Secret is consumed via envFrom -> reloads.
+	autoEnv := deploy("app", "api", map[string]string{
+		"reloader.stakater.com/auto": "true",
+	}, corev1.PodSpec{Containers: []corev1.Container{{
+		Name:    "api",
+		EnvFrom: []corev1.EnvFromSource{{SecretRef: &corev1.SecretEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: "app-secret"}}}},
+	}}})
+	// The ConfigMap explicit key must NOT match a Secret lookup (wrong annotation key).
+	wrongKind := deploy("app", "web", map[string]string{
+		"configmap.reloader.stakater.com/reload": "app-secret",
+	}, corev1.PodSpec{})
+	c := &ClusterConn{typed: fake.NewSimpleClientset(autoEnv, wrongKind)}
+
+	refs := c.reloaderConsumerRefs(context.Background(), "app", "app-secret", "Secret")
+	if !hasRef(refs, "Deployment", "api", "reloads") {
+		t.Errorf("auto + envFrom secret must match, got %+v", refs)
+	}
+	if hasRef(refs, "Deployment", "web", "reloads") {
+		t.Error("the configmap reload key must not match a Secret lookup")
+	}
+	if len(refs) != 1 {
+		t.Fatalf("want exactly api, got %+v", refs)
 	}
 }

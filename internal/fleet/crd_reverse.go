@@ -2,7 +2,9 @@ package fleet
 
 import (
 	"context"
+	"strings"
 
+	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -161,4 +163,104 @@ func (c *ClusterConn) serviceAccountBindingRefs(ctx context.Context, ns, name st
 		}
 	}
 	return out
+}
+
+// reloaderConsumerRefs answers "if I change this ConfigMap/Secret, what restarts"
+// for clusters running Stakater Reloader: it finds the Deployments, StatefulSets,
+// and DaemonSets in ns that reload on this object. Two Reloader modes are honored:
+//   - explicit: the workload's configmap|secret.reloader.stakater.com/reload
+//     annotation lists this object's name (comma-separated).
+//   - auto: reloader.stakater.com/auto="true" reloads on ANY mounted CM/Secret, so
+//     the workload matches when its pod template mounts this object (reloaderPodMounts).
+//
+// kind is "ConfigMap" or "Secret". Capped, namespace-scoped lists; nil on error.
+func (c *ClusterConn) reloaderConsumerRefs(ctx context.Context, ns, name, kind string) []crd.RelatedRef {
+	if c.typed == nil {
+		return nil
+	}
+	explicitKey := "configmap.reloader.stakater.com/reload"
+	if kind == "Secret" {
+		explicitKey = "secret.reloader.stakater.com/reload"
+	}
+	reloadsOn := func(ann map[string]string, tmpl corev1.PodSpec) bool {
+		if v := ann[explicitKey]; v != "" {
+			for _, n := range strings.Split(v, ",") {
+				if strings.TrimSpace(n) == name {
+					return true
+				}
+			}
+		}
+		return ann["reloader.stakater.com/auto"] == "true" && reloaderPodMounts(tmpl, kind, name)
+	}
+	var out []crd.RelatedRef
+	if deps, err := c.typed.AppsV1().Deployments(ns).List(ctx, metav1.ListOptions{Limit: reverseLookupCap}); err == nil && deps != nil {
+		for i := range deps.Items {
+			if reloadsOn(deps.Items[i].Annotations, deps.Items[i].Spec.Template.Spec) {
+				out = append(out, resourceRef("Deployment", ns, deps.Items[i].Name, "apps", "v1", "deployments", "Namespaced", "reloads"))
+			}
+		}
+	}
+	if sts, err := c.typed.AppsV1().StatefulSets(ns).List(ctx, metav1.ListOptions{Limit: reverseLookupCap}); err == nil && sts != nil {
+		for i := range sts.Items {
+			if reloadsOn(sts.Items[i].Annotations, sts.Items[i].Spec.Template.Spec) {
+				out = append(out, resourceRef("StatefulSet", ns, sts.Items[i].Name, "apps", "v1", "statefulsets", "Namespaced", "reloads"))
+			}
+		}
+	}
+	if ds, err := c.typed.AppsV1().DaemonSets(ns).List(ctx, metav1.ListOptions{Limit: reverseLookupCap}); err == nil && ds != nil {
+		for i := range ds.Items {
+			if reloadsOn(ds.Items[i].Annotations, ds.Items[i].Spec.Template.Spec) {
+				out = append(out, resourceRef("DaemonSet", ns, ds.Items[i].Name, "apps", "v1", "daemonsets", "Namespaced", "reloads"))
+			}
+		}
+	}
+	return out
+}
+
+// reloaderPodMounts reports whether a pod template references the named
+// ConfigMap/Secret through the surfaces Reloader's auto mode watches: a volume
+// (incl. a projected source), an envFrom, or a valueFrom key ref.
+func reloaderPodMounts(spec corev1.PodSpec, kind, name string) bool {
+	for _, v := range spec.Volumes {
+		if kind == "ConfigMap" && v.ConfigMap != nil && v.ConfigMap.Name == name {
+			return true
+		}
+		if kind == "Secret" && v.Secret != nil && v.Secret.SecretName == name {
+			return true
+		}
+		if v.Projected != nil {
+			for _, s := range v.Projected.Sources {
+				if kind == "ConfigMap" && s.ConfigMap != nil && s.ConfigMap.Name == name {
+					return true
+				}
+				if kind == "Secret" && s.Secret != nil && s.Secret.Name == name {
+					return true
+				}
+			}
+		}
+	}
+	containers := append(append([]corev1.Container{}, spec.InitContainers...), spec.Containers...)
+	for i := range containers {
+		ct := &containers[i]
+		for _, ef := range ct.EnvFrom {
+			if kind == "ConfigMap" && ef.ConfigMapRef != nil && ef.ConfigMapRef.Name == name {
+				return true
+			}
+			if kind == "Secret" && ef.SecretRef != nil && ef.SecretRef.Name == name {
+				return true
+			}
+		}
+		for _, e := range ct.Env {
+			if e.ValueFrom == nil {
+				continue
+			}
+			if kind == "ConfigMap" && e.ValueFrom.ConfigMapKeyRef != nil && e.ValueFrom.ConfigMapKeyRef.Name == name {
+				return true
+			}
+			if kind == "Secret" && e.ValueFrom.SecretKeyRef != nil && e.ValueFrom.SecretKeyRef.Name == name {
+				return true
+			}
+		}
+	}
+	return false
 }

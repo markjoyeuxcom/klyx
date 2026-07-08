@@ -1291,6 +1291,14 @@ func (c *ClusterConn) relatedRefs(ctx context.Context, group, version, plural, n
 		for _, ref := range c.serviceAccountBindingRefs(ctx, ns, name) {
 			add(ref)
 		}
+	case group == "" && version == "v1" && plural == "configmaps":
+		for _, ref := range c.reloaderConsumerRefs(ctx, ns, name, "ConfigMap") {
+			add(ref)
+		}
+	case group == "" && version == "v1" && plural == "secrets":
+		for _, ref := range c.reloaderConsumerRefs(ctx, ns, name, "Secret") {
+			add(ref)
+		}
 	case group == "rbac.authorization.k8s.io" && plural == "rolebindings":
 		if roleName := nestedString(u.Object, "roleRef", "name"); roleName != "" {
 			if nestedString(u.Object, "roleRef", "kind") == "ClusterRole" {
