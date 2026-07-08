@@ -86,7 +86,8 @@ type Pending = PendingRestart | PendingScale | PendingScaleInput | PendingDelete
 export function WorkloadsView({ cluster }: { cluster: string }) {
   const wl = useFleet((s) => s.workloads);
   const isProtected = useFleet((s) => s.clusters.find((c) => c.name === cluster)?.protected ?? false);
-  const reloaderDetected = useFleet((s) => s.clusters.find((c) => c.name === cluster)?.reloaderPresent ?? false);
+  const reloaderPresent = useFleet((s) => s.clusters.find((c) => c.name === cluster)?.reloaderPresent ?? false);
+  const reloaderHealthy = useFleet((s) => s.clusters.find((c) => c.name === cluster)?.reloaderHealthy ?? false);
   const [pending, setPending] = useState<Pending | null>(null);
   // Selection is tracked by stable key (kind/namespace/name), never by array
   // index — live emits re-rank the rows, and an index-bound selection silently
@@ -431,7 +432,8 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
           onClose={() => setSelectedKey(null)}
           expanded={selectedExpanded}
           isProtected={isProtected}
-          reloaderDetected={reloaderDetected}
+          reloaderPresent={reloaderPresent}
+          reloaderHealthy={reloaderHealthy}
           pending={pending}
           onLogs={(w) => setLogsTarget({ namespace: w.namespace, name: w.name, kind: w.kind as WorkloadKind })}
           onRestart={(w) => setPending({ kind: "restart", w })}
@@ -569,7 +571,8 @@ function WorkloadContextPanel({
   expanded,
   onClose,
   isProtected,
-  reloaderDetected,
+  reloaderPresent,
+  reloaderHealthy,
   pending,
   onLogs,
   onRestart,
@@ -586,7 +589,8 @@ function WorkloadContextPanel({
   expanded: boolean;
   onClose: () => void;
   isProtected: boolean;
-  reloaderDetected: boolean;
+  reloaderPresent: boolean;
+  reloaderHealthy: boolean;
   pending: Pending | null;
   onLogs: (w: WorkloadDTO) => void;
   onRestart: (w: WorkloadDTO) => void;
@@ -714,12 +718,15 @@ function WorkloadContextPanel({
               <span title="reloader.stakater.com/auto: reloads on any mounted ConfigMap/Secret" style={{ fontFamily: "var(--font-mono)", fontSize: 9, textTransform: "uppercase", letterSpacing: 0.5, padding: "1px 5px", borderRadius: 3, color: "var(--color-text-info)", boxShadow: "inset 0 0 0 1px var(--color-border-info)", background: "var(--color-background-info)" }}>auto</span>
             )}
           </div>
-          {/* Honesty: reload annotations declare intent; if the operator is not
-              detected on this cluster they are inert. */}
-          {!reloaderDetected && (
+          {/* Honesty: reload annotations declare intent; they are inert unless the
+              Reloader operator is present AND healthy. A present-but-Degraded
+              controller (crashlooping, 0 ready) fires no reloads either. */}
+          {!(reloaderPresent && reloaderHealthy) && (
             <div style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, color: "var(--color-text-warning)", overflowWrap: "anywhere" }}>
               <IconAlertTriangle size={12} stroke={1.5} />
-              Reloader operator not detected on this cluster — these annotations may be inert.
+              {reloaderPresent
+                ? "Reloader operator is present but not ready — reloads may not fire until it recovers."
+                : "Reloader operator not detected on this cluster — these annotations may be inert."}
             </div>
           )}
           <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>

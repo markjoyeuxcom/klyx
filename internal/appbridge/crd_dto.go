@@ -73,14 +73,16 @@ type RelatedRefDTO struct {
 
 // FactDTO is one salient summary value for the inspector's Summary tab - the
 // data path surfaced as a readable fact instead of hiding in the YAML tab.
-// Kind "well" renders as an inset counter well, "row" as a labeled row; Group
-// is an optional section header ("" = headline facts).
+// Kind "well" renders as an inset counter well, "row" as a labeled row, "meter"
+// as a used/total bar (Pct drives the fill); Group is an optional section header
+// ("" = headline facts).
 type FactDTO struct {
-	Group string `json:"group"`
-	Label string `json:"label"`
-	Value string `json:"value"`
-	Tone  string `json:"tone"`
-	Kind  string `json:"kind"`
+	Group string  `json:"group"`
+	Label string  `json:"label"`
+	Value string  `json:"value"`
+	Tone  string  `json:"tone"`
+	Kind  string  `json:"kind"`
+	Pct   float64 `json:"pct,omitempty"`
 }
 
 // InstanceDetailDTO is the full per-instance detail.

@@ -209,14 +209,27 @@ describe("WorkloadsView", () => {
     expect(getByText(/annotations may be inert/)).toBeTruthy();
   });
 
-  it("does not warn when the Reloader operator is detected on the cluster", () => {
-    const c: ClusterDTO = { name: "homelab-nelli", state: "connected", reason: "", nodesReady: 1, nodesTotal: 1, pods: 1, version: "v1.30", gitopsTier: "Absent", gitopsReason: "", networkTier: "Absent", networkReason: "", env: "", region: "", provider: "", group: "", ageSeconds: 1, reloaderPresent: true };
+  it("does not warn when the Reloader operator is present AND healthy", () => {
+    const c: ClusterDTO = { name: "homelab-nelli", state: "connected", reason: "", nodesReady: 1, nodesTotal: 1, pods: 1, version: "v1.30", gitopsTier: "Absent", gitopsReason: "", networkTier: "Absent", networkReason: "", env: "", region: "", provider: "", group: "", ageSeconds: 1, reloaderPresent: true, reloaderHealthy: true };
     useFleet.setState({ clusters: [c] });
     const w: WorkloadDTO = { ...healthy, name: "api", namespace: "app", reloader: { auto: false, configMaps: ["only-this"], secrets: [] } };
     seed([w]);
     const { getByText, queryByText } = render(<WorkloadsView cluster="homelab-nelli" />);
     fireEvent.click(getByText("api"));
     expect(getByText("reloads on")).toBeTruthy();
+    expect(queryByText(/annotations may be inert/)).toBeNull();
+    expect(queryByText(/reloads may not fire/)).toBeNull();
+  });
+
+  it("warns 'present but not ready' when the operator is detected but Degraded", () => {
+    // present but unhealthy (crashlooping controller) -> annotations are still inert.
+    const c: ClusterDTO = { name: "homelab-nelli", state: "connected", reason: "", nodesReady: 1, nodesTotal: 1, pods: 1, version: "v1.30", gitopsTier: "Absent", gitopsReason: "", networkTier: "Absent", networkReason: "", env: "", region: "", provider: "", group: "", ageSeconds: 1, reloaderPresent: true, reloaderHealthy: false };
+    useFleet.setState({ clusters: [c] });
+    const w: WorkloadDTO = { ...healthy, name: "api", namespace: "app", reloader: { auto: true, configMaps: ["cfg"], secrets: [] } };
+    seed([w]);
+    const { getByText, queryByText } = render(<WorkloadsView cluster="homelab-nelli" />);
+    fireEvent.click(getByText("api"));
+    expect(getByText(/reloads may not fire/)).toBeTruthy();
     expect(queryByText(/annotations may be inert/)).toBeNull();
   });
 
