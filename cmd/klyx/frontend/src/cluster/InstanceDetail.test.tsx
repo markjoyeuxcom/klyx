@@ -776,3 +776,36 @@ describe("InstanceDetail — HPA scaling", () => {
     expect(queryByText(/min \d+ \/ max \d+/)).toBeNull();
   });
 });
+
+describe("InstanceDetail facts (the data path)", () => {
+  it("renders per-kind facts in the summary, not metadata-only", () => {
+    const httpRoute: InstanceDetailDTO = {
+      kind: "HTTPRoute", namespace: "ollama-prod", name: "ollama", created: "", labels: {},
+      // Health lives in status.parents[].conditions - carried with a scope so the
+      // verdict picks it up and two parents never collide.
+      conditions: [{ type: "Accepted", status: "True", reason: "Accepted", message: "", scope: "parent envoy-gateway-system/eg" }],
+      events: [], yaml: "kind: HTTPRoute\n",
+      facts: [
+        { group: "Routing", label: "hostnames", value: "ollama.example.com", tone: "", kind: "row" },
+        { group: "Routing", label: "rules", value: "1", tone: "", kind: "well" },
+        { group: "Routing", label: "backends", value: "ollama:80 (w100)", tone: "", kind: "row" },
+      ],
+    };
+    seed({ detail: httpRoute });
+    const { getByText } = render(<InstanceDetail cluster="x" resource={resource} instance={instance} />);
+    // Facts render (previously the summary showed only labels/annotations).
+    expect(getByText("ollama.example.com")).toBeTruthy();
+    expect(getByText("ollama:80 (w100)")).toBeTruthy();
+    // The scoped Accepted condition drives an honest verdict headline + scope chip.
+    expect(getByText(/Accepted True/)).toBeTruthy();
+    expect(getByText("parent envoy-gateway-system/eg")).toBeTruthy();
+  });
+
+  it("renders nothing extra for a kind with no facts (graceful degrade)", () => {
+    // The default Certificate detail has no facts; summary still renders.
+    seed();
+    const { getByText, queryByText } = render(<InstanceDetail cluster="x" resource={resource} instance={instance} />);
+    expect(getByText("Labels")).toBeTruthy();
+    expect(queryByText("Routing")).toBeNull();
+  });
+});

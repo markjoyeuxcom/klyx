@@ -71,6 +71,18 @@ type RelatedRefDTO struct {
 	Relation  string `json:"relation"`
 }
 
+// FactDTO is one salient summary value for the inspector's Summary tab - the
+// data path surfaced as a readable fact instead of hiding in the YAML tab.
+// Kind "well" renders as an inset counter well, "row" as a labeled row; Group
+// is an optional section header ("" = headline facts).
+type FactDTO struct {
+	Group string `json:"group"`
+	Label string `json:"label"`
+	Value string `json:"value"`
+	Tone  string `json:"tone"`
+	Kind  string `json:"kind"`
+}
+
 // InstanceDetailDTO is the full per-instance detail.
 type InstanceDetailDTO struct {
 	Kind        string            `json:"kind"`
@@ -91,6 +103,9 @@ type InstanceDetailDTO struct {
 	HPAScaling *HPAScalingDTO `json:"hpaScaling,omitempty"`
 	// Related is populated for objects with useful direct relationships.
 	Related []RelatedRefDTO `json:"related,omitempty"`
+	// Facts are per-kind salient summary values (the data path) for kinds with a
+	// registered builder; empty for kinds without one.
+	Facts []FactDTO `json:"facts,omitempty"`
 }
 
 // RevealResultDTO is returned by RevealSecretKey. On success Value is the

@@ -131,6 +131,27 @@ export function InspectorFacts({ facts }: {
   );
 }
 
+// InspectorKV — labeled prose rows for facts that are lists or free text
+// (hostnames, backends, provisioner). Numbers get physical form via
+// InspectorFacts; prose stays in kv rows. The shared row primitive every kind
+// reuses, so a new kind's facts never need a bespoke React section.
+export function InspectorKV({ rows }: {
+  rows: ReadonlyArray<{ label: string; value: string; tone?: Tone } | null | false>;
+}) {
+  const cells = rows.filter((r): r is { label: string; value: string; tone?: Tone } => Boolean(r));
+  if (cells.length === 0) return null;
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+      {cells.map((r, i) => (
+        <div key={`${r.label}-${i}`} style={{ display: "flex", gap: 8, alignItems: "baseline", fontSize: 11, minWidth: 0 }}>
+          <span style={{ fontSize: 9, letterSpacing: "0.08em", textTransform: "uppercase", fontWeight: 600, color: "var(--color-text-tertiary)", flexShrink: 0, minWidth: 92 }}>{r.label}</span>
+          <span style={{ fontFamily: "var(--font-mono)", color: r.tone ? toneColor[r.tone] : "var(--color-text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={r.value}>{r.value}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 // InspectorIdle — the inspector well when nothing is selected. The panel is
 // ALWAYS present (mockup rule: the board is list + inspector, permanently),
 // so selecting a row never reflows the list. Idle it stays honest: the
@@ -246,10 +267,17 @@ export function InspectorConditions({ conditions, colorOf }: { conditions: Condi
   const dotColor = colorOf ?? ((c: ConditionDTO) => conditionColor(c.status, c.type));
   return (
     <>
-      {conditions.map((c) => (
-        <div key={c.type} style={{ display: "flex", gap: 8, alignItems: "baseline", fontSize: 11, padding: "1px 0" }}>
+      {conditions.map((c, i) => (
+        <div key={`${c.scope ?? ""}/${c.type}/${i}`} style={{ display: "flex", gap: 8, alignItems: "baseline", fontSize: 11, padding: "1px 0" }}>
           <span style={{ width: 7, height: 7, borderRadius: "50%", background: dotColor(c), display: "inline-block", flexShrink: 0, alignSelf: "center" }} />
           <span style={{ fontWeight: 500, flexShrink: 0, whiteSpace: "nowrap" }}>{c.type}</span>
+          {/* Scope attributes a nested condition to its sub-object (Gateway API
+              parent/listener) so two "Accepted" blocks are distinguishable. */}
+          {c.scope && (
+            <span style={{ flexShrink: 0, fontSize: 9, color: "var(--color-text-tertiary)", background: "var(--color-background-tertiary, var(--color-background-secondary))", padding: "0 5px", borderRadius: 3, fontFamily: "var(--font-mono)" }}>
+              {c.scope}
+            </span>
+          )}
           {/* The status value itself, not just its dot encoding - "Ready False"
               must be readable, colour stays the severity channel. */}
           {c.status && (

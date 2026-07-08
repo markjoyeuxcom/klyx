@@ -98,6 +98,10 @@ type ConditionDTO struct {
 	Status  string `json:"status"`
 	Reason  string `json:"reason"`
 	Message string `json:"message"`
+	// Scope attributes a nested per-sub-object condition (e.g. "parent envoy-gw/eg",
+	// "listener https"); "" for a standard status.conditions[] entry. Populated by
+	// the generic inspector for Gateway API kinds; empty everywhere else.
+	Scope string `json:"scope,omitempty"`
 }
 
 type InventoryEntryDTO struct {

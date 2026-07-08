@@ -1217,12 +1217,15 @@ func (c *ClusterConn) GetInstanceDetail(ctx context.Context, group, version, plu
 		Created:        u.GetCreationTimestamp().Time,
 		Labels:         u.GetLabels(),
 		Annotations:    u.GetAnnotations(),
-		Conditions:     crd.ParseConditions(u.Object),
+		Conditions:     crd.ParseConditionsDeep(group, plural, u.Object),
 		YAML:           y,
 		SecretKeys:     secretKeys,
 		ServiceBacking: serviceBacking,
 		HPAScaling:     hpaScaling,
 		Related:        c.relatedRefs(ctx, group, version, plural, ns, name, u),
+		// Facts are built from obj (masked for Secrets), so no secret value can
+		// reach a fact even via a future buggy builder.
+		Facts: crd.BuildFacts(group, plural, &unstructured.Unstructured{Object: obj}),
 	}
 	d.Events = c.instanceEvents(ctx, string(u.GetUID()))
 	return d, nil

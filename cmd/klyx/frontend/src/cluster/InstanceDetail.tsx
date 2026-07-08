@@ -1,16 +1,59 @@
 import { useEffect, useRef, useState } from "react";
-import { useFleet, ResourceRef, InstanceRef, InstanceDetailDTO, SecretKeyDTO, ServiceBackingDTO, HPAScalingDTO, RelatedRefDTO, EventDTO } from "../store/fleet";
+import { useFleet, ResourceRef, InstanceRef, InstanceDetailDTO, SecretKeyDTO, ServiceBackingDTO, HPAScalingDTO, RelatedRefDTO, EventDTO, FactDTO } from "../store/fleet";
 import { getInstanceDetail, revealSecretKey, copyText, dryRunInstanceYAML, applyInstanceYAML, ActionResult } from "../bridge/crd";
 import { armProtected } from "../bridge/configsvc";
 import { openPodDetail } from "../bridge/pods";
 import { ForwardPopover } from "./ForwardPopover";
-import { InspectorStatus, conditionColor, InspectorConditions, InspectorEvents, InspectorSection, InspectorTabButton, MetadataChips, inspectorStateBox } from "./ResourceInspector";
-import { actionBtn, ellipsis } from "../chrome/primitives";
+import { InspectorStatus, conditionColor, InspectorConditions, InspectorEvents, InspectorSection, InspectorTabButton, InspectorFacts, InspectorKV, MetadataChips, inspectorStateBox } from "./ResourceInspector";
+import { actionBtn, ellipsis, type Tone } from "../chrome/primitives";
 import { CopyButton } from "../chrome/CopyButton";
 import { DescribePane } from "../chrome/DescribePane";
 import { IconX } from "@tabler/icons-react";
 
 type DetailTab = "summary" | "related" | "events" | "yaml";
+
+const TONE_SET = new Set<string>(["success", "warning", "danger", "info", "muted", "neutral"]);
+function asTone(s: string): Tone | undefined {
+  return TONE_SET.has(s) ? (s as Tone) : undefined;
+}
+
+// FactsSummary renders a resource's salient facts (the data path) grouped by
+// section: wells (short scalars/counts) as counter wells, rows (lists/prose) as
+// labeled kv rows. Group "" is the headline block (no header). Every kind with a
+// registered backend fact builder renders here with zero bespoke code - the
+// generic path that replaces the old "labels/annotations only" summary.
+function FactsSummary({ facts }: { facts?: FactDTO[] }) {
+  if (!facts || facts.length === 0) return null;
+  const order: string[] = [];
+  const byGroup = new Map<string, FactDTO[]>();
+  for (const f of facts) {
+    if (!byGroup.has(f.group)) {
+      byGroup.set(f.group, []);
+      order.push(f.group);
+    }
+    byGroup.get(f.group)!.push(f);
+  }
+  return (
+    <>
+      {order.map((group) => {
+        const items = byGroup.get(group)!;
+        const wells = items.filter((f) => f.kind === "well").map((f) => ({ label: f.label, value: f.value, tone: asTone(f.tone) }));
+        const rows = items.filter((f) => f.kind !== "well").map((f) => ({ label: f.label, value: f.value, tone: asTone(f.tone) }));
+        const body = (
+          <div style={{ display: "flex", flexDirection: "column", gap: wells.length && rows.length ? 8 : 0 }}>
+            <InspectorFacts facts={wells} />
+            <InspectorKV rows={rows} />
+          </div>
+        );
+        return group === "" ? (
+          <div key="__headline" style={{ marginBottom: 8 }}>{body}</div>
+        ) : (
+          <InspectorSection key={group} title={group} collapsible>{body}</InspectorSection>
+        );
+      })}
+    </>
+  );
+}
 
 function age(created: string): string {
   if (!created) return "";
@@ -731,7 +774,7 @@ export function InstanceDetail({ cluster, resource, instance }: { cluster: strin
             // Verdict parity with the pod/workload panels: derive the headline
             // from the object's own conditions when it has any. No conditions
             // means no verdict - never a fabricated "healthy".
-            const primary = ["Ready", "Available", "Established", "Synced", "AbleToScale", "Progressing"]
+            const primary = ["Ready", "Available", "Established", "Synced", "Accepted", "Programmed", "AbleToScale", "Progressing"]
               .map((t) => d.conditions.find((c) => c.type === t))
               .find(Boolean) ?? d.conditions[0];
             if (!primary) return null;
@@ -749,6 +792,9 @@ export function InstanceDetail({ cluster, resource, instance }: { cluster: strin
           <div data-testid="instance-detail-scroll" style={{ flex: 1, minHeight: 0, overflowY: "auto", paddingRight: 4 }}>
             {tab === "summary" ? (
               <>
+                {/* The data path leads - the salient facts a platform engineer
+                    reads first - then metadata, typed sections, and conditions. */}
+                <FactsSummary facts={d.facts} />
                 <MetadataChips title="Labels" values={d.labels} />
                 <MetadataChips title="Annotations" values={d.annotations} defaultCollapsed />
 
