@@ -46,6 +46,11 @@ func ClusterConfigForContext(ctx string) ClusterConfig {
 		cc.Name = eks.Name
 		cc.Tags = tagsForEKS(eks, nil)
 	}
+	// Default a production-looking hot-added cluster to protected, and persist it
+	// so the protection survives restart and shows in Settings - never fail open
+	// on a prod context imported mid-session. IsProtected also infers at guard
+	// time, but recording it keeps disk and enforcement in agreement.
+	cc.Protected = cc.IsProtected()
 	return cc
 }
 

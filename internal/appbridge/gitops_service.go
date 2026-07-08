@@ -100,7 +100,7 @@ func (s *GitOpsService) Open(cluster string) {
 		conn.CloseGitOps()
 		return
 	}
-	go s.pushLoop(ctx, cluster, conn)
+	safeGo("gitops-push:"+cluster, func() { s.pushLoop(ctx, cluster, conn) })
 }
 
 func (s *GitOpsService) Close(cluster string) {
@@ -173,7 +173,18 @@ const actionTimeout = 30 * time.Second
 // (including SOPS decryption) and dry-runs it against the apiserver.
 const diffTimeout = 120 * time.Second
 
+// Reconcile, ReconcileWithSource and SetSuspend drive the Flux controllers on a
+// live cluster - day-2 mutations, not desired-state authoring - so on a
+// protected cluster they consume the typed-confirmation grant first, exactly
+// like ArgoService.SyncApp and every other destructive verb. The frontend
+// dialogs arm the grant on confirm; gating here keeps arm and check paired
+// one-to-one so a frontend bug (or a hostile webview call) can never fire a
+// Flux mutation on a protected cluster without the typed confirmation, and no
+// un-consumed grant can linger to authorize an unrelated later action.
 func (s *GitOpsService) Reconcile(cluster, kind, namespace, name string) ActionResultDTO {
+	if err := checkProtected(cluster); err != nil {
+		return ActionResultDTO{Error: err.Error()}
+	}
 	conn, ok := s.lookup(cluster)
 	if !ok {
 		return ActionResultDTO{Error: "cluster not connected: " + cluster}
@@ -187,6 +198,9 @@ func (s *GitOpsService) Reconcile(cluster, kind, namespace, name string) ActionR
 }
 
 func (s *GitOpsService) ReconcileWithSource(cluster, kind, namespace, name string) ActionResultDTO {
+	if err := checkProtected(cluster); err != nil {
+		return ActionResultDTO{Error: err.Error()}
+	}
 	conn, ok := s.lookup(cluster)
 	if !ok {
 		return ActionResultDTO{Error: "cluster not connected: " + cluster}
@@ -221,6 +235,9 @@ func (s *GitOpsService) FluxDiff(cluster, namespace, name, path string) FluxDiff
 }
 
 func (s *GitOpsService) SetSuspend(cluster, kind, namespace, name string, suspend bool) ActionResultDTO {
+	if err := checkProtected(cluster); err != nil {
+		return ActionResultDTO{Error: err.Error()}
+	}
 	conn, ok := s.lookup(cluster)
 	if !ok {
 		return ActionResultDTO{Error: "cluster not connected: " + cluster}

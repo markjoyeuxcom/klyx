@@ -53,3 +53,20 @@ func TestEffectiveTagsDerivesEKSWithoutOverwritingUserTags(t *testing.T) {
 		t.Fatalf("derived tags missing: %+v", got)
 	}
 }
+
+func TestClusterConfigForContextDefaultsProdProtected(t *testing.T) {
+	// A production-looking context is marked protected and recorded so it persists.
+	prod := ClusterConfigForContext("arn:aws:eks:eu-west-1:123456789012:cluster/eks-prd-we")
+	if !prod.Protected {
+		t.Fatalf("prod-named EKS context must default to protected: %+v", prod)
+	}
+	// A non-prod context stays unprotected.
+	dev := ClusterConfigForContext("arn:aws:eks:eu-west-1:123456789012:cluster/eks-dev-we")
+	if dev.Protected {
+		t.Fatalf("non-prod context must not be protected: %+v", dev)
+	}
+	// A plain (non-EKS) prod context too.
+	if plain := ClusterConfigForContext("prod-cluster"); !plain.Protected {
+		t.Fatalf("plain prod context must default to protected: %+v", plain)
+	}
+}

@@ -194,3 +194,44 @@ func TestKubeContextsMissingFileIsEmptyNotError(t *testing.T) {
 		t.Fatalf("missing kubeconfig: want nil/nil, got %v/%v", got, err)
 	}
 }
+
+func TestAppendClustersPersistsProtectedForProd(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "fleet.yaml")
+	// A prod-looking context persists protected: true; a dev one does not.
+	if err := AppendClusters(path, []string{"prod-eu", "dev-eu"}); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	s := string(mustRead(t, path))
+	if !strings.Contains(s, "- name: prod-eu\n    context: prod-eu\n    protected: true") {
+		t.Fatalf("prod cluster must persist protected: true:\n%s", s)
+	}
+	if strings.Contains(s, "- name: dev-eu\n    context: dev-eu\n    protected: true") {
+		t.Fatalf("dev cluster must not be marked protected:\n%s", s)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("result must load: %v", err)
+	}
+	for _, c := range cfg.Clusters {
+		switch c.Name {
+		case "prod-eu":
+			if !c.Protected {
+				t.Fatalf("prod-eu must reload protected: %+v", c)
+			}
+		case "dev-eu":
+			if c.Protected {
+				t.Fatalf("dev-eu must reload unprotected: %+v", c)
+			}
+		}
+	}
+}
+
+func mustRead(t *testing.T, path string) []byte {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %q: %v", path, err)
+	}
+	return b
+}

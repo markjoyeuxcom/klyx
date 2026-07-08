@@ -127,6 +127,12 @@ func (s *LogsService) streamCount() int {
 	return len(s.streams)
 }
 
+func (s *LogsService) drainingCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.draining)
+}
+
 // --- tests ---
 
 func TestOpenLogStream_ClusterMiss(t *testing.T) {

@@ -190,7 +190,13 @@ func (r *liveRegistry) open(
 		report()
 	}
 
-	go func() {
+	// Panic net: compute() parses live cluster objects, so a malformed object must
+	// not crash the whole app. On a recovered panic the onPanic callback reports
+	// not-live and stops the watch, so the lens degrades honestly instead of
+	// leaving the last live:true edge latched over a dead compute loop (an
+	// error-honesty violation). fn's own defers (close(sub.done), ticker stop)
+	// still run first, so stopSub never hangs.
+	safeGoOnPanic("livelist:"+key, func() {
 		t := time.NewTicker(interval)
 		defer t.Stop()
 		defer close(sub.done)
@@ -228,7 +234,10 @@ func (r *liveRegistry) open(
 				}
 			}
 		}
-	}()
+	}, func(any) {
+		emitLive(false)
+		sub.stopWatch()
+	})
 }
 
 // stopSub signals a sub's loop to exit and waits briefly for it to drain. The

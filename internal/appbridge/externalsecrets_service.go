@@ -77,7 +77,7 @@ func (s *ExternalSecretsService) Open(cluster string) {
 		conn.CloseExternalSecrets()
 		return
 	}
-	go s.pushLoop(ctx, cluster, conn)
+	safeGo("externalsecrets-push:"+cluster, func() { s.pushLoop(ctx, cluster, conn) })
 }
 
 func (s *ExternalSecretsService) Close(cluster string) {

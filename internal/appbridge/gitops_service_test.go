@@ -30,10 +30,12 @@ type fakeGitOpsConn struct {
 
 	sourceURL string
 
-	reconcileErr error
-	suspendErr   error
-	lastSuspend  bool
-	withSource   bool
+	reconcileErr   error
+	suspendErr     error
+	lastSuspend    bool
+	withSource     bool
+	reconcileCalls int // Reconcile + ReconcileWithSource invocations, for gate tests
+	suspendCalls   int
 }
 
 func (f *fakeGitOpsConn) OpenGitOps()  { f.mu.Lock(); f.opened++; f.mu.Unlock() }
@@ -68,17 +70,22 @@ func (f *fakeGitOpsConn) FluxDiffKustomization(ctx context.Context, ns, name, pa
 }
 
 func (f *fakeGitOpsConn) Reconcile(ctx context.Context, kind, ns, name string) error {
+	f.mu.Lock()
+	f.reconcileCalls++
+	f.mu.Unlock()
 	return f.reconcileErr
 }
 func (f *fakeGitOpsConn) ReconcileWithSource(ctx context.Context, kind, ns, name string) error {
 	f.mu.Lock()
 	f.withSource = true
+	f.reconcileCalls++
 	f.mu.Unlock()
 	return f.reconcileErr
 }
 func (f *fakeGitOpsConn) SetSuspend(ctx context.Context, kind, ns, name string, suspend bool) error {
 	f.mu.Lock()
 	f.lastSuspend = suspend
+	f.suspendCalls++
 	f.mu.Unlock()
 	return f.suspendErr
 }
@@ -252,5 +259,75 @@ func TestActionUnknownClusterIsError(t *testing.T) {
 	svc := NewGitOpsService(func(string) (GitOpsConn, bool) { return nil, false }, &fakeEmitter{}, time.Now, time.Second)
 	if r := svc.Reconcile("ghost", "Kustomization", "n", "x"); r.OK || r.Error == "" {
 		t.Fatalf("want failure for unknown cluster, got %+v", r)
+	}
+}
+
+// TestProtectGuard_GatesFluxVerbs is the regression for the P0: Reconcile,
+// ReconcileWithSource and SetSuspend must consume the typed-confirmation grant
+// on a protected cluster exactly like every other destructive verb, so a
+// frontend bug or a hostile webview call can never drive a Flux mutation on a
+// protected cluster without the confirmation - and no un-consumed grant can
+// linger to authorize an unrelated later action. Before the fix these three
+// verbs never called checkProtected at all.
+func TestProtectGuard_GatesFluxVerbs(t *testing.T) {
+	now := time.Now()
+	g := newTestGuard("prd-cluster", &now)
+	SetProtectGuard(g)
+	t.Cleanup(func() { SetProtectGuard(nil) })
+
+	conn := &fakeGitOpsConn{}
+	svc := NewGitOpsService(func(string) (GitOpsConn, bool) { return conn, true }, &fakeEmitter{}, time.Now, time.Second)
+
+	callCounts := func() (reconcile, suspend int) {
+		conn.mu.Lock()
+		defer conn.mu.Unlock()
+		return conn.reconcileCalls, conn.suspendCalls
+	}
+
+	// Each verb: unarmed refuses without reaching the conn; armed passes exactly
+	// once; the grant is one-shot.
+	verbs := []struct {
+		name string
+		call func() ActionResultDTO
+	}{
+		{"Reconcile", func() ActionResultDTO { return svc.Reconcile("prd-cluster", "Kustomization", "flux-system", "app") }},
+		{"ReconcileWithSource", func() ActionResultDTO {
+			return svc.ReconcileWithSource("prd-cluster", "Kustomization", "flux-system", "app")
+		}},
+		{"SetSuspend", func() ActionResultDTO {
+			return svc.SetSuspend("prd-cluster", "Kustomization", "flux-system", "app", true)
+		}},
+	}
+
+	for _, v := range verbs {
+		beforeR, beforeS := callCounts()
+
+		// Unarmed: refused, and the mutation never reaches the conn.
+		if r := v.call(); r.OK || r.Error == "" {
+			t.Fatalf("%s: unarmed on protected cluster must refuse, got %+v", v.name, r)
+		}
+		if afterR, afterS := callCounts(); afterR != beforeR || afterS != beforeS {
+			t.Fatalf("%s: refused verb still reached the conn (reconcile %d->%d, suspend %d->%d)", v.name, beforeR, afterR, beforeS, afterS)
+		}
+
+		// Armed: passes exactly once.
+		if err := g.Arm("prd-cluster", "prd-cluster"); err != nil {
+			t.Fatalf("%s: arm: %v", v.name, err)
+		}
+		if r := v.call(); !r.OK {
+			t.Fatalf("%s: armed verb must pass the gate, got %+v", v.name, r)
+		}
+
+		// One-shot: the grant was consumed, the next call refuses again.
+		if r := v.call(); r.OK {
+			t.Fatalf("%s: second call must be refused (one-shot grant)", v.name)
+		}
+	}
+
+	// FluxDiff is dry-run and must stay ungated even on a protected cluster: with
+	// no grant armed it still runs (Available), rather than being refused.
+	conn.fluxAvailable = true
+	if dto := svc.FluxDiff("prd-cluster", "flux-system", "app", ""); !dto.Available {
+		t.Fatalf("FluxDiff must stay ungated on a protected cluster, got %+v", dto)
 	}
 }

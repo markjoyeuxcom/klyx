@@ -78,7 +78,7 @@ func (s *CertManagerService) Open(cluster string) {
 		conn.CloseCertManager()
 		return
 	}
-	go s.pushLoop(ctx, cluster, conn)
+	safeGo("certmanager-push:"+cluster, func() { s.pushLoop(ctx, cluster, conn) })
 }
 
 func (s *CertManagerService) Close(cluster string) {

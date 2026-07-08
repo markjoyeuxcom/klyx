@@ -53,6 +53,9 @@ func (s *FleetService) GetFleet() []ClusterDTO {
 // purpose: every exported method on a bound service lands in the JS binding
 // surface, and this is a Go lifecycle hook, not an RPC.
 func RunFleetPush(ctx context.Context, s *FleetService, em Emitter, interval time.Duration) {
+	// Panic net: GetFleet aggregates parsed state across every cluster; a panic
+	// here (started detached by main) would crash the whole app. Contain it.
+	defer recoverGuard("fleet-push", nil)
 	t := time.NewTicker(interval)
 	defer t.Stop()
 	for {

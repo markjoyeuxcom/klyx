@@ -396,7 +396,7 @@ function HelmDetailPanel({
           {/* Values section */}
           <InspectorSection title="Values">
             <div style={{ fontSize: 10, color: "var(--color-text-tertiary)", marginBottom: 6, fontFamily: "var(--font-sans, sans-serif)" }}>
-              values may contain sensitive data
+              secret-shaped values are masked; the source chart in Git holds the full set
             </div>
             {values === "" ? (
               <span style={{ color: "var(--color-text-tertiary)" }}>no user-supplied values</span>

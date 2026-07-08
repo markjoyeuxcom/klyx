@@ -173,7 +173,12 @@ func recentlyTerminated(pods []*corev1.Pod, now time.Time) bool {
 			if cs.LastTerminationState.Terminated != nil && within(cs.LastTerminationState.Terminated.FinishedAt) {
 				return true
 			}
-			if cs.State.Terminated != nil && within(cs.State.Terminated.FinishedAt) {
+			// The CURRENT terminated state counts only when it was a FAILURE. A
+			// normally-completed init container (Reason "Completed", ExitCode 0)
+			// stays in State.Terminated for the whole life of a Running pod, so
+			// counting it would mis-rank every freshly-rolled healthy pod as
+			// "Restarts" for an hour. A genuine restart is captured above.
+			if t := cs.State.Terminated; t != nil && t.ExitCode != 0 && within(t.FinishedAt) {
 				return true
 			}
 		}

@@ -486,3 +486,79 @@ func TestAggregate_NoGoroutineLeak(t *testing.T) {
 	}
 	t.Fatalf("goroutine leak: before=%d after=%d (delta=%d)", before, after, after-before)
 }
+
+// TestAggregate_EvictedByOpenLogStream_DrainsAndClosesDone is the regression for
+// the P1 log-stream leak: when a single-pod OpenLogStream evicts an aggregate as
+// the oldest stream, the aggregate is moved to s.draining. Its batcher's
+// deregister() must fall back to draining (like finish()) so the entry is removed
+// and its done channel closed. Before the fix, deregister() only looked in
+// s.streams, so an evicted aggregate leaked its draining entry for the process
+// lifetime and CloseAll blocked the full closeWaitTimeout on its never-closing
+// done channel.
+func TestAggregate_EvictedByOpenLogStream_DrainsAndClosesDone(t *testing.T) {
+	em := &captureEmitter{}
+	var mu sync.Mutex
+	var pipes []*io.PipeWriter
+	defer func() {
+		mu.Lock()
+		defer mu.Unlock()
+		for _, pw := range pipes {
+			pw.Close()
+		}
+	}()
+
+	// Blocking pipes so nothing self-terminates; only eviction/CloseAll ends a
+	// stream. The one aggConn serves both the aggregate open (WorkloadPods +
+	// PodLogStream) and the single-pod opens (PodLogStream).
+	conn := &aggConn{
+		pods: []string{"web-aaa"},
+		streamFor: func(string, int64) (io.ReadCloser, error) {
+			pr, pw := io.Pipe()
+			mu.Lock()
+			pipes = append(pipes, pw)
+			mu.Unlock()
+			return pr, nil
+		},
+	}
+	svc := NewLogsService(aggLookup(conn), em)
+
+	// Open the aggregate first so it is the oldest registry entry.
+	aggRes := svc.OpenWorkloadLogStream("c", "ns", "Deployment", "web", "app", 100)
+	if aggRes.StreamID == "" || aggRes.Error != "" {
+		t.Fatalf("aggregate open failed: %+v", aggRes)
+	}
+
+	// Fill to the cap with single-pod streams; the last open evicts the aggregate.
+	for i := 0; i < maxConcurrentLogStreams; i++ {
+		if res := svc.OpenLogStream("c", "ns", fmt.Sprintf("pod-%d", i), "app", false, 100); res.StreamID == "" {
+			t.Fatalf("single open %d failed: %+v", i, res)
+		}
+	}
+
+	// The aggregate must be gone from the live registry (evicted) ...
+	if !waitUntil(t, 2*time.Second, func() bool {
+		svc.mu.Lock()
+		defer svc.mu.Unlock()
+		_, live := svc.streams[aggRes.StreamID]
+		return !live
+	}) {
+		t.Fatal("aggregate was never evicted")
+	}
+	// ... and its draining entry must be cleaned up by deregister() (the fix).
+	// Before the fix this leaked forever.
+	if !waitUntil(t, 2*time.Second, func() bool { return svc.drainingCount() == 0 }) {
+		t.Fatalf("evicted aggregate leaked a draining entry: %d left", svc.drainingCount())
+	}
+
+	// And CloseAll must not stall on a never-closing done channel.
+	done := make(chan struct{})
+	go func() { svc.CloseAll(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("CloseAll blocked: evicted-aggregate done never closed")
+	}
+	if svc.streamCount() != 0 {
+		t.Fatalf("registry not drained after CloseAll: %d", svc.streamCount())
+	}
+}

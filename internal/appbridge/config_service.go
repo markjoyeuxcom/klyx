@@ -71,6 +71,22 @@ func NewConfigService(path string, cfg *config.Config, connect func(config.Clust
 	}
 }
 
+// IsProtected reports whether the named cluster is protected, consulting the
+// LIVE fleet (startup config plus this session's hot-added clusters) so a prd
+// context imported mid-session is gated immediately - not left unprotected until
+// a restart. This is the ProtectGuard's protection source; the guard closes over
+// it in main so hot-added clusters honor the typed-confirmation invariant. An
+// unknown name is treated as unprotected (the destructive verb will fail its
+// own connected-cluster check).
+func (s *ConfigService) IsProtected(cluster string) bool {
+	for _, c := range s.fleetClusters() {
+		if c.Name == cluster || c.Context == cluster {
+			return c.IsProtected()
+		}
+	}
+	return false
+}
+
 // fleetClusters returns the startup clusters plus this session's hot-added
 // ones - the live fleet as Settings should report it.
 func (s *ConfigService) fleetClusters() []config.ClusterConfig {
