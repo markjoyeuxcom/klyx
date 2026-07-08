@@ -1283,6 +1283,38 @@ func (c *ClusterConn) relatedRefs(ctx context.Context, group, version, plural, n
 		if pv := nestedString(u.Object, "spec", "volumeName"); pv != "" {
 			add(resourceRef("PersistentVolume", "", pv, "", "v1", "persistentvolumes", "Cluster", "bound volume"))
 		}
+		for _, ref := range c.pvcConsumerRefs(ctx, ns, name) {
+			add(ref)
+		}
+	case group == "" && version == "v1" && plural == "serviceaccounts":
+		for _, ref := range c.serviceAccountBindingRefs(ctx, ns, name) {
+			add(ref)
+		}
+	case group == "rbac.authorization.k8s.io" && plural == "rolebindings":
+		if roleName := nestedString(u.Object, "roleRef", "name"); roleName != "" {
+			if nestedString(u.Object, "roleRef", "kind") == "ClusterRole" {
+				add(resourceRef("ClusterRole", "", roleName, "rbac.authorization.k8s.io", "v1", "clusterroles", "Cluster", "grants role"))
+			} else {
+				add(resourceRef("Role", ns, roleName, "rbac.authorization.k8s.io", "v1", "roles", "Namespaced", "grants role"))
+			}
+		}
+	case group == "rbac.authorization.k8s.io" && plural == "clusterrolebindings":
+		if roleName := nestedString(u.Object, "roleRef", "name"); roleName != "" {
+			add(resourceRef("ClusterRole", "", roleName, "rbac.authorization.k8s.io", "v1", "clusterroles", "Cluster", "grants role"))
+		}
+	case group == "policy" && plural == "poddisruptionbudgets":
+		ml, _, _ := unstructured.NestedStringMap(u.Object, "spec", "selector", "matchLabels")
+		for _, ref := range c.pdbGuardedRefs(ctx, ns, ml) {
+			add(ref)
+		}
+	case group == "batch" && version == "v1" && plural == "jobs":
+		for _, ref := range c.ownerPodRefs(ctx, ns, string(u.GetUID()), "job pod") {
+			add(ref)
+		}
+	case group == "apps" && version == "v1" && plural == "replicasets":
+		for _, ref := range c.ownerPodRefs(ctx, ns, string(u.GetUID()), "replica pod") {
+			add(ref)
+		}
 	case group == "" && version == "v1" && plural == "persistentvolumes":
 		claimNS := nestedString(u.Object, "spec", "claimRef", "namespace")
 		claimName := nestedString(u.Object, "spec", "claimRef", "name")
