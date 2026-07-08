@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, fireEvent, act } from "@testing-library/react";
 import { WorkloadsView } from "./WorkloadsView";
 import { useFleet } from "../store/fleet";
-import type { WorkloadDTO } from "../store/fleet";
+import type { WorkloadDTO, ClusterDTO } from "../store/fleet";
 
 vi.mock("../bridge/workloads", () => ({
   listWorkloads: vi.fn().mockResolvedValue(undefined),
@@ -210,9 +210,8 @@ describe("WorkloadsView", () => {
   });
 
   it("does not warn when the Reloader operator is detected on the cluster", () => {
-    useFleet.setState((s) => ({
-      clusters: [{ name: "homelab-nelli", state: "connected", reason: "", nodesReady: 1, nodesTotal: 1, pods: 1, version: "v1.30", gitopsTier: "Absent", gitopsReason: "", networkTier: "Absent", networkReason: "", env: "", region: "", provider: "", group: "", ageSeconds: 1, reloaderPresent: true } as (typeof s.clusters)[number]],
-    }));
+    const c: ClusterDTO = { name: "homelab-nelli", state: "connected", reason: "", nodesReady: 1, nodesTotal: 1, pods: 1, version: "v1.30", gitopsTier: "Absent", gitopsReason: "", networkTier: "Absent", networkReason: "", env: "", region: "", provider: "", group: "", ageSeconds: 1, reloaderPresent: true };
+    useFleet.setState({ clusters: [c] });
     const w: WorkloadDTO = { ...healthy, name: "api", namespace: "app", reloader: { auto: false, configMaps: ["only-this"], secrets: [] } };
     seed([w]);
     const { getByText, queryByText } = render(<WorkloadsView cluster="homelab-nelli" />);

@@ -18,7 +18,9 @@ export interface ParsedLine {
 // ANSI stripping
 // ---------------------------------------------------------------------------
 
-// Matches ESC [ ... m colour sequences and ESC [ K (erase-to-EOL).
+// Matches ESC [ ... m colour sequences and ESC [ K (erase-to-EOL). The ESC
+// control char is intentional here - that is exactly what we strip.
+// eslint-disable-next-line no-control-regex
 const RE_ANSI = /\x1b\[[0-9;]*[mK]/g;
 
 export function stripAnsi(s: string): string {

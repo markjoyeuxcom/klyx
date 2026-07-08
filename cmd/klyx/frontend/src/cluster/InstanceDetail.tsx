@@ -511,7 +511,7 @@ function parsePercent(s: string): number | null {
 // HPAScalingSection renders the scaling summary for an autoscaling HPA:
 // replica line, scale-target line (with workloads lens link for
 // Deployment/StatefulSet), per-metric table, and last-scale age.
-function HPAScalingSection({ cluster, scaling }: { cluster: string; scaling: HPAScalingDTO }) {
+function HPAScalingSection({ scaling }: { cluster: string; scaling: HPAScalingDTO }) {
   const atMax = scaling.currentReplicas >= scaling.maxReplicas && scaling.desiredReplicas >= scaling.maxReplicas;
   const replicaMismatch = scaling.desiredReplicas !== scaling.currentReplicas;
 

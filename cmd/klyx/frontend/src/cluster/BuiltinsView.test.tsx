@@ -174,7 +174,7 @@ describe("BuiltinsView - category chips", () => {
 
 	  it("all chip restores all categories when category was set", () => {
 	    useFleet.setState({ crd: { ...useFleet.getState().crd, builtinCategory: "Config & Secrets" } });
-    const { getByText, queryByText: _ } = render(<BuiltinsView cluster="x" />);
+    const { getByText } = render(<BuiltinsView cluster="x" />);
     fireEvent.click(getByText("all"));
     // Re-render is synchronous via Zustand; re-query
     expect(useFleet.getState().crd.builtinCategory).toBeNull();

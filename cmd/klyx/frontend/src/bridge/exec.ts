@@ -48,7 +48,7 @@ export async function openExecTerminal(
   pod: string,
   container: string,
 ): Promise<void> {
-  let result: ActionResultDTO | null = null;
+  let result: ActionResultDTO | null;
   try {
     result = (await ExecService.OpenExecTerminal(cluster, ns, pod, container)) as ActionResultDTO;
   } catch {

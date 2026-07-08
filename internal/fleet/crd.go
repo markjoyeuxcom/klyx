@@ -23,9 +23,6 @@ import (
 	"github.com/moomora/klyx/internal/crd"
 )
 
-// serviceGVR is the GVR used to typed-get a core Service for backing detail.
-var serviceGVR = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "services"}
-
 // ListCRDs lists the cluster's CustomResourceDefinitions and parses them. A
 // single cheap dynamic list; no watch.
 func (c *ClusterConn) ListCRDs(ctx context.Context) ([]crd.Info, error) {

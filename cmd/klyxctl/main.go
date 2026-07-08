@@ -40,15 +40,16 @@ func main() {
 
 	snaps := reg.Snapshots()
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "CLUSTER\tSTATE\tNODES\tPODS\tGITOPS\tNETWORK\tREASON")
+	// Writes to a stdout-backed tabwriter; the errors are not actionable in a CLI.
+	_, _ = fmt.Fprintln(w, "CLUSTER\tSTATE\tNODES\tPODS\tGITOPS\tNETWORK\tREASON")
 	for _, s := range snaps {
-		fmt.Fprintf(w, "%s\t%s\t%d/%d\t%d\t%s\t%s\t%s\n",
+		_, _ = fmt.Fprintf(w, "%s\t%s\t%d/%d\t%d\t%s\t%s\t%s\n",
 			s.Name, s.State,
 			s.NodesReady, s.NodesTotal, s.Pods,
 			s.Capabilities.GitOps.Tier, s.Capabilities.Network.Tier,
 			s.Reason)
 	}
-	w.Flush()
+	_ = w.Flush()
 
 	sum := fleet.Summarize(snaps)
 	fmt.Printf("\nfleet: %d/%d answered, %d/%d nodes ready, %d pods, partial=%v\n",

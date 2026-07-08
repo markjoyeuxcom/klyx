@@ -18,8 +18,29 @@ permissions:
 env:
   NODE_VERSION: "24"
   WAILS_VERSION: "v3.0.0-alpha2.103"
+  GOLANGCI_VERSION: "v2.12.2"
 
 jobs:
+  lint:
+    name: golangci-lint
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      # internal/ and cmd/klyxctl/ do not import the Wails runtime, so this job
+      # needs no GTK/WebKit headers or frontend/dist stub (unlike the go job).
+      # cmd/klyx (the Wails main) is covered by go vet in the `go` job; config
+      # lives in .golangci.yml (high-signal set; ST*/QF* style checks off).
+      - name: golangci-lint
+        run: |
+          go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@${GOLANGCI_VERSION}
+          "$(go env GOPATH)/bin/golangci-lint" run ./internal/... ./cmd/klyxctl/... --timeout=5m
+
   go:
     name: go vet + test (-race)
     runs-on: ubuntu-24.04
@@ -108,6 +129,13 @@ jobs:
       - name: Typecheck
         working-directory: cmd/klyx/frontend
         run: npx tsc --noEmit
+
+      # eslint.config.js is a high-signal set (classic react-hooks rules; the
+      # React-Compiler-presumptive rules are off). Warnings (exhaustive-deps) are
+      # advisory; the step fails only on errors.
+      - name: Lint frontend
+        working-directory: cmd/klyx/frontend
+        run: npm run lint
 
       - name: Tests
         working-directory: cmd/klyx/frontend

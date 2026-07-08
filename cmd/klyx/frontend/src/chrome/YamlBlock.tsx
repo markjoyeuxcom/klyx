@@ -81,7 +81,7 @@ function LineView({ line, query, isCurrentLine }: { line: string; query: string;
         while (true) {
           const at = s.toLowerCase().indexOf(q);
           if (at < 0) {
-            parts.push(<span key={li++}>{s}</span>);
+            parts.push(<span key={li}>{s}</span>);
             break;
           }
           if (at > 0) parts.push(<span key={li++}>{s.slice(0, at)}</span>);
