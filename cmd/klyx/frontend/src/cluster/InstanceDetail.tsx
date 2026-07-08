@@ -4,7 +4,7 @@ import { getInstanceDetail, revealSecretKey, copyText, dryRunInstanceYAML, apply
 import { armProtected } from "../bridge/configsvc";
 import { openPodDetail } from "../bridge/pods";
 import { ForwardPopover } from "./ForwardPopover";
-import { InspectorStatus, conditionColor, InspectorConditions, InspectorEvents, InspectorSection, InspectorTabButton, InspectorFacts, InspectorKV, MetadataChips, inspectorStateBox } from "./ResourceInspector";
+import { InspectorStatus, conditionColor, InspectorConditions, InspectorEvents, InspectorSection, InspectorTabButton, InspectorFacts, InspectorKV, InspectorMeters, MetadataChips, inspectorStateBox } from "./ResourceInspector";
 import { actionBtn, ellipsis, type Tone } from "../chrome/primitives";
 import { CopyButton } from "../chrome/CopyButton";
 import { DescribePane } from "../chrome/DescribePane";
@@ -38,10 +38,13 @@ function FactsSummary({ facts }: { facts?: FactDTO[] }) {
       {order.map((group) => {
         const items = byGroup.get(group)!;
         const wells = items.filter((f) => f.kind === "well").map((f) => ({ label: f.label, value: f.value, tone: asTone(f.tone) }));
-        const rows = items.filter((f) => f.kind !== "well").map((f) => ({ label: f.label, value: f.value, tone: asTone(f.tone) }));
+        const meters = items.filter((f) => f.kind === "meter").map((f) => ({ label: f.label, value: f.value, pct: f.pct ?? 0, tone: asTone(f.tone) }));
+        const rows = items.filter((f) => f.kind !== "well" && f.kind !== "meter").map((f) => ({ label: f.label, value: f.value, tone: asTone(f.tone) }));
+        const blocks = [wells.length > 0, meters.length > 0, rows.length > 0].filter(Boolean).length;
         const body = (
-          <div style={{ display: "flex", flexDirection: "column", gap: wells.length && rows.length ? 8 : 0 }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: blocks > 1 ? 8 : 0 }}>
             <InspectorFacts facts={wells} />
+            <InspectorMeters meters={meters} />
             <InspectorKV rows={rows} />
           </div>
         );
@@ -508,7 +511,7 @@ function parsePercent(s: string): number | null {
 // HPAScalingSection renders the scaling summary for an autoscaling HPA:
 // replica line, scale-target line (with workloads lens link for
 // Deployment/StatefulSet), per-metric table, and last-scale age.
-function HPAScalingSection({ cluster, scaling }: { cluster: string; scaling: HPAScalingDTO }) {
+function HPAScalingSection({ scaling }: { cluster: string; scaling: HPAScalingDTO }) {
   const atMax = scaling.currentReplicas >= scaling.maxReplicas && scaling.desiredReplicas >= scaling.maxReplicas;
   const replicaMismatch = scaling.desiredReplicas !== scaling.currentReplicas;
 

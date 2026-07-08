@@ -98,6 +98,15 @@ describe("PodsView", () => {
     expect(getByText("CrashLoopBackOff")).toBeTruthy();
   });
 
+  it("shows a loud truncation banner only when the list was capped", () => {
+    seed([broken, healthy]);
+    const { queryByText, rerender } = render(<PodsView cluster="homelab" />);
+    expect(queryByText(/broken-first triage may miss a fault/)).toBeNull();
+    useFleet.setState((s) => ({ pods: { ...s.pods, truncated: true } }));
+    rerender(<PodsView cluster="homelab" />);
+    expect(queryByText(/broken-first triage may miss a fault/)).toBeTruthy();
+  });
+
   it("the broken filter switch hides healthy rows and carries the honest count", () => {
     seed([broken, healthy]);
     const { getByRole, getByText, queryByText } = render(<PodsView cluster="homelab" />);

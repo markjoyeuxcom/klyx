@@ -113,7 +113,14 @@ func resourceQuotaFacts(u *unstructured.Unstructured) []Fact {
 		facts = append(facts, row("Scopes", "scopes", strings.Join(scopes, ", "), ""))
 	}
 	for _, r := range rows {
-		facts = append(facts, row("Quota", r.res, r.value, r.tone))
+		// A computable ratio renders as a bar (glance) with the value text kept
+		// (precise reading); unparseable/zero-hard rows fall back to plain text so
+		// there is never a phantom 0%-width bar.
+		if r.hasP {
+			facts = append(facts, meter("Quota", r.res, r.value, r.pct, r.tone))
+		} else {
+			facts = append(facts, row("Quota", r.res, r.value, r.tone))
+		}
 	}
 	return facts
 }

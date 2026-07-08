@@ -3,7 +3,6 @@ package helmcli
 import (
 	"context"
 	"errors"
-	"fmt"
 	"os/exec"
 	"strings"
 	"testing"
@@ -444,7 +443,7 @@ func TestExecRunner_StderrInError(t *testing.T) {
 		t.Fatal("want error for unknown command")
 	}
 	// The error should not be a bare "exit status N" with no context.
-	if err.Error() == fmt.Sprintf("helm __no_such_command__: exit status 1") {
+	if err.Error() == "helm __no_such_command__: exit status 1" {
 		t.Logf("note: got bare exit status (acceptable if helm gave no stderr)")
 	}
 }

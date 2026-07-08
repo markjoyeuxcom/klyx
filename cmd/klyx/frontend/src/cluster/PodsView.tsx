@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from "react";
-import { IconTerminal2, IconExternalLink, IconCircleDot, IconChevronDown, IconX } from "@tabler/icons-react";
+import { IconTerminal2, IconExternalLink, IconCircleDot, IconChevronDown, IconX, IconAlertTriangle } from "@tabler/icons-react";
 import { useFleet } from "../store/fleet";
 import type { PodDetailDTO, PodSummaryDTO, ContainerSummaryDTO } from "../store/fleet";
 import { listPods, openLivePods, openPodDetail, deletePod } from "../bridge/pods";
@@ -283,6 +283,16 @@ export function PodsView({ cluster }: { cluster: string }) {
             <button onClick={onRefresh} style={btn}>refresh</button>
             <LiveIndicator live={pods.live} />
           </div>
+
+          {/* Truncation banner - LOUD, not a chip: broken-first ranking happens
+              after the list, so a truncated all-namespaces view can hide a broken
+              pod past the cap. Never imply the shown set is complete. */}
+          {pods.truncated && (
+            <div role="status" style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, padding: "7px 11px", border: "0.5px solid var(--color-border-warning)", background: "var(--color-background-warning)", borderRadius: 4, fontSize: 12, color: "var(--color-text-warning)", flexShrink: 0 }}>
+              <IconAlertTriangle size={14} stroke={1.5} />
+              <span>Showing the first 5000 pods — this list is incomplete, so broken-first triage may miss a fault. Scope by namespace for the full picture.</span>
+            </div>
+          )}
 
           {/* Bulk action bar - appears only while a selection exists */}
           {bulk.size > 0 && (

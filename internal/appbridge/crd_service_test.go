@@ -54,6 +54,32 @@ func (f *fakeCRDConn) RevealSecretKey(ctx context.Context, ns, name, key string)
 	return v, nil
 }
 
+func TestGetInstanceDetailCarriesMeterPct(t *testing.T) {
+	// Regression: the meter Fact's Pct must survive the crd.Fact -> appbridge
+	// FactDTO remap, or every quota bar renders at 0% fill next to correct text.
+	conn := &fakeCRDConn{detail: crd.InstanceDetail{
+		Facts: []crd.Fact{
+			{Group: "Quota", Label: "requests.cpu", Value: "3 / 4 (75%)", Tone: "warning", Kind: "meter", Pct: 75},
+			{Group: "Quota", Label: "scopes", Value: "NotTerminating", Kind: "row"},
+		},
+	}}
+	svc := NewCRDService(func(string) (CRDConn, bool) { return conn, true })
+
+	dto := svc.GetInstanceDetail("x", "", "v1", "resourcequotas", "team", "compute")
+	var meter *FactDTO
+	for i := range dto.Facts {
+		if dto.Facts[i].Kind == "meter" {
+			meter = &dto.Facts[i]
+		}
+	}
+	if meter == nil {
+		t.Fatalf("meter fact missing from DTO: %+v", dto.Facts)
+	}
+	if meter.Pct != 75 {
+		t.Fatalf("Pct dropped at the bridge boundary: got %v, want 75", meter.Pct)
+	}
+}
+
 func TestApplyResourceYAMLMapsToConn(t *testing.T) {
 	conn := &fakeCRDConn{}
 	svc := NewCRDService(func(string) (CRDConn, bool) { return conn, true })

@@ -83,8 +83,8 @@ func (f *fakeConn) SourceURL(ctx context.Context, kind, ns, name string) (string
 	return "", false
 }
 func (f *fakeConn) ListCRDs(ctx context.Context) ([]crd.Info, error) { return nil, nil }
-func (f *fakeConn) ListWorkloads(context.Context, string) ([]workloads.Workload, bool, error) {
-	return nil, false, nil
+func (f *fakeConn) ListWorkloads(context.Context, string) ([]workloads.Workload, bool, bool, error) {
+	return nil, false, false, nil
 }
 func (f *fakeConn) ListNodes(context.Context) ([]workloads.NodeSummary, error) {
 	return nil, nil
@@ -92,8 +92,8 @@ func (f *fakeConn) ListNodes(context.Context) ([]workloads.NodeSummary, error) {
 func (f *fakeConn) NodeDetail(context.Context, string) (NodeDetail, error) {
 	return NodeDetail{}, nil
 }
-func (f *fakeConn) ListPods(context.Context, string) ([]workloads.PodSummary, error) {
-	return nil, nil
+func (f *fakeConn) ListPods(context.Context, string) ([]workloads.PodSummary, bool, error) {
+	return nil, false, nil
 }
 func (f *fakeConn) DeletePod(context.Context, string, string) error { return nil }
 func (f *fakeConn) ListEvents(context.Context, string) ([]workloads.EventSummary, bool, error) {

@@ -14,7 +14,7 @@ const podsTimeout = 30 * time.Second
 // PodsConn is the per-cluster surface PodsService needs. No fleet import
 // in the interface itself — the lookup closure bridges to the real fleet.Conn.
 type PodsConn interface {
-	ListPods(ctx context.Context, namespace string) ([]workloads.PodSummary, error)
+	ListPods(ctx context.Context, namespace string) ([]workloads.PodSummary, bool, error)
 	PodDetail(ctx context.Context, namespace, name string) (fleet.PodDetail, error)
 	DeletePod(ctx context.Context, namespace, name string) error
 	WatchDirty(ctx context.Context, namespace string, kinds []string, onDirty func(), onLive func(bool)) (stop func(), err error)
@@ -54,10 +54,11 @@ func computePods(conn PodsConn, namespace string) (PodsResultDTO, bool) {
 	out := PodsResultDTO{Namespaces: []string{}, Pods: []PodSummaryDTO{}}
 	ctx, cancel := context.WithTimeout(context.Background(), podsTimeout)
 	defer cancel()
-	pods, err := conn.ListPods(ctx, namespace)
+	pods, truncated, err := conn.ListPods(ctx, namespace)
 	if err != nil {
 		return out, false
 	}
+	out.Truncated = truncated
 
 	nsSet := map[string]bool{}
 	for _, p := range pods {

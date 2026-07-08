@@ -36,6 +36,10 @@ type ClusterDTO struct {
 	ExternalSecretsReason  string `json:"externalSecretsReason"`
 	ExternalSecretsPresent bool   `json:"externalSecretsPresent"`
 	ExternalSecretsHealthy bool   `json:"externalSecretsHealthy"`
+	ReloaderTier           string `json:"reloaderTier"`
+	ReloaderReason         string `json:"reloaderReason"`
+	ReloaderPresent        bool   `json:"reloaderPresent"`
+	ReloaderHealthy        bool   `json:"reloaderHealthy"`
 	Env                    string `json:"env"`
 	Region                 string `json:"region"`
 	Provider               string `json:"provider"`
@@ -81,6 +85,10 @@ func ToDTO(s fleet.Snapshot, cc config.ClusterConfig, now time.Time) ClusterDTO 
 		ExternalSecretsReason:  s.Capabilities.ExternalSecrets.Reason,
 		ExternalSecretsPresent: s.Capabilities.ExternalSecrets.Present,
 		ExternalSecretsHealthy: s.Capabilities.ExternalSecrets.Healthy,
+		ReloaderTier:           s.Capabilities.Reloader.Tier.String(),
+		ReloaderReason:         s.Capabilities.Reloader.Reason,
+		ReloaderPresent:        s.Capabilities.Reloader.Present,
+		ReloaderHealthy:        s.Capabilities.Reloader.Healthy,
 		Env:                    firstNonEmpty(cc.Environment, tags["env"]),
 		Protected:              cc.Protected,
 		Region:                 tags["region"],

@@ -92,9 +92,9 @@ func AppendClusters(path string, contexts []string) error {
 		}
 	}
 	tmpPath := tmp.Name()
-	defer os.Remove(tmpPath)
+	defer func() { _ = os.Remove(tmpPath) }() // best-effort temp cleanup
 	if _, err := tmp.WriteString(candidate); err != nil {
-		tmp.Close()
+		_ = tmp.Close() // already returning the write error; close is cleanup
 		return fmt.Errorf("write temp config: %w", err)
 	}
 	if err := tmp.Close(); err != nil {

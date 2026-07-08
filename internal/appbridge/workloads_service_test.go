@@ -11,6 +11,7 @@ import (
 type fakeWLConn struct {
 	wl              []workloads.Workload
 	flux            bool
+	truncated       bool
 	rolloutErr      error
 	lastRestartKind string
 	scaleErr        error
@@ -18,8 +19,8 @@ type fakeWLConn struct {
 	lastScaleN      int32
 }
 
-func (f *fakeWLConn) ListWorkloads(context.Context, string) ([]workloads.Workload, bool, error) {
-	return f.wl, f.flux, nil
+func (f *fakeWLConn) ListWorkloads(context.Context, string) ([]workloads.Workload, bool, bool, error) {
+	return f.wl, f.flux, f.truncated, nil
 }
 
 func (f *fakeWLConn) WorkloadMetrics(context.Context, string) (map[string]workloads.Usage, workloads.UsageStatus) {
@@ -79,6 +80,17 @@ func TestListWorkloadsDTO(t *testing.T) {
 		scoped := s.ListWorkloads("c", "b")
 		if len(scoped.Namespaces) != 0 {
 			t.Fatalf("scoped namespaces should be empty, got %+v", scoped.Namespaces)
+		}
+	})
+	t.Run("truncated flag propagates", func(t *testing.T) {
+		conn := &fakeWLConn{truncated: true}
+		s := NewWorkloadsService(func(string) (WorkloadsConn, bool) { return conn, true }, nil)
+		if dto := s.ListWorkloads("c", ""); !dto.Truncated {
+			t.Fatalf("truncated must propagate, got %+v", dto)
+		}
+		conn.truncated = false
+		if dto := s.ListWorkloads("c", ""); dto.Truncated {
+			t.Fatal("non-truncated list must not set Truncated")
 		}
 	})
 }

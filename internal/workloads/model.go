@@ -55,4 +55,8 @@ type Workload struct {
 	// the same staleness language as Flux resources and Gateways.
 	Generation         int64
 	ObservedGeneration int64
+	// Reloader declares the ConfigMaps/Secrets this workload reloads on via
+	// Stakater Reloader annotations; nil when it carries none. Forward intent
+	// only - it does not prove the Reloader operator is installed.
+	Reloader *ReloadTargets
 }

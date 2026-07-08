@@ -55,7 +55,7 @@ func (s *WorkloadsService) RolloutRestart(cluster, kind, namespace, name string)
 const workloadsTimeout = 30 * time.Second
 
 type WorkloadsConn interface {
-	ListWorkloads(ctx context.Context, namespace string) ([]workloads.Workload, bool, error)
+	ListWorkloads(ctx context.Context, namespace string) ([]workloads.Workload, bool, bool, error)
 	WorkloadMetrics(ctx context.Context, namespace string) (map[string]workloads.Usage, workloads.UsageStatus)
 	RolloutRestart(ctx context.Context, kind, namespace, name string) error
 	ScaleWorkload(ctx context.Context, kind, namespace, name string, replicas int32) error
@@ -92,11 +92,12 @@ func computeWorkloads(conn WorkloadsConn, namespace string) (WorkloadsResultDTO,
 	out := WorkloadsResultDTO{Namespaces: []string{}, Workloads: []WorkloadDTO{}}
 	ctx, cancel := context.WithTimeout(context.Background(), workloadsTimeout)
 	defer cancel()
-	wl, fluxPresent, err := conn.ListWorkloads(ctx, namespace)
+	wl, fluxPresent, truncated, err := conn.ListWorkloads(ctx, namespace)
 	if err != nil {
 		return out, false
 	}
 	out.FluxPresent = fluxPresent
+	out.Truncated = truncated
 
 	nsSet := map[string]bool{}
 	for _, w := range wl {
@@ -166,6 +167,17 @@ func toWorkloadDTO(w workloads.Workload) WorkloadDTO {
 	d.Resources = WorkloadResourcesDTO{
 		CPU: ResourceCellDTO{Usage: w.Resources.CPU.Usage, Request: w.Resources.CPU.Request, Limit: w.Resources.CPU.Limit},
 		Mem: ResourceCellDTO{Usage: w.Resources.Mem.Usage, Request: w.Resources.Mem.Request, Limit: w.Resources.Mem.Limit},
+	}
+	if w.Reloader != nil {
+		// Default the slices to [] so the frontend never sees a null array.
+		cms, secs := w.Reloader.ConfigMaps, w.Reloader.Secrets
+		if cms == nil {
+			cms = []string{}
+		}
+		if secs == nil {
+			secs = []string{}
+		}
+		d.Reloader = &ReloadTargetsDTO{Auto: w.Reloader.Auto, ConfigMaps: cms, Secrets: secs}
 	}
 	return d
 }

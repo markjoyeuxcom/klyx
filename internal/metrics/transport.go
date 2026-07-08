@@ -43,7 +43,7 @@ func (t *directTransport) InstantQuery(ctx context.Context, promql string) (int,
 	if err != nil {
 		return 0, nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
 	return resp.StatusCode, body, err
 }
@@ -64,7 +64,7 @@ func (t *directTransport) RangeQuery(ctx context.Context, promql string, start, 
 	if err != nil {
 		return 0, nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
 	return resp.StatusCode, body, err
 }
@@ -118,7 +118,7 @@ func (t *proxyTransport) get(ctx context.Context, suffix string, params [][2]str
 		}
 		return 0, nil, err // genuine transport error (no status)
 	}
-	defer rc.Close()
+	defer func() { _ = rc.Close() }()
 	body, err := io.ReadAll(io.LimitReader(rc, maxResponseBytes))
 	if err != nil {
 		return 0, nil, err

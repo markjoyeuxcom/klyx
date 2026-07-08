@@ -53,6 +53,12 @@ func row(group, label, value, tone string) Fact {
 	return Fact{Group: group, Label: label, Value: value, Tone: tone, Kind: "row"}
 }
 
+// meter is a used/total ratio: pct drives the bar fill, value keeps the legible
+// "used / hard (pct%)" text, tone carries pressure (warning/danger).
+func meter(group, label, value string, pct float64, tone string) Fact {
+	return Fact{Group: group, Label: label, Value: value, Tone: tone, Kind: "meter", Pct: pct}
+}
+
 // --- field readers (nil-tolerant) ---
 
 func gstr(u *unstructured.Unstructured, path ...string) string {

@@ -161,6 +161,63 @@ jobs:
           cp bin/klyx bin/klyx.app/Contents/MacOS/klyx
           cp build/darwin/Info.plist bin/klyx.app/Contents/Info.plist
 
+      # Code-signing + notarization. INERT until the owner adds the Apple secrets:
+      # the preflight sees empty env, the gate is false, the sign step skips, and
+      # the app ships unsigned exactly as today. UNTESTED until first enabled.
+      # Repo/org secrets required:
+      #   APPLE_DEVELOPER_ID_APP_CERT_P12 - base64 of the Developer ID Application .p12
+      #   APPLE_CERT_PASSWORD             - the .p12 export password
+      #   APPLE_SIGNING_IDENTITY          - "Developer ID Application: NAME (TEAMID)"
+      #   APPLE_NOTARY_KEY_P8             - base64 of the App Store Connect API .p8 key
+      #   APPLE_NOTARY_KEY_ID             - the API key id
+      #   APPLE_NOTARY_ISSUER_ID          - the App Store Connect issuer id
+      - name: Signing preflight (macOS)
+        id: macsign
+        env:
+          CERT: ${{ secrets.APPLE_DEVELOPER_ID_APP_CERT_P12 }}
+        run: |
+          if [[ -n "${CERT}" ]]; then
+            echo "enabled=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "enabled=false" >> "${GITHUB_OUTPUT}"
+            echo "No Apple signing secrets set - shipping the macOS app UNSIGNED."
+          fi
+
+      - name: Sign and notarize macOS app
+        if: steps.macsign.outputs.enabled == 'true'
+        working-directory: cmd/klyx
+        env:
+          CERT: ${{ secrets.APPLE_DEVELOPER_ID_APP_CERT_P12 }}
+          CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
+          SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          NOTARY_KEY_P8: ${{ secrets.APPLE_NOTARY_KEY_P8 }}
+          NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          KEYCHAIN="${RUNNER_TEMP}/klyx-signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -base64 24)"
+          security create-keychain -p "${KEYCHAIN_PASSWORD}" "${KEYCHAIN}"
+          security set-keychain-settings -lut 3600 "${KEYCHAIN}"
+          security unlock-keychain -p "${KEYCHAIN_PASSWORD}" "${KEYCHAIN}"
+          echo "${CERT}" | base64 --decode > "${RUNNER_TEMP}/cert.p12"
+          security import "${RUNNER_TEMP}/cert.p12" -k "${KEYCHAIN}" -P "${CERT_PASSWORD}" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -k "${KEYCHAIN_PASSWORD}" "${KEYCHAIN}" >/dev/null
+          security list-keychains -d user -s "${KEYCHAIN}" login.keychain
+          # Hardened runtime is required for notarization.
+          codesign --force --deep --options runtime --timestamp \
+            --sign "${SIGNING_IDENTITY}" bin/klyx.app
+          codesign --verify --strict --verbose=2 bin/klyx.app
+          echo "${NOTARY_KEY_P8}" | base64 --decode > "${RUNNER_TEMP}/notary.p8"
+          ditto -c -k --keepParent bin/klyx.app "${RUNNER_TEMP}/notarize.zip"
+          xcrun notarytool submit "${RUNNER_TEMP}/notarize.zip" \
+            --key "${RUNNER_TEMP}/notary.p8" \
+            --key-id "${NOTARY_KEY_ID}" \
+            --issuer "${NOTARY_ISSUER_ID}" \
+            --wait
+          xcrun stapler staple bin/klyx.app
+          rm -f "${RUNNER_TEMP}/cert.p12" "${RUNNER_TEMP}/notary.p8"
+
       - name: Package macOS artifact
         run: |
           set -euo pipefail
@@ -360,6 +417,47 @@ jobs:
         run: |
           wails3 task windows:create:nsis:installer ARCH=${env:KLYX_ARCH} INSTALL_SCOPE=user
 
+      # Authenticode signing. INERT until the owner adds the Windows secrets;
+      # skips (unsigned, as today) when absent. UNTESTED until first enabled.
+      # NOTE: since 2023, new public OV/EV certs are issued only on hardware
+      # tokens, so a PFX-in-CI works only for an existing/internal cert - a fresh
+      # cert likely needs cloud signing (Azure Trusted Signing / DigiCert
+      # KeyLocker / SSL.com eSigner), which would replace this step's secrets.
+      # Requires: WINDOWS_CERT_PFX (base64 .pfx), WINDOWS_CERT_PASSWORD,
+      #           WINDOWS_TIMESTAMP_URL (optional; defaults to DigiCert).
+      - name: Signing preflight (Windows)
+        id: winsign
+        shell: pwsh
+        env:
+          PFX: ${{ secrets.WINDOWS_CERT_PFX }}
+        run: |
+          if ($env:PFX) {
+            "enabled=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          } else {
+            "enabled=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+            Write-Host "No Windows signing secrets set - shipping UNSIGNED."
+          }
+
+      - name: Sign Windows binaries
+        if: steps.winsign.outputs.enabled == 'true'
+        shell: pwsh
+        working-directory: cmd/klyx
+        env:
+          PFX: ${{ secrets.WINDOWS_CERT_PFX }}
+          PFX_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+          TIMESTAMP_URL: ${{ secrets.WINDOWS_TIMESTAMP_URL }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $pfxPath = Join-Path $env:RUNNER_TEMP "klyx-cert.pfx"
+          [IO.File]::WriteAllBytes($pfxPath, [Convert]::FromBase64String($env:PFX))
+          $ts = if ($env:TIMESTAMP_URL) { $env:TIMESTAMP_URL } else { "http://timestamp.digicert.com" }
+          $signtool = (Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe" |
+            Sort-Object FullName -Descending | Select-Object -First 1).FullName
+          foreach ($f in @("bin/klyx.exe", "bin/klyx-$($env:KLYX_ARCH)-installer.exe")) {
+            & $signtool sign /f $pfxPath /p $env:PFX_PASSWORD /fd SHA256 /tr $ts /td SHA256 $f
+          }
+          Remove-Item $pfxPath
+
       - name: Package Windows artifacts
         shell: pwsh
         run: |
@@ -409,5 +507,5 @@ jobs:
             gh release create "${TAG}" release-artifacts/* \
               --target "${GITHUB_SHA}" \
               --title "Klyx ${TAG}" \
-              --notes "Unsigned Klyx desktop builds for ${TAG}."
+              --notes "Klyx desktop builds for ${TAG}. Verify each asset against its .sha256."
           fi

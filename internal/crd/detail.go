@@ -25,14 +25,18 @@ type Condition struct {
 // spec/status - the data path the resource describes, surfaced without opening
 // the YAML tab. Group is an optional section header ("Routing", "Data"; "" =
 // headline facts, no header). Kind is "well" for short scalars/counts (rendered
-// as inset counter wells) or "row" for prose/lists (rendered as labeled rows).
-// Tone is "" | success | warning | danger | info | neutral.
+// as inset counter wells), "row" for prose/lists (labeled rows), or "meter" for
+// a used/total ratio (rendered as a bar; Pct drives the fill, Value keeps the
+// legible "used / hard (pct%)" text). Tone is "" | success | warning | danger |
+// info | neutral.
 type Fact struct {
 	Group string
 	Label string
 	Value string
 	Tone  string
 	Kind  string
+	// Pct is the fill percentage for Kind=="meter" (0 for every other kind).
+	Pct float64
 }
 
 // Event is a describe-style event for an instance.

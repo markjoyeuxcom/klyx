@@ -51,6 +51,17 @@ func externalSecretsControllerDeploy(name string, ready int32) *appsv1.Deploymen
 	}
 }
 
+// reloaderControllerDeploy builds a Reloader controller Deployment carrying the
+// name label detectReloader selects on, in an arbitrary namespace/name (both vary
+// by install layout).
+func reloaderControllerDeploy(namespace, name string, ready int32) *appsv1.Deployment {
+	return &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace, Labels: map[string]string{"app.kubernetes.io/name": "reloader"}},
+		Status:     appsv1.DeploymentStatus{AvailableReplicas: ready},
+		Spec:       appsv1.DeploymentSpec{Replicas: ptr(int32(1))},
+	}
+}
+
 func ptr[T any](v T) *T { return &v }
 
 func TestDetectCertManagerAbsent(t *testing.T) {
@@ -164,6 +175,7 @@ func TestDetectDiscoveryError(t *testing.T) {
 		"Network":         set.Network.Base,
 		"CertManager":     set.CertManager.Base,
 		"ExternalSecrets": set.ExternalSecrets.Base,
+		"Reloader":        set.Reloader.Base,
 	}
 	for name, b := range caps {
 		if b.Tier != Absent {
@@ -172,6 +184,56 @@ func TestDetectDiscoveryError(t *testing.T) {
 		if b.Reason == "" {
 			t.Errorf("%s: want a failure reason on discovery error, got empty", name)
 		}
+	}
+}
+
+func TestDetectReloaderAbsent(t *testing.T) {
+	// A non-Reloader Deployment must not be mistaken for the controller.
+	other := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "app"},
+		Spec:       appsv1.DeploymentSpec{Replicas: ptr(int32(1))},
+	}
+	cs := newFake(nil, other)
+	set := NewDetector(cs).Detect(context.Background())
+	if set.Reloader.Tier != Absent || set.Reloader.Present {
+		t.Fatalf("want Absent+not present, got %+v", set.Reloader)
+	}
+}
+
+func TestDetectReloaderPresentButUnhealthy(t *testing.T) {
+	// Chart-style name; controller not ready.
+	cs := newFake(nil, reloaderControllerDeploy("reloader", "reloader-reloader", 0))
+	set := NewDetector(cs).Detect(context.Background())
+	if set.Reloader.Tier != Degraded {
+		t.Fatalf("want Degraded, got %v (%s)", set.Reloader.Tier, set.Reloader.Reason)
+	}
+	if !set.Reloader.Present || set.Reloader.Reason == "" {
+		t.Fatalf("want present with a reason, got %+v", set.Reloader)
+	}
+}
+
+func TestDetectReloaderHealthy(t *testing.T) {
+	// Namespace/name independent: label match anywhere counts.
+	cs := newFake(nil, reloaderControllerDeploy("tooling", "reloader", 1))
+	set := NewDetector(cs).Detect(context.Background())
+	if set.Reloader.Tier != Healthy || !set.Reloader.Present || !set.Reloader.Healthy {
+		t.Fatalf("want present+healthy, got %+v", set.Reloader)
+	}
+}
+
+func TestDetectReloaderListError(t *testing.T) {
+	// Error honesty: a Deployments list failure reads Absent WITH a reason, never
+	// a silent "not installed".
+	cs := newFake(nil)
+	cs.PrependReactor("list", "deployments", func(clienttesting.Action) (bool, runtime.Object, error) {
+		return true, nil, errors.New("deployments is forbidden")
+	})
+	set := NewDetector(cs).Detect(context.Background())
+	if set.Reloader.Tier != Absent {
+		t.Fatalf("want Absent on list error, got %v", set.Reloader.Tier)
+	}
+	if set.Reloader.Reason == "" {
+		t.Fatal("want a failure reason on list error (error honesty)")
 	}
 }
 

@@ -46,6 +46,10 @@ type PodsResultDTO struct {
 	// when namespace=="" (all-namespaces load); empty slice otherwise.
 	Namespaces []string        `json:"namespaces"`
 	Pods       []PodSummaryDTO `json:"pods"`
+	// Truncated: the list hit the server cap, so the rows are an incomplete
+	// (pre-ranking) slice - the UI must tell the user to scope by namespace for
+	// complete broken-first triage, never imply this is the whole picture.
+	Truncated bool `json:"truncated,omitempty"`
 }
 
 // PodDetailDTO is the full per-pod detail view.

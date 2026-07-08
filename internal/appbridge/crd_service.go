@@ -95,7 +95,7 @@ func (s *CRDService) GetInstanceDetail(cluster, group, version, plural, namespac
 	}
 	facts := make([]FactDTO, 0, len(d.Facts))
 	for _, f := range d.Facts {
-		facts = append(facts, FactDTO{Group: f.Group, Label: f.Label, Value: f.Value, Tone: f.Tone, Kind: f.Kind})
+		facts = append(facts, FactDTO{Group: f.Group, Label: f.Label, Value: f.Value, Tone: f.Tone, Kind: f.Kind, Pct: f.Pct})
 	}
 	events := make([]EventDTO, 0, len(d.Events))
 	for _, e := range d.Events {

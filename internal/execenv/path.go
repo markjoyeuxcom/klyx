@@ -11,7 +11,7 @@ import (
 // locations. It is intentionally additive: user-provided PATH entries stay
 // first, and duplicates are ignored.
 func ApplyDesktopToolPath() {
-	os.Setenv("PATH", AugmentPath(os.Getenv("PATH"), runtime.GOOS, os.Getenv))
+	_ = os.Setenv("PATH", AugmentPath(os.Getenv("PATH"), runtime.GOOS, os.Getenv))
 }
 
 // AugmentPath returns a PATH with common desktop-tool directories appended for

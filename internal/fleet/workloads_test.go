@@ -29,7 +29,7 @@ func TestListWorkloads(t *testing.T) {
 	c := &ClusterConn{typed: cs, clk: clock.NewFake(time.Unix(0, 0))}
 	c.caps = capability.Set{GitOps: capability.GitOpsCapability{Flux: capability.FluxInfo{Present: true}}}
 
-	out, fluxPresent, err := c.ListWorkloads(context.Background(), "")
+	out, fluxPresent, _, err := c.ListWorkloads(context.Background(), "")
 	if err != nil {
 		t.Fatal(err)
 	}

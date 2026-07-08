@@ -9,13 +9,24 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
+// liveListCap bounds a single pods/workloads live list so a pathological cluster
+// can never OOM the render (the DOM is already virtualized; this caps the objects
+// held in memory). It is deliberately high: at the owner's fleet size a namespace
+// - or even all-namespaces - list never approaches it, so the broken-first
+// ranking that happens AFTER the list stays intact in practice. When the cap IS
+// hit the result is flagged truncated and the UI shows a "scope by namespace"
+// banner, so a broken pod past the cap is never silently passed off as the full
+// triage picture.
+const liveListCap = 5000
+
 // ListPods lists pods scoped to namespace ("" = all; set namespace scopes the
 // typed list at source) and classifies them with the shared severity engine.
+// The second return reports whether the list was truncated at liveListCap.
 // On-demand; no watch.
-func (c *ClusterConn) ListPods(ctx context.Context, namespace string) ([]workloads.PodSummary, error) {
-	pods, err := c.typed.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{})
+func (c *ClusterConn) ListPods(ctx context.Context, namespace string) ([]workloads.PodSummary, bool, error) {
+	pods, err := c.typed.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{Limit: liveListCap})
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 
 	clk := c.clk
@@ -24,7 +35,7 @@ func (c *ClusterConn) ListPods(ctx context.Context, namespace string) ([]workloa
 	}
 	sums := workloads.SummarizePods(pods.Items, clk.Now())
 	c.resolveReplicaSetOwners(ctx, namespace, sums)
-	return sums, nil
+	return sums, pods.GetContinue() != "", nil
 }
 
 var replicaSetGVR = schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "replicasets"}
@@ -47,7 +58,7 @@ func (c *ClusterConn) resolveReplicaSetOwners(ctx context.Context, namespace str
 	if !need || c.meta == nil {
 		return
 	}
-	list, err := c.meta.Resource(replicaSetGVR).Namespace(namespace).List(ctx, metav1.ListOptions{})
+	list, err := c.meta.Resource(replicaSetGVR).Namespace(namespace).List(ctx, metav1.ListOptions{Limit: liveListCap})
 	if err != nil {
 		return
 	}

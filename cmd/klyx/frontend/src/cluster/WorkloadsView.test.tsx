@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, fireEvent, act } from "@testing-library/react";
 import { WorkloadsView } from "./WorkloadsView";
 import { useFleet } from "../store/fleet";
-import type { WorkloadDTO } from "../store/fleet";
+import type { WorkloadDTO, ClusterDTO } from "../store/fleet";
 
 vi.mock("../bridge/workloads", () => ({
   listWorkloads: vi.fn().mockResolvedValue(undefined),
@@ -173,6 +173,71 @@ describe("WorkloadsView", () => {
     fireEvent.change(input, { target: { value: "3" } });
     fireEvent.click(getByText("apply")); // confirm in popover
     expect(scaleWorkload).toHaveBeenCalledWith("homelab-nelli", "Deployment", "ollama-prod", "ollama", 3);
+  });
+
+  it("shows a loud truncation banner only when the list was capped", () => {
+    seed([healthy]);
+    const { queryByText, rerender } = render(<WorkloadsView cluster="homelab-nelli" />);
+    expect(queryByText(/broken-first triage may miss a fault/)).toBeNull();
+    act(() => { useFleet.setState((s) => ({ workloads: { ...s.workloads, truncated: true } })); });
+    rerender(<WorkloadsView cluster="homelab-nelli" />);
+    expect(queryByText(/broken-first triage may miss a fault/)).toBeTruthy();
+  });
+
+  // --- Reloader forward "reloads on" view ---
+
+  it("shows the reloads-on well with an auto chip and the reload-target chips", () => {
+    const w: WorkloadDTO = {
+      ...healthy, name: "api", namespace: "app",
+      reloader: { auto: true, configMaps: ["app-config"], secrets: ["app-secret"] },
+    };
+    seed([w]);
+    const { getByText, getByTitle } = render(<WorkloadsView cluster="homelab-nelli" />);
+    fireEvent.click(getByText("api")); // select -> panel
+    expect(getByText("reloads on")).toBeTruthy();
+    expect(getByText("auto")).toBeTruthy();
+    // Chips are cross-links into Resources (title carries the target identity).
+    expect(getByTitle("open ConfigMap app/app-config in Resources")).toBeTruthy();
+    expect(getByTitle("open Secret app/app-secret in Resources")).toBeTruthy();
+  });
+
+  it("warns when reload annotations exist but the Reloader operator is not detected", () => {
+    const w: WorkloadDTO = { ...healthy, name: "api", namespace: "app", reloader: { auto: true, configMaps: [], secrets: [] } };
+    seed([w]); // no cluster entry -> reloaderPresent defaults false
+    const { getByText } = render(<WorkloadsView cluster="homelab-nelli" />);
+    fireEvent.click(getByText("api"));
+    expect(getByText(/annotations may be inert/)).toBeTruthy();
+  });
+
+  it("does not warn when the Reloader operator is present AND healthy", () => {
+    const c: ClusterDTO = { name: "homelab-nelli", state: "connected", reason: "", nodesReady: 1, nodesTotal: 1, pods: 1, version: "v1.30", gitopsTier: "Absent", gitopsReason: "", networkTier: "Absent", networkReason: "", env: "", region: "", provider: "", group: "", ageSeconds: 1, reloaderPresent: true, reloaderHealthy: true };
+    useFleet.setState({ clusters: [c] });
+    const w: WorkloadDTO = { ...healthy, name: "api", namespace: "app", reloader: { auto: false, configMaps: ["only-this"], secrets: [] } };
+    seed([w]);
+    const { getByText, queryByText } = render(<WorkloadsView cluster="homelab-nelli" />);
+    fireEvent.click(getByText("api"));
+    expect(getByText("reloads on")).toBeTruthy();
+    expect(queryByText(/annotations may be inert/)).toBeNull();
+    expect(queryByText(/reloads may not fire/)).toBeNull();
+  });
+
+  it("warns 'present but not ready' when the operator is detected but Degraded", () => {
+    // present but unhealthy (crashlooping controller) -> annotations are still inert.
+    const c: ClusterDTO = { name: "homelab-nelli", state: "connected", reason: "", nodesReady: 1, nodesTotal: 1, pods: 1, version: "v1.30", gitopsTier: "Absent", gitopsReason: "", networkTier: "Absent", networkReason: "", env: "", region: "", provider: "", group: "", ageSeconds: 1, reloaderPresent: true, reloaderHealthy: false };
+    useFleet.setState({ clusters: [c] });
+    const w: WorkloadDTO = { ...healthy, name: "api", namespace: "app", reloader: { auto: true, configMaps: ["cfg"], secrets: [] } };
+    seed([w]);
+    const { getByText, queryByText } = render(<WorkloadsView cluster="homelab-nelli" />);
+    fireEvent.click(getByText("api"));
+    expect(getByText(/reloads may not fire/)).toBeTruthy();
+    expect(queryByText(/annotations may be inert/)).toBeNull();
+  });
+
+  it("renders no reloads-on well for a workload without Reloader annotations", () => {
+    seed([{ ...healthy, name: "plain", namespace: "app" }]); // reloader undefined
+    const { getByText, queryByText } = render(<WorkloadsView cluster="homelab-nelli" />);
+    fireEvent.click(getByText("plain"));
+    expect(queryByText("reloads on")).toBeNull();
   });
 
   // --- Keyboard nav + a11y ---

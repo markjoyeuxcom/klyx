@@ -1,0 +1,32 @@
+# golangci-lint v2 config. Deliberately a tight, high-signal set: the standard
+# linters (errcheck/govet/ineffassign/staticcheck/unused) plus misspell. Style/
+# complexity families (revive, gocyclo, wsl, gochecknoglobals, ...) are left off -
+# they flood a mature Wails/k8s app without catching defects. staticcheck's
+# opinionated QF* quickfix checks are disabled for the same reason.
+version: "2"
+
+linters:
+  default: standard
+  enable:
+    - misspell
+  settings:
+    staticcheck:
+      # Keep the SA* (bugs) and S* (simplifications) families; drop the purely
+      # stylistic ones - ST* (stylecheck: naming/comment form) and QF* (opinionated
+      # quickfixes). These are conventions, not defects, and flood a mature app.
+      checks:
+        - all
+        - -ST*
+        - -QF*
+  exclusions:
+    generated: lax
+    paths:
+      # ios/android build stubs are package main with no real build tags; the
+      # linter cannot typecheck them (same reason the Makefile/CI exclude them).
+      - cmd/klyx/build
+    rules:
+      # Tests routinely ignore errors on cleanup (defer Close) and helper calls;
+      # errcheck there is noise, not a defect signal. staticcheck still applies.
+      - path: _test\.go
+        linters:
+          - errcheck
