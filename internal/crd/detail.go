@@ -132,6 +132,13 @@ var condPaths = map[string]condPath{
 	"gateway.networking.k8s.io/httproutes": {slice: []string{"status", "parents"}, nameKey: []string{"parentRef", "name"}, label: "parent"},
 	"gateway.networking.k8s.io/grpcroutes": {slice: []string{"status", "parents"}, nameKey: []string{"parentRef", "name"}, label: "parent"},
 	"gateway.networking.k8s.io/gateways":   {slice: []string{"status", "listeners"}, nameKey: []string{"name"}, label: "listener"},
+	// Gateway API / Envoy Gateway policies report per-target health under
+	// status.ancestors[].conditions[] (the attached Gateway/Route is the ancestor).
+	"gateway.networking.k8s.io/backendtlspolicies": {slice: []string{"status", "ancestors"}, nameKey: []string{"ancestorRef", "name"}, label: "ancestor"},
+	"gateway.envoyproxy.io/securitypolicies":       {slice: []string{"status", "ancestors"}, nameKey: []string{"ancestorRef", "name"}, label: "ancestor"},
+	"gateway.envoyproxy.io/backendtrafficpolicies": {slice: []string{"status", "ancestors"}, nameKey: []string{"ancestorRef", "name"}, label: "ancestor"},
+	"gateway.envoyproxy.io/clienttrafficpolicies":  {slice: []string{"status", "ancestors"}, nameKey: []string{"ancestorRef", "name"}, label: "ancestor"},
+	"gateway.envoyproxy.io/envoyextensionpolicies": {slice: []string{"status", "ancestors"}, nameKey: []string{"ancestorRef", "name"}, label: "ancestor"},
 }
 
 // ParseConditionsDeep returns status.conditions[] PLUS any nested per-sub-object
