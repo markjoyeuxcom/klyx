@@ -50,7 +50,10 @@ function ago(sec: number): string {
 }
 
 function needsAttention(r: FluxResourceDTO): boolean {
-  return r.ready !== "Ready" || r.suspended;
+  // Suspended is an intended paused state, never a fault - it must not drive the
+  // attention badge/meter/filter (matches gitops_summary.go and argo.Broken()).
+  // It stays visible via its own suspended count/filter and warning color.
+  return !r.suspended && r.ready !== "Ready";
 }
 
 function rank(r: FluxResourceDTO): number {
@@ -451,7 +454,7 @@ function RowSummary({ r, open, kbSelected, onClick }: { r: FluxResourceDTO; open
         color: "var(--color-text-primary)",
         background: kbSelected || open ? "var(--color-background-secondary)" : "transparent",
         boxShadow: kbSelected ? "inset 2px 0 0 var(--bench-selection-edge, var(--color-text-info))" : undefined,
-        ...staleStyle(r.stale),
+        ...staleStyle(!r.suspended && r.stale),
       }}
     >
       <span style={{ alignSelf: "stretch", background: isBad ? "var(--color-text-danger)" : isReconciling ? "var(--color-text-info)" : r.suspended ? "var(--color-text-warning)" : "transparent" }} />
@@ -467,7 +470,7 @@ function RowSummary({ r, open, kbSelected, onClick }: { r: FluxResourceDTO; open
       <div style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--color-text-secondary)", ...ellipsis }} title={r.revision}>{shortRev(r.revision) || "—"}</div>
       <div style={{ color: "var(--color-text-tertiary)", fontSize: 11, ...ellipsis }}>{ago(r.readySinceSeconds) || "—"}</div>
       <div className={!r.stale && r.ready === "Failed" ? "klyx-danger-prefix" : undefined} style={{ ...ellipsis, color, fontFamily: "var(--font-mono)", fontSize: 11, fontWeight: !r.stale && r.ready === "Failed" ? 700 : undefined }}>
-        {r.stale ? <SyncingChip generation={r.generation} observedGeneration={r.observedGeneration} /> : statusText(r)}
+        {r.suspended ? statusText(r) : r.stale ? <SyncingChip generation={r.generation} observedGeneration={r.observedGeneration} /> : statusText(r)}
       </div>
     </button>
   );
@@ -654,7 +657,10 @@ function DiffSection({ cluster, namespace, name }: { cluster: string; namespace:
 }
 
 function SourceSection({ source }: { source: FluxSourceDTO }) {
-  const ready = source.ready === "Ready";
+  // A suspended source is paused, not failed: its Ready condition goes stale by
+  // design, so it must not surface the red "source not ready" root-cause headline
+  // (the status dot already shows paused). Suspended-is-not-a-fault invariant.
+  const ready = source.suspended || source.ready === "Ready";
   const dot = source.suspended ? "var(--color-text-warning)" : (readyColor[source.ready] ?? "var(--color-text-tertiary)");
   const label = sourceKindLabel[source.kind] ?? source.kind;
   return (

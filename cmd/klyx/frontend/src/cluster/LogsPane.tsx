@@ -193,13 +193,10 @@ export function LogsPane({
       if (renderLines[i].raw.toLowerCase().includes(searchLc)) matchLineIndices.push(i);
     }
   }
-  const matchCount = searchLc
-    ? (() => {
-        let n = 0;
-        for (const l of filteredLines) if (l.raw.toLowerCase().includes(searchLc)) n++;
-        return n;
-      })()
-    : 0;
+  // counter shares navigation's coordinate space: only matches inside
+  // renderLines are Enter-cyclable, so the denominator must be the navigable
+  // set, not the whole (up to LOG_BUF_CAP) filtered buffer.
+  const matchCount = matchLineIndices.length;
 
   // Clamp activeMatchIdx when matches change
   const clampedActive =

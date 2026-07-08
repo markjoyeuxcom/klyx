@@ -112,6 +112,11 @@ func AppendClusters(path string, contexts []string) error {
 func writeClusterEntry(b *strings.Builder, cc ClusterConfig) {
 	fmt.Fprintf(b, "  - name: %s\n", yamlScalar(cc.Name))
 	fmt.Fprintf(b, "    context: %s\n", yamlScalar(cc.Context))
+	// Persist protection so a prod cluster imported mid-session stays protected
+	// across restarts, not just for the current session.
+	if cc.Protected {
+		b.WriteString("    protected: true\n")
+	}
 	if len(cc.Tags) == 0 {
 		return
 	}

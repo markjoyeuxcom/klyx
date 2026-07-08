@@ -36,6 +36,10 @@ export async function closeCertManager(cluster: string): Promise<void> {
   try {
     await CertManagerService.Close(cluster);
   } finally {
-    useFleet.getState().clearCertManager();
+    // A delayed close must not clobber a freshly-opened cluster's slice: only
+    // clear when the slice still names the cluster being closed.
+    if (useFleet.getState().certmanager.cluster === cluster) {
+      useFleet.getState().clearCertManager();
+    }
   }
 }

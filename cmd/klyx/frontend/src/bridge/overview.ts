@@ -90,7 +90,7 @@ export type UnwrappedSources = {
   events: EventRow[] | null;
   nodes: NodeRow[] | null;
   helm: { available: boolean; releases: HelmRow[] } | null;
-  flux: { fluxPresent: boolean; notReady: number; suspended?: number } | null;
+  flux: { fluxPresent: boolean; notReady: number; suspended?: number; error?: string } | null;
 };
 
 // value: the fulfilled result cast to its DTO shape, null on rejection (or a
@@ -120,7 +120,7 @@ export function unwrapSources(
     events: events ? events.events ?? [] : null,
     nodes: nodes ? nodes.nodes ?? [] : null,
     helm: value<{ available: boolean; releases: HelmRow[] }>(helmResult),
-    flux: value<{ fluxPresent: boolean; notReady: number; suspended?: number }>(fluxResult),
+    flux: value<{ fluxPresent: boolean; notReady: number; suspended?: number; error?: string }>(fluxResult),
   };
 }
 
@@ -187,6 +187,10 @@ export async function fetchOverviewSummary(cluster: string): Promise<void> {
     failedReleases: out.failedReleases,
     namespaces: out.namespaces > 0 ? out.namespaces : null,
     flux: out.flux,
+    // fluxError distinguishes a failed summary read (transient RBAC/network,
+    // carried as a non-empty error) from a Flux-free cluster - the tile shows
+    // "—" rather than hiding, so the failure never reads as "no Flux".
+    fluxError: !!(src.flux && src.flux.error),
   };
 
   useFleet.getState().setOverviewSummary(summary);

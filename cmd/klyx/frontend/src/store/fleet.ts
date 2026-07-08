@@ -530,7 +530,10 @@ function loadActionLog(): ActionEvent[] {
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
-    const entries = parsed.filter((e): e is ActionEvent => e && typeof e.message === "string" && typeof e.at === "number");
+    const entries = parsed.filter(
+      (e): e is ActionEvent =>
+        e && typeof e.message === "string" && typeof e.at === "number" && typeof e.id === "number" && Number.isFinite(e.id),
+    );
     nextActionId = entries.reduce((m, e) => Math.max(m, e.id), 0) + 1;
     return entries.slice(0, ACTION_LOG_MAX);
   } catch {
@@ -581,6 +584,10 @@ export type OverviewSummary = {
   // flux is null when Flux is not installed (tile hidden), or when the fetch
   // failed (tile shows "—" via the null count path).
   flux: { present: boolean; notReady: number; suspended: number } | null;
+  // fluxError is true when the summary read errored (transient RBAC/network) as
+  // opposed to a Flux-free cluster; the tile then shows "—" instead of hiding,
+  // so the failure is honest and never reads as "no Flux".
+  fluxError: boolean;
 };
 
 type FleetState = {
@@ -1077,8 +1084,8 @@ export const useFleet = create<FleetState>((set) => ({
     return { helm: { ...s.helm, history, values, detailLoading: false } };
   }),
   clearHelm: () => set({ helm: { cluster: null, releases: [], available: true, message: "", loading: false, selected: null, history: [], values: "", detailLoading: false } }),
-  overviewSummary: { cluster: null, loading: false, unhealthyWorkloads: null, podsNotReady: null, warningEvents: null, nodeProblems: null, failedReleases: null, helmAvailable: false, namespaces: null, flux: null },
-  setOverviewSummaryLoading: (cluster) => set({ overviewSummary: { cluster, loading: true, unhealthyWorkloads: null, podsNotReady: null, warningEvents: null, nodeProblems: null, failedReleases: null, helmAvailable: false, namespaces: null, flux: null } }),
+  overviewSummary: { cluster: null, loading: false, unhealthyWorkloads: null, podsNotReady: null, warningEvents: null, nodeProblems: null, failedReleases: null, helmAvailable: false, namespaces: null, flux: null, fluxError: false },
+  setOverviewSummaryLoading: (cluster) => set({ overviewSummary: { cluster, loading: true, unhealthyWorkloads: null, podsNotReady: null, warningEvents: null, nodeProblems: null, failedReleases: null, helmAvailable: false, namespaces: null, flux: null, fluxError: false } }),
   setOverviewSummary: (s) => set({ overviewSummary: s }),
-  clearOverviewSummary: () => set({ overviewSummary: { cluster: null, loading: false, unhealthyWorkloads: null, podsNotReady: null, warningEvents: null, nodeProblems: null, failedReleases: null, helmAvailable: false, namespaces: null, flux: null } }),
+  clearOverviewSummary: () => set({ overviewSummary: { cluster: null, loading: false, unhealthyWorkloads: null, podsNotReady: null, warningEvents: null, nodeProblems: null, failedReleases: null, helmAvailable: false, namespaces: null, flux: null, fluxError: false } }),
 }));

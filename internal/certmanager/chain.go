@@ -77,7 +77,7 @@ func ParseChainNode(u *unstructured.Unstructured) ChainNode {
 		n.Reason, _, _ = unstructured.NestedString(u.Object, "status", "reason")
 	}
 	if n.Message == "" {
-		n.Message, _, _ = unstructured.NestedString(u.Object, "status", "reason")
+		n.Message, _, _ = unstructured.NestedString(u.Object, "status", "message")
 	}
 	return n
 }

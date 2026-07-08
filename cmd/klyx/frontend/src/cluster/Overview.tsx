@@ -120,6 +120,7 @@ type SummaryForStrip = {
   helmAvailable: boolean;
   failedReleases: number | null;
   flux: { present: boolean; notReady: number; suspended: number } | null;
+  fluxError: boolean;
 };
 
 function AttentionStrip({
@@ -184,7 +185,7 @@ function AttentionStrip({
     { key: "events", value: tileValue(summary?.warningEvents ?? null, loading), label: "warning events", variant: toneFor(summary?.warningEvents, "warning", loading), onClick: goEvents },
     { key: "nodes", value: tileValue(summary?.nodeProblems ?? null, loading), label: "node problems", variant: toneFor(summary?.nodeProblems, "danger", loading), onClick: goNodes },
     { key: "helm", value: tileValue(summary?.failedReleases ?? null, loading), label: "failed releases", variant: toneFor(summary?.failedReleases, "danger", loading), onClick: goHelm, hidden: !(summary?.helmAvailable ?? false) },
-    { key: "flux", value: tileValue(summary?.flux != null ? summary.flux.notReady : null, loading), label: "flux not ready", variant: toneFor(summary?.flux?.notReady, "danger", loading), onClick: goGitOps, hidden: !(summary?.flux?.present ?? false), title: fluxTileTitle },
+    { key: "flux", value: tileValue(summary?.flux != null ? summary.flux.notReady : null, loading), label: "flux not ready", variant: toneFor(summary?.flux?.notReady, "danger", loading), onClick: goGitOps, hidden: !(summary?.flux?.present ?? false) && !(summary?.fluxError ?? false), title: (summary?.fluxError && !summary?.flux) ? "flux summary failed to load" : fluxTileTitle },
     { key: "argo", value: board?.argo ? String(board.argo.broken) : "—", label: "argo degraded", variant: board?.argo?.broken ? "warning" : "success", onClick: goArgo, hidden: !board?.argo },
     { key: "gateway", value: gatewayTileValue(board), label: "gateway issues", variant: gatewayTileTone(board), onClick: goNetwork, hidden: board?.gateway?.served === false || (!board?.gateway && clusterState === "Synced") },
     { key: "freshness", value: clusterState === "Synced" ? "live" : clusterState.toLowerCase(), label: "watch state", variant: clusterState === "Synced" ? "success" : "warning", title: cluster },

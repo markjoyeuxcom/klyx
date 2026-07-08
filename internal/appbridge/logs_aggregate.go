@@ -104,15 +104,11 @@ func (s *LogsService) OpenWorkloadLogStream(cluster, namespace, kind, name, cont
 
 	s.mu.Lock()
 	// Same synchronous-eviction discipline as OpenLogStream: an aggregate counts
-	// as ONE stream, evicting the oldest when at cap before registering.
-	for len(s.order) >= maxConcurrentLogStreams {
-		oldest := s.order[0]
-		s.order = s.order[1:]
-		if ev := s.streams[oldest]; ev != nil {
-			delete(s.streams, oldest)
-			ev.cancel()
-		}
-	}
+	// as ONE stream against the cap. Use the shared helper so an evicted stream is
+	// moved to draining exactly as the single-pod path does - the previous inline
+	// loop here deleted without the draining hand-off, leaving an aggregate-evicted
+	// stream's done channel unclosed.
+	s.evictToCapLocked()
 	s.streams[streamID] = st
 	s.order = append(s.order, streamID)
 	s.mu.Unlock()
@@ -275,8 +271,17 @@ func (s *LogsService) emitAggregateEOF(streamID string, failMu *sync.Mutex, fail
 // gone), mirroring finish() in logs_service.go.
 func (s *LogsService) deregister(streamID string) {
 	s.mu.Lock()
+	// Mirror finish(): a live aggregate lives in streams, one already evicted by a
+	// later open lives in draining. Fall back to draining so the entry is removed
+	// and its done closed either way - otherwise an evicted aggregate leaks its
+	// draining entry and never closes done, stalling CloseAll for the full
+	// closeWaitTimeout per leak.
 	st := s.streams[streamID]
 	delete(s.streams, streamID)
+	if st == nil {
+		st = s.draining[streamID]
+	}
+	delete(s.draining, streamID)
 	for i, id := range s.order {
 		if id == streamID {
 			s.order = append(s.order[:i], s.order[i+1:]...)

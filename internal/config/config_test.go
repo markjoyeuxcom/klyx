@@ -176,3 +176,25 @@ func TestEndpointAndServiceRefWarning(t *testing.T) {
 		t.Fatalf("want endpoint/serviceRef warning, got %q", got)
 	}
 }
+
+func TestIsProtectedInfersProduction(t *testing.T) {
+	cases := []struct {
+		name string
+		cc   ClusterConfig
+		want bool
+	}{
+		{"explicit-protected", ClusterConfig{Name: "anything", Protected: true}, true},
+		{"environment-field-prd", ClusterConfig{Name: "c", Environment: "prd"}, true},
+		{"env-tag-production", ClusterConfig{Name: "c", Tags: map[string]string{"env": "production"}}, true},
+		{"name-token-prd", ClusterConfig{Name: "eks-prd-we"}, true},
+		{"context-arn-prod", ClusterConfig{Name: "friendly", Context: "arn:aws:eks:eu-west-1:1:cluster/app-prod-1"}, true},
+		{"dev", ClusterConfig{Name: "eks-dev-we", Environment: "dev"}, false},
+		{"substring-not-token", ClusterConfig{Name: "reproducer-lab"}, false},
+		{"homelab", ClusterConfig{Name: "homelab"}, false},
+	}
+	for _, tc := range cases {
+		if got := tc.cc.IsProtected(); got != tc.want {
+			t.Errorf("%s: IsProtected()=%v want %v", tc.name, got, tc.want)
+		}
+	}
+}

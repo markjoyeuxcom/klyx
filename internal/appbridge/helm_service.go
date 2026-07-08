@@ -118,7 +118,12 @@ func (s *HelmService) GetHelmHistory(cluster, namespace, release string) HelmHis
 	return HelmHistoryResultDTO{History: dtos}
 }
 
-// GetHelmValues returns the user-supplied values for a release as a YAML string.
+// GetHelmValues returns the user-supplied values for a release as a MASKED YAML
+// string: secret-shaped leaves (password/token/*Key/credential ...) are redacted
+// before the values leave the backend, so no secret reaches the UI or the
+// clipboard. The redacted paths are returned so the frontend can offer per-value
+// reveal (RevealHelmValue). On a parse failure it FAILS CLOSED - an error, never
+// the raw document.
 func (s *HelmService) GetHelmValues(cluster, namespace, release string) HelmValuesResultDTO {
 	conn, ok := s.lookup(cluster)
 	if !ok {
@@ -132,7 +137,40 @@ func (s *HelmService) GetHelmValues(cluster, namespace, release string) HelmValu
 	if err != nil {
 		return HelmValuesResultDTO{Error: err.Error()}
 	}
-	return HelmValuesResultDTO{Values: values}
+	masked, paths, err := helmcli.MaskValues(values)
+	if err != nil {
+		// Never fall back to the raw (unmasked) document.
+		return HelmValuesResultDTO{Error: "could not render values safely: " + err.Error()}
+	}
+	return HelmValuesResultDTO{Values: masked, MaskedPaths: paths}
+}
+
+// RevealHelmValue fetches a single unmasked helm value on demand - the reveal
+// affordance next to a redacted key. Mirroring CRDService.RevealSecretKey, it
+// re-fetches the release values (they are never held in memory) and returns the
+// scalar at path; the value is returned only on explicit request and is never
+// logged.
+func (s *HelmService) RevealHelmValue(cluster, namespace, release, path string) RevealResultDTO {
+	conn, ok := s.lookup(cluster)
+	if !ok {
+		return RevealResultDTO{Error: "cluster not connected: " + cluster}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), helmTimeout)
+	defer cancel()
+
+	values, err := conn.HelmValues(ctx, namespace, release)
+	if err != nil {
+		return RevealResultDTO{Error: err.Error()}
+	}
+	v, found, err := helmcli.ValueAtPath(values, path)
+	if err != nil {
+		return RevealResultDTO{Error: "could not read value: " + err.Error()}
+	}
+	if !found {
+		return RevealResultDTO{Error: "no value at " + path}
+	}
+	return RevealResultDTO{Value: v}
 }
 
 // RollbackOptionsDTO carries the user-composed rollback flags from the

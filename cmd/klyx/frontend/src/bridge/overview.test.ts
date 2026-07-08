@@ -313,4 +313,21 @@ describe("fetchOverviewSummary integration", () => {
     await fetchOverviewSummary("homelab");
     expect(useFleet.getState().overviewSummary.flux).toBeNull();
   });
+
+  // A summary that carries a backend error (transient RBAC/network) is NOT a
+  // Flux-free cluster: flux stays null but fluxError is set so the tile shows
+  // "—" instead of hiding - error-honesty.
+  it("sets fluxError when GetGitOpsSummary returns an error", async () => {
+    (WorkloadsService.ListWorkloads as ReturnType<typeof vi.fn>).mockResolvedValue({ fluxPresent: false, namespaces: [], workloads: [] });
+    (PodsService.ListPods as ReturnType<typeof vi.fn>).mockResolvedValue({ namespaces: [], pods: [] });
+    (EventsService.ListEvents as ReturnType<typeof vi.fn>).mockResolvedValue({ namespaces: [], events: [] });
+    (NodesService.ListNodes as ReturnType<typeof vi.fn>).mockResolvedValue({ nodes: [] });
+    (HelmService.ListHelmReleases as ReturnType<typeof vi.fn>).mockResolvedValue({ available: false, releases: [] });
+    (GitOpsService.GetGitOpsSummary as ReturnType<typeof vi.fn>).mockResolvedValue({ fluxPresent: false, total: 0, notReady: 0, suspended: 0, error: "forbidden" });
+
+    await fetchOverviewSummary("homelab");
+    const s = useFleet.getState().overviewSummary;
+    expect(s.flux).toBeNull();
+    expect(s.fluxError).toBe(true);
+  });
 });

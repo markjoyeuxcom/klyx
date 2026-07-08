@@ -359,3 +359,30 @@ func TestAssembleCarriesGenerations(t *testing.T) {
 		t.Fatalf("daemonset generations not carried: %+v", byName["cilium"])
 	}
 }
+
+// TestRecentlyTerminated_CompletedInitContainerNotCounted is the regression: a
+// normally-completed init container (State.Terminated{ExitCode:0}) stays in the
+// current terminated state for the whole life of a Running pod and must NOT be
+// mis-ranked as a recent restart; only a FAILED current-state termination counts.
+func TestRecentlyTerminated_CompletedInitContainerNotCounted(t *testing.T) {
+	now := time.Unix(1_000_000, 0)
+	initState := func(exitCode int32, reason string) []*corev1.Pod {
+		p := corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{Namespace: "x", Name: "p"},
+			Status: corev1.PodStatus{
+				InitContainerStatuses: []corev1.ContainerStatus{{
+					State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{
+						Reason: reason, ExitCode: exitCode, FinishedAt: metav1.NewTime(now.Add(-5 * time.Minute)),
+					}},
+				}},
+			},
+		}
+		return []*corev1.Pod{&p}
+	}
+	if recentlyTerminated(initState(0, "Completed"), now) {
+		t.Fatal("completed init container (ExitCode 0) must not count as a recent restart")
+	}
+	if !recentlyTerminated(initState(1, "Error"), now) {
+		t.Fatal("failed current-state termination (ExitCode 1) must still count")
+	}
+}

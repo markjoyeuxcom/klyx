@@ -1,6 +1,16 @@
 package config
 
-import "strings"
+import (
+	"regexp"
+	"strings"
+)
+
+// AWS region and 12-digit account shapes. Region tolerates the multi-segment
+// gov/iso partitions (us-gov-west-1) beyond the common two-segment form.
+var (
+	eksRegionRe  = regexp.MustCompile(`^[a-z]{2}(-[a-z]+)+-\d+$`)
+	eksAccountRe = regexp.MustCompile(`^\d{12}$`)
+)
 
 // EKSContext is the parsed identity encoded in AWS' default kubeconfig context
 // ARN: arn:aws:eks:<region>:<account>:cluster/<name>.
@@ -18,11 +28,16 @@ func ParseEKSContext(ctx string) (out EKSContext, ok bool) {
 	if len(parts) != 6 {
 		return EKSContext{}, false
 	}
-	if parts[0] != "arn" || parts[2] != "eks" || parts[3] == "" || parts[4] == "" {
+	if parts[0] != "arn" || parts[2] != "eks" {
+		return EKSContext{}, false
+	}
+	if !eksRegionRe.MatchString(parts[3]) || !eksAccountRe.MatchString(parts[4]) {
 		return EKSContext{}, false
 	}
 	const prefix = "cluster/"
-	if !strings.HasPrefix(parts[5], prefix) {
+	// SplitN(...,6) leaves any further ':' inside parts[5]; a real EKS resource
+	// segment (cluster/<name>) never carries one, so reject it.
+	if strings.Contains(parts[5], ":") || !strings.HasPrefix(parts[5], prefix) {
 		return EKSContext{}, false
 	}
 	name := strings.TrimPrefix(parts[5], prefix)
@@ -46,6 +61,11 @@ func ClusterConfigForContext(ctx string) ClusterConfig {
 		cc.Name = eks.Name
 		cc.Tags = tagsForEKS(eks, nil)
 	}
+	// Default a production-looking hot-added cluster to protected, and persist it
+	// so the protection survives restart and shows in Settings - never fail open
+	// on a prod context imported mid-session. IsProtected also infers at guard
+	// time, but recording it keeps disk and enforcement in agreement.
+	cc.Protected = cc.IsProtected()
 	return cc
 }
 

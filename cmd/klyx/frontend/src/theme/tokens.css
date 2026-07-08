@@ -5,6 +5,7 @@
   --color-background-secondary: #f5f4ed;
   --color-background-tertiary: #faf9f5;
   --color-background-info: #e6f1fb;
+  --color-background-accent: #d3e6fa;
   --color-background-danger: #fceaea;
   --color-background-success: #eaf3de;
   --color-background-warning: #faeeda;
@@ -55,6 +56,7 @@
   --color-background-secondary: #2a2926;
   --color-background-tertiary: #1a1918;
   --color-background-info: rgba(24,95,165,0.22);
+  --color-background-accent: rgba(24,95,165,0.42);
   --color-background-danger: rgba(163,45,45,0.22);
   --color-background-success: rgba(59,109,17,0.22);
   --color-background-warning: rgba(133,79,11,0.25);
@@ -79,6 +81,7 @@
   --color-background-secondary: #132232;
   --color-background-tertiary: #07111d;
   --color-background-info: rgba(88,166,255,0.18);
+  --color-background-accent: rgba(88,166,255,0.34);
   --color-background-danger: rgba(244,91,105,0.20);
   --color-background-success: rgba(129,201,149,0.18);
   --color-background-warning: rgba(236,176,67,0.20);
@@ -103,6 +106,7 @@
   --color-background-secondary: #1d2025;
   --color-background-tertiary: #090b0e;
   --color-background-info: rgba(93,170,255,0.17);
+  --color-background-accent: rgba(93,170,255,0.33);
   --color-background-danger: rgba(255,101,101,0.19);
   --color-background-success: rgba(137,199,95,0.17);
   --color-background-warning: rgba(239,181,78,0.20);
@@ -127,6 +131,7 @@
   --color-background-secondary: #2a171b;
   --color-background-tertiary: #10090b;
   --color-background-info: rgba(117,170,255,0.17);
+  --color-background-accent: rgba(117,170,255,0.33);
   --color-background-danger: rgba(255,107,122,0.22);
   --color-background-success: rgba(155,204,99,0.17);
   --color-background-warning: rgba(239,180,94,0.19);
@@ -151,6 +156,7 @@
   --color-background-secondary: #15251d;
   --color-background-tertiary: #08120d;
   --color-background-info: rgba(95,177,255,0.16);
+  --color-background-accent: rgba(95,177,255,0.32);
   --color-background-danger: rgba(244,99,99,0.19);
   --color-background-success: rgba(116,203,115,0.20);
   --color-background-warning: rgba(236,181,80,0.19);
@@ -175,6 +181,7 @@
   --color-background-secondary: #262013;
   --color-background-tertiary: #0f0b06;
   --color-background-info: rgba(91,169,255,0.16);
+  --color-background-accent: rgba(91,169,255,0.32);
   --color-background-danger: rgba(244,98,98,0.19);
   --color-background-success: rgba(145,205,99,0.17);
   --color-background-warning: rgba(238,177,70,0.23);
@@ -199,6 +206,7 @@
   --color-background-secondary: #21192f;
   --color-background-tertiary: #0e0915;
   --color-background-info: rgba(132,174,255,0.17);
+  --color-background-accent: rgba(132,174,255,0.33);
   --color-background-danger: rgba(244,91,119,0.19);
   --color-background-success: rgba(142,204,109,0.17);
   --color-background-warning: rgba(235,178,78,0.19);
@@ -364,6 +372,7 @@ div[role="button"]:hover {
 
   /* tone tints (chip/badge/banner fills) */
   --color-background-info: rgba(127,184,238,0.11);
+  --color-background-accent: rgba(127,184,238,0.26);
   --color-background-danger: rgba(255,125,125,0.12);
   --color-background-success: rgba(143,199,94,0.12);
   --color-background-warning: rgba(240,168,50,0.12);
@@ -415,6 +424,7 @@ div[role="button"]:hover {
   --color-background-secondary: #f4f2ec;
 
   --color-background-info: rgba(29,100,168,0.08);
+  --color-background-accent: rgba(29,100,168,0.20);
   --color-background-danger: rgba(178,51,51,0.09);
   --color-background-success: rgba(74,125,28,0.10);
   --color-background-warning: rgba(154,95,10,0.10);

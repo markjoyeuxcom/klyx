@@ -283,3 +283,62 @@ func TestHelmRollback_PropagatesError(t *testing.T) {
 		t.Errorf("want error text propagated, got %q", result.Error)
 	}
 }
+
+// ---------- GetHelmValues masking (P0 secret-egress) ----------
+
+func TestGetHelmValues_MasksSecrets(t *testing.T) {
+	conn := &fakeHelmConn{values: "replicaCount: 3\npostgresql:\n  auth:\n    username: app\n    password: hunter2\napiKey: abc123\n"}
+	svc := newHelmTestSvc(conn)
+
+	result := svc.GetHelmValues("test", "default", "my-app")
+	if result.Error != "" {
+		t.Fatalf("unexpected error: %q", result.Error)
+	}
+	// The secret bytes must not appear anywhere in what reaches the frontend/clipboard.
+	for _, leak := range []string{"hunter2", "abc123"} {
+		if strings.Contains(result.Values, leak) {
+			t.Fatalf("GetHelmValues leaked secret %q:\n%s", leak, result.Values)
+		}
+	}
+	// Non-sensitive values survive.
+	if !strings.Contains(result.Values, "replicaCount") || !strings.Contains(result.Values, "app") {
+		t.Fatalf("non-sensitive values dropped:\n%s", result.Values)
+	}
+	// The redacted paths are reported for the reveal affordance.
+	paths := map[string]bool{}
+	for _, p := range result.MaskedPaths {
+		paths[p] = true
+	}
+	if !paths["postgresql.auth.password"] || !paths["apiKey"] {
+		t.Fatalf("masked paths incomplete: %v", result.MaskedPaths)
+	}
+}
+
+func TestGetHelmValues_FailsClosedOnUnparseableYAML(t *testing.T) {
+	conn := &fakeHelmConn{values: "a: b:\n  - ]["} // not valid YAML
+	svc := newHelmTestSvc(conn)
+
+	result := svc.GetHelmValues("test", "default", "my-app")
+	if result.Error == "" {
+		t.Fatal("unparseable values must surface an error, not fall back to raw")
+	}
+	if result.Values != "" {
+		t.Fatalf("no raw values may leak on a masking failure, got %q", result.Values)
+	}
+}
+
+func TestRevealHelmValue(t *testing.T) {
+	conn := &fakeHelmConn{values: "postgresql:\n  auth:\n    password: hunter2\n"}
+	svc := newHelmTestSvc(conn)
+
+	r := svc.RevealHelmValue("test", "default", "my-app", "postgresql.auth.password")
+	if r.Error != "" || r.Value != "hunter2" {
+		t.Fatalf("reveal must return the unmasked value, got %+v", r)
+	}
+	if miss := svc.RevealHelmValue("test", "default", "my-app", "nope.here"); miss.Error == "" {
+		t.Fatalf("reveal of a missing path must error, got %+v", miss)
+	}
+	if cm := svc.RevealHelmValue("missing", "default", "my-app", "x"); cm.Error == "" {
+		t.Fatal("reveal on an unconnected cluster must error")
+	}
+}

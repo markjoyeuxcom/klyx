@@ -93,8 +93,8 @@ func (d *Detector) servedGroups(ctx context.Context) (map[string]bool, error) {
 func (d *Detector) Detect(ctx context.Context) Set {
 	served, err := d.servedGroups(ctx)
 	if err != nil {
-		// NOTE: not unit-tested because the fake discovery client does not
-		// surface ServerGroups errors via PrependReactor.
+		// Error-honesty: a discovery-degraded cluster reports every capability
+		// as Absent with the failure reason, never as "nothing installed".
 		msg := fmt.Sprintf("capability detection failed: %v", err)
 		return Set{
 			GitOps:          GitOpsCapability{Base: Base{Tier: Absent, Reason: msg}},

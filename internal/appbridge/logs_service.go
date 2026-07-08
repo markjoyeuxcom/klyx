@@ -81,6 +81,28 @@ func NewLogsService(lookup func(string) (LogsConn, bool), em Emitter) *LogsServi
 	}
 }
 
+// evictToCapLocked evicts the oldest stream(s) until there is room to register
+// one more under maxConcurrentLogStreams. The caller MUST hold s.mu. Each
+// evicted stream is MOVED to s.draining (not merely deleted) so its reader's
+// finish()/deregister() can still find it and close its done channel; otherwise
+// a CloseAll racing an eviction would wait the full closeWaitTimeout on a stream
+// whose reader had already exited, and the draining entry would leak for the
+// process lifetime. Single-pod (OpenLogStream) and aggregate
+// (OpenWorkloadLogStream) opens both call this, so the two eviction paths can
+// never drift - a drift that previously dropped an aggregate-evicted stream on
+// the floor with its done never closed.
+func (s *LogsService) evictToCapLocked() {
+	for len(s.order) >= maxConcurrentLogStreams {
+		oldest := s.order[0]
+		s.order = s.order[1:]
+		if ev := s.streams[oldest]; ev != nil {
+			delete(s.streams, oldest)
+			s.draining[oldest] = ev
+			ev.cancel() // supervisor closes its rc; its reader exits via finish()/deregister()
+		}
+	}
+}
+
 // OpenLogStream opens a live tail for one container and returns its streamID.
 // The frontend subscribes to "podlogs:"+streamID. tailLines<=0 defaults
 // downstream (fleet clamps to 500, caps at 5000). previous tails the prior
@@ -105,21 +127,10 @@ func (s *LogsService) OpenLogStream(cluster, namespace, pod, container string, p
 
 	s.mu.Lock()
 	// Cap: synchronously evict the oldest stream(s) before registering the new
-	// one. Removing both the map entry and the order slot here means concurrent
-	// or rapid sequential opens can never blow past maxConcurrentLogStreams - the
-	// invariant holds at registration time, not eventually. The evicted stream
-	// moves to draining so its reader's finish() can still find it and close
-	// done - otherwise a CloseAll racing an eviction would wait the full
-	// closeWaitTimeout on a stream whose reader had already exited.
-	for len(s.order) >= maxConcurrentLogStreams {
-		oldest := s.order[0]
-		s.order = s.order[1:]
-		if ev := s.streams[oldest]; ev != nil {
-			delete(s.streams, oldest)
-			s.draining[oldest] = ev
-			ev.cancel() // supervisor closes its rc; its reader exits via finish()
-		}
-	}
+	// one, so concurrent or rapid sequential opens can never blow past
+	// maxConcurrentLogStreams - the invariant holds at registration time, not
+	// eventually.
+	s.evictToCapLocked()
 	s.streams[streamID] = st
 	s.order = append(s.order, streamID)
 	s.mu.Unlock()

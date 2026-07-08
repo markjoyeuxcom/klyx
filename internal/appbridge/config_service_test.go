@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/moomora/klyx/internal/config"
 )
@@ -165,5 +166,66 @@ func TestAddClustersReportsConnectFailureHonestly(t *testing.T) {
 	// Not connected -> not claimed as in-fleet for the session.
 	if got := len(s.GetFleetConfig().Clusters); got != 2 {
 		t.Fatalf("failed connect must not join the session fleet, got %d clusters", got)
+	}
+}
+
+// TestConfigService_IsProtected_LiveHotAdd is the P1 regression: the protection
+// source is LIVE, so a prod-looking cluster hot-added mid-session is protected
+// immediately - not fail-open until a restart.
+func TestConfigService_IsProtected_LiveHotAdd(t *testing.T) {
+	s := testConfigService(t, nil, nil)
+
+	// Startup clusters resolve from the frozen config as before.
+	if !s.IsProtected("prd-weu") {
+		t.Fatal("explicitly-protected startup cluster must be protected")
+	}
+	if s.IsProtected("homelab-nelli") {
+		t.Fatal("unprotected homelab cluster must not be protected")
+	}
+	if s.IsProtected("does-not-exist") {
+		t.Fatal("unknown cluster must be treated as unprotected")
+	}
+
+	// Hot-add via the seams (no real file / registry needed).
+	s.appendClusters = func(string, []string) error { return nil }
+	s.connect = func(config.ClusterConfig) error { return nil }
+	if r := s.AddClusters([]string{"prod-eu"}); !r.OK {
+		t.Fatalf("hot-add prod failed: %+v", r)
+	}
+	if !s.IsProtected("prod-eu") {
+		t.Fatal("hot-added prod cluster must be protected immediately (the P1 fix)")
+	}
+	if r := s.AddClusters([]string{"dev-eu"}); !r.OK {
+		t.Fatalf("hot-add dev failed: %+v", r)
+	}
+	if s.IsProtected("dev-eu") {
+		t.Fatal("hot-added non-prod cluster must stay unprotected")
+	}
+}
+
+// TestProtectGuard_LiveSourceGatesHotAddedProdCluster wires the guard exactly as
+// main does - over the live ConfigService.IsProtected - and proves a destructive
+// verb on a hot-added prod cluster now requires the typed grant.
+func TestProtectGuard_LiveSourceGatesHotAddedProdCluster(t *testing.T) {
+	s := testConfigService(t, nil, nil)
+	s.appendClusters = func(string, []string) error { return nil }
+	s.connect = func(config.ClusterConfig) error { return nil }
+	if r := s.AddClusters([]string{"prod-eu"}); !r.OK {
+		t.Fatalf("hot-add: %+v", r)
+	}
+
+	SetProtectGuard(NewProtectGuard(s.IsProtected, time.Now))
+	t.Cleanup(func() { SetProtectGuard(nil) })
+
+	svc := NewPodsService(func(string) (PodsConn, bool) { return &fakeLivePodConn{}, true }, &anyEmitter{})
+
+	if r := svc.DeletePod("prod-eu", "ns", "pod"); r.OK || r.Error == "" {
+		t.Fatalf("destructive verb on hot-added prod cluster must require a typed grant, got %+v", r)
+	}
+	if r := s.ArmProtected("prod-eu", "prod-eu"); !r.OK {
+		t.Fatalf("arm: %+v", r)
+	}
+	if r := svc.DeletePod("prod-eu", "ns", "pod"); !r.OK {
+		t.Fatalf("armed delete on hot-added prod cluster must pass: %+v", r)
 	}
 }

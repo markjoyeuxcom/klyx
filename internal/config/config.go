@@ -44,6 +44,45 @@ type MetricsServiceRef struct {
 // Env returns the environment tag, or "" if unset.
 func (c ClusterConfig) Env() string { return c.Tags["env"] }
 
+// IsProtected reports the cluster's EFFECTIVE protection - what the destructive-
+// verb guard enforces. A cluster is protected if it is explicitly marked
+// (protected: true), or its environment / name looks like production. The
+// production default is deliberate and fail-safe: a false positive only adds a
+// typed-confirmation prompt, while a false negative fails open on prod - the
+// costly direction for an owner running prod-bearing clusters. Notably this
+// makes a cluster hot-added mid-session through Settings protected the moment it
+// looks like prod, instead of unprotected until a fleet.yaml edit + restart.
+func (c ClusterConfig) IsProtected() bool {
+	if c.Protected {
+		return true
+	}
+	env := c.Environment
+	if env == "" {
+		env = c.EffectiveTags()["env"]
+	}
+	return looksProd(env) || looksProd(c.Name) || looksProd(c.Context)
+}
+
+// looksProd reports whether an environment/name string carries a production
+// token. It splits on non-alphanumeric separators and matches whole tokens
+// (prd/prod/production) rather than substrings, so "reproducer" or "productivity"
+// do not false-match while "eks-prd-we" or "environment: production" do.
+func looksProd(s string) bool {
+	if s == "" {
+		return false
+	}
+	tok := strings.FieldsFunc(strings.ToLower(s), func(r rune) bool {
+		return !(r >= 'a' && r <= 'z') && !(r >= '0' && r <= '9')
+	})
+	for _, t := range tok {
+		switch t {
+		case "prd", "prod", "production":
+			return true
+		}
+	}
+	return false
+}
+
 // reservedTagKeys are top-level ClusterConfig field names. If one shows up as a
 // `tags:` key it is almost certainly a misplaced field: YAML silently accepts it
 // into the Tags map, so the intended typed field stays at its zero value (the

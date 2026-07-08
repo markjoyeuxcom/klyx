@@ -38,10 +38,11 @@ type GitOpsConn interface {
 
 // GitOpsSummaryDTO is the serialised form of GitOpsSummary for the JS bridge.
 type GitOpsSummaryDTO struct {
-	FluxPresent bool `json:"fluxPresent"`
-	Total       int  `json:"total"`
-	NotReady    int  `json:"notReady"`
-	Suspended   int  `json:"suspended"`
+	FluxPresent bool   `json:"fluxPresent"`
+	Total       int    `json:"total"`
+	NotReady    int    `json:"notReady"`
+	Suspended   int    `json:"suspended"`
+	Error       string `json:"error,omitempty"` // non-empty = the summary read failed (never confuse with FluxPresent:false)
 }
 
 // GitOpsUpdatedEvent is emitted with { cluster, resources }.
@@ -100,7 +101,7 @@ func (s *GitOpsService) Open(cluster string) {
 		conn.CloseGitOps()
 		return
 	}
-	go s.pushLoop(ctx, cluster, conn)
+	safeGo("gitops-push:"+cluster, func() { s.pushLoop(ctx, cluster, conn) })
 }
 
 func (s *GitOpsService) Close(cluster string) {
@@ -173,7 +174,18 @@ const actionTimeout = 30 * time.Second
 // (including SOPS decryption) and dry-runs it against the apiserver.
 const diffTimeout = 120 * time.Second
 
+// Reconcile, ReconcileWithSource and SetSuspend drive the Flux controllers on a
+// live cluster - day-2 mutations, not desired-state authoring - so on a
+// protected cluster they consume the typed-confirmation grant first, exactly
+// like ArgoService.SyncApp and every other destructive verb. The frontend
+// dialogs arm the grant on confirm; gating here keeps arm and check paired
+// one-to-one so a frontend bug (or a hostile webview call) can never fire a
+// Flux mutation on a protected cluster without the typed confirmation, and no
+// un-consumed grant can linger to authorize an unrelated later action.
 func (s *GitOpsService) Reconcile(cluster, kind, namespace, name string) ActionResultDTO {
+	if err := checkProtected(cluster); err != nil {
+		return ActionResultDTO{Error: err.Error()}
+	}
 	conn, ok := s.lookup(cluster)
 	if !ok {
 		return ActionResultDTO{Error: "cluster not connected: " + cluster}
@@ -187,6 +199,9 @@ func (s *GitOpsService) Reconcile(cluster, kind, namespace, name string) ActionR
 }
 
 func (s *GitOpsService) ReconcileWithSource(cluster, kind, namespace, name string) ActionResultDTO {
+	if err := checkProtected(cluster); err != nil {
+		return ActionResultDTO{Error: err.Error()}
+	}
 	conn, ok := s.lookup(cluster)
 	if !ok {
 		return ActionResultDTO{Error: "cluster not connected: " + cluster}
@@ -221,6 +236,9 @@ func (s *GitOpsService) FluxDiff(cluster, namespace, name, path string) FluxDiff
 }
 
 func (s *GitOpsService) SetSuspend(cluster, kind, namespace, name string, suspend bool) ActionResultDTO {
+	if err := checkProtected(cluster); err != nil {
+		return ActionResultDTO{Error: err.Error()}
+	}
 	conn, ok := s.lookup(cluster)
 	if !ok {
 		return ActionResultDTO{Error: "cluster not connected: " + cluster}
@@ -265,11 +283,11 @@ func (s *GitOpsService) GetResourceDetail(cluster, kind, namespace, name string)
 }
 
 // GetGitOpsSummary returns a point-in-time Flux summary for the named cluster.
-// Cluster miss or list error → {FluxPresent: false} (the strip tile will hide).
-// A thrown error from the binding is intentionally NOT surfaced here so the
-// per-tile failure convention ("—") is handled by fetchOverviewSummary's
-// Promise.allSettled path; returning {fluxPresent:false} on miss keeps the tile
-// hidden on a cluster with no Flux, which is semantically correct.
+// A cluster miss returns {FluxPresent: false} - semantically "no Flux here", so
+// the strip tile hides. A list error is different: it returns {Error: ...} so
+// the tile renders the failure marker ("—") rather than masquerading as a
+// Flux-free cluster (error-honesty - a transient RBAC/network fault must not
+// read as "no Flux").
 func (s *GitOpsService) GetGitOpsSummary(cluster string) GitOpsSummaryDTO {
 	conn, ok := s.lookup(cluster)
 	if !ok {
@@ -279,7 +297,7 @@ func (s *GitOpsService) GetGitOpsSummary(cluster string) GitOpsSummaryDTO {
 	defer cancel()
 	present, total, notReady, suspended, err := conn.GitOpsSummaryFlux(ctx)
 	if err != nil {
-		return GitOpsSummaryDTO{}
+		return GitOpsSummaryDTO{Error: err.Error()}
 	}
 	return GitOpsSummaryDTO{FluxPresent: present, Total: total, NotReady: notReady, Suspended: suspended}
 }

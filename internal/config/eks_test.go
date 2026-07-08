@@ -19,6 +19,9 @@ func TestParseEKSContextRejectsNonEKS(t *testing.T) {
 		"arn:aws:iam::934692410245:role/admin",
 		"arn:aws:eks:us-east-1:934692410245:nodegroup/eks-tooling/ng/abc",
 		"arn:aws:eks:us-east-1:934692410245:cluster/",
+		"arn:aws:eks:not-a-region:934692410245:cluster/eks-tooling", // malformed region
+		"arn:aws:eks:us-east-1:12345:cluster/eks-tooling",           // short account
+		"arn:aws:eks:us-east-1:934692410245:cluster/foo:bar",        // extra ':' in resource
 	} {
 		if got, ok := ParseEKSContext(ctx); ok {
 			t.Fatalf("%q parsed unexpectedly as %+v", ctx, got)
@@ -51,5 +54,22 @@ func TestEffectiveTagsDerivesEKSWithoutOverwritingUserTags(t *testing.T) {
 	}
 	if got["cloud"] != "aws" || got["region"] != "us-gov-west-1" || got["account"] != "123456789012" || got["partition"] != "aws-us-gov" {
 		t.Fatalf("derived tags missing: %+v", got)
+	}
+}
+
+func TestClusterConfigForContextDefaultsProdProtected(t *testing.T) {
+	// A production-looking context is marked protected and recorded so it persists.
+	prod := ClusterConfigForContext("arn:aws:eks:eu-west-1:123456789012:cluster/eks-prd-we")
+	if !prod.Protected {
+		t.Fatalf("prod-named EKS context must default to protected: %+v", prod)
+	}
+	// A non-prod context stays unprotected.
+	dev := ClusterConfigForContext("arn:aws:eks:eu-west-1:123456789012:cluster/eks-dev-we")
+	if dev.Protected {
+		t.Fatalf("non-prod context must not be protected: %+v", dev)
+	}
+	// A plain (non-EKS) prod context too.
+	if plain := ClusterConfigForContext("prod-cluster"); !plain.Protected {
+		t.Fatalf("plain prod context must default to protected: %+v", plain)
 	}
 }

@@ -36,8 +36,13 @@ type HelmHistoryResultDTO struct {
 	Error   string                `json:"error,omitempty"`
 }
 
-// HelmValuesResultDTO is the response from GetHelmValues.
+// HelmValuesResultDTO is the response from GetHelmValues. Values is MASKED YAML:
+// secret-shaped leaves are redacted before it leaves the backend, upholding the
+// invariant that secret values never leak via helm values. MaskedPaths lists the
+// dotted paths that were redacted; the frontend reveals an individual value on
+// demand via RevealHelmValue.
 type HelmValuesResultDTO struct {
-	Values string `json:"values"` // YAML string; "" means no user values set
-	Error  string `json:"error,omitempty"`
+	Values      string   `json:"values"` // masked YAML string; "" means no user values set
+	MaskedPaths []string `json:"maskedPaths"`
+	Error       string   `json:"error,omitempty"`
 }

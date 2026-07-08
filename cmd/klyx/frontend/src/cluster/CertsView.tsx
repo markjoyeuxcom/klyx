@@ -40,8 +40,10 @@ function expiryText(c: CertificateDTO): string {
   return `${Math.floor(secs / 86400)}d`;
 }
 
+// Render in LOCAL time (en-CA gives ISO-like YYYY-MM-DD) to match the app's
+// Age.tsx absolute hovers - a UTC slice off-by-ones a day near midnight.
 function dateText(unix?: number): string {
-  return unix && unix > 0 ? new Date(unix * 1000).toISOString().slice(0, 10) : "—";
+  return unix && unix > 0 ? new Date(unix * 1000).toLocaleDateString("en-CA") : "—";
 }
 
 // A Ready cert that is merely in the renewal window is NOT attention (cert-manager
