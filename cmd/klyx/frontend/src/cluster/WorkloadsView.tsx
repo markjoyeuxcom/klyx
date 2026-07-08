@@ -603,7 +603,7 @@ function WorkloadContextPanel({
     : "—";
 
   return (
-    <aside style={{ minWidth: 0, minHeight: 0, overflowY: "auto", background: "var(--color-background-secondary)", display: "flex", flexDirection: "column" }}>
+    <aside style={{ minWidth: 0, minHeight: 0, overflowY: "auto", background: "var(--bench-well-bg, var(--color-background-secondary))", boxShadow: "var(--bench-well-shadow, inset 0 0 0 1px var(--color-border-tertiary))", borderRadius: "var(--radius-sm)", display: "flex", flexDirection: "column" }}>
       <div style={{ padding: 14, borderBottom: "0.5px solid var(--color-border-tertiary)", display: "grid", gap: 10 }}>
         <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10 }}>
           <div style={{ minWidth: 0, flex: 1 }}>

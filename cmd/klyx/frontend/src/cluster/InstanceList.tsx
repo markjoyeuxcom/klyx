@@ -341,7 +341,7 @@ export function InstanceList({ cluster, resource }: { cluster: string; resource:
       {openRef && (
         <div
           data-testid="instance-detail-panel"
-          style={{ width: panelWidth, flexShrink: 0, position: "relative", background: "var(--bench-well-bg, transparent)", boxShadow: "var(--bench-well-shadow, none)", borderRadius: "var(--radius-sm)", padding: "12px 16px", marginLeft: 8, minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column" }}
+          style={{ width: panelWidth, flexShrink: 0, position: "relative", background: "var(--bench-well-bg, var(--color-background-secondary))", boxShadow: "var(--bench-well-shadow, inset 0 0 0 1px var(--color-border-tertiary))", borderRadius: "var(--radius-sm)", padding: "12px 16px", marginLeft: 8, minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column" }}
         >
           <div {...handleProps} />
           <InstanceDetail cluster={cluster} resource={resource} instance={openRef} />

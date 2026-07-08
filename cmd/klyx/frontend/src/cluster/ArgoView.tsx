@@ -986,7 +986,7 @@ function headerGrid(cols: string): React.CSSProperties {
 
 const splitPane: React.CSSProperties = { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 380px), 1fr))", gap: 14, alignItems: "start" };
 const splitPaneWide: React.CSSProperties = { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 420px), 1fr))", gap: 14, alignItems: "start" };
-const inspector: React.CSSProperties = { border: "0.5px solid var(--color-border-secondary)", borderRadius: 6, background: "var(--color-background-primary)", padding: 14, minWidth: 0, display: "grid", gap: 13, position: "sticky", top: 12 };
+const inspector: React.CSSProperties = { background: "var(--bench-well-bg, var(--color-background-secondary))", boxShadow: "var(--bench-well-shadow, inset 0 0 0 1px var(--color-border-tertiary))", borderRadius: "var(--radius-sm)", padding: 14, minWidth: 0, display: "grid", gap: 13, position: "sticky", top: 12 };
 const mutedLine: React.CSSProperties = { color: "var(--color-text-tertiary)", fontSize: 11 };
 const monoLine: React.CSSProperties = { fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--color-text-secondary)" };
 const smallBtn: React.CSSProperties = { ...btn, padding: "2px 7px", fontSize: 10 };

@@ -73,7 +73,14 @@ func resourceQuotaFacts(u *unstructured.Unstructured) []Fact {
 		tone := ""
 		pct, ok := quotaPct(used, h)
 		if ok {
-			value += fmt.Sprintf(" (%.0f%%)", pct)
+			// Non-zero-but-tiny usage rounds to "0%" and reads as untouched;
+			// show "<1%" so a quota with real (small) usage is not mistaken for
+			// empty. "0%" stays 0% only when usage is genuinely zero.
+			if pct > 0 && pct < 1 {
+				value += " (<1%)"
+			} else {
+				value += fmt.Sprintf(" (%.0f%%)", pct)
+			}
 			switch {
 			case pct >= 100:
 				tone = "danger"
