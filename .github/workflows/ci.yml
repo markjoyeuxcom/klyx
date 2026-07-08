@@ -112,3 +112,10 @@ jobs:
       - name: Tests
         working-directory: cmd/klyx/frontend
         run: npm test -- --run
+
+      # tsc/vitest run against the dev toolchain; a prod-only vite breakage
+      # (env-gated imports, build-time transforms) would slip through to a tag
+      # otherwise. Run the real production build per-PR to catch it here.
+      - name: Build frontend (production)
+        working-directory: cmd/klyx/frontend
+        run: npm run build

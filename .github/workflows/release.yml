@@ -19,6 +19,12 @@ on:
 permissions:
   contents: read
 
+# One release run per ref. Never cancel an in-flight release - a half-published
+# set of assets is worse than waiting for the previous run to finish.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 env:
   NODE_VERSION: "24"
   WAILS_VERSION: "v3.0.0-alpha2.103"
@@ -104,7 +110,10 @@ jobs:
         run: npm run build
 
       - name: Test Go
-        run: go test ./...
+        # Match ci.yml exactly: race-enabled, excluding the generated
+        # cmd/klyx/build/ tree. A release must not pass on a weaker suite than
+        # every PR already runs.
+        run: go test -race $(go list ./... | grep -v '/cmd/klyx/build/')
 
   build-macos:
     name: build macOS universal
@@ -159,7 +168,10 @@ jobs:
           ditto -c -k --sequesterRsrc --keepParent \
             cmd/klyx/bin/klyx.app \
             "artifacts/klyx-${KLYX_VERSION}-darwin-universal.zip"
-          shasum -a 256 artifacts/* > "artifacts/klyx-${KLYX_VERSION}-darwin-universal.sha256"
+          # Record leaf names only, so 'shasum -c' works from inside the
+          # download dir (running over artifacts/* bakes the path prefix in).
+          (cd artifacts && shasum -a 256 "klyx-${KLYX_VERSION}-darwin-universal.zip" \
+            > "klyx-${KLYX_VERSION}-darwin-universal.sha256")
 
       - uses: actions/upload-artifact@v7
         with:
@@ -169,12 +181,17 @@ jobs:
           compression-level: 0
 
   build-linux:
-    name: build Linux amd64
+    name: build Linux ${{ matrix.arch }}
     runs-on: ubuntu-24.04
     needs: [version, test]
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64, arm64]
     env:
       KLYX_VERSION: ${{ needs.version.outputs.version }}
-      GOARCH: amd64
+      KLYX_ARCH: ${{ matrix.arch }}
+      GOARCH: ${{ matrix.arch }}
       GIT_COMMITTER_NAME: Moomora
       GIT_COMMITTER_EMAIL: actions@github.com
     steps:
@@ -213,11 +230,20 @@ jobs:
       - name: Apply build version
         run: node scripts/set-build-version.mjs "${KLYX_VERSION}"
 
+      # The runner is amd64, so arm64 is a cross-arch build: the linux:build
+      # task routes to Docker (Dockerfile.cross) when target != host arch, and
+      # that path needs the wails-cross image built first. amd64 builds
+      # natively and never touches Docker.
+      - name: Build cross-compile image (arm64 only)
+        if: matrix.arch == 'arm64'
+        working-directory: cmd/klyx
+        run: wails3 task setup:docker
+
       - name: Build Linux binary and packages
         working-directory: cmd/klyx
         run: |
           set -euo pipefail
-          wails3 task linux:build ARCH=amd64 OUTPUT=bin/klyx
+          wails3 task linux:build ARCH="${KLYX_ARCH}" OUTPUT=bin/klyx
           wails3 task linux:generate:dotdesktop
           wails3 task linux:generate:deb
           wails3 task linux:generate:rpm
@@ -229,15 +255,21 @@ jobs:
           install -m 0755 cmd/klyx/bin/klyx artifacts/linux/klyx/klyx
           install -m 0644 cmd/klyx/build/linux/klyx.desktop artifacts/linux/klyx/klyx.desktop
           install -m 0644 cmd/klyx/build/appicon.png artifacts/linux/klyx/klyx.png
-          tar -C artifacts/linux -czf "artifacts/klyx-${KLYX_VERSION}-linux-amd64.tar.gz" klyx
-          cp cmd/klyx/bin/*.deb "artifacts/klyx-${KLYX_VERSION}-linux-amd64.deb"
-          cp cmd/klyx/bin/*.rpm "artifacts/klyx-${KLYX_VERSION}-linux-amd64.rpm"
+          tar -C artifacts/linux -czf "artifacts/klyx-${KLYX_VERSION}-linux-${KLYX_ARCH}.tar.gz" klyx
+          cp cmd/klyx/bin/*.deb "artifacts/klyx-${KLYX_VERSION}-linux-${KLYX_ARCH}.deb"
+          cp cmd/klyx/bin/*.rpm "artifacts/klyx-${KLYX_VERSION}-linux-${KLYX_ARCH}.rpm"
           rm -rf artifacts/linux
-          sha256sum artifacts/* > "artifacts/klyx-${KLYX_VERSION}-linux-amd64.sha256"
+          # Record leaf names only, so 'sha256sum -c' works from inside the
+          # download dir (running over artifacts/* bakes the path prefix in).
+          (cd artifacts && sha256sum \
+            "klyx-${KLYX_VERSION}-linux-${KLYX_ARCH}.tar.gz" \
+            "klyx-${KLYX_VERSION}-linux-${KLYX_ARCH}.deb" \
+            "klyx-${KLYX_VERSION}-linux-${KLYX_ARCH}.rpm" \
+            > "klyx-${KLYX_VERSION}-linux-${KLYX_ARCH}.sha256")
 
       - uses: actions/upload-artifact@v7
         with:
-          name: klyx-${{ env.KLYX_VERSION }}-linux-amd64
+          name: klyx-${{ env.KLYX_VERSION }}-linux-${{ matrix.arch }}
           path: artifacts/*
           if-no-files-found: error
           compression-level: 0
