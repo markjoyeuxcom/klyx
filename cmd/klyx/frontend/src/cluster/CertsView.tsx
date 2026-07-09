@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useFleet } from "../store/fleet";
 import type { CertificateDTO, IssuerDTO, ChainNodeDTO, CertChainDTO } from "../store/fleet";
 import { openCertManager, closeCertManager, getCertificateChain } from "../bridge/certmanager";
+import { aiAvailability, aiEgressAllowed, explainCertificate } from "../bridge/ai";
+import type { AIResultDTO } from "../store/fleet";
 import { useListKeys } from "../chrome/useListKeys";
 import { FKeysBar } from "../chrome/FKeysBar";
 import { inputWell, MetersStrip, well, Badge, FilterButton, StatusDot, frame, ellipsis, mono, readyColor, toneColor, type Tone } from "../chrome/primitives";
@@ -10,7 +12,7 @@ import { CopyButton } from "../chrome/CopyButton";
 import { EmptyState } from "../chrome/EmptyState";
 import { SkeletonRows } from "../chrome/SkeletonRows";
 import { WatchErrorBanner } from "../chrome/WatchErrorBanner";
-import { IconCertificate } from "@tabler/icons-react";
+import { IconCertificate, IconSparkles, IconAlertTriangle } from "@tabler/icons-react";
 import { SECRET_REF } from "./resourceRefs";
 import { SyncingChip, staleStyle } from "./staleness";
 
@@ -132,6 +134,23 @@ export function CertsView({ cluster }: { cluster: string }) {
     const name = cm.selectedKey.slice(slash + 1);
     void getCertificateChain(cluster, ns, name).catch((e) => console.error("getCertificateChain", e));
   }, [cluster, cm.selectedKey, cm.cluster]);
+
+  // AI-assist availability (drives whether the "Explain" affordance renders) +
+  // the per-cluster egress decision (hosted backend on a protected cluster).
+  const [ai, setAi] = useState<{ ready: boolean; egress: boolean }>({ ready: false, egress: false });
+  useEffect(() => {
+    if (absent) return;
+    let live = true;
+    aiAvailability()
+      .then(async (a) => {
+        if (!live) return;
+        if (!a.ready) { setAi({ ready: false, egress: false }); return; }
+        const egress = await aiEgressAllowed(cluster).catch(() => false);
+        if (live) setAi({ ready: true, egress });
+      })
+      .catch(() => { if (live) setAi({ ready: false, egress: false }); });
+    return () => { live = false; };
+  }, [cluster, absent]);
 
   const certs = cm.cluster === cluster ? cm.certificates : [];
   const issuers = cm.cluster === cluster ? cm.issuers : [];
@@ -287,7 +306,7 @@ export function CertsView({ cluster }: { cluster: string }) {
           </div>
 
           <div data-testid="cert-inspector" style={{ minHeight: 0, overflowY: "auto" }}>
-            {selected ? <CertInspector c={selected} issuer={resolveIssuer(selected, issuers)} chain={chain} chainLoading={cm.chainLoading} /> : <EmptyInspector attention={attention} />}
+            {selected ? <CertInspector c={selected} cluster={cluster} issuer={resolveIssuer(selected, issuers)} chain={chain} chainLoading={cm.chainLoading} aiReady={ai.ready} aiEgress={ai.egress} /> : <EmptyInspector attention={attention} />}
           </div>
         </div>
       )}
@@ -340,7 +359,7 @@ function CertRow({ c, open, kbSelected, onClick }: { c: CertificateDTO; open: bo
   );
 }
 
-function CertInspector({ c, issuer, chain, chainLoading }: { c: CertificateDTO; issuer: IssuerDTO | undefined; chain: CertChainDTO | null; chainLoading: boolean }) {
+function CertInspector({ c, cluster, issuer, chain, chainLoading, aiReady, aiEgress }: { c: CertificateDTO; cluster: string; issuer: IssuerDTO | undefined; chain: CertChainDTO | null; chainLoading: boolean; aiReady: boolean; aiEgress: boolean }) {
   // Prefer the server-resolved bound issuer (chain.issuer); fall back to the one
   // resolved from the watched issuers list before the chain lands.
   const boundIssuer = chain?.issuer ?? issuer;
@@ -351,12 +370,45 @@ function CertInspector({ c, issuer, chain, chainLoading }: { c: CertificateDTO; 
   const warnings = arrayOf(chain?.warnings);
   const dnsNames = arrayOf(c.dnsNames);
   const cause = failureHint(c, boundIssuer, failing, warnings);
+
+  // AI "Explain this" — on-demand, read-only, reset when the selection changes.
+  const [explain, setExplain] = useState<{ loading: boolean; result: AIResultDTO | null }>({ loading: false, result: null });
+  useEffect(() => { setExplain({ loading: false, result: null }); }, [c.namespace, c.name]);
+  const runExplain = useCallback(() => {
+    setExplain({ loading: true, result: null });
+    explainCertificate(cluster, c.namespace, c.name)
+      .then((r) => {
+        setExplain({ loading: false, result: r });
+        if (r.error) {
+          useFleet.getState().setActionStatus({ kind: "error", message: `Explain failed: ${r.error}` });
+        } else {
+          // Audit the egress: a record of what was sent, to which backend.
+          useFleet.getState().setActionStatus({ kind: "success", message: `AI explain — Certificate/${c.namespace}/${c.name} via ${r.backend}` });
+        }
+      })
+      .catch((e) => {
+        setExplain({ loading: false, result: null });
+        useFleet.getState().setActionStatus({ kind: "error", message: `Explain failed: ${String(e)}` });
+      });
+  }, [cluster, c.namespace, c.name]);
+
   return (
     <div style={{ ...well, padding: 14, display: "flex", flexDirection: "column", gap: 12 }}>
       <div>
         <div style={{ display: "flex", alignItems: "center", gap: 2, marginBottom: 8 }}>
           <div style={{ ...mono, fontSize: 13, fontWeight: 500 }}>{c.namespace}/{c.name}</div>
           <CopyButton text={c.name} label={`copy certificate name ${c.name}`} />
+          {aiReady && (
+            <button
+              onClick={runExplain}
+              disabled={!aiEgress || explain.loading}
+              title={aiEgress ? "Explain why this certificate is stuck (AI, read-only)" : "AI is disabled for this protected cluster — use a local backend or set ai.allowProtectedEgress"}
+              style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11, padding: "3px 8px", borderRadius: 4, cursor: aiEgress && !explain.loading ? "pointer" : "not-allowed", border: "0.5px solid var(--color-border-info)", background: "var(--color-background-info)", color: "var(--color-text-info)", opacity: aiEgress ? 1 : 0.5 }}
+            >
+              <IconSparkles size={12} stroke={1.5} />
+              {explain.loading ? "explaining…" : "Explain"}
+            </button>
+          )}
         </div>
         <InspectorStatus
           tone={certTone(c)}
@@ -371,6 +423,25 @@ function CertInspector({ c, issuer, chain, chainLoading }: { c: CertificateDTO; 
           <div style={{ fontSize: 11, color: "var(--color-text-warning)", fontWeight: 600 }}>likely cause</div>
           <div style={{ fontSize: 11, color: "var(--color-text-secondary)", marginTop: 3 }}>{cause}</div>
         </div>
+      )}
+
+      {(explain.loading || explain.result) && (
+        <InspectorSection title="Explain (AI)">
+          {explain.loading ? (
+            <div style={{ fontSize: 11, color: "var(--color-text-tertiary)" }}>asking the model…</div>
+          ) : explain.result?.error ? (
+            <div style={{ display: "flex", alignItems: "flex-start", gap: 5, fontSize: 11, color: "var(--color-text-danger)" }}>
+              <IconAlertTriangle size={12} stroke={1.5} style={{ flexShrink: 0, marginTop: 1 }} />
+              <span>{explain.result.error}</span>
+            </div>
+          ) : explain.result ? (
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              <div style={{ fontSize: 11, color: "var(--color-text-secondary)", whiteSpace: "pre-wrap", lineHeight: 1.5 }}>{explain.result.explanation}</div>
+              <div style={{ ...mono, fontSize: 9, color: "var(--color-text-tertiary)" }}>Grounded on: {explain.result.groundedOn} · {explain.result.model}</div>
+              <div style={{ fontSize: 9, color: "var(--color-text-tertiary)", fontStyle: "italic" }}>AI-generated from the resolved chain — verify before acting.</div>
+            </div>
+          ) : null}
+        </InspectorSection>
       )}
 
       {/* A failing bound issuer is the headline for a stuck cert (M10 source pattern). */}

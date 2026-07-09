@@ -14,7 +14,24 @@ import (
 
 type Config struct {
 	Clusters []ClusterConfig `yaml:"clusters"`
+	AI       *AIConfig       `yaml:"ai"`
 }
+
+// AIConfig is the global (not per-cluster) AI-assist settings. AI is opt-in and
+// OFF by default. Backend "local" points at an OpenAI-compatible endpoint (Ollama
+// / llama.cpp) so nothing leaves the machine; "hosted" uses the Anthropic API.
+// Hosted egress to a protected cluster is refused unless AllowProtectedEgress.
+type AIConfig struct {
+	Backend              string `yaml:"backend"` // "off" (default) | "hosted" | "local"
+	BaseURL              string `yaml:"baseUrl"` // hosted default api.anthropic.com; local default localhost:11434
+	APIKey               string `yaml:"apiKey"`
+	Model                string `yaml:"model"`                // hosted default claude-sonnet-5; local must be set
+	AllowProtectedEgress bool   `yaml:"allowProtectedEgress"` // default false: hosted refused on protected clusters
+	TLSSkipVerify        bool   `yaml:"tlsSkipVerify"`        // for a local self-signed endpoint
+}
+
+// Enabled reports whether AI is configured to run (a non-nil, non-off backend).
+func (a *AIConfig) Enabled() bool { return a != nil && a.Backend != "" && a.Backend != "off" }
 
 type ClusterConfig struct {
 	Name        string            `yaml:"name"`
@@ -157,11 +174,43 @@ func (c *Config) applyDefaults() {
 		}
 		c.Clusters[i].applyDerivedDefaults()
 	}
+	if c.AI != nil {
+		c.AI.applyDefaults()
+	}
+}
+
+func (a *AIConfig) applyDefaults() {
+	if a.Backend == "" {
+		a.Backend = "off"
+	}
+	switch a.Backend {
+	case "hosted":
+		if a.BaseURL == "" {
+			a.BaseURL = "https://api.anthropic.com"
+		}
+		if a.Model == "" {
+			a.Model = "claude-sonnet-5"
+		}
+	case "local":
+		if a.BaseURL == "" {
+			a.BaseURL = "http://localhost:11434"
+		}
+	}
 }
 
 func (c *Config) validate() error {
 	if len(c.Clusters) == 0 {
 		return fmt.Errorf("no clusters configured")
+	}
+	if c.AI != nil {
+		switch c.AI.Backend {
+		case "", "off", "hosted", "local":
+		default:
+			return fmt.Errorf("ai.backend must be off, hosted, or local (got %q)", c.AI.Backend)
+		}
+		if c.AI.Backend == "hosted" && c.AI.APIKey == "" {
+			return fmt.Errorf("ai.apiKey is required when ai.backend is hosted")
+		}
 	}
 	seen := make(map[string]bool, len(c.Clusters))
 	for i, cl := range c.Clusters {

@@ -98,6 +98,57 @@ func TestValidateRejectsNoClusters(t *testing.T) {
 	}
 }
 
+func TestAIConfigDefaultsAndValidation(t *testing.T) {
+	// nil AI is fine (off) and Enabled() is false.
+	var none *AIConfig
+	if none.Enabled() {
+		t.Fatal("nil AIConfig must not be Enabled")
+	}
+
+	// hosted backend fills BaseURL + Model defaults.
+	c := &Config{Clusters: []ClusterConfig{{Name: "a"}}, AI: &AIConfig{Backend: "hosted", APIKey: "sk"}}
+	c.applyDefaults()
+	if c.AI.BaseURL != "https://api.anthropic.com" || c.AI.Model != "claude-sonnet-5" {
+		t.Fatalf("hosted defaults not applied: %+v", c.AI)
+	}
+	if !c.AI.Enabled() {
+		t.Fatal("hosted backend must be Enabled")
+	}
+	if err := c.validate(); err != nil {
+		t.Fatalf("valid hosted config rejected: %v", err)
+	}
+
+	// empty backend defaults to off (not enabled).
+	off := &Config{Clusters: []ClusterConfig{{Name: "a"}}, AI: &AIConfig{}}
+	off.applyDefaults()
+	if off.AI.Backend != "off" || off.AI.Enabled() {
+		t.Fatalf("empty backend must default off, got %+v", off.AI)
+	}
+
+	// hosted without an API key is rejected.
+	noKey := &Config{Clusters: []ClusterConfig{{Name: "a"}}, AI: &AIConfig{Backend: "hosted"}}
+	noKey.applyDefaults()
+	if err := noKey.validate(); err == nil {
+		t.Fatal("hosted backend without apiKey must be rejected")
+	}
+
+	// unknown backend is rejected.
+	bad := &Config{Clusters: []ClusterConfig{{Name: "a"}}, AI: &AIConfig{Backend: "wat"}}
+	if err := bad.validate(); err == nil {
+		t.Fatal("unknown ai.backend must be rejected")
+	}
+
+	// local backend defaults the Ollama base URL and needs no key.
+	local := &Config{Clusters: []ClusterConfig{{Name: "a"}}, AI: &AIConfig{Backend: "local", Model: "llama3.1"}}
+	local.applyDefaults()
+	if local.AI.BaseURL != "http://localhost:11434" {
+		t.Fatalf("local base URL default not applied: %+v", local.AI)
+	}
+	if err := local.validate(); err != nil {
+		t.Fatalf("valid local config rejected: %v", err)
+	}
+}
+
 func TestServiceRefValidation(t *testing.T) {
 	cases := []struct {
 		name    string

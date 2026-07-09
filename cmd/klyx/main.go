@@ -2,12 +2,15 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"embed"
 	"log"
+	"net/http"
 	"os"
 	"path/filepath"
 	"time"
 
+	"github.com/moomora/klyx/internal/ai"
 	"github.com/moomora/klyx/internal/appbridge"
 	"github.com/moomora/klyx/internal/clock"
 	"github.com/moomora/klyx/internal/clustermesh"
@@ -277,6 +280,32 @@ func main() {
 	// consulted until a destructive verb runs at request time.
 	appbridge.SetProtectGuard(appbridge.NewProtectGuard(configSvc.IsProtected, time.Now))
 
+	// AI-assist (read-only "Explain this"). Off unless fleet.yaml configures a
+	// backend. The client is built once from the startup config; nil when off, so
+	// AIService.Available() reports not-ready and the UI hides the affordance. The
+	// egress gate reuses configSvc.IsProtected (live) exactly like the ProtectGuard.
+	var aiClient appbridge.Completer
+	aiBackend, aiAllowEgress := "off", false
+	if cfg.AI.Enabled() {
+		aiBackend, aiAllowEgress = cfg.AI.Backend, cfg.AI.AllowProtectedEgress
+		tr := &http.Transport{}
+		if cfg.AI.TLSSkipVerify {
+			tr.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec // user opt-in for a local self-signed endpoint
+		}
+		httpc := &http.Client{Transport: tr, Timeout: 90 * time.Second}
+		aiClient = ai.NewClient(ai.Backend(cfg.AI.Backend), cfg.AI.BaseURL, cfg.AI.APIKey, cfg.AI.Model, httpc)
+	}
+	aiSvc := appbridge.NewAIService(
+		func(name string) (appbridge.CertExplainConn, bool) {
+			c, ok := reg.Conn(name)
+			if !ok {
+				return nil, false
+			}
+			return c, true
+		},
+		aiClient, aiBackend, aiAllowEgress, configSvc.IsProtected,
+	)
+
 	argoSvc := appbridge.NewArgoService(func(name string) (appbridge.ArgoConn, bool) {
 		c, ok := reg.Conn(name)
 		if !ok {
@@ -340,6 +369,7 @@ func main() {
 			application.NewService(windowsSvc),
 			application.NewService(configSvc),
 			application.NewService(argoSvc),
+			application.NewService(aiSvc),
 			application.NewService(dockSvc),
 			application.NewService(notifySvc),
 			application.NewService(shellSvc),
