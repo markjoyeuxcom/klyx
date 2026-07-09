@@ -3,11 +3,13 @@ package appbridge
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/moomora/klyx/internal/ai"
 	"github.com/moomora/klyx/internal/certmanager"
+	"github.com/moomora/klyx/internal/crd"
 )
 
 // The real transport must satisfy the Completer interface main.go passes in.
@@ -29,12 +31,26 @@ func (f *fakeCompleter) Complete(_ context.Context, system, user string, _ int) 
 func (f *fakeCompleter) Model() string { return "test-model" }
 
 type fakeExplainConn struct {
-	chain certmanager.Chain
-	err   error
+	chain   certmanager.Chain
+	err     error
+	details map[string]crd.InstanceDetail // keyed "group/plural/ns/name"
+	detErr  error
+	getCall int
 }
 
 func (f *fakeExplainConn) GetCertificateChain(context.Context, string, string) (certmanager.Chain, error) {
 	return f.chain, f.err
+}
+
+func (f *fakeExplainConn) GetInstanceDetail(_ context.Context, group, _, plural, ns, name string) (crd.InstanceDetail, error) {
+	f.getCall++
+	if f.detErr != nil {
+		return crd.InstanceDetail{}, f.detErr
+	}
+	if d, ok := f.details[group+"/"+plural+"/"+ns+"/"+name]; ok {
+		return d, nil
+	}
+	return crd.InstanceDetail{}, errors.New("not found")
 }
 
 func stuckChain() certmanager.Chain {
@@ -54,9 +70,9 @@ func stuckChain() certmanager.Chain {
 	}
 }
 
-func newAI(client Completer, backend string, allowEgress bool, protected bool, conn CertExplainConn) *AIService {
+func newAI(client Completer, backend string, allowEgress bool, protected bool, conn AIConn) *AIService {
 	return NewAIService(
-		func(string) (CertExplainConn, bool) { return conn, conn != nil },
+		func(string) (AIConn, bool) { return conn, conn != nil },
 		client, backend, allowEgress,
 		func(string) bool { return protected },
 	)
@@ -134,6 +150,114 @@ func TestAI_RedactionGuard_NoSecretsInPrompt(t *testing.T) {
 		if strings.Contains(user, bad) {
 			t.Fatalf("prompt leaked a sensitive marker %q: %s", bad, user)
 		}
+	}
+}
+
+func TestAI_ExplainResource_CrossLens(t *testing.T) {
+	root := crd.InstanceDetail{
+		Kind: "HTTPRoute", Namespace: "prod", Name: "ollama",
+		Conditions: []crd.Condition{{Type: "Accepted", Status: "False", Reason: "NoMatchingListener", Scope: "parent eg/eg"}},
+		Related:    []crd.RelatedRef{{Kind: "Gateway", Group: "gateway.networking.k8s.io", Version: "v1", Plural: "gateways", Namespace: "eg", Name: "eg", Scope: "Namespaced", Relation: "gateway"}},
+	}
+	gw := crd.InstanceDetail{
+		Kind: "Gateway", Namespace: "eg", Name: "eg",
+		Conditions: []crd.Condition{{Type: "Programmed", Status: "False", Reason: "Invalid", Scope: "listener https"}},
+	}
+	conn := &fakeExplainConn{details: map[string]crd.InstanceDetail{
+		"gateway.networking.k8s.io/httproutes/prod/ollama": root,
+		"gateway.networking.k8s.io/gateways/eg/eg":         gw,
+	}}
+	cl := &fakeCompleter{reply: "The HTTPRoute is not Accepted because Gateway eg's https listener is Invalid."}
+	s := newAI(cl, "local", false, false, conn)
+
+	r := s.ExplainResource("c", "gateway.networking.k8s.io", "v1", "httproutes", "prod", "ollama")
+	if !r.OK || r.Error != "" {
+		t.Fatalf("want OK, got %+v", r)
+	}
+	// The prompt carries BOTH the root's and the related gateway's resolved health.
+	for _, want := range []string{"HTTPRoute", "Gateway", "NoMatchingListener", "Invalid"} {
+		if !strings.Contains(cl.gotUser, want) {
+			t.Fatalf("prompt missing cross-lens context %q: %s", want, cl.gotUser)
+		}
+	}
+	if !strings.Contains(r.GroundedOn, "HTTPRoute/prod/ollama") || !strings.Contains(r.GroundedOn, "Gateway/eg/eg") {
+		t.Fatalf("groundedOn must name root + related: %q", r.GroundedOn)
+	}
+}
+
+func TestAI_ExplainResource_CapsRelated(t *testing.T) {
+	var related []crd.RelatedRef
+	details := map[string]crd.InstanceDetail{}
+	for i := 0; i < 10; i++ {
+		name := fmt.Sprintf("cm%d", i)
+		related = append(related, crd.RelatedRef{Kind: "ConfigMap", Group: "", Version: "v1", Plural: "configmaps", Namespace: "ns", Name: name, Scope: "Namespaced", Relation: "uses"})
+		details["/configmaps/ns/"+name] = crd.InstanceDetail{Kind: "ConfigMap", Namespace: "ns", Name: name}
+	}
+	details["/pods/ns/root"] = crd.InstanceDetail{Kind: "Pod", Namespace: "ns", Name: "root", Related: related}
+	conn := &fakeExplainConn{details: details}
+	s := newAI(&fakeCompleter{reply: "ok"}, "local", false, false, conn)
+
+	s.ExplainResource("c", "", "v1", "pods", "ns", "root")
+	// 1 root + aiRelatedCap related = the bundle stops walking at the cap.
+	if conn.getCall != aiRelatedCap+1 {
+		t.Fatalf("want %d Get calls (root + cap), got %d", aiRelatedCap+1, conn.getCall)
+	}
+}
+
+func TestAI_ExplainResource_SkipsUnresolvableRelated(t *testing.T) {
+	root := crd.InstanceDetail{Kind: "Pod", Namespace: "ns", Name: "p", Related: []crd.RelatedRef{
+		{Kind: "Secret", Group: "", Version: "v1", Plural: "secrets", Namespace: "ns", Name: "gone", Relation: "uses"},
+	}}
+	conn := &fakeExplainConn{details: map[string]crd.InstanceDetail{"/pods/ns/p": root}}
+	s := newAI(&fakeCompleter{reply: "ok"}, "local", false, false, conn)
+
+	r := s.ExplainResource("c", "", "v1", "pods", "ns", "p")
+	if !r.OK {
+		t.Fatalf("root must still explain when a related ref is unresolvable: %+v", r)
+	}
+	if strings.Contains(r.GroundedOn, "gone") {
+		t.Fatalf("an unresolvable related ref must not appear in groundedOn: %q", r.GroundedOn)
+	}
+}
+
+func TestAI_ExplainResource_RedactionGuard(t *testing.T) {
+	// A Secret-related object contributes only conditions/facts to the bundle;
+	// its (masked) YAML must never enter the prompt.
+	root := crd.InstanceDetail{Kind: "ExternalSecret", Namespace: "ns", Name: "es",
+		Conditions: []crd.Condition{{Type: "Ready", Status: "False", Reason: "SecretSyncedError"}},
+		Related:    []crd.RelatedRef{{Kind: "Secret", Group: "", Version: "v1", Plural: "secrets", Namespace: "ns", Name: "target", Relation: "target"}}}
+	sec := crd.InstanceDetail{Kind: "Secret", Namespace: "ns", Name: "target",
+		Facts: []crd.Fact{{Label: "keys", Value: "3", Kind: "well"}},
+		YAML:  "data:\n  password: <masked>\n"}
+	conn := &fakeExplainConn{details: map[string]crd.InstanceDetail{
+		"external-secrets.io/externalsecrets/ns/es": root,
+		"/secrets/ns/target":                        sec,
+	}}
+	cl := &fakeCompleter{reply: "ok"}
+	s := newAI(cl, "local", false, false, conn)
+
+	s.ExplainResource("c", "external-secrets.io", "v1beta1", "externalsecrets", "ns", "es")
+	for _, bad := range []string{"<masked>", "\"data\"", "password", "BEGIN"} {
+		if strings.Contains(cl.gotUser, bad) {
+			t.Fatalf("bundle leaked %q: %s", bad, cl.gotUser)
+		}
+	}
+	// But the Secret's benign fact + the ExternalSecret's failure condition ARE present.
+	if !strings.Contains(cl.gotUser, "SecretSyncedError") {
+		t.Fatalf("bundle should carry the ExternalSecret failure condition: %s", cl.gotUser)
+	}
+}
+
+func TestAI_ExplainResource_EgressGate(t *testing.T) {
+	cl := &fakeCompleter{reply: "x"}
+	conn := &fakeExplainConn{details: map[string]crd.InstanceDetail{"/pods/ns/p": {Kind: "Pod", Namespace: "ns", Name: "p"}}}
+	s := newAI(cl, "hosted", false, true, conn) // hosted + protected + no opt-in
+	r := s.ExplainResource("prd", "", "v1", "pods", "ns", "p")
+	if r.OK || !strings.Contains(r.Error, "protected") {
+		t.Fatalf("want protected-egress refusal, got %+v", r)
+	}
+	if cl.calls != 0 || conn.getCall != 0 {
+		t.Fatal("egress-refused must call neither the resolver nor the model")
 	}
 }
 

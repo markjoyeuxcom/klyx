@@ -296,7 +296,7 @@ func main() {
 		aiClient = ai.NewClient(ai.Backend(cfg.AI.Backend), cfg.AI.BaseURL, cfg.AI.APIKey, cfg.AI.Model, httpc)
 	}
 	aiSvc := appbridge.NewAIService(
-		func(name string) (appbridge.CertExplainConn, bool) {
+		func(name string) (appbridge.AIConn, bool) {
 			c, ok := reg.Conn(name)
 			if !ok {
 				return nil, false

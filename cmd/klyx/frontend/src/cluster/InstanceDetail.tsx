@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { useFleet, ResourceRef, InstanceRef, InstanceDetailDTO, SecretKeyDTO, ServiceBackingDTO, HPAScalingDTO, RelatedRefDTO, EventDTO, FactDTO } from "../store/fleet";
+import { useFleet, ResourceRef, InstanceRef, InstanceDetailDTO, SecretKeyDTO, ServiceBackingDTO, HPAScalingDTO, RelatedRefDTO, EventDTO, FactDTO, AIResultDTO } from "../store/fleet";
 import { getInstanceDetail, revealSecretKey, copyText, dryRunInstanceYAML, applyInstanceYAML, ActionResult } from "../bridge/crd";
+import { explainResource } from "../bridge/ai";
+import { useAIAvailability } from "./useAI";
 import { armProtected } from "../bridge/configsvc";
 import { openPodDetail } from "../bridge/pods";
 import { ForwardPopover } from "./ForwardPopover";
@@ -8,7 +10,7 @@ import { InspectorStatus, conditionColor, InspectorConditions, InspectorEvents, 
 import { actionBtn, ellipsis, type Tone } from "../chrome/primitives";
 import { CopyButton } from "../chrome/CopyButton";
 import { DescribePane } from "../chrome/DescribePane";
-import { IconX } from "@tabler/icons-react";
+import { IconX, IconSparkles, IconAlertTriangle } from "@tabler/icons-react";
 
 type DetailTab = "summary" | "related" | "events" | "yaml";
 
@@ -733,6 +735,27 @@ export function InstanceDetail({ cluster, resource, instance }: { cluster: strin
   const isCurrent = id.ref && id.ref.namespace === instance.namespace && id.ref.name === instance.name;
   const d = isCurrent ? id.detail : null;
 
+  // AI cross-lens "Explain this" — on-demand, read-only; reset on selection change.
+  const ai = useAIAvailability(cluster, true);
+  const [explain, setExplain] = useState<{ loading: boolean; result: AIResultDTO | null }>({ loading: false, result: null });
+  useEffect(() => { setExplain({ loading: false, result: null }); }, [resource.group, resource.plural, instance.namespace, instance.name]);
+  const runExplain = () => {
+    setExplain({ loading: true, result: null });
+    explainResource(cluster, resource.group, resource.version, resource.plural, instance.namespace, instance.name)
+      .then((r) => {
+        setExplain({ loading: false, result: r });
+        if (r.error) {
+          useFleet.getState().setActionStatus({ kind: "error", message: `Explain failed: ${r.error}` });
+        } else {
+          useFleet.getState().setActionStatus({ kind: "success", message: `AI explain — ${resource.kind}/${instance.namespace ? `${instance.namespace}/` : ""}${instance.name} via ${r.backend}` });
+        }
+      })
+      .catch((e) => {
+        setExplain({ loading: false, result: null });
+        useFleet.getState().setActionStatus({ kind: "error", message: `Explain failed: ${String(e)}` });
+      });
+  };
+
   const onCopy = () => {
     if (!d) return;
     void copyText(d.yaml);
@@ -750,6 +773,17 @@ export function InstanceDetail({ cluster, resource, instance }: { cluster: strin
         <CopyButton text={instance.name} label={`copy name ${instance.name}`} />
         {d && d.created && <span style={{ fontSize: 11, color: "var(--color-text-tertiary)", flexShrink: 0 }}>{age(d.created)}</span>}
         <div style={{ flex: 1 }} />
+        {ai.ready && (
+          <button
+            onClick={runExplain}
+            disabled={!ai.egress || explain.loading}
+            title={ai.egress ? "Explain the root cause across related objects (AI, read-only)" : "AI is disabled for this protected cluster — use a local backend or set ai.allowProtectedEgress"}
+            style={{ ...actionBtn, display: "inline-flex", alignItems: "center", gap: 4, color: "var(--color-text-info)", borderColor: "var(--color-border-info)", opacity: ai.egress ? 1 : 0.5, cursor: ai.egress && !explain.loading ? "pointer" : "not-allowed" }}
+          >
+            <IconSparkles size={12} stroke={1.5} />
+            {explain.loading ? "explaining…" : "Explain"}
+          </button>
+        )}
         <button onClick={() => setDescribing(true)} style={actionBtn}>describe</button>
         <button onClick={() => void getInstanceDetail(cluster, resource, instance)} style={actionBtn}>Refresh</button>
         <button onClick={closeInstance} aria-label="close instance panel" style={{ ...actionBtn, display: "inline-flex", alignItems: "center" }}><IconX size={13} stroke={1.5} /></button>
@@ -795,6 +829,24 @@ export function InstanceDetail({ cluster, resource, instance }: { cluster: strin
           <div data-testid="instance-detail-scroll" style={{ flex: 1, minHeight: 0, overflowY: "auto", paddingRight: 4 }}>
             {tab === "summary" ? (
               <>
+                {(explain.loading || explain.result) && (
+                  <InspectorSection title="Explain (AI)">
+                    {explain.loading ? (
+                      <div style={{ fontSize: 11, color: "var(--color-text-tertiary)" }}>tracing the chain across related objects…</div>
+                    ) : explain.result?.error ? (
+                      <div style={{ display: "flex", alignItems: "flex-start", gap: 5, fontSize: 11, color: "var(--color-text-danger)" }}>
+                        <IconAlertTriangle size={12} stroke={1.5} style={{ flexShrink: 0, marginTop: 1 }} />
+                        <span>{explain.result.error}</span>
+                      </div>
+                    ) : explain.result ? (
+                      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                        <div style={{ fontSize: 11, color: "var(--color-text-secondary)", whiteSpace: "pre-wrap", lineHeight: 1.5 }}>{explain.result.explanation}</div>
+                        <div style={{ fontFamily: "var(--font-mono)", fontSize: 9, color: "var(--color-text-tertiary)" }}>Grounded on: {explain.result.groundedOn} · {explain.result.model}</div>
+                        <div style={{ fontSize: 9, color: "var(--color-text-tertiary)", fontStyle: "italic" }}>AI-generated from resolved health — verify before acting.</div>
+                      </div>
+                    ) : null}
+                  </InspectorSection>
+                )}
                 {/* The data path leads - the salient facts a platform engineer
                     reads first - then metadata, typed sections, and conditions. */}
                 <FactsSummary facts={d.facts} />

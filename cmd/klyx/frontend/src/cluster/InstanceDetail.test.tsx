@@ -33,6 +33,13 @@ vi.mock("../bridge/exec", () => ({
 }));
 import { describeResource } from "../bridge/exec";
 
+vi.mock("../bridge/ai", () => ({
+  aiAvailability: vi.fn(async () => ({ backend: "off", ready: false })),
+  aiEgressAllowed: vi.fn(async () => false),
+  explainResource: vi.fn(async () => ({ ok: true, explanation: "", model: "", backend: "", groundedOn: "", error: "" })),
+}));
+import { aiAvailability, aiEgressAllowed, explainResource } from "../bridge/ai";
+
 const resource: ResourceRef = { group: "cert-manager.io", version: "v1", plural: "certificates", kind: "Certificate", scope: "Namespaced" };
 const instance: InstanceRef = { namespace: "default", name: "web-tls" };
 const detail: InstanceDetailDTO = {
@@ -824,5 +831,46 @@ describe("InstanceDetail facts (the data path)", () => {
     const { getByText, queryByText } = render(<InstanceDetail cluster="x" resource={resource} instance={instance} />);
     expect(getByText(/Ready True/)).toBeTruthy();
     expect(queryByText("Routing")).toBeNull();
+  });
+});
+
+describe("InstanceDetail cross-lens Explain (AI)", () => {
+  it("hides Explain when no AI backend is configured", async () => {
+    vi.mocked(aiAvailability).mockResolvedValueOnce({ backend: "off", ready: false });
+    seed();
+    const { queryByRole } = render(<InstanceDetail cluster="x" resource={resource} instance={instance} />);
+    await act(async () => { await Promise.resolve(); });
+    expect(queryByRole("button", { name: /explain/i })).toBeNull();
+  });
+
+  it("shows Explain and renders a grounded cross-lens result on click", async () => {
+    vi.mocked(aiAvailability).mockResolvedValueOnce({ backend: "local", ready: true });
+    vi.mocked(aiEgressAllowed).mockResolvedValueOnce(true);
+    vi.mocked(explainResource).mockResolvedValueOnce({
+      ok: true, backend: "local", model: "llama3.1",
+      groundedOn: "Certificate/default/web-tls, ClusterIssuer/le-prod",
+      explanation: "Issuance is stuck: the bound ClusterIssuer le-prod is not Ready.",
+      error: "",
+    });
+    seed();
+    const { findByRole, findByText, getByText } = render(<InstanceDetail cluster="x" resource={resource} instance={instance} />);
+
+    const btn = await findByRole("button", { name: /explain/i });
+    fireEvent.click(btn);
+
+    expect(await findByText(/bound ClusterIssuer le-prod is not Ready/)).toBeTruthy();
+    expect(getByText(/Grounded on:/)).toBeTruthy();
+    expect(getByText(/verify before acting/)).toBeTruthy();
+    expect(vi.mocked(explainResource)).toHaveBeenCalledWith("x", "cert-manager.io", "v1", "certificates", "default", "web-tls");
+  });
+
+  it("disables Explain when hosted egress is refused on a protected cluster", async () => {
+    vi.mocked(aiAvailability).mockResolvedValueOnce({ backend: "hosted", ready: true });
+    vi.mocked(aiEgressAllowed).mockResolvedValueOnce(false);
+    seed();
+    const { findByRole } = render(<InstanceDetail cluster="x" resource={resource} instance={instance} />);
+    const btn = (await findByRole("button", { name: /explain/i })) as HTMLButtonElement;
+    expect(btn.disabled).toBe(true);
+    expect(btn.title).toMatch(/protected cluster/i);
   });
 });

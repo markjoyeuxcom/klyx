@@ -20,3 +20,10 @@ export async function aiEgressAllowed(cluster: string): Promise<boolean> {
 export async function explainCertificate(cluster: string, namespace: string, name: string): Promise<AIResultDTO> {
   return (await AIService.ExplainCertificate(cluster, namespace, name)) as AIResultDTO;
 }
+
+// explainResource asks the model for a cross-lens root-cause narrative for any
+// resource, grounded in the resolved health of the object AND the objects it
+// relates to. Read-only.
+export async function explainResource(cluster: string, group: string, version: string, plural: string, namespace: string, name: string): Promise<AIResultDTO> {
+  return (await AIService.ExplainResource(cluster, group, version, plural, namespace, name)) as AIResultDTO;
+}
