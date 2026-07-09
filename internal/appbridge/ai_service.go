@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/moomora/klyx/internal/capability"
 	"github.com/moomora/klyx/internal/certmanager"
 	"github.com/moomora/klyx/internal/crd"
 )
@@ -43,15 +44,24 @@ type AIConn interface {
 // the resolved (secret-free) chain to the model, and never mutates cluster state.
 // Errors fold into the result DTO; it never throws across the bridge.
 type AIService struct {
-	lookup      func(string) (AIConn, bool)
-	client      Completer // nil when the backend is off
-	backend     string
-	allowEgress bool
-	isProtected func(string) bool
+	lookup       func(string) (AIConn, bool)
+	client       Completer // nil when the backend is off
+	backend      string
+	allowEgress  bool
+	isProtected  func(string) bool
+	capabilities func(string) capability.Set // per-cluster operator health; may be nil
 }
 
-func NewAIService(lookup func(string) (AIConn, bool), client Completer, backend string, allowEgress bool, isProtected func(string) bool) *AIService {
-	return &AIService{lookup: lookup, client: client, backend: backend, allowEgress: allowEgress, isProtected: isProtected}
+func NewAIService(lookup func(string) (AIConn, bool), client Completer, backend string, allowEgress bool, isProtected func(string) bool, capabilities func(string) capability.Set) *AIService {
+	return &AIService{lookup: lookup, client: client, backend: backend, allowEgress: allowEgress, isProtected: isProtected, capabilities: capabilities}
+}
+
+// operators projects the cluster's controller health into the bundle (nil-safe).
+func (s *AIService) operators(cluster string) *operatorHealth {
+	if s.capabilities == nil {
+		return nil
+	}
+	return projectOperators(s.capabilities(cluster))
 }
 
 // Available reports whether the Explain affordance should render at all.
@@ -134,6 +144,7 @@ func (s *AIService) ExplainResource(cluster, group, version, plural, ns, name st
 	if err != nil {
 		return AIResultDTO{Error: "resolve resource: " + err.Error()}
 	}
+	bundle.Operators = s.operators(cluster)
 	system, user := BuildResourceExplainPrompt(bundle)
 	text, err := s.client.Complete(ctx, system, user, aiMaxTokens)
 	if err != nil {
@@ -171,6 +182,7 @@ func (s *AIService) SuggestFix(cluster, group, version, plural, ns, name string)
 	if err != nil {
 		return AIResultDTO{Error: "resolve resource: " + err.Error()}
 	}
+	bundle.Operators = s.operators(cluster)
 	system, user := BuildFixPrompt(bundle, root.YAML)
 	text, err := s.client.Complete(ctx, system, user, aiFixMaxTokens)
 	if err != nil {

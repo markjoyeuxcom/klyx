@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 
+	"github.com/moomora/klyx/internal/capability"
 	"github.com/moomora/klyx/internal/crd"
 )
 
@@ -35,8 +36,58 @@ type factView struct {
 }
 
 type resourceBundle struct {
-	Root    resourceView   `json:"root"`
-	Related []resourceView `json:"related,omitempty"`
+	Root      resourceView    `json:"root"`
+	Related   []resourceView  `json:"related,omitempty"`
+	Operators *operatorHealth `json:"operators,omitempty"`
+}
+
+// operatorView is the health of one cluster controller. A resource can be stuck
+// because its own operator is down, so this often carries the real root cause.
+type operatorView struct {
+	Healthy bool   `json:"healthy"`
+	Tier    string `json:"tier"`
+	Reason  string `json:"reason,omitempty"`
+}
+
+// operatorHealth reports the health of the controllers that are actually present
+// on the cluster (absent operators are omitted to keep the context focused).
+type operatorHealth struct {
+	Flux            *operatorView `json:"flux,omitempty"`
+	Argo            *operatorView `json:"argo,omitempty"`
+	CertManager     *operatorView `json:"certManager,omitempty"`
+	ExternalSecrets *operatorView `json:"externalSecrets,omitempty"`
+	Reloader        *operatorView `json:"reloader,omitempty"`
+	Gateway         *operatorView `json:"gateway,omitempty"`
+}
+
+// projectOperators maps the capability Set to the present controllers' health.
+// Returns nil when nothing is installed (the section is then omitted).
+func projectOperators(set capability.Set) *operatorHealth {
+	present := false
+	view := func(isPresent, healthy bool, tier capability.Tier, reason string) *operatorView {
+		if !isPresent {
+			return nil
+		}
+		present = true
+		v := &operatorView{Healthy: healthy, Tier: tier.String()}
+		if !healthy {
+			v.Reason = reason
+		}
+		return v
+	}
+	oh := &operatorHealth{
+		Flux:            view(set.GitOps.Flux.Present, set.GitOps.Flux.Healthy, set.GitOps.Tier, set.GitOps.Reason),
+		Argo:            view(set.GitOps.Argo.Present, set.GitOps.Argo.Healthy, set.GitOps.Tier, set.GitOps.Reason),
+		CertManager:     view(set.CertManager.Present, set.CertManager.Healthy, set.CertManager.Tier, set.CertManager.Reason),
+		ExternalSecrets: view(set.ExternalSecrets.Present, set.ExternalSecrets.Healthy, set.ExternalSecrets.Tier, set.ExternalSecrets.Reason),
+		Reloader:        view(set.Reloader.Present, set.Reloader.Healthy, set.Reloader.Tier, set.Reloader.Reason),
+		Gateway: view(set.Network.GatewayAPIVersion != "" || set.Network.CiliumPresent,
+			set.Network.Tier == capability.Healthy, set.Network.Tier, set.Network.Reason),
+	}
+	if !present {
+		return nil
+	}
+	return oh
 }
 
 func toResourceView(d crd.InstanceDetail, relation string) resourceView {
@@ -52,6 +103,8 @@ func toResourceView(d crd.InstanceDetail, relation string) resourceView {
 
 // resourceExplainSystem is the cross-lens root-cause system prompt.
 const resourceExplainSystem = `You are a Kubernetes diagnostics assistant embedded in Klyx, a read-only desktop client. You are given one resource and the resolved health (conditions + facts) of the objects it relates to - Klyx already extracted all of this from the live cluster. In 3-5 sentences, explain the ROOT CAUSE of any problem, tracing the causal chain across the related objects (for example: a route is not accepted because its gateway's listener is down because a certificate is stuck because a challenge failed).
+
+An "operators" section reports the health of the cluster's controllers (Flux, Argo, cert-manager, External Secrets, Reloader, Gateway). If the operator responsible for a resource is not Healthy, that is often the real root cause - say so explicitly.
 
 Rules:
 - Reason ONLY from the provided data. Never invent objects, conditions, or fixes not present in the input.
@@ -73,6 +126,8 @@ func BuildResourceExplainPrompt(bundle resourceBundle) (system, user string) {
 const fixSystem = `You are a Kubernetes remediation assistant embedded in Klyx, a READ-ONLY desktop client. You are given a broken resource, the resolved health of it and its related objects, and its current manifest - all extracted from the live cluster by Klyx. Propose the MINIMAL change to the DESIRED STATE that would fix the diagnosed problem.
 
 Klyx will NOT apply your suggestion. The operator commits it to Git (a Kustomize patch, a Helm values change, or a manifest edit) and Flux/Argo reconciles it. So author a change to desired state, never an imperative command.
+
+An "operators" section reports the health of the cluster's controllers. If the operator responsible for this resource is not Healthy, no manifest change will help until the operator recovers - say that instead of proposing a spec edit.
 
 Output exactly three parts, in order:
 1. A one-line summary of the change.

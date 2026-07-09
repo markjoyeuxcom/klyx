@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/moomora/klyx/internal/ai"
+	"github.com/moomora/klyx/internal/capability"
 	"github.com/moomora/klyx/internal/certmanager"
 	"github.com/moomora/klyx/internal/crd"
 )
@@ -75,6 +76,7 @@ func newAI(client Completer, backend string, allowEgress bool, protected bool, c
 		func(string) (AIConn, bool) { return conn, conn != nil },
 		client, backend, allowEgress,
 		func(string) bool { return protected },
+		nil, // capabilities: exercised separately
 	)
 }
 
@@ -258,6 +260,42 @@ func TestAI_ExplainResource_EgressGate(t *testing.T) {
 	}
 	if cl.calls != 0 || conn.getCall != 0 {
 		t.Fatal("egress-refused must call neither the resolver nor the model")
+	}
+}
+
+func TestAI_ExplainResource_IncludesOperatorHealth(t *testing.T) {
+	root := crd.InstanceDetail{
+		Kind: "Certificate", Namespace: "prod", Name: "tls",
+		Conditions: []crd.Condition{{Type: "Ready", Status: "False", Reason: "IssuerNotReady"}},
+	}
+	conn := &fakeExplainConn{details: map[string]crd.InstanceDetail{"cert-manager.io/certificates/prod/tls": root}}
+	cl := &fakeCompleter{reply: "cert-manager itself is Degraded - fix the controller first."}
+	// cert-manager present but unhealthy: the real root cause is the operator.
+	caps := func(string) capability.Set {
+		return capability.Set{CertManager: capability.CertManagerCapability{
+			Base: capability.Base{Tier: capability.Degraded, Reason: "cert-manager controller not ready"}, Present: true, Healthy: false,
+		}}
+	}
+	s := NewAIService(
+		func(string) (AIConn, bool) { return conn, true },
+		cl, "local", false, func(string) bool { return false }, caps,
+	)
+
+	r := s.ExplainResource("c", "cert-manager.io", "v1", "certificates", "prod", "tls")
+	if !r.OK {
+		t.Fatalf("want OK, got %+v", r)
+	}
+	for _, want := range []string{"operators", "certManager", "cert-manager controller not ready"} {
+		if !strings.Contains(cl.gotUser, want) {
+			t.Fatalf("prompt missing operator health %q: %s", want, cl.gotUser)
+		}
+	}
+	// A cluster with no operators installed carries no operators section.
+	empty := NewAIService(func(string) (AIConn, bool) { return conn, true }, cl, "local", false, func(string) bool { return false },
+		func(string) capability.Set { return capability.Set{} })
+	empty.ExplainResource("c", "cert-manager.io", "v1", "certificates", "prod", "tls")
+	if strings.Contains(cl.gotUser, "\"operators\"") {
+		t.Fatalf("no installed operators should mean no operators section: %s", cl.gotUser)
 	}
 }
 
