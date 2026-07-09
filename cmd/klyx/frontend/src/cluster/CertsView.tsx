@@ -360,11 +360,17 @@ function CertInspector({ c, cluster, issuer, chain, chainLoading, aiReady, aiEgr
 
   // AI "Explain this" — on-demand, read-only, reset when the selection changes.
   const [explain, setExplain] = useState<{ loading: boolean; result: AIResultDTO | null }>({ loading: false, result: null });
-  useEffect(() => { setExplain({ loading: false, result: null }); }, [c.namespace, c.name]);
+  // Fence against a mid-flight cert change: CertInspector is reused across
+  // selections, so a slow explain from the previous cert must not land under the
+  // new one. The token bumps whenever the selected cert changes.
+  const explainTokenRef = useRef(0);
+  useEffect(() => { explainTokenRef.current++; setExplain({ loading: false, result: null }); }, [c.namespace, c.name]);
   const runExplain = useCallback(() => {
+    const token = explainTokenRef.current;
     setExplain({ loading: true, result: null });
     explainCertificate(cluster, c.namespace, c.name)
       .then((r) => {
+        if (token !== explainTokenRef.current) return; // selection changed mid-flight
         setExplain({ loading: false, result: r });
         if (r.error) {
           useFleet.getState().setActionStatus({ kind: "error", message: `Explain failed: ${r.error}` });
@@ -374,6 +380,7 @@ function CertInspector({ c, cluster, issuer, chain, chainLoading, aiReady, aiEgr
         }
       })
       .catch((e) => {
+        if (token !== explainTokenRef.current) return;
         setExplain({ loading: false, result: null });
         useFleet.getState().setActionStatus({ kind: "error", message: `Explain failed: ${String(e)}` });
       });

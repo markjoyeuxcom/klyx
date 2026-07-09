@@ -299,6 +299,44 @@ func TestAI_ExplainResource_IncludesOperatorHealth(t *testing.T) {
 	}
 }
 
+func TestProjectOperators_PerToolGitOpsTier(t *testing.T) {
+	// Flux healthy while Argo degraded (a supported coexistence). Flux must NOT
+	// inherit the combined Degraded tier.
+	set := capability.Set{GitOps: capability.GitOpsCapability{
+		Base: capability.Base{Tier: capability.Degraded, Reason: "Argo installed but argocd-application-controller is not ready"},
+		Flux: capability.FluxInfo{Present: true, Healthy: true},
+		Argo: capability.ArgoInfo{Present: true, Healthy: false},
+	}}
+	oh := projectOperators(set)
+	if oh == nil || oh.Flux == nil || oh.Argo == nil {
+		t.Fatalf("want flux+argo present: %+v", oh)
+	}
+	if !oh.Flux.Healthy || oh.Flux.Tier != "Healthy" || oh.Flux.Reason != "" {
+		t.Fatalf("healthy Flux must read Healthy with no reason, got %+v", oh.Flux)
+	}
+	if oh.Argo.Healthy || oh.Argo.Tier != "Degraded" || oh.Argo.Reason == "" {
+		t.Fatalf("degraded Argo must read Degraded with a reason, got %+v", oh.Argo)
+	}
+}
+
+func TestAI_ExplainResource_CapsGetsNotJustResults(t *testing.T) {
+	var related []crd.RelatedRef
+	for i := 0; i < 20; i++ {
+		related = append(related, crd.RelatedRef{Kind: "X", Group: "g", Version: "v1", Plural: "xs", Namespace: "ns", Name: fmt.Sprintf("x%d", i), Relation: "r"})
+	}
+	// Root resolves; every related ref is unresolvable (absent from details).
+	conn := &fakeExplainConn{details: map[string]crd.InstanceDetail{
+		"/pods/ns/root": {Kind: "Pod", Namespace: "ns", Name: "root", Related: related},
+	}}
+	s := newAI(&fakeCompleter{reply: "ok"}, "local", false, false, conn)
+
+	s.ExplainResource("c", "", "v1", "pods", "ns", "root")
+	// 1 root + at most aiRelatedGetCap related Gets, even though 20 refs are unresolvable.
+	if conn.getCall != 1+aiRelatedGetCap {
+		t.Fatalf("Gets must be bounded to root + %d, got %d", aiRelatedGetCap, conn.getCall)
+	}
+}
+
 func TestAI_SuggestFix_IncludesManifestAndBundle(t *testing.T) {
 	root := crd.InstanceDetail{
 		Kind: "Deployment", Namespace: "app", Name: "api",

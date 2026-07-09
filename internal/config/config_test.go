@@ -147,6 +147,13 @@ func TestAIConfigDefaultsAndValidation(t *testing.T) {
 	if err := local.validate(); err != nil {
 		t.Fatalf("valid local config rejected: %v", err)
 	}
+
+	// local backend without a model is rejected (there is no local model default).
+	localNoModel := &Config{Clusters: []ClusterConfig{{Name: "a"}}, AI: &AIConfig{Backend: "local"}}
+	localNoModel.applyDefaults()
+	if err := localNoModel.validate(); err == nil {
+		t.Fatal("local backend without a model must be rejected")
+	}
 }
 
 func TestServiceRefValidation(t *testing.T) {

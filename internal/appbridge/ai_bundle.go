@@ -75,9 +75,13 @@ func projectOperators(set capability.Set) *operatorHealth {
 		}
 		return v
 	}
+	// GitOps carries ONE combined Base.Tier/Reason for Flux+Argo, so per-tool tiers
+	// are derived from each tool's own Present/Healthy (else a healthy Flux reads as
+	// Degraded whenever Argo is degraded, and vice versa). The combined reason is
+	// only attached when THAT tool is unhealthy - it names the failing tool.
 	oh := &operatorHealth{
-		Flux:            view(set.GitOps.Flux.Present, set.GitOps.Flux.Healthy, set.GitOps.Tier, set.GitOps.Reason),
-		Argo:            view(set.GitOps.Argo.Present, set.GitOps.Argo.Healthy, set.GitOps.Tier, set.GitOps.Reason),
+		Flux:            view(set.GitOps.Flux.Present, set.GitOps.Flux.Healthy, capability.Classify(set.GitOps.Flux.Present, set.GitOps.Flux.Healthy), set.GitOps.Reason),
+		Argo:            view(set.GitOps.Argo.Present, set.GitOps.Argo.Healthy, capability.Classify(set.GitOps.Argo.Present, set.GitOps.Argo.Healthy), set.GitOps.Reason),
 		CertManager:     view(set.CertManager.Present, set.CertManager.Healthy, set.CertManager.Tier, set.CertManager.Reason),
 		ExternalSecrets: view(set.ExternalSecrets.Present, set.ExternalSecrets.Healthy, set.ExternalSecrets.Tier, set.ExternalSecrets.Reason),
 		Reloader:        view(set.Reloader.Present, set.Reloader.Healthy, set.Reloader.Tier, set.Reloader.Reason),

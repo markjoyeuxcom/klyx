@@ -18,6 +18,9 @@ const (
 	// so an Explain on a highly-connected object stays a handful of Gets, not a
 	// cluster crawl.
 	aiRelatedCap = 6
+	// aiRelatedGetCap bounds the number of GetInstanceDetail calls made while
+	// filling the bundle, so a wall of unresolvable refs cannot drive many Gets.
+	aiRelatedGetCap = 12
 	// aiManifestCap bounds the current-manifest text sent for a fix suggestion.
 	aiManifestCap = 8000
 )
@@ -209,8 +212,12 @@ func buildResourceBundle(ctx context.Context, conn AIConn, group, version, plura
 	}
 	b := resourceBundle{Root: toResourceView(root, "")}
 	seen := map[string]bool{group + "/" + plural + "/" + ns + "/" + name: true}
+	// Cap Gets, not just appended results: an object with many unresolvable
+	// related refs (each skipped without filling a slot) must not drive an
+	// unbounded number of GetInstanceDetail calls.
+	gets := 0
 	for _, r := range root.Related {
-		if len(b.Related) >= aiRelatedCap {
+		if len(b.Related) >= aiRelatedCap || gets >= aiRelatedGetCap {
 			break
 		}
 		k := r.Group + "/" + r.Plural + "/" + r.Namespace + "/" + r.Name
@@ -218,6 +225,7 @@ func buildResourceBundle(ctx context.Context, conn AIConn, group, version, plura
 			continue
 		}
 		seen[k] = true
+		gets++
 		rd, err := conn.GetInstanceDetail(ctx, r.Group, r.Version, r.Plural, r.Namespace, r.Name)
 		if err != nil {
 			continue

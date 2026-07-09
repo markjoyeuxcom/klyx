@@ -739,8 +739,13 @@ export function InstanceDetail({ cluster, resource, instance }: { cluster: strin
   // suggestion the operator commits to Git). Reset on selection change.
   const ai = useAIAvailability(cluster, true);
   const [aiPanel, setAiPanel] = useState<{ mode: "explain" | "fix"; loading: boolean; result: AIResultDTO | null } | null>(null);
-  useEffect(() => { setAiPanel(null); }, [resource.group, resource.plural, instance.namespace, instance.name]);
+  // Fence AI results against a mid-flight selection change: the panel component is
+  // reused across selections, so a slow explain/fix from the previous resource must
+  // not land under the new one. The token bumps on every selection change.
+  const aiTokenRef = useRef(0);
+  useEffect(() => { aiTokenRef.current++; setAiPanel(null); }, [resource.group, resource.plural, instance.namespace, instance.name]);
   const runAI = (mode: "explain" | "fix") => {
+    const token = aiTokenRef.current;
     setAiPanel({ mode, loading: true, result: null });
     const verb = mode === "fix" ? "fix suggestion" : "explain";
     const call = mode === "fix"
@@ -748,6 +753,7 @@ export function InstanceDetail({ cluster, resource, instance }: { cluster: strin
       : explainResource(cluster, resource.group, resource.version, resource.plural, instance.namespace, instance.name);
     call
       .then((r) => {
+        if (token !== aiTokenRef.current) return; // selection changed mid-flight
         setAiPanel({ mode, loading: false, result: r });
         if (r.error) {
           useFleet.getState().setActionStatus({ kind: "error", message: `AI ${verb} failed: ${r.error}` });
@@ -756,6 +762,7 @@ export function InstanceDetail({ cluster, resource, instance }: { cluster: strin
         }
       })
       .catch((e) => {
+        if (token !== aiTokenRef.current) return;
         setAiPanel({ mode, loading: false, result: null });
         useFleet.getState().setActionStatus({ kind: "error", message: `AI ${verb} failed: ${String(e)}` });
       });

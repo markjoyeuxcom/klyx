@@ -211,6 +211,9 @@ func (c *Config) validate() error {
 		if c.AI.Backend == "hosted" && c.AI.APIKey == "" {
 			return fmt.Errorf("ai.apiKey is required when ai.backend is hosted")
 		}
+		if c.AI.Backend == "local" && c.AI.Model == "" {
+			return fmt.Errorf("ai.model is required when ai.backend is local (e.g. llama3.1)")
+		}
 	}
 	seen := make(map[string]bool, len(c.Clusters))
 	for i, cl := range c.Clusters {
