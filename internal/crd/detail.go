@@ -223,6 +223,13 @@ func MaskSecretData(obj map[string]interface{}) (map[string]interface{}, []Secre
 		out[k] = v
 	}
 
+	// Strip the kubectl.kubernetes.io/last-applied-configuration annotation: for a
+	// Secret written with `kubectl apply` it holds a full JSON snapshot of the
+	// object INCLUDING the base64 data values, so masking data/stringData below is
+	// not enough to keep secret bytes out of the rendered YAML (and any egress).
+	// metadata is deep-copied here so the shared informer object is never mutated.
+	out = stripLastAppliedConfig(out)
+
 	var keys []SecretKeyInfo
 
 	// data: base64-encoded byte values (the standard Secret.data field)
@@ -283,6 +290,49 @@ func sortSecretKeys(ks []SecretKeyInfo) {
 // the modern `kubectl get -o yaml` default (managedFields hidden since 1.21).
 // The server-side-apply ownership tree is pure noise in a detail view and buries
 // the real spec. Does not mutate the input (shallow-clones the touched maps).
+// lastAppliedConfigAnnotation is the client-side apply snapshot annotation. For a
+// Secret it carries base64 data values; it is noise everywhere else.
+const lastAppliedConfigAnnotation = "kubectl.kubernetes.io/last-applied-configuration"
+
+// stripLastAppliedConfig returns obj with the last-applied-configuration
+// annotation removed, deep-copying metadata + annotations so the input (a shared
+// informer object) is never mutated. A no-op (returns obj as-is) when absent.
+func stripLastAppliedConfig(obj map[string]interface{}) map[string]interface{} {
+	md, ok := obj["metadata"].(map[string]interface{})
+	if !ok {
+		return obj
+	}
+	ann, ok := md["annotations"].(map[string]interface{})
+	if !ok {
+		return obj
+	}
+	if _, has := ann[lastAppliedConfigAnnotation]; !has {
+		return obj
+	}
+	nann := make(map[string]interface{}, len(ann))
+	for k, v := range ann {
+		if k == lastAppliedConfigAnnotation {
+			continue
+		}
+		nann[k] = v
+	}
+	nmd := make(map[string]interface{}, len(md))
+	for k, v := range md {
+		nmd[k] = v
+	}
+	if len(nann) > 0 {
+		nmd["annotations"] = nann
+	} else {
+		delete(nmd, "annotations")
+	}
+	out := make(map[string]interface{}, len(obj))
+	for k, v := range obj {
+		out[k] = v
+	}
+	out["metadata"] = nmd
+	return out
+}
+
 func withoutManagedFields(obj map[string]interface{}) map[string]interface{} {
 	md, ok := obj["metadata"].(map[string]interface{})
 	if !ok {

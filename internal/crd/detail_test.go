@@ -102,6 +102,48 @@ func TestMaskSecretDataMasksValues(t *testing.T) {
 	}
 }
 
+func TestMaskSecretDataStripsLastAppliedConfig(t *testing.T) {
+	// A kubectl-applied Secret carries a full JSON snapshot (incl. base64 data) in
+	// the last-applied-configuration annotation. Masking spec data is not enough -
+	// that annotation must be stripped, or the plaintext leaks via the YAML.
+	b64 := base64.StdEncoding.EncodeToString([]byte("supersecret"))
+	lac := `{"apiVersion":"v1","kind":"Secret","data":{"password":"` + b64 + `"}}`
+	obj := map[string]interface{}{
+		"apiVersion": "v1",
+		"kind":       "Secret",
+		"metadata": map[string]interface{}{
+			"name":      "creds",
+			"namespace": "app",
+			"annotations": map[string]interface{}{
+				"kubectl.kubernetes.io/last-applied-configuration": lac,
+				"reloader.stakater.com/match":                      "true",
+			},
+		},
+		"data": map[string]interface{}{"password": b64},
+	}
+
+	masked, _ := MaskSecretData(obj)
+	y, err := ToYAML(masked)
+	if err != nil {
+		t.Fatalf("ToYAML: %v", err)
+	}
+	if strings.Contains(y, b64) {
+		t.Fatalf("base64 secret value leaked via last-applied-configuration:\n%s", y)
+	}
+	if strings.Contains(y, "last-applied-configuration") {
+		t.Fatalf("last-applied-configuration annotation must be stripped:\n%s", y)
+	}
+	// A benign annotation must survive.
+	if !strings.Contains(y, "reloader.stakater.com/match") {
+		t.Fatalf("benign annotations must be preserved:\n%s", y)
+	}
+	// The input must not be mutated (shared informer object).
+	origAnn := obj["metadata"].(map[string]interface{})["annotations"].(map[string]interface{})
+	if _, has := origAnn["kubectl.kubernetes.io/last-applied-configuration"]; !has {
+		t.Fatal("MaskSecretData mutated the input annotations")
+	}
+}
+
 func TestMaskSecretDataStringData(t *testing.T) {
 	obj := map[string]interface{}{
 		"apiVersion": "v1",

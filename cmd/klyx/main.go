@@ -12,6 +12,7 @@ import (
 
 	"github.com/moomora/klyx/internal/ai"
 	"github.com/moomora/klyx/internal/appbridge"
+	"github.com/moomora/klyx/internal/capability"
 	"github.com/moomora/klyx/internal/clock"
 	"github.com/moomora/klyx/internal/clustermesh"
 	"github.com/moomora/klyx/internal/config"
@@ -296,7 +297,7 @@ func main() {
 		aiClient = ai.NewClient(ai.Backend(cfg.AI.Backend), cfg.AI.BaseURL, cfg.AI.APIKey, cfg.AI.Model, httpc)
 	}
 	aiSvc := appbridge.NewAIService(
-		func(name string) (appbridge.CertExplainConn, bool) {
+		func(name string) (appbridge.AIConn, bool) {
 			c, ok := reg.Conn(name)
 			if !ok {
 				return nil, false
@@ -304,6 +305,14 @@ func main() {
 			return c, true
 		},
 		aiClient, aiBackend, aiAllowEgress, configSvc.IsProtected,
+		func(name string) capability.Set {
+			for _, sn := range reg.Snapshots() {
+				if sn.Name == name {
+					return sn.Capabilities
+				}
+			}
+			return capability.Set{}
+		},
 	)
 
 	argoSvc := appbridge.NewArgoService(func(name string) (appbridge.ArgoConn, bool) {

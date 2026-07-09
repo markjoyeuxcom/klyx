@@ -2,7 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useFleet } from "../store/fleet";
 import type { CertificateDTO, IssuerDTO, ChainNodeDTO, CertChainDTO } from "../store/fleet";
 import { openCertManager, closeCertManager, getCertificateChain } from "../bridge/certmanager";
-import { aiAvailability, aiEgressAllowed, explainCertificate } from "../bridge/ai";
+import { explainCertificate } from "../bridge/ai";
+import { useAIAvailability } from "./useAI";
 import type { AIResultDTO } from "../store/fleet";
 import { useListKeys } from "../chrome/useListKeys";
 import { FKeysBar } from "../chrome/FKeysBar";
@@ -135,22 +136,8 @@ export function CertsView({ cluster }: { cluster: string }) {
     void getCertificateChain(cluster, ns, name).catch((e) => console.error("getCertificateChain", e));
   }, [cluster, cm.selectedKey, cm.cluster]);
 
-  // AI-assist availability (drives whether the "Explain" affordance renders) +
-  // the per-cluster egress decision (hosted backend on a protected cluster).
-  const [ai, setAi] = useState<{ ready: boolean; egress: boolean }>({ ready: false, egress: false });
-  useEffect(() => {
-    if (absent) return;
-    let live = true;
-    aiAvailability()
-      .then(async (a) => {
-        if (!live) return;
-        if (!a.ready) { setAi({ ready: false, egress: false }); return; }
-        const egress = await aiEgressAllowed(cluster).catch(() => false);
-        if (live) setAi({ ready: true, egress });
-      })
-      .catch(() => { if (live) setAi({ ready: false, egress: false }); });
-    return () => { live = false; };
-  }, [cluster, absent]);
+  // AI-assist availability + the per-cluster egress decision (shared hook).
+  const ai = useAIAvailability(cluster, !absent);
 
   const certs = cm.cluster === cluster ? cm.certificates : [];
   const issuers = cm.cluster === cluster ? cm.issuers : [];
@@ -373,11 +360,17 @@ function CertInspector({ c, cluster, issuer, chain, chainLoading, aiReady, aiEgr
 
   // AI "Explain this" — on-demand, read-only, reset when the selection changes.
   const [explain, setExplain] = useState<{ loading: boolean; result: AIResultDTO | null }>({ loading: false, result: null });
-  useEffect(() => { setExplain({ loading: false, result: null }); }, [c.namespace, c.name]);
+  // Fence against a mid-flight cert change: CertInspector is reused across
+  // selections, so a slow explain from the previous cert must not land under the
+  // new one. The token bumps whenever the selected cert changes.
+  const explainTokenRef = useRef(0);
+  useEffect(() => { explainTokenRef.current++; setExplain({ loading: false, result: null }); }, [c.namespace, c.name]);
   const runExplain = useCallback(() => {
+    const token = explainTokenRef.current;
     setExplain({ loading: true, result: null });
     explainCertificate(cluster, c.namespace, c.name)
       .then((r) => {
+        if (token !== explainTokenRef.current) return; // selection changed mid-flight
         setExplain({ loading: false, result: r });
         if (r.error) {
           useFleet.getState().setActionStatus({ kind: "error", message: `Explain failed: ${r.error}` });
@@ -387,6 +380,7 @@ function CertInspector({ c, cluster, issuer, chain, chainLoading, aiReady, aiEgr
         }
       })
       .catch((e) => {
+        if (token !== explainTokenRef.current) return;
         setExplain({ loading: false, result: null });
         useFleet.getState().setActionStatus({ kind: "error", message: `Explain failed: ${String(e)}` });
       });

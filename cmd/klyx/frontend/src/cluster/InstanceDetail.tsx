@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { useFleet, ResourceRef, InstanceRef, InstanceDetailDTO, SecretKeyDTO, ServiceBackingDTO, HPAScalingDTO, RelatedRefDTO, EventDTO, FactDTO } from "../store/fleet";
+import { useFleet, ResourceRef, InstanceRef, InstanceDetailDTO, SecretKeyDTO, ServiceBackingDTO, HPAScalingDTO, RelatedRefDTO, EventDTO, FactDTO, AIResultDTO } from "../store/fleet";
 import { getInstanceDetail, revealSecretKey, copyText, dryRunInstanceYAML, applyInstanceYAML, ActionResult } from "../bridge/crd";
+import { explainResource, suggestFix } from "../bridge/ai";
+import { useAIAvailability } from "./useAI";
 import { armProtected } from "../bridge/configsvc";
 import { openPodDetail } from "../bridge/pods";
 import { ForwardPopover } from "./ForwardPopover";
@@ -8,7 +10,7 @@ import { InspectorStatus, conditionColor, InspectorConditions, InspectorEvents, 
 import { actionBtn, ellipsis, type Tone } from "../chrome/primitives";
 import { CopyButton } from "../chrome/CopyButton";
 import { DescribePane } from "../chrome/DescribePane";
-import { IconX } from "@tabler/icons-react";
+import { IconX, IconSparkles, IconAlertTriangle } from "@tabler/icons-react";
 
 type DetailTab = "summary" | "related" | "events" | "yaml";
 
@@ -733,6 +735,40 @@ export function InstanceDetail({ cluster, resource, instance }: { cluster: strin
   const isCurrent = id.ref && id.ref.namespace === instance.namespace && id.ref.name === instance.name;
   const d = isCurrent ? id.detail : null;
 
+  // AI assist — on-demand, read-only; two modes (cross-lens explain, and a fix
+  // suggestion the operator commits to Git). Reset on selection change.
+  const ai = useAIAvailability(cluster, true);
+  const [aiPanel, setAiPanel] = useState<{ mode: "explain" | "fix"; loading: boolean; result: AIResultDTO | null } | null>(null);
+  // Fence AI results against a mid-flight selection change: the panel component is
+  // reused across selections, so a slow explain/fix from the previous resource must
+  // not land under the new one. The token bumps on every selection change.
+  const aiTokenRef = useRef(0);
+  useEffect(() => { aiTokenRef.current++; setAiPanel(null); }, [resource.group, resource.plural, instance.namespace, instance.name]);
+  const runAI = (mode: "explain" | "fix") => {
+    const token = aiTokenRef.current;
+    setAiPanel({ mode, loading: true, result: null });
+    const verb = mode === "fix" ? "fix suggestion" : "explain";
+    const call = mode === "fix"
+      ? suggestFix(cluster, resource.group, resource.version, resource.plural, instance.namespace, instance.name)
+      : explainResource(cluster, resource.group, resource.version, resource.plural, instance.namespace, instance.name);
+    call
+      .then((r) => {
+        if (token !== aiTokenRef.current) return; // selection changed mid-flight
+        setAiPanel({ mode, loading: false, result: r });
+        if (r.error) {
+          useFleet.getState().setActionStatus({ kind: "error", message: `AI ${verb} failed: ${r.error}` });
+        } else {
+          useFleet.getState().setActionStatus({ kind: "success", message: `AI ${verb} — ${resource.kind}/${instance.namespace ? `${instance.namespace}/` : ""}${instance.name} via ${r.backend}` });
+        }
+      })
+      .catch((e) => {
+        if (token !== aiTokenRef.current) return;
+        setAiPanel({ mode, loading: false, result: null });
+        useFleet.getState().setActionStatus({ kind: "error", message: `AI ${verb} failed: ${String(e)}` });
+      });
+  };
+  const aiBusy = aiPanel?.loading ?? false;
+
   const onCopy = () => {
     if (!d) return;
     void copyText(d.yaml);
@@ -750,6 +786,28 @@ export function InstanceDetail({ cluster, resource, instance }: { cluster: strin
         <CopyButton text={instance.name} label={`copy name ${instance.name}`} />
         {d && d.created && <span style={{ fontSize: 11, color: "var(--color-text-tertiary)", flexShrink: 0 }}>{age(d.created)}</span>}
         <div style={{ flex: 1 }} />
+        {ai.ready && (
+          <>
+            <button
+              onClick={() => runAI("explain")}
+              disabled={!ai.egress || aiBusy}
+              title={ai.egress ? "Explain the root cause across related objects (AI, read-only)" : "AI is disabled for this protected cluster — use a local backend or set ai.allowProtectedEgress"}
+              style={{ ...actionBtn, display: "inline-flex", alignItems: "center", gap: 4, color: "var(--color-text-info)", borderColor: "var(--color-border-info)", opacity: ai.egress ? 1 : 0.5, cursor: ai.egress && !aiBusy ? "pointer" : "not-allowed" }}
+            >
+              <IconSparkles size={12} stroke={1.5} />
+              {aiPanel?.mode === "explain" && aiBusy ? "explaining…" : "Explain"}
+            </button>
+            <button
+              onClick={() => runAI("fix")}
+              disabled={!ai.egress || aiBusy}
+              title={ai.egress ? "Draft a fix to commit to Git (AI, read-only — Klyx never applies it)" : "AI is disabled for this protected cluster — use a local backend or set ai.allowProtectedEgress"}
+              style={{ ...actionBtn, display: "inline-flex", alignItems: "center", gap: 4, color: "var(--color-text-info)", borderColor: "var(--color-border-info)", opacity: ai.egress ? 1 : 0.5, cursor: ai.egress && !aiBusy ? "pointer" : "not-allowed" }}
+            >
+              <IconSparkles size={12} stroke={1.5} />
+              {aiPanel?.mode === "fix" && aiBusy ? "suggesting…" : "Suggest fix"}
+            </button>
+          </>
+        )}
         <button onClick={() => setDescribing(true)} style={actionBtn}>describe</button>
         <button onClick={() => void getInstanceDetail(cluster, resource, instance)} style={actionBtn}>Refresh</button>
         <button onClick={closeInstance} aria-label="close instance panel" style={{ ...actionBtn, display: "inline-flex", alignItems: "center" }}><IconX size={13} stroke={1.5} /></button>
@@ -795,6 +853,37 @@ export function InstanceDetail({ cluster, resource, instance }: { cluster: strin
           <div data-testid="instance-detail-scroll" style={{ flex: 1, minHeight: 0, overflowY: "auto", paddingRight: 4 }}>
             {tab === "summary" ? (
               <>
+                {aiPanel && (
+                  <InspectorSection title={aiPanel.mode === "fix" ? "Suggested fix (AI)" : "Explain (AI)"}>
+                    {aiPanel.loading ? (
+                      <div style={{ fontSize: 11, color: "var(--color-text-tertiary)" }}>{aiPanel.mode === "fix" ? "drafting a change to commit to Git…" : "tracing the chain across related objects…"}</div>
+                    ) : aiPanel.result?.error ? (
+                      <div style={{ display: "flex", alignItems: "flex-start", gap: 5, fontSize: 11, color: "var(--color-text-danger)" }}>
+                        <IconAlertTriangle size={12} stroke={1.5} style={{ flexShrink: 0, marginTop: 1 }} />
+                        <span>{aiPanel.result.error}</span>
+                      </div>
+                    ) : aiPanel.result ? (
+                      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                        {aiPanel.mode === "fix" && (
+                          <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "5px 8px", borderRadius: 4, border: "0.5px solid var(--color-border-warning)", background: "var(--color-background-warning)", color: "var(--color-text-warning)", fontSize: 10 }}>
+                            <IconAlertTriangle size={12} stroke={1.5} style={{ flexShrink: 0 }} />
+                            <span>Review and commit this to Git — Klyx will not apply it. Desired state stays in your repo.</span>
+                          </div>
+                        )}
+                        <div style={{ fontSize: 11, color: "var(--color-text-secondary)", whiteSpace: "pre-wrap", lineHeight: 1.5, fontFamily: aiPanel.mode === "fix" ? "var(--font-mono)" : undefined }}>{aiPanel.result.explanation}</div>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                          {aiPanel.mode === "fix" && (
+                            <button onClick={() => { void copyText(aiPanel.result!.explanation); }} style={{ ...actionBtn, fontSize: 10 }}>copy suggestion</button>
+                          )}
+                          <div style={{ fontFamily: "var(--font-mono)", fontSize: 9, color: "var(--color-text-tertiary)" }}>Grounded on: {aiPanel.result.groundedOn} · {aiPanel.result.model}</div>
+                        </div>
+                        {aiPanel.mode !== "fix" && (
+                          <div style={{ fontSize: 9, color: "var(--color-text-tertiary)", fontStyle: "italic" }}>AI-generated from resolved health — verify before acting.</div>
+                        )}
+                      </div>
+                    ) : null}
+                  </InspectorSection>
+                )}
                 {/* The data path leads - the salient facts a platform engineer
                     reads first - then metadata, typed sections, and conditions. */}
                 <FactsSummary facts={d.facts} />
