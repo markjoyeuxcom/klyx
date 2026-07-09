@@ -10,6 +10,13 @@ vi.mock("../bridge/certmanager", () => ({
   getCertificateChain: async () => {},
 }));
 
+vi.mock("../bridge/ai", () => ({
+  aiAvailability: vi.fn(async () => ({ backend: "off", ready: false })),
+  aiEgressAllowed: vi.fn(async () => false),
+  explainCertificate: vi.fn(async () => ({ ok: true, explanation: "", model: "", backend: "", groundedOn: "", error: "" })),
+}));
+import { aiAvailability, aiEgressAllowed, explainCertificate } from "../bridge/ai";
+
 const cluster = (tier: string): ClusterDTO => ({
   name: "x", state: "Synced", reason: "", nodesReady: 1, nodesTotal: 1, pods: 1, version: "v1",
   gitopsTier: "Absent", gitopsReason: "", networkTier: "Absent", networkReason: "",
@@ -213,5 +220,51 @@ describe("CertsView", () => {
     const panel = getByTestId("issuer-scroll");
     expect(within(panel).getByText("lab-acme-staging")).toBeTruthy();
     expect(within(panel).getByText("ACMEAccountRegistrationFailed")).toBeTruthy();
+  });
+
+  // --- AI "Explain this" ---
+
+  it("hides the Explain affordance when no AI backend is configured", async () => {
+    vi.mocked(aiAvailability).mockResolvedValueOnce({ backend: "off", ready: false });
+    const c = cert({ name: "acme-demo", ready: "Failed", reason: "DoesNotExist" });
+    setup("Healthy", [c], [issuer({})], "payments/acme-demo");
+    const { getByTestId, queryByRole } = render(<CertsView cluster="x" />);
+    await act(async () => { await Promise.resolve(); });
+    // The inspector renders, but no Explain button.
+    expect(getByTestId("cert-inspector")).toBeTruthy();
+    expect(queryByRole("button", { name: /explain/i })).toBeNull();
+  });
+
+  it("shows Explain and renders a grounded, disclaimed result on click", async () => {
+    vi.mocked(aiAvailability).mockResolvedValueOnce({ backend: "hosted", ready: true });
+    vi.mocked(aiEgressAllowed).mockResolvedValueOnce(true);
+    vi.mocked(explainCertificate).mockResolvedValueOnce({
+      ok: true, backend: "hosted", model: "claude-sonnet-5",
+      groundedOn: "Certificate/payments/acme-demo, ClusterIssuer/lab-acme-staging",
+      explanation: "The bound ClusterIssuer is healthy; the Challenge is stuck on a DNS record.",
+      error: "",
+    });
+    const c = cert({ name: "acme-demo", ready: "Failed", reason: "DoesNotExist" });
+    setup("Healthy", [c], [issuer({})], "payments/acme-demo");
+    const { findByRole, findByText, getByText } = render(<CertsView cluster="x" />);
+
+    const btn = await findByRole("button", { name: /explain/i });
+    fireEvent.click(btn);
+
+    expect(await findByText(/Challenge is stuck on a DNS record/)).toBeTruthy();
+    expect(getByText(/Grounded on:/)).toBeTruthy();
+    expect(getByText(/verify before acting/)).toBeTruthy();
+    expect(vi.mocked(explainCertificate)).toHaveBeenCalledWith("x", "payments", "acme-demo");
+  });
+
+  it("disables Explain when hosted egress is refused on a protected cluster", async () => {
+    vi.mocked(aiAvailability).mockResolvedValueOnce({ backend: "hosted", ready: true });
+    vi.mocked(aiEgressAllowed).mockResolvedValueOnce(false);
+    const c = cert({ name: "acme-demo", ready: "Failed", reason: "DoesNotExist" });
+    setup("Healthy", [c], [issuer({})], "payments/acme-demo");
+    const { findByRole } = render(<CertsView cluster="x" />);
+    const btn = (await findByRole("button", { name: /explain/i })) as HTMLButtonElement;
+    expect(btn.disabled).toBe(true);
+    expect(btn.title).toMatch(/protected cluster/i);
   });
 });

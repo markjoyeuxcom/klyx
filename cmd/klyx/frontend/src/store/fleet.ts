@@ -362,6 +362,11 @@ export type RelatedRefDTO = { kind: string; namespace: string; name: string; gro
 // FactDTO is one salient Summary value (the data path). kind "well" = counter
 // well, "row" = labeled row; group "" = headline facts (no section header).
 export type FactDTO = { group: string; label: string; value: string; tone: string; kind: string; pct?: number };
+
+// AI-assist ("Explain this"). Read-only; errors fold into `error` (ok stays false).
+// groundedOn names the resolved nodes sent to the model, for traceability.
+export type AIResultDTO = { ok: boolean; explanation: string; model: string; backend: string; groundedOn: string; error: string };
+export type AIAvailabilityDTO = { backend: string; ready: boolean };
 export type InstanceDetailDTO = { kind: string; namespace: string; name: string; created: string; labels: Record<string, string>; annotations?: Record<string, string>; conditions: ConditionDTO[]; events: EventDTO[]; yaml: string; secretKeys?: SecretKeyDTO[]; serviceBacking?: ServiceBackingDTO | null; hpaScaling?: HPAScalingDTO | null; related?: RelatedRefDTO[]; facts?: FactDTO[] };
 export type InstanceDetailSlice = { ref: InstanceRef | null; detail: InstanceDetailDTO | null; loading: boolean };
 

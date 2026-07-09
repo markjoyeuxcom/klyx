@@ -9,6 +9,7 @@ import "github.com/moomora/klyx/internal/fleet"
 // CI - with them, a plain `go test ./internal/...` catches it anywhere.
 var (
 	_ ArgoConn            = fleet.Conn(nil)
+	_ CertExplainConn     = fleet.Conn(nil)
 	_ CertManagerConn     = fleet.Conn(nil)
 	_ CRDConn             = fleet.Conn(nil)
 	_ EventsConn          = fleet.Conn(nil)
