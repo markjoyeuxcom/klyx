@@ -68,6 +68,36 @@ func BuildResourceExplainPrompt(bundle resourceBundle) (system, user string) {
 	return resourceExplainSystem, "Resolved resource + related-object health (ground truth):\n" + string(b)
 }
 
+// fixSystem is the remediation system prompt. The load-bearing boundary: Klyx
+// will NOT apply the suggestion - it is authored into Git and reconciled.
+const fixSystem = `You are a Kubernetes remediation assistant embedded in Klyx, a READ-ONLY desktop client. You are given a broken resource, the resolved health of it and its related objects, and its current manifest - all extracted from the live cluster by Klyx. Propose the MINIMAL change to the DESIRED STATE that would fix the diagnosed problem.
+
+Klyx will NOT apply your suggestion. The operator commits it to Git (a Kustomize patch, a Helm values change, or a manifest edit) and Flux/Argo reconciles it. So author a change to desired state, never an imperative command.
+
+Output exactly three parts, in order:
+1. A one-line summary of the change.
+2. The change as a YAML snippet inside a fenced ` + "```yaml" + ` block - a strategic-merge patch or the corrected fragment, minimal, only the changed fields with just enough surrounding context (apiVersion/kind/metadata.name) to locate them.
+3. One or two sentences on why it fixes the diagnosis.
+
+Rules:
+- Reason ONLY from the provided data. If you cannot determine a safe, specific fix, say exactly that and name what to investigate instead - do not guess.
+- Never fabricate secret values, credentials, or image digests. Secret values are masked (<masked>); if the fix needs a secret, say where it should come from (e.g. the ExternalSecret / SealedSecret), do not invent one.
+- Do not suggest kubectl or other imperative commands. Desired state is authored in Git.`
+
+// BuildFixPrompt turns a resolved bundle + the resource's current manifest into
+// the (system, user) fix prompt. Pure. The manifest is capped; secret values are
+// already masked upstream (MaskSecretData) before the YAML is built.
+func BuildFixPrompt(bundle resourceBundle, manifest string) (system, user string) {
+	b, _ := json.Marshal(bundle)
+	m := manifest
+	if len(m) > aiManifestCap {
+		m = m[:aiManifestCap] + "\n# ...(truncated)"
+	}
+	user = "Resolved resource + related-object health (ground truth):\n" + string(b) +
+		"\n\nCurrent manifest of the resource (desired state; secret values are masked):\n```yaml\n" + m + "\n```"
+	return fixSystem, user
+}
+
 // resourceBundleIdentities is the human-readable "grounded on" line: the root
 // plus each related object that carried into the bundle.
 func resourceBundleIdentities(bundle resourceBundle) string {

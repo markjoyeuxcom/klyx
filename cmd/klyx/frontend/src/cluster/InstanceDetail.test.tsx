@@ -37,8 +37,9 @@ vi.mock("../bridge/ai", () => ({
   aiAvailability: vi.fn(async () => ({ backend: "off", ready: false })),
   aiEgressAllowed: vi.fn(async () => false),
   explainResource: vi.fn(async () => ({ ok: true, explanation: "", model: "", backend: "", groundedOn: "", error: "" })),
+  suggestFix: vi.fn(async () => ({ ok: true, explanation: "", model: "", backend: "", groundedOn: "", error: "" })),
 }));
-import { aiAvailability, aiEgressAllowed, explainResource } from "../bridge/ai";
+import { aiAvailability, aiEgressAllowed, explainResource, suggestFix } from "../bridge/ai";
 
 const resource: ResourceRef = { group: "cert-manager.io", version: "v1", plural: "certificates", kind: "Certificate", scope: "Namespaced" };
 const instance: InstanceRef = { namespace: "default", name: "web-tls" };
@@ -869,8 +870,29 @@ describe("InstanceDetail cross-lens Explain (AI)", () => {
     vi.mocked(aiEgressAllowed).mockResolvedValueOnce(false);
     seed();
     const { findByRole } = render(<InstanceDetail cluster="x" resource={resource} instance={instance} />);
-    const btn = (await findByRole("button", { name: /explain/i })) as HTMLButtonElement;
+    const btn = (await findByRole("button", { name: /^explain$/i })) as HTMLButtonElement;
     expect(btn.disabled).toBe(true);
     expect(btn.title).toMatch(/protected cluster/i);
+  });
+
+  it("Suggest fix renders a copyable patch with a loud commit-to-Git disclaimer", async () => {
+    vi.mocked(aiAvailability).mockResolvedValueOnce({ backend: "local", ready: true });
+    vi.mocked(aiEgressAllowed).mockResolvedValueOnce(true);
+    vi.mocked(suggestFix).mockResolvedValueOnce({
+      ok: true, backend: "local", model: "llama3.1",
+      groundedOn: "Deployment/app/api",
+      explanation: "Scale to 1.\n```yaml\nspec:\n  replicas: 1\n```",
+      error: "",
+    });
+    seed();
+    const { findByRole, findByText, getByText } = render(<InstanceDetail cluster="x" resource={resource} instance={instance} />);
+
+    const btn = await findByRole("button", { name: /suggest fix/i });
+    fireEvent.click(btn);
+
+    expect(await findByText(/Klyx will not apply it/)).toBeTruthy();
+    expect(getByText(/replicas: 1/)).toBeTruthy();
+    expect(getByText("copy suggestion")).toBeTruthy();
+    expect(vi.mocked(suggestFix)).toHaveBeenCalledWith("x", "cert-manager.io", "v1", "certificates", "default", "web-tls");
   });
 });

@@ -261,6 +261,63 @@ func TestAI_ExplainResource_EgressGate(t *testing.T) {
 	}
 }
 
+func TestAI_SuggestFix_IncludesManifestAndBundle(t *testing.T) {
+	root := crd.InstanceDetail{
+		Kind: "Deployment", Namespace: "app", Name: "api",
+		Conditions: []crd.Condition{{Type: "Available", Status: "False", Reason: "MinimumReplicasUnavailable"}},
+		YAML:       "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: api\nspec:\n  replicas: 0\n",
+	}
+	conn := &fakeExplainConn{details: map[string]crd.InstanceDetail{"apps/deployments/app/api": root}}
+	cl := &fakeCompleter{reply: "Scale to 1 replica.\n```yaml\nspec:\n  replicas: 1\n```\nThe Deployment is scaled to 0."}
+	s := newAI(cl, "local", false, false, conn)
+
+	r := s.SuggestFix("c", "apps", "v1", "deployments", "app", "api")
+	if !r.OK || r.Error != "" {
+		t.Fatalf("want OK, got %+v", r)
+	}
+	// The fix prompt carries the current manifest AND the resolved health.
+	if !strings.Contains(cl.gotUser, "replicas: 0") || !strings.Contains(cl.gotUser, "MinimumReplicasUnavailable") {
+		t.Fatalf("fix prompt missing manifest or health: %s", cl.gotUser)
+	}
+	// The system prompt states the read-only / Git boundary.
+	if !strings.Contains(cl.gotSystem, "NOT apply") {
+		t.Fatalf("fix system prompt must state Klyx will not apply: %s", cl.gotSystem)
+	}
+	if r.Explanation == "" {
+		t.Fatal("want a suggestion")
+	}
+}
+
+func TestAI_SuggestFix_SecretManifestStaysMasked(t *testing.T) {
+	// The manifest is included for a fix, but secret values are already masked
+	// upstream - the model sees <masked>, never a real value.
+	root := crd.InstanceDetail{
+		Kind: "Secret", Namespace: "app", Name: "creds",
+		YAML: "apiVersion: v1\nkind: Secret\ndata:\n  password: <masked>\n",
+	}
+	conn := &fakeExplainConn{details: map[string]crd.InstanceDetail{"/secrets/app/creds": root}}
+	cl := &fakeCompleter{reply: "ok"}
+	s := newAI(cl, "local", false, false, conn)
+
+	s.SuggestFix("c", "", "v1", "secrets", "app", "creds")
+	if !strings.Contains(cl.gotUser, "<masked>") {
+		t.Fatalf("secret manifest should reach the model already masked: %s", cl.gotUser)
+	}
+}
+
+func TestAI_SuggestFix_EgressGate(t *testing.T) {
+	cl := &fakeCompleter{reply: "x"}
+	conn := &fakeExplainConn{details: map[string]crd.InstanceDetail{"/pods/ns/p": {Kind: "Pod", Namespace: "ns", Name: "p"}}}
+	s := newAI(cl, "hosted", false, true, conn) // hosted + protected + no opt-in
+	r := s.SuggestFix("prd", "", "v1", "pods", "ns", "p")
+	if r.OK || !strings.Contains(r.Error, "protected") {
+		t.Fatalf("want protected-egress refusal, got %+v", r)
+	}
+	if cl.calls != 0 || conn.getCall != 0 {
+		t.Fatal("egress-refused must call neither the resolver nor the model")
+	}
+}
+
 func TestAI_Errors_FoldIntoDTO(t *testing.T) {
 	// resolver error.
 	s1 := newAI(&fakeCompleter{}, "local", false, false, &fakeExplainConn{err: errors.New("forbidden")})

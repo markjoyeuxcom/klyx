@@ -10,12 +10,15 @@ import (
 )
 
 const (
-	aiTimeout   = 60 * time.Second
-	aiMaxTokens = 512
+	aiTimeout      = 60 * time.Second
+	aiMaxTokens    = 512
+	aiFixMaxTokens = 900 // a suggested patch needs more room than an explanation
 	// aiRelatedCap bounds how many related objects the cross-lens bundle resolves,
 	// so an Explain on a highly-connected object stays a handful of Gets, not a
 	// cluster crawl.
 	aiRelatedCap = 6
+	// aiManifestCap bounds the current-manifest text sent for a fix suggestion.
+	aiManifestCap = 8000
 )
 
 // Completer is the LLM surface AIService needs; *ai.Client satisfies it and
@@ -127,7 +130,7 @@ func (s *AIService) ExplainResource(cluster, group, version, plural, ns, name st
 	ctx, cancel := context.WithTimeout(context.Background(), aiTimeout)
 	defer cancel()
 
-	bundle, err := buildResourceBundle(ctx, conn, group, version, plural, ns, name)
+	bundle, _, err := buildResourceBundle(ctx, conn, group, version, plural, ns, name)
 	if err != nil {
 		return AIResultDTO{Error: "resolve resource: " + err.Error()}
 	}
@@ -145,14 +148,52 @@ func (s *AIService) ExplainResource(cluster, group, version, plural, ns, name st
 	}
 }
 
+// SuggestFix drafts the MINIMAL change to desired state that would fix the
+// diagnosed problem, as a copyable patch the operator commits to Git. Klyx never
+// applies it - Git stays the source of truth. Same read-only + egress posture as
+// Explain; it additionally sends the resource's current manifest (secret values
+// already masked upstream, and capped) so the model can target a specific edit.
+func (s *AIService) SuggestFix(cluster, group, version, plural, ns, name string) AIResultDTO {
+	if s.client == nil {
+		return AIResultDTO{Error: "AI backend not configured"}
+	}
+	if !s.EgressAllowed(cluster) {
+		return AIResultDTO{Error: "AI is disabled for protected cluster \"" + cluster + "\": use a local backend or set ai.allowProtectedEgress"}
+	}
+	conn, ok := s.lookup(cluster)
+	if !ok {
+		return AIResultDTO{Error: "cluster not connected"}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), aiTimeout)
+	defer cancel()
+
+	bundle, root, err := buildResourceBundle(ctx, conn, group, version, plural, ns, name)
+	if err != nil {
+		return AIResultDTO{Error: "resolve resource: " + err.Error()}
+	}
+	system, user := BuildFixPrompt(bundle, root.YAML)
+	text, err := s.client.Complete(ctx, system, user, aiFixMaxTokens)
+	if err != nil {
+		return AIResultDTO{Error: "model call failed: " + err.Error()}
+	}
+	return AIResultDTO{
+		OK:          true,
+		Explanation: strings.TrimSpace(text),
+		Model:       s.client.Model(),
+		Backend:     s.backend,
+		GroundedOn:  resourceBundleIdentities(bundle),
+	}
+}
+
 // buildResourceBundle resolves the root object plus (capped) its related objects'
-// health via the generic GetInstanceDetail. Related resolution is best-effort:
-// an unresolvable ref (RBAC, gone) is skipped, not fatal. Sequential and bounded
-// so the whole assembly fits one on-demand call.
-func buildResourceBundle(ctx context.Context, conn AIConn, group, version, plural, ns, name string) (resourceBundle, error) {
+// health via the generic GetInstanceDetail. It also returns the raw root detail
+// so a fix suggestion can reach the current manifest. Related resolution is
+// best-effort: an unresolvable ref (RBAC, gone) is skipped, not fatal. Sequential
+// and bounded so the whole assembly fits one on-demand call.
+func buildResourceBundle(ctx context.Context, conn AIConn, group, version, plural, ns, name string) (resourceBundle, crd.InstanceDetail, error) {
 	root, err := conn.GetInstanceDetail(ctx, group, version, plural, ns, name)
 	if err != nil {
-		return resourceBundle{}, err
+		return resourceBundle{}, crd.InstanceDetail{}, err
 	}
 	b := resourceBundle{Root: toResourceView(root, "")}
 	seen := map[string]bool{group + "/" + plural + "/" + ns + "/" + name: true}
@@ -171,5 +212,5 @@ func buildResourceBundle(ctx context.Context, conn AIConn, group, version, plura
 		}
 		b.Related = append(b.Related, toResourceView(rd, r.Relation))
 	}
-	return b, nil
+	return b, root, nil
 }
