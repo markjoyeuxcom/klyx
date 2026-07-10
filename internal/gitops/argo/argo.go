@@ -53,6 +53,7 @@ type App struct {
 	DestServer     string
 	ApplicationSet string
 	AutoSync       bool // spec.syncPolicy.automated present
+	AutoPrune      bool // spec.syncPolicy.automated.prune: auto-deletes out-of-band objects
 	OpPhase        string
 	OpMessage      string
 	Conditions     []Condition
@@ -179,6 +180,9 @@ func Parse(u *unstructured.Unstructured) App {
 	}
 	if _, ok, _ := unstructured.NestedMap(u.Object, "spec", "syncPolicy", "automated"); ok {
 		a.AutoSync = true
+		// automated.prune is the "deletes out-of-band objects without a human
+		// sync" signal the pre-write ownership check warns on.
+		a.AutoPrune, _, _ = unstructured.NestedBool(u.Object, "spec", "syncPolicy", "automated", "prune")
 	}
 
 	a.SyncStatus, _, _ = unstructured.NestedString(u.Object, "status", "sync", "status")

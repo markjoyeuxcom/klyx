@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/moomora/klyx/internal/crd"
+	"github.com/moomora/klyx/internal/fleet"
 )
 
 // CRDConn is the per-cluster read surface CRDService needs.
@@ -15,6 +16,7 @@ type CRDConn interface {
 	GetInstanceDetail(ctx context.Context, group, version, plural, ns, name string) (crd.InstanceDetail, error)
 	ApplyResourceYAML(ctx context.Context, group, version, plural, kind, scope, ns, name, yaml string, dryRun bool) error
 	RevealSecretKey(ctx context.Context, ns, name, key string) (string, error)
+	GitOpsOwnership(ctx context.Context, group, kind, ns, name string) fleet.GitOpsOwnership
 }
 
 const crdTimeout = 30 * time.Second
@@ -186,6 +188,33 @@ func (s *CRDService) ApplyResourceYAML(cluster, group, version, plural, kind, sc
 		return ActionResultDTO{Error: err.Error()}
 	}
 	return ActionResultDTO{OK: true}
+}
+
+// GitOpsOwnership returns the authoritative pre-write verdict for a target
+// object: the GitOps unit that OWNS it (edits revert) and the unit that REACHES
+// its namespace (out-of-band creates are pruned). Read-only; called by the edit
+// flow before a write and by the (future) create composer. A cluster miss
+// returns an empty verdict with a warning - degraded checks are never silent.
+func (s *CRDService) GitOpsOwnership(cluster, group, kind, namespace, name string) GitOpsOwnershipDTO {
+	conn, ok := s.lookup(cluster)
+	if !ok {
+		return GitOpsOwnershipDTO{Warnings: []string{"cluster not connected: " + cluster}}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), crdTimeout)
+	defer cancel()
+	o := conn.GitOpsOwnership(ctx, group, kind, namespace, name)
+	dto := GitOpsOwnershipDTO{
+		OwnerKind: o.OwnerKind, OwnerNamespace: o.OwnerNamespace, OwnerName: o.OwnerName,
+		OwnerPrunes: o.OwnerPrunes, OwnerSuspended: o.OwnerSuspended, Basis: o.Basis,
+		NamespaceOwnerKind: o.NamespaceOwnerKind, NamespaceOwnerNamespace: o.NamespaceOwnerNamespace,
+		NamespaceOwnerName: o.NamespaceOwnerName, NamespacePrunes: o.NamespacePrunes,
+		NamespaceBasis: o.NamespaceBasis,
+		Warnings:       []string{},
+	}
+	if o.Warnings != nil {
+		dto.Warnings = o.Warnings
+	}
+	return dto
 }
 
 // RevealSecretKey fetches the decoded value of one key from a Secret and

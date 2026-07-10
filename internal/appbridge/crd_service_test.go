@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/moomora/klyx/internal/crd"
+	"github.com/moomora/klyx/internal/fleet"
 )
 
 type fakeCRDConn struct {
@@ -18,6 +19,7 @@ type fakeCRDConn struct {
 	secretData map[string]string // key -> decoded value, for RevealSecretKey tests
 	apply      applyCall
 	applyErr   error
+	ownership  fleet.GitOpsOwnership
 }
 
 type applyCall struct {
@@ -43,6 +45,10 @@ func (f *fakeCRDConn) ApplyResourceYAML(ctx context.Context, group, version, plu
 	f.apply = applyCall{group: group, version: version, plural: plural, kind: kind, scope: scope, ns: ns, name: name, yaml: yaml, dryRun: dryRun}
 	return f.applyErr
 }
+func (f *fakeCRDConn) GitOpsOwnership(context.Context, string, string, string, string) fleet.GitOpsOwnership {
+	return f.ownership
+}
+
 func (f *fakeCRDConn) RevealSecretKey(ctx context.Context, ns, name, key string) (string, error) {
 	if f.secretData == nil {
 		return "", errors.New("key not found")
@@ -77,6 +83,32 @@ func TestGetInstanceDetailCarriesMeterPct(t *testing.T) {
 	}
 	if meter.Pct != 75 {
 		t.Fatalf("Pct dropped at the bridge boundary: got %v, want 75", meter.Pct)
+	}
+}
+
+func TestGitOpsOwnershipMapsToDTO(t *testing.T) {
+	conn := &fakeCRDConn{ownership: fleet.GitOpsOwnership{
+		OwnerKind: "Kustomization", OwnerNamespace: "flux-system", OwnerName: "apps",
+		OwnerPrunes: true, Basis: "flux-inventory",
+		NamespaceOwnerKind: "Kustomization", NamespaceOwnerName: "apps", NamespacePrunes: true, NamespaceBasis: "flux",
+	}}
+	svc := NewCRDService(func(string) (CRDConn, bool) { return conn, true })
+
+	dto := svc.GitOpsOwnership("x", "apps", "Deployment", "web", "api")
+	if dto.OwnerKind != "Kustomization" || dto.OwnerName != "apps" || !dto.OwnerPrunes || dto.Basis != "flux-inventory" {
+		t.Fatalf("owner fields not mapped: %+v", dto)
+	}
+	if dto.NamespaceOwnerKind != "Kustomization" || !dto.NamespacePrunes {
+		t.Fatalf("namespace fields not mapped: %+v", dto)
+	}
+	if dto.Warnings == nil {
+		t.Fatal("warnings must be non-nil ([] not null) for clean JSON")
+	}
+
+	// Cluster miss degrades to a warning, never a silent empty verdict.
+	miss := NewCRDService(func(string) (CRDConn, bool) { return nil, false })
+	if d := miss.GitOpsOwnership("nope", "", "ConfigMap", "ns", "n"); len(d.Warnings) == 0 {
+		t.Fatalf("cluster miss must warn: %+v", d)
 	}
 }
 

@@ -9,8 +9,11 @@ vi.mock("../bridge/crd", () => ({
   revealSecretKey: vi.fn(async () => "hunter2"),
   dryRunInstanceYAML: vi.fn(async () => ({ ok: true, error: "" })),
   applyInstanceYAML: vi.fn(async () => ({ ok: true, error: "" })),
+  // null = authoritative check unavailable -> the label-based fallback renders
+  // (what most existing tests assert). Ownership tests override per-case.
+  gitOpsOwnership: vi.fn(async () => null),
 }));
-import { getInstanceDetail, copyText, revealSecretKey, dryRunInstanceYAML, applyInstanceYAML } from "../bridge/crd";
+import { getInstanceDetail, copyText, revealSecretKey, dryRunInstanceYAML, applyInstanceYAML, gitOpsOwnership } from "../bridge/crd";
 
 vi.mock("../bridge/pods", () => ({
   openPodDetail: vi.fn(async () => {}),
@@ -313,6 +316,34 @@ describe("InstanceDetail", () => {
     const { getByText, queryByText } = render(<InstanceDetail cluster="x" resource={resource} instance={instance} />);
     fireEvent.click(getByText("yaml"));
     expect(queryByText(/Live edits may be reverted/)).toBeNull();
+  });
+
+  it("authoritative ownership names the owning unit and beats the label heuristic", async () => {
+    // No Flux labels on the object - the label heuristic sees nothing - but the
+    // inventory check names the owner: the authoritative banner must render.
+    vi.mocked(gitOpsOwnership).mockResolvedValueOnce({
+      ownerKind: "Kustomization", ownerNamespace: "flux-system", ownerName: "apps",
+      ownerPrunes: true, ownerSuspended: false, basis: "flux-inventory",
+      namespaceOwnerKind: "Kustomization", namespaceOwnerNamespace: "flux-system", namespaceOwnerName: "apps",
+      namespacePrunes: true, namespaceBasis: "flux", warnings: [],
+    });
+    const { getByText, findByText, queryByText } = render(<InstanceDetail cluster="x" resource={resource} instance={instance} />);
+    fireEvent.click(getByText("yaml"));
+    expect(await findByText(/Kustomization flux-system\/apps owns this object \(Flux inventory\)/)).toBeTruthy();
+    expect(getByText(/reverted on the next reconcile/)).toBeTruthy();
+    // The vaguer label-based copy is replaced, not duplicated.
+    expect(queryByText(/appears .*-managed/)).toBeNull();
+  });
+
+  it("a degraded ownership check surfaces its warning, never a silent unmanaged", async () => {
+    vi.mocked(gitOpsOwnership).mockResolvedValueOnce({
+      ownerKind: "", ownerNamespace: "", ownerName: "", ownerPrunes: false, ownerSuspended: false, basis: "",
+      namespaceOwnerKind: "", namespaceOwnerNamespace: "", namespaceOwnerName: "", namespacePrunes: false, namespaceBasis: "",
+      warnings: ["Argo ownership check failed: applications is forbidden"],
+    });
+    const { getByText, findByText } = render(<InstanceDetail cluster="x" resource={resource} instance={instance} />);
+    fireEvent.click(getByText("yaml"));
+    expect(await findByText(/Ownership check degraded: Argo ownership check failed/)).toBeTruthy();
   });
 
   it("dry-runs edited YAML", async () => {
