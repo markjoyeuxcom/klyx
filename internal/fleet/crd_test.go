@@ -2,6 +2,7 @@ package fleet
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -105,6 +106,28 @@ func TestApplyResourceYAMLDryRun(t *testing.T) {
 	}
 	if !patched {
 		t.Fatal("want dynamic patch")
+	}
+}
+
+func TestApplyResourceYAMLSurfacesConflict(t *testing.T) {
+	// A field-ownership conflict (another manager owns a field we changed) must be
+	// surfaced with an actionable message, not forced through - Force:false is the
+	// whole point (no silent drift against Flux/Argo).
+	gvr := schema.GroupVersionResource{Group: "", Version: "v1", Resource: "configmaps"}
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(dynScheme(), map[schema.GroupVersionResource]string{gvr: "ConfigMapList"})
+	dyn.PrependReactor("patch", "configmaps", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewConflict(schema.GroupResource{Resource: "configmaps"}, "app",
+			errors.New(`Apply failed with 1 conflict: conflict with "kustomize-controller": .data.key`))
+	})
+	c := NewClusterConn("x", nil, nil, dyn, nil, clock.Real{}, config.MetricsConfig{})
+
+	err := c.ApplyResourceYAML(context.Background(), "", "v1", "configmaps", "ConfigMap", "Namespaced", "default", "app",
+		"apiVersion: v1\nkind: ConfigMap\nmetadata:\n  namespace: default\n  name: app\ndata:\n  key: v\n", false)
+	if err == nil {
+		t.Fatal("want a conflict error, got nil")
+	}
+	if !strings.Contains(err.Error(), "apply conflict") || !strings.Contains(err.Error(), "kustomize-controller") {
+		t.Fatalf("conflict must be surfaced with the owning manager, got: %v", err)
 	}
 }
 

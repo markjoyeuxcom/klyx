@@ -13,6 +13,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -136,7 +137,13 @@ func (c *ClusterConn) ApplyResourceYAML(ctx context.Context, group, version, plu
 		return errors.New("masked Secret YAML cannot be applied - reveal or edit secret data outside Klyx")
 	}
 
-	opts := metav1.ApplyOptions{FieldManager: "klyx", Force: true}
+	// Force:false is deliberate. Server-side apply with Force:true would STEAL
+	// field ownership from Flux/Argo on any object they manage, so the change
+	// lands and the controller reverts it on the next reconcile - silent drift,
+	// the exact thing this tool exists to make visible. With Force:false a field
+	// owned by another manager returns a 409 conflict that names the manager, so
+	// the honest "GitOps owns this" state surfaces instead of being papered over.
+	opts := metav1.ApplyOptions{FieldManager: "klyx", Force: false}
 	if dryRun {
 		opts.DryRun = []string{metav1.DryRunAll}
 	}
@@ -148,6 +155,11 @@ func (c *ClusterConn) ApplyResourceYAML(ctx context.Context, group, version, plu
 		_, err = resource.Apply(ctx, name, u, opts)
 	}
 	if err != nil {
+		if apierrors.IsConflict(err) {
+			// The SSA conflict message already lists the conflicting fields +
+			// managers; prefix it so the cause is unmistakable.
+			return fmt.Errorf("apply conflict - another controller (e.g. Flux/Argo) owns fields you changed; forcing would be reverted on the next reconcile: %w", err)
+		}
 		return err
 	}
 	if !dryRun {
