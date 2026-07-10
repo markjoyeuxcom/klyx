@@ -1,5 +1,5 @@
 import { Events } from "@wailsio/runtime";
-import { useFleet, PodsResultDTO, PodDetailDTO } from "../store/fleet";
+import { useFleet, PodsResultDTO, PodDetailDTO, AdhocResultDTO } from "../store/fleet";
 import { PodsService } from "../../bindings/github.com/moomora/klyx/internal/appbridge/index.js";
 
 type ActionResultDTO = { ok: boolean; error: string };
@@ -108,4 +108,10 @@ export async function openPodDetail(cluster: string, namespace: string, name: st
       useFleet.setState((s) => ({ pods: { ...s.pods, detailLoading: false } }));
     }
   }
+}
+
+// launchDiagnosticPod creates a TTL-bounded scratch debugging pod in the
+// klyx-scratch namespace. Returns the per-object result (ok or an honest error).
+export async function launchDiagnosticPod(cluster: string, name: string, image: string, ttlSeconds: number): Promise<AdhocResultDTO> {
+  return (await PodsService.LaunchDiagnosticPod(cluster, name, image, ttlSeconds)) as AdhocResultDTO;
 }

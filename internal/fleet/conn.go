@@ -89,6 +89,9 @@ type Conn interface {
 	GetInstanceDetail(ctx context.Context, group, version, plural, ns, name string) (crd.InstanceDetail, error)
 	ApplyResourceYAML(ctx context.Context, group, version, plural, kind, scope, ns, name, yaml string, dryRun bool) error
 	CreateResourceYAML(ctx context.Context, yamlDocs string, dryRun bool) []AdhocResult
+	LaunchDiagnosticPod(ctx context.Context, name, image string, ttlSeconds int64) AdhocResult
+	ListAdhocObjects(ctx context.Context) []AdhocObject
+	DeleteAdhocObject(ctx context.Context, group, version, plural, ns, name string) error
 	GitOpsOwnership(ctx context.Context, group, kind, ns, name string) GitOpsOwnership
 	RevealSecretKey(ctx context.Context, ns, name, key string) (string, error)
 	ListGateways(ctx context.Context) ([]gwapi.GatewayRef, bool, error)

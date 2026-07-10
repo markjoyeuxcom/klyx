@@ -18,10 +18,18 @@ type fakePodConn struct {
 	detErr    error
 	deleteErr error
 	deleted   []string // records "<namespace>/<name>" for assertion
+	launched  string   // records "<name>|<image>" for assertion
+	launchTTL int64
 }
 
 func (f *fakePodConn) ListPods(_ context.Context, _ string) ([]workloads.PodSummary, bool, error) {
 	return f.pods, f.truncated, nil
+}
+
+func (f *fakePodConn) LaunchDiagnosticPod(_ context.Context, name, image string, ttl int64) fleet.AdhocResult {
+	f.launched = name + "|" + image
+	f.launchTTL = ttl
+	return fleet.AdhocResult{Kind: "Pod", Namespace: fleet.ScratchNamespace, Name: name, OK: true}
 }
 
 func (f *fakePodConn) PodDetail(_ context.Context, _, _ string) (fleet.PodDetail, error) {

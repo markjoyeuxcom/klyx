@@ -98,6 +98,13 @@ func (f *fakeConn) GitOpsOwnership(context.Context, string, string, string, stri
 func (f *fakeConn) CreateResourceYAML(context.Context, string, bool) []AdhocResult {
 	return nil
 }
+func (f *fakeConn) LaunchDiagnosticPod(context.Context, string, string, int64) AdhocResult {
+	return AdhocResult{}
+}
+func (f *fakeConn) ListAdhocObjects(context.Context) []AdhocObject { return nil }
+func (f *fakeConn) DeleteAdhocObject(context.Context, string, string, string, string, string) error {
+	return nil
+}
 func (f *fakeConn) ListPods(context.Context, string) ([]workloads.PodSummary, bool, error) {
 	return nil, false, nil
 }

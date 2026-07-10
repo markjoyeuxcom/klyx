@@ -15,6 +15,7 @@ const podsTimeout = 30 * time.Second
 // in the interface itself — the lookup closure bridges to the real fleet.Conn.
 type PodsConn interface {
 	ListPods(ctx context.Context, namespace string) ([]workloads.PodSummary, bool, error)
+	LaunchDiagnosticPod(ctx context.Context, name, image string, ttlSeconds int64) fleet.AdhocResult
 	PodDetail(ctx context.Context, namespace, name string) (fleet.PodDetail, error)
 	DeletePod(ctx context.Context, namespace, name string) error
 	WatchDirty(ctx context.Context, namespace string, kinds []string, onDirty func(), onLive func(bool)) (stop func(), err error)
@@ -158,6 +159,23 @@ func (s *PodsService) GetPodDetail(cluster, namespace, name string) PodDetailDTO
 
 // DeletePod deletes a single pod via the cluster connection. The owning
 // controller recreates it; this is the standard imperative bounce.
+// LaunchDiagnosticPod creates a TTL-bounded scratch debugging pod in the
+// klyx-scratch namespace (created on first use). A create is a mutation, so it
+// consumes the protected-cluster grant like every destructive verb.
+func (s *PodsService) LaunchDiagnosticPod(cluster, name, image string, ttlSeconds int64) AdhocResultDTO {
+	if err := checkProtected(cluster); err != nil {
+		return AdhocResultDTO{Error: err.Error()}
+	}
+	conn, ok := s.lookup(cluster)
+	if !ok {
+		return AdhocResultDTO{Error: "cluster not connected: " + cluster}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
+	defer cancel()
+	r := conn.LaunchDiagnosticPod(ctx, name, image, ttlSeconds)
+	return AdhocResultDTO{Kind: r.Kind, Namespace: r.Namespace, Name: r.Name, OK: r.OK, Error: r.Error}
+}
+
 func (s *PodsService) DeletePod(cluster, namespace, name string) ActionResultDTO {
 	if err := checkProtected(cluster); err != nil {
 		return ActionResultDTO{Error: err.Error()}

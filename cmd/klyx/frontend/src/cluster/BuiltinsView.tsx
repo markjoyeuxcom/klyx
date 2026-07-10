@@ -4,6 +4,7 @@ import { countKind } from "../bridge/crd";
 import { BUILTIN_CATALOG, BuiltinEntry } from "./builtins";
 import { Chip, btn, ellipsis } from "../chrome/primitives";
 import { AdhocComposer } from "./AdhocComposer";
+import { ScratchPanel } from "./ScratchPanel";
 
 function matchesEntry(entry: BuiltinEntry, q: string): boolean {
   if (!q) return true;
@@ -21,6 +22,7 @@ export function BuiltinsView({ cluster }: { cluster: string }) {
   const builtinCategory = useFleet((s) => s.crd.builtinCategory);
   const setBuiltinCategory = useFleet((s) => s.setBuiltinCategory);
   const [composing, setComposing] = useState(false);
+  const [scratchOpen, setScratchOpen] = useState(false);
 
   const categories = BUILTIN_CATALOG
     .filter((cat) => builtinCategory === null || cat.label === builtinCategory)
@@ -37,6 +39,7 @@ export function BuiltinsView({ cluster }: { cluster: string }) {
         </div>
         <div style={{ flex: 1 }} />
         <button onClick={() => setComposing(true)} style={btn} title="Deploy scratch/diagnostic YAML (labeled klyx.dev/adhoc, not in Git)">deploy yaml</button>
+        <button onClick={() => setScratchOpen(true)} style={btn} title="Klyx-created scratch objects: launch a debug pod, list, clean up">scratch</button>
         <input
           value={search}
           onChange={(e) => setSearch(e.target.value)}
@@ -45,6 +48,7 @@ export function BuiltinsView({ cluster }: { cluster: string }) {
         />
       </div>
       {composing && <AdhocComposer cluster={cluster} onClose={() => setComposing(false)} />}
+      {scratchOpen && <ScratchPanel cluster={cluster} onClose={() => setScratchOpen(false)} />}
 
       {/* Category chip row */}
       <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 12, flexWrap: "wrap", flexShrink: 0 }}>

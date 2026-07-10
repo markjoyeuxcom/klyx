@@ -24,6 +24,10 @@ type fakeCRDConn struct {
 	createYAML    string
 	createDryRun  bool
 	createResults []fleet.AdhocResult
+
+	adhocObjects   []fleet.AdhocObject
+	adhocDeleted   []string
+	adhocDeleteErr error
 }
 
 type applyCall struct {
@@ -56,6 +60,13 @@ func (f *fakeCRDConn) GitOpsOwnership(context.Context, string, string, string, s
 func (f *fakeCRDConn) CreateResourceYAML(_ context.Context, yamlDocs string, dryRun bool) []fleet.AdhocResult {
 	f.createYAML, f.createDryRun = yamlDocs, dryRun
 	return f.createResults
+}
+
+func (f *fakeCRDConn) ListAdhocObjects(context.Context) []fleet.AdhocObject { return f.adhocObjects }
+
+func (f *fakeCRDConn) DeleteAdhocObject(_ context.Context, group, version, plural, ns, name string) error {
+	f.adhocDeleted = append(f.adhocDeleted, plural+"/"+ns+"/"+name)
+	return f.adhocDeleteErr
 }
 
 func (f *fakeCRDConn) RevealSecretKey(ctx context.Context, ns, name, key string) (string, error) {
@@ -118,6 +129,28 @@ func TestCreateResourceYAMLMapsToDTO(t *testing.T) {
 	miss := NewCRDService(func(string) (CRDConn, bool) { return nil, false })
 	if r := miss.CreateResourceYAML("nope", "x", true); len(r) != 1 || r[0].Error == "" {
 		t.Fatalf("cluster miss must fold into an error result: %+v", r)
+	}
+}
+
+func TestAdhocListAndDelete(t *testing.T) {
+	conn := &fakeCRDConn{adhocObjects: []fleet.AdhocObject{
+		{Kind: "Pod", Version: "v1", Plural: "pods", Scope: "Namespaced", Namespace: "klyx-scratch", Name: "dbg", AgeSeconds: 60},
+	}}
+	svc := NewCRDService(func(string) (CRDConn, bool) { return conn, true })
+
+	objs := svc.ListAdhocObjects("x")
+	if len(objs) != 1 || objs[0].Name != "dbg" || objs[0].AgeSeconds != 60 {
+		t.Fatalf("list not mapped: %+v", objs)
+	}
+
+	r := svc.DeleteAdhocObject("x", "", "v1", "pods", "klyx-scratch", "dbg")
+	if !r.OK || len(conn.adhocDeleted) != 1 || conn.adhocDeleted[0] != "pods/klyx-scratch/dbg" {
+		t.Fatalf("delete not forwarded: %+v %v", r, conn.adhocDeleted)
+	}
+
+	conn.adhocDeleteErr = errors.New("not a Klyx ad-hoc object")
+	if r := svc.DeleteAdhocObject("x", "", "v1", "pods", "prod", "app"); r.OK || r.Error == "" {
+		t.Fatalf("guard refusal must surface: %+v", r)
 	}
 }
 

@@ -16,6 +16,8 @@ type CRDConn interface {
 	GetInstanceDetail(ctx context.Context, group, version, plural, ns, name string) (crd.InstanceDetail, error)
 	ApplyResourceYAML(ctx context.Context, group, version, plural, kind, scope, ns, name, yaml string, dryRun bool) error
 	CreateResourceYAML(ctx context.Context, yamlDocs string, dryRun bool) []fleet.AdhocResult
+	ListAdhocObjects(ctx context.Context) []fleet.AdhocObject
+	DeleteAdhocObject(ctx context.Context, group, version, plural, ns, name string) error
 	RevealSecretKey(ctx context.Context, ns, name, key string) (string, error)
 	GitOpsOwnership(ctx context.Context, group, kind, ns, name string) fleet.GitOpsOwnership
 }
@@ -218,6 +220,45 @@ func (s *CRDService) CreateResourceYAML(cluster, yaml string, dryRun bool) []Adh
 		})
 	}
 	return out
+}
+
+// ListAdhocObjects returns everything Klyx created ad-hoc on the cluster (the
+// scratch inventory: label klyx.dev/adhoc). Read-only.
+func (s *CRDService) ListAdhocObjects(cluster string) []AdhocObjectDTO {
+	conn, ok := s.lookup(cluster)
+	if !ok {
+		return []AdhocObjectDTO{}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), crdTimeout)
+	defer cancel()
+	objs := conn.ListAdhocObjects(ctx)
+	out := make([]AdhocObjectDTO, 0, len(objs))
+	for _, o := range objs {
+		out = append(out, AdhocObjectDTO{
+			Kind: o.Kind, Group: o.Group, Version: o.Version, Plural: o.Plural,
+			Scope: o.Scope, Namespace: o.Namespace, Name: o.Name, AgeSeconds: o.AgeSeconds,
+		})
+	}
+	return out
+}
+
+// DeleteAdhocObject deletes one Klyx-created scratch object. Label-guarded in
+// the data layer (never deletes anything Klyx did not create) and consumes the
+// protected-cluster grant like every destructive verb.
+func (s *CRDService) DeleteAdhocObject(cluster, group, version, plural, namespace, name string) ActionResultDTO {
+	if err := checkProtected(cluster); err != nil {
+		return ActionResultDTO{Error: err.Error()}
+	}
+	conn, ok := s.lookup(cluster)
+	if !ok {
+		return ActionResultDTO{Error: "cluster not connected: " + cluster}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), crdTimeout)
+	defer cancel()
+	if err := conn.DeleteAdhocObject(ctx, group, version, plural, namespace, name); err != nil {
+		return ActionResultDTO{Error: err.Error()}
+	}
+	return ActionResultDTO{OK: true}
 }
 
 // GitOpsOwnership returns the authoritative pre-write verdict for a target
