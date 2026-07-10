@@ -10,6 +10,7 @@ import { SkeletonRows } from "../chrome/SkeletonRows";
 import { WatchErrorBanner } from "../chrome/WatchErrorBanner";
 import { IconShieldLock } from "@tabler/icons-react";
 import { SECRET_REF } from "./resourceRefs";
+import { ManifestButton } from "./ManifestButton";
 
 type EsoFilter = "all" | "attention" | "stale" | "stores";
 
@@ -319,6 +320,7 @@ function SecretInspector({ e, store }: { e: ExternalSecretDTO; store: ExternalSe
         <div style={{ display: "flex", alignItems: "center", gap: 2 }}>
           <div style={{ ...mono, fontSize: 13, fontWeight: 500 }}>{e.namespace}/{e.name}</div>
           <CopyButton text={e.name} label={`copy external secret name ${e.name}`} />
+          <ManifestButton group="external-secrets.io" kind="ExternalSecret" namespace={e.namespace} name={e.name} />
         </div>
         <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 5, marginTop: 6 }}>
           <EsoBadge tone={e.state === "Synced" && !e.stale ? "success" : e.state === "Failed" ? "danger" : "warning"}>{e.stale ? "stale" : e.state.toLowerCase()}</EsoBadge>
