@@ -14,7 +14,8 @@ import { EmptyState } from "../chrome/EmptyState";
 import { SkeletonRows } from "../chrome/SkeletonRows";
 import { WatchErrorBanner } from "../chrome/WatchErrorBanner";
 import { IconGitBranch } from "@tabler/icons-react";
-import { wellKnownResourceRef } from "./resourceRefs";
+import { wellKnownResourceRef, FLUX_KIND_GROUPS } from "./resourceRefs";
+import { ManifestButton } from "./ManifestButton";
 import { inputWell, MetersStrip, well, Badge, FilterButton, StatusDot, readyColor, ellipsis, actionBtn, type Tone } from "../chrome/primitives";
 import { compactCount } from "../chrome/format";
 import { InspectorConditions, InspectorSection, InspectorStatus, Kbd } from "./ResourceInspector";
@@ -767,6 +768,7 @@ function InspectorHeader({ resource }: { resource: FluxResourceDTO }) {
       <div style={{ display: "flex", gap: 8, alignItems: "center", minWidth: 0, marginTop: 2, marginBottom: 10 }}>
         <span style={{ fontFamily: "var(--font-mono)", fontSize: 15, fontWeight: 600, ...ellipsis }}>{resource.name}</span>
         <CopyButton text={resource.name} label={`copy name ${resource.name}`} />
+        <ManifestButton group={FLUX_KIND_GROUPS[resource.kind] ?? ""} kind={resource.kind} namespace={resource.namespace} name={resource.name} />
       </div>
       <InspectorStatus
         tone={fluxTone(resource)}

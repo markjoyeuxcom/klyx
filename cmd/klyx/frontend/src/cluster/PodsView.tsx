@@ -20,6 +20,7 @@ import { useNavIntent } from "../chrome/useNavIntent";
 import { FKeysBar } from "../chrome/FKeysBar";
 import { inputWell, selectWell, FilterButton, MetersStrip, well, EmptyState, LiveIndicator, SkeletonRows, btn, ellipsis, type Tone } from "../chrome/primitives";
 import { CopyButton } from "../chrome/CopyButton";
+import { ManifestButton } from "./ManifestButton";
 import { YamlBlock } from "../chrome/YamlBlock";
 import { InspectorFacts, InspectorIdle, InspectorConditions, InspectorEvents, InspectorSection, InspectorStatus, InspectorTabButton, Kbd, MetadataChips, inspectorStateBox } from "./ResourceInspector";
 import { loadClusterPrefs, loadSearch, savePodsViewPrefs, saveSearch } from "../store/persist";
@@ -615,6 +616,7 @@ function PodDetailPanel({
           )}
         </span>
         <CopyButton text={name} label="copy pod name" />
+        <ManifestButton group="" kind="Pod" namespace={namespace} name={name} />
 
         {/* Logs button — opens / re-targets the dock; l is live via useListKeys */}
         <button

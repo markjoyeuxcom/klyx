@@ -12,6 +12,7 @@ import { IconGitMerge } from "@tabler/icons-react";
 import { Age, UpdatedAt, useReceivedAt } from "../chrome/Age";
 import { InspectorEmpty, InspectorSection, InspectorTitle } from "./ResourceInspector";
 import { wellKnownResourceRef } from "./resourceRefs";
+import { ManifestButton } from "./ManifestButton";
 
 // ArgoView is the Argo CD lens, speaking Argo's vocabulary (synced/degraded,
 // never translated into Flux terms). Apps arrive broken-first from the
@@ -605,6 +606,9 @@ function ApplicationInspector({ cluster, app, project, appSet, onRefresh, onSync
   return (
     <div style={inspector}>
       <InspectorTitle title={app.name} sub={`${app.namespace} · ${app.project || "default"} · ${app.destNamespace || "destination unknown"}`} />
+      <div style={{ display: "flex", gap: 6, marginBottom: 4 }}>
+        <ManifestButton group="argoproj.io" kind="Application" namespace={app.namespace} name={app.name} />
+      </div>
       <InspectorSection title="status">
         <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
           <RiskBadge tone={app.syncStatus === "Synced" ? "success" : "warning"}>{app.syncStatus}</RiskBadge>

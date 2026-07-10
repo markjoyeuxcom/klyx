@@ -15,6 +15,7 @@ import { SkeletonRows } from "../chrome/SkeletonRows";
 import { WatchErrorBanner } from "../chrome/WatchErrorBanner";
 import { IconCertificate, IconSparkles, IconAlertTriangle } from "@tabler/icons-react";
 import { SECRET_REF } from "./resourceRefs";
+import { ManifestButton } from "./ManifestButton";
 import { SyncingChip, staleStyle } from "./staleness";
 
 type CertFilter = "all" | "attention" | "expiring" | "issuing" | "issuerProblem" | "issuers";
@@ -392,6 +393,7 @@ function CertInspector({ c, cluster, issuer, chain, chainLoading, aiReady, aiEgr
         <div style={{ display: "flex", alignItems: "center", gap: 2, marginBottom: 8 }}>
           <div style={{ ...mono, fontSize: 13, fontWeight: 500 }}>{c.namespace}/{c.name}</div>
           <CopyButton text={c.name} label={`copy certificate name ${c.name}`} />
+          <ManifestButton group="cert-manager.io" kind="Certificate" namespace={c.namespace} name={c.name} />
           {aiReady && (
             <button
               onClick={runExplain}

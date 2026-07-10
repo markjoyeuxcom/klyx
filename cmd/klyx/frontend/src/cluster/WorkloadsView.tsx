@@ -26,6 +26,7 @@ import { InspectorFacts, InspectorIdle, InspectorStatus } from "./ResourceInspec
 import { loadClusterPrefs, loadSearch, saveSearch, saveWorkloadsViewPrefs } from "../store/persist";
 import { SyncingChip, staleStyle } from "./staleness";
 import { wellKnownResourceRef } from "./resourceRefs";
+import { ManifestButton } from "./ManifestButton";
 
 const rankDot: Record<string, string> = {
   unhealthy: "var(--color-text-danger)",
@@ -668,17 +669,7 @@ function WorkloadContextPanel({
           )}
           {/* One manifest surface: jump to InstanceDetail (YAML, labels,
               annotations, edit) instead of duplicating a YAML tab here. */}
-          <button
-            onClick={() => {
-              const ref = wellKnownResourceRef("apps", workload.kind);
-              if (!ref) return;
-              const nav = useFleet.getState();
-              nav.openResource(ref);
-              nav.openInstance(workload.namespace, workload.name);
-            }}
-            style={btn}
-            title="Open the manifest (YAML, labels, edit) in Resources"
-          >manifest</button>
+          <ManifestButton group="apps" kind={workload.kind} namespace={workload.namespace} name={workload.name} />
           <span style={{ color: "var(--color-text-tertiary)", fontSize: 11 }}>
             {expanded ? "expanded" : "enter expands"}
           </span>
