@@ -370,6 +370,10 @@ export type AdhocResultDTO = {
   namespaceOwnerKind: string; namespaceOwnerName: string; namespaceOwnerNamespace: string; namespacePrunes: boolean;
 };
 
+// AdhocObjectDTO is one Klyx-created scratch object (label klyx.dev/adhoc) in
+// the cleanup inventory.
+export type AdhocObjectDTO = { kind: string; group: string; version: string; plural: string; scope: string; namespace: string; name: string; ageSeconds: number };
+
 // GitOpsOwnershipDTO is the authoritative pre-write verdict: which GitOps unit
 // OWNS the object (edits revert on reconcile) and which unit REACHES its
 // namespace (out-of-band creates are pruned when namespacePrunes). Empty

@@ -21,6 +21,7 @@ import { FKeysBar } from "../chrome/FKeysBar";
 import { inputWell, selectWell, FilterButton, MetersStrip, well, EmptyState, LiveIndicator, SkeletonRows, btn, ellipsis, type Tone } from "../chrome/primitives";
 import { CopyButton } from "../chrome/CopyButton";
 import { ManifestButton } from "./ManifestButton";
+import { ScratchPanel } from "./ScratchPanel";
 import { YamlBlock } from "../chrome/YamlBlock";
 import { InspectorFacts, InspectorIdle, InspectorConditions, InspectorEvents, InspectorSection, InspectorStatus, InspectorTabButton, Kbd, MetadataChips, inspectorStateBox } from "./ResourceInspector";
 import { loadClusterPrefs, loadSearch, savePodsViewPrefs, saveSearch } from "../store/persist";
@@ -78,6 +79,7 @@ export function PodsView({ cluster }: { cluster: string }) {
   // row; the checkbox reveals on row hover and stays put once checked.
   const [bulk, setBulk] = useState<Set<string>>(new Set());
   const [bulkConfirm, setBulkConfirm] = useState(false);
+  const [scratchOpen, setScratchOpen] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<VirtualListHandle>(null);
   // Holds the cleanup for the current live subscription so namespace changes
@@ -282,8 +284,21 @@ export function PodsView({ cluster }: { cluster: string }) {
               style={{ ...inputWell, width: 160 }}
             />
             <button onClick={onRefresh} style={btn}>refresh</button>
+            <button onClick={() => setScratchOpen(true)} style={btn} title="Launch a TTL-bounded debug pod into klyx-scratch">debug pod</button>
             <LiveIndicator live={pods.live} />
           </div>
+          {scratchOpen && (
+            <ScratchPanel
+              cluster={cluster}
+              onClose={() => setScratchOpen(false)}
+              onLaunched={(ns) => {
+                // Jump the live pods subscription to the scratch namespace so
+                // the new pod is immediately visible.
+                useFleet.getState().requestPodsNamespace(cluster, ns);
+                setScratchOpen(false);
+              }}
+            />
+          )}
 
           {/* Truncation banner - LOUD, not a chip: broken-first ranking happens
               after the list, so a truncated all-namespaces view can hide a broken

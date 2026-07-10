@@ -89,6 +89,19 @@ type AdhocResultDTO struct {
 	NamespacePrunes         bool   `json:"namespacePrunes"`
 }
 
+// AdhocObjectDTO is one Klyx-created scratch object (label klyx.dev/adhoc) in
+// the cleanup inventory.
+type AdhocObjectDTO struct {
+	Kind       string `json:"kind"`
+	Group      string `json:"group"`
+	Version    string `json:"version"`
+	Plural     string `json:"plural"`
+	Scope      string `json:"scope"`
+	Namespace  string `json:"namespace"`
+	Name       string `json:"name"`
+	AgeSeconds int64  `json:"ageSeconds"`
+}
+
 // GitOpsOwnershipDTO is the authoritative pre-write verdict for one target
 // object: which GitOps unit OWNS it (an edit reverts on the next reconcile) and
 // which unit REACHES its namespace (an out-of-band create there is DELETED on

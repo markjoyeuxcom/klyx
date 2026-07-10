@@ -107,6 +107,10 @@ func (f *fakeLivePodConn) PodDetail(context.Context, string, string) (fleet.PodD
 	return fleet.PodDetail{}, nil
 }
 
+func (f *fakeLivePodConn) LaunchDiagnosticPod(context.Context, string, string, int64) fleet.AdhocResult {
+	return fleet.AdhocResult{}
+}
+
 func (f *fakeLivePodConn) DeletePod(context.Context, string, string) error { return nil }
 
 func (f *fakeLivePodConn) WatchDirty(_ context.Context, _ string, _ []string, onDirty func(), onLive func(bool)) (func(), error) {

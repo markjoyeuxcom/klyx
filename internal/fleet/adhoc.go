@@ -3,11 +3,13 @@ package fleet
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -186,6 +188,172 @@ func (c *ClusterConn) applyAdhocDoc(ctx context.Context, doc string, dryRun bool
 		r.NamespacePrunes = o.NamespacePrunes
 	}
 	return r
+}
+
+// ScratchNamespace is where the diagnostic-pod launcher deploys. A dedicated
+// unmanaged namespace designs the prune risk out: no GitOps unit targets it, so
+// nothing there is ever reverted or pruned by a reconcile.
+const ScratchNamespace = "klyx-scratch"
+
+// LaunchDiagnosticPod creates a scratch debugging pod in the klyx-scratch
+// namespace (created on first use, adhoc-stamped like everything else). The pod
+// is TTL-bounded by activeDeadlineSeconds - the CLUSTER kills it when time is
+// up, so cleanup never depends on Klyx still running - with restartPolicy Never
+// so it dies once instead of crash-looping forever.
+func (c *ClusterConn) LaunchDiagnosticPod(ctx context.Context, name, image string, ttlSeconds int64) AdhocResult {
+	r := AdhocResult{Kind: "Pod", Namespace: ScratchNamespace, Name: name}
+	if c.typed == nil {
+		r.Error = "cluster connection unavailable"
+		return r
+	}
+	if name == "" || image == "" {
+		r.Error = "name and image are required"
+		return r
+	}
+	if ttlSeconds <= 0 {
+		ttlSeconds = 3600
+	}
+	clk := c.clk
+	if clk == nil {
+		clk = clock.Real{}
+	}
+	stamp := map[string]string{AdhocLabel: "true"}
+	annos := map[string]string{adhocCreatedByAnno: "klyx", adhocCreatedAtAnno: clk.Now().UTC().Format(time.RFC3339)}
+
+	// Ensure the scratch namespace exists; racing an existing one is fine.
+	nsObj := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ScratchNamespace, Labels: stamp, Annotations: annos}}
+	if _, err := c.typed.CoreV1().Namespaces().Create(ctx, nsObj, metav1.CreateOptions{FieldManager: adhocFieldManager}); err != nil && !apierrors.IsAlreadyExists(err) {
+		r.Error = "create " + ScratchNamespace + " namespace: " + err.Error()
+		return r
+	}
+
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ScratchNamespace, Labels: stamp, Annotations: annos},
+		Spec: corev1.PodSpec{
+			RestartPolicy:         corev1.RestartPolicyNever,
+			ActiveDeadlineSeconds: &ttlSeconds,
+			Containers: []corev1.Container{{
+				Name:    "shell",
+				Image:   image,
+				Command: []string{"sleep", fmt.Sprintf("%d", ttlSeconds)},
+			}},
+		},
+	}
+	if _, err := c.typed.CoreV1().Pods(ScratchNamespace).Create(ctx, pod, metav1.CreateOptions{FieldManager: adhocFieldManager}); err != nil {
+		if apierrors.IsAlreadyExists(err) {
+			r.Error = fmt.Sprintf("pod %q already exists in %s - delete it from the scratch list or pick another name", name, ScratchNamespace)
+			return r
+		}
+		r.Error = err.Error()
+		return r
+	}
+	r.OK = true
+	c.signalRefresh()
+	return r
+}
+
+// AdhocObject is one Klyx-created scratch object (labeled klyx.dev/adhoc).
+type AdhocObject struct {
+	Kind       string
+	Group      string
+	Version    string
+	Plural     string
+	Scope      string
+	Namespace  string
+	Name       string
+	AgeSeconds int64
+}
+
+// adhocListGVRs is the curated set of kinds the scratch list sweeps. Bounded by
+// design: a label-selector list per kind is cheap, and scratch objects are by
+// construction things Klyx itself created. Extend as the composer grows uses.
+var adhocListGVRs = []struct {
+	gvr   schema.GroupVersionResource
+	kind  string
+	scope string
+}{
+	{schema.GroupVersionResource{Group: "", Version: "v1", Resource: "pods"}, "Pod", "Namespaced"},
+	{schema.GroupVersionResource{Group: "", Version: "v1", Resource: "configmaps"}, "ConfigMap", "Namespaced"},
+	{schema.GroupVersionResource{Group: "", Version: "v1", Resource: "services"}, "Service", "Namespaced"},
+	{schema.GroupVersionResource{Group: "", Version: "v1", Resource: "namespaces"}, "Namespace", "Cluster"},
+	{schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}, "Deployment", "Namespaced"},
+	{schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "statefulsets"}, "StatefulSet", "Namespaced"},
+	{schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "daemonsets"}, "DaemonSet", "Namespaced"},
+	{schema.GroupVersionResource{Group: "batch", Version: "v1", Resource: "jobs"}, "Job", "Namespaced"},
+	{schema.GroupVersionResource{Group: "batch", Version: "v1", Resource: "cronjobs"}, "CronJob", "Namespaced"},
+	{schema.GroupVersionResource{Group: "networking.k8s.io", Version: "v1", Resource: "networkpolicies"}, "NetworkPolicy", "Namespaced"},
+	{schema.GroupVersionResource{Group: "", Version: "v1", Resource: "persistentvolumeclaims"}, "PersistentVolumeClaim", "Namespaced"},
+}
+
+// ListAdhocObjects sweeps the curated kinds for everything Klyx created ad-hoc
+// (label klyx.dev/adhoc) - the cleanup backstop for TTL'd scratch objects. Kinds
+// whose list fails (CRD absent, RBAC) are skipped; this is a best-effort
+// inventory of Klyx's OWN objects, not a cluster audit.
+func (c *ClusterConn) ListAdhocObjects(ctx context.Context) []AdhocObject {
+	if c.dyn == nil {
+		return nil
+	}
+	clk := c.clk
+	if clk == nil {
+		clk = clock.Real{}
+	}
+	now := clk.Now()
+	var out []AdhocObject
+	for _, e := range adhocListGVRs {
+		list, err := c.dyn.Resource(e.gvr).List(ctx, metav1.ListOptions{LabelSelector: AdhocLabel + "=true", Limit: 500})
+		if err != nil || list == nil {
+			continue
+		}
+		for i := range list.Items {
+			u := &list.Items[i]
+			age := int64(0)
+			if ct := u.GetCreationTimestamp(); !ct.IsZero() {
+				age = int64(now.Sub(ct.Time).Seconds())
+				if age < 0 {
+					age = 0
+				}
+			}
+			out = append(out, AdhocObject{
+				Kind: e.kind, Group: e.gvr.Group, Version: e.gvr.Version, Plural: e.gvr.Resource,
+				Scope: e.scope, Namespace: u.GetNamespace(), Name: u.GetName(), AgeSeconds: age,
+			})
+		}
+	}
+	return out
+}
+
+// DeleteAdhocObject deletes one Klyx-created scratch object. The label guard is
+// load-bearing: the object is fetched first and MUST carry klyx.dev/adhoc, so
+// this verb can never be aimed at anything Klyx did not create.
+func (c *ClusterConn) DeleteAdhocObject(ctx context.Context, group, version, plural, ns, name string) error {
+	if c.dyn == nil {
+		return errors.New("dynamic client unavailable")
+	}
+	gvr := schema.GroupVersionResource{Group: group, Version: version, Resource: plural}
+	resource := c.dyn.Resource(gvr)
+	var u *unstructured.Unstructured
+	var err error
+	if ns != "" {
+		u, err = resource.Namespace(ns).Get(ctx, name, metav1.GetOptions{})
+	} else {
+		u, err = resource.Get(ctx, name, metav1.GetOptions{})
+	}
+	if err != nil {
+		return err
+	}
+	if u.GetLabels()[AdhocLabel] != "true" {
+		return fmt.Errorf("%s %q is not a Klyx ad-hoc object (missing %s label) - refusing to delete", u.GetKind(), name, AdhocLabel)
+	}
+	if ns != "" {
+		err = resource.Namespace(ns).Delete(ctx, name, metav1.DeleteOptions{})
+	} else {
+		err = resource.Delete(ctx, name, metav1.DeleteOptions{})
+	}
+	if err != nil {
+		return err
+	}
+	c.signalRefresh()
+	return nil
 }
 
 // resolveGVK maps the document's own apiVersion+kind to the served GVR + scope

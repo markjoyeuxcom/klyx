@@ -1,4 +1,4 @@
-import { useFleet, CRDGroupDTO, CRDCountDTO, crdCountKey, ResourceRef, InstanceDTO, InstanceRef, InstanceDetailDTO, GitOpsOwnershipDTO, AdhocResultDTO } from "../store/fleet";
+import { useFleet, CRDGroupDTO, CRDCountDTO, crdCountKey, ResourceRef, InstanceDTO, InstanceRef, InstanceDetailDTO, GitOpsOwnershipDTO, AdhocResultDTO, AdhocObjectDTO } from "../store/fleet";
 import { CRDService } from "../../bindings/github.com/moomora/klyx/internal/appbridge/index.js";
 import { Clipboard } from "@wailsio/runtime";
 
@@ -152,6 +152,18 @@ export async function gitOpsOwnership(cluster: string, resource: ResourceRef, in
 // objects. Per-doc honest results; dryRun validates + carries prune warnings.
 export async function createResourceYAML(cluster: string, yaml: string, dryRun: boolean): Promise<AdhocResultDTO[]> {
   return ((await CRDService.CreateResourceYAML(cluster, yaml, dryRun)) as AdhocResultDTO[]) ?? [];
+}
+
+// listAdhocObjects returns Klyx-created scratch objects (the cleanup inventory).
+export async function listAdhocObjects(cluster: string): Promise<AdhocObjectDTO[]> {
+  return ((await CRDService.ListAdhocObjects(cluster)) as AdhocObjectDTO[]) ?? [];
+}
+
+// deleteAdhocObject deletes one Klyx-created scratch object (label-guarded in
+// the backend: never deletes anything Klyx did not create).
+export async function deleteAdhocObject(cluster: string, o: AdhocObjectDTO): Promise<{ ok: boolean; error: string }> {
+  const r = (await CRDService.DeleteAdhocObject(cluster, o.group, o.version, o.plural, o.namespace, o.name)) as { ok: boolean; error: string };
+  return { ok: !!r.ok, error: r.error ?? "" };
 }
 
 export async function copyText(text: string): Promise<void> {

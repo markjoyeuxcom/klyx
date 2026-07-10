@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	discoveryfake "k8s.io/client-go/discovery/fake"
@@ -35,9 +36,11 @@ func adhocConn(t *testing.T) (*ClusterConn, *dynamicfake.FakeDynamicClient) {
 		}},
 	}
 	listKinds := map[schema.GroupVersionResource]string{
-		{Group: "", Version: "v1", Resource: "pods"}:                                  "PodList",
-		{Group: "", Version: "v1", Resource: "configmaps"}:                            "ConfigMapList",
 		{Group: "rbac.authorization.k8s.io", Version: "v1", Resource: "clusterroles"}: "ClusterRoleList",
+	}
+	// Every GVR the adhoc scratch sweep lists must be registered with the fake.
+	for _, e := range adhocListGVRs {
+		listKinds[e.gvr] = e.kind + "List"
 	}
 	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(dynScheme(), listKinds)
 	c := NewClusterConn("x", typed, nil, dyn, nil, clock.Real{}, config.MetricsConfig{})
@@ -140,6 +143,82 @@ metadata:
 `, false)
 	if len(res) != 1 || res[0].OK || !strings.Contains(res[0].Error, "not served") {
 		t.Fatalf("unknown apiVersion must fail honestly: %+v", res)
+	}
+}
+
+func TestLaunchDiagnosticPod_CreatesNamespaceAndTTLBoundedPod(t *testing.T) {
+	c, _ := adhocConn(t)
+
+	r := c.LaunchDiagnosticPod(context.Background(), "dbg", "nicolaka/netshoot", 1800)
+	if !r.OK || r.Error != "" {
+		t.Fatalf("launch failed: %+v", r)
+	}
+	// Namespace created + stamped.
+	ns, err := c.typed.CoreV1().Namespaces().Get(context.Background(), ScratchNamespace, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("scratch namespace missing: %v", err)
+	}
+	if ns.Labels[AdhocLabel] != "true" {
+		t.Fatalf("namespace must carry the adhoc stamp: %v", ns.Labels)
+	}
+	// Pod TTL-bounded by the CLUSTER (activeDeadlineSeconds), never restarting.
+	pod, err := c.typed.CoreV1().Pods(ScratchNamespace).Get(context.Background(), "dbg", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("pod missing: %v", err)
+	}
+	if pod.Spec.ActiveDeadlineSeconds == nil || *pod.Spec.ActiveDeadlineSeconds != 1800 {
+		t.Fatalf("activeDeadlineSeconds must bound the pod: %+v", pod.Spec.ActiveDeadlineSeconds)
+	}
+	if pod.Spec.RestartPolicy != "Never" || pod.Labels[AdhocLabel] != "true" {
+		t.Fatalf("pod must be Never-restart + adhoc-stamped: %+v", pod.Spec.RestartPolicy)
+	}
+
+	// Relaunching the same name refuses honestly (namespace already existing is fine).
+	r2 := c.LaunchDiagnosticPod(context.Background(), "dbg", "busybox", 60)
+	if r2.OK || !strings.Contains(r2.Error, "already exists") {
+		t.Fatalf("duplicate launch must refuse: %+v", r2)
+	}
+}
+
+func TestListAndDeleteAdhocObjects(t *testing.T) {
+	c, dyn := adhocConn(t)
+	// One adhoc pod (via the launcher path uses typed; seed dynamic for the list)
+	podGVR := schema.GroupVersionResource{Group: "", Version: "v1", Resource: "pods"}
+	adhocPod := &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "v1", "kind": "Pod",
+		"metadata": map[string]interface{}{
+			"name": "dbg", "namespace": ScratchNamespace,
+			"labels": map[string]interface{}{AdhocLabel: "true"},
+		},
+	}}
+	plainPod := &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "v1", "kind": "Pod",
+		"metadata": map[string]interface{}{"name": "app", "namespace": "prod"},
+	}}
+	for _, p := range []*unstructured.Unstructured{adhocPod, plainPod} {
+		if _, err := dyn.Resource(podGVR).Namespace(p.GetNamespace()).Create(context.Background(), p, metav1.CreateOptions{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	objs := c.ListAdhocObjects(context.Background())
+	if len(objs) != 1 || objs[0].Name != "dbg" || objs[0].Kind != "Pod" {
+		t.Fatalf("want exactly the adhoc pod, got %+v", objs)
+	}
+
+	// The label guard refuses to delete a non-adhoc object...
+	if err := c.DeleteAdhocObject(context.Background(), "", "v1", "pods", "prod", "app"); err == nil || !strings.Contains(err.Error(), "not a Klyx ad-hoc object") {
+		t.Fatalf("non-adhoc delete must refuse: %v", err)
+	}
+	// ...and deletes a stamped one.
+	if err := c.DeleteAdhocObject(context.Background(), "", "v1", "pods", ScratchNamespace, "dbg"); err != nil {
+		t.Fatalf("adhoc delete failed: %v", err)
+	}
+	if _, err := dyn.Resource(podGVR).Namespace(ScratchNamespace).Get(context.Background(), "dbg", metav1.GetOptions{}); err == nil {
+		t.Fatal("adhoc pod should be gone")
+	}
+	if _, err := dyn.Resource(podGVR).Namespace("prod").Get(context.Background(), "app", metav1.GetOptions{}); err != nil {
+		t.Fatal("plain pod must be untouched")
 	}
 }
 
