@@ -1,4 +1,4 @@
-import { useFleet, CRDGroupDTO, CRDCountDTO, crdCountKey, ResourceRef, InstanceDTO, InstanceRef, InstanceDetailDTO } from "../store/fleet";
+import { useFleet, CRDGroupDTO, CRDCountDTO, crdCountKey, ResourceRef, InstanceDTO, InstanceRef, InstanceDetailDTO, GitOpsOwnershipDTO } from "../store/fleet";
 import { CRDService } from "../../bindings/github.com/moomora/klyx/internal/appbridge/index.js";
 import { Clipboard } from "@wailsio/runtime";
 
@@ -135,6 +135,17 @@ export async function applyInstanceYAML(cluster: string, resource: ResourceRef, 
     false,
   )) as ActionResult;
   return { ok: !!r.ok, error: r.error ?? "" };
+}
+
+// gitOpsOwnership fetches the authoritative pre-write verdict for a target
+// object (who owns it / who reaches its namespace, with prune state). Null on
+// failure - callers keep their label-based fallback warning.
+export async function gitOpsOwnership(cluster: string, resource: ResourceRef, instance: InstanceRef): Promise<GitOpsOwnershipDTO | null> {
+  try {
+    return (await CRDService.GitOpsOwnership(cluster, resource.group, resource.kind, instance.namespace, instance.name)) as GitOpsOwnershipDTO;
+  } catch {
+    return null;
+  }
 }
 
 export async function copyText(text: string): Promise<void> {

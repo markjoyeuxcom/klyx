@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { useFleet, ResourceRef, InstanceRef, InstanceDetailDTO, SecretKeyDTO, ServiceBackingDTO, HPAScalingDTO, RelatedRefDTO, EventDTO, FactDTO, AIResultDTO } from "../store/fleet";
-import { getInstanceDetail, revealSecretKey, copyText, dryRunInstanceYAML, applyInstanceYAML, ActionResult } from "../bridge/crd";
+import { useFleet, ResourceRef, InstanceRef, InstanceDetailDTO, SecretKeyDTO, ServiceBackingDTO, HPAScalingDTO, RelatedRefDTO, EventDTO, FactDTO, AIResultDTO, GitOpsOwnershipDTO } from "../store/fleet";
+import { getInstanceDetail, revealSecretKey, copyText, dryRunInstanceYAML, applyInstanceYAML, gitOpsOwnership, ActionResult } from "../bridge/crd";
 import { explainResource, suggestFix } from "../bridge/ai";
 import { useAIAvailability } from "./useAI";
 import { armProtected } from "../bridge/configsvc";
@@ -1028,6 +1028,19 @@ function YamlPanel({
   draftRef.current = draft;
   baselineYamlRef.current = baselineYaml;
 
+  // Authoritative ownership (Flux inventory / Argo resources): catches
+  // managed-but-UNLABELED objects the label heuristic above misses, and names
+  // the owning unit + its prune state. Label detection stays as the instant
+  // fallback while this resolves (or when the check degrades).
+  const [ownership, setOwnership] = useState<GitOpsOwnershipDTO | null>(null);
+  useEffect(() => {
+    let live = true;
+    setOwnership(null);
+    gitOpsOwnership(cluster, resource, instance).then((o) => { if (live) setOwnership(o); });
+    return () => { live = false; };
+  }, [cluster, resource.group, resource.plural, instance.namespace, instance.name]);
+  const owned = ownership && ownership.ownerKind !== "" ? ownership : null;
+
   useEffect(() => {
     const hadLocalEdits = draftRef.current !== baselineYamlRef.current;
     setLiveYaml(yaml);
@@ -1126,9 +1139,20 @@ function YamlPanel({
 
   return (
     <div>
-      {gitOwner && (
+      {owned ? (
+        <div style={noticeStyle("warning")}>
+          {owned.ownerKind} {owned.ownerNamespace ? `${owned.ownerNamespace}/` : ""}{owned.ownerName} owns this object
+          {owned.basis === "flux-inventory" ? " (Flux inventory)" : owned.basis === "argo-resources" ? " (Argo resources)" : ""} —
+          your edit will be reverted on the next reconcile{owned.ownerSuspended ? " (currently suspended, so deferred until resumed)" : ""}.
+        </div>
+      ) : gitOwner ? (
         <div style={noticeStyle("warning")}>
           This object appears {gitOwner.tool}-managed ({gitOwner.detail}). Live edits may be reverted by GitOps or release reconciliation.
+        </div>
+      ) : null}
+      {ownership && ownership.warnings.length > 0 && (
+        <div style={noticeStyle("warning")}>
+          Ownership check degraded: {ownership.warnings.join("; ")}
         </div>
       )}
       {maskedSecret && (

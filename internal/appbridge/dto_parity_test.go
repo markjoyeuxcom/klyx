@@ -6,6 +6,7 @@ import (
 
 	"github.com/moomora/klyx/internal/certmanager"
 	"github.com/moomora/klyx/internal/crd"
+	"github.com/moomora/klyx/internal/fleet"
 	"github.com/moomora/klyx/internal/workloads"
 )
 
@@ -34,6 +35,7 @@ var mirrorPairs = []struct {
 	{"Issuer", reflect.TypeOf(certmanager.Issuer{}), reflect.TypeOf(IssuerDTO{})},
 	{"ReloadTargets", reflect.TypeOf(workloads.ReloadTargets{}), reflect.TypeOf(ReloadTargetsDTO{})},
 	{"Owner", reflect.TypeOf(workloads.Owner{}), reflect.TypeOf(OwnerDTO{})},
+	{"GitOpsOwnership", reflect.TypeOf(fleet.GitOpsOwnership{}), reflect.TypeOf(GitOpsOwnershipDTO{})},
 }
 
 func TestDTOFieldParity(t *testing.T) {

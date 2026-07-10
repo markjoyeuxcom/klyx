@@ -92,6 +92,9 @@ func (f *fakeConn) ListNodes(context.Context) ([]workloads.NodeSummary, error) {
 func (f *fakeConn) NodeDetail(context.Context, string) (NodeDetail, error) {
 	return NodeDetail{}, nil
 }
+func (f *fakeConn) GitOpsOwnership(context.Context, string, string, string, string) GitOpsOwnership {
+	return GitOpsOwnership{}
+}
 func (f *fakeConn) ListPods(context.Context, string) ([]workloads.PodSummary, bool, error) {
 	return nil, false, nil
 }

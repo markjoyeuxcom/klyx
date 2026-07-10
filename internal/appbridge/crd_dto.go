@@ -73,6 +73,28 @@ type RelatedRefDTO struct {
 
 // FactDTO is one salient summary value for the inspector's Summary tab - the
 // data path surfaced as a readable fact instead of hiding in the YAML tab.
+// GitOpsOwnershipDTO is the authoritative pre-write verdict for one target
+// object: which GitOps unit OWNS it (an edit reverts on the next reconcile) and
+// which unit REACHES its namespace (an out-of-band create there is DELETED on
+// the next reconcile when that unit prunes). Empty namespace-owner fields mean
+// "no managing unit DETECTED" - a heuristic negative, never a safety guarantee.
+type GitOpsOwnershipDTO struct {
+	OwnerKind      string `json:"ownerKind"`
+	OwnerNamespace string `json:"ownerNamespace"`
+	OwnerName      string `json:"ownerName"`
+	OwnerPrunes    bool   `json:"ownerPrunes"`
+	OwnerSuspended bool   `json:"ownerSuspended"`
+	Basis          string `json:"basis"`
+
+	NamespaceOwnerKind      string `json:"namespaceOwnerKind"`
+	NamespaceOwnerNamespace string `json:"namespaceOwnerNamespace"`
+	NamespaceOwnerName      string `json:"namespaceOwnerName"`
+	NamespacePrunes         bool   `json:"namespacePrunes"`
+	NamespaceBasis          string `json:"namespaceBasis"`
+
+	Warnings []string `json:"warnings"`
+}
+
 // Kind "well" renders as an inset counter well, "row" as a labeled row, "meter"
 // as a used/total bar (Pct drives the fill); Group is an optional section header
 // ("" = headline facts).
