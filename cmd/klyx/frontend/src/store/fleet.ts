@@ -363,6 +363,13 @@ export type RelatedRefDTO = { kind: string; namespace: string; name: string; gro
 // well, "row" = labeled row; group "" = headline facts (no section header).
 export type FactDTO = { group: string; label: string; value: string; tone: string; kind: string; pct?: number };
 
+// AdhocResultDTO is the per-document outcome of an ad-hoc create (the scratch
+// path). On dry-run the namespaceOwner* fields carry the prune-reach verdict.
+export type AdhocResultDTO = {
+  kind: string; namespace: string; name: string; ok: boolean; error: string;
+  namespaceOwnerKind: string; namespaceOwnerName: string; namespaceOwnerNamespace: string; namespacePrunes: boolean;
+};
+
 // GitOpsOwnershipDTO is the authoritative pre-write verdict: which GitOps unit
 // OWNS the object (edits revert on reconcile) and which unit REACHES its
 // namespace (out-of-band creates are pruned when namespacePrunes). Empty

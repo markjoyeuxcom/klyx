@@ -1,4 +1,4 @@
-import { useFleet, CRDGroupDTO, CRDCountDTO, crdCountKey, ResourceRef, InstanceDTO, InstanceRef, InstanceDetailDTO, GitOpsOwnershipDTO } from "../store/fleet";
+import { useFleet, CRDGroupDTO, CRDCountDTO, crdCountKey, ResourceRef, InstanceDTO, InstanceRef, InstanceDetailDTO, GitOpsOwnershipDTO, AdhocResultDTO } from "../store/fleet";
 import { CRDService } from "../../bindings/github.com/moomora/klyx/internal/appbridge/index.js";
 import { Clipboard } from "@wailsio/runtime";
 
@@ -146,6 +146,12 @@ export async function gitOpsOwnership(cluster: string, resource: ResourceRef, in
   } catch {
     return null;
   }
+}
+
+// createResourceYAML creates the documents as NEW ad-hoc (non-GitOps, stamped)
+// objects. Per-doc honest results; dryRun validates + carries prune warnings.
+export async function createResourceYAML(cluster: string, yaml: string, dryRun: boolean): Promise<AdhocResultDTO[]> {
+  return ((await CRDService.CreateResourceYAML(cluster, yaml, dryRun)) as AdhocResultDTO[]) ?? [];
 }
 
 export async function copyText(text: string): Promise<void> {

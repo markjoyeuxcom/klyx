@@ -1,8 +1,9 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useFleet, ResourceRef, crdCountKey } from "../store/fleet";
 import { countKind } from "../bridge/crd";
 import { BUILTIN_CATALOG, BuiltinEntry } from "./builtins";
-import { Chip, ellipsis } from "../chrome/primitives";
+import { Chip, btn, ellipsis } from "../chrome/primitives";
+import { AdhocComposer } from "./AdhocComposer";
 
 function matchesEntry(entry: BuiltinEntry, q: string): boolean {
   if (!q) return true;
@@ -19,6 +20,7 @@ export function BuiltinsView({ cluster }: { cluster: string }) {
   const setSearch = useFleet((s) => s.setCRDSearch);
   const builtinCategory = useFleet((s) => s.crd.builtinCategory);
   const setBuiltinCategory = useFleet((s) => s.setBuiltinCategory);
+  const [composing, setComposing] = useState(false);
 
   const categories = BUILTIN_CATALOG
     .filter((cat) => builtinCategory === null || cat.label === builtinCategory)
@@ -34,6 +36,7 @@ export function BuiltinsView({ cluster }: { cluster: string }) {
           Built-in resource catalog
         </div>
         <div style={{ flex: 1 }} />
+        <button onClick={() => setComposing(true)} style={btn} title="Deploy scratch/diagnostic YAML (labeled klyx.dev/adhoc, not in Git)">deploy yaml</button>
         <input
           value={search}
           onChange={(e) => setSearch(e.target.value)}
@@ -41,6 +44,7 @@ export function BuiltinsView({ cluster }: { cluster: string }) {
           style={{ width: 200, height: 28, paddingLeft: 10, fontSize: 12, background: "var(--color-background-secondary)", border: "0.5px solid var(--color-border-tertiary)", borderRadius: 4, color: "var(--color-text-primary)" }}
         />
       </div>
+      {composing && <AdhocComposer cluster={cluster} onClose={() => setComposing(false)} />}
 
       {/* Category chip row */}
       <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 12, flexWrap: "wrap", flexShrink: 0 }}>
