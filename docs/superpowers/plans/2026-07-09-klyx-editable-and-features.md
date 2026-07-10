@@ -141,7 +141,39 @@ tools, can actuate. Non-negotiable gates:
 - **Write ONLY through the existing confirm/arming** — the assistant PROPOSES a
   day-2 action; the human confirms via `ConfirmDialog` (protected-cluster arming,
   prd typed-confirm). Never auto-execute. Reuses the ratified palette-verb pattern
-  (open the existing confirm, never bypass arming).
+  (open the existing confirm, never bypass arming). See the permission model below.
+
+### The assistant's write/delete permission model
+
+The assistant SHOULD be able to write and delete — the question is only WHERE the
+permission lives. The rule: **per-action, system-owned approval — never a blanket
+grant.**
+
+- **Per-action ask (the model to build).** A write/delete tool call does NOT
+  execute. It surfaces the request and the human approves THAT specific action;
+  only then does it run. Not new machinery — the palette-as-operator-console
+  already emits day-2 verbs as one-shot `NavIntent`s that open the existing confirm
+  and never bypass arming. The assistant is the same pattern with NL as the trigger.
+- **Blanket / session grant (the anti-pattern — do NOT build).** "Allow the
+  assistant to write for this session" removes the human from the specific decision
+  an LLM must not make alone: an agentic loop chains actions, so one wrong inference
+  (wrong namespace, a hallucinated "delete these") executes with nobody looking at
+  the concrete target, and it defeats the per-action prd arming that exists exactly
+  so a production change is a conscious act.
+- **The prompt must be the SYSTEM's confirm, not model-rendered.** It shows the
+  concrete target + impact (this pod / this namespace / this diff), applies the
+  same protected-cluster typed-name arming (30s TTL) the human gets, and is audited
+  to the Activity log. It must NOT be an assistant-rendered "Allow? [y/n]": cluster
+  data is attacker-influenceable (a crafted annotation could try to talk the
+  assistant into a delete — the injection risk the #19-#24 review flagged) and the
+  model can simply be wrong; the human must see the real action through a gate the
+  model does not control the copy of or wave through.
+- **Delete is the sharpest edge.** There is no generic delete verb yet (plan's
+  second tier); pod-delete + bulk-delete have confirms. Before the assistant gets
+  arbitrary-delete reach, the generic-delete verb must carry RESOURCE-NAME typed
+  arming (not just cluster arming), because a wrong fleet delete (PVC / Secret /
+  namespace) is usually irreversible. Assistant delete reach is gated on that verb
+  shipping with the stronger confirmation.
 - Cite every tool result; egress-gated + audit-logged like today's AI.
 
 **Model tradeoff (honest).** Reliable multi-step tool-use needs a capable model:
