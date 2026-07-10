@@ -73,6 +73,22 @@ type RelatedRefDTO struct {
 
 // FactDTO is one salient summary value for the inspector's Summary tab - the
 // data path surfaced as a readable fact instead of hiding in the YAML tab.
+// AdhocResultDTO is the per-document outcome of an ad-hoc create. On dry-run the
+// namespaceOwner* fields carry the prune-reach verdict for the target namespace
+// (empty = no managing unit DETECTED - a heuristic negative, never "safe").
+type AdhocResultDTO struct {
+	Kind      string `json:"kind"`
+	Namespace string `json:"namespace"`
+	Name      string `json:"name"`
+	OK        bool   `json:"ok"`
+	Error     string `json:"error"`
+
+	NamespaceOwnerKind      string `json:"namespaceOwnerKind"`
+	NamespaceOwnerName      string `json:"namespaceOwnerName"`
+	NamespaceOwnerNamespace string `json:"namespaceOwnerNamespace"`
+	NamespacePrunes         bool   `json:"namespacePrunes"`
+}
+
 // GitOpsOwnershipDTO is the authoritative pre-write verdict for one target
 // object: which GitOps unit OWNS it (an edit reverts on the next reconcile) and
 // which unit REACHES its namespace (an out-of-band create there is DELETED on

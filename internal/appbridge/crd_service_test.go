@@ -20,6 +20,10 @@ type fakeCRDConn struct {
 	apply      applyCall
 	applyErr   error
 	ownership  fleet.GitOpsOwnership
+
+	createYAML    string
+	createDryRun  bool
+	createResults []fleet.AdhocResult
 }
 
 type applyCall struct {
@@ -47,6 +51,11 @@ func (f *fakeCRDConn) ApplyResourceYAML(ctx context.Context, group, version, plu
 }
 func (f *fakeCRDConn) GitOpsOwnership(context.Context, string, string, string, string) fleet.GitOpsOwnership {
 	return f.ownership
+}
+
+func (f *fakeCRDConn) CreateResourceYAML(_ context.Context, yamlDocs string, dryRun bool) []fleet.AdhocResult {
+	f.createYAML, f.createDryRun = yamlDocs, dryRun
+	return f.createResults
 }
 
 func (f *fakeCRDConn) RevealSecretKey(ctx context.Context, ns, name, key string) (string, error) {
@@ -83,6 +92,32 @@ func TestGetInstanceDetailCarriesMeterPct(t *testing.T) {
 	}
 	if meter.Pct != 75 {
 		t.Fatalf("Pct dropped at the bridge boundary: got %v, want 75", meter.Pct)
+	}
+}
+
+func TestCreateResourceYAMLMapsToDTO(t *testing.T) {
+	conn := &fakeCRDConn{createResults: []fleet.AdhocResult{
+		{Kind: "Pod", Namespace: "scratch", Name: "dbg", OK: true,
+			NamespaceOwnerKind: "Kustomization", NamespaceOwnerName: "web", NamespacePrunes: true},
+		{Kind: "ConfigMap", Name: "cfg", Error: "set metadata.namespace explicitly"},
+	}}
+	svc := NewCRDService(func(string) (CRDConn, bool) { return conn, true })
+
+	out := svc.CreateResourceYAML("x", "apiVersion: v1\nkind: Pod\n", true)
+	if !conn.createDryRun || conn.createYAML == "" {
+		t.Fatalf("args not forwarded: dryRun=%v yaml=%q", conn.createDryRun, conn.createYAML)
+	}
+	if len(out) != 2 || !out[0].OK || out[0].NamespaceOwnerKind != "Kustomization" || !out[0].NamespacePrunes {
+		t.Fatalf("per-doc results not mapped: %+v", out)
+	}
+	if out[1].OK || out[1].Error == "" {
+		t.Fatalf("error doc must carry its error: %+v", out[1])
+	}
+
+	// Cluster miss folds into a single error result.
+	miss := NewCRDService(func(string) (CRDConn, bool) { return nil, false })
+	if r := miss.CreateResourceYAML("nope", "x", true); len(r) != 1 || r[0].Error == "" {
+		t.Fatalf("cluster miss must fold into an error result: %+v", r)
 	}
 }
 

@@ -15,6 +15,7 @@ type CRDConn interface {
 	ListInstances(ctx context.Context, group, version, plural string, limit int64, continueToken string) ([]crd.InstanceMeta, string, error)
 	GetInstanceDetail(ctx context.Context, group, version, plural, ns, name string) (crd.InstanceDetail, error)
 	ApplyResourceYAML(ctx context.Context, group, version, plural, kind, scope, ns, name, yaml string, dryRun bool) error
+	CreateResourceYAML(ctx context.Context, yamlDocs string, dryRun bool) []fleet.AdhocResult
 	RevealSecretKey(ctx context.Context, ns, name, key string) (string, error)
 	GitOpsOwnership(ctx context.Context, group, kind, ns, name string) fleet.GitOpsOwnership
 }
@@ -188,6 +189,35 @@ func (s *CRDService) ApplyResourceYAML(cluster, group, version, plural, kind, sc
 		return ActionResultDTO{Error: err.Error()}
 	}
 	return ActionResultDTO{OK: true}
+}
+
+// CreateResourceYAML creates the documents in yaml as NEW ad-hoc objects (the
+// deliberately-non-GitOps scratch path: stamped klyx.dev/adhoc, plain create -
+// name collisions refuse, Secrets refused, explicit namespaces required). A
+// real create on a protected cluster consumes the one-shot typed-confirmation
+// grant, exactly like ApplyResourceYAML; dry-run never does.
+func (s *CRDService) CreateResourceYAML(cluster, yaml string, dryRun bool) []AdhocResultDTO {
+	if !dryRun {
+		if err := checkProtected(cluster); err != nil {
+			return []AdhocResultDTO{{Error: err.Error()}}
+		}
+	}
+	conn, ok := s.lookup(cluster)
+	if !ok {
+		return []AdhocResultDTO{{Error: "cluster not connected: " + cluster}}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), crdTimeout)
+	defer cancel()
+	rs := conn.CreateResourceYAML(ctx, yaml, dryRun)
+	out := make([]AdhocResultDTO, 0, len(rs))
+	for _, r := range rs {
+		out = append(out, AdhocResultDTO{
+			Kind: r.Kind, Namespace: r.Namespace, Name: r.Name, OK: r.OK, Error: r.Error,
+			NamespaceOwnerKind: r.NamespaceOwnerKind, NamespaceOwnerName: r.NamespaceOwnerName,
+			NamespaceOwnerNamespace: r.NamespaceOwnerNamespace, NamespacePrunes: r.NamespacePrunes,
+		})
+	}
+	return out
 }
 
 // GitOpsOwnership returns the authoritative pre-write verdict for a target

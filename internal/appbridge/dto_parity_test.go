@@ -36,6 +36,7 @@ var mirrorPairs = []struct {
 	{"ReloadTargets", reflect.TypeOf(workloads.ReloadTargets{}), reflect.TypeOf(ReloadTargetsDTO{})},
 	{"Owner", reflect.TypeOf(workloads.Owner{}), reflect.TypeOf(OwnerDTO{})},
 	{"GitOpsOwnership", reflect.TypeOf(fleet.GitOpsOwnership{}), reflect.TypeOf(GitOpsOwnershipDTO{})},
+	{"AdhocResult", reflect.TypeOf(fleet.AdhocResult{}), reflect.TypeOf(AdhocResultDTO{})},
 }
 
 func TestDTOFieldParity(t *testing.T) {
