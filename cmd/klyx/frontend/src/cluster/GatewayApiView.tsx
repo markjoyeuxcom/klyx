@@ -4,6 +4,7 @@ import { useFleet } from "../store/fleet";
 import type { GatewayRefDTO } from "../store/fleet";
 import { listGateways } from "../bridge/gateway";
 import { GatewayTopology } from "./GatewayTopology";
+import { HubbleFlowsPanel, useHasHubble } from "./HubbleFlowsPanel";
 import { useListKeys } from "../chrome/useListKeys";
 import { EmptyState } from "../chrome/EmptyState";
 import { SkeletonRows } from "../chrome/SkeletonRows";
@@ -41,6 +42,7 @@ function gatewayListeners(g: GatewayRefDTO): string {
 }
 
 export function GatewayApiView({ cluster }: { cluster: string }) {
+  const hasHubble = useHasHubble(cluster);
   const route = useFleet((s) => s.route);
   const net = useFleet((s) => s.network);
   const openGateway = useFleet((s) => s.openGateway);
@@ -135,6 +137,8 @@ export function GatewayApiView({ cluster }: { cluster: string }) {
           { label: "classes", value: classes },
         ]}
       />
+
+      {hasHubble && <HubbleFlowsPanel cluster={cluster} />}
 
       <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
         <FilterButton label="all" count={gateways.length} active={mode === "all"} onClick={() => setMode("all")} />

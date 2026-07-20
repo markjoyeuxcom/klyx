@@ -187,3 +187,24 @@ func toTopologyDTO(t gwapi.Topology) TopologyDTO {
 	}
 	return out
 }
+
+// ReasonRateDTO is one Hubble drop reason's rate (flows/s).
+type ReasonRateDTO struct {
+	Reason   string  `json:"reason"`
+	Protocol string  `json:"protocol"`
+	Rate     float64 `json:"rate"`
+}
+
+// HubbleStatsDTO is the Hubble flow/drop triage readout. Nil pointer fields
+// mean "that metric set is not enabled/scraped" and render as absent - never a
+// fabricated zero. Status reuses the route-metrics status discipline.
+type HubbleStatsDTO struct {
+	ForwardRate   *float64              `json:"forwardRate"`
+	DropRate      *float64              `json:"dropRate"`
+	DropReasons   []ReasonRateDTO       `json:"dropReasons"`
+	DNSErrorRate  *float64              `json:"dnsErrorRate"`
+	DNSTotalRate  *float64              `json:"dnsTotalRate"`
+	HTTPErrorRate *float64              `json:"httpErrorRate"`
+	HTTPTotalRate *float64              `json:"httpTotalRate"`
+	Status        RouteMetricsStatusDTO `json:"status"`
+}

@@ -18,6 +18,7 @@ export type ClusterDTO = {
   gatewayAPIVersion?: string;
   ciliumPresent?: boolean;
   clusterMesh?: boolean;
+  hasHubble?: boolean;
   certManagerTier?: string;
   certManagerReason?: string;
   certManagerPresent?: boolean;
@@ -382,6 +383,16 @@ export type AdhocResultDTO = {
 // AdhocObjectDTO is one Klyx-created scratch object (label klyx.dev/adhoc) in
 // the cleanup inventory.
 export type AdhocObjectDTO = { kind: string; group: string; version: string; plural: string; scope: string; namespace: string; name: string; ageSeconds: number };
+
+// Hubble flow/drop triage readout. Nil/absent numeric fields mean "that metric
+// set is not enabled/scraped" - never a fabricated zero.
+export type ReasonRateDTO = { reason: string; protocol: string; rate: number };
+export type HubbleStatsDTO = {
+  forwardRate: number | null; dropRate: number | null; dropReasons: ReasonRateDTO[];
+  dnsErrorRate: number | null; dnsTotalRate: number | null;
+  httpErrorRate: number | null; httpTotalRate: number | null;
+  status: RouteMetricsStatusDTO;
+};
 
 // GitOpsOwnershipDTO is the authoritative pre-write verdict: which GitOps unit
 // OWNS the object (edits revert on reconcile) and which unit REACHES its

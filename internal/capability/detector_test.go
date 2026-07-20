@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	discoveryfake "k8s.io/client-go/discovery/fake"
@@ -323,6 +324,37 @@ func TestDetectClusterMeshInstalled(t *testing.T) {
 	// Nothing present -> false.
 	if NewDetector(fake.NewSimpleClientset()).clusterMeshInstalled(context.Background()) {
 		t.Fatal("no apiserver/secret -> not installed")
+	}
+}
+
+func TestDetectHubbleInstalled(t *testing.T) {
+	// hubble-relay Deployment -> Hubble installed.
+	relay := fake.NewSimpleClientset(&appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "hubble-relay", Namespace: "kube-system"},
+	})
+	if !NewDetector(relay).hubbleInstalled(context.Background()) {
+		t.Fatal("hubble-relay deployment should mark Hubble installed")
+	}
+	// hubble-peer Service alone (Hubble on, relay off) -> installed.
+	peer := fake.NewSimpleClientset(&corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: "hubble-peer", Namespace: "kube-system"},
+	})
+	if !NewDetector(peer).hubbleInstalled(context.Background()) {
+		t.Fatal("hubble-peer service should mark Hubble installed")
+	}
+	// Nothing -> false.
+	if NewDetector(fake.NewSimpleClientset()).hubbleInstalled(context.Background()) {
+		t.Fatal("no relay/peer -> not installed")
+	}
+
+	// And end-to-end: Cilium served + relay present -> HasHubble true.
+	cs := fake.NewSimpleClientset(&appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "hubble-relay", Namespace: "kube-system"},
+	})
+	cs.Discovery().(*discoveryfake.FakeDiscovery).Resources = []*metav1.APIResourceList{{GroupVersion: "cilium.io/v2"}}
+	set := NewDetector(cs).Detect(context.Background())
+	if !set.Network.HasHubble {
+		t.Fatalf("HasHubble must be detected: %+v", set.Network)
 	}
 }
 

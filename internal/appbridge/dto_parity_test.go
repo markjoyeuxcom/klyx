@@ -7,6 +7,7 @@ import (
 	"github.com/moomora/klyx/internal/certmanager"
 	"github.com/moomora/klyx/internal/crd"
 	"github.com/moomora/klyx/internal/fleet"
+	"github.com/moomora/klyx/internal/hubble"
 	"github.com/moomora/klyx/internal/workloads"
 )
 
@@ -40,6 +41,8 @@ var mirrorPairs = []struct {
 	{"AdhocObject", reflect.TypeOf(fleet.AdhocObject{}), reflect.TypeOf(AdhocObjectDTO{})},
 	{"CompareContainer", reflect.TypeOf(fleet.CompareContainer{}), reflect.TypeOf(CompareContainerDTO{})},
 	{"WorkloadCompare", reflect.TypeOf(fleet.WorkloadCompareInfo{}), reflect.TypeOf(WorkloadCompareDTO{})},
+	{"ReasonRate", reflect.TypeOf(hubble.ReasonRate{}), reflect.TypeOf(ReasonRateDTO{})},
+	{"HubbleStats", reflect.TypeOf(hubble.FlowStats{}), reflect.TypeOf(HubbleStatsDTO{})},
 }
 
 func TestDTOFieldParity(t *testing.T) {

@@ -1,4 +1,4 @@
-import { useFleet, GatewayListDTO, TopologyDTO, GatewayRef, RouteMetricsResultDTO } from "../store/fleet";
+import { useFleet, GatewayListDTO, TopologyDTO, GatewayRef, RouteMetricsResultDTO, HubbleStatsDTO } from "../store/fleet";
 import { GatewayService } from "../../bindings/github.com/moomora/klyx/internal/appbridge/index.js";
 
 export async function listGateways(cluster: string): Promise<void> {
@@ -38,4 +38,10 @@ export async function getRouteMetrics(cluster: string, gwNamespace: string, gwNa
   const cur = useFleet.getState().network.selected;
   if (!cur || cur.namespace !== gwNamespace || cur.name !== gwName) return;
   useFleet.getState().setRouteMetrics(r ?? { status: { available: false, message: "", updatedAt: "" }, routes: {} });
+}
+
+// getHubbleFlowStats fetches the Hubble flow/drop triage readout (on-demand,
+// read-only). Availability + honest reasons come from the backend status.
+export async function getHubbleFlowStats(cluster: string): Promise<HubbleStatsDTO> {
+  return (await GatewayService.GetHubbleFlowStats(cluster)) as HubbleStatsDTO;
 }
