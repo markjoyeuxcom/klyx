@@ -24,5 +24,6 @@ var (
 	_ NodeOpsConn         = fleet.Conn(nil)
 	_ NodesConn           = fleet.Conn(nil)
 	_ PodsConn            = fleet.Conn(nil)
+	_ RBACConn            = fleet.Conn(nil)
 	_ WorkloadsConn       = fleet.Conn(nil)
 )

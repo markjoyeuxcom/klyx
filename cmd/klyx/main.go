@@ -323,6 +323,14 @@ func main() {
 		return c, true
 	})
 
+	rbacSvc := appbridge.NewRBACService(func(name string) (appbridge.RBACConn, bool) {
+		c, ok := reg.Conn(name)
+		if !ok {
+			return nil, false
+		}
+		return c, true
+	})
+
 	// Native shell: window title context, dock/taskbar badge, OS notifications.
 	// mainWin is assigned after window creation below; the closures are nil-safe
 	// until then.
@@ -378,6 +386,7 @@ func main() {
 			application.NewService(windowsSvc),
 			application.NewService(configSvc),
 			application.NewService(argoSvc),
+			application.NewService(rbacSvc),
 			application.NewService(aiSvc),
 			application.NewService(dockSvc),
 			application.NewService(notifySvc),

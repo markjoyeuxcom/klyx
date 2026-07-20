@@ -808,6 +808,18 @@ export function InstanceDetail({ cluster, resource, instance }: { cluster: strin
             </button>
           </>
         )}
+        {resource.kind === "ServiceAccount" && (
+          <button
+            onClick={() => {
+              useFleet.getState().requestNavIntent({ kind: "access-check", cluster, namespace: instance.namespace, name: instance.name });
+              useFleet.getState().setSection("access");
+            }}
+            title="Check what this ServiceAccount can do (SubjectAccessReview simulation, read-only)"
+            style={actionBtn}
+          >
+            check access
+          </button>
+        )}
         <button onClick={() => setDescribing(true)} style={actionBtn}>describe</button>
         <button onClick={() => void getInstanceDetail(cluster, resource, instance)} style={actionBtn}>Refresh</button>
         <button onClick={closeInstance} aria-label="close instance panel" style={{ ...actionBtn, display: "inline-flex", alignItems: "center" }}><IconX size={13} stroke={1.5} /></button>

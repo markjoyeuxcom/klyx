@@ -22,6 +22,7 @@ import (
 	"github.com/moomora/klyx/internal/helmcli"
 	"github.com/moomora/klyx/internal/hubble"
 	"github.com/moomora/klyx/internal/metrics"
+	"github.com/moomora/klyx/internal/rbac"
 	"github.com/moomora/klyx/internal/routemetrics"
 	"github.com/moomora/klyx/internal/workloads"
 )
@@ -210,6 +211,12 @@ func (f *fakeConn) ListArgoApplicationSets(context.Context) ([]argo.ApplicationS
 func (f *fakeConn) RefreshArgoApp(context.Context, string, string) error { return nil }
 func (f *fakeConn) SyncArgoApp(context.Context, string, string, argo.SyncOptions) error {
 	return nil
+}
+func (f *fakeConn) AccessCanI(context.Context, rbac.CheckSpec, string, string) (rbac.Verdict, error) {
+	return rbac.Verdict{}, nil
+}
+func (f *fakeConn) AccessWhoCan(context.Context, rbac.CheckSpec) (rbac.Enumeration, error) {
+	return rbac.Enumeration{}, nil
 }
 func (f *fakeConn) GitOpsSummary(context.Context) (GitOpsSummary, error) {
 	return GitOpsSummary{}, nil

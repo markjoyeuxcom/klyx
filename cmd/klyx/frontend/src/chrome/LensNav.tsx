@@ -4,7 +4,7 @@ import {
   IconAlertTriangle, IconAnchor, IconArrowsLeftRight, IconBox, IconCertificate, IconCircleDot,
   IconComponents, IconCpu, IconDatabase, IconFolder, IconGitBranch, IconGitMerge, IconHistory,
   IconKey, IconLayoutGrid, IconNetwork, IconPackage, IconRoute, IconScale, IconServer,
-  IconSettings, IconShieldLock, IconStack2, IconTerminal2, IconWebhook,
+  IconSettings, IconShieldLock, IconStack2, IconTerminal2, IconUserCheck, IconWebhook,
 } from "@tabler/icons-react";
 import { useFleet, WORKLOAD_KINDS } from "../store/fleet";
 import type { ArgoViewMode, ClusterSection, ResourceRef, Route, WorkloadKind } from "../store/fleet";
@@ -112,6 +112,7 @@ const EXPANDED_MENU: ExpandedGroup[] = [
   {
     label: "Access control",
     items: [
+      { label: "Access check", Icon: IconUserCheck, target: { kind: "section", section: "access" } },
       { label: "Service Accounts", Icon: IconKey, target: { kind: "resource", ref: r("", "v1", "serviceaccounts", "ServiceAccount", "Namespaced") } },
       { label: "Cluster Roles", Icon: IconShieldLock, target: { kind: "resource", ref: r("rbac.authorization.k8s.io", "v1", "clusterroles", "ClusterRole", "Cluster") } },
       { label: "Roles", Icon: IconShieldLock, target: { kind: "resource", ref: r("rbac.authorization.k8s.io", "v1", "roles", "Role", "Namespaced") } },

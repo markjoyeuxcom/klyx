@@ -32,6 +32,8 @@ function message(section: ClusterSection, c: ClusterDTO): string {
       return "";
     case "nodes":
       return "";
+    case "access":
+      return "";
   }
 }
 
