@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
-	"runtime"
 	"strings"
 	"time"
 )
@@ -57,13 +56,10 @@ func (s *ExecService) GetExecCommand(cluster, ns, pod, container string) ExecCom
 	}
 }
 
-// OpenExecTerminal launches the OS terminal with the kubectl exec command.
-// On macOS it uses osascript to open Terminal.app; on other platforms it
-// returns an error asking the user to copy and paste the command.
-//
-// The process is started but not waited on (fire-and-forget). A goroutine
-// calls cmd.Wait() to reap the osascript child and avoid zombies; the
-// terminal process itself is detached and lives beyond osascript's exit.
+// OpenExecTerminal launches the OS terminal with the kubectl exec command -
+// Terminal.app on macOS, the user's emulator ($TERMINAL / x-terminal-emulator /
+// the common set) on Linux, Windows Terminal or a cmd window on Windows. When
+// no terminal can be found the error says to use the copy-command affordance.
 func (s *ExecService) OpenExecTerminal(cluster, ns, pod, container string) ActionResultDTO {
 	conn, ok := s.lookup(cluster)
 	if !ok {
@@ -74,7 +70,7 @@ func (s *ExecService) OpenExecTerminal(cluster, ns, pod, container string) Actio
 		return ActionResultDTO{Error: err.Error()}
 	}
 
-	return openCommandInTerminal(argv)
+	return launchTerminal(argv)
 }
 
 // GetDebugCommand returns the kubectl debug argv (ephemeral busybox container,
@@ -93,7 +89,7 @@ func (s *ExecService) GetDebugCommand(cluster, ns, pod, container string) ExecCo
 }
 
 // OpenDebugTerminal launches the OS terminal running kubectl debug against the
-// pod. Same platform constraint as OpenExecTerminal (macOS only for now).
+// pod. Same platform behavior as OpenExecTerminal.
 func (s *ExecService) OpenDebugTerminal(cluster, ns, pod, container string) ActionResultDTO {
 	conn, ok := s.lookup(cluster)
 	if !ok {
@@ -103,41 +99,7 @@ func (s *ExecService) OpenDebugTerminal(cluster, ns, pod, container string) Acti
 	if err != nil {
 		return ActionResultDTO{Error: err.Error()}
 	}
-	return openCommandInTerminal(argv)
-}
-
-// openCommandInTerminal runs argv in a new Terminal.app window via osascript.
-// The process is started but not waited on (fire-and-forget); a goroutine
-// reaps the osascript child while the terminal lives on detached.
-func openCommandInTerminal(argv []string) ActionResultDTO {
-	if runtime.GOOS != "darwin" {
-		return ActionResultDTO{Error: "open-terminal not supported on this platform yet - use copy command"}
-	}
-
-	// Build the AppleScript. The inner do script argument is the quoted kubectl
-	// command; we escape double quotes for the AppleScript string context.
-	cmdStr := shellQuoteArgv(argv)
-	// Escape backslashes, double quotes, and line breaks for embedding in an
-	// AppleScript string literal - a raw newline would end the literal and let
-	// the remainder run as a second AppleScript statement.
-	escaped := strings.ReplaceAll(cmdStr, `\`, `\\`)
-	escaped = strings.ReplaceAll(escaped, `"`, `\"`)
-	escaped = strings.ReplaceAll(escaped, "\n", `\n`)
-	escaped = strings.ReplaceAll(escaped, "\r", `\r`)
-	script := fmt.Sprintf(
-		`tell application "Terminal" to do script "%s"`,
-		escaped,
-	) + "\n" +
-		`tell application "Terminal" to activate`
-
-	cmd := exec.Command("osascript", "-e", script) //nolint:gosec // argv built internally
-	if err := cmd.Start(); err != nil {
-		return ActionResultDTO{Error: "open terminal: " + err.Error()}
-	}
-	// Reap the osascript child to avoid zombies. Terminal itself is detached.
-	go func() { _ = cmd.Wait() }()
-
-	return ActionResultDTO{OK: true}
+	return launchTerminal(argv)
 }
 
 // shellQuoteArgv joins argv into a single string, single-quoting any argument
@@ -230,18 +192,7 @@ func (s *ExecService) Describe(cluster, kindArg, namespace, name string) Describ
 }
 
 // OpenTerminal opens a plain OS terminal window (no command) - the sidebar's
-// external-terminal escape hatch. macOS only for now, same constraint as
-// OpenExecTerminal.
+// external-terminal escape hatch. Same platform behavior as OpenExecTerminal.
 func (s *ExecService) OpenTerminal() ActionResultDTO {
-	if runtime.GOOS != "darwin" {
-		return ActionResultDTO{Error: "open-terminal not supported on this platform yet"}
-	}
-	script := `tell application "Terminal" to do script ""` + "\n" +
-		`tell application "Terminal" to activate`
-	cmd := exec.Command("osascript", "-e", script) //nolint:gosec // fixed script
-	if err := cmd.Start(); err != nil {
-		return ActionResultDTO{Error: "open terminal: " + err.Error()}
-	}
-	go func() { _ = cmd.Wait() }()
-	return ActionResultDTO{OK: true}
+	return launchTerminal(nil)
 }
