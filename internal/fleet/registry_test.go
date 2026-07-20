@@ -86,6 +86,9 @@ func (f *fakeConn) ListCRDs(ctx context.Context) ([]crd.Info, error) { return ni
 func (f *fakeConn) ListWorkloads(context.Context, string) ([]workloads.Workload, bool, bool, error) {
 	return nil, false, false, nil
 }
+func (f *fakeConn) WorkloadCompare(context.Context, string, string, string) (WorkloadCompareInfo, error) {
+	return WorkloadCompareInfo{}, nil
+}
 func (f *fakeConn) ListNodes(context.Context) ([]workloads.NodeSummary, error) {
 	return nil, nil
 }

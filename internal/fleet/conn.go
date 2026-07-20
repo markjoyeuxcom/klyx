@@ -70,6 +70,7 @@ type Conn interface {
 	SourceURL(ctx context.Context, kind, ns, name string) (string, bool)
 	ListCRDs(ctx context.Context) ([]crd.Info, error)
 	ListWorkloads(ctx context.Context, namespace string) ([]workloads.Workload, bool, bool, error)
+	WorkloadCompare(ctx context.Context, kind, ns, name string) (WorkloadCompareInfo, error)
 	ListNodes(ctx context.Context) ([]workloads.NodeSummary, error)
 	NodeDetail(ctx context.Context, name string) (NodeDetail, error)
 	ListPods(ctx context.Context, namespace string) ([]workloads.PodSummary, bool, error)

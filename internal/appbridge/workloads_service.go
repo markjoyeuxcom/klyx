@@ -6,6 +6,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/moomora/klyx/internal/fleet"
 	"github.com/moomora/klyx/internal/workloads"
 )
 
@@ -57,6 +58,7 @@ const workloadsTimeout = 30 * time.Second
 type WorkloadsConn interface {
 	ListWorkloads(ctx context.Context, namespace string) ([]workloads.Workload, bool, bool, error)
 	WorkloadMetrics(ctx context.Context, namespace string) (map[string]workloads.Usage, workloads.UsageStatus)
+	WorkloadCompare(ctx context.Context, kind, ns, name string) (fleet.WorkloadCompareInfo, error)
 	RolloutRestart(ctx context.Context, kind, namespace, name string) error
 	ScaleWorkload(ctx context.Context, kind, namespace, name string, replicas int32) error
 	WatchDirty(ctx context.Context, namespace string, kinds []string, onDirty func(), onLive func(bool)) (stop func(), err error)
@@ -180,6 +182,35 @@ func toWorkloadDTO(w workloads.Workload) WorkloadDTO {
 		d.Reloader = &ReloadTargetsDTO{Auto: w.Reloader.Auto, ConfigMaps: cms, Secrets: secs}
 	}
 	return d
+}
+
+// WorkloadCompare returns one cluster's drift-relevant view of a workload for
+// the fleet compare (images, replicas, resources, GitOps owner + resolved
+// revision, spec hash). Read-only. Errors fold into the DTO so a degraded
+// column renders as degraded, never as "not present".
+func (s *WorkloadsService) WorkloadCompare(cluster, kind, namespace, name string) WorkloadCompareDTO {
+	conn, ok := s.lookup(cluster)
+	if !ok {
+		return WorkloadCompareDTO{Kind: kind, Namespace: namespace, Name: name, Error: "cluster not connected: " + cluster}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), workloadsTimeout)
+	defer cancel()
+	info, err := conn.WorkloadCompare(ctx, kind, namespace, name)
+	if err != nil {
+		return WorkloadCompareDTO{Kind: kind, Namespace: namespace, Name: name, Error: err.Error()}
+	}
+	dto := WorkloadCompareDTO{
+		Found: info.Found, Kind: info.Kind, Namespace: info.Namespace, Name: info.Name,
+		DesiredReplicas: info.DesiredReplicas, ReadyReplicas: info.ReadyReplicas,
+		SpecHash:  info.SpecHash,
+		OwnerKind: info.OwnerKind, OwnerNamespace: info.OwnerNamespace, OwnerName: info.OwnerName,
+		OwnerRevision: info.OwnerRevision,
+		Containers:    []CompareContainerDTO{},
+	}
+	for _, ct := range info.Containers {
+		dto.Containers = append(dto.Containers, CompareContainerDTO{Name: ct.Name, Image: ct.Image, Resources: ct.Resources})
+	}
+	return dto
 }
 
 // GetWorkloadMetrics returns live per-workload cpu/memory usage keyed by

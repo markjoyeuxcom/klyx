@@ -268,6 +268,15 @@ export type WorkloadResourcesDTO = { cpu: ResourceCellDTO; mem: ResourceCellDTO 
 // stale: spec changed, controller has not observed it - status/rank reflect
 // the previous spec; render as transitioning ("dim = not yet realized").
 export type ReloadTargetsDTO = { auto: boolean; configMaps: string[]; secrets: string[] };
+// Fleet compare: one cluster's drift-relevant view of a workload. found=false is
+// an honest "not present"; error is a degraded lookup, never mistaken for absence.
+export type CompareContainerDTO = { name: string; image: string; resources: string };
+export type WorkloadCompareDTO = {
+  found: boolean; kind: string; namespace: string; name: string;
+  desiredReplicas: number; readyReplicas: number; containers: CompareContainerDTO[];
+  specHash: string; ownerKind: string; ownerNamespace: string; ownerName: string; ownerRevision: string;
+  error: string;
+};
 export type WorkloadDTO = { kind: string; namespace: string; name: string; desired: number; ready: number; available: number; updated: number; restarts: number; reason: string; rank: "unhealthy"|"degraded"|"restarts"|"healthy"; gitops: OwnerDTO | null; pods: PodDTO[]; resources: WorkloadResourcesDTO; stale?: boolean; generation?: number; observedGeneration?: number; reloader?: ReloadTargetsDTO | null };
 export type WorkloadUsageDTO = { cpuUsage: number | null; memUsage: number | null };
 export type WorkloadMetricsStatusDTO = { available: boolean; message: string; updatedAt: string };
