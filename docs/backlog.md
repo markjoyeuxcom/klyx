@@ -1,7 +1,7 @@
 # Klyx backlog
 
-Consolidated 2026-07-09; last pruned 2026-08-04 (fleet compare shipped; earlier:
-editable Tiers 1–3 + the cross-platform exec fix). Pulls together the "what's left" that was scattered across `CLAUDE.md`
+Consolidated 2026-07-09; last pruned 2026-08-05 (Hubble flow lens shipped; earlier:
+fleet compare, editable Tiers 1–3, the cross-platform exec fix). Pulls together the "what's left" that was scattered across `CLAUDE.md`
 deferred notes, `docs/brainstorm-questions.md`, and the eyeball checklists.
 Living doc — prune items as they ship, add as they surface.
 
@@ -21,7 +21,9 @@ the need is real, not top-to-bottom.
       surface — the authoritative "Kustomization X owns this" banner in the YAML
       editor, the per-lens `manifest` buttons, the "deploy yaml" composer with
       its prune warning, the "debug pod" launcher, the Scratch panel, and the fleet-compare
-      modal (drift columns against the live DEV/STG/PRD tiers)
+      modal (drift columns against the live DEV/STG/PRD tiers), and the Hubble
+      flows panel (drop reasons against the live Cilium fleet — also verifies
+      the new HasHubble detection fires on the real clusters)
 - [ ] **Real-LLM smoke test** of the AI feature (local Ollama backend, or a hosted
       key) — everything is currently verified against a fake client
 - [ ] **Live-cluster smoke of the write paths** (nothing destructive committed
@@ -82,8 +84,6 @@ The un-built remainder of the ranked top-12 (see the plan doc for sketches):
 - [ ] **RBAC access review** — can-i (as ServiceAccount) + who-can enumerator;
       read-only SubjectAccessReview, the highest-value untracked diagnosis
 - [ ] **Live node + per-pod/container utilization** with a rightsizing delta
-- [ ] **Hubble L7 flow lens** (drops, identities, cross-cluster backend health) —
-      the most differentiated add for the Cilium+ClusterMesh+Envoy stack
 - [ ] **Rollout history + undo + pause/resume** (undo is destructive: owner
       sign-off on the confirm shape first)
 
@@ -91,6 +91,9 @@ The un-built remainder of the ranked top-12 (see the plan doc for sketches):
 
 - [ ] **Fleet compare follow-ups**: HelmRelease *values* compare; AI Explain over
       the cross-env diff ("explain why prd differs" — composes with the AI stack)
+- [ ] **Hubble lens follow-ups**: per-namespace drop breakdown (needs Hubble
+      context labels configured in Cilium); the topology-graph drop overlay;
+      `hubble observe` flow tailing via the CLI escape-hatch pattern
 
 - [ ] **M10-f**: `flux diff --path` per-cluster local-clone-root config (makes
       `flux diff` resolve reliably)
@@ -135,6 +138,12 @@ See `docs/brainstorm-questions.md` (Q16 pinned resources, etc.).
 ## Recently shipped (so it's not mistaken for open)
 
 Merged to `main` — do not re-add to the backlog:
+
+**2026-08-05 — Hubble flow lens:**
+- Drop/deny triage from Hubble's Prometheus metrics in the network lens:
+  verdict rates, drop reasons ranked by rate, DNS/HTTP error rates; opt-in
+  metric sets render only when present, all-empty says how to enable. Also
+  fixed the never-populated HasHubble capability stub (#37)
 
 **2026-08-04 — fleet compare:**
 - Cross-environment drift compare: the same workload side-by-side across the
