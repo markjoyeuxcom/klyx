@@ -1,7 +1,7 @@
 # Klyx backlog
 
-Consolidated 2026-07-09; last pruned 2026-07-10 (editable Tiers 1–3 + the
-cross-platform exec fix shipped). Pulls together the "what's left" that was scattered across `CLAUDE.md`
+Consolidated 2026-07-09; last pruned 2026-08-04 (fleet compare shipped; earlier:
+editable Tiers 1–3 + the cross-platform exec fix). Pulls together the "what's left" that was scattered across `CLAUDE.md`
 deferred notes, `docs/brainstorm-questions.md`, and the eyeball checklists.
 Living doc — prune items as they ship, add as they surface.
 
@@ -20,7 +20,8 @@ the need is real, not top-to-bottom.
       banners, the AI Explain / Suggest-fix panels, and the whole editable
       surface — the authoritative "Kustomization X owns this" banner in the YAML
       editor, the per-lens `manifest` buttons, the "deploy yaml" composer with
-      its prune warning, the "debug pod" launcher, and the Scratch panel
+      its prune warning, the "debug pod" launcher, the Scratch panel, and the fleet-compare
+      modal (drift columns against the live DEV/STG/PRD tiers)
 - [ ] **Real-LLM smoke test** of the AI feature (local Ollama backend, or a hosted
       key) — everything is currently verified against a fake client
 - [ ] **Live-cluster smoke of the write paths** (nothing destructive committed
@@ -83,12 +84,13 @@ The un-built remainder of the ranked top-12 (see the plan doc for sketches):
 - [ ] **Live node + per-pod/container utilization** with a rightsizing delta
 - [ ] **Hubble L7 flow lens** (drops, identities, cross-cluster backend health) —
       the most differentiated add for the Cilium+ClusterMesh+Envoy stack
-- [ ] **Cross-environment drift compare** (DEV/STG/PRD of the same workload /
-      HelmRelease / values) — the killer fleet-first feature, pure read-only
 - [ ] **Rollout history + undo + pause/resume** (undo is destructive: owner
       sign-off on the confirm shape first)
 
 ## 4. Feature deferrals (from the milestone notes)
+
+- [ ] **Fleet compare follow-ups**: HelmRelease *values* compare; AI Explain over
+      the cross-env diff ("explain why prd differs" — composes with the AI stack)
 
 - [ ] **M10-f**: `flux diff --path` per-cluster local-clone-root config (makes
       `flux diff` resolve reliably)
@@ -133,6 +135,12 @@ See `docs/brainstorm-questions.md` (Q16 pinned resources, etc.).
 ## Recently shipped (so it's not mistaken for open)
 
 Merged to `main` — do not re-add to the backlog:
+
+**2026-08-04 — fleet compare:**
+- Cross-environment drift compare: the same workload side-by-side across the
+  fleet (dev→stg→prd columns), image/revision/replica/resource drift highlighted
+  vs the origin, spec-hash "other drift" honesty, live Flux revision per
+  cluster (#35)
 
 **2026-07-10 — editable everything + ad-hoc (PRs #27–#31, the 2026-07-09 plan's
 Tiers 1–3, complete) + the exec fix:**
