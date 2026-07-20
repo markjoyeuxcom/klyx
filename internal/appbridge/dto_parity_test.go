@@ -8,6 +8,7 @@ import (
 	"github.com/moomora/klyx/internal/crd"
 	"github.com/moomora/klyx/internal/fleet"
 	"github.com/moomora/klyx/internal/hubble"
+	"github.com/moomora/klyx/internal/rbac"
 	"github.com/moomora/klyx/internal/workloads"
 )
 
@@ -43,6 +44,9 @@ var mirrorPairs = []struct {
 	{"WorkloadCompare", reflect.TypeOf(fleet.WorkloadCompareInfo{}), reflect.TypeOf(WorkloadCompareDTO{})},
 	{"ReasonRate", reflect.TypeOf(hubble.ReasonRate{}), reflect.TypeOf(ReasonRateDTO{})},
 	{"HubbleStats", reflect.TypeOf(hubble.FlowStats{}), reflect.TypeOf(HubbleStatsDTO{})},
+	{"AccessVerdict", reflect.TypeOf(rbac.Verdict{}), reflect.TypeOf(AccessVerdictDTO{})},
+	{"AccessGrant", reflect.TypeOf(rbac.Grant{}), reflect.TypeOf(AccessGrantDTO{})},
+	{"AccessEnumeration", reflect.TypeOf(rbac.Enumeration{}), reflect.TypeOf(AccessWhoCanDTO{})},
 }
 
 func TestDTOFieldParity(t *testing.T) {

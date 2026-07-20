@@ -34,6 +34,7 @@ import (
 	"github.com/moomora/klyx/internal/helmcli"
 	"github.com/moomora/klyx/internal/hubble"
 	"github.com/moomora/klyx/internal/metrics"
+	"github.com/moomora/klyx/internal/rbac"
 	"github.com/moomora/klyx/internal/routemetrics"
 	"github.com/moomora/klyx/internal/workloads"
 )
@@ -95,6 +96,8 @@ type Conn interface {
 	ListAdhocObjects(ctx context.Context) []AdhocObject
 	DeleteAdhocObject(ctx context.Context, group, version, plural, ns, name string) error
 	GitOpsOwnership(ctx context.Context, group, kind, ns, name string) GitOpsOwnership
+	AccessCanI(ctx context.Context, spec rbac.CheckSpec, saNamespace, saName string) (rbac.Verdict, error)
+	AccessWhoCan(ctx context.Context, spec rbac.CheckSpec) (rbac.Enumeration, error)
 	RevealSecretKey(ctx context.Context, ns, name, key string) (string, error)
 	ListGateways(ctx context.Context) ([]gwapi.GatewayRef, bool, error)
 	GetGatewayTopology(ctx context.Context, namespace, name string) (gwapi.Topology, error)

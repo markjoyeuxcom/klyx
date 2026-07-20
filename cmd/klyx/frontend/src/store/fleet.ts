@@ -259,7 +259,7 @@ export type ExternalSecretsSlice = {
 
 // "observability" removed 2026-06-10: metrics ship inline in overview/workloads/network lanes
 // (design principle 5); a dedicated surface can return when it has real content.
-export type ClusterSection = "overview" | "gitops" | "argo" | "helm" | "certs" | "externalsecrets" | "gatewayApi" | "resources" | "crds" | "workloads" | "pods" | "events" | "nodes";
+export type ClusterSection = "overview" | "gitops" | "argo" | "helm" | "certs" | "externalsecrets" | "gatewayApi" | "resources" | "crds" | "workloads" | "pods" | "events" | "nodes" | "access";
 export type ArgoViewMode = "applications" | "projects" | "applicationsets";
 
 export type OwnerDTO = { kind: string; namespace: string; name: string };
@@ -394,6 +394,23 @@ export type HubbleStatsDTO = {
   status: RouteMetricsStatusDTO;
 };
 
+// Access check (RBAC lens). The query speaks ResourceAttributes vocabulary;
+// an empty saName checks as the kubeconfig identity.
+export type AccessQueryDTO = {
+  verb: string; group: string; resource: string; subresource: string;
+  name: string; namespace: string; saNamespace: string; saName: string;
+};
+export type AccessVerdictDTO = {
+  allowed: boolean; denied: boolean; reason: string; evaluationError: string;
+  subject: string; error: string;
+};
+export type AccessGrantDTO = {
+  subjectKind: string; subjectName: string; subjectNamespace: string;
+  bindingKind: string; bindingNamespace: string; bindingName: string;
+  roleKind: string; roleName: string;
+};
+export type AccessWhoCanDTO = { grants: AccessGrantDTO[]; clusterWideOnly: boolean; error: string };
+
 // GitOpsOwnershipDTO is the authoritative pre-write verdict: which GitOps unit
 // OWNS the object (edits revert on reconcile) and which unit REACHES its
 // namespace (out-of-band creates are pruned when namespacePrunes). Empty
@@ -435,6 +452,7 @@ export const SECTION_LABELS: Record<ClusterSection, string> = {
   pods: "Pods",
   events: "Events",
   nodes: "Nodes",
+  access: "Access",
 };
 
 export type CRDKindDTO = { kind: string; plural: string; scope: string; version: string; operator: string; shortNames: string[] };
@@ -624,7 +642,8 @@ export type NavIntent =
   | { kind: "select-pod"; cluster: string; namespace: string; name: string }
   | { kind: "select-workload"; cluster: string; workloadKind: string; namespace: string; name: string }
   | { kind: "select-node"; cluster: string; node: string }
-  | { kind: "select-flux"; cluster: string; fluxKind: string; namespace: string; name: string };
+  | { kind: "select-flux"; cluster: string; fluxKind: string; namespace: string; name: string }
+  | { kind: "access-check"; cluster: string; namespace: string; name: string };
 
 // Overview triage summary — fetched once per cluster open, never mutated by the view slices.
 export type OverviewSummary = {
