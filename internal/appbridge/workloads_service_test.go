@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/moomora/klyx/internal/fleet"
 	"github.com/moomora/klyx/internal/workloads"
 )
 
@@ -17,10 +18,16 @@ type fakeWLConn struct {
 	scaleErr        error
 	lastScaleKind   string
 	lastScaleN      int32
+	compareInfo     fleet.WorkloadCompareInfo
+	compareErr      error
 }
 
 func (f *fakeWLConn) ListWorkloads(context.Context, string) ([]workloads.Workload, bool, bool, error) {
 	return f.wl, f.flux, f.truncated, nil
+}
+
+func (f *fakeWLConn) WorkloadCompare(context.Context, string, string, string) (fleet.WorkloadCompareInfo, error) {
+	return f.compareInfo, f.compareErr
 }
 
 func (f *fakeWLConn) WorkloadMetrics(context.Context, string) (map[string]workloads.Usage, workloads.UsageStatus) {
@@ -93,6 +100,35 @@ func TestListWorkloadsDTO(t *testing.T) {
 			t.Fatal("non-truncated list must not set Truncated")
 		}
 	})
+}
+
+func TestWorkloadCompareMapsToDTO(t *testing.T) {
+	conn := &fakeWLConn{compareInfo: fleet.WorkloadCompareInfo{
+		Found: true, Kind: "Deployment", Namespace: "shop", Name: "cart",
+		DesiredReplicas: 3, ReadyReplicas: 3, SpecHash: "abc123def456",
+		Containers: []fleet.CompareContainer{{Name: "app", Image: "shop/cart:v1", Resources: "req 100m/128Mi"}},
+		OwnerKind:  "Kustomization", OwnerName: "apps", OwnerRevision: "main@sha1:abc",
+	}}
+	s := NewWorkloadsService(func(string) (WorkloadsConn, bool) { return conn, true }, nil)
+
+	dto := s.WorkloadCompare("c", "Deployment", "shop", "cart")
+	if !dto.Found || dto.SpecHash != "abc123def456" || dto.OwnerRevision != "main@sha1:abc" {
+		t.Fatalf("facts not mapped: %+v", dto)
+	}
+	if len(dto.Containers) != 1 || dto.Containers[0].Image != "shop/cart:v1" {
+		t.Fatalf("containers not mapped: %+v", dto.Containers)
+	}
+
+	// A degraded lookup carries its error - never mistaken for absence.
+	conn.compareErr = errors.New("forbidden")
+	if d := s.WorkloadCompare("c", "Deployment", "shop", "cart"); d.Found || d.Error == "" {
+		t.Fatalf("error must fold into DTO: %+v", d)
+	}
+	// Cluster miss too.
+	miss := NewWorkloadsService(func(string) (WorkloadsConn, bool) { return nil, false }, nil)
+	if d := miss.WorkloadCompare("nope", "Deployment", "shop", "cart"); d.Error == "" {
+		t.Fatalf("cluster miss must carry an error: %+v", d)
+	}
 }
 
 func TestGetWorkloadMetricsDTO(t *testing.T) {

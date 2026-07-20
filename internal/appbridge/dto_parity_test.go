@@ -38,6 +38,8 @@ var mirrorPairs = []struct {
 	{"GitOpsOwnership", reflect.TypeOf(fleet.GitOpsOwnership{}), reflect.TypeOf(GitOpsOwnershipDTO{})},
 	{"AdhocResult", reflect.TypeOf(fleet.AdhocResult{}), reflect.TypeOf(AdhocResultDTO{})},
 	{"AdhocObject", reflect.TypeOf(fleet.AdhocObject{}), reflect.TypeOf(AdhocObjectDTO{})},
+	{"CompareContainer", reflect.TypeOf(fleet.CompareContainer{}), reflect.TypeOf(CompareContainerDTO{})},
+	{"WorkloadCompare", reflect.TypeOf(fleet.WorkloadCompareInfo{}), reflect.TypeOf(WorkloadCompareDTO{})},
 }
 
 func TestDTOFieldParity(t *testing.T) {

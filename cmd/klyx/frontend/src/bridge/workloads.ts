@@ -1,5 +1,5 @@
 import { Events } from "@wailsio/runtime";
-import { useFleet, WorkloadsResultDTO } from "../store/fleet";
+import { useFleet, WorkloadsResultDTO, WorkloadCompareDTO } from "../store/fleet";
 import { WorkloadsService } from "../../bindings/github.com/moomora/klyx/internal/appbridge/index.js";
 import { liveOpenRetryMs } from "./pods";
 
@@ -100,4 +100,10 @@ export function openLiveWorkloads(cluster: string, namespace: string): () => voi
     if (typeof offStatus === "function") offStatus();
     WorkloadsService.CloseLiveWorkloads(cluster, namespace).catch(() => undefined);
   };
+}
+
+// workloadCompare fetches one cluster's drift-relevant view of a workload for
+// the fleet compare. Errors fold into the DTO (degraded, never "absent").
+export async function workloadCompare(cluster: string, kind: string, namespace: string, name: string): Promise<WorkloadCompareDTO> {
+  return (await WorkloadsService.WorkloadCompare(cluster, kind, namespace, name)) as WorkloadCompareDTO;
 }

@@ -78,6 +78,33 @@ type WorkloadDTO struct {
 	Reloader *ReloadTargetsDTO `json:"reloader,omitempty"`
 }
 
+// CompareContainerDTO is one container's drift-relevant identity in the fleet
+// compare.
+type CompareContainerDTO struct {
+	Name      string `json:"name"`
+	Image     string `json:"image"`
+	Resources string `json:"resources"`
+}
+
+// WorkloadCompareDTO is one cluster's view of a workload for the fleet compare.
+// found=false is an honest "this cluster does not run it"; error carries a
+// degraded lookup (RBAC, disconnect) so it is never mistaken for absence.
+type WorkloadCompareDTO struct {
+	Found           bool                  `json:"found"`
+	Kind            string                `json:"kind"`
+	Namespace       string                `json:"namespace"`
+	Name            string                `json:"name"`
+	DesiredReplicas int32                 `json:"desiredReplicas"`
+	ReadyReplicas   int32                 `json:"readyReplicas"`
+	Containers      []CompareContainerDTO `json:"containers"`
+	SpecHash        string                `json:"specHash"`
+	OwnerKind       string                `json:"ownerKind"`
+	OwnerNamespace  string                `json:"ownerNamespace"`
+	OwnerName       string                `json:"ownerName"`
+	OwnerRevision   string                `json:"ownerRevision"`
+	Error           string                `json:"error"`
+}
+
 type WorkloadsResultDTO struct {
 	FluxPresent bool          `json:"fluxPresent"`
 	Namespaces  []string      `json:"namespaces"` // populated only when namespace==""

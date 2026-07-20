@@ -247,3 +247,17 @@ func extractOwner(l map[string]string) *Owner {
 	}
 	return nil
 }
+
+// GitOpsOwnerFromLabels is the exported owner extraction for surfaces beyond the
+// workloads list (the fleet compare). Flux owners first (same precedence as
+// extractOwner), then the Argo instance label - an Argo Owner carries no
+// namespace (the label does not include the Application's namespace).
+func GitOpsOwnerFromLabels(l map[string]string) *Owner {
+	if o := extractOwner(l); o != nil {
+		return o
+	}
+	if n := l["argocd.argoproj.io/instance"]; n != "" {
+		return &Owner{Kind: "Application", Name: n}
+	}
+	return nil
+}

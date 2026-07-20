@@ -27,6 +27,7 @@ import { loadClusterPrefs, loadSearch, saveSearch, saveWorkloadsViewPrefs } from
 import { SyncingChip, staleStyle } from "./staleness";
 import { wellKnownResourceRef } from "./resourceRefs";
 import { ManifestButton } from "./ManifestButton";
+import { FleetCompare } from "./FleetCompare";
 
 const rankDot: Record<string, string> = {
   unhealthy: "var(--color-text-danger)",
@@ -90,6 +91,9 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
   const reloaderPresent = useFleet((s) => s.clusters.find((c) => c.name === cluster)?.reloaderPresent ?? false);
   const reloaderHealthy = useFleet((s) => s.clusters.find((c) => c.name === cluster)?.reloaderHealthy ?? false);
   const [pending, setPending] = useState<Pending | null>(null);
+  // Fleet compare: the selected workload side-by-side across every cluster.
+  const [compareTarget, setCompareTarget] = useState<WorkloadDTO | null>(null);
+  const fleetSize = useFleet((s) => s.clusters.length);
   // Selection is tracked by stable key (kind/namespace/name), never by array
   // index — live emits re-rank the rows, and an index-bound selection silently
   // retargets the context panel (and the day-2 verbs derived from it).
@@ -462,8 +466,19 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
             useFleet.getState().setSection("gitops");
             useFleet.getState().requestNavIntent({ kind: "select-flux", cluster, fluxKind: w.gitops.kind, namespace: w.gitops.namespace, name: w.gitops.name });
           }}
+          onCompare={fleetSize > 1 ? (w) => setCompareTarget(w) : undefined}
         />
       </div>
+
+      {compareTarget && (
+        <FleetCompare
+          origin={cluster}
+          kind={compareTarget.kind}
+          namespace={compareTarget.namespace}
+          name={compareTarget.name}
+          onClose={() => setCompareTarget(null)}
+        />
+      )}
 
       {/* Aggregate-logs dock — persists across row selection changes; close via ✕ only */}
       {logsTarget && (
@@ -584,6 +599,7 @@ function WorkloadContextPanel({
   onOpenPod,
   onOpenNode,
   onOpenFluxOwner,
+  onCompare,
 }: {
   workload: WorkloadDTO | null;
   attention: number;
@@ -602,6 +618,8 @@ function WorkloadContextPanel({
   onOpenPod: (w: WorkloadDTO, pod: PodDTO) => void;
   onOpenNode: (node: string) => void;
   onOpenFluxOwner: (w: WorkloadDTO) => void;
+  // Fleet compare (undefined on a single-cluster fleet - no dead button).
+  onCompare?: (w: WorkloadDTO) => void;
 }) {
   if (!workload) {
     return (
@@ -670,6 +688,9 @@ function WorkloadContextPanel({
           {/* One manifest surface: jump to InstanceDetail (YAML, labels,
               annotations, edit) instead of duplicating a YAML tab here. */}
           <ManifestButton group="apps" kind={workload.kind} namespace={workload.namespace} name={workload.name} />
+          {onCompare && (
+            <button onClick={() => onCompare(workload)} style={btn} title="Compare this workload across the fleet (DEV/STG/PRD drift)">compare fleet</button>
+          )}
           <span style={{ color: "var(--color-text-tertiary)", fontSize: 11 }}>
             {expanded ? "expanded" : "enter expands"}
           </span>
