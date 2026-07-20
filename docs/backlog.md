@@ -1,7 +1,7 @@
 # Klyx backlog
 
-Consolidated 2026-07-09; last pruned 2026-07-10 (editable-everything Tiers 1–3
-shipped). Pulls together the "what's left" that was scattered across `CLAUDE.md`
+Consolidated 2026-07-09; last pruned 2026-07-10 (editable Tiers 1–3 + the
+cross-platform exec fix shipped). Pulls together the "what's left" that was scattered across `CLAUDE.md`
 deferred notes, `docs/brainstorm-questions.md`, and the eyeball checklists.
 Living doc — prune items as they ship, add as they surface.
 
@@ -87,8 +87,6 @@ The un-built remainder of the ranked top-12 (see the plan doc for sketches):
       HelmRelease / values) — the killer fleet-first feature, pure read-only
 - [ ] **Rollout history + undo + pause/resume** (undo is destructive: owner
       sign-off on the confirm shape first)
-- [ ] **Fix exec/terminal on Linux + Windows** — the escape hatch hard-gates on
-      macOS today (`exec_service.go:113`), dead on the owner's own k3s homelab
 
 ## 4. Feature deferrals (from the milestone notes)
 
@@ -137,7 +135,10 @@ See `docs/brainstorm-questions.md` (Q16 pinned resources, etc.).
 Merged to `main` — do not re-add to the backlog:
 
 **2026-07-10 — editable everything + ad-hoc (PRs #27–#31, the 2026-07-09 plan's
-Tiers 1–3, complete):**
+Tiers 1–3, complete) + the exec fix:**
+- Cross-platform terminal escape hatch: exec/debug/plain terminal now launch on
+  Linux ($TERMINAL / x-terminal-emulator / common emulators) and Windows
+  (wt / cmd start), fail-closed quoting; was macOS-only (#33)
 - Tier 1a: Force:false conflict-aware apply (a 409 names the owning manager,
   never silent drift) + the reflection DTO field-parity tripwire (#27)
 - Tier 1b: authoritative GitOps ownership + prune-reach verdict from Flux
