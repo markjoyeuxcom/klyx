@@ -6,12 +6,15 @@ import (
 	"time"
 
 	"github.com/moomora/klyx/internal/gwapi"
+	"github.com/moomora/klyx/internal/hubble"
 	"github.com/moomora/klyx/internal/routemetrics"
 )
 
 type fakeRMConn struct {
-	m  map[string]routemetrics.RouteMetrics
-	st routemetrics.Status
+	m            map[string]routemetrics.RouteMetrics
+	st           routemetrics.Status
+	hubbleStats  hubble.FlowStats
+	hubbleStatus hubble.Status
 }
 
 func (f fakeRMConn) ListGateways(context.Context) ([]gwapi.GatewayRef, bool, error) {
@@ -22,6 +25,9 @@ func (f fakeRMConn) GetGatewayTopology(context.Context, string, string) (gwapi.T
 }
 func (f fakeRMConn) RouteMetrics(context.Context, []string) (map[string]routemetrics.RouteMetrics, routemetrics.Status) {
 	return f.m, f.st
+}
+func (f fakeRMConn) HubbleFlowStats(context.Context) (hubble.FlowStats, hubble.Status) {
+	return f.hubbleStats, f.hubbleStatus
 }
 
 func TestGetRouteMetrics(t *testing.T) {
@@ -50,4 +56,30 @@ func TestGetRouteMetrics(t *testing.T) {
 			t.Fatalf("routes: %+v", dto.Routes)
 		}
 	})
+}
+
+func TestGetHubbleFlowStats(t *testing.T) {
+	fwd, drop := 120.5, 3.25
+	conn := fakeRMConn{hubbleStats: hubble.FlowStats{
+		ForwardRate: &fwd, DropRate: &drop,
+		DropReasons: []hubble.ReasonRate{{Reason: "Policy denied", Protocol: "TCP", Rate: 3.0}},
+	}, hubbleStatus: hubble.Status{Available: true}}
+	s := NewGatewayService(func(string) (GatewayConn, bool) { return conn, true })
+
+	dto := s.GetHubbleFlowStats("c")
+	if !dto.Status.Available || dto.ForwardRate == nil || *dto.ForwardRate != 120.5 {
+		t.Fatalf("stats not mapped: %+v", dto)
+	}
+	if len(dto.DropReasons) != 1 || dto.DropReasons[0].Reason != "Policy denied" {
+		t.Fatalf("reasons not mapped: %+v", dto.DropReasons)
+	}
+	// Disabled sections stay nil across the bridge (never fabricated zeros).
+	if dto.DNSTotalRate != nil || dto.HTTPTotalRate != nil {
+		t.Fatalf("nil sections must stay nil: %+v", dto)
+	}
+	// Cluster miss -> honest unavailable.
+	miss := NewGatewayService(func(string) (GatewayConn, bool) { return nil, false })
+	if d := miss.GetHubbleFlowStats("nope"); d.Status.Available || d.Status.Message == "" {
+		t.Fatalf("cluster miss must be unavailable with a message: %+v", d)
+	}
 }

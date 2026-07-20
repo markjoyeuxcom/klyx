@@ -28,6 +28,7 @@ type ClusterDTO struct {
 	GatewayAPIVersion      string `json:"gatewayAPIVersion"`
 	CiliumPresent          bool   `json:"ciliumPresent"`
 	ClusterMesh            bool   `json:"clusterMesh"`
+	HasHubble              bool   `json:"hasHubble"`
 	CertManagerTier        string `json:"certManagerTier"`
 	CertManagerReason      string `json:"certManagerReason"`
 	CertManagerPresent     bool   `json:"certManagerPresent"`
@@ -77,6 +78,7 @@ func ToDTO(s fleet.Snapshot, cc config.ClusterConfig, now time.Time) ClusterDTO 
 		GatewayAPIVersion:      s.Capabilities.Network.GatewayAPIVersion,
 		CiliumPresent:          s.Capabilities.Network.CiliumPresent,
 		ClusterMesh:            s.Capabilities.Network.ClusterMesh,
+		HasHubble:              s.Capabilities.Network.HasHubble,
 		CertManagerTier:        s.Capabilities.CertManager.Tier.String(),
 		CertManagerReason:      s.Capabilities.CertManager.Reason,
 		CertManagerPresent:     s.Capabilities.CertManager.Present,

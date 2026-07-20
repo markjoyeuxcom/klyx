@@ -5,14 +5,17 @@ import (
 	"testing"
 
 	"github.com/moomora/klyx/internal/gwapi"
+	"github.com/moomora/klyx/internal/hubble"
 	"github.com/moomora/klyx/internal/routemetrics"
 )
 
 type fakeGatewayConn struct {
-	refs   []gwapi.GatewayRef
-	served bool
-	topo   gwapi.Topology
-	err    error
+	hubbleStats  hubble.FlowStats
+	hubbleStatus hubble.Status
+	refs         []gwapi.GatewayRef
+	served       bool
+	topo         gwapi.Topology
+	err          error
 }
 
 func (f *fakeGatewayConn) ListGateways(ctx context.Context) ([]gwapi.GatewayRef, bool, error) {
@@ -20,6 +23,9 @@ func (f *fakeGatewayConn) ListGateways(ctx context.Context) ([]gwapi.GatewayRef,
 }
 func (f *fakeGatewayConn) GetGatewayTopology(ctx context.Context, namespace, name string) (gwapi.Topology, error) {
 	return f.topo, f.err
+}
+func (f *fakeGatewayConn) HubbleFlowStats(context.Context) (hubble.FlowStats, hubble.Status) {
+	return f.hubbleStats, f.hubbleStatus
 }
 func (f *fakeGatewayConn) RouteMetrics(context.Context, []string) (map[string]routemetrics.RouteMetrics, routemetrics.Status) {
 	return nil, routemetrics.Status{}

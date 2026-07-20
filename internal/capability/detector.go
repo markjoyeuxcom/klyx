@@ -151,6 +151,7 @@ func (d *Detector) detectNetwork(ctx context.Context, served map[string]bool) Ne
 	out.CiliumPresent = served["cilium.io"]
 	if out.CiliumPresent {
 		out.ClusterMesh = d.clusterMeshInstalled(ctx)
+		out.HasHubble = d.hubbleInstalled(ctx)
 	}
 
 	gwVersion := ""
@@ -248,6 +249,20 @@ func (d *Detector) detectReloader(ctx context.Context) ReloaderCapability {
 		out.Base.Reason = "Reloader controller present but not ready"
 	}
 	return out
+}
+
+// hubbleInstalled reports whether Hubble is enabled: the hubble-relay
+// Deployment OR the hubble-peer Service in kube-system (the peer service exists
+// whenever Hubble is on, relay only with the full stack). Same one-shot-Get
+// shape as clusterMeshInstalled.
+func (d *Detector) hubbleInstalled(ctx context.Context) bool {
+	if _, err := d.cs.AppsV1().Deployments("kube-system").Get(ctx, "hubble-relay", metav1.GetOptions{}); err == nil {
+		return true
+	}
+	if _, err := d.cs.CoreV1().Services("kube-system").Get(ctx, "hubble-peer", metav1.GetOptions{}); err == nil {
+		return true
+	}
+	return false
 }
 
 // clusterMeshInstalled reports whether Cilium ClusterMesh is installed: the

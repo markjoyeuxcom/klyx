@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/moomora/klyx/internal/gwapi"
+	"github.com/moomora/klyx/internal/hubble"
 	"github.com/moomora/klyx/internal/routemetrics"
 )
 
@@ -12,6 +13,7 @@ type GatewayConn interface {
 	ListGateways(ctx context.Context) ([]gwapi.GatewayRef, bool, error)
 	GetGatewayTopology(ctx context.Context, namespace, name string) (gwapi.Topology, error)
 	RouteMetrics(ctx context.Context, routeKeys []string) (map[string]routemetrics.RouteMetrics, routemetrics.Status)
+	HubbleFlowStats(ctx context.Context) (hubble.FlowStats, hubble.Status)
 }
 
 const gatewayTimeout = 30 * time.Second
@@ -90,6 +92,34 @@ func (s *GatewayService) GetGatewayTopology(cluster, namespace, name string) Top
 
 // GetRouteMetrics returns per-route traffic metrics + an Envoy-route status for
 // the given route keys ("<ns>/<name>"). On-demand; the frontend polls it.
+// GetHubbleFlowStats returns the cluster's Hubble flow/drop triage readout
+// (from its Prometheus hubble_* metrics). Read-only, on-demand; capability- and
+// metrics-gated in the fleet layer with honest unavailable reasons.
+func (s *GatewayService) GetHubbleFlowStats(cluster string) HubbleStatsDTO {
+	conn, ok := s.lookup(cluster)
+	if !ok {
+		return HubbleStatsDTO{DropReasons: []ReasonRateDTO{}, Status: RouteMetricsStatusDTO{Available: false, Message: "cluster not connected"}}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), gatewayTimeout)
+	defer cancel()
+	stats, st := conn.HubbleFlowStats(ctx)
+	updatedAt := ""
+	if !st.UpdatedAt.IsZero() {
+		updatedAt = st.UpdatedAt.Format(time.RFC3339)
+	}
+	dto := HubbleStatsDTO{
+		ForwardRate: stats.ForwardRate, DropRate: stats.DropRate,
+		DNSErrorRate: stats.DNSErrorRate, DNSTotalRate: stats.DNSTotalRate,
+		HTTPErrorRate: stats.HTTPErrorRate, HTTPTotalRate: stats.HTTPTotalRate,
+		DropReasons: []ReasonRateDTO{},
+		Status:      RouteMetricsStatusDTO{Available: st.Available, Message: st.Message, UpdatedAt: updatedAt},
+	}
+	for _, r := range stats.DropReasons {
+		dto.DropReasons = append(dto.DropReasons, ReasonRateDTO{Reason: r.Reason, Protocol: r.Protocol, Rate: r.Rate})
+	}
+	return dto
+}
+
 func (s *GatewayService) GetRouteMetrics(cluster string, routeKeys []string) RouteMetricsResultDTO {
 	empty := RouteMetricsResultDTO{Routes: map[string]RouteMetricDTO{}}
 	conn, ok := s.lookup(cluster)

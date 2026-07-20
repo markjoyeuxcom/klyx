@@ -32,6 +32,7 @@ import (
 	"github.com/moomora/klyx/internal/gitops/flux"
 	"github.com/moomora/klyx/internal/gwapi"
 	"github.com/moomora/klyx/internal/helmcli"
+	"github.com/moomora/klyx/internal/hubble"
 	"github.com/moomora/klyx/internal/metrics"
 	"github.com/moomora/klyx/internal/routemetrics"
 	"github.com/moomora/klyx/internal/workloads"
@@ -101,6 +102,7 @@ type Conn interface {
 	HasGlobalService(ctx context.Context, ns, name string) bool
 	ClusterMetrics(ctx context.Context, forceReprobe bool) (metrics.ClusterMetrics, metrics.MetricsCapability)
 	RouteMetrics(ctx context.Context, routeKeys []string) (map[string]routemetrics.RouteMetrics, routemetrics.Status)
+	HubbleFlowStats(ctx context.Context) (hubble.FlowStats, hubble.Status)
 	SetCordon(ctx context.Context, nodeName string, cordon bool) error
 	DrainNodeCmd(nodeName string, opts DrainOptions) (*exec.Cmd, error)
 	DescribeCmd(ctx context.Context, kindArg, namespace, name string) (*exec.Cmd, error)
