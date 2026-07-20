@@ -1,7 +1,8 @@
 # Klyx backlog
 
-Consolidated 2026-07-09; last pruned 2026-08-05 (Hubble flow lens shipped; earlier:
-fleet compare, editable Tiers 1–3, the cross-platform exec fix). Pulls together the "what's left" that was scattered across `CLAUDE.md`
+Consolidated 2026-07-09; last pruned 2026-07-20 (RBAC access lens shipped;
+earlier the same day: Hubble flow lens, fleet compare, the cross-platform exec
+fix; 2026-07-10: editable Tiers 1–3). Pulls together the "what's left" that was scattered across `CLAUDE.md`
 deferred notes, `docs/brainstorm-questions.md`, and the eyeball checklists.
 Living doc — prune items as they ship, add as they surface.
 
@@ -21,9 +22,12 @@ the need is real, not top-to-bottom.
       surface — the authoritative "Kustomization X owns this" banner in the YAML
       editor, the per-lens `manifest` buttons, the "deploy yaml" composer with
       its prune warning, the "debug pod" launcher, the Scratch panel, and the fleet-compare
-      modal (drift columns against the live DEV/STG/PRD tiers), and the Hubble
+      modal (drift columns against the live DEV/STG/PRD tiers), the Hubble
       flows panel (drop reasons against the live Cilium fleet — also verifies
-      the new HasHubble detection fires on the real clusters)
+      the new HasHubble detection fires on the real clusters), and the Access
+      lens (a good live check: can-i as kustomize-controller on a prd cluster,
+      who-can get secrets in a team namespace, and the ServiceAccount
+      inspector's "check access" cross-link prefilling the subject)
 - [ ] **Real-LLM smoke test** of the AI feature (local Ollama backend, or a hosted
       key) — everything is currently verified against a fake client
 - [ ] **Live-cluster smoke of the write paths** (nothing destructive committed
@@ -81,8 +85,6 @@ This is a walk-the-app-and-tick-boxes exercise; no coding is blocking 1.0.
 
 The un-built remainder of the ranked top-12 (see the plan doc for sketches):
 
-- [ ] **RBAC access review** — can-i (as ServiceAccount) + who-can enumerator;
-      read-only SubjectAccessReview, the highest-value untracked diagnosis
 - [ ] **Live node + per-pod/container utilization** with a rightsizing delta
 - [ ] **Rollout history + undo + pause/resume** (undo is destructive: owner
       sign-off on the confirm shape first)
@@ -94,6 +96,11 @@ The un-built remainder of the ranked top-12 (see the plan doc for sketches):
 - [ ] **Hubble lens follow-ups**: per-namespace drop breakdown (needs Hubble
       context labels configured in Cilium); the topology-graph drop overlay;
       `hubble observe` flow tailing via the CLI escape-hatch pattern
+- [ ] **Access lens follow-ups**: nonResourceURL checks (can-i on /metrics,
+      /healthz); a "what can this subject do HERE" full listing
+      (SelfSubjectRulesReview); who-can across all namespaces (today: one
+      namespace per query, or cluster-wide grants only — the honesty caption
+      says which)
 
 - [ ] **M10-f**: `flux diff --path` per-cluster local-clone-root config (makes
       `flux diff` resolve reliably)
@@ -139,13 +146,24 @@ See `docs/brainstorm-questions.md` (Q16 pinned resources, etc.).
 
 Merged to `main` — do not re-add to the backlog:
 
-**2026-08-05 — Hubble flow lens:**
+**2026-07-20 — RBAC access lens** (dates below corrected the same day — the
+fleet-compare and Hubble entries were briefly misdated 2026-08-04/05):
+- The "Access" section: can-i as the kubeconfig user or an impersonated
+  ServiceAccount (SubjectAccessReview with the SA's groups — the authoritative
+  answer, every authorizer), and a who-can enumerator over
+  (Cluster)Roles/(Cluster)RoleBindings with exact API-server rule semantics,
+  grant paths click-through to the binding inspector, and honesty captions
+  (static-RBAC-only; cluster-wide-only without a namespace). ServiceAccount
+  inspector gained a "check access" cross-link (NavIntent prefill). Read-only
+  throughout; new pure pkg `internal/rbac` (#39)
+
+**2026-07-20 — Hubble flow lens:**
 - Drop/deny triage from Hubble's Prometheus metrics in the network lens:
   verdict rates, drop reasons ranked by rate, DNS/HTTP error rates; opt-in
   metric sets render only when present, all-empty says how to enable. Also
   fixed the never-populated HasHubble capability stub (#37)
 
-**2026-08-04 — fleet compare:**
+**2026-07-20 — fleet compare:**
 - Cross-environment drift compare: the same workload side-by-side across the
   fleet (dev→stg→prd columns), image/revision/replica/resource drift highlighted
   vs the origin, spec-hash "other drift" honesty, live Flux revision per
