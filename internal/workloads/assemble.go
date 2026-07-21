@@ -20,7 +20,9 @@ func Assemble(deploys []appsv1.Deployment, stss []appsv1.StatefulSet, dss []apps
 	out := make([]Workload, 0, len(deploys)+len(stss)+len(dss))
 	for i := range deploys {
 		d := &deploys[i]
-		out = append(out, build("Deployment", d.Namespace, d.Name, d.Labels, d.Annotations, d.Spec.Selector, d.Spec.Template.Spec, classifyDeployment(d), pods, fluxPresent, now, d.Generation, d.Status.ObservedGeneration))
+		w := build("Deployment", d.Namespace, d.Name, d.Labels, d.Annotations, d.Spec.Selector, d.Spec.Template.Spec, classifyDeployment(d), pods, fluxPresent, now, d.Generation, d.Status.ObservedGeneration)
+		w.Paused = d.Spec.Paused
+		out = append(out, w)
 	}
 	for i := range stss {
 		s := &stss[i]

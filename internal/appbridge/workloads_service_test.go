@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/moomora/klyx/internal/fleet"
 	"github.com/moomora/klyx/internal/workloads"
@@ -20,6 +21,25 @@ type fakeWLConn struct {
 	lastScaleN      int32
 	compareInfo     fleet.WorkloadCompareInfo
 	compareErr      error
+	history         []workloads.RolloutRevision
+	historyErr      error
+	undoErr         error
+	lastUndoRev     int64
+	lastPause       *bool
+}
+
+func (f *fakeWLConn) RolloutHistory(context.Context, string, string, string) ([]workloads.RolloutRevision, error) {
+	return f.history, f.historyErr
+}
+
+func (f *fakeWLConn) RolloutUndo(_ context.Context, _, _, _ string, revision int64) error {
+	f.lastUndoRev = revision
+	return f.undoErr
+}
+
+func (f *fakeWLConn) RolloutPause(_ context.Context, _, _ string, pause bool) error {
+	f.lastPause = &pause
+	return nil
 }
 
 func (f *fakeWLConn) ListWorkloads(context.Context, string) ([]workloads.Workload, bool, bool, error) {
@@ -257,5 +277,89 @@ func TestWorkloadsService_ScaleWorkload_UpperBoundsRejected(t *testing.T) {
 	r := s.ScaleWorkload("c", "Deployment", "ns", "api", maxScaleReplicas+1)
 	if r.OK || r.Error == "" {
 		t.Fatalf("want bounds error for replicas > %d, got %+v", maxScaleReplicas, r)
+	}
+}
+
+func wlSvc(conn *fakeWLConn) *WorkloadsService {
+	return NewWorkloadsService(func(string) (WorkloadsConn, bool) { return conn, true }, nil)
+}
+
+func TestRolloutHistoryMapsToDTO(t *testing.T) {
+	conn := &fakeWLConn{history: []workloads.RolloutRevision{
+		{Revision: 3, AgeSeconds: 600, Images: []string{"shop/cart:v3"}, Current: true},
+		{Revision: 2, AgeSeconds: 3600, Images: nil, ChangeCause: "hotfix"},
+	}}
+	dto := wlSvc(conn).RolloutHistory("c", "Deployment", "shop", "cart")
+	if dto.Error != "" || len(dto.Revisions) != 2 {
+		t.Fatalf("dto: %+v", dto)
+	}
+	if !dto.Revisions[0].Current || dto.Revisions[0].Images[0] != "shop/cart:v3" {
+		t.Fatalf("head: %+v", dto.Revisions[0])
+	}
+	// nil images must serialize as [], never null.
+	if dto.Revisions[1].Images == nil || dto.Revisions[1].ChangeCause != "hotfix" {
+		t.Fatalf("second: %+v", dto.Revisions[1])
+	}
+
+	conn.historyErr = errors.New("boom")
+	if dto := wlSvc(conn).RolloutHistory("c", "Deployment", "shop", "cart"); dto.Error != "boom" || dto.Revisions == nil {
+		t.Fatalf("error fold-in: %+v", dto)
+	}
+}
+
+func TestRolloutUndoGatedByProtectGuard(t *testing.T) {
+	prev := activeProtectGuard.Load()
+	t.Cleanup(func() { activeProtectGuard.Store(prev) })
+	SetProtectGuard(NewProtectGuard(func(c string) bool { return c == "prd" }, time.Now))
+
+	conn := &fakeWLConn{}
+	svc := wlSvc(conn)
+
+	// Unarmed on a protected cluster: refused before the conn is touched.
+	if r := svc.RolloutUndo("prd", "Deployment", "shop", "cart", 2); r.OK || r.Error == "" {
+		t.Fatalf("unarmed undo on prd must refuse: %+v", r)
+	}
+	if conn.lastUndoRev != 0 {
+		t.Fatal("refused undo must never reach the conn")
+	}
+
+	// Armed: the one-shot grant admits exactly one undo.
+	if err := activeProtectGuard.Load().Arm("prd", "prd"); err != nil {
+		t.Fatal(err)
+	}
+	if r := svc.RolloutUndo("prd", "Deployment", "shop", "cart", 2); !r.OK {
+		t.Fatalf("armed undo: %+v", r)
+	}
+	if conn.lastUndoRev != 2 {
+		t.Fatalf("revision passthrough: %d", conn.lastUndoRev)
+	}
+	// The grant was consumed - a second undo without re-arming refuses.
+	if r := svc.RolloutUndo("prd", "Deployment", "shop", "cart", 1); r.OK {
+		t.Fatalf("grant must be one-shot: %+v", r)
+	}
+}
+
+func TestRolloutPausePassesThroughAndGates(t *testing.T) {
+	prev := activeProtectGuard.Load()
+	t.Cleanup(func() { activeProtectGuard.Store(prev) })
+	SetProtectGuard(NewProtectGuard(func(c string) bool { return c == "prd" }, time.Now))
+
+	conn := &fakeWLConn{}
+	svc := wlSvc(conn)
+	if r := svc.RolloutPause("dev", "shop", "cart", true); !r.OK || conn.lastPause == nil || !*conn.lastPause {
+		t.Fatalf("pause on unprotected: %+v %+v", r, conn.lastPause)
+	}
+	if r := svc.RolloutPause("dev", "shop", "cart", false); !r.OK || *conn.lastPause {
+		t.Fatalf("resume: %+v", r)
+	}
+	if r := svc.RolloutPause("prd", "shop", "cart", true); r.OK {
+		t.Fatalf("unarmed pause on prd must refuse: %+v", r)
+	}
+}
+
+func TestWorkloadDTOCarriesPaused(t *testing.T) {
+	dto := toWorkloadDTO(workloads.Workload{Kind: "Deployment", Namespace: "x", Name: "held", Paused: true})
+	if !dto.Paused {
+		t.Fatalf("paused must carry: %+v", dto)
 	}
 }

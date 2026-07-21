@@ -76,6 +76,26 @@ type WorkloadDTO struct {
 	// Reloader is the forward "reloads on" declaration; nil when the workload
 	// carries no Reloader annotation.
 	Reloader *ReloadTargetsDTO `json:"reloader,omitempty"`
+	// Paused: Deployment spec.paused - an intended operator state (rollouts
+	// held), not an error. Always false for StatefulSet/DaemonSet.
+	Paused bool `json:"paused,omitempty"`
+}
+
+// RolloutRevisionDTO mirrors workloads.RolloutRevision - one rollout history
+// entry.
+type RolloutRevisionDTO struct {
+	Revision    int64    `json:"revision"`
+	AgeSeconds  int      `json:"ageSeconds"`
+	Images      []string `json:"images"`
+	Current     bool     `json:"current"`
+	ChangeCause string   `json:"changeCause,omitempty"`
+}
+
+// RolloutHistoryResultDTO is RolloutHistory's payload. Error is the fold-in
+// failure channel; Revisions is never nil.
+type RolloutHistoryResultDTO struct {
+	Revisions []RolloutRevisionDTO `json:"revisions"`
+	Error     string               `json:"error,omitempty"`
 }
 
 // CompareContainerDTO is one container's drift-relevant identity in the fleet

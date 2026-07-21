@@ -48,6 +48,7 @@ var mirrorPairs = []struct {
 	{"AccessGrant", reflect.TypeOf(rbac.Grant{}), reflect.TypeOf(AccessGrantDTO{})},
 	{"AccessEnumeration", reflect.TypeOf(rbac.Enumeration{}), reflect.TypeOf(AccessWhoCanDTO{})},
 	{"NodeUsage", reflect.TypeOf(workloads.NodeUsage{}), reflect.TypeOf(NodeUsageDTO{})},
+	{"RolloutRevision", reflect.TypeOf(workloads.RolloutRevision{}), reflect.TypeOf(RolloutRevisionDTO{})},
 	{"ContainerSummary", reflect.TypeOf(workloads.ContainerSummary{}), reflect.TypeOf(ContainerSummaryDTO{})},
 	{"ContainerPort", reflect.TypeOf(workloads.ContainerPort{}), reflect.TypeOf(ContainerPortDTO{})},
 }

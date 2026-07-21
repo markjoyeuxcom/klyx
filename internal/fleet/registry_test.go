@@ -212,6 +212,11 @@ func (f *fakeConn) RefreshArgoApp(context.Context, string, string) error { retur
 func (f *fakeConn) SyncArgoApp(context.Context, string, string, argo.SyncOptions) error {
 	return nil
 }
+func (f *fakeConn) RolloutHistory(context.Context, string, string, string) ([]workloads.RolloutRevision, error) {
+	return nil, nil
+}
+func (f *fakeConn) RolloutUndo(context.Context, string, string, string, int64) error { return nil }
+func (f *fakeConn) RolloutPause(context.Context, string, string, bool) error         { return nil }
 func (f *fakeConn) NodeUtilization(context.Context) ([]workloads.NodeUsage, workloads.UsageStatus) {
 	return nil, workloads.UsageStatus{}
 }
