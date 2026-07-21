@@ -1,8 +1,9 @@
 # Klyx backlog
 
-Consolidated 2026-07-09; last pruned 2026-07-21 (node + per-container
-utilization shipped; 2026-07-20: RBAC access lens, Hubble flow lens, fleet
-compare, the cross-platform exec fix; 2026-07-10: editable Tiers 1–3). Pulls together the "what's left" that was scattered across `CLAUDE.md`
+Consolidated 2026-07-09; last pruned 2026-07-21 (rollout history/undo/pause
+shipped — THE RANKED TOP-12 IS NOW COMPLETE; same day: node + per-container
+utilization; 2026-07-20: RBAC access lens, Hubble flow lens, fleet compare,
+the cross-platform exec fix; 2026-07-10: editable Tiers 1–3). Pulls together the "what's left" that was scattered across `CLAUDE.md`
 deferred notes, `docs/brainstorm-questions.md`, and the eyeball checklists.
 Living doc — prune items as they ship, add as they surface.
 
@@ -30,7 +31,10 @@ the need is real, not top-to-bottom.
       inspector's "check access" cross-link prefilling the subject), and the
       utilization surfaces (node board cpu/mem used bars against the live AKS
       tiers — is the hot node believable; a pod inspector's per-container
-      usage + a rightsizing chip on a known-oversized workload)
+      usage + a rightsizing chip on a known-oversized workload), and the
+      rollout surface (history on a Deployment with real revisions; pause →
+      resume round-trip on a dev workload; an undo on the homelab incl. the
+      GitOps-owned warning + prd typed arming on a protected cluster)
 - [ ] **Real-LLM smoke test** of the AI feature (local Ollama backend, or a hosted
       key) — everything is currently verified against a fake client
 - [ ] **Live-cluster smoke of the write paths** (nothing destructive committed
@@ -86,10 +90,9 @@ This is a walk-the-app-and-tick-boxes exercise; no coding is blocking 1.0.
 
 ## 3. Ranked feature candidates (from the 2026-07-09 full-codebase review)
 
-The un-built remainder of the ranked top-12 (see the plan doc for sketches):
-
-- [ ] **Rollout history + undo + pause/resume** (undo is destructive: owner
-      sign-off on the confirm shape first) — the LAST un-built ranked item
+**COMPLETE** — all twelve ranked items are on `main` (the last, rollout
+history/undo/pause, landed 2026-07-21 as #43). New feature work is now
+entirely demand-driven from sections 1–4.
 
 ## 4. Feature deferrals (from the milestone notes)
 
@@ -108,6 +111,9 @@ The un-built remainder of the ranked top-12 (see the plan doc for sketches):
       allocatable, by design); a "which pod is hot on THIS node" drill-in from
       the node inspector; rightsizing chips on the workloads list (the
       per-container logic exists in `saturation.ts`)
+- [ ] **Rollout follow-ups**: undo/pause as ⌘K palette verbs (one-shot
+      NavIntents through the existing confirm, the ratified pattern); a
+      revision diff (old vs new template YAML) in the history rows
 
 - [ ] **M10-f**: `flux diff --path` per-cluster local-clone-root config (makes
       `flux diff` resolve reliably)
@@ -142,7 +148,7 @@ The un-built remainder of the ranked top-12 (see the plan doc for sketches):
 - [ ] **GitHub Actions budget exhausted** (hit 2026-07-21) — every CI job fails
       in 2s with "an Actions budget is preventing further use" (private repo,
       paid minutes). Raise the spending cap: github.com/settings/billing →
-      Budgets and alerts. PRs #41/#42 merged on full local gates (same
+      Budgets and alerts. PRs #41–#44 merged on full local gates (same
       commands CI runs); the first green run on main after the reset
       re-verifies them.
 - [ ] **Release signing / notarization** — inert scaffold in `release.yml`; needs
@@ -158,6 +164,16 @@ See `docs/brainstorm-questions.md` (Q16 pinned resources, etc.).
 ## Recently shipped (so it's not mistaken for open)
 
 Merged to `main` — do not re-add to the backlog:
+
+**2026-07-21 — rollout history + undo + pause/resume (ranked top-12 complete):**
+- Revision history in the workload inspector (Deployments via owned
+  ReplicaSets, STS/DS via ControllerRevisions; images + change-cause; honest
+  error/empty states). Undo with kubectl's exact semantics (old RS template
+  minus pod-template-hash / ControllerRevision data as the patch), refuses
+  the current revision, consumes the one-shot protected grant, confirm
+  carries danger + typed prd arming + the GitOps-owned-will-revert warning.
+  Pause/resume = spec.paused (Deployment-only, grant-gated); paused renders
+  as an intended state. Merged on local gates during the CI budget outage (#43)
 
 **2026-07-21 — node + per-container utilization (rightsizing delta):**
 - Node board cpu/mem "used" columns: pod-attributed live usage vs allocatable
