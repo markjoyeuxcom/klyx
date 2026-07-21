@@ -1,6 +1,9 @@
 package workloads
 
-import "time"
+import (
+	"sort"
+	"time"
+)
 
 // Usage is a workload's live resource usage (cpu cores, memory bytes). nil = no
 // sample available; never a fabricated zero.
@@ -21,6 +24,62 @@ type UsageStatus struct {
 // health list, the metrics map, and the UI row key.
 func (w Workload) Key() string {
 	return w.Kind + "/" + w.Namespace + "/" + w.Name
+}
+
+// NodeUsage is one node's pod-attributed live usage: the sum of the usage of
+// the pods scheduled on it. Deliberately NOT whole-node usage - node OS and
+// kubelet overhead are outside it - but it is the scheduling-relevant number
+// (what pods consume of allocatable) and needs no extra metric series beyond
+// the confirmed per-pod ones. nil = no sampled pod on that node.
+type NodeUsage struct {
+	Node        string
+	CPU         *float64
+	Mem         *float64
+	SampledPods int // pods that contributed at least one sample
+}
+
+// AggregateNodeUsage groups per-pod usage (keyed "<namespace>/<pod>") by the
+// pod's assigned node. Unscheduled pods (empty Node) are skipped. A node
+// appears only when at least one of its pods produced a sample - a node with
+// none is "no data", never zero. Sorted by node name.
+func AggregateNodeUsage(pods []PodSummary, cpuByPod, memByPod map[string]float64) []NodeUsage {
+	byNode := map[string]*NodeUsage{}
+	for i := range pods {
+		p := &pods[i]
+		if p.Node == "" {
+			continue
+		}
+		k := p.Namespace + "/" + p.Name
+		cpu, cpuOK := cpuByPod[k]
+		mem, memOK := memByPod[k]
+		if !cpuOK && !memOK {
+			continue
+		}
+		nu := byNode[p.Node]
+		if nu == nil {
+			nu = &NodeUsage{Node: p.Node}
+			byNode[p.Node] = nu
+		}
+		nu.SampledPods++
+		if cpuOK {
+			if nu.CPU == nil {
+				nu.CPU = new(float64)
+			}
+			*nu.CPU += cpu
+		}
+		if memOK {
+			if nu.Mem == nil {
+				nu.Mem = new(float64)
+			}
+			*nu.Mem += mem
+		}
+	}
+	out := make([]NodeUsage, 0, len(byNode))
+	for _, nu := range byNode {
+		out = append(out, *nu)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Node < out[j].Node })
+	return out
 }
 
 // AggregateUsage sums per-pod usage (keyed "<namespace>/<pod>") over each

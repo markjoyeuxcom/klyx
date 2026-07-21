@@ -14,6 +14,10 @@ vi.mock("../bridge/workloads", () => ({
   listWorkloads: vi.fn().mockResolvedValue(undefined),
   rolloutRestart: vi.fn().mockResolvedValue(undefined),
 }));
+vi.mock("../bridge/metrics", () => ({
+  getPodContainerUsage: vi.fn(async () => ({ available: false, message: "no metrics source", updatedAtUnix: 0, items: [] })),
+}));
+
 vi.mock("../bridge/windows", () => ({
   openLogsWindow: vi.fn().mockResolvedValue(true),
 }));

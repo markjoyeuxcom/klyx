@@ -1,8 +1,10 @@
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import { IconTerminal2, IconExternalLink, IconCircleDot, IconChevronDown, IconX, IconAlertTriangle } from "@tabler/icons-react";
 import { useFleet } from "../store/fleet";
-import type { PodDetailDTO, PodSummaryDTO, ContainerSummaryDTO } from "../store/fleet";
+import type { PodDetailDTO, PodSummaryDTO, ContainerSummaryDTO, ContainerUsageDTO, PodUsageResultDTO } from "../store/fleet";
 import { listPods, openLivePods, openPodDetail, deletePod } from "../bridge/pods";
+import { getPodContainerUsage } from "../bridge/metrics";
+import { rightsizing, fmtCpu, fmtMem } from "./saturation";
 import { openLogsWindow } from "../bridge/windows";
 import { rolloutRestart } from "../bridge/workloads";
 import { armProtected } from "../bridge/configsvc";
@@ -803,6 +805,22 @@ function InfoTab({ detail, cluster, namespace, name, onRestart, onDelete }: {
   const p = detail.summary;
   const [forwarding, setForwarding] = useState(false);
   const [describing, setDescribing] = useState(false);
+
+  // Live per-container usage for the rightsizing readout (usage vs the
+  // container's declared requests/limits). Unavailable metrics degrade to a
+  // caption on the Containers section - the block still renders.
+  const [ctUsage, setCtUsage] = useState<PodUsageResultDTO | null>(null);
+  useEffect(() => {
+    let live = true;
+    setCtUsage(null);
+    void getPodContainerUsage(cluster, namespace, name).then((r) => { if (live) setCtUsage(r); });
+    return () => { live = false; };
+  }, [cluster, namespace, name]);
+  const usageByContainer = useMemo(() => {
+    const m = new Map<string, ContainerUsageDTO>();
+    for (const it of ctUsage?.items ?? []) m.set(it.container, it);
+    return m;
+  }, [ctUsage]);
   // Restart is meaningful only for owners rollout-restart supports. The
   // backend resolves ReplicaSet -> Deployment, so a pod still showing
   // ownerKind=ReplicaSet is under a BARE ReplicaSet (nothing to restart), and
@@ -907,7 +925,12 @@ function InfoTab({ detail, cluster, namespace, name, onRestart, onDelete }: {
       {/* Containers — a kv block per container, not a table: the state word
           with its reason is the headline fact and needs a full line. */}
       <InspectorSection title="Containers" count={p.containers.length} collapsible>
-        {p.containers.map((c) => <ContainerBlock key={c.name} c={c} />)}
+        {ctUsage !== null && !ctUsage.available && (
+          <div style={{ fontSize: 9, color: "var(--color-text-tertiary)", paddingBottom: 4 }}>
+            live usage unavailable — {ctUsage.message || "no metrics source"}
+          </div>
+        )}
+        {p.containers.map((c) => <ContainerBlock key={c.name} c={c} u={usageByContainer.get(c.name)} />)}
       </InspectorSection>
 
       {/* Conditions */}
@@ -1113,8 +1136,15 @@ function containerStateParts(state: string): { word: string; reason: string } {
   return i < 0 ? { word: state, reason: "" } : { word: state.slice(0, i), reason: state.slice(i + 1) };
 }
 
-function ContainerBlock({ c }: { c: ContainerSummaryDTO }) {
+function ContainerBlock({ c, u }: { c: ContainerSummaryDTO; u?: ContainerUsageDTO }) {
   const { word, reason } = containerStateParts(c.state);
+  // Rightsizing findings: usage vs the container's declared requests/limits.
+  // Diagnosis framing - throttle/OOM proximity first, oversized request second.
+  const findings = [
+    rightsizing("cpu", u?.cpu ?? null, c.cpuRequest, c.cpuLimit),
+    rightsizing("mem", u?.mem ?? null, c.memRequest, c.memLimit),
+  ].filter((f): f is NonNullable<typeof f> => f !== null);
+  const fmtRes = (v: number | null | undefined, format: (n: number) => string) => (v == null ? "—" : format(v));
   // terminated:Completed is the normal init-container end state, not a fault.
   const faulted = word !== "" && word !== "running" && reason !== "Completed";
   const stateColor = word === "running"
@@ -1151,6 +1181,27 @@ function ContainerBlock({ c }: { c: ContainerSummaryDTO }) {
           </span>
         </>
       )}
+      {u && (u.cpu != null || u.mem != null) && (
+        <>
+          <span style={{ color: "var(--color-text-tertiary)" }}>usage</span>
+          <span style={{ ...ellipsis, color: "var(--color-text-secondary)" }}>
+            cpu {fmtRes(u.cpu, fmtCpu)} · mem {fmtRes(u.mem, fmtMem)}
+          </span>
+        </>
+      )}
+      {(c.cpuRequest != null || c.memRequest != null || c.cpuLimit != null || c.memLimit != null) && (
+        <>
+          <span style={{ color: "var(--color-text-tertiary)" }}>req / lim</span>
+          <span style={{ ...ellipsis, color: "var(--color-text-tertiary)" }}>
+            cpu {fmtRes(c.cpuRequest, fmtCpu)}/{fmtRes(c.cpuLimit, fmtCpu)} · mem {fmtRes(c.memRequest, fmtMem)}/{fmtRes(c.memLimit, fmtMem)}
+          </span>
+        </>
+      )}
+      {findings.map((f) => (
+        <span key={f.label} style={{ gridColumn: "1 / -1", fontSize: 10, fontWeight: f.tier === "danger" ? 600 : undefined, color: f.tier === "danger" ? "var(--color-text-danger)" : f.tier === "warn" ? "var(--color-text-warning)" : "var(--color-text-info)" }}>
+          {f.label}
+        </span>
+      ))}
     </div>
   );
 }

@@ -4,10 +4,13 @@ import { useFleet } from "../store/fleet";
 import type { ConditionDTO, NodeDetailDTO, NodeSummaryDTO, PodOnNodeDTO } from "../store/fleet";
 import { listNodes, openNodeDetail, cordonNode, startDrain, cancelDrain } from "../bridge/nodes";
 import type { DrainOptions } from "../bridge/nodes";
+import { getNodeUtilization } from "../bridge/metrics";
+import type { NodeUtilizationResultDTO } from "../store/fleet";
+import { saturation } from "./saturation";
 import { ConfirmDialog } from "../chrome/ConfirmDialog";
 import { DescribePane } from "../chrome/DescribePane";
 import { MetaTile, OperationDialog, OptionTile } from "../chrome/OperationDialog";
-import { fmtMem } from "./saturation";
+import { fmtMem, fmtCpu } from "./saturation";
 import { useResizablePanel } from "../chrome/useResizablePanel";
 import { useNavIntent } from "../chrome/useNavIntent";
 import { useListKeys } from "../chrome/useListKeys";
@@ -34,7 +37,7 @@ function nodeDotColor(n: NodeSummaryDTO): string {
 
 
 // columns: dot | name | roles | status | version | cpu alloc/cap | mem alloc/cap | taints | age
-const gridCols = "12px minmax(170px,1.5fr) 86px minmax(120px,1fr) 82px 112px 132px 48px 44px";
+const gridCols = "12px minmax(150px,1.5fr) 80px minmax(110px,1fr) 76px 104px 120px 104px 120px 44px 44px";
 type NodeFilter = "all" | "attention" | "cordoned" | "tainted";
 
 function conditionIsProblem(c: ConditionDTO): boolean {
@@ -409,6 +412,22 @@ export function NodesView({ cluster }: { cluster: string }) {
     return () => { useFleet.getState().clearNodes(); };
   }, [cluster]);
 
+  // Live per-node usage (pod-attributed) - fetched alongside the list, joined
+  // by node name at render. Unavailable metrics degrade the two usage columns
+  // to "—" with a caption, never the whole board.
+  const [util, setUtil] = useState<NodeUtilizationResultDTO | null>(null);
+  useEffect(() => {
+    let live = true;
+    setUtil(null);
+    void getNodeUtilization(cluster).then((r) => { if (live) setUtil(r); });
+    return () => { live = false; };
+  }, [cluster]);
+  const usageByNode = useMemo(() => {
+    const m = new Map<string, { cpu: number | null; mem: number | null }>();
+    for (const it of util?.items ?? []) m.set(it.node, { cpu: it.cpu, mem: it.mem });
+    return m;
+  }, [util]);
+
   // Palette verbs land here as one-shot intents once the node list is loaded.
   useNavIntent(cluster, ["drain-node", "cordon-node", "select-node"], (intent) => {
     if (nodes.loading || nodes.items.length === 0) return "wait";
@@ -421,7 +440,10 @@ export function NodesView({ cluster }: { cluster: string }) {
     return "consumed";
   }, [nodes.items, nodes.loading]);
 
-  const onRefresh = () => { void listNodes(cluster); };
+  const onRefresh = () => {
+    void listNodes(cluster);
+    void getNodeUtilization(cluster).then(setUtil);
+  };
   const receivedAt = useReceivedAt(nodes.cluster === cluster && !nodes.loading && nodes.items.length > 0 ? nodes.items : null);
   const orderedNodes = useMemo(
     () => [...nodes.items].sort((a, b) => nodeRank(a) - nodeRank(b) || a.name.localeCompare(b.name)),
@@ -526,6 +548,19 @@ export function NodesView({ cluster }: { cluster: string }) {
           {visibleNodes.length !== nodes.items.length && <span style={{ fontSize: 10, color: "var(--color-text-tertiary)" }}>{visibleNodes.length} of {nodes.items.length}</span>}
         </div>
 
+        {util !== null && (
+          util.available ? (
+            <div style={{ fontSize: 9, color: "var(--color-text-tertiary)", flexShrink: 0 }}>
+              cpu/mem used = pod usage vs allocatable (5m rate) — node OS/kubelet overhead not included
+              {util.message ? ` · ${util.message}` : ""}
+            </div>
+          ) : (
+            <div style={{ fontSize: 9, color: "var(--color-text-warning)", flexShrink: 0 }} data-testid="node-util-unavailable">
+              live usage unavailable — {util.message || "no metrics source"}
+            </div>
+          )
+        )}
+
         {nodes.loading && nodes.items.length === 0 ? (
           <SkeletonRows rows={6} label="loading nodes" />
         ) : nodes.items.length === 0 ? (
@@ -537,7 +572,7 @@ export function NodesView({ cluster }: { cluster: string }) {
         ) : (
           <div style={{ ...well, overflow: "hidden", flex: 1, minHeight: 0, display: "flex", flexDirection: "column", fontFamily: "var(--font-mono)", fontSize: 12 }}>
             <div style={{ display: "grid", gridTemplateColumns: gridCols, gap: 10, padding: "5px 8px", fontSize: 9, color: "var(--color-text-tertiary)", borderBottom: "0.5px solid var(--color-border-secondary)", flexShrink: 0 }}>
-              <span /><span>node</span><span>roles</span><span>status</span><span>version</span><span>cpu alloc/cap</span><span>mem alloc/cap</span><span>taints</span><span>age</span>
+              <span /><span>node</span><span>roles</span><span>status</span><span>version</span><span>cpu used</span><span>mem used</span><span>cpu alloc/cap</span><span>mem alloc/cap</span><span>taints</span><span>age</span>
             </div>
             <div data-testid="nodes-list-scroll" style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
               {visibleNodes.length === 0 ? (
@@ -574,6 +609,8 @@ export function NodesView({ cluster }: { cluster: string }) {
                     </span>
                     <span style={{ color: nodeStatusColor(n), ...ellipsis }}>{nodeStatusText(n)}</span>
                     <span style={{ color: "var(--color-text-tertiary)", ...ellipsis }}>{n.version}</span>
+                    <UsageCell resource="cpu" usage={usageByNode.get(n.name)?.cpu ?? null} allocatable={n.cpuAllocatable} format={fmtCpu} />
+                    <UsageCell resource="mem" usage={usageByNode.get(n.name)?.mem ?? null} allocatable={n.memAllocatable} format={fmtMem} />
                     <CapacityCell value={n.cpuAllocatable} total={n.cpuCapacity} format={(v) => v.toFixed(1)} />
                     <CapacityCell value={n.memAllocatable} total={n.memCapacity} format={fmtMem} />
                     <span style={{ color: n.taintCount > 0 ? "var(--color-text-warning)" : "var(--color-text-tertiary)" }}>
@@ -653,6 +690,35 @@ export function NodesView({ cluster }: { cluster: string }) {
         />
       )}
     </div>
+  );
+}
+
+// UsageCell renders live pod-attributed usage against allocatable with the
+// shared saturation tiers (Signal Bench: only a hot node glows). No sample
+// renders "—", never a zero bar.
+function UsageCell({ resource, usage, allocatable, format }: {
+  resource: "cpu" | "mem";
+  usage: number | null;
+  allocatable: number;
+  format: (v: number) => string;
+}) {
+  if (usage == null) {
+    return <span style={{ color: "var(--color-text-tertiary)" }}>—</span>;
+  }
+  const sat = saturation(resource, usage, allocatable > 0 ? allocatable : null);
+  const pct = sat.pct == null ? 0 : Math.max(0, Math.min(100, sat.pct * 100));
+  const barColor = sat.tier === "danger" ? "var(--color-text-danger)" : sat.tier === "warn" ? "var(--color-text-warning)" : "var(--color-text-success)";
+  const textColor = sat.tier === "danger" ? "var(--color-text-danger)" : sat.tier === "warn" ? "var(--color-text-warning)" : "var(--color-text-secondary)";
+  return (
+    <span style={{ color: textColor, display: "inline-flex", flexDirection: "column", gap: 2, minWidth: 0 }}>
+      <span style={{ ...ellipsis }} title={`${format(usage)} of ${format(allocatable)} allocatable`}>
+        {format(usage)}
+        <span style={{ color: "var(--color-text-tertiary)" }}> ({sat.pct == null ? "?" : Math.round(sat.pct * 100)}%)</span>
+      </span>
+      <span style={{ height: 4, background: "var(--color-background-secondary)", borderRadius: 2, overflow: "hidden" }}>
+        <span style={{ display: "block", height: "100%", width: `${pct}%`, background: barColor }} />
+      </span>
+    </span>
   );
 }
 

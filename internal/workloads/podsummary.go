@@ -38,6 +38,13 @@ type ContainerSummary struct {
 	LastReason       string
 	LastExitCode     int
 	LastFinishedUnix int64 // FinishedAt.Unix(), 0 when absent
+	// Declared resources from the container spec (cpu cores, memory bytes).
+	// nil = not set on the spec - the rightsizing delta needs "unset" and "0"
+	// to stay distinguishable.
+	CPURequest *float64
+	CPULimit   *float64
+	MemRequest *float64
+	MemLimit   *float64
 }
 
 // ContainerPort is one declared port on a container spec. Port-forward
@@ -150,6 +157,7 @@ func buildContainerSummaries(p *corev1.Pod) []ContainerSummary {
 			Image: c.Image,
 			Init:  true,
 		}
+		applyContainerResources(&sum, c)
 		if ok {
 			sum.Ready = cs.Ready
 			sum.Restarts = int(cs.RestartCount)
@@ -167,6 +175,7 @@ func buildContainerSummaries(p *corev1.Pod) []ContainerSummary {
 			Init:  false,
 			Ports: containerPorts(c.Ports),
 		}
+		applyContainerResources(&sum, c)
 		if ok {
 			sum.Ready = cs.Ready
 			sum.Restarts = int(cs.RestartCount)
@@ -182,6 +191,27 @@ func buildContainerSummaries(p *corev1.Pod) []ContainerSummary {
 // containerPorts maps spec ports onto the summary shape. Init containers are
 // skipped by the caller (they never serve traffic); protocol defaults to TCP
 // per the API convention.
+// applyContainerResources copies the spec's declared cpu/memory requests and
+// limits (cores, bytes). Absent quantities stay nil - never a fabricated zero.
+func applyContainerResources(sum *ContainerSummary, c corev1.Container) {
+	if q, ok := c.Resources.Requests[corev1.ResourceCPU]; ok {
+		v := q.AsApproximateFloat64()
+		sum.CPURequest = &v
+	}
+	if q, ok := c.Resources.Limits[corev1.ResourceCPU]; ok {
+		v := q.AsApproximateFloat64()
+		sum.CPULimit = &v
+	}
+	if q, ok := c.Resources.Requests[corev1.ResourceMemory]; ok {
+		v := q.AsApproximateFloat64()
+		sum.MemRequest = &v
+	}
+	if q, ok := c.Resources.Limits[corev1.ResourceMemory]; ok {
+		v := q.AsApproximateFloat64()
+		sum.MemLimit = &v
+	}
+}
+
 func containerPorts(ports []corev1.ContainerPort) []ContainerPort {
 	if len(ports) == 0 {
 		return nil
