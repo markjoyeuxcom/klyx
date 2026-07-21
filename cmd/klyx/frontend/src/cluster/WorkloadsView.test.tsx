@@ -8,6 +8,9 @@ vi.mock("../bridge/workloads", () => ({
   listWorkloads: vi.fn().mockResolvedValue(undefined),
   openLiveWorkloads: vi.fn().mockReturnValue(() => {}),
   rolloutRestart: vi.fn().mockResolvedValue(undefined),
+  rolloutHistory: vi.fn(async () => ({ revisions: [] })),
+  rolloutUndo: vi.fn().mockResolvedValue(undefined),
+  rolloutPause: vi.fn().mockResolvedValue(undefined),
   scaleWorkload: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock("../bridge/workload-metrics", () => ({ getWorkloadMetrics: vi.fn().mockResolvedValue(undefined) }));
@@ -33,7 +36,7 @@ vi.mock("./LogsPane", () => ({
     <div data-testid="logs-pane-stub">{workload ? `${workload.kind}:${pod.namespace}/${workload.name}` : `pod:${pod.namespace}/${pod.name}`}</div>
   ),
 }));
-import { rolloutRestart, scaleWorkload, openLiveWorkloads } from "../bridge/workloads";
+import { rolloutRestart, rolloutHistory, rolloutUndo, rolloutPause, scaleWorkload, openLiveWorkloads } from "../bridge/workloads";
 import { openWorkloadLogsWindow } from "../bridge/windows";
 
 const noResources = { cpu: { usage: null, request: null, limit: null }, mem: { usage: null, request: null, limit: null } };
@@ -62,6 +65,61 @@ describe("WorkloadsView", () => {
     fireEvent.click(getByText("ollama"));
     expect(getByText("ollama-x")).toBeTruthy();
     expect(getByText("node-3")).toBeTruthy();
+  });
+
+  it("rollout history lists revisions; undo opens the danger confirm with the GitOps warning", async () => {
+    vi.mocked(rolloutHistory).mockResolvedValue({
+      revisions: [
+        { revision: 3, ageSeconds: 600, images: ["shop/cart:v3"], current: true },
+        { revision: 2, ageSeconds: 7200, images: ["shop/cart:v2"], current: false, changeCause: "hotfix" },
+      ],
+    });
+    seed([broken]);
+    const { getByText, findByText, queryByText } = render(<WorkloadsView cluster="homelab-nelli" />);
+    fireEvent.click(getByText("ollama"));
+    expect(await findByText("#3")).toBeTruthy();
+    expect(getByText("current")).toBeTruthy();
+    // The current revision gets no undo; revision 2 does.
+    const undoButtons = getByText("undo →");
+    fireEvent.click(undoButtons);
+    // Danger confirm names the target AND the GitOps-owned consequence.
+    expect(await findByText(/revision 2/)).toBeTruthy();
+    expect(getByText(/Flux will revert this on its next reconcile/)).toBeTruthy();
+    expect(getByText("Roll back")).toBeTruthy();
+    expect(vi.mocked(rolloutUndo)).not.toHaveBeenCalled();
+    fireEvent.click(getByText("Roll back"));
+    expect(vi.mocked(rolloutUndo)).toHaveBeenCalledWith("homelab-nelli", "Deployment", "ollama-prod", "ollama", 2);
+    expect(queryByText("Roll back")).toBeNull();
+  });
+
+  it("a failed history read renders its error, never a silently missing section", async () => {
+    vi.mocked(rolloutHistory).mockResolvedValue({ revisions: [], error: "list replicasets in shop: forbidden" });
+    seed([broken]);
+    const { getByText, findByText } = render(<WorkloadsView cluster="homelab-nelli" />);
+    fireEvent.click(getByText("ollama"));
+    expect(await findByText(/list replicasets in shop: forbidden/)).toBeTruthy();
+  });
+
+  it("pause/resume: button flips with paused state and the confirm fires the verb", async () => {
+    seed([{ ...healthy, paused: true }]);
+    const { getByText, findByText } = render(<WorkloadsView cluster="homelab-nelli" />);
+    fireEvent.click(getByText("grafana"));
+    // Paused state: the resume affordance + the status fact.
+    const resume = await findByText("resume rollouts");
+    expect(getByText("paused")).toBeTruthy();
+    fireEvent.click(resume);
+    expect(await findByText("Resume")).toBeTruthy();
+    fireEvent.click(getByText("Resume"));
+    expect(vi.mocked(rolloutPause)).toHaveBeenCalledWith("homelab-nelli", "monitoring", "grafana", false);
+  });
+
+  it("pause is Deployment-only: no button on other kinds", async () => {
+    seed([{ ...broken, kind: "DaemonSet" }]);
+    const { getByText, queryByText, findByTestId } = render(<WorkloadsView cluster="homelab-nelli" />);
+    fireEvent.click(getByText("ollama"));
+    await findByTestId("rollout-section");
+    expect(queryByText("pause rollouts")).toBeNull();
+    expect(queryByText("resume rollouts")).toBeNull();
   });
 
   it("needs-attention filter hides healthy rows", () => {

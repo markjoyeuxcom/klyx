@@ -88,6 +88,9 @@ type Conn interface {
 	WorkloadSparklines(ctx context.Context, kind, namespace, name string) (SparklineSet, error)
 	ClusterSparklines(ctx context.Context) (SparklineSet, error)
 	RolloutRestart(ctx context.Context, kind, namespace, name string) error
+	RolloutHistory(ctx context.Context, kind, namespace, name string) ([]workloads.RolloutRevision, error)
+	RolloutUndo(ctx context.Context, kind, namespace, name string, revision int64) error
+	RolloutPause(ctx context.Context, namespace, name string, pause bool) error
 	ScaleWorkload(ctx context.Context, kind, namespace, name string, replicas int32) error
 	CountResource(ctx context.Context, group, version, plural string) (int, bool, error)
 	ListInstances(ctx context.Context, group, version, plural string, limit int64, continueToken string) ([]crd.InstanceMeta, string, error)

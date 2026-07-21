@@ -1,8 +1,8 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import { IconTerminal2, IconExternalLink, IconBox, IconX, IconAlertTriangle } from "@tabler/icons-react";
 import { useFleet } from "../store/fleet";
-import type { WorkloadDTO, PodDTO, WorkloadKind, ResourceCellDTO } from "../store/fleet";
-import { listWorkloads, openLiveWorkloads, rolloutRestart, scaleWorkload } from "../bridge/workloads";
+import type { WorkloadDTO, PodDTO, WorkloadKind, ResourceCellDTO, RolloutRevisionDTO } from "../store/fleet";
+import { listWorkloads, openLiveWorkloads, rolloutRestart, rolloutHistory, rolloutUndo, rolloutPause, scaleWorkload } from "../bridge/workloads";
 import { deletePod, openPodDetail } from "../bridge/pods";
 import { getWorkloadMetrics } from "../bridge/workload-metrics";
 import { getWorkloadSparklines } from "../bridge/metrics";
@@ -44,6 +44,13 @@ const rankTone: Record<string, Tone> = {
 const KINDS: WorkloadKind[] = ["Deployment", "StatefulSet", "DaemonSet"];
 const kindShort: Record<WorkloadKind, string> = { Deployment: "deploy", StatefulSet: "sts", DaemonSet: "daemonset" };
 const keyOf = (w: WorkloadDTO) => `${w.kind}/${w.namespace}/${w.name}`;
+
+function ago(sec: number): string {
+  if (sec < 60) return `${sec}s`;
+  if (sec < 3600) return `${Math.floor(sec / 60)}m`;
+  if (sec < 86400) return `${Math.floor(sec / 3600)}h`;
+  return `${Math.floor(sec / 86400)}d`;
+}
 // Fixed row height (px, incl. border) — must match the VirtualList rowHeight so
 // the windowing math lines up with the real DOM rows.
 const ROW_HEIGHT = 32;
@@ -83,7 +90,9 @@ type PendingRestart = { kind: "restart"; w: WorkloadDTO };
 type PendingScale = { kind: "scale"; w: WorkloadDTO; replicas: number };
 type PendingScaleInput = { kind: "scale-input"; w: WorkloadDTO };
 type PendingDeletePod = { kind: "delete-pod"; w: WorkloadDTO; pod: PodDTO };
-type Pending = PendingRestart | PendingScale | PendingScaleInput | PendingDeletePod;
+type PendingUndo = { kind: "undo"; w: WorkloadDTO; rev: RolloutRevisionDTO };
+type PendingPause = { kind: "pause"; w: WorkloadDTO; pause: boolean };
+type Pending = PendingRestart | PendingScale | PendingScaleInput | PendingDeletePod | PendingUndo | PendingPause;
 
 export function WorkloadsView({ cluster }: { cluster: string }) {
   const wl = useFleet((s) => s.workloads);
@@ -467,6 +476,9 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
             useFleet.getState().requestNavIntent({ kind: "select-flux", cluster, fluxKind: w.gitops.kind, namespace: w.gitops.namespace, name: w.gitops.name });
           }}
           onCompare={fleetSize > 1 ? (w) => setCompareTarget(w) : undefined}
+          onUndo={(w, rev) => setPending({ kind: "undo", w, rev })}
+          onPause={(w, pause) => setPending({ kind: "pause", w, pause })}
+          cluster={cluster}
         />
       </div>
 
@@ -522,6 +534,43 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
             const { w, replicas } = pending;
             setPending(null);
             void scaleWorkload(cluster, w.kind, w.namespace, w.name, replicas);
+          }}
+        />
+      )}
+      {pending?.kind === "undo" && (
+        <ConfirmDialog
+          title="roll back"
+          cluster={cluster}
+          detail={
+            `${pending.w.kind.toLowerCase()} ${pending.w.namespace}/${pending.w.name} → revision ${pending.rev.revision}` +
+            (pending.rev.images.length > 0 ? ` (${pending.rev.images.join(", ")})` : "") +
+            (pending.w.gitops
+              ? ` — GitOps-owned (${pending.w.gitops.kind}/${pending.w.gitops.name}): Flux will revert this on its next reconcile. Undo is incident response; make the real fix in Git.`
+              : "")
+          }
+          protected={isProtected}
+          danger
+          confirmLabel="Roll back"
+          onCancel={() => setPending(null)}
+          onConfirm={() => {
+            const { w, rev } = pending;
+            setPending(null);
+            void rolloutUndo(cluster, w.kind, w.namespace, w.name, rev.revision);
+          }}
+        />
+      )}
+      {pending?.kind === "pause" && (
+        <ConfirmDialog
+          title={pending.pause ? "pause rollouts" : "resume rollouts"}
+          cluster={cluster}
+          detail={`deployment ${pending.w.namespace}/${pending.w.name} — ${pending.pause ? "hold rollouts (running pods untouched)" : "apply any held template changes"}`}
+          protected={isProtected}
+          confirmLabel={pending.pause ? "Pause" : "Resume"}
+          onCancel={() => setPending(null)}
+          onConfirm={() => {
+            const { w, pause } = pending;
+            setPending(null);
+            void rolloutPause(cluster, w.namespace, w.name, pause);
           }}
         />
       )}
@@ -600,12 +649,16 @@ function WorkloadContextPanel({
   onOpenNode,
   onOpenFluxOwner,
   onCompare,
+  onUndo,
+  onPause,
+  cluster,
 }: {
   workload: WorkloadDTO | null;
   attention: number;
   expanded: boolean;
   onClose: () => void;
   isProtected: boolean;
+  cluster: string;
   reloaderPresent: boolean;
   reloaderHealthy: boolean;
   pending: Pending | null;
@@ -620,6 +673,8 @@ function WorkloadContextPanel({
   onOpenFluxOwner: (w: WorkloadDTO) => void;
   // Fleet compare (undefined on a single-cluster fleet - no dead button).
   onCompare?: (w: WorkloadDTO) => void;
+  onUndo: (w: WorkloadDTO, rev: RolloutRevisionDTO) => void;
+  onPause: (w: WorkloadDTO, pause: boolean) => void;
 }) {
   if (!workload) {
     return (
@@ -665,6 +720,13 @@ function WorkloadContextPanel({
         <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
           <button onClick={() => onLogs(workload)} style={{ ...btn, color: "var(--color-text-info)", borderColor: "var(--color-border-info)", background: "var(--color-background-info)" }}>tail logs</button>
           <button onClick={() => onRestart(workload)} style={btn}>restart</button>
+          {workload.kind === "Deployment" && (
+            <button
+              onClick={() => onPause(workload, !workload.paused)}
+              title={workload.paused ? "Resume rollouts (spec.paused=false)" : "Hold rollouts without touching pods (spec.paused=true)"}
+              style={workload.paused ? { ...btn, color: "var(--color-text-warning)", borderColor: "var(--color-border-warning)", background: "var(--color-background-warning)" } : btn}
+            >{workload.paused ? "resume rollouts" : "pause rollouts"}</button>
+          )}
           {/* Match the pending action by stable key, not DTO identity — live
               emits replace the DTOs, and an identity match dismissed the open
               popover on every update. */}
@@ -705,6 +767,9 @@ function WorkloadContextPanel({
             { label: "restarts", value: workload.restarts, tone: workload.restarts > 0 ? "warning" : undefined },
             { label: "updated", value: workload.updated },
             { label: "available", value: workload.available },
+            // Paused is an intended operator state (rollouts held), surfaced
+            // like Suspended on the GitOps side - visible, not alarming.
+            ...(workload.paused ? [{ label: "rollouts", value: "paused", tone: "warning" as const }] : []),
           ]}
         />
         <div style={{ display: "grid", gridTemplateColumns: "88px 1fr", gap: "5px 10px", fontFamily: "var(--font-mono)", fontSize: 11 }}>
@@ -721,6 +786,8 @@ function WorkloadContextPanel({
           )}
         </div>
       </div>
+
+      <RolloutSection cluster={cluster} workload={workload} onUndo={onUndo} />
 
       {workload.reloader && (
         <div style={{ padding: "12px 14px", borderBottom: "0.5px solid var(--color-border-tertiary)", display: "grid", gap: 8 }}>
@@ -961,6 +1028,74 @@ function WorkloadLogsDock({
 // ReloadChip is one reload-target ConfigMap/Secret, cross-linked to its manifest
 // in Resources (same openResource+openInstance pattern as the workload manifest
 // button). A kind tag (CM/SEC) disambiguates the two lists in one row.
+// RolloutSection: the workload's revision history (newest first) with per-row
+// undo. History is fetched on selection; a failed read renders its error, an
+// empty history says so - never a silently missing section. The undo button
+// only OPENS the confirm (danger + prd arming + the GitOps-owned warning);
+// nothing fires from here.
+const ROLLOUT_SHOWN = 8;
+
+function RolloutSection({ cluster, workload, onUndo }: {
+  cluster: string;
+  workload: WorkloadDTO;
+  onUndo: (w: WorkloadDTO, rev: RolloutRevisionDTO) => void;
+}) {
+  const [history, setHistory] = useState<{ key: string; revisions: RolloutRevisionDTO[]; error?: string } | null>(null);
+  const key = keyOf(workload);
+  useEffect(() => {
+    let live = true;
+    setHistory(null);
+    void rolloutHistory(cluster, workload.kind, workload.namespace, workload.name).then((r) => {
+      if (live) setHistory({ key, revisions: r.revisions, error: r.error });
+    });
+    return () => { live = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cluster, key]);
+
+  const rows = history?.key === key ? history.revisions : null;
+  return (
+    <div data-testid="rollout-section" style={{ padding: "12px 14px", borderBottom: "0.5px solid var(--color-border-tertiary)", display: "grid", gap: 6 }}>
+      <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5, color: "var(--color-text-tertiary)" }}>
+        rollout history{rows ? ` · ${rows.length}` : ""}
+      </div>
+      {history?.error ? (
+        <div style={{ fontSize: 11, color: "var(--color-text-danger)", overflowWrap: "anywhere" }}>{history.error}</div>
+      ) : rows === null ? (
+        <div style={{ fontSize: 11, color: "var(--color-text-tertiary)" }}>reading revisions…</div>
+      ) : rows.length === 0 ? (
+        <div style={{ fontSize: 11, color: "var(--color-text-tertiary)" }}>no revision history recorded</div>
+      ) : (
+        <>
+          {rows.slice(0, ROLLOUT_SHOWN).map((r) => (
+            <div key={r.revision} data-rowhost="true" style={{ display: "flex", alignItems: "baseline", gap: 8, fontFamily: "var(--font-mono)", fontSize: 11 }}>
+              <span style={{ color: "var(--color-text-secondary)", minWidth: 28 }}>#{r.revision}</span>
+              <span style={{ color: "var(--color-text-tertiary)", minWidth: 34 }}>{ago(r.ageSeconds)}</span>
+              <span
+                style={{ ...ellipsis, flex: 1, color: "var(--color-text-secondary)" }}
+                title={[...r.images, r.changeCause ? `cause: ${r.changeCause}` : ""].filter(Boolean).join("\n")}
+              >
+                {r.images.length > 0 ? r.images.join(" · ") : "—"}
+              </span>
+              {r.current ? (
+                <span style={{ fontSize: 9, textTransform: "uppercase", letterSpacing: 0.5, color: "var(--color-text-success)", flexShrink: 0 }}>current</span>
+              ) : (
+                <button
+                  onClick={() => onUndo(workload, r)}
+                  title={`Roll back to revision ${r.revision}`}
+                  style={{ ...btn, fontSize: 10, padding: "1px 8px", color: "var(--color-text-danger)", borderColor: "var(--color-border-danger)", flexShrink: 0 }}
+                >undo →</button>
+              )}
+            </div>
+          ))}
+          {rows.length > ROLLOUT_SHOWN && (
+            <span style={{ fontSize: 10, color: "var(--color-text-tertiary)" }}>+{rows.length - ROLLOUT_SHOWN} older revisions</span>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 function ReloadChip({ kind, name, namespace }: { kind: "ConfigMap" | "Secret"; name: string; namespace: string }) {
   const open = () => {
     const ref = wellKnownResourceRef("", kind);

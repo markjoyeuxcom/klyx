@@ -1,5 +1,5 @@
 import { Events } from "@wailsio/runtime";
-import { useFleet, WorkloadsResultDTO, WorkloadCompareDTO } from "../store/fleet";
+import { useFleet, WorkloadsResultDTO, WorkloadCompareDTO, RolloutHistoryResultDTO } from "../store/fleet";
 import { WorkloadsService } from "../../bindings/github.com/moomora/klyx/internal/appbridge/index.js";
 import { liveOpenRetryMs } from "./pods";
 
@@ -106,4 +106,42 @@ export function openLiveWorkloads(cluster: string, namespace: string): () => voi
 // the fleet compare. Errors fold into the DTO (degraded, never "absent").
 export async function workloadCompare(cluster: string, kind: string, namespace: string, name: string): Promise<WorkloadCompareDTO> {
   return (await WorkloadsService.WorkloadCompare(cluster, kind, namespace, name)) as WorkloadCompareDTO;
+}
+
+// Rollout history + undo + pause/resume (the last ranked day-2 verbs).
+// History is read-only; undo/pause go through the same toast + relist flow as
+// restart/scale. Undo is destructive: the caller's ConfirmDialog armed the
+// protected grant before this fires - the backend re-checks regardless.
+export async function rolloutHistory(cluster: string, kind: string, namespace: string, name: string): Promise<RolloutHistoryResultDTO> {
+  try {
+    return (await WorkloadsService.RolloutHistory(cluster, kind, namespace, name)) as RolloutHistoryResultDTO;
+  } catch (e) {
+    return { revisions: [], error: e instanceof Error ? e.message : "rollout history failed" };
+  }
+}
+
+export async function rolloutUndo(cluster: string, kind: string, namespace: string, name: string, revision: number): Promise<void> {
+  const r = (await WorkloadsService.RolloutUndo(cluster, kind, namespace, name, revision)) as ActionResultDTO;
+  useFleet.getState().setActionStatus(
+    r.ok
+      ? { kind: "success", message: `rolled ${kind.toLowerCase()} ${namespace}/${name} back to revision ${revision}` }
+      : { kind: "error", message: r.error || "Rollback failed" },
+  );
+  if (r.ok) {
+    const cur = useFleet.getState().workloads;
+    void listWorkloads(cluster, cur.namespace);
+  }
+}
+
+export async function rolloutPause(cluster: string, namespace: string, name: string, pause: boolean): Promise<void> {
+  const r = (await WorkloadsService.RolloutPause(cluster, namespace, name, pause)) as ActionResultDTO;
+  useFleet.getState().setActionStatus(
+    r.ok
+      ? { kind: "success", message: `${pause ? "paused" : "resumed"} rollouts for deployment ${namespace}/${name}` }
+      : { kind: "error", message: r.error || (pause ? "Pause failed" : "Resume failed") },
+  );
+  if (r.ok) {
+    const cur = useFleet.getState().workloads;
+    void listWorkloads(cluster, cur.namespace);
+  }
 }

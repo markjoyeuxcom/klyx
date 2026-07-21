@@ -34,6 +34,71 @@ func (s *WorkloadsService) ScaleWorkload(cluster, kind, namespace, name string, 
 	return ActionResultDTO{OK: true}
 }
 
+// RolloutHistory returns a workload's revision history, newest first.
+// Read-only: no protected gating.
+func (s *WorkloadsService) RolloutHistory(cluster, kind, namespace, name string) RolloutHistoryResultDTO {
+	conn, ok := s.lookup(cluster)
+	if !ok {
+		return RolloutHistoryResultDTO{Revisions: []RolloutRevisionDTO{}, Error: "cluster not connected: " + cluster}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
+	defer cancel()
+	revs, err := conn.RolloutHistory(ctx, kind, namespace, name)
+	if err != nil {
+		return RolloutHistoryResultDTO{Revisions: []RolloutRevisionDTO{}, Error: err.Error()}
+	}
+	out := RolloutHistoryResultDTO{Revisions: make([]RolloutRevisionDTO, 0, len(revs))}
+	for _, r := range revs {
+		images := r.Images
+		if images == nil {
+			images = []string{}
+		}
+		out.Revisions = append(out.Revisions, RolloutRevisionDTO{
+			Revision: r.Revision, AgeSeconds: r.AgeSeconds, Images: images,
+			Current: r.Current, ChangeCause: r.ChangeCause,
+		})
+	}
+	return out
+}
+
+// RolloutUndo rolls a workload back to a prior revision. Destructive: consumes
+// the protected-cluster grant, and the frontend confirm carries the
+// GitOps-owned-will-be-reverted warning.
+func (s *WorkloadsService) RolloutUndo(cluster, kind, namespace, name string, revision int) ActionResultDTO {
+	if err := checkProtected(cluster); err != nil {
+		return ActionResultDTO{Error: err.Error()}
+	}
+	conn, ok := s.lookup(cluster)
+	if !ok {
+		return ActionResultDTO{Error: "cluster not connected: " + cluster}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
+	defer cancel()
+	if err := conn.RolloutUndo(ctx, kind, namespace, name, int64(revision)); err != nil {
+		return ActionResultDTO{Error: err.Error()}
+	}
+	return ActionResultDTO{OK: true}
+}
+
+// RolloutPause pauses/resumes a Deployment's rollouts (spec.paused). Reversible
+// but still a spec mutation on a possibly-protected cluster, so it consumes the
+// grant like restart/scale.
+func (s *WorkloadsService) RolloutPause(cluster, namespace, name string, pause bool) ActionResultDTO {
+	if err := checkProtected(cluster); err != nil {
+		return ActionResultDTO{Error: err.Error()}
+	}
+	conn, ok := s.lookup(cluster)
+	if !ok {
+		return ActionResultDTO{Error: "cluster not connected: " + cluster}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
+	defer cancel()
+	if err := conn.RolloutPause(ctx, namespace, name, pause); err != nil {
+		return ActionResultDTO{Error: err.Error()}
+	}
+	return ActionResultDTO{OK: true}
+}
+
 // RolloutRestart triggers a rolling restart for a workload by patching the
 // pod-template restartedAt annotation. kind must be Deployment, StatefulSet,
 // or DaemonSet.
@@ -60,6 +125,9 @@ type WorkloadsConn interface {
 	WorkloadMetrics(ctx context.Context, namespace string) (map[string]workloads.Usage, workloads.UsageStatus)
 	WorkloadCompare(ctx context.Context, kind, ns, name string) (fleet.WorkloadCompareInfo, error)
 	RolloutRestart(ctx context.Context, kind, namespace, name string) error
+	RolloutHistory(ctx context.Context, kind, namespace, name string) ([]workloads.RolloutRevision, error)
+	RolloutUndo(ctx context.Context, kind, namespace, name string, revision int64) error
+	RolloutPause(ctx context.Context, namespace, name string, pause bool) error
 	ScaleWorkload(ctx context.Context, kind, namespace, name string, replicas int32) error
 	WatchDirty(ctx context.Context, namespace string, kinds []string, onDirty func(), onLive func(bool)) (stop func(), err error)
 }
@@ -159,6 +227,7 @@ func toWorkloadDTO(w workloads.Workload) WorkloadDTO {
 		Restarts: w.Restarts, Reason: w.Reason, Rank: w.Rank.String(),
 		Pods:  make([]PodDTO, 0, len(w.Pods)),
 		Stale: w.Generation > w.ObservedGeneration, Generation: w.Generation, ObservedGeneration: w.ObservedGeneration,
+		Paused: w.Paused,
 	}
 	if w.GitOps != nil {
 		d.GitOps = &OwnerDTO{Kind: w.GitOps.Kind, Namespace: w.GitOps.Namespace, Name: w.GitOps.Name}

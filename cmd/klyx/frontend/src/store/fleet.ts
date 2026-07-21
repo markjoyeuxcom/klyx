@@ -278,7 +278,12 @@ export type WorkloadCompareDTO = {
   specHash: string; ownerKind: string; ownerNamespace: string; ownerName: string; ownerRevision: string;
   error: string;
 };
-export type WorkloadDTO = { kind: string; namespace: string; name: string; desired: number; ready: number; available: number; updated: number; restarts: number; reason: string; rank: "unhealthy"|"degraded"|"restarts"|"healthy"; gitops: OwnerDTO | null; pods: PodDTO[]; resources: WorkloadResourcesDTO; stale?: boolean; generation?: number; observedGeneration?: number; reloader?: ReloadTargetsDTO | null };
+export type WorkloadDTO = { kind: string; namespace: string; name: string; desired: number; ready: number; available: number; updated: number; restarts: number; reason: string; rank: "unhealthy"|"degraded"|"restarts"|"healthy"; gitops: OwnerDTO | null; pods: PodDTO[]; resources: WorkloadResourcesDTO; stale?: boolean; generation?: number; observedGeneration?: number; reloader?: ReloadTargetsDTO | null; paused?: boolean };
+
+// Rollout history (newest first). Images may be empty when a
+// ControllerRevision's patch data carries no template - never fabricated.
+export type RolloutRevisionDTO = { revision: number; ageSeconds: number; images: string[]; current: boolean; changeCause?: string };
+export type RolloutHistoryResultDTO = { revisions: RolloutRevisionDTO[]; error?: string };
 export type WorkloadUsageDTO = { cpuUsage: number | null; memUsage: number | null };
 export type WorkloadMetricsStatusDTO = { available: boolean; message: string; updatedAt: string };
 export type WorkloadMetricsResultDTO = { status: WorkloadMetricsStatusDTO; usage: Record<string, WorkloadUsageDTO> };
