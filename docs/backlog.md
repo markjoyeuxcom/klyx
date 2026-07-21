@@ -1,8 +1,8 @@
 # Klyx backlog
 
-Consolidated 2026-07-09; last pruned 2026-07-20 (RBAC access lens shipped;
-earlier the same day: Hubble flow lens, fleet compare, the cross-platform exec
-fix; 2026-07-10: editable Tiers 1–3). Pulls together the "what's left" that was scattered across `CLAUDE.md`
+Consolidated 2026-07-09; last pruned 2026-07-21 (node + per-container
+utilization shipped; 2026-07-20: RBAC access lens, Hubble flow lens, fleet
+compare, the cross-platform exec fix; 2026-07-10: editable Tiers 1–3). Pulls together the "what's left" that was scattered across `CLAUDE.md`
 deferred notes, `docs/brainstorm-questions.md`, and the eyeball checklists.
 Living doc — prune items as they ship, add as they surface.
 
@@ -24,10 +24,13 @@ the need is real, not top-to-bottom.
       its prune warning, the "debug pod" launcher, the Scratch panel, and the fleet-compare
       modal (drift columns against the live DEV/STG/PRD tiers), the Hubble
       flows panel (drop reasons against the live Cilium fleet — also verifies
-      the new HasHubble detection fires on the real clusters), and the Access
+      the new HasHubble detection fires on the real clusters), the Access
       lens (a good live check: can-i as kustomize-controller on a prd cluster,
       who-can get secrets in a team namespace, and the ServiceAccount
-      inspector's "check access" cross-link prefilling the subject)
+      inspector's "check access" cross-link prefilling the subject), and the
+      utilization surfaces (node board cpu/mem used bars against the live AKS
+      tiers — is the hot node believable; a pod inspector's per-container
+      usage + a rightsizing chip on a known-oversized workload)
 - [ ] **Real-LLM smoke test** of the AI feature (local Ollama backend, or a hosted
       key) — everything is currently verified against a fake client
 - [ ] **Live-cluster smoke of the write paths** (nothing destructive committed
@@ -85,9 +88,8 @@ This is a walk-the-app-and-tick-boxes exercise; no coding is blocking 1.0.
 
 The un-built remainder of the ranked top-12 (see the plan doc for sketches):
 
-- [ ] **Live node + per-pod/container utilization** with a rightsizing delta
 - [ ] **Rollout history + undo + pause/resume** (undo is destructive: owner
-      sign-off on the confirm shape first)
+      sign-off on the confirm shape first) — the LAST un-built ranked item
 
 ## 4. Feature deferrals (from the milestone notes)
 
@@ -101,6 +103,11 @@ The un-built remainder of the ranked top-12 (see the plan doc for sketches):
       (SelfSubjectRulesReview); who-can across all namespaces (today: one
       namespace per query, or cluster-wide grants only — the honesty caption
       says which)
+- [ ] **Utilization follow-ups**: whole-node usage (needs a known node-label
+      scheme or node_exporter — today's columns are pod-attributed vs
+      allocatable, by design); a "which pod is hot on THIS node" drill-in from
+      the node inspector; rightsizing chips on the workloads list (the
+      per-container logic exists in `saturation.ts`)
 
 - [ ] **M10-f**: `flux diff --path` per-cluster local-clone-root config (makes
       `flux diff` resolve reliably)
@@ -132,6 +139,12 @@ The un-built remainder of the ranked top-12 (see the plan doc for sketches):
 
 ## 7. Blocked on you
 
+- [ ] **GitHub Actions budget exhausted** (hit 2026-07-21) — every CI job fails
+      in 2s with "an Actions budget is preventing further use" (private repo,
+      paid minutes). Raise the spending cap: github.com/settings/billing →
+      Budgets and alerts. PRs #41/#42 merged on full local gates (same
+      commands CI runs); the first green run on main after the reset
+      re-verifies them.
 - [ ] **Release signing / notarization** — inert scaffold in `release.yml`; needs
       the Apple notarytool creds + a Windows code-signing path (likely cloud
       signing — Azure Trusted Signing / DigiCert KeyLocker — not a PFX)
@@ -145,6 +158,15 @@ See `docs/brainstorm-questions.md` (Q16 pinned resources, etc.).
 ## Recently shipped (so it's not mistaken for open)
 
 Merged to `main` — do not re-add to the backlog:
+
+**2026-07-21 — node + per-container utilization (rightsizing delta):**
+- Node board cpu/mem "used" columns: pod-attributed live usage vs allocatable
+  with saturation tiers, joined from the confirmed per-pod cAdvisor series to
+  spec.nodeName (no node-label assumptions); overhead exclusion + pod-list-cap
+  under-count stated in captions. Pod inspector containers gained live usage,
+  declared req/lim, and rightsizing findings (near-limit OOM/throttle danger;
+  oversized request ≥8× with 50m/64Mi noise floors). nil = no sample
+  throughout; merged on local gates during the CI budget outage (#41)
 
 **2026-07-20 — RBAC access lens** (dates below corrected the same day — the
 fleet-compare and Hubble entries were briefly misdated 2026-08-04/05):
