@@ -4,16 +4,21 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/moomora/klyx/internal/fleet"
 	"github.com/moomora/klyx/internal/metrics"
+	"github.com/moomora/klyx/internal/workloads"
 )
 
 type fakeMetricsConn struct {
-	cm       metrics.ClusterMetrics
-	cap      metrics.MetricsCapability
-	spark    fleet.SparklineSet
-	sparkErr error
+	cm        metrics.ClusterMetrics
+	cap       metrics.MetricsCapability
+	spark     fleet.SparklineSet
+	sparkErr  error
+	nodeUsage []workloads.NodeUsage
+	podUsage  map[string]workloads.Usage
+	usageSt   workloads.UsageStatus
 }
 
 func (f fakeMetricsConn) ClusterMetrics(context.Context, bool) (metrics.ClusterMetrics, metrics.MetricsCapability) {
@@ -26,6 +31,14 @@ func (f fakeMetricsConn) WorkloadSparklines(context.Context, string, string, str
 
 func (f fakeMetricsConn) ClusterSparklines(context.Context) (fleet.SparklineSet, error) {
 	return f.spark, f.sparkErr
+}
+
+func (f fakeMetricsConn) NodeUtilization(context.Context) ([]workloads.NodeUsage, workloads.UsageStatus) {
+	return f.nodeUsage, f.usageSt
+}
+
+func (f fakeMetricsConn) PodContainerUsage(context.Context, string, string) (map[string]workloads.Usage, workloads.UsageStatus) {
+	return f.podUsage, f.usageSt
 }
 
 func TestGetClusterMetrics(t *testing.T) {
@@ -99,5 +112,54 @@ func TestGetClusterSparklines(t *testing.T) {
 	dto := s.GetClusterSparklines("c")
 	if !dto.Available || len(dto.CPU) != 1 || len(dto.Mem) != 1 || dto.Mem[0].V != 0.6 {
 		t.Fatalf("got %+v", dto)
+	}
+}
+
+func TestGetNodeUtilization(t *testing.T) {
+	cpu, mem := 0.75, 4096.0
+	conn := fakeMetricsConn{
+		nodeUsage: []workloads.NodeUsage{{Node: "node-1", CPU: &cpu, Mem: &mem, SampledPods: 3}},
+		usageSt:   workloads.UsageStatus{Available: true, Message: "pod list capped - node usage may under-count", UpdatedAt: time.Unix(1700, 0)},
+	}
+	s := NewMetricsService(func(string) (MetricsConn, bool) { return conn, true })
+	dto := s.GetNodeUtilization("c")
+	if !dto.Available || len(dto.Items) != 1 || dto.UpdatedAtUnix != 1700 {
+		t.Fatalf("dto: %+v", dto)
+	}
+	it := dto.Items[0]
+	if it.Node != "node-1" || it.CPU == nil || *it.CPU != 0.75 || it.Mem == nil || *it.Mem != 4096 || it.SampledPods != 3 {
+		t.Fatalf("item: %+v", it)
+	}
+	// Available=true + Message is the under-count caveat, and must survive the remap.
+	if dto.Message == "" {
+		t.Fatal("the cap caveat must reach the UI")
+	}
+
+	miss := NewMetricsService(func(string) (MetricsConn, bool) { return nil, false }).GetNodeUtilization("nope")
+	if miss.Available || miss.Message == "" || miss.Items == nil {
+		t.Fatalf("cluster miss must be honest and non-nil: %+v", miss)
+	}
+}
+
+func TestGetPodContainerUsage(t *testing.T) {
+	cpu := 0.02
+	conn := fakeMetricsConn{
+		podUsage: map[string]workloads.Usage{
+			"sidecar": {CPU: &cpu},
+			"app":     {},
+		},
+		usageSt: workloads.UsageStatus{Available: true, UpdatedAt: time.Unix(1800, 0)},
+	}
+	s := NewMetricsService(func(string) (MetricsConn, bool) { return conn, true })
+	dto := s.GetPodContainerUsage("c", "ns", "pod")
+	if !dto.Available || len(dto.Items) != 2 {
+		t.Fatalf("dto: %+v", dto)
+	}
+	// Sorted by container name for a stable render.
+	if dto.Items[0].Container != "app" || dto.Items[1].Container != "sidecar" {
+		t.Fatalf("order: %+v", dto.Items)
+	}
+	if dto.Items[1].CPU == nil || *dto.Items[1].CPU != 0.02 || dto.Items[1].Mem != nil {
+		t.Fatalf("sidecar: %+v", dto.Items[1])
 	}
 }

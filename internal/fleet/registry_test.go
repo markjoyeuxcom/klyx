@@ -212,6 +212,12 @@ func (f *fakeConn) RefreshArgoApp(context.Context, string, string) error { retur
 func (f *fakeConn) SyncArgoApp(context.Context, string, string, argo.SyncOptions) error {
 	return nil
 }
+func (f *fakeConn) NodeUtilization(context.Context) ([]workloads.NodeUsage, workloads.UsageStatus) {
+	return nil, workloads.UsageStatus{}
+}
+func (f *fakeConn) PodContainerUsage(context.Context, string, string) (map[string]workloads.Usage, workloads.UsageStatus) {
+	return nil, workloads.UsageStatus{}
+}
 func (f *fakeConn) AccessCanI(context.Context, rbac.CheckSpec, string, string) (rbac.Verdict, error) {
 	return rbac.Verdict{}, nil
 }

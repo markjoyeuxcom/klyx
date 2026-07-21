@@ -317,7 +317,13 @@ export type ContainerPortDTO = { name: string; port: number; protocol: string };
 // ports and the last* trio are optional in the type (older fixtures omit them);
 // the backend always sends them - last* are zero values when the container
 // never terminated (lastReason "" means "no last state", never fabricate one).
-export type ContainerSummaryDTO = { name: string; image: string; ready: boolean; restarts: number; state: string; init: boolean; ports?: ContainerPortDTO[]; lastReason?: string; lastExitCode?: number; lastFinishedUnix?: number };
+export type ContainerSummaryDTO = { name: string; image: string; ready: boolean; restarts: number; state: string; init: boolean; ports?: ContainerPortDTO[]; lastReason?: string; lastExitCode?: number; lastFinishedUnix?: number; cpuRequest?: number | null; cpuLimit?: number | null; memRequest?: number | null; memLimit?: number | null };
+
+// Node + per-container live usage (pod-attributed; nil = no sample, never zero).
+export type NodeUsageDTO = { node: string; cpu: number | null; mem: number | null; sampledPods: number };
+export type NodeUtilizationResultDTO = { available: boolean; message?: string; updatedAtUnix: number; items: NodeUsageDTO[] };
+export type ContainerUsageDTO = { container: string; cpu: number | null; mem: number | null };
+export type PodUsageResultDTO = { available: boolean; message?: string; updatedAtUnix: number; items: ContainerUsageDTO[] };
 export type PodSummaryDTO = { namespace: string; name: string; ready: boolean; phase: string; reason: string; rank: "unhealthy"|"degraded"|"restarts"|"healthy"; restarts: number; node: string; ip: string; ownerKind: string; ownerName: string; ageSeconds: number; containers: ContainerSummaryDTO[] };
 export type PodsResultDTO = { namespaces: string[]; pods: PodSummaryDTO[]; truncated?: boolean };
 export type PodDetailDTO = { summary: PodSummaryDTO; labels: Record<string, string>; annotations?: Record<string, string>; conditions: ConditionDTO[]; events: EventDTO[]; yaml: string; qosClass: string; serviceAccount: string };

@@ -47,6 +47,9 @@ var mirrorPairs = []struct {
 	{"AccessVerdict", reflect.TypeOf(rbac.Verdict{}), reflect.TypeOf(AccessVerdictDTO{})},
 	{"AccessGrant", reflect.TypeOf(rbac.Grant{}), reflect.TypeOf(AccessGrantDTO{})},
 	{"AccessEnumeration", reflect.TypeOf(rbac.Enumeration{}), reflect.TypeOf(AccessWhoCanDTO{})},
+	{"NodeUsage", reflect.TypeOf(workloads.NodeUsage{}), reflect.TypeOf(NodeUsageDTO{})},
+	{"ContainerSummary", reflect.TypeOf(workloads.ContainerSummary{}), reflect.TypeOf(ContainerSummaryDTO{})},
+	{"ContainerPort", reflect.TypeOf(workloads.ContainerPort{}), reflect.TypeOf(ContainerPortDTO{})},
 }
 
 func TestDTOFieldParity(t *testing.T) {

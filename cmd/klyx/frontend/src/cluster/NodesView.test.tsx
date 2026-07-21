@@ -26,6 +26,12 @@ vi.mock("../bridge/crd", () => ({
   copyText: vi.fn().mockResolvedValue(undefined),
 }));
 
+// Live node utilization: default unavailable; per-test overrides seed items.
+vi.mock("../bridge/metrics", () => ({
+  getNodeUtilization: vi.fn(async () => ({ available: false, message: "no metrics source", updatedAtUnix: 0, items: [] })),
+}));
+import { getNodeUtilization } from "../bridge/metrics";
+
 // DescribePane runs kubectl describe via the exec bridge; mocked so the
 // describe test never needs a Wails runtime.
 vi.mock("../bridge/exec", () => ({
@@ -161,6 +167,39 @@ describe("NodesView", () => {
     const { getByText } = render(<NodesView cluster="homelab" />);
     expect(getByText("node-healthy")).toBeTruthy();
     expect(getByText("a-notready")).toBeTruthy();
+  });
+
+  it("renders live usage against allocatable when utilization is available", async () => {
+    vi.mocked(getNodeUtilization).mockResolvedValue({
+      available: true, updatedAtUnix: 1700, message: "",
+      items: [{ node: "node-healthy", cpu: 3.9, mem: 10.5 * 1073741824, sampledPods: 12 }],
+    });
+    seed([healthy, notReady]);
+    const { findByText, getAllByText, getByText } = render(<NodesView cluster="homelab" />);
+    // 3.9 of 7.8 cpu allocatable = 50%; 10.5 of 14Gi mem = 75% (warn tier).
+    expect(await findByText(/\(50%\)/)).toBeTruthy();
+    expect(getByText(/\(75%\)/)).toBeTruthy();
+    expect(getByText(/node OS\/kubelet overhead not included/)).toBeTruthy();
+    // The unsampled node renders "—", never a zero bar.
+    expect(getAllByText("—").length).toBeGreaterThan(0);
+  });
+
+  it("degrades the usage columns to an honest caption when metrics are unavailable", async () => {
+    vi.mocked(getNodeUtilization).mockResolvedValue({ available: false, message: "no metrics source", updatedAtUnix: 0, items: [] });
+    seed([healthy]);
+    const { findByTestId } = render(<NodesView cluster="homelab" />);
+    const cap = await findByTestId("node-util-unavailable");
+    expect(cap.textContent).toContain("no metrics source");
+  });
+
+  it("surfaces the pod-list cap under-count caveat", async () => {
+    vi.mocked(getNodeUtilization).mockResolvedValue({
+      available: true, updatedAtUnix: 1700, message: "pod list capped - node usage may under-count",
+      items: [{ node: "node-healthy", cpu: 1, mem: null, sampledPods: 5 }],
+    });
+    seed([healthy]);
+    const { findByText } = render(<NodesView cluster="homelab" />);
+    expect(await findByText(/pod list capped/)).toBeTruthy();
   });
 
   it("consumes a parked drain-node intent by opening the drain composer", () => {

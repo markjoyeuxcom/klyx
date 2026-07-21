@@ -13,6 +13,11 @@ type ContainerSummaryDTO struct {
 	LastReason       string `json:"lastReason"` // e.g. "OOMKilled"
 	LastExitCode     int    `json:"lastExitCode"`
 	LastFinishedUnix int64  `json:"lastFinishedUnix"` // FinishedAt.Unix(), 0 when absent
+	// Declared resources (cpu cores, memory bytes); null = unset on the spec.
+	CPURequest *float64 `json:"cpuRequest"`
+	CPULimit   *float64 `json:"cpuLimit"`
+	MemRequest *float64 `json:"memRequest"`
+	MemLimit   *float64 `json:"memLimit"`
 }
 
 // ContainerPortDTO is one declared container port - the forward popover offers

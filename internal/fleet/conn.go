@@ -83,6 +83,8 @@ type Conn interface {
 	PodLogStream(ctx context.Context, namespace, pod, container string, previous bool, tailLines int64) (io.ReadCloser, error)
 	WorkloadPods(ctx context.Context, kind, namespace, name string) ([]string, error)
 	WorkloadMetrics(ctx context.Context, namespace string) (map[string]workloads.Usage, workloads.UsageStatus)
+	NodeUtilization(ctx context.Context) ([]workloads.NodeUsage, workloads.UsageStatus)
+	PodContainerUsage(ctx context.Context, namespace, pod string) (map[string]workloads.Usage, workloads.UsageStatus)
 	WorkloadSparklines(ctx context.Context, kind, namespace, name string) (SparklineSet, error)
 	ClusterSparklines(ctx context.Context) (SparklineSet, error)
 	RolloutRestart(ctx context.Context, kind, namespace, name string) error

@@ -210,6 +210,10 @@ func toPodSummaryDTO(p workloads.PodSummary) PodSummaryDTO {
 			LastReason:       c.LastReason,
 			LastExitCode:     c.LastExitCode,
 			LastFinishedUnix: c.LastFinishedUnix,
+			CPURequest:       c.CPURequest,
+			CPULimit:         c.CPULimit,
+			MemRequest:       c.MemRequest,
+			MemLimit:         c.MemLimit,
 		})
 	}
 	return PodSummaryDTO{

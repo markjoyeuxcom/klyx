@@ -2,10 +2,12 @@ package appbridge
 
 import (
 	"context"
+	"sort"
 	"time"
 
 	"github.com/moomora/klyx/internal/fleet"
 	"github.com/moomora/klyx/internal/metrics"
+	"github.com/moomora/klyx/internal/workloads"
 )
 
 const metricsTimeout = 30 * time.Second
@@ -16,6 +18,8 @@ type MetricsConn interface {
 	ClusterMetrics(ctx context.Context, forceReprobe bool) (metrics.ClusterMetrics, metrics.MetricsCapability)
 	WorkloadSparklines(ctx context.Context, kind, namespace, name string) (fleet.SparklineSet, error)
 	ClusterSparklines(ctx context.Context) (fleet.SparklineSet, error)
+	NodeUtilization(ctx context.Context) ([]workloads.NodeUsage, workloads.UsageStatus)
+	PodContainerUsage(ctx context.Context, namespace, pod string) (map[string]workloads.Usage, workloads.UsageStatus)
 }
 
 // MetricsService is bound to JS. On-demand only; no push loop.
@@ -90,5 +94,48 @@ func pointsDTO(ps []metrics.Point) []PointDTO {
 	for i, p := range ps {
 		out[i] = PointDTO{T: p.Unix, V: p.Value}
 	}
+	return out
+}
+
+// GetNodeUtilization returns per-node pod-attributed live usage for the nodes
+// lens. Available=true with a Message means usable-but-caveated (the pod-list
+// cap under-count) - the view renders it as a caption, never discards data.
+func (s *MetricsService) GetNodeUtilization(cluster string) NodeUtilizationResultDTO {
+	conn, ok := s.lookup(cluster)
+	if !ok {
+		return NodeUtilizationResultDTO{Items: []NodeUsageDTO{}, Message: "cluster not connected"}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), metricsTimeout)
+	defer cancel()
+	usages, st := conn.NodeUtilization(ctx)
+	out := NodeUtilizationResultDTO{Available: st.Available, Message: st.Message, Items: make([]NodeUsageDTO, 0, len(usages))}
+	if !st.UpdatedAt.IsZero() {
+		out.UpdatedAtUnix = st.UpdatedAt.Unix()
+	}
+	for _, u := range usages {
+		out.Items = append(out.Items, NodeUsageDTO{Node: u.Node, CPU: u.CPU, Mem: u.Mem, SampledPods: u.SampledPods})
+	}
+	return out
+}
+
+// GetPodContainerUsage returns one pod's live per-container usage - the pod
+// inspector joins it to each container's declared requests/limits for the
+// rightsizing readout. Sorted by container name for a stable render.
+func (s *MetricsService) GetPodContainerUsage(cluster, namespace, pod string) PodUsageResultDTO {
+	conn, ok := s.lookup(cluster)
+	if !ok {
+		return PodUsageResultDTO{Items: []ContainerUsageDTO{}, Message: "cluster not connected"}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), metricsTimeout)
+	defer cancel()
+	byName, st := conn.PodContainerUsage(ctx, namespace, pod)
+	out := PodUsageResultDTO{Available: st.Available, Message: st.Message, Items: make([]ContainerUsageDTO, 0, len(byName))}
+	if !st.UpdatedAt.IsZero() {
+		out.UpdatedAtUnix = st.UpdatedAt.Unix()
+	}
+	for name, u := range byName {
+		out.Items = append(out.Items, ContainerUsageDTO{Container: name, CPU: u.CPU, Mem: u.Mem})
+	}
+	sort.Slice(out.Items, func(i, j int) bool { return out.Items[i].Container < out.Items[j].Container })
 	return out
 }

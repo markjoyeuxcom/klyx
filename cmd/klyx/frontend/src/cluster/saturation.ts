@@ -46,6 +46,43 @@ export function nearLimitSort(items: WorkloadDTO[]): WorkloadDTO[] {
   });
 }
 
+// Rightsizing verdict for one container+resource: usage vs declared request/limit.
+// Diagnosis framing, NOT FinOps: the three findings are "near the limit" (OOM /
+// throttle risk), "oversized request" (scheduling waste that starves the node),
+// and null (nothing noteworthy or not calculable). Oversize needs BOTH a
+// meaningful request (cpu ≥ 50m, mem ≥ 64Mi - below that the noise beats the
+// signal) and usage under 1/8 of it; the ratio caps at "≥20×" so a near-idle
+// container doesn't render a silly number.
+export type RightsizingFinding = { tier: "warn" | "danger" | "info"; label: string };
+
+const OVERSIZE_RATIO = 8;
+const OVERSIZE_CAP = 20;
+const MIN_CPU_REQUEST = 0.05; // 50m
+const MIN_MEM_REQUEST = 64 * 1048576; // 64Mi
+
+export function rightsizing(
+  resource: Resource,
+  usage: number | null | undefined,
+  request: number | null | undefined,
+  limit: number | null | undefined,
+): RightsizingFinding | null {
+  if (usage == null) return null;
+  const sat = saturation(resource, usage, limit ?? null);
+  if (sat.tier === "danger") {
+    return { tier: "danger", label: resource === "mem" ? "near mem limit — OOM risk" : "cpu at limit — throttling" };
+  }
+  if (sat.tier === "warn") {
+    return { tier: "warn", label: resource === "mem" ? "approaching mem limit" : "approaching cpu limit" };
+  }
+  const floor = resource === "cpu" ? MIN_CPU_REQUEST : MIN_MEM_REQUEST;
+  if (request != null && request >= floor && usage < request / OVERSIZE_RATIO) {
+    const ratio = usage > 0 ? request / usage : Infinity;
+    const shown = ratio >= OVERSIZE_CAP ? `≥${OVERSIZE_CAP}×` : `${Math.round(ratio)}×`;
+    return { tier: "info", label: `${resource} request ${shown} actual — oversized` };
+  }
+  return null;
+}
+
 export function fmtCpu(cores: number): string {
   return cores >= 1 ? cores.toFixed(2) : `${Math.round(cores * 1000)}m`;
 }

@@ -29,3 +29,37 @@ type SparklinesDTO struct {
 	CPU       []PointDTO `json:"cpu"`
 	Mem       []PointDTO `json:"mem"`
 }
+
+// NodeUsageDTO mirrors workloads.NodeUsage: one node's pod-attributed live
+// usage. Nil cpu/mem serialize as JSON null - "no sample", never zero.
+type NodeUsageDTO struct {
+	Node        string   `json:"node"`
+	CPU         *float64 `json:"cpu"`
+	Mem         *float64 `json:"mem"`
+	SampledPods int      `json:"sampledPods"`
+}
+
+// NodeUtilizationResultDTO is GetNodeUtilization's payload. Available=true may
+// still carry a Message (e.g. the pod-list cap under-count warning) - render
+// it as a caption, not an error.
+type NodeUtilizationResultDTO struct {
+	Available     bool           `json:"available"`
+	Message       string         `json:"message,omitempty"`
+	UpdatedAtUnix int64          `json:"updatedAtUnix"`
+	Items         []NodeUsageDTO `json:"items"`
+}
+
+// ContainerUsageDTO is one container's live usage inside a pod.
+type ContainerUsageDTO struct {
+	Container string   `json:"container"`
+	CPU       *float64 `json:"cpu"`
+	Mem       *float64 `json:"mem"`
+}
+
+// PodUsageResultDTO is GetPodContainerUsage's payload.
+type PodUsageResultDTO struct {
+	Available     bool                `json:"available"`
+	Message       string              `json:"message,omitempty"`
+	UpdatedAtUnix int64               `json:"updatedAtUnix"`
+	Items         []ContainerUsageDTO `json:"items"`
+}

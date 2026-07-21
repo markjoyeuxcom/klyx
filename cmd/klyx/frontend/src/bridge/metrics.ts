@@ -1,4 +1,4 @@
-import { useFleet, MetricsDTO } from "../store/fleet";
+import { useFleet, MetricsDTO, NodeUtilizationResultDTO, PodUsageResultDTO } from "../store/fleet";
 import { MetricsService } from "../../bindings/github.com/moomora/klyx/internal/appbridge/index.js";
 
 export async function getClusterMetrics(cluster: string, forceReprobe: boolean): Promise<void> {
@@ -50,5 +50,23 @@ export async function getClusterSparklines(cluster: string): Promise<SparklinesD
     return (await MetricsService.GetClusterSparklines(cluster)) as SparklinesDTO;
   } catch (e) {
     return failedSparklines(String(e));
+  }
+}
+
+// Node + per-container utilization (on-demand, no store slice). Errors resolve
+// to an unavailable DTO so the views degrade to their no-data captions.
+export async function getNodeUtilization(cluster: string): Promise<NodeUtilizationResultDTO> {
+  try {
+    return (await MetricsService.GetNodeUtilization(cluster)) as NodeUtilizationResultDTO;
+  } catch (e) {
+    return { available: false, message: String(e), updatedAtUnix: 0, items: [] };
+  }
+}
+
+export async function getPodContainerUsage(cluster: string, namespace: string, pod: string): Promise<PodUsageResultDTO> {
+  try {
+    return (await MetricsService.GetPodContainerUsage(cluster, namespace, pod)) as PodUsageResultDTO;
+  } catch (e) {
+    return { available: false, message: String(e), updatedAtUnix: 0, items: [] };
   }
 }
