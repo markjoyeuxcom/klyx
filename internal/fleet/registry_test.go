@@ -232,6 +232,12 @@ func (f *fakeConn) AccessWhoCan(context.Context, rbac.CheckSpec) (rbac.Enumerati
 func (f *fakeConn) GitOpsPromotion(context.Context) (PromotionSnapshot, error) {
 	return PromotionSnapshot{}, nil
 }
+func (f *fakeConn) UpgradeReadiness(context.Context) (UpgradeReport, error) {
+	return UpgradeReport{}, nil
+}
+func (f *fakeConn) ConnectivityCanI(context.Context, string, string, string, string, int, string) (ConnectivityReport, error) {
+	return ConnectivityReport{}, nil
+}
 func (f *fakeConn) GitOpsSummary(context.Context) (GitOpsSummary, error) {
 	return GitOpsSummary{}, nil
 }

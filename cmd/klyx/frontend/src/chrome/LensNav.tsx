@@ -4,7 +4,7 @@ import {
   IconAlertTriangle, IconAnchor, IconArrowsLeftRight, IconBox, IconCertificate, IconCircleDot,
   IconComponents, IconCpu, IconDatabase, IconFolder, IconGitBranch, IconGitMerge, IconHistory,
   IconKey, IconLayoutGrid, IconNetwork, IconPackage, IconRoute, IconScale, IconServer,
-  IconSettings, IconShieldLock, IconStack2, IconTerminal2, IconUserCheck, IconWebhook,
+  IconRouteAltLeft, IconSettings, IconShieldLock, IconStack2, IconStairsUp, IconTerminal2, IconUserCheck, IconWebhook,
 } from "@tabler/icons-react";
 import { useFleet, WORKLOAD_KINDS } from "../store/fleet";
 import type { ArgoViewMode, ClusterSection, ResourceRef, Route, WorkloadKind } from "../store/fleet";
@@ -54,6 +54,7 @@ const EXPANDED_MENU: ExpandedGroup[] = [
       { label: "Namespaces", Icon: IconFolder, target: { kind: "resource", ref: r("", "v1", "namespaces", "Namespace", "Cluster") } },
       { label: "API Services", Icon: IconComponents, target: { kind: "resource", ref: r("apiregistration.k8s.io", "v1", "apiservices", "APIService", "Cluster") } },
       { label: "Events", Icon: IconAlertTriangle, target: { kind: "section", section: "events" } },
+      { label: "Upgrade check", Icon: IconStairsUp, target: { kind: "section", section: "upgrade" } },
     ],
   },
   {
@@ -91,6 +92,7 @@ const EXPANDED_MENU: ExpandedGroup[] = [
   {
     label: "Network",
     items: [
+      { label: "Connectivity check", Icon: IconRouteAltLeft, target: { kind: "section", section: "connectivity" } },
       { label: "Services", Icon: IconNetwork, target: { kind: "resource", ref: r("", "v1", "services", "Service", "Namespaced") } },
       { label: "Ingresses", Icon: IconRoute, target: { kind: "resource", ref: r("networking.k8s.io", "v1", "ingresses", "Ingress", "Namespaced") } },
       { label: "NetworkPolicies", Icon: IconShieldLock, target: { kind: "resource", ref: r("networking.k8s.io", "v1", "networkpolicies", "NetworkPolicy", "Namespaced") } },

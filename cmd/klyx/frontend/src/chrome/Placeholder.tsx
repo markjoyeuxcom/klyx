@@ -34,6 +34,10 @@ function message(section: ClusterSection, c: ClusterDTO): string {
       return "";
     case "access":
       return "";
+    case "upgrade":
+      return "";
+    case "connectivity":
+      return "";
   }
 }
 

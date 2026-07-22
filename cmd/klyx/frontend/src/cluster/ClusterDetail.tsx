@@ -14,6 +14,8 @@ import { PodsView } from "./PodsView";
 import { EventsView } from "./EventsView";
 import { NodesView } from "./NodesView";
 import { AccessView } from "./AccessView";
+import { UpgradeView } from "./UpgradeView";
+import { ConnectivityView } from "./ConnectivityView";
 import { Placeholder } from "../chrome/Placeholder";
 
 export function ClusterDetail() {
@@ -54,5 +56,7 @@ export function ClusterDetail() {
   if (route.section === "events") return <EventsView cluster={cluster.name} />;
   if (route.section === "nodes") return <NodesView cluster={cluster.name} />;
   if (route.section === "access") return <AccessView cluster={cluster.name} />;
+  if (route.section === "upgrade") return <UpgradeView cluster={cluster.name} />;
+  if (route.section === "connectivity") return <ConnectivityView cluster={cluster.name} />;
   return <Placeholder section={route.section} c={cluster} />;
 }

@@ -8,7 +8,9 @@ import (
 	"github.com/moomora/klyx/internal/crd"
 	"github.com/moomora/klyx/internal/fleet"
 	"github.com/moomora/klyx/internal/hubble"
+	"github.com/moomora/klyx/internal/netpol"
 	"github.com/moomora/klyx/internal/rbac"
+	"github.com/moomora/klyx/internal/upgrade"
 	"github.com/moomora/klyx/internal/workloads"
 )
 
@@ -51,6 +53,9 @@ var mirrorPairs = []struct {
 	{"RolloutRevision", reflect.TypeOf(workloads.RolloutRevision{}), reflect.TypeOf(RolloutRevisionDTO{})},
 	{"PromotionUnit", reflect.TypeOf(fleet.PromotionUnit{}), reflect.TypeOf(PromotionUnitDTO{})},
 	{"PromotionSource", reflect.TypeOf(fleet.PromotionSource{}), reflect.TypeOf(PromotionSourceDTO{})},
+	{"SkewFinding", reflect.TypeOf(upgrade.SkewFinding{}), reflect.TypeOf(SkewFindingDTO{})},
+	{"NetpolPolicyRef", reflect.TypeOf(netpol.PolicyRef{}), reflect.TypeOf(NetpolRefDTO{})},
+	{"DeprecatedUse", reflect.TypeOf(fleet.DeprecatedUse{}), reflect.TypeOf(DeprecatedUseDTO{})},
 	{"ContainerSummary", reflect.TypeOf(workloads.ContainerSummary{}), reflect.TypeOf(ContainerSummaryDTO{})},
 	{"ContainerPort", reflect.TypeOf(workloads.ContainerPort{}), reflect.TypeOf(ContainerPortDTO{})},
 }

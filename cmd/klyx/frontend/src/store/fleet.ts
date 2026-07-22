@@ -259,7 +259,7 @@ export type ExternalSecretsSlice = {
 
 // "observability" removed 2026-06-10: metrics ship inline in overview/workloads/network lanes
 // (design principle 5); a dedicated surface can return when it has real content.
-export type ClusterSection = "overview" | "gitops" | "argo" | "helm" | "certs" | "externalsecrets" | "gatewayApi" | "resources" | "crds" | "workloads" | "pods" | "events" | "nodes" | "access";
+export type ClusterSection = "overview" | "gitops" | "argo" | "helm" | "certs" | "externalsecrets" | "gatewayApi" | "resources" | "crds" | "workloads" | "pods" | "events" | "nodes" | "access" | "upgrade" | "connectivity";
 export type ArgoViewMode = "applications" | "projects" | "applicationsets";
 
 export type OwnerDTO = { kind: string; namespace: string; name: string };
@@ -289,6 +289,16 @@ export type RolloutHistoryResultDTO = { revisions: RolloutRevisionDTO[]; error?:
 export type PromotionUnitDTO = { kind: string; namespace: string; name: string; sourceKind: string; sourceName: string; revision: string; ready: string; suspended: boolean; stale: boolean; message: string };
 export type PromotionSourceDTO = { kind: string; namespace: string; name: string; revision: string; ready: string; suspended: boolean };
 export type PromotionSnapshotDTO = { fluxPresent: boolean; argoPresent: boolean; units: PromotionUnitDTO[]; sources: PromotionSourceDTO[]; error?: string };
+
+// Upgrade-readiness report (per cluster).
+export type SkewFindingDTO = { node: string; version: string; delta: number; level: string; detail: string };
+export type DeprecatedUseDTO = { group: string; version: string; resource: string; kind: string; removedInMinor: number; replacedBy: string; count: number; countKnown: boolean };
+export type UpgradeReportDTO = { serverVersion: string; serverMinor: number; eolDate: string; skew: SkewFindingDTO[]; deprecated: DeprecatedUseDTO[]; error?: string };
+
+// Connectivity can-i (NetworkPolicy simulation).
+export type NetpolRefDTO = { namespace: string; name: string; admits: boolean };
+export type DirectionVerdictDTO = { isolated: boolean; allowed: boolean; policies: NetpolRefDTO[]; explain: string };
+export type ConnectivityReportDTO = { allowed: boolean; ingress: DirectionVerdictDTO; egress: DirectionVerdictDTO; srcLabels: Record<string, string>; dstLabels: Record<string, string>; ciliumPolicies: number; error?: string };
 export type WorkloadUsageDTO = { cpuUsage: number | null; memUsage: number | null };
 export type WorkloadMetricsStatusDTO = { available: boolean; message: string; updatedAt: string };
 export type WorkloadMetricsResultDTO = { status: WorkloadMetricsStatusDTO; usage: Record<string, WorkloadUsageDTO> };
@@ -469,6 +479,8 @@ export const SECTION_LABELS: Record<ClusterSection, string> = {
   events: "Events",
   nodes: "Nodes",
   access: "Access",
+  upgrade: "Upgrade",
+  connectivity: "Connectivity",
 };
 
 export type CRDKindDTO = { kind: string; plural: string; scope: string; version: string; operator: string; shortNames: string[] };
