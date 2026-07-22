@@ -1,9 +1,11 @@
 # Klyx backlog
 
-Consolidated 2026-07-09; last pruned 2026-07-21 (rollout history/undo/pause
-shipped — THE RANKED TOP-12 IS NOW COMPLETE; same day: node + per-container
-utilization; 2026-07-20: RBAC access lens, Hubble flow lens, fleet compare,
-the cross-platform exec fix; 2026-07-10: editable Tiers 1–3). Pulls together the "what's left" that was scattered across `CLAUDE.md`
+Consolidated 2026-07-09; last pruned 2026-07-22 (the fleet-ops batch shipped:
+promotion tracker, upgrade readiness, connectivity can-i, survivability
+headroom, expiry horizon; 2026-07-21: rollout history/undo/pause — the ranked
+top-12 complete — and node + per-container utilization; 2026-07-20: RBAC
+access lens, Hubble flow lens, fleet compare, the cross-platform exec fix;
+2026-07-10: editable Tiers 1–3). Pulls together the "what's left" that was scattered across `CLAUDE.md`
 deferred notes, `docs/brainstorm-questions.md`, and the eyeball checklists.
 Living doc — prune items as they ship, add as they surface.
 
@@ -34,7 +36,14 @@ the need is real, not top-to-bottom.
       usage + a rightsizing chip on a known-oversized workload), and the
       rollout surface (history on a Deployment with real revisions; pause →
       resume round-trip on a dev workload; an undo on the homelab incl. the
-      GitOps-owned warning + prd typed arming on a protected cluster)
+      GitOps-owned warning + prd typed arming on a protected cluster), and the
+      fleet-ops batch: the promotion tracker against the live DEV/STG/PRD Flux
+      tiers (does the drift default catch a real straggler), the upgrade lens
+      on an AKS cluster + the k3s homelab (EOL runway + skew believable), a
+      connectivity check against a real deny-all namespace (and the PARTIAL
+      Cilium label on the mesh clusters), a zone-loss simulation on prd-weu
+      (is the verdict credible against known capacity), and the expiry horizon
+      (does it find the webhook CAs and any unmanaged TLS secrets)
 - [ ] **Real-LLM smoke test** of the AI feature (local Ollama backend, or a hosted
       key) — everything is currently verified against a fake client
 - [ ] **Live-cluster smoke of the write paths** (nothing destructive committed
@@ -114,6 +123,14 @@ entirely demand-driven from sections 1–4.
 - [ ] **Rollout follow-ups**: undo/pause as ⌘K palette verbs (one-shot
       NavIntents through the existing confirm, the ratified pattern); a
       revision diff (old vs new template YAML) in the history rows
+- [ ] **Fleet-ops batch follow-ups**: promotion — pin a source and diff unit
+      revisions against ITS head (needs revision-format awareness); upgrade —
+      Git-side manifest scanning for deprecated apiVersions (pluto-style, via
+      the local-clone-root config M10-f wants anyway); connectivity — evaluate
+      CiliumNetworkPolicies natively (today: counted + labeled PARTIAL);
+      headroom — taints/affinity modeling; expiry — kubeconfig client-cert
+      expiry (config layer), kubeadm control-plane certs (needs node-level
+      read), ESO token staleness fold-in
 
 - [ ] **M10-f**: `flux diff --path` per-cluster local-clone-root config (makes
       `flux diff` resolve reliably)
@@ -148,7 +165,7 @@ entirely demand-driven from sections 1–4.
 - [ ] **GitHub Actions budget exhausted** (hit 2026-07-21) — every CI job fails
       in 2s with "an Actions budget is preventing further use" (private repo,
       paid minutes). Raise the spending cap: github.com/settings/billing →
-      Budgets and alerts. PRs #41–#44 merged on full local gates (same
+      Budgets and alerts. PRs #41–#45 merged on full local gates (same
       commands CI runs); the first green run on main after the reset
       re-verifies them.
 - [ ] **Release signing / notarization** — inert scaffold in `release.yml`; needs
@@ -164,6 +181,17 @@ See `docs/brainstorm-questions.md` (Q16 pinned resources, etc.).
 ## Recently shipped (so it's not mistaken for open)
 
 Merged to `main` — do not re-add to the backlog:
+
+**2026-07-22 — the fleet-ops batch (#45, five features, one commit each):**
+- Promotion tracker: fleet modal, applied GitOps revisions per cluster in
+  env-ranked columns, drift + not-ready in the attention default, source-heads
+  strip. Upgrade readiness lens: version/EOL/skew + served deprecated APIs vs
+  a target minor. Connectivity can-i: static NetworkPolicy simulation between
+  live pods (new pure internal/netpol), Cilium policies counted as PARTIAL.
+  Survivability headroom: pool/zone identity + requests-based loss simulation
+  with PDB drain blockers. Expiry horizon: fleet-merged cert lifetimes
+  (TLS secrets, webhook CAs, cert-manager statuses), soonest first. All
+  read-only; merged on local gates during the CI budget outage
 
 **2026-07-21 — rollout history + undo + pause/resume (ranked top-12 complete):**
 - Revision history in the workload inspector (Deployments via owned
