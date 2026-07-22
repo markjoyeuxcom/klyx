@@ -299,6 +299,12 @@ export type UpgradeReportDTO = { serverVersion: string; serverMinor: number; eol
 export type NetpolRefDTO = { namespace: string; name: string; admits: boolean };
 export type DirectionVerdictDTO = { isolated: boolean; allowed: boolean; policies: NetpolRefDTO[]; explain: string };
 export type ConnectivityReportDTO = { allowed: boolean; ingress: DirectionVerdictDTO; egress: DirectionVerdictDTO; srcLabels: Record<string, string>; dstLabels: Record<string, string>; ciliumPolicies: number; error?: string };
+
+// Survivability headroom simulation.
+export type HeadroomPodRefDTO = { namespace: string; name: string; cpuReq: number; memReq: number };
+export type PDBBlockerDTO = { namespace: string; name: string; disruptionsAllowed: number };
+export type HeadroomResultDTO = { lostNodes: number; survivorNodes: number; displaced: number; rescheduled: number; unplaced: HeadroomPodRefDTO[]; cpuShortfall: number; memShortfall: number };
+export type HeadroomReportDTO = { result: HeadroomResultDTO; pdbBlockers: PDBBlockerDTO[]; podListCapped: boolean; error?: string };
 export type WorkloadUsageDTO = { cpuUsage: number | null; memUsage: number | null };
 export type WorkloadMetricsStatusDTO = { available: boolean; message: string; updatedAt: string };
 export type WorkloadMetricsResultDTO = { status: WorkloadMetricsStatusDTO; usage: Record<string, WorkloadUsageDTO> };
@@ -544,7 +550,7 @@ export type MetricsDTO = { available: boolean; mode: string; source: string; war
 export type MetricsSlice = { cluster: string | null; dto: MetricsDTO | null; loading: boolean };
 
 // Nodes types
-export type NodeSummaryDTO = { name: string; roles: string[]; ready: boolean; unschedulable: boolean; problems: string[]; version: string; os: string; arch: string; taintCount: number; cpuCapacity: number; cpuAllocatable: number; memCapacity: number; memAllocatable: number; podCapacity: number; ageSeconds: number };
+export type NodeSummaryDTO = { name: string; roles: string[]; ready: boolean; unschedulable: boolean; problems: string[]; version: string; os: string; arch: string; taintCount: number; cpuCapacity: number; cpuAllocatable: number; memCapacity: number; memAllocatable: number; podCapacity: number; ageSeconds: number; pool?: string; zone?: string };
 export type NodesResultDTO = { nodes: NodeSummaryDTO[] };
 export type NodeTaintDTO = { key: string; value: string; effect: string };
 export type PodOnNodeDTO = { namespace: string; name: string; phase: string };

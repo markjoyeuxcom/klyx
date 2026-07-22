@@ -56,6 +56,10 @@ var mirrorPairs = []struct {
 	{"SkewFinding", reflect.TypeOf(upgrade.SkewFinding{}), reflect.TypeOf(SkewFindingDTO{})},
 	{"NetpolPolicyRef", reflect.TypeOf(netpol.PolicyRef{}), reflect.TypeOf(NetpolRefDTO{})},
 	{"DeprecatedUse", reflect.TypeOf(fleet.DeprecatedUse{}), reflect.TypeOf(DeprecatedUseDTO{})},
+	{"NodeSummary", reflect.TypeOf(workloads.NodeSummary{}), reflect.TypeOf(NodeSummaryDTO{})},
+	{"HeadroomResult", reflect.TypeOf(workloads.HeadroomResult{}), reflect.TypeOf(HeadroomResultDTO{})},
+	{"HeadroomPodRef", reflect.TypeOf(workloads.PodRef{}), reflect.TypeOf(HeadroomPodRefDTO{})},
+	{"PDBBlocker", reflect.TypeOf(fleet.PDBBlocker{}), reflect.TypeOf(PDBBlockerDTO{})},
 	{"ContainerSummary", reflect.TypeOf(workloads.ContainerSummary{}), reflect.TypeOf(ContainerSummaryDTO{})},
 	{"ContainerPort", reflect.TypeOf(workloads.ContainerPort{}), reflect.TypeOf(ContainerPortDTO{})},
 }

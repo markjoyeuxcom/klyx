@@ -14,6 +14,7 @@ const nodesTimeout = 30 * time.Second
 type NodesConn interface {
 	ListNodes(ctx context.Context) ([]workloads.NodeSummary, error)
 	NodeDetail(ctx context.Context, name string) (fleet.NodeDetail, error)
+	NodeHeadroom(ctx context.Context, loseKind, loseName string) (fleet.HeadroomReport, error)
 }
 
 // NodesService is bound to JS. Pure request/response: ListNodes returns
@@ -135,5 +136,40 @@ func toNodeSummaryDTO(n workloads.NodeSummary) NodeSummaryDTO {
 		MemAllocatable: n.MemAllocatable,
 		PodCapacity:    n.PodCapacity,
 		AgeSeconds:     n.AgeSeconds,
+		Pool:           n.Pool,
+		Zone:           n.Zone,
 	}
+}
+
+// GetNodeHeadroom runs the survivability simulation: lose a node/zone/pool,
+// bin-pack the displaced pods onto what's left (requests-based - the caveats
+// live on workloads.SimulateLoss and in the UI captions). Read-only.
+func (s *NodesService) GetNodeHeadroom(cluster, loseKind, loseName string) HeadroomReportDTO {
+	out := HeadroomReportDTO{Result: HeadroomResultDTO{Unplaced: []HeadroomPodRefDTO{}}, PDBBlockers: []PDBBlockerDTO{}}
+	conn, ok := s.lookup(cluster)
+	if !ok {
+		out.Error = "cluster not connected: " + cluster
+		return out
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), nodesTimeout)
+	defer cancel()
+	r, err := conn.NodeHeadroom(ctx, loseKind, loseName)
+	if err != nil {
+		out.Error = err.Error()
+		return out
+	}
+	out.Result = HeadroomResultDTO{
+		LostNodes: r.Result.LostNodes, SurvivorNodes: r.Result.SurvivorNodes,
+		Displaced: r.Result.Displaced, Rescheduled: r.Result.Rescheduled,
+		Unplaced:     make([]HeadroomPodRefDTO, 0, len(r.Result.Unplaced)),
+		CPUShortfall: r.Result.CPUShortfall, MemShortfall: r.Result.MemShortfall,
+	}
+	for _, u := range r.Result.Unplaced {
+		out.Result.Unplaced = append(out.Result.Unplaced, HeadroomPodRefDTO{Namespace: u.Namespace, Name: u.Name, CPUReq: u.CPUReq, MemReq: u.MemReq})
+	}
+	for _, b := range r.PDBBlockers {
+		out.PDBBlockers = append(out.PDBBlockers, PDBBlockerDTO{Namespace: b.Namespace, Name: b.Name, DisruptionsAllowed: b.DisruptionsAllowed})
+	}
+	out.PodListCapped = r.PodListCapped
+	return out
 }

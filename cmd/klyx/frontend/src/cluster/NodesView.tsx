@@ -2,7 +2,8 @@ import { useEffect, useCallback, useMemo, useState, useRef, useLayoutEffect } fr
 import { Events } from "@wailsio/runtime";
 import { useFleet } from "../store/fleet";
 import type { ConditionDTO, NodeDetailDTO, NodeSummaryDTO, PodOnNodeDTO } from "../store/fleet";
-import { listNodes, openNodeDetail, cordonNode, startDrain, cancelDrain } from "../bridge/nodes";
+import { listNodes, openNodeDetail, cordonNode, startDrain, cancelDrain, getNodeHeadroom } from "../bridge/nodes";
+import type { HeadroomReportDTO } from "../store/fleet";
 import type { DrainOptions } from "../bridge/nodes";
 import { getNodeUtilization } from "../bridge/metrics";
 import type { NodeUtilizationResultDTO } from "../store/fleet";
@@ -548,6 +549,8 @@ export function NodesView({ cluster }: { cluster: string }) {
           {visibleNodes.length !== nodes.items.length && <span style={{ fontSize: 10, color: "var(--color-text-tertiary)" }}>{visibleNodes.length} of {nodes.items.length}</span>}
         </div>
 
+        <SurvivabilityModule cluster={cluster} nodes={nodes.items} />
+
         {util !== null && (
           util.available ? (
             <div style={{ fontSize: 9, color: "var(--color-text-tertiary)", flexShrink: 0 }}>
@@ -688,6 +691,85 @@ export function NodesView({ cluster }: { cluster: string }) {
             void listNodes(cluster);
           }}
         />
+      )}
+    </div>
+  );
+}
+
+// SurvivabilityModule: "does this cluster survive losing X?" - a requests-
+// based bin-pack simulation (backend workloads.SimulateLoss). Targets are
+// derived from the LOADED nodes (zones + pools + single nodes); the verdict
+// states its caveats: requests-based upper bound, affinity/taints not
+// modeled, DaemonSet pods excluded, PDB blockers listed separately.
+function SurvivabilityModule({ cluster, nodes }: { cluster: string; nodes: NodeSummaryDTO[] }) {
+  const targets = useMemo(() => {
+    const zones = [...new Set(nodes.map((n) => n.zone ?? "").filter(Boolean))].sort();
+    const pools = [...new Set(nodes.map((n) => n.pool ?? "").filter(Boolean))].sort();
+    const out: Array<{ kind: string; name: string; label: string }> = [];
+    for (const z of zones) out.push({ kind: "zone", name: z, label: `zone ${z}` });
+    for (const p of pools) out.push({ kind: "pool", name: p, label: `pool ${p}` });
+    for (const n of nodes) out.push({ kind: "node", name: n.name, label: `node ${n.name}` });
+    return out;
+  }, [nodes]);
+  const [sel, setSel] = useState(0);
+  const [report, setReport] = useState<HeadroomReportDTO | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  if (targets.length === 0) return null;
+  const target = targets[Math.min(sel, targets.length - 1)];
+
+  const run = async () => {
+    setBusy(true);
+    try {
+      setReport(await getNodeHeadroom(cluster, target.kind, target.name));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const r = report?.result;
+  const fits = r ? r.unplaced.length === 0 : false;
+  return (
+    <div data-testid="survivability" style={{ display: "flex", flexDirection: "column", gap: 6, flexShrink: 0, padding: "8px 10px", background: "var(--bench-well-bg, var(--color-background-secondary))", borderRadius: "var(--radius-sm)", boxShadow: "var(--bench-well-shadow, inset 0 0 0 1px var(--color-border-tertiary))" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+        <span style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5, color: "var(--color-text-tertiary)" }}>survivability</span>
+        <span style={{ fontSize: 10, color: "var(--color-text-tertiary)" }}>if we lose</span>
+        <select value={sel} onChange={(e) => { setSel(Number(e.target.value)); setReport(null); }} aria-label="loss target" style={{ fontSize: 11, fontFamily: "var(--font-mono)", padding: "2px 6px", borderRadius: 4, border: "0.5px solid var(--color-border-tertiary)", background: "var(--color-background-primary)", color: "var(--color-text-primary)" }}>
+          {targets.map((t, i) => <option key={`${t.kind}/${t.name}`} value={i}>{t.label}</option>)}
+        </select>
+        <button onClick={() => void run()} disabled={busy} style={{ ...btn, fontSize: 10 }}>{busy ? "packing…" : "simulate"}</button>
+        {report && !report.error && r && (
+          <span data-testid="survivability-verdict" style={{ fontFamily: "var(--font-mono)", fontSize: 11, fontWeight: 600, color: fits ? "var(--color-text-success)" : "var(--color-text-danger)" }}>
+            {fits
+              ? `fits — ${r.displaced} displaced pod${r.displaced === 1 ? "" : "s"} reschedule onto ${r.survivorNodes} node${r.survivorNodes === 1 ? "" : "s"}`
+              : `${r.unplaced.length} pod${r.unplaced.length === 1 ? "" : "s"} won't fit (short ${fmtCpu(r.cpuShortfall)} cpu / ${fmtMem(r.memShortfall)})`}
+          </span>
+        )}
+        {report?.error && <span style={{ fontSize: 11, color: "var(--color-text-danger)", overflowWrap: "anywhere" }}>{report.error}</span>}
+      </div>
+      {report && !report.error && r && (
+        <>
+          {r.unplaced.length > 0 && (
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6, fontFamily: "var(--font-mono)", fontSize: 10 }}>
+              {r.unplaced.slice(0, 6).map((p) => (
+                <span key={`${p.namespace}/${p.name}`} style={{ color: "var(--color-text-danger)" }} title={`requests ${fmtCpu(p.cpuReq)} cpu / ${fmtMem(p.memReq)}`}>
+                  {p.namespace}/{p.name}
+                </span>
+              ))}
+              {r.unplaced.length > 6 && <span style={{ color: "var(--color-text-tertiary)" }}>+{r.unplaced.length - 6} more</span>}
+            </div>
+          )}
+          {report.pdbBlockers.length > 0 && (
+            <div style={{ fontSize: 10, color: "var(--color-text-warning)" }}>
+              drain blockers: {report.pdbBlockers.slice(0, 4).map((b) => `${b.namespace}/${b.name}`).join(", ")}
+              {report.pdbBlockers.length > 4 ? ` +${report.pdbBlockers.length - 4} more` : ""} — PDBs at 0 allowed disruptions stall the drain even when capacity fits
+            </div>
+          )}
+          <div style={{ fontSize: 9, color: "var(--color-text-tertiary)" }}>
+            requests-based upper bound — affinity, taints, and topology spread not modeled; DaemonSet pods excluded
+            {report.podListCapped ? " · pod list capped: the verdict may be optimistic" : ""}
+          </div>
+        </>
       )}
     </div>
   );

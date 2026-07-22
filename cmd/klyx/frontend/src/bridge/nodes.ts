@@ -1,4 +1,4 @@
-import { useFleet, NodesResultDTO, NodeDetailDTO } from "../store/fleet";
+import { useFleet, NodesResultDTO, NodeDetailDTO, HeadroomReportDTO } from "../store/fleet";
 import { NodesService, NodeOpsService } from "../../bindings/github.com/moomora/klyx/internal/appbridge/index.js";
 
 type ActionResultDTO = { ok: boolean; error: string };
@@ -65,5 +65,18 @@ export async function openNodeDetail(cluster: string, name: string): Promise<voi
     if (sel && sel.name === name) {
       useFleet.setState((s) => ({ nodes: { ...s.nodes, detailLoading: false } }));
     }
+  }
+}
+
+// Survivability simulation: lose a node/zone/pool, do the displaced pods fit?
+export async function getNodeHeadroom(cluster: string, loseKind: string, loseName: string): Promise<HeadroomReportDTO> {
+  try {
+    return (await NodesService.GetNodeHeadroom(cluster, loseKind, loseName)) as HeadroomReportDTO;
+  } catch (e) {
+    return {
+      result: { lostNodes: 0, survivorNodes: 0, displaced: 0, rescheduled: 0, unplaced: [], cpuShortfall: 0, memShortfall: 0 },
+      pdbBlockers: [], podListCapped: false,
+      error: e instanceof Error ? e.message : "headroom simulation failed",
+    };
   }
 }
