@@ -284,6 +284,11 @@ export type WorkloadDTO = { kind: string; namespace: string; name: string; desir
 // ControllerRevision's patch data carries no template - never fabricated.
 export type RolloutRevisionDTO = { revision: number; ageSeconds: number; images: string[]; current: boolean; changeCause?: string };
 export type RolloutHistoryResultDTO = { revisions: RolloutRevisionDTO[]; error?: string };
+
+// Fleet promotion tracker: one cluster's applied GitOps state.
+export type PromotionUnitDTO = { kind: string; namespace: string; name: string; sourceKind: string; sourceName: string; revision: string; ready: string; suspended: boolean; stale: boolean; message: string };
+export type PromotionSourceDTO = { kind: string; namespace: string; name: string; revision: string; ready: string; suspended: boolean };
+export type PromotionSnapshotDTO = { fluxPresent: boolean; argoPresent: boolean; units: PromotionUnitDTO[]; sources: PromotionSourceDTO[]; error?: string };
 export type WorkloadUsageDTO = { cpuUsage: number | null; memUsage: number | null };
 export type WorkloadMetricsStatusDTO = { available: boolean; message: string; updatedAt: string };
 export type WorkloadMetricsResultDTO = { status: WorkloadMetricsStatusDTO; usage: Record<string, WorkloadUsageDTO> };

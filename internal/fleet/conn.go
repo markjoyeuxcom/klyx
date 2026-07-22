@@ -128,6 +128,7 @@ type Conn interface {
 	RefreshArgoApp(ctx context.Context, namespace, name string) error
 	SyncArgoApp(ctx context.Context, namespace, name string, opts argo.SyncOptions) error
 	GitOpsSummary(ctx context.Context) (GitOpsSummary, error)
+	GitOpsPromotion(ctx context.Context) (PromotionSnapshot, error)
 	GitOpsSummaryFlux(ctx context.Context) (fluxPresent bool, total, notReady, suspended int, err error)
 }
 

@@ -1,5 +1,7 @@
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { IconLayoutGrid } from "@tabler/icons-react";
+import { FleetPromotion } from "./FleetPromotion";
+import { btn } from "../chrome/primitives";
 import { useFleet } from "../store/fleet";
 import { MetersStrip } from "../chrome/primitives";
 import { EmptyState } from "../chrome/EmptyState";
@@ -12,6 +14,7 @@ export function FleetView() {
   const clusters = useFleet((s) => s.clusters);
   const mesh = useFleet((s) => s.mesh);
   const fleetBoard = useFleet((s) => s.fleetBoard);
+  const [showPromotion, setShowPromotion] = useState(false);
   // Board enrichment fetches once per set of CONNECTED clusters (a cluster
   // coming online re-triggers); per-card fields degrade independently.
   const connectedKey = clusters
@@ -73,6 +76,7 @@ export function FleetView() {
           }}>
             <div style={{ fontSize: 15, fontWeight: 600 }}>Fleet board</div>
             <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", justifyContent: "flex-end" }}>
+              <button onClick={() => setShowPromotion(true)} title="Track applied GitOps revisions across the fleet (did my change land everywhere?)" style={{ ...btn, fontSize: 11 }}>promotion</button>
               <BoardChip strong>diagnostic order</BoardChip>
               <BoardChip>{clusters.length} cluster{clusters.length === 1 ? "" : "s"}</BoardChip>
               <span style={{ display: "inline-flex", alignItems: "center", gap: 6, color: allConnected ? "var(--color-text-success)" : "var(--color-text-warning)", fontFamily: "var(--font-mono)", fontSize: 11, whiteSpace: "nowrap" }}>
@@ -92,6 +96,7 @@ export function FleetView() {
           </div>
         </>
       )}
+      {showPromotion && <FleetPromotion onClose={() => setShowPromotion(false)} />}
     </div>
   );
 }

@@ -229,6 +229,9 @@ func (f *fakeConn) AccessCanI(context.Context, rbac.CheckSpec, string, string) (
 func (f *fakeConn) AccessWhoCan(context.Context, rbac.CheckSpec) (rbac.Enumeration, error) {
 	return rbac.Enumeration{}, nil
 }
+func (f *fakeConn) GitOpsPromotion(context.Context) (PromotionSnapshot, error) {
+	return PromotionSnapshot{}, nil
+}
 func (f *fakeConn) GitOpsSummary(context.Context) (GitOpsSummary, error) {
 	return GitOpsSummary{}, nil
 }
