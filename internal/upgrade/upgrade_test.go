@@ -7,10 +7,10 @@ import (
 
 func TestParseMinor(t *testing.T) {
 	cases := map[string]int{
-		"v1.31.4":            31,
-		"v1.30.3+k3s1":       30,
+		"v1.31.4":             31,
+		"v1.30.3+k3s1":        30,
 		"v1.29.8-eks-a737599": 29,
-		"1.28.0":             28,
+		"1.28.0":              28,
 	}
 	for in, want := range cases {
 		got, ok := ParseMinor(in)
