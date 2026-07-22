@@ -15,6 +15,7 @@ var (
 	_ CRDConn             = fleet.Conn(nil)
 	_ EventsConn          = fleet.Conn(nil)
 	_ ExecConn            = fleet.Conn(nil)
+	_ ExpiryConn          = fleet.Conn(nil)
 	_ ExternalSecretsConn = fleet.Conn(nil)
 	_ ForwardsConn        = fleet.Conn(nil)
 	_ GatewayConn         = fleet.Conn(nil)

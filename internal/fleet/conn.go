@@ -132,6 +132,7 @@ type Conn interface {
 	UpgradeReadiness(ctx context.Context) (UpgradeReport, error)
 	ConnectivityCanI(ctx context.Context, srcNS, srcPod, dstNS, dstPod string, port int, protocol string) (ConnectivityReport, error)
 	NodeHeadroom(ctx context.Context, loseKind, loseName string) (HeadroomReport, error)
+	ExpiryScan(ctx context.Context) (ExpiryScanResult, error)
 	GitOpsSummaryFlux(ctx context.Context) (fluxPresent bool, total, notReady, suspended int, err error)
 }
 

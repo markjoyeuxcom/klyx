@@ -241,6 +241,9 @@ func (f *fakeConn) ConnectivityCanI(context.Context, string, string, string, str
 func (f *fakeConn) NodeHeadroom(context.Context, string, string) (HeadroomReport, error) {
 	return HeadroomReport{}, nil
 }
+func (f *fakeConn) ExpiryScan(context.Context) (ExpiryScanResult, error) {
+	return ExpiryScanResult{}, nil
+}
 func (f *fakeConn) GitOpsSummary(context.Context) (GitOpsSummary, error) {
 	return GitOpsSummary{}, nil
 }
