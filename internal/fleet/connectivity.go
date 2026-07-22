@@ -68,9 +68,7 @@ func (c *ClusterConn) ConnectivityCanI(ctx context.Context, srcNS, srcPod, dstNS
 		if err != nil {
 			return ConnectivityReport{}, fmt.Errorf("list networkpolicies in %s: %w", ns, err)
 		}
-		for i := range pl.Items {
-			all = append(all, pl.Items[i])
-		}
+		all = append(all, pl.Items...)
 	}
 
 	q := netpol.Query{
