@@ -331,6 +331,38 @@ func main() {
 		return c, true
 	})
 
+	promotionSvc := appbridge.NewPromotionService(func(name string) (appbridge.PromotionConn, bool) {
+		c, ok := reg.Conn(name)
+		if !ok {
+			return nil, false
+		}
+		return c, true
+	})
+
+	upgradeSvc := appbridge.NewUpgradeService(func(name string) (appbridge.UpgradeConn, bool) {
+		c, ok := reg.Conn(name)
+		if !ok {
+			return nil, false
+		}
+		return c, true
+	})
+
+	connectivitySvc := appbridge.NewConnectivityService(func(name string) (appbridge.ConnectivityConn, bool) {
+		c, ok := reg.Conn(name)
+		if !ok {
+			return nil, false
+		}
+		return c, true
+	})
+
+	expirySvc := appbridge.NewExpiryService(func(name string) (appbridge.ExpiryConn, bool) {
+		c, ok := reg.Conn(name)
+		if !ok {
+			return nil, false
+		}
+		return c, true
+	})
+
 	// Native shell: window title context, dock/taskbar badge, OS notifications.
 	// mainWin is assigned after window creation below; the closures are nil-safe
 	// until then.
@@ -387,6 +419,10 @@ func main() {
 			application.NewService(configSvc),
 			application.NewService(argoSvc),
 			application.NewService(rbacSvc),
+			application.NewService(promotionSvc),
+			application.NewService(upgradeSvc),
+			application.NewService(connectivitySvc),
+			application.NewService(expirySvc),
 			application.NewService(aiSvc),
 			application.NewService(dockSvc),
 			application.NewService(notifySvc),

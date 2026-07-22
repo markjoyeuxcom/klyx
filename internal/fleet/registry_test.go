@@ -229,6 +229,21 @@ func (f *fakeConn) AccessCanI(context.Context, rbac.CheckSpec, string, string) (
 func (f *fakeConn) AccessWhoCan(context.Context, rbac.CheckSpec) (rbac.Enumeration, error) {
 	return rbac.Enumeration{}, nil
 }
+func (f *fakeConn) GitOpsPromotion(context.Context) (PromotionSnapshot, error) {
+	return PromotionSnapshot{}, nil
+}
+func (f *fakeConn) UpgradeReadiness(context.Context) (UpgradeReport, error) {
+	return UpgradeReport{}, nil
+}
+func (f *fakeConn) ConnectivityCanI(context.Context, string, string, string, string, int, string) (ConnectivityReport, error) {
+	return ConnectivityReport{}, nil
+}
+func (f *fakeConn) NodeHeadroom(context.Context, string, string) (HeadroomReport, error) {
+	return HeadroomReport{}, nil
+}
+func (f *fakeConn) ExpiryScan(context.Context) (ExpiryScanResult, error) {
+	return ExpiryScanResult{}, nil
+}
 func (f *fakeConn) GitOpsSummary(context.Context) (GitOpsSummary, error) {
 	return GitOpsSummary{}, nil
 }

@@ -12,8 +12,12 @@ vi.mock("../bridge/nodes", () => ({
   cordonNode: vi.fn().mockResolvedValue(undefined),
   startDrain: vi.fn().mockResolvedValue({ streamId: "test-stream-1" }),
   cancelDrain: vi.fn().mockResolvedValue(undefined),
+  getNodeHeadroom: vi.fn(async () => ({
+    result: { lostNodes: 0, survivorNodes: 0, displaced: 0, rescheduled: 0, unplaced: [], cpuShortfall: 0, memShortfall: 0 },
+    pdbBlockers: [], podListCapped: false,
+  })),
 }));
-import { openNodeDetail, cordonNode, startDrain, cancelDrain } from "../bridge/nodes";
+import { openNodeDetail, cordonNode, startDrain, cancelDrain, getNodeHeadroom } from "../bridge/nodes";
 
 // ConfirmDialog registers protected-cluster grants via the config bridge;
 // mock it so no Wails runtime (bindings chain) is needed.
@@ -54,6 +58,8 @@ import { Events } from "@wailsio/runtime";
 
 const healthy: NodeSummaryDTO = {
   name: "node-healthy",
+  pool: "workers",
+  zone: "westeurope-1",
   roles: ["worker"],
   ready: true,
   unschedulable: false,
@@ -202,6 +208,39 @@ describe("NodesView", () => {
     expect(await findByText(/pod list capped/)).toBeTruthy();
   });
 
+  it("survivability: targets derive from loaded nodes and the verdict renders", async () => {
+    vi.mocked(getNodeHeadroom).mockResolvedValue({
+      result: { lostNodes: 1, survivorNodes: 2, displaced: 5, rescheduled: 5, unplaced: [], cpuShortfall: 0, memShortfall: 0 },
+      pdbBlockers: [{ namespace: "team-a", name: "pg-pdb", disruptionsAllowed: 0 }],
+      podListCapped: false,
+    });
+    seed([healthy, notReady]);
+    const { getByText, getByLabelText, findByTestId } = render(<NodesView cluster="homelab" />);
+    // Zone + pool + per-node targets from the loaded rows.
+    const select = getByLabelText("loss target") as HTMLSelectElement;
+    expect([...select.options].map((o) => o.text)).toContain("zone westeurope-1");
+    expect([...select.options].map((o) => o.text)).toContain("pool workers");
+    fireEvent.click(getByText("simulate"));
+    const verdict = await findByTestId("survivability-verdict");
+    expect(verdict.textContent).toContain("fits — 5 displaced pods reschedule onto 2 nodes");
+    expect(getByText(/drain blockers: team-a\/pg-pdb/)).toBeTruthy();
+    expect(getByText(/requests-based upper bound/)).toBeTruthy();
+  });
+
+  it("survivability: a shortfall names the pods that won't fit", async () => {
+    vi.mocked(getNodeHeadroom).mockResolvedValue({
+      result: { lostNodes: 1, survivorNodes: 1, displaced: 3, rescheduled: 1, unplaced: [{ namespace: "x", name: "big", cpuReq: 4, memReq: 8 * 1073741824 }, { namespace: "x", name: "small", cpuReq: 1, memReq: 1073741824 }], cpuShortfall: 5, memShortfall: 9 * 1073741824 },
+      pdbBlockers: [], podListCapped: true,
+    });
+    seed([healthy]);
+    const { getByText, findByTestId } = render(<NodesView cluster="homelab" />);
+    fireEvent.click(getByText("simulate"));
+    const verdict = await findByTestId("survivability-verdict");
+    expect(verdict.textContent).toContain("2 pods won't fit");
+    expect(getByText("x/big")).toBeTruthy();
+    expect(getByText(/pod list capped: the verdict may be optimistic/)).toBeTruthy();
+  });
+
   it("consumes a parked drain-node intent by opening the drain composer", () => {
     seed([healthy]);
     useFleet.getState().requestNavIntent({ kind: "drain-node", cluster: "homelab", node: "node-healthy" });
@@ -270,7 +309,9 @@ describe("NodesView", () => {
   it("sorts nodes with problems above quiet nodes", () => {
     seed([healthy, cordoned, notReady]);
     const { getAllByText } = render(<NodesView cluster="homelab" />);
-    const names = getAllByText(/a-notready|b-cordoned|node-healthy/).map((el) => el.textContent);
+    // Anchored: the survivability dropdown options ("node node-healthy")
+    // must not match - only the row name cells.
+    const names = getAllByText(/^(a-notready|b-cordoned|node-healthy)$/).map((el) => el.textContent);
     expect(names[0]).toBe("a-notready");
   });
 

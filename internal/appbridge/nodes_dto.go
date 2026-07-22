@@ -17,6 +17,42 @@ type NodeSummaryDTO struct {
 	MemAllocatable float64  `json:"memAllocatable"`
 	PodCapacity    int64    `json:"podCapacity"`
 	AgeSeconds     int      `json:"ageSeconds"`
+	Pool           string   `json:"pool"`
+	Zone           string   `json:"zone"`
+}
+
+// HeadroomPodRefDTO mirrors workloads.PodRef (an unplaced pod + its requests).
+type HeadroomPodRefDTO struct {
+	Namespace string  `json:"namespace"`
+	Name      string  `json:"name"`
+	CPUReq    float64 `json:"cpuReq"`
+	MemReq    float64 `json:"memReq"`
+}
+
+// PDBBlockerDTO mirrors fleet.PDBBlocker.
+type PDBBlockerDTO struct {
+	Namespace          string `json:"namespace"`
+	Name               string `json:"name"`
+	DisruptionsAllowed int    `json:"disruptionsAllowed"`
+}
+
+// HeadroomResultDTO mirrors workloads.HeadroomResult.
+type HeadroomResultDTO struct {
+	LostNodes     int                 `json:"lostNodes"`
+	SurvivorNodes int                 `json:"survivorNodes"`
+	Displaced     int                 `json:"displaced"`
+	Rescheduled   int                 `json:"rescheduled"`
+	Unplaced      []HeadroomPodRefDTO `json:"unplaced"`
+	CPUShortfall  float64             `json:"cpuShortfall"`
+	MemShortfall  float64             `json:"memShortfall"`
+}
+
+// HeadroomReportDTO is GetNodeHeadroom's payload.
+type HeadroomReportDTO struct {
+	Result        HeadroomResultDTO `json:"result"`
+	PDBBlockers   []PDBBlockerDTO   `json:"pdbBlockers"`
+	PodListCapped bool              `json:"podListCapped"`
+	Error         string            `json:"error,omitempty"`
 }
 
 // NodesResultDTO is the response from ListNodes.

@@ -27,6 +27,22 @@ type NodeSummary struct {
 	MemAllocatable float64 // bytes
 	PodCapacity    int64
 	AgeSeconds     int
+	// Pool is the provider node-pool/group identity (AKS agentpool, EKS
+	// nodegroup, GKE nodepool, Karpenter nodepool), "" when no known label.
+	// Zone is topology.kubernetes.io/zone (rack/zone on on-prem via the same
+	// well-known label), "" when unlabeled.
+	Pool string
+	Zone string
+}
+
+// poolLabels are the provider labels that name a node's pool/group, checked in
+// order. Provider-agnostic by design: AKS, EKS, GKE, Karpenter.
+var poolLabels = []string{
+	"agentpool",
+	"kubernetes.azure.com/agentpool",
+	"eks.amazonaws.com/nodegroup",
+	"cloud.google.com/gke-nodepool",
+	"karpenter.sh/nodepool",
 }
 
 // SummarizeNodes classifies each node and returns them sorted problem-first
@@ -85,6 +101,14 @@ func summarizeNode(n *corev1.Node, now time.Time) NodeSummary {
 		}
 	}
 	sort.Strings(s.Roles)
+
+	for _, l := range poolLabels {
+		if v := n.Labels[l]; v != "" {
+			s.Pool = v
+			break
+		}
+	}
+	s.Zone = n.Labels["topology.kubernetes.io/zone"]
 
 	// Conditions: extract Ready state and pressure conditions.
 	s.Ready = true // default optimistic until we see the condition

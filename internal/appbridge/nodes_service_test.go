@@ -21,6 +21,10 @@ func (f *fakeNodeConn) ListNodes(_ context.Context) ([]workloads.NodeSummary, er
 	return f.nodes, nil
 }
 
+func (f *fakeNodeConn) NodeHeadroom(context.Context, string, string) (fleet.HeadroomReport, error) {
+	return fleet.HeadroomReport{}, nil
+}
+
 func (f *fakeNodeConn) NodeDetail(_ context.Context, _ string) (fleet.NodeDetail, error) {
 	return f.detail, f.detErr
 }
