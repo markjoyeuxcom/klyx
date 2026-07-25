@@ -702,6 +702,9 @@ export function NodesView({ cluster }: { cluster: string }) {
 // states its caveats: requests-based upper bound, affinity/taints not
 // modeled, DaemonSet pods excluded, PDB blockers listed separately.
 function SurvivabilityModule({ cluster, nodes }: { cluster: string; nodes: NodeSummaryDTO[] }) {
+  // Autoscaler honesty: with Karpenter present, lost capacity would be
+  // re-provisioned - the fixed-capacity verdict is a FLOOR, not the outcome.
+  const hasKarpenter = useFleet((s) => s.clusters.find((c) => c.name === cluster)?.karpenterPresent ?? false);
   const targets = useMemo(() => {
     const zones = [...new Set(nodes.map((n) => n.zone ?? "").filter(Boolean))].sort();
     const pools = [...new Set(nodes.map((n) => n.pool ?? "").filter(Boolean))].sort();
@@ -767,6 +770,7 @@ function SurvivabilityModule({ cluster, nodes }: { cluster: string; nodes: NodeS
           )}
           <div style={{ fontSize: 9, color: "var(--color-text-tertiary)" }}>
             requests-based upper bound — affinity, taints, and topology spread not modeled; DaemonSet pods excluded
+            {hasKarpenter ? " · Karpenter present: lost capacity would be re-provisioned, this verdict is a floor" : ""}
             {report.podListCapped ? " · pod list capped: the verdict may be optimistic" : ""}
           </div>
         </>

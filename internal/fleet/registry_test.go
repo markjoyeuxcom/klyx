@@ -244,6 +244,9 @@ func (f *fakeConn) NodeHeadroom(context.Context, string, string) (HeadroomReport
 func (f *fakeConn) ExpiryScan(context.Context) (ExpiryScanResult, error) {
 	return ExpiryScanResult{}, nil
 }
+func (f *fakeConn) KarpenterState(context.Context) (KarpenterSnapshot, error) {
+	return KarpenterSnapshot{}, nil
+}
 func (f *fakeConn) GitOpsSummary(context.Context) (GitOpsSummary, error) {
 	return GitOpsSummary{}, nil
 }

@@ -105,6 +105,7 @@ func (d *Detector) Detect(ctx context.Context) Set {
 			CertManager:     CertManagerCapability{Base: Base{Tier: Absent, Reason: msg}},
 			ExternalSecrets: ExternalSecretsCapability{Base: Base{Tier: Absent, Reason: msg}},
 			Reloader:        ReloaderCapability{Base: Base{Tier: Absent, Reason: msg}},
+			Karpenter:       KarpenterCapability{Base: Base{Tier: Absent, Reason: msg}},
 		}
 	}
 	return Set{
@@ -113,6 +114,7 @@ func (d *Detector) Detect(ctx context.Context) Set {
 		CertManager:     d.detectCertManager(ctx, served),
 		ExternalSecrets: d.detectExternalSecrets(ctx, served),
 		Reloader:        d.detectReloader(ctx),
+		Karpenter:       d.detectKarpenter(ctx, served),
 	}
 }
 
@@ -217,6 +219,30 @@ func (d *Detector) detectExternalSecrets(ctx context.Context, served map[string]
 	out.Base.Tier = Classify(true, out.Healthy)
 	if !out.Healthy {
 		out.Base.Reason = "External Secrets Operator installed but " + externalSecretsController + " is not ready"
+	}
+	return out
+}
+
+// detectKarpenter classifies Karpenter: present iff the karpenter.sh CRDs
+// (NodePool/NodeClaim) are served, healthy iff the karpenter controller
+// Deployment is ready in either of its conventional namespaces (kube-system
+// for newer EKS installs, karpenter for the classic helm chart).
+func (d *Detector) detectKarpenter(ctx context.Context, served map[string]bool) KarpenterCapability {
+	out := KarpenterCapability{}
+	out.Present = served["karpenter.sh"]
+	if !out.Present {
+		out.Base = Base{Tier: Absent, Reason: "no Karpenter CRDs installed"}
+		return out
+	}
+	for _, ns := range []string{"kube-system", "karpenter"} {
+		if d.controllerReady(ctx, deploymentWorkload, ns, "karpenter") {
+			out.Healthy = true
+			break
+		}
+	}
+	out.Base.Tier = Classify(true, out.Healthy)
+	if !out.Healthy {
+		out.Base.Reason = "Karpenter CRDs installed but the karpenter controller is not ready (checked kube-system, karpenter)"
 	}
 	return out
 }

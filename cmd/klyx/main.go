@@ -363,6 +363,14 @@ func main() {
 		return c, true
 	})
 
+	karpenterSvc := appbridge.NewKarpenterService(func(name string) (appbridge.KarpenterConn, bool) {
+		c, ok := reg.Conn(name)
+		if !ok {
+			return nil, false
+		}
+		return c, true
+	})
+
 	// Native shell: window title context, dock/taskbar badge, OS notifications.
 	// mainWin is assigned after window creation below; the closures are nil-safe
 	// until then.
@@ -423,6 +431,7 @@ func main() {
 			application.NewService(upgradeSvc),
 			application.NewService(connectivitySvc),
 			application.NewService(expirySvc),
+			application.NewService(karpenterSvc),
 			application.NewService(aiSvc),
 			application.NewService(dockSvc),
 			application.NewService(notifySvc),

@@ -43,6 +43,7 @@ const SECTION_ORDER: ClusterSection[] = [
   "access",
   "connectivity",
   "upgrade",
+  "karpenter",
   "resources",
   "crds",
 ];

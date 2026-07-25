@@ -8,6 +8,7 @@ import (
 	"github.com/moomora/klyx/internal/crd"
 	"github.com/moomora/klyx/internal/fleet"
 	"github.com/moomora/klyx/internal/hubble"
+	"github.com/moomora/klyx/internal/karpenter"
 	"github.com/moomora/klyx/internal/netpol"
 	"github.com/moomora/klyx/internal/rbac"
 	"github.com/moomora/klyx/internal/upgrade"
@@ -60,6 +61,8 @@ var mirrorPairs = []struct {
 	{"HeadroomResult", reflect.TypeOf(workloads.HeadroomResult{}), reflect.TypeOf(HeadroomResultDTO{})},
 	{"HeadroomPodRef", reflect.TypeOf(workloads.PodRef{}), reflect.TypeOf(HeadroomPodRefDTO{})},
 	{"PDBBlocker", reflect.TypeOf(fleet.PDBBlocker{}), reflect.TypeOf(PDBBlockerDTO{})},
+	{"KarpenterPool", reflect.TypeOf(karpenter.NodePool{}), reflect.TypeOf(KarpenterPoolDTO{})},
+	{"KarpenterClaim", reflect.TypeOf(karpenter.NodeClaim{}), reflect.TypeOf(KarpenterClaimDTO{})},
 	{"ContainerSummary", reflect.TypeOf(workloads.ContainerSummary{}), reflect.TypeOf(ContainerSummaryDTO{})},
 	{"ContainerPort", reflect.TypeOf(workloads.ContainerPort{}), reflect.TypeOf(ContainerPortDTO{})},
 }

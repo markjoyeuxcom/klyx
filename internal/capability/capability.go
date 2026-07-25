@@ -108,6 +108,16 @@ type ReloaderCapability struct {
 	Healthy bool
 }
 
+// KarpenterCapability models Karpenter: presence of the karpenter.sh CRDs
+// (NodePool/NodeClaim) plus controller health. The controller Deployment's
+// namespace varies by install (kube-system on newer EKS defaults, karpenter
+// on the classic helm chart), so health probes both.
+type KarpenterCapability struct {
+	Base
+	Present bool
+	Healthy bool
+}
+
 // Set is the full per-cluster capability snapshot handed to the view layer.
 type Set struct {
 	GitOps          GitOpsCapability
@@ -115,4 +125,5 @@ type Set struct {
 	CertManager     CertManagerCapability
 	ExternalSecrets ExternalSecretsCapability
 	Reloader        ReloaderCapability
+	Karpenter       KarpenterCapability
 }

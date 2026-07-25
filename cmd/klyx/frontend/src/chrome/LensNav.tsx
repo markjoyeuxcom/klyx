@@ -4,7 +4,7 @@ import {
   IconAlertTriangle, IconAnchor, IconArrowsLeftRight, IconBox, IconCertificate, IconCircleDot,
   IconComponents, IconCpu, IconDatabase, IconFolder, IconGitBranch, IconGitMerge, IconHistory,
   IconKey, IconLayoutGrid, IconNetwork, IconPackage, IconRoute, IconScale, IconServer,
-  IconRouteAltLeft, IconSettings, IconShieldLock, IconStack2, IconStairsUp, IconTerminal2, IconUserCheck, IconWebhook,
+  IconRouteAltLeft, IconSettings, IconShieldLock, IconStack2, IconStairsUp, IconTerminal2, IconTopologyStar3, IconUserCheck, IconWebhook,
 } from "@tabler/icons-react";
 import { useFleet, WORKLOAD_KINDS } from "../store/fleet";
 import type { ArgoViewMode, ClusterSection, ResourceRef, Route, WorkloadKind } from "../store/fleet";
@@ -150,6 +150,15 @@ const EXPANDED_MENU: ExpandedGroup[] = [
     ],
   },
   {
+    label: "Karpenter",
+    items: [
+      { label: "Autoscaling", Icon: IconTopologyStar3, target: { kind: "section", section: "karpenter" } },
+      { label: "NodePools", Icon: IconServer, target: { kind: "resource", ref: r("karpenter.sh", "v1", "nodepools", "NodePool", "Cluster") } },
+      { label: "NodeClaims", Icon: IconCircleDot, target: { kind: "resource", ref: r("karpenter.sh", "v1", "nodeclaims", "NodeClaim", "Cluster") } },
+      { label: "EC2NodeClasses", Icon: IconCpu, target: { kind: "resource", ref: r("karpenter.k8s.aws", "v1", "ec2nodeclasses", "EC2NodeClass", "Cluster") } },
+    ],
+  },
+  {
     label: "External Secrets",
     items: [
       { label: "ExternalSecrets", Icon: IconShieldLock, target: { kind: "section", section: "externalsecrets" } },
@@ -209,15 +218,16 @@ const EXPANDED_MENU: ExpandedGroup[] = [
 // Inside a cluster, tool-specific nav is hidden when detection says the tool
 // is absent; outside a cluster (fleet/settings) everything shows disabled as
 // before. Detection lag just means a group appears when the cluster syncs.
-type ClusterCaps = { flux: boolean; argo: boolean; certManager: boolean; externalSecrets: boolean; gatewayAPI: boolean };
+type ClusterCaps = { flux: boolean; argo: boolean; certManager: boolean; externalSecrets: boolean; gatewayAPI: boolean; karpenter: boolean };
 
-const ALL_CAPS: ClusterCaps = { flux: true, argo: true, certManager: true, externalSecrets: true, gatewayAPI: true };
+const ALL_CAPS: ClusterCaps = { flux: true, argo: true, certManager: true, externalSecrets: true, gatewayAPI: true, karpenter: true };
 
 // Groups/sections owned by a single tool; everything else is always shown.
 const GROUP_CAPS: Record<string, keyof ClusterCaps> = {
   "Flux CD": "flux",
   "Argo CD": "argo",
   "cert-manager": "certManager",
+  "Karpenter": "karpenter",
   "External Secrets": "externalSecrets",
   "Gateway API": "gatewayAPI",
 };
@@ -319,6 +329,7 @@ export function LensNav() {
         certManager: current.certManagerPresent ?? false,
         externalSecrets: current.externalSecretsPresent ?? false,
         gatewayAPI: Boolean(current.gatewayAPIVersion),
+        karpenter: current.karpenterPresent ?? false,
       }
     : ALL_CAPS;
 
