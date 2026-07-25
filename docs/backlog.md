@@ -1,6 +1,7 @@
 # Klyx backlog
 
-Consolidated 2026-07-09; last pruned 2026-07-22 (the fleet-ops batch shipped:
+Consolidated 2026-07-09; last pruned 2026-07-22 (the Karpenter lens shipped;
+same day, the fleet-ops batch:
 promotion tracker, upgrade readiness, connectivity can-i, survivability
 headroom, expiry horizon; 2026-07-21: rollout history/undo/pause — the ranked
 top-12 complete — and node + per-container utilization; 2026-07-20: RBAC
@@ -42,8 +43,11 @@ the need is real, not top-to-bottom.
       on an AKS cluster + the k3s homelab (EOL runway + skew believable), a
       connectivity check against a real deny-all namespace (and the PARTIAL
       Cilium label on the mesh clusters), a zone-loss simulation on prd-weu
-      (is the verdict credible against known capacity), and the expiry horizon
-      (does it find the webhook CAs and any unmanaged TLS secrets)
+      (is the verdict credible against known capacity), the expiry horizon
+      (does it find the webhook CAs and any unmanaged TLS secrets), and the
+      Karpenter lens (against the EKS lab once Karpenter lands there: does
+      detection fire, do stuck claims name the right chain link, does the
+      floor caption appear on the survivability module)
 - [ ] **Real-LLM smoke test** of the AI feature (local Ollama backend, or a hosted
       key) — everything is currently verified against a fake client
 - [ ] **Live-cluster smoke of the write paths** (nothing destructive committed
@@ -136,16 +140,11 @@ entirely demand-driven from sections 1–4.
       `flux diff` resolve reliably)
 - [ ] **ESO**: `ClusterExternalSecret` / `PushSecret` kinds + a day-2 force-refresh
       verb
-- [ ] **Karpenter lens** (demand-driven: build when Karpenter enters an
-      environment, e.g. a personal EKS lab): capability detection on the
-      `karpenter.sh` group + controller Deployment health; a broken-first
-      NodePool/NodeClaim triage speaking Karpenter's vocabulary (limits vs
-      current capacity, stuck claims with the failing requirement named,
-      disruption/consolidation reasons from events); an autoscaler-aware
-      caption on the survivability simulator (today it models FIXED capacity —
-      on a Karpenter cluster the verdict is a floor, since new nodes would be
-      provisioned). Already working: `karpenter.sh/nodepool` as a pool-identity
-      source, and the CRDs via the generic browser.
+- [ ] **Karpenter lens follow-ups** (lens shipped 2026-07-22, #48): NodeClaim →
+      Node cross-link into the node board; a "requirements that couldn't be
+      met" breakdown for stuck claims (parse status on the owning NodePool's
+      unschedulable pods); v1beta1 API fallback verification against an older
+      install (preferredVersion handles it, untested live)
 - [ ] **Reloader**: a capability nav badge/section (detection + forward view +
       reverse drill-in + search/match all shipped)
 - [ ] MeshStrip patch-bay cosmetics
@@ -175,7 +174,7 @@ entirely demand-driven from sections 1–4.
 - [ ] **GitHub Actions budget exhausted** (hit 2026-07-21) — every CI job fails
       in 2s with "an Actions budget is preventing further use" (private repo,
       paid minutes). Raise the spending cap: github.com/settings/billing →
-      Budgets and alerts. PRs #41–#45 merged on full local gates (same
+      Budgets and alerts. PRs #41–#48 merged on full local gates (same
       commands CI runs); the first green run on main after the reset
       re-verifies them.
 - [ ] **Release signing / notarization** — inert scaffold in `release.yml`; needs
@@ -191,6 +190,16 @@ See `docs/brainstorm-questions.md` (Q16 pinned resources, etc.).
 ## Recently shipped (so it's not mistaken for open)
 
 Merged to `main` — do not re-add to the backlog:
+
+**2026-07-22 — the Karpenter lens (#48):**
+- Autoscaling diagnosis in Karpenter's vocabulary: capability detection
+  (CRDs + controller health, both conventional namespaces), broken-first
+  NodePool triage (limits vs provisioned capacity, 90% warning bars),
+  stuck-first NodeClaim triage naming the first broken launch-chain link
+  (Launched → Registered → Initialized), drifted/consolidatable as intended
+  states, spot/on-demand identity, disruption event feed, and the
+  autoscaler-aware floor caption on the survivability simulator. Read-only;
+  merged on local gates during the CI budget outage
 
 **2026-07-22 — the fleet-ops batch (#45, five features, one commit each):**
 - Promotion tracker: fleet modal, applied GitOps revisions per cluster in
