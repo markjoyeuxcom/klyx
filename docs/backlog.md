@@ -136,6 +136,16 @@ entirely demand-driven from sections 1–4.
       `flux diff` resolve reliably)
 - [ ] **ESO**: `ClusterExternalSecret` / `PushSecret` kinds + a day-2 force-refresh
       verb
+- [ ] **Karpenter lens** (demand-driven: build when Karpenter enters an
+      environment, e.g. a personal EKS lab): capability detection on the
+      `karpenter.sh` group + controller Deployment health; a broken-first
+      NodePool/NodeClaim triage speaking Karpenter's vocabulary (limits vs
+      current capacity, stuck claims with the failing requirement named,
+      disruption/consolidation reasons from events); an autoscaler-aware
+      caption on the survivability simulator (today it models FIXED capacity —
+      on a Karpenter cluster the verdict is a floor, since new nodes would be
+      provisioned). Already working: `karpenter.sh/nodepool` as a pool-identity
+      source, and the CRDs via the generic browser.
 - [ ] **Reloader**: a capability nav badge/section (detection + forward view +
       reverse drill-in + search/match all shipped)
 - [ ] MeshStrip patch-bay cosmetics
