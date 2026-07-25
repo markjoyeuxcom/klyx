@@ -104,12 +104,12 @@ describe("buildCommands", () => {
     const setSection = vi.fn();
     const s = makeStore({ route: { name: "cluster", cluster: "dev", section: "overview" } as never, setSection });
     const sections = buildCommands(s).filter((c) => c.group === "Sections");
-    // 16 sections: observability removed; gitops label is "Flux" but id stays
+    // 17 sections: observability removed; gitops label is "Flux" but id stays
     // "gitops"; Argo CD added as its own section; External Secrets added in
     // M12, Certificates joined the palette alongside it (M11 gap), the Access
-    // lens (RBAC can-i / who-can) with the access-review work, and the
-    // Connectivity + Upgrade lenses with the fleet-ops batch.
-    expect(sections.length).toBe(16);
+    // lens (RBAC can-i / who-can) with the access-review work, the
+    // Connectivity + Upgrade lenses with the fleet-ops batch, and Karpenter.
+    expect(sections.length).toBe(17);
     expect(sections[0].hint).toBe("dev");
     // gitops section is still reachable by id
     sections.find((c) => c.id === "section:gitops")!.run();
@@ -121,7 +121,7 @@ describe("buildCommands", () => {
     // triage-first order keeps Nodes in the operational loop and Network as its own lane.
     const ids = sections.map((c) => c.id.replace("section:", ""));
     expect(ids).toEqual(["overview", "workloads", "pods", "nodes", "events", "gitops",
-      "argo", "helm", "certs", "externalsecrets", "gatewayApi", "access", "connectivity", "upgrade", "resources", "crds"]);
+      "argo", "helm", "certs", "externalsecrets", "gatewayApi", "access", "connectivity", "upgrade", "karpenter", "resources", "crds"]);
   });
 
   it("omits Pods when the pods slice is empty", () => {

@@ -38,6 +38,8 @@ function message(section: ClusterSection, c: ClusterDTO): string {
       return "";
     case "connectivity":
       return "";
+    case "karpenter":
+      return "";
   }
 }
 

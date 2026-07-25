@@ -18,7 +18,7 @@ export type ClusterDTO = {
   gatewayAPIVersion?: string;
   ciliumPresent?: boolean;
   clusterMesh?: boolean;
-  hasHubble?: boolean;
+  hasHubble?: boolean; karpenterPresent?: boolean; karpenterHealthy?: boolean;
   certManagerTier?: string;
   certManagerReason?: string;
   certManagerPresent?: boolean;
@@ -259,7 +259,7 @@ export type ExternalSecretsSlice = {
 
 // "observability" removed 2026-06-10: metrics ship inline in overview/workloads/network lanes
 // (design principle 5); a dedicated surface can return when it has real content.
-export type ClusterSection = "overview" | "gitops" | "argo" | "helm" | "certs" | "externalsecrets" | "gatewayApi" | "resources" | "crds" | "workloads" | "pods" | "events" | "nodes" | "access" | "upgrade" | "connectivity";
+export type ClusterSection = "overview" | "gitops" | "argo" | "helm" | "certs" | "externalsecrets" | "gatewayApi" | "resources" | "crds" | "workloads" | "pods" | "events" | "nodes" | "access" | "upgrade" | "connectivity" | "karpenter";
 export type ArgoViewMode = "applications" | "projects" | "applicationsets";
 
 export type OwnerDTO = { kind: string; namespace: string; name: string };
@@ -308,6 +308,12 @@ export type HeadroomReportDTO = { result: HeadroomResultDTO; pdbBlockers: PDBBlo
 
 // Fleet expiry horizon: one cluster's expiring certificate material.
 export type ExpiryItemDTO = { source: string; namespace: string; name: string; detail: string; subject: string; notAfterUnix: number };
+
+// Karpenter lens.
+export type KarpenterPoolDTO = { name: string; ready: string; reason: string; message: string; weight: number; cpuLimit: number | null; cpuUsed: number | null; memLimit: number | null; memUsed: number | null; nodes: number };
+export type KarpenterClaimDTO = { name: string; pool: string; nodeName: string; ready: string; failingType: string; failingReason: string; failingMessage: string; drifted: boolean; consolidatable: boolean; capacityType: string; instanceType: string; ageSeconds: number };
+export type KarpenterEventDTO = { type: string; reason: string; message: string; kind: string; name: string; lastSeenUnix: number };
+export type KarpenterSnapshotDTO = { detected: boolean; controllerHealthy: boolean; pools: KarpenterPoolDTO[]; claims: KarpenterClaimDTO[]; events: KarpenterEventDTO[]; error?: string };
 export type ExpiryScanResultDTO = { items: ExpiryItemDTO[]; warnings: string[]; error?: string };
 export type WorkloadUsageDTO = { cpuUsage: number | null; memUsage: number | null };
 export type WorkloadMetricsStatusDTO = { available: boolean; message: string; updatedAt: string };
@@ -491,6 +497,7 @@ export const SECTION_LABELS: Record<ClusterSection, string> = {
   access: "Access",
   upgrade: "Upgrade",
   connectivity: "Connectivity",
+  karpenter: "Karpenter",
 };
 
 export type CRDKindDTO = { kind: string; plural: string; scope: string; version: string; operator: string; shortNames: string[] };

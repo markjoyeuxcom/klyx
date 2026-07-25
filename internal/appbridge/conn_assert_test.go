@@ -21,6 +21,7 @@ var (
 	_ GatewayConn         = fleet.Conn(nil)
 	_ GitOpsConn          = fleet.Conn(nil)
 	_ HelmConn            = fleet.Conn(nil)
+	_ KarpenterConn       = fleet.Conn(nil)
 	_ LogsConn            = fleet.Conn(nil)
 	_ MetricsConn         = fleet.Conn(nil)
 	_ NodeOpsConn         = fleet.Conn(nil)
