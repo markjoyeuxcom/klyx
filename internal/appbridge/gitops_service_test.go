@@ -30,6 +30,8 @@ type fakeGitOpsConn struct {
 
 	sourceURL string
 
+	watchErr string // GitOpsWatchHealth's current failure
+
 	reconcileErr   error
 	suspendErr     error
 	lastSuspend    bool
@@ -54,7 +56,7 @@ func (f *fakeGitOpsConn) GitOpsObject(kind, namespace, name string) (*unstructur
 }
 
 func (f *fakeGitOpsConn) GitOpsSources() []flux.Source      { return f.srcs }
-func (f *fakeGitOpsConn) GitOpsWatchHealth() (bool, string) { return true, "" }
+func (f *fakeGitOpsConn) GitOpsWatchHealth() (bool, string) { return true, f.watchErr }
 func (f *fakeGitOpsConn) GitOpsSourceObject(kind, namespace, name string) (*unstructured.Unstructured, bool) {
 	if f.srcObj == nil {
 		return nil, false
@@ -178,6 +180,31 @@ func TestGitOpsServiceOpenEmitsAndCloseStops(t *testing.T) {
 	if opened != 1 || closed != 1 {
 		t.Fatalf("want opened=1 closed=1, got %d/%d", opened, closed)
 	}
+}
+
+// Review 2026-10-03 #11: a current failure on an informer that already synced
+// (or on a source informer) reached the view only while the primaries had not
+// synced - a broken OCIRepository watch read as a clean source list.
+func TestGitOpsPush_SurfacesFailureAfterSync(t *testing.T) {
+	conn := &fakeGitOpsConn{watchErr: "OCIRepository watch failing (showing last-known state): forbidden"}
+	em := &fakeEmitter{}
+	svc := NewGitOpsService(func(string) (GitOpsConn, bool) { return conn, true }, em, time.Now, 10*time.Millisecond)
+	svc.Open("x")
+	defer svc.Close("x")
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		em.mu.Lock()
+		p, ok := em.last.(gitOpsPayload)
+		em.mu.Unlock()
+		if ok {
+			if p.WatchError != conn.watchErr {
+				t.Fatalf("payload WatchError = %q, want the synced-informer failure", p.WatchError)
+			}
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("no gitops:updated emit")
 }
 
 func TestGitOpsServiceOpenUnknownClusterNoop(t *testing.T) {

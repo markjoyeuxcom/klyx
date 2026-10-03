@@ -2,7 +2,9 @@ package fleet
 
 import (
 	"context"
+	"fmt"
 	"sort"
+	"strings"
 	"sync"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -15,10 +17,21 @@ import (
 
 type gitopsWatch struct {
 	cancel context.CancelFunc
-	ksInf  cache.SharedIndexInformer
-	hrInf  cache.SharedIndexInformer
+	ksInf  cache.SharedIndexInformer // nil: Kustomizations not served
+	hrInf  cache.SharedIndexInformer // nil: HelmReleases not served
 	srcInf map[flux.Kind]cache.SharedIndexInformer
-	errs   *watchErrTracker
+	// watched is every informer started, primary and source, each with its own
+	// error tracker: health covers all of them (review 2026-10-03 #11 - a
+	// failing source watch used to render as a clean, empty source list).
+	watched []watchedInformer
+}
+
+// watchedInformer is one informer of a lazy watch group with its own error
+// tracker, so health can say which kind is failing and whether it recovered.
+type watchedInformer struct {
+	kind flux.Kind
+	inf  cache.SharedIndexInformer
+	errs *watchErrTracker
 }
 
 // watchErrTracker records the most recent reflector error for a lazy watch
@@ -27,14 +40,16 @@ type gitopsWatch struct {
 type watchErrTracker struct {
 	mu   sync.Mutex
 	last string
+	rv   string // the reflector's last-synced resourceVersion when last was recorded
 }
 
-func (t *watchErrTracker) record(err error) {
+func (t *watchErrTracker) record(err error, rv string) {
 	if err == nil {
 		return
 	}
 	t.mu.Lock()
 	t.last = err.Error()
+	t.rv = rv
 	t.mu.Unlock()
 }
 
@@ -44,14 +59,28 @@ func (t *watchErrTracker) lastError() string {
 	return t.last
 }
 
+// currentError is the recorded error only while it is still CURRENT for inf:
+// no list/watch has succeeded since it was recorded (the reflector's
+// last-synced resourceVersion has not moved). A recovered watch therefore stops
+// reporting, while a watch that synced once and then started failing (RBAC
+// revoked, CRD removed) reports even though its initial sync completed.
+func (t *watchErrTracker) currentError(inf cache.SharedIndexInformer) string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.last == "" || inf.LastSyncResourceVersion() != t.rv {
+		return ""
+	}
+	return t.last
+}
+
 // trackWatchErrors replaces an informer's default watch-error handler (which
 // only logs) with one that records into the tracker, and strips managedFields
 // before objects enter the cache (the lazy sets watch full objects and live as
 // long as the view is open). Must run before Start.
 func trackWatchErrors(inf cache.SharedIndexInformer, t *watchErrTracker) {
 	_ = inf.SetTransform(stripManagedFields)
-	_ = inf.SetWatchErrorHandler(func(_ *cache.Reflector, err error) {
-		t.record(err)
+	_ = inf.SetWatchErrorHandler(func(r *cache.Reflector, err error) {
+		t.record(err, r.LastSyncResourceVersion())
 	})
 }
 
@@ -101,28 +130,32 @@ func (c *ClusterConn) OpenGitOps() {
 		return
 	}
 
-	ksVer := preferredVersion(c.discovery(), "kustomize.toolkit.fluxcd.io", "v1")
-	hrVer := preferredVersion(c.discovery(), "helm.toolkit.fluxcd.io", "v2")
-	ksGVR := schema.GroupVersionResource{Group: "kustomize.toolkit.fluxcd.io", Version: ksVer, Resource: "kustomizations"}
-	hrGVR := schema.GroupVersionResource{Group: "helm.toolkit.fluxcd.io", Version: hrVer, Resource: "helmreleases"}
-
 	gctx, cancel := context.WithCancel(parent)
 	factory := dynamicinformer.NewDynamicSharedInformerFactory(dyn, defaultResync)
-	errs := &watchErrTracker{}
-	ksInf := factory.ForResource(ksGVR).Informer()
-	hrInf := factory.ForResource(hrGVR).Informer()
-	trackWatchErrors(ksInf, errs)
-	trackWatchErrors(hrInf, errs)
+	g := &gitopsWatch{cancel: cancel, srcInf: map[flux.Kind]cache.SharedIndexInformer{}}
+	// watch starts an informer for one Flux resource at the version discovery
+	// says THAT RESOURCE is served at (review 2026-10-03 #11), or nothing when
+	// its CRD is not installed - an unserved kind is absent, not an error.
+	watch := func(kind flux.Kind, group, resource, fallback string) cache.SharedIndexInformer {
+		ver, served := servedVersion(c.discovery(), group, resource, fallback)
+		if !served {
+			return nil
+		}
+		inf := factory.ForResource(schema.GroupVersionResource{Group: group, Version: ver, Resource: resource}).Informer()
+		errs := &watchErrTracker{}
+		trackWatchErrors(inf, errs)
+		g.watched = append(g.watched, watchedInformer{kind: kind, inf: inf, errs: errs})
+		return inf
+	}
+	g.ksInf = watch(flux.KustomizationKind, "kustomize.toolkit.fluxcd.io", "kustomizations", "v1")
+	g.hrInf = watch(flux.HelmReleaseKind, "helm.toolkit.fluxcd.io", "helmreleases", "v2")
 
 	// Watch the source kinds alongside ks/hr so a stuck resource's root cause
 	// (a source that is not pulling) is visible without a separate API read.
-	srcInf := make(map[flux.Kind]cache.SharedIndexInformer, len(sourceKinds))
 	for _, s := range sourceKinds {
-		ver := preferredVersion(c.discovery(), s.group, s.fallback)
-		gvr := schema.GroupVersionResource{Group: s.group, Version: ver, Resource: s.resource}
-		inf := factory.ForResource(gvr).Informer()
-		trackWatchErrors(inf, errs)
-		srcInf[s.kind] = inf
+		if inf := watch(s.kind, s.group, s.resource, s.fallback); inf != nil {
+			g.srcInf[s.kind] = inf
+		}
 	}
 
 	factory.Start(gctx.Done())
@@ -135,14 +168,17 @@ func (c *ClusterConn) OpenGitOps() {
 		cancel()
 		return
 	}
-	c.gitops = &gitopsWatch{cancel: cancel, ksInf: ksInf, hrInf: hrInf, srcInf: srcInf, errs: errs}
+	c.gitops = g
 	c.mu.Unlock()
 }
 
-// GitOpsWatchHealth reports whether the primary Flux informers have synced and
-// the most recent watch error. A not-synced watch with an error is the
-// "permanently failing" signal (RBAC denied, CRD mismatch) that must render as
-// an error, never as an empty resource list.
+// GitOpsWatchHealth reports whether every watched Flux informer - primary AND
+// source - has completed its initial sync, and the CURRENT watch failures
+// (watchErrTracker.currentError), each named by kind. A failure on an informer
+// that already synced says the view is showing last-known state. Any current
+// failure must render as an error, never as an empty or quietly stale list
+// (review 2026-10-03 #11: only Kustomization/HelmRelease sync was checked, and
+// only before it completed).
 func (c *ClusterConn) GitOpsWatchHealth() (synced bool, lastErr string) {
 	c.mu.RLock()
 	g := c.gitops
@@ -150,7 +186,23 @@ func (c *ClusterConn) GitOpsWatchHealth() (synced bool, lastErr string) {
 	if g == nil {
 		return false, ""
 	}
-	return g.ksInf.HasSynced() && g.hrInf.HasSynced(), g.errs.lastError()
+	synced = true
+	var errs []string
+	for _, w := range g.watched {
+		done := w.inf.HasSynced()
+		if !done {
+			synced = false
+		}
+		e := w.errs.currentError(w.inf)
+		switch {
+		case e == "":
+		case done:
+			errs = append(errs, fmt.Sprintf("%s watch failing (showing last-known state): %s", w.kind, e))
+		default:
+			errs = append(errs, fmt.Sprintf("%s: %s", w.kind, e))
+		}
+	}
+	return synced, strings.Join(errs, "; ")
 }
 
 // sourceKinds is the set of Flux source CRDs Klyx watches, with the fallback
@@ -276,14 +328,18 @@ func (c *ClusterConn) GitOpsResources() []flux.Resource {
 		return nil
 	}
 	var out []flux.Resource
-	for _, obj := range g.ksInf.GetStore().List() {
-		if u, ok := obj.(*unstructured.Unstructured); ok {
-			out = append(out, flux.ParseKustomization(u))
+	if g.ksInf != nil {
+		for _, obj := range g.ksInf.GetStore().List() {
+			if u, ok := obj.(*unstructured.Unstructured); ok {
+				out = append(out, flux.ParseKustomization(u))
+			}
 		}
 	}
-	for _, obj := range g.hrInf.GetStore().List() {
-		if u, ok := obj.(*unstructured.Unstructured); ok {
-			out = append(out, flux.ParseHelmRelease(u))
+	if g.hrInf != nil {
+		for _, obj := range g.hrInf.GetStore().List() {
+			if u, ok := obj.(*unstructured.Unstructured); ok {
+				out = append(out, flux.ParseHelmRelease(u))
+			}
 		}
 	}
 	// Stable order: informer stores list in an unstable order, so sort

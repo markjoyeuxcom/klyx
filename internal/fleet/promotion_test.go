@@ -17,7 +17,7 @@ import (
 
 var (
 	gitGVRProm = schema.GroupVersionResource{Group: "source.toolkit.fluxcd.io", Version: "v1", Resource: "gitrepositories"}
-	ociGVRProm = schema.GroupVersionResource{Group: "source.toolkit.fluxcd.io", Version: "v1", Resource: "ocirepositories"}
+	ociGVRProm = schema.GroupVersionResource{Group: "source.toolkit.fluxcd.io", Version: "v1beta2", Resource: "ocirepositories"} // the discovery-less fallback, as for the watch
 )
 
 func promKS(name, revision, sourceName string, ready bool) *unstructured.Unstructured {

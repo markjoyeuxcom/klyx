@@ -73,15 +73,21 @@ func (c *ClusterConn) GitOpsPromotion(ctx context.Context) (PromotionSnapshot, e
 
 	if fluxPresent {
 		disc := c.discovery()
+		// Per-resource versions (review 2026-10-03 #11); an unserved kind is
+		// skipped rather than failing the snapshot on a 404.
 		lists := []struct {
-			gvr   schema.GroupVersionResource
-			parse func(*unstructured.Unstructured) flux.Resource
+			group, resource, fallback string
+			parse                     func(*unstructured.Unstructured) flux.Resource
 		}{
-			{schema.GroupVersionResource{Group: "kustomize.toolkit.fluxcd.io", Version: preferredVersion(disc, "kustomize.toolkit.fluxcd.io", "v1"), Resource: "kustomizations"}, flux.ParseKustomization},
-			{schema.GroupVersionResource{Group: "helm.toolkit.fluxcd.io", Version: preferredVersion(disc, "helm.toolkit.fluxcd.io", "v2"), Resource: "helmreleases"}, flux.ParseHelmRelease},
+			{"kustomize.toolkit.fluxcd.io", "kustomizations", "v1", flux.ParseKustomization},
+			{"helm.toolkit.fluxcd.io", "helmreleases", "v2", flux.ParseHelmRelease},
 		}
 		for _, l := range lists {
-			ul, err := c.dyn.Resource(l.gvr).List(ctx, metav1.ListOptions{})
+			ver, served := servedVersion(disc, l.group, l.resource, l.fallback)
+			if !served {
+				continue
+			}
+			ul, err := c.dyn.Resource(schema.GroupVersionResource{Group: l.group, Version: ver, Resource: l.resource}).List(ctx, metav1.ListOptions{})
 			if err != nil {
 				return PromotionSnapshot{}, err
 			}
@@ -96,11 +102,11 @@ func (c *ClusterConn) GitOpsPromotion(ctx context.Context) (PromotionSnapshot, e
 			}
 		}
 
-		srcGVRs := []schema.GroupVersionResource{
-			{Group: "source.toolkit.fluxcd.io", Version: preferredVersion(disc, "source.toolkit.fluxcd.io", "v1"), Resource: "gitrepositories"},
-			{Group: "source.toolkit.fluxcd.io", Version: preferredVersion(disc, "source.toolkit.fluxcd.io", "v1"), Resource: "ocirepositories"},
-		}
-		for _, gvr := range srcGVRs {
+		for _, kind := range []string{"GitRepository", "OCIRepository"} {
+			gvr, ok := c.sourceServedGVR(kind)
+			if !ok {
+				continue
+			}
 			ul, err := c.dyn.Resource(gvr).List(ctx, metav1.ListOptions{})
 			if err != nil {
 				return PromotionSnapshot{}, err

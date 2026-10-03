@@ -52,9 +52,10 @@ type gitOpsPayload struct {
 	Cluster   string            `json:"cluster"`
 	Resources []FluxResourceDTO `json:"resources"`
 	Sources   []FluxSourceDTO   `json:"sources"`
-	// WatchError is set while the watch has not synced AND has recorded an
-	// error (RBAC denied, CRD mismatch): the view must show the failure, not
-	// an empty list. Empty once the informers sync.
+	// WatchError names every CURRENT Flux watch failure, primary or source
+	// (RBAC denied, CRD mismatch, a watch that synced and then broke): the
+	// view must show the failure, never an empty or quietly stale list. Empty
+	// once every failing watch has recovered.
 	WatchError string `json:"watchError,omitempty"`
 }
 
@@ -144,10 +145,10 @@ func (s *GitOpsService) pushLoop(ctx context.Context, cluster string, conn GitOp
 			return
 		case <-t.C:
 			now := s.now()
-			watchErr := ""
-			if synced, lastErr := conn.GitOpsWatchHealth(); !synced && lastErr != "" {
-				watchErr = lastErr
-			}
+			// Any CURRENT watch failure is shown, including one on a source
+			// informer or after the initial sync (review 2026-10-03 #11); the
+			// fleet layer stops reporting it once the watch recovers.
+			_, watchErr := conn.GitOpsWatchHealth()
 			snap := gitopsDomainSnap{res: conn.GitOpsResources(), srcs: conn.GitOpsSources(), watchErr: watchErr}
 			if last != nil && now.Sub(lastEmit) < pushHeartbeat && reflect.DeepEqual(*last, snap) {
 				continue

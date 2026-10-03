@@ -26,24 +26,24 @@ func TestWatchErrTrackerRecordsError(t *testing.T) {
 	}
 
 	// nil must not clobber or record anything.
-	tr.record(nil)
+	tr.record(nil, "")
 	if got := tr.lastError(); got != "" {
 		t.Fatalf("after record(nil) lastError = %q, want empty", got)
 	}
 
-	tr.record(errors.New("forbidden: RBAC denied"))
+	tr.record(errors.New("forbidden: RBAC denied"), "")
 	if got := tr.lastError(); got != "forbidden: RBAC denied" {
 		t.Fatalf("lastError = %q, want the recorded error", got)
 	}
 
 	// A subsequent nil must not wipe the recorded error.
-	tr.record(nil)
+	tr.record(nil, "")
 	if got := tr.lastError(); got != "forbidden: RBAC denied" {
 		t.Fatalf("record(nil) wiped lastError to %q", got)
 	}
 
 	// Most recent non-nil error wins.
-	tr.record(errors.New("the CRD version is not served"))
+	tr.record(errors.New("the CRD version is not served"), "")
 	if got := tr.lastError(); got != "the CRD version is not served" {
 		t.Fatalf("lastError = %q, want the latest error", got)
 	}

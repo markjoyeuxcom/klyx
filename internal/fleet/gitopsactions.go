@@ -24,8 +24,9 @@ func fluxGroupForKind(kind flux.Kind) (group, fallbackVersion string, ok bool) {
 	}
 }
 
-// gvrForKind resolves the served GVR for a Flux kind via discovery (falling back
-// to the documented version when discovery has no groups, e.g. in tests).
+// gvrForKind resolves the served GVR for a Flux kind via per-resource discovery
+// (servedVersion; the documented version when discovery cannot answer, e.g. in
+// tests).
 func (c *ClusterConn) gvrForKind(kind flux.Kind) (schema.GroupVersionResource, error) {
 	group, fallback, ok := fluxGroupForKind(kind)
 	if !ok {
@@ -35,7 +36,10 @@ func (c *ClusterConn) gvrForKind(kind flux.Kind) (schema.GroupVersionResource, e
 	if !ok {
 		return schema.GroupVersionResource{}, fmt.Errorf("unsupported kind %q", kind)
 	}
-	version := preferredVersion(c.discovery(), group, fallback)
+	version, served := servedVersion(c.discovery(), group, resource, fallback)
+	if !served {
+		return schema.GroupVersionResource{}, fmt.Errorf("%s is not served by this cluster (%s CRD not installed)", kind, resource)
+	}
 	return schema.GroupVersionResource{Group: group, Version: version, Resource: resource}, nil
 }
 
@@ -62,9 +66,7 @@ func (c *ClusterConn) ReconcileWithSource(ctx context.Context, kind, ns, name st
 	if gvr, err := c.gvrForKind(flux.Kind(kind)); err == nil {
 		if u, err := c.dyn.Resource(gvr).Namespace(ns).Get(ctx, name, metav1.GetOptions{}); err == nil {
 			if ref, ok := flux.BoundSource(u); ok {
-				if group, fallback, resource, ok := sourceGVR(ref.Kind); ok {
-					version := preferredVersion(c.discovery(), group, fallback)
-					sgvr := schema.GroupVersionResource{Group: group, Version: version, Resource: resource}
+				if sgvr, ok := c.sourceServedGVR(ref.Kind); ok {
 					body := flux.ReconcilePatch(c.clk.Now())
 					_, _ = c.dyn.Resource(sgvr).Namespace(ref.Namespace).Patch(ctx, ref.Name, types.MergePatchType, body, metav1.PatchOptions{})
 				}

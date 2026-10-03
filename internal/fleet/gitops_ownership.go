@@ -136,7 +136,11 @@ func (c *ClusterConn) kustomizationsForOwnership(ctx context.Context) ([]*unstru
 	// Kustomization version rather than panic (tests, degraded conns).
 	ver := "v1"
 	if c.typed != nil {
-		ver = preferredVersion(c.discovery(), "kustomize.toolkit.fluxcd.io", "v1")
+		v, served := servedVersion(c.discovery(), "kustomize.toolkit.fluxcd.io", "kustomizations", "v1")
+		if !served {
+			return nil, "" // no Kustomization CRD: nothing can own the object
+		}
+		ver = v
 	}
 	gvr := schema.GroupVersionResource{Group: "kustomize.toolkit.fluxcd.io", Version: ver, Resource: "kustomizations"}
 	list, err := c.dyn.Resource(gvr).List(ctx, metav1.ListOptions{Limit: ownershipListCap})

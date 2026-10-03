@@ -40,29 +40,27 @@ func (c *ClusterConn) GitOpsSummary(ctx context.Context) (GitOpsSummary, error) 
 		return GitOpsSummary{FluxPresent: false}, nil
 	}
 
-	ksVer := preferredVersion(c.discovery(), "kustomize.toolkit.fluxcd.io", "v1")
-	hrVer := preferredVersion(c.discovery(), "helm.toolkit.fluxcd.io", "v2")
-	ksGVR := schema.GroupVersionResource{Group: "kustomize.toolkit.fluxcd.io", Version: ksVer, Resource: "kustomizations"}
-	hrGVR := schema.GroupVersionResource{Group: "helm.toolkit.fluxcd.io", Version: hrVer, Resource: "helmreleases"}
-
+	// Per-resource versions (review 2026-10-03 #11); a kind whose CRD is not
+	// installed contributes nothing rather than failing the summary on a 404.
 	var resources []flux.Resource
-
-	ksList, err := c.dyn.Resource(ksGVR).List(ctx, metav1.ListOptions{})
-	if err != nil {
-		return GitOpsSummary{}, err
-	}
-	for i := range ksList.Items {
-		u := &unstructured.Unstructured{Object: ksList.Items[i].Object}
-		resources = append(resources, flux.ParseKustomization(u))
-	}
-
-	hrList, err := c.dyn.Resource(hrGVR).List(ctx, metav1.ListOptions{})
-	if err != nil {
-		return GitOpsSummary{}, err
-	}
-	for i := range hrList.Items {
-		u := &unstructured.Unstructured{Object: hrList.Items[i].Object}
-		resources = append(resources, flux.ParseHelmRelease(u))
+	for _, k := range []struct {
+		group, resource, fallback string
+		parse                     func(*unstructured.Unstructured) flux.Resource
+	}{
+		{"kustomize.toolkit.fluxcd.io", "kustomizations", "v1", flux.ParseKustomization},
+		{"helm.toolkit.fluxcd.io", "helmreleases", "v2", flux.ParseHelmRelease},
+	} {
+		ver, served := servedVersion(c.discovery(), k.group, k.resource, k.fallback)
+		if !served {
+			continue
+		}
+		list, err := c.dyn.Resource(schema.GroupVersionResource{Group: k.group, Version: ver, Resource: k.resource}).List(ctx, metav1.ListOptions{})
+		if err != nil {
+			return GitOpsSummary{}, err
+		}
+		for i := range list.Items {
+			resources = append(resources, k.parse(&unstructured.Unstructured{Object: list.Items[i].Object}))
+		}
 	}
 
 	out := GitOpsSummary{FluxPresent: true, Total: len(resources)}
