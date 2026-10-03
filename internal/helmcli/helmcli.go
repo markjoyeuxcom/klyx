@@ -280,28 +280,60 @@ func GetValues(ctx context.Context, r Runner, kubeContext, namespace, release st
 	return s, nil
 }
 
-// Rollback rolls back a release to the specified revision. It passes --wait
-// and --timeout 120s matching the kubectl drain pattern used in DrainNodeCmd.
-// RollbackOptions are the user-composed helm rollback flags (previously
-// hardcoded to --wait --timeout 120s).
+// RollbackOptions are the user-composed helm rollback flags.
 type RollbackOptions struct {
 	Wait           bool // wait for resources to become ready before returning
 	NoHooks        bool // skip pre/post-rollback hooks
 	TimeoutSeconds int  // 0 -> 120s default; only meaningful with Wait
 }
 
-func Rollback(ctx context.Context, r Runner, kubeContext, namespace, release string, revision int, opts RollbackOptions) error {
-	timeout := opts.TimeoutSeconds
-	if timeout <= 0 {
-		timeout = 120
+// helmDefaultTimeout is helm's own --timeout default, which governs hook Jobs
+// when Klyx passes no --timeout (rollback without --wait).
+const helmDefaultTimeout = 5 * time.Minute
+
+// rollbackMargin covers the parts helm does not bound with --timeout: the
+// resource update itself and the release-record writes.
+const rollbackMargin = 2 * time.Minute
+
+// waitTimeout is the --timeout passed with --wait.
+func (o RollbackOptions) waitTimeout() time.Duration {
+	if o.TimeoutSeconds <= 0 {
+		return 120 * time.Second
 	}
+	return time.Duration(o.TimeoutSeconds) * time.Second
+}
+
+// RunBudget is how long a rollback with these options may legitimately run,
+// for the caller's context deadline. helm bounds each phase by its own
+// timeout - pre-rollback hooks, the --wait readiness wait, post-rollback hooks
+// - so the budget is one timeout per phase plus margin (a chart with several
+// hooks in one phase can still exceed it; the deadline is a backstop for a hung
+// helm, not the operative limit). Killing helm mid-operation leaves the release
+// in pending-rollback, blocking every later helm and helm-controller operation
+// until it is repaired by hand, so the context must never expire before helm's
+// own timeouts do.
+func (o RollbackOptions) RunBudget() time.Duration {
+	per := helmDefaultTimeout
+	phases := 0
+	if o.Wait {
+		per = o.waitTimeout() // --timeout also bounds the hooks
+		phases++
+	}
+	if !o.NoHooks {
+		phases += 2
+	}
+	return time.Duration(phases)*per + rollbackMargin
+}
+
+// Rollback rolls back a release to the specified revision.
+func Rollback(ctx context.Context, r Runner, kubeContext, namespace, release string, revision int, opts RollbackOptions) error {
 	args := []string{
 		"rollback", release, fmt.Sprintf("%d", revision),
 		"-n", namespace,
 		"--kube-context", kubeContext,
 	}
 	if opts.Wait {
-		args = append(args, "--wait", "--timeout", fmt.Sprintf("%ds", timeout))
+		args = append(args, "--wait", "--timeout", fmt.Sprintf("%ds", int(opts.waitTimeout()/time.Second)))
 	}
 	if opts.NoHooks {
 		args = append(args, "--no-hooks")

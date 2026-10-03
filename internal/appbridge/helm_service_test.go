@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/moomora/klyx/internal/helmcli"
 )
@@ -26,6 +27,7 @@ type rollbackCall struct {
 	namespace string
 	release   string
 	revision  int
+	budget    time.Duration // time left on the context when helm was invoked
 }
 
 func (f *fakeHelmConn) HelmReleases(_ context.Context) ([]helmcli.Release, error) {
@@ -40,8 +42,12 @@ func (f *fakeHelmConn) HelmValues(_ context.Context, _, _ string) (string, error
 	return f.values, f.valuesErr
 }
 
-func (f *fakeHelmConn) HelmRollback(_ context.Context, namespace, release string, revision int, opts helmcli.RollbackOptions) error {
-	f.rollbackCalls = append(f.rollbackCalls, rollbackCall{namespace: namespace, release: release, revision: revision})
+func (f *fakeHelmConn) HelmRollback(ctx context.Context, namespace, release string, revision int, opts helmcli.RollbackOptions) error {
+	var budget time.Duration
+	if dl, ok := ctx.Deadline(); ok {
+		budget = time.Until(dl)
+	}
+	f.rollbackCalls = append(f.rollbackCalls, rollbackCall{namespace: namespace, release: release, revision: revision, budget: budget})
 	return f.rollbackErr
 }
 
@@ -255,6 +261,21 @@ func TestHelmRollback_Success(t *testing.T) {
 	rc := conn.rollbackCalls[0]
 	if rc.namespace != "staging" || rc.release != "my-app" || rc.revision != 3 {
 		t.Errorf("wrong rollback args: %+v", rc)
+	}
+}
+
+// Cross-review C: the context must outlast the helm timeout the user chose -
+// a fixed 150s killed a 600s --wait mid-rollback (release stuck in
+// pending-rollback).
+func TestHelmRollback_DeadlineOutlastsChosenTimeout(t *testing.T) {
+	conn := &fakeHelmConn{}
+	svc := newHelmTestSvc(conn)
+
+	if r := svc.HelmRollback("test", "ns", "rel", 2, RollbackOptionsDTO{Wait: true, NoHooks: true, TimeoutSeconds: 600}); !r.OK {
+		t.Fatalf("rollback: %q", r.Error)
+	}
+	if got := conn.rollbackCalls[0].budget; got <= 600*time.Second {
+		t.Fatalf("context budget %s does not outlast helm's 600s --timeout", got)
 	}
 }
 

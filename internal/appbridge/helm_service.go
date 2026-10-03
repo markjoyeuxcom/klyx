@@ -2,7 +2,6 @@ package appbridge
 
 import (
 	"context"
-	"time"
 
 	"github.com/moomora/klyx/internal/helmcli"
 )
@@ -193,10 +192,14 @@ func (s *HelmService) HelmRollback(cluster, namespace, release string, revision 
 		return ActionResultDTO{Error: "cluster not connected: " + cluster}
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), helmRollbackTimeout)
+	ro := helmcli.RollbackOptions{Wait: opts.Wait, NoHooks: opts.NoHooks, TimeoutSeconds: opts.TimeoutSeconds}
+	// The deadline derives from the chosen helm timeout (cross-review C): a
+	// fixed 150s killed a 300s/600s --wait mid-rollback, stranding the release
+	// in pending-rollback.
+	ctx, cancel := context.WithTimeout(context.Background(), ro.RunBudget())
 	defer cancel()
 
-	if err := conn.HelmRollback(ctx, namespace, release, revision, helmcli.RollbackOptions{Wait: opts.Wait, NoHooks: opts.NoHooks, TimeoutSeconds: opts.TimeoutSeconds}); err != nil {
+	if err := conn.HelmRollback(ctx, namespace, release, revision, ro); err != nil {
 		return ActionResultDTO{Error: err.Error()}
 	}
 	return ActionResultDTO{OK: true}
@@ -206,7 +209,3 @@ func (s *HelmService) HelmRollback(cluster, namespace, release string, revision 
 // queries talk to the cluster's Secrets store (release metadata) so they need
 // a real network budget.
 const helmTimeout = actionTimeout // 30s, same as other read ops
-
-// helmRollbackTimeout is longer because rollback also waits for pods to be
-// ready (--wait --timeout 120s). Give the outer context headroom beyond that.
-const helmRollbackTimeout = 150 * time.Second
