@@ -84,6 +84,7 @@ type fakeLivePodConn struct {
 	watchErr    error
 	noInitialUp bool
 	computeFail bool
+	empty       bool // ListPods returns no pods (e.g. everything was deleted)
 	listCalls   int
 	listHook    func() // if set, invoked (outside the lock) during each ListPods
 }
@@ -92,6 +93,7 @@ func (f *fakeLivePodConn) ListPods(context.Context, string) ([]workloads.PodSumm
 	f.mu.Lock()
 	f.listCalls++
 	fail := f.computeFail
+	empty := f.empty
 	hook := f.listHook
 	f.mu.Unlock()
 	if hook != nil {
@@ -99,6 +101,9 @@ func (f *fakeLivePodConn) ListPods(context.Context, string) ([]workloads.PodSumm
 	}
 	if fail {
 		return nil, false, context.DeadlineExceeded
+	}
+	if empty {
+		return []workloads.PodSummary{}, false, nil
 	}
 	return []workloads.PodSummary{{Namespace: "ns", Name: "p1", Rank: workloads.Healthy}}, false, nil
 }
@@ -621,3 +626,55 @@ func TestLiveList_NoGoroutineLeakAcrossLifecycles(t *testing.T) {
 	}
 	t.Fatalf("goroutine leak: before=%d after=%d (delta=%d)", before, after, after-before)
 }
+
+// Review 2026-10-03 #6: a watch that reconnects after an outage in which the
+// only change was deleting everything replays NO events (there is nothing left
+// to replay), so the old rows used to stay up under live:true. Re-establishment
+// itself must force a re-list, and live must wait for it.
+func TestLiveList_ReconnectRelistsWithoutEvents(t *testing.T) {
+	em := &anyEmitter{}
+	conn := &fakeLivePodConn{}
+	svc := newFastPodsSvc(conn, em)
+	svc.OpenLivePods("c", "ns")
+	defer svc.CloseLivePods("c", "ns")
+	if !liveWaitUntil(t, time.Second, func() bool { v, ok := em.lastLive("livePodsStatus:c:ns"); return ok && v }) {
+		t.Fatal("never went live")
+	}
+	emits := em.countOf("livePods:c:ns")
+
+	conn.mu.Lock()
+	onLive := conn.onLive
+	conn.empty = true // everything deleted while the watch was down
+	conn.mu.Unlock()
+	onLive(false)
+	onLive(true) // reconnected; no replay events because nothing exists
+
+	if !liveWaitUntil(t, time.Second, func() bool { return em.countOf("livePods:c:ns") > emits }) {
+		t.Fatal("a reconnected watch must re-list even when it replays no events")
+	}
+	if !liveWaitUntil(t, time.Second, func() bool { v, ok := em.lastLive("livePodsStatus:c:ns"); return ok && v }) {
+		t.Fatal("live must come back once the post-reconnect re-list succeeded")
+	}
+}
+
+// Review 2026-10-03 #6: a failed compute on a quiet namespace used to stay
+// not-live forever (re-lists only ran on watch events). It must retry by itself.
+func TestLiveList_FailedComputeRetriesWithoutEvents(t *testing.T) {
+	em := &anyEmitter{}
+	conn := &fakeLivePodConn{computeFail: true}
+	svc := newFastPodsSvc(conn, em)
+	svc.OpenLivePods("c", "ns")
+	defer svc.CloseLivePods("c", "ns")
+
+	if !liveWaitUntil(t, time.Second, func() bool { v, ok := em.lastLive("livePodsStatus:c:ns"); return ok && !v }) {
+		t.Fatal("a failing compute must report not-live")
+	}
+	conn.setComputeFail(false) // the apiserver recovers; NO dirty signal is fired
+	if !liveWaitUntil(t, 2*time.Second, func() bool { return em.countOf("livePods:c:ns") >= 1 }) {
+		t.Fatal("the loop must retry a failed compute on its own")
+	}
+	if !liveWaitUntil(t, time.Second, func() bool { v, ok := em.lastLive("livePodsStatus:c:ns"); return ok && v }) {
+		t.Fatal("never recovered to live after the retry succeeded")
+	}
+}
+

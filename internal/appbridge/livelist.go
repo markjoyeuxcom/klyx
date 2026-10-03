@@ -16,6 +16,10 @@ const (
 	// liveCloseWaitTimeout bounds the wait on a replaced/closed sub's loop exit so
 	// the UI thread is never blocked indefinitely (mirrors logs' closeWaitTimeout).
 	liveCloseWaitTimeout = 2 * time.Second
+
+	// liveRetryMaxIntervals caps the failed-compute retry backoff, in ticker
+	// intervals (1s production -> retries at 1, 2, 4, ... up to 30s).
+	liveRetryMaxIntervals = 30
 )
 
 // liveStatusDTO is the liveness edge payload emitted on the *Status event for a
@@ -102,6 +106,25 @@ func (r *liveRegistry) open(
 	dirty := true // immediate first compute
 	watchUp := false
 	computeOK := false
+	// Failed-compute retry (review 2026-10-03 #6): a failed re-list used to sit
+	// not-live until some watch event happened to arrive - forever on a quiet
+	// namespace. failures counts consecutive failures; retryAt is when the loop
+	// re-lists on its own (exponential backoff in ticker intervals, capped).
+	failures := 0
+	var retryAt time.Time
+	noteCompute := func(ok bool) {
+		if ok {
+			computeOK, failures = true, 0
+			return
+		}
+		computeOK = false
+		failures++
+		backoff := interval << (failures - 1)
+		if limit := interval * liveRetryMaxIntervals; failures > 6 || backoff > limit {
+			backoff = limit
+		}
+		retryAt = time.Now().Add(backoff)
+	}
 	// lastLive is tri-state: -1 = never reported, 0 = false, 1 = true. The
 	// sentinel forces the FIRST report to emit an explicit edge (even false), so
 	// the frontend gets a definite initial liveness signal - e.g. a cold-start
@@ -129,6 +152,15 @@ func (r *liveRegistry) open(
 	}
 	onLive := func(up bool) {
 		mu.Lock()
+		if up && !watchUp {
+			// The watch (re)established. Whatever we hold was computed before this
+			// watch existed: changes made while it was down (e.g. deletions down to
+			// an empty set, which a fresh watch never replays) are not in it. Force
+			// a re-list, and withhold "live" until a compute that started AFTER the
+			// watch was up has succeeded (review 2026-10-03 #6).
+			dirty = true
+			computeOK = false
+		}
 		watchUp = up
 		mu.Unlock()
 		report()
@@ -179,13 +211,13 @@ func (r *liveRegistry) open(
 		default:
 			emit(payload)
 			mu.Lock()
-			computeOK = true
+			noteCompute(true)
 			mu.Unlock()
 			report()
 		}
 	} else {
 		mu.Lock()
-		computeOK = false
+		noteCompute(false)
 		mu.Unlock()
 		report()
 	}
@@ -207,7 +239,9 @@ func (r *liveRegistry) open(
 				return
 			case <-t.C:
 				mu.Lock()
-				d := dirty
+				// Re-list when a watch event marked us dirty, OR when the last
+				// compute failed and its backoff has elapsed (no event needed).
+				d := dirty || (failures > 0 && !time.Now().Before(retryAt))
 				dirty = false
 				mu.Unlock()
 				if !d {
@@ -223,12 +257,12 @@ func (r *liveRegistry) open(
 					}
 					emit(payload)
 					mu.Lock()
-					computeOK = true
+					noteCompute(true)
 					mu.Unlock()
 					report()
 				} else {
 					mu.Lock()
-					computeOK = false
+					noteCompute(false)
 					mu.Unlock()
 					report()
 				}
