@@ -40,8 +40,12 @@ const (
 )
 
 // AdhocResult is the per-document outcome of an ad-hoc create. On a dry-run the
-// NamespaceOwner* fields carry the GitOps prune-reach verdict for the target
-// namespace (empty = no managing unit DETECTED, never "safe").
+// NamespaceOwner* fields carry the GitOps namespace context for the target
+// (GitOpsOwnership: reach is context, NamespaceManaged the conditional
+// namespace-deletion risk; empty = no managing unit DETECTED, never "safe").
+// TrackedByNamespaceOwner: the object carries the reaching Argo Application's
+// tracking metadata, so Argo treats it as part of the app - and prunes it,
+// since it is not in Git.
 type AdhocResult struct {
 	Kind      string
 	Namespace string
@@ -53,6 +57,8 @@ type AdhocResult struct {
 	NamespaceOwnerName      string
 	NamespaceOwnerNamespace string
 	NamespacePrunes         bool
+	NamespaceManaged        bool
+	TrackedByNamespaceOwner bool
 }
 
 // yamlDocSep splits a multi-document YAML stream on standalone `---` lines.
@@ -177,17 +183,35 @@ func (c *ClusterConn) applyAdhocDoc(ctx context.Context, doc string, dryRun bool
 	}
 	r.OK = true
 
-	// Dry-run enriches with the prune-reach verdict so the composer can warn
-	// BEFORE the commit step ("this namespace belongs to Kustomization X, which
-	// prunes - your object will be DELETED on the next reconcile").
+	// Dry-run enriches with the GitOps namespace context so the composer can
+	// warn BEFORE the commit step - stating only what is known: a reaching unit
+	// prunes its own objects, not this one, unless the object carries Argo
+	// tracking metadata or the unit manages (and could delete) the namespace.
 	if dryRun && namespaced {
 		o := c.GitOpsOwnership(ctx, gvr.Group, kind, ns, name)
 		r.NamespaceOwnerKind = o.NamespaceOwnerKind
 		r.NamespaceOwnerName = o.NamespaceOwnerName
 		r.NamespaceOwnerNamespace = o.NamespaceOwnerNamespace
 		r.NamespacePrunes = o.NamespacePrunes
+		r.NamespaceManaged = o.NamespaceManaged
+		r.TrackedByNamespaceOwner = o.NamespaceBasis == "argo" && argoTracked(u, o.NamespaceOwnerName)
 	}
 	return r
+}
+
+// argoTracked reports whether u carries Argo CD tracking metadata for app:
+// the default instance label, or the tracking-id annotation ("<app>:<group>/
+// <kind>:<ns>/<name>"). An object copied from an app's rendered manifests
+// often does; Argo then treats it as one of the app's resources. A custom
+// application.instanceLabelKey is not detected.
+func argoTracked(u *unstructured.Unstructured, app string) bool {
+	if app == "" {
+		return false
+	}
+	if u.GetLabels()["app.kubernetes.io/instance"] == app {
+		return true
+	}
+	return strings.HasPrefix(u.GetAnnotations()["argocd.argoproj.io/tracking-id"], app+":")
 }
 
 // ScratchNamespace is where the diagnostic-pod launcher deploys. A dedicated

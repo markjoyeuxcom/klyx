@@ -15,6 +15,7 @@ import { armProtected } from "../bridge/configsvc";
 const okResult = (over: Partial<AdhocResultDTO> = {}): AdhocResultDTO => ({
   kind: "Pod", namespace: "klyx-scratch", name: "dbg", ok: true, error: "",
   namespaceOwnerKind: "", namespaceOwnerName: "", namespaceOwnerNamespace: "", namespacePrunes: false,
+  namespaceManaged: false, trackedByNamespaceOwner: false,
   ...over,
 });
 
@@ -57,14 +58,39 @@ describe("AdhocComposer", () => {
     expect((getByText("create") as HTMLButtonElement).disabled).toBe(true);
   });
 
-  it("renders the red prune warning when the namespace belongs to a pruning unit", async () => {
+  // Review 2026-10-03 #13: a pruning unit that merely deploys into the
+  // namespace prunes only what it tracks - an untracked scratch object is NOT
+  // deleted on the next reconcile, and the copy must not say it is.
+  it("an untracked object in a pruning unit's namespace is context, not a deletion", async () => {
     vi.mocked(createResourceYAML).mockResolvedValueOnce([
       okResult({ namespace: "web", namespaceOwnerKind: "Kustomization", namespaceOwnerName: "web", namespaceOwnerNamespace: "flux-system", namespacePrunes: true }),
     ]);
-    const { getByText, getByPlaceholderText, findByText } = render(<AdhocComposer cluster="x" onClose={() => {}} />);
+    const { getByText, getByPlaceholderText, findByTestId } = render(<AdhocComposer cluster="x" onClose={() => {}} />);
     fireEvent.change(getByPlaceholderText(/apiVersion/), { target: { value: "doc" } });
     fireEvent.click(getByText("dry-run"));
-    expect(await findByText(/PRUNES: this object is not in Git and will be DELETED/)).toBeTruthy();
+    const note = (await findByTestId("namespace-context")).textContent ?? "";
+    expect(note).toMatch(/not one it tracks, so its pruning leaves the object alone/);
+    expect(note).not.toMatch(/DELETED|PRUNED/);
+  });
+
+  it("names the conditional namespace-deletion risk when the unit manages the namespace", async () => {
+    vi.mocked(createResourceYAML).mockResolvedValueOnce([
+      okResult({ namespace: "web", namespaceOwnerKind: "Kustomization", namespaceOwnerName: "web", namespaceOwnerNamespace: "flux-system", namespacePrunes: true, namespaceManaged: true }),
+    ]);
+    const { getByText, getByPlaceholderText, findByTestId } = render(<AdhocComposer cluster="x" onClose={() => {}} />);
+    fireEvent.change(getByPlaceholderText(/apiVersion/), { target: { value: "doc" } });
+    fireEvent.click(getByText("dry-run"));
+    expect((await findByTestId("namespace-context")).textContent).toMatch(/if the namespace is removed from Git, it is deleted together with this object/);
+  });
+
+  it("warns of certain pruning only when the object carries the Argo app's tracking metadata", async () => {
+    vi.mocked(createResourceYAML).mockResolvedValueOnce([
+      okResult({ namespace: "shop", namespaceOwnerKind: "Application", namespaceOwnerName: "shop", namespaceOwnerNamespace: "argocd", namespacePrunes: true, trackedByNamespaceOwner: true }),
+    ]);
+    const { getByText, getByPlaceholderText, findByTestId } = render(<AdhocComposer cluster="x" onClose={() => {}} />);
+    fireEvent.change(getByPlaceholderText(/apiVersion/), { target: { value: "doc" } });
+    fireEvent.click(getByText("dry-run"));
+    expect((await findByTestId("namespace-context")).textContent).toMatch(/will be PRUNED on the next sync/);
   });
 
   it("protected cluster requires the typed name and arms the one-shot grant", async () => {

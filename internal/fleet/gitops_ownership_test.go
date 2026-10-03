@@ -159,3 +159,47 @@ func TestGitOpsOwnership_FailedListDegradesToWarning(t *testing.T) {
 		t.Fatalf("degraded check must warn, got %+v", o)
 	}
 }
+
+// Review 2026-10-03 #13: reaching a namespace is context. A pruning unit that
+// merely deploys into the namespace does not manage the Namespace object, so
+// an untracked scratch object there is not at risk from its pruning;
+// NamespaceManaged marks only the unit that could delete the namespace itself
+// - and is preferred when several units reach it.
+func TestGitOpsOwnership_NamespaceManagedIsTheConditionalRisk(t *testing.T) {
+	deploysOnly := kustomization("flux-system", "apps", true, "web", "web_api_apps_Deployment")
+	c := ownershipConn(t, true, false, deploysOnly)
+	o := c.GitOpsOwnership(context.Background(), "", "ConfigMap", "web", "scratch")
+	if o.OwnerKind != "" || o.NamespaceOwnerName != "apps" || !o.NamespacePrunes || o.NamespaceManaged {
+		t.Fatalf("an untracked object in a deploys-only namespace: %+v", o)
+	}
+
+	managesNS := kustomization("flux-system", "namespaces", true, "", "_web__Namespace")
+	c = ownershipConn(t, true, false, deploysOnly, managesNS)
+	o = c.GitOpsOwnership(context.Background(), "", "ConfigMap", "web", "scratch")
+	if o.NamespaceOwnerName != "namespaces" || !o.NamespaceManaged || !o.NamespacePrunes {
+		t.Fatalf("the unit managing the Namespace object must be reported: %+v", o)
+	}
+
+	app := argoApp("argocd", "shop", "shop", true,
+		map[string]interface{}{"group": "", "kind": "Namespace", "namespace": "", "name": "shop"})
+	c = ownershipConn(t, false, true, app)
+	if o := c.GitOpsOwnership(context.Background(), "", "ConfigMap", "shop", "scratch"); !o.NamespaceManaged {
+		t.Fatalf("an Argo app tracking the Namespace manages it: %+v", o)
+	}
+}
+
+func TestArgoTracked(t *testing.T) {
+	u := &unstructured.Unstructured{Object: map[string]interface{}{}}
+	if argoTracked(u, "shop") {
+		t.Fatal("no metadata is not tracked")
+	}
+	u.SetLabels(map[string]string{"app.kubernetes.io/instance": "shop"})
+	if !argoTracked(u, "shop") || argoTracked(u, "other") {
+		t.Fatal("the instance label tracks for its app only")
+	}
+	u.SetLabels(nil)
+	u.SetAnnotations(map[string]string{"argocd.argoproj.io/tracking-id": "shop:/ConfigMap:shop/cfg"})
+	if !argoTracked(u, "shop") || argoTracked(u, "sho") {
+		t.Fatal("the tracking-id annotation tracks for its app only")
+	}
+}

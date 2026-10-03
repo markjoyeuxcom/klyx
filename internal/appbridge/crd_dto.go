@@ -103,6 +103,13 @@ type AdhocResultDTO struct {
 	NamespaceOwnerName      string `json:"namespaceOwnerName"`
 	NamespaceOwnerNamespace string `json:"namespaceOwnerNamespace"`
 	NamespacePrunes         bool   `json:"namespacePrunes"`
+	// NamespaceManaged: the reaching unit manages the Namespace object itself
+	// (removing it from Git while pruning deletes the namespace and this
+	// object). TrackedByNamespaceOwner: the object carries that Argo app's
+	// tracking metadata, so the app prunes it. Without either, the reaching
+	// unit's pruning leaves the object alone (review 2026-10-03 #13).
+	NamespaceManaged        bool `json:"namespaceManaged"`
+	TrackedByNamespaceOwner bool `json:"trackedByNamespaceOwner"`
 }
 
 // AdhocObjectDTO is one Klyx-created scratch object (label klyx.dev/adhoc) in
@@ -120,9 +127,11 @@ type AdhocObjectDTO struct {
 
 // GitOpsOwnershipDTO is the authoritative pre-write verdict for one target
 // object: which GitOps unit OWNS it (an edit reverts on the next reconcile) and
-// which unit REACHES its namespace (an out-of-band create there is DELETED on
-// the next reconcile when that unit prunes). Empty namespace-owner fields mean
-// "no managing unit DETECTED" - a heuristic negative, never a safety guarantee.
+// which unit REACHES its namespace - context, not a pruning verdict: a unit
+// prunes only its own objects, and NamespaceManaged marks the one that could
+// delete the namespace itself (fleet.GitOpsOwnership). Empty namespace-owner
+// fields mean "no managing unit DETECTED" - a heuristic negative, never a
+// safety guarantee.
 type GitOpsOwnershipDTO struct {
 	OwnerKind      string `json:"ownerKind"`
 	OwnerNamespace string `json:"ownerNamespace"`
@@ -135,6 +144,7 @@ type GitOpsOwnershipDTO struct {
 	NamespaceOwnerNamespace string `json:"namespaceOwnerNamespace"`
 	NamespaceOwnerName      string `json:"namespaceOwnerName"`
 	NamespacePrunes         bool   `json:"namespacePrunes"`
+	NamespaceManaged        bool   `json:"namespaceManaged"`
 	NamespaceBasis          string `json:"namespaceBasis"`
 
 	Warnings []string `json:"warnings"`

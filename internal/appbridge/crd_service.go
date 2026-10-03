@@ -222,6 +222,7 @@ func (s *CRDService) CreateResourceYAML(cluster, yaml string, dryRun bool) []Adh
 			Kind: r.Kind, Namespace: r.Namespace, Name: r.Name, OK: r.OK, Error: r.Error,
 			NamespaceOwnerKind: r.NamespaceOwnerKind, NamespaceOwnerName: r.NamespaceOwnerName,
 			NamespaceOwnerNamespace: r.NamespaceOwnerNamespace, NamespacePrunes: r.NamespacePrunes,
+			NamespaceManaged: r.NamespaceManaged, TrackedByNamespaceOwner: r.TrackedByNamespaceOwner,
 		})
 	}
 	return out
@@ -284,8 +285,8 @@ func (s *CRDService) GitOpsOwnership(cluster, group, kind, namespace, name strin
 		OwnerPrunes: o.OwnerPrunes, OwnerSuspended: o.OwnerSuspended, Basis: o.Basis,
 		NamespaceOwnerKind: o.NamespaceOwnerKind, NamespaceOwnerNamespace: o.NamespaceOwnerNamespace,
 		NamespaceOwnerName: o.NamespaceOwnerName, NamespacePrunes: o.NamespacePrunes,
-		NamespaceBasis: o.NamespaceBasis,
-		Warnings:       []string{},
+		NamespaceManaged: o.NamespaceManaged, NamespaceBasis: o.NamespaceBasis,
+		Warnings: []string{},
 	}
 	if o.Warnings != nil {
 		dto.Warnings = o.Warnings

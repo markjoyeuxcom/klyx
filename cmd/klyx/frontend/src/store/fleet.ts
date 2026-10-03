@@ -432,10 +432,14 @@ export type RelatedRefDTO = { kind: string; namespace: string; name: string; gro
 export type FactDTO = { group: string; label: string; value: string; tone: string; kind: string; pct?: number };
 
 // AdhocResultDTO is the per-document outcome of an ad-hoc create (the scratch
-// path). On dry-run the namespaceOwner* fields carry the prune-reach verdict.
+// path). On dry-run the namespaceOwner* fields carry the namespace's GitOps
+// context: a unit prunes only what it tracks, so the object is at risk only
+// when trackedByNamespaceOwner (Argo tracking metadata) or - conditionally -
+// when the unit manages and could delete the namespace itself.
 export type AdhocResultDTO = {
   kind: string; namespace: string; name: string; ok: boolean; error: string;
   namespaceOwnerKind: string; namespaceOwnerName: string; namespaceOwnerNamespace: string; namespacePrunes: boolean;
+  namespaceManaged: boolean; trackedByNamespaceOwner: boolean;
 };
 
 // AdhocObjectDTO is one Klyx-created scratch object (label klyx.dev/adhoc) in
@@ -471,11 +475,12 @@ export type AccessWhoCanDTO = { grants: AccessGrantDTO[]; clusterWideOnly: boole
 
 // GitOpsOwnershipDTO is the authoritative pre-write verdict: which GitOps unit
 // OWNS the object (edits revert on reconcile) and which unit REACHES its
-// namespace (out-of-band creates are pruned when namespacePrunes). Empty
-// namespace-owner fields mean "no managing unit DETECTED" - never "safe".
+// namespace - context only: a unit prunes what it tracks, and namespaceManaged
+// marks the one that could delete the namespace itself. Empty namespace-owner
+// fields mean "no managing unit DETECTED" - never "safe".
 export type GitOpsOwnershipDTO = {
   ownerKind: string; ownerNamespace: string; ownerName: string; ownerPrunes: boolean; ownerSuspended: boolean; basis: string;
-  namespaceOwnerKind: string; namespaceOwnerNamespace: string; namespaceOwnerName: string; namespacePrunes: boolean; namespaceBasis: string;
+  namespaceOwnerKind: string; namespaceOwnerNamespace: string; namespaceOwnerName: string; namespacePrunes: boolean; namespaceManaged: boolean; namespaceBasis: string;
   warnings: string[];
 };
 

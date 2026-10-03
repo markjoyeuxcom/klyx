@@ -13,10 +13,16 @@ import (
 
 // GitOpsOwnership is the authoritative pre-write verdict for one target object:
 // which GitOps unit OWNS it (an edit reverts on the next reconcile) and which
-// unit REACHES its namespace (an out-of-band create there is DELETED on the next
-// reconcile when that unit prunes). Derived from Flux Kustomization
-// status.inventory and Argo Application status.resources - not from object
-// labels, which miss unlabeled-but-managed objects entirely.
+// unit REACHES its namespace. Derived from Flux Kustomization status.inventory
+// and Argo Application status.resources - not from object labels, which miss
+// unlabeled-but-managed objects entirely.
+//
+// Namespace reach is CONTEXT, not a pruning verdict (review 2026-10-03 #13):
+// Flux garbage-collects only objects in its own inventory and Argo prunes only
+// resources it tracks, so an out-of-band object in a reached namespace is left
+// alone. The real conditional risk is NamespaceManaged: when the reaching unit
+// manages the Namespace object itself and prunes, removing that namespace from
+// Git deletes it - and everything in it.
 //
 // Honesty contract: object-level ownership (Basis "flux-inventory" /
 // "argo-resources") is authoritative. Namespace-level reach is a HEURISTIC in
@@ -32,16 +38,32 @@ type GitOpsOwnership struct {
 	OwnerSuspended bool
 	Basis          string // "flux-inventory" | "argo-resources" | ""
 
-	// Namespace-level: a unit deploys into the target namespace (create checks).
+	// Namespace-level: a unit deploys into the target namespace. When several
+	// do, the one managing the Namespace object itself is reported.
 	NamespaceOwnerKind      string
 	NamespaceOwnerNamespace string
 	NamespaceOwnerName      string
 	NamespacePrunes         bool
+	NamespaceManaged        bool   // the unit's inventory/resources hold the Namespace object
 	NamespaceBasis          string // "flux" | "argo" | ""
 
 	// Warnings carries degraded-check honesty (a failing list never reads as
 	// "unmanaged" silently).
 	Warnings []string
+}
+
+// noteReach records a unit reaching the target namespace, preferring one that
+// manages the Namespace object itself (the unit whose pruning can delete it).
+func (o *GitOpsOwnership) noteReach(kind, ns, name string, prunes, managed bool, basis string) {
+	if o.NamespaceOwnerKind != "" && (o.NamespaceManaged || !managed) {
+		return
+	}
+	o.NamespaceOwnerKind = kind
+	o.NamespaceOwnerNamespace = ns
+	o.NamespaceOwnerName = name
+	o.NamespacePrunes = prunes
+	o.NamespaceManaged = managed
+	o.NamespaceBasis = basis
 }
 
 // ownershipListCap bounds the fallback live lists; Kustomizations/Applications
@@ -76,12 +98,9 @@ func (c *ClusterConn) GitOpsOwnership(ctx context.Context, group, kind, ns, name
 				out.OwnerSuspended = s.Suspended
 				out.Basis = "flux-inventory"
 			}
-			if out.NamespaceOwnerKind == "" && s.ReachesNamespace(ns) {
-				out.NamespaceOwnerKind = "Kustomization"
-				out.NamespaceOwnerNamespace = s.Namespace
-				out.NamespaceOwnerName = s.Name
-				out.NamespacePrunes = s.Prune
-				out.NamespaceBasis = "flux"
+			// Managing the Namespace object itself is the strongest reach.
+			if managed := ns != "" && s.Owns("", "Namespace", "", ns); managed || s.ReachesNamespace(ns) {
+				out.noteReach("Kustomization", s.Namespace, s.Name, s.Prune, managed, "flux")
 			}
 		}
 	}
@@ -99,12 +118,8 @@ func (c *ClusterConn) GitOpsOwnership(ctx context.Context, group, kind, ns, name
 				out.OwnerPrunes = a.AutoPrune
 				out.Basis = "argo-resources"
 			}
-			if out.NamespaceOwnerKind == "" && argoReaches(a, ns) {
-				out.NamespaceOwnerKind = "Application"
-				out.NamespaceOwnerNamespace = a.Namespace
-				out.NamespaceOwnerName = a.Name
-				out.NamespacePrunes = a.AutoPrune
-				out.NamespaceBasis = "argo"
+			if managed := ns != "" && argoOwns(a, "", "Namespace", "", ns); managed || argoReaches(a, ns) {
+				out.noteReach("Application", a.Namespace, a.Name, a.AutoPrune, managed, "argo")
 			}
 		}
 	}
