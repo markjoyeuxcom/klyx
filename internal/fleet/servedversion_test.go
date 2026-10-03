@@ -4,14 +4,19 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/watch"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
+	clientfeatures "k8s.io/client-go/features"
+	clientfeaturestesting "k8s.io/client-go/features/testing"
 	"k8s.io/client-go/kubernetes/fake"
 	clienttesting "k8s.io/client-go/testing"
 	"k8s.io/client-go/tools/cache"
@@ -50,6 +55,10 @@ func splitListKinds() map[schema.GroupVersionResource]string {
 		{Group: "source.toolkit.fluxcd.io", Version: "v1beta2", Resource: "ocirepositories"}: "OCIRepositoryList",
 		{Group: "source.toolkit.fluxcd.io", Version: "v1", Resource: "helmrepositories"}:     "HelmRepositoryList",
 		{Group: "source.toolkit.fluxcd.io", Version: "v1", Resource: "helmcharts"}:           "HelmChartList",
+		// Under partial discovery (v1beta2 unreadable) an unserved Bucket can't
+		// be ruled out, so it is requested at the unreadable version and
+		// surfaces in health instead of being silently absent.
+		{Group: "source.toolkit.fluxcd.io", Version: "v1beta2", Resource: "buckets"}: "BucketList",
 	}
 }
 
@@ -174,33 +183,118 @@ func TestGitOpsWatchHealth_IncludesSourceInformers(t *testing.T) {
 	}
 }
 
-// rvInformer stubs the one informer method currentError reads.
-type rvInformer struct {
-	cache.SharedIndexInformer
-	rv string
+// partialDiscovery fails every v1beta2 resource lookup: discovery that answers
+// for one advertised version but not another.
+type partialDiscovery struct{ discoveryLike }
+
+func (d partialDiscovery) ServerResourcesForGroupVersion(gv string) (*metav1.APIResourceList, error) {
+	if strings.HasSuffix(gv, "/v1beta2") {
+		return nil, errors.New("temporary discovery failure")
+	}
+	return d.discoveryLike.ServerResourcesForGroupVersion(gv)
 }
 
-func (r *rvInformer) LastSyncResourceVersion() string { return r.rv }
+// Codex batch-3 review R2 probes, adopted: one unreadable version is
+// uncertainty, never absence - the request goes to the version that could not
+// be ruled out, so an installed OCIRepository is watched (or fails visibly).
+func TestServedVersion_PartialDiscoveryIsNotAbsence(t *testing.T) {
+	typed := fake.NewSimpleClientset()
+	typed.Resources = fluxSplitDiscovery()
+	d := partialDiscovery{typed.Discovery()}
+	if v, served := servedVersion(d, "source.toolkit.fluxcd.io", "ocirepositories", "v1beta2"); !served || v != "v1beta2" {
+		t.Fatalf("partial discovery = (%q, %v), want the unreadable fallback v1beta2", v, served)
+	}
+	// Complete discovery still establishes absence.
+	if _, served := servedVersion(typed.Discovery(), "source.toolkit.fluxcd.io", "buckets", "v1"); served {
+		t.Fatal("complete discovery without the resource is absence")
+	}
+}
 
-// An error is current only until a list/watch succeeds after it: the
-// reflector's last-synced resourceVersion moving clears it, and an error
-// recorded after a successful sync is current (the "synced, then failing"
-// case the old sync-gated check never reported).
-func TestWatchErrTracker_CurrentErrorClearsOnRecovery(t *testing.T) {
-	inf := &rvInformer{rv: "100"}
+func TestOpenGitOps_PartialDiscoveryCannotHideAnInstalledSource(t *testing.T) {
+	c, _, cancel := splitConn(t, ociRepo("present"))
+	defer cancel()
+	c.disc = newCachedDiscovery(partialDiscovery{c.typed.Discovery()}, nil)
+	c.OpenGitOps()
+	defer c.CloseGitOps()
+	waitFor(t, 2*time.Second, func() bool {
+		for _, s := range c.GitOpsSources() {
+			if s.Name == "present" {
+				return true
+			}
+		}
+		return false
+	})
+}
+
+// Codex batch-3 review R3 probe, adopted (WatchListClient off, as in the
+// probe): a watch fails once, then the relist and reopened watch succeed at
+// the SAME resourceVersion. Recovery is explicit (withRecovery), so the
+// failure stops being current; RV movement was no signal.
+func TestWatchErrTracker_RecoveryAtSameRV(t *testing.T) {
+	clientfeaturestesting.SetFeatureDuringTest(t, clientfeatures.WatchListClient, false)
+	var watches atomic.Int32
+	watcher := watch.NewRaceFreeFake()
+	defer watcher.Stop()
 	tr := &watchErrTracker{}
-	if tr.currentError(inf) != "" {
-		t.Fatal("no error recorded")
+	inf := cache.NewSharedIndexInformer(withRecovery(&cache.ListWatch{
+		ListWithContextFunc: func(context.Context, metav1.ListOptions) (runtime.Object, error) {
+			return &corev1.PodList{ListMeta: metav1.ListMeta{ResourceVersion: "100"}}, nil
+		},
+		WatchFuncWithContext: func(context.Context, metav1.ListOptions) (watch.Interface, error) {
+			if watches.Add(1) == 1 {
+				return nil, errors.New("transient watch setup failure")
+			}
+			return watcher, nil
+		},
+	}, tr), &corev1.Pod{}, 0, cache.Indexers{})
+	trackWatchErrors(inf, tr)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go inf.Run(ctx.Done())
+
+	waitFor(t, 5*time.Second, func() bool { return tr.lastError() != "" })
+	waitFor(t, 10*time.Second, func() bool { return watches.Load() >= 2 && inf.HasSynced() })
+	if rv := inf.LastSyncResourceVersion(); rv != "100" {
+		t.Fatalf("fixture RV %q", rv)
 	}
-	tr.record(errors.New("watch failed: forbidden"), "100")
-	if tr.currentError(inf) == "" {
-		t.Fatal("an error with no success since must be current")
+	waitFor(t, 2*time.Second, func() bool { return tr.currentError() == "" })
+}
+
+// A failure AFTER a success is current - the "synced, then broke" case the
+// old sync-gated check never reported - and only a later success clears it.
+func TestWatchErrTracker_FailureAfterSuccessIsCurrent(t *testing.T) {
+	tr := &watchErrTracker{}
+	tr.recovered()
+	tr.record(errors.New("watch failed: forbidden"))
+	if tr.currentError() == "" {
+		t.Fatal("a failure after a success must be current")
 	}
-	inf.rv = "105" // a relist succeeded
-	if got := tr.currentError(inf); got != "" {
+	tr.recovered()
+	if got := tr.currentError(); got != "" {
 		t.Fatalf("a recovered watch must not report %q", got)
 	}
 	if tr.lastError() == "" {
 		t.Fatal("lastError keeps the history")
 	}
+}
+
+// End to end: a Flux source watch that fails once and then recovers stops
+// reporting through GitOpsWatchHealth.
+func TestGitOpsWatchHealth_ClearsAfterRecovery(t *testing.T) {
+	c, dyn, cancel := splitConn(t, ociRepo("manifests"))
+	defer cancel()
+	var failed atomic.Bool
+	dyn.PrependWatchReactor("ocirepositories", func(clienttesting.Action) (bool, watch.Interface, error) {
+		if failed.CompareAndSwap(false, true) {
+			return true, nil, errors.New("transient watch failure")
+		}
+		return false, nil, nil
+	})
+	c.OpenGitOps()
+	defer c.CloseGitOps()
+	waitFor(t, 5*time.Second, func() bool { return failed.Load() })
+	waitFor(t, 10*time.Second, func() bool {
+		synced, e := c.GitOpsWatchHealth()
+		return synced && e == ""
+	})
 }

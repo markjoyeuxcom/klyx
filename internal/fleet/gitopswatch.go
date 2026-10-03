@@ -7,9 +7,11 @@ import (
 	"strings"
 	"sync"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/client-go/dynamic/dynamicinformer"
+	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/tools/cache"
 
 	"github.com/moomora/klyx/internal/gitops/flux"
@@ -38,18 +40,25 @@ type watchedInformer struct {
 // group, so a permanently failing list/watch (RBAC denied, CRD version
 // mismatch) can be surfaced instead of rendering as an empty, error-free view.
 type watchErrTracker struct {
-	mu   sync.Mutex
-	last string
-	rv   string // the reflector's last-synced resourceVersion when last was recorded
+	mu      sync.Mutex
+	last    string
+	current bool // no successful list/watch since last was recorded
 }
 
-func (t *watchErrTracker) record(err error, rv string) {
+func (t *watchErrTracker) record(err error) {
 	if err == nil {
 		return
 	}
 	t.mu.Lock()
 	t.last = err.Error()
-	t.rv = rv
+	t.current = true
+	t.mu.Unlock()
+}
+
+// recovered marks a SUCCESSFUL list or watch establishment (withRecovery).
+func (t *watchErrTracker) recovered() {
+	t.mu.Lock()
+	t.current = false
 	t.mu.Unlock()
 }
 
@@ -59,18 +68,44 @@ func (t *watchErrTracker) lastError() string {
 	return t.last
 }
 
-// currentError is the recorded error only while it is still CURRENT for inf:
-// no list/watch has succeeded since it was recorded (the reflector's
-// last-synced resourceVersion has not moved). A recovered watch therefore stops
-// reporting, while a watch that synced once and then started failing (RBAC
-// revoked, CRD removed) reports even though its initial sync completed.
-func (t *watchErrTracker) currentError(inf cache.SharedIndexInformer) string {
+// currentError is the recorded error only while it is still CURRENT: no list
+// or watch has succeeded since it was recorded. A recovered watch therefore
+// stops reporting, while a watch that synced once and then started failing
+// (RBAC revoked, CRD removed) reports even though its initial sync completed.
+// Recovery is signalled explicitly by withRecovery - a quiet relist can
+// succeed at the very same resourceVersion, so RV movement is no signal
+// (batch-3 review R3).
+func (t *watchErrTracker) currentError() string {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if t.last == "" || inf.LastSyncResourceVersion() != t.rv {
+	if !t.current {
 		return ""
 	}
 	return t.last
+}
+
+// withRecovery wraps lw so every SUCCESSFUL list or watch establishment marks
+// t recovered; failures still reach t through trackWatchErrors' handler. The
+// reflector runs list, watch and the error handler sequentially in one
+// goroutine, so a recovery can never be recorded ahead of the failure it
+// follows.
+func withRecovery(lw cache.ListerWatcherWithContext, t *watchErrTracker) *cache.ListWatch {
+	return &cache.ListWatch{
+		ListWithContextFunc: func(ctx context.Context, o metav1.ListOptions) (runtime.Object, error) {
+			obj, err := lw.ListWithContext(ctx, o)
+			if err == nil {
+				t.recovered()
+			}
+			return obj, err
+		},
+		WatchFuncWithContext: func(ctx context.Context, o metav1.ListOptions) (watch.Interface, error) {
+			w, err := lw.WatchWithContext(ctx, o)
+			if err == nil {
+				t.recovered()
+			}
+			return w, err
+		},
+	}
 }
 
 // trackWatchErrors replaces an informer's default watch-error handler (which
@@ -79,8 +114,8 @@ func (t *watchErrTracker) currentError(inf cache.SharedIndexInformer) string {
 // long as the view is open). Must run before Start.
 func trackWatchErrors(inf cache.SharedIndexInformer, t *watchErrTracker) {
 	_ = inf.SetTransform(stripManagedFields)
-	_ = inf.SetWatchErrorHandler(func(r *cache.Reflector, err error) {
-		t.record(err, r.LastSyncResourceVersion())
+	_ = inf.SetWatchErrorHandler(func(_ *cache.Reflector, err error) {
+		t.record(err)
 	})
 }
 
@@ -131,34 +166,57 @@ func (c *ClusterConn) OpenGitOps() {
 	}
 
 	gctx, cancel := context.WithCancel(parent)
-	factory := dynamicinformer.NewDynamicSharedInformerFactory(dyn, defaultResync)
 	g := &gitopsWatch{cancel: cancel, srcInf: map[flux.Kind]cache.SharedIndexInformer{}}
-	// watch starts an informer for one Flux resource at the version discovery
+	// watchKind builds an informer for one Flux resource at the version discovery
 	// says THAT RESOURCE is served at (review 2026-10-03 #11), or nothing when
-	// its CRD is not installed - an unserved kind is absent, not an error.
-	watch := func(kind flux.Kind, group, resource, fallback string) cache.SharedIndexInformer {
+	// its CRD is not installed - an unserved kind is absent, not an error. Its
+	// list/watch report successes to the informer's own tracker (withRecovery),
+	// so health knows when a failed watch has recovered.
+	watchKind := func(kind flux.Kind, group, resource, fallback string) cache.SharedIndexInformer {
 		ver, served := servedVersion(c.discovery(), group, resource, fallback)
 		if !served {
 			return nil
 		}
-		inf := factory.ForResource(schema.GroupVersionResource{Group: group, Version: ver, Resource: resource}).Informer()
+		gvr := schema.GroupVersionResource{Group: group, Version: ver, Resource: resource}
+		ri := dyn.Resource(gvr)
 		errs := &watchErrTracker{}
+		lw := withRecovery(&cache.ListWatch{
+			ListWithContextFunc: func(ctx context.Context, o metav1.ListOptions) (runtime.Object, error) {
+				return ri.List(ctx, o)
+			},
+			WatchFuncWithContext: func(ctx context.Context, o metav1.ListOptions) (watch.Interface, error) {
+				return ri.Watch(ctx, o)
+			},
+		}, errs)
+		// Built like dynamicinformer's informer, including telling the
+		// reflector whether this client supports watch-list semantics.
+		inf := cache.NewSharedIndexInformerWithOptions(
+			cache.ToListWatcherWithWatchListSemantics(lw, dyn),
+			&unstructured.Unstructured{},
+			cache.SharedIndexInformerOptions{
+				ResyncPeriod:      defaultResync,
+				Indexers:          cache.Indexers{cache.NamespaceIndex: cache.MetaNamespaceIndexFunc},
+				ObjectDescription: gvr.String(),
+			},
+		)
 		trackWatchErrors(inf, errs)
 		g.watched = append(g.watched, watchedInformer{kind: kind, inf: inf, errs: errs})
 		return inf
 	}
-	g.ksInf = watch(flux.KustomizationKind, "kustomize.toolkit.fluxcd.io", "kustomizations", "v1")
-	g.hrInf = watch(flux.HelmReleaseKind, "helm.toolkit.fluxcd.io", "helmreleases", "v2")
+	g.ksInf = watchKind(flux.KustomizationKind, "kustomize.toolkit.fluxcd.io", "kustomizations", "v1")
+	g.hrInf = watchKind(flux.HelmReleaseKind, "helm.toolkit.fluxcd.io", "helmreleases", "v2")
 
 	// Watch the source kinds alongside ks/hr so a stuck resource's root cause
 	// (a source that is not pulling) is visible without a separate API read.
 	for _, s := range sourceKinds {
-		if inf := watch(s.kind, s.group, s.resource, s.fallback); inf != nil {
+		if inf := watchKind(s.kind, s.group, s.resource, s.fallback); inf != nil {
 			g.srcInf[s.kind] = inf
 		}
 	}
 
-	factory.Start(gctx.Done())
+	for _, w := range g.watched {
+		go w.inf.Run(gctx.Done())
+	}
 
 	c.mu.Lock()
 	c.gitopsOpening = false
@@ -193,7 +251,7 @@ func (c *ClusterConn) GitOpsWatchHealth() (synced bool, lastErr string) {
 		if !done {
 			synced = false
 		}
-		e := w.errs.currentError(w.inf)
+		e := w.errs.currentError()
 		switch {
 		case e == "":
 		case done:
