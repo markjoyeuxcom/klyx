@@ -408,7 +408,8 @@ export type EventsSlice = {
 
 export type ResourceRef = { group: string; version: string; plural: string; kind: string; scope: string };
 export type InstanceDTO = { namespace: string; name: string; created: string; fields?: Record<string, string> };
-export type InstancesSlice = { ref: ResourceRef | null; rows: InstanceDTO[]; nextToken: string; loading: boolean; filter: string; riskOnly: boolean };
+// error: the last page read FAILED - rows are then not "no instances".
+export type InstancesSlice = { ref: ResourceRef | null; rows: InstanceDTO[]; nextToken: string; loading: boolean; filter: string; riskOnly: boolean; error?: string | null };
 
 export type InstanceRef = { namespace: string; name: string };
 export type EventDTO = { type: string; reason: string; message: string; count: number; lastSeen: string };
@@ -475,7 +476,7 @@ export type GitOpsOwnershipDTO = {
 // groundedOn names the resolved nodes sent to the model, for traceability.
 export type AIResultDTO = { ok: boolean; explanation: string; model: string; backend: string; groundedOn: string; error: string };
 export type AIAvailabilityDTO = { backend: string; ready: boolean };
-export type InstanceDetailDTO = { kind: string; namespace: string; name: string; created: string; labels: Record<string, string>; annotations?: Record<string, string>; conditions: ConditionDTO[]; events: EventDTO[]; yaml: string; secretKeys?: SecretKeyDTO[]; serviceBacking?: ServiceBackingDTO | null; hpaScaling?: HPAScalingDTO | null; related?: RelatedRefDTO[]; facts?: FactDTO[] };
+export type InstanceDetailDTO = { kind: string; namespace: string; name: string; created: string; labels: Record<string, string>; annotations?: Record<string, string>; conditions: ConditionDTO[]; events: EventDTO[]; yaml: string; secretKeys?: SecretKeyDTO[]; serviceBacking?: ServiceBackingDTO | null; hpaScaling?: HPAScalingDTO | null; related?: RelatedRefDTO[]; facts?: FactDTO[]; error?: string };
 export type InstanceDetailSlice = { ref: InstanceRef | null; detail: InstanceDetailDTO | null; loading: boolean };
 
 export type Route =
@@ -510,13 +511,15 @@ export const SECTION_LABELS: Record<ClusterSection, string> = {
 
 export type CRDKindDTO = { kind: string; plural: string; scope: string; version: string; operator: string; shortNames: string[] };
 export type CRDGroupDTO = { group: string; category: string; kinds: CRDKindDTO[] };
-export type CRDCountDTO = { count: number; capped: boolean };
+// error: the count FAILED (e.g. forbidden) - count is then meaningless, never zero.
+export type CRDCountDTO = { count: number; capped: boolean; error?: string };
 export type CRDGroupBy = "group" | "operator" | "scope" | "alphabetical";
 
 export type CRDSlice = {
   cluster: string | null;
   groups: CRDGroupDTO[];
   loading: boolean;
+  error?: string | null; // the CRD list read FAILED: empty groups are not "no CRDs"
   expanded: string[];
   counts: Record<string, CRDCountDTO>;
   groupBy: CRDGroupBy;
@@ -789,7 +792,7 @@ type FleetState = {
   forwards: ForwardDTO[];
   setForwards: (f: ForwardDTO[]) => void;
   crd: CRDSlice;
-  setCRDs: (cluster: string, groups: CRDGroupDTO[]) => void;
+  setCRDs: (cluster: string, groups: CRDGroupDTO[], error?: string) => void;
   setCRDLoading: (cluster: string) => void;
   clearCRDs: () => void;
   toggleCRDGroup: (group: string) => void;
@@ -931,7 +934,7 @@ export const useFleet = create<FleetState>((set) => ({
     const sameRef = s.instances.ref?.group === ref.group && s.instances.ref?.version === ref.version && s.instances.ref?.plural === ref.plural;
     return { instances: { ref, rows: [], nextToken: "", loading: true, filter: sameRef ? s.instances.filter : "", riskOnly: sameRef ? s.instances.riskOnly : false } };
   }),
-  setInstancePage: (items, nextToken) => set((s) => ({ instances: { ...s.instances, rows: items, nextToken, loading: false } })),
+  setInstancePage: (items, nextToken) => set((s) => ({ instances: { ...s.instances, rows: items, nextToken, loading: false, error: null } })),
   addInstancePage: (items, nextToken) => set((s) => ({ instances: { ...s.instances, rows: [...s.instances.rows, ...items], nextToken, loading: false } })),
   setInstanceFilter: (filter) => set((s) => ({ instances: { ...s.instances, filter } })),
   setInstanceRiskOnly: (riskOnly) => set((s) => ({ instances: { ...s.instances, riskOnly } })),
@@ -1006,7 +1009,7 @@ export const useFleet = create<FleetState>((set) => ({
   forwards: [],
   setForwards: (forwards) => set({ forwards }),
   crd: { cluster: null, groups: [], loading: false, expanded: [], counts: {}, groupBy: "group", search: "", builtinCategory: null },
-  setCRDs: (cluster, groups) => set((s) => ({ crd: { ...s.crd, cluster, groups, loading: false } })),
+  setCRDs: (cluster, groups, error) => set((s) => ({ crd: { ...s.crd, cluster, groups, loading: false, error: error || null } })),
   setCRDLoading: (cluster) => set((s) => ({ crd: { ...s.crd, cluster, groups: [], loading: true, expanded: [], counts: {} } })),
   clearCRDs: () => set({ crd: { cluster: null, groups: [], loading: false, expanded: [], counts: {}, groupBy: "group", search: "", builtinCategory: null } }),
   toggleCRDGroup: (group) => set((s) => ({

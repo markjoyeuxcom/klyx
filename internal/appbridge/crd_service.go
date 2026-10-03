@@ -4,6 +4,8 @@ import (
 	"context"
 	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+
 	"github.com/moomora/klyx/internal/crd"
 	"github.com/moomora/klyx/internal/fleet"
 )
@@ -37,32 +39,34 @@ func NewCRDService(lookup func(string) (CRDConn, bool)) *CRDService {
 }
 
 // ListCRDs returns the cluster's CRDs grouped by API group with category and
-// sorted deterministically. Empty on a cluster miss or a list error.
-func (s *CRDService) ListCRDs(cluster string) []CRDGroupDTO {
+// sorted deterministically. A cluster miss or list error returns empty Groups
+// WITH Error - never a silent "no CRDs".
+func (s *CRDService) ListCRDs(cluster string) CRDListDTO {
 	conn, ok := s.lookup(cluster)
 	if !ok {
-		return []CRDGroupDTO{}
+		return CRDListDTO{Groups: []CRDGroupDTO{}, Error: "cluster not connected: " + cluster}
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), crdTimeout)
 	defer cancel()
 	infos, err := conn.ListCRDs(ctx)
 	if err != nil {
-		return []CRDGroupDTO{}
+		return CRDListDTO{Groups: []CRDGroupDTO{}, Error: err.Error()}
 	}
-	return groupCRDs(infos)
+	return CRDListDTO{Groups: groupCRDs(infos)}
 }
 
-// CountKind returns the hybrid instance count for one kind. Zero value on miss.
+// CountKind returns the hybrid instance count for one kind. A cluster miss or
+// count error carries Error - a forbidden count is not a zero.
 func (s *CRDService) CountKind(cluster, group, version, plural string) CRDCountDTO {
 	conn, ok := s.lookup(cluster)
 	if !ok {
-		return CRDCountDTO{}
+		return CRDCountDTO{Error: "cluster not connected: " + cluster}
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), crdTimeout)
 	defer cancel()
 	count, capped, err := conn.CountResource(ctx, group, version, plural)
 	if err != nil {
-		return CRDCountDTO{}
+		return CRDCountDTO{Error: err.Error()}
 	}
 	return CRDCountDTO{Count: count, Capped: capped}
 }
@@ -74,17 +78,18 @@ func rfc3339(t time.Time) string {
 	return t.Format(time.RFC3339)
 }
 
-// GetInstanceDetail returns the full per-instance detail. Zero value on miss/error.
+// GetInstanceDetail returns the full per-instance detail. A cluster miss or
+// read error returns the zero DTO WITH Error, never a blank object.
 func (s *CRDService) GetInstanceDetail(cluster, group, version, plural, namespace, name string) InstanceDetailDTO {
 	conn, ok := s.lookup(cluster)
 	if !ok {
-		return InstanceDetailDTO{}
+		return InstanceDetailDTO{Error: "cluster not connected: " + cluster}
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), crdTimeout)
 	defer cancel()
 	d, err := conn.GetInstanceDetail(ctx, group, version, plural, namespace, name)
 	if err != nil {
-		return InstanceDetailDTO{}
+		return InstanceDetailDTO{Error: err.Error()}
 	}
 	labels := d.Labels
 	if labels == nil {
@@ -306,17 +311,23 @@ func (s *CRDService) RevealSecretKey(cluster, namespace, name, key string) Revea
 }
 
 // ListInstances returns one page of instances of a kind plus the next token.
-// Empty page on a cluster miss or error.
+// A cluster miss or list error returns an empty page WITH Error.
 func (s *CRDService) ListInstances(cluster, group, version, plural, continueToken string) InstancePageDTO {
 	conn, ok := s.lookup(cluster)
 	if !ok {
-		return InstancePageDTO{Items: []InstanceDTO{}}
+		return InstancePageDTO{Items: []InstanceDTO{}, Error: "cluster not connected: " + cluster}
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), crdTimeout)
 	defer cancel()
 	items, next, err := conn.ListInstances(ctx, group, version, plural, instancePageSize, continueToken)
 	if err != nil {
-		return InstancePageDTO{Items: []InstanceDTO{}}
+		// A cluster-wide list only 404s when the resource itself is not served
+		// (e.g. a CRD that is not installed): that is a definitive zero, not an
+		// unreadable read.
+		if apierrors.IsNotFound(err) {
+			return InstancePageDTO{Items: []InstanceDTO{}, NotServed: true}
+		}
+		return InstancePageDTO{Items: []InstanceDTO{}, Error: err.Error()}
 	}
 	dtos := make([]InstanceDTO, 0, len(items))
 	for _, m := range items {

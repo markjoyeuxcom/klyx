@@ -841,6 +841,12 @@ export function InstanceDetail({ cluster, resource, instance }: { cluster: strin
         <div style={inspectorStateBox}>Loading {resource.kind} detail…</div>
       ) : !d ? (
         <div style={inspectorStateBox}>Could not load {instance.namespace ? `${instance.namespace}/` : ""}{instance.name}.</div>
+      ) : d.error ? (
+        // The backend returns a zero DTO WITH the reason on a failed read;
+        // never render that as a real (empty) object.
+        <div role="alert" style={{ ...inspectorStateBox, color: "var(--color-text-danger)" }}>
+          Could not load {instance.namespace ? `${instance.namespace}/` : ""}{instance.name}: {d.error}
+        </div>
       ) : (
         <div style={{ minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column", flex: 1 }}>
           {(() => {

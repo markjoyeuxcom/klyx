@@ -5,8 +5,11 @@ import { Clipboard } from "@wailsio/runtime";
 export async function listCRDs(cluster: string): Promise<void> {
   useFleet.getState().setCRDLoading(cluster);
   try {
-    const groups = (await CRDService.ListCRDs(cluster)) as CRDGroupDTO[];
-    useFleet.getState().setCRDs(cluster, groups ?? []);
+    // A failed read comes back WITH error (empty groups are then unreadable,
+    // not "no CRDs installed").
+    const r = (await CRDService.ListCRDs(cluster)) as { groups: CRDGroupDTO[]; error?: string };
+    if (useFleet.getState().crd.cluster !== cluster) return; // stale: the browser moved on
+    useFleet.getState().setCRDs(cluster, r?.groups ?? [], r?.error);
   } catch (e) {
     // Clear the loading flag so the view doesn't get stuck on "Loading…".
     if (useFleet.getState().crd.cluster === cluster) {
@@ -58,12 +61,18 @@ export async function countKind(cluster: string, group: string, version: string,
   }
 }
 
-type InstancePageDTO = { items: InstanceDTO[]; nextToken: string };
+type InstancePageDTO = { items: InstanceDTO[]; nextToken: string; error?: string; notServed?: boolean };
 export type ActionResult = { ok: boolean; error: string };
 
+// listInstancePage REJECTS on a failed read: the backend returns an empty page
+// WITH error, and every caller (fleet-scope list, Overview risks, the list
+// view) must treat that as unreadable - never as "no instances" (review
+// 2026-10-03 #10). Throwing routes it through their existing error paths.
 export async function listInstancePage(cluster: string, ref: ResourceRef, token = ""): Promise<InstancePageDTO> {
   const page = (await CRDService.ListInstances(cluster, ref.group, ref.version, ref.plural, token)) as InstancePageDTO;
-  return { items: page.items ?? [], nextToken: page.nextToken ?? "" };
+  if (page?.error) throw new Error(page.error);
+  // notServed (the kind is not installed) is a definitive empty page, not an error.
+  return { items: page.items ?? [], nextToken: page.nextToken ?? "", notServed: !!page.notServed };
 }
 
 export async function loadInstances(cluster: string, ref: ResourceRef, token?: string): Promise<void> {
@@ -79,10 +88,12 @@ export async function loadInstances(cluster: string, ref: ResourceRef, token?: s
     else useFleet.getState().setInstancePage(page.items ?? [], page.nextToken ?? "");
   } catch (e) {
     console.error("loadInstances", e);
-    // Clear the loading flag so the view doesn't get stuck on "Loading…".
+    // Clear the loading flag so the view doesn't get stuck on "Loading…", and
+    // record WHY: the list must say it could not read, not that it is empty.
     const cur = useFleet.getState().instances.ref;
     if (cur && cur.group === ref.group && cur.plural === ref.plural) {
-      useFleet.setState((s) => ({ instances: { ...s.instances, loading: false } }));
+      const error = e instanceof Error ? e.message : String(e);
+      useFleet.setState((s) => ({ instances: { ...s.instances, loading: false, error } }));
     }
   }
 }

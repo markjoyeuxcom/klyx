@@ -3,6 +3,7 @@ import { IconChevronRight, IconComponents } from "@tabler/icons-react";
 import { useFleet, CRDGroupDTO, CRDKindDTO, CRDGroupBy, crdCountKey } from "../store/fleet";
 import { listCRDs, countKind } from "../bridge/crd";
 import { EmptyState, SkeletonRows, ellipsis } from "../chrome/primitives";
+import { WatchErrorBanner } from "../chrome/WatchErrorBanner";
 
 type FlatKind = CRDKindDTO & { group: string; category: string };
 
@@ -60,6 +61,14 @@ export function CRDBrowser({ cluster }: { cluster: string }) {
 
   if (crd.loading && groups.length === 0) {
     return <div style={{ padding: "14px 16px" }}><SkeletonRows rows={7} label="loading custom resources" /></div>;
+  }
+  // A failed read is not "no custom resources" (review 2026-10-03 #10).
+  if (crd.error && groups.length === 0) {
+    return (
+      <div style={{ padding: "14px 16px" }}>
+        <WatchErrorBanner tool="Custom resources" failure="read failed" error={crd.error} />
+      </div>
+    );
   }
   if (groups.length === 0 || (crd.search && sections.length === 0)) {
     return (
@@ -133,7 +142,10 @@ function Section({ cluster, label, category, kinds, grouped }: { cluster: string
     }
   }, [open, cluster, kinds, counts]);
 
-  const sectionInstances = kinds.reduce((n, k) => n + (counts[crdCountKey(k.group, k.version, k.plural)]?.count ?? 0), 0);
+  const sectionInstances = kinds.reduce((n, k) => {
+    const c = counts[crdCountKey(k.group, k.version, k.plural)];
+    return n + (c && !c.error ? c.count : 0);
+  }, 0);
   const sectionCounted = kinds.every((k) => counts[crdCountKey(k.group, k.version, k.plural)]);
   const sectionCapped = kinds.some((k) => counts[crdCountKey(k.group, k.version, k.plural)]?.capped);
 
@@ -151,7 +163,8 @@ function Section({ cluster, label, category, kinds, grouped }: { cluster: string
       </div>
       {open && kinds.map((k) => {
         const c = counts[crdCountKey(k.group, k.version, k.plural)];
-        const display = c ? (c.capped ? `${c.count}+` : `${c.count}`) : "…";
+        // A failed count is "?" - never a zero (review 2026-10-03 #10).
+        const display = c ? (c.error ? "?" : c.capped ? `${c.count}+` : `${c.count}`) : "…";
         return (
           <div
             key={`${k.group}/${k.kind}`}

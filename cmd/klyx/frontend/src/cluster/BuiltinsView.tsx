@@ -120,7 +120,8 @@ function BuiltinCategorySection({ cluster, label, entries }: { cluster: string; 
         }
         const ref = entry.ref;
         const c = counts[crdCountKey(ref.group, ref.version, ref.plural)];
-        const display = c ? (c.capped ? `${c.count}+` : `${c.count}`) : "…";
+        // A failed count is "?" - never a zero (review 2026-10-03 #10).
+        const display = c ? (c.error ? "?" : c.capped ? `${c.count}+` : `${c.count}`) : "…";
         return (
           <div
             key={`builtin/${ref.group}/${ref.plural}`}

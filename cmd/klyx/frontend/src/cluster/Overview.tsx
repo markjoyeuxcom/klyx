@@ -388,12 +388,24 @@ type RiskSummary = { ref: ResourceRef; count: number; sample: string; reason: st
 
 function ClusterRisks({ cluster }: { cluster: string }) {
   const [risks, setRisks] = useState<RiskSummary[] | null>(null);
+  // Kinds whose read FAILED. "no resource risks found" is only claimed when
+  // every kind was actually read (review 2026-10-03 #10): one failed page used
+  // to reject the whole scan into a confident empty result.
+  const [unreadable, setUnreadable] = useState<string[]>([]);
 
   useEffect(() => {
     let cancelled = false;
     setRisks(null);
+    setUnreadable([]);
+    const failed: string[] = [];
     Promise.all(CLUSTER_RISK_REFS.map(async (ref) => {
-      const page = await listInstancePage(cluster, ref);
+      let page;
+      try {
+        page = await listInstancePage(cluster, ref);
+      } catch {
+        failed.push(ref.kind);
+        return null;
+      }
       const bad = (page.items ?? [])
         .map((row) => ({ row, risk: riskFor(ref, row) }))
         .filter((item) => item.risk.bad);
@@ -407,10 +419,9 @@ function ClusterRisks({ cluster }: { cluster: string }) {
       } satisfies RiskSummary;
     })).then((items) => {
       if (!cancelled) {
+        setUnreadable([...failed].sort());
         setRisks(items.filter((item): item is RiskSummary => item !== null).sort((a, b) => b.count - a.count || a.ref.kind.localeCompare(b.ref.kind)));
       }
-    }).catch(() => {
-      if (!cancelled) setRisks([]);
     });
     return () => {
       cancelled = true;
@@ -428,7 +439,7 @@ function ClusterRisks({ cluster }: { cluster: string }) {
     <Section title="Cluster Risks">
       {risks === null ? (
         <span style={{ color: "var(--color-text-tertiary)", fontSize: 12, fontFamily: "var(--font-mono)" }}>checking resources…</span>
-      ) : risks.length === 0 ? (
+      ) : risks.length === 0 && unreadable.length === 0 ? (
         <span style={{ color: "var(--color-text-success)", fontSize: 12, fontFamily: "var(--font-mono)" }}>no resource risks found</span>
       ) : risks.slice(0, 6).map((r) => (
         <button
@@ -456,6 +467,15 @@ function ClusterRisks({ cluster }: { cluster: string }) {
           <span style={{ flex: "1 1 220px", minWidth: 0, color: "var(--color-text-tertiary)", ...ellipsis }}>{r.sample}</span>
         </button>
       ))}
+      {risks !== null && unreadable.length > 0 && (
+        <span
+          data-testid="risks-unreadable"
+          title={unreadable.join(", ")}
+          style={{ color: "var(--color-text-warning)", fontSize: 12, fontFamily: "var(--font-mono)" }}
+        >
+          {unreadable.length} kind{unreadable.length === 1 ? "" : "s"} could not be read - risks there are unknown
+        </span>
+      )}
     </Section>
   );
 }

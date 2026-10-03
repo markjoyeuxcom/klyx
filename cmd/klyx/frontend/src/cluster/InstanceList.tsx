@@ -9,6 +9,7 @@ import { useResizablePanel } from "../chrome/useResizablePanel";
 import { CopyButton } from "../chrome/CopyButton";
 import { Age } from "../chrome/Age";
 import { inputWell, well, EmptyState, SkeletonRows } from "../chrome/primitives";
+import { WatchErrorBanner } from "../chrome/WatchErrorBanner";
 import { IconStack2 } from "@tabler/icons-react";
 import { InstanceDetail } from "./InstanceDetail";
 import { riskFor, supportsRiskFilter } from "./resourceRisk";
@@ -245,6 +246,13 @@ export function InstanceList({ cluster, resource }: { cluster: string; resource:
               {target} <span style={tabCount}>{fleetCounts[target] ?? 0}</span>
             </button>
           ))}
+        </div>
+      )}
+
+      {/* Read failure - never pass as "no instances" (review 2026-10-03 #10). */}
+      {!fleetMode && instances.error && (
+        <div style={{ marginBottom: 10, flexShrink: 0 }}>
+          <WatchErrorBanner tool={resource.kind} failure="read failed" error={instances.error} />
         </div>
       )}
 

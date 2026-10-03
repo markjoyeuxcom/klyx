@@ -3,8 +3,12 @@ package appbridge
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
+
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/moomora/klyx/internal/crd"
 	"github.com/moomora/klyx/internal/fleet"
@@ -28,6 +32,9 @@ type fakeCRDConn struct {
 	adhocObjects   []fleet.AdhocObject
 	adhocDeleted   []string
 	adhocDeleteErr error
+
+	// read failures, for the error-honesty tests
+	listErr, countErr, instErr, detailErr error
 }
 
 type applyCall struct {
@@ -35,8 +42,11 @@ type applyCall struct {
 	dryRun                                              bool
 }
 
-func (f *fakeCRDConn) ListCRDs(ctx context.Context) ([]crd.Info, error) { return f.infos, nil }
+func (f *fakeCRDConn) ListCRDs(ctx context.Context) ([]crd.Info, error) { return f.infos, f.listErr }
 func (f *fakeCRDConn) CountResource(ctx context.Context, group, version, plural string) (int, bool, error) {
+	if f.countErr != nil {
+		return 0, false, f.countErr
+	}
 	n, ok := f.counts[plural]
 	if !ok {
 		return 0, false, nil
@@ -44,10 +54,10 @@ func (f *fakeCRDConn) CountResource(ctx context.Context, group, version, plural 
 	return n, n >= crd.Cap, nil
 }
 func (f *fakeCRDConn) ListInstances(ctx context.Context, group, version, plural string, limit int64, continueToken string) ([]crd.InstanceMeta, string, error) {
-	return f.instances, f.nextToken, nil
+	return f.instances, f.nextToken, f.instErr
 }
 func (f *fakeCRDConn) GetInstanceDetail(ctx context.Context, group, version, plural, ns, name string) (crd.InstanceDetail, error) {
-	return f.detail, nil
+	return f.detail, f.detailErr
 }
 func (f *fakeCRDConn) ApplyResourceYAML(ctx context.Context, group, version, plural, kind, scope, ns, name, yaml string, dryRun bool) error {
 	f.apply = applyCall{group: group, version: version, plural: plural, kind: kind, scope: scope, ns: ns, name: name, yaml: yaml, dryRun: dryRun}
@@ -205,7 +215,11 @@ func TestListCRDsGroupsAndAttributes(t *testing.T) {
 	}}
 	svc := NewCRDService(func(string) (CRDConn, bool) { return conn, true })
 
-	groups := svc.ListCRDs("x")
+	res := svc.ListCRDs("x")
+	if res.Error != "" {
+		t.Fatalf("unexpected error: %q", res.Error)
+	}
+	groups := res.Groups
 	if len(groups) != 2 {
 		t.Fatalf("want 2 groups, got %d", len(groups))
 	}
@@ -222,8 +236,33 @@ func TestListCRDsGroupsAndAttributes(t *testing.T) {
 
 func TestListCRDsUnknownClusterEmpty(t *testing.T) {
 	svc := NewCRDService(func(string) (CRDConn, bool) { return nil, false })
-	if g := svc.ListCRDs("ghost"); len(g) != 0 {
-		t.Fatalf("want empty, got %d", len(g))
+	g := svc.ListCRDs("ghost")
+	if len(g.Groups) != 0 || g.Groups == nil {
+		t.Fatalf("want empty non-nil groups, got %v", g.Groups)
+	}
+	// Review 2026-10-03 #10: unreadable, never "no CRDs installed".
+	if !strings.Contains(g.Error, "not connected") {
+		t.Fatalf("a cluster miss must carry Error, got %q", g.Error)
+	}
+}
+
+// Review 2026-10-03 #10: every CRD read carries Error when it fails, so a
+// forbidden count, page or detail is never shown as zero / empty / blank.
+func TestCRDReads_FailureCarriesError(t *testing.T) {
+	boom := errors.New("forbidden")
+	conn := &fakeCRDConn{listErr: boom, countErr: boom, instErr: boom, detailErr: boom}
+	svc := NewCRDService(func(string) (CRDConn, bool) { return conn, true })
+	if r := svc.ListCRDs("c"); r.Error != "forbidden" {
+		t.Errorf("ListCRDs: %q", r.Error)
+	}
+	if r := svc.CountKind("c", "g", "v1", "things"); r.Error != "forbidden" {
+		t.Errorf("CountKind: %q", r.Error)
+	}
+	if r := svc.ListInstances("c", "g", "v1", "things", ""); r.Error != "forbidden" || r.Items == nil {
+		t.Errorf("ListInstances: error=%q items-nil=%v", r.Error, r.Items == nil)
+	}
+	if r := svc.GetInstanceDetail("c", "g", "v1", "things", "ns", "x"); r.Error != "forbidden" {
+		t.Errorf("GetInstanceDetail: %q", r.Error)
 	}
 }
 
@@ -477,5 +516,18 @@ func TestCountKind(t *testing.T) {
 	}
 	if c := svc.CountKind("x", "cert-manager.io", "v1", "certificates"); c.Count != 4 || c.Capped {
 		t.Fatalf("exact: %+v", c)
+	}
+}
+
+// A resource the cluster does not serve (CRD not installed) is a definitive
+// zero, not an unreadable read - the Overview risk scan must not report every
+// absent operator as a failure.
+func TestListInstances_NotServedIsNotAnError(t *testing.T) {
+	notFound := apierrors.NewNotFound(schema.GroupResource{Group: "cert-manager.io", Resource: "certificates"}, "")
+	conn := &fakeCRDConn{instErr: notFound}
+	svc := NewCRDService(func(string) (CRDConn, bool) { return conn, true })
+	r := svc.ListInstances("c", "cert-manager.io", "v1", "certificates", "")
+	if r.Error != "" || !r.NotServed || r.Items == nil || len(r.Items) != 0 {
+		t.Fatalf("want NotServed with no error, got %+v", r)
 	}
 }

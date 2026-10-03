@@ -23,10 +23,20 @@ type CRDGroupDTO struct {
 	Kinds    []CRDKindDTO `json:"kinds"`
 }
 
-// CRDCountDTO is a hybrid instance count for one kind.
+// CRDListDTO is the CRD browser payload. Error marks a FAILED read (cluster
+// not connected, list error): an empty Groups then means "unreadable", never
+// "no CRDs installed" (review 2026-10-03 #10).
+type CRDListDTO struct {
+	Groups []CRDGroupDTO `json:"groups"`
+	Error  string        `json:"error,omitempty"`
+}
+
+// CRDCountDTO is a hybrid instance count for one kind. Error marks a failed
+// count (e.g. forbidden): Count is then meaningless, never a real zero.
 type CRDCountDTO struct {
-	Count  int  `json:"count"`
-	Capped bool `json:"capped"`
+	Count  int    `json:"count"`
+	Capped bool   `json:"capped"`
+	Error  string `json:"error,omitempty"`
 }
 
 // InstanceDTO is the metadata-only view of one instance.
@@ -41,6 +51,12 @@ type InstanceDTO struct {
 type InstancePageDTO struct {
 	Items     []InstanceDTO `json:"items"`
 	NextToken string        `json:"nextToken"`
+	// Error marks a failed page read: empty Items then mean "unreadable", not
+	// "no instances" (review 2026-10-03 #10).
+	Error string `json:"error,omitempty"`
+	// NotServed: the cluster does not serve this resource at all (e.g. a CRD
+	// that is not installed) - a definitive zero, distinct from a failed read.
+	NotServed bool `json:"notServed,omitempty"`
 }
 
 // EventDTO is a describe-style event.
@@ -159,6 +175,8 @@ type InstanceDetailDTO struct {
 	// Facts are per-kind salient summary values (the data path) for kinds with a
 	// registered builder; empty for kinds without one.
 	Facts []FactDTO `json:"facts,omitempty"`
+	// Error is set when the detail read failed; the zero DTO is never an object.
+	Error string `json:"error,omitempty"`
 }
 
 // RevealResultDTO is returned by RevealSecretKey. On success Value is the
