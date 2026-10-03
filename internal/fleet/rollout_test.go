@@ -12,6 +12,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	k8sfake "k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
@@ -190,6 +191,77 @@ func TestDeploymentUndoPatch_ChangeCauseAndIdentityGuard(t *testing.T) {
 	got = ops(rolloutDeployment(false, "3"), rolloutRS("cart-2", "2", "v2", "", time.Unix(0, 0)))
 	if len(got) != 2 {
 		t.Fatalf("want test+replace only, got %v", got)
+	}
+}
+
+// Codex's batch-1 review: assert the RESULTING Deployment for every
+// change-cause shape, including a non-nil EMPTY annotations map (omitted on the
+// wire, so a nested add would fail).
+func TestRolloutUndo_ChangeCauseResultingObject(t *testing.T) {
+	for _, kind := range []string{"nil annotations", "empty map", "replace cause", "remove cause"} {
+		t.Run(kind, func(t *testing.T) {
+			dep := rolloutDeployment(false, "2")
+			dep.Spec.Template = rolloutRS("cart-2", "2", "v2", "", time.Now()).Spec.Template
+			old := rolloutRS("cart-1", "1", "v1", "older", time.Now())
+			switch kind {
+			case "nil annotations":
+				dep.Annotations = nil
+			case "empty map":
+				dep.Annotations = map[string]string{}
+			case "replace cause":
+				dep.Annotations[changeCauseAnn] = "newer"
+			case "remove cause":
+				dep.Annotations[changeCauseAnn] = "newer"
+				delete(old.Annotations, changeCauseAnn)
+			}
+			typed := k8sfake.NewSimpleClientset(dep, old)
+			c := &ClusterConn{typed: typed}
+			if err := c.undoDeployment(context.Background(), "shop", "cart", 1); err != nil {
+				t.Fatal(err)
+			}
+			got, err := typed.AppsV1().Deployments("shop").Get(context.Background(), "cart", metav1.GetOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if kind == "remove cause" {
+				if _, ok := got.Annotations[changeCauseAnn]; ok {
+					t.Fatalf("newer change-cause must be removed: %v", got.Annotations)
+				}
+			} else if got.Annotations[changeCauseAnn] != "older" {
+				t.Fatalf("want the target's change-cause, got %v", got.Annotations)
+			}
+			if got.Spec.Template.Spec.Containers[0].Image != "v1" {
+				t.Fatalf("template not restored: %+v", got.Spec.Template.Spec.Containers)
+			}
+		})
+	}
+}
+
+// A Deployment deleted and recreated (new UID) between the read and the patch
+// must fail the uid test op and stay untouched.
+func TestRolloutUndo_RecreatedDeploymentIsNotRolledBack(t *testing.T) {
+	dep := rolloutDeployment(false, "2")
+	dep.Spec.Template = rolloutRS("cart-2", "2", "v2", "", time.Now()).Spec.Template
+	old := rolloutRS("cart-1", "1", "v1", "old cause", time.Now())
+	typed := k8sfake.NewSimpleClientset(dep, old)
+	typed.PrependReactor("patch", "deployments", func(k8stesting.Action) (bool, runtime.Object, error) {
+		newer := dep.DeepCopy()
+		newer.UID = "replacement-uid"
+		if err := typed.Tracker().Update(schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}, newer, "shop"); err != nil {
+			t.Fatal(err)
+		}
+		return false, nil, nil
+	})
+	c := &ClusterConn{typed: typed}
+	if err := c.undoDeployment(context.Background(), "shop", "cart", 1); err == nil {
+		t.Fatal("undo against a recreated Deployment must fail the uid precondition")
+	}
+	got, err := typed.AppsV1().Deployments("shop").Get(context.Background(), "cart", metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Spec.Template.Spec.Containers[0].Image != "v2" {
+		t.Fatal("the recreated Deployment must not be mutated")
 	}
 }
 

@@ -212,8 +212,11 @@ func (c *ClusterConn) undoDeployment(ctx context.Context, namespace, name string
 //   - tests metadata.uid first, so a Deployment deleted and recreated under the
 //     same name between our read and the patch is never rolled back blind;
 //   - carries the target revision's change-cause onto the Deployment (or drops
-//     the current one when the target has none), as kubectl does, so the
-//     rollout history does not attribute the rollback to the newer change.
+//     the current one when the target has none), so the rollout history does
+//     not attribute the rollback to the newer change. This is deliberately
+//     narrower than kubectl, which restores every non-bookkeeping annotation of
+//     the target ReplicaSet: Klyx moves change-cause only and otherwise leaves
+//     the Deployment's annotations untouched - no claim of full metadata parity.
 func deploymentUndoPatch(dep *appsv1.Deployment, target *appsv1.ReplicaSet) ([]byte, error) {
 	tmpl := target.Spec.Template.DeepCopy()
 	delete(tmpl.Labels, appsv1.DefaultDeploymentUniqueLabelKey)
@@ -226,7 +229,9 @@ func deploymentUndoPatch(dep *appsv1.Deployment, target *appsv1.ReplicaSet) ([]b
 	cause := target.Annotations[changeCauseAnn]
 	_, depHasCause := dep.Annotations[changeCauseAnn]
 	switch {
-	case cause != "" && dep.Annotations == nil:
+	case cause != "" && len(dep.Annotations) == 0:
+		// No annotations parent in the serialised object (an empty map is
+		// omitted), so add the whole map rather than a nested key.
 		ops = append(ops, map[string]interface{}{"op": "add", "path": "/metadata/annotations", "value": map[string]string{changeCauseAnn: cause}})
 	case cause != "":
 		ops = append(ops, map[string]interface{}{"op": "add", "path": causePath, "value": cause})
