@@ -677,4 +677,3 @@ func TestLiveList_FailedComputeRetriesWithoutEvents(t *testing.T) {
 		t.Fatal("never recovered to live after the retry succeeded")
 	}
 }
-
