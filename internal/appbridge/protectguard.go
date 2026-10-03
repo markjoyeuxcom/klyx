@@ -16,9 +16,18 @@ const armTTL = 30 * time.Second
 // clusters. The frontend ConfirmDialog requires typing the cluster name on a
 // protected cluster; on confirm it calls ConfigService.ArmProtected, which
 // records a one-shot grant here. Each destructive service method then calls
-// checkProtected before acting - defense in depth so a frontend bug (or a
-// hostile webview call) can never fire a destructive verb on a protected
-// cluster without the typed confirmation. Unprotected clusters always pass.
+// checkProtected before acting, so a frontend BUG - a code path that reaches a
+// verb without the confirm dialog - cannot fire it on a protected cluster.
+// Unprotected clusters always pass.
+//
+// Threat model, stated honestly (review 2026-10-03, J): this is a guard
+// against mistakes, not a security boundary. ArmProtected is on the same
+// JS-callable binding surface as the verbs, and the cluster name it checks is
+// no secret, so code able to call bindings arbitrarily (a compromised webview)
+// can arm and then act. And a grant is keyed by cluster only, not by verb or
+// object: within armTTL it authorizes the next destructive verb on that
+// cluster, whichever it is - which is why every verb must consume it, so none
+// lingers for an unrelated action.
 type ProtectGuard struct {
 	isProtected func(cluster string) bool
 	now         func() time.Time

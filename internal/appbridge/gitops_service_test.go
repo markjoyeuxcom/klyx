@@ -292,8 +292,8 @@ func TestActionUnknownClusterIsError(t *testing.T) {
 // TestProtectGuard_GatesFluxVerbs is the regression for the P0: Reconcile,
 // ReconcileWithSource and SetSuspend must consume the typed-confirmation grant
 // on a protected cluster exactly like every other destructive verb, so a
-// frontend bug or a hostile webview call can never drive a Flux mutation on a
-// protected cluster without the confirmation - and no un-consumed grant can
+// frontend bug can never drive a Flux mutation on a protected cluster without
+// the confirmation - and no un-consumed grant can
 // linger to authorize an unrelated later action. Before the fix these three
 // verbs never called checkProtected at all.
 func TestProtectGuard_GatesFluxVerbs(t *testing.T) {

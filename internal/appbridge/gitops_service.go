@@ -180,9 +180,10 @@ const diffTimeout = 120 * time.Second
 // protected cluster they consume the typed-confirmation grant first, exactly
 // like ArgoService.SyncApp and every other destructive verb. The frontend
 // dialogs arm the grant on confirm; gating here keeps arm and check paired
-// one-to-one so a frontend bug (or a hostile webview call) can never fire a
-// Flux mutation on a protected cluster without the typed confirmation, and no
-// un-consumed grant can linger to authorize an unrelated later action.
+// one-to-one so a frontend bug can never fire a Flux mutation on a protected
+// cluster without the typed confirmation, and no un-consumed grant can linger
+// to authorize an unrelated later action (ProtectGuard: a guard against
+// mistakes, not a security boundary).
 func (s *GitOpsService) Reconcile(cluster, kind, namespace, name string) ActionResultDTO {
 	if err := checkProtected(cluster); err != nil {
 		return ActionResultDTO{Error: err.Error()}
