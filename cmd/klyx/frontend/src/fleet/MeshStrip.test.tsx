@@ -93,4 +93,18 @@ describe("MeshStrip", () => {
     const { container } = render(<MeshStrip graph={g} />);
     expect(container.querySelector('[data-testid="mesh-arcs"]')).toBeNull();
   });
+
+  // Review 2026-10-03 (K): an unreadable member is "peering unknown", never
+  // "no peers"; with no Cilium name it still shows its fleet name.
+  it("marks a member whose mesh facts could not be read", () => {
+    const { getByTitle } = render(<MeshStrip graph={{
+      nodes: [
+        { cluster: "prd-weu", name: "", clusterId: null, state: "enabled", present: true, readNote: "cilium-clustermesh peers could not be read: forbidden" },
+        { cluster: "stg-weu", name: "stg-weu", clusterId: 2, state: "enabled", present: true },
+      ],
+      edges: [],
+    }} />);
+    const chip = getByTitle(/peering unknown - cilium-clustermesh peers could not be read/);
+    expect(chip.textContent).toBe("prd-weu ?");
+  });
 });

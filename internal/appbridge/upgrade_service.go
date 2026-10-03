@@ -25,6 +25,7 @@ type DeprecatedUseDTO struct {
 	ReplacedBy     string `json:"replacedBy"`
 	Count          int    `json:"count"`
 	CountKnown     bool   `json:"countKnown"`
+	CountCapped    bool   `json:"countCapped"` // Count is a lower bound ("500+")
 }
 
 // UpgradeReportDTO mirrors fleet.UpgradeReport plus a fold-in error.
@@ -34,7 +35,10 @@ type UpgradeReportDTO struct {
 	EOLDate       string             `json:"eolDate"`
 	Skew          []SkewFindingDTO   `json:"skew"`
 	Deprecated    []DeprecatedUseDTO `json:"deprecated"`
-	Error         string             `json:"error,omitempty"`
+	// Warnings name inputs that could not be read (e.g. node list -> skew
+	// unknown): a missing section must never read as clean.
+	Warnings []string `json:"warnings"`
+	Error    string   `json:"error,omitempty"`
 }
 
 // UpgradeConn is the per-cluster surface the upgrade lens needs.
@@ -55,7 +59,7 @@ func NewUpgradeService(lookup func(string) (UpgradeConn, bool)) *UpgradeService 
 // GetUpgradeReadiness returns one cluster's upgrade report. Errors fold into
 // the DTO; slices are never nil.
 func (s *UpgradeService) GetUpgradeReadiness(cluster string) UpgradeReportDTO {
-	out := UpgradeReportDTO{Skew: []SkewFindingDTO{}, Deprecated: []DeprecatedUseDTO{}}
+	out := UpgradeReportDTO{Skew: []SkewFindingDTO{}, Deprecated: []DeprecatedUseDTO{}, Warnings: []string{}}
 	conn, ok := s.lookup(cluster)
 	if !ok {
 		out.Error = "cluster not connected: " + cluster
@@ -78,8 +82,9 @@ func (s *UpgradeService) GetUpgradeReadiness(cluster string) UpgradeReportDTO {
 		out.Deprecated = append(out.Deprecated, DeprecatedUseDTO{
 			Group: d.Group, Version: d.Version, Resource: d.Resource, Kind: d.Kind,
 			RemovedInMinor: d.RemovedInMinor, ReplacedBy: d.ReplacedBy,
-			Count: d.Count, CountKnown: d.CountKnown,
+			Count: d.Count, CountKnown: d.CountKnown, CountCapped: d.CountCapped,
 		})
 	}
+	out.Warnings = append(out.Warnings, report.Warnings...)
 	return out
 }

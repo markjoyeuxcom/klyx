@@ -21,7 +21,7 @@ func BuildGraph(members []Member) Graph {
 		m := &members[i]
 		g.Nodes = append(g.Nodes, MeshNode{
 			Cluster: m.Cluster, Name: m.Identity.Name, ClusterID: m.Identity.ID,
-			State: stateOf(m, members), Present: true,
+			State: stateOf(m, members), Present: true, ReadNote: m.ReadNote,
 		})
 	}
 

@@ -21,6 +21,7 @@ type DeprecatedUse struct {
 	ReplacedBy     string
 	Count          int
 	CountKnown     bool // false when the count list failed (RBAC etc.)
+	CountCapped    bool // the count hit the list cap: Count is a lower bound ("500+")
 }
 
 // UpgradeReport is one cluster's upgrade-readiness snapshot.
@@ -30,6 +31,9 @@ type UpgradeReport struct {
 	EOLDate       string // "2026-02-28" upstream end-of-support, "" when unknown
 	Skew          []upgrade.SkewFinding
 	Deprecated    []DeprecatedUse // only the SERVED deprecated APIs; empty = clean
+	// Warnings name inputs the report could not read (e.g. the node list for
+	// kubelet skew): an absent section must never read as "clean".
+	Warnings []string
 }
 
 // UpgradeReadiness answers "can I upgrade this cluster": control-plane
@@ -50,7 +54,10 @@ func (c *ClusterConn) UpgradeReadiness(ctx context.Context) (UpgradeReport, erro
 	}
 
 	nodes, err := c.ListNodes(ctx)
-	if err == nil {
+	if err != nil {
+		// No skew findings is not "no skew": say the input was missing.
+		report.Warnings = append(report.Warnings, "kubelet skew unknown - the node list could not be read: "+err.Error())
+	} else {
 		vers := make(map[string]string, len(nodes))
 		for _, n := range nodes {
 			vers[n.Name] = n.Version
@@ -79,8 +86,8 @@ func (c *ClusterConn) UpgradeReadiness(ctx context.Context) (UpgradeReport, erro
 			RemovedInMinor: api.RemovedInMinor, ReplacedBy: api.ReplacedBy,
 		}
 		if c.meta != nil {
-			if n, _, cerr := c.CountResource(ctx, api.Group, api.Version, api.Resource); cerr == nil {
-				use.Count, use.CountKnown = n, true
+			if n, capped, cerr := c.CountResource(ctx, api.Group, api.Version, api.Resource); cerr == nil {
+				use.Count, use.CountKnown, use.CountCapped = n, true, capped
 			}
 		}
 		report.Deprecated = append(report.Deprecated, use)

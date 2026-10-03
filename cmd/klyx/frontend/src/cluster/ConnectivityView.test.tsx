@@ -67,4 +67,16 @@ describe("ConnectivityView", () => {
     fireEvent.click(getByText("can it reach?"));
     expect(await findByText(/source pod team-a\/ghost: not found/)).toBeTruthy();
   });
+
+  // Review 2026-10-03 (K): a failed Cilium count is a missing input, not zero
+  // policies - the verdict must read PARTIAL.
+  it("marks the verdict partial when Cilium policies could not be counted", async () => {
+    vi.mocked(canReach).mockResolvedValue(report({ ciliumUnknown: "ciliumnetworkpolicies is forbidden" }));
+    const { getByLabelText, getByText, findByTestId } = render(<ConnectivityView cluster="c" />);
+    fill(getByLabelText);
+    fireEvent.click(getByText("can it reach?"));
+    const note = await findByTestId("cilium-unknown");
+    expect(note.textContent).toMatch(/could not be counted/);
+    expect(note.getAttribute("title")).toBe("ciliumnetworkpolicies is forbidden");
+  });
 });

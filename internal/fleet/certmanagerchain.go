@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strconv"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -39,6 +40,11 @@ func (c *ClusterConn) GetCertificateChain(ctx context.Context, ns, name string) 
 		if issU, ok := c.CertManagerObject(ref.Kind, ref.Namespace, ref.Name); ok {
 			iss := certmanager.ParseIssuer(issU)
 			chain.Issuer = &iss
+		} else {
+			// The headline went missing silently: an external issuer kind, an
+			// issuer that does not exist, or the watch not synced yet. Say so -
+			// "no issuer shown" must not read as "issuer fine".
+			chain.Warnings = append(chain.Warnings, fmt.Sprintf("bound issuer %s %s is not in the watched issuers (external issuer kind, missing, or not yet synced) - its health is unknown", ref.Kind, nsName(ref.Namespace, ref.Name)))
 		}
 	}
 
@@ -67,20 +73,25 @@ func (c *ClusterConn) GetCertificateChain(ctx context.Context, ns, name string) 
 	})
 	latest := &owned[0]
 	node := certmanager.ParseChainNode(latest)
-	node.Children = c.resolveOrders(ctx, ns, latest.GetName())
+	node.Children = c.resolveOrders(ctx, ns, latest.GetName(), &chain.Warnings)
 	chain.Requests = []certmanager.ChainNode{node}
 	chain.FailingLink = certmanager.FirstFailingLink(chain.Requests)
 	return chain, nil
 }
 
 // resolveOrders lists ACME Orders owned by a CertificateRequest and their
-// Challenges. Non-ACME issuers have no Orders: a list error is expected there,
-// so it is swallowed (not a warning) and the subtree is simply empty.
-func (c *ClusterConn) resolveOrders(ctx context.Context, ns, requestName string) []certmanager.ChainNode {
+// Challenges. Only "the ACME CRDs are not installed" (NotFound) is expected and
+// silent - a non-ACME setup simply has no Orders. Any other failure (RBAC
+// denial, timeout) is recorded as a chain warning: an RBAC-denied Order list
+// used to look exactly like a non-ACME issuer, hiding the stuck link.
+func (c *ClusterConn) resolveOrders(ctx context.Context, ns, requestName string, warnings *[]string) []certmanager.ChainNode {
 	acmeVer := preferredVersion(c.discovery(), "acme.cert-manager.io", "v1")
 	orderGVR := schema.GroupVersionResource{Group: "acme.cert-manager.io", Version: acmeVer, Resource: "orders"}
 	orders, err := c.dyn.Resource(orderGVR).Namespace(ns).List(ctx, metav1.ListOptions{})
 	if err != nil {
+		if !apierrors.IsNotFound(err) {
+			*warnings = append(*warnings, "could not list ACME orders: "+err.Error())
+		}
 		return nil
 	}
 	var out []certmanager.ChainNode
@@ -89,17 +100,20 @@ func (c *ClusterConn) resolveOrders(ctx context.Context, ns, requestName string)
 			continue
 		}
 		onode := certmanager.ParseChainNode(&orders.Items[i])
-		onode.Children = c.resolveChallenges(ctx, ns, orders.Items[i].GetName())
+		onode.Children = c.resolveChallenges(ctx, ns, orders.Items[i].GetName(), warnings)
 		out = append(out, onode)
 	}
 	return out
 }
 
-func (c *ClusterConn) resolveChallenges(ctx context.Context, ns, orderName string) []certmanager.ChainNode {
+func (c *ClusterConn) resolveChallenges(ctx context.Context, ns, orderName string, warnings *[]string) []certmanager.ChainNode {
 	acmeVer := preferredVersion(c.discovery(), "acme.cert-manager.io", "v1")
 	challengeGVR := schema.GroupVersionResource{Group: "acme.cert-manager.io", Version: acmeVer, Resource: "challenges"}
 	challenges, err := c.dyn.Resource(challengeGVR).Namespace(ns).List(ctx, metav1.ListOptions{})
 	if err != nil {
+		if !apierrors.IsNotFound(err) {
+			*warnings = append(*warnings, "could not list ACME challenges: "+err.Error())
+		}
 		return nil
 	}
 	var out []certmanager.ChainNode
@@ -130,4 +144,12 @@ func certRequestRevision(u *unstructured.Unstructured) int {
 		}
 	}
 	return 0
+}
+
+// nsName renders "ns/name", or just "name" for a cluster-scoped object.
+func nsName(ns, name string) string {
+	if ns == "" {
+		return name
+	}
+	return ns + "/" + name
 }

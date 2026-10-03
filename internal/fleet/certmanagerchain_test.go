@@ -2,6 +2,7 @@ package fleet
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -119,14 +120,18 @@ func TestGetCertificateChainNoRequestsIsClean(t *testing.T) {
 	typed := fake.NewSimpleClientset()
 	scheme := runtime.NewScheme()
 	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(scheme, chainGVRToListKinds(),
-		certUnstructured("self-signed", "payments", "True", "Ready"))
+		certUnstructured("self-signed", "payments", "True", "Ready"),
+		clusterIssuerUnstructured("lab-acme-staging", "True"))
 
 	det := capability.NewDetector(typed)
 	c := NewClusterConn("x", typed, nil, dyn, det, clock.Real{}, config.MetricsConfig{})
 	c.ctx = ctx
 	c.OpenCertManager()
 	defer c.CloseCertManager()
-	waitFor(t, 2*time.Second, func() bool { return len(c.CertManagerCertificates()) == 1 })
+	waitFor(t, 2*time.Second, func() bool {
+		_, ok := c.CertManagerObject("ClusterIssuer", "", "lab-acme-staging")
+		return len(c.CertManagerCertificates()) == 1 && ok
+	})
 
 	chain, err := c.GetCertificateChain(ctx, "payments", "self-signed")
 	if err != nil {
@@ -134,5 +139,30 @@ func TestGetCertificateChainNoRequestsIsClean(t *testing.T) {
 	}
 	if len(chain.Requests) != 0 || chain.FailingLink != nil || len(chain.Warnings) != 0 {
 		t.Fatalf("expected a clean empty chain, got %+v", chain)
+	}
+}
+
+// Review 2026-10-03 (K): a bound issuer the watch does not hold (external
+// issuer kind, deleted, not synced) used to leave the headline blank with no
+// warning - "no issuer shown" read as "issuer fine".
+func TestGetCertificateChainWarnsWhenBoundIssuerIsUnknown(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	typed := fake.NewSimpleClientset()
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), chainGVRToListKinds(),
+		certUnstructured("orphan", "payments", "True", "Ready"))
+	c := NewClusterConn("x", typed, nil, dyn, capability.NewDetector(typed), clock.Real{}, config.MetricsConfig{})
+	c.ctx = ctx
+	c.OpenCertManager()
+	defer c.CloseCertManager()
+	waitFor(t, 2*time.Second, func() bool { return len(c.CertManagerCertificates()) == 1 })
+
+	chain, err := c.GetCertificateChain(ctx, "payments", "orphan")
+	if err != nil {
+		t.Fatalf("chain: %v", err)
+	}
+	if chain.Issuer != nil || len(chain.Warnings) != 1 || !strings.Contains(chain.Warnings[0], "ClusterIssuer lab-acme-staging") {
+		t.Fatalf("want an unknown-issuer warning, got issuer=%v warnings=%v", chain.Issuer, chain.Warnings)
 	}
 }

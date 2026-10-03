@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	networkingv1 "k8s.io/api/networking/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
@@ -24,6 +25,11 @@ type ConnectivityReport struct {
 	// CiliumClusterwideNetworkPolicies. >0 means the static verdict is
 	// PARTIAL - Cilium policies are not simulated.
 	CiliumPolicies int
+	// CiliumUnknown is set when a Cilium policy count FAILED (other than the
+	// CRDs being absent): whether Cilium policies apply is then unknown, so the
+	// verdict is PARTIAL too. A failed count used to read as 0 - a complete
+	// verdict built on a missing input (review 2026-10-03, K).
+	CiliumUnknown string
 }
 
 var (
@@ -86,14 +92,24 @@ func (c *ClusterConn) ConnectivityCanI(ctx context.Context, srcNS, srcPod, dstNS
 		EgressExplain:  netpol.Explain(verdict.Egress, "egress"),
 	}
 
-	// CNI-native policy honesty: count, best-effort (absent CRDs → 0).
+	// CNI-native policy honesty: count them (absent CRDs -> 0). A count that
+	// FAILS for any other reason leaves the verdict partial with the reason.
 	if c.dyn != nil {
+		note := func(err error) {
+			if err != nil && !apierrors.IsNotFound(err) && report.CiliumUnknown == "" {
+				report.CiliumUnknown = err.Error()
+			}
+		}
 		for _, ns := range polNamespaces {
-			if l, cerr := c.dyn.Resource(connCNPGVR).Namespace(ns).List(ctx, metav1.ListOptions{}); cerr == nil && l != nil {
+			l, cerr := c.dyn.Resource(connCNPGVR).Namespace(ns).List(ctx, metav1.ListOptions{})
+			note(cerr)
+			if cerr == nil && l != nil {
 				report.CiliumPolicies += len(l.Items)
 			}
 		}
-		if l, cerr := c.dyn.Resource(connCCNPGVR).List(ctx, metav1.ListOptions{}); cerr == nil && l != nil {
+		l, cerr := c.dyn.Resource(connCCNPGVR).List(ctx, metav1.ListOptions{})
+		note(cerr)
+		if cerr == nil && l != nil {
 			report.CiliumPolicies += len(l.Items)
 		}
 	}

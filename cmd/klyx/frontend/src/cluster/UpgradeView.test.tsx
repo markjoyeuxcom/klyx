@@ -59,4 +59,16 @@ describe("UpgradeView", () => {
     const { findByText } = render(<UpgradeView cluster="c" />);
     expect(await findByText(/server version: boom/)).toBeTruthy();
   });
+
+  // Review 2026-10-03 (K): an unread input is named, never shown as clean; a
+  // capped object count is a lower bound.
+  it("names unread inputs and marks capped counts", async () => {
+    vi.mocked(getUpgradeReadiness).mockResolvedValue(report({
+      warnings: ["kubelet skew unknown - the node list could not be read: nodes is forbidden"],
+      deprecated: [{ group: "flowcontrol.apiserver.k8s.io", version: "v1beta3", resource: "flowschemas", kind: "FlowSchema", removedInMinor: 32, replacedBy: "flowcontrol.apiserver.k8s.io/v1", count: 500, countKnown: true, countCapped: true }],
+    }));
+    const { findByTestId, findByText } = render(<UpgradeView cluster="c" />);
+    expect((await findByTestId("upgrade-warnings")).textContent).toMatch(/kubelet skew unknown/);
+    expect(await findByText("500+ objects")).toBeTruthy();
+  });
 });

@@ -295,13 +295,15 @@ export type PromotionSnapshotDTO = { fluxPresent: boolean; argoPresent: boolean;
 
 // Upgrade-readiness report (per cluster).
 export type SkewFindingDTO = { node: string; version: string; delta: number; level: string; detail: string };
-export type DeprecatedUseDTO = { group: string; version: string; resource: string; kind: string; removedInMinor: number; replacedBy: string; count: number; countKnown: boolean };
-export type UpgradeReportDTO = { serverVersion: string; serverMinor: number; eolDate: string; skew: SkewFindingDTO[]; deprecated: DeprecatedUseDTO[]; error?: string };
+export type DeprecatedUseDTO = { group: string; version: string; resource: string; kind: string; removedInMinor: number; replacedBy: string; count: number; countKnown: boolean; countCapped?: boolean };
+// warnings name inputs the report could not read (e.g. the node list): a
+// missing section must never read as clean.
+export type UpgradeReportDTO = { serverVersion: string; serverMinor: number; eolDate: string; skew: SkewFindingDTO[]; deprecated: DeprecatedUseDTO[]; warnings?: string[]; error?: string };
 
 // Connectivity can-i (NetworkPolicy simulation).
 export type NetpolRefDTO = { namespace: string; name: string; admits: boolean };
 export type DirectionVerdictDTO = { isolated: boolean; allowed: boolean; policies: NetpolRefDTO[]; explain: string };
-export type ConnectivityReportDTO = { allowed: boolean; ingress: DirectionVerdictDTO; egress: DirectionVerdictDTO; srcLabels: Record<string, string>; dstLabels: Record<string, string>; ciliumPolicies: number; error?: string };
+export type ConnectivityReportDTO = { allowed: boolean; ingress: DirectionVerdictDTO; egress: DirectionVerdictDTO; srcLabels: Record<string, string>; dstLabels: Record<string, string>; ciliumPolicies: number; ciliumUnknown?: string; error?: string };
 
 // Survivability headroom simulation.
 export type HeadroomPodRefDTO = { namespace: string; name: string; cpuReq: number; memReq: number };
@@ -564,7 +566,8 @@ export type NetworkSlice = {
   routeMetricsStale: boolean;
 };
 
-export type MeshNodeDTO = { cluster: string; name: string; clusterId: number | null; state: string; present: boolean };
+// readNote: this member's mesh facts could not be READ - peerings unknown, not none.
+export type MeshNodeDTO = { cluster: string; name: string; clusterId: number | null; state: string; present: boolean; readNote?: string };
 export type MeshEdgeDTO = { a: string; b: string; mutual: boolean; from?: string };
 export type MeshGraphDTO = { nodes: MeshNodeDTO[]; edges: MeshEdgeDTO[] };
 

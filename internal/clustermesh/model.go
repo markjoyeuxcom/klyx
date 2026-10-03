@@ -28,6 +28,10 @@ type Member struct {
 	Peers     []string // configured remote peer Cilium names (from the Secret)
 	Present   bool     // connected to Klyx (always true for real fleet members)
 	Installed bool     // ClusterMesh installed on this cluster
+	// ReadNote is set when this cluster's mesh facts could not be READ (RBAC,
+	// timeout) as opposed to being absent: its peerings are then unknown, not
+	// "none" (review 2026-10-03, K).
+	ReadNote string
 }
 
 // MeshNode is a node in the fleet peering graph.
@@ -36,7 +40,8 @@ type MeshNode struct {
 	Name      string // Cilium cluster-name (display for off-fleet)
 	ClusterID *int   // optional
 	State     MeshState
-	Present   bool // false = off-fleet (named by a member, not connected to Klyx)
+	Present   bool   // false = off-fleet (named by a member, not connected to Klyx)
+	ReadNote  string // fleet member whose mesh facts could not be read: peerings unknown
 }
 
 // MeshEdge is an undirected peering edge. Endpoints are fleet keys for present

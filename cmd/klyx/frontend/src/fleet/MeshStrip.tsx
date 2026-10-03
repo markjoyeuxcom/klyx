@@ -125,13 +125,17 @@ export function MeshStrip({ graph }: { graph: MeshGraphDTO }) {
             // a ⬡ marker. This covers both "enabled" (installed, no peers) and "unavailable"
             // (no ClusterMesh at all) so a non-mesh cluster never looks like a peer.
             const standalone = !off && node.state !== "peered";
-            const title = off
-              ? "off-fleet peer (not connected to Klyx)"
-              : node.state === "unavailable"
-                ? "no ClusterMesh"
-                : standalone
-                  ? "mesh enabled, no peers"
-                  : "meshed";
+            // A member whose mesh facts could not be READ: its peerings are
+            // unknown - never present it as "no peers" (review 2026-10-03, K).
+            const title = node.readNote
+              ? `peering unknown - ${node.readNote}`
+              : off
+                ? "off-fleet peer (not connected to Klyx)"
+                : node.state === "unavailable"
+                  ? "no ClusterMesh"
+                  : standalone
+                    ? "mesh enabled, no peers"
+                    : "meshed";
             return (
               <span
                 key={nodeKey(node)}
@@ -144,7 +148,7 @@ export function MeshStrip({ graph }: { graph: MeshGraphDTO }) {
                 }}
                 title={title}
               >
-                <span>{node.name}</span>{standalone ? " ⬡" : ""}{off ? " (off-fleet)" : ""}
+                <span>{node.name || node.cluster}</span>{node.readNote ? " ?" : standalone ? " ⬡" : ""}{off ? " (off-fleet)" : ""}
               </span>
             );
           })}

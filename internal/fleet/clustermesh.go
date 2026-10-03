@@ -3,6 +3,7 @@ package fleet
 import (
 	"context"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/moomora/klyx/internal/clustermesh"
@@ -28,15 +29,25 @@ func (c *ClusterConn) MeshMember(ctx context.Context) (clustermesh.Member, MeshR
 	if cm, err := c.typed.CoreV1().ConfigMaps("kube-system").Get(ctx, "cilium-config", metav1.GetOptions{}); err == nil {
 		m.Identity = clustermesh.ParseIdentity(cm)
 		st.IdentityRead = true
+	} else if !apierrors.IsNotFound(err) {
+		st.Note = "cilium-config could not be read: " + err.Error()
 	}
 	if sec, err := c.typed.CoreV1().Secrets("kube-system").Get(ctx, "cilium-clustermesh", metav1.GetOptions{}); err == nil {
 		m.Peers = clustermesh.ParsePeers(sec)
 		st.PeersRead = true
 		st.ClusterMeshInstalled = true
-	} else if _, derr := c.typed.AppsV1().Deployments("kube-system").Get(ctx, "clustermesh-apiserver", metav1.GetOptions{}); derr == nil {
-		st.ClusterMeshInstalled = true
+	} else {
+		if !apierrors.IsNotFound(err) && st.Note == "" {
+			// Absent Secret = no peering configured; an unreadable one (RBAC on
+			// kube-system Secrets is common) = peering UNKNOWN.
+			st.Note = "cilium-clustermesh peers could not be read: " + err.Error()
+		}
+		if _, derr := c.typed.AppsV1().Deployments("kube-system").Get(ctx, "clustermesh-apiserver", metav1.GetOptions{}); derr == nil {
+			st.ClusterMeshInstalled = true
+		}
 	}
 	m.Installed = st.ClusterMeshInstalled
+	m.ReadNote = st.Note
 	return m, st
 }
 

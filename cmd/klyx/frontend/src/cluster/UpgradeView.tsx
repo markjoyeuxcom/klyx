@@ -91,6 +91,14 @@ export function UpgradeView({ cluster }: { cluster: string }) {
           )}
         </div>
 
+        {/* Inputs the report could not read: an empty section below must not
+            read as clean (review 2026-10-03, K). */}
+        {report && !report.error && (report.warnings ?? []).length > 0 && (
+          <div data-testid="upgrade-warnings" role="status" style={{ ...well, padding: 10, display: "flex", flexDirection: "column", gap: 4, fontSize: 11, color: "var(--color-text-warning)" }}>
+            {(report.warnings ?? []).map((w) => <span key={w} style={{ overflowWrap: "anywhere" }}>partial report — {w}</span>)}
+          </div>
+        )}
+
         {report && !report.error && report.skew.length > 0 && (
           <div data-testid="upgrade-skew" style={{ ...well, padding: 12, display: "flex", flexDirection: "column", gap: 6 }}>
             <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5, color: "var(--color-text-tertiary)" }}>kubelet skew</div>
@@ -126,7 +134,7 @@ export function UpgradeView({ cluster }: { cluster: string }) {
                         <span style={{ color: gone ? "var(--color-text-danger)" : "var(--color-text-tertiary)", flexShrink: 0 }}>
                           {d.removedInMinor === 0 ? "removal unscheduled" : gone ? `REMOVED in 1.${d.removedInMinor}` : `removed in 1.${d.removedInMinor}`}
                         </span>
-                        {d.countKnown && <span style={{ color: "var(--color-text-tertiary)", flexShrink: 0 }}>{d.count} object{d.count === 1 ? "" : "s"}</span>}
+                        {d.countKnown && <span style={{ color: "var(--color-text-tertiary)", flexShrink: 0 }}>{d.count}{d.countCapped ? "+" : ""} object{d.count === 1 && !d.countCapped ? "" : "s"}</span>}
                       </div>
                       {d.replacedBy && <span style={{ fontSize: 10, color: "var(--color-text-tertiary)" }}>migrate to {d.replacedBy}</span>}
                     </div>

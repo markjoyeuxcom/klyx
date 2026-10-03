@@ -6,6 +6,7 @@ import (
 	"sort"
 	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -82,9 +83,15 @@ func (c *ClusterConn) ExpiryScan(ctx context.Context) (ExpiryScanResult, error) 
 
 	// cert-manager statuses: authoritative renewal-managed expiry. Dynamic
 	// list, tolerated as absent (no CRD -> skip silently: absence of the
-	// operator is not a warning).
+	// operator is not a warning). Any OTHER failure (RBAC, timeout) is a named
+	// warning: silently skipping it made the horizon look complete while every
+	// cert-manager certificate was missing from it (review 2026-10-03, K).
 	if c.dyn != nil {
-		if certs, cerr := c.dyn.Resource(cmCertGVRScan).List(ctx, metav1.ListOptions{}); cerr == nil && certs != nil {
+		certs, cerr := c.dyn.Resource(cmCertGVRScan).List(ctx, metav1.ListOptions{})
+		if cerr != nil && !apierrors.IsNotFound(cerr) {
+			out.Warnings = append(out.Warnings, "cert-manager certificates could not be read: "+cerr.Error())
+		}
+		if cerr == nil && certs != nil {
 			for i := range certs.Items {
 				u := unstructured.Unstructured{Object: certs.Items[i].Object}
 				notAfterStr, _, _ := unstructured.NestedString(u.Object, "status", "notAfter")

@@ -8,6 +8,9 @@ type MeshNodeDTO struct {
 	ClusterID *int   `json:"clusterId"`
 	State     string `json:"state"`
 	Present   bool   `json:"present"`
+	// ReadNote: this fleet member's mesh facts could not be read - its
+	// peerings are unknown, not "none".
+	ReadNote string `json:"readNote,omitempty"`
 }
 type MeshEdgeDTO struct {
 	A      string `json:"a"`
@@ -35,7 +38,7 @@ func (s *MeshService) GetMeshGraph() MeshGraphDTO {
 	g := clustermesh.BuildGraph(s.listMembers())
 	out := MeshGraphDTO{Nodes: make([]MeshNodeDTO, 0, len(g.Nodes)), Edges: make([]MeshEdgeDTO, 0, len(g.Edges))}
 	for _, n := range g.Nodes {
-		out.Nodes = append(out.Nodes, MeshNodeDTO{Cluster: n.Cluster, Name: n.Name, ClusterID: n.ClusterID, State: string(n.State), Present: n.Present})
+		out.Nodes = append(out.Nodes, MeshNodeDTO{Cluster: n.Cluster, Name: n.Name, ClusterID: n.ClusterID, State: string(n.State), Present: n.Present, ReadNote: n.ReadNote})
 	}
 	for _, e := range g.Edges {
 		out.Edges = append(out.Edges, MeshEdgeDTO{A: e.A, B: e.B, Mutual: e.Mutual, From: e.From})

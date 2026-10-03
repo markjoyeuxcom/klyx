@@ -135,6 +135,13 @@ export function ConnectivityView({ cluster }: { cluster: string }) {
                       PARTIAL — {report.ciliumPolicies} Cilium polic{report.ciliumPolicies === 1 ? "y" : "ies"} in scope are NOT simulated
                     </span>
                   )}
+                  {/* A FAILED Cilium count is a missing input, not zero policies:
+                      the verdict is partial (review 2026-10-03, K). */}
+                  {report.ciliumUnknown && (
+                    <span data-testid="cilium-unknown" title={report.ciliumUnknown} style={{ fontSize: 10, color: "var(--color-text-warning)" }}>
+                      PARTIAL — Cilium policies could not be counted, so whether any apply is unknown
+                    </span>
+                  )}
                 </div>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                   <DirectionWell title="egress (source side)" d={report.egress} onOpenPolicy={openPolicy} />
