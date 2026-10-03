@@ -39,8 +39,9 @@ func NewExecService(lookup func(string) (ExecConn, bool)) *ExecService {
 	return &ExecService{lookup: lookup}
 }
 
-// GetExecCommand returns the kubectl exec argv and a shell-quoted display command
-// for the given cluster/namespace/pod/container. container may be "" (omitted).
+// GetExecCommand returns the kubectl exec argv and the copyable command for the
+// host's default shell (commandDTO) for the given cluster/namespace/pod/
+// container. container may be "" (omitted).
 func (s *ExecService) GetExecCommand(cluster, ns, pod, container string) ExecCommandDTO {
 	conn, ok := s.lookup(cluster)
 	if !ok {
@@ -50,15 +51,22 @@ func (s *ExecService) GetExecCommand(cluster, ns, pod, container string) ExecCom
 	if err != nil {
 		return ExecCommandDTO{Error: err.Error()}
 	}
-	return ExecCommandDTO{
-		Command: shellQuoteArgv(argv),
-		Argv:    argv,
+	return commandDTO(argv)
+}
+
+// commandDTO pairs argv with the copyable command for the host's default
+// shell (displayCommand: PowerShell on Windows, POSIX elsewhere).
+func commandDTO(argv []string) ExecCommandDTO {
+	cmd, err := displayCommand(hostGOOS, argv)
+	if err != nil {
+		return ExecCommandDTO{Error: err.Error()}
 	}
+	return ExecCommandDTO{Command: cmd, Argv: argv}
 }
 
 // OpenExecTerminal launches the OS terminal with the kubectl exec command -
 // Terminal.app on macOS, the user's emulator ($TERMINAL / x-terminal-emulator /
-// the common set) on Linux, Windows Terminal or a cmd window on Windows. When
+// the common set) on Linux, PowerShell in a new console on Windows. When
 // no terminal can be found the error says to use the copy-command affordance.
 func (s *ExecService) OpenExecTerminal(cluster, ns, pod, container string) ActionResultDTO {
 	conn, ok := s.lookup(cluster)
@@ -85,7 +93,7 @@ func (s *ExecService) GetDebugCommand(cluster, ns, pod, container string) ExecCo
 	if err != nil {
 		return ExecCommandDTO{Error: err.Error()}
 	}
-	return ExecCommandDTO{Command: shellQuoteArgv(argv), Argv: argv}
+	return commandDTO(argv)
 }
 
 // OpenDebugTerminal launches the OS terminal running kubectl debug against the
