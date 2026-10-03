@@ -1,8 +1,10 @@
 // WatchErrorBanner — the shared "this list may be lying to you" strip for
 // watch-backed lenses. Error honesty rule: a failing watch renders as an
 // error, never as an empty list. Previously copy-pasted verbatim in the
-// Flux/Certs/ESO views.
-export function WatchErrorBanner({ tool, error }: { tool: string; error: string }) {
+// Flux/Certs/ESO views. `failure` names what failed: the default is a failing
+// watch; list views pass "read failed" when a one-shot list errored (the rows
+// shown, if any, are the last good read).
+export function WatchErrorBanner({ tool, error, failure = "watch is failing" }: { tool: string; error: string; failure?: string }) {
   return (
     <div
       role="alert"
@@ -14,7 +16,7 @@ export function WatchErrorBanner({ tool, error }: { tool: string; error: string 
         fontSize: 12,
       }}
     >
-      {tool} watch is failing - this list may be empty or stale, not clean: {error}
+      {tool} {failure} - this list may be empty or stale, not clean: {error}
     </div>
   );
 }

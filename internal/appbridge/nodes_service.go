@@ -34,12 +34,14 @@ func (s *NodesService) ListNodes(cluster string) NodesResultDTO {
 	out := NodesResultDTO{Nodes: []NodeSummaryDTO{}}
 	conn, ok := s.lookup(cluster)
 	if !ok {
+		out.Error = "cluster not connected: " + cluster
 		return out
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), nodesTimeout)
 	defer cancel()
 	nodes, err := conn.ListNodes(ctx)
 	if err != nil {
+		out.Error = err.Error()
 		return out
 	}
 	for _, n := range nodes {
@@ -61,12 +63,14 @@ func (s *NodesService) GetNodeDetail(cluster, name string) NodeDetailDTO {
 	}
 	conn, ok := s.lookup(cluster)
 	if !ok {
+		empty.Error = "cluster not connected: " + cluster
 		return empty
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), nodesTimeout)
 	defer cancel()
 	d, err := conn.NodeDetail(ctx, name)
 	if err != nil {
+		empty.Error = err.Error()
 		return empty
 	}
 

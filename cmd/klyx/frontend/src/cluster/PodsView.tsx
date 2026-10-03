@@ -27,6 +27,7 @@ import { ScratchPanel } from "./ScratchPanel";
 import { YamlBlock } from "../chrome/YamlBlock";
 import { InspectorFacts, InspectorIdle, InspectorConditions, InspectorEvents, InspectorSection, InspectorStatus, InspectorTabButton, Kbd, MetadataChips, inspectorStateBox } from "./ResourceInspector";
 import { loadClusterPrefs, loadSearch, savePodsViewPrefs, saveSearch } from "../store/persist";
+import { WatchErrorBanner } from "../chrome/WatchErrorBanner";
 
 const rankDot: Record<string, string> = {
   unhealthy: "var(--color-text-danger)",
@@ -300,6 +301,14 @@ export function PodsView({ cluster }: { cluster: string }) {
                 setScratchOpen(false);
               }}
             />
+          )}
+
+          {/* Read failure - the rows shown (if any) are the last good read; an
+              error must never pass as "no pods" (review 2026-10-03 #10). */}
+          {pods.error && (
+            <div style={{ marginBottom: 10, flexShrink: 0 }}>
+              <WatchErrorBanner tool="Pods" failure="read failed" error={pods.error} />
+            </div>
           )}
 
           {/* Truncation banner - LOUD, not a chip: broken-first ranking happens
@@ -659,6 +668,10 @@ function PodDetailPanel({
         <div style={inspectorStateBox}>Loading detail...</div>
       ) : !detail ? (
         <div style={inspectorStateBox}>Could not load pod detail.</div>
+      ) : detail.error ? (
+        // The backend returns a zero DTO WITH the reason on a failed read;
+        // never render that as a real (empty) pod.
+        <div role="alert" style={{ ...inspectorStateBox, color: "var(--color-text-danger)" }}>Could not load pod detail: {detail.error}</div>
       ) : (
         <>
           {tab === "info" && (

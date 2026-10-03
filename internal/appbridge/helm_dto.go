@@ -18,6 +18,11 @@ type HelmReleasesResultDTO struct {
 	Available bool             `json:"available"`
 	Message   string           `json:"message,omitempty"`
 	Releases  []HelmReleaseDTO `json:"releases"`
+	// Error marks a FAILED read (cluster not connected, helm list error) as
+	// distinct from "helm not found": both are Available=false, but only the
+	// latter is a definitive absence. The tape must show a failure as
+	// unreadable, never as "no helm" (review 2026-10-03 #10).
+	Error string `json:"error,omitempty"`
 }
 
 // HelmHistoryEntryDTO is one row in a release's rollout history.

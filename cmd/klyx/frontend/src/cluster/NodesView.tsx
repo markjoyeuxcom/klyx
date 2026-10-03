@@ -24,6 +24,7 @@ import { UpdatedAt, useReceivedAt } from "../chrome/Age";
 import { IconServer, IconX } from "@tabler/icons-react";
 import { well, ellipsis, btn, FilterButton, MetersStrip, StatusDot } from "../chrome/primitives";
 import { InspectorIdle, InspectorConditions, InspectorEvents, InspectorSection, InspectorStatus, InspectorTabButton, MetadataChips, inspectorStateBox } from "./ResourceInspector";
+import { WatchErrorBanner } from "../chrome/WatchErrorBanner";
 
 function ago(s: number): string {
   return s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)}m` : s < 86400 ? `${Math.floor(s / 3600)}h` : `${Math.floor(s / 86400)}d`;
@@ -564,6 +565,13 @@ export function NodesView({ cluster }: { cluster: string }) {
           )
         )}
 
+        {/* Read failure - never pass as "no nodes" (review 2026-10-03 #10). */}
+        {nodes.error && (
+          <div style={{ marginBottom: 10, flexShrink: 0 }}>
+            <WatchErrorBanner tool="Nodes" failure="read failed" error={nodes.error} />
+          </div>
+        )}
+
         {nodes.loading && nodes.items.length === 0 ? (
           <SkeletonRows rows={6} label="loading nodes" />
         ) : nodes.items.length === 0 ? (
@@ -887,6 +895,10 @@ function NodeDetailPanel({
         <div style={inspectorStateBox}>Loading detail...</div>
       ) : !detail ? (
         <div style={inspectorStateBox}>Could not load node detail.</div>
+      ) : detail.error ? (
+        // The backend returns a zero DTO WITH the reason on a failed read;
+        // never render that as a real (empty) node.
+        <div role="alert" style={{ ...inspectorStateBox, color: "var(--color-text-danger)" }}>Could not load node detail: {detail.error}</div>
       ) : (
         <>
           {tab === "info" && (

@@ -28,6 +28,7 @@ import { SyncingChip, staleStyle } from "./staleness";
 import { wellKnownResourceRef } from "./resourceRefs";
 import { ManifestButton } from "./ManifestButton";
 import { FleetCompare } from "./FleetCompare";
+import { WatchErrorBanner } from "../chrome/WatchErrorBanner";
 
 const rankDot: Record<string, string> = {
   unhealthy: "var(--color-text-danger)",
@@ -312,6 +313,13 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
               <LiveIndicator live={wl.live} />
             </div>
           </div>
+
+          {/* Read failure - never pass as "no workloads" (review 2026-10-03 #10). */}
+          {wl.error && (
+            <div style={{ marginBottom: 10, flexShrink: 0 }}>
+              <WatchErrorBanner tool="Workloads" failure="read failed" error={wl.error} />
+            </div>
+          )}
 
           {/* Truncation banner - LOUD: broken-first ranking happens after the
               list, so a truncated view can hide a fault past the cap. */}

@@ -99,6 +99,17 @@ function value<T>(r: PromiseSettledResult<unknown>): T | null {
   return r.status === "fulfilled" && r.value ? (r.value as T) : null;
 }
 
+// readable: value() for a read that reports failure IN the DTO. The list
+// bindings resolve with `error` set (cluster not connected, forbidden,
+// timeout) and empty rows rather than rejecting, so a fulfilled promise is not
+// proof of data: a DTO carrying `error` is unreadable, never "zero problems"
+// (review 2026-10-03 #10 - the tape promises it never claims quiet from
+// missing data).
+function readable<T>(r: PromiseSettledResult<unknown>): T | null {
+  const v = value<T & { error?: string }>(r);
+  return v && !v.error ? v : null;
+}
+
 export function unwrapSources(
   results: readonly [
     PromiseSettledResult<unknown>,
@@ -110,16 +121,16 @@ export function unwrapSources(
   ],
 ): UnwrappedSources {
   const [workloadsResult, podsResult, eventsResult, nodesResult, helmResult, fluxResult] = results;
-  const workloads = value<{ workloads?: RankedRow[] }>(workloadsResult);
-  const pods = value<{ pods?: Array<RankedRow & { namespace?: string }> }>(podsResult);
-  const events = value<{ events?: EventRow[] }>(eventsResult);
-  const nodes = value<{ nodes?: NodeRow[] }>(nodesResult);
+  const workloads = readable<{ workloads?: RankedRow[] }>(workloadsResult);
+  const pods = readable<{ pods?: Array<RankedRow & { namespace?: string }> }>(podsResult);
+  const events = readable<{ events?: EventRow[] }>(eventsResult);
+  const nodes = readable<{ nodes?: NodeRow[] }>(nodesResult);
   return {
     workloads: workloads ? workloads.workloads ?? [] : null,
     pods: pods ? pods.pods ?? [] : null,
     events: events ? events.events ?? [] : null,
     nodes: nodes ? nodes.nodes ?? [] : null,
-    helm: value<{ available: boolean; releases: HelmRow[] }>(helmResult),
+    helm: readable<{ available: boolean; releases: HelmRow[] }>(helmResult),
     flux: value<{ fluxPresent: boolean; notReady: number; suspended?: number; error?: string }>(fluxResult),
   };
 }

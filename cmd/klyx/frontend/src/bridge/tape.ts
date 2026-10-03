@@ -44,7 +44,8 @@ export async function fetchTape(cluster: string): Promise<void> {
     // available=false is a definitive "helm not detected" (failedReleases is
     // null exactly when helm is unavailable), not a failure.
     helm: src.helm ? out.failedReleases ?? "absent" : "unreadable",
-    flux: src.flux ? (out.flux ? out.flux.notReady : "absent") : "unreadable",
+    // A summary read that failed carries `error`: unreadable, never "absent".
+    flux: src.flux && !src.flux.error ? (out.flux ? out.flux.notReady : "absent") : "unreadable",
     argo: "unreadable",
   };
 

@@ -120,4 +120,23 @@ describe("pods slice", () => {
     useFleet.getState().setPodsLive("c", "monitoring", true);
     expect(useFleet.getState().pods.live).toBe(false);
   });
+
+  // Review 2026-10-03 #10: a failed read flags the slice and keeps the last
+  // good rows for the same scope - never wipes them into a fake "no pods".
+  it("a failed read keeps the last good rows for the same scope and flags the error", () => {
+    useFleet.getState().setPods("c", "", allResult);
+    useFleet.getState().setPods("c", "", { namespaces: [], pods: [], error: "pods is forbidden" });
+    let s = useFleet.getState().pods;
+    expect(s.items).toHaveLength(2);
+    expect(s.error).toBe("pods is forbidden");
+    // A later good read clears the flag.
+    useFleet.getState().setPods("c", "", allResult);
+    s = useFleet.getState().pods;
+    expect(s.error).toBeNull();
+    // A failure for a DIFFERENT scope must not show the previous scope's rows.
+    useFleet.getState().setPods("other", "", { namespaces: [], pods: [], error: "cluster not connected: other" });
+    s = useFleet.getState().pods;
+    expect(s.items).toHaveLength(0);
+    expect(s.error).toMatch(/not connected/);
+  });
 });

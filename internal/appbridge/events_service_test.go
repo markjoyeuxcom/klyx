@@ -136,4 +136,8 @@ func TestEventsService_Error_ReturnsEmpties(t *testing.T) {
 	if len(dto.Events) != 0 {
 		t.Errorf("want 0 events on error, got %d", len(dto.Events))
 	}
+	// Review 2026-10-03 #10: a failed read must say so, never pass as "no events".
+	if dto.Error == "" {
+		t.Error("a failed list must carry Error - empty must not read as quiet")
+	}
 }

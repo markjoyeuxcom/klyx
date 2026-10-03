@@ -58,6 +58,12 @@ type HeadroomReportDTO struct {
 // NodesResultDTO is the response from ListNodes.
 type NodesResultDTO struct {
 	Nodes []NodeSummaryDTO `json:"nodes"`
+	// Error is set when the read FAILED (cluster not connected, list/get
+	// error). The collections stay empty-but-non-nil, so a caller that ignores
+	// it still cannot crash - but an error must never read as "nothing found":
+	// the triage tape and Overview treat a source with Error as unreadable,
+	// not quiet (review 2026-10-03 #10).
+	Error string `json:"error,omitempty"`
 }
 
 // NodeTaintDTO is a single taint.
@@ -84,4 +90,6 @@ type NodeDetailDTO struct {
 	Events      []EventDTO        `json:"events"`
 	YAML        string            `json:"yaml"`
 	PodsOnNode  []PodOnNodeDTO    `json:"podsOnNode"`
+	// Error is set when the detail read failed; the zero DTO is never a node.
+	Error string `json:"error,omitempty"`
 }

@@ -440,6 +440,21 @@ describe("PodsView", () => {
     }));
   }
 
+  // Review 2026-10-03 #10: failures render as errors, never as an empty list
+  // or an empty pod.
+  it("a failed list read shows the read-failure banner", () => {
+    seed([]);
+    useFleet.setState((s) => ({ pods: { ...s.pods, error: "pods is forbidden: User cannot list" } }));
+    const { getByRole } = render(<PodsView cluster="homelab" />);
+    expect(getByRole("alert").textContent).toMatch(/Pods read failed .*pods is forbidden/);
+  });
+
+  it("a failed detail read shows the reason, not an empty pod", () => {
+    openDetailPanel(healthy, { ...fakeDetail, error: "pods \"grafana-xyz\" not found" });
+    const { getByText } = render(<PodsView cluster="homelab" />);
+    expect(getByText(/Could not load pod detail: pods "grafana-xyz" not found/)).toBeTruthy();
+  });
+
   it("delete pod button opens confirm dialog with controller-recreate body", () => {
     openDetailPanel(healthy); // healthy has ownerKind="Deployment" (backend-resolved)
     const { getByText } = render(<PodsView cluster="homelab" />);

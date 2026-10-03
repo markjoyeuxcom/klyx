@@ -50,6 +50,7 @@ func (s *HelmService) ListHelmReleases(cluster string) HelmReleasesResultDTO {
 			Available: false,
 			Message:   "cluster not connected: " + cluster,
 			Releases:  []HelmReleaseDTO{},
+			Error:     "cluster not connected: " + cluster,
 		}
 	}
 
@@ -62,6 +63,7 @@ func (s *HelmService) ListHelmReleases(cluster string) HelmReleasesResultDTO {
 			Available: false,
 			Message:   err.Error(),
 			Releases:  []HelmReleaseDTO{},
+			Error:     err.Error(),
 		}
 	}
 

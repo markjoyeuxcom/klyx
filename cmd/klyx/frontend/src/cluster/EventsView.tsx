@@ -11,6 +11,7 @@ import { VirtualList } from "../chrome/VirtualList";
 import type { VirtualListHandle } from "../chrome/VirtualList";
 import { useListKeys } from "../chrome/useListKeys";
 import { loadClusterPrefs, loadSearch, saveEventsViewPrefs, saveSearch } from "../store/persist";
+import { WatchErrorBanner } from "../chrome/WatchErrorBanner";
 
 // type dot · count · age · ns · kind/name · reason · message
 // count is 40px: the widest compact render is "×999k" - never the raw number,
@@ -167,6 +168,13 @@ export function EventsView({ cluster }: { cluster: string }) {
           </span>
         )}
       </div>
+
+      {/* Read failure - never pass as "no events" (review 2026-10-03 #10). */}
+      {events.error && (
+        <div style={{ marginBottom: 10 }}>
+          <WatchErrorBanner tool="Events" failure="read failed" error={events.error} />
+        </div>
+      )}
 
       {/* Table */}
       {events.loading && events.items.length === 0 ? (

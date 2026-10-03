@@ -12,13 +12,14 @@ import (
 
 // fakeNodeConn satisfies NodesConn without importing the real fleet.ClusterConn.
 type fakeNodeConn struct {
-	nodes  []workloads.NodeSummary
-	detail fleet.NodeDetail
-	detErr error
+	nodes   []workloads.NodeSummary
+	listErr error
+	detail  fleet.NodeDetail
+	detErr  error
 }
 
 func (f *fakeNodeConn) ListNodes(_ context.Context) ([]workloads.NodeSummary, error) {
-	return f.nodes, nil
+	return f.nodes, f.listErr
 }
 
 func (f *fakeNodeConn) NodeHeadroom(context.Context, string, string) (fleet.HeadroomReport, error) {
@@ -186,5 +187,8 @@ func TestNodesService_GetNodeDetail_ErrorReturnsEmpties(t *testing.T) {
 	}
 	if d.Summary.Name != "" {
 		t.Errorf("summary should be zero on error, got %+v", d.Summary)
+	}
+	if d.Error == "" {
+		t.Error("a failed detail read must carry Error")
 	}
 }

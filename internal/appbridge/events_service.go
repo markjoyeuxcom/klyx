@@ -38,7 +38,7 @@ func NewEventsService(lookup func(string) (EventsConn, bool), em Emitter) *Event
 func (s *EventsService) ListEvents(cluster, namespace string) EventsResultDTO {
 	conn, ok := s.lookup(cluster)
 	if !ok {
-		return EventsResultDTO{Namespaces: []string{}, Events: []EventRowDTO{}}
+		return EventsResultDTO{Namespaces: []string{}, Events: []EventRowDTO{}, Error: "cluster not connected: " + cluster}
 	}
 	out, _ := computeEvents(conn, namespace)
 	return out
@@ -55,6 +55,7 @@ func computeEvents(conn EventsConn, namespace string) (EventsResultDTO, bool) {
 
 	events, truncated, err := conn.ListEvents(ctx, namespace)
 	if err != nil {
+		out.Error = err.Error()
 		return out, false
 	}
 	out.Truncated = truncated

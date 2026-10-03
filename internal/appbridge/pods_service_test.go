@@ -2,6 +2,8 @@ package appbridge
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -14,6 +16,7 @@ import (
 type fakePodConn struct {
 	pods      []workloads.PodSummary
 	truncated bool
+	listErr   error
 	detail    fleet.PodDetail
 	detErr    error
 	deleteErr error
@@ -23,7 +26,7 @@ type fakePodConn struct {
 }
 
 func (f *fakePodConn) ListPods(_ context.Context, _ string) ([]workloads.PodSummary, bool, error) {
-	return f.pods, f.truncated, nil
+	return f.pods, f.truncated, f.listErr
 }
 
 func (f *fakePodConn) LaunchDiagnosticPod(_ context.Context, name, image string, ttl int64) fleet.AdhocResult {
@@ -55,6 +58,9 @@ func TestPodsService_ClusterMiss_NonNilEmpties(t *testing.T) {
 	}
 	if len(dto.Pods) != 0 || len(dto.Namespaces) != 0 {
 		t.Fatalf("want empty slices, got pods=%d ns=%d", len(dto.Pods), len(dto.Namespaces))
+	}
+	if !strings.Contains(dto.Error, "not connected") {
+		t.Errorf("a cluster miss must carry Error, got %q", dto.Error)
 	}
 }
 
@@ -197,6 +203,9 @@ func TestPodsService_GetPodDetail_ErrorReturnsEmpties(t *testing.T) {
 	if d.Summary.Name != "" {
 		t.Errorf("summary should be zero on error, got %+v", d.Summary)
 	}
+	if d.Error == "" {
+		t.Error("a failed detail read must carry Error")
+	}
 }
 
 // --- DeletePod tests ---
@@ -230,5 +239,36 @@ func TestPodsService_DeletePod_ErrorSurfaced(t *testing.T) {
 	r := svc.DeletePod("c", "ns", "pod")
 	if r.OK || r.Error == "" {
 		t.Fatalf("want failure surfaced, got %+v", r)
+	}
+}
+
+// Review 2026-10-03 #10: every request/response list carries Error when the
+// read fails, so the Overview and triage tape can mark the source unreadable
+// instead of counting zero problems.
+func TestListReads_FailureCarriesError(t *testing.T) {
+	boom := errors.New("pods is forbidden: User cannot list resource")
+
+	pods := NewPodsService(func(string) (PodsConn, bool) { return &fakePodConn{listErr: boom}, true }, nil).ListPods("c", "")
+	if pods.Error != boom.Error() || pods.Pods == nil {
+		t.Errorf("ListPods: error=%q pods-nil=%v", pods.Error, pods.Pods == nil)
+	}
+	wl := NewWorkloadsService(func(string) (WorkloadsConn, bool) { return &fakeWLConn{listErr: boom}, true }, nil).ListWorkloads("c", "")
+	if wl.Error != boom.Error() || wl.Workloads == nil {
+		t.Errorf("ListWorkloads: error=%q workloads-nil=%v", wl.Error, wl.Workloads == nil)
+	}
+	nodes := NewNodesService(func(string) (NodesConn, bool) { return &fakeNodeConn{listErr: boom}, true }).ListNodes("c")
+	if nodes.Error != boom.Error() || nodes.Nodes == nil {
+		t.Errorf("ListNodes: error=%q nodes-nil=%v", nodes.Error, nodes.Nodes == nil)
+	}
+	// Cluster misses say so too.
+	if r := NewNodesService(func(string) (NodesConn, bool) { return nil, false }).ListNodes("gone"); !strings.Contains(r.Error, "not connected") {
+		t.Errorf("ListNodes cluster miss: %q", r.Error)
+	}
+	if r := NewWorkloadsService(func(string) (WorkloadsConn, bool) { return nil, false }, nil).ListWorkloads("gone", ""); !strings.Contains(r.Error, "not connected") {
+		t.Errorf("ListWorkloads cluster miss: %q", r.Error)
+	}
+	// A successful empty list carries no error: quiet is only claimed from data.
+	if r := NewPodsService(func(string) (PodsConn, bool) { return &fakePodConn{}, true }, nil).ListPods("c", ""); r.Error != "" {
+		t.Errorf("successful empty list must not carry an error: %q", r.Error)
 	}
 }

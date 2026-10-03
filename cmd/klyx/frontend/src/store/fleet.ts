@@ -321,7 +321,9 @@ export type ExpiryScanResultDTO = { items: ExpiryItemDTO[]; warnings: string[]; 
 export type WorkloadUsageDTO = { cpuUsage: number | null; memUsage: number | null };
 export type WorkloadMetricsStatusDTO = { available: boolean; message: string; updatedAt: string };
 export type WorkloadMetricsResultDTO = { status: WorkloadMetricsStatusDTO; usage: Record<string, WorkloadUsageDTO> };
-export type WorkloadsResultDTO = { fluxPresent: boolean; namespaces: string[]; workloads: WorkloadDTO[]; truncated?: boolean };
+// error: the read FAILED (cluster not connected, forbidden, timeout). Rows are
+// then empty - never "nothing found" (review 2026-10-03 #10).
+export type WorkloadsResultDTO = { fluxPresent: boolean; namespaces: string[]; workloads: WorkloadDTO[]; truncated?: boolean; error?: string };
 export const WORKLOAD_KINDS = ["Deployment", "StatefulSet", "DaemonSet"] as const;
 export type WorkloadKind = typeof WORKLOAD_KINDS[number];
 export type WorkloadsSlice = {
@@ -341,6 +343,7 @@ export type WorkloadsSlice = {
   nearLimitSort: boolean;
   live: boolean;
   truncated?: boolean; // a list hit the server cap: rows are incomplete, scope by namespace
+  error?: string | null; // the last read FAILED; items are the last good read (or empty)
 };
 
 function workloadKindFilterFor(kinds: readonly WorkloadKind[]): Record<WorkloadKind, boolean> {
@@ -364,8 +367,8 @@ export type NodeUtilizationResultDTO = { available: boolean; message?: string; u
 export type ContainerUsageDTO = { container: string; cpu: number | null; mem: number | null };
 export type PodUsageResultDTO = { available: boolean; message?: string; updatedAtUnix: number; items: ContainerUsageDTO[] };
 export type PodSummaryDTO = { namespace: string; name: string; ready: boolean; phase: string; reason: string; rank: "unhealthy"|"degraded"|"restarts"|"healthy"; restarts: number; node: string; ip: string; ownerKind: string; ownerName: string; ageSeconds: number; containers: ContainerSummaryDTO[] };
-export type PodsResultDTO = { namespaces: string[]; pods: PodSummaryDTO[]; truncated?: boolean };
-export type PodDetailDTO = { summary: PodSummaryDTO; labels: Record<string, string>; annotations?: Record<string, string>; conditions: ConditionDTO[]; events: EventDTO[]; yaml: string; qosClass: string; serviceAccount: string };
+export type PodsResultDTO = { namespaces: string[]; pods: PodSummaryDTO[]; truncated?: boolean; error?: string };
+export type PodDetailDTO = { summary: PodSummaryDTO; labels: Record<string, string>; annotations?: Record<string, string>; conditions: ConditionDTO[]; events: EventDTO[]; yaml: string; qosClass: string; serviceAccount: string; error?: string };
 
 export type PodRef = { namespace: string; name: string };
 export type PodsSlice = {
@@ -381,6 +384,7 @@ export type PodsSlice = {
   detailLoading: boolean;
   live: boolean;
   truncated?: boolean; // the pod list hit the server cap: rows are incomplete, scope by namespace
+  error?: string | null; // the last read FAILED; items are the last good read (or empty)
   // Palette "jump to namespace": consumed by PodsView, which re-opens its live
   // subscription for the namespace. A raced one-shot list would be discarded
   // by the live sub's stale guard - the subscription itself must move.
@@ -388,7 +392,7 @@ export type PodsSlice = {
 };
 
 export type EventRowDTO = { type: "Normal" | "Warning"; reason: string; message: string; count: number; namespace: string; kind: string; name: string; lastSeenUnix: number; firstSeenUnix: number };
-export type EventsResultDTO = { namespaces: string[]; events: EventRowDTO[]; truncated?: boolean };
+export type EventsResultDTO = { namespaces: string[]; events: EventRowDTO[]; truncated?: boolean; error?: string };
 export type EventsSlice = {
   cluster: string | null;
   namespace: string;
@@ -399,6 +403,7 @@ export type EventsSlice = {
   search: string;
   live: boolean;
   truncated?: boolean; // the 500-event cap hit: newest warnings may be missing
+  error?: string | null; // the last read FAILED; items are the last good read (or empty)
 };
 
 export type ResourceRef = { group: string; version: string; plural: string; kind: string; scope: string };
@@ -565,16 +570,17 @@ export type MetricsSlice = { cluster: string | null; dto: MetricsDTO | null; loa
 
 // Nodes types
 export type NodeSummaryDTO = { name: string; roles: string[]; ready: boolean; unschedulable: boolean; problems: string[]; version: string; os: string; arch: string; taintCount: number; cpuCapacity: number; cpuAllocatable: number; memCapacity: number; memAllocatable: number; podCapacity: number; ageSeconds: number; pool?: string; zone?: string };
-export type NodesResultDTO = { nodes: NodeSummaryDTO[] };
+export type NodesResultDTO = { nodes: NodeSummaryDTO[]; error?: string };
 export type NodeTaintDTO = { key: string; value: string; effect: string };
 export type PodOnNodeDTO = { namespace: string; name: string; phase: string };
-export type NodeDetailDTO = { summary: NodeSummaryDTO; labels: Record<string, string>; annotations?: Record<string, string>; taints: NodeTaintDTO[]; conditions: ConditionDTO[]; events: EventDTO[]; yaml: string; podsOnNode: PodOnNodeDTO[] };
+export type NodeDetailDTO = { summary: NodeSummaryDTO; labels: Record<string, string>; annotations?: Record<string, string>; taints: NodeTaintDTO[]; conditions: ConditionDTO[]; events: EventDTO[]; yaml: string; podsOnNode: PodOnNodeDTO[]; error?: string };
 
 export type NodeRef = { name: string };
 export type NodesSlice = {
   cluster: string | null;
   items: NodeSummaryDTO[];
   loading: boolean;
+  error?: string | null; // the last read FAILED; items are the last good read (or empty)
   selected: NodeRef | null;
   detail: NodeDetailDTO | null;
   detailLoading: boolean;
@@ -1072,7 +1078,13 @@ export const useFleet = create<FleetState>((set) => ({
     let namespaces = s.workloads.namespaces;
     if (namespace === "") namespaces = result.namespaces ?? [];
     if (namespaces.length === 0 && namespace !== "") namespaces = [namespace];
-    return { workloads: { ...s.workloads, cluster, namespace, items: result.workloads ?? [], namespaces, fluxPresent: result.fluxPresent, truncated: result.truncated ?? false, loading: false } };
+    if (result.error) {
+      // A failed read never wipes the last good rows for the same scope - it
+      // flags them (the view shows the error banner over them).
+      const same = s.workloads.cluster === cluster && s.workloads.namespace === namespace;
+      return { workloads: { ...s.workloads, cluster, namespace, items: same ? s.workloads.items : [], error: result.error, loading: false } };
+    }
+    return { workloads: { ...s.workloads, cluster, namespace, items: result.workloads ?? [], namespaces, fluxPresent: result.fluxPresent, truncated: result.truncated ?? false, error: null, loading: false } };
   }),
   toggleWorkloadKind: (k) => set((s) => ({ workloads: { ...s.workloads, kindFilter: { ...s.workloads.kindFilter, [k]: !s.workloads.kindFilter[k] } } })),
   setWorkloadKindFilter: (kinds) => set((s) => ({ workloads: { ...s.workloads, kindFilter: workloadKindFilterFor(kinds) } })),
@@ -1110,7 +1122,11 @@ export const useFleet = create<FleetState>((set) => ({
     let namespaces = s.pods.namespaces;
     if (namespace === "") namespaces = result.namespaces ?? [];
     if (namespaces.length === 0 && namespace !== "") namespaces = [namespace];
-    return { pods: { ...s.pods, cluster, namespace, items: result.pods ?? [], namespaces, truncated: result.truncated ?? false, loading: false } };
+    if (result.error) {
+      const same = s.pods.cluster === cluster && s.pods.namespace === namespace;
+      return { pods: { ...s.pods, cluster, namespace, items: same ? s.pods.items : [], error: result.error, loading: false } };
+    }
+    return { pods: { ...s.pods, cluster, namespace, items: result.pods ?? [], namespaces, truncated: result.truncated ?? false, error: null, loading: false } };
   }),
   togglePodsNeedsAttention: () => set((s) => ({ pods: { ...s.pods, needsAttention: !s.pods.needsAttention } })),
   setPodsNeedsAttention: (v) => set((s) => ({ pods: { ...s.pods, needsAttention: v } })),
@@ -1135,7 +1151,11 @@ export const useFleet = create<FleetState>((set) => ({
     let namespaces = s.events.namespaces;
     if (namespace === "") namespaces = result.namespaces ?? [];
     if (namespaces.length === 0 && namespace !== "") namespaces = [namespace];
-    return { events: { ...s.events, cluster, namespace, items: result.events ?? [], namespaces, loading: false, truncated: result.truncated ?? false } };
+    if (result.error) {
+      const same = s.events.cluster === cluster && s.events.namespace === namespace;
+      return { events: { ...s.events, cluster, namespace, items: same ? s.events.items : [], error: result.error, loading: false } };
+    }
+    return { events: { ...s.events, cluster, namespace, items: result.events ?? [], namespaces, loading: false, truncated: result.truncated ?? false, error: null } };
   }),
   toggleWarningsOnly: () => set((s) => ({ events: { ...s.events, warningsOnly: !s.events.warningsOnly } })),
   setWarningsOnly: (v) => set((s) => ({ events: { ...s.events, warningsOnly: v } })),
@@ -1148,7 +1168,9 @@ export const useFleet = create<FleetState>((set) => ({
   clearEvents: () => set({ events: { cluster: null, namespace: "", items: [], namespaces: [], loading: false, warningsOnly: false, search: "", live: false, truncated: false } }),
   nodes: { cluster: null, items: [], loading: false, selected: null, detail: null, detailLoading: false },
   setNodesLoading: (cluster) => set((s) => ({ nodes: { ...s.nodes, cluster, loading: true } })),
-  setNodes: (cluster, result) => set((s) => ({ nodes: { ...s.nodes, cluster, items: result.nodes ?? [], loading: false } })),
+  setNodes: (cluster, result) => set((s) => result.error
+    ? { nodes: { ...s.nodes, cluster, items: s.nodes.cluster === cluster ? s.nodes.items : [], error: result.error, loading: false } }
+    : { nodes: { ...s.nodes, cluster, items: result.nodes ?? [], error: null, loading: false } }),
   selectNode: (ref) => set((s) => ({ nodes: { ...s.nodes, selected: ref, detail: null, detailLoading: ref !== null } })),
   setNodeDetail: (ref, detail) => set((s) => {
     const sel = s.nodes.selected;

@@ -12,6 +12,7 @@ import (
 
 type fakeWLConn struct {
 	wl              []workloads.Workload
+	listErr         error
 	flux            bool
 	truncated       bool
 	rolloutErr      error
@@ -43,7 +44,7 @@ func (f *fakeWLConn) RolloutPause(_ context.Context, _, _ string, pause bool) er
 }
 
 func (f *fakeWLConn) ListWorkloads(context.Context, string) ([]workloads.Workload, bool, bool, error) {
-	return f.wl, f.flux, f.truncated, nil
+	return f.wl, f.flux, f.truncated, f.listErr
 }
 
 func (f *fakeWLConn) WorkloadCompare(context.Context, string, string, string) (fleet.WorkloadCompareInfo, error) {

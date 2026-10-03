@@ -24,4 +24,10 @@ type EventsResultDTO struct {
 	// The cap slices in etcd key order, so the newest warnings can be missing -
 	// the view must say so rather than present the subset as complete.
 	Truncated bool `json:"truncated"`
+	// Error is set when the read FAILED (cluster not connected, list/get
+	// error). The collections stay empty-but-non-nil, so a caller that ignores
+	// it still cannot crash - but an error must never read as "nothing found":
+	// the triage tape and Overview treat a source with Error as unreadable,
+	// not quiet (review 2026-10-03 #10).
+	Error string `json:"error,omitempty"`
 }

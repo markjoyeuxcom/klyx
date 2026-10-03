@@ -290,6 +290,26 @@ describe("fetchOverviewSummary integration", () => {
     expect(s.podsNotReady).toBe(0);         // pods fetch succeeded
   });
 
+  // Review 2026-10-03 #10: the list bindings resolve (not reject) on failure,
+  // with `error` set and empty rows. That must read as unreadable, never as
+  // zero problems.
+  it("a fulfilled read carrying error is unreadable, not zero", async () => {
+    (WorkloadsService.ListWorkloads as ReturnType<typeof vi.fn>).mockResolvedValue({ fluxPresent: false, namespaces: [], workloads: [], error: "deployments.apps is forbidden" });
+    (PodsService.ListPods as ReturnType<typeof vi.fn>).mockResolvedValue({ namespaces: [], pods: [], error: "cluster not connected: homelab" });
+    (EventsService.ListEvents as ReturnType<typeof vi.fn>).mockResolvedValue({ namespaces: [], events: [], error: "context deadline exceeded" });
+    (NodesService.ListNodes as ReturnType<typeof vi.fn>).mockResolvedValue({ nodes: [], error: "nodes is forbidden" });
+    (HelmService.ListHelmReleases as ReturnType<typeof vi.fn>).mockResolvedValue({ available: false, releases: [], error: "helm list: Kubernetes cluster unreachable" });
+    (GitOpsService.GetGitOpsSummary as ReturnType<typeof vi.fn>).mockResolvedValue({ fluxPresent: false, total: 0, notReady: 0, suspended: 0 });
+
+    await fetchOverviewSummary("homelab");
+
+    const s = useFleet.getState().overviewSummary;
+    expect(s.unhealthyWorkloads).toBeNull();
+    expect(s.podsNotReady).toBeNull();
+    expect(s.warningEvents).toBeNull();
+    expect(s.nodeProblems).toBeNull();
+  });
+
   it("flux tile is null when fluxPresent is false", async () => {
     (WorkloadsService.ListWorkloads as ReturnType<typeof vi.fn>).mockResolvedValue({ fluxPresent: false, namespaces: [], workloads: [] });
     (PodsService.ListPods as ReturnType<typeof vi.fn>).mockResolvedValue({ namespaces: [], pods: [] });

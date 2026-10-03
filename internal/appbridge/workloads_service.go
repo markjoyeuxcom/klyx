@@ -148,7 +148,7 @@ func NewWorkloadsService(lookup func(string) (WorkloadsConn, bool), em Emitter) 
 func (s *WorkloadsService) ListWorkloads(cluster, namespace string) WorkloadsResultDTO {
 	conn, ok := s.lookup(cluster)
 	if !ok {
-		return WorkloadsResultDTO{Namespaces: []string{}, Workloads: []WorkloadDTO{}}
+		return WorkloadsResultDTO{Namespaces: []string{}, Workloads: []WorkloadDTO{}, Error: "cluster not connected: " + cluster}
 	}
 	out, _ := computeWorkloads(conn, namespace)
 	return out
@@ -164,6 +164,7 @@ func computeWorkloads(conn WorkloadsConn, namespace string) (WorkloadsResultDTO,
 	defer cancel()
 	wl, fluxPresent, truncated, err := conn.ListWorkloads(ctx, namespace)
 	if err != nil {
+		out.Error = err.Error()
 		return out, false
 	}
 	out.FluxPresent = fluxPresent

@@ -42,7 +42,7 @@ func NewPodsService(lookup func(string) (PodsConn, bool), em Emitter) *PodsServi
 func (s *PodsService) ListPods(cluster, namespace string) PodsResultDTO {
 	conn, ok := s.lookup(cluster)
 	if !ok {
-		return PodsResultDTO{Namespaces: []string{}, Pods: []PodSummaryDTO{}}
+		return PodsResultDTO{Namespaces: []string{}, Pods: []PodSummaryDTO{}, Error: "cluster not connected: " + cluster}
 	}
 	out, _ := computePods(conn, namespace)
 	return out
@@ -57,6 +57,7 @@ func computePods(conn PodsConn, namespace string) (PodsResultDTO, bool) {
 	defer cancel()
 	pods, truncated, err := conn.ListPods(ctx, namespace)
 	if err != nil {
+		out.Error = err.Error()
 		return out, false
 	}
 	out.Truncated = truncated
@@ -120,12 +121,14 @@ func (s *PodsService) GetPodDetail(cluster, namespace, name string) PodDetailDTO
 	}
 	conn, ok := s.lookup(cluster)
 	if !ok {
+		empty.Error = "cluster not connected: " + cluster
 		return empty
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), podsTimeout)
 	defer cancel()
 	d, err := conn.PodDetail(ctx, namespace, name)
 	if err != nil {
+		empty.Error = err.Error()
 		return empty
 	}
 
