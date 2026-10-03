@@ -14,9 +14,13 @@ package netpol
 
 import (
 	"fmt"
+	"sort"
+	"strconv"
+	"strings"
 
 	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/intstr"
 )
 
 // Endpoint is one side of the question: a pod identified by namespace + labels.
@@ -47,11 +51,16 @@ type DirectionVerdict struct {
 	Policies []PolicyRef // the selecting policies, admitters first
 }
 
-// Verdict is the full answer. Allowed = egress allowed AND ingress allowed.
+// Verdict is the full answer. Allowed = egress allowed AND ingress allowed on
+// the SAME port: for an any-port query, some port of the protocol must be
+// admitted in both directions.
 type Verdict struct {
 	Allowed bool
 	Ingress DirectionVerdict // evaluated on the dst side
 	Egress  DirectionVerdict // evaluated on the src side
+	// Note qualifies an any-port verdict: the ports reachable both ways, or
+	// why two individually-admitting directions still block.
+	Note string
 }
 
 // NamespaceLabels maps namespace name -> its labels (for namespaceSelector
@@ -66,21 +75,35 @@ func Evaluate(q Query, policies []networkingv1.NetworkPolicy, nsLabels Namespace
 	if proto == "" {
 		proto = "TCP"
 	}
-	v := Verdict{
-		Ingress: evalDirection(q.Dst, q.Src, q.Port, proto, policies, nsLabels, networkingv1.PolicyTypeIngress),
-		Egress:  evalDirection(q.Src, q.Dst, q.Port, proto, policies, nsLabels, networkingv1.PolicyTypeEgress),
+	in, inPorts := evalDirection(q.Dst, q.Src, q.Port, proto, policies, nsLabels, networkingv1.PolicyTypeIngress)
+	eg, egPorts := evalDirection(q.Src, q.Dst, q.Port, proto, policies, nsLabels, networkingv1.PolicyTypeEgress)
+	v := Verdict{Ingress: in, Egress: eg, Allowed: in.Allowed && eg.Allowed}
+	if q.Port == 0 && v.Allowed {
+		// Each direction admits SOME port; reachability needs one port admitted
+		// both ways (review 2026-10-03: egress TCP/80 + ingress TCP/443 read
+		// allowed).
+		common := inPorts.intersect(egPorts)
+		switch {
+		case len(common) == 0:
+			v.Allowed = false
+			v.Note = fmt.Sprintf("ingress and egress each admit some %s port, but no single port is admitted both ways", proto)
+		case !common.full():
+			v.Note = fmt.Sprintf("reachable only on %s %s", proto, common)
+		}
 	}
-	v.Allowed = v.Ingress.Allowed && v.Egress.Allowed
 	return v
 }
 
 // evalDirection evaluates one direction: subject is the pod whose policies
-// apply (dst for ingress, src for egress); peer is the other endpoint.
+// apply (dst for ingress, src for egress); peer is the other endpoint. It also
+// returns the ports of proto the direction admits for this peer (all ports
+// when the subject is not isolated).
 func evalDirection(subject, peer Endpoint, port int, proto string,
-	policies []networkingv1.NetworkPolicy, nsLabels NamespaceLabels, dir networkingv1.PolicyType) DirectionVerdict {
+	policies []networkingv1.NetworkPolicy, nsLabels NamespaceLabels, dir networkingv1.PolicyType) (DirectionVerdict, portSet) {
 
 	out := DirectionVerdict{}
 	var admitters, selectors []PolicyRef
+	var admitted portSet
 
 	for i := range policies {
 		p := &policies[i]
@@ -94,15 +117,29 @@ func evalDirection(subject, peer Endpoint, port int, proto string,
 			continue
 		}
 		out.Isolated = true
-		if policyAdmits(p, peer, port, proto, nsLabels, dir) {
+		ps := policyPorts(p, peer, proto, nsLabels, dir)
+		if admitsQuery(ps, port) {
 			admitters = append(admitters, PolicyRef{Namespace: p.Namespace, Name: p.Name, Admits: true})
+			admitted = admitted.union(ps)
 		} else {
 			selectors = append(selectors, PolicyRef{Namespace: p.Namespace, Name: p.Name})
 		}
 	}
 	out.Policies = append(admitters, selectors...)
 	out.Allowed = !out.Isolated || len(admitters) > 0
-	return out
+	if !out.Isolated {
+		admitted = allPorts
+	}
+	return out, admitted
+}
+
+// admitsQuery: a specific port must be in the set; "any port" (0) needs the
+// set to hold at least one port of the protocol.
+func admitsQuery(ps portSet, port int) bool {
+	if port == 0 {
+		return len(ps) > 0
+	}
+	return ps.has(port)
 }
 
 // hasPolicyType mirrors the API default: an absent policyTypes means Ingress,
@@ -122,21 +159,24 @@ func hasPolicyType(p *networkingv1.NetworkPolicy, dir networkingv1.PolicyType) b
 	return len(p.Spec.Egress) > 0
 }
 
-func policyAdmits(p *networkingv1.NetworkPolicy, peer Endpoint, port int, proto string, nsLabels NamespaceLabels, dir networkingv1.PolicyType) bool {
+// policyPorts is the set of proto ports policy p admits for peer in direction
+// dir: the union over its rules whose peers match.
+func policyPorts(p *networkingv1.NetworkPolicy, peer Endpoint, proto string, nsLabels NamespaceLabels, dir networkingv1.PolicyType) portSet {
+	var out portSet
 	if dir == networkingv1.PolicyTypeIngress {
 		for _, rule := range p.Spec.Ingress {
-			if peersMatch(rule.From, p.Namespace, peer, nsLabels) && portsMatch(rule.Ports, port, proto) {
-				return true
+			if peersMatch(rule.From, p.Namespace, peer, nsLabels) {
+				out = out.union(rulePorts(rule.Ports, proto))
 			}
 		}
-		return false
+		return out
 	}
 	for _, rule := range p.Spec.Egress {
-		if peersMatch(rule.To, p.Namespace, peer, nsLabels) && portsMatch(rule.Ports, port, proto) {
-			return true
+		if peersMatch(rule.To, p.Namespace, peer, nsLabels) {
+			out = out.union(rulePorts(rule.Ports, proto))
 		}
 	}
-	return false
+	return out
 }
 
 // peersMatch: an EMPTY peer list admits everything (all pods, all namespaces).
@@ -168,17 +208,15 @@ func peersMatch(peers []networkingv1.NetworkPolicyPeer, policyNS string, peer En
 	return false
 }
 
-// portsMatch: an empty ports list admits every port. Named ports cannot be
-// resolved statically and never match a numeric query (honest under-admit).
-func portsMatch(ports []networkingv1.NetworkPolicyPort, port int, proto string) bool {
+// rulePorts is the set of proto ports a rule's ports list admits. An empty
+// list admits every port of every protocol; an entry admits only its own
+// protocol (TCP when unset). Named ports cannot be resolved statically and
+// admit nothing (honest under-admit).
+func rulePorts(ports []networkingv1.NetworkPolicyPort, proto string) portSet {
 	if len(ports) == 0 {
-		return true
+		return allPorts
 	}
-	if port == 0 {
-		// "any port" query against a port-scoped rule: the rule admits SOME
-		// port, which satisfies an unqualified question.
-		return true
-	}
+	var out portSet
 	for _, pp := range ports {
 		ruleProto := "TCP"
 		if pp.Protocol != nil {
@@ -188,23 +226,88 @@ func portsMatch(ports []networkingv1.NetworkPolicyPort, port int, proto string) 
 			continue
 		}
 		if pp.Port == nil {
-			return true // protocol-only rule: all ports of that protocol
+			return allPorts // protocol-only rule: all ports of that protocol
 		}
-		if pp.Port.Type == 1 { // intstr.String: named port, unresolvable statically
+		if pp.Port.Type == intstr.String {
 			continue
 		}
-		p := int(pp.Port.IntVal)
-		if pp.EndPort != nil {
-			if port >= p && port <= int(*pp.EndPort) {
-				return true
-			}
-			continue
+		lo := int(pp.Port.IntVal)
+		hi := lo
+		if pp.EndPort != nil && int(*pp.EndPort) > lo {
+			hi = int(*pp.EndPort)
 		}
-		if port == p {
+		out = out.union(portSet{{lo, hi}})
+	}
+	return out
+}
+
+// portSet is a set of ports as sorted, disjoint, non-adjacent inclusive
+// ranges. nil is the empty set.
+type portSet []portRange
+
+type portRange struct{ lo, hi int }
+
+var allPorts = portSet{{1, 65535}}
+
+func (s portSet) full() bool { return len(s) == 1 && s[0] == allPorts[0] }
+
+func (s portSet) has(p int) bool {
+	for _, r := range s {
+		if p >= r.lo && p <= r.hi {
 			return true
 		}
 	}
 	return false
+}
+
+func (s portSet) union(o portSet) portSet {
+	all := append(append(portSet{}, s...), o...)
+	sort.Slice(all, func(i, j int) bool { return all[i].lo < all[j].lo })
+	var out portSet
+	for _, r := range all {
+		if n := len(out); n > 0 && r.lo <= out[n-1].hi+1 {
+			if r.hi > out[n-1].hi {
+				out[n-1].hi = r.hi
+			}
+			continue
+		}
+		out = append(out, r)
+	}
+	return out
+}
+
+func (s portSet) intersect(o portSet) portSet {
+	var out portSet
+	for i, j := 0, 0; i < len(s) && j < len(o); {
+		lo, hi := max(s[i].lo, o[j].lo), min(s[i].hi, o[j].hi)
+		if lo <= hi {
+			out = append(out, portRange{lo, hi})
+		}
+		if s[i].hi < o[j].hi {
+			i++
+		} else {
+			j++
+		}
+	}
+	return out
+}
+
+// String renders the set compactly ("443, 8000-8999"), capped for display.
+func (s portSet) String() string {
+	const maxShown = 4
+	parts := make([]string, 0, maxShown+1)
+	for i, r := range s {
+		if i == maxShown {
+			parts = append(parts, fmt.Sprintf("+%d more", len(s)-maxShown))
+			break
+		}
+		if r.lo == r.hi {
+			parts = append(parts, strconv.Itoa(r.lo))
+		} else {
+			parts = append(parts, fmt.Sprintf("%d-%d", r.lo, r.hi))
+		}
+	}
+	return strings.Join(parts, ", ")
 }
 
 // selectorMatches evaluates matchLabels + matchExpressions (In, NotIn, Exists,

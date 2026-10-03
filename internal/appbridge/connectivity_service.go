@@ -32,7 +32,10 @@ type ConnectivityReportDTO struct {
 	// CiliumUnknown: a Cilium policy count FAILED (not absent) - the verdict is
 	// PARTIAL because whether Cilium policies apply is unknown.
 	CiliumUnknown string `json:"ciliumUnknown,omitempty"`
-	Error         string `json:"error,omitempty"`
+	// Note qualifies an any-port verdict (netpol.Verdict.Note): the ports
+	// reachable both ways, or why two admitting directions still block.
+	Note  string `json:"note,omitempty"`
+	Error string `json:"error,omitempty"`
 }
 
 // ConnectivityConn is the per-cluster surface the connectivity lens needs.
@@ -82,6 +85,7 @@ func (s *ConnectivityService) CanReach(cluster, srcNS, srcPod, dstNS, dstPod str
 		DstLabels:      r.DstLabels,
 		CiliumPolicies: r.CiliumPolicies,
 		CiliumUnknown:  r.CiliumUnknown,
+		Note:           r.Verdict.Note,
 	}
 	dto.Ingress = DirectionVerdictDTO{Isolated: r.Verdict.Ingress.Isolated, Allowed: r.Verdict.Ingress.Allowed, Explain: r.IngressExplain, Policies: make([]NetpolRefDTO, 0, len(r.Verdict.Ingress.Policies))}
 	for _, p := range r.Verdict.Ingress.Policies {

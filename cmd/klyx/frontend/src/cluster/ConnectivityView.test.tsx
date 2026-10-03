@@ -79,4 +79,20 @@ describe("ConnectivityView", () => {
     expect(note.textContent).toMatch(/could not be counted/);
     expect(note.getAttribute("title")).toBe("ciliumnetworkpolicies is forbidden");
   });
+
+  // Review 2026-10-03 (netpol any-port): two directions that each admit some
+  // port can still block; the note says why instead of two green explains
+  // contradicting a BLOCKED verdict.
+  it("renders the any-port note that qualifies the verdict", async () => {
+    vi.mocked(canReach).mockResolvedValue(report({
+      allowed: false,
+      note: "ingress and egress each admit some TCP port, but no single port is admitted both ways",
+    }));
+    const { getByLabelText, getByText, findByText, getByTestId } = render(<ConnectivityView cluster="c" />);
+    fill(getByLabelText);
+    fireEvent.change(getByLabelText("port"), { target: { value: "" } });
+    fireEvent.click(getByText("can it reach?"));
+    expect(await findByText("BLOCKED")).toBeTruthy();
+    expect(getByTestId("connectivity-note").textContent).toMatch(/no single port is admitted both ways/);
+  });
 });

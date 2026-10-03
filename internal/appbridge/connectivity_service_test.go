@@ -24,6 +24,7 @@ func TestCanReachMapsVerdict(t *testing.T) {
 			Allowed: false,
 			Ingress: netpol.DirectionVerdict{Isolated: true, Allowed: false, Policies: []netpol.PolicyRef{{Namespace: "team-b", Name: "deny-all"}}},
 			Egress:  netpol.DirectionVerdict{Isolated: false, Allowed: true},
+			Note:    "reachable only on TCP 443",
 		},
 		SrcLabels: map[string]string{"app": "web"}, DstLabels: map[string]string{"app": "db"},
 		IngressExplain: "ingress DENIED - 1 policy selects the pod, none admits this peer/port",
@@ -40,6 +41,9 @@ func TestCanReachMapsVerdict(t *testing.T) {
 	}
 	if dto.CiliumPolicies != 3 {
 		t.Fatalf("the cilium honesty count must carry: %+v", dto)
+	}
+	if dto.Note != "reachable only on TCP 443" {
+		t.Fatalf("the any-port note must carry: %+v", dto)
 	}
 }
 

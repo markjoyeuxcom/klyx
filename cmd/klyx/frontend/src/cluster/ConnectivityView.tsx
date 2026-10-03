@@ -143,6 +143,14 @@ export function ConnectivityView({ cluster }: { cluster: string }) {
                     </span>
                   )}
                 </div>
+                {/* An any-port verdict needs ONE port admitted both ways; the note
+                    names those ports, or why two admitting directions still
+                    block (review 2026-10-03, netpol any-port). */}
+                {report.note && (
+                  <div data-testid="connectivity-note" style={{ fontSize: 11, color: report.allowed ? "var(--color-text-secondary)" : "var(--color-text-danger)" }}>
+                    {report.note}
+                  </div>
+                )}
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                   <DirectionWell title="egress (source side)" d={report.egress} onOpenPolicy={openPolicy} />
                   <DirectionWell title="ingress (destination side)" d={report.ingress} onOpenPolicy={openPolicy} />

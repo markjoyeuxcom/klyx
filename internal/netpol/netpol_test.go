@@ -160,6 +160,105 @@ func TestPortRangeAndAnyPortSemantics(t *testing.T) {
 	if !anyPort.Allowed {
 		t.Fatalf("any-port query against a port-scoped admit must read allowed: %+v", anyPort)
 	}
+	if anyPort.Note != "reachable only on TCP 8000-8999" {
+		t.Fatalf("an any-port allow must name the reachable ports, got %q", anyPort.Note)
+	}
+}
+
+func egressPolicy(ns, name string, podSel map[string]string, rules []networkingv1.NetworkPolicyEgressRule) networkingv1.NetworkPolicy {
+	return networkingv1.NetworkPolicy{
+		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name},
+		Spec: networkingv1.NetworkPolicySpec{
+			PodSelector: metav1.LabelSelector{MatchLabels: podSel},
+			PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeEgress},
+			Egress:      rules,
+		},
+	}
+}
+
+func tcpPort(p int) networkingv1.NetworkPolicyPort {
+	tcp := corev1.ProtocolTCP
+	v := intstr.FromInt(p)
+	return networkingv1.NetworkPolicyPort{Protocol: &tcp, Port: &v}
+}
+
+// Review 2026-10-03 (netpol any-port): the any-port shortcut ran before the
+// protocol check, so a UDP-only rule admitted a TCP any-port query.
+func TestAnyPortRespectsProtocol(t *testing.T) {
+	udp := corev1.ProtocolUDP
+	dns := intstr.FromInt(53)
+	pols := []networkingv1.NetworkPolicy{ingressPolicy("team-b", "udp-only", map[string]string{"app": "db"},
+		[]networkingv1.NetworkPolicyIngressRule{{Ports: []networkingv1.NetworkPolicyPort{{Protocol: &udp, Port: &dns}}}},
+	)}
+	v := Evaluate(q("team-a", nil, "team-b", map[string]string{"app": "db"}, 0), pols, nsLabels)
+	if v.Allowed || v.Ingress.Allowed {
+		t.Fatalf("a UDP-only rule must not admit an any-port TCP query: %+v", v)
+	}
+	udpQ := q("team-a", nil, "team-b", map[string]string{"app": "db"}, 0)
+	udpQ.Protocol = "UDP"
+	if v := Evaluate(udpQ, pols, nsLabels); !v.Allowed || v.Note != "reachable only on UDP 53" {
+		t.Fatalf("the same rule admits an any-port UDP query on 53: %+v", v)
+	}
+}
+
+// Review 2026-10-03 (netpol any-port): ingress and egress were ANDed
+// independently, so egress TCP/80 + ingress TCP/443 read allowed although no
+// port is admitted both ways.
+func TestAnyPortNeedsOnePortAdmittedBothWays(t *testing.T) {
+	src, dst := map[string]string{"app": "web"}, map[string]string{"app": "db"}
+	pols := []networkingv1.NetworkPolicy{
+		egressPolicy("team-a", "egress-80", src, []networkingv1.NetworkPolicyEgressRule{{Ports: []networkingv1.NetworkPolicyPort{tcpPort(80)}}}),
+		ingressPolicy("team-b", "ingress-443", dst, []networkingv1.NetworkPolicyIngressRule{{Ports: []networkingv1.NetworkPolicyPort{tcpPort(443)}}}),
+	}
+	v := Evaluate(q("team-a", src, "team-b", dst, 0), pols, nsLabels)
+	if v.Allowed {
+		t.Fatalf("no common port: any-port must be blocked: %+v", v)
+	}
+	if !v.Ingress.Allowed || !v.Egress.Allowed || v.Note == "" {
+		t.Fatalf("each direction admits some port and the note must say why it still blocks: %+v", v)
+	}
+
+	// Overlap: egress 80-500 and ingress 443 meet on 443 only.
+	end := int32(500)
+	wide := tcpPort(80)
+	wide.EndPort = &end
+	pols[0] = egressPolicy("team-a", "egress-range", src, []networkingv1.NetworkPolicyEgressRule{{Ports: []networkingv1.NetworkPolicyPort{wide}}})
+	v = Evaluate(q("team-a", src, "team-b", dst, 0), pols, nsLabels)
+	if !v.Allowed || v.Note != "reachable only on TCP 443" {
+		t.Fatalf("overlap on 443 must allow and name it: %+v", v)
+	}
+
+	// Specific-port queries keep their per-port semantics.
+	if v := Evaluate(q("team-a", src, "team-b", dst, 443), pols, nsLabels); !v.Allowed || v.Note != "" {
+		t.Fatalf("port 443 is admitted both ways: %+v", v)
+	}
+	if v := Evaluate(q("team-a", src, "team-b", dst, 80), pols, nsLabels); v.Allowed {
+		t.Fatalf("port 80 is not admitted on ingress: %+v", v)
+	}
+}
+
+func TestAnyPortUnisolatedHasNoNote(t *testing.T) {
+	v := Evaluate(q("team-a", nil, "team-b", nil, 0), nil, nsLabels)
+	if !v.Allowed || v.Note != "" {
+		t.Fatalf("no isolation: every port, nothing to qualify: %+v", v)
+	}
+}
+
+func TestPortSetAlgebra(t *testing.T) {
+	a := portSet{{80, 80}}.union(portSet{{81, 90}}).union(portSet{{443, 443}}).union(portSet{{85, 100}})
+	if a.String() != "80-100, 443" {
+		t.Fatalf("union must merge adjacent and overlapping ranges: %s", a)
+	}
+	b := a.intersect(portSet{{90, 450}})
+	if b.String() != "90-100, 443" {
+		t.Fatalf("intersect: %s", b)
+	}
+	if len(a.intersect(portSet{{101, 442}})) != 0 {
+		t.Fatal("disjoint intersect must be empty")
+	}
+	if !allPorts.union(a).full() || a.full() {
+		t.Fatal("full() must recognise only the whole range")
+	}
 }
 
 func TestMatchExpressions(t *testing.T) {

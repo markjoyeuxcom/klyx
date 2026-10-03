@@ -303,7 +303,7 @@ export type UpgradeReportDTO = { serverVersion: string; serverMinor: number; eol
 // Connectivity can-i (NetworkPolicy simulation).
 export type NetpolRefDTO = { namespace: string; name: string; admits: boolean };
 export type DirectionVerdictDTO = { isolated: boolean; allowed: boolean; policies: NetpolRefDTO[]; explain: string };
-export type ConnectivityReportDTO = { allowed: boolean; ingress: DirectionVerdictDTO; egress: DirectionVerdictDTO; srcLabels: Record<string, string>; dstLabels: Record<string, string>; ciliumPolicies: number; ciliumUnknown?: string; error?: string };
+export type ConnectivityReportDTO = { allowed: boolean; ingress: DirectionVerdictDTO; egress: DirectionVerdictDTO; srcLabels: Record<string, string>; dstLabels: Record<string, string>; ciliumPolicies: number; ciliumUnknown?: string; note?: string; error?: string };
 
 // Survivability headroom simulation.
 export type HeadroomPodRefDTO = { namespace: string; name: string; cpuReq: number; memReq: number };
