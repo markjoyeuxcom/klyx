@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+	"time"
 )
 
 // fakeExecConn implements ExecConn for testing.
@@ -314,5 +315,33 @@ func TestGetDebugCommand(t *testing.T) {
 	miss := NewExecService(func(string) (ExecConn, bool) { return nil, false })
 	if d := miss.GetDebugCommand("nope", "ns", "p", "c"); d.Error == "" {
 		t.Fatal("cluster miss must error")
+	}
+}
+
+// Review 2026-10-03 (finding A): kubectl debug permanently adds an ephemeral
+// container to the pod, so on a protected cluster the launch must consume the
+// typed-confirmation grant like every other mutating verb. Copying the command
+// runs nothing and stays ungated.
+func TestOpenDebugTerminal_ProtectedClusterNeedsGrant(t *testing.T) {
+	now := time.Now()
+	SetProtectGuard(newTestGuard("prd-cluster", &now))
+	t.Cleanup(func() { SetProtectGuard(nil) })
+
+	looked := false
+	svc := NewExecService(func(string) (ExecConn, bool) {
+		looked = true
+		return &fakeExecConn{kubeContext: "prd"}, true
+	})
+
+	r := svc.OpenDebugTerminal("prd-cluster", "ns", "pod", "app")
+	if r.OK || !strings.Contains(r.Error, "not armed") {
+		t.Fatalf("unarmed debug launch on a protected cluster must refuse, got %+v", r)
+	}
+	if looked {
+		t.Fatal("the gate must refuse before resolving the cluster or building the argv")
+	}
+
+	if dto := svc.GetDebugCommand("prd-cluster", "ns", "pod", "app"); dto.Error != "" || dto.Command == "" {
+		t.Fatalf("copying the debug command must stay ungated, got %+v", dto)
 	}
 }

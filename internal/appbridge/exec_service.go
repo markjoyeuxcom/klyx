@@ -90,7 +90,16 @@ func (s *ExecService) GetDebugCommand(cluster, ns, pod, container string) ExecCo
 
 // OpenDebugTerminal launches the OS terminal running kubectl debug against the
 // pod. Same platform behavior as OpenExecTerminal.
+//
+// Unlike exec, kubectl debug MUTATES the pod: it adds an ephemeral container
+// to the pod spec that Kubernetes cannot remove until the pod is recreated. So
+// it consumes the protected-cluster grant like every other mutating verb - the
+// frontend arms it through the shared ConfirmDialog. GetDebugCommand (copy the
+// command) stays ungated: copying runs nothing.
 func (s *ExecService) OpenDebugTerminal(cluster, ns, pod, container string) ActionResultDTO {
+	if err := checkProtected(cluster); err != nil {
+		return ActionResultDTO{Error: err.Error()}
+	}
 	conn, ok := s.lookup(cluster)
 	if !ok {
 		return ActionResultDTO{Error: "cluster not connected: " + cluster}

@@ -30,7 +30,7 @@ vi.mock("../bridge/exec", () => ({
 import { openLivePods, openPodDetail, deletePod } from "../bridge/pods";
 import { rolloutRestart } from "../bridge/workloads";
 import { openLogsWindow } from "../bridge/windows";
-import { describeResource } from "../bridge/exec";
+import { describeResource, openDebugTerminal } from "../bridge/exec";
 
 // LogsPane uses LogsService and Wails Events — stub them out so PodsView tests
 // don't need a Wails runtime.
@@ -464,6 +464,27 @@ describe("PodsView", () => {
     const confirmBtns = getAllByRole("button", { name: "Delete" });
     fireEvent.click(confirmBtns[confirmBtns.length - 1]);
     expect(deletePod).toHaveBeenCalledWith("homelab", "monitoring", "grafana-xyz");
+  });
+
+  // Review 2026-10-03 (finding A): kubectl debug permanently adds an ephemeral
+  // container to the pod, so the launch must go through the confirm dialog.
+  it("debug shell asks for confirmation before launching kubectl debug", () => {
+    openDetailPanel(healthy);
+    const { getByText, getByRole } = render(<PodsView cluster="homelab" />);
+    fireEvent.click(getByText("debug shell"));
+    expect(openDebugTerminal).not.toHaveBeenCalled();
+    expect(getByText(/stays on the pod spec until the pod is recreated/i)).toBeTruthy();
+    fireEvent.click(getByRole("button", { name: "Attach" }));
+    expect(openDebugTerminal).toHaveBeenCalledWith("homelab", "monitoring", "grafana-xyz", "app");
+  });
+
+  it("cancelling the debug shell confirmation launches nothing", () => {
+    openDetailPanel(healthy);
+    const { getByText, getByRole, queryByRole } = render(<PodsView cluster="homelab" />);
+    fireEvent.click(getByText("debug shell"));
+    fireEvent.click(getByRole("button", { name: "Cancel" }));
+    expect(queryByRole("button", { name: "Attach" })).toBeNull();
+    expect(openDebugTerminal).not.toHaveBeenCalled();
   });
 
   it("restart owner button is visible for Deployment owner", () => {

@@ -1057,6 +1057,11 @@ function ExecButtons({
 // terminal - the shell for DISTROLESS containers where "open shell" has
 // nothing to exec. With more than one container a picker chooses the
 // --target (whose process namespace the shell joins).
+//
+// kubectl debug MUTATES the pod: the ephemeral container is added to its spec
+// and Kubernetes has no API to remove it until the pod is recreated. So it
+// goes through the shared ConfirmDialog (typed arming on protected clusters),
+// and the backend refuses it on a protected cluster without that grant.
 function DebugShellButton({
   cluster, namespace, pod, containers,
 }: {
@@ -1066,7 +1071,11 @@ function DebugShellButton({
   containers: ContainerSummaryDTO[];
 }) {
   const [pickerOpen, setPickerOpen] = useState(false);
+  // The container a confirmed launch will target ("" = default container);
+  // null while no confirmation is pending.
+  const [pendingTarget, setPendingTarget] = useState<string | null>(null);
   const pickerRef = useRef<HTMLDivElement>(null);
+  const isProtected = useFleet((s) => s.clusters.find((c) => c.name === cluster)?.protected ?? false);
 
   useEffect(() => {
     if (!pickerOpen) return;
@@ -1081,20 +1090,40 @@ function DebugShellButton({
 
   const open = (container: string) => {
     setPickerOpen(false);
-    void openDebugTerminal(cluster, namespace, pod, container);
+    setPendingTarget(container);
   };
+
+  const confirmDialog = pendingTarget !== null && (
+    <ConfirmDialog
+      title="debug shell"
+      cluster={cluster}
+      detail={`${namespace}/${pod}${pendingTarget ? ` (target ${pendingTarget})` : ""} - kubectl debug adds an ephemeral busybox container to this pod. It stays on the pod spec until the pod is recreated; Kubernetes cannot remove it.`}
+      protected={isProtected}
+      confirmLabel="Attach"
+      onCancel={() => setPendingTarget(null)}
+      onConfirm={() => {
+        const target = pendingTarget;
+        setPendingTarget(null);
+        void openDebugTerminal(cluster, namespace, pod, target);
+      }}
+    />
+  );
 
   const tip = "Attach an ephemeral busybox shell (kubectl debug) - works on distroless images where open shell cannot. The ephemeral container stays listed on the pod until it is recreated.";
 
   if (containers.length <= 1) {
     return (
-      <button onClick={() => open(containers[0]?.name ?? "")} style={btn} title={tip}>
-        debug shell
-      </button>
+      <>
+        <button onClick={() => open(containers[0]?.name ?? "")} style={btn} title={tip}>
+          debug shell
+        </button>
+        {confirmDialog}
+      </>
     );
   }
   return (
     <div ref={pickerRef} style={{ position: "relative" }}>
+      {confirmDialog}
       <button onClick={() => setPickerOpen((v) => !v)} style={btn} title={tip}>
         debug shell <IconChevronDown size={11} stroke={1.7} style={{ verticalAlign: "-1px" }} />
       </button>
