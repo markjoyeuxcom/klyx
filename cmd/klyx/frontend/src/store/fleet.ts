@@ -346,6 +346,7 @@ export type WorkloadsSlice = {
   live: boolean;
   truncated?: boolean; // a list hit the server cap: rows are incomplete, scope by namespace
   error?: string | null; // the last read FAILED; items are the last good read (or empty)
+  rowsScope?: string | null; // "<cluster>|<namespace>" the current items were READ for
 };
 
 function workloadKindFilterFor(kinds: readonly WorkloadKind[]): Record<WorkloadKind, boolean> {
@@ -387,6 +388,7 @@ export type PodsSlice = {
   live: boolean;
   truncated?: boolean; // the pod list hit the server cap: rows are incomplete, scope by namespace
   error?: string | null; // the last read FAILED; items are the last good read (or empty)
+  rowsScope?: string | null; // "<cluster>|<namespace>" the current items were READ for
   // Palette "jump to namespace": consumed by PodsView, which re-opens its live
   // subscription for the namespace. A raced one-shot list would be discarded
   // by the live sub's stale guard - the subscription itself must move.
@@ -406,6 +408,7 @@ export type EventsSlice = {
   live: boolean;
   truncated?: boolean; // the 500-event cap hit: newest warnings may be missing
   error?: string | null; // the last read FAILED; items are the last good read (or empty)
+  rowsScope?: string | null; // "<cluster>|<namespace>" the current items were READ for
 };
 
 export type ResourceRef = { group: string; version: string; plural: string; kind: string; scope: string };
@@ -601,6 +604,7 @@ export type NodesSlice = {
   items: NodeSummaryDTO[];
   loading: boolean;
   error?: string | null; // the last read FAILED; items are the last good read (or empty)
+  rowsCluster?: string | null; // the cluster the current items were READ for
   selected: NodeRef | null;
   detail: NodeDetailDTO | null;
   detailLoading: boolean;
@@ -1098,13 +1102,16 @@ export const useFleet = create<FleetState>((set) => ({
     let namespaces = s.workloads.namespaces;
     if (namespace === "") namespaces = result.namespaces ?? [];
     if (namespaces.length === 0 && namespace !== "") namespaces = [namespace];
+    const scope = `${cluster}|${namespace}`;
     if (result.error) {
-      // A failed read never wipes the last good rows for the same scope - it
-      // flags them (the view shows the error banner over them).
-      const same = s.workloads.cluster === cluster && s.workloads.namespace === namespace;
-      return { workloads: { ...s.workloads, cluster, namespace, items: same ? s.workloads.items : [], error: result.error, loading: false } };
+      // A failed read keeps the last good rows ONLY if they were read for this
+      // same scope - the loading setters retag cluster/namespace before the
+      // read, so the scope the rows came from is tracked separately (Codex
+      // batch-2 review R2). Rows from another namespace/cluster are dropped.
+      const same = s.workloads.rowsScope === scope;
+      return { workloads: { ...s.workloads, cluster, namespace, items: same ? s.workloads.items : [], rowsScope: same ? scope : null, error: result.error, loading: false } };
     }
-    return { workloads: { ...s.workloads, cluster, namespace, items: result.workloads ?? [], namespaces, fluxPresent: result.fluxPresent, truncated: result.truncated ?? false, error: null, loading: false } };
+    return { workloads: { ...s.workloads, cluster, namespace, items: result.workloads ?? [], namespaces, fluxPresent: result.fluxPresent, truncated: result.truncated ?? false, rowsScope: scope, error: null, loading: false } };
   }),
   toggleWorkloadKind: (k) => set((s) => ({ workloads: { ...s.workloads, kindFilter: { ...s.workloads.kindFilter, [k]: !s.workloads.kindFilter[k] } } })),
   setWorkloadKindFilter: (kinds) => set((s) => ({ workloads: { ...s.workloads, kindFilter: workloadKindFilterFor(kinds) } })),
@@ -1142,11 +1149,12 @@ export const useFleet = create<FleetState>((set) => ({
     let namespaces = s.pods.namespaces;
     if (namespace === "") namespaces = result.namespaces ?? [];
     if (namespaces.length === 0 && namespace !== "") namespaces = [namespace];
+    const scope = `${cluster}|${namespace}`;
     if (result.error) {
-      const same = s.pods.cluster === cluster && s.pods.namespace === namespace;
-      return { pods: { ...s.pods, cluster, namespace, items: same ? s.pods.items : [], error: result.error, loading: false } };
+      const same = s.pods.rowsScope === scope;
+      return { pods: { ...s.pods, cluster, namespace, items: same ? s.pods.items : [], rowsScope: same ? scope : null, error: result.error, loading: false } };
     }
-    return { pods: { ...s.pods, cluster, namespace, items: result.pods ?? [], namespaces, truncated: result.truncated ?? false, error: null, loading: false } };
+    return { pods: { ...s.pods, cluster, namespace, items: result.pods ?? [], namespaces, truncated: result.truncated ?? false, rowsScope: scope, error: null, loading: false } };
   }),
   togglePodsNeedsAttention: () => set((s) => ({ pods: { ...s.pods, needsAttention: !s.pods.needsAttention } })),
   setPodsNeedsAttention: (v) => set((s) => ({ pods: { ...s.pods, needsAttention: v } })),
@@ -1171,11 +1179,12 @@ export const useFleet = create<FleetState>((set) => ({
     let namespaces = s.events.namespaces;
     if (namespace === "") namespaces = result.namespaces ?? [];
     if (namespaces.length === 0 && namespace !== "") namespaces = [namespace];
+    const scope = `${cluster}|${namespace}`;
     if (result.error) {
-      const same = s.events.cluster === cluster && s.events.namespace === namespace;
-      return { events: { ...s.events, cluster, namespace, items: same ? s.events.items : [], error: result.error, loading: false } };
+      const same = s.events.rowsScope === scope;
+      return { events: { ...s.events, cluster, namespace, items: same ? s.events.items : [], rowsScope: same ? scope : null, error: result.error, loading: false } };
     }
-    return { events: { ...s.events, cluster, namespace, items: result.events ?? [], namespaces, loading: false, truncated: result.truncated ?? false, error: null } };
+    return { events: { ...s.events, cluster, namespace, items: result.events ?? [], namespaces, loading: false, truncated: result.truncated ?? false, rowsScope: scope, error: null } };
   }),
   toggleWarningsOnly: () => set((s) => ({ events: { ...s.events, warningsOnly: !s.events.warningsOnly } })),
   setWarningsOnly: (v) => set((s) => ({ events: { ...s.events, warningsOnly: v } })),
@@ -1189,8 +1198,10 @@ export const useFleet = create<FleetState>((set) => ({
   nodes: { cluster: null, items: [], loading: false, selected: null, detail: null, detailLoading: false },
   setNodesLoading: (cluster) => set((s) => ({ nodes: { ...s.nodes, cluster, loading: true } })),
   setNodes: (cluster, result) => set((s) => result.error
-    ? { nodes: { ...s.nodes, cluster, items: s.nodes.cluster === cluster ? s.nodes.items : [], error: result.error, loading: false } }
-    : { nodes: { ...s.nodes, cluster, items: result.nodes ?? [], error: null, loading: false } }),
+    // Keep rows only if they were READ for this cluster (R2): setNodesLoading
+    // retags the slice's cluster before the read.
+    ? { nodes: { ...s.nodes, cluster, items: s.nodes.rowsCluster === cluster ? s.nodes.items : [], rowsCluster: s.nodes.rowsCluster === cluster ? cluster : null, error: result.error, loading: false } }
+    : { nodes: { ...s.nodes, cluster, items: result.nodes ?? [], rowsCluster: cluster, error: null, loading: false } }),
   selectNode: (ref) => set((s) => ({ nodes: { ...s.nodes, selected: ref, detail: null, detailLoading: ref !== null } })),
   setNodeDetail: (ref, detail) => set((s) => {
     const sel = s.nodes.selected;

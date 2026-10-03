@@ -148,6 +148,15 @@ function Section({ cluster, label, category, kinds, grouped }: { cluster: string
   }, 0);
   const sectionCounted = kinds.every((k) => counts[crdCountKey(cluster, k.group, k.version, k.plural)]);
   const sectionCapped = kinds.some((k) => counts[crdCountKey(cluster, k.group, k.version, k.plural)]?.capped);
+  // A section with any unreadable count has no definitive total: show what WAS
+  // read as a lower bound with a "?" marker, never a confident (possibly 0)
+  // number (Codex batch-2 review R6).
+  const sectionUnreadable = kinds.filter((k) => counts[crdCountKey(cluster, k.group, k.version, k.plural)]?.error).length;
+  const sectionTotal = !sectionCounted
+    ? "…"
+    : sectionUnreadable > 0
+      ? `${sectionInstances}+? instances`
+      : `${sectionInstances}${sectionCapped ? "+" : ""} instances`;
 
   return (
     <div>
@@ -159,7 +168,12 @@ function Section({ cluster, label, category, kinds, grouped }: { cluster: string
         <div style={{ fontFamily: "var(--font-mono)", fontSize: 12, fontWeight: 500, ...ellipsis }}>{label}</div>
         {category ? <span style={{ background: "var(--color-background-primary)", color: "var(--color-text-secondary)", fontSize: 9, padding: "1px 6px", borderRadius: 3, letterSpacing: 0.3, justifySelf: "start" }}>{category}</span> : <span />}
         <span style={{ fontSize: 11, color: "var(--color-text-secondary)" }}>{kinds.length} kinds</span>
-        <span style={{ fontSize: 11, color: "var(--color-text-secondary)" }}>{sectionCounted ? `${sectionInstances}${sectionCapped ? "+" : ""} instances` : "…"}</span>
+        <span
+          style={{ fontSize: 11, color: sectionUnreadable > 0 ? "var(--color-text-warning)" : "var(--color-text-secondary)" }}
+          title={sectionUnreadable > 0 ? `${sectionUnreadable} kind${sectionUnreadable === 1 ? "" : "s"} could not be counted - the total is a lower bound` : undefined}
+        >
+          {sectionTotal}
+        </span>
       </div>
       {open && kinds.map((k) => {
         const c = counts[crdCountKey(cluster, k.group, k.version, k.plural)];

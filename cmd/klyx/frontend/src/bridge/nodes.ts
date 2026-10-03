@@ -62,9 +62,11 @@ export async function openNodeDetail(cluster: string, name: string): Promise<voi
     if (cur.cluster !== cluster || !sel || sel.name !== name) return;
     useFleet.getState().setNodeDetail(ref, d);
   } catch {
-    // On failure, clear detailLoading so the panel doesn't spin forever.
-    const sel = useFleet.getState().nodes.selected;
-    if (sel && sel.name === name) {
+    // On failure, clear detailLoading so the panel doesn't spin forever - only
+    // for THIS cluster's selection.
+    const cur = useFleet.getState().nodes;
+    const sel = cur.selected;
+    if (cur.cluster === cluster && sel && sel.name === name) {
       useFleet.setState((s) => ({ nodes: { ...s.nodes, detailLoading: false } }));
     }
   }

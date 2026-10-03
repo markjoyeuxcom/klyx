@@ -11,9 +11,11 @@ export async function listCRDs(cluster: string): Promise<void> {
     if (useFleet.getState().crd.cluster !== cluster) return; // stale: the browser moved on
     useFleet.getState().setCRDs(cluster, r?.groups ?? [], r?.error);
   } catch (e) {
-    // Clear the loading flag so the view doesn't get stuck on "Loading…".
+    // Clear the loading flag AND record why: a rejected read must not render as
+    // "no custom resources on this cluster" (Codex batch-2 review R7).
     if (useFleet.getState().crd.cluster === cluster) {
-      useFleet.setState((s) => ({ crd: { ...s.crd, loading: false } }));
+      const error = e instanceof Error ? e.message : String(e);
+      useFleet.setState((s) => ({ crd: { ...s.crd, loading: false, error } }));
     }
     throw e; // callers .catch and log
   }
@@ -55,6 +57,9 @@ export async function countKind(cluster: string, group: string, version: string,
   try {
     const c = (await CRDService.CountKind(cluster, group, version, plural)) as CRDCountDTO;
     useFleet.getState().setCRDCount(key, c);
+  } catch (e) {
+    // A rejected count is unreadable ("?"), not "still counting" forever.
+    useFleet.getState().setCRDCount(key, { count: 0, capped: false, error: e instanceof Error ? e.message : String(e) });
   } finally {
     inFlight.delete(key);
     releaseCountSlot();

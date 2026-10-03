@@ -45,8 +45,9 @@ export async function openHelmRelease(cluster: string, namespace: string, name: 
       valuesResult.values ?? "",
     );
   } catch {
-    const sel = useFleet.getState().helm.selected;
-    if (sel && sel.namespace === namespace && sel.name === name) {
+    const cur = useFleet.getState().helm;
+    const sel = cur.selected;
+    if (cur.cluster === cluster && sel && sel.namespace === namespace && sel.name === name) {
       useFleet.setState((s) => ({ helm: { ...s.helm, detailLoading: false } }));
     }
   }

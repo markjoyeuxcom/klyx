@@ -105,9 +105,12 @@ export async function openPodDetail(cluster: string, namespace: string, name: st
     if (cur.cluster !== cluster || !sel || sel.namespace !== namespace || sel.name !== name) return;
     useFleet.getState().setPodDetail(ref, d);
   } catch {
-    // On failure, clear detailLoading so the panel doesn't spin forever.
-    const sel = useFleet.getState().pods.selected;
-    if (sel && sel.namespace === namespace && sel.name === name) {
+    // On failure, clear detailLoading so the panel doesn't spin forever - but
+    // only for THIS cluster's selection (another cluster's late rejection must
+    // not touch the new cluster's panel).
+    const cur = useFleet.getState().pods;
+    const sel = cur.selected;
+    if (cur.cluster === cluster && sel && sel.namespace === namespace && sel.name === name) {
       useFleet.setState((s) => ({ pods: { ...s.pods, detailLoading: false } }));
     }
   }

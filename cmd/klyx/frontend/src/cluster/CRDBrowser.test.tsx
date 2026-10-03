@@ -98,4 +98,13 @@ describe("CRDBrowser - CRD groups", () => {
     const { queryByText } = render(<CRDBrowser cluster="x" />);
     expect(queryByText("Built-in")).toBeNull();
   });
+
+  // Codex batch-2 review R6: a section whose only count failed has no
+  // definitive total - never "0 instances".
+  it("does not report a definitive total when a kind count failed", () => {
+    useFleet.setState({ crd: { ...useFleet.getState().crd, expanded: [], counts: { [crdCountKey("x", "cert-manager.io", "v1", "certificates")]: { count: 0, capped: false, error: "forbidden" } } } });
+    const { queryByText, getByText } = render(<CRDBrowser cluster="x" />);
+    expect(queryByText("0 instances")).toBeNull();
+    expect(getByText(/\+\? instances/)).toBeTruthy();
+  });
 });
