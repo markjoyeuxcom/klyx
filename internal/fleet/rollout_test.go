@@ -3,6 +3,7 @@ package fleet
 import (
 	"context"
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -82,43 +83,113 @@ func TestRolloutHistory_DeploymentNewestFirstWithCurrent(t *testing.T) {
 	}
 }
 
-func TestRolloutUndo_DeploymentPatchesOldTemplateWithoutHashLabel(t *testing.T) {
+func TestRolloutUndo_DeploymentRestoresOldTemplateWithoutHashLabel(t *testing.T) {
+	dep := rolloutDeployment(false, "3")
+	dep.Spec.Template = rolloutRS("cart-3", "3", "shop/cart:v3", "", time.Unix(0, 0)).Spec.Template
 	typed := k8sfake.NewSimpleClientset(
-		rolloutDeployment(false, "3"),
+		dep,
 		rolloutRS("cart-2", "2", "shop/cart:v2", "", time.Unix(0, 0)),
 		rolloutRS("cart-3", "3", "shop/cart:v3", "", time.Unix(0, 0)),
 	)
-	var patched []byte
+	var patchType types.PatchType
 	typed.PrependReactor("patch", "deployments", func(action k8stesting.Action) (bool, runtime.Object, error) {
-		patched = action.(k8stesting.PatchAction).GetPatch()
-		return true, rolloutDeployment(false, "4"), nil
+		patchType = action.(k8stesting.PatchAction).GetPatchType()
+		return false, nil, nil // fall through: the tracker applies the real patch
 	})
 	c := &ClusterConn{typed: typed, clk: clock.NewFake(time.Unix(0, 0))}
 
 	if err := c.RolloutUndo(context.Background(), "Deployment", "shop", "cart", 2); err != nil {
 		t.Fatal(err)
 	}
-	var p struct {
-		Spec struct {
-			Template struct {
-				Metadata struct {
-					Labels map[string]string `json:"labels"`
-				} `json:"metadata"`
-				Spec corev1.PodSpec `json:"spec"`
-			} `json:"template"`
-		} `json:"spec"`
+	if patchType != types.JSONPatchType {
+		t.Fatalf("undo must replace the template with a JSON patch, got %q", patchType)
 	}
-	if err := json.Unmarshal(patched, &p); err != nil {
+	got, err := typed.AppsV1().Deployments("shop").Get(context.Background(), "cart", metav1.GetOptions{})
+	if err != nil {
 		t.Fatal(err)
 	}
-	if p.Spec.Template.Spec.Containers[0].Image != "shop/cart:v2" {
-		t.Fatalf("patch must carry the old template: %s", patched)
+	if img := got.Spec.Template.Spec.Containers[0].Image; img != "shop/cart:v2" {
+		t.Fatalf("want the old template's image, got %q", img)
 	}
-	if _, has := p.Spec.Template.Metadata.Labels[appsv1.DefaultDeploymentUniqueLabelKey]; has {
-		t.Fatalf("pod-template-hash must be stripped: %s", patched)
+	if _, has := got.Spec.Template.Labels[appsv1.DefaultDeploymentUniqueLabelKey]; has {
+		t.Fatalf("pod-template-hash must be stripped: %v", got.Spec.Template.Labels)
 	}
-	if p.Spec.Template.Metadata.Labels["app"] != "cart" {
-		t.Fatalf("real labels must survive: %s", patched)
+	if got.Spec.Template.Labels["app"] != "cart" {
+		t.Fatalf("real labels must survive: %v", got.Spec.Template.Labels)
+	}
+}
+
+// Review 2026-10-03 #4 (Codex's repro): a strategic merge kept containers, env
+// and labels added after the target revision. The undo must yield exactly the
+// historical template.
+func TestRolloutUndo_DeploymentDropsFieldsAddedAfterTarget(t *testing.T) {
+	dep := rolloutDeployment(false, "2")
+	dep.Spec.Template = corev1.PodTemplateSpec{
+		ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": "cart", "new-label": "retained"}},
+		Spec: corev1.PodSpec{Containers: []corev1.Container{
+			{Name: "app", Image: "v2", Env: []corev1.EnvVar{{Name: "NEW_CONFIG", Value: "new"}}},
+			{Name: "new-sidecar", Image: "sidecar:v2"},
+		}},
+	}
+	old := rolloutRS("cart-1", "1", "v1", "", time.Now())
+	typed := k8sfake.NewSimpleClientset(dep, old)
+	c := &ClusterConn{typed: typed}
+
+	if err := c.undoDeployment(context.Background(), "shop", "cart", 1); err != nil {
+		t.Fatal(err)
+	}
+	got, err := typed.AppsV1().Deployments("shop").Get(context.Background(), "cart", metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := old.Spec.Template.DeepCopy()
+	delete(want.Labels, appsv1.DefaultDeploymentUniqueLabelKey)
+	if !reflect.DeepEqual(got.Spec.Template, *want) {
+		t.Fatalf("undo must restore exactly the historical template\n got %+v\nwant %+v", got.Spec.Template, *want)
+	}
+}
+
+func TestDeploymentUndoPatch_ChangeCauseAndIdentityGuard(t *testing.T) {
+	ops := func(dep *appsv1.Deployment, rs *appsv1.ReplicaSet) []map[string]interface{} {
+		t.Helper()
+		body, err := deploymentUndoPatch(dep, rs)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out []map[string]interface{}
+		if err := json.Unmarshal(body, &out); err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	const causePath = "/metadata/annotations/kubernetes.io~1change-cause"
+
+	// Identity guard first: a recreated Deployment (new UID) must fail the test op.
+	got := ops(rolloutDeployment(false, "3"), rolloutRS("cart-2", "2", "v2", "", time.Unix(0, 0)))
+	if got[0]["op"] != "test" || got[0]["path"] != "/metadata/uid" || got[0]["value"] != string(depUID) {
+		t.Fatalf("first op must test metadata.uid, got %v", got[0])
+	}
+
+	// Target carries a change-cause: it becomes the Deployment's.
+	got = ops(rolloutDeployment(false, "3"), rolloutRS("cart-2", "2", "v2", "pin v2", time.Unix(0, 0)))
+	last := got[len(got)-1]
+	if last["op"] != "add" || last["path"] != causePath || last["value"] != "pin v2" {
+		t.Fatalf("want change-cause carried from the target revision, got %v", last)
+	}
+
+	// Target has none but the Deployment does: drop it rather than misattribute.
+	dep := rolloutDeployment(false, "3")
+	dep.Annotations[changeCauseAnn] = "deploy v3"
+	got = ops(dep, rolloutRS("cart-2", "2", "v2", "", time.Unix(0, 0)))
+	last = got[len(got)-1]
+	if last["op"] != "remove" || last["path"] != causePath {
+		t.Fatalf("want the newer change-cause removed, got %v", last)
+	}
+
+	// Neither has one: template replace only.
+	got = ops(rolloutDeployment(false, "3"), rolloutRS("cart-2", "2", "v2", "", time.Unix(0, 0)))
+	if len(got) != 2 {
+		t.Fatalf("want test+replace only, got %v", got)
 	}
 }
 

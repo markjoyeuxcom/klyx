@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -133,7 +134,7 @@ func (c *ClusterConn) rolloutTargetIdentity(ctx context.Context, kind, namespace
 
 // RolloutUndo rolls a workload back to a prior revision with kubectl's own
 // semantics: for a Deployment the target ReplicaSet's pod template (minus the
-// pod-template-hash label) is patched into spec.template; for StatefulSets and
+// pod-template-hash label) replaces spec.template; for StatefulSets and
 // DaemonSets the target ControllerRevision's data IS the patch. Undoing to the
 // CURRENT revision is refused - a no-op undo presented as success would be a
 // lie. Destructive by design: the caller (appbridge) gates it behind the
@@ -191,19 +192,54 @@ func (c *ClusterConn) undoDeployment(ctx context.Context, namespace, name string
 		return fmt.Errorf("replicaset for revision %d of %s/%s not found", revision, namespace, name)
 	}
 
-	// kubectl rollout undo: the old RS template becomes the deployment
-	// template, minus the synthetic pod-template-hash label.
-	tmpl := target.Spec.Template.DeepCopy()
-	delete(tmpl.Labels, appsv1.DefaultDeploymentUniqueLabelKey)
-	patch := map[string]interface{}{"spec": map[string]interface{}{"template": tmpl}}
-	body, err := json.Marshal(patch)
+	body, err := deploymentUndoPatch(dep, target)
 	if err != nil {
 		return fmt.Errorf("rollout undo marshal: %w", err)
 	}
-	if _, err := c.typed.AppsV1().Deployments(namespace).Patch(ctx, name, types.StrategicMergePatchType, body, metav1.PatchOptions{}); err != nil {
+	if _, err := c.typed.AppsV1().Deployments(namespace).Patch(ctx, name, types.JSONPatchType, body, metav1.PatchOptions{}); err != nil {
 		return fmt.Errorf("rollout undo deployment %s/%s to revision %d: %w", namespace, name, revision, err)
 	}
 	return nil
+}
+
+// deploymentUndoPatch builds the JSON patch that rolls dep back to target's
+// pod template, the way kubectl rollout undo does: the old ReplicaSet template
+// (minus the synthetic pod-template-hash label) REPLACES spec.template. A
+// strategic merge would keep every container, env var and label added after
+// the target revision - a hybrid of old and new reported as a successful undo.
+//
+// The patch also:
+//   - tests metadata.uid first, so a Deployment deleted and recreated under the
+//     same name between our read and the patch is never rolled back blind;
+//   - carries the target revision's change-cause onto the Deployment (or drops
+//     the current one when the target has none), as kubectl does, so the
+//     rollout history does not attribute the rollback to the newer change.
+func deploymentUndoPatch(dep *appsv1.Deployment, target *appsv1.ReplicaSet) ([]byte, error) {
+	tmpl := target.Spec.Template.DeepCopy()
+	delete(tmpl.Labels, appsv1.DefaultDeploymentUniqueLabelKey)
+
+	ops := []map[string]interface{}{
+		{"op": "test", "path": "/metadata/uid", "value": string(dep.UID)},
+		{"op": "replace", "path": "/spec/template", "value": tmpl},
+	}
+	causePath := "/metadata/annotations/" + jsonPointerEscape(changeCauseAnn)
+	cause := target.Annotations[changeCauseAnn]
+	_, depHasCause := dep.Annotations[changeCauseAnn]
+	switch {
+	case cause != "" && dep.Annotations == nil:
+		ops = append(ops, map[string]interface{}{"op": "add", "path": "/metadata/annotations", "value": map[string]string{changeCauseAnn: cause}})
+	case cause != "":
+		ops = append(ops, map[string]interface{}{"op": "add", "path": causePath, "value": cause})
+	case depHasCause:
+		ops = append(ops, map[string]interface{}{"op": "remove", "path": causePath})
+	}
+	return json.Marshal(ops)
+}
+
+// jsonPointerEscape escapes one RFC 6901 reference token ("~" -> "~0",
+// "/" -> "~1"), e.g. for annotation keys like kubernetes.io/change-cause.
+func jsonPointerEscape(token string) string {
+	return strings.ReplaceAll(strings.ReplaceAll(token, "~", "~0"), "/", "~1")
 }
 
 func (c *ClusterConn) undoFromControllerRevision(ctx context.Context, kind, namespace, name string, revision int64) error {
