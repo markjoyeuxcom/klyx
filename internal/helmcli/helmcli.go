@@ -287,14 +287,6 @@ type RollbackOptions struct {
 	TimeoutSeconds int  // 0 -> 120s default; only meaningful with Wait
 }
 
-// helmDefaultTimeout is helm's own --timeout default, which governs hook Jobs
-// when Klyx passes no --timeout (rollback without --wait).
-const helmDefaultTimeout = 5 * time.Minute
-
-// rollbackMargin covers the parts helm does not bound with --timeout: the
-// resource update itself and the release-record writes.
-const rollbackMargin = 2 * time.Minute
-
 // waitTimeout is the --timeout passed with --wait.
 func (o RollbackOptions) waitTimeout() time.Duration {
 	if o.TimeoutSeconds <= 0 {
@@ -303,29 +295,13 @@ func (o RollbackOptions) waitTimeout() time.Duration {
 	return time.Duration(o.TimeoutSeconds) * time.Second
 }
 
-// RunBudget is how long a rollback with these options may legitimately run,
-// for the caller's context deadline. helm bounds each phase by its own
-// timeout - pre-rollback hooks, the --wait readiness wait, post-rollback hooks
-// - so the budget is one timeout per phase plus margin (a chart with several
-// hooks in one phase can still exceed it; the deadline is a backstop for a hung
-// helm, not the operative limit). Killing helm mid-operation leaves the release
-// in pending-rollback, blocking every later helm and helm-controller operation
-// until it is repaired by hand, so the context must never expire before helm's
-// own timeouts do.
-func (o RollbackOptions) RunBudget() time.Duration {
-	per := helmDefaultTimeout
-	phases := 0
-	if o.Wait {
-		per = o.waitTimeout() // --timeout also bounds the hooks
-		phases++
-	}
-	if !o.NoHooks {
-		phases += 2
-	}
-	return time.Duration(phases)*per + rollbackMargin
-}
-
-// Rollback rolls back a release to the specified revision.
+// Rollback rolls back a release to the specified revision. The caller's
+// context must not impose a deadline of its own: helm bounds every operation it
+// waits on with --timeout and records the outcome, but its total run time
+// depends on the chart's hooks (each hook's deletion and readiness get a
+// timeout of their own), so any shorter Klyx-side deadline can kill helm
+// mid-operation and strand the release in pending-rollback (review 2026-10-03,
+// C and batch-3 R1).
 func Rollback(ctx context.Context, r Runner, kubeContext, namespace, release string, revision int, opts RollbackOptions) error {
 	args := []string{
 		"rollback", release, fmt.Sprintf("%d", revision),

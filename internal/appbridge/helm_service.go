@@ -193,13 +193,12 @@ func (s *HelmService) HelmRollback(cluster, namespace, release string, revision 
 	}
 
 	ro := helmcli.RollbackOptions{Wait: opts.Wait, NoHooks: opts.NoHooks, TimeoutSeconds: opts.TimeoutSeconds}
-	// The deadline derives from the chosen helm timeout (cross-review C): a
-	// fixed 150s killed a 300s/600s --wait mid-rollback, stranding the release
-	// in pending-rollback.
-	ctx, cancel := context.WithTimeout(context.Background(), ro.RunBudget())
-	defer cancel()
-
-	if err := conn.HelmRollback(ctx, namespace, release, revision, ro); err != nil {
+	// No Klyx deadline: helm bounds each of its own waits with --timeout and
+	// records the outcome. A fixed 150s killed a 300s/600s --wait mid-rollback
+	// (cross-review C), and no derived budget is safe either - hook deletion
+	// and readiness each get their own timeout, per hook (batch-3 review R1).
+	// Killing helm mid-operation strands the release in pending-rollback.
+	if err := conn.HelmRollback(context.Background(), namespace, release, revision, ro); err != nil {
 		return ActionResultDTO{Error: err.Error()}
 	}
 	return ActionResultDTO{OK: true}

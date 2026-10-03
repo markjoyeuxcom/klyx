@@ -6,7 +6,6 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
-	"time"
 )
 
 // fakeRunner captures the args it received and returns a canned response.
@@ -469,25 +468,4 @@ func TestRollback_OptionFlags(t *testing.T) {
 	}
 	assertArg(t, r2.args[0], "--wait")
 	assertArg(t, r2.args[0], "300s")
-}
-
-// RunBudget never expires before helm's own per-phase timeouts (cross-review
-// C): pre-hooks, --wait and post-hooks each get one timeout, plus margin.
-func TestRollbackOptions_RunBudget(t *testing.T) {
-	cases := []struct {
-		name string
-		opts RollbackOptions
-		want time.Duration
-	}{
-		{"wait 600 no hooks", RollbackOptions{Wait: true, NoHooks: true, TimeoutSeconds: 600}, 600*time.Second + rollbackMargin},
-		{"wait 300 with hooks", RollbackOptions{Wait: true, TimeoutSeconds: 300}, 3*300*time.Second + rollbackMargin},
-		{"wait default", RollbackOptions{Wait: true, NoHooks: true}, 120*time.Second + rollbackMargin},
-		{"no wait, hooks at helm default", RollbackOptions{}, 2*helmDefaultTimeout + rollbackMargin},
-		{"no wait, no hooks", RollbackOptions{NoHooks: true}, rollbackMargin},
-	}
-	for _, tc := range cases {
-		if got := tc.opts.RunBudget(); got != tc.want {
-			t.Errorf("%s: RunBudget = %s, want %s", tc.name, got, tc.want)
-		}
-	}
 }
