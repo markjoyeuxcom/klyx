@@ -35,7 +35,10 @@ export type ClusterDTO = {
   region: string;
   provider: string;
   group: string;
+  // EFFECTIVE protection - exactly what the backend guard enforces (explicit
+  // flag or a prd/prod/production token). Typed arming keys off this field.
   protected?: boolean;
+  protectedInferred?: boolean;
   ageSeconds: number;
 };
 

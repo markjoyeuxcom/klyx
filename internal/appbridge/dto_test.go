@@ -91,3 +91,25 @@ func TestToDTOZeroLastSyncAgeIsZero(t *testing.T) {
 		t.Fatalf("want 0 age when never synced, got %d", d.AgeSeconds)
 	}
 }
+
+// Review 2026-10-03 #7: the fleet DTO carries EFFECTIVE protection, so the
+// ConfirmDialog arms for an inferred-prod cluster instead of offering a plain
+// confirm the backend then refuses.
+func TestToDTO_EffectiveProtection(t *testing.T) {
+	now := time.Unix(1000, 0)
+	cases := []struct {
+		cc                  config.ClusterConfig
+		protected, inferred bool
+	}{
+		{config.ClusterConfig{Name: "aks-prd-we"}, true, true},
+		{config.ClusterConfig{Name: "core", Protected: true}, true, false},
+		{config.ClusterConfig{Name: "lab", Context: "kind-prod"}, true, true},
+		{config.ClusterConfig{Name: "dev-we"}, false, false},
+	}
+	for _, tc := range cases {
+		d := ToDTO(fleet.Snapshot{Name: tc.cc.Name}, tc.cc, now)
+		if d.Protected != tc.protected || d.ProtectedInferred != tc.inferred {
+			t.Errorf("%s: (protected, inferred) = (%v, %v), want (%v, %v)", tc.cc.Name, d.Protected, d.ProtectedInferred, tc.protected, tc.inferred)
+		}
+	}
+}

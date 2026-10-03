@@ -256,3 +256,15 @@ func TestIsProtectedInfersProduction(t *testing.T) {
 		}
 	}
 }
+
+// The startup summary lists EFFECTIVE protection, marking token-inferred
+// clusters, so an operator can see why a cluster is locked.
+func TestSummaryListsInferredProtection(t *testing.T) {
+	c := &Config{Clusters: []ClusterConfig{
+		{Name: "core", Protected: true}, {Name: "aks-prd-we"}, {Name: "dev"},
+	}}
+	s := c.Summary()
+	if !strings.Contains(s, "aks-prd-we (inferred)") || !strings.Contains(s, "core") || strings.Contains(s, "dev") {
+		t.Fatalf("summary: %q", s)
+	}
+}

@@ -41,6 +41,23 @@ describe("SettingsView", () => {
     expect(getByText(/shadows a cluster field/)).toBeTruthy();
   });
 
+  // Review 2026-10-03 #7: Settings shows EFFECTIVE protection and says when it
+  // is inferred from a prd/prod/production token rather than set explicitly.
+  it("distinguishes explicit and inferred protection", async () => {
+    mockGetFleetConfig.mockResolvedValue({
+      ...baseCfg,
+      clusters: [
+        ...baseCfg.clusters,
+        { name: "aks-prd-we", context: "aks-prd-we", env: "", region: "", provider: "", account: "", group: "", protected: true, protectedInferred: true, hasMetrics: false },
+      ],
+    });
+    const { findAllByText } = render(<SettingsView />);
+    // Only aks-prd-we is inferred; prd-weu (explicit) still reads "yes".
+    const inferred = await findAllByText("inferred");
+    expect(inferred).toHaveLength(1);
+    expect(inferred[0].getAttribute("title")).toMatch(/prd\/prod\/production token/);
+  });
+
   it("marks contexts in/not-in fleet and only offers checkboxes for new ones", async () => {
     const { findAllByText, getAllByText, queryByLabelText, getByLabelText } = render(<SettingsView />);
     expect((await findAllByText("in fleet")).length).toBe(2);

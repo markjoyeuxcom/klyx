@@ -87,7 +87,12 @@ export function SettingsView() {
             <span style={{ ...ellipsis, color: "var(--color-text-tertiary)" }} title={c.context}>{c.context}</span>
             <span style={{ color: "var(--color-text-tertiary)" }}>{c.env || "—"}</span>
             <span style={{ color: "var(--color-text-tertiary)" }}>{c.group || "—"}</span>
-            <span style={{ color: c.protected ? "var(--color-text-warning)" : "var(--color-text-tertiary)" }}>{c.protected ? "yes" : "no"}</span>
+            <span
+              style={{ color: c.protected ? "var(--color-text-warning)" : "var(--color-text-tertiary)" }}
+              title={c.protectedInferred ? "inferred from a prd/prod/production token in its env, name or context - set protected: true to make it explicit" : undefined}
+            >
+              {c.protected ? (c.protectedInferred ? "inferred" : "yes") : "no"}
+            </span>
             <span style={{ color: "var(--color-text-tertiary)" }}>{c.hasMetrics ? "yes" : "—"}</span>
           </div>
         ))}

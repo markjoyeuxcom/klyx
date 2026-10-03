@@ -11,15 +11,19 @@ import (
 
 // FleetClusterDTO is one configured fleet entry as Settings shows it.
 type FleetClusterDTO struct {
-	Name       string `json:"name"`
-	Context    string `json:"context"`
-	Env        string `json:"env"`
-	Region     string `json:"region"`
-	Provider   string `json:"provider"`
-	Account    string `json:"account"`
-	Group      string `json:"group"`
-	Protected  bool   `json:"protected"`
-	HasMetrics bool   `json:"hasMetrics"`
+	Name     string `json:"name"`
+	Context  string `json:"context"`
+	Env      string `json:"env"`
+	Region   string `json:"region"`
+	Provider string `json:"provider"`
+	Account  string `json:"account"`
+	Group    string `json:"group"`
+	// Protected is the EFFECTIVE protection the backend guard enforces
+	// (explicit flag OR a prd/prod/production token); ProtectedInferred marks
+	// the token-inferred case so Settings can say why a cluster is locked.
+	Protected         bool `json:"protected"`
+	ProtectedInferred bool `json:"protectedInferred"`
+	HasMetrics        bool `json:"hasMetrics"`
 }
 
 // KubeContextDTO is one kubeconfig context with its fleet membership.
@@ -50,6 +54,12 @@ type ConfigService struct {
 	path string
 	cfg  *config.Config
 
+	// addMu serialises AddClusters end to end (fleet.yaml read-modify-write and
+	// the slow connects). It is deliberately NOT mu: protection checks and the
+	// 1s fleet push read the live fleet through mu, and must never wait behind
+	// a cluster connect.
+	addMu sync.Mutex
+
 	mu    sync.Mutex
 	added []config.ClusterConfig // hot-added this session, connect succeeded
 
@@ -78,13 +88,45 @@ func NewConfigService(path string, cfg *config.Config, connect func(config.Clust
 // it in main so hot-added clusters honor the typed-confirmation invariant. An
 // unknown name is treated as unprotected (the destructive verb will fail its
 // own connected-cluster check).
+//
+// The exact fleet NAME is matched first; a kubeconfig context is only a
+// fallback when no cluster carries that name. Matching name OR context in
+// config order let an earlier cluster whose context happens to equal a
+// protected cluster's name answer for it - fail-open on the prd guard while
+// the destructive verb (which resolves by name) hit the protected cluster.
 func (s *ConfigService) IsProtected(cluster string) bool {
-	for _, c := range s.fleetClusters() {
-		if c.Name == cluster || c.Context == cluster {
-			return c.IsProtected()
-		}
+	if c, ok := s.clusterConfig(cluster); ok {
+		return c.IsProtected()
 	}
 	return false
+}
+
+// clusterConfig resolves a cluster in the live fleet: exact fleet name first,
+// then kubeconfig context. Unexported on purpose - a ClusterConfig carries the
+// metrics bearer token and must never cross the JS binding surface (main wires
+// it in through LiveClusterConfig instead).
+func (s *ConfigService) clusterConfig(cluster string) (config.ClusterConfig, bool) {
+	fleet := s.fleetClusters()
+	for _, c := range fleet {
+		if c.Name == cluster {
+			return c, true
+		}
+	}
+	for _, c := range fleet {
+		if c.Context == cluster {
+			return c, true
+		}
+	}
+	return config.ClusterConfig{}, false
+}
+
+// LiveClusterConfig returns a lookup over the LIVE fleet (startup config plus
+// this session's hot-added clusters) for the FleetService, so a hot-added
+// cluster's DTO carries its env/group/protection instead of zero values. A
+// free function rather than a ConfigService method on purpose: exported
+// methods on a bound service land in the JS binding surface.
+func LiveClusterConfig(s *ConfigService) func(string) (config.ClusterConfig, bool) {
+	return s.clusterConfig
 }
 
 // fleetClusters returns the startup clusters plus this session's hot-added
@@ -115,15 +157,17 @@ func (s *ConfigService) GetFleetConfig() FleetConfigDTO {
 		inFleet[c.Context] = true
 		tags := c.EffectiveTags()
 		dto.Clusters = append(dto.Clusters, FleetClusterDTO{
-			Name:       c.Name,
-			Context:    c.Context,
-			Env:        firstNonEmpty(c.Environment, tags["env"]),
-			Region:     tags["region"],
-			Provider:   tags["provider"],
-			Account:    tags["account"],
-			Group:      c.Group,
-			Protected:  c.Protected,
-			HasMetrics: c.Metrics != nil,
+			Name:      c.Name,
+			Context:   c.Context,
+			Env:       firstNonEmpty(c.Environment, tags["env"]),
+			Region:    tags["region"],
+			Provider:  tags["provider"],
+			Account:   tags["account"],
+			Group:     c.Group,
+			Protected: c.IsProtected(),
+			// Inferred = locked by a prd/prod/production token, not the flag.
+			ProtectedInferred: c.IsProtected() && !c.Protected,
+			HasMetrics:        c.Metrics != nil,
 		})
 	}
 	sort.Slice(dto.Clusters, func(a, b int) bool { return dto.Clusters[a].Name < dto.Clusters[b].Name })
@@ -180,27 +224,46 @@ func (s *ConfigService) AddClusters(contexts []string) ActionResultDTO {
 	}
 	// Serialize the whole add: appendClusters is a read-modify-write of
 	// fleet.yaml, and two concurrent calls would each read the same original
-	// and one would silently lose the other's entries. Adds are rare,
-	// user-driven Settings actions - holding the lock across the file write
-	// and connects is fine.
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	// and one would silently lose the other's entries. addMu, not mu: the
+	// connects below can take tens of seconds, and protection checks / the
+	// fleet push must not wait behind them.
+	s.addMu.Lock()
+	defer s.addMu.Unlock()
 	if err := s.appendClusters(s.path, contexts); err != nil {
 		return ActionResultDTO{Error: err.Error()}
 	}
 	var failed []string
 	for _, name := range contexts {
 		cc := config.ClusterConfigForContext(name)
+		// Record the config BEFORE connecting: the moment the registry can
+		// hand out the new conn, its protection must already be known, or a
+		// destructive verb could race a not-yet-recorded prd cluster.
+		s.mu.Lock()
+		s.added = append(s.added, cc)
+		s.mu.Unlock()
 		if s.connect != nil {
 			if err := s.connect(cc); err != nil {
+				s.dropAdded(cc.Name)
 				failed = append(failed, fmt.Sprintf("%s: %v", cc.Name, err))
 				continue
 			}
 		}
-		s.added = append(s.added, cc)
 	}
 	if len(failed) > 0 {
 		return ActionResultDTO{Error: "added to fleet.yaml, but connecting failed - " + strings.Join(failed, "; ") + ". Restart Klyx to retry."}
 	}
 	return ActionResultDTO{OK: true}
+}
+
+// dropAdded removes a hot-added entry whose connect failed (it stays in
+// fleet.yaml; a restart retries it).
+func (s *ConfigService) dropAdded(name string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i, c := range s.added {
+		if c.Name == name {
+			s.added = append(s.added[:i], s.added[i+1:]...)
+			return
+		}
+	}
 }

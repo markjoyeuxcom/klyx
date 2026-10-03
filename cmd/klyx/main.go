@@ -68,7 +68,14 @@ func main() {
 	reg := fleet.NewRegistry(cfg, fleet.DefaultConnFactory(clock.Real{}))
 	reg.Start(ctx)
 
-	svc := appbridge.NewFleetService(reg, cfg, time.Now)
+	// configSvc is built before the fleet service: the fleet DTOs resolve each
+	// cluster's config (env, group, EFFECTIVE protection) from its live fleet,
+	// which includes clusters hot-added through Settings.
+	configSvc := appbridge.NewConfigService(configPath(), cfg, func(cc config.ClusterConfig) error {
+		return reg.Add(ctx, cc)
+	})
+
+	svc := appbridge.NewFleetService(reg, appbridge.LiveClusterConfig(configSvc), time.Now)
 
 	em := &emitterAdapter{}
 	winOpener := &windowOpener{}
@@ -266,10 +273,6 @@ func main() {
 	})
 
 	windowsSvc := appbridge.NewWindowsService(winOpener)
-
-	configSvc := appbridge.NewConfigService(configPath(), cfg, func(cc config.ClusterConfig) error {
-		return reg.Add(ctx, cc)
-	})
 
 	// Backend gate for destructive verbs on protected clusters: the frontend
 	// ConfirmDialog arms a one-shot grant (ConfigService.ArmProtected) and each

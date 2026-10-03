@@ -47,8 +47,15 @@ type ClusterDTO struct {
 	Region                 string `json:"region"`
 	Provider               string `json:"provider"`
 	Group                  string `json:"group"`
-	Protected              bool   `json:"protected"`
-	AgeSeconds             int64  `json:"ageSeconds"`
+	// Protected is the EFFECTIVE protection - exactly what the backend
+	// ProtectGuard enforces (explicit flag OR a prd/prod/production token in
+	// env/name/context). The UI decides on typed arming from this field; the
+	// raw flag alone left inferred-prod clusters with a plain confirm that the
+	// backend then refused ("not armed"). ProtectedInferred marks the
+	// token-inferred case for display.
+	Protected         bool  `json:"protected"`
+	ProtectedInferred bool  `json:"protectedInferred"`
+	AgeSeconds        int64 `json:"ageSeconds"`
 }
 
 // ToDTO projects a snapshot + its config into a ClusterDTO. now is injected so
@@ -96,7 +103,8 @@ func ToDTO(s fleet.Snapshot, cc config.ClusterConfig, now time.Time) ClusterDTO 
 		ReloaderPresent:        s.Capabilities.Reloader.Present,
 		ReloaderHealthy:        s.Capabilities.Reloader.Healthy,
 		Env:                    firstNonEmpty(cc.Environment, tags["env"]),
-		Protected:              cc.Protected,
+		Protected:              cc.IsProtected(),
+		ProtectedInferred:      cc.IsProtected() && !cc.Protected,
 		Region:                 tags["region"],
 		Provider:               tags["provider"],
 		Group:                  cc.Group,

@@ -134,12 +134,17 @@ func (c *Config) Warnings() []string {
 }
 
 // Summary is a one-line description of the loaded fleet for the startup log, so a
-// misplaced `protected` shows up as an absence the operator can notice.
+// misplaced `protected` shows up as an absence the operator can notice. It lists
+// EFFECTIVE protection (what the destructive-verb guard enforces), marking the
+// clusters protected only by a prd/prod/production token as "(inferred)".
 func (c *Config) Summary() string {
 	protected := make([]string, 0)
 	for _, cl := range c.Clusters {
-		if cl.Protected {
+		switch {
+		case cl.Protected:
 			protected = append(protected, cl.Name)
+		case cl.IsProtected():
+			protected = append(protected, cl.Name+" (inferred)")
 		}
 	}
 	sort.Strings(protected)

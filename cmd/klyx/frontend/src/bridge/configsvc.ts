@@ -11,7 +11,10 @@ export type FleetClusterConfigDTO = {
   provider: string;
   account: string;
   group: string;
+  // Effective protection (what the backend guard enforces); inferred marks a
+  // prd/prod/production token rather than an explicit `protected: true`.
   protected: boolean;
+  protectedInferred?: boolean;
   hasMetrics: boolean;
 };
 export type KubeContextDTO = { name: string; inFleet: boolean };

@@ -24,16 +24,30 @@ const FleetUpdatedEvent = "fleet:updated"
 // FleetService is bound to JS. GetFleet seeds the UI; Run pushes live updates.
 type FleetService struct {
 	reg    Snapshotter
-	byName map[string]config.ClusterConfig
+	lookup func(string) (config.ClusterConfig, bool)
 	now    func() time.Time
 }
 
-func NewFleetService(reg Snapshotter, cfg *config.Config, now func() time.Time) *FleetService {
-	byName := make(map[string]config.ClusterConfig, len(cfg.Clusters))
-	for _, c := range cfg.Clusters {
-		byName[c.Name] = c
+// NewFleetService builds the fleet DTO source. lookup resolves a cluster's
+// config from the LIVE fleet (main passes LiveClusterConfig), so clusters
+// hot-added through Settings carry their env/group/protection - a map built
+// once at startup gave them zero values, i.e. protected=false for a prd
+// context imported mid-session.
+func NewFleetService(reg Snapshotter, lookup func(string) (config.ClusterConfig, bool), now func() time.Time) *FleetService {
+	return &FleetService{reg: reg, lookup: lookup, now: now}
+}
+
+// StaticClusterConfig is a lookup over a fixed config (tests, tools that never
+// hot-add). Free function: not part of any bound service.
+func StaticClusterConfig(cfg *config.Config) func(string) (config.ClusterConfig, bool) {
+	return func(name string) (config.ClusterConfig, bool) {
+		for _, c := range cfg.Clusters {
+			if c.Name == name {
+				return c, true
+			}
+		}
+		return config.ClusterConfig{}, false
 	}
-	return &FleetService{reg: reg, byName: byName, now: now}
 }
 
 // GetFleet returns the current fleet as DTOs (bound, callable from JS).
@@ -42,7 +56,8 @@ func (s *FleetService) GetFleet() []ClusterDTO {
 	now := s.now()
 	out := make([]ClusterDTO, 0, len(snaps))
 	for _, snap := range snaps {
-		out = append(out, ToDTO(snap, s.byName[snap.Name], now))
+		cc, _ := s.lookup(snap.Name)
+		out = append(out, ToDTO(snap, cc, now))
 	}
 	return out
 }

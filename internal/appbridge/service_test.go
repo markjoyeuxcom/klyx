@@ -27,7 +27,7 @@ func TestGetFleetJoinsConfigByName(t *testing.T) {
 		{Name: "b", Tags: map[string]string{"env": "dev"}},
 	}}
 
-	svc := NewFleetService(reg, cfg, func() time.Time { return now })
+	svc := NewFleetService(reg, StaticClusterConfig(cfg), func() time.Time { return now })
 	dtos := svc.GetFleet()
 
 	if len(dtos) != 2 {
@@ -49,7 +49,7 @@ func TestGetFleetUnknownConfigStillProjects(t *testing.T) {
 	now := time.Now()
 	reg := &fakeSnapshotter{snaps: []fleet.Snapshot{{Name: "ghost", State: fleet.Synced}}}
 	cfg := &config.Config{}
-	svc := NewFleetService(reg, cfg, func() time.Time { return now })
+	svc := NewFleetService(reg, StaticClusterConfig(cfg), func() time.Time { return now })
 	dtos := svc.GetFleet()
 	if len(dtos) != 1 || dtos[0].Name != "ghost" {
 		t.Fatalf("want ghost projected with empty tags, got %+v", dtos)
@@ -99,7 +99,7 @@ func (e *fakeEmitter) Emit(name string, data any) {
 func TestRunEmitsOnTick(t *testing.T) {
 	now := time.Now()
 	reg := &fakeSnapshotter{snaps: []fleet.Snapshot{{Name: "a", State: fleet.Synced}}}
-	svc := NewFleetService(reg, &config.Config{}, func() time.Time { return now })
+	svc := NewFleetService(reg, StaticClusterConfig(&config.Config{}), func() time.Time { return now })
 	em := &fakeEmitter{}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -118,4 +118,28 @@ func TestRunEmitsOnTick(t *testing.T) {
 	}
 	cancel()
 	t.Fatal("expected at least one emit within 1s")
+}
+
+// Review 2026-10-03 #7: a cluster hot-added through Settings must carry its
+// config (env, group, protection) in the fleet push - the startup-only map gave
+// it zero values, i.e. protected=false for a prd context imported mid-session.
+func TestFleetService_HotAddedClusterCarriesItsConfig(t *testing.T) {
+	cs := NewConfigService("/tmp/fleet.yaml", &config.Config{}, nil)
+	cs.appendClusters = func(string, []string) error { return nil }
+	cs.connect = func(config.ClusterConfig) error { return nil }
+	reg := &fakeSnapshotter{snaps: []fleet.Snapshot{{Name: "aks-prd-we", State: fleet.Synced}}}
+	svc := NewFleetService(reg, LiveClusterConfig(cs), time.Now)
+
+	if got := svc.GetFleet()[0]; got.Protected {
+		t.Fatal("precondition: unknown cluster carries no config yet")
+	}
+	if r := cs.AddClusters([]string{"aks-prd-we"}); !r.OK {
+		t.Fatalf("add: %+v", r)
+	}
+	got := svc.GetFleet()[0]
+	// Protected, and explicitly so: a hot-add persists the inferred protection
+	// as `protected: true` in fleet.yaml (ClusterConfigForContext + append).
+	if !got.Protected || got.ProtectedInferred {
+		t.Fatalf("hot-added prd cluster must surface as protected (persisted explicitly), got protected=%v inferred=%v", got.Protected, got.ProtectedInferred)
+	}
 }

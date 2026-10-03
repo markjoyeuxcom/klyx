@@ -229,3 +229,102 @@ func TestProtectGuard_LiveSourceGatesHotAddedProdCluster(t *testing.T) {
 		t.Fatalf("armed delete on hot-added prod cluster must pass: %+v", r)
 	}
 }
+
+// Review 2026-10-03 #7: Settings shows EFFECTIVE protection - what the guard
+// enforces - and marks the token-inferred case.
+func TestGetFleetConfig_EffectiveAndInferredProtection(t *testing.T) {
+	cfg := &config.Config{Clusters: []config.ClusterConfig{
+		{Name: "aks-prd-we", Context: "aks-prd-we"},                                 // inferred from the name
+		{Name: "core", Context: "core", Protected: true},                            // explicit
+		{Name: "dev-we", Context: "dev-we", Environment: "dev"},                     // not protected
+		{Name: "pay", Context: "pay", Tags: map[string]string{"env": "production"}}, // inferred from env tag
+	}}
+	s := NewConfigService("/tmp/fleet.yaml", cfg, nil)
+	s.kubeContexts = func(string) ([]string, error) { return nil, nil }
+	got := map[string][2]bool{}
+	for _, c := range s.GetFleetConfig().Clusters {
+		got[c.Name] = [2]bool{c.Protected, c.ProtectedInferred}
+	}
+	want := map[string][2]bool{
+		"aks-prd-we": {true, true},
+		"core":       {true, false},
+		"dev-we":     {false, false},
+		"pay":        {true, true},
+	}
+	for name, w := range want {
+		if got[name] != w {
+			t.Errorf("%s: (protected, inferred) = %v, want %v", name, got[name], w)
+		}
+	}
+}
+
+// Codex's alias collision: an EARLIER cluster whose context equals a protected
+// cluster's name answered the protection lookup for it (fail-open), while the
+// destructive verb resolved the protected cluster by name.
+func TestConfigService_IsProtected_NameBeatsContextAlias(t *testing.T) {
+	cfg := &config.Config{Clusters: []config.ClusterConfig{
+		{Name: "dev", Context: "payments"}, // listed first
+		{Name: "payments", Context: "aks-prd", Protected: true},
+	}}
+	s := NewConfigService("/tmp/fleet.yaml", cfg, nil)
+	if !s.IsProtected("payments") {
+		t.Fatal("the cluster NAMED payments is protected; a context alias on another cluster must not answer for it")
+	}
+	if s.IsProtected("dev") {
+		t.Fatal("dev is not protected")
+	}
+	// Context remains a fallback when no cluster carries the name.
+	if !s.IsProtected("aks-prd") {
+		t.Fatal("context fallback must still resolve when no name matches")
+	}
+}
+
+// A hot-add records the cluster's config BEFORE connecting (protection known
+// before the registry can hand out the conn) and drops it if the connect fails.
+// Protection checks must not wait behind a slow connect.
+func TestAddClusters_ConfigRecordedBeforeConnectAndChecksNeverBlock(t *testing.T) {
+	s := NewConfigService("/tmp/fleet.yaml", &config.Config{}, nil)
+	s.appendClusters = func(string, []string) error { return nil }
+
+	release := make(chan struct{})
+	sawProtected := make(chan bool, 1)
+	s.connect = func(cc config.ClusterConfig) error {
+		sawProtected <- s.IsProtected(cc.Name) // must not deadlock on mu
+		<-release
+		return nil
+	}
+	done := make(chan ActionResultDTO, 1)
+	go func() { done <- s.AddClusters([]string{"aks-prd-we"}) }()
+
+	select {
+	case p := <-sawProtected:
+		if !p {
+			t.Fatal("the prd cluster's protection must be known before its conn exists")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("IsProtected blocked behind the in-flight connect")
+	}
+	// While the connect is still in flight, other checks stay responsive.
+	checked := make(chan bool, 1)
+	go func() { checked <- s.IsProtected("aks-prd-we") }()
+	select {
+	case <-checked:
+	case <-time.After(2 * time.Second):
+		t.Fatal("protection check stalled behind a slow connect")
+	}
+	close(release)
+	if r := <-done; !r.OK {
+		t.Fatalf("add failed: %+v", r)
+	}
+
+	// A failed connect leaves no live entry behind.
+	s2 := NewConfigService("/tmp/fleet.yaml", &config.Config{}, nil)
+	s2.appendClusters = func(string, []string) error { return nil }
+	s2.connect = func(config.ClusterConfig) error { return errors.New("auth expired") }
+	if r := s2.AddClusters([]string{"aks-prd-we"}); r.OK {
+		t.Fatal("want the connect failure reported")
+	}
+	if _, ok := s2.clusterConfig("aks-prd-we"); ok {
+		t.Fatal("a failed connect must not leave the cluster in the live fleet")
+	}
+}
