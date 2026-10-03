@@ -112,9 +112,15 @@ func (r *liveRegistry) open(
 	// re-lists on its own (exponential backoff in ticker intervals, capped).
 	failures := 0
 	var retryAt time.Time
-	noteCompute := func(ok bool) {
+	// watchGen counts watch up-edges. A compute records it when it STARTS; a
+	// success only certifies "live" if no reconnect happened meanwhile - data
+	// fetched before the latest (re)establishment is still emitted, but cannot
+	// vouch for the new watch (Codex batch-2 review R5).
+	watchGen := 0
+	noteCompute := func(ok bool, startedGen int) {
 		if ok {
-			computeOK, failures = true, 0
+			failures = 0
+			computeOK = startedGen == watchGen
 			return
 		}
 		computeOK = false
@@ -160,6 +166,7 @@ func (r *liveRegistry) open(
 			// watch was up has succeeded (review 2026-10-03 #6).
 			dirty = true
 			computeOK = false
+			watchGen++
 		}
 		watchUp = up
 		mu.Unlock()
@@ -203,6 +210,7 @@ func (r *liveRegistry) open(
 	// erase it and leave the list stale until the next watch event.
 	mu.Lock()
 	dirty = false
+	gen := watchGen
 	mu.Unlock()
 	if payload, ok := compute(); ok {
 		// Guard: if a replace arrived while compute ran, drop the stale emit.
@@ -211,13 +219,17 @@ func (r *liveRegistry) open(
 		default:
 			emit(payload)
 			mu.Lock()
-			noteCompute(true)
+			noteCompute(true, gen)
 			mu.Unlock()
 			report()
 		}
 	} else {
+		// A failed read still reaches the frontend: compute returns the DTO with
+		// its error, so the view leaves "loading" and shows WHY instead of
+		// waiting on a bare live:false (Codex batch-2 review R3).
+		emitFailure(sub, payload, emit)
 		mu.Lock()
-		noteCompute(false)
+		noteCompute(false, gen)
 		mu.Unlock()
 		report()
 	}
@@ -243,6 +255,7 @@ func (r *liveRegistry) open(
 				// compute failed and its backoff has elapsed (no event needed).
 				d := dirty || (failures > 0 && !time.Now().Before(retryAt))
 				dirty = false
+				gen := watchGen
 				mu.Unlock()
 				if !d {
 					continue
@@ -257,12 +270,13 @@ func (r *liveRegistry) open(
 					}
 					emit(payload)
 					mu.Lock()
-					noteCompute(true)
+					noteCompute(true, gen)
 					mu.Unlock()
 					report()
 				} else {
+					emitFailure(sub, payload, emit)
 					mu.Lock()
-					noteCompute(false)
+					noteCompute(false, gen)
 					mu.Unlock()
 					report()
 				}
@@ -272,6 +286,19 @@ func (r *liveRegistry) open(
 		emitLive(false)
 		sub.stopWatch()
 	})
+}
+
+// emitFailure forwards a failed compute's payload (the DTO carrying its error)
+// unless the sub was replaced meanwhile. A nil payload emits nothing.
+func emitFailure(sub *liveSub, payload any, emit func(any)) {
+	if payload == nil {
+		return
+	}
+	select {
+	case <-sub.cancel:
+	default:
+		emit(payload)
+	}
 }
 
 // stopSub signals a sub's loop to exit and waits briefly for it to drain. The

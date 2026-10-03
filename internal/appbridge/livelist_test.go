@@ -328,15 +328,25 @@ func TestLiveList_ComputeFailureEmitsLiveFalseOnce(t *testing.T) {
 			t.Fatal("reported live(true) despite compute failure")
 		}
 	}
-	// No data event should have been emitted on a failing compute.
-	if em.countOf("livePods:c:ns") != 0 {
-		t.Fatalf("compute failure must not emit data; got %d", em.countOf("livePods:c:ns"))
+	// A failing compute emits its error DTO - no rows, but the REASON - so the
+	// view can leave "loading" and show why (Codex batch-2 review R3).
+	failEmits := em.countOf("livePods:c:ns")
+	if failEmits == 0 {
+		t.Fatal("a failed compute must reach the frontend with its error")
+	}
+	for _, ev := range em.snapshot() {
+		if ev.name != "livePods:c:ns" {
+			continue
+		}
+		if dto, ok := ev.data.(PodsResultDTO); !ok || dto.Error == "" || len(dto.Pods) != 0 {
+			t.Fatalf("a failure emit must carry the error and no rows, got %+v", ev.data)
+		}
 	}
 
 	// Now let compute succeed and fire dirty: it should emit data + live(true).
 	conn.setComputeFail(false)
 	conn.fireDirty()
-	if !liveWaitUntil(t, 2*time.Second, func() bool { return em.countOf("livePods:c:ns") >= 1 }) {
+	if !liveWaitUntil(t, 2*time.Second, func() bool { return em.countOf("livePods:c:ns") > failEmits }) {
 		t.Fatal("recovery: no data emit after compute succeeds")
 	}
 	if !liveWaitUntil(t, time.Second, func() bool {

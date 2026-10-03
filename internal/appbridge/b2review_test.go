@@ -1,0 +1,100 @@
+package appbridge
+
+import (
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/moomora/klyx/internal/crd"
+)
+
+// Codex's batch-2 review probes, adopted as regression tests.
+
+// R5: a compute that STARTED before a reconnect must not certify "live" for
+// the new watch, even if it finishes after it.
+func TestLiveList_ComputeSpanningReconnectDoesNotCertifyLive(t *testing.T) {
+	r := newLiveRegistry()
+	r.interval = time.Hour // no ticker recompute during the test
+	started, release, finished := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	edges := make(chan bool, 10)
+	var onLive func(bool)
+	go func() {
+		r.open("review",
+			func(_ func(), live func(bool)) (func(), error) { onLive = live; live(true); return func() {}, nil },
+			func() (any, bool) { close(started); <-release; return "pre-reconnect snapshot", true },
+			func(any) {}, func(v bool) { edges <- v })
+		close(finished)
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("compute did not start")
+	}
+	onLive(false)
+	onLive(true)
+	close(release)
+	select {
+	case <-finished:
+	case <-time.After(time.Second):
+		t.Fatal("open did not finish")
+	}
+	defer r.closeAll()
+	for len(edges) > 0 {
+		if <-edges {
+			t.Fatal("a pre-reconnect compute certified live before any post-reconnect compute")
+		}
+	}
+}
+
+// R3: a read failure on a connected cluster reaches the frontend as an error
+// DTO, not just live=false (which left the view loading with no reason).
+func TestLiveList_ReadFailureReachesFrontend(t *testing.T) {
+	conn := &fakeLivePodConn{computeFail: true}
+	em := &anyEmitter{}
+	svc := NewPodsService(func(string) (PodsConn, bool) { return conn, true }, em)
+	svc.live.interval = time.Hour
+	defer svc.CloseAll()
+	if r := svc.OpenLivePods("c", "ns"); !r.OK {
+		t.Fatalf("open failed: %+v", r)
+	}
+	for _, ev := range em.snapshot() {
+		if dto, ok := ev.data.(PodsResultDTO); ok && dto.Error != "" {
+			return
+		}
+	}
+	t.Fatal("an RBAC/timeout read failure must be emitted with its reason")
+}
+
+// R1: a reference KEY without the reference SHAPE (here inside chart values)
+// is not exempt from redaction - neither in redactManifestForAI nor in the
+// prompt SuggestFix actually sends.
+func TestAI_ReferenceKeyInValuesIsRedacted(t *testing.T) {
+	const raw = `apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: app
+spec:
+  values:
+    credentials:
+      secretRef:
+        password: b2-review-private-password
+`
+	out, _, err := redactManifestForAI(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out, "b2-review-private-password") {
+		t.Fatalf("credential reached the AI manifest: %s", out)
+	}
+
+	root := crd.InstanceDetail{Kind: "HelmRelease", Namespace: "app", Name: "app", YAML: raw}
+	conn := &fakeExplainConn{details: map[string]crd.InstanceDetail{"helm.toolkit.fluxcd.io/helmreleases/app/app": root}}
+	cl := &fakeCompleter{reply: "ok"}
+	svc := newAI(cl, "hosted", true, false, conn)
+	if r := svc.SuggestFix("c", "helm.toolkit.fluxcd.io", "v2", "helmreleases", "app", "app"); !r.OK {
+		t.Fatalf("fix failed: %+v", r)
+	}
+	if strings.Contains(cl.gotUser, "b2-review-private-password") {
+		t.Fatal("credential under a values secretRef reached the model prompt")
+	}
+}
