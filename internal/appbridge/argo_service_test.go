@@ -183,6 +183,38 @@ func TestSyncApp_ProtectedGrant(t *testing.T) {
 	}
 }
 
+// Review 2026-10-03 (D): refresh patches the Application like Flux's
+// reconcile annotation, so it consumes the protected grant too - refused
+// unarmed, one-shot when armed.
+func TestRefreshApp_ProtectedGrant(t *testing.T) {
+	now := time.Now()
+	g := newTestGuard("prd-cluster", &now)
+	SetProtectGuard(g)
+	t.Cleanup(func() { SetProtectGuard(nil) })
+
+	conn := &fakeArgoConn{}
+	s := NewArgoService(func(string) (ArgoConn, bool) { return conn, true })
+	if r := s.RefreshApp("prd-cluster", "argocd", "app"); r.OK || r.Error == "" {
+		t.Fatalf("unarmed refresh on a protected cluster must refuse, got %+v", r)
+	}
+	if len(conn.calls) != 0 {
+		t.Fatalf("a refused refresh reached the conn: %v", conn.calls)
+	}
+	if err := g.Arm("prd-cluster", "prd-cluster"); err != nil {
+		t.Fatal(err)
+	}
+	if r := s.RefreshApp("prd-cluster", "argocd", "app"); !r.OK {
+		t.Fatalf("armed refresh must pass, got %+v", r)
+	}
+	if r := s.RefreshApp("prd-cluster", "argocd", "app"); r.OK {
+		t.Fatal("the grant is one-shot")
+	}
+	// Unprotected clusters are not gated.
+	if r := s.RefreshApp("dev-cluster", "argocd", "app"); !r.OK {
+		t.Fatalf("an unprotected refresh needs no grant, got %+v", r)
+	}
+}
+
 // TestSyncApp_OptionsThread asserts the prune/force/replace flags thread through
 // toArgoSyncOptions to the conn, and default false when the modal omits them.
 func TestSyncApp_OptionsThread(t *testing.T) {

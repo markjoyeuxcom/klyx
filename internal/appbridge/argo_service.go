@@ -136,8 +136,10 @@ type ArgoApplicationSetsResultDTO struct {
 }
 
 // ArgoService is bound to JS: Application listing + the two imperative
-// triggers (refresh, sync). Like every write verb it returns ActionResultDTO;
-// Protected gating happens in the frontend ConfirmDialog.
+// triggers (refresh, sync). Like every write verb it returns ActionResultDTO.
+// On a protected cluster both consume the typed-confirmation grant the
+// frontend ConfirmDialog arms (checkProtected) - the backend, not the dialog,
+// is the gate.
 type ArgoService struct {
 	lookup func(string) (ArgoConn, bool)
 }
@@ -295,7 +297,14 @@ func toArgoResourceRuleDTOs(in []argo.ResourceRule) []ArgoResourceRuleDTO {
 }
 
 // RefreshApp triggers a re-compare against the source (refresh annotation).
+// It patches the live Application - the same class of write as Flux's
+// reconcile annotation - so it consumes the protected-cluster grant like
+// Reconcile does (review 2026-10-03, D: it was ungated, and the grant the
+// confirm dialog armed was left unconsumed for another verb to use).
 func (s *ArgoService) RefreshApp(cluster, namespace, name string) ActionResultDTO {
+	if err := checkProtected(cluster); err != nil {
+		return ActionResultDTO{Error: err.Error()}
+	}
 	conn, ok := s.lookup(cluster)
 	if !ok {
 		return ActionResultDTO{Error: "cluster not connected: " + cluster}
