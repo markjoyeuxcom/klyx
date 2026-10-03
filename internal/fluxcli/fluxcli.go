@@ -27,7 +27,12 @@ type Runner interface {
 }
 
 // ExecRunner is the production Runner that executes flux via exec.CommandContext.
-type ExecRunner struct{}
+// Env holds extra environment entries (KEY=VALUE) appended to the inherited
+// environment - the fleet layer sets KUBECONFIG here so flux resolves the same
+// kubeconfig selection client-go used. Nil inherits the environment unchanged.
+type ExecRunner struct {
+	Env []string
+}
 
 // fluxBin is the shared binary-resolution stack (env override -> PATH ->
 // package-manager fallbacks). Tests swap its lookup hooks.
@@ -37,12 +42,15 @@ var fluxBin = clibin.Binary{
 	FallbackPaths: defaultFluxFallbackPaths,
 }
 
-func (ExecRunner) Run(ctx context.Context, args ...string) ([]byte, string, error) {
+func (r ExecRunner) Run(ctx context.Context, args ...string) ([]byte, string, error) {
 	bin, ok := Resolve()
 	if !ok {
 		bin = "flux"
 	}
 	cmd := exec.CommandContext(ctx, bin, args...) //nolint:gosec
+	if len(r.Env) > 0 {
+		cmd.Env = append(os.Environ(), r.Env...)
+	}
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr

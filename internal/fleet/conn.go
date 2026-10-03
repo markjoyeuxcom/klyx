@@ -26,6 +26,7 @@ import (
 	"github.com/moomora/klyx/internal/clustermesh"
 	"github.com/moomora/klyx/internal/config"
 	"github.com/moomora/klyx/internal/crd"
+	"github.com/moomora/klyx/internal/execenv"
 	"github.com/moomora/klyx/internal/externalsecrets"
 	"github.com/moomora/klyx/internal/fluxcli"
 	"github.com/moomora/klyx/internal/gitops/argo"
@@ -145,6 +146,7 @@ const defaultConnectTimeout = 30 * time.Second
 type ClusterConn struct {
 	name        string
 	kubeContext string       // kubeconfig context name for kubectl exec (e.g. drain)
+	kubeconfig  string       // the cluster's kubeconfig selection (file or path list); "" = default loading rules
 	restConfig  *rest.Config // for SPDY transports (port-forward); nil in fake-client tests
 	typed       kubernetes.Interface
 	meta        metadata.Interface
@@ -209,6 +211,21 @@ func (c *ClusterConn) WithKubeContext(ctx string) *ClusterConn {
 
 // KubeContext returns the kubeconfig context name.
 func (c *ClusterConn) KubeContext() string { return c.kubeContext }
+
+// WithKubeconfig records the cluster's kubeconfig selection (the fleet.yaml
+// `kubeconfig:` value - a file or an OS path list) so every kubectl/helm/flux
+// subprocess resolves the context through the SAME files client-go used. Without
+// it a context name that also exists in the default kubeconfig (k3s's "default"
+// is the classic collision) silently targets a different cluster. Call it right
+// after NewClusterConn in the factory; it is not threadsafe after Start.
+func (c *ClusterConn) WithKubeconfig(path string) *ClusterConn {
+	c.kubeconfig = path
+	return c
+}
+
+// cliEnv is the extra environment for kubectl/helm/flux child processes: the
+// cluster's KUBECONFIG selection, or nil to inherit the default resolution.
+func (c *ClusterConn) cliEnv() []string { return execenv.KubeconfigEnv(c.kubeconfig) }
 
 // WithRESTConfig sets the *rest.Config used to build SPDY transports for
 // port-forwarding. Call it right after NewClusterConn in the factory; it is not

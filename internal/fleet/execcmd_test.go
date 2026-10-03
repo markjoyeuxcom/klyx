@@ -6,6 +6,7 @@ import (
 )
 
 func TestExecCommand(t *testing.T) {
+	fakeKubectl(t, true)
 	conn := &ClusterConn{kubeContext: "prod-aks"}
 
 	t.Run("with container", func(t *testing.T) {
@@ -14,7 +15,7 @@ func TestExecCommand(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		want := []string{
-			"kubectl",
+			"/fake/kubectl",
 			"--context", "prod-aks",
 			"-n", "default",
 			"exec", "-it", "web-abc",
@@ -39,7 +40,7 @@ func TestExecCommand(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		want := []string{
-			"kubectl",
+			"/fake/kubectl",
 			"--context", "prod-aks",
 			"-n", "monitoring",
 			"exec", "-it", "grafana-xyz",
@@ -71,13 +72,14 @@ func TestExecCommand(t *testing.T) {
 }
 
 func TestDebugCommand(t *testing.T) {
+	fakeKubectl(t, true)
 	c := &ClusterConn{kubeContext: "kubernetes-admin@homelab-nelli"}
 	argv, err := c.DebugCommand("cert-manager", "cert-manager-7d65955cff-c8s5r", "cert-manager-controller")
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := []string{
-		"kubectl", "--context", "kubernetes-admin@homelab-nelli",
+		"/fake/kubectl", "--context", "kubernetes-admin@homelab-nelli",
 		"-n", "cert-manager", "debug", "-it", "cert-manager-7d65955cff-c8s5r",
 		"--image=busybox:1.36", "--target=cert-manager-controller", "--", "sh",
 	}

@@ -53,14 +53,18 @@ func kubeconfigLoadingRules(path string) *clientcmd.ClientConfigLoadingRules {
 	if path == "" {
 		return clientcmd.NewDefaultClientConfigLoadingRules()
 	}
-	parts := splitKubeconfigPathList(path)
+	parts := KubeconfigPaths(path)
 	if len(parts) > 1 {
 		return &clientcmd.ClientConfigLoadingRules{Precedence: parts}
 	}
 	return &clientcmd.ClientConfigLoadingRules{ExplicitPath: path}
 }
 
-func splitKubeconfigPathList(path string) []string {
+// KubeconfigPaths splits a cluster's kubeconfig setting into its files, using
+// the OS path-list separator and dropping empty entries - the exact split the
+// client-go loading rules above use. Exported so the kubectl/helm/flux
+// subprocess builders resolve the SAME file selection as client-go.
+func KubeconfigPaths(path string) []string {
 	raw := strings.Split(path, string(os.PathListSeparator))
 	out := make([]string, 0, len(raw))
 	for _, p := range raw {

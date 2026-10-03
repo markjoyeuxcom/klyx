@@ -11,8 +11,9 @@ import (
 	"github.com/moomora/klyx/internal/gitops/flux"
 )
 
-// fluxDiffRunner is the flux CLI runner; swappable in tests.
-var fluxDiffRunner fluxcli.Runner = fluxcli.ExecRunner{}
+// newFluxRunner builds the flux Runner for one call, carrying the cluster's
+// subprocess environment (its KUBECONFIG selection); swappable in tests.
+var newFluxRunner = func(env []string) fluxcli.Runner { return fluxcli.ExecRunner{Env: env} }
 
 // FluxAvailable reports whether the flux CLI is resolvable (so the UI can hide
 // the "compute diff" affordance when it isn't installed).
@@ -40,5 +41,5 @@ func (c *ClusterConn) FluxDiffKustomization(ctx context.Context, ns, name, path 
 	if path == "" {
 		path, _, _ = unstructured.NestedString(u.Object, "spec", "path")
 	}
-	return fluxcli.DiffKustomization(ctx, fluxDiffRunner, c.kubeContext, ns, name, path), nil
+	return fluxcli.DiffKustomization(ctx, newFluxRunner(c.cliEnv()), c.kubeContext, ns, name, path), nil
 }

@@ -28,7 +28,13 @@ type Runner interface {
 // ExecRunner is the production Runner that executes helm via exec.CommandContext.
 // On a non-zero exit, the error message includes stderr so callers can surface
 // it to the UI without a separate stderr read.
-type ExecRunner struct{}
+//
+// Env holds extra environment entries (KEY=VALUE) appended to the inherited
+// environment - the fleet layer sets KUBECONFIG here so helm resolves the same
+// kubeconfig selection client-go used. Nil inherits the environment unchanged.
+type ExecRunner struct {
+	Env []string
+}
 
 // helmBin is the shared binary-resolution stack (env override -> PATH ->
 // package-manager fallbacks). Tests swap its lookup hooks.
@@ -40,12 +46,15 @@ var helmBin = clibin.Binary{
 
 // Run executes helm with the given args. If helm exits non-zero it returns an
 // error whose message includes the combined stderr text.
-func (ExecRunner) Run(ctx context.Context, args ...string) ([]byte, error) {
+func (r ExecRunner) Run(ctx context.Context, args ...string) ([]byte, error) {
 	bin, ok := Resolve()
 	if !ok {
 		bin = "helm"
 	}
 	cmd := exec.CommandContext(ctx, bin, args...) //nolint:gosec
+	if len(r.Env) > 0 {
+		cmd.Env = append(os.Environ(), r.Env...)
+	}
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr

@@ -9,9 +9,11 @@ import (
 	"github.com/moomora/klyx/internal/helmcli"
 )
 
-// captureRunner records all calls and returns a canned response.
+// captureRunner records all calls (and the subprocess env each was built
+// with) and returns a canned response.
 type captureRunner struct {
 	calls [][]string
+	envs  [][]string
 	out   []byte
 	err   error
 }
@@ -31,11 +33,17 @@ func newHelmTestConn(kubeCtx string) *ClusterConn {
 	return &ClusterConn{name: "test", kubeContext: kubeCtx}
 }
 
-// withHelmRunner swaps the package-level runner and returns a restore func.
+// withHelmRunner swaps the package-level runner factory and returns a restore
+// func. A *captureRunner also records the env each runner was built with.
 func withHelmRunner(r helmcli.Runner) func() {
-	old := helmRunner
-	helmRunner = r
-	return func() { helmRunner = old }
+	old := newHelmRunner
+	newHelmRunner = func(env []string) helmcli.Runner {
+		if cr, ok := r.(*captureRunner); ok {
+			cr.envs = append(cr.envs, env)
+		}
+		return r
+	}
+	return func() { newHelmRunner = old }
 }
 
 func TestHelmReleases_ContextThreaded(t *testing.T) {

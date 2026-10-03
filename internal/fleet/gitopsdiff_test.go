@@ -9,6 +9,8 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic/fake"
+
+	"github.com/moomora/klyx/internal/fluxcli"
 )
 
 type fakeFluxRunner struct {
@@ -33,9 +35,10 @@ func seedKs(name string, suspend bool, ready string, path string) *unstructured.
 }
 
 func TestFluxDiffGatedToSuspendedOrFailing(t *testing.T) {
-	prev := fluxDiffRunner
-	defer func() { fluxDiffRunner = prev }()
-	fluxDiffRunner = &fakeFluxRunner{stdout: "± spec.replicas: 2 -> 3", err: errors.New("exit 1")}
+	prev := newFluxRunner
+	defer func() { newFluxRunner = prev }()
+	runner := &fakeFluxRunner{stdout: "± spec.replicas: 2 -> 3", err: errors.New("exit 1")}
+	newFluxRunner = func([]string) fluxcli.Runner { return runner }
 
 	listKinds := ksListKinds()
 	// A suspended Kustomization -> diff is allowed and returns changes.

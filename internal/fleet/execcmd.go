@@ -1,6 +1,51 @@
 package fleet
 
-import "fmt"
+import (
+	"fmt"
+	"os"
+	"runtime"
+	"strings"
+
+	"github.com/moomora/klyx/internal/cluster"
+)
+
+// terminalGOOS is the platform the terminal argv is built for; tests override it
+// to exercise the Windows refusal on any host.
+var terminalGOOS = runtime.GOOS
+
+// kubectlTerminalArgv returns the argv prefix that runs kubectl against THIS
+// cluster from a terminal Klyx launches (or a command the user copies). That
+// terminal does not inherit Klyx's environment - macOS Terminal.app starts a
+// fresh login shell - so the cluster's kubeconfig selection must travel in the
+// argv itself, or a context name that also exists in the default kubeconfig
+// silently targets a different cluster:
+//   - no kubeconfig configured: plain kubectl (default loading rules, exactly
+//     what client-go used);
+//   - one file: kubectl --kubeconfig <file>;
+//   - a path list: env KUBECONFIG=<list> kubectl (--kubeconfig takes a single
+//     file; KUBECONFIG merges the list with the rules client-go applied). There
+//     is no `env` on Windows, so a list is refused there rather than dropped.
+//
+// kubectl itself is resolved through clibin (KLYX_KUBECTL_PATH, PATH, fallbacks)
+// like drain/describe; when Klyx cannot find it, the bare name is left for the
+// terminal's own PATH.
+func (c *ClusterConn) kubectlTerminalArgv() ([]string, error) {
+	bin, ok := kubectlBin.Resolve()
+	if !ok {
+		bin = "kubectl"
+	}
+	paths := cluster.KubeconfigPaths(c.kubeconfig)
+	switch {
+	case len(paths) == 0:
+		return []string{bin}, nil
+	case len(paths) == 1:
+		return []string{bin, "--kubeconfig", paths[0]}, nil
+	case terminalGOOS == "windows":
+		return nil, fmt.Errorf("cluster kubeconfig is a path list, which cannot be passed to a Windows terminal: point kubeconfig at a single file")
+	default:
+		return []string{"env", "KUBECONFIG=" + strings.Join(paths, string(os.PathListSeparator)), bin}, nil
+	}
+}
 
 // ExecCommand returns the kubectl exec invocation for an interactive shell in
 // the container, as argv (no shell quoting — the caller renders or launches it).
@@ -21,12 +66,15 @@ func (c *ClusterConn) ExecCommand(namespace, pod, container string) ([]string, e
 	if err := validateExecNames(namespace, pod, container); err != nil {
 		return nil, err
 	}
-	argv := []string{
-		"kubectl",
+	argv, err := c.kubectlTerminalArgv()
+	if err != nil {
+		return nil, err
+	}
+	argv = append(argv,
 		"--context", c.kubeContext,
 		"-n", namespace,
 		"exec", "-it", pod,
-	}
+	)
 	if container != "" {
 		argv = append(argv, "-c", container)
 	}
@@ -52,13 +100,16 @@ func (c *ClusterConn) DebugCommand(namespace, pod, container string) ([]string, 
 	if err := validateExecNames(namespace, pod, container); err != nil {
 		return nil, err
 	}
-	argv := []string{
-		"kubectl",
+	argv, err := c.kubectlTerminalArgv()
+	if err != nil {
+		return nil, err
+	}
+	argv = append(argv,
 		"--context", c.kubeContext,
 		"-n", namespace,
 		"debug", "-it", pod,
 		"--image=busybox:1.36",
-	}
+	)
 	if container != "" {
 		argv = append(argv, "--target="+container)
 	}

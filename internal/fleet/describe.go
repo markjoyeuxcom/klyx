@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/moomora/klyx/internal/clibin"
+	"github.com/moomora/klyx/internal/execenv"
 )
 
 // kubectlBin is the shared kubectl resolution stack (env override -> PATH ->
@@ -107,5 +108,7 @@ func (c *ClusterConn) DescribeCmd(ctx context.Context, kindArg, namespace, name 
 		args = append(args, "-n", namespace)
 	}
 	args = append(args, "--", name)
-	return exec.CommandContext(ctx, bin, args...), nil //nolint:gosec // argv validated above, binary resolved via clibin
+	cmd := exec.CommandContext(ctx, bin, args...) //nolint:gosec // argv validated above, binary resolved via clibin
+	cmd.Env = execenv.Environ(c.cliEnv())
+	return cmd, nil
 }

@@ -8,6 +8,8 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+
+	"github.com/moomora/klyx/internal/execenv"
 )
 
 // SetCordon marks a node schedulable (false) or unschedulable (true) via a
@@ -82,5 +84,7 @@ func (c *ClusterConn) DrainNodeCmd(nodeName string, opts DrainOptions) (*exec.Cm
 		args = append(args, "--force")
 	}
 	args = append(args, fmt.Sprintf("--timeout=%ds", timeout), "--", nodeName)
-	return exec.Command(bin, args...), nil //nolint:gosec // argv validated above, binary resolved via clibin
+	cmd := exec.Command(bin, args...) //nolint:gosec // argv validated above, binary resolved via clibin
+	cmd.Env = execenv.Environ(c.cliEnv())
+	return cmd, nil
 }

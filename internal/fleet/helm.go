@@ -7,9 +7,10 @@ import (
 	"github.com/moomora/klyx/internal/helmcli"
 )
 
-// helmRunner is the package-level Runner seam. Tests replace it with a fake;
-// production leaves it as the exec-based runner.
-var helmRunner helmcli.Runner = helmcli.ExecRunner{}
+// newHelmRunner builds the helm Runner for one call, carrying the cluster's
+// subprocess environment (its KUBECONFIG selection). It is the package-level
+// seam: tests replace it to capture the env and return a fake.
+var newHelmRunner = func(env []string) helmcli.Runner { return helmcli.ExecRunner{Env: env} }
 
 // HelmReleases returns all Helm releases across all namespaces for this
 // cluster. Requires a non-empty kubeContext.
@@ -17,7 +18,7 @@ func (c *ClusterConn) HelmReleases(ctx context.Context) ([]helmcli.Release, erro
 	if c.kubeContext == "" {
 		return nil, fmt.Errorf("HelmReleases: kubeContext not set on conn %q", c.name)
 	}
-	return helmcli.ListReleases(ctx, helmRunner, c.kubeContext)
+	return helmcli.ListReleases(ctx, newHelmRunner(c.cliEnv()), c.kubeContext)
 }
 
 // HelmHistory returns the revision history for a release, newest-first.
@@ -28,7 +29,7 @@ func (c *ClusterConn) HelmHistory(ctx context.Context, namespace, release string
 	if err := validateHelmNames(namespace, release); err != nil {
 		return nil, err
 	}
-	return helmcli.History(ctx, helmRunner, c.kubeContext, namespace, release)
+	return helmcli.History(ctx, newHelmRunner(c.cliEnv()), c.kubeContext, namespace, release)
 }
 
 // HelmValues returns the user-supplied values for a release as a YAML string.
@@ -40,7 +41,7 @@ func (c *ClusterConn) HelmValues(ctx context.Context, namespace, release string)
 	if err := validateHelmNames(namespace, release); err != nil {
 		return "", err
 	}
-	return helmcli.GetValues(ctx, helmRunner, c.kubeContext, namespace, release)
+	return helmcli.GetValues(ctx, newHelmRunner(c.cliEnv()), c.kubeContext, namespace, release)
 }
 
 // HelmRollback rolls back a release to the given revision with the
@@ -52,7 +53,7 @@ func (c *ClusterConn) HelmRollback(ctx context.Context, namespace, release strin
 	if err := validateHelmNames(namespace, release); err != nil {
 		return err
 	}
-	return helmcli.Rollback(ctx, helmRunner, c.kubeContext, namespace, release, revision, opts)
+	return helmcli.Rollback(ctx, newHelmRunner(c.cliEnv()), c.kubeContext, namespace, release, revision, opts)
 }
 
 // validateHelmNames guards the helm CLI argv: namespace and release names come
