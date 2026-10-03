@@ -1197,6 +1197,12 @@ func (c *ClusterConn) GetInstanceDetail(ctx context.Context, group, version, plu
 	if group == "" && version == "v1" && plural == "secrets" {
 		obj, secretKeys = crd.MaskSecretData(obj)
 	}
+	// Every DTO field below is read from the SANITISED object, never from u:
+	// a client-side-applied Secret carries its full base64 data in the
+	// kubectl.kubernetes.io/last-applied-configuration annotation, which
+	// MaskSecretData strips from obj only. Reading annotations from u leaked
+	// it past the explicit reveal flow (review 2026-10-03 #2).
+	sanitised := &unstructured.Unstructured{Object: obj}
 
 	// Build service backing for v1 Services: typed-get the Service (for
 	// spec.ports and spec.selector) then list its EndpointSlices. A failure here
@@ -1224,17 +1230,17 @@ func (c *ClusterConn) GetInstanceDetail(ctx context.Context, group, version, plu
 		Namespace:      ns,
 		Name:           name,
 		Created:        u.GetCreationTimestamp().Time,
-		Labels:         u.GetLabels(),
-		Annotations:    u.GetAnnotations(),
+		Labels:         sanitised.GetLabels(),
+		Annotations:    sanitised.GetAnnotations(),
 		Conditions:     crd.ParseConditionsDeep(group, plural, u.Object),
 		YAML:           y,
 		SecretKeys:     secretKeys,
 		ServiceBacking: serviceBacking,
 		HPAScaling:     hpaScaling,
 		Related:        c.relatedRefs(ctx, group, version, plural, ns, name, u),
-		// Facts are built from obj (masked for Secrets), so no secret value can
-		// reach a fact even via a future buggy builder.
-		Facts: crd.BuildFacts(group, plural, &unstructured.Unstructured{Object: obj}),
+		// Facts are built from the sanitised object (masked for Secrets), so no
+		// secret value can reach a fact even via a future buggy builder.
+		Facts: crd.BuildFacts(group, plural, sanitised),
 	}
 	d.Facts = append(d.Facts, c.rbacDanglingFacts(ctx, group, plural, ns, u)...)
 	d.Events = c.instanceEvents(ctx, string(u.GetUID()))
