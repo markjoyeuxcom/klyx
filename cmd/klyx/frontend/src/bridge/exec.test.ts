@@ -58,6 +58,9 @@ describe("copyExecCommand", () => {
     const result = await copyExecCommand("prod", "default", "web-abc", "");
     expect(result).toBe("error");
     expect(Clipboard.SetText).not.toHaveBeenCalled();
+    // The reason reaches the action toast - "copy error" alone cannot say why.
+    expect(useFleet.getState().actionStatus?.kind).toBe("error");
+    expect(useFleet.getState().actionStatus?.message).toBe("cluster not connected: prod");
   });
 
   it("returns error when bridge throws", async () => {

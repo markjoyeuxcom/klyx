@@ -22,7 +22,9 @@ export async function getExecCommand(
 }
 
 // copyExecCommand calls GetExecCommand then copies the Command string to the
-// clipboard. Returns "copied" | "error".
+// clipboard. Returns "copied" | "error". A backend refusal (e.g. a path-list
+// kubeconfig that cannot travel to a Windows terminal) also raises the action
+// toast with its reason - the button's own "copy error" cannot say why.
 export async function copyExecCommand(
   cluster: string,
   ns: string,
@@ -30,7 +32,11 @@ export async function copyExecCommand(
   container: string,
 ): Promise<"copied" | "error"> {
   const dto = await getExecCommand(cluster, ns, pod, container);
-  if (!dto || dto.error) return "error";
+  if (!dto) return "error";
+  if (dto.error) {
+    useFleet.getState().setActionStatus({ kind: "error", message: dto.error });
+    return "error";
+  }
   try {
     await Clipboard.SetText(dto.command);
     return "copied";
@@ -93,7 +99,11 @@ export async function copyDebugCommand(
 ): Promise<"copied" | "error"> {
   try {
     const dto = (await ExecService.GetDebugCommand(cluster, ns, pod, container)) as ExecCommandDTO;
-    if (!dto || dto.error) return "error";
+    if (!dto) return "error";
+    if (dto.error) {
+      useFleet.getState().setActionStatus({ kind: "error", message: dto.error });
+      return "error";
+    }
     await Clipboard.SetText(dto.command);
     return "copied";
   } catch {

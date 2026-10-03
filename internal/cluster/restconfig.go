@@ -6,6 +6,7 @@ package cluster
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"k8s.io/client-go/rest"
@@ -58,6 +59,40 @@ func kubeconfigLoadingRules(path string) *clientcmd.ClientConfigLoadingRules {
 		return &clientcmd.ClientConfigLoadingRules{Precedence: parts}
 	}
 	return &clientcmd.ClientConfigLoadingRules{ExplicitPath: path}
+}
+
+// EffectiveKubeconfigPaths returns the ABSOLUTE kubeconfig files the loading
+// rules above resolve for a cluster, in precedence order: its configured
+// selection when set, otherwise client-go's defaults - this process's
+// KUBECONFIG, else ~/.kube/config. Duplicates are dropped, as client-go does.
+//
+// Subprocesses must be pinned to exactly these files. A terminal Klyx launches
+// starts with its OWN environment and working directory, so an unpinned (or
+// relative) selection can resolve the same context name through a different
+// file - another cluster. Relative paths are made absolute against this
+// process's working directory, which is what client-go resolved them against.
+func EffectiveKubeconfigPaths(configured string) []string {
+	var raw []string
+	switch {
+	case strings.TrimSpace(configured) != "":
+		raw = KubeconfigPaths(configured)
+	case os.Getenv(clientcmd.RecommendedConfigPathEnvVar) != "":
+		raw = KubeconfigPaths(os.Getenv(clientcmd.RecommendedConfigPathEnvVar))
+	default:
+		raw = []string{clientcmd.RecommendedHomeFile}
+	}
+	out := make([]string, 0, len(raw))
+	seen := make(map[string]bool, len(raw))
+	for _, p := range raw {
+		if abs, err := filepath.Abs(p); err == nil {
+			p = abs
+		}
+		if !seen[p] {
+			seen[p] = true
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // KubeconfigPaths splits a cluster's kubeconfig setting into its files, using

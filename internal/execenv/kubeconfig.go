@@ -6,10 +6,10 @@ import (
 )
 
 // KubeconfigEnv returns the environment entry that pins a kubectl/helm/flux
-// child process to a cluster's configured kubeconfig selection (a file or an
-// OS path list). It returns nil when the cluster has no explicit kubeconfig:
-// client-go then used the default loading rules (KUBECONFIG, else
-// ~/.kube/config) and the child inherits exactly the same resolution.
+// child process to a kubeconfig selection (a file or an OS path list) - the
+// fleet layer passes the cluster's EFFECTIVE selection, absolute, so a child
+// never re-resolves it through its own environment or working directory. It
+// returns nil for an empty selection, which leaves the child to inherit.
 //
 // Passing the selection through KUBECONFIG rather than --kubeconfig keeps
 // path-list semantics: --kubeconfig accepts a single file, while KUBECONFIG is

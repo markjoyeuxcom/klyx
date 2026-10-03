@@ -3,10 +3,9 @@ package fleet
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
-
-	"github.com/moomora/klyx/internal/cluster"
 )
 
 // terminalGOOS is the platform the terminal argv is built for; tests override it
@@ -15,26 +14,31 @@ var terminalGOOS = runtime.GOOS
 
 // kubectlTerminalArgv returns the argv prefix that runs kubectl against THIS
 // cluster from a terminal Klyx launches (or a command the user copies). That
-// terminal does not inherit Klyx's environment - macOS Terminal.app starts a
-// fresh login shell - so the cluster's kubeconfig selection must travel in the
-// argv itself, or a context name that also exists in the default kubeconfig
-// silently targets a different cluster:
-//   - no kubeconfig configured: plain kubectl (default loading rules, exactly
-//     what client-go used);
+// terminal does not inherit Klyx's environment or working directory - macOS
+// Terminal.app starts a fresh login shell with its own KUBECONFIG - so the
+// effective kubeconfig selection (absolute files, recorded when the connection
+// was made) must travel in the argv itself, or the same context name can
+// resolve through a different file to a different cluster:
 //   - one file: kubectl --kubeconfig <file>;
-//   - a path list: env KUBECONFIG=<list> kubectl (--kubeconfig takes a single
+//   - several: env KUBECONFIG=<list> kubectl (--kubeconfig takes a single
 //     file; KUBECONFIG merges the list with the rules client-go applied). There
-//     is no `env` on Windows, so a list is refused there rather than dropped.
+//     is no `env` on Windows, so a list is refused there rather than dropped;
+//   - none recorded (a conn built outside the factory): plain kubectl.
 //
 // kubectl itself is resolved through clibin (KLYX_KUBECTL_PATH, PATH, fallbacks)
-// like drain/describe; when Klyx cannot find it, the bare name is left for the
-// terminal's own PATH.
+// like drain/describe, and a relative resolution is made absolute for the same
+// working-directory reason. When Klyx cannot find kubectl, the bare name is
+// left for the terminal's own PATH.
 func (c *ClusterConn) kubectlTerminalArgv() ([]string, error) {
 	bin, ok := kubectlBin.Resolve()
 	if !ok {
 		bin = "kubectl"
+	} else if !filepath.IsAbs(bin) {
+		if abs, err := filepath.Abs(bin); err == nil {
+			bin = abs
+		}
 	}
-	paths := cluster.KubeconfigPaths(c.kubeconfig)
+	paths := c.kubeconfigPaths
 	switch {
 	case len(paths) == 0:
 		return []string{bin}, nil

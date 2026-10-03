@@ -3,7 +3,9 @@ package fleet
 import (
 	"context"
 	"io"
+	"os"
 	"os/exec"
+	"strings"
 	"sync"
 	"time"
 
@@ -145,14 +147,19 @@ const defaultConnectTimeout = 30 * time.Second
 
 type ClusterConn struct {
 	name        string
-	kubeContext string       // kubeconfig context name for kubectl exec (e.g. drain)
-	kubeconfig  string       // the cluster's kubeconfig selection (file or path list); "" = default loading rules
-	restConfig  *rest.Config // for SPDY transports (port-forward); nil in fake-client tests
-	typed       kubernetes.Interface
-	meta        metadata.Interface
-	dyn         dynamic.Interface
-	detector    *capability.Detector
-	clk         clock.Clock
+	kubeContext string // kubeconfig context name for kubectl exec (e.g. drain)
+	// kubeconfigPaths is the EFFECTIVE kubeconfig selection client-go resolved
+	// this cluster through - absolute files in precedence order (configured
+	// selection, else inherited KUBECONFIG, else ~/.kube/config). Every
+	// kubectl/helm/flux subprocess is pinned to it. Nil only for conns built
+	// outside the factory (tests), which then inherit the environment.
+	kubeconfigPaths []string
+	restConfig      *rest.Config // for SPDY transports (port-forward); nil in fake-client tests
+	typed           kubernetes.Interface
+	meta            metadata.Interface
+	dyn             dynamic.Interface
+	detector        *capability.Detector
+	clk             clock.Clock
 
 	mu             sync.RWMutex
 	state          ConnState
@@ -212,20 +219,27 @@ func (c *ClusterConn) WithKubeContext(ctx string) *ClusterConn {
 // KubeContext returns the kubeconfig context name.
 func (c *ClusterConn) KubeContext() string { return c.kubeContext }
 
-// WithKubeconfig records the cluster's kubeconfig selection (the fleet.yaml
-// `kubeconfig:` value - a file or an OS path list) so every kubectl/helm/flux
-// subprocess resolves the context through the SAME files client-go used. Without
-// it a context name that also exists in the default kubeconfig (k3s's "default"
-// is the classic collision) silently targets a different cluster. Call it right
-// after NewClusterConn in the factory; it is not threadsafe after Start.
-func (c *ClusterConn) WithKubeconfig(path string) *ClusterConn {
-	c.kubeconfig = path
+// WithKubeconfig records the EFFECTIVE kubeconfig selection for this cluster -
+// configured is the fleet.yaml `kubeconfig:` value (a file, an OS path list, or
+// "" for client-go's defaults) - resolved NOW, alongside the REST config, to
+// the absolute files client-go read. Every kubectl/helm/flux subprocess is then
+// pinned to exactly those files. Without that, a context name that also exists
+// in another kubeconfig (k3s's "default" is the classic collision) resolves to
+// a different cluster when a child sees a different KUBECONFIG (a terminal's
+// own shell environment) or a different working directory (relative paths).
+// Call it right after NewClusterConn in the factory; it is not threadsafe after
+// Start.
+func (c *ClusterConn) WithKubeconfig(configured string) *ClusterConn {
+	c.kubeconfigPaths = cluster.EffectiveKubeconfigPaths(configured)
 	return c
 }
 
-// cliEnv is the extra environment for kubectl/helm/flux child processes: the
-// cluster's KUBECONFIG selection, or nil to inherit the default resolution.
-func (c *ClusterConn) cliEnv() []string { return execenv.KubeconfigEnv(c.kubeconfig) }
+// cliEnv is the extra environment for kubectl/helm/flux child processes:
+// KUBECONFIG pinned to the effective selection, or nil (inherit) for a conn
+// with no recorded selection.
+func (c *ClusterConn) cliEnv() []string {
+	return execenv.KubeconfigEnv(strings.Join(c.kubeconfigPaths, string(os.PathListSeparator)))
+}
 
 // WithRESTConfig sets the *rest.Config used to build SPDY transports for
 // port-forwarding. Call it right after NewClusterConn in the factory; it is not
