@@ -115,3 +115,76 @@ func TestIsSensitiveKey(t *testing.T) {
 		}
 	}
 }
+
+// Review 2026-10-03 #3: sensitivity must be inherited down a secret subtree.
+// The map branch used to reset it to the leaf key alone, so
+// credentials: {value: x} came back unredacted.
+func TestMaskValues_InheritsSensitivityDownTheSubtree(t *testing.T) {
+	cases := []struct {
+		name, raw, secret string
+		wantPaths         []string
+	}{
+		{"nested map (Codex repro)", "credentials:\n  username: demo\n  value: synthetic-private-value\n", "synthetic-private-value",
+			[]string{"credentials.username", "credentials.value"}},
+		{"deep nesting", "auth:\n  secret:\n    nested:\n      deep: deep-private\n", "deep-private",
+			[]string{"auth.secret.nested.deep"}},
+		{"list of maps under a sensitive key", "tokens:\n  - id: a\n    value: list-private\n", "list-private",
+			[]string{"tokens[0].id", "tokens[0].value"}},
+		{"alias of a secret subtree", "base: &b\n  password: alias-private\nother:\n  credentials: *b\n", "alias-private",
+			[]string{"base.password", "other.credentials.password"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, paths, err := MaskValues(tc.raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(got, tc.secret) {
+				t.Fatalf("secret leaked through masking:\n%s", got)
+			}
+			if !reflect.DeepEqual(paths, tc.wantPaths) {
+				t.Errorf("paths: got %v, want %v", paths, tc.wantPaths)
+			}
+		})
+	}
+}
+
+// yaml.v3 decodes a mapping with any non-string key into
+// map[interface{}]interface{}; that subtree used to fall through to the scalar
+// branch and be returned raw, nested secrets included.
+func TestMaskValues_NonStringKeyedMapsAreWalked(t *testing.T) {
+	raw := "ports:\n  8080:\n    password: port-private\n    protocol: TCP\n"
+	got, paths, err := MaskValues(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(got, "port-private") {
+		t.Fatalf("secret under an integer-keyed map leaked:\n%s", got)
+	}
+	if !strings.Contains(got, "protocol: TCP") {
+		t.Errorf("non-secret siblings must survive:\n%s", got)
+	}
+	if !reflect.DeepEqual(paths, []string{"ports.8080.password"}) {
+		t.Errorf("paths: got %v", paths)
+	}
+	// Reveal parity: the masked path resolves through ValueAtPath.
+	if v, ok, err := ValueAtPath(raw, "ports.8080.password"); err != nil || !ok || v != "port-private" {
+		t.Fatalf("reveal of a non-string-keyed path: got (%q,%v,%v)", v, ok, err)
+	}
+}
+
+func TestMaskValues_PlainValuesUntouched(t *testing.T) {
+	raw := "replicaCount: 3\nimage:\n  repository: nginx\n  tag: v1\nexistingSecret: \"\"\n"
+	got, paths, err := MaskValues(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(paths) != 0 {
+		t.Fatalf("nothing secret here, got masked paths %v", paths)
+	}
+	for _, want := range []string{"replicaCount: 3", "repository: nginx", "tag: v1"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in:\n%s", want, got)
+		}
+	}
+}

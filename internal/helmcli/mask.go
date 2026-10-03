@@ -64,20 +64,24 @@ func ValueAtPath(raw, path string) (value string, found bool, err error) {
 func maskNode(v interface{}, path string, keySensitive bool, paths *[]string) interface{} {
 	switch t := v.(type) {
 	case map[string]interface{}:
-		// k8s-style env entry {name: FOO, value: bar}: the secret is in `value`
-		// but the KEY is "value", so key matching alone misses it. Treat `value`
-		// (and `default`) as sensitive when the sibling `name` looks like a secret.
-		nameLooksSecret := false
-		if nv, ok := t["name"].(string); ok && isSensitiveKey(nv) {
-			nameLooksSecret = true
-		}
+		nameLooksSecret := envEntryNameLooksSecret(t["name"])
 		out := make(map[string]interface{}, len(t))
 		for k, val := range t {
-			sensitive := isSensitiveKey(k)
-			if nameLooksSecret && (k == "value" || k == "default") {
-				sensitive = true
-			}
-			out[k] = maskNode(val, joinPath(path, k), sensitive, paths)
+			out[k] = maskNode(val, joinPath(path, k), childSensitive(keySensitive, nameLooksSecret, k), paths)
+		}
+		return out
+	case map[interface{}]interface{}:
+		// yaml.v3 decodes a mapping with ANY non-string key (e.g. an integer
+		// port) into map[interface{}]interface{}. Without this case the whole
+		// subtree fell through to the scalar branch and every secret nested
+		// under it was returned raw. Keys keep their original type so the
+		// re-encoded document is unchanged; paths use their string form, the
+		// same form walkLeaves uses, so ValueAtPath can still reveal them.
+		nameLooksSecret := envEntryNameLooksSecret(t["name"])
+		out := make(map[interface{}]interface{}, len(t))
+		for k, val := range t {
+			ks := fmt.Sprint(k)
+			out[k] = maskNode(val, joinPath(path, ks), childSensitive(keySensitive, nameLooksSecret, ks), paths)
 		}
 		return out
 	case []interface{}:
@@ -112,6 +116,10 @@ func walkLeaves(v interface{}, path string, visit func(string, interface{})) {
 		for k, val := range t {
 			walkLeaves(val, joinPath(path, k), visit)
 		}
+	case map[interface{}]interface{}:
+		for k, val := range t {
+			walkLeaves(val, joinPath(path, fmt.Sprint(k)), visit)
+		}
 	case []interface{}:
 		for i, val := range t {
 			walkLeaves(val, fmt.Sprintf("%s[%d]", path, i), visit)
@@ -133,6 +141,30 @@ func scalarString(v interface{}) string {
 		return ""
 	}
 	return fmt.Sprintf("%v", v)
+}
+
+// childSensitive reports whether the value under key k must be masked. Masking
+// is inherited down the whole subtree: once an ancestor key looks like a secret
+// (credentials: {value: x}, tokens: [{id: a}]) every descendant leaf is masked,
+// whatever its own key - a leaf named "value" or "username" under "credentials"
+// is still part of the credential. Otherwise the key itself decides, plus the
+// k8s-style env entry rule below.
+func childSensitive(parentSensitive, nameLooksSecret bool, k string) bool {
+	if parentSensitive || isSensitiveKey(k) {
+		return true
+	}
+	// k8s-style env entry {name: FOO_PASSWORD, value: bar}: the secret is in
+	// `value` but the KEY is "value", so key matching alone misses it. Treat
+	// `value` (and `default`) as sensitive when the sibling `name` looks like a
+	// secret.
+	return nameLooksSecret && (k == "value" || k == "default")
+}
+
+// envEntryNameLooksSecret reports whether a mapping's `name` field (the k8s env
+// entry shape) names a secret.
+func envEntryNameLooksSecret(name interface{}) bool {
+	nv, ok := name.(string)
+	return ok && isSensitiveKey(nv)
 }
 
 // isSensitiveKey reports whether a values key names a secret. Deliberately broad
