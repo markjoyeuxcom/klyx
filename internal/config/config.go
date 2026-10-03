@@ -4,6 +4,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"sort"
@@ -203,9 +204,12 @@ func (a *AIConfig) applyDefaults() {
 	}
 }
 
+// errNoClusters is the one validation failure adding clusters can repair.
+var errNoClusters = errors.New("no clusters configured")
+
 func (c *Config) validate() error {
 	if len(c.Clusters) == 0 {
-		return fmt.Errorf("no clusters configured")
+		return errNoClusters
 	}
 	if c.AI != nil {
 		switch c.AI.Backend {

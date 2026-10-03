@@ -1,19 +1,24 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"gopkg.in/yaml.v3"
 )
 
 // AppendClusters adds minimal cluster entries (name = context) to the fleet
-// file by TEXTUAL append: the existing bytes - including comments and hand
-// formatting - are preserved verbatim, and new `- name:` items are appended
-// under the existing top-level `clusters:` list. A missing file is created
-// with a small header. The candidate result is parsed and validated BEFORE the
-// file is replaced, so a bad append can never corrupt a working config.
+// file by TEXTUAL insertion: the existing bytes - including comments and hand
+// formatting - are preserved verbatim, and new `- name:` items are inserted at
+// the actual end of the top-level `clusters:` list (clustersInsertion), with
+// that list's indentation - wherever the list sits among the other fields. A
+// missing file is created with a small header. The candidate result is parsed
+// and validated - including that exactly the new clusters were added - BEFORE
+// the file is replaced, so a bad insertion can never corrupt a working config.
 func AppendClusters(path string, contexts []string) error {
 	if len(contexts) == 0 {
 		return fmt.Errorf("no contexts to add")
@@ -35,12 +40,18 @@ func AppendClusters(path string, contexts []string) error {
 	inFleet := map[string]bool{}
 	if exists {
 		cur, err := Load(path)
-		if err != nil {
+		switch {
+		case errors.Is(err, errNoClusters):
+			// An empty list (`clusters: []`, a bare `clusters:`, or none yet)
+			// is exactly what adding clusters repairs; the result is fully
+			// validated below.
+		case err != nil:
 			return fmt.Errorf("existing fleet config is invalid; fix it before adding clusters: %w", err)
-		}
-		for _, c := range cur.Clusters {
-			inFleet[c.Name] = true
-			inFleet[c.Context] = true
+		default:
+			for _, c := range cur.Clusters {
+				inFleet[c.Name] = true
+				inFleet[c.Context] = true
+			}
 		}
 	}
 	for _, entry := range entries {
@@ -58,26 +69,22 @@ func AppendClusters(path string, contexts []string) error {
 		}
 	}
 
-	var b strings.Builder
+	var candidate string
 	if exists {
-		b.Write(original)
-		if len(original) > 0 && original[len(original)-1] != '\n' {
-			b.WriteByte('\n')
-		}
-		// The file must already carry a top-level clusters: list for a plain
-		// item append to land in the right place.
-		if !strings.Contains(string(original), "clusters:") {
-			return fmt.Errorf("fleet config %q has no top-level clusters: list", path)
+		var err error
+		if candidate, err = insertClusters(string(original), entries); err != nil {
+			return fmt.Errorf("fleet config %q: %w", path, err)
 		}
 	} else {
+		var b strings.Builder
 		b.WriteString("# Klyx fleet configuration - clusters Klyx connects to.\n")
 		b.WriteString("# Docs: each entry needs a name; context defaults to the name.\n")
 		b.WriteString("clusters:\n")
+		for _, entry := range entries {
+			writeClusterEntry(&b, entry, "  ")
+		}
+		candidate = b.String()
 	}
-	for _, entry := range entries {
-		writeClusterEntry(&b, entry)
-	}
-	candidate := b.String()
 
 	// Validate the candidate by round-tripping it through the real loader.
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".fleet-*.yaml")
@@ -100,8 +107,22 @@ func AppendClusters(path string, contexts []string) error {
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("close temp config: %w", err)
 	}
-	if _, err := Load(tmpPath); err != nil {
+	got, err := Load(tmpPath)
+	if err != nil {
 		return fmt.Errorf("appended config failed validation (file unchanged): %w", err)
+	}
+	// The insertion must have landed IN the clusters list: still-valid YAML
+	// with the entries nested somewhere else would silently drop them.
+	added := map[string]bool{}
+	for _, c := range got.Clusters {
+		if !inFleet[c.Name] {
+			added[c.Name] = true
+		}
+	}
+	for _, entry := range entries {
+		if !added[entry.Name] {
+			return fmt.Errorf("appended config does not list cluster %q (file unchanged)", entry.Name)
+		}
 	}
 	if err := os.Rename(tmpPath, path); err != nil {
 		return fmt.Errorf("replace fleet config: %w", err)
@@ -109,13 +130,120 @@ func AppendClusters(path string, contexts []string) error {
 	return nil
 }
 
-func writeClusterEntry(b *strings.Builder, cc ClusterConfig) {
-	fmt.Fprintf(b, "  - name: %s\n", yamlScalar(cc.Name))
-	fmt.Fprintf(b, "    context: %s\n", yamlScalar(cc.Context))
+// insertClusters inserts entries into the top-level clusters list of an
+// existing fleet document (review 2026-10-03 #12: a plain EOF append broke
+// whenever another field - e.g. `ai:` - followed the list, and a substring
+// check accepted `clusters:` inside a comment). Formatting policy:
+//   - block list: new items go after its last content line (comments and blank
+//     lines that lead into the next field stay with that field), indented like
+//     its existing items;
+//   - `clusters:` with no value, or an empty inline `[]`: the items become the
+//     list's block content under that key;
+//   - no clusters field (or an empty document): a `clusters:` block is
+//     appended at the end;
+//   - a non-empty inline list or an alias is refused with how to fix it -
+//     rewriting it would reformat the user's file.
+func insertClusters(original string, entries []ClusterConfig) (string, error) {
+	var doc yaml.Node
+	if err := yaml.Unmarshal([]byte(original), &doc); err != nil {
+		return "", fmt.Errorf("parse: %w", err)
+	}
+	lines := strings.SplitAfter(original, "\n")
+	if lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+	items := func(indent string) string {
+		var b strings.Builder
+		for _, entry := range entries {
+			writeClusterEntry(&b, entry, indent)
+		}
+		return b.String()
+	}
+	// insertAfter splices text after line n (1-based; 0 = file start).
+	insertAfter := func(n int, text string) string {
+		var b strings.Builder
+		for i, l := range lines {
+			if i == n {
+				b.WriteString(text)
+			}
+			b.WriteString(l)
+		}
+		if n >= len(lines) {
+			if len(lines) > 0 && !strings.HasSuffix(lines[len(lines)-1], "\n") {
+				b.WriteByte('\n')
+			}
+			b.WriteString(text)
+		}
+		return b.String()
+	}
+
+	var root *yaml.Node
+	if doc.Kind == yaml.DocumentNode && len(doc.Content) > 0 {
+		root = doc.Content[0]
+	}
+	if root == nil || (root.Kind == yaml.ScalarNode && root.Tag == "!!null") {
+		return insertAfter(len(lines), "clusters:\n"+items("  ")), nil
+	}
+	if root.Kind != yaml.MappingNode {
+		return "", fmt.Errorf("top level is not a mapping")
+	}
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		key, val := root.Content[i], root.Content[i+1]
+		if key.Value != "clusters" {
+			continue
+		}
+		// Where the list's region ends: the next top-level field, or EOF.
+		end := len(lines)
+		if i+2 < len(root.Content) {
+			end = root.Content[i+2].Line - 1
+		}
+		switch {
+		case val.Kind == yaml.ScalarNode && val.Tag == "!!null":
+			return insertAfter(key.Line, items("  ")), nil
+		case val.Kind == yaml.SequenceNode && val.Style&yaml.FlowStyle != 0:
+			if len(val.Content) > 0 {
+				return "", fmt.Errorf("the clusters list is written inline ([...]); rewrite it as a block list (one `- name:` per line) to add clusters")
+			}
+			// `clusters: []` -> `clusters:` followed by the block items.
+			l := lines[val.Line-1]
+			col := val.Column - 1
+			if col+2 > len(l) || l[col:col+2] != "[]" {
+				return "", fmt.Errorf("cannot locate the empty clusters list to extend")
+			}
+			lines[val.Line-1] = strings.TrimRight(l[:col], " ") + l[col+2:]
+			return insertAfter(val.Line, items("  ")), nil
+		case val.Kind == yaml.SequenceNode:
+			last := val.Line
+			for n := end; n > val.Line; n-- {
+				t := strings.TrimSpace(lines[n-1])
+				if t != "" && !strings.HasPrefix(t, "#") {
+					last = n
+					break
+				}
+			}
+			// Items are indented like the existing ones: the dash sits two
+			// columns left of the item's content.
+			indent := "  "
+			if len(val.Content) > 0 && val.Content[0].Column >= 3 {
+				indent = strings.Repeat(" ", val.Content[0].Column-3)
+			}
+			return insertAfter(last, items(indent)), nil
+		default:
+			return "", fmt.Errorf("the top-level clusters field is not a list")
+		}
+	}
+	return insertAfter(len(lines), "clusters:\n"+items("  ")), nil
+}
+
+// writeClusterEntry writes one list item with its dash at indent.
+func writeClusterEntry(b *strings.Builder, cc ClusterConfig, indent string) {
+	field := indent + "  "
+	fmt.Fprintf(b, "%s- name: %s\n", indent, yamlScalar(cc.Name))
+	fmt.Fprintf(b, "%scontext: %s\n", field, yamlScalar(cc.Context))
 	// Persist protection so a prod cluster imported mid-session stays protected
 	// across restarts, not just for the current session.
 	if cc.Protected {
-		b.WriteString("    protected: true\n")
+		fmt.Fprintf(b, "%sprotected: true\n", field)
 	}
 	if len(cc.Tags) == 0 {
 		return
@@ -125,9 +253,9 @@ func writeClusterEntry(b *strings.Builder, cc ClusterConfig) {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
-	b.WriteString("    tags:\n")
+	fmt.Fprintf(b, "%stags:\n", field)
 	for _, k := range keys {
-		fmt.Fprintf(b, "      %s: %s\n", yamlScalar(k), yamlTagScalar(cc.Tags[k]))
+		fmt.Fprintf(b, "%s  %s: %s\n", field, yamlScalar(k), yamlTagScalar(cc.Tags[k]))
 	}
 }
 

@@ -235,3 +235,128 @@ func mustRead(t *testing.T, path string) []byte {
 	}
 	return b
 }
+
+// Review 2026-10-03 #12: the new entries land at the actual end of the
+// top-level clusters list wherever it sits, every original line survives in
+// order, and the result loads with exactly the new clusters added.
+func TestAppendClustersInsertsIntoTheListWhereverItIs(t *testing.T) {
+	cases := []struct {
+		name, original string
+		want           []string // cluster names after the append, in order
+		contains       string   // a substring proving the layout of the insertion
+	}{
+		{
+			name: "field after the list (the original failure)",
+			original: `clusters:
+  - name: a
+    context: a
+# AI settings
+ai:
+  backend: "off"
+`,
+			want:     []string{"a", "new"},
+			contains: "    context: a\n  - name: new\n    context: new\n# AI settings\nai:",
+		},
+		{
+			name: "fields before and after, trailing comments",
+			original: `ai:
+  backend: "off"
+clusters:
+  - name: a
+    context: a # inline
+
+# trailing note about the list
+
+`,
+			want:     []string{"a", "new"},
+			contains: "    context: a # inline\n  - name: new\n",
+		},
+		{
+			name:     "zero-indent list keeps its indentation",
+			original: "clusters:\n- name: a\n  context: a\nai:\n  backend: \"off\"\n",
+			want:     []string{"a", "new"},
+			contains: "  context: a\n- name: new\n  context: new\nai:",
+		},
+		{
+			name:     "clusters with no value",
+			original: "ai:\n  backend: \"off\"\nclusters:\n",
+			want:     []string{"new"},
+			contains: "clusters:\n  - name: new\n",
+		},
+		{
+			name:     "empty inline list",
+			original: "clusters: [] # none yet\nai:\n  backend: \"off\"\n",
+			want:     []string{"new"},
+			contains: "clusters: # none yet\n  - name: new\n    context: new\nai:",
+		},
+		{
+			name:     "a comment mentioning clusters: is not the field",
+			original: "# clusters: are added by Klyx\nai:\n  backend: \"off\"\n",
+			want:     []string{"new"},
+			contains: "ai:\n  backend: \"off\"\nclusters:\n  - name: new\n",
+		},
+		{
+			name:     "no trailing newline",
+			original: "clusters:\n  - name: a\n    context: a",
+			want:     []string{"a", "new"},
+			contains: "    context: a\n  - name: new\n",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "fleet.yaml")
+			if err := os.WriteFile(path, []byte(tc.original), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := AppendClusters(path, []string{"new"}); err != nil {
+				t.Fatalf("append: %v", err)
+			}
+			b, _ := os.ReadFile(path)
+			got := string(b)
+			if !strings.Contains(got, tc.contains) {
+				t.Fatalf("insertion layout wrong, want %q in:\n%s", tc.contains, got)
+			}
+			// Every original line survives, in order (the empty inline list's
+			// line is the one deliberate edit).
+			rest := got
+			for _, l := range strings.Split(strings.TrimRight(tc.original, "\n"), "\n") {
+				if strings.Contains(l, "[]") {
+					continue
+				}
+				i := strings.Index(rest, l)
+				if i < 0 {
+					t.Fatalf("original line %q lost or reordered:\n%s", l, got)
+				}
+				rest = rest[i+len(l):]
+			}
+			cfg, err := Load(path)
+			if err != nil {
+				t.Fatalf("result must load: %v\n%s", err, got)
+			}
+			var names []string
+			for _, c := range cfg.Clusters {
+				names = append(names, c.Name)
+			}
+			if strings.Join(names, ",") != strings.Join(tc.want, ",") {
+				t.Fatalf("clusters = %v, want %v", names, tc.want)
+			}
+		})
+	}
+}
+
+// A non-empty inline list cannot be extended without reformatting the user's
+// file: refused with how to fix it, and the file is untouched.
+func TestAppendClustersRefusesANonEmptyInlineList(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "fleet.yaml")
+	original := "clusters: [{name: a, context: a}]\n"
+	if err := os.WriteFile(path, []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err := AppendClusters(path, []string{"new"})
+	if err == nil || !strings.Contains(err.Error(), "block list") {
+		t.Fatalf("want an actionable refusal, got %v", err)
+	}
+	if b, _ := os.ReadFile(path); string(b) != original {
+		t.Fatalf("file must be unchanged:\n%s", b)
+	}
+}
