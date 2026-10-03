@@ -452,12 +452,22 @@ func (c *ClusterConn) applyGitOpsHealth(g capability.GitOpsCapability) {
 		return
 	}
 	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.caps.GitOps = g
+	// GitOps recovering must not clear a Degraded that ANOTHER capability still
+	// causes: the cluster stays Degraded, now for that capability's reason
+	// (review 2026-10-03 F - the overlay used to be wiped by the first healthy
+	// GitOps recompute while the network fault remained).
+	if ev == EvCapHealthy && c.caps.Network.Tier == capability.Degraded {
+		if c.state == Degraded {
+			c.reason = c.caps.Network.Reason
+		}
+		return
+	}
 	if next, ok := Transition(c.state, ev); ok {
 		c.state = next
 		c.reason = g.Reason
 	}
-	c.mu.Unlock()
 }
 
 // refreshCounts recomputes node/pod counts and lastSync from the informer

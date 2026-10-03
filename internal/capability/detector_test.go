@@ -299,16 +299,54 @@ func TestDetectArgoPresentButUnhealthy(t *testing.T) {
 	}
 }
 
-func TestDetectGatewayPresentWithoutEnvoyProxyIsDegraded(t *testing.T) {
-	groups := []*metav1.APIResourceList{{GroupVersion: "gateway.networking.k8s.io/v1"}}
-	cs := newFake(groups)
-	d := NewDetector(cs)
-	set := d.Detect(context.Background())
-	if set.Network.Tier != Degraded {
-		t.Fatalf("want Degraded (no EnvoyProxy), got %v", set.Network.Tier)
+// Review 2026-10-03 F: the Network tier is degraded only by a FAULT, and the
+// data plane is detected through the implementation-agnostic GatewayClass
+// contract - not by assuming Envoy Gateway.
+func TestDetectNetworkTier(t *testing.T) {
+	gw := []*metav1.APIResourceList{{GroupVersion: "gateway.networking.k8s.io/v1"}}
+	cilium := []*metav1.APIResourceList{{GroupVersion: "cilium.io/v2"}}
+	cases := []struct {
+		name     string
+		groups   []*metav1.APIResourceList
+		probe    func(context.Context, string) (int, int, error)
+		wantTier Tier
+	}{
+		{"non-Envoy data plane accepted its class", gw, func(context.Context, string) (int, int, error) { return 1, 1, nil }, Healthy},
+		{"classes exist, none accepted", gw, func(context.Context, string) (int, int, error) { return 2, 0, nil }, Degraded},
+		{"Gateway API CRDs but no classes (not in use)", gw, func(context.Context, string) (int, int, error) { return 0, 0, nil }, Healthy},
+		{"classes unreadable, no recognised data plane", gw, func(context.Context, string) (int, int, error) { return 0, 0, errors.New("forbidden") }, Degraded},
+		{"classes unreadable, Cilium present", append(append([]*metav1.APIResourceList{}, gw...), cilium...), func(context.Context, string) (int, int, error) { return 0, 0, errors.New("forbidden") }, Healthy},
+		{"Cilium without Gateway API is not a fault", cilium, nil, Healthy},
 	}
-	if set.Network.GatewayAPIVersion != "v1" {
-		t.Fatalf("want pinned version v1, got %q", set.Network.GatewayAPIVersion)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			d := NewDetector(newFake(tc.groups))
+			var gotVersion string
+			if tc.probe != nil {
+				d.gatewayClasses = func(ctx context.Context, v string) (int, int, error) { gotVersion = v; return tc.probe(ctx, v) }
+			}
+			set := d.Detect(context.Background())
+			if set.Network.Tier != tc.wantTier {
+				t.Fatalf("tier = %v (%s), want %v", set.Network.Tier, set.Network.Reason, tc.wantTier)
+			}
+			if tc.probe != nil && gotVersion != "v1" {
+				t.Fatalf("probe must use the served version, got %q", gotVersion)
+			}
+			if tc.wantTier == Degraded && set.Network.Reason == "" {
+				t.Fatal("a degraded tier must say why")
+			}
+		})
+	}
+}
+
+func TestCountAcceptedGatewayClasses(t *testing.T) {
+	raw := []byte(`{"items":[
+		{"status":{"conditions":[{"type":"Accepted","status":"True"}]}},
+		{"status":{"conditions":[{"type":"Accepted","status":"False"}]}},
+		{"status":{}}]}`)
+	total, accepted, err := countAcceptedGatewayClasses(raw)
+	if err != nil || total != 3 || accepted != 1 {
+		t.Fatalf("got total=%d accepted=%d err=%v", total, accepted, err)
 	}
 }
 

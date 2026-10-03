@@ -2,6 +2,7 @@ package capability
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -69,6 +70,11 @@ func gitOpsTier(flux FluxInfo, argo ArgoInfo) (Tier, string) {
 // Detector classifies capabilities for one cluster.
 type Detector struct {
 	cs kubernetes.Interface
+
+	// gatewayClasses reports how many GatewayClasses exist at the given
+	// Gateway API version and how many a controller has Accepted. nil selects
+	// the default (a read through the discovery REST client); tests inject it.
+	gatewayClasses func(ctx context.Context, version string) (total, accepted int, err error)
 }
 
 func NewDetector(cs kubernetes.Interface) *Detector { return &Detector{cs: cs} }
@@ -172,17 +178,80 @@ func (d *Detector) detectNetwork(ctx context.Context, served map[string]bool) Ne
 		return out
 	}
 
-	// Healthy requires Gateway API AND its data-plane operator (EnvoyProxy).
-	healthy := gwPresent && out.HasEnvoyProxy
-	out.Base.Tier = Classify(true, healthy)
-	if !healthy {
-		if gwPresent && !out.HasEnvoyProxy {
-			out.Base.Reason = "Gateway API present but no EnvoyProxy (data plane) installed"
-		} else if !gwPresent {
-			out.Base.Reason = "Cilium present but Gateway API not installed"
+	// Only a FAULT degrades the tier (review 2026-10-03 F; "only faults
+	// glow"). Cilium without Gateway API is a configuration choice, not a fault,
+	// and which data plane serves Gateway API is not Klyx's to assume: Envoy
+	// Gateway, Cilium, Istio and others all implement it. The implementation-
+	// agnostic signal is the GatewayClass contract - a controller that serves a
+	// class sets Accepted=True on it. Degraded means classes exist but no
+	// controller accepted any of them (a missing or broken data plane).
+	if !gwPresent {
+		out.Base.Tier = Healthy
+		return out
+	}
+	probe := d.gatewayClasses
+	if probe == nil {
+		probe = d.readGatewayClasses
+	}
+	total, accepted, err := probe(ctx, gwVersion)
+	switch {
+	case err != nil:
+		// Could not read GatewayClasses: fall back to recognising the common data
+		// planes by their CRDs rather than guessing a fault.
+		if out.HasEnvoyProxy || out.CiliumPresent {
+			out.Base.Tier = Healthy
+		} else {
+			out.Base = Base{Tier: Degraded, Reason: "Gateway API installed, GatewayClasses unreadable (" + err.Error() + ") and no recognised data plane CRDs"}
 		}
+	case total > 0 && accepted == 0:
+		out.Base = Base{Tier: Degraded, Reason: fmt.Sprintf("%d GatewayClass(es) exist but no controller has Accepted any - no working Gateway API data plane", total)}
+	default:
+		// Accepted classes, or Gateway API CRDs with no classes yet (not in use).
+		out.Base.Tier = Healthy
 	}
 	return out
+}
+
+// readGatewayClasses lists GatewayClasses through the discovery REST client
+// (the typed clientset has no Gateway API types) and counts the Accepted ones.
+func (d *Detector) readGatewayClasses(ctx context.Context, version string) (int, int, error) {
+	rc := d.cs.Discovery().RESTClient()
+	if rc == nil {
+		return 0, 0, fmt.Errorf("no REST client for gatewayclasses")
+	}
+	raw, err := rc.Get().AbsPath("/apis/gateway.networking.k8s.io", version, "gatewayclasses").Do(ctx).Raw()
+	if err != nil {
+		return 0, 0, err
+	}
+	return countAcceptedGatewayClasses(raw)
+}
+
+// countAcceptedGatewayClasses parses a GatewayClassList and counts the classes
+// whose Accepted condition is True.
+func countAcceptedGatewayClasses(raw []byte) (int, int, error) {
+	var list struct {
+		Items []struct {
+			Status struct {
+				Conditions []struct {
+					Type   string `json:"type"`
+					Status string `json:"status"`
+				} `json:"conditions"`
+			} `json:"status"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(raw, &list); err != nil {
+		return 0, 0, fmt.Errorf("parse gatewayclasses: %w", err)
+	}
+	accepted := 0
+	for _, it := range list.Items {
+		for _, c := range it.Status.Conditions {
+			if c.Type == "Accepted" && c.Status == "True" {
+				accepted++
+				break
+			}
+		}
+	}
+	return len(list.Items), accepted, nil
 }
 
 // detectCertManager classifies cert-manager: present iff the cert-manager.io
