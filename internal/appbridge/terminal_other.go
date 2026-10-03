@@ -2,7 +2,10 @@
 
 package appbridge
 
-import "syscall"
+import "errors"
 
-// newConsoleAttr is Windows-only; elsewhere terminals are separate apps.
-func newConsoleAttr() *syscall.SysProcAttr { return nil }
+// startInNewConsole is Windows-only: terminalLaunchArgv never asks for a new
+// console elsewhere, where terminals are separate apps.
+func startInNewConsole([]string) error {
+	return errors.New("new-console launch is Windows-only")
+}

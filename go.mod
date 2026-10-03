@@ -4,6 +4,7 @@ go 1.26.6
 
 require (
 	github.com/wailsapp/wails/v3 v3.0.0-alpha2.103
+	golang.org/x/sys v0.45.0
 	gopkg.in/yaml.v3 v3.0.1
 	k8s.io/api v0.36.2
 	k8s.io/apimachinery v0.36.2
@@ -47,7 +48,6 @@ require (
 	golang.org/x/image v0.40.0 // indirect
 	golang.org/x/net v0.55.0 // indirect
 	golang.org/x/oauth2 v0.34.0 // indirect
-	golang.org/x/sys v0.45.0 // indirect
 	golang.org/x/term v0.43.0 // indirect
 	golang.org/x/text v0.39.0 // indirect
 	golang.org/x/time v0.14.0 // indirect

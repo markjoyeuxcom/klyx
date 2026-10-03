@@ -126,8 +126,9 @@ func linuxTerminalArgv(lookPath func(string) (string, error), getenv func(string
 }
 
 // windowsTerminalArgv runs the command in PowerShell (pwsh when installed,
-// else the always-present Windows PowerShell) in a NEW console window - Windows
-// Terminal hosts it when it is the default terminal. -NoExit keeps the window
+// else the always-present Windows PowerShell) in a NEW console window with
+// that console's own stdio (startInNewConsole) - Windows Terminal hosts it
+// when it is the default terminal. -NoExit keeps the window
 // open after kubectl exits, so an error stays readable.
 //
 // Review 2026-10-03 #9: the old path went through cmd.exe (`wt cmd /k` or `cmd
@@ -211,10 +212,15 @@ func launchTerminal(argv []string) ActionResultDTO {
 	if err != nil {
 		return ActionResultDTO{Error: err.Error()}
 	}
-	cmd := exec.Command(launch[0], launch[1:]...) //nolint:gosec // argv built internally from validated parts
 	if newConsole {
-		cmd.SysProcAttr = newConsoleAttr()
+		// Not os/exec: it would hand the child NUL standard handles that
+		// Windows keeps even in the new console (startInNewConsole).
+		if err := startInNewConsole(launch); err != nil {
+			return ActionResultDTO{Error: "open terminal: " + err.Error()}
+		}
+		return ActionResultDTO{OK: true}
 	}
+	cmd := exec.Command(launch[0], launch[1:]...) //nolint:gosec // argv built internally from validated parts
 	if err := cmd.Start(); err != nil {
 		return ActionResultDTO{Error: "open terminal: " + err.Error()}
 	}
