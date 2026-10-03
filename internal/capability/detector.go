@@ -196,13 +196,10 @@ func (d *Detector) detectNetwork(ctx context.Context, served map[string]bool) Ne
 	total, accepted, err := probe(ctx, gwVersion)
 	switch {
 	case err != nil:
-		// Could not read GatewayClasses: fall back to recognising the common data
-		// planes by their CRDs rather than guessing a fault.
-		if out.HasEnvoyProxy || out.CiliumPresent {
-			out.Base.Tier = Healthy
-		} else {
-			out.Base = Base{Tier: Degraded, Reason: "Gateway API installed, GatewayClasses unreadable (" + err.Error() + ") and no recognised data plane CRDs"}
-		}
+		// Could not read GatewayClasses: acceptance is UNKNOWN, and CRD presence
+		// (Envoy Gateway, Cilium) cannot establish it. Say so rather than claim
+		// Healthy (Codex batch-2 review R4).
+		out.Base = Base{Tier: Degraded, Reason: "Gateway API installed but GatewayClasses could not be read (" + err.Error() + ") - data-plane health unknown"}
 	case total > 0 && accepted == 0:
 		out.Base = Base{Tier: Degraded, Reason: fmt.Sprintf("%d GatewayClass(es) exist but no controller has Accepted any - no working Gateway API data plane", total)}
 	default:
@@ -227,14 +224,21 @@ func (d *Detector) readGatewayClasses(ctx context.Context, version string) (int,
 }
 
 // countAcceptedGatewayClasses parses a GatewayClassList and counts the classes
-// whose Accepted condition is True.
+// whose Accepted condition is True FOR THE CURRENT SPEC: a condition whose
+// observedGeneration lags metadata.generation describes an older spec the
+// controller has not yet re-evaluated, so it does not count (Codex batch-2
+// review R4). A condition without observedGeneration is taken as current.
 func countAcceptedGatewayClasses(raw []byte) (int, int, error) {
 	var list struct {
 		Items []struct {
+			Metadata struct {
+				Generation int64 `json:"generation"`
+			} `json:"metadata"`
 			Status struct {
 				Conditions []struct {
-					Type   string `json:"type"`
-					Status string `json:"status"`
+					Type               string `json:"type"`
+					Status             string `json:"status"`
+					ObservedGeneration int64  `json:"observedGeneration"`
 				} `json:"conditions"`
 			} `json:"status"`
 		} `json:"items"`
@@ -244,11 +248,15 @@ func countAcceptedGatewayClasses(raw []byte) (int, int, error) {
 	}
 	accepted := 0
 	for _, it := range list.Items {
+		gen := it.Metadata.Generation
 		for _, c := range it.Status.Conditions {
-			if c.Type == "Accepted" && c.Status == "True" {
-				accepted++
-				break
+			if c.Type != "Accepted" || c.Status != "True" {
+				continue
 			}
+			if c.ObservedGeneration == 0 || gen == 0 || c.ObservedGeneration >= gen {
+				accepted++
+			}
+			break
 		}
 	}
 	return len(list.Items), accepted, nil

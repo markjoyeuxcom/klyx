@@ -315,7 +315,8 @@ func TestDetectNetworkTier(t *testing.T) {
 		{"classes exist, none accepted", gw, func(context.Context, string) (int, int, error) { return 2, 0, nil }, Degraded},
 		{"Gateway API CRDs but no classes (not in use)", gw, func(context.Context, string) (int, int, error) { return 0, 0, nil }, Healthy},
 		{"classes unreadable, no recognised data plane", gw, func(context.Context, string) (int, int, error) { return 0, 0, errors.New("forbidden") }, Degraded},
-		{"classes unreadable, Cilium present", append(append([]*metav1.APIResourceList{}, gw...), cilium...), func(context.Context, string) (int, int, error) { return 0, 0, errors.New("forbidden") }, Healthy},
+		// Unreadable acceptance is unknown: CRD presence cannot establish it (R4).
+		{"classes unreadable, Cilium present", append(append([]*metav1.APIResourceList{}, gw...), cilium...), func(context.Context, string) (int, int, error) { return 0, 0, errors.New("forbidden") }, Degraded},
 		{"Cilium without Gateway API is not a fault", cilium, nil, Healthy},
 	}
 	for _, tc := range cases {
@@ -336,6 +337,17 @@ func TestDetectNetworkTier(t *testing.T) {
 				t.Fatal("a degraded tier must say why")
 			}
 		})
+	}
+}
+
+// Codex batch-2 review R4: an Accepted=True that lags the spec is not current.
+func TestCountAcceptedGatewayClasses_StaleAcceptanceDoesNotCount(t *testing.T) {
+	raw := []byte(`{"items":[
+		{"metadata":{"generation":2},"status":{"conditions":[{"type":"Accepted","status":"True","observedGeneration":1}]}},
+		{"metadata":{"generation":3},"status":{"conditions":[{"type":"Accepted","status":"True","observedGeneration":3}]}}]}`)
+	total, accepted, err := countAcceptedGatewayClasses(raw)
+	if err != nil || total != 2 || accepted != 1 {
+		t.Fatalf("got total=%d accepted=%d err=%v, want 2/1", total, accepted, err)
 	}
 }
 
