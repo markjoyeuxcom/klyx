@@ -188,3 +188,37 @@ func TestMaskValues_PlainValuesUntouched(t *testing.T) {
 		}
 	}
 }
+
+// MaskManifest keeps secret REFERENCE fields (names, not values - even under a
+// secret-looking parent like volumes[].secret) readable - "secret X not found"
+// is what a fix most often needs - while still masking credential-like values.
+func TestMaskManifest_KeepsSecretReferencesReadable(t *testing.T) {
+	raw := `env:
+- name: API_TOKEN
+  valueFrom:
+    secretKeyRef: {name: api-creds, key: token}
+- name: DB_PASSWORD
+  value: hunter2
+volumes:
+- name: tls
+  secret: {secretName: web-tls}
+imagePullSecrets: [{name: regcred}]
+credentials:
+  secretRef: {name: nested}
+`
+	got, paths, err := MaskManifest(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, keep := range []string{"api-creds", "token", "web-tls", "regcred", "nested"} {
+		if !strings.Contains(got, keep) {
+			t.Errorf("reference %q must stay readable:\n%s", keep, got)
+		}
+	}
+	if strings.Contains(got, "hunter2") {
+		t.Fatalf("credential values must be masked:\n%s", got)
+	}
+	if len(paths) == 0 {
+		t.Fatal("masked paths must be reported")
+	}
+}

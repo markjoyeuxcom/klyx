@@ -12,6 +12,9 @@ type AIResultDTO struct {
 	Backend     string `json:"backend"`
 	GroundedOn  string `json:"groundedOn"`
 	Error       string `json:"error"`
+	// Redacted counts the manifest values masked before a fix suggestion was
+	// sent (credential-like keys; secret references stay readable).
+	Redacted int `json:"redacted,omitempty"`
 }
 
 // AIAvailabilityDTO tells the frontend whether to render an AI affordance at all

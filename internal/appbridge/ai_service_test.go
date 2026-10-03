@@ -438,3 +438,71 @@ func TestAI_LocalProtocolOffMachineIsEgress(t *testing.T) {
 		t.Fatal("ai.allowProtectedEgress must allow it")
 	}
 }
+
+// Review 2026-10-03 E: Suggest-fix sent full non-Secret manifests - inline env
+// credentials, ConfigMap data and the last-applied JSON copy - to the model,
+// while the prompt claimed values were masked. The manifest is now redacted
+// before it leaves, with secret REFERENCES kept readable.
+func TestAI_SuggestFix_RedactsNonSecretManifest(t *testing.T) {
+	yamlText := `apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+  annotations:
+    kubectl.kubernetes.io/last-applied-configuration: '{"spec":{"env":[{"name":"DB_PASSWORD","value":"hunter2"}]}}'
+    team: payments
+spec:
+  template:
+    spec:
+      containers:
+      - name: api
+        env:
+        - name: DB_PASSWORD
+          value: hunter2
+        - name: LOG_LEVEL
+          value: debug
+        - name: API_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: api-creds
+              key: token
+`
+	root := crd.InstanceDetail{Kind: "Deployment", Namespace: "app", Name: "api", YAML: yamlText}
+	conn := &fakeExplainConn{details: map[string]crd.InstanceDetail{"apps/deployments/app/api": root}}
+	cl := &fakeCompleter{reply: "ok"}
+	s := newAI(cl, "local", false, false, conn)
+
+	r := s.SuggestFix("c", "apps", "v1", "deployments", "app", "api")
+	if !r.OK {
+		t.Fatalf("want OK, got %+v", r)
+	}
+	if strings.Contains(cl.gotUser, "hunter2") {
+		t.Fatalf("an inline credential reached the model:\n%s", cl.gotUser)
+	}
+	if strings.Contains(cl.gotUser, "last-applied-configuration") {
+		t.Fatal("the last-applied JSON copy must be dropped, not sent")
+	}
+	for _, keep := range []string{"LOG_LEVEL", "debug", "api-creds", "team: payments"} {
+		if !strings.Contains(cl.gotUser, keep) {
+			t.Errorf("non-secret context %q must survive redaction:\n%s", keep, cl.gotUser)
+		}
+	}
+	if r.Redacted < 1 {
+		t.Fatalf("the result must report what was redacted, got %d", r.Redacted)
+	}
+	if strings.Contains(cl.gotUser, "secret values are masked)") {
+		t.Fatal("the prompt must not overclaim that all values are masked")
+	}
+}
+
+// Fail closed: a manifest that cannot be parsed for redaction is not sent.
+func TestAI_SuggestFix_UnredactableManifestIsNotSent(t *testing.T) {
+	root := crd.InstanceDetail{Kind: "Deployment", Namespace: "app", Name: "api", YAML: "kind: [unterminated"}
+	conn := &fakeExplainConn{details: map[string]crd.InstanceDetail{"apps/deployments/app/api": root}}
+	cl := &fakeCompleter{reply: "ok"}
+	s := newAI(cl, "local", false, false, conn)
+	r := s.SuggestFix("c", "apps", "v1", "deployments", "app", "api")
+	if r.OK || !strings.Contains(r.Error, "nothing was sent") || cl.calls != 0 {
+		t.Fatalf("want a fail-closed refusal with no model call, got %+v (calls=%d)", r, cl.calls)
+	}
+}

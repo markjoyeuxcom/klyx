@@ -2,12 +2,16 @@ package appbridge
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
+
+	"gopkg.in/yaml.v3"
 
 	"github.com/moomora/klyx/internal/capability"
 	"github.com/moomora/klyx/internal/certmanager"
 	"github.com/moomora/klyx/internal/crd"
+	"github.com/moomora/klyx/internal/helmcli"
 )
 
 const (
@@ -199,7 +203,15 @@ func (s *AIService) SuggestFix(cluster, group, version, plural, ns, name string)
 		return AIResultDTO{Error: "resolve resource: " + err.Error()}
 	}
 	bundle.Operators = s.operators(cluster)
-	system, user := BuildFixPrompt(bundle, root.YAML)
+	// The manifest leaves the machine (unless the endpoint is loopback): drop the
+	// last-applied annotation and mask credential-like values first. Fail
+	// closed - a manifest that cannot be redacted is not sent (review
+	// 2026-10-03 E).
+	manifest, redacted, err := redactManifestForAI(root.YAML)
+	if err != nil {
+		return AIResultDTO{Error: "could not redact the manifest, so nothing was sent: " + err.Error()}
+	}
+	system, user := BuildFixPrompt(bundle, manifest)
 	text, err := s.client.Complete(ctx, system, user, aiFixMaxTokens)
 	if err != nil {
 		return AIResultDTO{Error: "model call failed: " + err.Error()}
@@ -210,6 +222,7 @@ func (s *AIService) SuggestFix(cluster, group, version, plural, ns, name string)
 		Model:       s.client.Model(),
 		Backend:     s.backend,
 		GroundedOn:  resourceBundleIdentities(bundle),
+		Redacted:    redacted,
 	}
 }
 
@@ -246,4 +259,45 @@ func buildResourceBundle(ctx context.Context, conn AIConn, group, version, plura
 		b.Related = append(b.Related, toResourceView(rd, r.Relation))
 	}
 	return b, root, nil
+}
+
+// lastAppliedAnnotation is kubectl's client-side-apply snapshot: a JSON copy
+// of the whole object inside one string, which a structural masker cannot see
+// into - so it is dropped, never masked.
+const lastAppliedAnnotation = "kubectl.kubernetes.io/last-applied-configuration"
+
+// redactManifestForAI prepares a resource manifest for an AI prompt. Secret
+// objects arrive masked already (MaskSecretData); this covers every OTHER kind,
+// whose spec can carry inline credentials (env literals, ConfigMap data, inline
+// chart values): it drops the last-applied annotation, then masks every value
+// under a credential-like key - and the value of env entries whose name looks
+// like a secret - keeping secret REFERENCE fields readable
+// (helmcli.MaskManifest). Heuristic: it reduces, but cannot rule out, sensitive
+// data in the prompt, and the prompt says so. Returns the number of masked
+// values; an unparseable manifest is an error (the caller sends nothing).
+func redactManifestForAI(manifest string) (string, int, error) {
+	if strings.TrimSpace(manifest) == "" {
+		return "", 0, nil
+	}
+	var obj map[string]interface{}
+	if err := yaml.Unmarshal([]byte(manifest), &obj); err != nil {
+		return "", 0, fmt.Errorf("parse manifest: %w", err)
+	}
+	if md, ok := obj["metadata"].(map[string]interface{}); ok {
+		if anns, ok := md["annotations"].(map[string]interface{}); ok {
+			delete(anns, lastAppliedAnnotation)
+			if len(anns) == 0 {
+				delete(md, "annotations")
+			}
+		}
+	}
+	stripped, err := yaml.Marshal(obj)
+	if err != nil {
+		return "", 0, fmt.Errorf("re-encode manifest: %w", err)
+	}
+	masked, paths, err := helmcli.MaskManifest(string(stripped))
+	if err != nil {
+		return "", 0, err
+	}
+	return masked, len(paths), nil
 }

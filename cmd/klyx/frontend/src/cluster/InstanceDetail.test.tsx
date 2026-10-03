@@ -914,6 +914,7 @@ describe("InstanceDetail cross-lens Explain (AI)", () => {
       groundedOn: "Deployment/app/api",
       explanation: "Scale to 1.\n```yaml\nspec:\n  replicas: 1\n```",
       error: "",
+      redacted: 2,
     });
     seed();
     const { findByRole, findByText, getByText } = render(<InstanceDetail cluster="x" resource={resource} instance={instance} />);
@@ -924,6 +925,8 @@ describe("InstanceDetail cross-lens Explain (AI)", () => {
     expect(await findByText(/Klyx will not apply it/)).toBeTruthy();
     expect(getByText(/replicas: 1/)).toBeTruthy();
     expect(getByText("copy suggestion")).toBeTruthy();
+    // Review 2026-10-03 E: say what left the machine, and that redaction is heuristic.
+    expect(getByText(/2 credential-like values redacted.*heuristic/)).toBeTruthy();
     expect(vi.mocked(suggestFix)).toHaveBeenCalledWith("x", "cert-manager.io", "v1", "certificates", "default", "web-tls");
   });
 });

@@ -140,12 +140,13 @@ Output exactly three parts, in order:
 
 Rules:
 - Reason ONLY from the provided data. If you cannot determine a safe, specific fix, say exactly that and name what to investigate instead - do not guess.
-- Never fabricate secret values, credentials, or image digests. Secret values are masked (<masked>); if the fix needs a secret, say where it should come from (e.g. the ExternalSecret / SealedSecret), do not invent one.
+- Never fabricate secret values, credentials, or image digests. Secret objects are masked (<masked>) and values under credential-like keys are redacted (<redacted>); if the fix needs a secret, say where it should come from (e.g. the ExternalSecret / SealedSecret), do not invent one. Never repeat a literal value that looks like a credential.
 - Do not suggest kubectl or other imperative commands. Desired state is authored in Git.`
 
 // BuildFixPrompt turns a resolved bundle + the resource's current manifest into
-// the (system, user) fix prompt. Pure. The manifest is capped; secret values are
-// already masked upstream (MaskSecretData) before the YAML is built.
+// the (system, user) fix prompt. Pure. The manifest is capped; the caller has
+// already redacted it (redactManifestForAI: Secret data masked upstream,
+// last-applied dropped, credential-like values masked - heuristically).
 func BuildFixPrompt(bundle resourceBundle, manifest string) (system, user string) {
 	b, _ := json.Marshal(bundle)
 	m := manifest
@@ -153,7 +154,7 @@ func BuildFixPrompt(bundle resourceBundle, manifest string) (system, user string
 		m = m[:aiManifestCap] + "\n# ...(truncated)"
 	}
 	user = "Resolved resource + related-object health (ground truth):\n" + string(b) +
-		"\n\nCurrent manifest of the resource (desired state; secret values are masked):\n```yaml\n" + m + "\n```"
+		"\n\nCurrent manifest of the resource (desired state; Secret data masked, credential-like values redacted):\n```yaml\n" + m + "\n```"
 	return fixSystem, user
 }
 

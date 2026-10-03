@@ -13,6 +13,10 @@ import (
 // the clipboard).
 const redactedValue = "<redacted>"
 
+// secretMaskedValue is the placeholder Klyx's Secret masking (crd.MaskSecretData)
+// writes; already-masked data is left as is rather than re-masked.
+const secretMaskedValue = "<masked>"
+
 // MaskValues parses a helm values YAML document and returns a copy with every
 // sensitive leaf - a scalar under a password/secret/token/key/credential-shaped
 // key - replaced by redactedValue, plus the sorted dotted paths of the redacted
@@ -27,6 +31,32 @@ const redactedValue = "<redacted>"
 // only hides a non-secret behind a reveal click, a false negative leaks a real
 // secret.
 func MaskValues(raw string) (masked string, paths []string, err error) {
+	return mask(raw, nil)
+}
+
+// manifestRefKeys are Kubernetes fields whose subtree carries the NAMES of
+// secrets, never their values. MaskManifest keeps them readable: "secret X not
+// found" is the most common thing a fix has to address, and masking the
+// reference would hide exactly that.
+var manifestRefKeys = map[string]bool{
+	"secretKeyRef":     true, // env valueFrom: {name, key}
+	"secretRef":        true, // envFrom / many CRDs: {name}
+	"secretName":       true, // volumes.secret, TLS blocks
+	"existingSecret":   true, // chart convention for a pre-created Secret's name
+	"imagePullSecrets": true, // [{name}]
+	"secretStoreRef":   true, // ESO: {name, kind}
+}
+
+// MaskManifest is MaskValues for a Kubernetes manifest about to leave the
+// machine (an AI prompt): the same subtree-aware credential masking, except that
+// reference fields (manifestRefKeys) stay readable. Heuristic like MaskValues -
+// it cannot see a credential under an innocuous key (e.g. DATABASE_URL), so
+// callers must never present the result as secret-free.
+func MaskManifest(raw string) (masked string, paths []string, err error) {
+	return mask(raw, manifestRefKeys)
+}
+
+func mask(raw string, refKeys map[string]bool) (string, []string, error) {
 	if strings.TrimSpace(raw) == "" {
 		return "", nil, nil
 	}
@@ -35,7 +65,7 @@ func MaskValues(raw string) (masked string, paths []string, err error) {
 		return "", nil, fmt.Errorf("parse helm values: %w", err)
 	}
 	var collected []string
-	red := maskNode(root, "", false, &collected)
+	red := maskNode(root, "", false, refKeys, &collected)
 	out, err := yaml.Marshal(red)
 	if err != nil {
 		return "", nil, fmt.Errorf("re-encode helm values: %w", err)
@@ -61,13 +91,19 @@ func ValueAtPath(raw, path string) (value string, found bool, err error) {
 	return value, found, nil
 }
 
-func maskNode(v interface{}, path string, keySensitive bool, paths *[]string) interface{} {
+func maskNode(v interface{}, path string, keySensitive bool, refKeys map[string]bool, paths *[]string) interface{} {
 	switch t := v.(type) {
 	case map[string]interface{}:
 		nameLooksSecret := envEntryNameLooksSecret(t["name"])
 		out := make(map[string]interface{}, len(t))
 		for k, val := range t {
-			out[k] = maskNode(val, joinPath(path, k), childSensitive(keySensitive, nameLooksSecret, k), paths)
+			if refKeys[k] {
+				// A reference field carries NAMES by API contract (never values),
+				// even under a secret-looking parent such as volumes[].secret.
+				out[k] = val
+				continue
+			}
+			out[k] = maskNode(val, joinPath(path, k), childSensitive(keySensitive, nameLooksSecret, k), refKeys, paths)
 		}
 		return out
 	case map[interface{}]interface{}:
@@ -81,19 +117,27 @@ func maskNode(v interface{}, path string, keySensitive bool, paths *[]string) in
 		out := make(map[interface{}]interface{}, len(t))
 		for k, val := range t {
 			ks := fmt.Sprint(k)
-			out[k] = maskNode(val, joinPath(path, ks), childSensitive(keySensitive, nameLooksSecret, ks), paths)
+			if refKeys[ks] {
+				out[k] = val
+				continue
+			}
+			out[k] = maskNode(val, joinPath(path, ks), childSensitive(keySensitive, nameLooksSecret, ks), refKeys, paths)
 		}
 		return out
 	case []interface{}:
 		out := make([]interface{}, len(t))
 		for i, val := range t {
 			// A sensitive key over a list (e.g. tokens: [a, b]) masks each element.
-			out[i] = maskNode(val, fmt.Sprintf("%s[%d]", path, i), keySensitive, paths)
+			out[i] = maskNode(val, fmt.Sprintf("%s[%d]", path, i), keySensitive, refKeys, paths)
 		}
 		return out
 	default:
 		// Skip empty/nil scalars: masking "" as <redacted> would falsely imply a
-		// secret is set (e.g. existingSecret: "").
+		// secret is set (e.g. existingSecret: ""). Leave an already-masked
+		// placeholder alone (a Secret's <masked> data keeps its own marker).
+		if s, ok := t.(string); ok && (s == secretMaskedValue || s == redactedValue) {
+			return t
+		}
 		if keySensitive && !isEmptyScalar(t) {
 			*paths = append(*paths, path)
 			return redactedValue

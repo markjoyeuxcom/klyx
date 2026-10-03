@@ -895,6 +895,14 @@ export function InstanceDetail({ cluster, resource, instance }: { cluster: strin
                           )}
                           <div style={{ fontFamily: "var(--font-mono)", fontSize: 9, color: "var(--color-text-tertiary)" }}>Grounded on: {aiPanel.result.groundedOn} · {aiPanel.result.model}</div>
                         </div>
+                        {aiPanel.mode === "fix" && (
+                          // Say what left the machine: the manifest is redacted
+                          // heuristically, not guaranteed secret-free (review
+                          // 2026-10-03 E).
+                          <div data-testid="ai-fix-redaction" style={{ fontSize: 9, color: "var(--color-text-tertiary)", fontStyle: "italic" }}>
+                            Sent the manifest with {aiPanel.result.redacted ?? 0} credential-like value{(aiPanel.result.redacted ?? 0) === 1 ? "" : "s"} redacted and last-applied removed - redaction is heuristic, so review what your manifests carry inline.
+                          </div>
+                        )}
                         {aiPanel.mode !== "fix" && (
                           <div style={{ fontSize: 9, color: "var(--color-text-tertiary)", fontStyle: "italic" }}>AI-generated from resolved health — verify before acting.</div>
                         )}
