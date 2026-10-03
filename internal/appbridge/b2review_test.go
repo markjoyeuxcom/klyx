@@ -148,6 +148,80 @@ spec:
 	}
 }
 
+// Codex batch-2 final R1 probes, adopted: a foreign CRD's credential subtree
+// that reuses the Pod parent keys (secret, valueFrom) is not an API reference
+// location - the root kind plus the full path decides - so its value must not
+// reach the actual prompt.
+func TestAI_ForeignCredentialParentIsNotAPIReference(t *testing.T) {
+	cases := map[string]string{
+		"secret parent is not a volume": `apiVersion: example.com/v1
+kind: Widget
+metadata:
+  name: app
+spec:
+  credentials:
+    secret:
+      secretName: b2-final-private-value
+`,
+		"valueFrom parent is not pod env": `apiVersion: example.com/v1
+kind: Widget
+metadata:
+  name: app
+spec:
+  credentials:
+    valueFrom:
+      secretKeyRef:
+        name: custom-auth
+        key: b2-final-private-value
+`,
+	}
+	for name, raw := range cases {
+		t.Run(name, func(t *testing.T) {
+			root := crd.InstanceDetail{Kind: "Widget", Namespace: "app", Name: "app", YAML: raw}
+			conn := &fakeExplainConn{details: map[string]crd.InstanceDetail{"example.com/widgets/app/app": root}}
+			cl := &fakeCompleter{reply: "ok"}
+			svc := newAI(cl, "hosted", true, false, conn)
+			if r := svc.SuggestFix("c", "example.com", "v1", "widgets", "app", "app"); !r.OK {
+				t.Fatalf("fix failed: %+v", r)
+			}
+			if strings.Contains(cl.gotUser, "b2-final-private-value") {
+				t.Fatal("a foreign CRD credential under a matching parent key reached the model prompt")
+			}
+		})
+	}
+}
+
+// A workload Pod template's references stay readable at the kind's real path
+// (CronJob nests the template two levels deeper), for init containers too.
+func TestAI_WorkloadTemplateReferenceRemainsReadable(t *testing.T) {
+	const raw = `apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: app
+spec:
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          imagePullSecrets:
+          - name: cron-pull
+          initContainers:
+          - name: migrate
+            envFrom:
+            - secretRef:
+                name: cron-env
+`
+	out, _, err := redactManifestForAI(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ref := range []string{"cron-pull", "cron-env"} {
+		if !strings.Contains(out, ref) {
+			t.Errorf("CronJob template reference %q must stay readable:\n%s", ref, out)
+		}
+	}
+}
+
 func TestAI_GenuinePodReferenceRemainsReadable(t *testing.T) {
 	const raw = `apiVersion: v1
 kind: Pod

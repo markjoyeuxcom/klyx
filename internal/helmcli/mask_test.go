@@ -189,23 +189,29 @@ func TestMaskValues_PlainValuesUntouched(t *testing.T) {
 	}
 }
 
-// MaskManifest keeps secret REFERENCES readable at their KNOWN API locations
-// (even under a secret-looking parent like volumes[].secret) - "secret X not
-// found" is what a fix most often needs - while still masking credential-like
-// values, and a reference-shaped value anywhere else.
+// MaskManifest keeps secret REFERENCES readable at their exact API paths for
+// the manifest's kind (even under a secret-looking parent like
+// volumes[].secret) - "secret X not found" is what a fix most often needs -
+// while still masking credential-like values, and a reference-shaped value at
+// any other path.
 func TestMaskManifest_KeepsSecretReferencesReadable(t *testing.T) {
-	raw := `env:
-- name: API_TOKEN
-  valueFrom:
-    secretKeyRef: {name: api-creds, key: token}
-- name: DB_PASSWORD
-  value: hunter2
-volumes:
-- name: tls
-  secret: {secretName: web-tls}
-imagePullSecrets: [{name: regcred}]
-credentials:
-  secretRef: {name: nested}
+	raw := `apiVersion: v1
+kind: Pod
+spec:
+  containers:
+  - name: app
+    env:
+    - name: API_TOKEN
+      valueFrom:
+        secretKeyRef: {name: api-creds, key: token}
+    - name: DB_PASSWORD
+      value: hunter2
+  volumes:
+  - name: tls
+    secret: {secretName: web-tls}
+  imagePullSecrets: [{name: regcred}]
+  credentials:
+    secretRef: {name: nested}
 `
 	got, paths, err := MaskManifest(raw)
 	if err != nil {
@@ -219,12 +225,50 @@ credentials:
 	if strings.Contains(got, "hunter2") {
 		t.Fatalf("credential values must be masked:\n%s", got)
 	}
-	// credentials.secretRef is not a known API location: masked like any value.
+	// spec.credentials.secretRef is not an API reference path for a Pod.
 	if strings.Contains(got, "nested") {
-		t.Fatalf("a reference shape outside a known API location must be masked:\n%s", got)
+		t.Fatalf("a reference shape outside its API path must be masked:\n%s", got)
 	}
 	if len(paths) == 0 {
 		t.Fatal("masked paths must be reported")
+	}
+}
+
+// Pod templates are recognised at each workload kind's real path, for every
+// container list; the same shape anywhere else - including a foreign CRD
+// whose credential subtree reuses the parent keys - is masked (Codex batch-2
+// review R1, final).
+func TestMaskManifest_PodTemplatePathsPerKind(t *testing.T) {
+	keep := map[string]string{
+		"Deployment env":                 "apiVersion: apps/v1\nkind: Deployment\nspec:\n  template:\n    spec:\n      containers:\n      - env:\n        - valueFrom:\n            secretKeyRef: {name: dep-ref, key: k}\n",
+		"CronJob initContainers envFrom": "apiVersion: batch/v1\nkind: CronJob\nspec:\n  jobTemplate:\n    spec:\n      template:\n        spec:\n          initContainers:\n          - envFrom:\n            - secretRef: {name: cron-ref}\n",
+		"StatefulSet volume":             "apiVersion: apps/v1\nkind: StatefulSet\nspec:\n  template:\n    spec:\n      volumes:\n      - secret: {secretName: sts-ref}\n",
+	}
+	for name, raw := range keep {
+		got, _, err := MaskManifest(raw)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if strings.Contains(got, "<redacted>") {
+			t.Errorf("%s: a genuine reference was masked:\n%s", name, got)
+		}
+	}
+	leak := map[string]string{
+		"foreign secret parent":     "apiVersion: example.com/v1\nkind: Widget\nspec:\n  credentials:\n    secret:\n      secretName: leak-a\n",
+		"foreign valueFrom":         "apiVersion: example.com/v1\nkind: Widget\nspec:\n  credentials:\n    valueFrom:\n      secretKeyRef: {name: x, key: leak-b}\n",
+		"Deployment wrong path":     "apiVersion: apps/v1\nkind: Deployment\nspec:\n  credentials:\n    secret:\n      secretName: leak-c\n",
+		"Pod path under wrong kind": "apiVersion: example.com/v1\nkind: Widget\nspec:\n  volumes:\n  - secret: {secretName: leak-d}\n",
+	}
+	for name, raw := range leak {
+		got, _, err := MaskManifest(raw)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		for _, v := range []string{"leak-a", "leak-b", "leak-c", "leak-d"} {
+			if strings.Contains(got, v) {
+				t.Errorf("%s: %q leaked:\n%s", name, v, got)
+			}
+		}
 	}
 }
 

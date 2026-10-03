@@ -44,54 +44,50 @@ const (
 	refObjList                 // [{name}]: imagePullSecrets
 )
 
-// refCtx is where a field sits: the key of the map that contains it ("x[]"
-// for an element of list x, "" for the document root), that containing map,
-// and the manifest's API group.
-type refCtx struct {
-	parent    string
-	container map[string]interface{}
-	group     string
+// refLocations returns the COMPLETE API paths (from the object root; "x[]"
+// marks an element of list x) at which a manifest of this group/kind carries a
+// secret REFERENCE, with the shape the API gives it. Only these are kept
+// readable ("secret X not found" is the most common thing a fix has to
+// address); a reference-shaped value at any other path - a foreign CRD's
+// credentials.secret.secretName, a ConfigMap data key, chart values - is
+// masked like any other value. Codex batch-2 review R1: neither the key, nor
+// its shape, nor its immediate parent establishes the API contract; the root
+// kind plus the full path does. Unknown kinds get no exemptions.
+func refLocations(group, kind string) map[string]refShape {
+	out := map[string]refShape{}
+	podSpec := func(p string) {
+		for _, c := range []string{"containers", "initContainers", "ephemeralContainers"} {
+			out[p+"."+c+"[].env[].valueFrom.secretKeyRef"] = refObject
+			out[p+"."+c+"[].envFrom[].secretRef"] = refObject
+		}
+		out[p+".volumes[].secret.secretName"] = refString
+		out[p+".imagePullSecrets"] = refObjList
+	}
+	switch group + "/" + kind {
+	case "/Pod":
+		podSpec("spec")
+	case "/PodTemplate":
+		podSpec("template.spec")
+	case "/ReplicationController", "apps/Deployment", "apps/StatefulSet", "apps/DaemonSet", "apps/ReplicaSet", "batch/Job":
+		podSpec("spec.template.spec")
+	case "batch/CronJob":
+		podSpec("spec.jobTemplate.spec.template.spec")
+	case "/ServiceAccount":
+		out["imagePullSecrets"] = refObjList
+	case "networking.k8s.io/Ingress":
+		out["spec.tls[].secretName"] = refString
+	case "cert-manager.io/Certificate":
+		out["spec.secretName"] = refString
+	case "source.toolkit.fluxcd.io/GitRepository", "source.toolkit.fluxcd.io/HelmRepository",
+		"source.toolkit.fluxcd.io/OCIRepository", "source.toolkit.fluxcd.io/Bucket":
+		out["spec.secretRef"] = refObject
+	case "kustomize.toolkit.fluxcd.io/Kustomization":
+		out["spec.decryption.secretRef"] = refObject
+	case "external-secrets.io/ExternalSecret":
+		out["spec.secretStoreRef"] = refObject
+	}
+	return out
 }
-
-// refRule is one KNOWN Kubernetes API location of a secret reference: the
-// field's shape plus the context it must sit in. Shape alone proves nothing -
-// a ConfigMap data key or a chart value can be named secretName and hold a
-// credential (Codex batch-2 re-review R1).
-type refRule struct {
-	shape refShape
-	at    func(refCtx) bool
-}
-
-// manifestRefs are the reference fields MaskManifest keeps readable ("secret X
-// not found" is the most common thing a fix has to address) - only at their
-// API locations, only with their API shape, and never inside free-form data.
-var manifestRefs = map[string]refRule{
-	// env[].valueFrom.secretKeyRef
-	"secretKeyRef": {refObject, func(c refCtx) bool { return c.parent == "valueFrom" }},
-	// envFrom[].secretRef; Flux source spec.secretRef; Kustomization spec.decryption.secretRef
-	"secretRef": {refObject, func(c refCtx) bool {
-		return c.parent == "envFrom[]" ||
-			(c.parent == "spec" && c.group == "source.toolkit.fluxcd.io") ||
-			(c.parent == "decryption" && c.group == "kustomize.toolkit.fluxcd.io")
-	}},
-	// ExternalSecret spec.secretStoreRef
-	"secretStoreRef": {refObject, func(c refCtx) bool { return c.parent == "spec" && c.group == "external-secrets.io" }},
-	// volumes[].secret.secretName; Ingress spec.tls[].secretName; Certificate spec.secretName
-	"secretName": {refString, func(c refCtx) bool {
-		return c.parent == "secret" || c.parent == "tls[]" || (c.parent == "spec" && c.group == "cert-manager.io")
-	}},
-	// a pod spec (beside containers) or a ServiceAccount's root
-	"imagePullSecrets": {refObjList, func(c refCtx) bool {
-		_, podSpec := c.container["containers"]
-		return podSpec || c.parent == ""
-	}},
-}
-
-// manifestFreeForm keys hold application data, not API structure: below them
-// no reference exemption applies, and inherited sensitivity continues - a
-// "secretName" in ConfigMap data or chart values is whatever the app says it
-// is.
-var manifestFreeForm = map[string]bool{"values": true, "valuesObject": true, "data": true, "stringData": true, "binaryData": true}
 
 // refFields are the only fields a reference object may carry (identifiers).
 var refFields = map[string]bool{"name": true, "key": true, "kind": true, "namespace": true, "optional": true, "apiGroup": true}
@@ -139,19 +135,18 @@ func isRefObject(v interface{}) bool {
 
 // MaskManifest is MaskValues for a Kubernetes manifest about to leave the
 // machine (an AI prompt): the same subtree-aware credential masking, except that
-// secret REFERENCES at their known API locations (manifestRefs) stay readable.
-// Heuristic like MaskValues - it cannot see a credential under an innocuous key
-// (e.g. DATABASE_URL), so callers must never present the result as secret-free.
+// secret REFERENCES at their exact API paths for the manifest's group/kind
+// (refLocations) stay readable. Heuristic like MaskValues - it cannot see a
+// credential under an innocuous key (e.g. DATABASE_URL), so callers must never
+// present the result as secret-free.
 func MaskManifest(raw string) (masked string, paths []string, err error) {
 	return mask(raw, true)
 }
 
 // walkCtx is the walker's position for the manifest reference rules.
 type walkCtx struct {
-	refs     bool   // reference exemptions enabled (manifests only)
-	freeForm bool   // inside application data: no exemptions
-	parent   string // key of the containing map ("x[]" for an element of list x)
-	group    string // the manifest's API group
+	refs  map[string]refShape // exempt API paths (nil: none, e.g. helm values)
+	apath string              // API path from the root ("x[]" for list elements)
 }
 
 func mask(raw string, manifest bool) (string, []string, error) {
@@ -162,11 +157,15 @@ func mask(raw string, manifest bool) (string, []string, error) {
 	if err := yaml.Unmarshal([]byte(raw), &root); err != nil {
 		return "", nil, fmt.Errorf("parse yaml: %w", err)
 	}
-	ctx := walkCtx{refs: manifest}
+	var ctx walkCtx
 	if m, ok := root.(map[string]interface{}); ok && manifest {
-		if av, ok := m["apiVersion"].(string); ok && strings.Contains(av, "/") {
-			ctx.group = av[:strings.Index(av, "/")]
+		av, _ := m["apiVersion"].(string)
+		kind, _ := m["kind"].(string)
+		group := ""
+		if i := strings.Index(av, "/"); i > 0 {
+			group = av[:i] // core ("v1") has no group
 		}
+		ctx.refs = refLocations(group, kind)
 	}
 	var collected []string
 	red := maskNode(root, "", false, ctx, &collected)
@@ -201,14 +200,12 @@ func maskNode(v interface{}, path string, keySensitive bool, ctx walkCtx, paths 
 		nameLooksSecret := envEntryNameLooksSecret(t["name"])
 		out := make(map[string]interface{}, len(t))
 		for k, val := range t {
-			if ctx.refs && !ctx.freeForm {
-				if rule, ok := manifestRefs[k]; ok && isReference(rule.shape, val) && rule.at(refCtx{parent: ctx.parent, container: t, group: ctx.group}) {
-					// A genuine reference at its API location (names only) stays
-					// readable, even under a secret-looking parent such as
-					// volumes[].secret.
-					out[k] = val
-					continue
-				}
+			if shape, ok := ctx.refs[ctx.at(k)]; ok && isReference(shape, val) {
+				// A genuine reference at its exact API path for this kind (names
+				// only) stays readable, even under a secret-looking parent such as
+				// volumes[].secret.
+				out[k] = val
+				continue
 			}
 			out[k] = maskNode(val, joinPath(path, k), childSensitive(keySensitive, nameLooksSecret, k), ctx.child(k), paths)
 		}
@@ -231,7 +228,7 @@ func maskNode(v interface{}, path string, keySensitive bool, ctx walkCtx, paths 
 	case []interface{}:
 		out := make([]interface{}, len(t))
 		elem := ctx
-		elem.parent = ctx.parent + "[]"
+		elem.apath = ctx.apath + "[]"
 		for i, val := range t {
 			// A sensitive key over a list (e.g. tokens: [a, b]) masks each element.
 			out[i] = maskNode(val, fmt.Sprintf("%s[%d]", path, i), keySensitive, elem, paths)
@@ -252,10 +249,17 @@ func maskNode(v interface{}, path string, keySensitive bool, ctx walkCtx, paths 
 	}
 }
 
+// at is the API path of key k under the current position.
+func (c walkCtx) at(k string) string {
+	if c.apath == "" {
+		return k
+	}
+	return c.apath + "." + k
+}
+
 // child is the context for the value under key k.
 func (c walkCtx) child(k string) walkCtx {
-	c.parent = k
-	c.freeForm = c.freeForm || manifestFreeForm[k]
+	c.apath = c.at(k)
 	return c
 }
 
