@@ -1,8 +1,9 @@
 package routemetrics
 
 import (
-	"regexp"
 	"strings"
+
+	"github.com/moomora/klyx/internal/metrics"
 )
 
 // parseClusterName extracts "<ns>/<name>" from an Envoy cluster name of the
@@ -24,17 +25,14 @@ func parseClusterName(name string) (routeKey string, ok bool) {
 }
 
 // buildSelector builds the anchored, regex-escaped envoy_cluster_name matcher
-// for a set of route keys ("<ns>/<name>"). Returns "" for empty input (the
-// caller must guard and not query with an empty alternation).
+// for a set of route keys ("<ns>/<name>"), as a valid PromQL string literal.
+// Returns "" for empty input (the caller must guard and not query with an
+// empty alternation).
 func buildSelector(routeKeys []string) string {
 	if len(routeKeys) == 0 {
 		return ""
 	}
-	alts := make([]string, 0, len(routeKeys))
-	for _, k := range routeKeys {
-		alts = append(alts, regexp.QuoteMeta(k))
-	}
-	return `envoy_cluster_name=~"^httproute/(` + strings.Join(alts, "|") + `)/rule/[0-9]+$"`
+	return metrics.MatchAnyOf("envoy_cluster_name", "httproute/", routeKeys, "/rule/[0-9]+")
 }
 
 func isAllDigits(s string) bool {

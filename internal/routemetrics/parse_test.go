@@ -2,6 +2,8 @@ package routemetrics
 
 import (
 	"regexp"
+	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -34,14 +36,18 @@ func TestBuildSelector(t *testing.T) {
 		t.Fatalf("empty keys should give empty selector, got %q", got)
 	}
 	sel := buildSelector([]string{"default/web", "team.a/api-gw"})
-	// anchored, alternation, regex-escaped (the dot in "team.a" must be escaped;
-	// "-" is not a regex metacharacter so QuoteMeta leaves it unescaped).
-	want := `envoy_cluster_name=~"^httproute/(default/web|team\.a/api-gw)/rule/[0-9]+$"`
+	// anchored, alternation, regex-escaped (the dot in "team.a" is escaped, and
+	// that backslash is itself escaped inside the PromQL string literal - a bare
+	// `\.` is an invalid PromQL escape and failed the whole query).
+	want := `envoy_cluster_name=~"^httproute/(default/web|team\\.a/api-gw)/rule/[0-9]+$"`
 	if sel != want {
 		t.Fatalf("buildSelector:\n got %s\nwant %s", sel, want)
 	}
-	// the alternation body is a valid regex.
-	inner := `^httproute/(default/web|team\.a/api-gw)/rule/[0-9]+$`
+	// The literal unquotes (PromQL uses Go string escapes) to a valid regex.
+	inner, err := strconv.Unquote(strings.TrimPrefix(sel, "envoy_cluster_name=~"))
+	if err != nil {
+		t.Fatalf("selector is not a valid PromQL string literal: %v", err)
+	}
 	if _, err := regexp.Compile(inner); err != nil {
 		t.Fatalf("selector regex does not compile: %v", err)
 	}

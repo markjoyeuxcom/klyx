@@ -3,8 +3,6 @@ package fleet
 import (
 	"context"
 	"fmt"
-	"regexp"
-	"strings"
 	"time"
 
 	"github.com/moomora/klyx/internal/clock"
@@ -46,11 +44,7 @@ func (c *ClusterConn) WorkloadSparklines(ctx context.Context, kind, namespace, n
 		return SparklineSet{}, err
 	}
 
-	quoted := make([]string, len(pods))
-	for i, p := range pods {
-		quoted[i] = regexp.QuoteMeta(p)
-	}
-	sel := fmt.Sprintf(`namespace=%q,pod=~"^(%s)$",container!="",container!="POD"`, namespace, strings.Join(quoted, "|"))
+	sel := metrics.Equals("namespace", namespace) + "," + metrics.MatchAnyOf("pod", "", pods, "") + `,container!="",container!="POD"`
 	cpuQ := fmt.Sprintf(`sum(rate(container_cpu_usage_seconds_total{%s}[5m]))`, sel)
 	memQ := fmt.Sprintf(`sum(container_memory_working_set_bytes{%s})`, sel)
 
