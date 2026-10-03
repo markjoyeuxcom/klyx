@@ -73,7 +73,7 @@ describe("ClusterDetail", () => {
     useFleet.setState({
       clusters: [dto({ name: "x" })],
       route: { name: "cluster", cluster: "x", section: "resources", resource: { group: "", version: "v1", plural: "configmaps", kind: "ConfigMap", scope: "Namespaced" } },
-      instances: { ref: { group: "", version: "v1", plural: "configmaps", kind: "ConfigMap", scope: "Namespaced" }, rows: [], nextToken: "", loading: false, filter: "", riskOnly: false },
+      instances: { cluster: "x", ref: { group: "", version: "v1", plural: "configmaps", kind: "ConfigMap", scope: "Namespaced" }, rows: [], nextToken: "", loading: false, filter: "", riskOnly: false },
     });
     // InstanceList renders without crashing (verifies drill wiring for resources)
     render(<ClusterDetail />);
@@ -83,7 +83,7 @@ describe("ClusterDetail", () => {
     useFleet.setState({
       clusters: [dto({ name: "x" })],
       route: { name: "cluster", cluster: "x", section: "crds", resource: { group: "cilium.io", version: "v2", plural: "ciliumendpoints", kind: "CiliumEndpoint", scope: "Namespaced" } },
-      instances: { ref: { group: "cilium.io", version: "v2", plural: "ciliumendpoints", kind: "CiliumEndpoint", scope: "Namespaced" }, rows: [], nextToken: "", loading: false, filter: "", riskOnly: false },
+      instances: { cluster: "x", ref: { group: "cilium.io", version: "v2", plural: "ciliumendpoints", kind: "CiliumEndpoint", scope: "Namespaced" }, rows: [], nextToken: "", loading: false, filter: "", riskOnly: false },
     });
     // InstanceList renders without crashing (verifies drill wiring for crds)
     render(<ClusterDetail />);

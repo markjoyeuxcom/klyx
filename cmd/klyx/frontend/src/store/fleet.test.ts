@@ -76,7 +76,7 @@ test("crd slice: set groups, toggle, count, search, groupBy", () => {
   useFleet.getState().toggleCRDGroup("cilium.io");
   expect(useFleet.getState().crd.expanded).not.toContain("cilium.io");
 
-  const key = crdCountKey("cilium.io", "v2", "ciliumendpoints");
+  const key = crdCountKey("c", "cilium.io", "v2", "ciliumendpoints");
   useFleet.getState().setCRDCount(key, { count: 500, capped: true });
   expect(useFleet.getState().crd.counts[key].capped).toBe(true);
 
@@ -132,7 +132,9 @@ test("instance detail drill-in route + slice", () => {
   uf3.getState().setInstanceDetail({ kind: "Certificate", namespace: "default", name: "web-tls", created: "", labels: {}, conditions: [], events: [], yaml: "kind: Certificate\n" });
   expect(uf3.getState().instanceDetail.detail?.yaml).toContain("Certificate");
   expect(uf3.getState().instanceDetail.loading).toBe(false);
-  uf3.getState().setInstanceDetailLoading({ namespace: "default", name: "web-tls" });
+  // Same cluster + resource + ref keeps the detail while re-loading.
+  const idS = uf3.getState().instanceDetail;
+  uf3.getState().setInstanceDetailLoading(idS.cluster!, idS.resource!, { namespace: "default", name: "web-tls" });
   expect(uf3.getState().instanceDetail.detail?.yaml).toContain("Certificate");
   expect(uf3.getState().instanceDetail.loading).toBe(true);
 

@@ -411,7 +411,9 @@ export type EventsSlice = {
 export type ResourceRef = { group: string; version: string; plural: string; kind: string; scope: string };
 export type InstanceDTO = { namespace: string; name: string; created: string; fields?: Record<string, string> };
 // error: the last page read FAILED - rows are then not "no instances".
-export type InstancesSlice = { ref: ResourceRef | null; rows: InstanceDTO[]; nextToken: string; loading: boolean; filter: string; riskOnly: boolean; error?: string | null };
+// cluster + ref identify the list a page belongs to; a late page for any other
+// cluster/GVR is dropped (review 2026-10-03 #5).
+export type InstancesSlice = { cluster: string | null; ref: ResourceRef | null; rows: InstanceDTO[]; nextToken: string; loading: boolean; filter: string; riskOnly: boolean; error?: string | null };
 
 export type InstanceRef = { namespace: string; name: string };
 export type EventDTO = { type: string; reason: string; message: string; count: number; lastSeen: string };
@@ -479,7 +481,10 @@ export type GitOpsOwnershipDTO = {
 export type AIResultDTO = { ok: boolean; explanation: string; model: string; backend: string; groundedOn: string; error: string };
 export type AIAvailabilityDTO = { backend: string; ready: boolean };
 export type InstanceDetailDTO = { kind: string; namespace: string; name: string; created: string; labels: Record<string, string>; annotations?: Record<string, string>; conditions: ConditionDTO[]; events: EventDTO[]; yaml: string; secretKeys?: SecretKeyDTO[]; serviceBacking?: ServiceBackingDTO | null; hpaScaling?: HPAScalingDTO | null; related?: RelatedRefDTO[]; facts?: FactDTO[]; error?: string };
-export type InstanceDetailSlice = { ref: InstanceRef | null; detail: InstanceDetailDTO | null; loading: boolean };
+// cluster + resource + ref identify the object a detail belongs to: DEV/STG/PRD
+// share namespace/name, so ns/name alone let a late DEV detail render under the
+// PRD header (review 2026-10-03 #5).
+export type InstanceDetailSlice = { cluster: string | null; resource: ResourceRef | null; ref: InstanceRef | null; detail: InstanceDetailDTO | null; loading: boolean };
 
 export type Route =
   | { name: "fleet" }
@@ -529,7 +534,15 @@ export type CRDSlice = {
   builtinCategory: string | null;
 };
 
-export const crdCountKey = (group: string, version: string, plural: string) => `${group}/${version}/${plural}`;
+// Counts are keyed by CLUSTER as well as GVR: a count still in flight when the
+// user switches cluster lands in its own cluster's slot, never under the new
+// cluster's header (DEV/STG/PRD share kinds - review 2026-10-03 #5).
+// sameResource compares two GVRs (version included: a different served version
+// is a different list).
+export const sameResource = (a: ResourceRef | null | undefined, b: ResourceRef | null | undefined) =>
+  !!a && !!b && a.group === b.group && a.version === b.version && a.plural === b.plural;
+
+export const crdCountKey = (cluster: string, group: string, version: string, plural: string) => `${cluster}|${group}/${version}/${plural}`;
 
 export type GatewayAddressDTO = { type: string; value: string };
 export type GatewayRefDTO = { namespace: string; name: string; className: string; addresses?: GatewayAddressDTO[]; listeners?: ListenerDTO[]; accepted: boolean; programmed: boolean; stale?: boolean; generation?: number; observedGeneration?: number };
@@ -746,7 +759,7 @@ type FleetState = {
   openResource: (ref: ResourceRef) => void;
   closeResource: () => void;
   instances: InstancesSlice;
-  setInstancesLoading: (ref: ResourceRef) => void;
+  setInstancesLoading: (cluster: string, ref: ResourceRef) => void;
   setInstancePage: (items: InstanceDTO[], nextToken: string) => void;
   addInstancePage: (items: InstanceDTO[], nextToken: string) => void;
   setInstanceFilter: (s: string) => void;
@@ -756,7 +769,7 @@ type FleetState = {
   openInstance: (namespace: string, name: string) => void;
   closeInstance: () => void;
   instanceDetail: InstanceDetailSlice;
-  setInstanceDetailLoading: (ref: InstanceRef) => void;
+  setInstanceDetailLoading: (cluster: string, resource: ResourceRef, ref: InstanceRef) => void;
   setInstanceDetail: (d: InstanceDetailDTO) => void;
   clearInstanceDetail: () => void;
   gitops: GitOpsSlice;
@@ -923,7 +936,7 @@ export const useFleet = create<FleetState>((set) => ({
       const section: ClusterSection = (s.route.section === "crds" || s.route.section === "resources") ? s.route.section : "resources";
       return {
         route: { name: "cluster", cluster: s.route.cluster, section, resource },
-        instances: { ref: resource, rows: [], nextToken: "", loading: true, filter: "", riskOnly: false },
+        instances: { cluster: s.route.cluster, ref: resource, rows: [], nextToken: "", loading: true, filter: "", riskOnly: false },
       };
     }),
   closeResource: () =>
@@ -932,24 +945,24 @@ export const useFleet = create<FleetState>((set) => ({
       const section: ClusterSection = (s.route.section === "crds" || s.route.section === "resources") ? s.route.section : "resources";
       return { route: { name: "cluster", cluster: s.route.cluster, section } };
     }),
-  instances: { ref: null, rows: [], nextToken: "", loading: false, filter: "", riskOnly: false },
-  setInstancesLoading: (ref) => set((s) => {
-    const sameRef = s.instances.ref?.group === ref.group && s.instances.ref?.version === ref.version && s.instances.ref?.plural === ref.plural;
-    return { instances: { ref, rows: [], nextToken: "", loading: true, filter: sameRef ? s.instances.filter : "", riskOnly: sameRef ? s.instances.riskOnly : false } };
+  instances: { cluster: null, ref: null, rows: [], nextToken: "", loading: false, filter: "", riskOnly: false },
+  setInstancesLoading: (cluster, ref) => set((s) => {
+    const sameRef = s.instances.cluster === cluster && s.instances.ref?.group === ref.group && s.instances.ref?.version === ref.version && s.instances.ref?.plural === ref.plural;
+    return { instances: { cluster, ref, rows: [], nextToken: "", loading: true, filter: sameRef ? s.instances.filter : "", riskOnly: sameRef ? s.instances.riskOnly : false } };
   }),
   setInstancePage: (items, nextToken) => set((s) => ({ instances: { ...s.instances, rows: items, nextToken, loading: false, error: null } })),
   addInstancePage: (items, nextToken) => set((s) => ({ instances: { ...s.instances, rows: [...s.instances.rows, ...items], nextToken, loading: false } })),
   setInstanceFilter: (filter) => set((s) => ({ instances: { ...s.instances, filter } })),
   setInstanceRiskOnly: (riskOnly) => set((s) => ({ instances: { ...s.instances, riskOnly } })),
   toggleInstanceRiskOnly: () => set((s) => ({ instances: { ...s.instances, riskOnly: !s.instances.riskOnly } })),
-  clearInstances: () => set({ instances: { ref: null, rows: [], nextToken: "", loading: false, filter: "", riskOnly: false } }),
+  clearInstances: () => set({ instances: { cluster: null, ref: null, rows: [], nextToken: "", loading: false, filter: "", riskOnly: false } }),
   openInstance: (namespace, name) =>
     set((s) => {
       if (s.route.name !== "cluster" || !s.route.resource) return {};
       const section: ClusterSection = (s.route.section === "crds" || s.route.section === "resources") ? s.route.section : "resources";
       return {
         route: { name: "cluster", cluster: s.route.cluster, section, resource: s.route.resource, instance: { namespace, name } },
-        instanceDetail: { ref: { namespace, name }, detail: null, loading: true },
+        instanceDetail: { cluster: s.route.cluster, resource: s.route.resource, ref: { namespace, name }, detail: null, loading: true },
       };
     }),
   closeInstance: () =>
@@ -957,14 +970,14 @@ export const useFleet = create<FleetState>((set) => ({
       s.route.name === "cluster"
         ? { route: { name: "cluster", cluster: s.route.cluster, section: s.route.section, resource: s.route.resource } }
         : {}),
-  instanceDetail: { ref: null, detail: null, loading: false },
-  setInstanceDetailLoading: (ref) => set((s) => {
+  instanceDetail: { cluster: null, resource: null, ref: null, detail: null, loading: false },
+  setInstanceDetailLoading: (cluster, resource, ref) => set((s) => {
     const current = s.instanceDetail;
-    const sameRef = current.ref?.namespace === ref.namespace && current.ref?.name === ref.name;
-    return { instanceDetail: { ref, detail: sameRef ? current.detail : null, loading: true } };
+    const sameRef = current.cluster === cluster && sameResource(current.resource, resource) && current.ref?.namespace === ref.namespace && current.ref?.name === ref.name;
+    return { instanceDetail: { cluster, resource, ref, detail: sameRef ? current.detail : null, loading: true } };
   }),
   setInstanceDetail: (detail) => set((s) => ({ instanceDetail: { ...s.instanceDetail, detail, loading: false } })),
-  clearInstanceDetail: () => set({ instanceDetail: { ref: null, detail: null, loading: false } }),
+  clearInstanceDetail: () => set({ instanceDetail: { cluster: null, resource: null, ref: null, detail: null, loading: false } }),
   gitops: { cluster: null, resources: [], sources: [], loading: false, watchError: null, expandedKey: null, detail: null },
   setGitOps: (cluster, resources, sources, watchError) => set((s) => ({ gitops: { ...s.gitops, cluster, resources, sources, loading: false, watchError: watchError || null } })),
   setGitOpsLoading: (cluster) => set((s) => ({ gitops: { ...s.gitops, cluster, resources: [], sources: [], loading: true, watchError: null } })),

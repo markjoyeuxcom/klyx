@@ -1,4 +1,4 @@
-import { useFleet, CRDGroupDTO, CRDCountDTO, crdCountKey, ResourceRef, InstanceDTO, InstanceRef, InstanceDetailDTO, GitOpsOwnershipDTO, AdhocResultDTO, AdhocObjectDTO } from "../store/fleet";
+import { useFleet, sameResource, CRDGroupDTO, CRDCountDTO, crdCountKey, ResourceRef, InstanceDTO, InstanceRef, InstanceDetailDTO, GitOpsOwnershipDTO, AdhocResultDTO, AdhocObjectDTO } from "../store/fleet";
 import { CRDService } from "../../bindings/github.com/moomora/klyx/internal/appbridge/index.js";
 import { Clipboard } from "@wailsio/runtime";
 
@@ -48,7 +48,7 @@ function releaseCountSlot(): void {
 }
 
 export async function countKind(cluster: string, group: string, version: string, plural: string): Promise<void> {
-  const key = crdCountKey(group, version, plural);
+  const key = crdCountKey(cluster, group, version, plural);
   if (inFlight.has(key)) return;
   inFlight.add(key);
   await acquireCountSlot();
@@ -76,12 +76,16 @@ export async function listInstancePage(cluster: string, ref: ResourceRef, token 
 }
 
 export async function loadInstances(cluster: string, ref: ResourceRef, token?: string): Promise<void> {
-  if (!token) useFleet.getState().setInstancesLoading(ref);
+  if (!token) useFleet.getState().setInstancesLoading(cluster, ref);
+  // A page belongs to exactly one cluster + GVR: drop it if the user moved to
+  // another kind OR another cluster meanwhile (review 2026-10-03 #5).
+  const current = () => {
+    const s = useFleet.getState().instances;
+    return s.cluster === cluster && sameResource(s.ref, ref);
+  };
   try {
     const page = await listInstancePage(cluster, ref, token ?? "");
-    // Drop a stale page if the user navigated to a different kind meanwhile.
-    const cur = useFleet.getState().instances.ref;
-    if (!cur || cur.group !== ref.group || cur.plural !== ref.plural) return;
+    if (!current()) return;
     // First page REPLACES (idempotent against StrictMode's double effect invoke and
     // any re-trigger); only "load more" (token set) appends.
     if (token) useFleet.getState().addInstancePage(page.items ?? [], page.nextToken ?? "");
@@ -90,8 +94,7 @@ export async function loadInstances(cluster: string, ref: ResourceRef, token?: s
     console.error("loadInstances", e);
     // Clear the loading flag so the view doesn't get stuck on "Loading…", and
     // record WHY: the list must say it could not read, not that it is empty.
-    const cur = useFleet.getState().instances.ref;
-    if (cur && cur.group === ref.group && cur.plural === ref.plural) {
+    if (current()) {
       const error = e instanceof Error ? e.message : String(e);
       useFleet.setState((s) => ({ instances: { ...s.instances, loading: false, error } }));
     }
@@ -99,18 +102,23 @@ export async function loadInstances(cluster: string, ref: ResourceRef, token?: s
 }
 
 export async function getInstanceDetail(cluster: string, resource: ResourceRef, instance: InstanceRef): Promise<void> {
-  useFleet.getState().setInstanceDetailLoading(instance);
+  useFleet.getState().setInstanceDetailLoading(cluster, resource, instance);
+  // A detail belongs to exactly one cluster + GVR + ns/name. DEV/STG/PRD share
+  // namespace/name, so ns/name alone let a late DEV detail render under the PRD
+  // header (review 2026-10-03 #5).
+  const current = () => {
+    const s = useFleet.getState().instanceDetail;
+    return s.cluster === cluster && sameResource(s.resource, resource)
+      && s.ref?.namespace === instance.namespace && s.ref?.name === instance.name;
+  };
   try {
     const d = (await CRDService.GetInstanceDetail(cluster, resource.group, resource.version, resource.plural, instance.namespace, instance.name)) as InstanceDetailDTO;
-    // Drop a stale detail if the user navigated to a different instance meanwhile.
-    const cur = useFleet.getState().instanceDetail.ref;
-    if (!cur || cur.namespace !== instance.namespace || cur.name !== instance.name) return;
+    if (!current()) return;
     useFleet.getState().setInstanceDetail(d);
   } catch (e) {
     console.error("getInstanceDetail", e);
     // Clear the loading flag so the panel doesn't get stuck on "Loading…".
-    const cur = useFleet.getState().instanceDetail.ref;
-    if (cur && cur.namespace === instance.namespace && cur.name === instance.name) {
+    if (current()) {
       useFleet.setState((s) => ({ instanceDetail: { ...s.instanceDetail, loading: false } }));
     }
   }

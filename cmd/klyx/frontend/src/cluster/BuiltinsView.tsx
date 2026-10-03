@@ -89,7 +89,7 @@ function BuiltinCategorySection({ cluster, label, entries }: { cluster: string; 
 
   useEffect(() => {
     for (const ref of gvrRefs) {
-      if (!counts[crdCountKey(ref.group, ref.version, ref.plural)]) {
+      if (!counts[crdCountKey(cluster, ref.group, ref.version, ref.plural)]) {
         void countKind(cluster, ref.group, ref.version, ref.plural);
       }
     }
@@ -119,7 +119,7 @@ function BuiltinCategorySection({ cluster, label, entries }: { cluster: string; 
           );
         }
         const ref = entry.ref;
-        const c = counts[crdCountKey(ref.group, ref.version, ref.plural)];
+        const c = counts[crdCountKey(cluster, ref.group, ref.version, ref.plural)];
         // A failed count is "?" - never a zero (review 2026-10-03 #10).
         const display = c ? (c.error ? "?" : c.capped ? `${c.count}+` : `${c.count}`) : "…";
         return (

@@ -94,13 +94,13 @@ describe("BuiltinsView - catalog rendering", () => {
 	  });
 
   it("builtin renders existing count from store", () => {
-    useFleet.setState({ crd: { ...useFleet.getState().crd, counts: { [crdCountKey("", "v1", "configmaps")]: { count: 42, capped: false } }, builtinCategory: null } });
+    useFleet.setState({ crd: { ...useFleet.getState().crd, counts: { [crdCountKey("x", "", "v1", "configmaps")]: { count: 42, capped: false } }, builtinCategory: null } });
     const { getByText } = render(<BuiltinsView cluster="x" />);
     expect(getByText("42")).toBeTruthy();
   });
 
   it("renders capped count with + suffix", () => {
-    useFleet.setState({ crd: { ...useFleet.getState().crd, counts: { [crdCountKey("", "v1", "configmaps")]: { count: 500, capped: true } }, builtinCategory: null } });
+    useFleet.setState({ crd: { ...useFleet.getState().crd, counts: { [crdCountKey("x", "", "v1", "configmaps")]: { count: 500, capped: true } }, builtinCategory: null } });
     const { getByText } = render(<BuiltinsView cluster="x" />);
     expect(getByText("500+")).toBeTruthy();
   });

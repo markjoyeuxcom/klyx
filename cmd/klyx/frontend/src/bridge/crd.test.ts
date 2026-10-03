@@ -34,7 +34,7 @@ describe("CRD bridge error honesty", () => {
   it("a failed count is stored with its error, never as a real zero", async () => {
     ok(CRDService.CountKind, { count: 0, capped: false, error: "forbidden" });
     await countKind("c", "cert-manager.io", "v1", "certificates");
-    expect(useFleet.getState().crd.counts[crdCountKey("cert-manager.io", "v1", "certificates")]?.error).toBe("forbidden");
+    expect(useFleet.getState().crd.counts[crdCountKey("c", "cert-manager.io", "v1", "certificates")]?.error).toBe("forbidden");
   });
 
   it("listInstancePage rejects on a failed page and passes notServed through", async () => {
@@ -46,7 +46,7 @@ describe("CRD bridge error honesty", () => {
   });
 
   it("loadInstances records the failure on the instances slice", async () => {
-    useFleet.getState().setInstancesLoading(ref);
+    useFleet.getState().setInstancesLoading("c", ref);
     ok(CRDService.ListInstances, { items: [], nextToken: "", error: "certificates.cert-manager.io is forbidden" });
     await loadInstances("c", ref);
     const s = useFleet.getState().instances;

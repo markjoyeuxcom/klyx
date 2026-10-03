@@ -26,7 +26,7 @@ const rows: InstanceDTO[] = [
 ];
 
 function seed(ref: ResourceRef, over: Partial<{ rows: InstanceDTO[]; nextToken: string; loading: boolean; filter: string }> = {}) {
-  useFleet.setState({ instances: { ref, rows, nextToken: "", loading: false, filter: "", riskOnly: false, ...over } });
+  useFleet.setState({ instances: { cluster: "x", ref, rows, nextToken: "", loading: false, filter: "", riskOnly: false, ...over } });
 }
 
 const cluster = (name: string, state = "Synced"): ClusterDTO => ({

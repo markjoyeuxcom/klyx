@@ -98,8 +98,11 @@ export async function openPodDetail(cluster: string, namespace: string, name: st
   useFleet.getState().selectPod(ref);
   try {
     const d = (await PodsService.GetPodDetail(cluster, namespace, name)) as PodDetailDTO;
-    const sel = useFleet.getState().pods.selected;
-    if (!sel || sel.namespace !== namespace || sel.name !== name) return;
+    // Drop a late detail for another pod OR another cluster: DEV/STG/PRD share
+    // namespace/name (review 2026-10-03 #5).
+    const cur = useFleet.getState().pods;
+    const sel = cur.selected;
+    if (cur.cluster !== cluster || !sel || sel.namespace !== namespace || sel.name !== name) return;
     useFleet.getState().setPodDetail(ref, d);
   } catch {
     // On failure, clear detailLoading so the panel doesn't spin forever.

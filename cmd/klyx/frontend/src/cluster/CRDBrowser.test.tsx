@@ -44,7 +44,7 @@ describe("CRDBrowser - CRD groups", () => {
   });
 
   it("renders 500+ when a count is capped", () => {
-    useFleet.setState({ crd: { ...useFleet.getState().crd, expanded: ["cilium.io"], counts: { [crdCountKey("cilium.io", "v2", "ciliumendpoints")]: { count: 500, capped: true } } } });
+    useFleet.setState({ crd: { ...useFleet.getState().crd, expanded: ["cilium.io"], counts: { [crdCountKey("x", "cilium.io", "v2", "ciliumendpoints")]: { count: 500, capped: true } } } });
     const { getByText } = render(<CRDBrowser cluster="x" />);
     expect(getByText("500+")).toBeTruthy();
   });

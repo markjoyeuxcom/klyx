@@ -67,11 +67,11 @@ const secretDetail: InstanceDetailDTO = {
 };
 
 function seed(over: Partial<{ ref: InstanceRef | null; detail: InstanceDetailDTO | null; loading: boolean }> = {}, inst = instance) {
-  useFleet.setState({ instanceDetail: { ref: inst, detail: detail, loading: false, ...over } });
+  useFleet.setState({ instanceDetail: { cluster: null, resource: null, ref: inst, detail: detail, loading: false, ...over } });
 }
 
 function seedSecret(over: Partial<{ ref: InstanceRef | null; detail: InstanceDetailDTO | null; loading: boolean }> = {}) {
-  useFleet.setState({ instanceDetail: { ref: secretInstance, detail: secretDetail, loading: false, ...over } });
+  useFleet.setState({ instanceDetail: { cluster: null, resource: null, ref: secretInstance, detail: secretDetail, loading: false, ...over } });
 }
 
 beforeEach(() => { vi.clearAllMocks(); seed(); });
@@ -420,7 +420,7 @@ describe("InstanceDetail", () => {
     expect((getByText("Dry-run") as HTMLButtonElement).disabled).toBe(false);
 
     act(() => {
-      useFleet.setState({ instanceDetail: { ref: instance, detail: { ...detail, yaml: latest }, loading: false } });
+      useFleet.setState({ instanceDetail: { cluster: null, resource: null, ref: instance, detail: { ...detail, yaml: latest }, loading: false } });
     });
 
     expect(getByText(/Live object changed since this editor opened/)).toBeTruthy();
@@ -473,7 +473,7 @@ describe("InstanceDetail", () => {
     let finishRefresh: (() => void) | null = null;
     const refreshPromise = new Promise<void>((resolve) => {
       finishRefresh = () => {
-        useFleet.setState({ instanceDetail: { ref: instance, detail: { ...detail, yaml: refreshed }, loading: false } });
+        useFleet.setState({ instanceDetail: { cluster: null, resource: null, ref: instance, detail: { ...detail, yaml: refreshed }, loading: false } });
         resolve();
       };
     });
@@ -538,7 +538,7 @@ describe("InstanceDetail", () => {
     };
     useFleet.getState().openCluster("x");
     useFleet.getState().openResource(resource);
-    useFleet.setState({ instanceDetail: { ref: instance, detail: relatedDetail, loading: false } });
+    useFleet.setState({ instanceDetail: { cluster: null, resource: null, ref: instance, detail: relatedDetail, loading: false } });
     const { getByText } = render(<InstanceDetail cluster="x" resource={resource} instance={instance} />);
     fireEvent.click(getByText(/related 1/));
     fireEvent.click(getByText("default/web-tls-secret"));
@@ -651,7 +651,7 @@ const serviceDetail: InstanceDetailDTO = {
 };
 
 function seedService(over: Partial<{ ref: InstanceRef | null; detail: InstanceDetailDTO | null; loading: boolean }> = {}) {
-  useFleet.setState({ instanceDetail: { ref: serviceInstance, detail: serviceDetail, loading: false, ...over } });
+  useFleet.setState({ instanceDetail: { cluster: null, resource: null, ref: serviceInstance, detail: serviceDetail, loading: false, ...over } });
 }
 
 describe("InstanceDetail — service backing", () => {
@@ -732,7 +732,7 @@ const hpaDetail: InstanceDetailDTO = {
 };
 
 function seedHPA(over: Partial<{ ref: InstanceRef | null; detail: InstanceDetailDTO | null; loading: boolean }> = {}) {
-  useFleet.setState({ instanceDetail: { ref: hpaInstance, detail: hpaDetail, loading: false, ...over } });
+  useFleet.setState({ instanceDetail: { cluster: null, resource: null, ref: hpaInstance, detail: hpaDetail, loading: false, ...over } });
 }
 
 describe("InstanceDetail — HPA scaling", () => {

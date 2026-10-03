@@ -56,8 +56,10 @@ export async function openNodeDetail(cluster: string, name: string): Promise<voi
   useFleet.getState().selectNode(ref);
   try {
     const d = (await NodesService.GetNodeDetail(cluster, name)) as NodeDetailDTO;
-    const sel = useFleet.getState().nodes.selected;
-    if (!sel || sel.name !== name) return;
+    // Drop a late detail for another node OR another cluster (review 2026-10-03 #5).
+    const cur = useFleet.getState().nodes;
+    const sel = cur.selected;
+    if (cur.cluster !== cluster || !sel || sel.name !== name) return;
     useFleet.getState().setNodeDetail(ref, d);
   } catch {
     // On failure, clear detailLoading so the panel doesn't spin forever.

@@ -136,18 +136,18 @@ function Section({ cluster, label, category, kinds, grouped }: { cluster: string
   useEffect(() => {
     if (!open) return;
     for (const k of kinds) {
-      if (!counts[crdCountKey(k.group, k.version, k.plural)]) {
+      if (!counts[crdCountKey(cluster, k.group, k.version, k.plural)]) {
         void countKind(cluster, k.group, k.version, k.plural);
       }
     }
   }, [open, cluster, kinds, counts]);
 
   const sectionInstances = kinds.reduce((n, k) => {
-    const c = counts[crdCountKey(k.group, k.version, k.plural)];
+    const c = counts[crdCountKey(cluster, k.group, k.version, k.plural)];
     return n + (c && !c.error ? c.count : 0);
   }, 0);
-  const sectionCounted = kinds.every((k) => counts[crdCountKey(k.group, k.version, k.plural)]);
-  const sectionCapped = kinds.some((k) => counts[crdCountKey(k.group, k.version, k.plural)]?.capped);
+  const sectionCounted = kinds.every((k) => counts[crdCountKey(cluster, k.group, k.version, k.plural)]);
+  const sectionCapped = kinds.some((k) => counts[crdCountKey(cluster, k.group, k.version, k.plural)]?.capped);
 
   return (
     <div>
@@ -162,7 +162,7 @@ function Section({ cluster, label, category, kinds, grouped }: { cluster: string
         <span style={{ fontSize: 11, color: "var(--color-text-secondary)" }}>{sectionCounted ? `${sectionInstances}${sectionCapped ? "+" : ""} instances` : "…"}</span>
       </div>
       {open && kinds.map((k) => {
-        const c = counts[crdCountKey(k.group, k.version, k.plural)];
+        const c = counts[crdCountKey(cluster, k.group, k.version, k.plural)];
         // A failed count is "?" - never a zero (review 2026-10-03 #10).
         const display = c ? (c.error ? "?" : c.capped ? `${c.count}+` : `${c.count}`) : "…";
         return (

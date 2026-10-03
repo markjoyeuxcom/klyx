@@ -34,9 +34,11 @@ export async function openHelmRelease(cluster: string, namespace: string, name: 
       HelmService.GetHelmHistory(cluster, namespace, name) as Promise<HelmHistoryResultDTO>,
       HelmService.GetHelmValues(cluster, namespace, name) as Promise<HelmValuesResultDTO>,
     ]);
-    // Stale guard: user may have clicked a different release.
-    const sel = useFleet.getState().helm.selected;
-    if (!sel || sel.namespace !== namespace || sel.name !== name) return;
+    // Stale guard: a different release OR a different cluster (release names
+    // repeat across DEV/STG/PRD - review 2026-10-03 #5).
+    const cur = useFleet.getState().helm;
+    const sel = cur.selected;
+    if (cur.cluster !== cluster || !sel || sel.namespace !== namespace || sel.name !== name) return;
     useFleet.getState().setHelmDetail(
       ref,
       historyResult.history ?? [],
