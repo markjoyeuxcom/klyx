@@ -222,3 +222,27 @@ credentials:
 		t.Fatal("masked paths must be reported")
 	}
 }
+
+// Codex batch-2 review R1: a reference KEY is not a reference unless it has the
+// reference SHAPE. Chart values or a CRD can reuse the key for anything - e.g.
+// values.credentials.secretRef.password - and that must still be masked.
+func TestMaskManifest_ReferenceKeyWithoutReferenceShapeIsMasked(t *testing.T) {
+	raw := `spec:
+  values:
+    credentials:
+      secretRef:
+        password: b2-review-private-password
+    other:
+      secretKeyRef: "literal-token"
+      imagePullSecrets: [{name: ok, token: also-private}]
+`
+	got, _, err := MaskManifest(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, leak := range []string{"b2-review-private-password", "literal-token", "also-private"} {
+		if strings.Contains(got, leak) {
+			t.Errorf("%q leaked through a reference-key exemption:\n%s", leak, got)
+		}
+	}
+}

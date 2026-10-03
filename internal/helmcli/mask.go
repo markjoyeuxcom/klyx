@@ -34,17 +34,73 @@ func MaskValues(raw string) (masked string, paths []string, err error) {
 	return mask(raw, nil)
 }
 
-// manifestRefKeys are Kubernetes fields whose subtree carries the NAMES of
-// secrets, never their values. MaskManifest keeps them readable: "secret X not
-// found" is the most common thing a fix has to address, and masking the
-// reference would hide exactly that.
-var manifestRefKeys = map[string]bool{
-	"secretKeyRef":     true, // env valueFrom: {name, key}
-	"secretRef":        true, // envFrom / many CRDs: {name}
-	"secretName":       true, // volumes.secret, TLS blocks
-	"existingSecret":   true, // chart convention for a pre-created Secret's name
-	"imagePullSecrets": true, // [{name}]
-	"secretStoreRef":   true, // ESO: {name, kind}
+// refShape is the Kubernetes API shape a secret-REFERENCE field must have for
+// MaskManifest to keep it readable.
+type refShape int
+
+const (
+	refString  refShape = iota // a bare name: secretName, existingSecret
+	refObject                  // {name, key, kind, ...}: secretKeyRef, secretRef, secretStoreRef
+	refObjList                 // [{name}]: imagePullSecrets
+)
+
+// manifestRefKeys are Kubernetes fields that carry the NAMES of secrets, never
+// their values - with the exact shape the API gives them. MaskManifest keeps
+// them readable ("secret X not found" is the most common thing a fix has to
+// address), but ONLY when the value has that shape: the same key inside chart
+// values or an arbitrary CRD (e.g. values.credentials.secretRef.password) is
+// walked and masked like anything else.
+var manifestRefKeys = map[string]refShape{
+	"secretKeyRef":     refObject,  // env valueFrom: {name, key, optional}
+	"secretRef":        refObject,  // envFrom / many CRDs: {name}
+	"secretStoreRef":   refObject,  // ESO: {name, kind}
+	"secretName":       refString,  // volumes.secret, TLS blocks
+	"existingSecret":   refString,  // chart convention: a pre-created Secret's name
+	"imagePullSecrets": refObjList, // [{name}]
+}
+
+// refFields are the only fields a reference object may carry (identifiers).
+var refFields = map[string]bool{"name": true, "key": true, "kind": true, "namespace": true, "optional": true, "apiGroup": true}
+
+// isReference reports whether v has the reference shape for its key.
+func isReference(shape refShape, v interface{}) bool {
+	switch shape {
+	case refString:
+		_, ok := v.(string)
+		return ok
+	case refObject:
+		return isRefObject(v)
+	case refObjList:
+		items, ok := v.([]interface{})
+		if !ok {
+			return false
+		}
+		for _, it := range items {
+			if !isRefObject(it) {
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
+
+func isRefObject(v interface{}) bool {
+	m, ok := v.(map[string]interface{})
+	if !ok {
+		return false
+	}
+	for k, val := range m {
+		if !refFields[k] {
+			return false
+		}
+		switch val.(type) {
+		case string, bool:
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // MaskManifest is MaskValues for a Kubernetes manifest about to leave the
@@ -56,7 +112,7 @@ func MaskManifest(raw string) (masked string, paths []string, err error) {
 	return mask(raw, manifestRefKeys)
 }
 
-func mask(raw string, refKeys map[string]bool) (string, []string, error) {
+func mask(raw string, refKeys map[string]refShape) (string, []string, error) {
 	if strings.TrimSpace(raw) == "" {
 		return "", nil, nil
 	}
@@ -91,15 +147,16 @@ func ValueAtPath(raw, path string) (value string, found bool, err error) {
 	return value, found, nil
 }
 
-func maskNode(v interface{}, path string, keySensitive bool, refKeys map[string]bool, paths *[]string) interface{} {
+func maskNode(v interface{}, path string, keySensitive bool, refKeys map[string]refShape, paths *[]string) interface{} {
 	switch t := v.(type) {
 	case map[string]interface{}:
 		nameLooksSecret := envEntryNameLooksSecret(t["name"])
 		out := make(map[string]interface{}, len(t))
 		for k, val := range t {
-			if refKeys[k] {
-				// A reference field carries NAMES by API contract (never values),
+			if shape, ok := refKeys[k]; ok && isReference(shape, val) {
+				// A genuine reference (its API shape: names only) stays readable,
 				// even under a secret-looking parent such as volumes[].secret.
+				// Anything else under the same key is masked normally.
 				out[k] = val
 				continue
 			}
@@ -117,7 +174,7 @@ func maskNode(v interface{}, path string, keySensitive bool, refKeys map[string]
 		out := make(map[interface{}]interface{}, len(t))
 		for k, val := range t {
 			ks := fmt.Sprint(k)
-			if refKeys[ks] {
+			if shape, ok := refKeys[ks]; ok && isReference(shape, val) {
 				out[k] = val
 				continue
 			}
