@@ -71,10 +71,12 @@ func stuckChain() certmanager.Chain {
 	}
 }
 
+// newAI builds the service for the egress tests: "local" here means a model on
+// THIS machine (loopback endpoint); hosted is off-machine.
 func newAI(client Completer, backend string, allowEgress bool, protected bool, conn AIConn) *AIService {
 	return NewAIService(
 		func(string) (AIConn, bool) { return conn, conn != nil },
-		client, backend, allowEgress,
+		client, backend, backend == "local", allowEgress,
 		func(string) bool { return protected },
 		nil, // capabilities: exercised separately
 	)
@@ -278,7 +280,7 @@ func TestAI_ExplainResource_IncludesOperatorHealth(t *testing.T) {
 	}
 	s := NewAIService(
 		func(string) (AIConn, bool) { return conn, true },
-		cl, "local", false, func(string) bool { return false }, caps,
+		cl, "local", true, false, func(string) bool { return false }, caps,
 	)
 
 	r := s.ExplainResource("c", "cert-manager.io", "v1", "certificates", "prod", "tls")
@@ -291,7 +293,7 @@ func TestAI_ExplainResource_IncludesOperatorHealth(t *testing.T) {
 		}
 	}
 	// A cluster with no operators installed carries no operators section.
-	empty := NewAIService(func(string) (AIConn, bool) { return conn, true }, cl, "local", false, func(string) bool { return false },
+	empty := NewAIService(func(string) (AIConn, bool) { return conn, true }, cl, "local", true, false, func(string) bool { return false },
 		func(string) capability.Set { return capability.Set{} })
 	empty.ExplainResource("c", "cert-manager.io", "v1", "certificates", "prod", "tls")
 	if strings.Contains(cl.gotUser, "\"operators\"") {
@@ -409,5 +411,30 @@ func TestAI_Errors_FoldIntoDTO(t *testing.T) {
 	s3 := newAI(&fakeCompleter{}, "local", false, false, nil)
 	if r := s3.ExplainCertificate("c", "ns", "n"); r.OK || !strings.Contains(r.Error, "not connected") {
 		t.Fatalf("cluster miss must fold into DTO, got %+v", r)
+	}
+}
+
+// Review 2026-10-03 #14: "local" names the OpenAI-compatible wire protocol, not
+// where the model runs. A local-protocol backend pointed off this machine is
+// egress: a protected cluster needs ai.allowProtectedEgress, like hosted.
+func TestAI_LocalProtocolOffMachineIsEgress(t *testing.T) {
+	offMachine := NewAIService(
+		func(string) (AIConn, bool) { return nil, false },
+		&fakeCompleter{}, "local", false /* onMachine */, false,
+		func(string) bool { return true }, nil,
+	)
+	if offMachine.EgressAllowed("prd") {
+		t.Fatal("a local-protocol backend on a remote host must not receive a protected cluster's context without the opt-in")
+	}
+	if r := offMachine.ExplainResource("prd", "", "v1", "pods", "ns", "p"); !strings.Contains(r.Error, "not on this machine") {
+		t.Fatalf("want the egress refusal, got %+v", r)
+	}
+	optedIn := NewAIService(
+		func(string) (AIConn, bool) { return nil, false },
+		&fakeCompleter{}, "local", false, true, /* allowEgress */
+		func(string) bool { return true }, nil,
+	)
+	if !optedIn.EgressAllowed("prd") {
+		t.Fatal("ai.allowProtectedEgress must allow it")
 	}
 }

@@ -10,7 +10,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"strings"
 )
 
@@ -49,13 +51,49 @@ func NewClient(backend Backend, baseURL, apiKey, model string, httpClient *http.
 	if httpClient == nil {
 		httpClient = http.DefaultClient
 	}
+	// Never follow a redirect to another host: the egress policy is decided for
+	// the CONFIGURED endpoint, and a 307/308 re-sends the POST body (cluster
+	// context) wherever it points (review 2026-10-03 #14). A copy, so the
+	// caller's client is not mutated.
+	hc := *httpClient
+	hc.CheckRedirect = refuseCrossHostRedirect
 	return &Client{
 		backend: backend,
 		baseURL: strings.TrimRight(baseURL, "/"),
 		apiKey:  apiKey,
 		model:   model,
-		http:    httpClient,
+		http:    &hc,
 	}
+}
+
+// refuseCrossHostRedirect allows a redirect only within the original host.
+func refuseCrossHostRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) > 0 && !strings.EqualFold(req.URL.Host, via[0].URL.Host) {
+		return fmt.Errorf("refusing redirect from %s to %s: the AI egress policy covers the configured endpoint only", via[0].URL.Host, req.URL.Host)
+	}
+	if len(via) >= 5 {
+		return fmt.Errorf("too many redirects")
+	}
+	return nil
+}
+
+// IsLoopbackEndpoint reports whether baseURL points at THIS machine (localhost
+// or a loopback IP). Only such an endpoint keeps data on the machine: "local"
+// names the OpenAI-compatible wire protocol, not where the server runs - a team
+// vLLM or a hosted OpenAI-compatible gateway configured as "local" still sends
+// cluster context off-machine. No DNS lookup: a name other than localhost is
+// treated as remote.
+func IsLoopbackEndpoint(baseURL string) bool {
+	u, err := url.Parse(baseURL)
+	if err != nil || u.Host == "" {
+		return false
+	}
+	host := strings.ToLower(u.Hostname())
+	if host == "localhost" || strings.HasSuffix(host, ".localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // Model returns the configured model id (for surfacing in the UI).

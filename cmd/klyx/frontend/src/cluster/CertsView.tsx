@@ -398,7 +398,7 @@ function CertInspector({ c, cluster, issuer, chain, chainLoading, aiReady, aiEgr
             <button
               onClick={runExplain}
               disabled={!aiEgress || explain.loading}
-              title={aiEgress ? "Explain why this certificate is stuck (AI, read-only)" : "AI is disabled for this protected cluster — use a local backend or set ai.allowProtectedEgress"}
+              title={aiEgress ? "Explain why this certificate is stuck (AI, read-only)" : "AI is disabled for this protected cluster — the AI endpoint is not on this machine; use a model on localhost or set ai.allowProtectedEgress"}
               style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11, padding: "3px 8px", borderRadius: 4, cursor: aiEgress && !explain.loading ? "pointer" : "not-allowed", border: "0.5px solid var(--color-border-info)", background: "var(--color-background-info)", color: "var(--color-text-info)", opacity: aiEgress ? 1 : 0.5 }}
             >
               <IconSparkles size={12} stroke={1.5} />

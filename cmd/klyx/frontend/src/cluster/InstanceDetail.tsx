@@ -791,7 +791,7 @@ export function InstanceDetail({ cluster, resource, instance }: { cluster: strin
             <button
               onClick={() => runAI("explain")}
               disabled={!ai.egress || aiBusy}
-              title={ai.egress ? "Explain the root cause across related objects (AI, read-only)" : "AI is disabled for this protected cluster — use a local backend or set ai.allowProtectedEgress"}
+              title={ai.egress ? "Explain the root cause across related objects (AI, read-only)" : "AI is disabled for this protected cluster — the AI endpoint is not on this machine; use a model on localhost or set ai.allowProtectedEgress"}
               style={{ ...actionBtn, display: "inline-flex", alignItems: "center", gap: 4, color: "var(--color-text-info)", borderColor: "var(--color-border-info)", opacity: ai.egress ? 1 : 0.5, cursor: ai.egress && !aiBusy ? "pointer" : "not-allowed" }}
             >
               <IconSparkles size={12} stroke={1.5} />
@@ -800,7 +800,7 @@ export function InstanceDetail({ cluster, resource, instance }: { cluster: strin
             <button
               onClick={() => runAI("fix")}
               disabled={!ai.egress || aiBusy}
-              title={ai.egress ? "Draft a fix to commit to Git (AI, read-only — Klyx never applies it)" : "AI is disabled for this protected cluster — use a local backend or set ai.allowProtectedEgress"}
+              title={ai.egress ? "Draft a fix to commit to Git (AI, read-only — Klyx never applies it)" : "AI is disabled for this protected cluster — the AI endpoint is not on this machine; use a model on localhost or set ai.allowProtectedEgress"}
               style={{ ...actionBtn, display: "inline-flex", alignItems: "center", gap: 4, color: "var(--color-text-info)", borderColor: "var(--color-border-info)", opacity: ai.egress ? 1 : 0.5, cursor: ai.egress && !aiBusy ? "pointer" : "not-allowed" }}
             >
               <IconSparkles size={12} stroke={1.5} />

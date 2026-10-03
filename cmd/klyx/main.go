@@ -307,7 +307,11 @@ func main() {
 			}
 			return c, true
 		},
-		aiClient, aiBackend, aiAllowEgress, configSvc.IsProtected,
+		// onMachine: only a loopback endpoint keeps cluster context on this
+		// machine; any other endpoint (hosted, or "local" pointed at a LAN/hosted
+		// OpenAI-compatible server) needs ai.allowProtectedEgress for protected
+		// clusters.
+		aiClient, aiBackend, aiClient != nil && ai.IsLoopbackEndpoint(cfg.AI.BaseURL), aiAllowEgress, configSvc.IsProtected,
 		func(name string) capability.Set {
 			for _, sn := range reg.Snapshots() {
 				if sn.Name == name {

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -95,5 +96,49 @@ func TestComplete_ContextDeadline(t *testing.T) {
 	c := NewClient(BackendHosted, srv.URL, "k", "m", srv.Client())
 	if _, err := c.Complete(ctx, "s", "u", 10); err == nil {
 		t.Fatal("want a deadline error")
+	}
+}
+
+// Review 2026-10-03 #14: only a loopback endpoint keeps data on the machine.
+func TestIsLoopbackEndpoint(t *testing.T) {
+	cases := map[string]bool{
+		"http://localhost:11434":       true,
+		"http://127.0.0.1:11434/v1":    true,
+		"http://[::1]:8080":            true,
+		"http://ollama.localhost:1234": true,
+		"http://10.0.0.5:11434":        false, // LAN - leaves the machine
+		"http://ollama.lan:11434":      false, // unresolved name: treated as remote
+		"https://openrouter.ai/api":    false,
+		"https://api.anthropic.com":    false,
+		"not a url":                    false,
+	}
+	for in, want := range cases {
+		if got := IsLoopbackEndpoint(in); got != want {
+			t.Errorf("IsLoopbackEndpoint(%q) = %v, want %v", in, got, want)
+		}
+	}
+}
+
+// A 307/308 from the configured endpoint must not carry the prompt (cluster
+// context) to another host.
+func TestClientRefusesCrossHostRedirect(t *testing.T) {
+	var hits int32
+	elsewhere := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&hits, 1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer elsewhere.Close()
+	// Same loopback IP, different port -> different Host, so the guard applies.
+	configured := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, elsewhere.URL+r.URL.Path, http.StatusTemporaryRedirect)
+	}))
+	defer configured.Close()
+
+	c := NewClient(BackendLocal, configured.URL, "", "m", nil)
+	if _, err := c.Complete(context.Background(), "sys", "cluster context", 16); err == nil {
+		t.Fatal("a cross-host redirect must fail the call")
+	}
+	if atomic.LoadInt32(&hits) != 0 {
+		t.Fatal("the redirected request must never reach the other host")
 	}
 }

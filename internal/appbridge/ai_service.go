@@ -50,13 +50,24 @@ type AIService struct {
 	lookup       func(string) (AIConn, bool)
 	client       Completer // nil when the backend is off
 	backend      string
+	onMachine    bool // the endpoint is THIS machine (loopback) - nothing leaves it
 	allowEgress  bool
 	isProtected  func(string) bool
 	capabilities func(string) capability.Set // per-cluster operator health; may be nil
 }
 
-func NewAIService(lookup func(string) (AIConn, bool), client Completer, backend string, allowEgress bool, isProtected func(string) bool, capabilities func(string) capability.Set) *AIService {
-	return &AIService{lookup: lookup, client: client, backend: backend, allowEgress: allowEgress, isProtected: isProtected, capabilities: capabilities}
+// NewAIService wires the read-only AI surface. onMachine must be true ONLY when
+// the configured endpoint is this machine (ai.IsLoopbackEndpoint): it is what
+// lets a protected cluster's context reach the model without an explicit
+// opt-in. The backend label alone ("local" = OpenAI-compatible protocol) says
+// nothing about where the server runs.
+func NewAIService(lookup func(string) (AIConn, bool), client Completer, backend string, onMachine, allowEgress bool, isProtected func(string) bool, capabilities func(string) capability.Set) *AIService {
+	return &AIService{lookup: lookup, client: client, backend: backend, onMachine: onMachine, allowEgress: allowEgress, isProtected: isProtected, capabilities: capabilities}
+}
+
+// egressRefusal is the reason a protected cluster's context may not be sent.
+func egressRefusal(cluster string) string {
+	return "AI is disabled for protected cluster \"" + cluster + "\": the configured AI endpoint is not on this machine - use a local model on localhost, or set ai.allowProtectedEgress to allow it"
 }
 
 // operators projects the cluster's controller health into the bundle (nil-safe).
@@ -72,15 +83,17 @@ func (s *AIService) Available() AIAvailabilityDTO {
 	return AIAvailabilityDTO{Backend: s.backend, Ready: s.client != nil}
 }
 
-// EgressAllowed reports whether an Explain call is permitted for this cluster:
-// false when a hosted backend would send a protected cluster's topology off the
-// machine without an explicit opt-in. A local backend always allows it (nothing
-// leaves the machine). Lets the UI disable-with-tooltip rather than fail on click.
+// EgressAllowed reports whether an AI call is permitted for this cluster: false
+// when a protected cluster's context would leave the machine without the
+// explicit ai.allowProtectedEgress opt-in. Only an endpoint on this machine
+// (loopback) needs no opt-in - a "local" (OpenAI-compatible) backend pointed at
+// a LAN or hosted server is egress like any other (review 2026-10-03 #14).
+// Lets the UI disable-with-tooltip rather than fail on click.
 func (s *AIService) EgressAllowed(cluster string) bool {
 	if s.client == nil {
 		return false
 	}
-	if s.backend == "hosted" && s.protected(cluster) && !s.allowEgress {
+	if !s.onMachine && s.protected(cluster) && !s.allowEgress {
 		return false
 	}
 	return true
@@ -98,7 +111,7 @@ func (s *AIService) ExplainCertificate(cluster, ns, name string) AIResultDTO {
 		return AIResultDTO{Error: "AI backend not configured"}
 	}
 	if !s.EgressAllowed(cluster) {
-		return AIResultDTO{Error: "AI is disabled for protected cluster \"" + cluster + "\": use a local backend or set ai.allowProtectedEgress"}
+		return AIResultDTO{Error: egressRefusal(cluster)}
 	}
 	conn, ok := s.lookup(cluster)
 	if !ok {
@@ -134,7 +147,7 @@ func (s *AIService) ExplainResource(cluster, group, version, plural, ns, name st
 		return AIResultDTO{Error: "AI backend not configured"}
 	}
 	if !s.EgressAllowed(cluster) {
-		return AIResultDTO{Error: "AI is disabled for protected cluster \"" + cluster + "\": use a local backend or set ai.allowProtectedEgress"}
+		return AIResultDTO{Error: egressRefusal(cluster)}
 	}
 	conn, ok := s.lookup(cluster)
 	if !ok {
@@ -172,7 +185,7 @@ func (s *AIService) SuggestFix(cluster, group, version, plural, ns, name string)
 		return AIResultDTO{Error: "AI backend not configured"}
 	}
 	if !s.EgressAllowed(cluster) {
-		return AIResultDTO{Error: "AI is disabled for protected cluster \"" + cluster + "\": use a local backend or set ai.allowProtectedEgress"}
+		return AIResultDTO{Error: egressRefusal(cluster)}
 	}
 	conn, ok := s.lookup(cluster)
 	if !ok {
