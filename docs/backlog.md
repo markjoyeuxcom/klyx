@@ -1,7 +1,7 @@
 # Klyx backlog
 
-Consolidated 2026-07-09; last pruned 2026-07-22 (the Karpenter lens shipped;
-same day, the fleet-ops batch:
+Consolidated 2026-07-09; last pruned 2026-07-25 (the Karpenter lens shipped;
+2026-07-22, the fleet-ops batch:
 promotion tracker, upgrade readiness, connectivity can-i, survivability
 headroom, expiry horizon; 2026-07-21: rollout history/undo/pause — the ranked
 top-12 complete — and node + per-container utilization; 2026-07-20: RBAC
@@ -52,8 +52,12 @@ the need is real, not top-to-bottom.
       key) — everything is currently verified against a fake client
 - [ ] **Live-cluster smoke of the write paths** (nothing destructive committed
       blind): a Force:false apply against a Flux-owned object should 409 naming
-      kustomize-controller; a create into a pruned namespace should warn red;
+      kustomize-controller; a create into a namespace a pruning unit deploys into should state that the unit leaves an untracked object alone (amber; red only for an object carrying the Argo app's tracking metadata - semantics corrected in the 2026-10-03 review remediation);
       a debug-pod launch + Scratch delete-all should round-trip on the homelab
+- [ ] **Windows check of the exec terminal**: open a pod shell from Klyx on a
+      Windows host and type into it. The 2026-10-03 review remediation moved the
+      Windows launch to PowerShell via CreateProcess; its Windows-only tests
+      compile but have never run (CI and the dev machine are not Windows)
 - [ ] Finalize `docs/release-notes-1.0.0.md` and cut the `v1.0.0` tag
 
 This is a walk-the-app-and-tick-boxes exercise; no coding is blocking 1.0.
@@ -140,7 +144,7 @@ entirely demand-driven from sections 1–4.
       `flux diff` resolve reliably)
 - [ ] **ESO**: `ClusterExternalSecret` / `PushSecret` kinds + a day-2 force-refresh
       verb
-- [ ] **Karpenter lens follow-ups** (lens shipped 2026-07-22, #48): NodeClaim →
+- [ ] **Karpenter lens follow-ups** (lens shipped 2026-07-25, #48): NodeClaim →
       Node cross-link into the node board; a "requirements that couldn't be
       met" breakdown for stuck claims (parse status on the owning NodePool's
       unschedulable pods); v1beta1 API fallback verification against an older
@@ -191,7 +195,7 @@ See `docs/brainstorm-questions.md` (Q16 pinned resources, etc.).
 
 Merged to `main` — do not re-add to the backlog:
 
-**2026-07-22 — the Karpenter lens (#48):**
+**2026-07-25 — the Karpenter lens (#48):**
 - Autoscaling diagnosis in Karpenter's vocabulary: capability detection
   (CRDs + controller health, both conventional namespaces), broken-first
   NodePool triage (limits vs provisioned capacity, 90% warning bars),

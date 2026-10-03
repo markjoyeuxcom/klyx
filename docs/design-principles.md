@@ -12,7 +12,7 @@ Lens, FreeLens, Headlamp, K9s all treat the cluster as the unit of work and the 
 
 Drift detection, reconciliation state, and the actual diff (in-cluster vs Git) live alongside the resources they manage. Not in a separate Flux dashboard. Not behind a "install the Flux extension" prompt. Not as a tab that defaults to disabled.
 
-**Implication for build:** the GitOps view is one of the top-five sidebar entries. Every workload resource shows its owning Kustomization/Application as a clickable reference. Drift diffs render inline, not in a modal.
+**Implication for build:** the GitOps view is one of the first lenses in the LensNav (the horizontal lens bar that replaced the sidebar in Signal Bench, PR #11). Every workload resource shows its owning Kustomization/Application as a clickable reference. Drift diffs render inline, not in a modal.
 
 ## 3. Gateway API is rendered as a graph, not a CRD list
 
@@ -34,9 +34,9 @@ p50/p99/rps next to the route. CPU/memory on the pod card. Reconciliation durati
 
 ## 6. Command palette as primary nav
 
-`⌘K` (or `Ctrl+K`) opens a fuzzy-search palette for context switching, namespace jumps, resource lookup, action execution. The sidebar is a fallback for mouse users.
+`⌘K` (or `Ctrl+K`) opens a fuzzy-search palette for context switching, namespace jumps, resource lookup, action execution. The LensNav is the fallback for mouse users.
 
-**Implication for build:** the command palette is implemented before the sidebar. Every navigable surface is reachable from the palette.
+**Implication for build:** every navigable surface is reachable from the palette, and day-2 verbs launched from it open the same confirm flows as their buttons - never a bypass.
 
 ## 7. Capability detection over assumption
 
@@ -50,17 +50,23 @@ Flux Kustomizations are "ready" or "drifted". Argo Applications are "synced" or 
 
 **Implication for build:** the model layer has separate types for Flux and Argo resources. The UI uses each tool's terminology when displaying its resources.
 
-## 9. No resource creation wizards
+## 9. Git is the source of truth; no resource creation wizards (revised 2026-10-04)
 
-Klyx is a viewer, not a control plane. Resources are written as Helm, Kustomize, or plain YAML in Git. The UI surfaces what's in the cluster, helps diagnose what's wrong, and links to the source location - but does not have "Create Deployment" buttons.
+Desired state is written as Helm, Kustomize, or plain YAML in Git. Klyx surfaces what's in the cluster, helps diagnose what's wrong, and links to the source location - it has no "Create Deployment" forms and no resource templating UI.
 
-**Implication for build:** there are no creation forms anywhere. There are read-write actions (reconcile, suspend, delete pod, restart deployment) but no resource templating UI.
+Under the 2026-06-17 directive (functionality may overrule a non-goal, and the crossing is recorded), the editable surface of 2026-07-10 (PRs #27-#31) added guarded escape hatches that write to the cluster without authoring desired state in Git:
+
+- one YAML editor for any object, applying with server-side apply `Force:false`: a field owned by another manager (kustomize-controller, helm-controller, Argo) returns a conflict naming it instead of silently drifting, and the editor shows which GitOps unit owns the object;
+- an ad-hoc "deploy yaml" composer that only creates new objects (collisions refuse, `kind: Secret` is refused), stamps them `klyx.dev/adhoc`, and states what the namespace's GitOps unit can do to them;
+- a TTL-bounded diagnostic pod in the unmanaged `klyx-scratch` namespace, and a Scratch panel that inventories and deletes everything Klyx created.
+
+**Implication for build:** still no creation forms or templating. A new write surface must say whose state it touches, refuse to overwrite a GitOps owner silently, and be cleanable - Git stays the source of truth.
 
 ## 10. Native, not Electron
 
 Go + Wails. Native binaries. Sub-second cold start. ~10-20MB on disk. The webview is for the UI tree, not for running a Chromium process tree.
 
-**Implication for build:** any dependency that requires Node.js at runtime is rejected. The binary must ship statically linked.
+**Implication for build:** any dependency that requires Node.js at runtime is rejected. The binary carries everything except the platform webview: WebKit on macOS, WebView2 on Windows, and GTK 4 + WebKitGTK 6 on Linux, which are linked dynamically and declared as package dependencies (corrected 2026-10-04: an earlier version said "statically linked").
 
 ## 11. Diagnostic lenses first, daily driver included (revised 2026-06-09)
 
@@ -75,13 +81,19 @@ Klyx leads with diagnostic lenses - health, ownership, traffic path, policy, obs
 
 ## Visual language
 
-Borrowed from the mockups - see `mockups.html` for the canonical reference.
+Signal Bench (2026-07-05, PRs #10-#11) supersedes the original mockup language: the app as bench hardware - lamps that glow only on faults, inset wells for data against raised modules for chrome, a permanent function-key row. The design of record lives in `design/` (`direction-c-signal-bench.html`, `signal-bench-implementation-notes.md`, `tokens-signal-bench.css`). Four rules are enforced in review:
 
-- Sentence case for everything, never Title Case or ALL CAPS
-- Two font weights only: 400 regular, 500 medium
-- 0.5px borders for component edges, never thicker except for the deliberate "featured" accent
-- Flat surfaces. No gradients, no shadows except focus rings
+- Only faults glow. A healthy lamp is lit but never glows.
+- Blink is spine-only: the fleet spine is the one place a lamp may blink.
+- Danger gets shape, not only colour: ▲, hazard tape, typed interlock.
+- Wells hold data; modules hold chrome.
+
+Still in force from the original language:
+
+- Sentence case for everything, never Title Case or ALL CAPS - except deliberate verdict words (e.g. REACHABLE / BLOCKED)
 - Monospace for resource names, namespaces, revisions, and any string that's a K8s identifier
 - Status colours from CSS variables (success, warning, danger, info) - never hardcoded hex
 - Tabler outline icons only
-- Light and dark mode are both first-class. Every colour must work in both
+- Light and dark mode are both first-class (`bench` / `bench-light` are the default themes). Every colour must work in both
+
+Superseded: "flat surfaces, no shadows" (wells and modules are machined with inset and raised shading) and the two-weight / 0.5px-border-only rules.

@@ -1,7 +1,7 @@
 # Signal Bench — implementation notes
 
-Mockup of record: `docs/direction-c-signal-bench.html` (10 screens).
-Theme draft: `docs/tokens-signal-bench.css` (`bench` / `bench-light`).
+Mockup of record: `design/direction-c-signal-bench.html` (10 screens).
+Theme draft: `design/tokens-signal-bench.css` (`bench` / `bench-light`).
 
 Most of the direction lands as CSS variables. Three things are new primitives.
 Everything else is a restyle of existing components in place.
@@ -25,6 +25,11 @@ Everything else is a restyle of existing components in place.
 ## New primitives (3)
 
 ### 1. `Lamp` — replaces `StatusDot` (chrome/primitives/StatusDot.tsx)
+
+> As built (PR #10): no separate `Lamp` component was added - the lamp physics
+> below were implemented inside `StatusDot` itself, so every call site got
+> them without a rename. Read "Lamp" in this note as `StatusDot`.
+
 8px circle. Props: `tone` (existing `Tone` type), `blink?: boolean`
 (FleetSpine only), `size?`.
 - ok: `--color-text-success` at 0.75 opacity, no glow

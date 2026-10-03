@@ -18,7 +18,7 @@ Klyx is opinionated about all of these. See `CLAUDE.md` for the full brief.
 
 ## Tech stack
 
-- Go + Wails (native binary, no Electron)
+- Go + Wails v3 (native binary, no Electron)
 - TypeScript + React in the webview
 - client-go informer-based data layer
 - Builds for macOS, Linux, Windows
@@ -27,21 +27,33 @@ Klyx is opinionated about all of these. See `CLAUDE.md` for the full brief.
 
 ```
 klyx/
-├── CLAUDE.md                    # primary brief for AI-assisted work
+├── CLAUDE.md                    # canonical project guide for every agent (and humans)
+├── AGENTS.md                    # pointer to CLAUDE.md for agents that read AGENTS.md
 ├── README.md                    # this file
-├── docs/
-│   ├── design-principles.md     # full design philosophy
-│   ├── brainstorm-questions.md  # open architectural questions
-│   ├── example-prompts.md       # Claude Code prompts per phase
-│   └── mockups.html             # six UI mockups (open in browser)
+├── Makefile, Taskfile.yml       # build, test and lint entry points
+├── .github/workflows/           # CI (push/PR gates, govulncheck) and release builds
 ├── cmd/klyx/                    # Wails desktop app and React frontend
 ├── cmd/klyxctl/                 # CLI entry point
-└── internal/                    # fleet, capability, GitOps, Gateway, metrics, and bridge layers
+├── internal/                    # fleet, capability, GitOps, Gateway, metrics, and bridge layers
+├── design/                      # Signal Bench design of record (mockups, notes, tokens)
+├── docs/
+│   ├── backlog.md               # living status: v1.0.0 gate, shipped log, what's left
+│   ├── design-principles.md     # design philosophy
+│   ├── eyeball-checklist-*.md   # manual verification checklists
+│   ├── release-notes-*.md       # release notes
+│   ├── superpowers/{plans,specs}/  # feature plans and specs
+│   ├── brainstorm-questions.md  # open architectural questions
+│   ├── example-prompts.md       # prompts per phase
+│   └── mockups.html             # the original six UI mockups (open in browser)
+├── panels/                      # reference screenshots for the panel refit
+└── scripts/                     # build helpers (version stamping)
 ```
 
 ## Status
 
-Klyx is implemented beyond the initial foundation: fleet overview, Flux and
-Argo CD lenses, CRD/resource browsing, Gateway topology, inline metrics, and
-daily-driver Kubernetes operations are present. See `AGENTS.md` and the
-`docs/superpowers/plans/` history for the current milestone context.
+Klyx is well past its initial foundation: fleet overview, Flux and Argo CD
+lenses, cert-manager and External Secrets diagnosis, CRD/resource browsing,
+Gateway topology, ClusterMesh edges, inline metrics, the editable surface, AI
+assist, and daily-driver Kubernetes operations ship today (latest tag
+`v0.9.0`). `docs/backlog.md` is the living status - the v1.0.0 release gate
+and what's left - and `CLAUDE.md` carries the milestone history.
