@@ -43,8 +43,11 @@ export type DrainOptions = {
   timeoutSeconds: number;
 };
 
-export async function startDrain(cluster: string, node: string, opts: DrainOptions): Promise<OpenLogStreamResultDTO> {
-  return (await NodeOpsService.StartDrain(cluster, node, opts)) as OpenLogStreamResultDTO;
+// startDrain starts the drain on streamId, which the caller minted
+// (newStreamId) and has ALREADY subscribed to as `nodedrain:<streamId>` - the
+// backend emits kubectl output from the moment it starts (review 2026-10-03 #8).
+export async function startDrain(cluster: string, node: string, opts: DrainOptions, streamId: string): Promise<OpenLogStreamResultDTO> {
+  return (await NodeOpsService.StartDrain(cluster, node, opts, streamId)) as OpenLogStreamResultDTO;
 }
 
 export async function cancelDrain(streamId: string): Promise<void> {

@@ -66,7 +66,7 @@ describe("LogsWindow", () => {
     renderWindow(seeded());
     await waitFor(() => expect(mockOpenLogStream).toHaveBeenCalledTimes(1));
     expect(mockOpenLogStream).toHaveBeenCalledWith(
-      "prod-aks", "monitoring", "grafana-7d4", "grafana", false, 500,
+      "prod-aks", "monitoring", "grafana-7d4", "grafana", false, 500, expect.any(String),
     );
   });
 
@@ -82,7 +82,7 @@ describe("LogsWindow", () => {
     ));
     await waitFor(() => expect(mockOpenWorkloadLogStream).toHaveBeenCalledTimes(1));
     expect(mockOpenWorkloadLogStream).toHaveBeenCalledWith(
-      "prod-aks", "monitoring", "Deployment", "grafana", "", 500,
+      "prod-aks", "monitoring", "Deployment", "grafana", "", 500, expect.any(String),
     );
     expect(mockOpenLogStream).not.toHaveBeenCalled();
   });

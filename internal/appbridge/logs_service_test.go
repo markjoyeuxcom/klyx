@@ -138,7 +138,7 @@ func (s *LogsService) drainingCount() int {
 func TestOpenLogStream_ClusterMiss(t *testing.T) {
 	em := &captureEmitter{}
 	svc := NewLogsService(func(string) (LogsConn, bool) { return nil, false }, em)
-	res := svc.OpenLogStream("nope", "ns", "pod", "app", false, 100)
+	res := svc.OpenLogStream("nope", "ns", "pod", "app", false, 100, tid())
 	if res.Error == "" {
 		t.Fatal("want error on cluster miss")
 	}
@@ -150,7 +150,7 @@ func TestOpenLogStream_ClusterMiss(t *testing.T) {
 func TestOpenLogStream_OpenError(t *testing.T) {
 	em := &captureEmitter{}
 	svc := NewLogsService(lookupOf(openErrConn{}), em)
-	res := svc.OpenLogStream("c", "ns", "pod", "app", false, 100)
+	res := svc.OpenLogStream("c", "ns", "pod", "app", false, 100, tid())
 	if res.Error == "" || res.StreamID != "" {
 		t.Fatalf("want error+no id, got %+v", res)
 	}
@@ -170,7 +170,7 @@ func TestOpenLogStream_BatchesLinesThenEOF(t *testing.T) {
 	body := strings.Repeat("hello\n", 5) + "world\n"
 	svc := NewLogsService(lookupOf(&stringConn{body: body}), em)
 
-	res := svc.OpenLogStream("c", "ns", "pod", "app", false, 100)
+	res := svc.OpenLogStream("c", "ns", "pod", "app", false, 100, tid())
 	if res.StreamID == "" || res.Error != "" {
 		t.Fatalf("open failed: %+v", res)
 	}
@@ -200,7 +200,7 @@ func TestCloseLogStream_UnblocksBlockedRead(t *testing.T) {
 	defer pw.Close()
 	svc := NewLogsService(lookupOf(&pipeConn{r: pr}), em)
 
-	res := svc.OpenLogStream("c", "ns", "pod", "app", false, 100)
+	res := svc.OpenLogStream("c", "ns", "pod", "app", false, 100, tid())
 	if res.StreamID == "" {
 		t.Fatalf("open failed: %+v", res)
 	}
@@ -238,7 +238,7 @@ func TestCapEviction_OldestClosed(t *testing.T) {
 
 	ids := make([]string, 0, 9)
 	for i := 0; i < 9; i++ {
-		res := svc.OpenLogStream("c", "ns", "pod", "app", false, 100)
+		res := svc.OpenLogStream("c", "ns", "pod", "app", false, 100, tid())
 		if res.StreamID == "" {
 			t.Fatalf("open %d failed: %+v", i, res)
 		}
@@ -263,7 +263,7 @@ func TestCloseLogStream_Idempotent(t *testing.T) {
 	pr, pw := io.Pipe()
 	defer pw.Close()
 	svc := NewLogsService(lookupOf(&pipeConn{r: pr}), em)
-	res := svc.OpenLogStream("c", "ns", "pod", "app", false, 100)
+	res := svc.OpenLogStream("c", "ns", "pod", "app", false, 100, tid())
 
 	svc.CloseLogStream(res.StreamID)
 	svc.CloseLogStream(res.StreamID) // second close: no-op, must not panic
@@ -273,7 +273,7 @@ func TestCloseLogStream_Idempotent(t *testing.T) {
 func TestRead_ErrorPath_FinalChunkHasError(t *testing.T) {
 	em := &captureEmitter{}
 	svc := NewLogsService(lookupOf(&errConn{}), em)
-	res := svc.OpenLogStream("c", "ns", "pod", "app", false, 100)
+	res := svc.OpenLogStream("c", "ns", "pod", "app", false, 100, tid())
 	if res.StreamID == "" {
 		t.Fatalf("open failed: %+v", res)
 	}
@@ -315,7 +315,7 @@ func TestCloseAll_DrainsEveryStream(t *testing.T) {
 	}, em)
 
 	for i := 0; i < 5; i++ {
-		svc.OpenLogStream("c", "ns", "pod", "app", false, 100)
+		svc.OpenLogStream("c", "ns", "pod", "app", false, 100, tid())
 	}
 	if svc.streamCount() != 5 {
 		t.Fatalf("want 5 streams, got %d", svc.streamCount())
@@ -358,7 +358,7 @@ func TestCapHoldsUnderBurst(t *testing.T) {
 
 	burst := maxConcurrentLogStreams + 10
 	for i := 0; i < burst; i++ {
-		res := svc.OpenLogStream("c", "ns", "pod", "app", false, 100)
+		res := svc.OpenLogStream("c", "ns", "pod", "app", false, 100, tid())
 		if res.StreamID == "" {
 			t.Fatalf("open %d failed: %+v", i, res)
 		}
@@ -392,7 +392,7 @@ func TestNoGoroutineLeakAcrossLifecycles(t *testing.T) {
 	// Clean-EOF streams: body finishes immediately, reader exits on its own.
 	cleanSvc := NewLogsService(lookupOf(&stringConn{body: "line1\nline2\n"}), em)
 	for i := 0; i < 3; i++ {
-		cleanSvc.OpenLogStream("c", "ns", "pod", "app", false, 100)
+		cleanSvc.OpenLogStream("c", "ns", "pod", "app", false, 100, tid())
 	}
 
 	// Cancel-while-blocked streams: pipes that never write, cancelled via CloseAll.
@@ -404,7 +404,7 @@ func TestNoGoroutineLeakAcrossLifecycles(t *testing.T) {
 		return &pipeConn{r: pr}, true
 	}, em)
 	for i := 0; i < 3; i++ {
-		blockSvc.OpenLogStream("c", "ns", "pod", "app", false, 100)
+		blockSvc.OpenLogStream("c", "ns", "pod", "app", false, 100, tid())
 	}
 
 	// Over-cap burst: opens cap+4 streams to exercise synchronous eviction paths.
@@ -416,7 +416,7 @@ func TestNoGoroutineLeakAcrossLifecycles(t *testing.T) {
 		return &pipeConn{r: pr}, true
 	}, em)
 	for i := 0; i < maxConcurrentLogStreams+4; i++ {
-		burstSvc.OpenLogStream("c", "ns", "pod", "app", false, 100)
+		burstSvc.OpenLogStream("c", "ns", "pod", "app", false, 100, tid())
 	}
 
 	// Wait for clean-EOF streams to drain on their own.

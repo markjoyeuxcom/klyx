@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -49,7 +48,8 @@ type logStream struct {
 }
 
 // LogsService streams pod logs to the frontend over Wails events. Event name
-// contract: each open emits LogChunkDTO payloads on "podlogs:"+streamID.
+// contract: each open emits LogChunkDTO payloads on "podlogs:"+streamID, where
+// the FRONTEND chose streamID and subscribed before opening.
 //
 // Lifecycle / leak-safety: every reader goroutine has exactly one exit, reached
 // on any of {ctx cancel, scanner EOF, scanner error}. On exit it emits a final
@@ -60,8 +60,6 @@ type logStream struct {
 type LogsService struct {
 	lookup func(string) (LogsConn, bool)
 	em     Emitter
-
-	seq atomic.Uint64
 
 	mu       sync.Mutex
 	streams  map[string]*logStream
@@ -103,12 +101,34 @@ func (s *LogsService) evictToCapLocked() {
 	}
 }
 
-// OpenLogStream opens a live tail for one container and returns its streamID.
-// The frontend subscribes to "podlogs:"+streamID. tailLines<=0 defaults
-// downstream (fleet clamps to 500, caps at 5000). previous tails the prior
-// container instance's (static) logs. Cluster miss or open error returns an
-// Error and no stream.
-func (s *LogsService) OpenLogStream(cluster, namespace, pod, container string, previous bool, tailLines int) OpenLogStreamResultDTO {
+// registerLocked registers a new stream under its frontend-chosen id, first
+// evicting to the cap. It refuses an id that is still live or draining - two
+// streams on one event name would interleave. The caller MUST hold s.mu.
+func (s *LogsService) registerLocked(streamID string, st *logStream) error {
+	if s.streams[streamID] != nil || s.draining[streamID] != nil {
+		return fmt.Errorf("stream id %q is already in use", streamID)
+	}
+	// Cap: synchronously evict the oldest stream(s) before registering the new
+	// one, so concurrent or rapid sequential opens can never blow past
+	// maxConcurrentLogStreams - the invariant holds at registration time, not
+	// eventually.
+	s.evictToCapLocked()
+	s.streams[streamID] = st
+	s.order = append(s.order, streamID)
+	return nil
+}
+
+// OpenLogStream opens a live tail for one container on the frontend-chosen
+// streamID (validStreamID). The frontend subscribes to "podlogs:"+streamID
+// BEFORE calling, so the first batch - often the whole tail, emitted before
+// this returns - always has a listener. tailLines<=0 defaults downstream
+// (fleet clamps to 500, caps at 5000). previous tails the prior container
+// instance's (static) logs. Cluster miss, a bad or in-use id, or an open error
+// returns an Error and no stream.
+func (s *LogsService) OpenLogStream(cluster, namespace, pod, container string, previous bool, tailLines int, streamID string) OpenLogStreamResultDTO {
+	if err := validStreamID(streamID); err != nil {
+		return OpenLogStreamResultDTO{Error: err.Error()}
+	}
 	conn, ok := s.lookup(cluster)
 	if !ok {
 		return OpenLogStreamResultDTO{Error: "cluster not connected"}
@@ -122,18 +142,16 @@ func (s *LogsService) OpenLogStream(cluster, namespace, pod, container string, p
 		return OpenLogStreamResultDTO{Error: err.Error()}
 	}
 
-	streamID := fmt.Sprintf("%s/%s/%s/%s#%d", cluster, namespace, pod, container, s.seq.Add(1))
 	st := &logStream{cancel: cancel, done: make(chan struct{})}
 
 	s.mu.Lock()
-	// Cap: synchronously evict the oldest stream(s) before registering the new
-	// one, so concurrent or rapid sequential opens can never blow past
-	// maxConcurrentLogStreams - the invariant holds at registration time, not
-	// eventually.
-	s.evictToCapLocked()
-	s.streams[streamID] = st
-	s.order = append(s.order, streamID)
+	err = s.registerLocked(streamID, st)
 	s.mu.Unlock()
+	if err != nil {
+		cancel()
+		_ = rc.Close()
+		return OpenLogStreamResultDTO{Error: err.Error()}
+	}
 
 	// Supervisor: the ONLY thing that unblocks a stuck Read. ctx is cancelled by
 	// CloseLogStream, CloseAll, or eviction; closing rc makes a blocked Read

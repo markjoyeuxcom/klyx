@@ -5,6 +5,7 @@ import type { ConditionDTO, NodeDetailDTO, NodeSummaryDTO, PodOnNodeDTO } from "
 import { listNodes, openNodeDetail, cordonNode, startDrain, cancelDrain, getNodeHeadroom } from "../bridge/nodes";
 import type { HeadroomReportDTO } from "../store/fleet";
 import type { DrainOptions } from "../bridge/nodes";
+import { newStreamId } from "../bridge/streams";
 import { getNodeUtilization } from "../bridge/metrics";
 import type { NodeUtilizationResultDTO } from "../store/fleet";
 import { saturation } from "./saturation";
@@ -21,7 +22,7 @@ import { YamlBlock } from "../chrome/YamlBlock";
 import { EmptyState } from "../chrome/EmptyState";
 import { SkeletonRows } from "../chrome/SkeletonRows";
 import { UpdatedAt, useReceivedAt } from "../chrome/Age";
-import { IconServer, IconX } from "@tabler/icons-react";
+import { IconAlertTriangle, IconServer, IconX } from "@tabler/icons-react";
 import { well, ellipsis, btn, FilterButton, MetersStrip, StatusDot } from "../chrome/primitives";
 import { InspectorIdle, InspectorConditions, InspectorEvents, InspectorSection, InspectorStatus, InspectorTabButton, MetadataChips, inspectorStateBox } from "./ResourceInspector";
 import { WatchErrorBanner } from "../chrome/WatchErrorBanner";
@@ -115,9 +116,14 @@ interface LogChunkDTO {
   lines: string[];
   eof: boolean;
   error?: string;
+  // A drain the operator cancelled: kubectl was killed part-way and the node
+  // stays cordoned - neither a clean finish nor a failure (review 2026-10-03, H).
+  cancelled?: boolean;
 }
 
-type DrainStatus = "starting" | "running" | "ended" | "error";
+// cancelling: Cancel was pressed and the backend is killing kubectl; the modal
+// stays open for the terminal "cancelled" report instead of vanishing.
+type DrainStatus = "starting" | "running" | "cancelling" | "ended" | "cancelled" | "error";
 
 function DrainModal({ cluster, node, opts, onClose }: { cluster: string; node: string; opts: DrainOptions; onClose: () => void }) {
   const [status, setStatus] = useState<DrainStatus>("starting");
@@ -143,22 +149,20 @@ function DrainModal({ cluster, node, opts, onClose }: { cluster: string; node: s
     if (fromBottom > 80) setFollow(false);
   }, []);
 
+  // Cancel pressed while the start RPC was still in flight: the drain is not
+  // registered yet, so the cancel is re-sent once it is.
+  const cancelRequestedRef = useRef(false);
+
   useEffect(() => {
     let stale = false;
 
     async function open() {
-      const result = await startDrain(cluster, node, opts);
-      if (stale) return;
-      if (result.error || !result.streamId) {
-        setStatus("error");
-        setErrorMsg(result.error || "failed to start drain");
-        return;
-      }
-      streamIdRef.current = result.streamId;
-      setStatus("running");
-
-      const eventName = `nodedrain:${result.streamId}`;
-      const off = Events.On(eventName, (ev: { data: LogChunkDTO }) => {
+      // Subscribe FIRST, on an id we choose: kubectl output is emitted from the
+      // moment the process starts, before startDrain returns (review 2026-10-03
+      // #8). ended guards the status against a terminal chunk that beats it.
+      const streamId = newStreamId("drain");
+      let ended = false;
+      const off = Events.On(`nodedrain:${streamId}`, (ev: { data: LogChunkDTO }) => {
         if (stale) return;
         const chunk = ev.data;
         if (chunk.lines && chunk.lines.length > 0) {
@@ -171,18 +175,50 @@ function DrainModal({ cluster, node, opts, onClose }: { cluster: string; node: s
           setVersion((v) => v + 1);
         }
         if (chunk.eof) {
-          if (chunk.error) {
+          ended = true;
+          if (chunk.cancelled) {
+            setStatus("cancelled");
+            setErrorMsg(chunk.error);
+          } else if (chunk.error) {
             setStatus("error");
             setErrorMsg(chunk.error);
           } else {
             setStatus("ended");
           }
-          off();
-          offRef.current = null;
+          unsubscribe();
           streamIdRef.current = "";
         }
       });
-      offRef.current = typeof off === "function" ? off : () => {};
+      const unsubscribe = () => {
+        if (typeof off === "function") off();
+        if (offRef.current === unsubscribe) offRef.current = null;
+      };
+      offRef.current = unsubscribe;
+      // Known before startDrain returns, so a cancel or unmount mid-start can
+      // reach it.
+      streamIdRef.current = streamId;
+
+      const result = await startDrain(cluster, node, opts, streamId);
+      if (stale) {
+        // Unmounted while the start was in flight: the cleanup's cancel ran
+        // before the drain was registered (a no-op), so cancel now - never
+        // leave a drain running with no UI (review 2026-10-03, G).
+        unsubscribe();
+        if (result.streamId) void cancelDrain(streamId);
+        return;
+      }
+      if (result.error || !result.streamId) {
+        unsubscribe();
+        streamIdRef.current = "";
+        setStatus("error");
+        setErrorMsg(result.error || "failed to start drain");
+        return;
+      }
+      if (cancelRequestedRef.current) {
+        void cancelDrain(streamId);
+        return;
+      }
+      if (!ended) setStatus("running");
     }
 
     void open();
@@ -200,18 +236,22 @@ function DrainModal({ cluster, node, opts, onClose }: { cluster: string; node: s
     // state write, so its identity is stable for this modal's lifetime.
   }, [cluster, node, opts]);
 
+  // Cancel keeps the subscription: the terminal chunk reports the drain as
+  // cancelled with the node still cordoned, and the operator closes the modal
+  // after reading it (review 2026-10-03, H).
   const handleCancel = useCallback(() => {
-    if (offRef.current) { offRef.current(); offRef.current = null; }
     const sid = streamIdRef.current;
-    if (sid) {
-      streamIdRef.current = "";
-      void cancelDrain(sid);
+    if (!sid) {
+      onClose();
+      return;
     }
-    onClose();
+    cancelRequestedRef.current = true;
+    setStatus("cancelling");
+    void cancelDrain(sid);
   }, [onClose]);
 
   const handleKey = useCallback((e: KeyboardEvent) => {
-    if (e.key === "Escape" && (status === "ended" || status === "error")) onClose();
+    if (e.key === "Escape" && (status === "ended" || status === "cancelled" || status === "error")) onClose();
   }, [status, onClose]);
   useEffect(() => {
     document.addEventListener("keydown", handleKey);
@@ -222,7 +262,7 @@ function DrainModal({ cluster, node, opts, onClose }: { cluster: string; node: s
 
   return (
     <div
-      onClick={(e) => { if (e.target === e.currentTarget && (status === "ended" || status === "error")) onClose(); }}
+      onClick={(e) => { if (e.target === e.currentTarget && (status === "ended" || status === "cancelled" || status === "error")) onClose(); }}
       style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }}
     >
       <div
@@ -250,6 +290,8 @@ function DrainModal({ cluster, node, opts, onClose }: { cluster: string; node: s
             )}
             {status === "starting" && <span style={{ color: "var(--color-text-tertiary)" }}>starting…</span>}
             {status === "ended" && <span style={{ color: "var(--color-text-success)" }}>complete</span>}
+            {status === "cancelling" && <span style={{ color: "var(--color-text-tertiary)" }}>cancelling…</span>}
+            {status === "cancelled" && <span style={{ color: "var(--color-text-warning)" }}>cancelled</span>}
             {status === "error" && <span style={{ color: "var(--color-text-danger)" }} title={errorMsg}>failed: {errorMsg}</span>}
           </div>
         </div>
@@ -285,6 +327,13 @@ function DrainModal({ cluster, node, opts, onClose }: { cluster: string; node: s
           ))}
         </div>
 
+        {status === "cancelled" && (
+          <div data-testid="drain-cancelled" style={{ display: "flex", alignItems: "flex-start", gap: 6, fontSize: 11, color: "var(--color-text-warning)", marginBottom: 12 }}>
+            <IconAlertTriangle size={13} stroke={1.5} style={{ flexShrink: 0, marginTop: 1 }} />
+            <span>{errorMsg || `drain cancelled - ${node} stays cordoned`}</span>
+          </div>
+        )}
+
         {/* Footer buttons */}
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
           {(status === "running" || status === "starting") && (
@@ -292,7 +341,7 @@ function DrainModal({ cluster, node, opts, onClose }: { cluster: string; node: s
               Cancel drain
             </button>
           )}
-          {(status === "ended" || status === "error") && (
+          {(status === "ended" || status === "cancelled" || status === "error") && (
             <button onClick={onClose} style={btn}>Close</button>
           )}
         </div>

@@ -67,12 +67,13 @@ func TestAggregate_TwoPodsInterleaveWithPrefixes(t *testing.T) {
 	}
 	svc := NewLogsService(aggLookup(conn), em)
 
-	res := svc.OpenWorkloadLogStream("c", "ns", "Deployment", "web", "app", 100)
+	id := tid()
+	res := svc.OpenWorkloadLogStream("c", "ns", "Deployment", "web", "app", 100, id)
 	if res.StreamID == "" || res.Error != "" {
 		t.Fatalf("open failed: %+v", res)
 	}
-	if !strings.HasPrefix(res.StreamID, "agg:") {
-		t.Fatalf("aggregate streamID must be agg-prefixed: %q", res.StreamID)
+	if res.StreamID != id {
+		t.Fatalf("the aggregate must stream on the frontend-chosen id %q, got %q", id, res.StreamID)
 	}
 
 	if !waitUntil(t, 2*time.Second, em.sawEOF) {
@@ -106,7 +107,7 @@ func TestAggregate_PerPodTailSplit(t *testing.T) {
 		},
 	}
 	svc := NewLogsService(aggLookup(conn), em)
-	res := svc.OpenWorkloadLogStream("c", "ns", "Deployment", "web", "app", 400)
+	res := svc.OpenWorkloadLogStream("c", "ns", "Deployment", "web", "app", 400, tid())
 	if res.StreamID == "" {
 		t.Fatalf("open failed: %+v", res)
 	}
@@ -130,7 +131,7 @@ func TestAggregate_PerPodTailFloor(t *testing.T) {
 	}
 	svc := NewLogsService(aggLookup(conn), em)
 	// 100 / 5 = 20, below the 50 floor -> each pod gets 50.
-	svc.OpenWorkloadLogStream("c", "ns", "Deployment", "web", "app", 100)
+	svc.OpenWorkloadLogStream("c", "ns", "Deployment", "web", "app", 100, tid())
 	conn.mu.Lock()
 	defer conn.mu.Unlock()
 	for pod, tail := range conn.openedTails {
@@ -161,7 +162,7 @@ func TestAggregate_ZeroPods(t *testing.T) {
 	em := &captureEmitter{}
 	conn := &aggConn{pods: nil, streamFor: func(string, int64) (io.ReadCloser, error) { return nil, nil }}
 	svc := NewLogsService(aggLookup(conn), em)
-	res := svc.OpenWorkloadLogStream("c", "ns", "Deployment", "web", "app", 100)
+	res := svc.OpenWorkloadLogStream("c", "ns", "Deployment", "web", "app", 100, tid())
 	if res.Error == "" || res.StreamID != "" {
 		t.Fatalf("want error + no stream for zero pods, got %+v", res)
 	}
@@ -187,7 +188,7 @@ func TestAggregate_OnePodEndsEarly_AggregateContinues(t *testing.T) {
 		},
 	}
 	svc := NewLogsService(aggLookup(conn), em)
-	res := svc.OpenWorkloadLogStream("c", "ns", "Deployment", "web", "app", 100)
+	res := svc.OpenWorkloadLogStream("c", "ns", "Deployment", "web", "app", 100, tid())
 	if res.StreamID == "" {
 		t.Fatalf("open failed: %+v", res)
 	}
@@ -255,7 +256,7 @@ func TestAggregate_CloseUnblocksBlockedPods(t *testing.T) {
 		},
 	}
 	svc := NewLogsService(aggLookup(conn), em)
-	res := svc.OpenWorkloadLogStream("c", "ns", "Deployment", "web", "app", 100)
+	res := svc.OpenWorkloadLogStream("c", "ns", "Deployment", "web", "app", 100, tid())
 	if res.StreamID == "" {
 		t.Fatalf("open failed: %+v", res)
 	}
@@ -288,7 +289,7 @@ func TestAggregate_CapAtTenPodsWithMarker(t *testing.T) {
 		},
 	}
 	svc := NewLogsService(aggLookup(conn), em)
-	res := svc.OpenWorkloadLogStream("c", "ns", "Deployment", "web", "app", 1000)
+	res := svc.OpenWorkloadLogStream("c", "ns", "Deployment", "web", "app", 1000, tid())
 	if res.StreamID == "" {
 		t.Fatalf("open failed: %+v", res)
 	}
@@ -326,7 +327,7 @@ func TestAggregate_OnePodFailsToOpen_MarkerAndContinue(t *testing.T) {
 		},
 	}
 	svc := NewLogsService(aggLookup(conn), em)
-	res := svc.OpenWorkloadLogStream("c", "ns", "Deployment", "web", "app", 100)
+	res := svc.OpenWorkloadLogStream("c", "ns", "Deployment", "web", "app", 100, tid())
 	if res.StreamID == "" || res.Error != "" {
 		t.Fatalf("want stream despite one open-failure: %+v", res)
 	}
@@ -360,7 +361,7 @@ func TestAggregate_AllPodsFailToOpen_Error(t *testing.T) {
 		},
 	}
 	svc := NewLogsService(aggLookup(conn), em)
-	res := svc.OpenWorkloadLogStream("c", "ns", "Deployment", "web", "app", 100)
+	res := svc.OpenWorkloadLogStream("c", "ns", "Deployment", "web", "app", 100, tid())
 	if res.Error == "" || res.StreamID != "" {
 		t.Fatalf("want error + no stream when all pods fail, got %+v", res)
 	}
@@ -383,7 +384,7 @@ func TestAggregate_FailedReaderCountInEOF(t *testing.T) {
 		},
 	}
 	svc := NewLogsService(aggLookup(conn), em)
-	res := svc.OpenWorkloadLogStream("c", "ns", "Deployment", "web", "app", 100)
+	res := svc.OpenWorkloadLogStream("c", "ns", "Deployment", "web", "app", 100, tid())
 	if res.StreamID == "" {
 		t.Fatalf("open failed: %+v", res)
 	}
@@ -417,7 +418,7 @@ func TestAggregate_CountsAsOneStream(t *testing.T) {
 		},
 	}
 	svc := NewLogsService(aggLookup(conn), em)
-	res := svc.OpenWorkloadLogStream("c", "ns", "Deployment", "web", "app", 100)
+	res := svc.OpenWorkloadLogStream("c", "ns", "Deployment", "web", "app", 100, tid())
 	if res.StreamID == "" {
 		t.Fatalf("open failed: %+v", res)
 	}
@@ -450,7 +451,7 @@ func TestAggregate_NoGoroutineLeak(t *testing.T) {
 		}, true
 	}, em)
 	for i := 0; i < 3; i++ {
-		blockSvc.OpenWorkloadLogStream("c", "ns", "Deployment", "web", "app", 100)
+		blockSvc.OpenWorkloadLogStream("c", "ns", "Deployment", "web", "app", 100, tid())
 	}
 
 	// Clean-EOF aggregate drains on its own.
@@ -463,7 +464,7 @@ func TestAggregate_NoGoroutineLeak(t *testing.T) {
 		}, true
 	}, em)
 	for i := 0; i < 3; i++ {
-		cleanSvc.OpenWorkloadLogStream("c", "ns", "Deployment", "web", "app", 100)
+		cleanSvc.OpenWorkloadLogStream("c", "ns", "Deployment", "web", "app", 100, tid())
 	}
 	waitUntil(t, 3*time.Second, func() bool { return cleanSvc.streamCount() == 0 })
 
@@ -523,14 +524,14 @@ func TestAggregate_EvictedByOpenLogStream_DrainsAndClosesDone(t *testing.T) {
 	svc := NewLogsService(aggLookup(conn), em)
 
 	// Open the aggregate first so it is the oldest registry entry.
-	aggRes := svc.OpenWorkloadLogStream("c", "ns", "Deployment", "web", "app", 100)
+	aggRes := svc.OpenWorkloadLogStream("c", "ns", "Deployment", "web", "app", 100, tid())
 	if aggRes.StreamID == "" || aggRes.Error != "" {
 		t.Fatalf("aggregate open failed: %+v", aggRes)
 	}
 
 	// Fill to the cap with single-pod streams; the last open evicts the aggregate.
 	for i := 0; i < maxConcurrentLogStreams; i++ {
-		if res := svc.OpenLogStream("c", "ns", fmt.Sprintf("pod-%d", i), "app", false, 100); res.StreamID == "" {
+		if res := svc.OpenLogStream("c", "ns", fmt.Sprintf("pod-%d", i), "app", false, 100, tid()); res.StreamID == "" {
 			t.Fatalf("single open %d failed: %+v", i, res)
 		}
 	}

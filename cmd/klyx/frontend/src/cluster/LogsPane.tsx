@@ -10,6 +10,7 @@ import {
   IconX,
 } from "@tabler/icons-react";
 import { LogsService } from "../../bindings/github.com/moomora/klyx/internal/appbridge/index.js";
+import { newStreamId } from "../bridge/streams";
 import type { ContainerSummaryDTO } from "../store/fleet";
 import { parseLine, stripAnsi, splitHighlight } from "./logline";
 import type { LogLevel, ParsedLine } from "./logline";
@@ -253,42 +254,13 @@ export function LogsPane({
       setStatus("connecting");
       setErrorMsg(undefined);
 
-      let result: { streamId: string; error?: string };
-      try {
-        result = workload
-          ? await LogsService.OpenWorkloadLogStream(
-              cluster, pod.namespace, workload.kind, workload.name, container, tailLines,
-            )
-          : await LogsService.OpenLogStream(
-              cluster, pod.namespace, pod.name, container, previous, tailLines,
-            );
-      } catch (err) {
-        if (!stale) {
-          setStatus("error");
-          setErrorMsg(String(err));
-        }
-        return;
-      }
-
-      if (stale) {
-        // unmounted before open completed — close immediately
-        if (result.streamId) {
-          await LogsService.CloseLogStream(result.streamId).catch(() => undefined);
-        }
-        return;
-      }
-
-      if (result.error || !result.streamId) {
-        setStatus("error");
-        setErrorMsg(result.error || "failed to open stream");
-        return;
-      }
-
-      streamIdRef.current = result.streamId;
-      setStatus("streaming");
-
-      const eventName = `podlogs:${result.streamId}`;
-      const off = Events.On(eventName, (ev: { data: LogChunkDTO }) => {
+      // Subscribe FIRST, on an id we choose: the backend emits the first batch
+      // (often the whole tail) before the open call returns (review 2026-10-03
+      // #8). ended guards the status against an EOF that beats the open's
+      // return - a short previous-container log can finish first.
+      const streamId = newStreamId("logs");
+      let ended = false;
+      const off = Events.On(`podlogs:${streamId}`, (ev: { data: LogChunkDTO }) => {
         if (stale) return;
         const chunk = ev.data;
         if (chunk.lines && chunk.lines.length > 0) {
@@ -305,14 +277,58 @@ export function LogsPane({
           setVersion((v) => v + 1);
         }
         if (chunk.eof) {
+          ended = true;
           setStatus("ended");
           if (chunk.error) setErrorMsg(chunk.error);
-          off();
-          offRef.current = null;
+          unsubscribe();
           streamIdRef.current = "";
         }
       });
-      offRef.current = typeof off === "function" ? off : () => {};
+      const unsubscribe = () => {
+        if (typeof off === "function") off();
+        if (offRef.current === unsubscribe) offRef.current = null;
+      };
+      offRef.current = unsubscribe;
+      // Known before the open returns, so an unmount mid-open still closes it.
+      streamIdRef.current = streamId;
+
+      let result: { streamId: string; error?: string };
+      try {
+        result = workload
+          ? await LogsService.OpenWorkloadLogStream(
+              cluster, pod.namespace, workload.kind, workload.name, container, tailLines, streamId,
+            )
+          : await LogsService.OpenLogStream(
+              cluster, pod.namespace, pod.name, container, previous, tailLines, streamId,
+            );
+      } catch (err) {
+        unsubscribe();
+        if (streamIdRef.current === streamId) streamIdRef.current = "";
+        if (!stale) {
+          setStatus("error");
+          setErrorMsg(String(err));
+        }
+        return;
+      }
+
+      if (stale) {
+        // Unmounted while the open was in flight: the cleanup's close may have
+        // run before the stream registered, so close it again now.
+        if (result.streamId) {
+          await LogsService.CloseLogStream(streamId).catch(() => undefined);
+        }
+        return;
+      }
+
+      if (result.error || !result.streamId) {
+        unsubscribe();
+        if (streamIdRef.current === streamId) streamIdRef.current = "";
+        setStatus("error");
+        setErrorMsg(result.error || "failed to open stream");
+        return;
+      }
+
+      if (!ended) setStatus("streaming");
     }
 
     void open();

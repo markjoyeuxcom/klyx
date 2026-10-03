@@ -125,7 +125,7 @@ func TestNodeOps_StartDrain_LinesAppend(t *testing.T) {
 	}
 	svc, em := newNodeOpsTestSvc(conn)
 
-	result := svc.StartDrain("test", "node-drain", DrainOptionsDTO{})
+	result := svc.StartDrain("test", "node-drain", DrainOptionsDTO{}, tid())
 	if result.Error != "" {
 		t.Fatalf("StartDrain error: %s", result.Error)
 	}
@@ -180,7 +180,7 @@ func TestNodeOps_CancelDrain_KillsProcess(t *testing.T) {
 	}
 	svc, _ := newNodeOpsTestSvc(conn)
 
-	result := svc.StartDrain("test", "node-cancel", DrainOptionsDTO{})
+	result := svc.StartDrain("test", "node-cancel", DrainOptionsDTO{}, tid())
 	if result.Error != "" {
 		t.Fatalf("StartDrain error: %s", result.Error)
 	}
@@ -202,7 +202,7 @@ func TestNodeOps_CancelDrain_KillsProcess(t *testing.T) {
 func TestNodeOps_StartDrain_ClusterMiss(t *testing.T) {
 	conn := &fakeNodeOpsConn{}
 	svc, _ := newNodeOpsTestSvc(conn)
-	r := svc.StartDrain("missing", "node-1", DrainOptionsDTO{})
+	r := svc.StartDrain("missing", "node-1", DrainOptionsDTO{}, tid())
 	if r.Error == "" {
 		t.Error("expected error for missing cluster")
 	}
@@ -214,7 +214,7 @@ func TestNodeOps_StartDrain_ClusterMiss(t *testing.T) {
 func TestNodeOps_StartDrain_ThreadsOptions(t *testing.T) {
 	conn := &fakeNodeOpsConn{}
 	svc, _ := newNodeOpsTestSvc(conn)
-	r := svc.StartDrain("test", "node-1", DrainOptionsDTO{IgnoreDaemonSets: true, DeleteEmptyDirData: true, TimeoutSeconds: 60})
+	r := svc.StartDrain("test", "node-1", DrainOptionsDTO{IgnoreDaemonSets: true, DeleteEmptyDirData: true, TimeoutSeconds: 60}, tid())
 	if r.Error != "" {
 		t.Fatalf("StartDrain: %s", r.Error)
 	}
@@ -238,7 +238,7 @@ func TestNodeOps_StartDrain_RefusesAtCap(t *testing.T) {
 
 	running := make([]string, 0, maxConcurrentDrains)
 	for i := 0; i < maxConcurrentDrains; i++ {
-		r := svc.StartDrain("test", "node-cap", DrainOptionsDTO{})
+		r := svc.StartDrain("test", "node-cap", DrainOptionsDTO{}, tid())
 		if r.Error != "" {
 			t.Fatalf("StartDrain %d error: %s", i, r.Error)
 		}
@@ -246,7 +246,7 @@ func TestNodeOps_StartDrain_RefusesAtCap(t *testing.T) {
 	}
 
 	// At cap: the next drain must be refused, not evict a running one.
-	r := svc.StartDrain("test", "node-over-cap", DrainOptionsDTO{})
+	r := svc.StartDrain("test", "node-over-cap", DrainOptionsDTO{}, tid())
 	if r.Error == "" {
 		t.Fatal("expected refusal at cap, got a streamID")
 	}
@@ -267,7 +267,7 @@ func TestNodeOps_StartDrain_RefusesAtCap(t *testing.T) {
 
 	// Cancelling one frees a slot.
 	svc.CancelDrain(running[0])
-	r = svc.StartDrain("test", "node-after-cancel", DrainOptionsDTO{})
+	r = svc.StartDrain("test", "node-after-cancel", DrainOptionsDTO{}, tid())
 	if r.Error != "" {
 		t.Fatalf("StartDrain after cancel error: %s", r.Error)
 	}

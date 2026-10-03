@@ -25,6 +25,12 @@ vi.mock("@wailsio/runtime", () => ({
   },
 }));
 
+// Stream ids the pane mints: queued by openAs, else auto-generated.
+const streamIds = vi.hoisted(() => ({ queue: [] as string[], n: 0 }));
+vi.mock("../bridge/streams", () => ({
+  newStreamId: () => streamIds.queue.shift() ?? `auto-${++streamIds.n}`,
+}));
+
 const mockOpenLogStream = vi.fn();
 const mockOpenWorkloadLogStream = vi.fn();
 const mockCloseLogStream = vi.fn();
@@ -91,8 +97,14 @@ const defaultPodWithInit = {
   ],
 };
 
-const openSuccess = (streamId = "stream-1") =>
-  Promise.resolve({ streamId, error: undefined });
+// openAs(id) queues id as the NEXT stream id the pane mints (the pane chooses
+// the id and subscribes before opening - review 2026-10-03 #8) and returns an
+// open implementation that succeeds, echoing it. Call it when installing the
+// mock, i.e. before the open it describes.
+function openAs(streamId = "stream-1") {
+  streamIds.queue.push(streamId);
+  return () => Promise.resolve({ streamId, error: undefined });
+}
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -103,6 +115,7 @@ describe("LogsPane", () => {
     // Reset handlers and mocks before each test
     for (const k of Object.keys(eventHandlers)) delete eventHandlers[k];
     offFns.length = 0;
+    streamIds.queue.length = 0;
     mockOpenLogStream.mockReset();
     mockOpenWorkloadLogStream.mockReset();
     mockCloseLogStream.mockReset();
@@ -144,16 +157,16 @@ describe("LogsPane", () => {
   });
 
   it("calls OpenLogStream with defaults on mount (500 tail, first regular container)", async () => {
-    mockOpenLogStream.mockImplementation(() => openSuccess());
+    mockOpenLogStream.mockImplementation(openAs());
     render(<LogsPane cluster="homelab" pod={defaultPod} />);
     await waitFor(() => expect(mockOpenLogStream).toHaveBeenCalledTimes(1));
     expect(mockOpenLogStream).toHaveBeenCalledWith(
-      "homelab", "default", "my-pod", "app", false, 500,
+      "homelab", "default", "my-pod", "app", false, 500, expect.any(String),
     );
   });
 
   it("shows 'connecting' then 'streaming' after stream opens", async () => {
-    mockOpenLogStream.mockImplementation(() => openSuccess());
+    mockOpenLogStream.mockImplementation(openAs());
     const { getByText } = render(<LogsPane cluster="homelab" pod={defaultPod} />);
     // Before stream resolves, status is connecting
     expect(getByText("connecting…")).toBeTruthy();
@@ -161,7 +174,7 @@ describe("LogsPane", () => {
   });
 
   it("renders received log lines", async () => {
-    mockOpenLogStream.mockImplementation(() => openSuccess("s1"));
+    mockOpenLogStream.mockImplementation(openAs("s1"));
     const { getByText } = render(<LogsPane cluster="homelab" pod={defaultPod} />);
     await waitFor(() => expect(eventHandlers["podlogs:s1"]).toBeDefined());
 
@@ -174,7 +187,7 @@ describe("LogsPane", () => {
   });
 
   it("shows 'ended' status on EOF and unsubscribes", async () => {
-    mockOpenLogStream.mockImplementation(() => openSuccess("s-eof"));
+    mockOpenLogStream.mockImplementation(openAs("s-eof"));
     const { getByText } = render(<LogsPane cluster="homelab" pod={defaultPod} />);
     await waitFor(() => expect(eventHandlers["podlogs:s-eof"]).toBeDefined());
 
@@ -188,7 +201,7 @@ describe("LogsPane", () => {
   });
 
   it("calls CloseLogStream on unmount", async () => {
-    mockOpenLogStream.mockImplementation(() => openSuccess("s-unmount"));
+    mockOpenLogStream.mockImplementation(openAs("s-unmount"));
     const { unmount } = render(<LogsPane cluster="homelab" pod={defaultPod} />);
     await waitFor(() => expect(eventHandlers["podlogs:s-unmount"]).toBeDefined());
 
@@ -198,12 +211,12 @@ describe("LogsPane", () => {
   });
 
   it("closes old stream and opens new stream on container switch", async () => {
-    mockOpenLogStream.mockImplementation(() => openSuccess("s-initial"));
+    mockOpenLogStream.mockImplementation(openAs("s-initial"));
     const { getByRole, unmount } = render(<LogsPane cluster="homelab" pod={defaultPod} />);
     await waitFor(() => expect(mockOpenLogStream).toHaveBeenCalledTimes(1));
 
     // Switch container
-    mockOpenLogStream.mockImplementation(() => openSuccess("s-new"));
+    mockOpenLogStream.mockImplementation(openAs("s-new"));
     const select = getByRole("combobox", { name: /container/i });
     act(() => {
       fireEvent.change(select, { target: { value: "sidecar" } });
@@ -212,14 +225,14 @@ describe("LogsPane", () => {
     await waitFor(() => expect(mockOpenLogStream).toHaveBeenCalledTimes(2));
     expect(mockCloseLogStream).toHaveBeenCalledWith("s-initial");
     expect(mockOpenLogStream).toHaveBeenLastCalledWith(
-      "homelab", "default", "my-pod", "sidecar", false, 500,
+      "homelab", "default", "my-pod", "sidecar", false, 500, expect.any(String),
     );
 
     unmount();
   });
 
   it("clears buffer when clear is clicked (stream continues)", async () => {
-    mockOpenLogStream.mockImplementation(() => openSuccess("s-clear"));
+    mockOpenLogStream.mockImplementation(openAs("s-clear"));
     const { getByText, queryByText } = render(<LogsPane cluster="homelab" pod={defaultPod} />);
     await waitFor(() => expect(eventHandlers["podlogs:s-clear"]).toBeDefined());
 
@@ -239,7 +252,7 @@ describe("LogsPane", () => {
   });
 
   it("highlights search matches and shows match count", async () => {
-    mockOpenLogStream.mockImplementation(() => openSuccess("s-search"));
+    mockOpenLogStream.mockImplementation(openAs("s-search"));
     const { getByPlaceholderText, getByText } = render(
       <LogsPane cluster="homelab" pod={defaultPod} />,
     );
@@ -268,7 +281,7 @@ describe("LogsPane", () => {
   });
 
   it("shows init containers labeled in select", async () => {
-    mockOpenLogStream.mockImplementation(() => openSuccess("s-init"));
+    mockOpenLogStream.mockImplementation(openAs("s-init"));
     const { getByRole } = render(<LogsPane cluster="homelab" pod={defaultPodWithInit} />);
     await waitFor(() => expect(mockOpenLogStream).toHaveBeenCalled());
     const select = getByRole("combobox", { name: /container/i }) as HTMLSelectElement;
@@ -278,24 +291,25 @@ describe("LogsPane", () => {
   });
 
   it("opens with previous=true when previous chip is toggled", async () => {
-    mockOpenLogStream.mockImplementation(() => openSuccess("s-prev"));
+    mockOpenLogStream.mockImplementation(openAs("s-prev"));
     const { getByText, unmount } = render(<LogsPane cluster="homelab" pod={defaultPod} />);
     await waitFor(() => expect(mockOpenLogStream).toHaveBeenCalledTimes(1));
 
-    mockOpenLogStream.mockImplementation(() => openSuccess("s-prev2"));
+    mockOpenLogStream.mockImplementation(openAs("s-prev2"));
     act(() => {
       fireEvent.click(getByText("previous"));
     });
 
     await waitFor(() => expect(mockOpenLogStream).toHaveBeenCalledTimes(2));
     expect(mockOpenLogStream).toHaveBeenLastCalledWith(
-      "homelab", "default", "my-pod", "app", true, 500,
+      "homelab", "default", "my-pod", "app", true, 500, expect.any(String),
     );
     unmount();
   });
 
   it("guard: open resolving after unmount closes the stream immediately", async () => {
     let resolveOpen!: (v: { streamId: string }) => void;
+    streamIds.queue.push("s-late");
     mockOpenLogStream.mockImplementation(
       () => new Promise<{ streamId: string }>((r) => { resolveOpen = r; }),
     );
@@ -312,7 +326,7 @@ describe("LogsPane", () => {
   // -------------------------------------------------------------------------
 
   it("expand button toggles fixed layout", async () => {
-    mockOpenLogStream.mockImplementation(() => openSuccess("s-expand"));
+    mockOpenLogStream.mockImplementation(openAs("s-expand"));
     const { getByRole, getByTestId } = render(<LogsPane cluster="homelab" pod={defaultPod} />);
     await waitFor(() => expect(eventHandlers["podlogs:s-expand"]).toBeDefined());
 
@@ -330,7 +344,7 @@ describe("LogsPane", () => {
   });
 
   it("stream continues after expand (lines appear while expanded)", async () => {
-    mockOpenLogStream.mockImplementation(() => openSuccess("s-expand-stream"));
+    mockOpenLogStream.mockImplementation(openAs("s-expand-stream"));
     const { getByRole, getByText } = render(<LogsPane cluster="homelab" pod={defaultPod} />);
     await waitFor(() => expect(eventHandlers["podlogs:s-expand-stream"]).toBeDefined());
 
@@ -351,7 +365,7 @@ describe("LogsPane", () => {
   });
 
   it("Esc while expanded collapses without calling panel onClose", async () => {
-    mockOpenLogStream.mockImplementation(() => openSuccess("s-esc"));
+    mockOpenLogStream.mockImplementation(openAs("s-esc"));
     const onClose = vi.fn();
     const { getByRole, queryByTestId } = render(
       // onClose would be called by the panel — simulate by wrapping with a keydown spy.
@@ -382,7 +396,7 @@ describe("LogsPane", () => {
   // -------------------------------------------------------------------------
 
   it("error line gets danger color style", async () => {
-    mockOpenLogStream.mockImplementation(() => openSuccess("s-level"));
+    mockOpenLogStream.mockImplementation(openAs("s-level"));
     const { container } = render(<LogsPane cluster="homelab" pod={defaultPod} />);
     await waitFor(() => expect(eventHandlers["podlogs:s-level"]).toBeDefined());
 
@@ -408,7 +422,7 @@ describe("LogsPane", () => {
   // -------------------------------------------------------------------------
 
   it("copy button writes full buffer to clipboard and shows 'copied'", async () => {
-    mockOpenLogStream.mockImplementation(() => openSuccess("s-copy"));
+    mockOpenLogStream.mockImplementation(openAs("s-copy"));
     const { getByRole, getByText } = render(<LogsPane cluster="homelab" pod={defaultPod} />);
     await waitFor(() => expect(eventHandlers["podlogs:s-copy"]).toBeDefined());
 
@@ -426,7 +440,7 @@ describe("LogsPane", () => {
   });
 
   it("copies an individual visible log line", async () => {
-    mockOpenLogStream.mockImplementation(() => openSuccess("s-copy-line"));
+    mockOpenLogStream.mockImplementation(openAs("s-copy-line"));
     const { getAllByTestId, getByRole, getByText } = render(<LogsPane cluster="homelab" pod={defaultPod} />);
     await waitFor(() => expect(eventHandlers["podlogs:s-copy-line"]).toBeDefined());
 
@@ -453,7 +467,7 @@ describe("LogsPane", () => {
   });
 
   it("shows selected line detail with copy actions and level filtering", async () => {
-    mockOpenLogStream.mockImplementation(() => openSuccess("s-line-detail"));
+    mockOpenLogStream.mockImplementation(openAs("s-line-detail"));
     const { getAllByTestId, getAllByText, getByRole, getByTestId, getByText, queryByText } = render(
       <LogsPane cluster="homelab" pod={defaultPod} />,
     );
@@ -496,7 +510,7 @@ describe("LogsPane", () => {
   });
 
   it("level chips filter visible logs and copy uses the visible set", async () => {
-    mockOpenLogStream.mockImplementation(() => openSuccess("s-level-filter"));
+    mockOpenLogStream.mockImplementation(openAs("s-level-filter"));
     const { getByText, queryByText, getByRole } = render(<LogsPane cluster="homelab" pod={defaultPod} />);
     await waitFor(() => expect(eventHandlers["podlogs:s-level-filter"]).toBeDefined());
 
@@ -534,7 +548,7 @@ describe("LogsPane", () => {
   // -------------------------------------------------------------------------
 
   it("parses each line once at ingest, not on every render", async () => {
-    mockOpenLogStream.mockImplementation(() => openSuccess("s-parse-once"));
+    mockOpenLogStream.mockImplementation(openAs("s-parse-once"));
     const { getByText } = render(<LogsPane cluster="homelab" pod={defaultPod} />);
     await waitFor(() => expect(eventHandlers["podlogs:s-parse-once"]).toBeDefined());
 
@@ -563,7 +577,7 @@ describe("LogsPane", () => {
   // -------------------------------------------------------------------------
 
   it("search Enter advances n/N match index", async () => {
-    mockOpenLogStream.mockImplementation(() => openSuccess("s-nav"));
+    mockOpenLogStream.mockImplementation(openAs("s-nav"));
     const { getByPlaceholderText, getByText } = render(
       <LogsPane cluster="homelab" pod={defaultPod} />,
     );
@@ -604,7 +618,7 @@ describe("LogsPane", () => {
   // -------------------------------------------------------------------------
 
   it("hostedInWindow hides the expand button", async () => {
-    mockOpenLogStream.mockImplementation(() => openSuccess("s-host"));
+    mockOpenLogStream.mockImplementation(openAs("s-host"));
     const { queryByRole } = render(
       <LogsPane cluster="homelab" pod={defaultPod} hostedInWindow />,
     );
@@ -613,7 +627,7 @@ describe("LogsPane", () => {
   });
 
   it("initialContainer with empty containers streams that container as static text", async () => {
-    mockOpenLogStream.mockImplementation(() => openSuccess("s-static"));
+    mockOpenLogStream.mockImplementation(openAs("s-static"));
     const { getByText, queryByRole } = render(
       <LogsPane
         cluster="prod"
@@ -625,7 +639,7 @@ describe("LogsPane", () => {
     await waitFor(() => expect(mockOpenLogStream).toHaveBeenCalledTimes(1));
     // Stream opened on the explicit container.
     expect(mockOpenLogStream).toHaveBeenCalledWith(
-      "prod", "monitoring", "grafana-1", "grafana", false, 500,
+      "prod", "monitoring", "grafana-1", "grafana", false, 500, expect.any(String),
     );
     // Rendered as static text, not a select.
     expect(queryByRole("combobox", { name: /container/i })).toBeNull();
@@ -633,7 +647,7 @@ describe("LogsPane", () => {
   });
 
   it("onContainerChange fires with the active container on mount and switch", async () => {
-    mockOpenLogStream.mockImplementation(() => openSuccess("s-cc"));
+    mockOpenLogStream.mockImplementation(openAs("s-cc"));
     const onContainerChange = vi.fn();
     const { getByRole } = render(
       <LogsPane cluster="homelab" pod={defaultPod} onContainerChange={onContainerChange} />,
@@ -655,7 +669,7 @@ describe("LogsPane", () => {
     const workloadPod = { namespace: "default", name: "my-deploy", containers: [] };
 
     it("opens OpenWorkloadLogStream instead of OpenLogStream", async () => {
-      mockOpenWorkloadLogStream.mockImplementation(() => openSuccess("s-agg"));
+      mockOpenWorkloadLogStream.mockImplementation(openAs("s-agg"));
       render(
         <LogsPane
           cluster="homelab"
@@ -665,13 +679,13 @@ describe("LogsPane", () => {
       );
       await waitFor(() => expect(mockOpenWorkloadLogStream).toHaveBeenCalledTimes(1));
       expect(mockOpenWorkloadLogStream).toHaveBeenCalledWith(
-        "homelab", "default", "Deployment", "my-deploy", "", 500,
+        "homelab", "default", "Deployment", "my-deploy", "", 500, expect.any(String),
       );
       expect(mockOpenLogStream).not.toHaveBeenCalled();
     });
 
     it("hides the previous toggle (no single-container restart semantics)", async () => {
-      mockOpenWorkloadLogStream.mockImplementation(() => openSuccess("s-agg-prev"));
+      mockOpenWorkloadLogStream.mockImplementation(openAs("s-agg-prev"));
       const { queryByText } = render(
         <LogsPane
           cluster="homelab"
@@ -684,7 +698,7 @@ describe("LogsPane", () => {
     });
 
     it("renders a static 'default containers' label instead of a selector", async () => {
-      mockOpenWorkloadLogStream.mockImplementation(() => openSuccess("s-agg-static"));
+      mockOpenWorkloadLogStream.mockImplementation(openAs("s-agg-static"));
       const { getByText, queryByRole } = render(
         <LogsPane
           cluster="homelab"
@@ -698,7 +712,7 @@ describe("LogsPane", () => {
     });
 
     it("renders aggregate lines with dimmed pod prefixes from the stream", async () => {
-      mockOpenWorkloadLogStream.mockImplementation(() => openSuccess("s-agg-lines"));
+      mockOpenWorkloadLogStream.mockImplementation(openAs("s-agg-lines"));
       const { findByText } = render(
         <LogsPane
           cluster="homelab"
@@ -713,5 +727,44 @@ describe("LogsPane", () => {
       expect(await findByText(/hello from pod a/)).toBeTruthy();
       expect(await findByText(/hello from pod b/)).toBeTruthy();
     });
+  });
+
+  // -------------------------------------------------------------------------
+  // Review 2026-10-03 #8: subscribe before open
+  // -------------------------------------------------------------------------
+
+  it("receives chunks the backend emits BEFORE the open call returns", async () => {
+    // The backend emits the whole (short, previous-container) log and its EOF
+    // while the open is still in flight - the case that lost every line when
+    // the pane subscribed only after the open returned.
+    streamIds.queue.push("s-early");
+    mockOpenLogStream.mockImplementation(async (...args: unknown[]) => {
+      const id = args[6] as string;
+      fireChunk(`podlogs:${id}`, ["early one", "early two"]);
+      fireChunk(`podlogs:${id}`, [], true);
+      return { streamId: id, error: undefined };
+    });
+    const { findByText, queryByText } = render(<LogsPane cluster="homelab" pod={defaultPod} />);
+    expect(await findByText("early one")).toBeTruthy();
+    expect(await findByText("early two")).toBeTruthy();
+    // The early EOF wins: the pane must not be relabelled streaming afterwards.
+    await waitFor(() => expect(queryByText("streaming")).toBeNull());
+    expect(mockOpenLogStream.mock.calls[0][6]).toBe("s-early");
+  });
+
+  it("subscribes on the id it passes to the open call", async () => {
+    mockOpenLogStream.mockImplementation(openAs("s-order"));
+    render(<LogsPane cluster="homelab" pod={defaultPod} />);
+    await waitFor(() => expect(mockOpenLogStream).toHaveBeenCalledTimes(1));
+    expect(mockOpenLogStream.mock.calls[0][6]).toBe("s-order");
+    expect(eventHandlers["podlogs:s-order"]?.length).toBe(1);
+  });
+
+  it("unsubscribes when the open fails", async () => {
+    streamIds.queue.push("s-fail");
+    mockOpenLogStream.mockResolvedValue({ streamId: "", error: "no such pod" });
+    const { findByText } = render(<LogsPane cluster="homelab" pod={defaultPod} />);
+    expect(await findByText(/no such pod/)).toBeTruthy();
+    expect(eventHandlers["podlogs:s-fail"]?.length ?? 0).toBe(0);
   });
 });

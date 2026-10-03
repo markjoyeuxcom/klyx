@@ -38,7 +38,10 @@ const maxAggregatePods = 10
 //     and the aggregate continues; the natural EOF arrives once ALL readers end.
 //   - the terminal EOF chunk carries an Error listing the failed-reader count if
 //     any pod reader errored.
-func (s *LogsService) OpenWorkloadLogStream(cluster, namespace, kind, name, container string, tailLines int) OpenLogStreamResultDTO {
+func (s *LogsService) OpenWorkloadLogStream(cluster, namespace, kind, name, container string, tailLines int, streamID string) OpenLogStreamResultDTO {
+	if err := validStreamID(streamID); err != nil {
+		return OpenLogStreamResultDTO{Error: err.Error()}
+	}
 	conn, ok := s.lookup(cluster)
 	if !ok {
 		return OpenLogStreamResultDTO{Error: "cluster not connected"}
@@ -74,8 +77,6 @@ func (s *LogsService) OpenWorkloadLogStream(cluster, namespace, kind, name, cont
 		perPodTail = 50
 	}
 
-	streamID := fmt.Sprintf("agg:%s/%s/%s/%s#%d", cluster, namespace, kind, name, s.seq.Add(1))
-
 	// Open every pod stream up front so a total-failure returns synchronously
 	// (no stream registered). Each opened reader carries its prefix + ReadCloser.
 	type podReader struct {
@@ -103,15 +104,18 @@ func (s *LogsService) OpenWorkloadLogStream(cluster, namespace, kind, name, cont
 	st := &logStream{cancel: cancel, done: make(chan struct{})}
 
 	s.mu.Lock()
-	// Same synchronous-eviction discipline as OpenLogStream: an aggregate counts
-	// as ONE stream against the cap. Use the shared helper so an evicted stream is
-	// moved to draining exactly as the single-pod path does - the previous inline
-	// loop here deleted without the draining hand-off, leaving an aggregate-evicted
-	// stream's done channel unclosed.
-	s.evictToCapLocked()
-	s.streams[streamID] = st
-	s.order = append(s.order, streamID)
+	// Same registration as OpenLogStream (shared helper: in-use id refusal +
+	// synchronous eviction, an evicted stream moved to draining): an aggregate
+	// counts as ONE stream against the cap.
+	err = s.registerLocked(streamID, st)
 	s.mu.Unlock()
+	if err != nil {
+		cancel()
+		for _, pr := range readers {
+			_ = pr.rc.Close()
+		}
+		return OpenLogStreamResultDTO{Error: err.Error()}
+	}
 
 	// lines is the single shared fan-in channel. closed=cap len(readers) is not
 	// required; readers select on ctx.Done so a blocked send never leaks.

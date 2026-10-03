@@ -7,7 +7,6 @@ import (
 	"io"
 	"os/exec"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/moomora/klyx/internal/fleet"
@@ -33,6 +32,7 @@ type drainStream struct {
 	cancel context.CancelFunc // cancels the supervisor goroutine
 	cmd    *exec.Cmd          // the running kubectl drain process
 	done   chan struct{}      // closed when the reader goroutine has fully exited
+	node   string             // the node being drained (for the cancel report)
 }
 
 const (
@@ -49,8 +49,6 @@ const (
 type NodeOpsService struct {
 	lookup func(string) (NodeOpsConn, bool)
 	em     Emitter
-
-	seq atomic.Uint64
 
 	mu     sync.Mutex
 	drains map[string]*drainStream
@@ -95,16 +93,22 @@ func (p *drainPipe) Close() error {
 	return p.PipeReader.Close()
 }
 
-// StartDrain starts a kubectl drain process for the given node and returns a
-// streamID. The frontend subscribes to "nodedrain:<streamID>" for LogChunkDTO
-// events. The terminal chunk has EOF=true; Error is set if kubectl exited
-// non-zero or was killed.
+// StartDrain starts a kubectl drain process for the given node on the
+// frontend-chosen streamID (validStreamID). The frontend subscribes to
+// "nodedrain:<streamID>" for LogChunkDTO events BEFORE calling, so no output is
+// emitted before a listener exists (review 2026-10-03 #8). The terminal chunk
+// has EOF=true; Error is set if kubectl exited non-zero, and a cancelled drain
+// is reported as Cancelled with an Error saying the node stays cordoned - never
+// as a clean finish (review 2026-10-03, H).
 //
 // Cap: if maxConcurrentDrains drains are already running, StartDrain refuses.
 // A drain is a user-initiated destructive operation mid-flight - evicting one
 // would leave its node cordoned and half-drained while reporting a clean
 // stream end (same policy as forwards: never silently kill user-managed work).
-func (s *NodeOpsService) StartDrain(cluster, node string, opts DrainOptionsDTO) OpenLogStreamResultDTO {
+func (s *NodeOpsService) StartDrain(cluster, node string, opts DrainOptionsDTO, streamID string) OpenLogStreamResultDTO {
+	if err := validStreamID(streamID); err != nil {
+		return OpenLogStreamResultDTO{Error: err.Error()}
+	}
 	if err := checkProtected(cluster); err != nil {
 		return OpenLogStreamResultDTO{Error: err.Error()}
 	}
@@ -132,13 +136,18 @@ func (s *NodeOpsService) StartDrain(cluster, node string, opts DrainOptionsDTO) 
 	cmd.Stderr = pw
 	rc := &drainPipe{PipeReader: pr, pw: pw}
 
-	streamID := fmt.Sprintf("drain/%s/%s#%d", cluster, node, s.seq.Add(1))
 	ctx, cancel := context.WithCancel(context.Background())
-	ds := &drainStream{cancel: cancel, cmd: cmd, done: make(chan struct{})}
+	ds := &drainStream{cancel: cancel, cmd: cmd, done: make(chan struct{}), node: node}
 
 	// Reserve the slot before starting the process: the cap check and the add
 	// happen under one lock, and a registered stream can never miss CancelAll.
 	s.mu.Lock()
+	if s.drains[streamID] != nil {
+		s.mu.Unlock()
+		cancel()
+		_ = rc.Close()
+		return OpenLogStreamResultDTO{Error: fmt.Sprintf("stream id %q is already in use", streamID)}
+	}
 	if len(s.order) >= maxConcurrentDrains {
 		s.mu.Unlock()
 		cancel()
@@ -244,7 +253,7 @@ func (s *NodeOpsService) readDrain(ctx context.Context, streamID string, rc io.R
 		select {
 		case <-ctx.Done():
 			flush()
-			s.finishDrain(streamID, rc, "")
+			s.finishDrain(streamID, rc, s.cancelledChunk(streamID))
 			return
 		case <-ticker.C:
 			flush()
@@ -253,11 +262,14 @@ func (s *NodeOpsService) readDrain(ctx context.Context, streamID string, rc io.R
 				flush()
 				// Wait for cmd.Wait() to complete so ProcessState is populated.
 				<-waitDone
-				errMsg := ""
-				if ps := s.drainExitMsg(streamID); ps != "" {
-					errMsg = ps
+				// A cancel kills the process and closes the pipe, so this path can
+				// win the race against ctx.Done: it is still a cancel, not a
+				// "exit status -1" failure or a clean end.
+				if ctx.Err() != nil {
+					s.finishDrain(streamID, rc, s.cancelledChunk(streamID))
+					return
 				}
-				s.finishDrain(streamID, rc, errMsg)
+				s.finishDrain(streamID, rc, LogChunkDTO{Lines: []string{}, EOF: true, Error: s.drainExitMsg(streamID)})
 				return
 			}
 			batch = append(batch, line)
@@ -299,8 +311,27 @@ func (s *NodeOpsService) deregister(streamID string) *drainStream {
 	return ds
 }
 
-func (s *NodeOpsService) finishDrain(streamID string, rc io.ReadCloser, errMsg string) {
-	s.em.Emit("nodedrain:"+streamID, LogChunkDTO{Lines: []string{}, EOF: true, Error: errMsg})
+// cancelledChunk is the terminal chunk of a cancelled drain: kubectl was
+// killed part-way, so the node stays cordoned with some pods possibly still on
+// it. Reporting that as a clean end read a half-drained node as finished
+// (review 2026-10-03, H).
+func (s *NodeOpsService) cancelledChunk(streamID string) LogChunkDTO {
+	node := "the node"
+	s.mu.Lock()
+	if ds := s.drains[streamID]; ds != nil && ds.node != "" {
+		node = ds.node
+	}
+	s.mu.Unlock()
+	return LogChunkDTO{
+		Lines:     []string{},
+		EOF:       true,
+		Cancelled: true,
+		Error:     fmt.Sprintf("drain cancelled - %s stays cordoned and may be partly drained; uncordon it if you are not retrying", node),
+	}
+}
+
+func (s *NodeOpsService) finishDrain(streamID string, rc io.ReadCloser, final LogChunkDTO) {
+	s.em.Emit("nodedrain:"+streamID, final)
 	_ = rc.Close()
 
 	if ds := s.deregister(streamID); ds != nil {

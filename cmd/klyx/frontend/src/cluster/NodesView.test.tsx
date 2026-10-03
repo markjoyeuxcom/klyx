@@ -19,6 +19,9 @@ vi.mock("../bridge/nodes", () => ({
 }));
 import { openNodeDetail, cordonNode, startDrain, cancelDrain, getNodeHeadroom } from "../bridge/nodes";
 
+// The drain modal mints its stream id before starting (review 2026-10-03 #8).
+vi.mock("../bridge/streams", () => ({ newStreamId: () => "test-stream-1" }));
+
 // ConfirmDialog registers protected-cluster grants via the config bridge;
 // mock it so no Wails runtime (bindings chain) is needed.
 vi.mock("../bridge/configsvc", () => ({
@@ -530,7 +533,7 @@ describe("NodesView", () => {
       deleteEmptyDirData: false,
       force: false,
       timeoutSeconds: 120,
-    });
+    }, "test-stream-1");
     // Drain modal title should be visible
     expect(getByText(/Drain node:/)).toBeTruthy();
   });
@@ -545,7 +548,7 @@ describe("NodesView", () => {
     });
     expect(startDrain).toHaveBeenCalledWith("homelab", "node-healthy", expect.objectContaining({
       deleteEmptyDirData: true,
-    }));
+    }), "test-stream-1");
   });
 
   it("cancelling the drain composer starts no drain", () => {
@@ -563,7 +566,7 @@ describe("NodesView", () => {
     await act(async () => {
       fireEvent.click(getByRole("button", { name: "Drain" }));
     });
-    // After startDrain resolves, Events.On should be called with nodedrain:test-stream-1
+    // Subscribed on the minted id, which is the id startDrain was given.
     expect(Events.On).toHaveBeenCalledWith(
       "nodedrain:test-stream-1",
       expect.any(Function),
@@ -611,6 +614,72 @@ describe("NodesView", () => {
       capturedCb!({ data: { lines: [], eof: true } });
     });
     expect(queryByText("Cancel drain")).toBeNull();
+    expect(getByText("Close")).toBeTruthy();
+  });
+
+  // Review 2026-10-03 #8: kubectl output emitted before startDrain returns
+  // reaches the modal - it subscribed first.
+  it("drain modal: shows output emitted before startDrain resolves", async () => {
+    let capturedCb: ((ev: { data: { lines: string[]; eof: boolean } }) => void) | null = null;
+    vi.mocked(Events.On).mockImplementation((_name, cb) => {
+      capturedCb = cb as typeof capturedCb;
+      return () => {};
+    });
+    vi.mocked(startDrain).mockImplementationOnce(async () => {
+      capturedCb!({ data: { lines: ["node/node-healthy cordoned"], eof: false } });
+      return { streamId: "test-stream-1" };
+    });
+    seedWithDetail(healthy, fakeDetail);
+    const { getByLabelText, getByRole, getByText } = render(<NodesView cluster="homelab" />);
+    fireEvent.click(getByLabelText("drain"));
+    await act(async () => {
+      fireEvent.click(getByRole("button", { name: "Drain" }));
+    });
+    expect(getByText("node/node-healthy cordoned")).toBeTruthy();
+  });
+
+  // Review 2026-10-03 (G): the modal closing while startDrain is in flight
+  // used to return early and orphan the drain.
+  it("drain modal: a drain started after the modal closed is cancelled", async () => {
+    let resolveStart!: (v: { streamId: string }) => void;
+    vi.mocked(startDrain).mockImplementationOnce(() => new Promise((r) => { resolveStart = r; }));
+    seedWithDetail(healthy, fakeDetail);
+    const { getByLabelText, getByRole, unmount } = render(<NodesView cluster="homelab" />);
+    fireEvent.click(getByLabelText("drain"));
+    await act(async () => {
+      fireEvent.click(getByRole("button", { name: "Drain" }));
+    });
+    unmount();
+    vi.mocked(cancelDrain).mockClear();
+    await act(async () => { resolveStart({ streamId: "test-stream-1" }); });
+    expect(cancelDrain).toHaveBeenCalledWith("test-stream-1");
+  });
+
+  // Review 2026-10-03 (H): a cancelled drain is reported as cancelled with the
+  // node still cordoned - not as "complete", and not by silently vanishing.
+  it("drain modal: cancel keeps the modal open for the cancelled report", async () => {
+    let capturedCb: ((ev: { data: { lines: string[]; eof: boolean; cancelled?: boolean; error?: string } }) => void) | null = null;
+    vi.mocked(Events.On).mockImplementation((_name, cb) => {
+      capturedCb = cb as typeof capturedCb;
+      return () => {};
+    });
+    seedWithDetail(healthy, fakeDetail);
+    const { getByLabelText, getByRole, getByText, getByTestId, queryByText } = render(<NodesView cluster="homelab" />);
+    fireEvent.click(getByLabelText("drain"));
+    await act(async () => {
+      fireEvent.click(getByRole("button", { name: "Drain" }));
+    });
+    await act(async () => {
+      fireEvent.click(getByText("Cancel drain"));
+    });
+    expect(cancelDrain).toHaveBeenCalledWith("test-stream-1");
+    expect(getByText("cancelling…")).toBeTruthy();
+    await act(async () => {
+      capturedCb!({ data: { lines: [], eof: true, cancelled: true, error: "drain cancelled - node-healthy stays cordoned and may be partly drained; uncordon it if you are not retrying" } });
+    });
+    expect(getByText("cancelled")).toBeTruthy();
+    expect(getByTestId("drain-cancelled").textContent).toMatch(/node-healthy stays cordoned/);
+    expect(queryByText("complete")).toBeNull();
     expect(getByText("Close")).toBeTruthy();
   });
 });
