@@ -451,7 +451,10 @@ export function NodesView({ cluster }: { cluster: string }) {
 
   // drainPending holds the node while the composer dialog is open; confirming
   // moves node + composed options into drainActive, which mounts the modal.
-  const [drainActive, setDrainActive] = useState<{ node: string; opts: DrainOptions } | null>(null);
+  // drainActive also pins the cluster the drain was confirmed on: the modal
+  // must never restart the drain against another cluster if this view is
+  // re-rendered for one (batch-3 review, non-blocking).
+  const [drainActive, setDrainActive] = useState<{ cluster: string; node: string; opts: DrainOptions } | null>(null);
   const [cordonPending, setCordonPending] = useState<{ node: string; cordon: boolean } | null>(null);
   const [drainPending, setDrainPending] = useState<string | null>(null);
   const [filter, setFilter] = useState<NodeFilter>("all");
@@ -731,7 +734,7 @@ export function NodesView({ cluster }: { cluster: string }) {
           onConfirm={(opts) => {
             const node = drainPending;
             setDrainPending(null);
-            setDrainActive({ node, opts });
+            setDrainActive({ cluster, node, opts });
           }}
           onCancel={() => setDrainPending(null)}
         />
@@ -740,12 +743,13 @@ export function NodesView({ cluster }: { cluster: string }) {
       {/* Drain modal */}
       {drainActive && (
         <DrainModal
-          cluster={cluster}
+          cluster={drainActive.cluster}
           node={drainActive.node}
           opts={drainActive.opts}
           onClose={() => {
+            const drained = drainActive.cluster;
             setDrainActive(null);
-            void listNodes(cluster);
+            if (drained === cluster) void listNodes(cluster);
           }}
         />
       )}

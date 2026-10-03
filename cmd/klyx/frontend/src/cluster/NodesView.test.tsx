@@ -682,4 +682,18 @@ describe("NodesView", () => {
     expect(queryByText("complete")).toBeNull();
     expect(getByText("Close")).toBeTruthy();
   });
+
+  // Batch-3 review (non-blocking, adopted): re-rendering the view for another
+  // cluster must not restart the confirmed drain there with the old node.
+  it("drain modal: switching cluster cannot restart the drain on the new cluster", async () => {
+    seedWithDetail(healthy, fakeDetail);
+    const pane = render(<NodesView cluster="homelab" />);
+    fireEvent.click(pane.getByLabelText("drain"));
+    await act(async () => {
+      fireEvent.click(pane.getByRole("button", { name: "Drain" }));
+    });
+    expect(startDrain).toHaveBeenCalledTimes(1);
+    await act(async () => { pane.rerender(<NodesView cluster="other-cluster" />); });
+    expect(vi.mocked(startDrain).mock.calls.map((c) => c[0])).toEqual(["homelab"]);
+  });
 });
