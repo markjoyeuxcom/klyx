@@ -98,3 +98,81 @@ spec:
 		t.Fatal("credential under a values secretRef reached the model prompt")
 	}
 }
+
+// Codex batch-2 re-review R1 probes, adopted: reference SHAPE alone does not
+// prove a reference - in free-form data the value must still be redacted from
+// the actual prompt, while a genuine Pod reference stays readable.
+func TestAI_ShapeAloneDoesNotProveReference(t *testing.T) {
+	cases := []struct{ name, group, plural, kind, raw string }{
+		{"ConfigMap string data key", "", "configmaps", "ConfigMap", `apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app
+data:
+  secretName: b2-rereview-inline-credential
+`},
+		{"Helm values inherited sensitive identifier", "helm.toolkit.fluxcd.io", "helmreleases", "HelmRelease", `apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: app
+spec:
+  values:
+    credentials:
+      secretRef:
+        name: chart-option
+        key: b2-rereview-inline-credential
+`},
+		{"Helm values inherited sensitive scalar", "helm.toolkit.fluxcd.io", "helmreleases", "HelmRelease", `apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: app
+spec:
+  values:
+    credentials:
+      existingSecret: b2-rereview-inline-credential
+`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			root := crd.InstanceDetail{Kind: tc.kind, Namespace: "app", Name: "app", YAML: tc.raw}
+			conn := &fakeExplainConn{details: map[string]crd.InstanceDetail{tc.group + "/" + tc.plural + "/app/app": root}}
+			cl := &fakeCompleter{reply: "ok"}
+			svc := newAI(cl, "hosted", true, false, conn)
+			if r := svc.SuggestFix("c", tc.group, "v1", tc.plural, "app", "app"); !r.OK {
+				t.Fatalf("fix failed: %+v", r)
+			}
+			if strings.Contains(cl.gotUser, "b2-rereview-inline-credential") {
+				t.Fatal("an inline credential with a reference shape reached the model prompt")
+			}
+		})
+	}
+}
+
+func TestAI_GenuinePodReferenceRemainsReadable(t *testing.T) {
+	const raw = `apiVersion: v1
+kind: Pod
+metadata:
+  name: app
+spec:
+  volumes:
+  - name: creds
+    secret:
+      secretName: app-secret-name
+  containers:
+  - name: app
+    image: nginx
+    env:
+    - name: API_TOKEN
+      valueFrom:
+        secretKeyRef:
+          name: app-secret-name
+          key: token
+`
+	out, _, err := redactManifestForAI(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(out, "app-secret-name") != 2 {
+		t.Fatalf("genuine Pod references (volume + env) must stay readable:\n%s", out)
+	}
+}

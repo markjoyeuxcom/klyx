@@ -189,9 +189,10 @@ func TestMaskValues_PlainValuesUntouched(t *testing.T) {
 	}
 }
 
-// MaskManifest keeps secret REFERENCE fields (names, not values - even under a
-// secret-looking parent like volumes[].secret) readable - "secret X not found"
-// is what a fix most often needs - while still masking credential-like values.
+// MaskManifest keeps secret REFERENCES readable at their KNOWN API locations
+// (even under a secret-looking parent like volumes[].secret) - "secret X not
+// found" is what a fix most often needs - while still masking credential-like
+// values, and a reference-shaped value anywhere else.
 func TestMaskManifest_KeepsSecretReferencesReadable(t *testing.T) {
 	raw := `env:
 - name: API_TOKEN
@@ -210,13 +211,17 @@ credentials:
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, keep := range []string{"api-creds", "token", "web-tls", "regcred", "nested"} {
+	for _, keep := range []string{"api-creds", "token", "web-tls", "regcred"} {
 		if !strings.Contains(got, keep) {
 			t.Errorf("reference %q must stay readable:\n%s", keep, got)
 		}
 	}
 	if strings.Contains(got, "hunter2") {
 		t.Fatalf("credential values must be masked:\n%s", got)
+	}
+	// credentials.secretRef is not a known API location: masked like any value.
+	if strings.Contains(got, "nested") {
+		t.Fatalf("a reference shape outside a known API location must be masked:\n%s", got)
 	}
 	if len(paths) == 0 {
 		t.Fatal("masked paths must be reported")
@@ -243,6 +248,46 @@ func TestMaskManifest_ReferenceKeyWithoutReferenceShapeIsMasked(t *testing.T) {
 	for _, leak := range []string{"b2-review-private-password", "literal-token", "also-private"} {
 		if strings.Contains(got, leak) {
 			t.Errorf("%q leaked through a reference-key exemption:\n%s", leak, got)
+		}
+	}
+}
+
+// Codex batch-2 re-review R1: shape alone does not prove a reference. Inside
+// free-form data (ConfigMap data, chart values) nothing is exempt; under spec,
+// a reference is only recognised for the API group that defines it.
+func TestMaskManifest_ReferenceNeedsItsAPILocation(t *testing.T) {
+	cases := map[string]string{
+		"ConfigMap data key":    "apiVersion: v1\nkind: ConfigMap\ndata:\n  secretName: leak-1\n",
+		"values identifier":     "apiVersion: helm.toolkit.fluxcd.io/v2\nkind: HelmRelease\nspec:\n  values:\n    credentials:\n      secretRef: {name: chart-option, key: leak-2}\n",
+		"values scalar":         "apiVersion: helm.toolkit.fluxcd.io/v2\nkind: HelmRelease\nspec:\n  values:\n    credentials:\n      existingSecret: leak-3\n",
+		"spec ref, wrong group": "apiVersion: example.com/v1\nkind: Widget\nspec:\n  secretRef: {name: w, key: leak-4}\n",
+	}
+	for name, raw := range cases {
+		got, _, err := MaskManifest(raw)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		for _, leak := range []string{"leak-1", "leak-2", "leak-3", "leak-4"} {
+			if strings.Contains(got, leak) {
+				t.Errorf("%s: %q leaked:\n%s", name, leak, got)
+			}
+		}
+	}
+	// Known locations stay readable, including group-scoped spec references.
+	keep := map[string]string{
+		"Flux source secretRef":    "apiVersion: source.toolkit.fluxcd.io/v1\nkind: GitRepository\nspec:\n  secretRef: {name: git-auth}\n",
+		"ESO secretStoreRef":       "apiVersion: external-secrets.io/v1beta1\nkind: ExternalSecret\nspec:\n  secretStoreRef: {name: vault, kind: ClusterSecretStore}\n",
+		"Certificate secretName":   "apiVersion: cert-manager.io/v1\nkind: Certificate\nspec:\n  secretName: web-tls\n",
+		"Ingress tls secretName":   "apiVersion: networking.k8s.io/v1\nkind: Ingress\nspec:\n  tls:\n  - secretName: ing-tls\n",
+		"ServiceAccount pull refs": "apiVersion: v1\nkind: ServiceAccount\nimagePullSecrets: [{name: regcred}]\n",
+	}
+	for name, raw := range keep {
+		got, _, err := MaskManifest(raw)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if strings.Contains(got, "<redacted>") {
+			t.Errorf("%s: a genuine reference was masked:\n%s", name, got)
 		}
 	}
 }
