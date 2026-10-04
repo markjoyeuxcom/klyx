@@ -54,6 +54,7 @@ klyx/
 Klyx is well past its initial foundation: fleet overview, Flux and Argo CD
 lenses, cert-manager and External Secrets diagnosis, CRD/resource browsing,
 Gateway topology, ClusterMesh edges, inline metrics, the editable surface, AI
-assist, and daily-driver Kubernetes operations ship today (latest tag
-`v0.9.0`). `docs/backlog.md` is the living status - the v1.0.0 release gate
-and what's left - and `CLAUDE.md` carries the milestone history.
+assist, and daily-driver Kubernetes operations are on `main`. The latest tag,
+`v0.9.0` (2026-07-06), predates most of that: everything merged after PR #14 is
+untagged until v1.0.0. `docs/backlog.md` is the living status - the v1.0.0
+release gate and what's left - and `CLAUDE.md` carries the milestone history.
