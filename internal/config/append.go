@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 
@@ -111,6 +112,11 @@ func AppendClusters(path string, contexts []string) error {
 	if err != nil {
 		return fmt.Errorf("appended config failed validation (file unchanged): %w", err)
 	}
+	if exists {
+		if err := onlyClustersAdded(original, []byte(candidate), len(entries)); err != nil {
+			return fmt.Errorf("appended config would change existing settings (file unchanged): %w", err)
+		}
+	}
 	// The insertion must have landed IN the clusters list: still-valid YAML
 	// with the entries nested somewhere else would silently drop them.
 	added := map[string]bool{}
@@ -134,9 +140,9 @@ func AppendClusters(path string, contexts []string) error {
 // existing fleet document (review 2026-10-03 #12: a plain EOF append broke
 // whenever another field - e.g. `ai:` - followed the list, and a substring
 // check accepted `clusters:` inside a comment). Formatting policy:
-//   - block list: new items go after its last content line (comments and blank
-//     lines that lead into the next field stay with that field), indented like
-//     its existing items;
+//   - block list: new items go at the end of its region - before the next
+//     top-level field and any unindented comment lines leading into it -
+//     indented like its existing items;
 //   - `clusters:` with no value, or an empty inline `[]`: the items become the
 //     list's block content under that key;
 //   - no clusters field (or an empty document): a `clusters:` block is
@@ -213,13 +219,14 @@ func insertClusters(original string, entries []ClusterConfig) (string, error) {
 			lines[val.Line-1] = strings.TrimRight(l[:col], " ") + l[col+2:]
 			return insertAfter(val.Line, items("  ")), nil
 		case val.Kind == yaml.SequenceNode:
-			last := val.Line
-			for n := end; n > val.Line; n-- {
-				t := strings.TrimSpace(lines[n-1])
-				if t != "" && !strings.HasPrefix(t, "#") {
-					last = n
-					break
-				}
+			// Insert after the list's region, stepping back only over
+			// UNINDENTED comment lines (they lead into the next field). Blank
+			// lines and indented lines may be block-scalar content - a `|-`
+			// line starting with '#', or the trailing newlines a `|+` keeps -
+			// so they stay where they are (batch-4 review R1).
+			last := end
+			for last > val.Line && strings.HasPrefix(lines[last-1], "#") {
+				last--
 			}
 			// Items are indented like the existing ones: the dash sits two
 			// columns left of the item's content.
@@ -233,6 +240,44 @@ func insertClusters(original string, entries []ClusterConfig) (string, error) {
 		}
 	}
 	return insertAfter(len(lines), "clusters:\n"+items("  ")), nil
+}
+
+// onlyClustersAdded proves the textual insertion changed nothing but the
+// clusters list's tail: decoded, every top-level field other than clusters is
+// identical, and clusters is the original items, unchanged, followed by
+// exactly added new ones. Loading the candidate only proves it is valid; a
+// splice at the wrong line can still alter an existing value (batch-4 review
+// R1: a block scalar lost content and still loaded).
+func onlyClustersAdded(original, candidate []byte, added int) error {
+	var before, after map[string]interface{}
+	if err := yaml.Unmarshal(original, &before); err != nil {
+		return err
+	}
+	if err := yaml.Unmarshal(candidate, &after); err != nil {
+		return err
+	}
+	if len(after) != len(before) && !(len(after) == len(before)+1 && before["clusters"] == nil) {
+		return fmt.Errorf("top-level fields differ")
+	}
+	for k, v := range before {
+		if k == "clusters" {
+			continue
+		}
+		if !reflect.DeepEqual(v, after[k]) {
+			return fmt.Errorf("field %q changed", k)
+		}
+	}
+	old, _ := before["clusters"].([]interface{})
+	got, ok := after["clusters"].([]interface{})
+	if !ok || len(got) != len(old)+added {
+		return fmt.Errorf("clusters list has %d entries, want %d", len(got), len(old)+added)
+	}
+	for i := range old {
+		if !reflect.DeepEqual(old[i], got[i]) {
+			return fmt.Errorf("existing cluster entry %d changed", i)
+		}
+	}
+	return nil
 }
 
 // writeClusterEntry writes one list item with its dash at indent.

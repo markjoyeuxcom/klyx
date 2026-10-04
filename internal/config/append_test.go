@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -268,8 +269,10 @@ clusters:
 # trailing note about the list
 
 `,
-			want:     []string{"a", "new"},
-			contains: "    context: a # inline\n  - name: new\n",
+			want: []string{"a", "new"},
+			// Blank lines may be a |+ scalar's kept newlines, so they are never
+			// stepped back over (batch-4 review R1).
+			contains: "# trailing note about the list\n\n  - name: new\n",
 		},
 		{
 			name:     "zero-indent list keeps its indentation",
@@ -358,5 +361,63 @@ func TestAppendClustersRefusesANonEmptyInlineList(t *testing.T) {
 	}
 	if b, _ := os.ReadFile(path); string(b) != original {
 		t.Fatalf("file must be unchanged:\n%s", b)
+	}
+}
+
+// Codex batch-4 review R1, adopted: block-scalar content that looks like a
+// comment or a blank line is part of the value. The append must leave every
+// existing value exactly as it was - or refuse with the file untouched.
+func TestAppendClustersPreservesBlockScalarContent(t *testing.T) {
+	for name, raw := range map[string]string{
+		"strip scalar with a #-line":         "clusters:\n  - name: dev\n    tags:\n      note: |-\n        first line\n        # this is scalar content\n",
+		"keep scalar with trailing newlines": "clusters:\n  - name: dev\n    tags:\n      note: |+\n        first line\n\n\n",
+		"scalar then a field":                "clusters:\n  - name: dev\n    tags:\n      note: |\n        a\n        # b\nai:\n  backend: \"off\"\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			p := filepath.Join(t.TempDir(), "fleet.yaml")
+			if err := os.WriteFile(p, []byte(raw), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			before, err := Load(p)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := AppendClusters(p, []string{"new"}); err != nil {
+				if b, _ := os.ReadFile(p); string(b) != raw {
+					t.Fatal("a refusal must leave the file untouched")
+				}
+				t.Logf("refused safely: %v", err)
+				return
+			}
+			after, err := Load(p)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(before.Clusters[0], after.Clusters[0]) {
+				t.Fatalf("existing cluster changed: note %q -> %q", before.Clusters[0].Tags["note"], after.Clusters[0].Tags["note"])
+			}
+			if len(after.Clusters) != 2 || after.Clusters[1].Name != "new" {
+				t.Fatalf("clusters = %+v", after.Clusters)
+			}
+		})
+	}
+}
+
+// The decoded-document guard: any splice that alters an existing value is
+// refused, whatever the textual heuristic did.
+func TestOnlyClustersAdded(t *testing.T) {
+	orig := []byte("clusters:\n  - name: a\n    tags:\n      note: x\nai:\n  backend: \"off\"\n")
+	ok := []byte("clusters:\n  - name: a\n    tags:\n      note: x\n  - name: b\nai:\n  backend: \"off\"\n")
+	if err := onlyClustersAdded(orig, ok, 1); err != nil {
+		t.Fatalf("a pure append must pass: %v", err)
+	}
+	for name, bad := range map[string]string{
+		"value changed": "clusters:\n  - name: a\n    tags:\n      note: y\n  - name: b\nai:\n  backend: \"off\"\n",
+		"other field":   "clusters:\n  - name: a\n    tags:\n      note: x\n  - name: b\nai:\n  backend: local\n",
+		"wrong count":   "clusters:\n  - name: a\n    tags:\n      note: x\nai:\n  backend: \"off\"\n",
+	} {
+		if onlyClustersAdded(orig, []byte(bad), 1) == nil {
+			t.Errorf("%s: must be refused", name)
+		}
 	}
 }
