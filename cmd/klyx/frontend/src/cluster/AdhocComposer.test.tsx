@@ -15,7 +15,7 @@ import { armProtected } from "../bridge/configsvc";
 const okResult = (over: Partial<AdhocResultDTO> = {}): AdhocResultDTO => ({
   kind: "Pod", namespace: "klyx-scratch", name: "dbg", ok: true, error: "",
   namespaceOwnerKind: "", namespaceOwnerName: "", namespaceOwnerNamespace: "", namespacePrunes: false,
-  namespaceManaged: false, trackedByNamespaceOwner: false,
+  namespaceManaged: false, argoTracking: "", argoTrackingApp: "", argoTrackingPrunes: false, argoConfigKnown: false,
   ...over,
 });
 
@@ -69,7 +69,7 @@ describe("AdhocComposer", () => {
     fireEvent.change(getByPlaceholderText(/apiVersion/), { target: { value: "doc" } });
     fireEvent.click(getByText("dry-run"));
     const note = (await findByTestId("namespace-context")).textContent ?? "";
-    expect(note).toMatch(/not one it tracks, so its pruning leaves the object alone/);
+    expect(note).toMatch(/not in its inventory, so its pruning leaves the object alone/);
     expect(note).not.toMatch(/DELETED|PRUNED/);
   });
 
@@ -83,14 +83,43 @@ describe("AdhocComposer", () => {
     expect((await findByTestId("namespace-context")).textContent).toMatch(/if the namespace is removed from Git, it is deleted together with this object/);
   });
 
-  it("warns of certain pruning only when the object carries the Argo app's tracking metadata", async () => {
+  // Batch-4 review R2: certain pruning needs a KNOWN tracking method that the
+  // object's metadata matches, and an auto-pruning app; matching metadata
+  // under an unknown method is only a possibility (amber, conditional).
+  it("is red and certain only for an object tracked under the known method by an auto-pruning app", async () => {
     vi.mocked(createResourceYAML).mockResolvedValueOnce([
-      okResult({ namespace: "shop", namespaceOwnerKind: "Application", namespaceOwnerName: "shop", namespaceOwnerNamespace: "argocd", namespacePrunes: true, trackedByNamespaceOwner: true }),
+      okResult({ namespace: "shop", namespaceOwnerKind: "Application", namespaceOwnerName: "shop", namespaceOwnerNamespace: "argocd", namespacePrunes: true,
+        argoTracking: "tracked", argoTrackingApp: "argocd/shop", argoTrackingPrunes: true, argoConfigKnown: true }),
     ]);
     const { getByText, getByPlaceholderText, findByTestId } = render(<AdhocComposer cluster="x" onClose={() => {}} />);
     fireEvent.change(getByPlaceholderText(/apiVersion/), { target: { value: "doc" } });
     fireEvent.click(getByText("dry-run"));
-    expect((await findByTestId("namespace-context")).textContent).toMatch(/will be PRUNED on the next sync/);
+    const note = await findByTestId("namespace-context");
+    expect(note.textContent).toMatch(/the next sync deletes it/);
+    expect(note.getAttribute("style")).toMatch(/danger/);
+  });
+
+  it("keeps an unknown tracking method conditional", async () => {
+    vi.mocked(createResourceYAML).mockResolvedValueOnce([
+      okResult({ namespace: "shop", namespaceOwnerKind: "Application", namespaceOwnerName: "shop", namespaceOwnerNamespace: "argocd", namespacePrunes: true,
+        argoTracking: "possible", argoTrackingApp: "argocd/shop", argoTrackingPrunes: true, argoConfigKnown: false }),
+    ]);
+    const { getByText, getByPlaceholderText, findByTestId } = render(<AdhocComposer cluster="x" onClose={() => {}} />);
+    fireEvent.change(getByPlaceholderText(/apiVersion/), { target: { value: "doc" } });
+    fireEvent.click(getByText("dry-run"));
+    const note = await findByTestId("namespace-context");
+    expect(note.textContent).toMatch(/depends on the controller's tracking method, which Klyx could not read/);
+    expect(note.getAttribute("style")).not.toMatch(/danger/);
+  });
+
+  it("does not claim certainty for an Argo app whose tracking settings are unknown", async () => {
+    vi.mocked(createResourceYAML).mockResolvedValueOnce([
+      okResult({ namespace: "shop", namespaceOwnerKind: "Application", namespaceOwnerName: "shop", namespaceOwnerNamespace: "argocd", namespacePrunes: true }),
+    ]);
+    const { getByText, getByPlaceholderText, findByTestId } = render(<AdhocComposer cluster="x" onClose={() => {}} />);
+    fireEvent.change(getByPlaceholderText(/apiVersion/), { target: { value: "doc" } });
+    fireEvent.click(getByText("dry-run"));
+    expect((await findByTestId("namespace-context")).textContent).toMatch(/no tracking metadata Klyx recognizes .* should leave the object alone/);
   });
 
   it("protected cluster requires the typed name and arms the one-shot grant", async () => {

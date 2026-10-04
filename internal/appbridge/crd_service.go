@@ -222,7 +222,8 @@ func (s *CRDService) CreateResourceYAML(cluster, yaml string, dryRun bool) []Adh
 			Kind: r.Kind, Namespace: r.Namespace, Name: r.Name, OK: r.OK, Error: r.Error,
 			NamespaceOwnerKind: r.NamespaceOwnerKind, NamespaceOwnerName: r.NamespaceOwnerName,
 			NamespaceOwnerNamespace: r.NamespaceOwnerNamespace, NamespacePrunes: r.NamespacePrunes,
-			NamespaceManaged: r.NamespaceManaged, TrackedByNamespaceOwner: r.TrackedByNamespaceOwner,
+			NamespaceManaged: r.NamespaceManaged, ArgoTracking: r.ArgoTracking, ArgoTrackingApp: r.ArgoTrackingApp,
+			ArgoTrackingPrunes: r.ArgoTrackingPrunes, ArgoConfigKnown: r.ArgoConfigKnown,
 		})
 	}
 	return out
@@ -286,7 +287,11 @@ func (s *CRDService) GitOpsOwnership(cluster, group, kind, namespace, name strin
 		NamespaceOwnerKind: o.NamespaceOwnerKind, NamespaceOwnerNamespace: o.NamespaceOwnerNamespace,
 		NamespaceOwnerName: o.NamespaceOwnerName, NamespacePrunes: o.NamespacePrunes,
 		NamespaceManaged: o.NamespaceManaged, NamespaceBasis: o.NamespaceBasis,
+		ArgoApps: make([]ArgoAppRefDTO, 0, len(o.ArgoApps)),
 		Warnings: []string{},
+	}
+	for _, a := range o.ArgoApps {
+		dto.ArgoApps = append(dto.ArgoApps, ArgoAppRefDTO{Namespace: a.Namespace, Name: a.Name, Prunes: a.Prunes})
 	}
 	if o.Warnings != nil {
 		dto.Warnings = o.Warnings

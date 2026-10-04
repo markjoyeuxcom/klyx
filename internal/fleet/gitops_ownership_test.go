@@ -188,18 +188,98 @@ func TestGitOpsOwnership_NamespaceManagedIsTheConditionalRisk(t *testing.T) {
 	}
 }
 
-func TestArgoTracked(t *testing.T) {
-	u := &unstructured.Unstructured{Object: map[string]interface{}{}}
-	if argoTracked(u, "shop") {
-		t.Fatal("no metadata is not tracked")
+// Batch-4 review R2: tracking evidence follows Argo's documented tracking
+// modes. A copied tracking-id that names another object is excluded by Argo;
+// the instance label tracks only under label tracking; with the method
+// unknown, matching metadata is only "possible".
+func TestArgoTrackingEvidence(t *testing.T) {
+	obj := func(labels, annos map[string]string) *unstructured.Unstructured {
+		u := &unstructured.Unstructured{Object: map[string]interface{}{}}
+		u.SetLabels(labels)
+		u.SetAnnotations(annos)
+		return u
 	}
-	u.SetLabels(map[string]string{"app.kubernetes.io/instance": "shop"})
-	if !argoTracked(u, "shop") || argoTracked(u, "other") {
-		t.Fatal("the instance label tracks for its app only")
+	label := map[string]string{"app.kubernetes.io/instance": "shop"}
+	self := map[string]string{"argocd.argoproj.io/tracking-id": "shop:/ConfigMap:shop/copy"}
+	copied := map[string]string{"argocd.argoproj.io/tracking-id": "shop:/ConfigMap:shop/original"}
+	anyNS := map[string]string{"argocd.argoproj.io/tracking-id": "team_shop:/ConfigMap:shop/copy"}
+	labelMode := argoTrackingCfg{known: true, method: "label", labelKey: "app.kubernetes.io/instance"}
+	annoMode := argoTrackingCfg{known: true, method: "annotation", labelKey: "app.kubernetes.io/instance"}
+	both := argoTrackingCfg{known: true, method: "annotation+label", labelKey: "app.kubernetes.io/instance"}
+	unknown := argoTrackingCfg{labelKey: "app.kubernetes.io/instance"}
+
+	cases := []struct {
+		name  string
+		u     *unstructured.Unstructured
+		appNS string
+		cfg   argoTrackingCfg
+		want  string
+	}{
+		{"self-referencing id, annotation mode", obj(nil, self), "argocd", annoMode, "tracked"},
+		{"copied id is not self-referencing", obj(nil, copied), "argocd", annoMode, ""},
+		{"instance label, annotation mode", obj(label, nil), "argocd", annoMode, ""},
+		{"instance label, annotation+label mode", obj(label, nil), "argocd", both, ""},
+		{"self-referencing id, annotation+label mode", obj(nil, self), "argocd", both, "tracked"},
+		{"instance label, label mode", obj(label, nil), "argocd", labelMode, "tracked"},
+		{"tracking id ignored in label mode", obj(nil, self), "argocd", labelMode, ""},
+		{"method unknown, label", obj(label, nil), "argocd", unknown, "possible"},
+		{"method unknown, copied id", obj(nil, copied), "argocd", unknown, ""},
+		{"apps-in-any-namespace reference", obj(nil, anyNS), "team", annoMode, "tracked"},
+		{"no metadata", obj(nil, nil), "argocd", annoMode, ""},
 	}
-	u.SetLabels(nil)
-	u.SetAnnotations(map[string]string{"argocd.argoproj.io/tracking-id": "shop:/ConfigMap:shop/cfg"})
-	if !argoTracked(u, "shop") || argoTracked(u, "sho") {
-		t.Fatal("the tracking-id annotation tracks for its app only")
+	for _, tc := range cases {
+		if got := argoTrackingEvidence(tc.u, "", "ConfigMap", "shop", "copy", tc.appNS, "shop", tc.cfg); got != tc.want {
+			t.Errorf("%s: evidence = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
+// Codex batch-4 review probes, adopted end to end through the composer's dry
+// run: an Argo app's tracking is found even when a Flux unit manages the
+// namespace, and the controller's tracking method (argocd-cm) decides.
+func TestAdhocDryRun_ArgoTrackingFollowsTheController(t *testing.T) {
+	setup := func(t *testing.T, method string, objs ...*unstructured.Unstructured) *ClusterConn {
+		c := ownershipConn(t, true, true, objs...)
+		base, _ := adhocConn(t)
+		c.typed = base.typed
+		if method != "" {
+			cm := &unstructured.Unstructured{Object: map[string]interface{}{
+				"apiVersion": "v1", "kind": "ConfigMap",
+				"metadata": map[string]interface{}{"name": "argocd-cm", "namespace": "argocd"},
+				"data":     map[string]interface{}{"application.resourceTrackingMethod": method},
+			}}
+			if _, err := c.dyn.Resource(argoCMGVR).Namespace("argocd").Create(context.Background(), cm, metav1.CreateOptions{}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return c
+	}
+	dry := func(t *testing.T, c *ClusterConn, doc string) AdhocResult {
+		out := c.CreateResourceYAML(context.Background(), doc, true)
+		if len(out) != 1 || !out[0].OK {
+			t.Fatalf("dry run: %+v", out)
+		}
+		return out[0]
+	}
+	selfDoc := "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: copy\n  namespace: shop\n  annotations:\n    argocd.argoproj.io/tracking-id: shop:/ConfigMap:shop/copy\n"
+	labelDoc := "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: scratch\n  namespace: shop\n  labels:\n    app.kubernetes.io/instance: shop\n"
+
+	// A Flux unit managing the namespace does not hide the Argo app's tracking.
+	c := setup(t, "annotation", argoApp("argocd", "shop", "shop", true), kustomization("flux-system", "namespaces", true, "", "_shop__Namespace"))
+	r := dry(t, c, selfDoc)
+	if r.NamespaceOwnerKind != "Kustomization" || r.ArgoTracking != "tracked" || r.ArgoTrackingApp != "argocd/shop" || !r.ArgoTrackingPrunes || !r.ArgoConfigKnown {
+		t.Fatalf("self-referencing tracking under annotation mode: %+v", r)
+	}
+
+	// Annotation mode: the instance label alone is not tracking.
+	c = setup(t, "annotation", argoApp("argocd", "shop", "shop", true))
+	if r := dry(t, c, labelDoc); r.ArgoTracking != "" || !r.ArgoConfigKnown {
+		t.Fatalf("instance label under annotation mode: %+v", r)
+	}
+
+	// Method unreadable: the label is only a possibility.
+	c = setup(t, "", argoApp("argocd", "shop", "shop", true))
+	if r := dry(t, c, labelDoc); r.ArgoTracking != "possible" || r.ArgoConfigKnown {
+		t.Fatalf("unknown tracking method: %+v", r)
 	}
 }

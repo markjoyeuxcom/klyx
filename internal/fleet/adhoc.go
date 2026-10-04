@@ -43,9 +43,9 @@ const (
 // NamespaceOwner* fields carry the GitOps namespace context for the target
 // (GitOpsOwnership: reach is context, NamespaceManaged the conditional
 // namespace-deletion risk; empty = no managing unit DETECTED, never "safe").
-// TrackedByNamespaceOwner: the object carries the reaching Argo Application's
-// tracking metadata, so Argo treats it as part of the app - and prunes it,
-// since it is not in Git.
+// ArgoTracking*: whether an Argo Application reaching the namespace would treat
+// the object as one of its own resources (argoTrackingEvidence) - the one way
+// a new object becomes subject to Argo pruning.
 type AdhocResult struct {
 	Kind      string
 	Namespace string
@@ -58,7 +58,15 @@ type AdhocResult struct {
 	NamespaceOwnerNamespace string
 	NamespacePrunes         bool
 	NamespaceManaged        bool
-	TrackedByNamespaceOwner bool
+
+	ArgoTracking       string // "tracked" | "possible" | "" (no recognized evidence)
+	ArgoTrackingApp    string // "<namespace>/<name>" of the app the evidence names
+	ArgoTrackingPrunes bool   // that app prunes automatically
+	// ArgoConfigKnown: the controller's tracking method was read (argocd-cm),
+	// for the app the evidence names - or, with no evidence, for the Argo app
+	// managing the namespace. Unknown settings make every Argo verdict
+	// conditional.
+	ArgoConfigKnown bool
 }
 
 // yamlDocSep splits a multi-document YAML stream on standalone `---` lines.
@@ -194,24 +202,114 @@ func (c *ClusterConn) applyAdhocDoc(ctx context.Context, doc string, dryRun bool
 		r.NamespaceOwnerNamespace = o.NamespaceOwnerNamespace
 		r.NamespacePrunes = o.NamespacePrunes
 		r.NamespaceManaged = o.NamespaceManaged
-		r.TrackedByNamespaceOwner = o.NamespaceBasis == "argo" && argoTracked(u, o.NamespaceOwnerName)
+		c.noteArgoTracking(ctx, &r, u, gvr.Group, kind, ns, name, o)
 	}
 	return r
 }
 
-// argoTracked reports whether u carries Argo CD tracking metadata for app:
-// the default instance label, or the tracking-id annotation ("<app>:<group>/
-// <kind>:<ns>/<name>"). An object copied from an app's rendered manifests
-// often does; Argo then treats it as one of the app's resources. A custom
-// application.instanceLabelKey is not detected.
-func argoTracked(u *unstructured.Unstructured, app string) bool {
-	if app == "" {
-		return false
+// argoTrackingCfg is the controller's resource-tracking configuration from
+// argocd-cm (https://argo-cd.readthedocs.io/en/stable/user-guide/resource_tracking/).
+type argoTrackingCfg struct {
+	known    bool   // application.resourceTrackingMethod was read
+	method   string // "label" | "annotation" | "annotation+label"
+	labelKey string // application.instanceLabelKey
+}
+
+var argoCMGVR = schema.GroupVersionResource{Version: "v1", Resource: "configmaps"}
+
+// argoTrackingConfig reads argocd-cm in the Argo control-plane namespace (an
+// Application's own namespace). An unreadable or absent ConfigMap, or one that
+// does not set the method (whose default changed between Argo CD 2.x and
+// 3.x), leaves the configuration unknown.
+func (c *ClusterConn) argoTrackingConfig(ctx context.Context, ns string) argoTrackingCfg {
+	cfg := argoTrackingCfg{labelKey: "app.kubernetes.io/instance"}
+	if c.dyn == nil {
+		return cfg
 	}
-	if u.GetLabels()["app.kubernetes.io/instance"] == app {
-		return true
+	cm, err := c.dyn.Resource(argoCMGVR).Namespace(ns).Get(ctx, "argocd-cm", metav1.GetOptions{})
+	if err != nil {
+		return cfg
 	}
-	return strings.HasPrefix(u.GetAnnotations()["argocd.argoproj.io/tracking-id"], app+":")
+	data, _, _ := unstructured.NestedStringMap(cm.Object, "data")
+	if k := data["application.instanceLabelKey"]; k != "" {
+		cfg.labelKey = k
+	}
+	switch m := data["application.resourceTrackingMethod"]; m {
+	case "label", "annotation", "annotation+label":
+		cfg.known, cfg.method = true, m
+	}
+	return cfg
+}
+
+// argoTrackingEvidence classifies whether Argo app appNS/app would treat u
+// (identified by group/kind/namespace/name) as one of its resources:
+//   - "tracked": the controller's method is known and the matching metadata is
+//     present - the instance label under label tracking, or a SELF-referencing
+//     tracking-id annotation under annotation tracking (a copied, non-self-
+//     referencing tracking-id is excluded by Argo; under annotation+label the
+//     label is informational only);
+//   - "possible": the method is unknown and either kind of metadata matches;
+//   - "": no recognized evidence.
+//
+// App references accept "<app>" and the apps-in-any-namespace form
+// "<namespace>_<app>" (batch-4 review R2: the label or any tracking-id alone
+// asserted certain pruning).
+func argoTrackingEvidence(u *unstructured.Unstructured, group, kind, ns, name, appNS, app string, cfg argoTrackingCfg) string {
+	isApp := func(ref string) bool { return ref != "" && (ref == app || ref == appNS+"_"+app) }
+	labelMatch := isApp(u.GetLabels()[cfg.labelKey])
+	selfRef := false
+	if parts := strings.SplitN(u.GetAnnotations()["argocd.argoproj.io/tracking-id"], ":", 3); len(parts) == 3 && isApp(parts[0]) {
+		gk := strings.SplitN(parts[1], "/", 2)
+		nn := strings.SplitN(parts[2], "/", 2)
+		selfRef = len(gk) == 2 && len(nn) == 2 &&
+			gk[0] == group && gk[1] == kind && nn[0] == ns && nn[1] == name
+	}
+	if !cfg.known {
+		if selfRef || labelMatch {
+			return "possible"
+		}
+		return ""
+	}
+	if cfg.method == "label" {
+		if labelMatch {
+			return "tracked"
+		}
+		return ""
+	}
+	if selfRef {
+		return "tracked"
+	}
+	return ""
+}
+
+// noteArgoTracking checks EVERY Argo app reaching the namespace for tracking
+// evidence on u - not only the unit managing the namespace, which can be a
+// Flux Kustomization while an Argo app deploys there too - and records the
+// strongest finding.
+func (c *ClusterConn) noteArgoTracking(ctx context.Context, r *AdhocResult, u *unstructured.Unstructured, group, kind, ns, name string, o GitOpsOwnership) {
+	cfgs := map[string]argoTrackingCfg{}
+	cfgFor := func(appNS string) argoTrackingCfg {
+		if cfg, ok := cfgs[appNS]; ok {
+			return cfg
+		}
+		cfg := c.argoTrackingConfig(ctx, appNS)
+		cfgs[appNS] = cfg
+		return cfg
+	}
+	for _, a := range o.ArgoApps {
+		cfg := cfgFor(a.Namespace)
+		ev := argoTrackingEvidence(u, group, kind, ns, name, a.Namespace, a.Name, cfg)
+		if ev == "" || (r.ArgoTracking == "tracked") || (r.ArgoTracking == "possible" && ev == "possible") {
+			continue
+		}
+		r.ArgoTracking = ev
+		r.ArgoTrackingApp = a.Namespace + "/" + a.Name
+		r.ArgoTrackingPrunes = a.Prunes
+		r.ArgoConfigKnown = cfg.known
+	}
+	if r.ArgoTracking == "" && o.NamespaceBasis == "argo" {
+		r.ArgoConfigKnown = cfgFor(o.NamespaceOwnerNamespace).known
+	}
 }
 
 // ScratchNamespace is where the diagnostic-pod launcher deploys. A dedicated

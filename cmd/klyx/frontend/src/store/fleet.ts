@@ -434,12 +434,14 @@ export type FactDTO = { group: string; label: string; value: string; tone: strin
 // AdhocResultDTO is the per-document outcome of an ad-hoc create (the scratch
 // path). On dry-run the namespaceOwner* fields carry the namespace's GitOps
 // context: a unit prunes only what it tracks, so the object is at risk only
-// when trackedByNamespaceOwner (Argo tracking metadata) or - conditionally -
-// when the unit manages and could delete the namespace itself.
+// when a reaching Argo app tracks it (argoTracking "tracked", or "possible"
+// when the controller's tracking method is unknown) or - conditionally - when
+// the unit manages and could delete the namespace itself.
 export type AdhocResultDTO = {
   kind: string; namespace: string; name: string; ok: boolean; error: string;
   namespaceOwnerKind: string; namespaceOwnerName: string; namespaceOwnerNamespace: string; namespacePrunes: boolean;
-  namespaceManaged: boolean; trackedByNamespaceOwner: boolean;
+  namespaceManaged: boolean;
+  argoTracking: "" | "tracked" | "possible"; argoTrackingApp: string; argoTrackingPrunes: boolean; argoConfigKnown: boolean;
 };
 
 // AdhocObjectDTO is one Klyx-created scratch object (label klyx.dev/adhoc) in
@@ -481,6 +483,7 @@ export type AccessWhoCanDTO = { grants: AccessGrantDTO[]; clusterWideOnly: boole
 export type GitOpsOwnershipDTO = {
   ownerKind: string; ownerNamespace: string; ownerName: string; ownerPrunes: boolean; ownerSuspended: boolean; basis: string;
   namespaceOwnerKind: string; namespaceOwnerNamespace: string; namespaceOwnerName: string; namespacePrunes: boolean; namespaceManaged: boolean; namespaceBasis: string;
+  argoApps: { namespace: string; name: string; prunes: boolean }[];
   warnings: string[];
 };
 

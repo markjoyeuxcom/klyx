@@ -8,7 +8,7 @@ vi.mock("../bridge/crd", () => ({
   deleteAdhocObject: vi.fn(async () => ({ ok: true, error: "" })),
 }));
 vi.mock("../bridge/pods", () => ({
-  launchDiagnosticPod: vi.fn(async () => ({ kind: "Pod", namespace: "klyx-scratch", name: "dbg", ok: true, error: "", namespaceOwnerKind: "", namespaceOwnerName: "", namespaceOwnerNamespace: "", namespacePrunes: false, namespaceManaged: false, trackedByNamespaceOwner: false })),
+  launchDiagnosticPod: vi.fn(async () => ({ kind: "Pod", namespace: "klyx-scratch", name: "dbg", ok: true, error: "", namespaceOwnerKind: "", namespaceOwnerName: "", namespaceOwnerNamespace: "", namespacePrunes: false, namespaceManaged: false, argoTracking: "", argoTrackingApp: "", argoTrackingPrunes: false, argoConfigKnown: false })),
 }));
 vi.mock("../bridge/configsvc", () => ({
   armProtected: vi.fn(async () => ({ ok: true, error: "" })),

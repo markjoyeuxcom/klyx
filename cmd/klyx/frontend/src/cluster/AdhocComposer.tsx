@@ -91,7 +91,7 @@ export function AdhocComposer({ cluster, onClose }: { cluster: string; onClose: 
                   <span>{r.kind || "?"} {r.namespace ? `${r.namespace}/` : ""}{r.name || ""}</span>
                 </div>
                 {r.error && <div style={{ fontSize: 11, color: "var(--color-text-danger)", overflowWrap: "anywhere" }}>{r.error}</div>}
-                {r.ok && r.namespaceOwnerKind !== "" && (
+                {r.ok && (r.namespaceOwnerKind !== "" || r.argoTracking !== "") && (
                   <NamespaceContextNote r={r} />
                 )}
               </div>
@@ -128,34 +128,42 @@ export function AdhocComposer({ cluster, onClose }: { cluster: string; onClose: 
   );
 }
 
-// NamespaceContextNote states what the namespace's GitOps unit can actually do
-// to this object (review 2026-10-03 #13). Flux garbage-collects only its own
-// inventory and Argo prunes only what it tracks, so reaching the namespace is
-// context, not a deletion verdict. Pruned for certain only when the object
-// carries the app's Argo tracking metadata; at conditional risk when the unit
-// manages (and so can delete) the namespace itself.
+// NamespaceContextNote states what the namespace's GitOps units can actually
+// do to this object (review 2026-10-03 #13, batch-4 R2). Flux garbage-collects
+// only its own inventory and Argo prunes only what it tracks, so reaching the
+// namespace is context, not a deletion verdict. Certain pruning needs an Argo
+// app that tracks the object under its KNOWN tracking method and prunes
+// automatically; with the method unknown, matching metadata is only a
+// possibility. A unit managing the namespace itself is a conditional risk.
 export function NamespaceContextNote({ r }: { r: AdhocResultDTO }) {
   const unit = `${r.namespaceOwnerKind} ${r.namespaceOwnerNamespace ? `${r.namespaceOwnerNamespace}/` : ""}${r.namespaceOwnerName}`;
-  const pruned = r.trackedByNamespaceOwner && r.namespacePrunes;
-  const nsAtRisk = r.namespaceManaged && r.namespacePrunes;
-  let text: string;
-  if (r.trackedByNamespaceOwner) {
-    text = pruned
-      ? `This object carries ${unit}'s Argo tracking metadata, so the app treats it as its own: it is not in Git and will be PRUNED on the next sync.`
-      : `This object carries ${unit}'s Argo tracking metadata: the app shows it as out of sync, and a sync with pruning would delete it.`;
-  } else {
-    text = `Namespace ${r.namespace} is deployed into by ${unit}. This object is not one it tracks, so its pruning leaves the object alone.`;
-    if (nsAtRisk) {
-      text += ` ${unit} also manages the namespace itself: if the namespace is removed from Git, it is deleted together with this object.`;
-    } else if (r.namespaceManaged) {
-      text += ` ${unit} manages the namespace itself but does not prune it.`;
-    }
-    text += " An unmanaged namespace like klyx-scratch avoids GitOps interplay altogether.";
+  const app = `Argo app ${r.argoTrackingApp}`;
+  const certain = r.argoTracking === "tracked" && r.argoTrackingPrunes;
+  const parts: string[] = [];
+  if (r.argoTracking === "tracked") {
+    parts.push(r.argoTrackingPrunes
+      ? `${app} tracks this object (its tracking metadata matches the controller's tracking method) and prunes automatically: the object is not in Git, so the next sync deletes it.`
+      : `${app} tracks this object (its tracking metadata matches the controller's tracking method): the app shows it OutOfSync, and a sync with pruning would delete it.`);
+  } else if (r.argoTracking === "possible") {
+    parts.push(`This object carries ${app}'s tracking metadata. Whether Argo treats it as one of the app's resources depends on the controller's tracking method, which Klyx could not read; if it does, a sync with pruning deletes it.`);
+  } else if (r.namespaceOwnerKind === "Kustomization") {
+    parts.push(`Namespace ${r.namespace} is deployed into by ${unit}. This new object is not in its inventory, so its pruning leaves the object alone.`);
+  } else if (r.namespaceOwnerKind !== "") {
+    parts.push(r.argoConfigKnown
+      ? `Namespace ${r.namespace} is deployed into by ${unit}. This object carries none of its tracking metadata, so its pruning leaves the object alone.`
+      : `Namespace ${r.namespace} is deployed into by ${unit}. This object carries no tracking metadata Klyx recognizes (the controller's tracking settings could not be read), so its pruning should leave the object alone.`);
   }
+  if (r.namespaceOwnerKind !== "" && r.namespaceManaged) {
+    parts.push(r.namespacePrunes
+      ? `${unit} also manages the namespace itself: if the namespace is removed from Git, it is deleted together with this object.`
+      : `${unit} manages the namespace itself but does not prune it.`);
+  }
+  if (parts.length === 0) return null;
+  parts.push("An unmanaged namespace like klyx-scratch avoids GitOps interplay altogether.");
   return (
-    <div data-testid="namespace-context" style={{ display: "flex", alignItems: "flex-start", gap: 5, fontSize: 11, color: pruned ? "var(--color-text-danger)" : "var(--color-text-warning)" }}>
+    <div data-testid="namespace-context" style={{ display: "flex", alignItems: "flex-start", gap: 5, fontSize: 11, color: certain ? "var(--color-text-danger)" : "var(--color-text-warning)" }}>
       <IconAlertTriangle size={12} stroke={1.5} style={{ flexShrink: 0, marginTop: 1 }} />
-      <span>{text}</span>
+      <span>{parts.join(" ")}</span>
     </div>
   );
 }

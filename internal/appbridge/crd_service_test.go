@@ -169,10 +169,15 @@ func TestGitOpsOwnershipMapsToDTO(t *testing.T) {
 		OwnerKind: "Kustomization", OwnerNamespace: "flux-system", OwnerName: "apps",
 		OwnerPrunes: true, Basis: "flux-inventory",
 		NamespaceOwnerKind: "Kustomization", NamespaceOwnerName: "apps", NamespacePrunes: true, NamespaceBasis: "flux",
+		NamespaceManaged: true,
+		ArgoApps:         []fleet.ArgoAppRef{{Namespace: "argocd", Name: "shop", Prunes: true}},
 	}}
 	svc := NewCRDService(func(string) (CRDConn, bool) { return conn, true })
 
 	dto := svc.GitOpsOwnership("x", "apps", "Deployment", "web", "api")
+	if !dto.NamespaceManaged || len(dto.ArgoApps) != 1 || dto.ArgoApps[0].Name != "shop" || !dto.ArgoApps[0].Prunes {
+		t.Fatalf("namespace management and reaching Argo apps not mapped: %+v", dto)
+	}
 	if dto.OwnerKind != "Kustomization" || dto.OwnerName != "apps" || !dto.OwnerPrunes || dto.Basis != "flux-inventory" {
 		t.Fatalf("owner fields not mapped: %+v", dto)
 	}

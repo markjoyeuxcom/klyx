@@ -47,9 +47,21 @@ type GitOpsOwnership struct {
 	NamespaceManaged        bool   // the unit's inventory/resources hold the Namespace object
 	NamespaceBasis          string // "flux" | "argo" | ""
 
+	// ArgoApps lists EVERY Argo Application reaching (or managing) the target
+	// namespace - whether one of them would treat a new object as its own is a
+	// separate question from which unit manages the namespace (batch-4 review).
+	ArgoApps []ArgoAppRef
+
 	// Warnings carries degraded-check honesty (a failing list never reads as
 	// "unmanaged" silently).
 	Warnings []string
+}
+
+// ArgoAppRef names one Argo Application and whether it prunes automatically.
+type ArgoAppRef struct {
+	Namespace string
+	Name      string
+	Prunes    bool
 }
 
 // noteReach records a unit reaching the target namespace, preferring one that
@@ -120,6 +132,7 @@ func (c *ClusterConn) GitOpsOwnership(ctx context.Context, group, kind, ns, name
 			}
 			if managed := ns != "" && argoOwns(a, "", "Namespace", "", ns); managed || argoReaches(a, ns) {
 				out.noteReach("Application", a.Namespace, a.Name, a.AutoPrune, managed, "argo")
+				out.ArgoApps = append(out.ArgoApps, ArgoAppRef{Namespace: a.Namespace, Name: a.Name, Prunes: a.AutoPrune})
 			}
 		}
 	}

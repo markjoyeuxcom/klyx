@@ -105,11 +105,16 @@ type AdhocResultDTO struct {
 	NamespacePrunes         bool   `json:"namespacePrunes"`
 	// NamespaceManaged: the reaching unit manages the Namespace object itself
 	// (removing it from Git while pruning deletes the namespace and this
-	// object). TrackedByNamespaceOwner: the object carries that Argo app's
-	// tracking metadata, so the app prunes it. Without either, the reaching
-	// unit's pruning leaves the object alone (review 2026-10-03 #13).
-	NamespaceManaged        bool `json:"namespaceManaged"`
-	TrackedByNamespaceOwner bool `json:"trackedByNamespaceOwner"`
+	// object). ArgoTracking*: whether a reaching Argo app would treat the
+	// object as its own - "tracked" (the controller's tracking method is known
+	// and its metadata matches), "possible" (metadata matches, method unknown)
+	// or "" - the only way its pruning reaches a new object (review 2026-10-03
+	// #13, batch-4 R2). ArgoConfigKnown: argocd-cm's tracking method was read.
+	NamespaceManaged   bool   `json:"namespaceManaged"`
+	ArgoTracking       string `json:"argoTracking"`
+	ArgoTrackingApp    string `json:"argoTrackingApp"`
+	ArgoTrackingPrunes bool   `json:"argoTrackingPrunes"`
+	ArgoConfigKnown    bool   `json:"argoConfigKnown"`
 }
 
 // AdhocObjectDTO is one Klyx-created scratch object (label klyx.dev/adhoc) in
@@ -146,6 +151,9 @@ type GitOpsOwnershipDTO struct {
 	NamespacePrunes         bool   `json:"namespacePrunes"`
 	NamespaceManaged        bool   `json:"namespaceManaged"`
 	NamespaceBasis          string `json:"namespaceBasis"`
+	// ArgoApps: every Argo Application reaching the namespace (not only the
+	// namespace manager).
+	ArgoApps []ArgoAppRefDTO `json:"argoApps"`
 
 	Warnings []string `json:"warnings"`
 }
@@ -263,4 +271,11 @@ func groupCRDs(infos []crd.Info) []CRDGroupDTO {
 	}
 	sort.Slice(out, func(a, b int) bool { return out[a].Group < out[b].Group })
 	return out
+}
+
+// ArgoAppRefDTO mirrors fleet.ArgoAppRef.
+type ArgoAppRefDTO struct {
+	Namespace string `json:"namespace"`
+	Name      string `json:"name"`
+	Prunes    bool   `json:"prunes"`
 }

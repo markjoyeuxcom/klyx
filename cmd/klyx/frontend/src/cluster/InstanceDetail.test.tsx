@@ -325,7 +325,7 @@ describe("InstanceDetail", () => {
       ownerKind: "Kustomization", ownerNamespace: "flux-system", ownerName: "apps",
       ownerPrunes: true, ownerSuspended: false, basis: "flux-inventory",
       namespaceOwnerKind: "Kustomization", namespaceOwnerNamespace: "flux-system", namespaceOwnerName: "apps",
-      namespacePrunes: true, namespaceManaged: false, namespaceBasis: "flux", warnings: [],
+      namespacePrunes: true, namespaceManaged: false, namespaceBasis: "flux", argoApps: [], warnings: [],
     });
     const { getByText, findByText, queryByText } = render(<InstanceDetail cluster="x" resource={resource} instance={instance} />);
     fireEvent.click(getByText("yaml"));
@@ -338,7 +338,7 @@ describe("InstanceDetail", () => {
   it("a degraded ownership check surfaces its warning, never a silent unmanaged", async () => {
     vi.mocked(gitOpsOwnership).mockResolvedValueOnce({
       ownerKind: "", ownerNamespace: "", ownerName: "", ownerPrunes: false, ownerSuspended: false, basis: "",
-      namespaceOwnerKind: "", namespaceOwnerNamespace: "", namespaceOwnerName: "", namespacePrunes: false, namespaceManaged: false, namespaceBasis: "",
+      namespaceOwnerKind: "", namespaceOwnerNamespace: "", namespaceOwnerName: "", namespacePrunes: false, namespaceManaged: false, namespaceBasis: "", argoApps: [],
       warnings: ["Argo ownership check failed: applications is forbidden"],
     });
     const { getByText, findByText } = render(<InstanceDetail cluster="x" resource={resource} instance={instance} />);
