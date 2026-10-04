@@ -15,7 +15,7 @@ import { armProtected } from "../bridge/configsvc";
 const okResult = (over: Partial<AdhocResultDTO> = {}): AdhocResultDTO => ({
   kind: "Pod", namespace: "klyx-scratch", name: "dbg", ok: true, error: "",
   namespaceOwnerKind: "", namespaceOwnerName: "", namespaceOwnerNamespace: "", namespacePrunes: false,
-  namespaceManaged: false, argoTracking: "", argoTrackingApp: "", argoTrackingPrunes: false, argoConfigKnown: false,
+  namespaceManaged: false, argoTracking: "", argoTrackingApp: "", argoTrackingPrunes: false, argoPruneOption: "", argoConfigKnown: false,
   ...over,
 });
 
@@ -83,10 +83,10 @@ describe("AdhocComposer", () => {
     expect((await findByTestId("namespace-context")).textContent).toMatch(/if the namespace is removed from Git, it is deleted together with this object/);
   });
 
-  // Batch-4 review R2: certain pruning needs a KNOWN tracking method that the
-  // object's metadata matches, and an auto-pruning app; matching metadata
-  // under an unknown method is only a possibility (amber, conditional).
-  it("is red and certain only for an object tracked under the known method by an auto-pruning app", async () => {
+  // Batch-4 review R2: deletion is never asserted - Klyx cannot see the app's
+  // desired state in Git. Red marks the highest risk only: tracked under the
+  // known settings by an auto-pruning app, with no Prune= opt-out.
+  it("marks a tracked object of an auto-pruning app as the highest risk, conditionally", async () => {
     vi.mocked(createResourceYAML).mockResolvedValueOnce([
       okResult({ namespace: "shop", namespaceOwnerKind: "Application", namespaceOwnerName: "shop", namespaceOwnerNamespace: "argocd", namespacePrunes: true,
         argoTracking: "tracked", argoTrackingApp: "argocd/shop", argoTrackingPrunes: true, argoConfigKnown: true }),
@@ -95,8 +95,22 @@ describe("AdhocComposer", () => {
     fireEvent.change(getByPlaceholderText(/apiVersion/), { target: { value: "doc" } });
     fireEvent.click(getByText("dry-run"));
     const note = await findByTestId("namespace-context");
-    expect(note.textContent).toMatch(/the next sync deletes it/);
+    expect(note.textContent).toMatch(/If the object is absent from the app's desired state.*its automated sync may prune it/);
+    expect(note.textContent).not.toMatch(/deletes it|is not in Git/);
     expect(note.getAttribute("style")).toMatch(/danger/);
+  });
+
+  it("names a Prune=false opt-out and drops to amber", async () => {
+    vi.mocked(createResourceYAML).mockResolvedValueOnce([
+      okResult({ namespace: "shop", namespaceOwnerKind: "Application", namespaceOwnerName: "shop", namespaceOwnerNamespace: "argocd", namespacePrunes: true,
+        argoTracking: "tracked", argoTrackingApp: "argocd/shop", argoTrackingPrunes: true, argoPruneOption: "false", argoConfigKnown: true }),
+    ]);
+    const { getByText, getByPlaceholderText, findByTestId } = render(<AdhocComposer cluster="x" onClose={() => {}} />);
+    fireEvent.change(getByPlaceholderText(/apiVersion/), { target: { value: "doc" } });
+    fireEvent.click(getByText("dry-run"));
+    const note = await findByTestId("namespace-context");
+    expect(note.textContent).toMatch(/Prune=false sync option tells Argo to skip pruning it/);
+    expect(note.getAttribute("style")).not.toMatch(/danger/);
   });
 
   it("keeps an unknown tracking method conditional", async () => {
@@ -108,7 +122,7 @@ describe("AdhocComposer", () => {
     fireEvent.change(getByPlaceholderText(/apiVersion/), { target: { value: "doc" } });
     fireEvent.click(getByText("dry-run"));
     const note = await findByTestId("namespace-context");
-    expect(note.textContent).toMatch(/depends on the controller's tracking method, which Klyx could not read/);
+    expect(note.textContent).toMatch(/depends on the controller's tracking settings, which Klyx could not read/);
     expect(note.getAttribute("style")).not.toMatch(/danger/);
   });
 

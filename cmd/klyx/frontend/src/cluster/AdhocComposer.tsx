@@ -128,24 +128,36 @@ export function AdhocComposer({ cluster, onClose }: { cluster: string; onClose: 
   );
 }
 
-// NamespaceContextNote states what the namespace's GitOps units can actually
-// do to this object (review 2026-10-03 #13, batch-4 R2). Flux garbage-collects
-// only its own inventory and Argo prunes only what it tracks, so reaching the
-// namespace is context, not a deletion verdict. Certain pruning needs an Argo
-// app that tracks the object under its KNOWN tracking method and prunes
-// automatically; with the method unknown, matching metadata is only a
-// possibility. A unit managing the namespace itself is a conditional risk.
+// NamespaceContextNote states what the namespace's GitOps units can do to
+// this object (review 2026-10-03 #13, batch-4 R2). Flux garbage-collects only
+// its own inventory and Argo prunes only what it tracks, so reaching the
+// namespace is context, not a deletion verdict. Even an object an Argo app
+// tracks is only AT RISK: whether it goes depends on the app's desired state
+// in Git (which Klyx does not read) and on the sync permitting pruning - its
+// own Prune=false / Prune=confirm sync option included. Red marks the highest
+// risk (tracked by an auto-pruning app, no opt-out), never a certainty.
 export function NamespaceContextNote({ r }: { r: AdhocResultDTO }) {
   const unit = `${r.namespaceOwnerKind} ${r.namespaceOwnerNamespace ? `${r.namespaceOwnerNamespace}/` : ""}${r.namespaceOwnerName}`;
   const app = `Argo app ${r.argoTrackingApp}`;
-  const certain = r.argoTracking === "tracked" && r.argoTrackingPrunes;
+  const optOut =
+    r.argoPruneOption === "false"
+      ? " Its Prune=false sync option tells Argo to skip pruning it."
+      : r.argoPruneOption === "confirm"
+        ? " Its Prune=confirm sync option makes pruning it wait for manual confirmation."
+        : "";
+  const highRisk = r.argoTracking === "tracked" && r.argoTrackingPrunes && r.argoPruneOption === "";
   const parts: string[] = [];
   if (r.argoTracking === "tracked") {
-    parts.push(r.argoTrackingPrunes
-      ? `${app} tracks this object (its tracking metadata matches the controller's tracking method) and prunes automatically: the object is not in Git, so the next sync deletes it.`
-      : `${app} tracks this object (its tracking metadata matches the controller's tracking method): the app shows it OutOfSync, and a sync with pruning would delete it.`);
+    parts.push(
+      `${app} tracks this object (its tracking metadata matches the controller's settings). If the object is absent from the app's desired state, the app shows it OutOfSync and ` +
+        (r.argoTrackingPrunes ? "its automated sync may prune it." : "a sync that permits pruning may delete it.") +
+        optOut,
+    );
   } else if (r.argoTracking === "possible") {
-    parts.push(`This object carries ${app}'s tracking metadata. Whether Argo treats it as one of the app's resources depends on the controller's tracking method, which Klyx could not read; if it does, a sync with pruning deletes it.`);
+    parts.push(
+      `This object carries ${app}'s tracking metadata. Whether Argo treats it as one of the app's resources depends on the controller's tracking settings, which Klyx could not read; if it does and the object is absent from the app's desired state, a sync that permits pruning may delete it.` +
+        optOut,
+    );
   } else if (r.namespaceOwnerKind === "Kustomization") {
     parts.push(`Namespace ${r.namespace} is deployed into by ${unit}. This new object is not in its inventory, so its pruning leaves the object alone.`);
   } else if (r.namespaceOwnerKind !== "") {
@@ -161,7 +173,7 @@ export function NamespaceContextNote({ r }: { r: AdhocResultDTO }) {
   if (parts.length === 0) return null;
   parts.push("An unmanaged namespace like klyx-scratch avoids GitOps interplay altogether.");
   return (
-    <div data-testid="namespace-context" style={{ display: "flex", alignItems: "flex-start", gap: 5, fontSize: 11, color: certain ? "var(--color-text-danger)" : "var(--color-text-warning)" }}>
+    <div data-testid="namespace-context" style={{ display: "flex", alignItems: "flex-start", gap: 5, fontSize: 11, color: highRisk ? "var(--color-text-danger)" : "var(--color-text-warning)" }}>
       <IconAlertTriangle size={12} stroke={1.5} style={{ flexShrink: 0, marginTop: 1 }} />
       <span>{parts.join(" ")}</span>
     </div>

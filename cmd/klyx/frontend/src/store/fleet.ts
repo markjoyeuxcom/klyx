@@ -441,7 +441,8 @@ export type AdhocResultDTO = {
   kind: string; namespace: string; name: string; ok: boolean; error: string;
   namespaceOwnerKind: string; namespaceOwnerName: string; namespaceOwnerNamespace: string; namespacePrunes: boolean;
   namespaceManaged: boolean;
-  argoTracking: "" | "tracked" | "possible"; argoTrackingApp: string; argoTrackingPrunes: boolean; argoConfigKnown: boolean;
+  argoTracking: "" | "tracked" | "possible"; argoTrackingApp: string; argoTrackingPrunes: boolean;
+  argoPruneOption: "" | "false" | "confirm"; argoConfigKnown: boolean;
 };
 
 // AdhocObjectDTO is one Klyx-created scratch object (label klyx.dev/adhoc) in

@@ -114,6 +114,7 @@ type AdhocResultDTO struct {
 	ArgoTracking       string `json:"argoTracking"`
 	ArgoTrackingApp    string `json:"argoTrackingApp"`
 	ArgoTrackingPrunes bool   `json:"argoTrackingPrunes"`
+	ArgoPruneOption    string `json:"argoPruneOption"` // the object's Prune= sync option: "false" | "confirm" | ""
 	ArgoConfigKnown    bool   `json:"argoConfigKnown"`
 }
 

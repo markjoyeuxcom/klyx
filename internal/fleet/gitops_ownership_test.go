@@ -207,6 +207,17 @@ func TestArgoTrackingEvidence(t *testing.T) {
 	annoMode := argoTrackingCfg{known: true, method: "annotation", labelKey: "app.kubernetes.io/instance"}
 	both := argoTrackingCfg{known: true, method: "annotation+label", labelKey: "app.kubernetes.io/instance"}
 	unknown := argoTrackingCfg{labelKey: "app.kubernetes.io/instance"}
+	withID := func(c argoTrackingCfg) argoTrackingCfg { c.installationID = "production"; return c }
+	merge := func(a, b map[string]string) map[string]string {
+		out := map[string]string{}
+		for k, v := range a {
+			out[k] = v
+		}
+		for k, v := range b {
+			out[k] = v
+		}
+		return out
+	}
 
 	cases := []struct {
 		name  string
@@ -226,6 +237,13 @@ func TestArgoTrackingEvidence(t *testing.T) {
 		{"method unknown, copied id", obj(nil, copied), "argocd", unknown, ""},
 		{"apps-in-any-namespace reference", obj(nil, anyNS), "team", annoMode, "tracked"},
 		{"no metadata", obj(nil, nil), "argocd", annoMode, ""},
+		// Codex batch-4 re-review R2a: with installationID configured, annotation
+		// tracking also needs a matching installation-id annotation; label
+		// tracking is unaffected.
+		{"installationID set, annotation missing", obj(nil, self), "argocd", withID(annoMode), ""},
+		{"installationID set, annotation differs", obj(nil, merge(self, map[string]string{"argocd.argoproj.io/installation-id": "other"})), "argocd", withID(annoMode), ""},
+		{"installationID set, annotation matches", obj(nil, merge(self, map[string]string{"argocd.argoproj.io/installation-id": "production"})), "argocd", withID(annoMode), "tracked"},
+		{"installationID set, label mode", obj(label, nil), "argocd", withID(labelMode), "tracked"},
 	}
 	for _, tc := range cases {
 		if got := argoTrackingEvidence(tc.u, "", "ConfigMap", "shop", "copy", tc.appNS, "shop", tc.cfg); got != tc.want {
@@ -281,5 +299,55 @@ func TestAdhocDryRun_ArgoTrackingFollowsTheController(t *testing.T) {
 	c = setup(t, "", argoApp("argocd", "shop", "shop", true))
 	if r := dry(t, c, labelDoc); r.ArgoTracking != "possible" || r.ArgoConfigKnown {
 		t.Fatalf("unknown tracking method: %+v", r)
+	}
+}
+
+// Codex batch-4 re-review R2a probe, adopted end to end: installationID from
+// argocd-cm gates annotation tracking.
+func TestAdhocDryRun_ArgoInstallationIDGatesTracking(t *testing.T) {
+	for id, want := range map[string]string{"": "", "other": "", "production": "tracked"} {
+		t.Run("installation-id="+id, func(t *testing.T) {
+			c := ownershipConn(t, false, true, argoApp("argocd", "shop", "shop", true))
+			base, _ := adhocConn(t)
+			c.typed = base.typed
+			cm := &unstructured.Unstructured{Object: map[string]interface{}{
+				"apiVersion": "v1", "kind": "ConfigMap",
+				"metadata": map[string]interface{}{"name": "argocd-cm", "namespace": "argocd"},
+				"data":     map[string]interface{}{"application.resourceTrackingMethod": "annotation", "installationID": "production"},
+			}}
+			if _, err := c.dyn.Resource(argoCMGVR).Namespace("argocd").Create(context.Background(), cm, metav1.CreateOptions{}); err != nil {
+				t.Fatal(err)
+			}
+			doc := "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: copy\n  namespace: shop\n  annotations:\n    argocd.argoproj.io/tracking-id: shop:/ConfigMap:shop/copy\n"
+			if id != "" {
+				doc += "    argocd.argoproj.io/installation-id: " + id + "\n"
+			}
+			out := c.CreateResourceYAML(context.Background(), doc, true)
+			if len(out) != 1 || !out[0].OK {
+				t.Fatalf("dry run: %+v", out)
+			}
+			if out[0].ArgoTracking != want {
+				t.Fatalf("ArgoTracking = %q, want %q", out[0].ArgoTracking, want)
+			}
+		})
+	}
+}
+
+// Codex batch-4 re-review R2b: the object's own Prune= sync option reaches
+// the verdict.
+func TestArgoPruneOption(t *testing.T) {
+	for v, want := range map[string]string{
+		"":                                    "",
+		"Prune=false":                         "false",
+		"ServerSideApply=true, Prune=confirm": "confirm",
+		"PruneLast=true":                      "",
+	} {
+		u := &unstructured.Unstructured{Object: map[string]interface{}{}}
+		if v != "" {
+			u.SetAnnotations(map[string]string{"argocd.argoproj.io/sync-options": v})
+		}
+		if got := argoPruneOption(u); got != want {
+			t.Errorf("%q: argoPruneOption = %q, want %q", v, got, want)
+		}
 	}
 }

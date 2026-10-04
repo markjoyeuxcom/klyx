@@ -62,6 +62,7 @@ type AdhocResult struct {
 	ArgoTracking       string // "tracked" | "possible" | "" (no recognized evidence)
 	ArgoTrackingApp    string // "<namespace>/<name>" of the app the evidence names
 	ArgoTrackingPrunes bool   // that app prunes automatically
+	ArgoPruneOption    string // the object's own sync option: "false" | "confirm" | ""
 	// ArgoConfigKnown: the controller's tracking method was read (argocd-cm),
 	// for the app the evidence names - or, with no evidence, for the Argo app
 	// managing the namespace. Unknown settings make every Argo verdict
@@ -203,6 +204,7 @@ func (c *ClusterConn) applyAdhocDoc(ctx context.Context, doc string, dryRun bool
 		r.NamespacePrunes = o.NamespacePrunes
 		r.NamespaceManaged = o.NamespaceManaged
 		c.noteArgoTracking(ctx, &r, u, gvr.Group, kind, ns, name, o)
+		r.ArgoPruneOption = argoPruneOption(u)
 	}
 	return r
 }
@@ -210,17 +212,21 @@ func (c *ClusterConn) applyAdhocDoc(ctx context.Context, doc string, dryRun bool
 // argoTrackingCfg is the controller's resource-tracking configuration from
 // argocd-cm (https://argo-cd.readthedocs.io/en/stable/user-guide/resource_tracking/).
 type argoTrackingCfg struct {
-	known    bool   // application.resourceTrackingMethod was read
-	method   string // "label" | "annotation" | "annotation+label"
-	labelKey string // application.instanceLabelKey
+	known          bool   // application.resourceTrackingMethod was read
+	method         string // "label" | "annotation" | "annotation+label"
+	labelKey       string // application.instanceLabelKey
+	installationID string // installationID: annotation tracking also requires a matching installation-id annotation
 }
 
 var argoCMGVR = schema.GroupVersionResource{Version: "v1", Resource: "configmaps"}
 
-// argoTrackingConfig reads argocd-cm in the Argo control-plane namespace (an
-// Application's own namespace). An unreadable or absent ConfigMap, or one that
-// does not set the method (whose default changed between Argo CD 2.x and
-// 3.x), leaves the configuration unknown.
+// argoTrackingConfig reads argocd-cm in the namespace of an Application, on
+// the assumption that it is the controller's namespace. That holds for apps in
+// the control-plane namespace; with apps-in-any-namespace it does not, and the
+// lookup there normally finds no argocd-cm, leaving the configuration unknown
+// (so every verdict stays conditional). An unreadable or absent ConfigMap, or
+// one that does not set the method (whose default changed between Argo CD 2.x
+// and 3.x), also leaves it unknown.
 func (c *ClusterConn) argoTrackingConfig(ctx context.Context, ns string) argoTrackingCfg {
 	cfg := argoTrackingCfg{labelKey: "app.kubernetes.io/instance"}
 	if c.dyn == nil {
@@ -234,6 +240,7 @@ func (c *ClusterConn) argoTrackingConfig(ctx context.Context, ns string) argoTra
 	if k := data["application.instanceLabelKey"]; k != "" {
 		cfg.labelKey = k
 	}
+	cfg.installationID = data["installationID"]
 	switch m := data["application.resourceTrackingMethod"]; m {
 	case "label", "annotation", "annotation+label":
 		cfg.known, cfg.method = true, m
@@ -247,7 +254,8 @@ func (c *ClusterConn) argoTrackingConfig(ctx context.Context, ns string) argoTra
 //     present - the instance label under label tracking, or a SELF-referencing
 //     tracking-id annotation under annotation tracking (a copied, non-self-
 //     referencing tracking-id is excluded by Argo; under annotation+label the
-//     label is informational only);
+//     label is informational only) whose installation-id annotation matches a
+//     configured installationID, as Argo's getAppInstanceValue requires;
 //   - "possible": the method is unknown and either kind of metadata matches;
 //   - "": no recognized evidence.
 //
@@ -276,8 +284,23 @@ func argoTrackingEvidence(u *unstructured.Unstructured, group, kind, ns, name, a
 		}
 		return ""
 	}
-	if selfRef {
+	if selfRef && (cfg.installationID == "" || u.GetAnnotations()["argocd.argoproj.io/installation-id"] == cfg.installationID) {
 		return "tracked"
+	}
+	return ""
+}
+
+// argoPruneOption reads the object's own Argo sync options: "false" (Argo
+// skips pruning it), "confirm" (pruning waits for approval) or "".
+// https://argo-cd.readthedocs.io/en/stable/user-guide/sync-options/#no-prune-resources
+func argoPruneOption(u *unstructured.Unstructured) string {
+	for _, opt := range strings.Split(u.GetAnnotations()["argocd.argoproj.io/sync-options"], ",") {
+		switch strings.TrimSpace(opt) {
+		case "Prune=false":
+			return "false"
+		case "Prune=confirm":
+			return "confirm"
+		}
 	}
 	return ""
 }

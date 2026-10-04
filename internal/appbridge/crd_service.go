@@ -223,7 +223,7 @@ func (s *CRDService) CreateResourceYAML(cluster, yaml string, dryRun bool) []Adh
 			NamespaceOwnerKind: r.NamespaceOwnerKind, NamespaceOwnerName: r.NamespaceOwnerName,
 			NamespaceOwnerNamespace: r.NamespaceOwnerNamespace, NamespacePrunes: r.NamespacePrunes,
 			NamespaceManaged: r.NamespaceManaged, ArgoTracking: r.ArgoTracking, ArgoTrackingApp: r.ArgoTrackingApp,
-			ArgoTrackingPrunes: r.ArgoTrackingPrunes, ArgoConfigKnown: r.ArgoConfigKnown,
+			ArgoTrackingPrunes: r.ArgoTrackingPrunes, ArgoPruneOption: r.ArgoPruneOption, ArgoConfigKnown: r.ArgoConfigKnown,
 		})
 	}
 	return out
