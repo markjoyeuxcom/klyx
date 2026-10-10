@@ -24,7 +24,7 @@ import { PodsViewLegacy } from "./PodsViewLegacy";
 // localStorage "klyx.layout.v1.legacy<Lens>" = "1" (Pods, Nodes, Workloads)
 // falls back to that lens's old implementation as a whole - never a mix of
 // layout owners. Each is removed once its migration is accepted.
-function legacyLens(lens: "Pods" | "Nodes" | "Workloads" | "Resources" | "Flux" | "Argo" | "Certs" | "Eso" | "Helm" | "Events"): boolean {
+function legacyLens(lens: "Pods" | "Nodes" | "Workloads" | "Resources" | "Flux" | "Argo" | "Certs" | "Eso" | "Helm" | "Events" | "Access"): boolean {
   try { return localStorage.getItem(`klyx.layout.v1.legacy${lens}`) === "1"; } catch { return false; }
 }
 import { EventsView } from "./EventsView";
@@ -32,6 +32,7 @@ import { EventsViewLegacy } from "./EventsViewLegacy";
 import { NodesView } from "./NodesView";
 import { NodesViewLegacy } from "./NodesViewLegacy";
 import { AccessView } from "./AccessView";
+import { AccessViewLegacy } from "./AccessViewLegacy";
 import { UpgradeView } from "./UpgradeView";
 import { ConnectivityView } from "./ConnectivityView";
 import { KarpenterView } from "./KarpenterView";
@@ -74,7 +75,7 @@ export function ClusterDetail() {
   if (route.section === "pods") return legacyLens("Pods") ? <PodsViewLegacy cluster={cluster.name} /> : <PodsView cluster={cluster.name} />;
   if (route.section === "events") return legacyLens("Events") ? <EventsViewLegacy cluster={cluster.name} /> : <EventsView cluster={cluster.name} />;
   if (route.section === "nodes") return legacyLens("Nodes") ? <NodesViewLegacy cluster={cluster.name} /> : <NodesView cluster={cluster.name} />;
-  if (route.section === "access") return <AccessView cluster={cluster.name} />;
+  if (route.section === "access") return legacyLens("Access") ? <AccessViewLegacy cluster={cluster.name} /> : <AccessView cluster={cluster.name} />;
   if (route.section === "upgrade") return <UpgradeView cluster={cluster.name} />;
   if (route.section === "connectivity") return <ConnectivityView cluster={cluster.name} />;
   if (route.section === "karpenter") return <KarpenterView cluster={cluster.name} />;
