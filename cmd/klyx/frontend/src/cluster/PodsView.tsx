@@ -301,7 +301,7 @@ export function PodsView({ cluster }: { cluster: string }) {
               )}
               <label style={{ display: "flex", flex: "0 1 280px", minWidth: 160 }}>
                 <span className="sr-only">Search pods</span>
-                <input ref={searchRef} className="l-input" style={{ width: "100%" }} value={pods.search} placeholder="Search pods" onChange={(e) => useFleet.getState().setPodsSearch(e.target.value)} />
+                <input ref={searchRef} className="l-input" style={{ width: "100%" }} type="search" autoCapitalize="off" autoCorrect="off" spellCheck={false} value={pods.search} placeholder="Search pods" onChange={(e) => useFleet.getState().setPodsSearch(e.target.value)} />
               </label>
             </>
           }

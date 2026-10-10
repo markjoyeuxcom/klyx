@@ -359,7 +359,7 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
               )}
               <label style={{ display: "flex", flex: "0 1 280px", minWidth: 160 }}>
                 <span className="sr-only">Search workloads</span>
-                <input ref={searchRef} className="l-input" style={{ width: "100%" }} value={wl.search} placeholder="Search workloads" onChange={(e) => useFleet.getState().setWorkloadsSearch(e.target.value)} />
+                <input ref={searchRef} className="l-input" style={{ width: "100%" }} type="search" autoCapitalize="off" autoCorrect="off" spellCheck={false} value={wl.search} placeholder="Search workloads" onChange={(e) => useFleet.getState().setWorkloadsSearch(e.target.value)} />
               </label>
               {showMetrics && (
                 <button className="l-chip" aria-pressed={wl.nearLimitSort} onClick={() => useFleet.getState().toggleNearLimitSort()} title="Sort by how close usage is to the limit">

@@ -429,7 +429,7 @@ export function GitOps({ cluster }: { cluster: string }) {
             )}
             <label style={{ display: "flex", flex: "0 1 260px", minWidth: 140, marginLeft: "auto" }}>
               <span className="sr-only">Search Flux</span>
-              <input ref={searchRef} className="l-input" style={{ width: "100%" }} value={query} onChange={(e) => setQuery(e.target.value)} placeholder={view === "sources" ? "Search sources" : "Search name, message, revision"} />
+              <input ref={searchRef} className="l-input" style={{ width: "100%" }} type="search" autoCapitalize="off" autoCorrect="off" spellCheck={false} value={query} onChange={(e) => setQuery(e.target.value)} placeholder={view === "sources" ? "Search sources" : "Search name, message, revision"} />
             </label>
           </>
         )}

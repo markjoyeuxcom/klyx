@@ -269,7 +269,12 @@ export function InstanceList({ cluster, resource }: { cluster: string; resource:
   const stateView = state === "loading" ? <div style={{ width: "100%", alignSelf: "flex-start" }}><SkeletonRows rows={8} label={`loading ${resource.kind} instances`} /></div>
     : state === "unreadable" ? <EmptyState icon={<IconAlertTriangle size={28} stroke={1.2} />} title={`${resource.kind} instances ${where} could not be read.`} hint={readError ?? undefined} action={fleetMode ? { label: "Retry", onClick: () => setFleetReload((n) => n + 1) } : { label: "Retry", onClick: () => void loadInstances(cluster, resource) }} />
     : state === "empty" ? <EmptyState icon={<IconStack2 size={28} stroke={1.2} />} title={`No ${resource.kind} instances ${where}.`} />
-    : <EmptyState icon={<IconStack2 size={28} stroke={1.2} />} title={`No ${resource.kind} instances match the current filters.`} hint={`${all.length} loaded ${where}.`} action={{ label: "Clear filters", onClick: clearFilters }} />;
+    // Search runs over what is loaded. With more pages behind the cap, say so
+    // and offer the continuation here - the footer (and its Load more) is not
+    // shown in this state.
+    : !fleetMode && isCurrent && instances.nextToken
+      ? <EmptyState icon={<IconStack2 size={28} stroke={1.2} />} title={`No ${resource.kind} instances match in the ${all.length} loaded so far.`} hint="More pages exist on the server; the match may be on a later page." action={{ label: "Load more", onClick: () => void loadInstances(cluster, resource, instances.nextToken) }} />
+      : <EmptyState icon={<IconStack2 size={28} stroke={1.2} />} title={`No ${resource.kind} instances match the current filters.`} hint={`${all.length} loaded ${where}.`} action={{ label: "Clear filters", onClick: clearFilters }} />;
 
   const more = partial ? "+" : "";
   const filterBits = [instances.riskOnly ? "attention" : "", instances.filter ? "search" : "", fleetClusterFilter ? fleetClusterFilter : ""].filter(Boolean);
@@ -317,7 +322,7 @@ export function InstanceList({ cluster, resource }: { cluster: string; resource:
           )}
           <label style={{ display: "flex", flex: "0 1 280px", minWidth: 160 }}>
             <span className="sr-only">Search {resource.kind}</span>
-            <input ref={searchRef} className="l-input" style={{ width: "100%" }} value={instances.filter} onChange={(e) => setFilter(e.target.value)} placeholder={fleetMode ? "Search cluster, name, namespace" : "Search name, namespace, fields"} />
+            <input ref={searchRef} className="l-input" style={{ width: "100%" }} type="search" autoCapitalize="off" autoCorrect="off" spellCheck={false} value={instances.filter} onChange={(e) => setFilter(e.target.value)} placeholder={fleetMode ? "Search cluster, name, namespace" : "Search name, namespace, fields"} />
           </label>
         </>
       }

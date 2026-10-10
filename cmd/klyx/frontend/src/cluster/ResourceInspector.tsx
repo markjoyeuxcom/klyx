@@ -1,4 +1,4 @@
-import { useContext, useState } from "react";
+import { Fragment, useContext, useState } from "react";
 import { InspectorBlock, InspectorTemplate } from "../layout/InspectorLayout";
 import { IconChevronRight } from "@tabler/icons-react";
 import { StatusDot, toneBg, toneBorder, toneColor, type Tone } from "../chrome/primitives";
@@ -144,7 +144,23 @@ export function InspectorKV({ rows }: {
   rows: ReadonlyArray<{ label: string; value: string; tone?: Tone } | null | false>;
 }) {
   const cells = rows.filter((r): r is { label: string; value: string; tone?: Tone } => Boolean(r));
+  const inTemplate = useContext(InspectorTemplate);
   if (cells.length === 0) return null;
+  if (inTemplate) {
+    // Template anatomy: labels keep their real case (a ConfigMap key "a" is
+    // not "A" - keys are case-sensitive identifiers) and values wrap instead
+    // of hiding behind a tooltip.
+    return (
+      <div className="insp-kv">
+        {cells.map((r, i) => (
+          <Fragment key={`${r.label}-${i}`}>
+            <span className="t-identifier" style={{ overflowWrap: "anywhere" }}>{r.label}</span>
+            <span className="t-identifier" style={{ color: r.tone ? toneColor[r.tone] : "var(--color-text-primary)", overflowWrap: "anywhere" }}>{r.value}</span>
+          </Fragment>
+        ))}
+      </div>
+    );
+  }
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
       {cells.map((r, i) => (

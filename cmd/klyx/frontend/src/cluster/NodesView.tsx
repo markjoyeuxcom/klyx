@@ -656,7 +656,7 @@ export function NodesView({ cluster }: { cluster: string }) {
             )}
             <label style={{ display: "flex", flex: "0 1 280px", minWidth: 160 }}>
               <span className="sr-only">Search nodes</span>
-              <input ref={searchRef} className="l-input" style={{ width: "100%" }} value={query} placeholder="Search nodes" onChange={(e) => setQuery(e.target.value)} />
+              <input ref={searchRef} className="l-input" style={{ width: "100%" }} type="search" autoCapitalize="off" autoCorrect="off" spellCheck={false} value={query} placeholder="Search nodes" onChange={(e) => setQuery(e.target.value)} />
             </label>
           </>
         }

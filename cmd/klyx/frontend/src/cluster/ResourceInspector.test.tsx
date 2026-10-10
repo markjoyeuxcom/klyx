@@ -91,3 +91,19 @@ describe("InspectorEvents", () => {
     expect(getByText("No events for this node.")).toBeTruthy();
   });
 });
+
+describe("InspectorKV inside the template (live pass)", () => {
+  it("keeps data keys in their real case and wraps values", async () => {
+    const { InspectorTemplate } = await import("../layout/InspectorLayout");
+    const { InspectorKV } = await import("./ResourceInspector");
+    const long = "x".repeat(200);
+    const { getByText } = render(
+      <InspectorTemplate.Provider value={true}>
+        <InspectorKV rows={[{ label: "a", value: long }]} />
+      </InspectorTemplate.Provider>,
+    );
+    const key = getByText("a");
+    expect(key.style.textTransform).toBe("");
+    expect(getByText(long).style.overflowWrap).toBe("anywhere");
+  });
+});

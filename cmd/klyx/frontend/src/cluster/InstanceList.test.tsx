@@ -643,3 +643,13 @@ describe("InstanceList fleet follow-ups (Codex non-blocking)", () => {
     expect(listInstancePage).toHaveBeenCalledWith("blue", serviceRef, "p2");
   });
 });
+
+describe("InstanceList search over partial pages (live pass)", () => {
+  it("a no-match with more pages says so and offers Load more (the footer is hidden here)", () => {
+    seed(nsRef, { nextToken: "tok-2", filter: "not-on-page-one" });
+    const { getByText, getByRole } = render(<InstanceList cluster="x" resource={nsRef} />);
+    expect(getByText(/No CiliumEndpoint instances match in the 2 loaded so far/)).toBeTruthy();
+    fireEvent.click(getByRole("button", { name: "Load more" }));
+    expect(loadInstances).toHaveBeenCalledWith("x", nsRef, "tok-2");
+  });
+});

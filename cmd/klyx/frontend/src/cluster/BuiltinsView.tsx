@@ -59,7 +59,7 @@ export function BuiltinsView({ cluster }: { cluster: string }) {
             ))}
             <label style={{ display: "flex", flex: "0 1 240px", minWidth: 140, marginLeft: "auto" }}>
               <span className="sr-only">Search built-in kinds</span>
-              <input className="l-input" style={{ width: "100%" }} value={search} onChange={(e) => setSearch(e.target.value)} placeholder="kind, group…" />
+              <input className="l-input" style={{ width: "100%" }} type="search" autoCapitalize="off" autoCorrect="off" spellCheck={false} value={search} onChange={(e) => setSearch(e.target.value)} placeholder="kind, group…" />
             </label>
           </>
         }
