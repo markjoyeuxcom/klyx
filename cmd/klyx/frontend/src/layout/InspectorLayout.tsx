@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { createContext, useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { IconChevronDown, IconChevronRight, IconX } from "@tabler/icons-react";
 import { CopyButton } from "../chrome/CopyButton";
 import "./layout.css";
@@ -8,6 +8,11 @@ import "./layout.css";
 // Overview/Manifest tabs, then a scrolling body of ordered sections. It never
 // computes health, permissions or confirmations - callers pass handlers that
 // already route through ConfirmDialog / protected-cluster arming.
+
+// InspectorTemplate marks content rendered inside an InspectorLayout, so shared
+// section helpers (ResourceInspector's InspectorSection) adopt the template's
+// section anatomy instead of their legacy header style.
+export const InspectorTemplate = createContext(false);
 
 export type MenuItem =
   | { kind?: "item"; label: string; onSelect: () => void; danger?: boolean; disabled?: boolean; hint?: string }
@@ -81,7 +86,7 @@ export function InspectorLayout({
           )}
         </div>
         <div className="insp-body" role={onTab ? "tabpanel" : undefined}>
-          {tab === "manifest" ? manifest : children}
+          <InspectorTemplate.Provider value={true}>{tab === "manifest" ? manifest : children}</InspectorTemplate.Provider>
         </div>
       </div>
     </>
@@ -102,7 +107,7 @@ function ActionButton({ action, primary }: { action: InspectorAction; primary?: 
   return (
     <button className={primary ? "l-btn l-btn-primary" : "l-btn"} onClick={action.onSelect}>
       {action.label}
-      {action.kbd && <span className="t-legend" style={{ textTransform: "none" }}>{action.kbd}</span>}
+      {action.kbd && <kbd className="t-legend" aria-hidden="true" style={{ fontFamily: "var(--font-mono)" }}>{action.kbd.toUpperCase()}</kbd>}
     </button>
   );
 }

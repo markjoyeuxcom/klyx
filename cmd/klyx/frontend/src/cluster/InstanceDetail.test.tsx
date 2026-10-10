@@ -202,9 +202,9 @@ describe("InstanceDetail", () => {
 
   it("renders annotations as collapsed metadata", () => {
     const { getByText, queryByText } = render(<InstanceDetail cluster="x" resource={resource} instance={instance} />);
-    expect(getByText("Annotations (1)")).toBeTruthy();
+    expect(getByText("Annotations · 1")).toBeTruthy();
     expect(queryByText("owner=platform")).toBeNull();
-    fireEvent.click(getByText("Annotations (1)"));
+    fireEvent.click(getByText("Annotations · 1"));
     expect(getByText("owner=platform")).toBeTruthy();
   });
 

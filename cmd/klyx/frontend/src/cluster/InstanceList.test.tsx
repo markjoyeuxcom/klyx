@@ -79,9 +79,9 @@ describe("InstanceList", () => {
       }],
     });
     const { getByText } = render(<InstanceList cluster="x" resource={serviceRef} />);
-    expect(getByText("type")).toBeTruthy();
-    expect(getByText("cluster ip")).toBeTruthy();
-    expect(getByText("external ip")).toBeTruthy();
+    expect(getByText(/^type$/i)).toBeTruthy();
+    expect(getByText(/^cluster ip$/i)).toBeTruthy();
+    expect(getByText(/^external ip$/i)).toBeTruthy();
     expect(getByText("LoadBalancer")).toBeTruthy();
     expect(getByText("10.43.12.9")).toBeTruthy();
     expect(getByText("192.0.2.10")).toBeTruthy();
@@ -98,9 +98,9 @@ describe("InstanceList", () => {
       }],
     });
     const { getByText } = render(<InstanceList cluster="x" resource={endpointSliceRef} />);
-    expect(getByText("service")).toBeTruthy();
-    expect(getByText("addr")).toBeTruthy();
-    expect(getByText("ready")).toBeTruthy();
+    expect(getByText(/^service$/i)).toBeTruthy();
+    expect(getByText(/^addr$/i)).toBeTruthy();
+    expect(getByText(/^ready$/i)).toBeTruthy();
     expect(getByText("api")).toBeTruthy();
     expect(getByText("IPv4")).toBeTruthy();
     expect(getByText("2/3")).toBeTruthy();
@@ -178,7 +178,8 @@ describe("InstanceList", () => {
   ] satisfies Array<{ ref: ResourceRef; fields: Record<string, string>; labels: string[]; values: string[] }>)("shows useful list columns for $ref.kind", ({ ref, fields, labels, values }) => {
     seed(ref, { rows: [{ namespace: "apps", name: "sample", created: "", fields: fields as unknown as Record<string, string> }] });
     const { getAllByText } = render(<InstanceList cluster="x" resource={ref} />);
-    labels.forEach((label) => expect(getAllByText(label).length).toBeGreaterThan(0));
+    // headers are title-cased by the lens; match the label case-insensitively
+    labels.forEach((label) => expect(getAllByText(new RegExp(`^${label.replace(/[/]/g, "\\/")}$`, "i")).length).toBeGreaterThan(0));
     values.forEach((value) => expect(getAllByText(value).length).toBeGreaterThan(0));
   });
 

@@ -38,12 +38,18 @@ const FLEET_IDLE: FleetInstanceState = { rows: [], loading: false, errors: [], t
 
 const keyOfRow = (r: { cluster: string; namespace: string; name: string }) => `${r.cluster}/${r.namespace}/${r.name}`;
 
-// floorOf reads a column's minimum from its legacy grid width ("86px" or
-// "minmax(130px, 0.9fr)").
+// floorOf / growOf read a column's minimum and fr weight from its legacy grid
+// width ("86px" or "minmax(130px, 0.9fr)"): proportional columns keep sharing
+// spare width instead of sitting at their floor beside an empty name column.
 function floorOf(width: string): number {
   const m = /(\d+)px/.exec(width);
   return m ? Number(m[1]) : 100;
 }
+function growOf(width: string): number | undefined {
+  const m = /([\d.]+)fr/.exec(width);
+  return m ? Number(m[1]) : undefined;
+}
+const titleCase = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
 export function InstanceList({ cluster, resource }: { cluster: string; resource: ResourceRef }) {
   const instances = useFleet((s) => s.instances);
@@ -246,7 +252,7 @@ export function InstanceList({ cluster, resource }: { cluster: string; resource:
     ...(fleetMode ? [{ id: "cluster", label: "Cluster", width: 120, priority: 1 }] : []),
     ...(namespaced ? [{ id: "namespace", label: "Namespace", width: 140, priority: 1 }] : []),
     { id: "name", label: "Name", width: 240, priority: 0, flex: true },
-    ...extraColumns.map((c, i) => ({ id: `f:${c.key}`, label: c.label, width: floorOf(c.width), priority: 2 + i })),
+    ...extraColumns.map((c, i) => ({ id: `f:${c.key}`, label: titleCase(c.label), width: floorOf(c.width), grow: growOf(c.width), priority: 2 + i })),
     { id: "age", label: "Age", width: 56, priority: 2 + extraColumns.length },
   ], [riskSupported, fleetMode, namespaced, extraColumns]);
   const fitted = useMemo(() => fitColumns(columns, bodyWidth), [columns, bodyWidth]);
@@ -415,8 +421,8 @@ export function columnsFor(resource: ResourceRef): ExtraColumn[] {
   if (resource.group === "" && resource.version === "v1" && resource.plural === "services") {
     return [
       { key: "type", label: "type", width: "86px" },
-      { key: "clusterIP", label: "cluster ip", width: "120px" },
-      { key: "externalIP", label: "external ip", width: "minmax(130px, 0.9fr)" },
+      { key: "clusterIP", label: "cluster IP", width: "120px" },
+      { key: "externalIP", label: "external IP", width: "minmax(130px, 0.9fr)" },
       { key: "ports", label: "ports", width: "minmax(180px, 1.2fr)" },
     ];
   }

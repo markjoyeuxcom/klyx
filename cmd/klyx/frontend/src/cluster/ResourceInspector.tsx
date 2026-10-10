@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useContext, useState } from "react";
+import { InspectorBlock, InspectorTemplate } from "../layout/InspectorLayout";
 import { IconChevronRight } from "@tabler/icons-react";
 import { StatusDot, toneBg, toneBorder, toneColor, type Tone } from "../chrome/primitives";
 import { Age } from "../chrome/Age";
@@ -28,7 +29,11 @@ export function InspectorSection({
   defaultCollapsed?: boolean;
 }) {
   const [collapsed, setCollapsed] = useState(defaultCollapsed);
+  const inTemplate = useContext(InspectorTemplate);
   const label = count === undefined ? title : `${title} (${count})`;
+  if (inTemplate) {
+    return <InspectorBlock title={title} count={count} defaultOpen={!(collapsible && defaultCollapsed)}>{children}</InspectorBlock>;
+  }
 
   if (!collapsible) {
     return (

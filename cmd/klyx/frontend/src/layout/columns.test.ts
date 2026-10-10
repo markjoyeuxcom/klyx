@@ -28,3 +28,14 @@ describe("fitColumns", () => {
     expect(r.minWidth).toBeGreaterThan(100);
   });
 });
+
+describe("fitColumns grow weights (live pass 2026-10-10)", () => {
+  it("a visible column with grow shares spare width; fixed columns stay fixed", () => {
+    const r = fitColumns([
+      { id: "name", width: 240, priority: 0, flex: true },
+      { id: "ports", width: 180, priority: 1, grow: 1.2 },
+      { id: "age", width: 56, priority: 2 },
+    ], 1400);
+    expect(r.template).toBe("minmax(240px, 1fr) minmax(180px, 1.2fr) 56px");
+  });
+});

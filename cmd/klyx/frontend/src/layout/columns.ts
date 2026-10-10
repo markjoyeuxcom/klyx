@@ -11,6 +11,9 @@ export type ColumnDef = {
   /** lower = kept longer; the flex column is always kept */
   priority: number;
   flex?: boolean;
+  /** optional fr weight: a visible column with grow shares spare width with
+   * the flex column instead of sitting at its floor */
+  grow?: number;
 };
 
 export const ROW_PADDING = 16; // 8px each side
@@ -27,6 +30,8 @@ export function fitColumns(cols: readonly ColumnDef[], available: number): { vis
     trial.add(c.id);
     if (total(trial) <= available) keep.add(c.id);
   }
-  const template = cols.filter((c) => keep.has(c.id)).map((c) => (c.flex ? `minmax(${c.width}px, 1fr)` : `${c.width}px`)).join(" ");
+  const template = cols.filter((c) => keep.has(c.id))
+    .map((c) => (c.flex ? `minmax(${c.width}px, 1fr)` : c.grow ? `minmax(${c.width}px, ${c.grow}fr)` : `${c.width}px`))
+    .join(" ");
   return { visible: keep, template, minWidth: total(keep) };
 }

@@ -58,7 +58,7 @@
   box-shadow: var(--bench-well-shadow, inset 0 0 0 1px var(--color-border-tertiary)); }
 
 /* drawer: below the breakpoint the inspector overlays the body */
-.lens-scrim { position: absolute; inset: 0; background: rgba(0, 0, 0, 0.32); z-index: 30; }
+.lens-scrim { position: absolute; inset: 0; background: rgba(0, 0, 0, 0.5); z-index: 30; }
 .lens-drawer { position: absolute; top: 0; right: 0; bottom: 0; z-index: 31; box-shadow: -8px 0 24px rgba(0, 0, 0, 0.35); }
 
 /* table: one coordinated horizontal-scroll surface for header + rows */

@@ -119,7 +119,7 @@ const FLUX_COLUMNS: (ColumnDef & { label: string })[] = [
   { id: "status", label: "Status", width: 200, priority: 1 },
   { id: "source", label: "Source", width: 170, priority: 3 },
   { id: "revision", label: "Revision", width: 130, priority: 4 },
-  { id: "since", label: "Ready since", width: 84, priority: 5 },
+  { id: "since", label: "Since", width: 84, priority: 5 },
 ];
 const SOURCE_COLUMNS: (ColumnDef & { label: string })[] = [
   { id: "lamp", label: "", width: 16, priority: 0 },
@@ -133,11 +133,16 @@ const SOURCE_COLUMNS: (ColumnDef & { label: string })[] = [
 // the template rule (only faults glow): Failed = fault; other not-Ready =
 // degraded; Reconciling or an unobserved spec ("Syncing…") = progressing;
 // Suspended = paused (an outlined ring - intentional, not broken); Ready = ok.
-function fluxHealth(r: { ready: string; suspended: boolean; stale?: boolean }): { kind: string; label: string } {
+function fluxHealth(r: { ready: string; suspended: boolean; stale?: boolean; reason?: string }): { kind: string; label: string } {
   if (r.suspended) return { kind: "paused", label: "Suspended" };
   if (r.stale) return { kind: "progressing", label: "Syncing…" };
   if (r.ready === "Failed") return { kind: "fault", label: "Failed" };
   if (r.ready === "Reconciling") return { kind: "progressing", label: "Reconciling" };
+  if (r.ready === "Unknown") {
+    // Flux reports Ready=Unknown while a reconcile is in flight (reason
+    // Progressing); any other Unknown is unverified, never a fault.
+    return /^(Progressing|ProgressingWithRetry|Reconciling)$/.test(r.reason ?? "") ? { kind: "progressing", label: "Progressing" } : { kind: "unknown", label: "Unknown" };
+  }
   if (r.ready !== "Ready") return { kind: "degraded", label: r.ready || "Not ready" };
   return { kind: "ok", label: "Ready" };
 }
@@ -145,6 +150,7 @@ const STATUS_COLOR: Record<string, string> = {
   fault: "var(--color-text-danger)",
   degraded: "var(--color-text-warning)",
   progressing: "var(--color-text-secondary)",
+  unknown: "var(--color-text-tertiary)",
   paused: "var(--color-text-secondary)",
   ok: "var(--color-text-secondary)",
 };
@@ -650,6 +656,15 @@ function SourceInspector({ source, removed, usedBy, onClose, onOpenResource }: {
   );
 }
 
+// sinceWord: readySinceSeconds is the Ready condition's LAST TRANSITION, so
+// its meaning follows the current state - "ready since" only when Ready.
+function sinceWord(r: FluxResourceDTO): string {
+  if (r.suspended) return "suspended (last state change)";
+  if (r.ready === "Ready") return "ready";
+  if (r.ready === "Failed") return "failing";
+  return "in this state";
+}
+
 // FluxInspector - investigation order: the Flux verdict with the controller's
 // full message; Reconcile (primary), Suspend/Resume (secondary), More (view in
 // Git, manifest); then the bound source (the usual root cause), dependsOn
@@ -718,7 +733,7 @@ function FluxInspector({ cluster, resource, removed, isProtected, detail, deps, 
         meta={
           <>
             {isProtected && <span style={{ color: "var(--color-text-warning)", fontWeight: 600 }}>protected · </span>}
-            {[sourceText(r) ? `source ${sourceText(r)}` : "", r.readySinceSeconds > 0 ? `ready since ${ago(r.readySinceSeconds)}` : ""].filter(Boolean).join(" · ") || "Flux"}
+            {[sourceText(r) ? `source ${sourceText(r)}` : "", r.readySinceSeconds > 0 ? `${sinceWord(r)} since ${ago(r.readySinceSeconds)}` : ""].filter(Boolean).join(" · ") || "Flux"}
           </>
         }
         onClose={onClose}
@@ -898,7 +913,7 @@ function SourceSection({ source }: { source: FluxSourceDTO }) {
             <span style={{ color: "var(--color-text-tertiary)", fontSize: 11, marginLeft: 6, fontFamily: "var(--font-mono)" }}>{shortRev(source.revision)}</span>
           )}
           {source.message && !ready && (
-            <div style={{ color: "var(--color-text-secondary)", fontSize: 11, marginTop: 2, ...ellipsis }} title={source.message}>{source.message}</div>
+            <div style={{ color: "var(--color-text-secondary)", fontSize: 11, marginTop: 2, overflowWrap: "anywhere" }}>{source.message}</div>
           )}
         </div>
       </div>

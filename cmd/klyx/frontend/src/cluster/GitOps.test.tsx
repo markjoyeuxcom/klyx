@@ -613,3 +613,49 @@ describe("GitOps source consumers are namespace-safe (Codex Flux re-review)", ()
     expect(getByText("GitRepository team-a/repo")).toBeTruthy(); // c-explicit, bound across namespaces
   });
 });
+
+describe("GitOps live-pass fixes (2026-10-10)", () => {
+  const seedOne = (r: FluxResourceDTO, detail?: import("../store/fleet").ResourceDetailDTO) =>
+    useFleet.setState((s) => ({ gitops: { ...s.gitops, cluster: "x", resources: [r], sources: [], loading: false, watchError: null,
+      expandedKey: detail ? `${r.kind}/${r.namespace}/${r.name}` : null, detail: detail ?? null, detailCluster: detail ? "x" : null } }));
+
+  it("Ready=Unknown with reason Progressing is progress, not a glowing fault", () => {
+    seedOne(res({ kind: "HelmRelease", name: "podinfo", ready: "Unknown", reason: "Progressing" }));
+    const { getByRole } = render(<GitOps cluster="x" />);
+    expect(getByRole("img", { name: "Progressing" })).toBeTruthy();
+  });
+
+  it("transition time reads 'failing since' on a failed resource, never 'ready since'", () => {
+    const d = { kind: "Kustomization", namespace: "flux-system", name: "flux-system", suspended: false, appliedRevision: "", attemptedRevision: "", applyFailed: false, conditions: [], inventory: [] };
+    seedOne(res({ ready: "Failed", readySinceSeconds: 90, sourceKind: "GitRepository", sourceName: "repo" }), d);
+    render(<GitOps cluster="x" />);
+    expect(inspector().getByText(/failing since 1m ago/)).toBeTruthy();
+    expect(inspector().queryByText(/ready since/)).toBeNull();
+  });
+
+  it("the bound source's root-cause message wraps in full, no ellipsis", () => {
+    const long = "failed to checkout and determine revision: unable to clone 'ssh://git@git.example.com/platform/fleet-infrastructure.git': ssh: handshake failed";
+    const d = { kind: "Kustomization", namespace: "flux-system", name: "flux-system", suspended: false, appliedRevision: "", attemptedRevision: "", applyFailed: false, conditions: [], inventory: [],
+      source: src({ ready: "Failed", reason: "GitOperationFailed", message: long }) };
+    seedOne(res({ ready: "Failed" }), d);
+    render(<GitOps cluster="x" />);
+    const el = inspector().getByText(long);
+    expect(el.style.overflowWrap).toBe("anywhere");
+    expect(el.style.textOverflow).toBe("");
+  });
+
+  it("inside the template, shared sections render with the template's section anatomy", () => {
+    const d = { kind: "Kustomization", namespace: "flux-system", name: "flux-system", suspended: false, appliedRevision: "", attemptedRevision: "", applyFailed: false, conditions: [],
+      inventory: [{ group: "", version: "v1", kind: "ConfigMap", namespace: "ns", name: "cm" }] };
+    seedOne(res({}), d);
+    render(<GitOps cluster="x" />);
+    expect(inspector().getByRole("button", { name: "Inventory · 1" }).getAttribute("aria-expanded")).toBe("true");
+  });
+
+  it("action key hints read as letters", () => {
+    const d = { kind: "Kustomization", namespace: "flux-system", name: "flux-system", suspended: false, appliedRevision: "", attemptedRevision: "", applyFailed: false, conditions: [], inventory: [] };
+    seedOne(res({}), d);
+    render(<GitOps cluster="x" />);
+    expect(inspector().getByRole("button", { name: /^Reconcile/ }).querySelector("kbd")?.textContent).toBe("R");
+  });
+});
