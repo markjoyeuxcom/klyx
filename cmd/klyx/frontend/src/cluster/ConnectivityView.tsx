@@ -29,7 +29,9 @@ export function parsePort(raw: string): number | null {
   return n >= 1 && n <= 65535 ? n : null;
 }
 export function describeQuestion(q: Question): string {
-  return `${q.srcNS}/${q.srcPod} → ${q.dstNS}/${q.dstPod} on ${q.port === 0 ? "any port" : `${q.protocol}/${q.port}`}`;
+  // the protocol is always part of the question: an any-port query asks
+  // whether SOME port of that protocol is admitted both ways
+  return `${q.srcNS}/${q.srcPod} → ${q.dstNS}/${q.dstPod} on ${q.port === 0 ? `any ${q.protocol} port` : `${q.protocol}/${q.port}`}`;
 }
 
 function openPolicy(ns: string, name: string) {

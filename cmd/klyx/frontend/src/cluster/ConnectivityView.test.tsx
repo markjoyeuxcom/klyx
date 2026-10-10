@@ -97,3 +97,20 @@ describe("ConnectivityView (redesign step 5)", () => {
     for (const i of [...document.querySelectorAll("input")]) expect(i.getAttribute("autocapitalize")).toBe("off");
   });
 });
+
+describe("ConnectivityView any-port questions keep their protocol (Codex b67a816e)", () => {
+  beforeEach(() => vi.clearAllMocks());
+  it("TCP and UDP empty-port questions are distinct and keep their own heading after edits", async () => {
+    vi.mocked(canReach).mockResolvedValue(rep());
+    render(<ConnectivityView cluster="x" />);
+    fill("");
+    fireEvent.click(screen.getByRole("button", { name: "Can it reach?" }));
+    expect(await screen.findByText("Can team-a/web-1 → team-b/db-0 on any TCP port?")).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("protocol"), { target: { value: "UDP" } });
+    expect(screen.getByText("Can team-a/web-1 → team-b/db-0 on any TCP port?")).toBeTruthy();
+    expect(screen.getByText(/The form has changed since this answer/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Can it reach?" }));
+    expect(await screen.findByText("Can team-a/web-1 → team-b/db-0 on any UDP port?")).toBeTruthy();
+    expect(vi.mocked(canReach).mock.calls[1][6]).toBe("UDP");
+  });
+});
