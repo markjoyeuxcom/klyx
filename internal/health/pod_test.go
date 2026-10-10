@@ -197,3 +197,12 @@ func TestPodNotesAreHistoryOnly(t *testing.T) {
 		t.Fatalf("untimed termination produced a note: %q", v.Note)
 	}
 }
+
+func TestPodExitMessageCarriesLoopEvidence(t *testing.T) {
+	cs := terminated("worker", "Error", 1)
+	cs.RestartCount = 6
+	v := Pod(newPod(readyCond(corev1.ConditionFalse, t0), container(cs)), t0)
+	if v.Label != "Exited 1" || v.Message != "worker exited 1 (restarted 6 times)" {
+		t.Fatalf("got %q / %q", v.Label, v.Message)
+	}
+}

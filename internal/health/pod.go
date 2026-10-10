@@ -137,7 +137,7 @@ func worstEvidence(p *corev1.Pod, terminalOnly bool) (evidence, bool) {
 			if !ok {
 				r = failureRank["Exited"]
 			}
-			all = append(all, evidence{rank: r, label: label, reason: reason, message: prefix(cs.Name, t.Message), container: cs.Name, init: init})
+			all = append(all, evidence{rank: r, label: label, reason: reason, message: exitMessage(cs, t), container: cs.Name, init: init})
 		}
 	}
 	scan(p.Status.InitContainerStatuses, p.Spec.InitContainers, true)
@@ -274,6 +274,19 @@ func podNative(p *corev1.Pod) string {
 		}
 	}
 	return strings.Join(parts, " · ")
+}
+
+// exitMessage says what a non-zero exit was, with the restart count as the
+// evidence of a loop (the label stays the kubelet's own word).
+func exitMessage(cs corev1.ContainerStatus, t *corev1.ContainerStateTerminated) string {
+	m := fmt.Sprintf("%s exited %d", cs.Name, t.ExitCode)
+	switch {
+	case cs.RestartCount == 1:
+		m += " (restarted once)"
+	case cs.RestartCount > 1:
+		m += fmt.Sprintf(" (restarted %d times)", cs.RestartCount)
+	}
+	return joinNonEmpty(m, t.Message)
 }
 
 func prefix(container, msg string) string {
