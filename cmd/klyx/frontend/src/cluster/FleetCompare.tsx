@@ -30,6 +30,7 @@ export type ColumnDiff = {
   extra: Set<string>;       // containers only here
   revision: boolean;
   otherSpec: boolean;       // pod spec differs beyond images/resources
+  otherUnassessed: boolean; // hashes differ but container differences already explain some of it
   any: boolean;
 };
 
@@ -48,32 +49,46 @@ export function diffAgainst(base: WorkloadCompareDTO, r: WorkloadCompareDTO): Co
   const replicas = r.kind !== "DaemonSet" && base.desiredReplicas !== r.desiredReplicas;
   const revision = !!base.ownerRevision && !!r.ownerRevision && base.ownerRevision !== r.ownerRevision;
   const containersDiffer = images.size + resources.size + missing.length + extra.size > 0;
-  const otherSpec = !!base.specHash && !!r.specHash && base.specHash !== r.specHash && !containersDiffer;
-  return { replicas, images, resources, missing, extra, revision, otherSpec, any: replicas || containersDiffer || revision || otherSpec };
+  const hashesDiffer = !!base.specHash && !!r.specHash && base.specHash !== r.specHash;
+  const otherSpec = hashesDiffer && !containersDiffer;
+  // With an image or resource difference the hash cannot tell whether
+  // anything ELSE differs too - say so rather than imply it does not.
+  const otherUnassessed = hashesDiffer && containersDiffer;
+  return { replicas, images, resources, missing, extra, revision, otherSpec, otherUnassessed, any: replicas || containersDiffer || revision || otherSpec };
 }
 
 type Col = { cluster: string; env: string; region: string; result: WorkloadCompareDTO | null };
+type Member = { name: string; env: string; region: string };
+type Batch = { gen: number; members: Member[] };
+
+const FOCUSABLE = 'button:not([disabled]), input:not([disabled]), select:not([disabled]), [href], [tabindex]:not([tabindex="-1"])';
 
 export function FleetCompare({ origin, kind, namespace, name, onClose }: {
   origin: string; kind: string; namespace: string; name: string; onClose: () => void;
 }) {
-  const clusters = useFleet((s) => s.clusters);
-  const ordered = [...clusters].sort((a, b) => rankOfEnv(a.env) - rankOfEnv(b.env) || a.env.localeCompare(b.env) || a.name.localeCompare(b.name));
+  const liveNames = useFleet((s) => s.clusters.map((c) => c.name).sort().join("\n"));
+  const [batch, setBatch] = useState<Batch>({ gen: 0, members: [] });
   const [results, setResults] = useState<Record<string, WorkloadCompareDTO | null>>({});
   const [readAt, setReadAt] = useState<number | null>(null);
   const gen = useRef(0);
   const titleId = useId();
+  const dialogRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
   useRestoreFocus();
   useEffect(() => { closeRef.current?.focus(); }, []);
 
-  // One read per cluster; every answer is pinned to the request that asked
-  // it, so a Refresh never mixes columns from two reads.
+  // One read = one pinned cluster membership. Every answer belongs to the
+  // batch that asked for it; a cluster that joins or leaves the fleet while
+  // the dialog is open is named, and Refresh starts a new batch with it.
   const read = () => {
     const g = ++gen.current;
+    const members: Member[] = useFleet.getState().clusters
+      .map((c) => ({ name: c.name, env: c.env, region: c.region }))
+      .sort((a, b) => rankOfEnv(a.env) - rankOfEnv(b.env) || a.env.localeCompare(b.env) || a.name.localeCompare(b.name));
+    setBatch({ gen: g, members });
     setResults({});
     setReadAt(null);
-    for (const c of useFleet.getState().clusters) {
+    for (const c of members) {
       void workloadCompare(c.name, kind, namespace, name)
         .catch((e): WorkloadCompareDTO => ({ found: false, kind, namespace, name, desiredReplicas: 0, readyReplicas: 0, containers: [], specHash: "", ownerKind: "", ownerNamespace: "", ownerName: "", ownerRevision: "", error: e instanceof Error ? e.message : "compare call failed" }))
         .then((r) => {
@@ -85,8 +100,13 @@ export function FleetCompare({ origin, kind, namespace, name, onClose }: {
   };
   useEffect(read, [kind, namespace, name]);
 
-  const columns: Col[] = ordered.map((c) => ({ cluster: c.name, env: c.env, region: c.region, result: results[c.name] ?? null }));
-  const base = results[origin] ?? null;
+  const columns: Col[] = batch.members.map((m) => ({ cluster: m.name, env: m.env, region: m.region, result: results[m.name] ?? null }));
+  const readNames = batch.members.map((m) => m.name);
+  const live = liveNames ? liveNames.split("\n") : [];
+  const joined = live.filter((n) => !readNames.includes(n));
+  const left = readNames.filter((n) => !live.includes(n));
+  const originInRead = readNames.includes(origin);
+  const base = originInRead ? results[origin] ?? null : null;
   const baseOk = !!base && !base.error && base.found;
   const settled = columns.filter((c) => c.result !== null);
   const unreadable = settled.filter((c) => c.result!.error).length;
@@ -94,15 +114,29 @@ export function FleetCompare({ origin, kind, namespace, name, onClose }: {
   const differing = baseOk ? settled.filter((c) => c.cluster !== origin && !c.result!.error && c.result!.found && diffAgainst(base!, c.result!).any).length : 0;
   const pending = columns.length - settled.length;
 
-  const originNote = !base ? `Reading ${origin}…`
+  // Modal focus: Tab wraps inside the dialog (Close is always enabled, so
+  // there is always somewhere to land), keys never reach the lens behind.
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    e.stopPropagation();
+    if (e.key === "Escape") { onClose(); return; }
+    if (e.key !== "Tab") return;
+    const f = Array.from(dialogRef.current?.querySelectorAll<HTMLElement>(FOCUSABLE) ?? []);
+    if (f.length === 0) { e.preventDefault(); return; }
+    const first = f[0], last = f[f.length - 1];
+    const active = document.activeElement as HTMLElement | null;
+    if (e.shiftKey && (active === first || !f.includes(active!))) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && (active === last || !f.includes(active!))) { e.preventDefault(); first.focus(); }
+  };
+
+  const originNote = !originInRead ? `Differences are not computed: the origin ${origin} was not in the fleet when this read started.`
+    : !base ? `Reading ${origin}…`
     : base.error ? `Differences are not computed: the origin ${origin} could not be read (${base.error}).`
     : !base.found ? `Differences are not computed: ${kind} ${namespace}/${name} is not deployed on the origin ${origin}.`
     : null;
 
   return (
     <div className="l-dialog-scrim" onClick={onClose}>
-      <div role="dialog" aria-modal="true" aria-labelledby={titleId} className="l-dialog l-dialog-wide" onClick={(e) => e.stopPropagation()}
-        onKeyDown={(e) => { e.stopPropagation(); if (e.key === "Escape") onClose(); }}>
+      <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby={titleId} className="l-dialog l-dialog-wide" onClick={(e) => e.stopPropagation()} onKeyDown={onKeyDown}>
         <div className="l-dialog-head">
           <div style={{ minWidth: 0 }}>
             <h2 id={titleId} className="t-workspace-title">Fleet compare</h2>
@@ -121,6 +155,11 @@ export function FleetCompare({ origin, kind, namespace, name, onClose }: {
           {unreadable > 0 && <span className="t-secondary">{unreadable} unreadable</span>}
           {pending > 0 && <span className="t-secondary">{pending} reading…</span>}
         </div>
+        {(joined.length > 0 || left.length > 0) && (
+          <div className="t-body" role="status" style={{ padding: "0 16px 8px", color: "var(--color-text-secondary)", overflowWrap: "anywhere" }}>
+            Fleet membership changed since this read{joined.length > 0 ? ` - joined: ${joined.join(", ")}` : ""}{left.length > 0 ? ` - left: ${left.join(", ")}` : ""}. Refresh to compare the current fleet.
+          </div>
+        )}
         {originNote && <div className="t-body" role="status" style={{ padding: "0 16px 8px", color: base ? "var(--color-text-warning)" : "var(--color-text-tertiary)", overflowWrap: "anywhere" }}>{originNote}</div>}
 
         <div className="l-dialog-body">
@@ -142,8 +181,8 @@ export function FleetCompare({ origin, kind, namespace, name, onClose }: {
 
 const DIFF = "var(--color-text-warning)";
 
-function Mark({ on }: { on: boolean }) {
-  return on ? <span aria-label="differs from origin" style={{ color: DIFF }}>≠ </span> : null;
+function Mark({ on, neutral = false }: { on: boolean; neutral?: boolean }) {
+  return on ? <span aria-label="differs from origin" style={{ color: neutral ? "var(--color-text-secondary)" : DIFF }}>≠ </span> : null;
 }
 
 function CompareColumn({ col, isOrigin, diff }: { col: Col; isOrigin: boolean; diff: ColumnDiff | null }) {
@@ -165,7 +204,7 @@ function CompareColumn({ col, isOrigin, diff }: { col: Col; isOrigin: boolean; d
           <div className="insp-kv" style={{ gridTemplateColumns: "84px minmax(0, 1fr)" }}>
             <span>{r.kind === "DaemonSet" ? "scheduled" : "replicas"}</span>
             <span>
-              <Mark on={!!diff?.replicas} />{r.readyReplicas}/{r.desiredReplicas} ready
+              <Mark on={!!diff?.replicas} neutral />{r.readyReplicas}/{r.desiredReplicas} ready
               {r.kind === "DaemonSet" && <span className="t-secondary" style={{ display: "block" }}>per node count - not compared</span>}
             </span>
             {r.containers.map((ct) => (
@@ -188,6 +227,7 @@ function CompareColumn({ col, isOrigin, diff }: { col: Col; isOrigin: boolean; d
               {r.ownerKind && !r.ownerRevision && <span className="t-secondary" style={{ display: "block" }}>{r.ownerRevisionNote || "revision not resolved"} - not compared</span>}
             </span>
             {diff?.otherSpec && <><span>pod spec</span><span style={{ color: DIFF }}>≠ differs beyond images and resources (env, volumes, probes…)</span></>}
+            {diff?.otherUnassessed && <><span>pod spec</span><span className="t-secondary">other differences (env, volumes, probes…) not assessed - the images or resources above already differ</span></>}
           </div>
         )}
     </section>

@@ -121,4 +121,103 @@ describe("FleetCompare", () => {
     // Matching columns carry no such flag.
     expect(within(getByTestId("compare-col-stg-we")).queryByText(/differs beyond images/)).toBeNull();
   });
+
+  describe("modal focus (Codex step 6b)", () => {
+    const tab = (shift = false) => fireEvent.keyDown(document.activeElement as HTMLElement, { key: "Tab", shiftKey: shift });
+
+    it("Tab wraps inside the dialog whether Refresh is enabled or disabled; keys never reach the window", async () => {
+      let release: (v: WorkloadCompareDTO) => void = () => {};
+      vi.mocked(workloadCompare).mockImplementation((cluster) => cluster === "prd-we" ? new Promise((r) => { release = r; }) : Promise.resolve(result()));
+      const onWindowKey = vi.fn();
+      window.addEventListener("keydown", onWindowKey);
+      const { getByRole, findByText } = render(<FleetCompare origin="dev-we" kind="Deployment" namespace="shop" name="cart" onClose={() => {}} />);
+      const close = getByRole("button", { name: "close fleet compare" });
+      await findByText("1 reading…");
+      // Refresh disabled: Close is the only stop, both directions stay on it
+      expect(document.activeElement).toBe(close);
+      tab(); expect(document.activeElement).toBe(close);
+      tab(true); expect(document.activeElement).toBe(close);
+      await act(async () => { release(result()); });
+      // Refresh enabled: the wrap points (jsdom does not move focus between
+      // them natively; the browser does)
+      const refresh = getByRole("button", { name: "Refresh" });
+      refresh.focus(); tab(); expect(document.activeElement).toBe(close);
+      tab(true); expect(document.activeElement).toBe(refresh);
+      fireEvent.keyDown(document.activeElement as HTMLElement, { key: "j" });
+      expect(onWindowKey).not.toHaveBeenCalled();
+      window.removeEventListener("keydown", onWindowKey);
+    });
+
+    it("focus returns to the invoker on close", () => {
+      vi.mocked(workloadCompare).mockImplementation(async () => result());
+      const invoker = document.createElement("button"); document.body.appendChild(invoker); invoker.focus();
+      const { unmount } = render(<FleetCompare origin="dev-we" kind="Deployment" namespace="shop" name="cart" onClose={() => {}} />);
+      expect(document.activeElement).not.toBe(invoker);
+      unmount();
+      expect(document.activeElement).toBe(invoker);
+      invoker.remove();
+    });
+  });
+
+  describe("pinned membership (Codex step 6b)", () => {
+    it("a cluster joining mid-read is named, never an endless 'reading'; Refresh reads it and drops the old batch's late replies", async () => {
+      let releaseOld: (v: WorkloadCompareDTO) => void = () => {};
+      let firstPrd = true;
+      vi.mocked(workloadCompare).mockImplementation((cluster) => {
+        if (cluster === "prd-we" && firstPrd) { firstPrd = false; return new Promise((r) => { releaseOld = r; }); }
+        return Promise.resolve(result({ containers: [{ name: "app", image: `${cluster}:img`, resources: "" }] }));
+      });
+      const { getByRole, findByText, queryByTestId, getByTestId, queryByText } = render(<FleetCompare origin="dev-we" kind="Deployment" namespace="shop" name="cart" onClose={() => {}} />);
+      await findByText("1 reading…");
+      act(() => { useFleet.setState({ clusters: [cl("prd-we", "prd"), cl("dev-we", "dev"), cl("stg-we", "stg"), cl("qa-we", "qa")] }); });
+      expect(queryByTestId("compare-col-qa-we")).toBeNull();
+      expect(await findByText(/Fleet membership changed since this read - joined: qa-we/)).toBeTruthy();
+      await act(async () => { releaseOld(result({ containers: [{ name: "app", image: "late:0", resources: "" }] })); });
+      expect(queryByText(/reading…/)).toBeNull();
+      fireEvent.click(getByRole("button", { name: "Refresh" }));
+      expect(await findByText("qa-we:img")).toBeTruthy();
+      expect(within(getByTestId("compare-col-prd-we")).getByText(/prd-we:img/)).toBeTruthy();
+      expect(queryByText(/Fleet membership changed/)).toBeNull();
+    });
+
+    it("a superseded batch's late reply never lands in the new batch", async () => {
+      const pendingOld: ((v: WorkloadCompareDTO) => void)[] = [];
+      let round = 0;
+      vi.mocked(workloadCompare).mockImplementation((cluster) => {
+        if (round === 0 && cluster === "prd-we") return new Promise((r) => { pendingOld.push(r); });
+        return Promise.resolve(result({ containers: [{ name: "app", image: `${cluster}:r${round}`, resources: "" }] }));
+      });
+      const { rerender, findByText, getByTestId } = render(<FleetCompare origin="dev-we" kind="Deployment" namespace="shop" name="cart" onClose={() => {}} />);
+      await findByText("1 reading…");
+      round = 1;
+      rerender(<FleetCompare origin="dev-we" kind="Deployment" namespace="shop" name="cart2" onClose={() => {}} />);
+      expect(await findByText("prd-we:r1")).toBeTruthy();
+      await act(async () => { pendingOld[0](result({ containers: [{ name: "app", image: "stale:r0", resources: "" }] })); });
+      expect(within(getByTestId("compare-col-prd-we")).queryByText(/stale:r0/)).toBeNull();
+    });
+
+    it("a cluster leaving keeps its read column and is named; an origin outside the read is unverified", async () => {
+      vi.mocked(workloadCompare).mockImplementation(async (cluster) => result({ containers: [{ name: "app", image: `${cluster}:img`, resources: "" }] }));
+      const first = render(<FleetCompare origin="dev-we" kind="Deployment" namespace="shop" name="cart" onClose={() => {}} />);
+      await first.findByText("prd-we:img");
+      act(() => { useFleet.setState({ clusters: [cl("dev-we", "dev"), cl("stg-we", "stg")] }); });
+      expect(await first.findByText(/left: prd-we/)).toBeTruthy();
+      expect(first.getByTestId("compare-col-prd-we")).toBeTruthy();
+      first.unmount();
+      const second = render(<FleetCompare origin="gone-we" kind="Deployment" namespace="shop" name="cart" onClose={() => {}} />);
+      expect(await second.findByText(/the origin gone-we was not in the fleet when this read started/)).toBeTruthy();
+      expect(second.queryByText(/Reading gone-we/)).toBeNull();
+    });
+  });
+
+  it("with images already differing, other pod-spec differences are 'not assessed', not implied absent; replicas ≠ is neutral", async () => {
+    vi.mocked(workloadCompare).mockImplementation(async (cluster) =>
+      cluster === "prd-we" ? result({ desiredReplicas: 5, containers: [{ name: "app", image: "x:2", resources: "req 100m/128Mi" }], specHash: "zzzz" }) : result());
+    const { findByText, getByTestId } = render(<FleetCompare origin="dev-we" kind="Deployment" namespace="shop" name="cart" onClose={() => {}} />);
+    await findByText("≠ 1 differs from dev-we");
+    const prd = within(getByTestId("compare-col-prd-we"));
+    expect(prd.getByText(/other differences \(env, volumes, probes…\) not assessed/)).toBeTruthy();
+    const mark = prd.getByText(/5 ready/).querySelector("span[aria-label='differs from origin']") as HTMLElement;
+    expect(mark.style.color).toBe("var(--color-text-secondary)");
+  });
 });
