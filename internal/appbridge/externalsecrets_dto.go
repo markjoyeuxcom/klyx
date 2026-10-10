@@ -22,8 +22,11 @@ type ExternalSecretDTO struct {
 	// RefreshIntervalSeconds is spec.refreshInterval; 0 means refresh disabled.
 	RefreshIntervalSeconds int64 `json:"refreshIntervalSeconds"`
 	// LastRefreshAgeSeconds is now->status.refreshTime, computed server-side
-	// for determinism. 0 when the secret has never synced.
+	// for determinism. 0 both when never synced and when synced under a
+	// second ago - Refreshed is the presence fact that tells them apart.
 	LastRefreshAgeSeconds int64 `json:"lastRefreshAgeSeconds"`
+	// Refreshed: status.refreshTime is set (the secret has synced at least once).
+	Refreshed bool `json:"refreshed"`
 	// Stale: refresh is enabled and the last successful sync is more than 2x
 	// the interval ago - the controller has stopped refreshing even though
 	// Ready may still describe the last good sync.
@@ -49,6 +52,7 @@ func toExternalSecretDTO(e externalsecrets.ExternalSecret, now time.Time) Extern
 			age = 0
 		}
 		dto.LastRefreshAgeSeconds = age
+		dto.Refreshed = true
 	}
 	return dto
 }

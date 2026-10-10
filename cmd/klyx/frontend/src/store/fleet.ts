@@ -264,7 +264,8 @@ export type ExternalSecretDTO = {
   storeName: string;
   targetSecret: string;
   refreshIntervalSeconds: number; // 0 = refresh disabled
-  lastRefreshAgeSeconds: number; // 0 = never synced
+  lastRefreshAgeSeconds: number; // 0 = never synced OR under a second ago - read `refreshed`
+  refreshed?: boolean; // status.refreshTime is set; older payloads omit it (fall back to age > 0)
   stale?: boolean;
 };
 export type ExternalSecretStoreDTO = {

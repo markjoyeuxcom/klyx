@@ -431,3 +431,61 @@ describe("CertsView Unknown issuer is never a diagnosed cause (Codex re-review)"
     expect(insp().getByText(/Issuer failed \(last observed - the issuer watch is failing\): ErrRegister/)).toBeTruthy();
   });
 });
+
+describe("CertsView per-kind dataset + selection lifecycle (Codex c9231c13)", () => {
+  const cov = (over: Record<string, Partial<{ served: boolean; synced: boolean; error: string }>>) =>
+    ["Certificate", "Issuer", "ClusterIssuer"].map((kind) => ({ kind, served: true, synced: true, ...(over[kind] ?? {}) }));
+  const setCov = (c: ReturnType<typeof cov>) => useFleet.setState((s) => ({ certmanager: { ...s.certmanager, coverage: c } }));
+  const emit = (certificates: CertificateDTO[], c: ReturnType<typeof cov>) =>
+    act(() => useFleet.setState((s) => ({ certmanager: { ...s.certmanager, certificates, coverage: c } })));
+  const issuersTab = () => fireEvent.click(screen.getByRole("button", { name: /^Issuers/ }));
+
+  it("an error-free pending Certificate read is loading, never proven empty; auto-select waits for the complete list", () => {
+    setup("Healthy", [], [issuer({})]);
+    setCov(cov({ Certificate: { synced: false } }));
+    render(<CertsView cluster="x" />);
+    expect(screen.queryByText("No Certificates on this cluster.")).toBeNull();
+    emit([cert({ name: "bad", ready: "Failed" })], cov({ Certificate: { synced: false } }));
+    expect(useFleet.getState().certmanager.selectedKey).toBeNull();
+    expect(screen.getByText(/Still reading - this Certificate list is incomplete/)).toBeTruthy();
+    emit([cert({ name: "bad", ready: "Failed" })], cov({}));
+    expect(useFleet.getState().certmanager.selectedKey).toBe("payments/bad");
+  });
+
+  it("one issuer kind pending while the other is loaded: a lower bound, never all-ready", () => {
+    setup("Healthy", [], [issuer({ kind: "Issuer", namespace: "a", name: "ca" })]);
+    setCov(cov({ ClusterIssuer: { synced: false } }));
+    render(<CertsView cluster="x" />);
+    issuersTab();
+    expect(screen.getByText("1+")).toBeTruthy();
+    expect(screen.getByText("issuer list incomplete")).toBeTruthy();
+    expect(screen.queryByText("all issuers ready")).toBeNull();
+  });
+
+  it("after-sync issuer failure with only Ready cached rows is last observed, never an unqualified all-ready", () => {
+    setup("Healthy", [], [issuer({})]);
+    setCov(cov({ ClusterIssuer: { error: "forbidden" } }));
+    render(<CertsView cluster="x" />);
+    issuersTab();
+    expect(screen.getByText("none known not ready (last observed)")).toBeTruthy();
+    expect(screen.queryByText("all issuers ready")).toBeNull();
+  });
+
+  it("a selected object is removed only when its own kind's read is complete", () => {
+    setup("Healthy", [cert({ name: "gone", ready: "Failed" }), cert({ name: "other" })], [issuer({}), issuer({ kind: "Issuer", namespace: "a", name: "ca" })], "payments/gone");
+    setCov(cov({}));
+    render(<CertsView cluster="x" />);
+    emit([cert({ name: "other" })], cov({ Certificate: { synced: false } }));
+    expect(screen.queryByText("Certificate removed.")).toBeNull();
+    emit([cert({ name: "other" })], cov({}));
+    expect(insp().getByText("Certificate removed.")).toBeTruthy();
+
+    issuersTab();
+    fireEvent.click(screen.getAllByText("lab-acme-staging")[0]);
+    // the ClusterIssuer vanishes while ITS kind is pending; the Issuer kind being complete never vouches
+    act(() => useFleet.setState((s) => ({ certmanager: { ...s.certmanager, issuers: [issuer({ kind: "Issuer", namespace: "a", name: "ca" })], coverage: cov({ ClusterIssuer: { synced: false } }) } })));
+    expect(screen.queryByText(/removed\./)).toBeNull();
+    act(() => setCov(cov({})));
+    expect(insp().getByText(/removed\./)).toBeTruthy();
+  });
+});

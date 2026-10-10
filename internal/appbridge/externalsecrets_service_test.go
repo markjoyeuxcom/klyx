@@ -47,8 +47,8 @@ func TestToExternalSecretDTOComputesRefreshAge(t *testing.T) {
 
 func TestToExternalSecretDTONoAgeWhenNeverSynced(t *testing.T) {
 	dto := toExternalSecretDTO(externalsecrets.ExternalSecret{Name: "x", RefreshInterval: time.Hour}, time.Now())
-	if dto.LastRefreshAgeSeconds != 0 {
-		t.Fatalf("want zero refresh age for a never-synced secret: %+v", dto)
+	if dto.LastRefreshAgeSeconds != 0 || dto.Refreshed {
+		t.Fatalf("want zero refresh age and not refreshed for a never-synced secret: %+v", dto)
 	}
 	if dto.Stale {
 		t.Fatalf("want not stale when never synced: %+v", dto)
@@ -112,5 +112,13 @@ func TestExternalSecretsPayloadCarriesPerKindCoverage(t *testing.T) {
 	}, time.Now())
 	if p.WatchError == "" || len(p.Coverage) != 2 || p.Coverage[0].Error != "forbidden" {
 		t.Fatalf("payload coverage: %+v", p)
+	}
+}
+
+func TestToExternalSecretDTOJustRefreshedIsNotNeverSynced(t *testing.T) {
+	now := time.Now()
+	dto := toExternalSecretDTO(externalsecrets.ExternalSecret{Name: "x", RefreshInterval: time.Hour, RefreshTime: now}, now)
+	if dto.LastRefreshAgeSeconds != 0 || !dto.Refreshed {
+		t.Fatalf("a sync under a second ago must read refreshed with age 0: %+v", dto)
 	}
 }

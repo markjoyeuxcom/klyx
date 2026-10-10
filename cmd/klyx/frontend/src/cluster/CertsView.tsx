@@ -20,6 +20,7 @@ import { VerdictLamp } from "../health/VerdictView";
 import { LensLayout, LensTable, TABLE_ROW_HEIGHT, type DatasetState } from "../layout/LensLayout";
 import { InspectorBlock, InspectorLayout, type MenuItem } from "../layout/InspectorLayout";
 import { fitColumns, type ColumnDef } from "../layout/columns";
+import { combineEvidence, joinCoverage, kindEvidence, type JoinCoverage, type KindEvidence } from "../layout/coverage";
 
 const keyOf = (c: { namespace: string; name: string }) => `${c.namespace}/${c.name}`;
 const arrayOf = <T,>(value: T[] | null | undefined): T[] => (Array.isArray(value) ? value : []);
@@ -134,7 +135,6 @@ function Lamp({ role }: { role: { kind: string; label: string } }) {
 }
 const cellStyle: React.CSSProperties = { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 };
 const issuerKey = (i: IssuerDTO) => `${i.kind}/${i.namespace}/${i.name}`;
-type JoinCoverage = "complete" | "stale" | "unknown";
 
 const CERT_COLUMNS: (ColumnDef & { label: string })[] = [
   { id: "lamp", label: "", width: 16, priority: 0 },
@@ -186,20 +186,14 @@ export function CertsView({ cluster }: { cluster: string }) {
   const issuers = useMemo(() => (mine ? cm.issuers : []), [mine, cm.issuers]);
   const watchError = mine ? cm.watchError : null;
   const loaded = mine && !cm.loading;
-  const complete = loaded && !watchError;
-  // Evidence per kind: a synced Certificate watch never vouches for a pending
-  // or forbidden Issuer/ClusterIssuer watch (or the reverse). Older payloads
-  // without coverage fall back to the aggregate state.
-  const kindCov = useCallback((kind: string): JoinCoverage => {
-    if (!loaded) return "unknown";
-    const k = (cm.coverage ?? []).find((x) => x.kind === kind);
-    if (!k) return watchError ? "stale" : "complete";
-    if (!k.served) return "complete"; // not installed: definitively none
-    if (!k.synced) return "unknown";
-    return k.error ? "stale" : "complete";
-  }, [loaded, cm.coverage, watchError]);
-  const certsCov = kindCov("Certificate");
-  const issuerCovOf = useCallback((kind: string) => kindCov(kind), [kindCov]);
+  // Evidence per kind (layout/coverage.ts): every dataset, claim, auto-select
+  // and removal reads ITS OWN kinds - a synced Certificate watch never vouches
+  // for a pending or forbidden Issuer/ClusterIssuer watch, or the reverse.
+  const evidenceOf = useCallback((kind: string): KindEvidence => kindEvidence(loaded, cm.coverage, kind, watchError), [loaded, cm.coverage, watchError]);
+  const issuerCovOf = useCallback((kind: string): JoinCoverage => joinCoverage(evidenceOf(kind)), [evidenceOf]);
+  const certsEv = evidenceOf("Certificate");
+  const issuersEv = combineEvidence([evidenceOf("Issuer"), evidenceOf("ClusterIssuer")]);
+  const certsCov = joinCoverage(certsEv);
 
   // Re-read the chain when the selection changes (and on demand).
   const selKey = mine ? cm.selectedKey : null;
@@ -245,7 +239,7 @@ export function CertsView({ cluster }: { cluster: string }) {
   const selectedCert = selKey ? certs.find((c) => keyOf(c) === selKey) : undefined;
   const lastCert = useRef<CertificateDTO | null>(null);
   if (selectedCert) lastCert.current = selectedCert;
-  const certRemoved = !!selKey && complete && !selectedCert;
+  const certRemoved = !!selKey && certsEv === "complete" && !selectedCert;
   const liveChain = mine && cm.chain && cm.chainCluster === cluster && keyOf(cm.chain.certificate) === selKey ? cm.chain : null;
   const lastChain = useRef<{ key: string; chain: CertChainDTO } | null>(null);
   if (liveChain && selKey) lastChain.current = { key: `${cluster}/${selKey}`, chain: liveChain };
@@ -253,7 +247,8 @@ export function CertsView({ cluster }: { cluster: string }) {
   const selectedIssuer = issuerSel ? issuers.find((i) => issuerKey(i) === issuerSel) : undefined;
   const lastIssuer = useRef<IssuerDTO | null>(null);
   if (selectedIssuer) lastIssuer.current = selectedIssuer;
-  const issuerRemoved = !!issuerSel && complete && !selectedIssuer;
+  // an issuer is removed only when ITS kind's read is complete
+  const issuerRemoved = !!issuerSel && !selectedIssuer && evidenceOf(issuerSel.split("/")[0]) === "complete";
   useEffect(() => { if (selectedCert && view === "certificates" && !visibleCerts.includes(selectedCert)) selectCert(null); }, [selectedCert, visibleCerts, view, selectCert]);
   useEffect(() => { if (selectedIssuer && view === "issuers" && !visibleIssuers.includes(selectedIssuer)) setIssuerSel(null); }, [selectedIssuer, visibleIssuers, view]);
   const enteredCluster = useRef(cluster);
@@ -269,7 +264,8 @@ export function CertsView({ cluster }: { cluster: string }) {
   const autoSelect = useRef<"pending" | "done">("pending");
   const entryCerts = useRef<CertificateDTO[] | null>(null);
   if (entryCerts.current === null) entryCerts.current = cm.certificates;
-  const freshRead = complete && cm.certificates !== entryCerts.current;
+  // auto-select waits for the Certificate kind's first complete list
+  const freshRead = certsEv === "complete" && cm.certificates !== entryCerts.current;
   useEffect(() => {
     if (autoSelect.current === "done" || !freshRead || view !== "certificates") return;
     autoSelect.current = "done";
@@ -308,10 +304,11 @@ export function CertsView({ cluster }: { cluster: string }) {
   const clearFilters = () => { setStatus("all"); setQuery(""); setNamespace(""); };
   const total = view === "issuers" ? issuers.length : certs.length;
   const shown = view === "issuers" ? visibleIssuers.length : visibleCerts.length;
+  const viewEv = view === "issuers" ? issuersEv : certsEv;
   let state: DatasetState = "ready";
   if (absent) state = "empty";
-  else if (!loaded && total === 0) state = "loading";
-  else if (watchError && total === 0) state = "unreadable";
+  else if (viewEv === "failed" && total === 0) state = "unreadable";
+  else if (viewEv === "pending" && total === 0) state = "loading";
   else if (total === 0) state = "empty";
   else if (shown === 0) state = "no-match";
   const noun = view === "issuers" ? "issuers" : "certificates";
@@ -321,7 +318,8 @@ export function CertsView({ cluster }: { cluster: string }) {
       ? <EmptyState icon={<IconCertificate size={28} stroke={1.2} />} title="cert-manager is not installed on this cluster." hint="Klyx detected no cert-manager.io resources here." />
       : <EmptyState icon={<IconCertificate size={28} stroke={1.2} />} title={view === "issuers" ? "No issuers on this cluster." : "No Certificates on this cluster."} hint={view === "issuers" ? undefined : "cert-manager is installed but no Certificate objects exist yet."} />)
     : <EmptyState icon={<IconCertificate size={28} stroke={1.2} />} title={`No ${noun} match the current filters.`} hint={`${total} ${noun} on this cluster.`} action={{ label: "Clear filters", onClick: clearFilters }} />;
-  const partial = watchError ? "+" : "";
+  // not complete = a lower bound; never an unqualified claim
+  const partial = viewEv === "complete" ? "" : "+";
 
   return (
     <LensLayout
@@ -330,14 +328,15 @@ export function CertsView({ cluster }: { cluster: string }) {
       summary={state === "loading" || state === "unreadable" || absent ? null : view === "issuers" ? (
         <>
           <span className="t-number" style={{ color: "var(--color-text-secondary)" }}>{issuers.length}{partial}</span>
-          {issuersNotReady > 0 ? <span className="t-status" style={{ color: "var(--color-text-warning)" }}>{issuersNotReady} not ready</span> : <span className="t-secondary">all issuers ready</span>}
+          {issuersNotReady > 0 ? <span className="t-status" style={{ color: "var(--color-text-warning)" }}>{issuersNotReady} not ready</span>
+            : <span className="t-secondary">{issuersEv === "complete" ? "all issuers ready" : issuersEv === "stale" ? "none known not ready (last observed)" : "issuer list incomplete"}</span>}
         </>
       ) : (
         <>
           <span className="t-number" style={{ color: "var(--color-text-secondary)" }}>{certs.length}{partial}</span>
           {attention > 0
             ? <span className="t-status" style={{ color: failedOrExpired > 0 ? "var(--color-text-danger)" : "var(--color-text-warning)" }}>{failedOrExpired > 0 ? "▲ " : ""}{attention} not ready or expired</span>
-            : <span className="t-secondary">{watchError ? "none known not ready" : "all ready"}</span>}
+            : <span className="t-secondary">{certsEv === "complete" ? "all ready" : certsEv === "stale" ? "none known not ready (last observed)" : "Certificate list incomplete"}</span>}
           <span className="t-secondary">{[failedOrExpired ? `${failedOrExpired} failed or expired` : "", issuing ? `${issuing} issuing` : "", renewing ? `${renewing} in renewal window` : "", issuerProblems ? `${issuerProblems} with issuer problem` : ""].filter(Boolean).join(" · ")}</span>
         </>
       )}
@@ -371,7 +370,9 @@ export function CertsView({ cluster }: { cluster: string }) {
           </label>
         </>
       )}
-      notice={watchError && total > 0 ? <WatchErrorBanner tool="cert-manager" failure="watch failed - showing the last good state" error={watchError} /> : undefined}
+      notice={watchError && total > 0 ? <WatchErrorBanner tool="cert-manager" failure="watch failed - showing the last good state" error={watchError} />
+        : viewEv === "pending" && total > 0 ? <div role="status" className="t-secondary" style={{ minHeight: 28, display: "flex", alignItems: "center" }}>Still reading - this {view === "issuers" ? "issuer" : "Certificate"} list is incomplete.</div>
+        : undefined}
       state={state}
       stateView={stateView}
       body={

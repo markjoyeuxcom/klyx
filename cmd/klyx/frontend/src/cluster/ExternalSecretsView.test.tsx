@@ -219,3 +219,81 @@ describe("ExternalSecretsView workspace template + coverage (redesign step 4d)",
     expect(insp().queryByText("b/in-b")).toBeNull();
   });
 });
+
+describe("ExternalSecretsView per-kind dataset + selection lifecycle (Codex c9231c13)", () => {
+  const cov = (over: Record<string, Partial<{ served: boolean; synced: boolean; error: string }>>) =>
+    ["ExternalSecret", "SecretStore", "ClusterSecretStore"].map((kind) => ({ kind, served: true, synced: true, ...(over[kind] ?? {}) }));
+  const setCov = (c: ReturnType<typeof cov>) => useFleet.setState((s) => ({ externalsecrets: { ...s.externalsecrets, coverage: c } }));
+  const emit = (secrets: ExternalSecretDTO[], c: ReturnType<typeof cov>) =>
+    act(() => useFleet.setState((s) => ({ externalsecrets: { ...s.externalsecrets, secrets, coverage: c } })));
+
+  it("an error-free pending ExternalSecret read is loading, never proven empty; auto-select waits for the complete list", () => {
+    setup("Healthy", [], [store({})]);
+    setCov(cov({ ExternalSecret: { synced: false } }));
+    render(<ExternalSecretsView cluster="x" />);
+    expect(screen.queryByText("No ExternalSecrets on this cluster.")).toBeNull();
+    emit([secret({ name: "bad", state: "Failed" })], cov({ ExternalSecret: { synced: false } }));
+    expect(useFleet.getState().externalsecrets.selectedKey).toBeNull();
+    expect(screen.getByText(/Still reading - this ExternalSecret list is incomplete/)).toBeTruthy();
+    emit([secret({ name: "bad", state: "Failed" })], cov({}));
+    expect(useFleet.getState().externalsecrets.selectedKey).toBe("payments/bad");
+  });
+
+  it("one store kind pending while the other is loaded: a lower bound, never all-ready", () => {
+    setup("Healthy", [], [store({ kind: "SecretStore", namespace: "a", name: "vault" })]);
+    setCov(cov({ ClusterSecretStore: { synced: false } }));
+    const { getByRole } = render(<ExternalSecretsView cluster="x" />);
+    fireEvent.click(getByRole("button", { name: /^Stores/ }));
+    expect(screen.getByText("1+")).toBeTruthy();
+    expect(screen.getByText("store list incomplete")).toBeTruthy();
+    expect(screen.queryByText("all stores ready")).toBeNull();
+  });
+
+  it("after-sync store failure with only Ready cached rows is last observed, never an unqualified all-ready", () => {
+    setup("Healthy", [], [store({})], null, "clustersecretstores forbidden");
+    setCov(cov({ ClusterSecretStore: { error: "forbidden" } }));
+    const { getByRole } = render(<ExternalSecretsView cluster="x" />);
+    fireEvent.click(getByRole("button", { name: /^Stores/ }));
+    expect(screen.getByText("none known not ready (last observed)")).toBeTruthy();
+    expect(screen.queryByText("all stores ready")).toBeNull();
+  });
+
+  it("a failing ExternalSecret watch does not invalidate a complete store catalogue", () => {
+    setup("Healthy", [], [store({})], null, "externalsecrets forbidden");
+    setCov(cov({ ExternalSecret: { synced: false, error: "forbidden" } }));
+    const { getByRole } = render(<ExternalSecretsView cluster="x" />);
+    fireEvent.click(getByRole("button", { name: /^Stores/ }));
+    expect(screen.getByText("all stores ready")).toBeTruthy();
+  });
+
+  it("a selected object is removed only when its own kind's read is complete", () => {
+    setup("Healthy", [secret({ name: "gone", state: "Failed" }), secret({ name: "other" })], [store({}), store({ kind: "SecretStore", namespace: "a", name: "vault" })], "payments/gone");
+    setCov(cov({}));
+    const { getByRole } = render(<ExternalSecretsView cluster="x" />);
+    emit([secret({ name: "other" })], cov({ ExternalSecret: { synced: false } }));
+    expect(screen.queryByText("ExternalSecret removed.")).toBeNull();
+    emit([secret({ name: "other" })], cov({}));
+    expect(insp().getByText("ExternalSecret removed.")).toBeTruthy();
+
+    fireEvent.click(getByRole("button", { name: /^Stores/ }));
+    fireEvent.click(screen.getAllByText("azure-kv")[0]);
+    // the ClusterSecretStore vanishes while ITS kind is pending; the SecretStore kind being complete never vouches
+    act(() => useFleet.setState((s) => ({ externalsecrets: { ...s.externalsecrets, stores: [store({ kind: "SecretStore", namespace: "a", name: "vault" })], coverage: cov({ ClusterSecretStore: { synced: false } }) } })));
+    expect(screen.queryByText(/removed\./)).toBeNull();
+    act(() => setCov(cov({})));
+    expect(insp().getByText(/removed\./)).toBeTruthy();
+  });
+});
+
+describe("ExternalSecretsView refresh presence (Codex optional follow-up)", () => {
+  it("a sync under a second ago is not 'never synced'; an absent refreshTime is", () => {
+    setup("Healthy", [secret({ name: "fresh", lastRefreshAgeSeconds: 0, refreshed: true })], [store({})], "payments/fresh");
+    const first = render(<ExternalSecretsView cluster="x" />);
+    expect(insp().getByText("0s ago")).toBeTruthy();
+    expect(insp().queryByText("never synced")).toBeNull();
+    first.unmount();
+    setup("Healthy", [secret({ name: "never", state: "Failed", lastRefreshAgeSeconds: 0, refreshed: false })], [store({})], "payments/never");
+    render(<ExternalSecretsView cluster="x" />);
+    expect(insp().getByText("never synced")).toBeTruthy();
+  });
+});
