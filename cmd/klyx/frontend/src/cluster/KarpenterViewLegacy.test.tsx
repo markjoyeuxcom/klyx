@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render } from "@testing-library/react";
 import type { KarpenterSnapshotDTO } from "../store/fleet";
-import { KarpenterView } from "./KarpenterView";
+import { KarpenterViewLegacy as KarpenterView } from "./KarpenterViewLegacy";
 
 vi.mock("../bridge/karpenter", () => ({
   getKarpenterState: vi.fn(async () => ({}) as KarpenterSnapshotDTO),

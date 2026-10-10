@@ -90,7 +90,9 @@ function ClaimRow({ c }: { c: KarpenterClaimDTO }) {
   );
 }
 
-export function KarpenterView({ cluster }: { cluster: string }) {
+// KarpenterViewLegacy - the pre-redesign Karpenter lens, kept behind
+// klyx.layout.v1.legacyKarpenter=1 until the migrated lens is accepted.
+export function KarpenterViewLegacy({ cluster }: { cluster: string }) {
   const [snap, setSnap] = useState<KarpenterSnapshotDTO | null>(null);
 
   const fetchState = async () => {
