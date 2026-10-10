@@ -92,6 +92,33 @@
   .pods-grid .col-restarts, .pods-grid .col-age, .pods-grid .col-node { display: none; }
 }
 
+/* ---- canvas-detail ------------------------------------------------------ */
+/* A canvas body scrolls both ways inside the well; nodes never clip text they
+ * cannot show - names ellipsize with the full value in the inspector. */
+.lens-canvas { flex: 1; min-height: 0; overflow: auto; padding: 12px; display: flex; flex-direction: column; gap: 12px; }
+
+/* Gateway topology */
+.gw-crumb { border: 0; background: none; padding: 0; cursor: pointer; font: inherit; color: var(--color-text-info); }
+.gw-crumb:hover { text-decoration: underline; }
+.gw-node { min-width: 0; display: flex; flex-direction: column; gap: 3px; padding: 8px 10px; border-radius: 4px; text-align: left;
+  background: var(--color-background-primary); box-shadow: inset 0 0 0 1px var(--color-border-tertiary); color: var(--color-text-primary); }
+.gw-gateway { gap: 6px; }
+.gw-facts { display: grid; grid-template-columns: 104px minmax(0, 1fr); gap: 3px 12px; font: 400 12px/16px var(--font-mono); }
+.gw-facts > :nth-child(odd) { color: var(--color-text-tertiary); }
+.gw-facts > :nth-child(even) { min-width: 0; overflow-wrap: anywhere; }
+.gw-lane { display: grid; grid-template-columns: minmax(220px, 1.25fr) 14px minmax(160px, 1fr) 14px minmax(150px, 0.8fr); align-items: stretch; min-width: 616px; }
+.gw-edge { display: flex; align-items: center; justify-content: center; color: var(--color-text-tertiary); }
+.gw-route { border: 0; cursor: pointer; font: inherit; }
+.gw-route:hover { background: var(--color-background-secondary); }
+.gw-route[data-selected="true"] { background: var(--bench-selection-bg, var(--color-background-secondary)); box-shadow: inset 0 0 0 1px var(--color-text-info); }
+.gw-route:focus-visible { outline: none; box-shadow: inset 0 0 0 2px var(--color-text-info); }
+.gw-lane[data-role="fault"] .gw-route { box-shadow: inset 2px 0 0 var(--color-text-danger), inset 0 0 0 1px var(--color-border-tertiary); }
+.gw-lane[data-role="fault"] .gw-route[data-selected="true"] { box-shadow: inset 2px 0 0 var(--color-text-danger), inset 0 0 0 1px var(--color-text-info); }
+.gw-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gw-line { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; line-height: 16px; }
+.gw-policy { font: 400 10px/16px var(--font-mono); padding: 0 5px; border-radius: 3px; color: var(--color-text-secondary);
+  box-shadow: inset 0 0 0 1px var(--color-border-tertiary); white-space: nowrap; max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
+
 /* ---- InspectorLayout ---------------------------------------------------- */
 .insp-identity { flex-shrink: 0; min-height: 56px; display: flex; align-items: flex-start; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--color-border-tertiary); }
 .insp-identity-text { flex: 1; min-width: 0; }

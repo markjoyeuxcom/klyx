@@ -15,6 +15,7 @@ import { BuiltinsView } from "./BuiltinsView";
 import { InstanceList } from "./InstanceList";
 import { InstanceListLegacy } from "./InstanceListLegacy";
 import { GatewayApiView } from "./GatewayApiView";
+import { GatewayApiViewLegacy } from "./GatewayApiViewLegacy";
 import { WorkloadsView } from "./WorkloadsView";
 import { WorkloadsViewLegacy } from "./WorkloadsViewLegacy";
 import { PodsView } from "./PodsView";
@@ -24,7 +25,7 @@ import { PodsViewLegacy } from "./PodsViewLegacy";
 // localStorage "klyx.layout.v1.legacy<Lens>" = "1" (Pods, Nodes, Workloads)
 // falls back to that lens's old implementation as a whole - never a mix of
 // layout owners. Each is removed once its migration is accepted.
-function legacyLens(lens: "Pods" | "Nodes" | "Workloads" | "Resources" | "Flux" | "Argo" | "Certs" | "Eso" | "Helm" | "Events" | "Access" | "Upgrade" | "Connectivity" | "Karpenter"): boolean {
+function legacyLens(lens: "Pods" | "Nodes" | "Workloads" | "Resources" | "Flux" | "Argo" | "Certs" | "Eso" | "Helm" | "Events" | "Access" | "Upgrade" | "Connectivity" | "Karpenter" | "Gateway"): boolean {
   try { return localStorage.getItem(`klyx.layout.v1.legacy${lens}`) === "1"; } catch { return false; }
 }
 import { EventsView } from "./EventsView";
@@ -73,7 +74,7 @@ export function ClusterDetail() {
     if (route.resource) return legacyLens("Resources") ? <InstanceListLegacy cluster={cluster.name} resource={route.resource} /> : <InstanceList cluster={cluster.name} resource={route.resource} />;
     return <CRDBrowser cluster={cluster.name} />;
   }
-  if (route.section === "gatewayApi") return <GatewayApiView cluster={cluster.name} />;
+  if (route.section === "gatewayApi") return legacyLens("Gateway") ? <GatewayApiViewLegacy cluster={cluster.name} /> : <GatewayApiView cluster={cluster.name} />;
   if (route.section === "workloads") return legacyLens("Workloads") ? <WorkloadsViewLegacy cluster={cluster.name} /> : <WorkloadsView cluster={cluster.name} />;
   if (route.section === "pods") return legacyLens("Pods") ? <PodsViewLegacy cluster={cluster.name} /> : <PodsView cluster={cluster.name} />;
   if (route.section === "events") return legacyLens("Events") ? <EventsViewLegacy cluster={cluster.name} /> : <EventsView cluster={cluster.name} />;

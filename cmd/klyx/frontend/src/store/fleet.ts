@@ -616,6 +616,8 @@ export type NetworkSlice = {
   selected: GatewayRef | null;
   topology: TopologyDTO | null;
   topologyLoading: boolean;
+  topologyError?: string | null; // the last topology read failed (rendered, never blank)
+  topologyAt?: number | null;    // when the shown topology was received (ms)
   selectedRoute: string | null; // "<ns>/<name>"
   routeMetrics: Record<string, RouteMetricDTO>;
   routeMetricsStatus: RouteMetricsStatusDTO | null;
@@ -888,6 +890,7 @@ type FleetState = {
   setGateways: (cluster: string, l: GatewayListDTO) => void;
   setTopologyLoading: (cluster: string, ref: GatewayRef) => void;
   setTopology: (t: TopologyDTO) => void;
+  setTopologyError: (error: string) => void;
   selectRoute: (key: string | null) => void;
   clearNetwork: () => void;
   setRouteMetrics: (result: RouteMetricsResultDTO) => void;
@@ -1110,9 +1113,16 @@ export const useFleet = create<FleetState>((set) => ({
       // Crossing clusters (palette jump straight to a topology): drop the
       // previous cluster's gateway list along with stamping the new owner.
       const base = s.network.cluster === s.route.cluster ? s.network : { ...s.network, cluster: s.route.cluster, served: false, gateways: [], listLoading: false, listError: null };
+      const route = { name: "cluster" as const, cluster: s.route.cluster, section: "gatewayApi" as const, gateway: { namespace, name } };
+      // Re-opening the gateway already shown keeps its topology: the view's
+      // fetch is keyed on the gateway identity and would not re-run, leaving
+      // a blanked topology loading forever.
+      if (base === s.network && s.network.selected?.namespace === namespace && s.network.selected?.name === name) {
+        return { route, network: { ...s.network, selectedRoute: null } };
+      }
       return {
-        route: { name: "cluster", cluster: s.route.cluster, section: "gatewayApi", gateway: { namespace, name } },
-        network: { ...base, selected: { namespace, name }, topology: null, topologyLoading: true, selectedRoute: null, routeMetrics: {}, routeMetricsStatus: null, routeMetricsStale: false },
+        route,
+        network: { ...base, selected: { namespace, name }, topology: null, topologyLoading: true, topologyError: null, topologyAt: null, selectedRoute: null, routeMetrics: {}, routeMetricsStatus: null, routeMetricsStale: false },
       };
     }),
   closeGateway: () =>
@@ -1129,12 +1139,18 @@ export const useFleet = create<FleetState>((set) => ({
     return { network: { ...s.network, served: l.gatewayAPIServed, gateways: l.gateways ?? [], listLoading: false, listError: l.error || null } };
   }),
   setTopologyLoading: (cluster, ref) => set((s) => {
+    // A refresh of the gateway already shown keeps its topology, selection
+    // and metrics until the new read lands (or fails, marked as last good).
+    if (s.network.cluster === cluster && s.network.selected?.namespace === ref.namespace && s.network.selected?.name === ref.name) {
+      return { network: { ...s.network, topologyLoading: true } };
+    }
     const base = s.network.cluster === cluster ? s.network : { ...s.network, cluster, served: false, gateways: [], listLoading: false, listError: null };
-    return { network: { ...base, selected: ref, topology: null, topologyLoading: true, selectedRoute: null, routeMetrics: {}, routeMetricsStatus: null, routeMetricsStale: false } };
+    return { network: { ...base, selected: ref, topology: null, topologyLoading: true, topologyError: null, topologyAt: null, selectedRoute: null, routeMetrics: {}, routeMetricsStatus: null, routeMetricsStale: false } };
   }),
-  setTopology: (topology) => set((s) => ({ network: { ...s.network, topology, topologyLoading: false } })),
+  setTopology: (topology) => set((s) => ({ network: { ...s.network, topology, topologyLoading: false, topologyError: null, topologyAt: Date.now() } })),
+  setTopologyError: (error) => set((s) => ({ network: { ...s.network, topologyLoading: false, topologyError: error } })),
   selectRoute: (selectedRoute) => set((s) => ({ network: { ...s.network, selectedRoute } })),
-  clearNetwork: () => set((s) => ({ network: { ...s.network, selected: null, topology: null, topologyLoading: false, selectedRoute: null, routeMetrics: {}, routeMetricsStatus: null, routeMetricsStale: false } })),
+  clearNetwork: () => set((s) => ({ network: { ...s.network, selected: null, topology: null, topologyLoading: false, topologyError: null, topologyAt: null, selectedRoute: null, routeMetrics: {}, routeMetricsStatus: null, routeMetricsStale: false } })),
   setRouteMetrics: (result) =>
     set((s) => {
       if (result.status.available) {

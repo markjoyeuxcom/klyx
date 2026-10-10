@@ -18,7 +18,8 @@ export const INSPECTOR_WIDTH_KEY = "klyx.layout.v1.inspectorWidth";
 export const INSPECTOR_DEFAULT = 400;
 export const INSPECTOR_MIN = 360;
 export const INSPECTOR_MAX = 560;
-const BODY_MIN = 600;
+const BODY_MIN = 600;        // table-detail
+const CANVAS_BODY_MIN = 640; // canvas-detail: a graph needs more room before it yields to the inspector
 const DRAWER_BREAKPOINT = 1040; // workspace inner width
 const SPLIT_GAP = 8;
 const KEY_STEP = 16;
@@ -36,16 +37,17 @@ function writeRequestedWidth(n: number) {
 }
 
 /** splitGeometry decides split vs drawer and the effective inspector width. */
-export function splitGeometry(innerWidth: number, requested: number): { mode: "split" | "drawer"; width: number } {
+export function splitGeometry(innerWidth: number, requested: number, bodyMin = BODY_MIN): { mode: "split" | "drawer"; width: number } {
   if (innerWidth < DRAWER_BREAKPOINT) {
     return { mode: "drawer", width: Math.min(INSPECTOR_MAX, Math.max(INSPECTOR_MIN, requested), innerWidth) };
   }
-  const max = Math.min(INSPECTOR_MAX, innerWidth - BODY_MIN - SPLIT_GAP);
+  const max = Math.min(INSPECTOR_MAX, innerWidth - bodyMin - SPLIT_GAP);
   if (max < INSPECTOR_MIN) return { mode: "drawer", width: Math.min(requested, innerWidth) };
   return { mode: "split", width: Math.max(INSPECTOR_MIN, Math.min(requested, max)) };
 }
 
 export function LensLayout({
+  variant = "table",
   label,
   title,
   summary,
@@ -61,6 +63,7 @@ export function LensLayout({
   inspectorLabel,
   onCloseInspector,
 }: {
+  variant?: "table" | "canvas"; // table-detail (default) or canvas-detail
   label: string;               // landmark name, e.g. "Pods"
   title: ReactNode;
   summary?: ReactNode;         // total + attention, entity-scoped
@@ -92,7 +95,7 @@ export function LensLayout({
     return () => ro.disconnect();
   }, []);
 
-  const geo = splitGeometry(innerWidth, requested);
+  const geo = splitGeometry(innerWidth, requested, variant === "canvas" ? CANVAS_BODY_MIN : BODY_MIN);
   const commit = useCallback((n: number) => {
     const v = Math.max(INSPECTOR_MIN, Math.min(INSPECTOR_MAX, Math.round(n)));
     setRequested(v);
@@ -172,7 +175,7 @@ export function LensLayout({
   ) : null;
 
   return (
-    <div ref={rootRef} className="lens" data-mode={geo.mode} data-testid="lens-layout" style={{ "--table-row-height": `${TABLE_ROW_HEIGHT}px` } as React.CSSProperties}>
+    <div ref={rootRef} className="lens" data-mode={geo.mode} data-variant={variant} data-testid="lens-layout" style={{ "--table-row-height": `${TABLE_ROW_HEIGHT}px` } as React.CSSProperties}>
       <section ref={mainRef} aria-label={label} className="lens-main">
         <div className="lens-header">
           <h1 className="t-workspace-title">{title}</h1>

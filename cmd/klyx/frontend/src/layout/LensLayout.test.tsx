@@ -3,6 +3,11 @@ import { act, fireEvent, render } from "@testing-library/react";
 import { LensLayout, splitGeometry, INSPECTOR_DEFAULT, INSPECTOR_MAX, INSPECTOR_MIN } from "./LensLayout";
 
 describe("splitGeometry (spec §2 split and drawer)", () => {
+  it("canvas-detail keeps 640px for the graph before the inspector yields", () => {
+    expect(splitGeometry(1040, 400)).toEqual({ mode: "split", width: 400 });
+    expect(splitGeometry(1040, 400, 640)).toEqual({ mode: "split", width: 392 });
+  });
+
   it("drawer below a 1040px inner width, split at and above it", () => {
     expect(splitGeometry(1039, 400).mode).toBe("drawer");
     expect(splitGeometry(1040, 400).mode).toBe("split");
