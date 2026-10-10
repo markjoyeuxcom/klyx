@@ -20,27 +20,17 @@ import { useResizableDock } from "../chrome/useResizableDock";
 import { useListKeys } from "../chrome/useListKeys";
 import { useNavIntent } from "../chrome/useNavIntent";
 import { FKeysBar } from "../chrome/FKeysBar";
-import { inputWell, selectWell, FilterButton, MetersStrip, well, EmptyState, LiveIndicator, SkeletonRows, btn, ellipsis, type Tone } from "../chrome/primitives";
+import { inputWell, selectWell, FilterButton, MetersStrip, well, EmptyState, LiveIndicator, SkeletonRows, btn, ellipsis } from "../chrome/primitives";
 import { CopyButton } from "../chrome/CopyButton";
 import { ManifestButton } from "./ManifestButton";
 import { ScratchPanel } from "./ScratchPanel";
 import { YamlBlock } from "../chrome/YamlBlock";
-import { InspectorFacts, InspectorIdle, InspectorConditions, InspectorEvents, InspectorSection, InspectorStatus, InspectorTabButton, Kbd, MetadataChips, inspectorStateBox } from "./ResourceInspector";
+import { InspectorFacts, InspectorIdle, InspectorConditions, InspectorEvents, InspectorSection, InspectorTabButton, Kbd, MetadataChips, inspectorStateBox } from "./ResourceInspector";
 import { loadClusterPrefs, loadSearch, savePodsViewPrefs, saveSearch } from "../store/persist";
 import { WatchErrorBanner } from "../chrome/WatchErrorBanner";
 
-const rankDot: Record<string, string> = {
-  unhealthy: "var(--color-text-danger)",
-  degraded: "var(--color-text-warning)",
-  restarts: "var(--color-text-info)",
-  healthy: "var(--color-text-tertiary)",
-};
-const rankTone: Record<string, Tone> = {
-  unhealthy: "danger",
-  degraded: "warning",
-  restarts: "info",
-  healthy: "success",
-};
+import { VerdictLabel, VerdictLamp, VerdictStatus } from "../health/VerdictView";
+import { attentionTone, coverageOf, isAttention, kindOf, labelOf, summarize } from "../health/verdict";
 
 // readyOf renders the panel's "N/M ready" from non-init containers.
 function readyOf(p: PodSummaryDTO): string {
@@ -76,6 +66,8 @@ export function PodsView({ cluster }: { cluster: string }) {
   const isProtected = useFleet((s) => s.clusters.find((c) => c.name === cluster)?.protected ?? false);
 
   const [selectedIdx, setSelectedIdx] = useState(-1);
+  // "unknown" filter: offered only while some pod's health cannot be told.
+  const [unknownOnly, setUnknownOnly] = useState(false);
   const [logsTarget, setLogsTarget] = useState<{ namespace: string; name: string; containers: ContainerSummaryDTO[] } | null>(null);
   // Bulk selection ("ns/name" keys): deleting three crash-looping pods should
   // be one confirm, not three select->confirm cycles. x toggles the keyboard
@@ -146,17 +138,20 @@ export function PodsView({ cluster }: { cluster: string }) {
   };
   const onRefresh = () => { void listPods(cluster, pods.namespace); };
 
-  const crashloop = pods.items.filter((p) => p.reason === "CrashLoopBackOff").length;
-  const imagepull = pods.items.filter((p) => p.reason === "ImagePullBackOff" || p.reason === "ErrImagePull").length;
-  const pendingPods = pods.items.filter((p) => p.phase === "Pending").length;
-  const restartsRank = pods.items.filter((p) => p.rank === "restarts").length;
-  const runningPods = pods.items.filter((p) => p.rank === "healthy" && p.phase === "Running").length;
+  // One verdict per pod, classified by the backend (internal/health). Every
+  // number on this lens - meters, filter counts, the idle inspector - comes
+  // from this one summary, so they cannot disagree.
+  const counts = summarize(pods.items, (p) => p.health);
+  const coverage = coverageOf(pods, cluster, pods.namespace);
+  const qualifier = coverage === "partial" ? " (partial)" : coverage === "stale" ? " (last good)" : "";
 
   const filtered = pods.items.filter((p) => {
-    if (pods.needsAttention && p.rank === "healthy") return false;
+    const k = kindOf(p.health);
+    if (pods.needsAttention && !isAttention(k)) return false;
+    if (unknownOnly && k !== "unknown") return false;
     if (pods.search) {
       const q = pods.search.toLowerCase();
-      return p.name.toLowerCase().includes(q) || p.namespace.toLowerCase().includes(q) || p.reason.toLowerCase().includes(q);
+      return p.name.toLowerCase().includes(q) || p.namespace.toLowerCase().includes(q) || labelOf(p.health).toLowerCase().includes(q);
     }
     return true;
   });
@@ -257,14 +252,14 @@ export function PodsView({ cluster }: { cluster: string }) {
           {/* Meters (Signal Bench): the pod population by severity, faults only
             when they exist - 209 healthy rows stay dark. */}
         <MetersStrip
-          note="broken first · severity order"
+          note="faults first"
           meters={[
-            { label: "pods", value: pods.items.length },
-            crashloop > 0 && { label: "crashloop", value: crashloop, tone: "danger" as const },
-            imagepull > 0 && { label: "imagepull", value: imagepull, tone: "danger" as const },
-            pendingPods > 0 && { label: "pending", value: pendingPods, tone: "warning" as const },
-            restartsRank > 0 && { label: "restarts", value: restartsRank, tone: "info" as const },
-            { label: "running", value: runningPods, tone: "success" as const },
+            { label: pods.namespace ? `pods in ${pods.namespace}` : "pods", value: counts.total },
+            counts.attention > 0 && { label: `attention${qualifier}`, value: counts.attention, tone: attentionTone(counts) },
+            counts.fault > 0 && { label: "fault", value: counts.fault, tone: "danger" as const },
+            counts.degraded > 0 && { label: "degraded", value: counts.degraded, tone: "warning" as const },
+            counts.unknown > 0 && { label: "unknown", value: counts.unknown },
+            counts.progressing > 0 && { label: "starting", value: counts.progressing },
           ]}
         />
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, flexWrap: "wrap", flexShrink: 0 }}>
@@ -277,8 +272,11 @@ export function PodsView({ cluster }: { cluster: string }) {
               <option value="">all namespaces</option>
               {pods.namespaces.map((ns) => <option key={ns} value={ns}>{ns}</option>)}
             </select>
-            <FilterButton label="all" count={pods.items.length} active={!pods.needsAttention} onClick={() => { if (pods.needsAttention) useFleet.getState().togglePodsNeedsAttention(); }} />
-            <FilterButton label="broken" count={pods.items.filter((x) => x.rank !== "healthy").length} active={pods.needsAttention} onClick={() => { if (!pods.needsAttention) useFleet.getState().togglePodsNeedsAttention(); }} />
+            <FilterButton label="all" count={counts.total} active={!pods.needsAttention && !unknownOnly} onClick={() => { setUnknownOnly(false); if (pods.needsAttention) useFleet.getState().togglePodsNeedsAttention(); }} />
+            <FilterButton label="attention" count={counts.attention} active={pods.needsAttention} onClick={() => { setUnknownOnly(false); if (!pods.needsAttention) useFleet.getState().togglePodsNeedsAttention(); }} />
+            {counts.unknown > 0 && (
+              <FilterButton label="unknown" count={counts.unknown} active={unknownOnly} onClick={() => { setUnknownOnly(true); if (pods.needsAttention) useFleet.getState().togglePodsNeedsAttention(); }} />
+            )}
             <input
               ref={searchRef}
               value={pods.search}
@@ -356,7 +354,7 @@ export function PodsView({ cluster }: { cluster: string }) {
             <div style={{ ...well, fontFamily: "var(--font-mono)", fontSize: 12, display: "flex", flexDirection: "column", flex: 1, minHeight: 0, overflow: "hidden" }}>
               {/* Header */}
               <div style={{ display: "grid", gridTemplateColumns: gridCols, gap: 10, padding: "0 8px 6px", fontSize: 9, textTransform: "uppercase", letterSpacing: 0.5, color: "var(--color-text-tertiary)", borderBottom: "0.5px solid var(--color-border-secondary)", flexShrink: 0 }}>
-                <span /><span>pod</span><span>ready</span><span>phase</span><span>restarts</span><span>node</span><span>age</span><span />
+                <span /><span>pod</span><span>ready</span><span>status</span><span>restarts</span><span>node</span><span>age</span><span />
               </div>
               {/* Rows — VirtualList for >=100 items, plain render for smaller lists */}
               <VirtualList
@@ -391,7 +389,7 @@ export function PodsView({ cluster }: { cluster: string }) {
               />
               <FKeysBar
                 keys={[["j k", "nav"], ["↵", "inspect"], ["l", "logs"], ["x", "select"], ["/", "filter"]]}
-                status={`${filtered.length} of ${pods.items.length} · broken first`}
+                status={`${filtered.length} of ${pods.items.length} · faults first`}
               />
             </div>
           )}
@@ -401,7 +399,7 @@ export function PodsView({ cluster }: { cluster: string }) {
         {!pods.selected && (
           <InspectorIdle
             subject="pods"
-            attention={pods.items.filter((x) => x.rank !== "healthy").length}
+            attention={counts.attention}
             hint="Select a pod for containers, conditions, events, logs, and day-2 actions."
           />
         )}
@@ -493,7 +491,7 @@ function PodRow({
         outline: "none",
       }}
     >
-      <span style={{ width: 8, height: 8, borderRadius: "50%", background: rankDot[p.rank] }} />
+      <VerdictLamp health={p.health} size={8} />
       <span style={{ display: "flex", alignItems: "center", gap: 2, minWidth: 0 }}>
         <input
           type="checkbox"
@@ -511,25 +509,15 @@ function PodRow({
         </span>
         <CopyButton text={p.name} label={`copy pod name ${p.name}`} appearOnRowHover />
       </span>
-      <span style={{ color: readyCount === nonInitCount ? "var(--color-text-success)" : "var(--color-text-warning)" }}>
+      {/* Ready and restarts are facts, not verdicts: neutral. The verdict
+          column carries the colour. */}
+      <span style={{ color: "var(--color-text-secondary)" }}>
         {readyCount}/{nonInitCount}
       </span>
-      <span style={ellipsis} title={p.reason ? `${p.phase} · ${p.reason}` : p.phase}>
-        {/* stx idiom (Signal Bench): mono status word, bold red + triangle
-            when broken, muted when it is just Running. */}
-        <span
-          className={p.rank === "unhealthy" ? "klyx-danger-prefix" : undefined}
-          style={{
-            fontFamily: "var(--font-mono)",
-            fontSize: 11,
-            color: p.rank === "unhealthy" ? "var(--color-text-danger)" : p.rank === "degraded" ? "var(--color-text-warning)" : "var(--color-text-tertiary)",
-            fontWeight: p.rank === "unhealthy" ? 700 : undefined,
-          }}
-        >
-          {p.reason || p.phase}
-        </span>
+      <span style={{ ...ellipsis, fontSize: 11 }}>
+        <VerdictLabel health={p.health} mono />
       </span>
-      <span style={{ color: p.restarts > 0 ? "var(--color-text-warning)" : "var(--color-text-tertiary)" }}>
+      <span style={{ color: p.restarts > 0 ? "var(--color-text-secondary)" : "var(--color-text-tertiary)" }}>
         {p.restarts}
       </span>
       <span style={{ ...ellipsis, color: "var(--color-text-tertiary)" }} title={p.node}>{p.node}</span>
@@ -816,6 +804,10 @@ function InfoTab({ detail, cluster, namespace, name, onRestart, onDelete }: {
   onDelete: (s: PodSummaryDTO) => void;
 }) {
   const p = detail.summary;
+  // Verdict provenance: the headline is the SAME verdict as the selected list
+  // row (one observation, one answer). The detail read's own summary is a
+  // later observation and is used only if the row has left the list.
+  const rowHealth = useFleet((s) => s.pods.items.find((r) => r.namespace === p.namespace && r.name === p.name)?.health);
   const [forwarding, setForwarding] = useState(false);
   const [describing, setDescribing] = useState(false);
 
@@ -844,12 +836,7 @@ function InfoTab({ detail, cluster, namespace, name, onRestart, onDelete }: {
     <>
       {/* State first: the phase/rank/reason headline, scannable before any
           key-value rows. */}
-      <InspectorStatus
-        tone={rankTone[p.rank] ?? "muted"}
-        label={p.phase || p.rank}
-        reason={p.reason || undefined}
-        detail={`${readyOf(p)} ready`}
-      />
+      <VerdictStatus health={rowHealth ?? p.health} detail={`${readyOf(p)} ready`} />
 
       {/* Action buttons */}
       <div style={{ display: "flex", gap: 8, marginBottom: 12, alignItems: "center", flexWrap: "wrap" }}>

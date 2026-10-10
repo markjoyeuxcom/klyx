@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import type { HealthLike } from "../health/verdict";
 
 export type ClusterDTO = {
   name: string;
@@ -281,7 +282,7 @@ export type WorkloadCompareDTO = {
   specHash: string; ownerKind: string; ownerNamespace: string; ownerName: string; ownerRevision: string;
   error: string;
 };
-export type WorkloadDTO = { kind: string; namespace: string; name: string; desired: number; ready: number; available: number; updated: number; restarts: number; reason: string; rank: "unhealthy"|"degraded"|"restarts"|"healthy"; gitops: OwnerDTO | null; pods: PodDTO[]; resources: WorkloadResourcesDTO; stale?: boolean; generation?: number; observedGeneration?: number; reloader?: ReloadTargetsDTO | null; paused?: boolean };
+export type WorkloadDTO = { kind: string; namespace: string; name: string; desired: number; ready: number; available: number; updated: number; restarts: number; reason: string; rank: "unhealthy"|"degraded"|"restarts"|"healthy"; gitops: OwnerDTO | null; pods: PodDTO[]; resources: WorkloadResourcesDTO; stale?: boolean; generation?: number; observedGeneration?: number; reloader?: ReloadTargetsDTO | null; paused?: boolean; health?: HealthLike };
 
 // Rollout history (newest first). Images may be empty when a
 // ControllerRevision's patch data carries no template - never fabricated.
@@ -369,7 +370,7 @@ export type NodeUsageDTO = { node: string; cpu: number | null; mem: number | nul
 export type NodeUtilizationResultDTO = { available: boolean; message?: string; updatedAtUnix: number; items: NodeUsageDTO[] };
 export type ContainerUsageDTO = { container: string; cpu: number | null; mem: number | null };
 export type PodUsageResultDTO = { available: boolean; message?: string; updatedAtUnix: number; items: ContainerUsageDTO[] };
-export type PodSummaryDTO = { namespace: string; name: string; ready: boolean; phase: string; reason: string; rank: "unhealthy"|"degraded"|"restarts"|"healthy"; restarts: number; node: string; ip: string; ownerKind: string; ownerName: string; ageSeconds: number; containers: ContainerSummaryDTO[] };
+export type PodSummaryDTO = { namespace: string; name: string; ready: boolean; phase: string; reason: string; rank: "unhealthy"|"degraded"|"restarts"|"healthy"; restarts: number; node: string; ip: string; ownerKind: string; ownerName: string; ageSeconds: number; containers: ContainerSummaryDTO[]; health?: HealthLike };
 export type PodsResultDTO = { namespaces: string[]; pods: PodSummaryDTO[]; truncated?: boolean; error?: string };
 export type PodDetailDTO = { summary: PodSummaryDTO; labels: Record<string, string>; annotations?: Record<string, string>; conditions: ConditionDTO[]; events: EventDTO[]; yaml: string; qosClass: string; serviceAccount: string; error?: string };
 
@@ -601,7 +602,7 @@ export type MetricsDTO = { available: boolean; mode: string; source: string; war
 export type MetricsSlice = { cluster: string | null; dto: MetricsDTO | null; loading: boolean };
 
 // Nodes types
-export type NodeSummaryDTO = { name: string; roles: string[]; ready: boolean; unschedulable: boolean; problems: string[]; version: string; os: string; arch: string; taintCount: number; cpuCapacity: number; cpuAllocatable: number; memCapacity: number; memAllocatable: number; podCapacity: number; ageSeconds: number; pool?: string; zone?: string };
+export type NodeSummaryDTO = { name: string; roles: string[]; ready: boolean; unschedulable: boolean; problems: string[]; version: string; os: string; arch: string; taintCount: number; cpuCapacity: number; cpuAllocatable: number; memCapacity: number; memAllocatable: number; podCapacity: number; ageSeconds: number; pool?: string; zone?: string; health?: HealthLike };
 export type NodesResultDTO = { nodes: NodeSummaryDTO[]; error?: string };
 export type NodeTaintDTO = { key: string; value: string; effect: string };
 export type PodOnNodeDTO = { namespace: string; name: string; phase: string };

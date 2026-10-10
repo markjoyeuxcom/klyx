@@ -53,11 +53,13 @@ const healthy: PodSummaryDTO = {
   namespace: "monitoring", name: "grafana-xyz", ready: true, phase: "Running", reason: "", rank: "healthy",
   restarts: 0, node: "node-1", ip: "10.0.0.1", ownerKind: "Deployment", ownerName: "grafana",
   ageSeconds: 3600, containers: [makeContainer()],
+  health: { kind: "ok", label: "Running", reason: "Ready", rule: "pod.ready" },
 };
 const broken: PodSummaryDTO = {
   namespace: "default", name: "api-crash", ready: false, phase: "Running", reason: "CrashLoopBackOff", rank: "unhealthy",
   restarts: 7, node: "node-2", ip: "10.0.0.2", ownerKind: "Deployment", ownerName: "api",
   ageSeconds: 600, containers: [makeContainer({ ready: false, restarts: 7, state: "waiting:CrashLoopBackOff" })],
+  health: { kind: "fault", label: "CrashLoopBackOff", reason: "CrashLoopBackOff", message: "app: back-off 5m0s restarting failed container", rule: "pod.current-failure", rank: 70 },
 };
 
 const fakeDetail: PodDetailDTO = {
@@ -99,7 +101,7 @@ describe("PodsView", () => {
     const { getByText } = render(<PodsView cluster="homelab" />);
     expect(getByText("api-crash")).toBeTruthy();
     expect(getByText("grafana-xyz")).toBeTruthy();
-    expect(getByText("CrashLoopBackOff")).toBeTruthy();
+    expect(getByText(/CrashLoopBackOff/)).toBeTruthy();
   });
 
   it("shows a loud truncation banner only when the list was capped", () => {
@@ -111,10 +113,10 @@ describe("PodsView", () => {
     expect(queryByText(/broken-first triage may miss a fault/)).toBeTruthy();
   });
 
-  it("the broken filter switch hides healthy rows and carries the honest count", () => {
+  it("the attention filter hides healthy rows and carries the honest count", () => {
     seed([broken, healthy]);
     const { getByRole, getByText, queryByText } = render(<PodsView cluster="homelab" />);
-    const sw = getByRole("button", { name: /broken\s*1/i });
+    const sw = getByRole("button", { name: /attention\s*1/i });
     expect(sw.getAttribute("aria-pressed")).toBe("false");
     fireEvent.click(sw);
     expect(getByText("api-crash")).toBeTruthy();
@@ -767,5 +769,26 @@ describe("imageShort", () => {
     expect(
       imageShort("ghcr.io/org/app@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
     ).toBe("app@sha256:0123456789ab…");
+  });
+});
+
+describe("PodsView health model (1b)", () => {
+  beforeEach(() => { useFleet.getState().clearPods(); vi.clearAllMocks(); });
+
+  it("a pod without a verdict reads unknown, never healthy from legacy rank", () => {
+    const legacyOnly: PodSummaryDTO = { ...healthy, name: "no-verdict", health: undefined };
+    seed([legacyOnly]);
+    const { getByText, getByRole } = render(<PodsView cluster="homelab" />);
+    expect(getByText("Unknown")).toBeTruthy();
+    expect(getByRole("button", { name: /unknown\s*1/i })).toBeTruthy();
+    expect(getByRole("button", { name: /^attention$/i })).toBeTruthy();
+  });
+
+  it("a restarted-but-healthy pod is not attention", () => {
+    const restarted: PodSummaryDTO = { ...healthy, name: "restarted", rank: "restarts", restarts: 3,
+      health: { kind: "ok", label: "Running", reason: "Ready", rule: "pod.ready", note: "restarted 4m ago" } };
+    seed([restarted]);
+    const { getByRole } = render(<PodsView cluster="homelab" />);
+    expect(getByRole("button", { name: /^attention$/i })).toBeTruthy();
   });
 });
