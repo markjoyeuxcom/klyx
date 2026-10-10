@@ -650,17 +650,21 @@ function WorkloadInspector({
           {w.pods.length === 0 ? <span className="t-secondary">No pods match this workload's selector.</span> : (
             <div style={{ display: "flex", flexDirection: "column" }}>
               {w.pods.slice(0, 8).map((p) => (
-                <div key={p.name} className="t-identifier" style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) auto auto auto", gap: 10, padding: "3px 0", alignItems: "baseline" }}>
+                <div key={p.name} className="t-identifier" style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) auto", columnGap: 8, padding: "3px 0" }}>
+                  {/* Two lines in a 360px inspector: identity owns line one; status
+                      and node wrap on line two instead of squeezing the name. */}
                   <button onClick={() => live && onOpenPod(w, p)} aria-label={`open pod ${p.name}`} title="open in Pods"
                     style={{ minWidth: 0, background: "none", border: 0, padding: 0, textAlign: "left", cursor: "pointer", color: "var(--color-text-info)", font: "inherit", overflowWrap: "anywhere" }}>{p.name}</button>
-                  <span style={{ color: "var(--color-text-secondary)" }}>{p.ready ? "ready" : p.reason || "not ready"}{p.restarts ? ` · ${p.restarts}×` : ""}</span>
-                  <button onClick={() => onOpenNode(p.node)} title={`open node ${p.node}`} style={{ background: "none", border: 0, padding: 0, cursor: "pointer", color: "var(--color-text-tertiary)", font: "inherit" }}>{p.node || "-"}</button>
                   {live ? (
                     <button onClick={() => onDeletePod(w, p)} aria-label={`delete pod ${p.name}`} title={`delete pod ${p.name}`}
-                      style={{ background: "none", border: 0, padding: 0, cursor: "pointer", color: "var(--color-text-tertiary)", display: "inline-flex", alignSelf: "center" }}>
+                      style={{ background: "none", border: 0, padding: 0, cursor: "pointer", color: "var(--color-text-tertiary)", display: "inline-flex", alignSelf: "start", marginTop: 2 }}>
                       <IconTrash size={13} stroke={1.6} />
                     </button>
                   ) : <span />}
+                  <span style={{ gridColumn: "1 / -1", minWidth: 0, display: "flex", flexWrap: "wrap", columnGap: 8, color: "var(--color-text-secondary)" }}>
+                    <span style={{ overflowWrap: "anywhere", minWidth: 0 }}>{p.ready ? "ready" : p.reason || "not ready"}{p.restarts ? ` · ${p.restarts}×` : ""}</span>
+                    <button onClick={() => onOpenNode(p.node)} title={`open node ${p.node}`} style={{ minWidth: 0, background: "none", border: 0, padding: 0, cursor: "pointer", color: "var(--color-text-tertiary)", font: "inherit", overflowWrap: "anywhere", textAlign: "left" }}>{p.node ? `on ${p.node}` : "unscheduled"}</button>
+                  </span>
                 </div>
               ))}
               {w.pods.length > 8 && <span className="t-secondary">+{w.pods.length - 8} more pods</span>}

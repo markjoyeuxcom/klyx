@@ -75,7 +75,7 @@ describe("WorkloadsView", () => {
     expect(queryByText("ollama-x")).toBeNull();
     select("ollama");
     expect(getByText("ollama-x")).toBeTruthy();
-    expect(getByText("node-3")).toBeTruthy();
+    expect(getByText("on node-3")).toBeTruthy();
   });
 
   it("rollout history lists revisions; undo opens the danger confirm with the GitOps warning", async () => {
