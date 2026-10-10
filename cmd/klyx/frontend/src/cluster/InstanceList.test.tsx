@@ -9,12 +9,14 @@ vi.mock("../bridge/crd", () => ({
   // The open instance now renders as a side panel inside the list, so the
   // detail bridge loads too.
   getInstanceDetail: vi.fn(async () => {}),
+  gitOpsOwnership: vi.fn(async () => null),
   copyText: vi.fn(async () => {}),
   revealSecretKey: vi.fn(async () => null),
   dryRunInstanceYAML: vi.fn(async () => ({ ok: true, error: "" })),
   applyInstanceYAML: vi.fn(async () => ({ ok: true, error: "" })),
 }));
-import { loadInstances, listInstancePage } from "../bridge/crd";
+import { loadInstances, listInstancePage, applyInstanceYAML, dryRunInstanceYAML } from "../bridge/crd";
+import { TABLE_ROW_HEIGHT } from "../layout/LensLayout";
 
 const nsRef: ResourceRef = { group: "cilium.io", version: "v2", plural: "ciliumendpoints", kind: "CiliumEndpoint", scope: "Namespaced" };
 const clusterRef: ResourceRef = { group: "cilium.io", version: "v2", plural: "ciliumnodes", kind: "CiliumNode", scope: "Cluster" };
@@ -464,5 +466,144 @@ describe("InstanceList column folding", () => {
     } finally {
       Object.defineProperty(HTMLElement.prototype, "clientWidth", { configurable: true, get: () => 1800 });
     }
+  });
+});
+
+describe("InstanceList Codex rework (Resources review)", () => {
+  const svc = (name: string): InstanceDTO => ({ namespace: "infra", name, created: "", fields: { type: "ClusterIP", clusterIP: "10.0.0.1", externalIP: "-", ports: "80/TCP" } });
+  const routeTo = (resource: ResourceRef, instance?: { namespace: string; name: string }, c = "x") =>
+    useFleet.setState({ route: { name: "cluster", cluster: c, section: "resources", resource, ...(instance ? { instance } : {}) } });
+  const detailFor = (resource: ResourceRef, name: string, yaml: string, c = "x") =>
+    useFleet.setState({ instanceDetail: { cluster: c, resource, ref: { namespace: "infra", name }, loading: false,
+      detail: { kind: resource.kind, namespace: "infra", name, created: "", labels: {}, conditions: [], events: [], yaml } } });
+
+  it("1. removal while an apply confirm is open unmounts the editor: nothing can dispatch", () => {
+    routeTo(serviceRef, { namespace: "infra", name: "api" });
+    seed(serviceRef, { rows: [svc("api"), svc("web")] });
+    detailFor(serviceRef, "api", "apiVersion: v1\nkind: Service\nmetadata:\n  name: api\n  namespace: infra\n");
+    const { getByRole, getByLabelText, getByText, queryByLabelText, queryByText } = render(<InstanceList cluster="x" resource={serviceRef} />);
+    fireEvent.click(getByRole("tab", { name: "Manifest" }));
+    fireEvent.change(getByLabelText("resource yaml"), { target: { value: "apiVersion: v1\nkind: Service\nmetadata:\n  name: api\n  namespace: infra\n  labels: {a: b}\n" } });
+    fireEvent.click(getByText("Apply"));
+    expect(getByText(/Apply these YAML changes/)).toBeTruthy();
+    act(() => seed(serviceRef, { rows: [svc("web")] }));
+    expect(getByText("Service removed.")).toBeTruthy();
+    expect(queryByLabelText("resource yaml")).toBeNull();
+    expect(queryByText(/Apply these YAML changes/)).toBeNull();
+    expect(queryByText("Apply changes")).toBeNull();
+    expect(applyInstanceYAML).not.toHaveBeenCalled();
+    expect(dryRunInstanceYAML).not.toHaveBeenCalled();
+    expect(document.body.textContent).toContain("kind: Service"); // read-only last evidence
+  });
+
+  it("2. the virtualiser windows on the CSS row height, so deep rows neither overlap nor clip", async () => {
+    // one source: the lens root sets the CSS row height from the constant
+    seed(nsRef, { rows: Array.from({ length: 500 }, (_, i) => ({ namespace: "apps", name: `ep-${String(i).padStart(3, "0")}`, created: "" })) });
+    const { container, getByText, queryByText, getByTestId } = render(<InstanceList cluster="x" resource={nsRef} />);
+    expect(getByTestId("lens-layout").style.getPropertyValue("--table-row-height")).toBe(`${TABLE_ROW_HEIGHT}px`);
+    const scroller = container.querySelector(".lens-table [style*='overflow-y: auto']") as HTMLElement;
+    const spacer = scroller.firstElementChild as HTMLElement;
+    expect(spacer.style.height).toBe(`${500 * TABLE_ROW_HEIGHT}px`); // last row fully reachable
+    // scroll handling is throttled to one frame
+    await act(async () => { scroller.scrollTop = 400 * TABLE_ROW_HEIGHT; fireEvent.scroll(scroller); await new Promise((r) => requestAnimationFrame(() => r(null))); });
+    expect(getByText("ep-400")).toBeTruthy();
+    expect(queryByText("ep-000")).toBeNull();
+    const win = spacer.firstElementChild as HTMLElement;
+    const first = win.firstElementChild as HTMLElement;
+    const firstIdx = Number(/ep-(\d+)/.exec(first.textContent ?? "")?.[1]);
+    expect(parseInt(win.style.top, 10)).toBe(firstIdx * TABLE_ROW_HEIGHT); // no cursor-to-row drift
+  });
+
+  it("3a. a capped fleet read is a lower bound with a bounded continuation", async () => {
+    useFleet.setState({ clusters: [cluster("blue"), cluster("orange")] });
+    vi.mocked(listInstancePage).mockImplementation(async (target, _ref, token) => (
+      target === "blue" && !token
+        ? { items: [svc("b1")], nextToken: "blue-2" }
+        : target === "blue"
+          ? { items: [svc("b2")], nextToken: "" }
+          : { items: [svc("o1")], nextToken: "" }
+    ));
+    const { getByRole, getByText, findByText } = render(<InstanceList cluster="blue" resource={serviceRef} />);
+    fireEvent.click(getByRole("button", { name: "Fleet" }));
+    expect(await findByText(/First page only for blue/)).toBeTruthy();
+    expect(getByText(/^2\+$/)).toBeTruthy();
+    fireEvent.click(getByRole("button", { name: "Load next page" }));
+    await waitFor(() => expect(getByText("b2")).toBeTruthy());
+    expect(listInstancePage).toHaveBeenCalledWith("blue", serviceRef, "blue-2");
+    expect(getByText(/^3$/)).toBeTruthy(); // complete now: exact
+  });
+
+  it("3b. a mixed fleet read names the unreadable cluster and counts as a lower bound", async () => {
+    useFleet.setState({ clusters: [cluster("blue"), cluster("orange")] });
+    vi.mocked(listInstancePage).mockImplementation(async (target) => {
+      if (target === "orange") throw new Error("forbidden");
+      return { items: [svc("b1")], nextToken: "" };
+    });
+    const { getByRole, findByText, getByText, queryByText } = render(<InstanceList cluster="blue" resource={serviceRef} />);
+    fireEvent.click(getByRole("button", { name: "Fleet" }));
+    expect(await findByText(/1 cluster unreadable: orange/)).toBeTruthy();
+    expect(getByText(/^1\+$/)).toBeTruthy();
+    expect(queryByText(/^none need attention$/)).toBeNull();
+  });
+
+  it("3c. an all-unreadable fleet read is unreadable, never 'No instances'", async () => {
+    useFleet.setState({ clusters: [cluster("blue"), cluster("orange")] });
+    vi.mocked(listInstancePage).mockRejectedValue(new Error("forbidden"));
+    const { getByRole, findByText, queryByText } = render(<InstanceList cluster="blue" resource={serviceRef} />);
+    fireEvent.click(getByRole("button", { name: "Fleet" }));
+    expect(await findByText(/could not be read/)).toBeTruthy();
+    expect(queryByText(/No Service instances/)).toBeNull();
+  });
+
+  it("4a. rows recorded for another cluster or version are not shown", () => {
+    useFleet.setState({ instances: { cluster: "prd", ref: serviceRef, rows: [svc("same")], nextToken: "", loading: false, filter: "", riskOnly: false } });
+    const first = render(<InstanceList cluster="x" resource={serviceRef} />);
+    expect(first.queryByText("same")).toBeNull();
+    first.unmount();
+    const v2: ResourceRef = { ...serviceRef, version: "v2" };
+    useFleet.setState({ instances: { cluster: "x", ref: serviceRef, rows: [svc("same")], nextToken: "", loading: false, filter: "", riskOnly: false } });
+    const second = render(<InstanceList cluster="x" resource={v2} />);
+    expect(second.queryByText("same")).toBeNull();
+  });
+
+  it("4b. a cross-version switch never carries detail evidence or a local draft over", () => {
+    const v2: ResourceRef = { ...serviceRef, version: "v2" };
+    routeTo(serviceRef, { namespace: "infra", name: "api" });
+    seed(serviceRef, { rows: [svc("api")] });
+    detailFor(serviceRef, "api", "apiVersion: v1\nkind: Service\nmetadata:\n  name: api\n");
+    const { getByRole, getByLabelText, queryByLabelText, getByText, rerender } = render(<InstanceList cluster="x" resource={serviceRef} />);
+    fireEvent.click(getByRole("tab", { name: "Manifest" }));
+    fireEvent.change(getByLabelText("resource yaml"), { target: { value: "DRAFT" } });
+    // the v2 read is deferred: the detail slice still holds v1 evidence
+    routeTo(v2, { namespace: "infra", name: "api" });
+    rerender(<InstanceList cluster="x" resource={v2} />);
+    // a late v1 response lands after the switch
+    act(() => detailFor(serviceRef, "api", "apiVersion: v1\nkind: Service\nmetadata:\n  name: api\n"));
+    expect(queryByLabelText("resource yaml")).toBeNull();
+    expect(getByText(/Loading Service detail|Could not load/)).toBeTruthy();
+    act(() => detailFor(v2, "api", "apiVersion: v2\nkind: Service\nmetadata:\n  name: api\n"));
+    fireEvent.click(getByRole("tab", { name: "Manifest" }));
+    expect((getByLabelText("resource yaml") as HTMLTextAreaElement).value).toContain("apiVersion: v2");
+  });
+
+  it("5a. a cross-link opened before the list arrives reveals its row past a stale filter", () => {
+    routeTo(serviceRef);
+    useFleet.setState({ instances: { cluster: "x", ref: serviceRef, rows: [], nextToken: "", loading: true, filter: "web", riskOnly: false } });
+    const { queryByTestId } = render(<InstanceList cluster="x" resource={serviceRef} />);
+    act(() => useFleet.getState().openInstance("infra", "api"));
+    act(() => useFleet.setState((s) => ({ instances: { ...s.instances, rows: [svc("api"), svc("web")], loading: false } })));
+    expect(useFleet.getState().instances.filter).toBe("");
+    expect(queryByTestId("lens-inspector")).toBeTruthy();
+  });
+
+  it("5b. an operator filter edit after the request wins over the reveal", () => {
+    routeTo(serviceRef);
+    useFleet.setState({ instances: { cluster: "x", ref: serviceRef, rows: [], nextToken: "", loading: true, filter: "", riskOnly: false } });
+    const { queryByTestId, getByLabelText } = render(<InstanceList cluster="x" resource={serviceRef} />);
+    act(() => useFleet.getState().openInstance("infra", "api"));
+    fireEvent.change(getByLabelText("Search Service"), { target: { value: "web" } });
+    act(() => useFleet.setState((s) => ({ instances: { ...s.instances, rows: [svc("api"), svc("web")], loading: false } })));
+    expect(useFleet.getState().instances.filter).toBe("web");
+    expect(queryByTestId("lens-inspector")).toBeNull();
   });
 });

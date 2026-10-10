@@ -30,7 +30,7 @@ import { WatchErrorBanner } from "../chrome/WatchErrorBanner";
 import { VerdictLabel, VerdictLamp, VerdictStatus } from "../health/VerdictView";
 import { attentionTone, coverageOf, isAttention, kindOf, labelOf, summarize } from "../health/verdict";
 import { UpdatedAt, useReceivedAt } from "../chrome/Age";
-import { LensLayout, LensTable, type DatasetState } from "../layout/LensLayout";
+import { LensLayout, LensTable, TABLE_ROW_HEIGHT, type DatasetState } from "../layout/LensLayout";
 import { InspectorBlock, InspectorLayout, type MenuItem } from "../layout/InspectorLayout";
 import { fitColumns, type ColumnDef } from "../layout/columns";
 const KINDS: WorkloadKind[] = ["Deployment", "StatefulSet", "DaemonSet"];
@@ -45,7 +45,7 @@ function ago(sec: number): string {
 }
 // Fixed row height (px, incl. border) — must match the VirtualList rowHeight so
 // the windowing math lines up with the real DOM rows.
-const ROW_HEIGHT = 32;
+const ROW_HEIGHT = TABLE_ROW_HEIGHT;
 
 const tierColor: Record<string, string | undefined> = {
   none: undefined, neutral: "var(--color-text-success)", warn: "var(--color-text-warning)", danger: "var(--color-text-danger)",

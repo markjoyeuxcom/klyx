@@ -12,6 +12,7 @@ import { CopyButton } from "../chrome/CopyButton";
 import { DescribePane } from "../chrome/DescribePane";
 import { IconX, IconSparkles, IconAlertTriangle } from "@tabler/icons-react";
 import { InspectorBlock, InspectorLayout, type MenuItem } from "../layout/InspectorLayout";
+import { YamlBlock } from "../chrome/YamlBlock";
 
 type DetailTab = "summary" | "related" | "events" | "yaml";
 
@@ -974,14 +975,18 @@ export function InstanceDetail({ cluster, resource, instance, removed = false }:
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cluster, resource.group, resource.version, resource.plural, instance.namespace, instance.name]);
 
-  const isCurrent = id.ref && id.ref.namespace === instance.namespace && id.ref.name === instance.name;
+  // Evidence belongs to the full recorded identity (cluster + GVR + ns/name):
+  // DEV/STG/PRD and v1/v2 share names, so ns/name alone could show another
+  // object's detail under this header.
+  const isCurrent = id.cluster === cluster && id.resource?.group === resource.group && id.resource?.version === resource.version &&
+    id.resource?.plural === resource.plural && id.ref?.namespace === instance.namespace && id.ref?.name === instance.name;
   const d = isCurrent ? id.detail : null;
 
   const ai = useAIAvailability(cluster, true);
   const [aiPanel, setAiPanel] = useState<{ mode: "explain" | "fix"; loading: boolean; result: AIResultDTO | null } | null>(null);
   // Fence AI results against a mid-flight selection change.
   const aiTokenRef = useRef(0);
-  useEffect(() => { aiTokenRef.current++; setAiPanel(null); }, [resource.group, resource.plural, instance.namespace, instance.name]);
+  useEffect(() => { aiTokenRef.current++; setAiPanel(null); }, [cluster, resource.group, resource.version, resource.plural, instance.namespace, instance.name]);
   const runAI = (mode: "explain" | "fix") => {
     const token = aiTokenRef.current;
     setTab("overview");
@@ -1074,7 +1079,11 @@ export function InstanceDetail({ cluster, resource, instance, removed = false }:
         more={more}
         tab={tab}
         onTab={setTab}
-        manifest={body ?? (d ? <YamlPanel cluster={cluster} resource={resource} instance={instance} detail={d} copied={copied} onCopy={onCopy} /> : null)}
+        // A removed object's manifest is read-only last evidence: the editor
+        // (and any draft, pending confirm or dry-run/apply) unmounts with it.
+        manifest={body ?? (d ? (removed
+          ? <YamlBlock text={d.yaml} copyLabel={`${resource.kind} YAML (last evidence)`} />
+          : <YamlPanel cluster={cluster} resource={resource} instance={instance} detail={d} copied={copied} onCopy={onCopy} />) : null)}
       >
         {body ?? (d && (
           <>

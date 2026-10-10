@@ -11,7 +11,7 @@ import { WatchErrorBanner } from "../chrome/WatchErrorBanner";
 import { IconAlertTriangle, IconStack2 } from "@tabler/icons-react";
 import { InstanceDetail } from "./InstanceDetail";
 import { riskFor, supportsRiskFilter } from "./resourceRisk";
-import { LensLayout, LensTable, type DatasetState } from "../layout/LensLayout";
+import { LensLayout, LensTable, TABLE_ROW_HEIGHT, type DatasetState } from "../layout/LensLayout";
 import { fitColumns, type ColumnDef } from "../layout/columns";
 
 // The generic GVR lens behind every Resources and CRD destination, on the
@@ -20,12 +20,15 @@ import { fitColumns, type ColumnDef } from "../layout/columns";
 // or drawer, one-shot auto-select of the first at-risk row from a fresh read,
 // filter exclusion closes, a removed instance keeps its last evidence.
 
-const ROW_HEIGHT = 28;
 
 export type ExtraColumn = { key: string; label: string; width: string };
 type BrowserScope = "cluster" | "fleet";
 type FleetInstanceRow = InstanceDTO & { cluster: string };
-type FleetInstanceState = { rows: FleetInstanceRow[]; loading: boolean; errors: string[] };
+// Fleet coverage is per cluster: a cluster can be read fully, capped (more
+// pages behind `tokens[cluster]`), or unreadable. Counts are a lower bound
+// unless every target is complete.
+type FleetInstanceState = { rows: FleetInstanceRow[]; loading: boolean; errors: string[]; tokens: Record<string, string>; loadingMore: boolean };
+const FLEET_IDLE: FleetInstanceState = { rows: [], loading: false, errors: [], tokens: {}, loadingMore: false };
 
 const keyOfRow = (r: { cluster: string; namespace: string; name: string }) => `${r.cluster}/${r.namespace}/${r.name}`;
 
@@ -47,7 +50,9 @@ export function InstanceList({ cluster, resource }: { cluster: string; resource:
   const openRef = useFleet((s) => (s.route.name === "cluster" ? s.route.instance ?? null : null));
   const [scope, setScope] = useState<BrowserScope>("cluster");
   const [fleetClusterFilter, setFleetClusterFilter] = useState("");
-  const [fleetState, setFleetState] = useState<FleetInstanceState>({ rows: [], loading: false, errors: [] });
+  const [fleetState, setFleetState] = useState<FleetInstanceState>(FLEET_IDLE);
+  const fleetGen = useRef(0);
+  const [fleetReload, setFleetReload] = useState(0);
   const [bodyWidth, setBodyWidth] = useState(1100);
   const resKey = `${cluster}|${resource.group}/${resource.version}/${resource.plural}`;
 
@@ -69,29 +74,68 @@ export function InstanceList({ cluster, resource }: { cluster: string; resource:
 
   useEffect(() => {
     if (scope !== "fleet") return;
-    let cancelled = false;
-    setFleetState({ rows: [], loading: true, errors: [] });
+    const gen = ++fleetGen.current;
+    setFleetState({ ...FLEET_IDLE, loading: true });
     void Promise.all(fleetTargets.map(async (target) => {
       try {
         const page = await listInstancePage(target, resource);
-        return { target, rows: page.items.map((row) => ({ ...row, cluster: target })), error: "" };
+        return { target, rows: page.items.map((row) => ({ ...row, cluster: target })), token: page.nextToken, error: "" };
       } catch {
-        return { target, rows: [] as FleetInstanceRow[], error: target };
+        return { target, rows: [] as FleetInstanceRow[], token: "", error: target };
       }
     })).then((results) => {
-      if (cancelled) return;
-      setFleetState({ rows: results.flatMap((r) => r.rows), loading: false, errors: results.filter((r) => r.error).map((r) => r.error) });
+      if (gen !== fleetGen.current) return;
+      setFleetState({
+        rows: results.flatMap((r) => r.rows),
+        loading: false,
+        loadingMore: false,
+        errors: results.filter((r) => r.error).map((r) => r.error),
+        tokens: Object.fromEntries(results.filter((r) => r.token).map((r) => [r.target, r.token])),
+      });
     });
-    return () => { cancelled = true; };
+    // Bumping the generation invalidates this read and any continuation.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scope, fleetTargets, resource.group, resource.version, resource.plural]);
+    return () => { fleetGen.current++; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scope, fleetTargets, fleetReload, resource.group, resource.version, resource.plural]);
+
+  // Bounded continuation: one more page from every capped cluster.
+  const loadMoreFleet = () => {
+    const gen = fleetGen.current;
+    const pending = Object.entries(fleetState.tokens);
+    if (pending.length === 0) return;
+    setFleetState((st) => ({ ...st, loadingMore: true }));
+    void Promise.all(pending.map(async ([target, token]) => {
+      try {
+        const page = await listInstancePage(target, resource, token);
+        return { target, rows: page.items.map((row) => ({ ...row, cluster: target })), token: page.nextToken, error: "" };
+      } catch {
+        return { target, rows: [] as FleetInstanceRow[], token: "", error: target };
+      }
+    })).then((results) => {
+      if (gen !== fleetGen.current) return;
+      setFleetState((st) => {
+        const tokens = { ...st.tokens };
+        for (const r of results) { if (r.token) tokens[r.target] = r.token; else delete tokens[r.target]; }
+        return {
+          rows: [...st.rows, ...results.flatMap((r) => r.rows)],
+          loading: false,
+          loadingMore: false,
+          errors: [...st.errors, ...results.filter((r) => r.error && !st.errors.includes(r.error)).map((r) => r.error)],
+          tokens,
+        };
+      });
+    });
+  };
 
   const namespaced = resource.scope === "Namespaced";
   const extraColumns = columnsFor(resource);
   const fleetMode = scope === "fleet";
   const riskSupported = supportsRiskFilter(resource);
 
-  const isCurrent = !!instances.ref && instances.ref.group === resource.group && instances.ref.plural === resource.plural;
+  // Rows belong to the full recorded identity: cluster + group/version/plural.
+  const isCurrent = instances.cluster === cluster && !!instances.ref && instances.ref.group === resource.group &&
+    instances.ref.version === resource.version && instances.ref.plural === resource.plural;
   const fleetRows = fleetClusterFilter ? fleetState.rows.filter((row) => row.cluster === fleetClusterFilter) : fleetState.rows;
   const all: FleetInstanceRow[] = useMemo(
     () => (fleetMode ? fleetRows : (isCurrent ? instances.rows.map((row) => ({ ...row, cluster })) : [])),
@@ -114,7 +158,11 @@ export function InstanceList({ cluster, resource }: { cluster: string; resource:
       return a.row.namespace === b.row.namespace ? a.row.name.localeCompare(b.row.name) : a.row.namespace.localeCompare(b.row.namespace);
     }), [rowsWithRisk, instances.riskOnly, q]);
   const loading = fleetMode ? fleetState.loading : instances.loading;
-  const readError = !fleetMode ? instances.error : null;
+  const fleetCapped = Object.keys(fleetState.tokens);
+  const fleetAllFailed = fleetMode && !fleetState.loading && fleetTargets.length > 0 && fleetState.errors.length === fleetTargets.length;
+  const readError = !fleetMode ? instances.error : fleetAllFailed ? `no cluster could be read (${fleetState.errors.join(", ")})` : null;
+  // Lower bound: more pages behind a cluster's cap, or a cluster unreadable.
+  const partial = fleetMode ? fleetCapped.length > 0 || fleetState.errors.length > 0 : !!(isCurrent && instances.nextToken);
   // A read is complete only when every page is in and nothing failed: only
   // then can an absent instance be called removed.
   const complete = !fleetMode && isCurrent && !instances.loading && !instances.error && !instances.nextToken;
@@ -133,21 +181,28 @@ export function InstanceList({ cluster, resource }: { cluster: string; resource:
   const openKey = openRef ? keyOfRow({ cluster, namespace: openRef.namespace, name: openRef.name }) : null;
   const openRow_ = openKey ? all.find((r) => keyOfRow(r) === openKey) : undefined;
   const removed = !!openRef && complete && !openRow_;
+  // A newly requested selection (row click, cross-link, palette) stays
+  // "pending reveal" until its evidence arrives. If it then arrives excluded by
+  // a filter that predates the request, the filter is cleared to reveal it;
+  // a filter the operator edits after the request wins, and an operator
+  // filter excluding an already-revealed selection closes it.
+  const reveal = useRef<{ key: string; filter: string; riskOnly: boolean } | null>(null);
   const lastOpenKey = useRef<string | null>(null);
+  if (openKey !== lastOpenKey.current) {
+    lastOpenKey.current = openKey;
+    reveal.current = openKey ? { key: openKey, filter: instances.filter, riskOnly: instances.riskOnly } : null;
+  }
   useEffect(() => {
-    if (!openKey || !openRow_) { lastOpenKey.current = openKey; return; }
+    if (!openKey || !openRow_) return;
     const visible = rows.some(({ row }) => row === openRow_);
-    if (visible) { lastOpenKey.current = openKey; return; }
-    if (lastOpenKey.current !== openKey) {
-      // Newly opened (cross-link, palette) under a stale filter: reveal it
-      // rather than close what the operator just asked for.
-      lastOpenKey.current = openKey;
-      setFilter("");
-      setRiskOnly(false);
-      return;
+    const r = reveal.current;
+    if (r && r.key === openKey) {
+      const operatorEdited = instances.filter !== r.filter || instances.riskOnly !== r.riskOnly;
+      reveal.current = null;
+      if (!visible && !operatorEdited) { setFilter(""); setRiskOnly(false); return; }
     }
-    closeInstance(); // the operator's filter now excludes it
-  }, [openKey, openRow_, rows, setFilter, setRiskOnly, closeInstance]);
+    if (!visible) closeInstance();
+  }, [openKey, openRow_, rows, instances.filter, instances.riskOnly, setFilter, setRiskOnly, closeInstance]);
 
   // One-shot auto-select of the first at-risk row, only from a fresh read
   // received after route entry, only in cluster scope.
@@ -198,11 +253,11 @@ export function InstanceList({ cluster, resource }: { cluster: string; resource:
   else if (rows.length === 0) state = "no-match";
   const where = fleetMode ? "across the fleet" : `in ${cluster}`;
   const stateView = state === "loading" ? <div style={{ width: "100%", alignSelf: "flex-start" }}><SkeletonRows rows={8} label={`loading ${resource.kind} instances`} /></div>
-    : state === "unreadable" ? <EmptyState icon={<IconAlertTriangle size={28} stroke={1.2} />} title={`${resource.kind} instances ${where} could not be read.`} hint={readError ?? undefined} action={{ label: "Retry", onClick: () => void loadInstances(cluster, resource) }} />
+    : state === "unreadable" ? <EmptyState icon={<IconAlertTriangle size={28} stroke={1.2} />} title={`${resource.kind} instances ${where} could not be read.`} hint={readError ?? undefined} action={fleetMode ? { label: "Retry", onClick: () => setFleetReload((n) => n + 1) } : { label: "Retry", onClick: () => void loadInstances(cluster, resource) }} />
     : state === "empty" ? <EmptyState icon={<IconStack2 size={28} stroke={1.2} />} title={`No ${resource.kind} instances ${where}.`} />
     : <EmptyState icon={<IconStack2 size={28} stroke={1.2} />} title={`No ${resource.kind} instances match the current filters.`} hint={`${all.length} loaded ${where}.`} action={{ label: "Clear filters", onClick: clearFilters }} />;
 
-  const more = !fleetMode && isCurrent && instances.nextToken ? "+" : "";
+  const more = partial ? "+" : "";
   const filterBits = [instances.riskOnly ? "attention" : "", instances.filter ? "search" : "", fleetClusterFilter ? fleetClusterFilter : ""].filter(Boolean);
 
   return (
@@ -222,7 +277,7 @@ export function InstanceList({ cluster, resource }: { cluster: string; resource:
           <span className="t-number" style={{ color: "var(--color-text-secondary)" }}>{all.length}{more}</span>
           {riskSupported && (attentionCount > 0
             ? <span className="t-status" style={{ color: "var(--color-text-warning)" }}>{attentionCount}{more} need attention</span>
-            : <span className="t-secondary">{more ? "none need attention in the loaded pages" : "none need attention"}</span>)}
+            : <span className="t-secondary">{partial ? "no known attention in what was read" : "none need attention"}</span>)}
           <span className="t-secondary">{resource.scope === "Cluster" ? "cluster-scoped" : "namespaced"} · {resource.group || "core"}/{resource.version} · raw resource view</span>
         </>
       )}
@@ -252,10 +307,16 @@ export function InstanceList({ cluster, resource }: { cluster: string; resource:
           </label>
         </>
       }
-      notice={(readError && all.length > 0) || (fleetMode && fleetState.errors.length > 0) ? (
+      notice={(readError && all.length > 0) || (fleetMode && !fleetAllFailed && (fleetState.errors.length > 0 || fleetCapped.length > 0)) ? (
         <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
           {readError && all.length > 0 && <WatchErrorBanner tool={resource.kind} failure="read failed - showing the last good read" error={readError} />}
-          {fleetMode && fleetState.errors.length > 0 && (
+          {fleetMode && !fleetAllFailed && fleetCapped.length > 0 && (
+            <div role="status" className="t-control" style={{ minHeight: 32, display: "flex", alignItems: "center", gap: 8, padding: "0 10px", borderRadius: 4, background: "var(--color-background-secondary)", boxShadow: "inset 0 0 0 1px var(--color-border-secondary)" }}>
+              <span style={{ flex: 1, minWidth: 0 }}>First page only for {fleetCapped.join(", ")}: counts are a lower bound.</span>
+              <button className="l-btn" disabled={fleetState.loadingMore} onClick={loadMoreFleet}>{fleetState.loadingMore ? "Loading…" : "Load next page"}</button>
+            </div>
+          )}
+          {fleetMode && !fleetAllFailed && fleetState.errors.length > 0 && (
             <div role="status" className="t-control" style={{ minHeight: 32, display: "flex", alignItems: "center", gap: 8, padding: "0 10px", borderRadius: 4, background: "var(--color-background-warning)", boxShadow: "inset 0 0 0 1px var(--color-border-warning)", color: "var(--color-text-warning)" }}>
               <IconAlertTriangle size={14} stroke={1.6} aria-hidden="true" />
               <span>{fleetState.errors.length} cluster{fleetState.errors.length === 1 ? "" : "s"} unreadable: {fleetState.errors.join(", ")}. Fleet counts exclude them.</span>
@@ -273,7 +334,7 @@ export function InstanceList({ cluster, resource }: { cluster: string; resource:
           <VirtualList
             ref={listRef}
             items={rows}
-            rowHeight={ROW_HEIGHT}
+            rowHeight={TABLE_ROW_HEIGHT}
             rowKey={({ row }) => keyOfRow(row)}
             style={{ flex: 1, minHeight: 0 }}
             render={({ row: r, risk }) => {
@@ -324,7 +385,7 @@ export function InstanceList({ cluster, resource }: { cluster: string; resource:
         </>
       }
       inspector={openRef && (openRow_ || removed || !complete) ? (
-        <InstanceDetail key={`${cluster}/${resource.plural}/${openRef.namespace}/${openRef.name}`} cluster={cluster} resource={resource} instance={openRef} removed={removed} />
+        <InstanceDetail key={`${cluster}/${resource.group}/${resource.version}/${resource.plural}/${openRef.namespace}/${openRef.name}`} cluster={cluster} resource={resource} instance={openRef} removed={removed} />
       ) : undefined}
       inspectorLabel={`${resource.kind} details`}
       onCloseInspector={closeInstance}

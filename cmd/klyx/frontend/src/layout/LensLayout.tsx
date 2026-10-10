@@ -9,6 +9,11 @@ import "./layout.css";
 
 export type DatasetState = "loading" | "unreadable" | "empty" | "no-match" | "ready";
 
+// The table row height. LensLayout writes it into --table-row-height on its
+// root, so the CSS rows and the virtualiser's windowing share ONE number:
+// a mismatch would overlap rows, clip the last one and drift the cursor.
+export const TABLE_ROW_HEIGHT = 32;
+
 export const INSPECTOR_WIDTH_KEY = "klyx.layout.v1.inspectorWidth";
 export const INSPECTOR_DEFAULT = 400;
 export const INSPECTOR_MIN = 360;
@@ -167,7 +172,7 @@ export function LensLayout({
   ) : null;
 
   return (
-    <div ref={rootRef} className="lens" data-mode={geo.mode} data-testid="lens-layout">
+    <div ref={rootRef} className="lens" data-mode={geo.mode} data-testid="lens-layout" style={{ "--table-row-height": `${TABLE_ROW_HEIGHT}px` } as React.CSSProperties}>
       <section ref={mainRef} aria-label={label} className="lens-main">
         <div className="lens-header">
           <h1 className="t-workspace-title">{title}</h1>
