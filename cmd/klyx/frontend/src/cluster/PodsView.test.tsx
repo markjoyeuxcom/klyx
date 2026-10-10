@@ -955,4 +955,28 @@ describe("PodsView pilot rework (Codex review)", () => {
     expect(useFleet.getState().pods.selected).not.toBeNull();
     expect(document.activeElement).toBe(more);
   });
+
+  it("removal while a confirmation is open cancels it; nothing dispatches", () => {
+    seed([healthy, broken]);
+    select(healthy);
+    const { getByRole, queryByRole } = render(<PodsView cluster="homelab" />);
+    chooseMore("Delete pod", getByRole);
+    expect(getByRole("button", { name: "Delete" })).toBeTruthy();
+    act(() => seed([broken]));
+    expect(queryByRole("button", { name: "Delete" })).toBeNull();
+    expect(deletePod).not.toHaveBeenCalled();
+  });
+
+  it("removal while port-forward is open closes it", () => {
+    seed([healthy, broken]);
+    select(healthy);
+    const { getByRole, queryByTestId, container } = render(<PodsView cluster="homelab" />);
+    chooseMore("Port-forward…", getByRole);
+    expect(queryByTestId("forward-popover")).toBeTruthy();
+    act(() => seed([broken]));
+    expect(queryByTestId("forward-popover")).toBeNull();
+    expect(container.querySelector('[data-testid="forward-start"]')).toBeNull();
+    expect(document.body.textContent).toContain("Pod removed.");
+  });
 });
+

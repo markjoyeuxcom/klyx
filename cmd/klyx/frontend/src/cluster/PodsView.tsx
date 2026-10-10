@@ -522,9 +522,15 @@ function PodInspector({ cluster, namespace, name, detail, loading, removed, isPr
     return m;
   }, [ctUsage]);
 
-  // A removed pod keeps its identity and last evidence; no operation targets it.
+  // A removed pod keeps its identity and last evidence; no operation targets
+  // it - removal also cancels any confirm or popover already open for it.
   const p = detail && !detail.error ? detail.summary : null;
   const live = !removed;
+  useEffect(() => {
+    if (!removed) return;
+    setPending(null);
+    setForwarding(false);
+  }, [removed]);
   const containers = p ? p.containers.filter((c) => !c.init) : [];
   const per = (fn: (container: string) => void) => containers.map((c) => ({ label: c.name, onSelect: () => fn(c.name) }));
   const showRestart = !!p && (p.ownerKind === "Deployment" || p.ownerKind === "StatefulSet" || p.ownerKind === "DaemonSet");
@@ -582,7 +588,7 @@ function PodInspector({ cluster, namespace, name, detail, loading, removed, isPr
           <div role="alert" className="t-body" style={{ color: "var(--color-text-danger)" }}>Could not load pod detail: {detail.error}</div>
         ) : p && (
           <>
-            {forwarding && (
+            {forwarding && live && (
               <ForwardPopover
                 cluster={cluster}
                 namespace={namespace}
@@ -639,7 +645,7 @@ function PodInspector({ cluster, namespace, name, detail, loading, removed, isPr
         )}
       </InspectorLayout>
 
-      {pending && (
+      {pending && live && (
         <ConfirmDialog
           title={pending.verb === "delete" ? "delete pod" : pending.verb === "debug" ? "debug shell" : "restart owner"}
           cluster={cluster}
@@ -657,6 +663,8 @@ function PodInspector({ cluster, namespace, name, detail, loading, removed, isPr
           onConfirm={() => {
             const pd = pending;
             setPending(null);
+            // Re-check at dispatch: the pod may have gone since the dialog opened.
+            if (removed) return;
             if (pd.verb === "delete") void deletePod(cluster, pd.summary.namespace, pd.summary.name);
             else if (pd.verb === "debug") void openDebugTerminal(cluster, pd.summary.namespace, pd.summary.name, pd.container);
             // The backend resolves the controller chain into ownerKind/ownerName.
