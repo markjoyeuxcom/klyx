@@ -14,44 +14,50 @@ export type ArgoSyncOptions = {
   resources: ArgoResourceDTO[];
 };
 
+// Each list read carries a generation per kind: only the newest read for the
+// lens's current cluster may land (a slow older read - e.g. the list that
+// follows a refresh racing a manual reload - never overwrites a newer one).
+// Transport failures are read failures (error), never "Argo not installed".
+const gen = { apps: 0, projects: 0, appSets: 0 };
+
 // listArgoApps fetches every Application on the cluster (broken-first sort is
-// backend-side). Unavailable (no Argo, list failure) carries a message.
+// backend-side).
 export async function listArgoApps(cluster: string): Promise<void> {
+  const seq = ++gen.apps;
   useFleet.getState().setArgoLoading(cluster);
+  const current = () => seq === gen.apps && useFleet.getState().argo.cluster === cluster;
   try {
     const r = (await ArgoService.ListApplications(cluster)) as ArgoResultDTO;
-    if (useFleet.getState().argo.cluster !== cluster) return;
-    useFleet.getState().setArgo(cluster, r ?? { available: false, message: "no response", apps: [] });
+    if (!current()) return;
+    useFleet.getState().setArgo(cluster, r ?? { available: false, error: "no response", apps: [] });
   } catch (e) {
-    if (useFleet.getState().argo.cluster === cluster) {
-      useFleet.getState().setArgo(cluster, { available: false, message: String(e), apps: [] });
-    }
+    if (current()) useFleet.getState().setArgo(cluster, { available: false, error: String(e), apps: [] });
   }
 }
 
 export async function listArgoProjects(cluster: string): Promise<void> {
+  const seq = ++gen.projects;
   useFleet.getState().setArgoProjectsLoading(cluster);
+  const current = () => seq === gen.projects && useFleet.getState().argo.cluster === cluster;
   try {
     const r = (await ArgoService.ListProjects(cluster)) as ArgoProjectsResultDTO;
-    if (useFleet.getState().argo.cluster !== cluster) return;
-    useFleet.getState().setArgoProjects(cluster, r ?? { available: false, message: "no response", projects: [] });
+    if (!current()) return;
+    useFleet.getState().setArgoProjects(cluster, r ?? { available: false, error: "no response", projects: [] });
   } catch (e) {
-    if (useFleet.getState().argo.cluster === cluster) {
-      useFleet.getState().setArgoProjects(cluster, { available: false, message: String(e), projects: [] });
-    }
+    if (current()) useFleet.getState().setArgoProjects(cluster, { available: false, error: String(e), projects: [] });
   }
 }
 
 export async function listArgoApplicationSets(cluster: string): Promise<void> {
+  const seq = ++gen.appSets;
   useFleet.getState().setArgoApplicationSetsLoading(cluster);
+  const current = () => seq === gen.appSets && useFleet.getState().argo.cluster === cluster;
   try {
     const r = (await ArgoService.ListApplicationSets(cluster)) as ArgoApplicationSetsResultDTO;
-    if (useFleet.getState().argo.cluster !== cluster) return;
-    useFleet.getState().setArgoApplicationSets(cluster, r ?? { available: false, message: "no response", applicationSets: [] });
+    if (!current()) return;
+    useFleet.getState().setArgoApplicationSets(cluster, r ?? { available: false, error: "no response", applicationSets: [] });
   } catch (e) {
-    if (useFleet.getState().argo.cluster === cluster) {
-      useFleet.getState().setArgoApplicationSets(cluster, { available: false, message: String(e), applicationSets: [] });
-    }
+    if (current()) useFleet.getState().setArgoApplicationSets(cluster, { available: false, error: String(e), applicationSets: [] });
   }
 }
 

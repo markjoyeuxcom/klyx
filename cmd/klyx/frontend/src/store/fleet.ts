@@ -133,9 +133,11 @@ export type ArgoAppDTO = {
   opPhase: string; opMessage: string;
   conditions: ArgoConditionDTO[]; resources?: ArgoResourceDTO[]; reconciledUnix: number;
 };
-export type ArgoResultDTO = { available: boolean; message?: string; apps: ArgoAppDTO[] };
-export type ArgoProjectsResultDTO = { available: boolean; message?: string; projects: ArgoProjectDTO[] };
-export type ArgoApplicationSetsResultDTO = { available: boolean; message?: string; applicationSets: ArgoApplicationSetDTO[] };
+// error set = the read failed (availability unknown); available=false with no
+// error = the kind is not served. Never render a failed read as "not installed".
+export type ArgoResultDTO = { available: boolean; message?: string; error?: string; apps: ArgoAppDTO[] };
+export type ArgoProjectsResultDTO = { available: boolean; message?: string; error?: string; projects: ArgoProjectDTO[] };
+export type ArgoApplicationSetsResultDTO = { available: boolean; message?: string; error?: string; applicationSets: ArgoApplicationSetDTO[] };
 
 export type ConditionDTO = { type: string; status: string; reason: string; message: string; scope?: string };
 export type InventoryEntryDTO = { group: string; version: string; kind: string; namespace: string; name: string };
@@ -680,7 +682,19 @@ type ArgoSlice = {
   loading: boolean;
   projectsLoading: boolean;
   applicationSetsLoading: boolean;
+  // Last read failure per list (null = last read succeeded). A failure keeps
+  // the last good rows for the same cluster, so the lens can say "stale".
+  error?: string | null;
+  projectsError?: string | null;
+  applicationSetsError?: string | null;
   expanded: string[]; // "<ns>/<name>" keys
+};
+
+const ARGO_EMPTY_ROWS = {
+  apps: [] as ArgoAppDTO[], projects: [] as ArgoProjectDTO[], applicationSets: [] as ArgoApplicationSetDTO[],
+  available: true, projectsAvailable: true, applicationSetsAvailable: true,
+  message: "", projectsMessage: "", applicationSetsMessage: "",
+  error: null, projectsError: null, applicationSetsError: null,
 };
 
 // ---- / Helm types -------------------------------------------------------------
@@ -1251,12 +1265,25 @@ export const useFleet = create<FleetState>((set) => ({
     applicationSetsLoading: false,
     expanded: [],
   },
-  setArgoLoading: (cluster) => set((s) => ({ argo: { ...s.argo, cluster, loading: true } })),
-  setArgo: (cluster, r) => set((s) => ({ argo: { ...s.argo, cluster, apps: r.apps ?? [], available: r.available, message: r.message ?? "", loading: false } })),
-  setArgoProjectsLoading: (cluster) => set((s) => ({ argo: { ...s.argo, cluster, projectsLoading: true } })),
-  setArgoProjects: (cluster, r) => set((s) => ({ argo: { ...s.argo, cluster, projects: r.projects ?? [], projectsAvailable: r.available, projectsMessage: r.message ?? "", projectsLoading: false } })),
-  setArgoApplicationSetsLoading: (cluster) => set((s) => ({ argo: { ...s.argo, cluster, applicationSetsLoading: true } })),
-  setArgoApplicationSets: (cluster, r) => set((s) => ({ argo: { ...s.argo, cluster, applicationSets: r.applicationSets ?? [], applicationSetsAvailable: r.available, applicationSetsMessage: r.message ?? "", applicationSetsLoading: false } })),
+  // A different cluster starts empty: B's lens must never show A's rows while
+  // B's first read is in flight.
+  setArgoLoading: (cluster) => set((s) => ({ argo: { ...(s.argo.cluster === cluster ? s.argo : { ...s.argo, ...ARGO_EMPTY_ROWS }), cluster, loading: true } })),
+  setArgo: (cluster, r) => set((s) => ({ argo: r.error
+    // failed read: keep this cluster's last good rows, record the failure
+    ? (() => { const keep = s.argo.cluster === cluster ? s.argo.apps : [];
+        // legacy readers key off available/message: with nothing kept, say why
+        return { ...s.argo, cluster, apps: keep, error: r.error, loading: false, ...(keep.length === 0 ? { available: false, message: r.error } : {}) }; })()
+    : { ...s.argo, cluster, apps: r.apps ?? [], available: r.available, message: r.message ?? "", error: null, loading: false } })),
+  setArgoProjectsLoading: (cluster) => set((s) => ({ argo: { ...(s.argo.cluster === cluster ? s.argo : { ...s.argo, ...ARGO_EMPTY_ROWS }), cluster, projectsLoading: true } })),
+  setArgoProjects: (cluster, r) => set((s) => ({ argo: r.error
+    ? (() => { const keep = s.argo.cluster === cluster ? s.argo.projects : [];
+        return { ...s.argo, cluster, projects: keep, projectsError: r.error, projectsLoading: false, ...(keep.length === 0 ? { projectsAvailable: false, projectsMessage: r.error } : {}) }; })()
+    : { ...s.argo, cluster, projects: r.projects ?? [], projectsAvailable: r.available, projectsMessage: r.message ?? "", projectsError: null, projectsLoading: false } })),
+  setArgoApplicationSetsLoading: (cluster) => set((s) => ({ argo: { ...(s.argo.cluster === cluster ? s.argo : { ...s.argo, ...ARGO_EMPTY_ROWS }), cluster, applicationSetsLoading: true } })),
+  setArgoApplicationSets: (cluster, r) => set((s) => ({ argo: r.error
+    ? (() => { const keep = s.argo.cluster === cluster ? s.argo.applicationSets : [];
+        return { ...s.argo, cluster, applicationSets: keep, applicationSetsError: r.error, applicationSetsLoading: false, ...(keep.length === 0 ? { applicationSetsAvailable: false, applicationSetsMessage: r.error } : {}) }; })()
+    : { ...s.argo, cluster, applicationSets: r.applicationSets ?? [], applicationSetsAvailable: r.available, applicationSetsMessage: r.message ?? "", applicationSetsError: null, applicationSetsLoading: false } })),
   toggleArgoExpand: (key) => set((s) => ({ argo: { ...s.argo, expanded: s.argo.expanded.includes(key) ? s.argo.expanded.filter((k) => k !== key) : [...s.argo.expanded, key] } })),
   clearArgo: () => set({
     argo: {

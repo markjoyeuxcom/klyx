@@ -66,16 +66,26 @@ func TestListApplicationsNotInstalled(t *testing.T) {
 	conn := &fakeArgoConn{listErr: apierrors.NewNotFound(gr, "")}
 	s := NewArgoService(func(string) (ArgoConn, bool) { return conn, true })
 	r := s.ListApplications("c")
-	if r.Available || r.Message == "" {
-		t.Fatalf("missing CRD must read unavailable with message: %+v", r)
+	if r.Available || r.Message == "" || r.Error != "" {
+		t.Fatalf("missing CRD must read unavailable with message and NO error: %+v", r)
 	}
 }
 
 func TestListApplicationsError(t *testing.T) {
 	conn := &fakeArgoConn{listErr: errors.New("boom")}
 	s := NewArgoService(func(string) (ArgoConn, bool) { return conn, true })
-	if r := s.ListApplications("c"); r.Available || r.Message != "boom" {
-		t.Fatalf("list error must surface: %+v", r)
+	if r := s.ListApplications("c"); r.Available || r.Message != "boom" || r.Error != "boom" {
+		t.Fatalf("list error must surface as an error, not absence: %+v", r)
+	}
+	disconnected := NewArgoService(func(string) (ArgoConn, bool) { return nil, false })
+	if r := disconnected.ListApplications("c"); r.Error == "" {
+		t.Fatalf("not connected is a read failure, not absence: %+v", r)
+	}
+	if r := disconnected.ListProjects("c"); r.Error == "" {
+		t.Fatalf("projects: not connected must be an error: %+v", r)
+	}
+	if r := disconnected.ListApplicationSets("c"); r.Error == "" {
+		t.Fatalf("appsets: not connected must be an error: %+v", r)
 	}
 }
 

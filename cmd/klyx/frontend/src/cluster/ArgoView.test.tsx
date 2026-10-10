@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, fireEvent, act } from "@testing-library/react";
+import { render, fireEvent, act, screen, within } from "@testing-library/react";
 import { ArgoView, resolveArgoResourceRef } from "./ArgoView";
 import { useFleet } from "../store/fleet";
 import type { ArgoAppDTO, ArgoResourceDTO } from "../store/fleet";
@@ -36,6 +36,10 @@ function seed(apps: ArgoAppDTO[], extra: Partial<{ available: boolean; message: 
   useFleet.setState((s) => ({ argo: { ...s.argo, cluster: "homelab-nelli", apps, available: extra.available ?? true, message: extra.message ?? "", loading: false } }));
 }
 
+// The row is the first match: once selected, the inspector repeats the name.
+function select(name: string) { fireEvent.click(screen.getAllByText(name)[0]); }
+const inspector = () => within(screen.getByTestId("lens-inspector"));
+
 describe("ArgoView", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -47,7 +51,7 @@ describe("ArgoView", () => {
     seed([broken, healthy]);
     const { getByText, getAllByText } = render(<ArgoView cluster="homelab-nelli" />);
     expect(getAllByText("OutOfSync").length).toBeGreaterThanOrEqual(1);
-    expect(getAllByText("Degraded").length).toBeGreaterThanOrEqual(1);
+    expect(getAllByText(/▲ Degraded/).length).toBeGreaterThanOrEqual(1); // faults carry the shape cue
     expect(getAllByText("Synced").length).toBeGreaterThanOrEqual(1);
     expect(getAllByText("Healthy").length).toBeGreaterThanOrEqual(1);
     expect(getAllByText(/abc1234d/).length).toBeGreaterThanOrEqual(1); // shortened revision
@@ -60,19 +64,21 @@ describe("ArgoView", () => {
     expect(getByText(/Argo CD not detected/)).toBeTruthy();
   });
 
-  it("selecting a row shows source, conditions, and the action buttons in the inspector", () => {
+  it("selecting a row shows source, conditions, and the action band in the inspector", () => {
     seed([broken]);
-    const { getByText, getAllByRole } = render(<ArgoView cluster="homelab-nelli" />);
-    expect(getByText(/repo unreachable/)).toBeTruthy();
-    expect(getByText(/apps\/console\/overlays\/dev/)).toBeTruthy();
-    expect(getByText("refresh app")).toBeTruthy();
-    expect(getAllByRole("button", { name: "sync" }).length).toBeGreaterThan(0);
+    render(<ArgoView cluster="homelab-nelli" />);
+    select("ollama-prod");
+    expect(inspector().getByText(/repo unreachable/)).toBeTruthy();
+    expect(inspector().getByText(/apps\/console\/overlays\/dev/)).toBeTruthy();
+    expect(inspector().getByRole("button", { name: /^Refresh/ })).toBeTruthy(); // primary (spec §3)
+    expect(inspector().getByRole("button", { name: /^Sync/ })).toBeTruthy();    // safeguarded secondary
   });
 
   it("sync opens the Argo operation dialog and dispatches selected options", () => {
     seed([broken]);
-    const { getAllByRole, getByLabelText, getByRole, getByText } = render(<ArgoView cluster="homelab-nelli" />);
-    fireEvent.click(getAllByRole("button", { name: "sync" })[0]);
+    const { getByLabelText, getByRole, getByText } = render(<ArgoView cluster="homelab-nelli" />);
+    select("ollama-prod");
+    fireEvent.click(inspector().getByRole("button", { name: /^Sync/ }));
     expect(getByRole("dialog", { name: /Sync Application ollama-prod/ })).toBeTruthy();
     expect(getByText("Prune")).toBeTruthy();
     fireEvent.change(getByLabelText("revision git ref"), { target: { value: "feature/test" } });
@@ -96,8 +102,9 @@ describe("ArgoView", () => {
 
   it("sync defaults to prune off", () => {
     seed([broken]);
-    const { getAllByRole, getByRole } = render(<ArgoView cluster="homelab-nelli" />);
-    fireEvent.click(getAllByRole("button", { name: "sync" })[0]);
+    const { getByRole } = render(<ArgoView cluster="homelab-nelli" />);
+    select("ollama-prod");
+    fireEvent.click(inspector().getByRole("button", { name: /^Sync/ }));
     fireEvent.click(getByRole("button", { name: "Synchronize" }));
     expect(syncArgoApp).toHaveBeenCalledWith("homelab-nelli", "argocd", "ollama-prod", expect.objectContaining({
       prune: false,
@@ -106,9 +113,9 @@ describe("ArgoView", () => {
 
   it("refresh flows through ConfirmDialog", () => {
     seed([healthy]);
-    const { getByText, getAllByText, getAllByRole } = render(<ArgoView cluster="homelab-nelli" />);
+    const { getAllByText, getAllByRole } = render(<ArgoView cluster="homelab-nelli" />);
     fireEvent.click(getAllByText("console-dev")[0]); // name cell (dest ns matches too)
-    fireEvent.click(getByText("refresh app"));
+    fireEvent.click(inspector().getByRole("button", { name: /^Refresh/ }));
     const confirm = getAllByRole("button", { name: "Refresh" });
     fireEvent.click(confirm[confirm.length - 1]);
     expect(refreshArgoApp).toHaveBeenCalledWith("homelab-nelli", "argocd", "console-dev");
@@ -121,20 +128,17 @@ describe("ArgoView", () => {
 
   // --- Keyboard nav (applications mode only) ---
 
-  it("j/k + Enter selects an app like a click, Esc returns to the broken-first default", () => {
+  it("j/k + Enter selects an app like a click, Esc closes the inspector", () => {
     seed([broken, healthy]);
-    const { getByText, queryByText } = render(<ArgoView cluster="homelab-nelli" />);
-    // Default inspector selection is the first (broken) app.
-    expect(getByText(/repo unreachable/)).toBeTruthy();
+    const { queryByTestId } = render(<ArgoView cluster="homelab-nelli" />);
     // j → index 0 (ollama-prod); j → index 1 (console-dev); Enter → select it
     act(() => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "j", bubbles: true, cancelable: true })); });
     act(() => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "j", bubbles: true, cancelable: true })); });
     act(() => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })); });
-    // The inspector now shows console-dev - the same action as clicking its row.
-    expect(queryByText(/repo unreachable/)).toBeNull();
-    // Esc collapses the explicit selection back to the broken-first default.
+    expect(inspector().getByRole("heading", { name: "console-dev" })).toBeTruthy();
+    expect(inspector().queryByText(/repo unreachable/)).toBeNull();
     act(() => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })); });
-    expect(getByText(/repo unreachable/)).toBeTruthy();
+    expect(queryByTestId("lens-inspector")).toBeNull();
   });
 
   it("renders projects as an Argo-native view", () => {
@@ -148,6 +152,7 @@ describe("ArgoView", () => {
       },
     }));
     const { getAllByText, getByText } = render(<ArgoView cluster="homelab-nelli" mode="projects" />);
+    select("platform");
     expect(getAllByText("platform").length).toBeGreaterThanOrEqual(2);
     expect(getAllByText("unused").length).toBeGreaterThanOrEqual(2);
     expect(getByText("no linked Applications loaded")).toBeTruthy();
@@ -176,11 +181,14 @@ describe("ArgoView", () => {
         applicationSetsLoading: false,
       },
     }));
-    const { getAllByText, getByText } = render(<ArgoView cluster="homelab-nelli" mode="applicationsets" />);
+    const { getAllByText } = render(<ArgoView cluster="homelab-nelli" mode="applicationsets" />);
+    select("platform-set");
     expect(getAllByText("platform-set").length).toBeGreaterThanOrEqual(2);
-    expect(getByText("clusters")).toBeTruthy();
+    expect(getAllByText("clusters").length).toBeGreaterThanOrEqual(1);
     expect(getAllByText("3").length).toBeGreaterThanOrEqual(2);
-    expect(getAllByText(/RenderError/).length).toBeGreaterThanOrEqual(2);
+    // rows are fixed-height; the failing condition reads in full in the inspector
+    expect(inspector().getByText(/RenderError/)).toBeTruthy();
+    expect(inspector().getByText(/ErrorOccurred: bad template/)).toBeTruthy();
   });
 
   it("shows ApplicationSet expected versus actual generated app drift", () => {
@@ -209,6 +217,8 @@ describe("ArgoView", () => {
       },
     }));
     const { getByText, getAllByText } = render(<ArgoView cluster="homelab-nelli" mode="applicationsets" />);
+    select("platform-set");
+    fireEvent.click(getByText("Generated applications"));
     expect(getByText("expected")).toBeTruthy();
     expect(getAllByText("2").length).toBeGreaterThanOrEqual(2);
     expect(getByText("actual")).toBeTruthy();
@@ -220,10 +230,10 @@ describe("ArgoView", () => {
   it("filters applications by attention and query", () => {
     seed([broken, healthy]);
     const { getByRole, getByText, getAllByText, queryByText } = render(<ArgoView cluster="homelab-nelli" />);
-    fireEvent.click(getByRole("button", { name: /needs attention\s*1/i }));
+    fireEvent.click(getByRole("button", { name: /^Attention\s*1/i }));
     expect(getAllByText("ollama-prod").length).toBeGreaterThanOrEqual(1);
     expect(queryByText("console-dev")).toBeNull();
-    fireEvent.change(getByRole("textbox", { name: "filter applications" }), { target: { value: "nope" } });
+    fireEvent.change(getByRole("searchbox", { name: "Search Argo CD" }), { target: { value: "nope" } });
     expect(getByText(/No applications match/)).toBeTruthy();
   });
 
@@ -252,6 +262,7 @@ describe("ArgoView", () => {
       },
     }));
     const { getAllByText, getByText } = render(<ArgoView cluster="homelab-nelli" mode="applicationsets" />);
+    select("platform-set");
     expect(getAllByText("dev-platform").length).toBeGreaterThanOrEqual(1);
     expect(getByText("actual")).toBeTruthy();
   });
@@ -288,6 +299,7 @@ describe("ArgoView", () => {
     useFleet.setState({ route: { name: "cluster", cluster: "homelab-nelli", section: "argo" } });
     seed([healthy]);
     const { getByRole } = render(<ArgoView cluster="homelab-nelli" />);
+    select("console-dev");
     fireEvent.click(getByRole("button", { name: "open Deployment console-dev/console" }));
     const route = useFleet.getState().route;
     expect(route.name === "cluster" && route.section).toBe("resources");
@@ -299,6 +311,7 @@ describe("ArgoView", () => {
   it("leaves unknown Application resources as non-clickable rows", () => {
     seed([{ ...healthy, resources: [{ group: "example.com", kind: "Widget", namespace: "apps", name: "w1", status: "Synced", health: "Healthy" }] }]);
     const { getByText, queryByRole } = render(<ArgoView cluster="homelab-nelli" />);
+    select("console-dev");
     expect(getByText("Widget")).toBeTruthy();
     expect(getByText("apps/w1")).toBeTruthy();
     expect(queryByRole("button", { name: "open Widget apps/w1" })).toBeNull();
@@ -320,9 +333,86 @@ describe("ArgoView", () => {
     }));
     seed([{ ...healthy, resources: [{ group: "example.com", kind: "Widget", namespace: "apps", name: "w1", status: "Synced", health: "Healthy" }] }]);
     const { getByRole } = render(<ArgoView cluster="homelab-nelli" />);
+    select("console-dev");
     fireEvent.click(getByRole("button", { name: "open Widget apps/w1" }));
     const route = useFleet.getState().route;
     expect(route.name === "cluster" && route.resource).toEqual({ group: "example.com", version: "v1", plural: "widgets", kind: "Widget", scope: "Namespaced" });
     expect(route.name === "cluster" && route.instance).toEqual({ namespace: "apps", name: "w1" });
+  });
+});
+
+describe("ArgoView workspace template (redesign step 4b)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    useFleet.getState().clearArgo();
+    useFleet.setState({ navIntent: null, clusters: [] });
+  });
+
+  it("auto-selects the first broken application once, from a fresh read only", () => {
+    seed([healthy, broken]);
+    const { queryByTestId } = render(<ArgoView cluster="homelab-nelli" />);
+    expect(queryByTestId("lens-inspector")).toBeNull(); // cached rows at entry
+    act(() => seed([healthy, broken]));
+    expect(inspector().getByRole("heading", { name: "ollama-prod" })).toBeTruthy();
+    fireEvent.click(inspector().getByRole("button", { name: "close details" }));
+    act(() => seed([healthy, broken]));
+    expect(queryByTestId("lens-inspector")).toBeNull(); // once only
+  });
+
+  it("Suspended is an intended pause: never attention, paused lamp", () => {
+    const paused: ArgoAppDTO = { ...healthy, name: "paused-app", healthStatus: "Suspended", broken: false };
+    seed([paused]);
+    const { getByText, getByRole } = render(<ArgoView cluster="homelab-nelli" />);
+    expect(getByText("none need attention")).toBeTruthy();
+    expect(getByText(/1 suspended/)).toBeTruthy();
+    expect(getByRole("img", { name: "Suspended" })).toBeTruthy();
+  });
+
+  it("an application gone from a complete read is removed and cancels its pending sync", () => {
+    seed([broken, healthy]);
+    const { getByText, queryByRole } = render(<ArgoView cluster="homelab-nelli" />);
+    select("ollama-prod");
+    fireEvent.click(inspector().getByRole("button", { name: /^Sync/ }));
+    expect(screen.getByRole("dialog", { name: /Sync Application ollama-prod/ })).toBeTruthy();
+    act(() => seed([healthy]));
+    expect(getByText("Application removed.")).toBeTruthy();
+    expect(queryByRole("dialog", { name: /Sync Application/ })).toBeNull();
+    expect(inspector().queryByRole("button", { name: /^Refresh/ })).toBeNull();
+    expect(syncArgoApp).not.toHaveBeenCalled();
+  });
+
+  it("a pending refresh raised by keyboard is pinned to its own cluster", () => {
+    seed([broken]);
+    const { getByText, queryByText, rerender } = render(<ArgoView cluster="homelab-nelli" />);
+    act(() => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "j", bubbles: true, cancelable: true })); });
+    act(() => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "r", bubbles: true, cancelable: true })); });
+    expect(getByText("refresh application")).toBeTruthy();
+    rerender(<ArgoView cluster="other" />);
+    act(() => useFleet.setState((s) => ({ argo: { ...s.argo, cluster: "other", apps: [broken], loading: false, error: null } })));
+    expect(queryByText("refresh application")).toBeNull();
+    expect(refreshArgoApp).not.toHaveBeenCalled();
+  });
+
+  it("a failed re-read keeps the last good list under a notice; with no rows it is unreadable, not 'not installed'", () => {
+    seed([broken]);
+    useFleet.setState((s) => ({ argo: { ...s.argo, error: "forbidden" } }));
+    const first = render(<ArgoView cluster="homelab-nelli" />);
+    expect(first.getByText(/showing the last good read/)).toBeTruthy();
+    expect(first.getAllByText("ollama-prod").length).toBeGreaterThan(0);
+    first.unmount();
+    useFleet.setState((s) => ({ argo: { ...s.argo, cluster: "homelab-nelli", apps: [], available: false, message: "forbidden", error: "forbidden", loading: false } }));
+    const second = render(<ArgoView cluster="homelab-nelli" />);
+    expect(second.getByText("Argo CD applications could not be read.")).toBeTruthy();
+    expect(second.queryByText(/not served/)).toBeNull();
+  });
+
+  it("a palette sync for an app hidden by a stale filter reveals it and opens the composer", () => {
+    seed([broken, healthy]);
+    const { getByRole } = render(<ArgoView cluster="homelab-nelli" />);
+    fireEvent.change(getByRole("searchbox", { name: "Search Argo CD" }), { target: { value: "zzz" } });
+    act(() => useFleet.getState().requestNavIntent({ kind: "sync-argo", cluster: "homelab-nelli", namespace: "argocd", name: "console-dev" }));
+    expect(screen.getByRole("dialog", { name: /Sync Application console-dev/ })).toBeTruthy();
+    expect((getByRole("searchbox", { name: "Search Argo CD" }) as HTMLInputElement).value).toBe("");
+    expect(inspector().getByRole("heading", { name: "console-dev" })).toBeTruthy();
   });
 });

@@ -7,12 +7,17 @@ import { ConfirmDialog } from "../chrome/ConfirmDialog";
 import { MetaTile, OperationDialog, OptionTile } from "../chrome/OperationDialog";
 import { useListKeys } from "../chrome/useListKeys";
 import { useNavIntent } from "../chrome/useNavIntent";
-import { MetersStrip, EmptyState, FilterButton, SkeletonRows, btn, ellipsis } from "../chrome/primitives";
-import { IconGitMerge } from "@tabler/icons-react";
+import { EmptyState, SkeletonRows, ellipsis } from "../chrome/primitives";
+import { WatchErrorBanner } from "../chrome/WatchErrorBanner";
+import { VirtualList, type VirtualListHandle } from "../chrome/VirtualList";
+import { IconAlertTriangle, IconGitMerge } from "@tabler/icons-react";
 import { Age, UpdatedAt, useReceivedAt } from "../chrome/Age";
-import { InspectorEmpty, InspectorSection, InspectorTitle } from "./ResourceInspector";
+import { InspectorSection, InspectorStatus } from "./ResourceInspector";
 import { wellKnownResourceRef } from "./resourceRefs";
-import { ManifestButton } from "./ManifestButton";
+import { VerdictLamp } from "../health/VerdictView";
+import { LensLayout, LensTable, TABLE_ROW_HEIGHT, type DatasetState } from "../layout/LensLayout";
+import { InspectorBlock, InspectorLayout, type MenuItem } from "../layout/InspectorLayout";
+import { fitColumns, type ColumnDef } from "../layout/columns";
 
 // ArgoView is the Argo CD lens, speaking Argo's vocabulary (synced/degraded,
 // never translated into Flux terms). Apps arrive broken-first from the
@@ -23,23 +28,9 @@ import { ManifestButton } from "./ManifestButton";
 const keyOf = (a: ArgoAppDTO) => `${a.namespace}/${a.name}`;
 const arrayOf = <T,>(value: T[] | null | undefined): T[] => (Array.isArray(value) ? value : []);
 
-const syncColor: Record<string, string> = {
-  Synced: "var(--color-text-success)",
-  OutOfSync: "var(--color-text-warning)",
-};
-const healthColor: Record<string, string> = {
-  Healthy: "var(--color-text-success)",
-  Progressing: "var(--color-text-info)",
-  Degraded: "var(--color-text-danger)",
-  Missing: "var(--color-text-danger)",
-  Suspended: "var(--color-text-warning)",
-};
 
 const short = (rev: string) => (rev.length > 8 ? rev.slice(0, 8) : rev);
 
-type Pending = { verb: "refresh"; app: ArgoAppDTO };
-
-const gridCols = "12px minmax(0,1.2fr) 90px 110px minmax(0,1fr) 90px 90px 132px";
 
 export function resolveArgoResourceRef(resource: ArgoResourceDTO, crdGroups: CRDGroupDTO[] = []): ResourceRef | null {
   const crdGroup = crdGroups.find((g) => g.group === resource.group);
@@ -56,24 +47,93 @@ export function resolveArgoResourceRef(resource: ArgoResourceDTO, crdGroups: CRD
   return wellKnownResourceRef(resource.group, resource.kind);
 }
 
+// ArgoView - the Argo CD lens on the workspace template (spec §6 step 4b).
+// Three views of one lens: Applications, Projects, ApplicationSets (the route
+// keeps the mode). Argo's own vocabulary is kept - Synced/OutOfSync,
+// Healthy/Progressing/Degraded/Missing/Suspended - never translated into Flux
+// terms. Attention follows the ratified backend rule (Application.broken):
+// Suspended is an intended pause, never attention. Primary verb Refresh,
+// secondary Sync (safeguarded composer, prune off by default) per spec §3.
+
+type ArgoPinned = { cluster: string; verb: "refresh" | "sync"; app: ArgoAppDTO };
+type AppFilter = "all" | "attention" | "outofsync";
+type ProjectFilter = "all" | "risky" | "unused";
+type AppSetFilter = "all" | "attention" | "missing";
+
+// argoHealth maps Argo state onto the shared verdict roles so lamps follow
+// the template rule (only faults glow): Degraded/Missing = fault; OutOfSync =
+// degraded (drift); Progressing = progressing; Suspended = paused (outlined
+// ring); Healthy+Synced = ok; anything else = unknown.
+function argoHealth(a: ArgoAppDTO): { kind: string; label: string } {
+  if (a.healthStatus === "Degraded" || a.healthStatus === "Missing") return { kind: "fault", label: a.healthStatus };
+  if (a.healthStatus === "Suspended") return { kind: "paused", label: "Suspended" };
+  if (a.syncStatus === "OutOfSync") return { kind: "degraded", label: "OutOfSync" };
+  if (a.healthStatus === "Progressing") return { kind: "progressing", label: "Progressing" };
+  if (a.healthStatus === "Healthy" && a.syncStatus === "Synced") return { kind: "ok", label: "Healthy" };
+  return { kind: "unknown", label: a.healthStatus || "Unknown" };
+}
+const ROLE_COLOR: Record<string, string> = {
+  fault: "var(--color-text-danger)",
+  degraded: "var(--color-text-warning)",
+  progressing: "var(--color-text-secondary)",
+  paused: "var(--color-text-secondary)",
+  ok: "var(--color-text-secondary)",
+  unknown: "var(--color-text-tertiary)",
+};
+
+function riskRole(risks: Risk[]): { kind: string; label: string } {
+  if (risks.some((r) => r.tone === "danger")) return { kind: "fault", label: "risky policy" };
+  if (risks.some((r) => r.tone === "warning")) return { kind: "degraded", label: "policy warning" };
+  return { kind: "ok", label: "restricted" };
+}
+
+function RowLamp({ role }: { role: { kind: string; label: string } }) {
+  return <span role="img" aria-label={role.label} style={{ display: "inline-flex", justifySelf: "center" }}><VerdictLamp health={role} size={8} /></span>;
+}
+
+const cell: React.CSSProperties = { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 };
+
+const APP_COLUMNS: (ColumnDef & { label: string })[] = [
+  { id: "lamp", label: "", width: 16, priority: 0 },
+  { id: "name", label: "Application", width: 240, priority: 0, flex: true },
+  { id: "sync", label: "Sync", width: 92, priority: 1 },
+  { id: "health", label: "Health", width: 104, priority: 1 },
+  { id: "dest", label: "Destination", width: 140, priority: 3, grow: 0.6 },
+  { id: "revision", label: "Revision", width: 84, priority: 4 },
+  { id: "reconciled", label: "Reconciled", width: 92, priority: 5 },
+];
+const PROJECT_COLUMNS: (ColumnDef & { label: string })[] = [
+  { id: "lamp", label: "", width: 16, priority: 0 },
+  { id: "name", label: "Project", width: 240, priority: 0, flex: true },
+  { id: "policy", label: "Policy signal", width: 220, priority: 1, grow: 0.8 },
+  { id: "apps", label: "Apps", width: 56, priority: 2 },
+  { id: "appsets", label: "AppSets", width: 64, priority: 3 },
+];
+const APPSET_COLUMNS: (ColumnDef & { label: string })[] = [
+  { id: "lamp", label: "", width: 16, priority: 0 },
+  { id: "name", label: "ApplicationSet", width: 240, priority: 0, flex: true },
+  { id: "generators", label: "Generators", width: 130, priority: 2 },
+  { id: "apps", label: "Apps", width: 56, priority: 1 },
+  { id: "source", label: "Source", width: 180, priority: 4, grow: 0.8 },
+  { id: "project", label: "Project", width: 110, priority: 3 },
+];
+
 export function ArgoView({ cluster, mode = "applications" }: { cluster: string; mode?: ArgoViewMode }) {
   const argo = useFleet((s) => s.argo);
+  const openArgo = useFleet((s) => s.openArgo);
   const isProtected = useFleet((s) => s.clusters.find((c) => c.name === cluster)?.protected ?? false);
-  const [pending, setPending] = useState<Pending | null>(null);
-  const [syncTarget, setSyncTarget] = useState<ArgoAppDTO | null>(null);
-
-  // Palette verbs land here as one-shot intents once the app list is loaded.
-  // Sync opens the composer (prune/selective options + prd arming); refresh
-  // its confirm - the palette never bypasses either.
-  useNavIntent(cluster, ["sync-argo", "refresh-argo"], (intent) => {
-    if (argo.loading || argo.apps.length === 0) return "wait";
-    if (!("namespace" in intent)) return "missing";
-    const app = argo.apps.find((a) => a.namespace === intent.namespace && a.name === intent.name);
-    if (!app) return "missing";
-    if (intent.kind === "sync-argo") setSyncTarget(app);
-    else setPending({ verb: "refresh", app });
-    return "consumed";
-  }, [argo.apps, argo.loading]);
+  const [pinned, setPinnedState] = useState<ArgoPinned | null>(null);
+  const [appKey, setAppKey] = useState<string | null>(null);
+  const [projKey, setProjKey] = useState<string | null>(null);
+  const [setKey, setSetKey] = useState<string | null>(null);
+  const [cursorKey, setCursorKey] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
+  const [appFilter, setAppFilter] = useState<AppFilter>("all");
+  const [projectFilter, setProjectFilter] = useState<ProjectFilter>("all");
+  const [appSetFilter, setAppSetFilter] = useState<AppSetFilter>("all");
+  const [bodyWidth, setBodyWidth] = useState(1100);
+  const searchRef = useRef<HTMLInputElement>(null);
+  const listRef = useRef<VirtualListHandle>(null);
 
   useEffect(() => {
     if (mode === "projects") {
@@ -86,418 +146,540 @@ export function ArgoView({ cluster, mode = "applications" }: { cluster: string; 
       void listArgoProjects(cluster);
     } else {
       void listArgoApps(cluster);
+      void listArgoProjects(cluster);
+      void listArgoApplicationSets(cluster);
     }
     return () => useFleet.getState().clearArgo();
   }, [cluster, mode]);
 
-  const receivedAt = useReceivedAt(argo.cluster === cluster && !argo.loading && argo.apps.length > 0 ? argo.apps : null);
-  const broken = argo.apps.filter((a) => a.broken).length;
-  const brokenAppSets = argo.applicationSets.filter((a) => !a.healthy).length;
-  const count = mode === "projects" ? argo.projects.length : mode === "applicationsets" ? argo.applicationSets.length : argo.apps.length;
-  const noun = mode === "projects" ? "project" : mode === "applicationsets" ? "ApplicationSet" : "application";
-  const refresh = () => {
+  const mine = argo.cluster === cluster;
+  const apps = useMemo(() => (mine ? argo.apps : []), [mine, argo.apps]);
+  const projects = useMemo(() => (mine ? argo.projects : []), [mine, argo.projects]);
+  const appSets = useMemo(() => (mine ? argo.applicationSets : []), [mine, argo.applicationSets]);
+
+  // Pending verbs are pinned to the cluster + Application they were raised on
+  // and dropped when it leaves a complete read or the cluster changes.
+  const appsComplete = mine && !argo.loading && !argo.error;
+  const setPinned = useCallback((v: Omit<ArgoPinned, "cluster"> | null) => setPinnedState(v ? { ...v, cluster } : null), [cluster]);
+  const verbLive = (v: ArgoPinned) => v.cluster === cluster && (!appsComplete || apps.some((a) => keyOf(a) === keyOf(v.app)));
+  const verb = pinned && verbLive(pinned) ? pinned : null;
+  useEffect(() => { if (pinned && !verb) setPinnedState(null); }, [pinned, verb]);
+
+  // Filtering per view.
+  const q = query.trim().toLowerCase();
+  const visibleApps = useMemo(() => apps.filter((a) => {
+    if (appFilter === "attention" && !a.broken) return false;
+    if (appFilter === "outofsync" && a.syncStatus !== "OutOfSync") return false;
+    return matchesAppQuery(a, q);
+  }), [apps, appFilter, q]);
+  const visibleProjects = useMemo(() => [...projects]
+    .filter((p) => matchesProjectQuery(p, q))
+    .filter((p) => projectFilter !== "risky" || projectRiskBadges(p, appsForProject(apps, p.name)).some((r) => r.tone === "danger" || r.tone === "warning"))
+    .filter((p) => projectFilter !== "unused" || appsForProject(apps, p.name).length === 0)
+    .sort((a, b) => projectRiskScore(b, apps) - projectRiskScore(a, apps) || a.name.localeCompare(b.name)), [projects, apps, q, projectFilter]);
+  const visibleAppSets = useMemo(() => [...appSets]
+    .filter((a) => matchesAppSetQuery(a, q))
+    .filter((a) => appSetFilter !== "attention" || !a.healthy)
+    .filter((a) => appSetFilter !== "missing" || missingGeneratedNames(a, apps).length > 0)
+    .sort((a, b) => Number(a.healthy) - Number(b.healthy) || a.name.localeCompare(b.name)), [appSets, apps, q, appSetFilter]);
+
+  // Selection lifecycle per view: filter exclusion closes; absent from a
+  // complete read = removed (last evidence, no actions).
+  const selectedApp = appKey ? apps.find((a) => keyOf(a) === appKey) : undefined;
+  const selectedProject = projKey ? projects.find((p) => projectKey(p) === projKey) : undefined;
+  const selectedSet = setKey ? appSets.find((a) => appSetKey(a) === setKey) : undefined;
+  const lastApp = useRef<ArgoAppDTO | null>(null);
+  const lastProject = useRef<ArgoProjectDTO | null>(null);
+  const lastSet = useRef<ArgoApplicationSetDTO | null>(null);
+  if (selectedApp) lastApp.current = selectedApp;
+  if (selectedProject) lastProject.current = selectedProject;
+  if (selectedSet) lastSet.current = selectedSet;
+  const appRemoved = !!appKey && appsComplete && !selectedApp;
+  const projRemoved = !!projKey && mine && !argo.projectsLoading && !argo.projectsError && !selectedProject;
+  const setRemoved = !!setKey && mine && !argo.applicationSetsLoading && !argo.applicationSetsError && !selectedSet;
+  useEffect(() => { if (selectedApp && !visibleApps.includes(selectedApp)) setAppKey(null); }, [selectedApp, visibleApps]);
+  useEffect(() => { if (selectedProject && !visibleProjects.includes(selectedProject)) setProjKey(null); }, [selectedProject, visibleProjects]);
+  useEffect(() => { if (selectedSet && !visibleAppSets.includes(selectedSet)) setSetKey(null); }, [selectedSet, visibleAppSets]);
+  const enteredCluster = useRef(cluster);
+  useEffect(() => {
+    if (enteredCluster.current === cluster) return;
+    enteredCluster.current = cluster;
+    setAppKey(null); setProjKey(null); setSetKey(null); setCursorKey(null);
+    autoSelect.current = "pending";
+    entryApps.current = useFleet.getState().argo.apps;
+  }, [cluster]);
+
+  // Palette verbs / cross-links: select the app, reveal it past stale
+  // filters, then open its confirm - never bypassing the composer.
+  useNavIntent(cluster, ["sync-argo", "refresh-argo"], (intent) => {
+    if (argo.loading || apps.length === 0) return "wait";
+    if (!("namespace" in intent)) return "missing";
+    const app = apps.find((a) => a.namespace === intent.namespace && a.name === intent.name);
+    if (!app) return "missing";
+    autoSelect.current = "done";
+    if (mode !== "applications") openArgo("applications");
+    if (!visibleApps.includes(app)) { setAppFilter("all"); setQuery(""); }
+    setCursorKey(keyOf(app));
+    setAppKey(keyOf(app));
+    setPinned({ verb: intent.kind === "sync-argo" ? "sync" : "refresh", app });
+    return "consumed";
+  }, [apps, argo.loading, visibleApps, mode]);
+
+  // One-shot auto-select of the first broken Application from a fresh read.
+  const autoSelect = useRef<"pending" | "done">("pending");
+  const entryApps = useRef<ArgoAppDTO[] | null>(null);
+  if (entryApps.current === null) entryApps.current = argo.apps;
+  const freshRead = mine && !argo.loading && !argo.error && argo.apps !== entryApps.current;
+  useEffect(() => {
+    if (autoSelect.current === "done" || !freshRead || mode !== "applications") return;
+    autoSelect.current = "done";
+    if (appKey) return;
+    const a = visibleApps.find((x) => x.broken);
+    if (a) { setCursorKey(keyOf(a)); setAppKey(keyOf(a)); }
+  }, [freshRead, visibleApps, appKey, mode]);
+
+  // Keyboard: j/k/Enter/Esc in every view; r/s (refresh/sync) on apps only.
+  const nav: { key: string; open: () => void }[] = mode === "projects"
+    ? visibleProjects.map((p) => ({ key: projectKey(p), open: () => setProjKey(projectKey(p)) }))
+    : mode === "applicationsets"
+      ? visibleAppSets.map((a) => ({ key: appSetKey(a), open: () => setSetKey(appSetKey(a)) }))
+      : visibleApps.map((a) => ({ key: keyOf(a), open: () => { autoSelect.current = "done"; setAppKey(keyOf(a)); } }));
+  const cursorIdx = cursorKey === null ? -1 : nav.findIndex((n) => n.key === cursorKey);
+  const closeSelected = () => { autoSelect.current = "done"; if (mode === "projects") setProjKey(null); else if (mode === "applicationsets") setSetKey(null); else setAppKey(null); };
+  useListKeys({
+    count: nav.length,
+    selected: cursorIdx,
+    onSelect: (idx) => { const n = nav[idx]; if (n) { setCursorKey(n.key); listRef.current?.scrollToIndex(idx); } },
+    onActivate: (idx) => { const n = nav[idx]; if (n) { setCursorKey(n.key); n.open(); } },
+    onEscape: closeSelected,
+    searchRef,
+    extraKeys: mode === "applications" ? {
+      r: (idx) => { const a = visibleApps[idx]; if (a) setPinned({ verb: "refresh", app: a }); },
+      s: (idx) => { const a = visibleApps[idx]; if (a) setPinned({ verb: "sync", app: a }); },
+    } : {},
+  });
+
+  const columns = mode === "projects" ? PROJECT_COLUMNS : mode === "applicationsets" ? APPSET_COLUMNS : APP_COLUMNS;
+  const fitted = useMemo(() => fitColumns(columns, bodyWidth), [columns, bodyWidth]);
+  const show = (id: string) => fitted.visible.has(id);
+  const gridStyle = { gridTemplateColumns: fitted.template };
+
+  // Counts in Argo vocabulary.
+  const broken = apps.filter((a) => a.broken).length;
+  const byHealth = (h: string) => apps.filter((a) => a.healthStatus === h).length;
+  const outOfSync = apps.filter((a) => a.syncStatus === "OutOfSync").length;
+  const riskyProjects = projects.filter((p) => projectRiskBadges(p, appsForProject(apps, p.name)).some((r) => r.tone === "danger" || r.tone === "warning")).length;
+  const unusedProjects = projects.filter((p) => appsForProject(apps, p.name).length === 0).length;
+  const unhealthySets = appSets.filter((a) => !a.healthy).length;
+  const missingSets = appSets.filter((a) => missingGeneratedNames(a, apps).length > 0).length;
+
+  const view = mode === "projects"
+    ? { rows: projects.length, shown: visibleProjects.length, loading: argo.projectsLoading, error: argo.projectsError, available: argo.projectsAvailable, message: argo.projectsMessage, noun: "projects" }
+    : mode === "applicationsets"
+      ? { rows: appSets.length, shown: visibleAppSets.length, loading: argo.applicationSetsLoading, error: argo.applicationSetsError, available: argo.applicationSetsAvailable, message: argo.applicationSetsMessage, noun: "ApplicationSets" }
+      : { rows: apps.length, shown: visibleApps.length, loading: argo.loading, error: argo.error, available: argo.available, message: argo.message, noun: "applications" };
+  const clearFilters = () => { setQuery(""); setAppFilter("all"); setProjectFilter("all"); setAppSetFilter("all"); };
+  let state: DatasetState = "ready";
+  if (!mine || (view.loading && view.rows === 0)) state = "loading";
+  else if (view.error && view.rows === 0) state = "unreadable";
+  else if (view.rows === 0) state = "empty";
+  else if (view.shown === 0) state = "no-match";
+  const reload = () => {
     if (mode === "projects") void listArgoProjects(cluster);
     else if (mode === "applicationsets") void listArgoApplicationSets(cluster);
     else void listArgoApps(cluster);
   };
+  const stateView = state === "loading" ? <div style={{ width: "100%", alignSelf: "flex-start" }}><SkeletonRows rows={6} label={`loading ${view.noun}`} /></div>
+    : state === "unreadable" ? <EmptyState icon={<IconAlertTriangle size={28} stroke={1.2} />} title={`Argo CD ${view.noun} could not be read.`} hint={view.error ?? undefined} action={{ label: "Retry", onClick: reload }} />
+    : state === "empty" ? (!view.available
+      ? <EmptyState icon={<IconGitMerge size={28} stroke={1.2} />} title={`Argo CD ${view.noun} are not served on this cluster.`} hint={view.message || undefined} />
+      : <EmptyState icon={<IconGitMerge size={28} stroke={1.2} />} title={`No Argo CD ${view.noun} on this cluster.`} hint={mode === "applications" ? "Argo CD is installed but no Application objects exist yet." : mode === "projects" ? "Projects define allowed repos, destinations, and roles." : "ApplicationSets generate Applications from clusters, Git, pull requests, and other generators."} />)
+    : <EmptyState icon={<IconGitMerge size={28} stroke={1.2} />} title={`No ${view.noun} match the current filters.`} hint={`${view.rows} ${view.noun} on this cluster.`} action={{ label: "Clear filters", onClick: clearFilters }} />;
+  const receivedAt = useReceivedAt(mine && !argo.loading && apps.length > 0 ? apps : null);
+  const partial = view.error ? "+" : "";
+  const projectFor = (name: string) => projects.find((p) => p.name === name) ?? null;
 
   return (
-    <div style={{ padding: "16px 20px" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
-        <span style={{ fontSize: 12, color: "var(--color-text-secondary)" }}>
-          {count} {noun}{count === 1 ? "" : "s"}
-          {mode === "applications" && broken > 0 && <span style={{ color: "var(--color-text-danger)" }}> · {broken} need attention</span>}
-          {mode === "applicationsets" && brokenAppSets > 0 && <span style={{ color: "var(--color-text-danger)" }}> · {brokenAppSets} need attention</span>}
-        </span>
-        <button onClick={refresh} style={btn}>refresh</button>
-        <UpdatedAt at={receivedAt} />
-      </div>
-      <ArgoModeTabs mode={mode} />
+    <>
+      <LensLayout
+        label="Argo CD"
+        title={mode === "projects" ? "Argo CD projects" : mode === "applicationsets" ? "Argo CD ApplicationSets" : "Argo CD applications"}
+        summary={state === "loading" || state === "unreadable" ? null : mode === "applications" ? (
+          <>
+            <span className="t-number" style={{ color: "var(--color-text-secondary)" }}>{apps.length}{partial}</span>
+            {broken > 0
+              ? <span className="t-status" style={{ color: byHealth("Degraded") + byHealth("Missing") > 0 ? "var(--color-text-danger)" : "var(--color-text-warning)" }}>{byHealth("Degraded") + byHealth("Missing") > 0 ? "▲ " : ""}{broken} need attention</span>
+              : <span className="t-secondary">{view.error ? "no known attention" : "none need attention"}</span>}
+            <span className="t-secondary">
+              {[byHealth("Degraded") ? `${byHealth("Degraded")} degraded` : "", byHealth("Missing") ? `${byHealth("Missing")} missing` : "", outOfSync ? `${outOfSync} out of sync` : "", byHealth("Progressing") ? `${byHealth("Progressing")} progressing` : "", byHealth("Suspended") ? `${byHealth("Suspended")} suspended` : ""].filter(Boolean).join(" · ")}
+            </span>
+          </>
+        ) : mode === "projects" ? (
+          <>
+            <span className="t-number" style={{ color: "var(--color-text-secondary)" }}>{projects.length}{partial}</span>
+            <span className="t-secondary">{[riskyProjects ? `${riskyProjects} with policy risk` : "no policy risk", unusedProjects ? `${unusedProjects} unused` : ""].filter(Boolean).join(" · ")}</span>
+          </>
+        ) : (
+          <>
+            <span className="t-number" style={{ color: "var(--color-text-secondary)" }}>{appSets.length}{partial}</span>
+            {unhealthySets > 0
+              ? <span className="t-status" style={{ color: "var(--color-text-warning)" }}>{unhealthySets} need attention</span>
+              : <span className="t-secondary">none need attention</span>}
+            {missingSets > 0 && <span className="t-secondary">{missingSets} missing generated apps</span>}
+          </>
+        )}
+        headerEnd={
+          <>
+            <UpdatedAt at={receivedAt} />
+            <button className="l-btn" onClick={reload}>Refresh list</button>
+          </>
+        }
+        controls={
+          <>
+            <div role="group" aria-label="Argo CD view" style={{ display: "inline-flex", gap: 4 }}>
+              <button className="l-chip" aria-pressed={mode === "applications"} onClick={() => openArgo("applications")}>Applications</button>
+              <button className="l-chip" aria-pressed={mode === "projects"} onClick={() => openArgo("projects")}>Projects</button>
+              <button className="l-chip" aria-pressed={mode === "applicationsets"} onClick={() => openArgo("applicationsets")}>ApplicationSets</button>
+            </div>
+            {mode === "applications" && (
+              <>
+                <button className="l-chip" aria-pressed={appFilter === "all"} onClick={() => setAppFilter("all")}>All</button>
+                <button className="l-chip" aria-pressed={appFilter === "attention"} onClick={() => setAppFilter("attention")}>Attention {broken > 0 && <span style={{ color: "var(--color-text-warning)" }}>{broken}</span>}</button>
+                {outOfSync > 0 && <button className="l-chip" aria-pressed={appFilter === "outofsync"} onClick={() => setAppFilter("outofsync")}>OutOfSync <span style={{ color: "var(--color-text-tertiary)" }}>{outOfSync}</span></button>}
+              </>
+            )}
+            {mode === "projects" && (
+              <>
+                <button className="l-chip" aria-pressed={projectFilter === "all"} onClick={() => setProjectFilter("all")}>All</button>
+                <button className="l-chip" aria-pressed={projectFilter === "risky"} onClick={() => setProjectFilter("risky")}>Policy risk <span style={{ color: "var(--color-text-tertiary)" }}>{riskyProjects}</span></button>
+                <button className="l-chip" aria-pressed={projectFilter === "unused"} onClick={() => setProjectFilter("unused")}>Unused <span style={{ color: "var(--color-text-tertiary)" }}>{unusedProjects}</span></button>
+              </>
+            )}
+            {mode === "applicationsets" && (
+              <>
+                <button className="l-chip" aria-pressed={appSetFilter === "all"} onClick={() => setAppSetFilter("all")}>All</button>
+                <button className="l-chip" aria-pressed={appSetFilter === "attention"} onClick={() => setAppSetFilter("attention")}>Attention {unhealthySets > 0 && <span style={{ color: "var(--color-text-warning)" }}>{unhealthySets}</span>}</button>
+                <button className="l-chip" aria-pressed={appSetFilter === "missing"} onClick={() => setAppSetFilter("missing")}>Missing apps <span style={{ color: "var(--color-text-tertiary)" }}>{missingSets}</span></button>
+              </>
+            )}
+            <label style={{ display: "flex", flex: "0 1 260px", minWidth: 140, marginLeft: "auto" }}>
+              <span className="sr-only">Search Argo CD</span>
+              <input ref={searchRef} className="l-input" style={{ width: "100%" }} type="search" autoCapitalize="off" autoCorrect="off" spellCheck={false} value={query} onChange={(e) => setQuery(e.target.value)} placeholder={`Search ${view.noun}`} />
+            </label>
+          </>
+        }
+        notice={view.error && view.rows > 0 ? <WatchErrorBanner tool="Argo CD" failure="read failed - showing the last good read" error={view.error} /> : undefined}
+        state={state}
+        stateView={stateView}
+        body={
+          <LensTable minWidth={fitted.minWidth} onWidth={setBodyWidth}>
+            <div className="lens-table-head" role="row" style={gridStyle}>
+              {columns.filter((c) => show(c.id)).map((c) => <span key={c.id}>{c.label}</span>)}
+            </div>
+            {mode === "applications" ? (
+              <VirtualList
+                ref={listRef}
+                items={visibleApps}
+                rowHeight={TABLE_ROW_HEIGHT}
+                rowKey={(a) => keyOf(a)}
+                style={{ flex: 1, minHeight: 0 }}
+                render={(a) => {
+                  const k = keyOf(a);
+                  const role = argoHealth(a);
+                  return (
+                    <div key={k} role="button" tabIndex={0} className="lens-row" style={gridStyle}
+                      aria-selected={k === cursorKey} data-cursor={k === cursorKey ? "true" : undefined} data-selected={k === appKey ? "true" : undefined}
+                      onClick={() => { setCursorKey(k); autoSelect.current = "done"; setAppKey(k === appKey ? null : k); }}
+                      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setAppKey(k); } }}>
+                      {show("lamp") && <RowLamp role={role} />}
+                      {show("name") && (
+                        <span style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
+                          <span className="lens-cell-name" title={k}><span style={{ fontWeight: k === appKey ? 600 : 400 }}>{a.name}</span></span>
+                          {a.project && a.project !== "default" && <span style={{ color: "var(--color-text-tertiary)", flexShrink: 0 }}>{a.project}</span>}
+                          {a.autoSync && <span style={{ color: "var(--color-text-tertiary)", flexShrink: 0 }} title="automated sync policy">auto</span>}
+                        </span>
+                      )}
+                      {show("sync") && <span style={{ ...cell, color: a.syncStatus === "OutOfSync" ? "var(--color-text-warning)" : "var(--color-text-secondary)" }}>{a.syncStatus || "-"}</span>}
+                      {show("health") && <span style={{ ...cell, color: ROLE_COLOR[a.healthStatus === "Degraded" || a.healthStatus === "Missing" ? "fault" : "ok"], fontWeight: a.healthStatus === "Degraded" || a.healthStatus === "Missing" ? 600 : 400 }}>{a.healthStatus === "Degraded" || a.healthStatus === "Missing" ? "▲ " : ""}{a.healthStatus || "-"}</span>}
+                      {show("dest") && <span style={{ ...cell, color: "var(--color-text-secondary)" }}>{a.destNamespace || "-"}</span>}
+                      {show("revision") && <span style={{ ...cell, color: "var(--color-text-tertiary)" }}>{a.revision ? short(a.revision) : "-"}</span>}
+                      {show("reconciled") && <span style={{ color: "var(--color-text-tertiary)" }}><Age unixSeconds={a.reconciledUnix} suffix=" ago" fallback="never" /></span>}
+                    </div>
+                  );
+                }}
+              />
+            ) : mode === "projects" ? (
+              <VirtualList
+                ref={listRef}
+                items={visibleProjects}
+                rowHeight={TABLE_ROW_HEIGHT}
+                rowKey={(p) => projectKey(p)}
+                style={{ flex: 1, minHeight: 0 }}
+                render={(p) => {
+                  const k = projectKey(p);
+                  const pApps = appsForProject(apps, p.name);
+                  const risks = projectRiskBadges(p, pApps);
+                  return (
+                    <div key={k} role="button" tabIndex={0} className="lens-row" style={gridStyle}
+                      aria-selected={k === cursorKey} data-cursor={k === cursorKey ? "true" : undefined} data-selected={k === projKey ? "true" : undefined}
+                      onClick={() => { setCursorKey(k); setProjKey(k === projKey ? null : k); }}
+                      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setProjKey(k); } }}>
+                      {show("lamp") && <RowLamp role={riskRole(risks)} />}
+                      {show("name") && <span className="lens-cell-name" title={p.description || p.name}>{p.name}{p.description && <span style={{ color: "var(--color-text-tertiary)" }}> · {p.description}</span>}</span>}
+                      {show("policy") && <span style={{ ...cell, display: "flex", gap: 4 }}>{risks.length === 0 ? <span style={{ color: "var(--color-text-tertiary)" }}>restricted</span> : risks.slice(0, 3).map((r) => <RiskBadge key={r.label} tone={r.tone}>{r.label}</RiskBadge>)}</span>}
+                      {show("apps") && <span>{pApps.length}</span>}
+                      {show("appsets") && <span>{appSetsForProject(appSets, p.name).length}</span>}
+                    </div>
+                  );
+                }}
+              />
+            ) : (
+              <VirtualList
+                ref={listRef}
+                items={visibleAppSets}
+                rowHeight={TABLE_ROW_HEIGHT}
+                rowKey={(a) => appSetKey(a)}
+                style={{ flex: 1, minHeight: 0 }}
+                render={(a) => {
+                  const k = appSetKey(a);
+                  return (
+                    <div key={k} role="button" tabIndex={0} className="lens-row" style={gridStyle}
+                      aria-selected={k === cursorKey} data-cursor={k === cursorKey ? "true" : undefined} data-selected={k === setKey ? "true" : undefined}
+                      onClick={() => { setCursorKey(k); setSetKey(k === setKey ? null : k); }}
+                      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setSetKey(k); } }}>
+                      {show("lamp") && <RowLamp role={a.healthy ? { kind: "ok", label: "healthy" } : { kind: "degraded", label: "needs attention" }} />}
+                      {show("name") && <span className="lens-cell-name" title={k}><span style={{ color: "var(--color-text-tertiary)" }}>{a.namespace} / </span>{a.name}</span>}
+                      {show("generators") && <span style={{ ...cell, color: "var(--color-text-secondary)" }}>{a.generators.length === 0 ? "-" : a.generators.join(", ")}</span>}
+                      {show("apps") && <span>{a.generatedApps || generatedAppsForSet(apps, a).length || "-"}</span>}
+                      {show("source") && <span style={{ ...cell, color: "var(--color-text-tertiary)" }}>{a.repoURL ? `${a.repoURL}${a.path ? ` · ${a.path}` : ""}` : "-"}</span>}
+                      {show("project") && <span style={{ ...cell, color: "var(--color-text-secondary)" }}>{a.project || "-"}</span>}
+                    </div>
+                  );
+                }}
+              />
+            )}
+          </LensTable>
+        }
+        footer={<span className="t-legend">{mode === "applications" ? "j k navigate · ↵ inspect · r refresh · s sync · / search" : "j k navigate · ↵ inspect · / search"}</span>}
+        footerEnd={<span className="t-secondary">{view.shown} of {view.rows}{partial} {view.noun}{mode === "applications" ? " · broken first" : ""}</span>}
+        inspector={
+          mode === "applications" && appKey && (selectedApp || appRemoved) && lastApp.current ? (
+            <ApplicationInspector
+              key={`${cluster}/${appKey}`}
+              cluster={cluster}
+              app={selectedApp ?? lastApp.current}
+              removed={appRemoved}
+              isProtected={isProtected}
+              project={projectFor((selectedApp ?? lastApp.current).project)}
+              appSet={applicationSetForApp(appSets, selectedApp ?? lastApp.current)}
+              onClose={() => { autoSelect.current = "done"; setAppKey(null); }}
+              onRefresh={(a) => setPinned({ verb: "refresh", app: a })}
+              onSync={(a) => setPinned({ verb: "sync", app: a })}
+            />
+          ) : mode === "projects" && projKey && (selectedProject || projRemoved) && lastProject.current ? (
+            <ProjectInspector
+              key={`${cluster}/${projKey}`}
+              project={selectedProject ?? lastProject.current}
+              removed={projRemoved}
+              apps={appsForProject(apps, (selectedProject ?? lastProject.current).name)}
+              appSets={appSetsForProject(appSets, (selectedProject ?? lastProject.current).name)}
+              onClose={() => setProjKey(null)}
+            />
+          ) : mode === "applicationsets" && setKey && (selectedSet || setRemoved) && lastSet.current ? (
+            <ApplicationSetInspector
+              key={`${cluster}/${setKey}`}
+              appSet={selectedSet ?? lastSet.current}
+              removed={setRemoved}
+              allApps={apps}
+              project={projectFor((selectedSet ?? lastSet.current).project)}
+              onClose={() => setSetKey(null)}
+            />
+          ) : undefined
+        }
+        inspectorLabel={mode === "projects" ? "Argo CD project details" : mode === "applicationsets" ? "ApplicationSet details" : "Argo CD application details"}
+        onCloseInspector={closeSelected}
+      />
 
-      {mode === "projects" ? (
-        <ProjectsView argo={argo} />
-      ) : mode === "applicationsets" ? (
-        <ApplicationSetsView argo={argo} />
-      ) : argo.loading && argo.apps.length === 0 ? (
-        <SkeletonRows rows={6} label="loading applications" />
-      ) : !argo.available ? (
-        <div style={emptyStyle}>{argo.message || "Argo CD is not available on this cluster."}</div>
-      ) : argo.apps.length === 0 ? (
-        <EmptyState
-          icon={<IconGitMerge size={28} stroke={1.2} />}
-          title="No Argo CD applications on this cluster."
-          hint="Argo CD is installed but no Application objects exist yet."
-        />
-      ) : (
-        <ApplicationsView
-          cluster={cluster}
-          argo={argo}
-          onRefresh={(app) => setPending({ verb: "refresh", app })}
-          onSync={(app) => setSyncTarget(app)}
-        />
-      )}
-
-      {pending && (
+      {verb?.verb === "refresh" && (
         <ConfirmDialog
           title="refresh application"
-          cluster={cluster}
-          detail={`${keyOf(pending.app)} - re-compare against ${pending.app.targetRevision || "HEAD"}`}
+          cluster={verb.cluster}
+          detail={`${keyOf(verb.app)} - re-compare against ${verb.app.targetRevision || "HEAD"}`}
           protected={isProtected}
           confirmLabel="Refresh"
-          onCancel={() => setPending(null)}
+          onCancel={() => setPinnedState(null)}
           onConfirm={() => {
-            const { app } = pending;
-            setPending(null);
-            void refreshArgoApp(cluster, app.namespace, app.name);
+            const { cluster: target, app } = verb;
+            setPinnedState(null);
+            void refreshArgoApp(target, app.namespace, app.name);
           }}
         />
       )}
-      {syncTarget && (
+      {verb?.verb === "sync" && (
         <SyncApplicationDialog
-          cluster={cluster}
-          app={syncTarget}
+          cluster={verb.cluster}
+          app={verb.app}
           isProtected={isProtected}
-          onCancel={() => setSyncTarget(null)}
+          onCancel={() => setPinnedState(null)}
           onConfirm={(options) => {
-            const app = syncTarget;
-            setSyncTarget(null);
-            void syncArgoApp(cluster, app.namespace, app.name, options);
+            const { cluster: target, app } = verb;
+            setPinnedState(null);
+            void syncArgoApp(target, app.namespace, app.name, options);
           }}
         />
       )}
+    </>
+  );
+}
+
+function RemovedNotice({ kind }: { kind: string }) {
+  return (
+    <div role="status" className="t-body" style={{ padding: "8px 10px", borderRadius: 4, background: "var(--color-background-secondary)", boxShadow: "inset 0 0 0 1px var(--color-border-secondary)" }}>
+      <span className="t-status">{kind} removed.</span> It is no longer in the current read. The details below are its last evidence; actions are disabled.
     </div>
   );
 }
 
-function ArgoModeTabs({ mode }: { mode: ArgoViewMode }) {
-  const openArgo = useFleet((s) => s.openArgo);
-  const tabs: { mode: ArgoViewMode; label: string }[] = [
-    { mode: "applications", label: "Applications" },
-    { mode: "projects", label: "Projects" },
-    { mode: "applicationsets", label: "ApplicationSets" },
-  ];
+// ApplicationInspector - Argo verdict (health · sync) with the operation and
+// condition messages in full; Refresh (primary), Sync (secondary, composer
+// with prune off by default), More = View manifest; then source, destination,
+// operation, conditions, and the live resource inventory (each resolvable
+// resource opens in Resources).
+function ApplicationInspector({ cluster, app, removed, isProtected, project, appSet, onClose, onRefresh, onSync }: {
+  cluster: string;
+  app: ArgoAppDTO;
+  removed: boolean;
+  isProtected: boolean;
+  project: ArgoProjectDTO | null;
+  appSet: ArgoApplicationSetDTO | null;
+  onClose: () => void;
+  onRefresh: (a: ArgoAppDTO) => void;
+  onSync: (a: ArgoAppDTO) => void;
+}) {
+  const crd = useFleet((s) => s.crd);
+  const crdGroups = crd.cluster === cluster ? crd.groups : [];
+  const conditions = arrayOf(app.conditions);
+  const resources = arrayOf(app.resources);
+  const badResources = resources.filter((r) => r.status === "OutOfSync" || r.health === "Degraded" || r.health === "Missing");
+  const role = argoHealth(app);
+  const tone = role.kind === "fault" ? "danger" : role.kind === "degraded" ? "warning" : role.kind === "ok" ? "success" : "muted";
+  const live = !removed;
+  const manifestRef = wellKnownResourceRef("argoproj.io", "Application");
+  const openLiveResource = (resource: ArgoResourceDTO) => {
+    const ref = resolveArgoResourceRef(resource, crdGroups);
+    if (!ref) return;
+    const nav = useFleet.getState();
+    nav.openResource(ref);
+    nav.openInstance(ref.scope === "Cluster" ? "" : (resource.namespace || app.destNamespace), resource.name);
+  };
+  const more: MenuItem[] = manifestRef
+    ? [{ label: "View manifest in Resources", onSelect: () => { const nav = useFleet.getState(); nav.openResource(manifestRef); nav.openInstance(app.namespace, app.name); } }]
+    : [];
+  const opFailed = !!app.opPhase && app.opPhase !== "Succeeded" && app.opPhase !== "Running";
   return (
-    <div role="tablist" aria-label="Argo CD views" style={{ display: "inline-flex", gap: 2, border: "0.5px solid var(--color-border-tertiary)", borderRadius: 5, overflow: "hidden", marginBottom: 12 }}>
-      {tabs.map((t) => (
-        <button
-          key={t.mode}
-          role="tab"
-          aria-selected={mode === t.mode}
-          onClick={() => openArgo(t.mode)}
-          style={{
-            ...btn,
-            border: "none",
-            borderRadius: 0,
-            background: mode === t.mode ? "var(--color-background-secondary)" : "transparent",
-            color: mode === t.mode ? "var(--color-text-primary)" : "var(--color-text-secondary)",
-          }}
-        >
-          {t.label}
-        </button>
-      ))}
+    <div data-testid="argo-app-panel" style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
+      <InspectorLayout
+        kind="Application"
+        namespace={app.namespace}
+        name={app.name}
+        meta={
+          <>
+            {isProtected && <span style={{ color: "var(--color-text-warning)", fontWeight: 600 }}>protected · </span>}
+            {[`project ${app.project || "default"}`, app.destNamespace ? `→ ${app.destNamespace}` : "", app.autoSync ? "auto sync" : "manual sync"].filter(Boolean).join(" · ")}
+          </>
+        }
+        onClose={onClose}
+        verdict={removed ? <RemovedNotice kind="Application" /> : (
+          <div>
+            <InspectorStatus tone={tone} label={`${app.healthStatus || "Unknown"} · ${app.syncStatus || "Unknown"}`} reason={badResources.length > 0 ? `${badResources.length} resource${badResources.length === 1 ? "" : "s"} need attention` : undefined} detail={app.revision ? short(app.revision) : undefined} />
+            {conditions.map((c, i) => (
+              <div key={`${c.type}/${i}`} className="t-body" style={{ color: "var(--color-text-danger)", overflowWrap: "anywhere", marginTop: -4 }}>{c.type}: {c.message || "-"}</div>
+            ))}
+            {opFailed && app.opMessage && (
+              <div className="t-body" style={{ color: "var(--color-text-warning)", overflowWrap: "anywhere", marginTop: 2 }}>Last operation {app.opPhase}: {app.opMessage}</div>
+            )}
+          </div>
+        )}
+        primary={live ? { label: "Refresh", kbd: "r", onSelect: () => onRefresh(app) } : undefined}
+        secondary={live ? { label: "Sync", kbd: "s", onSelect: () => onSync(app) } : undefined}
+        more={more}
+      >
+        <InspectorBlock title="Resources" count={resources.length} extra={badResources.length > 0 ? <span className="t-secondary" style={{ color: "var(--color-text-warning)" }}>{badResources.length} need attention</span> : undefined}>
+          {resources.length === 0 ? <span className="t-secondary">Argo has not reported resource inventory for this Application.</span> : (
+            <div style={{ display: "grid", gap: 4 }}>
+              {[...badResources, ...resources.filter((r) => !badResources.includes(r))].map((r) => (
+                <ArgoResourceRow key={resourceKey(r)} resource={r} resolvable={resolveArgoResourceRef(r, crdGroups) !== null} onOpen={() => openLiveResource(r)} />
+              ))}
+            </div>
+          )}
+        </InspectorBlock>
+        <InspectorBlock title="Source">
+          <div className="insp-kv">
+            <span>repo</span><span className="t-identifier" style={{ overflowWrap: "anywhere" }}>{app.repoURL || "-"}</span>
+            <span>{app.chart ? "chart" : "path"}</span><span className="t-identifier" style={{ overflowWrap: "anywhere" }}>{app.chart || app.path || "root"}</span>
+            <span>target</span><span className="t-identifier">{app.targetRevision || "HEAD"}</span>
+            <span>revision</span><span className="t-identifier" style={{ overflowWrap: "anywhere" }}>{app.revision || "-"}</span>
+            {app.extraSources > 0 && <><span>extra</span><span>{app.extraSources} more source{app.extraSources === 1 ? "" : "s"}</span></>}
+          </div>
+        </InspectorBlock>
+        <InspectorBlock title="Destination">
+          <div className="insp-kv">
+            <span>namespace</span><span className="t-identifier">{app.destNamespace || "-"}</span>
+            <span>project</span><span className="t-identifier" style={{ color: project ? undefined : "var(--color-text-warning)" }}>{app.project || "default"}{project ? "" : " (not loaded)"}</span>
+            <span>appset</span><span className="t-identifier">{appSet ? appSet.name : "-"}</span>
+          </div>
+        </InspectorBlock>
+        <InspectorBlock title="Operation" defaultOpen={opFailed}>
+          <div className="insp-kv">
+            <span>last</span><span style={{ color: opFailed ? "var(--color-text-warning)" : undefined }}>{app.opPhase || "-"}</span>
+            <span>message</span><span style={{ overflowWrap: "anywhere" }}>{app.opMessage || "-"}</span>
+            <span>reconciled</span><span><Age unixSeconds={app.reconciledUnix} suffix=" ago" fallback="never" /></span>
+          </div>
+        </InspectorBlock>
+      </InspectorLayout>
     </div>
   );
 }
 
-function ApplicationsView({ cluster, argo, onRefresh, onSync }: { cluster: string; argo: ReturnType<typeof useFleet.getState>["argo"]; onRefresh: (app: ArgoAppDTO) => void; onSync: (app: ArgoAppDTO) => void }) {
-  const [selectedKey, setSelectedKey] = useState<string | null>(null);
-  const [kbKey, setKbKey] = useState<string | null>(null);
-  const [query, setQuery] = useState("");
-  const [attentionOnly, setAttentionOnly] = useState(false);
-  const argoCount = (health: string) => argo.apps.filter((a) => a.healthStatus === health).length;
-  const outOfSync = argo.apps.filter((a) => a.syncStatus === "OutOfSync").length;
-  const apps = useMemo(() => argo.apps.filter((a) => matchesAppQuery(a, query) && (!attentionOnly || a.broken)), [argo.apps, attentionOnly, query]);
-  const selected = apps.find((a) => keyOf(a) === selectedKey) ?? apps[0] ?? null;
-
-  // Keyboard nav (j/k/Enter/Esc) over the visible app rows - applications
-  // mode only; projects and applicationsets stay mouse-driven. Selection is
-  // keyed by keyOf: when the kb-selected app leaves the visible set (filter
-  // change) this resolves to -1 — no selection — instead of silently pointing
-  // at whatever row took its index.
-  const kbIdx = kbKey === null ? -1 : apps.findIndex((a) => keyOf(a) === kbKey);
-
-  const handleKbSelect = useCallback((idx: number) => {
-    const a = apps[idx];
-    if (a) setKbKey(keyOf(a));
-  }, [apps]);
-
-  const handleActivate = useCallback((idx: number) => {
-    const a = apps[idx];
-    if (a) setSelectedKey(keyOf(a));
-  }, [apps]);
-
-  const handleEscape = useCallback(() => {
-    if (selectedKey) setSelectedKey(null);
-  }, [selectedKey]);
-
-  useListKeys({
-    count: apps.length,
-    selected: kbIdx,
-    onSelect: handleKbSelect,
-    onActivate: handleActivate,
-    onEscape: handleEscape,
-  });
-
-  return (
-    <div style={splitPaneWide}>
-      <div style={{ minWidth: 0, fontFamily: "var(--font-mono)", fontSize: 12 }}>
-        {/* Meters in Argo's own vocabulary - never Flux words here. */}
-        <MetersStrip
-          note="broken first · argo vocabulary"
-          meters={[
-            { label: "applications", value: argo.apps.length },
-            argoCount("Degraded") > 0 && { label: "degraded", value: argoCount("Degraded"), tone: "danger" as const },
-            argoCount("Missing") > 0 && { label: "missing", value: argoCount("Missing"), tone: "danger" as const },
-            outOfSync > 0 && { label: "outofsync", value: outOfSync, tone: "warning" as const },
-            argoCount("Progressing") > 0 && { label: "progressing", value: argoCount("Progressing"), tone: "info" as const },
-            argoCount("Suspended") > 0 && { label: "suspended", value: argoCount("Suspended"), tone: "warning" as const },
-            { label: "synced", value: argo.apps.filter((a) => a.syncStatus === "Synced").length, tone: "success" as const },
-          ]}
-        />
-        <FilterBar
-          query={query}
-          onQuery={setQuery}
-          placeholder="filter applications"
-          toggles={[{ label: "needs attention", active: attentionOnly, count: argo.apps.filter((a) => a.broken).length, onClick: () => setAttentionOnly((v) => !v) }]}
-          visible={apps.length}
-          total={argo.apps.length}
-        />
-        <div style={{ display: "grid", gridTemplateColumns: gridCols, gap: 10, padding: "0 8px 6px", fontSize: 9, textTransform: "uppercase", letterSpacing: 0.5, color: "var(--color-text-tertiary)", borderBottom: "0.5px solid var(--color-border-secondary)" }}>
-          <span /><span>application</span><span>sync</span><span>health</span><span>destination</span><span>revision</span><span>reconciled</span><span>actions</span>
-        </div>
-        {apps.length === 0 ? <EmptyInline text="No applications match the current filter." /> : apps.map((a, i) => (
-          <ApplicationRow
-            key={keyOf(a)}
-            app={a}
-            selected={selected ? keyOf(selected) === keyOf(a) : false}
-            kbSelected={i === kbIdx}
-            onSelect={() => setSelectedKey(keyOf(a))}
-            onRefresh={() => onRefresh(a)}
-            onSync={() => onSync(a)}
-          />
-        ))}
-      </div>
-      <ApplicationInspector
-        cluster={cluster}
-        app={selected}
-        project={selected ? argo.projects.find((p) => p.name === selected.project) ?? null : null}
-        appSet={selected ? applicationSetForApp(argo.applicationSets, selected) : null}
-        onRefresh={selected ? () => onRefresh(selected) : undefined}
-        onSync={selected ? () => onSync(selected) : undefined}
-      />
-    </div>
-  );
-}
-
-function ApplicationRow({ app: a, selected, kbSelected, onSelect, onRefresh, onSync }: { app: ArgoAppDTO; selected: boolean; kbSelected: boolean; onSelect: () => void; onRefresh: () => void; onSync: () => void }) {
-  // Keep the kb-selected row visible while j/k walks the list. Optional call:
-  // jsdom has no scrollIntoView.
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (kbSelected) ref.current?.scrollIntoView?.({ block: "nearest" });
-  }, [kbSelected]);
-  return (
-    <div
-      ref={ref}
-      role="button"
-      tabIndex={0}
-      aria-selected={kbSelected}
-      onClick={onSelect}
-      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onSelect(); } }}
-      style={{ display: "grid", gridTemplateColumns: gridCols, gap: 10, alignItems: "center", width: "100%", padding: "7px 8px", border: "none", borderBottom: "0.5px solid var(--color-border-tertiary)", background: kbSelected || selected ? "var(--color-background-secondary)" : "transparent", boxShadow: kbSelected ? "inset 2px 0 0 var(--bench-selection-edge, var(--color-text-info))" : undefined, color: "var(--color-text-primary)", textAlign: "left", cursor: "pointer" }}
-    >
-      <span style={{ width: 8, height: 8, borderRadius: "50%", background: a.broken ? "var(--color-text-danger)" : "var(--color-text-success)" }} />
-      <span style={ellipsis} title={keyOf(a)}>
-        <span style={{ fontWeight: 500 }}>{a.name}</span>
-        {a.project && a.project !== "default" && <span style={{ color: "var(--color-text-tertiary)", marginLeft: 6, fontSize: 10 }}>{a.project}</span>}
-        {a.autoSync && <span style={{ color: "var(--color-text-tertiary)", marginLeft: 6, fontSize: 9 }} title="automated sync policy">auto</span>}
-      </span>
-      <span style={{ color: syncColor[a.syncStatus] ?? "var(--color-text-tertiary)" }}>{a.syncStatus}</span>
-      <span style={{ color: healthColor[a.healthStatus] ?? "var(--color-text-tertiary)" }}>{a.healthStatus}</span>
-      <span style={{ ...ellipsis, color: "var(--color-text-tertiary)" }} title={a.destNamespace}>{a.destNamespace || "-"}</span>
-      <span style={{ color: "var(--color-text-tertiary)" }} title={a.revision}>{a.revision ? short(a.revision) : "-"}</span>
-      <span style={{ color: "var(--color-text-tertiary)" }}><Age unixSeconds={a.reconciledUnix} suffix=" ago" fallback="never" /></span>
-      <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
-        <button onClick={(e) => { e.stopPropagation(); onRefresh(); }} style={smallBtn}>refresh</button>
-        <button onClick={(e) => { e.stopPropagation(); onSync(); }} style={smallPrimaryBtn}>sync</button>
-      </span>
-    </div>
-  );
-}
-
-function ProjectsView({ argo }: { argo: ReturnType<typeof useFleet.getState>["argo"] }) {
-  const [selectedKey, setSelectedKey] = useState<string | null>(null);
-  const [query, setQuery] = useState("");
-  const [riskyOnly, setRiskyOnly] = useState(false);
-  const [unusedOnly, setUnusedOnly] = useState(false);
-  const projects = useMemo(() => [...argo.projects]
-    .filter((p) => matchesProjectQuery(p, query))
-    .filter((p) => !riskyOnly || projectRiskBadges(p, appsForProject(argo.apps, p.name)).some((r) => r.tone === "danger" || r.tone === "warning"))
-    .filter((p) => !unusedOnly || appsForProject(argo.apps, p.name).length === 0)
-    .sort((a, b) => projectRiskScore(b, argo.apps) - projectRiskScore(a, argo.apps) || a.name.localeCompare(b.name)), [argo.apps, argo.projects, query, riskyOnly, unusedOnly]);
-  const selected = projects.find((p) => projectKey(p) === selectedKey) ?? projects[0] ?? null;
-  if (argo.projectsLoading && argo.projects.length === 0) return <SkeletonRows rows={5} label="loading projects" />;
-  if (!argo.projectsAvailable) return <div style={emptyStyle}>{argo.projectsMessage || "Argo CD projects are not available on this cluster."}</div>;
-  if (argo.projects.length === 0) {
-    return <EmptyState icon={<IconGitMerge size={28} stroke={1.2} />} title="No Argo CD projects on this cluster." hint="Projects define allowed repos, destinations, and roles." />;
-  }
-  return (
-    <div style={splitPane}>
-      <div style={{ minWidth: 0, fontFamily: "var(--font-mono)", fontSize: 12 }}>
-        <FilterBar
-          query={query}
-          onQuery={setQuery}
-          placeholder="filter projects"
-          toggles={[
-            { label: "risky policy", active: riskyOnly, count: argo.projects.filter((p) => projectRiskBadges(p, appsForProject(argo.apps, p.name)).some((r) => r.tone === "danger" || r.tone === "warning")).length, onClick: () => setRiskyOnly((v) => !v) },
-            { label: "unused", active: unusedOnly, count: argo.projects.filter((p) => appsForProject(argo.apps, p.name).length === 0).length, onClick: () => setUnusedOnly((v) => !v) },
-          ]}
-          visible={projects.length}
-          total={argo.projects.length}
-        />
-        <div style={headerGrid("12px minmax(150px, 0.9fr) minmax(0, 1fr) 86px 92px")}>
-          <span /><span>project</span><span>policy signal</span><span>apps</span><span>appsets</span>
-        </div>
-        {projects.length === 0 ? <EmptyInline text="No projects match the current filter." /> : projects.map((p) => (
-          <ProjectRow
-            key={projectKey(p)}
-            project={p}
-            selected={selected ? projectKey(selected) === projectKey(p) : false}
-            apps={appsForProject(argo.apps, p.name)}
-            appSets={appSetsForProject(argo.applicationSets, p.name)}
-            onSelect={() => setSelectedKey(projectKey(p))}
-          />
-        ))}
-      </div>
-      <ProjectInspector project={selected} apps={selected ? appsForProject(argo.apps, selected.name) : []} appSets={selected ? appSetsForProject(argo.applicationSets, selected.name) : []} />
-    </div>
-  );
-}
-
-function ProjectRow({ project: p, selected, apps, appSets, onSelect }: { project: ArgoProjectDTO; selected: boolean; apps: ArgoAppDTO[]; appSets: ArgoApplicationSetDTO[]; onSelect: () => void }) {
-  const risks = projectRiskBadges(p, apps);
-  return (
-    <button onClick={onSelect} style={{ display: "grid", gridTemplateColumns: "12px minmax(150px, 0.9fr) minmax(0, 1fr) 86px 92px", gap: 10, alignItems: "center", width: "100%", padding: "8px", border: "none", borderBottom: "0.5px solid var(--color-border-tertiary)", background: selected ? "var(--color-background-secondary)" : "transparent", color: "var(--color-text-primary)", textAlign: "left", cursor: "pointer" }}>
-      <span style={{ width: 8, height: 8, borderRadius: "50%", background: risks.some((r) => r.tone === "danger") ? "var(--color-text-danger)" : risks.some((r) => r.tone === "warning") ? "var(--color-text-warning)" : "var(--color-text-success)" }} />
-      <span style={ellipsis} title={p.description || p.name}>
-        <span style={{ fontWeight: 500 }}>{p.name}</span>
-        {p.description && <span style={{ color: "var(--color-text-tertiary)", marginLeft: 6 }}>{p.description}</span>}
-      </span>
-      <span style={{ display: "flex", flexWrap: "wrap", gap: 4, minWidth: 0 }}>{risks.length === 0 ? <span style={{ color: "var(--color-text-tertiary)" }}>restricted</span> : risks.slice(0, 2).map((r) => <RiskBadge key={r.label} tone={r.tone}>{r.label}</RiskBadge>)}</span>
-      <span>{apps.length}</span>
-      <span>{appSets.length}</span>
-    </button>
-  );
-}
-
-function ApplicationSetsView({ argo }: { argo: ReturnType<typeof useFleet.getState>["argo"] }) {
-  const [selectedKey, setSelectedKey] = useState<string | null>(null);
-  const [query, setQuery] = useState("");
-  const [attentionOnly, setAttentionOnly] = useState(false);
-  const [missingOnly, setMissingOnly] = useState(false);
-  const appSets = useMemo(() => [...argo.applicationSets]
-    .filter((a) => matchesAppSetQuery(a, query))
-    .filter((a) => !attentionOnly || !a.healthy)
-    .filter((a) => !missingOnly || missingGeneratedNames(a, argo.apps).length > 0)
-    .sort((a, b) => Number(a.healthy) - Number(b.healthy) || a.name.localeCompare(b.name)), [argo.applicationSets, argo.apps, attentionOnly, missingOnly, query]);
-  const selected = appSets.find((a) => appSetKey(a) === selectedKey) ?? appSets[0] ?? null;
-  if (argo.applicationSetsLoading && argo.applicationSets.length === 0) return <SkeletonRows rows={5} label="loading applicationsets" />;
-  if (!argo.applicationSetsAvailable) return <div style={emptyStyle}>{argo.applicationSetsMessage || "Argo CD ApplicationSets are not available on this cluster."}</div>;
-  if (argo.applicationSets.length === 0) {
-    return <EmptyState icon={<IconGitMerge size={28} stroke={1.2} />} title="No ApplicationSets on this cluster." hint="ApplicationSets generate Applications from clusters, Git, pull requests, and other generators." />;
-  }
-  return (
-    <div style={splitPane}>
-      <div style={{ minWidth: 0, fontFamily: "var(--font-mono)", fontSize: 12 }}>
-        <FilterBar
-          query={query}
-          onQuery={setQuery}
-          placeholder="filter applicationsets"
-          toggles={[
-            { label: "needs attention", active: attentionOnly, count: argo.applicationSets.filter((a) => !a.healthy).length, onClick: () => setAttentionOnly((v) => !v) },
-            { label: "missing apps", active: missingOnly, count: argo.applicationSets.filter((a) => missingGeneratedNames(a, argo.apps).length > 0).length, onClick: () => setMissingOnly((v) => !v) },
-          ]}
-          visible={appSets.length}
-          total={argo.applicationSets.length}
-        />
-        <div style={headerGrid("12px minmax(150px, 0.9fr) 116px 72px minmax(0, 1fr) 104px")}>
-          <span /><span>applicationset</span><span>generators</span><span>apps</span><span>source</span><span>project</span>
-        </div>
-        {appSets.length === 0 ? <EmptyInline text="No ApplicationSets match the current filter." /> : appSets.map((a) => (
-          <ApplicationSetRow
-            key={appSetKey(a)}
-            appSet={a}
-            selected={selected ? appSetKey(selected) === appSetKey(a) : false}
-            generatedApps={generatedAppsForSet(argo.apps, a)}
-            onSelect={() => setSelectedKey(appSetKey(a))}
-          />
-        ))}
-      </div>
-      <ApplicationSetInspector appSet={selected} allApps={argo.apps} project={selected ? argo.projects.find((p) => p.name === selected.project) ?? null : null} />
-    </div>
-  );
-}
-
-function ApplicationSetRow({ appSet: a, selected, generatedApps, onSelect }: { appSet: ArgoApplicationSetDTO; selected: boolean; generatedApps: ArgoAppDTO[]; onSelect: () => void }) {
-  const conditions = arrayOf(a.conditions);
-  const condition = conditions.find((c) => c.status !== "True") ?? conditions[0];
-  return (
-    <div>
-      <button onClick={onSelect} style={{ display: "grid", gridTemplateColumns: "12px minmax(150px, 0.9fr) 116px 72px minmax(0, 1fr) 104px", gap: 10, alignItems: "center", width: "100%", padding: "8px", border: "none", borderBottom: "0.5px solid var(--color-border-tertiary)", background: selected ? "var(--color-background-secondary)" : "transparent", color: "var(--color-text-primary)", textAlign: "left", cursor: "pointer" }}>
-        <span style={{ width: 8, height: 8, borderRadius: "50%", background: a.healthy ? "var(--color-text-success)" : "var(--color-text-danger)" }} />
-        <span style={ellipsis} title={`${a.namespace}/${a.name}`}><span style={{ fontWeight: 500 }}>{a.name}</span><span style={{ color: "var(--color-text-tertiary)", marginLeft: 6 }}>{a.namespace}</span></span>
-        <span style={ellipsis} title={a.generators.join(", ")}>{a.generators.length === 0 ? "-" : a.generators.join(", ")}</span>
-        <span>{a.generatedApps || generatedApps.length || "-"}</span>
-        <span style={{ ...ellipsis, color: "var(--color-text-tertiary)" }} title={`${a.repoURL} ${a.path}`}>{a.repoURL ? `${a.repoURL}${a.path ? ` · ${a.path}` : ""}` : "-"}</span>
-        <span>{a.project || "-"}</span>
-      </button>
-      {condition && !a.healthy && (
-        <div style={{ padding: "6px 8px 8px 30px", background: "var(--color-background-secondary)", borderBottom: "0.5px solid var(--color-border-tertiary)", color: "var(--color-text-warning)", fontSize: 11 }}>
-          {condition.type}: {condition.reason || condition.status}{condition.message ? ` - ${condition.message}` : ""}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function ProjectInspector({ project, apps, appSets }: { project: ArgoProjectDTO | null; apps: ArgoAppDTO[]; appSets: ArgoApplicationSetDTO[] }) {
-  if (!project) return <InspectorEmpty text="Select a project to inspect policy and generated workload ownership." style={inspector} />;
+function ProjectInspector({ project, removed, apps, appSets, onClose }: { project: ArgoProjectDTO; removed: boolean; apps: ArgoAppDTO[]; appSets: ArgoApplicationSetDTO[]; onClose: () => void }) {
   const risks = projectRiskBadges(project, apps);
+  const role = riskRole(risks);
   return (
-    <div style={inspector}>
-      <InspectorTitle title={project.name} sub={`${project.namespace} · ${apps.length} app${apps.length === 1 ? "" : "s"} · ${appSets.length} ApplicationSet${appSets.length === 1 ? "" : "s"}`} />
-      <InspectorSection title="policy signals">
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
-          {risks.length === 0 ? <RiskBadge tone="success">restricted</RiskBadge> : risks.map((r) => <RiskBadge key={r.label} tone={r.tone}>{r.label}</RiskBadge>)}
-        </div>
-      </InspectorSection>
-      <InspectorSection title="sources">
-        <ValueList values={project.sourceRepos} empty="no source repos declared" />
-      </InspectorSection>
-      <InspectorSection title="destinations">
-        <ValueList values={project.destinations} empty="no destinations declared" />
-      </InspectorSection>
-      <InspectorSection title="resource policy" collapsible>
-        <RuleList label="cluster allow" rules={project.clusterResourceWhitelist} />
-        <RuleList label="cluster deny" rules={project.clusterResourceBlacklist} />
-        <RuleList label="namespace allow" rules={project.namespaceResourceWhitelist} />
-        <RuleList label="namespace deny" rules={project.namespaceResourceBlacklist} />
-      </InspectorSection>
-      <InspectorSection title="roles" collapsible>
-        <ValueList values={project.roleNames ?? []} empty={project.roles > 0 ? `${project.roles} role${project.roles === 1 ? "" : "s"}` : "no project roles"} />
-      </InspectorSection>
-      <InspectorSection title="applications" collapsible>
-        <LinkedApps apps={apps} />
-      </InspectorSection>
-      <InspectorSection title="applicationsets" collapsible>
-        <ValueList values={appSets.map((a) => a.name)} empty="no ApplicationSets target this project" />
-      </InspectorSection>
+    <div data-testid="argo-project-panel" style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
+      <InspectorLayout
+        kind="AppProject"
+        namespace={project.namespace}
+        name={project.name}
+        meta={`${apps.length} app${apps.length === 1 ? "" : "s"} · ${appSets.length} ApplicationSet${appSets.length === 1 ? "" : "s"}${project.description ? ` · ${project.description}` : ""}`}
+        onClose={onClose}
+        verdict={removed ? <RemovedNotice kind="AppProject" /> : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 12 }}>
+            <InspectorStatus tone={role.kind === "fault" ? "danger" : role.kind === "degraded" ? "warning" : "success"} label={role.label} />
+            {risks.length > 0 && <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>{risks.map((r) => <RiskBadge key={r.label} tone={r.tone}>{r.label}</RiskBadge>)}</div>}
+          </div>
+        )}
+      >
+        <InspectorSection title="Sources"><ValueList values={project.sourceRepos} empty="no source repos declared" /></InspectorSection>
+        <InspectorSection title="Destinations"><ValueList values={project.destinations} empty="no destinations declared" /></InspectorSection>
+        <InspectorSection title="Resource policy" collapsible defaultCollapsed>
+          <RuleList label="cluster allow" rules={project.clusterResourceWhitelist} />
+          <RuleList label="cluster deny" rules={project.clusterResourceBlacklist} />
+          <RuleList label="namespace allow" rules={project.namespaceResourceWhitelist} />
+          <RuleList label="namespace deny" rules={project.namespaceResourceBlacklist} />
+        </InspectorSection>
+        <InspectorSection title="Roles" collapsible defaultCollapsed>
+          <ValueList values={project.roleNames ?? []} empty={project.roles > 0 ? `${project.roles} role${project.roles === 1 ? "" : "s"}` : "no project roles"} />
+        </InspectorSection>
+        <InspectorSection title="Applications" count={apps.length}><LinkedApps apps={apps} /></InspectorSection>
+        <InspectorSection title="ApplicationSets" count={appSets.length} collapsible defaultCollapsed>
+          <ValueList values={appSets.map((a) => a.name)} empty="no ApplicationSets target this project" />
+        </InspectorSection>
+      </InspectorLayout>
     </div>
   );
 }
 
-function ApplicationSetInspector({ appSet, allApps, project }: { appSet: ArgoApplicationSetDTO | null; allApps: ArgoAppDTO[]; project: ArgoProjectDTO | null }) {
-  if (!appSet) return <InspectorEmpty text="Select an ApplicationSet to inspect generator output and template policy." style={inspector} />;
+function ApplicationSetInspector({ appSet, removed, allApps, project, onClose }: { appSet: ArgoApplicationSetDTO; removed: boolean; allApps: ArgoAppDTO[]; project: ArgoProjectDTO | null; onClose: () => void }) {
   const condition = arrayOf(appSet.conditions).find((c) => c.status !== "True") ?? null;
   const generatedNames = arrayOf(appSet.generatedNames);
   const liveApps = generatedAppsForSet(allApps, appSet);
@@ -505,49 +687,47 @@ function ApplicationSetInspector({ appSet, allApps, project }: { appSet: ArgoApp
   const projectApps = appSet.project ? appsForProject(allApps, appSet.project) : [];
   const extraProjectApps = generatedNames.length > 0 ? projectApps.filter((a) => !generatedNames.includes(a.name)) : [];
   const expected = generatedNames.length > 0 ? generatedNames.length : appSet.generatedApps;
-  const actual = liveApps.length;
   return (
-    <div style={inspector}>
-      <InspectorTitle title={appSet.name} sub={`${appSet.namespace} · ${appSet.generators.join(", ") || "generator unknown"}`} />
-      <InspectorSection title="health">
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
-          <RiskBadge tone={appSet.healthy ? "success" : "danger"}>{appSet.healthy ? "healthy" : "needs attention"}</RiskBadge>
-          {expected === 0 && <RiskBadge tone="warning">no generated apps</RiskBadge>}
-          {missing.length > 0 && <RiskBadge tone="warning">{missing.length} missing generated</RiskBadge>}
-          {extraProjectApps.length > 0 && <RiskBadge tone="muted">{extraProjectApps.length} extra project app{extraProjectApps.length === 1 ? "" : "s"}</RiskBadge>}
-          {condition && <RiskBadge tone="warning">{condition.reason || condition.type}</RiskBadge>}
-        </div>
-        {condition && <div style={{ marginTop: 7, color: "var(--color-text-warning)", fontSize: 11 }}>{condition.type}: {condition.message || condition.reason || condition.status}</div>}
-      </InspectorSection>
-      <InspectorSection title="generated drift" collapsible>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 8 }}>
-          <MetricTile label="expected" value={String(expected)} tone={expected === 0 ? "warning" : undefined} />
-          <MetricTile label="actual" value={String(actual)} tone={actual < expected ? "warning" : undefined} />
-          <MetricTile label="missing" value={String(missing.length)} tone={missing.length > 0 ? "warning" : undefined} />
-        </div>
-        {missing.length > 0 && <ValueList values={missing} empty="no missing generated Applications" />}
-      </InspectorSection>
-      <InspectorSection title="template" collapsible>
-        <MetaLine label="name" value={appSet.templateName || "-"} />
-        <MetaLine label="project" value={appSet.project || "-"} tone={project ? undefined : "warning"} />
-        <MetaLine label="source" value={appSet.repoURL ? `${appSet.repoURL}${appSet.path ? ` · ${appSet.path}` : ""}` : "-"} />
-        <MetaLine label="revision" value={appSet.targetRevision || "HEAD"} />
-        <MetaLine label="destination" value={appSet.destNamespace || appSet.destServer || "-"} />
-      </InspectorSection>
-      <InspectorSection title="generated applications" collapsible>
-        {generatedNames.length > 0 ? <ValueList values={generatedNames} /> : <ValueList values={liveApps.map((a) => a.name)} empty="Argo has not reported generated resource names yet" />}
-      </InspectorSection>
-      <InspectorSection title="live application state" collapsible>
-        <LinkedApps apps={liveApps} />
-      </InspectorSection>
-      {extraProjectApps.length > 0 && (
-        <InspectorSection title="same-project applications" collapsible>
-          <LinkedApps apps={extraProjectApps} />
+    <div data-testid="argo-appset-panel" style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
+      <InspectorLayout
+        kind="ApplicationSet"
+        namespace={appSet.namespace}
+        name={appSet.name}
+        meta={appSet.generators.join(", ") || "generator unknown"}
+        onClose={onClose}
+        verdict={removed ? <RemovedNotice kind="ApplicationSet" /> : (
+          <div>
+            <InspectorStatus tone={appSet.healthy ? "success" : "warning"} label={appSet.healthy ? "Healthy" : "Needs attention"} reason={condition ? condition.reason || condition.type : undefined} />
+            {condition && <div className="t-body" style={{ color: "var(--color-text-warning)", overflowWrap: "anywhere", marginTop: -4 }}>{condition.type}: {condition.message || condition.reason || condition.status}</div>}
+          </div>
+        )}
+      >
+        <InspectorSection title="Generated drift">
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 8 }}>
+            <MetricTile label="expected" value={String(expected)} tone={expected === 0 ? "warning" : undefined} />
+            <MetricTile label="actual" value={String(liveApps.length)} tone={liveApps.length < expected ? "warning" : undefined} />
+            <MetricTile label="missing" value={String(missing.length)} tone={missing.length > 0 ? "warning" : undefined} />
+          </div>
+          {missing.length > 0 && <ValueList values={missing} empty="no missing generated Applications" />}
         </InspectorSection>
-      )}
-      {generatedNames.length === 0 && appSet.generatedApps > 0 && (
-        <div style={mutedLine}>Argo reported {appSet.generatedApps} generated resource{appSet.generatedApps === 1 ? "" : "s"} but did not include generated Application names.</div>
-      )}
+        <InspectorSection title="Live application state" count={liveApps.length}><LinkedApps apps={liveApps} /></InspectorSection>
+        <InspectorSection title="Template" collapsible defaultCollapsed>
+          <MetaLine label="name" value={appSet.templateName || "-"} />
+          <MetaLine label="project" value={appSet.project || "-"} tone={project ? undefined : "warning"} />
+          <MetaLine label="source" value={appSet.repoURL ? `${appSet.repoURL}${appSet.path ? ` · ${appSet.path}` : ""}` : "-"} />
+          <MetaLine label="revision" value={appSet.targetRevision || "HEAD"} />
+          <MetaLine label="destination" value={appSet.destNamespace || appSet.destServer || "-"} />
+        </InspectorSection>
+        <InspectorSection title="Generated applications" collapsible defaultCollapsed>
+          {generatedNames.length > 0 ? <ValueList values={generatedNames} /> : <ValueList values={liveApps.map((a) => a.name)} empty="Argo has not reported generated resource names yet" />}
+        </InspectorSection>
+        {extraProjectApps.length > 0 && (
+          <InspectorSection title="Same-project applications" collapsible defaultCollapsed><LinkedApps apps={extraProjectApps} /></InspectorSection>
+        )}
+        {generatedNames.length === 0 && appSet.generatedApps > 0 && (
+          <div style={mutedLine}>Argo reported {appSet.generatedApps} generated resource{appSet.generatedApps === 1 ? "" : "s"} but did not include generated Application names.</div>
+        )}
+      </InspectorLayout>
     </div>
   );
 }
@@ -557,102 +737,6 @@ function MetricTile({ label, value, tone }: { label: string; value: string; tone
     <div style={{ border: "0.5px solid var(--color-border-tertiary)", borderRadius: 5, padding: "7px 8px", background: "var(--color-background-secondary)", minWidth: 0 }}>
       <div style={fieldLabel}>{label}</div>
       <div style={{ marginTop: 4, fontFamily: "var(--font-mono)", fontSize: 16, color: tone === "warning" ? "var(--color-text-warning)" : "var(--color-text-primary)" }}>{value}</div>
-    </div>
-  );
-}
-
-type FilterToggle = { label: string; active: boolean; count: number; onClick: () => void };
-
-function FilterBar({ query, onQuery, placeholder, toggles, visible, total }: { query: string; onQuery: (value: string) => void; placeholder: string; toggles: FilterToggle[]; visible: number; total: number }) {
-  return (
-    <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center", marginBottom: 10 }}>
-      {/* The shared FilterButton pill - Argo was the one lens whose filter
-          buttons didn't match its siblings visually. */}
-      {toggles.map((t) => (
-        <FilterButton key={t.label} label={t.label} count={t.count} active={t.active} onClick={t.onClick} />
-      ))}
-      <input
-        value={query}
-        onChange={(e) => onQuery(e.target.value)}
-        placeholder={placeholder}
-        aria-label={placeholder}
-        style={{ marginLeft: "auto", fontSize: 11, padding: "4px 8px", borderRadius: 4, border: "0.5px solid var(--color-border-tertiary)", background: "var(--color-background-primary)", color: "var(--color-text-primary)", width: 190 }}
-      />
-      {visible !== total && <span style={{ color: "var(--color-text-tertiary)", fontSize: 10 }}>{visible} of {total}</span>}
-    </div>
-  );
-}
-
-function EmptyInline({ text }: { text: string }) {
-  return <div style={{ padding: "12px 8px", color: "var(--color-text-secondary)", fontSize: 12, borderBottom: "0.5px solid var(--color-border-tertiary)" }}>{text}</div>;
-}
-
-function ApplicationInspector({ cluster, app, project, appSet, onRefresh, onSync }: { cluster: string; app: ArgoAppDTO | null; project: ArgoProjectDTO | null; appSet: ArgoApplicationSetDTO | null; onRefresh?: () => void; onSync?: () => void }) {
-  const openResource = useFleet((s) => s.openResource);
-  const openInstance = useFleet((s) => s.openInstance);
-  const crd = useFleet((s) => s.crd);
-  const crdGroups = crd.cluster === cluster ? crd.groups : [];
-  if (!app) return <InspectorEmpty text="Select an Application to inspect source, sync state, resources, and ownership." style={inspector} />;
-  const conditions = arrayOf(app.conditions);
-  const resources = arrayOf(app.resources);
-  const source = app.chart ? `chart ${app.chart}` : app.path || "root";
-  const badResources = resources.filter((r) => r.status === "OutOfSync" || r.health === "Degraded" || r.health === "Missing");
-  const openLiveResource = (resource: ArgoResourceDTO) => {
-    const ref = resolveArgoResourceRef(resource, crdGroups);
-    if (!ref) return;
-    openResource(ref);
-    openInstance(ref.scope === "Cluster" ? "" : (resource.namespace || app.destNamespace), resource.name);
-  };
-  return (
-    <div style={inspector}>
-      <InspectorTitle title={app.name} sub={`${app.namespace} · ${app.project || "default"} · ${app.destNamespace || "destination unknown"}`} />
-      <div style={{ display: "flex", gap: 6, marginBottom: 4 }}>
-        <ManifestButton group="argoproj.io" kind="Application" namespace={app.namespace} name={app.name} />
-      </div>
-      <InspectorSection title="status">
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
-          <RiskBadge tone={app.syncStatus === "Synced" ? "success" : "warning"}>{app.syncStatus}</RiskBadge>
-          <RiskBadge tone={app.healthStatus === "Healthy" || app.healthStatus === "Progressing" ? "success" : "danger"}>{app.healthStatus}</RiskBadge>
-          {app.autoSync && <RiskBadge tone="muted">auto sync</RiskBadge>}
-          {conditions.length > 0 && <RiskBadge tone="danger">{conditions.length} condition{conditions.length === 1 ? "" : "s"}</RiskBadge>}
-          {badResources.length > 0 && <RiskBadge tone="warning">{badResources.length} resource{badResources.length === 1 ? "" : "s"} need attention</RiskBadge>}
-        </div>
-      </InspectorSection>
-      <InspectorSection title="source">
-        <MetaLine label="repo" value={app.repoURL || "-"} />
-        <MetaLine label={app.chart ? "chart" : "path"} value={source} />
-        <MetaLine label="target" value={app.targetRevision || "HEAD"} />
-        <MetaLine label="revision" value={app.revision ? short(app.revision) : "-"} />
-        {app.extraSources > 0 && <MetaLine label="extra" value={`${app.extraSources} more source${app.extraSources === 1 ? "" : "s"}`} />}
-      </InspectorSection>
-      <InspectorSection title="destination">
-        <MetaLine label="namespace" value={app.destNamespace || "-"} />
-        <MetaLine label="project" value={app.project || "default"} tone={project ? undefined : "warning"} />
-        <MetaLine label="appset" value={appSet ? appSet.name : "-"} />
-      </InspectorSection>
-      <InspectorSection title="operation">
-        <MetaLine label="last" value={app.opPhase || "-"} tone={app.opPhase && app.opPhase !== "Succeeded" ? "warning" : undefined} />
-        <MetaLine label="message" value={app.opMessage || "-"} />
-        <MetaLine label="reconciled" value={<Age unixSeconds={app.reconciledUnix} suffix=" ago" fallback="never" />} />
-      </InspectorSection>
-      {conditions.length > 0 && (
-        <InspectorSection title="conditions" collapsible>
-          {conditions.map((c, i) => <div key={`${c.type}/${i}`} style={{ color: "var(--color-text-danger)", fontSize: 11 }}>{c.type}: {c.message || "-"}</div>)}
-        </InspectorSection>
-      )}
-      <InspectorSection title="resources" collapsible>
-        {resources.length === 0 ? <div style={mutedLine}>Argo has not reported resource inventory for this Application.</div> : (
-          <div style={{ display: "grid", gap: 4 }}>
-            {resources.map((r) => (
-              <ArgoResourceRow key={resourceKey(r)} resource={r} resolvable={resolveArgoResourceRef(r, crdGroups) !== null} onOpen={() => openLiveResource(r)} />
-            ))}
-          </div>
-        )}
-      </InspectorSection>
-      <div style={{ display: "flex", gap: 8 }}>
-        <button onClick={onRefresh} style={btn}>refresh app</button>
-        <button onClick={onSync} style={smallPrimaryBtn}>sync</button>
-      </div>
     </div>
   );
 }
@@ -791,7 +875,7 @@ function ValueList({ values, empty }: { values: string[]; empty?: string }) {
   if (items.length === 0) return <div style={mutedLine}>{empty ?? "-"}</div>;
   return (
     <div style={{ display: "grid", gap: 4 }}>
-      {items.map((v) => <div key={v} title={v} style={{ ...monoLine, ...ellipsis }}>{v}</div>)}
+      {items.map((v) => <div key={v} style={{ ...monoLine, overflowWrap: "anywhere" }}>{v}</div>)}
     </div>
   );
 }
@@ -829,7 +913,7 @@ function MetaLine({ label, value, tone }: { label: string; value: React.ReactNod
   return (
     <div style={{ display: "grid", gridTemplateColumns: "72px minmax(0,1fr)", gap: 8, alignItems: "center" }}>
       <span style={{ color: "var(--color-text-tertiary)", fontSize: 10 }}>{label}</span>
-      <span title={typeof value === "string" ? value : undefined} style={{ ...monoLine, ...ellipsis, color: tone === "warning" ? "var(--color-text-warning)" : monoLine.color }}>{value}</span>
+      <span style={{ ...monoLine, overflowWrap: "anywhere", color: tone === "warning" ? "var(--color-text-warning)" : monoLine.color }}>{value}</span>
     </div>
   );
 }
@@ -974,27 +1058,8 @@ function resourceTone(r: ArgoResourceDTO): string {
   return "var(--color-text-tertiary)";
 }
 
-function headerGrid(cols: string): React.CSSProperties {
-  return {
-    display: "grid",
-    gridTemplateColumns: cols,
-    gap: 10,
-    padding: "0 8px 6px",
-    fontSize: 9,
-    textTransform: "uppercase",
-    letterSpacing: 0.5,
-    color: "var(--color-text-tertiary)",
-    borderBottom: "0.5px solid var(--color-border-secondary)",
-  };
-}
 
-const splitPane: React.CSSProperties = { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 380px), 1fr))", gap: 14, alignItems: "start" };
-const splitPaneWide: React.CSSProperties = { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 420px), 1fr))", gap: 14, alignItems: "start" };
-const inspector: React.CSSProperties = { background: "var(--bench-well-bg, var(--color-background-secondary))", boxShadow: "var(--bench-well-shadow, inset 0 0 0 1px var(--color-border-tertiary))", borderRadius: "var(--radius-sm)", padding: 14, minWidth: 0, display: "grid", gap: 13, position: "sticky", top: 12 };
 const mutedLine: React.CSSProperties = { color: "var(--color-text-tertiary)", fontSize: 11 };
 const monoLine: React.CSSProperties = { fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--color-text-secondary)" };
-const smallBtn: React.CSSProperties = { ...btn, padding: "2px 7px", fontSize: 10 };
-const smallPrimaryBtn: React.CSSProperties = { ...smallBtn, color: "var(--color-text-info)", borderColor: "var(--color-border-info)", background: "var(--color-background-info)" };
-const emptyStyle: React.CSSProperties = { color: "var(--color-text-secondary)", fontSize: 13 };
 const fieldLabel: React.CSSProperties = { color: "var(--color-text-tertiary)", fontSize: 10, textTransform: "uppercase", fontWeight: 600, letterSpacing: 0.2 };
 const inputStyle: React.CSSProperties = { width: "100%", boxSizing: "border-box", padding: "8px 10px", fontFamily: "var(--font-mono)", fontSize: 12, background: "var(--color-background-secondary)", border: "0.5px solid var(--color-border-tertiary)", borderRadius: 5, color: "var(--color-text-primary)", outline: "none" };
