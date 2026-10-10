@@ -713,3 +713,14 @@ describe("NodesView health model (1b rework)", () => {
     expect(queryByText(healthy.name)).toBeNull();
   });
 });
+
+describe("NodesView scope switch", () => {
+  it("switching A->B with B's read deferred exposes none of A's numbers, roles or capacity", () => {
+    useFleet.setState((s) => ({ nodes: { ...s.nodes, cluster: "blue", items: [healthy, notReady], rowsCluster: "homelab", loading: true, error: null } }));
+    const { queryByText, getByRole } = render(<NodesView cluster="blue" />);
+    expect(queryByText(healthy.name)).toBeNull();
+    expect(queryByText("cpu alloc")).toBeNull();
+    expect(queryByText("pod cap")).toBeNull();
+    expect(getByRole("button", { name: /^all$/ })).toBeTruthy(); // no count from cluster A
+  });
+});

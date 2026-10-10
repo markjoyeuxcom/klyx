@@ -4,7 +4,7 @@ import { IconRefresh } from "@tabler/icons-react";
 import { useFleet } from "../store/fleet";
 import { fetchTape } from "../bridge/tape";
 import { StatusDot } from "./primitives";
-import { describeObservation, type VerdictObservation } from "../health/verdict";
+import { asOfText, describeObservation, type VerdictObservation } from "../health/verdict";
 
 // Shown is what one chip says, normalised across legacy number counts and
 // verdict observations (health model 1b):
@@ -87,7 +87,9 @@ export function TriageTape({ cluster }: { cluster: string }) {
   const alerts = present.filter((c) => shownOf(c).state === "alert");
   const readable = present.filter((c) => c.count !== "unreadable");
   const unreadable = present.length - readable.length;
-  const unverified = present.filter((c) => shownOf(c).state === "unverified").length;
+  // Gaps are counted from coverage, independently of alerts: a lens with
+  // known attention AND unknown/capped rows is both lit and a gap.
+  const unverified = present.filter((c) => typeof c.count === "object" && describeObservation(c.count).gap).length;
   const lenses = (n: number) => `${n} lens${n === 1 ? "" : "es"}`;
   // Never "quiet" while any lens is unreadable or unverified.
   const gaps = [unreadable > 0 ? `${lenses(unreadable)} unreadable` : "", unverified > 0 ? `${lenses(unverified)} unverified` : ""].filter(Boolean).join(" · ");
@@ -160,6 +162,7 @@ function TriageSignal({ chip }: { chip: Chip }) {
     ? shown.tone === "danger" ? "var(--color-text-danger)" : "var(--color-text-warning)"
     : shown.state === "evidence" || shown.state === "unverified" ? "var(--color-text-secondary)" : "var(--color-text-tertiary)";
   const value = shown.state === "quiet" ? "quiet" : shown.text;
+  const asOf = typeof chip.count === "object" ? asOfText(chip.count) : "";
   const count = active ? shown.n : 0;
   const common: CSSProperties = {
     display: "inline-flex",
@@ -179,12 +182,13 @@ function TriageSignal({ chip }: { chip: Chip }) {
     </>
   );
 
-  if (!active) return <span style={common}>{body}</span>;
+  if (!active) return <span style={common} title={asOf || undefined}>{body}</span>;
 
   return (
     <button
       onClick={chip.go}
       aria-label={`${count} ${count === 1 ? chip.label[0] : chip.label[1]}`}
+      title={asOf || undefined}
       style={{ ...common, cursor: "pointer" }}
     >
       {body}

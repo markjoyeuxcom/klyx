@@ -338,15 +338,28 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
               <div style={{ padding: "16px 20px" }}>
                 <EmptyState
                   icon={<IconBox size={28} stroke={1.2} />}
-                  title={`No workloads${wl.namespace ? ` in ${wl.namespace}` : ""}.`}
-                  hint={wl.needsAttention && !wl.search ? "The attention filter is on - nothing in this scope needs attention." : undefined}
-                  action={(wl.search || wl.needsAttention || !KINDS.every((k) => wl.kindFilter[k])) ? {
+                  // Four different truths, never conflated: no observation for
+                  // this scope; a genuinely empty scope; rows that exist but do
+                  // not match the filters; no KNOWN attention while some rows
+                  // are unverified.
+                  title={coverage === "unavailable"
+                    ? `No workload data for ${wl.namespace || "all namespaces"} yet.`
+                    : scopedItems.length === 0
+                      ? `No workloads${wl.namespace ? ` in ${wl.namespace}` : ""}.`
+                      : "No workloads match the current filters."}
+                  hint={coverage !== "unavailable" && wl.needsAttention && !wl.search
+                    ? (counts.unknown > 0 || coverage !== "complete"
+                      ? `No known attention - but ${counts.unknown > 0 ? `${counts.unknown} workload${counts.unknown === 1 ? " is" : "s are"} unverified` : "the read was incomplete"}.`
+                      : "The attention filter is on - nothing in this scope needs attention.")
+                    : undefined}
+                  action={(wl.search || wl.needsAttention || unknownOnly || !KINDS.every((k) => wl.kindFilter[k])) ? {
                     label: "Clear filters",
                     onClick: () => {
                       const st = useFleet.getState();
                       st.setWorkloadsSearch("");
                       st.setWorkloadsNeedsAttention(false);
                       st.setWorkloadKindFilter(KINDS);
+                      setUnknownOnly(false);
                     },
                   } : undefined}
                 />

@@ -3,7 +3,7 @@ import { IconLock } from "@tabler/icons-react";
 import type { ClusterDTO, FleetBoardEntry, MeshGraphDTO } from "../store/fleet";
 import { useFleet } from "../store/fleet";
 import { type Tone, StatusDot, toneColor, toneBg, toneBorder } from "../chrome/primitives";
-import { attentionTone, boardAttention } from "../health/verdict";
+import { asOfText, attentionTone, boardAttention } from "../health/verdict";
 
 type Signal = {
   label: string;
@@ -194,13 +194,13 @@ function workloadSignal(board: FleetBoardEntry | undefined): Signal {
       value: `${counts.attention} of ${counts.total} need attention${partial}`,
       tone: attentionTone(counts) ?? "warning",
       fraction: null,
-      title: `${counts.fault} fault · ${counts.degraded} degraded${counts.unknown ? ` · ${counts.unknown} unknown` : ""}`,
+      title: [`${counts.fault} fault · ${counts.degraded} degraded${counts.unknown ? ` · ${counts.unknown} unknown` : ""}`, asOfText(w)].filter(Boolean).join(" · "),
     };
   }
   if (counts.unknown > 0) {
-    return { label: "workloads", value: `${counts.unknown} of ${counts.total} unverified${partial}`, tone: "muted", fraction: null };
+    return { label: "workloads", value: `${counts.unknown} of ${counts.total} unverified${partial}`, tone: "muted", fraction: null, title: asOfText(w) || undefined };
   }
-  return { label: "workloads", value: `${counts.total} · none need attention${partial}`, tone: "neutral", fraction: null };
+  return { label: "workloads", value: `${counts.total} · none need attention${partial}`, tone: "neutral", fraction: null, title: asOfText(w) || undefined };
 }
 
 function gitopsSignal(board: FleetBoardEntry | undefined): Signal {

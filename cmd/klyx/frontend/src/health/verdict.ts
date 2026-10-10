@@ -139,10 +139,25 @@ export function boardAttention(entry: { workloads: { counts: VerdictCounts } | n
  * board) carries this pair, never a bare number, so a capped or partly
  * unclassified read can never be presented as an exact "quiet".
  */
-export type VerdictObservation = { counts: VerdictCounts; coverage: "complete" | "partial" };
+export type VerdictObservation = {
+  counts: VerdictCounts;
+  coverage: "complete" | "partial";
+  // asOf is when this observation was RECEIVED (ms since epoch). Separate
+  // surfaces read independently until the shared summary (1c); the stamp lets
+  // an operator see which of two disagreeing numbers is older.
+  asOf?: number;
+};
 
 export function observe<T>(rows: readonly T[], health: (row: T) => HealthLike | null | undefined, partial: boolean): VerdictObservation {
-  return { counts: summarize(rows, health), coverage: partial ? "partial" : "complete" };
+  return { counts: summarize(rows, health), coverage: partial ? "partial" : "complete", asOf: Date.now() };
+}
+
+/** asOfText renders an observation's receipt time for tooltips. */
+export function asOfText(o: { asOf?: number } | null | undefined): string {
+  if (!o?.asOf) return "";
+  const d = new Date(o.asOf);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `as of ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
 /**
@@ -152,13 +167,17 @@ export function observe<T>(rows: readonly T[], health: (row: T) => HealthLike | 
  *   partial     -> "unverified (capped)", muted, NOT quiet
  *   otherwise   -> quiet
  */
-export function describeObservation(o: VerdictObservation): { attention: number; text: string; tone: Tone | undefined; quiet: boolean } {
+export function describeObservation(o: VerdictObservation): { attention: number; text: string; tone: Tone | undefined; quiet: boolean; gap: boolean } {
   const { counts, coverage } = o;
   const plus = coverage === "partial" ? "+" : "";
+  // A coverage gap is independent of attention: known attention stays lit
+  // AND the gap stays visible, so neither hides the other.
+  const gap = coverage === "partial" || counts.unknown > 0;
   if (counts.attention > 0) {
-    return { attention: counts.attention, text: `${counts.attention}${plus} need attention`, tone: attentionTone(counts), quiet: false };
+    const also = counts.unknown > 0 ? ` · ${counts.unknown} unverified` : "";
+    return { attention: counts.attention, text: `${counts.attention}${plus} need attention${also}`, tone: attentionTone(counts), quiet: false, gap };
   }
-  if (counts.unknown > 0) return { attention: 0, text: `${counts.unknown} unverified`, tone: undefined, quiet: false };
-  if (coverage === "partial") return { attention: 0, text: "unverified (capped)", tone: undefined, quiet: false };
-  return { attention: 0, text: "quiet", tone: undefined, quiet: true };
+  if (counts.unknown > 0) return { attention: 0, text: `${counts.unknown} unverified`, tone: undefined, quiet: false, gap };
+  if (coverage === "partial") return { attention: 0, text: "unverified (capped)", tone: undefined, quiet: false, gap };
+  return { attention: 0, text: "quiet", tone: undefined, quiet: true, gap };
 }

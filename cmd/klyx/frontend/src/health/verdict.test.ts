@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { attentionTone, coverageOf, describeObservation, observe, isAttention, kindOf, labelOf, matchesFilter, summarize, VERDICT_ORDER } from "./verdict";
+import { describe, expect, it, vi } from "vitest";
+import { asOfText, attentionTone, coverageOf, describeObservation, observe, isAttention, kindOf, labelOf, matchesFilter, summarize, VERDICT_ORDER } from "./verdict";
 
 describe("kindOf fails closed", () => {
   it("passes known kinds through", () => {
@@ -97,5 +97,21 @@ describe("describeObservation never claims a quiet it cannot see", () => {
   it("degraded-only attention is amber, any fault is danger, capped is a lower bound", () => {
     expect(describeObservation(observe([{ h: { kind: "degraded" } }], (r) => r.h, false)).tone).toBe("warning");
     expect(describeObservation(observe([{ h: { kind: "fault" } }, { h: { kind: "degraded" } }], (r) => r.h, true))).toMatchObject({ tone: "danger", text: "2+ need attention" });
+  });
+});
+
+describe("observe stamps receipt time", () => {
+  it("records when the observation was received", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date(2026, 9, 10, 9, 0, 0));
+      const a = observe([], () => undefined, false);
+      vi.setSystemTime(new Date(2026, 9, 10, 9, 5, 0));
+      const b = observe([], () => undefined, false);
+      expect(asOfText(a)).toBe("as of 09:00:00");
+      expect(asOfText(b)).toBe("as of 09:05:00");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

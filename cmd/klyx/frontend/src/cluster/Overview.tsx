@@ -1,4 +1,4 @@
-import { describeObservation, type VerdictObservation } from "../health/verdict";
+import { asOfText, describeObservation, type VerdictObservation } from "../health/verdict";
 import { useEffect, useState } from "react";
 import { useFleet } from "../store/fleet";
 import type { ClusterDTO, FleetBoardEntry, MetricsDTO } from "../store/fleet";
@@ -270,9 +270,10 @@ function StatTile({
 function verdictTile(key: string, label: string, o: VerdictObservation | null, loading: boolean, onClick: () => void) {
   if (loading || !o) return { key, value: "—", label, variant: "info" as const, onClick };
   const d = describeObservation(o);
-  if (d.attention > 0) return { key, value: `${d.attention}${o.coverage === "partial" ? "+" : ""}`, label, variant: (d.tone === "danger" ? "danger" : "warning") as "danger" | "warning", onClick, title: `${o.counts.fault} fault · ${o.counts.degraded} degraded` };
-  if (!d.quiet) return { key, value: "?", label: `${label} · ${d.text}`, variant: "neutral" as const, onClick };
-  return { key, value: "0", label, variant: "neutral" as const, onClick };
+  const asOf = asOfText(o);
+  if (d.attention > 0) return { key, value: `${d.attention}${o.coverage === "partial" ? "+" : ""}`, label, variant: (d.tone === "danger" ? "danger" : "warning") as "danger" | "warning", onClick, title: [`${o.counts.fault} fault · ${o.counts.degraded} degraded${o.counts.unknown ? ` · ${o.counts.unknown} unverified` : ""}`, asOf].filter(Boolean).join(" · ") };
+  if (!d.quiet) return { key, value: "?", label: `${label} · ${d.text}`, variant: "neutral" as const, onClick, title: asOf || undefined };
+  return { key, value: "0", label, variant: "neutral" as const, onClick, title: asOf || undefined };
 }
 
 function tileValue(count: number | null | undefined, loading: boolean): string {

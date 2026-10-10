@@ -86,10 +86,11 @@ export function observations(src: UnwrappedSources, out: SummariseOutput): {
   pods: VerdictObservation | null;
   nodes: VerdictObservation | null;
 } {
+  const asOf = Date.now();
   return {
-    workloads: src.workloads ? { counts: out.workloads, coverage: src.workloadsPartial ? "partial" : "complete" } : null,
-    pods: src.pods ? { counts: out.pods, coverage: src.podsPartial ? "partial" : "complete" } : null,
-    nodes: src.nodes ? { counts: out.nodes, coverage: "complete" } : null,
+    workloads: src.workloads ? { counts: out.workloads, coverage: src.workloadsPartial ? "partial" : "complete", asOf } : null,
+    pods: src.pods ? { counts: out.pods, coverage: src.podsPartial ? "partial" : "complete", asOf } : null,
+    nodes: src.nodes ? { counts: out.nodes, coverage: "complete", asOf } : null,
   };
 }
 

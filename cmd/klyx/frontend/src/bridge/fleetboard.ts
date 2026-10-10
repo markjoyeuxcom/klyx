@@ -1,4 +1,4 @@
-import { summarize, type HealthLike } from "../health/verdict";
+import { observe, type HealthLike } from "../health/verdict";
 import { useFleet } from "../store/fleet";
 import type { FleetBoardEntry } from "../store/fleet";
 import {
@@ -56,10 +56,7 @@ export async function fetchFleetBoard(clusters: string[]): Promise<void> {
       // is a lower bound.
       const r = workloads.value as WorkloadsResultDTO;
       if (!r.error) {
-        entry.workloads = {
-          counts: summarize(r.workloads ?? [], (x) => x.health),
-          coverage: r.truncated ? "partial" : "complete",
-        };
+        entry.workloads = observe(r.workloads ?? [], (x) => x.health, !!r.truncated);
       }
     }
     if (gateway.status === "fulfilled") entry.gateway = gateway.value;

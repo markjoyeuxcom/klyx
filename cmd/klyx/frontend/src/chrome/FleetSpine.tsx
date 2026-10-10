@@ -1,3 +1,4 @@
+import { asOfText } from "../health/verdict";
 import { useState } from "react";
 import { IconChevronRight, IconChevronLeft } from "@tabler/icons-react";
 import { useFleet } from "../store/fleet";
@@ -96,6 +97,8 @@ export function FleetSpine() {
         else if (w && (w.coverage !== "complete" || w.counts.unknown > 0)) title = `${c.name} — workload health unverified${w.counts.unknown ? ` (${w.counts.unknown} unknown)` : " (capped read)"}`;
         else if (!w && !unreachable) title = `${c.name} — workload health unreadable`;
         else if (c.state === "Stale") title = `${c.name} — connection stale${c.reason ? `: ${c.reason}` : ""}`;
+
+        if (w?.asOf && !unreachable) title += ` · ${asOfText(w)}`;
 
         // Channel-strip lamp (Signal Bench): healthy lamps sit dim, faults
         // glow, an unreachable cluster is an unpowered socket (dashed ring).

@@ -153,3 +153,27 @@ describe("TriageTape", () => {
   });
 });
 
+
+describe("TriageTape coverage gaps are independent of alerts", () => {
+  it("attention + unknown keeps the alert lit AND prohibits the quiet trailer", () => {
+    seed({ workloads: obs(1, 0, 2), helm: "absent", flux: "absent", argo: "absent" });
+    const { getByRole, getByText, queryByText } = render(<TriageTape cluster="nelli" />);
+    expect(getByRole("button", { name: "1 workload needs attention" }).textContent).toContain("2 unverified");
+    expect(queryByText("everything else is quiet")).toBeNull();
+    expect(getByText(/1 lens unverified/)).toBeTruthy();
+  });
+
+  it("attention on a capped read keeps the alert lit AND prohibits the quiet trailer", () => {
+    seed({ pods: obs(2, 0, 0, true), helm: "absent", flux: "absent", argo: "absent" });
+    const { getByRole, getByText, queryByText } = render(<TriageTape cluster="nelli" />);
+    expect(getByRole("button", { name: "2 pods need attention" }).textContent).toContain("2+");
+    expect(queryByText("everything else is quiet")).toBeNull();
+    expect(getByText(/1 lens unverified/)).toBeTruthy();
+  });
+
+  it("each chip shows when its observation was received", () => {
+    seed({ workloads: { ...obs(1), asOf: new Date(2026, 9, 10, 13, 41, 51).getTime() }, helm: "absent", flux: "absent", argo: "absent" });
+    const { getByRole } = render(<TriageTape cluster="nelli" />);
+    expect(getByRole("button", { name: "1 workload needs attention" }).title).toBe("as of 13:41:51");
+  });
+});

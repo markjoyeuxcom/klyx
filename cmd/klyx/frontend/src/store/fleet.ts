@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { HealthLike, VerdictCounts, VerdictObservation } from "../health/verdict";
+import type { HealthLike, VerdictObservation } from "../health/verdict";
 
 export type ClusterDTO = {
   name: string;
@@ -82,7 +82,7 @@ export type FleetBoardEntry = {
   // WORKLOAD verdict counts (internal/health) for the whole cluster, with the
   // coverage of the read behind them. null = the read failed (unreadable).
   // This is workload attention only - never a whole-cluster fault total.
-  workloads: { counts: VerdictCounts; coverage: "complete" | "partial" } | null;
+  workloads: VerdictObservation | null;
   flux: { total: number; notReady: number } | null;
   argo: { total: number; broken: number } | null;
   gateway?: { served: boolean; gateways: number; routes: number | null; brokenRoutes: number | null; unprogrammed: number } | null;

@@ -477,11 +477,13 @@ export function NodesView({ cluster }: { cluster: string }) {
     void listNodes(cluster);
     void getNodeUtilization(cluster).then(setUtil);
   };
-  const receivedAt = useReceivedAt(nodes.cluster === cluster && !nodes.loading && nodes.items.length > 0 ? nodes.items : null);
-  // Only rows read for THIS cluster are shown or counted.
+  // Only rows read for THIS cluster are shown or counted - every number on
+  // this board (verdicts, roles, taints, capacity) derives from scopedNodes.
+  const scopedNodes = useMemo(() => (nodes.rowsCluster === cluster ? nodes.items : []), [nodes.items, nodes.rowsCluster, cluster]);
+  const receivedAt = useReceivedAt(!nodes.loading && scopedNodes.length > 0 ? scopedNodes : null);
   const orderedNodes = useMemo(
-    () => (nodes.rowsCluster === cluster ? [...nodes.items] : []).sort((a, b) => orderOf(kindOf(a.health)) - orderOf(kindOf(b.health)) || a.name.localeCompare(b.name)),
-    [nodes.items, nodes.rowsCluster, cluster],
+    () => [...scopedNodes].sort((a, b) => orderOf(kindOf(a.health)) - orderOf(kindOf(b.health)) || a.name.localeCompare(b.name)),
+    [scopedNodes],
   );
   const visibleNodes = useMemo(
     () => orderedNodes.filter((n) => nodeMatchesFilter(n, filter) && nodeMatchesQuery(n, query, roleFilter)),
@@ -513,22 +515,22 @@ export function NodesView({ cluster }: { cluster: string }) {
     searchRef,
   });
   const roles = useMemo(
-    () => [...new Set(nodes.items.flatMap((n) => n.roles))].sort(),
-    [nodes.items],
+    () => [...new Set(scopedNodes.flatMap((n) => n.roles))].sort(),
+    [scopedNodes],
   );
   // Nodes are cluster-scoped: rows count only when read for THIS cluster; a
   // failed refresh keeps last-good rows, labelled as such.
   const coverage: Coverage = nodes.rowsCluster !== cluster ? "unavailable" : nodes.error ? "stale" : "complete";
-  const counts = summarize(coverage === "unavailable" ? [] : nodes.items, (n) => n.health);
+  const counts = summarize(scopedNodes, (n) => n.health);
   const attention = counts.attention;
-  const cordonedCount = nodes.items.filter((n) => n.unschedulable).length;
-  const taintedCount = nodes.items.filter((n) => n.taintCount > 0).length;
-  const versionCount = new Set(nodes.items.map((n) => n.version).filter(Boolean)).size;
-  const cpuAlloc = nodes.items.reduce((sum, n) => sum + n.cpuAllocatable, 0);
-  const cpuCap = nodes.items.reduce((sum, n) => sum + n.cpuCapacity, 0);
-  const memAlloc = nodes.items.reduce((sum, n) => sum + n.memAllocatable, 0);
-  const memCap = nodes.items.reduce((sum, n) => sum + n.memCapacity, 0);
-  const podCap = nodes.items.reduce((sum, n) => sum + n.podCapacity, 0);
+  const cordonedCount = scopedNodes.filter((n) => n.unschedulable).length;
+  const taintedCount = scopedNodes.filter((n) => n.taintCount > 0).length;
+  const versionCount = new Set(scopedNodes.map((n) => n.version).filter(Boolean)).size;
+  const cpuAlloc = scopedNodes.reduce((sum, n) => sum + n.cpuAllocatable, 0);
+  const cpuCap = scopedNodes.reduce((sum, n) => sum + n.cpuCapacity, 0);
+  const memAlloc = scopedNodes.reduce((sum, n) => sum + n.memAllocatable, 0);
+  const memCap = scopedNodes.reduce((sum, n) => sum + n.memCapacity, 0);
+  const podCap = scopedNodes.reduce((sum, n) => sum + n.podCapacity, 0);
 
   return (
     <div style={{ padding: "14px 16px", display: "flex", gap: 12, height: "100%", minHeight: 0, overflow: "hidden", boxSizing: "border-box", position: "relative" }}>
@@ -549,17 +551,20 @@ export function NodesView({ cluster }: { cluster: string }) {
           meters={[
             // fault = NotReady, degraded = pressure: the verdict owns both.
             ...verdictMeters({ noun: "nodes", counts, coverage }),
-            cordonedCount > 0 && { label: "cordoned", value: cordonedCount },
-            taintedCount > 0 && { label: "tainted", value: taintedCount },
-            { label: "versions", value: versionCount },
-            { label: "cpu alloc", value: `${cpuAlloc.toFixed(1)}/${cpuCap.toFixed(1)}` },
-            { label: "mem alloc", value: `${fmtMem(memAlloc)}/${fmtMem(memCap)}` },
-            { label: "pod cap", value: podCap },
+            // Auxiliary facts only for an observation of this cluster.
+            ...(coverage === "unavailable" ? [] : [
+              cordonedCount > 0 && { label: "cordoned", value: cordonedCount },
+              taintedCount > 0 && { label: "tainted", value: taintedCount },
+              { label: "versions", value: versionCount },
+              { label: "cpu alloc", value: `${cpuAlloc.toFixed(1)}/${cpuCap.toFixed(1)}` },
+              { label: "mem alloc", value: `${fmtMem(memAlloc)}/${fmtMem(memCap)}` },
+              { label: "pod cap", value: podCap },
+            ]),
           ]}
         />
 
         <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center", flexShrink: 0 }}>
-          <FilterButton label="all" count={nodes.items.length} active={filter === "all"} onClick={() => setFilter("all")} />
+          <FilterButton label="all" count={scopedNodes.length} active={filter === "all"} onClick={() => setFilter("all")} />
           <FilterButton label="attention" count={attention} active={filter === "attention"} onClick={() => setFilter("attention")} />
           {(counts.unknown > 0 || filter === "unknown") && (
             <FilterButton label="unknown" count={counts.unknown} active={filter === "unknown"} onClick={() => setFilter("unknown")} />
@@ -569,9 +574,9 @@ export function NodesView({ cluster }: { cluster: string }) {
           {roles.length > 0 && (
             <>
               <span style={{ fontSize: 9, color: "var(--color-text-tertiary)", marginLeft: 4 }}>role</span>
-              <FilterButton label="all roles" count={nodes.items.length} active={roleFilter === null} onClick={() => setRoleFilter(null)} />
+              <FilterButton label="all roles" count={scopedNodes.length} active={roleFilter === null} onClick={() => setRoleFilter(null)} />
               {roles.slice(0, 5).map((role) => (
-                <FilterButton key={role} label={role} count={nodes.items.filter((n) => n.roles.includes(role)).length} active={roleFilter === role} onClick={() => setRoleFilter(role)} />
+                <FilterButton key={role} label={role} count={scopedNodes.filter((n) => n.roles.includes(role)).length} active={roleFilter === role} onClick={() => setRoleFilter(role)} />
               ))}
             </>
           )}
@@ -583,10 +588,10 @@ export function NodesView({ cluster }: { cluster: string }) {
             aria-label="filter nodes"
             style={{ marginLeft: "auto", fontSize: 11, padding: "3px 8px", borderRadius: 4, border: "0.5px solid var(--color-border-tertiary)", background: "var(--color-background-primary)", color: "var(--color-text-primary)", width: 170 }}
           />
-          {visibleNodes.length !== nodes.items.length && <span style={{ fontSize: 10, color: "var(--color-text-tertiary)" }}>{visibleNodes.length} of {nodes.items.length}</span>}
+          {visibleNodes.length !== scopedNodes.length && <span style={{ fontSize: 10, color: "var(--color-text-tertiary)" }}>{visibleNodes.length} of {scopedNodes.length}</span>}
         </div>
 
-        <SurvivabilityModule cluster={cluster} nodes={nodes.items} />
+        <SurvivabilityModule cluster={cluster} nodes={scopedNodes} />
 
         {util !== null && (
           util.available ? (
@@ -608,12 +613,12 @@ export function NodesView({ cluster }: { cluster: string }) {
           </div>
         )}
 
-        {nodes.loading && nodes.items.length === 0 ? (
+        {nodes.loading && scopedNodes.length === 0 ? (
           <SkeletonRows rows={6} label="loading nodes" />
-        ) : nodes.items.length === 0 ? (
+        ) : scopedNodes.length === 0 ? (
           <EmptyState
             icon={<IconServer size={28} stroke={1.2} />}
-            title="No nodes visible."
+            title={coverage === "unavailable" ? "No node data for this cluster yet." : "No nodes visible."}
             hint="Either the list failed or RBAC hides nodes from this identity - refresh to retry."
           />
         ) : (
@@ -669,7 +674,7 @@ export function NodesView({ cluster }: { cluster: string }) {
             </div>
             <FKeysBar
               keys={[["j k", "nav"], ["\u21B5", "inspect"], ["/", "filter"]]}
-              status={`${visibleNodes.length} of ${nodes.items.length} \u00B7 broken first`}
+              status={`${visibleNodes.length} of ${scopedNodes.length} \u00B7 broken first`}
             />
           </div>
         )}

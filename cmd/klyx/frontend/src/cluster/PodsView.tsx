@@ -344,6 +344,7 @@ export function PodsView({ cluster }: { cluster: string }) {
                 onClick: () => {
                   useFleet.getState().setPodsSearch("");
                   useFleet.getState().setPodsNeedsAttention(false);
+                  setUnknownOnly(false);
                 },
               } : undefined}
             />

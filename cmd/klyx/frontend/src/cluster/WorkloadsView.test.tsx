@@ -545,3 +545,27 @@ describe("WorkloadsView health model (1b rework)", () => {
     expect(queryByText("ollama")).toBeNull();
   });
 });
+
+describe("WorkloadsView empty states never claim a quiet they did not see", () => {
+  beforeEach(() => useFleet.getState().clearWorkloads());
+
+  it("a failed first read never says 'No workloads'", () => {
+    useFleet.setState((s) => ({ workloads: { ...s.workloads, cluster: "homelab-nelli", items: [], loading: false, rowsScope: null, error: "forbidden" } }));
+    const { getByText, queryByText } = render(<WorkloadsView cluster="homelab-nelli" />);
+    expect(getByText(/No workload data for all namespaces yet/)).toBeTruthy();
+    expect(queryByText(/^No workloads\.$/)).toBeNull();
+  });
+
+  it("Clear filters also clears the unknown filter after its last row resolves", () => {
+    const mystery: WorkloadDTO = { ...healthy, name: "mystery", health: { kind: "unknown", label: "Unverified", reason: "PodsIncomplete", rule: "workload.pods-incomplete" } };
+    seed([healthy, mystery]);
+    const { getByRole, getByText, rerender } = render(<WorkloadsView cluster="homelab-nelli" />);
+    fireEvent.click(getByRole("button", { name: /unknown 1/ }));
+    // the unknown workload resolves to ok
+    seed([healthy, { ...mystery, health: { kind: "ok", label: "Available", reason: "Ready", rule: "workload.ready" } }]);
+    rerender(<WorkloadsView cluster="homelab-nelli" />);
+    fireEvent.click(getByRole("button", { name: "Clear filters" }));
+    expect(getByText("grafana")).toBeTruthy();
+    expect(getByText("mystery")).toBeTruthy();
+  });
+});
