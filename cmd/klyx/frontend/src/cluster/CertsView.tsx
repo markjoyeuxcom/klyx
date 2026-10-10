@@ -318,8 +318,9 @@ export function CertsView({ cluster }: { cluster: string }) {
       ? <EmptyState icon={<IconCertificate size={28} stroke={1.2} />} title="cert-manager is not installed on this cluster." hint="Klyx detected no cert-manager.io resources here." />
       : <EmptyState icon={<IconCertificate size={28} stroke={1.2} />} title={view === "issuers" ? "No issuers on this cluster." : "No Certificates on this cluster."} hint={view === "issuers" ? undefined : "cert-manager is installed but no Certificate objects exist yet."} />)
     : <EmptyState icon={<IconCertificate size={28} stroke={1.2} />} title={`No ${noun} match the current filters.`} hint={`${total} ${noun} on this cluster.`} action={{ label: "Clear filters", onClick: clearFilters }} />;
-  // not complete = a lower bound; never an unqualified claim
-  const partial = viewEv === "complete" ? "" : "+";
+  // pending/failed = a lower bound ("+"); stale = the last observed set ("*",
+  // not necessarily a lower bound); never an unqualified count either way
+  const partial = viewEv === "complete" ? "" : viewEv === "stale" ? "*" : "+";
 
   return (
     <LensLayout

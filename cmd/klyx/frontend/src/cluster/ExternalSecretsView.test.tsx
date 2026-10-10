@@ -297,3 +297,16 @@ describe("ExternalSecretsView refresh presence (Codex optional follow-up)", () =
     expect(insp().getByText("never synced")).toBeTruthy();
   });
 });
+
+describe("ExternalSecretsView count markers (Codex d607e454 polish)", () => {
+  const cov = (over: Record<string, Partial<{ served: boolean; synced: boolean; error: string }>>) =>
+    ["ExternalSecret", "SecretStore", "ClusterSecretStore"].map((kind) => ({ kind, served: true, synced: true, ...(over[kind] ?? {}) }));
+  it("a stale set is marked last observed (*), a pending one a lower bound (+)", () => {
+    setup("Healthy", [], [store({})], null, "forbidden");
+    useFleet.setState((s) => ({ externalsecrets: { ...s.externalsecrets, coverage: cov({ ClusterSecretStore: { error: "forbidden" } }) } }));
+    const { getByRole } = render(<ExternalSecretsView cluster="x" />);
+    fireEvent.click(getByRole("button", { name: /^Stores/ }));
+    expect(screen.getByText("1*")).toBeTruthy();
+    expect(screen.getAllByText("ExternalSecrets").length).toBeGreaterThan(1); // view toggle + the count column names controller objects, not target Secrets
+  });
+});

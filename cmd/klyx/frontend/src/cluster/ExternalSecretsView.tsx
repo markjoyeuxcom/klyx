@@ -129,7 +129,7 @@ const STORE_COLUMNS: (ColumnDef & { label: string })[] = [
   { id: "kind", label: "Kind", width: 140, priority: 2 },
   { id: "provider", label: "Provider", width: 110, priority: 3 },
   { id: "status", label: "Status", width: 200, priority: 1, grow: 0.8 },
-  { id: "secrets", label: "Secrets", width: 64, priority: 4 },
+  { id: "secrets", label: "ExternalSecrets", width: 112, priority: 4 },
 ];
 
 export function ExternalSecretsView({ cluster }: { cluster: string }) {
@@ -276,8 +276,9 @@ export function ExternalSecretsView({ cluster }: { cluster: string }) {
       ? <EmptyState icon={<IconShieldLock size={28} stroke={1.2} />} title="External Secrets Operator is not installed on this cluster." hint="Klyx detected no external-secrets.io resources here." />
       : <EmptyState icon={<IconShieldLock size={28} stroke={1.2} />} title={view === "stores" ? "No secret stores on this cluster." : "No ExternalSecrets on this cluster."} hint={view === "stores" ? undefined : "The operator is installed but no ExternalSecret objects exist yet."} />)
     : <EmptyState icon={<IconShieldLock size={28} stroke={1.2} />} title={`No ${noun} match the current filters.`} hint={`${total} ${noun} on this cluster.`} action={{ label: "Clear filters", onClick: clearFilters }} />;
-  // not complete = a lower bound; never an unqualified claim
-  const partial = viewEv === "complete" ? "" : "+";
+  // pending/failed = a lower bound ("+"); stale = the last observed set ("*",
+  // not necessarily a lower bound); never an unqualified count either way
+  const partial = viewEv === "complete" ? "" : viewEv === "stale" ? "*" : "+";
 
   return (
     <LensLayout
