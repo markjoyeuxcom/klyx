@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, fireEvent, act } from "@testing-library/react";
-import { EventsView } from "./EventsView";
+import { render, fireEvent, act, within, screen } from "@testing-library/react";
+import { EventsView, destinationOf } from "./EventsView";
 import { useFleet } from "../store/fleet";
 import type { EventRowDTO } from "../store/fleet";
 
@@ -8,202 +8,113 @@ vi.mock("../bridge/events", () => ({
   listEvents: vi.fn().mockResolvedValue(undefined),
   openLiveEvents: vi.fn().mockReturnValue(() => {}),
 }));
-import { openLiveEvents } from "../bridge/events";
-
-vi.mock("../bridge/pods", () => ({
-  openPodDetail: vi.fn().mockResolvedValue(undefined),
-}));
+vi.mock("../bridge/pods", () => ({ openPodDetail: vi.fn().mockResolvedValue(undefined) }));
 import { openPodDetail } from "../bridge/pods";
 
-// Stub Wails bindings so the test environment doesn't need a runtime.
-vi.mock("../../bindings/github.com/moomora/klyx/internal/appbridge/index.js", () => ({
-  EventsService: {
-    ListEvents: vi.fn().mockResolvedValue({ namespaces: [], events: [] }),
-    OpenLiveEvents: vi.fn().mockResolvedValue({ ok: true, error: "" }),
-    CloseLiveEvents: vi.fn().mockResolvedValue(undefined),
-    CloseAll: vi.fn().mockResolvedValue(undefined),
-  },
-}));
-vi.mock("@wailsio/runtime", () => ({
-  Events: { On: vi.fn().mockReturnValue(() => {}) },
-}));
-
-const warning: EventRowDTO = {
-  type: "Warning", reason: "BackOff", message: "back-off restarting failed container",
-  count: 5, namespace: "default", kind: "Pod", name: "api-crash",
-  lastSeenUnix: 1700000100, firstSeenUnix: 1700000000,
-};
-const normal: EventRowDTO = {
-  type: "Normal", reason: "Pulled", message: "Successfully pulled image nginx:latest",
-  count: 1, namespace: "monitoring", kind: "ReplicaSet", name: "grafana-rs",
-  lastSeenUnix: 1700000200, firstSeenUnix: 1700000200,
-};
-const zeroUnix: EventRowDTO = {
-  type: "Normal", reason: "Scheduled", message: "Successfully assigned pod",
-  count: 1, namespace: "default", kind: "Pod", name: "worker-abc",
-  lastSeenUnix: 0, firstSeenUnix: 0,
-};
-
-function seed(items: EventRowDTO[]) {
-  useFleet.setState((s) => ({
-    events: {
-      ...s.events,
-      cluster: "homelab",
-      items,
-      namespaces: ["default", "monitoring"],
-      loading: false,
-    },
-  }));
+const nowS = Math.floor(Date.now() / 1000);
+const ev = (over: Partial<EventRowDTO>): EventRowDTO => ({
+  type: "Normal", reason: "Pulled", message: "Successfully pulled image", count: 1, namespace: "apps", kind: "Pod", name: "web-1",
+  lastSeenUnix: nowS - 60, firstSeenUnix: nowS - 120, ...over,
+});
+function seed(items: EventRowDTO[], over: Record<string, unknown> = {}) {
+  useFleet.setState((s) => ({ events: { ...s.events, cluster: "x", namespace: "", items, namespaces: ["apps"], loading: false, live: true, truncated: false, error: null, rowsScope: "x|", ...over } }));
 }
+const insp = () => within(screen.getByTestId("lens-inspector"));
+const rowsText = () => [...document.querySelectorAll(".lens-row")].map((r) => r.textContent ?? "");
 
-describe("EventsView", () => {
-  beforeEach(() => {
-    useFleet.getState().clearEvents();
-    vi.clearAllMocks();
+describe("EventsView (redesign step 5)", () => {
+  beforeEach(() => { useFleet.getState().clearEvents(); vi.clearAllMocks(); });
+
+  it("warnings are evidence: amber text, no lamp anywhere", () => {
+    seed([ev({ type: "Warning", reason: "BackOff" }), ev({})]);
+    const { container } = render(<EventsView cluster="x" />);
+    expect(screen.getByText("1 warnings")).toBeTruthy();
+    expect(container.querySelector('[role="img"]')).toBeNull();
+    const warn = screen.getAllByText("Warning").find((el) => el.closest(".lens-row")) as HTMLElement;
+    expect(warn.style.color).toBe("var(--color-text-warning)");
   });
 
-  it("renders warning dot for Warning events", () => {
-    seed([warning]);
-    const { getByTitle } = render(<EventsView cluster="homelab" />);
-    // type dot has title matching the type
-    expect(getByTitle("Warning")).toBeTruthy();
+  it("the full message lives in the inspector, wrapped - never truncated-only", () => {
+    const long = "0/3 nodes are available: 1 node(s) had untolerated taint {node-role.kubernetes.io/control-plane: }, 2 Insufficient memory. preemption: 0/3 nodes are available";
+    seed([ev({ type: "Warning", reason: "FailedScheduling", message: long })]);
+    render(<EventsView cluster="x" />);
+    fireEvent.click(document.querySelector(".lens-row") as HTMLElement);
+    expect(insp().getByText(long)).toBeTruthy();
+    expect(insp().getByText("FailedScheduling")).toBeTruthy();
   });
 
-  it("renders reason and message in row", () => {
-    seed([warning, normal]);
-    const { getByText } = render(<EventsView cluster="homelab" />);
-    expect(getByText("BackOff")).toBeTruthy();
-    expect(getByText("Pulled")).toBeTruthy();
+  it("a failed first read is unreadable, never 'no events'; a failed re-read keeps rows marked *", () => {
+    seed([], { error: "events is forbidden", rowsScope: null, live: false });
+    const first = render(<EventsView cluster="x" />);
+    expect(screen.getByText("Could not read events.")).toBeTruthy();
+    expect(screen.queryByText(/^No events/)).toBeNull();
+    first.unmount();
+    seed([ev({})], { error: "timeout", live: false });
+    render(<EventsView cluster="x" />);
+    expect(screen.getByText("1*")).toBeTruthy();
+    expect(screen.getByText(/showing the last good read/)).toBeTruthy();
   });
 
-  it("warnings-only chip filters out Normal events", () => {
-    seed([warning, normal]);
-    const { getByText, queryByText } = render(<EventsView cluster="homelab" />);
-    fireEvent.click(getByText(/warnings only/i));
-    expect(getByText("BackOff")).toBeTruthy();
-    expect(queryByText("Pulled")).toBeNull();
+  it("before the first read it is loading, never empty", () => {
+    seed([], { rowsScope: null, loading: true, live: false });
+    render(<EventsView cluster="x" />);
+    expect(screen.queryByText(/^No events/)).toBeNull();
   });
 
-  it("search filters by reason", () => {
-    seed([warning, normal]);
-    const { getByPlaceholderText, getByText, queryByText } = render(<EventsView cluster="homelab" />);
-    fireEvent.change(getByPlaceholderText("filter events"), { target: { value: "BackOff" } });
-    expect(getByText("BackOff")).toBeTruthy();
-    expect(queryByText("Pulled")).toBeNull();
+  it("the 500-event cap is stated in words with a lower-bound count", () => {
+    seed([ev({})], { truncated: true });
+    render(<EventsView cluster="x" />);
+    expect(screen.getByText("1+")).toBeTruthy();
+    expect(screen.getByText(/First 500 events only/)).toBeTruthy();
   });
 
-  it("search filters by message", () => {
-    seed([warning, normal]);
-    const { getByPlaceholderText, getByText, queryByText } = render(<EventsView cluster="homelab" />);
-    fireEvent.change(getByPlaceholderText("filter events"), { target: { value: "pulled image" } });
-    expect(getByText("Pulled")).toBeTruthy();
-    expect(queryByText("BackOff")).toBeNull();
+  it("an honest empty state names the scope and that quiet can be real", () => {
+    seed([], { namespace: "apps", rowsScope: "x|apps" });
+    render(<EventsView cluster="x" />);
+    expect(screen.getByText("No events in apps.")).toBeTruthy();
+    expect(screen.getByText(/quiet can be real/)).toBeTruthy();
   });
 
-  it("search filters by involved name", () => {
-    seed([warning, normal]);
-    const { getByPlaceholderText, queryByText } = render(<EventsView cluster="homelab" />);
-    fireEvent.change(getByPlaceholderText("filter events"), { target: { value: "api-crash" } });
-    expect(queryByText("BackOff")).toBeTruthy();
-    expect(queryByText("Pulled")).toBeNull();
+  it("Warnings chip filters; search covers reason, object and message", () => {
+    seed([ev({ type: "Warning", reason: "BackOff", name: "crash" }), ev({ reason: "Pulled", name: "ok", message: "pulled nginx" })]);
+    render(<EventsView cluster="x" />);
+    fireEvent.click(screen.getByRole("button", { name: /^Warnings/ }));
+    expect(rowsText().length).toBe(1);
+    fireEvent.click(screen.getByRole("button", { name: "All" }));
+    fireEvent.change(screen.getByPlaceholderText("Search reason, object, message"), { target: { value: "nginx" } });
+    expect(rowsText().length).toBe(1);
+    expect(rowsText()[0]).toContain("ok");
   });
 
-  it("pod cross-link calls openPodDetail and switches section to pods", () => {
-    // Must be in cluster route for setSection to take effect
-    useFleet.getState().openCluster("homelab");
-    seed([warning]); // warning.kind === "Pod"
-    const { getByText } = render(<EventsView cluster="homelab" />);
-    // The pod link shows the name as a clickable element
-    const link = getByText("api-crash");
-    fireEvent.click(link);
-    expect(openPodDetail).toHaveBeenCalledWith("homelab", "default", "api-crash");
-    expect(useFleet.getState().route).toMatchObject({ section: "pods" });
+  it("an aged-out selected event keeps its last evidence; a failed re-read does not claim it aged out", () => {
+    const gone = ev({ type: "Warning", reason: "BackOff", name: "gone" });
+    seed([gone, ev({ name: "other" })]);
+    render(<EventsView cluster="x" />);
+    fireEvent.click(screen.getByText("gone").closest(".lens-row") as HTMLElement);
+    act(() => seed([ev({ name: "other" })], { error: "timeout" }));
+    expect(screen.queryByText("Event no longer listed.")).toBeNull();
+    act(() => seed([ev({ name: "other" })]));
+    expect(insp().getByText("Event no longer listed.")).toBeTruthy();
+    expect(insp().queryByRole("button", { name: "Open Pod" })).toBeNull();
   });
 
-  it("non-Pod involved object is plain text, not a link button", () => {
-    seed([normal]); // normal.kind === "ReplicaSet"
-    const { getByText } = render(<EventsView cluster="homelab" />);
-    const el = getByText("grafana-rs");
-    // It should be a span, not a button
-    expect(el.tagName.toLowerCase()).not.toBe("button");
+  it("Open Pod navigates to the pod; ambiguous kinds fail closed", () => {
+    seed([ev({ type: "Warning", reason: "BackOff" })]);
+    render(<EventsView cluster="x" />);
+    fireEvent.click(document.querySelector(".lens-row") as HTMLElement);
+    fireEvent.click(insp().getByRole("button", { name: "Open Pod" }));
+    expect(openPodDetail).toHaveBeenCalledWith("x", "apps", "web-1");
+    expect(destinationOf("x", ev({ kind: "Widget" }))).toBeNull();
+    expect(destinationOf("x", ev({ kind: "Deployment" }))?.label).toBe("Open Deployment");
+    expect(destinationOf("x", ev({ kind: "Kustomization" }))?.label).toBe("Open Kustomization");
   });
 
-  it("lastSeenUnix === 0 renders age as '—'", () => {
-    seed([zeroUnix]);
-    const { getAllByText } = render(<EventsView cluster="homelab" />);
-    expect(getAllByText("—").length).toBeGreaterThanOrEqual(1);
-  });
-
-  it("openLiveEvents is called on mount (replaces listEvents)", () => {
-    render(<EventsView cluster="homelab" />);
-    expect(openLiveEvents).toHaveBeenCalledWith("homelab", "");
-  });
-
-  it("live=true renders green live indicator", () => {
-    seed([warning]);
-    useFleet.setState((s) => ({ events: { ...s.events, live: true } }));
-    const { getByText } = render(<EventsView cluster="homelab" />);
-    expect(getByText("live")).toBeTruthy();
-  });
-
-  it("live=false renders manual fallback indicator", () => {
-    seed([warning]);
-    useFleet.setState((s) => ({ events: { ...s.events, live: false } }));
-    const { getByText } = render(<EventsView cluster="homelab" />);
-    expect(getByText("○ manual")).toBeTruthy();
-  });
-
-  // --- Keyboard nav + a11y ---
-
-  it("j then Enter toggles expansion of the second row", () => {
-    const second: EventRowDTO = {
-      type: "Normal", reason: "BackOff2", message: "second event message",
-      count: 1, namespace: "default", kind: "Pod", name: "pod-b",
-      lastSeenUnix: 1700000300, firstSeenUnix: 1700000300,
-    };
-    seed([warning, second]);
-    const { getAllByText } = render(<EventsView cluster="homelab" />);
-    // j → index 0; wait for re-render; j → index 1; Enter → expand second row
-    act(() => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "j", bubbles: true, cancelable: true })); });
-    act(() => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "j", bubbles: true, cancelable: true })); });
-    act(() => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })); });
-    // After expansion, the message appears in both the truncated row span and the expanded block.
-    expect(getAllByText("second event message").length).toBeGreaterThanOrEqual(2);
-  });
-
-  it("/ focuses the filter input", () => {
-    seed([warning]);
-    const { getByPlaceholderText } = render(<EventsView cluster="homelab" />);
-    const input = getByPlaceholderText("filter events") as HTMLInputElement;
-    window.dispatchEvent(new KeyboardEvent("keydown", { key: "/", bubbles: true, cancelable: true }));
-    expect(input).toBeTruthy();
-  });
-
-  it("event row has role=button and aria-expanded", () => {
-    seed([warning]);
-    const { getAllByRole } = render(<EventsView cluster="homelab" />);
-    const rows = getAllByRole("button").filter((el) => el.hasAttribute("aria-expanded"));
-    expect(rows.length).toBeGreaterThan(0);
-    expect(rows[0].getAttribute("aria-expanded")).toBe("false");
-  });
-
-  it("event row aria-expanded toggles on click", () => {
-    seed([warning]);
-    const { getAllByRole } = render(<EventsView cluster="homelab" />);
-    const rows = getAllByRole("button").filter((el) => el.hasAttribute("aria-expanded"));
-    const row = rows[0];
-    expect(row.getAttribute("aria-expanded")).toBe("false");
-    fireEvent.click(row);
-    expect(row.getAttribute("aria-expanded")).toBe("true");
-  });
-
-  it("row click expands message below the row", () => {
-    seed([warning]);
-    const { getByText, getAllByText } = render(<EventsView cluster="homelab" />);
-    // click the row (click on reason text which is in the row)
-    fireEvent.click(getByText("BackOff"));
-    // After expansion, the message should appear twice: once in row (truncated), once expanded
-    const msgs = getAllByText("back-off restarting failed container");
-    expect(msgs.length).toBeGreaterThanOrEqual(2);
+  it("changing namespace drops the selection (a new scope)", () => {
+    seed([ev({})]);
+    render(<EventsView cluster="x" />);
+    fireEvent.click(document.querySelector(".lens-row") as HTMLElement);
+    expect(screen.getByTestId("event-panel")).toBeTruthy();
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "apps" } });
+    expect(screen.queryByTestId("event-panel")).toBeNull();
   });
 });

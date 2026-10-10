@@ -55,6 +55,11 @@ export function formatAge(seconds: number): string {
   return `${Math.floor(s / 86400)}d`;
 }
 
+// absoluteTime renders a full local timestamp for an epoch-ms value.
+export function absoluteTime(ms: number): string {
+  return absolute(ms);
+}
+
 function absolute(ms: number): string {
   return new Date(ms).toLocaleString(undefined, {
     year: "numeric", month: "2-digit", day: "2-digit",

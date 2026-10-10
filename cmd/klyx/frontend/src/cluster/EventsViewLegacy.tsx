@@ -18,7 +18,9 @@ import { WatchErrorBanner } from "../chrome/WatchErrorBanner";
 // which a year-old flux reconcile event overflows (see chrome/format.ts).
 const gridCols = "10px 40px 44px minmax(0,0.9fr) minmax(0,1.1fr) 90px minmax(0,2fr)";
 
-export function EventsView({ cluster }: { cluster: string }) {
+// EventsViewLegacy - the pre-redesign Events lens, kept behind
+// klyx.layout.v1.legacyEvents=1 until the migrated lens is accepted.
+export function EventsViewLegacy({ cluster }: { cluster: string }) {
   const events = useFleet((s) => s.events);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [selectedIdx, setSelectedIdx] = useState(-1);
