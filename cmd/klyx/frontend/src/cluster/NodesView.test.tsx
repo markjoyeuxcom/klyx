@@ -844,3 +844,32 @@ describe("NodesView pending verbs are pinned to their own target (Codex review, 
     expect(queryByText(/Failing conditions · 3/)).toBeNull();
   });
 });
+
+describe("NodesView condition polarity (Codex re-review)", () => {
+  beforeEach(() => { useFleet.getState().clearNodes(); vi.clearAllMocks(); });
+
+  it("an unfamiliar condition type is neutral evidence whether True or False; odd statuses are unverified", () => {
+    const custom: NodeDetailDTO = {
+      ...fakeDetail,
+      conditions: [
+        { type: "Ready", status: "True", reason: "KubeletReady", message: "" },
+        { type: "KernelDeadlock", status: "True", reason: "KernelHasDeadlock", message: "task hung" },
+        { type: "FrequentKubeletRestart", status: "False", reason: "NoFrequentKubeletRestart", message: "" },
+        { type: "DiskPressure", status: "Maybe", reason: "Odd", message: "" },
+      ],
+    };
+    seedWithDetail(healthy, custom);
+    const { queryByText, getByText } = render(<NodesView cluster="homelab" />);
+    expect(queryByText(/^Failing conditions/)).toBeNull();
+    const unverified = getByText("Unverified conditions · 1").closest("section")!;
+    expect(unverified.textContent).toContain("DiskPressure");
+    // the custom conditions keep their native facts, uncoloured by health
+    fireEvent.click(getByText(/^Conditions/));
+    for (const name of ["KernelDeadlock", "FrequentKubeletRestart"]) {
+      const el = getByText(name);
+      const colored = el.closest("[style*='--color-text-success'], [style*='--color-text-warning'], [style*='--color-text-danger']");
+      expect(colored).toBeNull();
+    }
+    expect(getByText(/task hung/)).toBeTruthy();
+  });
+});

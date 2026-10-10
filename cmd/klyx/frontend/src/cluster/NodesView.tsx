@@ -42,21 +42,25 @@ type NodeFilter = "all" | "attention" | "unknown" | "cordoned" | "tainted";
 
 // Condition evidence, matching the node verdict (internal/health N-rules):
 // confirmed adverse (Ready=False is a fault, pressure=True degraded) is kept
-// apart from unverified (status Unknown), which never glows as a fault.
-type CondTone = "fault" | "degraded" | "unknown" | "ok";
+// apart from unverified (Unknown, or a status outside True/False), which never
+// glows as a fault. A condition type with no known polarity (custom/NPD) is
+// neutral native evidence: neither its True nor its False proves health.
+type CondTone = "fault" | "degraded" | "unknown" | "ok" | "neutral";
 const PRESSURE = new Set(["MemoryPressure", "DiskPressure", "PIDPressure", "NetworkUnavailable"]);
 function conditionTone(c: ConditionDTO): CondTone {
-  if (c.status === "Unknown") return "unknown";
+  const known = c.type === "Ready" || PRESSURE.has(c.type);
+  if (!known) return "neutral";
+  if (c.status !== "True" && c.status !== "False") return "unknown";
   if (c.type === "Ready") return c.status === "True" ? "ok" : "fault";
-  if (PRESSURE.has(c.type)) return c.status === "True" ? "degraded" : "ok";
-  return c.status === "False" ? "degraded" : "ok";
+  return c.status === "True" ? "degraded" : "ok";
 }
 const isAdverse = (c: ConditionDTO) => { const t = conditionTone(c); return t === "fault" || t === "degraded"; };
-const TONE_ORDER: Record<CondTone, number> = { fault: 0, degraded: 1, unknown: 2, ok: 3 };
+const TONE_ORDER: Record<CondTone, number> = { fault: 0, degraded: 1, unknown: 2, neutral: 3, ok: 4 };
 const condColor = (c: ConditionDTO) => ({
   fault: "var(--color-text-danger)",
   degraded: "var(--color-text-warning)",
   unknown: "var(--color-text-tertiary)",
+  neutral: "var(--color-text-secondary)",
   ok: "var(--color-text-success)",
 })[conditionTone(c)];
 
