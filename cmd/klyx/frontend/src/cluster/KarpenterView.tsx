@@ -165,6 +165,26 @@ export function KarpenterView({ cluster }: { cluster: string }) {
     : view === "pools" ? <EmptyState icon={icon} title="No NodePools defined." hint="Without a NodePool, Karpenter provisions nothing." />
     : <EmptyState icon={icon} title="No recent disruption activity." hint="Events age out of the API server after about an hour - quiet can be real." />;
 
+  // Independent inputs compose: controller status AND the feed's own
+  // evidence are both shown; neither hides the other.
+  const feedIncomplete = !!ok && (eventsFailed || !!ok.eventsTruncated);
+  const controllerNotice = !ok ? null : ok.controllerVerified !== false && !ok.controllerHealthy ? (
+    <div data-testid="karp-controller-down" role="status" className="t-body" style={{ color: "var(--color-text-danger)", padding: "4px 0" }}>
+      <span className="t-status">▲ The Karpenter controller is not ready.</span> No provisioning, disruption or drift replacement happens until it recovers - the states below are its last word.
+    </div>
+  ) : ok.controllerVerified === false ? (
+    <div data-testid="karp-controller-unverified" role="status" className="t-body" style={{ color: "var(--color-text-tertiary)", padding: "4px 0", overflowWrap: "anywhere" }}>
+      <span className="t-status" style={{ color: "var(--color-text-secondary)" }}>Controller health unverified.</span> {ok.controllerError || "The controller Deployment could not be read."}
+    </div>
+  ) : null;
+  // a capped read is the newest among the events READ - never a claim about
+  // unread pages, and a full page alone does not prove more exist
+  const activityNotice = view === "activity" && feedIncomplete && events.length > 0 ? (
+    <div data-testid="karp-feed-partial" role="status" className="t-body" style={{ color: "var(--color-text-warning)", padding: "4px 0", overflowWrap: "anywhere" }}>
+      {[eventsFailed ? `Partial read - ${ok!.eventsError}.` : "", ok!.eventsTruncated ? "Capped read - showing the newest among the events read." : ""].filter(Boolean).join(" ")}
+    </div>
+  ) : null;
+
   const selClaim = view === "claims" && selKey ? claims.find((c) => c.name === selKey) : undefined;
   const selPool = view === "pools" && selKey ? pools.find((p) => p.name === selKey) : undefined;
   const selEvent = view === "activity" && selKey ? events.find((e) => eventKey(e) === selKey) : undefined;
@@ -205,22 +225,10 @@ export function KarpenterView({ cluster }: { cluster: string }) {
         <div role="group" aria-label="Karpenter view" style={{ display: "inline-flex", gap: 4 }}>
           <button className="l-chip" aria-pressed={view === "claims"} onClick={() => switchView("claims")}>NodeClaims {failed + stuck > 0 && <span style={{ color: failed ? "var(--color-text-danger)" : "var(--color-text-warning)" }}>{failed + stuck}</span>}</button>
           <button className="l-chip" aria-pressed={view === "pools"} onClick={() => switchView("pools")}>NodePools {poolsDown > 0 && <span style={{ color: "var(--color-text-danger)" }}>{poolsDown}</span>}</button>
-          <button className="l-chip" aria-pressed={view === "activity"} onClick={() => switchView("activity")}>Disruption activity {(events.length > 0 || ok?.eventsTruncated) && <span style={{ color: "var(--color-text-secondary)" }}>{events.length}{ok?.eventsTruncated ? "+" : ""}</span>}</button>
+          <button className="l-chip" aria-pressed={view === "activity"} onClick={() => switchView("activity")}>Disruption activity {(events.length > 0 || feedIncomplete) && <span style={{ color: "var(--color-text-secondary)" }}>{events.length}{feedIncomplete ? "+" : ""}</span>}</button>
         </div>
       ) : undefined}
-      notice={ok && ok.controllerVerified !== false && !ok.controllerHealthy ? (
-        <div data-testid="karp-controller-down" role="status" className="t-body" style={{ color: "var(--color-text-danger)", padding: "4px 0" }}>
-          <span className="t-status">▲ The Karpenter controller is not ready.</span> No provisioning, disruption or drift replacement happens until it recovers - the states below are its last word.
-        </div>
-      ) : view === "activity" && ok && (eventsFailed || ok.eventsTruncated) && events.length > 0 ? (
-        <div role="status" className="t-body" style={{ color: "var(--color-text-warning)", padding: "4px 0", overflowWrap: "anywhere" }}>
-          {eventsFailed ? `Partial feed - ${ok.eventsError}.` : "Partial feed - only the most recent events are shown; more exist."}
-        </div>
-      ) : ok && ok.controllerVerified === false ? (
-        <div data-testid="karp-controller-unverified" role="status" className="t-body" style={{ color: "var(--color-text-tertiary)", padding: "4px 0", overflowWrap: "anywhere" }}>
-          <span className="t-status" style={{ color: "var(--color-text-secondary)" }}>Controller health unverified.</span> {ok.controllerError || "The controller Deployment could not be read."}
-        </div>
-      ) : undefined}
+      notice={ok && (controllerNotice || activityNotice) ? <div style={{ display: "grid", gap: 2 }}>{controllerNotice}{activityNotice}</div> : undefined}
       state={state}
       stateView={stateView}
       body={
@@ -270,7 +278,7 @@ export function KarpenterView({ cluster }: { cluster: string }) {
         </LensTable>
       }
       footer={<span className="t-legend">j k navigate · ↵ inspect</span>}
-      footerEnd={<span className="t-secondary">{view === "claims" ? "stuck first · drift and consolidation are intended behaviour, not faults" : view === "pools" ? "broken first" : ok?.eventsTruncated ? "most recent only - more events exist" : "newest first"}</span>}
+      footerEnd={<span className="t-secondary">{view === "claims" ? "stuck first · drift and consolidation are intended behaviour, not faults" : view === "pools" ? "broken first" : feedIncomplete ? "incomplete read · newest among the events read" : "newest first"}</span>}
       inspector={selClaim ? <ClaimInspector cluster={cluster} c={selClaim} onClose={() => setSelKey(null)} />
         : selPool ? <PoolInspector p={selPool} onClose={() => setSelKey(null)} />
         : selEvent ? <EventPanel e={selEvent} onClose={() => setSelKey(null)} />

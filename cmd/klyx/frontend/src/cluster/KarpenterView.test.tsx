@@ -159,7 +159,8 @@ describe("KarpenterView evidence corrections (Codex 271342a7)", () => {
     vi.mocked(getKarpenterState).mockResolvedValueOnce(snap({ controllerVerified: true, claims: [claim()], events: [ev], eventsTruncated: true }));
     render(<KarpenterView cluster="x" />);
     fireEvent.click(await screen.findByRole("button", { name: /^Disruption activity/ }));
-    expect(screen.getByText(/only the most recent events are shown; more exist/)).toBeTruthy();
+    expect(screen.getByText("Capped read - showing the newest among the events read.")).toBeTruthy();
+    expect(screen.queryByText(/more exist/)).toBeNull();
     expect(screen.getByRole("button", { name: /^Disruption activity 1\+/ })).toBeTruthy();
   });
 
@@ -168,5 +169,18 @@ describe("KarpenterView evidence corrections (Codex 271342a7)", () => {
     render(<KarpenterView cluster="x" />);
     expect(await screen.findByText("1 NodePool unverified")).toBeTruthy();
     expect(screen.queryByText("all ready")).toBeNull();
+  });
+});
+
+describe("KarpenterView composes independent notices (Codex cfbf793c)", () => {
+  beforeEach(() => vi.clearAllMocks());
+  it("a down controller and a partially failed feed are both disclosed, with an incomplete count", async () => {
+    const ev = { type: "Normal", reason: "Disrupting", message: "m", kind: "NodeClaim", name: "c", lastSeenUnix: Math.floor(Date.now() / 1000) };
+    vi.mocked(getKarpenterState).mockResolvedValue(snap({ controllerVerified: true, controllerHealthy: false, claims: [claim()], events: [ev], eventsError: "NodePool events: forbidden" }));
+    render(<KarpenterView cluster="x" />);
+    fireEvent.click(await screen.findByRole("button", { name: /^Disruption activity 1\+/ }));
+    expect(screen.getByTestId("karp-controller-down")).toBeTruthy();
+    expect(screen.getByTestId("karp-feed-partial").textContent).toContain("Partial read - NodePool events: forbidden.");
+    expect(screen.getByText("incomplete read · newest among the events read")).toBeTruthy();
   });
 });
