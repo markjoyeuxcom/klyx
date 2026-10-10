@@ -256,7 +256,7 @@ export function AccessView({ cluster }: { cluster: string }) {
 function Field({ label, span, children }: { label: string; span?: number; children: React.ReactNode }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 3, minWidth: 0, gridColumn: span ? `span ${span}` : undefined }}>
-      <span className="t-legend" aria-hidden="true">{label}</span>
+      <span className="t-secondary" aria-hidden="true">{label}</span>
       {children}
     </div>
   );

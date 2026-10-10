@@ -1,74 +1,92 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, fireEvent } from "@testing-library/react";
+import { render, fireEvent, screen, act, within } from "@testing-library/react";
 import type { UpgradeReportDTO } from "../store/fleet";
-import { UpgradeView } from "./UpgradeView";
+import { UpgradeView, daysUntil } from "./UpgradeView";
 
-vi.mock("../bridge/upgrade", () => ({
-  getUpgradeReadiness: vi.fn(async () => ({}) as UpgradeReportDTO),
-}));
+vi.mock("../bridge/upgrade", () => ({ getUpgradeReadiness: vi.fn(async () => ({}) as UpgradeReportDTO) }));
 import { getUpgradeReadiness } from "../bridge/upgrade";
 
 const report = (over: Partial<UpgradeReportDTO> = {}): UpgradeReportDTO => ({
-  serverVersion: "v1.31.4", serverMinor: 31, eolDate: "2099-01-01",
-  skew: [], deprecated: [], ...over,
+  serverVersion: "v1.31.4", serverMinor: 31, eolDate: "2099-01-01", skew: [], deprecated: [], ...over,
 });
+const api = (over = {}) => ({ group: "flowcontrol.apiserver.k8s.io", version: "v1beta3", resource: "flowschemas", kind: "FlowSchema", removedInMinor: 32, replacedBy: "flowcontrol.apiserver.k8s.io/v1", count: 4, countKnown: true, ...over });
+type D<T> = { promise: Promise<T>; resolve: (v: T) => void };
+const deferred = <T,>(): D<T> => { let resolve!: (v: T) => void; const promise = new Promise<T>((r) => (resolve = r)); return { promise, resolve }; };
 
-describe("UpgradeView", () => {
+describe("UpgradeView (redesign step 5)", () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it("renders version + clean deprecated verdict", async () => {
+  it("clean against the curated table, said as such - not a guarantee", async () => {
     vi.mocked(getUpgradeReadiness).mockResolvedValue(report());
-    const { findByText } = render(<UpgradeView cluster="c" />);
-    expect(await findByText("v1.31.4")).toBeTruthy();
-    expect(await findByText(/no deprecated API from the curated table is served/)).toBeTruthy();
+    render(<UpgradeView cluster="x" />);
+    expect(await screen.findByText("No deprecated API from Klyx's curated table is served.")).toBeTruthy();
+    expect(screen.getByText(/not a guarantee/)).toBeTruthy();
+    expect(screen.getByText("no blocker for 1.32 against the curated table")).toBeTruthy();
   });
 
-  it("frames deprecated APIs against the target minor and re-frames on change", async () => {
-    vi.mocked(getUpgradeReadiness).mockResolvedValue(report({
-      deprecated: [{
-        group: "flowcontrol.apiserver.k8s.io", version: "v1beta3", resource: "flowschemas", kind: "FlowSchema",
-        removedInMinor: 32, replacedBy: "flowcontrol.apiserver.k8s.io/v1 FlowSchema", count: 4, countKnown: true,
-      }],
-    }));
-    const { findByText, getByText, getByLabelText } = render(<UpgradeView cluster="c" />);
-    // Default target = serverMinor+1 = 32: the API is REMOVED there.
-    expect(await findByText(/REMOVED in 1.32/)).toBeTruthy();
-    expect(getByText(/migrate to flowcontrol/)).toBeTruthy();
-    expect(getByText("4 objects")).toBeTruthy();
-    // Same table entry framed differently would need a target BELOW the removal
-    // minor - not offered (targets go up), so instead assert the honesty caption.
-    expect(getByText(/REACHABLE via the deprecated API/)).toBeTruthy();
-    // Target selector exists and switches.
-    fireEvent.change(getByLabelText("target minor"), { target: { value: "33" } });
-    expect(await findByText(/REMOVED in 1.32/)).toBeTruthy();
+  it("a partial report never reads as clean", async () => {
+    vi.mocked(getUpgradeReadiness).mockResolvedValue(report({ warnings: ["node list unreadable: forbidden"] }));
+    render(<UpgradeView cluster="x" />);
+    expect(await screen.findByText(/Partial report - node list unreadable: forbidden/)).toBeTruthy();
+    expect(screen.getByText("No deprecated API found in what could be read.")).toBeTruthy();
+    expect(screen.queryByText(/against the curated table$/)).toBeNull();
   });
 
-  it("renders skew findings and EOL runway tones", async () => {
-    vi.mocked(getUpgradeReadiness).mockResolvedValue(report({
-      eolDate: "2000-01-01", // long past
-      skew: [{ node: "old-node", version: "v1.27.1", delta: 4, level: "danger", detail: "outside the supported skew window" }],
-    }));
-    const { findByText, getByText } = render(<UpgradeView cluster="c" />);
-    expect(await findByText("old-node")).toBeTruthy();
-    expect(getByText(/outside the supported skew window/)).toBeTruthy();
-    expect(getByText(/d past/)).toBeTruthy();
+  it("frames removals against the target and re-frames on change; removal is a shape, not a lamp", async () => {
+    vi.mocked(getUpgradeReadiness).mockResolvedValue(report({ deprecated: [api(), api({ resource: "x", kind: "Later", removedInMinor: 34 })] }));
+    const { container } = render(<UpgradeView cluster="x" />);
+    expect(await screen.findByText("▲ 1 API removed by 1.32")).toBeTruthy();
+    expect(container.querySelector('[role="img"]')).toBeNull();
+    fireEvent.change(screen.getByLabelText("target minor"), { target: { value: "34" } });
+    expect(screen.getByText("▲ 2 APIs removed by 1.34")).toBeTruthy();
   });
 
-  it("a failed report renders its error", async () => {
-    vi.mocked(getUpgradeReadiness).mockResolvedValue({ serverVersion: "", serverMinor: 0, eolDate: "", skew: [], deprecated: [], error: "server version: boom" });
-    const { findByText } = render(<UpgradeView cluster="c" />);
-    expect(await findByText(/server version: boom/)).toBeTruthy();
+  it("the API inspector explains the risk and the count's meaning in words", async () => {
+    vi.mocked(getUpgradeReadiness).mockResolvedValue(report({ deprecated: [api({ countCapped: true })] }));
+    render(<UpgradeView cluster="x" />);
+    fireEvent.click((await screen.findByText("FlowSchema")).closest(".lens-row") as HTMLElement);
+    const p = within(screen.getByTestId("lens-inspector"));
+    expect(p.getByText(/Removed in 1.32 - at or before the 1.32 target/)).toBeTruthy();
+    expect(p.getByText("4+ (count capped)")).toBeTruthy();
+    expect(p.getByText(/server converts on read/)).toBeTruthy();
   });
 
-  // Review 2026-10-03 (K): an unread input is named, never shown as clean; a
-  // capped object count is a lower bound.
-  it("names unread inputs and marks capped counts", async () => {
-    vi.mocked(getUpgradeReadiness).mockResolvedValue(report({
-      warnings: ["kubelet skew unknown - the node list could not be read: nodes is forbidden"],
-      deprecated: [{ group: "flowcontrol.apiserver.k8s.io", version: "v1beta3", resource: "flowschemas", kind: "FlowSchema", removedInMinor: 32, replacedBy: "flowcontrol.apiserver.k8s.io/v1", count: 500, countKnown: true, countCapped: true }],
-    }));
-    const { findByTestId, findByText } = render(<UpgradeView cluster="c" />);
-    expect((await findByTestId("upgrade-warnings")).textContent).toMatch(/kubelet skew unknown/);
-    expect(await findByText("500+ objects")).toBeTruthy();
+  it("skew findings list nodes, violations first, with an Open node action", async () => {
+    vi.mocked(getUpgradeReadiness).mockResolvedValue(report({ skew: [
+      { node: "a-warn", version: "v1.30.0", delta: 1, level: "warning", detail: "one minor behind" },
+      { node: "b-bad", version: "v1.27.0", delta: 4, level: "danger", detail: "outside the supported skew" },
+    ] }));
+    render(<UpgradeView cluster="x" />);
+    await screen.findByText("▲ 1 skew violation");
+    fireEvent.click(screen.getByRole("button", { name: /^Node skew/ }));
+    const rows = [...document.querySelectorAll(".lens-row")].map((r) => r.textContent ?? "");
+    expect(rows[0]).toContain("b-bad");
+    fireEvent.click(document.querySelector(".lens-row") as HTMLElement);
+    expect(within(screen.getByTestId("lens-inspector")).getByRole("button", { name: "Open node" })).toBeTruthy();
+  });
+
+  it("an error is unreadable with Retry; EOL past is a danger shape", async () => {
+    vi.mocked(getUpgradeReadiness).mockResolvedValueOnce(report({ error: "discovery failed" }));
+    render(<UpgradeView cluster="x" />);
+    expect(await screen.findByText("Could not read upgrade readiness.")).toBeTruthy();
+    vi.mocked(getUpgradeReadiness).mockResolvedValueOnce(report({ eolDate: "2000-01-01" }));
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByText(/▲ upstream EOL \d+d ago/)).toBeTruthy();
+  });
+
+  it("a late report for a previous cluster never lands on the new one", async () => {
+    const late = deferred<UpgradeReportDTO>();
+    vi.mocked(getUpgradeReadiness).mockReturnValueOnce(late.promise).mockResolvedValueOnce(report({ serverVersion: "v1.33.0", serverMinor: 33 }));
+    const { rerender } = render(<UpgradeView cluster="a" />);
+    rerender(<UpgradeView cluster="b" />);
+    expect(await screen.findByText("v1.33.0")).toBeTruthy();
+    await act(async () => { late.resolve(report({ serverVersion: "v1.29.0" })); await late.promise; });
+    expect(screen.queryByText("v1.29.0")).toBeNull();
+  });
+
+  it("daysUntil handles bad input", () => {
+    expect(daysUntil("")).toBeNull();
+    expect(daysUntil("nope")).toBeNull();
+    expect(daysUntil("2026-01-11", Date.parse("2026-01-01T00:00:00Z"))).toBe(10);
   });
 });
