@@ -520,9 +520,10 @@ function CertInspector({ c, cluster, removed, issuer, issuersKnown, issuerCov, c
   // headline card; an Unknown issuer is unverified evidence (no issuer-derived
   // cause); a missing issuer is a cause only with that kind's coverage. Chain
   // failures and other independent facts still provide a cause.
-  const cause = issuerBroken ? ""
-    : !boundIssuer ? (issuersKnown ? failureHint(c, undefined, failing, warnings, issuerCov === "stale") : failureHint(c, NO_ISSUER_CLAIM, failing, warnings))
-    : failureHint(c, issuerRole!.kind === "unknown" ? NO_ISSUER_CLAIM : boundIssuer, failing, warnings);
+  const issuerEvidence: IssuerEvidence = !boundIssuer
+    ? (issuersKnown ? { kind: "missing", lastObserved: issuerCov === "stale" } : { kind: "no-claim" })
+    : issuerRole!.kind === "unknown" ? { kind: "no-claim" } : { kind: "found", issuer: boundIssuer };
+  const cause = issuerBroken ? "" : failureHint(c, issuerEvidence, failing, warnings);
   const live = !removed;
   const role = certHealth(c);
 
@@ -712,13 +713,17 @@ const chainKindLabel: Record<string, string> = {
   Challenge: "challenge",
 };
 
-// NO_ISSUER_CLAIM: pass instead of an issuer when issuer evidence must not
-// produce a cause (Unknown health, or no coverage for that issuer kind).
-const NO_ISSUER_CLAIM = { kind: "", namespace: "", name: "", ready: "Ready", reason: "", message: "" } as IssuerDTO;
+// IssuerEvidence says what the issuer side may claim in a cause: a found
+// issuer (its own health speaks), a confirmed absence from a covered list, or
+// no claim at all (Unknown health, or no coverage for that issuer kind).
+type IssuerEvidence =
+  | { kind: "found"; issuer: IssuerDTO }
+  | { kind: "missing"; lastObserved: boolean }
+  | { kind: "no-claim" };
 
-function failureHint(c: CertificateDTO, issuer: IssuerDTO | undefined, failing: ChainNodeDTO | null, warnings: string[], lastObserved = false): string {
-  if (issuer && issuer !== NO_ISSUER_CLAIM && issuer.ready !== "Ready") return `${issuer.kind}/${issuer.name} is not ready${issuer.reason ? `: ${issuer.reason}` : ""}.`;
-  if (!issuer) return `${c.issuerKind}/${c.issuerName} was not found in the ${lastObserved ? "last observed" : "watched"} ${c.issuerKind} list.`;
+function failureHint(c: CertificateDTO, ev: IssuerEvidence, failing: ChainNodeDTO | null, warnings: string[]): string {
+  if (ev.kind === "found" && ev.issuer.ready !== "Ready") return `${ev.issuer.kind}/${ev.issuer.name} is not ready${ev.issuer.reason ? `: ${ev.issuer.reason}` : ""}.`;
+  if (ev.kind === "missing") return `${c.issuerKind}/${c.issuerName} was not found in the ${ev.lastObserved ? "last observed" : "watched"} ${c.issuerKind} list.`;
   if (failing) {
     const kind = chainKindLabel[failing.kind] ?? failing.kind.toLowerCase();
     return `${kind} ${failing.name} is ${failing.ready.toLowerCase()}${failing.reason ? `: ${failing.reason}` : ""}.`;
