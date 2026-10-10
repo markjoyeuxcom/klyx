@@ -172,6 +172,9 @@ export type GitOpsSlice = {
   watchError?: string | null; // watch failing before sync (RBAC, CRD mismatch) - not an empty list
   expandedKey: string | null;
   detail: ResourceDetailDTO | null;
+  // The cluster the detail was read from: DEV/STG/PRD share kind/ns/name, so
+  // a detail is only evidence for the selection when this matches too.
+  detailCluster?: string | null;
 };
 
 // cert-manager lens (M11). NotAfterUnix/RenewalUnix are 0 when unknown; expiry is
@@ -799,7 +802,7 @@ type FleetState = {
   clearGitOps: () => void;
   expand: (key: string) => void;
   collapse: () => void;
-  setDetail: (d: ResourceDetailDTO) => void;
+  setDetail: (d: ResourceDetailDTO, cluster?: string) => void;
   certmanager: CertManagerSlice;
   setCertManager: (cluster: string, certificates: CertificateDTO[], issuers: IssuerDTO[], watchError?: string) => void;
   setCertManagerLoading: (cluster: string) => void;
@@ -1001,11 +1004,14 @@ export const useFleet = create<FleetState>((set) => ({
   clearInstanceDetail: () => set({ instanceDetail: { cluster: null, resource: null, ref: null, detail: null, loading: false } }),
   gitops: { cluster: null, resources: [], sources: [], loading: false, watchError: null, expandedKey: null, detail: null },
   setGitOps: (cluster, resources, sources, watchError) => set((s) => ({ gitops: { ...s.gitops, cluster, resources, sources, loading: false, watchError: watchError || null } })),
-  setGitOpsLoading: (cluster) => set((s) => ({ gitops: { ...s.gitops, cluster, resources: [], sources: [], loading: true, watchError: null } })),
+  // A different cluster starts from no selection and no detail: a same-key
+  // selection must never carry another cluster's evidence over.
+  setGitOpsLoading: (cluster) => set((s) => ({ gitops: { ...s.gitops, cluster, resources: [], sources: [], loading: true, watchError: null,
+    ...(s.gitops.cluster !== cluster ? { expandedKey: null, detail: null, detailCluster: null } : {}) } })),
   clearGitOps: () => set({ gitops: { cluster: null, resources: [], sources: [], loading: false, watchError: null, expandedKey: null, detail: null } }),
   expand: (key) => set((s) => ({ gitops: { ...s.gitops, expandedKey: key, detail: null } })),
   collapse: () => set((s) => ({ gitops: { ...s.gitops, expandedKey: null, detail: null } })),
-  setDetail: (d) => set((s) => ({ gitops: { ...s.gitops, detail: d } })),
+  setDetail: (d, cluster) => set((s) => ({ gitops: { ...s.gitops, detail: d, detailCluster: cluster ?? s.gitops.cluster } })),
 
   certmanager: { cluster: null, certificates: [], issuers: [], loading: false, watchError: null, selectedKey: null, chain: null, chainLoading: false },
   setCertManager: (cluster, certificates, issuers, watchError) => set((s) => ({ certmanager: { ...s.certmanager, cluster, certificates, issuers, loading: false, watchError: watchError || null } })),

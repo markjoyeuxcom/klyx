@@ -18,6 +18,7 @@ import { wellKnownResourceRef, FLUX_KIND_GROUPS } from "./resourceRefs";
 import { StatusDot, readyColor, ellipsis, type Tone } from "../chrome/primitives";
 import { compactCount } from "../chrome/format";
 import { InspectorConditions, InspectorStatus } from "./ResourceInspector";
+import { VerdictLamp } from "../health/VerdictView";
 import { SyncingChip, staleStyle } from "./staleness";
 import { LensLayout, LensTable, TABLE_ROW_HEIGHT, type DatasetState } from "../layout/LensLayout";
 import { InspectorBlock, InspectorLayout, type MenuItem } from "../layout/InspectorLayout";
@@ -57,21 +58,17 @@ function needsAttention(r: FluxResourceDTO): boolean {
   return !r.suspended && r.ready !== "Ready";
 }
 
-function rank(r: FluxResourceDTO): number {
+// Broken first. Suspension is checked BEFORE the (historical) Ready state: a
+// deliberately paused resource keeps its last Failed condition, and must not
+// outrank an active failure.
+function rank(r: { ready: string; suspended: boolean }): number {
+  if (r.suspended) return 3;
   if (r.ready === "Failed") return 0;
   if (r.ready === "Reconciling") return 1;
-  if (r.suspended) return 2;
-  if (r.ready !== "Ready") return 3;
+  if (r.ready !== "Ready") return 2;
   return 4;
 }
-
-function srcRank(s: FluxSourceDTO): number {
-  if (s.ready === "Failed") return 0;
-  if (s.ready === "Reconciling") return 1;
-  if (s.suspended) return 2;
-  if (s.ready !== "Ready") return 3;
-  return 4;
-}
+const srcRank = rank;
 
 function sourceText(r: FluxResourceDTO): string {
   return [r.sourceKind, r.sourceName].filter(Boolean).join(" ");
@@ -123,22 +120,29 @@ const SOURCE_COLUMNS: (ColumnDef & { label: string })[] = [
   { id: "revision", label: "Revision", width: 150, priority: 2 },
 ];
 
-// fluxLamp: only faults glow. Failed = danger; Reconciling = info; suspended =
-// warning (an intended pause, shown, not counted as attention); a stale
-// (unobserved) spec never glows as healthy.
-function fluxLampColor(r: { ready: string; suspended: boolean; stale?: boolean }): string | null {
-  if (r.suspended) return "var(--color-text-warning)";
-  if (r.stale) return "var(--color-text-tertiary)";
-  if (r.ready === "Failed") return "var(--color-text-danger)";
-  if (r.ready === "Reconciling") return "var(--color-text-info)";
-  if (r.ready !== "Ready") return "var(--color-text-warning)";
-  return null;
+// fluxHealth maps Flux state onto the shared verdict roles so the lamp obeys
+// the template rule (only faults glow): Failed = fault; other not-Ready =
+// degraded; Reconciling or an unobserved spec ("Syncing…") = progressing;
+// Suspended = paused (an outlined ring - intentional, not broken); Ready = ok.
+function fluxHealth(r: { ready: string; suspended: boolean; stale?: boolean }): { kind: string; label: string } {
+  if (r.suspended) return { kind: "paused", label: "Suspended" };
+  if (r.stale) return { kind: "progressing", label: "Syncing…" };
+  if (r.ready === "Failed") return { kind: "fault", label: "Failed" };
+  if (r.ready === "Reconciling") return { kind: "progressing", label: "Reconciling" };
+  if (r.ready !== "Ready") return { kind: "degraded", label: r.ready || "Not ready" };
+  return { kind: "ok", label: "Ready" };
 }
+const STATUS_COLOR: Record<string, string> = {
+  fault: "var(--color-text-danger)",
+  degraded: "var(--color-text-warning)",
+  progressing: "var(--color-text-secondary)",
+  paused: "var(--color-text-secondary)",
+  ok: "var(--color-text-secondary)",
+};
 
-function Lamp({ color, label }: { color: string | null; label: string }) {
-  return color
-    ? <span role="img" aria-label={label} style={{ width: 8, height: 8, borderRadius: "50%", background: color, justifySelf: "center" }} />
-    : <span aria-hidden="true" />;
+function Lamp({ r }: { r: { ready: string; suspended: boolean; stale?: boolean } }) {
+  const h = fluxHealth(r);
+  return <span role="img" aria-label={h.label} style={{ display: "inline-flex", justifySelf: "center" }}><VerdictLamp health={h} size={8} /></span>;
 }
 
 const ellipsisCell: React.CSSProperties = { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 };
@@ -157,6 +161,8 @@ export function GitOps({ cluster }: { cluster: string }) {
   const [cursorKey, setCursorKey] = useState<string | null>(null);
   const [bodyWidth, setBodyWidth] = useState(1100);
   const [pinned, setPinnedState] = useState<PinnedVerb | null>(null);
+  const [sourceKey, setSourceKey] = useState<string | null>(null);
+  const sourceListRef = useRef<VirtualListHandle>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<VirtualListHandle>(null);
   const absent = tier === "Absent";
@@ -197,12 +203,16 @@ export function GitOps({ cluster }: { cluster: string }) {
     if (!r) return "missing";
     autoSelect.current = "done";
     setView("reconciliation");
+    // Direct navigation wins over pre-existing filters; a later operator edit
+    // that excludes it still closes the inspector.
+    const passes = (!kindFilter || r.kind === kindFilter) && (status === "all" || (status === "attention" ? needsAttention(r) : r.suspended)) && matchesQuery(r, query);
+    if (!passes) { setStatus("all"); setKindFilter(""); setQuery(""); }
     setCursorKey(keyOf(r));
     expand(keyOf(r));
     if (intent.kind === "reconcile-flux") setPinned({ kind: "reconcile", r });
     else if (intent.kind === "suspend-flux") setPinned({ kind: intent.suspend ? "suspend" : "resume", r });
     return "consumed";
-  }, [rows, gitops.loading]);
+  }, [rows, gitops.loading, kindFilter, status, query]);
 
   const orderedRows = useMemo(
     () => [...rows].sort((a, b) => rank(a) - rank(b) || a.namespace.localeCompare(b.namespace) || a.name.localeCompare(b.name)),
@@ -226,6 +236,15 @@ export function GitOps({ cluster }: { cluster: string }) {
     const q = query.trim().toLowerCase();
     return !q || [s.kind, s.namespace, s.name, s.message, s.revision].some((v) => v.toLowerCase().includes(q));
   }), [orderedSources, sourceKind, status, query]);
+  const openSource = useCallback((s: FluxSourceDTO) => { setCursorKey(keyOf(s)); setSourceKey(keyOf(s)); }, []);
+  const selectedSource = sourceKey ? allSources.find((x) => keyOf(x) === sourceKey) : undefined;
+  const lastSource = useRef<FluxSourceDTO | null>(null);
+  if (selectedSource) lastSource.current = selectedSource;
+  const sourceRemoved = !!sourceKey && complete && !selectedSource;
+  useEffect(() => {
+    if (selectedSource && !visibleSources.includes(selectedSource)) setSourceKey(null);
+  }, [selectedSource, visibleSources]);
+  useEffect(() => { setSourceKey(null); }, [cluster]);
   const byKey = useMemo(() => {
     const m = new Map<string, FluxResourceDTO>();
     for (const r of rows) m.set(keyOf(r), r);
@@ -239,6 +258,11 @@ export function GitOps({ cluster }: { cluster: string }) {
   const lastSelected = useRef<FluxResourceDTO | null>(null);
   if (selected) lastSelected.current = selected;
   const removed = !!selKey && complete && !selected;
+  // Detail is evidence for the selection only with matching cluster AND key.
+  const liveDetail = mine && gitops.detail && gitops.detailCluster === cluster && keyOf(gitops.detail) === selKey ? gitops.detail : null;
+  const lastDetail = useRef<{ key: string; d: ResourceDetailDTO } | null>(null);
+  if (liveDetail && selKey) lastDetail.current = { key: `${cluster}/${selKey}`, d: liveDetail };
+  const shownDetail = liveDetail ?? (removed && lastDetail.current?.key === `${cluster}/${selKey}` ? lastDetail.current.d : null);
   useEffect(() => {
     if (selected && view === "reconciliation" && !visibleRows.includes(selected)) collapse();
   }, [selected, visibleRows, view, collapse]);
@@ -269,19 +293,22 @@ export function GitOps({ cluster }: { cluster: string }) {
     if (r) { setCursorKey(keyOf(r)); expand(keyOf(r)); }
   }, [freshRead, visibleRows, expand]);
 
-  const cursorIdx = cursorKey === null ? -1 : visibleRows.findIndex((r) => keyOf(r) === cursorKey);
   const openRow = useCallback((r: FluxResourceDTO) => { autoSelect.current = "done"; setCursorKey(keyOf(r)); expand(keyOf(r)); }, [expand]);
   const close = useCallback(() => { autoSelect.current = "done"; collapse(); }, [collapse]);
+  const navRows: { key: string; open: () => void }[] = view === "sources"
+    ? visibleSources.map((s) => ({ key: keyOf(s), open: () => openSource(s) }))
+    : visibleRows.map((r) => ({ key: keyOf(r), open: () => openRow(r) }));
+  const cursorIdx = cursorKey === null ? -1 : navRows.findIndex((n) => n.key === cursorKey);
   // r / s drive the SAME confirm flows the inspector opens - keys never
   // bypass a confirm. Inert while no row has the cursor.
   useListKeys({
-    count: view === "sources" ? 0 : visibleRows.length,
+    count: navRows.length,
     selected: cursorIdx,
-    onSelect: (idx) => { const r = visibleRows[idx]; if (r) { setCursorKey(keyOf(r)); listRef.current?.scrollToIndex(idx); } },
-    onActivate: (idx) => { const r = visibleRows[idx]; if (r) openRow(r); },
-    onEscape: () => { if (selKey) close(); },
+    onSelect: (idx) => { const n = navRows[idx]; if (n) { setCursorKey(n.key); (view === "sources" ? sourceListRef : listRef).current?.scrollToIndex(idx); } },
+    onActivate: (idx) => navRows[idx]?.open(),
+    onEscape: () => { if (view === "sources") setSourceKey(null); else if (selKey) close(); },
     searchRef,
-    extraKeys: {
+    extraKeys: view === "sources" ? {} : {
       r: (idx) => { const r = visibleRows[idx]; if (r) setPinned({ kind: "reconcile", r }); },
       s: (idx) => { const r = visibleRows[idx]; if (r) setPinned({ kind: r.suspended ? "resume" : "suspend", r }); },
     },
@@ -333,7 +360,7 @@ export function GitOps({ cluster }: { cluster: string }) {
             <span className="t-number" style={{ color: "var(--color-text-secondary)" }}>{allSources.length}{partial}</span>
             {srcAttention > 0
               ? <span className="t-status" style={{ color: "var(--color-text-warning)" }}>{srcAttention} not ready</span>
-              : <span className="t-secondary">{watchError ? "no known faults" : "all sources ready"}</span>}
+              : <span className="t-secondary">{watchError ? "no known faults" : srcSuspended > 0 ? "no active sources need attention" : "all sources ready"}</span>}
             {srcSuspended > 0 && <span className="t-secondary">{srcSuspended} suspended</span>}
           </>
         ) : (
@@ -397,17 +424,30 @@ export function GitOps({ cluster }: { cluster: string }) {
               {columns.filter((c) => show(c.id)).map((c) => <span key={c.id}>{c.label}</span>)}
             </div>
             <VirtualList
+              ref={sourceListRef}
               items={visibleSources}
               rowHeight={TABLE_ROW_HEIGHT}
               rowKey={(s) => keyOf(s)}
               style={{ flex: 1, minHeight: 0 }}
               render={(s) => (
-                <div key={keyOf(s)} className="lens-row" style={{ ...gridStyle, cursor: "default" }} data-testid="flux-source-row">
-                  {show("lamp") && <Lamp color={fluxLampColor(s)} label={s.suspended ? "suspended" : s.ready} />}
+                <div
+                  key={keyOf(s)}
+                  role="button"
+                  tabIndex={0}
+                  className="lens-row"
+                  data-testid="flux-source-row"
+                  aria-selected={keyOf(s) === cursorKey}
+                  data-cursor={keyOf(s) === cursorKey ? "true" : undefined}
+                  data-selected={keyOf(s) === sourceKey ? "true" : undefined}
+                  style={gridStyle}
+                  onClick={() => (keyOf(s) === sourceKey ? setSourceKey(null) : openSource(s))}
+                  onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openSource(s); } }}
+                >
+                  {show("lamp") && <Lamp r={s} />}
                   {show("kind") && <span style={{ color: "var(--color-text-tertiary)" }}>{sourceKindLabel[s.kind] ?? s.kind}</span>}
                   {show("name") && <span className="lens-cell-name" title={`${s.namespace}/${s.name}`}><span style={{ color: "var(--color-text-tertiary)" }}>{s.namespace} / </span>{s.name}</span>}
                   {show("status") && (
-                    <span style={{ ...ellipsisCell, color: fluxLampColor(s) ?? "var(--color-text-secondary)" }} title={s.message || undefined}>
+                    <span style={{ ...ellipsisCell, color: STATUS_COLOR[fluxHealth(s).kind] }}>
                       {s.suspended ? "Suspended" : s.ready}{s.message && s.ready !== "Ready" && !s.suspended ? ` · ${s.message}` : ""}
                     </span>
                   )}
@@ -429,7 +469,7 @@ export function GitOps({ cluster }: { cluster: string }) {
               style={{ flex: 1, minHeight: 0 }}
               render={(r) => {
                 const k = keyOf(r);
-                const lamp = fluxLampColor(r);
+                const h = fluxHealth(r);
                 return (
                   <div
                     key={k}
@@ -443,7 +483,7 @@ export function GitOps({ cluster }: { cluster: string }) {
                     onClick={() => (k === selKey ? close() : openRow(r))}
                     onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openRow(r); } }}
                   >
-                    {show("lamp") && <Lamp color={lamp} label={r.suspended ? "suspended" : r.stale ? "syncing" : r.ready} />}
+                    {show("lamp") && <Lamp r={r} />}
                     {show("kind") && <span style={{ color: "var(--color-text-tertiary)" }}>{r.kind === "Kustomization" ? "ks" : "hr"}</span>}
                     {show("name") && (
                       <span style={{ display: "flex", alignItems: "center", gap: 4, minWidth: 0 }}>
@@ -456,9 +496,9 @@ export function GitOps({ cluster }: { cluster: string }) {
                     )}
                     {show("status") && (
                       <span style={ellipsisCell} title={needsAttention(r) && r.message ? r.message : undefined}>
-                        {r.suspended ? <span style={{ color: "var(--color-text-warning)" }}>Suspended</span>
+                        {r.suspended ? <span style={{ color: "var(--color-text-secondary)" }}>Suspended</span>
                           : r.stale ? <SyncingChip generation={r.generation} observedGeneration={r.observedGeneration} />
-                          : <span className={r.ready === "Failed" ? "klyx-danger-prefix" : undefined} style={{ color: lamp ?? "var(--color-text-secondary)", fontWeight: r.ready === "Failed" ? 600 : 400 }}>
+                          : <span className={r.ready === "Failed" ? "klyx-danger-prefix" : undefined} style={{ color: STATUS_COLOR[h.kind], fontWeight: r.ready === "Failed" ? 600 : 400 }}>
                               {r.ready}{needsAttention(r) && r.reason ? ` · ${r.reason}` : ""}
                             </span>}
                       </span>
@@ -472,29 +512,38 @@ export function GitOps({ cluster }: { cluster: string }) {
             />
           </LensTable>
         )}
-        footer={<span className="t-legend">{view === "sources" ? "/ search" : "j k navigate · ↵ inspect · r reconcile · s suspend · / search"}</span>}
+        footer={<span className="t-legend">{view === "sources" ? "j k navigate · ↵ inspect · / search" : "j k navigate · ↵ inspect · r reconcile · s suspend · / search"}</span>}
         footerEnd={
           <>
             <span className="t-secondary">{shown} of {total}{partial} {view === "sources" ? "sources" : "resources"} · broken first{filterBits.length ? ` · filter: ${filterBits.join(", ")}` : ""}</span>
             {filterBits.length > 0 && <button className="l-chip" style={{ height: 20, color: "var(--color-text-info)" }} onClick={clearFilters}>Show all</button>}
           </>
         }
-        inspector={view === "reconciliation" && selKey && (selected || removed) && lastSelected.current ? (
+        inspector={view === "sources" ? (sourceKey && (selectedSource || sourceRemoved) && lastSource.current ? (
+          <SourceInspector
+            key={`${cluster}/${sourceKey}`}
+            source={selectedSource ?? lastSource.current}
+            removed={sourceRemoved}
+            usedBy={rows.filter((r) => r.sourceKind === (selectedSource ?? lastSource.current)!.kind && r.sourceName === (selectedSource ?? lastSource.current)!.name)}
+            onClose={() => setSourceKey(null)}
+            onOpenResource={(r) => { setView("reconciliation"); setSourceKey(null); openRow(r); }}
+          />
+        ) : undefined) : view === "reconciliation" && selKey && (selected || removed) && lastSelected.current ? (
           <FluxInspector
             key={`${cluster}/${selKey}`}
             cluster={cluster}
             resource={selected ?? lastSelected.current}
             removed={removed}
             isProtected={isProtected}
-            detail={gitops.detail && selected && keyOf(gitops.detail) === keyOf(selected) ? gitops.detail : null}
+            detail={shownDetail}
             deps={byKey}
             onClose={close}
             onReconcile={(r) => setPinned({ kind: "reconcile", r })}
             onToggleSuspend={(r, isSuspended) => setPinned({ kind: isSuspended ? "resume" : "suspend", r })}
           />
         ) : undefined}
-        inspectorLabel="Flux resource details"
-        onCloseInspector={close}
+        inspectorLabel={view === "sources" ? "Flux source details" : "Flux resource details"}
+        onCloseInspector={view === "sources" ? () => setSourceKey(null) : close}
       />
 
       {verb && (verb.kind === "suspend" || verb.kind === "resume") && (
@@ -528,6 +577,67 @@ export function GitOps({ cluster }: { cluster: string }) {
         />
       )}
     </>
+  );
+}
+
+// SourceInspector - a source's full diagnosis (wrapped message, URL,
+// revision) and the resources bound to it, which is how a source failure
+// reaches the operator's attention. Manifest opens the guarded editor.
+function SourceInspector({ source, removed, usedBy, onClose, onOpenResource }: {
+  source: FluxSourceDTO;
+  removed: boolean;
+  usedBy: FluxResourceDTO[];
+  onClose: () => void;
+  onOpenResource: (r: FluxResourceDTO) => void;
+}) {
+  const s = source;
+  const h = fluxHealth(s);
+  const ref = wellKnownResourceRef(FLUX_KIND_GROUPS[s.kind] ?? "", s.kind);
+  const view = ref ? () => { const nav = useFleet.getState(); nav.openResource(ref); nav.openInstance(s.namespace, s.name); } : null;
+  return (
+    <div data-testid="flux-source-panel" style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
+      <InspectorLayout
+        kind={s.kind}
+        namespace={s.namespace}
+        name={s.name}
+        meta={[sourceKindLabel[s.kind] ?? s.kind, s.url].filter(Boolean).join(" · ")}
+        onClose={onClose}
+        verdict={removed ? (
+          <div role="status" className="t-body" style={{ padding: "8px 10px", borderRadius: 4, background: "var(--color-background-secondary)", boxShadow: "inset 0 0 0 1px var(--color-border-secondary)" }}>
+            <span className="t-status">{s.kind} removed.</span> It is no longer in the current read. The details below are its last evidence.
+          </div>
+        ) : (
+          <div>
+            <InspectorStatus tone={fluxTone(s)} label={h.label} reason={!s.suspended && s.ready !== "Ready" ? s.reason || undefined : undefined} detail={shortRev(s.revision) || undefined} />
+            {s.message && !s.suspended && s.ready !== "Ready" && (
+              <div className="t-body" style={{ color: s.ready === "Failed" ? "var(--color-text-danger)" : "var(--color-text-warning)", overflowWrap: "anywhere", marginTop: -4 }}>{s.message}</div>
+            )}
+          </div>
+        )}
+        primary={view ? { label: "View manifest in Resources", onSelect: view } : undefined}
+      >
+        <InspectorBlock title="Used by" count={usedBy.length}>
+          {usedBy.length === 0 ? <Muted>No Kustomization or HelmRelease in this cluster names this source.</Muted> : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+              {usedBy.map((r) => (
+                <button key={keyOf(r)} onClick={() => onOpenResource(r)} className="t-identifier"
+                  style={{ display: "flex", gap: 8, alignItems: "center", background: "none", border: 0, padding: "2px 0", cursor: "pointer", textAlign: "left", color: "var(--color-text-info)" }}>
+                  <VerdictLamp health={fluxHealth(r)} size={7} />
+                  <span style={{ overflowWrap: "anywhere" }}>{r.kind === "Kustomization" ? "ks" : "hr"} {r.namespace}/{r.name}</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </InspectorBlock>
+        <InspectorBlock title="Artifact">
+          <div className="insp-kv">
+            <span>revision</span><span className="t-identifier" style={{ overflowWrap: "anywhere" }}>{s.revision || "-"}</span>
+            <span>url</span><span className="t-identifier" style={{ overflowWrap: "anywhere" }}>{s.url || "-"}</span>
+            <span>state</span><span>{s.suspended ? "suspended (intended pause)" : s.ready}</span>
+          </div>
+        </InspectorBlock>
+      </InspectorLayout>
+    </div>
   );
 }
 
@@ -568,7 +678,14 @@ function FluxInspector({ cluster, resource, removed, isProtected, detail, deps, 
   ) : (
     <div>
       {!r.suspended && r.stale ? (
-        <InspectorStatus tone="muted" label="Syncing…" reason={`generation ${r.generation} not yet observed (observed ${r.observedGeneration})`} />
+        <>
+          <InspectorStatus tone="muted" label="Syncing…" reason={`generation ${r.generation} not yet observed (observed ${r.observedGeneration})`} />
+          {r.message && (
+            <div className="t-body" style={{ color: "var(--color-text-secondary)", overflowWrap: "anywhere", marginTop: -4 }}>
+              <span className="t-section-label">Last observed (generation {r.observedGeneration}): </span>{r.ready}{r.reason ? ` · ${r.reason}` : ""} - {r.message}
+            </div>
+          )}
+        </>
       ) : (
         <InspectorStatus
           tone={fluxTone(r)}
@@ -577,7 +694,7 @@ function FluxInspector({ cluster, resource, removed, isProtected, detail, deps, 
           detail={shortRev(r.revision) || undefined}
         />
       )}
-      {r.message && needsAttention(r) && (
+      {r.message && needsAttention(r) && !r.stale && (
         <div className="t-body" style={{ color: r.ready === "Failed" ? "var(--color-text-danger)" : "var(--color-text-warning)", overflowWrap: "anywhere", marginTop: -4 }}>{r.message}</div>
       )}
     </div>
@@ -846,8 +963,8 @@ function EventsSection({ events }: { events: EventRowDTO[] }) {
 
 // fluxTone maps readyColor semantics onto the verdict tone: Failed=danger,
 // Ready=success, Reconciling=info, suspended=warning (an intended pause).
-function fluxTone(r: FluxResourceDTO): Tone {
-  if (r.suspended) return "warning";
+function fluxTone(r: { ready: string; suspended: boolean }): Tone {
+  if (r.suspended) return "muted"; // an intended pause, not a fault
   if (r.ready === "Failed") return "danger";
   if (r.ready === "Ready") return "success";
   if (r.ready === "Reconciling") return "info";

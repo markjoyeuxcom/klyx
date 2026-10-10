@@ -43,6 +43,7 @@ const expandedDetail = (over: Partial<import("../store/fleet").ResourceDetailDTO
   sources: [],
   loading: false,
   expandedKey: "Kustomization/flux-system/flux-system",
+  detailCluster: "x",
   detail: {
     kind: "Kustomization", namespace: "flux-system", name: "flux-system",
     suspended: false, appliedRevision: "main@a", attemptedRevision: "main@a", applyFailed: false,
@@ -125,6 +126,7 @@ describe("GitOps view", () => {
         sources: [],
         loading: false,
         expandedKey: "Kustomization/flux-system/flux-system",
+        detailCluster: "x",
         detail: {
           kind: "Kustomization", namespace: "flux-system", name: "flux-system",
           appliedRevision: "main@a", attemptedRevision: "main@a", applyFailed: false,
@@ -171,6 +173,7 @@ describe("GitOps view", () => {
         sources: [],
         loading: false,
         expandedKey: "Kustomization/flux-system/flux-system",
+        detailCluster: "x",
         detail: {
           kind: "Kustomization", namespace: "flux-system", name: "flux-system",
           suspended: false, appliedRevision: "main@a", attemptedRevision: "main@a", applyFailed: false,
@@ -193,6 +196,7 @@ describe("GitOps view", () => {
         sources: [],
         loading: false,
         expandedKey: "Kustomization/flux-system/x",
+        detailCluster: "x",
         detail: {
           kind: "Kustomization", namespace: "flux-system", name: "x",
           appliedRevision: "main@a", attemptedRevision: "main@b", applyFailed: true,
@@ -257,6 +261,7 @@ describe("GitOps view", () => {
         sources: [],
         loading: false,
         expandedKey: "HelmRelease/ns/app",
+        detailCluster: "x",
         detail: { kind: "HelmRelease", namespace: "ns", name: "app", suspended: false, appliedRevision: "", attemptedRevision: "", applyFailed: false, conditions: [], inventory: [] },
       },
     });
@@ -289,6 +294,7 @@ describe("GitOps view", () => {
         sources: [],
         loading: false,
         expandedKey: "Kustomization/flux-system/apps",
+        detailCluster: "x",
         detail: {
           kind: "Kustomization", namespace: "flux-system", name: "apps",
           reason: "DependencyNotReady", appliedRevision: "main@a", attemptedRevision: "main@a", applyFailed: false,
@@ -438,7 +444,7 @@ describe("GitOps workspace template (redesign)", () => {
     expect(queryByText(/\d+ need attention/)).toBeNull();
     expect(getByText("none need attention")).toBeTruthy();
     expect(getByText(/1 suspended/)).toBeTruthy();
-    fireEvent.click(getByRole("button", { name: /^Suspended/ }));
+    fireEvent.click(getByRole("button", { name: /^Suspended \d+$/ }));
     expect(getByText("paused")).toBeTruthy();
     expect(queryByText("ok")).toBeNull();
   });
@@ -493,5 +499,75 @@ describe("GitOps workspace template (redesign)", () => {
     const { getByText, queryByText } = render(<GitOps cluster="x" />);
     expect(getByText("Flux state could not be read.")).toBeTruthy();
     expect(queryByText(/No Flux resources/)).toBeNull();
+  });
+});
+
+describe("GitOps Codex rework (Flux review)", () => {
+  const seedRows = (resources: FluxResourceDTO[], over: Partial<{ expandedKey: string | null; sources: FluxSourceDTO[]; detail: import("../store/fleet").ResourceDetailDTO | null }> = {}) =>
+    useFleet.setState((s) => ({ gitops: { ...s.gitops, cluster: "x", resources, sources: over.sources ?? [], loading: false, expandedKey: over.expandedKey ?? null, detail: over.detail ?? null, detailCluster: over.detail ? "x" : null, watchError: null } }));
+
+  it("2. a source has a keyboard-reachable full diagnosis and its users", () => {
+    const long = "failed to checkout and determine revision: unable to clone 'ssh://git@example.com/very/long/path': ssh: handshake failed: knownhosts: key mismatch";
+    seedRows([res({ name: "apps", sourceKind: "GitRepository", sourceName: "repo" })], { sources: [src({ name: "repo", ready: "Failed", reason: "GitOperationFailed", message: long })] });
+    const { getByRole } = render(<GitOps cluster="x" />);
+    fireEvent.click(getByRole("button", { name: /^Sources/ }));
+    act(() => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "j", bubbles: true, cancelable: true })); });
+    act(() => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })); });
+    expect(inspector().getByText(long)).toBeTruthy(); // full, wrapped - not a title
+    expect(inspector().getByText("Used by · 1")).toBeTruthy();
+    fireEvent.click(inspector().getByText(/ks flux-system\/apps/));
+    expect(useFleet.getState().gitops.expandedKey).toBe("Kustomization/flux-system/apps");
+  });
+
+  it("3. removal keeps the loaded detail as read-only last evidence", () => {
+    const detail = { kind: "Kustomization", namespace: "flux-system", name: "a", suspended: false, appliedRevision: "main@a", attemptedRevision: "main@a", applyFailed: false,
+      conditions: [], inventory: [], source: src({ ready: "Failed", reason: "GitOperationFailed", message: "auth required" }) };
+    seedRows([res({ name: "a", ready: "Failed" }), res({ name: "b" })], { expandedKey: "Kustomization/flux-system/a", detail });
+    const { getByText, queryByText } = render(<GitOps cluster="x" />);
+    expect(getByText(/source not ready: GitOperationFailed/)).toBeTruthy();
+    act(() => useFleet.setState((s) => ({ gitops: { ...s.gitops, resources: [res({ name: "b" })] } })));
+    expect(getByText("Kustomization removed.")).toBeTruthy();
+    expect(getByText(/source not ready: GitOperationFailed/)).toBeTruthy();
+    expect(queryByText(/No detail was loaded/)).toBeNull();
+    expect(inspector().queryByRole("button", { name: /^Reconcile/ })).toBeNull();
+    expect(queryByText("Compute diff")).toBeNull();
+  });
+
+  it("4a. a suspended resource with an old failure never outranks an active failure", () => {
+    // alphabetical order would put the paused one first; only ranking can fix it
+    seedRows([res({ name: "a-paused-old-fail", suspended: true, ready: "Failed" }), res({ name: "z-active-fail", ready: "Failed" })]);
+    const { container } = render(<GitOps cluster="x" />);
+    const names = [...container.querySelectorAll(".lens-row .lens-cell-name")].map((e) => e.textContent);
+    expect(names[0]).toContain("z-active-fail");
+    expect(names[1]).toContain("a-paused-old-fail");
+  });
+
+  it("4b. all-suspended sources say no ACTIVE source needs attention", () => {
+    seedRows([res({})], { sources: [src({ name: "s1", suspended: true }), src({ name: "s2", suspended: true, ready: "Failed" })] });
+    const { getByRole, getByText, queryByText } = render(<GitOps cluster="x" />);
+    fireEvent.click(getByRole("button", { name: /^Sources/ }));
+    expect(getByText("no active sources need attention")).toBeTruthy();
+    expect(queryByText("all sources ready")).toBeNull();
+    expect(getByText("2 suspended")).toBeTruthy();
+  });
+
+  it("4c. a stale resource shows its old failure as last observed evidence, not a current diagnosis", () => {
+    seedRows([res({ name: "edited", ready: "Failed", reason: "BuildFailed", message: "kustomize build failed", stale: true, generation: 5, observedGeneration: 4 })], { expandedKey: "Kustomization/flux-system/edited" });
+    render(<GitOps cluster="x" />);
+    expect(inspector().getByText("Syncing…")).toBeTruthy();
+    const last = inspector().getByText(/Last observed \(generation 4\)/).parentElement as HTMLElement;
+    expect(last.textContent).toContain("kustomize build failed");
+    expect(last.style.color).toBe("var(--color-text-secondary)");
+  });
+
+  it("5. palette/cross-link navigation wins over a stale filter; a later operator edit closes", () => {
+    seedRows([res({ name: "a" }), res({ kind: "HelmRelease", name: "h" })]);
+    const { getByLabelText, queryByTestId, getByPlaceholderText } = render(<GitOps cluster="x" />);
+    fireEvent.change(getByPlaceholderText("Search name, message, revision"), { target: { value: "zzz" } });
+    act(() => useFleet.getState().requestNavIntent({ kind: "select-flux", cluster: "x", fluxKind: "HelmRelease", namespace: "flux-system", name: "h" }));
+    expect(queryByTestId("lens-inspector")).toBeTruthy();
+    expect((getByPlaceholderText("Search name, message, revision") as HTMLInputElement).value).toBe("");
+    fireEvent.change(getByLabelText("Kind"), { target: { value: "Kustomization" } });
+    expect(queryByTestId("lens-inspector")).toBeNull();
   });
 });
