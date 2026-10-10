@@ -21,7 +21,7 @@ describe("UpgradeView (redesign step 5)", () => {
     render(<UpgradeView cluster="x" />);
     expect(await screen.findByText("No deprecated API from Klyx's curated table is served.")).toBeTruthy();
     expect(screen.getByText(/not a guarantee/)).toBeTruthy();
-    expect(screen.getByText("no blocker for 1.32 against the curated table")).toBeTruthy();
+    expect(screen.getByText("no API removal blocker for 1.32 (curated table)")).toBeTruthy();
   });
 
   it("a partial report never reads as clean", async () => {
@@ -57,7 +57,7 @@ describe("UpgradeView (redesign step 5)", () => {
       { node: "b-bad", version: "v1.27.0", delta: 4, level: "danger", detail: "outside the supported skew" },
     ] }));
     render(<UpgradeView cluster="x" />);
-    await screen.findByText("▲ 1 skew violation");
+    await screen.findByText("▲ 1 kubelet skew violation now");
     fireEvent.click(screen.getByRole("button", { name: /^Node skew/ }));
     const rows = [...document.querySelectorAll(".lens-row")].map((r) => r.textContent ?? "");
     expect(rows[0]).toContain("b-bad");
@@ -88,5 +88,31 @@ describe("UpgradeView (redesign step 5)", () => {
     expect(daysUntil("")).toBeNull();
     expect(daysUntil("nope")).toBeNull();
     expect(daysUntil("2026-01-11", Date.parse("2026-01-01T00:00:00Z"))).toBe(10);
+  });
+});
+
+describe("UpgradeView skew is a current prerequisite, not target readiness (Codex 1e89fc5a)", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("1.31 control plane, a 1.28 kubelet warning, no deprecated APIs: no unqualified 'no blocker'; target changes never imply re-evaluated skew", async () => {
+    vi.mocked(getUpgradeReadiness).mockResolvedValue(report({ skew: [{ node: "old", version: "v1.28.0", delta: 3, level: "warning", detail: "upgrade nodes before the next control-plane bump" }] }));
+    render(<UpgradeView cluster="x" />);
+    expect(await screen.findByText("1 node to upgrade before the next control-plane bump")).toBeTruthy();
+    expect(screen.getByText("no API removal blocker for 1.32 (curated table)")).toBeTruthy();
+    expect(screen.queryByText(/^no blocker/)).toBeNull();
+    fireEvent.change(screen.getByLabelText("target minor"), { target: { value: "34" } });
+    expect(screen.getByText("1 node to upgrade before the next control-plane bump")).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Node skew \(current control plane\)/ })).toBeTruthy();
+  });
+
+  it("a refreshed report with a new server minor drops an obsolete target", async () => {
+    vi.mocked(getUpgradeReadiness).mockResolvedValueOnce(report());
+    render(<UpgradeView cluster="x" />);
+    await screen.findByText("v1.31.4");
+    fireEvent.change(screen.getByLabelText("target minor"), { target: { value: "32" } });
+    vi.mocked(getUpgradeReadiness).mockResolvedValueOnce(report({ serverVersion: "v1.33.0", serverMinor: 33 }));
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    expect(await screen.findByText("v1.33.0")).toBeTruthy();
+    expect((screen.getByLabelText("target minor") as HTMLSelectElement).value).toBe("34");
   });
 });

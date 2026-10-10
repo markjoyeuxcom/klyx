@@ -72,7 +72,8 @@ export function UpgradeView({ cluster }: { cluster: string }) {
     if (g !== gen.current) return;
     setLoading(false);
     setPinned({ cluster: origin, report: r, at: Date.now() });
-    if (r.serverMinor > 0) setTarget((t) => t ?? r.serverMinor + 1);
+    // keep the chosen target only while it is still one of +1..+3
+    if (r.serverMinor > 0) setTarget((t) => (t !== null && t > r.serverMinor && t <= r.serverMinor + 3 ? t : r.serverMinor + 1));
   };
   useEffect(() => {
     setTarget(null); setSelKey(null); setCursorKey(null); setPinned(null);
@@ -95,6 +96,7 @@ export function UpgradeView({ cluster }: { cluster: string }) {
   const removedAtTarget = apis.filter((d) => d.removedInMinor > 0 && targetMinor >= d.removedInMinor);
   const skew = useMemo(() => [...(ok?.skew ?? [])].sort((a, b) => Number(b.level === "danger") - Number(a.level === "danger") || a.node.localeCompare(b.node)), [ok]);
   const skewDanger = skew.filter((s) => s.level === "danger").length;
+  const skewWarn = skew.length - skewDanger;
 
   const rows: { key: string }[] = view === "apis" ? apis.map((d) => ({ key: apiKey(d) })) : skew.map((s) => ({ key: s.node }));
   const selectedApi = view === "apis" && selKey ? apis.find((d) => apiKey(d) === selKey) : undefined;
@@ -122,7 +124,7 @@ export function UpgradeView({ cluster }: { cluster: string }) {
     : state === "unreadable" ? <EmptyState icon={<IconArrowUpCircle size={28} stroke={1.2} />} title="Could not read upgrade readiness." hint={report?.error} action={{ label: "Retry", onClick: () => void fetchReport() }} />
     : view === "apis"
       ? <EmptyState icon={<IconArrowUpCircle size={28} stroke={1.2} />} title={partial ? "No deprecated API found in what could be read." : "No deprecated API from Klyx's curated table is served."} hint={partial ? "Part of the report could not be read (see above) - this is not a clean bill." : "Clean against the curated table for any target - not a guarantee; check your provider's upgrade notes."} />
-      : <EmptyState icon={<IconArrowUpCircle size={28} stroke={1.2} />} title={partial ? "No kubelet skew found in what could be read." : "No kubelet skew findings."} hint={partial ? "Part of the report could not be read (see above)." : "Every node's kubelet is within the supported skew of the control plane."} />;
+      : <EmptyState icon={<IconArrowUpCircle size={28} stroke={1.2} />} title={partial ? "No kubelet skew found in what could be read." : "No kubelet skew findings."} hint={partial ? "Part of the report could not be read (see above)." : "Every node's kubelet is within the supported skew of the CURRENT control plane. Skew at the target is not evaluated - upgrade nodes after the control plane."} />;
 
   const switchView = (v: View) => { setView(v); setSelKey(null); setCursorKey(null); };
 
@@ -139,8 +141,11 @@ export function UpgradeView({ cluster }: { cluster: string }) {
             </span>
           )}
           {removedAtTarget.length > 0 && <span className="t-status" style={{ color: "var(--color-text-danger)" }}>▲ {removedAtTarget.length} API{removedAtTarget.length === 1 ? "" : "s"} removed by 1.{targetMinor}</span>}
-          {skewDanger > 0 && <span className="t-status" style={{ color: "var(--color-text-danger)" }}>▲ {skewDanger} skew violation{skewDanger === 1 ? "" : "s"}</span>}
-          {removedAtTarget.length === 0 && skewDanger === 0 && <span className="t-secondary">{partial ? `no blocker found for 1.${targetMinor} in what could be read` : `no blocker for 1.${targetMinor} against the curated table`}</span>}
+          {removedAtTarget.length === 0 && <span className="t-secondary">{partial ? `no API removal found for 1.${targetMinor} in what could be read` : `no API removal blocker for 1.${targetMinor} (curated table)`}</span>}
+          {/* skew is measured against the CURRENT control plane, never the
+              target: it is a prerequisite, not target readiness */}
+          {skewDanger > 0 && <span className="t-status" style={{ color: "var(--color-text-danger)" }}>▲ {skewDanger} kubelet skew violation{skewDanger === 1 ? "" : "s"} now</span>}
+          {skewWarn > 0 && <span className="t-status" style={{ color: "var(--color-text-warning)" }}>{skewWarn} node{skewWarn === 1 ? "" : "s"} to upgrade before the next control-plane bump</span>}
         </>
       )}
       headerEnd={
@@ -154,7 +159,7 @@ export function UpgradeView({ cluster }: { cluster: string }) {
         <>
           <div role="group" aria-label="Upgrade view" style={{ display: "inline-flex", gap: 4 }}>
             <button className="l-chip" aria-pressed={view === "apis"} onClick={() => switchView("apis")}>Deprecated APIs {ok && <span style={{ color: removedAtTarget.length > 0 ? "var(--color-text-danger)" : "var(--color-text-secondary)" }}>{apis.length}</span>}</button>
-            <button className="l-chip" aria-pressed={view === "skew"} onClick={() => switchView("skew")}>Node skew {ok && <span style={{ color: skewDanger > 0 ? "var(--color-text-danger)" : "var(--color-text-secondary)" }}>{skew.length}</span>}</button>
+            <button className="l-chip" aria-pressed={view === "skew"} onClick={() => switchView("skew")}>Node skew (current control plane) {ok && <span style={{ color: skewDanger > 0 ? "var(--color-text-danger)" : "var(--color-text-secondary)" }}>{skew.length}</span>}</button>
           </div>
           {ok && ok.serverMinor > 0 && (
             <label style={{ display: "flex", alignItems: "center", gap: 6, marginLeft: "auto" }}>
@@ -210,7 +215,7 @@ export function UpgradeView({ cluster }: { cluster: string }) {
         </LensTable>
       }
       footer={<span className="t-legend">j k navigate · ↵ inspect</span>}
-      footerEnd={<span className="t-secondary">{view === "apis" ? "removed at target first" : "violations first"}</span>}
+      footerEnd={<span className="t-secondary">{view === "apis" ? "removed at target first" : "against the current control plane, not the target · violations first"}</span>}
       inspector={selectedApi ? <ApiInspector d={selectedApi} targetMinor={targetMinor} onClose={() => setSelKey(null)} />
         : selectedSkew ? <SkewInspector cluster={cluster} s={selectedSkew} serverVersion={ok?.serverVersion ?? ""} onClose={() => setSelKey(null)} />
         : undefined}
