@@ -276,3 +276,14 @@ func TestMatchExpressions(t *testing.T) {
 		t.Fatal("existing forbidden key must not match")
 	}
 }
+
+func TestExplainDeniedAgreesInNumber(t *testing.T) {
+	one := Explain(DirectionVerdict{Isolated: true, Policies: []PolicyRef{{Name: "a"}}}, "ingress")
+	if one != "ingress DENIED - 1 policy selects the pod, none admits this peer/port" {
+		t.Fatalf("singular: %q", one)
+	}
+	two := Explain(DirectionVerdict{Isolated: true, Policies: []PolicyRef{{Name: "a"}, {Name: "b"}}}, "ingress")
+	if two != "ingress DENIED - 2 policies select the pod, none admits this peer/port" {
+		t.Fatalf("plural: %q", two)
+	}
+}

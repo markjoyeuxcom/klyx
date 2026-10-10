@@ -51,7 +51,9 @@ function DirectionWell({ title, d, onOpenPolicy }: { title: string; d: Direction
   );
 }
 
-export function ConnectivityView({ cluster }: { cluster: string }) {
+// ConnectivityViewLegacy - the pre-redesign Connectivity lens, kept behind
+// klyx.layout.v1.legacyConnectivity=1 until the migrated lens is accepted.
+export function ConnectivityViewLegacy({ cluster }: { cluster: string }) {
   const [srcNS, setSrcNS] = useState("");
   const [srcPod, setSrcPod] = useState("");
   const [dstNS, setDstNS] = useState("");

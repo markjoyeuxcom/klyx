@@ -366,7 +366,11 @@ func Explain(d DirectionVerdict, direction string) string {
 	if d.Allowed {
 		return fmt.Sprintf("%s allowed by policy", direction)
 	}
-	return fmt.Sprintf("%s DENIED - %d polic%s select the pod, none admits this peer/port", direction, len(d.Policies), pluralY(len(d.Policies)))
+	verb := "select"
+	if len(d.Policies) == 1 {
+		verb = "selects"
+	}
+	return fmt.Sprintf("%s DENIED - %d polic%s %s the pod, none admits this peer/port", direction, len(d.Policies), pluralY(len(d.Policies)), verb)
 }
 
 func pluralY(n int) string {
