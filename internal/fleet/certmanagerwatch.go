@@ -2,11 +2,15 @@ package fleet
 
 import (
 	"context"
+	"fmt"
 	"sort"
+	"strings"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/client-go/dynamic/dynamicinformer"
+	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/tools/cache"
 
 	"github.com/moomora/klyx/internal/certmanager"
@@ -14,9 +18,31 @@ import (
 
 type certmanagerWatch struct {
 	cancel  context.CancelFunc
-	certInf cache.SharedIndexInformer
-	issInf  map[certmanager.Kind]cache.SharedIndexInformer // Issuer + ClusterIssuer
-	errs    *watchErrTracker
+	certInf cache.SharedIndexInformer                      // nil when Certificate is not served
+	issInf  map[certmanager.Kind]cache.SharedIndexInformer // Issuer + ClusterIssuer (served ones)
+	// watched: one entry per watched kind with its OWN recovery-aware error
+	// tracker, so coverage is per kind - a synced Certificate informer says
+	// nothing about a pending or forbidden ClusterIssuer watch.
+	watched []cmWatched
+	// unserved: kinds whose CRD is not installed (absent, not an error).
+	unserved []string
+}
+
+type cmWatched struct {
+	kind string
+	inf  cache.SharedIndexInformer
+	errs *watchErrTracker
+}
+
+// KindCoverage is one watched kind's evidence state: Served=false is a
+// definitive absence; otherwise Synced (initial list done) and Error (a
+// CURRENT failure - including one after the initial sync, while the view is
+// showing last-known state).
+type KindCoverage struct {
+	Kind   string
+	Served bool
+	Synced bool
+	Error  string
 }
 
 // issuerKinds is the set of cert-manager issuer CRDs Klyx watches alongside
@@ -52,24 +78,50 @@ func (c *ClusterConn) OpenCertManager() {
 		return
 	}
 
-	ver := preferredVersion(c.discovery(), "cert-manager.io", "v1")
-	certGVR := schema.GroupVersionResource{Group: "cert-manager.io", Version: ver, Resource: "certificates"}
-
 	gctx, cancel := context.WithCancel(parent)
-	factory := dynamicinformer.NewDynamicSharedInformerFactory(dyn, defaultResync)
-	errs := &watchErrTracker{}
-	certInf := factory.ForResource(certGVR).Informer()
-	trackWatchErrors(certInf, errs)
-
-	issInf := make(map[certmanager.Kind]cache.SharedIndexInformer, len(issuerKinds))
-	for _, k := range issuerKinds {
-		gvr := schema.GroupVersionResource{Group: "cert-manager.io", Version: ver, Resource: k.resource}
-		inf := factory.ForResource(gvr).Informer()
+	g := &certmanagerWatch{cancel: cancel, issInf: map[certmanager.Kind]cache.SharedIndexInformer{}}
+	// watchKind mirrors OpenGitOps: each kind at the version discovery says
+	// THAT resource is served at, or nothing when its CRD is absent; list/watch
+	// successes mark the kind's own tracker recovered (withRecovery).
+	watchKind := func(kind, resource string) cache.SharedIndexInformer {
+		ver, served := servedVersion(c.discovery(), "cert-manager.io", resource, "v1")
+		if !served {
+			g.unserved = append(g.unserved, kind)
+			return nil
+		}
+		gvr := schema.GroupVersionResource{Group: "cert-manager.io", Version: ver, Resource: resource}
+		ri := dyn.Resource(gvr)
+		errs := &watchErrTracker{}
+		lw := withRecovery(&cache.ListWatch{
+			ListWithContextFunc: func(ctx context.Context, o metav1.ListOptions) (runtime.Object, error) {
+				return ri.List(ctx, o)
+			},
+			WatchFuncWithContext: func(ctx context.Context, o metav1.ListOptions) (watch.Interface, error) {
+				return ri.Watch(ctx, o)
+			},
+		}, errs)
+		inf := cache.NewSharedIndexInformerWithOptions(
+			cache.ToListWatcherWithWatchListSemantics(lw, dyn),
+			&unstructured.Unstructured{},
+			cache.SharedIndexInformerOptions{
+				ResyncPeriod:      defaultResync,
+				Indexers:          cache.Indexers{cache.NamespaceIndex: cache.MetaNamespaceIndexFunc},
+				ObjectDescription: gvr.String(),
+			},
+		)
 		trackWatchErrors(inf, errs)
-		issInf[k.kind] = inf
+		g.watched = append(g.watched, cmWatched{kind: kind, inf: inf, errs: errs})
+		return inf
 	}
-
-	factory.Start(gctx.Done())
+	g.certInf = watchKind("Certificate", "certificates")
+	for _, k := range issuerKinds {
+		if inf := watchKind(string(k.kind), k.resource); inf != nil {
+			g.issInf[k.kind] = inf
+		}
+	}
+	for _, w := range g.watched {
+		go w.inf.Run(gctx.Done())
+	}
 
 	c.mu.Lock()
 	c.certmgrOpening = false
@@ -79,22 +131,57 @@ func (c *ClusterConn) OpenCertManager() {
 		cancel()
 		return
 	}
-	c.certmgr = &certmanagerWatch{cancel: cancel, certInf: certInf, issInf: issInf, errs: errs}
+	c.certmgr = g
 	c.mu.Unlock()
 }
 
-// CertManagerWatchHealth reports whether the Certificate informer has synced
-// and the most recent watch error - the "permanently failing" signal that must
-// render as an error, never as an empty certificate list. Mirrors
-// GitOpsWatchHealth.
+// CertManagerWatchHealth reports whether EVERY watched cert-manager informer
+// has synced, and the CURRENT failures of any kind (a failure after the
+// initial sync included - the view is then showing last-known state). Mirrors
+// GitOpsWatchHealth. Per-kind detail is CertManagerCoverage.
 func (c *ClusterConn) CertManagerWatchHealth() (synced bool, lastErr string) {
+	cov := c.CertManagerCoverage()
+	if cov == nil {
+		return false, ""
+	}
+	synced = true
+	var errs []string
+	for _, k := range cov {
+		if !k.Served {
+			continue
+		}
+		if !k.Synced {
+			synced = false
+		}
+		switch {
+		case k.Error == "":
+		case k.Synced:
+			errs = append(errs, fmt.Sprintf("%s watch failing (showing last-known state): %s", k.Kind, k.Error))
+		default:
+			errs = append(errs, fmt.Sprintf("%s: %s", k.Kind, k.Error))
+		}
+	}
+	return synced, strings.Join(errs, "; ")
+}
+
+// CertManagerCoverage reports evidence per kind (Certificate, Issuer,
+// ClusterIssuer). nil when the watch is not open.
+func (c *ClusterConn) CertManagerCoverage() []KindCoverage {
 	c.mu.RLock()
 	g := c.certmgr
 	c.mu.RUnlock()
 	if g == nil {
-		return false, ""
+		return nil
 	}
-	return g.certInf.HasSynced(), g.errs.lastError()
+	out := make([]KindCoverage, 0, len(g.watched)+len(g.unserved))
+	for _, w := range g.watched {
+		out = append(out, KindCoverage{Kind: w.kind, Served: true, Synced: w.inf.HasSynced(), Error: w.errs.currentError()})
+	}
+	for _, k := range g.unserved {
+		out = append(out, KindCoverage{Kind: k, Served: false, Synced: true})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Kind < out[j].Kind })
+	return out
 }
 
 // CloseCertManager stops the cert-manager informers. Clearing certmgrWanted
@@ -120,6 +207,9 @@ func (c *ClusterConn) CertManagerCertificates() []certmanager.Certificate {
 		return nil
 	}
 	var out []certmanager.Certificate
+	if g.certInf == nil {
+		return nil
+	}
 	for _, obj := range g.certInf.GetStore().List() {
 		if u, ok := obj.(*unstructured.Unstructured); ok {
 			out = append(out, certmanager.ParseCertificate(u))

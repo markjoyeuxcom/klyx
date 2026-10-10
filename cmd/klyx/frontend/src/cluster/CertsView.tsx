@@ -106,8 +106,10 @@ type CertStatus = "all" | "attention" | "expiring" | "issuing" | "issuerProblem"
 // renewal window is cert-manager's normal automatic renewal - not attention;
 // the expiry cell carries it in amber text.
 function certHealth(c: CertificateDTO): { kind: string; label: string } {
-  if (c.stale) return { kind: "progressing", label: "Syncing…" };
+  // absolute expiry outranks an unobserved spec: an expired certificate is a
+  // fault whatever generation the controller has caught up to
   if (expired(c)) return { kind: "fault", label: "Expired" };
+  if (c.stale) return { kind: "progressing", label: "Syncing…" };
   if (c.ready === "Failed") return { kind: "fault", label: "Failed" };
   if (c.ready === "Issuing") return { kind: "progressing", label: "Issuing" };
   if (c.ready === "Ready") return { kind: "ok", label: "Ready" };
@@ -132,6 +134,7 @@ function Lamp({ role }: { role: { kind: string; label: string } }) {
 }
 const cellStyle: React.CSSProperties = { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 };
 const issuerKey = (i: IssuerDTO) => `${i.kind}/${i.namespace}/${i.name}`;
+type JoinCoverage = "complete" | "stale" | "unknown";
 
 const CERT_COLUMNS: (ColumnDef & { label: string })[] = [
   { id: "lamp", label: "", width: 16, priority: 0 },
@@ -184,8 +187,19 @@ export function CertsView({ cluster }: { cluster: string }) {
   const watchError = mine ? cm.watchError : null;
   const loaded = mine && !cm.loading;
   const complete = loaded && !watchError;
-  // certificates and issuers arrive in one watch emission: one coverage
-  const issuersKnown = loaded;
+  // Evidence per kind: a synced Certificate watch never vouches for a pending
+  // or forbidden Issuer/ClusterIssuer watch (or the reverse). Older payloads
+  // without coverage fall back to the aggregate state.
+  const kindCov = useCallback((kind: string): JoinCoverage => {
+    if (!loaded) return "unknown";
+    const k = (cm.coverage ?? []).find((x) => x.kind === kind);
+    if (!k) return watchError ? "stale" : "complete";
+    if (!k.served) return "complete"; // not installed: definitively none
+    if (!k.synced) return "unknown";
+    return k.error ? "stale" : "complete";
+  }, [loaded, cm.coverage, watchError]);
+  const certsCov = kindCov("Certificate");
+  const issuerCovOf = useCallback((kind: string) => kindCov(kind), [kindCov]);
 
   // Re-read the chain when the selection changes (and on demand).
   const selKey = mine ? cm.selectedKey : null;
@@ -207,9 +221,9 @@ export function CertsView({ cluster }: { cluster: string }) {
     if (status === "attention") return needsAttention(c);
     if (status === "expiring") return expiringSoon(c) || expired(c);
     if (status === "issuing") return c.ready === "Issuing";
-    if (status === "issuerProblem") return issuersKnown && issuerProblem(c, issuers);
+    if (status === "issuerProblem") return issuerCovOf(c.issuerKind) !== "unknown" && issuerProblem(c, issuers);
     return true;
-  }, [status, issuers, issuersKnown]);
+  }, [status, issuers, issuerCovOf]);
   const visibleCerts = useMemo(
     () => orderedCerts.filter((c) => (!namespace || c.namespace === namespace) && passesStatus(c) && matchesQuery(c, q)),
     [orderedCerts, namespace, passesStatus, q],
@@ -288,7 +302,7 @@ export function CertsView({ cluster }: { cluster: string }) {
   const failedOrExpired = certs.filter((c) => c.ready === "Failed" || expired(c)).length;
   const issuing = certs.filter((c) => c.ready === "Issuing").length;
   const renewing = certs.filter((c) => expiringSoon(c)).length;
-  const issuerProblems = issuersKnown ? certs.filter((c) => issuerProblem(c, issuers)).length : 0;
+  const issuerProblems = certs.filter((c) => issuerCovOf(c.issuerKind) !== "unknown" && issuerProblem(c, issuers)).length;
   const issuersNotReady = issuers.filter((i) => i.ready !== "Ready").length;
 
   const clearFilters = () => { setStatus("all"); setQuery(""); setNamespace(""); };
@@ -384,7 +398,7 @@ export function CertsView({ cluster }: { cluster: string }) {
                     {show("name") && <span className="lens-cell-name" title={`${i.namespace ? `${i.namespace}/` : ""}${i.name}`}>{i.namespace && <span style={{ color: "var(--color-text-tertiary)" }}>{i.namespace} / </span>}{i.name}</span>}
                     {show("kind") && <span style={{ color: "var(--color-text-tertiary)" }}>{i.kind}</span>}
                     {show("status") && <span style={{ ...cellStyle, color: ROLE_TEXT[role.kind] }}>{role.kind === "fault" ? "▲ " : ""}{i.ready}{i.ready !== "Ready" && i.reason ? ` · ${i.reason}` : ""}</span>}
-                    {show("certs") && <span>{certsFor(i).length}</span>}
+                    {show("certs") && <span title={certsCov === "unknown" ? "Certificate read unavailable" : certsCov === "stale" ? "from the last observed Certificate list" : undefined}>{certsCov === "unknown" ? "?" : `${certsFor(i).length}${certsCov === "stale" ? "*" : ""}`}</span>}
                   </div>
                 );
               }}
@@ -401,7 +415,7 @@ export function CertsView({ cluster }: { cluster: string }) {
                 const role = certHealth(c);
                 const soon = expiringSoon(c);
                 return (
-                  <div key={k} role="button" tabIndex={0} className="lens-row" style={{ ...gridStyle, ...staleStyle(c.stale) }}
+                  <div key={k} role="button" tabIndex={0} className="lens-row" style={{ ...gridStyle, ...staleStyle(c.stale && !expired(c)) }}
                     aria-selected={k === cursorKey} data-cursor={k === cursorKey ? "true" : undefined} data-selected={k === selKey ? "true" : undefined}
                     onClick={() => { setCursorKey(k); autoSelect.current = "done"; selectCert(k === selKey ? null : k); }}
                     onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); selectCert(k); } }}>
@@ -414,12 +428,12 @@ export function CertsView({ cluster }: { cluster: string }) {
                     )}
                     {show("status") && (
                       <span style={cellStyle}>
-                        {c.stale ? <SyncingChip generation={c.generation} observedGeneration={c.observedGeneration} />
+                        {c.stale && !expired(c) ? <SyncingChip generation={c.generation} observedGeneration={c.observedGeneration} />
                           : <span style={{ color: ROLE_TEXT[role.kind], fontWeight: role.kind === "fault" ? 600 : 400 }}>{role.kind === "fault" ? "▲ " : ""}{role.label}{needsAttention(c) && c.reason ? ` · ${c.reason}` : ""}</span>}
                       </span>
                     )}
                     {show("expiry") && <span style={{ color: expired(c) ? "var(--color-text-danger)" : soon ? "var(--color-text-warning)" : "var(--color-text-secondary)" }} title={c.notAfterUnix ? dateText(c.notAfterUnix) : undefined}>{expiryText(c)}</span>}
-                    {show("issuer") && <span style={{ ...cellStyle, color: issuersKnown && issuerProblem(c, issuers) ? "var(--color-text-warning)" : "var(--color-text-secondary)" }}>{c.issuerName}</span>}
+                    {show("issuer") && <span style={{ ...cellStyle, color: issuerCovOf(c.issuerKind) !== "unknown" && issuerProblem(c, issuers) ? "var(--color-text-warning)" : "var(--color-text-secondary)" }}>{c.issuerName}</span>}
                     {show("secret") && <span style={{ ...cellStyle, color: "var(--color-text-secondary)" }}>{c.secretName || "-"}</span>}
                   </div>
                 );
@@ -436,8 +450,9 @@ export function CertsView({ cluster }: { cluster: string }) {
           c={selectedCert ?? lastCert.current}
           cluster={cluster}
           removed={certRemoved}
-          issuer={issuersKnown ? resolveIssuer(selectedCert ?? lastCert.current, issuers) : undefined}
-          issuersKnown={issuersKnown}
+          issuer={issuerCovOf((selectedCert ?? lastCert.current).issuerKind) !== "unknown" ? resolveIssuer(selectedCert ?? lastCert.current, issuers) : undefined}
+          issuersKnown={issuerCovOf((selectedCert ?? lastCert.current).issuerKind) !== "unknown"}
+          issuerCov={issuerCovOf((selectedCert ?? lastCert.current).issuerKind)}
           chain={shownChain}
           chainLoading={!shownChain && mine && cm.chainLoading}
           aiReady={ai.ready}
@@ -452,6 +467,7 @@ export function CertsView({ cluster }: { cluster: string }) {
           issuer={selectedIssuer ?? lastIssuer.current}
           removed={issuerRemoved}
           certs={certsFor(selectedIssuer ?? lastIssuer.current)}
+          certsCov={certsCov}
           onClose={() => setIssuerSel(null)}
           onOpenCert={(c) => { setView("certificates"); setStatus("all"); setNamespace(""); setQuery(""); setCursorKey(keyOf(c)); autoSelect.current = "done"; selectCert(keyOf(c)); }}
         />
@@ -473,12 +489,13 @@ function RemovedNotice({ kind }: { kind: string }) {
 // CertInspector - investigation order: the cert verdict; the bound issuer
 // (headline when not ready), the likely cause, the issuance chain with the
 // deepest stuck node flagged; then secret, validity, DNS names, message.
-function CertInspector({ c, cluster, removed, issuer, issuersKnown, chain, chainLoading, aiReady, aiEgress, onClose, onResolve, onOpenIssuer }: {
+function CertInspector({ c, cluster, removed, issuer, issuersKnown, issuerCov, chain, chainLoading, aiReady, aiEgress, onClose, onResolve, onOpenIssuer }: {
   c: CertificateDTO;
   cluster: string;
   removed: boolean;
   issuer: IssuerDTO | undefined;
   issuersKnown: boolean;
+  issuerCov: JoinCoverage;
   chain: CertChainDTO | null;
   chainLoading: boolean;
   aiReady: boolean;
@@ -490,7 +507,10 @@ function CertInspector({ c, cluster, removed, issuer, issuersKnown, chain, chain
   // Prefer the server-resolved bound issuer (chain.issuer); fall back to the
   // watched issuer list before the chain lands.
   const boundIssuer = chain?.issuer ?? issuer;
-  const issuerBroken = boundIssuer && boundIssuer.ready !== "Ready";
+  const issuerRole = boundIssuer ? issuerHealth(boundIssuer) : null;
+  // only CONFIRMED adverse issuer health is a diagnosed root cause; Unknown is
+  // unverified evidence, shown muted
+  const issuerBroken = !!issuerRole && (issuerRole.kind === "fault" || issuerRole.kind === "degraded");
   const failing = chain?.failingLink ?? null;
   const failKey = failing ? `${failing.kind}/${failing.namespace}/${failing.name}` : null;
   const requests = arrayOf(chain?.requests);
@@ -537,17 +557,22 @@ function CertInspector({ c, cluster, removed, issuer, issuersKnown, chain, chain
         onClose={onClose}
         verdict={removed ? <RemovedNotice kind="Certificate" /> : (
           <div>
-            {c.stale ? (
+            {c.stale && !expired(c) ? (
               <InspectorStatus tone="muted" label="Syncing…" reason={`generation ${c.generation} not yet observed (observed ${c.observedGeneration})`} />
             ) : (
               <InspectorStatus
-                tone={certTone(c)}
+                tone={roleTone(role.kind)}
                 label={role.label}
                 reason={needsAttention(c) || c.ready === "Issuing" ? c.reason || undefined : expiringSoon(c) ? "renewal window" : undefined}
                 detail={c.notAfterUnix > 0 && !expired(c) ? `expires ${expiryText(c)}` : undefined}
               />
             )}
-            {c.message && needsAttention(c) && <div className="t-body" style={{ color: certTone(c) === "danger" ? "var(--color-text-danger)" : "var(--color-text-warning)", overflowWrap: "anywhere", marginTop: -4 }}>{c.message}</div>}
+            {c.stale && expired(c) && (
+              <div className="t-body" style={{ color: "var(--color-text-secondary)", overflowWrap: "anywhere", marginTop: -4 }}>
+                Spec generation {c.generation} not yet observed (observed {c.observedGeneration}) - the expiry above is current regardless.
+              </div>
+            )}
+            {c.message && needsAttention(c) && <div className="t-body" style={{ color: ROLE_TEXT[role.kind], overflowWrap: "anywhere", marginTop: c.stale && expired(c) ? 2 : -4 }}>{c.message}</div>}
           </div>
         )}
         primary={live ? { label: chainLoading ? "Resolving chain…" : "Re-resolve chain", onSelect: onResolve } : undefined}
@@ -555,8 +580,8 @@ function CertInspector({ c, cluster, removed, issuer, issuersKnown, chain, chain
         more={more}
       >
         {issuerBroken && (
-          <div className="t-body" style={{ padding: "8px 10px", borderRadius: 4, background: "var(--color-background-danger)", boxShadow: "inset 0 0 0 1px var(--color-border-danger)" }}>
-            <div style={{ color: "var(--color-text-danger)", fontWeight: 600 }}>Issuer not ready: {boundIssuer!.reason || "unknown"}</div>
+          <div className="t-body" style={{ padding: "8px 10px", borderRadius: 4, background: issuerRole!.kind === "fault" ? "var(--color-background-danger)" : "var(--color-background-warning)", boxShadow: `inset 0 0 0 1px ${issuerRole!.kind === "fault" ? "var(--color-border-danger)" : "var(--color-border-warning)"}` }}>
+            <div style={{ color: ROLE_TEXT[issuerRole!.kind], fontWeight: 600 }}>{issuerRole!.kind === "fault" ? "Issuer failed" : "Issuer not ready"}: {boundIssuer!.reason || "unknown"}</div>
             <button onClick={() => onOpenIssuer(boundIssuer!)} className="t-identifier" style={{ background: "none", border: 0, padding: 0, cursor: "pointer", color: "var(--color-text-info)", marginTop: 2 }}>{boundIssuer!.kind}/{boundIssuer!.name}</button>
             {boundIssuer!.message && <div style={{ color: "var(--color-text-secondary)", marginTop: 3, overflowWrap: "anywhere" }}>{boundIssuer!.message}</div>}
           </div>
@@ -594,8 +619,10 @@ function CertInspector({ c, cluster, removed, issuer, issuersKnown, chain, chain
           <div className="insp-kv">
             <span>ref</span><span className="t-identifier">{c.issuerKind}/{c.issuerName}</span>
             <span>health</span>
-            <span style={{ color: !boundIssuer ? "var(--color-text-tertiary)" : boundIssuer.ready === "Ready" ? undefined : "var(--color-text-danger)" }}>
-              {boundIssuer ? boundIssuer.ready : issuersKnown ? "not found in the watched issuer list" : "unverified (issuer read unavailable)"}
+            <span style={{ color: issuerRole ? ROLE_TEXT[issuerRole.kind] : "var(--color-text-tertiary)" }}>
+              {boundIssuer
+                ? `${issuerRole!.label}${issuerRole!.kind === "unknown" ? " (unverified)" : ""}${issuerCov === "stale" ? " (last observed)" : ""}`
+                : issuerCov === "unknown" ? `unverified (${c.issuerKind} read unavailable)` : issuerCov === "stale" ? `not found in the last observed ${c.issuerKind} list` : `not found in the watched ${c.issuerKind} list`}
             </span>
           </div>
         </InspectorBlock>
@@ -621,7 +648,7 @@ function CertInspector({ c, cluster, removed, issuer, issuersKnown, chain, chain
   );
 }
 
-function IssuerInspector({ issuer, removed, certs, onClose, onOpenCert }: { issuer: IssuerDTO; removed: boolean; certs: CertificateDTO[]; onClose: () => void; onOpenCert: (c: CertificateDTO) => void }) {
+function IssuerInspector({ issuer, removed, certs, certsCov, onClose, onOpenCert }: { issuer: IssuerDTO; removed: boolean; certs: CertificateDTO[]; certsCov: JoinCoverage; onClose: () => void; onOpenCert: (c: CertificateDTO) => void }) {
   const role = issuerHealth(issuer);
   const ref = wellKnownResourceRef("cert-manager.io", issuer.kind);
   const view = ref ? () => { const nav = useFleet.getState(); nav.openResource(ref); nav.openInstance(issuer.kind === "ClusterIssuer" ? "" : issuer.namespace, issuer.name); } : null;
@@ -642,8 +669,10 @@ function IssuerInspector({ issuer, removed, certs, onClose, onOpenCert }: { issu
         )}
         primary={view ? { label: "View manifest in Resources", onSelect: view } : undefined}
       >
-        <InspectorBlock title="Certificates using it" count={certs.length} extra={blocked.length > 0 ? <span className="t-secondary" style={{ color: "var(--color-text-warning)" }}>{blocked.length} not ready or expired</span> : undefined}>
-          {certs.length === 0 ? <span className="t-secondary">No Certificate references this issuer.</span> : (
+        <InspectorBlock title="Certificates using it" count={certsCov === "unknown" ? undefined : certs.length} extra={blocked.length > 0 ? <span className="t-secondary" style={{ color: "var(--color-text-warning)" }}>{blocked.length} not ready or expired</span> : undefined}>
+          {certsCov === "stale" && <span className="t-secondary">From the last observed Certificate list; the watch is currently failing.</span>}
+          {certsCov === "unknown" ? <span className="t-secondary">Certificate read unavailable - usage unverified, not zero.</span>
+            : certs.length === 0 ? <span className="t-secondary">No Certificate references this issuer.</span> : (
             <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
               {[...blocked, ...certs.filter((c) => !blocked.includes(c))].map((c) => (
                 <button key={keyOf(c)} onClick={() => onOpenCert(c)} className="t-identifier"
@@ -665,14 +694,10 @@ function IssuerInspector({ issuer, removed, certs, onClose, onOpenCert }: { issu
   );
 }
 
-// certTone maps the triage semantics onto the verdict tone: failed/expired are
-// faults, issuing is activity, the renewal window is a caution, ready is quiet.
-function certTone(c: CertificateDTO): Tone {
-  if (expired(c) || c.ready === "Failed") return "danger";
-  if (c.ready === "Issuing") return "info";
-  if (expiringSoon(c)) return "warning";
-  if (c.ready === "Ready") return "success";
-  return "muted";
+// roleTone: the verdict tone from the shared role - one mapping for rows,
+// headlines and messages (the renewal window stays a separate expiry fact).
+function roleTone(kind: string): Tone {
+  return kind === "fault" ? "danger" : kind === "degraded" ? "warning" : kind === "ok" ? "success" : "muted";
 }
 
 const chainKindLabel: Record<string, string> = {

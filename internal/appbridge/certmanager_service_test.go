@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/moomora/klyx/internal/certmanager"
+	"github.com/moomora/klyx/internal/fleet"
 )
 
 type fakeCertManagerConn struct {
@@ -13,12 +14,15 @@ type fakeCertManagerConn struct {
 	certs          []certmanager.Certificate
 	iss            []certmanager.Issuer
 	chain          certmanager.Chain
+	cov            []fleet.KindCoverage
+	healthErr      string
 }
 
 func (f *fakeCertManagerConn) OpenCertManager()                                   { f.opened++ }
 func (f *fakeCertManagerConn) CloseCertManager()                                  { f.closed++ }
 func (f *fakeCertManagerConn) CertManagerCertificates() []certmanager.Certificate { return f.certs }
-func (f *fakeCertManagerConn) CertManagerWatchHealth() (bool, string)             { return true, "" }
+func (f *fakeCertManagerConn) CertManagerWatchHealth() (bool, string)             { return true, f.healthErr }
+func (f *fakeCertManagerConn) CertManagerCoverage() []fleet.KindCoverage          { return f.cov }
 func (f *fakeCertManagerConn) CertManagerIssuers() []certmanager.Issuer           { return f.iss }
 func (f *fakeCertManagerConn) GetCertificateChain(ctx context.Context, ns, name string) (certmanager.Chain, error) {
 	return f.chain, nil
@@ -159,5 +163,24 @@ func TestCertManagerServiceOpenEmitsAndCloses(t *testing.T) {
 	svc.Close("nelli")
 	if conn.closed == 0 {
 		t.Fatal("expected CloseCertManager to be called")
+	}
+}
+
+func TestCertManagerPayloadCarriesPerKindCoverageAndSyncedFailures(t *testing.T) {
+	s := &CertManagerService{}
+	snap := certmanagerDomainSnap{
+		watchErr: "ClusterIssuer watch failing (showing last-known state): forbidden",
+		coverage: []fleet.KindCoverage{
+			{Kind: "Certificate", Served: true, Synced: true},
+			{Kind: "ClusterIssuer", Served: true, Synced: true, Error: "forbidden"},
+			{Kind: "Issuer", Served: true, Synced: false},
+		},
+	}
+	p := s.buildPayload("c", snap, time.Now())
+	if p.WatchError == "" {
+		t.Fatalf("a failure after sync must still surface: %+v", p)
+	}
+	if len(p.Coverage) != 3 || p.Coverage[1].Kind != "ClusterIssuer" || p.Coverage[1].Error != "forbidden" || p.Coverage[2].Synced {
+		t.Fatalf("per-kind coverage: %+v", p.Coverage)
 	}
 }

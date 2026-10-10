@@ -229,6 +229,11 @@ export type CertChainDTO = {
   failingLink: ChainNodeDTO | null;
   warnings: string[];
 };
+// One watched kind's evidence (backend KindCoverageDTO): served=false is a
+// definitive absence; synced=false = no evidence yet; error = a CURRENT
+// failure (after sync: the rows are last-observed).
+export type KindCoverageDTO = { kind: string; served: boolean; synced: boolean; error?: string };
+
 export type CertManagerSlice = {
   cluster: string | null;
   certificates: CertificateDTO[];
@@ -241,6 +246,7 @@ export type CertManagerSlice = {
   // the cluster the chain was read from: DEV/STG/PRD share ns/name, so a
   // chain is evidence for the selection only when this matches too
   chainCluster?: string | null;
+  coverage?: KindCoverageDTO[]; // per kind: Certificate, Issuer, ClusterIssuer
 };
 
 // External Secrets Operator lens (M12). Refresh staleness is ESO-native: a
@@ -826,7 +832,7 @@ type FleetState = {
   collapse: () => void;
   setDetail: (d: ResourceDetailDTO, cluster?: string) => void;
   certmanager: CertManagerSlice;
-  setCertManager: (cluster: string, certificates: CertificateDTO[], issuers: IssuerDTO[], watchError?: string) => void;
+  setCertManager: (cluster: string, certificates: CertificateDTO[], issuers: IssuerDTO[], watchError?: string, coverage?: KindCoverageDTO[]) => void;
   setCertManagerLoading: (cluster: string) => void;
   clearCertManager: () => void;
   selectCertificate: (key: string | null) => void;
@@ -1036,7 +1042,7 @@ export const useFleet = create<FleetState>((set) => ({
   setDetail: (d, cluster) => set((s) => ({ gitops: { ...s.gitops, detail: d, detailCluster: cluster ?? s.gitops.cluster } })),
 
   certmanager: { cluster: null, certificates: [], issuers: [], loading: false, watchError: null, selectedKey: null, chain: null, chainLoading: false },
-  setCertManager: (cluster, certificates, issuers, watchError) => set((s) => ({ certmanager: { ...s.certmanager, cluster, certificates, issuers, loading: false, watchError: watchError || null } })),
+  setCertManager: (cluster, certificates, issuers, watchError, coverage) => set((s) => ({ certmanager: { ...s.certmanager, cluster, certificates, issuers, loading: false, watchError: watchError || null, coverage } })),
   setCertManagerLoading: (cluster) => set((s) => ({ certmanager: { ...s.certmanager, cluster, certificates: [], issuers: [], loading: true, watchError: null, selectedKey: null, chain: null, chainLoading: false } })),
   clearCertManager: () => set({ certmanager: { cluster: null, certificates: [], issuers: [], loading: false, watchError: null, selectedKey: null, chain: null, chainLoading: false } }),
   selectCertificate: (key) => set((s) => ({ certmanager: { ...s.certmanager, selectedKey: key, chain: null, chainLoading: key !== null } })),

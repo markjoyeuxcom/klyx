@@ -60,6 +60,7 @@ type Conn interface {
 	CertManagerIssuers() []certmanager.Issuer
 	CertManagerObject(kind, namespace, name string) (*unstructured.Unstructured, bool)
 	CertManagerWatchHealth() (synced bool, lastErr string)
+	CertManagerCoverage() []KindCoverage
 	GetCertificateChain(ctx context.Context, ns, name string) (certmanager.Chain, error)
 	OpenExternalSecrets()
 	CloseExternalSecrets()

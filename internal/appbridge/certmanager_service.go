@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/moomora/klyx/internal/certmanager"
+	"github.com/moomora/klyx/internal/fleet"
 )
 
 // CertManagerConn is the per-cluster surface CertManagerService needs: the lazy
@@ -19,6 +20,9 @@ type CertManagerConn interface {
 	// CertManagerWatchHealth reports informer sync + the last watch error, so a
 	// failing watch renders as an error instead of an empty list.
 	CertManagerWatchHealth() (synced bool, lastErr string)
+	// CertManagerCoverage reports evidence per kind (Certificate, Issuer,
+	// ClusterIssuer): served / synced / current error.
+	CertManagerCoverage() []fleet.KindCoverage
 	GetCertificateChain(ctx context.Context, ns, name string) (certmanager.Chain, error)
 }
 
@@ -29,9 +33,21 @@ type certManagerPayload struct {
 	Cluster      string           `json:"cluster"`
 	Certificates []CertificateDTO `json:"certificates"`
 	Issuers      []IssuerDTO      `json:"issuers"`
-	// WatchError is set while the watch has not synced AND has recorded an
-	// error - the view must show the failure, not an empty list.
+	// WatchError carries every CURRENT watch failure of any kind - before the
+	// initial sync, or after it (the view is then showing last-known state).
+	// The view must show the failure, never an empty or quietly stale list.
 	WatchError string `json:"watchError,omitempty"`
+	// Coverage is per kind, so a synced Certificate list never vouches for a
+	// pending or forbidden Issuer/ClusterIssuer watch (or the reverse).
+	Coverage []KindCoverageDTO `json:"coverage"`
+}
+
+// KindCoverageDTO is one watched kind's evidence state.
+type KindCoverageDTO struct {
+	Kind   string `json:"kind"`
+	Served bool   `json:"served"`
+	Synced bool   `json:"synced"`
+	Error  string `json:"error,omitempty"`
 }
 
 // CertManagerService is bound to JS. Open starts a cluster's lazy cert-manager
@@ -101,6 +117,7 @@ type certmanagerDomainSnap struct {
 	certs    []certmanager.Certificate
 	issuers  []certmanager.Issuer
 	watchErr string
+	coverage []fleet.KindCoverage
 }
 
 func (s *CertManagerService) pushLoop(ctx context.Context, cluster string, conn CertManagerConn) {
@@ -114,11 +131,11 @@ func (s *CertManagerService) pushLoop(ctx context.Context, cluster string, conn 
 			return
 		case <-t.C:
 			now := s.now()
-			watchErr := ""
-			if synced, lastErr := conn.CertManagerWatchHealth(); !synced && lastErr != "" {
-				watchErr = lastErr
-			}
-			snap := certmanagerDomainSnap{certs: conn.CertManagerCertificates(), issuers: conn.CertManagerIssuers(), watchErr: watchErr}
+			// every CURRENT failure, synced or not (a failure after the initial
+			// sync used to be suppressed - the view then showed stale state as
+			// if current)
+			_, watchErr := conn.CertManagerWatchHealth()
+			snap := certmanagerDomainSnap{certs: conn.CertManagerCertificates(), issuers: conn.CertManagerIssuers(), watchErr: watchErr, coverage: conn.CertManagerCoverage()}
 			if last != nil && now.Sub(lastEmit) < pushHeartbeat && reflect.DeepEqual(*last, snap) {
 				continue
 			}
@@ -163,5 +180,9 @@ func (s *CertManagerService) buildPayload(cluster string, snap certmanagerDomain
 	for _, i := range snap.issuers {
 		issDTOs = append(issDTOs, toIssuerDTO(i))
 	}
-	return certManagerPayload{Cluster: cluster, Certificates: certDTOs, Issuers: issDTOs, WatchError: snap.watchErr}
+	cov := make([]KindCoverageDTO, 0, len(snap.coverage))
+	for _, k := range snap.coverage {
+		cov = append(cov, KindCoverageDTO{Kind: k.Kind, Served: k.Served, Synced: k.Synced, Error: k.Error})
+	}
+	return certManagerPayload{Cluster: cluster, Certificates: certDTOs, Issuers: issDTOs, WatchError: snap.watchErr, Coverage: cov}
 }

@@ -2,6 +2,8 @@ package fleet
 
 import (
 	"context"
+	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -10,6 +12,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/moomora/klyx/internal/capability"
 	"github.com/moomora/klyx/internal/certmanager"
@@ -116,5 +119,52 @@ func TestCertManagerIssuersAndObject(t *testing.T) {
 	}
 	if _, ok := c.CertManagerObject("Certificate", "payments", "nope"); ok {
 		t.Fatal("did not expect to find a nonexistent certificate")
+	}
+}
+
+// Coverage is per kind: Certificates syncing must not vouch for a forbidden
+// ClusterIssuer watch, and the ClusterIssuer's recovery clears its error.
+func TestCertManagerCoverageIsPerKindAndRecovers(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	typed := fake.NewSimpleClientset()
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), certManagerGVRToListKinds(),
+		certUnstructured("acme-demo", "payments", "True", "Ready"),
+		clusterIssuerUnstructured("lab-acme-staging", "True"))
+	var forbid atomic.Bool
+	forbid.Store(true)
+	dyn.PrependReactor("list", "clusterissuers", func(k8stesting.Action) (bool, runtime.Object, error) {
+		if forbid.Load() {
+			return true, nil, errors.New("clusterissuers.cert-manager.io is forbidden")
+		}
+		return false, nil, nil
+	})
+
+	c := NewClusterConn("x", typed, nil, dyn, capability.NewDetector(typed), clock.Real{}, config.MetricsConfig{})
+	c.ctx = ctx
+	c.OpenCertManager()
+	defer c.CloseCertManager()
+
+	cov := func(kind string) KindCoverage {
+		for _, k := range c.CertManagerCoverage() {
+			if k.Kind == kind {
+				return k
+			}
+		}
+		return KindCoverage{}
+	}
+	waitFor(t, 3*time.Second, func() bool { return cov("Certificate").Synced && cov("ClusterIssuer").Error != "" })
+	if ci := cov("ClusterIssuer"); ci.Synced || !ci.Served {
+		t.Fatalf("forbidden ClusterIssuer must be served but unsynced: %+v", ci)
+	}
+	if synced, err := c.CertManagerWatchHealth(); synced || err == "" {
+		t.Fatalf("aggregate health must say not synced with the ClusterIssuer error: %v %q", synced, err)
+	}
+
+	forbid.Store(false) // RBAC fixed: the reflector's retry lists successfully
+	waitFor(t, 5*time.Second, func() bool { ci := cov("ClusterIssuer"); return ci.Synced && ci.Error == "" })
+	if synced, err := c.CertManagerWatchHealth(); !synced || err != "" {
+		t.Fatalf("recovered watch must be synced with no current error: %v %q", synced, err)
 	}
 }

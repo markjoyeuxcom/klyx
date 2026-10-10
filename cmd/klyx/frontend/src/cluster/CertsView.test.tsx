@@ -332,7 +332,73 @@ describe("CertsView workspace template (redesign step 4c)", () => {
     setup("Healthy", [c], [], "payments/acme-demo");
     useFleet.setState((s) => ({ certmanager: { ...s.certmanager, loading: true } }));
     render(<CertsView cluster="x" />);
-    expect(insp().getByText(/unverified \(issuer read unavailable\)/)).toBeTruthy();
+    expect(insp().getByText(/unverified \(ClusterIssuer read unavailable\)/)).toBeTruthy();
     expect(insp().queryByText(/not found in the watched issuer list/)).toBeNull();
+  });
+});
+
+describe("CertsView Codex review corrections (cert-manager)", () => {
+  const cov = (over: Record<string, Partial<{ served: boolean; synced: boolean; error: string }>>) =>
+    ["Certificate", "Issuer", "ClusterIssuer"].map((kind) => ({ kind, served: true, synced: true, ...(over[kind] ?? {}) }));
+  const setCov = (c: ReturnType<typeof cov>) => useFleet.setState((s) => ({ certmanager: { ...s.certmanager, coverage: c } }));
+  const nowS = Math.floor(Date.now() / 1000);
+
+  it("1a. Certificates synced, ClusterIssuer forbidden: issuer health unverified, no issuer-problem claim; recovery restores it", () => {
+    const c = cert({ name: "acme-demo", ready: "Failed" });
+    setup("Healthy", [c], [], "payments/acme-demo");
+    setCov(cov({ ClusterIssuer: { synced: false, error: "forbidden" } }));
+    const { queryByRole } = render(<CertsView cluster="x" />);
+    expect(insp().getByText(/unverified \(ClusterIssuer read unavailable\)/)).toBeTruthy();
+    expect(insp().queryByText(/not found/)).toBeNull();
+    expect(queryByRole("button", { name: /^Issuer problem/ })).toBeNull();
+    act(() => { useFleet.setState((s) => ({ certmanager: { ...s.certmanager, issuers: [issuer({ ready: "False", reason: "ErrRegister" })] } })); setCov(cov({})); });
+    expect(insp().getByText(/Issuer not ready: ErrRegister/)).toBeTruthy();
+  });
+
+  it("1b. ClusterIssuer after-sync failure: the found issuer is marked last observed", () => {
+    const c = cert({ name: "acme-demo", ready: "Ready" });
+    setup("Healthy", [c], [issuer({})], "payments/acme-demo");
+    setCov(cov({ ClusterIssuer: { error: "forbidden" } }));
+    render(<CertsView cluster="x" />);
+    expect(insp().getByText(/Ready \(last observed\)/)).toBeTruthy();
+  });
+
+  it("1c. Issuers synced, Certificates unsynced: issuer usage is unverified, never zero", () => {
+    setup("Healthy", [], [issuer({ ready: "False" })]);
+    setCov(cov({ Certificate: { synced: false, error: "forbidden" } }));
+    const { getByRole } = render(<CertsView cluster="x" />);
+    fireEvent.click(getByRole("button", { name: /^Issuers/ }));
+    expect(rowsText().join(" ")).toContain("?");
+    fireEvent.click(screen.getAllByText("lab-acme-staging")[0]);
+    expect(insp().getByText(/usage unverified, not zero/)).toBeTruthy();
+    expect(insp().queryByText(/No Certificate references this issuer/)).toBeNull();
+  });
+
+  it("2. an expired certificate is Expired even while its spec is unobserved, in row and inspector", () => {
+    const c = cert({ name: "old", ready: "Ready", stale: true, generation: 4, observedGeneration: 3, notAfterUnix: nowS - 3600 });
+    setup("Healthy", [c], [issuer({})], "payments/old");
+    render(<CertsView cluster="x" />);
+    const row = rowsText().join(" ");
+    expect(row).toContain("▲ Expired");
+    expect(row).not.toContain("Syncing");
+    expect(insp().getByText("Expired")).toBeTruthy();
+    expect(insp().getByText(/Spec generation 4 not yet observed/)).toBeTruthy();
+  });
+
+  it("3. issuer and certificate roles agree across row and inspector", () => {
+    // Unknown bound issuer: muted and unverified, never a red root-cause card
+    setup("Healthy", [cert({ name: "u", ready: "Unknown" })], [issuer({ ready: "Unknown" })], "payments/u");
+    const first = render(<CertsView cluster="x" />);
+    expect(insp().queryByText(/Issuer failed|Issuer not ready/)).toBeNull();
+    expect((insp().getByText(/Unknown \(unverified\)/) as HTMLElement).style.color).toBe("var(--color-text-tertiary)");
+    expect(screen.getByRole("img", { name: "Unknown" })).toBeTruthy(); // the Unknown certificate's row lamp
+    first.unmount();
+    // degraded issuer: amber card; degraded certificate: amber headline
+    setup("Healthy", [cert({ name: "d", ready: "Pending", message: "waiting on request" })], [issuer({ ready: "Pending", reason: "Verifying" })], "payments/d");
+    render(<CertsView cluster="x" />);
+    const card = insp().getByText(/Issuer not ready: Verifying/) as HTMLElement;
+    expect(card.style.color).toBe("var(--color-text-warning)");
+    expect((insp().getByText("waiting on request") as HTMLElement).style.color).toBe("var(--color-text-warning)");
+    expect(screen.getAllByRole("img", { name: "Pending" }).length).toBeGreaterThan(0);
   });
 });

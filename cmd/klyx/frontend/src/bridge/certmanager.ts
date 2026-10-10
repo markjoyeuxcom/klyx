@@ -1,4 +1,4 @@
-import { useFleet, CertificateDTO, IssuerDTO, CertChainDTO } from "../store/fleet";
+import { useFleet, CertificateDTO, IssuerDTO, CertChainDTO, KindCoverageDTO } from "../store/fleet";
 import { Events } from "@wailsio/runtime";
 import { CertManagerService } from "../../bindings/github.com/moomora/klyx/internal/appbridge/index.js";
 
@@ -28,11 +28,11 @@ export async function getCertificateChain(cluster: string, namespace: string, na
 export async function openCertManager(cluster: string): Promise<() => void> {
   useFleet.getState().setCertManagerLoading(cluster);
   await CertManagerService.Open(cluster);
-  const off = Events.On(CERTMANAGER_UPDATED, (ev: { data: { cluster: string; certificates: CertificateDTO[]; issuers: IssuerDTO[]; watchError?: string } }) => {
+  const off = Events.On(CERTMANAGER_UPDATED, (ev: { data: { cluster: string; certificates: CertificateDTO[]; issuers: IssuerDTO[]; watchError?: string; coverage?: KindCoverageDTO[] } }) => {
     const d = ev.data;
     // a late callback for a cluster the lens has left must not overwrite it
     if (d && d.cluster === cluster && useFleet.getState().certmanager.cluster === cluster) {
-      useFleet.getState().setCertManager(cluster, d.certificates ?? [], d.issuers ?? [], d.watchError);
+      useFleet.getState().setCertManager(cluster, d.certificates ?? [], d.issuers ?? [], d.watchError, d.coverage);
     }
   });
   return typeof off === "function" ? off : () => {};
