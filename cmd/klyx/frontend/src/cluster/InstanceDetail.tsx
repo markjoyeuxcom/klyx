@@ -11,6 +11,7 @@ import { actionBtn, ellipsis, type Tone } from "../chrome/primitives";
 import { CopyButton } from "../chrome/CopyButton";
 import { DescribePane } from "../chrome/DescribePane";
 import { IconX, IconSparkles, IconAlertTriangle } from "@tabler/icons-react";
+import { InspectorBlock, InspectorLayout, type MenuItem } from "../layout/InspectorLayout";
 
 type DetailTab = "summary" | "related" | "events" | "yaml";
 
@@ -719,7 +720,9 @@ function ServiceBackingSection({
 // (master-detail, the Pods pattern) - never as a full-page swap that throws
 // the list away. The panel header carries kind + name + refresh + close; the
 // drill path lives in the Header breadcrumb and the list beside it.
-export function InstanceDetail({ cluster, resource, instance }: { cluster: string; resource: ResourceRef; instance: InstanceRef }) {
+// InstanceDetailLegacy - the pre-redesign inspector, kept for the reversible
+// rollout switch (localStorage "klyx.layout.v1.legacyResources" = "1").
+export function InstanceDetailLegacy({ cluster, resource, instance }: { cluster: string; resource: ResourceRef; instance: InstanceRef }) {
   const id = useFleet((s) => s.instanceDetail);
   const closeInstance = useFleet((s) => s.closeInstance);
   const [copied, setCopied] = useState(false);
@@ -944,6 +947,199 @@ export function InstanceDetail({ cluster, resource, instance }: { cluster: strin
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// InstanceDetail - the generic (GVR) inspector on the shared InspectorLayout.
+// Lens descriptor (spec §3, documented variant): a raw resource has no domain
+// verb, so the primary is the universal read-only Describe; the secondary is
+// AI Explain when it is usable here. Suggest fix, check access (ServiceAccount)
+// and refresh live in More. Overview orders the data path first (facts), then
+// typed sections, conditions, related objects and events; Manifest is the
+// guarded YAML editor. A removed instance keeps its last evidence, read-only.
+export function InstanceDetail({ cluster, resource, instance, removed = false }: { cluster: string; resource: ResourceRef; instance: InstanceRef; removed?: boolean }) {
+  const id = useFleet((s) => s.instanceDetail);
+  const closeInstance = useFleet((s) => s.closeInstance);
+  const [copied, setCopied] = useState(false);
+  const [describing, setDescribing] = useState(false);
+  const [tab, setTab] = useState<"overview" | "manifest">("overview");
+
+  useEffect(() => {
+    setTab("overview");
+    setDescribing(false);
+    void getInstanceDetail(cluster, resource, instance);
+    return () => useFleet.getState().clearInstanceDetail();
+    // Keyed by the identity fields, not the ref objects (new each render).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cluster, resource.group, resource.version, resource.plural, instance.namespace, instance.name]);
+
+  const isCurrent = id.ref && id.ref.namespace === instance.namespace && id.ref.name === instance.name;
+  const d = isCurrent ? id.detail : null;
+
+  const ai = useAIAvailability(cluster, true);
+  const [aiPanel, setAiPanel] = useState<{ mode: "explain" | "fix"; loading: boolean; result: AIResultDTO | null } | null>(null);
+  // Fence AI results against a mid-flight selection change.
+  const aiTokenRef = useRef(0);
+  useEffect(() => { aiTokenRef.current++; setAiPanel(null); }, [resource.group, resource.plural, instance.namespace, instance.name]);
+  const runAI = (mode: "explain" | "fix") => {
+    const token = aiTokenRef.current;
+    setTab("overview");
+    setAiPanel({ mode, loading: true, result: null });
+    const verb = mode === "fix" ? "fix suggestion" : "explain";
+    const call = mode === "fix"
+      ? suggestFix(cluster, resource.group, resource.version, resource.plural, instance.namespace, instance.name)
+      : explainResource(cluster, resource.group, resource.version, resource.plural, instance.namespace, instance.name);
+    call
+      .then((r) => {
+        if (token !== aiTokenRef.current) return;
+        setAiPanel({ mode, loading: false, result: r });
+        if (r.error) useFleet.getState().setActionStatus({ kind: "error", message: `AI ${verb} failed: ${r.error}` });
+        else useFleet.getState().setActionStatus({ kind: "success", message: `AI ${verb} - ${resource.kind}/${instance.namespace ? `${instance.namespace}/` : ""}${instance.name} via ${r.backend}` });
+      })
+      .catch((e) => {
+        if (token !== aiTokenRef.current) return;
+        setAiPanel({ mode, loading: false, result: null });
+        useFleet.getState().setActionStatus({ kind: "error", message: `AI ${verb} failed: ${String(e)}` });
+      });
+  };
+  const aiBusy = aiPanel?.loading ?? false;
+  const aiBlocked = "AI is disabled for this protected cluster - the AI endpoint is not on this machine; use a model on localhost or set ai.allowProtectedEgress";
+
+  const onCopy = () => {
+    if (!d) return;
+    void copyText(d.yaml);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  };
+
+  const live = !removed && !!d && !d.error;
+  const more: MenuItem[] = [];
+  if (live && ai.ready) {
+    if (!ai.egress) more.push({ label: "Explain (AI)", disabled: true, hint: aiBlocked, onSelect: () => {} });
+    more.push({ label: "Suggest fix (AI, Git-only)", disabled: !ai.egress || aiBusy, hint: ai.egress ? "Draft a fix to commit to Git - Klyx never applies it" : aiBlocked, onSelect: () => runAI("fix") });
+  }
+  if (live && resource.kind === "ServiceAccount") {
+    more.push({ label: "Check access", hint: "SubjectAccessReview simulation, read-only", onSelect: () => {
+      useFleet.getState().requestNavIntent({ kind: "access-check", cluster, namespace: instance.namespace, name: instance.name });
+      useFleet.getState().setSection("access");
+    } });
+  }
+  if (!removed) more.push({ label: "Refresh", onSelect: () => void getInstanceDetail(cluster, resource, instance) });
+
+  // Verdict parity with the pod/workload panels: the headline is the object's
+  // own primary condition when it has one. No conditions = no verdict, never a
+  // fabricated "healthy".
+  const verdict = (() => {
+    if (removed) {
+      return (
+        <div role="status" className="t-body" style={{ padding: "8px 10px", borderRadius: 4, background: "var(--color-background-secondary)", boxShadow: "inset 0 0 0 1px var(--color-border-secondary)" }}>
+          <span className="t-status">{resource.kind} removed.</span> It is no longer in the current read. The details below are its last evidence; actions are disabled.
+        </div>
+      );
+    }
+    if (!d || d.error) return undefined;
+    const primary = ["Ready", "Available", "Established", "Synced", "Accepted", "Programmed", "AbleToScale", "Progressing"]
+      .map((t) => d.conditions.find((c) => c.type === t))
+      .find(Boolean) ?? d.conditions[0];
+    if (!primary) return undefined;
+    const color = conditionColor(primary.status, primary.type);
+    const tone = color.includes("success") ? ("success" as const) : color.includes("danger") ? ("danger" as const) : ("info" as const);
+    return <InspectorStatus tone={tone} label={`${primary.type} ${primary.status}`} reason={primary.reason || undefined} />;
+  })();
+
+  const body = id.loading && !d ? (
+    <div className="t-body" style={{ color: "var(--color-text-tertiary)" }}>Loading {resource.kind} detail…</div>
+  ) : !d ? (
+    <div className="t-body" style={{ color: "var(--color-text-tertiary)" }}>Could not load {instance.namespace ? `${instance.namespace}/` : ""}{instance.name}.</div>
+  ) : d.error ? (
+    // The backend returns a zero DTO WITH the reason on a failed read; never
+    // render that as a real (empty) object.
+    <div role="alert" className="t-body" style={{ color: "var(--color-text-danger)" }}>
+      Could not load {instance.namespace ? `${instance.namespace}/` : ""}{instance.name}: {d.error}
+    </div>
+  ) : null;
+
+  return (
+    <div data-testid="instance-detail-panel" style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
+      <InspectorLayout
+        kind={resource.kind}
+        namespace={instance.namespace || undefined}
+        name={instance.name}
+        meta={d && !d.error ? [d.created ? `${age(d.created)} old` : "", resource.group ? `${resource.group}/${resource.version}` : resource.version].filter(Boolean).join(" · ") : undefined}
+        onClose={closeInstance}
+        verdict={verdict}
+        primary={live ? { label: "Describe", onSelect: () => { setTab("overview"); setDescribing(true); } } : undefined}
+        secondary={live && ai.ready && ai.egress ? { label: aiPanel?.mode === "explain" && aiBusy ? "Explaining…" : "Explain", onSelect: () => { if (!aiBusy) runAI("explain"); } } : undefined}
+        more={more}
+        tab={tab}
+        onTab={setTab}
+        manifest={body ?? (d ? <YamlPanel cluster={cluster} resource={resource} instance={instance} detail={d} copied={copied} onCopy={onCopy} /> : null)}
+      >
+        {body ?? (d && (
+          <>
+            {describing && (
+              <DescribePane
+                cluster={cluster}
+                // kubectl's unambiguous resource argument: plural.group for CRDs
+                // and any grouped kind, plural alone for the core "" group.
+                kindArg={resource.group ? `${resource.plural}.${resource.group}` : resource.plural}
+                namespace={instance.namespace}
+                name={instance.name}
+                onClose={() => setDescribing(false)}
+              />
+            )}
+            {aiPanel && (
+              <InspectorBlock title={aiPanel.mode === "fix" ? "Suggested fix (AI)" : "Explain (AI)"}>
+                {aiPanel.loading ? (
+                  <span className="t-secondary">{aiPanel.mode === "fix" ? "Drafting a change to commit to Git…" : "Tracing the chain across related objects…"}</span>
+                ) : aiPanel.result?.error ? (
+                  <div className="t-body" style={{ display: "flex", alignItems: "flex-start", gap: 5, color: "var(--color-text-danger)" }}>
+                    <IconAlertTriangle size={12} stroke={1.5} style={{ flexShrink: 0, marginTop: 2 }} />
+                    <span>{aiPanel.result.error}</span>
+                  </div>
+                ) : aiPanel.result ? (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                    {aiPanel.mode === "fix" && (
+                      <div className="t-secondary" style={{ display: "flex", alignItems: "center", gap: 6, padding: "5px 8px", borderRadius: 4, boxShadow: "inset 0 0 0 1px var(--color-border-warning)", background: "var(--color-background-warning)", color: "var(--color-text-warning)" }}>
+                        <IconAlertTriangle size={12} stroke={1.5} style={{ flexShrink: 0 }} />
+                        <span>Review and commit this to Git - Klyx will not apply it. Desired state stays in your repo.</span>
+                      </div>
+                    )}
+                    <div className={aiPanel.mode === "fix" ? "t-identifier" : "t-body"} style={{ color: "var(--color-text-secondary)", whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{aiPanel.result.explanation}</div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                      {aiPanel.mode === "fix" && <button className="l-btn" onClick={() => { void copyText(aiPanel.result!.explanation); }}>Copy suggestion</button>}
+                      <span className="t-secondary">Grounded on: {aiPanel.result.groundedOn} · {aiPanel.result.model}</span>
+                    </div>
+                    {aiPanel.mode === "fix" ? (
+                      <div data-testid="ai-fix-redaction" className="t-secondary" style={{ fontStyle: "italic" }}>
+                        Sent the manifest with {aiPanel.result.redacted ?? 0} credential-like value{(aiPanel.result.redacted ?? 0) === 1 ? "" : "s"} redacted and last-applied removed - redaction is heuristic, so review what your manifests carry inline.
+                      </div>
+                    ) : (
+                      <div className="t-secondary" style={{ fontStyle: "italic" }}>AI-generated from resolved health - verify before acting.</div>
+                    )}
+                  </div>
+                ) : null}
+              </InspectorBlock>
+            )}
+            <FactsSummary facts={d.facts} />
+            {d.hpaScaling != null && <HPAScalingSection cluster={cluster} scaling={d.hpaScaling} />}
+            {d.serviceBacking != null && <ServiceBackingSection cluster={cluster} ns={instance.namespace} serviceName={instance.name} backing={d.serviceBacking} />}
+            {d.secretKeys && d.secretKeys.length > 0 && !removed && <SecretDataSection cluster={cluster} ns={instance.namespace} name={instance.name} keys={d.secretKeys} />}
+            {d.conditions.length > 0 && (
+              <InspectorBlock title="Conditions" count={d.conditions.length}>
+                <InspectorConditions conditions={d.conditions} />
+              </InspectorBlock>
+            )}
+            <RelatedSection cluster={cluster} related={d.related ?? []} />
+            <InspectorBlock title="Recent events" count={d.events.length}>
+              <InspectorEvents events={d.events} emptyText="No events for this object." />
+            </InspectorBlock>
+            <MetadataChips title="Labels" values={d.labels} />
+            <MetadataChips title="Annotations" values={d.annotations} defaultCollapsed />
+          </>
+        ))}
+      </InspectorLayout>
     </div>
   );
 }

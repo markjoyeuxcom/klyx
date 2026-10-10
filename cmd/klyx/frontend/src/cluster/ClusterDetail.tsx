@@ -8,6 +8,7 @@ import { ExternalSecretsView } from "./ExternalSecretsView";
 import { CRDBrowser } from "./CRDBrowser";
 import { BuiltinsView } from "./BuiltinsView";
 import { InstanceList } from "./InstanceList";
+import { InstanceListLegacy } from "./InstanceListLegacy";
 import { GatewayApiView } from "./GatewayApiView";
 import { WorkloadsView } from "./WorkloadsView";
 import { WorkloadsViewLegacy } from "./WorkloadsViewLegacy";
@@ -18,7 +19,7 @@ import { PodsViewLegacy } from "./PodsViewLegacy";
 // localStorage "klyx.layout.v1.legacy<Lens>" = "1" (Pods, Nodes, Workloads)
 // falls back to that lens's old implementation as a whole - never a mix of
 // layout owners. Each is removed once its migration is accepted.
-function legacyLens(lens: "Pods" | "Nodes" | "Workloads"): boolean {
+function legacyLens(lens: "Pods" | "Nodes" | "Workloads" | "Resources"): boolean {
   try { return localStorage.getItem(`klyx.layout.v1.legacy${lens}`) === "1"; } catch { return false; }
 }
 import { EventsView } from "./EventsView";
@@ -55,11 +56,11 @@ export function ClusterDetail() {
   if (route.section === "resources") {
     // An open instance renders as a side panel INSIDE the list (master-detail,
     // the Pods pattern) - never as a full-page swap that throws the list away.
-    if (route.resource) return <InstanceList cluster={cluster.name} resource={route.resource} />;
+    if (route.resource) return legacyLens("Resources") ? <InstanceListLegacy cluster={cluster.name} resource={route.resource} /> : <InstanceList cluster={cluster.name} resource={route.resource} />;
     return <BuiltinsView cluster={cluster.name} />;
   }
   if (route.section === "crds") {
-    if (route.resource) return <InstanceList cluster={cluster.name} resource={route.resource} />;
+    if (route.resource) return legacyLens("Resources") ? <InstanceListLegacy cluster={cluster.name} resource={route.resource} /> : <InstanceList cluster={cluster.name} resource={route.resource} />;
     return <CRDBrowser cluster={cluster.name} />;
   }
   if (route.section === "gatewayApi") return <GatewayApiView cluster={cluster.name} />;

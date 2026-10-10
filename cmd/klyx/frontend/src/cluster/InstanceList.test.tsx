@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, beforeAll, afterAll, vi } from "vitest";
 import { render, fireEvent, waitFor, act } from "@testing-library/react";
 import { useFleet, ResourceRef, InstanceDTO, ClusterDTO } from "../store/fleet";
 import { InstanceList } from "./InstanceList";
@@ -47,6 +47,12 @@ const cluster = (name: string, state = "Synced"): ClusterDTO => ({
   group: "homelab",
   ageSeconds: 1,
 });
+
+// jsdom has no layout: report a wide workspace so priority-fitted columns all
+// fit (narrow folding is covered by the template tests).
+const widthDesc = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientWidth");
+beforeAll(() => { Object.defineProperty(HTMLElement.prototype, "clientWidth", { configurable: true, get: () => 1800 }); });
+afterAll(() => { if (widthDesc) Object.defineProperty(HTMLElement.prototype, "clientWidth", widthDesc); });
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -188,14 +194,11 @@ describe("InstanceList", () => {
     expect(loadInstances).toHaveBeenCalledWith("x", nsRef, "tok-2");
   });
 
-  it("owns scrolling for long instance lists", () => {
+  it("header and rows share the one LensTable scroll surface", () => {
     const { getByTestId } = render(<InstanceList cluster="x" resource={nsRef} />);
-    expect(getByTestId("instance-list-scroll").style.overflowY).toBe("auto");
-  });
-
-  it("keeps the table header sticky inside the instance list", () => {
-    const { getByTestId } = render(<InstanceList cluster="x" resource={nsRef} />);
-    expect(getByTestId("instance-list-header").style.position).toBe("sticky");
+    const head = getByTestId("instance-list-header");
+    expect(head.classList.contains("lens-table-head")).toBe(true);
+    expect(head.closest(".lens-table")).toBeTruthy();
   });
 
   it("breadcrumb back returns to the resource catalog", () => {
@@ -225,8 +228,8 @@ describe("InstanceList", () => {
         { namespace: "infra", name: "waiting", created: "", fields: { type: "LoadBalancer", externalIP: "pending", clusterIP: "10.0.0.2", ports: "443/TCP" } },
       ],
     });
-    const { getByText, queryByText } = render(<InstanceList cluster="x" resource={serviceRef} />);
-    fireEvent.click(getByText(/needs attention 1/));
+    const { getByText, queryByText, getByRole } = render(<InstanceList cluster="x" resource={serviceRef} />);
+    fireEvent.click(getByRole("button", { name: /^Attention 1/ }));
     expect(getByText("waiting")).toBeTruthy();
     expect(queryByText("ok")).toBeNull();
   });
@@ -276,13 +279,13 @@ describe("InstanceList", () => {
     }));
 
     const { getByText, getAllByText, getByRole } = render(<InstanceList cluster="blue" resource={serviceRef} />);
-    fireEvent.click(getByText("fleet"));
+    fireEvent.click(getByRole("button", { name: "Fleet" }));
 
     await waitFor(() => expect(getByText("api-blue")).toBeTruthy());
     expect(getByText("api-orange")).toBeTruthy();
-    expect(getAllByText("cluster").length).toBeGreaterThan(0);
-    expect(getByRole("tab", { name: "blue 1" })).toBeTruthy();
-    expect(getByRole("tab", { name: "orange 1" })).toBeTruthy();
+    expect(getAllByText("Cluster").length).toBeGreaterThan(0);
+    expect(getByRole("option", { name: "blue (1)" })).toBeTruthy();
+    expect(getByRole("option", { name: "orange (1)" })).toBeTruthy();
     expect(listInstancePage).toHaveBeenCalledWith("blue", serviceRef);
     expect(listInstancePage).toHaveBeenCalledWith("orange", serviceRef);
     expect(listInstancePage).not.toHaveBeenCalledWith("down", serviceRef);
@@ -295,8 +298,8 @@ describe("InstanceList", () => {
       nextToken: "",
     }));
 
-    const { getByText } = render(<InstanceList cluster="blue" resource={serviceRef} />);
-    fireEvent.click(getByText("fleet"));
+    const { getByRole } = render(<InstanceList cluster="blue" resource={serviceRef} />);
+    fireEvent.click(getByRole("button", { name: "Fleet" }));
     await waitFor(() => expect(listInstancePage).toHaveBeenCalledTimes(2));
 
     vi.mocked(listInstancePage).mockClear();
@@ -314,15 +317,15 @@ describe("InstanceList", () => {
       nextToken: "",
     }));
 
-    const { getByText, queryByText, getByRole } = render(<InstanceList cluster="blue" resource={serviceRef} />);
-    fireEvent.click(getByText("fleet"));
+    const { getByText, queryByText, getByRole, getByLabelText } = render(<InstanceList cluster="blue" resource={serviceRef} />);
+    fireEvent.click(getByRole("button", { name: "Fleet" }));
     await waitFor(() => expect(getByText("api-orange")).toBeTruthy());
-    expect(getByRole("tab", { name: "all 2" })).toBeTruthy();
-    expect(getByRole("tab", { name: "blue 1" })).toBeTruthy();
-    expect(getByRole("tab", { name: "orange 1" })).toBeTruthy();
+    expect(getByRole("option", { name: "All clusters (2)" })).toBeTruthy();
+    expect(getByRole("option", { name: "blue (1)" })).toBeTruthy();
+    expect(getByRole("option", { name: "orange (1)" })).toBeTruthy();
 
     vi.mocked(listInstancePage).mockClear();
-    fireEvent.click(getByRole("tab", { name: "orange 1" }));
+    fireEvent.change(getByLabelText("Fleet cluster"), { target: { value: "orange" } });
 
     expect(queryByText("api-blue")).toBeNull();
     expect(getByText("api-orange")).toBeTruthy();
@@ -344,12 +347,12 @@ describe("InstanceList", () => {
     }));
 
     const { getByText, queryByText, getByRole } = render(<InstanceList cluster="blue" resource={serviceRef} />);
-    fireEvent.click(getByText("fleet"));
+    fireEvent.click(getByRole("button", { name: "Fleet" }));
     await waitFor(() => expect(getByText("inst-000-blue")).toBeTruthy());
 
     // 600 merged rows: the window (jsdom fallback 600px / 28px rows + overscan)
     // renders the head of the list, not the full fleet.
-    expect(getByRole("tab", { name: "all 600" })).toBeTruthy();
+    expect(getByRole("option", { name: "All clusters (600)" })).toBeTruthy();
     expect(queryByText("inst-299-orange")).toBeNull();
   });
 
@@ -376,8 +379,8 @@ describe("InstanceList", () => {
       nextToken: "",
     }));
 
-    const { getByText } = render(<InstanceList cluster="blue" resource={serviceRef} />);
-    fireEvent.click(getByText("fleet"));
+    const { getByText, getByRole } = render(<InstanceList cluster="blue" resource={serviceRef} />);
+    fireEvent.click(getByRole("button", { name: "Fleet" }));
     await waitFor(() => expect(getByText("api-orange")).toBeTruthy());
     fireEvent.click(getByText("api-orange"));
 
@@ -389,5 +392,77 @@ describe("InstanceList", () => {
       resource: serviceRef,
       instance: { namespace: "apps", name: "api-orange" },
     });
+  });
+});
+
+describe("InstanceList workspace template (redesign)", () => {
+  const svcRows: InstanceDTO[] = [
+    { namespace: "infra", name: "ok", created: "", fields: { type: "ClusterIP", externalIP: "-", clusterIP: "10.0.0.1", ports: "80/TCP" } },
+    { namespace: "infra", name: "waiting", created: "", fields: { type: "LoadBalancer", externalIP: "pending", clusterIP: "10.0.0.2", ports: "443/TCP" } },
+  ];
+  const openRoute = (instance?: { namespace: string; name: string }) =>
+    useFleet.setState({ route: { name: "cluster", cluster: "x", section: "resources", resource: serviceRef, ...(instance ? { instance } : {}) } });
+
+  it("auto-selects the first at-risk row once, from a fresh read only", () => {
+    openRoute();
+    seed(serviceRef, { rows: svcRows });
+    render(<InstanceList cluster="x" resource={serviceRef} />);
+    const instanceOf = () => { const r = useFleet.getState().route; return r.name === "cluster" ? r.instance : undefined; };
+    expect(instanceOf()).toBeUndefined(); // cached rows at entry
+    act(() => seed(serviceRef, { rows: [...svcRows] }));
+    expect(instanceOf()).toEqual({ namespace: "infra", name: "waiting" });
+    act(() => useFleet.getState().closeInstance());
+    act(() => seed(serviceRef, { rows: [...svcRows] }));
+    expect(instanceOf()).toBeUndefined(); // once only
+  });
+
+  it("an instance gone from a complete read is shown as removed, read-only", () => {
+    openRoute({ namespace: "infra", name: "waiting" });
+    seed(serviceRef, { rows: svcRows });
+    const { getByText, queryByRole } = render(<InstanceList cluster="x" resource={serviceRef} />);
+    act(() => seed(serviceRef, { rows: [svcRows[0]] }));
+    expect(getByText("Service removed.")).toBeTruthy();
+    expect(queryByRole("button", { name: "Describe" })).toBeNull();
+  });
+
+  it("an absent instance is NOT called removed while more pages exist", () => {
+    openRoute({ namespace: "infra", name: "waiting" });
+    seed(serviceRef, { rows: [svcRows[0]], nextToken: "tok" });
+    const { queryByText } = render(<InstanceList cluster="x" resource={serviceRef} />);
+    expect(queryByText("Service removed.")).toBeNull();
+  });
+
+  it("the operator's filter excluding the open instance closes it", () => {
+    openRoute({ namespace: "infra", name: "ok" });
+    seed(serviceRef, { rows: svcRows });
+    const { getByLabelText, queryByTestId } = render(<InstanceList cluster="x" resource={serviceRef} />);
+    expect(queryByTestId("lens-inspector")).toBeTruthy();
+    fireEvent.change(getByLabelText("Search Service"), { target: { value: "waiting" } });
+    expect(queryByTestId("lens-inspector")).toBeNull();
+  });
+
+  it("a cross-link opened under a stale filter reveals the instance instead of closing it", () => {
+    openRoute();
+    seed(serviceRef, { rows: svcRows, filter: "waiting" });
+    const { queryByTestId } = render(<InstanceList cluster="x" resource={serviceRef} />);
+    act(() => useFleet.getState().openInstance("infra", "ok"));
+    expect(queryByTestId("lens-inspector")).toBeTruthy();
+    expect(useFleet.getState().instances.filter).toBe("");
+  });
+});
+
+describe("InstanceList column folding", () => {
+  it("drops kind-specific columns before the name at a narrow width", () => {
+    Object.defineProperty(HTMLElement.prototype, "clientWidth", { configurable: true, get: () => 560 });
+    try {
+      seed(serviceRef, { rows: [{ namespace: "infra", name: "a-long-service-name", created: "", fields: { type: "ClusterIP", clusterIP: "10.0.0.1", externalIP: "-", ports: "80/TCP" } }] });
+      const { getByTestId, getByText } = render(<InstanceList cluster="x" resource={serviceRef} />);
+      const head = getByTestId("instance-list-header").textContent ?? "";
+      expect(head).toContain("Name");
+      expect(head).not.toContain("ports");
+      expect(getByText("a-long-service-name")).toBeTruthy();
+    } finally {
+      Object.defineProperty(HTMLElement.prototype, "clientWidth", { configurable: true, get: () => 1800 });
+    }
   });
 });

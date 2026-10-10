@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render, fireEvent, waitFor, act } from "@testing-library/react";
+import { render, fireEvent, waitFor, act, screen } from "@testing-library/react";
 import { useFleet, ResourceRef, InstanceRef, InstanceDetailDTO, ServiceBackingDTO, HPAScalingDTO } from "../store/fleet";
 import { InstanceDetail, buildFoldedDiffRows, buildLineDiff, cursorPositionForOffset, detectGitOwner, formatDiffPlainText, formatKubernetesActionError, validateResourceYAML } from "./InstanceDetail";
 
@@ -181,7 +181,7 @@ describe("InstanceDetail", () => {
 
   it("describe button opens the read-only describe pane via the bridge", async () => {
     const { getByRole, findByText } = render(<InstanceDetail cluster="x" resource={resource} instance={instance} />);
-    fireEvent.click(getByRole("button", { name: "describe" }));
+    fireEvent.click(getByRole("button", { name: "Describe" }));
     // typed instances describe by the unambiguous plural.group resource arg
     expect(describeResource).toHaveBeenCalledWith("x", "certificates.cert-manager.io", "default", "web-tls");
     expect(await findByText(/Name:\s+web-tls/)).toBeTruthy();
@@ -191,13 +191,12 @@ describe("InstanceDetail", () => {
 
   it("renders header, conditions, events, and YAML", () => {
     const { getByText } = render(<InstanceDetail cluster="x" resource={resource} instance={instance} />);
-    expect(getByText("Certificate")).toBeTruthy();
+    expect(getByText("Certificate in default")).toBeTruthy();
     expect(getByText("app=web")).toBeTruthy();
     expect(getByText("Ready")).toBeTruthy();
     expect(getByText(/Certificate is up to date/)).toBeTruthy();
-    fireEvent.click(getByText(/events 1/));
     expect(getByText(/order failed/)).toBeTruthy();
-    fireEvent.click(getByText("yaml"));
+    fireEvent.click(screen.getByRole("tab", { name: "Manifest" }));
     expect(getByText(/kind: Certificate/)).toBeTruthy();
   });
 
@@ -211,14 +210,14 @@ describe("InstanceDetail", () => {
 
   it("copy calls the bridge with the YAML", () => {
     const { getByText } = render(<InstanceDetail cluster="x" resource={resource} instance={instance} />);
-    fireEvent.click(getByText("yaml"));
+    fireEvent.click(screen.getByRole("tab", { name: "Manifest" }));
     fireEvent.click(getByText("Copy"));
     expect(copyText).toHaveBeenCalledWith(detail.yaml);
   });
 
   it("renders YAML editor metadata and dirty state", () => {
     const { getByText, getAllByText, getByLabelText } = render(<InstanceDetail cluster="x" resource={resource} instance={instance} />);
-    fireEvent.click(getByText("yaml"));
+    fireEvent.click(screen.getByRole("tab", { name: "Manifest" }));
 
     expect(getAllByText("default/web-tls").length).toBeGreaterThan(0);
     expect(getByText("saved")).toBeTruthy();
@@ -231,7 +230,7 @@ describe("InstanceDetail", () => {
 
   it("shows cursor line and column in the YAML editor footer", () => {
     const { getByText, getByLabelText } = render(<InstanceDetail cluster="x" resource={resource} instance={instance} />);
-    fireEvent.click(getByText("yaml"));
+    fireEvent.click(screen.getByRole("tab", { name: "Manifest" }));
     const editor = getByLabelText("resource yaml") as HTMLTextAreaElement;
 
     const secondLineOffset = detail.yaml.indexOf("\n") + 1;
@@ -243,7 +242,7 @@ describe("InstanceDetail", () => {
   it("shows diff counts and preview for edited YAML", () => {
     const next = `${detail.yaml}metadata:\n  name: web-tls\n`;
     const { getByText, getByLabelText } = render(<InstanceDetail cluster="x" resource={resource} instance={instance} />);
-    fireEvent.click(getByText("yaml"));
+    fireEvent.click(screen.getByRole("tab", { name: "Manifest" }));
     expect(() => getByText(/Diff \+/)).toThrow();
 
     fireEvent.change(getByLabelText("resource yaml"), { target: { value: next } });
@@ -259,7 +258,7 @@ describe("InstanceDetail", () => {
   it("copies the rendered YAML diff as plain text", async () => {
     const next = `${detail.yaml}metadata:\n  name: web-tls\n`;
     const { getByText, getByLabelText, findByText } = render(<InstanceDetail cluster="x" resource={resource} instance={instance} />);
-    fireEvent.click(getByText("yaml"));
+    fireEvent.click(screen.getByRole("tab", { name: "Manifest" }));
     fireEvent.change(getByLabelText("resource yaml"), { target: { value: next } });
     fireEvent.click(getByText("Diff +2 -0"));
     fireEvent.click(getByText("Copy diff"));
@@ -283,7 +282,7 @@ describe("InstanceDetail", () => {
     seed({ detail: { ...detail, yaml: before } });
 
     const { getByText, getAllByText, getByLabelText, queryByText } = render(<InstanceDetail cluster="x" resource={resource} instance={instance} />);
-    fireEvent.click(getByText("yaml"));
+    fireEvent.click(screen.getByRole("tab", { name: "Manifest" }));
     fireEvent.change(getByLabelText("resource yaml"), { target: { value: after } });
     fireEvent.click(getByText(/Diff \+/));
 
@@ -300,7 +299,7 @@ describe("InstanceDetail", () => {
     seed({ detail: { ...detail, labels: { ...detail.labels, "argocd.argoproj.io/instance": "console-dev" } } });
     const { getByText, queryByText } = render(<InstanceDetail cluster="x" resource={resource} instance={instance} />);
     expect(queryByText(/Live edits may be reverted/)).toBeNull();
-    fireEvent.click(getByText("yaml"));
+    fireEvent.click(screen.getByRole("tab", { name: "Manifest" }));
     expect(getByText(/Argo CD-managed/)).toBeTruthy();
     expect(getByText(/Live edits may be reverted by GitOps or release reconciliation/)).toBeTruthy();
   });
@@ -308,13 +307,13 @@ describe("InstanceDetail", () => {
   it("shows Flux ownership warning in the YAML editor", () => {
     seed({ detail: { ...detail, labels: { ...detail.labels, "kustomize.toolkit.fluxcd.io/name": "platform", "kustomize.toolkit.fluxcd.io/namespace": "flux-system" } } });
     const { getByText } = render(<InstanceDetail cluster="x" resource={resource} instance={instance} />);
-    fireEvent.click(getByText("yaml"));
+    fireEvent.click(screen.getByRole("tab", { name: "Manifest" }));
     expect(getByText(/Flux-managed \(flux-system\/platform\)/)).toBeTruthy();
   });
 
   it("does not show GitOps ownership warning for unmanaged YAML", () => {
-    const { getByText, queryByText } = render(<InstanceDetail cluster="x" resource={resource} instance={instance} />);
-    fireEvent.click(getByText("yaml"));
+    const { queryByText } = render(<InstanceDetail cluster="x" resource={resource} instance={instance} />);
+    fireEvent.click(screen.getByRole("tab", { name: "Manifest" }));
     expect(queryByText(/Live edits may be reverted/)).toBeNull();
   });
 
@@ -328,7 +327,7 @@ describe("InstanceDetail", () => {
       namespacePrunes: true, namespaceManaged: false, namespaceBasis: "flux", argoApps: [], warnings: [],
     });
     const { getByText, findByText, queryByText } = render(<InstanceDetail cluster="x" resource={resource} instance={instance} />);
-    fireEvent.click(getByText("yaml"));
+    fireEvent.click(screen.getByRole("tab", { name: "Manifest" }));
     expect(await findByText(/Kustomization flux-system\/apps owns this object \(Flux inventory\)/)).toBeTruthy();
     expect(getByText(/reverted on the next reconcile/)).toBeTruthy();
     // The vaguer label-based copy is replaced, not duplicated.
@@ -341,14 +340,14 @@ describe("InstanceDetail", () => {
       namespaceOwnerKind: "", namespaceOwnerNamespace: "", namespaceOwnerName: "", namespacePrunes: false, namespaceManaged: false, namespaceBasis: "", argoApps: [],
       warnings: ["Argo ownership check failed: applications is forbidden"],
     });
-    const { getByText, findByText } = render(<InstanceDetail cluster="x" resource={resource} instance={instance} />);
-    fireEvent.click(getByText("yaml"));
+    const { findByText } = render(<InstanceDetail cluster="x" resource={resource} instance={instance} />);
+    fireEvent.click(screen.getByRole("tab", { name: "Manifest" }));
     expect(await findByText(/Ownership check degraded: Argo ownership check failed/)).toBeTruthy();
   });
 
   it("dry-runs edited YAML", async () => {
     const { getByText, getByLabelText, findByText } = render(<InstanceDetail cluster="x" resource={resource} instance={instance} />);
-    fireEvent.click(getByText("yaml"));
+    fireEvent.click(screen.getByRole("tab", { name: "Manifest" }));
     fireEvent.change(getByLabelText("resource yaml"), { target: { value: `${detail.yaml}metadata:\n  name: web-tls\n  namespace: default\n` } });
     fireEvent.click(getByText("Dry-run"));
 
@@ -362,7 +361,7 @@ describe("InstanceDetail", () => {
       error: 'certificates.cert-manager.io "web-tls" is forbidden: User "alice@example.com" cannot patch resource "certificates" in API group "cert-manager.io" in the namespace "default"',
     });
     const { getByText, getByLabelText, findByText } = render(<InstanceDetail cluster="x" resource={resource} instance={instance} />);
-    fireEvent.click(getByText("yaml"));
+    fireEvent.click(screen.getByRole("tab", { name: "Manifest" }));
     fireEvent.change(getByLabelText("resource yaml"), { target: { value: `${detail.yaml}metadata:\n  name: web-tls\n  namespace: default\n` } });
     fireEvent.click(getByText("Dry-run"));
 
@@ -371,7 +370,7 @@ describe("InstanceDetail", () => {
 
   it("blocks dry-run and apply for local YAML errors", () => {
     const { getByText, getByLabelText } = render(<InstanceDetail cluster="x" resource={resource} instance={instance} />);
-    fireEvent.click(getByText("yaml"));
+    fireEvent.click(screen.getByRole("tab", { name: "Manifest" }));
     fireEvent.change(getByLabelText("resource yaml"), { target: { value: "apiVersion cert-manager.io/v1\nkind: Certificate\nmetadata:\n  name: web-tls\n" } });
 
     expect(getByText("Local YAML errors")).toBeTruthy();
@@ -385,7 +384,7 @@ describe("InstanceDetail", () => {
   it("jumps to the first local YAML validation error", () => {
     const badYaml = "apiVersion: cert-manager.io/v1\nkind: Certificate\nmetadata:\n\tname: web-tls\n";
     const { getByText, getByLabelText } = render(<InstanceDetail cluster="x" resource={resource} instance={instance} />);
-    fireEvent.click(getByText("yaml"));
+    fireEvent.click(screen.getByRole("tab", { name: "Manifest" }));
     fireEvent.change(getByLabelText("resource yaml"), { target: { value: badYaml } });
 
     fireEvent.click(getByText("Jump to line 4"));
@@ -398,7 +397,7 @@ describe("InstanceDetail", () => {
 
   it("shows identity warnings without blocking dry-run", () => {
     const { getByText, getByLabelText } = render(<InstanceDetail cluster="x" resource={resource} instance={instance} />);
-    fireEvent.click(getByText("yaml"));
+    fireEvent.click(screen.getByRole("tab", { name: "Manifest" }));
     fireEvent.change(getByLabelText("resource yaml"), { target: { value: "apiVersion: cert-manager.io/v1\nkind: Certificate\nmetadata:\n  name: other\n  namespace: kube-system\n" } });
 
     expect(getByText("Local YAML warnings")).toBeTruthy();
@@ -415,7 +414,7 @@ describe("InstanceDetail", () => {
     seed({ detail: { ...detail, yaml: baseline } });
 
     const { getByText, getByLabelText, queryByText } = render(<InstanceDetail cluster="x" resource={resource} instance={instance} />);
-    fireEvent.click(getByText("yaml"));
+    fireEvent.click(screen.getByRole("tab", { name: "Manifest" }));
     fireEvent.change(getByLabelText("resource yaml"), { target: { value: draft } });
     expect((getByText("Dry-run") as HTMLButtonElement).disabled).toBe(false);
 
@@ -439,7 +438,7 @@ describe("InstanceDetail", () => {
   it("applies edited YAML behind confirmation", async () => {
     const next = `${detail.yaml}metadata:\n  name: web-tls\n`;
     const { getByText, getByLabelText, getAllByText } = render(<InstanceDetail cluster="x" resource={resource} instance={instance} />);
-    fireEvent.click(getByText("yaml"));
+    fireEvent.click(screen.getByRole("tab", { name: "Manifest" }));
     fireEvent.change(getByLabelText("resource yaml"), { target: { value: next } });
     fireEvent.click(getByText("Apply"));
     expect(getByText(/Apply these YAML changes/)).toBeTruthy();
@@ -456,7 +455,7 @@ describe("InstanceDetail", () => {
     });
     const next = `${detail.yaml}metadata:\n  name: web-tls\n  namespace: default\n`;
     const { getByText, getByLabelText, findByText } = render(<InstanceDetail cluster="x" resource={resource} instance={instance} />);
-    fireEvent.click(getByText("yaml"));
+    fireEvent.click(screen.getByRole("tab", { name: "Manifest" }));
     fireEvent.change(getByLabelText("resource yaml"), { target: { value: next } });
     fireEvent.click(getByText("Apply"));
     fireEvent.click(getByText("Apply changes"));
@@ -479,7 +478,7 @@ describe("InstanceDetail", () => {
     });
 
     const { findByText, getByText, getByLabelText } = render(<InstanceDetail cluster="x" resource={resource} instance={instance} />);
-    fireEvent.click(getByText("yaml"));
+    fireEvent.click(screen.getByRole("tab", { name: "Manifest" }));
     vi.mocked(getInstanceDetail).mockImplementationOnce(async () => refreshPromise);
     fireEvent.change(getByLabelText("resource yaml"), { target: { value: draft } });
     fireEvent.click(getByText("Apply"));
@@ -495,15 +494,15 @@ describe("InstanceDetail", () => {
   });
 
   it("refresh re-fetches", () => {
-    const { getByText } = render(<InstanceDetail cluster="x" resource={resource} instance={instance} />);
-    fireEvent.click(getByText(/refresh/i));
+    render(<InstanceDetail cluster="x" resource={resource} instance={instance} />);
+    fireEvent.click(screen.getByRole("button", { name: /^More/ }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Refresh" }));
     expect(getInstanceDetail).toHaveBeenCalledWith("x", resource, instance);
   });
 
   it("shows a no-events note when there are none", () => {
     seed({ detail: { ...detail, events: [] } });
     const { getByText } = render(<InstanceDetail cluster="x" resource={resource} instance={instance} />);
-    fireEvent.click(getByText(/events 0/));
     expect(getByText(/no events/i)).toBeTruthy();
   });
 
@@ -516,7 +515,7 @@ describe("InstanceDetail", () => {
   it("closing the panel returns to the resource instance list", () => {
     useFleet.setState({ route: { name: "cluster", cluster: "x", section: "resources", resource, instance } });
     const { getByLabelText } = render(<InstanceDetail cluster="x" resource={resource} instance={instance} />);
-    fireEvent.click(getByLabelText("close instance panel"));
+    fireEvent.click(getByLabelText("close details"));
     const r = useFleet.getState().route;
     expect(r.name === "cluster" && r.instance).toBeUndefined();
     expect(r.name === "cluster" && r.resource).toEqual(resource);
@@ -540,7 +539,6 @@ describe("InstanceDetail", () => {
     useFleet.getState().openResource(resource);
     useFleet.setState({ instanceDetail: { cluster: null, resource: null, ref: instance, detail: relatedDetail, loading: false } });
     const { getByText } = render(<InstanceDetail cluster="x" resource={resource} instance={instance} />);
-    fireEvent.click(getByText(/related 1/));
     fireEvent.click(getByText("default/web-tls-secret"));
     const r = useFleet.getState().route;
     expect(r.name === "cluster" && r.resource?.kind).toBe("Secret");
@@ -596,13 +594,13 @@ describe("InstanceDetail — secrets", () => {
 
   it("yaml section still shows <masked> placeholder", () => {
     const { getByText } = render(<InstanceDetail cluster="x" resource={secretResource} instance={secretInstance} />);
-    fireEvent.click(getByText("yaml"));
+    fireEvent.click(screen.getByRole("tab", { name: "Manifest" }));
     expect(getByText(/<masked>/)).toBeTruthy();
   });
 
   it("blocks applying masked Secret YAML", () => {
     const { getByText, getByLabelText } = render(<InstanceDetail cluster="x" resource={secretResource} instance={secretInstance} />);
-    fireEvent.click(getByText("yaml"));
+    fireEvent.click(screen.getByRole("tab", { name: "Manifest" }));
     fireEvent.change(getByLabelText("resource yaml"), { target: { value: `${secretDetail.yaml}metadata:\n  name: app-secret\n` } });
 
     expect(getByText(/Masked Secret YAML cannot be applied/)).toBeTruthy();
@@ -900,10 +898,13 @@ describe("InstanceDetail cross-lens Explain (AI)", () => {
     vi.mocked(aiAvailability).mockResolvedValueOnce({ backend: "hosted", ready: true });
     vi.mocked(aiEgressAllowed).mockResolvedValueOnce(false);
     seed();
-    const { findByRole } = render(<InstanceDetail cluster="x" resource={resource} instance={instance} />);
-    const btn = (await findByRole("button", { name: /^explain$/i })) as HTMLButtonElement;
-    expect(btn.disabled).toBe(true);
-    expect(btn.title).toMatch(/protected cluster/i);
+    const { findByRole, queryByRole } = render(<InstanceDetail cluster="x" resource={resource} instance={instance} />);
+    // no live Explain action; the blocked reason is stated in More
+    fireEvent.click(await findByRole("button", { name: /^More/ }));
+    const item = (await findByRole("menuitem", { name: "Explain (AI)" })) as HTMLButtonElement;
+    expect(item.disabled).toBe(true);
+    expect(item.title).toMatch(/protected cluster/i);
+    expect(queryByRole("button", { name: /^explain$/i })).toBeNull();
   });
 
   it("Suggest fix renders a copyable patch with a loud commit-to-Git disclaimer", async () => {
@@ -919,12 +920,12 @@ describe("InstanceDetail cross-lens Explain (AI)", () => {
     seed();
     const { findByRole, findByText, getByText } = render(<InstanceDetail cluster="x" resource={resource} instance={instance} />);
 
-    const btn = await findByRole("button", { name: /suggest fix/i });
-    fireEvent.click(btn);
+    fireEvent.click(await findByRole("button", { name: /^More/ }));
+    fireEvent.click(await findByRole("menuitem", { name: /Suggest fix/ }));
 
     expect(await findByText(/Klyx will not apply it/)).toBeTruthy();
     expect(getByText(/replicas: 1/)).toBeTruthy();
-    expect(getByText("copy suggestion")).toBeTruthy();
+    expect(getByText("Copy suggestion")).toBeTruthy();
     // Review 2026-10-03 E: say what left the machine, and that redaction is heuristic.
     expect(getByText(/2 credential-like values redacted.*heuristic/)).toBeTruthy();
     expect(vi.mocked(suggestFix)).toHaveBeenCalledWith("x", "cert-manager.io", "v1", "certificates", "default", "web-tls");
