@@ -32,11 +32,16 @@ export const LAUNCH_DEADLINE_S = 900;
 type Role = { kind: "fault" | "degraded" | "progressing" | "ok" | "unknown"; label: string };
 type View = "claims" | "pools" | "activity";
 
+// A link is named as THE failure only when its own status is False; an
+// overall Ready=False with no proven link stays adverse but unattributed.
+// A claim with a node has registered: what remains is initialization.
+export const provenLink = (c: KarpenterClaimDTO) => (c.failingStatus === "False" ? c.failingType : "");
 export function claimHealth(c: KarpenterClaimDTO): Role {
   if (c.ready === "ready") return { kind: "ok", label: "ready" };
-  if (c.ready === "not-ready") return { kind: "fault", label: c.failingType ? `failed at ${c.failingType}` : "not ready" };
-  if (c.ageSeconds > LAUNCH_DEADLINE_S) return { kind: "degraded", label: "launching, appears stuck" };
-  return { kind: "progressing", label: "launching" };
+  if (c.ready === "not-ready") return { kind: "fault", label: provenLink(c) ? `failed at ${provenLink(c)}` : "not ready" };
+  const phase = c.nodeName ? "initializing" : "launching";
+  if (c.ageSeconds > LAUNCH_DEADLINE_S) return { kind: "degraded", label: `${phase}, appears stuck` };
+  return { kind: "progressing", label: phase };
 }
 export function poolHealth(p: KarpenterPoolDTO): Role {
   if (p.ready === "ready") return { kind: "ok", label: "ready" };
@@ -125,6 +130,7 @@ export function KarpenterView({ cluster }: { cluster: string }) {
   const stuck = claims.filter((c) => claimHealth(c).kind === "degraded").length;
   const launching = claims.filter((c) => claimHealth(c).kind === "progressing").length;
   const poolsDown = pools.filter((p) => poolHealth(p).kind === "fault").length;
+  const poolsUnknown = pools.filter((p) => poolHealth(p).kind === "unknown").length;
   const drifted = claims.filter((c) => c.drifted).length;
 
   const keys: string[] = view === "claims" ? claims.map((c) => c.name) : view === "pools" ? pools.map((p) => p.name) : events.map(eventKey);
@@ -143,13 +149,16 @@ export function KarpenterView({ cluster }: { cluster: string }) {
   const gridStyle = { gridTemplateColumns: fitted.template };
   const switchView = (v: View) => { setView(v); setSelKey(null); setCursorKey(null); };
 
+  const eventsFailed = !!ok?.eventsError;
   let state: DatasetState = "ready";
   if (!snap) state = "loading";
   else if (snap.error) state = "unreadable";
+  else if (view === "activity" && eventsFailed && keys.length === 0) state = "unreadable";
   else if (!snap.detected || keys.length === 0) state = "empty";
 
   const icon = <IconServerBolt size={28} stroke={1.2} />;
   const stateView = state === "loading" ? <SkeletonRows rows={5} label="reading NodePools and NodeClaims" />
+    : state === "unreadable" && !snap?.error ? <EmptyState icon={icon} title="Could not read disruption activity." hint={ok?.eventsError} action={{ label: "Retry", onClick: () => void fetchState() }} />
     : state === "unreadable" ? <EmptyState icon={icon} title="Could not read Karpenter state." hint={snap?.error} action={{ label: "Retry", onClick: () => void fetchState() }} />
     : !snap?.detected ? <EmptyState icon={icon} title="Karpenter is not installed on this cluster." hint="Klyx detected no karpenter.sh resources here." />
     : view === "claims" ? <EmptyState icon={icon} title="No NodeClaims." hint="Karpenter has provisioned nothing on this cluster right now." />
@@ -178,9 +187,11 @@ export function KarpenterView({ cluster }: { cluster: string }) {
           <span className="t-number" style={{ color: "var(--color-text-secondary)" }}>{claims.length}</span>
           <span className="t-secondary">NodeClaims</span>
           {failed + stuck + poolsDown > 0
-            ? <span className="t-status" style={{ color: failed + poolsDown > 0 ? "var(--color-text-danger)" : "var(--color-text-warning)" }}>{failed + poolsDown > 0 ? "▲ " : ""}{[failed ? `${failed} failed` : "", stuck ? `${stuck} launching, appear${stuck === 1 ? "s" : ""} stuck` : "", poolsDown ? `${poolsDown} NodePool${poolsDown === 1 ? "" : "s"} not ready` : ""].filter(Boolean).join(" · ")}</span>
-            : <span className="t-secondary">{launching > 0 ? `${launching} launching` : "all ready"}</span>}
-          {drifted > 0 && <span className="t-secondary">{drifted} drifted (will be replaced)</span>}
+            ? <span className="t-status" style={{ color: failed + poolsDown > 0 ? "var(--color-text-danger)" : "var(--color-text-warning)" }}>{failed + poolsDown > 0 ? "▲ " : ""}{[failed ? `${failed} not ready` : "", stuck ? `${stuck} appear${stuck === 1 ? "s" : ""} stuck` : "", poolsDown ? `${poolsDown} NodePool${poolsDown === 1 ? "" : "s"} not ready` : ""].filter(Boolean).join(" · ")}</span>
+            : launching > 0 ? <span className="t-secondary">{launching} in progress</span>
+            : poolsUnknown === 0 && claims.length > 0 ? <span className="t-secondary">all ready</span> : null}
+          {poolsUnknown > 0 && <span className="t-secondary">{poolsUnknown} NodePool{poolsUnknown === 1 ? "" : "s"} unverified</span>}
+          {drifted > 0 && <span className="t-secondary">{drifted} drifted (eligible for replacement)</span>}
         </>
       )}
       headerEnd={
@@ -194,12 +205,20 @@ export function KarpenterView({ cluster }: { cluster: string }) {
         <div role="group" aria-label="Karpenter view" style={{ display: "inline-flex", gap: 4 }}>
           <button className="l-chip" aria-pressed={view === "claims"} onClick={() => switchView("claims")}>NodeClaims {failed + stuck > 0 && <span style={{ color: failed ? "var(--color-text-danger)" : "var(--color-text-warning)" }}>{failed + stuck}</span>}</button>
           <button className="l-chip" aria-pressed={view === "pools"} onClick={() => switchView("pools")}>NodePools {poolsDown > 0 && <span style={{ color: "var(--color-text-danger)" }}>{poolsDown}</span>}</button>
-          <button className="l-chip" aria-pressed={view === "activity"} onClick={() => switchView("activity")}>Disruption activity {events.length > 0 && <span style={{ color: "var(--color-text-secondary)" }}>{events.length}</span>}</button>
+          <button className="l-chip" aria-pressed={view === "activity"} onClick={() => switchView("activity")}>Disruption activity {(events.length > 0 || ok?.eventsTruncated) && <span style={{ color: "var(--color-text-secondary)" }}>{events.length}{ok?.eventsTruncated ? "+" : ""}</span>}</button>
         </div>
       ) : undefined}
-      notice={ok && !ok.controllerHealthy ? (
+      notice={ok && ok.controllerVerified !== false && !ok.controllerHealthy ? (
         <div data-testid="karp-controller-down" role="status" className="t-body" style={{ color: "var(--color-text-danger)", padding: "4px 0" }}>
           <span className="t-status">▲ The Karpenter controller is not ready.</span> No provisioning, disruption or drift replacement happens until it recovers - the states below are its last word.
+        </div>
+      ) : view === "activity" && ok && (eventsFailed || ok.eventsTruncated) && events.length > 0 ? (
+        <div role="status" className="t-body" style={{ color: "var(--color-text-warning)", padding: "4px 0", overflowWrap: "anywhere" }}>
+          {eventsFailed ? `Partial feed - ${ok.eventsError}.` : "Partial feed - only the most recent events are shown; more exist."}
+        </div>
+      ) : ok && ok.controllerVerified === false ? (
+        <div data-testid="karp-controller-unverified" role="status" className="t-body" style={{ color: "var(--color-text-tertiary)", padding: "4px 0", overflowWrap: "anywhere" }}>
+          <span className="t-status" style={{ color: "var(--color-text-secondary)" }}>Controller health unverified.</span> {ok.controllerError || "The controller Deployment could not be read."}
         </div>
       ) : undefined}
       state={state}
@@ -251,7 +270,7 @@ export function KarpenterView({ cluster }: { cluster: string }) {
         </LensTable>
       }
       footer={<span className="t-legend">j k navigate · ↵ inspect</span>}
-      footerEnd={<span className="t-secondary">{view === "claims" ? "stuck first · drift and consolidation are intended behaviour, not faults" : view === "pools" ? "broken first" : "newest first"}</span>}
+      footerEnd={<span className="t-secondary">{view === "claims" ? "stuck first · drift and consolidation are intended behaviour, not faults" : view === "pools" ? "broken first" : ok?.eventsTruncated ? "most recent only - more events exist" : "newest first"}</span>}
       inspector={selClaim ? <ClaimInspector cluster={cluster} c={selClaim} onClose={() => setSelKey(null)} />
         : selPool ? <PoolInspector p={selPool} onClose={() => setSelKey(null)} />
         : selEvent ? <EventPanel e={selEvent} onClose={() => setSelKey(null)} />
@@ -265,11 +284,17 @@ export function KarpenterView({ cluster }: { cluster: string }) {
 function ClaimInspector({ cluster, c, onClose }: { cluster: string; c: KarpenterClaimDTO; onClose: () => void }) {
   const role = claimHealth(c);
   const openNode = () => { const nav = useFleet.getState(); nav.setSection("nodes"); nav.requestNavIntent({ kind: "select-node", cluster, node: c.nodeName }); };
+  const link = provenLink(c);
+  const pending = c.failingType && c.failingStatus !== "False" ? `${c.failingType} is ${c.failingStatus || "not reported"} (unverified)` : "";
   const detail = role.kind === "fault"
-    ? `The launch chain stopped at ${c.failingType || "Ready"}${c.failingReason ? `: ${c.failingReason}` : ""}.`
+    ? link
+      ? `The launch chain failed at ${link}${c.failingReason ? `: ${c.failingReason}` : ""}.`
+      : `Ready is False, but no launch-chain link is confirmed failed${pending ? ` - ${pending}` : ""}.`
     : role.kind === "degraded"
-      ? `Still launching after ${formatAge(c.ageSeconds)} - past Karpenter's 15m registration TTL, used here as Klyx's attention heuristic. Karpenter normally deletes a claim that fails to register in that window; check the controller and the cloud provider.`
-      : role.kind === "progressing" ? `Launching for ${formatAge(c.ageSeconds)} - the launch chain has not finished yet.` : null;
+      ? c.nodeName
+        ? `Registered as node ${c.nodeName} but not initialized after ${formatAge(c.ageSeconds)} - past Klyx's 15m attention heuristic${pending ? `; ${pending}` : ""}. Check the node's readiness, startup taints and daemonsets.`
+        : `Not registered after ${formatAge(c.ageSeconds)} - past Karpenter's 15m registration TTL (Klyx's attention heuristic here). Karpenter normally deletes a claim that fails to register in that window; check the controller and the cloud provider.`
+      : role.kind === "progressing" ? `${c.nodeName ? "Initializing" : "Launching"} for ${formatAge(c.ageSeconds)}${pending ? ` - ${pending}` : " - the launch chain has not finished yet"}.` : null;
   return (
     <div data-testid="karp-claim-panel" style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
       <InspectorLayout kind="NodeClaim" name={c.name} meta={[c.pool && `pool ${c.pool}`, c.instanceType, c.capacityType].filter(Boolean).join(" · ")} onClose={onClose}
@@ -277,7 +302,7 @@ function ClaimInspector({ cluster, c, onClose }: { cluster: string; c: Karpenter
           <div>
             <InspectorStatus tone={roleTone(role.kind)} label={role.label} />
             {detail && <div className="t-body" style={{ color: ROLE_TEXT[role.kind], overflowWrap: "anywhere", marginTop: -4 }}>{detail}</div>}
-            {role.kind === "fault" && c.failingMessage && <div className="t-body" style={{ color: ROLE_TEXT[role.kind], overflowWrap: "anywhere", marginTop: 4 }}>{c.failingMessage}</div>}
+            {role.kind === "fault" && link && c.failingMessage && <div className="t-body" style={{ color: ROLE_TEXT[role.kind], overflowWrap: "anywhere", marginTop: 4 }}>{c.failingMessage}</div>}
           </div>
         }
         primary={c.nodeName ? { label: "Open node", onSelect: openNode } : undefined}>
@@ -292,7 +317,7 @@ function ClaimInspector({ cluster, c, onClose }: { cluster: string; c: Karpenter
         </InspectorBlock>
         {(c.drifted || c.consolidatable) && (
           <InspectorBlock title="Disruption">
-            {c.drifted && <div className="t-body">Drifted - its requirements no longer match the NodePool or NodeClass; Karpenter will replace it.</div>}
+            {c.drifted && <div className="t-body">Drifted - its requirements no longer match the NodePool or NodeClass; it is eligible for replacement (disruption budgets can delay it).</div>}
             {c.consolidatable && <div className="t-body">Consolidatable - Karpenter may remove or replace it to save capacity.</div>}
             <div className="t-secondary" style={{ marginTop: 6 }}>Intended behaviour, not a fault.</div>
           </InspectorBlock>

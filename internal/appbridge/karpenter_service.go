@@ -27,6 +27,7 @@ type KarpenterClaimDTO struct {
 	NodeName       string `json:"nodeName"`
 	Ready          string `json:"ready"`
 	FailingType    string `json:"failingType"`
+	FailingStatus  string `json:"failingStatus"`
 	FailingReason  string `json:"failingReason"`
 	FailingMessage string `json:"failingMessage"`
 	Drifted        bool   `json:"drifted"`
@@ -48,12 +49,16 @@ type KarpenterEventDTO struct {
 
 // KarpenterSnapshotDTO is GetKarpenterState's payload.
 type KarpenterSnapshotDTO struct {
-	Detected          bool                `json:"detected"`
-	ControllerHealthy bool                `json:"controllerHealthy"`
-	Pools             []KarpenterPoolDTO  `json:"pools"`
-	Claims            []KarpenterClaimDTO `json:"claims"`
-	Events            []KarpenterEventDTO `json:"events"`
-	Error             string              `json:"error,omitempty"`
+	Detected           bool                `json:"detected"`
+	ControllerVerified bool                `json:"controllerVerified"`
+	ControllerHealthy  bool                `json:"controllerHealthy"`
+	ControllerError    string              `json:"controllerError,omitempty"`
+	EventsError        string              `json:"eventsError,omitempty"`
+	EventsTruncated    bool                `json:"eventsTruncated,omitempty"`
+	Pools              []KarpenterPoolDTO  `json:"pools"`
+	Claims             []KarpenterClaimDTO `json:"claims"`
+	Events             []KarpenterEventDTO `json:"events"`
+	Error              string              `json:"error,omitempty"`
 }
 
 // KarpenterConn is the per-cluster surface the Karpenter lens needs.
@@ -87,7 +92,11 @@ func (s *KarpenterService) GetKarpenterState(cluster string) KarpenterSnapshotDT
 		return out
 	}
 	out.Detected = snap.Detected
+	out.ControllerVerified = snap.ControllerVerified
 	out.ControllerHealthy = snap.ControllerHealthy
+	out.ControllerError = snap.ControllerError
+	out.EventsError = snap.EventsError
+	out.EventsTruncated = snap.EventsTruncated
 	for _, p := range snap.Pools {
 		out.Pools = append(out.Pools, KarpenterPoolDTO{
 			Name: p.Name, Ready: p.Ready, Reason: p.Reason, Message: p.Message, Weight: p.Weight,
@@ -98,7 +107,7 @@ func (s *KarpenterService) GetKarpenterState(cluster string) KarpenterSnapshotDT
 	for _, cl := range snap.Claims {
 		out.Claims = append(out.Claims, KarpenterClaimDTO{
 			Name: cl.Name, Pool: cl.Pool, NodeName: cl.NodeName, Ready: cl.Ready,
-			FailingType: cl.FailingType, FailingReason: cl.FailingReason, FailingMessage: cl.FailingMessage,
+			FailingType: cl.FailingType, FailingStatus: cl.FailingStatus, FailingReason: cl.FailingReason, FailingMessage: cl.FailingMessage,
 			Drifted: cl.Drifted, Consolidatable: cl.Consolidatable,
 			CapacityType: cl.CapacityType, InstanceType: cl.InstanceType, AgeSeconds: cl.AgeSeconds,
 		})

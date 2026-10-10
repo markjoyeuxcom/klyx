@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -24,11 +26,20 @@ const karpenterEventCap = 30
 // and recent NodePool/NodeClaim events - the "why did my node get replaced"
 // feed.
 type KarpenterSnapshot struct {
-	Detected          bool
-	ControllerHealthy bool
-	Pools             []karpenter.NodePool
-	Claims            []karpenter.NodeClaim
-	Events            []workloads.EventSummary
+	Detected bool
+	// ControllerVerified: a karpenter Deployment was actually read. When
+	// false, ControllerHealthy carries no claim and ControllerError says why
+	// (forbidden, not found under the expected name, ...).
+	ControllerVerified bool
+	ControllerHealthy  bool
+	ControllerError    string
+	Pools              []karpenter.NodePool
+	Claims             []karpenter.NodeClaim
+	Events             []workloads.EventSummary
+	// EventsError names event reads that failed (the feed is then partial or
+	// unreadable, never quiet); EventsTruncated: more events exist than shown.
+	EventsError     string
+	EventsTruncated bool
 }
 
 // KarpenterState returns the Karpenter lens snapshot. Capability-gated
@@ -80,26 +91,50 @@ func (c *ClusterConn) KarpenterState(ctx context.Context) (KarpenterSnapshot, er
 	karpenter.SortPoolsBrokenFirst(out.Pools)
 	karpenter.SortClaimsStuckFirst(out.Claims)
 
-	// Controller health, re-probed live (mirrors the detector's namespace pair).
+	// Controller health, re-probed live (mirrors the detector's namespace
+	// pair). Only a Deployment actually read is evidence: a forbidden read or
+	// a controller installed under another name is unverified, never a
+	// confirmed outage.
+	var ctrlErrs []string
 	for _, ns := range []string{"kube-system", "karpenter"} {
-		if dep, derr := c.typed.AppsV1().Deployments(ns).Get(ctx, "karpenter", metav1.GetOptions{}); derr == nil && dep != nil {
-			if dep.Status.ReadyReplicas > 0 {
-				out.ControllerHealthy = true
-			}
+		dep, derr := c.typed.AppsV1().Deployments(ns).Get(ctx, "karpenter", metav1.GetOptions{})
+		if derr == nil && dep != nil {
+			out.ControllerVerified = true
+			out.ControllerHealthy = dep.Status.ReadyReplicas > 0
 			break
+		}
+		if derr != nil && !apierrors.IsNotFound(derr) {
+			ctrlErrs = append(ctrlErrs, ns+": "+derr.Error())
+		}
+	}
+	if !out.ControllerVerified {
+		if len(ctrlErrs) > 0 {
+			out.ControllerError = "controller Deployment unreadable (" + strings.Join(ctrlErrs, "; ") + ")"
+		} else {
+			out.ControllerError = "no Deployment named karpenter in kube-system or karpenter"
 		}
 	}
 
 	// Disruption feed: events about NodeClaims and NodePools (launch failures,
-	// disruption/consolidation decisions, drift replacements). Best-effort: a
-	// failing event list degrades to an empty feed, the triage above stands.
+	// disruption/consolidation decisions, drift replacements). Optional: a
+	// failing event read never blocks the triage above, but it is reported -
+	// the feed is then partial or unreadable, never "quiet".
+	var evErrs []string
 	for _, kind := range []string{"NodeClaim", "NodePool"} {
 		evs, eerr := c.typed.CoreV1().Events("").List(ctx, metav1.ListOptions{
 			FieldSelector: "involvedObject.kind=" + kind,
 			Limit:         karpenterEventCap,
 		})
 		if eerr != nil || evs == nil {
+			msg := "no response"
+			if eerr != nil {
+				msg = eerr.Error()
+			}
+			evErrs = append(evErrs, kind+" events: "+msg)
 			continue
+		}
+		if evs.Continue != "" || len(evs.Items) >= karpenterEventCap {
+			out.EventsTruncated = true
 		}
 		for i := range evs.Items {
 			e := &evs.Items[i]
@@ -123,6 +158,8 @@ func (c *ClusterConn) KarpenterState(ctx context.Context) (KarpenterSnapshot, er
 	sort.Slice(out.Events, func(i, j int) bool { return out.Events[i].LastSeenUnix > out.Events[j].LastSeenUnix })
 	if len(out.Events) > karpenterEventCap {
 		out.Events = out.Events[:karpenterEventCap]
+		out.EventsTruncated = true
 	}
+	out.EventsError = strings.Join(evErrs, "; ")
 	return out, nil
 }

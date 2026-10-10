@@ -48,11 +48,15 @@ type NodePool struct {
 // NodeClaim is one claim's lifecycle row. FailingCondition names the first
 // broken link of the launch chain when the claim is not Ready.
 type NodeClaim struct {
-	Name           string
-	Pool           string
-	NodeName       string
-	Ready          string // "ready" | "not-ready" | "unknown"
-	FailingType    string // "" when Ready
+	Name        string
+	Pool        string
+	NodeName    string
+	Ready       string // "ready" | "not-ready" | "unknown"
+	FailingType string // "" when Ready
+	// FailingStatus is the chosen link's native condition status. Only
+	// "False" proves that link failed; "Unknown" (or anything else) is a link
+	// still in progress or unverified.
+	FailingStatus  string
 	FailingReason  string
 	FailingMessage string
 	Drifted        bool
@@ -88,14 +92,17 @@ func conditionsOf(u *unstructured.Unstructured) map[string]condition {
 	return out
 }
 
+// readyString maps a Ready condition: only "True" and "False" are evidence;
+// a missing, Unknown or unsupported status is "unknown", never a fault.
 func readyString(c condition, found bool) string {
-	if !found || c.Status == "Unknown" || c.Status == "" {
+	switch {
+	case found && c.Status == "True":
+		return "ready"
+	case found && c.Status == "False":
+		return "not-ready"
+	default:
 		return "unknown"
 	}
-	if c.Status == "True" {
-		return "ready"
-	}
-	return "not-ready"
 }
 
 func quantityPtr(s string) *float64 {
@@ -154,15 +161,19 @@ func ParseNodeClaim(u *unstructured.Unstructured, now time.Time) NodeClaim {
 	out.Ready = readyString(ready, found)
 
 	if out.Ready != "ready" {
-		for _, t := range launchChain {
-			c, ok := conds[t]
-			if ok && c.Status != "True" {
-				out.FailingType, out.FailingReason, out.FailingMessage = t, c.Reason, c.Message
-				break
+		// A confirmed False link is the diagnosis; failing that, the first
+		// link not yet True (in progress / unverified), then Ready itself.
+		pick := func(match func(condition) bool) bool {
+			for _, t := range launchChain {
+				if c, ok := conds[t]; ok && match(c) {
+					out.FailingType, out.FailingStatus, out.FailingReason, out.FailingMessage = t, c.Status, c.Reason, c.Message
+					return true
+				}
 			}
+			return false
 		}
-		if out.FailingType == "" && found && ready.Status != "True" {
-			out.FailingType, out.FailingReason, out.FailingMessage = condReady, ready.Reason, ready.Message
+		if !pick(func(c condition) bool { return c.Status == "False" }) && !pick(func(c condition) bool { return c.Status != "True" }) && found && ready.Status != "True" {
+			out.FailingType, out.FailingStatus, out.FailingReason, out.FailingMessage = condReady, ready.Status, ready.Reason, ready.Message
 		}
 	}
 

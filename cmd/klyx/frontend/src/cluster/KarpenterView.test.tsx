@@ -6,7 +6,7 @@ import { KarpenterView, claimHealth, LAUNCH_DEADLINE_S } from "./KarpenterView";
 vi.mock("../bridge/karpenter", () => ({ getKarpenterState: vi.fn(async () => ({}) as KarpenterSnapshotDTO) }));
 import { getKarpenterState } from "../bridge/karpenter";
 
-const snap = (over: Partial<KarpenterSnapshotDTO> = {}): KarpenterSnapshotDTO => ({ detected: true, controllerHealthy: true, pools: [], claims: [], events: [], ...over });
+const snap = (over: Partial<KarpenterSnapshotDTO> = {}): KarpenterSnapshotDTO => ({ detected: true, controllerVerified: true, controllerHealthy: true, pools: [], claims: [], events: [], ...over });
 const claim = (over: Partial<KarpenterClaimDTO> = {}): KarpenterClaimDTO => ({
   name: "default-abcde", pool: "default", nodeName: "ip-10-0-1-1", ready: "ready", failingType: "", failingReason: "", failingMessage: "",
   drifted: false, consolidatable: false, capacityType: "spot", instanceType: "m6i.large", ageSeconds: 3600, ...over,
@@ -18,9 +18,13 @@ const rows = () => [...document.querySelectorAll(".lens-row")].map((r) => r.text
 describe("claimHealth", () => {
   it("False chain = failed; Unknown = launching until the 15m heuristic, then appears stuck", () => {
     expect(claimHealth(claim()).kind).toBe("ok");
-    expect(claimHealth(claim({ ready: "not-ready", failingType: "Launched" }))).toEqual({ kind: "fault", label: "failed at Launched" });
-    expect(claimHealth(claim({ ready: "unknown", ageSeconds: 60 })).kind).toBe("progressing");
-    expect(claimHealth(claim({ ready: "unknown", ageSeconds: LAUNCH_DEADLINE_S + 1 }))).toEqual({ kind: "degraded", label: "launching, appears stuck" });
+    expect(claimHealth(claim({ ready: "not-ready", failingType: "Launched", failingStatus: "False" }))).toEqual({ kind: "fault", label: "failed at Launched" });
+    // Ready=False with only an Unknown link: adverse, but no link is named failed
+    expect(claimHealth(claim({ ready: "not-ready", failingType: "Launched", failingStatus: "Unknown" }))).toEqual({ kind: "fault", label: "not ready" });
+    expect(claimHealth(claim({ ready: "unknown", ageSeconds: 60, nodeName: "" })).label).toBe("launching");
+    expect(claimHealth(claim({ ready: "unknown", ageSeconds: 60 })).label).toBe("initializing");
+    expect(claimHealth(claim({ ready: "unknown", ageSeconds: LAUNCH_DEADLINE_S + 1, nodeName: "" }))).toEqual({ kind: "degraded", label: "launching, appears stuck" });
+    expect(claimHealth(claim({ ready: "unknown", ageSeconds: LAUNCH_DEADLINE_S + 1 }))).toEqual({ kind: "degraded", label: "initializing, appears stuck" });
   });
 });
 
@@ -32,10 +36,10 @@ describe("KarpenterView (redesign step 5)", () => {
       claim({ name: "ok" }),
       claim({ name: "young", ready: "unknown", ageSeconds: 30, nodeName: "" }),
       claim({ name: "old", ready: "unknown", ageSeconds: 3600, nodeName: "" }),
-      claim({ name: "bad", ready: "not-ready", failingType: "Launched", failingReason: "InsufficientCapacity" }),
+      claim({ name: "bad", ready: "not-ready", failingType: "Launched", failingStatus: "False", failingReason: "InsufficientCapacity" }),
     ] }));
     render(<KarpenterView cluster="x" />);
-    expect(await screen.findByText("▲ 1 failed · 1 launching, appears stuck")).toBeTruthy();
+    expect(await screen.findByText("▲ 1 not ready · 1 appears stuck")).toBeTruthy();
     const r = rows();
     expect(r[0]).toContain("bad");
     expect(r[1]).toContain("old");
@@ -44,11 +48,11 @@ describe("KarpenterView (redesign step 5)", () => {
   });
 
   it("a failed claim names the failing link and its message in words; Open node when registered", async () => {
-    vi.mocked(getKarpenterState).mockResolvedValue(snap({ claims: [claim({ ready: "not-ready", failingType: "Registered", failingReason: "NodeNotFound", failingMessage: "node did not join within 15m" })] }));
+    vi.mocked(getKarpenterState).mockResolvedValue(snap({ claims: [claim({ ready: "not-ready", failingType: "Registered", failingStatus: "False", failingReason: "NodeNotFound", failingMessage: "node did not join within 15m" })] }));
     render(<KarpenterView cluster="x" />);
     fireEvent.click((await screen.findByText("default-abcde")).closest(".lens-row") as HTMLElement);
     const p = within(screen.getByTestId("lens-inspector"));
-    expect(p.getByText("The launch chain stopped at Registered: NodeNotFound.")).toBeTruthy();
+    expect(p.getByText("The launch chain failed at Registered: NodeNotFound.")).toBeTruthy();
     expect(p.getByText("node did not join within 15m")).toBeTruthy();
     expect(p.getByRole("button", { name: "Open node" })).toBeTruthy();
   });
@@ -57,7 +61,7 @@ describe("KarpenterView (redesign step 5)", () => {
     vi.mocked(getKarpenterState).mockResolvedValue(snap({ claims: [claim({ drifted: true, consolidatable: true })] }));
     render(<KarpenterView cluster="x" />);
     expect(await screen.findByText("all ready")).toBeTruthy();
-    expect(screen.getByText("1 drifted (will be replaced)")).toBeTruthy();
+    expect(screen.getByText("1 drifted (eligible for replacement)")).toBeTruthy();
     fireEvent.click(screen.getByText("default-abcde").closest(".lens-row") as HTMLElement);
     expect(within(screen.getByTestId("lens-inspector")).getByText("Intended behaviour, not a fault.")).toBeTruthy();
   });
@@ -71,8 +75,7 @@ describe("KarpenterView (redesign step 5)", () => {
   it("pools show capacity against limits and warn near a limit", async () => {
     vi.mocked(getKarpenterState).mockResolvedValue(snap({ pools: [{ name: "default", ready: "ready", reason: "", message: "", weight: 10, cpuLimit: 100, cpuUsed: 95, memLimit: null, memUsed: 1024 ** 3, nodes: 3 }] }));
     render(<KarpenterView cluster="x" />);
-    await screen.findByText("all ready");
-    fireEvent.click(screen.getByRole("button", { name: /^NodePools/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /^NodePools/ }));
     fireEvent.click(document.querySelector(".lens-row") as HTMLElement);
     expect(within(screen.getByTestId("lens-inspector")).getByText(/Karpenter stops provisioning from this pool/)).toBeTruthy();
   });
@@ -109,5 +112,61 @@ describe("KarpenterView (redesign step 5)", () => {
     expect(await screen.findByText("from-b")).toBeTruthy();
     await act(async () => { late.resolve(snap({ claims: [claim({ name: "from-a" })] })); await late.promise; });
     expect(screen.queryByText("from-a")).toBeNull();
+  });
+});
+
+describe("KarpenterView evidence corrections (Codex 271342a7)", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("Ready=False with an unproven link names no failure; its message is not presented as the cause", async () => {
+    vi.mocked(getKarpenterState).mockResolvedValue(snap({ controllerVerified: true, claims: [claim({ ready: "not-ready", failingType: "Launched", failingStatus: "Unknown", failingMessage: "waiting" })] }));
+    render(<KarpenterView cluster="x" />);
+    fireEvent.click((await screen.findByText("default-abcde")).closest(".lens-row") as HTMLElement);
+    const p = within(screen.getByTestId("lens-inspector"));
+    expect(p.getByText("Ready is False, but no launch-chain link is confirmed failed - Launched is Unknown (unverified).")).toBeTruthy();
+    expect(p.queryByText("waiting")).toBeNull();
+  });
+
+  it("registration expiry is only mentioned for an unregistered claim; a registered one gets an initialization diagnosis", async () => {
+    vi.mocked(getKarpenterState).mockResolvedValue(snap({ controllerVerified: true, claims: [
+      claim({ name: "unreg", ready: "unknown", nodeName: "", ageSeconds: 3600 }),
+      claim({ name: "reg", ready: "unknown", nodeName: "ip-1", ageSeconds: 3600 }),
+    ] }));
+    render(<KarpenterView cluster="x" />);
+    fireEvent.click((await screen.findByText("unreg")).closest(".lens-row") as HTMLElement);
+    expect(within(screen.getByTestId("lens-inspector")).getByText(/registration TTL/)).toBeTruthy();
+    fireEvent.click(screen.getByText("reg").closest(".lens-row") as HTMLElement);
+    const p = within(screen.getByTestId("lens-inspector"));
+    expect(p.getByText(/Registered as node ip-1 but not initialized/)).toBeTruthy();
+    expect(p.queryByText(/registration TTL/)).toBeNull();
+  });
+
+  it("an unreadable controller is unverified, never a confirmed outage", async () => {
+    vi.mocked(getKarpenterState).mockResolvedValue(snap({ controllerVerified: false, controllerHealthy: false, controllerError: "controller Deployment unreadable (kube-system: forbidden)", claims: [claim()] }));
+    render(<KarpenterView cluster="x" />);
+    expect((await screen.findByTestId("karp-controller-unverified")).textContent).toContain("forbidden");
+    expect(screen.queryByTestId("karp-controller-down")).toBeNull();
+  });
+
+  it("an unreadable activity feed is unreadable, never quiet; a capped one discloses partial coverage", async () => {
+    vi.mocked(getKarpenterState).mockResolvedValueOnce(snap({ controllerVerified: true, claims: [claim()], eventsError: "NodeClaim events: forbidden; NodePool events: forbidden" }));
+    const first = render(<KarpenterView cluster="x" />);
+    fireEvent.click(await screen.findByRole("button", { name: /^Disruption activity/ }));
+    expect(screen.getByText("Could not read disruption activity.")).toBeTruthy();
+    expect(screen.queryByText("No recent disruption activity.")).toBeNull();
+    first.unmount();
+    const ev = { type: "Normal", reason: "Disrupting", message: "m", kind: "NodeClaim", name: "c", lastSeenUnix: Math.floor(Date.now() / 1000) };
+    vi.mocked(getKarpenterState).mockResolvedValueOnce(snap({ controllerVerified: true, claims: [claim()], events: [ev], eventsTruncated: true }));
+    render(<KarpenterView cluster="x" />);
+    fireEvent.click(await screen.findByRole("button", { name: /^Disruption activity/ }));
+    expect(screen.getByText(/only the most recent events are shown; more exist/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: /^Disruption activity 1\+/ })).toBeTruthy();
+  });
+
+  it("an Unknown NodePool is never folded into 'all ready'", async () => {
+    vi.mocked(getKarpenterState).mockResolvedValue(snap({ controllerVerified: true, claims: [claim()], pools: [{ name: "p", ready: "unknown", reason: "", message: "", weight: 0, cpuLimit: null, cpuUsed: null, memLimit: null, memUsed: null, nodes: 1 }] }));
+    render(<KarpenterView cluster="x" />);
+    expect(await screen.findByText("1 NodePool unverified")).toBeTruthy();
+    expect(screen.queryByText("all ready")).toBeNull();
   });
 });

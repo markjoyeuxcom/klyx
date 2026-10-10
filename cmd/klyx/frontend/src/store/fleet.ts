@@ -343,9 +343,12 @@ export type ExpiryItemDTO = { source: string; namespace: string; name: string; d
 
 // Karpenter lens.
 export type KarpenterPoolDTO = { name: string; ready: string; reason: string; message: string; weight: number; cpuLimit: number | null; cpuUsed: number | null; memLimit: number | null; memUsed: number | null; nodes: number };
-export type KarpenterClaimDTO = { name: string; pool: string; nodeName: string; ready: string; failingType: string; failingReason: string; failingMessage: string; drifted: boolean; consolidatable: boolean; capacityType: string; instanceType: string; ageSeconds: number };
+export type KarpenterClaimDTO = { name: string; pool: string; nodeName: string; ready: string; failingType: string; failingStatus?: string; failingReason: string; failingMessage: string; drifted: boolean; consolidatable: boolean; capacityType: string; instanceType: string; ageSeconds: number };
 export type KarpenterEventDTO = { type: string; reason: string; message: string; kind: string; name: string; lastSeenUnix: number };
-export type KarpenterSnapshotDTO = { detected: boolean; controllerHealthy: boolean; pools: KarpenterPoolDTO[]; claims: KarpenterClaimDTO[]; events: KarpenterEventDTO[]; error?: string };
+// controllerVerified: a karpenter Deployment was actually read - otherwise
+// controllerHealthy carries no claim and controllerError says why. eventsError
+// / eventsTruncated: the disruption feed is partial or unreadable, never quiet.
+export type KarpenterSnapshotDTO = { detected: boolean; controllerVerified?: boolean; controllerHealthy: boolean; controllerError?: string; pools: KarpenterPoolDTO[]; claims: KarpenterClaimDTO[]; events: KarpenterEventDTO[]; eventsError?: string; eventsTruncated?: boolean; error?: string };
 export type ExpiryScanResultDTO = { items: ExpiryItemDTO[]; warnings: string[]; error?: string };
 export type WorkloadUsageDTO = { cpuUsage: number | null; memUsage: number | null };
 export type WorkloadMetricsStatusDTO = { available: boolean; message: string; updatedAt: string };

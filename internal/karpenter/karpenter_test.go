@@ -132,3 +132,33 @@ func TestSorting(t *testing.T) {
 		t.Fatalf("claims: %+v", claims)
 	}
 }
+
+func TestParseNodeClaim_OnlyAConfirmedFalseLinkIsTheFailure(t *testing.T) {
+	now := time.Unix(10000, 0)
+	// Ready=False, Launched Unknown, Registered False: the proven failure is
+	// Registered, never the merely-unverified Launched.
+	c := ParseNodeClaim(nodeClaimU("x", "workers", now,
+		cond("Launched", "Unknown", "", ""),
+		cond("Registered", "False", "NodeNotFound", "node did not join"),
+		cond("Ready", "False", "NotRegistered", "")), now)
+	if c.FailingType != "Registered" || c.FailingStatus != "False" {
+		t.Fatalf("want the confirmed False link: %+v", c)
+	}
+	// No False link: the first non-True link is named with its own status.
+	c2 := ParseNodeClaim(nodeClaimU("y", "workers", now,
+		cond("Launched", "Unknown", "", ""),
+		cond("Ready", "False", "", "")), now)
+	if c2.FailingType != "Launched" || c2.FailingStatus != "Unknown" {
+		t.Fatalf("want an unverified link with its status: %+v", c2)
+	}
+	// An unsupported Ready status is unknown, never a fault.
+	c3 := ParseNodeClaim(nodeClaimU("z", "workers", now, cond("Ready", "Bogus", "", "")), now)
+	if c3.Ready != "unknown" {
+		t.Fatalf("unsupported status must be unknown: %+v", c3)
+	}
+	// An absent Ready condition is unknown.
+	c4 := ParseNodeClaim(nodeClaimU("w", "workers", now), now)
+	if c4.Ready != "unknown" {
+		t.Fatalf("absent Ready must be unknown: %+v", c4)
+	}
+}

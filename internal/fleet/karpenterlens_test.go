@@ -2,17 +2,20 @@ package fleet
 
 import (
 	"context"
+	"strconv"
 	"testing"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	typedfake "k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/moomora/klyx/internal/capability"
 	"github.com/moomora/klyx/internal/clock"
@@ -114,5 +117,51 @@ func TestKarpenterState_TriageAndControllerHealth(t *testing.T) {
 	// The disruption feed carries the event.
 	if len(snap.Events) != 1 || snap.Events[0].Reason != "DisruptionTerminating" || snap.Events[0].Kind != "NodeClaim" {
 		t.Fatalf("events: %+v", snap.Events)
+	}
+}
+
+func TestKarpenterState_PartialInputsStayUnverified(t *testing.T) {
+	c := newKarpConn(true, nil, karpPool("workers", "True"), karpClaim("wk-1", "workers", "True"))
+	typed := c.typed.(*typedfake.Clientset)
+	typed.PrependReactor("get", "deployments", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewForbidden(schema.GroupResource{Group: "apps", Resource: "deployments"}, "karpenter", nil)
+	})
+	typed.PrependReactor("list", "events", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		if a.(k8stesting.ListAction).GetListRestrictions().Fields.String() == "involvedObject.kind=NodePool" {
+			return true, nil, apierrors.NewForbidden(schema.GroupResource{Resource: "events"}, "", nil)
+		}
+		return false, nil, nil
+	})
+	snap, err := c.KarpenterState(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snap.ControllerVerified || snap.ControllerHealthy || snap.ControllerError == "" {
+		t.Fatalf("a forbidden controller read must be unverified with its reason: %+v", snap)
+	}
+	if snap.EventsError == "" || len(snap.Claims) != 1 || len(snap.Pools) != 1 {
+		t.Fatalf("a failed event read is reported, triage stays usable: %+v", snap)
+	}
+}
+
+func TestKarpenterState_MissingControllerIsUnverifiedAndFeedCapIsDisclosed(t *testing.T) {
+	var objs []runtime.Object
+	for i := 0; i < karpenterEventCap; i++ {
+		objs = append(objs, &corev1.Event{
+			ObjectMeta:     metav1.ObjectMeta{Namespace: "default", Name: "ev" + strconv.Itoa(i)},
+			InvolvedObject: corev1.ObjectReference{Kind: "NodeClaim", Name: "c"},
+			LastTimestamp:  metav1.Time{Time: time.Unix(int64(500+i), 0)},
+		})
+	}
+	c := newKarpConn(true, objs, karpPool("workers", "True"))
+	snap, err := c.KarpenterState(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snap.ControllerVerified || snap.ControllerError == "" {
+		t.Fatalf("no karpenter Deployment under the expected name is unverified, not an outage: %+v", snap)
+	}
+	if !snap.EventsTruncated {
+		t.Fatalf("a full page of events must disclose partial coverage: %+v", snap)
 	}
 }
