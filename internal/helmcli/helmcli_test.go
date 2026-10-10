@@ -152,6 +152,15 @@ func TestListReleases_KubeContextArg(t *testing.T) {
 	// --max 0 lifts helm's default 256-release cap (silent truncation otherwise).
 	assertArg(t, r.args[0], "--max")
 	assertArg(t, r.args[0], "0")
+	// explicit current states: helm 3's default hides stuck pending-* releases
+	for _, f := range []string{"--deployed", "--failed", "--pending", "--uninstalling"} {
+		assertArg(t, r.args[0], f)
+	}
+	for _, a := range r.args[0] {
+		if a == "--superseded" || a == "--uninstalled" || a == "--all" || a == "-a" {
+			t.Fatalf("historical states must not be listed: %v", r.args[0])
+		}
+	}
 }
 
 // ---------- History tests ----------

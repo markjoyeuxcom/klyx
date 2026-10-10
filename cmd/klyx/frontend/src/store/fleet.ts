@@ -679,6 +679,14 @@ export type HelmSlice = {
   history: HelmHistoryEntryDTO[];
   values: string;
   detailLoading: boolean;
+  // Helm is a bounded CLI snapshot, never a live watch. snapshotAt is when the
+  // last successful `helm list` arrived; error is the latest list failure -
+  // releases then hold the last good snapshot (or nothing, if none was read).
+  snapshotAt?: number | null;
+  error?: string | null;
+  // Detail read failures are evidence, never an empty history or values.
+  historyError?: string | null;
+  valuesError?: string | null;
 };
 
 type ArgoSlice = {
@@ -938,8 +946,9 @@ type FleetState = {
   clearArgo: () => void;
   setHelmLoading: (cluster: string) => void;
   setHelm: (cluster: string, available: boolean, message: string, releases: HelmReleaseDTO[]) => void;
+  setHelmListError: (cluster: string, message: string) => void;
   selectHelmRelease: (ref: HelmRef | null) => void;
-  setHelmDetail: (ref: HelmRef, history: HelmHistoryEntryDTO[], values: string) => void;
+  setHelmDetail: (ref: HelmRef, history: HelmHistoryEntryDTO[], values: string, historyError?: string | null, valuesError?: string | null) => void;
   clearHelm: () => void;
   overviewSummary: OverviewSummary;
   setOverviewSummaryLoading: (cluster: string) => void;
@@ -1316,15 +1325,26 @@ export const useFleet = create<FleetState>((set) => ({
       expanded: [],
     },
   }),
-  setHelmLoading: (cluster) => set((s) => ({ helm: { ...s.helm, cluster, loading: true } })),
-  setHelm: (cluster, available, message, releases) => set((s) => ({ helm: { ...s.helm, cluster, available, message, releases, loading: false } })),
-  selectHelmRelease: (ref) => set((s) => ({ helm: { ...s.helm, selected: ref, history: [], values: "", detailLoading: ref !== null } })),
-  setHelmDetail: (ref, history, values) => set((s) => {
+  // A different cluster never inherits another cluster's snapshot or selection.
+  setHelmLoading: (cluster) => set((s) => ({ helm: s.helm.cluster === cluster
+    ? { ...s.helm, loading: true }
+    : { cluster, releases: [], available: true, message: "", loading: true, selected: null, history: [], values: "", detailLoading: false, snapshotAt: null, error: null, historyError: null, valuesError: null } })),
+  setHelm: (cluster, available, message, releases) => set((s) => ({ helm: { ...s.helm, cluster, available, message, releases, loading: false, error: null, snapshotAt: available ? Date.now() : null } })),
+  // A list failure keeps the last good snapshot of the SAME cluster. With no
+  // prior snapshot it also marks the slice unavailable (the legacy gate).
+  setHelmListError: (cluster, message) => set((s) => {
+    const prior = s.helm.cluster === cluster && s.helm.snapshotAt != null;
+    return { helm: prior
+      ? { ...s.helm, loading: false, error: message }
+      : { ...s.helm, cluster, releases: [], available: false, message, loading: false, error: message, snapshotAt: null } };
+  }),
+  selectHelmRelease: (ref) => set((s) => ({ helm: { ...s.helm, selected: ref, history: [], values: "", detailLoading: ref !== null, historyError: null, valuesError: null } })),
+  setHelmDetail: (ref, history, values, historyError = null, valuesError = null) => set((s) => {
     const sel = s.helm.selected;
     if (!sel || sel.namespace !== ref.namespace || sel.name !== ref.name) return {};
-    return { helm: { ...s.helm, history, values, detailLoading: false } };
+    return { helm: { ...s.helm, history, values, detailLoading: false, historyError, valuesError } };
   }),
-  clearHelm: () => set({ helm: { cluster: null, releases: [], available: true, message: "", loading: false, selected: null, history: [], values: "", detailLoading: false } }),
+  clearHelm: () => set({ helm: { cluster: null, releases: [], available: true, message: "", loading: false, selected: null, history: [], values: "", detailLoading: false, snapshotAt: null, error: null, historyError: null, valuesError: null } }),
   overviewSummary: { cluster: null, loading: false, workloads: null, pods: null, warningEvents: null, nodes: null, failedReleases: null, helmAvailable: false, namespaces: null, flux: null, fluxError: false },
   setOverviewSummaryLoading: (cluster) => set({ overviewSummary: { cluster, loading: true, workloads: null, pods: null, warningEvents: null, nodes: null, failedReleases: null, helmAvailable: false, namespaces: null, flux: null, fluxError: false } }),
   setOverviewSummary: (s) => set({ overviewSummary: s }),

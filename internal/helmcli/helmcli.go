@@ -187,8 +187,16 @@ func parseUpdated(s string) int64 {
 // ListReleases returns all releases across all namespaces for the given
 // kubeContext. `--max 0` lifts helm's default cap of 256 releases, which would
 // otherwise silently truncate the list on large clusters.
+//
+// The state set is explicit because the default differs by helm version:
+// helm 3 lists only deployed and failed, so a release stuck in pending-*
+// ("another operation is in progress") would be invisible; helm 4 lists every
+// state. Current states are requested; historical ones (superseded,
+// uninstalled with --keep-history) never describe a live release.
 func ListReleases(ctx context.Context, r Runner, kubeContext string) ([]Release, error) {
-	out, err := r.Run(ctx, "list", "-A", "-o", "json", "--max", "0", "--kube-context", kubeContext)
+	out, err := r.Run(ctx, "list", "-A", "-o", "json", "--max", "0",
+		"--deployed", "--failed", "--pending", "--uninstalling",
+		"--kube-context", kubeContext)
 	if err != nil {
 		return nil, err
 	}

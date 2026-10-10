@@ -1,312 +1,174 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, fireEvent } from "@testing-library/react";
-import { HelmView } from "./HelmView";
+import { render, fireEvent, within, screen, act } from "@testing-library/react";
 import { useFleet } from "../store/fleet";
 import type { HelmReleaseDTO, HelmHistoryEntryDTO } from "../store/fleet";
+import { HelmView, releaseHealth, PENDING_DEADLINE_S } from "./HelmView";
 
-// Mock bridge/helm so no Wails runtime is needed.
 vi.mock("../bridge/helm", () => ({
+  HELM_CLI_MISSING: "helm not found",
   listHelmReleases: vi.fn().mockResolvedValue(undefined),
   openHelmRelease: vi.fn().mockResolvedValue(undefined),
   helmRollback: vi.fn().mockResolvedValue(undefined),
 }));
 import { openHelmRelease, helmRollback } from "../bridge/helm";
+vi.mock("../bridge/configsvc", () => ({ armProtected: vi.fn(async () => ({ ok: true, error: "" })) }));
 
-// The rollback composer (OperationDialog) registers protected-cluster grants
-// via the config bridge; mock it so no Wails runtime is needed.
-vi.mock("../bridge/configsvc", () => ({
-  armProtected: vi.fn(async () => ({ ok: true, error: "" })),
-}));
+const nowS = Math.floor(Date.now() / 1000);
+const rel = (over: Partial<HelmReleaseDTO>): HelmReleaseDTO => ({
+  name: "web", namespace: "apps", chart: "web-1.2.0", appVersion: "1.2", status: "deployed", revision: 3, updatedUnix: nowS - 600, ...over,
+});
+const hist = (revision: number, status: string, description = ""): HelmHistoryEntryDTO => ({
+  revision, status, chart: `web-1.${revision}.0`, appVersion: `1.${revision}`, description, updatedUnix: nowS - 1000 * (10 - revision),
+});
 
-const deployed: HelmReleaseDTO = {
-  name: "nginx-ingress",
-  namespace: "ingress-nginx",
-  chart: "ingress-nginx-4.10.0",
-  appVersion: "1.10.0",
-  status: "deployed",
-  revision: 3,
-  updatedUnix: Math.floor(Date.now() / 1000) - 600,
-};
-
-const failed: HelmReleaseDTO = {
-  name: "cert-manager",
-  namespace: "cert-manager",
-  chart: "cert-manager-1.14.2",
-  appVersion: "1.14.2",
-  status: "failed",
-  revision: 2,
-  updatedUnix: Math.floor(Date.now() / 1000) - 3600,
-};
-
-const superseded: HelmReleaseDTO = {
-  name: "monitoring",
-  namespace: "monitoring",
-  chart: "kube-prometheus-stack-56.0.0",
-  appVersion: "0.70.0",
-  status: "superseded",
-  revision: 1,
-  updatedUnix: 0,
-};
-
-const historyEntries: HelmHistoryEntryDTO[] = [
-  { revision: 3, status: "deployed", chart: "ingress-nginx-4.10.0", appVersion: "1.10.0", description: "Upgrade complete", updatedUnix: Math.floor(Date.now() / 1000) - 600 },
-  { revision: 2, status: "superseded", chart: "ingress-nginx-4.9.0", appVersion: "1.9.1", description: "Upgrade complete", updatedUnix: Math.floor(Date.now() / 1000) - 86400 },
-  { revision: 1, status: "superseded", chart: "ingress-nginx-4.8.0", appVersion: "1.8.0", description: "Install complete", updatedUnix: Math.floor(Date.now() / 1000) - 172800 },
-];
-
-function seedReleases(releases: HelmReleaseDTO[]) {
-  useFleet.setState((s) => ({
-    helm: {
-      ...s.helm,
-      cluster: "homelab",
-      releases,
-      available: true,
-      message: "",
-      loading: false,
-    },
-  }));
+function seed(releases: HelmReleaseDTO[], over: Record<string, unknown> = {}) {
+  useFleet.setState((s) => ({ helm: { ...s.helm, cluster: "x", releases, available: true, message: "", loading: false, snapshotAt: 1000, error: null, ...over } }));
 }
-
-function seedWithDetail(release: HelmReleaseDTO, history: HelmHistoryEntryDTO[], values: string) {
-  useFleet.setState((s) => ({
-    helm: {
-      ...s.helm,
-      cluster: "homelab",
-      releases: [release],
-      available: true,
-      message: "",
-      loading: false,
-      selected: { namespace: release.namespace, name: release.name },
-      history,
-      values,
-      detailLoading: false,
-    },
-  }));
+function select(r: HelmReleaseDTO, history: HelmHistoryEntryDTO[] = [], extra: Record<string, unknown> = {}) {
+  useFleet.setState((s) => ({ helm: { ...s.helm, selected: { namespace: r.namespace, name: r.name }, history, values: "", detailLoading: false, ...extra } }));
 }
+const insp = () => within(screen.getByTestId("lens-inspector"));
+const rowsText = () => [...document.querySelectorAll(".lens-row")].map((r) => r.textContent ?? "");
 
-describe("HelmView", () => {
-  beforeEach(() => {
-    useFleet.getState().clearHelm();
-    vi.clearAllMocks();
+describe("releaseHealth", () => {
+  it("maps helm's vocabulary; pending past the deadline is stuck; historical never faults", () => {
+    expect(releaseHealth(rel({}), nowS).kind).toBe("ok");
+    expect(releaseHealth(rel({ status: "failed" }), nowS).kind).toBe("fault");
+    expect(releaseHealth(rel({ status: "pending-upgrade", updatedUnix: nowS - 60 }), nowS)).toEqual({ kind: "progressing", label: "pending-upgrade" });
+    expect(releaseHealth(rel({ status: "pending-upgrade", updatedUnix: nowS - PENDING_DEADLINE_S - 1 }), nowS)).toEqual({ kind: "degraded", label: "stuck pending-upgrade" });
+    expect(releaseHealth(rel({ status: "pending-install", updatedUnix: 0 }), nowS).kind).toBe("progressing");
+    expect(releaseHealth(rel({ status: "superseded" }), nowS).kind).toBe("unknown");
+    expect(releaseHealth(rel({ status: "uninstalled" }), nowS).kind).toBe("unknown");
+  });
+});
+
+describe("HelmView (redesign step 5)", () => {
+  beforeEach(() => { useFleet.getState().clearHelm(); vi.clearAllMocks(); });
+
+  it("the required empty gate: a complete snapshot with no releases says what was searched, offers no install", () => {
+    seed([]);
+    render(<HelmView cluster="x" />);
+    expect(screen.getByText("No Helm releases on this cluster.")).toBeTruthy();
+    expect(screen.getByText(/across all namespaces found no deployed, failed, pending or uninstalling release/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /install/i })).toBeNull();
   });
 
-  // ----- capability-absent state -----
-
-  it("shows honest empty state when not available (helm not found)", () => {
-    useFleet.setState((s) => ({
-      helm: { ...s.helm, cluster: "homelab", available: false, message: "helm not found", loading: false },
-    }));
-    const { getByText } = render(<HelmView cluster="homelab" />);
-    expect(getByText(/helm not found - install helm or set KLYX_HELM_PATH to inspect releases/)).toBeTruthy();
+  it("a missing CLI and a failed first read are distinct unreadable states, never an empty list", () => {
+    seed([], { available: false, message: "helm not found", snapshotAt: null });
+    const first = render(<HelmView cluster="x" />);
+    expect(screen.getByText("helm CLI not found.")).toBeTruthy();
+    expect(screen.queryByText("No Helm releases on this cluster.")).toBeNull();
+    first.unmount();
+    seed([], { available: false, message: "secrets is forbidden", error: "secrets is forbidden", snapshotAt: null });
+    render(<HelmView cluster="x" />);
+    expect(screen.getByText("Could not read Helm releases.")).toBeTruthy();
+    expect(screen.getByText("secrets is forbidden")).toBeTruthy();
+    expect(screen.queryByText("No Helm releases on this cluster.")).toBeNull();
   });
 
-  it("shows raw message when available:false and message is not PATH-related", () => {
-    useFleet.setState((s) => ({
-      helm: { ...s.helm, cluster: "homelab", available: false, message: "cluster not connected: homelab", loading: false },
-    }));
-    const { getByText } = render(<HelmView cluster="homelab" />);
-    expect(getByText("cluster not connected: homelab")).toBeTruthy();
+  it("before the first snapshot it is loading, never empty", () => {
+    seed([], { snapshotAt: null, loading: true });
+    render(<HelmView cluster="x" />);
+    expect(screen.queryByText("No Helm releases on this cluster.")).toBeNull();
   });
 
-  // ----- release list rendering -----
-
-  it("renders rows for seeded releases", () => {
-    seedReleases([deployed, failed]);
-    const { getAllByText } = render(<HelmView cluster="homelab" />);
-    // nginx-ingress appears once (name only); cert-manager appears in both name and namespace columns
-    expect(getAllByText("nginx-ingress").length).toBeGreaterThanOrEqual(1);
-    expect(getAllByText("cert-manager").length).toBeGreaterThanOrEqual(1);
+  it("a failed re-read keeps the last snapshot: '*' count, banner, no unqualified claim", () => {
+    seed([rel({})], { error: "context deadline exceeded" });
+    render(<HelmView cluster="x" />);
+    expect(screen.getByText("1*")).toBeTruthy();
+    expect(screen.getByText(/showing the last good snapshot/)).toBeTruthy();
+    expect(screen.getByText("none known failed (last snapshot)")).toBeTruthy();
+    expect(screen.queryByText("all deployed")).toBeNull();
   });
 
-  it("shows empty state when no releases", () => {
-    seedReleases([]);
-    const { getByText } = render(<HelmView cluster="homelab" />);
-    expect(getByText(/No Helm releases on this cluster/)).toBeTruthy();
+  it("broken first: failed, then stuck pending, then in progress, then deployed; header counts match", () => {
+    seed([
+      rel({ name: "ok" }),
+      rel({ name: "fresh", status: "pending-upgrade", updatedUnix: nowS - 30 }),
+      rel({ name: "stuck", status: "pending-upgrade", updatedUnix: nowS - 3600 }),
+      rel({ name: "bad", status: "failed" }),
+    ]);
+    render(<HelmView cluster="x" />);
+    const rows = rowsText();
+    expect(rows[0]).toContain("bad");
+    expect(rows[1]).toContain("stuck pending-upgrade");
+    expect(rows[2]).toContain("fresh");
+    expect(rows[3]).toContain("ok");
+    expect(screen.getByText("▲ 1 failed · 1 stuck pending")).toBeTruthy();
+    expect(screen.getByText("1 in progress")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /^Pending/ }));
+    expect(rowsText().length).toBe(2);
   });
 
-  it("deployed status dot renders with success color", () => {
-    seedReleases([deployed]);
-    const { container } = render(<HelmView cluster="homelab" />);
-    const dots = container.querySelectorAll("span[style*='border-radius: 50%']");
-    // At least one dot should have the success color
-    const successDot = Array.from(dots).find((el) =>
-      (el as HTMLElement).style.background.includes("color-text-success"),
-    );
-    expect(successDot).toBeTruthy();
+  it("auto-selects the first release needing attention once, from a fresh snapshot only", () => {
+    seed([rel({ name: "ok" }), rel({ name: "bad", status: "failed" })]);
+    render(<HelmView cluster="x" />);
+    expect(openHelmRelease).not.toHaveBeenCalled(); // cached snapshot at entry
+    act(() => seed([rel({ name: "ok" }), rel({ name: "bad", status: "failed" })], { snapshotAt: 2000 }));
+    expect(openHelmRelease).toHaveBeenCalledWith("x", "apps", "bad");
   });
 
-  it("failed status shows danger color text", () => {
-    seedReleases([failed]);
-    // The status "failed" should cause a danger-colored dot
-    const { container } = render(<HelmView cluster="homelab" />);
-    const dots = container.querySelectorAll("span[style*='border-radius: 50%']");
-    const dangerDot = Array.from(dots).find((el) =>
-      (el as HTMLElement).style.background.includes("color-text-danger"),
-    );
-    expect(dangerDot).toBeTruthy();
+  it("a failed release's verdict carries helm's own account; earlier failures stay muted history", () => {
+    const r = rel({ status: "failed", revision: 4 });
+    seed([r]);
+    select(r, [hist(4, "failed", 'Upgrade "web" failed: context deadline exceeded'), hist(3, "superseded", "Upgrade complete"), hist(2, "failed", "old failure")]);
+    render(<HelmView cluster="x" />);
+    expect(insp().getAllByText('Upgrade "web" failed: context deadline exceeded').length).toBeGreaterThan(0);
+    const oldRow = insp().getByText("old failure").closest("li") as HTMLElement;
+    const oldStatus = within(oldRow).getByText("failed");
+    expect(oldStatus.style.color).toBe("var(--color-text-tertiary)");
+    const currentStatus = within(insp().getByText("rev 4").closest("li") as HTMLElement).getByText("failed · current");
+    expect(currentStatus.style.color).toBe("var(--color-text-danger)");
   });
 
-  it("zero updatedUnix renders as em-dash", () => {
-    seedReleases([superseded]);
-    const { getAllByText } = render(<HelmView cluster="homelab" />);
-    expect(getAllByText("—").length).toBeGreaterThan(0);
+  it("a stuck release explains the deadline and the way out in words", () => {
+    const r = rel({ status: "pending-upgrade", updatedUnix: nowS - 3600 });
+    seed([r]);
+    select(r, [hist(3, "pending-upgrade", "Preparing upgrade")]);
+    render(<HelmView cluster="x" />);
+    expect(insp().getByText(/pending-upgrade for \d+[mh] - longer than 10m/)).toBeTruthy();
+    expect(insp().getByText(/Helm refuses new operations/)).toBeTruthy();
   });
 
-  it("row click calls openHelmRelease", () => {
-    seedReleases([deployed]);
-    const { getByText } = render(<HelmView cluster="homelab" />);
-    fireEvent.click(getByText("nginx-ingress"));
-    expect(openHelmRelease).toHaveBeenCalledWith("homelab", "ingress-nginx", "nginx-ingress");
+  it("history and values read failures are shown, never as empty", () => {
+    const r = rel({});
+    seed([r]);
+    select(r, [], { historyError: "release: not found", valuesError: "forbidden" });
+    render(<HelmView cluster="x" />);
+    expect(insp().getByText("History unreadable: release: not found")).toBeTruthy();
+    expect(insp().getByText("Values unreadable: forbidden")).toBeTruthy();
+    expect(insp().queryByText("No user-supplied values.")).toBeNull();
   });
 
-  // ----- detail panel -----
-
-  it("detail panel renders when release is selected with history", () => {
-    seedWithDetail(deployed, historyEntries, "");
-    const { getAllByText, getByText } = render(<HelmView cluster="homelab" />);
-    // Header contains nginx-ingress (may appear multiple times between list + detail panel)
-    expect(getAllByText("nginx-ingress").length).toBeGreaterThanOrEqual(1);
-    // History section title
-    expect(getByText("History")).toBeTruthy();
-    // All 3 revisions appear in history table
-    const rev3 = getAllByText("3");
-    expect(rev3.length).toBeGreaterThanOrEqual(1);
-    const rev2 = getAllByText("2");
-    expect(rev2.length).toBeGreaterThanOrEqual(1);
-    const rev1 = getAllByText("1");
-    expect(rev1.length).toBeGreaterThanOrEqual(1);
-    // Description text (appears in history rows)
-    expect(getAllByText("Upgrade complete").length).toBeGreaterThanOrEqual(1);
+  it("secondary rolls back to the last GOOD revision (skips failed); confirm is pinned to the release", () => {
+    const r = rel({ status: "failed", revision: 5 });
+    seed([r]);
+    select(r, [hist(5, "failed"), hist(4, "failed"), hist(3, "superseded"), hist(2, "superseded")]);
+    render(<HelmView cluster="x" />);
+    fireEvent.click(insp().getByRole("button", { name: "Roll back to rev 3…" }));
+    fireEvent.click(screen.getByRole("button", { name: "Roll back" }));
+    expect(helmRollback).toHaveBeenCalledWith("x", "apps", "web", 3, { wait: true, noHooks: false, timeoutSeconds: 120 });
   });
 
-  it("rollback button only shows on non-current revisions", () => {
-    seedWithDetail(deployed, historyEntries, "");
-    const { getAllByText, queryAllByText } = render(<HelmView cluster="homelab" />);
-    // Revisions 1 and 2 should have rollback buttons; 3 (current) should not
-    const rollbackBtns = getAllByText("rollback");
-    expect(rollbackBtns).toHaveLength(2);
-    // Confirm there are exactly 2 rollback buttons (not on rev 3)
-    expect(queryAllByText("rollback")).toHaveLength(2);
+  it("a release missing from a complete snapshot is removed, read-only; from a failed re-read it is not", () => {
+    const r = rel({ name: "gone", status: "failed" });
+    seed([r, rel({ name: "other" })]);
+    select(r, [hist(3, "failed", "boom")]);
+    render(<HelmView cluster="x" />);
+    act(() => seed([rel({ name: "other" })], { error: "timeout" }));
+    expect(screen.queryByText("Release removed.")).toBeNull();
+    act(() => seed([rel({ name: "other" })], { error: null, snapshotAt: 3000 }));
+    expect(insp().getByText("Release removed.")).toBeTruthy();
+    expect(insp().queryByRole("button", { name: /Roll back|Re-read/ })).toBeNull();
   });
 
-  it("rollback button opens the composer with from → to tiles naming revision, chart, appVersion", () => {
-    seedWithDetail(deployed, historyEntries, "");
-    const { getAllByText, getByRole, getByText } = render(<HelmView cluster="homelab" />);
-    const rollbackBtns = getAllByText("rollback");
-    // Click the first one (revision 2 after sort desc: rev3, rev2, rev1)
-    fireEvent.click(rollbackBtns[0]);
-    expect(getByRole("dialog", { name: "Roll back nginx-ingress" })).toBeTruthy();
-    // From/to context: current vs target, chart included - the target running
-    // a different chart version is the interesting fact of this rollback.
-    expect(getByText("rev 3 · ingress-nginx-4.10.0 (1.10.0)")).toBeTruthy();
-    expect(getByText("rev 2 · ingress-nginx-4.9.0 (1.9.1)")).toBeTruthy();
-  });
-
-  it("confirming rollback passes the default options: wait on, hooks on, 120s", () => {
-    seedWithDetail(deployed, historyEntries, "");
-    const { getAllByText, getByRole } = render(<HelmView cluster="homelab" />);
-    fireEvent.click(getAllByText("rollback")[0]);
-    fireEvent.click(getByRole("button", { name: "Roll back" }));
-    expect(helmRollback).toHaveBeenCalledWith("homelab", "ingress-nginx", "nginx-ingress", 2, {
-      wait: true,
-      noHooks: false,
-      timeoutSeconds: 120,
-    });
-  });
-
-  it("toggling wait/skip-hooks and timeout threads through to helmRollback", () => {
-    seedWithDetail(deployed, historyEntries, "");
-    const { getAllByText, getByRole, getByLabelText } = render(<HelmView cluster="homelab" />);
-    fireEvent.click(getAllByText("rollback")[0]);
-    fireEvent.change(getByLabelText("rollback timeout"), { target: { value: "300" } });
-    fireEvent.click(getByRole("button", { name: /Skip hooks/ }));
-    fireEvent.click(getByRole("button", { name: /Wait for readiness/ }));
-    // Timeout only applies while waiting; with wait off the select is disabled.
-    expect((getByLabelText("rollback timeout") as HTMLSelectElement).disabled).toBe(true);
-    fireEvent.click(getByRole("button", { name: "Roll back" }));
-    expect(helmRollback).toHaveBeenCalledWith("homelab", "ingress-nginx", "nginx-ingress", 2, {
-      wait: false,
-      noHooks: true,
-      timeoutSeconds: 300,
-    });
-  });
-
-  it("cancelling rollback dialog does not call helmRollback", () => {
-    seedWithDetail(deployed, historyEntries, "");
-    const { getAllByText, getByText } = render(<HelmView cluster="homelab" />);
-    fireEvent.click(getAllByText("rollback")[0]);
-    fireEvent.click(getByText("Cancel"));
-    expect(helmRollback).not.toHaveBeenCalled();
-  });
-
-  // ----- values pane -----
-
-  it("shows 'no user-supplied values' when values is empty string", () => {
-    seedWithDetail(deployed, historyEntries, "");
-    const { getByText } = render(<HelmView cluster="homelab" />);
-    expect(getByText("no user-supplied values")).toBeTruthy();
-  });
-
-  it("renders values content in pre block when present", () => {
-    seedWithDetail(deployed, historyEntries, "replicaCount: 2\nimage:\n  tag: latest");
-    render(<HelmView cluster="homelab" />);
-    expect(document.body.textContent).toContain("replicaCount: 2");
-  });
-
-  it("renders the masking hint above the values pane", () => {
-    seedWithDetail(deployed, historyEntries, "secret: <redacted>");
-    const { getByText } = render(<HelmView cluster="homelab" />);
-    expect(getByText("secret-shaped values are masked; the source chart in Git holds the full set")).toBeTruthy();
-  });
-
-  it("close button clears selected release", () => {
-    seedWithDetail(deployed, historyEntries, "");
-    const { getByRole } = render(<HelmView cluster="homelab" />);
-    fireEvent.click(getByRole("button", { name: "close release detail panel" }));
-    expect(useFleet.getState().helm.selected).toBeNull();
-  });
-
-  it("sorts failed releases first (broken-first triage)", () => {
-    seedReleases([deployed, superseded, failed]);
-    const { getAllByTitle } = render(<HelmView cluster="homelab" />);
-    const names = getAllByTitle(/^(nginx-ingress|cert-manager|monitoring)$/).map((el) => el.textContent);
-    expect(names[0]).toBe("cert-manager");
-  });
-
-  it("status filter narrows to failed releases", () => {
-    seedReleases([deployed, failed]);
-    const { getByRole, queryByTitle } = render(<HelmView cluster="homelab" />);
-    fireEvent.click(getByRole("button", { name: /^failed/ }));
-    expect(queryByTitle("nginx-ingress")).toBeNull();
-    expect(queryByTitle("cert-manager-1.14.2")).toBeTruthy(); // failed release's chart cell
-  });
-
-  it("namespace select and search narrow the list", () => {
-    seedReleases([deployed, failed]);
-    const { getByLabelText, queryByTitle, getByPlaceholderText } = render(<HelmView cluster="homelab" />);
-    fireEvent.change(getByLabelText("filter release namespace"), { target: { value: "ingress-nginx" } });
-    expect(queryByTitle("cert-manager")).toBeNull();
-    fireEvent.change(getByLabelText("filter release namespace"), { target: { value: "" } });
-    fireEvent.change(getByPlaceholderText("filter releases"), { target: { value: "prometheus" } });
-    expect(queryByTitle("nginx-ingress")).toBeNull();
-  });
-
-  it("summary strip counts deployed and failed", () => {
-    seedReleases([deployed, superseded, failed]);
-    const { getByText } = render(<HelmView cluster="homelab" />);
-    // deployed + superseded both count as settled
-    const strip = getByText("releases").parentElement?.parentElement;
-    expect(strip?.textContent).toContain("deployed");
-    expect(strip?.textContent).toContain("failed");
-    expect(strip?.textContent).toContain("3"); // total releases
-  });
-
-  it("j then Enter opens the keyboard-selected release", () => {
-    seedReleases([failed, deployed]);
-    render(<HelmView cluster="homelab" />);
-    fireEvent.keyDown(window, { key: "j" });
-    fireEvent.keyDown(window, { key: "Enter" });
-    // failed sorts first, so the first kb selection is cert-manager
-    expect(openHelmRelease).toHaveBeenCalledWith("homelab", "cert-manager", "cert-manager");
+  it("direct navigation to a release the filters hide clears them once", () => {
+    const ok = rel({ name: "ok" });
+    seed([ok, rel({ name: "bad", status: "failed" })]);
+    render(<HelmView cluster="x" />);
+    fireEvent.click(screen.getByRole("button", { name: /^Failed/ }));
+    expect(rowsText().join(" ")).not.toContain("ok");
+    act(() => select(ok));
+    expect(rowsText().join(" ")).toContain("ok");
   });
 });

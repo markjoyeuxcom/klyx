@@ -1,515 +1,450 @@
-import { useEffect, useCallback, useMemo, useRef, useState } from "react";
-import { IconAnchor, IconX } from "@tabler/icons-react";
-import { inputWell, EmptyState, FilterButton, MetersStrip, SkeletonRows, btn, ellipsis } from "../chrome/primitives";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { IconAnchor } from "@tabler/icons-react";
 import { useFleet } from "../store/fleet";
 import type { HelmReleaseDTO, HelmHistoryEntryDTO } from "../store/fleet";
-import { listHelmReleases, openHelmRelease, helmRollback } from "../bridge/helm";
-import type { RollbackOptions } from "../bridge/helm";
-import { MetaTile, OperationDialog, OptionTile } from "../chrome/OperationDialog";
-import { useResizablePanel } from "../chrome/useResizablePanel";
+import { listHelmReleases, openHelmRelease, helmRollback, HELM_CLI_MISSING } from "../bridge/helm";
 import { useListKeys } from "../chrome/useListKeys";
-import { InspectorFacts, InspectorSection, InspectorIdle, InspectorStatus } from "./ResourceInspector";
 import { CopyButton } from "../chrome/CopyButton";
+import { EmptyState } from "../chrome/EmptyState";
+import { SkeletonRows } from "../chrome/SkeletonRows";
+import { WatchErrorBanner } from "../chrome/WatchErrorBanner";
+import { VirtualList, type VirtualListHandle } from "../chrome/VirtualList";
 import { YamlBlock } from "../chrome/YamlBlock";
-import { Age, UpdatedAt, useReceivedAt } from "../chrome/Age";
+import { Age, UpdatedAt, formatAge, useNow } from "../chrome/Age";
+import { InspectorStatus } from "./ResourceInspector";
+import { VerdictLamp } from "../health/VerdictView";
+import { LensLayout, LensTable, TABLE_ROW_HEIGHT, type DatasetState } from "../layout/LensLayout";
+import { InspectorBlock, InspectorLayout, type MenuItem } from "../layout/InspectorLayout";
+import { fitColumns, type ColumnDef } from "../layout/columns";
 import { loadClusterPrefs, loadSearch, saveHelmViewPrefs, saveSearch } from "../store/persist";
+import { RollbackComposerDialog } from "./HelmRollbackDialog";
 
-// Helm status color map — deployed/failed/superseded/pending-*
-const statusColor = (status: string): string => {
-  switch (status) {
-    case "deployed":
-      return "var(--color-text-success)";
-    case "failed":
-      return "var(--color-text-danger)";
-    case "superseded":
-      return "var(--color-text-tertiary)";
-    default:
-      // pending-install / pending-upgrade / pending-rollback / uninstalling
-      return "var(--color-text-warning)";
+// HelmView - Helm releases on the workspace template (spec §6 step 5). Helm is
+// a bounded CLI snapshot (`helm list` on demand), never a live watch: the
+// header names the snapshot time, a failed re-read keeps the last good
+// snapshot marked as such, and a missing CLI or a failed read is never an
+// empty list. Release inspection and rollback only - no chart catalogue, no
+// install. Documented domain variant of the action band: History is the
+// inspector's first section (the spec's Helm primary is history, which is
+// content here, not a verb), so the primary action re-reads it; rollback to
+// the last good revision is the safeguarded secondary and every other
+// revision is in More. All rollbacks go through the composer dialog with its
+// protected-cluster arming.
+
+type Role = { kind: "fault" | "degraded" | "progressing" | "ok" | "unknown"; label: string };
+
+// A pending-* or uninstalling release is an operation in flight until it has
+// been in that state longer than twice helm's default 5m --timeout; past that
+// it is stuck (helm refuses new operations on it), never silently "pending".
+export const PENDING_DEADLINE_S = 600;
+const IN_FLIGHT = new Set(["pending-install", "pending-upgrade", "pending-rollback", "uninstalling"]);
+const HISTORICAL = new Set(["superseded", "uninstalled"]);
+
+// releaseHealth maps helm's status vocabulary onto the shared roles (only
+// faults glow). Historical states never fault.
+export function releaseHealth(r: { status: string; updatedUnix: number }, nowS: number): Role {
+  if (r.status === "deployed") return { kind: "ok", label: "deployed" };
+  if (r.status === "failed") return { kind: "fault", label: "failed" };
+  if (IN_FLIGHT.has(r.status)) {
+    if (r.updatedUnix > 0 && nowS - r.updatedUnix > PENDING_DEADLINE_S) return { kind: "degraded", label: `stuck ${r.status}` };
+    return { kind: "progressing", label: r.status };
   }
-};
-
-const statusDot = (status: string): string => {
-  switch (status) {
-    case "deployed":
-      return "var(--color-text-success)";
-    case "failed":
-      return "var(--color-text-danger)";
-    case "superseded":
-      return "var(--color-text-tertiary)";
-    default:
-      return "var(--color-text-warning)";
-  }
-};
-
-// statusGroup buckets helm's statuses for triage: failed floats first,
-// in-flight pending-*/uninstalling states next, settled releases last.
-type HelmStatusGroup = "failed" | "pending" | "ok";
-export function statusGroup(status: string): HelmStatusGroup {
-  if (status === "failed") return "failed";
-  if (status === "deployed" || status === "superseded") return "ok";
-  return "pending";
+  if (HISTORICAL.has(r.status)) return { kind: "unknown", label: `${r.status} (historical)` };
+  return { kind: "unknown", label: r.status || "unknown" };
 }
-const groupRank: Record<HelmStatusGroup, number> = { failed: 0, pending: 1, ok: 2 };
+const RANK: Record<Role["kind"], number> = { fault: 0, degraded: 1, progressing: 2, unknown: 3, ok: 4 };
+const needsAttention = (role: Role) => role.kind === "fault" || role.kind === "degraded";
+const inFlight = (r: HelmReleaseDTO) => IN_FLIGHT.has(r.status);
 
-type HelmFilter = "all" | HelmStatusGroup;
+const ROLE_TEXT: Record<string, string> = {
+  fault: "var(--color-text-danger)",
+  degraded: "var(--color-text-warning)",
+  progressing: "var(--color-text-secondary)",
+  ok: "var(--color-text-secondary)",
+  unknown: "var(--color-text-tertiary)",
+};
+const roleTone = (k: string) => (k === "fault" ? "danger" : k === "degraded" ? "warning" : k === "ok" ? "success" : "muted") as "danger" | "warning" | "success" | "muted";
+function Lamp({ role }: { role: Role }) {
+  return <span role="img" aria-label={role.label} style={{ display: "inline-flex", justifySelf: "center" }}><VerdictLamp health={role} size={8} /></span>;
+}
+const cellStyle: React.CSSProperties = { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 };
+const keyOf = (r: { namespace: string; name: string }) => `${r.namespace}/${r.name}`;
 
-function matchesQuery(r: HelmReleaseDTO, query: string): boolean {
-  const q = query.trim().toLowerCase();
+type HelmFilter = "all" | "failed" | "pending";
+
+function matchesQuery(r: HelmReleaseDTO, q: string): boolean {
   if (!q) return true;
-  return [r.name, r.namespace, r.chart, r.appVersion, r.status].some((v) => v.toLowerCase().includes(q));
+  return [r.name, r.namespace, r.chart, r.appVersion, r.status].some((v) => (v ?? "").toLowerCase().includes(q));
 }
 
-// columns: dot | name | namespace | chart | appVersion | revision | updated
-const gridCols = "12px minmax(0,1.4fr) minmax(0,0.8fr) minmax(0,1.2fr) 80px 52px 80px";
+const COLUMNS: (ColumnDef & { label: string })[] = [
+  { id: "lamp", label: "", width: 16, priority: 0 },
+  { id: "name", label: "Release", width: 240, priority: 0, flex: true },
+  { id: "status", label: "Status", width: 170, priority: 1 },
+  { id: "chart", label: "Chart", width: 180, priority: 2, grow: 0.6 },
+  { id: "app", label: "App version", width: 96, priority: 3 },
+  { id: "rev", label: "Rev", width: 44, priority: 2 },
+  { id: "updated", label: "Updated", width: 76, priority: 1 },
+];
 
 export function HelmView({ cluster }: { cluster: string }) {
   const helm = useFleet((s) => s.helm);
   const isProtected = useFleet((s) => s.clusters.find((c) => c.name === cluster)?.protected ?? false);
+  const nowS = Math.floor(useNow() / 1000);
 
-  // Filters follow the persistence rules of the other triage views: the
-  // namespace survives a relaunch, the free-text query survives section
-  // switches within this run.
+  // namespace survives a relaunch, the query survives section switches
   const [filter, setFilter] = useState<HelmFilter>("all");
   const [namespace, setNamespace] = useState<string>(() => loadClusterPrefs(cluster).helm?.namespace ?? "");
   const [query, setQuery] = useState<string>(() => loadSearch(cluster, "helm"));
-  const [kbKey, setKbKey] = useState<string | null>(null);
+  const [cursorKey, setCursorKey] = useState<string | null>(null);
+  const [bodyWidth, setBodyWidth] = useState(1100);
   const searchRef = useRef<HTMLInputElement>(null);
+  const listRef = useRef<VirtualListHandle>(null);
 
   useEffect(() => {
     void listHelmReleases(cluster);
     return () => { useFleet.getState().clearHelm(); };
   }, [cluster]);
-
   useEffect(() => {
     saveHelmViewPrefs(cluster, { namespace });
     saveSearch(cluster, "helm", query);
   }, [cluster, namespace, query]);
 
-  const onRefresh = () => { void listHelmReleases(cluster); };
+  const mine = helm.cluster === cluster;
+  const releases = useMemo(() => (mine ? helm.releases : []), [mine, helm.releases]);
+  const snapshotAt = mine ? helm.snapshotAt ?? null : null;
+  const listError = mine ? helm.error ?? null : null;
+  const cliMissing = mine && !helm.loading && !helm.available && helm.message === HELM_CLI_MISSING;
+  // evidence of the current release set: a successful snapshot is complete;
+  // a failed re-read leaves the last good snapshot (stale); nothing read yet
+  // is pending, and a failure with no prior snapshot is failed
+  const evidence: "complete" | "stale" | "pending" | "failed" = snapshotAt != null ? (listError ? "stale" : "complete") : listError || cliMissing ? "failed" : "pending";
 
-  const releases = helm.cluster === cluster ? helm.releases : [];
-  const receivedAt = useReceivedAt(helm.cluster === cluster && !helm.loading ? helm.releases : null);
+  const roleOf = useCallback((r: HelmReleaseDTO) => releaseHealth(r, nowS), [nowS]);
+  const q = query.trim().toLowerCase();
+  const ordered = useMemo(
+    () => [...releases].sort((a, b) => RANK[roleOf(a).kind] - RANK[roleOf(b).kind] || a.namespace.localeCompare(b.namespace) || a.name.localeCompare(b.name)),
+    [releases, roleOf],
+  );
   const namespaces = useMemo(() => Array.from(new Set(releases.map((r) => r.namespace))).sort(), [releases]);
-  // Broken-first: a failed release floats to the top like every other lens;
-  // the backend returns helm's own ordering, which buries failures.
-  const orderedReleases = useMemo(
-    () => [...releases].sort((a, b) => groupRank[statusGroup(a.status)] - groupRank[statusGroup(b.status)] || a.namespace.localeCompare(b.namespace) || a.name.localeCompare(b.name)),
-    [releases],
-  );
-  const visibleReleases = useMemo(
-    () => orderedReleases.filter((r) => (!namespace || r.namespace === namespace) && (filter === "all" || statusGroup(r.status) === filter) && matchesQuery(r, query)),
-    [orderedReleases, namespace, filter, query],
-  );
-  const failed = releases.filter((r) => statusGroup(r.status) === "failed").length;
-  const pendingCount = releases.filter((r) => statusGroup(r.status) === "pending").length;
-  const deployed = releases.filter((r) => statusGroup(r.status) === "ok").length;
+  const visible = useMemo(() => ordered.filter((r) => {
+    if (namespace && r.namespace !== namespace) return false;
+    if (filter === "failed" && r.status !== "failed") return false;
+    if (filter === "pending" && !inFlight(r)) return false;
+    return matchesQuery(r, q);
+  }), [ordered, namespace, filter, q]);
 
-  // Keyboard parity: j/k moves a key-stable selection, Enter opens the
-  // release, Esc closes the panel, / focuses the filter.
-  const kbIdx = kbKey === null ? -1 : visibleReleases.findIndex((r) => `${r.namespace}/${r.name}` === kbKey);
-  const handleKbSelect = useCallback((idx: number) => {
-    const r = visibleReleases[idx];
-    if (r) setKbKey(`${r.namespace}/${r.name}`);
-  }, [visibleReleases]);
-  const handleKbActivate = useCallback((idx: number) => {
-    const r = visibleReleases[idx];
+  const failed = releases.filter((r) => r.status === "failed").length;
+  const pending = releases.filter(inFlight).length;
+  const stuck = releases.filter((r) => roleOf(r).kind === "degraded").length;
+  const attention = releases.filter((r) => needsAttention(roleOf(r))).length;
+
+  // selection: the store owns it (the palette opens releases too)
+  const sel = mine ? helm.selected : null;
+  const selKey = sel ? keyOf(sel) : null;
+  const selected = selKey ? releases.find((r) => keyOf(r) === selKey) : undefined;
+  const lastRelease = useRef<HelmReleaseDTO | null>(null);
+  if (selected) lastRelease.current = selected;
+  if (selKey && lastRelease.current && keyOf(lastRelease.current) !== selKey && !selected) lastRelease.current = null;
+  // removed only when a complete snapshot no longer lists it
+  const removed = !!selKey && evidence === "complete" && !selected;
+  const select = useCallback((r: HelmReleaseDTO | null) => {
     if (r) void openHelmRelease(cluster, r.namespace, r.name);
-  }, [visibleReleases, cluster]);
-  const handleKbEscape = useCallback(() => {
-    if (useFleet.getState().helm.selected) useFleet.getState().selectHelmRelease(null);
-  }, []);
+    else useFleet.getState().selectHelmRelease(null);
+  }, [cluster]);
+
+  // direct navigation (palette) to a release the filters hide clears them once
+  const navigatedTo = useRef<string | null>(null);
+  useEffect(() => {
+    if (!selKey || navigatedTo.current === selKey) return;
+    navigatedTo.current = selKey;
+    if (selected && !visible.includes(selected)) { setFilter("all"); setNamespace(""); setQuery(""); }
+    setCursorKey(selKey);
+  }, [selKey, selected, visible]);
+
+  // one-shot auto-select of the first release needing attention, from the
+  // first complete snapshot of this visit (never from a cached one)
+  const autoSelect = useRef<"pending" | "done">("pending");
+  const entrySnapshot = useRef<number | null | undefined>(undefined);
+  if (entrySnapshot.current === undefined) entrySnapshot.current = snapshotAt;
+  const freshRead = evidence === "complete" && snapshotAt !== entrySnapshot.current;
+  useEffect(() => {
+    if (autoSelect.current === "done" || !freshRead) return;
+    autoSelect.current = "done";
+    if (useFleet.getState().helm.selected) return;
+    const r = visible.find((x) => needsAttention(roleOf(x)));
+    if (r) { setCursorKey(keyOf(r)); select(r); }
+  }, [freshRead, visible, roleOf, select]);
+
+  const cursorIdx = cursorKey === null ? -1 : visible.findIndex((r) => keyOf(r) === cursorKey);
+  const close = () => { autoSelect.current = "done"; select(null); };
   useListKeys({
-    count: visibleReleases.length,
-    selected: kbIdx,
-    onSelect: handleKbSelect,
-    onActivate: handleKbActivate,
-    onEscape: handleKbEscape,
+    count: visible.length,
+    selected: cursorIdx,
+    onSelect: (idx) => { const r = visible[idx]; if (r) { setCursorKey(keyOf(r)); listRef.current?.scrollToIndex(idx); } },
+    onActivate: (idx) => { const r = visible[idx]; if (r) { setCursorKey(keyOf(r)); autoSelect.current = "done"; select(r); } },
+    onEscape: close,
     searchRef,
   });
 
-  // availability gate
-  if (!helm.loading && !helm.available) {
-    const displayMsg = helm.message.includes("helm not found")
-      ? "helm not found - install helm or set KLYX_HELM_PATH to inspect releases"
-      : helm.message || "helm not available for this cluster";
-    return (
-      <div style={{ padding: 24, color: "var(--color-text-secondary)", fontSize: 13 }}>
-        {displayMsg}
-      </div>
-    );
-  }
+  const fitted = useMemo(() => fitColumns(COLUMNS, bodyWidth), [bodyWidth]);
+  const show = (id: string) => fitted.visible.has(id);
+  const gridStyle = { gridTemplateColumns: fitted.template };
+
+  const clearFilters = () => { setFilter("all"); setNamespace(""); setQuery(""); };
+  let state: DatasetState = "ready";
+  if (evidence === "failed" && releases.length === 0) state = "unreadable";
+  else if (evidence === "pending" && releases.length === 0) state = "loading";
+  else if (releases.length === 0) state = "empty";
+  else if (visible.length === 0) state = "no-match";
+  // "*" = the last good snapshot; never an unqualified count
+  const marker = evidence === "stale" ? "*" : "";
+
+  const stateView = state === "loading" ? <SkeletonRows rows={6} label="reading Helm releases" />
+    : state === "unreadable" ? (cliMissing
+      ? <EmptyState icon={<IconAnchor size={28} stroke={1.2} />} title="helm CLI not found." hint="Klyx reads releases with helm list. Install helm or set KLYX_HELM_PATH, then refresh." />
+      : <EmptyState icon={<IconAnchor size={28} stroke={1.2} />} title="Could not read Helm releases." hint={listError ?? undefined} action={{ label: "Retry", onClick: () => void listHelmReleases(cluster) }} />)
+    : state === "empty"
+      ? <EmptyState icon={<IconAnchor size={28} stroke={1.2} />} title="No Helm releases on this cluster." hint="helm list across all namespaces found no deployed, failed, pending or uninstalling release. Releases installed by Flux helm-controller are Helm releases and appear here too." />
+      : <EmptyState icon={<IconAnchor size={28} stroke={1.2} />} title="No releases match the current filters." hint={`${releases.length}${marker} releases on this cluster.`} action={{ label: "Clear filters", onClick: clearFilters }} />;
+
+  const inspected = selected ?? (removed ? lastRelease.current : null);
 
   return (
-    <div style={{ padding: "16px 20px", display: "flex", gap: 0, height: "100%", boxSizing: "border-box" }}>
-      <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", minHeight: 0 }}>
-        <MetersStrip
-          note="broken first · helm status"
-          meters={[
-            { label: "releases", value: releases.length },
-            failed > 0 && { label: "failed", value: failed, tone: "danger" as const },
-            pendingCount > 0 && { label: "pending", value: pendingCount, tone: "warning" as const },
-            { label: "deployed", value: deployed, tone: "success" as const },
-            { label: "namespaces", value: namespaces.length },
-          ]}
-        />
-
-        {/* Controls row */}
-        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, flexWrap: "wrap", flexShrink: 0 }}>
-          <select
-            value={namespace}
-            onChange={(e) => setNamespace(e.target.value)}
-            aria-label="filter release namespace"
-            style={{ fontSize: 12, padding: "3px 6px", background: "var(--color-background-primary)", color: "var(--color-text-primary)", border: "0.5px solid var(--color-border-tertiary)", borderRadius: 4 }}
-          >
-            <option value="">all namespaces</option>
-            {namespaces.map((ns) => <option key={ns} value={ns}>{ns}</option>)}
-          </select>
-          <FilterButton label="all" count={releases.length} active={filter === "all"} onClick={() => setFilter("all")} />
-          <FilterButton label="failed" count={failed} active={filter === "failed"} onClick={() => setFilter("failed")} />
-          <FilterButton label="pending" count={pendingCount} active={filter === "pending"} onClick={() => setFilter("pending")} />
-          <FilterButton label="deployed" count={deployed} active={filter === "ok"} onClick={() => setFilter("ok")} />
-          <input
-            ref={searchRef}
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="filter releases"
-            aria-label="filter releases"
-            style={{ ...inputWell, marginLeft: "auto", width: 180 }}
-          />
-          <button onClick={onRefresh} style={btn}>refresh</button>
-          <UpdatedAt at={receivedAt} />
-        </div>
-
-        {/* List */}
-        {helm.loading && releases.length === 0 ? (
-          <SkeletonRows rows={6} label="loading releases" />
-        ) : releases.length === 0 ? (
-          <EmptyState
-            icon={<IconAnchor size={28} stroke={1.2} />}
-            title="No Helm releases on this cluster."
-            hint="Nothing installed via helm - Flux HelmReleases appear in the Flux lens instead."
-          />
-        ) : (
-          <div style={{ fontFamily: "var(--font-mono)", fontSize: 12, flex: 1, minHeight: 0, overflowY: "auto" }}>
-            {/* Header */}
-            <div style={{ display: "grid", gridTemplateColumns: gridCols, gap: 10, padding: "0 8px 6px", fontSize: 9, textTransform: "uppercase", letterSpacing: 0.5, color: "var(--color-text-tertiary)", borderBottom: "0.5px solid var(--color-border-secondary)" }}>
-              <span /><span>release</span><span>namespace</span><span>chart</span><span>app version</span><span>rev</span><span>updated</span>
-            </div>
-            {visibleReleases.length === 0 && (
-              <EmptyState
-                title="No releases match the current filter."
-                action={{ label: "Clear filters", onClick: () => { setFilter("all"); setNamespace(""); setQuery(""); } }}
-              />
-            )}
-            {/* Rows */}
-            {visibleReleases.map((r) => {
-              const isSelected = helm.selected?.namespace === r.namespace && helm.selected?.name === r.name;
-              const isKb = kbIdx >= 0 && kbKey === `${r.namespace}/${r.name}`;
+    <LensLayout
+      label="Helm"
+      title="Helm releases"
+      summary={state === "loading" || state === "unreadable" ? null : (
+        <>
+          <span className="t-number" style={{ color: "var(--color-text-secondary)" }}>{releases.length}{marker}</span>
+          {attention > 0
+            ? <span className="t-status" style={{ color: failed > 0 ? "var(--color-text-danger)" : "var(--color-text-warning)" }}>{failed > 0 ? "▲ " : ""}{[failed ? `${failed} failed` : "", stuck ? `${stuck} stuck pending` : ""].filter(Boolean).join(" · ")}</span>
+            : pending > 0 ? <span className="t-secondary">{pending} in progress</span>
+            : <span className="t-secondary">{evidence === "complete" ? (releases.length > 0 ? "all deployed" : "") : "none known failed (last snapshot)"}</span>}
+          {attention > 0 && pending - stuck > 0 && <span className="t-secondary">{pending - stuck} in progress</span>}
+        </>
+      )}
+      headerEnd={
+        <>
+          <span className="t-secondary" title="Read with helm list on demand - not a live watch.">snapshot</span>
+          <UpdatedAt at={snapshotAt} />
+          <button className="l-btn" onClick={() => void listHelmReleases(cluster)} disabled={mine && helm.loading}>{mine && helm.loading ? "Reading…" : "Refresh"}</button>
+        </>
+      }
+      controls={
+        <>
+          <label style={{ display: "flex" }}>
+            <span className="sr-only">Namespace</span>
+            <select className="l-input" value={namespace} onChange={(e) => setNamespace(e.target.value)}>
+              <option value="">All namespaces</option>
+              {namespaces.map((ns) => <option key={ns} value={ns}>{ns}</option>)}
+            </select>
+          </label>
+          <button className="l-chip" aria-pressed={filter === "all"} onClick={() => setFilter("all")}>All</button>
+          <button className="l-chip" aria-pressed={filter === "failed"} onClick={() => setFilter("failed")}>Failed {failed > 0 && <span style={{ color: "var(--color-text-danger)" }}>{failed}</span>}</button>
+          <button className="l-chip" aria-pressed={filter === "pending"} onClick={() => setFilter("pending")}>Pending {pending > 0 && <span style={{ color: stuck > 0 ? "var(--color-text-warning)" : "var(--color-text-secondary)" }}>{pending}</span>}</button>
+          <label style={{ display: "flex", flex: "0 1 260px", minWidth: 140, marginLeft: "auto" }}>
+            <span className="sr-only">Search Helm releases</span>
+            <input ref={searchRef} className="l-input" style={{ width: "100%" }} type="search" autoCapitalize="off" autoCorrect="off" spellCheck={false} value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search release, chart, version" />
+          </label>
+        </>
+      }
+      notice={listError && releases.length > 0 ? <WatchErrorBanner tool="Helm" failure="helm list failed - showing the last good snapshot" error={listError} /> : undefined}
+      state={state}
+      stateView={stateView}
+      body={
+        <LensTable minWidth={fitted.minWidth} onWidth={setBodyWidth}>
+          <div className="lens-table-head" role="row" style={gridStyle}>
+            {COLUMNS.filter((c) => show(c.id)).map((c) => <span key={c.id}>{c.label}</span>)}
+          </div>
+          <VirtualList
+            ref={listRef}
+            items={visible}
+            rowHeight={TABLE_ROW_HEIGHT}
+            rowKey={(r) => keyOf(r)}
+            style={{ flex: 1, minHeight: 0 }}
+            render={(r) => {
+              const k = keyOf(r);
+              const role = roleOf(r);
               return (
-                <div
-                  key={`${r.namespace}/${r.name}`}
-                  data-rowhost="true"
-                  aria-selected={isKb}
-                  ref={isKb ? (el) => el?.scrollIntoView?.({ block: "nearest" }) : undefined}
-                  onClick={() => void openHelmRelease(cluster, r.namespace, r.name)}
-                  style={{
-                    display: "grid", gridTemplateColumns: gridCols, gap: 10, alignItems: "center",
-                    padding: "7px 8px", borderBottom: "0.5px solid var(--color-border-tertiary)",
-                    cursor: "pointer",
-                    background: isKb || isSelected ? "var(--color-background-secondary)" : undefined,
-                    boxShadow: isKb ? "inset 2px 0 0 var(--bench-selection-edge, var(--color-text-info))" : undefined,
-                  }}
-                >
-                  <span style={{ width: 8, height: 8, borderRadius: "50%", background: statusDot(r.status), display: "inline-block" }} />
-                  <span style={{ display: "flex", alignItems: "center", gap: 2, minWidth: 0 }}>
-                    <span style={{ fontWeight: 500, ...ellipsis }} title={r.name}>{r.name}</span>
-                    <CopyButton text={r.name} label={`copy release name ${r.name}`} appearOnRowHover />
-                  </span>
-                  <span style={{ color: "var(--color-text-tertiary)", ...ellipsis }} title={r.namespace}>{r.namespace}</span>
-                  <span style={{ color: "var(--color-text-tertiary)", ...ellipsis }} title={r.chart}>{r.chart}</span>
-                  <span style={{ color: "var(--color-text-secondary)", ...ellipsis }} title={r.appVersion}>{r.appVersion || "—"}</span>
-                  <span style={{ color: "var(--color-text-secondary)" }}>{r.revision}</span>
-                  <span style={{ color: "var(--color-text-tertiary)" }}><Age unixSeconds={r.updatedUnix} suffix=" ago" /></span>
+                <div key={k} role="button" tabIndex={0} className="lens-row" style={gridStyle}
+                  aria-selected={k === cursorKey} data-cursor={k === cursorKey ? "true" : undefined} data-selected={k === selKey ? "true" : undefined}
+                  onClick={() => { setCursorKey(k); autoSelect.current = "done"; select(k === selKey ? null : r); }}
+                  onKeyDown={(ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); select(r); } }}>
+                  {show("lamp") && <Lamp role={role} />}
+                  {show("name") && (
+                    <span style={{ display: "flex", alignItems: "center", gap: 4, minWidth: 0 }}>
+                      <span className="lens-cell-name" title={k}><span style={{ color: "var(--color-text-tertiary)" }}>{r.namespace} / </span><span style={{ fontWeight: k === selKey ? 600 : 400 }}>{r.name}</span></span>
+                      <CopyButton text={r.name} label={`copy release name ${r.name}`} appearOnRowHover />
+                    </span>
+                  )}
+                  {show("status") && <span style={{ ...cellStyle, color: ROLE_TEXT[role.kind], fontWeight: role.kind === "fault" ? 600 : 400 }}>{role.kind === "fault" ? "▲ " : ""}{role.label}</span>}
+                  {show("chart") && <span style={{ ...cellStyle, color: "var(--color-text-secondary)" }}>{r.chart}</span>}
+                  {show("app") && <span style={{ ...cellStyle, color: "var(--color-text-secondary)" }}>{r.appVersion || "-"}</span>}
+                  {show("rev") && <span style={{ color: "var(--color-text-secondary)" }}>{r.revision}</span>}
+                  {show("updated") && <span style={{ color: "var(--color-text-tertiary)" }}><Age unixSeconds={r.updatedUnix} /></span>}
                 </div>
               );
-            })}
-          </div>
-        )}
-      </div>
-
-      {/* Detail panel */}
-      {!helm.selected && !helm.loading && helm.available && (
-        <InspectorIdle
-          subject="releases"
-          attention={failed + pendingCount}
-          hint="Select a release for history, rollback, and values."
-        />
-      )}
-      {helm.selected && (
-        <HelmDetailPanel
+            }}
+          />
+        </LensTable>
+      }
+      footer={<span className="t-legend">j k navigate · ↵ inspect · / search</span>}
+      footerEnd={<span className="t-secondary">{visible.length} of {releases.length}{marker} releases · broken first</span>}
+      inspector={selKey && inspected ? (
+        <ReleaseInspector
+          key={`${cluster}/${selKey}`}
           cluster={cluster}
-          namespace={helm.selected.namespace}
-          name={helm.selected.name}
-          releases={helm.releases}
+          release={inspected}
+          role={roleOf(inspected)}
+          removed={removed}
+          stale={evidence === "stale"}
           history={helm.history}
           values={helm.values}
           detailLoading={helm.detailLoading}
+          historyError={helm.historyError ?? null}
+          valuesError={helm.valuesError ?? null}
           isProtected={isProtected}
-          onClose={() => useFleet.getState().selectHelmRelease(null)}
+          nowS={nowS}
+          onClose={close}
         />
-      )}
+      ) : undefined}
+      inspectorLabel="Helm release details"
+      onCloseInspector={close}
+    />
+  );
+}
+
+function RemovedNotice() {
+  return (
+    <div role="status" className="t-body" style={{ padding: "8px 10px", borderRadius: 4, background: "var(--color-background-secondary)", boxShadow: "inset 0 0 0 1px var(--color-border-secondary)" }}>
+      <span className="t-status">Release removed.</span> The latest helm list snapshot no longer has it (uninstalled). The details below are its last evidence; actions are disabled.
     </div>
   );
 }
 
-type RollbackPending = { revision: number };
+// lastGood is the newest earlier revision that deployed successfully (helm
+// marks a replaced good revision "superseded"; failed ones stay "failed").
+function lastGood(history: HelmHistoryEntryDTO[], current: number): HelmHistoryEntryDTO | undefined {
+  return [...history].filter((e) => e.revision < current && (e.status === "superseded" || e.status === "deployed")).sort((a, b) => b.revision - a.revision)[0];
+}
 
-function HelmDetailPanel({
-  cluster, namespace, name, releases, history, values, detailLoading, isProtected, onClose,
-}: {
+// verdictDetail is the diagnosis in words - never tooltip-only. A failed or
+// in-flight release's current revision description is helm's own account of
+// what happened ("Upgrade "x" failed: context deadline exceeded").
+function verdictDetail(r: HelmReleaseDTO, role: Role, nowS: number): string | null {
+  const age = r.updatedUnix > 0 ? formatAge(nowS - r.updatedUnix) : null;
+  if (role.kind === "degraded") return `${r.status} for ${age} - longer than ${PENDING_DEADLINE_S / 60}m (twice helm's default 5m timeout). Helm refuses new operations on this release until it clears; rolling back to the last good revision is the usual way out.`;
+  if (role.kind === "progressing") return `${r.status}${age ? ` since ${age} ago` : " (start time unknown)"} - an operation is in flight.`;
+  return null;
+}
+
+function ReleaseInspector({ cluster, release: r, role, removed, stale, history, values, detailLoading, historyError, valuesError, isProtected, nowS, onClose }: {
   cluster: string;
-  namespace: string;
-  name: string;
-  releases: HelmReleaseDTO[];
+  release: HelmReleaseDTO;
+  role: Role;
+  removed: boolean;
+  stale: boolean;
   history: HelmHistoryEntryDTO[];
   values: string;
   detailLoading: boolean;
+  historyError: string | null;
+  valuesError: string | null;
   isProtected: boolean;
+  nowS: number;
   onClose: () => void;
 }) {
-  const [rollbackPending, setRollbackPending] = useState<RollbackPending | null>(null);
-  const { width, handleProps } = useResizablePanel();
+  const [rollbackTo, setRollbackTo] = useState<number | null>(null);
+  const live = !removed;
+  const currentRev = history.length > 0 ? Math.max(...history.map((e) => e.revision)) : r.revision;
+  const current = history.find((e) => e.revision === currentRev);
+  const good = lastGood(history, currentRev);
+  const earlier = [...history].filter((e) => e.revision < currentRev).sort((a, b) => b.revision - a.revision);
+  const detail = verdictDetail(r, role, nowS);
+  const reread = () => void openHelmRelease(cluster, r.namespace, r.name);
 
-  // Current revision = max revision in history, or fallback from release list
-  const currentRevision = history.length > 0
-    ? Math.max(...history.map((e) => e.revision))
-    : (releases.find((r) => r.namespace === namespace && r.name === name)?.revision ?? 0);
-
-  const handleKey = useCallback((e: KeyboardEvent) => {
-    if (e.key === "Escape") {
-      if (rollbackPending) { setRollbackPending(null); return; }
-      onClose();
-    }
-  }, [onClose, rollbackPending]);
-
-  useEffect(() => {
-    document.addEventListener("keydown", handleKey);
-    return () => document.removeEventListener("keydown", handleKey);
-  }, [handleKey]);
-
-  // Find the current release for the header
-  const release = releases.find((r) => r.namespace === namespace && r.name === name);
+  const more: MenuItem[] = live && earlier.length > 0
+    ? [{ kind: "choose", label: "Roll back to revision", danger: true, options: earlier.map((e) => ({ label: `rev ${e.revision} · ${e.status} · ${e.chart}`, onSelect: () => setRollbackTo(e.revision) })) }]
+    : [];
 
   return (
-    <div style={{
-      width, flexShrink: 0, position: "relative",
-      background: "var(--bench-well-bg, var(--color-background-secondary))", boxShadow: "var(--bench-well-shadow, inset 0 0 0 1px var(--color-border-tertiary))", borderRadius: "var(--radius-sm)", padding: "12px 16px",
-      overflowY: "auto",
-      fontFamily: "var(--font-mono)",
-      fontSize: 12,
-      paddingLeft: 16,
-      marginLeft: 16,
-    }}>
-      {/* Resize handle — drag left edge */}
-      <div {...handleProps} />
-
-      {/* Panel header */}
-      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, position: "sticky", top: 0, background: "var(--color-background-primary)", paddingTop: 2, paddingBottom: 6, borderBottom: "0.5px solid var(--color-border-tertiary)" }}>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            {release && (
-              <span style={{ width: 8, height: 8, borderRadius: "50%", background: statusDot(release.status), display: "inline-block", flexShrink: 0 }} />
+    <div data-testid="helm-release-panel" style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
+      <InspectorLayout
+        kind="Helm release"
+        namespace={r.namespace}
+        name={r.name}
+        meta={[r.chart, r.appVersion ? `app ${r.appVersion}` : "", `rev ${r.revision}`].filter(Boolean).join(" · ")}
+        onClose={onClose}
+        verdict={removed ? <RemovedNotice /> : (
+          <div>
+            <InspectorStatus tone={roleTone(role.kind)} label={role.label} reason={stale ? "last snapshot" : undefined} />
+            {detail && <div className="t-body" style={{ color: ROLE_TEXT[role.kind], overflowWrap: "anywhere", marginTop: -4 }}>{detail}</div>}
+            {(role.kind === "fault" || role.kind === "degraded" || role.kind === "progressing") && (
+              current?.description
+                ? <div className="t-body" style={{ color: ROLE_TEXT[role.kind], overflowWrap: "anywhere", marginTop: detail ? 4 : -4 }}>{current.description}</div>
+                : detailLoading ? <div className="t-secondary" style={{ marginTop: -4 }}>Reading the release history for helm's account of it…</div>
+                : historyError ? <div className="t-secondary" style={{ marginTop: -4 }}>helm's account is unavailable: the history read failed.</div>
+                : null
             )}
-            <span style={{ fontWeight: 500, ...ellipsis }} title={`${namespace}/${name}`}>
-              <span style={{ color: "var(--color-text-tertiary)" }}>{namespace}</span>/{name}
-            </span>
           </div>
-        </div>
-        <button onClick={onClose} aria-label="close release detail panel" style={{ ...btn, padding: "2px 8px", flexShrink: 0, display: "inline-flex", alignItems: "center" }}><IconX size={13} stroke={1.5} /></button>
-      </div>
-
-      {/* State first: helm's own status as the tone badge, revision + chart
-          as the scannable detail line. */}
-      {release && (
-        <InspectorStatus
-          tone={statusGroup(release.status) === "failed" ? "danger" : statusGroup(release.status) === "pending" ? "warning" : "success"}
-          label={release.status}
-          detail={`${release.chart}${release.appVersion ? ` · ${release.appVersion}` : ""}`}
-        />
-      )}
-      {release && (
-        <div style={{ marginBottom: 12 }}>
-          <InspectorFacts
-            facts={[
-              { label: "revision", value: release.revision },
-              history.length > 0 && { label: "history", value: history.length },
-            ]}
-          />
-        </div>
-      )}
-
-      {detailLoading && history.length === 0 ? (
-        <div style={{ color: "var(--color-text-secondary)" }}>Loading detail…</div>
-      ) : (
-        <>
-          {/* History section */}
-          <InspectorSection title="History">
-            {history.length === 0 ? (
-              <span style={{ color: "var(--color-text-tertiary)" }}>No history available.</span>
-            ) : (
-              <div>
-                {/* History header */}
-                <div style={{ display: "grid", gridTemplateColumns: "40px 80px minmax(0,1fr) minmax(0,1.5fr) 70px 60px", gap: 8, padding: "0 0 4px", fontSize: 9, textTransform: "uppercase", color: "var(--color-text-tertiary)", borderBottom: "0.5px solid var(--color-border-tertiary)", marginBottom: 4 }}>
-                  <span>rev</span><span>status</span><span>chart</span><span>description</span><span>updated</span><span />
-                </div>
-                {/* History rows — newest first */}
-                {[...history].sort((a, b) => b.revision - a.revision).map((e) => {
-                  const isCurrent = e.revision === currentRevision;
-                  return (
-                    <div
-                      key={e.revision}
-                      style={{ display: "grid", gridTemplateColumns: "40px 80px minmax(0,1fr) minmax(0,1.5fr) 70px 60px", gap: 8, alignItems: "center", padding: "5px 0", borderBottom: "0.5px solid var(--color-border-tertiary)" }}
-                    >
-                      <span style={{ color: isCurrent ? "var(--color-text-primary)" : "var(--color-text-tertiary)", fontWeight: isCurrent ? 600 : 400 }}>{e.revision}</span>
-                      <span style={{ color: statusColor(e.status), ...ellipsis }} title={e.status}>{e.status}</span>
-                      <span style={{ color: "var(--color-text-tertiary)", ...ellipsis }} title={e.chart}>{e.chart}</span>
-                      <span style={{ color: "var(--color-text-secondary)", ...ellipsis }} title={e.description}>{e.description || "—"}</span>
-                      <span style={{ color: "var(--color-text-tertiary)" }}><Age unixSeconds={e.updatedUnix} suffix=" ago" /></span>
-                      <span>
-                        {!isCurrent && (
-                          <button
-                            onClick={() => setRollbackPending({ revision: e.revision })}
-                            style={{ ...btn, fontSize: 9, padding: "2px 6px", color: "var(--color-text-warning)", borderColor: "var(--color-text-warning)" }}
-                          >
-                            rollback
-                          </button>
-                        )}
-                      </span>
+        )}
+        primary={live ? { label: detailLoading ? "Reading…" : "Re-read history", onSelect: reread } : undefined}
+        secondary={live && good ? { label: `Roll back to rev ${good.revision}…`, onSelect: () => setRollbackTo(good.revision) } : undefined}
+        more={more}
+      >
+        <InspectorBlock title="History" count={history.length || undefined}>
+          {historyError ? (
+            <div className="t-body" style={{ color: "var(--color-text-warning)", overflowWrap: "anywhere" }}>History unreadable: {historyError}</div>
+          ) : detailLoading && history.length === 0 ? (
+            <SkeletonRows rows={3} label="reading history" />
+          ) : history.length === 0 ? (
+            <span className="t-secondary">{removed ? "No history was read before it was removed." : "helm history returned no revisions."}</span>
+          ) : (
+            <ol style={{ listStyle: "none", margin: 0, padding: 0, display: "grid", gap: 6 }}>
+              {[...history].sort((a, b) => b.revision - a.revision).map((e) => {
+                const hRole = e.revision === currentRev ? role : e.status === "failed" ? { kind: "fault" as const, label: "failed" } : { kind: "unknown" as const, label: e.status };
+                return (
+                  <li key={e.revision} style={{ display: "grid", gap: 2, paddingBottom: 6, borderBottom: "0.5px solid var(--color-border-tertiary)" }}>
+                    <div className="t-body" style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "baseline" }}>
+                      <span style={{ fontFamily: "var(--font-mono)", fontWeight: e.revision === currentRev ? 600 : 400 }}>rev {e.revision}</span>
+                      {/* earlier failures are history: muted, they never glow */}
+                      <span style={{ color: e.revision === currentRev ? ROLE_TEXT[hRole.kind] : "var(--color-text-tertiary)" }}>{e.status}{e.revision === currentRev ? " · current" : ""}</span>
+                      <span className="t-secondary">{e.chart}{e.appVersion ? ` (${e.appVersion})` : ""}</span>
+                      <span className="t-secondary" style={{ marginLeft: "auto" }}><Age unixSeconds={e.updatedUnix} suffix=" ago" /></span>
                     </div>
-                  );
-                })}
-              </div>
-            )}
-          </InspectorSection>
-
-          {/* Values section */}
-          <InspectorSection title="Values">
-            <div style={{ fontSize: 10, color: "var(--color-text-tertiary)", marginBottom: 6, fontFamily: "var(--font-sans, sans-serif)" }}>
-              secret-shaped values are masked; the source chart in Git holds the full set
-            </div>
-            {values === "" ? (
-              <span style={{ color: "var(--color-text-tertiary)" }}>no user-supplied values</span>
-            ) : (
-              <YamlBlock text={values} copyLabel="release values" maxHeight={400} />
-            )}
-          </InspectorSection>
-        </>
-      )}
-
-      {/* Rollback composer dialog */}
-      {rollbackPending && (
+                    {e.description && <div className="t-secondary" style={{ overflowWrap: "anywhere" }}>{e.description}</div>}
+                  </li>
+                );
+              })}
+            </ol>
+          )}
+        </InspectorBlock>
+        <InspectorBlock title="Values">
+          <div className="t-secondary" style={{ marginBottom: 6 }}>User-supplied values; secret-shaped values are masked. The chart source in Git holds the full set.</div>
+          {valuesError ? (
+            <div className="t-body" style={{ color: "var(--color-text-warning)", overflowWrap: "anywhere" }}>Values unreadable: {valuesError}</div>
+          ) : detailLoading && values === "" ? (
+            <SkeletonRows rows={2} label="reading values" />
+          ) : values === "" ? (
+            <span className="t-secondary">No user-supplied values.</span>
+          ) : (
+            <YamlBlock text={values} copyLabel="release values" maxHeight={400} />
+          )}
+        </InspectorBlock>
+      </InspectorLayout>
+      {rollbackTo !== null && live && (
         <RollbackComposerDialog
           cluster={cluster}
-          namespace={namespace}
-          name={name}
-          current={history.find((e) => e.revision === currentRevision)}
-          target={history.find((e) => e.revision === rollbackPending.revision)}
-          targetRevision={rollbackPending.revision}
+          namespace={r.namespace}
+          name={r.name}
+          current={current}
+          target={history.find((e) => e.revision === rollbackTo)}
+          targetRevision={rollbackTo}
           isProtected={isProtected}
-          onCancel={() => setRollbackPending(null)}
-          onConfirm={(opts) => {
-            const { revision } = rollbackPending;
-            setRollbackPending(null);
-            void helmRollback(cluster, namespace, name, revision, opts);
-          }}
+          onCancel={() => setRollbackTo(null)}
+          onConfirm={(opts) => { const rev = rollbackTo; setRollbackTo(null); void helmRollback(cluster, r.namespace, r.name, rev, opts); }}
         />
       )}
     </div>
   );
 }
-
-const rollbackTimeouts = [60, 120, 300, 600];
-
-// revLabel names a history entry as "rev N · chart (appVersion)". Chart is
-// part of the value on purpose: when the target revision runs a different
-// chart version, that difference is the interesting fact of the rollback.
-function revLabel(rev: number, e?: HelmHistoryEntryDTO): string {
-  if (!e) return `rev ${rev}`;
-  return `rev ${e.revision} · ${e.chart}${e.appVersion ? ` (${e.appVersion})` : ""}`;
-}
-
-// RollbackComposerDialog assembles the helm rollback flags per rollback:
-// wait-for-readiness (on by default, matching helm's safest interactive use)
-// and hook skipping (off by default). Helm creates a NEW revision from the
-// target's manifest - the from → to tiles show exactly what changes.
-function RollbackComposerDialog({ cluster, namespace, name, current, target, targetRevision, isProtected, onCancel, onConfirm }: {
-  cluster: string;
-  namespace: string;
-  name: string;
-  current?: HelmHistoryEntryDTO;
-  target?: HelmHistoryEntryDTO;
-  targetRevision: number;
-  isProtected: boolean;
-  onCancel: () => void;
-  onConfirm: (opts: RollbackOptions) => void;
-}) {
-  const [wait, setWait] = useState(true);
-  const [noHooks, setNoHooks] = useState(false);
-  const [timeoutSeconds, setTimeoutSeconds] = useState(120);
-
-  return (
-    <OperationDialog
-      title={`Roll back "${name}"`}
-      ariaLabel={`Roll back ${name}`}
-      subtitle={`helm rollback: re-deploys ${namespace}/${name} from revision ${targetRevision}'s manifest as a new revision.`}
-      cluster={cluster}
-      protected={isProtected}
-      confirmLabel="Roll back"
-      danger
-      onCancel={onCancel}
-      onConfirm={() => onConfirm({ wait, noHooks, timeoutSeconds })}
-    >
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-        <MetaTile label="from (current)" value={revLabel(current?.revision ?? 0, current)} />
-        <MetaTile label="to (target)" value={revLabel(targetRevision, target)} />
-      </div>
-
-      <div style={{ display: "grid", gap: 8 }}>
-        <div style={composerLabel}>options</div>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-          <OptionTile
-            active={wait}
-            title="Wait for readiness"
-            body="Block until rolled-back resources are ready (--wait); a failed rollout surfaces as a failed rollback instead of a silent one."
-            onClick={() => setWait((v) => !v)}
-          />
-          <OptionTile
-            active={noHooks}
-            title="Skip hooks"
-            body="Skip pre/post-rollback hooks (--no-hooks); use when a broken hook is what you are rolling back from."
-            onClick={() => setNoHooks((v) => !v)}
-          />
-        </div>
-      </div>
-
-      <label style={{ display: "flex", alignItems: "center", gap: 10, opacity: wait ? 1 : 0.5 }}>
-        <span style={composerLabel}>timeout</span>
-        <select
-          aria-label="rollback timeout"
-          value={timeoutSeconds}
-          disabled={!wait}
-          onChange={(e) => setTimeoutSeconds(Number(e.target.value))}
-          style={composerSelect}
-        >
-          {rollbackTimeouts.map((t) => <option key={t} value={t}>{t}s</option>)}
-        </select>
-        {!wait && <span style={{ fontSize: 10, color: "var(--color-text-tertiary)" }}>only applies when waiting for readiness</span>}
-      </label>
-    </OperationDialog>
-  );
-}
-
-const composerLabel: React.CSSProperties = { color: "var(--color-text-tertiary)", fontSize: 10, textTransform: "uppercase", fontWeight: 600, letterSpacing: 0.2 };
-const composerSelect: React.CSSProperties = { padding: "4px 8px", fontSize: 12, fontFamily: "var(--font-mono)", background: "var(--color-background-secondary)", border: "0.5px solid var(--color-border-tertiary)", borderRadius: 4, color: "var(--color-text-primary)" };
-
