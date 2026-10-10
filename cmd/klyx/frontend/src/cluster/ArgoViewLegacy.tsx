@@ -874,6 +874,7 @@ function SyncApplicationDialog({
       subtitle="Starts an Argo CD sync operation with explicit Argo options and fast Klyx defaults."
       cluster={cluster}
       protected={isProtected}
+      danger={prune}
       confirmLabel="Synchronize"
       onCancel={onCancel}
       onConfirm={() => onConfirm({

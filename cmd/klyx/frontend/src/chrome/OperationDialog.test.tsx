@@ -81,4 +81,13 @@ describe("OperationDialog", () => {
     const second = dialog();
     expect(document.activeElement).toBe(second.getByRole("button", { name: "Drain" }));
   });
+
+  it("a danger flag flipping mid-form (Argo prune) keeps focus on the control in use", () => {
+    const props = { title: "Sync", cluster: "dev", protected: false, confirmLabel: "Synchronize", onConfirm: () => {}, onCancel: () => {} };
+    const { rerender, getByRole } = render(<OperationDialog {...props}><input aria-label="prune" type="checkbox" /></OperationDialog>);
+    const box = getByRole("checkbox", { name: "prune" });
+    box.focus();
+    rerender(<OperationDialog {...props} danger><input aria-label="prune" type="checkbox" /></OperationDialog>);
+    expect(document.activeElement).toBe(box);
+  });
 });
