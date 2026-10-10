@@ -44,7 +44,9 @@ const broken: WorkloadDTO = { kind: "Deployment", namespace: "ollama-prod", name
 const healthy: WorkloadDTO = { kind: "Deployment", namespace: "monitoring", name: "grafana", desired: 1, ready: 1, available: 1, updated: 1, restarts: 0, reason: "Available", rank: "healthy", gitops: null, pods: [], resources: noResources, health: { kind: "ok", label: "Available", reason: "Ready", rule: "workload.ready" } };
 
 function seed(items: WorkloadDTO[]) {
-  useFleet.setState((s) => ({ workloads: { ...s.workloads, cluster: "homelab-nelli", items, namespaces: ["monitoring", "ollama-prod"], loading: false } }));
+  // rowsScope: the rows were READ for this cluster + all namespaces (what the
+  // real store records); lenses never show rows from another scope.
+  useFleet.setState((s) => ({ workloads: { ...s.workloads, cluster: "homelab-nelli", items, namespaces: ["monitoring", "ollama-prod"], loading: false, rowsScope: "homelab-nelli|" } }));
 }
 
 describe("WorkloadsView", () => {
@@ -124,8 +126,8 @@ describe("WorkloadsView", () => {
 
   it("needs-attention filter hides healthy rows", () => {
     seed([broken, healthy]);
-    const { getByText, queryByText } = render(<WorkloadsView cluster="homelab-nelli" />);
-    fireEvent.click(getByText(/needs attention/i));
+    const { getByText, getByRole, queryByText } = render(<WorkloadsView cluster="homelab-nelli" />);
+    fireEvent.click(getByRole("button", { name: "attention" }));
     expect(getByText("ollama")).toBeTruthy();
     expect(queryByText("grafana")).toBeNull();
   });
@@ -474,8 +476,8 @@ describe("WorkloadsView", () => {
 
   it("status trail reads shown/total, not shown/shown", () => {
     seed([broken, healthy]);
-    const { getByText } = render(<WorkloadsView cluster="homelab-nelli" />);
-    fireEvent.click(getByText(/needs attention/i)); // hides healthy → 1 of 2
+    const { getByText, getByRole } = render(<WorkloadsView cluster="homelab-nelli" />);
+    fireEvent.click(getByRole("button", { name: "attention" })); // hides healthy → 1 of 2
     expect(getByText("1/2")).toBeTruthy();
   });
 
@@ -511,5 +513,35 @@ describe("WorkloadsView", () => {
     expect(openWorkloadLogsWindow).toHaveBeenCalledWith("homelab-nelli", "ollama-prod", "Deployment", "ollama", "");
     await act(async () => {}); // flush the resolved promise
     expect(queryByTestId("workload-logs-dock")).toBeNull();
+  });
+});
+
+describe("WorkloadsView health model (1b rework)", () => {
+  beforeEach(() => useFleet.getState().clearWorkloads());
+
+  it("offers an unknown filter while a verdict is unknown, and it isolates those rows", () => {
+    const mystery: WorkloadDTO = { ...healthy, name: "mystery", health: { kind: "unknown", label: "Unverified", reason: "PodsIncomplete", rule: "workload.pods-incomplete" } };
+    seed([broken, healthy, mystery]);
+    const { getByRole, queryByText, getByText } = render(<WorkloadsView cluster="homelab-nelli" />);
+    fireEvent.click(getByRole("button", { name: /unknown 1/ }));
+    expect(getByText("mystery")).toBeTruthy();
+    expect(queryByText("grafana")).toBeNull();
+    expect(queryByText("ollama")).toBeNull();
+  });
+
+  it("the inspector never derives its own pod health: a recovered restart asserts nothing", () => {
+    const recovered: WorkloadDTO = { ...healthy, name: "api", pods: [{ name: "api-1", ready: true, restarts: 4, reason: "", node: "n1", ageSeconds: 99 }] };
+    seed([recovered]);
+    const { getByText, queryByText } = render(<WorkloadsView cluster="homelab-nelli" />);
+    fireEvent.click(getByText("api"));
+    expect(getByText("1 matched")).toBeTruthy();
+    expect(queryByText(/affected/)).toBeNull();
+    expect(queryByText(/\d+ healthy/)).toBeNull();
+  });
+
+  it("rows read for another scope are neither shown nor counted", () => {
+    useFleet.setState((s) => ({ workloads: { ...s.workloads, cluster: "homelab-nelli", namespace: "monitoring", items: [broken], loading: true, rowsScope: "homelab-nelli|" } }));
+    const { queryByText } = render(<WorkloadsView cluster="homelab-nelli" />);
+    expect(queryByText("ollama")).toBeNull();
   });
 });

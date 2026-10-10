@@ -393,7 +393,9 @@ export function LensNav() {
   const workloadsBadge: Badge = wl && wl.coverage === "complete" ? { n: wl.counts.attention, tone: attentionTone(wl.counts) } : NO_BADGE;
   const pods = useFleet((s) => s.pods);
   const podsBadge = useMemo((): Badge => {
-    if (!inCluster || coverageOf(pods, clusterName, "") !== "complete") return NO_BADGE;
+    // The REQUESTED scope must be all-namespaces too: during a switch to a
+    // namespace the store still holds the old all-namespaces rows.
+    if (!inCluster || pods.namespace !== "" || coverageOf(pods, clusterName, "") !== "complete") return NO_BADGE;
     const c = summarize(pods.items, (p) => p.health);
     return { n: c.attention, tone: attentionTone(c) };
   }, [inCluster, pods, clusterName]);

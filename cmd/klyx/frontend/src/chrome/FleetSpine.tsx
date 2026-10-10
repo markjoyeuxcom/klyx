@@ -92,7 +92,9 @@ export function FleetSpine() {
 
         let title = `${c.name} — ${c.state.toLowerCase()}`;
         if (unreachable) title = `${c.name} — ${c.state.toLowerCase()}${c.reason ? `: ${c.reason}` : ""}`;
-        else if (attention > 0) title = `${c.name} — ${attention} workload${attention === 1 ? "" : "s"} need attention (${w!.counts.fault} fault, ${w!.counts.degraded} degraded)`;
+        else if (attention > 0) title = `${c.name} — ${attention}${w!.coverage === "partial" ? "+" : ""} workload${attention === 1 ? "" : "s"} need attention (${w!.counts.fault} fault, ${w!.counts.degraded} degraded${w!.coverage === "partial" ? "; capped read" : ""})`;
+        else if (w && (w.coverage !== "complete" || w.counts.unknown > 0)) title = `${c.name} — workload health unverified${w.counts.unknown ? ` (${w.counts.unknown} unknown)` : " (capped read)"}`;
+        else if (!w && !unreachable) title = `${c.name} — workload health unreadable`;
         else if (c.state === "Stale") title = `${c.name} — connection stale${c.reason ? `: ${c.reason}` : ""}`;
 
         // Channel-strip lamp (Signal Bench): healthy lamps sit dim, faults
@@ -104,7 +106,7 @@ export function FleetSpine() {
         ) : (
           <StatusDot
             size={8}
-            tone={broken ? "danger" : attention > 0 ? "warning" : c.state === "Degraded" || c.state === "Stale" ? "warning" : w?.coverage === "complete" && c.state === "Synced" ? "success" : "muted"}
+            tone={broken ? "danger" : attention > 0 ? "warning" : c.state === "Degraded" || c.state === "Stale" ? "warning" : w?.coverage === "complete" && w.counts.unknown === 0 && c.state === "Synced" ? "success" : "muted"}
             blink={broken}
           />
         );

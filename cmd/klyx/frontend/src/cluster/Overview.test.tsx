@@ -1,3 +1,4 @@
+import type { VerdictObservation } from "../health/verdict";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, fireEvent, waitFor } from "@testing-library/react";
 import { Overview } from "./Overview";
@@ -30,15 +31,20 @@ function setMetrics(d: MetricsDTO | null) {
   useFleet.setState({ metrics: { cluster: "homelab-blue", dto: d, loading: false } });
 }
 
+// obs builds a verdict observation with `attention` faults among `total` rows.
+function obs(fault = 0, total = 5): VerdictObservation {
+  return { coverage: "complete", counts: { total, fault, degraded: 0, unknown: 0, progressing: 0, paused: 0, ok: total - fault, attention: fault } };
+}
+
 function seedSummary(cluster: string, partial: Partial<OverviewSummary> = {}) {
   useFleet.setState({
     overviewSummary: {
       cluster,
       loading: false,
-      unhealthyWorkloads: 0,
-      podsNotReady: 0,
+      workloads: obs(),
+      pods: obs(),
       warningEvents: 0,
-      nodeProblems: 0,
+      nodes: obs(),
       helmAvailable: false,
       failedReleases: null,
       namespaces: null,
@@ -141,7 +147,7 @@ describe("Overview attention strip", () => {
   });
 
   it("shows — (muted) for all tiles while loading", () => {
-    useFleet.setState({ overviewSummary: { cluster: "homelab-nelli", loading: true, unhealthyWorkloads: null, podsNotReady: null, warningEvents: null, nodeProblems: null, helmAvailable: false, failedReleases: null, namespaces: null, flux: null, fluxError: false } });
+    useFleet.setState({ overviewSummary: { cluster: "homelab-nelli", loading: true, workloads: null, pods: null, warningEvents: null, nodes: null, helmAvailable: false, failedReleases: null, namespaces: null, flux: null, fluxError: false } });
     const { getAllByText } = render(<Overview c={dto} />);
     // During loading, all tiles show "—".
     const dashes = getAllByText("—");
@@ -149,7 +155,7 @@ describe("Overview attention strip", () => {
   });
 
   it("renders non-zero counts as numbers", () => {
-    seedSummary("homelab-nelli", { unhealthyWorkloads: 3, podsNotReady: 1, warningEvents: 5, nodeProblems: 0 });
+    seedSummary("homelab-nelli", { workloads: obs(3), pods: obs(1), warningEvents: 5, nodes: obs() });
     const { getByText } = render(<Overview c={dto} />);
     expect(getByText("3")).toBeTruthy();
     expect(getByText("1")).toBeTruthy();
@@ -157,7 +163,7 @@ describe("Overview attention strip", () => {
   });
 
   it("zero counts render as '0' (quiet, not hidden)", () => {
-    seedSummary("homelab-nelli", { unhealthyWorkloads: 0, podsNotReady: 0, warningEvents: 0, nodeProblems: 0 });
+    seedSummary("homelab-nelli", { workloads: obs(), pods: obs(), warningEvents: 0, nodes: obs() });
     const { getAllByText } = render(<Overview c={dto} />);
     const zeros = getAllByText("0");
     expect(zeros.length).toBeGreaterThanOrEqual(4);
@@ -165,9 +171,9 @@ describe("Overview attention strip", () => {
 
   it("navigates to workloads and sets needs-attention on tile click", () => {
     useFleet.getState().openCluster("homelab-nelli");
-    seedSummary("homelab-nelli", { unhealthyWorkloads: 2 });
+    seedSummary("homelab-nelli", { workloads: obs(2) });
     const { getByText } = render(<Overview c={dto} />);
-    fireEvent.click(getByText("unhealthy workloads"));
+    fireEvent.click(getByText("workloads need attention"));
     const state = useFleet.getState();
     expect(state.route).toMatchObject({ name: "cluster", section: "workloads" });
     expect(state.workloads.needsAttention).toBe(true);
@@ -175,9 +181,9 @@ describe("Overview attention strip", () => {
 
   it("navigates to pods and sets needs-attention on tile click", () => {
     useFleet.getState().openCluster("homelab-nelli");
-    seedSummary("homelab-nelli", { podsNotReady: 1 });
+    seedSummary("homelab-nelli", { pods: obs(1) });
     const { getByText } = render(<Overview c={dto} />);
-    fireEvent.click(getByText("pods not ready"));
+    fireEvent.click(getByText("pods need attention"));
     const state = useFleet.getState();
     expect(state.route).toMatchObject({ name: "cluster", section: "pods" });
     expect(state.pods.needsAttention).toBe(true);
@@ -206,7 +212,7 @@ describe("Overview attention strip", () => {
   });
 
   it("shows — with title='failed to load' when a tile has null count after load", () => {
-    seedSummary("homelab-nelli", { unhealthyWorkloads: null });
+    seedSummary("homelab-nelli", { workloads: null });
     const { getByTitle } = render(<Overview c={dto} />);
     expect(getByTitle("failed to load")).toBeTruthy();
   });
@@ -306,3 +312,12 @@ describe("Overview sparklines", () => {
     expect(queryAllByRole("img", { name: /metric sparkline/i }).length).toBe(0);
   });
 });
+
+describe("Overview verdict tiles never claim a quiet they cannot see", () => {
+  it("a capped zero-attention read shows ?, not 0", () => {
+    seedSummary("homelab-nelli", { pods: { coverage: "partial", counts: obs().counts } });
+    const { getByText } = render(<Overview c={dto} />);
+    expect(getByText(/pods need attention · unverified \(capped\)/)).toBeTruthy();
+  });
+});
+

@@ -1,3 +1,4 @@
+import { describeObservation, type VerdictObservation } from "../health/verdict";
 import { useEffect, useState } from "react";
 import { useFleet } from "../store/fleet";
 import type { ClusterDTO, FleetBoardEntry, MetricsDTO } from "../store/fleet";
@@ -113,10 +114,10 @@ export function Overview({ c }: { c: ClusterDTO }) {
 // ---- Attention strip -----------------------------------------------------------
 
 type SummaryForStrip = {
-  unhealthyWorkloads: number | null;
-  podsNotReady: number | null;
+  workloads: VerdictObservation | null;
+  pods: VerdictObservation | null;
   warningEvents: number | null;
-  nodeProblems: number | null;
+  nodes: VerdictObservation | null;
   helmAvailable: boolean;
   failedReleases: number | null;
   flux: { present: boolean; notReady: number; suspended: number } | null;
@@ -175,20 +176,21 @@ function AttentionStrip({
     key: string;
     value: string;
     label: string;
-    variant: "danger" | "warning" | "success" | "info";
+    variant: "danger" | "warning" | "success" | "info" | "neutral";
     onClick?: () => void;
     hidden?: boolean;
     title?: string;
   }> = [
-    { key: "workloads", value: tileValue(summary?.unhealthyWorkloads ?? null, loading), label: "unhealthy workloads", variant: toneFor(summary?.unhealthyWorkloads, "danger", loading), onClick: goWorkloads },
-    { key: "pods", value: tileValue(summary?.podsNotReady ?? null, loading), label: "pods not ready", variant: toneFor(summary?.podsNotReady, "danger", loading), onClick: goPods },
-    { key: "events", value: tileValue(summary?.warningEvents ?? null, loading), label: "warning events", variant: toneFor(summary?.warningEvents, "warning", loading), onClick: goEvents },
-    { key: "nodes", value: tileValue(summary?.nodeProblems ?? null, loading), label: "node problems", variant: toneFor(summary?.nodeProblems, "danger", loading), onClick: goNodes },
+    verdictTile("workloads", "workloads need attention", summary?.workloads ?? null, loading, goWorkloads),
+    verdictTile("pods", "pods need attention", summary?.pods ?? null, loading, goPods),
+    // Warning events are evidence, not faults: a count, never a lit tone.
+    { key: "events", value: tileValue(summary?.warningEvents ?? null, loading), label: "warning events", variant: "neutral", onClick: goEvents },
+    verdictTile("nodes", "nodes need attention", summary?.nodes ?? null, loading, goNodes),
     { key: "helm", value: tileValue(summary?.failedReleases ?? null, loading), label: "failed releases", variant: toneFor(summary?.failedReleases, "danger", loading), onClick: goHelm, hidden: !(summary?.helmAvailable ?? false) },
     { key: "flux", value: tileValue(summary?.flux != null ? summary.flux.notReady : null, loading), label: "flux not ready", variant: toneFor(summary?.flux?.notReady, "danger", loading), onClick: goGitOps, hidden: !(summary?.flux?.present ?? false) && !(summary?.fluxError ?? false), title: (summary?.fluxError && !summary?.flux) ? "flux summary failed to load" : fluxTileTitle },
     { key: "argo", value: board?.argo ? String(board.argo.broken) : "—", label: "argo degraded", variant: board?.argo?.broken ? "warning" : "success", onClick: goArgo, hidden: !board?.argo },
     { key: "gateway", value: gatewayTileValue(board), label: "gateway issues", variant: gatewayTileTone(board), onClick: goNetwork, hidden: board?.gateway?.served === false || (!board?.gateway && clusterState === "Synced") },
-    { key: "freshness", value: clusterState === "Synced" ? "live" : clusterState.toLowerCase(), label: "watch state", variant: clusterState === "Synced" ? "success" : "warning", title: cluster },
+    { key: "freshness", value: clusterState === "Synced" ? "connected" : clusterState.toLowerCase(), label: "connection", variant: clusterState === "Synced" ? "neutral" : "warning", title: cluster },
   ];
 
   const visibleTiles = tiles.filter((t) => !t.hidden);
@@ -218,7 +220,7 @@ function StatTile({
 }: {
   value: string;
   label: string;
-  variant: "danger" | "warning" | "success" | "info";
+  variant: "danger" | "warning" | "success" | "info" | "neutral";
   onClick?: () => void;
   title?: string;
 }) {
@@ -231,7 +233,9 @@ function StatTile({
         ? "var(--color-text-warning)"
         : variant === "success"
           ? "var(--color-text-success)"
-          : "var(--color-text-info)";
+          : variant === "neutral"
+            ? "var(--color-text-primary)"
+            : "var(--color-text-info)";
 
   return (
     <button
@@ -259,14 +263,27 @@ function StatTile({
   );
 }
 
+// verdictTile words a migrated domain's observation: the attention count in
+// the tone of its worst verdict, "+" on a capped read, and an explicit
+// "unverified" rather than a reassuring zero when the read was capped or
+// some rows could not be classified.
+function verdictTile(key: string, label: string, o: VerdictObservation | null, loading: boolean, onClick: () => void) {
+  if (loading || !o) return { key, value: "—", label, variant: "info" as const, onClick };
+  const d = describeObservation(o);
+  if (d.attention > 0) return { key, value: `${d.attention}${o.coverage === "partial" ? "+" : ""}`, label, variant: (d.tone === "danger" ? "danger" : "warning") as "danger" | "warning", onClick, title: `${o.counts.fault} fault · ${o.counts.degraded} degraded` };
+  if (!d.quiet) return { key, value: "?", label: `${label} · ${d.text}`, variant: "neutral" as const, onClick };
+  return { key, value: "0", label, variant: "neutral" as const, onClick };
+}
+
 function tileValue(count: number | null | undefined, loading: boolean): string {
   if (loading || count == null) return "—";
   return String(count);
 }
 
-function toneFor(count: number | null | undefined, alertTone: "danger" | "warning", loading: boolean): "danger" | "warning" | "success" | "info" {
+// A zero is neutral, never success: absence of a fault is not evidence of health.
+function toneFor(count: number | null | undefined, alertTone: "danger" | "warning", loading: boolean): "danger" | "warning" | "neutral" | "info" {
   if (loading || count == null) return "info";
-  return count > 0 ? alertTone : "success";
+  return count > 0 ? alertTone : "neutral";
 }
 
 function gatewayTileValue(board: BoardEntry): string {
@@ -293,8 +310,10 @@ function NextActions({
 }) {
   const nav = useFleet.getState();
   const actions: Array<{ label: string; detail: string; run: () => void; tone: string }> = [];
-  if ((summary?.unhealthyWorkloads ?? 0) > 0) actions.push({ label: "workloads", detail: `${summary?.unhealthyWorkloads} need attention`, run: () => { nav.setSection("workloads"); nav.setWorkloadsNeedsAttention(true); }, tone: "var(--color-text-danger)" });
-  if ((summary?.podsNotReady ?? 0) > 0) actions.push({ label: "pods", detail: `${summary?.podsNotReady} not ready`, run: () => { nav.setSection("pods"); nav.setPodsNeedsAttention(true); }, tone: "var(--color-text-danger)" });
+  const wd = summary?.workloads ? describeObservation(summary.workloads) : null;
+  const pd = summary?.pods ? describeObservation(summary.pods) : null;
+  if (wd && wd.attention > 0) actions.push({ label: "workloads", detail: wd.text, run: () => { nav.setSection("workloads"); nav.setWorkloadsNeedsAttention(true); }, tone: wd.tone === "danger" ? "var(--color-text-danger)" : "var(--color-text-warning)" });
+  if (pd && pd.attention > 0) actions.push({ label: "pods", detail: pd.text, run: () => { nav.setSection("pods"); nav.setPodsNeedsAttention(true); }, tone: pd.tone === "danger" ? "var(--color-text-danger)" : "var(--color-text-warning)" });
   if ((summary?.warningEvents ?? 0) > 0) actions.push({ label: "events", detail: `${summary?.warningEvents} warnings`, run: () => { nav.setSection("events"); nav.setWarningsOnly(true); }, tone: "var(--color-text-warning)" });
   if ((summary?.flux?.notReady ?? 0) > 0 || (summary?.flux?.suspended ?? 0) > 0) actions.push({ label: "flux", detail: `${summary?.flux?.notReady ?? 0} not ready · ${summary?.flux?.suspended ?? 0} suspended`, run: () => nav.setSection("gitops"), tone: "var(--color-text-warning)" });
   if ((board?.argo?.broken ?? 0) > 0) actions.push({ label: "argo", detail: `${board?.argo?.broken} degraded`, run: () => nav.setSection("argo"), tone: "var(--color-text-warning)" });

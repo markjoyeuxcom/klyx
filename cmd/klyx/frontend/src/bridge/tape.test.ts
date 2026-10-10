@@ -40,8 +40,8 @@ describe("fetchTape error honesty", () => {
   it("a successful empty read is quiet (0)", async () => {
     await fetchTape("nelli");
     const c = useFleet.getState().tape.counts;
-    expect(c.pods).toBe(0);
-    expect(c.workloads).toBe(0);
+    expect(c.pods).toMatchObject({ coverage: "complete", counts: { attention: 0, total: 0 } });
+    expect(c.workloads).toMatchObject({ coverage: "complete", counts: { attention: 0, total: 0 } });
     expect(c.helm).toBe(0);
     expect(c.flux).toBe(0);
   });
@@ -53,7 +53,7 @@ describe("fetchTape error honesty", () => {
     const c = useFleet.getState().tape.counts;
     expect(c.pods).toBe("unreadable");
     expect(c.nodes).toBe("unreadable");
-    expect(c.workloads).toBe(0); // the others still read
+    expect(c.workloads).toMatchObject({ counts: { attention: 0 } }); // the others still read
   });
 
   it("a failed helm list is unreadable; only 'helm not found' is absent", async () => {

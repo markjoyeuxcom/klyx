@@ -123,3 +123,17 @@ describe("spineCodes", () => {
     expect(lamp.style.background).not.toContain("success");
   });
 });
+
+describe("FleetSpine unknown workload verdicts", () => {
+  it("a Synced cluster whose workloads are all unknown is never green, and says so", () => {
+    useFleet.setState({
+      clusters: [{ name: "dev", state: "Synced", reason: "" } as never],
+      fleetBoard: { dev: { cpuFraction: null, memFraction: null, workloads: { counts: { total: 2, fault: 0, degraded: 0, unknown: 2, progressing: 0, paused: 0, ok: 0, attention: 0 }, coverage: "complete" }, flux: null, argo: null } },
+    });
+    const { getByLabelText } = render(<FleetSpine />);
+    const block = getByLabelText("cluster dev");
+    const lamp = block.querySelector("span") as HTMLElement;
+    expect(lamp.style.background).not.toContain("success");
+    expect(block.title).toContain("unverified");
+  });
+});

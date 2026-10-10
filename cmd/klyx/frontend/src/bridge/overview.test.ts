@@ -55,7 +55,8 @@ describe("summarise", () => {
       flux: null,
     };
     const out = summarise(input, new Set());
-    expect(out.unhealthyWorkloads).toBe(2);
+    expect(out.workloads.attention).toBe(2);
+    expect(out.workloads.unknown).toBe(1); // carried, so a surface never reads it as quiet
   });
 
   it("counts pod attention from the verdict (restarts are history)", () => {
@@ -73,7 +74,7 @@ describe("summarise", () => {
       flux: null,
     };
     const out = summarise(input, new Set());
-    expect(out.podsNotReady).toBe(1);
+    expect(out.pods.attention).toBe(1);
   });
 
   it("counts Warning events only (not Normal)", () => {
@@ -111,7 +112,8 @@ describe("summarise", () => {
       flux: null,
     };
     const out = summarise(input, new Set());
-    expect(out.nodeProblems).toBe(2);
+    expect(out.nodes.attention).toBe(2);
+    expect(out.nodes.unknown).toBe(1);
   });
 
   it("returns null failedReleases when helmAvailable=false", () => {
@@ -143,10 +145,10 @@ describe("summarise", () => {
       flux: null,
     };
     const out = summarise(input, new Set());
-    expect(out.unhealthyWorkloads).toBe(0);
-    expect(out.podsNotReady).toBe(0);
+    expect(out.workloads.attention).toBe(0);
+    expect(out.pods.attention).toBe(0);
     expect(out.warningEvents).toBe(0);
-    expect(out.nodeProblems).toBe(0);
+    expect(out.nodes.attention).toBe(0);
     expect(out.failedReleases).toBe(0);
   });
 
@@ -268,10 +270,10 @@ describe("fetchOverviewSummary integration", () => {
     const s = useFleet.getState().overviewSummary;
     expect(s.cluster).toBe("homelab");
     expect(s.loading).toBe(false);
-    expect(s.unhealthyWorkloads).toBe(2);
-    expect(s.podsNotReady).toBe(1);
+    expect(s.workloads).toMatchObject({ coverage: "complete", counts: { attention: 2 } });
+    expect(s.pods).toMatchObject({ coverage: "complete", counts: { attention: 1 } });
     expect(s.warningEvents).toBe(1);
-    expect(s.nodeProblems).toBe(1);
+    expect(s.nodes).toMatchObject({ coverage: "complete", counts: { attention: 1 } });
     expect(s.helmAvailable).toBe(true);
     expect(s.failedReleases).toBe(1);
     expect(s.namespaces).toBe(2); // "default" + "kube-system"
@@ -289,8 +291,8 @@ describe("fetchOverviewSummary integration", () => {
     await fetchOverviewSummary("homelab");
 
     const s = useFleet.getState().overviewSummary;
-    expect(s.unhealthyWorkloads).toBeNull(); // workloads fetch rejected
-    expect(s.podsNotReady).toBe(0);         // pods fetch succeeded
+    expect(s.workloads).toBeNull(); // workloads fetch rejected
+    expect(s.pods).toMatchObject({ coverage: "complete", counts: { total: 0, attention: 0 } }); // pods fetch succeeded
   });
 
   // Review 2026-10-03 #10: the list bindings resolve (not reject) on failure,
@@ -307,10 +309,10 @@ describe("fetchOverviewSummary integration", () => {
     await fetchOverviewSummary("homelab");
 
     const s = useFleet.getState().overviewSummary;
-    expect(s.unhealthyWorkloads).toBeNull();
-    expect(s.podsNotReady).toBeNull();
+    expect(s.workloads).toBeNull();
+    expect(s.pods).toBeNull();
     expect(s.warningEvents).toBeNull();
-    expect(s.nodeProblems).toBeNull();
+    expect(s.nodes).toBeNull();
   });
 
   it("flux tile is null when fluxPresent is false", async () => {
@@ -354,3 +356,21 @@ describe("fetchOverviewSummary integration", () => {
     expect(s.fluxError).toBe(true);
   });
 });
+
+describe("observations keep coverage", () => {
+  it("a capped list is partial even with zero attention", async () => {
+    (WorkloadsService.ListWorkloads as ReturnType<typeof vi.fn>).mockResolvedValue({ fluxPresent: false, namespaces: [], workloads: [{ health: { kind: "ok" } }], truncated: true });
+    (PodsService.ListPods as ReturnType<typeof vi.fn>).mockResolvedValue({ namespaces: [], pods: [], truncated: true });
+    (EventsService.ListEvents as ReturnType<typeof vi.fn>).mockResolvedValue({ namespaces: [], events: [] });
+    (NodesService.ListNodes as ReturnType<typeof vi.fn>).mockResolvedValue({ nodes: [] });
+    (HelmService.ListHelmReleases as ReturnType<typeof vi.fn>).mockResolvedValue({ available: false, releases: [] });
+    (GitOpsService.GetGitOpsSummary as ReturnType<typeof vi.fn>).mockResolvedValue({ fluxPresent: false, total: 0, notReady: 0, suspended: 0 });
+
+    await fetchOverviewSummary("homelab");
+
+    const s = useFleet.getState().overviewSummary;
+    expect(s.workloads?.coverage).toBe("partial");
+    expect(s.pods?.coverage).toBe("partial");
+  });
+});
+

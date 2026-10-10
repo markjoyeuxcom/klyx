@@ -31,7 +31,8 @@ import { FleetCompare } from "./FleetCompare";
 import { WatchErrorBanner } from "../chrome/WatchErrorBanner";
 
 import { VerdictLabel, VerdictLamp, VerdictStatus } from "../health/VerdictView";
-import { attentionTone, coverageOf, isAttention, kindOf, labelOf, summarize } from "../health/verdict";
+import { coverageOf, isAttention, kindOf, labelOf, summarize } from "../health/verdict";
+import { verdictMeters } from "../health/meters";
 const KINDS: WorkloadKind[] = ["Deployment", "StatefulSet", "DaemonSet"];
 const kindShort: Record<WorkloadKind, string> = { Deployment: "deploy", StatefulSet: "sts", DaemonSet: "daemonset" };
 const keyOf = (w: WorkloadDTO) => `${w.kind}/${w.namespace}/${w.name}`;
@@ -98,6 +99,7 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
   // index — live emits re-rank the rows, and an index-bound selection silently
   // retargets the context panel (and the day-2 verbs derived from it).
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const [unknownOnly, setUnknownOnly] = useState(false);
   // Aggregate-logs dock target. Persists across row selection; closed via ✕ only.
   const [logsTarget, setLogsTarget] = useState<{ namespace: string; name: string; kind: WorkloadKind } | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
@@ -177,16 +179,18 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
   const showMetrics = wl.metricsAvailable;
   // One verdict per workload from the backend (internal/health); every
   // number on this lens derives from this one summary.
-  const counts = summarize(wl.items, (w) => w.health);
+  // Count and show only rows read for THIS cluster+namespace (see PodsView).
   const coverage = coverageOf(wl, cluster, wl.namespace);
-  const qualifier = coverage === "partial" ? " (partial)" : coverage === "stale" ? " (last good)" : "";
+  const scopedItems = coverage === "unavailable" ? [] : wl.items;
+  const counts = summarize(scopedItems, (w) => w.health);
   const gridCols = showMetrics
     ? "12px 90px 1fr 70px 64px 1.1fr 140px 140px 130px 28px"
     : "12px 90px 1fr 70px 64px 1.2fr 160px 28px";
   const query = wl.search.trim().toLowerCase();
-  const filtered = wl.items.filter((w) => {
+  const filtered = scopedItems.filter((w) => {
     if (!wl.kindFilter[w.kind as WorkloadKind]) return false;
     if (wl.needsAttention && !isAttention(kindOf(w.health))) return false;
+    if (unknownOnly && kindOf(w.health) !== "unknown") return false;
     if (!query) return true;
     const gitops = w.gitops ? `${w.gitops.kind} ${w.gitops.namespace} ${w.gitops.name}` : "";
     const pods = w.pods.map((p) => `${p.name} ${p.node} ${p.reason}`).join(" ");
@@ -256,15 +260,10 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
           {/* Meters: workload population by rank - the same buckets the rows sort by. */}
           <MetersStrip
             note="faults first"
-            meters={[
-              { label: wl.namespace ? `workloads in ${wl.namespace}` : "workloads", value: counts.total },
-              counts.attention > 0 && { label: `attention${qualifier}`, value: counts.attention, tone: attentionTone(counts) },
-              counts.fault > 0 && { label: "fault", value: counts.fault, tone: "danger" as const },
-              counts.degraded > 0 && { label: "degraded", value: counts.degraded, tone: "warning" as const },
-              counts.unknown > 0 && { label: "unknown", value: counts.unknown },
+            meters={verdictMeters({ noun: "workloads", scope: wl.namespace, counts, coverage, extra: [
               counts.progressing > 0 && { label: "rolling out", value: counts.progressing },
               counts.paused > 0 && { label: "scaled to 0", value: counts.paused },
-            ]}
+            ] })}
           />
           <div style={{
             display: "flex",
@@ -283,13 +282,18 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
                 <option value="">all namespaces</option>
                 {wl.namespaces.map((ns) => <option key={ns} value={ns}>{ns}</option>)}
               </select>
-              <Chip on={wl.needsAttention} onClick={() => useFleet.getState().toggleNeedsAttention()}>needs attention</Chip>
+              <Chip on={wl.needsAttention} onClick={() => { setUnknownOnly(false); useFleet.getState().toggleNeedsAttention(); }}>attention</Chip>
+              {/* Offered while some verdict is unknown - and while the filter is
+                  on, so it can always be cleared after its last row resolves. */}
+              {(counts.unknown > 0 || unknownOnly) && (
+                <Chip on={unknownOnly} onClick={() => { if (wl.needsAttention) useFleet.getState().toggleNeedsAttention(); setUnknownOnly(!unknownOnly); }}>unknown {counts.unknown}</Chip>
+              )}
               {showMetrics && (
                 <Chip on={wl.nearLimitSort} onClick={() => useFleet.getState().toggleNearLimitSort()}>near limit</Chip>
               )}
               <WorkloadStatusTrail
                 shown={rows.length}
-                total={wl.items.length}
+                total={scopedItems.length}
                 attention={attentionCount}
                 kinds={visibleKinds || "none"}
                 live={wl.live}
@@ -326,7 +330,7 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
           )}
 
           <div style={{ flex: 1, minHeight: 0, overflowX: "auto", overflowY: "hidden", display: "flex", flexDirection: "column" }}>
-            {wl.loading && wl.items.length === 0 ? (
+            {wl.loading && scopedItems.length === 0 ? (
               <div style={{ padding: "16px 20px" }}>
                 <SkeletonRows rows={8} label="loading workloads" />
               </div>
@@ -335,7 +339,7 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
                 <EmptyState
                   icon={<IconBox size={28} stroke={1.2} />}
                   title={`No workloads${wl.namespace ? ` in ${wl.namespace}` : ""}.`}
-                  hint={wl.needsAttention && !wl.search ? "The needs-attention filter is on - everything here is healthy." : undefined}
+                  hint={wl.needsAttention && !wl.search ? "The attention filter is on - nothing in this scope needs attention." : undefined}
                   action={(wl.search || wl.needsAttention || !KINDS.every((k) => wl.kindFilter[k])) ? {
                     label: "Clear filters",
                     onClick: () => {
@@ -693,8 +697,11 @@ function WorkloadContextPanel({
     );
   }
 
-  const badPods = workload.pods.filter((p) => !p.ready || p.restarts > 0).length;
-  const deleteTarget = workload.pods.find((p) => !p.ready || p.restarts > 0) ?? workload.pods[0] ?? null;
+  // These pods are selector matches without their own verdicts: show native
+  // facts (ready, restarts) and never derive a second health model here. The
+  // workload's verdict above is the one judgement on this panel.
+  const notReadyPods = workload.pods.filter((p) => !p.ready).length;
+  const deleteTarget = workload.pods.find((p) => !p.ready) ?? workload.pods[0] ?? null;
   const owner = workload.gitops
     ? `${workload.gitops.kind} ${workload.gitops.namespace}/${workload.gitops.name}`
     : "—";
@@ -826,9 +833,9 @@ function WorkloadContextPanel({
       )}
 
       <div style={{ padding: "12px 14px", borderBottom: "0.5px solid var(--color-border-tertiary)", display: "grid", gap: 8 }}>
-        <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5, color: "var(--color-text-tertiary)" }}>pods</div>
-        <div style={{ fontFamily: "var(--font-mono)", fontSize: 12, color: badPods > 0 ? "var(--color-text-warning)" : "var(--color-text-success)" }}>
-          {badPods > 0 ? `${badPods} affected / ${workload.pods.length} total` : `${workload.pods.length} healthy`}
+        <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5, color: "var(--color-text-tertiary)" }} title="Pods matched by this workload's label selector. Open a pod for its own verdict.">pods · selector match</div>
+        <div style={{ fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--color-text-secondary)" }}>
+          {workload.pods.length} matched{notReadyPods > 0 ? ` · ${notReadyPods} not ready` : ""}
         </div>
         <div style={{ display: "grid", gap: 6 }}>
           {/* Every other pod-adjacent surface links pods; this one was the
@@ -849,9 +856,9 @@ function WorkloadContextPanel({
               }}
               style={{ display: "grid", gridTemplateColumns: "8px minmax(0, 1fr) auto", gap: 8, alignItems: "center", border: "0.5px solid var(--color-border-tertiary)", background: "var(--color-background-primary)", padding: "7px 8px", fontFamily: "var(--font-mono)", fontSize: 11, cursor: "pointer" }}
             >
-              <span style={{ width: 7, height: 7, borderRadius: "50%", background: p.ready ? "var(--color-text-success)" : "var(--color-text-danger)" }} />
+              <span aria-hidden style={{ width: 7, height: 7, borderRadius: "50%", boxSizing: "border-box", border: "1px solid var(--color-text-tertiary)", background: p.ready ? "var(--color-text-tertiary)" : "transparent" }} />
               <span style={{ ...ellipsis, color: "var(--color-text-info)" }} title={`open pod ${p.name}`}>{p.name}</span>
-              <span style={{ color: p.ready ? "var(--color-text-secondary)" : "var(--color-text-danger)" }}>{p.ready ? "ready" : p.reason || "not ready"}</span>
+              <span style={{ color: "var(--color-text-secondary)" }}>{p.ready ? "ready" : p.reason || "not ready"}</span>
               <span />
               <button
                 onClick={(e) => {
@@ -861,7 +868,7 @@ function WorkloadContextPanel({
                 title={`open node ${p.node}`}
                 style={{ background: "transparent", border: "none", padding: 0, cursor: "pointer", textAlign: "left", color: "var(--color-text-tertiary)", fontFamily: "var(--font-mono)", fontSize: 11, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", textDecoration: "underline", textDecorationColor: "var(--color-border-secondary)", textUnderlineOffset: 2 }}
               >{p.node}</button>
-              <span style={{ color: p.restarts > 0 ? "var(--color-text-warning)" : "var(--color-text-tertiary)" }}>{p.restarts}</span>
+              <span style={{ color: p.restarts > 0 ? "var(--color-text-secondary)" : "var(--color-text-tertiary)" }} title="restarts">{p.restarts}</span>
             </div>
           ))}
           {workload.pods.length > 6 && (

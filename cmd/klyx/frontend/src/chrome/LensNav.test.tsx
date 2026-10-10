@@ -70,3 +70,37 @@ describe("LensNav", () => {
     expect(getByText("1")).toBeTruthy();
   });
 });
+
+describe("LensNav attention badges (health model)", () => {
+  const fault = { kind: "fault", label: "CrashLoopBackOff", reason: "CrashLoopBackOff", rule: "pod.current-failure" };
+  const pod = (name: string, health: object) => ({
+    namespace: "shop", name, ready: false, phase: "Running", reason: "", rank: "unhealthy" as const, restarts: 0,
+    node: "n", ip: "", ownerKind: "", ownerName: "", ageSeconds: 1, containers: [], health,
+  });
+  const seedPods = (over: object) => useFleet.setState((s) => ({
+    route: { name: "cluster", cluster: "dev", section: "pods" },
+    pods: { ...s.pods, cluster: "dev", namespace: "", items: [pod("a", fault), pod("b", fault)], loading: false, rowsScope: "dev|", error: null, truncated: false, ...over },
+  }));
+  const podsTab = (getByText: (t: string) => HTMLElement) => getByText("pods").closest("button") as HTMLButtonElement;
+
+  it("shows the pods count for this cluster's complete all-namespaces read", () => {
+    seedPods({});
+    const { getByText } = render(<LensNav />);
+    expect(podsTab(getByText).textContent).toContain("2");
+  });
+
+  it("drops the badge during a switch to a namespace (old all-namespaces rows retained)", () => {
+    seedPods({ namespace: "shop", loading: true });
+    const { getByText } = render(<LensNav />);
+    expect(podsTab(getByText).textContent).not.toMatch(/\d/);
+  });
+
+  it("drops the badge for a capped, failed or other-cluster read", () => {
+    for (const over of [{ truncated: true }, { error: "boom" }, { rowsScope: "prd|" }]) {
+      seedPods(over);
+      const { getByText, unmount } = render(<LensNav />);
+      expect(podsTab(getByText).textContent).not.toMatch(/\d/);
+      unmount();
+    }
+  });
+});

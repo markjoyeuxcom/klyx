@@ -30,7 +30,8 @@ import { loadClusterPrefs, loadSearch, savePodsViewPrefs, saveSearch } from "../
 import { WatchErrorBanner } from "../chrome/WatchErrorBanner";
 
 import { VerdictLabel, VerdictLamp, VerdictStatus } from "../health/VerdictView";
-import { attentionTone, coverageOf, isAttention, kindOf, labelOf, summarize } from "../health/verdict";
+import { coverageOf, isAttention, kindOf, labelOf, summarize } from "../health/verdict";
+import { verdictMeters } from "../health/meters";
 
 // readyOf renders the panel's "N/M ready" from non-init containers.
 function readyOf(p: PodSummaryDTO): string {
@@ -141,11 +142,14 @@ export function PodsView({ cluster }: { cluster: string }) {
   // One verdict per pod, classified by the backend (internal/health). Every
   // number on this lens - meters, filter counts, the idle inspector - comes
   // from this one summary, so they cannot disagree.
-  const counts = summarize(pods.items, (p) => p.health);
+  // Rows count only when they were read for THIS cluster+namespace; during a
+  // scope switch (or after a failed first read) the store still holds another
+  // scope's rows, which must not be presented - or counted - as this one.
   const coverage = coverageOf(pods, cluster, pods.namespace);
-  const qualifier = coverage === "partial" ? " (partial)" : coverage === "stale" ? " (last good)" : "";
+  const scopedItems = coverage === "unavailable" ? [] : pods.items;
+  const counts = summarize(scopedItems, (p) => p.health);
 
-  const filtered = pods.items.filter((p) => {
+  const filtered = scopedItems.filter((p) => {
     const k = kindOf(p.health);
     if (pods.needsAttention && !isAttention(k)) return false;
     if (unknownOnly && k !== "unknown") return false;
@@ -253,14 +257,7 @@ export function PodsView({ cluster }: { cluster: string }) {
             when they exist - 209 healthy rows stay dark. */}
         <MetersStrip
           note="faults first"
-          meters={[
-            { label: pods.namespace ? `pods in ${pods.namespace}` : "pods", value: counts.total },
-            counts.attention > 0 && { label: `attention${qualifier}`, value: counts.attention, tone: attentionTone(counts) },
-            counts.fault > 0 && { label: "fault", value: counts.fault, tone: "danger" as const },
-            counts.degraded > 0 && { label: "degraded", value: counts.degraded, tone: "warning" as const },
-            counts.unknown > 0 && { label: "unknown", value: counts.unknown },
-            counts.progressing > 0 && { label: "starting", value: counts.progressing },
-          ]}
+          meters={verdictMeters({ noun: "pods", scope: pods.namespace, counts, coverage, extra: [counts.progressing > 0 && { label: "starting", value: counts.progressing }] })}
         />
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, flexWrap: "wrap", flexShrink: 0 }}>
 
@@ -274,7 +271,7 @@ export function PodsView({ cluster }: { cluster: string }) {
             </select>
             <FilterButton label="all" count={counts.total} active={!pods.needsAttention && !unknownOnly} onClick={() => { setUnknownOnly(false); if (pods.needsAttention) useFleet.getState().togglePodsNeedsAttention(); }} />
             <FilterButton label="attention" count={counts.attention} active={pods.needsAttention} onClick={() => { setUnknownOnly(false); if (!pods.needsAttention) useFleet.getState().togglePodsNeedsAttention(); }} />
-            {counts.unknown > 0 && (
+            {(counts.unknown > 0 || unknownOnly) && (
               <FilterButton label="unknown" count={counts.unknown} active={unknownOnly} onClick={() => { setUnknownOnly(true); if (pods.needsAttention) useFleet.getState().togglePodsNeedsAttention(); }} />
             )}
             <input
@@ -336,13 +333,13 @@ export function PodsView({ cluster }: { cluster: string }) {
           )}
 
           {/* Table */}
-          {pods.loading && pods.items.length === 0 ? (
+          {pods.loading && scopedItems.length === 0 ? (
             <SkeletonRows rows={8} label="loading pods" />
           ) : filtered.length === 0 ? (
             <EmptyState
               icon={<IconCircleDot size={28} stroke={1.2} />}
-              title={pods.items.length === 0 ? `No pods${pods.namespace ? ` in ${pods.namespace}` : ""}.` : "No pods match the current filter."}
-              action={pods.items.length > 0 ? {
+              title={coverage === "unavailable" ? `No pod data for ${pods.namespace || "all namespaces"} yet.` : scopedItems.length === 0 ? `No pods${pods.namespace ? ` in ${pods.namespace}` : ""}.` : "No pods match the current filter."}
+              action={scopedItems.length > 0 ? {
                 label: "Clear filters",
                 onClick: () => {
                   useFleet.getState().setPodsSearch("");
@@ -389,7 +386,7 @@ export function PodsView({ cluster }: { cluster: string }) {
               />
               <FKeysBar
                 keys={[["j k", "nav"], ["↵", "inspect"], ["l", "logs"], ["x", "select"], ["/", "filter"]]}
-                status={`${filtered.length} of ${pods.items.length} · faults first`}
+                status={`${filtered.length} of ${scopedItems.length} · faults first`}
               />
             </div>
           )}

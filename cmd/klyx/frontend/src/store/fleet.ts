@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { HealthLike, VerdictCounts } from "../health/verdict";
+import type { HealthLike, VerdictCounts, VerdictObservation } from "../health/verdict";
 
 export type ClusterDTO = {
   name: string;
@@ -92,11 +92,14 @@ export type FleetBoardEntry = {
 // installed - expected, excluded from the tape), or "unreadable" (the fetch
 // failed - the tape must say so rather than implying quiet).
 export type LensCount = number | "absent" | "unreadable";
+// Migrated domains carry their verdict counts and coverage, so the tape can
+// tell "quiet" from "capped" or "could not classify" (health model 1b).
+export type VerdictLensCount = VerdictObservation | "unreadable";
 export type TapeCounts = {
-  workloads: LensCount;
-  pods: LensCount;
+  workloads: VerdictLensCount;
+  pods: VerdictLensCount;
   events: LensCount;
-  nodes: LensCount;
+  nodes: VerdictLensCount;
   helm: LensCount;
   flux: LensCount;
   argo: LensCount;
@@ -739,10 +742,11 @@ export type NavIntent =
 export type OverviewSummary = {
   cluster: string | null;
   loading: boolean;
-  unhealthyWorkloads: number | null;  // null = fetch failed for that tile
-  podsNotReady: number | null;
+  // Verdict counts + coverage; null = the fetch failed for that tile.
+  workloads: VerdictObservation | null;
+  pods: VerdictObservation | null;
   warningEvents: number | null;
-  nodeProblems: number | null;
+  nodes: VerdictObservation | null;
   failedReleases: number | null;       // null also means helm unavailable (tile hidden)
   helmAvailable: boolean;
   namespaces: number | null;
@@ -1272,8 +1276,8 @@ export const useFleet = create<FleetState>((set) => ({
     return { helm: { ...s.helm, history, values, detailLoading: false } };
   }),
   clearHelm: () => set({ helm: { cluster: null, releases: [], available: true, message: "", loading: false, selected: null, history: [], values: "", detailLoading: false } }),
-  overviewSummary: { cluster: null, loading: false, unhealthyWorkloads: null, podsNotReady: null, warningEvents: null, nodeProblems: null, failedReleases: null, helmAvailable: false, namespaces: null, flux: null, fluxError: false },
-  setOverviewSummaryLoading: (cluster) => set({ overviewSummary: { cluster, loading: true, unhealthyWorkloads: null, podsNotReady: null, warningEvents: null, nodeProblems: null, failedReleases: null, helmAvailable: false, namespaces: null, flux: null, fluxError: false } }),
+  overviewSummary: { cluster: null, loading: false, workloads: null, pods: null, warningEvents: null, nodes: null, failedReleases: null, helmAvailable: false, namespaces: null, flux: null, fluxError: false },
+  setOverviewSummaryLoading: (cluster) => set({ overviewSummary: { cluster, loading: true, workloads: null, pods: null, warningEvents: null, nodes: null, failedReleases: null, helmAvailable: false, namespaces: null, flux: null, fluxError: false } }),
   setOverviewSummary: (s) => set({ overviewSummary: s }),
-  clearOverviewSummary: () => set({ overviewSummary: { cluster: null, loading: false, unhealthyWorkloads: null, podsNotReady: null, warningEvents: null, nodeProblems: null, failedReleases: null, helmAvailable: false, namespaces: null, flux: null, fluxError: false } }),
+  clearOverviewSummary: () => set({ overviewSummary: { cluster: null, loading: false, workloads: null, pods: null, warningEvents: null, nodes: null, failedReleases: null, helmAvailable: false, namespaces: null, flux: null, fluxError: false } }),
 }));

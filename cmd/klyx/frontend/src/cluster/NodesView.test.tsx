@@ -148,6 +148,7 @@ function seed(items: NodeSummaryDTO[]) {
       ...s.nodes,
       cluster: "homelab",
       items,
+      rowsCluster: "homelab",
       loading: false,
     },
   }));
@@ -159,6 +160,7 @@ function seedWithDetail(summary: NodeSummaryDTO, detail: NodeDetailDTO) {
       ...s.nodes,
       cluster: "homelab",
       items: [summary],
+      rowsCluster: "homelab",
       loading: false,
       selected: { name: summary.name },
       detail,
@@ -698,5 +700,16 @@ describe("NodesView", () => {
     expect(startDrain).toHaveBeenCalledTimes(1);
     await act(async () => { pane.rerender(<NodesView cluster="other-cluster" />); });
     expect(vi.mocked(startDrain).mock.calls.map((c) => c[0])).toEqual(["homelab"]);
+  });
+});
+
+describe("NodesView health model (1b rework)", () => {
+  it("offers an unknown filter that isolates nodes whose readiness is not reported", () => {
+    const silent: NodeSummaryDTO = { ...healthy, name: "silent-node", health: { kind: "unknown", label: "Ready not reported", reason: "ReadyMissing", rule: "node.ready-missing" } };
+    seed([healthy, silent]);
+    const { getByRole, getByText, queryByText } = render(<NodesView cluster="homelab" />);
+    fireEvent.click(getByRole("button", { name: /unknown\s*1/ }));
+    expect(getByText("silent-node")).toBeTruthy();
+    expect(queryByText(healthy.name)).toBeNull();
   });
 });

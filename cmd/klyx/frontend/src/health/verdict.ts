@@ -34,9 +34,11 @@ export function kindOf(h: HealthLike | null | undefined): VerdictKind {
 
 /** labelOf is the headline word; a missing label never invents health. */
 export function labelOf(h: HealthLike | null | undefined): string {
+  // Validate the kind BEFORE trusting the label: a missing or unsupported
+  // kind must never display a healthy-sounding label ("Available").
+  if (!KNOWN.has(h?.kind ?? "")) return "Unknown";
   const l = h?.label?.trim();
-  if (l) return l;
-  return kindOf(h) === "unknown" ? "Unknown" : kindOf(h);
+  return l || kindOf(h);
 }
 
 export function isAttention(k: VerdictKind): boolean {
@@ -129,4 +131,34 @@ export function countIsExact(c: Coverage): boolean {
 /** Workload attention on a fleet-board entry; null when unreadable. */
 export function boardAttention(entry: { workloads: { counts: VerdictCounts } | null } | undefined): number | null {
   return entry?.workloads ? entry.workloads.counts.attention : null;
+}
+
+/**
+ * VerdictObservation is a set of verdict counts together with how complete
+ * the read behind them was. Every count surface (tape, Overview, fleet
+ * board) carries this pair, never a bare number, so a capped or partly
+ * unclassified read can never be presented as an exact "quiet".
+ */
+export type VerdictObservation = { counts: VerdictCounts; coverage: "complete" | "partial" };
+
+export function observe<T>(rows: readonly T[], health: (row: T) => HealthLike | null | undefined, partial: boolean): VerdictObservation {
+  return { counts: summarize(rows, health), coverage: partial ? "partial" : "complete" };
+}
+
+/**
+ * describeObservation words an observation for a count surface:
+ *   attention   -> "3 need attention" (+ for a capped read), tone by worst verdict
+ *   unknown     -> "2 unverified", muted, NOT quiet
+ *   partial     -> "unverified (capped)", muted, NOT quiet
+ *   otherwise   -> quiet
+ */
+export function describeObservation(o: VerdictObservation): { attention: number; text: string; tone: Tone | undefined; quiet: boolean } {
+  const { counts, coverage } = o;
+  const plus = coverage === "partial" ? "+" : "";
+  if (counts.attention > 0) {
+    return { attention: counts.attention, text: `${counts.attention}${plus} need attention`, tone: attentionTone(counts), quiet: false };
+  }
+  if (counts.unknown > 0) return { attention: 0, text: `${counts.unknown} unverified`, tone: undefined, quiet: false };
+  if (coverage === "partial") return { attention: 0, text: "unverified (capped)", tone: undefined, quiet: false };
+  return { attention: 0, text: "quiet", tone: undefined, quiet: true };
 }

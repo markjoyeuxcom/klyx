@@ -1,4 +1,4 @@
-import { summarize, type HealthLike } from "../health/verdict";
+import { summarize, type HealthLike, type VerdictCounts, type VerdictObservation } from "../health/verdict";
 import { useFleet, OverviewSummary } from "../store/fleet";
 import {
   WorkloadsService,
@@ -31,10 +31,12 @@ export type SummariseInput = {
 };
 
 export type SummariseOutput = {
-  unhealthyWorkloads: number;
-  podsNotReady: number;
+  // Verdict counts for the migrated domains - attention, AND unknown, so a
+  // surface can tell "quiet" from "could not classify".
+  workloads: VerdictCounts;
+  pods: VerdictCounts;
   warningEvents: number;
-  nodeProblems: number;
+  nodes: VerdictCounts;
   helmAvailable: boolean;
   failedReleases: number | null; // null when helm unavailable
   namespaces: number;
@@ -49,13 +51,13 @@ export function summarise(
   input: SummariseInput,
   distinctNamespaces: Set<string>,
 ): SummariseOutput {
-  const unhealthyWorkloads = summarize(input.workloads, (w) => w.health).attention;
-  const podsNotReady = summarize(input.pods, (p) => p.health).attention;
+  const workloads = summarize(input.workloads, (w) => w.health);
+  const pods = summarize(input.pods, (p) => p.health);
 
   const warningEvents = input.events.filter((e) => e.type === "Warning").length;
 
   // Cordoned is an intended operator state (paused), not a node problem.
-  const nodeProblems = summarize(input.nodes, (n) => n.health).attention;
+  const nodes = summarize(input.nodes, (n) => n.health);
 
   const failedReleases = input.helmAvailable
     ? input.releases.filter((r) => r.status === "failed").length
@@ -66,14 +68,28 @@ export function summarise(
     : null;
 
   return {
-    unhealthyWorkloads,
-    podsNotReady,
+    workloads,
+    pods,
     warningEvents,
-    nodeProblems,
+    nodes,
     helmAvailable: input.helmAvailable,
     failedReleases,
     namespaces: distinctNamespaces.size,
     flux,
+  };
+}
+
+// observations pairs each migrated domain's counts with its coverage; a
+// failed source is null (unreadable), never a zero.
+export function observations(src: UnwrappedSources, out: SummariseOutput): {
+  workloads: VerdictObservation | null;
+  pods: VerdictObservation | null;
+  nodes: VerdictObservation | null;
+} {
+  return {
+    workloads: src.workloads ? { counts: out.workloads, coverage: src.workloadsPartial ? "partial" : "complete" } : null,
+    pods: src.pods ? { counts: out.pods, coverage: src.podsPartial ? "partial" : "complete" } : null,
+    nodes: src.nodes ? { counts: out.nodes, coverage: "complete" } : null,
   };
 }
 
@@ -85,6 +101,9 @@ export function summarise(
 export type UnwrappedSources = {
   workloads: RankedRow[] | null;
   pods: Array<RankedRow & { namespace?: string }> | null;
+  // The list hit the server cap: rows are a lower bound.
+  workloadsPartial: boolean;
+  podsPartial: boolean;
   events: EventRow[] | null;
   nodes: NodeRow[] | null;
   helm: { available: boolean; releases: HelmRow[] } | null;
@@ -119,13 +138,15 @@ export function unwrapSources(
   ],
 ): UnwrappedSources {
   const [workloadsResult, podsResult, eventsResult, nodesResult, helmResult, fluxResult] = results;
-  const workloads = readable<{ workloads?: RankedRow[] }>(workloadsResult);
-  const pods = readable<{ pods?: Array<RankedRow & { namespace?: string }> }>(podsResult);
+  const workloads = readable<{ workloads?: RankedRow[]; truncated?: boolean }>(workloadsResult);
+  const pods = readable<{ pods?: Array<RankedRow & { namespace?: string }>; truncated?: boolean }>(podsResult);
   const events = readable<{ events?: EventRow[] }>(eventsResult);
   const nodes = readable<{ nodes?: NodeRow[] }>(nodesResult);
   return {
     workloads: workloads ? workloads.workloads ?? [] : null,
     pods: pods ? pods.pods ?? [] : null,
+    workloadsPartial: !!workloads?.truncated,
+    podsPartial: !!pods?.truncated,
     events: events ? events.events ?? [] : null,
     nodes: nodes ? nodes.nodes ?? [] : null,
     helm: readable<{ available: boolean; releases: HelmRow[] }>(helmResult),
@@ -183,15 +204,16 @@ export async function fetchOverviewSummary(cluster: string): Promise<void> {
   }
 
   const out = summariseSources(src, nsSet);
+  const obs = observations(src, out);
 
   // Per-tile degradation: a failed source renders null ("?"), never a fake 0.
   const summary: OverviewSummary = {
     cluster,
     loading: false,
-    unhealthyWorkloads: src.workloads ? out.unhealthyWorkloads : null,
-    podsNotReady: src.pods ? out.podsNotReady : null,
+    workloads: obs.workloads,
+    pods: obs.pods,
     warningEvents: src.events ? out.warningEvents : null,
-    nodeProblems: src.nodes ? out.nodeProblems : null,
+    nodes: obs.nodes,
     helmAvailable: out.helmAvailable,
     failedReleases: out.failedReleases,
     namespaces: out.namespaces > 0 ? out.namespaces : null,

@@ -1,6 +1,6 @@
 import { useFleet } from "../store/fleet";
 import type { TapeCounts } from "../store/fleet";
-import { unwrapSources, summariseSources } from "./overview";
+import { unwrapSources, summariseSources, observations } from "./overview";
 import {
   WorkloadsService,
   PodsService,
@@ -35,12 +35,13 @@ export async function fetchTape(cluster: string): Promise<void> {
 
   const src = unwrapSources([workloads, pods, events, nodes, helm, flux]);
   const out = summariseSources(src, new Set());
+  const obs = observations(src, out);
 
   const counts: TapeCounts = {
-    workloads: src.workloads ? out.unhealthyWorkloads : "unreadable",
-    pods: src.pods ? out.podsNotReady : "unreadable",
+    workloads: obs.workloads ?? "unreadable",
+    pods: obs.pods ?? "unreadable",
     events: src.events ? out.warningEvents : "unreadable",
-    nodes: src.nodes ? out.nodeProblems : "unreadable",
+    nodes: obs.nodes ?? "unreadable",
     // available=false is a definitive "helm not detected" (failedReleases is
     // null exactly when helm is unavailable), not a failure.
     helm: src.helm ? out.failedReleases ?? "absent" : "unreadable",

@@ -3,11 +3,18 @@ import { render, fireEvent } from "@testing-library/react";
 import { TriageTape, tapeRepollMs } from "./TriageTape";
 import { useFleet } from "../store/fleet";
 import type { TapeCounts } from "../store/fleet";
+import type { VerdictObservation } from "../health/verdict";
 
 vi.mock("../bridge/tape", () => ({ fetchTape: vi.fn().mockResolvedValue(undefined) }));
 import { fetchTape } from "../bridge/tape";
 
-const quiet: TapeCounts = { workloads: 0, pods: 0, events: 0, nodes: 0, helm: 0, flux: 0, argo: 0 };
+// obs builds a verdict observation: fault/degraded/unknown counts (+ ok rows), capped or not.
+function obs(fault = 0, degraded = 0, unknown = 0, partial = false): VerdictObservation {
+  const ok = 3;
+  return { coverage: partial ? "partial" : "complete", counts: { total: fault + degraded + unknown + ok, fault, degraded, unknown, progressing: 0, paused: 0, ok, attention: fault + degraded } };
+}
+
+const quiet: TapeCounts = { workloads: obs(), pods: obs(), events: 0, nodes: obs(), helm: 0, flux: 0, argo: 0 };
 
 function seed(counts: Partial<TapeCounts>) {
   useFleet.setState({ tape: { cluster: "nelli", loading: false, counts: { ...quiet, ...counts } } });
@@ -64,16 +71,16 @@ describe("TriageTape", () => {
   });
 
   it("setTapeLoading keeps counts for the same cluster (no re-poll flicker) and resets for a new one", () => {
-    seed({ workloads: 2 });
+    seed({ workloads: obs(2) });
     useFleet.getState().setTapeLoading("nelli");
-    expect(useFleet.getState().tape.counts.workloads).toBe(2);
+    expect(useFleet.getState().tape.counts.workloads).toEqual(obs(2));
     expect(useFleet.getState().tape.loading).toBe(true);
     useFleet.getState().setTapeLoading("blue");
     expect(useFleet.getState().tape.counts.workloads).toBe("unreadable");
   });
 
   it("nonzero counts render chips (singularized); click jumps to the filtered lens", () => {
-    seed({ workloads: 1, events: 3 });
+    seed({ workloads: obs(1), events: 3 });
     const { getByRole, getByText } = render(<TriageTape cluster="nelli" />);
     expect(getByText("everything else is quiet")).toBeTruthy();
     expect(getByRole("button", { name: "3 warning events" })).toBeTruthy();
@@ -104,7 +111,7 @@ describe("TriageTape", () => {
   });
 
   it("genuinely unreadable lenses are counted in the trailer", () => {
-    useFleet.setState({ tape: { cluster: "nelli", loading: false, counts: { workloads: 2, pods: "unreadable", events: 0, nodes: "unreadable", helm: "absent", flux: 0, argo: "absent" } } });
+    useFleet.setState({ tape: { cluster: "nelli", loading: false, counts: { workloads: obs(2), pods: "unreadable", events: 0, nodes: "unreadable", helm: "absent", flux: 0, argo: "absent" } } });
     const { getByText, getByRole } = render(<TriageTape cluster="nelli" />);
     expect(getByRole("button", { name: "2 workloads need attention" })).toBeTruthy();
     expect(getByText("2 lenses unreadable")).toBeTruthy();
@@ -113,11 +120,36 @@ describe("TriageTape", () => {
   it("Warning events alone are evidence: clickable, never lit, never an alert", () => {
     useFleet.setState((s) => ({
       tape: { ...s.tape, cluster: "kind", loading: false,
-        counts: { workloads: 0, pods: 0, events: 12, nodes: 0, helm: "absent", flux: "absent", argo: "absent" } },
+        counts: { workloads: obs(), pods: obs(), events: 12, nodes: obs(), helm: "absent", flux: "absent", argo: "absent" } },
     }));
     const { getByRole, getByText } = render(<TriageTape cluster="kind" />);
     expect(getByRole("button", { name: "12 warning events" })).toBeTruthy();
     expect(getByText("everything is quiet")).toBeTruthy();
+  });
+
+  it("a capped zero-attention read is never quiet", () => {
+    seed({ pods: obs(0, 0, 0, true), helm: "absent", flux: "absent", argo: "absent" });
+    const { getByText, queryByText } = render(<TriageTape cluster="nelli" />);
+    expect(getByText("unverified (capped)")).toBeTruthy();
+    expect(queryByText("everything is quiet")).toBeNull();
+    expect(getByText(/1 lens unverified/)).toBeTruthy();
+  });
+
+  it("an all-unknown read is never quiet", () => {
+    seed({ nodes: obs(0, 0, 2), helm: "absent", flux: "absent", argo: "absent" });
+    const { getByText, queryByText } = render(<TriageTape cluster="nelli" />);
+    expect(getByText("2 unverified")).toBeTruthy();
+    expect(queryByText("everything is quiet")).toBeNull();
+  });
+
+  it("degraded-only attention is amber; any fault is danger", () => {
+    seed({ workloads: obs(0, 2), pods: obs(1, 1), helm: "absent", flux: "absent", argo: "absent" });
+    const { getByRole } = render(<TriageTape cluster="nelli" />);
+    const wl = getByRole("button", { name: "2 workloads need attention" });
+    const pods = getByRole("button", { name: "2 pods need attention" });
+    expect(wl.innerHTML).toContain("warning");
+    expect(wl.innerHTML).not.toContain("danger");
+    expect(pods.innerHTML).toContain("danger");
   });
 });
 

@@ -25,7 +25,8 @@ import { UpdatedAt, useReceivedAt } from "../chrome/Age";
 import { IconAlertTriangle, IconServer, IconX } from "@tabler/icons-react";
 import { well, ellipsis, btn, FilterButton, MetersStrip, StatusDot } from "../chrome/primitives";
 import { VerdictLabel, VerdictLamp, VerdictStatus } from "../health/VerdictView";
-import { attentionTone, isAttention, kindOf, orderOf, summarize } from "../health/verdict";
+import { type Coverage, isAttention, kindOf, orderOf, summarize } from "../health/verdict";
+import { verdictMeters } from "../health/meters";
 import { InspectorIdle, InspectorConditions, InspectorEvents, InspectorSection, InspectorTabButton, MetadataChips, inspectorStateBox } from "./ResourceInspector";
 import { WatchErrorBanner } from "../chrome/WatchErrorBanner";
 
@@ -37,7 +38,7 @@ function ago(s: number): string {
 
 // columns: dot | name | roles | status | version | cpu alloc/cap | mem alloc/cap | taints | age
 const gridCols = "12px minmax(150px,1.5fr) 80px minmax(110px,1fr) 76px 104px 120px 104px 120px 44px 44px";
-type NodeFilter = "all" | "attention" | "cordoned" | "tainted";
+type NodeFilter = "all" | "attention" | "unknown" | "cordoned" | "tainted";
 
 function conditionIsProblem(c: ConditionDTO): boolean {
   if (c.type === "Ready") return c.status !== "True";
@@ -63,6 +64,7 @@ function nodeNeedsAttention(n: NodeSummaryDTO): boolean {
 
 function nodeMatchesFilter(n: NodeSummaryDTO, filter: NodeFilter): boolean {
   if (filter === "attention") return nodeNeedsAttention(n);
+  if (filter === "unknown") return kindOf(n.health) === "unknown";
   if (filter === "cordoned") return n.unschedulable;
   if (filter === "tainted") return n.taintCount > 0;
   return true;
@@ -476,9 +478,10 @@ export function NodesView({ cluster }: { cluster: string }) {
     void getNodeUtilization(cluster).then(setUtil);
   };
   const receivedAt = useReceivedAt(nodes.cluster === cluster && !nodes.loading && nodes.items.length > 0 ? nodes.items : null);
+  // Only rows read for THIS cluster are shown or counted.
   const orderedNodes = useMemo(
-    () => [...nodes.items].sort((a, b) => orderOf(kindOf(a.health)) - orderOf(kindOf(b.health)) || a.name.localeCompare(b.name)),
-    [nodes.items],
+    () => (nodes.rowsCluster === cluster ? [...nodes.items] : []).sort((a, b) => orderOf(kindOf(a.health)) - orderOf(kindOf(b.health)) || a.name.localeCompare(b.name)),
+    [nodes.items, nodes.rowsCluster, cluster],
   );
   const visibleNodes = useMemo(
     () => orderedNodes.filter((n) => nodeMatchesFilter(n, filter) && nodeMatchesQuery(n, query, roleFilter)),
@@ -513,11 +516,13 @@ export function NodesView({ cluster }: { cluster: string }) {
     () => [...new Set(nodes.items.flatMap((n) => n.roles))].sort(),
     [nodes.items],
   );
-  const counts = summarize(nodes.items, (n) => n.health);
+  // Nodes are cluster-scoped: rows count only when read for THIS cluster; a
+  // failed refresh keeps last-good rows, labelled as such.
+  const coverage: Coverage = nodes.rowsCluster !== cluster ? "unavailable" : nodes.error ? "stale" : "complete";
+  const counts = summarize(coverage === "unavailable" ? [] : nodes.items, (n) => n.health);
   const attention = counts.attention;
   const cordonedCount = nodes.items.filter((n) => n.unschedulable).length;
   const taintedCount = nodes.items.filter((n) => n.taintCount > 0).length;
-  const pressureCount = nodes.items.filter((n) => n.problems.some((p) => p !== "NotReady")).length;
   const versionCount = new Set(nodes.items.map((n) => n.version).filter(Boolean)).size;
   const cpuAlloc = nodes.items.reduce((sum, n) => sum + n.cpuAllocatable, 0);
   const cpuCap = nodes.items.reduce((sum, n) => sum + n.cpuCapacity, 0);
@@ -542,11 +547,8 @@ export function NodesView({ cluster }: { cluster: string }) {
         <MetersStrip
           note="faults first, then name"
           meters={[
-            { label: "nodes", value: counts.total },
-            counts.attention > 0 && { label: "attention", value: counts.attention, tone: attentionTone(counts) },
-            counts.fault > 0 && { label: "not ready", value: counts.fault, tone: "danger" as const },
-            pressureCount > 0 && { label: "pressure", value: pressureCount, tone: "warning" as const },
-            counts.unknown > 0 && { label: "unknown", value: counts.unknown },
+            // fault = NotReady, degraded = pressure: the verdict owns both.
+            ...verdictMeters({ noun: "nodes", counts, coverage }),
             cordonedCount > 0 && { label: "cordoned", value: cordonedCount },
             taintedCount > 0 && { label: "tainted", value: taintedCount },
             { label: "versions", value: versionCount },
@@ -559,6 +561,9 @@ export function NodesView({ cluster }: { cluster: string }) {
         <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center", flexShrink: 0 }}>
           <FilterButton label="all" count={nodes.items.length} active={filter === "all"} onClick={() => setFilter("all")} />
           <FilterButton label="attention" count={attention} active={filter === "attention"} onClick={() => setFilter("attention")} />
+          {(counts.unknown > 0 || filter === "unknown") && (
+            <FilterButton label="unknown" count={counts.unknown} active={filter === "unknown"} onClick={() => setFilter("unknown")} />
+          )}
           <FilterButton label="cordoned" count={cordonedCount} active={filter === "cordoned"} onClick={() => setFilter("cordoned")} />
           <FilterButton label="tainted" count={taintedCount} active={filter === "tainted"} onClick={() => setFilter("tainted")} />
           {roles.length > 0 && (

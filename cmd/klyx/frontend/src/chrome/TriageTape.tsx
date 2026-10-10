@@ -4,6 +4,34 @@ import { IconRefresh } from "@tabler/icons-react";
 import { useFleet } from "../store/fleet";
 import { fetchTape } from "../bridge/tape";
 import { StatusDot } from "./primitives";
+import { describeObservation, type VerdictObservation } from "../health/verdict";
+
+// Shown is what one chip says, normalised across legacy number counts and
+// verdict observations (health model 1b):
+//   alert      - lit, clickable (attention / failures)
+//   evidence   - clickable but never lit (Warning events)
+//   unverified - read, but capped or partly unclassified: never "quiet"
+//   quiet / unreadable
+type Shown =
+  | { state: "alert"; n: number; text: string; tone: "danger" | "warning" }
+  | { state: "evidence"; n: number; text: string }
+  | { state: "unverified"; text: string }
+  | { state: "quiet" }
+  | { state: "unreadable"; text: string };
+
+function shownOf(chip: Chip): Shown {
+  const c = chip.count;
+  if (c === "absent" || c === "unreadable") return { state: "unreadable", text: String(c) };
+  if (typeof c === "object") {
+    const d = describeObservation(c);
+    if (d.attention > 0) return { state: "alert", n: d.attention, text: d.text, tone: d.tone === "danger" ? "danger" : "warning" };
+    return d.quiet ? { state: "quiet" } : { state: "unverified", text: d.text };
+  }
+  if (c <= 0) return { state: "quiet" };
+  const text = `${c} ${c === 1 ? chip.valueLabel[0] : chip.valueLabel[1]}`;
+  if (chip.variant === "evidence") return { state: "evidence", n: c, text };
+  return { state: "alert", n: c, text, tone: chip.variant };
+}
 
 // Gentle re-poll cadence: the tape stays honest about a cluster that breaks
 // while you are tailing logs, without hammering seven list endpoints.
@@ -16,7 +44,7 @@ export const tapeRepollMs = 60_000;
 
 type Chip = {
   key: string;
-  count: import("../store/fleet").LensCount;
+  count: import("../store/fleet").LensCount | VerdictObservation;
   label: [string, string]; // [singular, plural]
   tileLabel: string;
   valueLabel: [string, string];
@@ -56,15 +84,19 @@ export function TriageTape({ cluster }: { cluster: string }) {
   // Absent tools are excluded entirely - a Flux-only cluster has no argo lens,
   // which is expected, not unreadable.
   const present = chips.filter((c) => c.count !== "absent");
-  const alerts = present.filter((c) => c.variant !== "evidence" && typeof c.count === "number" && c.count > 0);
-  const readable = present.filter((c) => typeof c.count === "number");
+  const alerts = present.filter((c) => shownOf(c).state === "alert");
+  const readable = present.filter((c) => c.count !== "unreadable");
   const unreadable = present.length - readable.length;
+  const unverified = present.filter((c) => shownOf(c).state === "unverified").length;
+  const lenses = (n: number) => `${n} lens${n === 1 ? "" : "es"}`;
+  // Never "quiet" while any lens is unreadable or unverified.
+  const gaps = [unreadable > 0 ? `${lenses(unreadable)} unreadable` : "", unverified > 0 ? `${lenses(unverified)} unverified` : ""].filter(Boolean).join(" · ");
 
   let trailer: string;
   if (tape.loading && readable.length === 0) trailer = "checking…";
   else if (readable.length === 0) trailer = "triage unavailable";
-  else if (alerts.length === 0) trailer = unreadable > 0 ? `quiet · ${unreadable} lens${unreadable === 1 ? "" : "es"} unreadable` : "everything is quiet";
-  else trailer = unreadable > 0 ? `${unreadable} lens${unreadable === 1 ? "" : "es"} unreadable` : "everything else is quiet";
+  else if (alerts.length === 0) trailer = gaps ? `no attention seen · ${gaps}` : "everything is quiet";
+  else trailer = gaps || "everything else is quiet";
 
   const preferredKeys = new Set(["workloads", "pods", "events", "nodes", "helm"]);
   const preferred = present.filter((c) => preferredKeys.has(c.key));
@@ -120,21 +152,15 @@ export function TriageTape({ cluster }: { cluster: string }) {
 }
 
 function TriageSignal({ chip }: { chip: Chip }) {
-  const count = chip.count;
-  const isNumber = typeof count === "number";
-  const active = isNumber && count > 0;
-  const lit = active && chip.variant !== "evidence";
-  const tone = lit ? (chip.variant as "danger" | "warning") : "muted";
-  const valueColor = !isNumber
-    ? "var(--color-text-tertiary)"
-    : lit
-      ? chip.variant === "danger" ? "var(--color-text-danger)" : "var(--color-text-warning)"
-      : active ? "var(--color-text-secondary)" : "var(--color-text-tertiary)";
-  const value = !isNumber
-    ? String(count)
-    : active
-      ? `${count} ${count === 1 ? chip.valueLabel[0] : chip.valueLabel[1]}`
-      : "quiet";
+  const shown = shownOf(chip);
+  const lit = shown.state === "alert";
+  const active = shown.state === "alert" || shown.state === "evidence";
+  const tone = lit ? shown.tone : "muted";
+  const valueColor = lit
+    ? shown.tone === "danger" ? "var(--color-text-danger)" : "var(--color-text-warning)"
+    : shown.state === "evidence" || shown.state === "unverified" ? "var(--color-text-secondary)" : "var(--color-text-tertiary)";
+  const value = shown.state === "quiet" ? "quiet" : shown.text;
+  const count = active ? shown.n : 0;
   const common: CSSProperties = {
     display: "inline-flex",
     alignItems: "center",

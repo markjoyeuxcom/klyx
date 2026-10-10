@@ -86,6 +86,7 @@ function seed(items: PodSummaryDTO[]) {
       items,
       namespaces: ["default", "monitoring"],
       loading: false,
+      rowsScope: "homelab|",
     },
   }));
 }

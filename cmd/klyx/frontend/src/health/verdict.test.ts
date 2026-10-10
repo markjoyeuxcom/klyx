@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { attentionTone, coverageOf, isAttention, kindOf, labelOf, matchesFilter, summarize, VERDICT_ORDER } from "./verdict";
+import { attentionTone, coverageOf, describeObservation, observe, isAttention, kindOf, labelOf, matchesFilter, summarize, VERDICT_ORDER } from "./verdict";
 
 describe("kindOf fails closed", () => {
   it("passes known kinds through", () => {
@@ -20,6 +20,13 @@ describe("labelOf", () => {
   it("never invents a healthy word for a missing verdict", () => {
     expect(labelOf(undefined)).toBe("Unknown");
     expect(labelOf({ kind: "garbage" })).toBe("Unknown");
+  });
+  it("never shows a healthy label carried by an invalid or default kind", () => {
+    expect(labelOf({ kind: "", label: "Available" })).toBe("Unknown");
+    expect(labelOf({ kind: "healthy", label: "Ready" })).toBe("Unknown");
+  });
+  it("keeps a legitimate backend unknown label", () => {
+    expect(labelOf({ kind: "unknown", label: "Unverified" })).toBe("Unverified");
   });
 });
 
@@ -69,5 +76,26 @@ describe("coverageOf", () => {
   it("marks a failed refresh stale and a capped list partial", () => {
     expect(coverageOf({ rowsScope: "kind|", error: "boom" }, "kind", "")).toBe("stale");
     expect(coverageOf({ rowsScope: "kind|", truncated: true }, "kind", "")).toBe("partial");
+  });
+});
+
+describe("describeObservation never claims a quiet it cannot see", () => {
+  const ok = (n: number) => Array.from({ length: n }, () => ({ h: { kind: "ok" } }));
+  it("complete and all ok is quiet", () => {
+    expect(describeObservation(observe(ok(3), (r) => r.h, false)).quiet).toBe(true);
+  });
+  it("a capped zero-attention read is not quiet", () => {
+    const d = describeObservation(observe(ok(3), (r) => r.h, true));
+    expect(d.quiet).toBe(false);
+    expect(d.text).toBe("unverified (capped)");
+  });
+  it("an all-unknown read is not quiet", () => {
+    const d = describeObservation(observe([{ h: undefined }, { h: { kind: "" } }], (r) => r.h, false));
+    expect(d.quiet).toBe(false);
+    expect(d.text).toBe("2 unverified");
+  });
+  it("degraded-only attention is amber, any fault is danger, capped is a lower bound", () => {
+    expect(describeObservation(observe([{ h: { kind: "degraded" } }], (r) => r.h, false)).tone).toBe("warning");
+    expect(describeObservation(observe([{ h: { kind: "fault" } }, { h: { kind: "degraded" } }], (r) => r.h, true))).toMatchObject({ tone: "danger", text: "2+ need attention" });
   });
 });
