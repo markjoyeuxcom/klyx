@@ -40,20 +40,25 @@ function ago(s: number): string {
 // columns: dot | name | roles | status | version | cpu alloc/cap | mem alloc/cap | taints | age
 type NodeFilter = "all" | "attention" | "unknown" | "cordoned" | "tainted";
 
-function conditionIsProblem(c: ConditionDTO): boolean {
-  if (c.type === "Ready") return c.status !== "True";
-  if (c.type === "MemoryPressure" || c.type === "DiskPressure" || c.type === "PIDPressure" || c.type === "NetworkUnavailable") {
-    return c.status === "True" || c.status === "Unknown";
-  }
-  return c.status === "False" || c.status === "Unknown";
+// Condition evidence, matching the node verdict (internal/health N-rules):
+// confirmed adverse (Ready=False is a fault, pressure=True degraded) is kept
+// apart from unverified (status Unknown), which never glows as a fault.
+type CondTone = "fault" | "degraded" | "unknown" | "ok";
+const PRESSURE = new Set(["MemoryPressure", "DiskPressure", "PIDPressure", "NetworkUnavailable"]);
+function conditionTone(c: ConditionDTO): CondTone {
+  if (c.status === "Unknown") return "unknown";
+  if (c.type === "Ready") return c.status === "True" ? "ok" : "fault";
+  if (PRESSURE.has(c.type)) return c.status === "True" ? "degraded" : "ok";
+  return c.status === "False" ? "degraded" : "ok";
 }
-
-const condColor = (c: ConditionDTO) =>
-  conditionIsProblem(c)
-    ? "var(--color-text-danger)"
-    : c.status === "Unknown"
-      ? "var(--color-text-info)"
-      : "var(--color-text-success)";
+const isAdverse = (c: ConditionDTO) => { const t = conditionTone(c); return t === "fault" || t === "degraded"; };
+const TONE_ORDER: Record<CondTone, number> = { fault: 0, degraded: 1, unknown: 2, ok: 3 };
+const condColor = (c: ConditionDTO) => ({
+  fault: "var(--color-text-danger)",
+  degraded: "var(--color-text-warning)",
+  unknown: "var(--color-text-tertiary)",
+  ok: "var(--color-text-success)",
+})[conditionTone(c)];
 
 // Node health is the backend verdict (internal/health): fault (NotReady),
 // degraded (pressure), unknown (Ready missing/Unknown), paused (cordoned), ok.
@@ -455,8 +460,12 @@ export function NodesView({ cluster }: { cluster: string }) {
   // drainActive pins the cluster the drain was confirmed on: the modal never
   // restarts the drain against another cluster.
   const [drainActive, setDrainActive] = useState<{ cluster: string; node: string; opts: DrainOptions } | null>(null);
-  const [cordonPending, setCordonPending] = useState<{ node: string; cordon: boolean } | null>(null);
-  const [drainPending, setDrainPending] = useState<string | null>(null);
+  // Pending (not yet confirmed) verbs are pinned to their own cluster + node,
+  // independent of selection: they are cancelled on a cluster switch or when
+  // their target leaves a complete read, and always dispatch to the pinned
+  // cluster.
+  const [cordonPending, setCordonPending] = useState<{ cluster: string; node: string; cordon: boolean } | null>(null);
+  const [drainPending, setDrainPending] = useState<{ cluster: string; node: string } | null>(null);
   const [filter, setFilter] = useState<NodeFilter>("all");
   const [roleFilter, setRoleFilter] = useState<string | null>(null);
   const [query, setQuery] = useState("");
@@ -487,8 +496,8 @@ export function NodesView({ cluster }: { cluster: string }) {
     const name = "node" in intent ? intent.node : "";
     const n = nodes.items.find((x) => x.name === name);
     if (!n) return "missing";
-    if (intent.kind === "drain-node") setDrainPending(n.name);
-    else if (intent.kind === "cordon-node") setCordonPending({ node: n.name, cordon: intent.cordon });
+    if (intent.kind === "drain-node") setDrainPending({ cluster, node: n.name });
+    else if (intent.kind === "cordon-node") setCordonPending({ cluster, node: n.name, cordon: intent.cordon });
     else void openNodeDetail(cluster, n.name);
     return "consumed";
   }, [nodes.items, nodes.loading]);
@@ -561,13 +570,17 @@ export function NodesView({ cluster }: { cluster: string }) {
     if (!sel || !selRow) return;
     if (!visibleNodes.includes(selRow)) useFleet.getState().selectNode(null);
   }, [visibleNodes, selRow, sel]);
+  // A pending verb whose target is gone (another cluster, or absent from a
+  // complete read) must not stay one click from dispatch.
+  const targetLive = useCallback(
+    (p: { cluster: string; node: string } | null) =>
+      !!p && p.cluster === cluster && (coverage !== "complete" || scopedNodes.some((x) => x.name === p.node)),
+    [cluster, coverage, scopedNodes],
+  );
   useEffect(() => {
-    // Pending (not yet started) cordon/drain for a node that no longer exists
-    // must not stay one click from dispatch.
-    if (!selRemoved || !sel) return;
-    setCordonPending((p) => (p && p.node === sel.name ? null : p));
-    setDrainPending((p) => (p === sel.name ? null : p));
-  }, [selRemoved, sel]);
+    setCordonPending((p) => (p && !targetLive(p) ? null : p));
+    setDrainPending((p) => (p && !targetLive(p) ? null : p));
+  }, [targetLive]);
 
   const usageAvailable = util?.available !== false;
   const fitted = useMemo(
@@ -725,8 +738,8 @@ export function NodesView({ cluster }: { cluster: string }) {
             detail={nodes.detail}
             loading={nodes.detailLoading}
             removed={selRemoved}
-            onCordon={(node, cordon) => setCordonPending({ node, cordon })}
-            onDrain={(node) => setDrainPending(node)}
+            onCordon={(node, cordon) => setCordonPending({ cluster, node, cordon })}
+            onDrain={(node) => setDrainPending({ cluster, node })}
             onClose={closeInspector}
           />
         ) : undefined}
@@ -734,32 +747,32 @@ export function NodesView({ cluster }: { cluster: string }) {
         onCloseInspector={closeInspector}
       />
 
-      {cordonPending && (
+      {cordonPending && targetLive(cordonPending) && (
         <ConfirmDialog
           title={cordonPending.cordon ? "Cordon node" : "Uncordon node"}
-          cluster={cluster}
+          cluster={cordonPending.cluster}
           detail={`node ${cordonPending.node} will be marked ${cordonPending.cordon ? "unschedulable" : "schedulable"}`}
           protected={isProtected}
           danger={cordonPending.cordon}
           confirmLabel={cordonPending.cordon ? "Cordon" : "Uncordon"}
           onConfirm={() => {
-            const { node, cordon } = cordonPending;
+            const { cluster: target, node, cordon } = cordonPending;
             setCordonPending(null);
-            void cordonNode(cluster, node, cordon);
+            void cordonNode(target, node, cordon);
           }}
           onCancel={() => setCordonPending(null)}
         />
       )}
 
-      {drainPending && (
+      {drainPending && targetLive(drainPending) && (
         <DrainComposerDialog
-          cluster={cluster}
-          node={drainPending}
+          cluster={drainPending.cluster}
+          node={drainPending.node}
           isProtected={isProtected}
           onConfirm={(opts) => {
-            const node = drainPending;
+            const { cluster: target, node } = drainPending;
             setDrainPending(null);
-            setDrainActive({ cluster, node, opts });
+            setDrainActive({ cluster: target, node, opts });
           }}
           onCancel={() => setDrainPending(null)}
         />
@@ -943,7 +956,8 @@ function NodeInspector({ cluster, name, detail, loading, removed, onCordon, onDr
     ...(manifestRef ? [{ label: "Edit manifest in Resources", onSelect: () => { const nav = useFleet.getState(); nav.openResource(manifestRef); nav.openInstance("", name); } }] : []),
   ] : [];
 
-  const problems = detail?.conditions.filter(conditionIsProblem) ?? [];
+  const problems = detail?.conditions.filter(isAdverse) ?? [];
+  const unverified = detail?.conditions.filter((c) => conditionTone(c) === "unknown") ?? [];
 
   return (
     <div data-testid="node-detail-panel" style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
@@ -957,7 +971,7 @@ function NodeInspector({ cluster, name, detail, loading, removed, onCordon, onDr
             <span className="t-status">Node removed.</span> It is no longer in the current read. The details below are its last evidence; actions are disabled.
           </div>
         ) : n ? <VerdictStatus health={rowHealth ?? n.health} detail={[n.unschedulable ? "cordoned" : "", n.taintCount > 0 ? `${n.taintCount} taints` : ""].filter(Boolean).join(" · ")} /> : undefined}
-        primary={n && live ? { label: `Pods on node · ${detail?.podsOnNode.length ?? 0}`, onSelect: () => podsRef.current?.scrollIntoView({ block: "start" }) } : undefined}
+        primary={n && live ? { label: `Pods on node · ${detail?.podsOnNode.length ?? 0}`, onSelect: () => { setTab("overview"); requestAnimationFrame(() => podsRef.current?.scrollIntoView({ block: "start" })); } } : undefined}
         secondary={n && live ? (n.unschedulable ? { label: "Uncordon", onSelect: () => onCordon(n.name, false) } : { label: "Cordon", onSelect: () => onCordon(n.name, true) }) : undefined}
         more={live ? more : []}
         tab={tab}
@@ -979,6 +993,11 @@ function NodeInspector({ cluster, name, detail, loading, removed, onCordon, onDr
                 <InspectorConditions conditions={problems} colorOf={condColor} />
               </InspectorBlock>
             )}
+            {unverified.length > 0 && (
+              <InspectorBlock title="Unverified conditions" count={unverified.length}>
+                <InspectorConditions conditions={unverified} colorOf={condColor} />
+              </InspectorBlock>
+            )}
 
             <div ref={podsRef}>
               <InspectorBlock title="Pods on node" count={detail.podsOnNode.length}>
@@ -995,7 +1014,7 @@ function NodeInspector({ cluster, name, detail, loading, removed, onCordon, onDr
                         title={`open ${p.namespace}/${p.name} in Pods`}
                       >
                         <span style={{ minWidth: 0, overflowWrap: "anywhere" }}><span style={{ color: "var(--color-text-tertiary)" }}>{p.namespace} / </span>{p.name}</span>
-                        <span style={{ color: p.phase === "Failed" ? "var(--color-text-danger)" : "var(--color-text-tertiary)" }}>{p.phase}</span>
+                        <span style={{ color: "var(--color-text-tertiary)" }} title="native pod phase - lifecycle, not a health verdict">phase {p.phase}</span>
                       </button>
                     ))}
                   </div>
@@ -1031,7 +1050,7 @@ function NodeInspector({ cluster, name, detail, loading, removed, onCordon, onDr
 
             <InspectorBlock title="Conditions" count={detail.conditions.length} defaultOpen={false}>
               <InspectorConditions
-                conditions={[...detail.conditions].sort((a, b) => Number(conditionIsProblem(b)) - Number(conditionIsProblem(a)) || a.type.localeCompare(b.type))}
+                conditions={[...detail.conditions].sort((a, b) => TONE_ORDER[conditionTone(a)] - TONE_ORDER[conditionTone(b)] || a.type.localeCompare(b.type))}
                 colorOf={condColor}
               />
             </InspectorBlock>

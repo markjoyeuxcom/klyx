@@ -85,6 +85,10 @@ type PendingDeletePod = { kind: "delete-pod"; w: WorkloadDTO; pod: PodDTO };
 type PendingUndo = { kind: "undo"; w: WorkloadDTO; rev: RolloutRevisionDTO };
 type PendingPause = { kind: "pause"; w: WorkloadDTO; pause: boolean };
 type Pending = PendingRestart | PendingScale | PendingScaleInput | PendingDeletePod | PendingUndo | PendingPause;
+// A pending verb is pinned to the cluster it was raised on, independent of
+// selection: it dispatches there, and is dropped when its target leaves scope
+// or a complete read.
+type PinnedPending = Pending & { cluster: string };
 
 // Workload columns: identity keeps its 240px floor; the rest join by priority
 // while they fit. Usage columns exist only when a metrics source does.
@@ -108,7 +112,8 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
   const reloaderPresent = useFleet((s) => s.clusters.find((c) => c.name === cluster)?.reloaderPresent ?? false);
   const reloaderHealthy = useFleet((s) => s.clusters.find((c) => c.name === cluster)?.reloaderHealthy ?? false);
   const fleetSize = useFleet((s) => s.clusters.length);
-  const [pending, setPending] = useState<Pending | null>(null);
+  const [pinned, setPinned] = useState<PinnedPending | null>(null);
+  const setPending = useCallback((p: Pending | null) => setPinned(p ? { ...p, cluster } : null), [cluster]);
   const [compareTarget, setCompareTarget] = useState<WorkloadDTO | null>(null);
   // Cursor and selection are stable keys (kind/namespace/name), never indexes:
   // live emits re-rank the rows.
@@ -209,7 +214,17 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
   const autoSelect = useRef<"pending" | "done">("pending");
   const itemsAtEntry = useRef<WorkloadDTO[] | null>(null);
   if (itemsAtEntry.current === null) itemsAtEntry.current = wl.items;
-  useEffect(() => { autoSelect.current = "pending"; itemsAtEntry.current = useFleet.getState().workloads.items; setSelectedKey(null); setCursorKey(null); }, [cluster]);
+  // Reset on a real cluster change only: on mount this would undo a palette
+  // intent that already selected its workload.
+  const enteredCluster = useRef(cluster);
+  useEffect(() => {
+    if (enteredCluster.current === cluster) return;
+    enteredCluster.current = cluster;
+    autoSelect.current = "pending";
+    itemsAtEntry.current = useFleet.getState().workloads.items;
+    setSelectedKey(null);
+    setCursorKey(null);
+  }, [cluster]);
   const freshRead = !wl.loading && !wl.error && wl.items !== itemsAtEntry.current;
   useEffect(() => {
     if (autoSelect.current === "done" || !freshRead || (coverage !== "complete" && coverage !== "partial")) return;
@@ -233,10 +248,12 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
     if (!selInScope) { setSelectedKey(null); return; }
     if (selected && !rows.includes(selected)) setSelectedKey(null);
   }, [rows, selected, selectedKey, selInScope, coverage]);
-  useEffect(() => {
-    if (!selRemoved || !selectedKey) return;
-    setPending((p) => (p && keyOf(p.w) === selectedKey ? null : p));
-  }, [selRemoved, selectedKey]);
+  const targetLive = (p: PinnedPending) =>
+    p.cluster === cluster &&
+    (wl.namespace === "" || wl.namespace === p.w.namespace) &&
+    (coverage !== "complete" || scopedItems.some((w) => keyOf(w) === keyOf(p.w)));
+  const pending = pinned && targetLive(pinned) ? pinned : null;
+  useEffect(() => { if (pinned && !pending) setPinned(null); }, [pinned, pending]);
 
   const fitted = useMemo(
     () => fitColumns(WL_COLUMNS.filter((c) => showMetrics || (c.id !== "cpu" && c.id !== "mem")), bodyWidth),
@@ -480,7 +497,7 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
           protected={isProtected}
           confirmLabel="Restart"
           onCancel={() => setPending(null)}
-          onConfirm={() => { const { w } = pending; setPending(null); void rolloutRestart(cluster, w.kind, w.namespace, w.name); }}
+          onConfirm={() => { const { w } = pending; setPending(null); void rolloutRestart(pending.cluster, w.kind, w.namespace, w.name); }}
         />
       )}
       {pending?.kind === "scale" && (
@@ -491,7 +508,7 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
           protected={isProtected}
           confirmLabel="Scale"
           onCancel={() => setPending(null)}
-          onConfirm={() => { const { w, replicas } = pending; setPending(null); void scaleWorkload(cluster, w.kind, w.namespace, w.name, replicas); }}
+          onConfirm={() => { const { w, replicas } = pending; setPending(null); void scaleWorkload(pending.cluster, w.kind, w.namespace, w.name, replicas); }}
         />
       )}
       {pending?.kind === "undo" && (
@@ -507,7 +524,7 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
           danger
           confirmLabel="Roll back"
           onCancel={() => setPending(null)}
-          onConfirm={() => { const { w, rev } = pending; setPending(null); void rolloutUndo(cluster, w.kind, w.namespace, w.name, rev.revision); }}
+          onConfirm={() => { const { w, rev } = pending; setPending(null); void rolloutUndo(pending.cluster, w.kind, w.namespace, w.name, rev.revision); }}
         />
       )}
       {pending?.kind === "pause" && (
@@ -518,7 +535,7 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
           protected={isProtected}
           confirmLabel={pending.pause ? "Pause" : "Resume"}
           onCancel={() => setPending(null)}
-          onConfirm={() => { const { w, pause } = pending; setPending(null); void rolloutPause(cluster, w.namespace, w.name, pause); }}
+          onConfirm={() => { const { w, pause } = pending; setPending(null); void rolloutPause(pending.cluster, w.namespace, w.name, pause); }}
         />
       )}
       {pending?.kind === "delete-pod" && (
@@ -530,7 +547,7 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
           danger
           confirmLabel="Delete"
           onCancel={() => setPending(null)}
-          onConfirm={() => { const { w, pod } = pending; setPending(null); void deletePod(cluster, w.namespace, pod.name).then(() => listWorkloads(cluster, wl.namespace)); }}
+          onConfirm={() => { const { w, pod, cluster: target } = pending; setPending(null); void deletePod(target, w.namespace, pod.name).then(() => { if (target === cluster) void listWorkloads(cluster, wl.namespace); }); }}
         />
       )}
     </div>

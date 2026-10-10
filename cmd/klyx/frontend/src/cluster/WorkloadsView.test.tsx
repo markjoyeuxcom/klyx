@@ -595,3 +595,35 @@ describe("WorkloadsView workspace template (redesign)", () => {
     expect(queryByText("ollama")).toBeNull();
   });
 });
+
+describe("WorkloadsView pending verbs are pinned to their own target", () => {
+  beforeEach(() => { localStorage.clear(); useFleet.getState().clearWorkloads(); useFleet.setState({ navIntent: null }); vi.clearAllMocks(); });
+
+  it("a restart raised from the palette (no selection) is cancelled when its workload is removed", () => {
+    seed([broken, healthy]);
+    useFleet.getState().requestNavIntent({ kind: "restart-workload", cluster: "homelab-nelli", workloadKind: "Deployment", namespace: "ollama-prod", name: "ollama" });
+    const { getAllByRole, getByRole, queryAllByRole } = render(<WorkloadsView cluster="homelab-nelli" />);
+    expect(getAllByRole("button", { name: "Restart" }).length).toBe(2);
+    fireEvent.click(getByRole("button", { name: "close details" }));
+    expect(getAllByRole("button", { name: "Restart" }).length).toBe(1); // confirm stays: selection is not its owner
+    act(() => seed([healthy]));
+    expect(queryAllByRole("button", { name: "Restart" }).length).toBe(0);
+    expect(rolloutRestart).not.toHaveBeenCalled();
+  });
+
+  it("a cluster switch drops a pending restart instead of retargeting it", () => {
+    seed([broken]);
+    const { getAllByRole, queryAllByRole, rerender } = render(<WorkloadsView cluster="homelab-nelli" />);
+    select("ollama");
+    fireEvent.click(getAllByRole("button", { name: "Restart" })[0]);
+    rerender(<WorkloadsView cluster="other" />);
+    expect(rolloutRestart).not.toHaveBeenCalled();
+    act(() => useFleet.setState((s) => ({ workloads: { ...s.workloads, cluster: "other", items: [broken], loading: false, rowsScope: "other|" } })));
+    expect(queryAllByRole("button", { name: "Cancel" }).length).toBe(0); // the confirm is gone
+    fireEvent.click(getAllByRole("button", { name: "Restart" })[0]); // a NEW restart on "other" is fine
+    const confirm = getAllByRole("button", { name: "Restart" });
+    fireEvent.click(confirm[confirm.length - 1]);
+    expect(rolloutRestart).toHaveBeenCalledTimes(1);
+    expect(rolloutRestart).toHaveBeenCalledWith("other", "Deployment", "ollama-prod", "ollama");
+  });
+});

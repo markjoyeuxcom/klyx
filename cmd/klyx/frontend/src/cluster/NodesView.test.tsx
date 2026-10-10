@@ -783,3 +783,64 @@ describe("NodesView workspace template (redesign)", () => {
     expect(queryByText("Memory used")).toBeNull();
   });
 });
+
+describe("NodesView pending verbs are pinned to their own target (Codex review, Nodes)", () => {
+  beforeEach(() => {
+    useFleet.getState().clearNodes();
+    useFleet.setState({ navIntent: null, actionStatus: null });
+    vi.clearAllMocks();
+  });
+
+  it("a drain raised without selection is cancelled when its node leaves a complete read", () => {
+    seed([healthy, cordoned]);
+    useFleet.getState().requestNavIntent({ kind: "drain-node", cluster: "homelab", node: "node-healthy" });
+    const { getByRole, queryByRole } = render(<NodesView cluster="homelab" />);
+    expect(getByRole("dialog", { name: "Drain node node-healthy" })).toBeTruthy();
+    act(() => useFleet.getState().selectNode(null)); // selection is not the owner
+    act(() => seed([cordoned]));
+    expect(queryByRole("dialog", { name: /Drain node/ })).toBeNull();
+    expect(startDrain).not.toHaveBeenCalled();
+  });
+
+  it("a cordon survives a selection change and is cancelled when its own node is removed", () => {
+    seedWithDetail(healthy, fakeDetail);
+    const { getByText, queryByText } = render(<NodesView cluster="homelab" />);
+    fireEvent.click(screen.getByRole("button", { name: "Cordon" }));
+    expect(getByText("Cordon node")).toBeTruthy();
+    act(() => seed([healthy, cordoned]));
+    act(() => useFleet.getState().selectNode({ name: "b-cordoned" }));
+    expect(getByText("Cordon node")).toBeTruthy(); // its target still exists
+    act(() => seed([cordoned]));
+    expect(queryByText("Cordon node")).toBeNull();
+    expect(cordonNode).not.toHaveBeenCalled();
+  });
+
+  it("a cluster switch never retargets a pending cordon onto a same-name node", () => {
+    seedWithDetail(healthy, fakeDetail);
+    const { queryByText, rerender } = render(<NodesView cluster="homelab" />);
+    fireEvent.click(screen.getByRole("button", { name: "Cordon" }));
+    rerender(<NodesView cluster="other" />);
+    act(() => useFleet.setState((s) => ({ nodes: { ...s.nodes, cluster: "other", items: [healthy], rowsCluster: "other", loading: false } })));
+    expect(queryByText("Cordon node")).toBeNull();
+    expect(cordonNode).not.toHaveBeenCalled();
+  });
+
+  it("unknown conditions are unverified, never failing; pressure is amber, Ready=False red", () => {
+    const mixed: NodeDetailDTO = {
+      ...fakeDetail,
+      conditions: [
+        { type: "Ready", status: "Unknown", reason: "NodeStatusUnknown", message: "" },
+        { type: "DiskPressure", status: "Unknown", reason: "NodeStatusUnknown", message: "" },
+        { type: "MemoryPressure", status: "True", reason: "KubeletHasInsufficientMemory", message: "" },
+      ],
+    };
+    seedWithDetail(healthy, mixed);
+    const { getByText, queryByText } = render(<NodesView cluster="homelab" />);
+    expect(getByText("Failing conditions · 1")).toBeTruthy();
+    expect(getByText("Unverified conditions · 2")).toBeTruthy();
+    const failing = getByText("Failing conditions · 1").closest("section")!;
+    expect(failing.textContent).toContain("MemoryPressure");
+    expect(failing.textContent).not.toContain("Ready");
+    expect(queryByText(/Failing conditions · 3/)).toBeNull();
+  });
+});
