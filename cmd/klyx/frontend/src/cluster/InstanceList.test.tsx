@@ -607,3 +607,38 @@ describe("InstanceList Codex rework (Resources review)", () => {
     expect(queryByTestId("lens-inspector")).toBeNull();
   });
 });
+
+describe("InstanceList fleet follow-ups (Codex non-blocking)", () => {
+  const svc = (name: string): InstanceDTO => ({ namespace: "infra", name, created: "" });
+
+  it("names clusters that do not serve the kind", async () => {
+    useFleet.setState({ clusters: [cluster("blue"), cluster("orange")] });
+    vi.mocked(listInstancePage).mockImplementation(async (target) => (
+      target === "orange" ? { items: [], nextToken: "", notServed: true } : { items: [svc("b1")], nextToken: "" }
+    ));
+    const { getByRole, findByText } = render(<InstanceList cluster="blue" resource={serviceRef} />);
+    fireEvent.click(getByRole("button", { name: "Fleet" }));
+    expect(await findByText(/Service is not served on orange/)).toBeTruthy();
+  });
+
+  it("a failed continuation keeps its token and retries; wording follows progress", async () => {
+    useFleet.setState({ clusters: [cluster("blue"), cluster("orange")] });
+    let fail = true;
+    vi.mocked(listInstancePage).mockImplementation(async (target, _ref, token) => {
+      if (target === "orange") return { items: [svc("o1")], nextToken: "" };
+      if (!token) return { items: [svc("b1")], nextToken: "p2" };
+      if (token === "p2" && fail) { fail = false; throw new Error("timeout"); }
+      if (token === "p2") return { items: [svc("b2")], nextToken: "p3" };
+      return { items: [svc("b3")], nextToken: "" };
+    });
+    const { getByRole, findByText, getByText } = render(<InstanceList cluster="blue" resource={serviceRef} />);
+    fireEvent.click(getByRole("button", { name: "Fleet" }));
+    expect(await findByText(/First page only for blue/)).toBeTruthy();
+    fireEvent.click(getByRole("button", { name: "Load next page" }));
+    expect(await findByText(/The next page failed for blue/)).toBeTruthy();
+    fireEvent.click(getByRole("button", { name: "Retry next page" }));
+    await waitFor(() => expect(getByText("b2")).toBeTruthy());
+    expect(getByText(/More pages available for blue/)).toBeTruthy();
+    expect(listInstancePage).toHaveBeenCalledWith("blue", serviceRef, "p2");
+  });
+});

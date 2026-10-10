@@ -27,8 +27,14 @@ type FleetInstanceRow = InstanceDTO & { cluster: string };
 // Fleet coverage is per cluster: a cluster can be read fully, capped (more
 // pages behind `tokens[cluster]`), or unreadable. Counts are a lower bound
 // unless every target is complete.
-type FleetInstanceState = { rows: FleetInstanceRow[]; loading: boolean; errors: string[]; tokens: Record<string, string>; loadingMore: boolean };
-const FLEET_IDLE: FleetInstanceState = { rows: [], loading: false, errors: [], tokens: {}, loadingMore: false };
+// A cluster that does not serve the kind is capability evidence (not an
+// error, not an empty read). A failed continuation keeps its token so it can
+// be retried without rereading the whole fleet.
+type FleetInstanceState = {
+  rows: FleetInstanceRow[]; loading: boolean; errors: string[]; tokens: Record<string, string>; loadingMore: boolean;
+  notServed: string[]; continued: boolean; continuationErrors: string[];
+};
+const FLEET_IDLE: FleetInstanceState = { rows: [], loading: false, errors: [], tokens: {}, loadingMore: false, notServed: [], continued: false, continuationErrors: [] };
 
 const keyOfRow = (r: { cluster: string; namespace: string; name: string }) => `${r.cluster}/${r.namespace}/${r.name}`;
 
@@ -79,18 +85,18 @@ export function InstanceList({ cluster, resource }: { cluster: string; resource:
     void Promise.all(fleetTargets.map(async (target) => {
       try {
         const page = await listInstancePage(target, resource);
-        return { target, rows: page.items.map((row) => ({ ...row, cluster: target })), token: page.nextToken, error: "" };
+        return { target, rows: page.items.map((row) => ({ ...row, cluster: target })), token: page.nextToken, error: "", notServed: !!page.notServed };
       } catch {
-        return { target, rows: [] as FleetInstanceRow[], token: "", error: target };
+        return { target, rows: [] as FleetInstanceRow[], token: "", error: target, notServed: false };
       }
     })).then((results) => {
       if (gen !== fleetGen.current) return;
       setFleetState({
+        ...FLEET_IDLE,
         rows: results.flatMap((r) => r.rows),
-        loading: false,
-        loadingMore: false,
         errors: results.filter((r) => r.error).map((r) => r.error),
         tokens: Object.fromEntries(results.filter((r) => r.token).map((r) => [r.target, r.token])),
+        notServed: results.filter((r) => r.notServed).map((r) => r.target),
       });
     });
     // Bumping the generation invalidates this read and any continuation.
@@ -108,20 +114,22 @@ export function InstanceList({ cluster, resource }: { cluster: string; resource:
     void Promise.all(pending.map(async ([target, token]) => {
       try {
         const page = await listInstancePage(target, resource, token);
-        return { target, rows: page.items.map((row) => ({ ...row, cluster: target })), token: page.nextToken, error: "" };
+        return { target, rows: page.items.map((row) => ({ ...row, cluster: target })), token: page.nextToken, failed: false };
       } catch {
-        return { target, rows: [] as FleetInstanceRow[], token: "", error: target };
+        return { target, rows: [] as FleetInstanceRow[], token, failed: true };
       }
     })).then((results) => {
       if (gen !== fleetGen.current) return;
       setFleetState((st) => {
         const tokens = { ...st.tokens };
+        // a failed continuation keeps its token: the same button retries it
         for (const r of results) { if (r.token) tokens[r.target] = r.token; else delete tokens[r.target]; }
         return {
+          ...st,
           rows: [...st.rows, ...results.flatMap((r) => r.rows)],
-          loading: false,
           loadingMore: false,
-          errors: [...st.errors, ...results.filter((r) => r.error && !st.errors.includes(r.error)).map((r) => r.error)],
+          continued: st.continued || results.some((r) => !r.failed),
+          continuationErrors: results.filter((r) => r.failed).map((r) => r.target),
           tokens,
         };
       });
@@ -307,13 +315,23 @@ export function InstanceList({ cluster, resource }: { cluster: string; resource:
           </label>
         </>
       }
-      notice={(readError && all.length > 0) || (fleetMode && !fleetAllFailed && (fleetState.errors.length > 0 || fleetCapped.length > 0)) ? (
+      notice={(readError && all.length > 0) || (fleetMode && !fleetAllFailed && (fleetState.errors.length > 0 || fleetCapped.length > 0 || fleetState.notServed.length > 0)) ? (
         <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
           {readError && all.length > 0 && <WatchErrorBanner tool={resource.kind} failure="read failed - showing the last good read" error={readError} />}
           {fleetMode && !fleetAllFailed && fleetCapped.length > 0 && (
             <div role="status" className="t-control" style={{ minHeight: 32, display: "flex", alignItems: "center", gap: 8, padding: "0 10px", borderRadius: 4, background: "var(--color-background-secondary)", boxShadow: "inset 0 0 0 1px var(--color-border-secondary)" }}>
-              <span style={{ flex: 1, minWidth: 0 }}>First page only for {fleetCapped.join(", ")}: counts are a lower bound.</span>
-              <button className="l-btn" disabled={fleetState.loadingMore} onClick={loadMoreFleet}>{fleetState.loadingMore ? "Loading…" : "Load next page"}</button>
+              <span style={{ flex: 1, minWidth: 0 }}>
+                {fleetState.continued ? "More pages available" : "First page only"} for {fleetCapped.join(", ")}: counts are a lower bound.
+                {fleetState.continuationErrors.length > 0 && <span style={{ color: "var(--color-text-warning)" }}> The next page failed for {fleetState.continuationErrors.join(", ")}.</span>}
+              </span>
+              <button className="l-btn" disabled={fleetState.loadingMore} onClick={loadMoreFleet}>
+                {fleetState.loadingMore ? "Loading…" : fleetState.continuationErrors.length > 0 ? "Retry next page" : "Load next page"}
+              </button>
+            </div>
+          )}
+          {fleetMode && !fleetAllFailed && fleetState.notServed.length > 0 && (
+            <div role="status" className="t-control" style={{ minHeight: 32, display: "flex", alignItems: "center", gap: 8, padding: "0 10px", borderRadius: 4, background: "var(--color-background-secondary)", boxShadow: "inset 0 0 0 1px var(--color-border-secondary)" }}>
+              <span>{resource.kind} is not served on {fleetState.notServed.join(", ")} (not installed there) - those clusters contribute no rows.</span>
             </div>
           )}
           {fleetMode && !fleetAllFailed && fleetState.errors.length > 0 && (
