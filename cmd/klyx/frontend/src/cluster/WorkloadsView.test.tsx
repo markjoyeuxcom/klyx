@@ -40,8 +40,8 @@ import { rolloutRestart, rolloutHistory, rolloutUndo, rolloutPause, scaleWorkloa
 import { openWorkloadLogsWindow } from "../bridge/windows";
 
 const noResources = { cpu: { usage: null, request: null, limit: null }, mem: { usage: null, request: null, limit: null } };
-const broken: WorkloadDTO = { kind: "Deployment", namespace: "ollama-prod", name: "ollama", desired: 1, ready: 0, available: 0, updated: 1, restarts: 7, reason: "CrashLoopBackOff", rank: "unhealthy", gitops: { kind: "Kustomization", namespace: "flux-system", name: "ollama" }, pods: [{ name: "ollama-x", ready: false, restarts: 7, reason: "CrashLoopBackOff", node: "node-3", ageSeconds: 720 }], resources: noResources };
-const healthy: WorkloadDTO = { kind: "Deployment", namespace: "monitoring", name: "grafana", desired: 1, ready: 1, available: 1, updated: 1, restarts: 0, reason: "Available", rank: "healthy", gitops: null, pods: [], resources: noResources };
+const broken: WorkloadDTO = { kind: "Deployment", namespace: "ollama-prod", name: "ollama", desired: 1, ready: 0, available: 0, updated: 1, restarts: 7, reason: "CrashLoopBackOff", rank: "unhealthy", gitops: { kind: "Kustomization", namespace: "flux-system", name: "ollama" }, pods: [{ name: "ollama-x", ready: false, restarts: 7, reason: "CrashLoopBackOff", node: "node-3", ageSeconds: 720 }], resources: noResources, health: { kind: "fault", label: "CrashLoopBackOff", reason: "CrashLoopBackOff", rule: "workload.pod-failure", rank: 70 } };
+const healthy: WorkloadDTO = { kind: "Deployment", namespace: "monitoring", name: "grafana", desired: 1, ready: 1, available: 1, updated: 1, restarts: 0, reason: "Available", rank: "healthy", gitops: null, pods: [], resources: noResources, health: { kind: "ok", label: "Available", reason: "Ready", rule: "workload.ready" } };
 
 function seed(items: WorkloadDTO[]) {
   useFleet.setState((s) => ({ workloads: { ...s.workloads, cluster: "homelab-nelli", items, namespaces: ["monitoring", "ollama-prod"], loading: false } }));
@@ -53,7 +53,7 @@ describe("WorkloadsView", () => {
   it("renders triage rows with reason, restarts, and gitops owner", () => {
     seed([broken, healthy]);
     const { getByText } = render(<WorkloadsView cluster="homelab-nelli" />);
-    expect(getByText("CrashLoopBackOff")).toBeTruthy();
+    expect(getByText(/CrashLoopBackOff/)).toBeTruthy();
     expect(getByText("flux ks/ollama")).toBeTruthy();
     expect(getByText("0 / 1")).toBeTruthy();
   });
@@ -192,7 +192,7 @@ describe("WorkloadsView", () => {
     const daemonSet: WorkloadDTO = {
       kind: "DaemonSet", namespace: "kube-system", name: "cilium",
       desired: 3, ready: 3, available: 3, updated: 3, restarts: 0,
-      reason: "Available", rank: "healthy", gitops: null, pods: [], resources: noResources,
+      reason: "Available", rank: "healthy", gitops: null, pods: [], resources: noResources, health: { kind: "ok", label: "Available", reason: "Ready", rule: "workload.ready" },
     };
     seed([daemonSet]);
     const { getByText, queryByText } = render(<WorkloadsView cluster="homelab-nelli" />);
@@ -205,7 +205,7 @@ describe("WorkloadsView", () => {
     const sts: WorkloadDTO = {
       kind: "StatefulSet", namespace: "db", name: "postgres",
       desired: 1, ready: 1, available: 1, updated: 1, restarts: 0,
-      reason: "Available", rank: "healthy", gitops: null, pods: [], resources: noResources,
+      reason: "Available", rank: "healthy", gitops: null, pods: [], resources: noResources, health: { kind: "ok", label: "Available", reason: "Ready", rule: "workload.ready" },
     };
     seed([sts]);
     const { getByText } = render(<WorkloadsView cluster="homelab-nelli" />);
@@ -304,7 +304,7 @@ describe("WorkloadsView", () => {
     const second: WorkloadDTO = {
       kind: "Deployment", namespace: "default", name: "second-workload",
       desired: 1, ready: 1, available: 1, updated: 1, restarts: 0,
-      reason: "Available", rank: "healthy", gitops: null, pods: [], resources: noResources,
+      reason: "Available", rank: "healthy", gitops: null, pods: [], resources: noResources, health: { kind: "ok", label: "Available", reason: "Ready", rule: "workload.ready" },
     };
     seed([broken, second]);
     const { queryByText } = render(<WorkloadsView cluster="homelab-nelli" />);

@@ -77,6 +77,7 @@ const healthy: NodeSummaryDTO = {
   memAllocatable: 14 * 1073741824,
   podCapacity: 110,
   ageSeconds: 86400,
+  health: { kind: "ok", label: "Ready", reason: "Ready", rule: "node.ready" },
 };
 
 const notReady: NodeSummaryDTO = {
@@ -95,6 +96,7 @@ const notReady: NodeSummaryDTO = {
   memAllocatable: 7 * 1073741824,
   podCapacity: 110,
   ageSeconds: 3600,
+  health: { kind: "fault", label: "NotReady", reason: "KubeletNotReady", rule: "node.not-ready" },
 };
 
 const cordoned: NodeSummaryDTO = {
@@ -113,6 +115,7 @@ const cordoned: NodeSummaryDTO = {
   memAllocatable: 8 * 1073741824,
   podCapacity: 110,
   ageSeconds: 7200,
+  health: { kind: "paused", label: "Cordoned", reason: "Cordoned", rule: "node.cordoned" },
 };
 
 const fakeDetail: NodeDetailDTO = {
@@ -273,13 +276,13 @@ describe("NodesView", () => {
   it("shows problem text for not-ready node", () => {
     seed([notReady]);
     const { getByText } = render(<NodesView cluster="homelab" />);
-    expect(getByText("NotReady")).toBeTruthy();
+    expect(getByText(/NotReady/)).toBeTruthy();
   });
 
   it("shows cordoned text for unschedulable node", () => {
     seed([cordoned]);
     const { getAllByText } = render(<NodesView cluster="homelab" />);
-    expect(getAllByText("cordoned").length).toBeGreaterThan(0);
+    expect(getAllByText(/cordoned/i).length).toBeGreaterThan(0);
   });
 
   it("shows '-' roles for node with empty roles", () => {

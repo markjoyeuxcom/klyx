@@ -21,27 +21,17 @@ import { Chip } from "../chrome/Chip";
 import { CopyButton } from "../chrome/CopyButton";
 import { EmptyState } from "../chrome/EmptyState";
 import { SkeletonRows } from "../chrome/SkeletonRows";
-import { inputWell, selectWell, MetersStrip, LiveIndicator, btn, ellipsis, type Tone } from "../chrome/primitives";
-import { InspectorFacts, InspectorIdle, InspectorStatus } from "./ResourceInspector";
+import { inputWell, selectWell, MetersStrip, LiveIndicator, btn, ellipsis } from "../chrome/primitives";
+import { InspectorFacts, InspectorIdle } from "./ResourceInspector";
 import { loadClusterPrefs, loadSearch, saveSearch, saveWorkloadsViewPrefs } from "../store/persist";
-import { SyncingChip, staleStyle } from "./staleness";
+import { staleStyle } from "./staleness";
 import { wellKnownResourceRef } from "./resourceRefs";
 import { ManifestButton } from "./ManifestButton";
 import { FleetCompare } from "./FleetCompare";
 import { WatchErrorBanner } from "../chrome/WatchErrorBanner";
 
-const rankDot: Record<string, string> = {
-  unhealthy: "var(--color-text-danger)",
-  degraded: "var(--color-text-warning)",
-  restarts: "var(--color-text-info)",
-  healthy: "var(--color-text-tertiary)",
-};
-const rankTone: Record<string, Tone> = {
-  unhealthy: "danger",
-  degraded: "warning",
-  restarts: "info",
-  healthy: "success",
-};
+import { VerdictLabel, VerdictLamp, VerdictStatus } from "../health/VerdictView";
+import { attentionTone, coverageOf, isAttention, kindOf, labelOf, summarize } from "../health/verdict";
 const KINDS: WorkloadKind[] = ["Deployment", "StatefulSet", "DaemonSet"];
 const kindShort: Record<WorkloadKind, string> = { Deployment: "deploy", StatefulSet: "sts", DaemonSet: "daemonset" };
 const keyOf = (w: WorkloadDTO) => `${w.kind}/${w.namespace}/${w.name}`;
@@ -185,14 +175,18 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
   const onRefresh = () => { listWorkloads(cluster, wl.namespace).then(() => getWorkloadMetrics(cluster, wl.namespace)); };
 
   const showMetrics = wl.metricsAvailable;
-  const rankCount = (rank: string) => wl.items.filter((w) => w.rank === rank).length;
+  // One verdict per workload from the backend (internal/health); every
+  // number on this lens derives from this one summary.
+  const counts = summarize(wl.items, (w) => w.health);
+  const coverage = coverageOf(wl, cluster, wl.namespace);
+  const qualifier = coverage === "partial" ? " (partial)" : coverage === "stale" ? " (last good)" : "";
   const gridCols = showMetrics
     ? "12px 90px 1fr 70px 64px 1.1fr 140px 140px 130px 28px"
     : "12px 90px 1fr 70px 64px 1.2fr 160px 28px";
   const query = wl.search.trim().toLowerCase();
   const filtered = wl.items.filter((w) => {
     if (!wl.kindFilter[w.kind as WorkloadKind]) return false;
-    if (wl.needsAttention && w.rank === "healthy") return false;
+    if (wl.needsAttention && !isAttention(kindOf(w.health))) return false;
     if (!query) return true;
     const gitops = w.gitops ? `${w.gitops.kind} ${w.gitops.namespace} ${w.gitops.name}` : "";
     const pods = w.pods.map((p) => `${p.name} ${p.node} ${p.reason}`).join(" ");
@@ -200,8 +194,7 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
       w.kind,
       w.namespace,
       w.name,
-      w.reason,
-      w.rank,
+      labelOf(w.health),
       gitops,
       pods,
     ].some((v) => v.toLowerCase().includes(query));
@@ -252,7 +245,7 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
 
   const selectedWorkload = effectiveIdx >= 0 ? rows[effectiveIdx] : null;
   const visibleKinds = KINDS.filter((k) => wl.kindFilter[k]).map((k) => kindShort[k]).join(", ");
-  const attentionCount = wl.items.filter((w) => w.rank !== "healthy").length;
+  const attentionCount = counts.attention;
   const selectedExpanded = selectedWorkload ? wl.expanded.includes(keyOf(selectedWorkload)) : false;
 
   return (
@@ -262,13 +255,15 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
         <div style={{ minWidth: 0, minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column", borderRight: "0.5px solid var(--color-border-tertiary)" }}>
           {/* Meters: workload population by rank - the same buckets the rows sort by. */}
           <MetersStrip
-            note="broken first · rank order"
+            note="faults first"
             meters={[
-              { label: "workloads", value: wl.items.length },
-              rankCount("unhealthy") > 0 && { label: "unhealthy", value: rankCount("unhealthy"), tone: "danger" as const },
-              rankCount("degraded") > 0 && { label: "degraded", value: rankCount("degraded"), tone: "warning" as const },
-              rankCount("restarts") > 0 && { label: "restarts", value: rankCount("restarts"), tone: "info" as const },
-              { label: "healthy", value: rankCount("healthy"), tone: "success" as const },
+              { label: wl.namespace ? `workloads in ${wl.namespace}` : "workloads", value: counts.total },
+              counts.attention > 0 && { label: `attention${qualifier}`, value: counts.attention, tone: attentionTone(counts) },
+              counts.fault > 0 && { label: "fault", value: counts.fault, tone: "danger" as const },
+              counts.degraded > 0 && { label: "degraded", value: counts.degraded, tone: "warning" as const },
+              counts.unknown > 0 && { label: "unknown", value: counts.unknown },
+              counts.progressing > 0 && { label: "rolling out", value: counts.progressing },
+              counts.paused > 0 && { label: "scaled to 0", value: counts.paused },
             ]}
           />
           <div style={{
@@ -406,19 +401,22 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
                             cursor: "pointer",
                             background: isKbSelected ? "var(--color-background-secondary)" : undefined,
                             outline: "none",
-                            ...staleStyle(w.stale),
+                            // "dim = not yet realized" - but never dim a fault
+                            // or degradation: generation lag never conceals one.
+                            ...staleStyle(w.stale && !isAttention(kindOf(w.health))),
                           }}
                         >
-                          <span style={{ width: 8, height: 8, borderRadius: "50%", background: rankDot[w.rank] }} />
+                          <VerdictLamp health={w.health} size={8} />
                           <span style={{ color: "var(--color-text-tertiary)" }}>{kindShort[w.kind as WorkloadKind]}</span>
                           <span style={{ display: "flex", alignItems: "center", gap: 2, minWidth: 0 }}>
                             <span style={ellipsis}><span style={{ color: "var(--color-text-tertiary)" }}>{w.namespace}</span> / <span style={{ fontWeight: 500 }}>{w.name}</span></span>
                             <CopyButton text={w.name} label={`copy workload name ${w.name}`} appearOnRowHover />
                           </span>
-                          <span style={{ color: w.ready < w.desired ? "var(--color-text-warning)" : "var(--color-text-secondary)" }}>{w.ready} / {w.desired}</span>
-                          <span style={{ color: w.restarts > 0 ? "var(--color-text-warning)" : "var(--color-text-tertiary)" }}>{w.restarts}</span>
-                          <span style={{ ...ellipsis, color: w.rank === "unhealthy" ? "var(--color-text-danger)" : "var(--color-text-secondary)" }} title={w.reason}>
-                            {w.stale ? <SyncingChip generation={w.generation} observedGeneration={w.observedGeneration} /> : w.reason}
+                          {/* ready / restarts are facts; the verdict column carries colour */}
+                          <span style={{ color: "var(--color-text-secondary)" }}>{w.ready} / {w.desired}</span>
+                          <span style={{ color: w.restarts > 0 ? "var(--color-text-secondary)" : "var(--color-text-tertiary)" }}>{w.restarts}</span>
+                          <span style={{ ...ellipsis, fontSize: 11 }}>
+                            <VerdictLabel health={w.health} mono />
                           </span>
                           {showMetrics && <ResourceCellView resource="cpu" cell={w.resources.cpu} hasPods={w.pods.length > 0} />}
                           {showMetrics && <ResourceCellView resource="mem" cell={w.resources.mem} hasPods={w.pods.length > 0} />}
@@ -450,7 +448,7 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
 
         <WorkloadContextPanel
           workload={selectedWorkload}
-          attention={rankCount("unhealthy") + rankCount("degraded")}
+          attention={counts.attention}
           onClose={() => setSelectedKey(null)}
           expanded={selectedExpanded}
           isProtected={isProtected}
@@ -719,12 +717,7 @@ function WorkloadContextPanel({
         </div>
         {/* State first: the rank + reason headline, scannable before the
             status grid below. */}
-        <InspectorStatus
-          tone={workload.stale ? "muted" : rankTone[workload.rank] ?? "muted"}
-          label={workload.stale ? "syncing…" : workload.rank}
-          reason={workload.stale ? undefined : (workload.reason || undefined)}
-          detail={`${workload.ready}/${workload.desired} ready`}
-        />
+        <VerdictStatus health={workload.health} />
         <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
           <button onClick={() => onLogs(workload)} style={{ ...btn, color: "var(--color-text-info)", borderColor: "var(--color-border-info)", background: "var(--color-background-info)" }}>tail logs</button>
           <button onClick={() => onRestart(workload)} style={btn}>restart</button>
@@ -781,7 +774,7 @@ function WorkloadContextPanel({
           ]}
         />
         <div style={{ display: "grid", gridTemplateColumns: "88px 1fr", gap: "5px 10px", fontFamily: "var(--font-mono)", fontSize: 11 }}>
-          <span style={{ color: "var(--color-text-tertiary)" }}>reason</span><span style={{ color: workload.rank === "unhealthy" ? "var(--color-text-danger)" : "var(--color-text-secondary)", overflowWrap: "anywhere" }}>{workload.reason}</span>
+          <span style={{ color: "var(--color-text-tertiary)" }}>controller</span><span style={{ color: "var(--color-text-secondary)", overflowWrap: "anywhere" }}>{workload.reason}</span>
           <span style={{ color: "var(--color-text-tertiary)" }}>owner</span>
           {workload.gitops ? (
             <button

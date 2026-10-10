@@ -24,19 +24,15 @@ import { SkeletonRows } from "../chrome/SkeletonRows";
 import { UpdatedAt, useReceivedAt } from "../chrome/Age";
 import { IconAlertTriangle, IconServer, IconX } from "@tabler/icons-react";
 import { well, ellipsis, btn, FilterButton, MetersStrip, StatusDot } from "../chrome/primitives";
-import { InspectorIdle, InspectorConditions, InspectorEvents, InspectorSection, InspectorStatus, InspectorTabButton, MetadataChips, inspectorStateBox } from "./ResourceInspector";
+import { VerdictLabel, VerdictLamp, VerdictStatus } from "../health/VerdictView";
+import { attentionTone, isAttention, kindOf, orderOf, summarize } from "../health/verdict";
+import { InspectorIdle, InspectorConditions, InspectorEvents, InspectorSection, InspectorTabButton, MetadataChips, inspectorStateBox } from "./ResourceInspector";
 import { WatchErrorBanner } from "../chrome/WatchErrorBanner";
 
 function ago(s: number): string {
   return s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)}m` : s < 86400 ? `${Math.floor(s / 3600)}h` : `${Math.floor(s / 86400)}d`;
 }
 
-function nodeDotColor(n: NodeSummaryDTO): string {
-  if (!n.ready || n.problems.some((p) => p === "NotReady")) return "var(--color-text-danger)";
-  if (n.problems.length > 0) return "var(--color-text-danger)"; // pressure
-  if (n.unschedulable) return "var(--color-text-warning)";
-  return "var(--color-text-tertiary)";
-}
 
 
 // columns: dot | name | roles | status | version | cpu alloc/cap | mem alloc/cap | taints | age
@@ -58,30 +54,11 @@ const condColor = (c: ConditionDTO) =>
       ? "var(--color-text-info)"
       : "var(--color-text-success)";
 
+// Node health is the backend verdict (internal/health): fault (NotReady),
+// degraded (pressure), unknown (Ready missing/Unknown), paused (cordoned), ok.
+// Taints are a fact, never a verdict.
 function nodeNeedsAttention(n: NodeSummaryDTO): boolean {
-  return !n.ready || n.problems.length > 0;
-}
-
-function nodeRank(n: NodeSummaryDTO): number {
-  if (!n.ready || n.problems.some((p) => p === "NotReady")) return 0;
-  if (n.problems.length > 0) return 1;
-  if (n.unschedulable) return 2;
-  if (n.taintCount > 0) return 3;
-  return 4;
-}
-
-function nodeStatusText(n: NodeSummaryDTO): string {
-  if (n.problems.length > 0) return n.problems.join(", ");
-  if (!n.ready) return "NotReady";
-  if (n.unschedulable) return "cordoned";
-  if (n.taintCount > 0) return `${n.taintCount} taints`;
-  return "ready";
-}
-
-function nodeStatusColor(n: NodeSummaryDTO): string {
-  if (!n.ready || n.problems.length > 0) return "var(--color-text-danger)";
-  if (n.unschedulable || n.taintCount > 0) return "var(--color-text-warning)";
-  return "var(--color-text-success)";
+  return isAttention(kindOf(n.health));
 }
 
 function nodeMatchesFilter(n: NodeSummaryDTO, filter: NodeFilter): boolean {
@@ -500,7 +477,7 @@ export function NodesView({ cluster }: { cluster: string }) {
   };
   const receivedAt = useReceivedAt(nodes.cluster === cluster && !nodes.loading && nodes.items.length > 0 ? nodes.items : null);
   const orderedNodes = useMemo(
-    () => [...nodes.items].sort((a, b) => nodeRank(a) - nodeRank(b) || a.name.localeCompare(b.name)),
+    () => [...nodes.items].sort((a, b) => orderOf(kindOf(a.health)) - orderOf(kindOf(b.health)) || a.name.localeCompare(b.name)),
     [nodes.items],
   );
   const visibleNodes = useMemo(
@@ -536,8 +513,8 @@ export function NodesView({ cluster }: { cluster: string }) {
     () => [...new Set(nodes.items.flatMap((n) => n.roles))].sort(),
     [nodes.items],
   );
-  const ready = nodes.items.filter((n) => n.ready).length;
-  const attention = nodes.items.filter(nodeNeedsAttention).length;
+  const counts = summarize(nodes.items, (n) => n.health);
+  const attention = counts.attention;
   const cordonedCount = nodes.items.filter((n) => n.unschedulable).length;
   const taintedCount = nodes.items.filter((n) => n.taintCount > 0).length;
   const pressureCount = nodes.items.filter((n) => n.problems.some((p) => p !== "NotReady")).length;
@@ -563,13 +540,15 @@ export function NodesView({ cluster }: { cluster: string }) {
         </div>
 
         <MetersStrip
-          note="broken first · then by name"
+          note="faults first, then name"
           meters={[
-            { label: "ready", value: `${ready}/${nodes.items.length}`, tone: attention > 0 ? ("warning" as const) : ("success" as const) },
-            attention > 0 && { label: "attention", value: attention, tone: "danger" as const },
-            cordonedCount > 0 && { label: "cordoned", value: cordonedCount, tone: "warning" as const },
-            taintedCount > 0 && { label: "tainted", value: taintedCount, tone: "warning" as const },
-            pressureCount > 0 && { label: "pressure", value: pressureCount, tone: "danger" as const },
+            { label: "nodes", value: counts.total },
+            counts.attention > 0 && { label: "attention", value: counts.attention, tone: attentionTone(counts) },
+            counts.fault > 0 && { label: "not ready", value: counts.fault, tone: "danger" as const },
+            pressureCount > 0 && { label: "pressure", value: pressureCount, tone: "warning" as const },
+            counts.unknown > 0 && { label: "unknown", value: counts.unknown },
+            cordonedCount > 0 && { label: "cordoned", value: cordonedCount },
+            taintedCount > 0 && { label: "tainted", value: taintedCount },
             { label: "versions", value: versionCount },
             { label: "cpu alloc", value: `${cpuAlloc.toFixed(1)}/${cpuCap.toFixed(1)}` },
             { label: "mem alloc", value: `${fmtMem(memAlloc)}/${fmtMem(memCap)}` },
@@ -579,7 +558,7 @@ export function NodesView({ cluster }: { cluster: string }) {
 
         <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center", flexShrink: 0 }}>
           <FilterButton label="all" count={nodes.items.length} active={filter === "all"} onClick={() => setFilter("all")} />
-          <FilterButton label="needs attention" count={attention} active={filter === "attention"} onClick={() => setFilter("attention")} />
+          <FilterButton label="attention" count={attention} active={filter === "attention"} onClick={() => setFilter("attention")} />
           <FilterButton label="cordoned" count={cordonedCount} active={filter === "cordoned"} onClick={() => setFilter("cordoned")} />
           <FilterButton label="tainted" count={taintedCount} active={filter === "tainted"} onClick={() => setFilter("tainted")} />
           {roles.length > 0 && (
@@ -646,7 +625,6 @@ export function NodesView({ cluster }: { cluster: string }) {
               ) : visibleNodes.map((n) => {
                 const isSelected = nodes.selected?.name === n.name;
                 const isKb = kbName === n.name && kbIdx >= 0;
-                const dotColor = nodeDotColor(n);
                 return (
                   <div
                     key={n.name}
@@ -662,7 +640,7 @@ export function NodesView({ cluster }: { cluster: string }) {
                       boxShadow: isKb ? "inset 2px 0 0 var(--bench-selection-edge, var(--color-text-info))" : undefined,
                     }}
                   >
-                    <StatusDot size={8} color={dotColor} />
+                    <VerdictLamp health={n.health} size={8} />
                     <span style={{ display: "flex", alignItems: "center", gap: 2, minWidth: 0 }}>
                       <span style={{ fontWeight: 500, ...ellipsis }} title={n.name}>{n.name}</span>
                       <CopyButton text={n.name} label={`copy node name ${n.name}`} appearOnRowHover />
@@ -670,7 +648,7 @@ export function NodesView({ cluster }: { cluster: string }) {
                     <span style={{ color: "var(--color-text-tertiary)", ...ellipsis }}>
                       {n.roles.length > 0 ? n.roles.join(", ") : "-"}
                     </span>
-                    <span style={{ color: nodeStatusColor(n), ...ellipsis }}>{nodeStatusText(n)}</span>
+                    <span style={ellipsis}><VerdictLabel health={n.health} /></span>
                     <span style={{ color: "var(--color-text-tertiary)", ...ellipsis }}>{n.version}</span>
                     <UsageCell resource="cpu" usage={usageByNode.get(n.name)?.cpu ?? null} allocatable={n.cpuAllocatable} format={fmtCpu} />
                     <UsageCell resource="mem" usage={usageByNode.get(n.name)?.mem ?? null} allocatable={n.memAllocatable} format={fmtMem} />
@@ -877,8 +855,11 @@ function CapacityCell({ value, total, format }: { value: number; total: number; 
         {format(value)}
         <span style={{ color: "var(--color-text-tertiary)" }}> / {format(total)}</span>
       </span>
+      {/* Allocatable/capacity is a fact about the node (system reservations),
+          not pressure: neutral, never a warning colour. Real pressure lives in
+          the "used" columns and the verdict. */}
       <span style={{ height: 4, background: "var(--color-background-secondary)", borderRadius: 2, overflow: "hidden" }}>
-        <span style={{ display: "block", height: "100%", width: `${pct}%`, background: pct < 80 ? "var(--color-text-success)" : "var(--color-text-warning)" }} />
+        <span style={{ display: "block", height: "100%", width: `${pct}%`, background: "var(--color-text-tertiary)" }} />
       </span>
     </span>
   );
@@ -976,6 +957,9 @@ function InfoTab({ detail, cluster, onCordon, onDrain }: {
   onDrain: (node: string) => void;
 }) {
   const n = detail.summary;
+  // Verdict provenance: the headline is the selected list row's verdict; the
+  // detail read's own summary is used only if the row has left the list.
+  const rowHealth = useFleet((s) => s.nodes.items.find((x) => x.name === n.name)?.health);
   const setSection = useFleet((s) => s.setSection);
   const [describing, setDescribing] = useState(false);
 
@@ -991,12 +975,7 @@ function InfoTab({ detail, cluster, onCordon, onDrain }: {
     <>
       {/* State first: the node's headline condition, scannable before any
           key-value rows. */}
-      <InspectorStatus
-        tone={!n.ready || n.problems.length > 0 ? "danger" : n.unschedulable || n.taintCount > 0 ? "warning" : "success"}
-        label={nodeStatusText(n)}
-        reason={n.problems.length > 0 ? n.problems.join(", ") : undefined}
-        detail={[n.roles.join(", "), n.version].filter(Boolean).join(" · ")}
-      />
+      <VerdictStatus health={rowHealth ?? n.health} detail={[n.roles.join(", "), n.version, n.taintCount > 0 ? `${n.taintCount} taints` : ""].filter(Boolean).join(" · ")} />
 
       {/* Actions row */}
       <InspectorSection title="Actions">
