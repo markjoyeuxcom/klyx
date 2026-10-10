@@ -123,6 +123,8 @@
   box-shadow: var(--bench-well-shadow, inset 0 0 0 1px var(--color-border-tertiary)); }
 .l-input { height: 24px; border: 0; border-radius: 4px; padding: 0 8px; font: 400 12px var(--font-sans); color: var(--color-text-primary);
   background: var(--bench-well-bg, var(--color-background-secondary)); box-shadow: inset 0 0 0 1px var(--color-border-tertiary); min-width: 0; }
+/* a placeholder is an example, never mistakable for a typed value */
+.l-input::placeholder { color: var(--color-text-tertiary); opacity: 1; }
 .l-menu { position: absolute; z-index: 40; min-width: 200px; padding: 4px; border-radius: 6px; background: var(--color-background-primary);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35), inset 0 0 0 1px var(--color-border-secondary); display: flex; flex-direction: column; }
 .l-menu-item { min-height: 28px; padding: 4px 10px; border: 0; border-radius: 4px; background: transparent; text-align: left; cursor: pointer;

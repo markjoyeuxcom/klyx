@@ -25,6 +25,9 @@ import { fitColumns, type ColumnDef } from "../layout/columns";
 // another cluster or an older request is dropped. Read-only throughout.
 
 const VERBS = ["get", "list", "watch", "create", "update", "patch", "delete", "deletecollection", "impersonate", "escalate", "bind", "use"];
+// Kubernetes names are case-sensitive: WebKit must never auto-capitalize or
+// auto-correct a typed resource, group, verb object or namespace.
+const RAW = { autoCapitalize: "off", autoCorrect: "off", spellCheck: false } as const;
 const cellStyle: React.CSSProperties = { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 };
 
 const GRANT_COLUMNS: (ColumnDef & { label: string })[] = [
@@ -94,7 +97,7 @@ export function AccessView({ cluster }: { cluster: string }) {
     setSaNamespace(intent.namespace);
     setSaName(intent.name);
     gen.current++;
-    setVerdict(null); setGrants(null); setSelKey(null);
+    setVerdict(null); setGrants(null); setSelKey(null); setBusy(null);
     return "consumed";
   }, []);
 
@@ -145,8 +148,34 @@ export function AccessView({ cluster }: { cluster: string }) {
   const gridStyle = { gridTemplateColumns: fitted.template };
 
   const asked = !!verdictNow || !!grantsNow;
-  const state: DatasetState = asked || busy ? "ready" : "empty";
+  // the form lives in the body, so the body always renders; before any
+  // answer the explanatory hint sits below the form
+  const state: DatasetState = "ready";
   const canRun = busy === null && query.verb !== "" && query.resource !== "" && (!asSA || (query.saNamespace !== "" && query.saName !== ""));
+
+  const form = (
+    <form aria-label="Access question" onSubmit={(e) => { e.preventDefault(); if (canRun) void run("cani"); }}
+      style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))", gap: "8px 10px", alignItems: "end", padding: "10px 12px", borderRadius: 4, background: "var(--color-background-secondary)", boxShadow: "inset 0 0 0 1px var(--color-border-tertiary)" }}>
+      <Field label="Subject" span={2}>
+        <div role="group" aria-label="Subject" style={{ display: "inline-flex", gap: 4 }}>
+          <button type="button" className="l-chip" aria-pressed={!asSA} onClick={() => setAsSA(false)}>As me</button>
+          <button type="button" className="l-chip" aria-pressed={asSA} onClick={() => setAsSA(true)}>As ServiceAccount</button>
+        </div>
+      </Field>
+      {asSA && <Field label="SA namespace"><input {...RAW} className="l-input" value={saNamespace} onChange={(e) => setSaNamespace(e.target.value)} placeholder="e.g. flux-system" aria-label="service account namespace" /></Field>}
+      {asSA && <Field label="SA name"><input {...RAW} className="l-input" value={saName} onChange={(e) => setSaName(e.target.value)} placeholder="e.g. kustomize-controller" aria-label="service account name" /></Field>}
+      <Field label="Verb">
+        <select className="l-input" value={verb} onChange={(e) => setVerb(e.target.value)} aria-label="verb">
+          {VERBS.map((v) => <option key={v} value={v}>{v}</option>)}
+        </select>
+      </Field>
+      <Field label="Resource (plural)"><input {...RAW} className="l-input" value={resource} onChange={(e) => setResource(e.target.value)} placeholder="e.g. deployments" aria-label="resource" /></Field>
+      <Field label="Namespace"><input {...RAW} className="l-input" value={namespace} onChange={(e) => setNamespace(e.target.value)} placeholder="empty = cluster-wide" aria-label="namespace" /></Field>
+      <Field label="API group (advanced)"><input {...RAW} className="l-input" value={group} onChange={(e) => setGroup(e.target.value)} placeholder="empty = core" aria-label="api group" /></Field>
+      <Field label="Subresource (advanced)"><input {...RAW} className="l-input" value={subresource} onChange={(e) => setSubresource(e.target.value)} placeholder="e.g. scale" aria-label="subresource" /></Field>
+      <Field label="Object name (advanced)"><input {...RAW} className="l-input" value={name} onChange={(e) => setName(e.target.value)} placeholder="empty = any" aria-label="object name" /></Field>
+    </form>
+  );
 
   return (
     <LensLayout
@@ -155,40 +184,26 @@ export function AccessView({ cluster }: { cluster: string }) {
       summary={<span className="t-secondary">read-only simulation - nothing is granted, changed or persisted</span>}
       controls={
         <>
-          <div role="group" aria-label="Subject" style={{ display: "inline-flex", gap: 4 }}>
-            <button className="l-chip" aria-pressed={!asSA} onClick={() => setAsSA(false)}>As me</button>
-            <button className="l-chip" aria-pressed={asSA} onClick={() => setAsSA(true)}>As ServiceAccount</button>
-          </div>
-          {asSA && (
-            <>
-              <input className="l-input" style={{ width: 130 }} value={saNamespace} onChange={(e) => setSaNamespace(e.target.value)} placeholder="SA namespace" aria-label="service account namespace" />
-              <input className="l-input" style={{ width: 170 }} value={saName} onChange={(e) => setSaName(e.target.value)} placeholder="SA name" aria-label="service account name" />
-            </>
-          )}
-          <select className="l-input" value={verb} onChange={(e) => setVerb(e.target.value)} aria-label="verb">
-            {VERBS.map((v) => <option key={v} value={v}>{v}</option>)}
-          </select>
-          <input className="l-input" style={{ width: 140 }} value={resource} onChange={(e) => setResource(e.target.value)} placeholder="resource (plural)" aria-label="resource" />
-          <input className="l-input" style={{ width: 130 }} value={group} onChange={(e) => setGroup(e.target.value)} placeholder="api group (core)" aria-label="api group" />
-          <input className="l-input" style={{ width: 100 }} value={subresource} onChange={(e) => setSubresource(e.target.value)} placeholder="subresource" aria-label="subresource" />
-          <input className="l-input" style={{ width: 120 }} value={name} onChange={(e) => setName(e.target.value)} placeholder="object (any)" aria-label="object name" />
-          <input className="l-input" style={{ width: 120 }} value={namespace} onChange={(e) => setNamespace(e.target.value)} placeholder="namespace (all)" aria-label="namespace" />
-          <span style={{ marginLeft: "auto", display: "inline-flex", gap: 6 }}>
+          <span className="t-secondary" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }} title={describeQuery(query, true)}>
+            {query.resource ? describeQuery(query, true) : "Set a verb and resource below"}
+          </span>
+          <span style={{ marginLeft: "auto", display: "inline-flex", gap: 6, flexShrink: 0 }}>
             <button className="l-btn l-btn-primary" disabled={!canRun} onClick={() => void run("cani")}>{busy === "cani" ? "Checking…" : "Can I?"}</button>
             <button className="l-btn" disabled={busy !== null || query.verb === "" || query.resource === ""} onClick={() => void run("whocan")}>{busy === "whocan" ? "Enumerating…" : "Who can?"}</button>
           </span>
         </>
       }
       state={state}
-      stateView={
-        <EmptyState
-          icon={<IconShieldLock size={28} stroke={1.2} />}
-          title="Ask an access question."
-          hint="Can I? asks the API server (SubjectAccessReview) - the authoritative answer across every authorizer. Who can? enumerates RBAC bindings - it can miss webhook or ABAC grants, but never invents one. Set a verb and resource to start."
-        />
-      }
       body={
-        <div style={{ display: "flex", flexDirection: "column", gap: 12, minHeight: 0, flex: 1 }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 12, minHeight: 0, flex: 1, overflowY: "auto" }}>
+          {form}
+          {!asked && !busy && (
+            <EmptyState
+              icon={<IconShieldLock size={28} stroke={1.2} />}
+              title="Ask an access question."
+              hint="Can I? asks the API server (SubjectAccessReview) - the authoritative answer across every authorizer. Who can? enumerates RBAC bindings - it can miss webhook or ABAC grants, but never invents one. Set a verb and resource to start."
+            />
+          )}
           {verdictNow && <VerdictPanel pinned={verdictNow} outdated={verdictOutdated} />}
           {grantsNow && (
             <section data-testid="access-whocan" aria-label="Who can" style={{ display: "flex", flexDirection: "column", gap: 6, minHeight: 0, flex: 1 }}>
@@ -235,6 +250,15 @@ export function AccessView({ cluster }: { cluster: string }) {
       inspectorLabel="Grant path details"
       onCloseInspector={() => setSelKey(null)}
     />
+  );
+}
+
+function Field({ label, span, children }: { label: string; span?: number; children: React.ReactNode }) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 3, minWidth: 0, gridColumn: span ? `span ${span}` : undefined }}>
+      <span className="t-legend" aria-hidden="true">{label}</span>
+      {children}
+    </div>
   );
 }
 

@@ -118,3 +118,46 @@ describe("EventsView (redesign step 5)", () => {
     expect(screen.queryByTestId("event-panel")).toBeNull();
   });
 });
+
+describe("EventsView lifecycle corrections (Codex 8de24158)", () => {
+  beforeEach(() => { useFleet.getState().clearEvents(); vi.clearAllMocks(); });
+
+  it("missing from a capped read proves nothing; only an uncapped complete read says it aged out", () => {
+    const e = ev({ type: "Warning", reason: "BackOff", name: "gone" });
+    seed([e, ev({ name: "other" })], { truncated: true });
+    render(<EventsView cluster="x" />);
+    fireEvent.click(screen.getByText("gone").closest(".lens-row") as HTMLElement);
+    act(() => seed([ev({ name: "other" })], { truncated: true }));
+    expect(insp().getByText("Not in the current partial read.")).toBeTruthy();
+    expect(screen.queryByText("Event no longer listed.")).toBeNull();
+    act(() => seed([ev({ name: "other" })], { truncated: false }));
+    expect(insp().getByText("Event no longer listed.")).toBeTruthy();
+  });
+
+  it("A -> B never carries a selection, even onto a colliding row key", () => {
+    const e = ev({ name: "same" });
+    seed([e]);
+    const { rerender } = render(<EventsView cluster="x" />);
+    fireEvent.click(document.querySelector(".lens-row") as HTMLElement);
+    expect(screen.getByTestId("event-panel")).toBeTruthy();
+    rerender(<EventsView cluster="y" />);
+    act(() => useFleet.setState((s) => ({ events: { ...s.events, cluster: "y", namespace: "", rowsScope: "y|", items: [e], loading: false } })));
+    expect(screen.queryByTestId("event-panel")).toBeNull();
+    expect(screen.queryByText("Event no longer listed.")).toBeNull();
+  });
+
+  it("rows read for another scope are never shown", () => {
+    seed([ev({ name: "from-other-ns" })], { namespace: "apps", rowsScope: "x|", loading: true });
+    render(<EventsView cluster="x" />);
+    expect(rowsText().length).toBe(0);
+  });
+
+  it("a later operator filter that excludes the selection closes it", () => {
+    seed([ev({ name: "normal" }), ev({ type: "Warning", reason: "BackOff", name: "warn" })]);
+    render(<EventsView cluster="x" />);
+    fireEvent.click(screen.getByText("normal").closest(".lens-row") as HTMLElement);
+    expect(screen.getByTestId("event-panel")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /^Warnings/ }));
+    expect(screen.queryByTestId("event-panel")).toBeNull();
+  });
+});

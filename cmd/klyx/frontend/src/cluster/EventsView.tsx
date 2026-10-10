@@ -14,7 +14,7 @@ import { WORKLOAD_KINDS } from "../store/fleet";
 import { listEvents, openLiveEvents } from "../bridge/events";
 import { openPodDetail } from "../bridge/pods";
 import { loadClusterPrefs, loadSearch, saveEventsViewPrefs, saveSearch } from "../store/persist";
-import { FLUX_KIND_GROUPS, WELL_KNOWN_RESOURCE_REFS } from "./resourceRefs";
+import { WELL_KNOWN_RESOURCE_REFS } from "./resourceRefs";
 import { LensLayout, LensTable, TABLE_ROW_HEIGHT, type DatasetState } from "../layout/LensLayout";
 import { InspectorBlock, InspectorLayout, type MenuItem } from "../layout/InspectorLayout";
 import { fitColumns, type ColumnDef } from "../layout/columns";
@@ -46,7 +46,6 @@ const COLUMNS: (ColumnDef & { label: string })[] = [
 // (no link) rather than opening the wrong object.
 type Destination = { label: string; open: () => void } | null;
 function refForKind(kind: string): ResourceRef | null {
-  if (FLUX_KIND_GROUPS[kind]) return WELL_KNOWN_RESOURCE_REFS[`${FLUX_KIND_GROUPS[kind]}/${kind}`] ?? null;
   const matches = Object.values(WELL_KNOWN_RESOURCE_REFS).filter((r) => r.kind === kind);
   return matches.length === 1 ? matches[0] : null;
 }
@@ -100,8 +99,10 @@ export function EventsView({ cluster }: { cluster: string }) {
   };
 
   const mine = events.cluster === cluster;
-  const items = useMemo(() => (mine ? events.items : []), [mine, events.items]);
+  // rows belong to the scope they were READ for: another cluster's or another
+  // namespace's rows are never shown or used as evidence here
   const scopeRead = mine && events.rowsScope === `${cluster}|${events.namespace}`;
+  const items = useMemo(() => (scopeRead ? events.items : []), [scopeRead, events.items]);
   const error = mine ? events.error ?? null : null;
   // evidence of the current scope's rows: a read (live or snapshot) is
   // complete; a failure after one keeps those rows (stale); nothing read yet
@@ -117,13 +118,26 @@ export function EventsView({ cluster }: { cluster: string }) {
   }), [items, events.warningsOnly, q]);
   const warnings = items.filter((e) => e.type === "Warning").length;
 
-  const selected = selKey ? items.find((e) => keyOf(e) === selKey) : undefined;
+  // The component is reused across clusters: selection, cursor and last
+  // evidence never carry over (a colliding row key on B is not A's event).
   const lastEvent = useRef<EventRowDTO | null>(null);
+  const enteredCluster = useRef(cluster);
+  if (enteredCluster.current !== cluster) { enteredCluster.current = cluster; lastEvent.current = null; }
+  useEffect(() => { setSelKey(null); setCursorKey(null); }, [cluster]);
+
+  const selected = selKey ? items.find((e) => keyOf(e) === selKey) : undefined;
   if (selected) lastEvent.current = selected;
-  // aged out / deleted only when a complete read of the same scope lacks it
-  const removed = !!selKey && evidence === "complete" && !selected;
-  const inspected = selected ?? (removed ? lastEvent.current : null);
+  if (lastEvent.current && keyOf(lastEvent.current) !== selKey) lastEvent.current = null;
+  // Aged out / deleted only when an UNCAPPED complete read of the same scope
+  // lacks it. Missing from the arbitrary first 500 proves nothing: the event
+  // stays as last evidence with no asserted cause.
+  const missing = !!selKey && !selected && evidence === "complete";
+  const removed = missing && !events.truncated;
+  const partialMiss = missing && !!events.truncated;
+  const inspected = selected ?? (missing ? lastEvent.current : null);
   const close = () => setSelKey(null);
+  // later operator edits win: a filter that excludes the selection closes it
+  useEffect(() => { if (selected && !visible.includes(selected)) setSelKey(null); }, [selected, visible]);
 
   const cursorIdx = cursorKey === null ? -1 : visible.findIndex((e) => keyOf(e) === cursorKey);
   useListKeys({
@@ -230,7 +244,7 @@ export function EventsView({ cluster }: { cluster: string }) {
       footer={<span className="t-legend">j k navigate · ↵ inspect · / search</span>}
       footerEnd={<span className="t-secondary">{visible.length} of {items.length}{marker} events · newest first</span>}
       inspector={selKey && inspected ? (
-        <EventInspector key={selKey} cluster={cluster} e={inspected} removed={removed} stale={evidence === "stale"} nowS={nowS} onClose={close} />
+        <EventInspector key={selKey} cluster={cluster} e={inspected} removed={removed} partialMiss={partialMiss} stale={evidence === "stale"} nowS={nowS} onClose={close} />
       ) : undefined}
       inspectorLabel="Event details"
       onCloseInspector={close}
@@ -238,16 +252,17 @@ export function EventsView({ cluster }: { cluster: string }) {
   );
 }
 
-function EventInspector({ cluster, e, removed, stale, nowS, onClose }: {
+function EventInspector({ cluster, e, removed, partialMiss, stale, nowS, onClose }: {
   cluster: string;
   e: EventRowDTO;
   removed: boolean;
+  partialMiss: boolean;
   stale: boolean;
   nowS: number;
   onClose: () => void;
 }) {
   const warn = e.type === "Warning";
-  const dest = removed ? null : destinationOf(cluster, e);
+  const dest = removed || partialMiss ? null : destinationOf(cluster, e);
   const span = e.firstSeenUnix > 0 && e.lastSeenUnix > e.firstSeenUnix ? ` over ${formatAge(e.lastSeenUnix - e.firstSeenUnix)}` : "";
   const more: MenuItem[] = [{ label: "Copy message", onSelect: () => void navigator.clipboard?.writeText(e.message) }];
   return (
@@ -261,6 +276,7 @@ function EventInspector({ cluster, e, removed, stale, nowS, onClose }: {
         verdict={
           <div className="t-body" style={{ display: "grid", gap: 4 }}>
             {removed && <div role="status"><span className="t-status">Event no longer listed.</span> It aged out of the API server or was deleted; this is its last evidence.</div>}
+            {partialMiss && <div role="status"><span className="t-status">Not in the current partial read.</span> The list is capped at the first 500 events, so its absence proves nothing; this is its last evidence.</div>}
             {/* evidence, not a verdict: no lamp */}
             <div>
               <span className="t-status" style={{ color: warn ? "var(--color-text-warning)" : "var(--color-text-secondary)" }}>{e.type}</span>

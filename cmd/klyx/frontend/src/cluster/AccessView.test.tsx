@@ -119,3 +119,44 @@ describe("AccessView (redesign step 5)", () => {
       .toBe('patch deployments/scale "web" in apps as ServiceAccount a/b');
   });
 });
+
+describe("AccessView raw inputs", () => {
+  it("every form input disables auto-capitalize, auto-correct and spellcheck (names are case-sensitive)", () => {
+    render(<AccessView cluster="prd" />);
+    fireEvent.click(screen.getByRole("button", { name: "As ServiceAccount" }));
+    const inputs = [...document.querySelectorAll("input")];
+    expect(inputs.length).toBe(7);
+    for (const i of inputs) {
+      expect(i.getAttribute("autocapitalize")).toBe("off");
+      expect(i.getAttribute("autocorrect")).toBe("off");
+      expect(i.getAttribute("spellcheck")).toBe("false");
+    }
+  });
+});
+
+describe("AccessView corrections (Codex 8de24158)", () => {
+  beforeEach(() => { vi.clearAllMocks(); useFleet.setState({ navIntent: null }); });
+
+  it("an access-check intent mid-request leaves the new question runnable and drops the old answer", async () => {
+    const late = deferred<AccessVerdictDTO>();
+    vi.mocked(canI).mockReturnValueOnce(late.promise);
+    render(<AccessView cluster="prd" />);
+    fireEvent.change(screen.getByLabelText("resource"), { target: { value: "secrets" } });
+    fireEvent.click(screen.getByRole("button", { name: "Can I?" }));
+    act(() => useFleet.setState({ navIntent: { kind: "access-check", cluster: "prd", namespace: "flux-system", name: "helm-controller" } as never }));
+    await act(async () => { late.resolve(verdict()); await late.promise; });
+    expect(screen.queryByText("Allowed")).toBeNull();
+    expect((screen.getByRole("button", { name: "Can I?" }) as HTMLButtonElement).disabled).toBe(false);
+    vi.mocked(canI).mockResolvedValueOnce(verdict({ subject: "system:serviceaccount:flux-system:helm-controller" }));
+    fireEvent.click(screen.getByRole("button", { name: "Can I?" }));
+    expect(await screen.findByText(/checked as system:serviceaccount:flux-system:helm-controller/)).toBeTruthy();
+  });
+
+  it("the full question is a labelled form in the body; controls keep the sentence and both run actions", () => {
+    render(<AccessView cluster="prd" />);
+    expect(screen.getByRole("form", { name: "Access question" })).toBeTruthy();
+    expect(screen.getByText("API group (advanced)")).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("resource"), { target: { value: "secrets" } });
+    expect(screen.getAllByText("get secrets cluster-wide as you").length).toBeGreaterThan(0);
+  });
+});
