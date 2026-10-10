@@ -19,12 +19,46 @@ func condTrue(obj map[string]interface{}, condType string) bool {
 	return false
 }
 
+// condOf returns the named condition as observed; an absent condition has
+// Status "".
+func condOf(conds []interface{}, condType string) Cond {
+	for _, c := range conds {
+		m, ok := c.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if t, _ := m["type"].(string); t != condType {
+			continue
+		}
+		out := Cond{}
+		out.Status, _ = m["status"].(string)
+		out.Reason, _ = m["reason"].(string)
+		out.Message, _ = m["message"].(string)
+		switch og := m["observedGeneration"].(type) {
+		case int64:
+			out.ObservedGeneration = og
+		case float64:
+			out.ObservedGeneration = int64(og)
+		}
+		return out
+	}
+	return Cond{}
+}
+
+func statusConds(obj map[string]interface{}) []interface{} {
+	conds, _, _ := unstructured.NestedSlice(obj, "status", "conditions")
+	return conds
+}
+
 // ParseGateway maps a Gateway unstructured to a GatewayNode (no routes).
 func ParseGateway(u *unstructured.Unstructured) GatewayNode {
 	g := GatewayNode{Namespace: u.GetNamespace(), Name: u.GetName()}
 	g.ClassName, _, _ = unstructured.NestedString(u.Object, "spec", "gatewayClassName")
 	g.Accepted = condTrue(u.Object, "Accepted")
 	g.Programmed = condTrue(u.Object, "Programmed")
+	g.AcceptedCond = condOf(statusConds(u.Object), "Accepted")
+	g.ProgrammedCond = condOf(statusConds(u.Object), "Programmed")
+	g.Generation = u.GetGeneration()
 	g.Listeners = parseListeners(u.Object)
 	g.Addresses = parseAddresses(u.Object)
 	return g
@@ -107,6 +141,7 @@ func ParseGatewayRef(u *unstructured.Unstructured) GatewayRef {
 		Addresses: parseAddresses(u.Object),
 		Listeners: parseListeners(u.Object),
 		Stale:     stale, Generation: gen, ObservedGeneration: observed,
+		AcceptedCond: condOf(statusConds(u.Object), "Accepted"), ProgrammedCond: condOf(statusConds(u.Object), "Programmed"),
 	}
 }
 

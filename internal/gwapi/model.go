@@ -10,6 +10,21 @@ type Topology struct {
 	Routes          []RouteNode // one lane each
 	ClusterPolicies []PolicyRef // broad/empty CCNPs - header context, not per-service (M5-b-ii)
 	Warnings        []string    // soft, non-fatal issues (filled by the fleet layer)
+
+	// RoutesComplete is true only when the HTTPRoute list succeeded: an
+	// absent route is then proven not attached. RoutesError names the
+	// failure otherwise (Routes is empty, never "no routes").
+	RoutesComplete bool
+	RoutesError    string
+}
+
+// Cond is one status condition as observed. Status is "True", "False",
+// "Unknown", or "" when no controller has written the condition - a boolean
+// cannot tell a rejection from a status nobody has reported yet.
+// ObservedGeneration is the generation the condition describes.
+type Cond struct {
+	Status, Reason, Message string
+	ObservedGeneration      int64
 }
 
 type GatewayNode struct {
@@ -18,6 +33,9 @@ type GatewayNode struct {
 	Addresses                  []GatewayAddress
 	Accepted, Programmed       bool
 	Policies                   []PolicyRef // M5-b; empty in M5-a
+
+	AcceptedCond, ProgrammedCond Cond
+	Generation                   int64
 }
 
 type RouteNode struct {
@@ -29,7 +47,13 @@ type RouteNode struct {
 	Backends               []Backend
 	Policies               []PolicyRef   // M5-b; empty in M5-a
 	Services               []ServiceNode // resolved Service backends; lane shows primary
-	Pods                   PodCount      // for the primary Service backend
+	Pods                   PodCount      // for the first RESOLVED Service backend (legacy lane)
+
+	// ParentFound reports a status.parents entry for THIS Gateway (and
+	// listener); without one the conditions below are absent, not False.
+	ParentFound                    bool
+	AcceptedCond, ResolvedRefsCond Cond
+	Generation                     int64
 }
 
 type ServiceNode struct {
@@ -55,6 +79,30 @@ type Match struct{ PathType, PathValue, Method string }
 type Backend struct {
 	Kind, Name, Namespace string
 	Port, Weight          int32
+
+	// Filled by the fleet layer, per backend, so a lane is diagnosed from
+	// its own backend's evidence.
+	State     BackendState
+	Error     string         // why State is unreadable
+	Endpoints *EndpointCount // resolved Service backends only
+}
+
+// BackendState is what Klyx could establish about one backendRef.
+type BackendState string
+
+const (
+	BackendResolved    BackendState = "resolved"    // the Service was read
+	BackendNotFound    BackendState = "not-found"   // the API said NotFound
+	BackendUnreadable  BackendState = "unreadable"  // forbidden, timeout, ... - existence unknown
+	BackendUnsupported BackendState = "unsupported" // not a core Service; Klyx does not evaluate it
+)
+
+// EndpointCount is a Service's EndpointSlice endpoints - endpoints, not
+// pods: an endpoint may have no pod TargetRef (NonPod counts those).
+// Error is set when the slices could not be read (the counts are then 0).
+type EndpointCount struct {
+	Ready, Total, NonPod int
+	Error                string
 }
 type PodCount struct {
 	Ready, Total int
@@ -106,4 +154,6 @@ type GatewayRef struct {
 	Stale              bool
 	Generation         int64
 	ObservedGeneration int64
+
+	AcceptedCond, ProgrammedCond Cond
 }

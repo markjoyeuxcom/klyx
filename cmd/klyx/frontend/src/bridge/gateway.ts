@@ -36,6 +36,8 @@ export async function getGatewayTopology(cluster: string, ref: GatewayRef): Prom
   try {
     const t = (await GatewayService.GetGatewayTopology(cluster, ref.namespace, ref.name)) as TopologyDTO;
     if (g !== topoGen || !sameGateway(cluster, ref)) return;
+    // The service reports a failed read in-band: that is not a snapshot.
+    if (!t || t.error) { useFleet.getState().setTopologyError(t?.error || "empty topology response"); return; }
     useFleet.getState().setTopology(t);
   } catch (e) {
     if (g !== topoGen || !sameGateway(cluster, ref)) return;
@@ -44,12 +46,26 @@ export async function getGatewayTopology(cluster: string, ref: GatewayRef): Prom
   }
 }
 
+// Route metrics poll every 20s while a topology is open. Latest request
+// wins: an older poll that resolves after a newer one (or after leaving and
+// returning to the same Gateway) is dropped. A rejected poll is a failed
+// observation - last good numbers stay, labelled.
+let metricsGen = 0;
 export async function getRouteMetrics(cluster: string, gwNamespace: string, gwName: string, routeKeys: string[]): Promise<void> {
-  const r = (await GatewayService.GetRouteMetrics(cluster, routeKeys)) as RouteMetricsResultDTO;
-  // Drop a stale result if the user switched clusters or gateways meanwhile.
-  if (!sameGateway(cluster, { namespace: gwNamespace, name: gwName })) return;
+  const g = ++metricsGen;
+  const ref = { namespace: gwNamespace, name: gwName };
+  let r: RouteMetricsResultDTO;
+  try {
+    r = (await GatewayService.GetRouteMetrics(cluster, routeKeys)) as RouteMetricsResultDTO;
+  } catch (e) {
+    r = { status: { available: false, message: errText(e), updatedAt: "" }, routes: {} };
+  }
+  if (g !== metricsGen || !sameGateway(cluster, ref)) return;
   useFleet.getState().setRouteMetrics(r ?? { status: { available: false, message: "", updatedAt: "" }, routes: {} });
 }
+
+/** Invalidate in-flight metric polls (leaving a topology). */
+export function abandonRouteMetrics(): void { metricsGen++; }
 
 function errText(e: unknown): string {
   return e instanceof Error ? e.message : typeof e === "string" ? e : "the read failed";

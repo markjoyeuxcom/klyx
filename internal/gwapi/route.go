@@ -93,17 +93,24 @@ func RouteForGateway(u *unstructured.Unstructured, gwNamespace, gwName string) (
 	}
 
 	// Scope status to this Gateway's parent entry (and listener, if pinned).
-	rn.Accepted, rn.ResolvedRefs = parentStatus(u.Object, gwNamespace, gwName, routeNS, sectionName)
+	rn.Generation = u.GetGeneration()
+	if conds, found := parentConds(u.Object, gwNamespace, gwName, routeNS, sectionName); found {
+		rn.ParentFound = true
+		rn.AcceptedCond = condOf(conds, "Accepted")
+		rn.ResolvedRefsCond = condOf(conds, "ResolvedRefs")
+		rn.Accepted = rn.AcceptedCond.Status == "True"
+		rn.ResolvedRefs = rn.ResolvedRefsCond.Status == "True"
+	}
 	return rn, true
 }
 
-// parentStatus reads status.parents[] and returns Accepted/ResolvedRefs for the
-// entry whose parentRef matches the given Gateway (namespace defaulting to the
-// route's). When wantSection is non-empty, the status entry must be pinned to
-// the same listener via sectionName; an empty wantSection matches the first
-// entry regardless of its sectionName. Returns false,false when no matching
-// parent status exists yet.
-func parentStatus(obj map[string]interface{}, gwNamespace, gwName, routeNS, wantSection string) (accepted, resolved bool) {
+// parentConds returns the conditions of the status.parents entry whose
+// parentRef matches the given Gateway (namespace defaulting to the route's).
+// When wantSection is non-empty, the entry must be pinned to the same
+// listener via sectionName; an empty wantSection matches the first entry
+// regardless of its sectionName. found=false when no controller has written
+// a matching entry yet - absent status, not a rejection.
+func parentConds(obj map[string]interface{}, gwNamespace, gwName, routeNS, wantSection string) (conds []interface{}, found bool) {
 	// Returns the first status entry matching the parentRef; controllerName is
 	// not disambiguated (single Gateway controller assumed).
 	sps, _, _ := unstructured.NestedSlice(obj, "status", "parents")
@@ -136,22 +143,8 @@ func parentStatus(obj map[string]interface{}, gwNamespace, gwName, routeNS, want
 				continue
 			}
 		}
-		conds, _, _ := unstructured.NestedSlice(spm, "conditions")
-		for _, c := range conds {
-			cm, ok := c.(map[string]interface{})
-			if !ok {
-				continue
-			}
-			t, _ := cm["type"].(string)
-			s, _ := cm["status"].(string)
-			switch t {
-			case "Accepted":
-				accepted = s == "True"
-			case "ResolvedRefs":
-				resolved = s == "True"
-			}
-		}
-		return accepted, resolved
+		c, _, _ := unstructured.NestedSlice(spm, "conditions")
+		return c, true
 	}
-	return false, false
+	return nil, false
 }

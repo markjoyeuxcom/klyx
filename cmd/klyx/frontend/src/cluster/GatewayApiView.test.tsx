@@ -1,19 +1,21 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, fireEvent, screen, within } from "@testing-library/react";
 import { useFleet } from "../store/fleet";
-import type { GatewayRefDTO, HubbleStatsDTO } from "../store/fleet";
+import type { CondDTO, GatewayRefDTO, HubbleStatsDTO } from "../store/fleet";
 
 vi.mock("../bridge/gateway", () => ({
   listGateways: vi.fn(async () => {}),
   getGatewayTopology: vi.fn(async () => {}),
   getRouteMetrics: vi.fn(async () => {}),
+  abandonRouteMetrics: vi.fn(),
   getHubbleFlowStats: vi.fn(async () => ({}) as HubbleStatsDTO),
 }));
 import { getHubbleFlowStats } from "../bridge/gateway";
 import { GatewayApiView } from "./GatewayApiView";
 
+const cond = (status: string, reason = "", observedGeneration = 1): CondDTO => ({ status, reason, message: "", observedGeneration });
 const gw = (name: string, over: Partial<GatewayRefDTO> = {}): GatewayRefDTO => ({
-  namespace: "infra", name, className: "envoy-gateway", accepted: true, programmed: true,
+  namespace: "infra", name, className: "envoy-gateway", accepted: true, programmed: true, generation: 1, acceptedCond: cond("True"), programmedCond: cond("True"),
   addresses: [{ type: "IPAddress", value: "192.0.2.10" }], listeners: [{ name: "https", protocol: "HTTPS", hostname: "", port: 443 }], ...over,
 });
 
@@ -29,13 +31,13 @@ beforeEach(() => { vi.clearAllMocks(); });
 
 describe("GatewayApiView (redesign step 6)", () => {
   it("orders not accepted first and auto-selects it once, naming the condition honestly", () => {
-    net({ gateways: [gw("ok"), gw("pending", { programmed: false }), gw("broken", { accepted: false, programmed: false })] });
+    net({ gateways: [gw("ok"), gw("pending", { programmed: false, programmedCond: cond("False", "AddressNotAssigned") }), gw("broken", { accepted: false, programmed: false, acceptedCond: cond("False", "InvalidParameters"), programmedCond: cond("False") })] });
     render(<GatewayApiView cluster="x" />);
     const rows = screen.getAllByRole("button").filter((b) => b.classList.contains("lens-row"));
     expect(rows.map((r) => r.textContent)).toEqual([expect.stringContaining("broken"), expect.stringContaining("pending"), expect.stringContaining("ok")]);
     const panel = screen.getByTestId("gateway-panel");
-    expect(within(panel).getByText(/Accepted is not True \(False, Unknown or not reported\)/)).toBeTruthy();
-    expect(screen.getByText("▲ 1 not accepted · 1 not programmed")).toBeTruthy();
+    expect(within(panel).getByText(/Accepted is False - InvalidParameters/)).toBeTruthy();
+    expect(screen.getByText("▲ 1 not accepted · 1 needs attention")).toBeTruthy();
   });
 
   it("the inspector's primary action opens the topology", () => {
@@ -49,7 +51,7 @@ describe("GatewayApiView (redesign step 6)", () => {
   });
 
   it("a stale Gateway is syncing - never confirmed programmed - and dims", () => {
-    net({ gateways: [gw("eg", { stale: true, generation: 7, observedGeneration: 6 })] });
+    net({ gateways: [gw("eg", { stale: true, generation: 7, observedGeneration: 6, acceptedCond: cond("True", "", 6), programmedCond: cond("True", "", 6) })] });
     render(<GatewayApiView cluster="x" />);
     const row = screen.getByText("eg").closest(".lens-row") as HTMLElement;
     expect(row.textContent).toContain("syncing");
@@ -57,10 +59,21 @@ describe("GatewayApiView (redesign step 6)", () => {
     expect(row.style.opacity).toBe("0.6");
   });
 
-  it("a stale Gateway that is not accepted keeps its fault", () => {
-    net({ gateways: [gw("eg", { accepted: false, programmed: false, stale: true, generation: 3, observedGeneration: 2 })] });
+  it("absent, Unknown, explicit False and last-observed False are four different claims", () => {
+    net({ gateways: [
+      gw("absent", { accepted: false, programmed: false, acceptedCond: cond(""), programmedCond: cond("") }),
+      gw("pending", { accepted: false, programmed: false, acceptedCond: cond("Unknown", "Pending"), programmedCond: cond("") }),
+      gw("rejected", { accepted: false, programmed: false, acceptedCond: cond("False", "InvalidParameters"), programmedCond: cond("") }),
+      gw("lastseen", { accepted: false, programmed: false, generation: 3, acceptedCond: cond("False", "InvalidParameters", 2), programmedCond: cond("") }),
+    ] });
     render(<GatewayApiView cluster="x" />);
-    expect(document.querySelector(".lens-row")!.textContent).toContain("▲ not accepted · syncing");
+    const text = (name: string) => [...document.querySelectorAll(".lens-row")].find((r) => r.textContent?.includes(`infra/${name}`))!.textContent;
+    expect(text("absent")).toContain("no status reported");
+    expect(text("pending")).toContain("acceptance pending");
+    expect(text("rejected")).toContain("▲ not accepted");
+    expect(text("lastseen")).toContain("not accepted (last observed)");
+    expect(text("lastseen")).not.toContain("▲");
+    expect(screen.getByText("2 unverified")).toBeTruthy();
   });
 
   it("not served, served-but-empty and a failed list are three different states", () => {
@@ -93,7 +106,7 @@ describe("GatewayApiView (redesign step 6)", () => {
   });
 
   it("a filter edit that hides the selection closes it", () => {
-    net({ gateways: [gw("broken", { accepted: false }), gw("ok")] });
+    net({ gateways: [gw("broken", { accepted: false, acceptedCond: cond("False", "InvalidParameters") }), gw("ok")] });
     render(<GatewayApiView cluster="x" />);
     expect(screen.getByTestId("gateway-panel")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Programmed" }));

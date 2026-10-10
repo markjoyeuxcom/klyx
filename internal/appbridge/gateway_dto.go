@@ -36,6 +36,29 @@ type PolicyRefDTO struct {
 	Inferred          bool              `json:"inferred"`
 	Match             string            `json:"match"`
 }
+
+// CondDTO is one status condition as observed: status "True", "False",
+// "Unknown", or "" when absent (no controller has written it).
+type CondDTO struct {
+	Status             string `json:"status"`
+	Reason             string `json:"reason"`
+	Message            string `json:"message"`
+	ObservedGeneration int64  `json:"observedGeneration"`
+}
+
+func condDTO(c gwapi.Cond) CondDTO {
+	return CondDTO{Status: c.Status, Reason: c.Reason, Message: c.Message, ObservedGeneration: c.ObservedGeneration}
+}
+
+// EndpointCountDTO is one Service's EndpointSlice endpoints (not pods:
+// nonPod counts endpoints without a pod TargetRef). error = unreadable.
+type EndpointCountDTO struct {
+	Ready  int    `json:"ready"`
+	Total  int    `json:"total"`
+	NonPod int    `json:"nonPod"`
+	Error  string `json:"error,omitempty"`
+}
+
 type GatewayNodeDTO struct {
 	Namespace  string              `json:"namespace"`
 	Name       string              `json:"name"`
@@ -45,6 +68,10 @@ type GatewayNodeDTO struct {
 	Accepted   bool                `json:"accepted"`
 	Programmed bool                `json:"programmed"`
 	Policies   []PolicyRefDTO      `json:"policies"`
+
+	AcceptedCond   CondDTO `json:"acceptedCond"`
+	ProgrammedCond CondDTO `json:"programmedCond"`
+	Generation     int64   `json:"generation"`
 }
 type MatchDTO struct {
 	PathType  string `json:"pathType"`
@@ -57,6 +84,11 @@ type BackendDTO struct {
 	Namespace string `json:"namespace"`
 	Port      int32  `json:"port"`
 	Weight    int32  `json:"weight"`
+
+	// state: resolved | not-found | unreadable | unsupported
+	State     string            `json:"state"`
+	Error     string            `json:"error,omitempty"`
+	Endpoints *EndpointCountDTO `json:"endpoints,omitempty"`
 }
 type PodCountDTO struct {
 	Ready   int  `json:"ready"`
@@ -87,13 +119,24 @@ type RouteNodeDTO struct {
 	Services          []ServiceNodeDTO `json:"services"`
 	Pods              PodCountDTO      `json:"pods"`
 	Policies          []PolicyRefDTO   `json:"policies"`
+
+	ParentFound      bool    `json:"parentFound"`
+	AcceptedCond     CondDTO `json:"acceptedCond"`
+	ResolvedRefsCond CondDTO `json:"resolvedRefsCond"`
+	Generation       int64   `json:"generation"`
 }
 type TopologyDTO struct {
 	Gateway         GatewayNodeDTO `json:"gateway"`
 	Routes          []RouteNodeDTO `json:"routes"`
 	ClusterPolicies []PolicyRefDTO `json:"clusterPolicies,omitempty"`
 	Warnings        []string       `json:"warnings,omitempty"`
-	Error           string         `json:"error,omitempty"`
+	// Error = the topology could not be read at all (the Gateway GET
+	// failed); nothing else in the DTO is evidence.
+	Error string `json:"error,omitempty"`
+	// RoutesComplete: the HTTPRoute list succeeded, so an absent route is
+	// proven not attached. RoutesError names the failure otherwise.
+	RoutesComplete bool   `json:"routesComplete"`
+	RoutesError    string `json:"routesError,omitempty"`
 }
 type GatewayRefDTO struct {
 	Namespace  string              `json:"namespace"`
@@ -106,9 +149,11 @@ type GatewayRefDTO struct {
 	// Stale: the spec changed and the controller has not observed it yet -
 	// Accepted/Programmed reflect the previous spec; the row renders as
 	// transitioning.
-	Stale              bool  `json:"stale"`
-	Generation         int64 `json:"generation"`
-	ObservedGeneration int64 `json:"observedGeneration"`
+	Stale              bool    `json:"stale"`
+	Generation         int64   `json:"generation"`
+	AcceptedCond       CondDTO `json:"acceptedCond"`
+	ProgrammedCond     CondDTO `json:"programmedCond"`
+	ObservedGeneration int64   `json:"observedGeneration"`
 }
 type GatewayListDTO struct {
 	GatewayAPIServed bool            `json:"gatewayAPIServed"`
@@ -164,21 +209,27 @@ func certificateRefDTOs(refs []gwapi.CertificateRef) []CertificateRefDTO {
 
 func toTopologyDTO(t gwapi.Topology) TopologyDTO {
 	g := t.Gateway
-	gd := GatewayNodeDTO{Namespace: g.Namespace, Name: g.Name, ClassName: g.ClassName, Accepted: g.Accepted, Programmed: g.Programmed, Policies: policyDTOs(g.Policies)}
+	gd := GatewayNodeDTO{Namespace: g.Namespace, Name: g.Name, ClassName: g.ClassName, Accepted: g.Accepted, Programmed: g.Programmed, Policies: policyDTOs(g.Policies),
+		AcceptedCond: condDTO(g.AcceptedCond), ProgrammedCond: condDTO(g.ProgrammedCond), Generation: g.Generation}
 	for _, l := range g.Listeners {
 		gd.Listeners = append(gd.Listeners, ListenerDTO{Name: l.Name, Protocol: l.Protocol, Hostname: l.Hostname, Port: l.Port, CertificateRefs: certificateRefDTOs(l.CertificateRefs)})
 	}
 	for _, a := range g.Addresses {
 		gd.Addresses = append(gd.Addresses, GatewayAddressDTO{Type: a.Type, Value: a.Value})
 	}
-	out := TopologyDTO{Gateway: gd, Warnings: t.Warnings, ClusterPolicies: policyDTOs(t.ClusterPolicies)}
+	out := TopologyDTO{Gateway: gd, Warnings: t.Warnings, ClusterPolicies: policyDTOs(t.ClusterPolicies), RoutesComplete: t.RoutesComplete, RoutesError: t.RoutesError}
 	for _, r := range t.Routes {
-		rd := RouteNodeDTO{Namespace: r.Namespace, Name: r.Name, Hostnames: r.Hostnames, ParentSectionName: r.ParentSectionName, Accepted: r.Accepted, ResolvedRefs: r.ResolvedRefs, Pods: PodCountDTO{Ready: r.Pods.Ready, Total: r.Pods.Total, Unknown: r.Pods.Unknown}, Policies: policyDTOs(r.Policies)}
+		rd := RouteNodeDTO{Namespace: r.Namespace, Name: r.Name, Hostnames: r.Hostnames, ParentSectionName: r.ParentSectionName, Accepted: r.Accepted, ResolvedRefs: r.ResolvedRefs, Pods: PodCountDTO{Ready: r.Pods.Ready, Total: r.Pods.Total, Unknown: r.Pods.Unknown}, Policies: policyDTOs(r.Policies),
+			ParentFound: r.ParentFound, AcceptedCond: condDTO(r.AcceptedCond), ResolvedRefsCond: condDTO(r.ResolvedRefsCond), Generation: r.Generation}
 		for _, m := range r.Matches {
 			rd.Matches = append(rd.Matches, MatchDTO{PathType: m.PathType, PathValue: m.PathValue, Method: m.Method})
 		}
 		for _, b := range r.Backends {
-			rd.Backends = append(rd.Backends, BackendDTO{Kind: b.Kind, Name: b.Name, Namespace: b.Namespace, Port: b.Port, Weight: b.Weight})
+			bd := BackendDTO{Kind: b.Kind, Name: b.Name, Namespace: b.Namespace, Port: b.Port, Weight: b.Weight, State: string(b.State), Error: b.Error}
+			if b.Endpoints != nil {
+				bd.Endpoints = &EndpointCountDTO{Ready: b.Endpoints.Ready, Total: b.Endpoints.Total, NonPod: b.Endpoints.NonPod, Error: b.Endpoints.Error}
+			}
+			rd.Backends = append(rd.Backends, bd)
 		}
 		for _, s := range r.Services {
 			rd.Services = append(rd.Services, ServiceNodeDTO{Namespace: s.Namespace, Name: s.Name, Type: s.Type, Port: s.Port, Resolved: s.Resolved, Global: s.Global, MeshClusters: []string{}, Policies: policyDTOs(s.Policies), CNPs: policyDTOs(s.CNPs)})

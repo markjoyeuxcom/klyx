@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -202,9 +203,13 @@ func (c *ClusterConn) GetGatewayTopology(ctx context.Context, namespace, name st
 
 	hrList, err := c.dyn.Resource(c.gwGVR("httproutes")).List(ctx, metav1.ListOptions{})
 	if err != nil {
-		topo.Warnings = append(topo.Warnings, "could not list HTTPRoutes: "+err.Error())
+		// Coverage, not a warning alone: with no route list nothing can be
+		// claimed about which routes attach (none, or one that left).
+		topo.RoutesError = "could not list HTTPRoutes: " + err.Error()
+		topo.Warnings = append(topo.Warnings, topo.RoutesError)
 		return topo, nil
 	}
+	topo.RoutesComplete = true
 	for i := range hrList.Items {
 		u := &unstructured.Unstructured{Object: hrList.Items[i].Object}
 		rn, ok := gwapi.RouteForGateway(u, namespace, name)
@@ -219,22 +224,34 @@ func (c *ClusterConn) GetGatewayTopology(ctx context.Context, namespace, name st
 	return topo, nil
 }
 
-// resolveBackends fills a route's Services + primary Pods from the typed client,
-// appending warnings for anything it can't resolve.
+// resolveBackends records, per backendRef, what Klyx could establish - read,
+// NotFound, unreadable (existence unknown) or an unsupported kind - plus each
+// resolved Service's endpoints, so a lane is diagnosed from its own backend's
+// evidence. Services/Pods keep the legacy shape (first RESOLVED Service).
 func (c *ClusterConn) resolveBackends(ctx context.Context, rn *gwapi.RouteNode, topo *gwapi.Topology) {
-	primaryCounted := false // the first RESOLVED Service backend owns the pod count, not array position 0
-	for _, b := range rn.Backends {
+	primaryCounted := false
+	for bi := range rn.Backends {
+		b := &rn.Backends[bi]
 		if b.Kind != "Service" {
+			b.State = gwapi.BackendUnsupported
 			topo.Warnings = append(topo.Warnings, fmt.Sprintf("route %s/%s: backend %q is a %s, not a Service", rn.Namespace, rn.Name, b.Name, b.Kind))
 			continue
 		}
 		sn := gwapi.ServiceNode{Namespace: b.Namespace, Name: b.Name, Port: b.Port}
 		svc, err := c.typed.CoreV1().Services(b.Namespace).Get(ctx, b.Name, metav1.GetOptions{})
 		if err != nil {
-			topo.Warnings = append(topo.Warnings, fmt.Sprintf("route %s/%s: backend Service %s/%s not found", rn.Namespace, rn.Name, b.Namespace, b.Name))
+			if apierrors.IsNotFound(err) {
+				b.State = gwapi.BackendNotFound
+				topo.Warnings = append(topo.Warnings, fmt.Sprintf("route %s/%s: backend Service %s/%s not found", rn.Namespace, rn.Name, b.Namespace, b.Name))
+			} else {
+				b.State = gwapi.BackendUnreadable
+				b.Error = err.Error()
+				topo.Warnings = append(topo.Warnings, fmt.Sprintf("route %s/%s: backend Service %s/%s unreadable: %v", rn.Namespace, rn.Name, b.Namespace, b.Name, err))
+			}
 			rn.Services = append(rn.Services, sn) // Resolved=false
 			continue
 		}
+		b.State = gwapi.BackendResolved
 		sn.Resolved = true
 		sn.Type = string(svc.Spec.Type)
 		sn.Selector = svc.Spec.Selector
@@ -243,8 +260,13 @@ func (c *ClusterConn) resolveBackends(ctx context.Context, rn *gwapi.RouteNode, 
 			sn.Port = svc.Spec.Ports[0].Port
 		}
 		rn.Services = append(rn.Services, sn)
+		ep := c.endpointCount(ctx, b.Namespace, b.Name)
+		b.Endpoints = &ep
 		if !primaryCounted {
-			rn.Pods = c.podCount(ctx, b.Namespace, b.Name, topo, rn)
+			rn.Pods = gwapi.PodCount{Ready: ep.Ready, Total: ep.Total, Unknown: ep.Error != ""}
+			if ep.Error != "" {
+				topo.Warnings = append(topo.Warnings, fmt.Sprintf("route %s/%s: EndpointSlices unavailable for %s", rn.Namespace, rn.Name, b.Name))
+			}
 			primaryCounted = true
 		}
 	}
@@ -253,21 +275,20 @@ func (c *ClusterConn) resolveBackends(ctx context.Context, rn *gwapi.RouteNode, 
 	}
 }
 
-func (c *ClusterConn) podCount(ctx context.Context, ns, svc string, topo *gwapi.Topology, rn *gwapi.RouteNode) gwapi.PodCount {
+// endpointCount counts a Service's EndpointSlice endpoints. Dedup by
+// TargetRef across slices: a dual-stack Service lists the same pods in its
+// IPv4 and IPv6 slices. Endpoints without a pod TargetRef cannot be
+// attributed to a pod; they count individually and as NonPod.
+func (c *ClusterConn) endpointCount(ctx context.Context, ns, svc string) gwapi.EndpointCount {
 	slices, err := c.typed.DiscoveryV1().EndpointSlices(ns).List(ctx, metav1.ListOptions{LabelSelector: "kubernetes.io/service-name=" + svc})
 	if err != nil {
-		topo.Warnings = append(topo.Warnings, fmt.Sprintf("route %s/%s: EndpointSlices unavailable for %s", rn.Namespace, rn.Name, svc))
-		return gwapi.PodCount{Unknown: true}
+		return gwapi.EndpointCount{Error: err.Error()}
 	}
-	// Dedup by TargetRef across slices: a dual-stack Service lists the same pods
-	// in its IPv4 and IPv6 slices, so counting every endpoint doubles the total.
-	// Endpoints without a TargetRef (rare, non-pod backends) can't be deduped, so
-	// they're counted individually via a synthetic key.
-	pc := gwapi.PodCount{}
+	out := gwapi.EndpointCount{}
 	seen := make(map[string]bool)
 	for i := range slices.Items {
 		for j, e := range slices.Items[i].Endpoints {
-			key := fmt.Sprintf("slice%d/ep%d", i, j) // fallback: no TargetRef, treat as distinct
+			key := fmt.Sprintf("slice%d/ep%d", i, j) // no TargetRef: treat as distinct
 			if e.TargetRef != nil {
 				key = string(e.TargetRef.UID)
 				if key == "" {
@@ -278,11 +299,14 @@ func (c *ClusterConn) podCount(ctx context.Context, ns, svc string, topo *gwapi.
 				continue
 			}
 			seen[key] = true
-			pc.Total++
+			out.Total++
+			if e.TargetRef == nil || e.TargetRef.Kind != "Pod" {
+				out.NonPod++
+			}
 			if e.Conditions.Ready != nil && *e.Conditions.Ready {
-				pc.Ready++
+				out.Ready++
 			}
 		}
 	}
-	return pc
+	return out
 }

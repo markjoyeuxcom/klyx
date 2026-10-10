@@ -2,37 +2,42 @@ import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { IconAlertTriangle, IconRoute } from "@tabler/icons-react";
 import { useFleet } from "../store/fleet";
 import type { GatewayNodeDTO, GatewayRef, ListenerDTO, PolicyRefDTO, ResourceRef, RouteMetricDTO, RouteNodeDTO, TopologyDTO } from "../store/fleet";
-import { getGatewayTopology, getRouteMetrics } from "../bridge/gateway";
+import { abandonRouteMetrics, getGatewayTopology, getRouteMetrics } from "../bridge/gateway";
 import { EmptyState } from "../chrome/EmptyState";
 import { SkeletonRows } from "../chrome/SkeletonRows";
-import { UpdatedAt, absoluteTime } from "../chrome/Age";
+import { UpdatedAt, absoluteTime, useNow } from "../chrome/Age";
 import { useListKeys } from "../chrome/useListKeys";
 import { VerdictLamp } from "../health/VerdictView";
 import { InspectorStatus } from "./ResourceInspector";
 import { LensLayout, type DatasetState } from "../layout/LensLayout";
 import { InspectorBlock, InspectorLayout, type MenuItem } from "../layout/InspectorLayout";
+import { kindEvidence, type KindEvidence } from "../layout/coverage";
 import {
   POLICY_ABBREV, POLICY_REFS, RANK, REFS, ROLE_TEXT, addressText, certBySecret, certStatus, errColor, fmtErr, fmtMs, fmtRps,
-  gatewayHealth, listenerText, policyKey, roleTone, routeHasGlobal, routeHasPolicies, routeHealth, routeIssues, routeKey, sortWarnings,
+  gatewayHealth, listenerText, policyKey, primaryBackendText, roleTone, routeHasGlobal, routeHasPolicies, routeHealth, routeIssues, routeKey, sortWarnings,
   type CertLookup, type Role,
 } from "./gatewayModel";
 
 // GatewayTopology - one Gateway's data path on the canvas-detail template
 // (spec §6 step 6). The canvas draws each HTTPRoute as a lane: route ->
-// primary backend Service (+ its pods) -> live traffic; broken lanes first.
-// The selected route's diagnosis lives in the inspector. The topology is a
-// read with Refresh (route numbers poll every 20s); a failed refresh keeps
-// the last good read, marked. Selection is the store's selectedRoute so the
-// palette can deep-link a route.
+// primary backend -> observed traffic; broken lanes first. The selected
+// route's diagnosis lives in the inspector. The topology is a read with
+// Refresh (route numbers poll every 20s). Evidence rules (Codex review):
+// conditions keep their native status (absent / Unknown / False / last
+// observed); a failed read never replaces the last good one; route absence
+// is claimed only from a complete HTTPRoute list; nothing here asserts an
+// end-to-end path works - Klyx reads status and endpoints, it does not probe.
 
 type Mode = "all" | "issues" | "global" | "policies";
 type OpenObject = (ref: ResourceRef, namespace: string, name: string) => void;
+export type MetricsObs = { state: "reading" | "live" | "stale" | "unavailable"; message: string; at: number | null };
 
 export function GatewayTopology({ cluster, gateway }: { cluster: string; gateway: GatewayRef }) {
   const net = useFleet((s) => s.network);
   const selectRoute = useFleet((s) => s.selectRoute);
   const closeGateway = useFleet((s) => s.closeGateway);
   const cm = useFleet((s) => s.certmanager);
+  const nowS = Math.floor(useNow() / 1000);
   const [mode, setMode] = useState<Mode>("all");
   const [nsFilter, setNsFilter] = useState("");
   const [query, setQuery] = useState("");
@@ -41,7 +46,7 @@ export function GatewayTopology({ cluster, gateway }: { cluster: string; gateway
   const refresh = () => void getGatewayTopology(cluster, gateway).catch(() => { /* rendered from the store */ });
   useEffect(() => {
     refresh();
-    return () => useFleet.getState().clearNetwork();
+    return () => { abandonRouteMetrics(); useFleet.getState().clearNetwork(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cluster, gateway.namespace, gateway.name]);
 
@@ -51,6 +56,11 @@ export function GatewayTopology({ cluster, gateway }: { cluster: string; gateway
   const readError = current ? net.topologyError ?? null : null;
   const routes = useMemo(() => t?.routes ?? [], [t]);
   const listeners = useMemo(() => t?.gateway.listeners ?? [], [t]);
+  // Route coverage of the shown read: complete (absence is proof), carried
+  // over from an earlier complete read (last evidence), or never read.
+  const routesNow = !!t && t.routesComplete === true;
+  const routesCarried = !!t && !routesNow && !!net.routesAt;
+  const certEvidence: KindEvidence = cm.cluster === cluster ? kindEvidence(!cm.loading, cm.coverage, "Certificate", cm.watchError) : "pending";
   const certLookup = useMemo(() => certBySecret(cm.cluster === cluster ? cm.certificates : []), [cm, cluster]);
   const metrics = current ? net.routeMetrics : {};
   const warnings = useMemo(() => sortWarnings(t?.warnings), [t]);
@@ -60,21 +70,30 @@ export function GatewayTopology({ cluster, gateway }: { cluster: string; gateway
   useEffect(() => {
     if (!routeKeysJoined) return;
     const keys = routeKeysJoined.split(",");
-    const tick = () => void getRouteMetrics(cluster, gateway.namespace, gateway.name, keys).catch(() => { /* status carries it */ });
+    const tick = () => void getRouteMetrics(cluster, gateway.namespace, gateway.name, keys);
     tick();
     const id = setInterval(tick, 20000);
-    return () => clearInterval(id);
+    return () => { clearInterval(id); abandonRouteMetrics(); };
   }, [cluster, gateway.namespace, gateway.name, routeKeysJoined]);
 
+  const rmStatus = current ? net.routeMetricsStatus : null;
+  const metricsObs: MetricsObs = !rmStatus ? { state: "reading", message: "", at: null }
+    : rmStatus.available ? { state: "live", message: rmStatus.message, at: net.routeMetricsAt ?? null }
+    : net.routeMetricsStale ? { state: "stale", message: rmStatus.message, at: net.routeMetricsAt ?? null }
+    : { state: "unavailable", message: rmStatus.message, at: null };
+
   const healthOf = useMemo(() => new Map(routes.map((r) => [routeKey(r), routeHealth(r, listeners)])), [routes, listeners]);
+  const kindOf = (r: RouteNodeDTO) => healthOf.get(routeKey(r))!.kind;
   const nsCounts = useMemo(() => {
     const m = new Map<string, number>();
     for (const r of routes) m.set(r.namespace, (m.get(r.namespace) ?? 0) + 1);
     return m;
   }, [routes]);
   const namespaces = [...nsCounts.keys()].sort();
-  const issueCount = routes.filter((r) => RANK[healthOf.get(routeKey(r))!.kind] <= RANK.degraded).length;
-  const brokenCount = routes.filter((r) => healthOf.get(routeKey(r))!.kind === "fault").length;
+  const broken = routes.filter((r) => kindOf(r) === "fault").length;
+  const degraded = routes.filter((r) => kindOf(r) === "degraded").length;
+  const unverified = routes.filter((r) => kindOf(r) === "unknown" || kindOf(r) === "progressing").length;
+  const issueCount = broken + degraded;
   const globalCount = routes.filter(routeHasGlobal).length;
   const policyCount = routes.filter(routeHasPolicies).length;
 
@@ -86,7 +105,7 @@ export function GatewayTopology({ cluster, gateway }: { cluster: string; gateway
       if (mode === "global" && !routeHasGlobal(r)) return false;
       if (mode === "policies" && !routeHasPolicies(r)) return false;
       if (!q) return true;
-      return [r.name, r.namespace, ...r.hostnames, ...r.services.map((s) => s.name)].some((v) => v.toLowerCase().includes(q));
+      return [r.name, r.namespace, ...r.hostnames, ...r.backends.map((b) => b.name)].some((v) => v.toLowerCase().includes(q));
     })
     // broken lanes first; the API order holds within a tier (stable sort)
     .sort((a, b) => RANK[healthOf.get(routeKey(a))!.kind] - RANK[healthOf.get(routeKey(b))!.kind]),
@@ -106,16 +125,17 @@ export function GatewayTopology({ cluster, gateway }: { cluster: string; gateway
     setMode("all"); setNsFilter(""); setQuery("");
   }, [selKey, selected]);
 
-  // First fresh read: select the first broken lane once (no focus theft).
+  // First fresh, COMPLETE read: select the first broken lane once (no focus
+  // theft). An incomplete or failed read does not consume the one shot.
   const autoDone = useRef(false);
   useEffect(() => {
-    if (autoDone.current || !t || loading) return;
+    if (autoDone.current || !t || loading || !routesNow) return;
     autoDone.current = true;
     if (selKey) return;
     const first = visible[0];
-    if (first && healthOf.get(routeKey(first))!.kind === "fault") pick(routeKey(first));
+    if (first && kindOf(first) === "fault") pick(routeKey(first));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [t, loading]);
+  }, [t, loading, routesNow]);
 
   // Later operator filter edits win: one that hides the selection closes it.
   const filterEdits = useRef(0);
@@ -125,8 +145,8 @@ export function GatewayTopology({ cluster, gateway }: { cluster: string; gateway
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode, nsFilter, q]);
 
-  // A route that left a complete read is named as gone, with its last
-  // evidence; a partial read (t.error) proves nothing about absence.
+  // A route absent from a complete current read is named as no longer
+  // attached; absent from anything less proves nothing.
   const lastRoute = useRef<RouteNodeDTO | null>(null);
   if (selected) lastRoute.current = selected;
   if (lastRoute.current && routeKey(lastRoute.current) !== selKey) lastRoute.current = null;
@@ -163,7 +183,9 @@ export function GatewayTopology({ cluster, gateway }: { cluster: string; gateway
     : state === "empty" ? (
       <div style={{ width: "100%", maxWidth: 720, alignSelf: "stretch" }}>
         {t && <GatewayStrip g={t.gateway} clusterPolicies={t.clusterPolicies ?? []} absentKinds={warnings.absentKinds} />}
-        <EmptyState icon={icon} title="No HTTPRoutes are attached to this Gateway." hint={t?.error ? "The read was partial - see the notice above." : "Routes attach through spec.parentRefs; nothing references this Gateway."} />
+        {routesNow
+          ? <EmptyState icon={icon} title="No HTTPRoutes are attached to this Gateway." hint="Routes attach through spec.parentRefs; none references this Gateway." />
+          : <EmptyState icon={<IconAlertTriangle size={28} stroke={1.2} />} title="Could not list HTTPRoutes." hint={`${t?.routesError ?? "The route list was not read"} - which routes attach is unknown.`} action={{ label: "Retry", onClick: refresh }} />}
       </div>
     )
     : <EmptyState icon={icon} title="No routes match the current filters." hint={`${routes.length} routes on this Gateway.`} action={{ label: "Clear filters", onClick: clearFilters }} />;
@@ -174,29 +196,28 @@ export function GatewayTopology({ cluster, gateway }: { cluster: string; gateway
         <span className="t-status">Refresh failed - showing the read from {net.topologyAt ? absoluteTime(net.topologyAt) : "earlier"}.</span> {readError}
       </div>
     ) : null,
-    t?.error ? (
-      <div key="partial" role="status" className="t-body" style={{ color: "var(--color-text-danger)", overflowWrap: "anywhere" }}>
-        <span className="t-status">▲ Partial read.</span> {t.error}
+    routesCarried ? (
+      <div key="routes" role="status" className="t-body" style={{ color: "var(--color-text-warning)", overflowWrap: "anywhere" }}>
+        <span className="t-status">HTTPRoute list failed - the lanes are from the complete read at {absoluteTime(net.routesAt!)}.</span> {t?.routesError}
       </div>
     ) : null,
     gwRole && RANK[gwRole.kind] <= RANK.degraded ? (
       <div key="gw" role="status" className="t-body" style={{ color: ROLE_TEXT[gwRole.kind], overflowWrap: "anywhere" }}>
-        <span className="t-status">{gwRole.kind === "fault" ? "▲ " : ""}Gateway {gwRole.label}.</span> {gwRole.kind === "fault" ? "Its controller has not accepted it - every lane below is unserved until it does." : "No data path is programmed yet - the lanes below describe intent, not live traffic."}
+        <span className="t-status">{gwRole.kind === "fault" ? "▲ " : ""}Gateway {gwRole.label}.</span> {gwRole.kind === "fault" ? "Its controller rejects it - the lanes below are not served through it." : "Lane evidence below is route status and endpoints, not proof that traffic flows through this Gateway."}
       </div>
     ) : null,
-    ...warnings.gaps.map((w, i) => (
+    ...warnings.gaps.filter((w) => w !== t?.routesError).map((w, i) => (
       <div key={`w${i}`} className="t-body" style={{ color: "var(--color-text-warning)", display: "flex", gap: 6, alignItems: "baseline", overflowWrap: "anywhere" }}>
         <IconAlertTriangle size={12} stroke={1.7} style={{ flexShrink: 0, alignSelf: "center" }} /> {w}
       </div>
     )),
   ].filter(Boolean);
 
-  const rmStatus = current ? net.routeMetricsStatus : null;
-  const metricsCaption = !rmStatus ? "route traffic: reading…"
-    : !rmStatus.available && net.routeMetricsStale ? `route traffic: last good read - the latest failed${rmStatus.message ? ` (${rmStatus.message})` : ""}`
-    : !rmStatus.available ? `route traffic unavailable: ${rmStatus.message || "no metrics source"}`
-    : rmStatus.message ? `route traffic: ${rmStatus.message}`
-    : "route traffic · 5m rates";
+  const metricsCaption = metricsObs.state === "reading" ? "route traffic: reading…"
+    : metricsObs.state === "stale" ? `route traffic: last good read - the latest failed${metricsObs.message ? ` (${metricsObs.message})` : ""}`
+    : metricsObs.state === "unavailable" ? `route traffic unavailable: ${metricsObs.message || "no metrics source"}`
+    : metricsObs.message ? `route traffic: ${metricsObs.message}` : "route traffic · 5m rates";
+  const coverage = routesNow ? "" : routesCarried ? " (last complete read)" : " (route list unreadable)";
 
   return (
     <LensLayout
@@ -209,13 +230,12 @@ export function GatewayTopology({ cluster, gateway }: { cluster: string; gateway
           <span style={{ fontFamily: "var(--font-mono)" }}><span style={{ color: "var(--color-text-tertiary)" }}>{gateway.namespace}/</span>{gateway.name}</span>
         </>
       }
-      summary={!t ? null : (
+      summary={!t || (!routesNow && !routesCarried) ? null : (
         <>
           <span className="t-number" style={{ color: "var(--color-text-secondary)" }}>{routes.length}</span>
-          <span className="t-secondary">HTTPRoute{routes.length === 1 ? "" : "s"}{t.error ? " (partial read)" : ""}</span>
-          {issueCount > 0
-            ? <span className="t-status" style={{ color: brokenCount > 0 ? "var(--color-text-danger)" : "var(--color-text-warning)" }}>{brokenCount > 0 ? `▲ ${brokenCount} broken` : ""}{brokenCount > 0 && issueCount > brokenCount ? " · " : ""}{issueCount > brokenCount ? `${issueCount - brokenCount} degraded` : ""}</span>
-            : routes.length > 0 && <span className="t-secondary">every path usable</span>}
+          <span className="t-secondary">HTTPRoute{routes.length === 1 ? "" : "s"}{coverage}</span>
+          {issueCount > 0 && <span className="t-status" style={{ color: broken > 0 ? "var(--color-text-danger)" : "var(--color-text-warning)" }}>{[broken ? `▲ ${broken} broken` : "", degraded ? `${degraded} degraded` : ""].filter(Boolean).join(" · ")}</span>}
+          {unverified > 0 && <span className="t-secondary">{unverified} unverified</span>}
         </>
       )}
       headerEnd={
@@ -229,7 +249,7 @@ export function GatewayTopology({ cluster, gateway }: { cluster: string; gateway
         <>
           <div role="group" aria-label="Route filter" style={{ display: "inline-flex", gap: 4 }}>
             <button className="l-chip" aria-pressed={mode === "all"} onClick={() => setMode("all")}>All {routes.length}</button>
-            <button className="l-chip" aria-pressed={mode === "issues"} onClick={() => setMode("issues")}>Issues {issueCount > 0 && <span style={{ color: brokenCount > 0 ? "var(--color-text-danger)" : "var(--color-text-warning)" }}>{issueCount}</span>}</button>
+            <button className="l-chip" aria-pressed={mode === "issues"} onClick={() => setMode("issues")}>Issues {issueCount > 0 && <span style={{ color: broken > 0 ? "var(--color-text-danger)" : "var(--color-text-warning)" }}>{issueCount}</span>}</button>
             {globalCount > 0 && <button className="l-chip" aria-pressed={mode === "global"} onClick={() => setMode("global")}>Global {globalCount}</button>}
             {policyCount > 0 && <button className="l-chip" aria-pressed={mode === "policies"} onClick={() => setMode("policies")}>With policies {policyCount}</button>}
           </div>
@@ -245,7 +265,7 @@ export function GatewayTopology({ cluster, gateway }: { cluster: string; gateway
           <label style={{ display: "flex", flex: "0 1 260px", minWidth: 140, marginLeft: "auto" }}>
             <span className="sr-only">Search routes</span>
             <input ref={searchRef} className="l-input" style={{ width: "100%" }} type="search" autoCapitalize="off" autoCorrect="off" spellCheck={false}
-              value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search route, hostname, service" />
+              value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search route, hostname, backend" />
           </label>
         </>
       ) : undefined}
@@ -257,7 +277,7 @@ export function GatewayTopology({ cluster, gateway }: { cluster: string; gateway
           <GatewayStrip g={t.gateway} clusterPolicies={t.clusterPolicies ?? []} absentKinds={warnings.absentKinds} />
           <div role="list" aria-label="HTTPRoute lanes" style={{ display: "grid", gap: 8 }}>
             {visible.map((r) => (
-              <RouteLane key={routeKey(r)} route={r} role={healthOf.get(routeKey(r))!} metric={metrics[routeKey(r)]} metricsOff={!!rmStatus && !rmStatus.available && !net.routeMetricsStale}
+              <RouteLane key={routeKey(r)} route={r} role={healthOf.get(routeKey(r))!} metric={metrics[routeKey(r)]} metricsObs={metricsObs}
                 selected={routeKey(r) === selKey} onSelect={() => pick(routeKey(r) === selKey ? null : routeKey(r))} />
             ))}
           </div>
@@ -266,8 +286,8 @@ export function GatewayTopology({ cluster, gateway }: { cluster: string; gateway
       footer={<span className="t-legend">j k select · esc close · / search</span>}
       footerEnd={<span className="t-secondary">{visible.length !== routes.length ? `${visible.length} of ${routes.length} routes · ` : ""}broken first · {metricsCaption}</span>}
       inspector={selKey && inspected && t ? (
-        <RouteInspector key={selKey} route={inspected} gone={missing && !t.error} unproven={missing && !!t.error} listeners={listeners} notes={warnings.byRoute.get(selKey) ?? []}
-          metric={metrics[selKey]} certLookup={certLookup} certsLoaded={cm.cluster === cluster} onOpenObject={openObject} onClose={() => pick(null)} />
+        <RouteInspector key={selKey} route={inspected} gone={missing && routesNow} unproven={missing && !routesNow} gateway={t.gateway} listeners={listeners} notes={warnings.byRoute.get(selKey) ?? []}
+          metric={metrics[selKey]} metricsObs={metricsObs} certLookup={certLookup} certEvidence={certEvidence} nowS={nowS} onOpenObject={openObject} onClose={() => pick(null)} />
       ) : undefined}
       inspectorLabel="Route details"
       onCloseInspector={() => pick(null)}
@@ -280,6 +300,7 @@ export function GatewayTopology({ cluster, gateway }: { cluster: string; gateway
 function GatewayStrip({ g, clusterPolicies, absentKinds }: { g: GatewayNodeDTO; clusterPolicies: PolicyRefDTO[]; absentKinds: string[] }) {
   const role = gatewayHealth(g);
   const address = addressText(g.addresses);
+  const [showAbsent, setShowAbsent] = useState(false);
   return (
     <div className="gw-node gw-gateway" data-testid="gateway-strip">
       <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
@@ -294,7 +315,17 @@ function GatewayStrip({ g, clusterPolicies, absentKinds }: { g: GatewayNodeDTO; 
         <span>listeners</span><span>{g.listeners.length === 0 ? <span className="t-secondary">none</span> : g.listeners.map((l) => `${listenerText(l)}${l.hostname ? ` (${l.hostname})` : ""}`).join(" · ")}</span>
         {g.policies.length > 0 && <><span>policies</span><span><PolicyList policies={g.policies} /></span></>}
         {clusterPolicies.length > 0 && <><span>cluster-wide</span><span><PolicyList policies={clusterPolicies} /></span></>}
-        {absentKinds.length > 0 && <><span>not installed</span><span className="t-secondary" style={{ fontFamily: "var(--font-sans)" }}>{absentKinds.join(", ")} - no such policies can apply here</span></>}
+        {absentKinds.length > 0 && (
+          <>
+            <span>policy APIs</span>
+            <span className="t-secondary" style={{ fontFamily: "var(--font-sans)" }}>
+              <button className="gw-crumb" style={{ color: "var(--color-text-secondary)" }} aria-expanded={showAbsent} onClick={() => setShowAbsent(!showAbsent)}>
+                {absentKinds.length} optional kind{absentKinds.length === 1 ? "" : "s"} not installed
+              </button>
+              {showAbsent && <> - {absentKinds.join(", ")}; no such policies can apply here</>}
+            </span>
+          </>
+        )}
       </div>
     </div>
   );
@@ -316,11 +347,23 @@ function Lamp({ role }: { role: Role }) {
   return <span role="img" aria-label={role.label} style={{ display: "inline-flex", flexShrink: 0 }}><VerdictLamp health={role} size={8} /></span>;
 }
 
-function RouteLane({ route, role, metric, metricsOff, selected, onSelect }: { route: RouteNodeDTO; role: Role; metric: RouteMetricDTO | undefined; metricsOff: boolean; selected: boolean; onSelect: () => void }) {
-  const svc = route.services[0];
+function TrafficLine({ metric, obs }: { metric: RouteMetricDTO | undefined; obs: MetricsObs }) {
+  if (obs.state === "unavailable") return <span className="t-secondary">no metrics source</span>;
+  if (obs.state === "reading" && !metric) return <span className="t-secondary">reading…</span>;
+  if (!metric) return <span className="t-secondary">no traffic series for this route</span>;
+  return (
+    <>
+      <span className="t-identifier">{fmtRps(metric.rps)} rps · p99 {fmtMs(metric.p99)}</span>
+      <span className="t-secondary gw-line">p50 {fmtMs(metric.p50)} · <span style={{ color: errColor(metric.errRate) }}>5xx {fmtErr(metric.errRate)}</span>{obs.state === "stale" ? " · last good" : ""}</span>
+    </>
+  );
+}
+
+function RouteLane({ route, role, metric, metricsObs, selected, onSelect }: { route: RouteNodeDTO; role: Role; metric: RouteMetricDTO | undefined; metricsObs: MetricsObs; selected: boolean; onSelect: () => void }) {
+  const b = route.backends[0];
+  const svc = b ? route.services.find((s) => s.namespace === b.namespace && s.name === b.name) : undefined;
   const ref = useRef<HTMLButtonElement>(null);
   useEffect(() => { if (selected) ref.current?.scrollIntoView?.({ block: "nearest" }); }, [selected]);
-  const servesTraffic = role.kind !== "fault" && !!svc?.resolved;
   return (
     <div role="listitem" className="gw-lane" data-role={role.kind}>
       <button ref={ref} className="gw-node gw-route" aria-pressed={selected} data-selected={selected ? "true" : undefined} onClick={onSelect}
@@ -335,12 +378,9 @@ function RouteLane({ route, role, metric, metricsOff, selected, onSelect }: { ro
       </button>
       <span className="gw-edge" aria-hidden="true">›</span>
       <div className="gw-node">
-        <span className="t-legend">service</span>
-        <span className="t-identifier gw-name">{svc ? svc.name : "none"}{route.backends.length > 1 ? <span className="t-secondary"> +{route.backends.length - 1}</span> : null}</span>
-        <span className="t-secondary gw-line">
-          {!svc ? "no backend" : !svc.resolved ? "not found" : `${svc.type} :${svc.port}`}
-          {svc?.resolved && <> · pods {route.pods.unknown ? "unknown" : `${route.pods.ready}/${route.pods.total}`}</>}
-        </span>
+        <span className="t-legend">{route.backends.length > 1 ? `primary backend · ${route.backends.length} total` : "backend"}</span>
+        <span className="t-identifier gw-name">{b ? b.name : "none"}</span>
+        <span className="t-secondary gw-line">{primaryBackendText(route)}</span>
         {svc && (svc.policies.length > 0 || svc.cnps.length > 0) && <PolicyList policies={[...svc.policies, ...svc.cnps]} />}
         {svc?.global && (
           <span className="t-secondary gw-line" title="Global service: also present on these fleet mesh peers. Live dataplane health is not checked.">
@@ -350,37 +390,37 @@ function RouteLane({ route, role, metric, metricsOff, selected, onSelect }: { ro
       </div>
       <span className="gw-edge" aria-hidden="true">›</span>
       <div className="gw-node">
-        <span className="t-legend">traffic</span>
-        {servesTraffic && metricsOff ? <span className="t-secondary">no metrics source</span> : servesTraffic ? (
-          <>
-            <span className="t-identifier">{fmtRps(metric?.rps ?? null)} rps · p99 {fmtMs(metric?.p99 ?? null)}</span>
-            <span className="t-secondary gw-line">p50 {fmtMs(metric?.p50 ?? null)} · <span style={{ color: errColor(metric?.errRate ?? null) }}>5xx {fmtErr(metric?.errRate ?? null)}</span></span>
-          </>
-        ) : <span className="t-secondary">no data path</span>}
+        <span className="t-legend">observed traffic</span>
+        <TrafficLine metric={metric} obs={metricsObs} />
       </div>
     </div>
   );
 }
 
-function RouteInspector({ route, gone, unproven, listeners, notes, metric, certLookup, certsLoaded, onOpenObject, onClose }: {
+function RouteInspector({ route, gone, unproven, gateway, listeners, notes, metric, metricsObs, certLookup, certEvidence, nowS, onOpenObject, onClose }: {
   route: RouteNodeDTO;
   gone: boolean;
   unproven: boolean;
+  gateway: GatewayNodeDTO;
   listeners: ListenerDTO[];
   notes: string[];
   metric: RouteMetricDTO | undefined;
+  metricsObs: MetricsObs;
   certLookup: CertLookup;
-  certsLoaded: boolean;
+  certEvidence: KindEvidence;
+  nowS: number;
   onOpenObject: OpenObject;
   onClose: () => void;
 }) {
   const role = routeHealth(route, listeners);
   const issues = routeIssues(route, listeners);
-  const svc = route.services[0];
+  const gwRole = gatewayHealth(gateway);
+  const primary = route.backends[0];
   const scoped = route.parentSectionName ? listeners.filter((l) => l.name === route.parentSectionName) : listeners;
   const policies = [...route.policies, ...route.services.flatMap((s) => s.policies)];
   const cnps = route.services.flatMap((s) => s.cnps);
-  const services = route.backends.filter((b) => b.kind === "Service");
+  const services = route.backends.filter((b) => b.kind === "Service" && b.state !== "not-found");
+  const ep = primary?.endpoints;
 
   const more: MenuItem[] = [];
   if (services.length > 1) more.push({ kind: "choose", label: "Open backend Service", options: services.map((b) => ({ label: `${b.namespace}/${b.name}`, onSelect: () => onOpenObject(REFS.service, b.namespace, b.name) })) });
@@ -395,22 +435,23 @@ function RouteInspector({ route, gone, unproven, listeners, notes, metric, certL
         onClose={onClose}
         verdict={
           <div>
-            {gone && <div role="status" className="t-body" style={{ marginBottom: 8 }}><span className="t-status">No longer attached.</span> The last complete read of this Gateway did not include it; this is its last evidence.</div>}
-            {unproven && <div role="status" className="t-body" style={{ marginBottom: 8 }}><span className="t-status">Not in the current partial read.</span> Its absence proves nothing; this is its last evidence.</div>}
+            {gone && <div role="status" className="t-body" style={{ marginBottom: 8 }}><span className="t-status">No longer attached.</span> The latest complete HTTPRoute list did not include it; this is its last evidence.</div>}
+            {unproven && <div role="status" className="t-body" style={{ marginBottom: 8 }}><span className="t-status">Not in the current read.</span> The HTTPRoute list was incomplete, so its absence proves nothing; this is its last evidence.</div>}
             <InspectorStatus tone={roleTone(role.kind)} label={role.label} />
-            {issues.length > 0 ? (
-              <div style={{ display: "grid", gap: 4, marginTop: -4 }}>
-                {issues.map((i) => <div key={i.short} className="t-body" style={{ color: ROLE_TEXT[i.severity], overflowWrap: "anywhere" }}>{i.text}</div>)}
-              </div>
-            ) : role.kind === "unknown" ? (
-              <div className="t-body" style={{ color: "var(--color-text-secondary)", marginTop: -4 }}>Attached and resolved, but the backend's endpoints could not be read - readiness is unverified.</div>
-            ) : (
-              <div className="t-body" style={{ color: "var(--color-text-secondary)", marginTop: -4 }}>Attachment, references, backend Service and endpoints are usable.</div>
-            )}
+            <div style={{ display: "grid", gap: 4, marginTop: -4 }}>
+              {issues.length > 0
+                ? issues.map((i) => <div key={i.short} className="t-body" style={{ color: ROLE_TEXT[i.severity], overflowWrap: "anywhere" }}>{i.text}</div>)
+                : (
+                  <div className="t-body" style={{ color: "var(--color-text-secondary)" }}>
+                    Accepted by this Gateway with references resolved; the primary backend {primary?.name} has {ep ? `${ep.ready}/${ep.total} endpoints ready` : "endpoints"}. Klyx reads status and endpoints - it does not test the path end to end.
+                  </div>
+                )}
+              {RANK[gwRole.kind] <= RANK.degraded && <div className="t-body" style={{ color: ROLE_TEXT[gwRole.kind] }}>The Gateway itself is {gwRole.label}.</div>}
+            </div>
           </div>
         }
         primary={gone ? undefined : { label: "Open HTTPRoute", onSelect: () => onOpenObject(REFS.httpRoute, route.namespace, route.name) }}
-        secondary={!gone && svc?.resolved ? { label: "Open Service", onSelect: () => onOpenObject(REFS.service, svc.namespace, svc.name) } : undefined}
+        secondary={!gone && primary?.state === "resolved" ? { label: "Open Service", onSelect: () => onOpenObject(REFS.service, primary.namespace, primary.name) } : undefined}
         more={gone ? undefined : more}>
         {notes.length > 0 && (
           <InspectorBlock title="Read notes" count={notes.length}>
@@ -419,9 +460,7 @@ function RouteInspector({ route, gone, unproven, listeners, notes, metric, certL
         )}
         <InspectorBlock title="Matches" count={route.matches.length}>
           <div className="insp-kv">
-            {route.matches.map((m, i) => (
-              <Fragment key={i}><span>{m.method || "any"}</span><span>{m.pathType} {m.pathValue}</span></Fragment>
-            ))}
+            {route.matches.map((m, i) => <Fragment key={i}><span>{m.method || "any"}</span><span>{m.pathType} {m.pathValue}</span></Fragment>)}
             <span>hostnames</span><span>{route.hostnames.length > 0 ? route.hostnames.join(", ") : "any (from the listener)"}</span>
           </div>
         </InspectorBlock>
@@ -430,13 +469,13 @@ function RouteInspector({ route, gone, unproven, listeners, notes, metric, certL
             {route.backends.map((b, i) => (
               <Fragment key={i}>
                 <span>{b.kind}</span>
-                <span>{b.namespace}/{b.name}:{b.port}{b.weight ? ` · weight ${b.weight}` : ""}{i === 0 ? <span className="t-secondary"> (lane)</span> : null}</span>
+                <span>
+                  {b.namespace}/{b.name}:{b.port}{b.weight ? ` · weight ${b.weight}` : ""}{i === 0 ? <span className="t-secondary"> (lane)</span> : null}
+                  <span className="t-secondary" style={{ display: "block" }}>{backendEvidence(b)}</span>
+                </span>
               </Fragment>
             ))}
           </div>
-          {svc && (
-            <div className="t-secondary">Primary: {svc.resolved ? `${svc.type} :${svc.port}` : "Service not found"}{svc.resolved ? ` · pods ${route.pods.unknown ? "unknown" : `${route.pods.ready}/${route.pods.total} ready`}` : ""}</div>
-          )}
         </InspectorBlock>
         <InspectorBlock title="Listener TLS">
           {scoped.length === 0 ? (
@@ -448,7 +487,7 @@ function RouteInspector({ route, gone, unproven, listeners, notes, metric, certL
                 <span className="t-identifier">{listenerText(l)}{l.hostname ? ` · ${l.hostname}` : ""}</span>
                 {refs.length === 0 ? <span className="t-secondary">No certificateRefs.</span> : refs.map((ref) => {
                   const cert = ref.kind === "Secret" ? certLookup.get(`${ref.namespace}/${ref.name}`) : undefined;
-                  const st = certsLoaded ? certStatus(cert) : { text: "cert-manager state not loaded", color: "var(--color-text-tertiary)" };
+                  const st = ref.kind === "Secret" ? certStatus(cert, certEvidence, nowS) : { text: "not a Secret - not evaluated", color: "var(--color-text-tertiary)" };
                   return (
                     <span key={`${ref.kind}/${ref.namespace}/${ref.name}`} className="t-secondary" style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
                       <span className="t-identifier">{ref.kind} {ref.namespace}/{ref.name}</span>
@@ -462,20 +501,25 @@ function RouteInspector({ route, gone, unproven, listeners, notes, metric, certL
             );
           })}
         </InspectorBlock>
-        <InspectorBlock title="Traffic">
-          {role.kind === "fault" || !svc?.resolved ? <div className="t-secondary">No data path - nothing to measure.</div> : (
-            <>
-              <div className="insp-kv">
-                <span>rate</span><span>{fmtRps(metric?.rps ?? null)} rps</span>
-                <span>p50 / p99</span><span>{fmtMs(metric?.p50 ?? null)} / {fmtMs(metric?.p99 ?? null)}</span>
-                <span>5xx</span><span style={{ color: errColor(metric?.errRate ?? null) }}>{fmtErr(metric?.errRate ?? null)}</span>
-              </div>
-              <div className="t-secondary">p50/p99 are the worst rule's values. 5xx is tinted at 1% and 5% - Klyx's thresholds.</div>
-            </>
-          )}
+        <InspectorBlock title="Observed traffic">
+          {metricsObs.state === "unavailable" ? <div className="t-secondary">Unavailable{metricsObs.message ? ` - ${metricsObs.message}` : ""}.</div>
+            : !metric ? <div className="t-secondary">{metricsObs.state === "reading" ? "Reading…" : "No traffic series for this route in the window."}</div>
+            : (
+              <>
+                <div className="insp-kv">
+                  <span>rate</span><span>{fmtRps(metric.rps)} rps</span>
+                  <span>p50 / p99</span><span>{fmtMs(metric.p50)} / {fmtMs(metric.p99)}</span>
+                  <span>5xx</span><span style={{ color: errColor(metric.errRate) }}>{fmtErr(metric.errRate)}</span>
+                </div>
+                <div className="t-secondary">
+                  {metricsObs.state === "stale" ? `Last good read${metricsObs.at ? ` from ${absoluteTime(metricsObs.at)}` : ""} - the latest poll failed${metricsObs.message ? ` (${metricsObs.message})` : ""}. ` : metricsObs.at ? `5m rates, read ${absoluteTime(metricsObs.at)}. ` : ""}
+                  p50/p99 are the worst rule's values; 5xx is tinted at 1% and 5% (Klyx's thresholds).
+                </div>
+              </>
+            )}
         </InspectorBlock>
         <InspectorBlock title="Attached policies" count={policies.length}>
-          {policies.length === 0 ? <div className="t-secondary">None on this route or its Service. Gateway-wide policies are on the canvas's gateway node.</div> : policies.map((p) => <PolicyDetail key={policyKey(p)} p={p} />)}
+          {policies.length === 0 ? <div className="t-secondary">None on this route or its Services. Gateway-wide policies are on the canvas's gateway node.</div> : policies.map((p) => <PolicyDetail key={policyKey(p)} p={p} />)}
         </InspectorBlock>
         {cnps.length > 0 && (
           <InspectorBlock title="Inferred network policies" count={cnps.length}>
@@ -486,6 +530,16 @@ function RouteInspector({ route, gone, unproven, listeners, notes, metric, certL
       </InspectorLayout>
     </div>
   );
+}
+
+function backendEvidence(b: RouteNodeDTO["backends"][number]): string {
+  if (b.state === "not-found") return "Service not found";
+  if (b.state === "unreadable") return `could not be read${b.error ? ` - ${b.error}` : ""}`;
+  if (b.state === "unsupported" || b.kind !== "Service") return "not evaluated (Klyx reads Service backends only)";
+  const ep = b.endpoints;
+  if (!ep) return "endpoints not read";
+  if (ep.error) return `endpoints unreadable - ${ep.error}`;
+  return `${ep.ready}/${ep.total} endpoints ready${ep.nonPod > 0 ? ` · ${ep.nonPod} not backed by a pod` : ""}`;
 }
 
 function PolicyDetail({ p, inferred = false }: { p: PolicyRefDTO; inferred?: boolean }) {

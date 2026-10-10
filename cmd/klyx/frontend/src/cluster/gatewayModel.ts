@@ -1,4 +1,5 @@
-import type { CertificateDTO, GatewayRefDTO, ListenerDTO, PolicyRefDTO, ResourceRef, RouteNodeDTO } from "../store/fleet";
+import type { CertificateDTO, CondDTO, GatewayRefDTO, ListenerDTO, PolicyRefDTO, ResourceRef, RouteNodeDTO } from "../store/fleet";
+import type { KindEvidence } from "../layout/coverage";
 
 // gatewayModel - the Gateway API lens's health and wording, shared by the
 // list and the topology (spec §6 step 6). Gateway and route status reach the
@@ -13,22 +14,55 @@ export const ROLE_TEXT: Record<Role["kind"], string> = {
 };
 export const roleTone = (k: Role["kind"]) => (k === "fault" ? "danger" : k === "degraded" ? "warning" : k === "ok" ? "success" : "muted") as "danger" | "warning" | "success" | "muted";
 
-// A Gateway the controller has not accepted serves nothing (fault). One that
-// is accepted but not programmed has no data path yet - provisioning or a
-// missing address - so it needs attention, not alarm. A generation the
-// controller has not observed is syncing; it never hides a fault.
-export function gatewayHealth(g: Pick<GatewayRefDTO, "accepted" | "programmed" | "stale">): Role {
-  if (!g.accepted) return { kind: "fault", label: g.stale ? "not accepted · syncing" : "not accepted" };
-  if (!g.programmed) return { kind: "degraded", label: g.stale ? "not programmed · syncing" : "not programmed" };
-  if (g.stale) return { kind: "progressing", label: "syncing" };
+// ---- condition evidence ----------------------------------------------------
+
+// One condition as Klyx may claim it. "absent" = no controller has written
+// it (no evidence either way); "Unknown" = the controller says it is still
+// deciding; "False" = an explicit negative. A condition observed for an
+// older generation is last-observed: it describes the previous spec, so a
+// stale False is never asserted as the current state.
+export type CondState = { status: "True" | "False" | "Unknown" | "absent"; reason: string; message: string; stale: boolean; observedGeneration: number };
+export function condState(c: CondDTO | undefined, generation: number | undefined, fallback?: boolean): CondState {
+  // An older payload without condition evidence: True stays True, but false
+  // is only "not True" - never promoted to an explicit False.
+  if (!c) return { status: fallback ? "True" : "absent", reason: "", message: "", stale: false, observedGeneration: 0 };
+  const status = c.status === "True" || c.status === "False" || c.status === "Unknown" ? c.status : "absent";
+  const stale = status !== "absent" && !!generation && c.observedGeneration > 0 && c.observedGeneration < generation;
+  return { status, reason: c.reason, message: c.message, stale, observedGeneration: c.observedGeneration };
+}
+const because = (c: CondState) => [c.reason, c.message].filter(Boolean).join(": ");
+
+type GatewayLike = Pick<GatewayRefDTO, "accepted" | "programmed" | "acceptedCond" | "programmedCond" | "generation">;
+
+// Gateway roles: an explicit, current Accepted=False is the fault (nothing
+// through it is served by its controller). Absent status is unverified, a
+// pending decision is progressing, and an explicit not-programmed is
+// degraded (no data path configured yet). A last-observed negative is
+// degraded "(last observed)" - the current state is unproven.
+export function gatewayHealth(g: GatewayLike): Role {
+  const a = condState(g.acceptedCond, g.generation, g.accepted);
+  if (a.status === "absent") return { kind: "unknown", label: "no status reported" };
+  if (a.status === "Unknown") return { kind: "progressing", label: "acceptance pending" };
+  if (a.status === "False") return a.stale ? { kind: "degraded", label: "not accepted (last observed)" } : { kind: "fault", label: "not accepted" };
+  const p = condState(g.programmedCond, g.generation, g.programmed);
+  if (p.status === "absent") return { kind: "unknown", label: "programming not reported" };
+  if (p.status === "Unknown") return { kind: "progressing", label: "programming" };
+  if (p.status === "False") return { kind: "degraded", label: p.stale ? "not programmed (last observed)" : "not programmed" };
+  if (a.stale || p.stale) return { kind: "progressing", label: "syncing" };
   return { kind: "ok", label: "programmed" };
 }
 
-export function gatewayVerdictDetail(g: Pick<GatewayRefDTO, "accepted" | "programmed" | "stale" | "generation" | "observedGeneration">): string {
-  const sync = g.stale ? ` The controller has not observed generation ${g.generation ?? "?"} yet; status describes generation ${g.observedGeneration ?? "?"}.` : "";
-  if (!g.accepted) return `Accepted is not True (False, Unknown or not reported) - the controller has not accepted this Gateway, so no route through it is served. Check the GatewayClass and its controller.${sync}`;
-  if (!g.programmed) return `Accepted, but Programmed is not True - the data plane is not configured for this Gateway yet (address or proxy still provisioning, or a listener conflict).${sync}`;
-  if (g.stale) return `Programmed for the previous generation.${sync}`;
+export function gatewayVerdictDetail(g: GatewayLike): string {
+  const a = condState(g.acceptedCond, g.generation, g.accepted);
+  const p = condState(g.programmedCond, g.generation, g.programmed);
+  const last = (c: CondState) => (c.stale ? ` This was observed for generation ${c.observedGeneration}; the controller has not reported on generation ${g.generation} yet.` : "");
+  if (a.status === "absent") return "No controller has written an Accepted condition - check that the GatewayClass exists and its controller is running. Klyx cannot tell whether it will be accepted.";
+  if (a.status === "Unknown") return `The controller has not decided yet${because(a) ? ` (${because(a)})` : ""}.`;
+  if (a.status === "False") return `Accepted is False${because(a) ? ` - ${because(a)}` : ""}. Its controller does not serve routes through it.${last(a)}`;
+  if (p.status === "absent") return "Accepted, but no Programmed condition has been written - whether the data plane is configured is unverified.";
+  if (p.status === "Unknown") return `Accepted; programming is in progress${because(p) ? ` (${because(p)})` : ""}.`;
+  if (p.status === "False") return `Accepted, but Programmed is False${because(p) ? ` - ${because(p)}` : ""}. The data plane is not configured for it.${last(p)}`;
+  if (a.stale || p.stale) return `Programmed for generation ${p.observedGeneration || a.observedGeneration}; the controller has not observed generation ${g.generation} yet.`;
   return "Accepted and programmed by its controller.";
 }
 
@@ -43,31 +77,79 @@ export function listenerText(l: ListenerDTO): string {
 
 // ---- routes ----------------------------------------------------------------
 
-export type RouteIssue = { short: string; text: string; severity: "fault" | "degraded" };
+export type RouteIssue = { short: string; text: string; severity: Role["kind"] };
 
-// The lane follows the PRIMARY backend (services[0]); extra backends are
-// listed in the inspector and named by the topology's own warnings.
+const endpointsText = (r: number, t: number, nonPod: number) => `${r}/${t} endpoints ready${nonPod > 0 ? ` (${nonPod} not backed by a pod)` : ""}`;
+
+// routeIssues reads this route's status FOR THIS Gateway and its primary
+// backend (backends[0], the lane). Each issue says how sure Klyx is:
+// fault = explicit current negative; degraded = partial or last observed;
+// progressing = the controller is deciding; unknown = Klyx could not read
+// or does not evaluate it. With several backends, a primary-backend
+// problem is degraded: other backends may still carry traffic.
 export function routeIssues(r: RouteNodeDTO, listeners: ListenerDTO[] = []): RouteIssue[] {
-  const svc = r.services[0];
   const out: RouteIssue[] = [];
+  const legacy = r.parentFound === undefined; // older payload: booleans only
+  if (!legacy && !r.parentFound) {
+    out.push({ short: "no status for this Gateway", text: "No controller has written status for this route's parent - attachment is unverified.", severity: "unknown" });
+  } else {
+    const a = condState(r.acceptedCond, r.generation, r.accepted);
+    if (a.status === "False") out.push(a.stale
+      ? { short: "not accepted (last observed)", text: `Accepted was False for generation ${a.observedGeneration}${because(a) ? ` - ${because(a)}` : ""}; the current generation is not reported yet.`, severity: "degraded" }
+      : { short: "not accepted", text: `Not accepted by this Gateway${because(a) ? ` - ${because(a)}` : ""}.`, severity: "fault" });
+    else if (a.status === "Unknown") out.push({ short: "acceptance pending", text: `The controller has not decided${because(a) ? ` (${because(a)})` : ""}.`, severity: "progressing" });
+    else if (a.status === "absent") out.push({ short: "acceptance not reported", text: "No Accepted condition for this Gateway.", severity: "unknown" });
+    const rr = condState(r.resolvedRefsCond, r.generation, r.resolvedRefs);
+    if (rr.status === "False") out.push(rr.stale
+      ? { short: "unresolved refs (last observed)", text: `ResolvedRefs was False for generation ${rr.observedGeneration}${because(rr) ? ` - ${because(rr)}` : ""}.`, severity: "degraded" }
+      : { short: "unresolved refs", text: `References not resolved${because(rr) ? ` - ${because(rr)}` : ""}. Check the backendRef, a cross-namespace ReferenceGrant, or the listener section.`, severity: "fault" });
+    else if (rr.status === "Unknown") out.push({ short: "refs pending", text: `ResolvedRefs is Unknown${because(rr) ? ` (${because(rr)})` : ""}.`, severity: "progressing" });
+  }
   const names = new Set(listeners.map((l) => l.name).filter(Boolean));
-  if (!r.accepted) out.push({ short: "not accepted", text: "Not accepted by this Gateway (Accepted is not True for this parent).", severity: "fault" });
-  if (!r.resolvedRefs) out.push({ short: "unresolved refs", text: "References not resolved (ResolvedRefs is not True) - check the backendRef, a cross-namespace ReferenceGrant, or the listener section.", severity: "fault" });
   if (r.parentSectionName && names.size > 0 && !names.has(r.parentSectionName)) out.push({ short: "listener missing", text: `Listener ${r.parentSectionName} does not exist on this Gateway.`, severity: "fault" });
-  if (!svc) out.push({ short: "no backend", text: "No backend Service.", severity: "fault" });
-  else if (!svc.resolved) out.push({ short: "backend missing", text: `Backend Service ${svc.namespace}/${svc.name} not found.`, severity: "fault" });
-  else if (!r.pods.unknown && (r.pods.total === 0 || r.pods.ready === 0)) out.push({ short: "no ready endpoints", text: r.pods.total === 0 ? "The backend Service selects no pods." : r.pods.total === 1 ? "The backend's only pod is not ready." : `None of the backend's ${r.pods.total} pods is ready.`, severity: "fault" });
-  else if (!r.pods.unknown && r.pods.ready < r.pods.total) out.push({ short: `${r.pods.ready}/${r.pods.total} ready`, text: `Backend pods ${r.pods.ready}/${r.pods.total} ready - serving at reduced capacity.`, severity: "degraded" });
+
+  const b = r.backends[0];
+  const several = r.backends.length > 1;
+  const primary = (sev: "fault" | "degraded") => (several && sev === "fault" ? "degraded" : sev);
+  const scope = several ? ` This is the primary backend; ${r.backends.length - 1} other backend${r.backends.length === 2 ? " is" : "s are"} not diagnosed on the lane.` : "";
+  if (!b) {
+    out.push({ short: "no backendRefs", text: "No backendRefs - a redirect or filter-only route, or a misconfiguration. Klyx does not evaluate filters.", severity: "unknown" });
+  } else if (b.state === "unsupported" || (b.state === undefined && b.kind !== "Service")) {
+    out.push({ short: `${b.kind} backend not evaluated`, text: `The primary backend is a ${b.kind}; Klyx evaluates Service backends only.${scope}`, severity: "unknown" });
+  } else if (b.state === "not-found") {
+    out.push({ short: several ? "primary backend not found" : "backend not found", text: `Backend Service ${b.namespace}/${b.name} not found.${scope}`, severity: primary("fault") });
+  } else if (b.state === "unreadable") {
+    out.push({ short: "backend unreadable", text: `Backend Service ${b.namespace}/${b.name} could not be read${b.error ? ` - ${b.error}` : ""}; whether it exists is unknown.`, severity: "unknown" });
+  } else if (b.state === "resolved") {
+    const ep = b.endpoints;
+    if (!ep || ep.error) out.push({ short: "endpoints unreadable", text: `The backend's EndpointSlices could not be read${ep?.error ? ` - ${ep.error}` : ""}.`, severity: "unknown" });
+    else if (ep.total === 0) out.push({ short: "no endpoints", text: `The backend Service has no endpoints.${scope}`, severity: primary("fault") });
+    else if (ep.ready === 0) out.push({ short: "no ready endpoints", text: `${ep.total === 1 ? "The backend's only endpoint is not ready" : `None of the backend's ${ep.total} endpoints is ready`}.${scope}`, severity: primary("fault") });
+    else if (ep.ready < ep.total) out.push({ short: `${ep.ready}/${ep.total} endpoints ready`, text: `${endpointsText(ep.ready, ep.total, ep.nonPod)} - reduced capacity.`, severity: "degraded" });
+  } else {
+    out.push({ short: "backend not evaluated", text: "Klyx has no evidence for the primary backend.", severity: "unknown" });
+  }
   return out;
 }
 
 export function routeHealth(r: RouteNodeDTO, listeners: ListenerDTO[] = []): Role {
   const issues = routeIssues(r, listeners);
-  const fault = issues.find((i) => i.severity === "fault");
-  if (fault) return { kind: "fault", label: fault.short };
-  if (issues.length > 0) return { kind: "degraded", label: issues[0].short };
-  if (r.services[0]?.resolved && r.pods.unknown) return { kind: "unknown", label: "endpoints unverified" };
-  return { kind: "ok", label: "path healthy" };
+  if (issues.length === 0) return { kind: "ok", label: "resolved" };
+  const worst = [...issues].sort((x, y) => RANK[x.severity] - RANK[y.severity])[0];
+  return { kind: worst.severity, label: worst.short };
+}
+
+/** What the lane's backend box says about the primary backend. */
+export function primaryBackendText(r: RouteNodeDTO): string {
+  const b = r.backends[0];
+  if (!b) return "no backendRefs";
+  if (b.state === "not-found") return "not found";
+  if (b.state === "unreadable") return "unreadable";
+  if (b.state === "unsupported" || b.kind !== "Service") return `${b.kind} - not evaluated`;
+  const svc = r.services.find((s) => s.namespace === b.namespace && s.name === b.name);
+  const ep = b.endpoints;
+  const eps = !ep ? "" : ep.error ? " · endpoints unreadable" : ` · ${ep.ready}/${ep.total} endpoints`;
+  return `${svc?.type ?? "Service"} :${b.port || svc?.port || "?"}${eps}`;
 }
 
 export const routeKey = (r: { namespace: string; name: string }) => `${r.namespace}/${r.name}`;
@@ -82,11 +164,19 @@ export function certBySecret(certs: CertificateDTO[]): CertLookup {
   for (const c of certs) if (c.secretName) out.set(`${c.namespace}/${c.secretName}`, c);
   return out;
 }
-export function certStatus(c: CertificateDTO | undefined): { text: string; color: string } {
-  if (!c) return { text: "not issued by cert-manager", color: "var(--color-text-tertiary)" };
-  if (c.ready === "Ready") return { text: "certificate ready", color: "var(--color-text-secondary)" };
-  if (c.ready === "Issuing") return { text: "certificate issuing", color: "var(--color-text-secondary)" };
-  return { text: `certificate ${c.ready.toLowerCase() || "state unknown"}`, color: "var(--color-text-warning)" };
+// Listener TLS evidence from the cert-manager watch (the accepted coverage
+// rules): unread means unknown; a stale read is last observed; a complete
+// read without a match proves only that no Certificate in it writes this
+// Secret; expiry is checked before Ready; Unknown stays neutral.
+export function certStatus(c: CertificateDTO | undefined, evidence: KindEvidence, nowS: number): { text: string; color: string } {
+  if (evidence === "pending" || evidence === "failed") return { text: "Certificates not read - cert-manager state unknown", color: "var(--color-text-tertiary)" };
+  const last = evidence === "stale" ? " (last observed)" : "";
+  if (!c) return { text: `no matching Certificate in this read${last}`, color: "var(--color-text-tertiary)" };
+  if (c.notAfterUnix > 0 && c.notAfterUnix <= nowS) return { text: `▲ certificate expired${last}`, color: "var(--color-text-danger)" };
+  if (c.ready === "Ready") return { text: `certificate ready${last}`, color: "var(--color-text-secondary)" };
+  if (c.ready === "Issuing") return { text: `certificate issuing${last}`, color: "var(--color-text-secondary)" };
+  if (!c.ready || c.ready === "Unknown") return { text: `certificate state unknown${last}`, color: "var(--color-text-tertiary)" };
+  return { text: `certificate ${c.ready.toLowerCase()}${last}`, color: "var(--color-text-warning)" };
 }
 
 // ---- traffic ---------------------------------------------------------------

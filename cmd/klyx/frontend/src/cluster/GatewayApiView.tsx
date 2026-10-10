@@ -77,6 +77,8 @@ function GatewayList({ cluster }: { cluster: string }) {
     RANK[gatewayHealth(a).kind] - RANK[gatewayHealth(b).kind] || a.namespace.localeCompare(b.namespace) || a.name.localeCompare(b.name)), [gateways]);
   const attention = gateways.filter((g) => RANK[gatewayHealth(g).kind] <= RANK.degraded).length;
   const notAccepted = gateways.filter((g) => gatewayHealth(g).kind === "fault").length;
+  const unverified = gateways.filter((g) => ["unknown", "progressing"].includes(gatewayHealth(g).kind)).length;
+  const allOk = gateways.length > 0 && gateways.every((g) => gatewayHealth(g).kind === "ok");
   const q = query.trim().toLowerCase();
   const visible = useMemo(() => ordered.filter((g) => {
     const role = gatewayHealth(g);
@@ -150,9 +152,9 @@ function GatewayList({ cluster }: { cluster: string }) {
         <>
           <span className="t-number" style={{ color: "var(--color-text-secondary)" }}>{gateways.length}{error ? "*" : ""}</span>
           <span className="t-secondary">Gateway{gateways.length === 1 ? "" : "s"}</span>
-          {attention > 0
-            ? <span className="t-status" style={{ color: notAccepted > 0 ? "var(--color-text-danger)" : "var(--color-text-warning)" }}>{[notAccepted ? `▲ ${notAccepted}${error ? "*" : ""} not accepted` : "", attention > notAccepted ? `${attention - notAccepted}${error ? "*" : ""} not programmed` : ""].filter(Boolean).join(" · ")}</span>
-            : gateways.length > 0 && <span className="t-secondary">all programmed{error ? " at the last read" : ""}</span>}
+          {attention > 0 && <span className="t-status" style={{ color: notAccepted > 0 ? "var(--color-text-danger)" : "var(--color-text-warning)" }}>{[notAccepted ? `▲ ${notAccepted}${error ? "*" : ""} not accepted` : "", attention > notAccepted ? `${attention - notAccepted}${error ? "*" : ""} need${attention - notAccepted === 1 ? "s" : ""} attention` : ""].filter(Boolean).join(" · ")}</span>}
+          {unverified > 0 && <span className="t-secondary">{unverified}{error ? "*" : ""} unverified</span>}
+          {allOk && <span className="t-secondary">all programmed{error ? " at the last read" : ""}</span>}
         </>
       )}
       headerEnd={
@@ -217,7 +219,7 @@ function GatewayList({ cluster }: { cluster: string }) {
         </LensTable>
       }
       footer={<span className="t-legend">j k navigate · ↵ inspect · double-click opens topology · / search</span>}
-      footerEnd={<span className="t-secondary">{visible.length !== gateways.length ? `${visible.length} of ${gateways.length} · ` : ""}not accepted first</span>}
+      footerEnd={<span className="t-secondary">{visible.length !== gateways.length ? `${visible.length} of ${gateways.length} · ` : ""}needs attention first</span>}
       inspector={selected ? <GatewayInspector key={selKey} g={selected} stale={!!error} onOpen={() => openGateway(selected.namespace, selected.name)} onClose={close} /> : undefined}
       inspectorLabel="Gateway details"
       onCloseInspector={close}

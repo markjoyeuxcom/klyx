@@ -14,12 +14,12 @@ vi.mock("../../bindings/github.com/moomora/klyx/internal/appbridge/index.js", ()
     GetRouteMetrics: (...a: unknown[]) => metrics(...a),
   },
 }));
-import { getGatewayTopology, getRouteMetrics, listGateways } from "./gateway";
+import { abandonRouteMetrics, getGatewayTopology, getRouteMetrics, listGateways } from "./gateway";
 
 const eg = { namespace: "envoy-gateway-system", name: "eg" };
 const t = (marker: string): TopologyDTO => ({
   gateway: { ...eg, className: marker, listeners: [], accepted: true, programmed: true, policies: [] },
-  routes: [],
+  routes: [], routesComplete: true,
 });
 
 beforeEach(() => {
@@ -90,5 +90,64 @@ describe("Gateway bridge (redesign step 6)", () => {
     expect(n.topology?.gateway.className).toBe("kept");
     expect(n.topologyLoading).toBe(false);
     expect(n.selectedRoute).toBe("apps/share");
+  });
+
+  it("an in-band DTO error is a failed read: the last good topology stays, its receipt time unchanged", async () => {
+    topo.mockResolvedValueOnce(t("good"));
+    await getGatewayTopology("A", eg);
+    const at = useFleet.getState().network.topologyAt;
+    topo.mockResolvedValueOnce({ error: "get gateway infra/eg: forbidden" });
+    await getGatewayTopology("A", eg);
+    const n = useFleet.getState().network;
+    expect(n.topology?.gateway.className).toBe("good");
+    expect(n.topologyError).toMatch(/forbidden/);
+    expect(n.topologyAt).toBe(at);
+  });
+
+  it("an in-band list error keeps the last good Gateways", async () => {
+    list.mockResolvedValueOnce({ gatewayAPIServed: true, gateways: [{ ...eg, className: "kept", accepted: true, programmed: true }] });
+    await listGateways("A");
+    list.mockResolvedValueOnce({ gatewayAPIServed: true, gateways: [], error: "list gateways: forbidden" });
+    await listGateways("A");
+    const n = useFleet.getState().network;
+    expect(n.gateways.map((g) => g.className)).toEqual(["kept"]);
+    expect(n.listError).toMatch(/forbidden/);
+  });
+
+  it("route metrics: the latest poll wins over an older one resolving late", async () => {
+    topo.mockResolvedValueOnce(t("A"));
+    await getGatewayTopology("A", eg);
+    const old = deferred<unknown>();
+    metrics.mockReturnValueOnce(old.promise).mockResolvedValueOnce({ status: { available: true, message: "", updatedAt: "new" }, routes: { "apps/x": { rps: 2, p50: 1, p99: 1, errRate: 0 } } });
+    const first = getRouteMetrics("A", eg.namespace, eg.name, ["apps/x"]);
+    await getRouteMetrics("A", eg.namespace, eg.name, ["apps/x"]);
+    old.resolve({ status: { available: true, message: "", updatedAt: "old" }, routes: { "apps/x": { rps: 99, p50: 1, p99: 1, errRate: 0 } } });
+    await first;
+    expect(useFleet.getState().network.routeMetrics["apps/x"].rps).toBe(2);
+  });
+
+  it("route metrics: leaving and returning to the same Gateway drops the earlier poll", async () => {
+    topo.mockResolvedValueOnce(t("A"));
+    await getGatewayTopology("A", eg);
+    const old = deferred<unknown>();
+    metrics.mockReturnValueOnce(old.promise);
+    const first = getRouteMetrics("A", eg.namespace, eg.name, ["apps/x"]);
+    abandonRouteMetrics(); // left the topology; returning re-reads it
+    old.resolve({ status: { available: true, message: "", updatedAt: "old" }, routes: { "apps/x": { rps: 99, p50: 1, p99: 1, errRate: 0 } } });
+    await first;
+    expect(useFleet.getState().network.routeMetrics).toEqual({});
+  });
+
+  it("route metrics: a rejected poll after good numbers keeps them, marked stale", async () => {
+    topo.mockResolvedValueOnce(t("A"));
+    await getGatewayTopology("A", eg);
+    metrics.mockResolvedValueOnce({ status: { available: true, message: "", updatedAt: "t1" }, routes: { "apps/x": { rps: 2, p50: 1, p99: 1, errRate: 0 } } });
+    await getRouteMetrics("A", eg.namespace, eg.name, ["apps/x"]);
+    metrics.mockRejectedValueOnce(new Error("prometheus timeout"));
+    await getRouteMetrics("A", eg.namespace, eg.name, ["apps/x"]);
+    const n = useFleet.getState().network;
+    expect(n.routeMetrics["apps/x"].rps).toBe(2);
+    expect(n.routeMetricsStale).toBe(true);
+    expect(n.routeMetricsStatus?.message).toMatch(/prometheus timeout/);
   });
 });

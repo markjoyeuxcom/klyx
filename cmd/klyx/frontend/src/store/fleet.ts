@@ -588,19 +588,26 @@ export const sameResource = (a: ResourceRef | null | undefined, b: ResourceRef |
 export const crdCountKey = (cluster: string, group: string, version: string, plural: string) => `${cluster}|${group}/${version}/${plural}`;
 
 export type GatewayAddressDTO = { type: string; value: string };
-export type GatewayRefDTO = { namespace: string; name: string; className: string; addresses?: GatewayAddressDTO[]; listeners?: ListenerDTO[]; accepted: boolean; programmed: boolean; stale?: boolean; generation?: number; observedGeneration?: number };
+// CondDTO: one status condition as observed. status "" = absent (no
+// controller wrote it) - distinct from "False" (rejected) and "Unknown".
+export type CondDTO = { status: string; reason: string; message: string; observedGeneration: number };
+export type GatewayRefDTO = { namespace: string; name: string; className: string; addresses?: GatewayAddressDTO[]; listeners?: ListenerDTO[]; accepted: boolean; programmed: boolean; stale?: boolean; generation?: number; observedGeneration?: number; acceptedCond?: CondDTO; programmedCond?: CondDTO };
 export type GatewayListDTO = { gatewayAPIServed: boolean; gateways: GatewayRefDTO[]; error?: string };
 export type PolicyDetailDTO = { key: string; value: string };
 export type PolicyRefDTO = { kind: string; namespace: string; name: string; targetKind: string; targetNamespace: string; targetName: string; targetSectionName: string; summary: string; details: PolicyDetailDTO[]; inferred: boolean; match: string };
 export type CertificateRefDTO = { group: string; kind: string; namespace: string; name: string };
 export type ListenerDTO = { name: string; protocol: string; hostname: string; port: number; certificateRefs?: CertificateRefDTO[] };
 export type MatchDTO = { pathType: string; pathValue: string; method: string };
-export type BackendDTO = { kind: string; name: string; namespace: string; port: number; weight: number };
+// Endpoints, not pods: nonPod counts endpoints without a pod TargetRef.
+export type EndpointCountDTO = { ready: number; total: number; nonPod: number; error?: string };
+export type BackendDTO = { kind: string; name: string; namespace: string; port: number; weight: number; state?: "resolved" | "not-found" | "unreadable" | "unsupported"; error?: string; endpoints?: EndpointCountDTO };
 export type PodCountDTO = { ready: number; total: number; unknown: boolean };
 export type ServiceNodeDTO = { namespace: string; name: string; type: string; port: number; resolved: boolean; global: boolean; meshClusters: string[]; meshUnconfirmed: boolean; policies: PolicyRefDTO[]; cnps: PolicyRefDTO[] };
-export type GatewayNodeDTO = { namespace: string; name: string; className: string; listeners: ListenerDTO[]; addresses?: GatewayAddressDTO[]; accepted: boolean; programmed: boolean; policies: PolicyRefDTO[] };
-export type RouteNodeDTO = { namespace: string; name: string; hostnames: string[]; matches: MatchDTO[]; parentSectionName?: string; accepted: boolean; resolvedRefs: boolean; backends: BackendDTO[]; services: ServiceNodeDTO[]; pods: PodCountDTO; policies: PolicyRefDTO[] };
-export type TopologyDTO = { gateway: GatewayNodeDTO; routes: RouteNodeDTO[]; clusterPolicies?: PolicyRefDTO[]; warnings?: string[]; error?: string };
+export type GatewayNodeDTO = { namespace: string; name: string; className: string; listeners: ListenerDTO[]; addresses?: GatewayAddressDTO[]; accepted: boolean; programmed: boolean; policies: PolicyRefDTO[]; acceptedCond?: CondDTO; programmedCond?: CondDTO; generation?: number };
+export type RouteNodeDTO = { namespace: string; name: string; hostnames: string[]; matches: MatchDTO[]; parentSectionName?: string; accepted: boolean; resolvedRefs: boolean; backends: BackendDTO[]; services: ServiceNodeDTO[]; pods: PodCountDTO; policies: PolicyRefDTO[]; parentFound?: boolean; acceptedCond?: CondDTO; resolvedRefsCond?: CondDTO; generation?: number };
+// error = the topology could not be read at all (never a snapshot);
+// routesComplete = the HTTPRoute list succeeded (absence is then proof).
+export type TopologyDTO = { gateway: GatewayNodeDTO; routes: RouteNodeDTO[]; clusterPolicies?: PolicyRefDTO[]; warnings?: string[]; error?: string; routesComplete?: boolean; routesError?: string };
 export type GatewayRef = { namespace: string; name: string };
 
 export type RouteMetricDTO = { rps: number | null; p50: number | null; p99: number | null; errRate: number | null };
@@ -618,6 +625,8 @@ export type NetworkSlice = {
   topologyLoading: boolean;
   topologyError?: string | null; // the last topology read failed (rendered, never blank)
   topologyAt?: number | null;    // when the shown topology was received (ms)
+  routesAt?: number | null;      // when the shown routes were last read COMPLETELY (ms)
+  routeMetricsAt?: number | null; // when the shown route numbers were received (ms)
   selectedRoute: string | null; // "<ns>/<name>"
   routeMetrics: Record<string, RouteMetricDTO>;
   routeMetricsStatus: RouteMetricsStatusDTO | null;
@@ -1122,7 +1131,7 @@ export const useFleet = create<FleetState>((set) => ({
       }
       return {
         route,
-        network: { ...base, selected: { namespace, name }, topology: null, topologyLoading: true, topologyError: null, topologyAt: null, selectedRoute: null, routeMetrics: {}, routeMetricsStatus: null, routeMetricsStale: false },
+        network: { ...base, selected: { namespace, name }, topology: null, topologyLoading: true, topologyError: null, topologyAt: null, routesAt: null, routeMetricsAt: null, selectedRoute: null, routeMetrics: {}, routeMetricsStatus: null, routeMetricsStale: false },
       };
     }),
   closeGateway: () =>
@@ -1136,7 +1145,10 @@ export const useFleet = create<FleetState>((set) => ({
   }),
   setGateways: (cluster, l) => set((s) => {
     if (s.network.cluster !== cluster) return {}; // stale in-flight response
-    return { network: { ...s.network, served: l.gatewayAPIServed, gateways: l.gateways ?? [], listLoading: false, listError: l.error || null } };
+    // A failed read is not a snapshot: the last good rows stay, marked by
+    // listError; with none, the view shows the failure.
+    if (l.error) return { network: { ...s.network, served: s.network.served || l.gatewayAPIServed, listLoading: false, listError: l.error } };
+    return { network: { ...s.network, served: l.gatewayAPIServed, gateways: l.gateways ?? [], listLoading: false, listError: null } };
   }),
   setTopologyLoading: (cluster, ref) => set((s) => {
     // A refresh of the gateway already shown keeps its topology, selection
@@ -1145,16 +1157,26 @@ export const useFleet = create<FleetState>((set) => ({
       return { network: { ...s.network, topologyLoading: true } };
     }
     const base = s.network.cluster === cluster ? s.network : { ...s.network, cluster, served: false, gateways: [], listLoading: false, listError: null };
-    return { network: { ...base, selected: ref, topology: null, topologyLoading: true, topologyError: null, topologyAt: null, selectedRoute: null, routeMetrics: {}, routeMetricsStatus: null, routeMetricsStale: false } };
+    return { network: { ...base, selected: ref, topology: null, topologyLoading: true, topologyError: null, topologyAt: null, routesAt: null, routeMetricsAt: null, selectedRoute: null, routeMetrics: {}, routeMetricsStatus: null, routeMetricsStale: false } };
   }),
-  setTopology: (topology) => set((s) => ({ network: { ...s.network, topology, topologyLoading: false, topologyError: null, topologyAt: Date.now() } })),
+  setTopology: (topology) => set((s) => {
+    const now = Date.now();
+    // An incomplete route read never replaces routes from an earlier
+    // complete one: they stay as last evidence (routesAt says when), and
+    // nothing is claimed detached.
+    const prev = s.network.topology;
+    if (topology.routesComplete !== true && prev && s.network.routesAt) {
+      return { network: { ...s.network, topology: { ...topology, routes: prev.routes }, topologyLoading: false, topologyError: null, topologyAt: now } };
+    }
+    return { network: { ...s.network, topology, topologyLoading: false, topologyError: null, topologyAt: now, routesAt: topology.routesComplete === true ? now : null } };
+  }),
   setTopologyError: (error) => set((s) => ({ network: { ...s.network, topologyLoading: false, topologyError: error } })),
   selectRoute: (selectedRoute) => set((s) => ({ network: { ...s.network, selectedRoute } })),
-  clearNetwork: () => set((s) => ({ network: { ...s.network, selected: null, topology: null, topologyLoading: false, topologyError: null, topologyAt: null, selectedRoute: null, routeMetrics: {}, routeMetricsStatus: null, routeMetricsStale: false } })),
+  clearNetwork: () => set((s) => ({ network: { ...s.network, selected: null, topology: null, topologyLoading: false, topologyError: null, topologyAt: null, routesAt: null, routeMetricsAt: null, selectedRoute: null, routeMetrics: {}, routeMetricsStatus: null, routeMetricsStale: false } })),
   setRouteMetrics: (result) =>
     set((s) => {
       if (result.status.available) {
-        return { network: { ...s.network, routeMetrics: result.routes ?? {}, routeMetricsStatus: result.status, routeMetricsStale: false } };
+        return { network: { ...s.network, routeMetrics: result.routes ?? {}, routeMetricsStatus: result.status, routeMetricsStale: false, routeMetricsAt: Date.now() } };
       }
       // transient failure: keep last-good numbers + last-good updatedAt, mark stale
       const keptUpdatedAt = s.network.routeMetricsStatus?.updatedAt ?? "";
