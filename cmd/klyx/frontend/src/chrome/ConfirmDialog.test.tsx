@@ -101,4 +101,49 @@ describe("ConfirmDialog", () => {
     await waitFor(() => expect(onConfirm).toHaveBeenCalledTimes(1));
     expect(armProtected).toHaveBeenCalledWith("prd-we", "prd-we");
   });
+
+  describe("danger verbs start on Cancel (2026-10-10 accidental suspend)", () => {
+    // jsdom does not synthesise a click from Enter on a focused button; the
+    // browser does. Model it: Enter on the focused element activates it.
+    const pressEnter = () => { const el = document.activeElement as HTMLElement; fireEvent.keyDown(el, { key: "Enter" }); el.click(); };
+
+    it("a shortcut then a stray Enter does not dispatch a danger verb", () => {
+      const onConfirm = vi.fn(); const onCancel = vi.fn();
+      const { getByRole } = render(<ConfirmDialog title="Suspend reconciliation" cluster="dev" detail="HelmRelease team-b/podinfo" protected={false} danger confirmLabel="Suspend" onConfirm={onConfirm} onCancel={onCancel} />);
+      expect(document.activeElement).toBe(getByRole("button", { name: "Cancel" }));
+      pressEnter();
+      expect(onConfirm).not.toHaveBeenCalled();
+      expect(onCancel).toHaveBeenCalledTimes(1);
+    });
+
+    it("deliberate Tab to the confirm button then Enter dispatches", async () => {
+      const onConfirm = vi.fn();
+      const { getByRole } = render(<ConfirmDialog title="Suspend reconciliation" cluster="dev" detail="x" protected={false} danger confirmLabel="Suspend" onConfirm={onConfirm} onCancel={() => {}} />);
+      getByRole("button", { name: "Suspend" }).focus();
+      pressEnter();
+      await waitFor(() => expect(onConfirm).toHaveBeenCalledTimes(1));
+    });
+
+    it("Escape cancels; a non-danger verb keeps Enter-to-confirm", async () => {
+      const onCancel = vi.fn();
+      const first = render(<ConfirmDialog title="Suspend" cluster="dev" detail="x" protected={false} danger onConfirm={() => {}} onCancel={onCancel} />);
+      fireEvent.keyDown(document.activeElement as HTMLElement, { key: "Escape" });
+      expect(onCancel).toHaveBeenCalledTimes(1);
+      first.unmount();
+      const onConfirm = vi.fn();
+      const { getByRole } = render(<ConfirmDialog title="Resume" cluster="dev" detail="x" protected={false} confirmLabel="Resume" onConfirm={onConfirm} onCancel={() => {}} />);
+      expect(document.activeElement).toBe(getByRole("button", { name: "Resume" }));
+      pressEnter();
+      await waitFor(() => expect(onConfirm).toHaveBeenCalledTimes(1));
+    });
+
+    it("focus returns to the invoker on close", () => {
+      const invoker = document.createElement("button"); invoker.textContent = "s"; document.body.appendChild(invoker); invoker.focus();
+      const { unmount } = render(<ConfirmDialog title="Suspend" cluster="dev" detail="x" protected={false} danger onConfirm={() => {}} onCancel={() => {}} />);
+      expect(document.activeElement).not.toBe(invoker);
+      unmount();
+      expect(document.activeElement).toBe(invoker);
+      invoker.remove();
+    });
+  });
 });

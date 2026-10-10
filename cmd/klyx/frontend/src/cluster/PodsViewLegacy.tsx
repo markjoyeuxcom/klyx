@@ -688,7 +688,7 @@ function PodDetailPanel({
               : `${pending.summary.namespace}/${pending.summary.name} — the controller will recreate it.`)
             : `${pending.summary.namespace}/${pending.summary.name}`}
           protected={isProtected}
-          danger={pending.verb === "delete"}
+          danger
           confirmLabel={pending.verb === "delete" ? "Delete" : "Restart"}
           onCancel={() => setPending(null)}
           onConfirm={() => {

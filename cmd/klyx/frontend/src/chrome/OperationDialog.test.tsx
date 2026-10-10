@@ -73,4 +73,12 @@ describe("OperationDialog", () => {
     fireEvent.click(getByRole("dialog")); // panel click must NOT cancel
     expect(onCancel).toHaveBeenCalledTimes(1);
   });
+
+  it("a danger operation opens on Cancel; a non-danger one on its confirm button", () => {
+    const first = dialog({ danger: true });
+    expect(document.activeElement).toBe(first.getByRole("button", { name: "Cancel" }));
+    first.unmount();
+    const second = dialog();
+    expect(document.activeElement).toBe(second.getByRole("button", { name: "Drain" }));
+  });
 });

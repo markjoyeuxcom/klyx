@@ -540,6 +540,7 @@ export function WorkloadsViewLegacy({ cluster }: { cluster: string }) {
           cluster={cluster}
           detail={`${pending.w.kind.toLowerCase()} ${pending.w.namespace}/${pending.w.name}`}
           protected={isProtected}
+          danger
           confirmLabel="Restart"
           onCancel={() => setPending(null)}
           onConfirm={() => {

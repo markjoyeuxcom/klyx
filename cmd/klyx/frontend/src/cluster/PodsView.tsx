@@ -657,7 +657,7 @@ function PodInspector({ cluster, namespace, name, detail, loading, removed, isPr
               ? `${pending.summary.namespace}/${pending.summary.name}${pending.container ? ` (target ${pending.container})` : ""} - kubectl debug adds an ephemeral busybox container to this pod. It stays on the pod spec until the pod is recreated; Kubernetes cannot remove it.`
               : `${pending.summary.ownerKind} ${pending.summary.namespace}/${pending.summary.ownerName}`}
           protected={isProtected}
-          danger={pending.verb === "delete"}
+          danger
           confirmLabel={pending.verb === "delete" ? "Delete" : pending.verb === "debug" ? "Attach" : "Restart"}
           onCancel={() => setPending(null)}
           onConfirm={() => {

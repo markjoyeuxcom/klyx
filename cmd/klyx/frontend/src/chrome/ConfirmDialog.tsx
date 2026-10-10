@@ -38,11 +38,21 @@ export function ConfirmDialog({
   const dialogRef = useRef<HTMLDivElement>(null);
   const confirmRef = useRef<HTMLButtonElement>(null);
 
+  const cancelRef = useRef<HTMLButtonElement>(null);
+
   // Initial focus so keys land in the dialog: the protected input autoFocuses
-  // itself; without it, focus the confirm button (Enter then activates it).
+  // itself. Otherwise a danger verb (suspend, delete, drain, rollback...)
+  // starts on Cancel - a shortcut followed by a stray Enter must never
+  // dispatch it (2026-10-10: s then Enter suspended a Flux release); the
+  // operator Tabs to the confirm button deliberately. Non-danger verbs keep
+  // Enter-to-confirm.
   useEffect(() => {
-    if (!isProtected) confirmRef.current?.focus();
-  }, [isProtected]);
+    if (isProtected) return;
+    (danger ? cancelRef : confirmRef).current?.focus();
+    // initial focus only: a danger flag that flips while the form is edited
+    // (Argo prune) must not pull focus away from the control in use
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Restore focus to whatever invoked the dialog once it closes - without
   // this, focus falls to <body> and a keyboard flow loses its place.
@@ -137,7 +147,7 @@ export function ConfirmDialog({
           <div style={{ color: "var(--color-text-danger)", fontSize: 12, marginBottom: 10 }}>{armError}</div>
         )}
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
-          <button onClick={onCancel} style={btnStyle(false, false)}>Cancel</button>
+          <button ref={cancelRef} onClick={onCancel} style={btnStyle(false, false)}>Cancel</button>
           <button ref={confirmRef} onClick={() => void confirm()} disabled={!armed || arming} style={btnStyle(true, danger, !armed || arming)}>{confirmLabel}</button>
         </div>
       </div>

@@ -506,6 +506,7 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
           cluster={cluster}
           detail={`${pending.w.kind.toLowerCase()} ${pending.w.namespace}/${pending.w.name}`}
           protected={isProtected}
+          danger
           confirmLabel="Restart"
           onCancel={() => setPending(null)}
           onConfirm={() => { const { w } = pending; setPending(null); void rolloutRestart(pending.cluster, w.kind, w.namespace, w.name); }}
@@ -517,6 +518,7 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
           cluster={cluster}
           detail={`${pending.w.kind.toLowerCase()} ${pending.w.namespace}/${pending.w.name} → ${pending.replicas} replicas`}
           protected={isProtected}
+          danger={pending.replicas < pending.w.desired}
           confirmLabel="Scale"
           onCancel={() => setPending(null)}
           onConfirm={() => { const { w, replicas } = pending; setPending(null); void scaleWorkload(pending.cluster, w.kind, w.namespace, w.name, replicas); }}

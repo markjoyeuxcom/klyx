@@ -71,11 +71,18 @@ export function OperationDialog({
     onConfirm();
   };
 
-  // Focus lands inside the dialog: the prd-lock input when protected,
-  // otherwise the confirm button - so Escape/Enter work immediately.
+  // Focus lands inside the dialog: the prd-lock input when protected;
+  // otherwise Cancel for a danger verb (a stray Enter after its shortcut
+  // must never dispatch it - see ConfirmDialog) and the confirm button for
+  // everything else.
+  const cancelRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
-    if (!isProtected) confirmRef.current?.focus();
-  }, [isProtected]);
+    if (isProtected) return;
+    (danger ? cancelRef : confirmRef).current?.focus();
+    // initial focus only: a danger flag that flips while the form is edited
+    // (Argo prune) must not pull focus away from the control in use
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Restore focus to whatever invoked the dialog once it closes - without
   // this, focus falls to <body> and a keyboard flow loses its place.
@@ -189,7 +196,7 @@ export function OperationDialog({
         </div>
 
         <div style={{ padding: "14px 20px", borderTop: "0.5px solid var(--color-border-tertiary)", display: "flex", justifyContent: "flex-end", gap: 8, background: "var(--color-background-secondary)", flexShrink: 0 }}>
-          <button onClick={onCancel} style={footerBtn(false, false, false)}>Cancel</button>
+          <button ref={cancelRef} onClick={onCancel} style={footerBtn(false, false, false)}>Cancel</button>
           <button ref={confirmRef} onClick={() => void confirm()} disabled={!canConfirm} style={footerBtn(true, danger, !canConfirm)}>
             {isProtected && !armed ? `${confirmLabel} — locked` : confirmLabel}
           </button>
