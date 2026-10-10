@@ -508,7 +508,7 @@ describe("GitOps Codex rework (Flux review)", () => {
 
   it("2. a source has a keyboard-reachable full diagnosis and its users", () => {
     const long = "failed to checkout and determine revision: unable to clone 'ssh://git@example.com/very/long/path': ssh: handshake failed: knownhosts: key mismatch";
-    seedRows([res({ name: "apps", sourceKind: "GitRepository", sourceName: "repo" })], { sources: [src({ name: "repo", ready: "Failed", reason: "GitOperationFailed", message: long })] });
+    seedRows([res({ name: "apps", sourceKind: "GitRepository", sourceName: "repo", sourceNamespace: "flux-system" })], { sources: [src({ name: "repo", ready: "Failed", reason: "GitOperationFailed", message: long })] });
     const { getByRole } = render(<GitOps cluster="x" />);
     fireEvent.click(getByRole("button", { name: /^Sources/ }));
     act(() => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "j", bubbles: true, cancelable: true })); });
@@ -569,5 +569,47 @@ describe("GitOps Codex rework (Flux review)", () => {
     expect((getByPlaceholderText("Search name, message, revision") as HTMLInputElement).value).toBe("");
     fireEvent.change(getByLabelText("Kind"), { target: { value: "Kustomization" } });
     expect(queryByTestId("lens-inspector")).toBeNull();
+  });
+});
+
+describe("GitOps source consumers are namespace-safe (Codex Flux re-review)", () => {
+  const open = (sourceNs: string) => {
+    fireEvent.click(screen.getByRole("button", { name: /^Sources/ }));
+    const row = screen.getAllByTestId("flux-source-row").find((r) => r.textContent?.includes(`${sourceNs} / repo`))!;
+    fireEvent.click(row);
+  };
+  const seed = () => useFleet.setState((s) => ({ gitops: { ...s.gitops, cluster: "x", loading: false, watchError: null, expandedKey: null, detail: null,
+    resources: [
+      res({ namespace: "team-a", name: "a-default", sourceKind: "GitRepository", sourceName: "repo", sourceNamespace: "team-a" }),
+      res({ namespace: "team-b", name: "b-default", sourceKind: "GitRepository", sourceName: "repo", sourceNamespace: "team-b" }),
+      res({ namespace: "team-c", name: "c-explicit", sourceKind: "GitRepository", sourceName: "repo", sourceNamespace: "team-a" }),
+      res({ namespace: "team-a", name: "no-evidence", sourceKind: "GitRepository", sourceName: "repo" }),
+    ],
+    sources: [src({ namespace: "team-a", name: "repo" }), src({ namespace: "team-b", name: "repo" })],
+  } }));
+
+  it("same-named sources in different namespaces have distinct consumers; explicit cross-namespace refs resolve", () => {
+    seed();
+    render(<GitOps cluster="x" />);
+    open("team-a");
+    expect(inspector().getByText("Used by · 2")).toBeTruthy();
+    expect(inspector().getByText(/team-a\/a-default/)).toBeTruthy();
+    expect(inspector().getByText(/team-c\/c-explicit/)).toBeTruthy(); // explicit sourceRef.namespace: team-a
+    expect(inspector().queryByText(/b-default/)).toBeNull();
+    expect(inspector().queryByText(/no-evidence/)).toBeNull(); // no resolved namespace = no claim
+  });
+
+  it("the other namespace's source claims only its own consumer", () => {
+    seed();
+    render(<GitOps cluster="x" />);
+    open("team-b");
+    expect(inspector().getByText("Used by · 1")).toBeTruthy();
+    expect(inspector().getByText(/team-b\/b-default/)).toBeTruthy();
+  });
+
+  it("a cross-namespace source is named with its namespace in the row", () => {
+    seed();
+    const { getByText } = render(<GitOps cluster="x" />);
+    expect(getByText("GitRepository team-a/repo")).toBeTruthy(); // c-explicit, bound across namespaces
   });
 });

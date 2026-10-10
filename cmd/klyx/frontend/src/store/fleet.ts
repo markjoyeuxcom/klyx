@@ -55,6 +55,9 @@ export type FluxResourceDTO = {
   suspended: boolean;
   sourceKind: string;
   sourceName: string;
+  // resolved namespace of the bound source (sourceRef.namespace, else the
+  // object's own) - the authoritative join key with sourceKind + sourceName
+  sourceNamespace?: string;
   // stale: spec changed, controller has not observed it - ready reflects the
   // previous spec; render the row as transitioning ("dim = not yet realized").
   stale?: boolean;

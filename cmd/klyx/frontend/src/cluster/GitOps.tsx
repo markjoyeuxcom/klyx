@@ -70,8 +70,17 @@ function rank(r: { ready: string; suspended: boolean }): number {
 }
 const srcRank = rank;
 
+// sourceText names the bound source; a cross-namespace source carries its
+// namespace so two same-named sources never read as one.
 function sourceText(r: FluxResourceDTO): string {
-  return [r.sourceKind, r.sourceName].filter(Boolean).join(" ");
+  const name = r.sourceNamespace && r.sourceNamespace !== r.namespace ? `${r.sourceNamespace}/${r.sourceName}` : r.sourceName;
+  return [r.sourceKind, name].filter(Boolean).join(" ");
+}
+
+// boundTo: the authoritative consumer join - kind, resolved namespace and
+// name. Without a resolved namespace there is no evidence, so no match.
+function boundTo(r: FluxResourceDTO, s: FluxSourceDTO): boolean {
+  return !!r.sourceNamespace && r.sourceKind === s.kind && r.sourceNamespace === s.namespace && r.sourceName === s.name;
 }
 
 function matchesQuery(r: FluxResourceDTO, query: string): boolean {
@@ -524,7 +533,7 @@ export function GitOps({ cluster }: { cluster: string }) {
             key={`${cluster}/${sourceKey}`}
             source={selectedSource ?? lastSource.current}
             removed={sourceRemoved}
-            usedBy={rows.filter((r) => r.sourceKind === (selectedSource ?? lastSource.current)!.kind && r.sourceName === (selectedSource ?? lastSource.current)!.name)}
+            usedBy={rows.filter((r) => boundTo(r, (selectedSource ?? lastSource.current)!))}
             onClose={() => setSourceKey(null)}
             onOpenResource={(r) => { setView("reconciliation"); setSourceKey(null); openRow(r); }}
           />

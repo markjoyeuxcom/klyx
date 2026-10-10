@@ -232,3 +232,37 @@ func TestStalenessFromObservedGeneration(t *testing.T) {
 		t.Fatalf("missing observedGeneration must read not-stale: %+v", r)
 	}
 }
+
+func TestSourceNamespaceResolution(t *testing.T) {
+	// Kustomization without sourceRef.namespace: Flux defaults to its own.
+	r := ParseKustomization(ksWithSource("True", "", false, "", "", "GitRepository", "repo"))
+	if r.SourceNamespace != "flux-system" {
+		t.Fatalf("default ks source ns: %q", r.SourceNamespace)
+	}
+	// Explicit cross-namespace sourceRef wins.
+	u := ksWithSource("True", "", false, "", "", "GitRepository", "repo")
+	_ = unstructured.SetNestedField(u.Object, "team-a", "spec", "sourceRef", "namespace")
+	if r := ParseKustomization(u); r.SourceNamespace != "team-a" {
+		t.Fatalf("explicit ks source ns: %q", r.SourceNamespace)
+	}
+	hr := func(spec map[string]interface{}) *unstructured.Unstructured {
+		return &unstructured.Unstructured{Object: map[string]interface{}{
+			"apiVersion": "helm.toolkit.fluxcd.io/v2", "kind": "HelmRelease",
+			"metadata": map[string]interface{}{"name": "app", "namespace": "apps"},
+			"spec":     spec,
+		}}
+	}
+	// chart.spec.sourceRef: default and explicit.
+	if r := ParseHelmRelease(hr(map[string]interface{}{"chart": map[string]interface{}{"spec": map[string]interface{}{
+		"sourceRef": map[string]interface{}{"kind": "HelmRepository", "name": "charts"}}}})); r.SourceNamespace != "apps" {
+		t.Fatalf("default hr chart source ns: %q", r.SourceNamespace)
+	}
+	if r := ParseHelmRelease(hr(map[string]interface{}{"chart": map[string]interface{}{"spec": map[string]interface{}{
+		"sourceRef": map[string]interface{}{"kind": "HelmRepository", "name": "charts", "namespace": "flux-system"}}}})); r.SourceNamespace != "flux-system" {
+		t.Fatalf("explicit hr chart source ns: %q", r.SourceNamespace)
+	}
+	// chartRef: explicit.
+	if r := ParseHelmRelease(hr(map[string]interface{}{"chartRef": map[string]interface{}{"kind": "OCIRepository", "name": "podinfo", "namespace": "sources"}})); r.SourceNamespace != "sources" || r.SourceKind != "OCIRepository" {
+		t.Fatalf("hr chartRef source: %+v", r)
+	}
+}

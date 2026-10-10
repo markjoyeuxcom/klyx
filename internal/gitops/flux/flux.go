@@ -52,7 +52,12 @@ type Resource struct {
 	Suspended  bool
 	SourceKind string
 	SourceName string
-	DependsOn  []DependencyRef
+	// SourceNamespace is the resolved namespace of the bound source:
+	// sourceRef.namespace when set (an explicit cross-namespace ref), else the
+	// object's own namespace (Flux's default). Same-named sources in different
+	// namespaces are different sources - a consumer join needs all three.
+	SourceNamespace string
+	DependsOn       []DependencyRef
 	// Stale reports that the spec changed and the controller has not observed
 	// it yet (metadata.generation > status.observedGeneration). While stale,
 	// Ready reflects the PREVIOUS spec - the UI must present the row as
@@ -122,9 +127,11 @@ func ParseHelmRelease(u *unstructured.Unstructured) Resource {
 		if n, ok, _ := unstructured.NestedString(u.Object, "spec", "chart", "spec", "sourceRef", "name"); ok && n != "" {
 			r.SourceName = n
 			r.SourceKind, _, _ = unstructured.NestedString(u.Object, "spec", "chart", "spec", "sourceRef", "kind")
+			r.SourceNamespace = refNamespace(u, "spec", "chart", "spec", "sourceRef", "namespace")
 		} else if n, ok, _ := unstructured.NestedString(u.Object, "spec", "chartRef", "name"); ok && n != "" {
 			r.SourceName = n
 			r.SourceKind, _, _ = unstructured.NestedString(u.Object, "spec", "chartRef", "kind")
+			r.SourceNamespace = refNamespace(u, "spec", "chartRef", "namespace")
 		}
 	}
 	return r
@@ -169,6 +176,15 @@ func currentHelmChartVersion(u *unstructured.Unstructured) string {
 	return firstChart
 }
 
+// refNamespace reads a sourceRef namespace field, defaulting to the object's
+// own namespace as Flux does.
+func refNamespace(u *unstructured.Unstructured, path ...string) string {
+	if ns, ok, _ := unstructured.NestedString(u.Object, path...); ok && ns != "" {
+		return ns
+	}
+	return u.GetNamespace()
+}
+
 func common(u *unstructured.Unstructured, kind Kind) Resource {
 	r := Resource{Kind: kind, Name: u.GetName(), Namespace: u.GetNamespace()}
 	if susp, ok, _ := unstructured.NestedBool(u.Object, "spec", "suspend"); ok {
@@ -179,6 +195,7 @@ func common(u *unstructured.Unstructured, kind Kind) Resource {
 	}
 	if n, ok, _ := unstructured.NestedString(u.Object, "spec", "sourceRef", "name"); ok {
 		r.SourceName = n
+		r.SourceNamespace = refNamespace(u, "spec", "sourceRef", "namespace")
 	}
 	r.Ready, r.Reason, r.Message = readyFromConditions(u)
 	r.DependsOn = parseDependsOn(u)
