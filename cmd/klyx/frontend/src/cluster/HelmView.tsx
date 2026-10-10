@@ -33,9 +33,10 @@ import { RollbackComposerDialog } from "./HelmRollbackDialog";
 
 type Role = { kind: "fault" | "degraded" | "progressing" | "ok" | "unknown"; label: string };
 
-// A pending-* or uninstalling release is an operation in flight until it has
-// been in that state longer than twice helm's default 5m --timeout; past that
-// it is stuck (helm refuses new operations on it), never silently "pending".
+// A pending-* or uninstalling release past PENDING_DEADLINE_S (Klyx's
+// attention heuristic: twice helm's default 5m --timeout) "appears stuck".
+// Elapsed time is not proof: no configured timeout or process evidence is
+// visible in a snapshot, so the wording never claims the operation stopped.
 export const PENDING_DEADLINE_S = 600;
 const IN_FLIGHT = new Set(["pending-install", "pending-upgrade", "pending-rollback", "uninstalling"]);
 const HISTORICAL = new Set(["superseded", "uninstalled"]);
@@ -46,7 +47,7 @@ export function releaseHealth(r: { status: string; updatedUnix: number }, nowS: 
   if (r.status === "deployed") return { kind: "ok", label: "deployed" };
   if (r.status === "failed") return { kind: "fault", label: "failed" };
   if (IN_FLIGHT.has(r.status)) {
-    if (r.updatedUnix > 0 && nowS - r.updatedUnix > PENDING_DEADLINE_S) return { kind: "degraded", label: `stuck ${r.status}` };
+    if (r.updatedUnix > 0 && nowS - r.updatedUnix > PENDING_DEADLINE_S) return { kind: "degraded", label: `${r.status}, appears stuck` };
     return { kind: "progressing", label: r.status };
   }
   if (HISTORICAL.has(r.status)) return { kind: "unknown", label: `${r.status} (historical)` };
@@ -145,7 +146,7 @@ export function HelmView({ cluster }: { cluster: string }) {
   const selected = selKey ? releases.find((r) => keyOf(r) === selKey) : undefined;
   const lastRelease = useRef<HelmReleaseDTO | null>(null);
   if (selected) lastRelease.current = selected;
-  if (selKey && lastRelease.current && keyOf(lastRelease.current) !== selKey && !selected) lastRelease.current = null;
+  if (lastRelease.current && keyOf(lastRelease.current) !== selKey) lastRelease.current = null;
   // removed only when a complete snapshot no longer lists it
   const removed = !!selKey && evidence === "complete" && !selected;
   const select = useCallback((r: HelmReleaseDTO | null) => {
@@ -153,20 +154,41 @@ export function HelmView({ cluster }: { cluster: string }) {
     else useFleet.getState().selectHelmRelease(null);
   }, [cluster]);
 
-  // direct navigation (palette) to a release the filters hide clears them once
-  const navigatedTo = useRef<string | null>(null);
+  // Selection lifecycle. A newly requested selection (row, palette) stays
+  // pending until its row arrives; the first time it is present, filters that
+  // hide it are cleared once (direct navigation wins over stale filters).
+  // After that, later operator edits win: a filter that excludes the selected
+  // release closes its inspector.
+  const navTarget = useRef<{ key: string; revealed: boolean } | null>(null);
   useEffect(() => {
-    if (!selKey || navigatedTo.current === selKey) return;
-    navigatedTo.current = selKey;
-    if (selected && !visible.includes(selected)) { setFilter("all"); setNamespace(""); setQuery(""); }
-    setCursorKey(selKey);
-  }, [selKey, selected, visible]);
+    if (!selKey) { navTarget.current = null; return; }
+    if (navTarget.current?.key !== selKey) navTarget.current = { key: selKey, revealed: false };
+    if (!selected) return;
+    if (!navTarget.current.revealed) {
+      navTarget.current.revealed = true;
+      setCursorKey(selKey);
+      if (!visible.includes(selected)) { setFilter("all"); setNamespace(""); setQuery(""); }
+      return;
+    }
+    if (!visible.includes(selected)) select(null);
+  }, [selKey, selected, visible, select]);
 
   // one-shot auto-select of the first release needing attention, from the
   // first complete snapshot of this visit (never from a cached one)
   const autoSelect = useRef<"pending" | "done">("pending");
   const entrySnapshot = useRef<number | null | undefined>(undefined);
   if (entrySnapshot.current === undefined) entrySnapshot.current = snapshotAt;
+  // the same component instance is reused across clusters: a new cluster is a
+  // new visit with its own one-shot selection and no carried-over evidence
+  const enteredCluster = useRef(cluster);
+  if (enteredCluster.current !== cluster) {
+    enteredCluster.current = cluster;
+    autoSelect.current = "pending";
+    entrySnapshot.current = useFleet.getState().helm.cluster === cluster ? useFleet.getState().helm.snapshotAt ?? null : null;
+    navTarget.current = null;
+    lastRelease.current = null;
+  }
+  useEffect(() => { setCursorKey(null); }, [cluster]);
   const freshRead = evidence === "complete" && snapshotAt !== entrySnapshot.current;
   useEffect(() => {
     if (autoSelect.current === "done" || !freshRead) return;
@@ -218,7 +240,7 @@ export function HelmView({ cluster }: { cluster: string }) {
         <>
           <span className="t-number" style={{ color: "var(--color-text-secondary)" }}>{releases.length}{marker}</span>
           {attention > 0
-            ? <span className="t-status" style={{ color: failed > 0 ? "var(--color-text-danger)" : "var(--color-text-warning)" }}>{failed > 0 ? "▲ " : ""}{[failed ? `${failed} failed` : "", stuck ? `${stuck} stuck pending` : ""].filter(Boolean).join(" · ")}</span>
+            ? <span className="t-status" style={{ color: failed > 0 ? "var(--color-text-danger)" : "var(--color-text-warning)" }}>{failed > 0 ? "▲ " : ""}{[failed ? `${failed} failed` : "", stuck ? `${stuck} pending, ${stuck === 1 ? "appears" : "appear"} stuck` : ""].filter(Boolean).join(" · ")}</span>
             : pending > 0 ? <span className="t-secondary">{pending} in progress</span>
             : <span className="t-secondary">{evidence === "complete" ? (releases.length > 0 ? "all deployed" : "") : "none known failed (last snapshot)"}</span>}
           {attention > 0 && pending - stuck > 0 && <span className="t-secondary">{pending - stuck} in progress</span>}
@@ -332,10 +354,17 @@ function lastGood(history: HelmHistoryEntryDTO[], current: number): HelmHistoryE
 // verdictDetail is the diagnosis in words - never tooltip-only. A failed or
 // in-flight release's current revision description is helm's own account of
 // what happened ("Upgrade "x" failed: context deadline exceeded").
-function verdictDetail(r: HelmReleaseDTO, role: Role, nowS: number): string | null {
+// Pending wording is qualified: the snapshot shows the status and its age,
+// never whether a helm process is still running.
+function verdictDetail(r: HelmReleaseDTO, role: Role, good: HelmHistoryEntryDTO | undefined, nowS: number): string | null {
   const age = r.updatedUnix > 0 ? formatAge(nowS - r.updatedUnix) : null;
-  if (role.kind === "degraded") return `${r.status} for ${age} - longer than ${PENDING_DEADLINE_S / 60}m (twice helm's default 5m timeout). Helm refuses new operations on this release until it clears; rolling back to the last good revision is the usual way out.`;
-  if (role.kind === "progressing") return `${r.status}${age ? ` since ${age} ago` : " (start time unknown)"} - an operation is in flight.`;
+  if (role.kind === "degraded") {
+    const way = good
+      ? `If none is, rolling back to rev ${good.revision} (the last good revision) clears the pending state.`
+      : "There is no earlier good revision to roll back to.";
+    return `${r.status} at the last snapshot, last updated ${age} ago - past Klyx's ${PENDING_DEADLINE_S / 60}m attention threshold (twice helm's default 5m timeout). Elapsed time does not prove the operation stopped: check that no helm operation is still running (a CI job, another terminal, a controller). While it is pending, helm refuses new operations on this release. ${way}`;
+  }
+  if (role.kind === "progressing") return `${r.status} at the last snapshot${age ? `, updated ${age} ago` : " (update time unknown)"} - an operation was in flight when the snapshot was read.`;
   return null;
 }
 
@@ -354,13 +383,20 @@ function ReleaseInspector({ cluster, release: r, role, removed, stale, history, 
   nowS: number;
   onClose: () => void;
 }) {
-  const [rollbackTo, setRollbackTo] = useState<number | null>(null);
+  // The pending rollback pins its full evidence at open (target and current
+  // revision), and is cancelled the moment the release is removed - a later
+  // snapshot restoring the name never revives the old confirmation.
+  const [pendingRollback, setPendingRollback] = useState<{ revision: number; target?: HelmHistoryEntryDTO; current?: HelmHistoryEntryDTO } | null>(null);
   const live = !removed;
+  useEffect(() => { if (removed) setPendingRollback(null); }, [removed]);
+  const removedRef = useRef(removed);
+  removedRef.current = removed;
   const currentRev = history.length > 0 ? Math.max(...history.map((e) => e.revision)) : r.revision;
   const current = history.find((e) => e.revision === currentRev);
   const good = lastGood(history, currentRev);
   const earlier = [...history].filter((e) => e.revision < currentRev).sort((a, b) => b.revision - a.revision);
-  const detail = verdictDetail(r, role, nowS);
+  const detail = verdictDetail(r, role, good, nowS);
+  const setRollbackTo = (revision: number) => setPendingRollback({ revision, target: history.find((e) => e.revision === revision), current });
   const reread = () => void openHelmRelease(cluster, r.namespace, r.name);
 
   const more: MenuItem[] = live && earlier.length > 0
@@ -432,17 +468,22 @@ function ReleaseInspector({ cluster, release: r, role, removed, stale, history, 
           )}
         </InspectorBlock>
       </InspectorLayout>
-      {rollbackTo !== null && live && (
+      {pendingRollback && live && (
         <RollbackComposerDialog
           cluster={cluster}
           namespace={r.namespace}
           name={r.name}
-          current={current}
-          target={history.find((e) => e.revision === rollbackTo)}
-          targetRevision={rollbackTo}
+          current={pendingRollback.current}
+          target={pendingRollback.target}
+          targetRevision={pendingRollback.revision}
           isProtected={isProtected}
-          onCancel={() => setRollbackTo(null)}
-          onConfirm={(opts) => { const rev = rollbackTo; setRollbackTo(null); void helmRollback(cluster, r.namespace, r.name, rev, opts); }}
+          onCancel={() => setPendingRollback(null)}
+          onConfirm={(opts) => {
+            const p = pendingRollback;
+            setPendingRollback(null);
+            if (removedRef.current) return; // never dispatch against removed evidence
+            void helmRollback(cluster, r.namespace, r.name, p.revision, opts);
+          }}
         />
       )}
     </div>

@@ -6,15 +6,16 @@ const deferred = <T,>(): Deferred<T> => { let resolve!: (v: T) => void; const pr
 const list = vi.fn();
 const history = vi.fn();
 const values = vi.fn();
+const rollback = vi.fn();
 vi.mock("../../bindings/github.com/moomora/klyx/internal/appbridge/index.js", () => ({
   HelmService: {
     ListHelmReleases: (...a: unknown[]) => list(...a),
     GetHelmHistory: (...a: unknown[]) => history(...a),
     GetHelmValues: (...a: unknown[]) => values(...a),
-    HelmRollback: vi.fn(),
+    HelmRollback: (...a: unknown[]) => rollback(...a),
   },
 }));
-import { listHelmReleases, openHelmRelease } from "./helm";
+import { listHelmReleases, openHelmRelease, helmRollback } from "./helm";
 
 const rel = { name: "app", namespace: "ns", chart: "app-1.0.0", appVersion: "1.0", status: "deployed", revision: 2, updatedUnix: 1 };
 
@@ -78,5 +79,59 @@ describe("Helm bridge (redesign step 5)", () => {
     await openHelmRelease("A", "ns", "app");
     expect(useFleet.getState().helm.historyError).toBe("release: not found");
     expect(useFleet.getState().helm.valuesError).toBe("forbidden");
+  });
+});
+
+describe("Helm bridge fences (Codex f66e887c)", () => {
+  beforeEach(() => { useFleet.getState().clearHelm(); vi.clearAllMocks(); });
+  const opts = { wait: true, noHooks: false, timeoutSeconds: 120 };
+
+  it("an older list success or failure finishing after a newer read never replaces it", async () => {
+    const older = deferred<unknown>();
+    list.mockReturnValueOnce(older.promise).mockResolvedValueOnce({ available: true, message: "", releases: [rel] });
+    const a = listHelmReleases("A");
+    await listHelmReleases("A");
+    older.resolve({ available: true, message: "", releases: [] });
+    await a;
+    expect(useFleet.getState().helm.releases).toEqual([rel]);
+    const olderFail = deferred<unknown>();
+    list.mockReturnValueOnce(olderFail.promise).mockResolvedValueOnce({ available: true, message: "", releases: [rel] });
+    const b = listHelmReleases("A");
+    await listHelmReleases("A");
+    olderFail.resolve({ available: false, message: "boom", releases: [], error: "boom" });
+    await b;
+    expect(useFleet.getState().helm.error).toBeNull();
+  });
+
+  it("a rollback on A finishing while B is viewed never re-lists A into view", async () => {
+    list.mockResolvedValueOnce({ available: true, message: "", releases: [rel] });
+    await listHelmReleases("A");
+    const done = deferred<unknown>();
+    rollback.mockReturnValueOnce(done.promise);
+    const p = helmRollback("A", "ns", "app", 1, opts);
+    list.mockResolvedValueOnce({ available: true, message: "", releases: [] });
+    await listHelmReleases("B");
+    list.mockClear();
+    done.resolve({ ok: true, error: "" });
+    await p;
+    expect(list).not.toHaveBeenCalled();
+    expect(useFleet.getState().helm.cluster).toBe("B");
+  });
+
+  it("a rollback on X never re-opens X once the operator inspects Y", async () => {
+    const y = { ...rel, name: "y" };
+    list.mockResolvedValue({ available: true, message: "", releases: [rel, y] });
+    await listHelmReleases("A");
+    history.mockResolvedValue({ history: [] });
+    values.mockResolvedValue({ values: "" });
+    const done = deferred<unknown>();
+    rollback.mockReturnValueOnce(done.promise);
+    const p = helmRollback("A", "ns", "app", 1, opts);
+    await openHelmRelease("A", "ns", "y");
+    history.mockClear();
+    done.resolve({ ok: true, error: "" });
+    await p;
+    expect(history).not.toHaveBeenCalledWith("A", "ns", "app");
+    expect(useFleet.getState().helm.selected?.name).toBe("y");
   });
 });

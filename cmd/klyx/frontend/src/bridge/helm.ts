@@ -9,13 +9,17 @@ type HelmHistoryResultDTO = { history: HelmHistoryEntryDTO[]; error?: string };
 type HelmValuesResultDTO = { values: string; error?: string };
 type ActionResultDTO = { ok: boolean; error: string };
 
+// listGen fences list reads: an older read (same cluster, or A->B->A) that
+// finishes after a newer one never replaces its snapshot or error.
+let listGen = 0;
+
 export async function listHelmReleases(cluster: string): Promise<void> {
+  const gen = ++listGen;
   useFleet.getState().setHelmLoading(cluster);
   try {
     const r = (await HelmService.ListHelmReleases(cluster)) as HelmReleasesResultDTO;
-    // Drop stale response if cluster changed while in flight.
     const cur = useFleet.getState().helm;
-    if (cur.cluster !== cluster) return;
+    if (gen !== listGen || cur.cluster !== cluster) return;
     if (r.available || r.message === HELM_CLI_MISSING) {
       useFleet.getState().setHelm(cluster, r.available, r.message ?? "", r.releases ?? []);
       return;
@@ -24,7 +28,7 @@ export async function listHelmReleases(cluster: string): Promise<void> {
     // last good snapshot stays, marked as such.
     useFleet.getState().setHelmListError(cluster, r.error || r.message || "helm list failed");
   } catch (e: unknown) {
-    if (useFleet.getState().helm.cluster === cluster) {
+    if (gen === listGen && useFleet.getState().helm.cluster === cluster) {
       useFleet.getState().setHelmListError(cluster, e instanceof Error ? e.message : "helm list failed");
     }
   }
@@ -73,22 +77,27 @@ export type RollbackOptions = {
   timeoutSeconds: number;
 };
 
+// helmRollback reports its result against its ORIGIN (cluster + release):
+// finishing after the operator navigated away never re-lists another cluster
+// into view or re-opens a release they have left.
 export async function helmRollback(cluster: string, namespace: string, name: string, revision: number, opts: RollbackOptions): Promise<void> {
   try {
     const r = (await HelmService.HelmRollback(cluster, namespace, name, revision, opts)) as ActionResultDTO;
     useFleet.getState().setActionStatus(
       r.ok
-        ? { kind: "success", message: `rolled back ${namespace}/${name} to revision ${revision}` }
-        : { kind: "error", message: r.error || "rollback failed" },
+        ? { kind: "success", message: `rolled back ${namespace}/${name} on ${cluster} to revision ${revision}` }
+        : { kind: "error", message: `rollback of ${namespace}/${name} on ${cluster} failed: ${r.error || "unknown error"}` },
     );
-    if (r.ok) {
-      await listHelmReleases(cluster);
+    if (!r.ok || useFleet.getState().helm.cluster !== cluster) return;
+    await listHelmReleases(cluster);
+    const after = useFleet.getState().helm;
+    if (after.cluster === cluster && after.selected?.namespace === namespace && after.selected?.name === name) {
       await openHelmRelease(cluster, namespace, name);
     }
   } catch (e: unknown) {
     useFleet.getState().setActionStatus({
       kind: "error",
-      message: e instanceof Error ? e.message : "rollback failed",
+      message: `rollback of ${namespace}/${name} on ${cluster} failed: ${e instanceof Error ? e.message : "unknown error"}`,
     });
   }
 }

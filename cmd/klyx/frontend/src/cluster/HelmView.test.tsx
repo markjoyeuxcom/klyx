@@ -35,7 +35,7 @@ describe("releaseHealth", () => {
     expect(releaseHealth(rel({}), nowS).kind).toBe("ok");
     expect(releaseHealth(rel({ status: "failed" }), nowS).kind).toBe("fault");
     expect(releaseHealth(rel({ status: "pending-upgrade", updatedUnix: nowS - 60 }), nowS)).toEqual({ kind: "progressing", label: "pending-upgrade" });
-    expect(releaseHealth(rel({ status: "pending-upgrade", updatedUnix: nowS - PENDING_DEADLINE_S - 1 }), nowS)).toEqual({ kind: "degraded", label: "stuck pending-upgrade" });
+    expect(releaseHealth(rel({ status: "pending-upgrade", updatedUnix: nowS - PENDING_DEADLINE_S - 1 }), nowS)).toEqual({ kind: "degraded", label: "pending-upgrade, appears stuck" });
     expect(releaseHealth(rel({ status: "pending-install", updatedUnix: 0 }), nowS).kind).toBe("progressing");
     expect(releaseHealth(rel({ status: "superseded" }), nowS).kind).toBe("unknown");
     expect(releaseHealth(rel({ status: "uninstalled" }), nowS).kind).toBe("unknown");
@@ -91,10 +91,10 @@ describe("HelmView (redesign step 5)", () => {
     render(<HelmView cluster="x" />);
     const rows = rowsText();
     expect(rows[0]).toContain("bad");
-    expect(rows[1]).toContain("stuck pending-upgrade");
+    expect(rows[1]).toContain("pending-upgrade, appears stuck");
     expect(rows[2]).toContain("fresh");
     expect(rows[3]).toContain("ok");
-    expect(screen.getByText("▲ 1 failed · 1 stuck pending")).toBeTruthy();
+    expect(screen.getByText("▲ 1 failed · 1 pending, appears stuck")).toBeTruthy();
     expect(screen.getByText("1 in progress")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: /^Pending/ }));
     expect(rowsText().length).toBe(2);
@@ -121,13 +121,22 @@ describe("HelmView (redesign step 5)", () => {
     expect(currentStatus.style.color).toBe("var(--color-text-danger)");
   });
 
-  it("a stuck release explains the deadline and the way out in words", () => {
+  it("an apparently stuck release is qualified: Klyx's heuristic, verify nothing runs, rollback only when a good revision exists", () => {
     const r = rel({ status: "pending-upgrade", updatedUnix: nowS - 3600 });
     seed([r]);
-    select(r, [hist(3, "pending-upgrade", "Preparing upgrade")]);
+    select(r, [hist(3, "pending-upgrade", "Preparing upgrade"), hist(2, "superseded")]);
+    const first = render(<HelmView cluster="x" />);
+    const text = insp().getByText(/at the last snapshot, last updated \d+[mh] ago/).textContent ?? "";
+    expect(text).toContain("Klyx's 10m attention threshold");
+    expect(text).toContain("does not prove the operation stopped");
+    expect(text).toContain("rolling back to rev 2");
+    first.unmount();
+    const fresh = rel({ name: "new", status: "pending-install", revision: 1, updatedUnix: nowS - 3600 });
+    seed([fresh]);
+    select(fresh, [hist(1, "pending-install")]);
     render(<HelmView cluster="x" />);
-    expect(insp().getByText(/pending-upgrade for \d+[mh] - longer than 10m/)).toBeTruthy();
-    expect(insp().getByText(/Helm refuses new operations/)).toBeTruthy();
+    expect(insp().getByText(/There is no earlier good revision to roll back to/)).toBeTruthy();
+    expect(insp().queryByRole("button", { name: /Roll back/ })).toBeNull();
   });
 
   it("history and values read failures are shown, never as empty", () => {
@@ -170,5 +179,55 @@ describe("HelmView (redesign step 5)", () => {
     expect(rowsText().join(" ")).not.toContain("ok");
     act(() => select(ok));
     expect(rowsText().join(" ")).toContain("ok");
+  });
+});
+
+describe("HelmView lifecycle corrections (Codex f66e887c)", () => {
+  beforeEach(() => { useFleet.getState().clearHelm(); vi.clearAllMocks(); });
+
+  it("a removed release cancels its open rollback composer; reappearance never revives it or dispatches", () => {
+    const r = rel({ status: "failed", revision: 3 });
+    seed([r, rel({ name: "other" })]);
+    select(r, [hist(3, "failed"), hist(2, "superseded")]);
+    render(<HelmView cluster="x" />);
+    fireEvent.click(insp().getByRole("button", { name: "Roll back to rev 2…" }));
+    expect(screen.getByRole("button", { name: "Roll back" })).toBeTruthy();
+    act(() => seed([rel({ name: "other" })], { snapshotAt: 2000 }));
+    expect(screen.queryByRole("button", { name: "Roll back" })).toBeNull();
+    act(() => seed([r, rel({ name: "other" })], { snapshotAt: 3000 }));
+    expect(screen.queryByRole("button", { name: "Roll back" })).toBeNull();
+    expect(helmRollback).not.toHaveBeenCalled();
+  });
+
+  it("A -> B is a new visit: B gets its own one-shot auto-select from its fresh snapshot", () => {
+    seed([rel({ name: "bad-a", status: "failed" })]);
+    const { rerender } = render(<HelmView cluster="x" />);
+    act(() => seed([rel({ name: "bad-a", status: "failed" })], { snapshotAt: 2000 }));
+    expect(openHelmRelease).toHaveBeenLastCalledWith("x", "apps", "bad-a");
+    act(() => useFleet.setState((s) => ({ helm: { ...s.helm, cluster: "y", releases: [], snapshotAt: null, selected: null } })));
+    rerender(<HelmView cluster="y" />);
+    act(() => useFleet.setState((s) => ({ helm: { ...s.helm, cluster: "y", releases: [rel({ name: "bad-b", status: "failed" })], snapshotAt: 5000 } })));
+    expect(openHelmRelease).toHaveBeenLastCalledWith("y", "apps", "bad-b");
+  });
+
+  it("a later operator filter that excludes the selected release closes its inspector", () => {
+    const ok = rel({ name: "ok" });
+    seed([ok, rel({ name: "bad", status: "failed" })]);
+    select(ok);
+    render(<HelmView cluster="x" />);
+    expect(screen.getByTestId("helm-release-panel")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /^Failed/ }));
+    expect(useFleet.getState().helm.selected).toBeNull();
+  });
+
+  it("a palette target requested before its row arrives stays pending, then clears stale filters once", () => {
+    seed([rel({ name: "bad", status: "failed" })]);
+    render(<HelmView cluster="x" />);
+    fireEvent.click(screen.getByRole("button", { name: /^Failed/ }));
+    act(() => useFleet.setState((s) => ({ helm: { ...s.helm, selected: { namespace: "apps", name: "late" } } })));
+    expect(useFleet.getState().helm.selected).not.toBeNull(); // pending, not dropped
+    act(() => seed([rel({ name: "bad", status: "failed" }), rel({ name: "late" })], { snapshotAt: 2000 }));
+    expect(rowsText().join(" ")).toContain("late");
+    expect(screen.getByTestId("helm-release-panel")).toBeTruthy();
   });
 });
