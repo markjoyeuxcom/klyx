@@ -68,6 +68,7 @@ func (f *fakeConn) CloseExternalSecrets()                                 {}
 func (f *fakeConn) ExternalSecretsList() []externalsecrets.ExternalSecret { return nil }
 func (f *fakeConn) ExternalSecretsStores() []externalsecrets.Store        { return nil }
 func (f *fakeConn) ExternalSecretsWatchHealth() (bool, string)            { return true, "" }
+func (f *fakeConn) ExternalSecretsCoverage() []KindCoverage               { return nil }
 func (f *fakeConn) FluxEvents(ctx context.Context, kind, ns, name string) ([]workloads.EventSummary, error) {
 	return nil, nil
 }

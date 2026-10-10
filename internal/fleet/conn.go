@@ -67,6 +67,7 @@ type Conn interface {
 	ExternalSecretsList() []externalsecrets.ExternalSecret
 	ExternalSecretsStores() []externalsecrets.Store
 	ExternalSecretsWatchHealth() (synced bool, lastErr string)
+	ExternalSecretsCoverage() []KindCoverage
 	FluxEvents(ctx context.Context, kind, ns, name string) ([]workloads.EventSummary, error)
 	FluxAvailable() bool
 	FluxDiffKustomization(ctx context.Context, ns, name, path string) (fluxcli.DiffResult, error)

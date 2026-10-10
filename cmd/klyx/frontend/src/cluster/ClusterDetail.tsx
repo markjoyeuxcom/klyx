@@ -8,6 +8,7 @@ import { HelmView } from "./HelmView";
 import { CertsView } from "./CertsView";
 import { CertsViewLegacy } from "./CertsViewLegacy";
 import { ExternalSecretsView } from "./ExternalSecretsView";
+import { ExternalSecretsViewLegacy } from "./ExternalSecretsViewLegacy";
 import { CRDBrowser } from "./CRDBrowser";
 import { BuiltinsView } from "./BuiltinsView";
 import { InstanceList } from "./InstanceList";
@@ -22,7 +23,7 @@ import { PodsViewLegacy } from "./PodsViewLegacy";
 // localStorage "klyx.layout.v1.legacy<Lens>" = "1" (Pods, Nodes, Workloads)
 // falls back to that lens's old implementation as a whole - never a mix of
 // layout owners. Each is removed once its migration is accepted.
-function legacyLens(lens: "Pods" | "Nodes" | "Workloads" | "Resources" | "Flux" | "Argo" | "Certs"): boolean {
+function legacyLens(lens: "Pods" | "Nodes" | "Workloads" | "Resources" | "Flux" | "Argo" | "Certs" | "Eso"): boolean {
   try { return localStorage.getItem(`klyx.layout.v1.legacy${lens}`) === "1"; } catch { return false; }
 }
 import { EventsView } from "./EventsView";
@@ -55,7 +56,7 @@ export function ClusterDetail() {
   if (route.section === "argo") return legacyLens("Argo") ? <ArgoViewLegacy cluster={cluster.name} mode={route.argoView ?? "applications"} /> : <ArgoView cluster={cluster.name} mode={route.argoView ?? "applications"} />;
   if (route.section === "helm") return <HelmView cluster={cluster.name} />;
   if (route.section === "certs") return legacyLens("Certs") ? <CertsViewLegacy cluster={cluster.name} /> : <CertsView cluster={cluster.name} />;
-  if (route.section === "externalsecrets") return <ExternalSecretsView cluster={cluster.name} />;
+  if (route.section === "externalsecrets") return legacyLens("Eso") ? <ExternalSecretsViewLegacy cluster={cluster.name} /> : <ExternalSecretsView cluster={cluster.name} />;
   if (route.section === "resources") {
     // An open instance renders as a side panel INSIDE the list (master-detail,
     // the Pods pattern) - never as a full-page swap that throws the list away.

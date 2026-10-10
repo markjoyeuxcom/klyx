@@ -5,8 +5,6 @@ import (
 	"sort"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/client-go/dynamic/dynamicinformer"
 	"k8s.io/client-go/tools/cache"
 
 	"github.com/moomora/klyx/internal/externalsecrets"
@@ -14,9 +12,9 @@ import (
 
 type esoWatch struct {
 	cancel   context.CancelFunc
-	esInf    cache.SharedIndexInformer
-	storeInf map[externalsecrets.Kind]cache.SharedIndexInformer // SecretStore + ClusterSecretStore
-	errs     *watchErrTracker
+	esInf    cache.SharedIndexInformer                          // nil when ExternalSecret is not served
+	storeInf map[externalsecrets.Kind]cache.SharedIndexInformer // SecretStore + ClusterSecretStore (served ones)
+	kinds    kindSet                                            // per-kind coverage (kindcoverage.go)
 }
 
 // esoStoreKinds is the set of ESO store CRDs Klyx watches alongside
@@ -52,24 +50,15 @@ func (c *ClusterConn) OpenExternalSecrets() {
 		return
 	}
 
-	ver := preferredVersion(c.discovery(), "external-secrets.io", "v1beta1")
-	esGVR := schema.GroupVersionResource{Group: "external-secrets.io", Version: ver, Resource: "externalsecrets"}
-
 	gctx, cancel := context.WithCancel(parent)
-	factory := dynamicinformer.NewDynamicSharedInformerFactory(dyn, defaultResync)
-	errs := &watchErrTracker{}
-	esInf := factory.ForResource(esGVR).Informer()
-	trackWatchErrors(esInf, errs)
-
-	storeInf := make(map[externalsecrets.Kind]cache.SharedIndexInformer, len(esoStoreKinds))
+	g := &esoWatch{cancel: cancel, storeInf: map[externalsecrets.Kind]cache.SharedIndexInformer{}}
+	g.esInf = g.kinds.watch(c.discovery(), dyn, "ExternalSecret", "external-secrets.io", "externalsecrets", "v1beta1")
 	for _, k := range esoStoreKinds {
-		gvr := schema.GroupVersionResource{Group: "external-secrets.io", Version: ver, Resource: k.resource}
-		inf := factory.ForResource(gvr).Informer()
-		trackWatchErrors(inf, errs)
-		storeInf[k.kind] = inf
+		if inf := g.kinds.watch(c.discovery(), dyn, string(k.kind), "external-secrets.io", k.resource, "v1beta1"); inf != nil {
+			g.storeInf[k.kind] = inf
+		}
 	}
-
-	factory.Start(gctx.Done())
+	g.kinds.run(gctx.Done())
 
 	c.mu.Lock()
 	c.esoOpening = false
@@ -79,22 +68,32 @@ func (c *ClusterConn) OpenExternalSecrets() {
 		cancel()
 		return
 	}
-	c.eso = &esoWatch{cancel: cancel, esInf: esInf, storeInf: storeInf, errs: errs}
+	c.eso = g
 	c.mu.Unlock()
 }
 
-// ExternalSecretsWatchHealth reports whether the ExternalSecret informer has
-// synced and the most recent watch error - the "permanently failing" signal
-// that must render as an error, never as an empty secret list. Mirrors
-// CertManagerWatchHealth.
+// ExternalSecretsWatchHealth reports whether EVERY watched ESO informer has
+// synced, and the CURRENT failures of any kind (after-sync failures included -
+// they used to be suppressed once ExternalSecrets synced). Per-kind detail is
+// ExternalSecretsCoverage.
 func (c *ClusterConn) ExternalSecretsWatchHealth() (synced bool, lastErr string) {
+	cov := c.ExternalSecretsCoverage()
+	if cov == nil {
+		return false, ""
+	}
+	return healthOf(cov)
+}
+
+// ExternalSecretsCoverage reports evidence per kind (ExternalSecret,
+// SecretStore, ClusterSecretStore). nil when the watch is not open.
+func (c *ClusterConn) ExternalSecretsCoverage() []KindCoverage {
 	c.mu.RLock()
 	g := c.eso
 	c.mu.RUnlock()
 	if g == nil {
-		return false, ""
+		return nil
 	}
-	return g.esInf.HasSynced(), g.errs.lastError()
+	return g.kinds.coverage()
 }
 
 // CloseExternalSecrets stops the ESO informers. Clearing esoWanted also aborts
@@ -121,6 +120,9 @@ func (c *ClusterConn) ExternalSecretsList() []externalsecrets.ExternalSecret {
 	}
 	now := c.clk.Now()
 	var out []externalsecrets.ExternalSecret
+	if g.esInf == nil {
+		return nil
+	}
 	for _, obj := range g.esInf.GetStore().List() {
 		if u, ok := obj.(*unstructured.Unstructured); ok {
 			out = append(out, externalsecrets.ParseExternalSecret(u, now))

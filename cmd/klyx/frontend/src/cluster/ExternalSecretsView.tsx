@@ -3,16 +3,18 @@ import { useFleet } from "../store/fleet";
 import type { ExternalSecretDTO, ExternalSecretStoreDTO } from "../store/fleet";
 import { openExternalSecrets, closeExternalSecrets } from "../bridge/externalsecrets";
 import { useListKeys } from "../chrome/useListKeys";
-import { inputWell, MetersStrip, well, Badge, FilterButton, Section, Field, StatusDot, frame, ellipsis, mono, readyColor, toneColor } from "../chrome/primitives";
 import { CopyButton } from "../chrome/CopyButton";
 import { EmptyState } from "../chrome/EmptyState";
 import { SkeletonRows } from "../chrome/SkeletonRows";
 import { WatchErrorBanner } from "../chrome/WatchErrorBanner";
-import { IconShieldLock } from "@tabler/icons-react";
-import { SECRET_REF } from "./resourceRefs";
-import { ManifestButton } from "./ManifestButton";
-
-type EsoFilter = "all" | "attention" | "stale" | "stores";
+import { VirtualList, type VirtualListHandle } from "../chrome/VirtualList";
+import { IconAlertTriangle, IconShieldLock } from "@tabler/icons-react";
+import { SECRET_REF, wellKnownResourceRef } from "./resourceRefs";
+import { InspectorStatus } from "./ResourceInspector";
+import { VerdictLamp } from "../health/VerdictView";
+import { LensLayout, LensTable, TABLE_ROW_HEIGHT, type DatasetState } from "../layout/LensLayout";
+import { InspectorBlock, InspectorLayout, type MenuItem } from "../layout/InspectorLayout";
+import { fitColumns, type ColumnDef } from "../layout/columns";
 
 const keyOf = (e: { namespace: string; name: string }) => `${e.namespace}/${e.name}`;
 
@@ -61,34 +63,90 @@ function resolveStore(e: ExternalSecretDTO, stores: ExternalSecretStoreDTO[]): E
   );
 }
 
-function matchesFilter(e: ExternalSecretDTO, filter: EsoFilter): boolean {
-  if (filter === "attention") return needsAttention(e);
-  if (filter === "stale") return !!e.stale;
-  return true;
-}
-
 function matchesQuery(e: ExternalSecretDTO, query: string): boolean {
   const q = query.trim().toLowerCase();
   if (!q) return true;
   return [e.namespace, e.name, e.storeName, e.targetSecret, e.reason].some((v) => v.toLowerCase().includes(q));
 }
 
+// ExternalSecretsView - the External Secrets Operator lens on the workspace
+// template (spec §6 step 4d). Two views: ExternalSecrets (broken first, then
+// staleness) and Stores. ESO-native refresh staleness is kept: a Synced
+// secret whose last sync is older than 2x its refresh interval is "stale" -
+// never shown as confidently synced. Read-only lens; the documented domain
+// variant of the action band is Open target Secret (primary) with the
+// manifest in More. The bound (Cluster)SecretStore's health is the headline.
+
+type EsoView = "secrets" | "stores";
+type EsoStatus = "all" | "attention" | "stale";
+
+// Shared verdict roles (only faults glow): Failed = fault; stale (refresh
+// stopped) = degraded; Synced = ok; Unknown = unknown; anything else =
+// degraded.
+function secretHealth(e: ExternalSecretDTO): { kind: string; label: string } {
+  if (e.state === "Failed") return { kind: "fault", label: "Failed" };
+  if (e.state === "Synced" && e.stale) return { kind: "degraded", label: "Stale" };
+  if (e.state === "Synced") return { kind: "ok", label: "Synced" };
+  if (e.state === "Unknown" || !e.state) return { kind: "unknown", label: "Unknown" };
+  return { kind: "degraded", label: e.state };
+}
+function storeHealth(s: ExternalSecretStoreDTO): { kind: string; label: string } {
+  if (s.state === "Synced") return { kind: "ok", label: "Ready" };
+  if (s.state === "Failed") return { kind: "fault", label: "Failed" };
+  if (s.state === "Unknown" || !s.state) return { kind: "unknown", label: "Unknown" };
+  return { kind: "degraded", label: s.state };
+}
+const ROLE_TEXT: Record<string, string> = {
+  fault: "var(--color-text-danger)",
+  degraded: "var(--color-text-warning)",
+  progressing: "var(--color-text-secondary)",
+  ok: "var(--color-text-secondary)",
+  unknown: "var(--color-text-tertiary)",
+};
+const roleTone = (k: string) => (k === "fault" ? "danger" : k === "degraded" ? "warning" : k === "ok" ? "success" : "muted") as "danger" | "warning" | "success" | "muted";
+function Lamp({ role }: { role: { kind: string; label: string } }) {
+  return <span role="img" aria-label={role.label} style={{ display: "inline-flex", justifySelf: "center" }}><VerdictLamp health={role} size={8} /></span>;
+}
+const cellStyle: React.CSSProperties = { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 };
+const storeKey = (s: ExternalSecretStoreDTO) => `${s.kind}/${s.namespace}/${s.name}`;
+type JoinCoverage = "complete" | "stale" | "unknown";
+
+const SECRET_COLUMNS: (ColumnDef & { label: string })[] = [
+  { id: "lamp", label: "", width: 16, priority: 0 },
+  { id: "name", label: "ExternalSecret", width: 240, priority: 0, flex: true },
+  { id: "status", label: "Status", width: 170, priority: 1 },
+  { id: "refreshed", label: "Last sync", width: 76, priority: 1 },
+  { id: "store", label: "Store", width: 150, priority: 2, grow: 0.6 },
+  { id: "target", label: "Target Secret", width: 140, priority: 3, grow: 0.5 },
+];
+const STORE_COLUMNS: (ColumnDef & { label: string })[] = [
+  { id: "lamp", label: "", width: 16, priority: 0 },
+  { id: "name", label: "Store", width: 240, priority: 0, flex: true },
+  { id: "kind", label: "Kind", width: 140, priority: 2 },
+  { id: "provider", label: "Provider", width: 110, priority: 3 },
+  { id: "status", label: "Status", width: 200, priority: 1, grow: 0.8 },
+  { id: "secrets", label: "Secrets", width: 64, priority: 4 },
+];
+
 export function ExternalSecretsView({ cluster }: { cluster: string }) {
   const tier = useFleet((s) => s.clusters.find((c) => c.name === cluster)?.externalSecretsTier ?? "Unknown");
   const eso = useFleet((s) => s.externalsecrets);
-  const select = useFleet((s) => s.selectExternalSecret);
-  const [filter, setFilter] = useState<EsoFilter>("all");
+  const selectSecret = useFleet((s) => s.selectExternalSecret);
+  const [view, setView] = useState<EsoView>("secrets");
+  const [status, setStatus] = useState<EsoStatus>("all");
   const [query, setQuery] = useState("");
   const [namespace, setNamespace] = useState("");
-  const [kbKey, setKbKey] = useState<string | null>(null);
+  const [cursorKey, setCursorKey] = useState<string | null>(null);
+  const [storeSel, setStoreSel] = useState<string | null>(null);
+  const [bodyWidth, setBodyWidth] = useState(1100);
   const searchRef = useRef<HTMLInputElement>(null);
+  const listRef = useRef<VirtualListHandle>(null);
   const absent = tier === "Absent";
 
   useEffect(() => {
     if (absent) return;
     // If cleanup runs before openExternalSecrets resolves, invoke the
-    // late-arriving unsubscriber immediately - otherwise its listener leaks for
-    // the app's lifetime and duplicates store writes on every reopen.
+    // late-arriving unsubscriber immediately - otherwise its listener leaks.
     let cancelled = false;
     let off = () => {};
     openExternalSecrets(cluster).then((u) => (cancelled ? u() : (off = u))).catch((e) => console.error("openExternalSecrets", e));
@@ -99,343 +157,408 @@ export function ExternalSecretsView({ cluster }: { cluster: string }) {
     };
   }, [cluster, absent]);
 
-  const secrets = eso.cluster === cluster ? eso.secrets : [];
-  const stores = eso.cluster === cluster ? eso.stores : [];
+  const mine = eso.cluster === cluster;
+  const secrets = useMemo(() => (mine ? eso.secrets : []), [mine, eso.secrets]);
+  const stores = useMemo(() => (mine ? eso.stores : []), [mine, eso.stores]);
+  const watchError = mine ? eso.watchError : null;
+  const loaded = mine && !eso.loading;
+  const complete = loaded && !watchError;
+  // Evidence per kind (as in cert-manager): a synced ExternalSecret watch
+  // never vouches for a pending or forbidden (Cluster)SecretStore watch, or
+  // the reverse. Older payloads fall back to the aggregate state.
+  const kindCov = useCallback((kind: string): JoinCoverage => {
+    if (!loaded) return "unknown";
+    const k = (eso.coverage ?? []).find((x) => x.kind === kind);
+    if (!k) return watchError ? "stale" : "complete";
+    if (!k.served) return "complete";
+    if (!k.synced) return "unknown";
+    return k.error ? "stale" : "complete";
+  }, [loaded, eso.coverage, watchError]);
+  const secretsCov = kindCov("ExternalSecret");
+
+  const q = query.trim().toLowerCase();
   const orderedSecrets = useMemo(
     () => [...secrets].sort((a, b) => secretRank(a) - secretRank(b) || a.namespace.localeCompare(b.namespace) || a.name.localeCompare(b.name)),
     [secrets],
   );
   const namespaces = useMemo(() => Array.from(new Set(secrets.map((e) => e.namespace))).sort(), [secrets]);
-  const visibleSecrets = useMemo(
-    () => orderedSecrets.filter((e) => (!namespace || e.namespace === namespace) && matchesFilter(e, filter) && matchesQuery(e, query)),
-    [orderedSecrets, filter, namespace, query],
-  );
+  const visibleSecrets = useMemo(() => orderedSecrets.filter((e) => {
+    if (namespace && e.namespace !== namespace) return false;
+    if (status === "attention" && !needsAttention(e)) return false;
+    if (status === "stale" && !e.stale) return false;
+    return matchesQuery(e, q);
+  }), [orderedSecrets, namespace, status, q]);
   const orderedStores = useMemo(
     () => [...stores].sort((a, b) => storeRank(a) - storeRank(b) || a.kind.localeCompare(b.kind) || a.name.localeCompare(b.name)),
     [stores],
   );
+  const visibleStores = useMemo(() => orderedStores.filter((s) => {
+    if (namespace && s.kind === "SecretStore" && s.namespace !== namespace) return false;
+    if (status === "attention" && s.state === "Synced") return false;
+    return !q || [s.kind, s.namespace, s.name, s.provider, s.reason, s.message].some((v) => (v ?? "").toLowerCase().includes(q));
+  }), [orderedStores, namespace, status, q]);
+  const secretsFor = useCallback((s: ExternalSecretStoreDTO) => secrets.filter((e) => resolveStore(e, [s]) === s), [secrets]);
 
-  // Keyboard parity with the Certs lens (j/k, Enter opens the inspector,
-  // Esc closes it, / focuses the filter) - ESO is a near-clone of Certs and
-  // was the one lens without it.
-  const kbIdx = kbKey === null ? -1 : visibleSecrets.findIndex((e) => keyOf(e) === kbKey);
-  const handleKbSelect = useCallback((idx: number) => {
-    const e = visibleSecrets[idx];
-    if (e) setKbKey(keyOf(e));
-  }, [visibleSecrets]);
-  const handleKbActivate = useCallback((idx: number) => {
-    const e = visibleSecrets[idx];
-    if (!e) return;
-    const k = keyOf(e);
-    select(useFleet.getState().externalsecrets.selectedKey === k ? null : k);
-  }, [visibleSecrets, select]);
-  const handleKbEscape = useCallback(() => {
-    if (useFleet.getState().externalsecrets.selectedKey) select(null);
-  }, [select]);
+  // Selection lifecycle (secrets keyed in the store, stores local).
+  const selKey = mine ? eso.selectedKey : null;
+  const selectedSecret = selKey ? secrets.find((e) => keyOf(e) === selKey) : undefined;
+  const lastSecret = useRef<ExternalSecretDTO | null>(null);
+  if (selectedSecret) lastSecret.current = selectedSecret;
+  const secretRemoved = !!selKey && complete && !selectedSecret;
+  const selectedStore = storeSel ? stores.find((s) => storeKey(s) === storeSel) : undefined;
+  const lastStore = useRef<ExternalSecretStoreDTO | null>(null);
+  if (selectedStore) lastStore.current = selectedStore;
+  const storeRemoved = !!storeSel && complete && !selectedStore;
+  useEffect(() => { if (selectedSecret && view === "secrets" && !visibleSecrets.includes(selectedSecret)) selectSecret(null); }, [selectedSecret, visibleSecrets, view, selectSecret]);
+  useEffect(() => { if (selectedStore && view === "stores" && !visibleStores.includes(selectedStore)) setStoreSel(null); }, [selectedStore, visibleStores, view]);
+  const enteredCluster = useRef(cluster);
+  useEffect(() => {
+    if (enteredCluster.current === cluster) return;
+    enteredCluster.current = cluster;
+    setStoreSel(null); setCursorKey(null);
+    autoSelect.current = "pending";
+    entrySecrets.current = useFleet.getState().externalsecrets.secrets;
+  }, [cluster]);
+
+  // One-shot auto-select of the first secret needing attention.
+  const autoSelect = useRef<"pending" | "done">("pending");
+  const entrySecrets = useRef<ExternalSecretDTO[] | null>(null);
+  if (entrySecrets.current === null) entrySecrets.current = eso.secrets;
+  const freshRead = complete && eso.secrets !== entrySecrets.current;
+  useEffect(() => {
+    if (autoSelect.current === "done" || !freshRead || view !== "secrets") return;
+    autoSelect.current = "done";
+    if (useFleet.getState().externalsecrets.selectedKey) return;
+    const e = visibleSecrets.find(needsAttention);
+    if (e) { setCursorKey(keyOf(e)); selectSecret(keyOf(e)); }
+  }, [freshRead, visibleSecrets, view, selectSecret]);
+
+  const nav: { key: string; open: () => void }[] = view === "stores"
+    ? visibleStores.map((s) => ({ key: storeKey(s), open: () => setStoreSel(storeKey(s)) }))
+    : visibleSecrets.map((e) => ({ key: keyOf(e), open: () => { autoSelect.current = "done"; selectSecret(keyOf(e)); } }));
+  const cursorIdx = cursorKey === null ? -1 : nav.findIndex((n) => n.key === cursorKey);
+  const closeSelected = () => { autoSelect.current = "done"; if (view === "stores") setStoreSel(null); else selectSecret(null); };
   useListKeys({
-    // The stores filter renders a different list; suspend row nav there.
-    count: filter === "stores" ? 0 : visibleSecrets.length,
-    selected: kbIdx,
-    onSelect: handleKbSelect,
-    onActivate: handleKbActivate,
-    onEscape: handleKbEscape,
+    count: nav.length,
+    selected: cursorIdx,
+    onSelect: (idx) => { const n = nav[idx]; if (n) { setCursorKey(n.key); listRef.current?.scrollToIndex(idx); } },
+    onActivate: (idx) => { const n = nav[idx]; if (n) { setCursorKey(n.key); n.open(); } },
+    onEscape: closeSelected,
     searchRef,
   });
 
-  if (absent) {
-    return <div style={{ padding: 24, color: "var(--color-text-secondary)", fontSize: 13 }}>External Secrets Operator not detected on this cluster.</div>;
-  }
+  const columns = view === "stores" ? STORE_COLUMNS : SECRET_COLUMNS;
+  const fitted = useMemo(() => fitColumns(columns, bodyWidth), [columns, bodyWidth]);
+  const show = (id: string) => fitted.visible.has(id);
+  const gridStyle = { gridTemplateColumns: fitted.template };
 
   const attention = secrets.filter(needsAttention).length;
   const failed = secrets.filter((e) => e.state === "Failed").length;
   const stale = secrets.filter((e) => e.stale).length;
-  const synced = secrets.filter((e) => e.state === "Synced" && !e.stale).length;
-  const selected = visibleSecrets.find((e) => keyOf(e) === eso.selectedKey) ?? null;
+  const storesNotReady = stores.filter((s) => s.state !== "Synced").length;
+  const storeProblems = secrets.filter((e) => { if (kindCov(e.storeKind) === "unknown") return false; const st = resolveStore(e, stores); return !st || st.state !== "Synced"; }).length;
+
+  const clearFilters = () => { setStatus("all"); setQuery(""); setNamespace(""); };
+  const total = view === "stores" ? stores.length : secrets.length;
+  const shown = view === "stores" ? visibleStores.length : visibleSecrets.length;
+  let state: DatasetState = "ready";
+  if (absent) state = "empty";
+  else if (!loaded && total === 0) state = "loading";
+  else if (watchError && total === 0) state = "unreadable";
+  else if (total === 0) state = "empty";
+  else if (shown === 0) state = "no-match";
+  const noun = view === "stores" ? "stores" : "ExternalSecrets";
+  const stateView = state === "loading" ? <div style={{ width: "100%", alignSelf: "flex-start" }}><SkeletonRows rows={7} label="loading external secret state" /></div>
+    : state === "unreadable" ? <EmptyState icon={<IconAlertTriangle size={28} stroke={1.2} />} title="External Secrets state could not be read." hint={watchError ?? undefined} />
+    : state === "empty" ? (absent
+      ? <EmptyState icon={<IconShieldLock size={28} stroke={1.2} />} title="External Secrets Operator is not installed on this cluster." hint="Klyx detected no external-secrets.io resources here." />
+      : <EmptyState icon={<IconShieldLock size={28} stroke={1.2} />} title={view === "stores" ? "No secret stores on this cluster." : "No ExternalSecrets on this cluster."} hint={view === "stores" ? undefined : "The operator is installed but no ExternalSecret objects exist yet."} />)
+    : <EmptyState icon={<IconShieldLock size={28} stroke={1.2} />} title={`No ${noun} match the current filters.`} hint={`${total} ${noun} on this cluster.`} action={{ label: "Clear filters", onClick: clearFilters }} />;
+  const partial = watchError ? "+" : "";
 
   return (
-    <div style={{ padding: "14px 16px", display: "flex", flexDirection: "column", gap: 12, height: "100%", minHeight: 0, overflow: "hidden", boxSizing: "border-box" }}>
-      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 16 }}>
-        <div>
-          <div style={{ fontSize: 10, color: "var(--color-text-tertiary)", marginBottom: 3 }}>external-secrets</div>
-          <div style={{ fontSize: 18, fontWeight: 600 }}>External Secrets</div>
-        </div>
-        <Badge tone={attention > 0 ? "warning" : "success"}>{attention > 0 ? `${attention} need attention` : "synced"}</Badge>
-      </div>
-
-      {eso.cluster === cluster && eso.watchError && (
-        <WatchErrorBanner tool="external-secrets" error={eso.watchError} />
-      )}
-
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", overflow: "hidden" }}>
-        <MetersStrip
-          note="broken first · then staleness"
-          meters={[
-            { label: "externalsecrets", value: secrets.length },
-            failed > 0 && { label: "failed", value: failed, tone: "danger" as const },
-            stale > 0 && { label: "stale", value: stale, tone: "warning" as const },
-            { label: "stores", value: stores.length },
-            { label: "synced", value: synced, tone: "success" as const },
-          ]}
-        />
-      </div>
-
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
-        <FilterButton label="all" active={filter === "all"} count={secrets.length} onClick={() => setFilter("all")} />
-        <FilterButton label="needs attention" active={filter === "attention"} count={attention} onClick={() => setFilter("attention")} />
-        <FilterButton label="stale" active={filter === "stale"} count={stale} onClick={() => setFilter("stale")} />
-        <FilterButton label="stores" active={filter === "stores"} count={stores.length} onClick={() => setFilter("stores")} />
-        <select
-          value={namespace}
-          onChange={(e) => setNamespace(e.target.value)}
-          aria-label="filter external secret namespace"
-          style={{ fontSize: 11, padding: "3px 8px", borderRadius: 4, border: "0.5px solid var(--color-border-tertiary)", background: "var(--color-background-primary)", color: "var(--color-text-primary)" }}
-        >
-          <option value="">all namespaces</option>
-          {namespaces.map((ns) => <option key={ns} value={ns}>{ns}</option>)}
-        </select>
-        <input
-          ref={searchRef}
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="filter external secrets"
-          aria-label="filter external secrets"
-          style={{ ...inputWell, marginLeft: "auto", width: 180 }}
-        />
-        {(visibleSecrets.length !== secrets.length || namespace) && filter !== "stores" && <span style={{ fontSize: 10, color: "var(--color-text-tertiary)" }}>{visibleSecrets.length} of {secrets.length}</span>}
-      </div>
-
-      {eso.loading && secrets.length === 0 && stores.length === 0 ? (
-        <SkeletonRows rows={7} label="loading external secret state" />
-      ) : filter === "stores" ? (
-        <StoresPanel stores={orderedStores} />
-      ) : secrets.length === 0 ? (
-        <EmptyState
-          icon={<IconShieldLock size={28} stroke={1.2} />}
-          title="No ExternalSecrets on this cluster."
-          hint="The operator is installed but no ExternalSecret objects exist yet."
-        />
+    <LensLayout
+      label="External Secrets"
+      title={view === "stores" ? "Secret stores" : "External Secrets"}
+      summary={state === "loading" || state === "unreadable" || absent ? null : view === "stores" ? (
+        <>
+          <span className="t-number" style={{ color: "var(--color-text-secondary)" }}>{stores.length}{partial}</span>
+          {storesNotReady > 0 ? <span className="t-status" style={{ color: "var(--color-text-warning)" }}>{storesNotReady} not ready</span> : <span className="t-secondary">all stores ready</span>}
+        </>
       ) : (
-        <div style={{ flex: 1, minHeight: 0, display: "grid", gridTemplateColumns: "minmax(440px, 1.25fr) minmax(320px, 0.75fr)", gap: 12, alignItems: "stretch", overflow: "hidden" }}>
-          <div style={{ ...well, overflow: "hidden", minHeight: 0, display: "flex", flexDirection: "column" }}>
-            <div style={{ display: "grid", gridTemplateColumns: "3px minmax(180px,1.3fr) minmax(120px,1fr) 96px 64px 84px", gap: 10, alignItems: "center", padding: "5px 12px", borderBottom: "0.5px solid var(--color-border-tertiary)", fontSize: 10, color: "var(--color-text-tertiary)", flexShrink: 0 }}>
-              <span />
-              <span>external secret</span>
-              <span>store</span>
-              <span>target</span>
-              <span>refreshed</span>
-              <span>status</span>
-            </div>
-            <div data-testid="eso-scroll" style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
-              {visibleSecrets.length === 0 ? (
-                <EmptyState
-                  title="No external secrets match the current filter."
-                  action={{ label: "Clear filters", onClick: () => { setFilter("all"); setQuery(""); setNamespace(""); } }}
-                />
-              ) : visibleSecrets.map((e) => {
-                const k = keyOf(e);
+        <>
+          <span className="t-number" style={{ color: "var(--color-text-secondary)" }}>{secrets.length}{partial}</span>
+          {attention > 0
+            ? <span className="t-status" style={{ color: failed > 0 ? "var(--color-text-danger)" : "var(--color-text-warning)" }}>{failed > 0 ? "▲ " : ""}{attention} not synced or stale</span>
+            : <span className="t-secondary">{watchError ? "none known not synced" : "all synced and refreshing"}</span>}
+          <span className="t-secondary">{[failed ? `${failed} failed` : "", stale ? `${stale} stale` : "", storeProblems ? `${storeProblems} with store problem` : ""].filter(Boolean).join(" · ")}</span>
+        </>
+      )}
+      controls={absent ? undefined : (
+        <>
+          <div role="group" aria-label="External Secrets view" style={{ display: "inline-flex", gap: 4 }}>
+            <button className="l-chip" aria-pressed={view === "secrets"} onClick={() => { setView("secrets"); setStatus("all"); }}>ExternalSecrets</button>
+            <button className="l-chip" aria-pressed={view === "stores"} onClick={() => { setView("stores"); setStatus("all"); }}>
+              Stores {storesNotReady > 0 && <span style={{ color: "var(--color-text-warning)" }}>{storesNotReady}</span>}
+            </button>
+          </div>
+          <label style={{ display: "flex" }}>
+            <span className="sr-only">Namespace</span>
+            <select className="l-input" value={namespace} onChange={(e) => setNamespace(e.target.value)}>
+              <option value="">All namespaces</option>
+              {namespaces.map((ns) => <option key={ns} value={ns}>{ns}</option>)}
+            </select>
+          </label>
+          <button className="l-chip" aria-pressed={status === "all"} onClick={() => setStatus("all")}>All</button>
+          <button className="l-chip" aria-pressed={status === "attention"} onClick={() => setStatus("attention")}>{view === "stores" ? "Not ready" : "Not synced or stale"} {(view === "stores" ? storesNotReady : attention) > 0 && <span style={{ color: "var(--color-text-warning)" }}>{view === "stores" ? storesNotReady : attention}</span>}</button>
+          {view === "secrets" && stale > 0 && <button className="l-chip" aria-pressed={status === "stale"} onClick={() => setStatus("stale")}>Stale <span style={{ color: "var(--color-text-warning)" }}>{stale}</span></button>}
+          <label style={{ display: "flex", flex: "0 1 260px", minWidth: 140, marginLeft: "auto" }}>
+            <span className="sr-only">Search External Secrets</span>
+            <input ref={searchRef} className="l-input" style={{ width: "100%" }} type="search" autoCapitalize="off" autoCorrect="off" spellCheck={false} value={query} onChange={(e) => setQuery(e.target.value)} placeholder={view === "stores" ? "Search stores" : "Search name, store, target"} />
+          </label>
+        </>
+      )}
+      notice={watchError && total > 0 ? <WatchErrorBanner tool="External Secrets" failure="watch failed - showing the last good state" error={watchError} /> : undefined}
+      state={state}
+      stateView={stateView}
+      body={
+        <LensTable minWidth={fitted.minWidth} onWidth={setBodyWidth}>
+          <div className="lens-table-head" role="row" style={gridStyle}>
+            {columns.filter((c) => show(c.id)).map((c) => <span key={c.id}>{c.label}</span>)}
+          </div>
+          {view === "stores" ? (
+            <VirtualList
+              ref={listRef}
+              items={visibleStores}
+              rowHeight={TABLE_ROW_HEIGHT}
+              rowKey={(s) => storeKey(s)}
+              style={{ flex: 1, minHeight: 0 }}
+              render={(s) => {
+                const k = storeKey(s);
+                const role = storeHealth(s);
                 return (
-                  <SecretRow
-                    key={k}
-                    e={e}
-                    open={eso.selectedKey === k}
-                    kbSelected={kbKey === k}
-                    onClick={() => (eso.selectedKey === k ? select(null) : select(k))}
-                  />
+                  <div key={k} role="button" tabIndex={0} className="lens-row" style={gridStyle}
+                    aria-selected={k === cursorKey} data-cursor={k === cursorKey ? "true" : undefined} data-selected={k === storeSel ? "true" : undefined}
+                    onClick={() => { setCursorKey(k); setStoreSel(k === storeSel ? null : k); }}
+                    onKeyDown={(ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); setStoreSel(k); } }}>
+                    {show("lamp") && <Lamp role={role} />}
+                    {show("name") && <span className="lens-cell-name" title={`${s.namespace ? `${s.namespace}/` : ""}${s.name}`}>{s.namespace && <span style={{ color: "var(--color-text-tertiary)" }}>{s.namespace} / </span>}{s.name}</span>}
+                    {show("kind") && <span style={{ color: "var(--color-text-tertiary)" }}>{s.kind}</span>}
+                    {show("provider") && <span style={{ ...cellStyle, color: "var(--color-text-secondary)" }}>{s.provider || "-"}</span>}
+                    {show("status") && <span style={{ ...cellStyle, color: ROLE_TEXT[role.kind] }}>{role.kind === "fault" ? "▲ " : ""}{role.label}{s.state !== "Synced" && s.reason ? ` · ${s.reason}` : ""}</span>}
+                    {show("secrets") && <span title={secretsCov === "unknown" ? "ExternalSecret read unavailable" : secretsCov === "stale" ? "from the last observed ExternalSecret list" : undefined}>{secretsCov === "unknown" ? "?" : `${secretsFor(s).length}${secretsCov === "stale" ? "*" : ""}`}</span>}
+                  </div>
                 );
-              })}
-            </div>
-          </div>
-
-          <div data-testid="eso-inspector" style={{ minHeight: 0, overflowY: "auto" }}>
-            {selected ? <SecretInspector e={selected} store={resolveStore(selected, stores)} /> : <EmptyInspector attention={attention} />}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function SecretRow({ e, open, kbSelected, onClick }: { e: ExternalSecretDTO; open: boolean; kbSelected: boolean; onClick: () => void }) {
-  const bad = e.state === "Failed";
-  // Keep the keyboard selection visible as j/k moves it past the fold.
-  // Optional call: jsdom has no scrollIntoView.
-  const ref = useRef<HTMLButtonElement>(null);
-  useEffect(() => {
-    if (kbSelected) ref.current?.scrollIntoView?.({ block: "nearest" });
-  }, [kbSelected]);
-  return (
-    <button
-      ref={ref}
-      aria-selected={kbSelected}
-      onClick={onClick}
-      style={{
-        width: "100%", textAlign: "left", display: "grid",
-        gridTemplateColumns: "3px minmax(180px,1.3fr) minmax(120px,1fr) 96px 64px 84px",
-        gap: 10, alignItems: "center", padding: "7px 12px", cursor: "pointer",
-        border: "none", borderBottom: "0.5px solid var(--color-border-tertiary)",
-        background: kbSelected || open ? "var(--color-background-secondary)" : "transparent", color: "var(--color-text-primary)",
-        boxShadow: kbSelected ? "inset 2px 0 0 var(--bench-selection-edge, var(--color-text-info))" : undefined,
-      }}
-    >
-      <span style={{ alignSelf: "stretch", background: bad ? "var(--color-text-danger)" : e.stale ? "var(--color-text-warning)" : "transparent" }} />
-      <span style={{ ...mono, ...ellipsis, fontSize: 12 }} title={`${e.namespace}/${e.name}`}>
-        <span style={{ color: "var(--color-text-tertiary)" }}>{e.namespace}/</span>{e.name}
-      </span>
-      <span style={{ ...mono, ...ellipsis, fontSize: 11, color: "var(--color-text-secondary)" }} title={`${e.storeKind}/${e.storeName}`}>{e.storeName}</span>
-      <span style={{ ...mono, ...ellipsis, fontSize: 11, color: "var(--color-text-secondary)" }} title={e.targetSecret}>{e.targetSecret}</span>
-      <span style={{ ...mono, fontSize: 11, color: e.stale ? "var(--color-text-warning)" : "var(--color-text-secondary)" }}>{refreshedText(e)}</span>
-      <span style={{ display: "flex", alignItems: "center", gap: 5, minWidth: 0 }}>
-        {e.stale ? (
-          // A stale secret never renders as confidently synced: the amber chip
-          // replaces the green state until the controller refreshes again.
-          <StaleChip e={e} />
-        ) : (
-          <>
-            <StatusDot size={6} color={readyColor[e.state] ?? readyColor.Unknown} />
-            <span style={{ ...ellipsis, fontSize: 11, color: "var(--color-text-secondary)" }}>{e.state.toLowerCase()}</span>
-          </>
-        )}
-      </span>
-    </button>
-  );
-}
-
-function StaleChip({ e }: { e: ExternalSecretDTO }) {
-  return (
-    <span
-      title={staleTitle(e)}
-      style={{ ...mono, fontSize: 10, border: "0.5px solid var(--color-border-tertiary)", borderRadius: 4, padding: "1px 6px", background: "var(--color-background-secondary)", color: "var(--color-text-warning)" }}
-    >
-      stale
-    </span>
-  );
-}
-
-function SecretInspector({ e, store }: { e: ExternalSecretDTO; store: ExternalSecretStoreDTO | undefined }) {
-  const storeBroken = store && store.state !== "Synced";
-  const cause = failureHint(e, store);
-  return (
-    <div style={{ ...well, padding: 14, display: "flex", flexDirection: "column", gap: 12 }}>
-      <div>
-        <div style={{ display: "flex", alignItems: "center", gap: 2 }}>
-          <div style={{ ...mono, fontSize: 13, fontWeight: 500 }}>{e.namespace}/{e.name}</div>
-          <CopyButton text={e.name} label={`copy external secret name ${e.name}`} />
-          <ManifestButton group="external-secrets.io" kind="ExternalSecret" namespace={e.namespace} name={e.name} />
-        </div>
-        <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 5, marginTop: 6 }}>
-          <EsoBadge tone={e.state === "Synced" && !e.stale ? "success" : e.state === "Failed" ? "danger" : "warning"}>{e.stale ? "stale" : e.state.toLowerCase()}</EsoBadge>
-          {e.stale && e.state === "Synced" && <EsoBadge tone="warning">last sync ok, refresh stopped</EsoBadge>}
-          {storeBroken && <EsoBadge tone="danger">store problem</EsoBadge>}
-          {e.reason && <EsoBadge tone={e.state === "Failed" ? "danger" : "muted"}>{e.reason}</EsoBadge>}
-        </div>
-      </div>
-
-      {cause && (
-        <div style={{ border: "0.5px solid var(--color-text-warning)", borderRadius: "var(--border-radius-md)", padding: "8px 10px", background: "var(--color-background-secondary)" }}>
-          <div style={{ fontSize: 11, color: "var(--color-text-warning)", fontWeight: 600 }}>likely cause</div>
-          <div style={{ fontSize: 11, color: "var(--color-text-secondary)", marginTop: 3 }}>{cause}</div>
-        </div>
-      )}
-
-      {/* A failing bound store is the headline for a stuck secret (M10/M11 pattern). */}
-      {storeBroken && (
-        <div style={{ border: "0.5px solid var(--color-text-danger)", borderRadius: "var(--border-radius-md)", padding: "8px 10px", background: "var(--color-background-secondary)" }}>
-          <div style={{ fontSize: 11, color: "var(--color-text-danger)", fontWeight: 500 }}>store not ready: {store!.reason || "unknown"}</div>
-          <div style={{ ...mono, fontSize: 11, color: "var(--color-text-secondary)", marginTop: 2 }}>{store!.kind}/{store!.name}</div>
-          {store!.message && <div style={{ fontSize: 11, color: "var(--color-text-secondary)", marginTop: 3 }}>{store!.message}</div>}
-        </div>
-      )}
-
-      <Section title="store">
-        <Field label="ref" value={`${e.storeKind}/${e.storeName}`} />
-        <Field label="health" value={store ? store.state : "not found"} tone={store ? (store.state === "Synced" ? "success" : "danger") : "muted"} />
-        {store?.provider && <Field label="provider" value={store.provider} />}
-        {store?.message && <div style={{ fontSize: 11, color: "var(--color-text-secondary)" }}>{store.message}</div>}
-      </Section>
-
-      <Section title="target secret">
-        {e.targetSecret ? (
-          <div style={{ display: "flex", gap: 8, alignItems: "baseline", fontSize: 11 }}>
-            <span style={{ color: "var(--color-text-tertiary)", width: 72, flexShrink: 0 }}>name</span>
-            <button
-              onClick={() => {
-                const nav = useFleet.getState();
-                nav.openResource(SECRET_REF);
-                nav.openInstance(e.namespace, e.targetSecret);
               }}
-              title={`open Secret ${e.namespace}/${e.targetSecret}`}
-              style={{ background: "transparent", border: "none", padding: 0, cursor: "pointer", textAlign: "left", color: "var(--color-text-info)", fontFamily: "var(--font-mono)", fontSize: 11, overflowWrap: "anywhere", textDecoration: "underline", textDecorationColor: "var(--color-border-secondary)", textUnderlineOffset: 2 }}
-            >{e.targetSecret}</button>
-          </div>
-        ) : (
-          <Field label="name" value="—" />
-        )}
-      </Section>
-
-      <Section title="refresh">
-        <Field label="interval" value={e.refreshIntervalSeconds > 0 ? fmtDuration(e.refreshIntervalSeconds) : "disabled"} />
-        <Field
-          label="last refresh"
-          value={e.lastRefreshAgeSeconds > 0 ? `${fmtDuration(e.lastRefreshAgeSeconds)} ago` : "never synced"}
-          tone={e.stale ? "warning" : e.lastRefreshAgeSeconds > 0 ? "muted" : "danger"}
+            />
+          ) : (
+            <VirtualList
+              ref={listRef}
+              items={visibleSecrets}
+              rowHeight={TABLE_ROW_HEIGHT}
+              rowKey={(e) => keyOf(e)}
+              style={{ flex: 1, minHeight: 0 }}
+              render={(e) => {
+                const k = keyOf(e);
+                const role = secretHealth(e);
+                const storeCov = kindCov(e.storeKind);
+                const st = storeCov !== "unknown" ? resolveStore(e, stores) : undefined;
+                return (
+                  <div key={k} role="button" tabIndex={0} className="lens-row" style={gridStyle}
+                    aria-selected={k === cursorKey} data-cursor={k === cursorKey ? "true" : undefined} data-selected={k === selKey ? "true" : undefined}
+                    onClick={() => { setCursorKey(k); autoSelect.current = "done"; selectSecret(k === selKey ? null : k); }}
+                    onKeyDown={(ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); selectSecret(k); } }}>
+                    {show("lamp") && <Lamp role={role} />}
+                    {show("name") && (
+                      <span style={{ display: "flex", alignItems: "center", gap: 4, minWidth: 0 }}>
+                        <span className="lens-cell-name" title={k}><span style={{ color: "var(--color-text-tertiary)" }}>{e.namespace} / </span><span style={{ fontWeight: k === selKey ? 600 : 400 }}>{e.name}</span></span>
+                        <CopyButton text={e.name} label={`copy external secret name ${e.name}`} appearOnRowHover />
+                      </span>
+                    )}
+                    {show("status") && <span style={{ ...cellStyle, color: ROLE_TEXT[role.kind], fontWeight: role.kind === "fault" ? 600 : 400 }}>{role.kind === "fault" ? "▲ " : ""}{role.label}{e.state === "Failed" && e.reason ? ` · ${e.reason}` : ""}</span>}
+                    {show("refreshed") && <span style={{ color: e.stale ? "var(--color-text-warning)" : "var(--color-text-secondary)" }}>{refreshedText(e)}</span>}
+                    {show("store") && <span style={{ ...cellStyle, color: storeCov !== "unknown" && (!st || st.state !== "Synced") ? "var(--color-text-warning)" : "var(--color-text-secondary)" }}>{e.storeName}</span>}
+                    {show("target") && <span style={{ ...cellStyle, color: "var(--color-text-secondary)" }}>{e.targetSecret || "-"}</span>}
+                  </div>
+                );
+              }}
+            />
+          )}
+        </LensTable>
+      }
+      footer={<span className="t-legend">j k navigate · ↵ inspect · / search</span>}
+      footerEnd={<span className="t-secondary">{shown} of {total}{partial} {noun}{view === "secrets" ? " · broken first, then staleness" : ""}</span>}
+      inspector={view === "secrets" && selKey && (selectedSecret || secretRemoved) && lastSecret.current ? (
+        <SecretInspector
+          key={`${cluster}/${selKey}`}
+          e={selectedSecret ?? lastSecret.current}
+          removed={secretRemoved}
+          store={kindCov((selectedSecret ?? lastSecret.current).storeKind) !== "unknown" ? resolveStore(selectedSecret ?? lastSecret.current, stores) : undefined}
+          storeCov={kindCov((selectedSecret ?? lastSecret.current).storeKind)}
+          onClose={() => { autoSelect.current = "done"; selectSecret(null); }}
+          onOpenStore={(s) => { setView("stores"); setStatus("all"); setStoreSel(storeKey(s)); setCursorKey(storeKey(s)); }}
         />
-      </Section>
+      ) : view === "stores" && storeSel && (selectedStore || storeRemoved) && lastStore.current ? (
+        <StoreInspector
+          key={`${cluster}/${storeSel}`}
+          store={selectedStore ?? lastStore.current}
+          removed={storeRemoved}
+          secrets={secretsFor(selectedStore ?? lastStore.current)}
+          secretsCov={secretsCov}
+          onClose={() => setStoreSel(null)}
+          onOpenSecret={(e) => { setView("secrets"); setStatus("all"); setNamespace(""); setQuery(""); setCursorKey(keyOf(e)); autoSelect.current = "done"; selectSecret(keyOf(e)); }}
+        />
+      ) : undefined}
+      inspectorLabel={view === "stores" ? "Secret store details" : "ExternalSecret details"}
+      onCloseInspector={closeSelected}
+    />
+  );
+}
 
-      {e.message && (
-        <Section title="message">
-          <div style={{ fontSize: 11, color: "var(--color-text-secondary)" }}>{e.message}</div>
-        </Section>
-      )}
+function RemovedNotice({ kind }: { kind: string }) {
+  return (
+    <div role="status" className="t-body" style={{ padding: "8px 10px", borderRadius: 4, background: "var(--color-background-secondary)", boxShadow: "inset 0 0 0 1px var(--color-border-secondary)" }}>
+      <span className="t-status">{kind} removed.</span> It is no longer in the current read. The details below are its last evidence; actions are disabled.
     </div>
   );
 }
 
-function failureHint(e: ExternalSecretDTO, store: ExternalSecretStoreDTO | undefined): string {
-  if (store && store.state !== "Synced") return `${store.kind}/${store.name} is not ready${store.reason ? `: ${store.reason}` : ""}.`;
-  if (!store) return `${e.storeKind}/${e.storeName} was not found in the watched store list.`;
+function SecretInspector({ e, removed, store, storeCov, onClose, onOpenStore }: {
+  e: ExternalSecretDTO;
+  removed: boolean;
+  store: ExternalSecretStoreDTO | undefined;
+  storeCov: JoinCoverage;
+  onClose: () => void;
+  onOpenStore: (s: ExternalSecretStoreDTO) => void;
+}) {
+  // store surfaces derive from storeHealth: only CONFIRMED adverse store
+  // health is a diagnosed root cause; Unknown is unverified evidence
+  const storeRole = store ? storeHealth(store) : null;
+  const storeBroken = !!storeRole && (storeRole.kind === "fault" || storeRole.kind === "degraded");
+  const cause = causeOf(e, store, storeRole, storeCov);
+  const role = secretHealth(e);
+  const live = !removed;
+  const manifestRef = wellKnownResourceRef("external-secrets.io", "ExternalSecret");
+  const more: MenuItem[] = manifestRef ? [{ label: "View manifest in Resources", onSelect: () => { const nav = useFleet.getState(); nav.openResource(manifestRef); nav.openInstance(e.namespace, e.name); } }] : [];
+  return (
+    <div data-testid="eso-secret-panel" style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
+      <InspectorLayout
+        kind="ExternalSecret"
+        namespace={e.namespace}
+        name={e.name}
+        meta={[`store ${e.storeKind}/${e.storeName}`, e.targetSecret ? `→ Secret ${e.targetSecret}` : ""].filter(Boolean).join(" · ")}
+        onClose={onClose}
+        verdict={removed ? <RemovedNotice kind="ExternalSecret" /> : (
+          <div>
+            <InspectorStatus tone={roleTone(role.kind)} label={role.label} reason={e.state === "Failed" ? e.reason || undefined : e.stale ? "refresh stopped - last sync ok" : undefined} />
+            {e.message && e.state !== "Synced" && <div className="t-body" style={{ color: ROLE_TEXT[role.kind], overflowWrap: "anywhere", marginTop: -4 }}>{e.message}</div>}
+            {e.stale && <div className="t-body" style={{ color: "var(--color-text-warning)", overflowWrap: "anywhere", marginTop: -4 }}>{staleTitle(e)}</div>}
+          </div>
+        )}
+        primary={live && e.targetSecret ? { label: "Open target Secret", onSelect: () => { const nav = useFleet.getState(); nav.openResource(SECRET_REF); nav.openInstance(e.namespace, e.targetSecret); } } : undefined}
+        more={more}
+      >
+        {storeBroken && (
+          <div className="t-body" style={{ padding: "8px 10px", borderRadius: 4, background: storeRole!.kind === "fault" ? "var(--color-background-danger)" : "var(--color-background-warning)", boxShadow: `inset 0 0 0 1px ${storeRole!.kind === "fault" ? "var(--color-border-danger)" : "var(--color-border-warning)"}` }}>
+            <div style={{ color: ROLE_TEXT[storeRole!.kind], fontWeight: 600 }}>{storeRole!.kind === "fault" ? "Store failed" : "Store not ready"}{storeCov === "stale" ? " (last observed - the store watch is failing)" : ""}: {store!.reason || "unknown"}</div>
+            <button onClick={() => onOpenStore(store!)} className="t-identifier" style={{ background: "none", border: 0, padding: 0, cursor: "pointer", color: "var(--color-text-info)", marginTop: 2 }}>{store!.kind}/{store!.name}</button>
+            {store!.message && <div style={{ color: "var(--color-text-secondary)", marginTop: 3, overflowWrap: "anywhere" }}>{store!.message}</div>}
+          </div>
+        )}
+        {cause && !storeBroken && (
+          <div className="t-body" style={{ padding: "8px 10px", borderRadius: 4, background: "var(--color-background-secondary)", boxShadow: "inset 0 0 0 1px var(--color-border-warning)" }}>
+            <div style={{ color: "var(--color-text-warning)", fontWeight: 600 }}>Likely cause</div>
+            <div style={{ color: "var(--color-text-secondary)", marginTop: 3, overflowWrap: "anywhere" }}>{cause}</div>
+          </div>
+        )}
+        <InspectorBlock title="Store">
+          <div className="insp-kv">
+            <span>ref</span><span className="t-identifier">{e.storeKind}/{e.storeName}</span>
+            <span>health</span>
+            <span style={{ color: storeRole ? ROLE_TEXT[storeRole.kind] : "var(--color-text-tertiary)" }}>
+              {store
+                ? `${storeRole!.label}${storeRole!.kind === "unknown" ? " (unverified)" : ""}${storeCov === "stale" ? " (last observed)" : ""}`
+                : storeCov === "unknown" ? `unverified (${e.storeKind} read unavailable)` : storeCov === "stale" ? `not found in the last observed ${e.storeKind} list` : `not found in the watched ${e.storeKind} list`}
+            </span>
+            {store?.provider && <><span>provider</span><span>{store.provider}</span></>}
+          </div>
+        </InspectorBlock>
+        <InspectorBlock title="Refresh">
+          <div className="insp-kv">
+            <span>interval</span><span>{e.refreshIntervalSeconds > 0 ? fmtDuration(e.refreshIntervalSeconds) : "disabled"}</span>
+            <span>last sync</span>
+            <span style={{ color: e.stale ? "var(--color-text-warning)" : e.lastRefreshAgeSeconds > 0 ? undefined : "var(--color-text-danger)" }}>
+              {e.lastRefreshAgeSeconds > 0 ? `${fmtDuration(e.lastRefreshAgeSeconds)} ago` : "never synced"}
+            </span>
+          </div>
+        </InspectorBlock>
+        {e.message && e.state === "Synced" && (
+          <InspectorBlock title="Message" defaultOpen={false}>
+            <div className="t-body" style={{ color: "var(--color-text-secondary)", overflowWrap: "anywhere" }}>{e.message}</div>
+          </InspectorBlock>
+        )}
+      </InspectorLayout>
+    </div>
+  );
+}
+
+function StoreInspector({ store, removed, secrets, secretsCov, onClose, onOpenSecret }: { store: ExternalSecretStoreDTO; removed: boolean; secrets: ExternalSecretDTO[]; secretsCov: JoinCoverage; onClose: () => void; onOpenSecret: (e: ExternalSecretDTO) => void }) {
+  const role = storeHealth(store);
+  const ref = wellKnownResourceRef("external-secrets.io", store.kind);
+  const view = ref ? () => { const nav = useFleet.getState(); nav.openResource(ref); nav.openInstance(store.kind === "ClusterSecretStore" ? "" : store.namespace, store.name); } : null;
+  const blocked = secrets.filter(needsAttention);
+  return (
+    <div data-testid="eso-store-panel" style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
+      <InspectorLayout
+        kind={store.kind}
+        namespace={store.namespace || undefined}
+        name={store.name}
+        meta={[store.provider ? `provider ${store.provider}` : "", store.kind === "ClusterSecretStore" ? "cluster-scoped - any namespace may use it" : `namespaced - serves ExternalSecrets in ${store.namespace}`].filter(Boolean).join(" · ")}
+        onClose={onClose}
+        verdict={removed ? <RemovedNotice kind={store.kind} /> : (
+          <div>
+            <InspectorStatus tone={roleTone(role.kind)} label={role.label} reason={store.state !== "Synced" ? store.reason || undefined : undefined} />
+            {store.message && store.state !== "Synced" && <div className="t-body" style={{ color: ROLE_TEXT[role.kind], overflowWrap: "anywhere", marginTop: -4 }}>{store.message}</div>}
+          </div>
+        )}
+        primary={view ? { label: "View manifest in Resources", onSelect: view } : undefined}
+      >
+        <InspectorBlock title="ExternalSecrets using it" count={secretsCov === "unknown" ? undefined : secrets.length} extra={blocked.length > 0 ? <span className="t-secondary" style={{ color: "var(--color-text-warning)" }}>{blocked.length} not synced or stale</span> : undefined}>
+          {secretsCov === "stale" && <span className="t-secondary">From the last observed ExternalSecret list; the watch is currently failing.</span>}
+          {secretsCov === "unknown" ? <span className="t-secondary">ExternalSecret read unavailable - usage unverified, not zero.</span>
+            : secrets.length === 0 ? <span className="t-secondary">No ExternalSecret references this store.</span> : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+              {[...blocked, ...secrets.filter((x) => !blocked.includes(x))].map((x) => (
+                <button key={keyOf(x)} onClick={() => onOpenSecret(x)} className="t-identifier"
+                  style={{ display: "flex", gap: 8, alignItems: "center", background: "none", border: 0, padding: "2px 0", cursor: "pointer", textAlign: "left", color: "var(--color-text-info)" }}>
+                  <VerdictLamp health={secretHealth(x)} size={7} />
+                  <span style={{ overflowWrap: "anywhere" }}>{x.namespace}/{x.name}</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </InspectorBlock>
+        {store.message && store.state === "Synced" && (
+          <InspectorBlock title="Message" defaultOpen={false}>
+            <div className="t-body" style={{ color: "var(--color-text-secondary)", overflowWrap: "anywhere" }}>{store.message}</div>
+          </InspectorBlock>
+        )}
+      </InspectorLayout>
+    </div>
+  );
+}
+
+// causeOf: the "likely cause" text. Only CONFIRMED evidence may be a cause -
+// a broken store is the headline card (no duplicate cause); an Unknown store
+// is unverified evidence (no store-derived cause); a missing store is a cause
+// only with that kind's coverage. The secret's own failure and ESO-native
+// staleness still give a cause.
+function causeOf(e: ExternalSecretDTO, store: ExternalSecretStoreDTO | undefined, role: { kind: string } | null, cov: JoinCoverage): string {
+  if (role && (role.kind === "fault" || role.kind === "degraded")) return "";
+  if (!store && cov !== "unknown") return `${e.storeKind}/${e.storeName} was not found in the ${cov === "stale" ? "last observed" : "watched"} ${e.storeKind} list.`;
   if (e.state === "Failed") return `The last sync attempt failed${e.reason ? `: ${e.reason}` : ""}.`;
   if (e.stale) return `The controller has stopped refreshing: last successful sync was ${fmtDuration(e.lastRefreshAgeSeconds)} ago against a ${fmtDuration(e.refreshIntervalSeconds)} refresh interval.`;
   if (e.lastRefreshAgeSeconds === 0 && e.state !== "Synced") return "This secret has never synced successfully.";
   return "";
 }
 
-// EsoBadge is deliberately NOT the Badge primitive: it is a mono 10px chip on
-// a neutral border/surface with only the text toned — none of Badge's variants
-// (toned border, toned bg) renders that. It does share the primitive tone map.
-function EsoBadge({ children, tone }: { children: React.ReactNode; tone: "success" | "info" | "warning" | "danger" | "muted" }) {
-  return <span style={{ ...mono, fontSize: 10, border: "0.5px solid var(--color-border-tertiary)", borderRadius: 4, padding: "1px 6px", background: "var(--color-background-secondary)", color: toneColor[tone] }}>{children}</span>;
-}
-
-function StoresPanel({ stores }: { stores: ExternalSecretStoreDTO[] }) {
-  if (stores.length === 0) {
-    return <div style={{ color: "var(--color-text-secondary)", fontSize: 13 }}>No secret stores found.</div>;
-  }
-  return (
-    <div style={{ ...frame, overflow: "hidden", minHeight: 0, flex: 1, display: "flex", flexDirection: "column" }}>
-      <div data-testid="store-scroll" style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
-        {stores.map((s) => (
-          <div key={`${s.kind}/${s.namespace}/${s.name}`} style={{ display: "grid", gridTemplateColumns: "3px minmax(180px,1.4fr) 130px 110px minmax(120px,1fr)", gap: 10, alignItems: "center", padding: "7px 12px", borderBottom: "0.5px solid var(--color-border-tertiary)" }}>
-            <span style={{ alignSelf: "stretch", background: s.state === "Failed" ? "var(--color-text-danger)" : s.state !== "Synced" ? "var(--color-text-warning)" : "transparent" }} />
-            <span style={{ ...mono, ...ellipsis, fontSize: 12 }} title={`${s.kind}/${s.namespace}/${s.name}`}>
-              {s.namespace && <span style={{ color: "var(--color-text-tertiary)" }}>{s.namespace}/</span>}{s.name}
-            </span>
-            <span style={{ fontSize: 10, color: "var(--color-text-tertiary)" }}>{s.kind}</span>
-            <span style={{ ...mono, ...ellipsis, fontSize: 11, color: "var(--color-text-secondary)" }} title={s.provider}>{s.provider || "—"}</span>
-            <span style={{ display: "flex", alignItems: "center", gap: 5 }}>
-              <StatusDot size={6} color={readyColor[s.state] ?? readyColor.Unknown} />
-              <span style={{ ...ellipsis, fontSize: 11, color: s.state === "Failed" ? "var(--color-text-danger)" : "var(--color-text-secondary)" }} title={s.message}>{s.state !== "Synced" && s.reason ? s.reason : s.state.toLowerCase()}</span>
-            </span>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function EmptyInspector({ attention }: { attention: number }) {
-  return (
-    <div style={{ ...well, padding: 18, color: "var(--color-text-secondary)", fontSize: 12, height: "100%", boxSizing: "border-box" }}>
-      {attention > 0 ? "Select an external secret to inspect its store and refresh state." : "All external secrets are synced. Select one to inspect it."}
-    </div>
-  );
-}

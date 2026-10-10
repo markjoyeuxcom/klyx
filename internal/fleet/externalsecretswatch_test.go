@@ -2,6 +2,8 @@ package fleet
 
 import (
 	"context"
+	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -10,6 +12,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/moomora/klyx/internal/capability"
 	"github.com/moomora/klyx/internal/clock"
@@ -176,4 +179,50 @@ func TestOpenCloseExternalSecretsInterleaved(t *testing.T) {
 	c.OpenExternalSecrets()
 	defer c.CloseExternalSecrets()
 	waitFor(t, 2*time.Second, func() bool { return len(c.ExternalSecretsList()) == 1 })
+}
+
+// Coverage is per kind: ExternalSecrets syncing must not vouch for a
+// forbidden ClusterSecretStore watch, and its recovery clears the error.
+func TestExternalSecretsCoverageIsPerKindAndRecovers(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	typed := fake.NewSimpleClientset()
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), externalSecretsGVRToListKinds(),
+		externalSecretUnstructured("stripe", "payments", "True", "SecretSynced"),
+		clusterSecretStoreUnstructured("azure-kv", "True"))
+	var forbid atomic.Bool
+	forbid.Store(true)
+	dyn.PrependReactor("list", "clustersecretstores", func(k8stesting.Action) (bool, runtime.Object, error) {
+		if forbid.Load() {
+			return true, nil, errors.New("clustersecretstores.external-secrets.io is forbidden")
+		}
+		return false, nil, nil
+	})
+
+	c := NewClusterConn("x", typed, nil, dyn, capability.NewDetector(typed), clock.Real{}, config.MetricsConfig{})
+	c.ctx = ctx
+	c.OpenExternalSecrets()
+	defer c.CloseExternalSecrets()
+
+	cov := func(kind string) KindCoverage {
+		for _, k := range c.ExternalSecretsCoverage() {
+			if k.Kind == kind {
+				return k
+			}
+		}
+		return KindCoverage{}
+	}
+	waitFor(t, 3*time.Second, func() bool { return cov("ExternalSecret").Synced && cov("ClusterSecretStore").Error != "" })
+	if cs := cov("ClusterSecretStore"); cs.Synced || !cs.Served {
+		t.Fatalf("forbidden ClusterSecretStore must be served but unsynced: %+v", cs)
+	}
+	if synced, err := c.ExternalSecretsWatchHealth(); synced || err == "" {
+		t.Fatalf("aggregate health: %v %q", synced, err)
+	}
+	forbid.Store(false)
+	waitFor(t, 5*time.Second, func() bool { cs := cov("ClusterSecretStore"); return cs.Synced && cs.Error == "" })
+	if synced, err := c.ExternalSecretsWatchHealth(); !synced || err != "" {
+		t.Fatalf("recovered: %v %q", synced, err)
+	}
 }

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/moomora/klyx/internal/externalsecrets"
+	"github.com/moomora/klyx/internal/fleet"
 )
 
 // ExternalSecretsConn is the per-cluster surface ExternalSecretsService needs:
@@ -19,6 +20,9 @@ type ExternalSecretsConn interface {
 	// ExternalSecretsWatchHealth reports informer sync + the last watch error,
 	// so a failing watch renders as an error instead of an empty list.
 	ExternalSecretsWatchHealth() (synced bool, lastErr string)
+	// ExternalSecretsCoverage reports evidence per kind (ExternalSecret,
+	// SecretStore, ClusterSecretStore): served / synced / current error.
+	ExternalSecretsCoverage() []fleet.KindCoverage
 }
 
 // ExternalSecretsUpdatedEvent is emitted with { cluster, secrets, stores }.
@@ -31,6 +35,9 @@ type esoPayload struct {
 	// WatchError is set while the watch has not synced AND has recorded an
 	// error - the view must show the failure, not an empty list.
 	WatchError string `json:"watchError,omitempty"`
+	// Coverage is per kind: a synced ExternalSecret list never vouches for a
+	// pending or forbidden (Cluster)SecretStore watch, or the reverse.
+	Coverage []KindCoverageDTO `json:"coverage"`
 }
 
 // ExternalSecretsService is bound to JS. Open starts a cluster's lazy ESO
@@ -100,6 +107,7 @@ type esoDomainSnap struct {
 	secrets  []externalsecrets.ExternalSecret
 	stores   []externalsecrets.Store
 	watchErr string
+	coverage []fleet.KindCoverage
 }
 
 func (s *ExternalSecretsService) pushLoop(ctx context.Context, cluster string, conn ExternalSecretsConn) {
@@ -113,11 +121,10 @@ func (s *ExternalSecretsService) pushLoop(ctx context.Context, cluster string, c
 			return
 		case <-t.C:
 			now := s.now()
-			watchErr := ""
-			if synced, lastErr := conn.ExternalSecretsWatchHealth(); !synced && lastErr != "" {
-				watchErr = lastErr
-			}
-			snap := esoDomainSnap{secrets: conn.ExternalSecretsList(), stores: conn.ExternalSecretsStores(), watchErr: watchErr}
+			// every CURRENT failure, synced or not (after-sync failures used to
+			// be suppressed, so stale rows read as current)
+			_, watchErr := conn.ExternalSecretsWatchHealth()
+			snap := esoDomainSnap{secrets: conn.ExternalSecretsList(), stores: conn.ExternalSecretsStores(), watchErr: watchErr, coverage: conn.ExternalSecretsCoverage()}
 			if last != nil && now.Sub(lastEmit) < pushHeartbeat && reflect.DeepEqual(*last, snap) {
 				continue
 			}
@@ -137,5 +144,9 @@ func (s *ExternalSecretsService) buildPayload(cluster string, snap esoDomainSnap
 	for _, st := range snap.stores {
 		storeDTOs = append(storeDTOs, toStoreDTO(st))
 	}
-	return esoPayload{Cluster: cluster, Secrets: secretDTOs, Stores: storeDTOs, WatchError: snap.watchErr}
+	cov := make([]KindCoverageDTO, 0, len(snap.coverage))
+	for _, k := range snap.coverage {
+		cov = append(cov, KindCoverageDTO{Kind: k.Kind, Served: k.Served, Synced: k.Synced, Error: k.Error})
+	}
+	return esoPayload{Cluster: cluster, Secrets: secretDTOs, Stores: storeDTOs, WatchError: snap.watchErr, Coverage: cov}
 }

@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/moomora/klyx/internal/externalsecrets"
+	"github.com/moomora/klyx/internal/fleet"
 )
 
 type fakeExternalSecretsConn struct {
@@ -20,6 +21,7 @@ func (f *fakeExternalSecretsConn) ExternalSecretsList() []externalsecrets.Extern
 }
 func (f *fakeExternalSecretsConn) ExternalSecretsStores() []externalsecrets.Store { return f.stores }
 func (f *fakeExternalSecretsConn) ExternalSecretsWatchHealth() (bool, string)     { return true, "" }
+func (f *fakeExternalSecretsConn) ExternalSecretsCoverage() []fleet.KindCoverage  { return nil }
 
 func TestToExternalSecretDTOComputesRefreshAge(t *testing.T) {
 	now := time.Date(2026, 7, 3, 0, 0, 0, 0, time.UTC)
@@ -99,5 +101,16 @@ func TestExternalSecretsServiceOpenEmitsAndCloses(t *testing.T) {
 	svc.Close("nelli")
 	if conn.closed == 0 {
 		t.Fatal("expected CloseExternalSecrets to be called")
+	}
+}
+
+func TestExternalSecretsPayloadCarriesPerKindCoverage(t *testing.T) {
+	s := &ExternalSecretsService{}
+	p := s.buildPayload("c", esoDomainSnap{
+		watchErr: "ClusterSecretStore watch failing (showing last-known state): forbidden",
+		coverage: []fleet.KindCoverage{{Kind: "ClusterSecretStore", Served: true, Synced: true, Error: "forbidden"}, {Kind: "ExternalSecret", Served: true, Synced: true}},
+	}, time.Now())
+	if p.WatchError == "" || len(p.Coverage) != 2 || p.Coverage[0].Error != "forbidden" {
+		t.Fatalf("payload coverage: %+v", p)
 	}
 }
