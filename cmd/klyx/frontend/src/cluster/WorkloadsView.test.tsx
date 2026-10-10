@@ -12,6 +12,7 @@ vi.mock("../bridge/workloads", () => ({
   rolloutUndo: vi.fn().mockResolvedValue(undefined),
   rolloutPause: vi.fn().mockResolvedValue(undefined),
   scaleWorkload: vi.fn().mockResolvedValue(undefined),
+  workloadCompare: vi.fn(() => new Promise(() => {})), // never settles: only the dialog's presence matters
 }));
 vi.mock("../bridge/workload-metrics", () => ({ getWorkloadMetrics: vi.fn().mockResolvedValue(undefined) }));
 vi.mock("../bridge/windows", () => ({ openWorkloadLogsWindow: vi.fn().mockResolvedValue(true) }));
@@ -38,6 +39,7 @@ vi.mock("./LogsPane", () => ({
 }));
 import { rolloutRestart, rolloutHistory, rolloutUndo, rolloutPause, scaleWorkload, openLiveWorkloads } from "../bridge/workloads";
 import { openWorkloadLogsWindow } from "../bridge/windows";
+import { deletePod } from "../bridge/pods";
 
 const noResources = { cpu: { usage: null, request: null, limit: null }, mem: { usage: null, request: null, limit: null } };
 const broken: WorkloadDTO = { kind: "Deployment", namespace: "ollama-prod", name: "ollama", desired: 1, ready: 0, available: 0, updated: 1, restarts: 7, reason: "CrashLoopBackOff", rank: "unhealthy", gitops: { kind: "Kustomization", namespace: "flux-system", name: "ollama" }, pods: [{ name: "ollama-x", ready: false, restarts: 7, reason: "CrashLoopBackOff", node: "node-3", ageSeconds: 720 }], resources: noResources, health: { kind: "fault", label: "CrashLoopBackOff", reason: "CrashLoopBackOff", rule: "workload.pod-failure", rank: 70 } };
@@ -582,7 +584,7 @@ describe("WorkloadsView workspace template (redesign)", () => {
     act(() => seed([healthy]));
     expect(getByText("Workload removed.")).toBeTruthy();
     expect(queryByRole("button", { name: "Restart" })).toBeNull();
-    expect(queryByRole("button", { name: /^More/ })).toBeNull();
+    expect(queryByRole("menuitem", { name: /Scale/ })).toBeNull();
     expect(rolloutRestart).not.toHaveBeenCalled();
   });
 
@@ -625,5 +627,86 @@ describe("WorkloadsView pending verbs are pinned to their own target", () => {
     fireEvent.click(confirm[confirm.length - 1]);
     expect(rolloutRestart).toHaveBeenCalledTimes(1);
     expect(rolloutRestart).toHaveBeenCalledWith("other", "Deployment", "ollama-prod", "ollama");
+  });
+});
+
+describe("WorkloadsView Codex review corrections", () => {
+  beforeEach(() => { localStorage.clear(); useFleet.getState().clearWorkloads(); useFleet.setState({ navIntent: null, clusters: [] }); vi.clearAllMocks(); });
+  const switchTo = (rerender: (ui: React.ReactElement) => void, c: string, items: WorkloadDTO[]) => {
+    rerender(<WorkloadsView cluster={c} />);
+    act(() => useFleet.setState((s) => ({ workloads: { ...s.workloads, cluster: c, items, loading: false, rowsScope: `${c}|` } })));
+  };
+
+  it("the logs dock belongs to its origin cluster: a switch to a same-name workload closes it", () => {
+    seed([broken]);
+    const { getByRole, queryByTestId, rerender } = render(<WorkloadsView cluster="homelab-nelli" />);
+    fireEvent.click(getByRole("button", { name: /aggregate logs for ollama-prod\/ollama/i }));
+    expect(queryByTestId("workload-logs-dock")).toBeTruthy();
+    switchTo(rerender, "other", [broken]);
+    expect(queryByTestId("workload-logs-dock")).toBeNull();
+    switchTo(rerender, "homelab-nelli", [broken]); // and never resurrects
+    expect(queryByTestId("workload-logs-dock")).toBeNull();
+  });
+
+  it("pop-out targets the dock's own cluster", async () => {
+    seed([broken]);
+    const { getByRole, findByTestId } = render(<WorkloadsView cluster="homelab-nelli" />);
+    fireEvent.click(getByRole("button", { name: /aggregate logs for ollama-prod\/ollama/i }));
+    await findByTestId("workload-logs-dock");
+    fireEvent.click(getByRole("button", { name: /open logs in window/i }));
+    expect(openWorkloadLogsWindow).toHaveBeenCalledWith("homelab-nelli", "ollama-prod", "Deployment", "ollama", "");
+  });
+
+  it("fleet compare belongs to its origin cluster: a switch closes it", () => {
+    const c = (name: string): ClusterDTO => ({ name, state: "connected", reason: "", nodesReady: 1, nodesTotal: 1, pods: 1, version: "v1.30", gitopsTier: "Absent", gitopsReason: "", networkTier: "Absent", networkReason: "", env: "", region: "", provider: "", group: "", ageSeconds: 1 });
+    useFleet.setState({ clusters: [c("homelab-nelli"), c("other")] });
+    seed([broken]);
+    const { getByRole, queryByRole, rerender } = render(<WorkloadsView cluster="homelab-nelli" />);
+    select("ollama");
+    chooseMore("Compare across the fleet");
+    expect(getByRole("dialog", { name: "fleet compare" })).toBeTruthy();
+    switchTo(rerender, "other", [broken]);
+    expect(queryByRole("dialog", { name: "fleet compare" })).toBeNull();
+  });
+
+  it("pod deletion is a per-pod action and is cancelled when that pod leaves the evidence", () => {
+    const two: WorkloadDTO = { ...broken, pods: [broken.pods[0], { name: "ollama-y", ready: true, restarts: 0, reason: "", node: "node-1", ageSeconds: 60 }] };
+    seed([two]);
+    const { getByRole, queryByText, queryByRole } = render(<WorkloadsView cluster="homelab-nelli" />);
+    select("ollama");
+    fireEvent.click(getByRole("button", { name: /^More/ }));
+    expect(queryByRole("menuitem", { name: /Delete pod/ })).toBeNull(); // no controller-level guess
+    fireEvent.click(getByRole("button", { name: /^More/ }));
+    fireEvent.click(getByRole("button", { name: "delete pod ollama-x" }));
+    expect(queryByText(/ollama-x - matched by deployment ollama's selector/)).toBeTruthy();
+    // the chosen pod is replaced; the workload remains
+    act(() => seed([{ ...two, pods: [{ ...two.pods[1] }, { ...broken.pods[0], name: "ollama-z" }] }]));
+    expect(queryByText(/ollama-x - matched by/)).toBeNull();
+    expect(queryByRole("button", { name: "Delete" })).toBeNull();
+    expect(deletePod).not.toHaveBeenCalled();
+  });
+
+  it("a paused Deployment with running replicas is 'paused', never 'scaled to 0'", () => {
+    const paused: WorkloadDTO = { ...healthy, name: "held", desired: 2, ready: 2, available: 2, paused: true, health: { kind: "paused", label: "Paused", reason: "RolloutsPaused", rule: "workload.paused" } };
+    seed([paused]);
+    const { getByText, queryByText } = render(<WorkloadsView cluster="homelab-nelli" />);
+    expect(getByText(/1 paused/)).toBeTruthy();
+    expect(queryByText(/scaled to 0/)).toBeNull();
+  });
+
+  it("no Manifest tab that navigates away; View manifest stays available on removed evidence", () => {
+    seed([broken, healthy]);
+    const { queryByRole, getByRole, getByText } = render(<WorkloadsView cluster="homelab-nelli" />);
+    select("ollama");
+    expect(queryByRole("tab", { name: "Manifest" })).toBeNull();
+    fireEvent.click(getByRole("button", { name: /^More/ }));
+    expect(getByRole("menuitem", { name: "View manifest in Resources" })).toBeTruthy();
+    expect(queryByRole("menuitem", { name: /Edit manifest/ })).toBeNull();
+    fireEvent.click(getByRole("button", { name: /^More/ }));
+    act(() => seed([healthy]));
+    expect(getByText("Workload removed.")).toBeTruthy();
+    fireEvent.click(getByRole("button", { name: /^More/ }));
+    expect(getByRole("menuitem", { name: "View manifest in Resources" })).toBeTruthy();
+    expect(queryByRole("menuitem", { name: /Scale|Pause|Compare/ })).toBeNull();
   });
 });

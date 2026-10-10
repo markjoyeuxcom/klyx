@@ -40,9 +40,11 @@ export function InspectorLayout({
   primary?: InspectorAction;
   secondary?: InspectorAction;
   more?: MenuItem[];
-  tab: "overview" | "manifest";
-  onTab: (t: "overview" | "manifest") => void;
-  manifest: ReactNode;
+  // Omit onTab for a lens with no inline manifest: no tabs render, rather
+  // than a tab that navigates away and is never selected.
+  tab?: "overview" | "manifest";
+  onTab?: (t: "overview" | "manifest") => void;
+  manifest?: ReactNode;
   children: ReactNode;
 }) {
   return (
@@ -71,13 +73,15 @@ export function InspectorLayout({
               {more && more.length > 0 && <ActionMenu label="More" items={more} />}
             </div>
           )}
-          <div className="insp-tabs" role="tablist" aria-label="detail views">
-            <button role="tab" className="insp-tab" aria-selected={tab === "overview"} onClick={() => onTab("overview")}>Overview</button>
-            <button role="tab" className="insp-tab" aria-selected={tab === "manifest"} onClick={() => onTab("manifest")}>Manifest</button>
-          </div>
+          {onTab && (
+            <div className="insp-tabs" role="tablist" aria-label="detail views">
+              <button role="tab" className="insp-tab" aria-selected={tab !== "manifest"} onClick={() => onTab("overview")}>Overview</button>
+              <button role="tab" className="insp-tab" aria-selected={tab === "manifest"} onClick={() => onTab("manifest")}>Manifest</button>
+            </div>
+          )}
         </div>
-        <div className="insp-body" role="tabpanel">
-          {tab === "overview" ? children : manifest}
+        <div className="insp-body" role={onTab ? "tabpanel" : undefined}>
+          {tab === "manifest" ? manifest : children}
         </div>
       </div>
     </>

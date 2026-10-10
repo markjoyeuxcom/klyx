@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, useCallback, useRef } from "react";
-import { IconTerminal2, IconExternalLink, IconBox, IconX, IconAlertTriangle } from "@tabler/icons-react";
+import { IconTerminal2, IconExternalLink, IconBox, IconX, IconAlertTriangle, IconTrash } from "@tabler/icons-react";
 import { useFleet } from "../store/fleet";
 import type { WorkloadDTO, PodDTO, WorkloadKind, ResourceCellDTO, RolloutRevisionDTO } from "../store/fleet";
 import { listWorkloads, openLiveWorkloads, rolloutRestart, rolloutHistory, rolloutUndo, rolloutPause, scaleWorkload } from "../bridge/workloads";
@@ -114,13 +114,17 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
   const fleetSize = useFleet((s) => s.clusters.length);
   const [pinned, setPinned] = useState<PinnedPending | null>(null);
   const setPending = useCallback((p: Pending | null) => setPinned(p ? { ...p, cluster } : null), [cluster]);
-  const [compareTarget, setCompareTarget] = useState<WorkloadDTO | null>(null);
+  // Auxiliary surfaces carry their origin cluster and render only on it, so a
+  // cluster switch never queries A's object name against B.
+  const [compareTarget, setCompareTarget] = useState<{ cluster: string; w: WorkloadDTO } | null>(null);
   // Cursor and selection are stable keys (kind/namespace/name), never indexes:
   // live emits re-rank the rows.
   const [cursorKey, setCursorKey] = useState<string | null>(null);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [unknownOnly, setUnknownOnly] = useState(false);
-  const [logsTarget, setLogsTarget] = useState<{ namespace: string; name: string; kind: WorkloadKind } | null>(null);
+  const [logsPinned, setLogsPinned] = useState<{ cluster: string; namespace: string; name: string; kind: WorkloadKind } | null>(null);
+  const setLogsTarget = useCallback((t: { namespace: string; name: string; kind: WorkloadKind } | null) => setLogsPinned(t ? { ...t, cluster } : null), [cluster]);
+  const logsTarget = logsPinned && logsPinned.cluster === cluster ? logsPinned : null;
   const [bodyWidth, setBodyWidth] = useState(1100);
   const searchRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<VirtualListHandle>(null);
@@ -224,6 +228,8 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
     itemsAtEntry.current = useFleet.getState().workloads.items;
     setSelectedKey(null);
     setCursorKey(null);
+    setLogsPinned(null);
+    setCompareTarget(null);
   }, [cluster]);
   const freshRead = !wl.loading && !wl.error && wl.items !== itemsAtEntry.current;
   useEffect(() => {
@@ -248,10 +254,15 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
     if (!selInScope) { setSelectedKey(null); return; }
     if (selected && !rows.includes(selected)) setSelectedKey(null);
   }, [rows, selected, selectedKey, selInScope, coverage]);
-  const targetLive = (p: PinnedPending) =>
-    p.cluster === cluster &&
-    (wl.namespace === "" || wl.namespace === p.w.namespace) &&
-    (coverage !== "complete" || scopedItems.some((w) => keyOf(w) === keyOf(p.w)));
+  const targetLive = (p: PinnedPending) => {
+    if (p.cluster !== cluster || (wl.namespace !== "" && wl.namespace !== p.w.namespace)) return false;
+    if (coverage !== "complete") return true;
+    const cur = scopedItems.find((w) => keyOf(w) === keyOf(p.w));
+    if (!cur) return false;
+    // A pod deletion targets that exact pod: gone from the current evidence
+    // means cancelled, never retargeted to a replacement.
+    return p.kind !== "delete-pod" || cur.pods.some((x) => x.name === p.pod.name);
+  };
   const pending = pinned && targetLive(pinned) ? pinned : null;
   useEffect(() => { if (pinned && !pending) setPinned(null); }, [pinned, pending]);
 
@@ -307,7 +318,7 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
                 </span>
               ) : <span className="t-secondary">{counts.unknown > 0 || coverage !== "complete" ? "no known attention" : "none need attention"}</span>}
               <span className="t-secondary">
-                {[counts.fault ? `${counts.fault} fault` : "", counts.degraded ? `${counts.degraded} degraded` : "", counts.unknown ? `${counts.unknown} unverified` : "", counts.progressing ? `${counts.progressing} rolling out` : "", counts.paused ? `${counts.paused} scaled to 0` : ""].filter(Boolean).join(" · ")}
+                {[counts.fault ? `${counts.fault} fault` : "", counts.degraded ? `${counts.degraded} degraded` : "", counts.unknown ? `${counts.unknown} unverified` : "", counts.progressing ? `${counts.progressing} rolling out` : "", counts.paused ? `${counts.paused} paused` : ""].filter(Boolean).join(" · ")}
               </span>
             </>
           )}
@@ -463,7 +474,7 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
                 useFleet.getState().setSection("gitops");
                 useFleet.getState().requestNavIntent({ kind: "select-flux", cluster, fluxKind: w.gitops.kind, namespace: w.gitops.namespace, name: w.gitops.name });
               }}
-              onCompare={fleetSize > 1 ? (w) => setCompareTarget(w) : undefined}
+              onCompare={fleetSize > 1 ? (w) => setCompareTarget({ cluster, w }) : undefined}
               onUndo={(w, rev) => setPending({ kind: "undo", w, rev })}
               onPause={(w, pause) => setPending({ kind: "pause", w, pause })}
             />
@@ -473,17 +484,17 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
         />
       </div>
 
-      {compareTarget && (
-        <FleetCompare origin={cluster} kind={compareTarget.kind} namespace={compareTarget.namespace} name={compareTarget.name} onClose={() => setCompareTarget(null)} />
+      {compareTarget && compareTarget.cluster === cluster && (
+        <FleetCompare origin={compareTarget.cluster} kind={compareTarget.w.kind} namespace={compareTarget.w.namespace} name={compareTarget.w.name} onClose={() => setCompareTarget(null)} />
       )}
 
       {logsTarget && (
         <WorkloadLogsDock
-          cluster={cluster}
+          cluster={logsTarget.cluster}
           target={logsTarget}
           onClose={() => setLogsTarget(null)}
           onPopOut={async (container) => {
-            const ok = await openWorkloadLogsWindow(cluster, logsTarget.namespace, logsTarget.kind, logsTarget.name, container);
+            const ok = await openWorkloadLogsWindow(logsTarget.cluster, logsTarget.namespace, logsTarget.kind, logsTarget.name, container);
             if (ok) setLogsTarget(null);
           }}
         />
@@ -541,8 +552,8 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
       {pending?.kind === "delete-pod" && (
         <ConfirmDialog
           title="delete pod"
-          cluster={cluster}
-          detail={`pod ${pending.w.namespace}/${pending.pod.name}`}
+          cluster={pending.cluster}
+          detail={`pod ${pending.w.namespace}/${pending.pod.name} - matched by ${pending.w.kind.toLowerCase()} ${pending.w.name}'s selector (a selector match, not proof of ownership)`}
           protected={isProtected}
           danger
           confirmLabel="Delete"
@@ -587,17 +598,18 @@ function WorkloadInspector({
   const live = !removed;
   // Selector-matched pods carry no verdict of their own: native facts only.
   const notReadyPods = w.pods.filter((p) => !p.ready).length;
-  const deleteTarget = w.pods.find((p) => !p.ready) ?? w.pods[0] ?? null;
   const scaling = pending?.kind === "scale-input" && keyOf(pending.w) === keyOf(w);
   const manifestRef = wellKnownResourceRef("apps", w.kind);
   const scalable = w.kind === "Deployment" || w.kind === "StatefulSet";
 
+  const viewManifest: MenuItem | null = manifestRef
+    ? { label: "View manifest in Resources", onSelect: () => { const nav = useFleet.getState(); nav.openResource(manifestRef); nav.openInstance(w.namespace, w.name); } }
+    : null;
   const more: MenuItem[] = [
     ...(scalable ? [{ label: `Scale (${w.desired} replicas)…`, onSelect: () => onScale(w) }] : []),
     ...(w.kind === "Deployment" ? [{ label: w.paused ? "Resume rollouts" : "Pause rollouts", onSelect: () => onPause(w, !w.paused), hint: w.paused ? "spec.paused=false" : "Hold rollouts without touching pods (spec.paused=true)" }] : []),
     ...(onCompare ? [{ label: "Compare across the fleet", onSelect: () => onCompare(w) }] : []),
-    ...(manifestRef ? [{ label: "Edit manifest in Resources", onSelect: () => { const nav = useFleet.getState(); nav.openResource(manifestRef); nav.openInstance(w.namespace, w.name); } }] : []),
-    ...(deleteTarget ? [{ kind: "separator" as const }, { label: `Delete pod ${deleteTarget.name}`, danger: true, onSelect: () => onDeletePod(w, deleteTarget) }] : []),
+    ...(viewManifest ? [viewManifest] : []),
   ];
 
   const ownerText = w.gitops ? `${w.gitops.kind} ${w.gitops.namespace}/${w.gitops.name}` : "";
@@ -625,10 +637,7 @@ function WorkloadInspector({
         ) : <VerdictStatus health={w.health} detail={`${w.ready}/${w.desired} ready · ${w.updated} updated · ${w.available} available${w.restarts ? ` · ${w.restarts} restarts` : ""}`} />}
         primary={live ? { label: "Logs", kbd: "l", onSelect: () => onLogs(w) } : undefined}
         secondary={live ? { label: "Restart", onSelect: () => onRestart(w) } : undefined}
-        more={live ? more : []}
-        tab="overview"
-        onTab={() => { const nav = useFleet.getState(); if (manifestRef) { nav.openResource(manifestRef); nav.openInstance(w.namespace, w.name); } }}
-        manifest={null}
+        more={live ? more : viewManifest ? [viewManifest] : []}
       >
         {live && scaling && (
           <InspectorBlock title="Scale">
@@ -641,11 +650,17 @@ function WorkloadInspector({
           {w.pods.length === 0 ? <span className="t-secondary">No pods match this workload's selector.</span> : (
             <div style={{ display: "flex", flexDirection: "column" }}>
               {w.pods.slice(0, 8).map((p) => (
-                <div key={p.name} className="t-identifier" style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) auto auto", gap: 10, padding: "3px 0", alignItems: "baseline" }}>
+                <div key={p.name} className="t-identifier" style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) auto auto auto", gap: 10, padding: "3px 0", alignItems: "baseline" }}>
                   <button onClick={() => live && onOpenPod(w, p)} aria-label={`open pod ${p.name}`} title="open in Pods"
                     style={{ minWidth: 0, background: "none", border: 0, padding: 0, textAlign: "left", cursor: "pointer", color: "var(--color-text-info)", font: "inherit", overflowWrap: "anywhere" }}>{p.name}</button>
                   <span style={{ color: "var(--color-text-secondary)" }}>{p.ready ? "ready" : p.reason || "not ready"}{p.restarts ? ` · ${p.restarts}×` : ""}</span>
                   <button onClick={() => onOpenNode(p.node)} title={`open node ${p.node}`} style={{ background: "none", border: 0, padding: 0, cursor: "pointer", color: "var(--color-text-tertiary)", font: "inherit" }}>{p.node || "-"}</button>
+                  {live ? (
+                    <button onClick={() => onDeletePod(w, p)} aria-label={`delete pod ${p.name}`} title={`delete pod ${p.name}`}
+                      style={{ background: "none", border: 0, padding: 0, cursor: "pointer", color: "var(--color-text-tertiary)", display: "inline-flex", alignSelf: "center" }}>
+                      <IconTrash size={13} stroke={1.6} />
+                    </button>
+                  ) : <span />}
                 </div>
               ))}
               {w.pods.length > 8 && <span className="t-secondary">+{w.pods.length - 8} more pods</span>}
