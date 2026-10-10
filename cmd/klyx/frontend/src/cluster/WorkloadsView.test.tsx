@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, fireEvent, act } from "@testing-library/react";
+import { render, fireEvent, act, screen } from "@testing-library/react";
 import { WorkloadsView } from "./WorkloadsView";
 import { useFleet } from "../store/fleet";
 import type { WorkloadDTO, ClusterDTO } from "../store/fleet";
@@ -49,8 +49,15 @@ function seed(items: WorkloadDTO[]) {
   useFleet.setState((s) => ({ workloads: { ...s.workloads, cluster: "homelab-nelli", items, namespaces: ["monitoring", "ollama-prod"], loading: false, rowsScope: "homelab-nelli|" } }));
 }
 
+// The row is the first match: once selected, the inspector repeats the name.
+function select(name: string) { fireEvent.click(screen.getAllByText(name)[0]); }
+function chooseMore(label: string | RegExp) {
+  fireEvent.click(screen.getByRole("button", { name: /^More/ }));
+  fireEvent.click(screen.getByRole("menuitem", { name: label }));
+}
+
 describe("WorkloadsView", () => {
-  beforeEach(() => useFleet.getState().clearWorkloads());
+  beforeEach(() => { localStorage.clear(); useFleet.getState().clearWorkloads(); });
 
   it("renders triage rows with reason, restarts, and gitops owner", () => {
     seed([broken, healthy]);
@@ -64,7 +71,7 @@ describe("WorkloadsView", () => {
     seed([broken]);
     const { getByText, queryByText } = render(<WorkloadsView cluster="homelab-nelli" />);
     expect(queryByText("ollama-x")).toBeNull();
-    fireEvent.click(getByText("ollama"));
+    select("ollama");
     expect(getByText("ollama-x")).toBeTruthy();
     expect(getByText("node-3")).toBeTruthy();
   });
@@ -78,7 +85,7 @@ describe("WorkloadsView", () => {
     });
     seed([broken]);
     const { getByText, findByText, queryByText } = render(<WorkloadsView cluster="homelab-nelli" />);
-    fireEvent.click(getByText("ollama"));
+    select("ollama");
     expect(await findByText("#3")).toBeTruthy();
     expect(getByText("current")).toBeTruthy();
     // The current revision gets no undo; revision 2 does.
@@ -97,19 +104,18 @@ describe("WorkloadsView", () => {
   it("a failed history read renders its error, never a silently missing section", async () => {
     vi.mocked(rolloutHistory).mockResolvedValue({ revisions: [], error: "list replicasets in shop: forbidden" });
     seed([broken]);
-    const { getByText, findByText } = render(<WorkloadsView cluster="homelab-nelli" />);
-    fireEvent.click(getByText("ollama"));
+    const { findByText } = render(<WorkloadsView cluster="homelab-nelli" />);
+    select("ollama");
     expect(await findByText(/list replicasets in shop: forbidden/)).toBeTruthy();
   });
 
   it("pause/resume: button flips with paused state and the confirm fires the verb", async () => {
     seed([{ ...healthy, paused: true }]);
     const { getByText, findByText } = render(<WorkloadsView cluster="homelab-nelli" />);
-    fireEvent.click(getByText("grafana"));
-    // Paused state: the resume affordance + the status fact.
-    const resume = await findByText("resume rollouts");
-    expect(getByText("paused")).toBeTruthy();
-    fireEvent.click(resume);
+    select("grafana");
+    // Paused state: the status fact in the identity + the resume verb in More.
+    expect(getByText(/rollouts paused/)).toBeTruthy();
+    chooseMore("Resume rollouts");
     expect(await findByText("Resume")).toBeTruthy();
     fireEvent.click(getByText("Resume"));
     expect(vi.mocked(rolloutPause)).toHaveBeenCalledWith("homelab-nelli", "monitoring", "grafana", false);
@@ -117,17 +123,18 @@ describe("WorkloadsView", () => {
 
   it("pause is Deployment-only: no button on other kinds", async () => {
     seed([{ ...broken, kind: "DaemonSet" }]);
-    const { getByText, queryByText, findByTestId } = render(<WorkloadsView cluster="homelab-nelli" />);
-    fireEvent.click(getByText("ollama"));
+    const { queryByText, findByTestId } = render(<WorkloadsView cluster="homelab-nelli" />);
+    select("ollama");
     await findByTestId("rollout-section");
-    expect(queryByText("pause rollouts")).toBeNull();
-    expect(queryByText("resume rollouts")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /^More/ }));
+    expect(queryByText("Pause rollouts")).toBeNull();
+    expect(queryByText("Resume rollouts")).toBeNull();
   });
 
   it("needs-attention filter hides healthy rows", () => {
     seed([broken, healthy]);
     const { getByText, getByRole, queryByText } = render(<WorkloadsView cluster="homelab-nelli" />);
-    fireEvent.click(getByRole("button", { name: "attention" }));
+    fireEvent.click(getByRole("button", { name: /^Attention/ }));
     expect(getByText("ollama")).toBeTruthy();
     expect(queryByText("grafana")).toBeNull();
   });
@@ -135,7 +142,7 @@ describe("WorkloadsView", () => {
   it("filter input narrows workload rows", () => {
     seed([broken, healthy]);
     const { getByPlaceholderText, queryByText } = render(<WorkloadsView cluster="homelab-nelli" />);
-    fireEvent.change(getByPlaceholderText("filter workloads"), { target: { value: "grafana" } });
+    fireEvent.change(getByPlaceholderText("Search workloads"), { target: { value: "grafana" } });
     expect(queryByText("grafana")).toBeTruthy();
     expect(queryByText("ollama")).toBeNull();
   });
@@ -156,92 +163,76 @@ describe("WorkloadsView", () => {
       status: { available: true, message: "", updatedAt: "2026-06-09T00:00:00Z" },
       usage: {},
     });
-    const { getByText, getAllByText } = render(<WorkloadsView cluster="homelab-nelli" />);
-    expect(getByText("near limit")).toBeTruthy();
-    expect(getAllByText("cpu").length).toBeGreaterThan(0);
-    expect(getAllByText("mem").length).toBeGreaterThan(0);
+    const { getByText } = render(<WorkloadsView cluster="homelab-nelli" />);
+    expect(getByText(/Sort: faults first/)).toBeTruthy();
+    expect(getByText("CPU")).toBeTruthy();
+    expect(getByText("Memory")).toBeTruthy();
   });
 
-  it("restart button is visible after expanding a Deployment row", () => {
+  it("Restart is the secondary action once a Deployment is selected", () => {
     seed([broken]);
-    const { getByText, queryByText } = render(<WorkloadsView cluster="homelab-nelli" />);
-    expect(queryByText("restart")).toBeNull();
-    fireEvent.click(getByText("ollama")); // expand the row
-    expect(getByText("restart")).toBeTruthy();
+    const { queryByRole, getByRole } = render(<WorkloadsView cluster="homelab-nelli" />);
+    expect(queryByRole("button", { name: "Restart" })).toBeNull();
+    select("ollama");
+    expect(getByRole("button", { name: "Restart" })).toBeTruthy();
   });
 
   it("confirming restart dispatches rolloutRestart for the correct workload", () => {
     seed([broken]);
-    const { getByText, getAllByRole } = render(<WorkloadsView cluster="homelab-nelli" />);
-    fireEvent.click(getByText("ollama")); // expand
-    fireEvent.click(getByText("restart")); // open confirm dialog
+    const { getAllByRole } = render(<WorkloadsView cluster="homelab-nelli" />);
+    select("ollama");
+    fireEvent.click(getAllByRole("button", { name: "Restart" })[0]); // open confirm
     const confirmBtns = getAllByRole("button", { name: "Restart" });
     fireEvent.click(confirmBtns[confirmBtns.length - 1]); // confirm
     expect(rolloutRestart).toHaveBeenCalledWith("homelab-nelli", "Deployment", "ollama-prod", "ollama");
   });
 
-  // --- Scale button ---
+  // --- Scale (More menu) ---
 
-  it("scale button is visible after expanding a Deployment row", () => {
-    seed([broken]);
-    const { getByText, queryByText } = render(<WorkloadsView cluster="homelab-nelli" />);
-    expect(queryByText("scale")).toBeNull();
-    fireEvent.click(getByText("ollama")); // expand
-    expect(getByText("scale")).toBeTruthy();
-  });
-
-  it("scale button is hidden for DaemonSets", () => {
+  it("Scale is offered for Deployments and StatefulSets, not DaemonSets", () => {
     const daemonSet: WorkloadDTO = {
       kind: "DaemonSet", namespace: "kube-system", name: "cilium",
       desired: 3, ready: 3, available: 3, updated: 3, restarts: 0,
       reason: "Available", rank: "healthy", gitops: null, pods: [], resources: noResources, health: { kind: "ok", label: "Available", reason: "Ready", rule: "workload.ready" },
     };
-    seed([daemonSet]);
-    const { getByText, queryByText } = render(<WorkloadsView cluster="homelab-nelli" />);
-    fireEvent.click(getByText("cilium")); // expand
-    expect(queryByText("scale")).toBeNull();
-    expect(getByText("restart")).toBeTruthy(); // restart still shown
+    const sts: WorkloadDTO = { ...daemonSet, kind: "StatefulSet", namespace: "db", name: "postgres", desired: 1, ready: 1, available: 1, updated: 1 };
+    seed([broken, daemonSet, sts]);
+    const { queryByRole, getByRole } = render(<WorkloadsView cluster="homelab-nelli" />);
+    for (const [name, scalable] of [["ollama", true], ["cilium", false], ["postgres", true]] as const) {
+      select(name);
+      fireEvent.click(getByRole("button", { name: /^More/ }));
+      expect(!!queryByRole("menuitem", { name: /^Scale/ })).toBe(scalable);
+      fireEvent.click(getByRole("button", { name: /^More/ })); // close
+      expect(getByRole("button", { name: "Restart" })).toBeTruthy();
+    }
   });
 
-  it("scale button is visible for StatefulSets", () => {
-    const sts: WorkloadDTO = {
-      kind: "StatefulSet", namespace: "db", name: "postgres",
-      desired: 1, ready: 1, available: 1, updated: 1, restarts: 0,
-      reason: "Available", rank: "healthy", gitops: null, pods: [], resources: noResources, health: { kind: "ok", label: "Available", reason: "Ready", rule: "workload.ready" },
-    };
-    seed([sts]);
-    const { getByText } = render(<WorkloadsView cluster="homelab-nelli" />);
-    fireEvent.click(getByText("postgres")); // expand
-    expect(getByText("scale")).toBeTruthy();
-  });
-
-  it("clicking scale shows the replica input popover prefilled with desired count", () => {
+  it("Scale opens the replica input prefilled with the desired count", () => {
     seed([broken]); // broken.desired = 1
-    const { getByText, getByRole } = render(<WorkloadsView cluster="homelab-nelli" />);
-    fireEvent.click(getByText("ollama")); // expand
-    fireEvent.click(getByText("scale")); // open popover
+    const { getByRole } = render(<WorkloadsView cluster="homelab-nelli" />);
+    select("ollama");
+    chooseMore(/^Scale/);
     const input = getByRole("spinbutton", { name: /replica count/i });
     expect((input as HTMLInputElement).value).toBe("1");
   });
 
   it("confirming scale dispatches scaleWorkload with the entered replica count", () => {
     seed([broken]);
-    const { getByText, getByRole } = render(<WorkloadsView cluster="homelab-nelli" />);
-    fireEvent.click(getByText("ollama")); // expand
-    fireEvent.click(getByText("scale")); // open popover
-    const input = getByRole("spinbutton", { name: /replica count/i });
-    fireEvent.change(input, { target: { value: "3" } });
-    fireEvent.click(getByText("apply")); // confirm in popover
+    const { getByRole } = render(<WorkloadsView cluster="homelab-nelli" />);
+    select("ollama");
+    chooseMore(/^Scale/);
+    fireEvent.change(getByRole("spinbutton", { name: /replica count/i }), { target: { value: "3" } });
+    fireEvent.click(getByRole("button", { name: "apply scale" }));
     expect(scaleWorkload).toHaveBeenCalledWith("homelab-nelli", "Deployment", "ollama-prod", "ollama", 3);
   });
 
   it("shows a loud truncation banner only when the list was capped", () => {
     seed([healthy]);
     const { queryByText, rerender } = render(<WorkloadsView cluster="homelab-nelli" />);
-    expect(queryByText(/broken-first triage may miss a fault/)).toBeNull();
+    expect(queryByText(/hit the 5000 cap/)).toBeNull();
     act(() => { useFleet.setState((s) => ({ workloads: { ...s.workloads, truncated: true } })); });
     rerender(<WorkloadsView cluster="homelab-nelli" />);
-    expect(queryByText(/broken-first triage may miss a fault/)).toBeTruthy();
+    expect(queryByText(/hit the 5000 cap/)).toBeTruthy();
   });
 
   // --- Reloader forward "reloads on" view ---
@@ -253,8 +244,8 @@ describe("WorkloadsView", () => {
     };
     seed([w]);
     const { getByText, getByTitle } = render(<WorkloadsView cluster="homelab-nelli" />);
-    fireEvent.click(getByText("api")); // select -> panel
-    expect(getByText("reloads on")).toBeTruthy();
+    select("api");
+    expect(getByText("Reloads on")).toBeTruthy();
     expect(getByText("auto")).toBeTruthy();
     // Chips are cross-links into Resources (title carries the target identity).
     expect(getByTitle("open ConfigMap app/app-config in Resources")).toBeTruthy();
@@ -265,7 +256,7 @@ describe("WorkloadsView", () => {
     const w: WorkloadDTO = { ...healthy, name: "api", namespace: "app", reloader: { auto: true, configMaps: [], secrets: [] } };
     seed([w]); // no cluster entry -> reloaderPresent defaults false
     const { getByText } = render(<WorkloadsView cluster="homelab-nelli" />);
-    fireEvent.click(getByText("api"));
+    select("api");
     expect(getByText(/annotations may be inert/)).toBeTruthy();
   });
 
@@ -275,8 +266,8 @@ describe("WorkloadsView", () => {
     const w: WorkloadDTO = { ...healthy, name: "api", namespace: "app", reloader: { auto: false, configMaps: ["only-this"], secrets: [] } };
     seed([w]);
     const { getByText, queryByText } = render(<WorkloadsView cluster="homelab-nelli" />);
-    fireEvent.click(getByText("api"));
-    expect(getByText("reloads on")).toBeTruthy();
+    select("api");
+    expect(getByText("Reloads on")).toBeTruthy();
     expect(queryByText(/annotations may be inert/)).toBeNull();
     expect(queryByText(/reloads may not fire/)).toBeNull();
   });
@@ -288,16 +279,16 @@ describe("WorkloadsView", () => {
     const w: WorkloadDTO = { ...healthy, name: "api", namespace: "app", reloader: { auto: true, configMaps: ["cfg"], secrets: [] } };
     seed([w]);
     const { getByText, queryByText } = render(<WorkloadsView cluster="homelab-nelli" />);
-    fireEvent.click(getByText("api"));
+    select("api");
     expect(getByText(/reloads may not fire/)).toBeTruthy();
     expect(queryByText(/annotations may be inert/)).toBeNull();
   });
 
   it("renders no reloads-on well for a workload without Reloader annotations", () => {
     seed([{ ...healthy, name: "plain", namespace: "app" }]); // reloader undefined
-    const { getByText, queryByText } = render(<WorkloadsView cluster="homelab-nelli" />);
-    fireEvent.click(getByText("plain"));
-    expect(queryByText("reloads on")).toBeNull();
+    const { queryByText } = render(<WorkloadsView cluster="homelab-nelli" />);
+    select("plain");
+    expect(queryByText("Reloads on")).toBeNull();
   });
 
   // --- Keyboard nav + a11y ---
@@ -315,44 +306,35 @@ describe("WorkloadsView", () => {
     act(() => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "j", bubbles: true, cancelable: true })); });
     act(() => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "j", bubbles: true, cancelable: true })); });
     act(() => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })); });
-    // The "restart" button appears in the expanded section
-    expect(queryByText("restart")).toBeTruthy();
+    // Enter opens the inspector on the second row
+    expect(screen.getByRole("heading", { name: "second-workload" })).toBeTruthy();
   });
 
   it("/ focuses the filter input", () => {
     seed([broken]);
     const { getByPlaceholderText } = render(<WorkloadsView cluster="homelab-nelli" />);
-    const input = getByPlaceholderText("filter workloads") as HTMLInputElement;
+    const input = getByPlaceholderText("Search workloads") as HTMLInputElement;
     window.dispatchEvent(new KeyboardEvent("keydown", { key: "/", bubbles: true, cancelable: true }));
     expect(input).toBeTruthy();
   });
 
-  it("workload row has role=button and aria-expanded", () => {
+  it("clicking a row selects it and opens the inspector", () => {
     seed([broken]);
-    const { getAllByRole } = render(<WorkloadsView cluster="homelab-nelli" />);
-    const rows = getAllByRole("button").filter((el) => el.hasAttribute("aria-expanded"));
-    expect(rows.length).toBeGreaterThan(0);
-    expect(rows[0].getAttribute("aria-expanded")).toBe("false");
-  });
-
-  it("workload row aria-expanded toggles on click", () => {
-    seed([broken]);
-    const { getAllByRole } = render(<WorkloadsView cluster="homelab-nelli" />);
-    const rows = getAllByRole("button").filter((el) => el.hasAttribute("aria-expanded"));
-    const row = rows[0];
-    expect(row.getAttribute("aria-expanded")).toBe("false");
+    const { getAllByRole, getByTestId } = render(<WorkloadsView cluster="homelab-nelli" />);
+    const row = getAllByRole("button").find((el) => el.classList.contains("lens-row"))!;
+    expect(row.getAttribute("data-selected")).toBeNull();
     fireEvent.click(row);
-    expect(row.getAttribute("aria-expanded")).toBe("true");
+    expect(row.getAttribute("data-selected")).toBe("true");
+    expect(getByTestId("lens-inspector")).toBeTruthy();
   });
 
-  it("cancelling scale popover hides the input", () => {
+  it("cancelling the scale input hides it", () => {
     seed([broken]);
-    const { getByText, getByRole, queryByRole } = render(<WorkloadsView cluster="homelab-nelli" />);
-    fireEvent.click(getByText("ollama")); // expand
-    fireEvent.click(getByText("scale")); // open popover
-    fireEvent.click(getByRole("button", { name: "cancel scale" })); // cancel
+    const { getByRole, queryByRole } = render(<WorkloadsView cluster="homelab-nelli" />);
+    select("ollama");
+    chooseMore(/^Scale/);
+    fireEvent.click(getByRole("button", { name: "cancel scale" }));
     expect(queryByRole("spinbutton", { name: /replica count/i })).toBeNull();
-    expect(getByText("scale")).toBeTruthy(); // button back
   });
 
   it("openLiveWorkloads is called on mount (replaces listWorkloads)", () => {
@@ -416,8 +398,8 @@ describe("WorkloadsView", () => {
       status: { available: true, message: "", updatedAt: "2026-06-10T00:00:00Z" },
       usage: {},
     });
-    const { getByText, findByText, findAllByRole } = render(<WorkloadsView cluster="homelab-nelli" />);
-    fireEvent.click(getByText("ollama")); // expand
+    const { findByText, findAllByRole } = render(<WorkloadsView cluster="homelab-nelli" />);
+    select("ollama"); // expand
     await findByText("cpu 30m");
     expect(mockGetWorkloadSparklines).toHaveBeenCalledWith("homelab-nelli", "ollama-prod", "Deployment", "ollama");
     const sparks = await findAllByRole("img", { name: /metric sparkline/i });
@@ -431,8 +413,8 @@ describe("WorkloadsView", () => {
       status: { available: true, message: "", updatedAt: "2026-06-10T00:00:00Z" },
       usage: {},
     });
-    const { getByText, findByText } = render(<WorkloadsView cluster="homelab-nelli" />);
-    fireEvent.click(getByText("ollama"));
+    const { findByText } = render(<WorkloadsView cluster="homelab-nelli" />);
+    select("ollama");
     expect(await findByText(/sparklines unavailable: metrics unavailable: no source/)).toBeTruthy();
   });
 
@@ -440,9 +422,9 @@ describe("WorkloadsView", () => {
 
   it("selection follows the workload when a live emit re-orders the rows", () => {
     seed([broken, healthy]);
-    const { getByText, getAllByText } = render(<WorkloadsView cluster="homelab-nelli" />);
+    const { getAllByText } = render(<WorkloadsView cluster="homelab-nelli" />);
     // Select grafana (second row) via click.
-    fireEvent.click(getByText("grafana"));
+    select("grafana");
     // Context panel shows grafana (name appears in row + panel).
     expect(getAllByText("grafana").length).toBeGreaterThan(1);
     // Live emit re-ranks: grafana now first, ollama second.
@@ -454,19 +436,19 @@ describe("WorkloadsView", () => {
 
   it("selection clears when the selected workload leaves the visible set", () => {
     seed([broken, healthy]);
-    const { getByText, getByPlaceholderText, queryByText } = render(<WorkloadsView cluster="homelab-nelli" />);
-    fireEvent.click(getByText("grafana")); // select
-    fireEvent.change(getByPlaceholderText("filter workloads"), { target: { value: "ollama" } });
-    // grafana filtered out — no selection, so no action buttons for a wrong row.
-    expect(queryByText("restart")).toBeNull();
-    expect(getByText(/select a workload/i)).toBeTruthy();
+    const { getByPlaceholderText, queryByText, queryByTestId } = render(<WorkloadsView cluster="homelab-nelli" />);
+    select("grafana");
+    fireEvent.change(getByPlaceholderText("Search workloads"), { target: { value: "ollama" } });
+    // grafana filtered out - the inspector closes rather than retarget a wrong row.
+    expect(queryByTestId("lens-inspector")).toBeNull();
+    expect(queryByText("Restart")).toBeNull();
   });
 
   it("open scale popover survives a live emit that replaces the DTOs", () => {
     seed([broken]);
-    const { getByText, getByRole } = render(<WorkloadsView cluster="homelab-nelli" />);
-    fireEvent.click(getByText("ollama")); // select + expand
-    fireEvent.click(getByText("scale")); // open popover
+    const { getByRole } = render(<WorkloadsView cluster="homelab-nelli" />);
+    select("ollama");
+    chooseMore(/^Scale/);
     expect(getByRole("spinbutton", { name: /replica count/i })).toBeTruthy();
     // Live emit replaces the workload DTO (same identity key, new object).
     act(() => { seed([{ ...broken, restarts: 8 }]); });
@@ -477,16 +459,16 @@ describe("WorkloadsView", () => {
   it("status trail reads shown/total, not shown/shown", () => {
     seed([broken, healthy]);
     const { getByText, getByRole } = render(<WorkloadsView cluster="homelab-nelli" />);
-    fireEvent.click(getByRole("button", { name: "attention" })); // hides healthy → 1 of 2
-    expect(getByText("1/2")).toBeTruthy();
+    fireEvent.click(getByRole("button", { name: /^Attention/ })); // hides healthy → 1 of 2
+    expect(getByText(/^1 of 2 workloads/)).toBeTruthy();
   });
 
   it("context-panel pod rows open the pod detail in the Pods section", async () => {
     const { openPodDetail } = await import("../bridge/pods");
     useFleet.getState().openCluster("homelab-nelli");
     seed([broken]);
-    const { getByText, getByRole } = render(<WorkloadsView cluster="homelab-nelli" />);
-    fireEvent.click(getByText("ollama")); // select -> context panel
+    const { getByRole } = render(<WorkloadsView cluster="homelab-nelli" />);
+    select("ollama"); // select -> context panel
     fireEvent.click(getByRole("button", { name: "open pod ollama-x" }));
     expect(useFleet.getState().route).toMatchObject({ name: "cluster", section: "pods" });
     expect(openPodDetail).toHaveBeenCalledWith("homelab-nelli", "ollama-prod", "ollama-x");
@@ -495,8 +477,8 @@ describe("WorkloadsView", () => {
   it("context-panel flux owner jumps to the GitOps lens with a select intent", () => {
     useFleet.getState().openCluster("homelab-nelli");
     seed([broken]);
-    const { getByText, getByTitle } = render(<WorkloadsView cluster="homelab-nelli" />);
-    fireEvent.click(getByText("ollama"));
+    const { getByTitle } = render(<WorkloadsView cluster="homelab-nelli" />);
+    select("ollama");
     fireEvent.click(getByTitle(/open Kustomization flux-system\/ollama in the Flux lens/));
     expect(useFleet.getState().route).toMatchObject({ name: "cluster", section: "gitops" });
     expect(useFleet.getState().navIntent).toEqual({
@@ -517,13 +499,13 @@ describe("WorkloadsView", () => {
 });
 
 describe("WorkloadsView health model (1b rework)", () => {
-  beforeEach(() => useFleet.getState().clearWorkloads());
+  beforeEach(() => { localStorage.clear(); useFleet.getState().clearWorkloads(); });
 
   it("offers an unknown filter while a verdict is unknown, and it isolates those rows", () => {
     const mystery: WorkloadDTO = { ...healthy, name: "mystery", health: { kind: "unknown", label: "Unverified", reason: "PodsIncomplete", rule: "workload.pods-incomplete" } };
     seed([broken, healthy, mystery]);
     const { getByRole, queryByText, getByText } = render(<WorkloadsView cluster="homelab-nelli" />);
-    fireEvent.click(getByRole("button", { name: /unknown 1/ }));
+    fireEvent.click(getByRole("button", { name: /^Unknown 1/ }));
     expect(getByText("mystery")).toBeTruthy();
     expect(queryByText("grafana")).toBeNull();
     expect(queryByText("ollama")).toBeNull();
@@ -533,8 +515,8 @@ describe("WorkloadsView health model (1b rework)", () => {
     const recovered: WorkloadDTO = { ...healthy, name: "api", pods: [{ name: "api-1", ready: true, restarts: 4, reason: "", node: "n1", ageSeconds: 99 }] };
     seed([recovered]);
     const { getByText, queryByText } = render(<WorkloadsView cluster="homelab-nelli" />);
-    fireEvent.click(getByText("api"));
-    expect(getByText("1 matched")).toBeTruthy();
+    select("api");
+    expect(getByText("Pods · selector match · 1")).toBeTruthy();
     expect(queryByText(/affected/)).toBeNull();
     expect(queryByText(/\d+ healthy/)).toBeNull();
   });
@@ -547,12 +529,12 @@ describe("WorkloadsView health model (1b rework)", () => {
 });
 
 describe("WorkloadsView empty states never claim a quiet they did not see", () => {
-  beforeEach(() => useFleet.getState().clearWorkloads());
+  beforeEach(() => { localStorage.clear(); useFleet.getState().clearWorkloads(); });
 
   it("a failed first read never says 'No workloads'", () => {
     useFleet.setState((s) => ({ workloads: { ...s.workloads, cluster: "homelab-nelli", items: [], loading: false, rowsScope: null, error: "forbidden" } }));
     const { getByText, queryByText } = render(<WorkloadsView cluster="homelab-nelli" />);
-    expect(getByText(/No workload data for all namespaces yet/)).toBeTruthy();
+    expect(getByText(/Workloads in all namespaces could not be read/)).toBeTruthy();
     expect(queryByText(/^No workloads\.$/)).toBeNull();
   });
 
@@ -560,12 +542,56 @@ describe("WorkloadsView empty states never claim a quiet they did not see", () =
     const mystery: WorkloadDTO = { ...healthy, name: "mystery", health: { kind: "unknown", label: "Unverified", reason: "PodsIncomplete", rule: "workload.pods-incomplete" } };
     seed([healthy, mystery]);
     const { getByRole, getByText, rerender } = render(<WorkloadsView cluster="homelab-nelli" />);
-    fireEvent.click(getByRole("button", { name: /unknown 1/ }));
+    fireEvent.click(getByRole("button", { name: /^Unknown 1/ }));
     // the unknown workload resolves to ok
     seed([healthy, { ...mystery, health: { kind: "ok", label: "Available", reason: "Ready", rule: "workload.ready" } }]);
     rerender(<WorkloadsView cluster="homelab-nelli" />);
     fireEvent.click(getByRole("button", { name: "Clear filters" }));
     expect(getByText("grafana")).toBeTruthy();
     expect(getByText("mystery")).toBeTruthy();
+  });
+});
+
+describe("WorkloadsView workspace template (redesign)", () => {
+  beforeEach(() => { localStorage.clear(); useFleet.getState().clearWorkloads(); vi.clearAllMocks(); });
+
+  it("auto-selects the first attention workload once, from a fresh read only", () => {
+    seed([healthy, broken]);
+    const { queryByTestId, getByRole } = render(<WorkloadsView cluster="homelab-nelli" />);
+    expect(queryByTestId("lens-inspector")).toBeNull(); // cached rows at entry
+    act(() => seed([healthy, broken]));
+    expect(getByRole("heading", { name: "ollama" })).toBeTruthy();
+    // closing it is final: a later read never reopens
+    fireEvent.click(getByRole("button", { name: "close details" }));
+    act(() => seed([healthy, broken, { ...broken, name: "other" }]));
+    expect(queryByTestId("lens-inspector")).toBeNull();
+  });
+
+  it("no idle inspector when nothing is selected", () => {
+    seed([healthy]);
+    const { queryByTestId } = render(<WorkloadsView cluster="homelab-nelli" />);
+    expect(queryByTestId("lens-inspector")).toBeNull();
+  });
+
+  it("a workload gone from a complete read shows 'Workload removed', cancels a pending restart, and drops actions", () => {
+    seed([broken, healthy]);
+    const { getByText, queryByRole, getAllByRole } = render(<WorkloadsView cluster="homelab-nelli" />);
+    select("ollama");
+    fireEvent.click(getAllByRole("button", { name: "Restart" })[0]);
+    expect(getAllByRole("button", { name: "Restart" }).length).toBe(2); // confirm open
+    act(() => seed([healthy]));
+    expect(getByText("Workload removed.")).toBeTruthy();
+    expect(queryByRole("button", { name: "Restart" })).toBeNull();
+    expect(queryByRole("button", { name: /^More/ })).toBeNull();
+    expect(rolloutRestart).not.toHaveBeenCalled();
+  });
+
+  it("the kind filter lives in the view and narrows rows", () => {
+    const ds: WorkloadDTO = { ...healthy, kind: "DaemonSet", name: "cilium", namespace: "kube-system" };
+    seed([broken, ds]);
+    const { getByLabelText, queryByText, getByText } = render(<WorkloadsView cluster="homelab-nelli" />);
+    fireEvent.change(getByLabelText("Kind"), { target: { value: "DaemonSet" } });
+    expect(getByText("cilium")).toBeTruthy();
+    expect(queryByText("ollama")).toBeNull();
   });
 });

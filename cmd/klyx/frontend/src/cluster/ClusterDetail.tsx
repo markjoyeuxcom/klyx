@@ -10,6 +10,7 @@ import { BuiltinsView } from "./BuiltinsView";
 import { InstanceList } from "./InstanceList";
 import { GatewayApiView } from "./GatewayApiView";
 import { WorkloadsView } from "./WorkloadsView";
+import { WorkloadsViewLegacy } from "./WorkloadsViewLegacy";
 import { PodsView } from "./PodsView";
 import { PodsViewLegacy } from "./PodsViewLegacy";
 
@@ -62,7 +63,7 @@ export function ClusterDetail() {
     return <CRDBrowser cluster={cluster.name} />;
   }
   if (route.section === "gatewayApi") return <GatewayApiView cluster={cluster.name} />;
-  if (route.section === "workloads") return <WorkloadsView cluster={cluster.name} />;
+  if (route.section === "workloads") return legacyLens("Workloads") ? <WorkloadsViewLegacy cluster={cluster.name} /> : <WorkloadsView cluster={cluster.name} />;
   if (route.section === "pods") return legacyLens("Pods") ? <PodsViewLegacy cluster={cluster.name} /> : <PodsView cluster={cluster.name} />;
   if (route.section === "events") return <EventsView cluster={cluster.name} />;
   if (route.section === "nodes") return legacyLens("Nodes") ? <NodesViewLegacy cluster={cluster.name} /> : <NodesView cluster={cluster.name} />;

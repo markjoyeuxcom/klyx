@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { IconTerminal2, IconExternalLink, IconBox, IconX, IconAlertTriangle } from "@tabler/icons-react";
 import { useFleet } from "../store/fleet";
 import type { WorkloadDTO, PodDTO, WorkloadKind, ResourceCellDTO, RolloutRevisionDTO } from "../store/fleet";
@@ -17,22 +17,22 @@ import type { VirtualListHandle } from "../chrome/VirtualList";
 import { useListKeys } from "../chrome/useListKeys";
 import { useNavIntent } from "../chrome/useNavIntent";
 import { useResizableDock } from "../chrome/useResizableDock";
-import { Chip } from "../chrome/Chip";
 import { CopyButton } from "../chrome/CopyButton";
 import { EmptyState } from "../chrome/EmptyState";
 import { SkeletonRows } from "../chrome/SkeletonRows";
-import { inputWell, selectWell, MetersStrip, LiveIndicator, btn, ellipsis } from "../chrome/primitives";
-import { InspectorFacts, InspectorIdle } from "./ResourceInspector";
+import { LiveIndicator, btn, ellipsis } from "../chrome/primitives";
 import { loadClusterPrefs, loadSearch, saveSearch, saveWorkloadsViewPrefs } from "../store/persist";
 import { staleStyle } from "./staleness";
 import { wellKnownResourceRef } from "./resourceRefs";
-import { ManifestButton } from "./ManifestButton";
 import { FleetCompare } from "./FleetCompare";
 import { WatchErrorBanner } from "../chrome/WatchErrorBanner";
 
 import { VerdictLabel, VerdictLamp, VerdictStatus } from "../health/VerdictView";
-import { coverageOf, isAttention, kindOf, labelOf, summarize } from "../health/verdict";
-import { verdictMeters } from "../health/meters";
+import { attentionTone, coverageOf, isAttention, kindOf, labelOf, summarize } from "../health/verdict";
+import { UpdatedAt, useReceivedAt } from "../chrome/Age";
+import { LensLayout, LensTable, type DatasetState } from "../layout/LensLayout";
+import { InspectorBlock, InspectorLayout, type MenuItem } from "../layout/InspectorLayout";
+import { fitColumns, type ColumnDef } from "../layout/columns";
 const KINDS: WorkloadKind[] = ["Deployment", "StatefulSet", "DaemonSet"];
 const kindShort: Record<WorkloadKind, string> = { Deployment: "deploy", StatefulSet: "sts", DaemonSet: "daemonset" };
 const keyOf = (w: WorkloadDTO) => `${w.kind}/${w.namespace}/${w.name}`;
@@ -86,41 +86,51 @@ type PendingUndo = { kind: "undo"; w: WorkloadDTO; rev: RolloutRevisionDTO };
 type PendingPause = { kind: "pause"; w: WorkloadDTO; pause: boolean };
 type Pending = PendingRestart | PendingScale | PendingScaleInput | PendingDeletePod | PendingUndo | PendingPause;
 
+// Workload columns: identity keeps its 240px floor; the rest join by priority
+// while they fit. Usage columns exist only when a metrics source does.
+const WL_COLUMNS: ColumnDef[] = [
+  { id: "lamp", width: 16, priority: 0 },
+  { id: "kind", width: 64, priority: 2 },
+  { id: "name", width: 240, priority: 0, flex: true },
+  { id: "status", width: 168, priority: 1 },
+  { id: "ready", width: 64, priority: 1 },
+  { id: "cpu", width: 120, priority: 3 },
+  { id: "mem", width: 120, priority: 3 },
+  { id: "restarts", width: 64, priority: 4 },
+  { id: "gitops", width: 150, priority: 5 },
+  { id: "logs", width: 24, priority: 2 },
+];
+const WL_LABEL: Record<string, string> = { lamp: "", kind: "Kind", name: "Workload", status: "Status", ready: "Ready", cpu: "CPU", mem: "Memory", restarts: "Restarts", gitops: "GitOps owner", logs: "" };
+
 export function WorkloadsView({ cluster }: { cluster: string }) {
   const wl = useFleet((s) => s.workloads);
   const isProtected = useFleet((s) => s.clusters.find((c) => c.name === cluster)?.protected ?? false);
   const reloaderPresent = useFleet((s) => s.clusters.find((c) => c.name === cluster)?.reloaderPresent ?? false);
   const reloaderHealthy = useFleet((s) => s.clusters.find((c) => c.name === cluster)?.reloaderHealthy ?? false);
-  const [pending, setPending] = useState<Pending | null>(null);
-  // Fleet compare: the selected workload side-by-side across every cluster.
-  const [compareTarget, setCompareTarget] = useState<WorkloadDTO | null>(null);
   const fleetSize = useFleet((s) => s.clusters.length);
-  // Selection is tracked by stable key (kind/namespace/name), never by array
-  // index — live emits re-rank the rows, and an index-bound selection silently
-  // retargets the context panel (and the day-2 verbs derived from it).
+  const [pending, setPending] = useState<Pending | null>(null);
+  const [compareTarget, setCompareTarget] = useState<WorkloadDTO | null>(null);
+  // Cursor and selection are stable keys (kind/namespace/name), never indexes:
+  // live emits re-rank the rows.
+  const [cursorKey, setCursorKey] = useState<string | null>(null);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [unknownOnly, setUnknownOnly] = useState(false);
-  // Aggregate-logs dock target. Persists across row selection; closed via ✕ only.
   const [logsTarget, setLogsTarget] = useState<{ namespace: string; name: string; kind: WorkloadKind } | null>(null);
+  const [bodyWidth, setBodyWidth] = useState(1100);
   const searchRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<VirtualListHandle>(null);
-  // Holds the cleanup for the current live subscription so namespace changes
-  // can close the old sub before opening the new one.
   const liveCleanupRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
-    // Open live subscription for the list. getWorkloadMetrics for usage stays
-    // separate (polling, not watch-driven). Hydration fills only fields still
-    // at their reset defaults, so a palette openWorkloads(kinds) or an
-    // Overview needs-attention intent set just before mount always wins.
+    // Live list subscription; usage metrics poll separately. Hydration fills
+    // only fields still at their reset defaults, so an intent set just before
+    // mount wins.
     const st = useFleet.getState();
     const prefs = loadClusterPrefs(cluster).workloads ?? {};
     if (prefs.needsAttention && !st.workloads.needsAttention) st.setWorkloadsNeedsAttention(true);
     if (prefs.nearLimitSort && !st.workloads.nearLimitSort) st.toggleNearLimitSort();
     const kindsAtDefault = KINDS.every((k) => st.workloads.kindFilter[k]);
-    if (prefs.kinds && prefs.kinds.length > 0 && prefs.kinds.length < KINDS.length && kindsAtDefault) {
-      st.setWorkloadKindFilter(prefs.kinds);
-    }
+    if (prefs.kinds && prefs.kinds.length > 0 && prefs.kinds.length < KINDS.length && kindsAtDefault) st.setWorkloadKindFilter(prefs.kinds);
     const savedSearch = loadSearch(cluster, "workloads");
     if (savedSearch && st.workloads.search === "") st.setWorkloadsSearch(savedSearch);
     const ns = st.workloads.namespace || (prefs.namespace ?? "");
@@ -137,39 +147,28 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
     };
   }, [cluster]);
 
-  // Mirror filters into per-cluster prefs (namespace + toggles survive a
-  // relaunch; search survives section switches within this run).
   useEffect(() => {
-    if (wl.cluster !== cluster) return; // transient state during open/switch
-    saveWorkloadsViewPrefs(cluster, {
-      namespace: wl.namespace,
-      needsAttention: wl.needsAttention,
-      kinds: KINDS.filter((k) => wl.kindFilter[k]),
-      nearLimitSort: wl.nearLimitSort,
-    });
+    if (wl.cluster !== cluster) return;
+    saveWorkloadsViewPrefs(cluster, { namespace: wl.namespace, needsAttention: wl.needsAttention, kinds: KINDS.filter((k) => wl.kindFilter[k]), nearLimitSort: wl.nearLimitSort });
     saveSearch(cluster, "workloads", wl.search);
   }, [cluster, wl.cluster, wl.namespace, wl.needsAttention, wl.kindFilter, wl.nearLimitSort, wl.search]);
 
-  // Palette verbs / cross-links land here as one-shot intents once the list
-  // is loaded. Scale opens the inline popover in the expanded row, so the row
-  // is expanded first; restart's confirm renders at the root.
+  // Palette verbs / cross-links: select the workload, then open the verb's
+  // confirm or scale input.
   useNavIntent(cluster, ["restart-workload", "scale-workload", "select-workload"], (intent) => {
     if (wl.loading || wl.items.length === 0) return "wait";
     if (!("workloadKind" in intent)) return "missing";
     const w = wl.items.find((x) => x.kind === intent.workloadKind && x.namespace === intent.namespace && x.name === intent.name);
     if (!w) return "missing";
-    const key = keyOf(w);
-    setSelectedKey(key);
-    if (!useFleet.getState().workloads.expanded.includes(key)) {
-      useFleet.getState().toggleWorkloadExpand(key);
-    }
+    autoSelect.current = "done";
+    setCursorKey(keyOf(w));
+    setSelectedKey(keyOf(w));
     if (intent.kind === "restart-workload") setPending({ kind: "restart", w });
     else if (intent.kind === "scale-workload") setPending({ kind: "scale-input", w });
     return "consumed";
   }, [wl.items, wl.loading]);
 
   const onNamespace = (ns: string) => {
-    // Close the current live sub, then reopen for the selected namespace.
     if (liveCleanupRef.current) { liveCleanupRef.current(); liveCleanupRef.current = null; }
     liveCleanupRef.current = openLiveWorkloads(cluster, ns);
     void getWorkloadMetrics(cluster, ns);
@@ -177,345 +176,290 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
   const onRefresh = () => { listWorkloads(cluster, wl.namespace).then(() => getWorkloadMetrics(cluster, wl.namespace)); };
 
   const showMetrics = wl.metricsAvailable;
-  // One verdict per workload from the backend (internal/health); every
-  // number on this lens derives from this one summary.
-  // Count and show only rows read for THIS cluster+namespace (see PodsView).
   const coverage = coverageOf(wl, cluster, wl.namespace);
-  const scopedItems = coverage === "unavailable" ? [] : wl.items;
+  const scopedItems = useMemo(() => (coverage === "unavailable" ? [] : wl.items), [coverage, wl.items]);
   const counts = summarize(scopedItems, (w) => w.health);
-  const gridCols = showMetrics
-    ? "12px 90px 1fr 70px 64px 1.1fr 140px 140px 130px 28px"
-    : "12px 90px 1fr 70px 64px 1.2fr 160px 28px";
+  const receivedAt = useReceivedAt(coverage === "complete" || coverage === "partial" ? wl.items : null);
   const query = wl.search.trim().toLowerCase();
-  const filtered = scopedItems.filter((w) => {
+  const filtered = useMemo(() => scopedItems.filter((w) => {
     if (!wl.kindFilter[w.kind as WorkloadKind]) return false;
     if (wl.needsAttention && !isAttention(kindOf(w.health))) return false;
     if (unknownOnly && kindOf(w.health) !== "unknown") return false;
     if (!query) return true;
     const gitops = w.gitops ? `${w.gitops.kind} ${w.gitops.namespace} ${w.gitops.name}` : "";
     const pods = w.pods.map((p) => `${p.name} ${p.node} ${p.reason}`).join(" ");
-    return [
-      w.kind,
-      w.namespace,
-      w.name,
-      labelOf(w.health),
-      gitops,
-      pods,
-    ].some((v) => v.toLowerCase().includes(query));
-  });
+    return [w.kind, w.namespace, w.name, labelOf(w.health), gitops, pods].some((v) => v.toLowerCase().includes(query));
+  }), [scopedItems, wl.kindFilter, wl.needsAttention, unknownOnly, query]);
   const rows = showMetrics && wl.nearLimitSort ? nearLimitSort(filtered) : filtered;
+  const cursorIdx = cursorKey === null ? -1 : rows.findIndex((w) => keyOf(w) === cursorKey);
 
-  // Derive the selected row from the key. When the selected workload leaves the
-  // visible set (filter change, delete) this resolves to -1 — no selection —
-  // instead of silently pointing at whatever row took its index.
-  const effectiveIdx = selectedKey === null ? -1 : rows.findIndex((w) => keyOf(w) === selectedKey);
-
-  const handleSelect = useCallback((idx: number) => {
-    const w = rows[idx];
-    if (!w) return;
-    setSelectedKey(keyOf(w));
-    listRef.current?.scrollToIndex(idx);
-  }, [rows]);
-
-  const handleActivate = useCallback((idx: number) => {
-    const w = rows[idx];
-    if (w) useFleet.getState().toggleWorkloadExpand(keyOf(w));
-  }, [rows]);
-
-  const handleEscape = useCallback(() => {
-    // Collapse selected row if expanded, else no-op.
-    if (effectiveIdx >= 0) {
-      const w = rows[effectiveIdx];
-      if (w && wl.expanded.includes(keyOf(w))) {
-        useFleet.getState().toggleWorkloadExpand(keyOf(w));
-      }
-    }
-  }, [effectiveIdx, rows, wl.expanded]);
-
-  const handleLogsKey = useCallback((idx: number) => {
-    const w = rows[idx];
-    if (w) setLogsTarget({ namespace: w.namespace, name: w.name, kind: w.kind as WorkloadKind });
-  }, [rows]);
-
+  const closeInspector = useCallback(() => { autoSelect.current = "done"; setSelectedKey(null); }, []);
+  const open = useCallback((w: WorkloadDTO) => { setCursorKey(keyOf(w)); setSelectedKey(keyOf(w)); }, []);
   useListKeys({
     count: rows.length,
-    selected: effectiveIdx,
-    onSelect: handleSelect,
-    onActivate: handleActivate,
-    onEscape: handleEscape,
+    selected: cursorIdx,
+    onSelect: (idx) => { const w = rows[idx]; if (w) { setCursorKey(keyOf(w)); listRef.current?.scrollToIndex(idx); } },
+    onActivate: (idx) => { const w = rows[idx]; if (w) open(w); },
+    onEscape: () => { if (selectedKey) closeInspector(); },
     searchRef,
-    extraKeys: { l: handleLogsKey },
+    extraKeys: { l: (idx) => { const w = rows[idx]; if (w) setLogsTarget({ namespace: w.namespace, name: w.name, kind: w.kind as WorkloadKind }); } },
   });
 
-  const selectedWorkload = effectiveIdx >= 0 ? rows[effectiveIdx] : null;
-  const visibleKinds = KINDS.filter((k) => wl.kindFilter[k]).map((k) => kindShort[k]).join(", ");
-  const attentionCount = counts.attention;
-  const selectedExpanded = selectedWorkload ? wl.expanded.includes(keyOf(selectedWorkload)) : false;
+  // One-shot auto-select of the first attention row from a FRESH read.
+  const autoSelect = useRef<"pending" | "done">("pending");
+  const itemsAtEntry = useRef<WorkloadDTO[] | null>(null);
+  if (itemsAtEntry.current === null) itemsAtEntry.current = wl.items;
+  useEffect(() => { autoSelect.current = "pending"; itemsAtEntry.current = useFleet.getState().workloads.items; setSelectedKey(null); setCursorKey(null); }, [cluster]);
+  const freshRead = !wl.loading && !wl.error && wl.items !== itemsAtEntry.current;
+  useEffect(() => {
+    if (autoSelect.current === "done" || !freshRead || (coverage !== "complete" && coverage !== "partial")) return;
+    autoSelect.current = "done";
+    if (selectedKey) return;
+    const w = rows.find((x) => isAttention(kindOf(x.health)));
+    if (w) open(w);
+  }, [freshRead, coverage, rows, selectedKey, open]);
+
+  // Selection lifecycle: a filter or scope excluding it closes the inspector;
+  // a workload gone from a complete in-scope read is removed (last evidence,
+  // no actions) and any pending verb for it is cancelled.
+  const selected = selectedKey ? scopedItems.find((w) => keyOf(w) === selectedKey) : undefined;
+  const lastSelected = useRef<WorkloadDTO | null>(null);
+  if (selected) lastSelected.current = selected;
+  const selNs = selectedKey ? selectedKey.split("/")[1] : "";
+  const selInScope = !!selectedKey && (wl.namespace === "" || wl.namespace === selNs);
+  const selRemoved = !!selectedKey && selInScope && coverage === "complete" && !selected;
+  useEffect(() => {
+    if (!selectedKey || coverage === "unavailable") return;
+    if (!selInScope) { setSelectedKey(null); return; }
+    if (selected && !rows.includes(selected)) setSelectedKey(null);
+  }, [rows, selected, selectedKey, selInScope, coverage]);
+  useEffect(() => {
+    if (!selRemoved || !selectedKey) return;
+    setPending((p) => (p && keyOf(p.w) === selectedKey ? null : p));
+  }, [selRemoved, selectedKey]);
+
+  const fitted = useMemo(
+    () => fitColumns(WL_COLUMNS.filter((c) => showMetrics || (c.id !== "cpu" && c.id !== "mem")), bodyWidth),
+    [bodyWidth, showMetrics],
+  );
+  const show = (id: string) => fitted.visible.has(id);
+  const gridStyle = { gridTemplateColumns: fitted.template };
+
+  const clearFilters = () => {
+    const st = useFleet.getState();
+    st.setWorkloadsSearch("");
+    st.setWorkloadsNeedsAttention(false);
+    st.setWorkloadKindFilter(KINDS);
+    setUnknownOnly(false);
+  };
+  const oneKind = KINDS.filter((k) => wl.kindFilter[k]);
+  const kindValue = oneKind.length === KINDS.length ? "" : oneKind.length === 1 ? oneKind[0] : "custom";
+
+  let state: DatasetState = "ready";
+  if (wl.loading && scopedItems.length === 0) state = "loading";
+  else if (coverage === "unavailable" && wl.error) state = "unreadable";
+  else if (coverage === "unavailable") state = "loading";
+  else if (scopedItems.length === 0) state = "empty";
+  else if (rows.length === 0) state = "no-match";
+  const scope = wl.namespace || "all namespaces";
+  const stateView = state === "loading" ? <div style={{ width: "100%", alignSelf: "flex-start" }}><SkeletonRows rows={8} label="loading workloads" /></div>
+    : state === "unreadable" ? <EmptyState icon={<IconAlertTriangle size={28} stroke={1.2} />} title={`Workloads in ${scope} could not be read.`} hint={wl.error ?? undefined} action={{ label: "Retry", onClick: onRefresh }} />
+    : state === "empty" ? <EmptyState icon={<IconBox size={28} stroke={1.2} />} title={`No workloads in ${scope}.`} />
+    : <EmptyState icon={<IconBox size={28} stroke={1.2} />} title="No workloads match the current filters."
+        hint={wl.needsAttention && !wl.search && (counts.unknown > 0 || coverage !== "complete")
+          ? `No known attention - but ${counts.unknown > 0 ? `${counts.unknown} workload${counts.unknown === 1 ? " is" : "s are"} unverified` : "the read was incomplete"}.`
+          : `${scopedItems.length} workload${scopedItems.length === 1 ? "" : "s"} in ${scope}.`}
+        action={{ label: "Clear filters", onClick: clearFilters }} />;
+
+  const tone = attentionTone(counts);
+  const partial = coverage === "partial" ? "+" : "";
+  const filterBits = [wl.needsAttention ? "Attention" : unknownOnly ? "Unknown" : "", kindValue && kindValue !== "custom" ? kindShort[kindValue as WorkloadKind] : kindValue === "custom" ? "kinds" : "", wl.search ? "search" : ""].filter(Boolean);
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0, overflow: "hidden", boxSizing: "border-box", background: "var(--color-background-primary)" }}>
-      {/* Workloads workspace - the logs dock pins below it. */}
-      <div style={{ flex: 1, minHeight: 0, overflow: "hidden", display: "grid", gridTemplateColumns: "minmax(620px, 1fr) minmax(320px, 380px)" }}>
-        <div style={{ minWidth: 0, minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column", borderRight: "0.5px solid var(--color-border-tertiary)" }}>
-          {/* Meters: workload population by rank - the same buckets the rows sort by. */}
-          <MetersStrip
-            note="faults first"
-            meters={verdictMeters({ noun: "workloads", scope: wl.namespace, counts, coverage, extra: [
-              counts.progressing > 0 && { label: "rolling out", value: counts.progressing },
-              counts.paused > 0 && { label: "scaled to 0", value: counts.paused },
-            ] })}
-          />
-          <div style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            gap: 12,
-            padding: "10px 12px",
-            borderBottom: "0.5px solid var(--color-border-tertiary)",
-            background: "var(--color-background-secondary)",
-            flexWrap: "wrap",
-            flexShrink: 0,
-          }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-              <select value={wl.namespace} onChange={(e) => onNamespace(e.target.value)}
-                style={selectWell}>
-                <option value="">all namespaces</option>
-                {wl.namespaces.map((ns) => <option key={ns} value={ns}>{ns}</option>)}
-              </select>
-              <Chip on={wl.needsAttention} onClick={() => { setUnknownOnly(false); useFleet.getState().toggleNeedsAttention(); }}>attention</Chip>
-              {/* Offered while some verdict is unknown - and while the filter is
-                  on, so it can always be cleared after its last row resolves. */}
-              {(counts.unknown > 0 || unknownOnly) && (
-                <Chip on={unknownOnly} onClick={() => { if (wl.needsAttention) useFleet.getState().toggleNeedsAttention(); setUnknownOnly(!unknownOnly); }}>unknown {counts.unknown}</Chip>
-              )}
-              {showMetrics && (
-                <Chip on={wl.nearLimitSort} onClick={() => useFleet.getState().toggleNearLimitSort()}>near limit</Chip>
-              )}
-              <WorkloadStatusTrail
-                shown={rows.length}
-                total={scopedItems.length}
-                attention={attentionCount}
-                kinds={visibleKinds || "none"}
-                live={wl.live}
-              />
-            </div>
-            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-              <input
-                ref={searchRef}
-                value={wl.search}
-                onChange={(e) => useFleet.getState().setWorkloadsSearch(e.target.value)}
-                aria-label="filter workloads"
-                placeholder="filter workloads"
-                style={{ ...inputWell, width: 180 }}
-              />
-              <button onClick={onRefresh} style={btn}>refresh</button>
+    <div style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
+      <div style={{ flex: 1, minHeight: 0 }}>
+        <LensLayout
+          label="Workloads"
+          title="Workloads"
+          summary={coverage === "unavailable" ? null : (
+            <>
+              <span className="t-number" style={{ color: "var(--color-text-secondary)" }}>{counts.total}{partial}</span>
+              {counts.attention > 0 ? (
+                <span className="t-status" style={{ color: tone === "danger" ? "var(--color-text-danger)" : "var(--color-text-warning)" }}>
+                  {tone === "danger" ? "▲ " : ""}{counts.attention}{partial} need attention
+                </span>
+              ) : <span className="t-secondary">{counts.unknown > 0 || coverage !== "complete" ? "no known attention" : "none need attention"}</span>}
+              <span className="t-secondary">
+                {[counts.fault ? `${counts.fault} fault` : "", counts.degraded ? `${counts.degraded} degraded` : "", counts.unknown ? `${counts.unknown} unverified` : "", counts.progressing ? `${counts.progressing} rolling out` : "", counts.paused ? `${counts.paused} scaled to 0` : ""].filter(Boolean).join(" · ")}
+              </span>
+            </>
+          )}
+          headerEnd={
+            <>
               <LiveIndicator live={wl.live} />
-            </div>
-          </div>
-
-          {/* Read failure - never pass as "no workloads" (review 2026-10-03 #10). */}
-          {wl.error && (
-            <div style={{ marginBottom: 10, flexShrink: 0 }}>
-              <WatchErrorBanner tool="Workloads" failure="read failed" error={wl.error} />
-            </div>
-          )}
-
-          {/* Truncation banner - LOUD: broken-first ranking happens after the
-              list, so a truncated view can hide a fault past the cap. */}
-          {wl.truncated && (
-            <div role="status" style={{ display: "flex", alignItems: "center", gap: 8, margin: "0 0 10px", padding: "7px 11px", border: "0.5px solid var(--color-border-warning)", background: "var(--color-background-warning)", borderRadius: 4, fontSize: 12, color: "var(--color-text-warning)", flexShrink: 0 }}>
-              <IconAlertTriangle size={14} stroke={1.5} />
-              <span>Showing the first 5000 workloads — this list is incomplete, so broken-first triage may miss a fault. Scope by namespace for the full picture.</span>
-            </div>
-          )}
-
-          <div style={{ flex: 1, minHeight: 0, overflowX: "auto", overflowY: "hidden", display: "flex", flexDirection: "column" }}>
-            {wl.loading && scopedItems.length === 0 ? (
-              <div style={{ padding: "16px 20px" }}>
-                <SkeletonRows rows={8} label="loading workloads" />
-              </div>
-            ) : rows.length === 0 ? (
-              <div style={{ padding: "16px 20px" }}>
-                <EmptyState
-                  icon={<IconBox size={28} stroke={1.2} />}
-                  // Four different truths, never conflated: no observation for
-                  // this scope; a genuinely empty scope; rows that exist but do
-                  // not match the filters; no KNOWN attention while some rows
-                  // are unverified.
-                  title={coverage === "unavailable"
-                    ? `No workload data for ${wl.namespace || "all namespaces"} yet.`
-                    : scopedItems.length === 0
-                      ? `No workloads${wl.namespace ? ` in ${wl.namespace}` : ""}.`
-                      : "No workloads match the current filters."}
-                  hint={coverage !== "unavailable" && wl.needsAttention && !wl.search
-                    ? (counts.unknown > 0 || coverage !== "complete"
-                      ? `No known attention - but ${counts.unknown > 0 ? `${counts.unknown} workload${counts.unknown === 1 ? " is" : "s are"} unverified` : "the read was incomplete"}.`
-                      : "The attention filter is on - nothing in this scope needs attention.")
-                    : undefined}
-                  action={(wl.search || wl.needsAttention || unknownOnly || !KINDS.every((k) => wl.kindFilter[k])) ? {
-                    label: "Clear filters",
-                    onClick: () => {
-                      const st = useFleet.getState();
-                      st.setWorkloadsSearch("");
-                      st.setWorkloadsNeedsAttention(false);
-                      st.setWorkloadKindFilter(KINDS);
-                      setUnknownOnly(false);
-                    },
-                  } : undefined}
-                />
-              </div>
-            ) : (
-              <div style={{ fontFamily: "var(--font-mono)", fontSize: 12, minWidth: showMetrics ? 980 : 760, flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
-                <div style={{ display: "grid", gridTemplateColumns: gridCols, gap: 10, padding: "0 8px 6px", fontSize: 10, color: "var(--color-text-tertiary)", borderBottom: "0.5px solid var(--color-border-secondary)", flexShrink: 0, background: "var(--color-background-primary)" }}>
-                  <span /><span>kind</span><span>workload</span><span>ready</span><span>restarts</span><span>status</span>
-                  {showMetrics && <span>cpu</span>}
-                  {showMetrics && <span>mem</span>}
-                  <span>gitops</span>
-                  <span />
+              <UpdatedAt at={receivedAt} />
+              <button className="l-btn" onClick={onRefresh}>Refresh</button>
+            </>
+          }
+          controls={
+            <>
+              <label style={{ display: "flex" }}>
+                <span className="sr-only">Namespace</span>
+                <select className="l-input" value={wl.namespace} onChange={(e) => onNamespace(e.target.value)}>
+                  <option value="">All namespaces</option>
+                  {wl.namespaces.map((ns) => <option key={ns} value={ns}>{ns}</option>)}
+                </select>
+              </label>
+              <label style={{ display: "flex" }}>
+                <span className="sr-only">Kind</span>
+                <select className="l-input" value={kindValue} onChange={(e) => useFleet.getState().setWorkloadKindFilter(e.target.value ? [e.target.value as WorkloadKind] : KINDS)}>
+                  <option value="">All kinds</option>
+                  {KINDS.map((k) => <option key={k} value={k}>{k}s</option>)}
+                  {kindValue === "custom" && <option value="custom" disabled>Custom selection</option>}
+                </select>
+              </label>
+              <button className="l-chip" aria-pressed={!wl.needsAttention && !unknownOnly} onClick={() => { setUnknownOnly(false); if (wl.needsAttention) useFleet.getState().toggleNeedsAttention(); }}>
+                All <span style={{ color: "var(--color-text-tertiary)" }}>{counts.total || ""}</span>
+              </button>
+              <button className="l-chip" aria-pressed={wl.needsAttention} onClick={() => { setUnknownOnly(false); if (!wl.needsAttention) useFleet.getState().toggleNeedsAttention(); }}>
+                Attention {counts.attention > 0 && <span style={{ color: tone === "danger" ? "var(--color-text-danger)" : "var(--color-text-warning)" }}>{counts.attention}</span>}
+              </button>
+              {(counts.unknown > 0 || unknownOnly) && (
+                <button className="l-chip" aria-pressed={unknownOnly} onClick={() => { if (wl.needsAttention) useFleet.getState().toggleNeedsAttention(); setUnknownOnly(!unknownOnly); }}>
+                  Unknown <span style={{ color: "var(--color-text-tertiary)" }}>{counts.unknown || ""}</span>
+                </button>
+              )}
+              <label style={{ display: "flex", flex: "0 1 280px", minWidth: 160 }}>
+                <span className="sr-only">Search workloads</span>
+                <input ref={searchRef} className="l-input" style={{ width: "100%" }} value={wl.search} placeholder="Search workloads" onChange={(e) => useFleet.getState().setWorkloadsSearch(e.target.value)} />
+              </label>
+              {showMetrics && (
+                <button className="l-chip" aria-pressed={wl.nearLimitSort} onClick={() => useFleet.getState().toggleNearLimitSort()} title="Sort by how close usage is to the limit">
+                  Sort: {wl.nearLimitSort ? "near limit" : "faults first"}
+                </button>
+              )}
+            </>
+          }
+          notice={(wl.error && coverage !== "unavailable") || wl.truncated ? (
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              {wl.error && coverage !== "unavailable" && <WatchErrorBanner tool="Workloads" failure="read failed - showing the last good read" error={wl.error} />}
+              {wl.truncated && (
+                <div role="status" className="t-control" style={{ minHeight: 32, display: "flex", alignItems: "center", gap: 8, padding: "0 10px", borderRadius: 4, background: "var(--color-background-warning)", boxShadow: "inset 0 0 0 1px var(--color-border-warning)", color: "var(--color-text-warning)" }}>
+                  <IconAlertTriangle size={14} stroke={1.6} aria-hidden="true" />
+                  <span style={{ flex: 1, minWidth: 0 }}>The list hit the 5000 cap: counts are a lower bound and a fault past the cap is not shown. Scope by namespace for the full picture.</span>
                 </div>
-                {/*
-                 * VirtualList windows >=100 rows. Expanded rows have variable
-                 * height (metrics + sparklines), which breaks fixed-row
-                 * windowing math, so any expansion forces the plain path —
-                 * users expand rows to read details, at which point full
-                 * rendering is the correct tradeoff.
-                 */}
-                <VirtualList
-                  ref={listRef}
-                  items={rows}
-                  rowHeight={ROW_HEIGHT}
-                  forcePlain={wl.expanded.length > 0}
-                  rowKey={(w) => keyOf(w)}
-                  style={{ flex: 1, minHeight: 0 }}
-                  render={(w, i) => {
-                    const expanded = wl.expanded.includes(keyOf(w));
-                    const isKbSelected = i === effectiveIdx;
-                    return (
-                      <div key={keyOf(w)}>
-                        <div
-                          role="button"
-                          tabIndex={0}
-                          aria-expanded={expanded}
-                          aria-selected={isKbSelected}
-                          onClick={() => {
-                            setSelectedKey(keyOf(w));
-                            useFleet.getState().toggleWorkloadExpand(keyOf(w));
-                          }}
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter" || e.key === " ") {
-                              e.preventDefault();
-                              setSelectedKey(keyOf(w));
-                              useFleet.getState().toggleWorkloadExpand(keyOf(w));
-                            }
-                          }}
-                          data-rowhost="true"
-                          style={{
-                            display: "grid", gridTemplateColumns: gridCols, gap: 10, alignItems: "center",
-                            height: ROW_HEIGHT, boxSizing: "border-box",
-                            padding: isKbSelected ? "7px 8px 7px 6px" : "7px 8px",
-                            borderBottom: "0.5px solid var(--color-border-tertiary)",
-                            borderLeft: isKbSelected ? "2px solid var(--bench-selection-edge, var(--color-text-info))" : "2px solid transparent",
-                            cursor: "pointer",
-                            background: isKbSelected ? "var(--color-background-secondary)" : undefined,
-                            outline: "none",
-                            // "dim = not yet realized" - but never dim a fault
-                            // or degradation: generation lag never conceals one.
-                            ...staleStyle(w.stale && !isAttention(kindOf(w.health))),
-                          }}
-                        >
-                          <VerdictLamp health={w.health} size={8} />
-                          <span style={{ color: "var(--color-text-tertiary)" }}>{kindShort[w.kind as WorkloadKind]}</span>
-                          <span style={{ display: "flex", alignItems: "center", gap: 2, minWidth: 0 }}>
-                            <span style={ellipsis}><span style={{ color: "var(--color-text-tertiary)" }}>{w.namespace}</span> / <span style={{ fontWeight: 500 }}>{w.name}</span></span>
-                            <CopyButton text={w.name} label={`copy workload name ${w.name}`} appearOnRowHover />
-                          </span>
-                          {/* ready / restarts are facts; the verdict column carries colour */}
-                          <span style={{ color: "var(--color-text-secondary)" }}>{w.ready} / {w.desired}</span>
-                          <span style={{ color: w.restarts > 0 ? "var(--color-text-secondary)" : "var(--color-text-tertiary)" }}>{w.restarts}</span>
-                          <span style={{ ...ellipsis, fontSize: 11 }}>
-                            <VerdictLabel health={w.health} mono />
-                          </span>
-                          {showMetrics && <ResourceCellView resource="cpu" cell={w.resources.cpu} hasPods={w.pods.length > 0} />}
-                          {showMetrics && <ResourceCellView resource="mem" cell={w.resources.mem} hasPods={w.pods.length > 0} />}
-                          <span style={{ ...ellipsis, color: "var(--color-text-tertiary)" }} title={w.gitops ? `Flux ownership label: ${w.gitops.kind} ${w.gitops.namespace}/${w.gitops.name}` : undefined}>
-                            {w.gitops ? `flux ${w.gitops.kind === "HelmRelease" ? "hr" : "ks"}/${w.gitops.name}` : "—"}
-                          </span>
-                          <LogsIconButton
-                            label={`aggregate logs for ${w.namespace}/${w.name}`}
-                            onClick={() => setLogsTarget({ namespace: w.namespace, name: w.name, kind: w.kind as WorkloadKind })}
-                          />
-                        </div>
-                        {expanded && showMetrics && (
-                          <div style={{ display: "flex", gap: 28, fontSize: 11, padding: "6px 8px 6px 32px", background: "var(--color-background-secondary)", fontFamily: "var(--font-mono)", borderBottom: "0.5px solid var(--color-border-tertiary)" }}>
-                            <span><span style={{ color: "var(--color-text-tertiary)" }}>cpu</span> {w.pods.length === 0 ? "—" : `usage ${w.resources.cpu.usage == null ? "—" : fmtCpu(w.resources.cpu.usage)} · req ${w.resources.cpu.request == null ? "—" : fmtCpu(w.resources.cpu.request)} · ${w.resources.cpu.limit == null ? "no limit" : `lim ${fmtCpu(w.resources.cpu.limit)}`}`} <span style={{ color: tierColor[saturation("cpu", w.resources.cpu.usage, w.resources.cpu.limit).tier] }}>{riskLabel("cpu", w.resources.cpu)}</span></span>
-                            <span><span style={{ color: "var(--color-text-tertiary)" }}>mem</span> {w.pods.length === 0 ? "—" : `usage ${w.resources.mem.usage == null ? "—" : fmtMem(w.resources.mem.usage)} · req ${w.resources.mem.request == null ? "—" : fmtMem(w.resources.mem.request)} · ${w.resources.mem.limit == null ? "no limit" : `lim ${fmtMem(w.resources.mem.limit)}`}`} <span style={{ color: tierColor[saturation("mem", w.resources.mem.usage, w.resources.mem.limit).tier] }}>{riskLabel("mem", w.resources.mem)}</span></span>
-                          </div>
-                        )}
-                        {expanded && showMetrics && (
-                          <WorkloadSparkRow cluster={cluster} kind={w.kind} namespace={w.namespace} name={w.name} />
-                        )}
-                      </div>
-                    );
-                  }}
-                />
+              )}
+            </div>
+          ) : undefined}
+          state={state}
+          stateView={stateView}
+          body={
+            <LensTable minWidth={fitted.minWidth} onWidth={setBodyWidth}>
+              <div className="lens-table-head" role="row" style={gridStyle}>
+                {WL_COLUMNS.filter((c) => show(c.id)).map((c) => <span key={c.id}>{WL_LABEL[c.id]}</span>)}
               </div>
-            )}
-          </div>
-        </div>
-
-        <WorkloadContextPanel
-          workload={selectedWorkload}
-          attention={counts.attention}
-          onClose={() => setSelectedKey(null)}
-          expanded={selectedExpanded}
-          isProtected={isProtected}
-          reloaderPresent={reloaderPresent}
-          reloaderHealthy={reloaderHealthy}
-          pending={pending}
-          onLogs={(w) => setLogsTarget({ namespace: w.namespace, name: w.name, kind: w.kind as WorkloadKind })}
-          onRestart={(w) => setPending({ kind: "restart", w })}
-          onScale={(w) => setPending({ kind: "scale-input", w })}
-          onScaleConfirm={(w, replicas) => {
-            if (isProtected) {
-              setPending({ kind: "scale", w, replicas });
-            } else {
-              setPending(null);
-              void scaleWorkload(cluster, w.kind, w.namespace, w.name, replicas);
-            }
-          }}
-          onCancelScale={() => setPending(null)}
-          onDeletePod={(w, pod) => setPending({ kind: "delete-pod", w, pod })}
-          onOpenPod={(w, pod) => {
-            useFleet.getState().setSection("pods");
-            void openPodDetail(cluster, w.namespace, pod.name);
-          }}
-          onOpenNode={(node) => {
-            useFleet.getState().setSection("nodes");
-            useFleet.getState().requestNavIntent({ kind: "select-node", cluster, node });
-          }}
-          onOpenFluxOwner={(w) => {
-            if (!w.gitops) return;
-            useFleet.getState().setSection("gitops");
-            useFleet.getState().requestNavIntent({ kind: "select-flux", cluster, fluxKind: w.gitops.kind, namespace: w.gitops.namespace, name: w.gitops.name });
-          }}
-          onCompare={fleetSize > 1 ? (w) => setCompareTarget(w) : undefined}
-          onUndo={(w, rev) => setPending({ kind: "undo", w, rev })}
-          onPause={(w, pause) => setPending({ kind: "pause", w, pause })}
-          cluster={cluster}
+              <VirtualList
+                ref={listRef}
+                items={rows}
+                rowHeight={ROW_HEIGHT}
+                rowKey={(w) => keyOf(w)}
+                style={{ flex: 1, minHeight: 0 }}
+                render={(w) => {
+                  const k = keyOf(w);
+                  const quietStale = w.stale && !isAttention(kindOf(w.health));
+                  return (
+                    <div
+                      key={k}
+                      role="button"
+                      tabIndex={0}
+                      aria-selected={k === cursorKey}
+                      data-cursor={k === cursorKey ? "true" : undefined}
+                      data-selected={k === selectedKey ? "true" : undefined}
+                      data-rowhost="true"
+                      className="lens-row"
+                      style={{ ...gridStyle, ...staleStyle(quietStale) }}
+                      onClick={() => open(w)}
+                      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(w); } }}
+                    >
+                      {show("lamp") && <VerdictLamp health={w.health} size={8} />}
+                      {show("kind") && <span style={{ color: "var(--color-text-tertiary)" }}>{kindShort[w.kind as WorkloadKind]}</span>}
+                      {show("name") && (
+                        <span style={{ display: "flex", alignItems: "center", gap: 4, minWidth: 0 }}>
+                          <span className="lens-cell-name" title={`${w.namespace}/${w.name}`}>
+                            <span style={{ color: "var(--color-text-tertiary)" }}>{w.namespace} / </span>
+                            <span style={{ fontWeight: k === selectedKey ? 600 : 400 }}>{w.name}</span>
+                          </span>
+                          <CopyButton text={w.name} label={`copy workload name ${w.name}`} appearOnRowHover />
+                        </span>
+                      )}
+                      {show("status") && <span style={ellipsis}><VerdictLabel health={w.health} /></span>}
+                      {show("ready") && <span style={{ color: "var(--color-text-secondary)" }}>{w.ready} / {w.desired}</span>}
+                      {show("cpu") && <ResourceCellView resource="cpu" cell={w.resources.cpu} hasPods={w.pods.length > 0} />}
+                      {show("mem") && <ResourceCellView resource="mem" cell={w.resources.mem} hasPods={w.pods.length > 0} />}
+                      {show("restarts") && <span style={{ color: w.restarts > 0 ? "var(--color-text-secondary)" : "var(--color-text-tertiary)" }}>{w.restarts}</span>}
+                      {show("gitops") && (
+                        <span style={{ ...ellipsis, color: "var(--color-text-tertiary)" }} title={w.gitops ? `Flux ownership label: ${w.gitops.kind} ${w.gitops.namespace}/${w.gitops.name}` : undefined}>
+                          {w.gitops ? `flux ${w.gitops.kind === "HelmRelease" ? "hr" : "ks"}/${w.gitops.name}` : "-"}
+                        </span>
+                      )}
+                      {show("logs") && (
+                        <LogsIconButton label={`aggregate logs for ${w.namespace}/${w.name}`} onClick={() => setLogsTarget({ namespace: w.namespace, name: w.name, kind: w.kind as WorkloadKind })} />
+                      )}
+                    </div>
+                  );
+                }}
+              />
+            </LensTable>
+          }
+          footer={<span className="t-legend">j k navigate · ↵ inspect · l logs · / search</span>}
+          footerEnd={
+            <>
+              <span className="t-secondary">{rows.length} of {scopedItems.length}{partial} workloads{filterBits.length ? ` · filter: ${filterBits.join(", ")}` : ""}</span>
+              {filterBits.length > 0 && <button className="l-chip" style={{ height: 20, color: "var(--color-text-info)" }} onClick={clearFilters}>Show all {scopedItems.length}{partial} workloads</button>}
+            </>
+          }
+          inspector={selectedKey && wl.cluster === cluster && (selected || selRemoved) && lastSelected.current ? (
+            <WorkloadInspector
+              key={`${cluster}/${selectedKey}`}
+              cluster={cluster}
+              workload={selected ?? lastSelected.current}
+              removed={selRemoved}
+              showMetrics={showMetrics}
+              isProtected={isProtected}
+              reloaderPresent={reloaderPresent}
+              reloaderHealthy={reloaderHealthy}
+              pending={pending}
+              onClose={closeInspector}
+              onLogs={(w) => setLogsTarget({ namespace: w.namespace, name: w.name, kind: w.kind as WorkloadKind })}
+              onRestart={(w) => setPending({ kind: "restart", w })}
+              onScale={(w) => setPending({ kind: "scale-input", w })}
+              onScaleConfirm={(w, replicas) => {
+                if (isProtected) setPending({ kind: "scale", w, replicas });
+                else { setPending(null); void scaleWorkload(cluster, w.kind, w.namespace, w.name, replicas); }
+              }}
+              onCancelScale={() => setPending(null)}
+              onDeletePod={(w, pod) => setPending({ kind: "delete-pod", w, pod })}
+              onOpenPod={(w, pod) => { useFleet.getState().setSection("pods"); void openPodDetail(cluster, w.namespace, pod.name); }}
+              onOpenNode={(node) => { useFleet.getState().setSection("nodes"); useFleet.getState().requestNavIntent({ kind: "select-node", cluster, node }); }}
+              onOpenFluxOwner={(w) => {
+                if (!w.gitops) return;
+                useFleet.getState().setSection("gitops");
+                useFleet.getState().requestNavIntent({ kind: "select-flux", cluster, fluxKind: w.gitops.kind, namespace: w.gitops.namespace, name: w.gitops.name });
+              }}
+              onCompare={fleetSize > 1 ? (w) => setCompareTarget(w) : undefined}
+              onUndo={(w, rev) => setPending({ kind: "undo", w, rev })}
+              onPause={(w, pause) => setPending({ kind: "pause", w, pause })}
+            />
+          ) : undefined}
+          inspectorLabel="Workload details"
+          onCloseInspector={closeInspector}
         />
       </div>
 
       {compareTarget && (
-        <FleetCompare
-          origin={cluster}
-          kind={compareTarget.kind}
-          namespace={compareTarget.namespace}
-          name={compareTarget.name}
-          onClose={() => setCompareTarget(null)}
-        />
+        <FleetCompare origin={cluster} kind={compareTarget.kind} namespace={compareTarget.namespace} name={compareTarget.name} onClose={() => setCompareTarget(null)} />
       )}
 
-      {/* Aggregate-logs dock — persists across row selection changes; close via ✕ only */}
       {logsTarget && (
         <WorkloadLogsDock
           cluster={cluster}
@@ -523,8 +467,6 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
           onClose={() => setLogsTarget(null)}
           onPopOut={async (container) => {
             const ok = await openWorkloadLogsWindow(cluster, logsTarget.namespace, logsTarget.kind, logsTarget.name, container);
-            // On success the tail moved to the native window; close the dock so we
-            // don't double-tail the same workload. On failure keep the dock open.
             if (ok) setLogsTarget(null);
           }}
         />
@@ -538,11 +480,7 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
           protected={isProtected}
           confirmLabel="Restart"
           onCancel={() => setPending(null)}
-          onConfirm={() => {
-            const { w } = pending;
-            setPending(null);
-            void rolloutRestart(cluster, w.kind, w.namespace, w.name);
-          }}
+          onConfirm={() => { const { w } = pending; setPending(null); void rolloutRestart(cluster, w.kind, w.namespace, w.name); }}
         />
       )}
       {pending?.kind === "scale" && (
@@ -553,11 +491,7 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
           protected={isProtected}
           confirmLabel="Scale"
           onCancel={() => setPending(null)}
-          onConfirm={() => {
-            const { w, replicas } = pending;
-            setPending(null);
-            void scaleWorkload(cluster, w.kind, w.namespace, w.name, replicas);
-          }}
+          onConfirm={() => { const { w, replicas } = pending; setPending(null); void scaleWorkload(cluster, w.kind, w.namespace, w.name, replicas); }}
         />
       )}
       {pending?.kind === "undo" && (
@@ -567,19 +501,13 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
           detail={
             `${pending.w.kind.toLowerCase()} ${pending.w.namespace}/${pending.w.name} → revision ${pending.rev.revision}` +
             (pending.rev.images.length > 0 ? ` (${pending.rev.images.join(", ")})` : "") +
-            (pending.w.gitops
-              ? ` — GitOps-owned (${pending.w.gitops.kind}/${pending.w.gitops.name}): Flux will revert this on its next reconcile. Undo is incident response; make the real fix in Git.`
-              : "")
+            (pending.w.gitops ? ` — GitOps-owned (${pending.w.gitops.kind}/${pending.w.gitops.name}): Flux will revert this on its next reconcile. Undo is incident response; make the real fix in Git.` : "")
           }
           protected={isProtected}
           danger
           confirmLabel="Roll back"
           onCancel={() => setPending(null)}
-          onConfirm={() => {
-            const { w, rev } = pending;
-            setPending(null);
-            void rolloutUndo(cluster, w.kind, w.namespace, w.name, rev.revision);
-          }}
+          onConfirm={() => { const { w, rev } = pending; setPending(null); void rolloutUndo(cluster, w.kind, w.namespace, w.name, rev.revision); }}
         />
       )}
       {pending?.kind === "pause" && (
@@ -590,11 +518,7 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
           protected={isProtected}
           confirmLabel={pending.pause ? "Pause" : "Resume"}
           onCancel={() => setPending(null)}
-          onConfirm={() => {
-            const { w, pause } = pending;
-            setPending(null);
-            void rolloutPause(cluster, w.namespace, w.name, pause);
-          }}
+          onConfirm={() => { const { w, pause } = pending; setPending(null); void rolloutPause(cluster, w.namespace, w.name, pause); }}
         />
       )}
       {pending?.kind === "delete-pod" && (
@@ -606,85 +530,29 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
           danger
           confirmLabel="Delete"
           onCancel={() => setPending(null)}
-          onConfirm={() => {
-            const { w, pod } = pending;
-            setPending(null);
-            void deletePod(cluster, w.namespace, pod.name).then(() => listWorkloads(cluster, wl.namespace));
-          }}
+          onConfirm={() => { const { w, pod } = pending; setPending(null); void deletePod(cluster, w.namespace, pod.name).then(() => listWorkloads(cluster, wl.namespace)); }}
         />
       )}
     </div>
   );
 }
 
-function WorkloadStatusTrail({
-  shown,
-  total,
-  attention,
-  kinds,
-  live,
+// WorkloadInspector - investigation order: verdict; Logs (primary), Restart
+// (secondary), More (scale, pause/resume, compare, manifest, delete a pod);
+// pods, rollout history (undo), usage, reloads-on, then controller facts.
+function WorkloadInspector({
+  cluster, workload, removed, showMetrics, isProtected, reloaderPresent, reloaderHealthy, pending,
+  onClose, onLogs, onRestart, onScale, onScaleConfirm, onCancelScale, onDeletePod, onOpenPod, onOpenNode, onOpenFluxOwner, onCompare, onUndo, onPause,
 }: {
-  /** Rows surviving the current filters. */
-  shown: number;
-  /** All loaded workloads, pre-filter. */
-  total: number;
-  attention: number;
-  kinds: string;
-  live: boolean;
-}) {
-  return (
-    <span style={{
-      display: "inline-flex",
-      alignItems: "center",
-      gap: 8,
-      color: "var(--color-text-tertiary)",
-      fontFamily: "var(--font-mono)",
-      fontSize: 9,
-      letterSpacing: "0.08em",
-      textTransform: "uppercase",
-      marginLeft: 4,
-      whiteSpace: "nowrap",
-    }}>
-      <span>{shown}/{total}</span>
-      <span style={{ color: attention > 0 ? "var(--color-text-danger)" : undefined }}>{attention} attention</span>
-      <span>{kinds}</span>
-      <span style={{ color: live ? undefined : "var(--color-text-warning)" }}>{live ? "watch-backed" : "manual refresh"}</span>
-    </span>
-  );
-}
-
-function WorkloadContextPanel({
-  workload,
-  attention,
-  expanded,
-  onClose,
-  isProtected,
-  reloaderPresent,
-  reloaderHealthy,
-  pending,
-  onLogs,
-  onRestart,
-  onScale,
-  onScaleConfirm,
-  onCancelScale,
-  onDeletePod,
-  onOpenPod,
-  onOpenNode,
-  onOpenFluxOwner,
-  onCompare,
-  onUndo,
-  onPause,
-  cluster,
-}: {
-  workload: WorkloadDTO | null;
-  attention: number;
-  expanded: boolean;
-  onClose: () => void;
-  isProtected: boolean;
   cluster: string;
+  workload: WorkloadDTO;
+  removed: boolean;
+  showMetrics: boolean;
+  isProtected: boolean;
   reloaderPresent: boolean;
   reloaderHealthy: boolean;
   pending: Pending | null;
+  onClose: () => void;
   onLogs: (w: WorkloadDTO) => void;
   onRestart: (w: WorkloadDTO) => void;
   onScale: (w: WorkloadDTO) => void;
@@ -694,212 +562,125 @@ function WorkloadContextPanel({
   onOpenPod: (w: WorkloadDTO, pod: PodDTO) => void;
   onOpenNode: (node: string) => void;
   onOpenFluxOwner: (w: WorkloadDTO) => void;
-  // Fleet compare (undefined on a single-cluster fleet - no dead button).
   onCompare?: (w: WorkloadDTO) => void;
   onUndo: (w: WorkloadDTO, rev: RolloutRevisionDTO) => void;
   onPause: (w: WorkloadDTO, pause: boolean) => void;
 }) {
-  if (!workload) {
-    return (
-      <InspectorIdle
-        subject="workloads"
-        attention={attention}
-        hint="Select a workload for ownership, freshness, pods, and day-2 actions."
-        width="100%"
-      />
-    );
-  }
+  const w = workload;
+  const live = !removed;
+  // Selector-matched pods carry no verdict of their own: native facts only.
+  const notReadyPods = w.pods.filter((p) => !p.ready).length;
+  const deleteTarget = w.pods.find((p) => !p.ready) ?? w.pods[0] ?? null;
+  const scaling = pending?.kind === "scale-input" && keyOf(pending.w) === keyOf(w);
+  const manifestRef = wellKnownResourceRef("apps", w.kind);
+  const scalable = w.kind === "Deployment" || w.kind === "StatefulSet";
 
-  // These pods are selector matches without their own verdicts: show native
-  // facts (ready, restarts) and never derive a second health model here. The
-  // workload's verdict above is the one judgement on this panel.
-  const notReadyPods = workload.pods.filter((p) => !p.ready).length;
-  const deleteTarget = workload.pods.find((p) => !p.ready) ?? workload.pods[0] ?? null;
-  const owner = workload.gitops
-    ? `${workload.gitops.kind} ${workload.gitops.namespace}/${workload.gitops.name}`
-    : "—";
+  const more: MenuItem[] = [
+    ...(scalable ? [{ label: `Scale (${w.desired} replicas)…`, onSelect: () => onScale(w) }] : []),
+    ...(w.kind === "Deployment" ? [{ label: w.paused ? "Resume rollouts" : "Pause rollouts", onSelect: () => onPause(w, !w.paused), hint: w.paused ? "spec.paused=false" : "Hold rollouts without touching pods (spec.paused=true)" }] : []),
+    ...(onCompare ? [{ label: "Compare across the fleet", onSelect: () => onCompare(w) }] : []),
+    ...(manifestRef ? [{ label: "Edit manifest in Resources", onSelect: () => { const nav = useFleet.getState(); nav.openResource(manifestRef); nav.openInstance(w.namespace, w.name); } }] : []),
+    ...(deleteTarget ? [{ kind: "separator" as const }, { label: `Delete pod ${deleteTarget.name}`, danger: true, onSelect: () => onDeletePod(w, deleteTarget) }] : []),
+  ];
+
+  const ownerText = w.gitops ? `${w.gitops.kind} ${w.gitops.namespace}/${w.gitops.name}` : "";
 
   return (
-    <aside style={{ minWidth: 0, minHeight: 0, overflowY: "auto", background: "var(--bench-well-bg, var(--color-background-secondary))", boxShadow: "var(--bench-well-shadow, inset 0 0 0 1px var(--color-border-tertiary))", borderRadius: "var(--radius-sm)", display: "flex", flexDirection: "column" }}>
-      <div style={{ padding: 14, borderBottom: "0.5px solid var(--color-border-tertiary)", display: "grid", gap: 10 }}>
-        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10 }}>
-          <div style={{ minWidth: 0, flex: 1 }}>
-            <div style={{ color: "var(--color-text-tertiary)", fontFamily: "var(--font-mono)", fontSize: 10 }}>{workload.kind} / {workload.namespace}</div>
-            <div style={{ fontFamily: "var(--font-mono)", fontSize: 15, fontWeight: 600, overflowWrap: "anywhere" }}>{workload.name}</div>
+    <div data-testid="workload-detail-panel" style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
+      <InspectorLayout
+        kind={w.kind}
+        namespace={w.namespace}
+        name={w.name}
+        meta={
+          <>
+            {isProtected && <span style={{ color: "var(--color-text-warning)", fontWeight: 600 }}>protected · </span>}
+            {w.gitops ? (
+              <button onClick={() => onOpenFluxOwner(w)} title={`open ${ownerText} in the Flux lens`} style={{ background: "none", border: 0, padding: 0, cursor: "pointer", color: "var(--color-text-info)", font: "inherit" }}>owned by {ownerText}</button>
+            ) : "not GitOps-owned"}
+            {w.paused ? " · rollouts paused" : ""}
+          </>
+        }
+        onClose={onClose}
+        verdict={removed ? (
+          <div role="status" className="t-body" style={{ padding: "8px 10px", borderRadius: 4, background: "var(--color-background-secondary)", boxShadow: "inset 0 0 0 1px var(--color-border-secondary)" }}>
+            <span className="t-status">Workload removed.</span> It is no longer in the current read of {w.namespace}. The details below are its last evidence; actions are disabled.
           </div>
-          <CopyButton text={`${workload.namespace}/${workload.name}`} label="copy workload name" />
-          {isProtected && (
-            <span style={{ boxShadow: "inset 0 0 0 1px var(--color-border-warning)", background: "var(--color-background-warning)", color: "var(--color-text-warning)", fontFamily: "var(--font-mono)", fontSize: 10, padding: "2px 6px", borderRadius: 3, flexShrink: 0 }}>
-              prd lock
-            </span>
-          )}
-          <button onClick={onClose} aria-label="close workload panel" style={{ ...btn, padding: "2px 8px", flexShrink: 0, display: "inline-flex", alignItems: "center" }}><IconX size={13} stroke={1.5} /></button>
-        </div>
-        {/* State first: the rank + reason headline, scannable before the
-            status grid below. */}
-        <VerdictStatus health={workload.health} />
-        <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-          <button onClick={() => onLogs(workload)} style={{ ...btn, color: "var(--color-text-info)", borderColor: "var(--color-border-info)", background: "var(--color-background-info)" }}>tail logs</button>
-          <button onClick={() => onRestart(workload)} style={btn}>restart</button>
-          {workload.kind === "Deployment" && (
-            <button
-              onClick={() => onPause(workload, !workload.paused)}
-              title={workload.paused ? "Resume rollouts (spec.paused=false)" : "Hold rollouts without touching pods (spec.paused=true)"}
-              style={workload.paused ? { ...btn, color: "var(--color-text-warning)", borderColor: "var(--color-border-warning)", background: "var(--color-background-warning)" } : btn}
-            >{workload.paused ? "resume rollouts" : "pause rollouts"}</button>
-          )}
-          {/* Match the pending action by stable key, not DTO identity — live
-              emits replace the DTOs, and an identity match dismissed the open
-              popover on every update. */}
-          {(workload.kind === "Deployment" || workload.kind === "StatefulSet") && (
-            pending?.kind === "scale-input" && keyOf(pending.w) === keyOf(workload) ? (
-              <ScalePopover
-                initial={workload.desired}
-                onConfirm={(n) => onScaleConfirm(workload, n)}
-                onCancel={onCancelScale}
-              />
-            ) : (
-              <button onClick={() => onScale(workload)} style={btn}>scale</button>
-            )
-          )}
-          {deleteTarget && (
-            <button
-              onClick={() => onDeletePod(workload, deleteTarget)}
-              style={{ ...btn, color: "var(--color-text-danger)", borderColor: "var(--color-border-danger)", background: "var(--color-background-danger)" }}
-            >delete pod</button>
-          )}
-          {/* One manifest surface: jump to InstanceDetail (YAML, labels,
-              annotations, edit) instead of duplicating a YAML tab here. */}
-          <ManifestButton group="apps" kind={workload.kind} namespace={workload.namespace} name={workload.name} />
-          {onCompare && (
-            <button onClick={() => onCompare(workload)} style={btn} title="Compare this workload across the fleet (DEV/STG/PRD drift)">compare fleet</button>
-          )}
-          <span style={{ color: "var(--color-text-tertiary)", fontSize: 11 }}>
-            {expanded ? "expanded" : "enter expands"}
-          </span>
-        </div>
-      </div>
+        ) : <VerdictStatus health={w.health} detail={`${w.ready}/${w.desired} ready · ${w.updated} updated · ${w.available} available${w.restarts ? ` · ${w.restarts} restarts` : ""}`} />}
+        primary={live ? { label: "Logs", kbd: "l", onSelect: () => onLogs(w) } : undefined}
+        secondary={live ? { label: "Restart", onSelect: () => onRestart(w) } : undefined}
+        more={live ? more : []}
+        tab="overview"
+        onTab={() => { const nav = useFleet.getState(); if (manifestRef) { nav.openResource(manifestRef); nav.openInstance(w.namespace, w.name); } }}
+        manifest={null}
+      >
+        {live && scaling && (
+          <InspectorBlock title="Scale">
+            <ScalePopover initial={w.desired} onConfirm={(n) => onScaleConfirm(w, n)} onCancel={onCancelScale} />
+          </InspectorBlock>
+        )}
 
-      <div style={{ padding: "12px 14px", borderBottom: "0.5px solid var(--color-border-tertiary)", display: "grid", gap: 8 }}>
-        <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5, color: "var(--color-text-tertiary)" }}>status</div>
-        <InspectorFacts
-          facts={[
-            { label: "ready", value: `${workload.ready}/${workload.desired}`, tone: workload.ready < workload.desired ? "warning" : undefined },
-            { label: "restarts", value: workload.restarts, tone: workload.restarts > 0 ? "warning" : undefined },
-            { label: "updated", value: workload.updated },
-            { label: "available", value: workload.available },
-            // Paused is an intended operator state (rollouts held), surfaced
-            // like Suspended on the GitOps side - visible, not alarming.
-            ...(workload.paused ? [{ label: "rollouts", value: "paused", tone: "warning" as const }] : []),
-          ]}
-        />
-        <div style={{ display: "grid", gridTemplateColumns: "88px 1fr", gap: "5px 10px", fontFamily: "var(--font-mono)", fontSize: 11 }}>
-          <span style={{ color: "var(--color-text-tertiary)" }}>controller</span><span style={{ color: "var(--color-text-secondary)", overflowWrap: "anywhere" }}>{workload.reason}</span>
-          <span style={{ color: "var(--color-text-tertiary)" }}>owner</span>
-          {workload.gitops ? (
-            <button
-              onClick={() => onOpenFluxOwner(workload)}
-              title={`open ${owner} in the Flux lens`}
-              style={{ background: "transparent", border: "none", padding: 0, cursor: "pointer", textAlign: "left", color: "var(--color-text-info)", fontFamily: "var(--font-mono)", fontSize: 11, overflowWrap: "anywhere", textDecoration: "underline", textDecorationColor: "var(--color-border-secondary)", textUnderlineOffset: 2 }}
-            >{owner}</button>
-          ) : (
-            <span style={{ color: "var(--color-text-tertiary)", overflowWrap: "anywhere" }}>{owner}</span>
-          )}
-        </div>
-      </div>
-
-      <RolloutSection cluster={cluster} workload={workload} onUndo={onUndo} />
-
-      {workload.reloader && (
-        <div style={{ padding: "12px 14px", borderBottom: "0.5px solid var(--color-border-tertiary)", display: "grid", gap: 8 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5, color: "var(--color-text-tertiary)" }}>reloads on</div>
-            {workload.reloader.auto && (
-              <span title="reloader.stakater.com/auto: reloads on any mounted ConfigMap/Secret" style={{ fontFamily: "var(--font-mono)", fontSize: 9, textTransform: "uppercase", letterSpacing: 0.5, padding: "1px 5px", borderRadius: 3, color: "var(--color-text-info)", boxShadow: "inset 0 0 0 1px var(--color-border-info)", background: "var(--color-background-info)" }}>auto</span>
-            )}
-          </div>
-          {/* Honesty: reload annotations declare intent; they are inert unless the
-              Reloader operator is present AND healthy. A present-but-Degraded
-              controller (crashlooping, 0 ready) fires no reloads either. */}
-          {!(reloaderPresent && reloaderHealthy) && (
-            <div style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, color: "var(--color-text-warning)", overflowWrap: "anywhere" }}>
-              <IconAlertTriangle size={12} stroke={1.5} />
-              {reloaderPresent
-                ? "Reloader operator is present but not ready — reloads may not fire until it recovers."
-                : "Reloader operator not detected on this cluster — these annotations may be inert."}
+        <InspectorBlock title="Pods · selector match" count={w.pods.length}
+          extra={notReadyPods > 0 ? <span className="t-secondary">{notReadyPods} not ready</span> : undefined}>
+          {w.pods.length === 0 ? <span className="t-secondary">No pods match this workload's selector.</span> : (
+            <div style={{ display: "flex", flexDirection: "column" }}>
+              {w.pods.slice(0, 8).map((p) => (
+                <div key={p.name} className="t-identifier" style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) auto auto", gap: 10, padding: "3px 0", alignItems: "baseline" }}>
+                  <button onClick={() => live && onOpenPod(w, p)} aria-label={`open pod ${p.name}`} title="open in Pods"
+                    style={{ minWidth: 0, background: "none", border: 0, padding: 0, textAlign: "left", cursor: "pointer", color: "var(--color-text-info)", font: "inherit", overflowWrap: "anywhere" }}>{p.name}</button>
+                  <span style={{ color: "var(--color-text-secondary)" }}>{p.ready ? "ready" : p.reason || "not ready"}{p.restarts ? ` · ${p.restarts}×` : ""}</span>
+                  <button onClick={() => onOpenNode(p.node)} title={`open node ${p.node}`} style={{ background: "none", border: 0, padding: 0, cursor: "pointer", color: "var(--color-text-tertiary)", font: "inherit" }}>{p.node || "-"}</button>
+                </div>
+              ))}
+              {w.pods.length > 8 && <span className="t-secondary">+{w.pods.length - 8} more pods</span>}
             </div>
           )}
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
-            {workload.reloader.configMaps.map((n) => (
-              <ReloadChip key={`cm-${n}`} kind="ConfigMap" name={n} namespace={workload.namespace} />
-            ))}
-            {workload.reloader.secrets.map((n) => (
-              <ReloadChip key={`sec-${n}`} kind="Secret" name={n} namespace={workload.namespace} />
-            ))}
-            {workload.reloader.configMaps.length === 0 && workload.reloader.secrets.length === 0 && (
-              <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--color-text-tertiary)" }}>
-                {workload.reloader.auto ? "no mounted config" : "—"}
-              </span>
-            )}
-          </div>
-        </div>
-      )}
+        </InspectorBlock>
 
-      <div style={{ padding: "12px 14px", borderBottom: "0.5px solid var(--color-border-tertiary)", display: "grid", gap: 8 }}>
-        <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5, color: "var(--color-text-tertiary)" }} title="Pods matched by this workload's label selector. Open a pod for its own verdict.">pods · selector match</div>
-        <div style={{ fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--color-text-secondary)" }}>
-          {workload.pods.length} matched{notReadyPods > 0 ? ` · ${notReadyPods} not ready` : ""}
-        </div>
-        <div style={{ display: "grid", gap: 6 }}>
-          {/* Every other pod-adjacent surface links pods; this one was the
-              exception. Click opens the pod detail in the Pods section; the
-              node name jumps to the Nodes board. */}
-          {workload.pods.slice(0, 6).map((p) => (
-            <div
-              key={p.name}
-              role="button"
-              tabIndex={0}
-              aria-label={`open pod ${p.name}`}
-              onClick={() => onOpenPod(workload, p)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" || e.key === " ") {
-                  e.preventDefault();
-                  onOpenPod(workload, p);
-                }
-              }}
-              style={{ display: "grid", gridTemplateColumns: "8px minmax(0, 1fr) auto", gap: 8, alignItems: "center", border: "0.5px solid var(--color-border-tertiary)", background: "var(--color-background-primary)", padding: "7px 8px", fontFamily: "var(--font-mono)", fontSize: 11, cursor: "pointer" }}
-            >
-              <span aria-hidden style={{ width: 7, height: 7, borderRadius: "50%", boxSizing: "border-box", border: "1px solid var(--color-text-tertiary)", background: p.ready ? "var(--color-text-tertiary)" : "transparent" }} />
-              <span style={{ ...ellipsis, color: "var(--color-text-info)" }} title={`open pod ${p.name}`}>{p.name}</span>
-              <span style={{ color: "var(--color-text-secondary)" }}>{p.ready ? "ready" : p.reason || "not ready"}</span>
-              <span />
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onOpenNode(p.node);
-                }}
-                title={`open node ${p.node}`}
-                style={{ background: "transparent", border: "none", padding: 0, cursor: "pointer", textAlign: "left", color: "var(--color-text-tertiary)", fontFamily: "var(--font-mono)", fontSize: 11, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", textDecoration: "underline", textDecorationColor: "var(--color-border-secondary)", textUnderlineOffset: 2 }}
-              >{p.node}</button>
-              <span style={{ color: p.restarts > 0 ? "var(--color-text-secondary)" : "var(--color-text-tertiary)" }} title="restarts">{p.restarts}</span>
+        <RolloutSection cluster={cluster} workload={w} onUndo={live ? onUndo : undefined} />
+
+        {showMetrics && (
+          <InspectorBlock title="Usage">
+            <div className="insp-kv">
+              <span>CPU</span><span><ResourceCellView resource="cpu" cell={w.resources.cpu} hasPods={w.pods.length > 0} /></span>
+              <span>memory</span><span><ResourceCellView resource="mem" cell={w.resources.mem} hasPods={w.pods.length > 0} /></span>
             </div>
-          ))}
-          {workload.pods.length > 6 && (
-            <div style={{ color: "var(--color-text-tertiary)", fontSize: 11, fontFamily: "var(--font-mono)" }}>+{workload.pods.length - 6} more pods</div>
-          )}
-        </div>
-      </div>
+            <div className="t-secondary">
+              CPU {w.pods.length === 0 ? "-" : `usage ${w.resources.cpu.usage == null ? "-" : fmtCpu(w.resources.cpu.usage)} · req ${w.resources.cpu.request == null ? "-" : fmtCpu(w.resources.cpu.request)} · ${w.resources.cpu.limit == null ? "no limit" : `lim ${fmtCpu(w.resources.cpu.limit)}`}`} {riskLabel("cpu", w.resources.cpu)}
+              <br />
+              Memory {w.pods.length === 0 ? "-" : `usage ${w.resources.mem.usage == null ? "-" : fmtMem(w.resources.mem.usage)} · req ${w.resources.mem.request == null ? "-" : fmtMem(w.resources.mem.request)} · ${w.resources.mem.limit == null ? "no limit" : `lim ${fmtMem(w.resources.mem.limit)}`}`} {riskLabel("mem", w.resources.mem)}
+            </div>
+            <WorkloadSparkRow cluster={cluster} kind={w.kind} namespace={w.namespace} name={w.name} />
+          </InspectorBlock>
+        )}
 
-      <div style={{ padding: "12px 14px", display: "grid", gap: 8 }}>
-        <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5, color: "var(--color-text-tertiary)" }}>resources</div>
-        <div style={{ display: "grid", gridTemplateColumns: "88px 1fr", gap: "5px 10px", fontFamily: "var(--font-mono)", fontSize: 11 }}>
-          <span style={{ color: "var(--color-text-tertiary)" }}>cpu</span>
-          <span><ResourceCellView resource="cpu" cell={workload.resources.cpu} hasPods={workload.pods.length > 0} /></span>
-          <span style={{ color: "var(--color-text-tertiary)" }}>mem</span>
-          <span><ResourceCellView resource="mem" cell={workload.resources.mem} hasPods={workload.pods.length > 0} /></span>
-        </div>
-      </div>
-    </aside>
+        {w.reloader && (
+          <InspectorBlock title="Reloads on" extra={w.reloader.auto ? <span className="t-secondary" title="reloader.stakater.com/auto: reloads on any mounted ConfigMap/Secret">auto</span> : undefined}>
+            {!(reloaderPresent && reloaderHealthy) && (
+              <div className="t-secondary" style={{ color: "var(--color-text-warning)", display: "flex", gap: 6, alignItems: "center" }}>
+                <IconAlertTriangle size={12} stroke={1.6} aria-hidden="true" />
+                {reloaderPresent ? "Reloader is present but not ready - reloads may not fire until it recovers." : "Reloader not detected on this cluster - these annotations may be inert."}
+              </div>
+            )}
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
+              {w.reloader.configMaps.map((n) => <ReloadChip key={`cm-${n}`} kind="ConfigMap" name={n} namespace={w.namespace} />)}
+              {w.reloader.secrets.map((n) => <ReloadChip key={`sec-${n}`} kind="Secret" name={n} namespace={w.namespace} />)}
+              {w.reloader.configMaps.length === 0 && w.reloader.secrets.length === 0 && <span className="t-secondary">{w.reloader.auto ? "no mounted config" : "-"}</span>}
+            </div>
+          </InspectorBlock>
+        )}
+
+        <InspectorBlock title="Controller" defaultOpen={false}>
+          <div className="insp-kv">
+            <span>reason</span><span>{w.reason || "-"}</span>
+            <span>ready</span><span>{w.ready} / {w.desired}</span>
+            <span>updated</span><span>{w.updated}</span>
+            <span>available</span><span>{w.available}</span>
+            <span>restarts</span><span>{w.restarts}</span>
+            {w.generation ? <><span>generation</span><span>{w.observedGeneration ?? "-"} observed / {w.generation}</span></> : null}
+          </div>
+        </InspectorBlock>
+      </InspectorLayout>
+    </div>
   );
 }
 
@@ -1059,7 +840,7 @@ const ROLLOUT_SHOWN = 8;
 function RolloutSection({ cluster, workload, onUndo }: {
   cluster: string;
   workload: WorkloadDTO;
-  onUndo: (w: WorkloadDTO, rev: RolloutRevisionDTO) => void;
+  onUndo?: (w: WorkloadDTO, rev: RolloutRevisionDTO) => void; // absent = read-only (removed object)
 }) {
   const [history, setHistory] = useState<{ key: string; revisions: RolloutRevisionDTO[]; error?: string } | null>(null);
   const key = keyOf(workload);
@@ -1075,44 +856,42 @@ function RolloutSection({ cluster, workload, onUndo }: {
 
   const rows = history?.key === key ? history.revisions : null;
   return (
-    <div data-testid="rollout-section" style={{ padding: "12px 14px", borderBottom: "0.5px solid var(--color-border-tertiary)", display: "grid", gap: 6 }}>
-      <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5, color: "var(--color-text-tertiary)" }}>
-        rollout history{rows ? ` · ${rows.length}` : ""}
-      </div>
-      {history?.error ? (
-        <div style={{ fontSize: 11, color: "var(--color-text-danger)", overflowWrap: "anywhere" }}>{history.error}</div>
-      ) : rows === null ? (
-        <div style={{ fontSize: 11, color: "var(--color-text-tertiary)" }}>reading revisions…</div>
-      ) : rows.length === 0 ? (
-        <div style={{ fontSize: 11, color: "var(--color-text-tertiary)" }}>no revision history recorded</div>
-      ) : (
-        <>
-          {rows.slice(0, ROLLOUT_SHOWN).map((r) => (
-            <div key={r.revision} data-rowhost="true" style={{ display: "flex", alignItems: "baseline", gap: 8, fontFamily: "var(--font-mono)", fontSize: 11 }}>
-              <span style={{ color: "var(--color-text-secondary)", minWidth: 28 }}>#{r.revision}</span>
-              <span style={{ color: "var(--color-text-tertiary)", minWidth: 34 }}>{ago(r.ageSeconds)}</span>
-              <span
-                style={{ ...ellipsis, flex: 1, color: "var(--color-text-secondary)" }}
-                title={[...r.images, r.changeCause ? `cause: ${r.changeCause}` : ""].filter(Boolean).join("\n")}
-              >
-                {r.images.length > 0 ? r.images.join(" · ") : "—"}
-              </span>
-              {r.current ? (
-                <span style={{ fontSize: 9, textTransform: "uppercase", letterSpacing: 0.5, color: "var(--color-text-success)", flexShrink: 0 }}>current</span>
-              ) : (
-                <button
-                  onClick={() => onUndo(workload, r)}
-                  title={`Roll back to revision ${r.revision}`}
-                  style={{ ...btn, fontSize: 10, padding: "1px 8px", color: "var(--color-text-danger)", borderColor: "var(--color-border-danger)", flexShrink: 0 }}
-                >undo →</button>
-              )}
-            </div>
-          ))}
-          {rows.length > ROLLOUT_SHOWN && (
-            <span style={{ fontSize: 10, color: "var(--color-text-tertiary)" }}>+{rows.length - ROLLOUT_SHOWN} older revisions</span>
-          )}
-        </>
-      )}
+    <div data-testid="rollout-section">
+      <InspectorBlock title="Rollout history" count={rows ? rows.length : undefined}>
+        {history?.error ? (
+          <div className="t-body" style={{ color: "var(--color-text-danger)", overflowWrap: "anywhere" }}>{history.error}</div>
+        ) : rows === null ? (
+          <span className="t-secondary">Reading revisions…</span>
+        ) : rows.length === 0 ? (
+          <span className="t-secondary">No revision history recorded.</span>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+            {rows.slice(0, ROLLOUT_SHOWN).map((r) => (
+              <div key={r.revision} data-rowhost="true" className="t-identifier" style={{ display: "flex", alignItems: "baseline", gap: 8, minHeight: 22 }}>
+                <span style={{ color: "var(--color-text-secondary)", minWidth: 28 }}>#{r.revision}</span>
+                <span style={{ color: "var(--color-text-tertiary)", minWidth: 34 }}>{ago(r.ageSeconds)}</span>
+                <span
+                  style={{ ...ellipsis, flex: 1, color: "var(--color-text-secondary)" }}
+                  title={[...r.images, r.changeCause ? `cause: ${r.changeCause}` : ""].filter(Boolean).join("\n")}
+                >
+                  {r.images.length > 0 ? r.images.join(" · ") : "-"}
+                </span>
+                {r.current ? (
+                  <span className="t-legend" style={{ color: "var(--color-text-success)", flexShrink: 0 }}>current</span>
+                ) : onUndo ? (
+                  <button
+                    className="l-btn"
+                    onClick={() => onUndo(workload, r)}
+                    title={`Roll back to revision ${r.revision}`}
+                    style={{ height: 22, color: "var(--color-text-danger)", flexShrink: 0 }}
+                  >undo →</button>
+                ) : null}
+              </div>
+            ))}
+            {rows.length > ROLLOUT_SHOWN && <span className="t-secondary">+{rows.length - ROLLOUT_SHOWN} older revisions</span>}
+          </div>
+        )}
+      </InspectorBlock>
     </div>
   );
 }

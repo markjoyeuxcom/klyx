@@ -1158,7 +1158,7 @@ export const useFleet = create<FleetState>((set) => ({
       if (s.workloads.cluster !== cluster || s.workloads.namespace !== namespace) return {};
       return { workloads: { ...s.workloads, live } };
     }),
-  clearWorkloads: () => set((s) => ({ workloads: { ...s.workloads, cluster: null, items: [], namespaces: [], expanded: [], kindFilter: workloadKindFilterFor(WORKLOAD_KINDS), needsAttention: false, search: "", namespace: "", metricsAvailable: false, metricsStatus: null, metricsStale: false, nearLimitSort: false, live: false } })),
+  clearWorkloads: () => set((s) => ({ workloads: { ...s.workloads, cluster: null, items: [], namespaces: [], expanded: [], kindFilter: workloadKindFilterFor(WORKLOAD_KINDS), needsAttention: false, search: "", namespace: "", metricsAvailable: false, metricsStatus: null, metricsStale: false, nearLimitSort: false, live: false, truncated: false, error: null, rowsScope: null } })),
   pods: { cluster: null, namespace: "", items: [], namespaces: [], loading: false, needsAttention: false, search: "", selected: null, detail: null, detailLoading: false, live: false },
   setPodsLoading: (cluster, namespace) => set((s) => ({ pods: { ...s.pods, cluster, namespace, loading: true } })),
   setPods: (cluster, namespace, result) => set((s) => {
