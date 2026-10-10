@@ -516,7 +516,13 @@ function CertInspector({ c, cluster, removed, issuer, issuersKnown, issuerCov, c
   const requests = arrayOf(chain?.requests);
   const warnings = arrayOf(chain?.warnings);
   const dnsNames = arrayOf(c.dnsNames);
-  const cause = !boundIssuer && !issuersKnown ? "" : failureHint(c, boundIssuer, failing, warnings);
+  // Only CONFIRMED issuer evidence may become a cause: a broken issuer is the
+  // headline card; an Unknown issuer is unverified evidence (no issuer-derived
+  // cause); a missing issuer is a cause only with that kind's coverage. Chain
+  // failures and other independent facts still provide a cause.
+  const cause = issuerBroken ? ""
+    : !boundIssuer ? (issuersKnown ? failureHint(c, undefined, failing, warnings, issuerCov === "stale") : failureHint(c, NO_ISSUER_CLAIM, failing, warnings))
+    : failureHint(c, issuerRole!.kind === "unknown" ? NO_ISSUER_CLAIM : boundIssuer, failing, warnings);
   const live = !removed;
   const role = certHealth(c);
 
@@ -581,7 +587,7 @@ function CertInspector({ c, cluster, removed, issuer, issuersKnown, issuerCov, c
       >
         {issuerBroken && (
           <div className="t-body" style={{ padding: "8px 10px", borderRadius: 4, background: issuerRole!.kind === "fault" ? "var(--color-background-danger)" : "var(--color-background-warning)", boxShadow: `inset 0 0 0 1px ${issuerRole!.kind === "fault" ? "var(--color-border-danger)" : "var(--color-border-warning)"}` }}>
-            <div style={{ color: ROLE_TEXT[issuerRole!.kind], fontWeight: 600 }}>{issuerRole!.kind === "fault" ? "Issuer failed" : "Issuer not ready"}: {boundIssuer!.reason || "unknown"}</div>
+            <div style={{ color: ROLE_TEXT[issuerRole!.kind], fontWeight: 600 }}>{issuerRole!.kind === "fault" ? "Issuer failed" : "Issuer not ready"}{issuerCov === "stale" ? " (last observed - the issuer watch is failing)" : ""}: {boundIssuer!.reason || "unknown"}</div>
             <button onClick={() => onOpenIssuer(boundIssuer!)} className="t-identifier" style={{ background: "none", border: 0, padding: 0, cursor: "pointer", color: "var(--color-text-info)", marginTop: 2 }}>{boundIssuer!.kind}/{boundIssuer!.name}</button>
             {boundIssuer!.message && <div style={{ color: "var(--color-text-secondary)", marginTop: 3, overflowWrap: "anywhere" }}>{boundIssuer!.message}</div>}
           </div>
@@ -706,9 +712,13 @@ const chainKindLabel: Record<string, string> = {
   Challenge: "challenge",
 };
 
-function failureHint(c: CertificateDTO, issuer: IssuerDTO | undefined, failing: ChainNodeDTO | null, warnings: string[]): string {
-  if (issuer && issuer.ready !== "Ready") return `${issuer.kind}/${issuer.name} is not ready${issuer.reason ? `: ${issuer.reason}` : ""}.`;
-  if (!issuer) return `${c.issuerKind}/${c.issuerName} was not found in the watched issuer list.`;
+// NO_ISSUER_CLAIM: pass instead of an issuer when issuer evidence must not
+// produce a cause (Unknown health, or no coverage for that issuer kind).
+const NO_ISSUER_CLAIM = { kind: "", namespace: "", name: "", ready: "Ready", reason: "", message: "" } as IssuerDTO;
+
+function failureHint(c: CertificateDTO, issuer: IssuerDTO | undefined, failing: ChainNodeDTO | null, warnings: string[], lastObserved = false): string {
+  if (issuer && issuer !== NO_ISSUER_CLAIM && issuer.ready !== "Ready") return `${issuer.kind}/${issuer.name} is not ready${issuer.reason ? `: ${issuer.reason}` : ""}.`;
+  if (!issuer) return `${c.issuerKind}/${c.issuerName} was not found in the ${lastObserved ? "last observed" : "watched"} ${c.issuerKind} list.`;
   if (failing) {
     const kind = chainKindLabel[failing.kind] ?? failing.kind.toLowerCase();
     return `${kind} ${failing.name} is ${failing.ready.toLowerCase()}${failing.reason ? `: ${failing.reason}` : ""}.`;

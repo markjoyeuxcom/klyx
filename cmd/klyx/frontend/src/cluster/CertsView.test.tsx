@@ -402,3 +402,32 @@ describe("CertsView Codex review corrections (cert-manager)", () => {
     expect(screen.getAllByRole("img", { name: "Pending" }).length).toBeGreaterThan(0);
   });
 });
+
+describe("CertsView Unknown issuer is never a diagnosed cause (Codex re-review)", () => {
+  const cov = (over: Record<string, Partial<{ served: boolean; synced: boolean; error: string }>>) =>
+    ["Certificate", "Issuer", "ClusterIssuer"].map((kind) => ({ kind, served: true, synced: true, ...(over[kind] ?? {}) }));
+
+  it("an Unknown issuer produces neither a failure card nor an issuer-derived likely cause", () => {
+    setup("Healthy", [cert({ name: "u", ready: "Failed", reason: "Pending" })], [issuer({ ready: "Unknown" })], "payments/u");
+    render(<CertsView cluster="x" />);
+    expect(insp().queryByText(/Issuer failed|Issuer not ready/)).toBeNull();
+    expect(insp().queryByText(/lab-acme-staging is not ready/)).toBeNull();
+  });
+
+  it("a chain failure still provides the cause when the issuer is Unknown", () => {
+    const c = cert({ name: "u", ready: "Failed", reason: "Pending" });
+    const chain: CertChainDTO = { certificate: c, issuer: issuer({ ready: "Unknown" }), warnings: [],
+      requests: [{ kind: "CertificateRequest", namespace: "payments", name: "u-1", ready: "Failed", reason: "Denied", message: "", children: [] }],
+      failingLink: { kind: "CertificateRequest", namespace: "payments", name: "u-1", ready: "Failed", reason: "Denied", message: "", children: [] } };
+    setup("Healthy", [c], [issuer({ ready: "Unknown" })], "payments/u", chain);
+    render(<CertsView cluster="x" />);
+    expect(insp().getByText(/request u-1 is failed: Denied/)).toBeTruthy();
+  });
+
+  it("a real failed issuer still headlines; from a failing watch it is explicitly last observed", () => {
+    setup("Healthy", [cert({ name: "f", ready: "Failed" })], [issuer({ ready: "Failed", reason: "ErrRegister" })], "payments/f");
+    useFleet.setState((s) => ({ certmanager: { ...s.certmanager, coverage: cov({ ClusterIssuer: { error: "forbidden" } }) } }));
+    render(<CertsView cluster="x" />);
+    expect(insp().getByText(/Issuer failed \(last observed - the issuer watch is failing\): ErrRegister/)).toBeTruthy();
+  });
+});
