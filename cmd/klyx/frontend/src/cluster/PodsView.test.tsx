@@ -804,6 +804,9 @@ describe("PodsView workspace template (redesign pilot)", () => {
   it("auto-selects the first attention row once on the first fresh snapshot", () => {
     seed([healthy, broken]);
     const { rerender } = render(<PodsView cluster="homelab" />);
+    // rows present at entry are cached, not a fresh read: nothing selected yet
+    expect(openPodDetail).not.toHaveBeenCalled();
+    act(() => seed([healthy, broken]));
     expect(openPodDetail).toHaveBeenCalledTimes(1);
     expect(openPodDetail).toHaveBeenCalledWith("homelab", "default", "api-crash");
     // later updates never re-select
@@ -855,3 +858,101 @@ describe("PodsView workspace template (redesign pilot)", () => {
   });
 });
 
+
+describe("PodsView pilot rework (Codex review)", () => {
+  beforeEach(() => { useFleet.getState().clearPods(); vi.clearAllMocks(); });
+
+  function select(pod: PodSummaryDTO, detail: PodDetailDTO = { ...fakeDetail, summary: pod }) {
+    useFleet.setState((s) => ({ pods: { ...s.pods, selected: { namespace: pod.namespace, name: pod.name }, detail, detailLoading: false } }));
+  }
+
+  it("cached healthy rows then a broken fresh read: selects the broken pod", () => {
+    seed([healthy]);
+    render(<PodsView cluster="homelab" />);
+    expect(openPodDetail).not.toHaveBeenCalled();
+    act(() => seed([healthy, broken]));
+    expect(openPodDetail).toHaveBeenCalledWith("homelab", "default", "api-crash");
+  });
+
+  it("cached broken rows while a read is pending select nothing", () => {
+    seed([broken]);
+    useFleet.setState((s) => ({ pods: { ...s.pods, loading: true } }));
+    render(<PodsView cluster="homelab" />);
+    expect(openPodDetail).not.toHaveBeenCalled();
+  });
+
+  it("after close, a live repair or a new fault never re-selects", () => {
+    seed([healthy]);
+    const { rerender } = render(<PodsView cluster="homelab" />);
+    act(() => seed([healthy, broken]));
+    expect(openPodDetail).toHaveBeenCalledTimes(1);
+    act(() => { useFleet.getState().selectPod(null); });
+    act(() => seed([healthy, broken, { ...broken, name: "api-crash-2" }]));
+    rerender(<PodsView cluster="homelab" />);
+    expect(openPodDetail).toHaveBeenCalledTimes(1);
+  });
+
+  it("an unreadable fresh read selects nothing", () => {
+    seed([broken]);
+    render(<PodsView cluster="homelab" />);
+    act(() => useFleet.getState().setPods("homelab", "", { namespaces: [], pods: [], error: "forbidden" }));
+    expect(openPodDetail).not.toHaveBeenCalled();
+  });
+
+  it("selecting B never carries A's pending confirmation", () => {
+    const b: PodSummaryDTO = { ...healthy, name: "grafana-b" };
+    seed([healthy, b]);
+    select(healthy);
+    const { getByRole, queryByText } = render(<PodsView cluster="homelab" />);
+    chooseMore("Delete pod", getByRole);
+    expect(queryByText(/grafana-xyz — the controller will recreate it/)).toBeTruthy();
+    act(() => select(b));
+    expect(queryByText(/the controller will recreate it/)).toBeNull();
+  });
+
+  it("a namespace scope that excludes the selection closes the inspector", () => {
+    seed([healthy]);
+    select(healthy);
+    render(<PodsView cluster="homelab" />);
+    act(() => useFleet.getState().setPods("homelab", "default", { namespaces: [], pods: [broken] }));
+    expect(useFleet.getState().pods.selected).toBeNull();
+  });
+
+  it("a pod removed from the complete read shows a removed state with no actions", () => {
+    seed([healthy, broken]);
+    select(healthy);
+    const { getByText, queryByRole } = render(<PodsView cluster="homelab" />);
+    act(() => seed([broken]));
+    expect(getByText("Pod removed.")).toBeTruthy();
+    expect(queryByRole("button", { name: /^Logs/ })).toBeNull();
+    expect(queryByRole("button", { name: /^More/ })).toBeNull();
+    expect(getByText("grafana-xyz", { selector: "h2" })).toBeTruthy();
+  });
+
+  it("keyboard use of inspector buttons never activates the list row behind", () => {
+    seed([broken, healthy]);
+    select(healthy);
+    const { getByRole } = render(<PodsView cluster="homelab" />);
+    vi.mocked(openPodDetail).mockClear();
+    const more = getByRole("button", { name: /^More/ });
+    more.focus();
+    fireEvent.keyDown(more, { key: "Enter" });
+    fireEvent.keyDown(more, { key: "j" });
+    fireEvent.keyDown(more, { key: "ArrowDown" });
+    expect(openPodDetail).not.toHaveBeenCalled();
+  });
+
+  it("first Escape closes the More menu only; focus returns to its trigger", () => {
+    seed([healthy]);
+    select(healthy);
+    const { getByRole, queryByRole } = render(<PodsView cluster="homelab" />);
+    const more = getByRole("button", { name: /^More/ });
+    fireEvent.click(more);
+    expect(getByRole("menu")).toBeTruthy();
+    expect(document.activeElement?.getAttribute("role")).toBe("menuitem");
+    fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+    expect(queryByRole("menu")).toBeNull();
+    expect(useFleet.getState().pods.selected).not.toBeNull();
+    expect(document.activeElement).toBe(more);
+  });
+});

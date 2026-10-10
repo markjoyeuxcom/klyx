@@ -58,20 +58,27 @@ export function InspectorLayout({
           <IconX size={14} stroke={1.6} />
         </button>
       </div>
-      {verdict && <div className="insp-verdict">{verdict}</div>}
-      {(primary || secondary || (more && more.length > 0)) && (
-        <div className="insp-actions" role="group" aria-label="actions">
-          {primary && <ActionButton action={primary} primary />}
-          {secondary && <ActionButton action={secondary} />}
-          {more && more.length > 0 && <ActionMenu label="More" items={more} />}
+      {/* Everything below identity scrolls, so a long diagnosis never pushes
+          the actions or sections out of reach; the action band and tabs
+          stick once the verdict has scrolled away. */}
+      <div className="insp-scroll">
+        {verdict && <div className="insp-verdict">{verdict}</div>}
+        <div className="insp-sticky">
+          {(primary || secondary || (more && more.length > 0)) && (
+            <div className="insp-actions" role="group" aria-label="actions">
+              {primary && <ActionButton action={primary} primary />}
+              {secondary && <ActionButton action={secondary} />}
+              {more && more.length > 0 && <ActionMenu label="More" items={more} />}
+            </div>
+          )}
+          <div className="insp-tabs" role="tablist" aria-label="detail views">
+            <button role="tab" className="insp-tab" aria-selected={tab === "overview"} onClick={() => onTab("overview")}>Overview</button>
+            <button role="tab" className="insp-tab" aria-selected={tab === "manifest"} onClick={() => onTab("manifest")}>Manifest</button>
+          </div>
         </div>
-      )}
-      <div className="insp-tabs" role="tablist" aria-label="detail views">
-        <button role="tab" className="insp-tab" aria-selected={tab === "overview"} onClick={() => onTab("overview")}>Overview</button>
-        <button role="tab" className="insp-tab" aria-selected={tab === "manifest"} onClick={() => onTab("manifest")}>Manifest</button>
-      </div>
-      <div className="insp-body" role="tabpanel">
-        {tab === "overview" ? children : manifest}
+        <div className="insp-body" role="tabpanel">
+          {tab === "overview" ? children : manifest}
+        </div>
       </div>
     </>
   );
@@ -107,29 +114,54 @@ export function ActionMenu({ label, items, buttonClass = "l-btn", inlineChoose =
   const [open, setOpen] = useState(false);
   const [choosing, setChoosing] = useState<number | null>(inlineChoose ? 0 : null);
   const ref = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   const menuId = useId();
 
+  // Menu keyboard model: focus the first item on open (and when a "choose"
+  // list replaces the items), arrows move, Home/End jump, Escape closes this
+  // menu only and returns focus to its trigger, Tab closes.
   useEffect(() => {
     if (!open) return;
-    const onDown = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) close(); };
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") { e.stopPropagation(); close(); } };
+    menuRef.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
+  }, [open, choosing]);
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) close(false); };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); close(true); return; }
+      if (e.key === "Tab") { close(false); return; }
+      const items = Array.from(menuRef.current?.querySelectorAll<HTMLElement>('[role="menuitem"]:not([disabled])') ?? []);
+      if (items.length === 0) return;
+      const i = items.indexOf(document.activeElement as HTMLElement);
+      let next = -1;
+      if (e.key === "ArrowDown") next = i < 0 ? 0 : (i + 1) % items.length;
+      else if (e.key === "ArrowUp") next = i < 0 ? items.length - 1 : (i - 1 + items.length) % items.length;
+      else if (e.key === "Home") next = 0;
+      else if (e.key === "End") next = items.length - 1;
+      if (next >= 0) { e.preventDefault(); e.stopPropagation(); items[next].focus(); }
+    };
     document.addEventListener("mousedown", onDown);
     document.addEventListener("keydown", onKey, true);
     return () => { document.removeEventListener("mousedown", onDown); document.removeEventListener("keydown", onKey, true); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
-  function close() { setOpen(false); setChoosing(inlineChoose ? 0 : null); }
-  const pick = (fn: () => void) => { close(); fn(); };
+  function close(refocus: boolean) {
+    setOpen(false);
+    setChoosing(inlineChoose ? 0 : null);
+    if (refocus) triggerRef.current?.focus();
+  }
+  const pick = (fn: () => void) => { close(true); fn(); };
   const chosen = choosing !== null ? items[choosing] : null;
 
   return (
     <div ref={ref} style={{ position: "relative" }}>
-      <button className={buttonClass} aria-haspopup="menu" aria-expanded={open} aria-controls={menuId} onClick={() => (open ? close() : setOpen(true))}>
+      <button ref={triggerRef} className={buttonClass} aria-haspopup="menu" aria-expanded={open} aria-controls={menuId} onClick={() => (open ? close(false) : setOpen(true))}>
         {label} <IconChevronDown size={12} stroke={1.7} />
       </button>
       {open && (
-        <div id={menuId} role="menu" className="l-menu" style={{ top: "calc(100% + 4px)", left: 0 }}>
+        <div ref={menuRef} id={menuId} role="menu" aria-label={label} className="l-menu" style={{ top: "calc(100% + 4px)", left: 0 }}>
           {chosen && chosen.kind === "choose" ? (
             <>
               <div className="l-menu-label">{chosen.label}</div>

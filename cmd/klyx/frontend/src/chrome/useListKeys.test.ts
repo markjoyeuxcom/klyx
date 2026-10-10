@@ -238,3 +238,42 @@ describe("useListKeys", () => {
     document.body.removeChild(input);
   });
 });
+
+describe("useListKeys scoping (redesign: panels own their keys)", () => {
+  function fire(key: string, target: HTMLElement, prevented = false) {
+    const e = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
+    if (prevented) e.preventDefault();
+    target.dispatchEvent(e);
+  }
+
+  it("ignores list keys from inside an inspector, menu or dialog - but Escape still closes", () => {
+    const onSelect = vi.fn(), onActivate = vi.fn(), onEscape = vi.fn();
+    renderHook(() => useListKeys({ count: 3, selected: 0, onSelect, onActivate, onEscape }));
+    for (const attr of [["data-list-keys", "ignore"], ["role", "menu"], ["role", "dialog"]]) {
+      const host = document.createElement("div");
+      host.setAttribute(attr[0], attr[1]);
+      const btn = document.createElement("button");
+      host.appendChild(btn);
+      document.body.appendChild(host);
+      fire("Enter", btn);
+      fire("j", btn);
+      fire("ArrowDown", btn);
+      document.body.removeChild(host);
+    }
+    expect(onActivate).not.toHaveBeenCalled();
+    expect(onSelect).not.toHaveBeenCalled();
+    const host = document.createElement("div");
+    host.setAttribute("data-list-keys", "ignore");
+    document.body.appendChild(host);
+    fire("Escape", host);
+    expect(onEscape).toHaveBeenCalledTimes(1);
+    document.body.removeChild(host);
+  });
+
+  it("ignores events another handler already handled", () => {
+    const onActivate = vi.fn();
+    renderHook(() => useListKeys({ count: 3, selected: 0, onSelect: vi.fn(), onActivate }));
+    fire("Enter", document.body, true);
+    expect(onActivate).not.toHaveBeenCalled();
+  });
+});

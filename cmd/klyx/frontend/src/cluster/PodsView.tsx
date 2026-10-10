@@ -27,7 +27,7 @@ import { loadClusterPrefs, loadSearch, savePodsViewPrefs, saveSearch } from "../
 import { WatchErrorBanner } from "../chrome/WatchErrorBanner";
 import { UpdatedAt, useReceivedAt } from "../chrome/Age";
 import { wellKnownResourceRef } from "./resourceRefs";
-import { LensLayout, type DatasetState } from "../layout/LensLayout";
+import { LensLayout, LensTable, type DatasetState } from "../layout/LensLayout";
 import { InspectorBlock, InspectorLayout, type MenuItem } from "../layout/InspectorLayout";
 import { VerdictLabel, VerdictLamp, VerdictStatus } from "../health/VerdictView";
 import { attentionTone, coverageOf, isAttention, kindOf, labelOf, summarize } from "../health/verdict";
@@ -135,31 +135,40 @@ export function PodsView({ cluster }: { cluster: string }) {
 
   const effectiveCursor = filtered.length === 0 ? -1 : Math.min(cursor, filtered.length - 1);
 
-  // Selection (spec §3): on the first usable FRESH snapshot of this route
-  // entry, auto-select the first visible attention row once - never again
-  // after Escape/close, never on later watches or filter changes, never from
-  // stale data, and never moving focus.
+  // Selection (spec §3): on the first successful read RECEIVED after this
+  // route entry (never the cached rows present at entry, never a pending or
+  // failed read), auto-select the first visible attention row once - never
+  // again after Escape/close, on later watches or filter changes - and never
+  // move focus.
   const autoSelect = useRef<"pending" | "done">("pending");
-  useEffect(() => { autoSelect.current = "pending"; }, [cluster]);
+  const itemsAtEntry = useRef<PodSummaryDTO[] | null>(null);
+  if (itemsAtEntry.current === null) itemsAtEntry.current = pods.items;
+  useEffect(() => { autoSelect.current = "pending"; itemsAtEntry.current = useFleet.getState().pods.items; }, [cluster]);
+  const freshRead = !pods.loading && !pods.error && pods.items !== itemsAtEntry.current;
   useEffect(() => {
     if (autoSelect.current === "done") return;
-    if (coverage !== "complete" && coverage !== "partial") return;
+    if (!freshRead || (coverage !== "complete" && coverage !== "partial")) return;
     autoSelect.current = "done";
     if (useFleet.getState().pods.selected) return;
     const idx = filtered.findIndex((p) => isAttention(kindOf(p.health)));
     if (idx < 0) return;
     setCursor(idx);
     void openPodDetail(cluster, filtered[idx].namespace, filtered[idx].name);
-  }, [coverage, filtered, cluster]);
+  }, [coverage, filtered, cluster, freshRead]);
 
-  // A filter that excludes the selection closes the inspector.
+  // Selection exclusion: a filter or a namespace scope that excludes the
+  // selected pod closes the inspector. A pod that the complete, current read
+  // no longer contains (in a scope that would include it) was REMOVED: the
+  // inspector keeps its identity and last evidence but disables operations.
+  const sel = pods.selected;
+  const selInScope = !!sel && (pods.namespace === "" || pods.namespace === sel.namespace);
+  const selRow = sel ? scopedItems.find((p) => p.namespace === sel.namespace && p.name === sel.name) : undefined;
+  const selRemoved = !!sel && selInScope && coverage === "complete" && !selRow;
   useEffect(() => {
-    const sel = pods.selected;
     if (!sel || coverage === "unavailable") return;
-    if (!filtered.some((p) => p.namespace === sel.namespace && p.name === sel.name) && scopedItems.some((p) => p.namespace === sel.namespace && p.name === sel.name)) {
-      useFleet.getState().selectPod(null);
-    }
-  }, [filtered, scopedItems, pods.selected, coverage]);
+    if (!selInScope) { useFleet.getState().selectPod(null); return; }
+    if (selRow && !filtered.includes(selRow)) useFleet.getState().selectPod(null);
+  }, [filtered, selRow, sel, selInScope, coverage]);
 
   const select = useCallback((idx: number) => { setCursor(idx); listRef.current?.scrollToIndex(idx); }, []);
   const activate = useCallback((idx: number) => {
@@ -318,7 +327,7 @@ export function PodsView({ cluster }: { cluster: string }) {
           state={state}
           stateView={stateView}
           body={
-            <>
+            <LensTable minWidth={560}>
               <div className="lens-table-head pods-grid" role="row">
                 <span /><span>Pod</span><span>Status</span><span>Ready</span><span className="col-restarts">Restarts</span><span className="col-node">Node</span><span className="col-age">Age</span><span />
               </div>
@@ -341,7 +350,7 @@ export function PodsView({ cluster }: { cluster: string }) {
                   />
                 )}
               />
-            </>
+            </LensTable>
           }
           footer={<span className="t-legend">j k navigate · ↵ inspect · l logs · x select · / search</span>}
           footerEnd={
@@ -350,8 +359,11 @@ export function PodsView({ cluster }: { cluster: string }) {
               {filterLabel && <button className="l-chip" style={{ height: 20, color: "var(--color-text-info)" }} onClick={clearFilters}>Show all {scopedItems.length}{partial} pods</button>}
             </>
           }
-          inspector={pods.selected ? (
+          inspector={pods.selected && pods.cluster === cluster ? (
             <PodInspector
+              // Object-scoped state (tab, confirms, popovers) resets per object.
+              key={`${cluster}/${pods.selected.namespace}/${pods.selected.name}`}
+              removed={selRemoved}
               cluster={cluster}
               namespace={pods.selected.namespace}
               name={pods.selected.name}
@@ -472,7 +484,8 @@ function PodRow({ p, cursor, selected, bulkSelected, onToggleBulk, onOpen, onLog
 
 type Pending = { verb: "restart" | "delete"; summary: PodSummaryDTO } | { verb: "debug"; summary: PodSummaryDTO; container: string };
 
-function PodInspector({ cluster, namespace, name, detail, loading, isProtected, onClose, onOpenLogs }: {
+function PodInspector({ cluster, namespace, name, detail, loading, removed, isProtected, onClose, onOpenLogs }: {
+  removed: boolean;
   cluster: string;
   namespace: string;
   name: string;
@@ -509,7 +522,9 @@ function PodInspector({ cluster, namespace, name, detail, loading, isProtected, 
     return m;
   }, [ctUsage]);
 
+  // A removed pod keeps its identity and last evidence; no operation targets it.
   const p = detail && !detail.error ? detail.summary : null;
+  const live = !removed;
   const containers = p ? p.containers.filter((c) => !c.init) : [];
   const per = (fn: (container: string) => void) => containers.map((c) => ({ label: c.name, onSelect: () => fn(c.name) }));
   const showRestart = !!p && (p.ownerKind === "Deployment" || p.ownerKind === "StatefulSet" || p.ownerKind === "DaemonSet");
@@ -547,10 +562,14 @@ function PodInspector({ cluster, namespace, name, detail, loading, isProtected, 
         name={name}
         meta={meta}
         onClose={onClose}
-        verdict={p ? <VerdictStatus health={rowHealth ?? p.health} detail={`${readyOf(p)} ready`} /> : undefined}
-        primary={p ? { label: "Logs", kbd: "l", onSelect: () => onOpenLogs({ namespace, name, containers: p.containers }) } : undefined}
-        secondary={p && containers.length > 0 ? { label: "Shell", onSelect: () => void openExecTerminal(cluster, namespace, name, containers[0].name), options: per((c) => void openExecTerminal(cluster, namespace, name, c)) } : undefined}
-        more={more}
+        verdict={removed ? (
+          <div role="status" className="t-body" style={{ padding: "8px 10px", borderRadius: 4, background: "var(--color-background-secondary)", boxShadow: "inset 0 0 0 1px var(--color-border-secondary)" }}>
+            <span className="t-status">Pod removed.</span> It is no longer in the current read of {namespace}. The details below are its last evidence; actions are disabled.
+          </div>
+        ) : p ? <VerdictStatus health={rowHealth ?? p.health} detail={`${readyOf(p)} ready`} /> : undefined}
+        primary={p && live ? { label: "Logs", kbd: "l", onSelect: () => onOpenLogs({ namespace, name, containers: p.containers }) } : undefined}
+        secondary={p && live && containers.length > 0 ? { label: "Shell", onSelect: () => void openExecTerminal(cluster, namespace, name, containers[0].name), options: per((c) => void openExecTerminal(cluster, namespace, name, c)) } : undefined}
+        more={live ? more : []}
         tab={tab}
         onTab={setTab}
         manifest={detail && !detail.error ? <YamlBlock text={detail.yaml} copyLabel="pod YAML" /> : null}

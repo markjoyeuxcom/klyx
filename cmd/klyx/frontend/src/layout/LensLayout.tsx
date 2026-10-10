@@ -78,9 +78,11 @@ export function LensLayout({
   useLayoutEffect(() => {
     const el = rootRef.current;
     if (!el) return;
-    setInnerWidth(el.clientWidth);
+    // A width of 0 means "not laid out yet" (hidden, or a test DOM), not
+    // "narrow": keep the default until a real measurement arrives.
+    if (el.clientWidth > 0) setInnerWidth(el.clientWidth);
     if (typeof ResizeObserver === "undefined") return;
-    const ro = new ResizeObserver((entries) => setInnerWidth(entries[0].contentRect.width));
+    const ro = new ResizeObserver((entries) => { const w = entries[0].contentRect.width; if (w > 0) setInnerWidth(w); });
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
@@ -116,18 +118,47 @@ export function LensLayout({
     else if (e.key === "End") { e.preventDefault(); commit(INSPECTOR_MAX); }
   };
 
-  // Drawer: Escape closes it (nested surfaces stop propagation first).
+  // Drawer = modal dialog: the list behind is inert, focus moves in on open,
+  // Tab cycles inside, Escape closes (nested menus/confirms stop it first),
+  // and focus returns to the element that opened it.
+  const mainRef = useRef<HTMLElement>(null);
+  const asideRef = useRef<HTMLElement>(null);
+  const returnFocus = useRef<HTMLElement | null>(null);
+  const drawerOpen = !!inspector && geo.mode === "drawer";
   useEffect(() => {
-    if (!inspector || geo.mode !== "drawer" || !onCloseInspector) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onCloseInspector(); };
+    if (!drawerOpen) return;
+    const main = mainRef.current;
+    const aside = asideRef.current;
+    returnFocus.current = document.activeElement as HTMLElement | null;
+    main?.setAttribute("inert", "");
+    (focusables(aside)[0] ?? aside)?.focus();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !e.defaultPrevented) { onCloseInspector?.(); return; }
+      if (e.key !== "Tab" || !aside) return;
+      const f = focusables(aside);
+      if (f.length === 0) { e.preventDefault(); return; }
+      const first = f[0], last = f[f.length - 1];
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [inspector, geo.mode, onCloseInspector]);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      main?.removeAttribute("inert");
+      const back = returnFocus.current;
+      if (back && document.contains(back)) back.focus();
+    };
+  }, [drawerOpen, onCloseInspector]);
 
   const inspectorEl = inspector ? (
     <aside
+      ref={asideRef}
       aria-label={inspectorLabel ?? `${label} details`}
       data-testid="lens-inspector"
+      data-list-keys="ignore"
+      role={geo.mode === "drawer" ? "dialog" : undefined}
+      aria-modal={geo.mode === "drawer" ? true : undefined}
+      tabIndex={-1}
       className={`lens-inspector${geo.mode === "drawer" ? " lens-drawer" : ""}`}
       style={{ width: geo.width }}
     >
@@ -137,7 +168,7 @@ export function LensLayout({
 
   return (
     <div ref={rootRef} className="lens" data-mode={geo.mode} data-testid="lens-layout">
-      <section aria-label={label} className="lens-main">
+      <section ref={mainRef} aria-label={label} className="lens-main">
         <div className="lens-header">
           <h1 className="t-workspace-title">{title}</h1>
           {summary && <div className="lens-header-summary">{summary}</div>}
@@ -183,6 +214,24 @@ export function LensLayout({
           {inspectorEl}
         </>
       )}
+    </div>
+  );
+}
+
+const FOCUSABLE = 'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+function focusables(root: HTMLElement | null): HTMLElement[] {
+  if (!root) return [];
+  return Array.from(root.querySelectorAll<HTMLElement>(FOCUSABLE)).filter((el) => !el.closest("[inert]"));
+}
+
+// LensTable: the one horizontal-scroll surface for a table body. Header and
+// rows share it (and one column definition), so they can never scroll apart;
+// minWidth is the sum of the column floors at the narrowest fold.
+export function LensTable({ minWidth, children }: { minWidth: number; children: ReactNode }) {
+  return (
+    <div className="lens-table" role="table">
+      <div className="lens-table-inner" style={{ minWidth }}>{children}</div>
     </div>
   );
 }

@@ -20,6 +20,10 @@ import { getPaletteOpen } from "./CommandPalette";
  *   - event.target is INPUT, TEXTAREA, or contentEditable
  *   - paletteOpen flag is true
  *   - event has meta / ctrl / alt modifier
+ *   - another handler already handled it (defaultPrevented)
+ *   - it comes from inside an inspector, menu or dialog (except Escape, which
+ *     still closes the inspector) - keyboard use of a panel's buttons must
+ *     never move or activate the list row behind it
  */
 
 export interface UseListKeysOptions {
@@ -41,6 +45,14 @@ export interface UseListKeysOptions {
    * Only fires when selected >= 0 and selected < count.
    */
   extraKeys?: Record<string, (selected: number) => void>;
+}
+
+// Surfaces whose own controls must not drive the list.
+const OWN_KEYS = '[data-list-keys="ignore"], [role="menu"], [role="dialog"]';
+
+function inOwnKeysSurface(t: EventTarget | null): boolean {
+  const el = t as HTMLElement | null;
+  return !!el && typeof el.closest === "function" && el.closest(OWN_KEYS) !== null;
 }
 
 function inEditable(t: EventTarget | null): boolean {
@@ -71,6 +83,8 @@ export function useListKeys({
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       // Ignore when the event originates inside an editable element.
       if (inEditable(e.target)) return;
+      if (e.defaultPrevented) return;
+      if (e.key !== "Escape" && inOwnKeysSurface(e.target)) return;
 
       if (e.key === "j" || e.key === "ArrowDown") {
         if (count === 0) return;
