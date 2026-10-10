@@ -16,7 +16,7 @@ func faultPod(name, label string, rank int) OwnedPod {
 func deploy(mut func(*WorkloadInput)) WorkloadInput {
 	in := WorkloadInput{
 		Kind: "Deployment", Generation: 2, ObservedGeneration: 2,
-		Desired: 3, Ready: 3, Updated: 3, Strategy: StrategyRolling,
+		Desired: 3, Ready: 3, Available: 3, Updated: 3, Strategy: StrategyRolling,
 		Progressing:      &Condition{Status: "True", Reason: "NewReplicaSetAvailable", LastUpdateTime: t0},
 		ProgressDeadline: 600 * time.Second,
 		Pods:             []OwnedPod{healthyPod("a"), healthyPod("b"), healthyPod("c")},
@@ -123,8 +123,38 @@ func TestWorkloadTable(t *testing.T) {
 		{"paused Deployment with missing readiness still reports the outage", deploy(func(in *WorkloadInput) {
 			in.Paused, in.Ready, in.Updated = true, 0, 1
 		}), t0, Fault, "0/3 ready", "workload.none-ready"},
-		{"incomplete pod evidence never reads healthy", deploy(func(in *WorkloadInput) { in.PodsComplete = false }),
-			t0, Unknown, "Available", "workload.pods-incomplete"},
+		{"incomplete pod evidence never reads healthy, nor headlines it", deploy(func(in *WorkloadInput) { in.PodsComplete = false }),
+			t0, Unknown, "Unverified", "workload.pods-incomplete"},
+		{"previous completed rollout never anchors a new generation's stall clock", deploy(func(in *WorkloadInput) {
+			in.Generation, in.Updated = 3, 1 // observedGeneration still 2; condition is yesterday's completion
+			in.Progressing = &Condition{Status: "True", Reason: "NewReplicaSetAvailable", LastUpdateTime: t0.Add(-24 * time.Hour)}
+		}), t0, Progressing, "Rolling out · 1/3 updated", "workload.rollout-unanchored-serving"},
+		{"completed condition on the observed generation is not progress evidence", deploy(func(in *WorkloadInput) {
+			in.Updated, in.Ready = 1, 2
+			in.Progressing = &Condition{Status: "True", Reason: "NewReplicaSetAvailable", LastUpdateTime: t0.Add(-24 * time.Hour)}
+		}), t0, Unknown, "Rolling out · 1/3 updated", "workload.rollout-unanchored"},
+		{"Progressing=Unknown is not positive evidence", deploy(func(in *WorkloadInput) {
+			in.Updated, in.Ready = 1, 2
+			in.Progressing = &Condition{Status: "Unknown", Reason: "DeploymentPaused", LastUpdateTime: t0.Add(-24 * time.Hour)}
+		}), t0, Unknown, "Rolling out · 1/3 updated", "workload.rollout-unanchored"},
+		{"stale deadline failure from before the new generation is history", deploy(func(in *WorkloadInput) {
+			in.Generation, in.Updated = 3, 0
+			in.Progressing = &Condition{Status: "False", Reason: "ProgressDeadlineExceeded", LastUpdateTime: t0.Add(-time.Hour)}
+		}), t0, Progressing, "Rolling out · 0/3 updated", "workload.rollout-unanchored-serving"},
+		{"ready but not yet available (minReadySeconds)", deploy(func(in *WorkloadInput) { in.Available = 1 }),
+			t0, Progressing, "Ready · 1/3 available", "workload.becoming-available"},
+		{"ordinal start 10, partition below start: all replicas update", sts(func(in *WorkloadInput) {
+			in.OrdinalStart, in.Partition, in.Updated, in.RevisionDrift = 10, 5, 0, true
+		}), t0, Progressing, "Rolling out · 0/3 updated", "workload.rollout-serving"},
+		{"ordinal start 10, partition 11: two replicas must update", sts(func(in *WorkloadInput) {
+			in.OrdinalStart, in.Partition, in.Updated, in.RevisionDrift = 10, 11, 0, true
+		}), t0, Progressing, "Rolling out · 0/2 updated", "workload.rollout-serving"},
+		{"ordinal start 10, partition at range end: none update", sts(func(in *WorkloadInput) {
+			in.OrdinalStart, in.Partition, in.Updated, in.RevisionDrift = 10, 13, 0, true
+		}), t0, OK, "Ready", "workload.ready"},
+		{"ordinal partition does not hide a serving shortfall", sts(func(in *WorkloadInput) {
+			in.OrdinalStart, in.Partition, in.Updated, in.Ready, in.RevisionDrift = 10, 13, 0, 2, true
+		}), t0, Degraded, "2/3 ready", "workload.partially-ready"},
 		{"incomplete evidence still reports a known fault", deploy(func(in *WorkloadInput) {
 			in.PodsComplete = false
 			in.Pods[0] = faultPod("a", "ErrImagePull", 50)
@@ -170,5 +200,16 @@ func TestWorkloadRolloutBoundary(t *testing.T) {
 	}
 	if got := Workload(in, *v.ReclassifyAt).Kind; got != Degraded {
 		t.Fatalf("at boundary got %s, want degraded", got)
+	}
+}
+
+func TestUnsupportedKindNeverSerialisesHealthy(t *testing.T) {
+	for _, k := range []Kind{Kind(-1), Kind(99)} {
+		if k.String() != "unknown" {
+			t.Fatalf("Kind(%d).String() = %q, want unknown", int(k), k.String())
+		}
+	}
+	if OK.String() != "ok" {
+		t.Fatalf("OK.String() = %q", OK.String())
 	}
 }

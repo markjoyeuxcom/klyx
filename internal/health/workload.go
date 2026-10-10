@@ -37,12 +37,16 @@ type WorkloadInput struct {
 	ObservedGeneration int64
 	// Desired is spec.replicas (Deployment/StatefulSet, nil defaulted to 1)
 	// or status.desiredNumberScheduled (DaemonSet).
-	Desired int
-	Ready   int
-	Updated int
+	Desired   int
+	Ready     int
+	Available int // Deployment status.availableReplicas (honours minReadySeconds)
+	Updated   int
 	// Strategy and Partition (StatefulSet RollingUpdate partition; 0 if none).
 	Strategy  Strategy
 	Partition int
+	// OrdinalStart is StatefulSet spec.ordinals.start (0 when unset): the
+	// replicas are ordinals [OrdinalStart, OrdinalStart+Desired).
+	OrdinalStart int
 	// RevisionDrift: the controller reports pods on an older revision
 	// (StatefulSet currentRevision != updateRevision; DaemonSet
 	// updatedNumberScheduled < desiredNumberScheduled).
@@ -72,10 +76,10 @@ func Workload(in WorkloadInput, now time.Time) Verdict {
 		v.Native = fmt.Sprintf("%d/%d ready · %d updated · generation %d/%d", in.Ready, in.Desired, in.Updated, in.ObservedGeneration, in.Generation)
 	}
 	if v.Kind == OK && !in.PodsComplete {
-		v.Kind = Unknown
-		v.Reason = "PodsIncomplete"
-		v.Rule = "workload.pods-incomplete"
-		v.Message = "pod list was truncated or unreadable; healthy cannot be confirmed"
+		// The controller's own counts stay visible in Native; the headline
+		// must not claim health the evidence cannot support.
+		v = Verdict{Kind: Unknown, Label: "Unverified", Reason: "PodsIncomplete", Rule: "workload.pods-incomplete", Native: v.Native,
+			Message: "pod or ReplicaSet evidence was truncated or unreadable; healthy cannot be confirmed"}
 	}
 	return v
 }
@@ -91,11 +95,14 @@ func workloadVerdict(in WorkloadInput, now time.Time) Verdict {
 		return Verdict{Kind: Fault, Label: p.Verdict.Label, Reason: p.Verdict.Reason, Message: msg, Rule: "workload.pod-failure", Rank: p.Verdict.Rank}
 	}
 
-	// W2: the Deployment controller says it failed.
-	if c := in.ReplicaFailure; c != nil && c.Status == "True" {
+	// W2: the Deployment controller says it failed - about the CURRENT spec
+	// only; a condition from before the latest generation was observed is
+	// history.
+	current := in.ObservedGeneration >= in.Generation
+	if c := in.ReplicaFailure; current && c != nil && c.Status == "True" {
 		return Verdict{Kind: Fault, Label: orDefault(c.Reason, "ReplicaFailure"), Reason: "ReplicaFailure", Message: c.Message, Rule: "workload.replica-failure"}
 	}
-	if c := in.Progressing; c != nil && c.Status == "False" {
+	if c := in.Progressing; current && c != nil && c.Status == "False" {
 		return Verdict{Kind: Fault, Label: orDefault(c.Reason, "ProgressDeadlineExceeded"), Reason: "ProgressFailed", Message: c.Message, Rule: "workload.progress-failed"}
 	}
 
@@ -124,8 +131,8 @@ func workloadVerdict(in WorkloadInput, now time.Time) Verdict {
 			// The Deployment controller enforces its own progress deadline and
 			// flips Progressing=False (W2). Trust it while it is current;
 			// without the condition, no trustworthy anchor exists.
-			c := in.Progressing
-			if c == nil || c.LastUpdateTime.IsZero() {
+			c := activeProgress(in)
+			if c == nil {
 				if in.Ready >= in.Desired {
 					return Verdict{Kind: Progressing, Label: label, Reason: "RollingOut", Rule: "workload.rollout-unanchored-serving"}
 				}
@@ -157,7 +164,12 @@ func workloadVerdict(in WorkloadInput, now time.Time) Verdict {
 		return Verdict{Kind: Degraded, Label: fmt.Sprintf("%d/%d ready", in.Ready, in.Desired), Reason: "PartiallyReady", Rule: "workload.partially-ready"}
 	}
 
-	// W6/W7/W10: serving fully.
+	// W6/W7/W10: serving fully. A Deployment claims "Available" only from
+	// its own availability count (minReadySeconds can hold ready pods back).
+	if in.Kind == "Deployment" && in.Available < in.Desired {
+		return Verdict{Kind: Progressing, Label: fmt.Sprintf("Ready · %d/%d available", in.Available, in.Desired), Reason: "BecomingAvailable", Rule: "workload.becoming-available",
+			Message: "pods are ready but have not yet been ready for minReadySeconds"}
+	}
 	v := Verdict{Kind: OK, Reason: "Ready", Rule: "workload.ready", Label: "Ready"}
 	if in.Kind == "Deployment" {
 		v.Label = "Available"
@@ -187,14 +199,46 @@ func rolloutActive(in WorkloadInput) bool {
 	return in.Updated < updateTarget(in)
 }
 
-// updateTarget is how many replicas an automatic rollout must update:
-// desired minus a StatefulSet partition (ordinals below it stay put).
+// updateTarget is how many replicas an automatic rollout must update: the
+// ordinals in [OrdinalStart, OrdinalStart+Desired) at or above a StatefulSet
+// partition (ordinals below it stay on the old revision).
 func updateTarget(in WorkloadInput) int {
-	t := in.Desired - in.Partition
+	hi := in.OrdinalStart + in.Desired
+	lo := in.Partition
+	if lo < in.OrdinalStart {
+		lo = in.OrdinalStart
+	}
+	t := hi - lo
 	if t < 0 {
 		return 0
 	}
+	if t > in.Desired {
+		return in.Desired
+	}
 	return t
+}
+
+// activeProgressReasons are the Deployment controller's Progressing=True
+// reasons for a rollout in flight. NewReplicaSetAvailable means the LAST
+// rollout completed; it can never start a new episode's stall clock.
+var activeProgressReasons = map[string]bool{
+	"NewReplicaSetCreated": true,
+	"FoundNewReplicaSet":   true,
+	"ReplicaSetUpdated":    true,
+}
+
+// activeProgress returns the Progressing condition only when it is positive
+// evidence of the current rollout moving: True, an in-flight reason, a
+// timestamp, and about the observed generation. Anything else is unanchored.
+func activeProgress(in WorkloadInput) *Condition {
+	c := in.Progressing
+	if c == nil || c.Status != "True" || !activeProgressReasons[c.Reason] || c.LastUpdateTime.IsZero() {
+		return nil
+	}
+	if in.ObservedGeneration < in.Generation {
+		return nil
+	}
+	return c
 }
 
 // worstFaultPod picks the failing pod that headlines a workload, with stable

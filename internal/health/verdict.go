@@ -39,8 +39,10 @@ func (k Kind) String() string {
 		return "progressing"
 	case Paused:
 		return "paused"
-	default:
+	case OK:
 		return "ok"
+	default: // an unsupported value must never serialise as healthy
+		return "unknown"
 	}
 }
 

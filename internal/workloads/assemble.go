@@ -13,30 +13,47 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 )
 
-// Assemble joins workloads with their pods and derives health, sorted
-// triage-first. It assumes the pod list is complete; callers that know it may
-// be truncated use AssembleObserved.
-func Assemble(deploys []appsv1.Deployment, stss []appsv1.StatefulSet, dss []appsv1.DaemonSet,
-	pods []corev1.Pod, fluxPresent bool, now time.Time) []Workload {
-	return AssembleObserved(deploys, stss, dss, pods, true, fluxPresent, now)
+// Evidence states how complete the observations behind a health verdict are.
+// A workload is never confirmed healthy on incomplete evidence.
+type Evidence struct {
+	PodsComplete bool // the pod list was read in full
+	// ReplicaSetsComplete: the ReplicaSet list was read in full. Without it a
+	// Deployment's pods cannot be attributed by ownership.
+	ReplicaSetsComplete bool
 }
 
-// AssembleObserved is Assemble with the pod observation's completeness made
-// explicit: podsComplete=false (a truncated or partial pod list) means no
-// workload can be confirmed healthy. fluxPresent gates owner extraction.
-// AgeSeconds and time-based verdicts are computed from now. Rows sort by
-// health verdict (internal/health), then severity, namespace and name.
-func AssembleObserved(deploys []appsv1.Deployment, stss []appsv1.StatefulSet, dss []appsv1.DaemonSet,
-	pods []corev1.Pod, podsComplete, fluxPresent bool, now time.Time) []Workload {
+// Assemble joins workloads with their pods for the legacy fields. It has no
+// ReplicaSets, so Deployment health is reported unverified; production
+// callers use AssembleObserved.
+func Assemble(deploys []appsv1.Deployment, stss []appsv1.StatefulSet, dss []appsv1.DaemonSet,
+	pods []corev1.Pod, fluxPresent bool, now time.Time) []Workload {
+	return AssembleObserved(deploys, nil, stss, dss, pods, Evidence{PodsComplete: true}, fluxPresent, now)
+}
+
+// AssembleObserved joins workloads with the pods they own and derives health
+// (internal/health). Pods are attributed by controller UID chain only:
+// StatefulSet/DaemonSet directly, Deployment via pod -> ReplicaSet ->
+// Deployment. fluxPresent gates owner extraction. AgeSeconds and time-based
+// verdicts are computed from now. Rows sort by verdict, then severity,
+// namespace and name.
+func AssembleObserved(deploys []appsv1.Deployment, rss []appsv1.ReplicaSet, stss []appsv1.StatefulSet, dss []appsv1.DaemonSet,
+	pods []corev1.Pod, ev Evidence, fluxPresent bool, now time.Time) []Workload {
 
 	podVerdicts := make([]health.Verdict, len(pods))
 	for i := range pods {
 		podVerdicts[i] = health.Pod(&pods[i], now)
 	}
-	classify := func(in health.WorkloadInput, owns func(*corev1.Pod, *metav1.OwnerReference) bool, ns string) health.Verdict {
+	classify := func(in health.WorkloadInput, owns func(*metav1.OwnerReference) bool, ns string, complete bool) health.Verdict {
 		in.Pods = ownedPods(ns, pods, podVerdicts, owns)
-		in.PodsComplete = podsComplete
+		in.PodsComplete = complete
 		return health.Workload(in, now)
+	}
+	// rsOwner maps a ReplicaSet UID to the UID of the Deployment controlling it.
+	rsOwner := make(map[types.UID]types.UID, len(rss))
+	for i := range rss {
+		if ref := metav1.GetControllerOf(&rss[i]); ref != nil && ref.Kind == "Deployment" {
+			rsOwner[rss[i].UID] = ref.UID
+		}
 	}
 
 	out := make([]Workload, 0, len(deploys)+len(stss)+len(dss))
@@ -44,19 +61,19 @@ func AssembleObserved(deploys []appsv1.Deployment, stss []appsv1.StatefulSet, ds
 		d := &deploys[i]
 		w := build("Deployment", d.Namespace, d.Name, d.Labels, d.Annotations, d.Spec.Selector, d.Spec.Template.Spec, classifyDeployment(d), pods, fluxPresent, now, d.Generation, d.Status.ObservedGeneration)
 		w.Paused = d.Spec.Paused
-		w.Health = classify(deploymentInput(d), ownedByDeployment(d.Name), d.Namespace)
+		w.Health = classify(deploymentInput(d), ownedByDeployment(d.UID, rsOwner), d.Namespace, ev.PodsComplete && ev.ReplicaSetsComplete)
 		out = append(out, w)
 	}
 	for i := range stss {
 		s := &stss[i]
 		w := build("StatefulSet", s.Namespace, s.Name, s.Labels, s.Annotations, s.Spec.Selector, s.Spec.Template.Spec, classifyStatefulSet(s), pods, fluxPresent, now, s.Generation, s.Status.ObservedGeneration)
-		w.Health = classify(statefulSetInput(s), ownedByUID("StatefulSet", s.UID), s.Namespace)
+		w.Health = classify(statefulSetInput(s), ownedByUID("StatefulSet", s.UID), s.Namespace, ev.PodsComplete)
 		out = append(out, w)
 	}
 	for i := range dss {
 		ds := &dss[i]
 		w := build("DaemonSet", ds.Namespace, ds.Name, ds.Labels, ds.Annotations, ds.Spec.Selector, ds.Spec.Template.Spec, classifyDaemonSet(ds), pods, fluxPresent, now, ds.Generation, ds.Status.ObservedGeneration)
-		w.Health = classify(daemonSetInput(ds), ownedByUID("DaemonSet", ds.UID), ds.Namespace)
+		w.Health = classify(daemonSetInput(ds), ownedByUID("DaemonSet", ds.UID), ds.Namespace, ev.PodsComplete)
 		out = append(out, w)
 	}
 
@@ -77,7 +94,7 @@ func AssembleObserved(deploys []appsv1.Deployment, stss []appsv1.StatefulSet, ds
 
 // ownedPods attributes pods to one workload by controller owner reference,
 // never by label selector (selectors can overlap; ownership cannot).
-func ownedPods(ns string, pods []corev1.Pod, verdicts []health.Verdict, owns func(*corev1.Pod, *metav1.OwnerReference) bool) []health.OwnedPod {
+func ownedPods(ns string, pods []corev1.Pod, verdicts []health.Verdict, owns func(*metav1.OwnerReference) bool) []health.OwnedPod {
 	var out []health.OwnedPod
 	for i := range pods {
 		p := &pods[i]
@@ -85,7 +102,7 @@ func ownedPods(ns string, pods []corev1.Pod, verdicts []health.Verdict, owns fun
 			continue
 		}
 		ref := metav1.GetControllerOf(p)
-		if ref == nil || !owns(p, ref) {
+		if ref == nil || !owns(ref) {
 			continue
 		}
 		out = append(out, health.OwnedPod{Namespace: p.Namespace, Name: p.Name, UID: string(p.UID), Verdict: verdicts[i]})
@@ -94,29 +111,26 @@ func ownedPods(ns string, pods []corev1.Pod, verdicts []health.Verdict, owns fun
 }
 
 // ownedByUID matches pods a StatefulSet/DaemonSet controls directly.
-func ownedByUID(kind string, uid types.UID) func(*corev1.Pod, *metav1.OwnerReference) bool {
-	return func(_ *corev1.Pod, ref *metav1.OwnerReference) bool {
+func ownedByUID(kind string, uid types.UID) func(*metav1.OwnerReference) bool {
+	return func(ref *metav1.OwnerReference) bool {
 		return ref.Kind == kind && uid != "" && ref.UID == uid
 	}
 }
 
-// ownedByDeployment matches pods whose controlling ReplicaSet is one of this
-// Deployment's: the controller names each ReplicaSet <deployment>-<hash> and
-// stamps the same pod-template-hash on its pods. (Without listing
-// ReplicaSets this cannot tell a same-named, recreated Deployment's orphaned
-// ReplicaSet apart; that leftover is short-lived and garbage-collected.)
-func ownedByDeployment(name string) func(*corev1.Pod, *metav1.OwnerReference) bool {
-	return func(p *corev1.Pod, ref *metav1.OwnerReference) bool {
-		hash := p.Labels[appsv1.DefaultDeploymentUniqueLabelKey]
-		return ref.Kind == "ReplicaSet" && hash != "" && ref.Name == name+"-"+hash
+// ownedByDeployment matches pods whose controlling ReplicaSet is itself
+// controlled by this Deployment (UID chain, never names): an orphaned or
+// same-named old ReplicaSet does not attach, an adopted one does.
+func ownedByDeployment(uid types.UID, rsOwner map[types.UID]types.UID) func(*metav1.OwnerReference) bool {
+	return func(ref *metav1.OwnerReference) bool {
+		return ref.Kind == "ReplicaSet" && uid != "" && rsOwner[ref.UID] == uid
 	}
 }
 
 func deploymentInput(d *appsv1.Deployment) health.WorkloadInput {
 	in := health.WorkloadInput{
 		Kind: "Deployment", Generation: d.Generation, ObservedGeneration: d.Status.ObservedGeneration,
-		Desired: replicas(d.Spec.Replicas), Ready: int(d.Status.ReadyReplicas), Updated: int(d.Status.UpdatedReplicas),
-		Strategy: health.StrategyRolling, Paused: d.Spec.Paused, ProgressDeadline: 600 * time.Second,
+		Desired: replicas(d.Spec.Replicas), Ready: int(d.Status.ReadyReplicas), Available: int(d.Status.AvailableReplicas),
+		Updated: int(d.Status.UpdatedReplicas), Strategy: health.StrategyRolling, Paused: d.Spec.Paused, ProgressDeadline: 600 * time.Second,
 	}
 	if d.Spec.Strategy.Type == appsv1.RecreateDeploymentStrategyType {
 		in.Strategy = health.StrategyRecreate
@@ -149,6 +163,9 @@ func statefulSetInput(s *appsv1.StatefulSet) health.WorkloadInput {
 	}
 	if ru := s.Spec.UpdateStrategy.RollingUpdate; ru != nil && ru.Partition != nil {
 		in.Partition = int(*ru.Partition)
+	}
+	if s.Spec.Ordinals != nil {
+		in.OrdinalStart = int(s.Spec.Ordinals.Start)
 	}
 	return in
 }

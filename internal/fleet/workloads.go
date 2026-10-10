@@ -5,6 +5,7 @@ import (
 
 	"github.com/moomora/klyx/internal/clock"
 	"github.com/moomora/klyx/internal/workloads"
+	appsv1 "k8s.io/api/apps/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -35,12 +36,20 @@ func (c *ClusterConn) ListWorkloads(ctx context.Context, namespace string) ([]wo
 	if err != nil {
 		return nil, fluxPresent, false, err
 	}
+	// ReplicaSets carry the Deployment ownership chain for health
+	// attribution. Unreadable (e.g. RBAC) is not fatal: Deployment health
+	// then reports unverified instead of guessing.
+	ev := workloads.Evidence{PodsComplete: pods.GetContinue() == ""}
+	var rsItems []appsv1.ReplicaSet
+	if rss, rerr := c.typed.AppsV1().ReplicaSets(namespace).List(ctx, opts); rerr == nil {
+		rsItems = rss.Items
+		ev.ReplicaSetsComplete = rss.GetContinue() == ""
+	}
 	truncated := deps.GetContinue() != "" || stss.GetContinue() != "" || dss.GetContinue() != "" || pods.GetContinue() != ""
 
 	clk := c.clk
 	if clk == nil {
 		clk = clock.Real{}
 	}
-	// A truncated pod list means no workload can be confirmed healthy.
-	return workloads.AssembleObserved(deps.Items, stss.Items, dss.Items, pods.Items, pods.GetContinue() == "", fluxPresent, clk.Now()), fluxPresent, truncated, nil
+	return workloads.AssembleObserved(deps.Items, rsItems, stss.Items, dss.Items, pods.Items, ev, fluxPresent, clk.Now()), fluxPresent, truncated, nil
 }
