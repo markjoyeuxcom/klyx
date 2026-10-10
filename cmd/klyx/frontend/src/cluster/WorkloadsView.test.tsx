@@ -664,9 +664,9 @@ describe("WorkloadsView Codex review corrections", () => {
     const { getByRole, queryByRole, rerender } = render(<WorkloadsView cluster="homelab-nelli" />);
     select("ollama");
     chooseMore("Compare across the fleet");
-    expect(getByRole("dialog", { name: "fleet compare" })).toBeTruthy();
+    expect(getByRole("dialog", { name: "Fleet compare" })).toBeTruthy();
     switchTo(rerender, "other", [broken]);
-    expect(queryByRole("dialog", { name: "fleet compare" })).toBeNull();
+    expect(queryByRole("dialog", { name: "Fleet compare" })).toBeNull();
   });
 
   it("pod deletion is a per-pod action and is cancelled when that pod leaves the evidence", () => {

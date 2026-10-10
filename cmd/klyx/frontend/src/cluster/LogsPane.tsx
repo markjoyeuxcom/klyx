@@ -1,4 +1,4 @@
-import { inputWell } from "../chrome/primitives";
+import "../layout/layout.css";
 import React, { useEffect, useRef, useState, useLayoutEffect, useCallback } from "react";
 import { Events } from "@wailsio/runtime";
 import {
@@ -446,57 +446,28 @@ export function LogsPane({
   // Styles
   // --------------------------------------------------------------------------
 
-  const chipStyle = (on: boolean): React.CSSProperties => ({
-    fontSize: 10, padding: "3px 9px", borderRadius: 11, cursor: "pointer",
-    border: on ? "0.5px solid var(--color-text-info)" : "0.5px solid var(--color-border-tertiary)",
-    background: on ? "var(--color-background-info, transparent)" : "transparent",
-    color: on ? "var(--color-text-info)" : "var(--color-text-tertiary)",
-  });
-
-  const btnStyle: React.CSSProperties = {
-    fontSize: 10, padding: "3px 9px", borderRadius: 4, cursor: "pointer",
-    border: "0.5px solid var(--color-border-tertiary)",
-    background: "var(--color-background-primary)",
-    color: "var(--color-text-secondary)",
-  };
-
-  const iconBtnStyle: React.CSSProperties = {
-    ...btnStyle,
-    display: "flex", alignItems: "center", justifyContent: "center",
-    padding: "3px 5px",
-  };
-
-  const detailBtnStyle: React.CSSProperties = {
-    ...iconBtnStyle,
-    minWidth: 0,
-    height: 24,
-  };
-
-  const selectStyle: React.CSSProperties = {
-    fontSize: 11, padding: "3px 6px",
-    background: "var(--color-background-primary)",
-    color: "var(--color-text-primary)",
-    border: "0.5px solid var(--color-border-tertiary)",
-    borderRadius: 4,
-  };
+  // Shared control roles (layout.css): the logs surface uses the same chips,
+  // buttons and inputs as the lenses (spec §2 - separate surface, same roles).
+  const iconBtn: React.CSSProperties = { width: 24, padding: 0, justifyContent: "center" };
 
   // --------------------------------------------------------------------------
   // Controls bar (shared between normal + expanded render)
   // --------------------------------------------------------------------------
 
   const controlsBar = (
-    <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", flexShrink: 0 }}>
+    <div className="t-control" style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", flexShrink: 0 }}>
       {/* Container picker — or static text when hosted with no containers list */}
       {staticContainer ? (
         <span
-          style={{ fontSize: 11, color: "var(--color-text-secondary)", fontFamily: "var(--font-mono)" }}
+          className="t-identifier"
+          style={{ color: "var(--color-text-secondary)" }}
           aria-label="container"
         >{container || "default containers"}</span>
       ) : (
         <select
           value={container}
           onChange={(e) => setContainer(e.target.value)}
-          style={selectStyle}
+          className="l-input"
           aria-label="container"
         >
           {regular.map((c) => <option key={c.name} value={c.name}>{c.name}</option>)}
@@ -508,7 +479,7 @@ export function LogsPane({
       <select
         value={tailLines}
         onChange={(e) => setTailLines(Number(e.target.value))}
-        style={selectStyle}
+        className="l-input"
         aria-label="tail lines"
       >
         <option value={100}>100 lines</option>
@@ -518,9 +489,10 @@ export function LogsPane({
       </select>
 
       {/* Toggles */}
-      {!workload && <button style={chipStyle(previous)} onClick={() => setPrevious((p) => !p)}>previous</button>}
+      {!workload && <button className="l-chip" aria-pressed={previous} onClick={() => setPrevious((p) => !p)}>previous</button>}
       <button
-        style={chipStyle(follow)}
+        className="l-chip"
+        aria-pressed={follow}
         onClick={() => {
           setFollow((f) => {
             if (!f && scrollRef.current) {
@@ -533,13 +505,14 @@ export function LogsPane({
           });
         }}
       >follow</button>
-      <button style={chipStyle(wrap)} onClick={() => setWrap((w) => !w)}>wrap</button>
+      <button className="l-chip" aria-pressed={wrap} onClick={() => setWrap((w) => !w)}>wrap</button>
 
       {/* Level filters. No active level means "all"; active chips narrow output. */}
       {LOG_LEVEL_FILTERS.map((level) => (
         <button
           key={level}
-          style={chipStyle(levelFilters[level])}
+          className="l-chip"
+          aria-pressed={levelFilters[level]}
           onClick={() => setLevelFilters((current) => ({ ...current, [level]: !current[level] }))}
         >
           {level}
@@ -553,7 +526,12 @@ export function LogsPane({
         onChange={(e) => setSearch(e.target.value)}
         onKeyDown={handleSearchKey}
         placeholder="search"
-        style={{ ...inputWell, width: 120 }}
+        className="l-input"
+        type="search"
+        autoCapitalize="off"
+        autoCorrect="off"
+        spellCheck={false}
+        style={{ width: 140 }}
         aria-label="search logs"
       />
       {search && (
@@ -565,17 +543,17 @@ export function LogsPane({
           </span>
           {matchLineIndices.length > 0 && (
             <>
-              <button style={btnStyle} onClick={() => jumpMatch(-1)} title="previous match (Shift+Enter)">↑</button>
-              <button style={btnStyle} onClick={() => jumpMatch(1)} title="next match (Enter)">↓</button>
+              <button className="l-btn" style={iconBtn} onClick={() => jumpMatch(-1)} title="previous match (Shift+Enter)">↑</button>
+              <button className="l-btn" style={iconBtn} onClick={() => jumpMatch(1)} title="next match (Enter)">↓</button>
             </>
           )}
         </>
       )}
 
-      <button onClick={clearBuffer} style={btnStyle}>clear</button>
+      <button onClick={clearBuffer} className="l-btn">clear</button>
       <button
         onClick={() => void handleCopy()}
-        style={btnStyle}
+        className="l-btn"
         aria-label="copy logs"
       >
         {copyState === "copied" ? "copied" : "copy visible"}
@@ -585,7 +563,8 @@ export function LogsPane({
           meaningless when the pane already owns the whole window). */}
       {!hostedInWindow && (
         <button
-          style={iconBtnStyle}
+          className="l-btn"
+          style={iconBtn}
           onClick={() => setExpanded((v) => !v)}
           aria-label={expanded ? "collapse logs" : "expand logs"}
           title={expanded ? "collapse (Esc)" : "expand"}
@@ -597,7 +576,7 @@ export function LogsPane({
       )}
 
       {/* Status (right-aligned) */}
-      <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 5, fontSize: 10 }}>
+      <div className="t-secondary" style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 5 }}>
         {status === "streaming" && (
           <>
             <span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--color-text-success)", display: "inline-block" }} />
@@ -606,8 +585,8 @@ export function LogsPane({
         )}
         {status === "connecting" && <span style={{ color: "var(--color-text-tertiary)" }}>connecting…</span>}
         {status === "ended" && !errorMsg && <span style={{ color: "var(--color-text-tertiary)" }}>ended</span>}
-        {status === "ended" && errorMsg && <span style={{ color: "var(--color-text-danger)" }} title={errorMsg}>ended: {errorMsg}</span>}
-        {status === "error" && <span style={{ color: "var(--color-text-danger)" }} title={errorMsg}>error: {errorMsg}</span>}
+        {status === "ended" && errorMsg && <span style={{ color: "var(--color-text-danger)", overflowWrap: "anywhere" }} title={errorMsg}>▲ ended: {errorMsg}</span>}
+        {status === "error" && <span style={{ color: "var(--color-text-danger)", overflowWrap: "anywhere" }} title={errorMsg}>▲ error: {errorMsg}</span>}
       </div>
     </div>
   );
@@ -718,7 +697,7 @@ export function LogsPane({
       <div style={{ display: "flex", alignItems: "flex-start", gap: 5, flexWrap: "wrap", justifyContent: "flex-end" }}>
         <button
           type="button"
-          style={detailBtnStyle}
+          className="l-btn" style={iconBtn}
           onClick={() => void handleCopySelected(selectedDetail.raw)}
           title="copy raw line"
           aria-label="copy raw log line"
@@ -727,7 +706,7 @@ export function LogsPane({
         </button>
         <button
           type="button"
-          style={detailBtnStyle}
+          className="l-btn" style={iconBtn}
           onClick={() => void handleCopySelected(selectedDetail.message)}
           title="copy message"
           aria-label="copy log message"
@@ -737,7 +716,7 @@ export function LogsPane({
         {selectedLevelFilter && (
           <button
             type="button"
-            style={detailBtnStyle}
+            className="l-btn" style={iconBtn}
             onClick={() => setLevelFilters({
               error: selectedLevelFilter === "error",
               warn: selectedLevelFilter === "warn",
@@ -752,7 +731,7 @@ export function LogsPane({
         )}
         <button
           type="button"
-          style={detailBtnStyle}
+          className="l-btn" style={iconBtn}
           onClick={() => setSelectedLine(null)}
           title="close"
           aria-label="close log line detail"

@@ -40,9 +40,11 @@ type WorkloadCompareInfo struct {
 	DesiredReplicas int32
 	ReadyReplicas   int32
 	Containers      []CompareContainer
-	// SpecHash is a short digest of the pod template. Equal hashes mean the
-	// templates are byte-identical; differing hashes with identical images and
-	// resources mean OTHER spec drift (env, volumes, probes, ...) exists.
+	// SpecHash is a short digest of the POD SPEC (template metadata is
+	// excluded: kubectl rollout restart and Reloader stamp annotations there,
+	// which are not configuration drift). Equal hashes mean the pod specs are
+	// identical; differing hashes with identical images and resources mean
+	// OTHER pod-spec drift (env, volumes, probes, ...) exists.
 	SpecHash string
 	// The GitOps owner from the workload's labels, and - for Flux owners - the
 	// owning object's lastAppliedRevision, resolved live (best-effort; "" when
@@ -51,6 +53,10 @@ type WorkloadCompareInfo struct {
 	OwnerNamespace string
 	OwnerName      string
 	OwnerRevision  string
+	// OwnerRevisionNote says why OwnerRevision is empty for an owned
+	// workload (Argo owner, Flux API not served, read failed, not applied
+	// yet) - an unresolved revision is never shown as an equal one.
+	OwnerRevisionNote string
 }
 
 // WorkloadCompare fetches one workload's compare facts. kind is Deployment,
@@ -115,7 +121,7 @@ func (c *ClusterConn) WorkloadCompare(ctx context.Context, kind, ns, name string
 
 	if o := workloads.GitOpsOwnerFromLabels(labels); o != nil {
 		info.OwnerKind, info.OwnerNamespace, info.OwnerName = o.Kind, o.Namespace, o.Name
-		info.OwnerRevision = c.fluxOwnerRevision(ctx, o)
+		info.OwnerRevision, info.OwnerRevisionNote = c.fluxOwnerRevision(ctx, o)
 	}
 	return info, nil
 }
@@ -127,10 +133,11 @@ func desiredReplicasOf(r *int32) int32 {
 	return 1
 }
 
-// podTemplateHash digests the full pod template (short sha256). Typed-struct
-// JSON marshaling has a fixed field order, so equal templates hash equal.
+// podTemplateHash digests the pod spec (short sha256). Typed-struct JSON
+// marshaling has a fixed field order, so equal specs hash equal. Template
+// metadata is deliberately excluded (restartedAt, Reloader annotations).
 func podTemplateHash(tmpl corev1.PodTemplateSpec) string {
-	b, err := json.Marshal(tmpl)
+	b, err := json.Marshal(tmpl.Spec)
 	if err != nil {
 		return ""
 	}
@@ -168,15 +175,18 @@ func compactResources(r corev1.ResourceRequirements) string {
 }
 
 // fluxOwnerRevision resolves the owning Flux object's lastAppliedRevision with
-// one live Get. Best-effort: any failure (Argo owner, CRD absent, RBAC) returns
-// "" - the compare still shows the owner identity.
-func (c *ClusterConn) fluxOwnerRevision(ctx context.Context, o *workloads.Owner) string {
-	if c.dyn == nil || (o.Kind != "Kustomization" && o.Kind != "HelmRelease") {
-		return ""
+// one live Get. When it cannot, the note says why (the compare still shows the
+// owner identity, and never treats two unresolved revisions as equal).
+func (c *ClusterConn) fluxOwnerRevision(ctx context.Context, o *workloads.Owner) (rev, note string) {
+	if o.Kind != "Kustomization" && o.Kind != "HelmRelease" {
+		return "", o.Kind + " owner - revision not read"
+	}
+	if c.dyn == nil {
+		return "", "revision not read - no dynamic client"
 	}
 	gvr, err := c.gvrForKind(flux.Kind(o.Kind))
 	if err != nil {
-		return ""
+		return "", "Flux " + o.Kind + " API not served"
 	}
 	ns := o.Namespace
 	if ns == "" {
@@ -184,9 +194,15 @@ func (c *ClusterConn) fluxOwnerRevision(ctx context.Context, o *workloads.Owner)
 	}
 	u, err := c.dyn.Resource(gvr).Namespace(ns).Get(ctx, o.Name, metav1.GetOptions{})
 	if err != nil || u == nil {
-		return ""
+		if err == nil {
+			err = fmt.Errorf("empty response")
+		}
+		return "", "revision unreadable: " + err.Error()
 	}
-	return fluxAppliedRevision(u)
+	if r := fluxAppliedRevision(u); r != "" {
+		return r, ""
+	}
+	return "", "no revision applied yet"
 }
 
 func fluxAppliedRevision(u *unstructured.Unstructured) string {

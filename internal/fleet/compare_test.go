@@ -114,3 +114,30 @@ func TestWorkloadCompare_NotFoundIsHonestNotError(t *testing.T) {
 		t.Fatal("unsupported kind must error")
 	}
 }
+
+// Template metadata is not configuration: a rollout restart (restartedAt) or a
+// Reloader trigger must not read as spec drift; a pod-spec change must.
+func TestWorkloadCompare_HashIgnoresTemplateMetadata(t *testing.T) {
+	plain := compareDeploy(3, "shop/cart:v1", false)
+	restarted := compareDeploy(3, "shop/cart:v1", false)
+	restarted.Spec.Template.Annotations = map[string]string{"kubectl.kubernetes.io/restartedAt": "2026-10-10T18:00:00Z", "reloader.stakater.com/last-reloaded-from": "x"}
+	ca := NewClusterConn("a", k8sfake.NewSimpleClientset(plain), nil, nil, nil, clock.Real{}, config.MetricsConfig{})
+	cb := NewClusterConn("b", k8sfake.NewSimpleClientset(restarted), nil, nil, nil, clock.Real{}, config.MetricsConfig{})
+	ia, _ := ca.WorkloadCompare(context.Background(), "Deployment", "shop", "cart")
+	ib, _ := cb.WorkloadCompare(context.Background(), "Deployment", "shop", "cart")
+	if ia.SpecHash != ib.SpecHash {
+		t.Fatal("template annotations must not count as spec drift")
+	}
+}
+
+// An owned workload whose revision cannot be resolved says why.
+func TestWorkloadCompare_UnresolvedRevisionHasANote(t *testing.T) {
+	c := NewClusterConn("x", k8sfake.NewSimpleClientset(compareDeploy(1, "shop/cart:v1", true)), nil, nil, nil, clock.Real{}, config.MetricsConfig{})
+	info, err := c.WorkloadCompare(context.Background(), "Deployment", "shop", "cart")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.OwnerRevision != "" || info.OwnerRevisionNote == "" {
+		t.Fatalf("unresolved revision needs a reason: %+v", info)
+	}
+}

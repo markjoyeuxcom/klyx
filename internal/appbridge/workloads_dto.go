@@ -125,7 +125,9 @@ type WorkloadCompareDTO struct {
 	OwnerNamespace  string                `json:"ownerNamespace"`
 	OwnerName       string                `json:"ownerName"`
 	OwnerRevision   string                `json:"ownerRevision"`
-	Error           string                `json:"error"`
+	// OwnerRevisionNote: why ownerRevision is empty for an owned workload.
+	OwnerRevisionNote string `json:"ownerRevisionNote,omitempty"`
+	Error             string `json:"error"`
 }
 
 type WorkloadsResultDTO struct {

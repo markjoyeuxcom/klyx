@@ -306,6 +306,7 @@ export type WorkloadCompareDTO = {
   found: boolean; kind: string; namespace: string; name: string;
   desiredReplicas: number; readyReplicas: number; containers: CompareContainerDTO[];
   specHash: string; ownerKind: string; ownerNamespace: string; ownerName: string; ownerRevision: string;
+  ownerRevisionNote?: string; // why ownerRevision is empty for an owned workload
   error: string;
 };
 export type WorkloadDTO = { kind: string; namespace: string; name: string; desired: number; ready: number; available: number; updated: number; restarts: number; reason: string; rank: "unhealthy"|"degraded"|"restarts"|"healthy"; gitops: OwnerDTO | null; pods: PodDTO[]; resources: WorkloadResourcesDTO; stale?: boolean; generation?: number; observedGeneration?: number; reloader?: ReloadTargetsDTO | null; paused?: boolean; health?: HealthLike };

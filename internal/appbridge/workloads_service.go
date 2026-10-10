@@ -275,8 +275,8 @@ func (s *WorkloadsService) WorkloadCompare(cluster, kind, namespace, name string
 		DesiredReplicas: info.DesiredReplicas, ReadyReplicas: info.ReadyReplicas,
 		SpecHash:  info.SpecHash,
 		OwnerKind: info.OwnerKind, OwnerNamespace: info.OwnerNamespace, OwnerName: info.OwnerName,
-		OwnerRevision: info.OwnerRevision,
-		Containers:    []CompareContainerDTO{},
+		OwnerRevision: info.OwnerRevision, OwnerRevisionNote: info.OwnerRevisionNote,
+		Containers: []CompareContainerDTO{},
 	}
 	for _, ct := range info.Containers {
 		dto.Containers = append(dto.Containers, CompareContainerDTO{Name: ct.Name, Image: ct.Image, Resources: ct.Resources})
