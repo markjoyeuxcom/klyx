@@ -332,7 +332,9 @@ export function InspectorConditions({ conditions, colorOf }: { conditions: Condi
 }
 
 /** InspectorEvents — one event rendering for every panel. */
-export function InspectorEvents({ events, emptyText = "No events." }: { events: EventDTO[]; emptyText?: string }) {
+// wrap=true (migrated inspectors, redesign spec §3): reason and message wrap in
+// full instead of truncating behind a tooltip.
+export function InspectorEvents({ events, emptyText = "No events.", wrap = false }: { events: EventDTO[]; emptyText?: string; wrap?: boolean }) {
   if (events.length === 0) {
     return <span style={{ color: "var(--color-text-tertiary)", fontSize: 11 }}>{emptyText}</span>;
   }
@@ -341,8 +343,16 @@ export function InspectorEvents({ events, emptyText = "No events." }: { events: 
       {events.map((e, i) => (
         <div key={i} style={{ display: "flex", gap: 6, alignItems: "baseline", fontSize: 11, padding: "1px 0", color: e.type === "Warning" ? "var(--color-text-danger)" : "var(--color-text-secondary)" }}>
           <span style={{ width: 7, height: 7, borderRadius: "50%", background: e.type === "Warning" ? "var(--color-text-danger)" : "var(--color-text-tertiary)", display: "inline-block", flexShrink: 0, alignSelf: "center" }} />
-          <span style={{ fontWeight: 500, flexShrink: 0, maxWidth: 130, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={e.reason}>{e.reason}</span>
-          <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, minWidth: 0 }} title={e.message}>{e.message}</span>
+          {wrap ? (
+            <span style={{ flex: 1, minWidth: 0, overflowWrap: "anywhere", lineHeight: "16px" }}>
+              <span style={{ fontWeight: 600 }}>{e.reason}</span> {e.message}
+            </span>
+          ) : (
+            <>
+              <span style={{ fontWeight: 500, flexShrink: 0, maxWidth: 130, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={e.reason}>{e.reason}</span>
+              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, minWidth: 0 }} title={e.message}>{e.message}</span>
+            </>
+          )}
           {e.count > 1 && (
             <span title={`${e.count.toLocaleString()} occurrences`} style={{ color: "var(--color-text-tertiary)", flexShrink: 0 }}>×{compactCount(e.count)}</span>
           )}

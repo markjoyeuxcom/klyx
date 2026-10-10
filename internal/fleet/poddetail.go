@@ -42,7 +42,12 @@ func (c *ClusterConn) PodDetail(ctx context.Context, namespace, name string) (Po
 	}
 	now := clk.Now()
 
-	summary := workloads.SummarizePods([]corev1.Pod{*p}, now)[0]
+	// Resolve a ReplicaSet owner to its controller exactly like ListPods does,
+	// so the inspector offers "restart deployment" for Deployment pods (the
+	// detail read previously kept the raw ReplicaSet and hid the verb).
+	sums := workloads.SummarizePods([]corev1.Pod{*p}, now)
+	c.resolveReplicaSetOwners(ctx, p.Namespace, sums)
+	summary := sums[0]
 
 	labels := p.GetLabels()
 	if labels == nil {

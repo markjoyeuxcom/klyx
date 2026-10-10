@@ -11,6 +11,14 @@ import { InstanceList } from "./InstanceList";
 import { GatewayApiView } from "./GatewayApiView";
 import { WorkloadsView } from "./WorkloadsView";
 import { PodsView } from "./PodsView";
+import { PodsViewLegacy } from "./PodsViewLegacy";
+
+// Reversible rollout switch for the 2026-10 workspace redesign pilot: set
+// localStorage "klyx.layout.v1.legacyPods" = "1" to fall back to the old lens
+// as a whole (never a mix of layout owners). Removed once the pilot is accepted.
+function legacyPods(): boolean {
+  try { return localStorage.getItem("klyx.layout.v1.legacyPods") === "1"; } catch { return false; }
+}
 import { EventsView } from "./EventsView";
 import { NodesView } from "./NodesView";
 import { AccessView } from "./AccessView";
@@ -53,7 +61,7 @@ export function ClusterDetail() {
   }
   if (route.section === "gatewayApi") return <GatewayApiView cluster={cluster.name} />;
   if (route.section === "workloads") return <WorkloadsView cluster={cluster.name} />;
-  if (route.section === "pods") return <PodsView cluster={cluster.name} />;
+  if (route.section === "pods") return legacyPods() ? <PodsViewLegacy cluster={cluster.name} /> : <PodsView cluster={cluster.name} />;
   if (route.section === "events") return <EventsView cluster={cluster.name} />;
   if (route.section === "nodes") return <NodesView cluster={cluster.name} />;
   if (route.section === "access") return <AccessView cluster={cluster.name} />;

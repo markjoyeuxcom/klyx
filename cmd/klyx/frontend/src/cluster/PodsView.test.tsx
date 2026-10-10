@@ -30,7 +30,7 @@ vi.mock("../bridge/exec", () => ({
 import { openLivePods, openPodDetail, deletePod } from "../bridge/pods";
 import { rolloutRestart } from "../bridge/workloads";
 import { openLogsWindow } from "../bridge/windows";
-import { describeResource, openDebugTerminal } from "../bridge/exec";
+import { describeResource, openDebugTerminal, openExecTerminal } from "../bridge/exec";
 
 // LogsPane uses LogsService and Wails Events — stub them out so PodsView tests
 // don't need a Wails runtime.
@@ -78,6 +78,12 @@ const fakeDetail: PodDetailDTO = {
   serviceAccount: "grafana-sa",
 };
 
+// Actions beyond Logs/Shell live in the inspector's More menu (redesign spec §3).
+function chooseMore(label: string | RegExp, getByRole: (role: string, opts?: { name?: string | RegExp }) => HTMLElement) {
+  fireEvent.click(getByRole("button", { name: /^More/ }));
+  fireEvent.click(getByRole("menuitem", { name: label }));
+}
+
 function seed(items: PodSummaryDTO[]) {
   useFleet.setState((s) => ({
     pods: {
@@ -108,10 +114,10 @@ describe("PodsView", () => {
   it("shows a loud truncation banner only when the list was capped", () => {
     seed([broken, healthy]);
     const { queryByText, rerender } = render(<PodsView cluster="homelab" />);
-    expect(queryByText(/broken-first triage may miss a fault/)).toBeNull();
+    expect(queryByText(/a fault past the cap is not shown/)).toBeNull();
     useFleet.setState((s) => ({ pods: { ...s.pods, truncated: true } }));
     rerender(<PodsView cluster="homelab" />);
-    expect(queryByText(/broken-first triage may miss a fault/)).toBeTruthy();
+    expect(queryByText(/a fault past the cap is not shown/)).toBeTruthy();
   });
 
   it("the attention filter hides healthy rows and carries the honest count", () => {
@@ -127,7 +133,7 @@ describe("PodsView", () => {
   it("search filters by name", () => {
     seed([broken, healthy]);
     const { getByPlaceholderText, getByText, queryByText } = render(<PodsView cluster="homelab" />);
-    fireEvent.change(getByPlaceholderText("filter pods"), { target: { value: "grafana" } });
+    fireEvent.change(getByPlaceholderText("Search pods"), { target: { value: "grafana" } });
     expect(getByText("grafana-xyz")).toBeTruthy();
     expect(queryByText("api-crash")).toBeNull();
   });
@@ -135,7 +141,7 @@ describe("PodsView", () => {
   it("search filters by namespace", () => {
     seed([broken, healthy]);
     const { getByPlaceholderText, getByText, queryByText } = render(<PodsView cluster="homelab" />);
-    fireEvent.change(getByPlaceholderText("filter pods"), { target: { value: "monitoring" } });
+    fireEvent.change(getByPlaceholderText("Search pods"), { target: { value: "monitoring" } });
     expect(getByText("grafana-xyz")).toBeTruthy();
     expect(queryByText("api-crash")).toBeNull();
   });
@@ -157,19 +163,20 @@ describe("PodsView", () => {
         detailLoading: false,
       },
     }));
-    const { getByText } = render(<PodsView cluster="homelab" />);
-    // Summary section
+    const { getByText, queryByText } = render(<PodsView cluster="homelab" />);
+    // Placement facts
     expect(getByText("Burstable")).toBeTruthy();
     expect(getByText("grafana-sa")).toBeTruthy();
-    // Conditions
-    expect(getByText("all containers ready")).toBeTruthy();
-    // Events
+    // Recent events are expanded (runtime before metadata)
     expect(getByText("Pulled")).toBeTruthy();
     expect(getByText("back-off restarting")).toBeTruthy();
-    // Labels
+    // Successful conditions and labels start collapsed, one click away.
+    expect(queryByText("all containers ready")).toBeNull();
+    fireEvent.click(getByText("Conditions · 1"));
+    expect(getByText("all containers ready")).toBeTruthy();
+    expect(queryByText("app=grafana")).toBeNull();
+    fireEvent.click(getByText("Labels · 2"));
     expect(getByText("app=grafana")).toBeTruthy();
-    // Annotations start collapsed.
-    expect(getByText("Annotations (1)")).toBeTruthy();
   });
 
   it("describe button opens the read-only describe pane via the bridge", async () => {
@@ -183,7 +190,7 @@ describe("PodsView", () => {
       },
     }));
     const { getByRole, findByText } = render(<PodsView cluster="homelab" />);
-    fireEvent.click(getByRole("button", { name: "describe" }));
+    chooseMore("Describe", getByRole);
     expect(describeResource).toHaveBeenCalledWith("homelab", "pod", "monitoring", "grafana-xyz");
     // the kubectl output lands in the pane
     expect(await findByText(/Name:\s+grafana-xyz/)).toBeTruthy();
@@ -192,7 +199,7 @@ describe("PodsView", () => {
     expect(document.querySelector('[role="dialog"]')).toBeNull();
   });
 
-  it("panel header carries one mono meta line: namespace, node, age, ip", () => {
+  it("identity header names kind + namespace, then one meta line: node, age, ip", () => {
     seed([healthy]);
     useFleet.setState((s) => ({
       pods: {
@@ -207,12 +214,9 @@ describe("PodsView", () => {
     // Node keeps its Nodes cross-link, now on the meta line.
     const nodeLink = panel.getByRole("button", { name: "node-1" });
     const meta = nodeLink.parentElement as HTMLElement;
-    expect(meta.textContent).toContain("monitoring");
     expect(meta.textContent).toContain("1h");
     expect(meta.textContent).toContain("10.0.0.1");
-    // node/ip left the Summary kv - the meta line owns them now.
-    expect(panel.queryByText("node")).toBeNull();
-    expect(panel.queryByText("ip")).toBeNull();
+    expect(panel.getByText("Pod in monitoring")).toBeTruthy();
   });
 
   it("containers render as kv blocks with state · reason from the DTO", () => {
@@ -230,8 +234,7 @@ describe("PodsView", () => {
     const panel = within(getByTestId("pod-detail-panel"));
     expect(panel.getByText("waiting · CrashLoopBackOff")).toBeTruthy();
     expect(panel.getByText("image")).toBeTruthy();
-    // "restarts" appears as the facts-well label AND the container kv label.
-    expect(panel.getAllByText("restarts").length).toBeGreaterThanOrEqual(2);
+    expect(panel.getByText("restarts")).toBeTruthy();
     expect(panel.getByTitle("nginx:latest")).toBeTruthy();
   });
 
@@ -247,11 +250,11 @@ describe("PodsView", () => {
     }));
     const { getByText, queryByText } = render(<PodsView cluster="homelab" />);
     expect(queryByText("reloader.stakater.com/auto=true")).toBeNull();
-    fireEvent.click(getByText("Annotations (1)"));
+    fireEvent.click(getByText("Annotations · 1"));
     expect(getByText("reloader.stakater.com/auto=true")).toBeTruthy();
   });
 
-  it("detail panel tabs are info and yaml (no logs tab)", () => {
+  it("detail panel tabs are Overview and Manifest (logs open the dock, not a tab)", () => {
     seed([healthy]);
     useFleet.setState((s) => ({
       pods: {
@@ -261,15 +264,9 @@ describe("PodsView", () => {
         detailLoading: false,
       },
     }));
-    const { getByText, queryByRole } = render(<PodsView cluster="homelab" />);
-    // info and yaml tabs present
-    expect(getByText("info")).toBeTruthy();
-    expect(getByText("yaml")).toBeTruthy();
-    // no tab labelled "logs" (the logs button is in the header, not a tab)
-    // The button with text "logs" is the dock-open button, not a tab button.
-    // Verify no tab with role=button and exact text "logs" in the tabs row by
-    // checking the yaml tab switches content correctly instead.
-    fireEvent.click(getByText("yaml"));
+    const { getAllByRole, getByRole, queryByRole } = render(<PodsView cluster="homelab" />);
+    expect(getAllByRole("tab").map((t) => t.textContent)).toEqual(["Overview", "Manifest"]);
+    fireEvent.click(getByRole("tab", { name: "Manifest" }));
     expect(document.body.textContent).toContain("apiVersion: v1");
     // No container selector visible at this point (dock not open yet)
     expect(queryByRole("combobox", { name: /container/i })).toBeNull();
@@ -286,7 +283,7 @@ describe("PodsView", () => {
       },
     }));
     const { getByRole, getByTestId } = render(<PodsView cluster="homelab" />);
-    fireEvent.click(getByRole("button", { name: /open logs dock/i }));
+    fireEvent.click(getByRole("button", { name: /^Logs/ }));
     const dock = getByTestId("logs-dock");
     expect(dock).toBeTruthy();
     // Dock header shows ns/name
@@ -307,10 +304,10 @@ describe("PodsView", () => {
     }));
     const { getByRole, getByTestId, queryByTestId } = render(<PodsView cluster="homelab" />);
     // Open dock
-    fireEvent.click(getByRole("button", { name: /open logs dock/i }));
+    fireEvent.click(getByRole("button", { name: /^Logs/ }));
     expect(getByTestId("logs-dock")).toBeTruthy();
     // Close the detail panel (✕ button on the panel — aria-label distinguishes it)
-    fireEvent.click(getByRole("button", { name: /close pod detail panel/i }));
+    fireEvent.click(getByRole("button", { name: "close details" }));
     // Dock still present
     expect(queryByTestId("logs-dock")).toBeTruthy();
   });
@@ -329,7 +326,7 @@ describe("PodsView", () => {
     }));
     const { getByRole, getByTestId } = render(<PodsView cluster="homelab" />);
     // Open dock for grafana
-    fireEvent.click(getByRole("button", { name: /open logs dock/i }));
+    fireEvent.click(getByRole("button", { name: /^Logs/ }));
     expect(getByTestId("logs-dock")).toBeTruthy();
     // Select a different pod (grafana row click -> openPodDetail, but state must be updated manually)
     useFleet.setState((s) => ({
@@ -360,7 +357,7 @@ describe("PodsView", () => {
     const apiDetail: typeof fakeDetail = { ...fakeDetail, summary: api };
     const { getByRole, getByTestId, rerender } = render(<PodsView cluster="homelab" />);
     // Open dock for grafana
-    fireEvent.click(getByRole("button", { name: /open logs dock/i }));
+    fireEvent.click(getByRole("button", { name: /^Logs/ }));
     {
       const dockText = getByTestId("logs-dock").textContent ?? "";
       expect(dockText).toContain("grafana-xyz");
@@ -377,7 +374,7 @@ describe("PodsView", () => {
     }));
     rerender(<PodsView cluster="homelab" />);
     // Re-target dock via logs button for api-crash
-    fireEvent.click(getByRole("button", { name: /open logs dock/i }));
+    fireEvent.click(getByRole("button", { name: /^Logs/ }));
     // Dock header now shows api-crash's ns/name
     const dock = getByTestId("logs-dock");
     const dockText = dock.textContent ?? "";
@@ -398,7 +395,7 @@ describe("PodsView", () => {
       },
     }));
     const { getByRole, getByTestId, queryByTestId } = render(<PodsView cluster="homelab" />);
-    fireEvent.click(getByRole("button", { name: /open logs dock/i }));
+    fireEvent.click(getByRole("button", { name: /^Logs/ }));
     expect(getByTestId("logs-dock")).toBeTruthy();
     fireEvent.click(getByRole("button", { name: /close logs dock/i }));
     expect(queryByTestId("logs-dock")).toBeNull();
@@ -414,8 +411,8 @@ describe("PodsView", () => {
         detailLoading: false,
       },
     }));
-    const { getByText } = render(<PodsView cluster="homelab" />);
-    fireEvent.click(getByText("yaml"));
+    const { getByRole } = render(<PodsView cluster="homelab" />);
+    fireEvent.click(getByRole("tab", { name: "Manifest" }));
     expect(document.body.textContent).toContain("apiVersion: v1");
   });
 
@@ -430,7 +427,7 @@ describe("PodsView", () => {
       },
     }));
     const { getByRole } = render(<PodsView cluster="homelab" />);
-    fireEvent.click(getByRole("button", { name: /close pod detail panel/i }));
+    fireEvent.click(getByRole("button", { name: "close details" }));
     expect(useFleet.getState().pods.selected).toBeNull();
   });
 
@@ -460,8 +457,8 @@ describe("PodsView", () => {
 
   it("delete pod button opens confirm dialog with controller-recreate body", () => {
     openDetailPanel(healthy); // healthy has ownerKind="Deployment" (backend-resolved)
-    const { getByText } = render(<PodsView cluster="homelab" />);
-    fireEvent.click(getByText("delete pod"));
+    const { getByText, getByRole } = render(<PodsView cluster="homelab" />);
+    chooseMore("Delete pod", getByRole);
     expect(getByText(/the controller will recreate it/i)).toBeTruthy();
   });
 
@@ -469,15 +466,15 @@ describe("PodsView", () => {
     const standalone: PodSummaryDTO = { ...healthy, ownerKind: "", ownerName: "" };
     const detailWithStandalone = { ...fakeDetail, summary: standalone };
     openDetailPanel(standalone, detailWithStandalone);
-    const { getByText } = render(<PodsView cluster="homelab" />);
-    fireEvent.click(getByText("delete pod"));
+    const { getByText, getByRole } = render(<PodsView cluster="homelab" />);
+    chooseMore("Delete pod", getByRole);
     expect(getByText(/will NOT be recreated/i)).toBeTruthy();
   });
 
   it("confirming delete pod calls deletePod bridge", () => {
     openDetailPanel(healthy);
-    const { getByText, getAllByRole } = render(<PodsView cluster="homelab" />);
-    fireEvent.click(getByText("delete pod"));
+    const { getByRole, getAllByRole } = render(<PodsView cluster="homelab" />);
+    chooseMore("Delete pod", getByRole);
     // Confirm button is the last "Delete" in the DOM (inside the dialog).
     const confirmBtns = getAllByRole("button", { name: "Delete" });
     fireEvent.click(confirmBtns[confirmBtns.length - 1]);
@@ -489,7 +486,7 @@ describe("PodsView", () => {
   it("debug shell asks for confirmation before launching kubectl debug", () => {
     openDetailPanel(healthy);
     const { getByText, getByRole } = render(<PodsView cluster="homelab" />);
-    fireEvent.click(getByText("debug shell"));
+    chooseMore(/Debug shell/, getByRole);
     expect(openDebugTerminal).not.toHaveBeenCalled();
     expect(getByText(/stays on the pod spec until the pod is recreated/i)).toBeTruthy();
     fireEvent.click(getByRole("button", { name: "Attach" }));
@@ -498,17 +495,18 @@ describe("PodsView", () => {
 
   it("cancelling the debug shell confirmation launches nothing", () => {
     openDetailPanel(healthy);
-    const { getByText, getByRole, queryByRole } = render(<PodsView cluster="homelab" />);
-    fireEvent.click(getByText("debug shell"));
+    const { getByRole, queryByRole } = render(<PodsView cluster="homelab" />);
+    chooseMore(/Debug shell/, getByRole);
     fireEvent.click(getByRole("button", { name: "Cancel" }));
     expect(queryByRole("button", { name: "Attach" })).toBeNull();
     expect(openDebugTerminal).not.toHaveBeenCalled();
   });
 
-  it("restart owner button is visible for Deployment owner", () => {
+  it("restart owner is offered for a Deployment owner, named with its target", () => {
     openDetailPanel(healthy); // healthy has ownerKind="Deployment" (backend-resolved)
-    const { getByText } = render(<PodsView cluster="homelab" />);
-    expect(getByText("restart owner")).toBeTruthy();
+    const { getByRole } = render(<PodsView cluster="homelab" />);
+    fireEvent.click(getByRole("button", { name: /^More/ }));
+    expect(getByRole("menuitem", { name: "Restart deployment grafana" })).toBeTruthy();
   });
 
   it("restart owner button is NOT visible for a bare ReplicaSet owner", () => {
@@ -517,24 +515,27 @@ describe("PodsView", () => {
     const bareRs: PodSummaryDTO = { ...healthy, ownerKind: "ReplicaSet", ownerName: "web-7d4b9c6f9" };
     const detailRs = { ...fakeDetail, summary: bareRs };
     openDetailPanel(bareRs, detailRs);
-    const { queryByText } = render(<PodsView cluster="homelab" />);
-    expect(queryByText("restart owner")).toBeNull();
+    const { getByRole, queryByRole } = render(<PodsView cluster="homelab" />);
+    fireEvent.click(getByRole("button", { name: /^More/ }));
+    expect(queryByRole("menuitem", { name: /^Restart/ })).toBeNull();
   });
 
   it("restart owner button is NOT visible for ownerKind='' (standalone pod)", () => {
     const standalone: PodSummaryDTO = { ...healthy, ownerKind: "", ownerName: "" };
     const detailWithStandalone = { ...fakeDetail, summary: standalone };
     openDetailPanel(standalone, detailWithStandalone);
-    const { queryByText } = render(<PodsView cluster="homelab" />);
-    expect(queryByText("restart owner")).toBeNull();
+    const { getByRole, queryByRole } = render(<PodsView cluster="homelab" />);
+    fireEvent.click(getByRole("button", { name: /^More/ }));
+    expect(queryByRole("menuitem", { name: /^Restart/ })).toBeNull();
   });
 
   it("restart owner button is NOT visible for ownerKind=Node", () => {
     const nodeOwned: PodSummaryDTO = { ...healthy, ownerKind: "Node", ownerName: "node-1" };
     const detailNode = { ...fakeDetail, summary: nodeOwned };
     openDetailPanel(nodeOwned, detailNode);
-    const { queryByText } = render(<PodsView cluster="homelab" />);
-    expect(queryByText("restart owner")).toBeNull();
+    const { getByRole, queryByRole } = render(<PodsView cluster="homelab" />);
+    fireEvent.click(getByRole("button", { name: /^More/ }));
+    expect(queryByRole("menuitem", { name: /^Restart/ })).toBeNull();
   });
 
   it("restart dispatches the backend-resolved owner verbatim (no name guessing)", () => {
@@ -548,8 +549,8 @@ describe("PodsView", () => {
     useFleet.setState((s) => ({
       pods: { ...s.pods, selected: { namespace: "prod", name: "web-7d4b9c6f9-abc" }, detail: detailDeploy, detailLoading: false },
     }));
-    const { getByText, getAllByRole } = render(<PodsView cluster="homelab" />);
-    fireEvent.click(getByText("restart owner"));
+    const { getByRole, getAllByRole } = render(<PodsView cluster="homelab" />);
+    chooseMore("Restart deployment web", getByRole);
     const confirmBtns = getAllByRole("button", { name: "Restart" });
     fireEvent.click(confirmBtns[confirmBtns.length - 1]);
     expect(rolloutRestart).toHaveBeenCalledWith("homelab", "Deployment", "prod", "web");
@@ -571,7 +572,7 @@ describe("PodsView", () => {
   it("/ focuses the filter input", () => {
     seed([broken]);
     const { getByPlaceholderText } = render(<PodsView cluster="homelab" />);
-    const input = getByPlaceholderText("filter pods") as HTMLInputElement;
+    const input = getByPlaceholderText("Search pods") as HTMLInputElement;
     const slash = new KeyboardEvent("keydown", { key: "/", bubbles: true, cancelable: true });
     window.dispatchEvent(slash);
     // In jsdom focus may not move automatically, but we can verify no throw
@@ -587,8 +588,8 @@ describe("PodsView", () => {
     expect(buttons.length).toBeGreaterThan(0);
   });
 
-  it("pod row has aria-selected false initially", () => {
-    seed([broken]);
+  it("pod row has aria-selected false initially when nothing needs attention", () => {
+    seed([healthy]);
     const { getAllByRole } = render(<PodsView cluster="homelab" />);
     // Find button elements with aria-selected (the pod rows)
     const rows = getAllByRole("button").filter((el) => el.hasAttribute("aria-selected"));
@@ -608,18 +609,19 @@ describe("PodsView", () => {
   });
 
   it("row logs button opens dock with that pod without opening detail panel", () => {
-    seed([broken, healthy]);
+    // healthy only: a faulted row would be auto-selected on entry by design
+    seed([healthy]);
     const { getAllByRole, getByTestId } = render(<PodsView cluster="homelab" />);
     const logsBtn = getAllByRole("button").find((el) =>
-      el.getAttribute("aria-label") === "logs for default/api-crash"
+      el.getAttribute("aria-label") === "logs for monitoring/grafana-xyz"
     );
     expect(logsBtn).toBeTruthy();
     fireEvent.click(logsBtn!);
-    // Dock opened with the correct pod
     const dock = getByTestId("logs-dock");
     const dockText = dock.textContent ?? "";
-    expect(dockText).toContain("api-crash");
-    expect(dockText).toContain("default");
+    expect(dockText).toContain("grafana-xyz");
+    expect(dockText).toContain("monitoring");
+    expect(openPodDetail).not.toHaveBeenCalled();
     // Detail panel NOT opened — selected state stays null
     expect(useFleet.getState().pods.selected).toBeNull();
     // openPodDetail bridge was NOT called
@@ -655,7 +657,7 @@ describe("PodsView", () => {
     }));
     const { getByRole, getByTestId, queryByTestId, findByRole } = render(<PodsView cluster="homelab" />);
     // Open the dock.
-    fireEvent.click(getByRole("button", { name: /open logs dock/i }));
+    fireEvent.click(getByRole("button", { name: /^Logs/ }));
     expect(getByTestId("logs-dock")).toBeTruthy();
 
     // LogsPane reports the active container ("app") via onContainerChange on mount.
@@ -716,8 +718,8 @@ describe("PodsView", () => {
     useFleet.setState((s) => ({
       pods: { ...s.pods, selected: { namespace: "db", name: "postgres-0" }, detail: detailSts, detailLoading: false },
     }));
-    const { getByText, getAllByRole } = render(<PodsView cluster="homelab" />);
-    fireEvent.click(getByText("restart owner"));
+    const { getByRole, getAllByRole } = render(<PodsView cluster="homelab" />);
+    chooseMore("Restart statefulset postgres", getByRole);
     const confirmBtns = getAllByRole("button", { name: "Restart" });
     fireEvent.click(confirmBtns[confirmBtns.length - 1]);
     expect(rolloutRestart).toHaveBeenCalledWith("homelab", "StatefulSet", "db", "postgres");
@@ -731,7 +733,7 @@ describe("PodsView", () => {
     fireEvent.click(getByRole("checkbox", { name: "select pod grafana-xyz for bulk actions" }));
     fireEvent.click(getByRole("checkbox", { name: "select pod api-crash for bulk actions" }));
     expect(getByText("2 pods selected")).toBeTruthy();
-    fireEvent.click(getByText("delete selected"));
+    fireEvent.click(getByText("Delete selected"));
     await findByText("delete 2 pods");
     const confirmBtns = getAllByRole("button", { name: "Delete 2" });
     await act(async () => {
@@ -779,9 +781,11 @@ describe("PodsView health model (1b)", () => {
   it("a pod without a verdict reads unknown, never healthy from legacy rank", () => {
     const legacyOnly: PodSummaryDTO = { ...healthy, name: "no-verdict", health: undefined };
     seed([legacyOnly]);
-    const { getByText, getByRole } = render(<PodsView cluster="homelab" />);
-    expect(getByText("Unknown")).toBeTruthy();
-    expect(getByRole("button", { name: /unknown\s*1/i })).toBeTruthy();
+    const { getAllByText, getByRole, getByText } = render(<PodsView cluster="homelab" />);
+    // the row's verdict label reads Unknown (and the Unknown filter appears)
+    expect(within(getByText("no-verdict").closest('[data-rowhost="true"]') as HTMLElement).getByText("Unknown")).toBeTruthy();
+    expect(getAllByText("Unknown").length).toBeGreaterThanOrEqual(1);
+    expect(getByRole("button", { name: /^Unknown\s*1$/ })).toBeTruthy();
     expect(getByRole("button", { name: /^attention$/i })).toBeTruthy();
   });
 
@@ -793,3 +797,61 @@ describe("PodsView health model (1b)", () => {
     expect(getByRole("button", { name: /^attention$/i })).toBeTruthy();
   });
 });
+
+describe("PodsView workspace template (redesign pilot)", () => {
+  beforeEach(() => { useFleet.getState().clearPods(); vi.clearAllMocks(); });
+
+  it("auto-selects the first attention row once on the first fresh snapshot", () => {
+    seed([healthy, broken]);
+    const { rerender } = render(<PodsView cluster="homelab" />);
+    expect(openPodDetail).toHaveBeenCalledTimes(1);
+    expect(openPodDetail).toHaveBeenCalledWith("homelab", "default", "api-crash");
+    // later updates never re-select
+    seed([healthy, broken, { ...broken, name: "api-crash-2" }]);
+    rerender(<PodsView cluster="homelab" />);
+    expect(openPodDetail).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not auto-select when nothing needs attention, and shows no idle inspector", () => {
+    seed([healthy]);
+    const { queryByTestId } = render(<PodsView cluster="homelab" />);
+    expect(openPodDetail).not.toHaveBeenCalled();
+    expect(queryByTestId("lens-inspector")).toBeNull();
+    expect(queryByTestId("inspector-idle")).toBeNull();
+  });
+
+  it("does not auto-select from data read for another scope", () => {
+    seed([broken]);
+    useFleet.setState((s) => ({ pods: { ...s.pods, rowsScope: "other|" } }));
+    render(<PodsView cluster="homelab" />);
+    expect(openPodDetail).not.toHaveBeenCalled();
+  });
+
+  it("the header names its entity and attention; the footer states the active filter", () => {
+    seed([broken, healthy]);
+    const { getByText, getByRole } = render(<PodsView cluster="homelab" />);
+    expect(getByText(/1 need attention/)).toBeTruthy();
+    fireEvent.click(getByRole("button", { name: /^Attention/ }));
+    expect(getByText("1 of 2 pods · filter: Attention")).toBeTruthy();
+    fireEvent.click(getByRole("button", { name: "Show all 2 pods" }));
+    expect(useFleet.getState().pods.needsAttention).toBe(false);
+  });
+
+  it("a failed first read is a readable error state, not an empty list", () => {
+    useFleet.setState((s) => ({ pods: { ...s.pods, cluster: "homelab", items: [], loading: false, rowsScope: null, error: "pods is forbidden" } }));
+    const { getByText, queryByText } = render(<PodsView cluster="homelab" />);
+    expect(getByText("Pods in all namespaces could not be read.")).toBeTruthy();
+    expect(queryByText(/^No pods/)).toBeNull();
+  });
+
+  it("the Shell action picks a container when the pod has several", () => {
+    const multi: PodSummaryDTO = { ...healthy, containers: [makeContainer({ name: "app" }), makeContainer({ name: "sidecar" })] };
+    seed([multi]);
+    useFleet.setState((s) => ({ pods: { ...s.pods, selected: { namespace: "monitoring", name: "grafana-xyz" }, detail: { ...fakeDetail, summary: multi }, detailLoading: false } }));
+    const { getByRole } = render(<PodsView cluster="homelab" />);
+    fireEvent.click(getByRole("button", { name: /^Shell/ }));
+    fireEvent.click(getByRole("menuitem", { name: "sidecar" }));
+    expect(openExecTerminal).toHaveBeenCalledWith("homelab", "monitoring", "grafana-xyz", "sidecar");
+  });
+});
+

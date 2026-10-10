@@ -200,4 +200,13 @@ func TestListPodsResolvesReplicaSetOwner(t *testing.T) {
 	if got := byName["bare-5c9d8-xyz"]; got.OwnerKind != "ReplicaSet" || got.OwnerName != "bare-5c9d8" {
 		t.Fatalf("bare RS owner: %s/%s", got.OwnerKind, got.OwnerName)
 	}
+	// The detail read resolves the same way: the inspector's restart verb was
+	// hidden for Deployment pods because PodDetail kept the raw ReplicaSet.
+	d, err := c.PodDetail(context.Background(), "team", "web-7d4b9c6f9-abc")
+	if err != nil {
+		t.Fatalf("PodDetail: %v", err)
+	}
+	if d.Summary.OwnerKind != "Deployment" || d.Summary.OwnerName != "web" {
+		t.Fatalf("detail owner: %s/%s", d.Summary.OwnerKind, d.Summary.OwnerName)
+	}
 }
