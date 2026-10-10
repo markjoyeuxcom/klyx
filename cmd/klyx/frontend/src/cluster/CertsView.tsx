@@ -6,19 +6,20 @@ import { explainCertificate } from "../bridge/ai";
 import { useAIAvailability } from "./useAI";
 import type { AIResultDTO } from "../store/fleet";
 import { useListKeys } from "../chrome/useListKeys";
-import { FKeysBar } from "../chrome/FKeysBar";
-import { inputWell, MetersStrip, well, Badge, FilterButton, StatusDot, frame, ellipsis, mono, readyColor, toneColor, type Tone } from "../chrome/primitives";
-import { InspectorFacts, InspectorSection, InspectorStatus } from "./ResourceInspector";
+import { StatusDot, mono, readyColor, type Tone } from "../chrome/primitives";
+import { InspectorStatus } from "./ResourceInspector";
 import { CopyButton } from "../chrome/CopyButton";
 import { EmptyState } from "../chrome/EmptyState";
 import { SkeletonRows } from "../chrome/SkeletonRows";
 import { WatchErrorBanner } from "../chrome/WatchErrorBanner";
-import { IconCertificate, IconSparkles, IconAlertTriangle } from "@tabler/icons-react";
-import { SECRET_REF } from "./resourceRefs";
-import { ManifestButton } from "./ManifestButton";
+import { VirtualList, type VirtualListHandle } from "../chrome/VirtualList";
+import { IconCertificate, IconAlertTriangle } from "@tabler/icons-react";
+import { SECRET_REF, wellKnownResourceRef } from "./resourceRefs";
 import { SyncingChip, staleStyle } from "./staleness";
-
-type CertFilter = "all" | "attention" | "expiring" | "issuing" | "issuerProblem" | "issuers";
+import { VerdictLamp } from "../health/VerdictView";
+import { LensLayout, LensTable, TABLE_ROW_HEIGHT, type DatasetState } from "../layout/LensLayout";
+import { InspectorBlock, InspectorLayout, type MenuItem } from "../layout/InspectorLayout";
+import { fitColumns, type ColumnDef } from "../layout/columns";
 
 const keyOf = (c: { namespace: string; name: string }) => `${c.namespace}/${c.name}`;
 const arrayOf = <T,>(value: T[] | null | undefined): T[] => (Array.isArray(value) ? value : []);
@@ -70,11 +71,6 @@ function issuerRank(i: IssuerDTO): number {
   return 2;
 }
 
-function statusText(c: CertificateDTO): string {
-  if (expired(c)) return "expired";
-  return c.ready.toLowerCase();
-}
-
 // resolveIssuer finds the bound Issuer/ClusterIssuer for a certificate. A
 // ClusterIssuer is cluster-scoped; an Issuer is matched within the cert's namespace.
 function resolveIssuer(c: CertificateDTO, issuers: IssuerDTO[]): IssuerDTO | undefined {
@@ -88,36 +84,90 @@ function issuerProblem(c: CertificateDTO, issuers: IssuerDTO[]): boolean {
   return !issuer || issuer.ready !== "Ready";
 }
 
-function matchesFilter(c: CertificateDTO, filter: CertFilter, issuers: IssuerDTO[]): boolean {
-  if (filter === "attention") return needsAttention(c);
-  if (filter === "expiring") return expiringSoon(c) || expired(c);
-  if (filter === "issuing") return c.ready === "Issuing";
-  if (filter === "issuerProblem") return issuerProblem(c, issuers);
-  return true;
-}
-
 function matchesQuery(c: CertificateDTO, query: string): boolean {
   const q = query.trim().toLowerCase();
   if (!q) return true;
   return [c.namespace, c.name, c.issuerName, c.secretName, c.reason, ...arrayOf(c.dnsNames)].some((v) => v.toLowerCase().includes(q));
 }
 
+// CertsView - the cert-manager lens on the workspace template (spec §6 step
+// 4c). Two views of one lens: Certificates (broken first, then soonest
+// expiry) and Issuers. Read-only diagnosis, so the documented domain variant
+// of the action band is: Re-resolve chain (primary - re-reads the issuance
+// chain), Explain (secondary, AI, only when usable here), More = manifest /
+// Secret. The bound issuer's health is the headline for a stuck certificate.
+
+type CertView = "certificates" | "issuers";
+type CertStatus = "all" | "attention" | "expiring" | "issuing" | "issuerProblem";
+
+// certHealth maps cert-manager state onto the shared verdict roles (only
+// faults glow): Failed or expired = fault; Issuing or an unobserved spec =
+// progressing; Unknown = unknown; other not-Ready = degraded; Ready = ok. The
+// renewal window is cert-manager's normal automatic renewal - not attention;
+// the expiry cell carries it in amber text.
+function certHealth(c: CertificateDTO): { kind: string; label: string } {
+  if (c.stale) return { kind: "progressing", label: "Syncing…" };
+  if (expired(c)) return { kind: "fault", label: "Expired" };
+  if (c.ready === "Failed") return { kind: "fault", label: "Failed" };
+  if (c.ready === "Issuing") return { kind: "progressing", label: "Issuing" };
+  if (c.ready === "Ready") return { kind: "ok", label: "Ready" };
+  if (c.ready === "Unknown" || !c.ready) return { kind: "unknown", label: "Unknown" };
+  return { kind: "degraded", label: c.ready };
+}
+function issuerHealth(i: IssuerDTO): { kind: string; label: string } {
+  if (i.ready === "Ready") return { kind: "ok", label: "Ready" };
+  if (i.ready === "Failed") return { kind: "fault", label: "Failed" };
+  if (i.ready === "Unknown" || !i.ready) return { kind: "unknown", label: "Unknown" };
+  return { kind: "degraded", label: i.ready };
+}
+const ROLE_TEXT: Record<string, string> = {
+  fault: "var(--color-text-danger)",
+  degraded: "var(--color-text-warning)",
+  progressing: "var(--color-text-secondary)",
+  ok: "var(--color-text-secondary)",
+  unknown: "var(--color-text-tertiary)",
+};
+function Lamp({ role }: { role: { kind: string; label: string } }) {
+  return <span role="img" aria-label={role.label} style={{ display: "inline-flex", justifySelf: "center" }}><VerdictLamp health={role} size={8} /></span>;
+}
+const cellStyle: React.CSSProperties = { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 };
+const issuerKey = (i: IssuerDTO) => `${i.kind}/${i.namespace}/${i.name}`;
+
+const CERT_COLUMNS: (ColumnDef & { label: string })[] = [
+  { id: "lamp", label: "", width: 16, priority: 0 },
+  { id: "name", label: "Certificate", width: 240, priority: 0, flex: true },
+  { id: "status", label: "Status", width: 170, priority: 1 },
+  { id: "expiry", label: "Expires", width: 72, priority: 1 },
+  { id: "issuer", label: "Issuer", width: 150, priority: 2, grow: 0.6 },
+  { id: "secret", label: "Secret", width: 140, priority: 3, grow: 0.5 },
+];
+const ISSUER_COLUMNS: (ColumnDef & { label: string })[] = [
+  { id: "lamp", label: "", width: 16, priority: 0 },
+  { id: "name", label: "Issuer", width: 240, priority: 0, flex: true },
+  { id: "kind", label: "Kind", width: 100, priority: 2 },
+  { id: "status", label: "Status", width: 220, priority: 1, grow: 0.8 },
+  { id: "certs", label: "Certificates", width: 92, priority: 3 },
+];
+
 export function CertsView({ cluster }: { cluster: string }) {
   const tier = useFleet((s) => s.clusters.find((c) => c.name === cluster)?.certManagerTier ?? "Unknown");
   const cm = useFleet((s) => s.certmanager);
-  const select = useFleet((s) => s.selectCertificate);
-  const [filter, setFilter] = useState<CertFilter>("all");
+  const selectCert = useFleet((s) => s.selectCertificate);
+  const [view, setView] = useState<CertView>("certificates");
+  const [status, setStatus] = useState<CertStatus>("all");
   const [query, setQuery] = useState("");
   const [namespace, setNamespace] = useState("");
-  const [kbKey, setKbKey] = useState<string | null>(null);
+  const [cursorKey, setCursorKey] = useState<string | null>(null);
+  const [issuerSel, setIssuerSel] = useState<string | null>(null);
+  const [bodyWidth, setBodyWidth] = useState(1100);
   const searchRef = useRef<HTMLInputElement>(null);
+  const listRef = useRef<VirtualListHandle>(null);
   const absent = tier === "Absent";
 
   useEffect(() => {
     if (absent) return;
     // If cleanup runs before openCertManager resolves, invoke the late-arriving
-    // unsubscriber immediately - otherwise its listener leaks for the app's
-    // lifetime and duplicates store writes on every reopen.
+    // unsubscriber immediately - otherwise its listener leaks.
     let cancelled = false;
     let off = () => {};
     openCertManager(cluster).then((u) => (cancelled ? u() : (off = u))).catch((e) => console.error("openCertManager", e));
@@ -128,228 +178,317 @@ export function CertsView({ cluster }: { cluster: string }) {
     };
   }, [cluster, absent]);
 
-  // Resolve the issuance chain on demand when a certificate is selected.
-  useEffect(() => {
-    if (!cm.selectedKey || cm.cluster !== cluster) return;
-    const slash = cm.selectedKey.indexOf("/");
-    const ns = cm.selectedKey.slice(0, slash);
-    const name = cm.selectedKey.slice(slash + 1);
-    void getCertificateChain(cluster, ns, name).catch((e) => console.error("getCertificateChain", e));
-  }, [cluster, cm.selectedKey, cm.cluster]);
+  const mine = cm.cluster === cluster;
+  const certs = useMemo(() => (mine ? cm.certificates : []), [mine, cm.certificates]);
+  const issuers = useMemo(() => (mine ? cm.issuers : []), [mine, cm.issuers]);
+  const watchError = mine ? cm.watchError : null;
+  const loaded = mine && !cm.loading;
+  const complete = loaded && !watchError;
+  // certificates and issuers arrive in one watch emission: one coverage
+  const issuersKnown = loaded;
 
-  // AI-assist availability + the per-cluster egress decision (shared hook).
+  // Re-read the chain when the selection changes (and on demand).
+  const selKey = mine ? cm.selectedKey : null;
+  const resolveChain = useCallback((key: string) => {
+    const slash = key.indexOf("/");
+    void getCertificateChain(cluster, key.slice(0, slash), key.slice(slash + 1)).catch((e) => console.error("getCertificateChain", e));
+  }, [cluster]);
+  useEffect(() => { if (selKey) resolveChain(selKey); }, [selKey, resolveChain]);
+
   const ai = useAIAvailability(cluster, !absent);
 
-  const certs = cm.cluster === cluster ? cm.certificates : [];
-  const issuers = cm.cluster === cluster ? cm.issuers : [];
+  const q = query.trim().toLowerCase();
   const orderedCerts = useMemo(
     () => [...certs].sort((a, b) => certRank(a) - certRank(b) || a.namespace.localeCompare(b.namespace) || a.name.localeCompare(b.name)),
     [certs],
   );
   const namespaces = useMemo(() => Array.from(new Set(certs.map((c) => c.namespace))).sort(), [certs]);
+  const passesStatus = useCallback((c: CertificateDTO) => {
+    if (status === "attention") return needsAttention(c);
+    if (status === "expiring") return expiringSoon(c) || expired(c);
+    if (status === "issuing") return c.ready === "Issuing";
+    if (status === "issuerProblem") return issuersKnown && issuerProblem(c, issuers);
+    return true;
+  }, [status, issuers, issuersKnown]);
   const visibleCerts = useMemo(
-    () => orderedCerts.filter((c) => (!namespace || c.namespace === namespace) && matchesFilter(c, filter, issuers) && matchesQuery(c, query)),
-    [orderedCerts, filter, issuers, namespace, query],
+    () => orderedCerts.filter((c) => (!namespace || c.namespace === namespace) && passesStatus(c) && matchesQuery(c, q)),
+    [orderedCerts, namespace, passesStatus, q],
   );
   const orderedIssuers = useMemo(
     () => [...issuers].sort((a, b) => issuerRank(a) - issuerRank(b) || a.kind.localeCompare(b.kind) || a.name.localeCompare(b.name)),
     [issuers],
   );
+  const visibleIssuers = useMemo(() => orderedIssuers.filter((i) => {
+    if (namespace && i.kind === "Issuer" && i.namespace !== namespace) return false;
+    if (status === "attention" && i.ready === "Ready") return false;
+    return !q || [i.kind, i.namespace, i.name, i.reason, i.message].some((v) => (v ?? "").toLowerCase().includes(q));
+  }), [orderedIssuers, namespace, status, q]);
+  const certsFor = useCallback((i: IssuerDTO) => certs.filter((c) => resolveIssuer(c, [i]) === i), [certs]);
 
-  // Keyboard nav (j/k/Enter/Esc, "/" focuses the filter) over the visible
-  // certificates. Selection is keyed by keyOf: when the selected certificate
-  // leaves the visible set (filter change) this resolves to -1 — no selection
-  // — instead of silently pointing at whatever row took its index.
-  const kbIdx = kbKey === null ? -1 : visibleCerts.findIndex((c) => keyOf(c) === kbKey);
+  // Selection lifecycle: certificates use the store's selectedKey (the chain
+  // reader keys on it); issuers are local. Filter exclusion closes; absent
+  // from a complete read = removed (last evidence, read-only).
+  const selectedCert = selKey ? certs.find((c) => keyOf(c) === selKey) : undefined;
+  const lastCert = useRef<CertificateDTO | null>(null);
+  if (selectedCert) lastCert.current = selectedCert;
+  const certRemoved = !!selKey && complete && !selectedCert;
+  const liveChain = mine && cm.chain && cm.chainCluster === cluster && keyOf(cm.chain.certificate) === selKey ? cm.chain : null;
+  const lastChain = useRef<{ key: string; chain: CertChainDTO } | null>(null);
+  if (liveChain && selKey) lastChain.current = { key: `${cluster}/${selKey}`, chain: liveChain };
+  const shownChain = liveChain ?? (certRemoved && lastChain.current?.key === `${cluster}/${selKey}` ? lastChain.current.chain : null);
+  const selectedIssuer = issuerSel ? issuers.find((i) => issuerKey(i) === issuerSel) : undefined;
+  const lastIssuer = useRef<IssuerDTO | null>(null);
+  if (selectedIssuer) lastIssuer.current = selectedIssuer;
+  const issuerRemoved = !!issuerSel && complete && !selectedIssuer;
+  useEffect(() => { if (selectedCert && view === "certificates" && !visibleCerts.includes(selectedCert)) selectCert(null); }, [selectedCert, visibleCerts, view, selectCert]);
+  useEffect(() => { if (selectedIssuer && view === "issuers" && !visibleIssuers.includes(selectedIssuer)) setIssuerSel(null); }, [selectedIssuer, visibleIssuers, view]);
+  const enteredCluster = useRef(cluster);
+  useEffect(() => {
+    if (enteredCluster.current === cluster) return;
+    enteredCluster.current = cluster;
+    setIssuerSel(null); setCursorKey(null);
+    autoSelect.current = "pending";
+    entryCerts.current = useFleet.getState().certmanager.certificates;
+  }, [cluster]);
 
-  const handleSelect = useCallback((idx: number) => {
-    const c = visibleCerts[idx];
-    if (c) setKbKey(keyOf(c));
-  }, [visibleCerts]);
+  // One-shot auto-select of the first certificate needing attention.
+  const autoSelect = useRef<"pending" | "done">("pending");
+  const entryCerts = useRef<CertificateDTO[] | null>(null);
+  if (entryCerts.current === null) entryCerts.current = cm.certificates;
+  const freshRead = complete && cm.certificates !== entryCerts.current;
+  useEffect(() => {
+    if (autoSelect.current === "done" || !freshRead || view !== "certificates") return;
+    autoSelect.current = "done";
+    if (useFleet.getState().certmanager.selectedKey) return;
+    const c = visibleCerts.find(needsAttention);
+    if (c) { setCursorKey(keyOf(c)); selectCert(keyOf(c)); }
+  }, [freshRead, visibleCerts, view, selectCert]);
 
-  const handleActivate = useCallback((idx: number) => {
-    const c = visibleCerts[idx];
-    if (!c) return;
-    const k = keyOf(c);
-    select(cm.selectedKey === k ? null : k);
-  }, [visibleCerts, cm.selectedKey, select]);
-
-  const handleEscape = useCallback(() => {
-    if (cm.selectedKey) select(null);
-  }, [cm.selectedKey, select]);
-
+  // Keyboard: j/k/Enter/Esc in both views.
+  const nav: { key: string; open: () => void }[] = view === "issuers"
+    ? visibleIssuers.map((i) => ({ key: issuerKey(i), open: () => setIssuerSel(issuerKey(i)) }))
+    : visibleCerts.map((c) => ({ key: keyOf(c), open: () => { autoSelect.current = "done"; selectCert(keyOf(c)); } }));
+  const cursorIdx = cursorKey === null ? -1 : nav.findIndex((n) => n.key === cursorKey);
+  const closeSelected = () => { autoSelect.current = "done"; if (view === "issuers") setIssuerSel(null); else selectCert(null); };
   useListKeys({
-    // The issuers filter renders a different list; suspend row nav there.
-    count: filter === "issuers" ? 0 : visibleCerts.length,
-    selected: kbIdx,
-    onSelect: handleSelect,
-    onActivate: handleActivate,
-    onEscape: handleEscape,
+    count: nav.length,
+    selected: cursorIdx,
+    onSelect: (idx) => { const n = nav[idx]; if (n) { setCursorKey(n.key); listRef.current?.scrollToIndex(idx); } },
+    onActivate: (idx) => { const n = nav[idx]; if (n) { setCursorKey(n.key); n.open(); } },
+    onEscape: closeSelected,
     searchRef,
   });
 
-  if (absent) {
-    return <div style={{ padding: 24, color: "var(--color-text-secondary)", fontSize: 13 }}>cert-manager not detected on this cluster.</div>;
-  }
+  const columns = view === "issuers" ? ISSUER_COLUMNS : CERT_COLUMNS;
+  const fitted = useMemo(() => fitColumns(columns, bodyWidth), [columns, bodyWidth]);
+  const show = (id: string) => fitted.visible.has(id);
+  const gridStyle = { gridTemplateColumns: fitted.template };
 
   const attention = certs.filter(needsAttention).length;
+  const failedOrExpired = certs.filter((c) => c.ready === "Failed" || expired(c)).length;
   const issuing = certs.filter((c) => c.ready === "Issuing").length;
-  const expiring = certs.filter((c) => expiringSoon(c) || expired(c)).length;
-  const issuerProblems = certs.filter((c) => issuerProblem(c, issuers)).length;
-  const ready = certs.filter((c) => c.ready === "Ready" && !expired(c)).length;
-  const selected = visibleCerts.find((c) => keyOf(c) === cm.selectedKey) ?? null;
-  const chain = cm.chain && keyOf(cm.chain.certificate) === cm.selectedKey ? cm.chain : null;
+  const renewing = certs.filter((c) => expiringSoon(c)).length;
+  const issuerProblems = issuersKnown ? certs.filter((c) => issuerProblem(c, issuers)).length : 0;
+  const issuersNotReady = issuers.filter((i) => i.ready !== "Ready").length;
+
+  const clearFilters = () => { setStatus("all"); setQuery(""); setNamespace(""); };
+  const total = view === "issuers" ? issuers.length : certs.length;
+  const shown = view === "issuers" ? visibleIssuers.length : visibleCerts.length;
+  let state: DatasetState = "ready";
+  if (absent) state = "empty";
+  else if (!loaded && total === 0) state = "loading";
+  else if (watchError && total === 0) state = "unreadable";
+  else if (total === 0) state = "empty";
+  else if (shown === 0) state = "no-match";
+  const noun = view === "issuers" ? "issuers" : "certificates";
+  const stateView = state === "loading" ? <div style={{ width: "100%", alignSelf: "flex-start" }}><SkeletonRows rows={7} label="loading certificate state" /></div>
+    : state === "unreadable" ? <EmptyState icon={<IconAlertTriangle size={28} stroke={1.2} />} title="cert-manager state could not be read." hint={watchError ?? undefined} />
+    : state === "empty" ? (absent
+      ? <EmptyState icon={<IconCertificate size={28} stroke={1.2} />} title="cert-manager is not installed on this cluster." hint="Klyx detected no cert-manager.io resources here." />
+      : <EmptyState icon={<IconCertificate size={28} stroke={1.2} />} title={view === "issuers" ? "No issuers on this cluster." : "No Certificates on this cluster."} hint={view === "issuers" ? undefined : "cert-manager is installed but no Certificate objects exist yet."} />)
+    : <EmptyState icon={<IconCertificate size={28} stroke={1.2} />} title={`No ${noun} match the current filters.`} hint={`${total} ${noun} on this cluster.`} action={{ label: "Clear filters", onClick: clearFilters }} />;
+  const partial = watchError ? "+" : "";
 
   return (
-    <div style={{ padding: "14px 16px", display: "flex", flexDirection: "column", gap: 12, height: "100%", minHeight: 0, overflow: "hidden", boxSizing: "border-box" }}>
-      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 16 }}>
-        <div>
-          <div style={{ fontSize: 10, color: "var(--color-text-tertiary)", marginBottom: 3 }}>cert-manager</div>
-          <div style={{ fontSize: 18, fontWeight: 600 }}>Certificates</div>
-        </div>
-        <Badge tone={attention > 0 ? "warning" : "success"}>{attention > 0 ? `${attention} need attention` : "ready"}</Badge>
-      </div>
-
-      {cm.cluster === cluster && cm.watchError && (
-        <WatchErrorBanner tool="cert-manager" error={cm.watchError} />
-      )}
-
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", overflow: "hidden" }}>
-        <MetersStrip
-          note="broken first · then soonest expiry"
-          meters={[
-            { label: "certificates", value: certs.length },
-            attention > 0 && { label: "failing", value: attention, tone: "danger" as const },
-            issuing > 0 && { label: "issuing", value: issuing, tone: "info" as const },
-            expiring > 0 && { label: "expiring", value: expiring, tone: "warning" as const },
-            { label: "issuers", value: issuers.length },
-            { label: "ready", value: ready, tone: "success" as const },
-          ]}
-        />
-      </div>
-
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
-        <FilterButton label="all" active={filter === "all"} count={certs.length} onClick={() => setFilter("all")} />
-        <FilterButton label="needs attention" active={filter === "attention"} count={attention} onClick={() => setFilter("attention")} />
-        <FilterButton label="expiring" active={filter === "expiring"} count={expiring} onClick={() => setFilter("expiring")} />
-        <FilterButton label="issuing" active={filter === "issuing"} count={issuing} onClick={() => setFilter("issuing")} />
-        <FilterButton label="issuer problem" active={filter === "issuerProblem"} count={issuerProblems} onClick={() => setFilter("issuerProblem")} />
-        <FilterButton label="issuers" active={filter === "issuers"} count={issuers.length} onClick={() => setFilter("issuers")} />
-        <select
-          value={namespace}
-          onChange={(e) => setNamespace(e.target.value)}
-          aria-label="filter certificate namespace"
-          style={{ fontSize: 11, padding: "3px 8px", borderRadius: 4, border: "0.5px solid var(--color-border-tertiary)", background: "var(--color-background-primary)", color: "var(--color-text-primary)" }}
-        >
-          <option value="">all namespaces</option>
-          {namespaces.map((ns) => <option key={ns} value={ns}>{ns}</option>)}
-        </select>
-        <input
-          ref={searchRef}
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="filter certificates"
-          aria-label="filter certificates"
-          style={{ ...inputWell, marginLeft: "auto", width: 180 }}
-        />
-        {(visibleCerts.length !== certs.length || namespace) && filter !== "issuers" && <span style={{ fontSize: 10, color: "var(--color-text-tertiary)" }}>{visibleCerts.length} of {certs.length}</span>}
-      </div>
-
-      {cm.loading && certs.length === 0 && issuers.length === 0 ? (
-        <SkeletonRows rows={7} label="loading certificate state" />
-      ) : filter === "issuers" ? (
-        <IssuersPanel issuers={orderedIssuers} />
-      ) : certs.length === 0 ? (
-        <EmptyState
-          icon={<IconCertificate size={28} stroke={1.2} />}
-          title="No Certificates on this cluster."
-          hint="cert-manager is installed but no Certificate objects exist yet."
-        />
+    <LensLayout
+      label="cert-manager"
+      title={view === "issuers" ? "cert-manager issuers" : "Certificates"}
+      summary={state === "loading" || state === "unreadable" || absent ? null : view === "issuers" ? (
+        <>
+          <span className="t-number" style={{ color: "var(--color-text-secondary)" }}>{issuers.length}{partial}</span>
+          {issuersNotReady > 0 ? <span className="t-status" style={{ color: "var(--color-text-warning)" }}>{issuersNotReady} not ready</span> : <span className="t-secondary">all issuers ready</span>}
+        </>
       ) : (
-        <div style={{ flex: 1, minHeight: 0, display: "grid", gridTemplateColumns: "minmax(440px, 1.25fr) minmax(320px, 0.75fr)", gap: 12, alignItems: "stretch", overflow: "hidden" }}>
-          <div style={{ ...well, overflow: "hidden", minHeight: 0, display: "flex", flexDirection: "column" }}>
-            <div style={{ display: "grid", gridTemplateColumns: "3px minmax(180px,1.3fr) minmax(120px,1fr) 96px 64px 84px", gap: 10, alignItems: "center", padding: "5px 12px", borderBottom: "0.5px solid var(--color-border-tertiary)", fontSize: 10, color: "var(--color-text-tertiary)", flexShrink: 0 }}>
-              <span />
-              <span>certificate</span>
-              <span>issuer</span>
-              <span>secret</span>
-              <span>expiry</span>
-              <span>status</span>
-            </div>
-            <div data-testid="cert-scroll" style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
-              {visibleCerts.length === 0 ? (
-                <EmptyState
-                  title="No certificates match the current filter."
-                  action={{ label: "Clear filters", onClick: () => { setFilter("all"); setQuery(""); setNamespace(""); } }}
-                />
-              ) : visibleCerts.map((c, i) => {
-                const k = keyOf(c);
-                return <CertRow key={k} c={c} open={cm.selectedKey === k} kbSelected={i === kbIdx} onClick={() => (cm.selectedKey === k ? select(null) : select(k))} />;
-              })}
-            </div>
-            <FKeysBar
-              keys={[["j k", "nav"], ["\u21B5", "inspect"], ["/", "filter"], ["esc", "close"]]}
-              status={`${visibleCerts.length} of ${certs.length} \u00B7 broken first`}
-            />
-          </div>
-
-          <div data-testid="cert-inspector" style={{ minHeight: 0, overflowY: "auto" }}>
-            {selected ? <CertInspector c={selected} cluster={cluster} issuer={resolveIssuer(selected, issuers)} chain={chain} chainLoading={cm.chainLoading} aiReady={ai.ready} aiEgress={ai.egress} /> : <EmptyInspector attention={attention} />}
-          </div>
-        </div>
+        <>
+          <span className="t-number" style={{ color: "var(--color-text-secondary)" }}>{certs.length}{partial}</span>
+          {attention > 0
+            ? <span className="t-status" style={{ color: failedOrExpired > 0 ? "var(--color-text-danger)" : "var(--color-text-warning)" }}>{failedOrExpired > 0 ? "▲ " : ""}{attention} not ready or expired</span>
+            : <span className="t-secondary">{watchError ? "none known not ready" : "all ready"}</span>}
+          <span className="t-secondary">{[failedOrExpired ? `${failedOrExpired} failed or expired` : "", issuing ? `${issuing} issuing` : "", renewing ? `${renewing} in renewal window` : "", issuerProblems ? `${issuerProblems} with issuer problem` : ""].filter(Boolean).join(" · ")}</span>
+        </>
       )}
+      controls={absent ? undefined : (
+        <>
+          <div role="group" aria-label="cert-manager view" style={{ display: "inline-flex", gap: 4 }}>
+            <button className="l-chip" aria-pressed={view === "certificates"} onClick={() => { setView("certificates"); setStatus("all"); }}>Certificates</button>
+            <button className="l-chip" aria-pressed={view === "issuers"} onClick={() => { setView("issuers"); setStatus("all"); }}>
+              Issuers {issuersNotReady > 0 && <span style={{ color: "var(--color-text-warning)" }}>{issuersNotReady}</span>}
+            </button>
+          </div>
+          <label style={{ display: "flex" }}>
+            <span className="sr-only">Namespace</span>
+            <select className="l-input" value={namespace} onChange={(e) => setNamespace(e.target.value)}>
+              <option value="">All namespaces</option>
+              {namespaces.map((ns) => <option key={ns} value={ns}>{ns}</option>)}
+            </select>
+          </label>
+          <button className="l-chip" aria-pressed={status === "all"} onClick={() => setStatus("all")}>All</button>
+          <button className="l-chip" aria-pressed={status === "attention"} onClick={() => setStatus("attention")}>Not ready {(view === "issuers" ? issuersNotReady : attention) > 0 && <span style={{ color: "var(--color-text-warning)" }}>{view === "issuers" ? issuersNotReady : attention}</span>}</button>
+          {view === "certificates" && (
+            <>
+              <button className="l-chip" aria-pressed={status === "expiring"} onClick={() => setStatus("expiring")}>Expiring <span style={{ color: "var(--color-text-tertiary)" }}>{certs.filter((c) => expiringSoon(c) || expired(c)).length}</span></button>
+              {issuing > 0 && <button className="l-chip" aria-pressed={status === "issuing"} onClick={() => setStatus("issuing")}>Issuing <span style={{ color: "var(--color-text-tertiary)" }}>{issuing}</span></button>}
+              {issuerProblems > 0 && <button className="l-chip" aria-pressed={status === "issuerProblem"} onClick={() => setStatus("issuerProblem")}>Issuer problem <span style={{ color: "var(--color-text-warning)" }}>{issuerProblems}</span></button>}
+            </>
+          )}
+          <label style={{ display: "flex", flex: "0 1 260px", minWidth: 140, marginLeft: "auto" }}>
+            <span className="sr-only">Search cert-manager</span>
+            <input ref={searchRef} className="l-input" style={{ width: "100%" }} type="search" autoCapitalize="off" autoCorrect="off" spellCheck={false} value={query} onChange={(e) => setQuery(e.target.value)} placeholder={view === "issuers" ? "Search issuers" : "Search name, issuer, DNS, secret"} />
+          </label>
+        </>
+      )}
+      notice={watchError && total > 0 ? <WatchErrorBanner tool="cert-manager" failure="watch failed - showing the last good state" error={watchError} /> : undefined}
+      state={state}
+      stateView={stateView}
+      body={
+        <LensTable minWidth={fitted.minWidth} onWidth={setBodyWidth}>
+          <div className="lens-table-head" role="row" style={gridStyle}>
+            {columns.filter((c) => show(c.id)).map((c) => <span key={c.id}>{c.label}</span>)}
+          </div>
+          {view === "issuers" ? (
+            <VirtualList
+              ref={listRef}
+              items={visibleIssuers}
+              rowHeight={TABLE_ROW_HEIGHT}
+              rowKey={(i) => issuerKey(i)}
+              style={{ flex: 1, minHeight: 0 }}
+              render={(i) => {
+                const k = issuerKey(i);
+                const role = issuerHealth(i);
+                return (
+                  <div key={k} role="button" tabIndex={0} className="lens-row" style={gridStyle}
+                    aria-selected={k === cursorKey} data-cursor={k === cursorKey ? "true" : undefined} data-selected={k === issuerSel ? "true" : undefined}
+                    onClick={() => { setCursorKey(k); setIssuerSel(k === issuerSel ? null : k); }}
+                    onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setIssuerSel(k); } }}>
+                    {show("lamp") && <Lamp role={role} />}
+                    {show("name") && <span className="lens-cell-name" title={`${i.namespace ? `${i.namespace}/` : ""}${i.name}`}>{i.namespace && <span style={{ color: "var(--color-text-tertiary)" }}>{i.namespace} / </span>}{i.name}</span>}
+                    {show("kind") && <span style={{ color: "var(--color-text-tertiary)" }}>{i.kind}</span>}
+                    {show("status") && <span style={{ ...cellStyle, color: ROLE_TEXT[role.kind] }}>{role.kind === "fault" ? "▲ " : ""}{i.ready}{i.ready !== "Ready" && i.reason ? ` · ${i.reason}` : ""}</span>}
+                    {show("certs") && <span>{certsFor(i).length}</span>}
+                  </div>
+                );
+              }}
+            />
+          ) : (
+            <VirtualList
+              ref={listRef}
+              items={visibleCerts}
+              rowHeight={TABLE_ROW_HEIGHT}
+              rowKey={(c) => keyOf(c)}
+              style={{ flex: 1, minHeight: 0 }}
+              render={(c) => {
+                const k = keyOf(c);
+                const role = certHealth(c);
+                const soon = expiringSoon(c);
+                return (
+                  <div key={k} role="button" tabIndex={0} className="lens-row" style={{ ...gridStyle, ...staleStyle(c.stale) }}
+                    aria-selected={k === cursorKey} data-cursor={k === cursorKey ? "true" : undefined} data-selected={k === selKey ? "true" : undefined}
+                    onClick={() => { setCursorKey(k); autoSelect.current = "done"; selectCert(k === selKey ? null : k); }}
+                    onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); selectCert(k); } }}>
+                    {show("lamp") && <Lamp role={role} />}
+                    {show("name") && (
+                      <span style={{ display: "flex", alignItems: "center", gap: 4, minWidth: 0 }}>
+                        <span className="lens-cell-name" title={k}><span style={{ color: "var(--color-text-tertiary)" }}>{c.namespace} / </span><span style={{ fontWeight: k === selKey ? 600 : 400 }}>{c.name}</span></span>
+                        <CopyButton text={c.name} label={`copy certificate name ${c.name}`} appearOnRowHover />
+                      </span>
+                    )}
+                    {show("status") && (
+                      <span style={cellStyle}>
+                        {c.stale ? <SyncingChip generation={c.generation} observedGeneration={c.observedGeneration} />
+                          : <span style={{ color: ROLE_TEXT[role.kind], fontWeight: role.kind === "fault" ? 600 : 400 }}>{role.kind === "fault" ? "▲ " : ""}{role.label}{needsAttention(c) && c.reason ? ` · ${c.reason}` : ""}</span>}
+                      </span>
+                    )}
+                    {show("expiry") && <span style={{ color: expired(c) ? "var(--color-text-danger)" : soon ? "var(--color-text-warning)" : "var(--color-text-secondary)" }} title={c.notAfterUnix ? dateText(c.notAfterUnix) : undefined}>{expiryText(c)}</span>}
+                    {show("issuer") && <span style={{ ...cellStyle, color: issuersKnown && issuerProblem(c, issuers) ? "var(--color-text-warning)" : "var(--color-text-secondary)" }}>{c.issuerName}</span>}
+                    {show("secret") && <span style={{ ...cellStyle, color: "var(--color-text-secondary)" }}>{c.secretName || "-"}</span>}
+                  </div>
+                );
+              }}
+            />
+          )}
+        </LensTable>
+      }
+      footer={<span className="t-legend">j k navigate · ↵ inspect · / search</span>}
+      footerEnd={<span className="t-secondary">{shown} of {total}{partial} {noun}{view === "certificates" ? " · broken first, then soonest expiry" : ""}</span>}
+      inspector={view === "certificates" && selKey && (selectedCert || certRemoved) && lastCert.current ? (
+        <CertInspector
+          key={`${cluster}/${selKey}`}
+          c={selectedCert ?? lastCert.current}
+          cluster={cluster}
+          removed={certRemoved}
+          issuer={issuersKnown ? resolveIssuer(selectedCert ?? lastCert.current, issuers) : undefined}
+          issuersKnown={issuersKnown}
+          chain={shownChain}
+          chainLoading={!shownChain && mine && cm.chainLoading}
+          aiReady={ai.ready}
+          aiEgress={ai.egress}
+          onClose={() => { autoSelect.current = "done"; selectCert(null); }}
+          onResolve={() => selKey && resolveChain(selKey)}
+          onOpenIssuer={(i) => { setView("issuers"); setStatus("all"); setIssuerSel(issuerKey(i)); setCursorKey(issuerKey(i)); }}
+        />
+      ) : view === "issuers" && issuerSel && (selectedIssuer || issuerRemoved) && lastIssuer.current ? (
+        <IssuerInspector
+          key={`${cluster}/${issuerSel}`}
+          issuer={selectedIssuer ?? lastIssuer.current}
+          removed={issuerRemoved}
+          certs={certsFor(selectedIssuer ?? lastIssuer.current)}
+          onClose={() => setIssuerSel(null)}
+          onOpenCert={(c) => { setView("certificates"); setStatus("all"); setNamespace(""); setQuery(""); setCursorKey(keyOf(c)); autoSelect.current = "done"; selectCert(keyOf(c)); }}
+        />
+      ) : undefined}
+      inspectorLabel={view === "issuers" ? "Issuer details" : "Certificate details"}
+      onCloseInspector={closeSelected}
+    />
+  );
+}
+
+function RemovedNotice({ kind }: { kind: string }) {
+  return (
+    <div role="status" className="t-body" style={{ padding: "8px 10px", borderRadius: 4, background: "var(--color-background-secondary)", boxShadow: "inset 0 0 0 1px var(--color-border-secondary)" }}>
+      <span className="t-status">{kind} removed.</span> It is no longer in the current read. The details below are its last evidence; actions are disabled.
     </div>
   );
 }
 
-function CertRow({ c, open, kbSelected, onClick }: { c: CertificateDTO; open: boolean; kbSelected: boolean; onClick: () => void }) {
-  const bad = c.ready === "Failed" || expired(c);
-  const soon = expiringSoon(c);
-  // Keep the kb-selected row visible - the list scrolls, there is no
-  // VirtualList handle here. Optional call: jsdom has no scrollIntoView.
-  const ref = useRef<HTMLButtonElement>(null);
-  useEffect(() => {
-    if (kbSelected) ref.current?.scrollIntoView?.({ block: "nearest" });
-  }, [kbSelected]);
-  return (
-    <button
-      ref={ref}
-      aria-selected={kbSelected}
-      onClick={onClick}
-      style={{
-        width: "100%", textAlign: "left", display: "grid",
-        gridTemplateColumns: "3px minmax(180px,1.3fr) minmax(120px,1fr) 96px 64px 84px",
-        gap: 10, alignItems: "center", padding: "7px 12px", cursor: "pointer",
-        border: "none", borderBottom: "0.5px solid var(--color-border-tertiary)",
-        background: kbSelected || open ? "var(--color-background-secondary)" : "transparent", color: "var(--color-text-primary)",
-        boxShadow: kbSelected ? "inset 2px 0 0 var(--bench-selection-edge, var(--color-text-info))" : undefined,
-        ...staleStyle(c.stale),
-      }}
-    >
-      <span style={{ alignSelf: "stretch", background: bad ? "var(--color-text-danger)" : c.ready === "Issuing" ? "var(--color-text-info)" : soon ? "var(--color-text-warning)" : "transparent" }} />
-      <span style={{ ...mono, ...ellipsis, fontSize: 12 }} title={`${c.namespace}/${c.name}`}>
-        <span style={{ color: "var(--color-text-tertiary)" }}>{c.namespace}/</span>{c.name}
-      </span>
-      <span style={{ ...mono, ...ellipsis, fontSize: 11, color: "var(--color-text-secondary)" }} title={`${c.issuerKind}/${c.issuerName}`}>{c.issuerName}</span>
-      <span style={{ ...mono, ...ellipsis, fontSize: 11, color: "var(--color-text-secondary)" }} title={c.secretName}>{c.secretName}</span>
-      <span style={{ ...mono, fontSize: 11, color: expired(c) ? "var(--color-text-danger)" : soon ? "var(--color-text-warning)" : "var(--color-text-secondary)" }}>{expiryText(c)}</span>
-      <span style={{ display: "flex", alignItems: "center", gap: 5, minWidth: 0 }}>
-        {c.stale ? (
-          <SyncingChip generation={c.generation} observedGeneration={c.observedGeneration} />
-        ) : (
-          <>
-            <StatusDot size={6} color={readyColor[c.ready] ?? readyColor.Unknown} />
-            <span style={{ ...ellipsis, fontSize: 11, color: "var(--color-text-secondary)" }}>{statusText(c)}</span>
-          </>
-        )}
-      </span>
-    </button>
-  );
-}
-
-function CertInspector({ c, cluster, issuer, chain, chainLoading, aiReady, aiEgress }: { c: CertificateDTO; cluster: string; issuer: IssuerDTO | undefined; chain: CertChainDTO | null; chainLoading: boolean; aiReady: boolean; aiEgress: boolean }) {
-  // Prefer the server-resolved bound issuer (chain.issuer); fall back to the one
-  // resolved from the watched issuers list before the chain lands.
+// CertInspector - investigation order: the cert verdict; the bound issuer
+// (headline when not ready), the likely cause, the issuance chain with the
+// deepest stuck node flagged; then secret, validity, DNS names, message.
+function CertInspector({ c, cluster, removed, issuer, issuersKnown, chain, chainLoading, aiReady, aiEgress, onClose, onResolve, onOpenIssuer }: {
+  c: CertificateDTO;
+  cluster: string;
+  removed: boolean;
+  issuer: IssuerDTO | undefined;
+  issuersKnown: boolean;
+  chain: CertChainDTO | null;
+  chainLoading: boolean;
+  aiReady: boolean;
+  aiEgress: boolean;
+  onClose: () => void;
+  onResolve: () => void;
+  onOpenIssuer: (i: IssuerDTO) => void;
+}) {
+  // Prefer the server-resolved bound issuer (chain.issuer); fall back to the
+  // watched issuer list before the chain lands.
   const boundIssuer = chain?.issuer ?? issuer;
   const issuerBroken = boundIssuer && boundIssuer.ready !== "Ready";
   const failing = chain?.failingLink ?? null;
@@ -357,160 +496,171 @@ function CertInspector({ c, cluster, issuer, chain, chainLoading, aiReady, aiEgr
   const requests = arrayOf(chain?.requests);
   const warnings = arrayOf(chain?.warnings);
   const dnsNames = arrayOf(c.dnsNames);
-  const cause = failureHint(c, boundIssuer, failing, warnings);
+  const cause = !boundIssuer && !issuersKnown ? "" : failureHint(c, boundIssuer, failing, warnings);
+  const live = !removed;
+  const role = certHealth(c);
 
-  // AI "Explain this" — on-demand, read-only, reset when the selection changes.
   const [explain, setExplain] = useState<{ loading: boolean; result: AIResultDTO | null }>({ loading: false, result: null });
-  // Fence against a mid-flight cert change: CertInspector is reused across
-  // selections, so a slow explain from the previous cert must not land under the
-  // new one. The token bumps whenever the selected cert changes.
   const explainTokenRef = useRef(0);
-  useEffect(() => { explainTokenRef.current++; setExplain({ loading: false, result: null }); }, [c.namespace, c.name]);
-  const runExplain = useCallback(() => {
+  useEffect(() => { explainTokenRef.current++; setExplain({ loading: false, result: null }); }, [cluster, c.namespace, c.name]);
+  const runExplain = () => {
     const token = explainTokenRef.current;
     setExplain({ loading: true, result: null });
     explainCertificate(cluster, c.namespace, c.name)
       .then((r) => {
-        if (token !== explainTokenRef.current) return; // selection changed mid-flight
+        if (token !== explainTokenRef.current) return;
         setExplain({ loading: false, result: r });
-        if (r.error) {
-          useFleet.getState().setActionStatus({ kind: "error", message: `Explain failed: ${r.error}` });
-        } else {
-          // Audit the egress: a record of what was sent, to which backend.
-          useFleet.getState().setActionStatus({ kind: "success", message: `AI explain — Certificate/${c.namespace}/${c.name} via ${r.backend}` });
-        }
+        if (r.error) useFleet.getState().setActionStatus({ kind: "error", message: `Explain failed: ${r.error}` });
+        else useFleet.getState().setActionStatus({ kind: "success", message: `AI explain - Certificate/${c.namespace}/${c.name} via ${r.backend}` });
       })
       .catch((e) => {
         if (token !== explainTokenRef.current) return;
         setExplain({ loading: false, result: null });
         useFleet.getState().setActionStatus({ kind: "error", message: `Explain failed: ${String(e)}` });
       });
-  }, [cluster, c.namespace, c.name]);
+  };
+  const aiBlocked = "AI is disabled for this protected cluster - the AI endpoint is not on this machine; use a model on localhost or set ai.allowProtectedEgress";
+  const manifestRef = wellKnownResourceRef("cert-manager.io", "Certificate");
+  const more: MenuItem[] = [
+    ...(manifestRef ? [{ label: "View manifest in Resources", onSelect: () => { const nav = useFleet.getState(); nav.openResource(manifestRef); nav.openInstance(c.namespace, c.name); } }] : []),
+    ...(c.secretName ? [{ label: `Open Secret ${c.secretName}`, onSelect: () => { const nav = useFleet.getState(); nav.openResource(SECRET_REF); nav.openInstance(c.namespace, c.secretName); } }] : []),
+    ...(live && aiReady && !aiEgress ? [{ label: "Explain (AI)", disabled: true, hint: aiBlocked, onSelect: () => {} }] : []),
+  ];
 
   return (
-    <div style={{ ...well, padding: 14, display: "flex", flexDirection: "column", gap: 12 }}>
-      <div>
-        <div style={{ display: "flex", alignItems: "center", gap: 2, marginBottom: 8 }}>
-          <div style={{ ...mono, fontSize: 13, fontWeight: 500 }}>{c.namespace}/{c.name}</div>
-          <CopyButton text={c.name} label={`copy certificate name ${c.name}`} />
-          <ManifestButton group="cert-manager.io" kind="Certificate" namespace={c.namespace} name={c.name} />
-          {aiReady && (
-            <button
-              onClick={runExplain}
-              disabled={!aiEgress || explain.loading}
-              title={aiEgress ? "Explain why this certificate is stuck (AI, read-only)" : "AI is disabled for this protected cluster — the AI endpoint is not on this machine; use a model on localhost or set ai.allowProtectedEgress"}
-              style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11, padding: "3px 8px", borderRadius: 4, cursor: aiEgress && !explain.loading ? "pointer" : "not-allowed", border: "0.5px solid var(--color-border-info)", background: "var(--color-background-info)", color: "var(--color-text-info)", opacity: aiEgress ? 1 : 0.5 }}
-            >
-              <IconSparkles size={12} stroke={1.5} />
-              {explain.loading ? "explaining…" : "Explain"}
-            </button>
-          )}
-        </div>
-        <InspectorStatus
-          tone={certTone(c)}
-          label={expired(c) ? "Expired" : c.ready}
-          reason={needsAttention(c) || c.ready === "Issuing" ? c.reason || undefined : expiringSoon(c) ? "renewal window" : undefined}
-          detail={c.notAfterUnix > 0 && !expired(c) ? `expires ${expiryText(c)}` : undefined}
-        />
-      </div>
-
-      {cause && (
-        <div style={{ border: "0.5px solid var(--color-text-warning)", borderRadius: "var(--border-radius-md)", padding: "8px 10px", background: "var(--color-background-secondary)" }}>
-          <div style={{ fontSize: 11, color: "var(--color-text-warning)", fontWeight: 600 }}>likely cause</div>
-          <div style={{ fontSize: 11, color: "var(--color-text-secondary)", marginTop: 3 }}>{cause}</div>
-        </div>
-      )}
-
-      {(explain.loading || explain.result) && (
-        <InspectorSection title="Explain (AI)">
-          {explain.loading ? (
-            <div style={{ fontSize: 11, color: "var(--color-text-tertiary)" }}>asking the model…</div>
-          ) : explain.result?.error ? (
-            <div style={{ display: "flex", alignItems: "flex-start", gap: 5, fontSize: 11, color: "var(--color-text-danger)" }}>
-              <IconAlertTriangle size={12} stroke={1.5} style={{ flexShrink: 0, marginTop: 1 }} />
-              <span>{explain.result.error}</span>
-            </div>
-          ) : explain.result ? (
-            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-              <div style={{ fontSize: 11, color: "var(--color-text-secondary)", whiteSpace: "pre-wrap", lineHeight: 1.5 }}>{explain.result.explanation}</div>
-              <div style={{ ...mono, fontSize: 9, color: "var(--color-text-tertiary)" }}>Grounded on: {explain.result.groundedOn} · {explain.result.model}</div>
-              <div style={{ fontSize: 9, color: "var(--color-text-tertiary)", fontStyle: "italic" }}>AI-generated from the resolved chain — verify before acting.</div>
-            </div>
-          ) : null}
-        </InspectorSection>
-      )}
-
-      {/* A failing bound issuer is the headline for a stuck cert (M10 source pattern). */}
-      {issuerBroken && (
-        <div style={{ border: "0.5px solid var(--color-text-danger)", borderRadius: "var(--border-radius-md)", padding: "8px 10px", background: "var(--color-background-secondary)" }}>
-          <div style={{ fontSize: 11, color: "var(--color-text-danger)", fontWeight: 500 }}>issuer not ready: {boundIssuer!.reason || "unknown"}</div>
-          <div style={{ ...mono, fontSize: 11, color: "var(--color-text-secondary)", marginTop: 2 }}>{boundIssuer!.kind}/{boundIssuer!.name}</div>
-          {boundIssuer!.message && <div style={{ fontSize: 11, color: "var(--color-text-secondary)", marginTop: 3 }}>{boundIssuer!.message}</div>}
-        </div>
-      )}
-
-      <InspectorSection title={failing ? "Issuance chain — deepest stuck node flagged" : "Issuance chain"}>
-        <div style={{ marginBottom: 6 }}>
-          <InspectorFacts
-            facts={[
-              { label: "requests", value: requests.length },
-              { label: "warnings", value: warnings.length, tone: warnings.length > 0 ? "warning" : undefined },
-              { label: "stuck", value: failing ? chainKindLabel[failing.kind] ?? failing.kind : "—", tone: failing ? "danger" : undefined },
-            ]}
-          />
-        </div>
-        {chainLoading ? (
-          <div style={{ fontSize: 11, color: "var(--color-text-tertiary)" }}>resolving chain…</div>
-        ) : requests.length > 0 ? (
-          <ChainRail nodes={requests} failKey={failKey} />
-        ) : (
-          <div style={{ fontSize: 11, color: "var(--color-text-tertiary)" }}>no active issuance request.</div>
+    <div data-testid="cert-panel" style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
+      <InspectorLayout
+        kind="Certificate"
+        namespace={c.namespace}
+        name={c.name}
+        meta={[`issuer ${c.issuerKind}/${c.issuerName}`, c.secretName ? `secret ${c.secretName}` : ""].filter(Boolean).join(" · ")}
+        onClose={onClose}
+        verdict={removed ? <RemovedNotice kind="Certificate" /> : (
+          <div>
+            {c.stale ? (
+              <InspectorStatus tone="muted" label="Syncing…" reason={`generation ${c.generation} not yet observed (observed ${c.observedGeneration})`} />
+            ) : (
+              <InspectorStatus
+                tone={certTone(c)}
+                label={role.label}
+                reason={needsAttention(c) || c.ready === "Issuing" ? c.reason || undefined : expiringSoon(c) ? "renewal window" : undefined}
+                detail={c.notAfterUnix > 0 && !expired(c) ? `expires ${expiryText(c)}` : undefined}
+              />
+            )}
+            {c.message && needsAttention(c) && <div className="t-body" style={{ color: certTone(c) === "danger" ? "var(--color-text-danger)" : "var(--color-text-warning)", overflowWrap: "anywhere", marginTop: -4 }}>{c.message}</div>}
+          </div>
         )}
-        {warnings.length > 0 && warnings.map((w) => (
-          <div key={w} style={{ fontSize: 10, color: "var(--color-text-warning)", marginTop: 3 }}>{w}</div>
-        ))}
-      </InspectorSection>
+        primary={live ? { label: chainLoading ? "Resolving chain…" : "Re-resolve chain", onSelect: onResolve } : undefined}
+        secondary={live && aiReady && aiEgress ? { label: explain.loading ? "Explaining…" : "Explain", onSelect: () => { if (!explain.loading) runExplain(); } } : undefined}
+        more={more}
+      >
+        {issuerBroken && (
+          <div className="t-body" style={{ padding: "8px 10px", borderRadius: 4, background: "var(--color-background-danger)", boxShadow: "inset 0 0 0 1px var(--color-border-danger)" }}>
+            <div style={{ color: "var(--color-text-danger)", fontWeight: 600 }}>Issuer not ready: {boundIssuer!.reason || "unknown"}</div>
+            <button onClick={() => onOpenIssuer(boundIssuer!)} className="t-identifier" style={{ background: "none", border: 0, padding: 0, cursor: "pointer", color: "var(--color-text-info)", marginTop: 2 }}>{boundIssuer!.kind}/{boundIssuer!.name}</button>
+            {boundIssuer!.message && <div style={{ color: "var(--color-text-secondary)", marginTop: 3, overflowWrap: "anywhere" }}>{boundIssuer!.message}</div>}
+          </div>
+        )}
+        {cause && !issuerBroken && (
+          <div className="t-body" style={{ padding: "8px 10px", borderRadius: 4, background: "var(--color-background-secondary)", boxShadow: "inset 0 0 0 1px var(--color-border-warning)" }}>
+            <div style={{ color: "var(--color-text-warning)", fontWeight: 600 }}>Likely cause</div>
+            <div style={{ color: "var(--color-text-secondary)", marginTop: 3, overflowWrap: "anywhere" }}>{cause}</div>
+          </div>
+        )}
+        {(explain.loading || explain.result) && (
+          <InspectorBlock title="Explain (AI)">
+            {explain.loading ? <span className="t-secondary">Asking the model…</span> : explain.result?.error ? (
+              <div className="t-body" style={{ display: "flex", alignItems: "flex-start", gap: 5, color: "var(--color-text-danger)" }}>
+                <IconAlertTriangle size={12} stroke={1.5} style={{ flexShrink: 0, marginTop: 2 }} />
+                <span>{explain.result.error}</span>
+              </div>
+            ) : explain.result ? (
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                <div className="t-body" style={{ color: "var(--color-text-secondary)", whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{explain.result.explanation}</div>
+                <span className="t-secondary">Grounded on: {explain.result.groundedOn} · {explain.result.model}</span>
+                <span className="t-secondary" style={{ fontStyle: "italic" }}>AI-generated from the resolved chain - verify before acting.</span>
+              </div>
+            ) : null}
+          </InspectorBlock>
+        )}
+        <InspectorBlock title={failing ? "Issuance chain - deepest stuck node flagged" : "Issuance chain"} count={chain ? requests.length : undefined}>
+          {chainLoading ? <span className="t-secondary">Resolving chain…</span>
+            : !chain ? <span className="t-secondary">{removed ? "No chain was resolved before it was removed." : "Chain not resolved."}</span>
+            : requests.length > 0 ? <ChainRail nodes={requests} failKey={failKey} />
+            : <span className="t-secondary">No active issuance request.</span>}
+          {warnings.map((w) => <div key={w} className="t-body" style={{ color: "var(--color-text-warning)", marginTop: 3, overflowWrap: "anywhere" }}>{w}</div>)}
+        </InspectorBlock>
+        <InspectorBlock title="Issuer">
+          <div className="insp-kv">
+            <span>ref</span><span className="t-identifier">{c.issuerKind}/{c.issuerName}</span>
+            <span>health</span>
+            <span style={{ color: !boundIssuer ? "var(--color-text-tertiary)" : boundIssuer.ready === "Ready" ? undefined : "var(--color-text-danger)" }}>
+              {boundIssuer ? boundIssuer.ready : issuersKnown ? "not found in the watched issuer list" : "unverified (issuer read unavailable)"}
+            </span>
+          </div>
+        </InspectorBlock>
+        <InspectorBlock title="Validity">
+          <div className="insp-kv">
+            <span>valid from</span><span>{dateText(c.notBeforeUnix)}</span>
+            <span>expires</span><span style={{ color: expired(c) ? "var(--color-text-danger)" : expiringSoon(c) ? "var(--color-text-warning)" : undefined }}>{c.notAfterUnix ? `${expiryText(c)} (${dateText(c.notAfterUnix)})` : "not issued"}</span>
+            <span>renews</span><span style={{ color: expiringSoon(c) ? "var(--color-text-warning)" : undefined }}>{dateText(c.renewalUnix)}</span>
+          </div>
+        </InspectorBlock>
+        {dnsNames.length > 0 && (
+          <InspectorBlock title="DNS names" count={dnsNames.length}>
+            {dnsNames.map((d) => <div key={d} className="t-identifier" style={{ color: "var(--color-text-secondary)", overflowWrap: "anywhere" }}>{d}</div>)}
+          </InspectorBlock>
+        )}
+        {c.message && !needsAttention(c) && (
+          <InspectorBlock title="Message" defaultOpen={false}>
+            <div className="t-body" style={{ color: "var(--color-text-secondary)", overflowWrap: "anywhere" }}>{c.message}</div>
+          </InspectorBlock>
+        )}
+      </InspectorLayout>
+    </div>
+  );
+}
 
-      <InspectorSection title="Issuer">
-        <Kv label="ref" value={`${c.issuerKind}/${c.issuerName}`} />
-        <Kv label="health" value={boundIssuer ? boundIssuer.ready : "not found"} tone={boundIssuer ? (boundIssuer.ready === "Ready" ? "success" : "danger") : "muted"} />
-        {boundIssuer?.message && <div style={{ fontSize: 11, color: "var(--color-text-secondary)" }}>{boundIssuer.message}</div>}
-      </InspectorSection>
-
-      <InspectorSection title="Secret">
-        <Kv
-          label="name"
-          value={c.secretName ? (
-            <button
-              onClick={() => {
-                const nav = useFleet.getState();
-                nav.openResource(SECRET_REF);
-                nav.openInstance(c.namespace, c.secretName);
-              }}
-              title={`open Secret ${c.namespace}/${c.secretName}`}
-              style={{ background: "transparent", border: "none", padding: 0, cursor: "pointer", textAlign: "left", color: "var(--color-text-info)", fontFamily: "var(--font-mono)", fontSize: 11, overflowWrap: "anywhere", textDecoration: "underline", textDecorationColor: "var(--color-border-secondary)", textUnderlineOffset: 2 }}
-            >{c.secretName}</button>
-          ) : "—"}
-        />
-      </InspectorSection>
-
-      <InspectorSection title="Validity">
-        <Kv label="valid from" value={dateText(c.notBeforeUnix)} />
-        <Kv label="expires" value={c.notAfterUnix ? `${expiryText(c)} (${dateText(c.notAfterUnix)})` : "not issued"} tone={expired(c) ? "danger" : expiringSoon(c) ? "warning" : undefined} />
-        <Kv label="renews" value={dateText(c.renewalUnix)} tone={expiringSoon(c) ? "warning" : undefined} />
-      </InspectorSection>
-
-      {dnsNames.length > 0 && (
-        <InspectorSection title="DNS names">
-          {dnsNames.map((d) => <div key={d} style={{ ...mono, fontSize: 11, color: "var(--color-text-secondary)" }}>{d}</div>)}
-        </InspectorSection>
-      )}
-
-      {c.message && (
-        <InspectorSection title="Message">
-          <div style={{ fontSize: 11, color: "var(--color-text-secondary)" }}>{c.message}</div>
-        </InspectorSection>
-      )}
+function IssuerInspector({ issuer, removed, certs, onClose, onOpenCert }: { issuer: IssuerDTO; removed: boolean; certs: CertificateDTO[]; onClose: () => void; onOpenCert: (c: CertificateDTO) => void }) {
+  const role = issuerHealth(issuer);
+  const ref = wellKnownResourceRef("cert-manager.io", issuer.kind);
+  const view = ref ? () => { const nav = useFleet.getState(); nav.openResource(ref); nav.openInstance(issuer.kind === "ClusterIssuer" ? "" : issuer.namespace, issuer.name); } : null;
+  const blocked = certs.filter(needsAttention);
+  return (
+    <div data-testid="issuer-panel" style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
+      <InspectorLayout
+        kind={issuer.kind}
+        namespace={issuer.namespace || undefined}
+        name={issuer.name}
+        meta={issuer.kind === "ClusterIssuer" ? "cluster-scoped - any namespace may use it" : `namespaced - serves Certificates in ${issuer.namespace}`}
+        onClose={onClose}
+        verdict={removed ? <RemovedNotice kind={issuer.kind} /> : (
+          <div>
+            <InspectorStatus tone={role.kind === "fault" ? "danger" : role.kind === "degraded" ? "warning" : role.kind === "ok" ? "success" : "muted"} label={role.label} reason={issuer.ready !== "Ready" ? issuer.reason || undefined : undefined} />
+            {issuer.message && issuer.ready !== "Ready" && <div className="t-body" style={{ color: ROLE_TEXT[role.kind], overflowWrap: "anywhere", marginTop: -4 }}>{issuer.message}</div>}
+          </div>
+        )}
+        primary={view ? { label: "View manifest in Resources", onSelect: view } : undefined}
+      >
+        <InspectorBlock title="Certificates using it" count={certs.length} extra={blocked.length > 0 ? <span className="t-secondary" style={{ color: "var(--color-text-warning)" }}>{blocked.length} not ready or expired</span> : undefined}>
+          {certs.length === 0 ? <span className="t-secondary">No Certificate references this issuer.</span> : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+              {[...blocked, ...certs.filter((c) => !blocked.includes(c))].map((c) => (
+                <button key={keyOf(c)} onClick={() => onOpenCert(c)} className="t-identifier"
+                  style={{ display: "flex", gap: 8, alignItems: "center", background: "none", border: 0, padding: "2px 0", cursor: "pointer", textAlign: "left", color: "var(--color-text-info)" }}>
+                  <VerdictLamp health={certHealth(c)} size={7} />
+                  <span style={{ overflowWrap: "anywhere" }}>{c.namespace}/{c.name}</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </InspectorBlock>
+        {issuer.message && issuer.ready === "Ready" && (
+          <InspectorBlock title="Message" defaultOpen={false}>
+            <div className="t-body" style={{ color: "var(--color-text-secondary)", overflowWrap: "anywhere" }}>{issuer.message}</div>
+          </InspectorBlock>
+        )}
+      </InspectorLayout>
     </div>
   );
 }
@@ -523,17 +673,6 @@ function certTone(c: CertificateDTO): Tone {
   if (expiringSoon(c)) return "warning";
   if (c.ready === "Ready") return "success";
   return "muted";
-}
-
-// Kv: label + left-adjacent value on the shared 88px grid. The Field primitive
-// right-aligns its value across the full panel width, which breaks scanning.
-function Kv({ label, value, tone }: { label: string; value: React.ReactNode; tone?: Tone }) {
-  return (
-    <div style={{ display: "grid", gridTemplateColumns: "88px 1fr", gap: 8, fontSize: 11, alignItems: "baseline" }}>
-      <span style={{ color: "var(--color-text-tertiary)" }}>{label}</span>
-      <span style={{ ...mono, fontSize: 11, color: tone ? toneColor[tone] : "var(--color-text-secondary)", overflowWrap: "anywhere" }}>{value}</span>
-    </div>
-  );
 }
 
 const chainKindLabel: Record<string, string> = {
@@ -589,7 +728,7 @@ function ChainRail({ nodes, failKey }: { nodes: ChainNodeDTO[]; failKey: string 
               <div style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 11 }}>
                 <StatusDot size={7} color={readyColor[node.ready] ?? readyColor.Unknown} />
                 <span style={{ color: "var(--color-text-tertiary)", width: 60, flexShrink: 0 }}>{chainKindLabel[kind] ?? kind.toLowerCase()}</span>
-                <span style={{ ...mono, ...ellipsis, color: isFail ? "var(--color-text-danger)" : "var(--color-text-secondary)" }} title={node.name}>{node.name}</span>
+                <span style={{ ...mono, overflowWrap: "anywhere", minWidth: 0, color: isFail ? "var(--color-text-danger)" : "var(--color-text-secondary)" }}>{node.name}</span>
                 {(bad || issuing) && node.reason && !isFail && (
                   <span style={{ ...mono, fontSize: 10, color: bad ? "var(--color-text-danger)" : "var(--color-text-warning)", flexShrink: 0 }} title={node.message}>{node.reason}</span>
                 )}
@@ -608,35 +747,3 @@ function ChainRail({ nodes, failKey }: { nodes: ChainNodeDTO[]; failKey: string 
   );
 }
 
-function IssuersPanel({ issuers }: { issuers: IssuerDTO[] }) {
-  if (issuers.length === 0) {
-    return <div style={{ color: "var(--color-text-secondary)", fontSize: 13 }}>No issuers found.</div>;
-  }
-  return (
-    <div style={{ ...frame, overflow: "hidden", minHeight: 0, flex: 1, display: "flex", flexDirection: "column" }}>
-      <div data-testid="issuer-scroll" style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
-        {issuers.map((i) => (
-          <div key={`${i.kind}/${i.namespace}/${i.name}`} style={{ display: "grid", gridTemplateColumns: "3px minmax(180px,1.4fr) 110px minmax(120px,1fr)", gap: 10, alignItems: "center", padding: "7px 12px", borderBottom: "0.5px solid var(--color-border-tertiary)" }}>
-            <span style={{ alignSelf: "stretch", background: i.ready === "Failed" ? "var(--color-text-danger)" : i.ready !== "Ready" ? "var(--color-text-warning)" : "transparent" }} />
-            <span style={{ ...mono, ...ellipsis, fontSize: 12 }} title={`${i.kind}/${i.namespace}/${i.name}`}>
-              {i.namespace && <span style={{ color: "var(--color-text-tertiary)" }}>{i.namespace}/</span>}{i.name}
-            </span>
-            <span style={{ fontSize: 10, color: "var(--color-text-tertiary)" }}>{i.kind}</span>
-            <span style={{ display: "flex", alignItems: "center", gap: 5 }}>
-              <StatusDot size={6} color={readyColor[i.ready] ?? readyColor.Unknown} />
-              <span style={{ ...ellipsis, fontSize: 11, color: i.ready === "Failed" ? "var(--color-text-danger)" : "var(--color-text-secondary)" }} title={i.message}>{i.ready !== "Ready" && i.reason ? i.reason : i.ready.toLowerCase()}</span>
-            </span>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function EmptyInspector({ attention }: { attention: number }) {
-  return (
-    <div style={{ ...well, padding: 18, color: "var(--color-text-secondary)", fontSize: 12, height: "100%", boxSizing: "border-box" }}>
-      {attention > 0 ? "Select a certificate to inspect its issuer and validity." : "All certificates are ready. Select one to inspect it."}
-    </div>
-  );
-}

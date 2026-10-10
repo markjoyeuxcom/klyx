@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { render, fireEvent, within, act } from "@testing-library/react";
+import { render, fireEvent, within, act, screen } from "@testing-library/react";
 import { useFleet } from "../store/fleet";
 import type { CertificateDTO, IssuerDTO, CertChainDTO, ClusterDTO } from "../store/fleet";
 import { CertsView } from "./CertsView";
@@ -37,17 +37,20 @@ function setup(tier: string, certs: CertificateDTO[], issuers: IssuerDTO[], sele
   useFleet.setState({
     clusters: [cluster(tier)],
     route: { name: "cluster", cluster: "x", section: "certs" },
-    certmanager: { cluster: "x", certificates: certs, issuers, loading: false, selectedKey, chain, chainLoading: false },
+    certmanager: { cluster: "x", certificates: certs, issuers, loading: false, selectedKey, chain, chainLoading: false, chainCluster: chain ? "x" : null },
   });
 }
+
+const insp = () => within(screen.getByTestId("lens-inspector"));
+const rowsText = () => [...document.querySelectorAll(".lens-row")].map((r) => r.textContent ?? "");
 
 describe("CertsView", () => {
   it("a stale certificate dims and shows the Syncing chip", () => {
     setup("Healthy", [cert({ name: "edited-tls", ready: "Ready", stale: true, generation: 3, observedGeneration: 2 })], [issuer({})]);
     const { getByText, getByTitle } = render(<CertsView cluster="x" />);
-    const row = getByText("edited-tls").closest("button") as HTMLButtonElement;
+    const row = getByText("edited-tls").closest(".lens-row") as HTMLElement;
     expect(getByText("Syncing…")).toBeTruthy();
-    expect(row.textContent).not.toContain("ready");
+    expect(row.textContent).not.toContain("Ready");
     expect(getByTitle(/Observed Gen: 2 vs Current: 3/)).toBeTruthy();
     expect(row.style.opacity).toBe("0.6");
   });
@@ -56,7 +59,7 @@ describe("CertsView", () => {
   it("renders an honest empty state when cert-manager is absent", () => {
     setup("Absent", [], []);
     const { getByText } = render(<CertsView cluster="x" />);
-    expect(getByText(/cert-manager not detected/i)).toBeTruthy();
+    expect(getByText(/cert-manager is not installed on this cluster/i)).toBeTruthy();
   });
 
   it("sorts failing certificates first (broken-first triage)", () => {
@@ -64,22 +67,19 @@ describe("CertsView", () => {
       cert({ name: "healthy-cert", ready: "Ready" }),
       cert({ name: "broken-cert", ready: "Failed", reason: "DoesNotExist" }),
     ], []);
-    const { getByTestId } = render(<CertsView cluster="x" />);
-    const rows = within(getByTestId("cert-scroll")).getAllByRole("button");
-    expect(rows[0].textContent).toContain("broken-cert");
-    expect(rows[1].textContent).toContain("healthy-cert");
+    render(<CertsView cluster="x" />);
+    const rows = rowsText();
+    expect(rows[0]).toContain("broken-cert");
+    expect(rows[1]).toContain("healthy-cert");
   });
 
-  it("the inspector opens with the shared verdict: state word plus reason, facts as counters", () => {
+  it("the inspector opens with the shared verdict: state word plus reason, then the chain", () => {
     const c = cert({ name: "acme-demo", ready: "Failed", reason: "DoesNotExist" });
     setup("Healthy", [c], [issuer({})], "payments/acme-demo");
-    const { getByTestId } = render(<CertsView cluster="x" />);
-    const inspector = getByTestId("cert-inspector");
-    expect(within(inspector).getByText("Failed")).toBeTruthy();
-    expect(within(inspector).getByText(/DoesNotExist/)).toBeTruthy();
-    // The requests/warnings/stuck tiles are now InspectorFacts counter wells.
-    expect(within(inspector).getByText("requests")).toBeTruthy();
-    expect(within(inspector).getByText("stuck")).toBeTruthy();
+    render(<CertsView cluster="x" />);
+    expect(insp().getByText("Failed")).toBeTruthy();
+    expect(insp().getAllByText(/DoesNotExist/).length).toBeGreaterThan(0);
+    expect(insp().getByText(/^Issuance chain/)).toBeTruthy();
   });
 
   it("renders the deepest stuck node's message in the flagged box", () => {
@@ -98,8 +98,8 @@ describe("CertsView", () => {
       warnings: [],
     };
     setup("Healthy", [c], [issuer({})], "payments/acme-demo", chain);
-    const { getByTestId } = render(<CertsView cluster="x" />);
-    const inspector = getByTestId("cert-inspector");
+    render(<CertsView cluster="x" />);
+    const inspector = screen.getByTestId("lens-inspector");
     expect(within(inspector).getByText(/deepest stuck node flagged/i)).toBeTruthy();
     expect(within(inspector).getByText("propagation check failed: NXDOMAIN")).toBeTruthy();
   });
@@ -107,8 +107,8 @@ describe("CertsView", () => {
   it("headlines a failing bound issuer in the inspector", () => {
     const c = cert({ name: "acme-demo", ready: "Failed", reason: "DoesNotExist" });
     setup("Healthy", [c], [issuer({ ready: "False", reason: "ACMEAccountRegistrationFailed" })], "payments/acme-demo");
-    const { getByTestId } = render(<CertsView cluster="x" />);
-    const inspector = getByTestId("cert-inspector");
+    render(<CertsView cluster="x" />);
+    const inspector = screen.getByTestId("lens-inspector");
     expect(within(inspector).getByText(/issuer not ready: ACMEAccountRegistrationFailed/i)).toBeTruthy();
   });
 
@@ -128,13 +128,14 @@ describe("CertsView", () => {
       warnings: [],
     };
     setup("Healthy", [c], [], "payments/acme-demo", chain);
-    const { getByTestId } = render(<CertsView cluster="x" />);
-    const inspector = getByTestId("cert-inspector");
+    render(<CertsView cluster="x" />);
+    const inspector = screen.getByTestId("lens-inspector");
     expect(within(inspector).getByText("acme-demo-1-123-456")).toBeTruthy();
     expect(within(inspector).getByText(/stuck here/i)).toBeTruthy();
-    // The server-resolved bound issuer drives the headline.
+    // The server-resolved bound issuer drives the headline - it IS the likely
+    // cause, so a second "likely cause" box no longer repeats it.
     expect(within(inspector).getByText(/issuer not ready: ACMEAccountRegistrationFailed/i)).toBeTruthy();
-    expect(within(inspector).getByText(/likely cause/i)).toBeTruthy();
+    expect(within(inspector).queryByText(/likely cause/i)).toBeNull();
   });
 
   it("filters certificates by issuing, issuer problem, and namespace", () => {
@@ -142,15 +143,15 @@ describe("CertsView", () => {
       cert({ namespace: "payments", name: "issuing-cert", ready: "Issuing" }),
       cert({ namespace: "cnpg-system", name: "ready-cert", ready: "Ready", issuerName: "missing-issuer" }),
     ], [issuer({})]);
-    const { getAllByRole, getByRole, getByTestId, queryByText } = render(<CertsView cluster="x" />);
-    fireEvent.click(getAllByRole("button", { name: /issuing/i })[0]);
-    expect(within(getByTestId("cert-scroll")).getByText("issuing-cert")).toBeTruthy();
+    const { getByRole, queryByText, getByLabelText } = render(<CertsView cluster="x" />);
+    fireEvent.click(getByRole("button", { name: /^Issuing \d+$/ })); // the chip, not a row whose lamp reads Issuing
+    expect(rowsText().join(" ")).toContain("issuing-cert");
     expect(queryByText("ready-cert")).toBeNull();
 
-    fireEvent.click(getByRole("button", { name: /issuer problem/i }));
-    expect(within(getByTestId("cert-scroll")).getByText("ready-cert")).toBeTruthy();
+    fireEvent.click(getByRole("button", { name: /^Issuer problem/ }));
+    expect(rowsText().join(" ")).toContain("ready-cert");
 
-    fireEvent.change(getByRole("combobox", { name: /filter certificate namespace/i }), { target: { value: "payments" } });
+    fireEvent.change(getByLabelText("Namespace"), { target: { value: "payments" } });
     expect(queryByText("ready-cert")).toBeNull();
   });
 
@@ -164,8 +165,8 @@ describe("CertsView", () => {
       renewalUnix: 1782259200,
     });
     setup("Healthy", [c], [issuer({})], "payments/secret-missing");
-    const { getByTestId } = render(<CertsView cluster="x" />);
-    const inspector = getByTestId("cert-inspector");
+    render(<CertsView cluster="x" />);
+    const inspector = screen.getByTestId("lens-inspector");
     expect(within(inspector).getByText(/likely cause/i)).toBeTruthy();
     expect(within(inspector).getByText(/target secret acme-demo-tls/i)).toBeTruthy();
     expect(within(inspector).getByText("2026-06-01")).toBeTruthy();
@@ -185,9 +186,9 @@ describe("CertsView", () => {
       warnings: null as unknown as string[],
     };
     setup("Healthy", [c], [], "cnpg-system/cnpg-ca", chain);
-    const { getByTestId } = render(<CertsView cluster="x" />);
-    const inspector = getByTestId("cert-inspector");
-    expect(within(inspector).getByText("cnpg-system/cnpg-ca")).toBeTruthy();
+    render(<CertsView cluster="x" />);
+    const inspector = screen.getByTestId("lens-inspector");
+    expect(within(inspector).getByRole("heading", { name: "cnpg-ca" })).toBeTruthy();
     expect(within(inspector).getByText("cnpg-ca-1")).toBeTruthy();
   });
 
@@ -210,16 +211,16 @@ describe("CertsView", () => {
     setup("Healthy", [cert({})], [issuer({})]);
     const { getByPlaceholderText } = render(<CertsView cluster="x" />);
     act(() => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "/", bubbles: true, cancelable: true })); });
-    expect(document.activeElement).toBe(getByPlaceholderText("filter certificates"));
+    expect(document.activeElement).toBe(getByPlaceholderText("Search name, issuer, DNS, secret"));
   });
 
   it("lists issuer health under the issuers filter", () => {
     setup("Healthy", [cert({})], [issuer({ ready: "False", reason: "ACMEAccountRegistrationFailed" })]);
-    const { getByRole, getByTestId } = render(<CertsView cluster="x" />);
-    fireEvent.click(getByRole("button", { name: /issuers/i }));
-    const panel = getByTestId("issuer-scroll");
-    expect(within(panel).getByText("lab-acme-staging")).toBeTruthy();
-    expect(within(panel).getByText("ACMEAccountRegistrationFailed")).toBeTruthy();
+    const { getByRole } = render(<CertsView cluster="x" />);
+    fireEvent.click(getByRole("button", { name: /^Issuers/ }));
+    const rows = rowsText().join(" ");
+    expect(rows).toContain("lab-acme-staging");
+    expect(rows).toContain("ACMEAccountRegistrationFailed");
   });
 
   // --- AI "Explain this" ---
@@ -231,7 +232,7 @@ describe("CertsView", () => {
     const { getByTestId, queryByRole } = render(<CertsView cluster="x" />);
     await act(async () => { await Promise.resolve(); });
     // The inspector renders, but no Explain button.
-    expect(getByTestId("cert-inspector")).toBeTruthy();
+    expect(getByTestId("lens-inspector")).toBeTruthy();
     expect(queryByRole("button", { name: /explain/i })).toBeNull();
   });
 
@@ -262,9 +263,76 @@ describe("CertsView", () => {
     vi.mocked(aiEgressAllowed).mockResolvedValueOnce(false);
     const c = cert({ name: "acme-demo", ready: "Failed", reason: "DoesNotExist" });
     setup("Healthy", [c], [issuer({})], "payments/acme-demo");
-    const { findByRole } = render(<CertsView cluster="x" />);
-    const btn = (await findByRole("button", { name: /explain/i })) as HTMLButtonElement;
-    expect(btn.disabled).toBe(true);
-    expect(btn.title).toMatch(/protected cluster/i);
+    const { findByRole, queryByRole } = render(<CertsView cluster="x" />);
+    // no live Explain action; the blocked reason is stated in More
+    fireEvent.click(await findByRole("button", { name: /^More/ }));
+    const item = (await findByRole("menuitem", { name: "Explain (AI)" })) as HTMLButtonElement;
+    expect(item.disabled).toBe(true);
+    expect(item.title).toMatch(/protected cluster/i);
+    expect(queryByRole("button", { name: /^Explain$/ })).toBeNull();
+  });
+});
+
+describe("CertsView workspace template (redesign step 4c)", () => {
+  const nowS = Math.floor(Date.now() / 1000);
+
+  it("auto-selects the first certificate needing attention once, from a fresh read only", () => {
+    setup("Healthy", [cert({ name: "ok" }), cert({ name: "bad", ready: "Failed" })], [issuer({})]);
+    render(<CertsView cluster="x" />);
+    expect(useFleet.getState().certmanager.selectedKey).toBeNull(); // cached rows at entry
+    act(() => useFleet.setState((s) => ({ certmanager: { ...s.certmanager, certificates: [cert({ name: "ok" }), cert({ name: "bad", ready: "Failed" })] } })));
+    expect(useFleet.getState().certmanager.selectedKey).toBe("payments/bad");
+  });
+
+  it("the renewal window is automatic renewal, not attention", () => {
+    setup("Healthy", [cert({ name: "renewing", ready: "Ready", notAfterUnix: nowS + 5 * 86400, renewalUnix: nowS - 3600 })], [issuer({})]);
+    const { getByText, queryByText } = render(<CertsView cluster="x" />);
+    expect(getByText("all ready")).toBeTruthy();
+    expect(getByText(/1 in renewal window/)).toBeTruthy();
+    expect(queryByText(/not ready or expired/)).toBeNull();
+  });
+
+  it("a removed certificate keeps its last chain as read-only evidence", () => {
+    const c = cert({ name: "gone", ready: "Failed" });
+    const chain: CertChainDTO = { certificate: c, issuer: issuer({}), warnings: [], failingLink: null,
+      requests: [{ kind: "CertificateRequest", namespace: "payments", name: "gone-1", ready: "Failed", reason: "Denied", message: "", children: [] }] };
+    setup("Healthy", [c, cert({ name: "other" })], [issuer({})], "payments/gone", chain);
+    const { getByText, queryByRole } = render(<CertsView cluster="x" />);
+    act(() => useFleet.setState((s) => ({ certmanager: { ...s.certmanager, certificates: [cert({ name: "other" })] } })));
+    expect(getByText("Certificate removed.")).toBeTruthy();
+    expect(insp().getByText("gone-1")).toBeTruthy();
+    expect(queryByRole("button", { name: /Re-resolve chain/ })).toBeNull();
+  });
+
+  it("a chain recorded for another cluster is never shown", () => {
+    const c = cert({ name: "acme-demo" });
+    const chain: CertChainDTO = { certificate: c, issuer: issuer({}), warnings: [], failingLink: null,
+      requests: [{ kind: "CertificateRequest", namespace: "payments", name: "from-prd", ready: "Ready", reason: "", message: "", children: [] }] };
+    setup("Healthy", [c], [issuer({})], "payments/acme-demo", chain);
+    useFleet.setState((s) => ({ certmanager: { ...s.certmanager, chainCluster: "prd" } }));
+    render(<CertsView cluster="x" />);
+    expect(insp().queryByText("from-prd")).toBeNull();
+  });
+
+  it("an Issuer serves only its own namespace; a ClusterIssuer serves all (namespace-safe Used by)", () => {
+    setup("Healthy", [
+      cert({ namespace: "a", name: "in-a", issuerKind: "Issuer", issuerName: "local" }),
+      cert({ namespace: "b", name: "in-b", issuerKind: "Issuer", issuerName: "local" }),
+    ], [issuer({ kind: "Issuer", namespace: "a", name: "local" })]);
+    const { getByRole } = render(<CertsView cluster="x" />);
+    fireEvent.click(getByRole("button", { name: /^Issuers/ }));
+    fireEvent.click(screen.getAllByText("local")[0]);
+    expect(insp().getByText("Certificates using it · 1")).toBeTruthy();
+    expect(insp().getByText("a/in-a")).toBeTruthy();
+    expect(insp().queryByText("b/in-b")).toBeNull();
+  });
+
+  it("before the watch has delivered, issuer health is unverified, never 'not found'", () => {
+    const c = cert({ name: "acme-demo", ready: "Failed" });
+    setup("Healthy", [c], [], "payments/acme-demo");
+    useFleet.setState((s) => ({ certmanager: { ...s.certmanager, loading: true } }));
+    render(<CertsView cluster="x" />);
+    expect(insp().getByText(/unverified \(issuer read unavailable\)/)).toBeTruthy();
+    expect(insp().queryByText(/not found in the watched issuer list/)).toBeNull();
   });
 });

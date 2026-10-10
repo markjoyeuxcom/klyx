@@ -238,6 +238,9 @@ export type CertManagerSlice = {
   selectedKey: string | null; // "<namespace>/<name>" of the inspected certificate
   chain: CertChainDTO | null; // resolved on demand for the selected cert
   chainLoading: boolean;
+  // the cluster the chain was read from: DEV/STG/PRD share ns/name, so a
+  // chain is evidence for the selection only when this matches too
+  chainCluster?: string | null;
 };
 
 // External Secrets Operator lens (M12). Refresh staleness is ESO-native: a
@@ -827,7 +830,7 @@ type FleetState = {
   setCertManagerLoading: (cluster: string) => void;
   clearCertManager: () => void;
   selectCertificate: (key: string | null) => void;
-  setCertChain: (chain: CertChainDTO) => void;
+  setCertChain: (chain: CertChainDTO, cluster?: string) => void;
   externalsecrets: ExternalSecretsSlice;
   setExternalSecrets: (cluster: string, secrets: ExternalSecretDTO[], stores: ExternalSecretStoreDTO[], watchError?: string) => void;
   setExternalSecretsLoading: (cluster: string) => void;
@@ -1037,7 +1040,7 @@ export const useFleet = create<FleetState>((set) => ({
   setCertManagerLoading: (cluster) => set((s) => ({ certmanager: { ...s.certmanager, cluster, certificates: [], issuers: [], loading: true, watchError: null, selectedKey: null, chain: null, chainLoading: false } })),
   clearCertManager: () => set({ certmanager: { cluster: null, certificates: [], issuers: [], loading: false, watchError: null, selectedKey: null, chain: null, chainLoading: false } }),
   selectCertificate: (key) => set((s) => ({ certmanager: { ...s.certmanager, selectedKey: key, chain: null, chainLoading: key !== null } })),
-  setCertChain: (chain) => set((s) => ({ certmanager: { ...s.certmanager, chain, chainLoading: false } })),
+  setCertChain: (chain, cluster) => set((s) => ({ certmanager: { ...s.certmanager, chain, chainLoading: false, chainCluster: cluster ?? s.certmanager.cluster } })),
 
   externalsecrets: { cluster: null, secrets: [], stores: [], loading: false, watchError: null, selectedKey: null },
   setExternalSecrets: (cluster, secrets, stores, watchError) => set((s) => ({ externalsecrets: { ...s.externalsecrets, cluster, secrets, stores, loading: false, watchError: watchError || null } })),
