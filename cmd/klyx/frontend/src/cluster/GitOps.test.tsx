@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render, fireEvent, act, within } from "@testing-library/react";
+import { render, fireEvent, act, within, screen } from "@testing-library/react";
 import { useFleet, FluxResourceDTO, FluxSourceDTO, ClusterDTO } from "../store/fleet";
 import { reconcile, reconcileWithSource, setSuspend, resolveGitLink } from "../bridge/gitops";
 import { GitOps } from "./GitOps";
@@ -58,16 +58,22 @@ beforeEach(() => {
   });
 });
 
+const inspector = () => within(screen.getByTestId("lens-inspector"));
+function chooseMore(label: string | RegExp) {
+  fireEvent.click(screen.getByRole("button", { name: /^More/ }));
+  fireEvent.click(screen.getByRole("menuitem", { name: label }));
+}
+
 describe("GitOps view", () => {
   it("a stale resource dims and shows the Syncing chip instead of a confident status", () => {
     useFleet.setState({ gitops: { cluster: "x", resources: [
       res({ name: "edited", ready: "Ready", stale: true, generation: 5, observedGeneration: 4 }),
     ], sources: [], loading: false, expandedKey: null, detail: null } });
     const { getByText, getByTitle } = render(<GitOps cluster="x" />);
-    const row = getByText("flux-system/edited").closest("button") as HTMLButtonElement;
+    const row = getByText("edited").closest(".lens-row") as HTMLElement;
     // The status cell must not read as confirmed while changes are unrealized.
     expect(getByText("Syncing…")).toBeTruthy();
-    expect(row.textContent).not.toContain("ready");
+    expect(row.textContent).not.toContain("Ready");
     expect(getByTitle(/Observed Gen: 4 vs Current: 5/)).toBeTruthy();
     // Dim = not yet realized.
     expect(row.style.opacity).toBe("0.6");
@@ -79,10 +85,11 @@ describe("GitOps view", () => {
       res({ name: "flux-system", ready: "Ready" }),
       res({ kind: "HelmRelease", name: "cilium", ready: "Failed", message: "install failed" }),
     ], sources: [], loading: false, expandedKey: null, detail: null } });
-    const { getByText } = render(<GitOps cluster="x" />);
-    expect(getByText("flux-system/flux-system")).toBeTruthy();
-    expect(getByText("flux-system/cilium")).toBeTruthy();
-    expect(getByText(/install failed/i)).toBeTruthy();
+    const { getByText, getByTitle } = render(<GitOps cluster="x" />);
+    expect(getByText("flux-system", { selector: ".lens-cell-name span:last-child" })).toBeTruthy();
+    expect(getByText("cilium")).toBeTruthy();
+    // the controller message rides on the status cell; the inspector shows it in full
+    expect(getByTitle(/install failed/i)).toBeTruthy();
   });
 
   it("shows the failing condition reason as a chip on the row", () => {
@@ -90,23 +97,23 @@ describe("GitOps view", () => {
       res({ kind: "HelmRelease", name: "cilium", ready: "Failed", reason: "UpgradeFailed", message: "upgrade retries exhausted" }),
     ], sources: [], loading: false, expandedKey: null, detail: null } });
     const { getAllByText } = render(<GitOps cluster="x" />);
-    expect(getAllByText("UpgradeFailed").length).toBeGreaterThan(0);
+    expect(getAllByText(/Failed · UpgradeFailed/).length).toBeGreaterThan(0);
   });
 
-  it("owns scrolling inside the hidden cluster page shell", () => {
+  it("list and inspector sit on the shared template surfaces", () => {
     useFleet.setState({ gitops: { cluster: "x", resources: [
       res({ name: "flux-system", ready: "Ready" }),
       res({ kind: "HelmRelease", name: "cilium", ready: "Failed", message: "install failed" }),
     ], sources: [], loading: false, expandedKey: null, detail: null } });
-    const { getByTestId } = render(<GitOps cluster="x" />);
-    expect(getByTestId("flux-resource-scroll").style.overflowY).toBe("auto");
-    expect(getByTestId("flux-inspector-scroll").style.overflowY).toBe("auto");
+    const { container } = render(<GitOps cluster="x" />);
+    expect(container.querySelector(".lens-table .lens-table-head")).toBeTruthy();
+    expect(container.querySelectorAll(".lens-row").length).toBe(2);
   });
 
   it("shows the no-Flux empty state when gitopsTier is Absent", () => {
     useFleet.setState({ clusters: [cluster("Absent")] });
     const { getByText } = render(<GitOps cluster="x" />);
-    expect(getByText(/No Flux or Argo/i)).toBeTruthy();
+    expect(getByText(/Flux is not installed on this cluster/i)).toBeTruthy();
   });
 
   it("expands a row and renders its detail from the store", () => {
@@ -129,7 +136,10 @@ describe("GitOps view", () => {
         },
       },
     });
-    const { getByText } = render(<GitOps cluster="x" />);
+    const { getByText, queryByText } = render(<GitOps cluster="x" />);
+    // successful conditions start collapsed (spec §3); one click shows them
+    expect(queryByText(/Health check passed/i)).toBeNull();
+    fireEvent.click(getByText("Conditions · 2"));
     expect(getByText(/Health check passed/i)).toBeTruthy();
     // Inventory rows split kind and namespace/name (dot + kind + link).
     expect(getByText("ConfigMap")).toBeTruthy();
@@ -144,7 +154,7 @@ describe("GitOps view", () => {
       }),
     });
     const { getByText, queryByText } = render(<GitOps cluster="x" />);
-    expect(getByText("Inventory (11)")).toBeTruthy();
+    expect(getByText("Inventory · 11")).toBeTruthy();
     expect(getByText("ns/cm-7")).toBeTruthy();
     expect(queryByText("ns/cm-8")).toBeNull();
     expect(getByText("+3 more")).toBeTruthy();
@@ -168,11 +178,10 @@ describe("GitOps view", () => {
         },
       },
     });
-    const { getByTestId } = render(<GitOps cluster="x" />);
-    const inspector = getByTestId("flux-inspector-scroll");
-    expect(within(inspector).getByText("Failed")).toBeTruthy();
-    expect(within(inspector).getByText(/HealthCheckFailed/)).toBeTruthy();
-    expect(within(inspector).getByText(/health check failed after 2m0s/)).toBeTruthy();
+    render(<GitOps cluster="x" />);
+    expect(inspector().getByText("Failed")).toBeTruthy();
+    expect(inspector().getByText(/HealthCheckFailed/)).toBeTruthy();
+    expect(inspector().getByText(/health check failed after 2m0s/)).toBeTruthy();
   });
 
   it("shows an apply-failed line when applyFailed", () => {
@@ -197,12 +206,11 @@ describe("GitOps view", () => {
 
   it("one Reconcile action opens the composer; confirming with the tile off calls reconcile", () => {
     useFleet.setState({ clusters: [cluster("Healthy")], gitops: expandedDetail() });
-    const { getByRole, getAllByRole, getByTestId, queryByText } = render(<GitOps cluster="x" />);
+    const { getByRole, getAllByRole, queryByText } = render(<GitOps cluster="x" />);
     // The former separate verb is gone - re-fetching the source is an option
     // inside the one Reconcile dialog, not a second action.
     expect(queryByText("Reconcile with source")).toBeNull();
-    // Scoped to the inspector: the FKeysBar also carries a "reconcile" hint label.
-    fireEvent.click(within(getByTestId("flux-inspector-scroll")).getByText("reconcile")); // panel button opens the dialog
+    fireEvent.click(inspector().getByRole("button", { name: /^Reconcile/ })); // primary action opens the dialog
     expect(getByRole("dialog", { name: "Reconcile flux-system/flux-system" })).toBeTruthy();
     expect(getByRole("button", { name: /Re-fetch source first/ }).getAttribute("aria-pressed")).toBe("false");
     const reconcileButtons = getAllByRole("button", { name: "Reconcile" });
@@ -213,8 +221,8 @@ describe("GitOps view", () => {
 
   it("toggling the re-fetch-source tile routes the confirm to reconcileWithSource", () => {
     useFleet.setState({ clusters: [cluster("Healthy")], gitops: expandedDetail() });
-    const { getByRole, getAllByRole, getByTestId } = render(<GitOps cluster="x" />);
-    fireEvent.click(within(getByTestId("flux-inspector-scroll")).getByText("reconcile")); // panel button opens the dialog
+    const { getByRole, getAllByRole } = render(<GitOps cluster="x" />);
+    fireEvent.click(inspector().getByRole("button", { name: /^Reconcile/ }));
     fireEvent.click(getByRole("button", { name: /Re-fetch source first/ }));
     const reconcileButtons = getAllByRole("button", { name: "Reconcile" });
     fireEvent.click(reconcileButtons[reconcileButtons.length - 1]); // dialog confirm
@@ -224,12 +232,10 @@ describe("GitOps view", () => {
 
   it("shows Resume + a suspended badge when detail.suspended is true", () => {
     useFleet.setState({ clusters: [cluster("Healthy")], gitops: expandedDetail({ suspended: true }) });
-    const { getAllByRole, getByTestId } = render(<GitOps cluster="x" />);
-    // Scoped to the inspector: the FKeysBar also carries a "suspend" hint label.
-    const inspector = within(getByTestId("flux-inspector-scroll"));
-    expect(inspector.getByText("resume")).toBeTruthy();
-    expect(inspector.queryByText("suspend")).toBeNull();
-    fireEvent.click(inspector.getByText("resume"));        // panel button opens the dialog
+    const { getAllByRole } = render(<GitOps cluster="x" />);
+    expect(inspector().getByRole("button", { name: /^Resume/ })).toBeTruthy();
+    expect(inspector().queryByRole("button", { name: /^Suspend/ })).toBeNull();
+    fireEvent.click(inspector().getByRole("button", { name: /^Resume/ })); // secondary action opens the dialog
     const resumeButtons = getAllByRole("button", { name: "Resume" });
     fireEvent.click(resumeButtons[resumeButtons.length - 1]); // dialog confirm is last in DOM
     expect(setSuspend).toHaveBeenCalledWith("x", "Kustomization", "flux-system", "flux-system", false);
@@ -237,8 +243,8 @@ describe("GitOps view", () => {
 
   it("view-in-git button calls resolveGitLink for a Kustomization", () => {
     useFleet.setState({ clusters: [cluster("Healthy")], gitops: expandedDetail() });
-    const { getByText } = render(<GitOps cluster="x" />);
-    fireEvent.click(getByText("view in git"));
+    render(<GitOps cluster="x" />);
+    chooseMore("View in Git");
     expect(resolveGitLink).toHaveBeenCalledWith("x", "Kustomization", "flux-system", "flux-system");
   });
 
@@ -254,8 +260,9 @@ describe("GitOps view", () => {
         detail: { kind: "HelmRelease", namespace: "ns", name: "app", suspended: false, appliedRevision: "", attemptedRevision: "", applyFailed: false, conditions: [], inventory: [] },
       },
     });
-    const { queryByText } = render(<GitOps cluster="x" />);
-    expect(queryByText("view in git")).toBeNull();
+    const { queryByRole } = render(<GitOps cluster="x" />);
+    fireEvent.click(screen.getByRole("button", { name: /^More/ }));
+    expect(queryByRole("menuitem", { name: "View in Git" })).toBeNull();
   });
 
   it("renders a failing bound source as the headline in the detail panel", () => {
@@ -336,10 +343,11 @@ describe("GitOps view", () => {
         detail: null,
       },
     });
-    const { getByText, getByTestId } = render(<GitOps cluster="x" />);
-    fireEvent.click(getByText("sources"));
-    expect(getByTestId("flux-sources-scroll")).toBeTruthy();
-    expect(getByText("flux-system/cilium")).toBeTruthy();
+    const { getByText, getAllByTestId, getByRole } = render(<GitOps cluster="x" />);
+    fireEvent.click(getByRole("button", { name: /^Sources/ }));
+    expect(getAllByTestId("flux-source-row").length).toBe(1);
+    expect(getByText("cilium")).toBeTruthy();
+    expect(getByText("oci")).toBeTruthy();
   });
 
   // --- Keyboard nav ---
@@ -397,7 +405,7 @@ describe("GitOps view", () => {
     useFleet.setState({ gitops: { cluster: "x", resources: [res({})], sources: [], loading: false, expandedKey: null, detail: null } });
     const { getByPlaceholderText } = render(<GitOps cluster="x" />);
     act(() => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "/", bubbles: true, cancelable: true })); });
-    expect(document.activeElement).toBe(getByPlaceholderText("filter flux"));
+    expect(document.activeElement).toBe(getByPlaceholderText("Search name, message, revision"));
   });
 
   it("sets the action-status in the store (global ActionToast renders it)", () => {
@@ -406,5 +414,84 @@ describe("GitOps view", () => {
     // by the bridge call — ActionToast.test.tsx covers the toast rendering.
     useFleet.setState({ clusters: [cluster("Healthy")], actionStatus: { kind: "success", message: "Reconcile requested for flux-system/x" } });
     expect(useFleet.getState().actionStatus?.message).toMatch(/Reconcile requested/i);
+  });
+});
+
+describe("GitOps workspace template (redesign)", () => {
+  const seedRows = (resources: FluxResourceDTO[], over: Partial<{ expandedKey: string | null; sources: FluxSourceDTO[] }> = {}) =>
+    useFleet.setState((s) => ({ gitops: { ...s.gitops, cluster: "x", resources, sources: over.sources ?? [], loading: false, expandedKey: over.expandedKey ?? null, detail: null, watchError: null } }));
+
+  it("auto-selects the first failing resource once, from a fresh read only", () => {
+    seedRows([res({ name: "ok" }), res({ name: "bad", ready: "Failed" })]);
+    render(<GitOps cluster="x" />);
+    expect(useFleet.getState().gitops.expandedKey).toBeNull(); // cached rows at entry
+    act(() => seedRows([res({ name: "ok" }), res({ name: "bad", ready: "Failed" })]));
+    expect(useFleet.getState().gitops.expandedKey).toBe("Kustomization/flux-system/bad");
+    act(() => useFleet.getState().collapse());
+    act(() => seedRows([res({ name: "ok" }), res({ name: "bad", ready: "Failed" })]));
+    expect(useFleet.getState().gitops.expandedKey).toBeNull();
+  });
+
+  it("suspended is an intended pause: shown and filterable, never attention", () => {
+    seedRows([res({ name: "paused", suspended: true }), res({ name: "ok" })]);
+    const { getByText, queryByText, getByRole } = render(<GitOps cluster="x" />);
+    expect(queryByText(/\d+ need attention/)).toBeNull();
+    expect(getByText("none need attention")).toBeTruthy();
+    expect(getByText(/1 suspended/)).toBeTruthy();
+    fireEvent.click(getByRole("button", { name: /^Suspended/ }));
+    expect(getByText("paused")).toBeTruthy();
+    expect(queryByText("ok")).toBeNull();
+  });
+
+  it("a resource gone from a complete read is removed and cancels its pending reconcile", () => {
+    seedRows([res({ name: "a" }), res({ name: "b" })], { expandedKey: "Kustomization/flux-system/a" });
+    const { getByText, queryByRole, getByRole } = render(<GitOps cluster="x" />);
+    fireEvent.click(inspector().getByRole("button", { name: /^Reconcile/ }));
+    expect(getByRole("dialog", { name: "Reconcile flux-system/a" })).toBeTruthy();
+    act(() => seedRows([res({ name: "b" })], { expandedKey: "Kustomization/flux-system/a" }));
+    expect(getByText("Kustomization removed.")).toBeTruthy();
+    expect(queryByRole("dialog", { name: /Reconcile/ })).toBeNull();
+    expect(inspector().queryByRole("button", { name: /^Reconcile/ })).toBeNull();
+    expect(reconcile).not.toHaveBeenCalled();
+  });
+
+  it("a pending suspend raised by keyboard (no selection) is pinned to its own cluster", () => {
+    seedRows([res({ name: "a" })]);
+    const { getByText, queryByText, rerender } = render(<GitOps cluster="x" />);
+    act(() => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "j", bubbles: true, cancelable: true })); });
+    act(() => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "s", bubbles: true, cancelable: true })); });
+    expect(getByText("Suspend reconciliation")).toBeTruthy();
+    useFleet.setState({ clusters: [cluster("Healthy"), { ...cluster("Healthy"), name: "y" }] });
+    rerender(<GitOps cluster="y" />);
+    act(() => useFleet.setState((s) => ({ gitops: { ...s.gitops, cluster: "y", resources: [res({ name: "a" })], loading: false } })));
+    expect(queryByText("Suspend reconciliation")).toBeNull();
+    expect(setSuspend).not.toHaveBeenCalled();
+  });
+
+  it("a filter excluding the selection closes the inspector", () => {
+    seedRows([res({ name: "a" }), res({ kind: "HelmRelease", name: "h" })], { expandedKey: "Kustomization/flux-system/a" });
+    const { getByLabelText, queryByTestId } = render(<GitOps cluster="x" />);
+    expect(queryByTestId("lens-inspector")).toBeTruthy();
+    fireEvent.change(getByLabelText("Kind"), { target: { value: "HelmRelease" } });
+    expect(queryByTestId("lens-inspector")).toBeNull();
+  });
+
+  it("Sources owns the source-type filter; Reconciliation owns the kind filter", () => {
+    seedRows([res({ name: "a" })], { sources: [src({ name: "git1" }), src({ kind: "HelmRepository", name: "charts" })] });
+    const { getByRole, getByLabelText, queryByLabelText, getByText, queryByText } = render(<GitOps cluster="x" />);
+    expect(getByLabelText("Kind")).toBeTruthy();
+    expect(queryByLabelText("Source type")).toBeNull();
+    fireEvent.click(getByRole("button", { name: /^Sources/ }));
+    expect(queryByLabelText("Kind")).toBeNull();
+    fireEvent.change(getByLabelText("Source type"), { target: { value: "HelmRepository" } });
+    expect(getByText("charts")).toBeTruthy();
+    expect(queryByText("git1")).toBeNull();
+  });
+
+  it("a failed watch with no rows is unreadable, never 'No Flux resources'", () => {
+    useFleet.setState((s) => ({ gitops: { ...s.gitops, cluster: "x", resources: [], sources: [], loading: false, watchError: "forbidden" } }));
+    const { getByText, queryByText } = render(<GitOps cluster="x" />);
+    expect(getByText("Flux state could not be read.")).toBeTruthy();
+    expect(queryByText(/No Flux resources/)).toBeNull();
   });
 });

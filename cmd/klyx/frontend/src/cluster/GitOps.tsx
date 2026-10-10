@@ -7,21 +7,21 @@ import type { FluxDiffDTO } from "../bridge/gitops";
 import { ConfirmDialog } from "../chrome/ConfirmDialog";
 import { MetaTile, OperationDialog, OptionTile } from "../chrome/OperationDialog";
 import { useListKeys } from "../chrome/useListKeys";
-import { FKeysBar } from "../chrome/FKeysBar";
 import { useNavIntent } from "../chrome/useNavIntent";
 import { CopyButton } from "../chrome/CopyButton";
 import { EmptyState } from "../chrome/EmptyState";
 import { SkeletonRows } from "../chrome/SkeletonRows";
 import { WatchErrorBanner } from "../chrome/WatchErrorBanner";
-import { IconGitBranch } from "@tabler/icons-react";
+import { VirtualList, type VirtualListHandle } from "../chrome/VirtualList";
+import { IconAlertTriangle, IconGitBranch } from "@tabler/icons-react";
 import { wellKnownResourceRef, FLUX_KIND_GROUPS } from "./resourceRefs";
-import { ManifestButton } from "./ManifestButton";
-import { inputWell, MetersStrip, well, Badge, FilterButton, StatusDot, readyColor, ellipsis, actionBtn, type Tone } from "../chrome/primitives";
+import { StatusDot, readyColor, ellipsis, type Tone } from "../chrome/primitives";
 import { compactCount } from "../chrome/format";
-import { InspectorConditions, InspectorSection, InspectorStatus, Kbd } from "./ResourceInspector";
+import { InspectorConditions, InspectorStatus } from "./ResourceInspector";
 import { SyncingChip, staleStyle } from "./staleness";
-
-type FluxFilter = "all" | "attention" | "suspended" | "kustomizations" | "helmreleases" | "sources";
+import { LensLayout, LensTable, TABLE_ROW_HEIGHT, type DatasetState } from "../layout/LensLayout";
+import { InspectorBlock, InspectorLayout, type MenuItem } from "../layout/InspectorLayout";
+import { fitColumns, type ColumnDef } from "../layout/columns";
 
 const keyOf = (r: { kind: string; namespace: string; name: string }) => `${r.kind}/${r.namespace}/${r.name}`;
 
@@ -73,20 +73,8 @@ function srcRank(s: FluxSourceDTO): number {
   return 4;
 }
 
-function statusText(r: FluxResourceDTO): string {
-  return r.suspended ? "suspended" : r.ready.toLowerCase();
-}
-
 function sourceText(r: FluxResourceDTO): string {
   return [r.sourceKind, r.sourceName].filter(Boolean).join(" ");
-}
-
-function matchesFilter(r: FluxResourceDTO, filter: FluxFilter): boolean {
-  if (filter === "attention") return needsAttention(r);
-  if (filter === "suspended") return r.suspended;
-  if (filter === "kustomizations") return r.kind === "Kustomization";
-  if (filter === "helmreleases") return r.kind === "HelmRelease";
-  return true;
 }
 
 function matchesQuery(r: FluxResourceDTO, query: string): boolean {
@@ -103,27 +91,80 @@ function matchesQuery(r: FluxResourceDTO, query: string): boolean {
   ].some((v) => v.toLowerCase().includes(q));
 }
 
+// Flux lens on the workspace template (spec §6 step 4). Two destinations in
+// one lens, per the IA: Reconciliation (the aggregate KS/HR view; its kind
+// filter lives inside it) and Sources (source-type filter lives there). Flux
+// vocabulary is kept: Ready / Reconciling / Failed, Suspended is an intended
+// pause (never attention), and generation > observedGeneration reads
+// "Syncing…" - never a confident Ready. Primary verb Reconcile, secondary
+// Suspend/Resume (spec §3 defaults); both open their existing confirm flow.
+
+type FluxView = "reconciliation" | "sources";
+type StatusFilter = "all" | "attention" | "suspended";
+type KindFilter = "" | "Kustomization" | "HelmRelease";
+type PinnedVerb =
+  | { cluster: string; kind: "reconcile"; r: FluxResourceDTO }
+  | { cluster: string; kind: "suspend" | "resume"; r: FluxResourceDTO };
+
+const FLUX_COLUMNS: (ColumnDef & { label: string })[] = [
+  { id: "lamp", label: "", width: 16, priority: 0 },
+  { id: "kind", label: "Kind", width: 32, priority: 2 },
+  { id: "name", label: "Resource", width: 240, priority: 0, flex: true },
+  { id: "status", label: "Status", width: 200, priority: 1 },
+  { id: "source", label: "Source", width: 170, priority: 3 },
+  { id: "revision", label: "Revision", width: 130, priority: 4 },
+  { id: "since", label: "Ready since", width: 84, priority: 5 },
+];
+const SOURCE_COLUMNS: (ColumnDef & { label: string })[] = [
+  { id: "lamp", label: "", width: 16, priority: 0 },
+  { id: "kind", label: "Type", width: 72, priority: 1 },
+  { id: "name", label: "Source", width: 240, priority: 0, flex: true },
+  { id: "status", label: "Status", width: 200, priority: 1 },
+  { id: "revision", label: "Revision", width: 150, priority: 2 },
+];
+
+// fluxLamp: only faults glow. Failed = danger; Reconciling = info; suspended =
+// warning (an intended pause, shown, not counted as attention); a stale
+// (unobserved) spec never glows as healthy.
+function fluxLampColor(r: { ready: string; suspended: boolean; stale?: boolean }): string | null {
+  if (r.suspended) return "var(--color-text-warning)";
+  if (r.stale) return "var(--color-text-tertiary)";
+  if (r.ready === "Failed") return "var(--color-text-danger)";
+  if (r.ready === "Reconciling") return "var(--color-text-info)";
+  if (r.ready !== "Ready") return "var(--color-text-warning)";
+  return null;
+}
+
+function Lamp({ color, label }: { color: string | null; label: string }) {
+  return color
+    ? <span role="img" aria-label={label} style={{ width: 8, height: 8, borderRadius: "50%", background: color, justifySelf: "center" }} />
+    : <span aria-hidden="true" />;
+}
+
+const ellipsisCell: React.CSSProperties = { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 };
+
 export function GitOps({ cluster }: { cluster: string }) {
   const tier = useFleet((s) => s.clusters.find((c) => c.name === cluster)?.gitopsTier ?? "Unknown");
   const gitops = useFleet((s) => s.gitops);
   const expand = useFleet((s) => s.expand);
   const collapse = useFleet((s) => s.collapse);
   const isProtected = useFleet((s) => s.clusters.find((c) => c.name === cluster)?.protected ?? false);
-  // suspend/resume stay on ConfirmDialog (no options to compose); reconcile
-  // opens the composer dialog where re-fetching the source is a per-run choice.
-  const [pending, setPending] = useState<null | { verb: "suspend" | "resume"; r: FluxResourceDTO }>(null);
-  const [reconcileTarget, setReconcileTarget] = useState<FluxResourceDTO | null>(null);
-  const [filter, setFilter] = useState<FluxFilter>("all");
+  const [view, setView] = useState<FluxView>("reconciliation");
+  const [status, setStatus] = useState<StatusFilter>("all");
+  const [kindFilter, setKindFilter] = useState<KindFilter>("");
+  const [sourceKind, setSourceKind] = useState("");
   const [query, setQuery] = useState("");
-  const [kbKey, setKbKey] = useState<string | null>(null);
+  const [cursorKey, setCursorKey] = useState<string | null>(null);
+  const [bodyWidth, setBodyWidth] = useState(1100);
+  const [pinned, setPinnedState] = useState<PinnedVerb | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
+  const listRef = useRef<VirtualListHandle>(null);
   const absent = tier === "Absent";
 
   useEffect(() => {
     if (absent) return;
     // If cleanup runs before openGitOps resolves, invoke the late-arriving
-    // unsubscriber immediately - otherwise its listener leaks for the app's
-    // lifetime and duplicates store writes on every reopen.
+    // unsubscriber immediately - otherwise its listener leaks.
     let cancelled = false;
     let off = () => {};
     openGitOps(cluster).then((u) => (cancelled ? u() : (off = u))).catch((e) => console.error("openGitOps", e));
@@ -134,19 +175,32 @@ export function GitOps({ cluster }: { cluster: string }) {
     };
   }, [cluster, absent]);
 
-  const rows = gitops.cluster === cluster ? gitops.resources : [];
+  const mine = gitops.cluster === cluster;
+  const rows = useMemo(() => (mine ? gitops.resources : []), [mine, gitops.resources]);
+  const allSources = useMemo(() => (mine ? (gitops.sources ?? []) : []), [mine, gitops.sources]);
+  const watchError = mine ? gitops.watchError : null;
+  const loaded = mine && !gitops.loading;
+  const complete = loaded && !watchError;
 
-  // Palette verbs / cross-links land here as one-shot intents once the watch
-  // has synced. Reconcile opens the composer; suspend/resume their confirm.
+  // Pending verbs are pinned to the cluster + resource they were raised on and
+  // dropped when that target leaves a complete read or the cluster changes.
+  const setPinned = useCallback((v: Omit<PinnedVerb, "cluster"> | null) => setPinnedState(v ? ({ ...v, cluster } as PinnedVerb) : null), [cluster]);
+  const targetLive = (v: PinnedVerb) => v.cluster === cluster && (!complete || rows.some((x) => keyOf(x) === keyOf(v.r)));
+  const verb = pinned && targetLive(pinned) ? pinned : null;
+  useEffect(() => { if (pinned && !verb) setPinnedState(null); }, [pinned, verb]);
+
+  // Palette verbs / cross-links: select the resource, then open its confirm.
   useNavIntent(cluster, ["reconcile-flux", "suspend-flux", "select-flux"], (intent) => {
     if (gitops.loading || rows.length === 0) return "wait";
     if (!("fluxKind" in intent)) return "missing";
     const r = rows.find((x) => x.kind === intent.fluxKind && x.namespace === intent.namespace && x.name === intent.name);
     if (!r) return "missing";
+    autoSelect.current = "done";
+    setView("reconciliation");
+    setCursorKey(keyOf(r));
     expand(keyOf(r));
-    void getResourceDetail(cluster, r.kind, r.namespace, r.name);
-    if (intent.kind === "reconcile-flux") setReconcileTarget(r);
-    else if (intent.kind === "suspend-flux") setPending({ verb: intent.suspend ? "suspend" : "resume", r });
+    if (intent.kind === "reconcile-flux") setPinned({ kind: "reconcile", r });
+    else if (intent.kind === "suspend-flux") setPinned({ kind: intent.suspend ? "suspend" : "resume", r });
     return "consumed";
   }, [rows, gitops.loading]);
 
@@ -154,236 +208,427 @@ export function GitOps({ cluster }: { cluster: string }) {
     () => [...rows].sort((a, b) => rank(a) - rank(b) || a.namespace.localeCompare(b.namespace) || a.name.localeCompare(b.name)),
     [rows],
   );
-  const visibleRows = useMemo(
-    () => orderedRows.filter((r) => matchesFilter(r, filter) && matchesQuery(r, query)),
-    [orderedRows, filter, query],
+  const visibleRows = useMemo(() => orderedRows.filter((r) => {
+    if (kindFilter && r.kind !== kindFilter) return false;
+    if (status === "attention" && !needsAttention(r)) return false;
+    if (status === "suspended" && !r.suspended) return false;
+    return matchesQuery(r, query);
+  }), [orderedRows, kindFilter, status, query]);
+  const orderedSources = useMemo(
+    () => [...allSources].sort((a, b) => srcRank(a) - srcRank(b) || a.kind.localeCompare(b.kind) || a.namespace.localeCompare(b.namespace) || a.name.localeCompare(b.name)),
+    [allSources],
   );
+  const sourceNeedsAttention = (s: FluxSourceDTO) => !s.suspended && s.ready !== "Ready";
+  const visibleSources = useMemo(() => orderedSources.filter((s) => {
+    if (sourceKind && s.kind !== sourceKind) return false;
+    if (status === "attention" && !sourceNeedsAttention(s)) return false;
+    if (status === "suspended" && !s.suspended) return false;
+    const q = query.trim().toLowerCase();
+    return !q || [s.kind, s.namespace, s.name, s.message, s.revision].some((v) => v.toLowerCase().includes(q));
+  }), [orderedSources, sourceKind, status, query]);
   const byKey = useMemo(() => {
     const m = new Map<string, FluxResourceDTO>();
     for (const r of rows) m.set(keyOf(r), r);
     return m;
   }, [rows]);
-  const allSources = gitops.cluster === cluster ? (gitops.sources ?? []) : [];
-  const orderedSources = useMemo(
-    () => [...allSources].sort((a, b) => srcRank(a) - srcRank(b) || a.kind.localeCompare(b.kind) || a.namespace.localeCompare(b.namespace) || a.name.localeCompare(b.name)),
-    [allSources],
-  );
 
-  // Keyboard nav (j/k/Enter/Esc, "/" focuses the filter) over the visible
-  // rows. Selection is keyed by keyOf: when the selected resource leaves the
-  // visible set (filter change) this resolves to -1 — no selection — instead
-  // of silently pointing at whatever row took its index.
-  const kbIdx = kbKey === null ? -1 : visibleRows.findIndex((r) => keyOf(r) === kbKey);
+  // Selection lifecycle (expandedKey lives in the store). A filter excluding
+  // the selection closes it; a resource gone from a complete read is removed.
+  const selKey = mine ? gitops.expandedKey : null;
+  const selected = selKey ? byKey.get(selKey) : undefined;
+  const lastSelected = useRef<FluxResourceDTO | null>(null);
+  if (selected) lastSelected.current = selected;
+  const removed = !!selKey && complete && !selected;
+  useEffect(() => {
+    if (selected && view === "reconciliation" && !visibleRows.includes(selected)) collapse();
+  }, [selected, visibleRows, view, collapse]);
+  useEffect(() => {
+    if (!selected) return;
+    void getResourceDetail(cluster, selected.kind, selected.namespace, selected.name);
+    // re-read on every live emit of the selected resource
+  }, [cluster, selected]);
 
-  const handleSelect = useCallback((idx: number) => {
-    const r = visibleRows[idx];
-    if (r) setKbKey(keyOf(r));
-  }, [visibleRows]);
+  // One-shot auto-select of the first attention row from a fresh read.
+  const autoSelect = useRef<"pending" | "done">("pending");
+  const entryRows = useRef<FluxResourceDTO[] | null>(null);
+  if (entryRows.current === null) entryRows.current = gitops.resources;
+  const enteredCluster = useRef(cluster);
+  useEffect(() => {
+    if (enteredCluster.current === cluster) return;
+    enteredCluster.current = cluster;
+    autoSelect.current = "pending";
+    entryRows.current = useFleet.getState().gitops.resources;
+    setCursorKey(null);
+  }, [cluster]);
+  const freshRead = loaded && !watchError && gitops.resources !== entryRows.current;
+  useEffect(() => {
+    if (autoSelect.current === "done" || !freshRead) return;
+    autoSelect.current = "done";
+    if (useFleet.getState().gitops.expandedKey) return;
+    const r = visibleRows.find(needsAttention);
+    if (r) { setCursorKey(keyOf(r)); expand(keyOf(r)); }
+  }, [freshRead, visibleRows, expand]);
 
-  const handleActivate = useCallback((idx: number) => {
-    const r = visibleRows[idx];
-    if (!r) return;
-    const k = keyOf(r);
-    if (gitops.expandedKey === k) collapse();
-    else expand(k);
-  }, [visibleRows, gitops.expandedKey, collapse, expand]);
-
-  const handleEscape = useCallback(() => {
-    if (gitops.expandedKey) collapse();
-  }, [gitops.expandedKey, collapse]);
-
-  // r / s drive the SAME dialogs the panel buttons open (ReconcileDialog and
-  // the suspend/resume ConfirmDialog) - the keys never bypass a confirm flow.
-  // useListKeys keeps them inert while no row is keyboard-selected.
-  const handleReconcileKey = useCallback((idx: number) => {
-    const r = visibleRows[idx];
-    if (r) setReconcileTarget(r);
-  }, [visibleRows]);
-
-  const handleSuspendKey = useCallback((idx: number) => {
-    const r = visibleRows[idx];
-    if (r) setPending({ verb: r.suspended ? "resume" : "suspend", r });
-  }, [visibleRows]);
-
+  const cursorIdx = cursorKey === null ? -1 : visibleRows.findIndex((r) => keyOf(r) === cursorKey);
+  const openRow = useCallback((r: FluxResourceDTO) => { autoSelect.current = "done"; setCursorKey(keyOf(r)); expand(keyOf(r)); }, [expand]);
+  const close = useCallback(() => { autoSelect.current = "done"; collapse(); }, [collapse]);
+  // r / s drive the SAME confirm flows the inspector opens - keys never
+  // bypass a confirm. Inert while no row has the cursor.
   useListKeys({
-    // The sources filter renders a different list; suspend row nav there.
-    count: filter === "sources" ? 0 : visibleRows.length,
-    selected: kbIdx,
-    onSelect: handleSelect,
-    onActivate: handleActivate,
-    onEscape: handleEscape,
+    count: view === "sources" ? 0 : visibleRows.length,
+    selected: cursorIdx,
+    onSelect: (idx) => { const r = visibleRows[idx]; if (r) { setCursorKey(keyOf(r)); listRef.current?.scrollToIndex(idx); } },
+    onActivate: (idx) => { const r = visibleRows[idx]; if (r) openRow(r); },
+    onEscape: () => { if (selKey) close(); },
     searchRef,
-    extraKeys: { r: handleReconcileKey, s: handleSuspendKey },
+    extraKeys: {
+      r: (idx) => { const r = visibleRows[idx]; if (r) setPinned({ kind: "reconcile", r }); },
+      s: (idx) => { const r = visibleRows[idx]; if (r) setPinned({ kind: r.suspended ? "resume" : "suspend", r }); },
+    },
   });
 
-  useEffect(() => {
-    if (!gitops.expandedKey) return;
-    const r = rows.find((x) => keyOf(x) === gitops.expandedKey);
-    if (r) void getResourceDetail(cluster, r.kind, r.namespace, r.name);
-  }, [cluster, gitops.expandedKey, rows]);
-
-  if (absent) {
-    return <div style={{ padding: 24, color: "var(--color-text-secondary)", fontSize: 13 }}>No Flux or Argo installed on this cluster.</div>;
-  }
+  const columns = view === "sources" ? SOURCE_COLUMNS : FLUX_COLUMNS;
+  const fitted = useMemo(() => fitColumns(columns, bodyWidth), [columns, bodyWidth]);
+  const show = (id: string) => fitted.visible.has(id);
+  const gridStyle = { gridTemplateColumns: fitted.template };
 
   const ks = rows.filter((r) => r.kind === "Kustomization").length;
   const hr = rows.filter((r) => r.kind === "HelmRelease").length;
-  const ready = rows.filter((r) => r.ready === "Ready" && !r.suspended).length;
+  const failed = rows.filter((r) => !r.suspended && r.ready === "Failed").length;
   const attention = rows.filter(needsAttention).length;
   const suspended = rows.filter((r) => r.suspended).length;
-  const reconciling = rows.filter((r) => r.ready === "Reconciling").length;
-  const selectedResource = visibleRows.find((r) => keyOf(r) === gitops.expandedKey) ?? null;
-  const selectedDetail = selectedResource && gitops.detail && keyOf(gitops.detail) === keyOf(selectedResource) ? gitops.detail : null;
+  const reconciling = rows.filter((r) => !r.suspended && r.ready === "Reconciling").length;
+  const syncing = rows.filter((r) => !r.suspended && r.stale).length;
+  const srcAttention = allSources.filter(sourceNeedsAttention).length;
+  const srcSuspended = allSources.filter((s) => s.suspended).length;
+  const sourceKinds = [...new Set(allSources.map((s) => s.kind))].sort();
+
+  const clearFilters = () => { setStatus("all"); setKindFilter(""); setSourceKind(""); setQuery(""); };
+  const total = view === "sources" ? allSources.length : rows.length;
+  const shown = view === "sources" ? visibleSources.length : visibleRows.length;
+  let state: DatasetState = "ready";
+  if (absent) state = "empty";
+  else if (!loaded && total === 0) state = "loading";
+  else if (watchError && total === 0) state = "unreadable";
+  else if (total === 0) state = "empty";
+  else if (shown === 0) state = "no-match";
+  const stateView = state === "loading" ? <div style={{ width: "100%", alignSelf: "flex-start" }}><SkeletonRows rows={7} label="loading reconciliation state" /></div>
+    : state === "unreadable" ? <EmptyState icon={<IconAlertTriangle size={28} stroke={1.2} />} title="Flux state could not be read." hint={watchError ?? undefined} />
+    : state === "empty" ? (absent
+      ? <EmptyState icon={<IconGitBranch size={28} stroke={1.2} />} title="Flux is not installed on this cluster." hint="Klyx detected no Flux controllers or CRDs here." />
+      : <EmptyState icon={<IconGitBranch size={28} stroke={1.2} />} title={view === "sources" ? "No Flux sources on this cluster." : "No Flux resources on this cluster."} hint={view === "sources" ? undefined : "Flux is installed but no Kustomizations or HelmReleases exist yet."} />)
+    : <EmptyState icon={<IconGitBranch size={28} stroke={1.2} />} title={view === "sources" ? "No Flux sources match the current filters." : "No Flux resources match the current filters."} hint={`${total} ${view === "sources" ? "sources" : "resources"} on this cluster.`} action={{ label: "Clear filters", onClick: clearFilters }} />;
+
+  const partial = watchError ? "+" : "";
+  const filterBits = [status !== "all" ? status : "", view === "reconciliation" && kindFilter ? (kindFilter === "Kustomization" ? "ks" : "hr") : "", view === "sources" && sourceKind ? (sourceKindLabel[sourceKind] ?? sourceKind) : "", query ? "search" : ""].filter(Boolean);
+  const attnHere = view === "sources" ? srcAttention : attention;
 
   return (
-    <div style={{ padding: "14px 16px", display: "flex", flexDirection: "column", gap: 12, height: "100%", minHeight: 0, overflow: "hidden", boxSizing: "border-box" }}>
-      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 16 }}>
-        <div>
-          <div style={{ fontSize: 10, color: "var(--color-text-tertiary)", marginBottom: 3 }}>Flux</div>
-          <div style={{ fontSize: 18, fontWeight: 600 }}>Reconciliation</div>
-        </div>
-        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-          {isProtected && <Badge tone="warning" variant="filled">prd lock</Badge>}
-          <Badge tone={attention > 0 ? "warning" : "success"} variant="filled">{attention > 0 ? `${attention} need attention` : "ready"}</Badge>
-        </div>
-      </div>
-
-      {gitops.cluster === cluster && gitops.watchError && (
-        <WatchErrorBanner tool="Flux" error={gitops.watchError} />
-      )}
-
-      <MetersStrip
-        note="broken first"
-        meters={[
-          { label: "kustomizations", value: ks },
-          { label: "helmreleases", value: hr },
-          attention > 0 && { label: "attention", value: attention, tone: "danger" as const },
-          reconciling > 0 && { label: "reconciling", value: reconciling, tone: "info" as const },
-          suspended > 0 && { label: "suspended", value: suspended, tone: "warning" as const },
-          { label: "ready", value: ready, tone: "success" as const },
-        ]}
+    <>
+      <LensLayout
+        label="Flux"
+        title={view === "sources" ? "Flux sources" : "Flux reconciliation"}
+        summary={state === "loading" || state === "unreadable" || absent ? null : view === "sources" ? (
+          <>
+            <span className="t-number" style={{ color: "var(--color-text-secondary)" }}>{allSources.length}{partial}</span>
+            {srcAttention > 0
+              ? <span className="t-status" style={{ color: "var(--color-text-warning)" }}>{srcAttention} not ready</span>
+              : <span className="t-secondary">{watchError ? "no known faults" : "all sources ready"}</span>}
+            {srcSuspended > 0 && <span className="t-secondary">{srcSuspended} suspended</span>}
+          </>
+        ) : (
+          <>
+            <span className="t-number" style={{ color: "var(--color-text-secondary)" }}>{rows.length}{partial}</span>
+            {attention > 0
+              ? <span className="t-status" style={{ color: failed > 0 ? "var(--color-text-danger)" : "var(--color-text-warning)" }}>{failed > 0 ? "▲ " : ""}{attention} need attention</span>
+              : <span className="t-secondary">{watchError ? "no known attention" : "none need attention"}</span>}
+            <span className="t-secondary">
+              {[`${ks} ks · ${hr} hr`, failed ? `${failed} failed` : "", reconciling ? `${reconciling} reconciling` : "", syncing ? `${syncing} syncing` : "", suspended ? `${suspended} suspended` : ""].filter(Boolean).join(" · ")}
+            </span>
+          </>
+        )}
+        controls={absent ? undefined : (
+          <>
+            <div role="group" aria-label="Flux view" style={{ display: "inline-flex", gap: 4 }}>
+              <button className="l-chip" aria-pressed={view === "reconciliation"} onClick={() => { setView("reconciliation"); setSourceKind(""); }}>Reconciliation</button>
+              <button className="l-chip" aria-pressed={view === "sources"} onClick={() => { setView("sources"); setKindFilter(""); close(); }}>
+                Sources {srcAttention > 0 && <span style={{ color: "var(--color-text-warning)" }}>{srcAttention}</span>}
+              </button>
+            </div>
+            {view === "reconciliation" ? (
+              <label style={{ display: "flex" }}>
+                <span className="sr-only">Kind</span>
+                <select className="l-input" value={kindFilter} onChange={(e) => setKindFilter(e.target.value as KindFilter)}>
+                  <option value="">All kinds ({rows.length})</option>
+                  <option value="Kustomization">Kustomizations ({ks})</option>
+                  <option value="HelmRelease">HelmReleases ({hr})</option>
+                </select>
+              </label>
+            ) : (
+              <label style={{ display: "flex" }}>
+                <span className="sr-only">Source type</span>
+                <select className="l-input" value={sourceKind} onChange={(e) => setSourceKind(e.target.value)}>
+                  <option value="">All source types ({allSources.length})</option>
+                  {sourceKinds.map((k) => <option key={k} value={k}>{k} ({allSources.filter((s) => s.kind === k).length})</option>)}
+                </select>
+              </label>
+            )}
+            <button className="l-chip" aria-pressed={status === "all"} onClick={() => setStatus("all")}>All</button>
+            <button className="l-chip" aria-pressed={status === "attention"} onClick={() => setStatus("attention")}>
+              Attention {attnHere > 0 && <span style={{ color: "var(--color-text-warning)" }}>{attnHere}</span>}
+            </button>
+            {(view === "sources" ? srcSuspended : suspended) > 0 && (
+              <button className="l-chip" aria-pressed={status === "suspended"} onClick={() => setStatus("suspended")}>
+                Suspended <span style={{ color: "var(--color-text-tertiary)" }}>{view === "sources" ? srcSuspended : suspended}</span>
+              </button>
+            )}
+            <label style={{ display: "flex", flex: "0 1 260px", minWidth: 140, marginLeft: "auto" }}>
+              <span className="sr-only">Search Flux</span>
+              <input ref={searchRef} className="l-input" style={{ width: "100%" }} value={query} onChange={(e) => setQuery(e.target.value)} placeholder={view === "sources" ? "Search sources" : "Search name, message, revision"} />
+            </label>
+          </>
+        )}
+        notice={watchError && total > 0 ? <WatchErrorBanner tool="Flux" failure="watch failed - showing the last good state" error={watchError} /> : undefined}
+        state={state}
+        stateView={stateView}
+        body={view === "sources" ? (
+          <LensTable minWidth={fitted.minWidth} onWidth={setBodyWidth}>
+            <div className="lens-table-head" role="row" style={gridStyle}>
+              {columns.filter((c) => show(c.id)).map((c) => <span key={c.id}>{c.label}</span>)}
+            </div>
+            <VirtualList
+              items={visibleSources}
+              rowHeight={TABLE_ROW_HEIGHT}
+              rowKey={(s) => keyOf(s)}
+              style={{ flex: 1, minHeight: 0 }}
+              render={(s) => (
+                <div key={keyOf(s)} className="lens-row" style={{ ...gridStyle, cursor: "default" }} data-testid="flux-source-row">
+                  {show("lamp") && <Lamp color={fluxLampColor(s)} label={s.suspended ? "suspended" : s.ready} />}
+                  {show("kind") && <span style={{ color: "var(--color-text-tertiary)" }}>{sourceKindLabel[s.kind] ?? s.kind}</span>}
+                  {show("name") && <span className="lens-cell-name" title={`${s.namespace}/${s.name}`}><span style={{ color: "var(--color-text-tertiary)" }}>{s.namespace} / </span>{s.name}</span>}
+                  {show("status") && (
+                    <span style={{ ...ellipsisCell, color: fluxLampColor(s) ?? "var(--color-text-secondary)" }} title={s.message || undefined}>
+                      {s.suspended ? "Suspended" : s.ready}{s.message && s.ready !== "Ready" && !s.suspended ? ` · ${s.message}` : ""}
+                    </span>
+                  )}
+                  {show("revision") && <span style={{ ...ellipsisCell, color: "var(--color-text-secondary)" }} title={s.revision}>{shortRev(s.revision) || "-"}</span>}
+                </div>
+              )}
+            />
+          </LensTable>
+        ) : (
+          <LensTable minWidth={fitted.minWidth} onWidth={setBodyWidth}>
+            <div className="lens-table-head" role="row" style={gridStyle}>
+              {columns.filter((c) => show(c.id)).map((c) => <span key={c.id}>{c.label}</span>)}
+            </div>
+            <VirtualList
+              ref={listRef}
+              items={visibleRows}
+              rowHeight={TABLE_ROW_HEIGHT}
+              rowKey={(r) => keyOf(r)}
+              style={{ flex: 1, minHeight: 0 }}
+              render={(r) => {
+                const k = keyOf(r);
+                const lamp = fluxLampColor(r);
+                return (
+                  <div
+                    key={k}
+                    role="button"
+                    tabIndex={0}
+                    className="lens-row"
+                    aria-selected={k === cursorKey}
+                    data-cursor={k === cursorKey ? "true" : undefined}
+                    data-selected={k === selKey ? "true" : undefined}
+                    style={{ ...gridStyle, ...staleStyle(!r.suspended && r.stale) }}
+                    onClick={() => (k === selKey ? close() : openRow(r))}
+                    onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openRow(r); } }}
+                  >
+                    {show("lamp") && <Lamp color={lamp} label={r.suspended ? "suspended" : r.stale ? "syncing" : r.ready} />}
+                    {show("kind") && <span style={{ color: "var(--color-text-tertiary)" }}>{r.kind === "Kustomization" ? "ks" : "hr"}</span>}
+                    {show("name") && (
+                      <span style={{ display: "flex", alignItems: "center", gap: 4, minWidth: 0 }}>
+                        <span className="lens-cell-name" title={`${r.namespace}/${r.name}`}>
+                          <span style={{ color: "var(--color-text-tertiary)" }}>{r.namespace} / </span>
+                          <span style={{ fontWeight: k === selKey ? 600 : 400 }}>{r.name}</span>
+                        </span>
+                        <CopyButton text={r.name} label={`copy name ${r.name}`} appearOnRowHover />
+                      </span>
+                    )}
+                    {show("status") && (
+                      <span style={ellipsisCell} title={needsAttention(r) && r.message ? r.message : undefined}>
+                        {r.suspended ? <span style={{ color: "var(--color-text-warning)" }}>Suspended</span>
+                          : r.stale ? <SyncingChip generation={r.generation} observedGeneration={r.observedGeneration} />
+                          : <span className={r.ready === "Failed" ? "klyx-danger-prefix" : undefined} style={{ color: lamp ?? "var(--color-text-secondary)", fontWeight: r.ready === "Failed" ? 600 : 400 }}>
+                              {r.ready}{needsAttention(r) && r.reason ? ` · ${r.reason}` : ""}
+                            </span>}
+                      </span>
+                    )}
+                    {show("source") && <span style={{ ...ellipsisCell, color: "var(--color-text-secondary)" }} title={sourceText(r)}>{sourceText(r) || "-"}</span>}
+                    {show("revision") && <span style={{ ...ellipsisCell, color: "var(--color-text-secondary)" }} title={r.revision}>{shortRev(r.revision) || "-"}</span>}
+                    {show("since") && <span style={{ color: "var(--color-text-tertiary)" }}>{ago(r.readySinceSeconds) || "-"}</span>}
+                  </div>
+                );
+              }}
+            />
+          </LensTable>
+        )}
+        footer={<span className="t-legend">{view === "sources" ? "/ search" : "j k navigate · ↵ inspect · r reconcile · s suspend · / search"}</span>}
+        footerEnd={
+          <>
+            <span className="t-secondary">{shown} of {total}{partial} {view === "sources" ? "sources" : "resources"} · broken first{filterBits.length ? ` · filter: ${filterBits.join(", ")}` : ""}</span>
+            {filterBits.length > 0 && <button className="l-chip" style={{ height: 20, color: "var(--color-text-info)" }} onClick={clearFilters}>Show all</button>}
+          </>
+        }
+        inspector={view === "reconciliation" && selKey && (selected || removed) && lastSelected.current ? (
+          <FluxInspector
+            key={`${cluster}/${selKey}`}
+            cluster={cluster}
+            resource={selected ?? lastSelected.current}
+            removed={removed}
+            isProtected={isProtected}
+            detail={gitops.detail && selected && keyOf(gitops.detail) === keyOf(selected) ? gitops.detail : null}
+            deps={byKey}
+            onClose={close}
+            onReconcile={(r) => setPinned({ kind: "reconcile", r })}
+            onToggleSuspend={(r, isSuspended) => setPinned({ kind: isSuspended ? "resume" : "suspend", r })}
+          />
+        ) : undefined}
+        inspectorLabel="Flux resource details"
+        onCloseInspector={close}
       />
 
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
-        <FilterButton label="all" active={filter === "all"} count={rows.length} onClick={() => setFilter("all")} />
-        <FilterButton label="needs attention" active={filter === "attention"} count={attention} onClick={() => setFilter("attention")} />
-        <FilterButton label="suspended" active={filter === "suspended"} count={suspended} onClick={() => setFilter("suspended")} />
-        <FilterButton label="ks" active={filter === "kustomizations"} count={ks} onClick={() => setFilter("kustomizations")} />
-        <FilterButton label="hr" active={filter === "helmreleases"} count={hr} onClick={() => setFilter("helmreleases")} />
-        <FilterButton label="sources" active={filter === "sources"} count={allSources.length} onClick={() => setFilter("sources")} />
-        <input
-          ref={searchRef}
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="filter flux"
-          aria-label="filter flux"
-          style={{ ...inputWell, marginLeft: "auto", width: 170 }}
-        />
-        {visibleRows.length !== rows.length && <span style={{ fontSize: 10, color: "var(--color-text-tertiary)" }}>{visibleRows.length} of {rows.length}</span>}
-      </div>
-
-      {gitops.loading && rows.length === 0 && allSources.length === 0 ? (
-        <SkeletonRows rows={7} label="loading reconciliation state" />
-      ) : filter === "sources" ? (
-        <SourcesPanel sources={orderedSources} />
-      ) : rows.length === 0 ? (
-        <EmptyState
-          icon={<IconGitBranch size={28} stroke={1.2} />}
-          title="No Flux resources on this cluster."
-          hint="Flux is installed but no Kustomizations or HelmReleases exist yet."
-        />
-      ) : (
-        <div style={{ flex: 1, minHeight: 0, display: "grid", gridTemplateColumns: "minmax(440px, 1.25fr) minmax(320px, 0.75fr)", gap: 12, alignItems: "stretch", overflow: "hidden" }}>
-          <div style={{ ...well, overflow: "hidden", minHeight: 0, display: "flex", flexDirection: "column" }}>
-            <div style={{ display: "grid", gridTemplateColumns: "3px minmax(180px,1.2fr) 120px minmax(110px,0.9fr) 84px 92px", gap: 10, alignItems: "center", padding: "5px 12px", borderBottom: "0.5px solid var(--color-border-tertiary)", fontSize: 10, color: "var(--color-text-tertiary)", flexShrink: 0 }}>
-              <span />
-              <span>resource</span>
-              <span>source</span>
-              <span>revision</span>
-              <span>since</span>
-              <span>status</span>
-            </div>
-            <div data-testid="flux-resource-scroll" style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
-              {visibleRows.length === 0 ? (
-                <EmptyState
-                  title="No Flux resources match the current filter."
-                  action={{ label: "Clear filters", onClick: () => { setFilter("all"); setQuery(""); } }}
-                />
-              ) : visibleRows.map((r, i) => {
-                const k = keyOf(r);
-                const open = gitops.expandedKey === k;
-                return (
-                  <RowSummary
-                    key={k}
-                    r={r}
-                    open={open}
-                    kbSelected={i === kbIdx}
-                    onClick={() => {
-                      // A click also moves the keyboard selection so the r/s
-                      // hints on the panel act on the row the panel shows.
-                      setKbKey(k);
-                      if (open) collapse(); else expand(k);
-                    }}
-                  />
-                );
-              })}
-            </div>
-            <FKeysBar
-              keys={[["j k", "nav"], ["\u21B5", "expand"], ["r", "reconcile"], ["s", "suspend"], ["/", "filter"], ["esc", "collapse"]]}
-              status={`${visibleRows.length} of ${rows.length} \u00B7 broken first`}
-            />
-          </div>
-
-          <div data-testid="flux-inspector-scroll" style={{ minHeight: 0, overflowY: "auto" }}>
-            {selectedResource ? (
-              <DetailPanel
-                key={keyOf(selectedResource)}
-                cluster={cluster}
-                resource={selectedResource}
-                detail={selectedDetail}
-                deps={byKey}
-                onReconcile={() => setReconcileTarget(selectedResource)}
-                onToggleSuspend={(isSuspended) => setPending({ verb: isSuspended ? "resume" : "suspend", r: selectedResource })}
-                onViewGit={() => void resolveGitLink(cluster, selectedResource.kind, selectedResource.namespace, selectedResource.name)}
-              />
-            ) : (
-              <EmptyInspector attention={attention} />
-            )}
-          </div>
-        </div>
-      )}
-
-      {pending && (
+      {verb && (verb.kind === "suspend" || verb.kind === "resume") && (
         <ConfirmDialog
-          title={pending.verb === "suspend" ? "Suspend reconciliation" : "Resume reconciliation"}
-          cluster={cluster}
-          detail={`${pending.r.kind} ${pending.r.namespace}/${pending.r.name}`}
+          title={verb.kind === "suspend" ? "Suspend reconciliation" : "Resume reconciliation"}
+          cluster={verb.cluster}
+          detail={`${verb.r.kind} ${verb.r.namespace}/${verb.r.name}`}
           protected={isProtected}
-          danger={pending.verb === "suspend"}
-          confirmLabel={pending.verb === "suspend" ? "Suspend" : "Resume"}
-          onCancel={() => setPending(null)}
+          danger={verb.kind === "suspend"}
+          confirmLabel={verb.kind === "suspend" ? "Suspend" : "Resume"}
+          onCancel={() => setPinnedState(null)}
           onConfirm={() => {
-            const { verb, r } = pending;
-            setPending(null);
-            void setSuspend(cluster, r.kind, r.namespace, r.name, verb === "suspend");
+            const { cluster: target, kind, r } = verb;
+            setPinnedState(null);
+            void setSuspend(target, r.kind, r.namespace, r.name, kind === "suspend");
           }}
         />
       )}
-
-      {reconcileTarget && (
+      {verb && verb.kind === "reconcile" && (
         <ReconcileDialog
-          cluster={cluster}
-          resource={reconcileTarget}
+          cluster={verb.cluster}
+          resource={verb.r}
           isProtected={isProtected}
-          onCancel={() => setReconcileTarget(null)}
+          onCancel={() => setPinnedState(null)}
           onConfirm={(withSource) => {
-            const r = reconcileTarget;
-            setReconcileTarget(null);
-            if (withSource) void reconcileWithSource(cluster, r.kind, r.namespace, r.name);
-            else void reconcile(cluster, r.kind, r.namespace, r.name);
+            const { cluster: target, r } = verb;
+            setPinnedState(null);
+            if (withSource) void reconcileWithSource(target, r.kind, r.namespace, r.name);
+            else void reconcile(target, r.kind, r.namespace, r.name);
           }}
         />
       )}
+    </>
+  );
+}
+
+// FluxInspector - investigation order: the Flux verdict with the controller's
+// full message; Reconcile (primary), Suspend/Resume (secondary), More (view in
+// Git, manifest); then the bound source (the usual root cause), dependsOn
+// blockers, drift/events, conditions, inventory, and the gated live diff.
+function FluxInspector({ cluster, resource, removed, isProtected, detail, deps, onClose, onReconcile, onToggleSuspend }: {
+  cluster: string;
+  resource: FluxResourceDTO;
+  removed: boolean;
+  isProtected: boolean;
+  detail: ResourceDetailDTO | null;
+  deps: Map<string, FluxResourceDTO>;
+  onClose: () => void;
+  onReconcile: (r: FluxResourceDTO) => void;
+  onToggleSuspend: (r: FluxResourceDTO, suspended: boolean) => void;
+}) {
+  const r = resource;
+  const live = !removed;
+  const isSuspended = detail?.suspended ?? r.suspended;
+  const manifestRef = wellKnownResourceRef(FLUX_KIND_GROUPS[r.kind] ?? "", r.kind);
+  const viewManifest: MenuItem | null = manifestRef
+    ? { label: "View manifest in Resources", onSelect: () => { const nav = useFleet.getState(); nav.openResource(manifestRef); nav.openInstance(manifestRef.scope === "Namespaced" ? r.namespace : "", r.name); } }
+    : null;
+  const more: MenuItem[] = [
+    ...(live && r.kind === "Kustomization" ? [{ label: "View in Git", onSelect: () => void resolveGitLink(cluster, r.kind, r.namespace, r.name) }] : []),
+    ...(viewManifest ? [viewManifest] : []),
+  ];
+  // M10-f: a real diff only helps when Flux isn't auto-healing (suspended) or
+  // is stuck (apply-failing); a healthy resource's diff is empty/misleading.
+  const canDiff = live && !!detail && r.kind === "Kustomization" && (detail.suspended || r.ready === "Failed");
+
+  const verdict = removed ? (
+    <div role="status" className="t-body" style={{ padding: "8px 10px", borderRadius: 4, background: "var(--color-background-secondary)", boxShadow: "inset 0 0 0 1px var(--color-border-secondary)" }}>
+      <span className="t-status">{r.kind} removed.</span> It is no longer in the current read. The details below are its last evidence; actions are disabled.
+    </div>
+  ) : (
+    <div>
+      {!r.suspended && r.stale ? (
+        <InspectorStatus tone="muted" label="Syncing…" reason={`generation ${r.generation} not yet observed (observed ${r.observedGeneration})`} />
+      ) : (
+        <InspectorStatus
+          tone={fluxTone(r)}
+          label={r.suspended ? "Suspended" : r.ready}
+          reason={needsAttention(r) ? r.reason || undefined : undefined}
+          detail={shortRev(r.revision) || undefined}
+        />
+      )}
+      {r.message && needsAttention(r) && (
+        <div className="t-body" style={{ color: r.ready === "Failed" ? "var(--color-text-danger)" : "var(--color-text-warning)", overflowWrap: "anywhere", marginTop: -4 }}>{r.message}</div>
+      )}
+    </div>
+  );
+
+  return (
+    <div data-testid="flux-detail-panel" style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
+      <InspectorLayout
+        kind={r.kind}
+        namespace={r.namespace}
+        name={r.name}
+        meta={
+          <>
+            {isProtected && <span style={{ color: "var(--color-text-warning)", fontWeight: 600 }}>protected · </span>}
+            {[sourceText(r) ? `source ${sourceText(r)}` : "", r.readySinceSeconds > 0 ? `ready since ${ago(r.readySinceSeconds)}` : ""].filter(Boolean).join(" · ") || "Flux"}
+          </>
+        }
+        onClose={onClose}
+        verdict={verdict}
+        primary={live ? { label: "Reconcile", kbd: "r", onSelect: () => onReconcile(r) } : undefined}
+        secondary={live ? { label: isSuspended ? "Resume" : "Suspend", kbd: "s", onSelect: () => onToggleSuspend(r, isSuspended) } : undefined}
+        more={more}
+      >
+        {!detail ? (
+          <span className="t-secondary">{removed ? "No detail was loaded before it was removed." : "Loading detail…"}</span>
+        ) : (
+          <>
+            {detail.applyFailed && (
+              <div className="t-body" style={{ color: "var(--color-text-danger)" }}>
+                Apply failed at <span className="t-identifier">{shortRev(detail.attemptedRevision)}</span>
+              </div>
+            )}
+            {detail.source && <SourceSection source={detail.source} />}
+            {detail.dependsOn && detail.dependsOn.length > 0 && (
+              <DependsOnSection deps={detail.dependsOn} kind={r.kind} resolve={deps} blocked={detail.reason === "DependencyNotReady"} />
+            )}
+            {detail.events && <EventsSection events={detail.events} />}
+            <InspectorBlock title="Conditions" count={detail.conditions.length} defaultOpen={needsAttention(r)}>
+              <InspectorConditions conditions={detail.conditions} />
+            </InspectorBlock>
+            {r.kind === "Kustomization" ? (
+              <InspectorBlock title="Inventory" count={detail.inventory.length}>
+                {detail.inventory.length === 0 ? <Muted>No managed objects.</Muted> : <InventoryList entries={detail.inventory} />}
+              </InspectorBlock>
+            ) : (
+              <InspectorBlock title="Inventory"><Muted>A HelmRelease CR carries no inventory.</Muted></InspectorBlock>
+            )}
+            {canDiff && <DiffSection cluster={cluster} namespace={r.namespace} name={r.name} />}
+          </>
+        )}
+      </InspectorLayout>
     </div>
   );
 }
@@ -422,158 +667,6 @@ function ReconcileDialog({ cluster, resource, isProtected, onCancel, onConfirm }
         onClick={() => setWithSource((v) => !v)}
       />
     </OperationDialog>
-  );
-}
-
-function RowSummary({ r, open, kbSelected, onClick }: { r: FluxResourceDTO; open: boolean; kbSelected: boolean; onClick: () => void }) {
-  const isBad = r.ready === "Failed";
-  const isReconciling = r.ready === "Reconciling";
-  const color = r.suspended ? "var(--color-text-warning)" : (readyColor[r.ready] ?? "var(--color-text-tertiary)");
-  // Keep the kb-selected row visible - the list scrolls, there is no
-  // VirtualList handle here. Optional call: jsdom has no scrollIntoView.
-  const ref = useRef<HTMLButtonElement>(null);
-  useEffect(() => {
-    if (kbSelected) ref.current?.scrollIntoView?.({ block: "nearest" });
-  }, [kbSelected]);
-  return (
-    <button
-      ref={ref}
-      aria-selected={kbSelected}
-      onClick={onClick}
-      style={{
-        width: "100%",
-        display: "grid",
-        gridTemplateColumns: "3px minmax(180px,1.2fr) 120px minmax(110px,0.9fr) 84px 92px",
-        gap: 10,
-        alignItems: "center",
-        padding: "8px 12px",
-        border: 0,
-        borderTop: "0.5px solid var(--color-border-tertiary)",
-        fontSize: 12,
-        cursor: "pointer",
-        textAlign: "left",
-        color: "var(--color-text-primary)",
-        background: kbSelected || open ? "var(--color-background-secondary)" : "transparent",
-        boxShadow: kbSelected ? "inset 2px 0 0 var(--bench-selection-edge, var(--color-text-info))" : undefined,
-        ...staleStyle(!r.suspended && r.stale),
-      }}
-    >
-      <span style={{ alignSelf: "stretch", background: isBad ? "var(--color-text-danger)" : isReconciling ? "var(--color-text-info)" : r.suspended ? "var(--color-text-warning)" : "transparent" }} />
-      <div style={{ minWidth: 0 }}>
-        <span style={{ fontFamily: "var(--font-mono)" }}>{r.namespace}/{r.name}</span>{" "}
-        <span style={{ color: "var(--color-text-tertiary)", fontSize: 10 }}>{r.kind === "Kustomization" ? "ks" : "hr"}</span>
-        {needsAttention(r) && r.reason && <ReasonChip reason={r.reason} bad={isBad} />}
-        {r.message && needsAttention(r) && (
-          <div style={{ color: isBad ? "var(--color-text-danger)" : "var(--color-text-warning)", fontSize: 11, marginTop: 2, ...ellipsis }} title={r.message}>{r.message}</div>
-        )}
-      </div>
-      <div style={{ color: "var(--color-text-secondary)", ...ellipsis }} title={sourceText(r)}>{sourceText(r) || "—"}</div>
-      <div style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--color-text-secondary)", ...ellipsis }} title={r.revision}>{shortRev(r.revision) || "—"}</div>
-      <div style={{ color: "var(--color-text-tertiary)", fontSize: 11, ...ellipsis }}>{ago(r.readySinceSeconds) || "—"}</div>
-      <div className={!r.stale && r.ready === "Failed" ? "klyx-danger-prefix" : undefined} style={{ ...ellipsis, color, fontFamily: "var(--font-mono)", fontSize: 11, fontWeight: !r.stale && r.ready === "Failed" ? 700 : undefined }}>
-        {r.suspended ? statusText(r) : r.stale ? <SyncingChip generation={r.generation} observedGeneration={r.observedGeneration} /> : statusText(r)}
-      </div>
-    </button>
-  );
-}
-
-function SourcesPanel({ sources }: { sources: FluxSourceDTO[] }) {
-  if (sources.length === 0) {
-    return <div style={{ color: "var(--color-text-secondary)", fontSize: 13 }}>No Flux sources found.</div>;
-  }
-  return (
-    <div style={{ flex: 1, minHeight: 0, ...well, overflow: "hidden", display: "flex", flexDirection: "column" }}>
-      <div style={{ display: "grid", gridTemplateColumns: "3px minmax(180px,1.4fr) 90px minmax(120px,1fr) 92px", gap: 10, alignItems: "center", padding: "5px 12px", borderBottom: "0.5px solid var(--color-border-tertiary)", fontSize: 10, color: "var(--color-text-tertiary)", flexShrink: 0 }}>
-        <span />
-        <span>source</span>
-        <span>kind</span>
-        <span>revision</span>
-        <span>status</span>
-      </div>
-      <div data-testid="flux-sources-scroll" style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
-        {sources.map((s) => <SourceRow key={keyOf(s)} s={s} />)}
-      </div>
-    </div>
-  );
-}
-
-function SourceRow({ s }: { s: FluxSourceDTO }) {
-  const isBad = s.ready === "Failed";
-  const isReconciling = s.ready === "Reconciling";
-  const color = s.suspended ? "var(--color-text-warning)" : (readyColor[s.ready] ?? "var(--color-text-tertiary)");
-  const notReady = s.ready !== "Ready";
-  return (
-    <div style={{ display: "grid", gridTemplateColumns: "3px minmax(180px,1.4fr) 90px minmax(120px,1fr) 92px", gap: 10, alignItems: "center", padding: "8px 12px", borderTop: "0.5px solid var(--color-border-tertiary)", fontSize: 12 }}>
-      <span style={{ alignSelf: "stretch", background: isBad ? "var(--color-text-danger)" : isReconciling ? "var(--color-text-info)" : s.suspended ? "var(--color-text-warning)" : "transparent" }} />
-      <div style={{ minWidth: 0 }}>
-        <span style={{ fontFamily: "var(--font-mono)" }}>{s.namespace}/{s.name}</span>
-        {s.message && notReady && (
-          <div style={{ color: isBad ? "var(--color-text-danger)" : "var(--color-text-warning)", fontSize: 11, marginTop: 2, ...ellipsis }} title={s.message}>{s.message}</div>
-        )}
-      </div>
-      <div style={{ color: "var(--color-text-tertiary)", fontSize: 10, fontFamily: "var(--font-mono)" }}>{sourceKindLabel[s.kind] ?? s.kind}</div>
-      <div style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--color-text-secondary)", ...ellipsis }} title={s.revision}>{shortRev(s.revision) || "—"}</div>
-      <div style={{ ...ellipsis, color }}>{s.suspended ? "suspended" : s.ready.toLowerCase()}</div>
-    </div>
-  );
-}
-
-function DetailPanel({ cluster, resource, detail, deps, onReconcile, onToggleSuspend, onViewGit }: {
-  cluster: string;
-  resource: FluxResourceDTO;
-  detail: ResourceDetailDTO | null;
-  deps: Map<string, FluxResourceDTO>;
-  onReconcile: () => void;
-  onToggleSuspend: (suspended: boolean) => void;
-  onViewGit: () => void;
-}) {
-  if (!detail) {
-    return (
-      <div style={{ ...well, padding: "10px 12px", fontSize: 12, color: "var(--color-text-secondary)" }}>
-        <InspectorHeader resource={resource} />
-        <div style={{ marginTop: 12 }}>Loading detail…</div>
-      </div>
-    );
-  }
-  // M10-f: a real diff only helps when Flux isn't auto-healing (suspended) or is
-  // stuck (apply-failing); a healthy resource's diff is empty/misleading.
-  const canDiff = resource.kind === "Kustomization" && (detail.suspended || resource.ready === "Failed");
-  return (
-    <div style={{ ...well, padding: "10px 12px", fontSize: 12 }}>
-      <InspectorHeader resource={resource} />
-      <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 12, flexWrap: "wrap" }}>
-        {/* r / s are live via useListKeys on the keyboard-selected row */}
-        <button onClick={onReconcile} style={{ ...actionBtn, display: "inline-flex", alignItems: "center", gap: 5 }}>reconcile <Kbd k="r" /></button>
-        <button onClick={() => onToggleSuspend(detail.suspended ?? false)} style={{ ...actionBtn, display: "inline-flex", alignItems: "center", gap: 5 }}>
-          {detail.suspended ? "resume" : "suspend"} <Kbd k="s" />
-        </button>
-        {resource.kind === "Kustomization" && (
-          <button onClick={onViewGit} style={actionBtn}>view in git</button>
-        )}
-        {detail.suspended && (
-          <span style={{ color: "var(--color-text-warning)", fontSize: 11, fontWeight: 500 }}>suspended</span>
-        )}
-      </div>
-      {detail.source && <SourceSection source={detail.source} />}
-      {detail.dependsOn && detail.dependsOn.length > 0 && (
-        <DependsOnSection deps={detail.dependsOn} kind={resource.kind} resolve={deps} blocked={detail.reason === "DependencyNotReady"} />
-      )}
-      {detail.events && <EventsSection events={detail.events} />}
-      {detail.applyFailed && (
-        <div style={{ color: "var(--color-text-danger)", marginBottom: 8 }}>apply failed at <span style={{ fontFamily: "var(--font-mono)" }}>{shortRev(detail.attemptedRevision)}</span></div>
-      )}
-      <InspectorSection title="Conditions">
-        <InspectorConditions conditions={detail.conditions} />
-      </InspectorSection>
-      {resource.kind === "Kustomization" ? (
-        <InspectorSection title="Inventory" count={detail.inventory.length}>
-          {detail.inventory.length === 0 ? <Muted>no managed objects</Muted> : <InventoryList entries={detail.inventory} />}
-        </InspectorSection>
-      ) : (
-        <InspectorSection title="Inventory"><Muted>no inventory in the HelmRelease CR</Muted></InspectorSection>
-      )}
-      {canDiff && <DiffSection cluster={cluster} namespace={resource.namespace} name={resource.name} />}
-    </div>
   );
 }
 
@@ -637,9 +730,9 @@ function DiffSection({ cluster, namespace, name }: { cluster: string; namespace:
       .finally(() => setRunning(false));
   };
   return (
-    <InspectorSection title="Live diff (flux diff)">
+    <InspectorBlock title="Live diff (flux diff)">
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-        <button onClick={run} disabled={running} style={{ ...actionBtn, opacity: running ? 0.6 : 1 }}>
+        <button className="l-btn" onClick={run} disabled={running} style={{ opacity: running ? 0.6 : 1 }}>
           {running ? "Computing…" : "Compute diff"}
         </button>
         <span style={{ color: "var(--color-text-tertiary)", fontSize: 10 }}>shells out to <span style={{ fontFamily: "var(--font-mono)" }}>flux diff</span> with your local credentials</span>
@@ -653,7 +746,7 @@ function DiffSection({ cluster, namespace, name }: { cluster: string; namespace:
       {result && result.hasChanges && (
         <pre style={{ marginTop: 6, padding: 8, maxHeight: 280, overflow: "auto", background: "var(--color-background-secondary)", border: "0.5px solid var(--color-border-tertiary)", borderRadius: 4, fontFamily: "var(--font-mono)", fontSize: 11, whiteSpace: "pre", lineHeight: 1.4 }}>{result.output}</pre>
       )}
-    </InspectorSection>
+    </InspectorBlock>
   );
 }
 
@@ -665,7 +758,7 @@ function SourceSection({ source }: { source: FluxSourceDTO }) {
   const dot = source.suspended ? "var(--color-text-warning)" : (readyColor[source.ready] ?? "var(--color-text-tertiary)");
   const label = sourceKindLabel[source.kind] ?? source.kind;
   return (
-    <InspectorSection title="Source">
+    <InspectorBlock title="Source">
       {!ready && (
         <div style={{ color: "var(--color-text-danger)", fontWeight: 500, marginBottom: 4 }}>
           source not ready{source.reason ? `: ${source.reason}` : ""}
@@ -683,7 +776,7 @@ function SourceSection({ source }: { source: FluxSourceDTO }) {
           )}
         </div>
       </div>
-    </InspectorSection>
+    </InspectorBlock>
   );
 }
 
@@ -697,7 +790,7 @@ function DependsOnSection({ deps, kind, resolve, blocked }: {
   const stateOf = (d: DependencyRefDTO): string | null => resolve.get(`${kind}/${d.namespace}/${d.name}`)?.ready ?? null;
   const blocker = blocked ? deps.find((d) => stateOf(d) !== "Ready") : undefined;
   return (
-    <InspectorSection title="Depends on">
+    <InspectorBlock title="Depends on">
       {blocker && (
         <div style={{ color: "var(--color-text-danger)", fontWeight: 500, marginBottom: 4 }}>
           blocked by <span style={{ fontFamily: "var(--font-mono)" }}>{blocker.namespace}/{blocker.name}</span>
@@ -714,7 +807,7 @@ function DependsOnSection({ deps, kind, resolve, blocked }: {
           </div>
         );
       })}
-    </InspectorSection>
+    </InspectorBlock>
   );
 }
 
@@ -730,7 +823,7 @@ function isDriftEvent(e: EventRowDTO): boolean {
 function EventsSection({ events }: { events: EventRowDTO[] }) {
   const nowSec = Math.floor(Date.now() / 1000);
   return (
-    <InspectorSection title="Drift / events">
+    <InspectorBlock title="Drift / events">
       {events.length === 0 ? <Muted>no recent events</Muted> : events.map((e, i) => {
         const warn = e.type === "Warning";
         const drift = isDriftEvent(e);
@@ -747,7 +840,7 @@ function EventsSection({ events }: { events: EventRowDTO[] }) {
           </div>
         );
       })}
-    </InspectorSection>
+    </InspectorBlock>
   );
 }
 
@@ -759,67 +852,6 @@ function fluxTone(r: FluxResourceDTO): Tone {
   if (r.ready === "Ready") return "success";
   if (r.ready === "Reconciling") return "info";
   return "muted";
-}
-
-function InspectorHeader({ resource }: { resource: FluxResourceDTO }) {
-  return (
-    <div style={{ minWidth: 0 }}>
-      <div style={{ color: "var(--color-text-tertiary)", fontSize: 11 }}>{resource.kind} / {resource.namespace}</div>
-      <div style={{ display: "flex", gap: 8, alignItems: "center", minWidth: 0, marginTop: 2, marginBottom: 10 }}>
-        <span style={{ fontFamily: "var(--font-mono)", fontSize: 15, fontWeight: 600, ...ellipsis }}>{resource.name}</span>
-        <CopyButton text={resource.name} label={`copy name ${resource.name}`} />
-        <ManifestButton group={FLUX_KIND_GROUPS[resource.kind] ?? ""} kind={resource.kind} namespace={resource.namespace} name={resource.name} />
-      </div>
-      <InspectorStatus
-        tone={fluxTone(resource)}
-        label={resource.suspended ? "Suspended" : resource.ready}
-        reason={needsAttention(resource) ? resource.reason || undefined : undefined}
-        detail={shortRev(resource.revision) || undefined}
-      />
-      {/* The controller's message hangs directly under the verdict (the -6
-          eats half the verdict's built-in 12px margin). */}
-      {resource.message && needsAttention(resource) && (
-        <div
-          style={{ color: resource.ready === "Failed" ? "var(--color-text-danger)" : "var(--color-text-warning)", fontSize: 11, marginTop: -6, marginBottom: 10, ...ellipsis }}
-          title={resource.message}
-        >{resource.message}</div>
-      )}
-    </div>
-  );
-}
-
-function ReasonChip({ reason, bad }: { reason: string; bad: boolean }) {
-  const tone = bad ? "danger" : "warning";
-  return (
-    <span
-      title={reason}
-      style={{
-        fontFamily: "var(--font-mono)",
-        fontSize: 9,
-        padding: "1px 5px",
-        borderRadius: 3,
-        marginLeft: 6,
-        verticalAlign: "middle",
-        border: `0.5px solid var(--color-border-${tone})`,
-        color: `var(--color-text-${tone})`,
-        background: `var(--color-background-${tone})`,
-        whiteSpace: "nowrap",
-      }}
-    >
-      {reason}
-    </span>
-  );
-}
-
-function EmptyInspector({ attention }: { attention: number }) {
-  return (
-    <div style={{ ...well, padding: "10px 12px", fontSize: 12, color: "var(--color-text-secondary)" }}>
-      <div style={{ color: attention > 0 ? "var(--color-text-warning)" : "var(--color-text-success)", fontFamily: "var(--font-mono)", fontWeight: 600 }}>
-        {attention > 0 ? `${attention} resources need attention` : "all reconciliations ready"}
-      </div>
-      <div style={{ marginTop: 8 }}>Select a Flux resource to inspect conditions, inventory, and day-2 actions.</div>
-    </div>
-  );
 }
 
 function Muted({ children }: { children: ReactNode }) {
