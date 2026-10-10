@@ -55,7 +55,7 @@ describe("ArgoView", () => {
     expect(getAllByText("Synced").length).toBeGreaterThanOrEqual(1);
     expect(getAllByText("Healthy").length).toBeGreaterThanOrEqual(1);
     expect(getAllByText(/abc1234d/).length).toBeGreaterThanOrEqual(1); // shortened revision
-    expect(getByText(/1 need attention/)).toBeTruthy();
+    expect(getByText(/1 out of sync or unhealthy/)).toBeTruthy(); // backend broken(), worded precisely
   });
 
   it("unavailable renders the reason, never an empty healthy list", () => {
@@ -364,7 +364,7 @@ describe("ArgoView workspace template (redesign step 4b)", () => {
     const paused: ArgoAppDTO = { ...healthy, name: "paused-app", healthStatus: "Suspended", broken: false };
     seed([paused]);
     const { getByText, getByRole } = render(<ArgoView cluster="homelab-nelli" />);
-    expect(getByText("none need attention")).toBeTruthy();
+    expect(getByText("all synced and healthy")).toBeTruthy();
     expect(getByText(/1 suspended/)).toBeTruthy();
     expect(getByRole("img", { name: "Suspended" })).toBeTruthy();
   });
@@ -434,5 +434,95 @@ describe("ArgoView ApplicationSet condition polarity (live pass)", () => {
     expect(lines[0]).toBe("ErrorOccurred: function tenant not defined");
     expect(lines).toContain("ResourcesUpToDate: generation failed");
     expect(lines.some((l) => l?.startsWith("SomethingNew"))).toBe(false);
+  });
+});
+
+describe("ArgoView Codex rework (Argo review)", () => {
+  const project = { namespace: "argocd", name: "platform", description: "", sourceRepos: ["https://x/y.git"], destinations: ["in-cluster/apps"], roles: 0, orphanWarn: true };
+  const appSet = { namespace: "argocd", name: "tenant-apps", generators: ["list"], templateName: "", project: "platform", repoURL: "", path: "", targetRevision: "main", destNamespace: "", generatedApps: 0, generatedNames: ["team-a-apps"], healthy: true, conditions: [] };
+  beforeEach(() => { vi.clearAllMocks(); useFleet.getState().clearArgo(); });
+
+  it("3a. a failed Application read never makes a project 'unused' or claim zero apps", () => {
+    useFleet.setState((s) => ({ argo: { ...s.argo, cluster: "homelab-nelli", projects: [project], projectsAvailable: true, projectsLoading: false,
+      apps: [], loading: false, available: false, message: "forbidden", error: "forbidden" } }));
+    const { queryByText, getByText, queryByRole } = render(<ArgoView cluster="homelab-nelli" mode="projects" />);
+    expect(queryByText("unused")).toBeNull();
+    expect(getByText(/app usage unverified/)).toBeTruthy();
+    expect(queryByRole("button", { name: /^Unused/ })).toBeNull();
+    select("platform");
+    expect(getByText(/links unverified, not zero/)).toBeTruthy();
+  });
+
+  it("3b. a still-loading Application read never claims missing generated apps", () => {
+    useFleet.setState((s) => ({ argo: { ...s.argo, cluster: "homelab-nelli", applicationSets: [appSet], applicationSetsAvailable: true, applicationSetsLoading: false,
+      apps: [], loading: true, error: null } }));
+    const { getByText, queryByRole } = render(<ArgoView cluster="homelab-nelli" mode="applicationsets" />);
+    expect(getByText(/generated apps unverified/)).toBeTruthy();
+    expect(queryByRole("button", { name: /^Missing apps/ })).toBeNull();
+    select("tenant-apps");
+    expect(getByText(/actual and missing are unverified, not zero/)).toBeTruthy();
+  });
+
+  it("3c. stale retained apps are labelled as the last good read", () => {
+    useFleet.setState((s) => ({ argo: { ...s.argo, cluster: "homelab-nelli", projects: [project], projectsAvailable: true, projectsLoading: false,
+      apps: [{ ...healthy, project: "platform" }], loading: false, error: "timeout" } }));
+    render(<ArgoView cluster="homelab-nelli" mode="projects" />);
+    select("platform");
+    expect(screen.getByText(/From the last good Application read/)).toBeTruthy();
+  });
+
+  it("4. condition severity follows the native type: Error red, Warning amber, other neutral", () => {
+    seed([{ ...broken, conditions: [
+      { type: "ComparisonError", message: "repo unreachable" },
+      { type: "SharedResourceWarning", message: "shared with app x" },
+      { type: "SomethingElse", message: "native evidence" },
+    ] }]);
+    render(<ArgoView cluster="homelab-nelli" />);
+    select("ollama-prod");
+    const color = (re: RegExp) => (inspector().getByText(re) as HTMLElement).style.color;
+    expect(color(/^ComparisonError:/)).toBe("var(--color-text-danger)");
+    expect(color(/^SharedResourceWarning:/)).toBe("var(--color-text-warning)");
+    expect(color(/^SomethingElse:/)).toBe("var(--color-text-secondary)");
+  });
+
+  it("5. a remote destination's inventory is labelled and never opens a same-named local object", () => {
+    seed([{ ...healthy, destServer: "https://prd-weu.example.com:6443" }]);
+    const { getByText, queryByRole } = render(<ArgoView cluster="homelab-nelli" />);
+    select("console-dev");
+    expect(getByText(/Managed on https:\/\/prd-weu\.example\.com:6443/)).toBeTruthy();
+    expect(queryByRole("button", { name: "open Deployment console-dev/console" })).toBeNull();
+  });
+});
+
+describe("ArgoView ApplicationSet polarity, full matrix (Codex rework #1)", () => {
+  const base = { namespace: "argocd", name: "s", generators: ["list"], templateName: "", project: "", repoURL: "", path: "", targetRevision: "", destNamespace: "", generatedApps: 0 };
+  const show = (healthy: boolean, conditions: { type: string; status: string; reason: string; message: string }[]) => {
+    useFleet.getState().clearArgo();
+    useFleet.setState((st) => ({ argo: { ...st.argo, cluster: "homelab-nelli", applicationSetsAvailable: true, applicationSetsLoading: false, applicationSets: [{ ...base, healthy, conditions }] } }));
+    const r = render(<ArgoView cluster="homelab-nelli" mode="applicationsets" />);
+    select("s");
+    return r;
+  };
+  it("healthy ErrorOccurred=False with positive conditions shows no diagnosis", () => {
+    const { unmount } = show(true, [
+      { type: "ErrorOccurred", status: "False", reason: "ApplicationSetUpToDate", message: "All applications have been generated successfully" },
+      { type: "ParametersGenerated", status: "True", reason: "ParametersGenerated", message: "ok" },
+      { type: "ResourcesUpToDate", status: "True", reason: "ApplicationSetUpToDate", message: "ok" },
+    ]);
+    expect(inspector().getByText("Healthy")).toBeTruthy();
+    expect(inspector().queryByText(/^(ErrorOccurred|ParametersGenerated|ResourcesUpToDate):/)).toBeNull();
+    unmount();
+  });
+  it("ErrorOccurred=True leads the diagnosis", () => {
+    const { unmount } = show(false, [{ type: "ErrorOccurred", status: "True", reason: "RenderError", message: "bad template" }]);
+    expect(inspector().getByText("ErrorOccurred: bad template")).toBeTruthy();
+    unmount();
+  });
+  it("an Unknown status is unverified evidence, not a diagnosis", () => {
+    const { unmount } = show(false, [{ type: "ResourcesUpToDate", status: "Unknown", reason: "", message: "controller restarting" }]);
+    expect(inspector().getByText("Unverified")).toBeTruthy();
+    const line = inspector().getByText(/ResourcesUpToDate is Unknown \(unverified\)/) as HTMLElement;
+    expect(line.style.color).toBe("var(--color-text-secondary)");
+    unmount();
   });
 });

@@ -92,19 +92,24 @@ type ArgoApplicationSetDTO struct {
 
 // ArgoAppDTO is one Argo CD Application in Argo's own vocabulary.
 type ArgoAppDTO struct {
-	Namespace      string             `json:"namespace"`
-	Name           string             `json:"name"`
-	Project        string             `json:"project"`
-	SyncStatus     string             `json:"syncStatus"`   // Synced | OutOfSync | Unknown
-	HealthStatus   string             `json:"healthStatus"` // Healthy | Progressing | Degraded | Suspended | Missing | Unknown
-	Broken         bool               `json:"broken"`
-	Revision       string             `json:"revision"`
-	RepoURL        string             `json:"repoURL"`
-	Path           string             `json:"path"`
-	Chart          string             `json:"chart"`
-	TargetRevision string             `json:"targetRevision"`
-	ExtraSources   int                `json:"extraSources"`
-	DestNamespace  string             `json:"destNamespace"`
+	Namespace      string `json:"namespace"`
+	Name           string `json:"name"`
+	Project        string `json:"project"`
+	SyncStatus     string `json:"syncStatus"`   // Synced | OutOfSync | Unknown
+	HealthStatus   string `json:"healthStatus"` // Healthy | Progressing | Degraded | Suspended | Missing | Unknown
+	Broken         bool   `json:"broken"`
+	Revision       string `json:"revision"`
+	RepoURL        string `json:"repoURL"`
+	Path           string `json:"path"`
+	Chart          string `json:"chart"`
+	TargetRevision string `json:"targetRevision"`
+	ExtraSources   int    `json:"extraSources"`
+	DestNamespace  string `json:"destNamespace"`
+	// DestServer / DestName say WHICH cluster the app's resources live on;
+	// the inventory is only the control plane's own objects when the
+	// destination is in-cluster.
+	DestServer     string             `json:"destServer"`
+	DestName       string             `json:"destName"`
 	ApplicationSet string             `json:"applicationSet"`
 	AutoSync       bool               `json:"autoSync"`
 	OpPhase        string             `json:"opPhase"`
@@ -187,6 +192,8 @@ func (s *ArgoService) ListApplications(cluster string) ArgoResultDTO {
 			TargetRevision: a.TargetRevision,
 			ExtraSources:   a.ExtraSources,
 			DestNamespace:  a.DestNamespace,
+			DestServer:     a.DestServer,
+			DestName:       a.DestName,
 			ApplicationSet: a.ApplicationSet,
 			AutoSync:       a.AutoSync,
 			OpPhase:        a.OpPhase,

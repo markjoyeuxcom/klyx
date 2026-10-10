@@ -155,6 +155,10 @@ export function ArgoView({ cluster, mode = "applications" }: { cluster: string; 
   }, [cluster, mode]);
 
   const mine = argo.cluster === cluster;
+  const appsCov: AppCoverage = !mine ? "unknown"
+    : argo.error ? (argo.apps.length > 0 ? "stale" : "unknown")
+    : argo.loading && argo.apps.length === 0 ? "unknown"
+    : "complete";
   const apps = useMemo(() => (mine ? argo.apps : []), [mine, argo.apps]);
   const projects = useMemo(() => (mine ? argo.projects : []), [mine, argo.projects]);
   const appSets = useMemo(() => (mine ? argo.applicationSets : []), [mine, argo.applicationSets]);
@@ -176,14 +180,14 @@ export function ArgoView({ cluster, mode = "applications" }: { cluster: string; 
   }), [apps, appFilter, q]);
   const visibleProjects = useMemo(() => [...projects]
     .filter((p) => matchesProjectQuery(p, q))
-    .filter((p) => projectFilter !== "risky" || projectRiskBadges(p, appsForProject(apps, p.name)).some((r) => r.tone === "danger" || r.tone === "warning"))
-    .filter((p) => projectFilter !== "unused" || appsForProject(apps, p.name).length === 0)
-    .sort((a, b) => projectRiskScore(b, apps) - projectRiskScore(a, apps) || a.name.localeCompare(b.name)), [projects, apps, q, projectFilter]);
+    .filter((p) => projectFilter !== "risky" || projectRiskBadges(p, appsForProject(apps, p.name), appsCov).some((r) => r.tone === "danger" || r.tone === "warning"))
+    .filter((p) => projectFilter !== "unused" || (appsCov !== "unknown" && appsForProject(apps, p.name).length === 0))
+    .sort((a, b) => projectRiskScore(b, apps, appsCov) - projectRiskScore(a, apps, appsCov) || a.name.localeCompare(b.name)), [projects, apps, q, projectFilter, appsCov]);
   const visibleAppSets = useMemo(() => [...appSets]
     .filter((a) => matchesAppSetQuery(a, q))
     .filter((a) => appSetFilter !== "attention" || !a.healthy)
-    .filter((a) => appSetFilter !== "missing" || missingGeneratedNames(a, apps).length > 0)
-    .sort((a, b) => Number(a.healthy) - Number(b.healthy) || a.name.localeCompare(b.name)), [appSets, apps, q, appSetFilter]);
+    .filter((a) => appSetFilter !== "missing" || (appsCov !== "unknown" && missingGeneratedNames(a, apps).length > 0))
+    .sort((a, b) => Number(a.healthy) - Number(b.healthy) || a.name.localeCompare(b.name)), [appSets, apps, q, appSetFilter, appsCov]);
 
   // Selection lifecycle per view: filter exclusion closes; absent from a
   // complete read = removed (last evidence, no actions).
@@ -270,10 +274,10 @@ export function ArgoView({ cluster, mode = "applications" }: { cluster: string; 
   const broken = apps.filter((a) => a.broken).length;
   const byHealth = (h: string) => apps.filter((a) => a.healthStatus === h).length;
   const outOfSync = apps.filter((a) => a.syncStatus === "OutOfSync").length;
-  const riskyProjects = projects.filter((p) => projectRiskBadges(p, appsForProject(apps, p.name)).some((r) => r.tone === "danger" || r.tone === "warning")).length;
-  const unusedProjects = projects.filter((p) => appsForProject(apps, p.name).length === 0).length;
+  const riskyProjects = projects.filter((p) => projectRiskBadges(p, appsForProject(apps, p.name), appsCov).some((r) => r.tone === "danger" || r.tone === "warning")).length;
+  const unusedProjects = appsCov === "unknown" ? null : projects.filter((p) => appsForProject(apps, p.name).length === 0).length;
   const unhealthySets = appSets.filter((a) => !a.healthy).length;
-  const missingSets = appSets.filter((a) => missingGeneratedNames(a, apps).length > 0).length;
+  const missingSets = appsCov === "unknown" ? null : appSets.filter((a) => missingGeneratedNames(a, apps).length > 0).length;
 
   const view = mode === "projects"
     ? { rows: projects.length, shown: visibleProjects.length, loading: argo.projectsLoading, error: argo.projectsError, available: argo.projectsAvailable, message: argo.projectsMessage, noun: "projects" }
@@ -297,7 +301,9 @@ export function ArgoView({ cluster, mode = "applications" }: { cluster: string; 
       ? <EmptyState icon={<IconGitMerge size={28} stroke={1.2} />} title={`Argo CD ${view.noun} are not served on this cluster.`} hint={view.message || undefined} />
       : <EmptyState icon={<IconGitMerge size={28} stroke={1.2} />} title={`No Argo CD ${view.noun} on this cluster.`} hint={mode === "applications" ? "Argo CD is installed but no Application objects exist yet." : mode === "projects" ? "Projects define allowed repos, destinations, and roles." : "ApplicationSets generate Applications from clusters, Git, pull requests, and other generators."} />)
     : <EmptyState icon={<IconGitMerge size={28} stroke={1.2} />} title={`No ${view.noun} match the current filters.`} hint={`${view.rows} ${view.noun} on this cluster.`} action={{ label: "Clear filters", onClick: clearFilters }} />;
-  const receivedAt = useReceivedAt(mine && !argo.loading && apps.length > 0 ? apps : null);
+  // freshness follows the CURRENT view's own read, not Applications for all
+  const viewRows: unknown[] = mode === "projects" ? projects : mode === "applicationsets" ? appSets : apps;
+  const receivedAt = useReceivedAt(mine && !view.loading && !view.error && viewRows.length > 0 ? viewRows : null);
   const partial = view.error ? "+" : "";
   const projectFor = (name: string) => projects.find((p) => p.name === name) ?? null;
 
@@ -310,8 +316,8 @@ export function ArgoView({ cluster, mode = "applications" }: { cluster: string; 
           <>
             <span className="t-number" style={{ color: "var(--color-text-secondary)" }}>{apps.length}{partial}</span>
             {broken > 0
-              ? <span className="t-status" style={{ color: byHealth("Degraded") + byHealth("Missing") > 0 ? "var(--color-text-danger)" : "var(--color-text-warning)" }}>{byHealth("Degraded") + byHealth("Missing") > 0 ? "▲ " : ""}{broken} need attention</span>
-              : <span className="t-secondary">{view.error ? "no known attention" : "none need attention"}</span>}
+              ? <span className="t-status" style={{ color: byHealth("Degraded") + byHealth("Missing") > 0 ? "var(--color-text-danger)" : "var(--color-text-warning)" }}>{byHealth("Degraded") + byHealth("Missing") > 0 ? "▲ " : ""}{broken} out of sync or unhealthy</span>
+              : <span className="t-secondary">{view.error ? "none known out of sync or unhealthy" : "all synced and healthy"}</span>}
             <span className="t-secondary">
               {[byHealth("Degraded") ? `${byHealth("Degraded")} degraded` : "", byHealth("Missing") ? `${byHealth("Missing")} missing` : "", outOfSync ? `${outOfSync} out of sync` : "", byHealth("Progressing") ? `${byHealth("Progressing")} progressing` : "", byHealth("Suspended") ? `${byHealth("Suspended")} suspended` : ""].filter(Boolean).join(" · ")}
             </span>
@@ -319,7 +325,7 @@ export function ArgoView({ cluster, mode = "applications" }: { cluster: string; 
         ) : mode === "projects" ? (
           <>
             <span className="t-number" style={{ color: "var(--color-text-secondary)" }}>{projects.length}{partial}</span>
-            <span className="t-secondary">{[riskyProjects ? `${riskyProjects} with policy risk` : "no policy risk", unusedProjects ? `${unusedProjects} unused` : ""].filter(Boolean).join(" · ")}</span>
+            <span className="t-secondary">{[riskyProjects ? `${riskyProjects} with policy risk` : "no policy risk", unusedProjects === null ? "app usage unverified (Application read unavailable)" : unusedProjects ? `${unusedProjects} unused` : ""].filter(Boolean).join(" · ")}</span>
           </>
         ) : (
           <>
@@ -327,7 +333,7 @@ export function ArgoView({ cluster, mode = "applications" }: { cluster: string; 
             {unhealthySets > 0
               ? <span className="t-status" style={{ color: "var(--color-text-warning)" }}>{unhealthySets} need attention</span>
               : <span className="t-secondary">none need attention</span>}
-            {missingSets > 0 && <span className="t-secondary">{missingSets} missing generated apps</span>}
+            {missingSets === null ? <span className="t-secondary">generated apps unverified (Application read unavailable)</span> : missingSets > 0 && <span className="t-secondary">{missingSets} missing generated apps</span>}
           </>
         )}
         headerEnd={
@@ -354,14 +360,14 @@ export function ArgoView({ cluster, mode = "applications" }: { cluster: string; 
               <>
                 <button className="l-chip" aria-pressed={projectFilter === "all"} onClick={() => setProjectFilter("all")}>All</button>
                 <button className="l-chip" aria-pressed={projectFilter === "risky"} onClick={() => setProjectFilter("risky")}>Policy risk <span style={{ color: "var(--color-text-tertiary)" }}>{riskyProjects}</span></button>
-                <button className="l-chip" aria-pressed={projectFilter === "unused"} onClick={() => setProjectFilter("unused")}>Unused <span style={{ color: "var(--color-text-tertiary)" }}>{unusedProjects}</span></button>
+                {unusedProjects !== null && <button className="l-chip" aria-pressed={projectFilter === "unused"} onClick={() => setProjectFilter("unused")}>Unused <span style={{ color: "var(--color-text-tertiary)" }}>{unusedProjects}</span></button>}
               </>
             )}
             {mode === "applicationsets" && (
               <>
                 <button className="l-chip" aria-pressed={appSetFilter === "all"} onClick={() => setAppSetFilter("all")}>All</button>
                 <button className="l-chip" aria-pressed={appSetFilter === "attention"} onClick={() => setAppSetFilter("attention")}>Attention {unhealthySets > 0 && <span style={{ color: "var(--color-text-warning)" }}>{unhealthySets}</span>}</button>
-                <button className="l-chip" aria-pressed={appSetFilter === "missing"} onClick={() => setAppSetFilter("missing")}>Missing apps <span style={{ color: "var(--color-text-tertiary)" }}>{missingSets}</span></button>
+                {missingSets !== null && <button className="l-chip" aria-pressed={appSetFilter === "missing"} onClick={() => setAppSetFilter("missing")}>Missing apps <span style={{ color: "var(--color-text-tertiary)" }}>{missingSets}</span></button>}
               </>
             )}
             <label style={{ display: "flex", flex: "0 1 260px", minWidth: 140, marginLeft: "auto" }}>
@@ -420,7 +426,7 @@ export function ArgoView({ cluster, mode = "applications" }: { cluster: string; 
                 render={(p) => {
                   const k = projectKey(p);
                   const pApps = appsForProject(apps, p.name);
-                  const risks = projectRiskBadges(p, pApps);
+                  const risks = projectRiskBadges(p, pApps, appsCov);
                   return (
                     <div key={k} role="button" tabIndex={0} className="lens-row" style={gridStyle}
                       aria-selected={k === cursorKey} data-cursor={k === cursorKey ? "true" : undefined} data-selected={k === projKey ? "true" : undefined}
@@ -429,7 +435,7 @@ export function ArgoView({ cluster, mode = "applications" }: { cluster: string; 
                       {show("lamp") && <RowLamp role={riskRole(risks)} />}
                       {show("name") && <span className="lens-cell-name" title={p.description || p.name}>{p.name}{p.description && <span style={{ color: "var(--color-text-tertiary)" }}> · {p.description}</span>}</span>}
                       {show("policy") && <span style={{ ...cell, display: "flex", gap: 4 }}>{risks.length === 0 ? <span style={{ color: "var(--color-text-tertiary)" }}>restricted</span> : risks.slice(0, 3).map((r) => <RiskBadge key={r.label} tone={r.tone}>{r.label}</RiskBadge>)}</span>}
-                      {show("apps") && <span>{pApps.length}</span>}
+                      {show("apps") && <span title={appsCov === "unknown" ? "Application read unavailable" : undefined}>{appsCov === "unknown" ? "?" : `${pApps.length}${appsCov === "stale" ? "*" : ""}`}</span>}
                       {show("appsets") && <span>{appSetsForProject(appSets, p.name).length}</span>}
                     </div>
                   );
@@ -452,7 +458,7 @@ export function ArgoView({ cluster, mode = "applications" }: { cluster: string; 
                       {show("lamp") && <RowLamp role={a.healthy ? { kind: "ok", label: "healthy" } : { kind: "degraded", label: "needs attention" }} />}
                       {show("name") && <span className="lens-cell-name" title={k}><span style={{ color: "var(--color-text-tertiary)" }}>{a.namespace} / </span>{a.name}</span>}
                       {show("generators") && <span style={{ ...cell, color: "var(--color-text-secondary)" }}>{a.generators.length === 0 ? "-" : a.generators.join(", ")}</span>}
-                      {show("apps") && <span>{a.generatedApps || generatedAppsForSet(apps, a).length || "-"}</span>}
+                      {show("apps") && <span>{a.generatedApps || (appsCov === "unknown" ? "?" : generatedAppsForSet(apps, a).length || "-")}</span>}
                       {show("source") && <span style={{ ...cell, color: "var(--color-text-tertiary)" }}>{a.repoURL ? `${a.repoURL}${a.path ? ` · ${a.path}` : ""}` : "-"}</span>}
                       {show("project") && <span style={{ ...cell, color: "var(--color-text-secondary)" }}>{a.project || "-"}</span>}
                     </div>
@@ -484,6 +490,7 @@ export function ArgoView({ cluster, mode = "applications" }: { cluster: string; 
               project={selectedProject ?? lastProject.current}
               removed={projRemoved}
               apps={appsForProject(apps, (selectedProject ?? lastProject.current).name)}
+              appsCov={appsCov}
               appSets={appSetsForProject(appSets, (selectedProject ?? lastProject.current).name)}
               onClose={() => setProjKey(null)}
             />
@@ -493,6 +500,7 @@ export function ArgoView({ cluster, mode = "applications" }: { cluster: string; 
               appSet={selectedSet ?? lastSet.current}
               removed={setRemoved}
               allApps={apps}
+              appsCov={appsCov}
               project={projectFor((selectedSet ?? lastSet.current).project)}
               onClose={() => setSetKey(null)}
             />
@@ -534,6 +542,28 @@ export function ArgoView({ cluster, mode = "applications" }: { cluster: string; 
   );
 }
 
+// Argo Application condition types carry their own severity: *Error types
+// (ComparisonError, SyncError, InvalidSpecError, UnknownError) are confirmed
+// errors; *Warning types (SharedResourceWarning, OrphanedResourceWarning ...)
+// are warnings; anything else is unclassified native evidence - never a
+// manufactured fault.
+function conditionSeverityColor(type: string): string {
+  if (/Error$/.test(type)) return "var(--color-text-danger)";
+  if (/Warning$/.test(type)) return "var(--color-text-warning)";
+  return "var(--color-text-secondary)";
+}
+
+// destinationIsThisCluster: an Application's inventory lives on its
+// destination cluster. Only the in-cluster destination (Argo's default server
+// URL or the "in-cluster" name) is the cluster this lens is reading; anything
+// else is managed elsewhere and must not open a same-named local object.
+function destinationIsThisCluster(a: ArgoAppDTO): boolean {
+  const server = a.destServer ?? "";
+  const name = a.destName ?? "";
+  if (!server && !name) return true; // older backends: no destination evidence
+  return server === "https://kubernetes.default.svc" || name === "in-cluster";
+}
+
 function RemovedNotice({ kind }: { kind: string }) {
   return (
     <div role="status" className="t-body" style={{ padding: "8px 10px", borderRadius: 4, background: "var(--color-background-secondary)", boxShadow: "inset 0 0 0 1px var(--color-border-secondary)" }}>
@@ -567,7 +597,10 @@ function ApplicationInspector({ cluster, app, removed, isProtected, project, app
   const tone = role.kind === "fault" ? "danger" : role.kind === "degraded" ? "warning" : role.kind === "ok" ? "success" : "muted";
   const live = !removed;
   const manifestRef = wellKnownResourceRef("argoproj.io", "Application");
+  const local = destinationIsThisCluster(app);
+  const destLabel = app.destName || app.destServer || "";
   const openLiveResource = (resource: ArgoResourceDTO) => {
+    if (!local) return;
     const ref = resolveArgoResourceRef(resource, crdGroups);
     if (!ref) return;
     const nav = useFleet.getState();
@@ -587,7 +620,7 @@ function ApplicationInspector({ cluster, app, removed, isProtected, project, app
         meta={
           <>
             {isProtected && <span style={{ color: "var(--color-text-warning)", fontWeight: 600 }}>protected · </span>}
-            {[`project ${app.project || "default"}`, app.destNamespace ? `→ ${app.destNamespace}` : "", app.autoSync ? "auto sync" : "manual sync"].filter(Boolean).join(" · ")}
+            {[`project ${app.project || "default"}`, app.destNamespace ? `→ ${app.destNamespace}` : "", !destinationIsThisCluster(app) ? `on ${app.destName || app.destServer}` : "", app.autoSync ? "auto sync" : "manual sync"].filter(Boolean).join(" · ")}
           </>
         }
         onClose={onClose}
@@ -595,7 +628,7 @@ function ApplicationInspector({ cluster, app, removed, isProtected, project, app
           <div>
             <InspectorStatus tone={tone} label={`${app.healthStatus || "Unknown"} · ${app.syncStatus || "Unknown"}`} reason={badResources.length > 0 ? `${badResources.length} resource${badResources.length === 1 ? " needs" : "s need"} attention` : undefined} detail={app.revision ? short(app.revision) : undefined} />
             {conditions.map((c, i) => (
-              <div key={`${c.type}/${i}`} className="t-body" style={{ color: "var(--color-text-danger)", overflowWrap: "anywhere", marginTop: -4 }}>{c.type}: {c.message || "-"}</div>
+              <div key={`${c.type}/${i}`} className="t-body" style={{ color: conditionSeverityColor(c.type), overflowWrap: "anywhere", marginTop: i === 0 ? -4 : 2 }}>{c.type}: {c.message || "-"}</div>
             ))}
             {opFailed && app.opMessage && (
               <div className="t-body" style={{ color: "var(--color-text-warning)", overflowWrap: "anywhere", marginTop: 2 }}>Last operation {app.opPhase}: {app.opMessage}</div>
@@ -607,10 +640,11 @@ function ApplicationInspector({ cluster, app, removed, isProtected, project, app
         more={more}
       >
         <InspectorBlock title="Resources" count={resources.length} extra={badResources.length > 0 ? <span className="t-secondary" style={{ color: "var(--color-text-warning)" }}>{badResources.length} need attention</span> : undefined}>
+          {!local && <div className="t-secondary" style={{ overflowWrap: "anywhere" }}>Managed on {destLabel} - these objects are not on this cluster, so they are not linked.</div>}
           {resources.length === 0 ? <span className="t-secondary">Argo has not reported resource inventory for this Application.</span> : (
             <div style={{ display: "grid", gap: 4 }}>
               {[...badResources, ...resources.filter((r) => !badResources.includes(r))].map((r) => (
-                <ArgoResourceRow key={resourceKey(r)} resource={r} resolvable={resolveArgoResourceRef(r, crdGroups) !== null} onOpen={() => openLiveResource(r)} />
+                <ArgoResourceRow key={resourceKey(r)} resource={r} resolvable={local && resolveArgoResourceRef(r, crdGroups) !== null} onOpen={() => openLiveResource(r)} />
               ))}
             </div>
           )}
@@ -644,8 +678,8 @@ function ApplicationInspector({ cluster, app, removed, isProtected, project, app
   );
 }
 
-function ProjectInspector({ project, removed, apps, appSets, onClose }: { project: ArgoProjectDTO; removed: boolean; apps: ArgoAppDTO[]; appSets: ArgoApplicationSetDTO[]; onClose: () => void }) {
-  const risks = projectRiskBadges(project, apps);
+function ProjectInspector({ project, removed, apps, appsCov, appSets, onClose }: { project: ArgoProjectDTO; removed: boolean; apps: ArgoAppDTO[]; appsCov: AppCoverage; appSets: ArgoApplicationSetDTO[]; onClose: () => void }) {
+  const risks = projectRiskBadges(project, apps, appsCov);
   const role = riskRole(risks);
   return (
     <div data-testid="argo-project-panel" style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
@@ -653,7 +687,7 @@ function ProjectInspector({ project, removed, apps, appSets, onClose }: { projec
         kind="AppProject"
         namespace={project.namespace}
         name={project.name}
-        meta={`${apps.length} app${apps.length === 1 ? "" : "s"} · ${appSets.length} ApplicationSet${appSets.length === 1 ? "" : "s"}${project.description ? ` · ${project.description}` : ""}`}
+        meta={`${appsCov === "unknown" ? "apps unverified" : `${apps.length} app${apps.length === 1 ? "" : "s"}${appsCov === "stale" ? " (last good read)" : ""}`} · ${appSets.length} ApplicationSet${appSets.length === 1 ? "" : "s"}${project.description ? ` · ${project.description}` : ""}`}
         onClose={onClose}
         verdict={removed ? <RemovedNotice kind="AppProject" /> : (
           <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 12 }}>
@@ -673,7 +707,14 @@ function ProjectInspector({ project, removed, apps, appSets, onClose }: { projec
         <InspectorSection title="Roles" collapsible defaultCollapsed>
           <ValueList values={project.roleNames ?? []} empty={project.roles > 0 ? `${project.roles} role${project.roles === 1 ? "" : "s"}` : "no project roles"} />
         </InspectorSection>
-        <InspectorSection title="Applications" count={apps.length}><LinkedApps apps={apps} /></InspectorSection>
+        <InspectorSection title="Applications" count={appsCov === "unknown" ? undefined : apps.length}>
+          {appsCov === "unknown" ? <div style={mutedLine}>Application read unavailable - links unverified, not zero.</div> : (
+            <>
+              {appsCov === "stale" && <div style={mutedLine}>From the last good Application read; the latest read failed.</div>}
+              <LinkedApps apps={apps} />
+            </>
+          )}
+        </InspectorSection>
         <InspectorSection title="ApplicationSets" count={appSets.length} collapsible defaultCollapsed>
           <ValueList values={appSets.map((a) => a.name)} empty="no ApplicationSets target this project" />
         </InspectorSection>
@@ -687,16 +728,29 @@ function ProjectInspector({ project, removed, apps, appSets, onClose }: { projec
 // ErrorOccurred is adverse when True (it carries the real error);
 // ParametersGenerated / ResourcesUpToDate are adverse when not True. Unknown
 // types make no claim. The real error leads.
+const APPSET_POLARITY: Record<string, "true-is-bad" | "false-is-bad"> = {
+  ErrorOccurred: "true-is-bad",
+  ParametersGenerated: "false-is-bad",
+  ResourcesUpToDate: "false-is-bad",
+};
 function adverseAppSetConditions(appSet: ArgoApplicationSetDTO) {
   const conds = arrayOf(appSet.conditions);
   const adverse = conds.filter((c) =>
-    (c.type === "ErrorOccurred" && c.status === "True") ||
-    ((c.type === "ParametersGenerated" || c.type === "ResourcesUpToDate") && c.status !== "True"));
+    (APPSET_POLARITY[c.type] === "true-is-bad" && c.status === "True") ||
+    (APPSET_POLARITY[c.type] === "false-is-bad" && c.status === "False"));
   return adverse.sort((a, b) => Number(b.type === "ErrorOccurred") - Number(a.type === "ErrorOccurred"));
 }
+// A known-polarity condition whose status is neither True nor False is
+// unverified evidence: shown neutrally, never as a diagnosis. (The backend's
+// health flag counts it, so an unhealthy set can carry only unverified lines.)
+function unverifiedAppSetConditions(appSet: ArgoApplicationSetDTO) {
+  return arrayOf(appSet.conditions).filter((c) => APPSET_POLARITY[c.type] && c.status !== "True" && c.status !== "False");
+}
 
-function ApplicationSetInspector({ appSet, removed, allApps, project, onClose }: { appSet: ArgoApplicationSetDTO; removed: boolean; allApps: ArgoAppDTO[]; project: ArgoProjectDTO | null; onClose: () => void }) {
+function ApplicationSetInspector({ appSet, removed, allApps, appsCov, project, onClose }: { appSet: ArgoApplicationSetDTO; removed: boolean; allApps: ArgoAppDTO[]; appsCov: AppCoverage; project: ArgoProjectDTO | null; onClose: () => void }) {
+  const known = appsCov !== "unknown";
   const adverse = adverseAppSetConditions(appSet);
+  const unverified = unverifiedAppSetConditions(appSet);
   const condition = adverse[0] ?? null;
   const generatedNames = arrayOf(appSet.generatedNames);
   const liveApps = generatedAppsForSet(allApps, appSet);
@@ -714,9 +768,16 @@ function ApplicationSetInspector({ appSet, removed, allApps, project, onClose }:
         onClose={onClose}
         verdict={removed ? <RemovedNotice kind="ApplicationSet" /> : (
           <div>
-            <InspectorStatus tone={appSet.healthy ? "success" : "warning"} label={appSet.healthy ? "Healthy" : "Needs attention"} reason={condition ? condition.reason || condition.type : undefined} />
+            <InspectorStatus
+              tone={appSet.healthy ? "success" : adverse.length > 0 ? "warning" : "muted"}
+              label={appSet.healthy ? "Healthy" : adverse.length > 0 ? "Needs attention" : "Unverified"}
+              reason={condition ? condition.reason || condition.type : undefined}
+            />
             {adverse.map((c, i) => (
               <div key={`${c.type}/${i}`} className="t-body" style={{ color: "var(--color-text-warning)", overflowWrap: "anywhere", marginTop: i === 0 ? -4 : 2 }}>{c.type}: {c.message || c.reason || c.status}</div>
+            ))}
+            {unverified.map((c, i) => (
+              <div key={`u/${c.type}/${i}`} className="t-body" style={{ color: "var(--color-text-secondary)", overflowWrap: "anywhere", marginTop: 2 }}>{c.type} is {c.status || "unreported"} (unverified){c.message ? `: ${c.message}` : ""}</div>
             ))}
           </div>
         )}
@@ -724,12 +785,16 @@ function ApplicationSetInspector({ appSet, removed, allApps, project, onClose }:
         <InspectorSection title="Generated drift">
           <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 8 }}>
             <MetricTile label="expected" value={String(expected)} tone={expected === 0 ? "warning" : undefined} />
-            <MetricTile label="actual" value={String(liveApps.length)} tone={liveApps.length < expected ? "warning" : undefined} />
-            <MetricTile label="missing" value={String(missing.length)} tone={missing.length > 0 ? "warning" : undefined} />
+            <MetricTile label="actual" value={known ? String(liveApps.length) : "?"} tone={known && liveApps.length < expected ? "warning" : undefined} />
+            <MetricTile label="missing" value={known ? String(missing.length) : "?"} tone={known && missing.length > 0 ? "warning" : undefined} />
           </div>
-          {missing.length > 0 && <ValueList values={missing} empty="no missing generated Applications" />}
+          {!known && <div style={mutedLine}>Application read unavailable - actual and missing are unverified, not zero.</div>}
+          {appsCov === "stale" && <div style={mutedLine}>Actual and missing come from the last good Application read; the latest read failed.</div>}
+          {known && missing.length > 0 && <ValueList values={missing} empty="no missing generated Applications" />}
         </InspectorSection>
-        <InspectorSection title="Live application state" count={liveApps.length}><LinkedApps apps={liveApps} /></InspectorSection>
+        <InspectorSection title="Live application state" count={known ? liveApps.length : undefined}>
+          {known ? <LinkedApps apps={liveApps} /> : <div style={mutedLine}>Application read unavailable.</div>}
+        </InspectorSection>
         <InspectorSection title="Template" collapsible defaultCollapsed>
           <MetaLine label="name" value={appSet.templateName || "-"} />
           <MetaLine label="project" value={appSet.project || "-"} tone={project ? undefined : "warning"} />
@@ -851,11 +916,17 @@ function matchesAppSetQuery(appSet: ArgoApplicationSetDTO, query: string): boole
   return matchesText([appSet.namespace, appSet.name, appSet.project, appSet.repoURL, appSet.path, appSet.destNamespace, appSet.destServer, ...arrayOf(appSet.generators), ...arrayOf(appSet.generatedNames)], query);
 }
 
-function projectRiskScore(p: ArgoProjectDTO, apps: ArgoAppDTO[]): number {
-  return projectRiskBadges(p, apps).reduce((sum, r) => sum + (r.tone === "danger" ? 4 : r.tone === "warning" ? 2 : 1), 0);
+function projectRiskScore(p: ArgoProjectDTO, apps: ArgoAppDTO[], appsCov: AppCoverage = "complete"): number {
+  return projectRiskBadges(p, apps, appsCov).reduce((sum, r) => sum + (r.tone === "danger" ? 4 : r.tone === "warning" ? 2 : 1), 0);
 }
 
-function projectRiskBadges(p: ArgoProjectDTO, apps: ArgoAppDTO[]): Risk[] {
+// Application coverage for cross-kind joins: a project's "unused" or an
+// ApplicationSet's "missing generated apps" are conclusions about the
+// Application read, so they need that read to have succeeded. "stale" = the
+// last good read is retained after a failure; "unknown" = no successful read.
+type AppCoverage = "complete" | "stale" | "unknown";
+
+function projectRiskBadges(p: ArgoProjectDTO, apps: ArgoAppDTO[], appsCov: AppCoverage = "complete"): Risk[] {
   const risks: Risk[] = [];
   const repos = arrayOf(p.sourceRepos);
   const destinations = arrayOf(p.destinations);
@@ -865,8 +936,8 @@ function projectRiskBadges(p: ArgoProjectDTO, apps: ArgoAppDTO[]): Risk[] {
   if (destinations.some(hasWildcard)) risks.push({ label: "all destinations", tone: "danger" });
   if (arrayOf(p.clusterResourceWhitelist).some(ruleWildcard)) risks.push({ label: "cluster wildcard", tone: "danger" });
   if (arrayOf(p.namespaceResourceWhitelist).some(ruleWildcard)) risks.push({ label: "namespace wildcard", tone: "warning" });
-  if (!p.orphanWarn && apps.length > 0) risks.push({ label: "orphan warn off", tone: "warning" });
-  if (apps.length === 0) risks.push({ label: "unused", tone: "muted" });
+  if (appsCov !== "unknown" && !p.orphanWarn && apps.length > 0) risks.push({ label: "orphan warn off", tone: "warning" });
+  if (appsCov !== "unknown" && apps.length === 0) risks.push({ label: "unused", tone: "muted" });
   return risks;
 }
 

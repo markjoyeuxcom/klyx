@@ -130,6 +130,8 @@ export type ArgoAppDTO = {
   syncStatus: string; healthStatus: string; broken: boolean;
   revision: string; repoURL: string; path: string; chart: string; targetRevision: string;
   extraSources: number; destNamespace: string; applicationSet?: string; autoSync: boolean;
+  // which cluster the resources live on: server URL or cluster-secret name
+  destServer?: string; destName?: string;
   opPhase: string; opMessage: string;
   conditions: ArgoConditionDTO[]; resources?: ArgoResourceDTO[]; reconciledUnix: number;
 };

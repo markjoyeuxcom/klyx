@@ -66,3 +66,27 @@ describe("Argo bridge fences (redesign step 4b)", () => {
     expect(useFleet.getState().argo.error).toMatch(/timeout/);
   });
 });
+
+describe("Argo action completions are scoped to their cluster (Codex rework #2)", () => {
+  it("a late refresh/sync completion for A never re-lists or relabels B", async () => {
+    const { ArgoService } = await import("../../bindings/github.com/moomora/klyx/internal/appbridge/index.js");
+    const pending: Deferred<unknown>[] = [];
+    (ArgoService as unknown as Record<string, unknown>).RefreshApp = vi.fn(() => { const d = deferred<unknown>(); pending.push(d); return d.promise; });
+    (ArgoService as unknown as Record<string, unknown>).SyncApp = vi.fn(() => { const d = deferred<unknown>(); pending.push(d); return d.promise; });
+    const { refreshArgoApp, syncArgoApp } = await import("./argo");
+    const r = refreshArgoApp("A", "argocd", "same-name");
+    const s = syncArgoApp("A", "argocd", "same-name", { revision: "", strategy: "hook", prune: false, dryRun: false, force: false, replace: false, serverSideApply: false, resources: [] });
+    // the operator moved to B, which loaded its own same-named app
+    void listArgoApps("B");
+    calls[calls.length - 1].resolve({ available: true, apps: [app("same-name")] });
+    await Promise.resolve(); await Promise.resolve();
+    const listsBefore = vi.mocked(ArgoService.ListApplications).mock.calls.length;
+    pending[0].resolve({ ok: true, error: "" });
+    pending[1].resolve({ ok: true, error: "" });
+    await r; await s;
+    expect(useFleet.getState().argo.cluster).toBe("B");
+    expect(useFleet.getState().argo.apps.map((a) => a.name)).toEqual(["same-name"]);
+    expect(vi.mocked(ArgoService.ListApplications).mock.calls.length).toBe(listsBefore); // no re-list of A
+    expect(useFleet.getState().actionStatus?.message).toMatch(/on A$/);
+  });
+});

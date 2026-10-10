@@ -62,14 +62,21 @@ export async function listArgoApplicationSets(cluster: string): Promise<void> {
 }
 
 // refreshArgoApp triggers a re-compare against the source (Argo's reconcile).
+// A completion belongs to the cluster it was raised on: the status names that
+// cluster, and the follow-up re-list runs only while the lens still shows it -
+// a late completion must never relabel or empty another cluster's state.
+function relistIfCurrent(cluster: string) {
+  if (useFleet.getState().argo.cluster === cluster) void listArgoApps(cluster);
+}
+
 export async function refreshArgoApp(cluster: string, namespace: string, name: string): Promise<void> {
   const r = (await ArgoService.RefreshApp(cluster, namespace, name)) as ActionResultDTO;
   useFleet.getState().setActionStatus(
     r.ok
-      ? { kind: "success", message: `refresh requested for ${name}` }
-      : { kind: "error", message: r.error || "Refresh failed" },
+      ? { kind: "success", message: `refresh requested for ${namespace}/${name} on ${cluster}` }
+      : { kind: "error", message: `${cluster}: ${r.error || "Refresh failed"}` },
   );
-  if (r.ok) void listArgoApps(cluster);
+  if (r.ok) relistIfCurrent(cluster);
 }
 
 // syncArgoApp starts an Argo sync operation with the options selected in the
@@ -78,8 +85,8 @@ export async function syncArgoApp(cluster: string, namespace: string, name: stri
   const r = (await ArgoService.SyncApp(cluster, namespace, name, options)) as ActionResultDTO;
   useFleet.getState().setActionStatus(
     r.ok
-      ? { kind: "success", message: `sync started for ${name}` }
-      : { kind: "error", message: r.error || "Sync failed" },
+      ? { kind: "success", message: `sync started for ${namespace}/${name} on ${cluster}` }
+      : { kind: "error", message: `${cluster}: ${r.error || "Sync failed"}` },
   );
-  if (r.ok) void listArgoApps(cluster);
+  if (r.ok) relistIfCurrent(cluster);
 }

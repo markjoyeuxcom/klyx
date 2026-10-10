@@ -51,6 +51,7 @@ type App struct {
 	ExtraSources   int // multi-source apps: number of sources beyond the first
 	DestNamespace  string
 	DestServer     string
+	DestName       string // spec.destination.name (cluster secret name), the alternative to server
 	ApplicationSet string
 	AutoSync       bool // spec.syncPolicy.automated present
 	AutoPrune      bool // spec.syncPolicy.automated.prune: auto-deletes out-of-band objects
@@ -172,6 +173,7 @@ func Parse(u *unstructured.Unstructured) App {
 
 	a.DestNamespace, _, _ = unstructured.NestedString(u.Object, "spec", "destination", "namespace")
 	a.DestServer, _, _ = unstructured.NestedString(u.Object, "spec", "destination", "server")
+	a.DestName, _, _ = unstructured.NestedString(u.Object, "spec", "destination", "name")
 	for _, owner := range u.GetOwnerReferences() {
 		if owner.Kind == "ApplicationSet" && owner.Name != "" {
 			a.ApplicationSet = owner.Name

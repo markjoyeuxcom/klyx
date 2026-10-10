@@ -305,3 +305,14 @@ func TestPatches(t *testing.T) {
 		t.Fatal("empty revision must default to HEAD")
 	}
 }
+
+func TestParseDestinationServerAndName(t *testing.T) {
+	byServer := Parse(app(map[string]interface{}{"destination": map[string]interface{}{"namespace": "a", "server": "https://kubernetes.default.svc"}}, map[string]interface{}{}))
+	if byServer.DestServer != "https://kubernetes.default.svc" || byServer.DestName != "" {
+		t.Fatalf("server destination: %+v", byServer)
+	}
+	byName := Parse(app(map[string]interface{}{"destination": map[string]interface{}{"namespace": "a", "name": "prd-weu"}}, map[string]interface{}{}))
+	if byName.DestName != "prd-weu" || byName.DestServer != "" {
+		t.Fatalf("name destination: %+v", byName)
+	}
+}
