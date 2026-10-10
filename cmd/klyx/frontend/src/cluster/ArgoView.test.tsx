@@ -175,7 +175,8 @@ describe("ArgoView", () => {
           destNamespace: "apps",
           generatedApps: 3,
           healthy: false,
-          conditions: [{ type: "ErrorOccurred", status: "False", reason: "RenderError", message: "bad template" }],
+          // ErrorOccurred is adverse when True (Argo's polarity)
+          conditions: [{ type: "ErrorOccurred", status: "True", reason: "RenderError", message: "bad template" }],
         }],
         applicationSetsAvailable: true,
         applicationSetsLoading: false,
@@ -414,5 +415,24 @@ describe("ArgoView workspace template (redesign step 4b)", () => {
     expect(screen.getByRole("dialog", { name: /Sync Application console-dev/ })).toBeTruthy();
     expect((getByRole("searchbox", { name: "Search Argo CD" }) as HTMLInputElement).value).toBe("");
     expect(inspector().getByRole("heading", { name: "console-dev" })).toBeTruthy();
+  });
+});
+
+describe("ArgoView ApplicationSet condition polarity (live pass)", () => {
+  it("ErrorOccurred=True is the headline error; ResourcesUpToDate=False follows; unknown types make no claim", () => {
+    useFleet.getState().clearArgo();
+    useFleet.setState((s) => ({ argo: { ...s.argo, cluster: "homelab-nelli", applicationSetsAvailable: true, applicationSetsLoading: false,
+      applicationSets: [{ namespace: "argocd", name: "tenant-apps", generators: ["list"], templateName: "", project: "platform", repoURL: "", path: "", targetRevision: "main", destNamespace: "", generatedApps: 0, healthy: false,
+        conditions: [
+          { type: "ResourcesUpToDate", status: "False", reason: "ApplicationGenerationFromParamsError", message: "generation failed" },
+          { type: "ErrorOccurred", status: "True", reason: "ApplicationGenerationFromParamsError", message: "function tenant not defined" },
+          { type: "SomethingNew", status: "False", reason: "X", message: "unknown polarity" },
+        ] }] } }));
+    render(<ArgoView cluster="homelab-nelli" mode="applicationsets" />);
+    select("tenant-apps");
+    const lines = inspector().getAllByText(/^(ErrorOccurred|ResourcesUpToDate|SomethingNew):/).map((e) => e.textContent);
+    expect(lines[0]).toBe("ErrorOccurred: function tenant not defined");
+    expect(lines).toContain("ResourcesUpToDate: generation failed");
+    expect(lines.some((l) => l?.startsWith("SomethingNew"))).toBe(false);
   });
 });

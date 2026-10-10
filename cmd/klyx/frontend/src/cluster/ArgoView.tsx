@@ -81,8 +81,10 @@ const ROLE_COLOR: Record<string, string> = {
   unknown: "var(--color-text-tertiary)",
 };
 
+// A project's policy risk is governance evidence, not a running fault: it
+// may warn (amber) but never glows as an outage or carries the fault ▲.
 function riskRole(risks: Risk[]): { kind: string; label: string } {
-  if (risks.some((r) => r.tone === "danger")) return { kind: "fault", label: "risky policy" };
+  if (risks.some((r) => r.tone === "danger")) return { kind: "degraded", label: "risky policy" };
   if (risks.some((r) => r.tone === "warning")) return { kind: "degraded", label: "policy warning" };
   return { kind: "ok", label: "restricted" };
 }
@@ -591,7 +593,7 @@ function ApplicationInspector({ cluster, app, removed, isProtected, project, app
         onClose={onClose}
         verdict={removed ? <RemovedNotice kind="Application" /> : (
           <div>
-            <InspectorStatus tone={tone} label={`${app.healthStatus || "Unknown"} · ${app.syncStatus || "Unknown"}`} reason={badResources.length > 0 ? `${badResources.length} resource${badResources.length === 1 ? "" : "s"} need attention` : undefined} detail={app.revision ? short(app.revision) : undefined} />
+            <InspectorStatus tone={tone} label={`${app.healthStatus || "Unknown"} · ${app.syncStatus || "Unknown"}`} reason={badResources.length > 0 ? `${badResources.length} resource${badResources.length === 1 ? " needs" : "s need"} attention` : undefined} detail={app.revision ? short(app.revision) : undefined} />
             {conditions.map((c, i) => (
               <div key={`${c.type}/${i}`} className="t-body" style={{ color: "var(--color-text-danger)", overflowWrap: "anywhere", marginTop: -4 }}>{c.type}: {c.message || "-"}</div>
             ))}
@@ -629,7 +631,8 @@ function ApplicationInspector({ cluster, app, removed, isProtected, project, app
             <span>appset</span><span className="t-identifier">{appSet ? appSet.name : "-"}</span>
           </div>
         </InspectorBlock>
-        <InspectorBlock title="Operation" defaultOpen={opFailed}>
+        {/* collapsed: a failed operation's message already reads in the verdict */}
+        <InspectorBlock title="Operation" defaultOpen={false}>
           <div className="insp-kv">
             <span>last</span><span style={{ color: opFailed ? "var(--color-text-warning)" : undefined }}>{app.opPhase || "-"}</span>
             <span>message</span><span style={{ overflowWrap: "anywhere" }}>{app.opMessage || "-"}</span>
@@ -654,7 +657,7 @@ function ProjectInspector({ project, removed, apps, appSets, onClose }: { projec
         onClose={onClose}
         verdict={removed ? <RemovedNotice kind="AppProject" /> : (
           <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 12 }}>
-            <InspectorStatus tone={role.kind === "fault" ? "danger" : role.kind === "degraded" ? "warning" : "success"} label={role.label} />
+            <InspectorStatus tone={role.kind === "degraded" ? "warning" : "success"} label={role.label} />
             {risks.length > 0 && <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>{risks.map((r) => <RiskBadge key={r.label} tone={r.tone}>{r.label}</RiskBadge>)}</div>}
           </div>
         )}
@@ -679,8 +682,22 @@ function ProjectInspector({ project, removed, apps, appSets, onClose }: { projec
   );
 }
 
+// adverseAppSetConditions applies each ApplicationSet condition's known
+// polarity, matching the backend's appSetConditionBroken (internal/gitops/argo):
+// ErrorOccurred is adverse when True (it carries the real error);
+// ParametersGenerated / ResourcesUpToDate are adverse when not True. Unknown
+// types make no claim. The real error leads.
+function adverseAppSetConditions(appSet: ArgoApplicationSetDTO) {
+  const conds = arrayOf(appSet.conditions);
+  const adverse = conds.filter((c) =>
+    (c.type === "ErrorOccurred" && c.status === "True") ||
+    ((c.type === "ParametersGenerated" || c.type === "ResourcesUpToDate") && c.status !== "True"));
+  return adverse.sort((a, b) => Number(b.type === "ErrorOccurred") - Number(a.type === "ErrorOccurred"));
+}
+
 function ApplicationSetInspector({ appSet, removed, allApps, project, onClose }: { appSet: ArgoApplicationSetDTO; removed: boolean; allApps: ArgoAppDTO[]; project: ArgoProjectDTO | null; onClose: () => void }) {
-  const condition = arrayOf(appSet.conditions).find((c) => c.status !== "True") ?? null;
+  const adverse = adverseAppSetConditions(appSet);
+  const condition = adverse[0] ?? null;
   const generatedNames = arrayOf(appSet.generatedNames);
   const liveApps = generatedAppsForSet(allApps, appSet);
   const missing = missingGeneratedNames(appSet, allApps);
@@ -698,7 +715,9 @@ function ApplicationSetInspector({ appSet, removed, allApps, project, onClose }:
         verdict={removed ? <RemovedNotice kind="ApplicationSet" /> : (
           <div>
             <InspectorStatus tone={appSet.healthy ? "success" : "warning"} label={appSet.healthy ? "Healthy" : "Needs attention"} reason={condition ? condition.reason || condition.type : undefined} />
-            {condition && <div className="t-body" style={{ color: "var(--color-text-warning)", overflowWrap: "anywhere", marginTop: -4 }}>{condition.type}: {condition.message || condition.reason || condition.status}</div>}
+            {adverse.map((c, i) => (
+              <div key={`${c.type}/${i}`} className="t-body" style={{ color: "var(--color-text-warning)", overflowWrap: "anywhere", marginTop: i === 0 ? -4 : 2 }}>{c.type}: {c.message || c.reason || c.status}</div>
+            ))}
           </div>
         )}
       >
