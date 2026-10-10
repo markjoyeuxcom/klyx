@@ -155,10 +155,9 @@ export function ArgoView({ cluster, mode = "applications" }: { cluster: string; 
   }, [cluster, mode]);
 
   const mine = argo.cluster === cluster;
-  const appsCov: AppCoverage = !mine ? "unknown"
-    : argo.error ? (argo.apps.length > 0 ? "stale" : "unknown")
-    : argo.loading && argo.apps.length === 0 ? "unknown"
-    : "complete";
+  const appsCov = coverageOf(mine, argo.loading, argo.error, argo.apps.length);
+  const projectsCov = coverageOf(mine, argo.projectsLoading, argo.projectsError, argo.projects.length);
+  const appSetsCov = coverageOf(mine, argo.applicationSetsLoading, argo.applicationSetsError, argo.applicationSets.length);
   const apps = useMemo(() => (mine ? argo.apps : []), [mine, argo.apps]);
   const projects = useMemo(() => (mine ? argo.projects : []), [mine, argo.projects]);
   const appSets = useMemo(() => (mine ? argo.applicationSets : []), [mine, argo.applicationSets]);
@@ -317,7 +316,8 @@ export function ArgoView({ cluster, mode = "applications" }: { cluster: string; 
             <span className="t-number" style={{ color: "var(--color-text-secondary)" }}>{apps.length}{partial}</span>
             {broken > 0
               ? <span className="t-status" style={{ color: byHealth("Degraded") + byHealth("Missing") > 0 ? "var(--color-text-danger)" : "var(--color-text-warning)" }}>{byHealth("Degraded") + byHealth("Missing") > 0 ? "▲ " : ""}{broken} out of sync or unhealthy</span>
-              : <span className="t-secondary">{view.error ? "none known out of sync or unhealthy" : "all synced and healthy"}</span>}
+              : apps.length === 0 ? null
+              : <span className="t-secondary">{view.error ? "none known out of sync or unhealthy" : "none out of sync or unhealthy reported"}</span>}
             <span className="t-secondary">
               {[byHealth("Degraded") ? `${byHealth("Degraded")} degraded` : "", byHealth("Missing") ? `${byHealth("Missing")} missing` : "", outOfSync ? `${outOfSync} out of sync` : "", byHealth("Progressing") ? `${byHealth("Progressing")} progressing` : "", byHealth("Suspended") ? `${byHealth("Suspended")} suspended` : ""].filter(Boolean).join(" · ")}
             </span>
@@ -325,7 +325,7 @@ export function ArgoView({ cluster, mode = "applications" }: { cluster: string; 
         ) : mode === "projects" ? (
           <>
             <span className="t-number" style={{ color: "var(--color-text-secondary)" }}>{projects.length}{partial}</span>
-            <span className="t-secondary">{[riskyProjects ? `${riskyProjects} with policy risk` : "no policy risk", unusedProjects === null ? "app usage unverified (Application read unavailable)" : unusedProjects ? `${unusedProjects} unused` : ""].filter(Boolean).join(" · ")}</span>
+            <span className="t-secondary">{[riskyProjects ? `${riskyProjects} with policy risk` : "no policy risk", unusedProjects === null ? "app usage unverified (Application read unavailable)" : unusedProjects ? `${unusedProjects} unused${appsCov === "stale" ? " (last good Application read)" : ""}` : ""].filter(Boolean).join(" · ")}</span>
           </>
         ) : (
           <>
@@ -333,7 +333,7 @@ export function ArgoView({ cluster, mode = "applications" }: { cluster: string; 
             {unhealthySets > 0
               ? <span className="t-status" style={{ color: "var(--color-text-warning)" }}>{unhealthySets} need attention</span>
               : <span className="t-secondary">none need attention</span>}
-            {missingSets === null ? <span className="t-secondary">generated apps unverified (Application read unavailable)</span> : missingSets > 0 && <span className="t-secondary">{missingSets} missing generated apps</span>}
+            {missingSets === null ? <span className="t-secondary">generated apps unverified (Application read unavailable)</span> : missingSets > 0 && <span className="t-secondary">{missingSets} missing generated apps{appsCov === "stale" ? " (last good Application read)" : ""}</span>}
           </>
         )}
         headerEnd={
@@ -360,14 +360,14 @@ export function ArgoView({ cluster, mode = "applications" }: { cluster: string; 
               <>
                 <button className="l-chip" aria-pressed={projectFilter === "all"} onClick={() => setProjectFilter("all")}>All</button>
                 <button className="l-chip" aria-pressed={projectFilter === "risky"} onClick={() => setProjectFilter("risky")}>Policy risk <span style={{ color: "var(--color-text-tertiary)" }}>{riskyProjects}</span></button>
-                {unusedProjects !== null && <button className="l-chip" aria-pressed={projectFilter === "unused"} onClick={() => setProjectFilter("unused")}>Unused <span style={{ color: "var(--color-text-tertiary)" }}>{unusedProjects}</span></button>}
+                {unusedProjects !== null && <button className="l-chip" aria-pressed={projectFilter === "unused"} onClick={() => setProjectFilter("unused")} title={appsCov === "stale" ? "from the last good Application read" : undefined}>Unused <span style={{ color: "var(--color-text-tertiary)" }}>{countText(unusedProjects, appsCov)}</span></button>}
               </>
             )}
             {mode === "applicationsets" && (
               <>
                 <button className="l-chip" aria-pressed={appSetFilter === "all"} onClick={() => setAppSetFilter("all")}>All</button>
                 <button className="l-chip" aria-pressed={appSetFilter === "attention"} onClick={() => setAppSetFilter("attention")}>Attention {unhealthySets > 0 && <span style={{ color: "var(--color-text-warning)" }}>{unhealthySets}</span>}</button>
-                {missingSets !== null && <button className="l-chip" aria-pressed={appSetFilter === "missing"} onClick={() => setAppSetFilter("missing")}>Missing apps <span style={{ color: "var(--color-text-tertiary)" }}>{missingSets}</span></button>}
+                {missingSets !== null && <button className="l-chip" aria-pressed={appSetFilter === "missing"} onClick={() => setAppSetFilter("missing")} title={appsCov === "stale" ? "from the last good Application read" : undefined}>Missing apps <span style={{ color: "var(--color-text-tertiary)" }}>{countText(missingSets, appsCov)}</span></button>}
               </>
             )}
             <label style={{ display: "flex", flex: "0 1 260px", minWidth: 140, marginLeft: "auto" }}>
@@ -435,8 +435,8 @@ export function ArgoView({ cluster, mode = "applications" }: { cluster: string; 
                       {show("lamp") && <RowLamp role={riskRole(risks)} />}
                       {show("name") && <span className="lens-cell-name" title={p.description || p.name}>{p.name}{p.description && <span style={{ color: "var(--color-text-tertiary)" }}> · {p.description}</span>}</span>}
                       {show("policy") && <span style={{ ...cell, display: "flex", gap: 4 }}>{risks.length === 0 ? <span style={{ color: "var(--color-text-tertiary)" }}>restricted</span> : risks.slice(0, 3).map((r) => <RiskBadge key={r.label} tone={r.tone}>{r.label}</RiskBadge>)}</span>}
-                      {show("apps") && <span title={appsCov === "unknown" ? "Application read unavailable" : undefined}>{appsCov === "unknown" ? "?" : `${pApps.length}${appsCov === "stale" ? "*" : ""}`}</span>}
-                      {show("appsets") && <span>{appSetsForProject(appSets, p.name).length}</span>}
+                      {show("apps") && <span title={appsCov === "unknown" ? "Application read unavailable" : undefined}>{countText(pApps.length, appsCov)}</span>}
+                      {show("appsets") && <span title={appSetsCov === "unknown" ? "ApplicationSet read unavailable" : appSetsCov === "stale" ? "from the last good ApplicationSet read" : undefined}>{countText(appSetsForProject(appSets, p.name).length, appSetsCov)}</span>}
                     </div>
                   );
                 }}
@@ -479,7 +479,9 @@ export function ArgoView({ cluster, mode = "applications" }: { cluster: string; 
               removed={appRemoved}
               isProtected={isProtected}
               project={projectFor((selectedApp ?? lastApp.current).project)}
+              projectsCov={projectsCov}
               appSet={applicationSetForApp(appSets, selectedApp ?? lastApp.current)}
+              appSetsCov={appSetsCov}
               onClose={() => { autoSelect.current = "done"; setAppKey(null); }}
               onRefresh={(a) => setPinned({ verb: "refresh", app: a })}
               onSync={(a) => setPinned({ verb: "sync", app: a })}
@@ -492,6 +494,7 @@ export function ArgoView({ cluster, mode = "applications" }: { cluster: string; 
               apps={appsForProject(apps, (selectedProject ?? lastProject.current).name)}
               appsCov={appsCov}
               appSets={appSetsForProject(appSets, (selectedProject ?? lastProject.current).name)}
+              appSetsCov={appSetsCov}
               onClose={() => setProjKey(null)}
             />
           ) : mode === "applicationsets" && setKey && (selectedSet || setRemoved) && lastSet.current ? (
@@ -553,15 +556,20 @@ function conditionSeverityColor(type: string): string {
   return "var(--color-text-secondary)";
 }
 
-// destinationIsThisCluster: an Application's inventory lives on its
-// destination cluster. Only the in-cluster destination (Argo's default server
-// URL or the "in-cluster" name) is the cluster this lens is reading; anything
-// else is managed elsewhere and must not open a same-named local object.
-function destinationIsThisCluster(a: ArgoAppDTO): boolean {
+// destinationOf: an Application's inventory lives on its destination
+// cluster. Only affirmative in-cluster evidence (Argo's default server URL
+// and/or the "in-cluster" name, not contradicting each other) makes it this
+// cluster. No evidence, or contradicting evidence, is unverified - fail closed:
+// never open a same-named control-plane object as the managed one.
+const IN_CLUSTER_SERVER = "https://kubernetes.default.svc";
+function destinationOf(a: ArgoAppDTO): "local" | "remote" | "unverified" {
   const server = a.destServer ?? "";
   const name = a.destName ?? "";
-  if (!server && !name) return true; // older backends: no destination evidence
-  return server === "https://kubernetes.default.svc" || name === "in-cluster";
+  if (!server && !name) return "unverified";
+  const serverLocal = server ? server === IN_CLUSTER_SERVER : null;
+  const nameLocal = name ? name === "in-cluster" : null;
+  if (serverLocal !== null && nameLocal !== null && serverLocal !== nameLocal) return "unverified";
+  return (serverLocal ?? nameLocal) ? "local" : "remote";
 }
 
 function RemovedNotice({ kind }: { kind: string }) {
@@ -577,13 +585,15 @@ function RemovedNotice({ kind }: { kind: string }) {
 // with prune off by default), More = View manifest; then source, destination,
 // operation, conditions, and the live resource inventory (each resolvable
 // resource opens in Resources).
-function ApplicationInspector({ cluster, app, removed, isProtected, project, appSet, onClose, onRefresh, onSync }: {
+function ApplicationInspector({ cluster, app, removed, isProtected, project, projectsCov, appSet, appSetsCov, onClose, onRefresh, onSync }: {
   cluster: string;
   app: ArgoAppDTO;
   removed: boolean;
   isProtected: boolean;
   project: ArgoProjectDTO | null;
+  projectsCov: AppCoverage;
   appSet: ArgoApplicationSetDTO | null;
+  appSetsCov: AppCoverage;
   onClose: () => void;
   onRefresh: (a: ArgoAppDTO) => void;
   onSync: (a: ArgoAppDTO) => void;
@@ -597,8 +607,9 @@ function ApplicationInspector({ cluster, app, removed, isProtected, project, app
   const tone = role.kind === "fault" ? "danger" : role.kind === "degraded" ? "warning" : role.kind === "ok" ? "success" : "muted";
   const live = !removed;
   const manifestRef = wellKnownResourceRef("argoproj.io", "Application");
-  const local = destinationIsThisCluster(app);
-  const destLabel = app.destName || app.destServer || "";
+  const dest = destinationOf(app);
+  const local = dest === "local";
+  const destLabel = [app.destName, app.destServer].filter(Boolean).join(" / ");
   const openLiveResource = (resource: ArgoResourceDTO) => {
     if (!local) return;
     const ref = resolveArgoResourceRef(resource, crdGroups);
@@ -620,7 +631,7 @@ function ApplicationInspector({ cluster, app, removed, isProtected, project, app
         meta={
           <>
             {isProtected && <span style={{ color: "var(--color-text-warning)", fontWeight: 600 }}>protected · </span>}
-            {[`project ${app.project || "default"}`, app.destNamespace ? `→ ${app.destNamespace}` : "", !destinationIsThisCluster(app) ? `on ${app.destName || app.destServer}` : "", app.autoSync ? "auto sync" : "manual sync"].filter(Boolean).join(" · ")}
+            {[`project ${app.project || "default"}`, app.destNamespace ? `→ ${app.destNamespace}` : "", dest === "remote" ? `on ${destLabel}` : dest === "unverified" ? "destination unverified" : "", app.autoSync ? "auto sync" : "manual sync"].filter(Boolean).join(" · ")}
           </>
         }
         onClose={onClose}
@@ -640,7 +651,8 @@ function ApplicationInspector({ cluster, app, removed, isProtected, project, app
         more={more}
       >
         <InspectorBlock title="Resources" count={resources.length} extra={badResources.length > 0 ? <span className="t-secondary" style={{ color: "var(--color-text-warning)" }}>{badResources.length} need attention</span> : undefined}>
-          {!local && <div className="t-secondary" style={{ overflowWrap: "anywhere" }}>Managed on {destLabel} - these objects are not on this cluster, so they are not linked.</div>}
+          {dest === "remote" && <div className="t-secondary" style={{ overflowWrap: "anywhere" }}>Managed on {destLabel} - these objects are not on this cluster, so they are not linked.</div>}
+          {dest === "unverified" && <div className="t-secondary" style={{ overflowWrap: "anywhere" }}>Destination unverified{destLabel ? ` (${destLabel} - conflicting server and name)` : " (no destination server or name reported)"} - objects are not linked.</div>}
           {resources.length === 0 ? <span className="t-secondary">Argo has not reported resource inventory for this Application.</span> : (
             <div style={{ display: "grid", gap: 4 }}>
               {[...badResources, ...resources.filter((r) => !badResources.includes(r))].map((r) => (
@@ -661,8 +673,14 @@ function ApplicationInspector({ cluster, app, removed, isProtected, project, app
         <InspectorBlock title="Destination">
           <div className="insp-kv">
             <span>namespace</span><span className="t-identifier">{app.destNamespace || "-"}</span>
-            <span>project</span><span className="t-identifier" style={{ color: project ? undefined : "var(--color-text-warning)" }}>{app.project || "default"}{project ? "" : " (not loaded)"}</span>
-            <span>appset</span><span className="t-identifier">{appSet ? appSet.name : "-"}</span>
+            <span>project</span><span className="t-identifier" style={{ color: project || projectsCov === "unknown" ? undefined : "var(--color-text-warning)" }}>
+              {app.project || "default"}{projectsCov === "unknown" ? " (project read unavailable - unverified)" : project ? (projectsCov === "stale" ? " (last good read)" : "") : " (not found in the project read)"}
+            </span>
+            <span>appset</span><span className="t-identifier">
+              {/* the Application's own owner record is authoritative; a name
+                  join against the ApplicationSet list needs that list */}
+              {app.applicationSet ? app.applicationSet : appSetsCov === "unknown" ? "unverified (ApplicationSet read unavailable)" : appSet ? `${appSet.name}${appSetsCov === "stale" ? " (last good read)" : ""}` : "-"}
+            </span>
           </div>
         </InspectorBlock>
         {/* collapsed: a failed operation's message already reads in the verdict */}
@@ -678,7 +696,7 @@ function ApplicationInspector({ cluster, app, removed, isProtected, project, app
   );
 }
 
-function ProjectInspector({ project, removed, apps, appsCov, appSets, onClose }: { project: ArgoProjectDTO; removed: boolean; apps: ArgoAppDTO[]; appsCov: AppCoverage; appSets: ArgoApplicationSetDTO[]; onClose: () => void }) {
+function ProjectInspector({ project, removed, apps, appsCov, appSets, appSetsCov, onClose }: { project: ArgoProjectDTO; removed: boolean; apps: ArgoAppDTO[]; appsCov: AppCoverage; appSets: ArgoApplicationSetDTO[]; appSetsCov: AppCoverage; onClose: () => void }) {
   const risks = projectRiskBadges(project, apps, appsCov);
   const role = riskRole(risks);
   return (
@@ -687,7 +705,7 @@ function ProjectInspector({ project, removed, apps, appsCov, appSets, onClose }:
         kind="AppProject"
         namespace={project.namespace}
         name={project.name}
-        meta={`${appsCov === "unknown" ? "apps unverified" : `${apps.length} app${apps.length === 1 ? "" : "s"}${appsCov === "stale" ? " (last good read)" : ""}`} · ${appSets.length} ApplicationSet${appSets.length === 1 ? "" : "s"}${project.description ? ` · ${project.description}` : ""}`}
+        meta={`${appsCov === "unknown" ? "apps unverified" : `${apps.length} app${apps.length === 1 ? "" : "s"}${appsCov === "stale" ? " (last good read)" : ""}`} · ${appSetsCov === "unknown" ? "ApplicationSets unverified" : `${appSets.length} ApplicationSet${appSets.length === 1 ? "" : "s"}${appSetsCov === "stale" ? " (last good read)" : ""}`}${project.description ? ` · ${project.description}` : ""}`}
         onClose={onClose}
         verdict={removed ? <RemovedNotice kind="AppProject" /> : (
           <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 12 }}>
@@ -715,8 +733,13 @@ function ProjectInspector({ project, removed, apps, appsCov, appSets, onClose }:
             </>
           )}
         </InspectorSection>
-        <InspectorSection title="ApplicationSets" count={appSets.length} collapsible defaultCollapsed>
-          <ValueList values={appSets.map((a) => a.name)} empty="no ApplicationSets target this project" />
+        <InspectorSection title="ApplicationSets" count={appSetsCov === "unknown" ? undefined : appSets.length} collapsible defaultCollapsed>
+          {appSetsCov === "unknown" ? <div style={mutedLine}>ApplicationSet read unavailable - unverified, not zero.</div> : (
+            <>
+              {appSetsCov === "stale" && <div style={mutedLine}>From the last good ApplicationSet read; the latest read failed.</div>}
+              <ValueList values={appSets.map((a) => a.name)} empty="no ApplicationSets target this project" />
+            </>
+          )}
         </InspectorSection>
       </InspectorLayout>
     </div>
@@ -925,6 +948,12 @@ function projectRiskScore(p: ArgoProjectDTO, apps: ArgoAppDTO[], appsCov: AppCov
 // Application read, so they need that read to have succeeded. "stale" = the
 // last good read is retained after a failure; "unknown" = no successful read.
 type AppCoverage = "complete" | "stale" | "unknown";
+// the same coverage notion for any of the three reads
+const coverageOf = (mine: boolean, loading: boolean, error: string | null | undefined, rows: number): AppCoverage =>
+  !mine ? "unknown" : error ? (rows > 0 ? "stale" : "unknown") : loading && rows === 0 ? "unknown" : "complete";
+// countText renders a join count honestly: "?" with no evidence, a trailing
+// "*" when derived from a retained last-good read.
+const countText = (n: number, cov: AppCoverage) => (cov === "unknown" ? "?" : `${n}${cov === "stale" ? "*" : ""}`);
 
 function projectRiskBadges(p: ArgoProjectDTO, apps: ArgoAppDTO[], appsCov: AppCoverage = "complete"): Risk[] {
   const risks: Risk[] = [];

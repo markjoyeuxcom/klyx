@@ -18,7 +18,8 @@ const healthy: ArgoAppDTO = {
   syncStatus: "Synced", healthStatus: "Healthy", broken: false,
   revision: "abc1234def5678", repoURL: "https://gitlab.com/x/workloads.git",
   path: "apps/console/overlays/dev", chart: "", targetRevision: "main",
-  extraSources: 0, destNamespace: "console-dev", autoSync: true,
+  // affirmative in-cluster evidence: the inventory is on this cluster
+  extraSources: 0, destNamespace: "console-dev", destServer: "https://kubernetes.default.svc", autoSync: true,
   opPhase: "Succeeded", opMessage: "", conditions: [],
   resources: [
     { group: "", kind: "Service", namespace: "console-dev", name: "console", status: "Synced", health: "Healthy" },
@@ -364,7 +365,7 @@ describe("ArgoView workspace template (redesign step 4b)", () => {
     const paused: ArgoAppDTO = { ...healthy, name: "paused-app", healthStatus: "Suspended", broken: false };
     seed([paused]);
     const { getByText, getByRole } = render(<ArgoView cluster="homelab-nelli" />);
-    expect(getByText("all synced and healthy")).toBeTruthy();
+    expect(getByText("none out of sync or unhealthy reported")).toBeTruthy(); // no Healthy claim
     expect(getByText(/1 suspended/)).toBeTruthy();
     expect(getByRole("img", { name: "Suspended" })).toBeTruthy();
   });
@@ -524,5 +525,62 @@ describe("ArgoView ApplicationSet polarity, full matrix (Codex rework #1)", () =
     const line = inspector().getByText(/ResourcesUpToDate is Unknown \(unverified\)/) as HTMLElement;
     expect(line.style.color).toBe("var(--color-text-secondary)");
     unmount();
+  });
+});
+
+describe("ArgoView Codex re-review (destination + join coverage + zero wording)", () => {
+  const project = { namespace: "argocd", name: "platform", description: "", sourceRepos: ["https://x/y.git"], destinations: ["in-cluster/apps"], roles: 0, orphanWarn: true };
+  beforeEach(() => { vi.clearAllMocks(); useFleet.getState().clearArgo(); });
+
+  it("1a. no destination evidence is unverified - rows are not linked", () => {
+    seed([{ ...healthy, destServer: undefined, destName: undefined }]);
+    const { getByText, queryByRole } = render(<ArgoView cluster="homelab-nelli" />);
+    select("console-dev");
+    expect(getByText(/Destination unverified \(no destination server or name reported\)/)).toBeTruthy();
+    expect(queryByRole("button", { name: "open Deployment console-dev/console" })).toBeNull();
+  });
+
+  it("1b. conflicting server and name evidence is unverified", () => {
+    seed([{ ...healthy, destServer: "https://kubernetes.default.svc", destName: "prd-weu" }]);
+    const { getByText, queryByRole } = render(<ArgoView cluster="homelab-nelli" />);
+    select("console-dev");
+    expect(getByText(/Destination unverified \(prd-weu \/ https:\/\/kubernetes\.default\.svc - conflicting/)).toBeTruthy();
+    expect(queryByRole("button", { name: "open Deployment console-dev/console" })).toBeNull();
+  });
+
+  it("2a. Projects succeed, ApplicationSets fail: appset counts are '?' and the inspector says unverified", () => {
+    useFleet.setState((st) => ({ argo: { ...st.argo, cluster: "homelab-nelli", projects: [project], projectsAvailable: true, projectsLoading: false,
+      apps: [{ ...healthy, project: "platform" }], loading: false,
+      applicationSets: [], applicationSetsLoading: false, applicationSetsAvailable: false, applicationSetsError: "forbidden" } }));
+    const { container, getByText } = render(<ArgoView cluster="homelab-nelli" mode="projects" />);
+    const row = container.querySelector(".lens-row") as HTMLElement;
+    expect(row.textContent).toContain("?");
+    select("platform");
+    expect(getByText(/ApplicationSets unverified/)).toBeTruthy();
+  });
+
+  it("2b. Applications succeed, Projects and ApplicationSets fail: attribution says unverified", () => {
+    useFleet.setState((st) => ({ argo: { ...st.argo, cluster: "homelab-nelli", apps: [healthy], loading: false, error: null, available: true,
+      projects: [], projectsLoading: false, projectsError: "forbidden",
+      applicationSets: [], applicationSetsLoading: false, applicationSetsError: "forbidden" } }));
+    render(<ArgoView cluster="homelab-nelli" />);
+    select("console-dev");
+    expect(inspector().getByText(/project read unavailable - unverified/)).toBeTruthy();
+    expect(inspector().getByText(/unverified \(ApplicationSet read unavailable\)/)).toBeTruthy();
+  });
+
+  it("2c. stale-derived headline counts and filter chips are marked last-good", () => {
+    useFleet.setState((st) => ({ argo: { ...st.argo, cluster: "homelab-nelli", projects: [project], projectsAvailable: true, projectsLoading: false,
+      apps: [{ ...healthy, project: "other" }], loading: false, error: "timeout" } }));
+    const { getByText, getByRole } = render(<ArgoView cluster="homelab-nelli" mode="projects" />);
+    expect(getByText(/1 unused \(last good Application read\)/)).toBeTruthy();
+    expect(getByRole("button", { name: /^Unused 1\*/ })).toBeTruthy();
+  });
+
+  it("3. an empty Application catalogue gets a neutral zero, never a health claim", () => {
+    seed([]);
+    const { queryByText } = render(<ArgoView cluster="homelab-nelli" />);
+    expect(queryByText(/none out of sync/)).toBeNull();
+    expect(queryByText(/healthy/i)).toBeNull();
   });
 });
