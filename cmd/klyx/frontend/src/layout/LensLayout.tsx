@@ -228,9 +228,19 @@ function focusables(root: HTMLElement | null): HTMLElement[] {
 // LensTable: the one horizontal-scroll surface for a table body. Header and
 // rows share it (and one column definition), so they can never scroll apart;
 // minWidth is the sum of the column floors at the narrowest fold.
-export function LensTable({ minWidth, children }: { minWidth: number; children: ReactNode }) {
+export function LensTable({ minWidth, children, onWidth }: { minWidth: number; children: ReactNode; onWidth?: (w: number) => void }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el || !onWidth) return;
+    if (el.clientWidth > 0) onWidth(el.clientWidth);
+    if (typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver((entries) => { const w = entries[0].contentRect.width; if (w > 0) onWidth(w); });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [onWidth]);
   return (
-    <div className="lens-table" role="table">
+    <div ref={ref} className="lens-table" role="table">
       <div className="lens-table-inner" style={{ minWidth }}>{children}</div>
     </div>
   );

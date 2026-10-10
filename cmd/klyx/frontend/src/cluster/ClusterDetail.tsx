@@ -13,14 +13,16 @@ import { WorkloadsView } from "./WorkloadsView";
 import { PodsView } from "./PodsView";
 import { PodsViewLegacy } from "./PodsViewLegacy";
 
-// Reversible rollout switch for the 2026-10 workspace redesign pilot: set
-// localStorage "klyx.layout.v1.legacyPods" = "1" to fall back to the old lens
-// as a whole (never a mix of layout owners). Removed once the pilot is accepted.
-function legacyPods(): boolean {
-  try { return localStorage.getItem("klyx.layout.v1.legacyPods") === "1"; } catch { return false; }
+// Reversible rollout switches for the 2026-10 workspace redesign: setting
+// localStorage "klyx.layout.v1.legacy<Lens>" = "1" (Pods, Nodes, Workloads)
+// falls back to that lens's old implementation as a whole - never a mix of
+// layout owners. Each is removed once its migration is accepted.
+function legacyLens(lens: "Pods" | "Nodes" | "Workloads"): boolean {
+  try { return localStorage.getItem(`klyx.layout.v1.legacy${lens}`) === "1"; } catch { return false; }
 }
 import { EventsView } from "./EventsView";
 import { NodesView } from "./NodesView";
+import { NodesViewLegacy } from "./NodesViewLegacy";
 import { AccessView } from "./AccessView";
 import { UpgradeView } from "./UpgradeView";
 import { ConnectivityView } from "./ConnectivityView";
@@ -61,9 +63,9 @@ export function ClusterDetail() {
   }
   if (route.section === "gatewayApi") return <GatewayApiView cluster={cluster.name} />;
   if (route.section === "workloads") return <WorkloadsView cluster={cluster.name} />;
-  if (route.section === "pods") return legacyPods() ? <PodsViewLegacy cluster={cluster.name} /> : <PodsView cluster={cluster.name} />;
+  if (route.section === "pods") return legacyLens("Pods") ? <PodsViewLegacy cluster={cluster.name} /> : <PodsView cluster={cluster.name} />;
   if (route.section === "events") return <EventsView cluster={cluster.name} />;
-  if (route.section === "nodes") return <NodesView cluster={cluster.name} />;
+  if (route.section === "nodes") return legacyLens("Nodes") ? <NodesViewLegacy cluster={cluster.name} /> : <NodesView cluster={cluster.name} />;
   if (route.section === "access") return <AccessView cluster={cluster.name} />;
   if (route.section === "upgrade") return <UpgradeView cluster={cluster.name} />;
   if (route.section === "connectivity") return <ConnectivityView cluster={cluster.name} />;

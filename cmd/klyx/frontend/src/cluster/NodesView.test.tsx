@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, fireEvent, act } from "@testing-library/react";
+import { render, fireEvent, act, screen } from "@testing-library/react";
 import { NodesView } from "./NodesView";
 import { useFleet } from "../store/fleet";
 import type { NodeSummaryDTO, NodeDetailDTO } from "../store/fleet";
@@ -169,6 +169,16 @@ function seedWithDetail(summary: NodeSummaryDTO, detail: NodeDetailDTO) {
   }));
 }
 
+// Redesign anatomy helpers: Drain/Describe live in the inspector's More menu;
+// the survivability simulator opens from the header's "Simulate loss".
+function chooseMore(label: string | RegExp) {
+  fireEvent.click(screen.getByRole("button", { name: /^More/ }));
+  fireEvent.click(screen.getByRole("menuitem", { name: label }));
+}
+function openSimulator() {
+  fireEvent.click(screen.getByRole("button", { name: "Simulate loss" }));
+}
+
 describe("NodesView", () => {
   beforeEach(() => {
     useFleet.getState().clearNodes();
@@ -193,7 +203,8 @@ describe("NodesView", () => {
     // 3.9 of 7.8 cpu allocatable = 50%; 10.5 of 14Gi mem = 75% (warn tier).
     expect(await findByText(/\(50%\)/)).toBeTruthy();
     expect(getByText(/\(75%\)/)).toBeTruthy();
-    expect(getByText(/node OS\/kubelet overhead not included/)).toBeTruthy();
+    // The caveat lives on the usage column headers (tooltip), not a caption row.
+    expect(screen.getAllByTitle(/node OS\/kubelet overhead not included/).length).toBe(2);
     // The unsampled node renders "—", never a zero bar.
     expect(getAllByText("—").length).toBeGreaterThan(0);
   });
@@ -225,7 +236,7 @@ describe("NodesView", () => {
     seed([healthy, notReady]);
     const { getByText, getByLabelText, findByTestId } = render(<NodesView cluster="homelab" />);
     // Zone + pool + per-node targets from the loaded rows.
-    const select = getByLabelText("loss target") as HTMLSelectElement;
+    const select = (openSimulator(), getByLabelText("loss target")) as HTMLSelectElement;
     expect([...select.options].map((o) => o.text)).toContain("zone westeurope-1");
     expect([...select.options].map((o) => o.text)).toContain("pool workers");
     fireEvent.click(getByText("simulate"));
@@ -242,7 +253,7 @@ describe("NodesView", () => {
     });
     seed([healthy]);
     const { getByText, findByTestId } = render(<NodesView cluster="homelab" />);
-    fireEvent.click(getByText("simulate"));
+    openSimulator(); fireEvent.click(getByText("simulate"));
     const verdict = await findByTestId("survivability-verdict");
     expect(verdict.textContent).toContain("2 pods won't fit");
     expect(getByText("x/big")).toBeTruthy();
@@ -310,8 +321,8 @@ describe("NodesView", () => {
   it("keeps node summary allocation values compact", () => {
     seed([healthy, cordoned]);
     const { getByText } = render(<NodesView cluster="homelab" />);
-    expect(getByText("11.8/12.0")).toBeTruthy();
-    expect(getByText("22.0Gi/24.0Gi")).toBeTruthy();
+    expect(getByText(/allocatable 11\.8 CPU/)).toBeTruthy();
+    expect(getByText(/22\.0Gi · /)).toBeTruthy();
   });
 
   it("sorts nodes with problems above quiet nodes", () => {
@@ -336,10 +347,11 @@ describe("NodesView", () => {
     const { getAllByText, getByText } = render(<NodesView cluster="homelab" />);
     // Summary — version appears in both list row and detail panel; use getAllByText
     expect(getAllByText("v1.30.0").length).toBeGreaterThanOrEqual(1);
-    // Conditions
+    // Successful conditions are collapsed, one click away
+    fireEvent.click(getByText(/^Conditions · /));
     expect(getByText("kubelet is posting ready status")).toBeTruthy();
     // Taints
-    expect(getByText("dedicated")).toBeTruthy();
+    expect(getByText(/^dedicated/)).toBeTruthy();
     expect(getByText("NoSchedule")).toBeTruthy();
     // Events
     expect(getByText("Starting")).toBeTruthy();
@@ -348,7 +360,7 @@ describe("NodesView", () => {
   it("describe button opens the read-only describe pane via the bridge", async () => {
     seedWithDetail(healthy, fakeDetail);
     const { getByRole, findByText } = render(<NodesView cluster="homelab" />);
-    fireEvent.click(getByRole("button", { name: "describe" }));
+    fireEvent.click((fireEvent.click(screen.getByRole("button", { name: /^More/ })), screen.getByRole("menuitem", { name: "Describe" })));
     // nodes are cluster-scoped: namespace is ""
     expect(describeResource).toHaveBeenCalledWith("homelab", "node", "", "node-healthy");
     expect(await findByText(/Name:\s+node-healthy/)).toBeTruthy();
@@ -359,6 +371,7 @@ describe("NodesView", () => {
   it("renders healthy False pressure conditions as healthy", () => {
     seedWithDetail(healthy, fakeDetail);
     const { getByText } = render(<NodesView cluster="homelab" />);
+    fireEvent.click(getByText(/^Conditions · /));
     const row = getByText("MemoryPressure").parentElement!;
     expect(row.querySelector("span")?.style.background).toBe("var(--color-text-success)");
   });
@@ -391,7 +404,7 @@ describe("NodesView", () => {
     const { getByText, queryByText } = render(<NodesView cluster="homelab" />);
     // Labels collapsed: values not visible
     expect(queryByText(/kubernetes\.io\/hostname=node-healthy/)).toBeNull();
-    fireEvent.click(getByText("Labels (2)"));
+    fireEvent.click(getByText("Labels · 2"));
     expect(getByText(/kubernetes\.io\/hostname=node-healthy/)).toBeTruthy();
   });
 
@@ -399,7 +412,7 @@ describe("NodesView", () => {
     seedWithDetail(healthy, fakeDetail);
     const { getByText, queryByText } = render(<NodesView cluster="homelab" />);
     expect(queryByText("cluster-autoscaler.kubernetes.io/scale-down-disabled=true")).toBeNull();
-    fireEvent.click(getByText("Annotations (1)"));
+    fireEvent.click(getByText("Annotations · 1"));
     expect(getByText("cluster-autoscaler.kubernetes.io/scale-down-disabled=true")).toBeTruthy();
   });
 
@@ -413,8 +426,8 @@ describe("NodesView", () => {
         detailLoading: false,
       },
     }));
-    const { getByText } = render(<NodesView cluster="homelab" />);
-    fireEvent.click(getByText("yaml"));
+    render(<NodesView cluster="homelab" />);
+    fireEvent.click(screen.getByRole("tab", { name: "Manifest" }));
     expect(document.body.textContent).toContain("apiVersion: v1");
   });
 
@@ -429,7 +442,7 @@ describe("NodesView", () => {
       },
     }));
     const { getByRole } = render(<NodesView cluster="homelab" />);
-    fireEvent.click(getByRole("button", { name: "close node detail panel" }));
+    fireEvent.click(getByRole("button", { name: "close details" }));
     expect(useFleet.getState().nodes.selected).toBeNull();
   });
 
@@ -454,42 +467,42 @@ describe("NodesView", () => {
 
   it("cordon button appears for schedulable node, shows confirm dialog on click", () => {
     seedWithDetail(healthy, fakeDetail);
-    const { getByLabelText, getByText } = render(<NodesView cluster="homelab" />);
+    const { getByText } = render(<NodesView cluster="homelab" />);
     // Actions row shows "cordon" button (healthy node is schedulable)
-    fireEvent.click(getByLabelText("cordon"));
+    fireEvent.click(screen.getByRole("button", { name: "Cordon" }));
     // Confirm dialog should appear
     expect(getByText("Cordon node")).toBeTruthy();
-    expect(getByText("Cordon")).toBeTruthy();
+    expect(screen.getAllByText("Cordon").length).toBe(2); // panel action + dialog confirm
   });
 
   it("confirming cordon calls cordonNode bridge", () => {
     seedWithDetail(healthy, fakeDetail);
-    const { getByLabelText, getByText } = render(<NodesView cluster="homelab" />);
-    fireEvent.click(getByLabelText("cordon"));
+    render(<NodesView cluster="homelab" />);
+    fireEvent.click(screen.getByRole("button", { name: "Cordon" }));
     // Click the confirm button in the dialog
-    fireEvent.click(getByText("Cordon"));
+    fireEvent.click(screen.getAllByText("Cordon").slice(-1)[0]);
     expect(cordonNode).toHaveBeenCalledWith("homelab", "node-healthy", true);
   });
 
   it("cancelling cordon dialog does not call cordonNode", () => {
     seedWithDetail(healthy, fakeDetail);
-    const { getByLabelText, getByText } = render(<NodesView cluster="homelab" />);
-    fireEvent.click(getByLabelText("cordon"));
+    const { getByText } = render(<NodesView cluster="homelab" />);
+    fireEvent.click(screen.getByRole("button", { name: "Cordon" }));
     fireEvent.click(getByText("Cancel"));
     expect(cordonNode).not.toHaveBeenCalled();
   });
 
   it("uncordon button appears for cordoned node", () => {
     seedWithDetail(cordoned, cordonedDetail);
-    const { getByLabelText } = render(<NodesView cluster="homelab" />);
-    expect(getByLabelText("uncordon")).toBeTruthy();
+    render(<NodesView cluster="homelab" />);
+    expect(screen.getByRole("button", { name: "Uncordon" })).toBeTruthy();
   });
 
   it("confirming uncordon calls cordonNode with cordon=false", () => {
     seedWithDetail(cordoned, cordonedDetail);
-    const { getByLabelText, getByText } = render(<NodesView cluster="homelab" />);
-    fireEvent.click(getByLabelText("uncordon"));
-    fireEvent.click(getByText("Uncordon"));
+    render(<NodesView cluster="homelab" />);
+    fireEvent.click(screen.getByRole("button", { name: "Uncordon" }));
+    fireEvent.click(screen.getAllByText("Uncordon").slice(-1)[0]);
     expect(cordonNode).toHaveBeenCalledWith("homelab", "b-cordoned", false);
   });
 
@@ -497,14 +510,14 @@ describe("NodesView", () => {
 
   it("drain button appears in actions row", () => {
     seedWithDetail(healthy, fakeDetail);
-    const { getByLabelText } = render(<NodesView cluster="homelab" />);
-    expect(getByLabelText("drain")).toBeTruthy();
+    render(<NodesView cluster="homelab" />);
+    expect((fireEvent.click(screen.getByRole("button", { name: /^More/ })), screen.getByRole("menuitem", { name: /^Drain/ }))).toBeTruthy();
   });
 
   it("drain button opens the drain composer with safe defaults", () => {
     seedWithDetail(healthy, fakeDetail);
-    const { getByLabelText, getByRole } = render(<NodesView cluster="homelab" />);
-    fireEvent.click(getByLabelText("drain"));
+    const { getByRole } = render(<NodesView cluster="homelab" />);
+    chooseMore(/^Drain/);
     expect(getByRole("dialog", { name: "Drain node node-healthy" })).toBeTruthy();
     // Safe default: DaemonSets tolerated ON; emptyDir destruction and force OFF.
     expect(getByRole("button", { name: /Tolerate DaemonSets/ }).getAttribute("aria-pressed")).toBe("true");
@@ -515,7 +528,7 @@ describe("NodesView", () => {
   it("command preview shows exactly the composed kubectl drain flags", () => {
     seedWithDetail(healthy, fakeDetail);
     const { getByLabelText, getByRole, getByTestId } = render(<NodesView cluster="homelab" />);
-    fireEvent.click(getByLabelText("drain"));
+    chooseMore(/^Drain/);
     const preview = getByTestId("drain-command-preview");
     expect(preview.textContent).toBe("kubectl drain node-healthy --ignore-daemonsets --timeout=120s");
     fireEvent.click(getByRole("button", { name: /Delete emptyDir data/ }));
@@ -528,8 +541,8 @@ describe("NodesView", () => {
 
   it("confirming drain with defaults calls startDrain with the safe options and opens the modal", async () => {
     seedWithDetail(healthy, fakeDetail);
-    const { getByLabelText, getByRole, getByText } = render(<NodesView cluster="homelab" />);
-    fireEvent.click(getByLabelText("drain"));
+    const { getByRole, getByText } = render(<NodesView cluster="homelab" />);
+    chooseMore(/^Drain/);
     await act(async () => {
       fireEvent.click(getByRole("button", { name: "Drain" }));
     });
@@ -545,8 +558,8 @@ describe("NodesView", () => {
 
   it("opting into emptyDir destruction threads deleteEmptyDirData to startDrain", async () => {
     seedWithDetail(healthy, fakeDetail);
-    const { getByLabelText, getByRole } = render(<NodesView cluster="homelab" />);
-    fireEvent.click(getByLabelText("drain"));
+    const { getByRole } = render(<NodesView cluster="homelab" />);
+    chooseMore(/^Drain/);
     fireEvent.click(getByRole("button", { name: /Delete emptyDir data/ }));
     await act(async () => {
       fireEvent.click(getByRole("button", { name: "Drain" }));
@@ -558,16 +571,16 @@ describe("NodesView", () => {
 
   it("cancelling the drain composer starts no drain", () => {
     seedWithDetail(healthy, fakeDetail);
-    const { getByLabelText, getByText } = render(<NodesView cluster="homelab" />);
-    fireEvent.click(getByLabelText("drain"));
+    const { getByText } = render(<NodesView cluster="homelab" />);
+    chooseMore(/^Drain/);
     fireEvent.click(getByText("Cancel"));
     expect(startDrain).not.toHaveBeenCalled();
   });
 
   it("drain modal: Events.On subscribes to nodedrain:<streamId>", async () => {
     seedWithDetail(healthy, fakeDetail);
-    const { getByLabelText, getByRole } = render(<NodesView cluster="homelab" />);
-    fireEvent.click(getByLabelText("drain"));
+    const { getByRole } = render(<NodesView cluster="homelab" />);
+    chooseMore(/^Drain/);
     await act(async () => {
       fireEvent.click(getByRole("button", { name: "Drain" }));
     });
@@ -580,8 +593,8 @@ describe("NodesView", () => {
 
   it("drain modal: cancel button calls cancelDrain", async () => {
     seedWithDetail(healthy, fakeDetail);
-    const { getByLabelText, getByRole, getByText } = render(<NodesView cluster="homelab" />);
-    fireEvent.click(getByLabelText("drain"));
+    const { getByRole, getByText } = render(<NodesView cluster="homelab" />);
+    chooseMore(/^Drain/);
     await act(async () => {
       fireEvent.click(getByRole("button", { name: "Drain" }));
     });
@@ -601,8 +614,8 @@ describe("NodesView", () => {
     });
 
     seedWithDetail(healthy, fakeDetail);
-    const { getByLabelText, getByRole, getByText, queryByText } = render(<NodesView cluster="homelab" />);
-    fireEvent.click(getByLabelText("drain"));
+    const { getByRole, getByText, queryByText } = render(<NodesView cluster="homelab" />);
+    chooseMore(/^Drain/);
     await act(async () => {
       fireEvent.click(getByRole("button", { name: "Drain" }));
     });
@@ -635,8 +648,8 @@ describe("NodesView", () => {
       return { streamId: "test-stream-1" };
     });
     seedWithDetail(healthy, fakeDetail);
-    const { getByLabelText, getByRole, getByText } = render(<NodesView cluster="homelab" />);
-    fireEvent.click(getByLabelText("drain"));
+    const { getByRole, getByText } = render(<NodesView cluster="homelab" />);
+    chooseMore(/^Drain/);
     await act(async () => {
       fireEvent.click(getByRole("button", { name: "Drain" }));
     });
@@ -649,8 +662,8 @@ describe("NodesView", () => {
     let resolveStart!: (v: { streamId: string }) => void;
     vi.mocked(startDrain).mockImplementationOnce(() => new Promise((r) => { resolveStart = r; }));
     seedWithDetail(healthy, fakeDetail);
-    const { getByLabelText, getByRole, unmount } = render(<NodesView cluster="homelab" />);
-    fireEvent.click(getByLabelText("drain"));
+    const { getByRole, unmount } = render(<NodesView cluster="homelab" />);
+    chooseMore(/^Drain/);
     await act(async () => {
       fireEvent.click(getByRole("button", { name: "Drain" }));
     });
@@ -669,8 +682,8 @@ describe("NodesView", () => {
       return () => {};
     });
     seedWithDetail(healthy, fakeDetail);
-    const { getByLabelText, getByRole, getByText, getByTestId, queryByText } = render(<NodesView cluster="homelab" />);
-    fireEvent.click(getByLabelText("drain"));
+    const { getByRole, getByText, getByTestId, queryByText } = render(<NodesView cluster="homelab" />);
+    chooseMore(/^Drain/);
     await act(async () => {
       fireEvent.click(getByRole("button", { name: "Drain" }));
     });
@@ -693,7 +706,7 @@ describe("NodesView", () => {
   it("drain modal: switching cluster cannot restart the drain on the new cluster", async () => {
     seedWithDetail(healthy, fakeDetail);
     const pane = render(<NodesView cluster="homelab" />);
-    fireEvent.click(pane.getByLabelText("drain"));
+    chooseMore(/^Drain/);
     await act(async () => {
       fireEvent.click(pane.getByRole("button", { name: "Drain" }));
     });
@@ -708,7 +721,7 @@ describe("NodesView health model (1b rework)", () => {
     const silent: NodeSummaryDTO = { ...healthy, name: "silent-node", health: { kind: "unknown", label: "Ready not reported", reason: "ReadyMissing", rule: "node.ready-missing" } };
     seed([healthy, silent]);
     const { getByRole, getByText, queryByText } = render(<NodesView cluster="homelab" />);
-    fireEvent.click(getByRole("button", { name: /unknown\s*1/ }));
+    fireEvent.click(getByRole("button", { name: /^Unknown\s*1$/ }));
     expect(getByText("silent-node")).toBeTruthy();
     expect(queryByText(healthy.name)).toBeNull();
   });
@@ -721,6 +734,52 @@ describe("NodesView scope switch", () => {
     expect(queryByText(healthy.name)).toBeNull();
     expect(queryByText("cpu alloc")).toBeNull();
     expect(queryByText("pod cap")).toBeNull();
-    expect(getByRole("button", { name: /^all$/ })).toBeTruthy(); // no count from cluster A
+    expect(getByRole("button", { name: /^All$/ })).toBeTruthy(); // no count from cluster A
+  });
+});
+
+describe("NodesView workspace template (redesign)", () => {
+  beforeEach(() => {
+    useFleet.getState().clearNodes();
+    useFleet.setState({ navIntent: null, actionStatus: null });
+    vi.clearAllMocks();
+  });
+
+  it("auto-selects the first attention node once, from a fresh read only", () => {
+    seed([healthy, notReady]);
+    render(<NodesView cluster="homelab" />);
+    expect(openNodeDetail).not.toHaveBeenCalled(); // cached rows at entry
+    act(() => seed([healthy, notReady]));
+    expect(openNodeDetail).toHaveBeenCalledTimes(1);
+    expect(openNodeDetail).toHaveBeenCalledWith("homelab", "a-notready");
+    act(() => seed([healthy, notReady, { ...notReady, name: "b-notready" }]));
+    expect(openNodeDetail).toHaveBeenCalledTimes(1);
+  });
+
+  it("no idle inspector when nothing is selected", () => {
+    seed([healthy]);
+    const { queryByTestId } = render(<NodesView cluster="homelab" />);
+    expect(queryByTestId("lens-inspector")).toBeNull();
+    expect(queryByTestId("inspector-idle")).toBeNull();
+  });
+
+  it("a node gone from a complete read shows 'Node removed' and cancels a pending cordon", () => {
+    seedWithDetail(healthy, fakeDetail);
+    const { getByText, queryByText, queryByRole } = render(<NodesView cluster="homelab" />);
+    fireEvent.click(screen.getByRole("button", { name: "Cordon" }));
+    expect(getByText("Cordon node")).toBeTruthy();
+    act(() => seed([notReady]));
+    expect(getByText("Node removed.")).toBeTruthy();
+    expect(queryByText("Cordon node")).toBeNull();
+    expect(queryByRole("button", { name: /^More/ })).toBeNull();
+  });
+
+  it("usage columns give way entirely when no metrics source exists", async () => {
+    vi.mocked(getNodeUtilization).mockResolvedValue({ available: false, message: "no metrics source", updatedAtUnix: 0, items: [] });
+    seed([healthy]);
+    const { findByTestId, queryByText } = render(<NodesView cluster="homelab" />);
+    await findByTestId("node-util-unavailable");
+    expect(queryByText("CPU used")).toBeNull();
+    expect(queryByText("Memory used")).toBeNull();
   });
 });
