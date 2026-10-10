@@ -634,7 +634,12 @@ function WorkloadInspector({
           <div role="status" className="t-body" style={{ padding: "8px 10px", borderRadius: 4, background: "var(--color-background-secondary)", boxShadow: "inset 0 0 0 1px var(--color-border-secondary)" }}>
             <span className="t-status">Workload removed.</span> It is no longer in the current read of {w.namespace}. The details below are its last evidence; actions are disabled.
           </div>
-        ) : <VerdictStatus health={w.health} detail={`${w.ready}/${w.desired} ready · ${w.updated} updated · ${w.available} available${w.restarts ? ` · ${w.restarts} restarts` : ""}`} />}
+        ) : <VerdictStatus
+          health={w.health}
+          // The native line already carries ready/updated/available (and
+          // generation); print counts once - only add what it lacks.
+          detail={[w.health?.native ? "" : `${w.ready}/${w.desired} ready · ${w.updated} updated · ${w.available} available`, w.restarts ? `${w.restarts} restarts` : ""].filter(Boolean).join(" · ") || undefined}
+        />}
         primary={live ? { label: "Logs", kbd: "l", onSelect: () => onLogs(w) } : undefined}
         secondary={live ? { label: "Restart", onSelect: () => onRestart(w) } : undefined}
         more={live ? more : viewManifest ? [viewManifest] : []}

@@ -375,15 +375,18 @@ export function GitOps({ cluster }: { cluster: string }) {
             <span className="t-number" style={{ color: "var(--color-text-secondary)" }}>{allSources.length}{partial}</span>
             {srcAttention > 0
               ? <span className="t-status" style={{ color: "var(--color-text-warning)" }}>{srcAttention} not ready</span>
-              : <span className="t-secondary">{watchError ? "no known faults" : srcSuspended > 0 ? "no active sources need attention" : "all sources ready"}</span>}
+              : <span className="t-secondary">{watchError ? "none known not ready" : srcSuspended > 0 ? "all active sources ready" : "all sources ready"}</span>}
             {srcSuspended > 0 && <span className="t-secondary">{srcSuspended} suspended</span>}
           </>
         ) : (
           <>
             <span className="t-number" style={{ color: "var(--color-text-secondary)" }}>{rows.length}{partial}</span>
             {attention > 0
-              ? <span className="t-status" style={{ color: failed > 0 ? "var(--color-text-danger)" : "var(--color-text-warning)" }}>{failed > 0 ? "▲ " : ""}{attention} need attention</span>
-              : <span className="t-secondary">{watchError ? "no known attention" : "none need attention"}</span>}
+              // "not ready", not "need attention": this legacy count still
+              // includes neutral progressing/stale/unknown rows until the shared
+              // Flux health slice aligns backend summary, tape and lens together.
+              ? <span className="t-status" style={{ color: failed > 0 ? "var(--color-text-danger)" : "var(--color-text-warning)" }}>{failed > 0 ? "▲ " : ""}{attention} not ready</span>
+              : <span className="t-secondary">{watchError ? "none known not ready" : "all ready"}</span>}
             <span className="t-secondary">
               {[`${ks} ks · ${hr} hr`, failed ? `${failed} failed` : "", reconciling ? `${reconciling} reconciling` : "", syncing ? `${syncing} syncing` : "", suspended ? `${suspended} suspended` : ""].filter(Boolean).join(" · ")}
             </span>
@@ -417,7 +420,7 @@ export function GitOps({ cluster }: { cluster: string }) {
             )}
             <button className="l-chip" aria-pressed={status === "all"} onClick={() => setStatus("all")}>All</button>
             <button className="l-chip" aria-pressed={status === "attention"} onClick={() => setStatus("attention")}>
-              Attention {attnHere > 0 && <span style={{ color: "var(--color-text-warning)" }}>{attnHere}</span>}
+              Not ready {attnHere > 0 && <span style={{ color: "var(--color-text-warning)" }}>{attnHere}</span>}
             </button>
             {(view === "sources" ? srcSuspended : suspended) > 0 && (
               <button className="l-chip" aria-pressed={status === "suspended"} onClick={() => setStatus("suspended")}>
@@ -659,7 +662,8 @@ function SourceInspector({ source, removed, usedBy, onClose, onOpenResource }: {
 // sinceWord: readySinceSeconds is the Ready condition's LAST TRANSITION, so
 // its meaning follows the current state - "ready since" only when Ready.
 function sinceWord(r: FluxResourceDTO): string {
-  if (r.suspended) return "suspended (last state change)";
+  // Ready's lastTransitionTime says nothing about when spec.suspend changed.
+  if (r.suspended) return "last observed Ready condition change";
   if (r.ready === "Ready") return "ready";
   if (r.ready === "Failed") return "failing";
   return "in this state";
@@ -733,7 +737,7 @@ function FluxInspector({ cluster, resource, removed, isProtected, detail, deps, 
         meta={
           <>
             {isProtected && <span style={{ color: "var(--color-text-warning)", fontWeight: 600 }}>protected · </span>}
-            {[sourceText(r) ? `source ${sourceText(r)}` : "", r.readySinceSeconds > 0 ? `${sinceWord(r)} since ${ago(r.readySinceSeconds)}` : ""].filter(Boolean).join(" · ") || "Flux"}
+            {[sourceText(r) ? `source ${sourceText(r)}` : "", r.readySinceSeconds > 0 ? (r.suspended ? `${sinceWord(r)} ${ago(r.readySinceSeconds)}` : `${sinceWord(r)} since ${ago(r.readySinceSeconds)}`) : ""].filter(Boolean).join(" · ") || "Flux"}
           </>
         }
         onClose={onClose}

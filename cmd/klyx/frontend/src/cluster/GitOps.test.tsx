@@ -441,8 +441,8 @@ describe("GitOps workspace template (redesign)", () => {
   it("suspended is an intended pause: shown and filterable, never attention", () => {
     seedRows([res({ name: "paused", suspended: true }), res({ name: "ok" })]);
     const { getByText, queryByText, getByRole } = render(<GitOps cluster="x" />);
-    expect(queryByText(/\d+ need attention/)).toBeNull();
-    expect(getByText("none need attention")).toBeTruthy();
+    expect(queryByText(/\d+ not ready/)).toBeNull(); // suspended is not "not ready"
+    expect(getByText("all ready")).toBeTruthy();
     expect(getByText(/1 suspended/)).toBeTruthy();
     fireEvent.click(getByRole("button", { name: /^Suspended \d+$/ }));
     expect(getByText("paused")).toBeTruthy();
@@ -546,7 +546,7 @@ describe("GitOps Codex rework (Flux review)", () => {
     seedRows([res({})], { sources: [src({ name: "s1", suspended: true }), src({ name: "s2", suspended: true, ready: "Failed" })] });
     const { getByRole, getByText, queryByText } = render(<GitOps cluster="x" />);
     fireEvent.click(getByRole("button", { name: /^Sources/ }));
-    expect(getByText("no active sources need attention")).toBeTruthy();
+    expect(getByText("all active sources ready")).toBeTruthy();
     expect(queryByText("all sources ready")).toBeNull();
     expect(getByText("2 suspended")).toBeTruthy();
   });
@@ -657,5 +657,23 @@ describe("GitOps live-pass fixes (2026-10-10)", () => {
     seedOne(res({}), d);
     render(<GitOps cluster="x" />);
     expect(inspector().getByRole("button", { name: /^Reconcile/ }).querySelector("kbd")?.textContent).toBe("R");
+  });
+});
+
+describe("GitOps visual-verdict wording (2026-10-10)", () => {
+  it("a suspended resource's time is the last observed Ready change, never 'suspended since'", () => {
+    const d = { kind: "Kustomization", namespace: "flux-system", name: "flux-system", suspended: true, appliedRevision: "", attemptedRevision: "", applyFailed: false, conditions: [], inventory: [] };
+    useFleet.setState((s) => ({ gitops: { ...s.gitops, cluster: "x", resources: [res({ suspended: true, ready: "Failed", readySinceSeconds: 120 })], sources: [], loading: false, watchError: null,
+      expandedKey: "Kustomization/flux-system/flux-system", detail: d, detailCluster: "x" } }));
+    render(<GitOps cluster="x" />);
+    expect(inspector().getByText(/last observed Ready condition change 2m ago/)).toBeTruthy();
+    expect(inspector().queryByText(/suspended.*since/)).toBeNull();
+  });
+
+  it("the legacy count says 'not ready' until the shared Flux health slice lands", () => {
+    useFleet.setState((s) => ({ gitops: { ...s.gitops, cluster: "x", resources: [res({ name: "p", ready: "Unknown", reason: "Progressing" })], sources: [], loading: false, watchError: null, expandedKey: null, detail: null } }));
+    const { getByText, queryByText } = render(<GitOps cluster="x" />);
+    expect(getByText("1 not ready")).toBeTruthy();
+    expect(queryByText(/need attention/)).toBeNull();
   });
 });

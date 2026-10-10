@@ -710,3 +710,15 @@ describe("WorkloadsView Codex review corrections", () => {
     expect(queryByRole("menuitem", { name: /Scale|Pause|Compare/ })).toBeNull();
   });
 });
+
+describe("WorkloadsView verdict prints counts once (visual verdict)", () => {
+  beforeEach(() => { localStorage.clear(); useFleet.getState().clearWorkloads(); });
+  it("with a native line, the detail adds only what it lacks", () => {
+    seed([{ ...broken, health: { ...broken.health!, native: "0/1 ready · 0 available · 1 updated · generation 1/1" } }]);
+    render(<WorkloadsView cluster="homelab-nelli" />);
+    select("ollama");
+    const v = screen.getByTestId("verdict-status").textContent ?? "";
+    expect(v.match(/ready/g)?.length).toBe(1);
+    expect(v).toContain("7 restarts");
+  });
+});
