@@ -43,6 +43,9 @@ type PodSummaryDTO struct {
 	OwnerName  string                `json:"ownerName"`
 	AgeSeconds int                   `json:"ageSeconds"`
 	Containers []ContainerSummaryDTO `json:"containers"`
+	// Health is the shared verdict; Rank/Reason/Phase are legacy fields kept
+	// until every consumer has migrated.
+	Health HealthDTO `json:"health"`
 }
 
 // PodsResultDTO is the response from ListPods.

@@ -3,6 +3,8 @@
 // operates on API structs and is fixture-testable.
 package workloads
 
+import "github.com/moomora/klyx/internal/health"
+
 // HealthRank is the triage ordering; lower value sorts nearer the top (worse).
 type HealthRank int
 
@@ -63,4 +65,8 @@ type Workload struct {
 	// Stakater Reloader annotations; nil when it carries none. Forward intent
 	// only - it does not prove the Reloader operator is installed.
 	Reloader *ReloadTargets
+	// Health is the shared verdict (internal/health), computed from pods
+	// attributed by owner reference. Rank/Reason are legacy and stay only
+	// until every consumer has migrated.
+	Health health.Verdict
 }

@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/moomora/klyx/internal/health"
 	corev1 "k8s.io/api/core/v1"
 )
 
@@ -33,6 +34,9 @@ type NodeSummary struct {
 	// well-known label), "" when unlabeled.
 	Pool string
 	Zone string
+	// Health is the shared verdict (internal/health). Ready/Problems are
+	// legacy and stay only until every consumer has migrated.
+	Health health.Verdict
 }
 
 // poolLabels are the provider labels that name a node's pool/group, checked in
@@ -45,41 +49,25 @@ var poolLabels = []string{
 	"karpenter.sh/nodepool",
 }
 
-// SummarizeNodes classifies each node and returns them sorted problem-first
-// (NotReady > pressure > cordoned), then name.
+// SummarizeNodes classifies each node and returns them in health verdict
+// order (fault, degraded, unknown, ..., ok), then name.
 func SummarizeNodes(nodes []corev1.Node, now time.Time) []NodeSummary {
 	out := make([]NodeSummary, 0, len(nodes))
 	for i := range nodes {
 		n := &nodes[i]
-		out = append(out, summarizeNode(n, now))
+		s := summarizeNode(n, now)
+		s.Health = health.Node(n)
+		out = append(out, s)
 	}
 
 	sort.SliceStable(out, func(a, b int) bool {
-		pa := nodePriority(out[a])
-		pb := nodePriority(out[b])
-		if pa != pb {
-			return pa < pb
+		if out[a].Health.Kind != out[b].Health.Kind {
+			return out[a].Health.Kind < out[b].Health.Kind
 		}
 		return out[a].Name < out[b].Name
 	})
 
 	return out
-}
-
-// nodePriority returns a sort key: lower = worse (NotReady=0, pressure=1, cordoned=2, healthy=3).
-func nodePriority(s NodeSummary) int {
-	if !s.Ready {
-		return 0
-	}
-	for _, p := range s.Problems {
-		if p == "MemoryPressure" || p == "DiskPressure" || p == "PIDPressure" {
-			return 1
-		}
-	}
-	if s.Unschedulable {
-		return 2
-	}
-	return 3
 }
 
 func summarizeNode(n *corev1.Node, now time.Time) NodeSummary {

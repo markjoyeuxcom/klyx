@@ -19,6 +19,9 @@ type NodeSummaryDTO struct {
 	AgeSeconds     int      `json:"ageSeconds"`
 	Pool           string   `json:"pool"`
 	Zone           string   `json:"zone"`
+	// Health is the shared verdict; Ready/Problems are legacy fields kept
+	// until every consumer has migrated.
+	Health HealthDTO `json:"health"`
 }
 
 // HeadroomPodRefDTO mirrors workloads.PodRef (an unplaced pod + its requests).

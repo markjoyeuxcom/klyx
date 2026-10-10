@@ -5,37 +5,67 @@ import (
 	"sort"
 	"time"
 
+	"github.com/moomora/klyx/internal/health"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/types"
 )
 
 // Assemble joins workloads with their pods and derives health, sorted
-// triage-first (Rank, then namespace/name). fluxPresent gates owner extraction.
-// AgeSeconds is computed from now.
+// triage-first. It assumes the pod list is complete; callers that know it may
+// be truncated use AssembleObserved.
 func Assemble(deploys []appsv1.Deployment, stss []appsv1.StatefulSet, dss []appsv1.DaemonSet,
 	pods []corev1.Pod, fluxPresent bool, now time.Time) []Workload {
+	return AssembleObserved(deploys, stss, dss, pods, true, fluxPresent, now)
+}
+
+// AssembleObserved is Assemble with the pod observation's completeness made
+// explicit: podsComplete=false (a truncated or partial pod list) means no
+// workload can be confirmed healthy. fluxPresent gates owner extraction.
+// AgeSeconds and time-based verdicts are computed from now. Rows sort by
+// health verdict (internal/health), then severity, namespace and name.
+func AssembleObserved(deploys []appsv1.Deployment, stss []appsv1.StatefulSet, dss []appsv1.DaemonSet,
+	pods []corev1.Pod, podsComplete, fluxPresent bool, now time.Time) []Workload {
+
+	podVerdicts := make([]health.Verdict, len(pods))
+	for i := range pods {
+		podVerdicts[i] = health.Pod(&pods[i], now)
+	}
+	classify := func(in health.WorkloadInput, owns func(*corev1.Pod, *metav1.OwnerReference) bool, ns string) health.Verdict {
+		in.Pods = ownedPods(ns, pods, podVerdicts, owns)
+		in.PodsComplete = podsComplete
+		return health.Workload(in, now)
+	}
 
 	out := make([]Workload, 0, len(deploys)+len(stss)+len(dss))
 	for i := range deploys {
 		d := &deploys[i]
 		w := build("Deployment", d.Namespace, d.Name, d.Labels, d.Annotations, d.Spec.Selector, d.Spec.Template.Spec, classifyDeployment(d), pods, fluxPresent, now, d.Generation, d.Status.ObservedGeneration)
 		w.Paused = d.Spec.Paused
+		w.Health = classify(deploymentInput(d), ownedByDeployment(d.Name), d.Namespace)
 		out = append(out, w)
 	}
 	for i := range stss {
 		s := &stss[i]
-		out = append(out, build("StatefulSet", s.Namespace, s.Name, s.Labels, s.Annotations, s.Spec.Selector, s.Spec.Template.Spec, classifyStatefulSet(s), pods, fluxPresent, now, s.Generation, s.Status.ObservedGeneration))
+		w := build("StatefulSet", s.Namespace, s.Name, s.Labels, s.Annotations, s.Spec.Selector, s.Spec.Template.Spec, classifyStatefulSet(s), pods, fluxPresent, now, s.Generation, s.Status.ObservedGeneration)
+		w.Health = classify(statefulSetInput(s), ownedByUID("StatefulSet", s.UID), s.Namespace)
+		out = append(out, w)
 	}
 	for i := range dss {
 		ds := &dss[i]
-		out = append(out, build("DaemonSet", ds.Namespace, ds.Name, ds.Labels, ds.Annotations, ds.Spec.Selector, ds.Spec.Template.Spec, classifyDaemonSet(ds), pods, fluxPresent, now, ds.Generation, ds.Status.ObservedGeneration))
+		w := build("DaemonSet", ds.Namespace, ds.Name, ds.Labels, ds.Annotations, ds.Spec.Selector, ds.Spec.Template.Spec, classifyDaemonSet(ds), pods, fluxPresent, now, ds.Generation, ds.Status.ObservedGeneration)
+		w.Health = classify(daemonSetInput(ds), ownedByUID("DaemonSet", ds.UID), ds.Namespace)
+		out = append(out, w)
 	}
 
 	sort.SliceStable(out, func(a, b int) bool {
-		if out[a].Rank != out[b].Rank {
-			return out[a].Rank < out[b].Rank
+		if out[a].Health.Kind != out[b].Health.Kind {
+			return out[a].Health.Kind < out[b].Health.Kind
+		}
+		if out[a].Health.Rank != out[b].Health.Rank {
+			return out[a].Health.Rank > out[b].Health.Rank
 		}
 		if out[a].Namespace != out[b].Namespace {
 			return out[a].Namespace < out[b].Namespace
@@ -43,6 +73,97 @@ func Assemble(deploys []appsv1.Deployment, stss []appsv1.StatefulSet, dss []apps
 		return out[a].Name < out[b].Name
 	})
 	return out
+}
+
+// ownedPods attributes pods to one workload by controller owner reference,
+// never by label selector (selectors can overlap; ownership cannot).
+func ownedPods(ns string, pods []corev1.Pod, verdicts []health.Verdict, owns func(*corev1.Pod, *metav1.OwnerReference) bool) []health.OwnedPod {
+	var out []health.OwnedPod
+	for i := range pods {
+		p := &pods[i]
+		if p.Namespace != ns {
+			continue
+		}
+		ref := metav1.GetControllerOf(p)
+		if ref == nil || !owns(p, ref) {
+			continue
+		}
+		out = append(out, health.OwnedPod{Namespace: p.Namespace, Name: p.Name, UID: string(p.UID), Verdict: verdicts[i]})
+	}
+	return out
+}
+
+// ownedByUID matches pods a StatefulSet/DaemonSet controls directly.
+func ownedByUID(kind string, uid types.UID) func(*corev1.Pod, *metav1.OwnerReference) bool {
+	return func(_ *corev1.Pod, ref *metav1.OwnerReference) bool {
+		return ref.Kind == kind && uid != "" && ref.UID == uid
+	}
+}
+
+// ownedByDeployment matches pods whose controlling ReplicaSet is one of this
+// Deployment's: the controller names each ReplicaSet <deployment>-<hash> and
+// stamps the same pod-template-hash on its pods. (Without listing
+// ReplicaSets this cannot tell a same-named, recreated Deployment's orphaned
+// ReplicaSet apart; that leftover is short-lived and garbage-collected.)
+func ownedByDeployment(name string) func(*corev1.Pod, *metav1.OwnerReference) bool {
+	return func(p *corev1.Pod, ref *metav1.OwnerReference) bool {
+		hash := p.Labels[appsv1.DefaultDeploymentUniqueLabelKey]
+		return ref.Kind == "ReplicaSet" && hash != "" && ref.Name == name+"-"+hash
+	}
+}
+
+func deploymentInput(d *appsv1.Deployment) health.WorkloadInput {
+	in := health.WorkloadInput{
+		Kind: "Deployment", Generation: d.Generation, ObservedGeneration: d.Status.ObservedGeneration,
+		Desired: replicas(d.Spec.Replicas), Ready: int(d.Status.ReadyReplicas), Updated: int(d.Status.UpdatedReplicas),
+		Strategy: health.StrategyRolling, Paused: d.Spec.Paused, ProgressDeadline: 600 * time.Second,
+	}
+	if d.Spec.Strategy.Type == appsv1.RecreateDeploymentStrategyType {
+		in.Strategy = health.StrategyRecreate
+	}
+	if d.Spec.ProgressDeadlineSeconds != nil {
+		in.ProgressDeadline = time.Duration(*d.Spec.ProgressDeadlineSeconds) * time.Second
+	}
+	for i := range d.Status.Conditions {
+		c := &d.Status.Conditions[i]
+		hc := &health.Condition{Status: string(c.Status), Reason: c.Reason, Message: c.Message, LastUpdateTime: c.LastUpdateTime.Time}
+		switch c.Type {
+		case appsv1.DeploymentReplicaFailure:
+			in.ReplicaFailure = hc
+		case appsv1.DeploymentProgressing:
+			in.Progressing = hc
+		}
+	}
+	return in
+}
+
+func statefulSetInput(s *appsv1.StatefulSet) health.WorkloadInput {
+	in := health.WorkloadInput{
+		Kind: "StatefulSet", Generation: s.Generation, ObservedGeneration: s.Status.ObservedGeneration,
+		Desired: replicas(s.Spec.Replicas), Ready: int(s.Status.ReadyReplicas), Updated: int(s.Status.UpdatedReplicas),
+		Strategy:      health.StrategyRolling,
+		RevisionDrift: s.Status.CurrentRevision != "" && s.Status.UpdateRevision != "" && s.Status.CurrentRevision != s.Status.UpdateRevision,
+	}
+	if s.Spec.UpdateStrategy.Type == appsv1.OnDeleteStatefulSetStrategyType {
+		in.Strategy = health.StrategyOnDelete
+	}
+	if ru := s.Spec.UpdateStrategy.RollingUpdate; ru != nil && ru.Partition != nil {
+		in.Partition = int(*ru.Partition)
+	}
+	return in
+}
+
+func daemonSetInput(ds *appsv1.DaemonSet) health.WorkloadInput {
+	in := health.WorkloadInput{
+		Kind: "DaemonSet", Generation: ds.Generation, ObservedGeneration: ds.Status.ObservedGeneration,
+		Desired: int(ds.Status.DesiredNumberScheduled), Ready: int(ds.Status.NumberReady), Updated: int(ds.Status.UpdatedNumberScheduled),
+		Strategy:      health.StrategyRolling,
+		RevisionDrift: ds.Status.UpdatedNumberScheduled < ds.Status.DesiredNumberScheduled,
+	}
+	if ds.Spec.UpdateStrategy.Type == appsv1.OnDeleteDaemonSetStrategyType {
+		in.Strategy = health.StrategyOnDelete
+	}
+	return in
 }
 
 func build(kind, ns, name string, objLabels, annotations map[string]string, selector *metav1.LabelSelector,

@@ -76,6 +76,9 @@ type WorkloadDTO struct {
 	// Reloader is the forward "reloads on" declaration; nil when the workload
 	// carries no Reloader annotation.
 	Reloader *ReloadTargetsDTO `json:"reloader,omitempty"`
+	// Health is the shared verdict; Rank/Reason are legacy fields kept until
+	// every consumer has migrated.
+	Health HealthDTO `json:"health"`
 	// Paused: Deployment spec.paused - an intended operator state (rollouts
 	// held), not an error. Always false for StatefulSet/DaemonSet.
 	Paused bool `json:"paused,omitempty"`

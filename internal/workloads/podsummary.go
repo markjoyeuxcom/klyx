@@ -4,6 +4,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/moomora/klyx/internal/health"
 	corev1 "k8s.io/api/core/v1"
 )
 
@@ -21,6 +22,9 @@ type PodSummary struct {
 	OwnerName       string
 	AgeSeconds      int
 	Containers      []ContainerSummary
+	// Health is the shared verdict (internal/health); Rank/Reason are legacy
+	// and stay only until every consumer has migrated.
+	Health health.Verdict
 }
 
 // ContainerSummary is a single container row within a PodSummary.
@@ -107,6 +111,7 @@ func SummarizePods(pods []corev1.Pod, now time.Time) []PodSummary {
 			IP:         p.Status.PodIP,
 			AgeSeconds: ageSeconds(p.CreationTimestamp.Time, now),
 			Containers: buildContainerSummaries(p),
+			Health:     health.Pod(p, now),
 		}
 
 		// Owner: first ownerRef where Controller is set and true.
@@ -122,8 +127,11 @@ func SummarizePods(pods []corev1.Pod, now time.Time) []PodSummary {
 	}
 
 	sort.SliceStable(out, func(a, b int) bool {
-		if out[a].Rank != out[b].Rank {
-			return out[a].Rank < out[b].Rank
+		if out[a].Health.Kind != out[b].Health.Kind {
+			return out[a].Health.Kind < out[b].Health.Kind
+		}
+		if out[a].Health.Rank != out[b].Health.Rank {
+			return out[a].Health.Rank > out[b].Health.Rank
 		}
 		if out[a].Namespace != out[b].Namespace {
 			return out[a].Namespace < out[b].Namespace

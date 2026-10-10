@@ -233,5 +233,6 @@ func toPodSummaryDTO(p workloads.PodSummary) PodSummaryDTO {
 		OwnerName:  p.OwnerName,
 		AgeSeconds: p.AgeSeconds,
 		Containers: containers,
+		Health:     toHealthDTO(p.Health),
 	}
 }

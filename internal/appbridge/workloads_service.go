@@ -229,6 +229,7 @@ func toWorkloadDTO(w workloads.Workload) WorkloadDTO {
 		Pods:  make([]PodDTO, 0, len(w.Pods)),
 		Stale: w.Generation > w.ObservedGeneration, Generation: w.Generation, ObservedGeneration: w.ObservedGeneration,
 		Paused: w.Paused,
+		Health: toHealthDTO(w.Health),
 	}
 	if w.GitOps != nil {
 		d.GitOps = &OwnerDTO{Kind: w.GitOps.Kind, Namespace: w.GitOps.Namespace, Name: w.GitOps.Name}

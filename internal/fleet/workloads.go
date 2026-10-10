@@ -41,5 +41,6 @@ func (c *ClusterConn) ListWorkloads(ctx context.Context, namespace string) ([]wo
 	if clk == nil {
 		clk = clock.Real{}
 	}
-	return workloads.Assemble(deps.Items, stss.Items, dss.Items, pods.Items, fluxPresent, clk.Now()), fluxPresent, truncated, nil
+	// A truncated pod list means no workload can be confirmed healthy.
+	return workloads.AssembleObserved(deps.Items, stss.Items, dss.Items, pods.Items, pods.GetContinue() == "", fluxPresent, clk.Now()), fluxPresent, truncated, nil
 }
