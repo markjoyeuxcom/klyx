@@ -74,6 +74,9 @@ func Workload(in WorkloadInput, now time.Time) Verdict {
 	v := workloadVerdict(in, now)
 	if v.Native == "" {
 		v.Native = fmt.Sprintf("%d/%d ready · %d updated · generation %d/%d", in.Ready, in.Desired, in.Updated, in.ObservedGeneration, in.Generation)
+		if in.Kind == "Deployment" {
+			v.Native = fmt.Sprintf("%d/%d ready · %d available · %d updated · generation %d/%d", in.Ready, in.Desired, in.Available, in.Updated, in.ObservedGeneration, in.Generation)
+		}
 	}
 	if v.Kind == OK && !in.PodsComplete {
 		// The controller's own counts stay visible in Native; the headline
@@ -168,7 +171,7 @@ func workloadVerdict(in WorkloadInput, now time.Time) Verdict {
 	// its own availability count (minReadySeconds can hold ready pods back).
 	if in.Kind == "Deployment" && in.Available < in.Desired {
 		return Verdict{Kind: Progressing, Label: fmt.Sprintf("Ready · %d/%d available", in.Available, in.Desired), Reason: "BecomingAvailable", Rule: "workload.becoming-available",
-			Message: "pods are ready but have not yet been ready for minReadySeconds"}
+			Message: "pods are ready but not yet counted available (minReadySeconds not elapsed, or availability status lagging)"}
 	}
 	v := Verdict{Kind: OK, Reason: "Ready", Rule: "workload.ready", Label: "Ready"}
 	if in.Kind == "Deployment" {
