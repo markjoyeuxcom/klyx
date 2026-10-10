@@ -76,6 +76,22 @@ describe("GatewayApiView (redesign step 6)", () => {
     expect(screen.getByText("2 unverified")).toBeTruthy();
   });
 
+  it("a last-observed negative is worded as last observed, never as a current outage", () => {
+    net({ gateways: [
+      gw("lastseen", { accepted: false, programmed: false, generation: 3, acceptedCond: cond("False", "InvalidParameters", 2), programmedCond: cond("") }),
+      gw("unprog", { programmed: false, generation: 3, acceptedCond: cond("True", "", 3), programmedCond: cond("False", "AddressNotAssigned", 0) }),
+    ] });
+    render(<GatewayApiView cluster="x" />);
+    const row = (name: string) => [...document.querySelectorAll(".lens-row")].find((r) => r.textContent?.includes(`infra/${name}`)) as HTMLElement;
+    if (!screen.queryByTestId("gateway-panel")?.textContent?.includes("lastseen")) fireEvent.click(row("lastseen"));
+    let panel = screen.getByTestId("gateway-panel");
+    expect(within(panel).getByText("Accepted was False for generation 2 - InvalidParameters. The controller has not reported on generation 3; whether the current Gateway is accepted is unverified.")).toBeTruthy();
+    expect(within(panel).queryByText(/does not serve routes/)).toBeNull();
+    fireEvent.click(row("unprog"));
+    panel = screen.getByTestId("gateway-panel");
+    expect(within(panel).getByText("Programmed was False for an unreported generation - AddressNotAssigned. The controller has not reported on generation 3; whether the data plane is configured now is unverified.")).toBeTruthy();
+  });
+
   it("not served, served-but-empty and a failed list are three different states", () => {
     net({ served: false });
     const { unmount } = render(<GatewayApiView cluster="x" />);

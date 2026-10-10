@@ -54,6 +54,13 @@ describe("routeHealth (evidence, Codex review)", () => {
     expect(routeHealth(route("a", "r", { acceptedCond: F("NotAllowedByListeners") }))).toEqual({ kind: "fault", label: "not accepted" });
     expect(routeHealth(route("a", "r", { generation: 2, acceptedCond: F("NotAllowedByListeners", 1) }))).toEqual({ kind: "degraded", label: "not accepted (last observed)" });
   });
+  it("fails closed: absent ResolvedRefs, stale positives and a zero observedGeneration are not current proof", () => {
+    expect(routeHealth(route("a", "r", { resolvedRefsCond: undefined, resolvedRefs: false }))).toEqual({ kind: "unknown", label: "refs not reported" });
+    expect(routeHealth(route("a", "r", { generation: 2 }))).toEqual({ kind: "progressing", label: "status syncing" });
+    expect(routeHealth(route("a", "r", { generation: 3, acceptedCond: F("NotAllowedByListeners", 0) }))).toEqual({ kind: "degraded", label: "not accepted (last observed)" });
+    // an independent, confirmed backend fault still wins over a syncing status
+    expect(routeHealth(route("a", "r", { generation: 2 }, { ready: 0, total: 2 }))).toEqual({ kind: "fault", label: "no ready endpoints" });
+  });
   it("each backend carries its own evidence: a missing primary among several is degraded, never another backend's numbers", () => {
     const r = route("a", "r");
     r.backends = [

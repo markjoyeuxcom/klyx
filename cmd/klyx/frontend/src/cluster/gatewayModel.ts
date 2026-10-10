@@ -27,10 +27,13 @@ export function condState(c: CondDTO | undefined, generation: number | undefined
   // is only "not True" - never promoted to an explicit False.
   if (!c) return { status: fallback ? "True" : "absent", reason: "", message: "", stale: false, observedGeneration: 0 };
   const status = c.status === "True" || c.status === "False" || c.status === "Unknown" ? c.status : "absent";
-  const stale = status !== "absent" && !!generation && c.observedGeneration > 0 && c.observedGeneration < generation;
+  // A condition proves the CURRENT spec only when it names the current
+  // generation; a missing (0) or older observedGeneration is last observed.
+  const stale = status !== "absent" && !!generation && c.observedGeneration < generation;
   return { status, reason: c.reason, message: c.message, stale, observedGeneration: c.observedGeneration };
 }
 const because = (c: CondState) => [c.reason, c.message].filter(Boolean).join(": ");
+const observedFor = (c: CondState) => (c.observedGeneration > 0 ? `generation ${c.observedGeneration}` : "an unreported generation");
 
 type GatewayLike = Pick<GatewayRefDTO, "accepted" | "programmed" | "acceptedCond" | "programmedCond" | "generation">;
 
@@ -55,14 +58,17 @@ export function gatewayHealth(g: GatewayLike): Role {
 export function gatewayVerdictDetail(g: GatewayLike): string {
   const a = condState(g.acceptedCond, g.generation, g.accepted);
   const p = condState(g.programmedCond, g.generation, g.programmed);
-  const last = (c: CondState) => (c.stale ? ` This was observed for generation ${c.observedGeneration}; the controller has not reported on generation ${g.generation} yet.` : "");
   if (a.status === "absent") return "No controller has written an Accepted condition - check that the GatewayClass exists and its controller is running. Klyx cannot tell whether it will be accepted.";
   if (a.status === "Unknown") return `The controller has not decided yet${because(a) ? ` (${because(a)})` : ""}.`;
-  if (a.status === "False") return `Accepted is False${because(a) ? ` - ${because(a)}` : ""}. Its controller does not serve routes through it.${last(a)}`;
+  if (a.status === "False") return a.stale
+    ? `Accepted was False for ${observedFor(a)}${because(a) ? ` - ${because(a)}` : ""}. The controller has not reported on generation ${g.generation}; whether the current Gateway is accepted is unverified.`
+    : `Accepted is False${because(a) ? ` - ${because(a)}` : ""}. Its controller does not serve routes through it.`;
   if (p.status === "absent") return "Accepted, but no Programmed condition has been written - whether the data plane is configured is unverified.";
   if (p.status === "Unknown") return `Accepted; programming is in progress${because(p) ? ` (${because(p)})` : ""}.`;
-  if (p.status === "False") return `Accepted, but Programmed is False${because(p) ? ` - ${because(p)}` : ""}. The data plane is not configured for it.${last(p)}`;
-  if (a.stale || p.stale) return `Programmed for generation ${p.observedGeneration || a.observedGeneration}; the controller has not observed generation ${g.generation} yet.`;
+  if (p.status === "False") return p.stale
+    ? `Programmed was False for ${observedFor(p)}${because(p) ? ` - ${because(p)}` : ""}. The controller has not reported on generation ${g.generation}; whether the data plane is configured now is unverified.`
+    : `Accepted, but Programmed is False${because(p) ? ` - ${because(p)}` : ""}. The data plane is not configured for it.`;
+  if (a.stale || p.stale) return `Accepted and programmed as of ${observedFor(p.stale ? p : a)}; the controller has not reported on generation ${g.generation} yet.`;
   return "Accepted and programmed by its controller.";
 }
 
@@ -95,15 +101,19 @@ export function routeIssues(r: RouteNodeDTO, listeners: ListenerDTO[] = []): Rou
   } else {
     const a = condState(r.acceptedCond, r.generation, r.accepted);
     if (a.status === "False") out.push(a.stale
-      ? { short: "not accepted (last observed)", text: `Accepted was False for generation ${a.observedGeneration}${because(a) ? ` - ${because(a)}` : ""}; the current generation is not reported yet.`, severity: "degraded" }
+      ? { short: "not accepted (last observed)", text: `Accepted was False for ${observedFor(a)}${because(a) ? ` - ${because(a)}` : ""}; whether generation ${r.generation} is accepted is unverified.`, severity: "degraded" }
       : { short: "not accepted", text: `Not accepted by this Gateway${because(a) ? ` - ${because(a)}` : ""}.`, severity: "fault" });
     else if (a.status === "Unknown") out.push({ short: "acceptance pending", text: `The controller has not decided${because(a) ? ` (${because(a)})` : ""}.`, severity: "progressing" });
     else if (a.status === "absent") out.push({ short: "acceptance not reported", text: "No Accepted condition for this Gateway.", severity: "unknown" });
     const rr = condState(r.resolvedRefsCond, r.generation, r.resolvedRefs);
     if (rr.status === "False") out.push(rr.stale
-      ? { short: "unresolved refs (last observed)", text: `ResolvedRefs was False for generation ${rr.observedGeneration}${because(rr) ? ` - ${because(rr)}` : ""}.`, severity: "degraded" }
+      ? { short: "unresolved refs (last observed)", text: `ResolvedRefs was False for ${observedFor(rr)}${because(rr) ? ` - ${because(rr)}` : ""}; the current generation is unverified.`, severity: "degraded" }
       : { short: "unresolved refs", text: `References not resolved${because(rr) ? ` - ${because(rr)}` : ""}. Check the backendRef, a cross-namespace ReferenceGrant, or the listener section.`, severity: "fault" });
     else if (rr.status === "Unknown") out.push({ short: "refs pending", text: `ResolvedRefs is Unknown${because(rr) ? ` (${because(rr)})` : ""}.`, severity: "progressing" });
+    else if (rr.status === "absent") out.push({ short: "refs not reported", text: "No ResolvedRefs condition for this Gateway - whether the references resolve is unverified.", severity: "unknown" });
+    // positive conditions for an older generation describe the previous spec
+    const stalePositive = [a, rr].filter((c) => c.status === "True" && c.stale);
+    if (stalePositive.length > 0) out.push({ short: "status syncing", text: `Accepted/ResolvedRefs describe ${observedFor(stalePositive[0])}; the controller has not reported on generation ${r.generation} yet.`, severity: "progressing" });
   }
   const names = new Set(listeners.map((l) => l.name).filter(Boolean));
   if (r.parentSectionName && names.size > 0 && !names.has(r.parentSectionName)) out.push({ short: "listener missing", text: `Listener ${r.parentSectionName} does not exist on this Gateway.`, severity: "fault" });
