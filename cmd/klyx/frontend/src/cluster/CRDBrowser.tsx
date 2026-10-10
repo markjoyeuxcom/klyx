@@ -1,8 +1,9 @@
 import { useEffect } from "react";
-import { IconChevronRight, IconComponents } from "@tabler/icons-react";
+import { IconAlertTriangle, IconChevronRight, IconComponents } from "@tabler/icons-react";
 import { useFleet, CRDGroupDTO, CRDKindDTO, CRDGroupBy, crdCountKey } from "../store/fleet";
 import { listCRDs, countKind } from "../bridge/crd";
-import { EmptyState, SkeletonRows, ellipsis } from "../chrome/primitives";
+import { EmptyState, SkeletonRows } from "../chrome/primitives";
+import { LensLayout, LensTable, type DatasetState } from "../layout/LensLayout";
 import { WatchErrorBanner } from "../chrome/WatchErrorBanner";
 
 type FlatKind = CRDKindDTO & { group: string; category: string };
@@ -42,6 +43,9 @@ function matches(k: FlatKind, q: string): boolean {
 const GROUP_BYS: CRDGroupBy[] = ["group", "operator", "scope", "alphabetical"];
 const GROUP_BY_LABEL: Record<CRDGroupBy, string> = { group: "api group", operator: "operator", scope: "scope", alphabetical: "alphabetical" };
 
+// The custom-resource catalogue on the workspace template: grouped by API
+// group (or operator/scope/alphabetical) with live instance counts. No
+// inspector - a kind opens the generic Resources lens.
 export function CRDBrowser({ cluster }: { cluster: string }) {
   const crd = useFleet((s) => s.crd);
   const setGroupBy = useFleet((s) => s.setCRDGroupBy);
@@ -56,72 +60,58 @@ export function CRDBrowser({ cluster }: { cluster: string }) {
   const sections = reshape(groups, crd.groupBy)
     .map((sec) => ({ ...sec, kinds: sec.kinds.filter((k) => matches(k, crd.search)) }))
     .filter((sec) => sec.kinds.length > 0);
-
   const totalKinds = flatten(groups).length;
+  const shownKinds = sections.reduce((n, s) => n + s.kinds.length, 0);
 
-  if (crd.loading && groups.length === 0) {
-    return <div style={{ padding: "14px 16px" }}><SkeletonRows rows={7} label="loading custom resources" /></div>;
-  }
   // A failed read is not "no custom resources" (review 2026-10-03 #10).
-  if (crd.error && groups.length === 0) {
-    return (
-      <div style={{ padding: "14px 16px" }}>
-        <WatchErrorBanner tool="Custom resources" failure="read failed" error={crd.error} />
-      </div>
-    );
-  }
-  if (groups.length === 0 || (crd.search && sections.length === 0)) {
-    return (
-      <EmptyState
-        icon={<IconComponents size={28} stroke={1.2} />}
-        title={groups.length === 0 ? "No custom resources on this cluster." : "No custom resources match the search."}
-        hint={groups.length === 0 ? "Only built-in kinds are served here." : undefined}
-        action={groups.length > 0 ? { label: "Clear search", onClick: () => setSearch("") } : undefined}
-      />
-    );
-  }
+  let state: DatasetState = "ready";
+  if (crd.loading && groups.length === 0) state = "loading";
+  else if (crd.error && groups.length === 0) state = "unreadable";
+  else if (groups.length === 0) state = "empty";
+  else if (sections.length === 0) state = "no-match";
+  const stateView = state === "loading" ? <div style={{ width: "100%", alignSelf: "flex-start" }}><SkeletonRows rows={7} label="loading custom resources" /></div>
+    : state === "unreadable" ? <EmptyState icon={<IconAlertTriangle size={28} stroke={1.2} />} title="Custom resources could not be read." hint={crd.error ?? undefined} action={{ label: "Retry", onClick: () => { listCRDs(cluster).catch((e) => console.error("listCRDs", e)); } }} />
+    : state === "empty" ? <EmptyState icon={<IconComponents size={28} stroke={1.2} />} title="No custom resources on this cluster." hint="Only built-in kinds are served here." />
+    : <EmptyState icon={<IconComponents size={28} stroke={1.2} />} title="No custom resources match the search." action={{ label: "Clear search", onClick: () => setSearch("") }} />;
 
   return (
-    <div style={{ padding: "14px 16px", height: "100%", minHeight: 0, overflow: "hidden", boxSizing: "border-box", display: "flex", flexDirection: "column" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12, flexShrink: 0 }}>
-        <div style={{ fontSize: 12, color: "var(--color-text-secondary)" }}>
-          <b style={{ color: "var(--color-text-primary)" }}>{groups.length}</b> groups · <b style={{ color: "var(--color-text-primary)" }}>{totalKinds}</b> kinds
-        </div>
-        <div style={{ flex: 1 }} />
-        <input
-          value={crd.search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="kind, group, operator…"
-          style={{ width: 200, height: 28, paddingLeft: 10, fontSize: 12, background: "var(--color-background-secondary)", border: "0.5px solid var(--color-border-tertiary)", borderRadius: 4, color: "var(--color-text-primary)" }}
-        />
-      </div>
-
-      <div style={{ display: "flex", gap: 6, marginBottom: 10, fontSize: 11, alignItems: "center", flexShrink: 0 }}>
-        <span style={{ color: "var(--color-text-tertiary)" }}>group by:</span>
-        {GROUP_BYS.map((g) => (
-          <button
-            key={g}
-            onClick={() => setGroupBy(g)}
-            style={{
-              padding: "3px 9px", borderRadius: 999, cursor: "pointer", fontSize: 11,
-              border: "0.5px solid var(--color-border-tertiary)",
-              background: crd.groupBy === g ? "var(--color-background-info)" : "transparent",
-              color: crd.groupBy === g ? "var(--color-text-info)" : "var(--color-text-secondary)",
-            }}
-          >
-            {GROUP_BY_LABEL[g]}
-          </button>
-        ))}
-      </div>
-
-      <div data-testid="crd-resource-scroll" style={{ border: "0.5px solid var(--color-border-tertiary)", borderRadius: "var(--border-radius-md)", overflowY: "auto", overflowX: "hidden", flex: 1, minHeight: 0 }}>
-        {sections.map((sec) => (
-          <Section key={sec.label} cluster={cluster} label={sec.label} category={sec.category} kinds={sec.kinds} grouped={crd.groupBy === "group"} />
-        ))}
-      </div>
-    </div>
+    <LensLayout
+      label="Custom resources"
+      title="Custom resources"
+      summary={groups.length > 0 ? (
+        <span className="t-secondary"><b className="t-number" style={{ color: "var(--color-text-primary)" }}>{groups.length}</b> groups · <b className="t-number" style={{ color: "var(--color-text-primary)" }}>{totalKinds}</b> kinds</span>
+      ) : null}
+      controls={
+        <>
+          <span className="t-secondary">Group by</span>
+          {GROUP_BYS.map((g) => (
+            <button key={g} className="l-chip" aria-pressed={crd.groupBy === g} onClick={() => setGroupBy(g)}>{GROUP_BY_LABEL[g]}</button>
+          ))}
+          <label style={{ display: "flex", flex: "0 1 260px", minWidth: 140, marginLeft: "auto" }}>
+            <span className="sr-only">Search custom resources</span>
+            <input className="l-input" style={{ width: "100%" }} value={crd.search} onChange={(e) => setSearch(e.target.value)} placeholder="kind, group, operator…" />
+          </label>
+        </>
+      }
+      notice={crd.error && groups.length > 0 ? <WatchErrorBanner tool="Custom resources" failure="read failed - showing the last good read" error={crd.error} /> : undefined}
+      state={state}
+      stateView={stateView}
+      body={
+        <LensTable minWidth={520}>
+          <div data-testid="crd-resource-scroll" style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
+            {sections.map((sec) => (
+              <Section key={sec.label} cluster={cluster} label={sec.label} category={sec.category} kinds={sec.kinds} grouped={crd.groupBy === "group"} />
+            ))}
+          </div>
+        </LensTable>
+      }
+      footer={<span className="t-legend">↵ open · counts are live reads; ? = unreadable, never zero</span>}
+      footerEnd={<span className="t-secondary">{shownKinds} of {totalKinds} kinds{crd.search ? " · filter: search" : ""}</span>}
+    />
   );
 }
+
+const CRD_GRID = "16px minmax(200px, 1fr) 96px 64px minmax(120px, 0.8fr)";
 
 function Section({ cluster, label, category, kinds, grouped }: { cluster: string; label: string; category: string; kinds: FlatKind[]; grouped: boolean }) {
   const expanded = useFleet((s) => s.crd.expanded);
@@ -159,17 +149,25 @@ function Section({ cluster, label, category, kinds, grouped }: { cluster: string
       : `${sectionInstances}${sectionCapped ? "+" : ""} instances`;
 
   return (
-    <div>
+    <section aria-label={label}>
       <div
+        className="lens-table-head"
+        role={grouped ? "button" : undefined}
+        tabIndex={grouped ? 0 : undefined}
+        aria-expanded={grouped ? open : undefined}
         onClick={() => grouped && toggle(label)}
-        style={{ display: "grid", gridTemplateColumns: "18px 1fr 90px 70px 1fr", gap: 10, alignItems: "center", padding: "8px 12px", background: "var(--color-background-secondary)", cursor: grouped ? "pointer" : "default", borderTop: "0.5px solid var(--color-border-tertiary)" }}
+        onKeyDown={(e) => { if (grouped && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); toggle(label); } }}
+        style={{ gridTemplateColumns: CRD_GRID, background: "var(--color-background-secondary)", cursor: grouped ? "pointer" : "default" }}
       >
-        <span style={{ color: "var(--color-text-secondary)", display: "inline-flex" }}>{grouped ? <IconChevronRight size={13} stroke={1.7} style={{ transform: open ? "rotate(90deg)" : "none", transition: "transform 100ms ease" }} /> : null}</span>
-        <div style={{ fontFamily: "var(--font-mono)", fontSize: 12, fontWeight: 500, ...ellipsis }}>{label}</div>
-        {category ? <span style={{ background: "var(--color-background-primary)", color: "var(--color-text-secondary)", fontSize: 9, padding: "1px 6px", borderRadius: 3, letterSpacing: 0.3, justifySelf: "start" }}>{category}</span> : <span />}
-        <span style={{ fontSize: 11, color: "var(--color-text-secondary)" }}>{kinds.length} kinds</span>
+        <span style={{ display: "inline-flex" }}>{grouped ? <IconChevronRight size={13} stroke={1.7} style={{ transform: open ? "rotate(90deg)" : "none", transition: "transform 100ms ease" }} /> : null}</span>
+        <span className="t-identifier" style={{ color: "var(--color-text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {label}{category ? <span className="t-secondary" style={{ marginLeft: 8, fontFamily: "var(--font-sans)" }}>{category}</span> : null}
+        </span>
+        <span className="t-secondary">{kinds.length} kinds</span>
+        <span />
         <span
-          style={{ fontSize: 11, color: sectionUnreadable > 0 ? "var(--color-text-warning)" : "var(--color-text-secondary)" }}
+          className="t-secondary"
+          style={{ color: sectionUnreadable > 0 ? "var(--color-text-warning)" : undefined, justifySelf: "end" }}
           title={sectionUnreadable > 0 ? `${sectionUnreadable} kind${sectionUnreadable === 1 ? "" : "s"} could not be counted - the total is a lower bound` : undefined}
         >
           {sectionTotal}
@@ -179,20 +177,19 @@ function Section({ cluster, label, category, kinds, grouped }: { cluster: string
         const c = counts[crdCountKey(cluster, k.group, k.version, k.plural)];
         // A failed count is "?" - never a zero (review 2026-10-03 #10).
         const display = c ? (c.error ? "?" : c.capped ? `${c.count}+` : `${c.count}`) : "…";
+        const go = () => openResource({ group: k.group, version: k.version, plural: k.plural, kind: k.kind, scope: k.scope });
         return (
-          <div
-            key={`${k.group}/${k.kind}`}
-            onClick={() => openResource({ group: k.group, version: k.version, plural: k.plural, kind: k.kind, scope: k.scope })}
-            style={{ display: "grid", gridTemplateColumns: "18px 1fr 90px 70px 1fr", gap: 10, alignItems: "center", padding: "6px 12px", borderTop: "0.5px solid var(--color-border-tertiary)", fontSize: 11, cursor: "pointer" }}
-          >
+          <div key={`${k.group}/${k.kind}`} role="button" tabIndex={0} className="lens-row" style={{ gridTemplateColumns: CRD_GRID }}
+            onClick={go}
+            onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); go(); } }}>
             <span />
-            <div style={{ fontFamily: "var(--font-mono)", ...ellipsis }}>{k.kind} {k.shortNames[0] && <span style={{ color: "var(--color-text-tertiary)" }}>{k.shortNames[0]}</span>}</div>
-            <span style={{ background: "var(--color-background-secondary)", color: "var(--color-text-secondary)", fontSize: 9, padding: "1px 5px", borderRadius: 3, justifySelf: "start" }}>{k.scope.toLowerCase()}</span>
-            <span style={{ fontWeight: 500 }}>{display}</span>
-            <span style={{ color: "var(--color-text-tertiary)", ...ellipsis }}>{k.operator}</span>
+            <span className="lens-cell-name">{k.kind} {k.shortNames[0] && <span style={{ color: "var(--color-text-tertiary)" }}>{k.shortNames[0]}</span>}</span>
+            <span className="t-secondary">{k.scope === "Cluster" ? "cluster-scoped" : "namespaced"}</span>
+            <span style={{ justifySelf: "end", color: c?.error ? "var(--color-text-warning)" : undefined }} title={c?.error ? "count could not be read" : undefined}>{display}</span>
+            <span className="t-secondary" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{k.operator}</span>
           </div>
         );
       })}
-    </div>
+    </section>
   );
 }

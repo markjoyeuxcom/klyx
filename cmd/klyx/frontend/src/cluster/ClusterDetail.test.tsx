@@ -55,8 +55,8 @@ describe("ClusterDetail", () => {
       route: { name: "cluster", cluster: "x", section: "resources" },
       crd: { cluster: "x", groups: [], loading: false, expanded: [], counts: {}, groupBy: "group", search: "", builtinCategory: null },
     });
-    const { getByText } = render(<ClusterDetail />);
-    expect(getByText("Built-in resource catalog")).toBeTruthy();
+    const { getByRole } = render(<ClusterDetail />);
+    expect(getByRole("heading", { name: "Built-in resources" })).toBeTruthy();
   });
 
   it("renders CRDBrowser for the crds section", () => {
