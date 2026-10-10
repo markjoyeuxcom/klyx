@@ -7,6 +7,8 @@ import {
   IconRouteAltLeft, IconSettings, IconShieldLock, IconStack2, IconStairsUp, IconTerminal2, IconTopologyStar3, IconUserCheck, IconWebhook,
 } from "@tabler/icons-react";
 import { useFleet, WORKLOAD_KINDS } from "../store/fleet";
+import { type Tone, toneColor } from "./primitives/styles";
+import { attentionTone, coverageOf, summarize } from "../health/verdict";
 import type { ArgoViewMode, ClusterSection, ResourceRef, Route, WorkloadKind } from "../store/fleet";
 import { openTerminal } from "../bridge/configsvc";
 
@@ -293,10 +295,20 @@ function tabStyle(current: boolean, sub: boolean): React.CSSProperties {
   };
 }
 
-function TabCount({ n, bad }: { n: number; bad?: boolean }) {
+// A tab's attention badge: a count with the tone of its worst verdict
+// (danger for any fault, warning for degraded only). Zero renders nothing.
+type Badge = { n: number; tone: Tone | undefined };
+const NO_BADGE: Badge = { n: 0, tone: undefined };
+
+function TabLamp({ tone }: { tone: Tone | undefined }) {
+  const t = tone ?? "danger";
+  return <span aria-hidden style={{ width: 6, height: 6, borderRadius: "50%", background: toneColor[t], boxShadow: `var(--lamp-glow-${t}, none)`, display: "inline-block" }} />;
+}
+
+function TabCount({ n, tone }: { n: number; tone?: Tone }) {
   if (n <= 0) return null;
   return (
-    <span style={{ fontFamily: "var(--font-mono)", fontSize: 9, color: bad ? "var(--color-text-danger)" : "var(--color-text-tertiary)", fontWeight: bad ? 700 : 400 }}>{n}</span>
+    <span style={{ fontFamily: "var(--font-mono)", fontSize: 9, color: tone ? toneColor[tone] : "var(--color-text-tertiary)", fontWeight: tone === "danger" ? 700 : 400 }}>{n}</span>
   );
 }
 
@@ -374,20 +386,32 @@ export function LensNav() {
   // from the fleet board (fetched fleet-wide); the rest read their lens
   // stores when they hold the current cluster.
   const clusterName = route.name === "cluster" ? route.cluster : "";
-  const brokenWorkloads = inCluster ? (board[clusterName]?.broken ?? 0) : 0;
-  const brokenPods = useFleet((s) => (inCluster && s.pods.cluster === clusterName ? s.pods.items.filter((p) => p.rank === "unhealthy").length : 0));
+  // Workloads and Pods use the shared verdict (internal/health), and a tab
+  // shows a number only when it is provably this cluster's complete,
+  // all-namespaces observation - never a silently scoped or retained count.
+  const wl = inCluster ? board[clusterName]?.workloads : undefined;
+  const workloadsBadge: Badge = wl && wl.coverage === "complete" ? { n: wl.counts.attention, tone: attentionTone(wl.counts) } : NO_BADGE;
+  const pods = useFleet((s) => s.pods);
+  const podsBadge = useMemo((): Badge => {
+    if (!inCluster || coverageOf(pods, clusterName, "") !== "complete") return NO_BADGE;
+    const c = summarize(pods.items, (p) => p.health);
+    return { n: c.attention, tone: attentionTone(c) };
+  }, [inCluster, pods, clusterName]);
   const brokenFlux = useFleet((s) => (inCluster && s.gitops.cluster === clusterName ? s.gitops.resources.filter((r) => r.ready === "Failed" && !r.suspended).length : 0));
   const brokenArgo = useFleet((s) => (inCluster && s.argo.cluster === clusterName ? s.argo.apps.filter((a) => a.broken).length : 0));
-  const groupFault: Record<string, number> = {
-    Workloads: Math.max(brokenWorkloads, brokenPods),
-    "Flux CD": brokenFlux,
-    "Argo CD": brokenArgo,
+  // Flux and Argo are not on the shared verdict yet (later slices): their
+  // legacy counts stay danger-toned and are never summed with verdict counts.
+  const legacy = (n: number): Badge => ({ n, tone: n > 0 ? "danger" : undefined });
+  const groupFault: Record<string, Badge> = {
+    Workloads: workloadsBadge,
+    "Flux CD": legacy(brokenFlux),
+    "Argo CD": legacy(brokenArgo),
   };
-  const itemFault: Record<string, number> = {
-    "All workloads": brokenWorkloads,
-    Pods: brokenPods,
-    Kustomizations: brokenFlux,
-    Applications: brokenArgo,
+  const itemFault: Record<string, Badge> = {
+    "All workloads": workloadsBadge,
+    Pods: podsBadge,
+    Kustomizations: legacy(brokenFlux),
+    Applications: legacy(brokenArgo),
   };
 
   return (
@@ -399,12 +423,13 @@ export function LensNav() {
         {inCluster && groups.map((g) => {
           const isCur = activeGroup?.label === g.label;
           const label = (DISPLAY_LABEL[g.label] ?? g.label).toLowerCase();
-          const bad = groupFault[g.label] ?? 0;
+          const badge = groupFault[g.label] ?? NO_BADGE;
+            const bad = badge.n;
           return (
             <button key={g.label} onClick={() => activate(g.items[0].target)} aria-current={isCur ? "true" : undefined} style={tabStyle(isCur, false)}>
-              {bad > 0 && <span aria-hidden style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--color-text-danger)", boxShadow: "var(--lamp-glow-danger, none)", display: "inline-block" }} />}
+              {bad > 0 && <TabLamp tone={badge.tone} />}
               {label}
-              <TabCount n={bad} bad />
+              <TabCount n={bad} tone={badge.tone} />
             </button>
           );
         })}
@@ -427,12 +452,13 @@ export function LensNav() {
         <nav aria-label={`${activeGroup.label.toLowerCase()} lenses`} style={navRow}>
           {activeGroup.items.map((item) => {
             const active = item.active !== "none" && isExpandedItemActive(route, item, workloadKindFilter);
-            const bad = itemFault[item.label] ?? 0;
+            const badge = itemFault[item.label] ?? NO_BADGE;
+            const bad = badge.n;
             return (
               <button key={item.label} onClick={() => activate(item.target)} aria-current={active ? "true" : undefined} style={tabStyle(active, true)}>
-                {bad > 0 && <span aria-hidden style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--color-text-danger)", boxShadow: "var(--lamp-glow-danger, none)", display: "inline-block" }} />}
+                {bad > 0 && <TabLamp tone={badge.tone} />}
                 {item.label.toLowerCase()}
-                <TabCount n={bad} bad />
+                <TabCount n={bad} tone={badge.tone} />
               </button>
             );
           })}

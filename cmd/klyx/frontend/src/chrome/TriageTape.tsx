@@ -20,7 +20,9 @@ type Chip = {
   label: [string, string]; // [singular, plural]
   tileLabel: string;
   valueLabel: [string, string];
-  variant: "danger" | "warning";
+  // "evidence" is a count worth a click that is NOT a fault (Warning events):
+  // it never lights a lamp or reads as an alert.
+  variant: "danger" | "warning" | "evidence";
   go: () => void;
 };
 
@@ -42,10 +44,10 @@ export function TriageTape({ cluster }: { cluster: string }) {
 
   const nav = useFleet.getState();
   const chips: Chip[] = [
-    { key: "workloads", count: tape.counts.workloads, label: ["unhealthy workload", "unhealthy workloads"], tileLabel: "workload health", valueLabel: ["need attention", "need attention"], variant: "danger", go: () => { nav.setSection("workloads"); nav.setWorkloadsNeedsAttention(true); } },
-    { key: "pods", count: tape.counts.pods, label: ["pod not ready", "pods not ready"], tileLabel: "pods", valueLabel: ["not ready", "not ready"], variant: "danger", go: () => { nav.setSection("pods"); nav.setPodsNeedsAttention(true); } },
-    { key: "events", count: tape.counts.events, label: ["warning event", "warning events"], tileLabel: "events", valueLabel: ["warning", "warnings"], variant: "warning", go: () => { nav.setSection("events"); nav.setWarningsOnly(true); } },
-    { key: "nodes", count: tape.counts.nodes, label: ["node problem", "node problems"], tileLabel: "nodes", valueLabel: ["problem", "problems"], variant: "danger", go: () => nav.setSection("nodes") },
+    { key: "workloads", count: tape.counts.workloads, label: ["workload needs attention", "workloads need attention"], tileLabel: "workloads", valueLabel: ["need attention", "need attention"], variant: "danger", go: () => { nav.setSection("workloads"); nav.setWorkloadsNeedsAttention(true); } },
+    { key: "pods", count: tape.counts.pods, label: ["pod needs attention", "pods need attention"], tileLabel: "pods", valueLabel: ["need attention", "need attention"], variant: "danger", go: () => { nav.setSection("pods"); nav.setPodsNeedsAttention(true); } },
+    { key: "events", count: tape.counts.events, label: ["warning event", "warning events"], tileLabel: "events", valueLabel: ["warning", "warnings"], variant: "evidence", go: () => { nav.setSection("events"); nav.setWarningsOnly(true); } },
+    { key: "nodes", count: tape.counts.nodes, label: ["node needs attention", "nodes need attention"], tileLabel: "nodes", valueLabel: ["need attention", "need attention"], variant: "danger", go: () => nav.setSection("nodes") },
     { key: "helm", count: tape.counts.helm, label: ["failed release", "failed releases"], tileLabel: "helm", valueLabel: ["failed release", "failed releases"], variant: "danger", go: () => nav.setSection("helm") },
     { key: "flux", count: tape.counts.flux, label: ["flux not ready", "flux not ready"], tileLabel: "flux", valueLabel: ["not ready", "not ready"], variant: "danger", go: () => nav.setSection("gitops") },
     { key: "argo", count: tape.counts.argo, label: ["argo app not synced", "argo apps not synced"], tileLabel: "argo cd", valueLabel: ["not synced", "not synced"], variant: "warning", go: () => nav.setSection("argo") },
@@ -54,7 +56,7 @@ export function TriageTape({ cluster }: { cluster: string }) {
   // Absent tools are excluded entirely - a Flux-only cluster has no argo lens,
   // which is expected, not unreadable.
   const present = chips.filter((c) => c.count !== "absent");
-  const alerts = present.filter((c) => typeof c.count === "number" && c.count > 0);
+  const alerts = present.filter((c) => c.variant !== "evidence" && typeof c.count === "number" && c.count > 0);
   const readable = present.filter((c) => typeof c.count === "number");
   const unreadable = present.length - readable.length;
 
@@ -121,12 +123,13 @@ function TriageSignal({ chip }: { chip: Chip }) {
   const count = chip.count;
   const isNumber = typeof count === "number";
   const active = isNumber && count > 0;
-  const tone = !isNumber ? "muted" : active ? chip.variant : "muted";
+  const lit = active && chip.variant !== "evidence";
+  const tone = lit ? (chip.variant as "danger" | "warning") : "muted";
   const valueColor = !isNumber
     ? "var(--color-text-tertiary)"
-    : active
+    : lit
       ? chip.variant === "danger" ? "var(--color-text-danger)" : "var(--color-text-warning)"
-      : "var(--color-text-tertiary)";
+      : active ? "var(--color-text-secondary)" : "var(--color-text-tertiary)";
   const value = !isNumber
     ? String(count)
     : active
@@ -146,7 +149,7 @@ function TriageSignal({ chip }: { chip: Chip }) {
     <>
       <StatusDot size={7} tone={tone} />
       <span style={{ fontSize: 9, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--color-text-tertiary)" }}>{chip.tileLabel}</span>
-      <span style={{ color: valueColor, fontFamily: "var(--font-mono)", fontSize: 11, fontWeight: active ? 700 : 400 }}>{value}</span>
+      <span style={{ color: valueColor, fontFamily: "var(--font-mono)", fontSize: 11, fontWeight: lit ? 700 : 400 }}>{value}</span>
     </>
   );
 

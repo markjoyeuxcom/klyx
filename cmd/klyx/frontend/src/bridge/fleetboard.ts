@@ -1,3 +1,4 @@
+import { summarize, type HealthLike } from "../health/verdict";
 import { useFleet } from "../store/fleet";
 import type { FleetBoardEntry } from "../store/fleet";
 import {
@@ -11,7 +12,7 @@ import {
 type MetricsDTO = { available: boolean; cpuFraction: number | null; memFraction: number | null };
 type GitOpsSummaryDTO = { fluxPresent: boolean; total: number; notReady: number; suspended: number };
 type ArgoResultDTO = { available: boolean; apps: { broken: boolean }[] };
-type WorkloadsResultDTO = { workloads: { rank: string }[] };
+type WorkloadsResultDTO = { workloads: { health?: HealthLike }[]; truncated?: boolean; error?: string };
 type GatewayListDTO = { gatewayAPIServed: boolean; gateways: { namespace: string; name: string; accepted: boolean; programmed: boolean }[] };
 type TopologyDTO = { routes?: { accepted: boolean; resolvedRefs: boolean }[]; error?: string };
 
@@ -31,7 +32,7 @@ export async function fetchFleetBoard(clusters: string[]): Promise<void> {
 
     const entry: FleetBoardEntry = {
       cpuFraction: null, memFraction: null,
-      workloadsTotal: null, broken: null, flux: null, argo: null, gateway: null,
+      workloads: null, flux: null, argo: null, gateway: null,
     };
 
     if (metrics.status === "fulfilled" && metrics.value) {
@@ -50,9 +51,16 @@ export async function fetchFleetBoard(clusters: string[]): Promise<void> {
       if (a.available) entry.argo = { total: a.apps.length, broken: a.apps.filter((x) => x.broken).length };
     }
     if (workloads.status === "fulfilled" && workloads.value) {
-      const w = (workloads.value as WorkloadsResultDTO).workloads ?? [];
-      entry.workloadsTotal = w.length;
-      entry.broken = w.filter((x) => x.rank === "unhealthy" || x.rank === "degraded").length;
+      // A fulfilled call can still carry a failed read (error) or a capped
+      // list (truncated): the first is unreadable, never a zero; the second
+      // is a lower bound.
+      const r = workloads.value as WorkloadsResultDTO;
+      if (!r.error) {
+        entry.workloads = {
+          counts: summarize(r.workloads ?? [], (x) => x.health),
+          coverage: r.truncated ? "partial" : "complete",
+        };
+      }
     }
     if (gateway.status === "fulfilled") entry.gateway = gateway.value;
 

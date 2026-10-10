@@ -77,7 +77,7 @@ describe("TriageTape", () => {
     const { getByRole, getByText } = render(<TriageTape cluster="nelli" />);
     expect(getByText("everything else is quiet")).toBeTruthy();
     expect(getByRole("button", { name: "3 warning events" })).toBeTruthy();
-    fireEvent.click(getByRole("button", { name: "1 unhealthy workload" }));
+    fireEvent.click(getByRole("button", { name: "1 workload needs attention" }));
     const st = useFleet.getState();
     expect(st.route).toMatchObject({ name: "cluster", section: "workloads" });
     expect(st.workloads.needsAttention).toBe(true);
@@ -106,7 +106,18 @@ describe("TriageTape", () => {
   it("genuinely unreadable lenses are counted in the trailer", () => {
     useFleet.setState({ tape: { cluster: "nelli", loading: false, counts: { workloads: 2, pods: "unreadable", events: 0, nodes: "unreadable", helm: "absent", flux: 0, argo: "absent" } } });
     const { getByText, getByRole } = render(<TriageTape cluster="nelli" />);
-    expect(getByRole("button", { name: "2 unhealthy workloads" })).toBeTruthy();
+    expect(getByRole("button", { name: "2 workloads need attention" })).toBeTruthy();
     expect(getByText("2 lenses unreadable")).toBeTruthy();
   });
+
+  it("Warning events alone are evidence: clickable, never lit, never an alert", () => {
+    useFleet.setState((s) => ({
+      tape: { ...s.tape, cluster: "kind", loading: false,
+        counts: { workloads: 0, pods: 0, events: 12, nodes: 0, helm: "absent", flux: "absent", argo: "absent" } },
+    }));
+    const { getByRole, getByText } = render(<TriageTape cluster="kind" />);
+    expect(getByRole("button", { name: "12 warning events" })).toBeTruthy();
+    expect(getByText("everything is quiet")).toBeTruthy();
+  });
 });
+

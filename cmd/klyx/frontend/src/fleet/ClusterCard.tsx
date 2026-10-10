@@ -3,6 +3,7 @@ import { IconLock } from "@tabler/icons-react";
 import type { ClusterDTO, FleetBoardEntry, MeshGraphDTO } from "../store/fleet";
 import { useFleet } from "../store/fleet";
 import { type Tone, StatusDot, toneColor, toneBg, toneBorder } from "../chrome/primitives";
+import { attentionTone, boardAttention } from "../health/verdict";
 
 type Signal = {
   label: string;
@@ -15,7 +16,8 @@ type Signal = {
 export function clusterDiagnosticScore(c: ClusterDTO, board: FleetBoardEntry | undefined): number {
   if (c.state === "Failed" || c.state === "Unconnected") return 1000;
   let score = 0;
-  if ((board?.broken ?? 0) > 0) score += 500 + Math.min(100, (board?.broken ?? 0) * 10);
+  const attention = boardAttention(board) ?? 0;
+  if (attention > 0) score += 500 + Math.min(100, attention * 10);
   if (c.state === "Stale") score += 420;
   if (c.state === "Degraded") score += 360;
   if ((board?.flux?.notReady ?? 0) > 0) score += 260;
@@ -147,15 +149,15 @@ export function ClusterCard({ c }: { c: ClusterDTO }) {
   );
 }
 
+// SignalRow: label and value in words. No bar: these signals have no honest
+// denominator, and a bar without one is decoration posing as measurement.
+// Only warnings and faults take colour.
 function SignalRow({ signal }: { signal: Signal }) {
-  const width = `${Math.round((signal.fraction ?? 0) * 100)}%`;
+  const lit = signal.tone === "danger" || signal.tone === "warning";
   return (
-    <div title={signal.title ?? signal.value} style={{ display: "grid", gridTemplateColumns: "86px minmax(44px, 1fr) minmax(0, 46%)", alignItems: "center", gap: 10, fontFamily: "var(--font-mono)", fontSize: 11, minWidth: 0 }}>
-      <span style={{ color: "var(--color-text-secondary)", ...ellipsis }}>{signal.label}</span>
-      <span style={{ height: 5, background: "var(--color-background-secondary)", border: "0.5px solid var(--color-border-tertiary)", overflow: "hidden", minWidth: 0 }}>
-        <span style={{ display: "block", width, maxWidth: "100%", height: "100%", background: toneColor[signal.tone], opacity: signal.fraction == null ? 0.25 : 1 }} />
-      </span>
-      <span style={{ color: toneColor[signal.tone], ...ellipsis }}>{signal.value}</span>
+    <div title={signal.title ?? signal.value} style={{ display: "grid", gridTemplateColumns: "86px minmax(0, 1fr)", alignItems: "center", gap: 10, fontFamily: "var(--font-mono)", fontSize: 11, minWidth: 0 }}>
+      <span style={{ color: "var(--color-text-tertiary)", ...ellipsis }}>{signal.label}</span>
+      <span style={{ color: lit ? toneColor[signal.tone] : signal.tone === "muted" ? "var(--color-text-tertiary)" : "var(--color-text-secondary)", ...ellipsis }}>{signal.value}</span>
     </div>
   );
 }
@@ -179,26 +181,26 @@ function Badge({ tone, children }: { tone: Tone; children: ReactNode }) {
   );
 }
 
+// workloadSignal: workload verdict counts with their entity and coverage -
+// "3 of 8 need attention", never a bar without a denominator.
 function workloadSignal(board: FleetBoardEntry | undefined): Signal {
-  if (!board || board.broken == null) {
-    return { label: "workloads", value: "unreadable", tone: "muted", fraction: null };
-  }
-  const total = board.workloadsTotal ?? null;
-  if (board.broken > 0) {
+  const w = board?.workloads;
+  if (!w) return { label: "workloads", value: "unreadable", tone: "muted", fraction: null };
+  const { counts, coverage } = w;
+  const partial = coverage === "partial" ? " (partial)" : "";
+  if (counts.attention > 0) {
     return {
       label: "workloads",
-      value: `${board.broken} bad`,
-      tone: "danger",
-      fraction: total && total > 0 ? Math.max(0.12, Math.min(1, board.broken / total)) : 0.42,
-      title: total ? `${board.broken} of ${total} workloads need attention` : undefined,
+      value: `${counts.attention} of ${counts.total} need attention${partial}`,
+      tone: attentionTone(counts) ?? "warning",
+      fraction: null,
+      title: `${counts.fault} fault · ${counts.degraded} degraded${counts.unknown ? ` · ${counts.unknown} unknown` : ""}`,
     };
   }
-  return {
-    label: "workloads",
-    value: total != null ? `${total} ok` : "quiet",
-    tone: "success",
-    fraction: 1,
-  };
+  if (counts.unknown > 0) {
+    return { label: "workloads", value: `${counts.unknown} of ${counts.total} unverified${partial}`, tone: "muted", fraction: null };
+  }
+  return { label: "workloads", value: `${counts.total} · none need attention${partial}`, tone: "neutral", fraction: null };
 }
 
 function gitopsSignal(board: FleetBoardEntry | undefined): Signal {
@@ -263,37 +265,48 @@ function meshSignal(graph: MeshGraphDTO | null, cluster: string): Signal {
   };
 }
 
+// freshnessSignal is the CONNECTION axis in words - never a bar, never
+// "healthy". A degraded connection is connected with subsystem notes.
 function freshnessSignal(c: ClusterDTO): Signal {
-  if (c.state === "Stale") return { label: "freshness", value: "watch stale", tone: "warning", fraction: 0.62, title: c.reason };
-  if (c.state === "Degraded") return { label: "freshness", value: "degraded", tone: "warning", fraction: 0.72, title: c.reason };
-  if (c.state === "Synced") return { label: "freshness", value: "live", tone: "success", fraction: 1 };
-  if (c.state === "Connecting") return { label: "freshness", value: "connecting", tone: "info", fraction: 0.34 };
-  return { label: "freshness", value: c.state.toLowerCase(), tone: "muted", fraction: null };
+  if (c.state === "Stale") return { label: "connection", value: "stale", tone: "warning", fraction: null, title: c.reason };
+  if (c.state === "Degraded") return { label: "connection", value: "connected · notes", tone: "warning", fraction: null, title: c.reason };
+  if (c.state === "Synced") return { label: "connection", value: "connected", tone: "neutral", fraction: null };
+  if (c.state === "Connecting") return { label: "connection", value: "connecting", tone: "muted", fraction: null };
+  return { label: "connection", value: c.state.toLowerCase(), tone: "muted", fraction: null };
 }
 
-function cardBadge(c: ClusterDTO, board: FleetBoardEntry | undefined, signals: Signal[]): { label: string; tone: Tone } | null {
-  if ((board?.broken ?? 0) > 0) return { label: `${board?.broken} critical`, tone: "danger" };
+// cardBadge names workload attention as exactly that - it is not a
+// whole-cluster fault total (other domains are their own signal rows).
+// No "healthy" badge: connection alone never asserts health.
+function cardBadge(_c: ClusterDTO, board: FleetBoardEntry | undefined, signals: Signal[]): { label: string; tone: Tone } | null {
+  const w = board?.workloads;
+  if (w && w.counts.attention > 0) return { label: `${w.counts.attention} workload attention`, tone: attentionTone(w.counts) ?? "warning" };
   const warning = signals.find((s) => s.tone === "warning");
-  if (warning) return { label: warning.value, tone: "warning" };
-  if (c.state === "Synced") return { label: "healthy", tone: "success" };
-  return { label: c.state.toLowerCase(), tone: "info" };
+  if (warning) return { label: `${warning.label}: ${warning.value}`, tone: "warning" };
+  return null;
 }
 
 function cardRail(c: ClusterDTO, board: FleetBoardEntry | undefined, signals: Signal[]): Tone {
-  if ((board?.broken ?? 0) > 0) return "danger";
+  const w = board?.workloads;
+  if (w && w.counts.attention > 0) return attentionTone(w.counts) ?? "warning";
   if (c.state === "Stale" || c.state === "Degraded" || signals.some((s) => s.tone === "warning")) return "warning";
-  return "success";
+  return "muted";
 }
 
 function diagnosticReason(c: ClusterDTO, board: FleetBoardEntry | undefined, signals: Signal[]): string {
-  if (c.protected && (board?.broken ?? 0) > 0) return "first because protected cluster has bad workloads";
-  if ((board?.broken ?? 0) > 0) return "raised because workloads need attention";
+  const attention = boardAttention(board) ?? 0;
+  if (c.protected && attention > 0) return "first because a protected cluster has workloads needing attention";
+  if (attention > 0) return "raised because workloads need attention";
   if (c.state === "Stale") return "raised because cluster watches are stale";
   if (c.state === "Degraded") return c.reason || "raised because cluster capability health is degraded";
   if ((board?.flux?.notReady ?? 0) > 0 || (board?.argo?.broken ?? 0) > 0) return "raised because GitOps needs attention";
   if (signals.some((s) => s.label === "gateway" && s.tone === "warning")) return "raised because Gateway API needs attention";
   if (c.nodesReady < c.nodesTotal) return "raised because node readiness is below target";
-  return "healthy clusters stay visible without stealing attention";
+  // Say what is known - never "healthy" on missing or partial evidence.
+  const w = board?.workloads;
+  if (!w) return "workload health unreadable";
+  if (w.coverage !== "complete" || w.counts.unknown > 0) return "workload health partly unverified";
+  return "nothing raised";
 }
 
 function clusterMeta(c: ClusterDTO): string {

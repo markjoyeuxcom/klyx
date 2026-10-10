@@ -1,3 +1,4 @@
+import { summarize, type HealthLike } from "../health/verdict";
 import { useFleet, OverviewSummary } from "../store/fleet";
 import {
   WorkloadsService,
@@ -10,9 +11,12 @@ import {
 
 // ---- pure summary math (exported for unit tests) --------------------------------
 
-type RankedRow = { rank: string };
+// Workloads, pods and nodes are counted from the shared backend verdict
+// (internal/health) - attention = fault + degraded. A row without a verdict
+// is unknown, never counted healthy or broken from legacy fields.
+type RankedRow = { health?: HealthLike };
 type EventRow = { type: string };
-type NodeRow = { ready: boolean; problems: string[]; unschedulable: boolean };
+type NodeRow = { health?: HealthLike };
 type HelmRow = { status: string };
 type FluxSummaryInput = { present: boolean; notReady: number; suspended: number } | null;
 
@@ -45,19 +49,13 @@ export function summarise(
   input: SummariseInput,
   distinctNamespaces: Set<string>,
 ): SummariseOutput {
-  const unhealthyWorkloads = input.workloads.filter(
-    (w) => w.rank === "unhealthy" || w.rank === "degraded",
-  ).length;
-
-  const podsNotReady = input.pods.filter(
-    (p) => p.rank === "unhealthy" || p.rank === "degraded",
-  ).length;
+  const unhealthyWorkloads = summarize(input.workloads, (w) => w.health).attention;
+  const podsNotReady = summarize(input.pods, (p) => p.health).attention;
 
   const warningEvents = input.events.filter((e) => e.type === "Warning").length;
 
-  const nodeProblems = input.nodes.filter(
-    (n) => !n.ready || n.problems.length > 0 || n.unschedulable,
-  ).length;
+  // Cordoned is an intended operator state (paused), not a node problem.
+  const nodeProblems = summarize(input.nodes, (n) => n.health).attention;
 
   const failedReleases = input.helmAvailable
     ? input.releases.filter((r) => r.status === "failed").length

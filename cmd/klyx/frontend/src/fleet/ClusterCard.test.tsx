@@ -91,18 +91,19 @@ describe("ClusterCard fleet board", () => {
   // --- Fleet board enrichment ---
 
   it("renders the gitops line in each tool's vocabulary when board data exists", () => {
-    useFleet.setState({ fleetBoard: { [base.name]: { cpuFraction: 0.62, memFraction: 0.81, workloadsTotal: 142, broken: 0, flux: { total: 47, notReady: 0 }, argo: { total: 6, broken: 0 }, gateway: { served: true, gateways: 2, routes: 18, brokenRoutes: 0, unprogrammed: 0 } } } });
+    useFleet.setState({ fleetBoard: { [base.name]: { cpuFraction: 0.62, memFraction: 0.81, workloads: { counts: { total: 142, fault: 0, degraded: 0, unknown: 0, progressing: 0, paused: 0, ok: 142, attention: 0 }, coverage: "complete" }, flux: { total: 47, notReady: 0 }, argo: { total: 6, broken: 0 }, gateway: { served: true, gateways: 2, routes: 18, brokenRoutes: 0, unprogrammed: 0 } } } });
     const { getByText } = render(<ClusterCard c={base} />);
-    expect(getByText("142 ok")).toBeTruthy();
+    expect(getByText("142 · none need attention")).toBeTruthy();
     expect(getByText("flux 47 ready · argo 6 synced")).toBeTruthy();
     expect(getByText("18 routes")).toBeTruthy();
-    expect(getByText("live")).toBeTruthy();
+    expect(getByText("connected")).toBeTruthy();
   });
 
-  it("broken workloads show a count, never hidden", () => {
-    useFleet.setState({ fleetBoard: { [base.name]: { cpuFraction: null, memFraction: null, workloadsTotal: 10, broken: 3, flux: null, argo: null, gateway: { served: false, gateways: 0, routes: null, brokenRoutes: null, unprogrammed: 0 } } } });
+  it("workload attention shows a count with its entity, never hidden", () => {
+    useFleet.setState({ fleetBoard: { [base.name]: { cpuFraction: null, memFraction: null, workloads: { counts: { total: 10, fault: 3, degraded: 0, unknown: 0, progressing: 0, paused: 0, ok: 7, attention: 3 }, coverage: "complete" }, flux: null, argo: null, gateway: { served: false, gateways: 0, routes: null, brokenRoutes: null, unprogrammed: 0 } } } });
     const { getByText } = render(<ClusterCard c={base} />);
-    expect(getByText("3 bad")).toBeTruthy();
+    expect(getByText("3 of 10 need attention")).toBeTruthy();
+    expect(getByText("3 workload attention")).toBeTruthy(); // badge names its entity, never "critical"
     expect(getByText("not detected")).toBeTruthy(); // no GitOps tools detected never implies healthy
     expect(getByText(/raised because workloads/i)).toBeTruthy();
   });
@@ -114,5 +115,18 @@ describe("ClusterCard fleet board", () => {
     expect(getByText("connect timed out")).toBeTruthy();
     expect(getByText(/reconnects automatically/)).toBeTruthy();
     expect(queryByText(/nodes/)).toBeNull(); // no fabricated stats
+  });
+
+  it("an unreadable workload read is never a zero", () => {
+    useFleet.setState({ fleetBoard: { [base.name]: { cpuFraction: null, memFraction: null, workloads: null, flux: null, argo: null } } });
+    const { getAllByText, queryByText } = render(<ClusterCard c={base} />);
+    expect(getAllByText("unreadable").length).toBeGreaterThan(0);
+    expect(queryByText(/healthy/)).toBeNull();
+  });
+
+  it("a capped workload read is labelled partial", () => {
+    useFleet.setState({ fleetBoard: { [base.name]: { cpuFraction: null, memFraction: null, workloads: { counts: { total: 10, fault: 0, degraded: 1, unknown: 0, progressing: 0, paused: 0, ok: 9, attention: 1 }, coverage: "partial" }, flux: null, argo: null } } });
+    const { getByText } = render(<ClusterCard c={base} />);
+    expect(getByText("1 of 10 need attention (partial)")).toBeTruthy();
   });
 });

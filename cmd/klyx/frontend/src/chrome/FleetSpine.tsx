@@ -82,12 +82,18 @@ export function FleetSpine() {
       <span style={{ fontSize: 8, letterSpacing: "0.16em", textTransform: "uppercase", color: "var(--color-text-tertiary)", marginBottom: 2 }}>fleet</span>
       {clusters.map((c) => {
         const unreachable = c.state === "Failed" || c.state === "Unconnected";
-        const broken = (board[c.name]?.broken ?? 0) > 0;
+        // One lamp, two axes kept honest: workload attention lights it
+        // (fault blinks, degraded glows amber); otherwise connection speaks
+        // (stale/notes amber). Green only with complete workload evidence.
+        const w = board[c.name]?.workloads ?? null;
+        const attention = w?.counts.attention ?? 0;
+        const broken = (w?.counts.fault ?? 0) > 0;
         const isSelected = c.name === selected;
 
         let title = `${c.name} — ${c.state.toLowerCase()}`;
         if (unreachable) title = `${c.name} — ${c.state.toLowerCase()}${c.reason ? `: ${c.reason}` : ""}`;
-        else if (broken) title = `${c.name} — ${board[c.name]!.broken} broken workload${board[c.name]!.broken === 1 ? "" : "s"}`;
+        else if (attention > 0) title = `${c.name} — ${attention} workload${attention === 1 ? "" : "s"} need attention (${w!.counts.fault} fault, ${w!.counts.degraded} degraded)`;
+        else if (c.state === "Stale") title = `${c.name} — connection stale${c.reason ? `: ${c.reason}` : ""}`;
 
         // Channel-strip lamp (Signal Bench): healthy lamps sit dim, faults
         // glow, an unreachable cluster is an unpowered socket (dashed ring).
@@ -96,7 +102,11 @@ export function FleetSpine() {
         const lamp = unreachable ? (
           <span aria-hidden style={{ width: 8, height: 8, borderRadius: "50%", background: "transparent", border: "1px dashed var(--color-text-tertiary)", flexShrink: 0 }} />
         ) : (
-          <StatusDot size={8} tone={broken ? "danger" : c.state === "Degraded" ? "warning" : "success"} blink={broken} />
+          <StatusDot
+            size={8}
+            tone={broken ? "danger" : attention > 0 ? "warning" : c.state === "Degraded" || c.state === "Stale" ? "warning" : w?.coverage === "complete" && c.state === "Synced" ? "success" : "muted"}
+            blink={broken}
+          />
         );
         const codeColor = unreachable ? "var(--color-text-tertiary)" : isSelected ? "var(--color-text-primary)" : "var(--color-text-secondary)";
         // Current channel is pressed into a well.
@@ -105,7 +115,7 @@ export function FleetSpine() {
           : { background: "transparent" };
 
         if (expanded) {
-          const brokenCount = board[c.name]?.broken ?? null;
+          const brokenCount = w ? attention : null;
           return (
             <button
               key={c.name}
@@ -133,7 +143,7 @@ export function FleetSpine() {
                 overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1,
               }}>{c.name}</span>
               {brokenCount != null && brokenCount > 0 && (
-                <span style={{ fontSize: 9, fontFamily: "var(--font-mono)", color: "var(--color-text-danger)", flexShrink: 0 }}>{brokenCount}</span>
+                <span style={{ fontSize: 9, fontFamily: "var(--font-mono)", color: broken ? "var(--color-text-danger)" : "var(--color-text-warning)", flexShrink: 0 }}>{brokenCount}</span>
               )}
             </button>
           );

@@ -37,13 +37,15 @@ import { summarise, fetchOverviewSummary, SummariseInput } from "./overview";
 // ---- summarise() pure-function tests -------------------------------------------
 
 describe("summarise", () => {
-  it("counts only unhealthy+degraded workloads (not restarts)", () => {
+  it("counts workload attention (fault + degraded) from the verdict", () => {
     const input: SummariseInput = {
       workloads: [
-        { rank: "unhealthy" },
-        { rank: "degraded" },
-        { rank: "restarts" }, // info only — should NOT count
-        { rank: "healthy" },
+        { health: { kind: "fault" } },
+        { health: { kind: "degraded" } },
+        { health: { kind: "ok", note: "restarted 4m ago" } }, // history only - NOT attention
+        { health: { kind: "progressing" } },
+        { health: { kind: "paused" } },
+        {}, // no verdict: unknown, never counted either way
       ],
       pods: [],
       events: [],
@@ -56,13 +58,13 @@ describe("summarise", () => {
     expect(out.unhealthyWorkloads).toBe(2);
   });
 
-  it("counts only unhealthy+degraded pods (not restarts)", () => {
+  it("counts pod attention from the verdict (restarts are history)", () => {
     const input: SummariseInput = {
       workloads: [],
       pods: [
-        { rank: "unhealthy" },
-        { rank: "restarts" },
-        { rank: "healthy" },
+        { health: { kind: "fault" } },
+        { health: { kind: "ok", note: "restarted 2m ago" } },
+        { health: { kind: "ok" } },
       ],
       events: [],
       nodes: [],
@@ -92,23 +94,24 @@ describe("summarise", () => {
     expect(out.warningEvents).toBe(2);
   });
 
-  it("counts node problems: !ready, problems.length>0, unschedulable", () => {
+  it("counts node attention from the verdict; cordoned is paused, not a problem", () => {
     const input: SummariseInput = {
       workloads: [],
       pods: [],
       events: [],
       nodes: [
-        { ready: true,  problems: [],      unschedulable: false }, // healthy
-        { ready: false, problems: [],      unschedulable: false }, // not ready
-        { ready: true,  problems: ["DiskPressure"], unschedulable: false }, // has problems
-        { ready: true,  problems: [],      unschedulable: true  }, // unschedulable
+        { health: { kind: "ok" } },
+        { health: { kind: "fault" } },    // NotReady
+        { health: { kind: "degraded" } }, // pressure
+        { health: { kind: "paused" } },   // cordoned - intended
+        { health: { kind: "unknown" } },  // Ready not reported - visible, not attention
       ],
       helmAvailable: false,
       releases: [],
       flux: null,
     };
     const out = summarise(input, new Set());
-    expect(out.nodeProblems).toBe(3);
+    expect(out.nodeProblems).toBe(2);
   });
 
   it("returns null failedReleases when helmAvailable=false", () => {
@@ -237,21 +240,21 @@ describe("fetchOverviewSummary integration", () => {
   it("writes expected counts into the store on success", async () => {
     (WorkloadsService.ListWorkloads as ReturnType<typeof vi.fn>).mockResolvedValue({
       fluxPresent: false, namespaces: [], workloads: [
-        { rank: "unhealthy" }, { rank: "degraded" }, { rank: "healthy" },
+        { health: { kind: "fault" } }, { health: { kind: "degraded" } }, { health: { kind: "ok" } },
       ],
     });
     (PodsService.ListPods as ReturnType<typeof vi.fn>).mockResolvedValue({
       namespaces: ["default", "kube-system"],
       pods: [
-        { rank: "unhealthy", namespace: "default" },
-        { rank: "healthy",   namespace: "kube-system" },
+        { health: { kind: "fault" }, namespace: "default" },
+        { health: { kind: "ok" },    namespace: "kube-system" },
       ],
     });
     (EventsService.ListEvents as ReturnType<typeof vi.fn>).mockResolvedValue({
       namespaces: [], events: [{ type: "Warning" }, { type: "Normal" }],
     });
     (NodesService.ListNodes as ReturnType<typeof vi.fn>).mockResolvedValue({
-      nodes: [{ ready: false, problems: [], unschedulable: false }],
+      nodes: [{ health: { kind: "fault" } }],
     });
     (HelmService.ListHelmReleases as ReturnType<typeof vi.fn>).mockResolvedValue({
       available: true, releases: [{ status: "failed" }, { status: "deployed" }],

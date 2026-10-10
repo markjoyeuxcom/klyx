@@ -44,14 +44,14 @@ describe("FleetSpine", () => {
     expect(block.title).toContain("connect timed out");
   });
 
-  it("broken workloads (from the fleet board) light the lamp danger and blink it - the spine is the one legal blink site", () => {
+  it("workload faults (from the fleet board) light the lamp danger and blink it - the spine is the one legal blink site", () => {
     useFleet.setState({
       clusters: [cluster("prd")],
-      fleetBoard: { prd: { cpuFraction: null, memFraction: null, broken: 2, flux: null, argo: null } },
+      fleetBoard: { prd: { cpuFraction: null, memFraction: null, workloads: { counts: { total: 7, fault: 2, degraded: 0, unknown: 0, progressing: 0, paused: 0, ok: 5, attention: 2 }, coverage: "complete" }, flux: null, argo: null } },
     });
     const { getByLabelText } = render(<FleetSpine />);
     const block = getByLabelText("cluster prd");
-    expect(block.title).toContain("2 broken workloads");
+    expect(block.title).toContain("2 workloads need attention");
     const lamp = block.querySelector("span") as HTMLElement;
     expect(lamp.style.background).toContain("danger");
     expect(lamp.className).toContain("klyx-lamp-blink");
@@ -72,7 +72,7 @@ describe("FleetSpine", () => {
     localStorage.setItem("klyx-spine-expanded", "1");
     useFleet.setState({
       clusters: [cluster("prd")],
-      fleetBoard: { prd: { cpuFraction: null, memFraction: null, broken: 3, flux: null, argo: null } },
+      fleetBoard: { prd: { cpuFraction: null, memFraction: null, workloads: { counts: { total: 3, fault: 3, degraded: 0, unknown: 0, progressing: 0, paused: 0, ok: 0, attention: 3 }, coverage: "complete" }, flux: null, argo: null } },
     });
     const { getByLabelText } = render(<FleetSpine />);
     expect(getByLabelText("cluster prd").textContent).toContain("3");
@@ -103,5 +103,23 @@ describe("spineCodes", () => {
 
   it("single-segment names use their first two letters", () => {
     expect(spineCodes(["nelli"])).toEqual({ nelli: "ne" });
+  });
+
+  it("degraded-only workloads glow amber and do not blink", () => {
+    useFleet.setState({
+      clusters: [cluster("stg")],
+      fleetBoard: { stg: { cpuFraction: null, memFraction: null, workloads: { counts: { total: 5, fault: 0, degraded: 1, unknown: 0, progressing: 0, paused: 0, ok: 4, attention: 1 }, coverage: "complete" }, flux: null, argo: null } },
+    });
+    const { getByLabelText } = render(<FleetSpine />);
+    const lamp = getByLabelText("cluster stg").querySelector("span") as HTMLElement;
+    expect(lamp.style.background).toContain("warning");
+    expect(lamp.className).not.toContain("klyx-lamp-blink");
+  });
+
+  it("a connected cluster without complete workload evidence is never green", () => {
+    useFleet.setState({ clusters: [cluster("dev")], fleetBoard: {} });
+    const { getByLabelText } = render(<FleetSpine />);
+    const lamp = getByLabelText("cluster dev").querySelector("span") as HTMLElement;
+    expect(lamp.style.background).not.toContain("success");
   });
 });

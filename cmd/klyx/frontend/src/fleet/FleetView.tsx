@@ -36,7 +36,22 @@ export function FleetView() {
     if (score !== 0) return score;
     return a.name.localeCompare(b.name);
   });
-  const connected = clusters.filter((c) => c.state !== "Failed" && c.state !== "Unconnected" && c.state !== "Connecting").length;
+  // Connection axis: Synced and Degraded (connected with notes) are
+  // connected; Stale is last-good, not live; Connecting is neither.
+  const connected = clusters.filter((c) => c.state === "Synced" || c.state === "Degraded").length;
+  const unreachable = clusters.filter((c) => c.state === "Failed" || c.state === "Unconnected").length;
+  const stale = clusters.filter((c) => c.state === "Stale").length;
+  // Workload attention per cluster - explicitly workloads, not a whole-cluster
+  // fault total. Clusters whose workload read failed or was capped are
+  // "unverified"; buckets may overlap and are labelled as independent facts.
+  const workloadAttention = clusters.filter((c) => (fleetBoard[c.name]?.workloads?.counts.attention ?? 0) > 0).length;
+  const workloadFault = clusters.some((c) => (fleetBoard[c.name]?.workloads?.counts.fault ?? 0) > 0);
+  const unverified = clusters.filter((c) => {
+    const w = fleetBoard[c.name]?.workloads;
+    return (c.state === "Synced" || c.state === "Degraded") && (!w || w.coverage !== "complete" || w.counts.unknown > 0);
+  }).length;
+  // ClusterMesh is capability-gated: no patch bay when no cluster runs it.
+  const meshPresent = !!mesh && mesh.nodes.some((n) => n.state !== "unavailable");
   const allConnected = connected === clusters.length;
 
   return (
@@ -51,17 +66,19 @@ export function FleetView() {
       ) : (
         <>
           <MetersStrip
-            note="broken first · diagnostic order"
+            note="attention first"
             meters={[
               { label: "clusters", value: clusters.length },
-              clusters.length - connected > 0 && { label: "unreachable", value: clusters.length - connected, tone: "danger" as const },
-              clusters.filter((c) => c.state === "Degraded").length > 0 && { label: "degraded", value: clusters.filter((c) => c.state === "Degraded").length, tone: "warning" as const },
-              { label: "healthy", value: clusters.filter((c) => c.state === "Synced").length, tone: "success" as const },
+              { label: "connected", value: connected },
+              unreachable > 0 && { label: "unreachable", value: unreachable, tone: "danger" as const },
+              stale > 0 && { label: "stale", value: stale, tone: "warning" as const },
+              workloadAttention > 0 && { label: "workload attention", value: workloadAttention, tone: workloadFault ? ("danger" as const) : ("warning" as const) },
+              unverified > 0 && { label: "unverified", value: unverified },
               { label: "nodes", value: clusters.reduce((n, c) => n + c.nodesTotal, 0) },
               { label: "pods", value: clusters.reduce((n, c) => n + c.pods, 0) },
             ]}
           />
-          {mesh && (
+          {meshPresent && mesh && (
             <div style={{ background: "var(--bench-well-bg, transparent)", boxShadow: "var(--bench-well-shadow, none)", borderRadius: "var(--radius-sm)", padding: "8px 14px" }}>
               <div style={{ fontSize: 9, letterSpacing: "0.14em", textTransform: "uppercase", fontWeight: 600, color: "var(--color-text-tertiary)", marginBottom: 2 }}>clustermesh · patch bay</div>
               <MeshStrip graph={mesh} />
@@ -82,8 +99,8 @@ export function FleetView() {
               <button onClick={() => setShowExpiry(true)} title="Everything with a certificate lifetime, fleet-wide, soonest first" style={{ ...btn, fontSize: 11 }}>expiry</button>
               <BoardChip strong>diagnostic order</BoardChip>
               <BoardChip>{clusters.length} cluster{clusters.length === 1 ? "" : "s"}</BoardChip>
-              <span style={{ display: "inline-flex", alignItems: "center", gap: 6, color: allConnected ? "var(--color-text-success)" : "var(--color-text-warning)", fontFamily: "var(--font-mono)", fontSize: 11, whiteSpace: "nowrap" }}>
-                <span style={{ width: 7, height: 7, borderRadius: "50%", background: allConnected ? "var(--color-text-success)" : "var(--color-text-warning)" }} />
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 6, color: allConnected ? "var(--color-text-secondary)" : "var(--color-text-warning)", fontFamily: "var(--font-mono)", fontSize: 11, whiteSpace: "nowrap" }}>
+                <span style={{ width: 7, height: 7, borderRadius: "50%", background: allConnected ? "var(--color-text-tertiary)" : "var(--color-text-warning)" }} />
                 {allConnected ? "all informer factories connected" : `${connected}/${clusters.length} informer factories connected`}
               </span>
             </div>

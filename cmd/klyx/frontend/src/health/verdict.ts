@@ -125,3 +125,8 @@ export function coverageOf(slice: ObservedSlice, cluster: string, scope: string)
 export function countIsExact(c: Coverage): boolean {
   return c === "complete";
 }
+
+/** Workload attention on a fleet-board entry; null when unreadable. */
+export function boardAttention(entry: { workloads: { counts: VerdictCounts } | null } | undefined): number | null {
+  return entry?.workloads ? entry.workloads.counts.attention : null;
+}
