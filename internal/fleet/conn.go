@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -182,9 +183,13 @@ type ClusterConn struct {
 	refresh        chan struct{}             // buffered(1); coalesces informer events
 	ctx            context.Context           // captured in Start; scopes lazy watches
 	nodeInf        cache.SharedIndexInformer // eager node informer; ListNodes serves from its cache once synced
-	nodeFailed     bool                      // the node watch failed and no node event has arrived since
-	nodeAt         time.Time                 // the last node observation (an informer event)
-	pods           observe.KindState         // the health Observer's pods kind, newest state (the pod seam)
+	nodeFailed     bool                      // without an Observer only: the node watch failed and no node event has arrived since
+	nodeAt         time.Time                 // without an Observer only: the last node informer event
+	observed       bool                      // an Observer serves the freshness of pods and nodes (the 1c seam)
+	pods           observe.KindState         // the Observer's pods kind, newest state
+	nodesKind      observe.KindState         // the Observer's nodes kind, newest state (the node freshness barrier)
+	connectHook    func()                    // test seam: runs after detection, before the first commit
+	recoverHook    func()                    // test seam: runs before a recovery commit
 	podInf         cache.SharedIndexInformer // without an Observer only: the metadata pod informer it replaced
 	podAt          time.Time                 // without an Observer only: the last pod event
 	disc           discoveryLike             // TTL-cached discovery; built lazily via c.discovery()
@@ -336,6 +341,11 @@ func (c *ClusterConn) Start(ctx context.Context) {
 	c.setState(EvStart, "")
 	c.ctx = ctx
 
+	h := c.Health()
+	c.mu.Lock()
+	c.observed = h != nil
+	c.mu.Unlock()
+
 	nodeFactory := informers.NewSharedInformerFactory(c.typed, defaultResync)
 	nodeInformer := nodeFactory.Core().V1().Nodes().Informer()
 	// Strip managedFields before caching: the eager set lives for the app's
@@ -343,22 +353,24 @@ func (c *ClusterConn) Start(ctx context.Context) {
 	// Register handlers BEFORE starting the informers. SetWatchErrorHandler
 	// errors only if called after Start, which we do not do; ignore defensively.
 	_ = nodeInformer.SetTransform(stripManagedFields)
+	// With an Observer the node informer is only the Nodes lens's cache and
+	// the counts' source: the connection's node freshness is the Observer's
+	// nodes kind, a complete-read barrier - an informer notification (a
+	// delayed one, or a local resync) is not a new observation. Without an
+	// Observer the informer keeps its pre-1c role.
 	_ = nodeInformer.SetWatchErrorHandler(func(_ *cache.Reflector, err error) {
+		if c.isObserved() {
+			return
+		}
 		c.mu.Lock()
 		c.nodeFailed = true
 		c.mu.Unlock()
 		c.onWatchError(err)
 	})
-	nodeEvent := func() {
-		c.mu.Lock()
-		c.nodeFailed, c.nodeAt = false, c.clk.Now()
-		c.mu.Unlock()
-		c.signalRefresh()
-	}
 	_, _ = nodeInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
-		AddFunc:    func(interface{}) { nodeEvent() },
-		UpdateFunc: func(interface{}, interface{}) { nodeEvent() },
-		DeleteFunc: func(interface{}) { nodeEvent() },
+		AddFunc:    func(interface{}) { c.onNodeInformerEvent() },
+		UpdateFunc: func(interface{}, interface{}) { c.onNodeInformerEvent() },
+		DeleteFunc: func(interface{}) { c.onNodeInformerEvent() },
 	})
 	c.mu.Lock()
 	c.nodeInf = nodeInformer
@@ -368,8 +380,9 @@ func (c *ClusterConn) Start(ctx context.Context) {
 	// Pods: the health Observer's pods kind is the barrier, the count and
 	// the freshness (1c 2d) - one pod watch, not two. Without an Observer
 	// (tests, tools) the metadata pod informer it replaced still serves.
-	if h := c.Health(); h != nil {
-		h.WatchKind(healthsrc.KindPods, c.onPodsState) // ends with the Observer
+	if h != nil {
+		h.WatchKind(healthsrc.KindPods, c.onKindState(&c.pods))       // ends with the Observer
+		h.WatchKind(healthsrc.KindNodes, c.onKindState(&c.nodesKind)) // ends with the Observer
 	} else {
 		c.startPodInformer(ctx)
 	}
@@ -378,22 +391,47 @@ func (c *ClusterConn) Start(ctx context.Context) {
 	go c.connectLoop(ctx, nodeInformer)
 }
 
-// onPodsState takes the pods kind's newest state. Anything but live after a
-// sync is a watch drop (Stale); before the first sync its failure is the
-// connect-timeout reason. A failure never advances lastSync (refreshCounts
-// uses the state's own observation time).
-func (c *ClusterConn) onPodsState(st observe.KindState) {
-	c.mu.Lock()
-	c.pods = st
-	c.mu.Unlock()
-	if st.Coverage != observe.Live && (st.Err != "" || st.CountKnown) {
-		msg := st.Err
-		if msg == "" {
-			msg = "not yet re-read"
+// onKindState applies the Observer's newest state of one kind the
+// connection's freshness rests on (pods or nodes). An older state (by the
+// kind's watermark) is ignored. Anything but live after a sync is a watch
+// drop (Stale) - a coalesced move to a new, still-checking generation too;
+// before the first sync a failure names the connect-timeout reason.
+func (c *ClusterConn) onKindState(dst *observe.KindState) func(observe.KindState) {
+	return func(st observe.KindState) {
+		c.mu.Lock()
+		if dst.Kind != "" && st.Seq < dst.Seq {
+			c.mu.Unlock()
+			return
 		}
-		c.onWatchError(fmt.Errorf("pods: %s", msg))
+		*dst = st
+		synced := c.state == Synced || c.state == Degraded
+		c.mu.Unlock()
+		if st.Coverage != observe.Live && (synced || st.Err != "") {
+			msg := st.Err
+			if msg == "" {
+				msg = "not current (" + string(st.Coverage) + ")"
+			}
+			c.onWatchError(fmt.Errorf("%s: %s", st.Kind, msg))
+		}
+		c.signalRefresh()
+	}
+}
+
+// onNodeInformerEvent handles a node informer notification: it refreshes
+// the counts, and only without an Observer is it the node freshness signal.
+func (c *ClusterConn) onNodeInformerEvent() {
+	if !c.isObserved() {
+		c.mu.Lock()
+		c.nodeFailed, c.nodeAt = false, c.clk.Now()
+		c.mu.Unlock()
 	}
 	c.signalRefresh()
+}
+
+func (c *ClusterConn) isObserved() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.observed
 }
 
 // startPodInformer is the pod source without an Observer.
@@ -419,16 +457,46 @@ func (c *ClusterConn) startPodInformer(ctx context.Context) {
 	metaFactory.Start(ctx.Done())
 }
 
-// podsSynced is the pod barrier: the pods kind's CURRENT state is live (an
-// old live state cannot satisfy a later failed generation), or without an
-// Observer the pod informer has synced.
-func (c *ClusterConn) podsSynced() bool {
+// sourcesCurrentLocked is the connection's barrier: nodes and pods are
+// CURRENT. With an Observer, both kinds' current states are live (an old
+// live state cannot satisfy a later failed generation) and the node cache
+// has listed; without one, both informers have synced and no node watch
+// failure is outstanding (the pre-1c contract). Caller holds c.mu.
+func (c *ClusterConn) sourcesCurrentLocked() bool {
+	if c.nodeInf == nil || !c.nodeInf.HasSynced() {
+		return false
+	}
+	if c.observed {
+		return c.pods.Coverage == observe.Live && c.nodesKind.Coverage == observe.Live
+	}
+	return !c.nodeFailed && c.podInf != nil && c.podInf.HasSynced()
+}
+
+func (c *ClusterConn) sourcesCurrent() bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	if c.podInf != nil {
-		return c.podInf.HasSynced()
+	return c.sourcesCurrentLocked()
+}
+
+// commitSynced is the one Synced decision: under c.mu, it re-checks that the
+// sources are current at the moment of the transition and that the state is
+// still one it may move from - so a failure delivered while detection or a
+// recovery was in progress can never be overwritten. overlayLocked runs on
+// the commit.
+func (c *ClusterConn) commitSynced(from ...ConnState) bool {
+	defer c.syncHealth() // after the unlock below
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !slices.Contains(from, c.state) || !c.sourcesCurrentLocked() {
+		return false
 	}
-	return c.pods.Coverage == observe.Live
+	next, ok := Transition(c.state, EvSynced)
+	if !ok {
+		return false
+	}
+	c.state, c.reason = next, ""
+	c.overlayLocked()
+	return true
 }
 
 // stripManagedFields is a cache.TransformFunc that drops ObjectMeta.ManagedFields
@@ -453,7 +521,7 @@ func stripManagedFields(obj interface{}) (interface{}, error) {
 func (c *ClusterConn) connectLoop(ctx context.Context, nodeInformer cache.SharedIndexInformer) {
 	for {
 		tctx, cancel := context.WithTimeout(ctx, c.connectTimeout)
-		ok := cache.WaitForCacheSync(tctx.Done(), nodeInformer.HasSynced, c.podsSynced)
+		ok := cache.WaitForCacheSync(tctx.Done(), c.sourcesCurrent)
 		cancel()
 
 		if ctx.Err() != nil {
@@ -473,14 +541,20 @@ func (c *ClusterConn) connectLoop(ctx context.Context, nodeInformer cache.Shared
 			c.mu.Unlock()
 
 			c.refreshCounts(nodeInformer)
+			if c.connectHook != nil {
+				c.connectHook()
+			}
 			// The first sync applies the initial tier from the one-shot Detect
-			// (setState's overlay). startCapHealth below then keeps GitOps
-			// health live via the controller-workload watch; the re-probe keeps
-			// the rest current.
-			c.setState(EvSynced, "")
-			c.startCapHealth(ctx, caps)
-			go c.reprobeLoop(ctx)
-			return
+			// (the commit's overlay) - only if nodes and pods are still current
+			// now; a failure during detection sends the loop round again.
+			// startCapHealth below then keeps GitOps health live via the
+			// controller-workload watch; the re-probe keeps the rest current.
+			if c.commitSynced(Connecting, Failed) {
+				c.startCapHealth(ctx, caps)
+				go c.reprobeLoop(ctx)
+				return
+			}
+			continue
 		}
 		reason := c.connectFailureReason()
 		msg := "connect timed out after " + c.connectTimeout.String()
@@ -514,13 +588,17 @@ func (c *ClusterConn) refreshLoop(ctx context.Context, nodeInformer cache.Shared
 			}
 			c.refreshCounts(nodeInformer) // retained counts show even while a source fails
 
-			// Recovery needs CURRENT nodes and pods: a node event cannot
-			// recover a connection whose pods are stale, nor the reverse.
+			// Recovery needs CURRENT nodes and pods, decided at the commit:
+			// a node event cannot recover a connection whose pods are
+			// failing, nor the reverse.
 			c.mu.RLock()
-			st, nodeFailed := c.state, c.nodeFailed
+			st := c.state
 			c.mu.RUnlock()
-			if st == Stale && !nodeFailed && c.podsSynced() {
-				c.setState(EvSynced, "")
+			if st == Stale {
+				if c.recoverHook != nil {
+					c.recoverHook()
+				}
+				c.commitSynced(Stale)
 			}
 		}
 	}
@@ -595,7 +673,7 @@ func (c *ClusterConn) refreshCounts(nodeInformer cache.SharedIndexInformer) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.snapNodesReady, c.snapNodesTotal = ready, total
-	podsAt := c.podAt
+	podsAt, nodesAt := c.podAt, c.nodeAt
 	if c.podInf != nil {
 		if c.podInf.HasSynced() {
 			c.snapPods, c.podsKnown, c.podsStale = len(c.podInf.GetStore().List()), true, false
@@ -606,12 +684,15 @@ func (c *ClusterConn) refreshCounts(nodeInformer cache.SharedIndexInformer) {
 			c.snapPods, c.podsKnown = st.Objects, true
 		}
 		c.podsStale = c.podsKnown && st.Coverage != observe.Live
-		podsAt = time.Time{}
+		podsAt, nodesAt = time.Time{}, time.Time{}
 		if st.ObservedAt != nil {
 			podsAt = *st.ObservedAt
 		}
+		if c.nodesKind.ObservedAt != nil {
+			nodesAt = *c.nodesKind.ObservedAt
+		}
 	}
-	latest := c.nodeAt
+	latest := nodesAt
 	if podsAt.After(latest) {
 		latest = podsAt
 	}

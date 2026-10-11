@@ -22,6 +22,7 @@ import (
 	"github.com/moomora/klyx/internal/capability"
 	"github.com/moomora/klyx/internal/clock"
 	"github.com/moomora/klyx/internal/config"
+	"github.com/moomora/klyx/internal/observe"
 )
 
 // The connection's pods come from the health Observer's pods kind (1c 2d):
@@ -33,9 +34,11 @@ type seamAPI struct {
 
 	mu        sync.Mutex
 	podsErr   error         // pod lists fail with this
+	nodesErr  error         // node lists fail with this
 	podsGate  chan struct{} // pod lists wait for this
 	nodesGate chan struct{} // node lists wait for this
 	podWatch  []*watch.RaceFreeFakeWatcher
+	nodeWatch []*watch.RaceFreeFakeWatcher
 }
 
 func seamNode(name string) *corev1.Node {
@@ -68,12 +71,22 @@ func newSeamAPI(t *testing.T, objs ...runtime.Object) *seamAPI {
 	})
 	a.typed.PrependReactor("list", "nodes", func(k8stesting.Action) (bool, runtime.Object, error) {
 		a.mu.Lock()
-		gate := a.nodesGate
+		gate, err := a.nodesGate, a.nodesErr
 		a.mu.Unlock()
 		if gate != nil {
 			<-gate
 		}
+		if err != nil {
+			return true, nil, err
+		}
 		return false, nil, nil
+	})
+	a.typed.PrependWatchReactor("nodes", func(k8stesting.Action) (bool, watch.Interface, error) {
+		w := watch.NewRaceFreeFake()
+		a.mu.Lock()
+		a.nodeWatch = append(a.nodeWatch, w)
+		a.mu.Unlock()
+		return true, w, nil
 	})
 	// Pod watches the test can break (the tracker's own events are not
 	// needed: lists carry the state).
@@ -85,6 +98,18 @@ func newSeamAPI(t *testing.T, objs ...runtime.Object) *seamAPI {
 		return true, w, nil
 	})
 	return a
+}
+
+func (a *seamAPI) breakNodeWatch(err error) {
+	a.mu.Lock()
+	a.nodesErr = err
+	ws := a.nodeWatch
+	a.nodeWatch = nil
+	a.mu.Unlock()
+	status := apierrors.NewServiceUnavailable("the server is shutting down").ErrStatus
+	for _, w := range ws {
+		w.Error(&status)
+	}
 }
 
 func (a *seamAPI) breakPodWatch(err error) {
@@ -184,9 +209,11 @@ func TestPodRelistFailureAndRecovery(t *testing.T) {
 		t.Fatalf("a failure advanced lastSync: %v -> %v", before, got)
 	}
 	// A node event during the pod failure cannot recover the connection.
-	n := seamNode("n2")
-	if _, err := a.typed.CoreV1().Nodes().Create(context.Background(), n, metav1.CreateOptions{}); err != nil {
-		t.Fatal(err)
+	a.mu.Lock()
+	ws := append([]*watch.RaceFreeFakeWatcher(nil), a.nodeWatch...)
+	a.mu.Unlock()
+	for _, w := range ws { // a genuine node event, to the informer and the Observer alike
+		w.Add(seamNode("n2"))
 	}
 	waitUntil(t, "the node event arrived", func() bool { return c.Snapshot().NodesTotal == 2 })
 	time.Sleep(100 * time.Millisecond)
@@ -238,4 +265,145 @@ func TestTeardownLeavesNoPodListener(t *testing.T) {
 	if after := c.Snapshot(); after.State != before.State || after.PodsStale != before.PodsStale {
 		t.Fatalf("a late pod callback after teardown: %+v -> %+v", before, after)
 	}
+}
+
+// ---- one atomic Synced decision (Codex 2d review P1) ------------------------
+
+func TestAFailureDuringDetectionIsNeverOverwrittenBySynced(t *testing.T) {
+	for _, which := range []string{"pods", "nodes"} {
+		a := newSeamAPI(t, seamNode("n1"), seamPod("a"))
+		c, ctx, cancel := a.conn(t)
+		c.connectTimeout = time.Hour
+		reached, release := make(chan struct{}), make(chan struct{})
+		var once sync.Once
+		c.connectHook = func() { once.Do(func() { close(reached); <-release }) }
+		c.Start(ctx)
+		<-reached // detection done, the commit not yet made
+		if which == "pods" {
+			a.breakPodWatch(errors.New("connection refused"))
+		} else {
+			a.breakNodeWatch(errors.New("connection refused"))
+		}
+		waitUntil(t, which+" failure delivered", func() bool {
+			c.mu.RLock()
+			defer c.mu.RUnlock()
+			return !c.sourcesCurrentLocked()
+		})
+		close(release)
+		time.Sleep(150 * time.Millisecond)
+		if st := c.Snapshot().State; st == Synced || st == Degraded {
+			t.Fatalf("%s failed during detection, yet the connection published %v", which, st)
+		}
+		stop(c, cancel)
+	}
+}
+
+func TestAFailureBeforeARecoveryCommitWins(t *testing.T) {
+	a := newSeamAPI(t, seamNode("n1"), seamPod("a"))
+	c, ctx, cancel := a.conn(t)
+	var arm sync.Once
+	reached, release := make(chan struct{}), make(chan struct{})
+	armed := make(chan struct{})
+	c.recoverHook = func() {
+		select {
+		case <-armed:
+			arm.Do(func() { close(reached); <-release })
+		default:
+		}
+	}
+	c.Start(ctx)
+	defer stop(c, cancel)
+	waitUntil(t, "synced", func() bool { return c.Snapshot().State == Synced })
+	a.breakPodWatch(errors.New("connection refused"))
+	waitUntil(t, "stale", func() bool { return c.Snapshot().State == Stale })
+	close(armed)
+	a.mu.Lock()
+	a.podsErr = nil
+	a.mu.Unlock()
+	<-reached // recovery decided, not committed
+	waitUntil(t, "the recovered pod watch is open", func() bool {
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		return len(a.podWatch) > 0
+	})
+	a.breakPodWatch(errors.New("connection refused again"))
+	waitUntil(t, "the new failure delivered", func() bool {
+		c.mu.RLock()
+		defer c.mu.RUnlock()
+		return c.pods.Coverage != observe.Live
+	})
+	close(release)
+	time.Sleep(150 * time.Millisecond)
+	if st := c.Snapshot().State; st != Stale {
+		t.Fatalf("a recovery committed over a newer failure: %v", st)
+	}
+}
+
+func TestACoalescedNewCheckingGenerationInvalidatesTheConnection(t *testing.T) {
+	a := newSeamAPI(t, seamNode("n1"), seamPod("a"))
+	c, ctx, cancel := a.conn(t)
+	c.Start(ctx)
+	defer stop(c, cancel)
+	waitUntil(t, "synced", func() bool { return c.Snapshot().State == Synced })
+	c.mu.RLock()
+	cur := c.pods
+	c.mu.RUnlock()
+	// A new generation still checking, no error, no count: never current.
+	c.onKindState(&c.pods)(observe.KindState{Kind: "pods", Generation: cur.Generation + 1, Seq: cur.Seq + 2, Coverage: observe.Checking})
+	waitUntil(t, "stale", func() bool { return c.Snapshot().State == Stale })
+	// An older state arriving late is ignored.
+	c.onKindState(&c.pods)(cur)
+	if c.mu.RLock(); c.pods.Coverage != observe.Checking {
+		c.mu.RUnlock()
+		t.Fatal("an older state replaced a newer one")
+	}
+	c.mu.RUnlock()
+}
+
+// ---- node freshness is a complete-read barrier (Codex 2d review P2) ---------
+
+func TestNodeFreshnessIsTheObserversCompleteRead(t *testing.T) {
+	a := newSeamAPI(t, seamNode("n1"), seamPod("a"))
+	c, ctx, cancel := a.conn(t)
+	c.Start(ctx)
+	defer stop(c, cancel)
+	waitUntil(t, "synced", func() bool { return c.Snapshot().State == Synced })
+	a.breakNodeWatch(errors.New("connection refused"))
+	waitUntil(t, "stale on the node failure", func() bool { return c.Snapshot().State == Stale })
+	before := c.Snapshot().LastSync
+	// A delayed notification, or a local resync, arriving during the failure
+	// is not an observation: it neither recovers nor advances lastSync.
+	for i := 0; i < 3; i++ {
+		c.onNodeInformerEvent()
+	}
+	time.Sleep(150 * time.Millisecond)
+	if s := c.Snapshot(); s.State != Stale || !s.LastSync.Equal(before) {
+		t.Fatalf("an informer notification recovered or stamped the connection: %v %v -> %v", s.State, before, s.LastSync)
+	}
+	// Recovery with the node contents unchanged: the complete relist is the
+	// barrier, though no object changed.
+	a.mu.Lock()
+	a.nodesErr = nil
+	a.mu.Unlock()
+	waitUntil(t, "recovered on an unchanged relist", func() bool { return c.Snapshot().State == Synced })
+	if s := c.Snapshot(); !s.LastSync.After(before) {
+		t.Fatal("the complete relist is an observation")
+	}
+}
+
+func TestAnEmptySuccessfulNodeRelistRecovers(t *testing.T) {
+	a := newSeamAPI(t, seamNode("n1"), seamPod("a"))
+	c, ctx, cancel := a.conn(t)
+	c.Start(ctx)
+	defer stop(c, cancel)
+	waitUntil(t, "synced", func() bool { return c.Snapshot().State == Synced })
+	a.breakNodeWatch(errors.New("connection refused"))
+	waitUntil(t, "stale", func() bool { return c.Snapshot().State == Stale })
+	if err := a.typed.Tracker().Delete(schema.GroupVersionResource{Version: "v1", Resource: "nodes"}, "", "n1"); err != nil {
+		t.Fatal(err)
+	}
+	a.mu.Lock()
+	a.nodesErr = nil
+	a.mu.Unlock()
+	waitUntil(t, "an empty relist is a complete read: recovered", func() bool { return c.Snapshot().State == Synced })
 }
