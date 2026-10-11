@@ -378,7 +378,12 @@ function GroupSelector({ cluster, clusterName, current, counts }: { cluster: Clu
                   onMouseMove={() => { if (!r.disabled) setSel(choices.findIndex((x) => x.d === r.d)); }}
                   onMouseDown={(e) => { e.preventDefault(); if (!r.disabled) go(r.d); }}>
                   <span style={{ flex: 1, minWidth: 0, overflowWrap: "anywhere" }}>{r.d.label}</span>
-                  {r.disabled ? <span className="t-secondary">{r.disabled}</span> : <Count b={counts.destination[r.d.id]} />}
+                  {r.disabled ? <span className="t-secondary">{r.disabled}</span> : (
+                    <>
+                      <Count b={counts.destination[r.d.id]} />
+                      {counts.destinationNote[r.d.id] && <span className="t-secondary">{counts.destinationNote[r.d.id]}</span>}
+                    </>
+                  )}
                 </div>
               );
             })}

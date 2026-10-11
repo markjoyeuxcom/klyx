@@ -178,12 +178,28 @@ describe("TopBar Attention button (redesign step 7e)", () => {
     unmount();
     useFleet.setState({ attention: { cluster: "dev", loading: false, at: 1, counts: { workloads: ok, pods: "unreadable", events: 0, nodes: ok, helm: 0, flux: 0, argo: 0 } } });
     const r = render(<TopBar />);
-    expect(r.getByRole("button", { name: /^Attention: No attention found · 1 unverified/ })).toBeTruthy();
+    expect(r.getByRole("button", { name: /^Attention: No attention in summary · 1 unverified/ })).toBeTruthy();
   });
 
   it("no Attention button outside a cluster", () => {
     useFleet.setState({ route: { name: "fleet" } });
     const { queryByRole } = render(<TopBar />);
     expect(queryByRole("button", { name: /^Attention/ })).toBeNull();
+  });
+
+  it("never an unqualified all-clear: uncovered installed domains and the as-of time are named", () => {
+    useFleet.setState({ clusters: [{ name: "dev", state: "Synced", certManagerPresent: true, gatewayAPIVersion: "v1.2" } as never],
+      attention: { cluster: "dev", loading: true, at: Date.now(), counts: { workloads: ok, pods: ok, events: 0, nodes: ok, helm: 0, flux: 0, argo: 0 } } });
+    const { getByRole } = render(<TopBar />);
+    const btn = getByRole("button", { name: /^Attention: No attention in summary · 2 not covered/ });
+    expect(btn.getAttribute("aria-label")).toMatch(/Summary as of .*, refreshing/);
+    expect(btn.getAttribute("title")).toMatch(/Not covered by the summary \(open their views\): Certificates, Gateways/);
+    expect(btn.textContent).toContain("refreshing");
+  });
+
+  it("a fault with a capped read is lit AND a gap", () => {
+    useFleet.setState({ attention: { cluster: "dev", loading: false, at: 1, counts: { workloads: ok, pods: { coverage: "partial", counts: { ...ok.counts, fault: 1, ok: 4, attention: 1 } }, events: 0, nodes: ok, helm: 0, flux: 0, argo: 0 } } });
+    const { getByRole } = render(<TopBar />);
+    expect(getByRole("button", { name: /^Attention: ▲ 1 area need attention · 1 unverified/ })).toBeTruthy();
   });
 });

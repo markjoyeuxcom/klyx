@@ -8,6 +8,7 @@ import { CopyButton } from "../chrome/CopyButton";
 import { EmptyState } from "../chrome/EmptyState";
 import { SkeletonRows } from "../chrome/SkeletonRows";
 import { WatchErrorBanner } from "../chrome/WatchErrorBanner";
+import { IN_FLIGHT, PENDING_DEADLINE_S, releaseHealth, type Role } from "./helmHealth";
 import { VirtualList, type VirtualListHandle } from "../chrome/VirtualList";
 import { YamlBlock } from "../chrome/YamlBlock";
 import { Age, UpdatedAt, formatAge, useNow } from "../chrome/Age";
@@ -31,28 +32,6 @@ import { RollbackComposerDialog } from "./HelmRollbackDialog";
 // revision is in More. All rollbacks go through the composer dialog with its
 // protected-cluster arming.
 
-type Role = { kind: "fault" | "degraded" | "progressing" | "ok" | "unknown"; label: string };
-
-// A pending-* or uninstalling release past PENDING_DEADLINE_S (Klyx's
-// attention heuristic: twice helm's default 5m --timeout) "appears stuck".
-// Elapsed time is not proof: no configured timeout or process evidence is
-// visible in a snapshot, so the wording never claims the operation stopped.
-export const PENDING_DEADLINE_S = 600;
-const IN_FLIGHT = new Set(["pending-install", "pending-upgrade", "pending-rollback", "uninstalling"]);
-const HISTORICAL = new Set(["superseded", "uninstalled"]);
-
-// releaseHealth maps helm's status vocabulary onto the shared roles (only
-// faults glow). Historical states never fault.
-export function releaseHealth(r: { status: string; updatedUnix: number }, nowS: number): Role {
-  if (r.status === "deployed") return { kind: "ok", label: "deployed" };
-  if (r.status === "failed") return { kind: "fault", label: "failed" };
-  if (IN_FLIGHT.has(r.status)) {
-    if (r.updatedUnix > 0 && nowS - r.updatedUnix > PENDING_DEADLINE_S) return { kind: "degraded", label: `${r.status}, appears stuck` };
-    return { kind: "progressing", label: r.status };
-  }
-  if (HISTORICAL.has(r.status)) return { kind: "unknown", label: `${r.status} (historical)` };
-  return { kind: "unknown", label: r.status || "unknown" };
-}
 const RANK: Record<Role["kind"], number> = { fault: 0, degraded: 1, progressing: 2, unknown: 3, ok: 4 };
 const needsAttention = (role: Role) => role.kind === "fault" || role.kind === "degraded";
 const inFlight = (r: HelmReleaseDTO) => IN_FLIGHT.has(r.status);
@@ -489,3 +468,5 @@ function ReleaseInspector({ cluster, release: r, role, removed, stale, history, 
     </div>
   );
 }
+
+export { PENDING_DEADLINE_S, releaseHealth };

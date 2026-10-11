@@ -209,6 +209,17 @@ describe("NavBand reads the shared attention summary (step 7e)", () => {
     expect(flux.textContent).toContain("▲ 1");
   });
 
+  it("the tree names what the summary does not cover and areas shown from a failed re-poll", () => {
+    useFleet.setState({ clusters: [cluster({ certManagerPresent: true, gatewayAPIVersion: "v1.2" })], route: { name: "cluster", cluster: "dev", section: "overview" },
+      attention: { cluster: "dev", loading: false, at: 2, stale: ["nodes"], areaAt: { nodes: 1 }, counts: { workloads: ok, pods: ok, events: 0, nodes: ok, helm: 0, flux: 0, argo: "absent" } } });
+    render(<NavBand />);
+    act(() => { window.dispatchEvent(new Event("klyx:open-nav-tree")); });
+    const tree = screen.getByRole("dialog", { name: "All views" });
+    expect((within(tree).getByText("cert-manager").parentElement as HTMLElement).textContent).toContain("not summarized");
+    expect(within(tree).getByRole("option", { name: /^Gateway topology/ }).textContent).toContain("not summarized");
+    expect((within(tree).getByText("Cluster").parentElement as HTMLElement).textContent).toContain("last good");
+  });
+
   it("opened by the Attention button, the tree starts on the first destination needing attention", () => {
     useFleet.setState({ route: { name: "cluster", cluster: "dev", section: "overview" },
       attention: { cluster: "dev", loading: false, at: 1, counts: { workloads: { ...ok, counts: { ...ok.counts, fault: 2, ok: 3, attention: 2 } }, pods: ok, events: 3, nodes: ok, helm: 0, flux: 0, argo: "absent" } } });

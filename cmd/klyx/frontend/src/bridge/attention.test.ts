@@ -14,7 +14,7 @@ vi.mock("../../bindings/github.com/moomora/klyx/internal/appbridge/index.js", ()
 import {
   WorkloadsService, PodsService, EventsService, NodesService, HelmService, GitOpsService, ArgoService,
 } from "../../bindings/github.com/moomora/klyx/internal/appbridge/index.js";
-import { fetchAttention } from "./attention";
+import { abandonAttention, fetchAttention } from "./attention";
 
 const ok = (fn: unknown, v: unknown) => (fn as ReturnType<typeof vi.fn>).mockResolvedValue(v);
 
@@ -34,6 +34,7 @@ function seedHealthy() {
 describe("fetchAttention error honesty", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    useFleet.getState().clearAttention();
     seedHealthy();
   });
 
@@ -78,6 +79,7 @@ describe("fetchAttention error honesty", () => {
 describe("fetchAttention coverage and scope", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    useFleet.getState().clearAttention();
     seedHealthy();
   });
 
@@ -106,5 +108,64 @@ describe("fetchAttention coverage and scope", () => {
     release({ fluxPresent: false, namespaces: [], workloads: [] });
     await first;
     expect(useFleet.getState().attention.cluster).toBe("b");
+  });
+});
+
+describe("fetchAttention ordering and last-good (Codex 7e review)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    useFleet.getState().clearAttention();
+    seedHealthy();
+  });
+
+  it("the latest request wins: an older reply landing later changes nothing", async () => {
+    let releaseOld!: (v: unknown) => void;
+    (HelmService.ListHelmReleases as ReturnType<typeof vi.fn>)
+      .mockReturnValueOnce(new Promise((r) => { releaseOld = r; }))
+      .mockResolvedValueOnce({ available: true, releases: [] });
+    const older = fetchAttention("a");
+    await fetchAttention("a");
+    const at = useFleet.getState().attention.at;
+    expect(useFleet.getState().attention.counts.helm).toBe(0);
+    releaseOld({ available: true, releases: [{ status: "failed", updatedUnix: 1 }] });
+    await older;
+    const s = useFleet.getState().attention;
+    expect(s.counts.helm).toBe(0);
+    expect(s.at).toBe(at);
+    expect(s.loading).toBe(false);
+  });
+
+  it("leaving and re-entering a cluster drops the reply that was in flight", async () => {
+    let release!: (v: unknown) => void;
+    (HelmService.ListHelmReleases as ReturnType<typeof vi.fn>).mockReturnValueOnce(new Promise((r) => { release = r; }));
+    const first = fetchAttention("a");
+    abandonAttention();
+    useFleet.getState().clearAttention();
+    await fetchAttention("b");
+    await fetchAttention("a");
+    release({ available: true, releases: [{ status: "failed", updatedUnix: 1 }] });
+    await first;
+    expect(useFleet.getState().attention.counts.helm).toBe(0);
+  });
+
+  it("a failed re-poll keeps each area's last good value and time, marked stale", async () => {
+    await fetchAttention("a");
+    const before = useFleet.getState().attention;
+    const nodesAt = before.areaAt?.nodes;
+    (NodesService.ListNodes as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ nodes: [], error: "forbidden" });
+    await new Promise((r) => setTimeout(r, 5));
+    await fetchAttention("a");
+    const after = useFleet.getState().attention;
+    expect(typeof after.counts.nodes).toBe("object");
+    expect(after.stale).toContain("nodes");
+    expect(after.areaAt?.nodes).toBe(nodesAt);
+    expect(after.areaAt?.workloads).toBeGreaterThan(nodesAt!);
+  });
+
+  it("stuck Helm releases are counted with the lens's rule", async () => {
+    const old = Math.floor(Date.now() / 1000) - 3600;
+    (HelmService.ListHelmReleases as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ available: true, releases: [{ status: "pending-upgrade", updatedUnix: old }, { status: "pending-install", updatedUnix: Math.floor(Date.now() / 1000) }] });
+    await fetchAttention("a");
+    expect(useFleet.getState().attention.counts.helmStuck).toBe(1);
   });
 });

@@ -12,7 +12,8 @@ import { fetchEventsSnapshot } from "../bridge/events";
 import { CLUSTER_RISK_REFS, riskFor } from "./resourceRisk";
 import { ellipsis } from "../chrome/primitives";
 import { LensLayout } from "../layout/LensLayout";
-import { attentionAreas, type Area } from "../nav/attention";
+import { attentionAreas, uncoveredDomains, type Area, type Uncovered } from "../nav/attention";
+import { NAV_GROUPS, navigate } from "../nav/registry";
 
 type BoardEntry = FleetBoardEntry | undefined;
 
@@ -77,7 +78,7 @@ export function Overview({ c }: { c: ClusterDTO }) {
       state="ready"
       body={
         <div className="lens-canvas" data-testid="overview">
-          <AttentionSection cluster={c.name} areas={areas} />
+          <AttentionSection cluster={c.name} areas={areas} uncovered={uncoveredDomains(c)} />
           <div className="ov-columns">
             <section aria-label="Cluster facts" className="ov-section">
               <h3 className="t-section-label">Cluster</h3>
@@ -139,9 +140,16 @@ function goArea(id: Area["id"]) {
   }
 }
 
-function AttentionSection({ cluster, areas }: { cluster: string; areas: Area[] }) {
+function goUncovered(u: Uncovered) {
+  const nav = useFleet.getState();
+  if (nav.route.name !== "cluster") return;
+  const d = NAV_GROUPS.flatMap((g) => g.destinations).find((x) => x.id === u.destinationId);
+  if (d) navigate(nav.route.cluster, d);
+}
+
+function AttentionSection({ cluster, areas, uncovered }: { cluster: string; areas: Area[]; uncovered: Uncovered[] }) {
   const lit = areas.filter((a) => a.state === "attention");
-  const gaps = areas.filter((a) => a.state === "unreadable" || a.state === "unverified");
+  const gaps = areas.filter((a) => a.gap || a.state === "unreadable" || a.state === "unverified");
   const loadingAll = areas.every((a) => a.state === "loading");
   return (
     <section aria-label="Attention" className="ov-section">
@@ -151,9 +159,17 @@ function AttentionSection({ cluster, areas }: { cluster: string; areas: Area[] }
           {areas.map((a) => (
             <button key={a.id} className="ov-area" data-state={a.state} onClick={() => goArea(a.id)} title={`Open ${a.label}`}>
               <span className="ov-area-label">{a.label}</span>
-              <span className="ov-area-text" style={{ color: a.state === "attention" ? (a.tone === "danger" ? "var(--color-text-danger)" : "var(--color-text-warning)") : a.state === "unreadable" ? "var(--color-text-warning)" : undefined }}>
+              <span className="ov-area-text" style={{ color: a.state === "attention" ? (a.tone === "danger" ? "var(--color-text-danger)" : "var(--color-text-warning)") : a.state === "unreadable" || a.stale ? "var(--color-text-warning)" : undefined }}>
                 {a.state === "attention" && a.tone === "danger" ? "▲ " : ""}{a.text}
               </span>
+            </button>
+          ))}
+          {/* Installed domains the summary does not read are named, so no
+              quiet line implies they were checked. */}
+          {uncovered.map((u) => (
+            <button key={u.id} className="ov-area" data-state="uncovered" onClick={() => goUncovered(u)} title={`Open ${u.label}`}>
+              <span className="ov-area-label">{u.label}</span>
+              <span className="ov-area-text">not covered by the summary - open to check</span>
             </button>
           ))}
         </div>
@@ -161,8 +177,9 @@ function AttentionSection({ cluster, areas }: { cluster: string; areas: Area[] }
       {!loadingAll && lit.length === 0 && (
         <span className="t-secondary">
           {gaps.length > 0
-            ? `No attention found in the ${areas.length - gaps.length} area${areas.length - gaps.length === 1 ? "" : "s"} read; ${gaps.length} could not be established.`
-            : `No attention found in the ${areas.length} areas read.`}
+            ? `No attention found in the ${areas.length - gaps.length} summarized area${areas.length - gaps.length === 1 ? "" : "s"} read; ${gaps.length} could not be established.`
+            : `No attention found in the ${areas.length} summarized areas read.`}
+          {uncovered.length > 0 ? ` ${uncovered.length} installed view${uncovered.length === 1 ? " is" : "s are"} not covered by the summary.` : ""}
         </span>
       )}
     </section>

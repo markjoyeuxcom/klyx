@@ -110,9 +110,17 @@ export type AttentionCounts = {
   helm: LensCount;
   flux: LensCount;
   argo: LensCount;
+  // Helm releases past Klyx's pending deadline ("appears stuck"), counted
+  // with the lens's own rule; meaningful only when helm is readable.
+  helmStuck?: number;
   namespaces?: number | null;
 };
-export type AttentionSlice = { cluster: string | null; loading: boolean; counts: AttentionCounts; at: number | null };
+export type AttentionKey = "workloads" | "pods" | "events" | "nodes" | "helm" | "flux" | "argo";
+export const ATTENTION_KEYS: AttentionKey[] = ["workloads", "pods", "events", "nodes", "helm", "flux", "argo"];
+// at: when the latest read completed; areaAt: when each area's shown value
+// was read; stale: areas whose latest read failed, shown from their last
+// good read (never restamped).
+export type AttentionSlice = { cluster: string | null; loading: boolean; counts: AttentionCounts; at: number | null; areaAt?: Partial<Record<AttentionKey, number>>; stale?: AttentionKey[] };
 const emptyAttentionCounts: AttentionCounts = { workloads: "unreadable", pods: "unreadable", events: "unreadable", nodes: "unreadable", helm: "unreadable", flux: "unreadable", argo: "unreadable", namespaces: null };
 
 export type ArgoConditionDTO = { type: string; message: string };
@@ -984,7 +992,28 @@ export const useFleet = create<FleetState>((set) => ({
         ? { ...s.attention, loading: true }
         : { cluster, loading: true, counts: emptyAttentionCounts, at: null },
     })),
-  setAttention: (cluster, counts) => set({ attention: { cluster, loading: false, counts, at: Date.now() } }),
+  // A failed area in a re-poll keeps its last good value and time, marked
+  // stale; a read area is restamped. A different cluster starts clean.
+  setAttention: (cluster, counts) => set((s) => {
+    const now = Date.now();
+    const prev = s.attention.cluster === cluster ? s.attention : null;
+    const merged: AttentionCounts = { ...counts };
+    const areaAt: Partial<Record<AttentionKey, number>> = {};
+    const stale: AttentionKey[] = [];
+    for (const k of ATTENTION_KEYS) {
+      const before = prev?.counts[k];
+      if (counts[k] === "unreadable" && prev && before !== undefined && before !== "unreadable" && prev.areaAt?.[k] !== undefined) {
+        (merged as Record<AttentionKey, unknown>)[k] = before;
+        if (k === "helm") merged.helmStuck = prev.counts.helmStuck;
+        areaAt[k] = prev.areaAt[k];
+        stale.push(k);
+      } else if (counts[k] !== "unreadable") {
+        areaAt[k] = now;
+      }
+    }
+    if (counts.pods === "unreadable" && prev && stale.includes("pods")) merged.namespaces = prev.counts.namespaces;
+    return { attention: { cluster, loading: false, counts: merged, at: now, areaAt, stale } };
+  }),
   clearAttention: () => set({ attention: { cluster: null, loading: false, counts: emptyAttentionCounts, at: null } }),
   openCluster: (name) => set({ route: { name: "cluster", cluster: name, section: "overview" } }),
   setSection: (section) =>

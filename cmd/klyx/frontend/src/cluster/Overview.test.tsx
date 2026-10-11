@@ -103,7 +103,7 @@ describe("Overview attention reads the shared summary", () => {
     render(<Overview c={dto} />);
     expect(area("Pods").textContent).toContain("unverified (capped)");
     expect(area("Nodes").textContent).toContain("could not be read");
-    expect(screen.getByText("No attention found in the 2 areas read; 2 could not be established.")).toBeTruthy();
+    expect(screen.getByText("No attention found in the 2 summarized areas read; 2 could not be established.")).toBeTruthy();
   });
 
   it("each area opens its lens with that lens's attention filter", () => {
@@ -192,5 +192,23 @@ describe("Overview metrics", () => {
     render(<Overview c={dto} />);
     const sparks = await screen.findAllByRole("img", { name: /metric sparkline/i });
     expect(sparks.length).toBe(2);
+  });
+});
+
+describe("Overview names what the summary does not cover (Codex 7e review)", () => {
+  it("installed domains outside the summary are rows, and the quiet line says so", () => {
+    seedAttention("homelab-nelli");
+    render(<Overview c={{ ...dto, certManagerPresent: true, externalSecretsPresent: true, gatewayAPIVersion: "v1.2", karpenterPresent: true }} />);
+    for (const label of ["Certificates", "External secrets", "Gateways", "Karpenter"]) {
+      expect(screen.getByRole("button", { name: new RegExp(`^${label}`) }).textContent).toContain("not covered by the summary");
+    }
+    expect(screen.getByText(/4 installed views are not covered by the summary\./)).toBeTruthy();
+  });
+
+  it("a stale area says when its value was read and that the latest read failed", () => {
+    useFleet.setState({ attention: { cluster: "homelab-nelli", loading: false, at: Date.now(), stale: ["nodes"], areaAt: { nodes: new Date(2026, 9, 11, 9, 5).getTime() },
+      counts: { workloads: obs(), pods: obs(), events: 0, nodes: obs(1), helm: "absent", flux: "absent", argo: "absent" } } });
+    render(<Overview c={dto} />);
+    expect(screen.getByRole("button", { name: /^Nodes/ }).textContent).toContain("(last good 09:05, latest read failed)");
   });
 });

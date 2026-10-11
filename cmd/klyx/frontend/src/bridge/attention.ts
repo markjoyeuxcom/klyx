@@ -1,6 +1,7 @@
 import { useFleet } from "../store/fleet";
 import type { AttentionCounts } from "../store/fleet";
 import { unwrapSources, summariseSources, observations } from "./overview";
+import { releaseHealth } from "../cluster/helmHealth";
 import {
   WorkloadsService,
   PodsService,
@@ -17,7 +18,14 @@ import {
 // (bridge/overview.ts). Each area degrades independently to "unreadable" -
 // nothing claims quiet from missing data - and helm/flux/argo additionally
 // distinguish a definitive "absent".
+// Latest request wins: a reply from an earlier request - an overlapping
+// manual Refresh and interval poll, or a cluster left and re-entered - never
+// changes counts, loading or receipt time.
+let gen = 0;
+export const abandonAttention = () => { gen++; };
+
 export async function fetchAttention(cluster: string): Promise<void> {
+  const g = ++gen;
   useFleet.getState().setAttentionLoading(cluster);
 
   const [workloads, pods, events, nodes, helm, flux, argo] = await Promise.allSettled([
@@ -30,7 +38,7 @@ export async function fetchAttention(cluster: string): Promise<void> {
     ArgoService.ListApplications(cluster),
   ]);
 
-  if (useFleet.getState().attention.cluster !== cluster) return; // stale guard
+  if (g !== gen || useFleet.getState().attention.cluster !== cluster) return; // superseded or left
 
   const src = unwrapSources([workloads, pods, events, nodes, helm, flux]);
   // Distinct namespaces come from the all-namespaces pods list.
@@ -47,6 +55,8 @@ export async function fetchAttention(cluster: string): Promise<void> {
     // available=false is a definitive "helm not detected" (failedReleases is
     // null exactly when helm is unavailable), not a failure.
     helm: src.helm ? out.failedReleases ?? "absent" : "unreadable",
+    // Stuck uses the Helm lens's own rule, so the summary and the lens agree.
+    helmStuck: src.helm?.available ? (src.helm.releases ?? []).filter((r) => releaseHealth(r as { status: string; updatedUnix: number }, Math.floor(Date.now() / 1000)).kind === "degraded").length : 0,
     // A summary read that failed carries `error`: unreadable, never "absent".
     flux: src.flux && !src.flux.error ? (out.flux ? out.flux.notReady : "absent") : "unreadable",
     argo: "unreadable",

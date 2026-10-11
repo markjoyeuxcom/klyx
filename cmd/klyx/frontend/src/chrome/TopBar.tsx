@@ -3,7 +3,7 @@ import { IconArrowLeft, IconArrowRight, IconArrowsLeftRight, IconClock, IconComm
 import { ThemeToggle } from "./ThemeToggle";
 import { KlyxMark } from "./KlyxMark";
 import { useFleet } from "../store/fleet";
-import { attentionAreas, attentionSummary, openNavTree } from "../nav/attention";
+import { attentionAreas, attentionSummary, openNavTree, uncoveredDomains } from "../nav/attention";
 import { back, backTarget, entryKey, entryLabel, forward, forwardTarget, go, recentPlaces, useHistory, type HistoryEntry } from "../nav/history";
 import { clusterDisplayName } from "../fleet/ClusterCard";
 import { stopAllForwards } from "../bridge/forwards";
@@ -83,21 +83,33 @@ export function TopBar() {
 // opens the same fault-aware navigation tree, not a second ledger.
 function AttentionButton({ cluster }: { cluster: string }) {
   const attention = useFleet((s) => s.attention);
+  const c = useFleet((s) => s.clusters.find((x) => x.name === cluster));
   const areas = attentionAreas(attention, cluster);
   const sum = attentionSummary(areas);
-  const lines = areas.map((a) => `${a.label}: ${a.text}`).join("\n");
+  const uncovered = uncoveredDomains(c);
+  const mine = attention.cluster === cluster;
+  const refreshing = mine && attention.loading && attention.at !== null;
+  const asOf = mine && attention.at ? new Date(attention.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : null;
   let text: string;
   let color = "var(--color-text-secondary)";
   if (sum.state === "loading") text = "Checking…";
   else if (sum.state === "attention") {
     text = `${sum.tone === "danger" ? "▲ " : ""}${sum.areas} area${sum.areas === 1 ? "" : "s"} need attention${sum.gaps > 0 ? ` · ${sum.gaps} unverified` : ""}`;
     color = sum.tone === "danger" ? "var(--color-text-danger)" : "var(--color-text-warning)";
-  } else if (sum.state === "gaps") text = `No attention found · ${sum.gaps} unverified`;
-  else text = "No attention found";
+  } else {
+    // Never an unqualified all-clear: the summary covers named areas only.
+    text = `No attention in summary${sum.gaps > 0 ? ` · ${sum.gaps} unverified` : ""}${uncovered.length > 0 ? ` · ${uncovered.length} not covered` : ""}`;
+  }
+  const lines = [
+    ...areas.map((a) => `${a.label}: ${a.text}`),
+    uncovered.length > 0 ? `Not covered by the summary (open their views): ${uncovered.map((u) => u.label).join(", ")}` : "",
+    asOf ? `Summary as of ${asOf}${refreshing ? " - refreshing" : ""}` : "",
+  ].filter(Boolean);
   return (
     <button type="button" className="mast-attention" style={{ ...noDrag, color }} onClick={() => openNavTree("attention")}
-      aria-label={`Attention: ${text}. Opens the view tree.`} title={`${lines}\n\nOpen the view tree`}>
-      {text}
+      aria-label={`Attention: ${text}.${asOf ? ` Summary as of ${asOf}${refreshing ? ", refreshing" : ""}.` : ""} Opens the view tree.`}
+      title={`${lines.join("\n")}\n\nOpen the view tree`}>
+      {text}{refreshing && <span className="t-secondary" style={{ fontWeight: 400 }}> · refreshing</span>}
     </button>
   );
 }
