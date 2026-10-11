@@ -3,12 +3,15 @@ package capability
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	discoveryfake "k8s.io/client-go/discovery/fake"
 	"k8s.io/client-go/kubernetes/fake"
 	clienttesting "k8s.io/client-go/testing"
@@ -306,25 +309,35 @@ func TestDetectNetworkTier(t *testing.T) {
 	gw := []*metav1.APIResourceList{{GroupVersion: "gateway.networking.k8s.io/v1"}}
 	cilium := []*metav1.APIResourceList{{GroupVersion: "cilium.io/v2"}}
 	cases := []struct {
-		name     string
-		groups   []*metav1.APIResourceList
-		probe    func(context.Context, string) (int, int, error)
-		wantTier Tier
+		name           string
+		groups         []*metav1.APIResourceList
+		probe          func(context.Context, string) (gatewayClassCounts, error)
+		wantTier       Tier
+		wantUnverified bool
 	}{
-		{"non-Envoy data plane accepted its class", gw, func(context.Context, string) (int, int, error) { return 1, 1, nil }, Healthy},
-		{"classes exist, none accepted", gw, func(context.Context, string) (int, int, error) { return 2, 0, nil }, Degraded},
-		{"Gateway API CRDs but no classes (not in use)", gw, func(context.Context, string) (int, int, error) { return 0, 0, nil }, Healthy},
-		{"classes unreadable, no recognised data plane", gw, func(context.Context, string) (int, int, error) { return 0, 0, errors.New("forbidden") }, Degraded},
+		{"non-Envoy data plane accepted its class", gw, func(context.Context, string) (gatewayClassCounts, error) { return gatewayClassCounts{1, 1, 0}, nil }, Healthy, false},
+		{"classes exist, every one rejected", gw, func(context.Context, string) (gatewayClassCounts, error) { return gatewayClassCounts{2, 0, 2}, nil }, Degraded, false},
+		// Codex 2c review P1: pending or unreported acceptance proves nothing.
+		{"classes exist, none accepted yet", gw, func(context.Context, string) (gatewayClassCounts, error) { return gatewayClassCounts{2, 0, 1}, nil }, Degraded, true},
+		{"Gateway API CRDs but no classes (not in use)", gw, func(context.Context, string) (gatewayClassCounts, error) { return gatewayClassCounts{}, nil }, Healthy, false},
+		{"classes unreadable, no recognised data plane", gw, func(context.Context, string) (gatewayClassCounts, error) {
+			return gatewayClassCounts{}, errors.New("forbidden")
+		}, Degraded, true},
 		// Unreadable acceptance is unknown: CRD presence cannot establish it (R4).
-		{"classes unreadable, Cilium present", append(append([]*metav1.APIResourceList{}, gw...), cilium...), func(context.Context, string) (int, int, error) { return 0, 0, errors.New("forbidden") }, Degraded},
-		{"Cilium without Gateway API is not a fault", cilium, nil, Healthy},
+		{"classes unreadable, Cilium present", append(append([]*metav1.APIResourceList{}, gw...), cilium...), func(context.Context, string) (gatewayClassCounts, error) {
+			return gatewayClassCounts{}, errors.New("forbidden")
+		}, Degraded, true},
+		{"Cilium without Gateway API is not a fault", cilium, nil, Healthy, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			d := NewDetector(newFake(tc.groups))
 			var gotVersion string
 			if tc.probe != nil {
-				d.gatewayClasses = func(ctx context.Context, v string) (int, int, error) { gotVersion = v; return tc.probe(ctx, v) }
+				d.gatewayClasses = func(ctx context.Context, v string) (gatewayClassCounts, error) {
+					gotVersion = v
+					return tc.probe(ctx, v)
+				}
 			}
 			set := d.Detect(context.Background())
 			if set.Network.Tier != tc.wantTier {
@@ -336,6 +349,9 @@ func TestDetectNetworkTier(t *testing.T) {
 			if tc.wantTier == Degraded && set.Network.Reason == "" {
 				t.Fatal("a degraded tier must say why")
 			}
+			if set.Network.GatewayUnverified != tc.wantUnverified {
+				t.Fatalf("unverified = %v (%s), want %v", set.Network.GatewayUnverified, set.Network.Reason, tc.wantUnverified)
+			}
 		})
 	}
 }
@@ -345,9 +361,9 @@ func TestCountAcceptedGatewayClasses_StaleAcceptanceDoesNotCount(t *testing.T) {
 	raw := []byte(`{"items":[
 		{"metadata":{"generation":2},"status":{"conditions":[{"type":"Accepted","status":"True","observedGeneration":1}]}},
 		{"metadata":{"generation":3},"status":{"conditions":[{"type":"Accepted","status":"True","observedGeneration":3}]}}]}`)
-	total, accepted, err := countAcceptedGatewayClasses(raw)
-	if err != nil || total != 2 || accepted != 1 {
-		t.Fatalf("got total=%d accepted=%d err=%v, want 2/1", total, accepted, err)
+	gc, err := countAcceptedGatewayClasses(raw)
+	if err != nil || gc.Total != 2 || gc.Accepted != 1 {
+		t.Fatalf("got %+v err=%v, want 2/1", gc, err)
 	}
 }
 
@@ -356,9 +372,9 @@ func TestCountAcceptedGatewayClasses(t *testing.T) {
 		{"status":{"conditions":[{"type":"Accepted","status":"True"}]}},
 		{"status":{"conditions":[{"type":"Accepted","status":"False"}]}},
 		{"status":{}}]}`)
-	total, accepted, err := countAcceptedGatewayClasses(raw)
-	if err != nil || total != 3 || accepted != 1 {
-		t.Fatalf("got total=%d accepted=%d err=%v", total, accepted, err)
+	gc, err := countAcceptedGatewayClasses(raw)
+	if err != nil || gc != (gatewayClassCounts{Total: 3, Accepted: 1, Rejected: 1}) {
+		t.Fatalf("got %+v err=%v", gc, err)
 	}
 }
 
@@ -453,5 +469,59 @@ func TestGitOpsTier(t *testing.T) {
 	tier, reason = gitOpsTier(FluxInfo{Present: true, Healthy: false}, ArgoInfo{})
 	if tier != Degraded || reason == "" {
 		t.Fatalf("want Degraded/reason, got %v/%q", tier, reason)
+	}
+}
+
+// Codex 2c review P1: only a controller workload actually read is evidence.
+// Forbidden, a transport failure and a missing conventional workload are
+// unverified, never "not ready"; a workload read adverse is not ready.
+func TestControllerHealthIsClaimedOnlyFromAWorkloadRead(t *testing.T) {
+	cm := []*metav1.APIResourceList{{GroupVersion: "cert-manager.io/v1"}, {GroupVersion: "karpenter.sh/v1"}}
+	forbidden := func(cs *fake.Clientset) {
+		cs.PrependReactor("get", "deployments", func(clienttesting.Action) (bool, runtime.Object, error) {
+			return true, nil, apierrors.NewForbidden(schema.GroupResource{Group: "apps", Resource: "deployments"}, "cert-manager", errors.New("rbac"))
+		})
+	}
+	transport := func(cs *fake.Clientset) {
+		cs.PrependReactor("get", "deployments", func(clienttesting.Action) (bool, runtime.Object, error) {
+			return true, nil, errors.New("dial tcp 10.0.0.1:443: connect: connection refused")
+		})
+	}
+	cases := []struct {
+		name           string
+		objs           []runtime.Object
+		react          func(*fake.Clientset)
+		healthy, known bool
+		reason         string
+	}{
+		{"read and ready", []runtime.Object{certManagerControllerDeploy("cert-manager", 1)}, nil, true, true, ""},
+		{"read and not ready", []runtime.Object{certManagerControllerDeploy("cert-manager", 0)}, nil, false, true, "cert-manager installed but cert-manager is not ready"},
+		{"forbidden", nil, forbidden, false, false, "health is unverified"},
+		{"transport failure", nil, transport, false, false, "connection refused"},
+		{"no workload under the conventional name", nil, nil, false, false, "no Deployment cert-manager/cert-manager"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cs := newFake(cm, tc.objs...)
+			if tc.react != nil {
+				tc.react(cs)
+			}
+			set := NewDetector(cs).Detect(context.Background())
+			c := set.CertManager
+			if c.Healthy != tc.healthy || c.Verified != tc.known || !strings.Contains(c.Reason, tc.reason) {
+				t.Fatalf("healthy=%v verified=%v reason=%q", c.Healthy, c.Verified, c.Reason)
+			}
+			if !tc.known && strings.Contains(c.Reason, "is not ready") {
+				t.Fatalf("an unverified controller is never called not ready: %q", c.Reason)
+			}
+			// Karpenter: no deployment in either conventional namespace is
+			// unverified, as the Karpenter lens says.
+			if tc.name == "no workload under the conventional name" {
+				k := set.Karpenter
+				if k.Verified || !strings.Contains(k.Reason, "no Deployment kube-system/karpenter; no Deployment karpenter/karpenter") {
+					t.Fatalf("karpenter: verified=%v reason=%q", k.Verified, k.Reason)
+				}
+			}
+		})
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 )
@@ -56,19 +57,36 @@ func StatefulSetReady(s *appsv1.StatefulSet) bool {
 // Callers handle the all-absent case before calling this.
 // FluxIssue and ArgoIssue name each GitOps tool's controller problem on its
 // own ("" when present and ready, or absent): the health summary reports
-// them per task, where the tier joins them.
+// them per task, where the tier joins them. An unverified controller says
+// so - never "not ready".
 func (g GitOpsCapability) FluxIssue() string {
-	if g.Flux.Present && !g.Flux.Healthy {
+	switch {
+	case !g.Flux.Present || g.Flux.Healthy:
+		return ""
+	case !g.Flux.Verified:
+		return "Flux installed but " + fluxKustomizeController + " health is unverified (" + g.Flux.Why + ")"
+	default:
 		return "Flux installed but " + fluxKustomizeController + " is not ready"
 	}
-	return ""
 }
 
 func (g GitOpsCapability) ArgoIssue() string {
-	if g.Argo.Present && !g.Argo.Healthy {
+	switch {
+	case !g.Argo.Present || g.Argo.Healthy:
+		return ""
+	case !g.Argo.Verified:
+		return "Argo installed but " + argoAppController + " health is unverified (" + g.Argo.Why + ")"
+	default:
 		return "Argo installed but " + argoAppController + " is not ready"
 	}
-	return ""
+}
+
+// applyRead sets a GitOps tool's health from a controller read.
+func applyRead(r ControllerRead, healthy, verified *bool, why *string) {
+	*healthy, *verified, *why = r.Health == ControllerReady, r.Health != ControllerUnverified, ""
+	if r.Health == ControllerUnverified {
+		*why = r.Why
+	}
 }
 
 func gitOpsTier(flux FluxInfo, argo ArgoInfo) (Tier, string) {
@@ -92,7 +110,7 @@ type Detector struct {
 	// gatewayClasses reports how many GatewayClasses exist at the given
 	// Gateway API version and how many a controller has Accepted. nil selects
 	// the default (a read through the discovery REST client); tests inject it.
-	gatewayClasses func(ctx context.Context, version string) (total, accepted int, err error)
+	gatewayClasses func(ctx context.Context, version string) (gatewayClassCounts, error)
 }
 
 func NewDetector(cs kubernetes.Interface) *Detector { return &Detector{cs: cs} }
@@ -164,13 +182,13 @@ func (d *Detector) detectGitOps(ctx context.Context, served map[string]bool) Git
 	}
 
 	if fluxPresent {
-		out.Flux.Healthy = d.controllerReady(ctx, deploymentWorkload, fluxNamespace, fluxKustomizeController)
+		applyRead(d.controllerProbe(ctx, deploymentWorkload, fluxNamespace, fluxKustomizeController), &out.Flux.Healthy, &out.Flux.Verified, &out.Flux.Why)
 		if out.Flux.Healthy {
 			out.Flux.Controllers = []string{fluxKustomizeController}
 		}
 	}
 	if argoPresent {
-		out.Argo.Healthy = d.controllerReady(ctx, statefulSetWorkload, argoNamespace, argoAppController)
+		applyRead(d.controllerProbe(ctx, statefulSetWorkload, argoNamespace, argoAppController), &out.Argo.Healthy, &out.Argo.Verified, &out.Argo.Why)
 	}
 
 	tier, reason := gitOpsTier(out.Flux, out.Argo)
@@ -218,16 +236,21 @@ func (d *Detector) detectNetwork(ctx context.Context, served map[string]bool) Ne
 	if probe == nil {
 		probe = d.readGatewayClasses
 	}
-	total, accepted, err := probe(ctx, gwVersion)
+	gc, err := probe(ctx, gwVersion)
 	switch {
 	case err != nil:
 		// Could not read GatewayClasses: acceptance is UNKNOWN, and CRD presence
 		// (Envoy Gateway, Cilium) cannot establish it. Say so rather than claim
 		// Healthy (Codex batch-2 review R4).
 		out.Base = Base{Tier: Degraded, Reason: "Gateway API installed but GatewayClasses could not be read (" + err.Error() + ") - data-plane health unknown"}
-		out.GatewayClassesUnread = true
-	case total > 0 && accepted == 0:
-		out.Base = Base{Tier: Degraded, Reason: fmt.Sprintf("%d GatewayClass(es) exist but no controller has Accepted any - no working Gateway API data plane", total)}
+		out.GatewayUnverified = true
+	case gc.Total > 0 && gc.Accepted == 0 && gc.Rejected == gc.Total:
+		out.Base = Base{Tier: Degraded, Reason: fmt.Sprintf("%d GatewayClass(es) exist and their controllers rejected every one (Accepted=False) - no working Gateway API data plane", gc.Total)}
+	case gc.Total > 0 && gc.Accepted == 0:
+		// Pending or unreported acceptance proves nothing about the data
+		// plane: no controller may be running, or it has not got to it yet.
+		out.Base = Base{Tier: Degraded, Reason: fmt.Sprintf("%d GatewayClass(es) exist but none is Accepted yet (%d rejected, %d pending or unreported) - data-plane health unverified", gc.Total, gc.Rejected, gc.Total-gc.Rejected)}
+		out.GatewayUnverified = true
 	default:
 		// Accepted classes, or Gateway API CRDs with no classes yet (not in use).
 		out.Base.Tier = Healthy
@@ -237,24 +260,29 @@ func (d *Detector) detectNetwork(ctx context.Context, served map[string]bool) Ne
 
 // readGatewayClasses lists GatewayClasses through the discovery REST client
 // (the typed clientset has no Gateway API types) and counts the Accepted ones.
-func (d *Detector) readGatewayClasses(ctx context.Context, version string) (int, int, error) {
+func (d *Detector) readGatewayClasses(ctx context.Context, version string) (gatewayClassCounts, error) {
 	rc := d.cs.Discovery().RESTClient()
 	if rc == nil {
-		return 0, 0, fmt.Errorf("no REST client for gatewayclasses")
+		return gatewayClassCounts{}, fmt.Errorf("no REST client for gatewayclasses")
 	}
 	raw, err := rc.Get().AbsPath("/apis/gateway.networking.k8s.io", version, "gatewayclasses").Do(ctx).Raw()
 	if err != nil {
-		return 0, 0, err
+		return gatewayClassCounts{}, err
 	}
 	return countAcceptedGatewayClasses(raw)
 }
+
+// gatewayClassCounts: Accepted and Rejected are current-spec verdicts
+// (Accepted True or False for the class's generation); the rest are pending
+// or unreported.
+type gatewayClassCounts struct{ Total, Accepted, Rejected int }
 
 // countAcceptedGatewayClasses parses a GatewayClassList and counts the classes
 // whose Accepted condition is True FOR THE CURRENT SPEC: a condition whose
 // observedGeneration lags metadata.generation describes an older spec the
 // controller has not yet re-evaluated, so it does not count (Codex batch-2
 // review R4). A condition without observedGeneration is taken as current.
-func countAcceptedGatewayClasses(raw []byte) (int, int, error) {
+func countAcceptedGatewayClasses(raw []byte) (gatewayClassCounts, error) {
 	var list struct {
 		Items []struct {
 			Metadata struct {
@@ -270,22 +298,27 @@ func countAcceptedGatewayClasses(raw []byte) (int, int, error) {
 		} `json:"items"`
 	}
 	if err := json.Unmarshal(raw, &list); err != nil {
-		return 0, 0, fmt.Errorf("parse gatewayclasses: %w", err)
+		return gatewayClassCounts{}, fmt.Errorf("parse gatewayclasses: %w", err)
 	}
-	accepted := 0
+	out := gatewayClassCounts{Total: len(list.Items)}
 	for _, it := range list.Items {
 		gen := it.Metadata.Generation
 		for _, c := range it.Status.Conditions {
-			if c.Type != "Accepted" || c.Status != "True" {
+			if c.Type != "Accepted" {
 				continue
 			}
 			if c.ObservedGeneration == 0 || gen == 0 || c.ObservedGeneration >= gen {
-				accepted++
+				switch c.Status {
+				case "True":
+					out.Accepted++
+				case "False":
+					out.Rejected++
+				}
 			}
 			break
 		}
 	}
-	return len(list.Items), accepted, nil
+	return out, nil
 }
 
 // detectCertManager classifies cert-manager: present iff the cert-manager.io
@@ -300,11 +333,10 @@ func (d *Detector) detectCertManager(ctx context.Context, served map[string]bool
 		out.Base = Base{Tier: Absent, Reason: "no cert-manager CRDs installed"}
 		return out
 	}
-	out.Healthy = d.controllerReady(ctx, deploymentWorkload, certManagerNamespace, certManagerController)
+	out.Healthy, out.Verified, out.Base.Reason = controllerVerdict(d.controllerProbe(ctx, deploymentWorkload, certManagerNamespace, certManagerController),
+		"cert-manager installed but "+certManagerController+" is not ready",
+		"cert-manager installed but "+certManagerController+" health is unverified")
 	out.Base.Tier = Classify(true, out.Healthy)
-	if !out.Healthy {
-		out.Base.Reason = "cert-manager installed but " + certManagerController + " is not ready"
-	}
 	return out
 }
 
@@ -318,11 +350,10 @@ func (d *Detector) detectExternalSecrets(ctx context.Context, served map[string]
 		out.Base = Base{Tier: Absent, Reason: "no External Secrets Operator CRDs installed"}
 		return out
 	}
-	out.Healthy = d.controllerReady(ctx, deploymentWorkload, externalSecretsNamespace, externalSecretsController)
+	out.Healthy, out.Verified, out.Base.Reason = controllerVerdict(d.controllerProbe(ctx, deploymentWorkload, externalSecretsNamespace, externalSecretsController),
+		"External Secrets Operator installed but "+externalSecretsController+" is not ready",
+		"External Secrets Operator installed but "+externalSecretsController+" health is unverified")
 	out.Base.Tier = Classify(true, out.Healthy)
-	if !out.Healthy {
-		out.Base.Reason = "External Secrets Operator installed but " + externalSecretsController + " is not ready"
-	}
 	return out
 }
 
@@ -337,16 +368,25 @@ func (d *Detector) detectKarpenter(ctx context.Context, served map[string]bool) 
 		out.Base = Base{Tier: Absent, Reason: "no Karpenter CRDs installed"}
 		return out
 	}
+	// The first Deployment actually read decides (as the Karpenter lens
+	// does); none read in either namespace is unverified, never an outage.
+	read := ControllerRead{Health: ControllerUnverified}
+	var gaps []string
 	for _, ns := range []string{"kube-system", "karpenter"} {
-		if d.controllerReady(ctx, deploymentWorkload, ns, "karpenter") {
-			out.Healthy = true
+		r := d.controllerProbe(ctx, deploymentWorkload, ns, "karpenter")
+		if r.Health != ControllerUnverified {
+			read = r
 			break
 		}
+		gaps = append(gaps, r.Why)
 	}
+	if read.Health == ControllerUnverified {
+		read.Why = strings.Join(gaps, "; ")
+	}
+	out.Healthy, out.Verified, out.Base.Reason = controllerVerdict(read,
+		"Karpenter CRDs installed but the karpenter controller is not ready",
+		"Karpenter CRDs installed but the karpenter controller's health is unverified")
 	out.Base.Tier = Classify(true, out.Healthy)
-	if !out.Healthy {
-		out.Base.Reason = "Karpenter CRDs installed but the karpenter controller is not ready (checked kube-system, karpenter)"
-	}
 	return out
 }
 
@@ -406,21 +446,65 @@ func (d *Detector) clusterMeshInstalled(ctx context.Context) bool {
 	return false
 }
 
-// controllerReady reports whether a controller workload has its desired replicas
-// ready. Deployments check AvailableReplicas; StatefulSets check ReadyReplicas.
-func (d *Detector) controllerReady(ctx context.Context, kind workloadKind, ns, name string) bool {
+// ControllerHealth is what reading a controller workload proved.
+type ControllerHealth int
+
+const (
+	// ControllerUnverified: the workload could not be read (forbidden, a
+	// transport failure) or none exists under the conventional name - no
+	// claim either way.
+	ControllerUnverified ControllerHealth = iota
+	ControllerNotReady                    // read: fewer ready replicas than desired
+	ControllerReady                       // read: its desired replicas are ready
+)
+
+// ControllerRead is one controller read: its health and, when unverified,
+// why. Only a workload actually read is evidence.
+type ControllerRead struct {
+	Health ControllerHealth
+	Why    string
+}
+
+// controllerProbe reads a controller workload. Deployments check
+// AvailableReplicas; StatefulSets check ReadyReplicas.
+func (d *Detector) controllerProbe(ctx context.Context, kind workloadKind, ns, name string) ControllerRead {
+	var ready bool
+	var err error
+	kindName := "Deployment"
 	switch kind {
 	case statefulSetWorkload:
-		sts, err := d.cs.AppsV1().StatefulSets(ns).Get(ctx, name, metav1.GetOptions{})
-		if err != nil {
-			return false
+		kindName = "StatefulSet"
+		var sts *appsv1.StatefulSet
+		if sts, err = d.cs.AppsV1().StatefulSets(ns).Get(ctx, name, metav1.GetOptions{}); err == nil {
+			ready = StatefulSetReady(sts)
 		}
-		return StatefulSetReady(sts)
 	default: // deploymentWorkload
-		dep, err := d.cs.AppsV1().Deployments(ns).Get(ctx, name, metav1.GetOptions{})
-		if err != nil {
-			return false
+		var dep *appsv1.Deployment
+		if dep, err = d.cs.AppsV1().Deployments(ns).Get(ctx, name, metav1.GetOptions{}); err == nil {
+			ready = DeploymentReady(dep)
 		}
-		return DeploymentReady(dep)
+	}
+	switch {
+	case apierrors.IsNotFound(err):
+		return ControllerRead{Health: ControllerUnverified, Why: fmt.Sprintf("no %s %s/%s", kindName, ns, name)}
+	case err != nil:
+		return ControllerRead{Health: ControllerUnverified, Why: fmt.Sprintf("%s %s/%s unreadable: %v", kindName, ns, name, err)}
+	case ready:
+		return ControllerRead{Health: ControllerReady}
+	default:
+		return ControllerRead{Health: ControllerNotReady}
+	}
+}
+
+// controllerVerdict turns a read into (healthy, verified) and the reason a
+// capability states: not ready only from a workload actually read.
+func controllerVerdict(r ControllerRead, notReady, unverified string) (healthy, verified bool, reason string) {
+	switch r.Health {
+	case ControllerReady:
+		return true, true, ""
+	case ControllerNotReady:
+		return false, true, notReady
+	default:
+		return false, false, unverified + " (" + r.Why + ")"
 	}
 }

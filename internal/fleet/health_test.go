@@ -3,15 +3,22 @@ package fleet
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	discoveryfake "k8s.io/client-go/discovery/fake"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes/fake"
 	metafake "k8s.io/client-go/metadata/fake"
+	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/moomora/klyx/internal/capability"
 	"github.com/moomora/klyx/internal/clock"
@@ -324,4 +331,161 @@ func TestReprobeKeepsControllerIssuesCurrent(t *testing.T) {
 	waitUntil(t, "a healthy probe clears both and lifts the overlay", func() bool {
 		return controller("certs") == nil && controller("gateway") == nil && c.Snapshot().State == Synced
 	})
+}
+
+// ---- the capability overlay across recovery (Codex 2c review P2) -----------
+
+func overlayConn(t *testing.T) *ClusterConn {
+	t.Helper()
+	scheme := runtime.NewScheme()
+	if err := metav1.AddMetaToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	c := NewClusterConn("x", fake.NewClientset(), metafake.NewSimpleMetadataClient(scheme), nil, nil, clock.Real{}, config.MetricsConfig{})
+	c.mu.Lock()
+	c.state = Synced
+	c.mu.Unlock()
+	return c
+}
+
+var (
+	netDown    = capability.Set{Network: capability.NetworkCapability{Base: capability.Base{Tier: capability.Degraded, Reason: "2 GatewayClass(es) exist and their controllers rejected every one"}, GatewayAPIVersion: "v1"}}
+	netUp      = capability.Set{Network: capability.NetworkCapability{Base: capability.Base{Tier: capability.Healthy}, GatewayAPIVersion: "v1"}}
+	gitopsBad  = capability.GitOpsCapability{Base: capability.Base{Tier: capability.Degraded, Reason: "Flux installed but kustomize-controller is not ready"}, Flux: capability.FluxInfo{Present: true, Verified: true}}
+	gitopsOK   = capability.GitOpsCapability{Base: capability.Base{Tier: capability.Healthy}, Flux: capability.FluxInfo{Present: true, Healthy: true, Verified: true}}
+	gitopsNone = capability.GitOpsCapability{Base: capability.Base{Tier: capability.Absent, Reason: "no Flux or Argo CRDs installed"}}
+)
+
+func stateOf(c *ClusterConn) (ConnState, string) { s := c.Snapshot(); return s.State, s.Reason }
+
+func TestANetworkFaultSurvivesARelist(t *testing.T) {
+	c := overlayConn(t)
+	c.mu.Lock()
+	c.caps.GitOps = gitopsNone
+	c.mu.Unlock()
+	c.applyReprobe(netDown)
+	if st, r := stateOf(c); st != Degraded || r != netDown.Network.Reason {
+		t.Fatalf("network-only degradation, with its own reason (never the absent GitOps one): %v %q", st, r)
+	}
+	c.onWatchError(errors.New("watch closed"))
+	if st, _ := stateOf(c); st != Stale {
+		t.Fatalf("want Stale, got %v", st)
+	}
+	c.applyReprobe(netUp) // capability updates never recover a connection
+	c.applyReprobe(netDown)
+	if st, _ := stateOf(c); st != Stale {
+		t.Fatalf("a capability update moved a Stale cluster: %v", st)
+	}
+	c.setState(EvSynced, "")
+	if st, r := stateOf(c); st != Degraded || r != netDown.Network.Reason {
+		t.Fatalf("the first recovered state is Degraded while the network still requires it: %v %q", st, r)
+	}
+}
+
+func TestOneFaultRecoveringKeepsTheOtherThroughARelist(t *testing.T) {
+	c := overlayConn(t)
+	c.applyGitOpsHealth(gitopsBad)
+	c.applyReprobe(netDown)
+	if st, r := stateOf(c); st != Degraded || r != gitopsBad.Reason {
+		t.Fatalf("both degraded: GitOps speaks first: %v %q", st, r)
+	}
+	c.applyGitOpsHealth(gitopsOK)
+	if st, r := stateOf(c); st != Degraded || r != netDown.Network.Reason {
+		t.Fatalf("GitOps recovered, the network still degrades: %v %q", st, r)
+	}
+	c.onWatchError(errors.New("watch closed"))
+	c.setState(EvSynced, "")
+	if st, r := stateOf(c); st != Degraded || r != netDown.Network.Reason {
+		t.Fatalf("after a relist the remaining fault still overlays: %v %q", st, r)
+	}
+	c.applyReprobe(netUp)
+	if st, r := stateOf(c); st != Synced || r != "" {
+		t.Fatalf("full recovery is Synced: %v %q", st, r)
+	}
+	c.onWatchError(errors.New("watch closed"))
+	c.setState(EvSynced, "")
+	if st, _ := stateOf(c); st != Synced {
+		t.Fatalf("with nothing degraded a relist recovers to Synced: %v", st)
+	}
+}
+
+// ---- the real Detector through the re-probe into the summary (Codex 2c P1) --
+
+func TestReprobeWithTheRealDetectorClaimsNotReadyOnlyFromAWorkloadRead(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := metav1.AddMetaToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	typed := fake.NewClientset()
+	typed.Discovery().(*discoveryfake.FakeDiscovery).Resources = []*metav1.APIResourceList{{GroupVersion: "cert-manager.io/v1"}, {GroupVersion: "karpenter.sh/v1"}}
+	var mode atomic.Value
+	mode.Store("forbidden")
+	typed.PrependReactor("get", "deployments", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		switch mode.Load().(string) {
+		case "forbidden":
+			return true, nil, apierrors.NewForbidden(schema.GroupResource{Group: "apps", Resource: "deployments"}, a.(k8stesting.GetAction).GetName(), errors.New("rbac"))
+		case "transport":
+			return true, nil, errors.New("dial tcp 10.0.0.1:443: connect: connection refused")
+		}
+		return false, nil, nil // the tracker answers
+	})
+	c := NewClusterConn("x", typed, metafake.NewSimpleMetadataClient(scheme), dynamicfake.NewSimpleDynamicClient(runtime.NewScheme()), capability.NewDetector(typed), clock.Real{}, config.MetricsConfig{})
+	s := &summarySink{}
+	c.SetHealthSink(s)
+	ctx, cancel := context.WithCancel(context.Background())
+	c.startHealth(ctx)
+	h := c.Health()
+	defer func() { cancel(); <-h.Done() }()
+
+	step := make(chan struct{})
+	oldDetect, oldEvery := reprobeDetect, capReprobeEvery
+	reprobeDetect = func(ctx context.Context, c *ClusterConn) (capability.Set, error) {
+		select {
+		case <-step:
+		case <-ctx.Done():
+			return capability.Set{}, ctx.Err()
+		}
+		return c.detector.DetectErr(ctx) // the real Detector
+	}
+	capReprobeEvery = time.Millisecond
+	loopCtx, stopLoop := context.WithCancel(ctx)
+	loopDone := make(chan struct{})
+	go func() { c.reprobeLoop(loopCtx); close(loopDone) }()
+	defer func() { stopLoop(); <-loopDone; reprobeDetect, capReprobeEvery = oldDetect, oldEvery }()
+
+	issue := func(task string) *observe.ControllerIssue { tk, _ := s.task(task); return tk.Controller }
+	expect := func(what, task, state, reasonPart string) {
+		t.Helper()
+		waitUntil(t, what, func() bool {
+			i := issue(task)
+			return i != nil && i.State == state && strings.Contains(i.Reason, reasonPart)
+		})
+	}
+	step <- struct{}{}
+	expect("forbidden is unknown", "certs", "unknown", "unreadable")
+	expect("forbidden Karpenter is unknown", "karpenter", "unknown", "unverified")
+
+	mode.Store("transport")
+	step <- struct{}{}
+	expect("a transport failure is unknown", "certs", "unknown", "connection refused")
+
+	mode.Store("tracker") // nothing in the conventional namespaces
+	step <- struct{}{}
+	expect("a missing Karpenter Deployment is unverified, never an outage", "karpenter", "unknown", "no Deployment kube-system/karpenter")
+	expect("so is a missing cert-manager Deployment", "certs", "unknown", "no Deployment cert-manager/cert-manager")
+
+	one := int32(1)
+	dep := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "cert-manager", Name: "cert-manager"}, Spec: appsv1.DeploymentSpec{Replicas: &one}}
+	if _, err := typed.AppsV1().Deployments("cert-manager").Create(ctx, dep, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	step <- struct{}{}
+	expect("a workload read adverse is not ready", "certs", "not ready", "cert-manager is not ready")
+
+	dep.Status.AvailableReplicas, dep.Status.ReadyReplicas, dep.Status.Replicas, dep.Status.UpdatedReplicas = 1, 1, 1, 1
+	if _, err := typed.AppsV1().Deployments("cert-manager").UpdateStatus(ctx, dep, metav1.UpdateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	step <- struct{}{}
+	waitUntil(t, "recovery clears it", func() bool { return issue("certs") == nil })
 }

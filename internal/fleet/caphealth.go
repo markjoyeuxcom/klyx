@@ -97,25 +97,36 @@ func (h *capHealth) recompute() {
 	if h.argoInf != nil && !h.argoInf.HasSynced() {
 		return
 	}
-	fluxHealthy := h.fluxInf == nil || deploymentReadyFromStore(h.fluxInf)
-	argoHealthy := h.argoInf == nil || statefulSetReadyFromStore(h.argoInf)
-	h.apply(capability.WithGitOpsHealth(h.set, fluxHealthy, argoHealthy))
+	var flux, argo capability.ControllerRead
+	if h.fluxInf != nil {
+		ns, name := capability.FluxControllerRef()
+		flux = capability.ReadFromWorkload("Deployment", ns, name, deploymentReadyFromStore(h.fluxInf))
+	}
+	if h.argoInf != nil {
+		ns, name := capability.ArgoControllerRef()
+		argo = capability.ReadFromWorkload("StatefulSet", ns, name, statefulSetReadyFromStore(h.argoInf))
+	}
+	h.apply(capability.WithGitOpsHealth(h.set, flux, argo))
 }
 
-func deploymentReadyFromStore(inf cache.SharedIndexInformer) bool {
+// deploymentReadyFromStore: nil when the synced store holds no workload -
+// none under the conventional name, which is unverified, never an outage.
+func deploymentReadyFromStore(inf cache.SharedIndexInformer) *bool {
 	for _, obj := range inf.GetStore().List() {
 		if d, ok := obj.(*appsv1.Deployment); ok {
-			return capability.DeploymentReady(d)
+			r := capability.DeploymentReady(d)
+			return &r
 		}
 	}
-	return false // workload absent -> not ready
+	return nil
 }
 
-func statefulSetReadyFromStore(inf cache.SharedIndexInformer) bool {
+func statefulSetReadyFromStore(inf cache.SharedIndexInformer) *bool {
 	for _, obj := range inf.GetStore().List() {
 		if s, ok := obj.(*appsv1.StatefulSet); ok {
-			return capability.StatefulSetReady(s)
+			r := capability.StatefulSetReady(s)
+			return &r
 		}
 	}
-	return false
+	return nil
 }

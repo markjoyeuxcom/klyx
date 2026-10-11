@@ -24,33 +24,38 @@ func ControllerIssues(caps capability.Set) map[string]*observe.ControllerIssue {
 	issue := func(state, reason string) *observe.ControllerIssue {
 		return &observe.ControllerIssue{State: state, Reason: reason}
 	}
+	// Not ready only from a controller workload actually read; a workload
+	// unreadable or not found under its conventional name is unknown.
+	stateOf := func(verified bool) string {
+		if verified {
+			return ControllerNotReady
+		}
+		return ControllerUnknown
+	}
 	out := make(map[string]*observe.ControllerIssue, len(ControllerTasks))
 	for _, t := range ControllerTasks {
 		out[t] = nil
 	}
 	if r := caps.GitOps.FluxIssue(); r != "" {
-		out[TaskFlux] = issue(ControllerNotReady, r)
+		out[TaskFlux] = issue(stateOf(caps.GitOps.Flux.Verified), r)
 	}
 	if r := caps.GitOps.ArgoIssue(); r != "" {
-		out[TaskArgo] = issue(ControllerNotReady, r)
+		out[TaskArgo] = issue(stateOf(caps.GitOps.Argo.Verified), r)
 	}
 	if caps.CertManager.Present && !caps.CertManager.Healthy {
-		out[TaskCerts] = issue(ControllerNotReady, caps.CertManager.Reason)
+		out[TaskCerts] = issue(stateOf(caps.CertManager.Verified), caps.CertManager.Reason)
 	}
 	if caps.ExternalSecrets.Present && !caps.ExternalSecrets.Healthy {
-		out[TaskESO] = issue(ControllerNotReady, caps.ExternalSecrets.Reason)
+		out[TaskESO] = issue(stateOf(caps.ExternalSecrets.Verified), caps.ExternalSecrets.Reason)
 	}
 	if caps.Karpenter.Present && !caps.Karpenter.Healthy {
-		out[TaskKarpenter] = issue(ControllerNotReady, caps.Karpenter.Reason)
+		out[TaskKarpenter] = issue(stateOf(caps.Karpenter.Verified), caps.Karpenter.Reason)
 	}
-	// The network tier degrades only on the Gateway API data plane (no
-	// GatewayClass accepted, or the classes unreadable).
+	// The network tier degrades only on the Gateway API data plane: every
+	// GatewayClass rejected (not ready), or the classes unreadable or their
+	// acceptance pending or unreported (unknown).
 	if caps.Network.GatewayAPIVersion != "" && caps.Network.Tier == capability.Degraded {
-		state := ControllerNotReady
-		if caps.Network.GatewayClassesUnread {
-			state = ControllerUnknown
-		}
-		out[TaskGateway] = issue(state, caps.Network.Reason)
+		out[TaskGateway] = issue(stateOf(!caps.Network.GatewayUnverified), caps.Network.Reason)
 	}
 	return out
 }

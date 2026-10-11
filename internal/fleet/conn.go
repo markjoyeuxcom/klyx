@@ -267,6 +267,24 @@ func (c *ClusterConn) setState(ev Event, reason string) {
 	if next, ok := Transition(c.state, ev); ok {
 		c.state = next
 		c.reason = reason
+		c.overlayLocked()
+	}
+}
+
+// overlayLocked applies the capability overlay to a cluster that has just
+// become Synced - at the first sync and on every recovery (Stale or Failed
+// -> Synced): it is Degraded at once while GitOps or the Gateway API data
+// plane still requires it, so a relist can never wipe a known fault. It
+// only ever acts on Synced: capability state never recovers a connection.
+// Caller holds c.mu.
+func (c *ClusterConn) overlayLocked() {
+	if c.state != Synced {
+		return
+	}
+	if c.caps.GitOps.Tier == capability.Degraded || c.caps.Network.Tier == capability.Degraded {
+		if next, ok := Transition(c.state, EvCapUnhealthy); ok {
+			c.state, c.reason = next, capabilityReason(c.caps)
+		}
 	}
 }
 
@@ -385,14 +403,11 @@ func (c *ClusterConn) connectLoop(ctx context.Context, nodeInformer, podInformer
 			c.mu.Unlock()
 
 			c.refreshCounts(nodeInformer, podInformer)
+			// The first sync applies the initial tier from the one-shot Detect
+			// (setState's overlay). startCapHealth below then keeps GitOps
+			// health live via the controller-workload watch; the re-probe keeps
+			// the rest current.
 			c.setState(EvSynced, "")
-
-			// Apply the initial tier from the one-shot Detect. startCapHealth
-			// below then keeps GitOps health live (Healthy <-> Degraded) via the
-			// controller-workload watch.
-			if caps.GitOps.Tier == capability.Degraded || caps.Network.Tier == capability.Degraded {
-				c.setState(EvCapUnhealthy, capabilityReason(caps))
-			}
 			c.startCapHealth(ctx, caps)
 			go c.reprobeLoop(ctx)
 			return
@@ -439,11 +454,17 @@ func (c *ClusterConn) refreshLoop(ctx context.Context, nodeInformer, podInformer
 	}
 }
 
+// capabilityReason is the overlay's reason: a degraded tier's own (GitOps
+// first). Only a degraded tier speaks - an absent tier's reason ("no Flux
+// or Argo CRDs installed") is not a fault and used to be picked up here.
 func capabilityReason(caps capability.Set) string {
-	if caps.GitOps.Reason != "" {
+	switch {
+	case caps.GitOps.Tier == capability.Degraded:
 		return caps.GitOps.Reason
+	case caps.Network.Tier == capability.Degraded:
+		return caps.Network.Reason
 	}
-	return caps.Network.Reason
+	return ""
 }
 
 // applyGitOpsHealth updates the GitOps capability and drives the cap-state edges

@@ -33,7 +33,7 @@ func TestWithGitOpsHealth(t *testing.T) {
 		Flux: FluxInfo{Present: true, Version: "v2.4.0", Healthy: true},
 	}}
 
-	g := WithGitOpsHealth(base, true, false)
+	g := WithGitOpsHealth(base, ControllerRead{Health: ControllerReady}, ControllerRead{Health: ControllerNotReady})
 	if g.Tier != Healthy || g.Reason != "" {
 		t.Fatalf("want Healthy/empty, got %v/%q", g.Tier, g.Reason)
 	}
@@ -44,7 +44,7 @@ func TestWithGitOpsHealth(t *testing.T) {
 		t.Fatalf("want Controllers populated when healthy")
 	}
 
-	g = WithGitOpsHealth(base, false, false)
+	g = WithGitOpsHealth(base, ControllerRead{Health: ControllerNotReady}, ControllerRead{Health: ControllerNotReady})
 	if g.Tier != Degraded || g.Reason == "" {
 		t.Fatalf("want Degraded/reason, got %v/%q", g.Tier, g.Reason)
 	}
@@ -58,11 +58,30 @@ func TestWithGitOpsHealth(t *testing.T) {
 		Argo:        ArgoInfo{Present: true, Healthy: true},
 		Coexistence: true,
 	}}
-	g = WithGitOpsHealth(co, true, false)
+	g = WithGitOpsHealth(co, ControllerRead{Health: ControllerReady}, ControllerRead{Health: ControllerNotReady})
 	if g.Tier != Degraded {
 		t.Fatalf("want Degraded when argo unhealthy, got %v", g.Tier)
 	}
 	if !g.Coexistence {
 		t.Fatal("coexistence must be preserved")
+	}
+}
+
+// Codex 2c review P1: a workload that is not there, or cannot be read, is
+// no evidence: the tool is unverified and the reason says so - never "not
+// ready".
+func TestWithGitOpsHealthUnverifiedClaimsNothing(t *testing.T) {
+	base := Set{GitOps: GitOpsCapability{Flux: FluxInfo{Present: true, Healthy: true, Verified: true}}}
+	g := WithGitOpsHealth(base, ReadFromWorkload("Deployment", "flux-system", "kustomize-controller", nil), ControllerRead{})
+	if g.Flux.Verified || g.Flux.Healthy || g.Flux.Why != "no Deployment flux-system/kustomize-controller" {
+		t.Fatalf("a missing workload is unverified: %+v", g.Flux)
+	}
+	if got := g.FluxIssue(); got != "Flux installed but kustomize-controller health is unverified (no Deployment flux-system/kustomize-controller)" {
+		t.Fatalf("issue: %q", got)
+	}
+	r := false
+	g = WithGitOpsHealth(base, ReadFromWorkload("Deployment", "flux-system", "kustomize-controller", &r), ControllerRead{})
+	if !g.Flux.Verified || g.Flux.Healthy || g.FluxIssue() != "Flux installed but kustomize-controller is not ready" {
+		t.Fatalf("a workload read adverse is a verified not-ready: %+v %q", g.Flux, g.FluxIssue())
 	}
 }

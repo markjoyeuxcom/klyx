@@ -47,12 +47,19 @@ type FluxInfo struct {
 	Version     string
 	Controllers []string
 	Healthy     bool
+	// Verified: the controller workload was actually read, so Healthy is a
+	// claim. Unverified (forbidden, unreadable, or no workload under the
+	// conventional name) claims nothing; Why names the gap.
+	Verified bool
+	Why      string
 }
 
 type ArgoInfo struct {
-	Present bool
-	Version string
-	Healthy bool
+	Present  bool
+	Version  string
+	Healthy  bool
+	Verified bool // as FluxInfo
+	Why      string
 }
 
 // GitOpsCapability models both tools together because the GitOps view needs them
@@ -74,9 +81,11 @@ type NetworkCapability struct {
 	HasHubble          bool
 	ClusterMesh        bool
 	IngressControllers []string
-	// GatewayClassesUnread marks a Degraded tier whose GatewayClasses could
-	// not be read: data-plane health is unknown, not known bad.
-	GatewayClassesUnread bool
+	// GatewayUnverified marks a Degraded tier that proves nothing: the
+	// GatewayClasses could not be read, or none is Accepted yet without all
+	// being rejected (acceptance pending or unreported). Data-plane health
+	// is unknown, not known bad.
+	GatewayUnverified bool
 }
 
 // CertManagerCapability models cert-manager: presence of the cert-manager.io
@@ -85,9 +94,10 @@ type NetworkCapability struct {
 // Flattened like NetworkCapability because cert-manager is a single tool.
 type CertManagerCapability struct {
 	Base
-	Present bool
-	Healthy bool
-	HasACME bool
+	Present  bool
+	Healthy  bool
+	Verified bool // the controller was read, so Healthy is a claim (as FluxInfo)
+	HasACME  bool
 }
 
 // ExternalSecretsCapability models the External Secrets Operator: presence of
@@ -95,8 +105,9 @@ type CertManagerCapability struct {
 // CertManagerCapability because ESO is a single tool.
 type ExternalSecretsCapability struct {
 	Base
-	Present bool
-	Healthy bool
+	Present  bool
+	Healthy  bool
+	Verified bool // as CertManagerCapability
 }
 
 // ReloaderCapability models Stakater Reloader. Unlike every other capability,
@@ -117,8 +128,9 @@ type ReloaderCapability struct {
 // on the classic helm chart), so health probes both.
 type KarpenterCapability struct {
 	Base
-	Present bool
-	Healthy bool
+	Present  bool
+	Healthy  bool
+	Verified bool // as CertManagerCapability
 }
 
 // Set is the full per-cluster capability snapshot handed to the view layer.

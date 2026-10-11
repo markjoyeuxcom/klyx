@@ -28,24 +28,41 @@ func ControllerRefs(s Set) []ControllerRef {
 }
 
 // WithGitOpsHealth returns a copy of s.GitOps with the tier, reason, and per-tool
-// Healthy flags recomputed from fresh controller readiness. Presence, version,
-// and coexistence are preserved. Readiness args are consulted only for tools that
-// are present in s.
-func WithGitOpsHealth(s Set, fluxHealthy, argoHealthy bool) GitOpsCapability {
+// health recomputed from fresh controller reads. Presence, version, and
+// coexistence are preserved. Reads are consulted only for tools that are
+// present in s; an unverified read claims nothing.
+func WithGitOpsHealth(s Set, flux, argo ControllerRead) GitOpsCapability {
 	out := s.GitOps
 	if out.Flux.Present {
-		out.Flux.Healthy = fluxHealthy
-		if fluxHealthy {
+		applyRead(flux, &out.Flux.Healthy, &out.Flux.Verified, &out.Flux.Why)
+		if out.Flux.Healthy {
 			out.Flux.Controllers = []string{fluxKustomizeController}
 		} else {
 			out.Flux.Controllers = nil
 		}
 	}
 	if out.Argo.Present {
-		out.Argo.Healthy = argoHealthy
+		applyRead(argo, &out.Argo.Healthy, &out.Argo.Verified, &out.Argo.Why)
 	}
 	tier, reason := gitOpsTier(out.Flux, out.Argo)
 	out.Base.Tier = tier
 	out.Base.Reason = reason
 	return out
 }
+
+// ReadFromWorkload is a ControllerRead from a workload a successful list
+// returned (nil when the list found none under the conventional name).
+func ReadFromWorkload(kind, ns, name string, ready *bool) ControllerRead {
+	switch {
+	case ready == nil:
+		return ControllerRead{Health: ControllerUnverified, Why: "no " + kind + " " + ns + "/" + name}
+	case *ready:
+		return ControllerRead{Health: ControllerReady}
+	default:
+		return ControllerRead{Health: ControllerNotReady}
+	}
+}
+
+// FluxControllerRef and ArgoControllerRef name the conventional workloads.
+func FluxControllerRef() (ns, name string) { return fluxNamespace, fluxKustomizeController }
+func ArgoControllerRef() (ns, name string) { return argoNamespace, argoAppController }

@@ -24,18 +24,18 @@ func TestControllerIssuesMapTheTiers(t *testing.T) {
 		t.Fatal("a tool that is not installed has no controller issue")
 	}
 	bad := ControllerIssues(capability.Set{
-		GitOps:          capability.GitOpsCapability{Flux: capability.FluxInfo{Present: true}, Argo: capability.ArgoInfo{Present: true, Healthy: true}},
-		CertManager:     capability.CertManagerCapability{Base: capability.Base{Reason: "cert-manager installed but cert-manager is not ready"}, Present: true},
-		ExternalSecrets: capability.ExternalSecretsCapability{Base: capability.Base{Reason: "eso down"}, Present: true},
-		Karpenter:       capability.KarpenterCapability{Base: capability.Base{Reason: "karpenter down"}, Present: true},
-		Network:         capability.NetworkCapability{Base: capability.Base{Tier: capability.Degraded, Reason: "classes unread"}, GatewayAPIVersion: "v1", GatewayClassesUnread: true},
+		GitOps:          capability.GitOpsCapability{Flux: capability.FluxInfo{Present: true, Verified: true}, Argo: capability.ArgoInfo{Present: true, Healthy: true, Verified: true}},
+		CertManager:     capability.CertManagerCapability{Base: capability.Base{Reason: "cert-manager installed but cert-manager is not ready"}, Present: true, Verified: true},
+		ExternalSecrets: capability.ExternalSecretsCapability{Base: capability.Base{Reason: "eso down"}, Present: true, Verified: true},
+		Karpenter:       capability.KarpenterCapability{Base: capability.Base{Reason: "karpenter unverified"}, Present: true}, // not read
+		Network:         capability.NetworkCapability{Base: capability.Base{Tier: capability.Degraded, Reason: "classes unread"}, GatewayAPIVersion: "v1", GatewayUnverified: true},
 	})
 	want := map[string]observe.ControllerIssue{
 		TaskFlux:      {State: ControllerNotReady, Reason: "Flux installed but kustomize-controller is not ready"},
 		TaskCerts:     {State: ControllerNotReady, Reason: "cert-manager installed but cert-manager is not ready"},
 		TaskESO:       {State: ControllerNotReady, Reason: "eso down"},
-		TaskKarpenter: {State: ControllerNotReady, Reason: "karpenter down"},
-		TaskGateway:   {State: ControllerUnknown, Reason: "classes unread"}, // unreadable is unknown, never "not ready"
+		TaskKarpenter: {State: ControllerUnknown, Reason: "karpenter unverified"}, // never "not ready" unread
+		TaskGateway:   {State: ControllerUnknown, Reason: "classes unread"},       // unreadable is unknown, never "not ready"
 	}
 	for task, w := range want {
 		if got := bad[task]; got == nil || *got != w {
@@ -44,5 +44,9 @@ func TestControllerIssuesMapTheTiers(t *testing.T) {
 	}
 	if bad[TaskArgo] != nil {
 		t.Error("a healthy Argo beside a broken Flux has no issue of its own")
+	}
+	unread := ControllerIssues(capability.Set{GitOps: capability.GitOpsCapability{Flux: capability.FluxInfo{Present: true, Why: "Deployment flux-system/kustomize-controller unreadable: forbidden"}}})
+	if got := unread[TaskFlux]; got == nil || got.State != ControllerUnknown || got.Reason != "Flux installed but kustomize-controller health is unverified (Deployment flux-system/kustomize-controller unreadable: forbidden)" {
+		t.Errorf("an unread Flux controller is unknown: %+v", got)
 	}
 }
