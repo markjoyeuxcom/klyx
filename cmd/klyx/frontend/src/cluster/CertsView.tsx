@@ -21,7 +21,7 @@ import { VerdictLamp } from "../health/VerdictView";
 import { LensLayout, LensTable, TABLE_ROW_HEIGHT, type DatasetState } from "../layout/LensLayout";
 import { InspectorBlock, InspectorLayout, type MenuItem } from "../layout/InspectorLayout";
 import { fitColumns, type ColumnDef } from "../layout/columns";
-import { combineEvidence, joinCoverage, kindEvidence, type JoinCoverage, type KindEvidence } from "../layout/coverage";
+import { clock, combineEvidence, coverageGaps, joinCoverage, kindEvidence, lastGoodAt, type JoinCoverage, type KindEvidence } from "../layout/coverage";
 
 const keyOf = (c: { namespace: string; name: string }) => `${c.namespace}/${c.name}`;
 const arrayOf = <T,>(value: T[] | null | undefined): T[] => (Array.isArray(value) ? value : []);
@@ -157,7 +157,15 @@ export function CertsView({ cluster }: { cluster: string }) {
   // A4 (slice 3 §4): past the deadline the rows are evidence as of their
   // capture, and the counts are the summary's until a re-read lands.
   const rowsRefreshing = mine && !!cm.rowsState?.refreshing;
-  const rowsAsOf = cm.rowsState?.evaluatedAt ? new Date(cm.rowsState.evaluatedAt).toLocaleTimeString() : "the last read";
+  const rowsAsOf = cm.rowsState?.evaluatedAt ? clock(cm.rowsState.evaluatedAt) : "the last read";
+  // The global counts are the one count selector's (slice 3 §4a): the rows'
+  // own, or the summary's past the A4 deadline. Headlines and attention chips
+  // read them; filtered views and breakdowns stay row-scoped ("as of").
+  const globalCounts = mine ? cm.partCounts : undefined;
+  // Evidence beside the rows: a stale kind's last good time and a failing
+  // discovery re-check (a capability gap, never a downgrade of live rows).
+  const lastGood = mine ? lastGoodAt(cm.coverage, ["Certificate", "Issuer", "ClusterIssuer"]) : null;
+  const discoveryGap = mine ? coverageGaps(cm.coverage ?? []) : null;
   const loaded = mine && !cm.loading;
   // Evidence per kind (layout/coverage.ts): every dataset, claim, auto-select
   // and removal reads ITS OWN kinds - a synced Certificate watch never vouches
@@ -210,16 +218,37 @@ export function CertsView({ cluster }: { cluster: string }) {
   // reader keys on it); issuers are local. Filter exclusion closes; absent
   // from a complete read = removed (last evidence, read-only).
   const selectedCert = selKey ? certs.find((c) => keyOf(c) === selKey) : undefined;
-  const lastCert = useRef<CertificateDTO | null>(null);
-  if (selectedCert) lastCert.current = selectedCert;
+  // the selection's last evidence, for this cluster and key only
+  const lastCert = useRef<{ cluster: string; cert: CertificateDTO } | null>(null);
+  if (selectedCert) lastCert.current = { cluster, cert: selectedCert };
+  const priorCert = lastCert.current && lastCert.current.cluster === cluster && keyOf(lastCert.current.cert) === selKey ? lastCert.current.cert : null;
   const certRemoved = !!selKey && certsEv === "complete" && !selectedCert;
-  // A chain is the selected row's only when it is the same object: a
-  // same-name recreation's chain never becomes the old row's detail (§5b).
-  const sameObject = (chain: CertChainDTO) => !selectedCert?.uid || !chain.certificate.uid || chain.certificate.uid === selectedCert.uid;
-  const liveChain = mine && cm.chain && cm.chainCluster === cluster && keyOf(cm.chain.certificate) === selKey && sameObject(cm.chain) ? cm.chain : null;
-  const lastChain = useRef<{ key: string; chain: CertChainDTO } | null>(null);
-  if (liveChain && selKey) lastChain.current = { key: `${cluster}/${selKey}`, chain: liveChain };
-  const shownChain = liveChain ?? (certRemoved && lastChain.current?.key === `${cluster}/${selKey}` ? lastChain.current.chain : null);
+  const subject = selectedCert ?? (certRemoved ? priorCert : null);
+  // A chain is the selected row's only when it is the same object: with a
+  // known UID the chain must carry that UID, so a same-name recreation's chain
+  // never becomes the old row's detail, nor the old chain the new row's (§5b).
+  const forSelection = mine && cm.chain && cm.chainCluster === cluster && keyOf(cm.chain.certificate) === selKey ? cm.chain : null;
+  // A failed read is the request's outcome, keyed by namespace/name: shown
+  // apart from the chain evidence, never as an empty chain.
+  const chainError = forSelection?.error || null;
+  const sameObject = (chain: CertChainDTO) => !subject?.uid || chain.certificate.uid === subject.uid;
+  const liveChain = forSelection && !forSelection.error && sameObject(forSelection) ? forSelection : null;
+  // the last chain read for an object, by UID: kept for a removed row or a
+  // failed re-read of the same object, never for a recreation
+  const lastChain = useRef<{ cluster: string; uid: string; chain: CertChainDTO } | null>(null);
+  if (liveChain?.certificate.uid) lastChain.current = { cluster, uid: liveChain.certificate.uid, chain: liveChain };
+  const chainOfOther = !!forSelection && !forSelection.error && !liveChain;
+  const priorChain = !liveChain && (certRemoved || chainError) && subject?.uid && lastChain.current?.cluster === cluster && lastChain.current.uid === subject.uid ? lastChain.current.chain : null;
+  const shownChain = liveChain ?? priorChain;
+  // a same-name recreation is another object: read its chain as well
+  const selUID = selectedCert?.uid;
+  const resolvedObject = useRef<{ key: string; uid: string } | null>(null);
+  useEffect(() => {
+    if (!selKey || !selUID) return;
+    const prev = resolvedObject.current;
+    resolvedObject.current = { key: selKey, uid: selUID };
+    if (prev && prev.key === selKey && prev.uid !== selUID) resolveChain(selKey);
+  }, [selKey, selUID, resolveChain]);
   const selectedIssuer = issuerSel ? issuers.find((i) => issuerKey(i) === issuerSel) : undefined;
   const lastIssuer = useRef<IssuerDTO | null>(null);
   if (selectedIssuer) lastIssuer.current = selectedIssuer;
@@ -270,15 +299,22 @@ export function CertsView({ cluster }: { cluster: string }) {
   const show = (id: string) => fitted.visible.has(id);
   const gridStyle = { gridTemplateColumns: fitted.template };
 
-  const attention = certs.filter(included).length;
+  // global: the count selector's; row-scoped: the breakdown and filters
+  const certTotal = globalCounts?.certificates?.total ?? certs.length;
+  const attention = globalCounts?.certificates?.included ?? certs.filter(included).length;
+  const issuerTotal = globalCounts?.issuers?.total ?? issuers.length;
+  const issuersNotReady = globalCounts?.issuers?.included ?? issuers.filter(included).length;
   const failedOrExpired = certs.filter((c) => c.ready === "Failed" || expired(c)).length;
   const issuing = certs.filter((c) => c.ready === "Issuing").length;
   const renewing = certs.filter((c) => expiringSoon(c)).length;
   const issuerProblems = certs.filter((c) => issuerCovOf(c.issuerKind) !== "unknown" && issuerProblem(c, issuers)).length;
-  const issuersNotReady = issuers.filter(included).length;
+  const asOf = rowsRefreshing ? ` (as of ${rowsAsOf})` : "";
 
   const clearFilters = () => { setStatus("all"); setQuery(""); setNamespace(""); };
+  // total: the rows in hand (dataset state, filters, footer); the headline
+  // reads the global count
   const total = view === "issuers" ? issuers.length : certs.length;
+  const globalTotal = view === "issuers" ? issuerTotal : certTotal;
   const shown = view === "issuers" ? visibleIssuers.length : visibleCerts.length;
   const viewEv = view === "issuers" ? issuersEv : certsEv;
   let state: DatasetState = "ready";
@@ -292,11 +328,20 @@ export function CertsView({ cluster }: { cluster: string }) {
     : state === "unreadable" ? <EmptyState icon={<IconAlertTriangle size={28} stroke={1.2} />} title="cert-manager state could not be read." hint={watchError ?? undefined} />
     : state === "empty" ? (absent
       ? <EmptyState icon={<IconCertificate size={28} stroke={1.2} />} title="cert-manager is not installed on this cluster." hint="Klyx detected no cert-manager.io resources here." />
+      : rowsRefreshing && globalTotal > 0 ? <EmptyState icon={<IconCertificate size={28} stroke={1.2} />} title={`No ${noun} as of ${rowsAsOf}.`} hint={`Refreshing - the cluster summary now counts ${globalTotal}.`} />
       : <EmptyState icon={<IconCertificate size={28} stroke={1.2} />} title={view === "issuers" ? "No issuers on this cluster." : "No Certificates on this cluster."} hint={view === "issuers" ? undefined : "cert-manager is installed but no Certificate objects exist yet."} />)
-    : <EmptyState icon={<IconCertificate size={28} stroke={1.2} />} title={`No ${noun} match the current filters.`} hint={`${total} ${noun} on this cluster.`} action={{ label: "Clear filters", onClick: clearFilters }} />;
+    : <EmptyState icon={<IconCertificate size={28} stroke={1.2} />} title={`No ${noun} match the current filters.`} hint={`${total} ${noun} on this cluster${asOf}.`} action={{ label: "Clear filters", onClick: clearFilters }} />;
   // pending/failed = a lower bound ("+"); stale = the last observed set ("*",
   // not necessarily a lower bound); never an unqualified count either way
   const partial = viewEv === "complete" ? "" : viewEv === "stale" ? "*" : "+";
+
+  // Notices stack: each is its own evidence, none hides another (Codex #1).
+  const statusLine = { minHeight: 28, display: "flex", alignItems: "center" } as const;
+  const notices: React.ReactNode[] = [];
+  if (watchError && total > 0) notices.push(<WatchErrorBanner key="watch" tool="cert-manager" failure={`watch failed - showing the last good state${lastGood ? ` from ${clock(lastGood)}` : ""}`} error={watchError} />);
+  else if (viewEv === "pending" && total > 0) notices.push(<div key="pending" role="status" className="t-secondary" style={statusLine}>Still reading - this {view === "issuers" ? "issuer" : "Certificate"} list is incomplete.</div>);
+  if (rowsRefreshing && !absent) notices.push(<div key="a4" role="status" data-testid="rows-refreshing" className="t-secondary" style={statusLine}>Rows as of {rowsAsOf} - refreshing; the totals are the cluster summary's.{cm.rowsState?.refreshError ? ` Last re-read failed: ${cm.rowsState.refreshError}` : ""}</div>);
+  if (discoveryGap && !absent) notices.push(<div key="gap" role="status" data-testid="discovery-gap" className="t-secondary" style={{ ...statusLine, color: "var(--color-text-warning)", overflowWrap: "anywhere" }}>Discovery re-check failing - {discoveryGap}. A capability gap only; the rows keep their own state.</div>);
 
   return (
     <LensLayout
@@ -304,17 +349,17 @@ export function CertsView({ cluster }: { cluster: string }) {
       title={view === "issuers" ? "cert-manager issuers" : "Certificates"}
       summary={state === "loading" || state === "unreadable" || absent ? null : view === "issuers" ? (
         <>
-          <span className="t-number" style={{ color: "var(--color-text-secondary)" }}>{issuers.length}{partial}</span>
+          <span className="t-number" style={{ color: "var(--color-text-secondary)" }}>{issuerTotal}{partial}</span>
           {issuersNotReady > 0 ? <span className="t-status" style={{ color: "var(--color-text-warning)" }}>{issuersNotReady} not ready</span>
             : <span className="t-secondary">{issuersEv === "complete" ? "all issuers ready" : issuersEv === "stale" ? "none known not ready (last observed)" : "issuer list incomplete"}</span>}
         </>
       ) : (
         <>
-          <span className="t-number" style={{ color: "var(--color-text-secondary)" }}>{certs.length}{partial}</span>
+          <span className="t-number" style={{ color: "var(--color-text-secondary)" }}>{certTotal}{partial}</span>
           {attention > 0
             ? <span className="t-status" style={{ color: failedOrExpired > 0 ? "var(--color-text-danger)" : "var(--color-text-warning)" }}>{failedOrExpired > 0 ? "▲ " : ""}{attention} not ready or expired</span>
             : <span className="t-secondary">{certsEv === "complete" ? "all ready" : certsEv === "stale" ? "none known not ready (last observed)" : "Certificate list incomplete"}</span>}
-          <span className="t-secondary">{[failedOrExpired ? `${failedOrExpired} failed or expired` : "", issuing ? `${issuing} issuing` : "", renewing ? `${renewing} in renewal window` : "", issuerProblems ? `${issuerProblems} with issuer problem` : ""].filter(Boolean).join(" · ")}</span>
+          <span className="t-secondary" data-testid="cert-breakdown">{[failedOrExpired ? `${failedOrExpired} failed or expired` : "", issuing ? `${issuing} issuing` : "", renewing ? `${renewing} in renewal window` : "", issuerProblems ? `${issuerProblems} with issuer problem` : ""].filter(Boolean).join(" · ")}{(failedOrExpired || issuing || renewing || issuerProblems) ? asOf : ""}</span>
         </>
       )}
       controls={absent ? undefined : (
@@ -347,10 +392,7 @@ export function CertsView({ cluster }: { cluster: string }) {
           </label>
         </>
       )}
-      notice={watchError && total > 0 ? <WatchErrorBanner tool="cert-manager" failure="watch failed - showing the last good state" error={watchError} />
-        : viewEv === "pending" && total > 0 ? <div role="status" className="t-secondary" style={{ minHeight: 28, display: "flex", alignItems: "center" }}>Still reading - this {view === "issuers" ? "issuer" : "Certificate"} list is incomplete.</div>
-        : rowsRefreshing ? <div role="status" data-testid="rows-refreshing" className="t-secondary" style={{ minHeight: 28, display: "flex", alignItems: "center" }}>As of {rowsAsOf} - refreshing; the counts are the cluster summary's.</div>
-        : undefined}
+      notice={notices.length > 0 ? <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>{notices}</div> : undefined}
       state={state}
       stateView={stateView}
       body={
@@ -422,18 +464,21 @@ export function CertsView({ cluster }: { cluster: string }) {
         </LensTable>
       }
       footer={<span className="t-legend">j k navigate · ↵ inspect · / search</span>}
-      footerEnd={<span className="t-secondary">{shown} of {total}{partial} {noun}{view === "certificates" ? " · broken first, then soonest expiry" : ""}</span>}
-      inspector={view === "certificates" && selKey && (selectedCert || certRemoved) && lastCert.current ? (
+      footerEnd={<span className="t-secondary">{shown} of {total}{partial} {noun}{asOf}{view === "certificates" ? " · broken first, then soonest expiry" : ""}</span>}
+      inspector={view === "certificates" && selKey && subject ? (
         <CertInspector
           key={`${cluster}/${selKey}`}
-          c={selectedCert ?? lastCert.current}
+          c={subject}
           cluster={cluster}
           removed={certRemoved}
-          issuer={issuerCovOf((selectedCert ?? lastCert.current).issuerKind) !== "unknown" ? resolveIssuer(selectedCert ?? lastCert.current, issuers) : undefined}
-          issuersKnown={issuerCovOf((selectedCert ?? lastCert.current).issuerKind) !== "unknown"}
-          issuerCov={issuerCovOf((selectedCert ?? lastCert.current).issuerKind)}
+          issuer={issuerCovOf(subject.issuerKind) !== "unknown" ? resolveIssuer(subject, issuers) : undefined}
+          issuersKnown={issuerCovOf(subject.issuerKind) !== "unknown"}
+          issuerCov={issuerCovOf(subject.issuerKind)}
           chain={shownChain}
-          chainLoading={!shownChain && mine && cm.chainLoading}
+          chainPrior={shownChain !== null && (certRemoved || shownChain === priorChain)}
+          chainError={chainError}
+          chainOfOther={chainOfOther}
+          chainLoading={!shownChain && !chainError && mine && cm.chainLoading}
           aiReady={ai.ready}
           aiEgress={ai.egress}
           onClose={() => { autoSelect.current = "done"; selectCert(null); }}
@@ -468,7 +513,7 @@ function RemovedNotice({ kind }: { kind: string }) {
 // CertInspector - investigation order: the cert verdict; the bound issuer
 // (headline when not ready), the likely cause, the issuance chain with the
 // deepest stuck node flagged; then secret, validity, DNS names, message.
-function CertInspector({ c, cluster, removed, issuer, issuersKnown, issuerCov, chain, chainLoading, aiReady, aiEgress, onClose, onResolve, onOpenIssuer }: {
+function CertInspector({ c, cluster, removed, issuer, issuersKnown, issuerCov, chain, chainPrior, chainError, chainOfOther, chainLoading, aiReady, aiEgress, onClose, onResolve, onOpenIssuer }: {
   c: CertificateDTO;
   cluster: string;
   removed: boolean;
@@ -476,6 +521,11 @@ function CertInspector({ c, cluster, removed, issuer, issuersKnown, issuerCov, c
   issuersKnown: boolean;
   issuerCov: JoinCoverage;
   chain: CertChainDTO | null;
+  // chainPrior: the chain is this object's last good read, not the current one
+  chainPrior: boolean;
+  chainError: string | null;
+  // chainOfOther: the last chain read was of an earlier object with this name
+  chainOfOther: boolean;
   chainLoading: boolean;
   aiReady: boolean;
   aiEgress: boolean;
@@ -595,8 +645,15 @@ function CertInspector({ c, cluster, removed, issuer, issuersKnown, issuerCov, c
           </InspectorBlock>
         )}
         <InspectorBlock title={failing ? "Issuance chain - deepest stuck node flagged" : "Issuance chain"} count={chain ? requests.length : undefined}>
+          {chainError && !removed && (
+            <div role="alert" data-testid="chain-error" className="t-body" style={{ display: "flex", alignItems: "flex-start", gap: 5, color: "var(--color-text-danger)", marginBottom: 4, overflowWrap: "anywhere" }}>
+              <IconAlertTriangle size={12} stroke={1.5} style={{ flexShrink: 0, marginTop: 2 }} />
+              <span>Chain read failed: {chainError}{chain ? "" : " - the chain is unverified, not empty."}</span>
+            </div>
+          )}
+          {chain && chainPrior && <div className="t-secondary" style={{ marginBottom: 3 }}>{chain.asOfUnix ? `Last resolved ${new Date(chain.asOfUnix * 1000).toLocaleTimeString()}` : "Last resolved chain"}{removed ? " - before it was removed." : "."}</div>}
           {chainLoading ? <span className="t-secondary">Resolving chain…</span>
-            : !chain ? <span className="t-secondary">{removed ? "No chain was resolved before it was removed." : "Chain not resolved."}</span>
+            : !chain ? (chainError && !removed ? null : <span className="t-secondary" data-testid="chain-unresolved">{removed ? "No chain was resolved before it was removed." : chainOfOther ? "Chain not resolved for this object - the last read was of an earlier object with this name." : "Chain not resolved."}</span>)
             : requests.length > 0 ? <ChainRail nodes={requests} failKey={failKey} />
             : <span className="t-secondary">No active issuance request.</span>}
           {warnings.map((w) => <div key={w} className="t-body" style={{ color: "var(--color-text-warning)", marginTop: 3, overflowWrap: "anywhere" }}>{w}</div>)}

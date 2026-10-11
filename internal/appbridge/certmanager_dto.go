@@ -137,7 +137,11 @@ type CertChainDTO struct {
 	// AsOfUnix is when the chain was read. The inspector shows a chain only
 	// for the selected row's UID (certificate.uid), never a same-name
 	// replacement's.
-	AsOfUnix    int64          `json:"asOfUnix,omitempty"`
+	AsOfUnix int64 `json:"asOfUnix,omitempty"`
+	// Error is a chain read that failed (NotFound, forbidden, timeout): the
+	// certificate carries only the requested namespace/name, no identity -
+	// a request outcome, never chain evidence.
+	Error       string         `json:"error,omitempty"`
 	Certificate CertificateDTO `json:"certificate"`
 	Issuer      *IssuerDTO     `json:"issuer"`
 	Requests    []ChainNodeDTO `json:"requests"`

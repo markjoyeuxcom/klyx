@@ -120,3 +120,55 @@ func TestChainReprobesTheVersionOnceOnNotFound(t *testing.T) {
 		t.Fatalf("the moved version is found by one re-probe: %+v %v", ch.Certificate, err)
 	}
 }
+
+// Codex review #4: after a NotFound, a re-probe that cannot be read leaves
+// the certificate unverified - its error, never a confirmed NotFound.
+func TestChainReprobeFailureIsNotAConfirmedNotFound(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"forbidden", apierrors.NewForbidden(schema.GroupResource{Resource: "discovery"}, "", errors.New("rbac"))},
+		{"transport", errors.New("dial tcp 10.0.0.1:443: connect: connection refused")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, _, typed := chainConn(t) // the certificate is absent at v1
+			// discovery answers the first probe, then fails: the failure
+			// lands exactly on the re-probe after the NotFound
+			c.disc = newCachedDiscovery(&flakyDiscovery{inner: typed.Discovery(), err: tc.err, okCalls: 2}, nil)
+			_, err := c.GetCertificateChain(context.Background(), "payments", "gone")
+			if err == nil || apierrors.IsNotFound(err) || !strings.Contains(err.Error(), "re-checking the served version") {
+				t.Fatalf("a failed re-probe must not confirm NotFound: %v", err)
+			}
+		})
+	}
+	t.Run("cancelled", func(t *testing.T) {
+		c, _, _ := chainConn(t)
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		if _, err := c.GetCertificateChain(ctx, "payments", "gone"); err == nil || apierrors.IsNotFound(err) {
+			t.Fatalf("a cancelled read is not a confirmed NotFound: %v", err)
+		}
+	})
+}
+
+// flakyDiscovery answers its first okCalls reads, then fails with err.
+type flakyDiscovery struct {
+	inner   discoveryLike
+	err     error
+	okCalls int
+	calls   int
+}
+
+func (f *flakyDiscovery) ServerGroups() (*metav1.APIGroupList, error) {
+	if f.calls++; f.calls > f.okCalls {
+		return nil, f.err
+	}
+	return f.inner.ServerGroups()
+}
+func (f *flakyDiscovery) ServerResourcesForGroupVersion(gv string) (*metav1.APIResourceList, error) {
+	if f.calls++; f.calls > f.okCalls {
+		return nil, f.err
+	}
+	return f.inner.ServerResourcesForGroupVersion(gv)
+}

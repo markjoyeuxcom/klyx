@@ -541,6 +541,6 @@ describe("CertsView on the shared rows (1c slice 3)", () => {
     setup("Healthy", [cert({})], [issuer({})]);
     useFleet.setState((s) => ({ certmanager: { ...s.certmanager, rowsState: { updating: false, refreshing: true, evaluatedAt: "2026-10-11T12:00:00Z" } } }));
     render(<CertsView cluster="x" />);
-    expect(screen.getByTestId("rows-refreshing").textContent).toMatch(/refreshing; the counts are the cluster summary's/);
+    expect(screen.getByTestId("rows-refreshing").textContent).toMatch(/refreshing; the totals are the cluster summary's/);
   });
 });

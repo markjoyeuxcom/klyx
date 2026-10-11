@@ -188,11 +188,21 @@ func (c *ClusterConn) getCertManagerObject(ctx context.Context, resource, ns, na
 		return nil, apierrors.NewNotFound(schema.GroupResource{Group: "cert-manager.io", Resource: resource}, name)
 	}
 	u, err := get(p.Version)
-	if apierrors.IsNotFound(err) {
-		c.probeDiscovery().invalidate("cert-manager.io")
-		if p2, perr := c.crdServed(ctx, "cert-manager.io", resource, "v1"); perr == nil && p2.Served && p2.Version != p.Version {
-			return get(p2.Version)
-		}
+	if !apierrors.IsNotFound(err) {
+		return u, err
 	}
-	return u, err
+	// NotFound is believed only after discovery confirms the version: a
+	// re-probe that cannot be read (forbidden, transport, deadline) leaves
+	// the object unverified, never confirmed missing (Codex review #4).
+	c.probeDiscovery().invalidate("cert-manager.io")
+	p2, perr := c.crdServed(ctx, "cert-manager.io", resource, "v1")
+	switch {
+	case perr != nil:
+		return nil, fmt.Errorf("re-checking the served version after a NotFound: %w", perr)
+	case !p2.Served:
+		return nil, err // confirmed: the kind is not served at all
+	case p2.Version != p.Version:
+		return get(p2.Version)
+	}
+	return nil, err // confirmed at the same version
 }

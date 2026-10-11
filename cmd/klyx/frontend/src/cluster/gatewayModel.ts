@@ -1,5 +1,5 @@
 import type { CertificateDTO, CondDTO, GatewayRefDTO, ListenerDTO, PolicyRefDTO, ResourceRef, RouteNodeDTO, RuleDTO } from "../store/fleet";
-import type { KindEvidence } from "../layout/coverage";
+import { clock, type KindEvidence } from "../layout/coverage";
 
 // gatewayModel - the Gateway API lens's health and wording, shared by the
 // list and the topology (spec §6 step 6). Gateway and route status reach the
@@ -165,10 +165,11 @@ export function certBySecret(certs: CertificateDTO[]): CertLookup {
 // Listener TLS evidence from the cert-manager watch (the accepted coverage
 // rules): unread means unknown; a stale read is last observed; a complete
 // read without a match proves only that no Certificate in it writes this
-// Secret; expiry is checked before Ready; Unknown stays neutral.
-export function certStatus(c: CertificateDTO | undefined, evidence: KindEvidence, nowS: number): { text: string; color: string } {
+// Secret; expiry is checked before Ready; Unknown stays neutral. A stale
+// read names its last good time when the Observer knows it.
+export function certStatus(c: CertificateDTO | undefined, evidence: KindEvidence, nowS: number, lastGood?: string | null): { text: string; color: string } {
   if (evidence === "pending" || evidence === "failed") return { text: "Certificates not read - cert-manager state unknown", color: "var(--color-text-tertiary)" };
-  const last = evidence === "stale" ? " (last observed)" : "";
+  const last = evidence === "stale" ? (lastGood ? ` (last observed ${clock(lastGood)})` : " (last observed)") : "";
   if (!c) return { text: `no matching Certificate in this read${last}`, color: "var(--color-text-tertiary)" };
   if (c.notAfterUnix > 0 && c.notAfterUnix <= nowS) return { text: `▲ certificate expired${last}`, color: "var(--color-text-danger)" };
   if (c.ready === "Ready") return { text: `certificate ready${last}`, color: "var(--color-text-secondary)" };

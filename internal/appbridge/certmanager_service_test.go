@@ -2,6 +2,8 @@ package appbridge
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -97,10 +99,28 @@ func TestGetCertificateChainUsesEmptyArraysForLeafAndNoRequests(t *testing.T) {
 func TestGetCertificateChainClusterMiss(t *testing.T) {
 	svc := NewCertManagerService(func(string) (CertManagerConn, bool) { return nil, false }, func() time.Time { return time.Now() })
 	dto := svc.GetCertificateChain("gone", "ns", "n")
-	if len(dto.Warnings) == 0 {
-		t.Fatal("expected a warning on cluster miss")
+	if dto.Error != "cluster not connected" || dto.Certificate.Namespace != "ns" || dto.Certificate.Name != "n" || dto.Certificate.UID != "" {
+		t.Fatalf("a failed read is an error for the requested key, with no identity: %+v", dto)
 	}
-	if dto.Requests == nil || dto.Certificate.DNSNames == nil {
-		t.Fatalf("want warning DTO arrays to be non-nil: %+v", dto)
+	if dto.Requests == nil || dto.Certificate.DNSNames == nil || dto.Warnings == nil {
+		t.Fatalf("want error DTO arrays to be non-nil: %+v", dto)
+	}
+}
+
+type failingChainConn struct{ err error }
+
+func (f failingChainConn) GetCertificateChain(context.Context, string, string) (certmanager.Chain, error) {
+	return certmanager.Chain{}, f.err
+}
+
+// Codex review #5: a resolve error is the request's outcome - kept apart
+// from chain evidence, keyed to the request.
+func TestGetCertificateChainErrorIsTheRequestsOutcome(t *testing.T) {
+	svc := NewCertManagerService(func(string) (CertManagerConn, bool) {
+		return failingChainConn{errors.New("certificates.cert-manager.io \"web\" is forbidden")}, true
+	}, time.Now)
+	dto := svc.GetCertificateChain("x", "payments", "web")
+	if !strings.Contains(dto.Error, "forbidden") || dto.Certificate.Name != "web" || dto.Issuer != nil || len(dto.Warnings) != 0 {
+		t.Fatalf("%+v", dto)
 	}
 }

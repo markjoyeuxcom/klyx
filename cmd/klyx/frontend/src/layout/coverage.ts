@@ -46,7 +46,7 @@ const OBSERVER_EVIDENCE: Record<NonNullable<KindCoverageDTO["coverage"]>, KindEv
   live: "complete", stale: "stale", checking: "pending", unreadable: "failed", absent: "complete",
 };
 
-type HealthKind = { kind: string; coverage: NonNullable<KindCoverageDTO["coverage"]>; class?: string; error?: string; lastGoodAt?: string; discovery?: string };
+type HealthKind = { kind: string; coverage: NonNullable<KindCoverageDTO["coverage"]>; class?: string; error?: string; asOf?: string; lastGoodAt?: string; discovery?: string };
 
 /** coverageFromHealth maps an Observer part's per-kind coverage onto the
  * lens's KindCoverageDTO, renaming kinds by `names` (Observer kind -> lens
@@ -60,7 +60,7 @@ export function coverageFromHealth(kinds: HealthKind[] | undefined, names: Recor
     const served = k.coverage !== "absent";
     const synced = k.coverage === "live" || k.coverage === "stale";
     const error = k.error ? (k.class ? `${k.class}: ${k.error}` : k.error) : undefined;
-    out.push({ kind, served, synced, error, coverage: k.coverage, class: k.class, lastGoodAt: k.lastGoodAt, discovery: k.discovery });
+    out.push({ kind, served, synced, error, coverage: k.coverage, class: k.class, asOf: k.asOf, lastGoodAt: k.lastGoodAt, discovery: k.discovery });
   }
   return out;
 }
@@ -71,3 +71,23 @@ export function coverageError(coverage: KindCoverageDTO[]): string | null {
   const errs = coverage.filter((k) => k.error && k.coverage !== "live").map((k) => `${k.kind}: ${k.error}`);
   return errs.length ? errs.join("; ") : null;
 }
+
+/** coverageGaps names failing discovery re-probes: a capability gap beside
+ * live data, never a reason to treat that data as stale (spec §3.3). */
+export function coverageGaps(coverage: KindCoverageDTO[]): string | null {
+  const gaps = coverage.filter((k) => k.discovery).map((k) => `${k.kind}: ${k.discovery}`);
+  return gaps.length ? gaps.join("; ") : null;
+}
+
+/** lastGoodAt is the oldest last-good time among the given kinds' stale
+ * evidence (the conservative "as of"), or null. */
+export function lastGoodAt(coverage: KindCoverageDTO[] | undefined, kinds: string[]): string | null {
+  let at: string | null = null;
+  for (const k of coverage ?? []) {
+    if (kinds.includes(k.kind) && k.coverage === "stale" && k.lastGoodAt && (at === null || k.lastGoodAt < at)) at = k.lastGoodAt;
+  }
+  return at;
+}
+
+/** clock formats an ISO time as the local wall clock (HH:MM:SS). */
+export const clock = (iso: string) => new Date(iso).toLocaleTimeString();

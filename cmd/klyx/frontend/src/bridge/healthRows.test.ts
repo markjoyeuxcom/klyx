@@ -90,7 +90,7 @@ describe("health rows transport (design §2b)", () => {
   // Observer on the same cluster - a fresh token, the old one closed - with
   // no other lens supplying rows.
   it("rebinds to a replacement Observer without a cluster change", async () => {
-    openMock.mockImplementation(async (...a: unknown[]) => ({ rows: rows(1, tokens().length === 1 ? 1 : 2) }));
+    openMock.mockImplementation(async () => ({ rows: rows(1, tokens().length === 1 ? 1 : 2) }));
     const close = openRows("c1", "certs", "certificates");
     await flush();
     const [t1] = tokens();

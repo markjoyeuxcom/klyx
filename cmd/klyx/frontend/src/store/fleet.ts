@@ -259,6 +259,11 @@ export type ChainNodeDTO = {
   children: ChainNodeDTO[];
 };
 export type CertChainDTO = {
+  // asOfUnix: when the chain was read. error: the read failed (NotFound,
+  // forbidden, timeout) - a request outcome keyed by the certificate's
+  // namespace/name only, never chain evidence or an identity.
+  asOfUnix?: number;
+  error?: string;
   certificate: CertificateDTO;
   issuer: IssuerDTO | null;
   requests: ChainNodeDTO[];
@@ -274,7 +279,7 @@ export type KindCoverageDTO = {
   // evidence behind it, carried unreduced - a stale kind's last good time,
   // the failure class, a discovery gap.
   coverage?: "live" | "stale" | "checking" | "unreadable" | "absent";
-  class?: string; lastGoodAt?: string; discovery?: string;
+  class?: string; asOf?: string; lastGoodAt?: string; discovery?: string;
 };
 
 export type CertManagerSlice = {
@@ -293,8 +298,17 @@ export type CertManagerSlice = {
   // The shared rows' A4 state (slice 3 §4): updating - the summary is ahead,
   // the counts still the rows'; refreshing - past the deadline, the rows are
   // shown as of evaluatedAt while a fenced re-read runs.
-  rowsState?: { updating: boolean; refreshing: boolean; evaluatedAt: string | null };
+  rowsState?: { updating: boolean; refreshing: boolean; evaluatedAt: string | null; refreshError?: string | null };
+  // The task's global counts per part from the one count selector (slice 3
+  // §4a): the rows' own counts, or the summary's past the A4 deadline. Lens
+  // headers and attention chips read these; filtered counts stay row-scoped.
+  partCounts?: { certificates: PartCountsDTO | null; issuers: PartCountsDTO | null };
 };
+
+export type PartCountsDTO = { total: number; included: number };
+
+// What the cert-manager rows adapter (health/useCertManagerRows) writes.
+export type CertManagerRowsPayload = Pick<CertManagerSlice, "certificates" | "issuers" | "coverage" | "watchError" | "loading" | "rowsState" | "partCounts">;
 
 // External Secrets Operator lens (M12). Refresh staleness is ESO-native: a
 // Synced secret whose last successful sync is more than 2x its refresh
@@ -902,6 +916,7 @@ type FleetState = {
   certmanager: CertManagerSlice;
   setCertManager: (cluster: string, certificates: CertificateDTO[], issuers: IssuerDTO[], watchError?: string, coverage?: KindCoverageDTO[], rowsState?: CertManagerSlice["rowsState"]) => void;
   setCertManagerLoading: (cluster: string) => void;
+  setCertManagerFromRows: (cluster: string, p: CertManagerRowsPayload) => void;
   clearCertManager: () => void;
   selectCertificate: (key: string | null) => void;
   setCertChain: (chain: CertChainDTO, cluster?: string) => void;
@@ -1138,7 +1153,8 @@ export const useFleet = create<FleetState>((set) => ({
 
   certmanager: { cluster: null, certificates: [], issuers: [], loading: false, watchError: null, selectedKey: null, chain: null, chainLoading: false },
   setCertManager: (cluster, certificates, issuers, watchError, coverage, rowsState) => set((s) => ({ certmanager: { ...s.certmanager, cluster, certificates, issuers, loading: false, watchError: watchError || null, coverage, rowsState } })),
-  setCertManagerLoading: (cluster) => set((s) => ({ certmanager: { ...s.certmanager, cluster, certificates: [], issuers: [], loading: true, watchError: null, selectedKey: null, chain: null, chainLoading: false } })),
+  setCertManagerLoading: (cluster) => set((s) => ({ certmanager: { ...s.certmanager, cluster, certificates: [], issuers: [], loading: true, watchError: null, selectedKey: null, chain: null, chainLoading: false, coverage: undefined, rowsState: undefined, partCounts: undefined } })),
+  setCertManagerFromRows: (cluster, p) => set((s) => ({ certmanager: { ...s.certmanager, cluster, ...p } })),
   clearCertManager: () => set({ certmanager: { cluster: null, certificates: [], issuers: [], loading: false, watchError: null, selectedKey: null, chain: null, chainLoading: false } }),
   selectCertificate: (key) => set((s) => ({ certmanager: { ...s.certmanager, selectedKey: key, chain: null, chainLoading: key !== null } })),
   setCertChain: (chain, cluster) => set((s) => ({ certmanager: { ...s.certmanager, chain, chainLoading: false, chainCluster: cluster ?? s.certmanager.cluster } })),

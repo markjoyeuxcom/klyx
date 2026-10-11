@@ -59,10 +59,16 @@ describe("useCertManagerRows", () => {
     expect(cm.watchError).toContain("cluster not observed: A");
   });
 
-  it("stays loading until both parts have answered", () => {
-    seed("A", "c", "certificates", rowsOf("A", "certificates", [], [live("certificates")]));
+  it("loads until a part answers; an unanswered part stays checking, never another part's evidence", () => {
+    addSub("c", "A", "certs", "certificates");
+    addSub("i", "A", "certs", "issuers");
     render(<Probe cluster="A" />);
     expect(useFleet.getState().certmanager).toMatchObject({ cluster: "A", loading: true });
+    act(() => { openStarted("c", "tok-c"); openSucceeded("c", "tok-c", 1); applyRows("c", rowsOf("A", "certificates", [{ uid: "u1" }], [live("certificates")]), 0); });
+    const cm = useFleet.getState().certmanager;
+    expect(cm.loading).toBe(false);
+    expect(cm.coverage?.map((k) => [k.kind, k.coverage])).toEqual([["Certificate", "live"], ["Issuer", "checking"], ["ClusterIssuer", "checking"]]);
+    expect(cm.issuers).toEqual([]);
   });
 
   it("never writes over another cluster's visit", () => {
@@ -97,5 +103,20 @@ describe("useCertManagerRows", () => {
     });
     expect(useFleet.getState().certmanager.rowsState).toMatchObject({ refreshing: true });
     expect(Object.keys(useHealth.getState().subs).length).toBe(2);
+  });
+
+  it("a refreshing part names its own capture time, and the totals move to the summary's", () => {
+    seed("A", "c", "certificates", { ...rowsOf("A", "certificates", [], [live("certificates")]), evaluatedAt: "2026-10-11T12:05:00Z" });
+    seed("A", "i", "issuers", { ...rowsOf("A", "issuers", [], [live("issuers")]), evaluatedAt: "2026-10-11T11:55:00Z" });
+    render(<Probe cluster="A" />);
+    act(() => {
+      const issuers = { ...part("issuers", [live("issuers")], 4), native: { total: 7, included: 2, word: "", roles: { total: 7, fault: 2, degraded: 0, unknown: 0, progressing: 0, paused: 0, ok: 5 } } };
+      applySummary({ cluster: "A", incarnation: 1, seq: 2, evaluatedAt: "", connection: "connected",
+        tasks: [{ id: "certs", coverage: "live", parts: [part("certificates", [live("certificates")], 1), issuers] }] }, 0);
+      dueForBootstrap(2000);
+    });
+    const cm = useFleet.getState().certmanager;
+    expect(cm.rowsState).toMatchObject({ refreshing: true, evaluatedAt: "2026-10-11T11:55:00Z" }); // the issuers' rows, not the certificates'
+    expect(cm.partCounts?.issuers).toEqual({ total: 7, included: 2 });
   });
 });

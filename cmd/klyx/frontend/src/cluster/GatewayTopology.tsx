@@ -12,7 +12,7 @@ import { VerdictLamp } from "../health/VerdictView";
 import { InspectorStatus } from "./ResourceInspector";
 import { LensLayout, type DatasetState } from "../layout/LensLayout";
 import { InspectorBlock, InspectorLayout, type MenuItem } from "../layout/InspectorLayout";
-import { kindEvidence, type KindEvidence } from "../layout/coverage";
+import { coverageGaps, kindEvidence, lastGoodAt, type KindEvidence } from "../layout/coverage";
 import {
   POLICY_ABBREV, POLICY_REFS, RANK, REFS, ROLE_TEXT, addressText, certBySecret, certStatus, errColor, fmtErr, fmtMs, fmtRps,
   gatewayRole, listenerText, policyKey, primaryBackendText, roleTone, routeHasGlobal, routeHasPolicies, routeIssues, routeRole, routeKey, sortWarnings,
@@ -65,6 +65,10 @@ export function GatewayTopology({ cluster, gateway }: { cluster: string; gateway
   const routesNow = !!t && t.routesComplete === true;
   const routesCarried = !!t && !routesNow && !!net.routesAt;
   const certEvidence: KindEvidence = cm.cluster === cluster ? kindEvidence(!cm.loading, cm.coverage, "Certificate", cm.watchError) : "pending";
+  // the Certificate kind's own last good time and discovery gap (slice 3 §5a)
+  const certCoverage = cm.cluster === cluster ? (cm.coverage ?? []).filter((k) => k.kind === "Certificate") : [];
+  const certLastGood = lastGoodAt(certCoverage, ["Certificate"]);
+  const certGap = coverageGaps(certCoverage);
   const certLookup = useMemo(() => certBySecret(cm.cluster === cluster ? cm.certificates : []), [cm, cluster]);
   const metrics = current ? net.routeMetrics : {};
   const warnings = useMemo(() => sortWarnings(t?.warnings), [t]);
@@ -291,7 +295,7 @@ export function GatewayTopology({ cluster, gateway }: { cluster: string; gateway
       footerEnd={<span className="t-secondary">{visible.length !== routes.length ? `${visible.length} of ${routes.length} routes · ` : ""}broken first · {metricsCaption}</span>}
       inspector={selKey && inspected && t ? (
         <RouteInspector key={selKey} route={inspected} gone={missing && routesNow} unproven={missing && !routesNow} gateway={t.gateway} listeners={listeners} notes={warnings.byRoute.get(selKey) ?? []}
-          metric={metrics[selKey]} metricsObs={metricsObs} certLookup={certLookup} certEvidence={certEvidence} nowS={nowS} onOpenObject={openObject} onClose={() => pick(null)} />
+          metric={metrics[selKey]} metricsObs={metricsObs} certLookup={certLookup} certEvidence={certEvidence} certLastGood={certLastGood} certGap={certGap} nowS={nowS} onOpenObject={openObject} onClose={() => pick(null)} />
       ) : undefined}
       inspectorLabel="Route details"
       onCloseInspector={() => pick(null)}
@@ -401,7 +405,7 @@ function RouteLane({ route, role, metric, metricsObs, selected, onSelect }: { ro
   );
 }
 
-function RouteInspector({ route, gone, unproven, gateway, listeners, notes, metric, metricsObs, certLookup, certEvidence, nowS, onOpenObject, onClose }: {
+function RouteInspector({ route, gone, unproven, gateway, listeners, notes, metric, metricsObs, certLookup, certEvidence, certLastGood, certGap, nowS, onOpenObject, onClose }: {
   route: RouteNodeDTO;
   gone: boolean;
   unproven: boolean;
@@ -412,6 +416,8 @@ function RouteInspector({ route, gone, unproven, gateway, listeners, notes, metr
   metricsObs: MetricsObs;
   certLookup: CertLookup;
   certEvidence: KindEvidence;
+  certLastGood: string | null;
+  certGap: string | null;
   nowS: number;
   onOpenObject: OpenObject;
   onClose: () => void;
@@ -482,6 +488,7 @@ function RouteInspector({ route, gone, unproven, gateway, listeners, notes, metr
           </div>
         </InspectorBlock>
         <InspectorBlock title="Listener TLS">
+          {certGap && <div className="t-secondary" data-testid="cert-discovery-gap" style={{ color: "var(--color-text-warning)", overflowWrap: "anywhere" }}>cert-manager discovery re-check failing - {certGap}. A capability gap only - the Certificate read below keeps its own state.</div>}
           {scoped.length === 0 ? (
             <div className="t-body" style={{ color: "var(--color-text-warning)" }}>No listener on this Gateway matches the route's section.</div>
           ) : scoped.map((l) => {
@@ -491,7 +498,7 @@ function RouteInspector({ route, gone, unproven, gateway, listeners, notes, metr
                 <span className="t-identifier">{listenerText(l)}{l.hostname ? ` · ${l.hostname}` : ""}</span>
                 {refs.length === 0 ? <span className="t-secondary">No certificateRefs.</span> : refs.map((ref) => {
                   const cert = ref.kind === "Secret" ? certLookup.get(`${ref.namespace}/${ref.name}`) : undefined;
-                  const st = ref.kind === "Secret" ? certStatus(cert, certEvidence, nowS) : { text: "not a Secret - not evaluated", color: "var(--color-text-tertiary)" };
+                  const st = ref.kind === "Secret" ? certStatus(cert, certEvidence, nowS, certLastGood) : { text: "not a Secret - not evaluated", color: "var(--color-text-tertiary)" };
                   return (
                     <span key={`${ref.kind}/${ref.namespace}/${ref.name}`} className="t-secondary" style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
                       <span className="t-identifier">{ref.kind} {ref.namespace}/{ref.name}</span>

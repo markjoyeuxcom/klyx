@@ -42,21 +42,24 @@ func NewCertManagerService(lookup func(string) (CertManagerConn, bool), now func
 func (s *CertManagerService) GetCertificateChain(cluster, ns, name string) CertChainDTO {
 	conn, ok := s.lookup(cluster)
 	if !ok {
-		return warningCertChainDTO("cluster not connected")
+		return chainErrorDTO(ns, name, "cluster not connected")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
 	defer cancel()
 	chain, err := conn.GetCertificateChain(ctx, ns, name)
 	if err != nil {
-		return warningCertChainDTO(err.Error())
+		return chainErrorDTO(ns, name, err.Error())
 	}
 	return toChainDTO(chain, s.now())
 }
 
-func warningCertChainDTO(warning string) CertChainDTO {
+// chainErrorDTO is a failed chain read for the requested certificate: the
+// request's key and the error, never an identity or chain evidence.
+func chainErrorDTO(ns, name, msg string) CertChainDTO {
 	return CertChainDTO{
-		Certificate: CertificateDTO{DNSNames: []string{}},
+		Error:       msg,
+		Certificate: CertificateDTO{Namespace: ns, Name: name, DNSNames: []string{}},
 		Requests:    []ChainNodeDTO{},
-		Warnings:    []string{warning},
+		Warnings:    []string{},
 	}
 }
