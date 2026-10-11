@@ -1,47 +1,23 @@
 import { useFleet } from "../store/fleet";
 import { Overview } from "./Overview";
 import { GitOps } from "./GitOps";
-import { GitOpsLegacy } from "./GitOpsLegacy";
 import { ArgoView } from "./ArgoView";
-import { ArgoViewLegacy } from "./ArgoViewLegacy";
 import { HelmView } from "./HelmView";
-import { HelmViewLegacy } from "./HelmViewLegacy";
 import { CertsView } from "./CertsView";
-import { CertsViewLegacy } from "./CertsViewLegacy";
 import { ExternalSecretsView } from "./ExternalSecretsView";
-import { ExternalSecretsViewLegacy } from "./ExternalSecretsViewLegacy";
 import { CRDBrowser } from "./CRDBrowser";
 import { BuiltinsView } from "./BuiltinsView";
 import { InstanceList } from "./InstanceList";
-import { InstanceListLegacy } from "./InstanceListLegacy";
 import { GatewayApiView } from "./GatewayApiView";
-import { GatewayApiViewLegacy } from "./GatewayApiViewLegacy";
 import { HubbleFlowsView } from "./HubbleFlowsView";
 import { WorkloadsView } from "./WorkloadsView";
-import { WorkloadsViewLegacy } from "./WorkloadsViewLegacy";
 import { PodsView } from "./PodsView";
-import { PodsViewLegacy } from "./PodsViewLegacy";
-
-// Reversible rollout switches for the 2026-10 workspace redesign: setting
-// localStorage "klyx.layout.v1.legacy<Lens>" = "1" (Pods, Nodes, Workloads)
-// falls back to that lens's old implementation as a whole - never a mix of
-// layout owners. Each is removed once its migration is accepted.
-function legacyLens(lens: "Pods" | "Nodes" | "Workloads" | "Resources" | "Flux" | "Argo" | "Certs" | "Eso" | "Helm" | "Events" | "Access" | "Upgrade" | "Connectivity" | "Karpenter" | "Gateway"): boolean {
-  try { return localStorage.getItem(`klyx.layout.v1.legacy${lens}`) === "1"; } catch { return false; }
-}
 import { EventsView } from "./EventsView";
-import { EventsViewLegacy } from "./EventsViewLegacy";
 import { NodesView } from "./NodesView";
-import { NodesViewLegacy } from "./NodesViewLegacy";
 import { AccessView } from "./AccessView";
-import { AccessViewLegacy } from "./AccessViewLegacy";
 import { UpgradeView } from "./UpgradeView";
-import { UpgradeViewLegacy } from "./UpgradeViewLegacy";
 import { ConnectivityView } from "./ConnectivityView";
-import { ConnectivityViewLegacy } from "./ConnectivityViewLegacy";
 import { KarpenterView } from "./KarpenterView";
-import { KarpenterViewLegacy } from "./KarpenterViewLegacy";
-import { Placeholder } from "../chrome/Placeholder";
 
 export function ClusterDetail() {
   const route = useFleet((s) => s.route);
@@ -60,30 +36,32 @@ export function ClusterDetail() {
     );
   }
   if (route.section === "overview") return <Overview c={cluster} />;
-  if (route.section === "gitops") return legacyLens("Flux") ? <GitOpsLegacy cluster={cluster.name} /> : <GitOps cluster={cluster.name} />;
-  if (route.section === "argo") return legacyLens("Argo") ? <ArgoViewLegacy cluster={cluster.name} mode={route.argoView ?? "applications"} /> : <ArgoView cluster={cluster.name} mode={route.argoView ?? "applications"} />;
-  if (route.section === "helm") return legacyLens("Helm") ? <HelmViewLegacy cluster={cluster.name} /> : <HelmView cluster={cluster.name} />;
-  if (route.section === "certs") return legacyLens("Certs") ? <CertsViewLegacy cluster={cluster.name} /> : <CertsView cluster={cluster.name} />;
-  if (route.section === "externalsecrets") return legacyLens("Eso") ? <ExternalSecretsViewLegacy cluster={cluster.name} /> : <ExternalSecretsView cluster={cluster.name} />;
+  if (route.section === "gitops") return <GitOps cluster={cluster.name} />;
+  if (route.section === "argo") return <ArgoView cluster={cluster.name} mode={route.argoView ?? "applications"} />;
+  if (route.section === "helm") return <HelmView cluster={cluster.name} />;
+  if (route.section === "certs") return <CertsView cluster={cluster.name} />;
+  if (route.section === "externalsecrets") return <ExternalSecretsView cluster={cluster.name} />;
   if (route.section === "resources") {
     // An open instance renders as a side panel INSIDE the list (master-detail,
     // the Pods pattern) - never as a full-page swap that throws the list away.
-    if (route.resource) return legacyLens("Resources") ? <InstanceListLegacy cluster={cluster.name} resource={route.resource} /> : <InstanceList cluster={cluster.name} resource={route.resource} />;
+    if (route.resource) return <InstanceList cluster={cluster.name} resource={route.resource} />;
     return <BuiltinsView cluster={cluster.name} />;
   }
   if (route.section === "crds") {
-    if (route.resource) return legacyLens("Resources") ? <InstanceListLegacy cluster={cluster.name} resource={route.resource} /> : <InstanceList cluster={cluster.name} resource={route.resource} />;
+    if (route.resource) return <InstanceList cluster={cluster.name} resource={route.resource} />;
     return <CRDBrowser cluster={cluster.name} />;
   }
-  if (route.section === "gatewayApi") return legacyLens("Gateway") ? <GatewayApiViewLegacy cluster={cluster.name} /> : <GatewayApiView cluster={cluster.name} />;
+  if (route.section === "gatewayApi") return <GatewayApiView cluster={cluster.name} />;
   if (route.section === "flows") return <HubbleFlowsView cluster={cluster.name} />;
-  if (route.section === "workloads") return legacyLens("Workloads") ? <WorkloadsViewLegacy cluster={cluster.name} /> : <WorkloadsView cluster={cluster.name} />;
-  if (route.section === "pods") return legacyLens("Pods") ? <PodsViewLegacy cluster={cluster.name} /> : <PodsView cluster={cluster.name} />;
-  if (route.section === "events") return legacyLens("Events") ? <EventsViewLegacy cluster={cluster.name} /> : <EventsView cluster={cluster.name} />;
-  if (route.section === "nodes") return legacyLens("Nodes") ? <NodesViewLegacy cluster={cluster.name} /> : <NodesView cluster={cluster.name} />;
-  if (route.section === "access") return legacyLens("Access") ? <AccessViewLegacy cluster={cluster.name} /> : <AccessView cluster={cluster.name} />;
-  if (route.section === "upgrade") return legacyLens("Upgrade") ? <UpgradeViewLegacy cluster={cluster.name} /> : <UpgradeView cluster={cluster.name} />;
-  if (route.section === "connectivity") return legacyLens("Connectivity") ? <ConnectivityViewLegacy cluster={cluster.name} /> : <ConnectivityView cluster={cluster.name} />;
-  if (route.section === "karpenter") return legacyLens("Karpenter") ? <KarpenterViewLegacy cluster={cluster.name} /> : <KarpenterView cluster={cluster.name} />;
-  return <Placeholder section={route.section} c={cluster} />;
+  if (route.section === "workloads") return <WorkloadsView cluster={cluster.name} />;
+  if (route.section === "pods") return <PodsView cluster={cluster.name} />;
+  if (route.section === "events") return <EventsView cluster={cluster.name} />;
+  if (route.section === "nodes") return <NodesView cluster={cluster.name} />;
+  if (route.section === "access") return <AccessView cluster={cluster.name} />;
+  if (route.section === "upgrade") return <UpgradeView cluster={cluster.name} />;
+  if (route.section === "connectivity") return <ConnectivityView cluster={cluster.name} />;
+  if (route.section === "karpenter") return <KarpenterView cluster={cluster.name} />;
+  // Every section is routed above; a persisted unknown section never reaches
+  // here (persist.ts validates it), but say so rather than render nothing.
+  return <div className="t-body" style={{ padding: 24 }}>This view is not available in this version of Klyx.</div>;
 }

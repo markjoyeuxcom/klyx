@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { toneColor, toneBg, toneBorder, readyColor, frame, ellipsis, btn, actionBtn } from "./styles";
+import { toneColor, toneBg, toneBorder, readyColor, ellipsis, btn, actionBtn } from "./styles";
 
 describe("primitive style tokens", () => {
   it("maps every tone to text/bg/border CSS vars", () => {
@@ -16,9 +16,7 @@ describe("primitive style tokens", () => {
     expect(readyColor.Issuing).toBe(readyColor.Reconciling);
   });
 
-  it("frame is a hairline card surface and ellipsis clips", () => {
-    expect(frame.borderRadius).toBe("var(--border-radius-md)");
-    expect(frame.border).toContain("--border-hairline");
+  it("ellipsis clips", () => {
     expect(ellipsis.whiteSpace).toBe("nowrap");
   });
 
