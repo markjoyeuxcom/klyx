@@ -76,7 +76,7 @@ function resolveIssuer(c: CertificateDTO, issuers: IssuerDTO[]): IssuerDTO | und
 
 function issuerProblem(c: CertificateDTO, issuers: IssuerDTO[]): boolean {
   const issuer = resolveIssuer(c, issuers);
-  return !issuer || issuer.ready !== "Ready";
+  return !issuer || issuer.rule.included;
 }
 
 function matchesQuery(c: CertificateDTO, query: string): boolean {
@@ -206,7 +206,7 @@ export function CertsView({ cluster }: { cluster: string }) {
   );
   const visibleIssuers = useMemo(() => orderedIssuers.filter((i) => {
     if (namespace && i.kind === "Issuer" && i.namespace !== namespace) return false;
-    if (status === "attention" && i.ready === "Ready") return false;
+    if (status === "attention" && !included(i)) return false;
     return !q || [i.kind, i.namespace, i.name, i.reason, i.message].some((v) => (v ?? "").toLowerCase().includes(q));
   }), [orderedIssuers, namespace, status, q]);
   const certsFor = useCallback((i: IssuerDTO) => certs.filter((c) => resolveIssuer(c, [i]) === i), [certs]);
@@ -377,7 +377,7 @@ export function CertsView({ cluster }: { cluster: string }) {
                     {show("lamp") && <Lamp role={role} />}
                     {show("name") && <span className="lens-cell-name" title={`${i.namespace ? `${i.namespace}/` : ""}${i.name}`}>{i.namespace && <span style={{ color: "var(--color-text-tertiary)" }}>{i.namespace} / </span>}{i.name}</span>}
                     {show("kind") && <span style={{ color: "var(--color-text-tertiary)" }}>{i.kind}</span>}
-                    {show("status") && <span style={{ ...cellStyle, color: ROLE_TEXT[role.kind] }}>{role.kind === "fault" ? "▲ " : ""}{i.ready}{i.ready !== "Ready" && i.reason ? ` · ${i.reason}` : ""}</span>}
+                    {show("status") && <span style={{ ...cellStyle, color: ROLE_TEXT[role.kind] }}>{role.kind === "fault" ? "▲ " : ""}{role.label}{included(i) && i.reason ? ` · ${i.reason}` : ""}</span>}
                     {show("certs") && <span title={certsCov === "unknown" ? "Certificate read unavailable" : certsCov === "stale" ? "from the last observed Certificate list" : undefined}>{certsCov === "unknown" ? "?" : `${certsFor(i).length}${certsCov === "stale" ? "*" : ""}`}</span>}
                   </div>
                 );
@@ -702,7 +702,7 @@ type IssuerEvidence =
   | { kind: "no-claim" };
 
 function failureHint(c: CertificateDTO, ev: IssuerEvidence, failing: ChainNodeDTO | null, warnings: string[]): string {
-  if (ev.kind === "found" && ev.issuer.ready !== "Ready") return `${ev.issuer.kind}/${ev.issuer.name} is not ready${ev.issuer.reason ? `: ${ev.issuer.reason}` : ""}.`;
+  if (ev.kind === "found" && ev.issuer.rule.included) return `${ev.issuer.kind}/${ev.issuer.name} is not ready${ev.issuer.reason ? `: ${ev.issuer.reason}` : ""}.`;
   if (ev.kind === "missing") return `${c.issuerKind}/${c.issuerName} was not found in the ${ev.lastObserved ? "last observed" : "watched"} ${c.issuerKind} list.`;
   if (failing) {
     const kind = chainKindLabel[failing.kind] ?? failing.kind.toLowerCase();

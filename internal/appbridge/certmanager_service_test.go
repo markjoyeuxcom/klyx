@@ -2,6 +2,7 @@ package appbridge
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -183,4 +184,43 @@ func TestCertManagerPayloadCarriesPerKindCoverageAndSyncedFailures(t *testing.T)
 	if len(p.Coverage) != 3 || p.Coverage[1].Kind != "ClusterIssuer" || p.Coverage[1].Error != "forbidden" || p.Coverage[2].Synced {
 		t.Fatalf("per-kind coverage: %+v", p.Coverage)
 	}
+}
+
+// A Ready certificate crossing its NotAfter with no object change: the
+// switched lens's rule becomes fault/included at the next push tick, not at
+// the 30s heartbeat (Codex 2b-1 review #3). The clock moves 6s, so the
+// heartbeat cannot be what fires.
+func TestCertManagerPushEmitsAnExpiryCrossingWithoutAnObjectChange(t *testing.T) {
+	var mu sync.Mutex
+	t0 := time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)
+	now := t0
+	clock := func() time.Time { mu.Lock(); defer mu.Unlock(); return now }
+	conn := &fakeCertManagerConn{certs: []certmanager.Certificate{{Namespace: "shop", Name: "web-tls", Ready: certmanager.Ready, NotAfter: t0.Add(5 * time.Second)}}}
+	em := &fakeEmitter{}
+	svc := NewCertManagerService(func(string) (CertManagerConn, bool) { return conn, true }, em, clock, 10*time.Millisecond)
+	svc.Open("nelli")
+	defer svc.Close("nelli")
+	ruleOf := func() (string, bool, int) {
+		em.mu.Lock()
+		defer em.mu.Unlock()
+		p, ok := em.last.(certManagerPayload)
+		if !ok || len(p.Certificates) == 0 {
+			return "", false, em.events
+		}
+		return p.Certificates[0].Rule.Role, p.Certificates[0].Rule.Included, em.events
+	}
+	waitUntil := func(what string, cond func() bool) {
+		t.Helper()
+		for end := time.Now().Add(2 * time.Second); time.Now().Before(end); time.Sleep(5 * time.Millisecond) {
+			if cond() {
+				return
+			}
+		}
+		t.Fatalf("timed out: %s", what)
+	}
+	waitUntil("first emit: Ready", func() bool { r, _, _ := ruleOf(); return r == "ok" })
+	mu.Lock()
+	now = t0.Add(6 * time.Second)
+	mu.Unlock()
+	waitUntil("the expiry crossing is emitted at the next tick", func() bool { r, inc, _ := ruleOf(); return r == "fault" && inc })
 }

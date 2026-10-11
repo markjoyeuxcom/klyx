@@ -8,6 +8,7 @@ import (
 
 	"github.com/moomora/klyx/internal/certmanager"
 	"github.com/moomora/klyx/internal/fleet"
+	"github.com/moomora/klyx/internal/health"
 )
 
 // CertManagerConn is the per-cluster surface CertManagerService needs: the lazy
@@ -118,6 +119,10 @@ type certmanagerDomainSnap struct {
 	issuers  []certmanager.Issuer
 	watchErr string
 	coverage []fleet.KindCoverage
+	// certRules: each certificate's rule at this tick. Expiry changes the
+	// rule (Ready -> Expired, included) with no object change, so a
+	// boundary crossing emits at the next tick, never only at heartbeat.
+	certRules []health.NativeEval
 }
 
 func (s *CertManagerService) pushLoop(ctx context.Context, cluster string, conn CertManagerConn) {
@@ -136,6 +141,9 @@ func (s *CertManagerService) pushLoop(ctx context.Context, cluster string, conn 
 			// if current)
 			_, watchErr := conn.CertManagerWatchHealth()
 			snap := certmanagerDomainSnap{certs: conn.CertManagerCertificates(), issuers: conn.CertManagerIssuers(), watchErr: watchErr, coverage: conn.CertManagerCoverage()}
+			for _, c := range snap.certs {
+				snap.certRules = append(snap.certRules, certmanager.CertificateRule(c, now))
+			}
 			if last != nil && now.Sub(lastEmit) < pushHeartbeat && reflect.DeepEqual(*last, snap) {
 				continue
 			}

@@ -188,8 +188,12 @@ func nativeResult(cluster, route, word string, items []nativeItem) observe.PartR
 	return observe.PartResult{Native: &nc, Top: top, Next: next}
 }
 
-func refOf(u *unstructured.Unstructured, gvr string) refInput {
-	return refInput{gvr: gvr, ns: u.GetNamespace(), name: u.GetName(), uid: string(u.GetUID()), generation: u.GetGeneration()}
+// refOf builds a Top ref whose GVR is the version the object was served at
+// (its own apiVersion, from the kind's current generation) - never a
+// documented fallback - plus the resource: "cert-manager.io/v1/certificates",
+// the same group/version/resource form as core refs.
+func refOf(u *unstructured.Unstructured, resource string) refInput {
+	return refInput{gvr: u.GetAPIVersion() + "/" + resource, ns: u.GetNamespace(), name: u.GetName(), uid: string(u.GetUID()), generation: u.GetGeneration()}
 }
 
 func evalCertificates(cluster string) func(observe.Capture) observe.PartResult {
@@ -198,7 +202,7 @@ func evalCertificates(cluster string) func(observe.Capture) observe.PartResult {
 		var rows []certmanager.Certificate
 		for _, u := range unstructuredOf(c.Objects[KindCertificates]) {
 			cert := certmanager.ParseCertificate(u)
-			items = append(items, nativeItem{certmanager.CertificateRule(cert, c.Now), refOf(u, "cert-manager.io/certificates")})
+			items = append(items, nativeItem{certmanager.CertificateRule(cert, c.Now), refOf(u, "certificates")})
 			rows = append(rows, cert)
 		}
 		r := nativeResult(cluster, TaskCerts, "not ready", items)
@@ -216,7 +220,7 @@ func evalIssuers(cluster string) func(observe.Capture) observe.PartResult {
 		for _, kind := range []string{KindIssuers, KindClusterIssuers} {
 			for _, u := range unstructuredOf(c.Objects[kind]) {
 				is := certmanager.ParseIssuer(u)
-				items = append(items, nativeItem{certmanager.IssuerRule(is), refOf(u, "cert-manager.io/"+kind)})
+				items = append(items, nativeItem{certmanager.IssuerRule(is), refOf(u, kind)})
 				rows = append(rows, is)
 			}
 		}
@@ -234,7 +238,7 @@ func evalExternalSecrets(cluster string) func(observe.Capture) observe.PartResul
 		var rows []externalsecrets.ExternalSecret
 		for _, u := range unstructuredOf(c.Objects[KindExternalSecrets]) {
 			e := externalsecrets.ParseExternalSecret(u, c.Now)
-			items = append(items, nativeItem{externalsecrets.ExternalSecretRule(e), refOf(u, "external-secrets.io/externalsecrets")})
+			items = append(items, nativeItem{externalsecrets.ExternalSecretRule(e), refOf(u, "externalsecrets")})
 			rows = append(rows, e)
 		}
 		r := nativeResult(cluster, TaskESO, "not synced or refresh overdue", items)
@@ -252,7 +256,7 @@ func evalStores(cluster string) func(observe.Capture) observe.PartResult {
 		for _, kind := range []string{KindSecretStores, KindClusterSecretStores} {
 			for _, u := range unstructuredOf(c.Objects[kind]) {
 				s := externalsecrets.ParseStore(u)
-				items = append(items, nativeItem{externalsecrets.StoreRule(s), refOf(u, "external-secrets.io/"+kind)})
+				items = append(items, nativeItem{externalsecrets.StoreRule(s), refOf(u, kind)})
 				rows = append(rows, s)
 			}
 		}
@@ -270,7 +274,7 @@ func evalNodeClaims(cluster string) func(observe.Capture) observe.PartResult {
 		var rows []karpenter.NodeClaim
 		for _, u := range unstructuredOf(c.Objects[KindNodeClaims]) {
 			cl := karpenter.ParseNodeClaim(u, c.Now)
-			items = append(items, nativeItem{karpenter.ClaimRule(cl), refOf(u, "karpenter.sh/nodeclaims")})
+			items = append(items, nativeItem{karpenter.ClaimRule(cl), refOf(u, "nodeclaims")})
 			rows = append(rows, cl)
 		}
 		r := nativeResult(cluster, TaskKarpenter, "not ready or appear stuck", items)
@@ -292,7 +296,7 @@ func evalNodePools(cluster string) func(observe.Capture) observe.PartResult {
 		for _, u := range unstructuredOf(c.Objects[KindNodePools]) {
 			p := karpenter.ParseNodePool(u)
 			p.Nodes = perPool[p.Name]
-			items = append(items, nativeItem{karpenter.PoolRule(p), refOf(u, "karpenter.sh/nodepools")})
+			items = append(items, nativeItem{karpenter.PoolRule(p), refOf(u, "nodepools")})
 			rows = append(rows, p)
 		}
 		r := nativeResult(cluster, TaskKarpenter, "not ready", items)

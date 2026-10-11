@@ -176,7 +176,7 @@ export function ExternalSecretsView({ cluster }: { cluster: string }) {
   );
   const visibleStores = useMemo(() => orderedStores.filter((s) => {
     if (namespace && s.kind === "SecretStore" && s.namespace !== namespace) return false;
-    if (status === "attention" && s.state === "Synced") return false;
+    if (status === "attention" && !included(s)) return false;
     return !q || [s.kind, s.namespace, s.name, s.provider, s.reason, s.message].some((v) => (v ?? "").toLowerCase().includes(q));
   }), [orderedStores, namespace, status, q]);
   const secretsFor = useCallback((s: ExternalSecretStoreDTO) => secrets.filter((e) => resolveStore(e, [s]) === s), [secrets]);
@@ -240,7 +240,7 @@ export function ExternalSecretsView({ cluster }: { cluster: string }) {
   const failed = secrets.filter((e) => e.state === "Failed").length;
   const stale = secrets.filter((e) => e.stale).length;
   const storesNotReady = stores.filter(included).length;
-  const storeProblems = secrets.filter((e) => { if (kindCov(e.storeKind) === "unknown") return false; const st = resolveStore(e, stores); return !st || st.state !== "Synced"; }).length;
+  const storeProblems = secrets.filter((e) => { if (kindCov(e.storeKind) === "unknown") return false; const st = resolveStore(e, stores); return !st || st.rule.included; }).length;
 
   const clearFilters = () => { setStatus("all"); setQuery(""); setNamespace(""); };
   const total = view === "stores" ? stores.length : secrets.length;
@@ -335,7 +335,7 @@ export function ExternalSecretsView({ cluster }: { cluster: string }) {
                     {show("name") && <span className="lens-cell-name" title={`${s.namespace ? `${s.namespace}/` : ""}${s.name}`}>{s.namespace && <span style={{ color: "var(--color-text-tertiary)" }}>{s.namespace} / </span>}{s.name}</span>}
                     {show("kind") && <span style={{ color: "var(--color-text-tertiary)" }}>{s.kind}</span>}
                     {show("provider") && <span style={{ ...cellStyle, color: "var(--color-text-secondary)" }}>{s.provider || "-"}</span>}
-                    {show("status") && <span style={{ ...cellStyle, color: ROLE_TEXT[role.kind] }}>{role.kind === "fault" ? "▲ " : ""}{role.label}{s.state !== "Synced" && s.reason ? ` · ${s.reason}` : ""}</span>}
+                    {show("status") && <span style={{ ...cellStyle, color: ROLE_TEXT[role.kind] }}>{role.kind === "fault" ? "▲ " : ""}{role.label}{included(s) && s.reason ? ` · ${s.reason}` : ""}</span>}
                     {show("secrets") && <span title={secretsCov === "unknown" ? "ExternalSecret read unavailable" : secretsCov === "stale" ? "from the last observed ExternalSecret list" : undefined}>{secretsCov === "unknown" ? "?" : `${secretsFor(s).length}${secretsCov === "stale" ? "*" : ""}`}</span>}
                   </div>
                 );
@@ -367,7 +367,7 @@ export function ExternalSecretsView({ cluster }: { cluster: string }) {
                     )}
                     {show("status") && <span style={{ ...cellStyle, color: ROLE_TEXT[role.kind], fontWeight: role.kind === "fault" ? 600 : 400 }}>{role.kind === "fault" ? "▲ " : ""}{role.label}{e.state === "Failed" && e.reason ? ` · ${e.reason}` : ""}</span>}
                     {show("refreshed") && <span style={{ color: e.stale ? "var(--color-text-warning)" : "var(--color-text-secondary)" }}>{refreshedText(e)}</span>}
-                    {show("store") && <span style={{ ...cellStyle, color: storeCov !== "unknown" && (!st || st.state !== "Synced") ? "var(--color-text-warning)" : "var(--color-text-secondary)" }}>{e.storeName}</span>}
+                    {show("store") && <span style={{ ...cellStyle, color: storeCov !== "unknown" && (!st || st.rule.included) ? "var(--color-text-warning)" : "var(--color-text-secondary)" }}>{e.storeName}</span>}
                     {show("target") && <span style={{ ...cellStyle, color: "var(--color-text-secondary)" }}>{e.targetSecret || "-"}</span>}
                   </div>
                 );

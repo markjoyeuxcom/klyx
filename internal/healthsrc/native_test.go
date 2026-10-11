@@ -2,7 +2,9 @@ package healthsrc
 
 import (
 	"context"
+	"k8s.io/apimachinery/pkg/types"
 	"reflect"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -180,4 +182,49 @@ func TestUnstructuredProjectionParity(t *testing.T) {
 		!reflect.DeepEqual(karpenter.ParseNodePool(pool), karpenter.ParseNodePool(pp.(*unstructured.Unstructured))) {
 		t.Fatal("Karpenter objects parse differently after projection")
 	}
+}
+
+// Top refs carry the version the kind is actually served at: a non-preferred
+// served version first, then the version a re-probe moves to - a new kind
+// generation whose objects are a different incarnation (Codex 2b-1 review #2).
+func TestNativeRefsCarryTheServedVersion(t *testing.T) {
+	now := time.Now()
+	expired := func(version, uid string) *unstructured.Unstructured {
+		u := cr("cert-manager.io/"+version, "Certificate", "shop", "old-tls", map[string]any{"secretName": "tls"},
+			[]any{cond("Ready", "True", "Ready")}, map[string]any{"notAfter": now.Add(-time.Hour).Format(time.RFC3339)})
+		u.SetUID(types.UID(uid))
+		return u
+	}
+	kinds := map[schema.GroupVersionResource]string{
+		{Group: "cert-manager.io", Version: "v1beta2", Resource: "certificates"}: "CertificateList",
+		{Group: "cert-manager.io", Version: "v1", Resource: "certificates"}:      "CertificateList",
+	}
+	for _, v := range []string{"v1beta2", "v1"} { // every cert-manager kind is served at the probed version
+		kinds[schema.GroupVersionResource{Group: "cert-manager.io", Version: v, Resource: "issuers"}] = "IssuerList"
+		kinds[schema.GroupVersionResource{Group: "cert-manager.io", Version: v, Resource: "clusterissuers"}] = "ClusterIssuerList"
+	}
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), kinds, expired("v1beta2", "uid-beta"), expired("v1", "uid-v1"))
+	var version atomic.Value
+	version.Store("v1beta2")
+	served := func(_ context.Context, group, _, _ string) (observe.Probe, error) {
+		if group == "cert-manager.io" {
+			return observe.Probe{Served: true, Version: version.Load().(string)}, nil
+		}
+		return observe.Probe{Served: false}, nil
+	}
+	ks, ds := Native(NativeDeps{Cluster: "c1", Dyn: dyn, Served: served})
+	s := &sink{}
+	o := observe.New(observe.Config{Cluster: "c1", Sink: s, Kinds: ks, Domains: ds, Throttle: 20 * time.Millisecond, ReprobeEvery: 50 * time.Millisecond})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer func() { cancel(); <-o.Done() }()
+	o.Start(ctx)
+	topIs := func(gvr, uid string) func() bool {
+		return func() bool {
+			p, ok := nativePart(s, TaskCerts, "certificates")
+			return ok && len(p.Top) == 1 && p.Top[0].GVR == gvr && p.Top[0].UID == uid
+		}
+	}
+	waitFor(t, "the non-preferred served version", topIs("cert-manager.io/v1beta2/certificates", "uid-beta"))
+	version.Store("v1")
+	waitFor(t, "the version a re-probe moves to, as a new incarnation", topIs("cert-manager.io/v1/certificates", "uid-v1"))
 }

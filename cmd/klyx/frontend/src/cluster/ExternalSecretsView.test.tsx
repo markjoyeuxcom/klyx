@@ -40,6 +40,21 @@ const insp = () => within(screen.getByTestId("lens-inspector"));
 const rowsText = () => [...document.querySelectorAll(".lens-row")].map((r) => r.textContent ?? "");
 
 describe("ExternalSecretsView", () => {
+  it("the Stores view reads the rule: attention filter, count and verdict label (Codex 2b-1 #1)", () => {
+    setup("Healthy", [], [
+      store({ name: "flagged", state: "Synced", rule: { included: true, role: "fault", label: "Flagged by backend" } }),
+      store({ name: "cleared", state: "Failed", reason: "InvalidProviderConfig", rule: { included: false, role: "ok", label: "Ready" } }),
+    ]);
+    render(<ExternalSecretsView cluster="x" />);
+    fireEvent.click(screen.getByRole("button", { name: /^Stores/ }));
+    expect(screen.getByText("flagged").closest(".lens-row")?.textContent).toContain("Flagged by backend");
+    expect(screen.getByText("cleared").closest(".lens-row")?.textContent).not.toContain("InvalidProviderConfig");
+    fireEvent.click(screen.getByRole("button", { name: /^Not ready/ }));
+    expect(screen.getByRole("button", { name: /^Not ready/ }).textContent).toBe("Not ready 1");
+    const rows = [...document.querySelectorAll(".lens-row")].map((r) => r.textContent ?? "");
+    expect(rows.map((r) => r.includes("flagged"))).toEqual([true]); // count and rows agree
+  });
+
   it("reads the Go-computed rule, never its own: verdict, label and the attention count (1c §2)", () => {
     // The rules contradict the native fields on purpose: only the rule may decide.
     setup("Healthy", [
