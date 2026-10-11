@@ -189,6 +189,23 @@ describe("cert-manager rows, mounted end to end (Codex review of 9de9d73)", () =
     expect(tls()).toContain(`certificate ready (last observed ${clock(lastGood)})`);
   });
 
+  // §5a: a selection missing from a read that is not complete for its kind
+  // (here: fenced by a Final, the new incarnation still checking) is kept with
+  // its last row, unverified - never removed, never silently closed.
+  it("a selection missing from an incomplete read is kept, unverified", () => {
+    open();
+    applyRows("c", rowsDTO(1, "certificates", 1, [cert("web")], CERT_KINDS()));
+    applyRows("i", rowsDTO(1, "issuers", 1, [issuer("le")], ISSUER_KINDS()));
+    render(<CertsView cluster="x" />);
+    act(() => useFleet.getState().selectCertificate("payments/web"));
+    act(() => applySummary({ ...summary(1, 9, [1, 1, 0], [1, 1, 0]), final: true }));
+    const panel = within(screen.getByTestId("cert-panel"));
+    expect(panel.getByTestId("selection-unverified").textContent).toMatch(/Not in the current Certificate read\..*unverified/);
+    expect(panel.queryByText(/Certificate removed\./)).toBeNull();
+    act(() => { open(2); applyRows("c", rowsDTO(2, "certificates", 1, [], CERT_KINDS())); });
+    expect(within(screen.getByTestId("cert-panel")).getByText(/Certificate removed\./)).toBeTruthy(); // a complete read without it
+  });
+
   // #5: a failed chain read is the request's outcome; a chain is the row's
   // only by UID; the last chain is kept by UID for a removal or a failed
   // re-read, never across a recreation, which is read afresh.

@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useFleet } from "../store/fleet";
 import type { ExternalSecretDTO, ExternalSecretStoreDTO, RuleDTO } from "../store/fleet";
-import { openExternalSecrets, closeExternalSecrets } from "../bridge/externalsecrets";
+import { useExternalSecretsRows } from "../health/useExternalSecretsRows";
+import { useNow } from "../chrome/Age";
 import { useListKeys } from "../chrome/useListKeys";
 import { CopyButton } from "../chrome/CopyButton";
 import { EmptyState } from "../chrome/EmptyState";
@@ -15,7 +16,7 @@ import { VerdictLamp } from "../health/VerdictView";
 import { LensLayout, LensTable, TABLE_ROW_HEIGHT, type DatasetState } from "../layout/LensLayout";
 import { InspectorBlock, InspectorLayout, type MenuItem } from "../layout/InspectorLayout";
 import { fitColumns, type ColumnDef } from "../layout/columns";
-import { combineEvidence, joinCoverage, kindEvidence, type JoinCoverage, type KindEvidence } from "../layout/coverage";
+import { clock, combineEvidence, coverageGaps, joinCoverage, kindEvidence, lastGoodAt, type JoinCoverage, type KindEvidence } from "../layout/coverage";
 
 const keyOf = (e: { namespace: string; name: string }) => `${e.namespace}/${e.name}`;
 
@@ -31,12 +32,17 @@ function fmtDuration(secs: number): string {
 // Older payloads without `refreshed` fall back to age > 0.
 const hasRefreshed = (e: ExternalSecretDTO) => e.refreshed ?? e.lastRefreshAgeSeconds > 0;
 
-function refreshedText(e: ExternalSecretDTO): string {
-  return hasRefreshed(e) ? fmtDuration(e.lastRefreshAgeSeconds) : "—";
+// ageOf ticks the age since the last sync from status.refreshTime (shared
+// rows are pushed only when they change - slice 3 §3); the capture-relative
+// age is the fallback for a payload without the absolute time.
+const ageOf = (e: ExternalSecretDTO, nowS: number) => (e.lastRefreshUnix ? Math.max(0, nowS - e.lastRefreshUnix) : e.lastRefreshAgeSeconds);
+
+function refreshedText(e: ExternalSecretDTO, nowS: number): string {
+  return hasRefreshed(e) ? fmtDuration(ageOf(e, nowS)) : "—";
 }
 
-function staleTitle(e: ExternalSecretDTO): string {
-  return `last synced ${fmtDuration(e.lastRefreshAgeSeconds)} ago - refresh interval ${fmtDuration(e.refreshIntervalSeconds)}; the controller has stopped refreshing`;
+function staleTitle(e: ExternalSecretDTO, nowS: number): string {
+  return `last synced ${fmtDuration(ageOf(e, nowS))} ago - refresh interval ${fmtDuration(e.refreshIntervalSeconds)}; the controller has stopped refreshing`;
 }
 
 
@@ -130,24 +136,26 @@ export function ExternalSecretsView({ cluster }: { cluster: string }) {
   const listRef = useRef<VirtualListHandle>(null);
   const absent = tier === "Absent";
 
-  useEffect(() => {
-    if (absent) return;
-    // If cleanup runs before openExternalSecrets resolves, invoke the
-    // late-arriving unsubscriber immediately - otherwise its listener leaks.
-    let cancelled = false;
-    let off = () => {};
-    openExternalSecrets(cluster).then((u) => (cancelled ? u() : (off = u))).catch((e) => console.error("openExternalSecrets", e));
-    return () => {
-      cancelled = true;
-      off();
-      void closeExternalSecrets(cluster);
-    };
-  }, [cluster, absent]);
+  // The data are the Observer's shared rows (1c slice 3 §5.2): the same
+  // capture as the cluster summary's eso task, never a watch of the lens's own.
+  useExternalSecretsRows(absent ? null : cluster);
+  const nowS = Math.floor(useNow() / 1000);
 
   const mine = eso.cluster === cluster;
   const secrets = useMemo(() => (mine ? eso.secrets : []), [mine, eso.secrets]);
   const stores = useMemo(() => (mine ? eso.stores : []), [mine, eso.stores]);
   const watchError = mine ? eso.watchError : null;
+  // A4 (slice 3 §4): past the deadline the rows are evidence as of their
+  // capture, and the totals are the summary's until a re-read lands.
+  const rowsRefreshing = mine && !!eso.rowsState?.refreshing;
+  const rowsAsOf = eso.rowsState?.evaluatedAt ? clock(eso.rowsState.evaluatedAt) : "the last read";
+  // The global counts are the one count selector's (slice 3 §4a); filtered
+  // views and breakdowns stay row-scoped ("as of").
+  const globalCounts = mine ? eso.partCounts : undefined;
+  // Evidence beside the rows: a stale kind's last good time and a failing
+  // discovery re-check (a capability gap, never a downgrade of live rows).
+  const lastGood = mine ? lastGoodAt(eso.coverage, ["ExternalSecret", "SecretStore", "ClusterSecretStore"]) : null;
+  const discoveryGap = mine ? coverageGaps(eso.coverage ?? []) : null;
   const loaded = mine && !eso.loading;
   // Evidence per kind (layout/coverage.ts): every dataset, claim, auto-select
   // and removal reads the coverage of ITS OWN kinds - a synced ExternalSecret
@@ -183,15 +191,24 @@ export function ExternalSecretsView({ cluster }: { cluster: string }) {
 
   // Selection lifecycle (secrets keyed in the store, stores local).
   const selKey = mine ? eso.selectedKey : null;
+  // the selection's last evidence, for this cluster and key only
   const selectedSecret = selKey ? secrets.find((e) => keyOf(e) === selKey) : undefined;
-  const lastSecret = useRef<ExternalSecretDTO | null>(null);
-  if (selectedSecret) lastSecret.current = selectedSecret;
+  const lastSecret = useRef<{ cluster: string; e: ExternalSecretDTO } | null>(null);
+  if (selectedSecret) lastSecret.current = { cluster, e: selectedSecret };
   const secretRemoved = !!selKey && secretsEv === "complete" && !selectedSecret;
+  const priorSecret = lastSecret.current?.cluster === cluster && keyOf(lastSecret.current.e) === selKey ? lastSecret.current.e : null;
+  // missing without a complete read of its own kind: kept with its last row,
+  // unverified - never removed (slice 3 §5a)
+  const secretUnverified = !!selKey && !selectedSecret && !secretRemoved && !!priorSecret;
+  const secretSubject = selectedSecret ?? priorSecret;
   const selectedStore = storeSel ? stores.find((s) => storeKey(s) === storeSel) : undefined;
-  const lastStore = useRef<ExternalSecretStoreDTO | null>(null);
-  if (selectedStore) lastStore.current = selectedStore;
+  const lastStore = useRef<{ cluster: string; s: ExternalSecretStoreDTO } | null>(null);
+  if (selectedStore) lastStore.current = { cluster, s: selectedStore };
   // a store is removed only when ITS kind's read is complete
   const storeRemoved = !!storeSel && !selectedStore && evidenceOf(storeSel.split("/")[0]) === "complete";
+  const priorStore = lastStore.current?.cluster === cluster && storeKey(lastStore.current.s) === storeSel ? lastStore.current.s : null;
+  const storeUnverified = !!storeSel && !selectedStore && !storeRemoved && !!priorStore;
+  const storeSubject = selectedStore ?? priorStore;
   useEffect(() => { if (selectedSecret && view === "secrets" && !visibleSecrets.includes(selectedSecret)) selectSecret(null); }, [selectedSecret, visibleSecrets, view, selectSecret]);
   useEffect(() => { if (selectedStore && view === "stores" && !visibleStores.includes(selectedStore)) setStoreSel(null); }, [selectedStore, visibleStores, view]);
   const enteredCluster = useRef(cluster);
@@ -236,14 +253,21 @@ export function ExternalSecretsView({ cluster }: { cluster: string }) {
   const show = (id: string) => fitted.visible.has(id);
   const gridStyle = { gridTemplateColumns: fitted.template };
 
-  const attention = secrets.filter(included).length;
+  // global: the count selector's; row-scoped: the breakdown and filters
+  const secretTotal = globalCounts?.secrets?.total ?? secrets.length;
+  const attention = globalCounts?.secrets?.included ?? secrets.filter(included).length;
+  const storeTotal = globalCounts?.stores?.total ?? stores.length;
+  const storesNotReady = globalCounts?.stores?.included ?? stores.filter(included).length;
   const failed = secrets.filter((e) => e.state === "Failed").length;
   const stale = secrets.filter((e) => e.stale).length;
-  const storesNotReady = stores.filter(included).length;
   const storeProblems = secrets.filter((e) => { if (kindCov(e.storeKind) === "unknown") return false; const st = resolveStore(e, stores); return !st || st.rule.included; }).length;
+  const asOf = rowsRefreshing ? ` (as of ${rowsAsOf})` : "";
 
   const clearFilters = () => { setStatus("all"); setQuery(""); setNamespace(""); };
+  // total: the rows in hand (dataset state, filters, footer); the headline
+  // reads the global count
   const total = view === "stores" ? stores.length : secrets.length;
+  const globalTotal = view === "stores" ? storeTotal : secretTotal;
   const shown = view === "stores" ? visibleStores.length : visibleSecrets.length;
   const viewEv = view === "stores" ? storesEv : secretsEv;
   let state: DatasetState = "ready";
@@ -257,11 +281,20 @@ export function ExternalSecretsView({ cluster }: { cluster: string }) {
     : state === "unreadable" ? <EmptyState icon={<IconAlertTriangle size={28} stroke={1.2} />} title="External Secrets state could not be read." hint={watchError ?? undefined} />
     : state === "empty" ? (absent
       ? <EmptyState icon={<IconShieldLock size={28} stroke={1.2} />} title="External Secrets Operator is not installed on this cluster." hint="Klyx detected no external-secrets.io resources here." />
+      : rowsRefreshing && globalTotal > 0 ? <EmptyState icon={<IconShieldLock size={28} stroke={1.2} />} title={`No ${noun} as of ${rowsAsOf}.`} hint={`Refreshing - the cluster summary now counts ${globalTotal}.`} />
       : <EmptyState icon={<IconShieldLock size={28} stroke={1.2} />} title={view === "stores" ? "No secret stores on this cluster." : "No ExternalSecrets on this cluster."} hint={view === "stores" ? undefined : "The operator is installed but no ExternalSecret objects exist yet."} />)
-    : <EmptyState icon={<IconShieldLock size={28} stroke={1.2} />} title={`No ${noun} match the current filters.`} hint={`${total} ${noun} on this cluster.`} action={{ label: "Clear filters", onClick: clearFilters }} />;
+    : <EmptyState icon={<IconShieldLock size={28} stroke={1.2} />} title={`No ${noun} match the current filters.`} hint={`${total} ${noun} on this cluster${asOf}.`} action={{ label: "Clear filters", onClick: clearFilters }} />;
   // pending/failed = a lower bound ("+"); stale = the last observed set ("*",
   // not necessarily a lower bound); never an unqualified count either way
   const partial = viewEv === "complete" ? "" : viewEv === "stale" ? "*" : "+";
+
+  // Notices stack: each is its own evidence, none hides another.
+  const statusLine = { minHeight: 28, display: "flex", alignItems: "center" } as const;
+  const notices: React.ReactNode[] = [];
+  if (watchError && total > 0) notices.push(<WatchErrorBanner key="watch" tool="External Secrets" failure={`watch failed - showing the last good state${lastGood ? ` from ${clock(lastGood)}` : ""}`} error={watchError} />);
+  else if (viewEv === "pending" && total > 0) notices.push(<div key="pending" role="status" className="t-secondary" style={statusLine}>Still reading - this {view === "stores" ? "store" : "ExternalSecret"} list is incomplete.</div>);
+  if (rowsRefreshing && !absent) notices.push(<div key="a4" role="status" data-testid="rows-refreshing" className="t-secondary" style={statusLine}>Rows as of {rowsAsOf} - refreshing; the totals are the cluster summary's.{eso.rowsState?.refreshError ? ` Last re-read failed: ${eso.rowsState.refreshError}` : ""}</div>);
+  if (discoveryGap && !absent) notices.push(<div key="gap" role="status" data-testid="discovery-gap" className="t-secondary" style={{ ...statusLine, color: "var(--color-text-warning)", overflowWrap: "anywhere" }}>Discovery re-check failing - {discoveryGap}. A capability gap only; the rows keep their own state.</div>);
 
   return (
     <LensLayout
@@ -269,17 +302,17 @@ export function ExternalSecretsView({ cluster }: { cluster: string }) {
       title={view === "stores" ? "Secret stores" : "External Secrets"}
       summary={state === "loading" || state === "unreadable" || absent ? null : view === "stores" ? (
         <>
-          <span className="t-number" style={{ color: "var(--color-text-secondary)" }}>{stores.length}{partial}</span>
+          <span className="t-number" style={{ color: "var(--color-text-secondary)" }}>{storeTotal}{partial}</span>
           {storesNotReady > 0 ? <span className="t-status" style={{ color: "var(--color-text-warning)" }}>{storesNotReady} not ready</span>
             : <span className="t-secondary">{storesEv === "complete" ? "all stores ready" : storesEv === "stale" ? "none known not ready (last observed)" : "store list incomplete"}</span>}
         </>
       ) : (
         <>
-          <span className="t-number" style={{ color: "var(--color-text-secondary)" }}>{secrets.length}{partial}</span>
+          <span className="t-number" style={{ color: "var(--color-text-secondary)" }}>{secretTotal}{partial}</span>
           {attention > 0
             ? <span className="t-status" style={{ color: failed > 0 ? "var(--color-text-danger)" : "var(--color-text-warning)" }}>{failed > 0 ? "▲ " : ""}{attention} not synced or stale</span>
             : <span className="t-secondary">{secretsEv === "complete" ? "all synced and refreshing" : secretsEv === "stale" ? "none known not synced (last observed)" : "ExternalSecret list incomplete"}</span>}
-          <span className="t-secondary">{[failed ? `${failed} failed` : "", stale ? `${stale} stale` : "", storeProblems ? `${storeProblems} with store problem` : ""].filter(Boolean).join(" · ")}</span>
+          <span className="t-secondary" data-testid="eso-breakdown">{[failed ? `${failed} failed` : "", stale ? `${stale} stale` : "", storeProblems ? `${storeProblems} with store problem` : ""].filter(Boolean).join(" · ")}{(failed || stale || storeProblems) ? asOf : ""}</span>
         </>
       )}
       controls={absent ? undefined : (
@@ -306,9 +339,7 @@ export function ExternalSecretsView({ cluster }: { cluster: string }) {
           </label>
         </>
       )}
-      notice={watchError && total > 0 ? <WatchErrorBanner tool="External Secrets" failure="watch failed - showing the last good state" error={watchError} />
-        : viewEv === "pending" && total > 0 ? <div role="status" className="t-secondary" style={{ minHeight: 28, display: "flex", alignItems: "center" }}>Still reading - this {view === "stores" ? "store" : "ExternalSecret"} list is incomplete.</div>
-        : undefined}
+      notice={notices.length > 0 ? <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>{notices}</div> : undefined}
       state={state}
       stateView={stateView}
       body={
@@ -366,7 +397,7 @@ export function ExternalSecretsView({ cluster }: { cluster: string }) {
                       </span>
                     )}
                     {show("status") && <span style={{ ...cellStyle, color: ROLE_TEXT[role.kind], fontWeight: role.kind === "fault" ? 600 : 400 }}>{role.kind === "fault" ? "▲ " : ""}{role.label}{e.state === "Failed" && e.reason ? ` · ${e.reason}` : ""}</span>}
-                    {show("refreshed") && <span style={{ color: e.stale ? "var(--color-text-warning)" : "var(--color-text-secondary)" }}>{refreshedText(e)}</span>}
+                    {show("refreshed") && <span style={{ color: e.stale ? "var(--color-text-warning)" : "var(--color-text-secondary)" }}>{refreshedText(e, nowS)}</span>}
                     {show("store") && <span style={{ ...cellStyle, color: storeCov !== "unknown" && (!st || st.rule.included) ? "var(--color-text-warning)" : "var(--color-text-secondary)" }}>{e.storeName}</span>}
                     {show("target") && <span style={{ ...cellStyle, color: "var(--color-text-secondary)" }}>{e.targetSecret || "-"}</span>}
                   </div>
@@ -377,23 +408,26 @@ export function ExternalSecretsView({ cluster }: { cluster: string }) {
         </LensTable>
       }
       footer={<span className="t-legend">j k navigate · ↵ inspect · / search</span>}
-      footerEnd={<span className="t-secondary">{shown} of {total}{partial} {noun}{view === "secrets" ? " · broken first, then staleness" : ""}</span>}
-      inspector={view === "secrets" && selKey && (selectedSecret || secretRemoved) && lastSecret.current ? (
+      footerEnd={<span className="t-secondary">{shown} of {total}{partial} {noun}{asOf}{view === "secrets" ? " · broken first, then staleness" : ""}</span>}
+      inspector={view === "secrets" && selKey && secretSubject ? (
         <SecretInspector
           key={`${cluster}/${selKey}`}
-          e={selectedSecret ?? lastSecret.current}
+          e={secretSubject}
+          nowS={nowS}
           removed={secretRemoved}
-          store={kindCov((selectedSecret ?? lastSecret.current).storeKind) !== "unknown" ? resolveStore(selectedSecret ?? lastSecret.current, stores) : undefined}
-          storeCov={kindCov((selectedSecret ?? lastSecret.current).storeKind)}
+          unverified={secretUnverified}
+          store={kindCov(secretSubject.storeKind) !== "unknown" ? resolveStore(secretSubject, stores) : undefined}
+          storeCov={kindCov(secretSubject.storeKind)}
           onClose={() => { autoSelect.current = "done"; selectSecret(null); }}
           onOpenStore={(s) => { setView("stores"); setStatus("all"); setStoreSel(storeKey(s)); setCursorKey(storeKey(s)); }}
         />
-      ) : view === "stores" && storeSel && (selectedStore || storeRemoved) && lastStore.current ? (
+      ) : view === "stores" && storeSel && storeSubject ? (
         <StoreInspector
           key={`${cluster}/${storeSel}`}
-          store={selectedStore ?? lastStore.current}
+          store={storeSubject}
           removed={storeRemoved}
-          secrets={secretsFor(selectedStore ?? lastStore.current)}
+          unverified={storeUnverified}
+          secrets={secretsFor(storeSubject)}
           secretsCov={secretsCov}
           onClose={() => setStoreSel(null)}
           onOpenSecret={(e) => { setView("secrets"); setStatus("all"); setNamespace(""); setQuery(""); setCursorKey(keyOf(e)); autoSelect.current = "done"; selectSecret(keyOf(e)); }}
@@ -405,6 +439,16 @@ export function ExternalSecretsView({ cluster }: { cluster: string }) {
   );
 }
 
+// UnverifiedNotice: the selection is missing from a read that is not live
+// and complete for its kind - kept with its last row, never called removed.
+function UnverifiedNotice({ kind }: { kind: string }) {
+  return (
+    <div role="status" data-testid="selection-unverified" className="t-body" style={{ padding: "8px 10px", borderRadius: 4, background: "var(--color-background-secondary)", boxShadow: "inset 0 0 0 1px var(--color-border-warning)" }}>
+      <span className="t-status">Not in the current {kind} read.</span> That read is incomplete, so this is unverified - it may still exist. The details below are its last observed row.
+    </div>
+  );
+}
+
 function RemovedNotice({ kind }: { kind: string }) {
   return (
     <div role="status" className="t-body" style={{ padding: "8px 10px", borderRadius: 4, background: "var(--color-background-secondary)", boxShadow: "inset 0 0 0 1px var(--color-border-secondary)" }}>
@@ -413,9 +457,11 @@ function RemovedNotice({ kind }: { kind: string }) {
   );
 }
 
-function SecretInspector({ e, removed, store, storeCov, onClose, onOpenStore }: {
+function SecretInspector({ e, nowS, removed, unverified, store, storeCov, onClose, onOpenStore }: {
   e: ExternalSecretDTO;
+  nowS: number;
   removed: boolean;
+  unverified: boolean;
   store: ExternalSecretStoreDTO | undefined;
   storeCov: JoinCoverage;
   onClose: () => void;
@@ -425,7 +471,7 @@ function SecretInspector({ e, removed, store, storeCov, onClose, onOpenStore }: 
   // health is a diagnosed root cause; Unknown is unverified evidence
   const storeRole = store ? roleOf(store) : null;
   const storeBroken = !!storeRole && (storeRole.kind === "fault" || storeRole.kind === "degraded");
-  const cause = causeOf(e, store, storeRole, storeCov);
+  const cause = causeOf(e, store, storeRole, storeCov, nowS);
   const role = roleOf(e);
   const live = !removed;
   const manifestRef = wellKnownResourceRef("external-secrets.io", "ExternalSecret");
@@ -438,11 +484,11 @@ function SecretInspector({ e, removed, store, storeCov, onClose, onOpenStore }: 
         name={e.name}
         meta={[`store ${e.storeKind}/${e.storeName}`, e.targetSecret ? `→ Secret ${e.targetSecret}` : ""].filter(Boolean).join(" · ")}
         onClose={onClose}
-        verdict={removed ? <RemovedNotice kind="ExternalSecret" /> : (
+        verdict={removed ? <RemovedNotice kind="ExternalSecret" /> : unverified ? <UnverifiedNotice kind="ExternalSecret" /> : (
           <div>
             <InspectorStatus tone={roleTone(role.kind)} label={role.label} reason={e.state === "Failed" ? e.reason || undefined : e.stale ? "refresh stopped - last sync ok" : undefined} />
             {e.message && e.state !== "Synced" && <div className="t-body" style={{ color: ROLE_TEXT[role.kind], overflowWrap: "anywhere", marginTop: -4 }}>{e.message}</div>}
-            {e.stale && <div className="t-body" style={{ color: "var(--color-text-warning)", overflowWrap: "anywhere", marginTop: -4 }}>{staleTitle(e)}</div>}
+            {e.stale && <div className="t-body" style={{ color: "var(--color-text-warning)", overflowWrap: "anywhere", marginTop: -4 }}>{staleTitle(e, nowS)}</div>}
           </div>
         )}
         primary={live && e.targetSecret ? { label: "Open target Secret", onSelect: () => { const nav = useFleet.getState(); nav.openResource(SECRET_REF); nav.openInstance(e.namespace, e.targetSecret); } } : undefined}
@@ -478,7 +524,7 @@ function SecretInspector({ e, removed, store, storeCov, onClose, onOpenStore }: 
             <span>interval</span><span>{e.refreshIntervalSeconds > 0 ? fmtDuration(e.refreshIntervalSeconds) : "disabled"}</span>
             <span>last sync</span>
             <span style={{ color: e.stale ? "var(--color-text-warning)" : hasRefreshed(e) ? undefined : "var(--color-text-danger)" }}>
-              {hasRefreshed(e) ? `${fmtDuration(e.lastRefreshAgeSeconds)} ago` : "never synced"}
+              {hasRefreshed(e) ? `${fmtDuration(ageOf(e, nowS))} ago` : "never synced"}
             </span>
           </div>
         </InspectorBlock>
@@ -492,7 +538,7 @@ function SecretInspector({ e, removed, store, storeCov, onClose, onOpenStore }: 
   );
 }
 
-function StoreInspector({ store, removed, secrets, secretsCov, onClose, onOpenSecret }: { store: ExternalSecretStoreDTO; removed: boolean; secrets: ExternalSecretDTO[]; secretsCov: JoinCoverage; onClose: () => void; onOpenSecret: (e: ExternalSecretDTO) => void }) {
+function StoreInspector({ store, removed, unverified, secrets, secretsCov, onClose, onOpenSecret }: { store: ExternalSecretStoreDTO; removed: boolean; unverified: boolean; secrets: ExternalSecretDTO[]; secretsCov: JoinCoverage; onClose: () => void; onOpenSecret: (e: ExternalSecretDTO) => void }) {
   const role = roleOf(store);
   const ref = wellKnownResourceRef("external-secrets.io", store.kind);
   const view = ref ? () => { const nav = useFleet.getState(); nav.openResource(ref); nav.openInstance(store.kind === "ClusterSecretStore" ? "" : store.namespace, store.name); } : null;
@@ -505,7 +551,7 @@ function StoreInspector({ store, removed, secrets, secretsCov, onClose, onOpenSe
         name={store.name}
         meta={[store.provider ? `provider ${store.provider}` : "", store.kind === "ClusterSecretStore" ? "cluster-scoped - any namespace may use it" : `namespaced - serves ExternalSecrets in ${store.namespace}`].filter(Boolean).join(" · ")}
         onClose={onClose}
-        verdict={removed ? <RemovedNotice kind={store.kind} /> : (
+        verdict={removed ? <RemovedNotice kind={store.kind} /> : unverified ? <UnverifiedNotice kind={store.kind} /> : (
           <div>
             <InspectorStatus tone={roleTone(role.kind)} label={role.label} reason={store.state !== "Synced" ? store.reason || undefined : undefined} />
             {store.message && store.state !== "Synced" && <div className="t-body" style={{ color: ROLE_TEXT[role.kind], overflowWrap: "anywhere", marginTop: -4 }}>{store.message}</div>}
@@ -543,11 +589,11 @@ function StoreInspector({ store, removed, secrets, secretsCov, onClose, onOpenSe
 // is unverified evidence (no store-derived cause); a missing store is a cause
 // only with that kind's coverage. The secret's own failure and ESO-native
 // staleness still give a cause.
-function causeOf(e: ExternalSecretDTO, store: ExternalSecretStoreDTO | undefined, role: { kind: string } | null, cov: JoinCoverage): string {
+function causeOf(e: ExternalSecretDTO, store: ExternalSecretStoreDTO | undefined, role: { kind: string } | null, cov: JoinCoverage, nowS: number): string {
   if (role && (role.kind === "fault" || role.kind === "degraded")) return "";
   if (!store && cov !== "unknown") return `${e.storeKind}/${e.storeName} was not found in the ${cov === "stale" ? "last observed" : "watched"} ${e.storeKind} list.`;
   if (e.state === "Failed") return `The last sync attempt failed${e.reason ? `: ${e.reason}` : ""}.`;
-  if (e.stale) return `The controller has stopped refreshing: last successful sync was ${fmtDuration(e.lastRefreshAgeSeconds)} ago against a ${fmtDuration(e.refreshIntervalSeconds)} refresh interval.`;
+  if (e.stale) return `The controller has stopped refreshing: last successful sync was ${fmtDuration(ageOf(e, nowS))} ago against a ${fmtDuration(e.refreshIntervalSeconds)} refresh interval.`;
   if (!hasRefreshed(e) && e.state !== "Synced") return "This secret has never synced successfully.";
   return "";
 }

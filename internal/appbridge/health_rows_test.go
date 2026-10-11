@@ -15,6 +15,7 @@ import (
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 
 	"github.com/moomora/klyx/internal/certmanager"
+	"github.com/moomora/klyx/internal/externalsecrets"
 	"github.com/moomora/klyx/internal/health"
 	"github.com/moomora/klyx/internal/healthsrc"
 	"github.com/moomora/klyx/internal/observe"
@@ -66,6 +67,60 @@ func TestSameNameRecreationIsANewRow(t *testing.T) {
 	var back map[string]any
 	if err := json.Unmarshal(b, &back); err != nil || back["uid"] != "new" || back["rule"] == nil {
 		t.Fatalf("serialization keeps identity and rule: %s", b)
+	}
+}
+
+// The ESO parts (slice 3 §5.2): the captured evaluation and identity, and
+// the absolute refresh time beside the capture-relative age - a pushed row
+// is re-sent only when it changes, so the lens ticks the age itself (§3).
+func TestExternalSecretRowsCarryTheCaptureAndAnAbsoluteRefreshTime(t *testing.T) {
+	at := time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)
+	synced := externalsecrets.ExternalSecret{Namespace: "shop", Name: "db", State: externalsecrets.Synced,
+		StoreKind: externalsecrets.ClusterSecretStoreKind, StoreName: "vault", RefreshInterval: time.Hour, RefreshTime: at.Add(-90 * time.Second)}
+	never := externalsecrets.ExternalSecret{Namespace: "shop", Name: "new", State: externalsecrets.Failed, StoreName: "vault"}
+	set := healthsrc.RowSet[externalsecrets.ExternalSecret]{Rows: []healthsrc.Row[externalsecrets.ExternalSecret]{
+		{Ref: healthsrc.RowRef{UID: "e1", GVR: "external-secrets.io/v1beta1/externalsecrets", Namespace: "shop", Name: "db"},
+			Eval: health.NativeEval{Included: true, Role: health.Degraded, Label: "Flagged at capture"}, Data: synced},
+		{Ref: healthsrc.RowRef{UID: "e2", Namespace: "shop", Name: "new"}, Eval: externalsecrets.ExternalSecretRule(never), Data: never},
+	}}
+	out, err := rowsConverters[healthsrc.TaskESO+"/externalsecrets"](set, at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dtos := out.([]ExternalSecretDTO)
+	if dtos[0].Rule != (RuleDTO{Included: true, Role: "degraded", Label: "Flagged at capture"}) {
+		t.Fatalf("the converter re-evaluated instead of copying: %+v", dtos[0].Rule)
+	}
+	if dtos[0].UID != "e1" || dtos[0].GVR != "external-secrets.io/v1beta1/externalsecrets" {
+		t.Fatalf("identity: %+v", dtos[0])
+	}
+	if dtos[0].LastRefreshUnix != at.Add(-90*time.Second).Unix() || dtos[0].LastRefreshAgeSeconds != 90 || !dtos[0].Refreshed {
+		t.Fatalf("refresh time: unix=%d age=%d refreshed=%v", dtos[0].LastRefreshUnix, dtos[0].LastRefreshAgeSeconds, dtos[0].Refreshed)
+	}
+	if dtos[1].LastRefreshUnix != 0 || dtos[1].Refreshed || dtos[1].UID != "e2" {
+		t.Fatalf("a never-synced secret has no refresh time: %+v", dtos[1])
+	}
+}
+
+func TestStoreRowsCarryTheCaptureAndIdentity(t *testing.T) {
+	st := externalsecrets.Store{Kind: externalsecrets.SecretStoreKind, Namespace: "shop", Name: "vault", State: externalsecrets.Synced, Provider: "vault"}
+	set := healthsrc.RowSet[externalsecrets.Store]{Rows: []healthsrc.Row[externalsecrets.Store]{
+		{Ref: healthsrc.RowRef{UID: "s1", GVR: "external-secrets.io/v1beta1/secretstores", Namespace: "shop", Name: "vault"},
+			Eval: health.NativeEval{Included: true, Role: health.Fault, Label: "Flagged at capture"}, Data: st},
+	}}
+	out, err := rowsConverters[healthsrc.TaskESO+"/stores"](set, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	dtos := out.([]StoreDTO)
+	if len(dtos) != 1 || dtos[0].UID != "s1" || dtos[0].GVR != "external-secrets.io/v1beta1/secretstores" || dtos[0].Provider != "vault" || dtos[0].Kind != "SecretStore" {
+		t.Fatalf("store row: %+v", dtos)
+	}
+	if dtos[0].Rule != (RuleDTO{Included: true, Role: "fault", Label: "Flagged at capture"}) {
+		t.Fatalf("the converter re-evaluated instead of copying: %+v", dtos[0].Rule)
+	}
+	if _, err := rowsConverters[healthsrc.TaskESO+"/stores"]("not rows", time.Now()); err == nil {
+		t.Fatal("a payload of the wrong type is an error, never an empty list")
 	}
 }
 

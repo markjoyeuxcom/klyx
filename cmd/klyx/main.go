@@ -120,17 +120,6 @@ func main() {
 		time.Now,
 	)
 
-	externalSecretsSvc := appbridge.NewExternalSecretsService(
-		func(name string) (appbridge.ExternalSecretsConn, bool) {
-			c, ok := reg.Conn(name)
-			if !ok {
-				return nil, false
-			}
-			return c, true
-		},
-		em, time.Now, time.Second,
-	)
-
 	crdSvc := appbridge.NewCRDService(func(name string) (appbridge.CRDConn, bool) {
 		c, ok := reg.Conn(name)
 		if !ok {
@@ -438,7 +427,6 @@ func main() {
 			application.NewService(healthSvc),
 			application.NewService(gitopsSvc),
 			application.NewService(certManagerSvc),
-			application.NewService(externalSecretsSvc),
 			application.NewService(crdSvc),
 			application.NewService(gatewaySvc),
 			application.NewService(meshSvc),

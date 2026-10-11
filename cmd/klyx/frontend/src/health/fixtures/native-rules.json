@@ -1301,6 +1301,7 @@
         "targetSecret": "synced and fresh",
         "refreshIntervalSeconds": 3600,
         "lastRefreshAgeSeconds": 600,
+        "lastRefreshUnix": 1791719400,
         "refreshed": true,
         "stale": false,
         "rule": {
@@ -1329,6 +1330,7 @@
         "targetSecret": "synced but refresh overdue",
         "refreshIntervalSeconds": 3600,
         "lastRefreshAgeSeconds": 10800,
+        "lastRefreshUnix": 1791709200,
         "refreshed": true,
         "stale": true,
         "rule": {
@@ -1357,6 +1359,7 @@
         "targetSecret": "synced, refresh disabled",
         "refreshIntervalSeconds": 0,
         "lastRefreshAgeSeconds": 172800,
+        "lastRefreshUnix": 1791547200,
         "refreshed": true,
         "stale": false,
         "rule": {
@@ -1441,6 +1444,7 @@
         "targetSecret": "failed and overdue",
         "refreshIntervalSeconds": 3600,
         "lastRefreshAgeSeconds": 10800,
+        "lastRefreshUnix": 1791709200,
         "refreshed": true,
         "stale": true,
         "rule": {

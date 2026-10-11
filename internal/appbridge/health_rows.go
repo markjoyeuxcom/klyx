@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/moomora/klyx/internal/certmanager"
+	"github.com/moomora/klyx/internal/externalsecrets"
 	"github.com/moomora/klyx/internal/healthsrc"
 	"github.com/moomora/klyx/internal/observe"
 )
@@ -61,6 +62,34 @@ var rowsConverters = map[string]rowsConverter{
 			dto := issuerFields(r.Data)
 			dto.Rule = toRuleDTO(r.Eval)
 			dto.UID, dto.GVR, dto.Generation = r.Ref.UID, r.Ref.GVR, r.Ref.Generation
+			out = append(out, dto)
+		}
+		return out, nil
+	},
+	healthsrc.TaskESO + "/externalsecrets": func(rows any, at time.Time) (any, error) {
+		set, err := rowSetOf[externalsecrets.ExternalSecret](rows)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]ExternalSecretDTO, 0, len(set.Rows))
+		for _, r := range set.Rows {
+			dto := externalSecretFields(r.Data, at)
+			dto.Rule = toRuleDTO(r.Eval)
+			dto.UID, dto.GVR = r.Ref.UID, r.Ref.GVR
+			out = append(out, dto)
+		}
+		return out, nil
+	},
+	healthsrc.TaskESO + "/stores": func(rows any, _ time.Time) (any, error) {
+		set, err := rowSetOf[externalsecrets.Store](rows)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]StoreDTO, 0, len(set.Rows))
+		for _, r := range set.Rows {
+			dto := storeFields(r.Data)
+			dto.Rule = toRuleDTO(r.Eval)
+			dto.UID, dto.GVR = r.Ref.UID, r.Ref.GVR
 			out = append(out, dto)
 		}
 		return out, nil

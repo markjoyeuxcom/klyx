@@ -29,6 +29,7 @@ const (
 
 // ExternalSecret is one ExternalSecret's sync state.
 type ExternalSecret struct {
+	UID       string // the object's identity: a same-name recreation is another secret
 	Namespace string
 	Name      string
 	State     SyncState
@@ -58,6 +59,7 @@ type ExternalSecret struct {
 // Store is a SecretStore or ClusterSecretStore's validation state. Namespace
 // is empty for a ClusterSecretStore (cluster-scoped).
 type Store struct {
+	UID       string
 	Kind      Kind
 	Namespace string
 	Name      string
@@ -81,7 +83,7 @@ const staleGraceFactor = 2
 // ParseExternalSecret extracts an ExternalSecret's sync state. now drives the
 // refresh-staleness computation (injected for determinism).
 func ParseExternalSecret(u *unstructured.Unstructured, now time.Time) ExternalSecret {
-	e := ExternalSecret{Namespace: u.GetNamespace(), Name: u.GetName()}
+	e := ExternalSecret{UID: string(u.GetUID()), Namespace: u.GetNamespace(), Name: u.GetName()}
 	e.State, e.Reason, e.Message = readyFromConditions(u)
 
 	e.StoreName, _, _ = unstructured.NestedString(u.Object, "spec", "secretStoreRef", "name")
@@ -122,7 +124,7 @@ func parseRefreshInterval(u *unstructured.Unstructured) time.Duration {
 
 // ParseStore extracts a SecretStore/ClusterSecretStore's validation state.
 func ParseStore(u *unstructured.Unstructured) Store {
-	s := Store{Kind: Kind(u.GetKind()), Namespace: u.GetNamespace(), Name: u.GetName()}
+	s := Store{UID: string(u.GetUID()), Kind: Kind(u.GetKind()), Namespace: u.GetNamespace(), Name: u.GetName()}
 	s.State, s.Reason, s.Message = readyFromConditions(u)
 	if prov, ok, _ := unstructured.NestedMap(u.Object, "spec", "provider"); ok {
 		for k := range prov {

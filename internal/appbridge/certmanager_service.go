@@ -14,16 +14,6 @@ type CertManagerConn interface {
 	GetCertificateChain(ctx context.Context, ns, name string) (certmanager.Chain, error)
 }
 
-// KindCoverageDTO is one watched kind's evidence state (the External
-// Secrets lens's payload; the cert-manager lens maps the Observer's
-// per-kind coverage instead).
-type KindCoverageDTO struct {
-	Kind   string `json:"kind"`
-	Served bool   `json:"served"`
-	Synced bool   `json:"synced"`
-	Error  string `json:"error,omitempty"`
-}
-
 // CertManagerService is bound to JS: the issuance-chain inspector's read.
 type CertManagerService struct {
 	lookup func(string) (CertManagerConn, bool)

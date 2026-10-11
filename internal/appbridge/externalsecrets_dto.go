@@ -8,6 +8,8 @@ import (
 
 // ExternalSecretDTO is the JSON projection of an ESO ExternalSecret.
 type ExternalSecretDTO struct {
+	UID       string `json:"uid,omitempty"` // identity (1c slice 3 §2a)
+	GVR       string `json:"gvr,omitempty"` // the served group/version/resource
 	Namespace string `json:"namespace"`
 	Name      string `json:"name"`
 	State     string `json:"state"`
@@ -25,6 +27,10 @@ type ExternalSecretDTO struct {
 	// for determinism. 0 both when never synced and when synced under a
 	// second ago - Refreshed is the presence fact that tells them apart.
 	LastRefreshAgeSeconds int64 `json:"lastRefreshAgeSeconds"`
+	// LastRefreshUnix is status.refreshTime itself (0 when never synced): the
+	// lens ticks the age from it, since shared rows are pushed only when they
+	// change (1c slice 3 §3) and a relative age would freeze between pushes.
+	LastRefreshUnix int64 `json:"lastRefreshUnix,omitempty"`
 	// Refreshed: status.refreshTime is set (the secret has synced at least once).
 	Refreshed bool `json:"refreshed"`
 	// Stale: refresh is enabled and the last successful sync is more than 2x
@@ -36,8 +42,16 @@ type ExternalSecretDTO struct {
 }
 
 func toExternalSecretDTO(e externalsecrets.ExternalSecret, now time.Time) ExternalSecretDTO {
+	dto := externalSecretFields(e, now)
+	dto.Rule = toRuleDTO(externalsecrets.ExternalSecretRule(e))
+	return dto
+}
+
+// externalSecretFields is the pure field conversion: no rule (the rows
+// converter copies the capture's evaluation, slice 3 §2a).
+func externalSecretFields(e externalsecrets.ExternalSecret, now time.Time) ExternalSecretDTO {
 	dto := ExternalSecretDTO{
-		Rule:                   toRuleDTO(externalsecrets.ExternalSecretRule(e)),
+		UID:                    e.UID,
 		Namespace:              e.Namespace,
 		Name:                   e.Name,
 		State:                  string(e.State),
@@ -55,6 +69,7 @@ func toExternalSecretDTO(e externalsecrets.ExternalSecret, now time.Time) Extern
 			age = 0
 		}
 		dto.LastRefreshAgeSeconds = age
+		dto.LastRefreshUnix = e.RefreshTime.Unix()
 		dto.Refreshed = true
 	}
 	return dto
@@ -63,6 +78,8 @@ func toExternalSecretDTO(e externalsecrets.ExternalSecret, now time.Time) Extern
 // StoreDTO is the JSON projection of a SecretStore /
 // ClusterSecretStore's validation state.
 type StoreDTO struct {
+	UID       string `json:"uid,omitempty"`
+	GVR       string `json:"gvr,omitempty"`
 	Kind      string `json:"kind"`
 	Namespace string `json:"namespace"`
 	Name      string `json:"name"`
@@ -75,8 +92,15 @@ type StoreDTO struct {
 }
 
 func toStoreDTO(s externalsecrets.Store) StoreDTO {
+	dto := storeFields(s)
+	dto.Rule = toRuleDTO(externalsecrets.StoreRule(s))
+	return dto
+}
+
+// storeFields is the pure field conversion (no rule).
+func storeFields(s externalsecrets.Store) StoreDTO {
 	return StoreDTO{
-		Rule:      toRuleDTO(externalsecrets.StoreRule(s)),
+		UID:       s.UID,
 		Kind:      string(s.Kind),
 		Namespace: s.Namespace,
 		Name:      s.Name,

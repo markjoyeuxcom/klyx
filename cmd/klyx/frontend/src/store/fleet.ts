@@ -298,13 +298,17 @@ export type CertManagerSlice = {
   // The shared rows' A4 state (slice 3 §4): updating - the summary is ahead,
   // the counts still the rows'; refreshing - past the deadline, the rows are
   // shown as of evaluatedAt while a fenced re-read runs.
-  rowsState?: { updating: boolean; refreshing: boolean; evaluatedAt: string | null; refreshError?: string | null };
+  rowsState?: RowsStateDTO;
   // The task's global counts per part from the one count selector (slice 3
   // §4a): the rows' own counts, or the summary's past the A4 deadline. Lens
   // headers and attention chips read these; filtered counts stay row-scoped.
   partCounts?: { certificates: PartCountsDTO | null; issuers: PartCountsDTO | null };
 };
 
+// A rows-backed lens's A4 state (slice 3 §4): updating - the summary is
+// ahead, inside the deadline; refreshing - past it, the rows are shown as of
+// evaluatedAt while a fenced re-read runs (refreshError: its last failure).
+export type RowsStateDTO = { updating: boolean; refreshing: boolean; evaluatedAt: string | null; refreshError?: string | null };
 export type PartCountsDTO = { total: number; included: number };
 
 // What the cert-manager rows adapter (health/useCertManagerRows) writes.
@@ -317,6 +321,8 @@ export type CertManagerRowsPayload = Pick<CertManagerSlice, "certificates" | "is
 // failing issuer is for a stuck certificate.
 export type ExternalSecretDTO = {
   rule: RuleDTO;
+  uid?: string; // identity (1c slice 3 §2a): a same-name recreation is another secret
+  gvr?: string;
   namespace: string;
   name: string;
   state: string;
@@ -328,10 +334,15 @@ export type ExternalSecretDTO = {
   refreshIntervalSeconds: number; // 0 = refresh disabled
   lastRefreshAgeSeconds: number; // 0 = never synced OR under a second ago - read `refreshed`
   refreshed?: boolean; // status.refreshTime is set; older payloads omit it (fall back to age > 0)
+  // status.refreshTime itself (0/absent = never synced): shared rows are
+  // pushed only when they change, so the lens ticks the age from it.
+  lastRefreshUnix?: number;
   stale?: boolean;
 };
 export type ExternalSecretStoreDTO = {
   rule: RuleDTO;
+  uid?: string;
+  gvr?: string;
   kind: string;
   namespace: string;
   name: string;
@@ -348,7 +359,12 @@ export type ExternalSecretsSlice = {
   watchError?: string | null; // watch failing before sync (RBAC, CRD mismatch) - not an empty list
   selectedKey: string | null; // "<namespace>/<name>" of the inspected secret
   coverage?: KindCoverageDTO[]; // per kind: ExternalSecret, SecretStore, ClusterSecretStore
+  rowsState?: RowsStateDTO;
+  partCounts?: { secrets: PartCountsDTO | null; stores: PartCountsDTO | null };
 };
+
+// What the External Secrets rows adapter (health/useExternalSecretsRows) writes.
+export type ExternalSecretsRowsPayload = Pick<ExternalSecretsSlice, "secrets" | "stores" | "coverage" | "watchError" | "loading" | "rowsState" | "partCounts">;
 
 // "observability" removed 2026-06-10: metrics ship inline in overview/workloads/network lanes
 // (design principle 5); a dedicated surface can return when it has real content.
@@ -923,6 +939,7 @@ type FleetState = {
   externalsecrets: ExternalSecretsSlice;
   setExternalSecrets: (cluster: string, secrets: ExternalSecretDTO[], stores: ExternalSecretStoreDTO[], watchError?: string, coverage?: KindCoverageDTO[]) => void;
   setExternalSecretsLoading: (cluster: string) => void;
+  setExternalSecretsFromRows: (cluster: string, p: ExternalSecretsRowsPayload) => void;
   clearExternalSecrets: () => void;
   selectExternalSecret: (key: string | null) => void;
   // actionStatus keeps the latest result (convenient for tests and callers);
@@ -1161,7 +1178,8 @@ export const useFleet = create<FleetState>((set) => ({
 
   externalsecrets: { cluster: null, secrets: [], stores: [], loading: false, watchError: null, selectedKey: null },
   setExternalSecrets: (cluster, secrets, stores, watchError, coverage) => set((s) => ({ externalsecrets: { ...s.externalsecrets, cluster, secrets, stores, loading: false, watchError: watchError || null, coverage } })),
-  setExternalSecretsLoading: (cluster) => set((s) => ({ externalsecrets: { ...s.externalsecrets, cluster, secrets: [], stores: [], loading: true, watchError: null, selectedKey: null } })),
+  setExternalSecretsLoading: (cluster) => set((s) => ({ externalsecrets: { ...s.externalsecrets, cluster, secrets: [], stores: [], loading: true, watchError: null, selectedKey: null, coverage: undefined, rowsState: undefined, partCounts: undefined } })),
+  setExternalSecretsFromRows: (cluster, p) => set((s) => ({ externalsecrets: { ...s.externalsecrets, cluster, ...p } })),
   clearExternalSecrets: () => set({ externalsecrets: { cluster: null, secrets: [], stores: [], loading: false, watchError: null, selectedKey: null } }),
   selectExternalSecret: (key) => set((s) => ({ externalsecrets: { ...s.externalsecrets, selectedKey: key } })),
   actionStatus: null,

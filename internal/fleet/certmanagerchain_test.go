@@ -90,7 +90,6 @@ func TestGetCertificateChainResolvesFailingLink(t *testing.T) {
 	c := NewClusterConn("x", typed, nil, dyn, det, clock.Real{}, config.MetricsConfig{})
 	c.ctx = ctx
 
-
 	chain, err := c.GetCertificateChain(ctx, "payments", "acme-demo")
 	if err != nil {
 		t.Fatalf("chain: %v", err)

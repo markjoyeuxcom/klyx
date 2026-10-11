@@ -5,10 +5,8 @@ import type { ExternalSecretDTO, ExternalSecretStoreDTO, ClusterDTO } from "../s
 import { ExternalSecretsView } from "./ExternalSecretsView";
 import { secretRule, storeRule, withRule } from "../test/backendRules";
 
-vi.mock("../bridge/externalsecrets", () => ({
-  openExternalSecrets: async () => () => {},
-  closeExternalSecrets: async () => {},
-}));
+// The rows hook is the transport; these tests seed the externalsecrets slice it fills.
+vi.mock("../health/useExternalSecretsRows", () => ({ useExternalSecretsRows: () => {} }));
 
 const cluster = (tier: string): ClusterDTO => ({
   name: "x", state: "Synced", reason: "", nodesReady: 1, nodesTotal: 1, pods: 1, version: "v1",

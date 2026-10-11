@@ -223,7 +223,10 @@ export function CertsView({ cluster }: { cluster: string }) {
   if (selectedCert) lastCert.current = { cluster, cert: selectedCert };
   const priorCert = lastCert.current && lastCert.current.cluster === cluster && keyOf(lastCert.current.cert) === selKey ? lastCert.current.cert : null;
   const certRemoved = !!selKey && certsEv === "complete" && !selectedCert;
-  const subject = selectedCert ?? (certRemoved ? priorCert : null);
+  // missing without a complete read of its own kind: kept with its last row,
+  // unverified - never removed (slice 3 §5a)
+  const certUnverified = !!selKey && !selectedCert && !certRemoved && !!priorCert;
+  const subject = selectedCert ?? priorCert;
   // A chain is the selected row's only when it is the same object: with a
   // known UID the chain must carry that UID, so a same-name recreation's chain
   // never becomes the old row's detail, nor the old chain the new row's (§5b).
@@ -250,10 +253,13 @@ export function CertsView({ cluster }: { cluster: string }) {
     if (prev && prev.key === selKey && prev.uid !== selUID) resolveChain(selKey);
   }, [selKey, selUID, resolveChain]);
   const selectedIssuer = issuerSel ? issuers.find((i) => issuerKey(i) === issuerSel) : undefined;
-  const lastIssuer = useRef<IssuerDTO | null>(null);
-  if (selectedIssuer) lastIssuer.current = selectedIssuer;
+  const lastIssuer = useRef<{ cluster: string; i: IssuerDTO } | null>(null);
+  if (selectedIssuer) lastIssuer.current = { cluster, i: selectedIssuer };
   // an issuer is removed only when ITS kind's read is complete
   const issuerRemoved = !!issuerSel && !selectedIssuer && evidenceOf(issuerSel.split("/")[0]) === "complete";
+  const priorIssuer = lastIssuer.current?.cluster === cluster && issuerKey(lastIssuer.current.i) === issuerSel ? lastIssuer.current.i : null;
+  const issuerUnverified = !!issuerSel && !selectedIssuer && !issuerRemoved && !!priorIssuer;
+  const issuerSubject = selectedIssuer ?? priorIssuer;
   useEffect(() => { if (selectedCert && view === "certificates" && !visibleCerts.includes(selectedCert)) selectCert(null); }, [selectedCert, visibleCerts, view, selectCert]);
   useEffect(() => { if (selectedIssuer && view === "issuers" && !visibleIssuers.includes(selectedIssuer)) setIssuerSel(null); }, [selectedIssuer, visibleIssuers, view]);
   const enteredCluster = useRef(cluster);
@@ -471,6 +477,7 @@ export function CertsView({ cluster }: { cluster: string }) {
           c={subject}
           cluster={cluster}
           removed={certRemoved}
+          unverified={certUnverified}
           issuer={issuerCovOf(subject.issuerKind) !== "unknown" ? resolveIssuer(subject, issuers) : undefined}
           issuersKnown={issuerCovOf(subject.issuerKind) !== "unknown"}
           issuerCov={issuerCovOf(subject.issuerKind)}
@@ -485,12 +492,13 @@ export function CertsView({ cluster }: { cluster: string }) {
           onResolve={() => selKey && resolveChain(selKey)}
           onOpenIssuer={(i) => { setView("issuers"); setStatus("all"); setIssuerSel(issuerKey(i)); setCursorKey(issuerKey(i)); }}
         />
-      ) : view === "issuers" && issuerSel && (selectedIssuer || issuerRemoved) && lastIssuer.current ? (
+      ) : view === "issuers" && issuerSel && issuerSubject ? (
         <IssuerInspector
           key={`${cluster}/${issuerSel}`}
-          issuer={selectedIssuer ?? lastIssuer.current}
+          issuer={issuerSubject}
           removed={issuerRemoved}
-          certs={certsFor(selectedIssuer ?? lastIssuer.current)}
+          unverified={issuerUnverified}
+          certs={certsFor(issuerSubject)}
           certsCov={certsCov}
           onClose={() => setIssuerSel(null)}
           onOpenCert={(c) => { setView("certificates"); setStatus("all"); setNamespace(""); setQuery(""); setCursorKey(keyOf(c)); autoSelect.current = "done"; selectCert(keyOf(c)); }}
@@ -499,6 +507,16 @@ export function CertsView({ cluster }: { cluster: string }) {
       inspectorLabel={view === "issuers" ? "Issuer details" : "Certificate details"}
       onCloseInspector={closeSelected}
     />
+  );
+}
+
+// UnverifiedNotice: the selection is missing from a read that is not live
+// and complete for its kind - kept with its last row, never called removed.
+function UnverifiedNotice({ kind }: { kind: string }) {
+  return (
+    <div role="status" data-testid="selection-unverified" className="t-body" style={{ padding: "8px 10px", borderRadius: 4, background: "var(--color-background-secondary)", boxShadow: "inset 0 0 0 1px var(--color-border-warning)" }}>
+      <span className="t-status">Not in the current {kind} read.</span> That read is incomplete, so this is unverified - it may still exist. The details below are its last observed row.
+    </div>
   );
 }
 
@@ -513,10 +531,11 @@ function RemovedNotice({ kind }: { kind: string }) {
 // CertInspector - investigation order: the cert verdict; the bound issuer
 // (headline when not ready), the likely cause, the issuance chain with the
 // deepest stuck node flagged; then secret, validity, DNS names, message.
-function CertInspector({ c, cluster, removed, issuer, issuersKnown, issuerCov, chain, chainPrior, chainError, chainOfOther, chainLoading, aiReady, aiEgress, onClose, onResolve, onOpenIssuer }: {
+function CertInspector({ c, cluster, removed, unverified, issuer, issuersKnown, issuerCov, chain, chainPrior, chainError, chainOfOther, chainLoading, aiReady, aiEgress, onClose, onResolve, onOpenIssuer }: {
   c: CertificateDTO;
   cluster: string;
   removed: boolean;
+  unverified: boolean;
   issuer: IssuerDTO | undefined;
   issuersKnown: boolean;
   issuerCov: JoinCoverage;
@@ -591,7 +610,7 @@ function CertInspector({ c, cluster, removed, issuer, issuersKnown, issuerCov, c
         name={c.name}
         meta={[`issuer ${c.issuerKind}/${c.issuerName}`, c.secretName ? `secret ${c.secretName}` : ""].filter(Boolean).join(" · ")}
         onClose={onClose}
-        verdict={removed ? <RemovedNotice kind="Certificate" /> : (
+        verdict={removed ? <RemovedNotice kind="Certificate" /> : unverified ? <UnverifiedNotice kind="Certificate" /> : (
           <div>
             {c.stale && !expired(c) ? (
               <InspectorStatus tone="muted" label="Syncing…" reason={`generation ${c.generation} not yet observed (observed ${c.observedGeneration})`} />
@@ -691,7 +710,7 @@ function CertInspector({ c, cluster, removed, issuer, issuersKnown, issuerCov, c
   );
 }
 
-function IssuerInspector({ issuer, removed, certs, certsCov, onClose, onOpenCert }: { issuer: IssuerDTO; removed: boolean; certs: CertificateDTO[]; certsCov: JoinCoverage; onClose: () => void; onOpenCert: (c: CertificateDTO) => void }) {
+function IssuerInspector({ issuer, removed, unverified, certs, certsCov, onClose, onOpenCert }: { issuer: IssuerDTO; removed: boolean; unverified: boolean; certs: CertificateDTO[]; certsCov: JoinCoverage; onClose: () => void; onOpenCert: (c: CertificateDTO) => void }) {
   const role = roleOf(issuer);
   const ref = wellKnownResourceRef("cert-manager.io", issuer.kind);
   const view = ref ? () => { const nav = useFleet.getState(); nav.openResource(ref); nav.openInstance(issuer.kind === "ClusterIssuer" ? "" : issuer.namespace, issuer.name); } : null;
@@ -704,7 +723,7 @@ function IssuerInspector({ issuer, removed, certs, certsCov, onClose, onOpenCert
         name={issuer.name}
         meta={issuer.kind === "ClusterIssuer" ? "cluster-scoped - any namespace may use it" : `namespaced - serves Certificates in ${issuer.namespace}`}
         onClose={onClose}
-        verdict={removed ? <RemovedNotice kind={issuer.kind} /> : (
+        verdict={removed ? <RemovedNotice kind={issuer.kind} /> : unverified ? <UnverifiedNotice kind={issuer.kind} /> : (
           <div>
             <InspectorStatus tone={role.kind === "fault" ? "danger" : role.kind === "degraded" ? "warning" : role.kind === "ok" ? "success" : "muted"} label={role.label} reason={issuer.ready !== "Ready" ? issuer.reason || undefined : undefined} />
             {issuer.message && issuer.ready !== "Ready" && <div className="t-body" style={{ color: ROLE_TEXT[role.kind], overflowWrap: "anywhere", marginTop: -4 }}>{issuer.message}</div>}

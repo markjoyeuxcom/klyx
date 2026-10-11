@@ -31,7 +31,6 @@ import (
 	"github.com/moomora/klyx/internal/config"
 	"github.com/moomora/klyx/internal/crd"
 	"github.com/moomora/klyx/internal/execenv"
-	"github.com/moomora/klyx/internal/externalsecrets"
 	"github.com/moomora/klyx/internal/fluxcli"
 	"github.com/moomora/klyx/internal/gitops/argo"
 	"github.com/moomora/klyx/internal/gitops/flux"
@@ -59,12 +58,6 @@ type Conn interface {
 	GitOpsSourceObject(kind, namespace, name string) (*unstructured.Unstructured, bool)
 	GitOpsWatchHealth() (synced bool, lastErr string)
 	GetCertificateChain(ctx context.Context, ns, name string) (certmanager.Chain, error)
-	OpenExternalSecrets()
-	CloseExternalSecrets()
-	ExternalSecretsList() []externalsecrets.ExternalSecret
-	ExternalSecretsStores() []externalsecrets.Store
-	ExternalSecretsWatchHealth() (synced bool, lastErr string)
-	ExternalSecretsCoverage() []KindCoverage
 	FluxEvents(ctx context.Context, kind, ns, name string) ([]workloads.EventSummary, error)
 	FluxAvailable() bool
 	FluxDiffKustomization(ctx context.Context, ns, name, path string) (fluxcli.DiffResult, error)
@@ -189,9 +182,6 @@ type ClusterConn struct {
 	gitops         *gitopsWatch              // lazy; nil until OpenGitOps
 	gitopsOpening  bool                      // single-flights OpenGitOps' out-of-lock install
 	gitopsWanted   bool                      // desired state; an in-flight open aborts if false
-	eso            *esoWatch                 // lazy; nil until OpenExternalSecrets
-	esoOpening     bool                      // single-flights OpenExternalSecrets' out-of-lock install
-	esoWanted      bool                      // desired state; an in-flight open aborts if false
 	healthSink     observe.Sink              // set before Start; nil = no health Observer (tests)
 	health         *observe.Observer         // the cluster's health observation (1c), from Start
 	healthSyncMu   sync.Mutex                // serializes state->Observer handoffs (see syncHealth)
