@@ -72,6 +72,8 @@ type GatewayNodeDTO struct {
 	AcceptedCond   CondDTO `json:"acceptedCond"`
 	ProgrammedCond CondDTO `json:"programmedCond"`
 	Generation     int64   `json:"generation"`
+	// Rule is the relocated lens rule (1c addendum §2).
+	Rule RuleDTO `json:"rule"`
 }
 type MatchDTO struct {
 	PathType  string `json:"pathType"`
@@ -124,6 +126,8 @@ type RouteNodeDTO struct {
 	AcceptedCond     CondDTO `json:"acceptedCond"`
 	ResolvedRefsCond CondDTO `json:"resolvedRefsCond"`
 	Generation       int64   `json:"generation"`
+	// Rule is the relocated lens rule (1c addendum §2).
+	Rule RuleDTO `json:"rule"`
 }
 type TopologyDTO struct {
 	Gateway         GatewayNodeDTO `json:"gateway"`
@@ -154,6 +158,8 @@ type GatewayRefDTO struct {
 	AcceptedCond       CondDTO `json:"acceptedCond"`
 	ProgrammedCond     CondDTO `json:"programmedCond"`
 	ObservedGeneration int64   `json:"observedGeneration"`
+	// Rule is the relocated lens rule (1c addendum §2).
+	Rule RuleDTO `json:"rule"`
 }
 type GatewayListDTO struct {
 	GatewayAPIServed bool            `json:"gatewayAPIServed"`
@@ -210,7 +216,8 @@ func certificateRefDTOs(refs []gwapi.CertificateRef) []CertificateRefDTO {
 func toTopologyDTO(t gwapi.Topology) TopologyDTO {
 	g := t.Gateway
 	gd := GatewayNodeDTO{Namespace: g.Namespace, Name: g.Name, ClassName: g.ClassName, Accepted: g.Accepted, Programmed: g.Programmed, Policies: policyDTOs(g.Policies),
-		AcceptedCond: condDTO(g.AcceptedCond), ProgrammedCond: condDTO(g.ProgrammedCond), Generation: g.Generation}
+		AcceptedCond: condDTO(g.AcceptedCond), ProgrammedCond: condDTO(g.ProgrammedCond), Generation: g.Generation,
+		Rule: toRuleDTO(gwapi.GatewayRule(g.AcceptedCond, g.ProgrammedCond, g.Generation))}
 	for _, l := range g.Listeners {
 		gd.Listeners = append(gd.Listeners, ListenerDTO{Name: l.Name, Protocol: l.Protocol, Hostname: l.Hostname, Port: l.Port, CertificateRefs: certificateRefDTOs(l.CertificateRefs)})
 	}
@@ -219,24 +226,38 @@ func toTopologyDTO(t gwapi.Topology) TopologyDTO {
 	}
 	out := TopologyDTO{Gateway: gd, Warnings: t.Warnings, ClusterPolicies: policyDTOs(t.ClusterPolicies), RoutesComplete: t.RoutesComplete, RoutesError: t.RoutesError}
 	for _, r := range t.Routes {
-		rd := RouteNodeDTO{Namespace: r.Namespace, Name: r.Name, Hostnames: r.Hostnames, ParentSectionName: r.ParentSectionName, Accepted: r.Accepted, ResolvedRefs: r.ResolvedRefs, Pods: PodCountDTO{Ready: r.Pods.Ready, Total: r.Pods.Total, Unknown: r.Pods.Unknown}, Policies: policyDTOs(r.Policies),
-			ParentFound: r.ParentFound, AcceptedCond: condDTO(r.AcceptedCond), ResolvedRefsCond: condDTO(r.ResolvedRefsCond), Generation: r.Generation}
-		for _, m := range r.Matches {
-			rd.Matches = append(rd.Matches, MatchDTO{PathType: m.PathType, PathValue: m.PathValue, Method: m.Method})
-		}
-		for _, b := range r.Backends {
-			bd := BackendDTO{Kind: b.Kind, Name: b.Name, Namespace: b.Namespace, Port: b.Port, Weight: b.Weight, State: string(b.State), Error: b.Error}
-			if b.Endpoints != nil {
-				bd.Endpoints = &EndpointCountDTO{Ready: b.Endpoints.Ready, Total: b.Endpoints.Total, NonPod: b.Endpoints.NonPod, Error: b.Endpoints.Error}
-			}
-			rd.Backends = append(rd.Backends, bd)
-		}
-		for _, s := range r.Services {
-			rd.Services = append(rd.Services, ServiceNodeDTO{Namespace: s.Namespace, Name: s.Name, Type: s.Type, Port: s.Port, Resolved: s.Resolved, Global: s.Global, MeshClusters: []string{}, Policies: policyDTOs(s.Policies), CNPs: policyDTOs(s.CNPs)})
-		}
-		out.Routes = append(out.Routes, rd)
+		out.Routes = append(out.Routes, toRouteNodeDTO(r, g.Listeners))
 	}
 	return out
+}
+
+// toRouteNodeDTO maps one route as it attaches to a Gateway; listeners are
+// that Gateway's (the route rule checks the parent section exists).
+func toRouteNodeDTO(r gwapi.RouteNode, listeners []gwapi.Listener) RouteNodeDTO {
+	rd := RouteNodeDTO{Namespace: r.Namespace, Name: r.Name, Hostnames: r.Hostnames, ParentSectionName: r.ParentSectionName, Accepted: r.Accepted, ResolvedRefs: r.ResolvedRefs, Pods: PodCountDTO{Ready: r.Pods.Ready, Total: r.Pods.Total, Unknown: r.Pods.Unknown}, Policies: policyDTOs(r.Policies),
+		ParentFound: r.ParentFound, AcceptedCond: condDTO(r.AcceptedCond), ResolvedRefsCond: condDTO(r.ResolvedRefsCond), Generation: r.Generation,
+		Rule: toRuleDTO(gwapi.RouteRule(r, listeners))}
+	// Slices always serialize as arrays: a route with no backendRefs (a
+	// redirect-only HTTPRoute) used to reach the lens as backends: null, and
+	// the lane code reads backends[0] (found by the 1c golden gate).
+	rd.Hostnames = sliceOrEmpty(rd.Hostnames)
+	rd.Matches = make([]MatchDTO, 0, len(r.Matches))
+	rd.Backends = make([]BackendDTO, 0, len(r.Backends))
+	rd.Services = make([]ServiceNodeDTO, 0, len(r.Services))
+	for _, m := range r.Matches {
+		rd.Matches = append(rd.Matches, MatchDTO{PathType: m.PathType, PathValue: m.PathValue, Method: m.Method})
+	}
+	for _, b := range r.Backends {
+		bd := BackendDTO{Kind: b.Kind, Name: b.Name, Namespace: b.Namespace, Port: b.Port, Weight: b.Weight, State: string(b.State), Error: b.Error}
+		if b.Endpoints != nil {
+			bd.Endpoints = &EndpointCountDTO{Ready: b.Endpoints.Ready, Total: b.Endpoints.Total, NonPod: b.Endpoints.NonPod, Error: b.Endpoints.Error}
+		}
+		rd.Backends = append(rd.Backends, bd)
+	}
+	for _, s := range r.Services {
+		rd.Services = append(rd.Services, ServiceNodeDTO{Namespace: s.Namespace, Name: s.Name, Type: s.Type, Port: s.Port, Resolved: s.Resolved, Global: s.Global, MeshClusters: []string{}, Policies: policyDTOs(s.Policies), CNPs: policyDTOs(s.CNPs)})
+	}
+	return rd
 }
 
 // ReasonRateDTO is one Hubble drop reason's rate (flows/s).

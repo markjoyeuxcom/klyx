@@ -2122,6 +2122,426 @@
       }
     }
   ],
+  "gateways": [
+    {
+      "case": "no status reported",
+      "nowUnix": 1791720000,
+      "dto": {
+        "namespace": "infra",
+        "name": "no status reported",
+        "className": "eg",
+        "addresses": null,
+        "listeners": null,
+        "accepted": false,
+        "programmed": false,
+        "stale": false,
+        "generation": 2,
+        "acceptedCond": {
+          "status": "",
+          "reason": "",
+          "message": "",
+          "observedGeneration": 0
+        },
+        "programmedCond": {
+          "status": "",
+          "reason": "",
+          "message": "",
+          "observedGeneration": 0
+        },
+        "observedGeneration": 0,
+        "rule": {
+          "included": false,
+          "role": "unknown",
+          "label": "no status reported"
+        }
+      },
+      "want": {
+        "included": false,
+        "role": "unknown",
+        "label": "no status reported"
+      }
+    },
+    {
+      "case": "acceptance pending",
+      "nowUnix": 1791720000,
+      "dto": {
+        "namespace": "infra",
+        "name": "acceptance pending",
+        "className": "eg",
+        "addresses": null,
+        "listeners": null,
+        "accepted": false,
+        "programmed": false,
+        "stale": false,
+        "generation": 2,
+        "acceptedCond": {
+          "status": "Unknown",
+          "reason": "R",
+          "message": "m",
+          "observedGeneration": 2
+        },
+        "programmedCond": {
+          "status": "",
+          "reason": "",
+          "message": "",
+          "observedGeneration": 0
+        },
+        "observedGeneration": 0,
+        "rule": {
+          "included": false,
+          "role": "progressing",
+          "label": "acceptance pending"
+        }
+      },
+      "want": {
+        "included": false,
+        "role": "progressing",
+        "label": "acceptance pending"
+      }
+    },
+    {
+      "case": "not accepted",
+      "nowUnix": 1791720000,
+      "dto": {
+        "namespace": "infra",
+        "name": "not accepted",
+        "className": "eg",
+        "addresses": null,
+        "listeners": null,
+        "accepted": false,
+        "programmed": false,
+        "stale": false,
+        "generation": 2,
+        "acceptedCond": {
+          "status": "False",
+          "reason": "R",
+          "message": "m",
+          "observedGeneration": 2
+        },
+        "programmedCond": {
+          "status": "True",
+          "reason": "R",
+          "message": "m",
+          "observedGeneration": 2
+        },
+        "observedGeneration": 0,
+        "rule": {
+          "included": true,
+          "role": "fault",
+          "label": "not accepted"
+        }
+      },
+      "want": {
+        "included": true,
+        "role": "fault",
+        "label": "not accepted"
+      }
+    },
+    {
+      "case": "not accepted, last observed",
+      "nowUnix": 1791720000,
+      "dto": {
+        "namespace": "infra",
+        "name": "not accepted, last observed",
+        "className": "eg",
+        "addresses": null,
+        "listeners": null,
+        "accepted": false,
+        "programmed": false,
+        "stale": false,
+        "generation": 2,
+        "acceptedCond": {
+          "status": "False",
+          "reason": "R",
+          "message": "m",
+          "observedGeneration": 1
+        },
+        "programmedCond": {
+          "status": "True",
+          "reason": "R",
+          "message": "m",
+          "observedGeneration": 1
+        },
+        "observedGeneration": 0,
+        "rule": {
+          "included": true,
+          "role": "degraded",
+          "label": "not accepted (last observed)"
+        }
+      },
+      "want": {
+        "included": true,
+        "role": "degraded",
+        "label": "not accepted (last observed)"
+      }
+    },
+    {
+      "case": "programming not reported",
+      "nowUnix": 1791720000,
+      "dto": {
+        "namespace": "infra",
+        "name": "programming not reported",
+        "className": "eg",
+        "addresses": null,
+        "listeners": null,
+        "accepted": false,
+        "programmed": false,
+        "stale": false,
+        "generation": 2,
+        "acceptedCond": {
+          "status": "True",
+          "reason": "R",
+          "message": "m",
+          "observedGeneration": 2
+        },
+        "programmedCond": {
+          "status": "",
+          "reason": "",
+          "message": "",
+          "observedGeneration": 0
+        },
+        "observedGeneration": 0,
+        "rule": {
+          "included": false,
+          "role": "unknown",
+          "label": "programming not reported"
+        }
+      },
+      "want": {
+        "included": false,
+        "role": "unknown",
+        "label": "programming not reported"
+      }
+    },
+    {
+      "case": "programming",
+      "nowUnix": 1791720000,
+      "dto": {
+        "namespace": "infra",
+        "name": "programming",
+        "className": "eg",
+        "addresses": null,
+        "listeners": null,
+        "accepted": false,
+        "programmed": false,
+        "stale": false,
+        "generation": 2,
+        "acceptedCond": {
+          "status": "True",
+          "reason": "R",
+          "message": "m",
+          "observedGeneration": 2
+        },
+        "programmedCond": {
+          "status": "Unknown",
+          "reason": "R",
+          "message": "m",
+          "observedGeneration": 2
+        },
+        "observedGeneration": 0,
+        "rule": {
+          "included": false,
+          "role": "progressing",
+          "label": "programming"
+        }
+      },
+      "want": {
+        "included": false,
+        "role": "progressing",
+        "label": "programming"
+      }
+    },
+    {
+      "case": "not programmed",
+      "nowUnix": 1791720000,
+      "dto": {
+        "namespace": "infra",
+        "name": "not programmed",
+        "className": "eg",
+        "addresses": null,
+        "listeners": null,
+        "accepted": false,
+        "programmed": false,
+        "stale": false,
+        "generation": 2,
+        "acceptedCond": {
+          "status": "True",
+          "reason": "R",
+          "message": "m",
+          "observedGeneration": 2
+        },
+        "programmedCond": {
+          "status": "False",
+          "reason": "R",
+          "message": "m",
+          "observedGeneration": 2
+        },
+        "observedGeneration": 0,
+        "rule": {
+          "included": true,
+          "role": "degraded",
+          "label": "not programmed"
+        }
+      },
+      "want": {
+        "included": true,
+        "role": "degraded",
+        "label": "not programmed"
+      }
+    },
+    {
+      "case": "not programmed, last observed",
+      "nowUnix": 1791720000,
+      "dto": {
+        "namespace": "infra",
+        "name": "not programmed, last observed",
+        "className": "eg",
+        "addresses": null,
+        "listeners": null,
+        "accepted": false,
+        "programmed": false,
+        "stale": false,
+        "generation": 2,
+        "acceptedCond": {
+          "status": "True",
+          "reason": "R",
+          "message": "m",
+          "observedGeneration": 2
+        },
+        "programmedCond": {
+          "status": "False",
+          "reason": "R",
+          "message": "m",
+          "observedGeneration": 1
+        },
+        "observedGeneration": 0,
+        "rule": {
+          "included": true,
+          "role": "degraded",
+          "label": "not programmed (last observed)"
+        }
+      },
+      "want": {
+        "included": true,
+        "role": "degraded",
+        "label": "not programmed (last observed)"
+      }
+    },
+    {
+      "case": "programmed",
+      "nowUnix": 1791720000,
+      "dto": {
+        "namespace": "infra",
+        "name": "programmed",
+        "className": "eg",
+        "addresses": null,
+        "listeners": null,
+        "accepted": false,
+        "programmed": false,
+        "stale": false,
+        "generation": 2,
+        "acceptedCond": {
+          "status": "True",
+          "reason": "R",
+          "message": "m",
+          "observedGeneration": 2
+        },
+        "programmedCond": {
+          "status": "True",
+          "reason": "R",
+          "message": "m",
+          "observedGeneration": 2
+        },
+        "observedGeneration": 0,
+        "rule": {
+          "included": false,
+          "role": "ok",
+          "label": "programmed"
+        }
+      },
+      "want": {
+        "included": false,
+        "role": "ok",
+        "label": "programmed"
+      }
+    },
+    {
+      "case": "programmed, accepted last observed (syncing)",
+      "nowUnix": 1791720000,
+      "dto": {
+        "namespace": "infra",
+        "name": "programmed, accepted last observed (syncing)",
+        "className": "eg",
+        "addresses": null,
+        "listeners": null,
+        "accepted": false,
+        "programmed": false,
+        "stale": false,
+        "generation": 2,
+        "acceptedCond": {
+          "status": "True",
+          "reason": "R",
+          "message": "m",
+          "observedGeneration": 1
+        },
+        "programmedCond": {
+          "status": "True",
+          "reason": "R",
+          "message": "m",
+          "observedGeneration": 2
+        },
+        "observedGeneration": 0,
+        "rule": {
+          "included": false,
+          "role": "progressing",
+          "label": "syncing"
+        }
+      },
+      "want": {
+        "included": false,
+        "role": "progressing",
+        "label": "syncing"
+      }
+    },
+    {
+      "case": "no generation recorded",
+      "nowUnix": 1791720000,
+      "dto": {
+        "namespace": "infra",
+        "name": "no generation recorded",
+        "className": "eg",
+        "addresses": null,
+        "listeners": null,
+        "accepted": false,
+        "programmed": false,
+        "stale": false,
+        "generation": 0,
+        "acceptedCond": {
+          "status": "True",
+          "reason": "R",
+          "message": "m",
+          "observedGeneration": 0
+        },
+        "programmedCond": {
+          "status": "True",
+          "reason": "R",
+          "message": "m",
+          "observedGeneration": 0
+        },
+        "observedGeneration": 0,
+        "rule": {
+          "included": false,
+          "role": "ok",
+          "label": "programmed"
+        }
+      },
+      "want": {
+        "included": false,
+        "role": "ok",
+        "label": "programmed"
+      }
+    }
+  ],
   "issuers": [
     {
       "case": "ready",
@@ -2609,6 +3029,1930 @@
         "included": false,
         "role": "unknown",
         "label": "unknown"
+      }
+    }
+  ],
+  "routes": [
+    {
+      "case": "resolved",
+      "nowUnix": 1791720000,
+      "dto": {
+        "route": {
+          "namespace": "shop",
+          "name": "resolved",
+          "hostnames": [],
+          "matches": [],
+          "parentSectionName": "",
+          "accepted": false,
+          "resolvedRefs": false,
+          "backends": [
+            {
+              "kind": "Service",
+              "name": "web-0",
+              "namespace": "shop",
+              "port": 80,
+              "weight": 0,
+              "state": "resolved",
+              "endpoints": {
+                "ready": 3,
+                "total": 3,
+                "nonPod": 0
+              }
+            }
+          ],
+          "services": [],
+          "pods": {
+            "ready": 0,
+            "total": 0,
+            "unknown": false
+          },
+          "policies": [],
+          "parentFound": true,
+          "acceptedCond": {
+            "status": "True",
+            "reason": "R",
+            "message": "m",
+            "observedGeneration": 3
+          },
+          "resolvedRefsCond": {
+            "status": "True",
+            "reason": "R",
+            "message": "m",
+            "observedGeneration": 3
+          },
+          "generation": 3,
+          "rule": {
+            "included": false,
+            "role": "ok",
+            "label": "resolved"
+          }
+        },
+        "listeners": [
+          {
+            "name": "https",
+            "protocol": "HTTPS",
+            "hostname": "",
+            "port": 443,
+            "certificateRefs": null
+          },
+          {
+            "name": "http",
+            "protocol": "HTTP",
+            "hostname": "",
+            "port": 80,
+            "certificateRefs": null
+          }
+        ]
+      },
+      "want": {
+        "included": false,
+        "role": "ok",
+        "label": "resolved"
+      }
+    },
+    {
+      "case": "no status for this Gateway",
+      "nowUnix": 1791720000,
+      "dto": {
+        "route": {
+          "namespace": "shop",
+          "name": "no status for this Gateway",
+          "hostnames": [],
+          "matches": [],
+          "parentSectionName": "",
+          "accepted": false,
+          "resolvedRefs": false,
+          "backends": [
+            {
+              "kind": "Service",
+              "name": "web-0",
+              "namespace": "shop",
+              "port": 80,
+              "weight": 0,
+              "state": "resolved",
+              "endpoints": {
+                "ready": 3,
+                "total": 3,
+                "nonPod": 0
+              }
+            }
+          ],
+          "services": [],
+          "pods": {
+            "ready": 0,
+            "total": 0,
+            "unknown": false
+          },
+          "policies": [],
+          "parentFound": false,
+          "acceptedCond": {
+            "status": "",
+            "reason": "",
+            "message": "",
+            "observedGeneration": 0
+          },
+          "resolvedRefsCond": {
+            "status": "",
+            "reason": "",
+            "message": "",
+            "observedGeneration": 0
+          },
+          "generation": 3,
+          "rule": {
+            "included": false,
+            "role": "unknown",
+            "label": "no status for this Gateway"
+          }
+        },
+        "listeners": [
+          {
+            "name": "https",
+            "protocol": "HTTPS",
+            "hostname": "",
+            "port": 443,
+            "certificateRefs": null
+          },
+          {
+            "name": "http",
+            "protocol": "HTTP",
+            "hostname": "",
+            "port": 80,
+            "certificateRefs": null
+          }
+        ]
+      },
+      "want": {
+        "included": false,
+        "role": "unknown",
+        "label": "no status for this Gateway"
+      }
+    },
+    {
+      "case": "not accepted",
+      "nowUnix": 1791720000,
+      "dto": {
+        "route": {
+          "namespace": "shop",
+          "name": "not accepted",
+          "hostnames": [],
+          "matches": [],
+          "parentSectionName": "",
+          "accepted": false,
+          "resolvedRefs": false,
+          "backends": [
+            {
+              "kind": "Service",
+              "name": "web-0",
+              "namespace": "shop",
+              "port": 80,
+              "weight": 0,
+              "state": "resolved",
+              "endpoints": {
+                "ready": 3,
+                "total": 3,
+                "nonPod": 0
+              }
+            }
+          ],
+          "services": [],
+          "pods": {
+            "ready": 0,
+            "total": 0,
+            "unknown": false
+          },
+          "policies": [],
+          "parentFound": true,
+          "acceptedCond": {
+            "status": "False",
+            "reason": "R",
+            "message": "m",
+            "observedGeneration": 3
+          },
+          "resolvedRefsCond": {
+            "status": "True",
+            "reason": "R",
+            "message": "m",
+            "observedGeneration": 3
+          },
+          "generation": 3,
+          "rule": {
+            "included": true,
+            "role": "fault",
+            "label": "not accepted"
+          }
+        },
+        "listeners": [
+          {
+            "name": "https",
+            "protocol": "HTTPS",
+            "hostname": "",
+            "port": 443,
+            "certificateRefs": null
+          },
+          {
+            "name": "http",
+            "protocol": "HTTP",
+            "hostname": "",
+            "port": 80,
+            "certificateRefs": null
+          }
+        ]
+      },
+      "want": {
+        "included": true,
+        "role": "fault",
+        "label": "not accepted"
+      }
+    },
+    {
+      "case": "not accepted, last observed",
+      "nowUnix": 1791720000,
+      "dto": {
+        "route": {
+          "namespace": "shop",
+          "name": "not accepted, last observed",
+          "hostnames": [],
+          "matches": [],
+          "parentSectionName": "",
+          "accepted": false,
+          "resolvedRefs": false,
+          "backends": [
+            {
+              "kind": "Service",
+              "name": "web-0",
+              "namespace": "shop",
+              "port": 80,
+              "weight": 0,
+              "state": "resolved",
+              "endpoints": {
+                "ready": 3,
+                "total": 3,
+                "nonPod": 0
+              }
+            }
+          ],
+          "services": [],
+          "pods": {
+            "ready": 0,
+            "total": 0,
+            "unknown": false
+          },
+          "policies": [],
+          "parentFound": true,
+          "acceptedCond": {
+            "status": "False",
+            "reason": "R",
+            "message": "m",
+            "observedGeneration": 2
+          },
+          "resolvedRefsCond": {
+            "status": "True",
+            "reason": "R",
+            "message": "m",
+            "observedGeneration": 3
+          },
+          "generation": 3,
+          "rule": {
+            "included": true,
+            "role": "degraded",
+            "label": "not accepted (last observed)"
+          }
+        },
+        "listeners": [
+          {
+            "name": "https",
+            "protocol": "HTTPS",
+            "hostname": "",
+            "port": 443,
+            "certificateRefs": null
+          },
+          {
+            "name": "http",
+            "protocol": "HTTP",
+            "hostname": "",
+            "port": 80,
+            "certificateRefs": null
+          }
+        ]
+      },
+      "want": {
+        "included": true,
+        "role": "degraded",
+        "label": "not accepted (last observed)"
+      }
+    },
+    {
+      "case": "acceptance pending outranks refs not reported",
+      "nowUnix": 1791720000,
+      "dto": {
+        "route": {
+          "namespace": "shop",
+          "name": "acceptance pending outranks refs not reported",
+          "hostnames": [],
+          "matches": [],
+          "parentSectionName": "",
+          "accepted": false,
+          "resolvedRefs": false,
+          "backends": [
+            {
+              "kind": "Service",
+              "name": "web-0",
+              "namespace": "shop",
+              "port": 80,
+              "weight": 0,
+              "state": "resolved",
+              "endpoints": {
+                "ready": 3,
+                "total": 3,
+                "nonPod": 0
+              }
+            }
+          ],
+          "services": [],
+          "pods": {
+            "ready": 0,
+            "total": 0,
+            "unknown": false
+          },
+          "policies": [],
+          "parentFound": true,
+          "acceptedCond": {
+            "status": "Unknown",
+            "reason": "R",
+            "message": "m",
+            "observedGeneration": 3
+          },
+          "resolvedRefsCond": {
+            "status": "",
+            "reason": "",
+            "message": "",
+            "observedGeneration": 0
+          },
+          "generation": 3,
+          "rule": {
+            "included": false,
+            "role": "progressing",
+            "label": "acceptance pending"
+          }
+        },
+        "listeners": [
+          {
+            "name": "https",
+            "protocol": "HTTPS",
+            "hostname": "",
+            "port": 443,
+            "certificateRefs": null
+          },
+          {
+            "name": "http",
+            "protocol": "HTTP",
+            "hostname": "",
+            "port": 80,
+            "certificateRefs": null
+          }
+        ]
+      },
+      "want": {
+        "included": false,
+        "role": "progressing",
+        "label": "acceptance pending"
+      }
+    },
+    {
+      "case": "acceptance not reported",
+      "nowUnix": 1791720000,
+      "dto": {
+        "route": {
+          "namespace": "shop",
+          "name": "acceptance not reported",
+          "hostnames": [],
+          "matches": [],
+          "parentSectionName": "",
+          "accepted": false,
+          "resolvedRefs": false,
+          "backends": [
+            {
+              "kind": "Service",
+              "name": "web-0",
+              "namespace": "shop",
+              "port": 80,
+              "weight": 0,
+              "state": "resolved",
+              "endpoints": {
+                "ready": 3,
+                "total": 3,
+                "nonPod": 0
+              }
+            }
+          ],
+          "services": [],
+          "pods": {
+            "ready": 0,
+            "total": 0,
+            "unknown": false
+          },
+          "policies": [],
+          "parentFound": true,
+          "acceptedCond": {
+            "status": "",
+            "reason": "",
+            "message": "",
+            "observedGeneration": 0
+          },
+          "resolvedRefsCond": {
+            "status": "True",
+            "reason": "R",
+            "message": "m",
+            "observedGeneration": 3
+          },
+          "generation": 3,
+          "rule": {
+            "included": false,
+            "role": "unknown",
+            "label": "acceptance not reported"
+          }
+        },
+        "listeners": [
+          {
+            "name": "https",
+            "protocol": "HTTPS",
+            "hostname": "",
+            "port": 443,
+            "certificateRefs": null
+          },
+          {
+            "name": "http",
+            "protocol": "HTTP",
+            "hostname": "",
+            "port": 80,
+            "certificateRefs": null
+          }
+        ]
+      },
+      "want": {
+        "included": false,
+        "role": "unknown",
+        "label": "acceptance not reported"
+      }
+    },
+    {
+      "case": "unresolved refs",
+      "nowUnix": 1791720000,
+      "dto": {
+        "route": {
+          "namespace": "shop",
+          "name": "unresolved refs",
+          "hostnames": [],
+          "matches": [],
+          "parentSectionName": "",
+          "accepted": false,
+          "resolvedRefs": false,
+          "backends": [
+            {
+              "kind": "Service",
+              "name": "web-0",
+              "namespace": "shop",
+              "port": 80,
+              "weight": 0,
+              "state": "resolved",
+              "endpoints": {
+                "ready": 3,
+                "total": 3,
+                "nonPod": 0
+              }
+            }
+          ],
+          "services": [],
+          "pods": {
+            "ready": 0,
+            "total": 0,
+            "unknown": false
+          },
+          "policies": [],
+          "parentFound": true,
+          "acceptedCond": {
+            "status": "True",
+            "reason": "R",
+            "message": "m",
+            "observedGeneration": 3
+          },
+          "resolvedRefsCond": {
+            "status": "False",
+            "reason": "R",
+            "message": "m",
+            "observedGeneration": 3
+          },
+          "generation": 3,
+          "rule": {
+            "included": true,
+            "role": "fault",
+            "label": "unresolved refs"
+          }
+        },
+        "listeners": [
+          {
+            "name": "https",
+            "protocol": "HTTPS",
+            "hostname": "",
+            "port": 443,
+            "certificateRefs": null
+          },
+          {
+            "name": "http",
+            "protocol": "HTTP",
+            "hostname": "",
+            "port": 80,
+            "certificateRefs": null
+          }
+        ]
+      },
+      "want": {
+        "included": true,
+        "role": "fault",
+        "label": "unresolved refs"
+      }
+    },
+    {
+      "case": "unresolved refs, last observed",
+      "nowUnix": 1791720000,
+      "dto": {
+        "route": {
+          "namespace": "shop",
+          "name": "unresolved refs, last observed",
+          "hostnames": [],
+          "matches": [],
+          "parentSectionName": "",
+          "accepted": false,
+          "resolvedRefs": false,
+          "backends": [
+            {
+              "kind": "Service",
+              "name": "web-0",
+              "namespace": "shop",
+              "port": 80,
+              "weight": 0,
+              "state": "resolved",
+              "endpoints": {
+                "ready": 3,
+                "total": 3,
+                "nonPod": 0
+              }
+            }
+          ],
+          "services": [],
+          "pods": {
+            "ready": 0,
+            "total": 0,
+            "unknown": false
+          },
+          "policies": [],
+          "parentFound": true,
+          "acceptedCond": {
+            "status": "True",
+            "reason": "R",
+            "message": "m",
+            "observedGeneration": 3
+          },
+          "resolvedRefsCond": {
+            "status": "False",
+            "reason": "R",
+            "message": "m",
+            "observedGeneration": 1
+          },
+          "generation": 3,
+          "rule": {
+            "included": true,
+            "role": "degraded",
+            "label": "unresolved refs (last observed)"
+          }
+        },
+        "listeners": [
+          {
+            "name": "https",
+            "protocol": "HTTPS",
+            "hostname": "",
+            "port": 443,
+            "certificateRefs": null
+          },
+          {
+            "name": "http",
+            "protocol": "HTTP",
+            "hostname": "",
+            "port": 80,
+            "certificateRefs": null
+          }
+        ]
+      },
+      "want": {
+        "included": true,
+        "role": "degraded",
+        "label": "unresolved refs (last observed)"
+      }
+    },
+    {
+      "case": "refs pending",
+      "nowUnix": 1791720000,
+      "dto": {
+        "route": {
+          "namespace": "shop",
+          "name": "refs pending",
+          "hostnames": [],
+          "matches": [],
+          "parentSectionName": "",
+          "accepted": false,
+          "resolvedRefs": false,
+          "backends": [
+            {
+              "kind": "Service",
+              "name": "web-0",
+              "namespace": "shop",
+              "port": 80,
+              "weight": 0,
+              "state": "resolved",
+              "endpoints": {
+                "ready": 3,
+                "total": 3,
+                "nonPod": 0
+              }
+            }
+          ],
+          "services": [],
+          "pods": {
+            "ready": 0,
+            "total": 0,
+            "unknown": false
+          },
+          "policies": [],
+          "parentFound": true,
+          "acceptedCond": {
+            "status": "True",
+            "reason": "R",
+            "message": "m",
+            "observedGeneration": 3
+          },
+          "resolvedRefsCond": {
+            "status": "Unknown",
+            "reason": "R",
+            "message": "m",
+            "observedGeneration": 3
+          },
+          "generation": 3,
+          "rule": {
+            "included": false,
+            "role": "progressing",
+            "label": "refs pending"
+          }
+        },
+        "listeners": [
+          {
+            "name": "https",
+            "protocol": "HTTPS",
+            "hostname": "",
+            "port": 443,
+            "certificateRefs": null
+          },
+          {
+            "name": "http",
+            "protocol": "HTTP",
+            "hostname": "",
+            "port": 80,
+            "certificateRefs": null
+          }
+        ]
+      },
+      "want": {
+        "included": false,
+        "role": "progressing",
+        "label": "refs pending"
+      }
+    },
+    {
+      "case": "status syncing",
+      "nowUnix": 1791720000,
+      "dto": {
+        "route": {
+          "namespace": "shop",
+          "name": "status syncing",
+          "hostnames": [],
+          "matches": [],
+          "parentSectionName": "",
+          "accepted": false,
+          "resolvedRefs": false,
+          "backends": [
+            {
+              "kind": "Service",
+              "name": "web-0",
+              "namespace": "shop",
+              "port": 80,
+              "weight": 0,
+              "state": "resolved",
+              "endpoints": {
+                "ready": 3,
+                "total": 3,
+                "nonPod": 0
+              }
+            }
+          ],
+          "services": [],
+          "pods": {
+            "ready": 0,
+            "total": 0,
+            "unknown": false
+          },
+          "policies": [],
+          "parentFound": true,
+          "acceptedCond": {
+            "status": "True",
+            "reason": "R",
+            "message": "m",
+            "observedGeneration": 2
+          },
+          "resolvedRefsCond": {
+            "status": "True",
+            "reason": "R",
+            "message": "m",
+            "observedGeneration": 3
+          },
+          "generation": 3,
+          "rule": {
+            "included": false,
+            "role": "progressing",
+            "label": "status syncing"
+          }
+        },
+        "listeners": [
+          {
+            "name": "https",
+            "protocol": "HTTPS",
+            "hostname": "",
+            "port": 443,
+            "certificateRefs": null
+          },
+          {
+            "name": "http",
+            "protocol": "HTTP",
+            "hostname": "",
+            "port": 80,
+            "certificateRefs": null
+          }
+        ]
+      },
+      "want": {
+        "included": false,
+        "role": "progressing",
+        "label": "status syncing"
+      }
+    },
+    {
+      "case": "listener missing",
+      "nowUnix": 1791720000,
+      "dto": {
+        "route": {
+          "namespace": "shop",
+          "name": "listener missing",
+          "hostnames": [],
+          "matches": [],
+          "parentSectionName": "grpc",
+          "accepted": false,
+          "resolvedRefs": false,
+          "backends": [
+            {
+              "kind": "Service",
+              "name": "web-0",
+              "namespace": "shop",
+              "port": 80,
+              "weight": 0,
+              "state": "resolved",
+              "endpoints": {
+                "ready": 3,
+                "total": 3,
+                "nonPod": 0
+              }
+            }
+          ],
+          "services": [],
+          "pods": {
+            "ready": 0,
+            "total": 0,
+            "unknown": false
+          },
+          "policies": [],
+          "parentFound": true,
+          "acceptedCond": {
+            "status": "True",
+            "reason": "R",
+            "message": "m",
+            "observedGeneration": 3
+          },
+          "resolvedRefsCond": {
+            "status": "True",
+            "reason": "R",
+            "message": "m",
+            "observedGeneration": 3
+          },
+          "generation": 3,
+          "rule": {
+            "included": true,
+            "role": "fault",
+            "label": "listener missing"
+          }
+        },
+        "listeners": [
+          {
+            "name": "https",
+            "protocol": "HTTPS",
+            "hostname": "",
+            "port": 443,
+            "certificateRefs": null
+          },
+          {
+            "name": "http",
+            "protocol": "HTTP",
+            "hostname": "",
+            "port": 80,
+            "certificateRefs": null
+          }
+        ]
+      },
+      "want": {
+        "included": true,
+        "role": "fault",
+        "label": "listener missing"
+      }
+    },
+    {
+      "case": "listener present",
+      "nowUnix": 1791720000,
+      "dto": {
+        "route": {
+          "namespace": "shop",
+          "name": "listener present",
+          "hostnames": [],
+          "matches": [],
+          "parentSectionName": "https",
+          "accepted": false,
+          "resolvedRefs": false,
+          "backends": [
+            {
+              "kind": "Service",
+              "name": "web-0",
+              "namespace": "shop",
+              "port": 80,
+              "weight": 0,
+              "state": "resolved",
+              "endpoints": {
+                "ready": 3,
+                "total": 3,
+                "nonPod": 0
+              }
+            }
+          ],
+          "services": [],
+          "pods": {
+            "ready": 0,
+            "total": 0,
+            "unknown": false
+          },
+          "policies": [],
+          "parentFound": true,
+          "acceptedCond": {
+            "status": "True",
+            "reason": "R",
+            "message": "m",
+            "observedGeneration": 3
+          },
+          "resolvedRefsCond": {
+            "status": "True",
+            "reason": "R",
+            "message": "m",
+            "observedGeneration": 3
+          },
+          "generation": 3,
+          "rule": {
+            "included": false,
+            "role": "ok",
+            "label": "resolved"
+          }
+        },
+        "listeners": [
+          {
+            "name": "https",
+            "protocol": "HTTPS",
+            "hostname": "",
+            "port": 443,
+            "certificateRefs": null
+          },
+          {
+            "name": "http",
+            "protocol": "HTTP",
+            "hostname": "",
+            "port": 80,
+            "certificateRefs": null
+          }
+        ]
+      },
+      "want": {
+        "included": false,
+        "role": "ok",
+        "label": "resolved"
+      }
+    },
+    {
+      "case": "no backendRefs",
+      "nowUnix": 1791720000,
+      "dto": {
+        "route": {
+          "namespace": "shop",
+          "name": "no backendRefs",
+          "hostnames": [],
+          "matches": [],
+          "parentSectionName": "",
+          "accepted": false,
+          "resolvedRefs": false,
+          "backends": [],
+          "services": [],
+          "pods": {
+            "ready": 0,
+            "total": 0,
+            "unknown": false
+          },
+          "policies": [],
+          "parentFound": true,
+          "acceptedCond": {
+            "status": "True",
+            "reason": "R",
+            "message": "m",
+            "observedGeneration": 3
+          },
+          "resolvedRefsCond": {
+            "status": "True",
+            "reason": "R",
+            "message": "m",
+            "observedGeneration": 3
+          },
+          "generation": 3,
+          "rule": {
+            "included": false,
+            "role": "unknown",
+            "label": "no backendRefs"
+          }
+        },
+        "listeners": [
+          {
+            "name": "https",
+            "protocol": "HTTPS",
+            "hostname": "",
+            "port": 443,
+            "certificateRefs": null
+          },
+          {
+            "name": "http",
+            "protocol": "HTTP",
+            "hostname": "",
+            "port": 80,
+            "certificateRefs": null
+          }
+        ]
+      },
+      "want": {
+        "included": false,
+        "role": "unknown",
+        "label": "no backendRefs"
+      }
+    },
+    {
+      "case": "unsupported backend kind",
+      "nowUnix": 1791720000,
+      "dto": {
+        "route": {
+          "namespace": "shop",
+          "name": "unsupported backend kind",
+          "hostnames": [],
+          "matches": [],
+          "parentSectionName": "",
+          "accepted": false,
+          "resolvedRefs": false,
+          "backends": [
+            {
+              "kind": "ServiceImport",
+              "name": "x",
+              "namespace": "",
+              "port": 0,
+              "weight": 0,
+              "state": "unsupported"
+            }
+          ],
+          "services": [],
+          "pods": {
+            "ready": 0,
+            "total": 0,
+            "unknown": false
+          },
+          "policies": [],
+          "parentFound": true,
+          "acceptedCond": {
+            "status": "True",
+            "reason": "R",
+            "message": "m",
+            "observedGeneration": 3
+          },
+          "resolvedRefsCond": {
+            "status": "True",
+            "reason": "R",
+            "message": "m",
+            "observedGeneration": 3
+          },
+          "generation": 3,
+          "rule": {
+            "included": false,
+            "role": "unknown",
+            "label": "ServiceImport backend not evaluated"
+          }
+        },
+        "listeners": [
+          {
+            "name": "https",
+            "protocol": "HTTPS",
+            "hostname": "",
+            "port": 443,
+            "certificateRefs": null
+          },
+          {
+            "name": "http",
+            "protocol": "HTTP",
+            "hostname": "",
+            "port": 80,
+            "certificateRefs": null
+          }
+        ]
+      },
+      "want": {
+        "included": false,
+        "role": "unknown",
+        "label": "ServiceImport backend not evaluated"
+      }
+    },
+    {
+      "case": "backend with no state",
+      "nowUnix": 1791720000,
+      "dto": {
+        "route": {
+          "namespace": "shop",
+          "name": "backend with no state",
+          "hostnames": [],
+          "matches": [],
+          "parentSectionName": "",
+          "accepted": false,
+          "resolvedRefs": false,
+          "backends": [
+            {
+              "kind": "Service",
+              "name": "x",
+              "namespace": "",
+              "port": 0,
+              "weight": 0,
+              "state": ""
+            }
+          ],
+          "services": [],
+          "pods": {
+            "ready": 0,
+            "total": 0,
+            "unknown": false
+          },
+          "policies": [],
+          "parentFound": true,
+          "acceptedCond": {
+            "status": "True",
+            "reason": "R",
+            "message": "m",
+            "observedGeneration": 3
+          },
+          "resolvedRefsCond": {
+            "status": "True",
+            "reason": "R",
+            "message": "m",
+            "observedGeneration": 3
+          },
+          "generation": 3,
+          "rule": {
+            "included": false,
+            "role": "unknown",
+            "label": "backend not evaluated"
+          }
+        },
+        "listeners": [
+          {
+            "name": "https",
+            "protocol": "HTTPS",
+            "hostname": "",
+            "port": 443,
+            "certificateRefs": null
+          },
+          {
+            "name": "http",
+            "protocol": "HTTP",
+            "hostname": "",
+            "port": 80,
+            "certificateRefs": null
+          }
+        ]
+      },
+      "want": {
+        "included": false,
+        "role": "unknown",
+        "label": "backend not evaluated"
+      }
+    },
+    {
+      "case": "backend not found",
+      "nowUnix": 1791720000,
+      "dto": {
+        "route": {
+          "namespace": "shop",
+          "name": "backend not found",
+          "hostnames": [],
+          "matches": [],
+          "parentSectionName": "",
+          "accepted": false,
+          "resolvedRefs": false,
+          "backends": [
+            {
+              "kind": "Service",
+              "name": "gone",
+              "namespace": "",
+              "port": 0,
+              "weight": 0,
+              "state": "not-found"
+            }
+          ],
+          "services": [],
+          "pods": {
+            "ready": 0,
+            "total": 0,
+            "unknown": false
+          },
+          "policies": [],
+          "parentFound": true,
+          "acceptedCond": {
+            "status": "True",
+            "reason": "R",
+            "message": "m",
+            "observedGeneration": 3
+          },
+          "resolvedRefsCond": {
+            "status": "True",
+            "reason": "R",
+            "message": "m",
+            "observedGeneration": 3
+          },
+          "generation": 3,
+          "rule": {
+            "included": true,
+            "role": "fault",
+            "label": "backend not found"
+          }
+        },
+        "listeners": [
+          {
+            "name": "https",
+            "protocol": "HTTPS",
+            "hostname": "",
+            "port": 443,
+            "certificateRefs": null
+          },
+          {
+            "name": "http",
+            "protocol": "HTTP",
+            "hostname": "",
+            "port": 80,
+            "certificateRefs": null
+          }
+        ]
+      },
+      "want": {
+        "included": true,
+        "role": "fault",
+        "label": "backend not found"
+      }
+    },
+    {
+      "case": "primary backend not found of several",
+      "nowUnix": 1791720000,
+      "dto": {
+        "route": {
+          "namespace": "shop",
+          "name": "primary backend not found of several",
+          "hostnames": [],
+          "matches": [],
+          "parentSectionName": "",
+          "accepted": false,
+          "resolvedRefs": false,
+          "backends": [
+            {
+              "kind": "Service",
+              "name": "gone",
+              "namespace": "",
+              "port": 0,
+              "weight": 0,
+              "state": "not-found"
+            },
+            {
+              "kind": "Service",
+              "name": "web-0",
+              "namespace": "shop",
+              "port": 80,
+              "weight": 0,
+              "state": "resolved",
+              "endpoints": {
+                "ready": 3,
+                "total": 3,
+                "nonPod": 0
+              }
+            }
+          ],
+          "services": [],
+          "pods": {
+            "ready": 0,
+            "total": 0,
+            "unknown": false
+          },
+          "policies": [],
+          "parentFound": true,
+          "acceptedCond": {
+            "status": "True",
+            "reason": "R",
+            "message": "m",
+            "observedGeneration": 3
+          },
+          "resolvedRefsCond": {
+            "status": "True",
+            "reason": "R",
+            "message": "m",
+            "observedGeneration": 3
+          },
+          "generation": 3,
+          "rule": {
+            "included": true,
+            "role": "degraded",
+            "label": "primary backend not found"
+          }
+        },
+        "listeners": [
+          {
+            "name": "https",
+            "protocol": "HTTPS",
+            "hostname": "",
+            "port": 443,
+            "certificateRefs": null
+          },
+          {
+            "name": "http",
+            "protocol": "HTTP",
+            "hostname": "",
+            "port": 80,
+            "certificateRefs": null
+          }
+        ]
+      },
+      "want": {
+        "included": true,
+        "role": "degraded",
+        "label": "primary backend not found"
+      }
+    },
+    {
+      "case": "backend unreadable",
+      "nowUnix": 1791720000,
+      "dto": {
+        "route": {
+          "namespace": "shop",
+          "name": "backend unreadable",
+          "hostnames": [],
+          "matches": [],
+          "parentSectionName": "",
+          "accepted": false,
+          "resolvedRefs": false,
+          "backends": [
+            {
+              "kind": "Service",
+              "name": "x",
+              "namespace": "",
+              "port": 0,
+              "weight": 0,
+              "state": "unreadable",
+              "error": "forbidden"
+            }
+          ],
+          "services": [],
+          "pods": {
+            "ready": 0,
+            "total": 0,
+            "unknown": false
+          },
+          "policies": [],
+          "parentFound": true,
+          "acceptedCond": {
+            "status": "True",
+            "reason": "R",
+            "message": "m",
+            "observedGeneration": 3
+          },
+          "resolvedRefsCond": {
+            "status": "True",
+            "reason": "R",
+            "message": "m",
+            "observedGeneration": 3
+          },
+          "generation": 3,
+          "rule": {
+            "included": false,
+            "role": "unknown",
+            "label": "backend unreadable"
+          }
+        },
+        "listeners": [
+          {
+            "name": "https",
+            "protocol": "HTTPS",
+            "hostname": "",
+            "port": 443,
+            "certificateRefs": null
+          },
+          {
+            "name": "http",
+            "protocol": "HTTP",
+            "hostname": "",
+            "port": 80,
+            "certificateRefs": null
+          }
+        ]
+      },
+      "want": {
+        "included": false,
+        "role": "unknown",
+        "label": "backend unreadable"
+      }
+    },
+    {
+      "case": "endpoints not read",
+      "nowUnix": 1791720000,
+      "dto": {
+        "route": {
+          "namespace": "shop",
+          "name": "endpoints not read",
+          "hostnames": [],
+          "matches": [],
+          "parentSectionName": "",
+          "accepted": false,
+          "resolvedRefs": false,
+          "backends": [
+            {
+              "kind": "Service",
+              "name": "web",
+              "namespace": "shop",
+              "port": 80,
+              "weight": 0,
+              "state": "resolved"
+            }
+          ],
+          "services": [],
+          "pods": {
+            "ready": 0,
+            "total": 0,
+            "unknown": false
+          },
+          "policies": [],
+          "parentFound": true,
+          "acceptedCond": {
+            "status": "True",
+            "reason": "R",
+            "message": "m",
+            "observedGeneration": 3
+          },
+          "resolvedRefsCond": {
+            "status": "True",
+            "reason": "R",
+            "message": "m",
+            "observedGeneration": 3
+          },
+          "generation": 3,
+          "rule": {
+            "included": false,
+            "role": "unknown",
+            "label": "endpoints unreadable"
+          }
+        },
+        "listeners": [
+          {
+            "name": "https",
+            "protocol": "HTTPS",
+            "hostname": "",
+            "port": 443,
+            "certificateRefs": null
+          },
+          {
+            "name": "http",
+            "protocol": "HTTP",
+            "hostname": "",
+            "port": 80,
+            "certificateRefs": null
+          }
+        ]
+      },
+      "want": {
+        "included": false,
+        "role": "unknown",
+        "label": "endpoints unreadable"
+      }
+    },
+    {
+      "case": "endpoints unreadable",
+      "nowUnix": 1791720000,
+      "dto": {
+        "route": {
+          "namespace": "shop",
+          "name": "endpoints unreadable",
+          "hostnames": [],
+          "matches": [],
+          "parentSectionName": "",
+          "accepted": false,
+          "resolvedRefs": false,
+          "backends": [
+            {
+              "kind": "Service",
+              "name": "web",
+              "namespace": "shop",
+              "port": 80,
+              "weight": 0,
+              "state": "resolved",
+              "endpoints": {
+                "ready": 0,
+                "total": 0,
+                "nonPod": 0,
+                "error": "forbidden"
+              }
+            }
+          ],
+          "services": [],
+          "pods": {
+            "ready": 0,
+            "total": 0,
+            "unknown": false
+          },
+          "policies": [],
+          "parentFound": true,
+          "acceptedCond": {
+            "status": "True",
+            "reason": "R",
+            "message": "m",
+            "observedGeneration": 3
+          },
+          "resolvedRefsCond": {
+            "status": "True",
+            "reason": "R",
+            "message": "m",
+            "observedGeneration": 3
+          },
+          "generation": 3,
+          "rule": {
+            "included": false,
+            "role": "unknown",
+            "label": "endpoints unreadable"
+          }
+        },
+        "listeners": [
+          {
+            "name": "https",
+            "protocol": "HTTPS",
+            "hostname": "",
+            "port": 443,
+            "certificateRefs": null
+          },
+          {
+            "name": "http",
+            "protocol": "HTTP",
+            "hostname": "",
+            "port": 80,
+            "certificateRefs": null
+          }
+        ]
+      },
+      "want": {
+        "included": false,
+        "role": "unknown",
+        "label": "endpoints unreadable"
+      }
+    },
+    {
+      "case": "no endpoints",
+      "nowUnix": 1791720000,
+      "dto": {
+        "route": {
+          "namespace": "shop",
+          "name": "no endpoints",
+          "hostnames": [],
+          "matches": [],
+          "parentSectionName": "",
+          "accepted": false,
+          "resolvedRefs": false,
+          "backends": [
+            {
+              "kind": "Service",
+              "name": "web",
+              "namespace": "shop",
+              "port": 80,
+              "weight": 0,
+              "state": "resolved",
+              "endpoints": {
+                "ready": 0,
+                "total": 0,
+                "nonPod": 0
+              }
+            }
+          ],
+          "services": [],
+          "pods": {
+            "ready": 0,
+            "total": 0,
+            "unknown": false
+          },
+          "policies": [],
+          "parentFound": true,
+          "acceptedCond": {
+            "status": "True",
+            "reason": "R",
+            "message": "m",
+            "observedGeneration": 3
+          },
+          "resolvedRefsCond": {
+            "status": "True",
+            "reason": "R",
+            "message": "m",
+            "observedGeneration": 3
+          },
+          "generation": 3,
+          "rule": {
+            "included": true,
+            "role": "fault",
+            "label": "no endpoints"
+          }
+        },
+        "listeners": [
+          {
+            "name": "https",
+            "protocol": "HTTPS",
+            "hostname": "",
+            "port": 443,
+            "certificateRefs": null
+          },
+          {
+            "name": "http",
+            "protocol": "HTTP",
+            "hostname": "",
+            "port": 80,
+            "certificateRefs": null
+          }
+        ]
+      },
+      "want": {
+        "included": true,
+        "role": "fault",
+        "label": "no endpoints"
+      }
+    },
+    {
+      "case": "no endpoints, primary of several",
+      "nowUnix": 1791720000,
+      "dto": {
+        "route": {
+          "namespace": "shop",
+          "name": "no endpoints, primary of several",
+          "hostnames": [],
+          "matches": [],
+          "parentSectionName": "",
+          "accepted": false,
+          "resolvedRefs": false,
+          "backends": [
+            {
+              "kind": "Service",
+              "name": "web",
+              "namespace": "shop",
+              "port": 80,
+              "weight": 0,
+              "state": "resolved",
+              "endpoints": {
+                "ready": 0,
+                "total": 0,
+                "nonPod": 0
+              }
+            },
+            {
+              "kind": "Service",
+              "name": "web-0",
+              "namespace": "shop",
+              "port": 80,
+              "weight": 0,
+              "state": "resolved",
+              "endpoints": {
+                "ready": 3,
+                "total": 3,
+                "nonPod": 0
+              }
+            },
+            {
+              "kind": "Service",
+              "name": "web-1",
+              "namespace": "shop",
+              "port": 80,
+              "weight": 0,
+              "state": "resolved",
+              "endpoints": {
+                "ready": 3,
+                "total": 3,
+                "nonPod": 0
+              }
+            }
+          ],
+          "services": [],
+          "pods": {
+            "ready": 0,
+            "total": 0,
+            "unknown": false
+          },
+          "policies": [],
+          "parentFound": true,
+          "acceptedCond": {
+            "status": "True",
+            "reason": "R",
+            "message": "m",
+            "observedGeneration": 3
+          },
+          "resolvedRefsCond": {
+            "status": "True",
+            "reason": "R",
+            "message": "m",
+            "observedGeneration": 3
+          },
+          "generation": 3,
+          "rule": {
+            "included": true,
+            "role": "degraded",
+            "label": "no endpoints"
+          }
+        },
+        "listeners": [
+          {
+            "name": "https",
+            "protocol": "HTTPS",
+            "hostname": "",
+            "port": 443,
+            "certificateRefs": null
+          },
+          {
+            "name": "http",
+            "protocol": "HTTP",
+            "hostname": "",
+            "port": 80,
+            "certificateRefs": null
+          }
+        ]
+      },
+      "want": {
+        "included": true,
+        "role": "degraded",
+        "label": "no endpoints"
+      }
+    },
+    {
+      "case": "no ready endpoints",
+      "nowUnix": 1791720000,
+      "dto": {
+        "route": {
+          "namespace": "shop",
+          "name": "no ready endpoints",
+          "hostnames": [],
+          "matches": [],
+          "parentSectionName": "",
+          "accepted": false,
+          "resolvedRefs": false,
+          "backends": [
+            {
+              "kind": "Service",
+              "name": "web",
+              "namespace": "shop",
+              "port": 80,
+              "weight": 0,
+              "state": "resolved",
+              "endpoints": {
+                "ready": 0,
+                "total": 2,
+                "nonPod": 0
+              }
+            }
+          ],
+          "services": [],
+          "pods": {
+            "ready": 0,
+            "total": 0,
+            "unknown": false
+          },
+          "policies": [],
+          "parentFound": true,
+          "acceptedCond": {
+            "status": "True",
+            "reason": "R",
+            "message": "m",
+            "observedGeneration": 3
+          },
+          "resolvedRefsCond": {
+            "status": "True",
+            "reason": "R",
+            "message": "m",
+            "observedGeneration": 3
+          },
+          "generation": 3,
+          "rule": {
+            "included": true,
+            "role": "fault",
+            "label": "no ready endpoints"
+          }
+        },
+        "listeners": [
+          {
+            "name": "https",
+            "protocol": "HTTPS",
+            "hostname": "",
+            "port": 443,
+            "certificateRefs": null
+          },
+          {
+            "name": "http",
+            "protocol": "HTTP",
+            "hostname": "",
+            "port": 80,
+            "certificateRefs": null
+          }
+        ]
+      },
+      "want": {
+        "included": true,
+        "role": "fault",
+        "label": "no ready endpoints"
+      }
+    },
+    {
+      "case": "some endpoints ready",
+      "nowUnix": 1791720000,
+      "dto": {
+        "route": {
+          "namespace": "shop",
+          "name": "some endpoints ready",
+          "hostnames": [],
+          "matches": [],
+          "parentSectionName": "",
+          "accepted": false,
+          "resolvedRefs": false,
+          "backends": [
+            {
+              "kind": "Service",
+              "name": "web",
+              "namespace": "shop",
+              "port": 80,
+              "weight": 0,
+              "state": "resolved",
+              "endpoints": {
+                "ready": 2,
+                "total": 3,
+                "nonPod": 0
+              }
+            }
+          ],
+          "services": [],
+          "pods": {
+            "ready": 0,
+            "total": 0,
+            "unknown": false
+          },
+          "policies": [],
+          "parentFound": true,
+          "acceptedCond": {
+            "status": "True",
+            "reason": "R",
+            "message": "m",
+            "observedGeneration": 3
+          },
+          "resolvedRefsCond": {
+            "status": "True",
+            "reason": "R",
+            "message": "m",
+            "observedGeneration": 3
+          },
+          "generation": 3,
+          "rule": {
+            "included": true,
+            "role": "degraded",
+            "label": "2/3 endpoints ready"
+          }
+        },
+        "listeners": [
+          {
+            "name": "https",
+            "protocol": "HTTPS",
+            "hostname": "",
+            "port": 443,
+            "certificateRefs": null
+          },
+          {
+            "name": "http",
+            "protocol": "HTTP",
+            "hostname": "",
+            "port": 80,
+            "certificateRefs": null
+          }
+        ]
+      },
+      "want": {
+        "included": true,
+        "role": "degraded",
+        "label": "2/3 endpoints ready"
+      }
+    },
+    {
+      "case": "not accepted and no endpoints (fault first)",
+      "nowUnix": 1791720000,
+      "dto": {
+        "route": {
+          "namespace": "shop",
+          "name": "not accepted and no endpoints (fault first)",
+          "hostnames": [],
+          "matches": [],
+          "parentSectionName": "",
+          "accepted": false,
+          "resolvedRefs": false,
+          "backends": [
+            {
+              "kind": "Service",
+              "name": "web",
+              "namespace": "shop",
+              "port": 80,
+              "weight": 0,
+              "state": "resolved",
+              "endpoints": {
+                "ready": 0,
+                "total": 0,
+                "nonPod": 0
+              }
+            }
+          ],
+          "services": [],
+          "pods": {
+            "ready": 0,
+            "total": 0,
+            "unknown": false
+          },
+          "policies": [],
+          "parentFound": true,
+          "acceptedCond": {
+            "status": "False",
+            "reason": "R",
+            "message": "m",
+            "observedGeneration": 3
+          },
+          "resolvedRefsCond": {
+            "status": "True",
+            "reason": "R",
+            "message": "m",
+            "observedGeneration": 3
+          },
+          "generation": 3,
+          "rule": {
+            "included": true,
+            "role": "fault",
+            "label": "not accepted"
+          }
+        },
+        "listeners": [
+          {
+            "name": "https",
+            "protocol": "HTTPS",
+            "hostname": "",
+            "port": 443,
+            "certificateRefs": null
+          },
+          {
+            "name": "http",
+            "protocol": "HTTP",
+            "hostname": "",
+            "port": 80,
+            "certificateRefs": null
+          }
+        ]
+      },
+      "want": {
+        "included": true,
+        "role": "fault",
+        "label": "not accepted"
       }
     }
   ],

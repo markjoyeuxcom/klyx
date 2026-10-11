@@ -48,15 +48,7 @@ func (s *GatewayService) ListGateways(cluster string) GatewayListDTO {
 	}
 	out := GatewayListDTO{GatewayAPIServed: served, Gateways: make([]GatewayRefDTO, 0, len(refs))}
 	for _, r := range refs {
-		g := GatewayRefDTO{Namespace: r.Namespace, Name: r.Name, ClassName: r.ClassName, Accepted: r.Accepted, Programmed: r.Programmed, Stale: r.Stale, Generation: r.Generation, ObservedGeneration: r.ObservedGeneration,
-			AcceptedCond: condDTO(r.AcceptedCond), ProgrammedCond: condDTO(r.ProgrammedCond)}
-		for _, a := range r.Addresses {
-			g.Addresses = append(g.Addresses, GatewayAddressDTO{Type: a.Type, Value: a.Value})
-		}
-		for _, l := range r.Listeners {
-			g.Listeners = append(g.Listeners, ListenerDTO{Name: l.Name, Protocol: l.Protocol, Hostname: l.Hostname, Port: l.Port, CertificateRefs: certificateRefDTOs(l.CertificateRefs)})
-		}
-		out.Gateways = append(out.Gateways, g)
+		out.Gateways = append(out.Gateways, toGatewayRefDTO(r))
 	}
 	return out
 }
@@ -143,4 +135,17 @@ func (s *GatewayService) GetRouteMetrics(cluster string, routeKeys []string) Rou
 		Status: RouteMetricsStatusDTO{Available: st.Available, Message: st.Message, UpdatedAt: updatedAt},
 		Routes: routes,
 	}
+}
+
+func toGatewayRefDTO(r gwapi.GatewayRef) GatewayRefDTO {
+	g := GatewayRefDTO{Namespace: r.Namespace, Name: r.Name, ClassName: r.ClassName, Accepted: r.Accepted, Programmed: r.Programmed, Stale: r.Stale, Generation: r.Generation, ObservedGeneration: r.ObservedGeneration,
+		AcceptedCond: condDTO(r.AcceptedCond), ProgrammedCond: condDTO(r.ProgrammedCond),
+		Rule: toRuleDTO(gwapi.GatewayRule(r.AcceptedCond, r.ProgrammedCond, r.Generation))}
+	for _, a := range r.Addresses {
+		g.Addresses = append(g.Addresses, GatewayAddressDTO{Type: a.Type, Value: a.Value})
+	}
+	for _, l := range r.Listeners {
+		g.Listeners = append(g.Listeners, ListenerDTO{Name: l.Name, Protocol: l.Protocol, Hostname: l.Hostname, Port: l.Port, CertificateRefs: certificateRefDTOs(l.CertificateRefs)})
+	}
+	return g
 }

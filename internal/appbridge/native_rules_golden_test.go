@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -13,6 +14,7 @@ import (
 	"github.com/moomora/klyx/internal/externalsecrets"
 	"github.com/moomora/klyx/internal/gitops/argo"
 	"github.com/moomora/klyx/internal/gitops/flux"
+	"github.com/moomora/klyx/internal/gwapi"
 	"github.com/moomora/klyx/internal/karpenter"
 )
 
@@ -174,6 +176,111 @@ func TestNativeRulesGolden(t *testing.T) {
 	appSet("healthy", argo.ApplicationSet{Healthy: true})
 	appSet("unhealthy", argo.ApplicationSet{Conditions: []argo.ApplicationSetCondition{{Type: "ErrorOccurred", Status: "True", Message: "boom"}}})
 
+	cond := func(status string, observed int64) gwapi.Cond {
+		return gwapi.Cond{Status: status, Reason: "R", Message: "m", ObservedGeneration: observed}
+	}
+	gateway := func(name string, accepted, programmed gwapi.Cond, gen int64) {
+		dto := toGatewayRefDTO(gwapi.GatewayRef{Namespace: "infra", Name: name, ClassName: "eg", AcceptedCond: accepted, ProgrammedCond: programmed, Generation: gen})
+		out["gateways"] = append(out["gateways"], goldenCase{name, nowU, dto, dto.Rule})
+	}
+	gateway("no status reported", gwapi.Cond{}, gwapi.Cond{}, 2)
+	gateway("acceptance pending", cond("Unknown", 2), gwapi.Cond{}, 2)
+	gateway("not accepted", cond("False", 2), cond("True", 2), 2)
+	gateway("not accepted, last observed", cond("False", 1), cond("True", 1), 2)
+	gateway("programming not reported", cond("True", 2), gwapi.Cond{}, 2)
+	gateway("programming", cond("True", 2), cond("Unknown", 2), 2)
+	gateway("not programmed", cond("True", 2), cond("False", 2), 2)
+	gateway("not programmed, last observed", cond("True", 2), cond("False", 1), 2)
+	gateway("programmed", cond("True", 2), cond("True", 2), 2)
+	gateway("programmed, accepted last observed (syncing)", cond("True", 1), cond("True", 2), 2)
+	gateway("no generation recorded", cond("True", 0), cond("True", 0), 0)
+
+	listeners := []gwapi.Listener{{Name: "https", Protocol: "HTTPS", Port: 443}, {Name: "http", Protocol: "HTTP", Port: 80}}
+	ok := func(n int) []gwapi.Backend {
+		var bs []gwapi.Backend
+		for i := 0; i < n; i++ {
+			bs = append(bs, gwapi.Backend{Kind: "Service", Namespace: "shop", Name: fmt.Sprintf("web-%d", i), Port: 80, State: gwapi.BackendResolved, Endpoints: &gwapi.EndpointCount{Ready: 3, Total: 3}})
+		}
+		return bs
+	}
+	withPrimary := func(b gwapi.Backend, others int) []gwapi.Backend { return append([]gwapi.Backend{b}, ok(others)...) }
+	resolved := func(ep *gwapi.EndpointCount) gwapi.Backend {
+		return gwapi.Backend{Kind: "Service", Namespace: "shop", Name: "web", Port: 80, State: gwapi.BackendResolved, Endpoints: ep}
+	}
+	type routeDTOWithParent struct {
+		Route     RouteNodeDTO  `json:"route"`
+		Listeners []ListenerDTO `json:"listeners"`
+	}
+	listenerDTOs := []ListenerDTO{}
+	for _, l := range listeners {
+		listenerDTOs = append(listenerDTOs, ListenerDTO{Name: l.Name, Protocol: l.Protocol, Port: l.Port})
+	}
+	route := func(name string, rn gwapi.RouteNode) {
+		rn.Namespace, rn.Name = "shop", name
+		if rn.Generation == 0 {
+			rn.Generation = 3
+		}
+		dto := toRouteNodeDTO(rn, listeners)
+		out["routes"] = append(out["routes"], goldenCase{name, nowU, routeDTOWithParent{dto, listenerDTOs}, dto.Rule})
+	}
+	acc := func(rn gwapi.RouteNode) gwapi.RouteNode {
+		rn.ParentFound, rn.AcceptedCond, rn.ResolvedRefsCond = true, cond("True", 3), cond("True", 3)
+		return rn
+	}
+	route("resolved", acc(gwapi.RouteNode{Backends: ok(1)}))
+	route("no status for this Gateway", gwapi.RouteNode{Backends: ok(1)})
+	route("not accepted", func() gwapi.RouteNode {
+		r := acc(gwapi.RouteNode{Backends: ok(1)})
+		r.AcceptedCond = cond("False", 3)
+		return r
+	}())
+	route("not accepted, last observed", func() gwapi.RouteNode {
+		r := acc(gwapi.RouteNode{Backends: ok(1)})
+		r.AcceptedCond = cond("False", 2)
+		return r
+	}())
+	route("acceptance pending outranks refs not reported", gwapi.RouteNode{ParentFound: true, AcceptedCond: cond("Unknown", 3), Backends: ok(1)})
+	route("acceptance not reported", gwapi.RouteNode{ParentFound: true, ResolvedRefsCond: cond("True", 3), Backends: ok(1)})
+	route("unresolved refs", func() gwapi.RouteNode {
+		r := acc(gwapi.RouteNode{Backends: ok(1)})
+		r.ResolvedRefsCond = cond("False", 3)
+		return r
+	}())
+	route("unresolved refs, last observed", func() gwapi.RouteNode {
+		r := acc(gwapi.RouteNode{Backends: ok(1)})
+		r.ResolvedRefsCond = cond("False", 1)
+		return r
+	}())
+	route("refs pending", func() gwapi.RouteNode {
+		r := acc(gwapi.RouteNode{Backends: ok(1)})
+		r.ResolvedRefsCond = cond("Unknown", 3)
+		return r
+	}())
+	route("status syncing", func() gwapi.RouteNode {
+		r := acc(gwapi.RouteNode{Backends: ok(1)})
+		r.AcceptedCond = cond("True", 2)
+		return r
+	}())
+	route("listener missing", acc(gwapi.RouteNode{ParentSectionName: "grpc", Backends: ok(1)}))
+	route("listener present", acc(gwapi.RouteNode{ParentSectionName: "https", Backends: ok(1)}))
+	route("no backendRefs", acc(gwapi.RouteNode{}))
+	route("unsupported backend kind", acc(gwapi.RouteNode{Backends: []gwapi.Backend{{Kind: "ServiceImport", Name: "x", State: gwapi.BackendUnsupported}}}))
+	route("backend with no state", acc(gwapi.RouteNode{Backends: []gwapi.Backend{{Kind: "Service", Name: "x"}}}))
+	route("backend not found", acc(gwapi.RouteNode{Backends: []gwapi.Backend{{Kind: "Service", Name: "gone", State: gwapi.BackendNotFound}}}))
+	route("primary backend not found of several", acc(gwapi.RouteNode{Backends: withPrimary(gwapi.Backend{Kind: "Service", Name: "gone", State: gwapi.BackendNotFound}, 1)}))
+	route("backend unreadable", acc(gwapi.RouteNode{Backends: []gwapi.Backend{{Kind: "Service", Name: "x", State: gwapi.BackendUnreadable, Error: "forbidden"}}}))
+	route("endpoints not read", acc(gwapi.RouteNode{Backends: []gwapi.Backend{resolved(nil)}}))
+	route("endpoints unreadable", acc(gwapi.RouteNode{Backends: []gwapi.Backend{resolved(&gwapi.EndpointCount{Error: "forbidden"})}}))
+	route("no endpoints", acc(gwapi.RouteNode{Backends: []gwapi.Backend{resolved(&gwapi.EndpointCount{})}}))
+	route("no endpoints, primary of several", acc(gwapi.RouteNode{Backends: withPrimary(resolved(&gwapi.EndpointCount{}), 2)}))
+	route("no ready endpoints", acc(gwapi.RouteNode{Backends: []gwapi.Backend{resolved(&gwapi.EndpointCount{Ready: 0, Total: 2})}}))
+	route("some endpoints ready", acc(gwapi.RouteNode{Backends: []gwapi.Backend{resolved(&gwapi.EndpointCount{Ready: 2, Total: 3})}}))
+	route("not accepted and no endpoints (fault first)", func() gwapi.RouteNode {
+		r := acc(gwapi.RouteNode{Backends: []gwapi.Backend{resolved(&gwapi.EndpointCount{})}})
+		r.AcceptedCond = cond("False", 3)
+		return r
+	}())
+
 	got, err := json.MarshalIndent(out, "", "  ")
 	if err != nil {
 		t.Fatal(err)
@@ -194,5 +301,19 @@ func TestNativeRulesGolden(t *testing.T) {
 	}
 	if !bytes.Equal(got, want) {
 		t.Fatalf("%s is out of date with the Go rules; regenerate with -update and re-run the vitest parity harness", nativeRulesFixture)
+	}
+}
+
+// A route with no backendRefs (redirect-only) must reach the lens as empty
+// arrays, never null: the lane code reads backends[0] and used to crash.
+func TestRouteNodeDTOSlicesSerializeAsArrays(t *testing.T) {
+	b, err := json.Marshal(toRouteNodeDTO(gwapi.RouteNode{Namespace: "shop", Name: "redirect", ParentFound: true}, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{`"backends":[]`, `"services":[]`, `"matches":[]`, `"hostnames":[]`, `"policies":[]`} {
+		if !bytes.Contains(b, []byte(field)) {
+			t.Errorf("want %s in %s", field, b)
+		}
 	}
 }

@@ -284,29 +284,5 @@ func (c *ClusterConn) endpointCount(ctx context.Context, ns, svc string) gwapi.E
 	if err != nil {
 		return gwapi.EndpointCount{Error: err.Error()}
 	}
-	out := gwapi.EndpointCount{}
-	seen := make(map[string]bool)
-	for i := range slices.Items {
-		for j, e := range slices.Items[i].Endpoints {
-			key := fmt.Sprintf("slice%d/ep%d", i, j) // no TargetRef: treat as distinct
-			if e.TargetRef != nil {
-				key = string(e.TargetRef.UID)
-				if key == "" {
-					key = e.TargetRef.Namespace + "/" + e.TargetRef.Name
-				}
-			}
-			if seen[key] {
-				continue
-			}
-			seen[key] = true
-			out.Total++
-			if e.TargetRef == nil || e.TargetRef.Kind != "Pod" {
-				out.NonPod++
-			}
-			if e.Conditions.Ready != nil && *e.Conditions.Ready {
-				out.Ready++
-			}
-		}
-	}
-	return out
+	return gwapi.CountEndpoints(slices.Items)
 }
