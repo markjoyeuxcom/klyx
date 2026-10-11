@@ -31,6 +31,7 @@ const (
 
 // Certificate is a cert-manager Certificate's issuance state.
 type Certificate struct {
+	UID         string // the object's identity: a same-name recreation is another certificate
 	Namespace   string
 	Name        string
 	Ready       ReadyState
@@ -55,7 +56,7 @@ type Certificate struct {
 
 // ParseCertificate extracts a Certificate's issuance state from a watched CR.
 func ParseCertificate(u *unstructured.Unstructured) Certificate {
-	c := Certificate{Namespace: u.GetNamespace(), Name: u.GetName()}
+	c := Certificate{UID: string(u.GetUID()), Namespace: u.GetNamespace(), Name: u.GetName()}
 	c.Ready, c.Reason, c.Message = readyFromConditions(u)
 	c.Stale, c.Generation, c.ObservedGeneration = staleness(u)
 	c.IssuerName, _, _ = unstructured.NestedString(u.Object, "spec", "issuerRef", "name")
@@ -74,6 +75,7 @@ func ParseCertificate(u *unstructured.Unstructured) Certificate {
 // Issuer is an Issuer or ClusterIssuer's Ready state. Namespace is empty for a
 // ClusterIssuer (cluster-scoped).
 type Issuer struct {
+	UID       string
 	Kind      Kind
 	Namespace string
 	Name      string
@@ -84,7 +86,7 @@ type Issuer struct {
 
 // ParseIssuer extracts an Issuer/ClusterIssuer's Ready state from a watched CR.
 func ParseIssuer(u *unstructured.Unstructured) Issuer {
-	i := Issuer{Kind: Kind(u.GetKind()), Namespace: u.GetNamespace(), Name: u.GetName()}
+	i := Issuer{UID: string(u.GetUID()), Kind: Kind(u.GetKind()), Namespace: u.GetNamespace(), Name: u.GetName()}
 	i.Ready, i.Reason, i.Message = readyFromConditions(u)
 	return i
 }

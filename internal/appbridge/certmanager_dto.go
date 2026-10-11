@@ -54,6 +54,7 @@ func toCertificateDTO(c certmanager.Certificate, now time.Time) CertificateDTO {
 // rows converter copies the capture's evaluation instead, slice 3 §2a).
 func certificateFields(c certmanager.Certificate, now time.Time) CertificateDTO {
 	dto := CertificateDTO{
+		UID:        c.UID,
 		Namespace:  c.Namespace,
 		Name:       c.Name,
 		Ready:      string(c.Ready),
@@ -107,6 +108,7 @@ func toIssuerDTO(i certmanager.Issuer) IssuerDTO {
 // issuerFields is the pure field conversion (no rule; see certificateFields).
 func issuerFields(i certmanager.Issuer) IssuerDTO {
 	return IssuerDTO{
+		UID:       i.UID,
 		Kind:      string(i.Kind),
 		Namespace: i.Namespace,
 		Name:      i.Name,
@@ -132,6 +134,10 @@ type ChainNodeDTO struct {
 // health (the headline), the CertificateRequest -> Order -> Challenge tree, and
 // the deepest stuck node (failingLink). Warnings carries soft resolution errors.
 type CertChainDTO struct {
+	// AsOfUnix is when the chain was read. The inspector shows a chain only
+	// for the selected row's UID (certificate.uid), never a same-name
+	// replacement's.
+	AsOfUnix    int64          `json:"asOfUnix,omitempty"`
 	Certificate CertificateDTO `json:"certificate"`
 	Issuer      *IssuerDTO     `json:"issuer"`
 	Requests    []ChainNodeDTO `json:"requests"`
@@ -158,6 +164,7 @@ func toChainNodeDTO(n certmanager.ChainNode) ChainNodeDTO {
 func toChainDTO(c certmanager.Chain, now time.Time) CertChainDTO {
 	dto := CertChainDTO{
 		Certificate: toCertificateDTO(c.Certificate, now),
+		AsOfUnix:    unixOrZero(c.AsOf),
 		Requests:    []ChainNodeDTO{},
 		Warnings:    []string{},
 	}
@@ -176,4 +183,11 @@ func toChainDTO(c certmanager.Chain, now time.Time) CertChainDTO {
 		dto.FailingLink = &fl
 	}
 	return dto
+}
+
+func unixOrZero(t time.Time) int64 {
+	if t.IsZero() {
+		return 0
+	}
+	return t.Unix()
 }

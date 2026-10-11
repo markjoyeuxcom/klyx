@@ -58,13 +58,6 @@ type Conn interface {
 	GitOpsSources() []flux.Source
 	GitOpsSourceObject(kind, namespace, name string) (*unstructured.Unstructured, bool)
 	GitOpsWatchHealth() (synced bool, lastErr string)
-	OpenCertManager()
-	CloseCertManager()
-	CertManagerCertificates() []certmanager.Certificate
-	CertManagerIssuers() []certmanager.Issuer
-	CertManagerObject(kind, namespace, name string) (*unstructured.Unstructured, bool)
-	CertManagerWatchHealth() (synced bool, lastErr string)
-	CertManagerCoverage() []KindCoverage
 	GetCertificateChain(ctx context.Context, ns, name string) (certmanager.Chain, error)
 	OpenExternalSecrets()
 	CloseExternalSecrets()
@@ -196,9 +189,6 @@ type ClusterConn struct {
 	gitops         *gitopsWatch              // lazy; nil until OpenGitOps
 	gitopsOpening  bool                      // single-flights OpenGitOps' out-of-lock install
 	gitopsWanted   bool                      // desired state; an in-flight open aborts if false
-	certmgr        *certmanagerWatch         // lazy; nil until OpenCertManager
-	certmgrOpening bool                      // single-flights OpenCertManager's out-of-lock install
-	certmgrWanted  bool                      // desired state; an in-flight open aborts if false
 	eso            *esoWatch                 // lazy; nil until OpenExternalSecrets
 	esoOpening     bool                      // single-flights OpenExternalSecrets' out-of-lock install
 	esoWanted      bool                      // desired state; an in-flight open aborts if false

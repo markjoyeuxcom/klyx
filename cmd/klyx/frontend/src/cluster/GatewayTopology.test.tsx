@@ -3,6 +3,8 @@ import { render, fireEvent, screen, within, act } from "@testing-library/react";
 import { useFleet } from "../store/fleet";
 import type { CertificateDTO, CondDTO, GatewayRef, RouteNodeDTO, TopologyDTO } from "../store/fleet";
 
+// The rows hook is the transport; these tests seed the certmanager slice it fills.
+vi.mock("../health/useCertManagerRows", () => ({ useCertManagerRows: () => {} }));
 vi.mock("../bridge/gateway", () => ({ getGatewayTopology: vi.fn(async () => {}), listGateways: vi.fn(async () => {}), getRouteMetrics: vi.fn(async () => {}), abandonRouteMetrics: vi.fn() }));
 import { GatewayTopology } from "./GatewayTopology";
 import { certStatus, routeIssues, sortWarnings } from "./gatewayModel";

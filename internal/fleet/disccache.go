@@ -2,6 +2,7 @@ package fleet
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"time"
 
@@ -212,4 +213,17 @@ func (c *ClusterConn) probeDiscovery() *cachedDiscovery {
 		return cd
 	}
 	return newCachedDiscovery(d, c.clk) // an injected test double
+}
+
+// invalidate forgets a group's cached discovery, so the next read asks the
+// server (a NotFound at a cached version re-probes once).
+func (c *cachedDiscovery) invalidate(group string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.groups = nil
+	for gv := range c.resources {
+		if strings.HasPrefix(gv, group+"/") {
+			delete(c.resources, gv)
+		}
+	}
 }

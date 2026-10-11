@@ -117,7 +117,7 @@ func main() {
 			}
 			return c, true
 		},
-		em, time.Now, time.Second,
+		time.Now,
 	)
 
 	externalSecretsSvc := appbridge.NewExternalSecretsService(

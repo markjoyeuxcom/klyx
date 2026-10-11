@@ -217,6 +217,8 @@ export type RuleDTO = { included: boolean; role: string; label: string };
 export type RuleStepDTO = { atUnix: number; rule: RuleDTO };
 
 export type CertificateDTO = {
+  uid?: string; // the object's identity (slice 3 §2a): a same-name recreation is another object
+  gvr?: string; // the served group/version/resource it was read at
   rule: RuleDTO;
   namespace: string;
   name: string;
@@ -236,6 +238,9 @@ export type CertificateDTO = {
   observedGeneration?: number;
 };
 export type IssuerDTO = {
+  uid?: string;
+  gvr?: string;
+  generation?: number;
   rule: RuleDTO;
   kind: string;
   namespace: string;
@@ -263,7 +268,14 @@ export type CertChainDTO = {
 // One watched kind's evidence (backend KindCoverageDTO): served=false is a
 // definitive absence; synced=false = no evidence yet; error = a CURRENT
 // failure (after sync: the rows are last-observed).
-export type KindCoverageDTO = { kind: string; served: boolean; synced: boolean; error?: string };
+export type KindCoverageDTO = {
+  kind: string; served: boolean; synced: boolean; error?: string;
+  // From the health Observer (slice 3): its five-state coverage and the
+  // evidence behind it, carried unreduced - a stale kind's last good time,
+  // the failure class, a discovery gap.
+  coverage?: "live" | "stale" | "checking" | "unreadable" | "absent";
+  class?: string; lastGoodAt?: string; discovery?: string;
+};
 
 export type CertManagerSlice = {
   cluster: string | null;
@@ -278,6 +290,10 @@ export type CertManagerSlice = {
   // chain is evidence for the selection only when this matches too
   chainCluster?: string | null;
   coverage?: KindCoverageDTO[]; // per kind: Certificate, Issuer, ClusterIssuer
+  // The shared rows' A4 state (slice 3 §4): updating - the summary is ahead,
+  // the counts still the rows'; refreshing - past the deadline, the rows are
+  // shown as of evaluatedAt while a fenced re-read runs.
+  rowsState?: { updating: boolean; refreshing: boolean; evaluatedAt: string | null };
 };
 
 // External Secrets Operator lens (M12). Refresh staleness is ESO-native: a
@@ -884,7 +900,7 @@ type FleetState = {
   collapse: () => void;
   setDetail: (d: ResourceDetailDTO, cluster?: string) => void;
   certmanager: CertManagerSlice;
-  setCertManager: (cluster: string, certificates: CertificateDTO[], issuers: IssuerDTO[], watchError?: string, coverage?: KindCoverageDTO[]) => void;
+  setCertManager: (cluster: string, certificates: CertificateDTO[], issuers: IssuerDTO[], watchError?: string, coverage?: KindCoverageDTO[], rowsState?: CertManagerSlice["rowsState"]) => void;
   setCertManagerLoading: (cluster: string) => void;
   clearCertManager: () => void;
   selectCertificate: (key: string | null) => void;
@@ -1121,7 +1137,7 @@ export const useFleet = create<FleetState>((set) => ({
   setDetail: (d, cluster) => set((s) => ({ gitops: { ...s.gitops, detail: d, detailCluster: cluster ?? s.gitops.cluster } })),
 
   certmanager: { cluster: null, certificates: [], issuers: [], loading: false, watchError: null, selectedKey: null, chain: null, chainLoading: false },
-  setCertManager: (cluster, certificates, issuers, watchError, coverage) => set((s) => ({ certmanager: { ...s.certmanager, cluster, certificates, issuers, loading: false, watchError: watchError || null, coverage } })),
+  setCertManager: (cluster, certificates, issuers, watchError, coverage, rowsState) => set((s) => ({ certmanager: { ...s.certmanager, cluster, certificates, issuers, loading: false, watchError: watchError || null, coverage, rowsState } })),
   setCertManagerLoading: (cluster) => set((s) => ({ certmanager: { ...s.certmanager, cluster, certificates: [], issuers: [], loading: true, watchError: null, selectedKey: null, chain: null, chainLoading: false } })),
   clearCertManager: () => set({ certmanager: { cluster: null, certificates: [], issuers: [], loading: false, watchError: null, selectedKey: null, chain: null, chainLoading: false } }),
   selectCertificate: (key) => set((s) => ({ certmanager: { ...s.certmanager, selectedKey: key, chain: null, chainLoading: key !== null } })),

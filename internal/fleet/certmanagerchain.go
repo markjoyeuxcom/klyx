@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
+	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -22,29 +23,39 @@ import (
 // (non-ACME issuers have no orders; RBAC on requests) degrade to warnings so
 // the chain still renders.
 func (c *ClusterConn) GetCertificateChain(ctx context.Context, ns, name string) (certmanager.Chain, error) {
-	certU, ok := c.CertManagerObject(string(certmanager.CertificateKind), ns, name)
-	if !ok {
-		ver := preferredVersion(c.discovery(), "cert-manager.io", "v1")
-		gvr := schema.GroupVersionResource{Group: "cert-manager.io", Version: ver, Resource: "certificates"}
-		u, err := c.dyn.Resource(gvr).Namespace(ns).Get(ctx, name, metav1.GetOptions{})
-		if err != nil {
-			return certmanager.Chain{}, fmt.Errorf("certificate %s/%s not found: %w", ns, name, err)
-		}
-		certU = u
+	// Direct reads at the served version (1c slice 3 design §5b): the chain
+	// never depends on a lazy watch's store, and a same-name recreation is
+	// told apart by its UID.
+	ctx, cancel := context.WithTimeout(ctx, chainReadTimeout)
+	defer cancel()
+	certU, err := c.getCertManagerObject(ctx, "certificates", ns, name)
+	if err != nil {
+		return certmanager.Chain{}, fmt.Errorf("certificate %s/%s: %w", ns, name, err)
 	}
 
-	chain := certmanager.Chain{Certificate: certmanager.ParseCertificate(certU)}
+	chain := certmanager.Chain{AsOf: c.clk.Now(), Certificate: certmanager.ParseCertificate(certU)}
 
-	// Bound issuer health is the headline for a stuck cert (the M10 source pattern).
+	// Bound issuer health is the headline for a stuck cert (the M10 source
+	// pattern). Its absence is never silent: not found, unreadable and an
+	// external issuer kind each say so - "no issuer shown" must not read as
+	// "issuer fine".
 	if ref, ok := certmanager.BoundIssuer(certU); ok {
-		if issU, ok := c.CertManagerObject(ref.Kind, ref.Namespace, ref.Name); ok {
-			iss := certmanager.ParseIssuer(issU)
-			chain.Issuer = &iss
-		} else {
-			// The headline went missing silently: an external issuer kind, an
-			// issuer that does not exist, or the watch not synced yet. Say so -
-			// "no issuer shown" must not read as "issuer fine".
-			chain.Warnings = append(chain.Warnings, fmt.Sprintf("bound issuer %s %s is not in the watched issuers (external issuer kind, missing, or not yet synced) - its health is unknown", ref.Kind, nsName(ref.Namespace, ref.Name)))
+		what := fmt.Sprintf("bound issuer %s %s", ref.Kind, nsName(ref.Namespace, ref.Name))
+		resource := map[string]string{string(certmanager.IssuerKind): "issuers", string(certmanager.ClusterIssuerKind): "clusterissuers"}[ref.Kind]
+		switch {
+		case resource == "":
+			chain.Warnings = append(chain.Warnings, what+" is an external issuer kind - its health is unknown")
+		default:
+			issU, err := c.getCertManagerObject(ctx, resource, ref.Namespace, ref.Name)
+			switch {
+			case err == nil:
+				iss := certmanager.ParseIssuer(issU)
+				chain.Issuer = &iss
+			case apierrors.IsNotFound(err):
+				chain.Warnings = append(chain.Warnings, what+" was not found - its health is unknown")
+			default:
+				chain.Warnings = append(chain.Warnings, what+" is unverified: "+err.Error())
+			}
 		}
 	}
 
@@ -152,4 +163,36 @@ func nsName(ns, name string) string {
 		return name
 	}
 	return ns + "/" + name
+}
+
+// chainReadTimeout bounds one chain read (design §5b).
+const chainReadTimeout = 15 * time.Second
+
+// getCertManagerObject GETs one cert-manager object at its served version.
+// A NotFound re-probes the version once (the served version may have moved
+// since the cached discovery) before it is believed. NotFound - the object
+// is gone - stays distinguishable from forbidden and transport failures.
+func (c *ClusterConn) getCertManagerObject(ctx context.Context, resource, ns, name string) (*unstructured.Unstructured, error) {
+	get := func(version string) (*unstructured.Unstructured, error) {
+		r := c.dyn.Resource(schema.GroupVersionResource{Group: "cert-manager.io", Version: version, Resource: resource})
+		if ns == "" {
+			return r.Get(ctx, name, metav1.GetOptions{})
+		}
+		return r.Namespace(ns).Get(ctx, name, metav1.GetOptions{})
+	}
+	p, err := c.crdServed(ctx, "cert-manager.io", resource, "v1")
+	if err != nil {
+		return nil, err
+	}
+	if !p.Served {
+		return nil, apierrors.NewNotFound(schema.GroupResource{Group: "cert-manager.io", Resource: resource}, name)
+	}
+	u, err := get(p.Version)
+	if apierrors.IsNotFound(err) {
+		c.probeDiscovery().invalidate("cert-manager.io")
+		if p2, perr := c.crdServed(ctx, "cert-manager.io", resource, "v1"); perr == nil && p2.Served && p2.Version != p.Version {
+			return get(p2.Version)
+		}
+	}
+	return u, err
 }

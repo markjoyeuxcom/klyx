@@ -1,8 +1,8 @@
-import { useFleet, CertificateDTO, IssuerDTO, CertChainDTO, KindCoverageDTO } from "../store/fleet";
-import { Events } from "@wailsio/runtime";
+import { useFleet, CertChainDTO } from "../store/fleet";
 import { CertManagerService } from "../../bindings/github.com/moomora/klyx/internal/appbridge/index.js";
 
-const CERTMANAGER_UPDATED = "certmanager:updated";
+// The certificate and issuer lists are the health Observer's shared rows
+// (health/useCertManagerRows); this bridge reads only the on-demand chain.
 
 // Chain reads are fenced by request generation, cluster and selected key: only
 // the newest read for the CURRENT cluster's CURRENT selection may land, on
@@ -22,30 +22,5 @@ export async function getCertificateChain(cluster: string, namespace: string, na
     // Clear chainLoading so the inspector doesn't get stuck on "Loading…".
     if (current()) useFleet.setState((s) => ({ certmanager: { ...s.certmanager, chainLoading: false } }));
     throw e; // caller .catches and logs
-  }
-}
-
-export async function openCertManager(cluster: string): Promise<() => void> {
-  useFleet.getState().setCertManagerLoading(cluster);
-  await CertManagerService.Open(cluster);
-  const off = Events.On(CERTMANAGER_UPDATED, (ev: { data: { cluster: string; certificates: CertificateDTO[]; issuers: IssuerDTO[]; watchError?: string; coverage?: KindCoverageDTO[] } }) => {
-    const d = ev.data;
-    // a late callback for a cluster the lens has left must not overwrite it
-    if (d && d.cluster === cluster && useFleet.getState().certmanager.cluster === cluster) {
-      useFleet.getState().setCertManager(cluster, d.certificates ?? [], d.issuers ?? [], d.watchError, d.coverage);
-    }
-  });
-  return typeof off === "function" ? off : () => {};
-}
-
-export async function closeCertManager(cluster: string): Promise<void> {
-  try {
-    await CertManagerService.Close(cluster);
-  } finally {
-    // A delayed close must not clobber a freshly-opened cluster's slice: only
-    // clear when the slice still names the cluster being closed.
-    if (useFleet.getState().certmanager.cluster === cluster) {
-      useFleet.getState().clearCertManager();
-    }
   }
 }

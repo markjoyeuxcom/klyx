@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useFleet } from "../store/fleet";
 import type { CertificateDTO, IssuerDTO, ChainNodeDTO, CertChainDTO, RuleDTO } from "../store/fleet";
-import { openCertManager, closeCertManager, getCertificateChain } from "../bridge/certmanager";
+import { getCertificateChain } from "../bridge/certmanager";
+import { useCertManagerRows } from "../health/useCertManagerRows";
 import { explainCertificate } from "../bridge/ai";
 import { useAIAvailability } from "./useAI";
 import type { AIResultDTO } from "../store/fleet";
@@ -145,24 +146,18 @@ export function CertsView({ cluster }: { cluster: string }) {
   const listRef = useRef<VirtualListHandle>(null);
   const absent = tier === "Absent";
 
-  useEffect(() => {
-    if (absent) return;
-    // If cleanup runs before openCertManager resolves, invoke the late-arriving
-    // unsubscriber immediately - otherwise its listener leaks.
-    let cancelled = false;
-    let off = () => {};
-    openCertManager(cluster).then((u) => (cancelled ? u() : (off = u))).catch((e) => console.error("openCertManager", e));
-    return () => {
-      cancelled = true;
-      off();
-      void closeCertManager(cluster);
-    };
-  }, [cluster, absent]);
+  // The data are the Observer's shared rows (1c slice 3): the same capture
+  // as the cluster summary's certs task, never a watch of the lens's own.
+  useCertManagerRows(absent ? null : cluster);
 
   const mine = cm.cluster === cluster;
   const certs = useMemo(() => (mine ? cm.certificates : []), [mine, cm.certificates]);
   const issuers = useMemo(() => (mine ? cm.issuers : []), [mine, cm.issuers]);
   const watchError = mine ? cm.watchError : null;
+  // A4 (slice 3 §4): past the deadline the rows are evidence as of their
+  // capture, and the counts are the summary's until a re-read lands.
+  const rowsRefreshing = mine && !!cm.rowsState?.refreshing;
+  const rowsAsOf = cm.rowsState?.evaluatedAt ? new Date(cm.rowsState.evaluatedAt).toLocaleTimeString() : "the last read";
   const loaded = mine && !cm.loading;
   // Evidence per kind (layout/coverage.ts): every dataset, claim, auto-select
   // and removal reads ITS OWN kinds - a synced Certificate watch never vouches
@@ -218,7 +213,10 @@ export function CertsView({ cluster }: { cluster: string }) {
   const lastCert = useRef<CertificateDTO | null>(null);
   if (selectedCert) lastCert.current = selectedCert;
   const certRemoved = !!selKey && certsEv === "complete" && !selectedCert;
-  const liveChain = mine && cm.chain && cm.chainCluster === cluster && keyOf(cm.chain.certificate) === selKey ? cm.chain : null;
+  // A chain is the selected row's only when it is the same object: a
+  // same-name recreation's chain never becomes the old row's detail (§5b).
+  const sameObject = (chain: CertChainDTO) => !selectedCert?.uid || !chain.certificate.uid || chain.certificate.uid === selectedCert.uid;
+  const liveChain = mine && cm.chain && cm.chainCluster === cluster && keyOf(cm.chain.certificate) === selKey && sameObject(cm.chain) ? cm.chain : null;
   const lastChain = useRef<{ key: string; chain: CertChainDTO } | null>(null);
   if (liveChain && selKey) lastChain.current = { key: `${cluster}/${selKey}`, chain: liveChain };
   const shownChain = liveChain ?? (certRemoved && lastChain.current?.key === `${cluster}/${selKey}` ? lastChain.current.chain : null);
@@ -351,6 +349,7 @@ export function CertsView({ cluster }: { cluster: string }) {
       )}
       notice={watchError && total > 0 ? <WatchErrorBanner tool="cert-manager" failure="watch failed - showing the last good state" error={watchError} />
         : viewEv === "pending" && total > 0 ? <div role="status" className="t-secondary" style={{ minHeight: 28, display: "flex", alignItems: "center" }}>Still reading - this {view === "issuers" ? "issuer" : "Certificate"} list is incomplete.</div>
+        : rowsRefreshing ? <div role="status" data-testid="rows-refreshing" className="t-secondary" style={{ minHeight: 28, display: "flex", alignItems: "center" }}>As of {rowsAsOf} - refreshing; the counts are the cluster summary's.</div>
         : undefined}
       state={state}
       stateView={stateView}

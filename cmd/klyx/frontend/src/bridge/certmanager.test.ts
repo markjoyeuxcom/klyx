@@ -18,7 +18,7 @@ vi.mock("../../bindings/github.com/moomora/klyx/internal/appbridge/index.js", ()
 }));
 const handlers: Record<string, (ev: unknown) => void> = {};
 vi.mock("@wailsio/runtime", () => ({ Events: { On: vi.fn((n: string, h: (ev: unknown) => void) => { handlers[n] = h; return () => {}; }) } }));
-import { getCertificateChain, openCertManager } from "./certmanager";
+import { getCertificateChain } from "./certmanager";
 
 const chainFor = (marker: string): CertChainDTO => ({
   certificate: { rule: { included: false, role: "ok", label: "Ready" }, namespace: "ns", name: "c", ready: "Ready", reason: marker, message: "", issuerKind: "", issuerName: "", secretName: "", dnsNames: [], notAfterUnix: 0, expiresInSeconds: 0, renewalUnix: 0 },
@@ -51,11 +51,5 @@ describe("cert-manager bridge fences (redesign step 4c)", () => {
     expect(useFleet.getState().certmanager.chainCluster).toBe("A");
   });
 
-  it("a late watch callback for A never overwrites B", async () => {
-    await openCertManager("A");
-    useFleet.getState().setCertManagerLoading("B");
-    handlers["certmanager:updated"]?.({ data: { cluster: "A", certificates: [{ namespace: "x", name: "from-A" }], issuers: [] } });
-    expect(useFleet.getState().certmanager.cluster).toBe("B");
-    expect(useFleet.getState().certmanager.certificates).toEqual([]);
-  });
+
 });

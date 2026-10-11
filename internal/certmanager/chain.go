@@ -2,6 +2,7 @@ package certmanager
 
 import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"time"
 )
 
 // IssuerRef points at the Issuer/ClusterIssuer a Certificate references.
@@ -47,6 +48,8 @@ type ChainNode struct {
 // headline for a stuck cert) and the CertificateRequest -> Order -> Challenge
 // tree, with the deepest stuck node singled out as FailingLink.
 type Chain struct {
+	// AsOf is when the chain was read: a detail is evidence as of then.
+	AsOf        time.Time
 	Certificate Certificate
 	Issuer      *Issuer
 	Requests    []ChainNode

@@ -4,6 +4,8 @@ import { useFleet } from "../store/fleet";
 import type { CertificateDTO, IssuerDTO, CertChainDTO, ClusterDTO } from "../store/fleet";
 import { CertsView } from "./CertsView";
 
+// The rows hook is the transport; these tests seed the certmanager slice it fills.
+vi.mock("../health/useCertManagerRows", () => ({ useCertManagerRows: () => {} }));
 vi.mock("../bridge/certmanager", () => ({
   openCertManager: async () => () => {},
   closeCertManager: async () => {},
@@ -517,5 +519,28 @@ describe("CertsView per-kind dataset + selection lifecycle (Codex c9231c13)", ()
     expect(screen.queryByText(/removed\./)).toBeNull();
     act(() => setCov(cov({})));
     expect(insp().getByText(/removed\./)).toBeTruthy();
+  });
+});
+
+describe("CertsView on the shared rows (1c slice 3)", () => {
+  const chainFor = (uid: string, warning: string): CertChainDTO => ({
+    certificate: { ...cert({}), uid }, issuer: null, requests: [], failingLink: null, warnings: [warning],
+  });
+
+  it("a chain for a same-name recreation is never the selected row's detail", () => {
+    setup("Healthy", [cert({ uid: "u2" })], [issuer({})], "payments/acme-demo", chainFor("u1", "chain-of-the-old-object"));
+    const first = render(<CertsView cluster="x" />);
+    expect(screen.queryByText(/chain-of-the-old-object/)).toBeNull();
+    first.unmount();
+    setup("Healthy", [cert({ uid: "u2" })], [issuer({})], "payments/acme-demo", chainFor("u2", "chain-of-this-object"));
+    render(<CertsView cluster="x" />);
+    expect(screen.getAllByText(/chain-of-this-object/).length).toBeGreaterThan(0);
+  });
+
+  it("past the A4 deadline the rows are qualified as of their capture", () => {
+    setup("Healthy", [cert({})], [issuer({})]);
+    useFleet.setState((s) => ({ certmanager: { ...s.certmanager, rowsState: { updating: false, refreshing: true, evaluatedAt: "2026-10-11T12:00:00Z" } } }));
+    render(<CertsView cluster="x" />);
+    expect(screen.getByTestId("rows-refreshing").textContent).toMatch(/refreshing; the counts are the cluster summary's/);
   });
 });

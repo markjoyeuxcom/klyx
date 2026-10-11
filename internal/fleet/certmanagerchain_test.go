@@ -4,8 +4,8 @@ import (
 	"context"
 	"strings"
 	"testing"
-	"time"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -49,6 +49,17 @@ func acmeObj(kind, name, owner, ownerKind, state, reason string) *unstructured.U
 	}}
 }
 
+// certManagerDiscovery serves cert-manager.io/v1: the chain reads at the
+// served version (design §5b).
+func certManagerDiscovery() []*metav1.APIResourceList {
+	return []*metav1.APIResourceList{{GroupVersion: "cert-manager.io/v1", APIResources: []metav1.APIResource{
+		{Name: "certificates", Namespaced: true, Kind: "Certificate"},
+		{Name: "issuers", Namespaced: true, Kind: "Issuer"},
+		{Name: "clusterissuers", Kind: "ClusterIssuer"},
+		{Name: "certificaterequests", Namespaced: true, Kind: "CertificateRequest"},
+	}}}
+}
+
 func chainGVRToListKinds() map[schema.GroupVersionResource]string {
 	return map[schema.GroupVersionResource]string{
 		{Group: "cert-manager.io", Version: "v1", Resource: "certificates"}:        "CertificateList",
@@ -65,6 +76,7 @@ func TestGetCertificateChainResolvesFailingLink(t *testing.T) {
 	defer cancel()
 
 	typed := fake.NewSimpleClientset()
+	typed.Resources = certManagerDiscovery()
 	scheme := runtime.NewScheme()
 	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(scheme, chainGVRToListKinds(),
 		certUnstructured("acme-demo", "payments", "False", "DoesNotExist"),
@@ -77,14 +89,7 @@ func TestGetCertificateChainResolvesFailingLink(t *testing.T) {
 	det := capability.NewDetector(typed)
 	c := NewClusterConn("x", typed, nil, dyn, det, clock.Real{}, config.MetricsConfig{})
 	c.ctx = ctx
-	c.OpenCertManager()
-	defer c.CloseCertManager()
 
-	// Wait for the watch store so the bound-issuer lookup (CertManagerObject) resolves.
-	waitFor(t, 2*time.Second, func() bool {
-		_, ok := c.CertManagerObject("ClusterIssuer", "", "lab-acme-staging")
-		return ok
-	})
 
 	chain, err := c.GetCertificateChain(ctx, "payments", "acme-demo")
 	if err != nil {
@@ -118,6 +123,7 @@ func TestGetCertificateChainNoRequestsIsClean(t *testing.T) {
 	defer cancel()
 
 	typed := fake.NewSimpleClientset()
+	typed.Resources = certManagerDiscovery()
 	scheme := runtime.NewScheme()
 	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(scheme, chainGVRToListKinds(),
 		certUnstructured("self-signed", "payments", "True", "Ready"),
@@ -126,12 +132,6 @@ func TestGetCertificateChainNoRequestsIsClean(t *testing.T) {
 	det := capability.NewDetector(typed)
 	c := NewClusterConn("x", typed, nil, dyn, det, clock.Real{}, config.MetricsConfig{})
 	c.ctx = ctx
-	c.OpenCertManager()
-	defer c.CloseCertManager()
-	waitFor(t, 2*time.Second, func() bool {
-		_, ok := c.CertManagerObject("ClusterIssuer", "", "lab-acme-staging")
-		return len(c.CertManagerCertificates()) == 1 && ok
-	})
 
 	chain, err := c.GetCertificateChain(ctx, "payments", "self-signed")
 	if err != nil {
@@ -142,21 +142,19 @@ func TestGetCertificateChainNoRequestsIsClean(t *testing.T) {
 	}
 }
 
-// Review 2026-10-03 (K): a bound issuer the watch does not hold (external
-// issuer kind, deleted, not synced) used to leave the headline blank with no
+// Review 2026-10-03 (K): a bound issuer that cannot be read (deleted,
+// external kind, forbidden) used to leave the headline blank with no
 // warning - "no issuer shown" read as "issuer fine".
 func TestGetCertificateChainWarnsWhenBoundIssuerIsUnknown(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	typed := fake.NewSimpleClientset()
+	typed.Resources = certManagerDiscovery()
 	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), chainGVRToListKinds(),
 		certUnstructured("orphan", "payments", "True", "Ready"))
 	c := NewClusterConn("x", typed, nil, dyn, capability.NewDetector(typed), clock.Real{}, config.MetricsConfig{})
 	c.ctx = ctx
-	c.OpenCertManager()
-	defer c.CloseCertManager()
-	waitFor(t, 2*time.Second, func() bool { return len(c.CertManagerCertificates()) == 1 })
 
 	chain, err := c.GetCertificateChain(ctx, "payments", "orphan")
 	if err != nil {

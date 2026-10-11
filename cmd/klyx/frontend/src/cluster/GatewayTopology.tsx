@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { useCertManagerRows } from "../health/useCertManagerRows";
 import { IconAlertTriangle, IconRoute } from "@tabler/icons-react";
 import { useFleet } from "../store/fleet";
 import type { GatewayNodeDTO, GatewayRef, ListenerDTO, PolicyRefDTO, ResourceRef, RouteMetricDTO, RouteNodeDTO, TopologyDTO } from "../store/fleet";
@@ -37,6 +38,9 @@ export function GatewayTopology({ cluster, gateway }: { cluster: string; gateway
   const selectRoute = useFleet((s) => s.selectRoute);
   const closeGateway = useFleet((s) => s.closeGateway);
   const cm = useFleet((s) => s.certmanager);
+  // Its own subscription to the certificates (slice 3 §5): the listeners'
+  // TLS evidence no longer depends on the Certificates lens being mounted.
+  useCertManagerRows(cluster);
   const nowS = Math.floor(useNow() / 1000);
   const [mode, setMode] = useState<Mode>("all");
   const [nsFilter, setNsFilter] = useState("");
