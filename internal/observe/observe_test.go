@@ -1142,3 +1142,60 @@ func TestFactsReevaluateOnlyTheirPartsWithoutData(t *testing.T) {
 		t.Fatal("a part that does not declare the fact is untouched")
 	}
 }
+
+// ---- offers (the Helm lens's own read feeds the snapshot) -------------------
+
+func offerHarness(t *testing.T, read func(ctx context.Context) ([]any, bool, error)) *harness {
+	snap := SnapshotSpec{Name: "helm", Scope: "all namespaces", Cadence: 10 * time.Second, Timeout: 5 * time.Second, Read: read}
+	eval := func(c Capture) PartResult { n := len(c.Objects["helm"]); return PartResult{Evidence: &n} }
+	return start(t, Config{Snapshots: []SnapshotSpec{snap}, Domains: []DomainSpec{{ID: "helm", Parts: []PartSpec{{ID: "releases", Counted: []string{"helm"}, Evaluate: eval}}}}})
+}
+
+func TestOfferIsAReadAndRestartsTheCadence(t *testing.T) {
+	var reads atomic.Int32
+	h := offerHarness(t, func(context.Context) ([]any, bool, error) { reads.Add(1); return []any{"r1"}, false, nil })
+	h.eventually(h.partIs("helm", "releases", live), "first read")
+	h.clk.Step(8 * time.Second) // 2s short of the cadence
+	h.o.Offer("helm", []any{"r1", "r2"}, false)
+	h.eventually(h.partIs("helm", "releases", func(p Part) bool { return *p.Evidence == 2 && p.Coverage == Live }), "the offer applied")
+	n := reads.Load()
+	h.clk.Step(8 * time.Second) // past the old cadence, short of the restarted one
+	time.Sleep(50 * time.Millisecond)
+	if reads.Load() != n {
+		t.Fatalf("the cadence did not restart from the offer: %d -> %d reads", n, reads.Load())
+	}
+	h.clk.Step(3 * time.Second)
+	h.eventually(func() bool { return reads.Load() == n+1 }, "the next read runs a cadence after the offer")
+}
+
+func TestAReadInFlightBeforeAnOfferIsDropped(t *testing.T) {
+	var reads atomic.Int32
+	release, entered, returned := make(chan struct{}), make(chan struct{}, 1), make(chan struct{})
+	h := offerHarness(t, func(context.Context) ([]any, bool, error) {
+		switch reads.Add(1) {
+		case 1:
+			return []any{"r1"}, false, nil
+		case 2: // slow, and its evidence predates the offer
+			entered <- struct{}{}
+			<-release
+			defer close(returned)
+			return []any{"old"}, false, nil
+		default:
+			return []any{"new1", "new2", "new3"}, false, nil
+		}
+	})
+	h.eventually(h.partIs("helm", "releases", live), "first read")
+	h.o.Refresh("helm")
+	<-entered
+	h.o.Offer("helm", []any{"new1", "new2", "new3"}, false)
+	h.eventually(h.partIs("helm", "releases", func(p Part) bool { return *p.Evidence == 3 }), "the offer applied")
+	close(release)
+	<-returned
+	time.Sleep(100 * time.Millisecond) // let its result reach apply; the clock stays put
+	h.o.mu.Lock()
+	items := len(h.o.snaps["helm"].gen.items)
+	h.o.mu.Unlock()
+	if items != 3 || reads.Load() != 2 {
+		t.Fatalf("an older in-flight read overwrote the offer: %d items after %d reads", items, reads.Load())
+	}
+}

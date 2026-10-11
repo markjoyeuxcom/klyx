@@ -32,12 +32,16 @@ type snapGen struct {
 	items   []any
 	fresh   freshness
 	refresh chan struct{}
+	// offered restarts the cadence after an Offer; epoch counts offers, so
+	// a read that started before one is known to hold older evidence.
+	offered chan struct{}
+	epoch   uint64
 }
 
 // startSnap starts a generation. Caller holds o.mu.
 func (o *Observer) startSnap(ss *snapState) {
 	ctx, cancel := context.WithCancel(o.ctx)
-	g := &snapGen{o: o, ss: ss, ctx: ctx, cancel: cancel, fresh: freshness{cov: Checking}, refresh: make(chan struct{}, 1)}
+	g := &snapGen{o: o, ss: ss, ctx: ctx, cancel: cancel, fresh: freshness{cov: Checking}, refresh: make(chan struct{}, 1), offered: make(chan struct{}, 1)}
 	ss.gen = g
 	o.markSnapLocked(ss)
 	o.goSafe(func() { g.run() })
@@ -54,18 +58,26 @@ func (o *Observer) stopSnap(ss *snapState) {
 }
 
 // run reads at once, then every cadence or on a refresh request. A request
-// that arrives during a read is coalesced into one follow-up read.
+// that arrives during a read is coalesced into one follow-up read. An Offer
+// counts as a read: the cadence restarts from it.
 func (g *snapGen) run() {
 	for {
 		g.read()
-		t := g.o.clk.NewTimer(g.ss.spec.Cadence)
-		select {
-		case <-g.ctx.Done():
-			t.Stop()
-			return
-		case <-t.C():
-		case <-g.refresh:
-			t.Stop()
+	wait:
+		for {
+			t := g.o.clk.NewTimer(g.ss.spec.Cadence)
+			select {
+			case <-g.ctx.Done():
+				t.Stop()
+				return
+			case <-t.C():
+				break wait
+			case <-g.refresh:
+				t.Stop()
+				break wait
+			case <-g.offered:
+				t.Stop()
+			}
 		}
 	}
 }
@@ -78,6 +90,9 @@ func (g *snapGen) run() {
 func (g *snapGen) read() {
 	rctx, cancel := context.WithCancel(g.ctx)
 	defer cancel()
+	g.o.mu.Lock()
+	epoch := g.epoch
+	g.o.mu.Unlock()
 	type result struct {
 		items     []any
 		truncated bool
@@ -99,7 +114,7 @@ func (g *snapGen) read() {
 	case <-t.C():
 		r, timedOut = result{err: context.DeadlineExceeded}, true
 	}
-	g.apply(r.items, r.truncated, r.err)
+	g.apply(epoch, r.items, r.truncated, r.err)
 	if timedOut {
 		cancel()
 		select { // the abandoned worker must finish before the next read
@@ -109,13 +124,44 @@ func (g *snapGen) read() {
 	}
 }
 
-func (g *snapGen) apply(items []any, truncated bool, err error) {
+func (g *snapGen) apply(epoch uint64, items []any, truncated bool, err error) {
 	o := g.o
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	if g.ss.gen != g || g.ctx.Err() != nil {
 		return
 	}
+	if epoch != g.epoch {
+		return // an Offer landed during this read: its evidence is newer
+	}
+	g.applyLocked(items, truncated, err)
+}
+
+// Offer hands a snapshot a successful read made elsewhere - the Helm lens's
+// own helm list - as if its own read had just returned, so one exec serves
+// the lens and the summary, which then share a snapshot. A read already in
+// flight started earlier: its result is dropped, never applied over the
+// offer. The cadence restarts from the offer. No-op when the snapshot is
+// not running.
+func (o *Observer) Offer(snapshot string, items []any, truncated bool) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	ss := o.snaps[snapshot]
+	if ss == nil || ss.gen == nil || ss.gen.ctx.Err() != nil {
+		return
+	}
+	g := ss.gen
+	g.epoch++
+	g.applyLocked(items, truncated, nil)
+	select {
+	case g.offered <- struct{}{}:
+	default:
+	}
+}
+
+// applyLocked records one read's outcome. Caller holds o.mu.
+func (g *snapGen) applyLocked(items []any, truncated bool, err error) {
+	o := g.o
 	now := o.clk.Now()
 	if err != nil {
 		class := classify(err)
