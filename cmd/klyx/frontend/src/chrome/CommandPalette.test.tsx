@@ -207,6 +207,13 @@ describe("rank match quality (redesign step 7c)", () => {
     expect(rank([cmd("aw", "All workloads")], "allwl").rows).toHaveLength(1);
     expect(rank(cmds, "sa").rows.map((r) => r.cmd.id)).toContain("sa");
   });
+  it("an exact title outranks a frecency-boosted longer match", async () => {
+    const { rank } = await import("./CommandPalette");
+    const cmds = [cmd("light", "theme: bench light"), cmd("bench", "theme: bench")];
+    const boost = (id: string) => (id === "light" ? 50 : 0);
+    expect(rank(cmds, "theme: bench", boost).rows[0].cmd.id).toBe("bench");
+  });
+
   it("hints match as a substring only", async () => {
     const { rank } = await import("./CommandPalette");
     const cmds = [cmd("p", "shop/api-1", "Pod · Running · dev")];

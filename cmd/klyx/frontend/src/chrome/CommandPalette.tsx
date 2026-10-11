@@ -70,7 +70,10 @@ export function rank(commands: Command[], query: string, boost: (id: string) => 
     const h = cmd.hint && cmd.hint.toLowerCase().includes(lq) ? fuzzyMatch(q, cmd.hint)
       : cmd.keywords?.some((k) => k.toLowerCase().includes(lq)) ? { score: 4, positions: [] } : null;
     if (!t && !h) continue;
-    const score = (t?.score ?? 0) + (h ? h.score * 0.5 : 0) + boost(cmd.id) * 0.75;
+    // Typing a result's whole title picks it: an exact match outranks any
+    // frecency habit ("theme: bench" over a recently used "theme: bench light").
+    const exact = cmd.title.toLowerCase() === q.toLowerCase() ? 1000 : 0;
+    const score = exact + (t?.score ?? 0) + (h ? h.score * 0.5 : 0) + boost(cmd.id) * 0.75;
     scored.push({ cmd, positions: t?.positions ?? [], score });
   }
   scored.sort((a, b) => b.score - a.score);
