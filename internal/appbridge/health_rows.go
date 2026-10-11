@@ -38,33 +38,47 @@ var errRowsShape = errors.New("rows of an unexpected shape")
 
 var rowsConverters = map[string]rowsConverter{
 	healthsrc.TaskCerts + "/certificates": func(rows any, at time.Time) (any, error) {
-		set, ok := rows.(healthsrc.RowSet[certmanager.Certificate])
-		if !ok {
-			return nil, errRowsShape
+		set, err := rowSetOf[certmanager.Certificate](rows)
+		if err != nil {
+			return nil, err
 		}
 		out := make([]CertificateDTO, 0, len(set.Rows))
 		for _, r := range set.Rows {
-			dto := toCertificateDTO(r.Data, at)
+			dto := certificateFields(r.Data, at)
 			dto.Rule = toRuleDTO(r.Eval) // the capture's evaluation, never a new one
-			dto.UID = r.Ref.UID
+			dto.UID, dto.GVR = r.Ref.UID, r.Ref.GVR
 			out = append(out, dto)
 		}
 		return out, nil
 	},
-	healthsrc.TaskCerts + "/issuers": func(rows any, at time.Time) (any, error) {
-		set, ok := rows.(healthsrc.RowSet[certmanager.Issuer])
-		if !ok {
-			return nil, errRowsShape
+	healthsrc.TaskCerts + "/issuers": func(rows any, _ time.Time) (any, error) {
+		set, err := rowSetOf[certmanager.Issuer](rows)
+		if err != nil {
+			return nil, err
 		}
 		out := make([]IssuerDTO, 0, len(set.Rows))
 		for _, r := range set.Rows {
-			dto := toIssuerDTO(r.Data)
+			dto := issuerFields(r.Data)
 			dto.Rule = toRuleDTO(r.Eval)
-			dto.UID, dto.Generation = r.Ref.UID, r.Ref.Generation
+			dto.UID, dto.GVR, dto.Generation = r.Ref.UID, r.Ref.GVR, r.Ref.Generation
 			out = append(out, dto)
 		}
 		return out, nil
 	},
+}
+
+// rowSetOf reads a part's rows. nil is a valid publication - a part whose
+// counted kinds are all absent is not evaluated - and converts to an empty
+// set beside its absent Part, never to an error; any other shape is one.
+func rowSetOf[T any](rows any) (healthsrc.RowSet[T], error) {
+	if rows == nil {
+		return healthsrc.RowSet[T]{}, nil
+	}
+	set, ok := rows.(healthsrc.RowSet[T])
+	if !ok {
+		return set, errRowsShape
+	}
+	return set, nil
 }
 
 // toRowsDTO converts one Rows publication. ok is false for a part without a
@@ -102,6 +116,10 @@ type rowsSub struct {
 	cluster, task, part string
 	o                   *observe.Observer
 	release, unsub      func()
+	// ctx lives as long as the subscription: a close cancels any bootstrap
+	// still waiting on its capture (§2b).
+	ctx    context.Context
+	cancel context.CancelFunc
 }
 
 // rowsRegistry tracks lens subscriptions by token. Each token holds its own
@@ -177,7 +195,8 @@ func (s *HealthService) OpenRows(cluster, task, part, token string) RowsReplyDTO
 		}
 		release := o.Acquire(task, rowsOwner(token))
 		unsub := o.SubscribeRows(task, part, rowsOwner(token))
-		sub = &rowsSub{cluster: cluster, task: task, part: part, o: o, release: release, unsub: unsub}
+		ctx, cancel := context.WithCancel(context.Background())
+		sub = &rowsSub{cluster: cluster, task: task, part: part, o: o, release: release, unsub: unsub, ctx: ctx, cancel: cancel}
 		g.subs[token] = sub
 	}
 	g.mu.Unlock()
@@ -198,6 +217,7 @@ func (s *HealthService) CloseRows(token string) {
 	g.tombstoneLocked(token)
 	g.mu.Unlock()
 	if sub != nil {
+		sub.cancel() // a bootstrap still waiting answers Closed at once
 		sub.unsub()
 		sub.release()
 	}
@@ -221,9 +241,12 @@ func (s *HealthService) RowsBootstrap(token string, requestGen uint64) RowsReply
 }
 
 func (s *HealthService) bootstrap(token string, sub *rowsSub) RowsReplyDTO {
-	ctx, cancel := context.WithTimeout(context.Background(), rowsBootstrapTimeout)
+	ctx, cancel := context.WithTimeout(sub.ctx, rowsBootstrapTimeout)
 	defer cancel()
 	r, ok := sub.o.RowsNowCtx(ctx, sub.task, sub.part)
+	if sub.ctx.Err() != nil {
+		return RowsReplyDTO{Closed: true} // closed while waiting
+	}
 	if !ok {
 		return RowsReplyDTO{Error: "the cluster's observation ended, or the capture did not answer within " + rowsBootstrapTimeout.String()}
 	}

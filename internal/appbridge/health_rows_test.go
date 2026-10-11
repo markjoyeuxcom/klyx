@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -109,6 +110,15 @@ type obsHarness struct {
 // holds every certificates evaluation until it is closed.
 func startCertObserver(t *testing.T, cluster string, gate chan struct{}) *obsHarness {
 	t.Helper()
+	served := &atomic.Bool{}
+	served.Store(true)
+	return startCertObserverServed(t, cluster, gate, served)
+}
+
+// startCertObserverServed: served switches cert-manager's discovery, and
+// kinds are re-probed every 20ms, so absence and reappearance are observed.
+func startCertObserverServed(t *testing.T, cluster string, gate chan struct{}, servedFlag *atomic.Bool) *obsHarness {
+	t.Helper()
 	listKinds := map[schema.GroupVersionResource]string{}
 	for _, r := range []string{"certificates", "issuers", "clusterissuers"} {
 		listKinds[schema.GroupVersionResource{Group: "cert-manager.io", Version: "v1", Resource: r}] = "List"
@@ -127,7 +137,7 @@ func startCertObserver(t *testing.T, cluster string, gate chan struct{}) *obsHar
 		}
 	}
 	served := func(_ context.Context, group, _, fallback string) (observe.Probe, error) {
-		return observe.Probe{Served: group == "cert-manager.io", Version: fallback}, nil
+		return observe.Probe{Served: group == "cert-manager.io" && servedFlag.Load(), Version: fallback}, nil
 	}
 	kinds, domains := healthsrc.Native(healthsrc.NativeDeps{Cluster: cluster, Dyn: dyn, Served: served})
 	if gate != nil {
@@ -147,7 +157,7 @@ func startCertObserver(t *testing.T, cluster string, gate chan struct{}) *obsHar
 		}
 	}
 	rec := &rowsSinkRec{rows: map[string][]RowsDTO{}}
-	o := observe.New(observe.Config{Cluster: cluster, Sink: NewHealthSink(rec), Kinds: kinds, Domains: domains, Throttle: 10 * time.Millisecond})
+	o := observe.New(observe.Config{Cluster: cluster, Sink: NewHealthSink(rec), Kinds: kinds, Domains: domains, Throttle: 10 * time.Millisecond, ReprobeEvery: 20 * time.Millisecond})
 	ctx, cancel := context.WithCancel(context.Background())
 	o.Start(ctx)
 	h := &obsHarness{o: o, rec: rec, cancel: cancel}
@@ -289,5 +299,70 @@ func TestABAAndAReplacedObserver(t *testing.T) {
 	r4 := svc2.OpenRows("A", healthsrc.TaskCerts, "certificates", "t4")
 	if r4.Rows == nil || r4.Rows.Incarnation <= r3.Rows.Incarnation {
 		t.Fatalf("the replacement Observer's rows carry a newer incarnation: %+v", r4)
+	}
+}
+
+// Codex infra review #3: an absent part is a valid publication - empty rows
+// beside its absent Part - never a conversion error, through the real
+// service and sink; live -> absent clears the rows, and reappearance
+// brings them back.
+func TestAbsentPartsAreRowsNotErrors(t *testing.T) {
+	served := &atomic.Bool{}
+	h := startCertObserverServed(t, "c1", nil, served) // cert-manager not served
+	waitRows(t, "certs absent", func() bool {
+		s, ok := h.o.Latest()
+		if !ok {
+			return false
+		}
+		for _, tk := range s.Tasks {
+			if tk.ID == healthsrc.TaskCerts {
+				return tk.Coverage == observe.Absent
+			}
+		}
+		return false
+	})
+	reply := h.svc.OpenRows("c1", healthsrc.TaskCerts, "certificates", "t1")
+	if reply.Error != "" || reply.Rows == nil || reply.Rows.Part.Coverage != observe.Absent || len(reply.Rows.Rows.([]CertificateDTO)) != 0 {
+		t.Fatalf("an initially absent part opens with empty rows and its absent Part: %+v", reply)
+	}
+	name := HealthRowsEventPrefix + "c1:certs/certificates"
+	served.Store(true)
+	waitRows(t, "the kind appears: rows flow", func() bool {
+		h.rec.mu.Lock()
+		defer h.rec.mu.Unlock()
+		l := h.rec.rows[name]
+		return len(l) > 0 && l[len(l)-1].Part.Coverage == observe.Live && len(l[len(l)-1].Rows.([]CertificateDTO)) == 3
+	})
+	served.Store(false)
+	waitRows(t, "live -> absent publishes empty rows and the absent Part", func() bool {
+		h.rec.mu.Lock()
+		defer h.rec.mu.Unlock()
+		l := h.rec.rows[name]
+		last := l[len(l)-1]
+		return last.Part.Coverage == observe.Absent && len(last.Rows.([]CertificateDTO)) == 0
+	})
+	if _, err := rowsConverters[healthsrc.TaskCerts+"/certificates"]("not rows", time.Now()); err == nil {
+		t.Fatal("a genuine shape error stays an error")
+	}
+}
+
+// Codex infra review #5: a close cancels a bootstrap still waiting on its
+// capture - it answers Closed at once, not when the capture finishes.
+func TestCloseCancelsAWaitingBootstrap(t *testing.T) {
+	gate := make(chan struct{})
+	h := startCertObserver(t, "c1", gate)
+	defer close(gate) // the loop is held at the gate until the test ends
+	waitRows(t, "certs live", live(h))
+	done := make(chan RowsReplyDTO, 1)
+	go func() { done <- h.svc.OpenRows("c1", healthsrc.TaskCerts, "certificates", "t1") }()
+	time.Sleep(50 * time.Millisecond) // the capture is held
+	h.svc.CloseRows("t1")
+	select {
+	case r := <-done:
+		if !r.Closed {
+			t.Fatalf("a cancelled bootstrap answers Closed: %+v", r)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("the bootstrap kept waiting after its close")
 	}
 }

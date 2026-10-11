@@ -409,6 +409,8 @@ func (o *Observer) RowsNowCtx(ctx context.Context, task, part string) (Rows, boo
 		return r.rows, r.ok
 	case <-ctx.Done():
 		return Rows{}, false
+	case <-o.ctx.Done():
+		return Rows{}, false
 	}
 }
 

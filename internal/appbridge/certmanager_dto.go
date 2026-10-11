@@ -10,7 +10,10 @@ import (
 type CertificateDTO struct {
 	// UID is the object's identity (1c slice 3 §2a): rows key and select by
 	// it, so a same-name recreation is a different row.
-	UID        string   `json:"uid,omitempty"`
+	UID string `json:"uid,omitempty"`
+	// GVR is the served group/version/resource the row was read at (for
+	// manifest and resource links), from the row's identity.
+	GVR        string   `json:"gvr,omitempty"`
 	Namespace  string   `json:"namespace"`
 	Name       string   `json:"name"`
 	Ready      string   `json:"ready"`
@@ -42,8 +45,15 @@ type CertificateDTO struct {
 }
 
 func toCertificateDTO(c certmanager.Certificate, now time.Time) CertificateDTO {
+	dto := certificateFields(c, now)
+	dto.Rule = toRuleDTO(certmanager.CertificateRule(c, now))
+	return dto
+}
+
+// certificateFields is the pure field conversion: it evaluates no rule (the
+// rows converter copies the capture's evaluation instead, slice 3 §2a).
+func certificateFields(c certmanager.Certificate, now time.Time) CertificateDTO {
 	dto := CertificateDTO{
-		Rule:       toRuleDTO(certmanager.CertificateRule(c, now)),
 		Namespace:  c.Namespace,
 		Name:       c.Name,
 		Ready:      string(c.Ready),
@@ -76,6 +86,7 @@ func toCertificateDTO(c certmanager.Certificate, now time.Time) CertificateDTO {
 // IssuerDTO is the JSON projection of an Issuer/ClusterIssuer's Ready state.
 type IssuerDTO struct {
 	UID        string `json:"uid,omitempty"`
+	GVR        string `json:"gvr,omitempty"`
 	Generation int64  `json:"generation,omitempty"`
 	Kind       string `json:"kind"`
 	Namespace  string `json:"namespace"`
@@ -88,8 +99,14 @@ type IssuerDTO struct {
 }
 
 func toIssuerDTO(i certmanager.Issuer) IssuerDTO {
+	dto := issuerFields(i)
+	dto.Rule = toRuleDTO(certmanager.IssuerRule(i))
+	return dto
+}
+
+// issuerFields is the pure field conversion (no rule; see certificateFields).
+func issuerFields(i certmanager.Issuer) IssuerDTO {
 	return IssuerDTO{
-		Rule:      toRuleDTO(certmanager.IssuerRule(i)),
 		Kind:      string(i.Kind),
 		Namespace: i.Namespace,
 		Name:      i.Name,
