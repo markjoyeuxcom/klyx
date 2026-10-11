@@ -323,6 +323,10 @@ func (o *Observer) buildSummaryLocked(now time.Time) Summary {
 	}
 	for _, d := range o.domains {
 		t := Task{ID: d.spec.ID}
+		if d.controller != nil {
+			c := *d.controller
+			t.Controller = &c
+		}
 		var covs []Coverage
 		for _, p := range d.parts {
 			part := Part{ID: p.spec.ID, Entity: p.spec.Entity, Scope: p.spec.Scope, Classifier: p.spec.Classifier, Coverage: Checking}

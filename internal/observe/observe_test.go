@@ -1199,3 +1199,38 @@ func TestAReadInFlightBeforeAnOfferIsDropped(t *testing.T) {
 		t.Fatalf("an older in-flight read overwrote the offer: %d items after %d reads", items, reads.Load())
 	}
 }
+
+// ---- controller issues ------------------------------------------------------------
+
+func TestControllerIssueIsTaskLevelNeverACount(t *testing.T) {
+	src := newSource()
+	src.put("a", nil)
+	h := start(t, Config{Kinds: []KindSpec{cmKind("cms", src)}, Domains: []DomainSpec{{ID: "certs", Parts: []PartSpec{cmPart("cms", "cms")}}}})
+	h.eventually(h.partIs("certs", "cms", live), "live")
+	taskOf := func() (Task, uint64) {
+		s, _ := h.sink.last()
+		for _, t := range s.Tasks {
+			if t.ID == "certs" {
+				return t, s.Seq
+			}
+		}
+		return Task{}, s.Seq
+	}
+	p0, _ := h.sink.part("certs", "cms")
+	_, seq0 := taskOf()
+	h.o.SetController("certs", &ControllerIssue{State: "not ready", Reason: "cert-manager installed but cert-manager is not ready"})
+	h.eventually(func() bool { t, _ := taskOf(); return t.Controller != nil && t.Controller.State == "not ready" }, "the issue is published")
+	tk, seq1 := taskOf()
+	if seq1 <= seq0 || tk.Parts[0].Ver != p0.Ver || tk.Parts[0].Counts.Total != p0.Counts.Total {
+		t.Fatalf("a controller change advances Seq and touches no part: seq %d->%d, ver %d->%d", seq0, seq1, p0.Ver, tk.Parts[0].Ver)
+	}
+	n := h.sink.n()
+	h.o.SetController("certs", &ControllerIssue{State: "not ready", Reason: "cert-manager installed but cert-manager is not ready"})
+	h.o.SetController("nope", &ControllerIssue{State: "not ready"}) // unknown task: ignored
+	h.settle(300 * time.Millisecond)
+	if h.sink.n() != n {
+		t.Fatal("an equal issue or an unknown task republished")
+	}
+	h.o.SetController("certs", nil)
+	h.eventually(func() bool { t, _ := taskOf(); return t.Controller == nil }, "recovery clears it")
+}

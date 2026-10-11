@@ -117,6 +117,9 @@ type domainState struct {
 	owners map[Owner]bool
 	active bool
 	parts  []*partState
+	// controller is the task's controller health (SetController): its own
+	// identity, never added to a part count.
+	controller *ControllerIssue
 }
 
 // Observer is one cluster's health observation (spec §2-§5).
@@ -294,6 +297,26 @@ func (o *Observer) Connection() string {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	return o.conn
+}
+
+// SetController records a task's controller issue (nil when healthy). It is
+// never a part count; a change publishes with a new Seq. Unknown tasks are
+// ignored.
+func (o *Observer) SetController(task string, issue *ControllerIssue) {
+	o.mu.Lock()
+	d := o.byTask[task]
+	if d == nil || reflect.DeepEqual(d.controller, issue) {
+		o.mu.Unlock()
+		return
+	}
+	if issue != nil {
+		c := *issue
+		issue = &c
+	}
+	d.controller = issue
+	o.summaryDirty = true
+	o.mu.Unlock()
+	o.signal()
 }
 
 // SetFact records an external input. A changed value re-evaluates the parts

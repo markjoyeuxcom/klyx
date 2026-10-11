@@ -2,15 +2,18 @@ package fleet
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes/fake"
 	metafake "k8s.io/client-go/metadata/fake"
 
+	"github.com/moomora/klyx/internal/capability"
 	"github.com/moomora/klyx/internal/clock"
 	"github.com/moomora/klyx/internal/config"
 	"github.com/moomora/klyx/internal/observe"
@@ -171,4 +174,102 @@ func waitUntil(t *testing.T, what string, cond func() bool) {
 		}
 	}
 	t.Fatalf("timed out: %s", what)
+}
+
+func (s *summarySink) task(id string) (observe.Task, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, t := range s.last.Tasks {
+		if t.ID == id {
+			return t, true
+		}
+	}
+	return observe.Task{}, false
+}
+
+// The re-probe keeps controller issues and the network overlay current; a
+// failed probe confirms nothing (1c spec §1).
+func TestReprobeKeepsControllerIssuesCurrent(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := metav1.AddMetaToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	typed := fake.NewClientset()
+	// a dynamic client registers the CRD-backed tasks (absent here: the fake
+	// serves no groups), so their controller issues have a home
+	c := NewClusterConn("x", typed, metafake.NewSimpleMetadataClient(scheme), dynamicfake.NewSimpleDynamicClient(runtime.NewScheme()), capability.NewDetector(typed), clock.Real{}, config.MetricsConfig{})
+	s := &summarySink{}
+	c.SetHealthSink(s)
+	ctx, cancel := context.WithCancel(context.Background())
+	c.startHealth(ctx)
+	h := c.Health()
+	defer func() { cancel(); <-h.Done() }()
+	c.mu.Lock()
+	c.state = Synced
+	c.mu.Unlock()
+
+	certsDown := capability.Set{CertManager: capability.CertManagerCapability{Base: capability.Base{Tier: capability.Degraded, Reason: "cert-manager installed but cert-manager is not ready"}, Present: true},
+		Network: capability.NetworkCapability{Base: capability.Base{Tier: capability.Degraded, Reason: "1 GatewayClass(es) exist but no controller has Accepted any"}, GatewayAPIVersion: "v1"}}
+	healthy := capability.Set{CertManager: capability.CertManagerCapability{Base: capability.Base{Tier: capability.Healthy}, Present: true, Healthy: true},
+		Network: capability.NetworkCapability{Base: capability.Base{Tier: capability.Healthy}, GatewayAPIVersion: "v1"}}
+	var mu sync.Mutex
+	script := []func() (capability.Set, error){
+		func() (capability.Set, error) { return certsDown, nil },
+		func() (capability.Set, error) {
+			return capability.Set{}, errors.New("discovery: the server is unavailable")
+		},
+		func() (capability.Set, error) { return healthy, nil },
+	}
+	step, entered := make(chan struct{}), make(chan struct{}, 1)
+	oldDetect, oldEvery := reprobeDetect, capReprobeEvery
+	reprobeDetect = func(ctx context.Context, _ *ClusterConn) (capability.Set, error) {
+		select { // the previous probe has been fully handled
+		case entered <- struct{}{}:
+		case <-ctx.Done():
+			return capability.Set{}, ctx.Err()
+		}
+		select {
+		case <-step:
+		case <-ctx.Done():
+			return capability.Set{}, ctx.Err()
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		f := script[0]
+		if len(script) > 1 {
+			script = script[1:]
+		}
+		return f()
+	}
+	capReprobeEvery = time.Millisecond
+	loopCtx, stopLoop := context.WithCancel(ctx)
+	loopDone := make(chan struct{})
+	go func() { c.reprobeLoop(loopCtx); close(loopDone) }()
+	defer func() { // the loop reads the seams: stop it before restoring them
+		stopLoop()
+		close(step)
+		<-loopDone
+		reprobeDetect, capReprobeEvery = oldDetect, oldEvery
+	}()
+
+	controller := func(task string) *observe.ControllerIssue { tk, _ := s.task(task); return tk.Controller }
+	<-entered
+	step <- struct{}{}
+	waitUntil(t, "the re-probe reports both controllers", func() bool {
+		return controller("certs") != nil && controller("gateway") != nil && controller("gateway").State == "not ready"
+	})
+	if snap := c.Snapshot(); snap.State != Degraded || snap.Reason != certsDown.Network.Reason {
+		t.Fatalf("a degraded data plane overlays a Synced cluster: %v %q", snap.State, snap.Reason)
+	}
+	<-entered
+	step <- struct{}{} // the failed probe
+	<-entered          // ...has been handled
+	time.Sleep(50 * time.Millisecond)
+	if controller("certs") == nil || controller("gateway") == nil || c.Snapshot().State != Degraded {
+		t.Fatal("a failed probe confirmed nothing, yet the issues or the overlay changed")
+	}
+	step <- struct{}{} // the healthy probe
+	waitUntil(t, "a healthy probe clears both and lifts the overlay", func() bool {
+		return controller("certs") == nil && controller("gateway") == nil && c.Snapshot().State == Synced
+	})
 }

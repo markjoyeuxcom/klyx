@@ -74,6 +74,9 @@ type NetworkCapability struct {
 	HasHubble          bool
 	ClusterMesh        bool
 	IngressControllers []string
+	// GatewayClassesUnread marks a Degraded tier whose GatewayClasses could
+	// not be read: data-plane health is unknown, not known bad.
+	GatewayClassesUnread bool
 }
 
 // CertManagerCapability models cert-manager: presence of the cert-manager.io

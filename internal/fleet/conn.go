@@ -394,6 +394,7 @@ func (c *ClusterConn) connectLoop(ctx context.Context, nodeInformer, podInformer
 				c.setState(EvCapUnhealthy, capabilityReason(caps))
 			}
 			c.startCapHealth(ctx, caps)
+			go c.reprobeLoop(ctx)
 			return
 		}
 		reason := c.connectFailureReason()
@@ -564,8 +565,8 @@ func (c *ClusterConn) startHealth(ctx context.Context) {
 	c.syncHealth()
 }
 
-// syncHealth hands the Observer the connection word and the capability
-// facts its tasks read. Handoffs are serialized and each re-reads the
+// syncHealth hands the Observer the connection word, the capability facts
+// its tasks read and each task's controller issue. Handoffs are serialized and each re-reads the
 // current state, so the last one to run carries the latest state - an
 // older read can never overwrite a newer one. The word never sets kind
 // freshness (1c addendum §3.1). Called after c.mu is released.
@@ -573,7 +574,7 @@ func (c *ClusterConn) syncHealth() {
 	c.healthSyncMu.Lock()
 	defer c.healthSyncMu.Unlock()
 	c.mu.RLock()
-	h, st, reason, flux, hook := c.health, c.state, c.reason, c.caps.GitOps.Flux.Present, c.healthSyncHook
+	h, st, reason, caps, hook := c.health, c.state, c.reason, c.caps, c.healthSyncHook
 	c.mu.RUnlock()
 	if h == nil {
 		return
@@ -582,7 +583,11 @@ func (c *ClusterConn) syncHealth() {
 		hook()
 	}
 	h.SetConnection(connectionWord(st, reason))
-	h.SetFact(healthsrc.FactFluxPresent, flux)
+	h.SetFact(healthsrc.FactFluxPresent, caps.GitOps.Flux.Present)
+	issues := healthsrc.ControllerIssues(caps)
+	for _, task := range healthsrc.ControllerTasks {
+		h.SetController(task, issues[task])
+	}
 }
 
 // connectionWord is the health spec §2 connection axis.

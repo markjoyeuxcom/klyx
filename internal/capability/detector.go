@@ -54,13 +54,31 @@ func StatefulSetReady(s *appsv1.StatefulSet) bool {
 
 // gitOpsTier computes the GitOps tier and reason from per-tool presence/health.
 // Callers handle the all-absent case before calling this.
+// FluxIssue and ArgoIssue name each GitOps tool's controller problem on its
+// own ("" when present and ready, or absent): the health summary reports
+// them per task, where the tier joins them.
+func (g GitOpsCapability) FluxIssue() string {
+	if g.Flux.Present && !g.Flux.Healthy {
+		return "Flux installed but " + fluxKustomizeController + " is not ready"
+	}
+	return ""
+}
+
+func (g GitOpsCapability) ArgoIssue() string {
+	if g.Argo.Present && !g.Argo.Healthy {
+		return "Argo installed but " + argoAppController + " is not ready"
+	}
+	return ""
+}
+
 func gitOpsTier(flux FluxInfo, argo ArgoInfo) (Tier, string) {
 	var reasons []string
-	if flux.Present && !flux.Healthy {
-		reasons = append(reasons, "Flux installed but "+fluxKustomizeController+" is not ready")
+	g := GitOpsCapability{Flux: flux, Argo: argo}
+	if r := g.FluxIssue(); r != "" {
+		reasons = append(reasons, r)
 	}
-	if argo.Present && !argo.Healthy {
-		reasons = append(reasons, "Argo installed but "+argoAppController+" is not ready")
+	if r := g.ArgoIssue(); r != "" {
+		reasons = append(reasons, r)
 	}
 	fluxOK := !flux.Present || flux.Healthy
 	argoOK := !argo.Present || argo.Healthy
@@ -100,6 +118,13 @@ func (d *Detector) servedGroups(ctx context.Context) (map[string]bool, error) {
 }
 
 func (d *Detector) Detect(ctx context.Context) Set {
+	set, _ := d.DetectErr(ctx)
+	return set
+}
+
+// DetectErr is Detect plus the discovery error, so a periodic re-probe can
+// tell a failed probe (which confirms nothing) from a real absence.
+func (d *Detector) DetectErr(ctx context.Context) (Set, error) {
 	served, err := d.servedGroups(ctx)
 	if err != nil {
 		// Error-honesty: a discovery-degraded cluster reports every capability
@@ -112,7 +137,7 @@ func (d *Detector) Detect(ctx context.Context) Set {
 			ExternalSecrets: ExternalSecretsCapability{Base: Base{Tier: Absent, Reason: msg}},
 			Reloader:        ReloaderCapability{Base: Base{Tier: Absent, Reason: msg}},
 			Karpenter:       KarpenterCapability{Base: Base{Tier: Absent, Reason: msg}},
-		}
+		}, err
 	}
 	return Set{
 		GitOps:          d.detectGitOps(ctx, served),
@@ -121,7 +146,7 @@ func (d *Detector) Detect(ctx context.Context) Set {
 		ExternalSecrets: d.detectExternalSecrets(ctx, served),
 		Reloader:        d.detectReloader(ctx),
 		Karpenter:       d.detectKarpenter(ctx, served),
-	}
+	}, nil
 }
 
 func (d *Detector) detectGitOps(ctx context.Context, served map[string]bool) GitOpsCapability {
@@ -200,6 +225,7 @@ func (d *Detector) detectNetwork(ctx context.Context, served map[string]bool) Ne
 		// (Envoy Gateway, Cilium) cannot establish it. Say so rather than claim
 		// Healthy (Codex batch-2 review R4).
 		out.Base = Base{Tier: Degraded, Reason: "Gateway API installed but GatewayClasses could not be read (" + err.Error() + ") - data-plane health unknown"}
+		out.GatewayClassesUnread = true
 	case total > 0 && accepted == 0:
 		out.Base = Base{Tier: Degraded, Reason: fmt.Sprintf("%d GatewayClass(es) exist but no controller has Accepted any - no working Gateway API data plane", total)}
 	default:
