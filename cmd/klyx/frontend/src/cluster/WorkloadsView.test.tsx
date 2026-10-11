@@ -61,6 +61,20 @@ function chooseMore(label: string | RegExp) {
 describe("WorkloadsView", () => {
   beforeEach(() => { localStorage.clear(); useFleet.getState().clearWorkloads(); });
 
+  it("saved kinds fill only an unchosen default: an explicit All workloads stays all (step 7b review)", () => {
+    localStorage.setItem("klyx-view-prefs", JSON.stringify({ "homelab-nelli": { workloads: { kinds: ["StatefulSet"] } } }));
+    useFleet.setState({ route: { name: "cluster", cluster: "homelab-nelli", section: "overview" } });
+    useFleet.getState().openWorkloads(["Deployment", "StatefulSet", "DaemonSet"]);
+    const { unmount } = render(<WorkloadsView cluster="homelab-nelli" />);
+    expect(useFleet.getState().workloads.kindFilter).toEqual({ Deployment: true, StatefulSet: true, DaemonSet: true });
+    unmount();
+    // Entering without a kind choice (a section link) still restores the saved kinds.
+    useFleet.getState().setSection("workloads");
+    render(<WorkloadsView cluster="homelab-nelli" />);
+    expect(useFleet.getState().workloads.kindFilter).toEqual({ Deployment: false, StatefulSet: true, DaemonSet: false });
+    expect(useFleet.getState().workloads.kindExplicit).toBe(false);
+  });
+
   it("renders triage rows with reason, restarts, and gitops owner", () => {
     seed([broken, healthy]);
     const { getByText } = render(<WorkloadsView cluster="homelab-nelli" />);

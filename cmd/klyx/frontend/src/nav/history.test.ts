@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { useFleet } from "../store/fleet";
 import type { ClusterDTO } from "../store/fleet";
-import { _resetHistoryForTest, back, entryLabel, forward, go, initHistory, recentPlaces, useHistory } from "./history";
+import { _resetHistoryForTest, back, backTarget, entryLabel, forward, go, initHistory, recentPlaces, useHistory } from "./history";
 
 const tick = () => new Promise<void>((r) => queueMicrotask(r));
 const c = (name: string) => ({ name, state: "Synced", env: "", protected: false } as unknown as ClusterDTO);
@@ -87,5 +87,42 @@ describe("navigation history (redesign step 7b)", () => {
     expect(useFleet.getState().route).toMatchObject({ section: "events" });
     back();
     expect(useFleet.getState().route).toMatchObject({ section: "overview" });
+  });
+
+  it("choosing a kind inside the workloads view is a navigation; hydration is not (step 7b review)", async () => {
+    useFleet.getState().openCluster("dev"); await tick();
+    useFleet.getState().openWorkloads(["Deployment", "StatefulSet", "DaemonSet"]); await tick();
+    const before = useHistory.getState().past.length;
+    useFleet.getState().hydrateWorkloadKinds(["DaemonSet"]); await tick();
+    expect(useHistory.getState().past.length).toBe(before);
+    useFleet.getState().setWorkloadKindFilter(["StatefulSet"]); await tick();
+    expect(useHistory.getState().past.length).toBe(before + 1);
+    expect(entryLabel(recentPlaces()[0]).place).toBe("DaemonSets");
+    back();
+    expect(useFleet.getState().workloads.kindFilter).toEqual({ Deployment: false, StatefulSet: false, DaemonSet: true });
+    expect(useFleet.getState().workloads.kindExplicit).toBe(true);
+  });
+
+  it("a NavIntent still waiting for data never fires on a place reached through history", async () => {
+    useFleet.getState().openCluster("dev"); await tick();
+    useFleet.getState().setSection("nodes");
+    useFleet.getState().requestNavIntent({ kind: "drain-node", cluster: "dev", node: "n1" });
+    await tick();
+    useFleet.getState().setSection("pods"); await tick(); // left before the view consumed it
+    expect(useFleet.getState().navIntent).not.toBeNull();
+    back();
+    expect(useFleet.getState().route).toMatchObject({ section: "nodes" });
+    expect(useFleet.getState().navIntent).toBeNull();
+  });
+
+  it("the Back target skips clusters that left the fleet; none reachable means none offered", async () => {
+    useFleet.getState().openCluster("prd"); await tick();
+    useFleet.getState().openCluster("dev"); await tick();
+    expect(entryLabel(backTarget()!).cluster).toBe("prd");
+    useFleet.setState({ clusters: [c("dev")] });
+    expect(backTarget()?.route).toEqual({ name: "fleet" });
+    _resetHistoryForTest();
+    useHistory.setState({ past: [{ route: { name: "cluster", cluster: "gone", section: "pods" } }] });
+    expect(backTarget()).toBeUndefined();
   });
 });

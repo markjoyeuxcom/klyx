@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { useFleet, WORKLOAD_KINDS } from "../store/fleet";
 import type { Route, WorkloadKind } from "../store/fleet";
-import { activeLocation } from "./registry";
+import { activeLocation, sameRef } from "./registry";
 
 // Navigation history (redesign step 7b; added to the spec after the Lens
 // comparison): Back / Forward and a Recent menu. An entry is a place - the
@@ -62,7 +62,21 @@ export function initHistory(): () => void {
   const s0 = useFleet.getState();
   remember(entryOf(s0.route, s0.workloads.kindFilter));
   return useFleet.subscribe((s, prev) => {
-    if (s.route === prev.route || restoring) return;
+    if (restoring) return;
+    // A chosen kind filter on the workloads task is part of the place (All
+    // workloads -> StatefulSets is a navigation); hydration and the view's
+    // unmount reset are not.
+    const onWorkloads = s.route.name === "cluster" && s.route.section === "workloads" && !s.route.resource;
+    const kindsChanged = s.workloads.kindFilter !== prev.workloads.kindFilter && onWorkloads;
+    if (kindsChanged && !s.workloads.kindExplicit && s.route === prev.route) {
+      // Hydration settled what this place shows: rename it, record nothing.
+      const here = entryOf(s.route, s.workloads.kindFilter);
+      const routeKey = JSON.stringify(s.route);
+      useHistory.setState((h) => ({ recent: h.recent.length > 0 && JSON.stringify(h.recent[0].route) === routeKey ? [here, ...h.recent.slice(1)] : h.recent }));
+      return;
+    }
+    const kindsMoved = kindsChanged && !!s.workloads.kindExplicit;
+    if (s.route === prev.route && !kindsMoved) return;
     if (pending) return;
     pending = entryOf(prev.route, prev.workloads.kindFilter);
     queueMicrotask(() => {
@@ -83,6 +97,9 @@ export function initHistory(): () => void {
 function restore(e: HistoryEntry) {
   restoring = true;
   pending = null;
+  // A NavIntent belongs to the navigation that raised it; one still waiting
+  // for data must not fire on a place reached through history.
+  useFleet.getState().clearNavIntent();
   try {
     const r = e.route;
     const nav = useFleet.getState();
@@ -92,11 +109,22 @@ function restore(e: HistoryEntry) {
       useFleet.setState({ route: { name: "cluster", cluster: r.cluster, section: "gatewayApi" } });
       nav.openGateway(r.gateway.namespace, r.gateway.name);
     } else if (r.resource) {
-      useFleet.setState({ route: { name: "cluster", cluster: r.cluster, section: r.section } });
-      nav.openResource(r.resource);
+      // Moving between instances of the list already on screen keeps that
+      // list: openResource would reset rows to loading, and the mounted list
+      // only re-reads when its cluster or kind changes.
+      const s = useFleet.getState();
+      const cur = s.route;
+      const owned = cur.name === "cluster" && cur.cluster === r.cluster && !!cur.resource && sameRef(cur.resource, r.resource)
+        && s.instances.cluster === r.cluster && !!s.instances.ref && sameRef(s.instances.ref, r.resource);
+      if (owned) {
+        useFleet.setState({ route: { name: "cluster", cluster: r.cluster, section: r.section, resource: r.resource } });
+      } else {
+        useFleet.setState({ route: { name: "cluster", cluster: r.cluster, section: r.section } });
+        nav.openResource(r.resource);
+      }
       if (r.instance) useFleet.getState().openInstance(r.instance.namespace, r.instance.name);
     } else {
-      useFleet.setState((s) => ({ route: r, ...(e.kindFilter ? { workloads: { ...s.workloads, kindFilter: e.kindFilter } } : {}) }));
+      useFleet.setState((s) => ({ route: r, ...(e.kindFilter ? { workloads: { ...s.workloads, kindFilter: e.kindFilter, kindExplicit: true } } : {}) }));
     }
   } finally {
     restoring = false;
@@ -109,6 +137,19 @@ const current = (): HistoryEntry => {
   const s = useFleet.getState();
   return entryOf(s.route, s.workloads.kindFilter);
 };
+
+// The places Back / Forward would actually reach (skipping clusters that
+// left the fleet) - what the mast buttons name and enable on.
+export function backTarget(): HistoryEntry | undefined {
+  const past = useHistory.getState().past;
+  for (let i = past.length - 1; i >= 0; i--) if (exists(past[i])) return past[i];
+  return undefined;
+}
+export function forwardTarget(): HistoryEntry | undefined {
+  const future = useHistory.getState().future;
+  for (let i = future.length - 1; i >= 0; i--) if (exists(future[i])) return future[i];
+  return undefined;
+}
 
 // back / forward skip places whose cluster has left the fleet.
 export function back(): boolean {

@@ -3,7 +3,7 @@ import { IconArrowLeft, IconArrowRight, IconArrowsLeftRight, IconClock, IconComm
 import { ThemeToggle } from "./ThemeToggle";
 import { KlyxMark } from "./KlyxMark";
 import { useFleet } from "../store/fleet";
-import { back, entryKey, entryLabel, forward, go, recentPlaces, useHistory, type HistoryEntry } from "../nav/history";
+import { back, backTarget, entryKey, entryLabel, forward, forwardTarget, go, recentPlaces, useHistory, type HistoryEntry } from "../nav/history";
 import { clusterDisplayName } from "../fleet/ClusterCard";
 import { stopAllForwards } from "../bridge/forwards";
 import { openCommandPalette } from "./CommandPalette";
@@ -79,12 +79,15 @@ export function TopBar() {
 // HistoryControls: Back / Forward (⌘[ / ⌘]) and the Recent menu. They move
 // between places; nothing they restore runs an action.
 function HistoryControls() {
-  const past = useHistory((h) => h.past);
-  const future = useHistory((h) => h.future);
+  // Re-render on history, route and fleet membership: the buttons name the
+  // place they would actually reach, skipping clusters that left the fleet.
+  useHistory((h) => h.past);
+  useHistory((h) => h.future);
   useHistory((h) => h.recent);
   useFleet((s) => s.route);
-  const prev = past[past.length - 1];
-  const next = future[future.length - 1];
+  useFleet((s) => s.clusters);
+  const prev = backTarget();
+  const next = forwardTarget();
   const name = (e: HistoryEntry | undefined) => { if (!e) return ""; const l = entryLabel(e); return l.cluster ? `${clusterDisplayName(l.cluster)} / ${l.place}` : l.place; };
   const recent = recentPlaces();
   return (
@@ -136,7 +139,7 @@ function RecentMenu({ places, name }: { places: HistoryEntry[]; name: (e: Histor
         <div ref={menuRef} role="menu" aria-label="Recent places" className="l-menu" style={{ top: "calc(100% + 6px)", left: 0, width: 340, maxHeight: "60vh", overflow: "auto" }}>
           <div className="l-menu-label">Recent places</div>
           {places.map((e) => (
-            <button key={entryKey(e)} role="menuitem" className="l-menu-item" onClick={() => { setOpen(false); go(e); }} title={name(e)}>
+            <button key={entryKey(e)} role="menuitem" className="l-menu-item" onClick={() => { setOpen(false); triggerRef.current?.focus(); go(e); }} title={name(e)}>
               <span style={{ minWidth: 0, overflowWrap: "anywhere" }}>{name(e)}</span>
             </button>
           ))}

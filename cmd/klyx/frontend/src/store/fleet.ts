@@ -369,6 +369,10 @@ export type WorkloadsSlice = {
   fluxPresent: boolean;
   loading: boolean;
   kindFilter: Record<WorkloadKind, boolean>;
+  // True when the kinds were chosen - by navigation, history or an edit in
+  // the view - rather than hydrated from saved preferences. A chosen "All
+  // workloads" is not a default for preferences to fill.
+  kindExplicit?: boolean;
   needsAttention: boolean;
   search: string;
   expanded: string[];       // keys "<kind>/<namespace>/<name>"
@@ -919,6 +923,7 @@ type FleetState = {
   setWorkloads: (cluster: string, namespace: string, result: WorkloadsResultDTO) => void;
   toggleWorkloadKind: (k: WorkloadKind) => void;
   setWorkloadKindFilter: (kinds: readonly WorkloadKind[]) => void;
+  hydrateWorkloadKinds: (kinds: readonly WorkloadKind[]) => void;
   openWorkloads: (kinds?: readonly WorkloadKind[]) => void;
   toggleNeedsAttention: () => void;
   setWorkloadsNeedsAttention: (v: boolean) => void;
@@ -1011,6 +1016,7 @@ export const useFleet = create<FleetState>((set) => ({
         workloads: {
           ...s.workloads,
           kindFilter: kinds ? workloadKindFilterFor(kinds) : s.workloads.kindFilter,
+          kindExplicit: kinds ? true : s.workloads.kindExplicit,
         },
       };
     }),
@@ -1222,8 +1228,9 @@ export const useFleet = create<FleetState>((set) => ({
     }
     return { workloads: { ...s.workloads, cluster, namespace, items: result.workloads ?? [], namespaces, fluxPresent: result.fluxPresent, truncated: result.truncated ?? false, rowsScope: scope, error: null, loading: false } };
   }),
-  toggleWorkloadKind: (k) => set((s) => ({ workloads: { ...s.workloads, kindFilter: { ...s.workloads.kindFilter, [k]: !s.workloads.kindFilter[k] } } })),
-  setWorkloadKindFilter: (kinds) => set((s) => ({ workloads: { ...s.workloads, kindFilter: workloadKindFilterFor(kinds) } })),
+  toggleWorkloadKind: (k) => set((s) => ({ workloads: { ...s.workloads, kindFilter: { ...s.workloads.kindFilter, [k]: !s.workloads.kindFilter[k] }, kindExplicit: true } })),
+  setWorkloadKindFilter: (kinds) => set((s) => ({ workloads: { ...s.workloads, kindFilter: workloadKindFilterFor(kinds), kindExplicit: true } })),
+  hydrateWorkloadKinds: (kinds) => set((s) => ({ workloads: { ...s.workloads, kindFilter: workloadKindFilterFor(kinds), kindExplicit: false } })),
   toggleNeedsAttention: () => set((s) => ({ workloads: { ...s.workloads, needsAttention: !s.workloads.needsAttention } })),
   setWorkloadsNeedsAttention: (v) => set((s) => ({ workloads: { ...s.workloads, needsAttention: v } })),
   setWorkloadsSearch: (search) => set((s) => ({ workloads: { ...s.workloads, search } })),
@@ -1251,7 +1258,7 @@ export const useFleet = create<FleetState>((set) => ({
       if (s.workloads.cluster !== cluster || s.workloads.namespace !== namespace) return {};
       return { workloads: { ...s.workloads, live } };
     }),
-  clearWorkloads: () => set((s) => ({ workloads: { ...s.workloads, cluster: null, items: [], namespaces: [], expanded: [], kindFilter: workloadKindFilterFor(WORKLOAD_KINDS), needsAttention: false, search: "", namespace: "", metricsAvailable: false, metricsStatus: null, metricsStale: false, nearLimitSort: false, live: false, truncated: false, error: null, rowsScope: null } })),
+  clearWorkloads: () => set((s) => ({ workloads: { ...s.workloads, cluster: null, items: [], namespaces: [], expanded: [], kindFilter: workloadKindFilterFor(WORKLOAD_KINDS), kindExplicit: false, needsAttention: false, search: "", namespace: "", metricsAvailable: false, metricsStatus: null, metricsStale: false, nearLimitSort: false, live: false, truncated: false, error: null, rowsScope: null } })),
   pods: { cluster: null, namespace: "", items: [], namespaces: [], loading: false, needsAttention: false, search: "", selected: null, detail: null, detailLoading: false, live: false },
   setPodsLoading: (cluster, namespace) => set((s) => ({ pods: { ...s.pods, cluster, namespace, loading: true } })),
   setPods: (cluster, namespace, result) => set((s) => {

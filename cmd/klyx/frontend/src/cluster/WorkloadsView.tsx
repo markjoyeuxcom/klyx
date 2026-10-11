@@ -138,8 +138,10 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
     const prefs = loadClusterPrefs(cluster).workloads ?? {};
     if (prefs.needsAttention && !st.workloads.needsAttention) st.setWorkloadsNeedsAttention(true);
     if (prefs.nearLimitSort && !st.workloads.nearLimitSort) st.toggleNearLimitSort();
-    const kindsAtDefault = KINDS.every((k) => st.workloads.kindFilter[k]);
-    if (prefs.kinds && prefs.kinds.length > 0 && prefs.kinds.length < KINDS.length && kindsAtDefault) st.setWorkloadKindFilter(prefs.kinds);
+    // Saved kinds fill only an unchosen default: an explicit All workloads
+    // (navigation or history) is not overwritten.
+    const kindsAtDefault = KINDS.every((k) => st.workloads.kindFilter[k]) && !st.workloads.kindExplicit;
+    if (prefs.kinds && prefs.kinds.length > 0 && prefs.kinds.length < KINDS.length && kindsAtDefault) st.hydrateWorkloadKinds(prefs.kinds);
     const savedSearch = loadSearch(cluster, "workloads");
     if (savedSearch && st.workloads.search === "") st.setWorkloadsSearch(savedSearch);
     const ns = st.workloads.namespace || (prefs.namespace ?? "");
