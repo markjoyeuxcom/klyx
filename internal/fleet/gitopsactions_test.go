@@ -282,7 +282,17 @@ func TestReconcileWithSourceReportsAPartialWrite(t *testing.T) {
 		wantSource string
 	}{
 		{"source written", nil, "its source GitRepository flux-system/flux-system was already asked to reconcile"},
-		{"source failed", errors.New("gitrepositories is forbidden"), "its source GitRepository flux-system/flux-system was not asked to reconcile either: gitrepositories is forbidden"},
+		// a definite API refusal: nothing was committed for the source
+		{"source refused", apierrors.NewForbidden(schema.GroupResource{Group: "source.toolkit.fluxcd.io", Resource: "gitrepositories"}, "flux-system", errors.New("rbac")),
+			"its source GitRepository flux-system/flux-system was not asked to reconcile either: "},
+		// Codex review of 9c58cca: a transport loss or deadline may have
+		// committed before the answer was lost - unverified, never "not asked"
+		{"source transport lost", errors.New("read tcp 10.0.0.1:443: connection reset by peer"),
+			"its source GitRepository flux-system/flux-system reconcile request failed and its outcome is unverified: read tcp"},
+		{"source timed out", context.DeadlineExceeded,
+			"its source GitRepository flux-system/flux-system reconcile request failed and its outcome is unverified: context deadline exceeded"},
+		{"source 504", apierrors.NewTimeoutError("the request timed out", 1),
+			"its source GitRepository flux-system/flux-system reconcile request failed and its outcome is unverified: "},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dyn := fake.NewSimpleDynamicClientWithCustomListKinds(dynScheme(), map[schema.GroupVersionResource]string{ksGVR(): "KustomizationList", gitRepoGVR: "GitRepositoryList"},
@@ -293,7 +303,8 @@ func TestReconcileWithSourceReportsAPartialWrite(t *testing.T) {
 			}
 			c := newActionConn(dyn)
 			err := c.ReconcileWithSource(context.Background(), "Kustomization", "flux-system", "app", "uid-app")
-			if !errors.Is(err, ErrReplaced) || !strings.Contains(err.Error(), tc.wantSource) || strings.Contains(err.Error(), "nothing was written") {
+			if !errors.Is(err, ErrReplaced) || !strings.Contains(err.Error(), tc.wantSource) || strings.Contains(err.Error(), "nothing was written") ||
+				(tc.sourceErr != nil && !definiteRefusal(tc.sourceErr) && strings.Contains(err.Error(), "was not asked")) {
 				t.Fatalf("the partial outcome must be said: %v", err)
 			}
 			sourcePatched := false

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -92,6 +93,19 @@ func (c *ClusterConn) checkArmed(ctx context.Context, gvr schema.GroupVersionRes
 	return u, nil
 }
 
+// definiteRefusal: the API server answered and refused a write (a 4xx
+// status other than a request timeout) - nothing was committed. Anything
+// else (transport loss, a deadline, a 5xx) may have committed before the
+// answer was lost, so its outcome is unverified (Codex review of 9c58cca).
+func definiteRefusal(err error) bool {
+	var st apierrors.APIStatus
+	if !errors.As(err, &st) {
+		return false
+	}
+	code := st.Status().Code
+	return code >= 400 && code < 500 && code != http.StatusRequestTimeout
+}
+
 // patchArmed writes a UID-guarded merge patch to the armed object. A write
 // the server refuses for the UID (a replacement after checkArmed) is
 // ErrReplaced; a replacement that is gone again is too. The error speaks
@@ -149,10 +163,13 @@ func (c *ClusterConn) ReconcileWithSource(ctx context.Context, kind, ns, name, u
 		if sgvr, ok := c.sourceServedGVR(ref.Kind); ok {
 			body := flux.ReconcilePatch(c.clk.Now())
 			what := fmt.Sprintf("its source %s %s/%s", ref.Kind, ref.Namespace, ref.Name)
-			if _, err := c.dyn.Resource(sgvr).Namespace(ref.Namespace).Patch(ctx, ref.Name, types.MergePatchType, body, metav1.PatchOptions{}); err != nil {
-				source = what + " was not asked to reconcile either: " + err.Error()
-			} else {
+			switch _, err := c.dyn.Resource(sgvr).Namespace(ref.Namespace).Patch(ctx, ref.Name, types.MergePatchType, body, metav1.PatchOptions{}); {
+			case err == nil:
 				source = what + " was already asked to reconcile"
+			case definiteRefusal(err):
+				source = what + " was not asked to reconcile either: " + err.Error()
+			default:
+				source = what + " reconcile request failed and its outcome is unverified: " + err.Error()
 			}
 		}
 	}
