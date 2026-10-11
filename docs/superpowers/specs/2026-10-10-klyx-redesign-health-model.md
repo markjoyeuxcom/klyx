@@ -109,6 +109,8 @@ Cordon is an independent operation fact carried on the DTO; a cordoned NotReady 
 | Unconnected, Failed | unreachable | no (unknown) |
 | any other value | unknown | no |
 
+**Amendment (2026-10-11, slice 1c v2.1).** For every surface served by the 1c Observer, the Stale row's "last-good, dimmed" applies per kind, not per cluster. Each watched kind's freshness is its own state machine (1c addendum §3.1). The connection word stays this table's, but it never sets kind freshness. A Stale or unreachable connection reaches each kind through that kind's own recorded errors, and a Degraded connection leaves kinds live. Surfaces not yet on the Observer keep the row as written.
+
 Fleet meters: `clusters`, `connected`, `attention` (clusters with ≥1 known fault/degraded), `unknown coverage` (clusters with gaps). Buckets are allowed to overlap and are labelled as independent facts, not a partition. Fixes FleetView "HEALTHY = Synced" (`fleet/FleetView.tsx:59`), connecting-as-unreachable (`:39`) and the green stale spine lamp (`chrome/FleetSpine.tsx:99`).
 
 ### Amendments from Codex's v2 review (approve-with-changes, binding on 1a)

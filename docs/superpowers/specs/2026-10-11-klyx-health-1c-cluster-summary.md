@@ -1,6 +1,6 @@
-# Klyx health slice 1c: the cluster health summary (design addendum, v2)
+# Klyx health slice 1c: the cluster health summary (design addendum, v2.1)
 
-Date: 2026-10-11. Status: v2 for Codex design review; no code before approval. Parent: `2026-10-10-klyx-redesign-health-model.md` §4 (binding requirements R1-R6). Consumer: `2026-10-10-klyx-redesign-layout-nav.md` §4 (fault discovery). The step 7e frontend summary is what this replaces.
+Date: 2026-10-11. Status: v2 APPROVED WITH CHANGES by Codex. v2.1 applies the four required amendments, A1-A4: part versions in §4, the reflector restart barrier in §3.1, route identity in §1.3, and the mismatch fallback in §4. It also applies the optional clarifications. Slice 1 may start once these are confirmed. Parent: `2026-10-10-klyx-redesign-health-model.md` §4 (binding requirements R1-R6). Consumer: `2026-10-10-klyx-redesign-layout-nav.md` §4 (fault discovery). The step 7e frontend summary is what this replaces.
 
 v1 (e92a9ca) got REWORK with eight required changes (C1-C8). The Observer direction and a budget of about 190 watches were accepted in principle. v2 changes the publication, coverage and acceptance contracts. Each section names the change it answers.
 
@@ -57,12 +57,11 @@ Each model entry is a pruned copy built by the transform, and the decoded object
 - the template's container names and images;
 - status: complete.
 
-Each workload entry also stores two precomputed facts:
+Each workload entry also stores its Reloader targets, `reloadTargets(annotations, podSpec)` (`assemble.go:193`, `reloader.go:89-110`), precomputed from the raw object at transform time.
 
-- its Reloader targets, `reloadTargets(annotations, podSpec)` (`assemble.go:193`, `reloader.go:89-110`), computed from the raw object at transform time;
-- its template resource totals.
+Workload resources keep today's derivation from matched pods (`assemble.go`), never template totals. The two differ after admission and at zero replicas.
 
-Workload DTO assembly takes the precomputed facts instead of the raw annotations and pod spec. Selector-matched pod facts keep working: pod labels are retained, and the selector is kept.
+Workload DTO assembly takes the precomputed Reloader targets instead of the raw annotations and pod spec. Selector-matched pod facts keep working: pod labels are retained, and the selector is kept.
 
 **Services** are metadata-only (existence). An **EndpointSlice** keeps its service-name label, address type and, per endpoint, the ready condition and targetRef kind. Addresses are dropped; `routeIssues` reads counts only. **ReplicaSets** and **namespaces** are metadata-only.
 
@@ -77,7 +76,17 @@ This gate passes before 1c-2 evaluates from projections and before 1c-6 serves r
 
 **Objects** are counted once per part by UID.
 
-**Attachments** are counted per route × parent Gateway. The part's count names its entity: "routes with a failing attachment" counts route objects. The Top refs list the attachments.
+**Routes (A3).** Attachments are internal identities: (route UID, parent Gateway namespace/name). An attachment exists for each parentRef whose Gateway is in the model, as the topology builds lanes today. The counted entity is the route object, once per UID:
+
+- its Role is the worst role across its attachments;
+- it is Included if any of its attachments is included;
+- Total and the role partition count routes, not attachments.
+
+The Top ref carries the route plus its worst attachment's parent (ties broken by parent namespace/name), and the lens row lists every attachment. A route with one healthy and two failing parents counts once, with the worse failing role, and names that parent.
+
+Removing a parent Gateway drops that attachment and re-derives the route. A route whose only parent is gone is not counted, which is today's behaviour, carried verbatim; dangling parentRefs belong to the Gateway domain table. Recreating the parent restores the attachment under the same identity, with progressing or unknown roles until its controller writes status.
+
+The Gateways lens gains a Routes part view whose header and filter count equal the part's `Included`. Today the lens header counts Gateways only (`GatewayApiView.tsx:74`).
 
 **Controller issues** are a task-level field, `Controller{State, Reason}`, never added to a part count. Today they come from the capability tiers; after 1c the 5m re-probe keeps them current. A task can be lit by its controller alone: "controller not ready", with no object number.
 
@@ -140,7 +149,29 @@ The ListWatch is wrapped. A list or watch-establish error, a `watch.Error` event
 | stale | `Replace` applied after the error | live |
 | any | lease released / generation ended | (model discarded) |
 
-`live` therefore means that a complete replacement list was applied after the last error, and no error has been recorded since. A stale kind whose re-list is still paging stays stale until `Replace` runs. Kinds are independent: one domain can recover while another remains failed. The connection state (health spec §2) is a separate axis, and it never sets kind freshness. Connection Degraded is "connected · notes" and leaves kinds live. A Stale or unreachable connection reaches each kind through its own watch errors.
+`live` therefore means that a complete replacement list was applied after the last error, and no error has been recorded since. A stale kind whose re-list is still paging stays stale until `Replace` runs.
+
+**Restart barrier (A2).** The pinned client-go v0.36.2 Reflector retries a failed watch establishment from `LastSyncResourceVersion` without listing again (`tools/cache/reflector.go:561-668`). This covers connection refused, 429 and internal errors. A clean watch timeout also re-watches without a list. So `Replace` alone would never arrive after those errors.
+
+Therefore any error Klyx records for a kind (a list error, a watch-establish error, or a `watch.Error` event) moves the kind to `stale` and ends that kind's **reflector instance**. Its context is cancelled, stopping its internal retry. A new reflector instance then starts after an exponential backoff (1s doubling to 30s, with jitter). A new reflector begins with an empty resource version, so it must list completely and call `Replace` before the kind is `live` again.
+
+Each instance writes through its own store adapter, stamped with the instance id. The model accepts calls only from the current instance, so late events from a cancelled instance are dropped.
+
+The model's contents survive the restart as retained evidence until the new `Replace` lands.
+
+A watch that ends cleanly, by server timeout or rotation, records no error and stays `live`. The reflector resumes from `LastSyncResourceVersion`, and the watch protocol makes that continuous: the server replays from that version or answers 410 Expired, which the reflector turns into a full list and `Replace`. This is not "watch establishment equals catch-up". It is the protocol's version continuity on a path where Klyx observed no error.
+
+Tests cover each path:
+
+- a failed establishment followed by a successful watch with no list (stays `stale`; the restart's `Replace` makes it `live`);
+- a quiet resumed stream (stays `live`);
+- a normal timeout (no error, no fault);
+- an expired version (the reflector's own re-list and `Replace`);
+- a late event from a cancelled instance (dropped).
+
+Kinds are independent: one domain can recover while another remains failed. The connection state (health spec §2) is a separate axis, and it never sets kind freshness. Connection Degraded is "connected · notes" and leaves kinds live. A Stale or unreachable connection reaches each kind through that kind's own recorded errors.
+
+This replaces the parent spec's §2 Stale row for every surface on the Observer. The parent spec carries a matching amendment, so the two documents do not contradict each other.
 
 ### 3.2 Leases, owners and generations
 
@@ -162,33 +193,56 @@ The ListWatch is wrapped. A list or watch-establish error, a `watch.Error` event
 
 - **Incarnation.** Each Observer has an `Incarnation` from a process-wide monotonic counter. Connection recovery never changes it; a new Observer for the same cluster gets a higher one.
 - **Final.** Cancelling the Observer's context publishes once with `Final: true`, bypassing the throttle, and removes the observer from `Summaries()`.
-- **Tombstones.** The frontend records `finalizedThrough[cluster] = incarnation` and drops any summary or rows at or below it, so a delayed bootstrap cannot resurrect the observer. `Final` removes the summary entry, never the configured fleet cluster: the fleet list still comes from `fleet:updated`.
+- **Tombstones.** The frontend records `finalizedThrough[cluster] = max(finalizedThrough[cluster], incarnation)` and drops any summary or rows at or below it, so a delayed bootstrap cannot resurrect the observer.
+- **Final from an older incarnation** never deletes a newer observer's stored summary. A `Final` removes the stored entry only when that entry's incarnation is the same or older.
+- `Final` removes the summary entry, never the configured fleet cluster: the fleet list still comes from `fleet:updated`.
 
 ## 4. Publication: sequence, watermarks and atomic capture (R3, C1, C7)
 
 Two different counters:
 
 - **`Seq`**, the publication sequence, is per Observer and monotonic. It advances on every observable change: a model mutation, a timer reclassification, a kind freshness transition (error, recovery, timeout), a capability or controller change, and a successful snapshot even when its content is unchanged (freshness advanced). The frontend orders by `(Incarnation, Seq)` and keeps strictly newer, so no observable change can be discarded.
-- **`Obs`**, the per-part observation watermark, is monotonic. It advances only when that part's counted data changes: a model mutation in its counted kinds or dependencies, or a snapshot with changed content. Unrelated parts never advance it, so pod churn does not invalidate Certificates.
+- **`Obs`**, the per-part data watermark, is informational. It advances when that part's counted data changes: a model mutation in its counted kinds or dependencies, or a snapshot with changed content.
+- **`Ver`**, the per-part version (A1), is monotonic. It orders a part's counts and rows. It advances on every part-visible change:
+  - `Obs` advanced;
+  - a re-evaluation changed any classification, label or `Next` (a time boundary crossed with no data change);
+  - the part's coverage or a kind's freshness, class, AsOf or LastGoodAt changed (error, recovery, timeout);
+  - a successful unchanged snapshot advanced AsOf.
 
-**Atomic capture.** A part's model mutations and its `Obs` increment happen under the part's lock. Evaluation takes the lock, captures the model contents and `Obs` together, releases it, and evaluates the captured set. Counts, Top refs and rows are always stamped with the `Obs` of exactly the contents they were computed from, never a value read after assembly.
+  Unrelated parts are not re-evaluated, so their `Ver` does not move: pod churn never touches Certificates.
+
+**Atomic capture.** A part's model mutations and its `Obs` increment happen under the part's lock. Evaluation takes the lock, captures the model contents and `Obs` together, releases it, and evaluates the captured set at one `EvaluatedAt`. Counts, Top refs and rows from one capture share its `Obs`, `Ver` and `EvaluatedAt`. Nothing is stamped with a value read after assembly.
 
 **Throttle.** Any change marks the Observer dirty. A publish is scheduled at `max(now, lastPublish + 1s)`, so the maximum delivery delay is 1s. One publish tick emits:
 
 1. the summary at its `Seq`, with every part's `Obs`;
-2. for each part whose `Obs` advanced and which has an open lens subscription, its rows with the counts computed from the same capture (atomic count + rows).
+2. for each part whose `Ver` advanced and which has an open lens subscription, its rows with the counts from the same capture (atomic count + rows).
 
 **One number per task (C7, both directions).** For a task whose rows are on screen, the lens header, the nav tree and the mast's task state all take that task's counts from the rows payload. For other tasks they come from the summary. Both are produced by one capture per tick, so they normally carry the same `Obs`.
 
-- If a summary arrives with a part `Obs` newer than the rows on screen, the task's counts keep the rows' counts and mark `updating` until the matching rows arrive. After 1s they switch to the summary's count, and the rows themselves show `updating`.
-- If rows arrive newer than the summary, the rows' counts are used immediately.
+- **Rows newer than the summary:** their counts are used at once.
+- **Summary newer than the rows (A4).** A part's `Ver` in the summary above the rows' `Ver` opens a mismatch, and its deadline is fixed at the first unresolved mismatch: **1s**. Later summary ticks never reset it.
+  - Until the deadline, the counts stay the rows' counts, marked `updating`.
+  - Any row payload with `Ver` at or above the summary's part `Ver` resolves the mismatch. It need not equal an obsolete watermark.
+  - At the deadline, the counts switch to the summary. The rows are qualified "as of HH:MM:SS - refreshing", with their verdict chips dimmed, so an old row's verdict is never presented as current evidence. A fenced `Rows(cluster, part)` re-bootstrap is also issued.
+- **Fencing.** Each re-bootstrap carries a request generation. A reply is applied only if its generation is current and its `Ver` is newer than the rows held. So a delayed or dropped rows event cannot leave a quiet part `updating` forever, and a stale reply cannot win a race with a later event.
 
-Under continuous churn every tick delivers rows and counts at one `Obs`, so `updating` never persists. Tests cover continuous updates, summary-newer-than-rows and rows-newer-than-summary.
+Under continuous churn every tick delivers rows and counts at one `Ver`, so `updating` never persists.
+
+Tests:
+
+- continuous churn;
+- summary newer than rows, and rows newer than summary;
+- a time boundary crossing with an open lens (fake clock): rows and counts update with no data change;
+- error and recovery, and an unchanged successful snapshot, each with no model mutation;
+- unrelated parts keep their `Ver`;
+- a dropped rows event and a delayed rows event (the deadline, then re-bootstrap);
+- a bootstrap reply racing a later event.
 
 **Transport.**
 
 - The `health:summary` event carries the full summary; `health:rows:<cluster>:<part>` carries rows per subscribed part.
-- The summary is bootstrapped with `HealthService.Summaries()`, and rows with `HealthService.Rows(cluster, part)`. Each subscribes before it bootstraps and keeps only strictly newer by `(Incarnation, Seq)` for summaries and `(Incarnation, Obs)` for rows.
+- The summary is bootstrapped with `HealthService.Summaries()`, and rows with `HealthService.Rows(cluster, part)`. Each subscribes before it bootstraps and keeps only strictly newer by `(Incarnation, Seq)` for summaries and `(Incarnation, Ver)` for rows.
 - Details (inspector) carry UID and generation.
 
 ## 5. Time, staleness names and coverage (R4, R5, C6)
@@ -229,7 +283,8 @@ type Part struct {
 	Native            *NativeCounts
 	Evidence          *int
 	Top               []Ref      // worst first, max 5; attachments for route parts
-	Obs               uint64
+	Obs               uint64     // data watermark (informational)
+	Ver               uint64     // part version: orders counts and rows (§4)
 	AsOf              time.Time  // MIN of its kinds' AsOf (the oldest freshness, conservative)
 	Next              *time.Time
 }
@@ -308,8 +363,9 @@ These are proposed acceptance budgets for review. If a measurement misses its bu
 - initial sync of all kinds ≤ 20s;
 - Klyx RSS increase ≤ 200 MB;
 - idle CPU ≤ 2% of one core; ≤ 15% under 50 pod updates/s;
-- one paged initial list per kind per generation, checked from the API server's `apiserver_request_total` delta;
-- connection and stream counts recorded.
+- one logical list cycle per kind per reflector instance; paginated LIST requests are counted separately, from the API server's `apiserver_request_total` delta;
+- connection and stream counts recorded;
+- steady and peak memory measured with every task's row subscription open.
 
 The fixture is deleted after the run, and the numbers go in the PR. The six AKS clusters are the owner's acceptance run.
 
@@ -332,10 +388,12 @@ Tests:
 - two simultaneous holders; repeated opens and closes; release during discovery and during start; late callbacks from an ended generation;
 - disappearance and reappearance (a new generation); a version 404 that re-probes; a discovery error that confirms nothing;
 - error and recovery without object changes; a re-list still paging stays stale; one kind recovering while another stays failed;
+- the restart barrier paths (§3.1): a failed establishment then a successful watch with no list; a quiet resumed stream; a normal timeout; an expired version; a late event from a cancelled instance;
 - a time-only threshold crossing; an unchanged successful snapshot that advances freshness;
 - concurrent mutation during evaluation (race detector);
-- continuous updates; summary-newer-than-rows; rows-newer-than-summary;
-- Final; a delayed bootstrap after Final; handler and goroutine baselines.
+- the §4 publication tests;
+- a route with one healthy and two failing parents, with parent removal and recreation;
+- Final; a delayed bootstrap after Final; a late Final from an older incarnation; handler and goroutine baselines.
 
 ### Slice 2. Sources
 
