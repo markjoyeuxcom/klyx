@@ -16,6 +16,7 @@ import { InstanceList } from "./InstanceList";
 import { InstanceListLegacy } from "./InstanceListLegacy";
 import { GatewayApiView } from "./GatewayApiView";
 import { GatewayApiViewLegacy } from "./GatewayApiViewLegacy";
+import { HubbleFlowsView } from "./HubbleFlowsView";
 import { WorkloadsView } from "./WorkloadsView";
 import { WorkloadsViewLegacy } from "./WorkloadsViewLegacy";
 import { PodsView } from "./PodsView";
@@ -75,6 +76,7 @@ export function ClusterDetail() {
     return <CRDBrowser cluster={cluster.name} />;
   }
   if (route.section === "gatewayApi") return legacyLens("Gateway") ? <GatewayApiViewLegacy cluster={cluster.name} /> : <GatewayApiView cluster={cluster.name} />;
+  if (route.section === "flows") return <HubbleFlowsView cluster={cluster.name} />;
   if (route.section === "workloads") return legacyLens("Workloads") ? <WorkloadsViewLegacy cluster={cluster.name} /> : <WorkloadsView cluster={cluster.name} />;
   if (route.section === "pods") return legacyLens("Pods") ? <PodsViewLegacy cluster={cluster.name} /> : <PodsView cluster={cluster.name} />;
   if (route.section === "events") return legacyLens("Events") ? <EventsViewLegacy cluster={cluster.name} /> : <EventsView cluster={cluster.name} />;

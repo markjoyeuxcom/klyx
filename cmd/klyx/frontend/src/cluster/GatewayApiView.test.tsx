@@ -1,16 +1,14 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, fireEvent, screen, within } from "@testing-library/react";
 import { useFleet } from "../store/fleet";
-import type { CondDTO, GatewayRefDTO, HubbleStatsDTO } from "../store/fleet";
+import type { CondDTO, GatewayRefDTO } from "../store/fleet";
 
 vi.mock("../bridge/gateway", () => ({
   listGateways: vi.fn(async () => {}),
   getGatewayTopology: vi.fn(async () => {}),
   getRouteMetrics: vi.fn(async () => {}),
   abandonRouteMetrics: vi.fn(),
-  getHubbleFlowStats: vi.fn(async () => ({}) as HubbleStatsDTO),
 }));
-import { getHubbleFlowStats } from "../bridge/gateway";
 import { GatewayApiView } from "./GatewayApiView";
 
 const cond = (status: string, reason = "", observedGeneration = 1): CondDTO => ({ status, reason, message: "", observedGeneration });
@@ -19,10 +17,10 @@ const gw = (name: string, over: Partial<GatewayRefDTO> = {}): GatewayRefDTO => (
   addresses: [{ type: "IPAddress", value: "192.0.2.10" }], listeners: [{ name: "https", protocol: "HTTPS", hostname: "", port: 443 }], ...over,
 });
 
-function net(over: Partial<ReturnType<typeof useFleet.getState>["network"]> = {}, hubble = false) {
-  useFleet.setState((s) => ({
+function net(over: Partial<ReturnType<typeof useFleet.getState>["network"]> = {}) {
+  useFleet.setState(() => ({
     route: { name: "cluster", cluster: "x", section: "gatewayApi" },
-    clusters: hubble ? [{ ...(s.clusters[0] ?? {}), name: "x", hasHubble: true } as never] : [],
+    clusters: [],
     network: { cluster: "x", served: true, gateways: [], listLoading: false, listError: null, selected: null, topology: null, topologyLoading: false, topologyError: null, topologyAt: null, selectedRoute: null, routeMetrics: {}, routeMetricsStatus: null, routeMetricsStale: false, ...over },
   }));
 }
@@ -127,24 +125,5 @@ describe("GatewayApiView (redesign step 6)", () => {
     expect(screen.getByTestId("gateway-panel")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Programmed" }));
     expect(screen.queryByTestId("gateway-panel")).toBeNull();
-  });
-
-  it("Hubble flows are a second view, shown only with Hubble; zero drops never glow", async () => {
-    vi.mocked(getHubbleFlowStats).mockResolvedValue({
-      forwardRate: 120, dropRate: 0, dropReasons: [], dnsErrorRate: null, dnsTotalRate: null, httpErrorRate: null, httpTotalRate: null,
-      status: { available: true, message: "", updatedAt: "2026-10-10T00:00:00Z" },
-    });
-    net({ gateways: [gw("eg")] }, true);
-    render(<GatewayApiView cluster="x" />);
-    fireEvent.click(screen.getByRole("button", { name: "Flows (Hubble)" }));
-    expect(await screen.findByText("no drops")).toBeTruthy();
-    expect(screen.queryByText(/dropped\/s/)).toBeNull();
-    expect(screen.getByText("No drops in the window.")).toBeTruthy();
-  });
-
-  it("without Hubble there is no Flows view", () => {
-    net({ gateways: [gw("eg")] });
-    render(<GatewayApiView cluster="x" />);
-    expect(screen.queryByRole("button", { name: "Flows (Hubble)" })).toBeNull();
   });
 });

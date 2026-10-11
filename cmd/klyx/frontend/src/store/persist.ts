@@ -1,5 +1,5 @@
 import { useFleet } from "./fleet";
-import type { ArgoViewMode, ClusterSection, Route, WorkloadKind } from "./fleet";
+import type { ArgoViewMode, ClusterSection, FluxViewMode, Route, WorkloadKind } from "./fleet";
 
 // Session persistence for navigation + per-cluster view filters.
 //
@@ -46,19 +46,19 @@ type PersistedRoute =
   | { name: "forwards" }
   | { name: "settings" }
   | { name: "activity" }
-  | { name: "cluster"; cluster: string; section: string; argoView?: string };
+  | { name: "cluster"; cluster: string; section: string; argoView?: string; fluxView?: string };
 
 // Sections that exist today; a persisted route naming an unknown section (from
 // an older or newer build) falls back to overview rather than rendering nothing.
 const KNOWN_SECTIONS = new Set([
   "overview", "gitops", "argo", "helm", "certs", "externalsecrets",
-  "gatewayApi", "resources", "crds", "workloads", "pods", "events", "nodes", "access", "upgrade", "connectivity", "karpenter",
+  "gatewayApi", "flows", "resources", "crds", "workloads", "pods", "events", "nodes", "access", "upgrade", "connectivity", "karpenter",
 ]);
 
 export function saveRoute(route: Route): void {
   let persisted: PersistedRoute;
   if (route.name === "cluster") {
-    persisted = { name: "cluster", cluster: route.cluster, section: route.section, argoView: route.argoView };
+    persisted = { name: "cluster", cluster: route.cluster, section: route.section, argoView: route.argoView, fluxView: route.fluxView };
   } else {
     persisted = { name: route.name };
   }
@@ -77,6 +77,7 @@ export function loadRoute(): PersistedRoute | null {
         cluster: parsed.cluster,
         section: KNOWN_SECTIONS.has(parsed.section) ? parsed.section : "overview",
         argoView: parsed.argoView,
+        fluxView: parsed.fluxView,
       };
     }
     return null;
@@ -115,6 +116,7 @@ export function restoreRouteOnBoot(clusterNames: string[]): void {
     saved.argoView === "applications" || saved.argoView === "projects" || saved.argoView === "applicationsets"
       ? saved.argoView
       : undefined;
+  const fluxView: FluxViewMode | undefined = saved.fluxView === "reconciliation" || saved.fluxView === "sources" ? saved.fluxView : undefined;
   useFleet.setState({
     route: {
       name: "cluster",
@@ -122,6 +124,7 @@ export function restoreRouteOnBoot(clusterNames: string[]): void {
       // validated against KNOWN_SECTIONS in loadRoute - the cast is safe
       section: saved.section as ClusterSection,
       argoView,
+      fluxView,
     },
   });
 }

@@ -10,6 +10,8 @@ function message(section: ClusterSection, c: ClusterDTO): string {
       return c.networkTier === "Absent"
         ? "No Gateway API or Cilium installed on this cluster."
         : "Gateway topology arrives in M5.";
+    case "flows":
+      return "";
     case "resources":
       return "";
     case "crds":

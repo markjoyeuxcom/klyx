@@ -15,6 +15,8 @@ import { stopAllForwards } from "../bridge/forwards";
 vi.mock("./ThemeToggle", () => ({ ThemeToggle: () => null }));
 vi.mock("./CommandPalette", () => ({ openCommandPalette: vi.fn() }));
 import { openCommandPalette } from "./CommandPalette";
+vi.mock("../bridge/configsvc", () => ({ openTerminal: vi.fn(async () => {}) }));
+import { openTerminal } from "../bridge/configsvc";
 
 const active: ForwardDTO = {
   id: "c/team/api#1",
@@ -35,9 +37,12 @@ describe("TopBar forwards indicator", () => {
     useFleet.getState().setForwards([]);
   });
 
-  it("renders nothing when there are no forwards", () => {
-    const { queryByTestId } = render(<TopBar />);
+  it("with no forwards there is no live chip - the Port-forwards utility opens the view", () => {
+    useFleet.setState({ route: { name: "fleet" } });
+    const { queryByTestId, getByRole } = render(<TopBar />);
     expect(queryByTestId("forwards-chip")).toBeNull();
+    fireEvent.click(getByRole("button", { name: "Port-forwards" }));
+    expect(useFleet.getState().route).toEqual({ name: "forwards" });
   });
 
   it("opens the command palette when the command bar is clicked", () => {
@@ -86,5 +91,34 @@ describe("TopBar forwards indicator", () => {
     fireEvent.click(getByTestId("forwards-chip"));
     expect(queryByTestId(`forward-stop-${active.id}`)).toBeNull();
     expect(queryByTestId("forwards-view-all")).toBeNull();
+  });
+});
+
+describe("TopBar app utilities (redesign step 7a)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    useFleet.setState({ route: { name: "fleet" }, forwards: [], newContexts: 0 });
+  });
+
+  it("Activity and Settings are mast utilities with accessible names; the current one is marked", () => {
+    const { getByRole } = render(<TopBar />);
+    fireEvent.click(getByRole("button", { name: "Activity" }));
+    expect(useFleet.getState().route).toEqual({ name: "activity" });
+    fireEvent.click(getByRole("button", { name: "Settings" }));
+    expect(useFleet.getState().route).toEqual({ name: "settings" });
+    expect(getByRole("button", { name: "Settings" }).getAttribute("aria-current")).toBe("page");
+  });
+
+  it("Terminal launches the escape hatch without changing route", () => {
+    const { getByRole } = render(<TopBar />);
+    fireEvent.click(getByRole("button", { name: "Terminal" }));
+    expect(openTerminal).toHaveBeenCalledTimes(1);
+    expect(useFleet.getState().route).toEqual({ name: "fleet" });
+  });
+
+  it("Settings carries the new-context count in its name, not only in a tooltip", () => {
+    useFleet.setState({ newContexts: 2 });
+    const { getByRole } = render(<TopBar />);
+    expect(getByRole("button", { name: "Settings, 2 new kubeconfig contexts" }).textContent).toContain("2");
   });
 });

@@ -55,9 +55,12 @@ beforeEach(() => {
   vi.clearAllMocks();
   useFleet.setState({
     clusters: [cluster("Healthy")],
+    route: { name: "cluster", cluster: "x", section: "gitops" },
     gitops: { cluster: "x", resources: [], sources: [], loading: false, expandedKey: null, detail: null },
   });
 });
+// Sources is a navigation destination (step 7a), carried by the route.
+const openSources = () => act(() => useFleet.getState().openFlux("sources"));
 
 const inspector = () => within(screen.getByTestId("lens-inspector"));
 function chooseMore(label: string | RegExp) {
@@ -349,8 +352,8 @@ describe("GitOps view", () => {
         detail: null,
       },
     });
-    const { getByText, getAllByTestId, getByRole } = render(<GitOps cluster="x" />);
-    fireEvent.click(getByRole("button", { name: /^Sources/ }));
+    const { getByText, getAllByTestId } = render(<GitOps cluster="x" />);
+    openSources();
     expect(getAllByTestId("flux-source-row").length).toBe(1);
     expect(getByText("cilium")).toBeTruthy();
     expect(getByText("oci")).toBeTruthy();
@@ -484,10 +487,10 @@ describe("GitOps workspace template (redesign)", () => {
 
   it("Sources owns the source-type filter; Reconciliation owns the kind filter", () => {
     seedRows([res({ name: "a" })], { sources: [src({ name: "git1" }), src({ kind: "HelmRepository", name: "charts" })] });
-    const { getByRole, getByLabelText, queryByLabelText, getByText, queryByText } = render(<GitOps cluster="x" />);
+    const { getByLabelText, queryByLabelText, getByText, queryByText } = render(<GitOps cluster="x" />);
     expect(getByLabelText("Kind")).toBeTruthy();
     expect(queryByLabelText("Source type")).toBeNull();
-    fireEvent.click(getByRole("button", { name: /^Sources/ }));
+    openSources();
     expect(queryByLabelText("Kind")).toBeNull();
     fireEvent.change(getByLabelText("Source type"), { target: { value: "HelmRepository" } });
     expect(getByText("charts")).toBeTruthy();
@@ -509,8 +512,8 @@ describe("GitOps Codex rework (Flux review)", () => {
   it("2. a source has a keyboard-reachable full diagnosis and its users", () => {
     const long = "failed to checkout and determine revision: unable to clone 'ssh://git@example.com/very/long/path': ssh: handshake failed: knownhosts: key mismatch";
     seedRows([res({ name: "apps", sourceKind: "GitRepository", sourceName: "repo", sourceNamespace: "flux-system" })], { sources: [src({ name: "repo", ready: "Failed", reason: "GitOperationFailed", message: long })] });
-    const { getByRole } = render(<GitOps cluster="x" />);
-    fireEvent.click(getByRole("button", { name: /^Sources/ }));
+    render(<GitOps cluster="x" />);
+    openSources();
     act(() => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "j", bubbles: true, cancelable: true })); });
     act(() => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })); });
     expect(inspector().getByText(long)).toBeTruthy(); // full, wrapped - not a title
@@ -544,8 +547,8 @@ describe("GitOps Codex rework (Flux review)", () => {
 
   it("4b. all-suspended sources say no ACTIVE source needs attention", () => {
     seedRows([res({})], { sources: [src({ name: "s1", suspended: true }), src({ name: "s2", suspended: true, ready: "Failed" })] });
-    const { getByRole, getByText, queryByText } = render(<GitOps cluster="x" />);
-    fireEvent.click(getByRole("button", { name: /^Sources/ }));
+    const { getByText, queryByText } = render(<GitOps cluster="x" />);
+    openSources();
     expect(getByText("all active sources ready")).toBeTruthy();
     expect(queryByText("all sources ready")).toBeNull();
     expect(getByText("2 suspended")).toBeTruthy();
@@ -574,7 +577,7 @@ describe("GitOps Codex rework (Flux review)", () => {
 
 describe("GitOps source consumers are namespace-safe (Codex Flux re-review)", () => {
   const open = (sourceNs: string) => {
-    fireEvent.click(screen.getByRole("button", { name: /^Sources/ }));
+    openSources();
     const row = screen.getAllByTestId("flux-source-row").find((r) => r.textContent?.includes(`${sourceNs} / repo`))!;
     fireEvent.click(row);
   };

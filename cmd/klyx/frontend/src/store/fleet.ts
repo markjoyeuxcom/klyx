@@ -289,8 +289,10 @@ export type ExternalSecretsSlice = {
 
 // "observability" removed 2026-06-10: metrics ship inline in overview/workloads/network lanes
 // (design principle 5); a dedicated surface can return when it has real content.
-export type ClusterSection = "overview" | "gitops" | "argo" | "helm" | "certs" | "externalsecrets" | "gatewayApi" | "resources" | "crds" | "workloads" | "pods" | "events" | "nodes" | "access" | "upgrade" | "connectivity" | "karpenter";
+export type ClusterSection = "overview" | "gitops" | "argo" | "helm" | "certs" | "externalsecrets" | "gatewayApi" | "flows" | "resources" | "crds" | "workloads" | "pods" | "events" | "nodes" | "access" | "upgrade" | "connectivity" | "karpenter";
 export type ArgoViewMode = "applications" | "projects" | "applicationsets";
+// The Flux lens's two destinations (spec §4): the aggregate KS/HR view and Sources.
+export type FluxViewMode = "reconciliation" | "sources";
 
 export type OwnerDTO = { kind: string; namespace: string; name: string };
 export type PodDTO = { name: string; ready: boolean; restarts: number; reason: string; node: string; ageSeconds: number };
@@ -535,7 +537,7 @@ export type Route =
   | { name: "forwards" }
   | { name: "settings" }
   | { name: "activity" }
-  | { name: "cluster"; cluster: string; section: ClusterSection; resource?: ResourceRef; instance?: InstanceRef; gateway?: GatewayRef; argoView?: ArgoViewMode };
+  | { name: "cluster"; cluster: string; section: ClusterSection; resource?: ResourceRef; instance?: InstanceRef; gateway?: GatewayRef; argoView?: ArgoViewMode; fluxView?: FluxViewMode };
 
 export const SECTION_LABELS: Record<ClusterSection, string> = {
   overview: "Overview",
@@ -548,6 +550,7 @@ export const SECTION_LABELS: Record<ClusterSection, string> = {
   certs: "Certificates",
   externalsecrets: "External Secrets",
   gatewayApi: "Gateway API",
+  flows: "Hubble flows",
   resources: "Resources",
   crds: "CRDs",
   workloads: "Workloads",
@@ -833,6 +836,7 @@ type FleetState = {
   openCluster: (name: string) => void;
   setSection: (s: ClusterSection) => void;
   openArgo: (mode?: ArgoViewMode) => void;
+  openFlux: (view?: FluxViewMode) => void;
   openResource: (ref: ResourceRef) => void;
   closeResource: () => void;
   instances: InstancesSlice;
@@ -997,6 +1001,8 @@ export const useFleet = create<FleetState>((set) => ({
     set((s) => (s.route.name === "cluster" ? { route: { name: "cluster", cluster: s.route.cluster, section } } : {})),
   openArgo: (mode = "applications") =>
     set((s) => (s.route.name === "cluster" ? { route: { name: "cluster", cluster: s.route.cluster, section: "argo", argoView: mode } } : {})),
+  openFlux: (view = "reconciliation") =>
+    set((s) => (s.route.name === "cluster" ? { route: { name: "cluster", cluster: s.route.cluster, section: "gitops", fluxView: view } } : {})),
   openWorkloads: (kinds) =>
     set((s) => {
       if (s.route.name !== "cluster") return {};

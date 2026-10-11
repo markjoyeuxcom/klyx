@@ -80,7 +80,23 @@ export function FleetSpine() {
         padding: expanded ? "10px 6px" : "10px 0",
       }}
     >
-      <span style={{ fontSize: 8, letterSpacing: "0.16em", textTransform: "uppercase", color: "var(--color-text-tertiary)", marginBottom: 2 }}>fleet</span>
+      {/* The spine header is the Fleet destination (spec §1) - the one place
+          Fleet lives now that the nav band carries no duplicate. */}
+      <button
+        type="button"
+        onClick={() => useFleet.getState().openFleet()}
+        aria-current={route.name === "fleet" ? "page" : undefined}
+        title="Fleet board"
+        style={{
+          height: 24, alignSelf: "stretch", margin: expanded ? 0 : "0 3px", padding: 0, border: "none", borderRadius: 4, cursor: "pointer",
+          fontFamily: "var(--font-sans)", fontSize: 11, fontWeight: 600,
+          color: route.name === "fleet" ? "var(--color-text-primary)" : "var(--color-text-secondary)",
+          background: route.name === "fleet" ? "var(--bench-well-bg, var(--color-background-secondary))" : "transparent",
+          boxShadow: route.name === "fleet" ? "var(--bench-well-shadow, inset 0 0 0 1px var(--color-border-secondary))" : undefined,
+        }}
+      >
+        Fleet
+      </button>
       {clusters.map((c) => {
         const unreachable = c.state === "Failed" || c.state === "Unconnected";
         // One lamp, two axes kept honest: workload attention lights it

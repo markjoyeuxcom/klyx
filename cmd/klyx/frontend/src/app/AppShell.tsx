@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import { useFleet } from "../store/fleet";
-import { LensNav } from "../chrome/LensNav";
+import { NavBand } from "../chrome/NavBand";
 import { ShortcutsOverlay } from "../chrome/ShortcutsOverlay";
 import { frame } from "../chrome/primitives";
 
@@ -49,7 +49,7 @@ export function AppShell() {
       <div style={{ flex: 1, display: "flex", minHeight: 0, gap: 8 }}>
         <FleetSpine />
         <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0, gap: 8 }}>
-          <LensNav />
+          <NavBand />
           <div style={{ ...moduleShell, flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
             {route.name === "cluster" && <TriageTape cluster={route.cluster} />}
             <div style={{ flex: 1, minHeight: 0, overflow: route.name === "cluster" ? "hidden" : "auto" }}>

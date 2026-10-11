@@ -70,6 +70,20 @@ describe("route persistence", () => {
     expect(useFleet.getState().route).toMatchObject({ section: "argo", argoView: "projects" });
   });
 
+  it("restores the Flux destination and the Hubble flows section (step 7a); junk views drop", () => {
+    saveRoute({ name: "cluster", cluster: "x", section: "gitops", fluxView: "sources" });
+    restoreRouteOnBoot(["x"]);
+    expect(useFleet.getState().route).toMatchObject({ section: "gitops", fluxView: "sources" });
+    useFleet.setState({ route: { name: "fleet" } });
+    localStorage.setItem("klyx-route", JSON.stringify({ name: "cluster", cluster: "x", section: "gitops", fluxView: "bogus" }));
+    restoreRouteOnBoot(["x"]);
+    expect(useFleet.getState().route).toEqual({ name: "cluster", cluster: "x", section: "gitops" });
+    useFleet.setState({ route: { name: "fleet" } });
+    saveRoute({ name: "cluster", cluster: "x", section: "flows" });
+    restoreRouteOnBoot(["x"]);
+    expect(useFleet.getState().route).toMatchObject({ section: "flows" });
+  });
+
   it("initRoutePersistence mirrors store navigation into storage", () => {
     const off = initRoutePersistence();
     useFleet.getState().openCluster("stg-weu");

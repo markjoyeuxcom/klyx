@@ -28,6 +28,14 @@ describe("FleetSpine", () => {
     expect(useFleet.getState().route).toMatchObject({ name: "cluster", cluster: "blue" });
   });
 
+  it("the spine header is the Fleet destination (step 7a)", () => {
+    useFleet.setState({ clusters: [cluster("dev")], route: { name: "cluster", cluster: "dev", section: "pods" } });
+    const { getByRole } = render(<FleetSpine />);
+    fireEvent.click(getByRole("button", { name: "Fleet" }));
+    expect(useFleet.getState().route).toEqual({ name: "fleet" });
+    expect(getByRole("button", { name: "Fleet" }).getAttribute("aria-current")).toBe("page");
+  });
+
   it("marks the selected cluster with aria-current", () => {
     useFleet.setState({ clusters: [cluster("nelli"), cluster("blue")], route: { name: "cluster", cluster: "nelli", section: "pods" } });
     const { getByLabelText } = render(<FleetSpine />);

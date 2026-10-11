@@ -40,6 +40,7 @@ const SECTION_ORDER: ClusterSection[] = [
   "certs",
   "externalsecrets",
   "gatewayApi",
+  "flows",
   "access",
   "connectivity",
   "upgrade",

@@ -168,7 +168,10 @@ export function GitOps({ cluster }: { cluster: string }) {
   const expand = useFleet((s) => s.expand);
   const collapse = useFleet((s) => s.collapse);
   const isProtected = useFleet((s) => s.clusters.find((c) => c.name === cluster)?.protected ?? false);
-  const [view, setView] = useState<FluxView>("reconciliation");
+  // The view is the route's (the navigation band's Reconciliation / Sources
+  // destinations), so it survives restore and history like any destination.
+  const view: FluxView = useFleet((s) => (s.route.name === "cluster" && s.route.fluxView === "sources" ? "sources" : "reconciliation"));
+  const setView = useCallback((v: FluxView) => useFleet.getState().openFlux(v), []);
   const [status, setStatus] = useState<StatusFilter>("all");
   const [kindFilter, setKindFilter] = useState<KindFilter>("");
   const [sourceKind, setSourceKind] = useState("");
@@ -310,6 +313,15 @@ export function GitOps({ cluster }: { cluster: string }) {
 
   const openRow = useCallback((r: FluxResourceDTO) => { autoSelect.current = "done"; setCursorKey(keyOf(r)); expand(keyOf(r)); }, [expand]);
   const close = useCallback(() => { autoSelect.current = "done"; collapse(); }, [collapse]);
+  // Each destination keeps only its own filters: entering Sources drops the
+  // KS/HR kind filter and the open resource; entering Reconciliation drops
+  // the source-type filter.
+  const lastView = useRef(view);
+  useEffect(() => {
+    if (lastView.current === view) return;
+    lastView.current = view;
+    if (view === "sources") { setKindFilter(""); close(); } else setSourceKind("");
+  }, [view, close]);
   const navRows: { key: string; open: () => void }[] = view === "sources"
     ? visibleSources.map((s) => ({ key: keyOf(s), open: () => openSource(s) }))
     : visibleRows.map((r) => ({ key: keyOf(r), open: () => openRow(r) }));
@@ -394,12 +406,6 @@ export function GitOps({ cluster }: { cluster: string }) {
         )}
         controls={absent ? undefined : (
           <>
-            <div role="group" aria-label="Flux view" style={{ display: "inline-flex", gap: 4 }}>
-              <button className="l-chip" aria-pressed={view === "reconciliation"} onClick={() => { setView("reconciliation"); setSourceKind(""); }}>Reconciliation</button>
-              <button className="l-chip" aria-pressed={view === "sources"} onClick={() => { setView("sources"); setKindFilter(""); close(); }}>
-                Sources {srcAttention > 0 && <span style={{ color: "var(--color-text-warning)" }}>{srcAttention}</span>}
-              </button>
-            </div>
             {view === "reconciliation" ? (
               <label style={{ display: "flex" }}>
                 <span className="sr-only">Kind</span>

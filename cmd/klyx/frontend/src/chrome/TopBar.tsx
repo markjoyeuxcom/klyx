@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { IconCommand } from "@tabler/icons-react";
+import { IconArrowsLeftRight, IconCommand, IconHistory, IconSettings, IconTerminal2 } from "@tabler/icons-react";
 import { ThemeToggle } from "./ThemeToggle";
 import { KlyxMark } from "./KlyxMark";
 import { useFleet, SECTION_LABELS } from "../store/fleet";
@@ -8,6 +8,7 @@ import { StatusDot } from "./primitives";
 import { clusterDisplayName } from "../fleet/ClusterCard";
 import { stopAllForwards } from "../bridge/forwards";
 import { openCommandPalette } from "./CommandPalette";
+import { openTerminal } from "../bridge/configsvc";
 
 // Wails v3 window-drag regions: the bar is draggable, interactive children opt out.
 const drag = { "--wails-draggable": "drag" } as React.CSSProperties;
@@ -104,20 +105,57 @@ export function TopBar() {
           </span>
           <kbd style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--color-text-tertiary)" }}>⌘K</kbd>
         </button>
+        {/* App utilities (spec §4): icon buttons whose names live in their
+            accessible labels and tooltips - context outranks utility text. */}
         <ForwardsIndicator />
+        <UtilityButton label="Activity" title="Activity - recent action outcomes" current={route.name === "activity"} onClick={() => useFleet.getState().openActivity()}>
+          <IconHistory size={15} stroke={1.5} />
+        </UtilityButton>
+        <UtilityButton label="Terminal" title="Open a terminal with this fleet's kubeconfig" onClick={() => void openTerminal()}>
+          <IconTerminal2 size={15} stroke={1.5} />
+        </UtilityButton>
+        <SettingsButton current={route.name === "settings"} />
         <ThemeToggle />
       </div>
     </div>
   );
 }
 
-// ForwardsIndicator shows a compact "⇄ N" chip when any port-forwards exist.
-// Clicking it opens a glanceable dropdown: one compact line per forward, click
-// any line to jump to the Forwards section where the real management lives.
-// "stop all" stays here as the emergency brake. Broken rows render
-// warning-coloured.
+const utilityBtn = (current: boolean): React.CSSProperties => ({
+  display: "inline-flex", alignItems: "center", gap: 4, height: 24, minWidth: 24, padding: "0 6px", borderRadius: 4, border: "none", cursor: "pointer",
+  fontFamily: "var(--font-mono)", fontSize: 11,
+  color: current ? "var(--color-text-primary)" : "var(--color-text-secondary)",
+  background: current ? "var(--bench-well-bg, var(--color-background-secondary))" : "transparent",
+  boxShadow: current ? "var(--bench-well-shadow, inset 0 0 0 1px var(--color-border-tertiary))" : undefined,
+});
+
+function UtilityButton({ label, title, current = false, onClick, children }: { label: string; title: string; current?: boolean; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button type="button" aria-label={label} title={title} aria-current={current ? "page" : undefined} onClick={onClick} style={utilityBtn(current)}>
+      {children}
+    </button>
+  );
+}
+
+function SettingsButton({ current }: { current: boolean }) {
+  const newContexts = useFleet((s) => s.newContexts);
+  const label = newContexts > 0 ? `Settings, ${newContexts} new kubeconfig contexts` : "Settings";
+  return (
+    <UtilityButton label={label} title={newContexts > 0 ? `Settings - ${newContexts} new kubeconfig contexts` : "Settings"} current={current} onClick={() => useFleet.getState().openSettings()}>
+      <IconSettings size={15} stroke={1.5} />
+      {newContexts > 0 && <span style={{ color: "var(--color-text-info)" }}>{newContexts}</span>}
+    </UtilityButton>
+  );
+}
+
+// ForwardsIndicator is the mast's Port-forwards utility: "⇄" plus the live
+// count. Clicking it opens a glanceable dropdown - one compact line per
+// forward, any line jumps to the Forwards view where the real management
+// lives - and "stop all" stays here as the emergency brake. Broken rows render
+// warning-coloured. With no forwards it opens the Forwards view directly.
 function ForwardsIndicator() {
   const forwards = useFleet((s) => s.forwards);
+  const current = useFleet((s) => s.route.name === "forwards");
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -133,7 +171,13 @@ function ForwardsIndicator() {
     return () => { document.removeEventListener("mousedown", onDown); document.removeEventListener("keydown", onKey); };
   }, [open]);
 
-  if (forwards.length === 0) return null;
+  if (forwards.length === 0) {
+    return (
+      <UtilityButton label="Port-forwards" title="Port-forwards - none active" current={current} onClick={() => useFleet.getState().openForwards()}>
+        <IconArrowsLeftRight size={15} stroke={1.5} />
+      </UtilityButton>
+    );
+  }
 
   const anyBroken = forwards.some((f) => f.status === "broken");
 
@@ -141,7 +185,7 @@ function ForwardsIndicator() {
     <div ref={ref} style={{ position: "relative" }}>
       <button
         onClick={() => setOpen((o) => !o)}
-        aria-label="active port-forwards"
+        aria-label={`Port-forwards, ${forwards.length} active${anyBroken ? ", some broken" : ""}`}
         data-testid="forwards-chip"
         style={{
           display: "inline-flex", alignItems: "center", gap: 5,
