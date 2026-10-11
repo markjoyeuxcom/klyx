@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { useFleet } from "../store/fleet";
+import type { ClusterDTO } from "../store/fleet";
 import { buildCommands, Command } from "./commands";
 import { fuzzyMatch } from "./fuzzy";
 import { loadBoosts, recordUse } from "./frecency";
@@ -22,6 +23,9 @@ const OPEN_EVENT = "klyx:open-command-palette";
 export const openCommandPalette = () => window.dispatchEvent(new Event(OPEN_EVENT));
 
 type Ranked = { cmd: Command; positions: number[] };
+
+const eligibilityKey = (cs: ClusterDTO[]) => cs.map((c) => [c.name, c.state, c.protected, c.fluxPresent, c.argoPresent, c.certManagerPresent,
+  c.externalSecretsPresent, c.gatewayAPIVersion, c.karpenterPresent, c.hasHubble, c.ciliumPresent].join("|")).join("\n");
 
 const LIMIT = 50;
 
@@ -62,7 +66,9 @@ export function rank(commands: Command[], query: string, boost: (id: string) => 
     // noise. Hints are long prose, so they match only as a substring.
     let t = fuzzyMatch(q, cmd.title);
     if (t && q.length >= 4 && t.score < q.length * 1.5) t = null;
-    const h = cmd.hint && cmd.hint.toLowerCase().includes(q.toLowerCase()) ? fuzzyMatch(q, cmd.hint) : null;
+    const lq = q.toLowerCase();
+    const h = cmd.hint && cmd.hint.toLowerCase().includes(lq) ? fuzzyMatch(q, cmd.hint)
+      : cmd.keywords?.some((k) => k.toLowerCase().includes(lq)) ? { score: 4, positions: [] } : null;
     if (!t && !h) continue;
     const score = (t?.score ?? 0) + (h ? h.score * 0.5 : 0) + boost(cmd.id) * 0.75;
     scored.push({ cmd, positions: t?.positions ?? [], score });
@@ -97,7 +103,9 @@ export function CommandPalette() {
   const [commands, setCommands] = useState<Command[]>([]);
   // A second step (Choose cluster): its options replace the results; the
   // first step's query comes back with Back.
-  const [step, setStep] = useState<{ title: string; options: Command[]; parentQuery: string } | null>(null);
+  const [step, setStep] = useState<{ title: string; options: Command[]; parentQuery: string; parentId: string } | null>(null);
+  // Why the last activation did nothing (the target became unavailable).
+  const [blocked, setBlocked] = useState<{ id: string; why: string } | null>(null);
   // Frecency boosts snapshot, taken once per open - rank() runs per keystroke
   // and must not re-read localStorage each time.
   const [boost, setBoost] = useState<(id: string) => number>(() => () => 0);
@@ -112,6 +120,7 @@ export function CommandPalette() {
     setQuery("");
     setSel(0);
     setStep(null);
+    setBlocked(null);
     prevFocusRef.current?.focus?.();
     prevFocusRef.current = null;
   }, []);
@@ -153,6 +162,25 @@ export function CommandPalette() {
     };
   }, [open, close, openPalette]);
 
+  // The index follows the fleet while open: membership, connection and
+  // capability changes rebuild it (and a Choose cluster step's options).
+  useEffect(() => {
+    if (!open) return;
+    return useFleet.subscribe((st, prev) => {
+      // Fleet pushes arrive every few seconds; only what decides a result's
+      // eligibility (membership, connection, capabilities, protection) or
+      // the route rebuilds the index, so rows do not churn under the cursor.
+      if (st.route === prev.route && eligibilityKey(st.clusters) === eligibilityKey(prev.clusters)) return;
+      const next = buildCommands(st);
+      setCommands(next);
+      setStep((cur) => {
+        if (!cur) return cur;
+        const parent = next.find((c) => c.id === cur.parentId);
+        return parent?.next ? { ...cur, options: parent.next.options } : { ...cur, options: [] };
+      });
+    });
+  }, [open]);
+
   // Focus the input whenever the palette opens.
   useEffect(() => {
     if (open) inputRef.current?.focus();
@@ -187,18 +215,22 @@ export function CommandPalette() {
         return;
       }
       if (cmd.next) {
-        recordUse(cmd.id);
-        setStep({ title: cmd.next.title, options: cmd.next.options, parentQuery: query });
+        setStep({ title: cmd.next.title, options: cmd.next.options, parentQuery: query, parentId: cmd.id });
         setQuery("");
         setSel(0);
+        setBlocked(null);
         inputRef.current?.focus();
         return;
       }
+      const why = cmd.guard?.();
+      if (why) { setBlocked({ id: cmd.id, why }); return; }
+      // Frecency records the destination that completed, not the step.
       recordUse(cmd.id);
+      if (step) recordUse(step.parentId);
       close();
       cmd.run();
     },
-    [results, close, query],
+    [results, close, query, step],
   );
   const backToResults = () => {
     if (!step) return;
@@ -286,6 +318,7 @@ export function CommandPalette() {
             onChange={(e) => {
               setQuery(e.target.value);
               setSel(0);
+              setBlocked(null);
             }}
             onKeyDown={onInputKey}
             placeholder={step ? "filter clusters…" : "jump or act: view, cluster, pod, drain, sync…"}
@@ -307,14 +340,14 @@ export function CommandPalette() {
 
         {step && (
           <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "0 16px 4px" }}>
-            <button type="button" className="l-btn" onMouseDown={(e) => { e.preventDefault(); backToResults(); }} title="Back to results (⌫ on an empty query)">‹ Results</button>
+            <button type="button" className="l-btn" onMouseDown={(e) => e.preventDefault()} onClick={backToResults} title="Back to results (⌫ on an empty query)">‹ Results</button>
             <span className="t-section-label">{step.title}</span>
           </div>
         )}
         <div ref={listRef} id="command-palette-list" role="listbox" style={{ maxHeight: "50vh", overflowY: "auto", padding: "4px 0" }}>
           {results.length === 0 ? (
             <div style={{ padding: "16px", fontSize: 13, color: "var(--color-text-tertiary)" }}>
-              No matches.
+              {step ? "No eligible cluster remains for this view." : "No matches."}
             </div>
           ) : (
             groups.map((g) => (
@@ -405,6 +438,7 @@ export function CommandPalette() {
             background: "var(--color-background-secondary)",
           }}
         >
+          {blocked && <span role="status" style={{ color: "var(--color-text-warning)" }}>Unavailable: {blocked.why} · </span>}
           {dropped > 0 ? `+${dropped} more — keep typing · ` : ""}↑↓ navigate · ↵ open · {step ? "⌫ back · " : ""}esc close · views always searchable, objects from loaded data
         </div>
       </div>

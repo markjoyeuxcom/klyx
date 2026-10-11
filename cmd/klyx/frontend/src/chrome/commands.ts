@@ -38,6 +38,11 @@ export type Command = {
   next?: { title: string; options: Command[] };
   // Cluster-qualified result: offered only when the query names this cluster.
   qualifier?: string;
+  // Re-checked against live state at activation: a reason means the target
+  // became unavailable while the palette was open - explain, run nothing.
+  guard?: () => string | null;
+  // Searchable aliases (registry keywords), matched like hints.
+  keywords?: string[];
 };
 
 function openSection(s: FleetStore, section: ClusterSection, targetCluster?: string | null): void {
@@ -515,6 +520,17 @@ function destinationCommands(s: FleetStore, g: NavGroup, d: Destination, here: s
   const group: CommandGroup = d.type === "task" ? "Views" : "Resources";
   const kindHint = d.target.kind === "resource" ? `${d.target.ref.kind} · ${d.target.ref.group ? `${d.target.ref.group}/` : ""}${d.target.ref.version}` : "";
   const base = [g.label, raw ? "raw resource view" : "", kindHint].filter(Boolean).join(" · ");
+  // Eligibility at activation, from live state (the index is built when the
+  // palette opens): never navigate to a cluster that left, disconnected or
+  // lost the capability since.
+  const live = (c: string) => (): string | null => {
+    const cl = useFleet.getState().clusters.find((x) => x.name === c);
+    if (!cl) return `${c} is no longer in the fleet`;
+    const st = destState(cl, g, d);
+    if (st !== "present") return `${CAP_STATE_TEXT[st]} on ${c}`;
+    if (!connected(cl)) return `${c} is not connected`;
+    return null;
+  };
   const open = (c: string) => () => {
     navigate(c, d, s);
     if (d.target.kind === "resource") {
@@ -527,24 +543,24 @@ function destinationCommands(s: FleetStore, g: NavGroup, d: Destination, here: s
   const id = `${group === "Views" ? "view" : "resource"}:${d.id}`;
   const chooser = (clusters: ClusterDTO[]): Command["next"] => ({
     title: `Choose cluster for ${d.label}`,
-    options: clusters.map((c) => ({ id: `${id}@${c.name}`, group: "Clusters", title: c.name, hint: [c.env, c.region, c.protected ? "prd lock" : ""].filter(Boolean).join(" · ") || undefined, run: open(c.name) })),
+    options: clusters.map((c) => ({ id: `${id}@${c.name}`, group: "Clusters", title: c.name, hint: [c.env, c.region, c.protected ? "prd lock" : ""].filter(Boolean).join(" · ") || undefined, run: open(c.name), guard: live(c.name) })),
   });
   const out: Command[] = [];
   if (here) {
     const mine = states.find((x) => x.c.name === here);
     if (mine && mine.state === "present") {
-      out.push({ id, group, title: d.label, hint: [base, here].join(" · "), run: open(here) });
+      out.push({ id, group, title: d.label, hint: [base, here].join(" · "), run: open(here), guard: live(here), keywords: d.keywords });
     } else {
       const others = eligible.filter((c) => c.name !== here);
       const why = mine && mine.state !== "present" ? `${CAP_STATE_TEXT[mine.state]} on ${here}` : `not available on ${here}`;
       out.push(others.length > 0
-        ? { id, group, title: d.label, hint: `${base} · ${why} - choose another cluster`, run: () => {}, next: chooser(others) }
-        : { id, group, title: d.label, hint: base, run: () => {}, disabled: why });
+        ? { id, group, title: d.label, hint: `${base} · ${why} - choose another cluster`, run: () => {}, next: chooser(others), keywords: d.keywords }
+        : { id, group, title: d.label, hint: base, run: () => {}, disabled: why, keywords: d.keywords });
     }
   } else if (eligible.length === 1) {
-    out.push({ id, group, title: d.label, hint: [base, eligible[0].name].join(" · "), run: open(eligible[0].name) });
+    out.push({ id, group, title: d.label, hint: [base, eligible[0].name].join(" · "), run: open(eligible[0].name), guard: live(eligible[0].name), keywords: d.keywords });
   } else if (eligible.length > 1) {
-    out.push({ id, group, title: d.label, hint: `${base} · ${eligible.length} clusters`, run: () => {}, next: chooser(eligible) });
+    out.push({ id, group, title: d.label, hint: `${base} · ${eligible.length} clusters`, run: () => {}, next: chooser(eligible), keywords: d.keywords });
   } else {
     const anyConnected = s.clusters.some(connected);
     const connecting = s.clusters.some((c) => c.state === "Connecting");
@@ -556,14 +572,14 @@ function destinationCommands(s: FleetStore, g: NavGroup, d: Destination, here: s
       : "not detected on any connected cluster";
     // Connect cluster only where connecting one is the way forward.
     const canConnect = s.clusters.length === 0 || (!anyConnected && !connecting);
-    out.push({ id, group, title: d.label, hint: base, run: () => {}, disabled: why,
+    out.push({ id, group, title: d.label, hint: base, run: () => {}, disabled: why, keywords: d.keywords,
       ...(canConnect ? { action: { label: "Connect cluster", run: () => s.openSettings() } } : {}) });
   }
   // Cluster-qualified task results: "events prd-weu" opens Events there.
   if (d.type === "task") {
     for (const c of eligible) {
       if (c.name === here) continue;
-      out.push({ id: `${id}@${c.name}`, group, title: `${d.label} · ${c.name}`, hint: g.label, qualifier: c.name, run: open(c.name) });
+      out.push({ id: `${id}@${c.name}`, group, title: `${d.label} · ${c.name}`, hint: g.label, qualifier: c.name, run: open(c.name), guard: live(c.name) });
     }
   }
   return out;

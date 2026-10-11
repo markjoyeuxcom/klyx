@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, fireEvent } from "@testing-library/react";
+import { render, fireEvent, act } from "@testing-library/react";
 import { CommandPalette } from "./CommandPalette";
 import { useFleet } from "../store/fleet";
 import type { ClusterDTO, PodSummaryDTO } from "../store/fleet";
@@ -212,5 +212,97 @@ describe("rank match quality (redesign step 7c)", () => {
     const cmds = [cmd("p", "shop/api-1", "Pod · Running · dev")];
     expect(rank(cmds, "running").rows).toHaveLength(1);
     expect(rank(cmds, "rnng").rows).toHaveLength(0);
+  });
+});
+
+describe("CommandPalette revalidates while open (Codex 7c review)", () => {
+  const dev = { name: "dev", state: "Synced", fluxPresent: true } as ClusterDTO;
+  const prd = { name: "prd", state: "Synced", fluxPresent: true } as ClusterDTO;
+  const type = (input: HTMLElement, value: string) => fireEvent.change(input, { target: { value } });
+
+  it("a cluster removed while the palette is open is never opened; the row explains", async () => {
+    const noFlux = { ...prd, fluxPresent: false };
+    useFleet.setState({ clusters: [dev, noFlux], route: { name: "fleet" } });
+    const { getByTestId } = render(<CommandPalette />);
+    pressCmdK();
+    const input = getByTestId("command-palette-input");
+    type(input, "Reconciliation");
+    expect(getByTestId("command-row-view:flux").textContent).toContain("dev");
+    act(() => { useFleet.setState({ clusters: [noFlux] }); });
+    const row = getByTestId("command-row-view:flux");
+    expect(row.getAttribute("aria-disabled")).toBe("true");
+    expect(row.textContent).toContain("not detected on any connected cluster");
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(useFleet.getState().route).toEqual({ name: "fleet" });
+    // With no cluster left at all, Enter is the row's explicit Connect action.
+    act(() => { useFleet.setState({ clusters: [] }); });
+    expect(getByTestId("command-row-view:flux").textContent).toContain("↵ Connect cluster");
+  });
+
+  it("a stale result's guard blocks activation and says why", async () => {
+    useFleet.setState({ clusters: [dev], route: { name: "fleet" } });
+    const { buildCommands } = await import("./commands");
+    const flux = buildCommands(useFleet.getState()).find((c) => c.id === "view:flux")!;
+    useFleet.setState({ clusters: [{ ...dev, fluxPresent: false }] });
+    expect(flux.guard?.()).toBe("not installed on dev");
+    useFleet.setState({ clusters: [{ ...dev, state: "Failed" }] });
+    expect(flux.guard?.()).toMatch(/dev/);
+    useFleet.setState({ clusters: [] });
+    expect(flux.guard?.()).toBe("dev is no longer in the fleet");
+  });
+
+  it("Choose cluster follows membership: a removed option disappears; none left says so", () => {
+    useFleet.setState({ clusters: [dev, prd], route: { name: "fleet" } });
+    const { getByTestId, queryByTestId, getByText } = render(<CommandPalette />);
+    pressCmdK();
+    const input = getByTestId("command-palette-input");
+    type(input, "Events");
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(getByTestId("command-row-view:events@prd")).toBeTruthy();
+    act(() => { useFleet.setState({ clusters: [dev] }); });
+    expect(queryByTestId("command-row-view:events@prd")).toBeNull();
+    act(() => { useFleet.setState({ clusters: [] }); });
+    expect(getByText("No eligible cluster remains for this view.")).toBeTruthy();
+  });
+
+  it("the Results button works from the keyboard and restores the query", () => {
+    useFleet.setState({ clusters: [dev, prd], route: { name: "fleet" } });
+    const { getByTestId, getByRole } = render(<CommandPalette />);
+    pressCmdK();
+    const input = getByTestId("command-palette-input") as HTMLInputElement;
+    type(input, "Events");
+    fireEvent.keyDown(input, { key: "Enter" });
+    const results = getByRole("button", { name: "‹ Results" });
+    results.focus();
+    fireEvent.click(results); // keyboard Enter/Space activates as click
+    expect(input.value).toBe("Events");
+    expect(document.activeElement).toBe(input);
+  });
+
+  it("registry aliases are searchable (cnp, hpa)", () => {
+    useFleet.setState({ clusters: [{ ...dev, ciliumPresent: true }], route: { name: "fleet" } });
+    const { getByTestId } = render(<CommandPalette />);
+    pressCmdK();
+    const input = getByTestId("command-palette-input");
+    type(input, "cnp");
+    expect(getByTestId("command-row-resource:res:cilium.io/v2/ciliumnetworkpolicies")).toBeTruthy();
+    type(input, "hpa");
+    expect(getByTestId("command-row-resource:res:autoscaling/v2/horizontalpodautoscalers")).toBeTruthy();
+  });
+
+  it("frecency records the completed destination, not just the chooser", async () => {
+    localStorage.clear();
+    useFleet.setState({ clusters: [dev, prd], route: { name: "fleet" } });
+    const { getByTestId } = render(<CommandPalette />);
+    pressCmdK();
+    const input = getByTestId("command-palette-input");
+    type(input, "Events");
+    fireEvent.keyDown(input, { key: "Enter" });
+    const { loadBoosts } = await import("./frecency");
+    expect(loadBoosts()("view:events")).toBe(0);
+    type(input, "prd");
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(loadBoosts()("view:events")).toBeGreaterThan(0);
+    expect(loadBoosts()("view:events@prd")).toBeGreaterThan(0);
   });
 });
