@@ -8,13 +8,14 @@ import (
 
 // ExternalSecretDTO is the JSON projection of an ESO ExternalSecret.
 type ExternalSecretDTO struct {
-	UID       string `json:"uid,omitempty"` // identity (1c slice 3 §2a)
-	GVR       string `json:"gvr,omitempty"` // the served group/version/resource
-	Namespace string `json:"namespace"`
-	Name      string `json:"name"`
-	State     string `json:"state"`
-	Reason    string `json:"reason"`
-	Message   string `json:"message"`
+	UID        string `json:"uid,omitempty"`        // identity (1c slice 3 §2a)
+	GVR        string `json:"gvr,omitempty"`        // the served group/version/resource
+	Generation int64  `json:"generation,omitempty"` // metadata.generation at the capture
+	Namespace  string `json:"namespace"`
+	Name       string `json:"name"`
+	State      string `json:"state"`
+	Reason     string `json:"reason"`
+	Message    string `json:"message"`
 	// StoreKind/StoreName bind the secret to its (Cluster)SecretStore - the
 	// headline for a stuck secret, exactly as the bound issuer is in M11.
 	StoreKind string `json:"storeKind"`
@@ -78,15 +79,16 @@ func externalSecretFields(e externalsecrets.ExternalSecret, now time.Time) Exter
 // StoreDTO is the JSON projection of a SecretStore /
 // ClusterSecretStore's validation state.
 type StoreDTO struct {
-	UID       string `json:"uid,omitempty"`
-	GVR       string `json:"gvr,omitempty"`
-	Kind      string `json:"kind"`
-	Namespace string `json:"namespace"`
-	Name      string `json:"name"`
-	State     string `json:"state"`
-	Reason    string `json:"reason"`
-	Message   string `json:"message"`
-	Provider  string `json:"provider"`
+	UID        string `json:"uid,omitempty"`
+	GVR        string `json:"gvr,omitempty"`
+	Generation int64  `json:"generation,omitempty"`
+	Kind       string `json:"kind"`
+	Namespace  string `json:"namespace"`
+	Name       string `json:"name"`
+	State      string `json:"state"`
+	Reason     string `json:"reason"`
+	Message    string `json:"message"`
+	Provider   string `json:"provider"`
 	// Rule is the relocated lens rule (1c addendum §2).
 	Rule RuleDTO `json:"rule"`
 }

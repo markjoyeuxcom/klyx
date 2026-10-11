@@ -323,6 +323,7 @@ export type ExternalSecretDTO = {
   rule: RuleDTO;
   uid?: string; // identity (1c slice 3 §2a): a same-name recreation is another secret
   gvr?: string;
+  generation?: number; // metadata.generation at the capture
   namespace: string;
   name: string;
   state: string;
@@ -343,6 +344,7 @@ export type ExternalSecretStoreDTO = {
   rule: RuleDTO;
   uid?: string;
   gvr?: string;
+  generation?: number;
   kind: string;
   namespace: string;
   name: string;

@@ -79,7 +79,7 @@ func TestExternalSecretRowsCarryTheCaptureAndAnAbsoluteRefreshTime(t *testing.T)
 		StoreKind: externalsecrets.ClusterSecretStoreKind, StoreName: "vault", RefreshInterval: time.Hour, RefreshTime: at.Add(-90 * time.Second)}
 	never := externalsecrets.ExternalSecret{Namespace: "shop", Name: "new", State: externalsecrets.Failed, StoreName: "vault"}
 	set := healthsrc.RowSet[externalsecrets.ExternalSecret]{Rows: []healthsrc.Row[externalsecrets.ExternalSecret]{
-		{Ref: healthsrc.RowRef{UID: "e1", GVR: "external-secrets.io/v1beta1/externalsecrets", Namespace: "shop", Name: "db"},
+		{Ref: healthsrc.RowRef{UID: "e1", GVR: "external-secrets.io/v1beta1/externalsecrets", Namespace: "shop", Name: "db", Generation: 7},
 			Eval: health.NativeEval{Included: true, Role: health.Degraded, Label: "Flagged at capture"}, Data: synced},
 		{Ref: healthsrc.RowRef{UID: "e2", Namespace: "shop", Name: "new"}, Eval: externalsecrets.ExternalSecretRule(never), Data: never},
 	}}
@@ -91,8 +91,16 @@ func TestExternalSecretRowsCarryTheCaptureAndAnAbsoluteRefreshTime(t *testing.T)
 	if dtos[0].Rule != (RuleDTO{Included: true, Role: "degraded", Label: "Flagged at capture"}) {
 		t.Fatalf("the converter re-evaluated instead of copying: %+v", dtos[0].Rule)
 	}
-	if dtos[0].UID != "e1" || dtos[0].GVR != "external-secrets.io/v1beta1/externalsecrets" {
-		t.Fatalf("identity: %+v", dtos[0])
+	if dtos[0].UID != "e1" || dtos[0].GVR != "external-secrets.io/v1beta1/externalsecrets" || dtos[0].Generation != 7 {
+		t.Fatalf("identity - UID, served GVR and the captured generation: %+v", dtos[0])
+	}
+	b, err := json.Marshal(dtos[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var back map[string]any
+	if err := json.Unmarshal(b, &back); err != nil || back["uid"] != "e1" || back["generation"] != float64(7) || back["lastRefreshUnix"] == nil {
+		t.Fatalf("serialization keeps identity, generation and the refresh time: %s", b)
 	}
 	if dtos[0].LastRefreshUnix != at.Add(-90*time.Second).Unix() || dtos[0].LastRefreshAgeSeconds != 90 || !dtos[0].Refreshed {
 		t.Fatalf("refresh time: unix=%d age=%d refreshed=%v", dtos[0].LastRefreshUnix, dtos[0].LastRefreshAgeSeconds, dtos[0].Refreshed)
@@ -105,7 +113,7 @@ func TestExternalSecretRowsCarryTheCaptureAndAnAbsoluteRefreshTime(t *testing.T)
 func TestStoreRowsCarryTheCaptureAndIdentity(t *testing.T) {
 	st := externalsecrets.Store{Kind: externalsecrets.SecretStoreKind, Namespace: "shop", Name: "vault", State: externalsecrets.Synced, Provider: "vault"}
 	set := healthsrc.RowSet[externalsecrets.Store]{Rows: []healthsrc.Row[externalsecrets.Store]{
-		{Ref: healthsrc.RowRef{UID: "s1", GVR: "external-secrets.io/v1beta1/secretstores", Namespace: "shop", Name: "vault"},
+		{Ref: healthsrc.RowRef{UID: "s1", GVR: "external-secrets.io/v1beta1/secretstores", Namespace: "shop", Name: "vault", Generation: 3},
 			Eval: health.NativeEval{Included: true, Role: health.Fault, Label: "Flagged at capture"}, Data: st},
 	}}
 	out, err := rowsConverters[healthsrc.TaskESO+"/stores"](set, time.Now())
@@ -113,7 +121,7 @@ func TestStoreRowsCarryTheCaptureAndIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 	dtos := out.([]StoreDTO)
-	if len(dtos) != 1 || dtos[0].UID != "s1" || dtos[0].GVR != "external-secrets.io/v1beta1/secretstores" || dtos[0].Provider != "vault" || dtos[0].Kind != "SecretStore" {
+	if len(dtos) != 1 || dtos[0].UID != "s1" || dtos[0].GVR != "external-secrets.io/v1beta1/secretstores" || dtos[0].Generation != 3 || dtos[0].Provider != "vault" || dtos[0].Kind != "SecretStore" {
 		t.Fatalf("store row: %+v", dtos)
 	}
 	if dtos[0].Rule != (RuleDTO{Included: true, Role: "fault", Label: "Flagged at capture"}) {

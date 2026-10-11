@@ -75,7 +75,7 @@ var rowsConverters = map[string]rowsConverter{
 		for _, r := range set.Rows {
 			dto := externalSecretFields(r.Data, at)
 			dto.Rule = toRuleDTO(r.Eval)
-			dto.UID, dto.GVR = r.Ref.UID, r.Ref.GVR
+			dto.UID, dto.GVR, dto.Generation = r.Ref.UID, r.Ref.GVR, r.Ref.Generation
 			out = append(out, dto)
 		}
 		return out, nil
@@ -89,7 +89,7 @@ var rowsConverters = map[string]rowsConverter{
 		for _, r := range set.Rows {
 			dto := storeFields(r.Data)
 			dto.Rule = toRuleDTO(r.Eval)
-			dto.UID, dto.GVR = r.Ref.UID, r.Ref.GVR
+			dto.UID, dto.GVR, dto.Generation = r.Ref.UID, r.Ref.GVR, r.Ref.Generation
 			out = append(out, dto)
 		}
 		return out, nil
