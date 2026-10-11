@@ -100,13 +100,28 @@ function reconcile(sub: RowsSub, summary: HealthSummary | undefined, now: number
 
 // advance raises a cluster's known incarnation and clears every
 // subscription's rows from an older one (their counts must not stand).
+// It also drops an older stored summary: no part may fall back to the
+// previous incarnation's counts as current, from whichever channel the
+// advance came (Codex infra re-review #1).
 function advance(st: HealthState, cluster: string, incarnation: number): HealthState {
   if (incarnation <= (st.knownIncarnation[cluster] ?? 0)) return st;
   const subs = { ...st.subs };
   for (const [h, sub] of Object.entries(subs)) {
     if (sub.cluster === cluster && sub.incarnation !== null && sub.incarnation < incarnation) subs[h] = cleared(sub);
   }
-  return { ...st, subs, knownIncarnation: { ...st.knownIncarnation, [cluster]: incarnation } };
+  let summaries = st.summaries;
+  if (summaries[cluster] && summaries[cluster].incarnation < incarnation) {
+    summaries = { ...summaries };
+    delete summaries[cluster];
+  }
+  return { ...st, subs, summaries, knownIncarnation: { ...st.knownIncarnation, [cluster]: incarnation } };
+}
+
+// currentSummary is a cluster's summary only if it belongs to the known
+// incarnation - every summary fallback goes through it.
+function currentSummary(st: HealthState, cluster: string): HealthSummary | undefined {
+  const s = st.summaries[cluster];
+  return s && s.incarnation >= (st.knownIncarnation[cluster] ?? 0) ? s : undefined;
 }
 
 // applySummary keeps only a strictly newer (incarnation, seq), never one at
@@ -244,11 +259,18 @@ export function bootstrapSettled(handle: string, requestGen: number, outcome: { 
 
 // nextWake is when the transport must look again: the earliest A4
 // deadline, re-bootstrap retry or failed-open retry.
+// Only actionable times count: a deadline not yet consumed, and a
+// re-bootstrap retry that has a token to use. A refreshing subscription
+// without a token (its open failed) waits for its open retry instead -
+// never an expired deadline re-armed at zero delay (Codex re-review #2).
 export function nextWake(): number | null {
   let at: number | null = null;
   const min = (t: number) => { at = at === null ? t : Math.min(at, t); };
   for (const s of Object.values(useHealth.getState().subs)) {
-    if (s.mismatchSince !== null && !s.inflight) min(s.refreshing ? (s.retryAt ?? s.mismatchSince + MISMATCH_DEADLINE_MS) : s.mismatchSince + MISMATCH_DEADLINE_MS);
+    if (s.mismatchSince !== null && !s.inflight) {
+      if (!s.refreshing) min(s.mismatchSince + MISMATCH_DEADLINE_MS);
+      else if (s.token && s.retryAt !== null) min(s.retryAt);
+    }
     if (s.open === "failed" && s.openRetryAt !== null) min(s.openRetryAt);
   }
   return at;
@@ -292,7 +314,7 @@ export function bestSub(st: HealthState, cluster: string, task: string, part: st
 // rows' counts until A4 switches every surface to the summary together;
 // any other part shows the summary's.
 export function taskCounts(st: HealthState, cluster: string, task: string, part: string): SelectedCounts {
-  const summaryPart = findPart(st.summaries[cluster], task, part) ?? null;
+  const summaryPart = findPart(currentSummary(st, cluster), task, part) ?? null;
   const best = bestSub(st, cluster, task, part);
   if (!best) return { part: summaryPart, source: summaryPart ? "summary" : "none", updating: false, refreshing: false };
   if (best.refreshing && summaryPart) return { part: summaryPart, source: "summary", updating: false, refreshing: true };

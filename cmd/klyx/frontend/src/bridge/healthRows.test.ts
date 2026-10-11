@@ -150,4 +150,34 @@ describe("health rows transport (design §2b)", () => {
     expect(subs()[0]).toMatchObject({ ver: 4, mismatchSince: null, refreshing: false, refreshError: null, error: null });
     close();
   });
+
+  // Codex infra re-review #2: an A4 deadline during a failed open's backoff
+  // is consumed once (the counts qualify), then waits for the reopen - no
+  // zero-delay timer churn, no bootstrap without a token.
+  it("an A4 deadline before a failed open's retry waits for the reopen, then recovers", async () => {
+    vi.useFakeTimers({ now: 0 });
+    let reject!: (e: Error) => void;
+    openMock.mockImplementationOnce(() => new Promise((_r, rej) => { reject = rej; }));
+    openMock.mockImplementation(async () => ({ rows: rows(4) }));
+    const boot = HealthService.RowsBootstrap as ReturnType<typeof vi.fn>;
+    boot.mockImplementation(async (_t: string, gen: number) => ({ rows: rows(4), requestGen: gen }));
+    const close = openRows("c1", "certs", "certificates");
+    emit(rowsEvent("c1", "certs", "certificates"), rows(1)); // the shared event beats the open
+    emit("health:summary", summary(1, 2, 4)); // the summary is ahead at t=0
+    await vi.advanceTimersByTimeAsync(500);
+    reject(new Error("connection refused")); // the open fails at t=500 -> retry at 1500
+    await flush();
+    expect(subs()[0]).toMatchObject({ open: "failed", token: null, rows: [{ uid: "i1v1" }] });
+    const timers = vi.spyOn(globalThis, "setTimeout");
+    await vi.advanceTimersByTimeAsync(600); // past the A4 deadline (1000), before the open retry (1500)
+    expect(subs()[0]).toMatchObject({ refreshing: true });
+    expect(boot).not.toHaveBeenCalled(); // nothing to bootstrap without a token
+    expect(timers.mock.calls.length).toBeLessThan(5); // no zero-delay churn
+    timers.mockRestore();
+    await vi.advanceTimersByTimeAsync(500); // the open retry
+    await flush();
+    expect(tokens()).toHaveLength(2);
+    expect(subs()[0]).toMatchObject({ open: "open", ver: 4, refreshing: false, mismatchSince: null, error: null });
+    close();
+  });
 });

@@ -152,6 +152,24 @@ describe("health store: one number per task (spec §4, A4)", () => {
     expect(counts()).toMatchObject({ source: "rows" });
   });
 
+  // Codex infra re-review #1: an advance from rows must not leave the older
+  // summary authoritative for the other parts.
+  it("a rows-first incarnation advance never lets another part report the prior summary as current", () => {
+    const issuers = (ver: number): HealthPart => ({ ...part(ver, 0), id: "issuers", entity: "Issuers and ClusterIssuers" });
+    const withIssuers = (inc: number, seq: number, ver: number): HealthSummary => ({
+      ...summary(inc, seq, ver), tasks: [{ id: "certs", coverage: "live", parts: [part(ver, ver), issuers(ver)] }],
+    });
+    applySummary(withIssuers(1, 50, 50));
+    const issuerCounts = () => taskCounts(useHealth.getState(), "c1", "certs", "issuers");
+    expect(issuerCounts()).toMatchObject({ source: "summary" });
+    expect(applyRows("t", rows(2, 1))).toBe(true); // the new Observer's rows arrive first
+    expect(issuerCounts()).toMatchObject({ source: "none", part: null });
+    expect(counts()).toMatchObject({ source: "rows" });
+    applySummary(withIssuers(2, 1, 1)); // the new summary restores them
+    expect(issuerCounts()).toMatchObject({ source: "summary" });
+    expect(issuerCounts().part?.ver).toBe(1);
+  });
+
   it("two consumers across incarnations: the current incarnation's rows count, whatever their Ver", () => {
     open("u", "tok-u");
     applyRows("t", rows(1, 51));
