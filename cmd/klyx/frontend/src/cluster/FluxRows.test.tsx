@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, act, within } from "@testing-library/react";
+import { render, screen, act, within, fireEvent } from "@testing-library/react";
 
 // The Flux lens mounted on the REAL rows adapter (health/useFluxRows) and
 // health store - only the transport is stubbed (slice 3 §5.3, held to the
@@ -10,10 +10,10 @@ vi.mock("../bridge/gitops", () => ({
   reconcile: vi.fn(), reconcileWithSource: vi.fn(), setSuspend: vi.fn(), resolveGitLink: vi.fn(), fluxDiff: vi.fn(),
 }));
 vi.mock("../bridge/configsvc", () => ({ armProtected: vi.fn(async () => ({ ok: true, error: "" })) }));
-import { getResourceDetail } from "../bridge/gitops";
+import { getResourceDetail, reconcile, reconcileWithSource, setSuspend } from "../bridge/gitops";
 import { GitOps } from "./GitOps";
 import { _resetFluxRowsForTest } from "../health/useFluxRows";
-import { resetHealthStore, addSub, openStarted, openSucceeded, applyRows, applySummary, dueForBootstrap, bootstrapSettled, useHealth, type HealthPart, type HealthSummary, type KindCoverage, type RowsDTO } from "../store/health";
+import { resetHealthStore, addSub, openStarted, openSucceeded, openFailed, applyRows, applySummary, dueForBootstrap, bootstrapSettled, useHealth, type HealthPart, type HealthSummary, type KindCoverage, type RowsDTO } from "../store/health";
 import { useFleet, type ClusterDTO, type FluxResourceDTO, type FluxSourceDTO, type ResourceDetailDTO } from "../store/fleet";
 import { fluxRule, fluxSourceRule, withRule } from "../test/backendRules";
 import { clock } from "../layout/coverage";
@@ -167,6 +167,116 @@ describe("Flux rows, mounted end to end (slice 3 §5.3)", () => {
     expect(panel().queryByText(/Kustomization removed\./)).toBeNull();
     act(() => { applyRows("r", rowsDTO(1, "reconciliations", 3, [], REC_KINDS({ helmreleases: { coverage: "stale", class: "transport", error: "dial tcp" } }))); });
     expect(panel().getByText(/Kustomization removed\./)).toBeTruthy(); // its own kind is live; the HelmRelease read's failure never vouches
+  });
+
+  // Codex review of 7d389eb #2: a source's consumers are a join on the
+  // reconciliation kinds - their coverage qualifies it, never a false zero.
+  describe("source usage is qualified by the reconciliation reads", () => {
+    const usedBy = () => within(screen.getByTestId("flux-source-panel"));
+    const openSource = () => { setView("sources"); fireEvent.click(screen.getByTestId("flux-source-row")); };
+    const NO_CONSUMER = "No Kustomization or HelmRelease in this cluster names this source.";
+
+    it("a failed first reconciliation read leaves usage unverified, not zero", () => {
+      addSub("r", "x", "flux", "reconciliations");
+      addSub("s", "x", "flux", "sources");
+      openStarted("r", "tok-r"); openFailed("r", "tok-r", "kustomizations is forbidden", 0);
+      openStarted("s", "tok-s"); openSucceeded("s", "tok-s", 1);
+      applyRows("s", rowsDTO(1, "sources", 1, [src("repo")], SRC_KINDS()));
+      render(<GitOps cluster="x" />);
+      openSource();
+      expect(usedBy().getByText("Kustomization and HelmRelease reads unavailable - usage unverified, not zero.")).toBeTruthy();
+      expect(usedBy().getByTestId("used-by-count").textContent).toBe("?");
+      expect(usedBy().queryByText(NO_CONSUMER)).toBeNull();
+    });
+
+    it("a new incarnation whose sources land first leaves usage unverified until reconciliations do", () => {
+      seed([res("apps")]);
+      render(<GitOps cluster="x" />);
+      openSource();
+      expect(usedBy().getByText("apps", { exact: false })).toBeTruthy();
+      act(() => applySummary({ ...summary(1, 9, [1, 1, 0], [1, 1, 0]), final: true }));
+      act(() => { open(2); applyRows("s", rowsDTO(2, "sources", 1, [src("repo")], SRC_KINDS())); });
+      expect(usedBy().getByText("Kustomization and HelmRelease reads unavailable - usage unverified, not zero.")).toBeTruthy();
+      expect(usedBy().queryByText(NO_CONSUMER)).toBeNull();
+      act(() => { applyRows("r", rowsDTO(2, "reconciliations", 1, [res("apps")], REC_KINDS())); });
+      expect(usedBy().queryByTestId("used-by-count")).toBeNull();
+      expect(screen.getByText(/^Used by · 1$/)).toBeTruthy();
+    });
+
+    it("mixed KS/HR coverage qualifies the observed subset as a lower bound", () => {
+      open();
+      applyRows("r", rowsDTO(1, "reconciliations", 1, [res("apps")], REC_KINDS({ helmreleases: { coverage: "unreadable", class: "forbidden", error: "rbac" } })));
+      applyRows("s", rowsDTO(1, "sources", 1, [src("repo")], SRC_KINDS()));
+      render(<GitOps cluster="x" />);
+      openSource();
+      expect(usedBy().getByTestId("used-by-count").textContent).toBe("1+");
+      expect(usedBy().getByText("HelmRelease read unavailable - usage unverified beyond the Kustomizations.")).toBeTruthy();
+    });
+
+    it("a stale reconciliation read is last observed, and recovery drops the qualifier", () => {
+      open();
+      applyRows("r", rowsDTO(1, "reconciliations", 1, [res("apps")], REC_KINDS({ kustomizations: { coverage: "stale", class: "transport", error: "dial tcp", lastGoodAt: "2026-10-11T11:00:00Z" } })));
+      applyRows("s", rowsDTO(1, "sources", 1, [src("repo"), src("unused", { name: "unused" })], SRC_KINDS()));
+      render(<GitOps cluster="x" />);
+      setView("sources");
+      fireEvent.click(screen.getAllByTestId("flux-source-row").find((r) => r.textContent?.includes("unused"))!);
+      expect(usedBy().getByText("None in the last observed Kustomization list.")).toBeTruthy();
+      expect(usedBy().getByText("From the last observed Kustomization list.")).toBeTruthy();
+      expect(usedBy().getByTestId("used-by-count").textContent).toBe("0*");
+      act(() => { applyRows("r", rowsDTO(1, "reconciliations", 2, [res("apps")], REC_KINDS())); });
+      expect(usedBy().getByText(NO_CONSUMER)).toBeTruthy();
+      expect(usedBy().queryByTestId("used-by-count")).toBeNull();
+    });
+  });
+
+  // Codex review of 7d389eb #1: a pending verb is pinned to the OBJECT it was
+  // armed against - a same-name replacement drops the composer, and the
+  // dispatch carries the armed UID for the backend's guarded write.
+  describe("verbs are pinned to the armed object (design §5b)", () => {
+    const recreate = () => act(() => { applyRows("r", rowsDTO(1, "reconciliations", 2, [res("apps", { uid: "uid-apps-2" })], REC_KINDS())); });
+
+    it("suspend: a replacement drops the confirm; nothing is sent", () => {
+      seed([res("apps")]);
+      render(<GitOps cluster="x" />);
+      select("apps");
+      fireEvent.click(panel().getByRole("button", { name: /^Suspend/ }));
+      expect(screen.getByRole("dialog")).toBeTruthy(); // the confirm is open
+      recreate();
+      expect(screen.queryByRole("dialog")).toBeNull();
+      expect(setSuspend).not.toHaveBeenCalled();
+    });
+
+    it("reconcile and reconcile-with-source: a replacement drops the composer", () => {
+      for (const withSource of [false, true]) {
+        resetHealthStore(); _resetFluxRowsForTest(); useFleet.getState().clearGitOps();
+        seed([res("apps")]);
+        const { unmount } = render(<GitOps cluster="x" />);
+        select("apps");
+        fireEvent.click(panel().getByRole("button", { name: /^Reconcile/ }));
+        if (withSource) fireEvent.click(screen.getByText("Re-fetch source first"));
+        recreate();
+        expect(screen.queryByRole("dialog")).toBeNull();
+        unmount();
+      }
+      expect(reconcile).not.toHaveBeenCalled();
+      expect(reconcileWithSource).not.toHaveBeenCalled();
+    });
+
+    it("the dispatch carries the armed UID, for every verb", () => {
+      seed([res("apps")]);
+      render(<GitOps cluster="x" />);
+      select("apps");
+      fireEvent.click(panel().getByRole("button", { name: /^Reconcile/ }));
+      fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: /^Reconcile$/ }));
+      expect(reconcile).toHaveBeenCalledWith("x", "Kustomization", "flux-system", "apps", "uid-apps");
+      fireEvent.click(panel().getByRole("button", { name: /^Reconcile/ }));
+      fireEvent.click(screen.getByText("Re-fetch source first"));
+      fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: /^Reconcile$/ }));
+      expect(reconcileWithSource).toHaveBeenCalledWith("x", "Kustomization", "flux-system", "apps", "uid-apps");
+      fireEvent.click(panel().getByRole("button", { name: /^Suspend/ }));
+      fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: /^Suspend$/ }));
+      expect(setSuspend).toHaveBeenCalledWith("x", "Kustomization", "flux-system", "apps", "uid-apps", true);
+    });
   });
 
   describe("detail results (design §5b)", () => {

@@ -2,6 +2,7 @@ package fleet
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -9,6 +10,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/client-go/dynamic/fake"
 	typedfake "k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
@@ -35,7 +37,7 @@ func seedKustomization(name string) *unstructured.Unstructured {
 	return &unstructured.Unstructured{Object: map[string]interface{}{
 		"apiVersion": "kustomize.toolkit.fluxcd.io/v1",
 		"kind":       "Kustomization",
-		"metadata":   map[string]interface{}{"name": name, "namespace": "flux-system"},
+		"metadata":   map[string]interface{}{"name": name, "namespace": "flux-system", "uid": "uid-" + name},
 		"spec":       map[string]interface{}{},
 	}}
 }
@@ -49,7 +51,7 @@ func TestReconcilePatchesAnnotation(t *testing.T) {
 	dyn := fake.NewSimpleDynamicClientWithCustomListKinds(dynScheme(), listKinds, seedKustomization("app"))
 	c := newActionConn(dyn)
 
-	if err := c.Reconcile(context.Background(), "Kustomization", "flux-system", "app"); err != nil {
+	if err := c.Reconcile(context.Background(), "Kustomization", "flux-system", "app", "uid-app"); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
 
@@ -71,7 +73,7 @@ func seedKustomizationWithSource(name, srcKind, srcName string) *unstructured.Un
 	return &unstructured.Unstructured{Object: map[string]interface{}{
 		"apiVersion": "kustomize.toolkit.fluxcd.io/v1",
 		"kind":       "Kustomization",
-		"metadata":   map[string]interface{}{"name": name, "namespace": "flux-system"},
+		"metadata":   map[string]interface{}{"name": name, "namespace": "flux-system", "uid": "uid-" + name},
 		"spec":       map[string]interface{}{"sourceRef": map[string]interface{}{"kind": srcKind, "name": srcName}},
 	}}
 }
@@ -96,7 +98,7 @@ func TestReconcileWithSourcePatchesBoth(t *testing.T) {
 		seedGitRepoSource("flux-system"))
 	c := newActionConn(dyn)
 
-	if err := c.ReconcileWithSource(context.Background(), "Kustomization", "flux-system", "app"); err != nil {
+	if err := c.ReconcileWithSource(context.Background(), "Kustomization", "flux-system", "app", "uid-app"); err != nil {
 		t.Fatalf("reconcile with source: %v", err)
 	}
 
@@ -131,7 +133,7 @@ func TestReconcileWithSourceDegradesWhenNoSource(t *testing.T) {
 	dyn := fake.NewSimpleDynamicClientWithCustomListKinds(dynScheme(), listKinds, seedKustomization("app"))
 	c := newActionConn(dyn)
 
-	if err := c.ReconcileWithSource(context.Background(), "Kustomization", "flux-system", "app"); err != nil {
+	if err := c.ReconcileWithSource(context.Background(), "Kustomization", "flux-system", "app", "uid-app"); err != nil {
 		t.Fatalf("reconcile with source: %v", err)
 	}
 	patchedKs := false
@@ -150,7 +152,7 @@ func TestSetSuspendPatchesSpec(t *testing.T) {
 	dyn := fake.NewSimpleDynamicClientWithCustomListKinds(dynScheme(), listKinds, seedKustomization("app"))
 	c := newActionConn(dyn)
 
-	if err := c.SetSuspend(context.Background(), "Kustomization", "flux-system", "app", true); err != nil {
+	if err := c.SetSuspend(context.Background(), "Kustomization", "flux-system", "app", "uid-app", true); err != nil {
 		t.Fatalf("suspend: %v", err)
 	}
 	found := false
@@ -167,7 +169,7 @@ func TestSetSuspendPatchesSpec(t *testing.T) {
 func TestReconcileUnknownKindErrors(t *testing.T) {
 	dyn := fake.NewSimpleDynamicClientWithCustomListKinds(dynScheme(), map[schema.GroupVersionResource]string{})
 	c := newActionConn(dyn)
-	if err := c.Reconcile(context.Background(), "Service", "default", "x"); err == nil {
+	if err := c.Reconcile(context.Background(), "Service", "default", "x", "uid-x"); err == nil {
 		t.Fatal("want error for unsupported kind")
 	}
 }
@@ -179,8 +181,83 @@ func TestReconcileSurfacesForbidden(t *testing.T) {
 		return true, nil, apierrors.NewForbidden(schema.GroupResource{Resource: "kustomizations"}, "app", nil)
 	})
 	c := newActionConn(dyn)
-	err := c.Reconcile(context.Background(), "Kustomization", "flux-system", "app")
+	err := c.Reconcile(context.Background(), "Kustomization", "flux-system", "app", "uid-app")
 	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "forbidden") {
 		t.Fatalf("want forbidden error, got %v", err)
+	}
+}
+
+// Design §5b (Codex review of 7d389eb #1): a verb writes only the object it
+// was armed against. A same-name replacement - or an object gone since - is
+// refused before anything is written, the source of a with-source reconcile
+// included.
+func TestFluxVerbsWriteOnlyTheArmedObject(t *testing.T) {
+	gitRepoGVR := schema.GroupVersionResource{Group: "source.toolkit.fluxcd.io", Version: "v1", Resource: "gitrepositories"}
+	verbs := map[string]func(c *ClusterConn, uid string) error{
+		"reconcile": func(c *ClusterConn, uid string) error {
+			return c.Reconcile(context.Background(), "Kustomization", "flux-system", "app", uid)
+		},
+		"with-source": func(c *ClusterConn, uid string) error {
+			return c.ReconcileWithSource(context.Background(), "Kustomization", "flux-system", "app", uid)
+		},
+		"suspend": func(c *ClusterConn, uid string) error {
+			return c.SetSuspend(context.Background(), "Kustomization", "flux-system", "app", uid, true)
+		},
+		"resume": func(c *ClusterConn, uid string) error {
+			return c.SetSuspend(context.Background(), "Kustomization", "flux-system", "app", uid, false)
+		},
+	}
+	for name, verb := range verbs {
+		t.Run(name, func(t *testing.T) {
+			for _, tc := range []struct {
+				what  string
+				seed  []runtime.Object
+				armed string
+				want  error
+			}{
+				{"replaced", []runtime.Object{seedKustomizationWithSource("app", "GitRepository", "flux-system"), seedGitRepoSource("flux-system")}, "uid-old-app", ErrReplaced},
+				{"gone", []runtime.Object{seedGitRepoSource("flux-system")}, "uid-app", ErrReplaced},
+				{"unarmed", []runtime.Object{seedKustomizationWithSource("app", "GitRepository", "flux-system"), seedGitRepoSource("flux-system")}, "", nil},
+			} {
+				dyn := fake.NewSimpleDynamicClientWithCustomListKinds(dynScheme(), map[schema.GroupVersionResource]string{ksGVR(): "KustomizationList", gitRepoGVR: "GitRepositoryList"}, tc.seed...)
+				c := newActionConn(dyn)
+				err := verb(c, tc.armed)
+				if err == nil || (tc.want != nil && !errors.Is(err, tc.want)) || (tc.want == nil && !strings.Contains(err.Error(), "no object identity was armed")) {
+					t.Fatalf("%s: want a refusal (%v), got %v", tc.what, tc.want, err)
+				}
+				for _, a := range dyn.Actions() {
+					if _, ok := a.(k8stesting.PatchAction); ok {
+						t.Fatalf("%s: nothing may be written, got a patch of %s", tc.what, a.GetResource().Resource)
+					}
+				}
+			}
+		})
+	}
+}
+
+// The armed write itself carries the UID, so the API server refuses a
+// replacement that lands after the check; that refusal reads as replaced.
+func TestFluxVerbPatchIsUIDGuarded(t *testing.T) {
+	dyn := fake.NewSimpleDynamicClientWithCustomListKinds(dynScheme(), map[schema.GroupVersionResource]string{ksGVR(): "KustomizationList"}, seedKustomization("app"))
+	c := newActionConn(dyn)
+	if err := c.SetSuspend(context.Background(), "Kustomization", "flux-system", "app", "uid-app", true); err != nil {
+		t.Fatal(err)
+	}
+	guarded := false
+	for _, a := range dyn.Actions() {
+		if pa, ok := a.(k8stesting.PatchAction); ok && strings.Contains(string(pa.GetPatch()), `"uid":"uid-app"`) && strings.Contains(string(pa.GetPatch()), `"suspend":true`) {
+			guarded = true
+		}
+	}
+	if !guarded {
+		t.Fatal("the write must carry the armed UID")
+	}
+
+	dyn.PrependReactor("patch", "kustomizations", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewInvalid(schema.GroupKind{Group: "kustomize.toolkit.fluxcd.io", Kind: "Kustomization"}, "app",
+			field.ErrorList{field.Invalid(field.NewPath("metadata", "uid"), "uid-app", "field is immutable")})
+	})
+	if err := c.Reconcile(context.Background(), "Kustomization", "flux-system", "app", "uid-app"); !errors.Is(err, ErrReplaced) {
+		t.Fatalf("a server refusal of the UID guard is a replacement: %v", err)
 	}
 }

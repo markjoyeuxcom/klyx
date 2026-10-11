@@ -51,11 +51,11 @@ func (f *fakeConn) FluxAvailable() bool { return false }
 func (f *fakeConn) FluxDiffKustomization(ctx context.Context, ns, name, path string) (fluxcli.DiffResult, error) {
 	return fluxcli.DiffResult{}, nil
 }
-func (f *fakeConn) Reconcile(ctx context.Context, kind, ns, name string) error { return nil }
-func (f *fakeConn) ReconcileWithSource(ctx context.Context, kind, ns, name string) error {
+func (f *fakeConn) Reconcile(ctx context.Context, kind, ns, name, uid string) error { return nil }
+func (f *fakeConn) ReconcileWithSource(ctx context.Context, kind, ns, name, uid string) error {
 	return nil
 }
-func (f *fakeConn) SetSuspend(ctx context.Context, kind, ns, name string, suspend bool) error {
+func (f *fakeConn) SetSuspend(ctx context.Context, kind, ns, name, uid string, suspend bool) error {
 	return nil
 }
 func (f *fakeConn) ListCRDs(ctx context.Context) ([]crd.Info, error) { return nil, nil }

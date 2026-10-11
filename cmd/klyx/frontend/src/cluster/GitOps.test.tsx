@@ -223,7 +223,7 @@ describe("GitOps view", () => {
     expect(getByRole("button", { name: /Re-fetch source first/ }).getAttribute("aria-pressed")).toBe("false");
     const reconcileButtons = getAllByRole("button", { name: "Reconcile" });
     fireEvent.click(reconcileButtons[reconcileButtons.length - 1]); // dialog confirm is last in DOM
-    expect(reconcile).toHaveBeenCalledWith("x", "Kustomization", "flux-system", "flux-system");
+    expect(reconcile).toHaveBeenCalledWith("x", "Kustomization", "flux-system", "flux-system", ""); // uid-less fixture: the backend refuses an unarmed write
     expect(reconcileWithSource).not.toHaveBeenCalled();
   });
 
@@ -234,7 +234,7 @@ describe("GitOps view", () => {
     fireEvent.click(getByRole("button", { name: /Re-fetch source first/ }));
     const reconcileButtons = getAllByRole("button", { name: "Reconcile" });
     fireEvent.click(reconcileButtons[reconcileButtons.length - 1]); // dialog confirm
-    expect(reconcileWithSource).toHaveBeenCalledWith("x", "Kustomization", "flux-system", "flux-system");
+    expect(reconcileWithSource).toHaveBeenCalledWith("x", "Kustomization", "flux-system", "flux-system", "");
     expect(reconcile).not.toHaveBeenCalled();
   });
 
@@ -246,7 +246,7 @@ describe("GitOps view", () => {
     fireEvent.click(inspector().getByRole("button", { name: /^Resume/ })); // secondary action opens the dialog
     const resumeButtons = getAllByRole("button", { name: "Resume" });
     fireEvent.click(resumeButtons[resumeButtons.length - 1]); // dialog confirm is last in DOM
-    expect(setSuspend).toHaveBeenCalledWith("x", "Kustomization", "flux-system", "flux-system", false);
+    expect(setSuspend).toHaveBeenCalledWith("x", "Kustomization", "flux-system", "flux-system", "", false);
   });
 
   it("view-in-git button calls resolveGitLink for a Kustomization", () => {
@@ -393,7 +393,7 @@ describe("GitOps view", () => {
     expect(reconcile).not.toHaveBeenCalled();               // the key never bypasses the confirm
     const reconcileButtons = getAllByRole("button", { name: "Reconcile" });
     fireEvent.click(reconcileButtons[reconcileButtons.length - 1]); // dialog confirm is last in DOM
-    expect(reconcile).toHaveBeenCalledWith("x", "Kustomization", "flux-system", "aaa");
+    expect(reconcile).toHaveBeenCalledWith("x", "Kustomization", "flux-system", "aaa", "");
   });
 
   it("s on the keyboard-selected row opens the suspend confirm; a suspended row gets resume", () => {
@@ -408,7 +408,7 @@ describe("GitOps view", () => {
     expect(setSuspend).not.toHaveBeenCalled();
     const resumeButtons = getAllByRole("button", { name: "Resume" });
     fireEvent.click(resumeButtons[resumeButtons.length - 1]);
-    expect(setSuspend).toHaveBeenCalledWith("x", "Kustomization", "flux-system", "aaa", false);
+    expect(setSuspend).toHaveBeenCalledWith("x", "Kustomization", "flux-system", "aaa", "", false);
   });
 
   it("/ focuses the flux filter input", () => {

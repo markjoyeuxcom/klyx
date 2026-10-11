@@ -54,9 +54,9 @@ type Conn interface {
 	FluxEvents(ctx context.Context, kind, ns, name string) ([]workloads.EventSummary, error)
 	FluxAvailable() bool
 	FluxDiffKustomization(ctx context.Context, ns, name, path string) (fluxcli.DiffResult, error)
-	Reconcile(ctx context.Context, kind, ns, name string) error
-	ReconcileWithSource(ctx context.Context, kind, ns, name string) error
-	SetSuspend(ctx context.Context, kind, ns, name string, suspend bool) error
+	Reconcile(ctx context.Context, kind, ns, name, uid string) error
+	ReconcileWithSource(ctx context.Context, kind, ns, name, uid string) error
+	SetSuspend(ctx context.Context, kind, ns, name, uid string, suspend bool) error
 	ListCRDs(ctx context.Context) ([]crd.Info, error)
 	ListWorkloads(ctx context.Context, namespace string) ([]workloads.Workload, bool, bool, error)
 	WorkloadCompare(ctx context.Context, kind, ns, name string) (WorkloadCompareInfo, error)

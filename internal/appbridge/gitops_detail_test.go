@@ -79,10 +79,10 @@ type fakeGitOpsSummaryConn struct {
 func (f *fakeGitOpsSummaryConn) FluxObject(context.Context, string, string, string) (*unstructured.Unstructured, error) {
 	return nil, errors.New("not used")
 }
-func (f *fakeGitOpsSummaryConn) Reconcile(ctx context.Context, kind, ns, name string) error {
+func (f *fakeGitOpsSummaryConn) Reconcile(ctx context.Context, kind, ns, name, uid string) error {
 	return nil
 }
-func (f *fakeGitOpsSummaryConn) ReconcileWithSource(ctx context.Context, kind, ns, name string) error {
+func (f *fakeGitOpsSummaryConn) ReconcileWithSource(ctx context.Context, kind, ns, name, uid string) error {
 	return nil
 }
 func (f *fakeGitOpsSummaryConn) FluxEvents(ctx context.Context, kind, ns, name string) ([]workloads.EventSummary, error) {
@@ -92,7 +92,7 @@ func (f *fakeGitOpsSummaryConn) FluxAvailable() bool { return false }
 func (f *fakeGitOpsSummaryConn) FluxDiffKustomization(ctx context.Context, ns, name, path string) (fluxcli.DiffResult, error) {
 	return fluxcli.DiffResult{}, nil
 }
-func (f *fakeGitOpsSummaryConn) SetSuspend(ctx context.Context, kind, ns, name string, suspend bool) error {
+func (f *fakeGitOpsSummaryConn) SetSuspend(ctx context.Context, kind, ns, name, uid string, suspend bool) error {
 	return nil
 }
 func (f *fakeGitOpsSummaryConn) GitOpsSummaryFlux(ctx context.Context) (bool, int, int, int, error) {

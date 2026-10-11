@@ -2,13 +2,19 @@ package fleet
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"strings"
+	"sync"
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/dynamic"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
+	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/moomora/klyx/internal/capability"
 	"github.com/moomora/klyx/internal/clock"
@@ -349,5 +355,116 @@ func TestArgoPruneOption(t *testing.T) {
 		if got := argoPruneOption(u); got != want {
 			t.Errorf("%q: argoPruneOption = %q, want %q", v, got, want)
 		}
+	}
+}
+
+// pagedKustomizations answers the Kustomization list one page per call: each
+// page's items, a continue token on every page but the last. The fake client
+// drops ListOptions from the action it hands reactors, so the options are
+// recorded at the client (continueRecorder) and checked against the tokens.
+func pagedKustomizations(t *testing.T, c *ClusterConn, pages ...[]*unstructured.Unstructured) *int {
+	t.Helper()
+	calls := 0
+	fake := c.dyn.(*dynamicfake.FakeDynamicClient)
+	rec := &continueRecorder{Interface: fake}
+	c.dyn = rec
+	fake.PrependReactor("list", "kustomizations", func(k8stesting.Action) (bool, runtime.Object, error) {
+		want := ""
+		if calls > 0 {
+			want = fmt.Sprintf("page-%d", calls)
+		}
+		if got := rec.last().Continue; got != want {
+			t.Fatalf("page %d requested with continue %q, want %q", calls, got, want)
+		}
+		list := &unstructured.UnstructuredList{Object: map[string]interface{}{"apiVersion": "kustomize.toolkit.fluxcd.io/v1", "kind": "KustomizationList"}}
+		for _, u := range pages[calls] {
+			list.Items = append(list.Items, *u)
+		}
+		calls++
+		if calls < len(pages) {
+			list.SetContinue(fmt.Sprintf("page-%d", calls))
+		}
+		return true, list, nil
+	})
+	return &calls
+}
+
+// continueRecorder records the ListOptions of every List the conn issues.
+type continueRecorder struct {
+	dynamic.Interface
+	mu   sync.Mutex
+	opts []metav1.ListOptions
+}
+
+func (r *continueRecorder) Resource(gvr schema.GroupVersionResource) dynamic.NamespaceableResourceInterface {
+	return recordingResource{r.Interface.Resource(gvr), r}
+}
+
+func (r *continueRecorder) last() metav1.ListOptions {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.opts[len(r.opts)-1]
+}
+
+type recordingResource struct {
+	dynamic.NamespaceableResourceInterface
+	r *continueRecorder
+}
+
+func (x recordingResource) List(ctx context.Context, opts metav1.ListOptions) (*unstructured.UnstructuredList, error) {
+	x.r.mu.Lock()
+	x.r.opts = append(x.r.opts, opts)
+	x.r.mu.Unlock()
+	return x.NamespaceableResourceInterface.List(ctx, opts)
+}
+
+// Codex review of 7d389eb #3: the owner on a later page is found - the
+// first page alone is not the cluster's Kustomizations.
+func TestGitOpsOwnership_PaginatedListFindsALaterPagesOwner(t *testing.T) {
+	c := ownershipConn(t, true, false)
+	calls := pagedKustomizations(t, c,
+		[]*unstructured.Unstructured{kustomization("flux-system", "other", true, "", "web_cfg__ConfigMap")},
+		[]*unstructured.Unstructured{kustomization("flux-system", "apps", true, "", "web_api_apps_Deployment")},
+	)
+	o := c.GitOpsOwnership(context.Background(), "apps", "Deployment", "web", "api")
+	if *calls != 2 || o.OwnerKind != "Kustomization" || o.OwnerName != "apps" || len(o.Warnings) != 0 {
+		t.Fatalf("calls=%d verdict %+v", *calls, o)
+	}
+}
+
+// Reaching the bound with more to read is an incomplete check, never a
+// clean "no owner detected".
+func TestGitOpsOwnership_ListBoundIsAnIncompleteCheck(t *testing.T) {
+	defer func(v int) { ownershipListCap = v }(ownershipListCap)
+	ownershipListCap = 2
+	c := ownershipConn(t, true, false)
+	page := func(n string) []*unstructured.Unstructured {
+		return []*unstructured.Unstructured{kustomization("flux-system", n, true, "", "web_cfg__ConfigMap")}
+	}
+	pagedKustomizations(t, c, page("a"), page("b"), []*unstructured.Unstructured{kustomization("flux-system", "apps", true, "", "web_api_apps_Deployment")})
+	o := c.GitOpsOwnership(context.Background(), "apps", "Deployment", "web", "api")
+	if o.OwnerKind != "" || len(o.Warnings) != 1 || !strings.Contains(o.Warnings[0], "incomplete: only the first 2 Kustomizations") {
+		t.Fatalf("a bounded read must say it is incomplete: %+v", o)
+	}
+}
+
+// A page that fails after others were read keeps them and says the check is
+// incomplete.
+func TestGitOpsOwnership_AFailedLaterPageIsIncomplete(t *testing.T) {
+	c := ownershipConn(t, true, false)
+	calls := 0
+	c.dyn.(*dynamicfake.FakeDynamicClient).PrependReactor("list", "kustomizations", func(k8stesting.Action) (bool, runtime.Object, error) {
+		calls++
+		if calls > 1 {
+			return true, nil, errors.New("the continue token has expired")
+		}
+		list := &unstructured.UnstructuredList{Object: map[string]interface{}{"apiVersion": "kustomize.toolkit.fluxcd.io/v1", "kind": "KustomizationList"}}
+		list.Items = []unstructured.Unstructured{*kustomization("flux-system", "a", true, "", "web_cfg__ConfigMap")}
+		list.SetContinue("page-1")
+		return true, list, nil
+	})
+	o := c.GitOpsOwnership(context.Background(), "apps", "Deployment", "web", "api")
+	if len(o.Warnings) != 1 || !strings.Contains(o.Warnings[0], "incomplete: only 1 Kustomizations were read before the list failed") {
+		t.Fatalf("%+v", o)
 	}
 }

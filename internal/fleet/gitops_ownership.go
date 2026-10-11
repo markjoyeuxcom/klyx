@@ -2,6 +2,7 @@ package fleet
 
 import (
 	"context"
+	"fmt"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -78,15 +79,18 @@ func (o *GitOpsOwnership) noteReach(kind, ns, name string, prunes, managed bool,
 	o.NamespaceBasis = basis
 }
 
-// ownershipListCap bounds the fallback live lists; Kustomizations/Applications
-// number in the dozens on real fleets.
-const ownershipListCap = 500
+// The Kustomization read is paginated (ownershipPageSize per page) up to
+// ownershipListCap objects; Kustomizations number in the dozens on real
+// fleets. Reaching the bound with more to read is an incomplete check, said
+// as a warning - never a silent "no owner detected". A var: a test seam.
+const ownershipPageSize = 500
 
-// GitOpsOwnership computes the pre-write verdict for (group, kind, ns, name).
-// Reads the Flux informer stores when the GitOps watch is open (no API calls),
-// falling back to bounded live lists; Argo Applications are always live-listed
-// (they are not watched). Failures degrade to Warnings, never to a silent
-// "unmanaged".
+var ownershipListCap = 5000
+
+// GitOpsOwnership computes the pre-write verdict for (group, kind, ns, name)
+// from live reads: a paginated, bounded Kustomization list and the Argo
+// Applications. A failed or incomplete read degrades to Warnings, never to a
+// silent "unmanaged".
 func (c *ClusterConn) GitOpsOwnership(ctx context.Context, group, kind, ns, name string) GitOpsOwnership {
 	out := GitOpsOwnership{}
 
@@ -140,10 +144,11 @@ func (c *ClusterConn) GitOpsOwnership(ctx context.Context, group, kind, ns, name
 	return out
 }
 
-// kustomizationsForOwnership returns the Kustomization unstructureds from one
-// bounded live list (the lens's lazy watch it once borrowed is gone - 1c
-// slice 3 §6). The warning distinguishes a degraded check from a clean
-// "none found".
+// kustomizationsForOwnership returns the Kustomization unstructureds from a
+// paginated live list, bounded by ownershipListCap (the lens's lazy watch it
+// once borrowed is gone - 1c slice 3 §6). The warning distinguishes a failed
+// or incomplete check from a clean "none found": a read that stops at the
+// bound, or fails after some pages, returns what it read and says so.
 func (c *ClusterConn) kustomizationsForOwnership(ctx context.Context) ([]*unstructured.Unstructured, string) {
 	if c.dyn == nil {
 		return nil, "Flux ownership check unavailable: no cluster connection"
@@ -159,15 +164,28 @@ func (c *ClusterConn) kustomizationsForOwnership(ctx context.Context) ([]*unstru
 		ver = v
 	}
 	gvr := schema.GroupVersionResource{Group: "kustomize.toolkit.fluxcd.io", Version: ver, Resource: "kustomizations"}
-	list, err := c.dyn.Resource(gvr).List(ctx, metav1.ListOptions{Limit: ownershipListCap})
-	if err != nil {
-		return nil, "Flux ownership check failed: " + err.Error()
+	var out []*unstructured.Unstructured
+	opts := metav1.ListOptions{Limit: ownershipPageSize}
+	for {
+		list, err := c.dyn.Resource(gvr).List(ctx, opts)
+		if err != nil {
+			if len(out) == 0 {
+				return nil, "Flux ownership check failed: " + err.Error()
+			}
+			return out, fmt.Sprintf("Flux ownership check incomplete: only %d Kustomizations were read before the list failed: %v", len(out), err)
+		}
+		for i := range list.Items {
+			out = append(out, &list.Items[i])
+		}
+		next := list.GetContinue()
+		if next == "" {
+			return out, ""
+		}
+		if len(out) >= ownershipListCap {
+			return out, fmt.Sprintf("Flux ownership check incomplete: only the first %d Kustomizations were read - an owner beyond them is not detected", len(out))
+		}
+		opts.Continue = next
 	}
-	out := make([]*unstructured.Unstructured, 0, len(list.Items))
-	for i := range list.Items {
-		out = append(out, &list.Items[i])
-	}
-	return out, ""
 }
 
 func argoOwns(a argo.App, group, kind, ns, name string) bool {

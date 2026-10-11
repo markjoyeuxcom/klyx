@@ -23,9 +23,11 @@ type GitOpsConn interface {
 	FluxEvents(ctx context.Context, kind, ns, name string) ([]workloads.EventSummary, error)
 	FluxAvailable() bool
 	FluxDiffKustomization(ctx context.Context, ns, name, path string) (fluxcli.DiffResult, error)
-	Reconcile(ctx context.Context, kind, ns, name string) error
-	ReconcileWithSource(ctx context.Context, kind, ns, name string) error
-	SetSuspend(ctx context.Context, kind, ns, name string, suspend bool) error
+	// The verbs write only the armed object (uid): a same-name replacement
+	// is refused (fleet.ErrReplaced), never written (design §5b).
+	Reconcile(ctx context.Context, kind, ns, name, uid string) error
+	ReconcileWithSource(ctx context.Context, kind, ns, name, uid string) error
+	SetSuspend(ctx context.Context, kind, ns, name, uid string, suspend bool) error
 	// GitOpsSummaryFlux performs a cluster-wide on-demand LIST and returns counts.
 	// Separated from fleet.GitOpsSummary to keep GitOpsConn free of fleet types.
 	GitOpsSummaryFlux(ctx context.Context) (fluxPresent bool, total, notReady, suspended int, err error)
@@ -66,7 +68,9 @@ const diffTimeout = 120 * time.Second
 // cluster without the typed confirmation, and no un-consumed grant can linger
 // to authorize an unrelated later action (ProtectGuard: a guard against
 // mistakes, not a security boundary).
-func (s *GitOpsService) Reconcile(cluster, kind, namespace, name string) ActionResultDTO {
+// uid is the object the verb was armed against (the row the operator
+// confirmed): only that object is written.
+func (s *GitOpsService) Reconcile(cluster, kind, namespace, name, uid string) ActionResultDTO {
 	if err := checkProtected(cluster); err != nil {
 		return ActionResultDTO{Error: err.Error()}
 	}
@@ -76,13 +80,13 @@ func (s *GitOpsService) Reconcile(cluster, kind, namespace, name string) ActionR
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
 	defer cancel()
-	if err := conn.Reconcile(ctx, kind, namespace, name); err != nil {
+	if err := conn.Reconcile(ctx, kind, namespace, name, uid); err != nil {
 		return ActionResultDTO{Error: err.Error()}
 	}
 	return ActionResultDTO{OK: true}
 }
 
-func (s *GitOpsService) ReconcileWithSource(cluster, kind, namespace, name string) ActionResultDTO {
+func (s *GitOpsService) ReconcileWithSource(cluster, kind, namespace, name, uid string) ActionResultDTO {
 	if err := checkProtected(cluster); err != nil {
 		return ActionResultDTO{Error: err.Error()}
 	}
@@ -92,7 +96,7 @@ func (s *GitOpsService) ReconcileWithSource(cluster, kind, namespace, name strin
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
 	defer cancel()
-	if err := conn.ReconcileWithSource(ctx, kind, namespace, name); err != nil {
+	if err := conn.ReconcileWithSource(ctx, kind, namespace, name, uid); err != nil {
 		return ActionResultDTO{Error: err.Error()}
 	}
 	return ActionResultDTO{OK: true}
@@ -119,7 +123,7 @@ func (s *GitOpsService) FluxDiff(cluster, namespace, name, path string) FluxDiff
 	return FluxDiffDTO{Available: true, HasChanges: res.HasChanges, Output: res.Output, Error: res.Err}
 }
 
-func (s *GitOpsService) SetSuspend(cluster, kind, namespace, name string, suspend bool) ActionResultDTO {
+func (s *GitOpsService) SetSuspend(cluster, kind, namespace, name, uid string, suspend bool) ActionResultDTO {
 	if err := checkProtected(cluster); err != nil {
 		return ActionResultDTO{Error: err.Error()}
 	}
@@ -129,7 +133,7 @@ func (s *GitOpsService) SetSuspend(cluster, kind, namespace, name string, suspen
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
 	defer cancel()
-	if err := conn.SetSuspend(ctx, kind, namespace, name, suspend); err != nil {
+	if err := conn.SetSuspend(ctx, kind, namespace, name, uid, suspend); err != nil {
 		return ActionResultDTO{Error: err.Error()}
 	}
 	return ActionResultDTO{OK: true}

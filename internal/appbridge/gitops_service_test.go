@@ -12,6 +12,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
+	"github.com/moomora/klyx/internal/fleet"
 	"github.com/moomora/klyx/internal/fluxcli"
 	"github.com/moomora/klyx/internal/workloads"
 )
@@ -36,6 +37,7 @@ type fakeGitOpsConn struct {
 	withSource     bool
 	reconcileCalls int // Reconcile + ReconcileWithSource invocations, for gate tests
 	suspendCalls   int
+	armedUID       string // the uid the last verb was armed against
 }
 
 // FluxObject: the direct read (design §5b) - a missing object is NotFound,
@@ -71,22 +73,25 @@ func (f *fakeGitOpsConn) FluxDiffKustomization(ctx context.Context, ns, name, pa
 	return f.diff, f.diffErr
 }
 
-func (f *fakeGitOpsConn) Reconcile(ctx context.Context, kind, ns, name string) error {
+func (f *fakeGitOpsConn) Reconcile(ctx context.Context, kind, ns, name, uid string) error {
 	f.mu.Lock()
 	f.reconcileCalls++
+	f.armedUID = uid
 	f.mu.Unlock()
 	return f.reconcileErr
 }
-func (f *fakeGitOpsConn) ReconcileWithSource(ctx context.Context, kind, ns, name string) error {
+func (f *fakeGitOpsConn) ReconcileWithSource(ctx context.Context, kind, ns, name, uid string) error {
 	f.mu.Lock()
 	f.withSource = true
+	f.armedUID = uid
 	f.reconcileCalls++
 	f.mu.Unlock()
 	return f.reconcileErr
 }
-func (f *fakeGitOpsConn) SetSuspend(ctx context.Context, kind, ns, name string, suspend bool) error {
+func (f *fakeGitOpsConn) SetSuspend(ctx context.Context, kind, ns, name, uid string, suspend bool) error {
 	f.mu.Lock()
 	f.lastSuspend = suspend
+	f.armedUID = uid
 	f.suspendCalls++
 	f.mu.Unlock()
 	return f.suspendErr
@@ -139,7 +144,7 @@ func TestResolveGitLinkNoSourceURLIsEmpty(t *testing.T) {
 func TestReconcileActionResult(t *testing.T) {
 	conn := &fakeGitOpsConn{}
 	svc := NewGitOpsService(func(string) (GitOpsConn, bool) { return conn, true }, time.Now)
-	if r := svc.Reconcile("x", "Kustomization", "flux-system", "app"); !r.OK || r.Error != "" {
+	if r := svc.Reconcile("x", "Kustomization", "flux-system", "app", "uid-app"); !r.OK || r.Error != "" {
 		t.Fatalf("want OK, got %+v", r)
 	}
 }
@@ -147,7 +152,7 @@ func TestReconcileActionResult(t *testing.T) {
 func TestReconcileActionSurfacesError(t *testing.T) {
 	conn := &fakeGitOpsConn{reconcileErr: errors.New("forbidden: cannot patch")}
 	svc := NewGitOpsService(func(string) (GitOpsConn, bool) { return conn, true }, time.Now)
-	r := svc.Reconcile("x", "Kustomization", "flux-system", "app")
+	r := svc.Reconcile("x", "Kustomization", "flux-system", "app", "uid-app")
 	if r.OK || r.Error == "" {
 		t.Fatalf("want failure surfaced, got %+v", r)
 	}
@@ -156,7 +161,7 @@ func TestReconcileActionSurfacesError(t *testing.T) {
 func TestReconcileWithSourceActionResult(t *testing.T) {
 	conn := &fakeGitOpsConn{}
 	svc := NewGitOpsService(func(string) (GitOpsConn, bool) { return conn, true }, time.Now)
-	if r := svc.ReconcileWithSource("x", "Kustomization", "flux-system", "app"); !r.OK || r.Error != "" {
+	if r := svc.ReconcileWithSource("x", "Kustomization", "flux-system", "app", "uid-app"); !r.OK || r.Error != "" {
 		t.Fatalf("want OK, got %+v", r)
 	}
 	conn.mu.Lock()
@@ -186,7 +191,7 @@ func TestFluxDiffReturnsChanges(t *testing.T) {
 
 func TestReconcileWithSourceUnknownClusterIsError(t *testing.T) {
 	svc := NewGitOpsService(func(string) (GitOpsConn, bool) { return nil, false }, time.Now)
-	if r := svc.ReconcileWithSource("ghost", "Kustomization", "n", "x"); r.OK || r.Error == "" {
+	if r := svc.ReconcileWithSource("ghost", "Kustomization", "n", "x", "uid-x"); r.OK || r.Error == "" {
 		t.Fatalf("want failure for unknown cluster, got %+v", r)
 	}
 }
@@ -194,7 +199,7 @@ func TestReconcileWithSourceUnknownClusterIsError(t *testing.T) {
 func TestSetSuspendActionPassesFlag(t *testing.T) {
 	conn := &fakeGitOpsConn{}
 	svc := NewGitOpsService(func(string) (GitOpsConn, bool) { return conn, true }, time.Now)
-	if r := svc.SetSuspend("x", "Kustomization", "flux-system", "app", true); !r.OK {
+	if r := svc.SetSuspend("x", "Kustomization", "flux-system", "app", "uid-app", true); !r.OK {
 		t.Fatalf("want OK, got %+v", r)
 	}
 	conn.mu.Lock()
@@ -206,7 +211,7 @@ func TestSetSuspendActionPassesFlag(t *testing.T) {
 
 func TestActionUnknownClusterIsError(t *testing.T) {
 	svc := NewGitOpsService(func(string) (GitOpsConn, bool) { return nil, false }, time.Now)
-	if r := svc.Reconcile("ghost", "Kustomization", "n", "x"); r.OK || r.Error == "" {
+	if r := svc.Reconcile("ghost", "Kustomization", "n", "x", "uid-x"); r.OK || r.Error == "" {
 		t.Fatalf("want failure for unknown cluster, got %+v", r)
 	}
 }
@@ -239,12 +244,12 @@ func TestProtectGuard_GatesFluxVerbs(t *testing.T) {
 		name string
 		call func() ActionResultDTO
 	}{
-		{"Reconcile", func() ActionResultDTO { return svc.Reconcile("prd-cluster", "Kustomization", "flux-system", "app") }},
+		{"Reconcile", func() ActionResultDTO { return svc.Reconcile("prd-cluster", "Kustomization", "flux-system", "app", "uid-app") }},
 		{"ReconcileWithSource", func() ActionResultDTO {
-			return svc.ReconcileWithSource("prd-cluster", "Kustomization", "flux-system", "app")
+			return svc.ReconcileWithSource("prd-cluster", "Kustomization", "flux-system", "app", "uid-app")
 		}},
 		{"SetSuspend", func() ActionResultDTO {
-			return svc.SetSuspend("prd-cluster", "Kustomization", "flux-system", "app", true)
+			return svc.SetSuspend("prd-cluster", "Kustomization", "flux-system", "app", "uid-app", true)
 		}},
 	}
 
@@ -310,5 +315,27 @@ func TestResolveGitLinkReadFailuresAreErrors(t *testing.T) {
 	svc := NewGitOpsService(func(string) (GitOpsConn, bool) { return nil, false }, time.Now)
 	if link := svc.ResolveGitLink("gone", "Kustomization", "ns", "app"); link.Error != "cluster not connected" {
 		t.Fatalf("a cluster miss is an error: %+v", link)
+	}
+}
+
+// Design §5b (Codex review of 7d389eb #1): each verb carries the UID it was
+// armed against to the conn, and a refused replacement is the verb's error.
+func TestFluxVerbsCarryTheArmedUID(t *testing.T) {
+	for name, call := range map[string]func(*GitOpsService) ActionResultDTO{
+		"reconcile":   func(s *GitOpsService) ActionResultDTO { return s.Reconcile("x", "Kustomization", "flux-system", "app", "uid-A") },
+		"with-source": func(s *GitOpsService) ActionResultDTO { return s.ReconcileWithSource("x", "Kustomization", "flux-system", "app", "uid-A") },
+		"suspend":     func(s *GitOpsService) ActionResultDTO { return s.SetSuspend("x", "Kustomization", "flux-system", "app", "uid-A", true) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			conn := &fakeGitOpsConn{}
+			svc := NewGitOpsService(func(string) (GitOpsConn, bool) { return conn, true }, time.Now)
+			if r := call(svc); !r.OK || conn.armedUID != "uid-A" {
+				t.Fatalf("result %+v, armed %q", r, conn.armedUID)
+			}
+			conn.reconcileErr, conn.suspendErr = fleet.ErrReplaced, fleet.ErrReplaced
+			if r := call(svc); r.OK || !strings.Contains(r.Error, "replaced since the action was armed") {
+				t.Fatalf("a refused replacement is the verb's error: %+v", r)
+			}
+		})
 	}
 }

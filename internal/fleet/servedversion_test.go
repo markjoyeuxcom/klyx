@@ -104,7 +104,7 @@ func TestServedVersion_ResolvesPerResource(t *testing.T) {
 // patch both use OCIRepository's own served version; an unserved source kind
 // is not found, never a guessed version.
 func TestFluxGVRs_UseTheResourcesOwnServedVersion(t *testing.T) {
-	ks := ksObj("apps")
+	ks := withObjUID(ksObj("apps"), "uid-apps")
 	ks.Object["spec"] = map[string]interface{}{"sourceRef": map[string]interface{}{"kind": "OCIRepository", "name": "manifests"}}
 	c, dyn, cancel := splitConn(t, ociRepo("manifests"), ks)
 	defer cancel()
@@ -118,7 +118,7 @@ func TestFluxGVRs_UseTheResourcesOwnServedVersion(t *testing.T) {
 	}
 
 	dyn.ClearActions()
-	if err := c.ReconcileWithSource(context.Background(), "Kustomization", "flux-system", "apps"); err != nil {
+	if err := c.ReconcileWithSource(context.Background(), "Kustomization", "flux-system", "apps", "uid-apps"); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
 	patchedOCI := false

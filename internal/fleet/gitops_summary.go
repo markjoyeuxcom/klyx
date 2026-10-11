@@ -10,9 +10,9 @@ import (
 	"github.com/moomora/klyx/internal/gitops/flux"
 )
 
-// GitOpsSummary is a cheap on-demand snapshot of Flux reconciliation health.
-// It is independent of the lazy watch (OpenGitOps) and is used by the Overview
-// attention strip.
+// GitOpsSummary is a cheap on-demand snapshot of Flux reconciliation health,
+// read with its own list, used by the Overview attention strip (until slice 4
+// moves the strip onto the health Observer's summary).
 type GitOpsSummary struct {
 	FluxPresent bool
 	Total       int

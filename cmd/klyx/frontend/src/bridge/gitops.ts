@@ -37,24 +37,26 @@ export async function getResourceDetail(cluster: string, kind: string, namespace
 
 type ActionResultDTO = { ok: boolean; error: string };
 
-export async function reconcile(cluster: string, kind: string, namespace: string, name: string): Promise<void> {
-  const r = (await GitOpsService.Reconcile(cluster, kind, namespace, name)) as ActionResultDTO;
+// The verbs carry the UID of the row they were armed against: the backend
+// writes only that object - a same-name replacement is refused (design §5b).
+export async function reconcile(cluster: string, kind: string, namespace: string, name: string, uid: string): Promise<void> {
+  const r = (await GitOpsService.Reconcile(cluster, kind, namespace, name, uid)) as ActionResultDTO;
   useFleet.getState().setActionStatus(
     r.ok ? { kind: "success", message: `Reconcile requested for ${namespace}/${name}` }
          : { kind: "error", message: r.error || "Reconcile failed" },
   );
 }
 
-export async function reconcileWithSource(cluster: string, kind: string, namespace: string, name: string): Promise<void> {
-  const r = (await GitOpsService.ReconcileWithSource(cluster, kind, namespace, name)) as ActionResultDTO;
+export async function reconcileWithSource(cluster: string, kind: string, namespace: string, name: string, uid: string): Promise<void> {
+  const r = (await GitOpsService.ReconcileWithSource(cluster, kind, namespace, name, uid)) as ActionResultDTO;
   useFleet.getState().setActionStatus(
     r.ok ? { kind: "success", message: `Reconcile (with source) requested for ${namespace}/${name}` }
          : { kind: "error", message: r.error || "Reconcile failed" },
   );
 }
 
-export async function setSuspend(cluster: string, kind: string, namespace: string, name: string, suspend: boolean): Promise<void> {
-  const r = (await GitOpsService.SetSuspend(cluster, kind, namespace, name, suspend)) as ActionResultDTO;
+export async function setSuspend(cluster: string, kind: string, namespace: string, name: string, uid: string, suspend: boolean): Promise<void> {
+  const r = (await GitOpsService.SetSuspend(cluster, kind, namespace, name, uid, suspend)) as ActionResultDTO;
   useFleet.getState().setActionStatus(
     r.ok ? { kind: "success", message: `${suspend ? "Suspended" : "Resumed"} ${namespace}/${name}` }
          : { kind: "error", message: r.error || "Action failed" },

@@ -5,7 +5,7 @@ import type { DependencyRefDTO, EventRowDTO, FluxResourceDTO, FluxSourceDTO, Inv
 import { getResourceDetail, reconcile, reconcileWithSource, setSuspend, resolveGitLink, fluxDiff } from "../bridge/gitops";
 import { FLUX_PART_KINDS, useFluxRows } from "../health/useFluxRows";
 import { useNow } from "../chrome/Age";
-import { clock, combineEvidence, coverageGaps, kindEvidence, lastGoodAt, type KindEvidence } from "../layout/coverage";
+import { clock, combineEvidence, coverageGaps, joinCoverage, kindEvidence, lastGoodAt, type JoinCoverage, type KindEvidence } from "../layout/coverage";
 import type { FluxDiffDTO } from "../bridge/gitops";
 import { ConfirmDialog } from "../chrome/ConfirmDialog";
 import { MetaTile, OperationDialog, OptionTile } from "../chrome/OperationDialog";
@@ -200,11 +200,27 @@ export function GitOps({ cluster }: { cluster: string }) {
   const lastGood = mine ? lastGoodAt(gitops.coverage, [...FLUX_PART_KINDS.reconciliations, ...FLUX_PART_KINDS.sources]) : null;
   const discoveryGap = mine ? coverageGaps(gitops.coverage ?? []) : null;
 
-  // Pending verbs are pinned to the cluster + resource they were raised on and
-  // dropped when that target leaves a complete read of its kind or the cluster
-  // changes.
+  // Pending verbs are pinned to the cluster + OBJECT they were raised on (its
+  // UID, design §5b): dropped when the cluster changes, when a same-name
+  // replacement takes the row, or when the target leaves a complete read of
+  // its kind. The backend writes only that UID, so a replacement after the
+  // last publication is refused there too.
   const setPinned = useCallback((v: Omit<PinnedVerb, "cluster"> | null) => setPinnedState(v ? ({ ...v, cluster } as PinnedVerb) : null), [cluster]);
-  const targetLive = (v: PinnedVerb) => v.cluster === cluster && (evidenceOf(v.r.kind) !== "complete" || rows.some((x) => keyOf(x) === keyOf(v.r)));
+  const targetLive = (v: PinnedVerb) => {
+    if (v.cluster !== cluster) return false;
+    const cur = rows.find((x) => keyOf(x) === keyOf(v.r));
+    if (cur) return cur.uid === v.r.uid;
+    return evidenceOf(v.r.kind) !== "complete";
+  };
+  // dispatch re-checks the armed object against the current rows
+  const dispatchArmed = (v: PinnedVerb, send: (uid: string) => void) => {
+    setPinnedState(null);
+    if (!targetLive(v)) {
+      useFleet.getState().setActionStatus({ kind: "error", message: `${v.r.kind} ${v.r.namespace}/${v.r.name} was replaced since the action was armed - nothing was sent` });
+      return;
+    }
+    send(v.r.uid ?? "");
+  };
   const verb = pinned && targetLive(pinned) ? pinned : null;
   useEffect(() => { if (pinned && !verb) setPinnedState(null); }, [pinned, verb]);
 
@@ -582,6 +598,7 @@ export function GitOps({ cluster }: { cluster: string }) {
             removed={sourceRemoved}
             unverified={sourceUnverified}
             usedBy={rows.filter((r) => boundTo(r, sourceSubject))}
+            usageCov={{ Kustomization: joinCoverage(evidenceOf("Kustomization")), HelmRelease: joinCoverage(evidenceOf("HelmRelease")) }}
             onClose={() => setSourceKey(null)}
             onOpenResource={(r) => { setView("reconciliation"); setSourceKey(null); openRow(r); }}
           />
@@ -619,8 +636,7 @@ export function GitOps({ cluster }: { cluster: string }) {
           onCancel={() => setPinnedState(null)}
           onConfirm={() => {
             const { cluster: target, kind, r } = verb;
-            setPinnedState(null);
-            void setSuspend(target, r.kind, r.namespace, r.name, kind === "suspend");
+            dispatchArmed(verb, (uid) => void setSuspend(target, r.kind, r.namespace, r.name, uid, kind === "suspend"));
           }}
         />
       )}
@@ -632,9 +648,7 @@ export function GitOps({ cluster }: { cluster: string }) {
           onCancel={() => setPinnedState(null)}
           onConfirm={(withSource) => {
             const { cluster: target, r } = verb;
-            setPinnedState(null);
-            if (withSource) void reconcileWithSource(target, r.kind, r.namespace, r.name);
-            else void reconcile(target, r.kind, r.namespace, r.name);
+            dispatchArmed(verb, (uid) => void (withSource ? reconcileWithSource(target, r.kind, r.namespace, r.name, uid) : reconcile(target, r.kind, r.namespace, r.name, uid)));
           }}
         />
       )}
@@ -645,16 +659,20 @@ export function GitOps({ cluster }: { cluster: string }) {
 // SourceInspector - a source's full diagnosis (wrapped message, URL,
 // revision) and the resources bound to it, which is how a source failure
 // reaches the operator's attention. Manifest opens the guarded editor.
-function SourceInspector({ source, removed, unverified, usedBy, onClose, onOpenResource }: {
+function SourceInspector({ source, removed, unverified, usedBy, usageCov, onClose, onOpenResource }: {
   source: FluxSourceDTO;
   removed: boolean;
   unverified: boolean;
   usedBy: FluxResourceDTO[];
+  // the consumer join is qualified by the reconciliation kinds it reads:
+  // unknown is unverified (never zero), stale is last observed
+  usageCov: Record<"Kustomization" | "HelmRelease", JoinCoverage>;
   onClose: () => void;
   onOpenResource: (r: FluxResourceDTO) => void;
 }) {
   const s = source;
   const h = roleOf(s);
+  const usage = usageQualifier(usageCov);
   const ref = wellKnownResourceRef(FLUX_KIND_GROUPS[s.kind] ?? "", s.kind);
   const view = ref ? () => { const nav = useFleet.getState(); nav.openResource(ref); nav.openInstance(s.namespace, s.name); } : null;
   return (
@@ -679,8 +697,9 @@ function SourceInspector({ source, removed, unverified, usedBy, onClose, onOpenR
         )}
         primary={view ? { label: "View manifest in Resources", onSelect: view } : undefined}
       >
-        <InspectorBlock title="Used by" count={usedBy.length}>
-          {usedBy.length === 0 ? <Muted>No Kustomization or HelmRelease in this cluster names this source.</Muted> : (
+        <InspectorBlock title="Used by" count={usage.mark ? undefined : usedBy.length} extra={usage.mark ? <span className="t-secondary" data-testid="used-by-count">{usage.allUnknown ? "?" : `${usedBy.length}${usage.mark}`}</span> : undefined}>
+          {usage.note && <Muted>{usage.note}</Muted>}
+          {usedBy.length === 0 ? (usage.allUnknown ? null : <Muted>{usage.unknown.length ? `None among the ${usage.read.join(" and ")} read.` : usage.stale.length ? `None in the last observed ${usage.stale.join(" and ")} list.` : "No Kustomization or HelmRelease in this cluster names this source."}</Muted>) : (
             <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
               {usedBy.map((r) => (
                 <button key={keyOf(r)} onClick={() => onOpenResource(r)} className="t-identifier"
@@ -702,6 +721,24 @@ function SourceInspector({ source, removed, unverified, usedBy, onClose, onOpenR
       </InspectorLayout>
     </div>
   );
+}
+
+// usageQualifier qualifies a source's consumer count by the reconciliation
+// kinds behind it (Codex review of 7d389eb #2): a kind without a read makes
+// the count a lower bound ("+") and the usage unverified, never zero; a
+// stale kind makes it last observed ("*").
+function usageQualifier(cov: Record<string, JoinCoverage>) {
+  const kinds = Object.keys(cov);
+  const plural = (k: string) => `${k}s`;
+  const unknown = kinds.filter((k) => cov[k] === "unknown");
+  const stale = kinds.filter((k) => cov[k] === "stale");
+  const read = kinds.filter((k) => cov[k] !== "unknown").map(plural);
+  const allUnknown = unknown.length === kinds.length;
+  const mark = unknown.length ? "+" : stale.length ? "*" : "";
+  const note = allUnknown ? `${unknown.join(" and ")} reads unavailable - usage unverified, not zero.`
+    : unknown.length ? `${unknown.join(" and ")} read unavailable - usage unverified beyond the ${read.join(" and ")}.`
+    : stale.length ? `From the last observed ${stale.join(" and ")} list.` : "";
+  return { unknown, stale, read, allUnknown, mark, note };
 }
 
 // sinceWord: readySinceSeconds is the Ready condition's LAST TRANSITION, so

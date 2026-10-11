@@ -14,6 +14,9 @@ vi.mock("../../bindings/github.com/moomora/klyx/internal/appbridge/index.js", ()
   GitOpsService: {
     GetResourceDetail: vi.fn(() => { const d = deferred<unknown>(); calls.push(d); return d.promise; }),
     ResolveGitLink: vi.fn(async () => resolved),
+    Reconcile: vi.fn(async () => ({ ok: true, error: "" })),
+    ReconcileWithSource: vi.fn(async () => ({ ok: true, error: "" })),
+    SetSuspend: vi.fn(async () => ({ ok: true, error: "" })),
   },
 }));
 let resolved: unknown = null;
@@ -21,7 +24,8 @@ vi.mock("@wailsio/runtime", () => ({
   Browser: { OpenURL: vi.fn(async () => {}) }, Clipboard: { SetText: vi.fn(async () => {}) },
 }));
 
-import { getResourceDetail, resolveGitLink } from "./gitops";
+import { getResourceDetail, reconcile, reconcileWithSource, resolveGitLink, setSuspend } from "./gitops";
+import { GitOpsService } from "../../bindings/github.com/moomora/klyx/internal/appbridge/index.js";
 
 const KEY = "Kustomization/flux-system/apps";
 const detailFrom = (marker: string): ResourceDetailDTO => ({
@@ -85,5 +89,17 @@ describe("Flux bridge lifecycle fences (Codex Flux review #1)", () => {
     useFleet.getState().setGitOpsLoading("B");
     expect(useFleet.getState().gitops.expandedKey).toBeNull();
     expect(useFleet.getState().gitops.detail).toBeNull();
+  });
+});
+
+// Design §5b: every verb hands the backend the UID it was armed against.
+describe("Flux verbs carry the armed UID", () => {
+  it("reconcile, reconcile-with-source and suspend pass it through", async () => {
+    await reconcile("A", "Kustomization", "flux-system", "apps", "uid-1");
+    await reconcileWithSource("A", "Kustomization", "flux-system", "apps", "uid-2");
+    await setSuspend("A", "Kustomization", "flux-system", "apps", "uid-3", true);
+    expect(GitOpsService.Reconcile).toHaveBeenCalledWith("A", "Kustomization", "flux-system", "apps", "uid-1");
+    expect(GitOpsService.ReconcileWithSource).toHaveBeenCalledWith("A", "Kustomization", "flux-system", "apps", "uid-2");
+    expect(GitOpsService.SetSuspend).toHaveBeenCalledWith("A", "Kustomization", "flux-system", "apps", "uid-3", true);
   });
 });
