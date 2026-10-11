@@ -92,7 +92,11 @@ export function loadRoute(): PersistedRoute | null {
 // initRoutePersistence subscribes to the store and mirrors every route change
 // into localStorage. Returns the unsubscriber.
 export function initRoutePersistence(): () => void {
-  let last: Route | undefined;
+  // Start from the current route: zustand calls this listener on EVERY state
+  // change, and the first one at boot (the fleet seed) happens before the
+  // saved route is restored - an undefined `last` used to save the boot
+  // default over the saved route, so restore always found "fleet".
+  let last: Route | undefined = useFleet.getState().route;
   return useFleet.subscribe((s) => {
     if (s.route === last) return;
     last = s.route;

@@ -94,6 +94,16 @@ describe("route persistence", () => {
     expect(useFleet.getState().route).toEqual({ name: "fleet" });
   });
 
+  it("an unrelated state change at boot never overwrites the saved route before restore", () => {
+    useFleet.setState({ route: { name: "fleet" } });
+    saveRoute({ name: "cluster", cluster: "dev-neu", section: "pods" });
+    const off = initRoutePersistence();
+    useFleet.getState().setClusters([{ name: "dev-neu" } as never]); // the fleet seed
+    restoreRouteOnBoot(["dev-neu"]);
+    off();
+    expect(useFleet.getState().route).toMatchObject({ name: "cluster", cluster: "dev-neu", section: "pods" });
+  });
+
   it("initRoutePersistence mirrors store navigation into storage", () => {
     const off = initRoutePersistence();
     useFleet.getState().openCluster("stg-weu");
