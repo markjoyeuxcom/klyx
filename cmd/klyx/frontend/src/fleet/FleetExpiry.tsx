@@ -2,8 +2,11 @@ import { useEffect, useMemo, useState } from "react";
 import { useFleet } from "../store/fleet";
 import type { ExpiryItemDTO, ExpiryScanResultDTO } from "../store/fleet";
 import { getExpiryScan } from "../bridge/expiry";
-import { btn, ellipsis, FilterButton } from "../chrome/primitives";
-import { IconX } from "@tabler/icons-react";
+import { ellipsis } from "../chrome/primitives";
+import { IconCertificate } from "@tabler/icons-react";
+import { EmptyState } from "../chrome/EmptyState";
+import { SkeletonRows } from "../chrome/SkeletonRows";
+import { LensLayout, type DatasetState } from "../layout/LensLayout";
 
 // FleetExpiry is the "what dies next" horizon: every certificate with a
 // lifetime, merged across the fleet, soonest first - cert-manager-managed
@@ -21,7 +24,7 @@ const sourceLabel: Record<string, string> = {
   "cert-manager": "cert-manager",
 };
 
-export function FleetExpiry({ onClose }: { onClose: () => void }) {
+export function FleetExpiry() {
   const clusters = useFleet((s) => s.clusters);
   const [snaps, setSnaps] = useState<Record<string, ExpiryScanResultDTO | null>>({});
   const [windowDays, setWindowDays] = useState<number>(90);
@@ -54,51 +57,69 @@ export function FleetExpiry({ onClose }: { onClose: () => void }) {
 
   const daysLeft = (unix: number) => Math.floor((unix - now) / 86400);
   const tone = (d: number) => (d < 0 ? "var(--color-text-danger)" : d <= 14 ? "var(--color-text-danger)" : d <= 30 ? "var(--color-text-warning)" : "var(--color-text-secondary)");
+  const readable = clusters.length - pending - errors.length;
+  const partial = clusters.filter((c) => (snaps[c.name]?.warnings ?? []).length > 0).length;
+  const expired = inWindow.filter((r) => r.notAfterUnix <= now).length;
+  const soon = inWindow.filter((r) => r.notAfterUnix > now && daysLeft(r.notAfterUnix) <= 14).length;
+  const horizon = windowDays === 0 ? "at any time" : `within ${windowDays} days`;
+
+  // Step 7d: a Fleet view on the workspace template. An empty window is
+  // scoped to the clusters that were scanned - partial and unreadable scans
+  // are named, never folded into "nothing expires".
+  let state: DatasetState = "ready";
+  if (readable === 0 && pending > 0) state = "loading";
+  else if (readable === 0 && errors.length > 0) state = "unreadable";
+  else if (rows.length === 0 && pending === 0) state = "empty";
+  else if (inWindow.length === 0 && pending === 0) state = "no-match";
+  const scope = `${readable} of ${clusters.length} cluster${clusters.length === 1 ? "" : "s"} scanned${partial > 0 ? `, ${partial} partially` : ""}`;
+  const icon = <IconCertificate size={28} stroke={1.2} />;
+  const stateView = state === "loading" ? <SkeletonRows rows={5} label="scanning certificates" />
+    : state === "unreadable" ? <EmptyState icon={icon} title="No cluster could be scanned." hint="Each cluster's error is listed above." />
+    : state === "empty" ? <EmptyState icon={icon} title="No certificate lifetimes found." hint={`Nothing with an expiry was read on the ${scope}.`} />
+    : <EmptyState icon={icon} title={`Nothing found expiring ${horizon}.`} hint={`On the ${scope}. Clusters and objects that were not read are not covered.`} action={windowDays !== 0 ? { label: "Show all", onClick: () => setWindowDays(0) } : undefined} />;
 
   return (
-    <div role="dialog" aria-label="expiry horizon" style={{ position: "fixed", inset: 0, background: "color-mix(in srgb, var(--color-background-primary) 72%, transparent)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 60 }}>
-      <div style={{ width: "min(94vw, 1100px)", maxHeight: "88vh", overflow: "auto", background: "var(--color-background-primary)", border: "0.5px solid var(--color-border-secondary)", borderRadius: "var(--border-radius-md)", padding: 16, display: "flex", flexDirection: "column", gap: 12 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-          <div style={{ fontSize: 13, fontWeight: 600 }}>Expiry horizon</div>
-          <div style={{ fontSize: 10, color: "var(--color-text-tertiary)" }}>
-            certs, raw TLS secrets, webhook CAs · fleet-wide · soonest first
-          </div>
-          {pending > 0 && <span style={{ fontSize: 10, color: "var(--color-text-tertiary)" }}>{pending} cluster{pending === 1 ? "" : "s"} scanning…</span>}
-          <div style={{ flex: 1 }} />
+    <LensLayout
+      label="Expiry horizon"
+      title="Expiry horizon"
+      summary={state === "loading" || state === "unreadable" ? null : (
+        <>
+          <span className="t-number" style={{ color: "var(--color-text-secondary)" }}>{inWindow.length}</span>
+          <span className="t-secondary">expiring {horizon} · {scope}</span>
+          {expired > 0 && <span className="t-status" style={{ color: "var(--color-text-danger)" }}>▲ {expired} expired</span>}
+          {soon > 0 && <span className="t-status" style={{ color: "var(--color-text-danger)" }}>▲ {soon} within 14 days</span>}
+        </>
+      )}
+      headerEnd={<span className="t-secondary">{pending > 0 ? `${pending} cluster${pending === 1 ? "" : "s"} scanning… · ` : ""}soonest first · read-only</span>}
+      controls={
+        <div role="group" aria-label="Expiry window" style={{ display: "inline-flex", gap: 4 }}>
           {WINDOWS.map((w) => (
-            <FilterButton key={w} label={w === 0 ? "all" : `${w}d`} active={windowDays === w} onClick={() => setWindowDays(w)} />
+            <button key={w} className="l-chip" aria-pressed={windowDays === w} onClick={() => setWindowDays(w)}>{w === 0 ? "All" : `${w} days`}</button>
           ))}
-          <button onClick={onClose} aria-label="close expiry horizon" style={{ ...btn, display: "inline-flex", alignItems: "center" }}><IconX size={13} stroke={1.5} /></button>
         </div>
-
-        {errors.length > 0 && (
-          <div style={{ fontSize: 11, color: "var(--color-text-danger)", display: "flex", flexDirection: "column", gap: 2 }}>
-            {errors.map((c) => <span key={c.name} style={{ overflowWrap: "anywhere" }}>{c.name}: {snaps[c.name]?.error}</span>)}
-          </div>
-        )}
-        {warnings.length > 0 && (
-          <div style={{ fontSize: 10, color: "var(--color-text-warning)", display: "flex", flexDirection: "column", gap: 2 }}>
-            {warnings.map((w) => <span key={w} style={{ overflowWrap: "anywhere" }}>partial scan — {w}</span>)}
-          </div>
-        )}
-
-        {inWindow.length === 0 && pending === 0 ? (
-          <div data-testid="expiry-clear" style={{ fontSize: 11, color: "var(--color-text-success)" }}>
-            nothing expires within {windowDays === 0 ? "any horizon" : `${windowDays} days`} across {clusters.length - errors.length} scanned cluster{clusters.length - errors.length === 1 ? "" : "s"}
-          </div>
-        ) : (
-          <div style={{ display: "grid", gridTemplateColumns: "70px 90px minmax(160px, 1fr) minmax(140px, 1fr) 110px", gap: "4px 10px", fontFamily: "var(--font-mono)", fontSize: 11, alignItems: "baseline" }}>
-            <span style={{ fontSize: 9, textTransform: "uppercase", color: "var(--color-text-tertiary)" }}>expires</span>
-            <span style={{ fontSize: 9, textTransform: "uppercase", color: "var(--color-text-tertiary)" }}>source</span>
-            <span style={{ fontSize: 9, textTransform: "uppercase", color: "var(--color-text-tertiary)" }}>object</span>
-            <span style={{ fontSize: 9, textTransform: "uppercase", color: "var(--color-text-tertiary)" }}>subject</span>
-            <span style={{ fontSize: 9, textTransform: "uppercase", color: "var(--color-text-tertiary)" }}>cluster</span>
+      }
+      notice={errors.length > 0 || warnings.length > 0 ? (
+        <div className="t-body" role="status" style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+          {errors.map((c) => <span key={c.name} style={{ color: "var(--color-text-danger)", overflowWrap: "anywhere" }}>▲ Could not scan {c.name}: {snaps[c.name]?.error}</span>)}
+          {warnings.map((w) => <span key={w} style={{ color: "var(--color-text-warning)", overflowWrap: "anywhere" }}>Partial scan - {w}</span>)}
+        </div>
+      ) : undefined}
+      state={state}
+      stateView={stateView}
+      body={
+        <div className="lens-canvas">
+          <div style={{ display: "grid", gridTemplateColumns: "80px 100px minmax(160px, 1fr) minmax(140px, 1fr) minmax(110px, 0.6fr)", gap: "4px 12px", fontFamily: "var(--font-mono)", fontSize: 12, alignItems: "baseline" }}>
+            <span className="t-section-label">Expires</span>
+            <span className="t-section-label">Source</span>
+            <span className="t-section-label">Object</span>
+            <span className="t-section-label">Subject</span>
+            <span className="t-section-label">Cluster</span>
             {inWindow.map((r) => {
               const d = daysLeft(r.notAfterUnix);
               return (
                 <div key={`${r.cluster}/${r.source}/${r.namespace}/${r.name}/${r.detail}`} style={{ display: "contents" }}>
                   <span style={{ color: tone(d), fontWeight: d <= 14 ? 600 : undefined }}>
-                    {d < 0 ? `${-d}d ago` : `${d}d`}
+                    {d <= 14 ? "▲ " : ""}{d < 0 ? `${-d}d ago` : `${d}d`}
                   </span>
                   <span style={{ color: r.source === "cert-manager" ? "var(--color-text-tertiary)" : "var(--color-text-secondary)" }}>
                     {sourceLabel[r.source] ?? r.source}
@@ -107,17 +128,14 @@ export function FleetExpiry({ onClose }: { onClose: () => void }) {
                     {r.namespace ? `${r.namespace}/` : ""}{r.name}
                   </span>
                   <span style={{ ...ellipsis, color: "var(--color-text-tertiary)" }} title={r.subject}>{r.subject || "—"}</span>
-                  <span style={{ ...ellipsis, color: "var(--color-text-tertiary)" }}>{r.cluster}</span>
+                  <span style={{ ...ellipsis, color: "var(--color-text-tertiary)" }} title={r.cluster}>{r.cluster}</span>
                 </div>
               );
             })}
           </div>
-        )}
-
-        <div style={{ fontSize: 10, color: "var(--color-text-tertiary)" }}>
-          cert-manager rows are renewal-managed (usually fine before expiry) · raw TLS secrets and webhook CAs have NO renewer — those are the ones that take clusters down · public certificate material only, keys never read
         </div>
-      </div>
-    </div>
+      }
+      footerEnd={<span className="t-secondary">cert-manager rows are renewal-managed · raw TLS secrets and webhook CAs have no renewer · public certificate material only, keys never read</span>}
+    />
   );
 }

@@ -5,6 +5,7 @@ import { useFleet } from "../store/fleet";
 import type { ForwardDTO } from "../store/fleet";
 import { stopForward, stopAllForwards } from "../bridge/forwards";
 import { EmptyState, btn, ellipsis } from "../chrome/primitives";
+import { LensLayout } from "../layout/LensLayout";
 import { IconArrowsLeftRight } from "@tabler/icons-react";
 
 // ForwardsView is the fleet-level port-forwards section: every active tunnel
@@ -25,32 +26,40 @@ export function ForwardsView() {
   const forwards = useFleet((s) => s.forwards);
   const broken = forwards.filter((f) => f.status === "broken").length;
 
+  // Step 7d: an app route on the workspace template. Active tunnels are
+  // neutral; only a broken one is marked.
   return (
-    <div style={{ padding: "16px 20px" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
-        <span style={{ fontSize: 12, color: "var(--color-text-secondary)" }}>
-          {forwards.length} active{broken > 0 && <span style={{ color: "var(--color-text-warning)" }}> · {broken} broken</span>}
-        </span>
-        {forwards.length > 0 && (
-          <button onClick={() => void stopAllForwards()} style={btn} data-testid="forwards-view-stop-all">stop all</button>
-        )}
-      </div>
-
-      {forwards.length === 0 ? (
+    <LensLayout
+      label="Port-forwards"
+      title="Port-forwards"
+      summary={forwards.length === 0 ? null : (
+        <>
+          <span className="t-number" style={{ color: "var(--color-text-secondary)" }}>{forwards.length}</span>
+          <span className="t-secondary">active across the fleet</span>
+          {broken > 0 && <span className="t-status" style={{ color: "var(--color-text-warning)" }}>▲ {broken} broken</span>}
+        </>
+      )}
+      headerEnd={forwards.length > 0 ? (
+        <button className="l-btn" onClick={() => void stopAllForwards()} data-testid="forwards-view-stop-all">Stop all</button>
+      ) : undefined}
+      state={forwards.length === 0 ? "empty" : "ready"}
+      stateView={
         <EmptyState
           icon={<IconArrowsLeftRight size={28} stroke={1.2} />}
           title="No active port-forwards."
           hint={'Start one from a pod\'s detail panel ("forward") or a service\'s port buttons.'}
         />
-      ) : (
-        <div style={{ fontFamily: "var(--font-mono)", fontSize: 12, maxWidth: 980 }}>
-          <div style={{ display: "grid", gridTemplateColumns: gridCols, gap: 10, padding: "0 8px 6px", fontSize: 9, textTransform: "uppercase", letterSpacing: 0.5, color: "var(--color-text-tertiary)", borderBottom: "0.5px solid var(--color-border-secondary)" }}>
-            <span /><span>cluster</span><span>kind</span><span>target</span><span>tunnel</span><span>started</span><span />
+      }
+      body={
+        <div className="lens-canvas" style={{ fontFamily: "var(--font-mono)", fontSize: 12 }}>
+          <div style={{ display: "grid", gridTemplateColumns: gridCols, gap: 10, padding: "0 8px 6px", borderBottom: "1px solid var(--color-border-tertiary)" }}>
+            <span /><span className="t-section-label">Cluster</span><span className="t-section-label">Kind</span><span className="t-section-label">Target</span><span className="t-section-label">Tunnel</span><span className="t-section-label">Started</span><span />
           </div>
           {forwards.map((f) => <ForwardRow key={f.id} f={f} />)}
         </div>
-      )}
-    </div>
+      }
+      footerEnd={<span className="t-secondary">push-fed - tunnels update as they change</span>}
+    />
   );
 }
 
@@ -76,8 +85,9 @@ function ForwardRow({ f }: { f: ForwardDTO }) {
     >
       <span
         title={broken ? "tunnel broken - stop and restart it" : "active"}
-        style={{ width: 8, height: 8, borderRadius: "50%", background: broken ? "var(--color-text-warning)" : "var(--color-text-success)" }}
-      />
+        aria-label={broken ? "broken" : "active"}
+        style={{ color: broken ? "var(--color-text-warning)" : "var(--color-text-tertiary)", fontSize: 11 }}
+      >{broken ? "▲" : "·"}</span>
       <span style={{ ...ellipsis, color: "var(--color-text-tertiary)" }} title={f.cluster}>{f.cluster}</span>
       <span style={{ color: "var(--color-text-tertiary)" }}>{kindShort[f.targetKind] ?? f.targetKind.toLowerCase()}</span>
       <span style={ellipsis} title={`${f.namespace}/${f.targetName}`}>
@@ -94,7 +104,7 @@ function ForwardRow({ f }: { f: ForwardDTO }) {
           title={`Copy ${url}`}
           style={iconBtn}
         >
-          {copied ? <IconCheck size={13} stroke={1.5} color="var(--color-text-success)" /> : <IconCopy size={13} stroke={1.5} />}
+          {copied ? <IconCheck size={13} stroke={1.5} /> : <IconCopy size={13} stroke={1.5} />}
         </button>
         <button
           onClick={() => void Browser.OpenURL(url)}

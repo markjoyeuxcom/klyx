@@ -42,7 +42,7 @@ function write(storage: Storage, key: string, value: string): void {
 // ---- route ------------------------------------------------------------------
 
 type PersistedRoute =
-  | { name: "fleet" }
+  | { name: "fleet"; view?: string }
   | { name: "forwards" }
   | { name: "settings" }
   | { name: "activity" }
@@ -59,6 +59,8 @@ export function saveRoute(route: Route): void {
   let persisted: PersistedRoute;
   if (route.name === "cluster") {
     persisted = { name: "cluster", cluster: route.cluster, section: route.section, argoView: route.argoView, fluxView: route.fluxView };
+  } else if (route.name === "fleet" && route.view) {
+    persisted = { name: "fleet", view: route.view };
   } else {
     persisted = { name: route.name };
   }
@@ -70,7 +72,8 @@ export function loadRoute(): PersistedRoute | null {
   if (!raw) return null;
   try {
     const parsed = JSON.parse(raw) as PersistedRoute;
-    if (parsed.name === "fleet" || parsed.name === "forwards" || parsed.name === "settings" || parsed.name === "activity") return { name: parsed.name };
+    if (parsed.name === "fleet") return parsed.view === "promotion" || parsed.view === "expiry" ? { name: "fleet", view: parsed.view } : { name: "fleet" };
+    if (parsed.name === "forwards" || parsed.name === "settings" || parsed.name === "activity") return { name: parsed.name };
     if (parsed.name === "cluster" && typeof parsed.cluster === "string" && parsed.cluster !== "") {
       return {
         name: "cluster",
@@ -106,7 +109,10 @@ export function restoreRouteOnBoot(clusterNames: string[]): void {
   if (current.name !== "fleet") return;
   const saved = loadRoute();
   if (!saved) return;
-  if (saved.name === "fleet") return;
+  if (saved.name === "fleet") {
+    if (saved.view === "promotion" || saved.view === "expiry") useFleet.setState({ route: { name: "fleet", view: saved.view } });
+    return;
+  }
   if (saved.name === "forwards" || saved.name === "settings" || saved.name === "activity") {
     useFleet.setState({ route: { name: saved.name } });
     return;

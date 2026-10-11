@@ -536,8 +536,11 @@ export type InstanceDetailDTO = { kind: string; namespace: string; name: string;
 // PRD header (review 2026-10-03 #5).
 export type InstanceDetailSlice = { cluster: string | null; resource: ResourceRef | null; ref: InstanceRef | null; detail: InstanceDetailDTO | null; loading: boolean };
 
+// Fleet-level views (redesign step 7d): the board, the promotion tracker and
+// the expiry horizon share the Fleet band.
+export type FleetView = "promotion" | "expiry";
 export type Route =
-  | { name: "fleet" }
+  | { name: "fleet"; view?: FleetView }
   | { name: "forwards" }
   | { name: "settings" }
   | { name: "activity" }
@@ -826,7 +829,7 @@ type FleetState = {
   clusters: ClusterDTO[];
   setClusters: (c: ClusterDTO[]) => void;
   route: Route;
-  openFleet: () => void;
+  openFleet: (view?: FleetView) => void;
   openForwards: () => void;
   openSettings: () => void;
   newContexts: number;
@@ -985,7 +988,7 @@ export const useFleet = create<FleetState>((set) => ({
   clusters: [],
   setClusters: (clusters) => set({ clusters }),
   route: { name: "fleet" },
-  openFleet: () => set({ route: { name: "fleet" } }),
+  openFleet: (view) => set({ route: view ? { name: "fleet", view } : { name: "fleet" } }),
   openForwards: () => set({ route: { name: "forwards" } }),
   openSettings: () => set({ route: { name: "settings" } }),
   newContexts: 0,

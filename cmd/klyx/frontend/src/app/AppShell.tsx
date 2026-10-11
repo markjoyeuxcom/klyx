@@ -6,6 +6,8 @@ import { FleetSpine, spineOrder } from "../chrome/FleetSpine";
 import { TopBar } from "../chrome/TopBar";
 import { TriageTape } from "../chrome/TriageTape";
 import { FleetView } from "../fleet/FleetView";
+import { FleetPromotion } from "../fleet/FleetPromotion";
+import { FleetExpiry } from "../fleet/FleetExpiry";
 import { ForwardsView } from "../fleet/ForwardsView";
 import { ActivityView } from "../fleet/ActivityView";
 import { SettingsView } from "./SettingsView";
@@ -79,8 +81,8 @@ export function AppShell() {
           <NavBand />
           <main className="shell-workspace" aria-label="Workspace">
             {route.name === "cluster" && <TriageTape cluster={route.cluster} />}
-            <div style={{ flex: 1, minHeight: 0, overflow: route.name === "cluster" ? "hidden" : "auto" }}>
-              {route.name === "fleet" ? <FleetView /> : route.name === "forwards" ? <ForwardsView /> : route.name === "activity" ? <ActivityView /> : route.name === "settings" ? <SettingsView /> : <ClusterDetail />}
+            <div style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
+              {route.name === "fleet" ? (route.view === "promotion" ? <FleetPromotion /> : route.view === "expiry" ? <FleetExpiry /> : <FleetView />) : route.name === "forwards" ? <ForwardsView /> : route.name === "activity" ? <ActivityView /> : route.name === "settings" ? <SettingsView /> : <ClusterDetail />}
             </div>
           </main>
         </div>

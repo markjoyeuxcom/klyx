@@ -105,7 +105,7 @@ describe("CommandPalette", () => {
     expect(getByTestId("command-row-fleet").getAttribute("data-selected")).toBe("true");
     fireEvent.keyDown(input, { key: "ArrowDown" });
     expect(getByTestId("command-row-fleet").getAttribute("data-selected")).toBe("false");
-    expect(getByTestId("command-row-forwards").getAttribute("data-selected")).toBe("true");
+    expect(getByTestId("command-row-fleet:promotion").getAttribute("data-selected")).toBe("true");
   });
 
   it("scrolls the selected row into view when navigating", () => {
@@ -118,7 +118,7 @@ describe("CommandPalette", () => {
     pressCmdK();
     scrollSpy.mockClear();
     fireEvent.keyDown(getByTestId("command-palette-input"), { key: "ArrowDown" });
-    expect(getByTestId("command-row-forwards").getAttribute("data-selected")).toBe("true");
+    expect(getByTestId("command-row-fleet:promotion").getAttribute("data-selected")).toBe("true");
     expect(scrollSpy).toHaveBeenCalledWith({ block: "nearest" });
   });
 });

@@ -49,6 +49,8 @@ export function windowTitleFor(route: Route): string {
   if (route.name === "forwards") return "Port-forwards — Klyx";
   if (route.name === "settings") return "Settings — Klyx";
   if (route.name === "activity") return "Activity — Klyx";
+  if (route.name === "fleet" && route.view === "promotion") return "Promotion tracker — Klyx";
+  if (route.name === "fleet" && route.view === "expiry") return "Expiry horizon — Klyx";
   return "Klyx";
 }
 

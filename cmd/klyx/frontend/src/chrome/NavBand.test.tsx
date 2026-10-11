@@ -180,6 +180,18 @@ describe("NavBand (redesign step 7a)", () => {
     expect(screen.getByRole("button", { name: "Fleet board" }).getAttribute("aria-current")).toBe("page");
     expect(screen.queryByText("Workloads")).toBeNull();
   });
+
+  it("Fleet task tabs: board, promotion and expiry are fleet views (step 7d)", () => {
+    render(<NavBand />);
+    fireEvent.click(screen.getByRole("button", { name: "Promotion" }));
+    expect(routeOf()).toEqual({ name: "fleet", view: "promotion" });
+    expect(screen.getByRole("button", { name: "Promotion" }).getAttribute("aria-current")).toBe("page");
+    expect(screen.getByRole("button", { name: "Fleet board" }).getAttribute("aria-current")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Expiry" }));
+    expect(routeOf()).toEqual({ name: "fleet", view: "expiry" });
+    fireEvent.click(screen.getByRole("button", { name: "Fleet board" }));
+    expect(routeOf()).toEqual({ name: "fleet" });
+  });
 });
 
 describe("NavBand counts (health model)", () => {

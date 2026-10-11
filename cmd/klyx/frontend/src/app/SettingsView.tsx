@@ -1,5 +1,8 @@
 import { useEffect, useState } from "react";
-import { IconAlertTriangle } from "@tabler/icons-react";
+import { IconAlertTriangle, IconSettings } from "@tabler/icons-react";
+import { EmptyState } from "../chrome/EmptyState";
+import { SkeletonRows } from "../chrome/SkeletonRows";
+import { LensLayout, type DatasetState } from "../layout/LensLayout";
 import { getFleetConfig, addClusters, refreshNewContextCount } from "../bridge/configsvc";
 import type { FleetConfigDTO } from "../bridge/configsvc";
 import { btn, ellipsis } from "../chrome/primitives";
@@ -45,26 +48,30 @@ export function SettingsView() {
     }
   };
 
-  if (loading && !cfg) return <div style={{ padding: "16px 20px", color: "var(--color-text-secondary)", fontSize: 13 }}>Loading configuration…</div>;
-  if (!cfg) return <div style={{ padding: "16px 20px", color: "var(--color-text-secondary)", fontSize: 13 }}>Could not load the fleet configuration.</div>;
+  const frame = (state: DatasetState, stateView: React.ReactNode, body: React.ReactNode, summary?: React.ReactNode) => (
+    <LensLayout
+      label="Settings"
+      title="Settings"
+      summary={summary}
+      headerEnd={<button className="l-btn" onClick={() => void load()} disabled={loading}>{loading ? "Reading…" : "Re-scan"}</button>}
+      notice={banner ? (
+        <div data-testid="settings-banner" role="status" className="t-body" style={{ color: banner.kind === "error" ? "var(--color-text-danger)" : "var(--color-text-primary)" }}>
+          {banner.kind === "error" ? "▲ " : ""}{banner.text}
+        </div>
+      ) : undefined}
+      state={state}
+      stateView={stateView}
+      body={body}
+    />
+  );
+  if (loading && !cfg) return frame("loading", <SkeletonRows rows={4} label="reading the fleet configuration" />, null);
+  if (!cfg) return frame("unreadable", <EmptyState icon={<IconSettings size={28} stroke={1.2} />} title="Could not load the fleet configuration." action={{ label: "Retry", onClick: () => void load() }} />, null);
 
   const newContexts = cfg.contexts.filter((c) => !c.inFleet);
 
-  return (
-    <div style={{ padding: "16px 20px", maxWidth: 760, fontSize: 12 }}>
-      {banner && (
-        <div
-          data-testid="settings-banner"
-          style={{
-            marginBottom: 14, padding: "8px 10px", borderRadius: 4, fontSize: 12,
-            background: banner.kind === "success" ? "var(--color-background-success)" : "var(--color-background-danger)",
-            color: banner.kind === "success" ? "var(--color-text-success)" : "var(--color-text-danger)",
-            border: `0.5px solid ${banner.kind === "success" ? "var(--color-border-success)" : "var(--color-border-danger)"}`,
-          }}
-        >
-          {banner.text}
-        </div>
-      )}
+  // Step 7d: an app route on the workspace template.
+  return frame("ready", null, (
+    <div className="lens-canvas" style={{ fontSize: 12, maxWidth: 900 }}>
 
       <Section title="Fleet configuration">
         <PathRow label="file" path={cfg.path} />
@@ -124,7 +131,7 @@ export function SettingsView() {
                 )}
                 <span style={{ ...ellipsis, flex: 1 }} title={c.name}>{c.name}</span>
                 {c.inFleet ? (
-                  <span style={{ fontSize: 10, color: "var(--color-text-success)" }}>in fleet</span>
+                  <span className="t-secondary">in fleet</span>
                 ) : (
                   <span style={{ fontSize: 10, color: "var(--color-text-info)" }}>not in fleet</span>
                 )}
@@ -146,7 +153,13 @@ export function SettingsView() {
         )}
       </Section>
     </div>
-  );
+  ), (
+    <>
+      <span className="t-number" style={{ color: "var(--color-text-secondary)" }}>{cfg.clusters.length}</span>
+      <span className="t-secondary">cluster{cfg.clusters.length === 1 ? "" : "s"} in fleet.yaml</span>
+      {newContexts.length > 0 && <span className="t-secondary">{newContexts.length} kubeconfig context{newContexts.length === 1 ? "" : "s"} not in the fleet</span>}
+    </>
+  ));
 }
 
 function PathRow({ label, path }: { label: string; path: string }) {
@@ -176,9 +189,9 @@ function PathRow({ label, path }: { label: string; path: string }) {
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <div style={{ marginBottom: 22 }}>
-      <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5, color: "var(--color-text-tertiary)", marginBottom: 8 }}>{title}</div>
+    <section style={{ marginBottom: 16 }}>
+      <h3 className="t-section-label" style={{ marginBottom: 8 }}>{title}</h3>
       {children}
-    </div>
+    </section>
   );
 }

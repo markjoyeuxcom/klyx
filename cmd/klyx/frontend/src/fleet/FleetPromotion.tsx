@@ -2,8 +2,11 @@ import { useEffect, useMemo, useState } from "react";
 import { useFleet } from "../store/fleet";
 import type { PromotionSnapshotDTO, PromotionUnitDTO } from "../store/fleet";
 import { getPromotion } from "../bridge/promotion";
-import { btn, ellipsis, FilterButton } from "../chrome/primitives";
-import { IconX } from "@tabler/icons-react";
+import { ellipsis } from "../chrome/primitives";
+import { IconGitMerge } from "@tabler/icons-react";
+import { EmptyState } from "../chrome/EmptyState";
+import { SkeletonRows } from "../chrome/SkeletonRows";
+import { LensLayout, type DatasetState } from "../layout/LensLayout";
 
 // FleetPromotion is the propagation tracker: every GitOps unit (Flux
 // Kustomization/HelmRelease, Argo Application) as a row, clusters as
@@ -39,7 +42,7 @@ type Row = {
   unhealthy: boolean; // any present cell not-ready (suspended excluded - intended)
 };
 
-export function FleetPromotion({ onClose }: { onClose: () => void }) {
+export function FleetPromotion() {
   const clusters = useFleet((s) => s.clusters);
   const ordered = useMemo(() => [...clusters].sort((a, b) =>
     rankOfEnv(a.env) - rankOfEnv(b.env) || a.env.localeCompare(b.env) || a.name.localeCompare(b.name)), [clusters]);
@@ -93,87 +96,114 @@ export function FleetPromotion({ onClose }: { onClose: () => void }) {
   }, [snaps, ordered]);
 
   const attention = rows.filter((r) => r.drift || r.unhealthy);
+  const notReady = rows.filter((r) => r.unhealthy).length;
   const visible = showAll ? rows : attention;
   const errors = ordered.filter((c) => snaps[c.name]?.error);
+  const readable = loaded.length - errors.length;
+
+  // Step 7d: a Fleet view on the workspace template. Nothing here claims the
+  // fleet is in sync - only what the clusters that answered show.
+  // Source heads are evidence on their own, so a fleet without units but with
+  // sources still renders the body.
+  const anySources = ordered.some((c) => (snaps[c.name]?.sources ?? []).length > 0);
+  let state: DatasetState = "ready";
+  if (loaded.length === 0) state = "loading";
+  else if (readable === 0 && pendingCount === 0) state = "unreadable";
+  else if (rows.length === 0 && !anySources && pendingCount === 0) state = "empty";
+  const scope = `${readable} of ${ordered.length} cluster${ordered.length === 1 ? "" : "s"} read`;
+  const icon = <IconGitMerge size={28} stroke={1.2} />;
+  const stateView = state === "loading" ? <SkeletonRows rows={5} label="reading applied revisions" />
+    : state === "unreadable" ? <EmptyState icon={icon} title="No cluster's GitOps state could be read." hint="Each cluster's error is listed above." />
+    : <EmptyState icon={icon} title="No GitOps units found." hint={`No Flux Kustomization, HelmRelease or Argo Application on the ${scope}.`} />;
+  // Neutral, scoped: never "the fleet is in sync".
+  const quiet = pendingCount === 0 && visible.length === 0 ? (
+    <div className="t-body" style={{ color: "var(--color-text-secondary)", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+      {rows.length === 0
+        ? `No GitOps units found on the ${scope}.`
+        : `No unit differs or is not ready among ${rows.length} unit${rows.length === 1 ? "" : "s"} on the ${scope}. Clusters that did not answer are not covered.`}
+      {rows.length > 0 && !showAll && <button className="l-btn" onClick={() => setShowAll(true)}>Show all units</button>}
+    </div>
+  ) : null;
 
   return (
-    <div role="dialog" aria-label="promotion tracker" style={{ position: "fixed", inset: 0, background: "color-mix(in srgb, var(--color-background-primary) 72%, transparent)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 60 }}>
-      <div style={{ width: "min(94vw, 1280px)", maxHeight: "88vh", overflow: "auto", background: "var(--color-background-primary)", border: "0.5px solid var(--color-border-secondary)", borderRadius: "var(--border-radius-md)", padding: 16, display: "flex", flexDirection: "column", gap: 12 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-          <div style={{ fontSize: 13, fontWeight: 600 }}>Promotion tracker</div>
-          <div style={{ fontSize: 10, color: "var(--color-text-tertiary)" }}>
-            applied revisions per cluster · reference = leftmost column · read-only
-          </div>
-          {pendingCount > 0 && <span style={{ fontSize: 10, color: "var(--color-text-tertiary)" }}>{pendingCount} cluster{pendingCount === 1 ? "" : "s"} loading…</span>}
-          <div style={{ flex: 1 }} />
-          <FilterButton label="needs attention" count={attention.length} active={!showAll} onClick={() => setShowAll(false)} />
-          <FilterButton label="all units" count={rows.length} active={showAll} onClick={() => setShowAll(true)} />
-          <button onClick={onClose} aria-label="close promotion tracker" style={{ ...btn, display: "inline-flex", alignItems: "center" }}><IconX size={13} stroke={1.5} /></button>
+    <LensLayout
+      label="Promotion tracker"
+      title="Promotion tracker"
+      summary={state === "loading" || state === "unreadable" ? null : (
+        <>
+          <span className="t-number" style={{ color: "var(--color-text-secondary)" }}>{rows.length}</span>
+          <span className="t-secondary">units · {scope}</span>
+          {notReady > 0 && <span className="t-status" style={{ color: "var(--color-text-danger)" }}>▲ {notReady} not ready</span>}
+          {attention.length - notReady > 0 && <span className="t-status" style={{ color: "var(--color-text-warning)" }}>{attention.length - notReady} differ</span>}
+        </>
+      )}
+      headerEnd={<span className="t-secondary">{pendingCount > 0 ? `${pendingCount} cluster${pendingCount === 1 ? "" : "s"} loading… · ` : ""}read-only</span>}
+      controls={rows.length > 0 ? (
+        <div role="group" aria-label="Promotion filter" style={{ display: "inline-flex", gap: 4 }}>
+          <button className="l-chip" aria-pressed={!showAll} onClick={() => setShowAll(false)}>Needs attention {attention.length > 0 && <span style={{ color: "var(--color-text-warning)" }}>{attention.length}</span>}</button>
+          <button className="l-chip" aria-pressed={showAll} onClick={() => setShowAll(true)}>All units {rows.length}</button>
         </div>
-
-        {errors.length > 0 && (
-          <div style={{ fontSize: 11, color: "var(--color-text-danger)", display: "flex", flexDirection: "column", gap: 2 }}>
-            {errors.map((c) => <span key={c.name} style={{ overflowWrap: "anywhere" }}>{c.name}: {snaps[c.name]?.error}</span>)}
-          </div>
-        )}
-
-        <div style={{ overflowX: "auto" }}>
-          <div style={{ display: "grid", gridTemplateColumns: `minmax(220px, 1.2fr) repeat(${ordered.length}, minmax(170px, 1fr))`, gap: "4px 10px", fontFamily: "var(--font-mono)", fontSize: 11, alignItems: "baseline" }}>
-            <span />
-            {ordered.map((c) => (
-              <span key={c.name} style={{ fontSize: 10, fontWeight: 600, display: "flex", gap: 5, alignItems: "baseline", minWidth: 0 }}>
-                <span style={{ ...ellipsis }}>{c.name}</span>
-                {c.env && <span style={{ fontSize: 9, textTransform: "uppercase", color: "var(--color-text-tertiary)", flexShrink: 0 }}>{c.env}</span>}
-              </span>
-            ))}
-
-            {visible.length === 0 && loaded.length > 0 ? (
-              <span style={{ gridColumn: "1 / -1", fontSize: 11, color: showAll ? "var(--color-text-tertiary)" : "var(--color-text-success)", padding: "8px 0" }}>
-                {showAll ? "no GitOps units found on the loaded clusters" : `all ${rows.length} units at matching revisions and healthy across the loaded fleet`}
-              </span>
-            ) : visible.map((row) => {
-              const refCluster = ordered.find((c) => row.cells[c.name]);
-              const refRev = refCluster ? row.cells[refCluster.name]!.revision : "";
-              return (
-                <div key={row.key} style={{ display: "contents" }}>
-                  <span data-testid={`prom-row-${row.key}`} style={{ display: "flex", gap: 6, alignItems: "baseline", minWidth: 0 }}>
-                    <span style={{ fontSize: 9, textTransform: "uppercase", color: "var(--color-text-tertiary)", flexShrink: 0 }}>
-                      {row.kind === "Kustomization" ? "ks" : row.kind === "HelmRelease" ? "hr" : "app"}
-                    </span>
-                    <span style={{ ...ellipsis, color: "var(--color-text-primary)" }} title={row.key}>{row.namespace}/{row.name}</span>
-                    {row.drift && <span style={{ fontSize: 9, color: "var(--color-text-warning)", flexShrink: 0 }}>drift</span>}
-                  </span>
-                  {ordered.map((c) => {
-                    const u = row.cells[c.name];
-                    if (snaps[c.name] == null) return <span key={c.name} style={{ color: "var(--color-text-tertiary)" }}>…</span>;
-                    if (!u) return <span key={c.name} style={{ color: "var(--color-text-tertiary)" }}>absent</span>;
-                    const differs = u.revision !== refRev;
-                    const color = u.suspended ? "var(--color-text-tertiary)"
-                      : u.ready === "not-ready" ? "var(--color-text-danger)"
-                      : differs ? "var(--color-text-warning)"
-                      : "var(--color-text-secondary)";
-                    return (
-                      <span key={c.name} style={{ display: "flex", gap: 5, alignItems: "baseline", minWidth: 0 }} title={`${u.revision || "no revision"}${u.message ? `\n${u.message}` : ""}`}>
-                        <span style={{ ...ellipsis, color, opacity: u.stale ? 0.6 : 1 }}>{shortRev(u.revision)}</span>
-                        {u.suspended && <span style={{ fontSize: 9, color: "var(--color-text-tertiary)", flexShrink: 0 }}>suspended</span>}
-                        {!u.suspended && u.ready === "not-ready" && <span style={{ fontSize: 9, color: "var(--color-text-danger)", flexShrink: 0 }}>not ready</span>}
-                        {u.stale && <span style={{ fontSize: 9, color: "var(--color-text-tertiary)", flexShrink: 0 }}>syncing…</span>}
+      ) : undefined}
+      notice={errors.length > 0 ? (
+        <div className="t-body" role="status" style={{ color: "var(--color-text-danger)", display: "flex", flexDirection: "column", gap: 2 }}>
+          {errors.map((c) => <span key={c.name} style={{ overflowWrap: "anywhere" }}>▲ Could not read {c.name}: {snaps[c.name]?.error}</span>)}
+        </div>
+      ) : undefined}
+      state={state}
+      stateView={stateView}
+      body={
+        <div className="lens-canvas">
+          {quiet}
+          <div style={{ overflowX: "auto" }}>
+            <div style={{ display: "grid", gridTemplateColumns: `minmax(220px, 1.2fr) repeat(${ordered.length}, minmax(170px, 1fr))`, gap: "4px 10px", fontFamily: "var(--font-mono)", fontSize: 12, alignItems: "baseline" }}>
+              <span className="t-section-label">Unit</span>
+              {ordered.map((c) => (
+                <span key={c.name} className="t-section-label" style={{ display: "flex", gap: 5, alignItems: "baseline", minWidth: 0 }}>
+                  <span style={{ ...ellipsis }} title={c.name}>{c.name}</span>
+                  {c.env && <span className="t-secondary" style={{ flexShrink: 0 }}>{c.env}</span>}
+                </span>
+              ))}
+              {visible.map((row) => {
+                const refCluster = ordered.find((c) => row.cells[c.name]);
+                const refRev = refCluster ? row.cells[refCluster.name]!.revision : "";
+                return (
+                  <div key={row.key} style={{ display: "contents" }}>
+                    <span data-testid={`prom-row-${row.key}`} style={{ display: "flex", gap: 6, alignItems: "baseline", minWidth: 0 }}>
+                      <span className="t-secondary" style={{ flexShrink: 0 }}>
+                        {row.kind === "Kustomization" ? "ks" : row.kind === "HelmRelease" ? "hr" : "app"}
                       </span>
-                    );
-                  })}
-                </div>
-              );
-            })}
+                      <span style={{ ...ellipsis, color: "var(--color-text-primary)" }} title={row.key}>{row.namespace}/{row.name}</span>
+                      {row.drift && <span className="t-secondary" style={{ color: "var(--color-text-warning)", flexShrink: 0 }}>≠ differs</span>}
+                    </span>
+                    {ordered.map((c) => {
+                      const u = row.cells[c.name];
+                      if (snaps[c.name] == null) return <span key={c.name} style={{ color: "var(--color-text-tertiary)" }}>…</span>;
+                      if (snaps[c.name]?.error) return <span key={c.name} style={{ color: "var(--color-text-tertiary)" }}>unread</span>;
+                      if (!u) return <span key={c.name} style={{ color: "var(--color-text-tertiary)" }}>absent</span>;
+                      const differs = u.revision !== refRev;
+                      const color = u.suspended ? "var(--color-text-tertiary)"
+                        : u.ready === "not-ready" ? "var(--color-text-danger)"
+                        : differs ? "var(--color-text-warning)"
+                        : "var(--color-text-secondary)";
+                      return (
+                        <span key={c.name} style={{ display: "flex", gap: 5, alignItems: "baseline", minWidth: 0 }} title={`${u.revision || "no revision"}${u.message ? `\n${u.message}` : ""}`}>
+                          <span style={{ ...ellipsis, color, opacity: u.stale ? 0.6 : 1 }}>{differs ? "≠ " : ""}{shortRev(u.revision)}</span>
+                          {u.suspended && <span className="t-secondary" style={{ flexShrink: 0 }}>suspended</span>}
+                          {!u.suspended && u.ready === "not-ready" && <span className="t-secondary" style={{ color: "var(--color-text-danger)", flexShrink: 0 }}>▲ not ready</span>}
+                          {u.stale && <span className="t-secondary" style={{ flexShrink: 0 }}>syncing…</span>}
+                        </span>
+                      );
+                    })}
+                  </div>
+                );
+              })}
+            </div>
           </div>
+          <SourcesStrip ordered={ordered.map((c) => c.name)} snaps={snaps} />
         </div>
-
-        <SourcesStrip ordered={ordered.map((c) => c.name)} snaps={snaps} />
-
-        <div style={{ fontSize: 10, color: "var(--color-text-tertiary)" }}>
-          Applied revision per unit · a differing cell is marked against the leftmost present column (which side is newer cannot be derived from opaque revisions) · suspended and syncing states shown as-is
-        </div>
-      </div>
-    </div>
+      }
+      footerEnd={<span className="t-secondary">Applied revision per unit · ≠ marks a cell that differs from the leftmost present column (which side is newer cannot be derived from opaque revisions)</span>}
+    />
   );
 }
 
@@ -189,7 +219,7 @@ function SourcesStrip({ ordered, snaps }: { ordered: string[]; snaps: Record<str
   if (keys.size === 0) return null;
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-      <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5, color: "var(--color-text-tertiary)" }}>source heads (fetched per cluster)</div>
+      <h3 className="t-section-label">Source heads (fetched per cluster)</h3>
       <div style={{ display: "grid", gridTemplateColumns: `minmax(220px, 1.2fr) repeat(${ordered.length}, minmax(170px, 1fr))`, gap: "3px 10px", fontFamily: "var(--font-mono)", fontSize: 11, alignItems: "baseline" }}>
         {[...keys.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([k, meta]) => {
           const revs = ordered.map((cl) => (snaps[cl]?.sources ?? []).find((s) => `${s.kind}/${s.namespace}/${s.name}` === k));
@@ -198,9 +228,9 @@ function SourcesStrip({ ordered, snaps }: { ordered: string[]; snaps: Record<str
           return (
             <div key={k} style={{ display: "contents" }}>
               <span style={{ display: "flex", gap: 6, alignItems: "baseline", minWidth: 0 }}>
-                <span style={{ fontSize: 9, textTransform: "uppercase", color: "var(--color-text-tertiary)", flexShrink: 0 }}>{meta.kind === "GitRepository" ? "git" : "oci"}</span>
+                <span className="t-secondary" style={{ flexShrink: 0 }}>{meta.kind === "GitRepository" ? "git" : "oci"}</span>
                 <span style={{ ...ellipsis }} title={k}>{meta.namespace}/{meta.name}</span>
-                {differ && <span style={{ fontSize: 9, color: "var(--color-text-warning)", flexShrink: 0 }}>heads differ</span>}
+                {differ && <span className="t-secondary" style={{ color: "var(--color-text-warning)", flexShrink: 0 }}>≠ heads differ</span>}
               </span>
               {ordered.map((cl, i) => {
                 const s = revs[i];

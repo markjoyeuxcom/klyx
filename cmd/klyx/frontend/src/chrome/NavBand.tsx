@@ -1,7 +1,7 @@
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { IconChevronDown, IconSearch } from "@tabler/icons-react";
 import { useFleet } from "../store/fleet";
-import type { ClusterDTO } from "../store/fleet";
+import type { ClusterDTO, FleetView } from "../store/fleet";
 import { toneColor } from "./primitives/styles";
 import { CAP_STATE_TEXT, NAV_GROUPS, activeLocation, destState, groupState, navigate, type Destination, type NavGroup } from "../nav/registry";
 import { useNavCounts, type NavBadge, type NavCounts } from "../nav/useNavCounts";
@@ -18,11 +18,23 @@ export function NavBand() {
   return (
     <nav aria-label="Fleet navigation" className="navband" data-list-keys="ignore">
       {route.name === "fleet"
-        ? <button className="l-chip" aria-current="page">Fleet board</button>
+        ? FLEET_TABS.map((t) => (
+          <button key={t.label} className="l-chip navband-tab" aria-current={route.view === t.view ? "page" : undefined}
+            title={t.title} onClick={() => useFleet.getState().openFleet(t.view)}>
+            {t.label}
+          </button>
+        ))
         : <span className="navband-title">{APP_TITLE[route.name]}</span>}
     </nav>
   );
 }
+
+// Fleet task tabs (spec §1): the board and the fleet-wide operations views.
+const FLEET_TABS: { label: string; view: FleetView | undefined; title: string }[] = [
+  { label: "Fleet board", view: undefined, title: "Every cluster, attention first" },
+  { label: "Promotion", view: "promotion", title: "Applied GitOps revisions per cluster - did a change land everywhere?" },
+  { label: "Expiry", view: "expiry", title: "Certificates, raw TLS secrets and webhook CAs fleet-wide, soonest first" },
+];
 
 const APP_TITLE: Record<"forwards" | "activity" | "settings", string> = { forwards: "Port-forwards", activity: "Activity", settings: "Settings" };
 

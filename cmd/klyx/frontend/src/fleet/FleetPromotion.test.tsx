@@ -34,27 +34,30 @@ describe("FleetPromotion", () => {
         ? snap([unit("apps", "main@sha1:aaaaaaa111")])
         : snap([unit("apps", "main@sha1:bbbbbbb222")]),
     );
-    const { findByText, getByTestId } = render(<FleetPromotion onClose={() => {}} />);
-    expect(await findByText("drift")).toBeTruthy();
+    const { findByText, getByTestId } = render(<FleetPromotion />);
+    expect(await findByText("≠ differs")).toBeTruthy();
     // dev column leads; both revisions render compacted.
     expect(await findByText("main@aaaaaaa")).toBeTruthy();
-    expect(await findByText("main@bbbbbbb")).toBeTruthy();
+    // the cell that differs from the leftmost column carries the ≠ mark
+    expect(await findByText("≠ main@bbbbbbb")).toBeTruthy();
     expect(getByTestId("prom-row-Kustomization/flux-system/apps")).toBeTruthy();
   });
 
-  it("matching healthy fleet renders the all-clear, not an empty grid", async () => {
+  it("a matching fleet is stated neutrally and scoped to what answered - never an all-clear (step 7d)", async () => {
     vi.mocked(getPromotion).mockResolvedValue(snap([unit("apps", "main@sha1:aaaaaaa111")]));
-    const { findByText } = render(<FleetPromotion onClose={() => {}} />);
-    expect(await findByText(/all 1 units at matching revisions/)).toBeTruthy();
+    const { findByText, queryByText } = render(<FleetPromotion />);
+    const line = await findByText(/No unit differs or is not ready among 1 unit on the 2 of 2 clusters read/);
+    expect(line.getAttribute("style") ?? "").not.toMatch(/success/);
+    expect(queryByText(/matching revisions and healthy/)).toBeNull();
   });
 
   it("show-all reveals healthy rows; absent clusters say absent", async () => {
     vi.mocked(getPromotion).mockImplementation(async (cluster: string) =>
       cluster === "dev-weu" ? snap([unit("apps", "r1")]) : snap([]),
     );
-    const { findByText, getByText } = render(<FleetPromotion onClose={() => {}} />);
-    await findByText(/needs attention/);
-    fireEvent.click(getByText("all units"));
+    const { findByText, getByText } = render(<FleetPromotion />);
+    await findByText(/Needs attention/);
+    fireEvent.click(getByText(/^All units/));
     expect(await findByText("flux-system/apps")).toBeTruthy();
     expect(getByText("absent")).toBeTruthy();
   });
@@ -65,8 +68,11 @@ describe("FleetPromotion", () => {
         ? snap([], { error: "list kustomizations: forbidden" })
         : snap([unit("apps", "r1")]),
     );
-    const { findByText } = render(<FleetPromotion onClose={() => {}} />);
-    expect(await findByText(/prd-weu: list kustomizations: forbidden/)).toBeTruthy();
+    const { findByText } = render(<FleetPromotion />);
+    expect(await findByText(/Could not read prd-weu: list kustomizations: forbidden/)).toBeTruthy();
+    // an unread cluster's cell says unread, never "absent"
+    fireEvent.click((await findByText(/^All units/)));
+    expect(await findByText("unread")).toBeTruthy();
   });
 
   it("not-ready units surface in the attention default; suspended does not", async () => {
@@ -74,8 +80,8 @@ describe("FleetPromotion", () => {
       unit("broken", "r1", { ready: "not-ready", message: "apply failed" }),
       unit("paused", "r1", { suspended: true }),
     ]));
-    const { findAllByText, queryByText } = render(<FleetPromotion onClose={() => {}} />);
-    expect((await findAllByText("not ready")).length).toBeGreaterThan(0);
+    const { findAllByText, queryByText } = render(<FleetPromotion />);
+    expect((await findAllByText(/not ready/)).length).toBeGreaterThan(0);
     // Suspended is intended - it does not join the attention list.
     expect(queryByText("flux-system/paused")).toBeNull();
   });
@@ -86,8 +92,8 @@ describe("FleetPromotion", () => {
         sources: [{ kind: "GitRepository", namespace: "flux-system", name: "fleet-repo", revision: cluster === "dev-weu" ? "main@sha1:aaaaaaa111" : "main@sha1:ccccccc333", ready: "ready", suspended: false }],
       }),
     );
-    const { findByText } = render(<FleetPromotion onClose={() => {}} />);
-    expect(await findByText("heads differ")).toBeTruthy();
-    expect(await findByText(/source heads/)).toBeTruthy();
+    const { findByText } = render(<FleetPromotion />);
+    expect(await findByText("≠ heads differ")).toBeTruthy();
+    expect(await findByText(/Source heads/)).toBeTruthy();
   });
 });

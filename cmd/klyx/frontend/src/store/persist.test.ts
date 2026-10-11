@@ -84,6 +84,16 @@ describe("route persistence", () => {
     expect(useFleet.getState().route).toMatchObject({ section: "flows" });
   });
 
+  it("restores a fleet view (step 7d); an unknown view lands on the board", () => {
+    saveRoute({ name: "fleet", view: "expiry" });
+    restoreRouteOnBoot(["x"]);
+    expect(useFleet.getState().route).toEqual({ name: "fleet", view: "expiry" });
+    useFleet.setState({ route: { name: "fleet" } });
+    localStorage.setItem("klyx-route", JSON.stringify({ name: "fleet", view: "bogus" }));
+    restoreRouteOnBoot(["x"]);
+    expect(useFleet.getState().route).toEqual({ name: "fleet" });
+  });
+
   it("initRoutePersistence mirrors store navigation into storage", () => {
     const off = initRoutePersistence();
     useFleet.getState().openCluster("stg-weu");

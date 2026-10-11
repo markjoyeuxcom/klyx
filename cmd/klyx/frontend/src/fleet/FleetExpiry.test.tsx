@@ -24,25 +24,26 @@ describe("FleetExpiry", () => {
         ? { items: [{ source: "webhook-ca", namespace: "", name: "cm-webhook", detail: "webhook.cert-manager.io", subject: "CN=ca", notAfterUnix: days(10) }], warnings: [] }
         : { items: [{ source: "tls-secret", namespace: "team-a", name: "web-tls", detail: "tls.crt", subject: "CN=web", notAfterUnix: days(80) }], warnings: [] },
     );
-    const { findByText, getByText } = render(<FleetExpiry onClose={() => {}} />);
-    expect(await findByText("10d")).toBeTruthy();
+    const { findByText, getByText } = render(<FleetExpiry />);
+    expect(await findByText("▲ 10d")).toBeTruthy();
     expect(getByText("80d")).toBeTruthy();
     expect(getByText("cm-webhook")).toBeTruthy();
     expect(getByText("team-a/web-tls")).toBeTruthy();
-    expect(getByText(/NO renewer/)).toBeTruthy();
+    expect(getByText(/have no renewer/)).toBeTruthy();
   });
 
-  it("window filter narrows; the clear state names the horizon", async () => {
+  it("window filter narrows; an empty window is neutral and scoped, never 'nothing expires' (step 7d)", async () => {
     useFleet.setState({ clusters: [cl("homelab")] });
     vi.mocked(getExpiryScan).mockResolvedValue({
       items: [{ source: "tls-secret", namespace: "x", name: "far-tls", detail: "tls.crt", subject: "CN=far", notAfterUnix: days(200) }],
       warnings: [],
     });
-    const { findByText, getByText, findByTestId } = render(<FleetExpiry onClose={() => {}} />);
+    const { findByText, getByText, queryByText } = render(<FleetExpiry />);
     // Default 90d window: the 200d cert is outside it.
-    const clear = await findByTestId("expiry-clear");
-    expect(clear.textContent).toContain("nothing expires within 90 days");
-    fireEvent.click(getByText("all"));
+    expect(await findByText("Nothing found expiring within 90 days.")).toBeTruthy();
+    expect(getByText(/On the 1 of 1 cluster scanned/)).toBeTruthy();
+    expect(queryByText(/nothing expires/i)).toBeNull();
+    fireEvent.click(getByText("All"));
     expect(await findByText("x/far-tls")).toBeTruthy();
   });
 
@@ -52,8 +53,8 @@ describe("FleetExpiry", () => {
       items: [{ source: "webhook-ca", namespace: "", name: "dead-webhook", detail: "hook", subject: "CN=dead", notAfterUnix: days(-3) }],
       warnings: [],
     });
-    const { findByText } = render(<FleetExpiry onClose={() => {}} />);
-    expect(await findByText("3d ago")).toBeTruthy();
+    const { findByText } = render(<FleetExpiry />);
+    expect(await findByText("▲ 3d ago")).toBeTruthy();
   });
 
   it("per-source warnings and cluster errors surface as partial-scan notes", async () => {
@@ -62,8 +63,10 @@ describe("FleetExpiry", () => {
         ? { items: [], warnings: ["tls secrets: forbidden"] }
         : { items: [], warnings: [], error: "cluster not connected: prd-weu" },
     );
-    const { findByText } = render(<FleetExpiry onClose={() => {}} />);
-    expect(await findByText(/partial scan — homelab: tls secrets: forbidden/)).toBeTruthy();
-    expect(await findByText(/prd-weu: cluster not connected/)).toBeTruthy();
+    const { findByText, findAllByText } = render(<FleetExpiry />);
+    expect(await findByText(/Partial scan - homelab: tls secrets: forbidden/)).toBeTruthy();
+    expect(await findByText(/Could not scan prd-weu: cluster not connected/)).toBeTruthy();
+    // the empty result names both the unread cluster and the partial one
+    expect((await findAllByText(/1 of 2 clusters scanned, 1 partially/)).length).toBeGreaterThan(0);
   });
 });

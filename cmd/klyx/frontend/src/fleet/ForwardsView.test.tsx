@@ -48,9 +48,13 @@ describe("ForwardsView", () => {
 
   it("header counts actives and broken honestly", () => {
     useFleet.getState().setForwards([active, brokenSvc]);
-    const { getByText } = render(<ForwardsView />);
-    expect(getByText(/2 active/)).toBeTruthy();
-    expect(getByText(/1 broken/)).toBeTruthy();
+    const { getByText, getByLabelText } = render(<ForwardsView />);
+    expect(getByText("2")).toBeTruthy();
+    expect(getByText(/active across the fleet/)).toBeTruthy();
+    expect(getByText("▲ 1 broken")).toBeTruthy();
+    // an active tunnel is neutral; only the broken one is marked
+    expect(getByLabelText("active").textContent).toBe("·");
+    expect(getByLabelText("broken").textContent).toBe("▲");
   });
 
   it("stop dispatches stopForward with the forward id", () => {
