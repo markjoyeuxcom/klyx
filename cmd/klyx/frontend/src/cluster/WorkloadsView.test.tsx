@@ -67,8 +67,10 @@ describe("WorkloadsView", () => {
     useFleet.getState().openWorkloads(["Deployment", "StatefulSet", "DaemonSet"]);
     const { unmount } = render(<WorkloadsView cluster="homelab-nelli" />);
     expect(useFleet.getState().workloads.kindFilter).toEqual({ Deployment: true, StatefulSet: true, DaemonSet: true });
+    // Leaving the view resets it; entering again without a kind choice (a
+    // section link) still restores the saved kinds.
+    useFleet.getState().setSection("pods");
     unmount();
-    // Entering without a kind choice (a section link) still restores the saved kinds.
     useFleet.getState().setSection("workloads");
     render(<WorkloadsView cluster="homelab-nelli" />);
     expect(useFleet.getState().workloads.kindFilter).toEqual({ Deployment: false, StatefulSet: true, DaemonSet: false });
@@ -735,4 +737,50 @@ describe("WorkloadsView verdict prints counts once (visual verdict)", () => {
     expect(v.match(/ready/g)?.length).toBe(1);
     expect(v).toContain("7 restarts");
   });
+});
+
+describe("WorkloadsView history across clusters (Codex 7b re-review)", () => {
+  // The reused view: one WorkloadsView whose cluster prop changes, as in
+  // ClusterDetail when history or the palette switches cluster on Workloads.
+  function Host() {
+    const r = useFleet((s) => s.route);
+    return r.name === "cluster" && r.section === "workloads" ? <WorkloadsView cluster={r.cluster} /> : null;
+  }
+  const kinds = () => useFleet.getState().workloads.kindFilter;
+  const tick = () => act(async () => { await new Promise<void>((r) => setTimeout(r, 0)); });
+  let off = () => {};
+
+  beforeEach(async () => {
+    off();
+    const h = await import("../nav/history");
+    h._resetHistoryForTest();
+    localStorage.clear();
+    // Restrictive saved kinds on both clusters: they must never override a place.
+    localStorage.setItem("klyx-view-prefs", JSON.stringify({ a: { workloads: { kinds: ["DaemonSet"] } }, b: { workloads: { kinds: ["DaemonSet"] } } }));
+    useFleet.setState({ route: { name: "fleet" }, clusters: [{ name: "a", state: "Synced" } as ClusterDTO, { name: "b", state: "Synced" } as ClusterDTO] });
+    useFleet.getState().clearWorkloads();
+    off = h.initHistory();
+  });
+
+  for (const [label, aKinds] of [["a single kind", ["StatefulSet"]], ["explicit All workloads", ["Deployment", "StatefulSet", "DaemonSet"]]] as const) {
+    it(`${label} on A survives a switch to B and comes back with Back; Forward returns B's choice`, async () => {
+      const { back, forward } = await import("../nav/history");
+      const want = { Deployment: aKinds.includes("Deployment" as never), StatefulSet: aKinds.includes("StatefulSet" as never), DaemonSet: aKinds.includes("DaemonSet" as never) };
+      act(() => { useFleet.getState().openCluster("a"); useFleet.getState().openWorkloads(aKinds); });
+      render(<Host />);
+      await tick();
+      expect(kinds()).toEqual(want);
+      act(() => { useFleet.getState().openCluster("b"); useFleet.getState().openWorkloads(["Deployment"]); });
+      await tick();
+      expect(kinds()).toEqual({ Deployment: true, StatefulSet: false, DaemonSet: false });
+      act(() => { back(); });
+      await tick();
+      expect(useFleet.getState().route).toMatchObject({ cluster: "a", section: "workloads" });
+      expect(kinds()).toEqual(want);
+      act(() => { forward(); });
+      await tick();
+      expect(useFleet.getState().route).toMatchObject({ cluster: "b", section: "workloads" });
+      expect(kinds()).toEqual({ Deployment: true, StatefulSet: false, DaemonSet: false });
+    });
+  }
 });

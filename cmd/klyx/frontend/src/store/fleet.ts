@@ -1258,7 +1258,14 @@ export const useFleet = create<FleetState>((set) => ({
       if (s.workloads.cluster !== cluster || s.workloads.namespace !== namespace) return {};
       return { workloads: { ...s.workloads, live } };
     }),
-  clearWorkloads: () => set((s) => ({ workloads: { ...s.workloads, cluster: null, items: [], namespaces: [], expanded: [], kindFilter: workloadKindFilterFor(WORKLOAD_KINDS), kindExplicit: false, needsAttention: false, search: "", namespace: "", metricsAvailable: false, metricsStatus: null, metricsStale: false, nearLimitSort: false, live: false, truncated: false, error: null, rowsScope: null } })),
+  // The view's cleanup. When the route still shows the workloads task (a
+  // cluster switch by history or the palette reuses the mounted view), an
+  // explicit kind choice belongs to the incoming place and is kept.
+  clearWorkloads: () => set((s) => {
+    const keepKinds = !!s.workloads.kindExplicit && s.route.name === "cluster" && s.route.section === "workloads" && !s.route.resource;
+    return { workloads: { ...s.workloads, cluster: null, items: [], namespaces: [], expanded: [],
+      kindFilter: keepKinds ? s.workloads.kindFilter : workloadKindFilterFor(WORKLOAD_KINDS), kindExplicit: keepKinds, needsAttention: false, search: "", namespace: "", metricsAvailable: false, metricsStatus: null, metricsStale: false, nearLimitSort: false, live: false, truncated: false, error: null, rowsScope: null } };
+  }),
   pods: { cluster: null, namespace: "", items: [], namespaces: [], loading: false, needsAttention: false, search: "", selected: null, detail: null, detailLoading: false, live: false },
   setPodsLoading: (cluster, namespace) => set((s) => ({ pods: { ...s.pods, cluster, namespace, loading: true } })),
   setPods: (cluster, namespace, result) => set((s) => {
