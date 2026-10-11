@@ -162,8 +162,8 @@ Each lens is its own commit, reviewed, in this order.
    - The topology stays a fetch. The routes part rows (`observe.Attached`) carry the verdict, not the data path.
 7. **Nodes** (`nodes/nodes`).
 8. **Workloads** (`workloads/workloads`):
-   - `FluxPresent` travels in the payload, as a fact that also sits on the summary.
-   - Evidence: `PodsComplete` means the coverage is live.
+   - The `fluxPresent` it was evaluated with travels with the rows (§2a).
+   - Evidence follows §5a: read in full (live or stale) is complete, and the freshness comes from coverage.
 9. **Pods** (`pods/pods`):
    - The Observer is all-namespaces and uncapped. The namespace filter moves to the frontend. The 5000 cap and its `Truncated` flag go, and the virtualized list holds the full set.
    - Payload size is measured on the kind lab (5000 pods, all rows open) before this lens switches. If a full-rows push under churn is too heavy for the webview, the fallback is per-subscription namespace filtering in the converter, which needs per-owner payloads. It is decided by measurement, not now.
@@ -189,8 +189,8 @@ None of these is ever reduced to loaded/error booleans.
 
 **Joins.** Cross-part joins (issuer to certificates, store to external secrets, source to reconciliations, usage counts) carry the qualifiers of the side they read:
 
-- an unreadable store makes "used by" unverified, not zero;
-- a stale issuer is "last good".
+- a usage join is qualified by the data it consumes: an issuer's certificate count by the Certificates coverage, a store's secret count by the ExternalSecrets coverage (unverified, not zero, when that kind is unreadable);
+- the issuer's or store's own coverage separately qualifies its health ("last good" when stale).
 
 **Read completeness versus freshness.** A stale dependency is still read-in-full evidence (its last complete read). This is current `evalWorkloads` behaviour, and the workloads verdict is evaluated from it, as a last-observed verdict. The rows preserve that evaluated verdict as captured. The lens shows freshness from the coverage, so a verdict from a stale capture is labelled "last observed", never current. "Complete" means read in full (live or stale), never "fresh".
 
@@ -245,13 +245,13 @@ If any limit is missed, the transport changes before the Pods lens switches. Per
 
 For every lens moved:
 
-- the header and filter count, the nav count and the summary part's `Included` are equal at one `Ver`;
+- the lens's task counts equal the summary part's counts at one `Ver`, under the §4a classifier- and scope-specific rule (Counts for verdict parts, Native for native parts; filtered and visible counts labelled separately, never compared to totals);
 - no lens watch is open for its kinds;
-- the lab rerun shows the WATCH delta drop accordingly.
+- the lab rerun shows the WATCH delta accordingly.
 
 A kind lab run with every lens open reports RSS and the rows payload rates.
 
-Per-lens gates (slice 3) are distinct from mast and nav parity (slice 4). Replacing a fetch lens (Nodes, Argo, Karpenter, Gateways) removes no watch, so the WATCH delta is expected to drop only for the push lenses' lazy watches and `OpenLive*`.
+Per-lens gates (slice 3) are distinct from mast and nav parity (slice 4). Replacing a fetch lens (Argo, Karpenter, Gateways) by itself removes no watch. The WATCH delta drops for the push lenses' lazy watches and `OpenLive*`, and separately for the typed node informer's watch when the Nodes migration removes it.
 
 ## 8. Order of work
 
