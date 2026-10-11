@@ -5,14 +5,20 @@ import type { CertificateDTO, CondDTO, GatewayRef, RouteNodeDTO, TopologyDTO } f
 
 vi.mock("../bridge/gateway", () => ({ getGatewayTopology: vi.fn(async () => {}), listGateways: vi.fn(async () => {}), getRouteMetrics: vi.fn(async () => {}), abandonRouteMetrics: vi.fn() }));
 import { GatewayTopology } from "./GatewayTopology";
-import { certStatus, routeHealth, routeIssues, sortWarnings } from "./gatewayModel";
+import { certStatus, routeIssues, sortWarnings } from "./gatewayModel";
+import { gatewayRule, routeRule } from "../test/backendRules";
 
 const gateway: GatewayRef = { namespace: "infra", name: "eg" };
 
 const T = (reason = "Accepted"): CondDTO => ({ status: "True", reason, message: "", observedGeneration: 1 });
 const F = (reason: string, observedGeneration = 1): CondDTO => ({ status: "False", reason, message: "", observedGeneration });
 
-function route(namespace: string, name: string, over: Partial<RouteNodeDTO> = {}, ep: { ready: number; total: number; nonPod?: number } = { ready: 2, total: 2 }): RouteNodeDTO {
+// The route verdict as the backend computes it (test/backendRules.ts, held to
+// the Go golden fixture); lens lanes read it from rule.
+type Route = Omit<RouteNodeDTO, "rule"> & { rule?: RouteNodeDTO["rule"] };
+const routeHealth = (r: Route) => { const x = routeRule(r); return { kind: x.role, label: x.label }; };
+
+function route(namespace: string, name: string, over: Partial<RouteNodeDTO> = {}, ep: { ready: number; total: number; nonPod?: number } = { ready: 2, total: 2 }): Route {
   const svc = `${name}-svc`;
   return {
     namespace, name, hostnames: [`${name}.example.com`], matches: [{ pathType: "PathPrefix", pathValue: `/${name}`, method: "" }], parentSectionName: "https",
@@ -23,11 +29,16 @@ function route(namespace: string, name: string, over: Partial<RouteNodeDTO> = {}
   };
 }
 
-const topo = (routes: RouteNodeDTO[], over: Partial<TopologyDTO> = {}): TopologyDTO => ({
-  gateway: { namespace: "infra", name: "eg", className: "envoy-gateway", accepted: true, programmed: true, generation: 1, acceptedCond: T(), programmedCond: T("Programmed"), addresses: [{ type: "IPAddress", value: "192.0.2.10" }],
-    listeners: [{ name: "https", protocol: "HTTPS", hostname: "", port: 443, certificateRefs: [{ group: "", kind: "Secret", namespace: "infra", name: "eg-tls" }] }], policies: [] },
-  routes, routesComplete: true, ...over,
-});
+// The topology stamps each route and its Gateway with the backend's rule, the
+// routes against this Gateway's listeners (a fixture that set its own rule on
+// purpose keeps it).
+const topo = (routes: Route[], over: Partial<Omit<TopologyDTO, "routes" | "gateway">> & { gateway?: Partial<TopologyDTO["gateway"]> } = {}): TopologyDTO => {
+  const gateway: TopologyDTO["gateway"] = { namespace: "infra", name: "eg", className: "envoy-gateway", accepted: true, programmed: true, generation: 1, acceptedCond: T(), programmedCond: T("Programmed"), addresses: [{ type: "IPAddress", value: "192.0.2.10" }],
+    listeners: [{ name: "https", protocol: "HTTPS", hostname: "", port: 443, certificateRefs: [{ group: "", kind: "Secret", namespace: "infra", name: "eg-tls" }] }], policies: [], rule: { included: false, role: "ok", label: "programmed" } };
+  const g = { ...gateway, ...over.gateway };
+  const stamped = { ...g, rule: over.gateway?.rule ?? gatewayRule(g) };
+  return { routesComplete: true, ...over, gateway: stamped, routes: routes.map((r) => ({ ...r, rule: r.rule ?? routeRule(r, stamped.listeners) })) };
+};
 
 function seed(t: TopologyDTO | null, over: Partial<ReturnType<typeof useFleet.getState>["network"]> = {}) {
   useFleet.setState({
@@ -128,6 +139,11 @@ describe("GatewayTopology (redesign step 6, canvas-detail)", () => {
     fireEvent.click(screen.getByRole("button", { name: /HTTPRoute apps\/share/ }));
     expect(within(screen.getByTestId("route-panel")).getByText("Has 2 backends; the lane shows the primary.")).toBeTruthy();
   });
+  it("lanes read the Go-computed route rule, never their own (1c §2)", () => {
+    seed(topo([route("apps", "share", { rule: { included: true, role: "fault", label: "Flagged by backend" } }), route("apps", "cart")]));
+    render(<GatewayTopology cluster="x" gateway={gateway} />);
+    expect(screen.getByRole("button", { name: /HTTPRoute apps\/share/ }).textContent).toContain("Flagged by backend");
+  });
   it("draws the gateway node and one lane per route, broken first, and auto-selects the first broken lane", () => {
     seed(topo([route("apps", "share"), route("apps", "cart", { resolvedRefs: false, resolvedRefsCond: F("BackendNotFound") })]));
     render(<GatewayTopology cluster="x" gateway={gateway} />);
@@ -155,8 +171,7 @@ describe("GatewayTopology (redesign step 6, canvas-detail)", () => {
   it("unknown endpoints are counted as unverified; a not-programmed Gateway qualifies otherwise-resolved routes", () => {
     const r = route("apps", "share");
     r.backends[0].endpoints = { ready: 0, total: 0, nonPod: 0, error: "forbidden" };
-    const t = topo([r, route("apps", "cart")]);
-    t.gateway.programmed = false; t.gateway.programmedCond = F("AddressNotAssigned");
+    const t = topo([r, route("apps", "cart")], { gateway: { programmed: false, programmedCond: F("AddressNotAssigned") } });
     seed(t);
     render(<GatewayTopology cluster="x" gateway={gateway} />);
     expect(screen.getByText("1 unverified")).toBeTruthy();
@@ -222,14 +237,12 @@ describe("GatewayTopology (redesign step 6, canvas-detail)", () => {
   });
 
   it("Gateway status: explicit False is a fault notice; absent status is unverified, never a rejection", () => {
-    const t = topo([route("apps", "share")]);
-    t.gateway.accepted = false; t.gateway.programmed = false; t.gateway.acceptedCond = F("InvalidParameters"); t.gateway.programmedCond = undefined;
+    const t = topo([route("apps", "share")], { gateway: { accepted: false, programmed: false, acceptedCond: F("InvalidParameters"), programmedCond: undefined } });
     seed(t);
     const first = render(<GatewayTopology cluster="x" gateway={gateway} />);
     expect(screen.getByText("▲ Gateway not accepted.")).toBeTruthy();
     first.unmount();
-    const t2 = topo([route("apps", "share")]);
-    t2.gateway.accepted = false; t2.gateway.programmed = false; t2.gateway.acceptedCond = { status: "", reason: "", message: "", observedGeneration: 0 };
+    const t2 = topo([route("apps", "share")], { gateway: { accepted: false, programmed: false, acceptedCond: { status: "", reason: "", message: "", observedGeneration: 0 } } });
     seed(t2);
     render(<GatewayTopology cluster="x" gateway={gateway} />);
     expect(within(screen.getByTestId("gateway-strip")).getByText("no status reported")).toBeTruthy();

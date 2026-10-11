@@ -10,12 +10,13 @@ vi.mock("../bridge/gateway", () => ({
   abandonRouteMetrics: vi.fn(),
 }));
 import { GatewayApiView } from "./GatewayApiView";
+import { gatewayRule, withRule } from "../test/backendRules";
 
 const cond = (status: string, reason = "", observedGeneration = 1): CondDTO => ({ status, reason, message: "", observedGeneration });
-const gw = (name: string, over: Partial<GatewayRefDTO> = {}): GatewayRefDTO => ({
+const gw = (name: string, over: Partial<GatewayRefDTO> = {}): GatewayRefDTO => withRule<GatewayRefDTO>({
   namespace: "infra", name, className: "envoy-gateway", accepted: true, programmed: true, generation: 1, acceptedCond: cond("True"), programmedCond: cond("True"),
   addresses: [{ type: "IPAddress", value: "192.0.2.10" }], listeners: [{ name: "https", protocol: "HTTPS", hostname: "", port: 443 }], ...over,
-});
+}, gatewayRule);
 
 function net(over: Partial<ReturnType<typeof useFleet.getState>["network"]> = {}) {
   useFleet.setState(() => ({
@@ -28,6 +29,18 @@ function net(over: Partial<ReturnType<typeof useFleet.getState>["network"]> = {}
 beforeEach(() => { vi.clearAllMocks(); });
 
 describe("GatewayApiView (redesign step 6)", () => {
+  it("reads the Go-computed rule, never its own: verdict and the Needs attention count (1c §2)", () => {
+    net({ gateways: [
+      gw("flagged", { rule: { included: true, role: "fault", label: "Flagged by backend" } }),
+      gw("cleared", { accepted: false, acceptedCond: cond("False", "InvalidParameters"), rule: { included: false, role: "ok", label: "programmed" } }),
+    ] });
+    render(<GatewayApiView cluster="x" />);
+    const rows = screen.getAllByRole("button").filter((b) => b.classList.contains("lens-row"));
+    expect(rows[0].textContent).toContain("flagged");
+    expect(rows[0].textContent).toContain("Flagged by backend");
+    expect(screen.getByRole("button", { name: /^Needs attention/ }).textContent?.trim()).toBe("Needs attention 1");
+  });
+
   it("orders not accepted first and auto-selects it once, naming the condition honestly", () => {
     net({ gateways: [gw("ok"), gw("pending", { programmed: false, programmedCond: cond("False", "AddressNotAssigned") }), gw("broken", { accepted: false, programmed: false, acceptedCond: cond("False", "InvalidParameters"), programmedCond: cond("False") })] });
     render(<GatewayApiView cluster="x" />);

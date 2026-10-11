@@ -18,7 +18,7 @@ import { abandonRouteMetrics, getGatewayTopology, getRouteMetrics, listGateways 
 
 const eg = { namespace: "envoy-gateway-system", name: "eg" };
 const t = (marker: string): TopologyDTO => ({
-  gateway: { ...eg, className: marker, listeners: [], accepted: true, programmed: true, policies: [] },
+  gateway: { ...eg, className: marker, listeners: [], accepted: true, programmed: true, policies: [], rule: { included: false, role: "ok", label: "programmed" } },
   routes: [], routesComplete: true,
 });
 

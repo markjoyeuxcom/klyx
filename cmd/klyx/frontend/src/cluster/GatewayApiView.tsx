@@ -14,7 +14,7 @@ import { GatewayTopology } from "./GatewayTopology";
 import { LensLayout, LensTable, TABLE_ROW_HEIGHT, type DatasetState } from "../layout/LensLayout";
 import { InspectorBlock, InspectorLayout } from "../layout/InspectorLayout";
 import { fitColumns, type ColumnDef } from "../layout/columns";
-import { RANK, REFS, ROLE_TEXT, addressText, gatewayHealth, gatewayVerdictDetail, listenerText, roleTone, type Role } from "./gatewayModel";
+import { RANK, REFS, ROLE_TEXT, addressText, gatewayRole, gatewayVerdictDetail, listenerText, roleTone, type Role } from "./gatewayModel";
 
 // GatewayApiView - the Gateway API lens on the workspace template (spec §6
 // step 6). Without a selected Gateway it is the Gateways table (not accepted
@@ -70,14 +70,14 @@ function GatewayList({ cluster }: { cluster: string }) {
   const receivedAt = useReceivedAt(mine && !net.listLoading && !error ? net.gateways : null);
 
   const ordered = useMemo(() => [...gateways].sort((a, b) =>
-    RANK[gatewayHealth(a).kind] - RANK[gatewayHealth(b).kind] || a.namespace.localeCompare(b.namespace) || a.name.localeCompare(b.name)), [gateways]);
-  const attention = gateways.filter((g) => RANK[gatewayHealth(g).kind] <= RANK.degraded).length;
-  const notAccepted = gateways.filter((g) => gatewayHealth(g).kind === "fault").length;
-  const unverified = gateways.filter((g) => ["unknown", "progressing"].includes(gatewayHealth(g).kind)).length;
-  const allOk = gateways.length > 0 && gateways.every((g) => gatewayHealth(g).kind === "ok");
+    RANK[gatewayRole(a).kind] - RANK[gatewayRole(b).kind] || a.namespace.localeCompare(b.namespace) || a.name.localeCompare(b.name)), [gateways]);
+  const attention = gateways.filter((g) => g.rule.included).length;
+  const notAccepted = gateways.filter((g) => gatewayRole(g).kind === "fault").length;
+  const unverified = gateways.filter((g) => ["unknown", "progressing"].includes(gatewayRole(g).kind)).length;
+  const allOk = gateways.length > 0 && gateways.every((g) => gatewayRole(g).kind === "ok");
   const q = query.trim().toLowerCase();
   const visible = useMemo(() => ordered.filter((g) => {
-    const role = gatewayHealth(g);
+    const role = gatewayRole(g);
     if (mode === "attention" && RANK[role.kind] > RANK.degraded) return false;
     if (mode === "programmed" && role.kind !== "ok") return false;
     if (!q) return true;
@@ -93,7 +93,7 @@ function GatewayList({ cluster }: { cluster: string }) {
     if (autoDone.current || loading || error || !served) return;
     autoDone.current = true;
     const first = visible[0];
-    if (first && RANK[gatewayHealth(first).kind] <= RANK.degraded && selKey === null) { setSelKey(keyOf(first)); setCursorKey(keyOf(first)); }
+    if (first && first.rule.included && selKey === null) { setSelKey(keyOf(first)); setCursorKey(keyOf(first)); }
   }, [loading, error, served, visible, selKey]);
   // Later operator filter edits win: one that hides the selection closes it.
   const filterEdits = useRef(0);
@@ -186,7 +186,7 @@ function GatewayList({ cluster }: { cluster: string }) {
           <VirtualList ref={listRef} items={visible} rowHeight={TABLE_ROW_HEIGHT} rowKey={keyOf} style={{ flex: 1, minHeight: 0 }}
             render={(g) => {
               const k = keyOf(g);
-              const role = gatewayHealth(g);
+              const role = gatewayRole(g);
               const address = addressText(g.addresses);
               return (
                 <div key={k} role="button" tabIndex={0} className="lens-row" style={{ ...gridStyle, opacity: g.stale ? 0.6 : undefined }}
@@ -216,7 +216,7 @@ function GatewayList({ cluster }: { cluster: string }) {
 }
 
 function GatewayInspector({ g, stale, onOpen, onClose }: { g: GatewayRefDTO; stale: boolean; onOpen: () => void; onClose: () => void }) {
-  const role = gatewayHealth(g);
+  const role = gatewayRole(g);
   const open = (ref: typeof REFS.gateway | typeof REFS.gatewayClass, ns: string, name: string) => {
     const nav = useFleet.getState();
     nav.openResource(ref);

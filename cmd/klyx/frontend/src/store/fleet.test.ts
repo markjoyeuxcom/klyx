@@ -183,14 +183,14 @@ test("network gateway drill-in route + slice", () => {
   expect(r2.name === "cluster" && r2.gateway).toBeUndefined();
 
   uf4.getState().setGatewaysLoading("x");
-  uf4.getState().setGateways("x", { gatewayAPIServed: true, gateways: [{ namespace: "infra", name: "eg", className: "envoy-gateway", accepted: true, programmed: true }] });
+  uf4.getState().setGateways("x", { gatewayAPIServed: true, gateways: [{ namespace: "infra", name: "eg", className: "envoy-gateway", accepted: true, programmed: true, rule: { included: false, role: "ok", label: "programmed" } }] });
   expect(uf4.getState().network.gateways.length).toBe(1);
   expect(uf4.getState().network.served).toBe(true);
 });
 
 test("network slice is scoped to its cluster", () => {
   uf4.getState().setGatewaysLoading("a");
-  uf4.getState().setGateways("a", { gatewayAPIServed: true, gateways: [{ namespace: "infra", name: "eg", className: "envoy-gateway", accepted: true, programmed: true }] });
+  uf4.getState().setGateways("a", { gatewayAPIServed: true, gateways: [{ namespace: "infra", name: "eg", className: "envoy-gateway", accepted: true, programmed: true, rule: { included: false, role: "ok", label: "programmed" } }] });
   expect(uf4.getState().network.cluster).toBe("a");
 
   // Switching to cluster b drops a's gateways instead of rendering them under b.
@@ -201,7 +201,7 @@ test("network slice is scoped to its cluster", () => {
   expect(uf4.getState().network.listLoading).toBe(true);
 
   // A stale in-flight response from cluster a is dropped.
-  uf4.getState().setGateways("a", { gatewayAPIServed: true, gateways: [{ namespace: "infra", name: "eg", className: "envoy-gateway", accepted: true, programmed: true }] });
+  uf4.getState().setGateways("a", { gatewayAPIServed: true, gateways: [{ namespace: "infra", name: "eg", className: "envoy-gateway", accepted: true, programmed: true, rule: { included: false, role: "ok", label: "programmed" } }] });
   expect(uf4.getState().network.gateways.length).toBe(0);
   expect(uf4.getState().network.cluster).toBe("b");
 

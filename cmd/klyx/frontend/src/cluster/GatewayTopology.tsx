@@ -14,7 +14,7 @@ import { InspectorBlock, InspectorLayout, type MenuItem } from "../layout/Inspec
 import { kindEvidence, type KindEvidence } from "../layout/coverage";
 import {
   POLICY_ABBREV, POLICY_REFS, RANK, REFS, ROLE_TEXT, addressText, certBySecret, certStatus, errColor, fmtErr, fmtMs, fmtRps,
-  gatewayHealth, listenerText, policyKey, primaryBackendText, roleTone, routeHasGlobal, routeHasPolicies, routeHealth, routeIssues, routeKey, sortWarnings,
+  gatewayRole, listenerText, policyKey, primaryBackendText, roleTone, routeHasGlobal, routeHasPolicies, routeIssues, routeRole, routeKey, sortWarnings,
   type CertLookup, type Role,
 } from "./gatewayModel";
 
@@ -82,7 +82,7 @@ export function GatewayTopology({ cluster, gateway }: { cluster: string; gateway
     : net.routeMetricsStale ? { state: "stale", message: rmStatus.message, at: net.routeMetricsAt ?? null }
     : { state: "unavailable", message: rmStatus.message, at: null };
 
-  const healthOf = useMemo(() => new Map(routes.map((r) => [routeKey(r), routeHealth(r, listeners)])), [routes, listeners]);
+  const healthOf = useMemo(() => new Map(routes.map((r) => [routeKey(r), routeRole(r)])), [routes]);
   const kindOf = (r: RouteNodeDTO) => healthOf.get(routeKey(r))!.kind;
   const nsCounts = useMemo(() => {
     const m = new Map<string, number>();
@@ -177,7 +177,7 @@ export function GatewayTopology({ cluster, gateway }: { cluster: string; gateway
 
   const icon = <IconRoute size={28} stroke={1.2} />;
   const clearFilters = () => { setMode("all"); setNsFilter(""); setQuery(""); };
-  const gwRole = t ? gatewayHealth(t.gateway) : null;
+  const gwRole = t ? gatewayRole(t.gateway) : null;
   const stateView = state === "loading" ? <SkeletonRows rows={5} label="reading the Gateway topology" />
     : state === "unreadable" ? <EmptyState icon={icon} title="Could not read this Gateway's topology." hint={readError ?? undefined} action={{ label: "Retry", onClick: refresh }} />
     : state === "empty" ? (
@@ -298,7 +298,7 @@ export function GatewayTopology({ cluster, gateway }: { cluster: string; gateway
 // GatewayStrip: the canvas's first node - the Gateway itself, with the
 // listeners every lane enters through and the policies that apply to all.
 function GatewayStrip({ g, clusterPolicies, absentKinds }: { g: GatewayNodeDTO; clusterPolicies: PolicyRefDTO[]; absentKinds: string[] }) {
-  const role = gatewayHealth(g);
+  const role = gatewayRole(g);
   const address = addressText(g.addresses);
   const [showAbsent, setShowAbsent] = useState(false);
   return (
@@ -412,9 +412,9 @@ function RouteInspector({ route, gone, unproven, gateway, listeners, notes, metr
   onOpenObject: OpenObject;
   onClose: () => void;
 }) {
-  const role = routeHealth(route, listeners);
+  const role = routeRole(route);
   const issues = routeIssues(route, listeners);
-  const gwRole = gatewayHealth(gateway);
+  const gwRole = gatewayRole(gateway);
   const primary = route.backends[0];
   const scoped = route.parentSectionName ? listeners.filter((l) => l.name === route.parentSectionName) : listeners;
   const policies = [...route.policies, ...route.services.flatMap((s) => s.policies)];

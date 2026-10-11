@@ -1,4 +1,4 @@
-import type { CertificateDTO, CondDTO, GatewayRefDTO, ListenerDTO, PolicyRefDTO, ResourceRef, RouteNodeDTO } from "../store/fleet";
+import type { CertificateDTO, CondDTO, GatewayRefDTO, ListenerDTO, PolicyRefDTO, ResourceRef, RouteNodeDTO, RuleDTO } from "../store/fleet";
 import type { KindEvidence } from "../layout/coverage";
 
 // gatewayModel - the Gateway API lens's health and wording, shared by the
@@ -42,18 +42,12 @@ type GatewayLike = Pick<GatewayRefDTO, "accepted" | "programmed" | "acceptedCond
 // pending decision is progressing, and an explicit not-programmed is
 // degraded (no data path configured yet). A last-observed negative is
 // degraded "(last observed)" - the current state is unproven.
-export function gatewayHealth(g: GatewayLike): Role {
-  const a = condState(g.acceptedCond, g.generation, g.accepted);
-  if (a.status === "absent") return { kind: "unknown", label: "no status reported" };
-  if (a.status === "Unknown") return { kind: "progressing", label: "acceptance pending" };
-  if (a.status === "False") return a.stale ? { kind: "degraded", label: "not accepted (last observed)" } : { kind: "fault", label: "not accepted" };
-  const p = condState(g.programmedCond, g.generation, g.programmed);
-  if (p.status === "absent") return { kind: "unknown", label: "programming not reported" };
-  if (p.status === "Unknown") return { kind: "progressing", label: "programming" };
-  if (p.status === "False") return { kind: "degraded", label: p.stale ? "not programmed (last observed)" : "not programmed" };
-  if (a.stale || p.stale) return { kind: "progressing", label: "syncing" };
-  return { kind: "ok", label: "programmed" };
-}
+// The Gateway and route verdicts are the relocated rules computed in Go
+// (internal/gwapi rules.go, 1c addendum §2): the lens reads them. The detail
+// texts below (gatewayVerdictDetail, routeIssues) stay presentation; the
+// golden gate holds their worst issue to the Go verdict.
+export const gatewayRole = (g: { rule: RuleDTO }): Role => ({ kind: g.rule.role as Role["kind"], label: g.rule.label });
+export const routeRole = (r: { rule: RuleDTO }): Role => ({ kind: r.rule.role as Role["kind"], label: r.rule.label });
 
 export function gatewayVerdictDetail(g: GatewayLike): string {
   const a = condState(g.acceptedCond, g.generation, g.accepted);
@@ -93,7 +87,7 @@ const endpointsText = (r: number, t: number, nonPod: number) => `${r}/${t} endpo
 // progressing = the controller is deciding; unknown = Klyx could not read
 // or does not evaluate it. With several backends, a primary-backend
 // problem is degraded: other backends may still carry traffic.
-export function routeIssues(r: RouteNodeDTO, listeners: ListenerDTO[] = []): RouteIssue[] {
+export function routeIssues(r: Omit<RouteNodeDTO, "rule">, listeners: ListenerDTO[] = []): RouteIssue[] {
   const out: RouteIssue[] = [];
   const legacy = r.parentFound === undefined; // older payload: booleans only
   if (!legacy && !r.parentFound) {
@@ -142,12 +136,6 @@ export function routeIssues(r: RouteNodeDTO, listeners: ListenerDTO[] = []): Rou
   return out;
 }
 
-export function routeHealth(r: RouteNodeDTO, listeners: ListenerDTO[] = []): Role {
-  const issues = routeIssues(r, listeners);
-  if (issues.length === 0) return { kind: "ok", label: "resolved" };
-  const worst = [...issues].sort((x, y) => RANK[x.severity] - RANK[y.severity])[0];
-  return { kind: worst.severity, label: worst.short };
-}
 
 /** What the lane's backend box says about the primary backend. */
 export function primaryBackendText(r: RouteNodeDTO): string {

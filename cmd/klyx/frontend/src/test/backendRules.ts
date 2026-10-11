@@ -1,4 +1,5 @@
-import type { ArgoAppDTO, ArgoApplicationSetDTO, CertificateDTO, ExternalSecretDTO, ExternalSecretStoreDTO, FluxResourceDTO, FluxSourceDTO, IssuerDTO, KarpenterClaimDTO, KarpenterPoolDTO, RuleDTO } from "../store/fleet";
+import type { ArgoAppDTO, ArgoApplicationSetDTO, CertificateDTO, GatewayRefDTO, ListenerDTO, RouteNodeDTO, ExternalSecretDTO, ExternalSecretStoreDTO, FluxResourceDTO, FluxSourceDTO, IssuerDTO, KarpenterClaimDTO, KarpenterPoolDTO, RuleDTO } from "../store/fleet";
+import { condState, routeIssues, RANK } from "../cluster/gatewayModel";
 
 // The relocated lens rules exactly as the backend computes them
 // (internal/certmanager, internal/externalsecrets, internal/karpenter
@@ -6,6 +7,7 @@ import type { ArgoAppDTO, ArgoApplicationSetDTO, CertificateDTO, ExternalSecretD
 // support only - lenses read the Go-computed `rule`. src/health/nativeRules
 // .test.ts holds every function here to the Go golden fixture, so this
 // module cannot drift from the backend.
+
 
 const nowSec = () => Math.floor(Date.now() / 1000);
 const rule = (included: boolean, role: string, label: string): RuleDTO => ({ included, role, label });
@@ -111,6 +113,31 @@ export function argoAppRule(a: Omit<ArgoAppDTO, "rule">): RuleDTO {
 
 export function argoAppSetRule(s: Omit<ArgoApplicationSetDTO, "rule">): RuleDTO {
   return s.healthy ? rule(false, "ok", "healthy") : rule(true, "degraded", "needs attention");
+}
+
+// Gateway API (gatewayModel gatewayHealth, verbatim; routes: the worst of
+// the lens's own routeIssues, so the detail text the topology still renders
+// stays held to the Go verdict). Included = role at or above degraded.
+type GatewayIn = Pick<GatewayRefDTO, "accepted" | "programmed" | "acceptedCond" | "programmedCond" | "generation">;
+export function gatewayRule(g: GatewayIn): RuleDTO {
+  const a = condState(g.acceptedCond, g.generation, g.accepted);
+  const verdict = (role: string, label: string) => rule(RANK[role as keyof typeof RANK] <= RANK.degraded, role, label);
+  if (a.status === "absent") return verdict("unknown", "no status reported");
+  if (a.status === "Unknown") return verdict("progressing", "acceptance pending");
+  if (a.status === "False") return a.stale ? verdict("degraded", "not accepted (last observed)") : verdict("fault", "not accepted");
+  const p = condState(g.programmedCond, g.generation, g.programmed);
+  if (p.status === "absent") return verdict("unknown", "programming not reported");
+  if (p.status === "Unknown") return verdict("progressing", "programming");
+  if (p.status === "False") return verdict("degraded", p.stale ? "not programmed (last observed)" : "not programmed");
+  if (a.stale || p.stale) return verdict("progressing", "syncing");
+  return verdict("ok", "programmed");
+}
+
+export function routeRule(r: Omit<RouteNodeDTO, "rule">, listeners: ListenerDTO[] = []): RuleDTO {
+  const issues = routeIssues(r, listeners);
+  if (issues.length === 0) return rule(false, "ok", "resolved");
+  const worst = [...issues].sort((x, y) => RANK[x.severity] - RANK[y.severity])[0];
+  return rule(RANK[worst.severity] <= RANK.degraded, worst.severity, worst.short);
 }
 
 // withRule stamps a fixture with the backend's rule unless the test set one.
