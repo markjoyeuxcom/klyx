@@ -62,3 +62,18 @@ func Save(path string, b Bounds) error {
 	}
 	return os.WriteFile(path, raw, 0o644)
 }
+
+// Settle chooses what to persist at shutdown. The window toolkit (Wails v3
+// alpha, macOS windowNew) creates the window one point smaller than the size
+// it is asked for, while Size() reports the real frame - so persisting the
+// observed size shrank the window by 1px on every launch. When the observed
+// size is exactly the requested size minus one in both dimensions (the
+// window was not resized), the requested size is kept. Self-correcting both
+// ways: a resize is persisted as observed, and if the toolkit stops
+// shrinking, observed == requested and is persisted unchanged.
+func Settle(requested, observed Bounds) Bounds {
+	if requested.Width > 0 && observed.Width == requested.Width-1 && observed.Height == requested.Height-1 {
+		observed.Width, observed.Height = requested.Width, requested.Height
+	}
+	return observed
+}

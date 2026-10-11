@@ -382,6 +382,9 @@ func main() {
 	// mainWin is assigned after window creation below; the closures are nil-safe
 	// until then.
 	var mainWin application.Window
+	// The bounds the window was created with (zero on first launch), for
+	// winstate.Settle at shutdown.
+	var requestedBounds winstate.Bounds
 	dockSvc := dock.New()
 	notifySvc := notifications.New()
 	shellSvc := appbridge.NewShellService(
@@ -458,7 +461,8 @@ func main() {
 			if mainWin != nil {
 				x, y := mainWin.Position()
 				w, h := mainWin.Size()
-				if err := winstate.Save(windowStatePath(), winstate.Bounds{X: x, Y: y, Width: w, Height: h}); err != nil {
+				b := winstate.Settle(requestedBounds, winstate.Bounds{X: x, Y: y, Width: w, Height: h})
+				if err := winstate.Save(windowStatePath(), b); err != nil {
 					log.Printf("warn: could not persist window state: %v", err)
 				}
 			}
@@ -494,6 +498,7 @@ func main() {
 		mainOpts.Width, mainOpts.Height = b.Width, b.Height
 		mainOpts.X, mainOpts.Y = b.X, b.Y
 		mainOpts.InitialPosition = application.WindowXY
+		requestedBounds = b
 	}
 	mainWin = app.Window.NewWithOptions(mainOpts)
 

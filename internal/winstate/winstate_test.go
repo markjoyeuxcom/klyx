@@ -51,3 +51,27 @@ func TestInsaneBoundsRejected(t *testing.T) {
 		t.Fatal("insane bounds must not be persisted")
 	}
 }
+
+func TestSettleUndoesTheToolkitShrink(t *testing.T) {
+	req := Bounds{X: 10, Y: 20, Width: 1523, Height: 1122}
+	// Untouched window: created 1px smaller - persist the requested size.
+	if got := Settle(req, Bounds{X: 10, Y: 20, Width: 1522, Height: 1121}); got.Width != 1523 || got.Height != 1122 {
+		t.Fatalf("untouched window drifted: %+v", got)
+	}
+	// Moved but not resized: position follows the window, size stays.
+	if got := Settle(req, Bounds{X: 300, Y: 40, Width: 1522, Height: 1121}); got != (Bounds{X: 300, Y: 40, Width: 1523, Height: 1122}) {
+		t.Fatalf("move lost: %+v", got)
+	}
+	// A real resize is persisted as observed.
+	if got := Settle(req, Bounds{Width: 1280, Height: 900}); got.Width != 1280 || got.Height != 900 {
+		t.Fatalf("resize lost: %+v", got)
+	}
+	// A toolkit that no longer shrinks: observed == requested, unchanged.
+	if got := Settle(req, req); got != req {
+		t.Fatalf("no-shrink toolkit changed: %+v", got)
+	}
+	// No requested size (first launch on defaults): observed as is.
+	if got := Settle(Bounds{}, Bounds{Width: 1023, Height: 767}); got.Width != 1023 {
+		t.Fatalf("first launch altered: %+v", got)
+	}
+}
