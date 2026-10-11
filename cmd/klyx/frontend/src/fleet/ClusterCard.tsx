@@ -113,7 +113,8 @@ export function ClusterCard({ c }: { c: ClusterDTO }) {
               <span style={{ display: "block", fontSize: 8, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--color-text-tertiary)" }}>nodes</span>
             </span>
             <span style={{ flex: 1, minWidth: 0, textAlign: "right", padding: "3px 8px 2px", borderRadius: "var(--radius-sm)", background: "var(--bench-well-bg, var(--color-background-secondary))", boxShadow: "var(--bench-well-shadow, inset 0 0 0 1px var(--color-border-tertiary))" }}>
-              <span style={{ display: "block", fontFamily: "var(--font-mono)", fontSize: 13, fontWeight: 600 }}>{c.pods}</span>
+              <span style={{ display: "block", fontFamily: "var(--font-mono)", fontSize: 13, fontWeight: 600, color: c.podsStale ? "var(--color-text-tertiary)" : undefined }}
+                title={c.podsKnown === false ? "no complete pod read yet" : c.podsStale ? "last good count - the pod read is failing" : undefined}>{c.podsKnown === false ? "—" : c.pods}</span>
               <span style={{ display: "block", fontSize: 8, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--color-text-tertiary)" }}>pods</span>
             </span>
           </div>

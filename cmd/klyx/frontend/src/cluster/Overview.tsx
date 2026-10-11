@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useFleet } from "../store/fleet";
+import { useFleet, podsText } from "../store/fleet";
 import type { ClusterDTO, EventRowDTO, FleetBoardEntry, MetricsDTO, ResourceRef } from "../store/fleet";
 import { getClusterMetrics, getClusterSparklines } from "../bridge/metrics";
 import type { SparklinesDTO } from "../bridge/metrics";
@@ -85,7 +85,7 @@ export function Overview({ c }: { c: ClusterDTO }) {
               <div className="insp-kv">
                 <span>connection</span><span style={{ color: stateTone }}>{freshnessText(c)}</span>
                 <span>nodes</span><span>{c.nodesReady}/{c.nodesTotal} ready</span>
-                <span>pods</span><span>{c.pods}</span>
+                <span>pods</span><span>{podsText(c)}</span>
                 <span>namespaces</span><span>{mine && attention.counts.namespaces != null ? `${attention.counts.namespaces}${(attention.stale ?? []).includes("pods") ? " (last good)" : ""}` : "—"}</span>
                 <span>flux</span><span>{fluxCapability(c, attention.counts.flux)}</span>
                 {board?.argo && <><span>argo cd</span><span>{board.argo.broken > 0 ? `${board.argo.broken} of ${board.argo.total} need attention` : `${board.argo.total} applications`}</span></>}

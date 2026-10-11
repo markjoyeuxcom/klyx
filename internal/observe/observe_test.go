@@ -1374,3 +1374,144 @@ func TestControllerIssueIsTaskLevelNeverACount(t *testing.T) {
 	h.o.SetController("certs", nil)
 	h.eventually(func() bool { t, _ := taskOf(); return t.Controller == nil }, "recovery clears it")
 }
+
+// ---- WatchKind (the connection's pod seam, 1c 2d) ---------------------------
+
+type stateLog struct {
+	mu  sync.Mutex
+	all []KindState
+}
+
+func (l *stateLog) add(st KindState) { l.mu.Lock(); l.all = append(l.all, st); l.mu.Unlock() }
+func (l *stateLog) last() (KindState, bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if len(l.all) == 0 {
+		return KindState{}, false
+	}
+	return l.all[len(l.all)-1], true
+}
+
+func TestWatchKindDeliversTheCapturedStateAtOnce(t *testing.T) {
+	src := newSource()
+	src.put("a", nil)
+	h := start(t, Config{Kinds: []KindSpec{cmKind("cms", src)}, Domains: []DomainSpec{{ID: "things", Parts: []PartSpec{cmPart("cms", "cms")}}}})
+	h.eventually(h.partIs("things", "cms", live), "live")
+	log := &stateLog{}
+	cancel := h.o.WatchKind("cms", log.add)
+	defer cancel()
+	h.eventually(func() bool { st, ok := log.last(); return ok && st.Coverage == Live }, "an already-live kind is delivered at subscription")
+	st, _ := log.last()
+	if !st.CountKnown || st.Objects != 1 || st.Generation == 0 || st.ObservedAt == nil {
+		t.Fatalf("one capture: count and coverage together: %+v", st)
+	}
+	if c := h.o.WatchKind("nope", log.add); c == nil {
+		t.Fatal("an unknown kind returns a no-op cancel")
+	}
+}
+
+func TestWatchKindCountAndTimesFollowObservationsOnly(t *testing.T) {
+	src := newSource()
+	h := start(t, Config{Kinds: []KindSpec{cmKind("cms", src)}, Domains: []DomainSpec{{ID: "things", Parts: []PartSpec{cmPart("cms", "cms")}}}})
+	log := &stateLog{}
+	defer h.o.WatchKind("cms", log.add)()
+	h.eventually(func() bool { st, ok := log.last(); return ok && st.Coverage == Live }, "an empty successful list is live")
+	st, _ := log.last()
+	if !st.CountKnown || st.Objects != 0 {
+		t.Fatalf("an empty complete read is a known zero: %+v", st)
+	}
+	seen := *st.ObservedAt
+	h.clk.Step(time.Second)
+	src.put("a", nil)
+	h.eventually(func() bool { st, _ := log.last(); return st.Objects == 1 }, "a mutation")
+	st, _ = log.last()
+	if !st.ObservedAt.After(seen) {
+		t.Fatal("a mutation is an observation")
+	}
+	seen = *st.ObservedAt
+	h.clk.Step(time.Second)
+	src.mu.Lock()
+	src.listErr = errors.New("connection refused")
+	src.mu.Unlock()
+	src.liveWatcher().Error(&apierrors.NewServiceUnavailable("down").ErrStatus)
+	h.eventually(func() bool { st, _ := log.last(); return st.Coverage == Stale }, "a failure")
+	st, _ = log.last()
+	if !st.CountKnown || st.Objects != 1 || st.LastGoodAt == nil || !st.ObservedAt.Equal(seen) {
+		t.Fatalf("stale keeps the last good count, and a failure is never an observation: %+v", st)
+	}
+}
+
+func TestWatchKindNamesEachGeneration(t *testing.T) {
+	h, src, ps := gapHarness(t, "v1")
+	_ = src
+	log := &stateLog{}
+	defer h.o.WatchKind("cms", log.add)()
+	h.eventually(func() bool { st, _ := log.last(); return st.Coverage == Live }, "live")
+	first, _ := log.last()
+	ps.set("absent")
+	h.eventually(func() bool { st, _ := log.last(); return st.Coverage == Absent }, "absent")
+	if st, _ := log.last(); st.Generation != 0 || st.CountKnown {
+		t.Fatalf("no generation runs while absent: %+v", st)
+	}
+	ps.set("v1")
+	h.eventually(func() bool { st, _ := log.last(); return st.Coverage == Live }, "live again")
+	if st, _ := log.last(); st.Generation <= first.Generation {
+		t.Fatalf("a new generation has a new identity: %d after %d", st.Generation, first.Generation)
+	}
+}
+
+func TestASlowKindListenerSeesTheNewestStateNotAQueue(t *testing.T) {
+	src := newSource()
+	h := start(t, Config{Kinds: []KindSpec{cmKind("cms", src)}, Domains: []DomainSpec{{ID: "things", Parts: []PartSpec{cmPart("cms", "cms")}}}})
+	h.eventually(h.partIs("things", "cms", live), "live")
+	release := make(chan struct{})
+	var calls atomic.Int32
+	log := &stateLog{}
+	cancel := h.o.WatchKind("cms", func(st KindState) {
+		if calls.Add(1) == 1 {
+			<-release
+		}
+		log.add(st)
+	})
+	time.Sleep(20 * time.Millisecond) // the first call is blocked
+	for i := 0; i < 50; i++ {
+		src.put(fmt.Sprintf("c%d", i), nil)
+	}
+	h.eventually(func() bool {
+		h.o.mu.Lock()
+		defer h.o.mu.Unlock()
+		return len(h.o.kinds["cms"].gen.model) == 50
+	}, "every mutation applied")
+	close(release)
+	h.eventually(func() bool { st, _ := log.last(); return st.Objects == 50 }, "the newest state arrives")
+	if n := calls.Load(); n > 3 {
+		t.Fatalf("a slow listener was queued %d calls, not the newest state", n)
+	}
+	cancel()
+	n := calls.Load()
+	src.put("after", nil)
+	time.Sleep(50 * time.Millisecond)
+	if calls.Load() != n {
+		t.Fatal("a call after cancel returned")
+	}
+}
+
+func TestKindListenersEndWithTheObserver(t *testing.T) {
+	src := newSource()
+	h := start(t, Config{Kinds: []KindSpec{cmKind("cms", src)}, Domains: []DomainSpec{{ID: "things", Parts: []PartSpec{cmPart("cms", "cms")}}}})
+	h.eventually(h.partIs("things", "cms", live), "live")
+	var calls atomic.Int32
+	h.o.WatchKind("cms", func(KindState) { calls.Add(1) })
+	h.eventually(func() bool { return calls.Load() > 0 }, "delivered")
+	h.cancel()
+	<-h.o.Done() // waits for the listener goroutine
+	n := calls.Load()
+	src.put("late", nil)
+	time.Sleep(30 * time.Millisecond)
+	if calls.Load() != n {
+		t.Fatal("a listener outlived its Observer")
+	}
+	if c := h.o.WatchKind("cms", func(KindState) { calls.Add(1) }); c == nil {
+		t.Fatal("a stopped Observer returns a no-op cancel")
+	}
+}

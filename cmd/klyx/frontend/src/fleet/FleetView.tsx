@@ -48,7 +48,9 @@ export function FleetView() {
   // ClusterMesh is capability-gated: no patch bay when no cluster runs it.
   const meshPresent = !!mesh && mesh.nodes.some((n) => n.state !== "unavailable");
   const nodes = clusters.reduce((n, c) => n + c.nodesTotal, 0);
-  const pods = clusters.reduce((n, c) => n + c.pods, 0);
+  // Unknown counts are never summed as zero: the total says how many are out.
+  const pods = clusters.reduce((n, c) => n + (c.podsKnown === false ? 0 : c.pods), 0);
+  const podsUnknown = clusters.filter((c) => c.podsKnown === false).length;
 
   // The board on the workspace template (redesign step 7d): the old meter
   // strip becomes the header summary - independent facts, zero neutral,
@@ -72,7 +74,7 @@ export function FleetView() {
           {unverified > 0 && <span className="t-secondary" title="Connected clusters whose workload read failed, was capped or holds unclassified rows">{unverified} unverified</span>}
         </>
       )}
-      headerEnd={clusters.length === 0 ? undefined : <span className="t-secondary">{nodes} node{nodes === 1 ? "" : "s"} · {pods} pod{pods === 1 ? "" : "s"}</span>}
+      headerEnd={clusters.length === 0 ? undefined : <span className="t-secondary">{nodes} node{nodes === 1 ? "" : "s"} · {pods} pod{pods === 1 ? "" : "s"}{podsUnknown > 0 ? ` (${podsUnknown} cluster${podsUnknown === 1 ? "" : "s"} unknown)` : ""}</span>}
       state={clusters.length === 0 ? "empty" : "ready"}
       stateView={
         <EmptyState

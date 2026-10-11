@@ -135,6 +135,7 @@ type Observer struct {
 
 	mu           sync.Mutex
 	kinds        map[string]*kindState
+	kindGenSeq   uint64 // kind generation identities
 	snaps        map[string]*snapState
 	domains      []*domainState
 	byTask       map[string]*domainState
@@ -505,6 +506,7 @@ func (o *Observer) Refresh(snapshot string) {
 // ---- dirty marking (caller holds o.mu) -----------------------------------
 
 func (o *Observer) bumpKindLocked(ks *kindState) {
+	o.notifyKindLocked(ks)
 	if ks.spec.Name == o.cfg.NamespacesKind {
 		o.summaryDirty = true
 	}
@@ -516,6 +518,7 @@ func (o *Observer) bumpKindLocked(ks *kindState) {
 }
 
 func (o *Observer) markKindLocked(ks *kindState) {
+	o.notifyKindLocked(ks)
 	if ks.spec.Name == o.cfg.NamespacesKind {
 		o.summaryDirty = true
 	}

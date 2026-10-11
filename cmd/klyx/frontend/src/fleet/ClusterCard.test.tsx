@@ -1,5 +1,5 @@
 import { beforeEach, describe, it, expect } from "vitest";
-import { render } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import { ClusterCard } from "./ClusterCard";
 import type { ClusterDTO } from "../store/fleet";
 import { useFleet } from "../store/fleet";
@@ -128,5 +128,15 @@ describe("ClusterCard fleet board", () => {
     useFleet.setState({ fleetBoard: { [base.name]: { cpuFraction: null, memFraction: null, workloads: { counts: { total: 10, fault: 0, degraded: 1, unknown: 0, progressing: 0, paused: 0, ok: 9, attention: 1 }, coverage: "partial" }, flux: null, argo: null } } });
     const { getByText } = render(<ClusterCard c={base} />);
     expect(getByText("1 of 10 need attention (partial)")).toBeTruthy();
+  });
+});
+
+describe("pod count honesty (1c 2d)", () => {
+  it("an unknown count is a dash, never zero; a stale count is marked", () => {
+    const { unmount } = render(<ClusterCard c={{ ...base, pods: 0, podsKnown: false }} />);
+    expect(screen.getByTitle("no complete pod read yet").textContent).toBe("—");
+    unmount();
+    render(<ClusterCard c={{ ...base, pods: 42, podsKnown: true, podsStale: true }} />);
+    expect(screen.getByTitle("last good count - the pod read is failing").textContent).toBe("42");
   });
 });

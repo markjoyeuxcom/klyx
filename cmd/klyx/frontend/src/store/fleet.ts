@@ -8,6 +8,10 @@ export type ClusterDTO = {
   nodesReady: number;
   nodesTotal: number;
   pods: number;
+  // podsKnown false: no complete pod read yet - unknown, never zero (absent
+  // in older fixtures means known). podsStale: pods is the last good count.
+  podsKnown?: boolean;
+  podsStale?: boolean;
   version: string;
   gitopsTier: string;
   gitopsReason: string;
@@ -1444,3 +1448,10 @@ export const useFleet = create<FleetState>((set) => ({
   }),
   clearHelm: () => set({ helm: { cluster: null, releases: [], available: true, message: "", loading: false, selected: null, history: [], values: "", detailLoading: false, snapshotAt: null, error: null, historyError: null, valuesError: null } }),
 }));
+
+// podsText renders a cluster's pod count honestly: unknown is a dash, never
+// a zero; a stale count says it is the last good one.
+export function podsText(c: Pick<ClusterDTO, "pods" | "podsKnown" | "podsStale">): string {
+  if (c.podsKnown === false) return "—";
+  return c.podsStale ? `${c.pods} (last good)` : String(c.pods);
+}

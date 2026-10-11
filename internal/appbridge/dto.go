@@ -11,12 +11,17 @@ import (
 
 // ClusterDTO is the JSON-friendly per-cluster shape the frontend consumes.
 type ClusterDTO struct {
-	Name                   string `json:"name"`
-	State                  string `json:"state"`
-	Reason                 string `json:"reason"`
-	NodesReady             int    `json:"nodesReady"`
-	NodesTotal             int    `json:"nodesTotal"`
-	Pods                   int    `json:"pods"`
+	Name       string `json:"name"`
+	State      string `json:"state"`
+	Reason     string `json:"reason"`
+	NodesReady int    `json:"nodesReady"`
+	NodesTotal int    `json:"nodesTotal"`
+	Pods       int    `json:"pods"`
+	// PodsKnown: a complete pod read has happened (Pods is evidence, an
+	// observed zero included); false is unknown, never zero. PodsStale: Pods
+	// is the last good count.
+	PodsKnown              bool   `json:"podsKnown"`
+	PodsStale              bool   `json:"podsStale"`
 	Version                string `json:"version"`
 	GitopsTier             string `json:"gitopsTier"`
 	GitopsReason           string `json:"gitopsReason"`
@@ -76,6 +81,8 @@ func ToDTO(s fleet.Snapshot, cc config.ClusterConfig, now time.Time) ClusterDTO 
 		NodesReady:             s.NodesReady,
 		NodesTotal:             s.NodesTotal,
 		Pods:                   s.Pods,
+		PodsKnown:              s.PodsKnown,
+		PodsStale:              s.PodsStale,
 		Version:                s.Version,
 		GitopsTier:             s.Capabilities.GitOps.Tier.String(),
 		GitopsReason:           s.Capabilities.GitOps.Reason,

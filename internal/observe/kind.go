@@ -46,16 +46,18 @@ type freshness struct {
 // kindGen is one generation of a kind: a model plus a sequence of reflector
 // instances. A generation is never restarted; a new one replaces it.
 type kindGen struct {
-	o        *Observer
-	ks       *kindState
-	ctx      context.Context
-	cancel   context.CancelFunc
-	version  string
-	model    map[string]any
-	current  uint64 // the instance allowed to write; 0 = detached
-	nextInst uint64
-	fresh    freshness
-	backoff  time.Duration
+	o          *Observer
+	ks         *kindState
+	ctx        context.Context
+	cancel     context.CancelFunc
+	version    string
+	model      map[string]any
+	id         uint64    // the generation's identity (KindState.Generation)
+	observedAt time.Time // the last complete read or model mutation
+	current    uint64    // the instance allowed to write; 0 = detached
+	nextInst   uint64
+	fresh      freshness
+	backoff    time.Duration
 }
 
 type kindState struct {
@@ -70,6 +72,9 @@ type kindState struct {
 	served   bool
 	version  string
 	probeErr string // the current discovery failure; cleared by a success
+	// watchers are WatchKind listeners; stateSeq is the kind's watermark.
+	watchers []*kindWatcher
+	stateSeq uint64
 }
 
 type probeGen struct {
@@ -198,7 +203,8 @@ func (o *Observer) kindCoverageLocked(ks *kindState) (Coverage, string, string) 
 // startKind starts a new generation for ks. Caller holds o.mu.
 func (o *Observer) startKind(ks *kindState, version string) {
 	ctx, cancel := context.WithCancel(o.ctx)
-	g := &kindGen{o: o, ks: ks, ctx: ctx, cancel: cancel, version: version,
+	o.kindGenSeq++
+	g := &kindGen{o: o, ks: ks, ctx: ctx, cancel: cancel, version: version, id: o.kindGenSeq,
 		model: map[string]any{}, fresh: freshness{cov: Checking}, backoff: o.cfg.BackoffMin}
 	ks.gen = g
 	o.markKindLocked(ks)
@@ -359,6 +365,7 @@ func (a *modelAdapter) put(obj any) error {
 		return nil // nothing the model keeps changed
 	}
 	a.g.model[key] = v
+	a.g.observedAt = o.clk.Now()
 	o.bumpKindLocked(a.g.ks)
 	return nil
 }
@@ -378,6 +385,7 @@ func (a *modelAdapter) Delete(obj any) error {
 		return nil
 	}
 	delete(a.g.model, key)
+	a.g.observedAt = o.clk.Now()
 	o.bumpKindLocked(a.g.ks)
 	return nil
 }
@@ -401,12 +409,16 @@ func (a *modelAdapter) Replace(list []any, _ string) error {
 	}
 	changed := !reflect.DeepEqual(g.model, next)
 	g.model = next
+	g.observedAt = o.clk.Now() // a complete read is an observation, changed or not
 	if changed {
 		o.bumpKindLocked(g.ks)
 	}
 	if g.fresh.cov != Live {
 		g.fresh = freshness{cov: Live}
 		o.markKindLocked(g.ks)
+	}
+	if !changed {
+		o.notifyKindLocked(g.ks) // the observation time moved
 	}
 	g.backoff = o.cfg.BackoffMin
 	return nil

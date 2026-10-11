@@ -174,6 +174,9 @@ func TestLabChurn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Values unique to this run: a patch to an unchanged value is a no-op
+	// the API server emits no event for.
+	run := time.Now().UnixNano()
 	tick := time.NewTicker(time.Second / time.Duration(rate))
 	defer tick.Stop()
 	var wg sync.WaitGroup
@@ -186,7 +189,7 @@ func TestLabChurn(t *testing.T) {
 		wg.Add(1)
 		go func(ns, name string, n int) {
 			defer wg.Done()
-			patch := []byte(fmt.Sprintf(`{"metadata":{"labels":{"klyx.dev/churn":"%d"}}}`, n))
+			patch := []byte(fmt.Sprintf(`{"metadata":{"labels":{"klyx.dev/churn":"%d-%d"}}}`, run, n))
 			if _, err := cs.CoreV1().Pods(ns).Patch(ctx, name, types.MergePatchType, patch, metav1.PatchOptions{}); err != nil {
 				mu.Lock()
 				fails++
