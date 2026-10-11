@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"time"
 
 	"github.com/moomora/klyx/internal/ai"
@@ -461,7 +462,8 @@ func main() {
 			if mainWin != nil {
 				x, y := mainWin.Position()
 				w, h := mainWin.Size()
-				b := winstate.Settle(requestedBounds, winstate.Bounds{X: x, Y: y, Width: w, Height: h})
+				// Only darwin's windowNew creates the window one point small.
+				b := winstate.Settle(requestedBounds, winstate.Bounds{X: x, Y: y, Width: w, Height: h}, runtime.GOOS == "darwin")
 				if err := winstate.Save(windowStatePath(), b); err != nil {
 					log.Printf("warn: could not persist window state: %v", err)
 				}

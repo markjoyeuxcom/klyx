@@ -63,16 +63,19 @@ func Save(path string, b Bounds) error {
 	return os.WriteFile(path, raw, 0o644)
 }
 
-// Settle chooses what to persist at shutdown. The window toolkit (Wails v3
-// alpha, macOS windowNew) creates the window one point smaller than the size
-// it is asked for, while Size() reports the real frame - so persisting the
-// observed size shrank the window by 1px on every launch. When the observed
-// size is exactly the requested size minus one in both dimensions (the
-// window was not resized), the requested size is kept. Self-correcting both
-// ways: a resize is persisted as observed, and if the toolkit stops
-// shrinking, observed == requested and is persisted unchanged.
-func Settle(requested, observed Bounds) Bounds {
-	if requested.Width > 0 && observed.Width == requested.Width-1 && observed.Height == requested.Height-1 {
+// Settle chooses what to persist at shutdown. On macOS the window toolkit
+// (Wails v3 alpha, windowNew) creates the window one point smaller than the
+// size it is asked for while Size() reports the real frame, so persisting the
+// observed size shrank the window by 1px on every launch. shrinksOnCreate
+// (true only where that toolkit behaviour exists - darwin) enables a narrow
+// heuristic: when the observed size is exactly the requested size minus one
+// in both dimensions, the requested size is kept. Final dimensions alone
+// cannot prove the window was not resized - a resize that ends at exactly
+// requested-1, or an OS adjustment landing there, is also kept at requested -
+// a one-point ambiguity accepted for this fix. Other platforms persist the
+// observed bounds unchanged. Position always follows the window.
+func Settle(requested, observed Bounds, shrinksOnCreate bool) Bounds {
+	if shrinksOnCreate && requested.Width > 0 && observed.Width == requested.Width-1 && observed.Height == requested.Height-1 {
 		observed.Width, observed.Height = requested.Width, requested.Height
 	}
 	return observed
