@@ -453,13 +453,15 @@ export type HeadroomReportDTO = { result: HeadroomResultDTO; pdbBlockers: PDBBlo
 export type ExpiryItemDTO = { source: string; namespace: string; name: string; detail: string; subject: string; notAfterUnix: number };
 
 // Karpenter lens.
-export type KarpenterPoolDTO = { rule: RuleDTO; name: string; ready: string; reason: string; message: string; weight: number; cpuLimit: number | null; cpuUsed: number | null; memLimit: number | null; memUsed: number | null; nodes: number };
-export type KarpenterClaimDTO = { rule: RuleDTO; createdUnix?: number; name: string; pool: string; nodeName: string; ready: string; failingType: string; failingStatus?: string; failingReason: string; failingMessage: string; drifted: boolean; consolidatable: boolean; capacityType: string; instanceType: string; ageSeconds: number };
+export type KarpenterPoolDTO = { rule: RuleDTO; uid?: string; gvr?: string; generation?: number; name: string; ready: string; reason: string; message: string; weight: number; cpuLimit: number | null; cpuUsed: number | null; memLimit: number | null; memUsed: number | null; nodes: number };
+export type KarpenterClaimDTO = { rule: RuleDTO; uid?: string; gvr?: string; generation?: number; createdUnix?: number; name: string; pool: string; nodeName: string; ready: string; failingType: string; failingStatus?: string; failingReason: string; failingMessage: string; drifted: boolean; consolidatable: boolean; capacityType: string; instanceType: string; ageSeconds: number };
 export type KarpenterEventDTO = { type: string; reason: string; message: string; kind: string; name: string; lastSeenUnix: number };
-// controllerVerified: a karpenter Deployment was actually read - otherwise
-// controllerHealthy carries no claim and controllerError says why. eventsError
-// / eventsTruncated: the disruption feed is partial or unreadable, never quiet.
-export type KarpenterSnapshotDTO = { detected: boolean; controllerVerified?: boolean; controllerHealthy: boolean; controllerError?: string; pools: KarpenterPoolDTO[]; claims: KarpenterClaimDTO[]; events: KarpenterEventDTO[]; eventsError?: string; eventsTruncated?: boolean; error?: string };
+// The controller probe and disruption feed, read on demand as of asOfUnix;
+// the NodePools and NodeClaims are the health Observer's shared rows (1c
+// slice 3 §5.5). controllerVerified: a karpenter Deployment was actually
+// read - otherwise controllerHealthy carries no claim and controllerError says
+// why. eventsError / eventsTruncated: the feed is partial or unreadable, never quiet.
+export type KarpenterSnapshotDTO = { detected: boolean; asOfUnix?: number; controllerVerified?: boolean; controllerHealthy: boolean; controllerError?: string; events: KarpenterEventDTO[]; eventsError?: string; eventsTruncated?: boolean; error?: string };
 export type ExpiryScanResultDTO = { items: ExpiryItemDTO[]; warnings: string[]; error?: string };
 export type WorkloadUsageDTO = { cpuUsage: number | null; memUsage: number | null };
 export type WorkloadMetricsStatusDTO = { available: boolean; message: string; updatedAt: string };

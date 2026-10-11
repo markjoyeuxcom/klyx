@@ -11,6 +11,7 @@ import (
 	"github.com/moomora/klyx/internal/gitops/argo"
 	"github.com/moomora/klyx/internal/gitops/flux"
 	"github.com/moomora/klyx/internal/healthsrc"
+	"github.com/moomora/klyx/internal/karpenter"
 	"github.com/moomora/klyx/internal/observe"
 )
 
@@ -118,6 +119,34 @@ var rowsConverters = map[string]rowsConverter{
 		out := make([]ArgoApplicationSetDTO, 0, len(set.Rows))
 		for _, r := range set.Rows {
 			dto := argoAppSetFields(r.Data)
+			dto.Rule = toRuleDTO(r.Eval)
+			dto.UID, dto.GVR, dto.Generation = r.Ref.UID, r.Ref.GVR, r.Ref.Generation
+			out = append(out, dto)
+		}
+		return out, nil
+	},
+	healthsrc.TaskKarpenter + "/nodepools": func(rows any, _ time.Time) (any, error) {
+		set, err := rowSetOf[karpenter.NodePool](rows)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]KarpenterPoolDTO, 0, len(set.Rows))
+		for _, r := range set.Rows {
+			dto := karpenterPoolFields(r.Data)
+			dto.Rule = toRuleDTO(r.Eval)
+			dto.UID, dto.GVR, dto.Generation = r.Ref.UID, r.Ref.GVR, r.Ref.Generation
+			out = append(out, dto)
+		}
+		return out, nil
+	},
+	healthsrc.TaskKarpenter + "/nodeclaims": func(rows any, _ time.Time) (any, error) {
+		set, err := rowSetOf[karpenter.NodeClaim](rows)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]KarpenterClaimDTO, 0, len(set.Rows))
+		for _, r := range set.Rows {
+			dto := karpenterClaimFields(r.Data)
 			dto.Rule = toRuleDTO(r.Eval)
 			dto.UID, dto.GVR, dto.Generation = r.Ref.UID, r.Ref.GVR, r.Ref.Generation
 			out = append(out, dto)

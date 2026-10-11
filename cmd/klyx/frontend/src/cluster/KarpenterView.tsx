@@ -6,7 +6,10 @@ import { getKarpenterState } from "../bridge/karpenter";
 import { EmptyState } from "../chrome/EmptyState";
 import { SkeletonRows } from "../chrome/SkeletonRows";
 import { VirtualList, type VirtualListHandle } from "../chrome/VirtualList";
-import { Age, UpdatedAt, formatAge } from "../chrome/Age";
+import { Age, UpdatedAt, formatAge, useNow } from "../chrome/Age";
+import { WatchErrorBanner } from "../chrome/WatchErrorBanner";
+import { useKarpenterRows } from "../health/useKarpenterRows";
+import { clock, coverageGaps, joinCoverage, kindEvidence, lastGoodAt, type JoinCoverage, type KindEvidence } from "../layout/coverage";
 import { useListKeys } from "../chrome/useListKeys";
 import { VerdictLamp } from "../health/VerdictView";
 import { InspectorStatus } from "./ResourceInspector";
@@ -16,8 +19,10 @@ import { fitColumns, type ColumnDef } from "../layout/columns";
 import { fmtCpu, fmtMem } from "./saturation";
 
 // KarpenterView - the node-autoscaling diagnosis lens on the workspace
-// template (spec §6 step 5), in Karpenter's vocabulary. A read-only snapshot
-// with Refresh. Controller health is its own headline fault; NodeClaims are
+// template (spec §6 step 5), in Karpenter's vocabulary. Read-only. NodePools
+// and NodeClaims are the health Observer's shared rows (1c slice 3 §5.5); the
+// controller probe and the disruption feed are a snapshot read on demand
+// (Refresh). Controller health is its own headline fault; NodeClaims are
 // stuck-first with the failing launch-chain link named (Launched ->
 // Registered -> Initialized); NodePools show provisioned capacity against
 // limits; drift and consolidation are Karpenter's intended behaviour, never
@@ -51,6 +56,11 @@ function Lamp({ role }: { role: Role }) {
 const cellStyle: React.CSSProperties = { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 };
 const pct = (used: number | null, limit: number | null) => (used != null && limit != null && limit > 0 ? used / limit : null);
 const eventKey = (e: KarpenterEventDTO) => `${e.kind}/${e.name}/${e.reason}/${e.lastSeenUnix}`;
+// ageOf ticks a claim's age from its creation time (rows are pushed only when
+// they change - slice 3 §3); the capture-relative age is the fallback.
+const ageOf = (c: KarpenterClaimDTO, nowS: number) => (c.createdUnix ? Math.max(0, nowS - c.createdUnix) : c.ageSeconds);
+// countText qualifies a join count by the kind it reads: "?" unread, "*" stale.
+const countText = (n: number, cov: JoinCoverage) => (cov === "unknown" ? "?" : `${n}${cov === "stale" ? "*" : ""}`);
 
 const CLAIM_COLUMNS: (ColumnDef & { label: string })[] = [
   { id: "lamp", label: "", width: 16, priority: 0 },
@@ -85,6 +95,9 @@ function capText(used: number | null, limit: number | null, fmt: (n: number) => 
 }
 
 export function KarpenterView({ cluster }: { cluster: string }) {
+  const present = useFleet((s) => s.clusters.find((c) => c.name === cluster)?.karpenterPresent);
+  const rows = useKarpenterRows(cluster);
+  const nowS = Math.floor(useNow() / 1000);
   const [pinned, setPinned] = useState<{ cluster: string; snap: KarpenterSnapshotDTO; at: number } | null>(null);
   const [loading, setLoading] = useState(false);
   const [view, setView] = useState<View>("claims");
@@ -94,8 +107,8 @@ export function KarpenterView({ cluster }: { cluster: string }) {
   const listRef = useRef<VirtualListHandle>(null);
   const gen = useRef(0);
 
-  // A snapshot answers one cluster at one time; a refresh keeps the previous
-  // snapshot until the new one lands; a late snapshot is dropped.
+  // The controller/feed snapshot answers one cluster at one time; a refresh
+  // keeps the previous snapshot until the new one lands; a late one is dropped.
   const fetchState = async () => {
     const g = ++gen.current;
     const origin = cluster;
@@ -113,16 +126,39 @@ export function KarpenterView({ cluster }: { cluster: string }) {
 
   const snap = pinned && pinned.cluster === cluster ? pinned.snap : null;
   const ok = snap && !snap.error && snap.detected ? snap : null;
-  const claims = useMemo(() => [...(ok?.claims ?? [])].sort((a, b) => rankOf(a) - rankOf(b) || b.ageSeconds - a.ageSeconds || a.name.localeCompare(b.name)), [ok]);
-  const pools = useMemo(() => [...(ok?.pools ?? [])].sort((a, b) => rankOf(a) - rankOf(b) || a.name.localeCompare(b.name)), [ok]);
+  // Karpenter is present by the snapshot's capability read, else the
+  // cluster's own capability before that read lands.
+  const detected = snap && !snap.error ? snap.detected : present !== false;
+  const evidenceOf = (kind: string): KindEvidence => kindEvidence(!rows.loading, rows.coverage, kind, rows.watchError);
+  const claimsEv = evidenceOf("NodeClaim");
+  const poolsEv = evidenceOf("NodePool");
+  const claims = useMemo(() => [...rows.claims].sort((a, b) => rankOf(a) - rankOf(b) || (b.createdUnix ?? 0) - (a.createdUnix ?? 0) || a.name.localeCompare(b.name)), [rows.claims]);
+  const pools = useMemo(() => [...rows.pools].sort((a, b) => rankOf(a) - rankOf(b) || a.name.localeCompare(b.name)), [rows.pools]);
   const events = useMemo(() => [...(ok?.events ?? [])].sort((a, b) => b.lastSeenUnix - a.lastSeenUnix), [ok]);
+  // A4 (slice 3 §4) and the evidence beside the rows.
+  const rowsRefreshing = rows.rowsState.refreshing;
+  const rowsAsOf = rows.rowsState.evaluatedAt ? clock(rows.rowsState.evaluatedAt) : "the last read";
+  const asOf = rowsRefreshing ? ` (as of ${rowsAsOf})` : "";
+  const lastGood = lastGoodAt(rows.coverage, ["NodePool", "NodeClaim"]);
+  const discoveryGap = coverageGaps(rows.coverage);
 
+  // global: the count selector's (slice 3 §4a); row-scoped: the breakdown
+  const claimTotal = rows.partCounts.nodeclaims?.total ?? claims.length;
+  const claimAttention = rows.partCounts.nodeclaims?.included ?? claims.filter((c) => c.rule.included).length;
+  const poolAttention = rows.partCounts.nodepools?.included ?? pools.filter((p) => p.rule.included).length;
   const failed = claims.filter((c) => roleOf(c).kind === "fault").length;
   const stuck = claims.filter((c) => roleOf(c).kind === "degraded").length;
   const launching = claims.filter((c) => roleOf(c).kind === "progressing").length;
   const poolsDown = pools.filter((p) => roleOf(p).kind === "fault").length;
   const poolsUnknown = pools.filter((p) => roleOf(p).kind === "unknown").length;
   const drifted = claims.filter((c) => c.drifted).length;
+  // a pool's node count is a join on the NodeClaims
+  const claimsCov = joinCoverage(claimsEv);
+
+  // Selections keep their last row: removed only on a complete read of their
+  // own kind, otherwise unverified (slice 3 §5a).
+  const lastClaim = useRef<{ cluster: string; c: KarpenterClaimDTO } | null>(null);
+  const lastPool = useRef<{ cluster: string; p: KarpenterPoolDTO } | null>(null);
 
   const keys: string[] = view === "claims" ? claims.map((c) => c.name) : view === "pools" ? pools.map((p) => p.name) : events.map(eventKey);
   const cursorIdx = cursorKey === null ? -1 : keys.indexOf(cursorKey);
@@ -141,17 +177,25 @@ export function KarpenterView({ cluster }: { cluster: string }) {
   const switchView = (v: View) => { setView(v); setSelKey(null); setCursorKey(null); };
 
   const eventsFailed = !!ok?.eventsError;
+  const viewEv = view === "claims" ? claimsEv : poolsEv;
   let state: DatasetState = "ready";
-  if (!snap) state = "loading";
-  else if (snap.error) state = "unreadable";
-  else if (view === "activity" && eventsFailed && keys.length === 0) state = "unreadable";
-  else if (!snap.detected || keys.length === 0) state = "empty";
+  if (!detected) state = "empty";
+  else if (view === "activity") {
+    if (!snap) state = "loading";
+    else if (snap.error || (eventsFailed && keys.length === 0)) state = "unreadable";
+    else if (keys.length === 0) state = "empty";
+  } else if (viewEv === "failed" && keys.length === 0) state = "unreadable";
+  else if (viewEv === "pending" && keys.length === 0) state = "loading";
+  else if (keys.length === 0) state = "empty";
 
   const icon = <IconServerBolt size={28} stroke={1.2} />;
-  const stateView = state === "loading" ? <SkeletonRows rows={5} label="reading NodePools and NodeClaims" />
-    : state === "unreadable" && !snap?.error ? <EmptyState icon={icon} title="Could not read disruption activity." hint={ok?.eventsError} action={{ label: "Retry", onClick: () => void fetchState() }} />
-    : state === "unreadable" ? <EmptyState icon={icon} title="Could not read Karpenter state." hint={snap?.error} action={{ label: "Retry", onClick: () => void fetchState() }} />
-    : !snap?.detected ? <EmptyState icon={icon} title="Karpenter is not installed on this cluster." hint="Klyx detected no karpenter.sh resources here." />
+  const stateView = state === "loading" ? <SkeletonRows rows={5} label={view === "activity" ? "reading disruption activity" : "reading NodePools and NodeClaims"} />
+    : state === "unreadable" && view === "activity" && !snap?.error ? <EmptyState icon={icon} title="Could not read disruption activity." hint={ok?.eventsError} action={{ label: "Retry", onClick: () => void fetchState() }} />
+    : state === "unreadable" && view === "activity" ? <EmptyState icon={icon} title="Could not read Karpenter state." hint={snap?.error} action={{ label: "Retry", onClick: () => void fetchState() }} />
+    : state === "unreadable" ? <EmptyState icon={icon} title={`Could not read the ${view === "claims" ? "NodeClaims" : "NodePools"}.`} hint={rows.watchError ?? undefined} />
+    : !detected ? <EmptyState icon={icon} title="Karpenter is not installed on this cluster." hint="Klyx detected no karpenter.sh resources here." />
+    : rowsRefreshing && (view === "claims" ? claimTotal : (rows.partCounts.nodepools?.total ?? 0)) > 0 ? <EmptyState icon={icon} title={`No ${view === "claims" ? "NodeClaims" : "NodePools"} as of ${rowsAsOf}.`} hint="Refreshing - the cluster summary counts more." />
+    : view !== "activity" && viewEv === "stale" ? <EmptyState icon={icon} title={`No ${view === "claims" ? "NodeClaims" : "NodePools"} in the last good read.`} hint={`The read is failing now${lastGood ? ` - last good ${clock(lastGood)}` : ""}: ${rows.watchError ?? "unverified"}.`} />
     : view === "claims" ? <EmptyState icon={icon} title="No NodeClaims." hint="Karpenter has provisioned nothing on this cluster right now." />
     : view === "pools" ? <EmptyState icon={icon} title="No NodePools defined." hint="Without a NodePool, Karpenter provisions nothing." />
     : <EmptyState icon={icon} title="No recent disruption activity." hint="Events age out of the API server after about an hour - quiet can be real." />;
@@ -176,8 +220,24 @@ export function KarpenterView({ cluster }: { cluster: string }) {
     </div>
   ) : null;
 
-  const selClaim = view === "claims" && selKey ? claims.find((c) => c.name === selKey) : undefined;
-  const selPool = view === "pools" && selKey ? pools.find((p) => p.name === selKey) : undefined;
+  const liveClaim = view === "claims" && selKey ? claims.find((c) => c.name === selKey) : undefined;
+  const livePool = view === "pools" && selKey ? pools.find((p) => p.name === selKey) : undefined;
+  if (liveClaim) lastClaim.current = { cluster, c: liveClaim };
+  if (livePool) lastPool.current = { cluster, p: livePool };
+  const priorClaim = view === "claims" && lastClaim.current?.cluster === cluster && lastClaim.current.c.name === selKey ? lastClaim.current.c : null;
+  const priorPool = view === "pools" && lastPool.current?.cluster === cluster && lastPool.current.p.name === selKey ? lastPool.current.p : null;
+  const selClaim = liveClaim ?? priorClaim ?? undefined;
+  // Notices stack: each is its own evidence, none hides another.
+  const notices: React.ReactNode[] = [];
+  if (snap?.error) notices.push(<div key="snap" role="status" data-testid="karp-snapshot-error" className="t-body" style={{ color: "var(--color-text-tertiary)", padding: "4px 0", overflowWrap: "anywhere" }}><span className="t-status" style={{ color: "var(--color-text-secondary)" }}>Controller health and disruption activity could not be read.</span> {snap.error}</div>);
+  if (controllerNotice) notices.push(<div key="ctrl">{controllerNotice}</div>);
+  if (rows.watchError && (claims.length + pools.length) > 0) notices.push(<WatchErrorBanner key="watch" tool="Karpenter" failure={`read failed - showing the last good state${lastGood ? ` from ${clock(lastGood)}` : ""}`} error={rows.watchError} />);
+  if (rowsRefreshing) notices.push(<div key="a4" role="status" data-testid="rows-refreshing" className="t-secondary" style={{ padding: "4px 0" }}>Rows as of {rowsAsOf} - refreshing; the totals are the cluster summary's.{rows.rowsState.refreshError ? ` Last re-read failed: ${rows.rowsState.refreshError}` : ""}</div>);
+  if (discoveryGap) notices.push(<div key="gap" role="status" data-testid="discovery-gap" className="t-secondary" style={{ padding: "4px 0", color: "var(--color-text-warning)", overflowWrap: "anywhere" }}>Discovery re-check failing - {discoveryGap}. A capability gap only; the rows keep their own state.</div>);
+  if (activityNotice) notices.push(<div key="feed">{activityNotice}</div>);
+  const selPool = livePool ?? priorPool ?? undefined;
+  const claimGone: "removed" | "unverified" | null = !liveClaim && selClaim ? (claimsEv === "complete" ? "removed" : "unverified") : null;
+  const poolGone: "removed" | "unverified" | null = !livePool && selPool ? (poolsEv === "complete" ? "removed" : "unverified") : null;
   const selEvent = view === "activity" && selKey ? events.find((e) => eventKey(e) === selKey) : undefined;
 
   const row = (k: string, children: React.ReactNode) => (
@@ -193,33 +253,35 @@ export function KarpenterView({ cluster }: { cluster: string }) {
     <LensLayout
       label="Karpenter"
       title="Karpenter"
-      summary={!ok ? null : (
+      summary={!detected || state === "loading" || state === "unreadable" ? null : (
         <>
-          <span className="t-number" style={{ color: "var(--color-text-secondary)" }}>{claims.length}</span>
+          <span className="t-number" style={{ color: "var(--color-text-secondary)" }}>{claimTotal}{claimsEv === "complete" ? "" : claimsEv === "stale" ? "*" : "+"}</span>
           <span className="t-secondary">NodeClaims</span>
+          {rowsRefreshing && claimAttention > 0 && <span className="t-status" style={{ color: "var(--color-text-warning)" }} data-testid="karp-global-attention">{claimAttention} not ready or appear stuck</span>}
           {failed + stuck + poolsDown > 0
             ? <span className="t-status" style={{ color: failed + poolsDown > 0 ? "var(--color-text-danger)" : "var(--color-text-warning)" }}>{failed + poolsDown > 0 ? "▲ " : ""}{[failed ? `${failed} not ready` : "", stuck ? `${stuck} appear${stuck === 1 ? "s" : ""} stuck` : "", poolsDown ? `${poolsDown} NodePool${poolsDown === 1 ? "" : "s"} not ready` : ""].filter(Boolean).join(" · ")}</span>
             : launching > 0 ? <span className="t-secondary">{launching} in progress</span>
             : poolsUnknown === 0 && claims.length > 0 ? <span className="t-secondary">all ready</span> : null}
           {poolsUnknown > 0 && <span className="t-secondary">{poolsUnknown} NodePool{poolsUnknown === 1 ? "" : "s"} unverified</span>}
           {drifted > 0 && <span className="t-secondary">{drifted} drifted (eligible for replacement)</span>}
+          {(failed + stuck + poolsDown + launching + drifted) > 0 && asOf && <span className="t-secondary" data-testid="karp-asof">{asOf.trim()}</span>}
         </>
       )}
       headerEnd={
         <>
-          <span className="t-secondary" title="Read on demand - not a live watch.">snapshot</span>
+          <span className="t-secondary" title="The controller probe and disruption feed are read on demand; NodePools and NodeClaims are live.">controller and events: snapshot</span>
           <UpdatedAt at={pinned && pinned.cluster === cluster ? pinned.at : null} />
           <button className="l-btn" onClick={() => void fetchState()} disabled={loading}>{loading ? "Reading…" : "Refresh"}</button>
         </>
       }
-      controls={ok ? (
+      controls={detected ? (
         <div role="group" aria-label="Karpenter view" style={{ display: "inline-flex", gap: 4 }}>
-          <button className="l-chip" aria-pressed={view === "claims"} onClick={() => switchView("claims")}>NodeClaims {failed + stuck > 0 && <span style={{ color: failed ? "var(--color-text-danger)" : "var(--color-text-warning)" }}>{failed + stuck}</span>}</button>
-          <button className="l-chip" aria-pressed={view === "pools"} onClick={() => switchView("pools")}>NodePools {poolsDown > 0 && <span style={{ color: "var(--color-text-danger)" }}>{poolsDown}</span>}</button>
+          <button className="l-chip" aria-pressed={view === "claims"} onClick={() => switchView("claims")}>NodeClaims {claimAttention > 0 && <span style={{ color: failed ? "var(--color-text-danger)" : "var(--color-text-warning)" }}>{claimAttention}</span>}</button>
+          <button className="l-chip" aria-pressed={view === "pools"} onClick={() => switchView("pools")}>NodePools {poolAttention > 0 && <span style={{ color: "var(--color-text-danger)" }}>{poolAttention}</span>}</button>
           <button className="l-chip" aria-pressed={view === "activity"} onClick={() => switchView("activity")}>Disruption activity {(events.length > 0 || feedIncomplete) && <span style={{ color: "var(--color-text-secondary)" }}>{events.length}{feedIncomplete ? "+" : ""}</span>}</button>
         </div>
       ) : undefined}
-      notice={ok && (controllerNotice || activityNotice) ? <div style={{ display: "grid", gap: 2 }}>{controllerNotice}{activityNotice}</div> : undefined}
+      notice={notices.length > 0 ? <div style={{ display: "grid", gap: 2 }}>{notices}</div> : undefined}
       state={state}
       stateView={stateView}
       body={
@@ -238,7 +300,7 @@ export function KarpenterView({ cluster }: { cluster: string }) {
                   {show("pool") && <span style={{ ...cellStyle, color: "var(--color-text-secondary)" }}>{c.pool || "-"}</span>}
                   {show("type") && <span style={{ ...cellStyle, color: "var(--color-text-secondary)" }}>{c.instanceType || "-"}</span>}
                   {show("capacity") && <span style={{ color: "var(--color-text-tertiary)" }}>{c.capacityType || "-"}</span>}
-                  {show("age") && <span style={{ color: "var(--color-text-tertiary)" }}>{formatAge(c.ageSeconds)}</span>}
+                  {show("age") && <span style={{ color: "var(--color-text-tertiary)" }}>{formatAge(ageOf(c, nowS))}</span>}
                 </>);
               }} />
           ) : view === "pools" ? (
@@ -251,7 +313,7 @@ export function KarpenterView({ cluster }: { cluster: string }) {
                   {show("lamp") && <Lamp role={role} />}
                   {show("name") && <span className="lens-cell-name">{p.name}</span>}
                   {show("status") && <span style={{ ...cellStyle, color: ROLE_TEXT[role.kind] }}>{role.kind === "fault" ? "▲ " : ""}{role.label}{p.ready === "not-ready" && p.reason ? ` · ${p.reason}` : ""}</span>}
-                  {show("nodes") && <span style={{ color: "var(--color-text-secondary)" }}>{p.nodes}</span>}
+                  {show("nodes") && <span style={{ color: "var(--color-text-secondary)" }} title={claimsCov === "unknown" ? "NodeClaim read unavailable" : claimsCov === "stale" ? "from the last observed NodeClaim list" : undefined}>{countText(p.nodes, claimsCov)}</span>}
                   {show("cpu") && <span style={{ ...cellStyle, color: cpu.near ? "var(--color-text-warning)" : "var(--color-text-secondary)" }}>{cpu.text}</span>}
                   {show("mem") && <span style={{ ...cellStyle, color: mem.near ? "var(--color-text-warning)" : "var(--color-text-secondary)" }}>{mem.text}</span>}
                 </>);
@@ -269,9 +331,9 @@ export function KarpenterView({ cluster }: { cluster: string }) {
         </LensTable>
       }
       footer={<span className="t-legend">j k navigate · ↵ inspect</span>}
-      footerEnd={<span className="t-secondary">{view === "claims" ? "stuck first · drift and consolidation are intended behaviour, not faults" : view === "pools" ? "broken first" : feedIncomplete ? "incomplete read · newest among the events read" : "newest first"}</span>}
-      inspector={selClaim ? <ClaimInspector cluster={cluster} c={selClaim} onClose={() => setSelKey(null)} />
-        : selPool ? <PoolInspector p={selPool} onClose={() => setSelKey(null)} />
+      footerEnd={<span className="t-secondary">{view === "claims" ? `stuck first · drift and consolidation are intended behaviour, not faults${asOf}` : view === "pools" ? `broken first${asOf}` : feedIncomplete ? "incomplete read · newest among the events read" : "newest first"}</span>}
+      inspector={selClaim ? <ClaimInspector cluster={cluster} c={selClaim} nowS={nowS} gone={claimGone} onClose={() => setSelKey(null)} />
+        : selPool ? <PoolInspector p={selPool} gone={poolGone} claimsCov={claimsCov} onClose={() => setSelKey(null)} />
         : selEvent ? <EventPanel e={selEvent} onClose={() => setSelKey(null)} />
         : undefined}
       inspectorLabel={view === "claims" ? "NodeClaim details" : view === "pools" ? "NodePool details" : "Event details"}
@@ -280,8 +342,21 @@ export function KarpenterView({ cluster }: { cluster: string }) {
   );
 }
 
-function ClaimInspector({ cluster, c, onClose }: { cluster: string; c: KarpenterClaimDTO; onClose: () => void }) {
+function GoneNotice({ kind, gone }: { kind: string; gone: "removed" | "unverified" }) {
+  return gone === "removed" ? (
+    <div role="status" className="t-body" style={{ padding: "8px 10px", borderRadius: 4, background: "var(--color-background-secondary)", boxShadow: "inset 0 0 0 1px var(--color-border-secondary)" }}>
+      <span className="t-status">{kind} removed.</span> It is no longer in the current read. The details below are its last evidence.
+    </div>
+  ) : (
+    <div role="status" data-testid="selection-unverified" className="t-body" style={{ padding: "8px 10px", borderRadius: 4, background: "var(--color-background-secondary)", boxShadow: "inset 0 0 0 1px var(--color-border-warning)" }}>
+      <span className="t-status">Not in the current {kind} read.</span> That read is incomplete, so this is unverified - it may still exist. The details below are its last observed row.
+    </div>
+  );
+}
+
+function ClaimInspector({ cluster, c, nowS, gone, onClose }: { cluster: string; c: KarpenterClaimDTO; nowS: number; gone: "removed" | "unverified" | null; onClose: () => void }) {
   const role = roleOf(c);
+  const age = formatAge(ageOf(c, nowS));
   const openNode = () => { const nav = useFleet.getState(); nav.setSection("nodes"); nav.requestNavIntent({ kind: "select-node", cluster, node: c.nodeName }); };
   const link = provenLink(c);
   const pending = c.failingType && c.failingStatus !== "False" ? `${c.failingType} is ${c.failingStatus || "not reported"} (unverified)` : "";
@@ -291,27 +366,27 @@ function ClaimInspector({ cluster, c, onClose }: { cluster: string; c: Karpenter
       : `Ready is False, but no launch-chain link is confirmed failed${pending ? ` - ${pending}` : ""}.`
     : role.kind === "degraded"
       ? c.nodeName
-        ? `Registered as node ${c.nodeName} but not initialized after ${formatAge(c.ageSeconds)} - past Klyx's 15m attention heuristic${pending ? `; ${pending}` : ""}. Check the node's readiness, startup taints and daemonsets.`
-        : `Not registered after ${formatAge(c.ageSeconds)} - past Karpenter's 15m registration TTL (Klyx's attention heuristic here). Karpenter normally deletes a claim that fails to register in that window; check the controller and the cloud provider.`
-      : role.kind === "progressing" ? `${c.nodeName ? "Initializing" : "Launching"} for ${formatAge(c.ageSeconds)}${pending ? ` - ${pending}` : " - the launch chain has not finished yet"}.` : null;
+        ? `Registered as node ${c.nodeName} but not initialized after ${age} - past Klyx's 15m attention heuristic${pending ? `; ${pending}` : ""}. Check the node's readiness, startup taints and daemonsets.`
+        : `Not registered after ${age} - past Karpenter's 15m registration TTL (Klyx's attention heuristic here). Karpenter normally deletes a claim that fails to register in that window; check the controller and the cloud provider.`
+      : role.kind === "progressing" ? `${c.nodeName ? "Initializing" : "Launching"} for ${age}${pending ? ` - ${pending}` : " - the launch chain has not finished yet"}.` : null;
   return (
     <div data-testid="karp-claim-panel" style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
       <InspectorLayout kind="NodeClaim" name={c.name} meta={[c.pool && `pool ${c.pool}`, c.instanceType, c.capacityType].filter(Boolean).join(" · ")} onClose={onClose}
-        verdict={
+        verdict={gone ? <GoneNotice kind="NodeClaim" gone={gone} /> : (
           <div>
             <InspectorStatus tone={roleTone(role.kind)} label={role.label} />
             {detail && <div className="t-body" style={{ color: ROLE_TEXT[role.kind], overflowWrap: "anywhere", marginTop: -4 }}>{detail}</div>}
             {role.kind === "fault" && link && c.failingMessage && <div className="t-body" style={{ color: ROLE_TEXT[role.kind], overflowWrap: "anywhere", marginTop: 4 }}>{c.failingMessage}</div>}
           </div>
-        }
-        primary={c.nodeName ? { label: "Open node", onSelect: openNode } : undefined}>
+        )}
+        primary={c.nodeName && gone !== "removed" ? { label: "Open node", onSelect: openNode } : undefined}>
         <InspectorBlock title="Claim">
           <div className="insp-kv">
             <span>node</span><span style={{ overflowWrap: "anywhere" }}>{c.nodeName || "not registered yet"}</span>
             <span>pool</span><span>{c.pool || "-"}</span>
             <span>instance</span><span>{c.instanceType || "-"}</span>
             <span>capacity</span><span>{c.capacityType || "-"}</span>
-            <span>age</span><span>{formatAge(c.ageSeconds)}</span>
+            <span>age</span><span>{age}</span>
           </div>
         </InspectorBlock>
         {(c.drifted || c.consolidatable) && (
@@ -326,19 +401,19 @@ function ClaimInspector({ cluster, c, onClose }: { cluster: string; c: Karpenter
   );
 }
 
-function PoolInspector({ p, onClose }: { p: KarpenterPoolDTO; onClose: () => void }) {
+function PoolInspector({ p, gone, claimsCov, onClose }: { p: KarpenterPoolDTO; gone: "removed" | "unverified" | null; claimsCov: JoinCoverage; onClose: () => void }) {
   const role = roleOf(p);
   const cpu = capText(p.cpuUsed, p.cpuLimit, fmtCpu);
   const mem = capText(p.memUsed, p.memLimit, fmtMem);
   return (
     <div data-testid="karp-pool-panel" style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
-      <InspectorLayout kind="NodePool" name={p.name} meta={`${p.nodes} node${p.nodes === 1 ? "" : "s"} · weight ${p.weight}`} onClose={onClose}
-        verdict={
+      <InspectorLayout kind="NodePool" name={p.name} meta={`${claimsCov === "unknown" ? "nodes unverified (NodeClaim read unavailable)" : `${countText(p.nodes, claimsCov)} node${p.nodes === 1 ? "" : "s"}`} · weight ${p.weight}`} onClose={onClose}
+        verdict={gone ? <GoneNotice kind="NodePool" gone={gone} /> : (
           <div>
             <InspectorStatus tone={roleTone(role.kind)} label={role.label} reason={p.ready === "not-ready" ? p.reason || undefined : undefined} />
             {p.ready === "not-ready" && p.message && <div className="t-body" style={{ color: ROLE_TEXT[role.kind], overflowWrap: "anywhere", marginTop: -4 }}>{p.message}</div>}
           </div>
-        }>
+        )}>
         <InspectorBlock title="Capacity vs limits">
           <div className="insp-kv">
             <span>cpu</span><span style={{ color: cpu.near ? "var(--color-text-warning)" : undefined }}>{cpu.text}</span>

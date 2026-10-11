@@ -1,26 +1,49 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, fireEvent, screen, act, within } from "@testing-library/react";
 import type { KarpenterClaimDTO, KarpenterPoolDTO, KarpenterSnapshotDTO } from "../store/fleet";
+import type { KarpenterRows } from "../health/useKarpenterRows";
 import { KarpenterView } from "./KarpenterView";
 import { claimRule, poolRule, withRule } from "../test/backendRules";
 
 vi.mock("../bridge/karpenter", () => ({ getKarpenterState: vi.fn(async () => ({}) as KarpenterSnapshotDTO) }));
 import { getKarpenterState } from "../bridge/karpenter";
+// The NodePools and NodeClaims are rows (health/useKarpenterRows): these
+// tests hand the lens a live, complete read; the snapshot carries the
+// controller probe and the disruption feed.
+let rowsValue: KarpenterRows;
+vi.mock("../health/useKarpenterRows", () => ({ useKarpenterRows: () => rowsValue }));
+const liveCoverage = () => [
+  { kind: "NodePool", served: true, synced: true, coverage: "live" as const },
+  { kind: "NodeClaim", served: true, synced: true, coverage: "live" as const },
+];
+function setRows(r: { claims?: KarpenterClaimDTO[]; pools?: KarpenterPoolDTO[]; coverage?: KarpenterRows["coverage"]; loading?: boolean; watchError?: string | null } = {}) {
+  rowsValue = {
+    claims: r.claims ?? [], pools: r.pools ?? [], coverage: r.coverage ?? liveCoverage(), watchError: r.watchError ?? null, loading: r.loading ?? false,
+    rowsState: { updating: false, refreshing: false, evaluatedAt: null }, partCounts: { nodepools: null, nodeclaims: null },
+  };
+}
+setRows();
 
-const snap = (over: Partial<KarpenterSnapshotDTO> = {}): KarpenterSnapshotDTO => ({ detected: true, controllerVerified: true, controllerHealthy: true, pools: [], claims: [], events: [], ...over });
+const snap = (over: Partial<KarpenterSnapshotDTO> & { claims?: KarpenterClaimDTO[]; pools?: KarpenterPoolDTO[] } = {}): KarpenterSnapshotDTO => {
+  // a fixture's claims/pools are the rows the lens reads
+  const { claims, pools, ...rest } = over;
+  setRows({ claims, pools });
+  return { detected: true, controllerVerified: true, controllerHealthy: true, events: [], ...rest };
+};
 // Fixtures carry the rule the backend computes (test/backendRules.ts, held to
 // the Go golden fixture, which also covers the rule's cases and its exact
 // launch-deadline boundary).
 const claim = (over: Partial<KarpenterClaimDTO> = {}): KarpenterClaimDTO => withRule<KarpenterClaimDTO>({
   name: "default-abcde", pool: "default", nodeName: "ip-10-0-1-1", ready: "ready", failingType: "", failingReason: "", failingMessage: "",
   drifted: false, consolidatable: false, capacityType: "spot", instanceType: "m6i.large", ageSeconds: 3600, ...over,
+  createdUnix: Math.floor(Date.now() / 1000) - (over.ageSeconds ?? 3600),
 }, claimRule);
 type D<T> = { promise: Promise<T>; resolve: (v: T) => void };
 const deferred = <T,>(): D<T> => { let resolve!: (v: T) => void; const promise = new Promise<T>((r) => (resolve = r)); return { promise, resolve }; };
 const rows = () => [...document.querySelectorAll(".lens-row")].map((r) => r.textContent ?? "");
 
 describe("KarpenterView (redesign step 5)", () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => { vi.clearAllMocks(); setRows(); });
 
   it("reads the Go-computed rule, never its own: header counts and row labels (1c §2)", async () => {
     // A natively ready claim the backend flags, and a natively failed one it clears.
@@ -82,15 +105,21 @@ describe("KarpenterView (redesign step 5)", () => {
     expect(within(screen.getByTestId("lens-inspector")).getByText(/Karpenter stops provisioning from this pool/)).toBeTruthy();
   });
 
-  it("not installed, errors and empty claims are distinct states", async () => {
+  it("not installed, unreadable rows, a failed snapshot and empty claims are distinct states", async () => {
     vi.mocked(getKarpenterState).mockResolvedValueOnce(snap({ detected: false }));
     const first = render(<KarpenterView cluster="x" />);
     expect(await screen.findByText("Karpenter is not installed on this cluster.")).toBeTruthy();
     first.unmount();
-    vi.mocked(getKarpenterState).mockResolvedValueOnce(snap({ error: "nodeclaims is forbidden" }));
+    vi.mocked(getKarpenterState).mockResolvedValueOnce(snap());
+    setRows({ coverage: [{ kind: "NodePool", served: true, synced: false, coverage: "unreadable", error: "forbidden" }, { kind: "NodeClaim", served: true, synced: false, coverage: "unreadable", error: "nodeclaims is forbidden" }], watchError: "NodeClaim: nodeclaims is forbidden" });
     const second = render(<KarpenterView cluster="x" />);
-    expect(await screen.findByText("Could not read Karpenter state.")).toBeTruthy();
+    expect(await screen.findByText("Could not read the NodeClaims.")).toBeTruthy();
     second.unmount();
+    vi.mocked(getKarpenterState).mockResolvedValueOnce(snap({ error: "cluster client not available" }));
+    const third = render(<KarpenterView cluster="x" />);
+    expect((await screen.findByTestId("karp-snapshot-error")).textContent).toContain("cluster client not available");
+    expect(screen.getByText("No NodeClaims.")).toBeTruthy(); // the rows' own evidence still speaks
+    third.unmount();
     vi.mocked(getKarpenterState).mockResolvedValueOnce(snap());
     render(<KarpenterView cluster="x" />);
     expect(await screen.findByText("No NodeClaims.")).toBeTruthy();
@@ -108,17 +137,19 @@ describe("KarpenterView (redesign step 5)", () => {
 
   it("a late snapshot for a previous cluster never lands on the new one", async () => {
     const late = deferred<KarpenterSnapshotDTO>();
-    vi.mocked(getKarpenterState).mockReturnValueOnce(late.promise).mockResolvedValueOnce(snap({ claims: [claim({ name: "from-b" })] }));
+    const ev = (name: string) => ({ type: "Normal", reason: "Disrupting", message: name, kind: "NodeClaim", name, lastSeenUnix: Math.floor(Date.now() / 1000) });
+    vi.mocked(getKarpenterState).mockReturnValueOnce(late.promise).mockResolvedValueOnce(snap({ events: [ev("from-b")] }));
     const { rerender } = render(<KarpenterView cluster="a" />);
     rerender(<KarpenterView cluster="b" />);
-    expect(await screen.findByText("from-b")).toBeTruthy();
-    await act(async () => { late.resolve(snap({ claims: [claim({ name: "from-a" })] })); await late.promise; });
-    expect(screen.queryByText("from-a")).toBeNull();
+    fireEvent.click(await screen.findByRole("button", { name: /^Disruption activity 1/ }));
+    expect(await screen.findAllByText("from-b")).toBeTruthy();
+    await act(async () => { late.resolve({ detected: true, controllerVerified: true, controllerHealthy: true, events: [ev("from-a")] }); await late.promise; });
+    expect(screen.queryAllByText("from-a")).toHaveLength(0);
   });
 });
 
 describe("KarpenterView evidence corrections (Codex 271342a7)", () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => { vi.clearAllMocks(); setRows(); });
 
   it("Ready=False with an unproven link names no failure; its message is not presented as the cause", async () => {
     vi.mocked(getKarpenterState).mockResolvedValue(snap({ controllerVerified: true, claims: [claim({ ready: "not-ready", failingType: "Launched", failingStatus: "Unknown", failingMessage: "waiting" })] }));
@@ -175,7 +206,7 @@ describe("KarpenterView evidence corrections (Codex 271342a7)", () => {
 });
 
 describe("KarpenterView composes independent notices (Codex cfbf793c)", () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => { vi.clearAllMocks(); setRows(); });
   it("a down controller and a partially failed feed are both disclosed, with an incomplete count", async () => {
     const ev = { type: "Normal", reason: "Disrupting", message: "m", kind: "NodeClaim", name: "c", lastSeenUnix: Math.floor(Date.now() / 1000) };
     vi.mocked(getKarpenterState).mockResolvedValue(snap({ controllerVerified: true, controllerHealthy: false, claims: [claim()], events: [ev], eventsError: "NodePool events: forbidden" }));

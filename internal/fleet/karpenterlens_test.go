@@ -100,20 +100,11 @@ func TestKarpenterState_TriageAndControllerHealth(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !snap.Detected || !snap.ControllerHealthy {
-		t.Fatalf("detection/health: %+v", snap)
+	if !snap.Detected || !snap.ControllerHealthy || !snap.AsOf.Equal(time.Unix(1000, 0)) {
+		t.Fatalf("detection/health/as-of: %+v", snap)
 	}
-	// Broken-first pools; claim counts attributed per pool.
-	if len(snap.Pools) != 2 || snap.Pools[0].Name != "gpu" || snap.Pools[1].Nodes != 2 {
-		t.Fatalf("pools: %+v", snap.Pools)
-	}
-	if snap.Pools[1].CPULimit == nil || *snap.Pools[1].CPULimit != 100 || *snap.Pools[1].CPUUsed != 10 {
-		t.Fatalf("pool capacity: %+v", snap.Pools[1])
-	}
-	// Stuck-first claims.
-	if len(snap.Claims) != 2 || snap.Claims[0].Name != "wk-2" || snap.Claims[0].Ready != "not-ready" {
-		t.Fatalf("claims: %+v", snap.Claims)
-	}
+	// The NodePools and NodeClaims are the Observer's rows now (slice 3
+	// §5.5): the snapshot never lists them.
 	// The disruption feed carries the event.
 	if len(snap.Events) != 1 || snap.Events[0].Reason != "DisruptionTerminating" || snap.Events[0].Kind != "NodeClaim" {
 		t.Fatalf("events: %+v", snap.Events)
@@ -139,8 +130,8 @@ func TestKarpenterState_PartialInputsStayUnverified(t *testing.T) {
 	if snap.ControllerVerified || snap.ControllerHealthy || snap.ControllerError == "" {
 		t.Fatalf("a forbidden controller read must be unverified with its reason: %+v", snap)
 	}
-	if snap.EventsError == "" || len(snap.Claims) != 1 || len(snap.Pools) != 1 {
-		t.Fatalf("a failed event read is reported, triage stays usable: %+v", snap)
+	if snap.EventsError == "" {
+		t.Fatalf("a failed event read is reported: %+v", snap)
 	}
 }
 

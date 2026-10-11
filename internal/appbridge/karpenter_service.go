@@ -9,22 +9,29 @@ import (
 
 // KarpenterPoolDTO mirrors karpenter.NodePool.
 type KarpenterPoolDTO struct {
-	Name     string   `json:"name"`
-	Ready    string   `json:"ready"`
-	Reason   string   `json:"reason"`
-	Message  string   `json:"message"`
-	Weight   int64    `json:"weight"`
-	CPULimit *float64 `json:"cpuLimit"`
-	CPUUsed  *float64 `json:"cpuUsed"`
-	MemLimit *float64 `json:"memLimit"`
-	MemUsed  *float64 `json:"memUsed"`
-	Nodes    int      `json:"nodes"`
+	UID        string   `json:"uid,omitempty"` // identity (1c slice 3 §2a)
+	GVR        string   `json:"gvr,omitempty"`
+	Generation int64    `json:"generation,omitempty"`
+	Name       string   `json:"name"`
+	Ready      string   `json:"ready"`
+	Reason     string   `json:"reason"`
+	Message    string   `json:"message"`
+	Weight     int64    `json:"weight"`
+	CPULimit   *float64 `json:"cpuLimit"`
+	CPUUsed    *float64 `json:"cpuUsed"`
+	MemLimit   *float64 `json:"memLimit"`
+	MemUsed    *float64 `json:"memUsed"`
+	Nodes      int      `json:"nodes"`
 	// Rule is the relocated lens rule (1c addendum §2).
 	Rule RuleDTO `json:"rule"`
 }
 
-// KarpenterClaimDTO mirrors karpenter.NodeClaim.
+// KarpenterClaimDTO mirrors karpenter.NodeClaim. AgeSeconds is relative to
+// the capture; the lens ticks the age from createdUnix (1c slice 3 §3).
 type KarpenterClaimDTO struct {
+	UID            string `json:"uid,omitempty"` // identity (1c slice 3 §2a)
+	GVR            string `json:"gvr,omitempty"`
+	Generation     int64  `json:"generation,omitempty"`
 	Name           string `json:"name"`
 	Pool           string `json:"pool"`
 	NodeName       string `json:"nodeName"`
@@ -53,16 +60,17 @@ type KarpenterEventDTO struct {
 	LastSeenUnix int64  `json:"lastSeenUnix"`
 }
 
-// KarpenterSnapshotDTO is GetKarpenterState's payload.
+// KarpenterSnapshotDTO is GetKarpenterState's payload: the controller probe
+// and the disruption feed as of AsOfUnix. The NodePools and NodeClaims are
+// the health Observer's shared rows (1c slice 3 §5.5).
 type KarpenterSnapshotDTO struct {
 	Detected           bool                `json:"detected"`
+	AsOfUnix           int64               `json:"asOfUnix,omitempty"`
 	ControllerVerified bool                `json:"controllerVerified"`
 	ControllerHealthy  bool                `json:"controllerHealthy"`
 	ControllerError    string              `json:"controllerError,omitempty"`
 	EventsError        string              `json:"eventsError,omitempty"`
 	EventsTruncated    bool                `json:"eventsTruncated,omitempty"`
-	Pools              []KarpenterPoolDTO  `json:"pools"`
-	Claims             []KarpenterClaimDTO `json:"claims"`
 	Events             []KarpenterEventDTO `json:"events"`
 	Error              string              `json:"error,omitempty"`
 }
@@ -81,10 +89,10 @@ func NewKarpenterService(lookup func(string) (KarpenterConn, bool)) *KarpenterSe
 	return &KarpenterService{lookup: lookup}
 }
 
-// GetKarpenterState returns one cluster's Karpenter snapshot. Errors fold in;
-// slices are never nil.
+// GetKarpenterState returns one cluster's Karpenter controller probe and
+// disruption feed. Errors fold in; slices are never nil.
 func (s *KarpenterService) GetKarpenterState(cluster string) KarpenterSnapshotDTO {
-	out := KarpenterSnapshotDTO{Pools: []KarpenterPoolDTO{}, Claims: []KarpenterClaimDTO{}, Events: []KarpenterEventDTO{}}
+	out := KarpenterSnapshotDTO{Events: []KarpenterEventDTO{}}
 	conn, ok := s.lookup(cluster)
 	if !ok {
 		out.Error = "cluster not connected: " + cluster
@@ -98,17 +106,14 @@ func (s *KarpenterService) GetKarpenterState(cluster string) KarpenterSnapshotDT
 		return out
 	}
 	out.Detected = snap.Detected
+	if !snap.AsOf.IsZero() {
+		out.AsOfUnix = snap.AsOf.Unix()
+	}
 	out.ControllerVerified = snap.ControllerVerified
 	out.ControllerHealthy = snap.ControllerHealthy
 	out.ControllerError = snap.ControllerError
 	out.EventsError = snap.EventsError
 	out.EventsTruncated = snap.EventsTruncated
-	for _, p := range snap.Pools {
-		out.Pools = append(out.Pools, toKarpenterPoolDTO(p))
-	}
-	for _, cl := range snap.Claims {
-		out.Claims = append(out.Claims, toKarpenterClaimDTO(cl))
-	}
 	for _, e := range snap.Events {
 		out.Events = append(out.Events, KarpenterEventDTO{
 			Type: e.Type, Reason: e.Reason, Message: e.Message,
@@ -119,19 +124,34 @@ func (s *KarpenterService) GetKarpenterState(cluster string) KarpenterSnapshotDT
 }
 
 func toKarpenterPoolDTO(p karpenter.NodePool) KarpenterPoolDTO {
+	dto := karpenterPoolFields(p)
+	dto.Rule = toRuleDTO(karpenter.PoolRule(p))
+	return dto
+}
+
+// karpenterPoolFields is the pure field conversion: no rule (the rows
+// converter copies the capture's evaluation, slice 3 §2a).
+func karpenterPoolFields(p karpenter.NodePool) KarpenterPoolDTO {
 	return KarpenterPoolDTO{
 		Name: p.Name, Ready: p.Ready, Reason: p.Reason, Message: p.Message, Weight: p.Weight,
 		CPULimit: p.CPULimit, CPUUsed: p.CPUUsed, MemLimit: p.MemLimit, MemUsed: p.MemUsed,
-		Nodes: p.Nodes, Rule: toRuleDTO(karpenter.PoolRule(p)),
+		Nodes: p.Nodes,
 	}
 }
 
 func toKarpenterClaimDTO(cl karpenter.NodeClaim) KarpenterClaimDTO {
+	dto := karpenterClaimFields(cl)
+	dto.Rule = toRuleDTO(karpenter.ClaimRule(cl))
+	return dto
+}
+
+// karpenterClaimFields is the pure field conversion (no rule).
+func karpenterClaimFields(cl karpenter.NodeClaim) KarpenterClaimDTO {
 	return KarpenterClaimDTO{
 		Name: cl.Name, Pool: cl.Pool, NodeName: cl.NodeName, Ready: cl.Ready,
 		FailingType: cl.FailingType, FailingStatus: cl.FailingStatus, FailingReason: cl.FailingReason, FailingMessage: cl.FailingMessage,
 		Drifted: cl.Drifted, Consolidatable: cl.Consolidatable,
 		CapacityType: cl.CapacityType, InstanceType: cl.InstanceType, AgeSeconds: cl.AgeSeconds,
-		Created: cl.Created.Unix(), Rule: toRuleDTO(karpenter.ClaimRule(cl)),
+		Created: cl.Created.Unix(),
 	}
 }

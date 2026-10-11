@@ -21,6 +21,7 @@ import (
 	"github.com/moomora/klyx/internal/gitops/flux"
 	"github.com/moomora/klyx/internal/health"
 	"github.com/moomora/klyx/internal/healthsrc"
+	"github.com/moomora/klyx/internal/karpenter"
 	"github.com/moomora/klyx/internal/observe"
 )
 
@@ -215,6 +216,41 @@ func TestArgoRowsCarryTheCapture(t *testing.T) {
 		t.Fatalf("applicationset row: %+v", sd)
 	}
 	if _, err := rowsConverters[healthsrc.TaskArgo+"/applications"]("not rows", at); err == nil {
+		t.Fatal("a payload of the wrong type is an error, never an empty list")
+	}
+}
+
+// The Karpenter parts (slice 3 §5.5): the captured evaluation and identity.
+func TestKarpenterRowsCarryTheCapture(t *testing.T) {
+	at := time.Now()
+	pset := healthsrc.RowSet[karpenter.NodePool]{Rows: []healthsrc.Row[karpenter.NodePool]{
+		{Ref: healthsrc.RowRef{UID: "p1", GVR: "karpenter.sh/v1/nodepools", Name: "workers", Generation: 4},
+			Eval: health.NativeEval{Included: true, Role: health.Fault, Label: "Flagged at capture"}, Data: karpenter.NodePool{Name: "workers", Ready: "ready", Nodes: 3}},
+	}}
+	out, err := rowsConverters[healthsrc.TaskKarpenter+"/nodepools"](pset, at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := out.([]KarpenterPoolDTO)[0]
+	if p.Rule != (RuleDTO{Included: true, Role: "fault", Label: "Flagged at capture"}) || p.UID != "p1" || p.GVR != "karpenter.sh/v1/nodepools" || p.Generation != 4 || p.Nodes != 3 {
+		t.Fatalf("pool row: %+v", p)
+	}
+	cset := healthsrc.RowSet[karpenter.NodeClaim]{Rows: []healthsrc.Row[karpenter.NodeClaim]{
+		{Ref: healthsrc.RowRef{UID: "c1", GVR: "karpenter.sh/v1/nodeclaims", Name: "wk-1", Generation: 2},
+			Eval: health.NativeEval{Role: health.Progressing, Label: "Launching at capture"}, Data: karpenter.NodeClaim{Name: "wk-1", Pool: "workers", Created: time.Unix(500, 0)}},
+	}}
+	cout, err := rowsConverters[healthsrc.TaskKarpenter+"/nodeclaims"](cset, at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := cout.([]KarpenterClaimDTO)[0]
+	if c.UID != "c1" || c.Generation != 2 || c.Created != 500 || c.Rule.Label != "Launching at capture" {
+		t.Fatalf("claim row: %+v", c)
+	}
+	if b, err := json.Marshal(c); err != nil || !strings.Contains(string(b), `"createdUnix":500`) || !strings.Contains(string(b), `"uid":"c1"`) {
+		t.Fatalf("serialization: %s %v", b, err)
+	}
+	if _, err := rowsConverters[healthsrc.TaskKarpenter+"/nodeclaims"]("not rows", at); err == nil {
 		t.Fatal("a payload of the wrong type is an error, never an empty list")
 	}
 }

@@ -5,14 +5,12 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/moomora/klyx/internal/clock"
-	"github.com/moomora/klyx/internal/karpenter"
 	"github.com/moomora/klyx/internal/workloads"
 )
 
@@ -20,21 +18,20 @@ import (
 // audit (the full event stream lives in the Events lens).
 const karpenterEventCap = 30
 
-// KarpenterSnapshot is one cluster's Karpenter state for the lens: pools
-// broken-first, claims stuck-first, controller health re-probed live (the
-// capability snapshot is connect-time; the lens headline must not go stale),
-// and recent NodePool/NodeClaim events - the "why did my node get replaced"
-// feed.
+// KarpenterSnapshot is the Karpenter lens's on-demand read: controller
+// health re-probed live (the capability snapshot is connect-time; the lens
+// headline must not go stale) and recent NodePool/NodeClaim events - the "why
+// did my node get replaced" feed - as of AsOf. The NodePools and NodeClaims
+// themselves are the health Observer's shared rows (1c slice 3 §5.5).
 type KarpenterSnapshot struct {
 	Detected bool
+	AsOf     time.Time
 	// ControllerVerified: a karpenter Deployment was actually read. When
 	// false, ControllerHealthy carries no claim and ControllerError says why
 	// (forbidden, not found under the expected name, ...).
 	ControllerVerified bool
 	ControllerHealthy  bool
 	ControllerError    string
-	Pools              []karpenter.NodePool
-	Claims             []karpenter.NodeClaim
 	Events             []workloads.EventSummary
 	// EventsError names event reads that failed (the feed is then partial or
 	// unreadable, never quiet); EventsTruncated: more events exist than shown.
@@ -42,9 +39,9 @@ type KarpenterSnapshot struct {
 	EventsTruncated bool
 }
 
-// KarpenterState returns the Karpenter lens snapshot. Capability-gated
-// (honest "not detected", never an empty lens); dynamic lists on demand, no
-// lazy watch - pool/claim counts are small.
+// KarpenterState returns the Karpenter lens's controller probe and
+// disruption feed. Capability-gated (honest "not detected", never an empty
+// lens).
 func (c *ClusterConn) KarpenterState(ctx context.Context) (KarpenterSnapshot, error) {
 	c.mu.RLock()
 	present := c.caps.Karpenter.Present
@@ -52,44 +49,14 @@ func (c *ClusterConn) KarpenterState(ctx context.Context) (KarpenterSnapshot, er
 	if !present {
 		return KarpenterSnapshot{Detected: false}, nil
 	}
-	if c.dyn == nil {
-		return KarpenterSnapshot{}, fmt.Errorf("dynamic client not available")
+	if c.typed == nil {
+		return KarpenterSnapshot{}, fmt.Errorf("cluster client not available")
 	}
 	clk := c.clk
 	if clk == nil {
 		clk = clock.Real{}
 	}
-	now := clk.Now()
-
-	out := KarpenterSnapshot{Detected: true}
-
-	ver := preferredVersion(c.discovery(), "karpenter.sh", "v1")
-	poolGVR := schema.GroupVersionResource{Group: "karpenter.sh", Version: ver, Resource: "nodepools"}
-	claimGVR := schema.GroupVersionResource{Group: "karpenter.sh", Version: ver, Resource: "nodeclaims"}
-
-	poolList, err := c.dyn.Resource(poolGVR).List(ctx, metav1.ListOptions{})
-	if err != nil {
-		return KarpenterSnapshot{}, fmt.Errorf("list nodepools: %w", err)
-	}
-	for i := range poolList.Items {
-		out.Pools = append(out.Pools, karpenter.ParseNodePool(&unstructured.Unstructured{Object: poolList.Items[i].Object}))
-	}
-
-	claimList, err := c.dyn.Resource(claimGVR).List(ctx, metav1.ListOptions{})
-	if err != nil {
-		return KarpenterSnapshot{}, fmt.Errorf("list nodeclaims: %w", err)
-	}
-	claimsPerPool := map[string]int{}
-	for i := range claimList.Items {
-		claim := karpenter.ParseNodeClaim(&unstructured.Unstructured{Object: claimList.Items[i].Object}, now)
-		out.Claims = append(out.Claims, claim)
-		claimsPerPool[claim.Pool]++
-	}
-	for i := range out.Pools {
-		out.Pools[i].Nodes = claimsPerPool[out.Pools[i].Name]
-	}
-	karpenter.SortPoolsBrokenFirst(out.Pools)
-	karpenter.SortClaimsStuckFirst(out.Claims)
+	out := KarpenterSnapshot{Detected: true, AsOf: clk.Now()}
 
 	// Controller health, re-probed live (mirrors the detector's namespace
 	// pair). Only a Deployment actually read is evidence: a forbidden read or
