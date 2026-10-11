@@ -49,8 +49,10 @@ func (c *ClusterConn) gvrForKind(kind flux.Kind) (schema.GroupVersionResource, e
 }
 
 // ErrReplaced: the object at a verb's name is not the one the verb was armed
-// against (a same-name recreation, or it is gone) - nothing was written.
-var ErrReplaced = errors.New("the object was replaced since the action was armed - nothing was written")
+// against (a same-name recreation, or it is gone). It names the identity
+// only: what was or was not written is said by the error wrapping it -
+// "nothing was written" only where that is true (Codex review of 6b43068).
+var ErrReplaced = errors.New("the object was replaced since the action was armed")
 
 // guardUID adds metadata.uid to a merge patch body. metadata.uid is
 // immutable, so the API server refuses the write when the object at that name
@@ -81,18 +83,19 @@ func (c *ClusterConn) checkArmed(ctx context.Context, gvr schema.GroupVersionRes
 	u, err := c.dyn.Resource(gvr).Namespace(ns).Get(ctx, name, metav1.GetOptions{})
 	switch {
 	case apierrors.IsNotFound(err):
-		return nil, fmt.Errorf("%s %s/%s: %w", kind, ns, name, ErrReplaced)
+		return nil, fmt.Errorf("%s %s/%s: %w - nothing was written", kind, ns, name, ErrReplaced)
 	case err != nil:
-		return nil, fmt.Errorf("%s %s/%s: %w", kind, ns, name, err)
+		return nil, fmt.Errorf("%s %s/%s: %w - nothing was written", kind, ns, name, err)
 	case string(u.GetUID()) != uid:
-		return nil, fmt.Errorf("%s %s/%s: %w", kind, ns, name, ErrReplaced)
+		return nil, fmt.Errorf("%s %s/%s: %w - nothing was written", kind, ns, name, ErrReplaced)
 	}
 	return u, nil
 }
 
 // patchArmed writes a UID-guarded merge patch to the armed object. A write
 // the server refuses for the UID (a replacement after checkArmed) is
-// ErrReplaced; a replacement that is gone again is too.
+// ErrReplaced; a replacement that is gone again is too. The error speaks
+// for this write only - a caller that wrote something before says so.
 func (c *ClusterConn) patchArmed(ctx context.Context, gvr schema.GroupVersionResource, kind, ns, name, uid string, body []byte) error {
 	guarded, err := guardUID(body, uid)
 	if err != nil {
@@ -103,7 +106,7 @@ func (c *ClusterConn) patchArmed(ctx context.Context, gvr schema.GroupVersionRes
 	case err == nil:
 		return nil
 	case apierrors.IsNotFound(err), (apierrors.IsInvalid(err) || apierrors.IsConflict(err)) && strings.Contains(strings.ToLower(err.Error()), "uid"):
-		return fmt.Errorf("%s %s/%s: %w (%v)", kind, ns, name, ErrReplaced, err)
+		return fmt.Errorf("%s %s/%s: %w - its write was refused (%v)", kind, ns, name, ErrReplaced, err)
 	}
 	return fmt.Errorf("%s %s/%s: %w", kind, ns, name, err)
 }
@@ -139,13 +142,24 @@ func (c *ClusterConn) ReconcileWithSource(ctx context.Context, kind, ns, name, u
 	if err != nil {
 		return fmt.Errorf("reconcile %w", err)
 	}
+	// The source's outcome is kept: if the target's write then fails, the
+	// error says what already happened to the source - never "nothing".
+	source := ""
 	if ref, ok := flux.BoundSource(u); ok {
 		if sgvr, ok := c.sourceServedGVR(ref.Kind); ok {
 			body := flux.ReconcilePatch(c.clk.Now())
-			_, _ = c.dyn.Resource(sgvr).Namespace(ref.Namespace).Patch(ctx, ref.Name, types.MergePatchType, body, metav1.PatchOptions{})
+			what := fmt.Sprintf("its source %s %s/%s", ref.Kind, ref.Namespace, ref.Name)
+			if _, err := c.dyn.Resource(sgvr).Namespace(ref.Namespace).Patch(ctx, ref.Name, types.MergePatchType, body, metav1.PatchOptions{}); err != nil {
+				source = what + " was not asked to reconcile either: " + err.Error()
+			} else {
+				source = what + " was already asked to reconcile"
+			}
 		}
 	}
 	if err := c.patchArmed(ctx, gvr, kind, ns, name, uid, flux.ReconcilePatch(c.clk.Now())); err != nil {
+		if source != "" {
+			return fmt.Errorf("reconcile %w; %s", err, source)
+		}
 		return fmt.Errorf("reconcile %w", err)
 	}
 	return nil

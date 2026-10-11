@@ -225,6 +225,9 @@ func TestFluxVerbsWriteOnlyTheArmedObject(t *testing.T) {
 				if err == nil || (tc.want != nil && !errors.Is(err, tc.want)) || (tc.want == nil && !strings.Contains(err.Error(), "no object identity was armed")) {
 					t.Fatalf("%s: want a refusal (%v), got %v", tc.what, tc.want, err)
 				}
+				if tc.want != nil && !strings.Contains(err.Error(), "nothing was written") {
+					t.Fatalf("%s: a refusal before any write says so: %v", tc.what, err)
+				}
 				for _, a := range dyn.Actions() {
 					if _, ok := a.(k8stesting.PatchAction); ok {
 						t.Fatalf("%s: nothing may be written, got a patch of %s", tc.what, a.GetResource().Resource)
@@ -260,4 +263,49 @@ func TestFluxVerbPatchIsUIDGuarded(t *testing.T) {
 	if err := c.Reconcile(context.Background(), "Kustomization", "flux-system", "app", "uid-app"); !errors.Is(err, ErrReplaced) {
 		t.Fatalf("a server refusal of the UID guard is a replacement: %v", err)
 	}
+}
+
+// Codex review of 6b43068: the race path of a with-source reconcile - the
+// target is still the armed object when checked, its source is written, then
+// the target's guarded write is refused (a replacement in between). The
+// error keeps the replacement detectable and says what happened to the
+// source; it never claims nothing was written.
+func TestReconcileWithSourceReportsAPartialWrite(t *testing.T) {
+	gitRepoGVR := schema.GroupVersionResource{Group: "source.toolkit.fluxcd.io", Version: "v1", Resource: "gitrepositories"}
+	refuse := func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewInvalid(schema.GroupKind{Group: "kustomize.toolkit.fluxcd.io", Kind: "Kustomization"}, "app",
+			field.ErrorList{field.Invalid(field.NewPath("metadata", "uid"), "uid-app", "field is immutable")})
+	}
+	for _, tc := range []struct {
+		name       string
+		sourceErr  error
+		wantSource string
+	}{
+		{"source written", nil, "its source GitRepository flux-system/flux-system was already asked to reconcile"},
+		{"source failed", errors.New("gitrepositories is forbidden"), "its source GitRepository flux-system/flux-system was not asked to reconcile either: gitrepositories is forbidden"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dyn := fake.NewSimpleDynamicClientWithCustomListKinds(dynScheme(), map[schema.GroupVersionResource]string{ksGVR(): "KustomizationList", gitRepoGVR: "GitRepositoryList"},
+				seedKustomizationWithSource("app", "GitRepository", "flux-system"), seedGitRepoSource("flux-system"))
+			dyn.PrependReactor("patch", "kustomizations", refuse)
+			if tc.sourceErr != nil {
+				dyn.PrependReactor("patch", "gitrepositories", func(k8stesting.Action) (bool, runtime.Object, error) { return true, nil, tc.sourceErr })
+			}
+			c := newActionConn(dyn)
+			err := c.ReconcileWithSource(context.Background(), "Kustomization", "flux-system", "app", "uid-app")
+			if !errors.Is(err, ErrReplaced) || !strings.Contains(err.Error(), tc.wantSource) || strings.Contains(err.Error(), "nothing was written") {
+				t.Fatalf("the partial outcome must be said: %v", err)
+			}
+			sourcePatched := false
+			for _, a := range dyn.Actions() {
+				if pa, ok := a.(k8stesting.PatchAction); ok && pa.GetResource().Resource == "gitrepositories" {
+					sourcePatched = true
+				}
+			}
+			if !sourcePatched {
+				t.Fatal("the source write was attempted before the target's")
+			}
+		})
+	}
+
 }
