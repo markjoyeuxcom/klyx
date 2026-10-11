@@ -34,9 +34,11 @@ import (
 	"github.com/moomora/klyx/internal/gitops/argo"
 	"github.com/moomora/klyx/internal/gitops/flux"
 	"github.com/moomora/klyx/internal/gwapi"
+	"github.com/moomora/klyx/internal/healthsrc"
 	"github.com/moomora/klyx/internal/helmcli"
 	"github.com/moomora/klyx/internal/hubble"
 	"github.com/moomora/klyx/internal/metrics"
+	"github.com/moomora/klyx/internal/observe"
 	"github.com/moomora/klyx/internal/rbac"
 	"github.com/moomora/klyx/internal/routemetrics"
 	"github.com/moomora/klyx/internal/workloads"
@@ -187,6 +189,8 @@ type ClusterConn struct {
 	eso            *esoWatch                 // lazy; nil until OpenExternalSecrets
 	esoOpening     bool                      // single-flights OpenExternalSecrets' out-of-lock install
 	esoWanted      bool                      // desired state; an in-flight open aborts if false
+	healthSink     observe.Sink              // set before Start; nil = no health Observer (tests)
+	health         *observe.Observer         // the cluster's health observation (1c), from Start
 
 	// metricsMu guards the metrics cache. Note: ClusterMetrics holds it across
 	// the probe + sample network I/O (up to a few seconds). This serializes
@@ -255,6 +259,7 @@ func (c *ClusterConn) WithRESTConfig(rc *rest.Config) *ClusterConn {
 func (c *ClusterConn) Name() string { return c.name }
 
 func (c *ClusterConn) setState(ev Event, reason string) {
+	defer c.syncHealthConnection() // after the unlock below
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if next, ok := Transition(c.state, ev); ok {
@@ -277,6 +282,7 @@ func (c *ClusterConn) signalRefresh() {
 // failures instead of hiding them behind a generic timeout.
 func (c *ClusterConn) onWatchError(err error) {
 	msg := cluster.FriendlyErrorMessage(err)
+	defer c.syncHealthConnection() // after the unlock below
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	st := c.state
@@ -298,6 +304,7 @@ func (c *ClusterConn) onWatchError(err error) {
 // fails to sync within connectTimeout is marked Failed but self-heals to Synced
 // when a later relist succeeds.
 func (c *ClusterConn) Start(ctx context.Context) {
+	c.startHealth(ctx)
 	c.setState(EvStart, "")
 	c.ctx = ctx
 
@@ -453,6 +460,7 @@ func (c *ClusterConn) applyGitOpsHealth(g capability.GitOpsCapability) {
 		c.mu.Unlock()
 		return
 	}
+	defer c.syncHealthConnection() // after the unlock below
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.caps.GitOps = g
@@ -504,5 +512,76 @@ func (c *ClusterConn) Snapshot() Snapshot {
 		Pods:         c.snapPods,
 		Version:      c.snapVersion,
 		Capabilities: c.caps,
+	}
+}
+
+// SetHealthSink gives the conn its health publication sink; it must be called
+// before Start. Without one (fake-client tests) no Observer runs.
+func (c *ClusterConn) SetHealthSink(s observe.Sink) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.healthSink = s
+}
+
+// Health returns the cluster's health Observer (nil before Start or without
+// a sink).
+func (c *ClusterConn) Health() *observe.Observer {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.health
+}
+
+// startHealth builds and starts the cluster's health Observer (1c addendum).
+// It owns its own reflectors; the eager informers above remain until their
+// consumers move onto the Observer.
+func (c *ClusterConn) startHealth(ctx context.Context) {
+	c.mu.Lock()
+	sink := c.healthSink
+	c.mu.Unlock()
+	if sink == nil || c.typed == nil || c.meta == nil {
+		return
+	}
+	kinds, domains := healthsrc.Core(healthsrc.CoreDeps{Cluster: c.name, Typed: c.typed, Meta: c.meta,
+		FluxPresent: func() bool {
+			c.mu.RLock()
+			defer c.mu.RUnlock()
+			return c.caps.GitOps.Flux.Present
+		}})
+	o := observe.New(observe.Config{Cluster: c.name, Sink: sink, Kinds: kinds, Domains: domains, NamespacesKind: healthsrc.KindNamespaces})
+	c.mu.Lock()
+	c.health = o
+	c.mu.Unlock()
+	o.Start(ctx)
+}
+
+// syncHealthConnection hands the Observer the connection word. It never
+// sets kind freshness (1c addendum §3.1). Called after c.mu is released.
+func (c *ClusterConn) syncHealthConnection() {
+	c.mu.RLock()
+	h, st, reason := c.health, c.state, c.reason
+	c.mu.RUnlock()
+	if h != nil {
+		h.SetConnection(connectionWord(st, reason))
+	}
+}
+
+// connectionWord is the health spec §2 connection axis.
+func connectionWord(st ConnState, reason string) string {
+	switch st {
+	case Synced:
+		return "connected"
+	case Degraded:
+		if reason != "" {
+			return "connected · " + reason
+		}
+		return "connected"
+	case Stale:
+		return "stale"
+	case Connecting:
+		return "connecting"
+	case Unconnected, Failed:
+		return "unreachable"
+	default:
+		return "unknown"
 	}
 }

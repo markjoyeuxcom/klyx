@@ -72,12 +72,15 @@ type Sink interface {
 
 // Config configures one Observer. Zero durations take the spec defaults.
 type Config struct {
-	Cluster            string
-	Clock              clock.WithTicker
-	Sink               Sink
-	Kinds              []KindSpec
-	Snapshots          []SnapshotSpec
-	Domains            []DomainSpec
+	Cluster   string
+	Clock     clock.WithTicker
+	Sink      Sink
+	Kinds     []KindSpec
+	Snapshots []SnapshotSpec
+	Domains   []DomainSpec
+	// NamespacesKind names a kind the Observer holds for its lifetime and
+	// counts into Summary.Namespaces (nil until it is live).
+	NamespacesKind     string
 	Throttle           time.Duration // 1s
 	InitialSyncTimeout time.Duration // 60s
 	ReprobeEvery       time.Duration // 5m
@@ -174,6 +177,9 @@ func New(cfg Config) *Observer {
 		}
 		o.snaps[s.Name] = &snapState{spec: s}
 	}
+	if cfg.NamespacesKind != "" && o.kinds[cfg.NamespacesKind] == nil {
+		panic("observe: unregistered namespaces kind " + cfg.NamespacesKind)
+	}
 	for _, d := range cfg.Domains {
 		if o.byTask[d.ID] != nil {
 			panic("observe: duplicate domain " + d.ID)
@@ -228,6 +234,9 @@ func (o *Observer) Start(ctx context.Context) {
 	o.ctx, o.cancel = context.WithCancel(ctx)
 	for _, d := range o.domains {
 		o.acquireLocked(d, HealthOwner)
+	}
+	if o.cfg.NamespacesKind != "" {
+		o.refSourceLocked(o.cfg.NamespacesKind)
 	}
 	o.summaryDirty = true
 	o.mu.Unlock()
@@ -429,6 +438,9 @@ func (o *Observer) Refresh(snapshot string) {
 // ---- dirty marking (caller holds o.mu) -----------------------------------
 
 func (o *Observer) bumpKindLocked(ks *kindState) {
+	if ks.spec.Name == o.cfg.NamespacesKind {
+		o.summaryDirty = true
+	}
 	for _, k := range ks.parts {
 		o.partOf(k).obs++
 		o.dirty[k] = true
@@ -437,6 +449,9 @@ func (o *Observer) bumpKindLocked(ks *kindState) {
 }
 
 func (o *Observer) markKindLocked(ks *kindState) {
+	if ks.spec.Name == o.cfg.NamespacesKind {
+		o.summaryDirty = true
+	}
 	for _, k := range ks.parts {
 		o.dirty[k] = true
 	}

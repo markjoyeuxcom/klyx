@@ -6,6 +6,7 @@ import (
 
 	"github.com/moomora/klyx/internal/health"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // PodSummary is the pods-lens row: one pod classified with the same severity
@@ -264,4 +265,20 @@ func containerStateString(s corev1.ContainerState) string {
 		return "terminated:" + s.Terminated.Reason
 	}
 	return ""
+}
+
+// ResolveReplicaSetOwners rewrites each pod's ReplicaSet owner to that
+// ReplicaSet's own controller (Deployment, Argo Rollout, ...). controllers
+// maps "namespace/replicaset" to the ReplicaSet's controller reference. Pods
+// under a bare ReplicaSet keep OwnerKind=ReplicaSet (nothing to restart).
+func ResolveReplicaSetOwners(sums []PodSummary, controllers map[string]metav1.OwnerReference) {
+	for i := range sums {
+		if sums[i].OwnerKind != "ReplicaSet" {
+			continue
+		}
+		if ref, ok := controllers[sums[i].Namespace+"/"+sums[i].OwnerName]; ok {
+			sums[i].OwnerKind = ref.Kind
+			sums[i].OwnerName = ref.Name
+		}
+	}
 }

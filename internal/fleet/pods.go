@@ -72,13 +72,5 @@ func (c *ClusterConn) resolveReplicaSetOwners(ctx context.Context, namespace str
 			}
 		}
 	}
-	for i := range sums {
-		if sums[i].OwnerKind != "ReplicaSet" {
-			continue
-		}
-		if ref, ok := owner[sums[i].Namespace+"/"+sums[i].OwnerName]; ok {
-			sums[i].OwnerKind = ref.Kind
-			sums[i].OwnerName = ref.Name
-		}
-	}
+	workloads.ResolveReplicaSetOwners(sums, owner)
 }

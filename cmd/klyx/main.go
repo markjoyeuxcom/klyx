@@ -19,6 +19,7 @@ import (
 	"github.com/moomora/klyx/internal/config"
 	"github.com/moomora/klyx/internal/execenv"
 	"github.com/moomora/klyx/internal/fleet"
+	"github.com/moomora/klyx/internal/observe"
 	"github.com/moomora/klyx/internal/winstate"
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/services/dock"
@@ -66,7 +67,11 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	// The emitter exists before any cluster starts: each cluster's health
+	// Observer (1c) publishes through it from its first evaluation.
+	em := &emitterAdapter{}
 	reg := fleet.NewRegistry(cfg, fleet.DefaultConnFactory(clock.Real{}))
+	reg.SetHealthSink(appbridge.NewHealthSink(em))
 	reg.Start(ctx)
 
 	// configSvc is built before the fleet service: the fleet DTOs resolve each
@@ -77,8 +82,18 @@ func main() {
 	})
 
 	svc := appbridge.NewFleetService(reg, appbridge.LiveClusterConfig(configSvc), time.Now)
+	healthSvc := appbridge.NewHealthService(func() []*observe.Observer {
+		var out []*observe.Observer
+		for _, s := range reg.Snapshots() {
+			if c, ok := reg.Conn(s.Name); ok {
+				if h, ok := c.(interface{ Health() *observe.Observer }); ok && h.Health() != nil {
+					out = append(out, h.Health())
+				}
+			}
+		}
+		return out
+	})
 
-	em := &emitterAdapter{}
 	winOpener := &windowOpener{}
 
 	gitopsSvc := appbridge.NewGitOpsService(
@@ -418,6 +433,7 @@ func main() {
 		},
 		Services: []application.Service{
 			application.NewService(svc),
+			application.NewService(healthSvc),
 			application.NewService(gitopsSvc),
 			application.NewService(certManagerSvc),
 			application.NewService(externalSecretsSvc),

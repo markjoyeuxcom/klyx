@@ -8,6 +8,7 @@ import (
 
 	"github.com/moomora/klyx/internal/cluster"
 	"github.com/moomora/klyx/internal/config"
+	"github.com/moomora/klyx/internal/observe"
 )
 
 // ConnFactory builds a Conn for a cluster. Injected so tests use fakes.
@@ -24,8 +25,9 @@ type Registry struct {
 	cfg     *config.Config
 	factory ConnFactory
 
-	mu      sync.RWMutex
-	entries []entry
+	mu         sync.RWMutex
+	entries    []entry
+	healthSink observe.Sink
 }
 
 func NewRegistry(cfg *config.Config, factory ConnFactory) *Registry {
@@ -49,6 +51,7 @@ func (r *Registry) Start(ctx context.Context) {
 			})
 			continue
 		}
+		r.wireHealth(conn)
 		conn.Start(ctx)
 		r.entries = append(r.entries, entry{conn: conn})
 	}
@@ -76,9 +79,25 @@ func (r *Registry) Add(ctx context.Context, cc config.ClusterConfig) error {
 	if err != nil {
 		return fmt.Errorf("failed to connect: %s", cluster.FriendlyErrorMessage(err))
 	}
+	r.wireHealth(conn)
 	conn.Start(ctx)
 	r.entries = append(r.entries, entry{conn: conn})
 	return nil
+}
+
+// SetHealthSink routes every cluster's health publications (1c) to s. Call
+// before Start; conns added later get it too.
+func (r *Registry) SetHealthSink(s observe.Sink) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.healthSink = s
+}
+
+// wireHealth hands a conn the sink before it starts. Caller holds r.mu.
+func (r *Registry) wireHealth(conn Conn) {
+	if hs, ok := conn.(interface{ SetHealthSink(observe.Sink) }); ok && r.healthSink != nil {
+		hs.SetHealthSink(r.healthSink)
+	}
 }
 
 // Conn returns the live Conn for a cluster by name (nil,false if absent or failed).

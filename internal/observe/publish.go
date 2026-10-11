@@ -309,6 +309,10 @@ func (o *Observer) captureLocked(p *partState, now time.Time) (Capture, []KindCo
 
 func (o *Observer) buildSummaryLocked(now time.Time) Summary {
 	s := Summary{Cluster: o.cfg.Cluster, Incarnation: o.incarnation, Seq: o.seq, EvaluatedAt: now, Connection: o.conn}
+	if ks := o.kinds[o.cfg.NamespacesKind]; ks != nil && ks.gen != nil && ks.gen.fresh.cov == Live {
+		n := len(ks.gen.model)
+		s.Namespaces = &n // unknown (nil) unless complete and current
+	}
 	for _, d := range o.domains {
 		t := Task{ID: d.spec.ID}
 		var covs []Coverage
@@ -383,6 +387,9 @@ func (o *Observer) final() {
 		if d.active {
 			o.deactivateLocked(d)
 		}
+	}
+	if o.cfg.NamespacesKind != "" {
+		o.unrefSourceLocked(o.cfg.NamespacesKind)
 	}
 	o.seq++
 	s := Summary{Cluster: o.cfg.Cluster, Incarnation: o.incarnation, Seq: o.seq, EvaluatedAt: o.clk.Now(), Connection: o.conn, Final: true}
