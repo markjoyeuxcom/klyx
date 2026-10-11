@@ -553,7 +553,9 @@ func (c *ClusterConn) startHealth(ctx context.Context) {
 		domains = append(append(append(domains, gd...), wd...), ndoms...)
 	}
 	snaps, hd := healthsrc.Helm(healthsrc.HelmDeps{Cluster: c.name, Detect: helmDetect, List: c.listHelm})
-	domains = append(domains, hd...)
+	es, ed := healthsrc.Events(healthsrc.EventsDeps{Cluster: c.name, Typed: c.typed})
+	snaps = append(snaps, es...)
+	domains = append(append(domains, hd...), ed...)
 	o := observe.New(observe.Config{Cluster: c.name, Sink: sink, Kinds: kinds, Snapshots: snaps, Domains: domains, NamespacesKind: healthsrc.KindNamespaces})
 	c.mu.Lock()
 	c.health = o
