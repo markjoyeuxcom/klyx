@@ -1,5 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
-import { useFleet } from "../store/fleet";
+import { useMemo, useState } from "react";
 import type { PromotionSnapshotDTO, PromotionUnitDTO } from "../store/fleet";
 import { getPromotion } from "../bridge/promotion";
 import { ellipsis } from "../chrome/primitives";
@@ -7,6 +6,9 @@ import { IconGitMerge } from "@tabler/icons-react";
 import { EmptyState } from "../chrome/EmptyState";
 import { SkeletonRows } from "../chrome/SkeletonRows";
 import { LensLayout, type DatasetState } from "../layout/LensLayout";
+import { UpdatedAt } from "../chrome/Age";
+import { useFleetBatch } from "./useFleetBatch";
+import { MembershipNote } from "./MembershipNote";
 
 // FleetPromotion is the propagation tracker: every GitOps unit (Flux
 // Kustomization/HelmRelease, Argo Application) as a row, clusters as
@@ -19,8 +21,6 @@ import { LensLayout, type DatasetState } from "../layout/LensLayout";
 // as such, because which side is 'behind' cannot be derived from the strings.
 // A failed cluster read renders its error in that column, never an empty cell.
 
-const envRank: Record<string, number> = { dev: 0, development: 0, stg: 1, staging: 1, prd: 2, prod: 2, production: 2 };
-const rankOfEnv = (env: string): number => envRank[env.toLowerCase()] ?? 3;
 
 // shortRev compacts "main@sha1:abcdef012345..." to "main@abcdef0".
 function shortRev(rev: string): string {
@@ -42,24 +42,15 @@ type Row = {
   unhealthy: boolean; // any present cell not-ready (suspended excluded - intended)
 };
 
-export function FleetPromotion() {
-  const clusters = useFleet((s) => s.clusters);
-  const ordered = useMemo(() => [...clusters].sort((a, b) =>
-    rankOfEnv(a.env) - rankOfEnv(b.env) || a.env.localeCompare(b.env) || a.name.localeCompare(b.name)), [clusters]);
-  const [snaps, setSnaps] = useState<Record<string, PromotionSnapshotDTO | null>>({});
-  const [showAll, setShowAll] = useState(false);
+const failedSnap = (e: unknown): PromotionSnapshotDTO => ({ fluxPresent: false, argoPresent: false, units: [], sources: [], error: e instanceof Error ? e.message : "promotion read failed" });
 
-  useEffect(() => {
-    let live = true;
-    setSnaps({});
-    for (const c of clusters) {
-      void getPromotion(c.name).then((r) => {
-        if (live) setSnaps((prev) => ({ ...prev, [c.name]: r }));
-      });
-    }
-    return () => { live = false; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+export function FleetPromotion() {
+  // One read = one pinned membership (useFleetBatch): joined/left clusters
+  // are named, Refresh reads the current fleet, late replies are dropped.
+  const batch = useFleetBatch(getPromotion, failedSnap);
+  const ordered = batch.members;
+  const snaps: Record<string, PromotionSnapshotDTO | null> = batch.results;
+  const [showAll, setShowAll] = useState(false);
 
   const loaded = ordered.filter((c) => snaps[c.name] != null);
   const pendingCount = ordered.length - loaded.length;
@@ -97,6 +88,9 @@ export function FleetPromotion() {
 
   const attention = rows.filter((r) => r.drift || r.unhealthy);
   const notReady = rows.filter((r) => r.unhealthy).length;
+  // Units whose readiness the cluster did not establish are unverified, never
+  // folded into a quiet reading.
+  const unknownReady = rows.filter((r) => !r.unhealthy && Object.values(r.cells).some((u) => u && !u.suspended && u.ready === "unknown")).length;
   const visible = showAll ? rows : attention;
   const errors = ordered.filter((c) => snaps[c.name]?.error);
   const readable = loaded.length - errors.length;
@@ -107,20 +101,22 @@ export function FleetPromotion() {
   // sources still renders the body.
   const anySources = ordered.some((c) => (snaps[c.name]?.sources ?? []).length > 0);
   let state: DatasetState = "ready";
-  if (loaded.length === 0) state = "loading";
+  if (ordered.length === 0) state = "empty";
+  else if (loaded.length === 0) state = "loading";
   else if (readable === 0 && pendingCount === 0) state = "unreadable";
   else if (rows.length === 0 && !anySources && pendingCount === 0) state = "empty";
   const scope = `${readable} of ${ordered.length} cluster${ordered.length === 1 ? "" : "s"} read`;
   const icon = <IconGitMerge size={28} stroke={1.2} />;
   const stateView = state === "loading" ? <SkeletonRows rows={5} label="reading applied revisions" />
-    : state === "unreadable" ? <EmptyState icon={icon} title="No cluster's GitOps state could be read." hint="Each cluster's error is listed above." />
+    : state === "unreadable" ? <EmptyState icon={icon} title="No cluster's GitOps state could be read." hint="Each cluster's error is listed above." action={{ label: "Retry", onClick: batch.refresh }} />
+    : ordered.length === 0 ? <EmptyState icon={icon} title="No clusters to read." hint="The fleet had no clusters when this read started." action={{ label: "Refresh", onClick: batch.refresh }} />
     : <EmptyState icon={icon} title="No GitOps units found." hint={`No Flux Kustomization, HelmRelease or Argo Application on the ${scope}.`} />;
   // Neutral, scoped: never "the fleet is in sync".
   const quiet = pendingCount === 0 && visible.length === 0 ? (
     <div className="t-body" style={{ color: "var(--color-text-secondary)", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
       {rows.length === 0
         ? `No GitOps units found on the ${scope}.`
-        : `No unit differs or is not ready among ${rows.length} unit${rows.length === 1 ? "" : "s"} on the ${scope}. Clusters that did not answer are not covered.`}
+        : `No unit differs or is not ready among ${rows.length} unit${rows.length === 1 ? "" : "s"} on the ${scope}${unknownReady > 0 ? `; ${unknownReady} with readiness unknown` : ""}. Clusters that did not answer are not covered.`}
       {rows.length > 0 && !showAll && <button className="l-btn" onClick={() => setShowAll(true)}>Show all units</button>}
     </div>
   ) : null;
@@ -135,18 +131,26 @@ export function FleetPromotion() {
           <span className="t-secondary">units · {scope}</span>
           {notReady > 0 && <span className="t-status" style={{ color: "var(--color-text-danger)" }}>▲ {notReady} not ready</span>}
           {attention.length - notReady > 0 && <span className="t-status" style={{ color: "var(--color-text-warning)" }}>{attention.length - notReady} differ</span>}
+          {unknownReady > 0 && <span className="t-secondary">{unknownReady} readiness unknown</span>}
         </>
       )}
-      headerEnd={<span className="t-secondary">{pendingCount > 0 ? `${pendingCount} cluster${pendingCount === 1 ? "" : "s"} loading… · ` : ""}read-only</span>}
+      headerEnd={
+        <>
+          <span className="t-secondary">{pendingCount > 0 ? `${pendingCount} cluster${pendingCount === 1 ? "" : "s"} loading… · ` : ""}read-only</span>
+          <UpdatedAt at={batch.readAt} />
+          <button className="l-btn" onClick={batch.refresh}>Refresh</button>
+        </>
+      }
       controls={rows.length > 0 ? (
         <div role="group" aria-label="Promotion filter" style={{ display: "inline-flex", gap: 4 }}>
           <button className="l-chip" aria-pressed={!showAll} onClick={() => setShowAll(false)}>Needs attention {attention.length > 0 && <span style={{ color: "var(--color-text-warning)" }}>{attention.length}</span>}</button>
           <button className="l-chip" aria-pressed={showAll} onClick={() => setShowAll(true)}>All units {rows.length}</button>
         </div>
       ) : undefined}
-      notice={errors.length > 0 ? (
-        <div className="t-body" role="status" style={{ color: "var(--color-text-danger)", display: "flex", flexDirection: "column", gap: 2 }}>
-          {errors.map((c) => <span key={c.name} style={{ overflowWrap: "anywhere" }}>▲ Could not read {c.name}: {snaps[c.name]?.error}</span>)}
+      notice={errors.length > 0 || batch.joined.length > 0 || batch.left.length > 0 ? (
+        <div className="t-body" role="status" style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+          {errors.map((c) => <span key={c.name} style={{ color: "var(--color-text-danger)", overflowWrap: "anywhere" }}>▲ Could not read {c.name}: {snaps[c.name]?.error}</span>)}
+          <MembershipNote joined={batch.joined} left={batch.left} />
         </div>
       ) : undefined}
       state={state}
@@ -190,6 +194,7 @@ export function FleetPromotion() {
                           <span style={{ ...ellipsis, color, opacity: u.stale ? 0.6 : 1 }}>{differs ? "≠ " : ""}{shortRev(u.revision)}</span>
                           {u.suspended && <span className="t-secondary" style={{ flexShrink: 0 }}>suspended</span>}
                           {!u.suspended && u.ready === "not-ready" && <span className="t-secondary" style={{ color: "var(--color-text-danger)", flexShrink: 0 }}>▲ not ready</span>}
+                          {!u.suspended && u.ready === "unknown" && <span className="t-secondary" style={{ flexShrink: 0 }}>readiness unknown</span>}
                           {u.stale && <span className="t-secondary" style={{ flexShrink: 0 }}>syncing…</span>}
                         </span>
                       );
@@ -222,7 +227,9 @@ function SourcesStrip({ ordered, snaps }: { ordered: string[]; snaps: Record<str
       <h3 className="t-section-label">Source heads (fetched per cluster)</h3>
       <div style={{ display: "grid", gridTemplateColumns: `minmax(220px, 1.2fr) repeat(${ordered.length}, minmax(170px, 1fr))`, gap: "3px 10px", fontFamily: "var(--font-mono)", fontSize: 11, alignItems: "baseline" }}>
         {[...keys.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([k, meta]) => {
-          const revs = ordered.map((cl) => (snaps[cl]?.sources ?? []).find((s) => `${s.kind}/${s.namespace}/${s.name}` === k));
+          // Only clusters whose read succeeded are evidence; an unread one is
+          // neither "absent" nor part of the comparison.
+          const revs = ordered.map((cl) => (snaps[cl] && !snaps[cl]!.error ? (snaps[cl]!.sources ?? []).find((s) => `${s.kind}/${s.namespace}/${s.name}` === k) : undefined));
           const present = revs.filter((s): s is NonNullable<typeof s> => !!s);
           const differ = new Set(present.map((s) => s.revision)).size > 1;
           return (
@@ -235,6 +242,7 @@ function SourcesStrip({ ordered, snaps }: { ordered: string[]; snaps: Record<str
               {ordered.map((cl, i) => {
                 const s = revs[i];
                 if (snaps[cl] == null) return <span key={cl} style={{ color: "var(--color-text-tertiary)" }}>…</span>;
+                if (snaps[cl]?.error) return <span key={cl} style={{ color: "var(--color-text-tertiary)" }}>unread</span>;
                 if (!s) return <span key={cl} style={{ color: "var(--color-text-tertiary)" }}>absent</span>;
                 return (
                   <span key={cl} title={s.revision} style={{ ...ellipsis, color: s.ready === "not-ready" ? "var(--color-text-danger)" : differ ? "var(--color-text-warning)" : "var(--color-text-tertiary)" }}>

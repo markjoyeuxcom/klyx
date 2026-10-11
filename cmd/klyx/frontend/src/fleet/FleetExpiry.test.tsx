@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, fireEvent } from "@testing-library/react";
+import { render, fireEvent, act, screen } from "@testing-library/react";
 import { useFleet } from "../store/fleet";
 import type { ClusterDTO, ExpiryScanResultDTO } from "../store/fleet";
 import { FleetExpiry } from "./FleetExpiry";
@@ -68,5 +68,25 @@ describe("FleetExpiry", () => {
     expect(await findByText(/Could not scan prd-weu: cluster not connected/)).toBeTruthy();
     // the empty result names both the unread cluster and the partial one
     expect((await findAllByText(/1 of 2 clusters scanned, 1 partially/)).length).toBeGreaterThan(0);
+  });
+
+  it("scans a pinned membership: a joining cluster is named and scanned on Refresh (Codex 7d review)", async () => {
+    useFleet.setState({ clusters: [cl("homelab")] });
+    render(<FleetExpiry />);
+    await act(async () => { await new Promise<void>((r) => setTimeout(r, 0)); });
+    act(() => { useFleet.setState({ clusters: [cl("homelab"), cl("prd-weu")] }); });
+    expect(screen.getByText(/joined: prd-weu/)).toBeTruthy();
+    expect(vi.mocked(getExpiryScan).mock.calls.map((c) => c[0])).toEqual(["homelab"]);
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    await act(async () => { await new Promise<void>((r) => setTimeout(r, 0)); });
+    expect(vi.mocked(getExpiryScan).mock.calls.map((c) => c[0])).toEqual(["homelab", "homelab", "prd-weu"]);
+  });
+
+  it("a rejected scan is a named failure with Retry, never a hang", async () => {
+    useFleet.setState({ clusters: [cl("homelab")] });
+    vi.mocked(getExpiryScan).mockRejectedValueOnce(new Error("timeout"));
+    render(<FleetExpiry />);
+    expect(await screen.findByText(/Could not scan homelab: timeout/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
   });
 });

@@ -1,5 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
-import { useFleet } from "../store/fleet";
+import { useMemo, useState } from "react";
 import type { ExpiryItemDTO, ExpiryScanResultDTO } from "../store/fleet";
 import { getExpiryScan } from "../bridge/expiry";
 import { ellipsis } from "../chrome/primitives";
@@ -7,6 +6,9 @@ import { IconCertificate } from "@tabler/icons-react";
 import { EmptyState } from "../chrome/EmptyState";
 import { SkeletonRows } from "../chrome/SkeletonRows";
 import { LensLayout, type DatasetState } from "../layout/LensLayout";
+import { UpdatedAt } from "../chrome/Age";
+import { useFleetBatch } from "./useFleetBatch";
+import { MembershipNote } from "./MembershipNote";
 
 // FleetExpiry is the "what dies next" horizon: every certificate with a
 // lifetime, merged across the fleet, soonest first - cert-manager-managed
@@ -24,21 +26,15 @@ const sourceLabel: Record<string, string> = {
   "cert-manager": "cert-manager",
 };
 
-export function FleetExpiry() {
-  const clusters = useFleet((s) => s.clusters);
-  const [snaps, setSnaps] = useState<Record<string, ExpiryScanResultDTO | null>>({});
-  const [windowDays, setWindowDays] = useState<number>(90);
+const failedScan = (e: unknown): ExpiryScanResultDTO => ({ items: [], warnings: [], error: e instanceof Error ? e.message : "expiry scan failed" });
 
-  useEffect(() => {
-    let live = true;
-    for (const c of clusters) {
-      void getExpiryScan(c.name).then((r) => {
-        if (live) setSnaps((prev) => ({ ...prev, [c.name]: r }));
-      });
-    }
-    return () => { live = false; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+export function FleetExpiry() {
+  // One scan = one pinned membership (useFleetBatch): joined/left clusters
+  // are named, Refresh scans the current fleet, late replies are dropped.
+  const batch = useFleetBatch(getExpiryScan, failedScan);
+  const clusters = batch.members;
+  const snaps: Record<string, ExpiryScanResultDTO | null> = batch.results;
+  const [windowDays, setWindowDays] = useState<number>(90);
 
   const now = Math.floor(Date.now() / 1000);
   const rows: Row[] = useMemo(() => {
@@ -67,14 +63,16 @@ export function FleetExpiry() {
   // scoped to the clusters that were scanned - partial and unreadable scans
   // are named, never folded into "nothing expires".
   let state: DatasetState = "ready";
-  if (readable === 0 && pending > 0) state = "loading";
+  if (clusters.length === 0) state = "empty";
+  else if (readable === 0 && pending > 0) state = "loading";
   else if (readable === 0 && errors.length > 0) state = "unreadable";
   else if (rows.length === 0 && pending === 0) state = "empty";
   else if (inWindow.length === 0 && pending === 0) state = "no-match";
   const scope = `${readable} of ${clusters.length} cluster${clusters.length === 1 ? "" : "s"} scanned${partial > 0 ? `, ${partial} partially` : ""}`;
   const icon = <IconCertificate size={28} stroke={1.2} />;
   const stateView = state === "loading" ? <SkeletonRows rows={5} label="scanning certificates" />
-    : state === "unreadable" ? <EmptyState icon={icon} title="No cluster could be scanned." hint="Each cluster's error is listed above." />
+    : state === "unreadable" ? <EmptyState icon={icon} title="No cluster could be scanned." hint="Each cluster's error is listed above." action={{ label: "Retry", onClick: batch.refresh }} />
+    : state === "empty" && clusters.length === 0 ? <EmptyState icon={icon} title="No clusters to scan." hint="The fleet had no clusters when this scan started." action={{ label: "Refresh", onClick: batch.refresh }} />
     : state === "empty" ? <EmptyState icon={icon} title="No certificate lifetimes found." hint={`Nothing with an expiry was read on the ${scope}.`} />
     : <EmptyState icon={icon} title={`Nothing found expiring ${horizon}.`} hint={`On the ${scope}. Clusters and objects that were not read are not covered.`} action={windowDays !== 0 ? { label: "Show all", onClick: () => setWindowDays(0) } : undefined} />;
 
@@ -90,7 +88,13 @@ export function FleetExpiry() {
           {soon > 0 && <span className="t-status" style={{ color: "var(--color-text-danger)" }}>▲ {soon} within 14 days</span>}
         </>
       )}
-      headerEnd={<span className="t-secondary">{pending > 0 ? `${pending} cluster${pending === 1 ? "" : "s"} scanning… · ` : ""}soonest first · read-only</span>}
+      headerEnd={
+        <>
+          <span className="t-secondary">{pending > 0 ? `${pending} cluster${pending === 1 ? "" : "s"} scanning… · ` : ""}soonest first · read-only</span>
+          <UpdatedAt at={batch.readAt} />
+          <button className="l-btn" onClick={batch.refresh}>Refresh</button>
+        </>
+      }
       controls={
         <div role="group" aria-label="Expiry window" style={{ display: "inline-flex", gap: 4 }}>
           {WINDOWS.map((w) => (
@@ -98,8 +102,9 @@ export function FleetExpiry() {
           ))}
         </div>
       }
-      notice={errors.length > 0 || warnings.length > 0 ? (
+      notice={errors.length > 0 || warnings.length > 0 || batch.joined.length > 0 || batch.left.length > 0 ? (
         <div className="t-body" role="status" style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+          <MembershipNote joined={batch.joined} left={batch.left} />
           {errors.map((c) => <span key={c.name} style={{ color: "var(--color-text-danger)", overflowWrap: "anywhere" }}>▲ Could not scan {c.name}: {snaps[c.name]?.error}</span>)}
           {warnings.map((w) => <span key={w} style={{ color: "var(--color-text-warning)", overflowWrap: "anywhere" }}>Partial scan - {w}</span>)}
         </div>
