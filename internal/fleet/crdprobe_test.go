@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
@@ -59,5 +60,41 @@ func TestCRDServedProbe(t *testing.T) {
 	// A discovery error confirms nothing: it is an error, not absence.
 	if _, err := probeConn(failingDiscovery{}).crdServed(ctx, "cert-manager.io", "certificates", "v1"); err == nil {
 		t.Error("a discovery failure must be reported, never read as absence")
+	}
+}
+
+// blockingDiscovery never answers until released (a hung discovery).
+type blockingDiscovery struct{ release chan struct{} }
+
+func (b blockingDiscovery) ServerGroups() (*metav1.APIGroupList, error) {
+	<-b.release
+	return nil, errors.New("released")
+}
+func (b blockingDiscovery) ServerResourcesForGroupVersion(string) (*metav1.APIResourceList, error) {
+	<-b.release
+	return nil, errors.New("released")
+}
+
+// A hung discovery never holds a probe past its deadline, and a cancelled
+// probe returns at once; either way it confirms nothing (a timeout class).
+func TestCRDServedProbeIsBoundedAndCancellable(t *testing.T) {
+	b := blockingDiscovery{release: make(chan struct{})}
+	defer close(b.release)
+	c := probeConn(b)
+	old := crdProbeTimeout
+	crdProbeTimeout = 50 * time.Millisecond
+	defer func() { crdProbeTimeout = old }()
+
+	start := time.Now()
+	_, err := c.crdServed(context.Background(), "cert-manager.io", "certificates", "v1")
+	if !errors.Is(err, context.DeadlineExceeded) || time.Since(start) > 2*time.Second {
+		t.Fatalf("a hung discovery must time out at the probe deadline: %v after %v", err, time.Since(start))
+	}
+	crdProbeTimeout = time.Hour
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() { time.Sleep(20 * time.Millisecond); cancel() }()
+	start = time.Now()
+	if _, err := c.crdServed(ctx, "cert-manager.io", "certificates", "v1"); !errors.Is(err, context.Canceled) || time.Since(start) > 2*time.Second {
+		t.Fatalf("a cancelled probe returns at once: %v after %v", err, time.Since(start))
 	}
 }

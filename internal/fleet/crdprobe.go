@@ -2,6 +2,8 @@ package fleet
 
 import (
 	"context"
+	"fmt"
+	"time"
 
 	"github.com/moomora/klyx/internal/observe"
 )
@@ -14,7 +16,36 @@ import (
 // resource lists cannot be read are uncertainty: when no readable version
 // serves the resource, the documented fallback (or the first unreadable
 // version) is tried, and its watch shows whether it works.
-func (c *ClusterConn) crdServed(_ context.Context, group, resource, fallback string) (observe.Probe, error) {
+//
+// Discovery calls take no context, so the probe runs aside: the Observer
+// gets its answer within crdProbeTimeout, or a timeout that confirms
+// nothing, and at once when its context ends. An abandoned call stays
+// bounded by the discovery client's own request timeout (client-go's 32s).
+func (c *ClusterConn) crdServed(ctx context.Context, group, resource, fallback string) (observe.Probe, error) {
+	ctx, cancel := context.WithTimeout(ctx, crdProbeTimeout)
+	defer cancel()
+	type result struct {
+		p   observe.Probe
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		p, err := c.crdServedNow(group, resource, fallback)
+		done <- result{p, err}
+	}()
+	select {
+	case r := <-done:
+		return r.p, r.err
+	case <-ctx.Done():
+		return observe.Probe{}, fmt.Errorf("discovery of %s/%s did not answer: %w", group, resource, ctx.Err())
+	}
+}
+
+// crdProbeTimeout bounds one probe across all of a group's versions. A test
+// seam.
+var crdProbeTimeout = 15 * time.Second
+
+func (c *ClusterConn) crdServedNow(group, resource, fallback string) (observe.Probe, error) {
 	disc := c.discovery()
 	groups, err := disc.ServerGroups()
 	if err != nil {
