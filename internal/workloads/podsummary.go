@@ -95,7 +95,7 @@ func SummarizePods(pods []corev1.Pod, now time.Time) []PodSummary {
 	out := make([]PodSummary, 0, len(pods))
 	for i := range pods {
 		p := &pods[i]
-		reason, sev := worstPodReason([]corev1.Pod{*p})
+		reason, sev := worstPodReasonOf([]*corev1.Pod{p})
 		recent := recentlyTerminated([]*corev1.Pod{p}, now)
 		rank := rankPod(p, sev, recent)
 

@@ -140,6 +140,7 @@ func (o *Observer) publish(now time.Time) {
 	o.mu.Unlock()
 
 	changed := false
+	start := time.Now() // wall time, not the injected clock: this is cost
 	for _, d := range o.domains {
 		for _, p := range d.parts {
 			if keys[p.key] {
@@ -147,6 +148,11 @@ func (o *Observer) publish(now time.Time) {
 				changed = changed || verChanged
 			}
 		}
+	}
+	if len(keys) > 0 {
+		spent := time.Since(start)
+		o.statEvalNanos.Add(int64(spent))
+		o.statLastEval.Store(int64(spent))
 	}
 	// Rows owed to subscribers: any part whose version they have not been
 	// sent - including a version a RowsNow bootstrap advanced, which never
@@ -170,6 +176,7 @@ func (o *Observer) publish(now time.Time) {
 		s := o.buildSummaryLocked(now)
 		o.latest = &s
 		o.mu.Unlock()
+		o.statPublishes.Add(1)
 		o.cfg.Sink.Summary(s)
 	}
 	for _, p := range rowsOut {

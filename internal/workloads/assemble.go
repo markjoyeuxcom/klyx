@@ -67,37 +67,42 @@ func assemble(deploys []appsv1.Deployment, rss []appsv1.ReplicaSet, stss []appsv
 	for i := range pods {
 		podVerdicts[i] = health.Pod(&pods[i], now)
 	}
-	classify := func(in health.WorkloadInput, owns func(*metav1.OwnerReference) bool, ns string, complete bool) health.Verdict {
-		in.Pods = ownedPods(ns, pods, podVerdicts, owns)
+	idx := indexPods(pods)
+	classify := func(in health.WorkloadInput, candidates []int, owns func(*metav1.OwnerReference) bool, ns string, complete bool) health.Verdict {
+		in.Pods = ownedPods(ns, pods, podVerdicts, candidates, owns)
 		in.PodsComplete = complete
 		return health.Workload(in, now)
 	}
-	// rsOwner maps a ReplicaSet UID to the UID of the Deployment controlling it.
+	// rsOwner maps a ReplicaSet UID to the UID of the Deployment controlling
+	// it; rsOf is its inverse, so a Deployment's candidate pods are those its
+	// ReplicaSets control.
 	rsOwner := make(map[types.UID]types.UID, len(rss))
+	rsOf := make(map[types.UID][]types.UID, len(rss))
 	for i := range rss {
 		if ref := metav1.GetControllerOf(&rss[i]); ref != nil && ref.Kind == "Deployment" {
 			rsOwner[rss[i].UID] = ref.UID
+			rsOf[ref.UID] = append(rsOf[ref.UID], rss[i].UID)
 		}
 	}
 
 	out := make([]Workload, 0, len(deploys)+len(stss)+len(dss))
 	for i := range deploys {
 		d := &deploys[i]
-		w := build("Deployment", d.UID, d.Namespace, d.Name, d.Labels, reloadOf(d.UID, d.Annotations, d.Spec.Template.Spec), d.Spec.Selector, classifyDeployment(d), pods, fluxPresent, now, d.Generation, d.Status.ObservedGeneration)
+		w := build("Deployment", d.UID, d.Namespace, d.Name, d.Labels, reloadOf(d.UID, d.Annotations, d.Spec.Template.Spec), d.Spec.Selector, classifyDeployment(d), pods, idx.byNS[d.Namespace], fluxPresent, now, d.Generation, d.Status.ObservedGeneration)
 		w.Paused = d.Spec.Paused
-		w.Health = classify(deploymentInput(d), ownedByDeployment(d.UID, rsOwner), d.Namespace, ev.PodsComplete && ev.ReplicaSetsComplete)
+		w.Health = classify(deploymentInput(d), idx.controlledBy("ReplicaSet", rsOf[d.UID]...), ownedByDeployment(d.UID, rsOwner), d.Namespace, ev.PodsComplete && ev.ReplicaSetsComplete)
 		out = append(out, w)
 	}
 	for i := range stss {
 		s := &stss[i]
-		w := build("StatefulSet", s.UID, s.Namespace, s.Name, s.Labels, reloadOf(s.UID, s.Annotations, s.Spec.Template.Spec), s.Spec.Selector, classifyStatefulSet(s), pods, fluxPresent, now, s.Generation, s.Status.ObservedGeneration)
-		w.Health = classify(statefulSetInput(s), ownedByUID("StatefulSet", s.UID), s.Namespace, ev.PodsComplete)
+		w := build("StatefulSet", s.UID, s.Namespace, s.Name, s.Labels, reloadOf(s.UID, s.Annotations, s.Spec.Template.Spec), s.Spec.Selector, classifyStatefulSet(s), pods, idx.byNS[s.Namespace], fluxPresent, now, s.Generation, s.Status.ObservedGeneration)
+		w.Health = classify(statefulSetInput(s), idx.controlledBy("StatefulSet", s.UID), ownedByUID("StatefulSet", s.UID), s.Namespace, ev.PodsComplete)
 		out = append(out, w)
 	}
 	for i := range dss {
 		ds := &dss[i]
-		w := build("DaemonSet", ds.UID, ds.Namespace, ds.Name, ds.Labels, reloadOf(ds.UID, ds.Annotations, ds.Spec.Template.Spec), ds.Spec.Selector, classifyDaemonSet(ds), pods, fluxPresent, now, ds.Generation, ds.Status.ObservedGeneration)
-		w.Health = classify(daemonSetInput(ds), ownedByUID("DaemonSet", ds.UID), ds.Namespace, ev.PodsComplete)
+		w := build("DaemonSet", ds.UID, ds.Namespace, ds.Name, ds.Labels, reloadOf(ds.UID, ds.Annotations, ds.Spec.Template.Spec), ds.Spec.Selector, classifyDaemonSet(ds), pods, idx.byNS[ds.Namespace], fluxPresent, now, ds.Generation, ds.Status.ObservedGeneration)
+		w.Health = classify(daemonSetInput(ds), idx.controlledBy("DaemonSet", ds.UID), ownedByUID("DaemonSet", ds.UID), ds.Namespace, ev.PodsComplete)
 		out = append(out, w)
 	}
 
@@ -116,11 +121,51 @@ func assemble(deploys []appsv1.Deployment, rss []appsv1.ReplicaSet, stss []appsv
 	return out
 }
 
-// ownedPods attributes pods to one workload by controller owner reference,
-// never by label selector (selectors can overlap; ownership cannot).
-func ownedPods(ns string, pods []corev1.Pod, verdicts []health.Verdict, owns func(*metav1.OwnerReference) bool) []health.OwnedPod {
-	var out []health.OwnedPod
+// podIndex is the join index, built once per assembly: pod positions by
+// namespace and by controlling owner, each in input order. A workload scans
+// only its candidates - never every pod (the pod x workload rescans that
+// cost a 5000-pod cluster most of its evaluation, 1c spec §7).
+type podIndex struct {
+	byNS    map[string][]int
+	byOwner map[ownerKey][]int
+}
+
+type ownerKey struct {
+	kind string
+	uid  types.UID
+}
+
+func indexPods(pods []corev1.Pod) podIndex {
+	idx := podIndex{byNS: map[string][]int{}, byOwner: map[ownerKey][]int{}}
 	for i := range pods {
+		idx.byNS[pods[i].Namespace] = append(idx.byNS[pods[i].Namespace], i)
+		if ref := metav1.GetControllerOf(&pods[i]); ref != nil {
+			k := ownerKey{ref.Kind, ref.UID}
+			idx.byOwner[k] = append(idx.byOwner[k], i)
+		}
+	}
+	return idx
+}
+
+// controlledBy is the pods controlled by any of the owners, in input order.
+func (idx podIndex) controlledBy(kind string, uids ...types.UID) []int {
+	if len(uids) == 1 {
+		return idx.byOwner[ownerKey{kind, uids[0]}]
+	}
+	var out []int
+	for _, uid := range uids {
+		out = append(out, idx.byOwner[ownerKey{kind, uid}]...)
+	}
+	sort.Ints(out)
+	return out
+}
+
+// ownedPods attributes pods to one workload by controller owner reference,
+// never by label selector (selectors can overlap; ownership cannot). It
+// checks only the candidates the index found, with the same predicate.
+func ownedPods(ns string, pods []corev1.Pod, verdicts []health.Verdict, candidates []int, owns func(*metav1.OwnerReference) bool) []health.OwnedPod {
+	var out []health.OwnedPod
+	for _, i := range candidates {
 		p := &pods[i]
 		if p.Namespace != ns {
 			continue
@@ -208,7 +253,7 @@ func daemonSetInput(ds *appsv1.DaemonSet) health.WorkloadInput {
 }
 
 func build(kind string, uid types.UID, ns, name string, objLabels map[string]string, reload *ReloadTargets, selector *metav1.LabelSelector,
-	c classified, allPods []corev1.Pod, fluxPresent bool, now time.Time,
+	c classified, allPods []corev1.Pod, nsPods []int, fluxPresent bool, now time.Time,
 	generation, observedGeneration int64) Workload {
 
 	w := Workload{Kind: kind, UID: uid, Namespace: ns, Name: name,
@@ -216,10 +261,10 @@ func build(kind string, uid types.UID, ns, name string, objLabels map[string]str
 		Generation: generation, ObservedGeneration: observedGeneration,
 		Reloader: reload}
 
-	matched := matchPods(ns, selector, allPods)
+	matched := matchPods(ns, selector, allPods, nsPods)
 	w.Pods = make([]Pod, 0, len(matched))
 	for _, p := range matched {
-		pr, _ := worstPodReason([]corev1.Pod{*p})
+		pr, _ := worstPodReasonOf([]*corev1.Pod{p})
 		w.Restarts += podRestarts(p)
 		w.Pods = append(w.Pods, Pod{
 			Name: p.Name, Ready: podReady(p), Restarts: podRestarts(p), Reason: pr,
@@ -232,7 +277,7 @@ func build(kind string, uid types.UID, ns, name string, objLabels map[string]str
 	// ready==desired) is shown in the status text but does not redden the rank dot.
 	// This is intentional - any real pod hard-failure still forces Unhealthy via sev,
 	// so a broken workload can never render healthy. Do not wire condReason into rankOf.
-	reason, sev := worstPodReason(deref(matched))
+	reason, sev := worstPodReasonOf(matched)
 	recent := recentlyTerminated(matched, now)
 	// Suppress a stale historical reason (an old OOMKill/Error left in lastState)
 	// from the row's status text, so the dot and the text agree. Hard (current
@@ -251,9 +296,10 @@ func build(kind string, uid types.UID, ns, name string, objLabels map[string]str
 	return w
 }
 
-// matchPods returns pods in ns matching selector. A nil or EMPTY selector matches
+// matchPods returns pods in ns matching selector, from nsPods (the
+// namespace's pod positions, in input order). A nil or EMPTY selector matches
 // ZERO pods (never the whole namespace).
-func matchPods(ns string, selector *metav1.LabelSelector, allPods []corev1.Pod) []*corev1.Pod {
+func matchPods(ns string, selector *metav1.LabelSelector, allPods []corev1.Pod, nsPods []int) []*corev1.Pod {
 	if selector == nil || (len(selector.MatchLabels) == 0 && len(selector.MatchExpressions) == 0) {
 		return nil
 	}
@@ -265,19 +311,11 @@ func matchPods(ns string, selector *metav1.LabelSelector, allPods []corev1.Pod) 
 	// have overlapping selectors a pod can match both — this mirrors Kubernetes
 	// label semantics (no owner-reference arbitration in this slice).
 	var out []*corev1.Pod
-	for i := range allPods {
+	for _, i := range nsPods {
 		p := &allPods[i]
 		if p.Namespace == ns && s.Matches(labels.Set(p.Labels)) {
 			out = append(out, p)
 		}
-	}
-	return out
-}
-
-func deref(ps []*corev1.Pod) []corev1.Pod {
-	out := make([]corev1.Pod, len(ps))
-	for i, p := range ps {
-		out[i] = *p
 	}
 	return out
 }

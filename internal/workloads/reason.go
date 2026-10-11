@@ -27,6 +27,16 @@ var hardRank = map[string]int{
 // worstPodReason returns the single worst reason across a workload's pods and its
 // severity. Reads container waiting/terminated state AND pod phase/conditions.
 func worstPodReason(pods []corev1.Pod) (string, severity) {
+	ps := make([]*corev1.Pod, len(pods))
+	for i := range pods {
+		ps[i] = &pods[i]
+	}
+	return worstPodReasonOf(ps)
+}
+
+// worstPodReasonOf is worstPodReason over pointers: the assembly never copies
+// a pod to classify it.
+func worstPodReasonOf(pods []*corev1.Pod) (string, severity) {
 	bestReason := ""
 	bestSev := sevNone
 	bestHard := -1
@@ -56,8 +66,7 @@ func worstPodReason(pods []corev1.Pod) (string, severity) {
 		}
 	}
 
-	for i := range pods {
-		p := &pods[i]
+	for _, p := range pods {
 		// Pod-level: unschedulable / failed.
 		if p.Status.Phase == corev1.PodFailed {
 			consider("Failed", sevHard)

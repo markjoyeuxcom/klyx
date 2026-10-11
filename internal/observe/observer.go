@@ -144,6 +144,10 @@ type Observer struct {
 	facts        map[string]any
 	latest       *Summary
 	seq          uint64
+	// stats: the Observer's own cost (Stats); written on the loop goroutine.
+	statPublishes atomic.Uint64
+	statEvalNanos atomic.Int64
+	statLastEval  atomic.Int64
 	started      bool
 
 	wake chan struct{}
@@ -551,4 +555,22 @@ func (o *Observer) partOf(k partKey) *partState {
 		}
 	}
 	panic("observe: unknown part")
+}
+
+// Stats are the Observer's own cost counters (1c spec §7): summaries
+// published, and the wall time spent capturing and evaluating parts on its
+// single loop goroutine - an upper bound on the CPU evaluation uses.
+type Stats struct {
+	Publishes uint64        // summaries emitted
+	EvalTime  time.Duration // cumulative capture and evaluation time
+	LastEval  time.Duration // capture and evaluation time of the latest publish cycle
+}
+
+// Stats returns the cost counters so far.
+func (o *Observer) Stats() Stats {
+	return Stats{
+		Publishes: o.statPublishes.Load(),
+		EvalTime:  time.Duration(o.statEvalNanos.Load()),
+		LastEval:  time.Duration(o.statLastEval.Load()),
+	}
 }
