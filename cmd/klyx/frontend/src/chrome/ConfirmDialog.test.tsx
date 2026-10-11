@@ -146,4 +146,15 @@ describe("ConfirmDialog", () => {
       invoker.remove();
     });
   });
+
+  it("is capped to the window and scrolls a long detail, so Cancel and Confirm stay reachable at any zoom", () => {
+    const { getByRole, getByTestId } = render(
+      <ConfirmDialog title="Delete 40 pods" cluster="dev-ne" detail={Array.from({ length: 40 }, (_, i) => `shop/pod-${i}`).join("\n")} protected={false} onConfirm={() => {}} onCancel={() => {}} />,
+    );
+    const dialog = getByRole("dialog");
+    expect(dialog.style.maxHeight).toBe("calc(100% - 32px)");
+    expect(dialog.style.display).toBe("flex");
+    expect(getByTestId("confirm-detail").style.overflowY).toBe("auto");
+    expect(getByTestId("confirm-detail").style.minHeight).toBe("0px");
+  });
 });

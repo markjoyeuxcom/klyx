@@ -30,6 +30,7 @@ import { LensLayout, LensTable, type DatasetState } from "../layout/LensLayout";
 import { InspectorBlock, InspectorLayout, type MenuItem } from "../layout/InspectorLayout";
 import { fitColumns, type ColumnDef } from "../layout/columns";
 import { WatchErrorBanner } from "../chrome/WatchErrorBanner";
+import { vh } from "../app/zoom";
 
 function ago(s: number): string {
   return s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)}m` : s < 86400 ? `${Math.floor(s / 3600)}h` : `${Math.floor(s / 86400)}d`;
@@ -260,7 +261,7 @@ function DrainModal({ cluster, node, opts, onClose }: { cluster: string; node: s
           borderRadius: "var(--border-radius-md)",
           padding: 20,
           width: 620,
-          maxHeight: "80vh",
+          maxHeight: vh(80),
           display: "flex",
           flexDirection: "column",
           fontSize: 13,

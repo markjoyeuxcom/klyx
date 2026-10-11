@@ -9,6 +9,7 @@ import { clusterDisplayName } from "../fleet/ClusterCard";
 import { stopAllForwards } from "../bridge/forwards";
 import { openCommandPalette } from "./CommandPalette";
 import { openTerminal } from "../bridge/configsvc";
+import { vh } from "../app/zoom";
 
 // Wails v3 window-drag regions: the bar is draggable, interactive children opt out.
 const drag = { "--wails-draggable": "drag" } as React.CSSProperties;
@@ -72,6 +73,26 @@ export function TopBar() {
           <IconTerminal2 size={15} stroke={1.5} />
         </UtilityButton>
         <SettingsButton current={route.name === "settings"} />
+        <ThemeToggle />
+      </div>
+    </header>
+  );
+}
+
+// PopoutBar: the mast of a pop-out window (logs). It keeps the main mast's
+// geometry - a draggable strip clear of the traffic lights - but none of its
+// navigation: a pop-out has no places, history or palette, so Back, Recent,
+// the palette and the utilities would be controls that lie.
+export function PopoutBar({ title }: { title: string }) {
+  return (
+    <header className="mast" style={drag}>
+      <div className="mast-left">
+        <KlyxMark size={18} />
+        <div className="mast-identity" style={noDrag} title={title}>
+          <span className="mast-cluster">{title}</span>
+        </div>
+      </div>
+      <div className="mast-right" style={noDrag}>
         <ThemeToggle />
       </div>
     </header>
@@ -174,7 +195,7 @@ function RecentMenu({ places, name }: { places: HistoryEntry[]; name: (e: Histor
         <IconClock size={15} stroke={1.6} />
       </button>
       {open && (
-        <div ref={menuRef} role="menu" aria-label="Recent places" className="l-menu" style={{ top: "calc(100% + 6px)", left: 0, width: 340, maxHeight: "60vh", overflow: "auto" }}>
+        <div ref={menuRef} role="menu" aria-label="Recent places" className="l-menu" style={{ top: "calc(100% + 6px)", left: 0, width: 340, maxHeight: vh(60), overflow: "auto" }}>
           <div className="l-menu-label">Recent places</div>
           {places.map((e) => (
             <button key={entryKey(e)} role="menuitem" className="l-menu-item" onClick={() => { setOpen(false); triggerRef.current?.focus(); go(e); }} title={name(e)}>

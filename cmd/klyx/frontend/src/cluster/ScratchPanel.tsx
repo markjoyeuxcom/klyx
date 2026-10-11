@@ -5,6 +5,7 @@ import { launchDiagnosticPod } from "../bridge/pods";
 import { armProtected } from "../bridge/configsvc";
 import { btn } from "../chrome/primitives";
 import { IconX, IconAlertTriangle } from "@tabler/icons-react";
+import { vh, vw } from "../app/zoom";
 
 // Image presets for the diagnostic-pod launcher. Curated, not a free-text field
 // by default: the common debug images, with netshoot first (the network
@@ -105,7 +106,7 @@ export function ScratchPanel({ cluster, onClose, onLaunched }: { cluster: string
 
   return (
     <div role="dialog" aria-label="scratch objects" style={{ position: "fixed", inset: 0, background: "color-mix(in srgb, var(--color-background-primary) 72%, transparent)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 60 }}>
-      <div style={{ width: 640, maxWidth: "92vw", maxHeight: "88vh", overflowY: "auto", background: "var(--color-background-primary)", border: "0.5px solid var(--color-border-secondary)", borderRadius: "var(--border-radius-md)", padding: 16, display: "flex", flexDirection: "column", gap: 12 }}>
+      <div style={{ width: 640, maxWidth: vw(92), maxHeight: vh(88), overflowY: "auto", background: "var(--color-background-primary)", border: "0.5px solid var(--color-border-secondary)", borderRadius: "var(--border-radius-md)", padding: 16, display: "flex", flexDirection: "column", gap: 12 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <div style={{ fontSize: 13, fontWeight: 600 }}>Scratch</div>
           <div style={{ fontSize: 11, color: "var(--color-text-tertiary)" }}>ad-hoc objects Klyx created (klyx.dev/adhoc) — not in Git</div>

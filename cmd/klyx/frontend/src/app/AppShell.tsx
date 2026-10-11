@@ -15,7 +15,7 @@ import { CommandPalette, getPaletteOpen } from "../chrome/CommandPalette";
 import { ActionToast } from "../chrome/ActionToast";
 import { back, forward } from "../nav/history";
 import { useClusterAttention } from "../nav/attention";
-import { zoomIn, zoomOut, zoomReset } from "./zoom";
+import { handleZoomKey } from "./zoom";
 
 // AppShell owns the frame (redesign spec §1): an 8px inset, the 36px mast,
 // then the fleet spine beside the 32px navigation band and the workspace,
@@ -39,16 +39,9 @@ export function shellKeysOwnedElsewhere(e: KeyboardEvent | MouseEvent): boolean 
 }
 
 export function handleShellKey(e: KeyboardEvent): void {
-  if (!(e.metaKey || e.ctrlKey) || e.altKey) return;
-  // mod+= / mod++ / mod+- / mod+0: app zoom, anywhere (a reading aid is
-  // never owned by a field) unless a handler already took the key.
-  if (e.key === "=" || e.key === "+" || e.key === "-" || e.key === "0") {
-    if (e.defaultPrevented) return;
-    e.preventDefault();
-    if (e.key === "-") zoomOut(); else if (e.key === "0") zoomReset(); else zoomIn();
-    return;
-  }
-  if (e.shiftKey) return;
+  // App zoom first: it works anywhere, a text field included (app/zoom.ts).
+  if (handleZoomKey(e)) return;
+  if (!(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey) return;
   const history = e.key === "[" || e.key === "]";
   const n = Number(e.key);
   const cluster = Number.isInteger(n) && n >= 1 && n <= 9;

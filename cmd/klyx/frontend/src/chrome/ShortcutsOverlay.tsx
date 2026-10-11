@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { getPaletteOpen } from "./CommandPalette";
+import { vh, vw } from "../app/zoom";
 
 // ShortcutsOverlay — the "?" cheatsheet. Every shortcut in the app was
 // previously undiscoverable outside the palette's footer line; this overlay
@@ -89,7 +90,7 @@ export function ShortcutsOverlay() {
         aria-modal="true"
         aria-label="Keyboard shortcuts"
         style={{
-          width: 480, maxWidth: "90vw", maxHeight: "80vh", overflowY: "auto",
+          width: 480, maxWidth: vw(90), maxHeight: vh(80), overflowY: "auto",
           background: "var(--color-background-primary)",
           border: "0.5px solid var(--color-border-secondary)",
           borderRadius: 11,

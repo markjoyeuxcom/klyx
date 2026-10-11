@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, waitFor } from "@testing-library/react";
+import { getZoom, zoomReset } from "./zoom";
 import { LogsWindow } from "./LogsWindow";
 import { ThemeProvider } from "../theme/ThemeProvider";
 
@@ -95,5 +96,35 @@ describe("LogsWindow", () => {
     const win = getByTestId("logs-window");
     expect(win.textContent).toContain("monitoring");
     expect(win.textContent).toContain("grafana");
+  });
+
+  it("fills the window through the 100% chain, never 100vh (viewport units are not zoom-compensated)", () => {
+    const { getByTestId } = renderWindow(seeded());
+    expect(getByTestId("logs-window").style.height).toBe("100%");
+  });
+
+  it("takes the zoom keys - and only those - and lets go of them on close (Codex zoom review)", async () => {
+    const { unmount } = renderWindow(seeded());
+    await waitFor(() => expect(mockOpenLogStream).toHaveBeenCalled());
+    try {
+      act(() => { fireEvent.keyDown(window, { key: "=", metaKey: true }); });
+      expect(getZoom()).toBe(1.1);
+      act(() => { fireEvent.keyDown(window, { key: "0", metaKey: true }); });
+      expect(getZoom()).toBe(1);
+      unmount();
+      act(() => { fireEvent.keyDown(window, { key: "=", metaKey: true }); });
+      expect(getZoom()).toBe(1);
+    } finally {
+      act(() => zoomReset());
+    }
+  });
+
+  it("its mast carries no main-window navigation - a pop-out has no places (step 7b regression)", () => {
+    const { getByRole, queryByRole, queryByTestId } = renderWindow(seeded());
+    expect(getByRole("banner").textContent).toContain("Logs");
+    expect(queryByRole("button", { name: /^Back/ })).toBeNull();
+    expect(queryByRole("button", { name: "Recent places" })).toBeNull();
+    expect(queryByTestId("command-bar")).toBeNull();
+    expect(queryByRole("button", { name: /^Settings/ })).toBeNull();
   });
 });

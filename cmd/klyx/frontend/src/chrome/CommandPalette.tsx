@@ -4,6 +4,7 @@ import type { ClusterDTO } from "../store/fleet";
 import { buildCommands, Command } from "./commands";
 import { fuzzyMatch } from "./fuzzy";
 import { loadBoosts, recordUse } from "./frecency";
+import { vh, vw } from "../app/zoom";
 
 // CommandPalette is the ⌘K primary-nav surface (design principle #6). It mounts
 // once in AppShell and installs a single window keydown handler:
@@ -291,14 +292,14 @@ export function CommandPalette() {
         display: "flex",
         justifyContent: "center",
         alignItems: "flex-start",
-        paddingTop: "12vh",
+        paddingTop: vh(12),
       }}
     >
       <div
         onMouseDown={(e) => e.stopPropagation()}
         style={{
           width: 560,
-          maxWidth: "92vw",
+          maxWidth: vw(92),
           background: "var(--color-background-primary)",
           border: "0.5px solid var(--color-border-secondary)",
           borderRadius: 11,
@@ -349,7 +350,7 @@ export function CommandPalette() {
             <span className="t-section-label">{step.title}</span>
           </div>
         )}
-        <div ref={listRef} id="command-palette-list" role="listbox" style={{ maxHeight: "50vh", overflowY: "auto", padding: "4px 0" }}>
+        <div ref={listRef} id="command-palette-list" role="listbox" style={{ maxHeight: vh(50), overflowY: "auto", padding: "4px 0" }}>
           {results.length === 0 ? (
             <div style={{ padding: "16px", fontSize: 13, color: "var(--color-text-tertiary)" }}>
               {step ? "No eligible cluster remains for this view." : "No matches."}

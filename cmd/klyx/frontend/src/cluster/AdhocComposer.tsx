@@ -4,6 +4,7 @@ import { createResourceYAML } from "../bridge/crd";
 import { armProtected } from "../bridge/configsvc";
 import { btn } from "../chrome/primitives";
 import { IconAlertTriangle, IconX } from "@tabler/icons-react";
+import { vh, vw } from "../app/zoom";
 
 // AdhocComposer is the deliberately-non-GitOps scratch/deploy surface: paste a
 // manifest (multi-doc ok), dry-run it against the server, review the per-doc
@@ -64,7 +65,7 @@ export function AdhocComposer({ cluster, onClose }: { cluster: string; onClose: 
 
   return (
     <div role="dialog" aria-label="deploy ad-hoc yaml" style={{ position: "fixed", inset: 0, background: "color-mix(in srgb, var(--color-background-primary) 72%, transparent)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 60 }}>
-      <div style={{ width: 700, maxWidth: "92vw", maxHeight: "88vh", overflowY: "auto", background: "var(--color-background-primary)", border: "0.5px solid var(--color-border-secondary)", borderRadius: "var(--border-radius-md)", padding: 16, display: "flex", flexDirection: "column", gap: 10 }}>
+      <div style={{ width: 700, maxWidth: vw(92), maxHeight: vh(88), overflowY: "auto", background: "var(--color-background-primary)", border: "0.5px solid var(--color-border-secondary)", borderRadius: "var(--border-radius-md)", padding: 16, display: "flex", flexDirection: "column", gap: 10 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <div style={{ fontSize: 13, fontWeight: 600 }}>Deploy ad-hoc YAML</div>
           <div style={{ flex: 1 }} />

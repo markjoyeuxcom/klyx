@@ -121,7 +121,7 @@
 
 /* ---- dialog surfaces (spec §2: separate surfaces, same text roles) ------ */
 .l-dialog-scrim { position: fixed; inset: 0; z-index: 60; background: rgba(0, 0, 0, 0.5); display: flex; align-items: center; justify-content: center; padding: 16px; }
-.l-dialog { max-height: 88vh; max-width: 100%; display: flex; flex-direction: column; min-height: 0; border-radius: 6px;
+.l-dialog { max-height: calc(88vh / var(--app-zoom, 1)); max-width: 100%; display: flex; flex-direction: column; min-height: 0; border-radius: 6px;
   background: var(--color-background-primary); box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4), inset 0 0 0 1px var(--color-border-secondary); }
 .l-dialog *, .l-dialog *::before, .l-dialog *::after { box-sizing: border-box; }
 .l-dialog-wide { width: min(1180px, 100%); }
@@ -194,8 +194,8 @@
 .navband-measure-clip { position: absolute; left: 0; top: 0; width: 0; height: 0; overflow: hidden; pointer-events: none; }
 .navband-measure { position: absolute; visibility: hidden; left: 0; top: 0; display: flex; gap: 2px; white-space: nowrap; width: max-content; }
 .navband-menu-wrap { position: relative; flex-shrink: 0; }
-.navband-menu { top: calc(100% + 4px); left: 0; max-height: min(60vh, 480px); overflow: auto; }
-.navtree { top: calc(100% + 4px); left: 0; width: 320px; max-height: min(70vh, 560px); padding: 0; }
+.navband-menu { top: calc(100% + 4px); left: 0; max-height: min(calc(60vh / var(--app-zoom, 1)), 480px); overflow: auto; }
+.navtree { top: calc(100% + 4px); left: 0; width: 320px; max-height: min(calc(70vh / var(--app-zoom, 1)), 560px); padding: 0; }
 .navtree-search { display: flex; align-items: center; gap: 6px; padding: 8px; color: var(--color-text-tertiary); border-bottom: 1px solid var(--color-border-tertiary); }
 .navtree-search .l-input { flex: 1; }
 .navtree-list { flex: 1; min-height: 0; overflow: auto; padding: 4px; }

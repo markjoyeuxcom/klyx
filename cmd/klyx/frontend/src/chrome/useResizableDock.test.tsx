@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { renderHook, act } from "@testing-library/react";
-import { useResizableDock } from "./useResizableDock";
+import { clampDock, dockMaxHeight, useResizableDock } from "./useResizableDock";
+import { setZoom, zoomReset } from "../app/zoom";
 
 const STORAGE_KEY = "klyx-logs-dock-height";
 const DEFAULT_HEIGHT = 320;
@@ -16,6 +17,7 @@ beforeEach(() => {
   Object.defineProperty(window, "innerHeight", { writable: true, configurable: true, value: INNER_HEIGHT });
 });
 afterEach(() => {
+  act(() => zoomReset());
   localStorage.clear();
   vi.clearAllMocks();
 });
@@ -179,5 +181,53 @@ describe("useResizableDock", () => {
     expect(s.top).toBe(0);
     expect(s.height).toBe(4);
     expect(s.position).toBe("absolute");
+  });
+});
+
+describe("useResizableDock under app zoom (Codex zoom review)", () => {
+  it("the limit is in layout px: at 200% an 800px window is 400 layout px", () => {
+    localStorage.setItem(STORAGE_KEY, "9999");
+    act(() => setZoom(2));
+    const { result } = renderHook(() => useResizableDock());
+    // min(60% of 400, 400 - 200 list reserve) = 200: the list keeps its room.
+    expect(result.current.height).toBe(200);
+  });
+
+  it("zooming an open dock re-clamps it, and zooming back restores the preference", () => {
+    localStorage.setItem(STORAGE_KEY, "480");
+    const { result } = renderHook(() => useResizableDock());
+    expect(result.current.height).toBe(480);
+    act(() => setZoom(2));
+    expect(result.current.height).toBe(200);
+    act(() => setZoom(1));
+    expect(result.current.height).toBe(480);
+  });
+
+  it("a window resize re-clamps the dock", () => {
+    localStorage.setItem(STORAGE_KEY, "480");
+    const { result } = renderHook(() => useResizableDock());
+    act(() => {
+      Object.defineProperty(window, "innerHeight", { writable: true, configurable: true, value: 500 });
+      window.dispatchEvent(new Event("resize"));
+    });
+    expect(result.current.height).toBe(300); // min(300, 300)
+  });
+
+  it("a space too small for the minimum still leaves the list room; the floor keeps the dock header", () => {
+    expect(dockMaxHeight(300)).toBe(120);
+    expect(clampDock(480, dockMaxHeight(300))).toBe(120);
+    expect(clampDock(50, dockMaxHeight(1000))).toBe(160);
+  });
+
+  it("the workspace, when mounted, is the space - not the whole window", () => {
+    const ws = document.createElement("div");
+    ws.className = "shell-workspace";
+    Object.defineProperty(ws, "clientHeight", { value: 600 });
+    document.body.appendChild(ws);
+    try {
+      expect(dockMaxHeight()).toBe(360);
+    } finally {
+      ws.remove();
+    }
   });
 });

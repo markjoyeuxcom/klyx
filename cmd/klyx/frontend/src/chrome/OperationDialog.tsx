@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import { IconAlertTriangle, IconX } from "@tabler/icons-react";
 import { armProtected } from "../bridge/configsvc";
 import { useRestoreFocus } from "./useRestoreFocus";
+import { vh, vw } from "../app/zoom";
 
 // OperationDialog is the operation-COMPOSER chrome shared by every
 // multi-option day-2 verb (Argo sync, node drain, helm rollback, flux
@@ -127,8 +128,8 @@ export function OperationDialog({
         onClick={(e) => e.stopPropagation()}
         onKeyDown={onDialogKeyDown}
         style={{
-          width: "min(720px, calc(100vw - 48px))",
-          maxHeight: "calc(100vh - 64px)",
+          width: `min(720px, calc(${vw(100)} - 48px))`,
+          maxHeight: `calc(${vh(100)} - 64px)`,
           display: "flex",
           flexDirection: "column",
           background: "var(--color-background-primary)",

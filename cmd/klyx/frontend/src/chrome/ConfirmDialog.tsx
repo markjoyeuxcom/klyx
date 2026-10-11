@@ -112,15 +112,18 @@ export function ConfirmDialog({
         aria-labelledby={titleId}
         onClick={(e) => e.stopPropagation()}
         onKeyDown={onDialogKeyDown}
-        style={{ background: "var(--color-background-primary)", border: "0.5px solid var(--color-border-secondary)", borderRadius: "var(--border-radius-md)", padding: 20, width: 380, fontSize: 13 }}
+        // Capped to the window (percentages of the fixed scrim are zoom-safe):
+        // a long detail - a bulk delete's pod list - scrolls, and Cancel and
+        // Confirm stay on screen at any zoom.
+        style={{ background: "var(--color-background-primary)", border: "0.5px solid var(--color-border-secondary)", borderRadius: "var(--border-radius-md)", padding: 20, width: 380, maxWidth: "calc(100% - 32px)", maxHeight: "calc(100% - 32px)", boxSizing: "border-box", display: "flex", flexDirection: "column", fontSize: 13 }}
       >
-        <div id={titleId} style={{ fontWeight: 600, marginBottom: 8, display: "flex", alignItems: "center", gap: 6 }}>
+        <div id={titleId} style={{ fontWeight: 600, marginBottom: 8, display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
           {/* Destructive intent gets a shape, not just a colour - the danger
               tint alone is invisible to colour-blind operators. */}
           {danger && <IconAlertTriangle size={15} stroke={1.8} style={{ color: "var(--color-text-danger)", flexShrink: 0 }} aria-hidden />}
           {title}
         </div>
-        <div style={{ color: "var(--color-text-secondary)", marginBottom: 6 }}>{detail}</div>
+        <div data-testid="confirm-detail" style={{ color: "var(--color-text-secondary)", marginBottom: 6, minHeight: 0, overflowY: "auto" }}>{detail}</div>
         <div style={{ color: "var(--color-text-tertiary)", fontSize: 12, marginBottom: 14 }}>
           on <span style={{ fontFamily: "var(--font-mono)" }}>{cluster}</span>
         </div>
@@ -146,7 +149,7 @@ export function ConfirmDialog({
         {armError && (
           <div style={{ color: "var(--color-text-danger)", fontSize: 12, marginBottom: 10 }}>{armError}</div>
         )}
-        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, flexShrink: 0 }}>
           <button ref={cancelRef} onClick={onCancel} style={btnStyle(false, false)}>Cancel</button>
           <button ref={confirmRef} onClick={() => void confirm()} disabled={!armed || arming} style={btnStyle(true, danger, !armed || arming)}>{confirmLabel}</button>
         </div>

@@ -3,6 +3,7 @@ import { IconX } from "@tabler/icons-react";
 import { describeResource, type DescribeResultDTO } from "../bridge/exec";
 import { CopyButton } from "./CopyButton";
 import { well } from "./primitives";
+import { vh, vw } from "../app/zoom";
 
 // DescribePane is the read-only `kubectl describe` overlay shared by the pod,
 // node, and generic instance panels. Same module shell as OperationDialog but
@@ -70,8 +71,8 @@ export function DescribePane({
           if (e.key === "Escape") onClose();
         }}
         style={{
-          width: "min(760px, calc(100vw - 48px))",
-          height: "min(560px, calc(100vh - 64px))",
+          width: `min(760px, calc(${vw(100)} - 48px))`,
+          height: `min(560px, calc(${vh(100)} - 64px))`,
           display: "flex",
           flexDirection: "column",
           background: "var(--color-background-primary)",

@@ -1,5 +1,7 @@
+import { useEffect } from "react";
 import { LogsPane } from "../cluster/LogsPane";
-import { TopBar } from "../chrome/TopBar";
+import { PopoutBar } from "../chrome/TopBar";
+import { handleZoomKey } from "./zoom";
 
 // LogsWindow is the root rendered in a pop-out log window (URL flag logswin=1).
 // It boots NONE of the normal app: no fleet subscriptions, no sidebar, no
@@ -19,22 +21,31 @@ export function LogsWindow({ params }: { params?: URLSearchParams }) {
   const kind = q.get("kind") ?? "";
   const container = q.get("container") ?? "";
 
+  // App zoom (initialised in main.tsx for both roots) - only the zoom keys,
+  // never the main window's navigation shortcuts.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => void handleZoomKey(e);
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   return (
     <div
       data-testid="logs-window"
       style={{
         display: "flex",
         flexDirection: "column",
-        height: "100vh",
+        // 100% of the html/body/#root chain, never 100vh: viewport units are
+        // not zoom-compensated, so 100vh overflows a zoomed window.
+        height: "100%",
         boxSizing: "border-box",
         background: "var(--color-background-primary)",
         color: "var(--color-text-primary)",
       }}
     >
-      {/* The same TopBar as the main window: traffic lights get their own clean
-          draggable strip (theme toggle included; the forwards indicator renders
-          nothing here because the popout never installs that subscription). */}
-      <TopBar />
+      {/* The pop-out mast: the main mast's draggable strip clear of the
+          traffic lights, without the main window's navigation. */}
+      <PopoutBar title="Logs" />
 
       {/* Identity line below the bar - the popout's equivalent of the main
           window's breadcrumb zone. */}

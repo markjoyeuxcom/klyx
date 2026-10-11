@@ -12,6 +12,7 @@ import { DescribePane } from "../chrome/DescribePane";
 import { IconAlertTriangle } from "@tabler/icons-react";
 import { InspectorBlock, InspectorLayout, type MenuItem } from "../layout/InspectorLayout";
 import { YamlBlock } from "../chrome/YamlBlock";
+import { vh } from "../app/zoom";
 
 const TONE_SET = new Set<string>(["success", "warning", "danger", "info", "muted", "neutral"]);
 function asTone(s: string): Tone | undefined {
@@ -1436,7 +1437,7 @@ const editorTextarea: React.CSSProperties = {
   display: "block",
   width: "100%",
   minHeight: 390,
-  maxHeight: "calc(100vh - 280px)",
+  maxHeight: `calc(${vh(100)} - 280px)`,
   resize: "vertical",
   boxSizing: "border-box",
   margin: 0,

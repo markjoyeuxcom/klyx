@@ -4,6 +4,7 @@ import './theme/tokens.css'
 import { ThemeProvider } from './theme/ThemeProvider'
 import App from './App'
 import { LogsWindow } from './app/LogsWindow'
+import { initZoom } from './app/zoom'
 
 // isLogsWindow detects the pop-out log window boot mode from a query string.
 // Extracted as a pure helper so the branch is unit-testable (the main.tsx side
@@ -13,6 +14,10 @@ export function isLogsWindow(search: string): boolean {
 }
 
 const popout = isLogsWindow(window.location.search)
+
+// App zoom applies to both roots, before first paint so a zoomed session never
+// flashes at 100%.
+initZoom()
 
 ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
   <React.StrictMode>
