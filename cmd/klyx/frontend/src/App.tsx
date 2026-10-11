@@ -5,6 +5,7 @@ import { initForwardsBridge } from "./bridge/forwards";
 import { refreshNewContextCount } from "./bridge/configsvc";
 import { initRoutePersistence } from "./store/persist";
 import { initShellSync } from "./bridge/shell";
+import { initHistory } from "./nav/history";
 
 export default function App() {
   useEffect(() => {
@@ -15,10 +16,11 @@ export default function App() {
     let offForwards = () => {};
     const offRoute = initRoutePersistence();
     const offShell = initShellSync();
+    const offHistory = initHistory();
     initFleetBridge().then((u) => (cancelled ? u() : (offFleet = u))).catch((e) => console.error("fleet bridge init", e));
     initForwardsBridge().then((u) => (cancelled ? u() : (offForwards = u))).catch((e) => console.error("forwards bridge init", e));
     void refreshNewContextCount();
-    return () => { cancelled = true; offFleet(); offForwards(); offRoute(); offShell(); };
+    return () => { cancelled = true; offFleet(); offForwards(); offRoute(); offShell(); offHistory(); };
   }, []);
   return <AppShell />;
 }

@@ -1,10 +1,9 @@
 import { useState, useRef, useEffect } from "react";
-import { IconArrowsLeftRight, IconCommand, IconHistory, IconSettings, IconTerminal2 } from "@tabler/icons-react";
+import { IconArrowLeft, IconArrowRight, IconArrowsLeftRight, IconClock, IconCommand, IconHistory, IconSettings, IconTerminal2 } from "@tabler/icons-react";
 import { ThemeToggle } from "./ThemeToggle";
 import { KlyxMark } from "./KlyxMark";
-import { useFleet, SECTION_LABELS } from "../store/fleet";
-import type { Route } from "../store/fleet";
-import { StatusDot } from "./primitives";
+import { useFleet } from "../store/fleet";
+import { back, entryKey, entryLabel, forward, go, recentPlaces, useHistory, type HistoryEntry } from "../nav/history";
 import { clusterDisplayName } from "../fleet/ClusterCard";
 import { stopAllForwards } from "../bridge/forwards";
 import { openCommandPalette } from "./CommandPalette";
@@ -14,96 +13,52 @@ import { openTerminal } from "../bridge/configsvc";
 const drag = { "--wails-draggable": "drag" } as React.CSSProperties;
 const noDrag = { "--wails-draggable": "no-drag" } as React.CSSProperties;
 
-// TopBar is the full-width title bar: macOS traffic lights sit on its left (the
-// padding clears them), the forwards indicator + theme toggle on its right, and
-// the empty middle drags the window. The breadcrumb lives in the content Header.
-// mastTitleFor renders the route as the mast readout - same shape as the OS
-// window title ("cluster / lens").
-function mastTitleFor(route: Route): { head: string; path: string } {
-  if (route.name === "cluster") {
-    const lens = route.resource ? route.resource.plural : SECTION_LABELS[route.section]?.toLowerCase() ?? route.section;
-    return { head: clusterDisplayName(route.cluster), path: lens };
-  }
-  if (route.name === "fleet") return { head: "fleet", path: "" };
-  return { head: route.name, path: "" };
-}
-
+// TopBar is the mast (spec §1): one 36px band. Left: Back / Forward / Recent,
+// then the readable context - cluster and the place in it - and the
+// protected-cluster cue, which never clips. Right: the palette and the app
+// utilities. Context outranks utility text: the palette label is the first
+// thing to give up width. The empty middle drags the window; macOS traffic
+// lights sit in the left padding.
 export function TopBar() {
-  const clusters = useFleet((s) => s.clusters);
   const route = useFleet((s) => s.route);
-  const mastTitle = mastTitleFor(route);
-  const currentProtected = route.name === "cluster" && (clusters.find((c) => c.name === route.cluster)?.protected ?? false);
-  const liveClusters = clusters.filter((c) => c.state !== "Failed" && c.state !== "Unconnected").length;
+  const kindFilter = useFleet((s) => s.workloads.kindFilter);
+  const current = useFleet((s) => (s.route.name === "cluster" ? s.clusters.find((c) => c.name === (s.route as { cluster: string }).cluster) : undefined));
+  const where = entryLabel({ route, kindFilter });
+  const clusterName = where.cluster ? clusterDisplayName(where.cluster) : null;
   return (
-    <div
-      style={{
-        ...drag,
-        display: "grid",
-        gridTemplateColumns: "180px minmax(220px, 1fr) auto",
-        alignItems: "center",
-        height: 40,
-        flexShrink: 0,
-        paddingLeft: 84,
-        paddingRight: 12,
-        // Mast module on the desk (Signal Bench) - machined, not joined.
-        background: "var(--color-background-primary)",
-        border: "var(--border-hairline) solid var(--color-border-tertiary)",
-        borderTop: "1px solid var(--bench-edge-hi, var(--color-border-tertiary))",
-        borderRadius: 6,
-        boxShadow: "var(--bench-module-shadow, none)",
-      }}
-    >
-      <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
-        <KlyxMark size={20} />
-        {/* Mast title (Signal Bench): mono "context / lens" readout. */}
-        <span style={{ fontFamily: "var(--font-mono)", fontSize: 13, fontWeight: 700, ...noDrag, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-          {mastTitle.head}
-          {mastTitle.path && <span style={{ color: "var(--color-text-tertiary)", fontWeight: 400 }}> / {mastTitle.path}</span>}
-        </span>
-        {/* The prd-lock cue moved here from the retired Header - the mast is
-            the one always-visible place. */}
-        {currentProtected && (
-          <span style={{ ...noDrag, fontFamily: "var(--font-mono)", fontSize: 9, padding: "2px 7px", borderRadius: 3, whiteSpace: "nowrap", color: "var(--color-text-warning)", background: "var(--color-background-warning)", boxShadow: "inset 0 0 0 1px var(--color-border-warning)" }}>
+    // data-list-keys="ignore": a focused mast control keeps its keys (see NavBand).
+    <header className="mast" style={drag} data-list-keys="ignore">
+      <div className="mast-left">
+        <HistoryControls />
+        <KlyxMark size={18} />
+        <div className="mast-identity" style={noDrag} title={where.cluster ? `${where.cluster} / ${where.place}` : where.place}>
+          {clusterName ? (
+            <>
+              <span className="mast-cluster">{clusterName}</span>
+              <span className="mast-sep" aria-hidden="true">/</span>
+              <span className="mast-place">{where.place}</span>
+            </>
+          ) : <span className="mast-cluster">{where.place}</span>}
+        </div>
+        {/* The protected cue never clips: it does not shrink, the place does. */}
+        {current?.protected && (
+          <span className="mast-protected" style={noDrag} title={current.protectedInferred ? "Protected - inferred from the cluster's environment name; operations need typed confirmation" : "Protected - operations need typed confirmation"}>
             prd lock
           </span>
         )}
       </div>
-      <div style={{ display: "flex", alignItems: "center", gap: 7, justifySelf: "start", fontSize: 9, letterSpacing: "0.12em", textTransform: "uppercase", color: "var(--color-text-tertiary)" }}>
-        {clusters.length > 0 && (
-          <>
-            <StatusDot size={8} tone={liveClusters === clusters.length ? "success" : liveClusters === 0 ? "danger" : "warning"} />
-            live · {liveClusters}/{clusters.length} watching
-          </>
-        )}
-      </div>
-      <div style={{ ...noDrag, display: "flex", alignItems: "center", gap: 8, justifySelf: "end" }}>
+      <div className="mast-right" style={noDrag}>
         <button
           type="button"
           aria-label="open command palette"
           data-testid="command-bar"
           onClick={openCommandPalette}
           title="open command palette with cmd+k or ctrl+k"
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 10,
-            minWidth: 230,
-            padding: "5px 12px",
-            fontSize: 11,
-            color: "var(--color-text-secondary)",
-            cursor: "pointer",
-            textAlign: "left",
-            border: "none",
-            borderRadius: "var(--radius-sm)",
-            background: "var(--bench-well-bg, var(--color-background-secondary))",
-            boxShadow: "var(--bench-well-shadow, inset 0 0 0 1px var(--color-border-tertiary))",
-          }}
+          className="mast-palette"
         >
-          <span style={{ display: "inline-flex", alignItems: "center", gap: 6, flex: 1 }}>
-            <IconCommand size={13} stroke={1.5} />
-            jump or run a command
-          </span>
-          <kbd style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--color-text-tertiary)" }}>⌘K</kbd>
+          <IconCommand size={13} stroke={1.5} style={{ flexShrink: 0 }} />
+          <span className="mast-palette-text">jump or run a command</span>
+          <kbd>⌘K</kbd>
         </button>
         {/* App utilities (spec §4): icon buttons whose names live in their
             accessible labels and tooltips - context outranks utility text. */}
@@ -117,6 +72,76 @@ export function TopBar() {
         <SettingsButton current={route.name === "settings"} />
         <ThemeToggle />
       </div>
+    </header>
+  );
+}
+
+// HistoryControls: Back / Forward (⌘[ / ⌘]) and the Recent menu. They move
+// between places; nothing they restore runs an action.
+function HistoryControls() {
+  const past = useHistory((h) => h.past);
+  const future = useHistory((h) => h.future);
+  useHistory((h) => h.recent);
+  useFleet((s) => s.route);
+  const prev = past[past.length - 1];
+  const next = future[future.length - 1];
+  const name = (e: HistoryEntry | undefined) => { if (!e) return ""; const l = entryLabel(e); return l.cluster ? `${clusterDisplayName(l.cluster)} / ${l.place}` : l.place; };
+  const recent = recentPlaces();
+  return (
+    <div className="mast-history" style={noDrag}>
+      <button type="button" className="mast-icon" aria-label={prev ? `Back to ${name(prev)}` : "Back"} title={prev ? `Back to ${name(prev)} (⌘[)` : "Back (⌘[)"} disabled={!prev} onClick={() => back()}>
+        <IconArrowLeft size={15} stroke={1.6} />
+      </button>
+      <button type="button" className="mast-icon" aria-label={next ? `Forward to ${name(next)}` : "Forward"} title={next ? `Forward to ${name(next)} (⌘])` : "Forward (⌘])"} disabled={!next} onClick={() => forward()}>
+        <IconArrowRight size={15} stroke={1.6} />
+      </button>
+      <RecentMenu places={recent} name={name} />
+    </div>
+  );
+}
+
+function RecentMenu({ places, name }: { places: HistoryEntry[]; name: (e: HistoryEntry) => string }) {
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    menuRef.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
+    const onDown = (e: MouseEvent) => { if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false); };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); setOpen(false); triggerRef.current?.focus(); return; }
+      if (e.key === "Tab") { setOpen(false); return; }
+      const list = Array.from(menuRef.current?.querySelectorAll<HTMLElement>('[role="menuitem"]') ?? []);
+      if (list.length === 0) return;
+      const i = list.indexOf(document.activeElement as HTMLElement);
+      let n = -1;
+      if (e.key === "ArrowDown") n = i < 0 ? 0 : (i + 1) % list.length;
+      else if (e.key === "ArrowUp") n = i < 0 ? list.length - 1 : (i - 1 + list.length) % list.length;
+      else if (e.key === "Home") n = 0;
+      else if (e.key === "End") n = list.length - 1;
+      if (n >= 0) { e.preventDefault(); e.stopPropagation(); list[n].focus(); }
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey, true);
+    return () => { document.removeEventListener("mousedown", onDown); document.removeEventListener("keydown", onKey, true); };
+  }, [open]);
+  return (
+    <div ref={wrapRef} style={{ position: "relative" }}>
+      <button ref={triggerRef} type="button" className="mast-icon" aria-label="Recent places" title="Recent places" aria-haspopup="menu" aria-expanded={open}
+        disabled={places.length === 0} onClick={() => setOpen((o) => !o)}>
+        <IconClock size={15} stroke={1.6} />
+      </button>
+      {open && (
+        <div ref={menuRef} role="menu" aria-label="Recent places" className="l-menu" style={{ top: "calc(100% + 6px)", left: 0, width: 340, maxHeight: "60vh", overflow: "auto" }}>
+          <div className="l-menu-label">Recent places</div>
+          {places.map((e) => (
+            <button key={entryKey(e)} role="menuitem" className="l-menu-item" onClick={() => { setOpen(false); go(e); }} title={name(e)}>
+              <span style={{ minWidth: 0, overflowWrap: "anywhere" }}>{name(e)}</span>
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

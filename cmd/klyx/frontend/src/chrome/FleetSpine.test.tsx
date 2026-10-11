@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { render, fireEvent } from "@testing-library/react";
-import { FleetSpine, spineCodes } from "./FleetSpine";
+import { FleetSpine, spineCodes, spineGroups, spineOrder } from "./FleetSpine";
 import { useFleet } from "../store/fleet";
 import type { ClusterDTO } from "../store/fleet";
 
@@ -70,10 +70,10 @@ describe("FleetSpine", () => {
     const { getByLabelText } = render(<FleetSpine />);
     fireEvent.click(getByLabelText("expand fleet spine"));
     expect(getByLabelText("cluster homelab-nelli").textContent).toContain("homelab-nelli");
-    expect(localStorage.getItem("klyx-spine-expanded")).toBe("1");
+    expect(localStorage.getItem("klyx.layout.v1.spineExpanded")).toBe("1");
     fireEvent.click(getByLabelText("collapse fleet spine"));
     expect(getByLabelText("cluster homelab-nelli").textContent).toBe("hn");
-    expect(localStorage.getItem("klyx-spine-expanded")).toBe("0");
+    expect(localStorage.getItem("klyx.layout.v1.spineExpanded")).toBe("0");
   });
 
   it("expanded rows show the broken count beside the name", () => {
@@ -109,6 +109,10 @@ describe("spineCodes", () => {
     });
   });
 
+  it("six names that differ only in middle segments get distinct codes (step 7b)", () => {
+    const names = ["dev-weu", "dev-neu", "stg-weu", "stg-neu", "prd-weu", "prd-neu"].map((x) => `aks-${x}-platform-01`);
+    expect(Object.values(spineCodes(names))).toEqual(["dw", "dn", "sw", "sn", "pw", "pn"]);
+  });
   it("single-segment names use their first two letters", () => {
     expect(spineCodes(["nelli"])).toEqual({ nelli: "ne" });
   });
@@ -143,5 +147,43 @@ describe("FleetSpine unknown workload verdicts", () => {
     const lamp = block.querySelector("span") as HTMLElement;
     expect(lamp.style.background).not.toContain("success");
     expect(block.title).toContain("unverified");
+  });
+});
+
+describe("FleetSpine environment grouping (redesign step 7b)", () => {
+  const env = (name: string, e: string): ClusterDTO => ({ ...cluster(name), env: e });
+
+  it("groups dev → test → stg → prd, config order within, unknown then untagged last", () => {
+    const cs = [env("aks-prd-weu", "PRD"), env("aks-dev-weu", "dev"), env("lab", ""), env("aks-stg-weu", "staging"), env("aks-prd-neu", "prod"), env("aks-dev-neu", "dev"), env("edge", "edge")];
+    expect(spineGroups(cs).map((g) => [g.env, g.clusters.map((c) => c.name)])).toEqual([
+      ["dev", ["aks-dev-weu", "aks-dev-neu"]],
+      ["staging", ["aks-stg-weu"]],
+      ["prd", ["aks-prd-weu"]],
+      ["prod", ["aks-prd-neu"]],
+      ["edge", ["edge"]],
+      ["other", ["lab"]],
+    ]);
+  });
+
+  it("no environment tags, or one environment for all: one flat list, no labels", () => {
+    const untagged = [{ ...cluster("b"), env: "" }, { ...cluster("a"), env: "" }];
+    expect(spineGroups(untagged)).toEqual([{ env: null, clusters: untagged }]);
+    const homelab = [cluster("b"), cluster("a")];
+    expect(spineGroups(homelab)).toEqual([{ env: null, clusters: homelab }]);
+  });
+
+  it("mod+N follows the spine's visual order", () => {
+    const cs = [env("aks-prd-weu", "prd"), env("aks-dev-weu", "dev")];
+    expect(spineOrder(cs).map((c) => c.name)).toEqual(["aks-dev-weu", "aks-prd-weu"]);
+  });
+
+  it("renders a labelled group per environment and migrates the old expansion key", () => {
+    localStorage.removeItem("klyx.layout.v1.spineExpanded");
+    localStorage.setItem("klyx-spine-expanded", "1");
+    useFleet.setState({ clusters: [env("aks-prd-weu", "prd"), env("aks-dev-weu", "dev")] });
+    const { getByRole, getByLabelText } = render(<FleetSpine />);
+    expect(getByRole("group", { name: "dev clusters" }).textContent).toContain("aks-dev-weu");
+    expect(getByRole("group", { name: "prd clusters" }).textContent).toContain("aks-prd-weu");
+    expect(getByLabelText("collapse fleet spine")).toBeTruthy();
   });
 });

@@ -24,6 +24,7 @@ const GROUPS: { title: string; rows: [string, string][] }[] = [
     rows: [
       [`${MOD} K`, "command palette — jump anywhere, run day-2 verbs"],
       [`${MOD} 1…9`, "switch to the nth cluster (fleet spine order)"],
+      [`${MOD} [  ·  ${MOD} ]`, "back / forward between places (never re-runs an action)"],
       ["?", "this cheatsheet"],
       ["Esc", "close panel, dialog, or palette"],
     ],

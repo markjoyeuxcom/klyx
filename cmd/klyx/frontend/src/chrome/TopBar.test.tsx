@@ -122,3 +122,34 @@ describe("TopBar app utilities (redesign step 7a)", () => {
     expect(getByRole("button", { name: "Settings, 2 new kubeconfig contexts" }).textContent).toContain("2");
   });
 });
+
+describe("TopBar mast identity and history (redesign step 7b)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    useFleet.setState({ forwards: [], newContexts: 0, clusters: [{ name: "aks-prd-weu-platform-01", state: "Synced", protected: true, protectedInferred: false } as never] });
+  });
+
+  it("names the cluster and the place in it; the protected cue is present", () => {
+    useFleet.setState({ route: { name: "cluster", cluster: "aks-prd-weu-platform-01", section: "gitops", fluxView: "sources" } });
+    const { container, getByText } = render(<TopBar />);
+    expect(container.querySelector(".mast-cluster")?.textContent).toBe("aks-prd-weu-platform-01");
+    expect(container.querySelector(".mast-place")?.textContent).toBe("Sources");
+    expect(getByText("prd lock")).toBeTruthy();
+    // No global green freshness readout in the mast.
+    expect(container.textContent).not.toMatch(/watching/i);
+  });
+
+  it("Back is disabled with no history and names its target when there is one", async () => {
+    const { _resetHistoryForTest, initHistory } = await import("../nav/history");
+    _resetHistoryForTest();
+    useFleet.setState({ route: { name: "fleet" } });
+    const off = initHistory();
+    const { getByRole, rerender } = render(<TopBar />);
+    expect((getByRole("button", { name: "Back" }) as HTMLButtonElement).disabled).toBe(true);
+    useFleet.getState().openCluster("aks-prd-weu-platform-01");
+    await new Promise<void>((r) => queueMicrotask(r));
+    rerender(<TopBar />);
+    expect((getByRole("button", { name: "Back to Fleet board" }) as HTMLButtonElement).disabled).toBe(false);
+    off();
+  });
+});
