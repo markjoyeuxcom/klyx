@@ -5,7 +5,8 @@ import { getHubbleFlowStats } from "../bridge/gateway";
 import { EmptyState } from "../chrome/EmptyState";
 import { SkeletonRows } from "../chrome/SkeletonRows";
 import { UpdatedAt } from "../chrome/Age";
-import { useHasHubble } from "./HubbleFlowsPanel";
+import { useFleet } from "../store/fleet";
+import { capState } from "../nav/registry";
 import { LensLayout, type DatasetState } from "../layout/LensLayout";
 
 // HubbleFlowsView - Cilium Hubble flow triage as a Network destination of its
@@ -13,14 +14,19 @@ import { LensLayout, type DatasetState } from "../layout/LensLayout";
 // left a Cilium cluster without Gateway API no way to reach it.
 
 export function HubbleFlowsView({ cluster }: { cluster: string }) {
-  const hasHubble = useHasHubble(cluster);
-  const flows = useHubble(cluster, hasHubble);
-  if (!hasHubble) {
-    return (
-      <LensLayout label="Hubble flows" title="Hubble flows" state="empty"
-        stateView={<EmptyState icon={<IconChartDots3 size={28} stroke={1.2} />} title="Hubble is not detected on this cluster." hint="Klyx found no Cilium Hubble metrics source here." />}
-        body={null} />
-    );
+  // The same resolver as the navigation: absence is claimed only once
+  // detection ran. A restored route while the cluster connects says
+  // "checking"; an unreadable cluster says it cannot tell.
+  const cap = useFleet((s) => capState(s.clusters.find((c) => c.name === cluster), "hubble"));
+  const flows = useHubble(cluster, cap === "present");
+  if (cap !== "present") {
+    const icon = <IconChartDots3 size={28} stroke={1.2} />;
+    const view = cap === "checking"
+      ? <EmptyState icon={icon} title="Checking for Hubble…" hint="Capability detection runs once the cluster connects." />
+      : cap === "unknown"
+        ? <EmptyState icon={icon} title="Cannot tell whether Hubble is installed." hint="The cluster could not be read, so capability detection has no answer." />
+        : <EmptyState icon={icon} title="Hubble is not detected on this cluster." hint="Klyx found no Cilium Hubble metrics source here." />;
+    return <LensLayout label="Hubble flows" title="Hubble flows" state={cap === "checking" ? "loading" : cap === "unknown" ? "unreadable" : "empty"} stateView={view} body={null} />;
   }
   return <FlowsLayout key={cluster} flows={flows} />;
 }

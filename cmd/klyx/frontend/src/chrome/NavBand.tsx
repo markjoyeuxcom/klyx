@@ -16,7 +16,7 @@ export function NavBand() {
   const route = useFleet((s) => s.route);
   if (route.name === "cluster") return <ClusterBand cluster={route.cluster} />;
   return (
-    <nav aria-label="Fleet navigation" className="navband">
+    <nav aria-label="Fleet navigation" className="navband" data-list-keys="ignore">
       {route.name === "fleet"
         ? <button className="l-chip" aria-current="page">Fleet board</button>
         : <span className="navband-title">{APP_TITLE[route.name]}</span>}
@@ -49,7 +49,9 @@ function ClusterBand({ cluster }: { cluster: string }) {
   const tabs = destination && destination.type === "resource" ? [...tasks, destination] : tasks;
 
   return (
-    <nav aria-label="Cluster navigation" className="navband">
+    // data-list-keys="ignore": a focused nav control owns its keys - Enter,
+    // j/k and lens verbs (r, s, ...) never reach the list behind the band.
+    <nav aria-label="Cluster navigation" className="navband" data-list-keys="ignore">
       <GroupSelector cluster={c} clusterName={cluster} current={group} counts={counts} />
       <Tabs tabs={tabs} active={destination} counts={counts} resources={resources} cluster={cluster} />
     </nav>
@@ -58,14 +60,51 @@ function ClusterBand({ cluster }: { cluster: string }) {
 
 // ---- tabs with overflow --------------------------------------------------------
 
+const GAP = 2;
+// A raw resource view is the generic GVR browser; the Deployments /
+// StatefulSets / DaemonSets shortcuts sit in the Resources menu but open the
+// verdict-based workloads view, so they are not "raw".
+const isRaw = (d: Destination) => d.target.kind === "resource";
+
+// fitTabs chooses the tabs the row shows. widths are measured as rendered
+// (the active tab in its active style); room is the row width; more/res are
+// the More and Resources triggers. The active tab is reserved first, then
+// neighbours in priority order while they fit. Unmeasured layout (no width
+// anywhere, as in tests) shows everything; real but insufficient room keeps
+// only the active tab.
+export function fitTabs(widths: number[], activeIdx: number, room: number, more: number, res: number): Set<number> {
+  const all = widths.map((_, i) => i);
+  if (room <= 0 && widths.every((w) => w === 0)) return new Set(all);
+  const avail = room - (res > 0 ? res + GAP : 0);
+  const sum = all.reduce((a, i) => a + widths[i] + GAP, 0);
+  if (sum <= avail) return new Set(all);
+  const budget = avail - (more + GAP);
+  const chosen = new Set<number>();
+  let used = 0;
+  if (activeIdx >= 0) { chosen.add(activeIdx); used += widths[activeIdx] + GAP; }
+  for (const i of all) {
+    if (chosen.has(i)) continue;
+    if (used + widths[i] + GAP > budget) break;
+    chosen.add(i);
+    used += widths[i] + GAP;
+  }
+  return chosen;
+}
+
+function TabLabel({ d, b }: { d: Destination; b: NavBadge | undefined }) {
+  return <>{d.label}{isRaw(d) && <span className="t-secondary">raw</span>}<Count b={b} /></>;
+}
+
 function Tabs({ tabs, active, counts, resources, cluster }: { tabs: Destination[]; active: Destination | undefined; counts: NavCounts; resources: Destination[]; cluster: string }) {
   const rowRef = useRef<HTMLDivElement>(null);
   const measureRef = useRef<HTMLDivElement>(null);
-  const [fit, setFit] = useState<number>(tabs.length);
-  const key = tabs.map((t) => t.id).join("|");
+  const [shownIdx, setShownIdx] = useState<Set<number> | null>(null);
+  const activeIdx = active ? tabs.indexOf(active) : -1;
+  const resHoldsActive = !!active && resources.includes(active);
+  // Anything that changes a measured width re-runs the fit: the tab set, the
+  // active one (bold), and every count shown.
+  const contentKey = [tabs.map((t) => `${t.id}:${counts.destination[t.id]?.n ?? 0}`).join("|"), activeIdx, resources.length, resHoldsActive].join("#");
 
-  // Measure every tab off-screen, then keep as many as the row holds after
-  // reserving the Resources and More triggers. The active tab always stays.
   useLayoutEffect(() => {
     const row = rowRef.current;
     const measure = measureRef.current;
@@ -73,52 +112,43 @@ function Tabs({ tabs, active, counts, resources, cluster }: { tabs: Destination[
     const compute = () => {
       const widths = Array.from(measure.children).map((el) => (el as HTMLElement).offsetWidth);
       const tabWidths = widths.slice(0, tabs.length);
-      const reserve = widths.slice(tabs.length).reduce((a, w) => a + w + 2, 0);
-      const room = row.clientWidth - reserve;
-      if (room <= 0 || tabWidths.every((w) => w === 0)) { setFit(tabs.length); return; }
-      let used = 0;
-      let n = 0;
-      for (const w of tabWidths) { if (used + w + 2 > room) break; used += w + 2; n++; }
-      setFit(n);
+      const more = widths[tabs.length] ?? 0;
+      const res = resources.length > 0 ? widths[tabs.length + 1] ?? 0 : 0;
+      setShownIdx(fitTabs(tabWidths, activeIdx, row.clientWidth, more, res));
     };
     compute();
     if (typeof ResizeObserver === "undefined") return;
     const ro = new ResizeObserver(compute);
     ro.observe(row);
+    ro.observe(measure);
     return () => ro.disconnect();
-  }, [key, tabs.length, resources.length]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [contentKey]);
 
-  let shown = tabs.slice(0, fit);
-  if (active && tabs.includes(active) && !shown.includes(active)) {
-    // Keep the active tab and its priority neighbours: drop from the end.
-    shown = [...tabs.slice(0, Math.max(0, fit - 1)), active];
-  }
+  const shown = tabs.filter((_, i) => !shownIdx || shownIdx.has(i));
   const overflow = tabs.filter((t) => !shown.includes(t));
-
-  const tab = (d: Destination) => (
-    <button key={d.id} className="l-chip navband-tab" aria-current={d === active ? "page" : undefined}
-      title={d.type === "resource" ? `${d.label} - raw resource view` : undefined}
-      onClick={() => navigate(cluster, d)}>
-      {d.label}{d.type === "resource" && <span className="t-secondary">raw</span>}
-      <Count b={counts.destination[d.id]} />
-    </button>
-  );
 
   return (
     <div ref={rowRef} className="navband-tabs">
-      {shown.map(tab)}
+      {shown.map((d) => (
+        <button key={d.id} className="l-chip navband-tab" aria-current={d === active ? "page" : undefined}
+          title={isRaw(d) ? `${d.label} - raw resource view` : undefined}
+          onClick={() => navigate(cluster, d)}>
+          <TabLabel d={d} b={counts.destination[d.id]} />
+        </button>
+      ))}
       {overflow.length > 0 && (
         <NavMenu label="More" title="More destinations" items={overflow} active={active} counts={counts} cluster={cluster} />
       )}
       {resources.length > 0 && (
-        <NavMenu label="Resources" title="Raw resource views" items={resources} active={active} counts={counts} cluster={cluster} raw />
+        <NavMenu label="Resources" title="Resources" items={resources} active={active} counts={counts} cluster={cluster} />
       )}
       <div ref={measureRef} aria-hidden="true" className="navband-measure">
         {tabs.map((d) => (
-          <span key={d.id} className="l-chip navband-tab">{d.label}{d.type === "resource" && <span className="t-secondary">raw</span>}<Count b={counts.destination[d.id]} /></span>
+          <span key={d.id} className="l-chip navband-tab" aria-current={d === active ? "page" : undefined}><TabLabel d={d} b={counts.destination[d.id]} /></span>
         ))}
-        <span className="l-chip">More <IconChevronDown size={12} /></span>
-        {resources.length > 0 && <span className="l-chip">Resources <IconChevronDown size={12} /></span>}
+        <span className="l-chip">More <IconChevronDown size={12} stroke={1.7} /></span>
+        {resources.length > 0 && <span className="l-chip" data-holds-active={resHoldsActive ? "true" : undefined}>Resources <IconChevronDown size={12} stroke={1.7} /></span>}
       </div>
     </div>
   );
@@ -127,7 +157,7 @@ function Tabs({ tabs, active, counts, resources, cluster }: { tabs: Destination[
 // NavMenu: a trigger plus a menu of destinations (More / Resources). Same
 // keyboard model as the inspector's ActionMenu: arrows, Home/End, Escape
 // returns focus to the trigger, Tab closes.
-function NavMenu({ label, title, items, active, counts, cluster, raw = false }: { label: string; title: string; items: Destination[]; active: Destination | undefined; counts: NavCounts; cluster: string; raw?: boolean }) {
+function NavMenu({ label, title, items, active, counts, cluster }: { label: string; title: string; items: Destination[]; active: Destination | undefined; counts: NavCounts; cluster: string }) {
   const [open, setOpen] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -167,11 +197,12 @@ function NavMenu({ label, title, items, active, counts, cluster, raw = false }: 
       </button>
       {open && (
         <div ref={menuRef} id={id} role="menu" aria-label={title} className="l-menu navband-menu">
-          {raw && <div className="l-menu-label">Raw resource views</div>}
           {items.map((d) => (
             <button key={d.id} role="menuitem" className="l-menu-item" aria-current={d === active ? "page" : undefined}
+              title={isRaw(d) ? `${d.label} - raw resource view` : undefined}
               onClick={() => { setOpen(false); triggerRef.current?.focus(); navigate(cluster, d); }}>
               <span style={{ flex: 1 }}>{d.label}</span>
+              {isRaw(d) && <span className="t-secondary">raw</span>}
               <Count b={counts.destination[d.id]} />
             </button>
           ))}
@@ -308,7 +339,7 @@ function GroupSelector({ cluster, clusterName, current, counts }: { cluster: Clu
               return (
                 <div key={`${r.g.id}:${r.d.id}`} id={optionId(r.d)} role="option" aria-selected={isSel} aria-disabled={r.disabled ? true : undefined}
                   aria-current={r.d === active ? "page" : undefined} data-selected={isSel ? "true" : "false"}
-                  className="navtree-item" title={r.disabled ?? (r.d.type === "resource" ? "Raw resource view" : undefined)}
+                  className="navtree-item" title={r.disabled ?? (isRaw(r.d) ? "Raw resource view" : undefined)}
                   onMouseMove={() => { if (!r.disabled) setSel(choices.findIndex((x) => x.d === r.d)); }}
                   onMouseDown={(e) => { e.preventDefault(); if (!r.disabled) go(r.d); }}>
                   <span style={{ flex: 1, minWidth: 0, overflowWrap: "anywhere" }}>{r.d.label}</span>

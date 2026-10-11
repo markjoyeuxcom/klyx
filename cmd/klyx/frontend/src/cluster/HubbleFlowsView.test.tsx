@@ -9,15 +9,15 @@ vi.mock("../bridge/gateway", () => ({
 import { getHubbleFlowStats } from "../bridge/gateway";
 import { HubbleFlowsView } from "./HubbleFlowsView";
 
-const seed = (hasHubble: boolean) => useFleet.setState(() => ({
+const seed = (hasHubble: boolean, state = "Synced") => useFleet.setState(() => ({
   route: { name: "cluster", cluster: "x", section: "flows" },
-  clusters: [{ name: "x", state: "Synced", hasHubble } as never],
+  clusters: [{ name: "x", state, hasHubble } as never],
 }));
 
 beforeEach(() => { vi.clearAllMocks(); });
 
 describe("HubbleFlowsView (redesign step 7a)", () => {
-  it("is its own destination - no Gateway API needed; zero drops never glow", async () => {
+  it("is its own destination - no Gateway API needed (none detected here); zero drops never glow", async () => {
     vi.mocked(getHubbleFlowStats).mockResolvedValue({
       forwardRate: 120, dropRate: 0, dropReasons: [], dnsErrorRate: null, dnsTotalRate: null, httpErrorRate: null, httpTotalRate: null,
       status: { available: true, message: "", updatedAt: "2026-10-10T00:00:00Z" },
@@ -29,11 +29,26 @@ describe("HubbleFlowsView (redesign step 7a)", () => {
     expect(screen.getByText("No drops in the window.")).toBeTruthy();
   });
 
-  it("without Hubble it says so and reads nothing", () => {
+  it("confirmed absent says so and reads nothing", () => {
     seed(false);
     render(<HubbleFlowsView cluster="x" />);
     expect(screen.getByText("Hubble is not detected on this cluster.")).toBeTruthy();
     expect(getHubbleFlowStats).not.toHaveBeenCalled();
+  });
+
+  it("a restored route while connecting says checking, never absent", () => {
+    seed(false, "Connecting");
+    render(<HubbleFlowsView cluster="x" />);
+    expect(screen.getByText("Checking for Hubble…")).toBeTruthy();
+    expect(screen.queryByText(/not detected/)).toBeNull();
+    expect(getHubbleFlowStats).not.toHaveBeenCalled();
+  });
+
+  it("an unreadable cluster cannot claim absence", () => {
+    seed(false, "Failed");
+    render(<HubbleFlowsView cluster="x" />);
+    expect(screen.getByText("Cannot tell whether Hubble is installed.")).toBeTruthy();
+    expect(screen.queryByText(/not detected/)).toBeNull();
   });
 
   it("a failed read is unreadable with Retry, never an empty success", async () => {

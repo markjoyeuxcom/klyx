@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, fireEvent, screen, within } from "@testing-library/react";
 import { useFleet, type ClusterDTO } from "../store/fleet";
-import { NavBand } from "./NavBand";
+import { NavBand, fitTabs } from "./NavBand";
+import { useListKeys } from "./useListKeys";
 
 vi.mock("../bridge/configsvc", () => ({ openTerminal: vi.fn(async () => {}) }));
 
@@ -40,9 +41,48 @@ describe("NavBand (redesign step 7a)", () => {
     // Kind links and raw views are in the Resources menu, not the row.
     expect(screen.queryByRole("button", { name: /^Deployments/ })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: /Resources/ }));
-    const menu = screen.getByRole("menu", { name: "Raw resource views" });
+    const menu = screen.getByRole("menu", { name: "Resources" });
     expect(within(menu).getByRole("menuitem", { name: "Deployments" })).toBeTruthy();
-    expect(within(menu).getByRole("menuitem", { name: "Jobs" })).toBeTruthy();
+    expect(within(menu).getByRole("menuitem", { name: /^Jobs/ })).toBeTruthy();
+  });
+
+  it("kind shortcuts are filtered workload views, never labelled raw; GVR views are", () => {
+    at("pods");
+    render(<NavBand />);
+    for (const [label, kind] of [["Deployments", "Deployment"], ["StatefulSets", "StatefulSet"], ["DaemonSets", "DaemonSet"]] as const) {
+      fireEvent.click(screen.getByRole("button", { name: /Resources/ }));
+      const menu = screen.getByRole("menu", { name: "Resources" });
+      const item = within(menu).getByRole("menuitem", { name: new RegExp(`^${label}`) });
+      expect(item.textContent).toBe(label);
+      expect(item.getAttribute("title")).toBeNull();
+      fireEvent.click(item);
+      const r = routeOf();
+      expect(r.name === "cluster" && r.section).toBe("workloads");
+      expect(useFleet.getState().workloads.kindFilter[kind]).toBe(true);
+    }
+    fireEvent.click(screen.getByRole("button", { name: /Resources/ }));
+    const jobs = within(screen.getByRole("menu", { name: "Resources" })).getByRole("menuitem", { name: /^Jobs/ });
+    expect(jobs.textContent).toContain("raw");
+    expect(jobs.getAttribute("title")).toMatch(/raw resource view/);
+  });
+
+  it("a focused nav control owns its keys: Enter, j/k and lens verbs never reach the list", () => {
+    at("pods");
+    const onActivate = vi.fn();
+    const onSelect = vi.fn();
+    const verb = vi.fn();
+    function List() {
+      useListKeys({ count: 3, selected: 0, onSelect, onActivate, extraKeys: { r: verb, s: verb } });
+      return null;
+    }
+    render(<><NavBand /><List /></>);
+    for (const el of [screen.getByRole("button", { name: /all views/ }), tab("Pods"), screen.getByRole("button", { name: /Resources/ })]) {
+      el.focus();
+      for (const key of ["Enter", "j", "k", "r", "s"]) fireEvent.keyDown(el, { key });
+    }
+    expect(onActivate).not.toHaveBeenCalled();
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(verb).not.toHaveBeenCalled();
   });
 
   it("a kind link opens All workloads filtered to that kind", () => {
@@ -166,5 +206,32 @@ describe("NavBand counts (health model)", () => {
       expect(tab("Pods").textContent).not.toMatch(/\d/);
       unmount();
     }
+  });
+});
+
+describe("fitTabs (Codex 7a review)", () => {
+  const ids = (set: Set<number>) => [...set].sort((a, b) => a - b);
+
+  it("everything fits: all tabs", () => {
+    expect(ids(fitTabs([60, 60, 60], 1, 400, 50, 80))).toEqual([0, 1, 2]);
+  });
+
+  it("a long active tab is reserved first; neighbours join only if they really fit", () => {
+    // room 300 - Resources 82 - More 52 = 166 for tabs; active needs 152.
+    expect(ids(fitTabs([60, 60, 150], 2, 300, 50, 80))).toEqual([2]);
+    expect(ids(fitTabs([10, 60, 150], 2, 300, 50, 80))).toEqual([0, 2]);
+  });
+
+  it("priority order: a later short tab never jumps a skipped earlier one", () => {
+    expect(ids(fitTabs([60, 120, 20], 0, 200, 50, 0))).toEqual([0]);
+  });
+
+  it("real but insufficient room keeps only the active tab, never all", () => {
+    expect(ids(fitTabs([60, 60, 60], 1, 0, 50, 80))).toEqual([1]);
+    expect(ids(fitTabs([60, 60, 60], -1, -10, 50, 80))).toEqual([]);
+  });
+
+  it("unmeasured layout (no widths anywhere) shows every tab", () => {
+    expect(ids(fitTabs([0, 0, 0], 1, 0, 0, 0))).toEqual([0, 1, 2]);
   });
 });
