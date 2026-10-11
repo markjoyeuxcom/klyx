@@ -256,7 +256,11 @@ func (o *Observer) captureLocked(p *partState, now time.Time) (Capture, []KindCo
 			kc.Scope = ks.spec.Scope
 			if ks.gen == nil {
 				kc.Coverage, kc.Class, kc.Error = o.kindCoverageLocked(ks)
+				if kc.Coverage == Stale && !ks.probedAt.IsZero() {
+					kc.AsOf, kc.LastGoodAt = copyTime(&ks.probedAt), copyTime(&ks.probedAt)
+				}
 			} else {
+				kc.Discovery = ks.probeErr
 				f := ks.gen.fresh
 				kc.Coverage, kc.Class, kc.Error = f.cov, f.class, f.err
 				if f.cov == Stale {

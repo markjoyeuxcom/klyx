@@ -66,9 +66,10 @@ type kindState struct {
 	// Discovery evidence, per kind:
 	probe    *probeGen
 	probed   bool // a probe has succeeded since activation
+	probedAt time.Time
 	served   bool
 	version  string
-	probeErr string // the last failed probe while none has succeeded
+	probeErr string // the current discovery failure; cleared by a success
 }
 
 type probeGen struct {
@@ -100,7 +101,7 @@ func (o *Observer) deactivateKind(ks *kindState) {
 		ks.probe = nil
 	}
 	o.stopKind(ks)
-	ks.probed, ks.served, ks.version, ks.probeErr = false, false, "", ""
+	ks.probed, ks.served, ks.version, ks.probeErr, ks.probedAt = false, false, "", "", time.Time{}
 	o.markKindLocked(ks)
 }
 
@@ -119,7 +120,9 @@ func (o *Observer) probeLoop(ks *kindState, pg *probeGen) {
 			return
 		}
 		if err != nil {
-			if !ks.probed {
+			// A failed probe confirms nothing: the last known served state
+			// and any live generation stand, and the gap is named.
+			if ks.probeErr != err.Error() {
 				ks.probeErr = err.Error()
 				o.markKindLocked(ks)
 			}
@@ -143,9 +146,12 @@ func (o *Observer) probeLoop(ks *kindState, pg *probeGen) {
 }
 
 func (o *Observer) applyProbeLocked(ks *kindState, res Probe) {
-	ks.probeErr = ""
+	if ks.probeErr != "" {
+		ks.probeErr = ""
+		o.markKindLocked(ks) // the discovery gap closes
+	}
 	first := !ks.probed
-	ks.probed = true
+	ks.probed, ks.probedAt = true, o.clk.Now()
 	switch {
 	case !res.Served:
 		if ks.served || first {
@@ -176,6 +182,10 @@ func (o *Observer) kindCoverageLocked(ks *kindState) (Coverage, string, string) 
 	switch {
 	case ks.refs == 0:
 		return Checking, "", "" // not observed by any active domain
+	case ks.probed && !ks.served && ks.probeErr != "":
+		// Last known absent, but discovery is failing now: absence is not
+		// confirmed - retained evidence, named as a discovery gap.
+		return Stale, ClassDiscovery, ks.probeErr
 	case ks.probed && !ks.served:
 		return Absent, "", ""
 	case !ks.probed && ks.probeErr != "":

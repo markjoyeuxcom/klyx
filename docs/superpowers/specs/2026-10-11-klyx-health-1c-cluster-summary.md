@@ -320,6 +320,7 @@ type Summary struct {
 **Coverage rules.**
 
 - **Zeros** are stated ("none need attention") only for a `live` part. A `stale` part reads "none at HH:MM (last good; latest read <class>)". A part that is `unreadable` with no evidence reads "could not be read (<class>)", for example "Klyx cannot list certificates (forbidden)".
+- **A failed re-probe after a success** confirms nothing (§3.3). A kind with live data keeps its reflector and its coverage, and names the gap in `KindCoverage.Discovery`, which consumers treat as a capability gap. A kind last known absent becomes `stale` with class `discovery` (last good at its last successful probe), so absence is never confirmed by a failing discovery.
 - **A forbidden first read** is `unreadable` with no counts. **RBAC revoked after a sync** is `stale` with class forbidden and retained, labelled counts. Retained zeros are never presented as current absence.
 - **Cluster ok** requires every applicable part (counted kinds and dependencies) `live`, verdict Unknown 0, native `Roles.Unknown` 0, and no controller issue. A failed dependency degrades its part. Example: failing EndpointSlices make route backends unverified, so the route part is `stale` or `unreadable` and the cluster is not ok.
 - **Events** never contribute to verdicts. A truncated Events read is shown as capped and does not block cluster ok.

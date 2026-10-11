@@ -1031,3 +1031,73 @@ func TestTimedOutSnapshotReadIsNeverOverlappedAndDoneWaitsForIt(t *testing.T) {
 		t.Fatal("Done closed before the last read returned")
 	}
 }
+
+// ---- discovery gaps after a success (Codex re-review, 9390458) -------------------
+
+// probeScript is a controllable probe: "absent", "fail" or a served version.
+type probeScript struct{ mode atomic.Value }
+
+func newProbe(mode string) *probeScript { p := &probeScript{}; p.mode.Store(mode); return p }
+func (p *probeScript) set(mode string)  { p.mode.Store(mode) }
+func (p *probeScript) probe(context.Context) (Probe, error) {
+	switch m := p.mode.Load().(string); m {
+	case "absent":
+		return Probe{Served: false}, nil
+	case "fail":
+		return Probe{}, errors.New("discovery: the server is unavailable")
+	default:
+		return Probe{Served: true, Version: m}, nil
+	}
+}
+
+func gapHarness(t *testing.T, mode string) (*harness, *fakeSource, *probeScript) {
+	src := newSource()
+	src.put("a", nil)
+	ps := newProbe(mode)
+	h := start(t, Config{ReprobeEvery: 5 * time.Second, BackoffMax: 2 * time.Second,
+		Kinds:   []KindSpec{withProbe(cmKind("cms", src), ps.probe)},
+		Domains: []DomainSpec{{ID: "things", Parts: []PartSpec{cmPart("cms", "cms")}}}})
+	return h, src, ps
+}
+
+func TestFailedReprobeOfAnAbsentKindIsAGapThenConfirmedAbsent(t *testing.T) {
+	h, _, ps := gapHarness(t, "absent")
+	h.eventually(h.partIs("things", "cms", func(p Part) bool { return p.Coverage == Absent }), "absent")
+	p0, _ := h.sink.part("things", "cms")
+	ps.set("fail")
+	h.eventually(h.partIs("things", "cms", func(p Part) bool {
+		return p.Coverage == Stale && kindOf(p).Class == ClassDiscovery && kindOf(p).LastGoodAt != nil
+	}), "a failing re-probe never confirms absence")
+	if p, _ := h.sink.part("things", "cms"); p.Ver <= p0.Ver || p.Obs != p0.Obs {
+		t.Fatalf("the gap publishes without an object mutation: ver %d->%d obs %d->%d", p0.Ver, p.Ver, p0.Obs, p.Obs)
+	}
+	ps.set("absent")
+	h.eventually(h.partIs("things", "cms", func(p Part) bool { return p.Coverage == Absent && kindOf(p).Error == "" }), "confirmed absent again")
+}
+
+func TestFailedReprobeOfAnAbsentKindThenPresent(t *testing.T) {
+	h, _, ps := gapHarness(t, "absent")
+	h.eventually(h.partIs("things", "cms", func(p Part) bool { return p.Coverage == Absent }), "absent")
+	ps.set("fail")
+	h.eventually(h.partIs("things", "cms", func(p Part) bool { return p.Coverage == Stale }), "gap")
+	ps.set("v1")
+	h.eventually(h.partIs("things", "cms", func(p Part) bool { return live(p) && p.Counts.Total == 1 && kindOf(p).Discovery == "" }), "present")
+}
+
+func TestFailedReprobeOfALiveKindNamesTheGapWithoutTearingItDown(t *testing.T) {
+	h, src, ps := gapHarness(t, "v1")
+	h.eventually(h.partIs("things", "cms", live), "live")
+	p0, _ := h.sink.part("things", "cms")
+	ps.set("fail")
+	h.eventually(h.partIs("things", "cms", func(p Part) bool { return live(p) && kindOf(p).Discovery != "" }), "live data, named discovery gap")
+	p1, _ := h.sink.part("things", "cms")
+	ps.set("v1")
+	h.eventually(h.partIs("things", "cms", func(p Part) bool { return live(p) && kindOf(p).Discovery == "" }), "gap cleared on same-version recovery")
+	p2, _ := h.sink.part("things", "cms")
+	if !(p0.Ver < p1.Ver && p1.Ver < p2.Ver) || p0.Obs != p2.Obs {
+		t.Fatalf("the gap opens and closes as versions without data: ver %d/%d/%d obs %d/%d", p0.Ver, p1.Ver, p2.Ver, p0.Obs, p2.Obs)
+	}
+	if lists, _ := src.counts(); lists != 1 || src.liveWatcher() == nil {
+		t.Fatalf("a failed re-probe must not tear down a valid reflector; lists=%d", lists)
+	}
+}

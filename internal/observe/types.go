@@ -70,6 +70,10 @@ type KindCoverage struct {
 	AsOf       *time.Time `json:"asOf,omitempty"`
 	LastGoodAt *time.Time `json:"lastGoodAt,omitempty"`
 	CadenceSec int64      `json:"cadenceSec,omitempty"`
+	// Discovery names a failing re-probe while the kind's data stays as
+	// observed (a live reflector keeps running; spec §3.3). A consumer
+	// treats it as a capability gap, never as data staleness.
+	Discovery string `json:"discovery,omitempty"`
 }
 
 // Counts is a complete partition of a verdict part by verdict.
