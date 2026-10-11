@@ -1,4 +1,873 @@
 {
+  "argoApplicationSets": [
+    {
+      "case": "healthy",
+      "nowUnix": 1791720000,
+      "dto": {
+        "namespace": "argocd",
+        "name": "healthy",
+        "generators": null,
+        "templateName": "",
+        "project": "",
+        "repoURL": "",
+        "path": "",
+        "targetRevision": "",
+        "destNamespace": "",
+        "destServer": "",
+        "generatedApps": 0,
+        "generatedNames": [],
+        "healthy": true,
+        "conditions": [],
+        "rule": {
+          "included": false,
+          "role": "ok",
+          "label": "healthy"
+        }
+      },
+      "want": {
+        "included": false,
+        "role": "ok",
+        "label": "healthy"
+      }
+    },
+    {
+      "case": "unhealthy",
+      "nowUnix": 1791720000,
+      "dto": {
+        "namespace": "argocd",
+        "name": "unhealthy",
+        "generators": null,
+        "templateName": "",
+        "project": "",
+        "repoURL": "",
+        "path": "",
+        "targetRevision": "",
+        "destNamespace": "",
+        "destServer": "",
+        "generatedApps": 0,
+        "generatedNames": [],
+        "healthy": false,
+        "conditions": [
+          {
+            "type": "ErrorOccurred",
+            "status": "True",
+            "reason": "",
+            "message": "boom"
+          }
+        ],
+        "rule": {
+          "included": true,
+          "role": "degraded",
+          "label": "needs attention"
+        }
+      },
+      "want": {
+        "included": true,
+        "role": "degraded",
+        "label": "needs attention"
+      }
+    }
+  ],
+  "argoApplications": [
+    {
+      "case": "Synced/Healthy",
+      "nowUnix": 1791720000,
+      "dto": {
+        "namespace": "argocd",
+        "name": "Synced/Healthy",
+        "project": "default",
+        "syncStatus": "Synced",
+        "healthStatus": "Healthy",
+        "broken": false,
+        "revision": "",
+        "repoURL": "",
+        "path": "",
+        "chart": "",
+        "targetRevision": "",
+        "extraSources": 0,
+        "destNamespace": "",
+        "destServer": "",
+        "destName": "",
+        "applicationSet": "",
+        "autoSync": false,
+        "opPhase": "",
+        "opMessage": "",
+        "conditions": [],
+        "resources": [],
+        "reconciledUnix": 0,
+        "rule": {
+          "included": false,
+          "role": "ok",
+          "label": "Healthy"
+        }
+      },
+      "want": {
+        "included": false,
+        "role": "ok",
+        "label": "Healthy"
+      }
+    },
+    {
+      "case": "OutOfSync/Healthy",
+      "nowUnix": 1791720000,
+      "dto": {
+        "namespace": "argocd",
+        "name": "OutOfSync/Healthy",
+        "project": "default",
+        "syncStatus": "OutOfSync",
+        "healthStatus": "Healthy",
+        "broken": true,
+        "revision": "",
+        "repoURL": "",
+        "path": "",
+        "chart": "",
+        "targetRevision": "",
+        "extraSources": 0,
+        "destNamespace": "",
+        "destServer": "",
+        "destName": "",
+        "applicationSet": "",
+        "autoSync": false,
+        "opPhase": "",
+        "opMessage": "",
+        "conditions": [],
+        "resources": [],
+        "reconciledUnix": 0,
+        "rule": {
+          "included": true,
+          "role": "degraded",
+          "label": "OutOfSync"
+        }
+      },
+      "want": {
+        "included": true,
+        "role": "degraded",
+        "label": "OutOfSync"
+      }
+    },
+    {
+      "case": "Unknown/Healthy",
+      "nowUnix": 1791720000,
+      "dto": {
+        "namespace": "argocd",
+        "name": "Unknown/Healthy",
+        "project": "default",
+        "syncStatus": "Unknown",
+        "healthStatus": "Healthy",
+        "broken": true,
+        "revision": "",
+        "repoURL": "",
+        "path": "",
+        "chart": "",
+        "targetRevision": "",
+        "extraSources": 0,
+        "destNamespace": "",
+        "destServer": "",
+        "destName": "",
+        "applicationSet": "",
+        "autoSync": false,
+        "opPhase": "",
+        "opMessage": "",
+        "conditions": [],
+        "resources": [],
+        "reconciledUnix": 0,
+        "rule": {
+          "included": true,
+          "role": "unknown",
+          "label": "Healthy"
+        }
+      },
+      "want": {
+        "included": true,
+        "role": "unknown",
+        "label": "Healthy"
+      }
+    },
+    {
+      "case": "Synced/Progressing",
+      "nowUnix": 1791720000,
+      "dto": {
+        "namespace": "argocd",
+        "name": "Synced/Progressing",
+        "project": "default",
+        "syncStatus": "Synced",
+        "healthStatus": "Progressing",
+        "broken": false,
+        "revision": "",
+        "repoURL": "",
+        "path": "",
+        "chart": "",
+        "targetRevision": "",
+        "extraSources": 0,
+        "destNamespace": "",
+        "destServer": "",
+        "destName": "",
+        "applicationSet": "",
+        "autoSync": false,
+        "opPhase": "",
+        "opMessage": "",
+        "conditions": [],
+        "resources": [],
+        "reconciledUnix": 0,
+        "rule": {
+          "included": false,
+          "role": "progressing",
+          "label": "Progressing"
+        }
+      },
+      "want": {
+        "included": false,
+        "role": "progressing",
+        "label": "Progressing"
+      }
+    },
+    {
+      "case": "OutOfSync/Progressing",
+      "nowUnix": 1791720000,
+      "dto": {
+        "namespace": "argocd",
+        "name": "OutOfSync/Progressing",
+        "project": "default",
+        "syncStatus": "OutOfSync",
+        "healthStatus": "Progressing",
+        "broken": true,
+        "revision": "",
+        "repoURL": "",
+        "path": "",
+        "chart": "",
+        "targetRevision": "",
+        "extraSources": 0,
+        "destNamespace": "",
+        "destServer": "",
+        "destName": "",
+        "applicationSet": "",
+        "autoSync": false,
+        "opPhase": "",
+        "opMessage": "",
+        "conditions": [],
+        "resources": [],
+        "reconciledUnix": 0,
+        "rule": {
+          "included": true,
+          "role": "degraded",
+          "label": "OutOfSync"
+        }
+      },
+      "want": {
+        "included": true,
+        "role": "degraded",
+        "label": "OutOfSync"
+      }
+    },
+    {
+      "case": "Unknown/Progressing",
+      "nowUnix": 1791720000,
+      "dto": {
+        "namespace": "argocd",
+        "name": "Unknown/Progressing",
+        "project": "default",
+        "syncStatus": "Unknown",
+        "healthStatus": "Progressing",
+        "broken": true,
+        "revision": "",
+        "repoURL": "",
+        "path": "",
+        "chart": "",
+        "targetRevision": "",
+        "extraSources": 0,
+        "destNamespace": "",
+        "destServer": "",
+        "destName": "",
+        "applicationSet": "",
+        "autoSync": false,
+        "opPhase": "",
+        "opMessage": "",
+        "conditions": [],
+        "resources": [],
+        "reconciledUnix": 0,
+        "rule": {
+          "included": true,
+          "role": "progressing",
+          "label": "Progressing"
+        }
+      },
+      "want": {
+        "included": true,
+        "role": "progressing",
+        "label": "Progressing"
+      }
+    },
+    {
+      "case": "Synced/Degraded",
+      "nowUnix": 1791720000,
+      "dto": {
+        "namespace": "argocd",
+        "name": "Synced/Degraded",
+        "project": "default",
+        "syncStatus": "Synced",
+        "healthStatus": "Degraded",
+        "broken": true,
+        "revision": "",
+        "repoURL": "",
+        "path": "",
+        "chart": "",
+        "targetRevision": "",
+        "extraSources": 0,
+        "destNamespace": "",
+        "destServer": "",
+        "destName": "",
+        "applicationSet": "",
+        "autoSync": false,
+        "opPhase": "",
+        "opMessage": "",
+        "conditions": [],
+        "resources": [],
+        "reconciledUnix": 0,
+        "rule": {
+          "included": true,
+          "role": "fault",
+          "label": "Degraded"
+        }
+      },
+      "want": {
+        "included": true,
+        "role": "fault",
+        "label": "Degraded"
+      }
+    },
+    {
+      "case": "OutOfSync/Degraded",
+      "nowUnix": 1791720000,
+      "dto": {
+        "namespace": "argocd",
+        "name": "OutOfSync/Degraded",
+        "project": "default",
+        "syncStatus": "OutOfSync",
+        "healthStatus": "Degraded",
+        "broken": true,
+        "revision": "",
+        "repoURL": "",
+        "path": "",
+        "chart": "",
+        "targetRevision": "",
+        "extraSources": 0,
+        "destNamespace": "",
+        "destServer": "",
+        "destName": "",
+        "applicationSet": "",
+        "autoSync": false,
+        "opPhase": "",
+        "opMessage": "",
+        "conditions": [],
+        "resources": [],
+        "reconciledUnix": 0,
+        "rule": {
+          "included": true,
+          "role": "fault",
+          "label": "Degraded"
+        }
+      },
+      "want": {
+        "included": true,
+        "role": "fault",
+        "label": "Degraded"
+      }
+    },
+    {
+      "case": "Unknown/Degraded",
+      "nowUnix": 1791720000,
+      "dto": {
+        "namespace": "argocd",
+        "name": "Unknown/Degraded",
+        "project": "default",
+        "syncStatus": "Unknown",
+        "healthStatus": "Degraded",
+        "broken": true,
+        "revision": "",
+        "repoURL": "",
+        "path": "",
+        "chart": "",
+        "targetRevision": "",
+        "extraSources": 0,
+        "destNamespace": "",
+        "destServer": "",
+        "destName": "",
+        "applicationSet": "",
+        "autoSync": false,
+        "opPhase": "",
+        "opMessage": "",
+        "conditions": [],
+        "resources": [],
+        "reconciledUnix": 0,
+        "rule": {
+          "included": true,
+          "role": "fault",
+          "label": "Degraded"
+        }
+      },
+      "want": {
+        "included": true,
+        "role": "fault",
+        "label": "Degraded"
+      }
+    },
+    {
+      "case": "Synced/Suspended",
+      "nowUnix": 1791720000,
+      "dto": {
+        "namespace": "argocd",
+        "name": "Synced/Suspended",
+        "project": "default",
+        "syncStatus": "Synced",
+        "healthStatus": "Suspended",
+        "broken": false,
+        "revision": "",
+        "repoURL": "",
+        "path": "",
+        "chart": "",
+        "targetRevision": "",
+        "extraSources": 0,
+        "destNamespace": "",
+        "destServer": "",
+        "destName": "",
+        "applicationSet": "",
+        "autoSync": false,
+        "opPhase": "",
+        "opMessage": "",
+        "conditions": [],
+        "resources": [],
+        "reconciledUnix": 0,
+        "rule": {
+          "included": false,
+          "role": "paused",
+          "label": "Suspended"
+        }
+      },
+      "want": {
+        "included": false,
+        "role": "paused",
+        "label": "Suspended"
+      }
+    },
+    {
+      "case": "OutOfSync/Suspended",
+      "nowUnix": 1791720000,
+      "dto": {
+        "namespace": "argocd",
+        "name": "OutOfSync/Suspended",
+        "project": "default",
+        "syncStatus": "OutOfSync",
+        "healthStatus": "Suspended",
+        "broken": true,
+        "revision": "",
+        "repoURL": "",
+        "path": "",
+        "chart": "",
+        "targetRevision": "",
+        "extraSources": 0,
+        "destNamespace": "",
+        "destServer": "",
+        "destName": "",
+        "applicationSet": "",
+        "autoSync": false,
+        "opPhase": "",
+        "opMessage": "",
+        "conditions": [],
+        "resources": [],
+        "reconciledUnix": 0,
+        "rule": {
+          "included": true,
+          "role": "paused",
+          "label": "Suspended"
+        }
+      },
+      "want": {
+        "included": true,
+        "role": "paused",
+        "label": "Suspended"
+      }
+    },
+    {
+      "case": "Unknown/Suspended",
+      "nowUnix": 1791720000,
+      "dto": {
+        "namespace": "argocd",
+        "name": "Unknown/Suspended",
+        "project": "default",
+        "syncStatus": "Unknown",
+        "healthStatus": "Suspended",
+        "broken": true,
+        "revision": "",
+        "repoURL": "",
+        "path": "",
+        "chart": "",
+        "targetRevision": "",
+        "extraSources": 0,
+        "destNamespace": "",
+        "destServer": "",
+        "destName": "",
+        "applicationSet": "",
+        "autoSync": false,
+        "opPhase": "",
+        "opMessage": "",
+        "conditions": [],
+        "resources": [],
+        "reconciledUnix": 0,
+        "rule": {
+          "included": true,
+          "role": "paused",
+          "label": "Suspended"
+        }
+      },
+      "want": {
+        "included": true,
+        "role": "paused",
+        "label": "Suspended"
+      }
+    },
+    {
+      "case": "Synced/Missing",
+      "nowUnix": 1791720000,
+      "dto": {
+        "namespace": "argocd",
+        "name": "Synced/Missing",
+        "project": "default",
+        "syncStatus": "Synced",
+        "healthStatus": "Missing",
+        "broken": true,
+        "revision": "",
+        "repoURL": "",
+        "path": "",
+        "chart": "",
+        "targetRevision": "",
+        "extraSources": 0,
+        "destNamespace": "",
+        "destServer": "",
+        "destName": "",
+        "applicationSet": "",
+        "autoSync": false,
+        "opPhase": "",
+        "opMessage": "",
+        "conditions": [],
+        "resources": [],
+        "reconciledUnix": 0,
+        "rule": {
+          "included": true,
+          "role": "fault",
+          "label": "Missing"
+        }
+      },
+      "want": {
+        "included": true,
+        "role": "fault",
+        "label": "Missing"
+      }
+    },
+    {
+      "case": "OutOfSync/Missing",
+      "nowUnix": 1791720000,
+      "dto": {
+        "namespace": "argocd",
+        "name": "OutOfSync/Missing",
+        "project": "default",
+        "syncStatus": "OutOfSync",
+        "healthStatus": "Missing",
+        "broken": true,
+        "revision": "",
+        "repoURL": "",
+        "path": "",
+        "chart": "",
+        "targetRevision": "",
+        "extraSources": 0,
+        "destNamespace": "",
+        "destServer": "",
+        "destName": "",
+        "applicationSet": "",
+        "autoSync": false,
+        "opPhase": "",
+        "opMessage": "",
+        "conditions": [],
+        "resources": [],
+        "reconciledUnix": 0,
+        "rule": {
+          "included": true,
+          "role": "fault",
+          "label": "Missing"
+        }
+      },
+      "want": {
+        "included": true,
+        "role": "fault",
+        "label": "Missing"
+      }
+    },
+    {
+      "case": "Unknown/Missing",
+      "nowUnix": 1791720000,
+      "dto": {
+        "namespace": "argocd",
+        "name": "Unknown/Missing",
+        "project": "default",
+        "syncStatus": "Unknown",
+        "healthStatus": "Missing",
+        "broken": true,
+        "revision": "",
+        "repoURL": "",
+        "path": "",
+        "chart": "",
+        "targetRevision": "",
+        "extraSources": 0,
+        "destNamespace": "",
+        "destServer": "",
+        "destName": "",
+        "applicationSet": "",
+        "autoSync": false,
+        "opPhase": "",
+        "opMessage": "",
+        "conditions": [],
+        "resources": [],
+        "reconciledUnix": 0,
+        "rule": {
+          "included": true,
+          "role": "fault",
+          "label": "Missing"
+        }
+      },
+      "want": {
+        "included": true,
+        "role": "fault",
+        "label": "Missing"
+      }
+    },
+    {
+      "case": "Synced/Unknown",
+      "nowUnix": 1791720000,
+      "dto": {
+        "namespace": "argocd",
+        "name": "Synced/Unknown",
+        "project": "default",
+        "syncStatus": "Synced",
+        "healthStatus": "Unknown",
+        "broken": true,
+        "revision": "",
+        "repoURL": "",
+        "path": "",
+        "chart": "",
+        "targetRevision": "",
+        "extraSources": 0,
+        "destNamespace": "",
+        "destServer": "",
+        "destName": "",
+        "applicationSet": "",
+        "autoSync": false,
+        "opPhase": "",
+        "opMessage": "",
+        "conditions": [],
+        "resources": [],
+        "reconciledUnix": 0,
+        "rule": {
+          "included": true,
+          "role": "unknown",
+          "label": "Unknown"
+        }
+      },
+      "want": {
+        "included": true,
+        "role": "unknown",
+        "label": "Unknown"
+      }
+    },
+    {
+      "case": "OutOfSync/Unknown",
+      "nowUnix": 1791720000,
+      "dto": {
+        "namespace": "argocd",
+        "name": "OutOfSync/Unknown",
+        "project": "default",
+        "syncStatus": "OutOfSync",
+        "healthStatus": "Unknown",
+        "broken": true,
+        "revision": "",
+        "repoURL": "",
+        "path": "",
+        "chart": "",
+        "targetRevision": "",
+        "extraSources": 0,
+        "destNamespace": "",
+        "destServer": "",
+        "destName": "",
+        "applicationSet": "",
+        "autoSync": false,
+        "opPhase": "",
+        "opMessage": "",
+        "conditions": [],
+        "resources": [],
+        "reconciledUnix": 0,
+        "rule": {
+          "included": true,
+          "role": "degraded",
+          "label": "OutOfSync"
+        }
+      },
+      "want": {
+        "included": true,
+        "role": "degraded",
+        "label": "OutOfSync"
+      }
+    },
+    {
+      "case": "Unknown/Unknown",
+      "nowUnix": 1791720000,
+      "dto": {
+        "namespace": "argocd",
+        "name": "Unknown/Unknown",
+        "project": "default",
+        "syncStatus": "Unknown",
+        "healthStatus": "Unknown",
+        "broken": true,
+        "revision": "",
+        "repoURL": "",
+        "path": "",
+        "chart": "",
+        "targetRevision": "",
+        "extraSources": 0,
+        "destNamespace": "",
+        "destServer": "",
+        "destName": "",
+        "applicationSet": "",
+        "autoSync": false,
+        "opPhase": "",
+        "opMessage": "",
+        "conditions": [],
+        "resources": [],
+        "reconciledUnix": 0,
+        "rule": {
+          "included": true,
+          "role": "unknown",
+          "label": "Unknown"
+        }
+      },
+      "want": {
+        "included": true,
+        "role": "unknown",
+        "label": "Unknown"
+      }
+    },
+    {
+      "case": "Synced/",
+      "nowUnix": 1791720000,
+      "dto": {
+        "namespace": "argocd",
+        "name": "Synced/",
+        "project": "default",
+        "syncStatus": "Synced",
+        "healthStatus": "",
+        "broken": true,
+        "revision": "",
+        "repoURL": "",
+        "path": "",
+        "chart": "",
+        "targetRevision": "",
+        "extraSources": 0,
+        "destNamespace": "",
+        "destServer": "",
+        "destName": "",
+        "applicationSet": "",
+        "autoSync": false,
+        "opPhase": "",
+        "opMessage": "",
+        "conditions": [],
+        "resources": [],
+        "reconciledUnix": 0,
+        "rule": {
+          "included": true,
+          "role": "unknown",
+          "label": "Unknown"
+        }
+      },
+      "want": {
+        "included": true,
+        "role": "unknown",
+        "label": "Unknown"
+      }
+    },
+    {
+      "case": "OutOfSync/",
+      "nowUnix": 1791720000,
+      "dto": {
+        "namespace": "argocd",
+        "name": "OutOfSync/",
+        "project": "default",
+        "syncStatus": "OutOfSync",
+        "healthStatus": "",
+        "broken": true,
+        "revision": "",
+        "repoURL": "",
+        "path": "",
+        "chart": "",
+        "targetRevision": "",
+        "extraSources": 0,
+        "destNamespace": "",
+        "destServer": "",
+        "destName": "",
+        "applicationSet": "",
+        "autoSync": false,
+        "opPhase": "",
+        "opMessage": "",
+        "conditions": [],
+        "resources": [],
+        "reconciledUnix": 0,
+        "rule": {
+          "included": true,
+          "role": "degraded",
+          "label": "OutOfSync"
+        }
+      },
+      "want": {
+        "included": true,
+        "role": "degraded",
+        "label": "OutOfSync"
+      }
+    },
+    {
+      "case": "Unknown/",
+      "nowUnix": 1791720000,
+      "dto": {
+        "namespace": "argocd",
+        "name": "Unknown/",
+        "project": "default",
+        "syncStatus": "Unknown",
+        "healthStatus": "",
+        "broken": true,
+        "revision": "",
+        "repoURL": "",
+        "path": "",
+        "chart": "",
+        "targetRevision": "",
+        "extraSources": 0,
+        "destNamespace": "",
+        "destServer": "",
+        "destName": "",
+        "applicationSet": "",
+        "autoSync": false,
+        "opPhase": "",
+        "opMessage": "",
+        "conditions": [],
+        "resources": [],
+        "reconciledUnix": 0,
+        "rule": {
+          "included": true,
+          "role": "unknown",
+          "label": "Unknown"
+        }
+      },
+      "want": {
+        "included": true,
+        "role": "unknown",
+        "label": "Unknown"
+      }
+    }
+  ],
   "certificates": [
     {
       "case": "ready, expires in 30d",
@@ -668,6 +1537,588 @@
         "included": true,
         "role": "degraded",
         "label": "Deleted"
+      }
+    }
+  ],
+  "fluxReconciliations": [
+    {
+      "case": "ready",
+      "nowUnix": 1791720000,
+      "dto": {
+        "kind": "Kustomization",
+        "namespace": "flux-system",
+        "name": "ready",
+        "ready": "Ready",
+        "reason": "",
+        "message": "",
+        "revision": "",
+        "readySinceSeconds": 0,
+        "stale": false,
+        "generation": 0,
+        "observedGeneration": 0,
+        "suspended": false,
+        "sourceKind": "",
+        "sourceName": "",
+        "sourceNamespace": "",
+        "rule": {
+          "included": false,
+          "role": "ok",
+          "label": "Ready"
+        }
+      },
+      "want": {
+        "included": false,
+        "role": "ok",
+        "label": "Ready"
+      }
+    },
+    {
+      "case": "failed",
+      "nowUnix": 1791720000,
+      "dto": {
+        "kind": "Kustomization",
+        "namespace": "flux-system",
+        "name": "failed",
+        "ready": "Failed",
+        "reason": "BuildFailed",
+        "message": "",
+        "revision": "",
+        "readySinceSeconds": 0,
+        "stale": false,
+        "generation": 0,
+        "observedGeneration": 0,
+        "suspended": false,
+        "sourceKind": "",
+        "sourceName": "",
+        "sourceNamespace": "",
+        "rule": {
+          "included": true,
+          "role": "fault",
+          "label": "Failed"
+        }
+      },
+      "want": {
+        "included": true,
+        "role": "fault",
+        "label": "Failed"
+      }
+    },
+    {
+      "case": "reconciling",
+      "nowUnix": 1791720000,
+      "dto": {
+        "kind": "Kustomization",
+        "namespace": "flux-system",
+        "name": "reconciling",
+        "ready": "Reconciling",
+        "reason": "",
+        "message": "",
+        "revision": "",
+        "readySinceSeconds": 0,
+        "stale": false,
+        "generation": 0,
+        "observedGeneration": 0,
+        "suspended": false,
+        "sourceKind": "",
+        "sourceName": "",
+        "sourceNamespace": "",
+        "rule": {
+          "included": true,
+          "role": "progressing",
+          "label": "Reconciling"
+        }
+      },
+      "want": {
+        "included": true,
+        "role": "progressing",
+        "label": "Reconciling"
+      }
+    },
+    {
+      "case": "unknown while progressing",
+      "nowUnix": 1791720000,
+      "dto": {
+        "kind": "Kustomization",
+        "namespace": "flux-system",
+        "name": "unknown while progressing",
+        "ready": "Unknown",
+        "reason": "Progressing",
+        "message": "",
+        "revision": "",
+        "readySinceSeconds": 0,
+        "stale": false,
+        "generation": 0,
+        "observedGeneration": 0,
+        "suspended": false,
+        "sourceKind": "",
+        "sourceName": "",
+        "sourceNamespace": "",
+        "rule": {
+          "included": true,
+          "role": "progressing",
+          "label": "Progressing"
+        }
+      },
+      "want": {
+        "included": true,
+        "role": "progressing",
+        "label": "Progressing"
+      }
+    },
+    {
+      "case": "unknown while progressing with retry",
+      "nowUnix": 1791720000,
+      "dto": {
+        "kind": "Kustomization",
+        "namespace": "flux-system",
+        "name": "unknown while progressing with retry",
+        "ready": "Unknown",
+        "reason": "ProgressingWithRetry",
+        "message": "",
+        "revision": "",
+        "readySinceSeconds": 0,
+        "stale": false,
+        "generation": 0,
+        "observedGeneration": 0,
+        "suspended": false,
+        "sourceKind": "",
+        "sourceName": "",
+        "sourceNamespace": "",
+        "rule": {
+          "included": true,
+          "role": "progressing",
+          "label": "Progressing"
+        }
+      },
+      "want": {
+        "included": true,
+        "role": "progressing",
+        "label": "Progressing"
+      }
+    },
+    {
+      "case": "unknown while reconciling",
+      "nowUnix": 1791720000,
+      "dto": {
+        "kind": "Kustomization",
+        "namespace": "flux-system",
+        "name": "unknown while reconciling",
+        "ready": "Unknown",
+        "reason": "Reconciling",
+        "message": "",
+        "revision": "",
+        "readySinceSeconds": 0,
+        "stale": false,
+        "generation": 0,
+        "observedGeneration": 0,
+        "suspended": false,
+        "sourceKind": "",
+        "sourceName": "",
+        "sourceNamespace": "",
+        "rule": {
+          "included": true,
+          "role": "progressing",
+          "label": "Progressing"
+        }
+      },
+      "want": {
+        "included": true,
+        "role": "progressing",
+        "label": "Progressing"
+      }
+    },
+    {
+      "case": "unknown, no reason",
+      "nowUnix": 1791720000,
+      "dto": {
+        "kind": "Kustomization",
+        "namespace": "flux-system",
+        "name": "unknown, no reason",
+        "ready": "Unknown",
+        "reason": "",
+        "message": "",
+        "revision": "",
+        "readySinceSeconds": 0,
+        "stale": false,
+        "generation": 0,
+        "observedGeneration": 0,
+        "suspended": false,
+        "sourceKind": "",
+        "sourceName": "",
+        "sourceNamespace": "",
+        "rule": {
+          "included": true,
+          "role": "unknown",
+          "label": "Unknown"
+        }
+      },
+      "want": {
+        "included": true,
+        "role": "unknown",
+        "label": "Unknown"
+      }
+    },
+    {
+      "case": "suspended and failed (paused, not attention)",
+      "nowUnix": 1791720000,
+      "dto": {
+        "kind": "Kustomization",
+        "namespace": "flux-system",
+        "name": "suspended and failed (paused, not attention)",
+        "ready": "Failed",
+        "reason": "",
+        "message": "",
+        "revision": "",
+        "readySinceSeconds": 0,
+        "stale": false,
+        "generation": 0,
+        "observedGeneration": 0,
+        "suspended": true,
+        "sourceKind": "",
+        "sourceName": "",
+        "sourceNamespace": "",
+        "rule": {
+          "included": false,
+          "role": "paused",
+          "label": "Suspended"
+        }
+      },
+      "want": {
+        "included": false,
+        "role": "paused",
+        "label": "Suspended"
+      }
+    },
+    {
+      "case": "suspended and ready",
+      "nowUnix": 1791720000,
+      "dto": {
+        "kind": "Kustomization",
+        "namespace": "flux-system",
+        "name": "suspended and ready",
+        "ready": "Ready",
+        "reason": "",
+        "message": "",
+        "revision": "",
+        "readySinceSeconds": 0,
+        "stale": false,
+        "generation": 0,
+        "observedGeneration": 0,
+        "suspended": true,
+        "sourceKind": "",
+        "sourceName": "",
+        "sourceNamespace": "",
+        "rule": {
+          "included": false,
+          "role": "paused",
+          "label": "Suspended"
+        }
+      },
+      "want": {
+        "included": false,
+        "role": "paused",
+        "label": "Suspended"
+      }
+    },
+    {
+      "case": "spec unobserved (Syncing…)",
+      "nowUnix": 1791720000,
+      "dto": {
+        "kind": "Kustomization",
+        "namespace": "flux-system",
+        "name": "spec unobserved (Syncing…)",
+        "ready": "Ready",
+        "reason": "",
+        "message": "",
+        "revision": "",
+        "readySinceSeconds": 0,
+        "stale": true,
+        "generation": 4,
+        "observedGeneration": 3,
+        "suspended": false,
+        "sourceKind": "",
+        "sourceName": "",
+        "sourceNamespace": "",
+        "rule": {
+          "included": false,
+          "role": "progressing",
+          "label": "Syncing…"
+        }
+      },
+      "want": {
+        "included": false,
+        "role": "progressing",
+        "label": "Syncing…"
+      }
+    },
+    {
+      "case": "failed while unobserved",
+      "nowUnix": 1791720000,
+      "dto": {
+        "kind": "Kustomization",
+        "namespace": "flux-system",
+        "name": "failed while unobserved",
+        "ready": "Failed",
+        "reason": "",
+        "message": "",
+        "revision": "",
+        "readySinceSeconds": 0,
+        "stale": true,
+        "generation": 0,
+        "observedGeneration": 0,
+        "suspended": false,
+        "sourceKind": "",
+        "sourceName": "",
+        "sourceNamespace": "",
+        "rule": {
+          "included": true,
+          "role": "progressing",
+          "label": "Syncing…"
+        }
+      },
+      "want": {
+        "included": true,
+        "role": "progressing",
+        "label": "Syncing…"
+      }
+    },
+    {
+      "case": "no ready state",
+      "nowUnix": 1791720000,
+      "dto": {
+        "kind": "Kustomization",
+        "namespace": "flux-system",
+        "name": "no ready state",
+        "ready": "",
+        "reason": "",
+        "message": "",
+        "revision": "",
+        "readySinceSeconds": 0,
+        "stale": false,
+        "generation": 0,
+        "observedGeneration": 0,
+        "suspended": false,
+        "sourceKind": "",
+        "sourceName": "",
+        "sourceNamespace": "",
+        "rule": {
+          "included": true,
+          "role": "degraded",
+          "label": "Not ready"
+        }
+      },
+      "want": {
+        "included": true,
+        "role": "degraded",
+        "label": "Not ready"
+      }
+    },
+    {
+      "case": "unrecognised ready state",
+      "nowUnix": 1791720000,
+      "dto": {
+        "kind": "Kustomization",
+        "namespace": "flux-system",
+        "name": "unrecognised ready state",
+        "ready": "Stalled",
+        "reason": "",
+        "message": "",
+        "revision": "",
+        "readySinceSeconds": 0,
+        "stale": false,
+        "generation": 0,
+        "observedGeneration": 0,
+        "suspended": false,
+        "sourceKind": "",
+        "sourceName": "",
+        "sourceNamespace": "",
+        "rule": {
+          "included": true,
+          "role": "degraded",
+          "label": "Stalled"
+        }
+      },
+      "want": {
+        "included": true,
+        "role": "degraded",
+        "label": "Stalled"
+      }
+    }
+  ],
+  "fluxSources": [
+    {
+      "case": "ready",
+      "nowUnix": 1791720000,
+      "dto": {
+        "kind": "GitRepository",
+        "namespace": "flux-system",
+        "name": "ready",
+        "ready": "Ready",
+        "reason": "",
+        "message": "",
+        "revision": "",
+        "url": "",
+        "suspended": false,
+        "rule": {
+          "included": false,
+          "role": "ok",
+          "label": "Ready"
+        }
+      },
+      "want": {
+        "included": false,
+        "role": "ok",
+        "label": "Ready"
+      }
+    },
+    {
+      "case": "failed",
+      "nowUnix": 1791720000,
+      "dto": {
+        "kind": "GitRepository",
+        "namespace": "flux-system",
+        "name": "failed",
+        "ready": "Failed",
+        "reason": "GitOperationFailed",
+        "message": "",
+        "revision": "",
+        "url": "",
+        "suspended": false,
+        "rule": {
+          "included": true,
+          "role": "fault",
+          "label": "Failed"
+        }
+      },
+      "want": {
+        "included": true,
+        "role": "fault",
+        "label": "Failed"
+      }
+    },
+    {
+      "case": "reconciling",
+      "nowUnix": 1791720000,
+      "dto": {
+        "kind": "GitRepository",
+        "namespace": "flux-system",
+        "name": "reconciling",
+        "ready": "Reconciling",
+        "reason": "",
+        "message": "",
+        "revision": "",
+        "url": "",
+        "suspended": false,
+        "rule": {
+          "included": true,
+          "role": "progressing",
+          "label": "Reconciling"
+        }
+      },
+      "want": {
+        "included": true,
+        "role": "progressing",
+        "label": "Reconciling"
+      }
+    },
+    {
+      "case": "unknown while progressing",
+      "nowUnix": 1791720000,
+      "dto": {
+        "kind": "GitRepository",
+        "namespace": "flux-system",
+        "name": "unknown while progressing",
+        "ready": "Unknown",
+        "reason": "Progressing",
+        "message": "",
+        "revision": "",
+        "url": "",
+        "suspended": false,
+        "rule": {
+          "included": true,
+          "role": "progressing",
+          "label": "Progressing"
+        }
+      },
+      "want": {
+        "included": true,
+        "role": "progressing",
+        "label": "Progressing"
+      }
+    },
+    {
+      "case": "unknown",
+      "nowUnix": 1791720000,
+      "dto": {
+        "kind": "GitRepository",
+        "namespace": "flux-system",
+        "name": "unknown",
+        "ready": "Unknown",
+        "reason": "",
+        "message": "",
+        "revision": "",
+        "url": "",
+        "suspended": false,
+        "rule": {
+          "included": true,
+          "role": "unknown",
+          "label": "Unknown"
+        }
+      },
+      "want": {
+        "included": true,
+        "role": "unknown",
+        "label": "Unknown"
+      }
+    },
+    {
+      "case": "suspended and failed",
+      "nowUnix": 1791720000,
+      "dto": {
+        "kind": "GitRepository",
+        "namespace": "flux-system",
+        "name": "suspended and failed",
+        "ready": "Failed",
+        "reason": "",
+        "message": "",
+        "revision": "",
+        "url": "",
+        "suspended": true,
+        "rule": {
+          "included": false,
+          "role": "paused",
+          "label": "Suspended"
+        }
+      },
+      "want": {
+        "included": false,
+        "role": "paused",
+        "label": "Suspended"
+      }
+    },
+    {
+      "case": "no ready state",
+      "nowUnix": 1791720000,
+      "dto": {
+        "kind": "GitRepository",
+        "namespace": "flux-system",
+        "name": "no ready state",
+        "ready": "",
+        "reason": "",
+        "message": "",
+        "revision": "",
+        "url": "",
+        "suspended": false,
+        "rule": {
+          "included": true,
+          "role": "degraded",
+          "label": "Not ready"
+        }
+      },
+      "want": {
+        "included": true,
+        "role": "degraded",
+        "label": "Not ready"
       }
     }
   ],

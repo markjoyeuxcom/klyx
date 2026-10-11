@@ -32,6 +32,8 @@ type FluxResourceDTO struct {
 	SourceKind         string `json:"sourceKind"`
 	SourceName         string `json:"sourceName"`
 	SourceNamespace    string `json:"sourceNamespace"`
+	// Rule is the relocated lens rule (1c addendum §2).
+	Rule RuleDTO `json:"rule"`
 }
 
 func ToFluxDTO(r flux.Resource, now time.Time) FluxResourceDTO {
@@ -43,6 +45,7 @@ func ToFluxDTO(r flux.Resource, now time.Time) FluxResourceDTO {
 		}
 	}
 	return FluxResourceDTO{
+		Rule:               toRuleDTO(flux.ReconciliationRule(r)),
 		Kind:               string(r.Kind),
 		Namespace:          r.Namespace,
 		Name:               r.Name,
@@ -79,10 +82,13 @@ type FluxSourceDTO struct {
 	Revision  string `json:"revision"`
 	URL       string `json:"url"`
 	Suspended bool   `json:"suspended"`
+	// Rule is the relocated lens rule (1c addendum §2).
+	Rule RuleDTO `json:"rule"`
 }
 
 func toSourceDTO(s flux.Source) FluxSourceDTO {
 	return FluxSourceDTO{
+		Rule:      toRuleDTO(flux.SourceRule(s)),
 		Kind:      string(s.Kind),
 		Namespace: s.Namespace,
 		Name:      s.Name,

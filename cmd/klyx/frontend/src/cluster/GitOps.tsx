@@ -1008,3 +1008,7 @@ function fluxTone(r: { ready: string; suspended: boolean }): Tone {
 function Muted({ children }: { children: ReactNode }) {
   return <span style={{ color: "var(--color-text-tertiary)" }}>{children}</span>;
 }
+
+// The lens rules, exported for the 1c golden parity harness until the lens
+// reads the Go-computed rule.
+export { needsAttention as fluxNeedsAttention, fluxHealth };

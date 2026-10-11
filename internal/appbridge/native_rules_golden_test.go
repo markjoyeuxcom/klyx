@@ -11,6 +11,8 @@ import (
 
 	"github.com/moomora/klyx/internal/certmanager"
 	"github.com/moomora/klyx/internal/externalsecrets"
+	"github.com/moomora/klyx/internal/gitops/argo"
+	"github.com/moomora/klyx/internal/gitops/flux"
 	"github.com/moomora/klyx/internal/karpenter"
 )
 
@@ -120,6 +122,57 @@ func TestNativeRulesGolden(t *testing.T) {
 	pool("not ready", karpenter.NodePool{Ready: "not-ready", Reason: "NodeClassNotReady"})
 	pool("unknown", karpenter.NodePool{Ready: "unknown"})
 	pool("no state", karpenter.NodePool{})
+
+	reconciliation := func(name string, r flux.Resource) {
+		r.Kind, r.Namespace, r.Name = flux.KustomizationKind, "flux-system", name
+		dto := ToFluxDTO(r, now)
+		out["fluxReconciliations"] = append(out["fluxReconciliations"], goldenCase{name, nowU, dto, dto.Rule})
+	}
+	reconciliation("ready", flux.Resource{Ready: flux.Ready})
+	reconciliation("failed", flux.Resource{Ready: flux.Failed, Reason: "BuildFailed"})
+	reconciliation("reconciling", flux.Resource{Ready: flux.Reconciling})
+	reconciliation("unknown while progressing", flux.Resource{Ready: flux.Unknown, Reason: "Progressing"})
+	reconciliation("unknown while progressing with retry", flux.Resource{Ready: flux.Unknown, Reason: "ProgressingWithRetry"})
+	reconciliation("unknown while reconciling", flux.Resource{Ready: flux.Unknown, Reason: "Reconciling"})
+	reconciliation("unknown, no reason", flux.Resource{Ready: flux.Unknown})
+	reconciliation("suspended and failed (paused, not attention)", flux.Resource{Ready: flux.Failed, Suspended: true})
+	reconciliation("suspended and ready", flux.Resource{Ready: flux.Ready, Suspended: true})
+	reconciliation("spec unobserved (Syncing…)", flux.Resource{Ready: flux.Ready, Stale: true, Generation: 4, ObservedGeneration: 3})
+	reconciliation("failed while unobserved", flux.Resource{Ready: flux.Failed, Stale: true})
+	reconciliation("no ready state", flux.Resource{})
+	reconciliation("unrecognised ready state", flux.Resource{Ready: "Stalled"})
+
+	source := func(name string, src flux.Source) {
+		src.Kind, src.Namespace, src.Name = flux.GitRepositoryKind, "flux-system", name
+		dto := toSourceDTO(src)
+		out["fluxSources"] = append(out["fluxSources"], goldenCase{name, nowU, dto, dto.Rule})
+	}
+	source("ready", flux.Source{Ready: flux.Ready})
+	source("failed", flux.Source{Ready: flux.Failed, Reason: "GitOperationFailed"})
+	source("reconciling", flux.Source{Ready: flux.Reconciling})
+	source("unknown while progressing", flux.Source{Ready: flux.Unknown, Reason: "Progressing"})
+	source("unknown", flux.Source{Ready: flux.Unknown})
+	source("suspended and failed", flux.Source{Ready: flux.Failed, Suspended: true})
+	source("no ready state", flux.Source{})
+
+	app := func(name string, a argo.App) {
+		a.Namespace, a.Name, a.Project = "argocd", name, "default"
+		dto := toArgoAppDTO(a)
+		out["argoApplications"] = append(out["argoApplications"], goldenCase{name, nowU, dto, dto.Rule})
+	}
+	for _, h := range []string{"Healthy", "Progressing", "Degraded", "Suspended", "Missing", "Unknown", ""} {
+		for _, sync := range []string{"Synced", "OutOfSync", "Unknown"} {
+			app(sync+"/"+h, argo.App{SyncStatus: sync, HealthStatus: h})
+		}
+	}
+
+	appSet := func(name string, a argo.ApplicationSet) {
+		a.Namespace, a.Name = "argocd", name
+		dto := toArgoAppSetDTO(a)
+		out["argoApplicationSets"] = append(out["argoApplicationSets"], goldenCase{name, nowU, dto, dto.Rule})
+	}
+	appSet("healthy", argo.ApplicationSet{Healthy: true})
+	appSet("unhealthy", argo.ApplicationSet{Conditions: []argo.ApplicationSetCondition{{Type: "ErrorOccurred", Status: "True", Message: "boom"}}})
 
 	got, err := json.MarshalIndent(out, "", "  ")
 	if err != nil {

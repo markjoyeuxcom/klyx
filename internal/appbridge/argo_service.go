@@ -88,6 +88,8 @@ type ArgoApplicationSetDTO struct {
 	GeneratedNames []string                 `json:"generatedNames"`
 	Healthy        bool                     `json:"healthy"`
 	Conditions     []ArgoAppSetConditionDTO `json:"conditions"`
+	// Rule is the relocated lens rule (1c addendum §2).
+	Rule RuleDTO `json:"rule"`
 }
 
 // ArgoAppDTO is one Argo CD Application in Argo's own vocabulary.
@@ -117,6 +119,8 @@ type ArgoAppDTO struct {
 	Conditions     []ArgoConditionDTO `json:"conditions"`
 	Resources      []ArgoResourceDTO  `json:"resources"`
 	ReconciledUnix int64              `json:"reconciledUnix"` // 0 = never
+	// Rule is the relocated lens rule (1c addendum §2).
+	Rule RuleDTO `json:"rule"`
 }
 
 // ArgoResultDTO is the list payload. Available=false with Message covers both
@@ -178,46 +182,7 @@ func (s *ArgoService) ListApplications(cluster string) ArgoResultDTO {
 	}
 	out := make([]ArgoAppDTO, 0, len(apps))
 	for _, a := range apps {
-		dto := ArgoAppDTO{
-			Namespace:      a.Namespace,
-			Name:           a.Name,
-			Project:        a.Project,
-			SyncStatus:     a.SyncStatus,
-			HealthStatus:   a.HealthStatus,
-			Broken:         a.Broken(),
-			Revision:       a.Revision,
-			RepoURL:        a.RepoURL,
-			Path:           a.Path,
-			Chart:          a.Chart,
-			TargetRevision: a.TargetRevision,
-			ExtraSources:   a.ExtraSources,
-			DestNamespace:  a.DestNamespace,
-			DestServer:     a.DestServer,
-			DestName:       a.DestName,
-			ApplicationSet: a.ApplicationSet,
-			AutoSync:       a.AutoSync,
-			OpPhase:        a.OpPhase,
-			OpMessage:      a.OpMessage,
-			Conditions:     make([]ArgoConditionDTO, 0, len(a.Conditions)),
-			Resources:      make([]ArgoResourceDTO, 0, len(a.Resources)),
-		}
-		for _, c := range a.Conditions {
-			dto.Conditions = append(dto.Conditions, ArgoConditionDTO{Type: c.Type, Message: c.Message})
-		}
-		for _, r := range a.Resources {
-			dto.Resources = append(dto.Resources, ArgoResourceDTO{
-				Group:     r.Group,
-				Kind:      r.Kind,
-				Namespace: r.Namespace,
-				Name:      r.Name,
-				Status:    r.Status,
-				Health:    r.Health,
-			})
-		}
-		if !a.ReconciledAt.IsZero() {
-			dto.ReconciledUnix = a.ReconciledAt.Unix()
-		}
-		out = append(out, dto)
+		out = append(out, toArgoAppDTO(a))
 	}
 	return ArgoResultDTO{Available: true, Apps: out}
 }
@@ -272,26 +237,7 @@ func (s *ArgoService) ListApplicationSets(cluster string) ArgoApplicationSetsRes
 	}
 	out := make([]ArgoApplicationSetDTO, 0, len(sets))
 	for _, a := range sets {
-		dto := ArgoApplicationSetDTO{
-			Namespace:      a.Namespace,
-			Name:           a.Name,
-			Generators:     a.Generators,
-			TemplateName:   a.TemplateName,
-			Project:        a.Project,
-			RepoURL:        a.RepoURL,
-			Path:           a.Path,
-			TargetRevision: a.TargetRevision,
-			DestNamespace:  a.DestNamespace,
-			DestServer:     a.DestServer,
-			GeneratedApps:  a.GeneratedApps,
-			GeneratedNames: sliceOrEmpty(a.GeneratedNames),
-			Healthy:        a.Healthy,
-			Conditions:     make([]ArgoAppSetConditionDTO, 0, len(a.Conditions)),
-		}
-		for _, c := range a.Conditions {
-			dto.Conditions = append(dto.Conditions, ArgoAppSetConditionDTO{Type: c.Type, Status: c.Status, Reason: c.Reason, Message: c.Message})
-		}
-		out = append(out, dto)
+		out = append(out, toArgoAppSetDTO(a))
 	}
 	return ArgoApplicationSetsResultDTO{Available: true, ApplicationSets: out}
 }
@@ -379,4 +325,72 @@ func toArgoSyncOptions(opts ArgoSyncOptionsDTO) argo.SyncOptions {
 		})
 	}
 	return out
+}
+
+func toArgoAppDTO(a argo.App) ArgoAppDTO {
+	dto := ArgoAppDTO{
+		Namespace:      a.Namespace,
+		Name:           a.Name,
+		Project:        a.Project,
+		SyncStatus:     a.SyncStatus,
+		HealthStatus:   a.HealthStatus,
+		Broken:         a.Broken(),
+		Revision:       a.Revision,
+		RepoURL:        a.RepoURL,
+		Path:           a.Path,
+		Chart:          a.Chart,
+		TargetRevision: a.TargetRevision,
+		ExtraSources:   a.ExtraSources,
+		DestNamespace:  a.DestNamespace,
+		DestServer:     a.DestServer,
+		DestName:       a.DestName,
+		ApplicationSet: a.ApplicationSet,
+		AutoSync:       a.AutoSync,
+		OpPhase:        a.OpPhase,
+		OpMessage:      a.OpMessage,
+		Conditions:     make([]ArgoConditionDTO, 0, len(a.Conditions)),
+		Resources:      make([]ArgoResourceDTO, 0, len(a.Resources)),
+	}
+	for _, c := range a.Conditions {
+		dto.Conditions = append(dto.Conditions, ArgoConditionDTO{Type: c.Type, Message: c.Message})
+	}
+	for _, r := range a.Resources {
+		dto.Resources = append(dto.Resources, ArgoResourceDTO{
+			Group:     r.Group,
+			Kind:      r.Kind,
+			Namespace: r.Namespace,
+			Name:      r.Name,
+			Status:    r.Status,
+			Health:    r.Health,
+		})
+	}
+	if !a.ReconciledAt.IsZero() {
+		dto.ReconciledUnix = a.ReconciledAt.Unix()
+	}
+	dto.Rule = toRuleDTO(argo.AppRule(a))
+	return dto
+}
+
+func toArgoAppSetDTO(a argo.ApplicationSet) ArgoApplicationSetDTO {
+	dto := ArgoApplicationSetDTO{
+		Namespace:      a.Namespace,
+		Name:           a.Name,
+		Generators:     a.Generators,
+		TemplateName:   a.TemplateName,
+		Project:        a.Project,
+		RepoURL:        a.RepoURL,
+		Path:           a.Path,
+		TargetRevision: a.TargetRevision,
+		DestNamespace:  a.DestNamespace,
+		DestServer:     a.DestServer,
+		GeneratedApps:  a.GeneratedApps,
+		GeneratedNames: sliceOrEmpty(a.GeneratedNames),
+		Healthy:        a.Healthy,
+		Conditions:     make([]ArgoAppSetConditionDTO, 0, len(a.Conditions)),
+	}
+	for _, c := range a.Conditions {
+		dto.Conditions = append(dto.Conditions, ArgoAppSetConditionDTO{Type: c.Type, Status: c.Status, Reason: c.Reason, Message: c.Message})
+	}
+	dto.Rule = toRuleDTO(argo.AppSetRule(a))
+	return dto
 }
