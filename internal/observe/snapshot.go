@@ -70,8 +70,11 @@ func (g *snapGen) run() {
 	}
 }
 
-// read runs one bounded read. A hung read is abandoned at its deadline and
-// recorded as a timeout, so the snapshot never stays checking indefinitely.
+// read runs one bounded read. Read must return promptly once its context
+// is cancelled; its worker is tracked, so Observer.Done waits for it. A read
+// that misses its deadline is recorded as a timeout at once, and no further
+// read starts until that worker has returned - single-flight even across a
+// timeout (Go cannot kill a callback; Klyx never overlaps one).
 func (g *snapGen) read() {
 	rctx, cancel := context.WithCancel(g.ctx)
 	defer cancel()
@@ -81,21 +84,32 @@ func (g *snapGen) read() {
 		err       error
 	}
 	done := make(chan result, 1)
-	go func() {
+	g.o.goSafe(func() {
 		items, truncated, err := g.ss.spec.Read(rctx)
 		done <- result{items, truncated, err}
-	}()
+	})
 	t := g.o.clk.NewTimer(g.ss.spec.Timeout)
 	defer t.Stop()
 	var r result
+	timedOut := false
 	select {
 	case <-g.ctx.Done():
 		return
 	case r = <-done:
 	case <-t.C():
-		r = result{err: context.DeadlineExceeded}
+		r, timedOut = result{err: context.DeadlineExceeded}, true
 	}
+	g.apply(r.items, r.truncated, r.err)
+	if timedOut {
+		cancel()
+		select { // the abandoned worker must finish before the next read
+		case <-done:
+		case <-g.ctx.Done():
+		}
+	}
+}
 
+func (g *snapGen) apply(items []any, truncated bool, err error) {
 	o := g.o
 	o.mu.Lock()
 	defer o.mu.Unlock()
@@ -103,10 +117,10 @@ func (g *snapGen) read() {
 		return
 	}
 	now := o.clk.Now()
-	if r.err != nil {
-		class := classify(r.err)
-		msg := r.err.Error()
-		if r.err == context.DeadlineExceeded {
+	if err != nil {
+		class := classify(err)
+		msg := err.Error()
+		if err == context.DeadlineExceeded {
 			msg = "read did not finish within " + g.ss.spec.Timeout.String()
 		}
 		switch g.fresh.cov {
@@ -119,12 +133,12 @@ func (g *snapGen) read() {
 		o.markSnapLocked(g.ss)
 		return
 	}
-	if !reflect.DeepEqual(g.items, r.items) || g.fresh.truncated != r.truncated {
-		g.items = r.items
+	if !reflect.DeepEqual(g.items, items) || g.fresh.truncated != truncated {
+		g.items = items
 		o.bumpSnapLocked(g.ss)
 	}
 	// A successful read advances freshness even when nothing changed.
-	g.fresh = freshness{cov: Live, readAt: &now, truncated: r.truncated}
+	g.fresh = freshness{cov: Live, readAt: &now, truncated: truncated}
 	o.markSnapLocked(g.ss)
 }
 

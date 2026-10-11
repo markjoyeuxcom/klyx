@@ -36,6 +36,9 @@ type fakeSource struct {
 	watchers  []*watch.RaceFreeFakeWatcher
 	lists     int
 	versions  []string
+	watchList bool  // serve watch-list (SendInitialEvents) streams
+	wlErr     error // a watch-list attempt fails (the reflector falls back to a list)
+	wlCalls   int
 }
 
 func newSource() *fakeSource { return &fakeSource{objs: map[string]*corev1.ConfigMap{}} }
@@ -79,10 +82,31 @@ func (l *fakeLW) ListWithContext(ctx context.Context, _ metav1.ListOptions) (krt
 	return list, nil
 }
 
-func (l *fakeLW) WatchWithContext(_ context.Context, _ metav1.ListOptions) (watch.Interface, error) {
+func (l *fakeLW) WatchWithContext(_ context.Context, o metav1.ListOptions) (watch.Interface, error) {
 	f := l.f
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if o.SendInitialEvents != nil && *o.SendInitialEvents {
+		f.wlCalls++
+		if f.wlErr != nil {
+			return nil, f.wlErr
+		}
+		// The initial state as ADDED events, then the initial-events-end
+		// bookmark; the same stream then carries ordinary events.
+		w := watch.NewRaceFreeFake()
+		names := make([]string, 0, len(f.objs))
+		for n := range f.objs {
+			names = append(names, n)
+		}
+		sort.Strings(names)
+		for _, n := range names {
+			w.Add(f.objs[n].DeepCopy())
+		}
+		w.Action(watch.Bookmark, &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{ResourceVersion: strconv.Itoa(f.rv),
+			Annotations: map[string]string{metav1.InitialEventsAnnotationKey: "true"}}})
+		f.watchers = append(f.watchers, w)
+		return w, nil
+	}
 	if len(f.watchErrs) > 0 {
 		e := f.watchErrs[0]
 		f.watchErrs = f.watchErrs[1:]
@@ -95,7 +119,11 @@ func (l *fakeLW) WatchWithContext(_ context.Context, _ metav1.ListOptions) (watc
 	return w, nil
 }
 
-func (l *fakeLW) IsWatchListSemanticsUnSupported() bool { return true }
+func (l *fakeLW) IsWatchListSemanticsUnSupported() bool {
+	l.f.mu.Lock()
+	defer l.f.mu.Unlock()
+	return !l.f.watchList
+}
 
 func (f *fakeSource) put(name string, data map[string]string) {
 	f.mu.Lock()
@@ -251,6 +279,11 @@ func cmKind(name string, src *fakeSource) KindSpec {
 	return KindSpec{Name: name, Scope: "all namespaces", NewListWatch: src.lw, ExpectedType: &corev1.ConfigMap{}, Project: projectCM}
 }
 
+func withProbe(k KindSpec, probe func(context.Context) (Probe, error)) KindSpec {
+	k.Probe = probe
+	return k
+}
+
 func cmPart(id, kind string, deps ...string) PartSpec {
 	return PartSpec{ID: id, Entity: id, Scope: "all namespaces", Classifier: "verdict", Counted: []string{kind}, Deps: deps, Evaluate: evalCMs(kind)}
 }
@@ -354,7 +387,7 @@ func TestReleaseDuringDiscoveryDiscardsTheProbe(t *testing.T) {
 		}
 		return Probe{Served: true, Version: "v1"}, nil
 	}
-	h := start(t, Config{Kinds: []KindSpec{cmKind("cms", src)}, Domains: []DomainSpec{{ID: "things", Probe: probe, Parts: []PartSpec{cmPart("cms", "cms")}}}})
+	h := start(t, Config{Kinds: []KindSpec{withProbe(cmKind("cms", src), probe)}, Domains: []DomainSpec{{ID: "things", Parts: []PartSpec{cmPart("cms", "cms")}}}})
 	h.eventually(func() bool { return probes.Load() == 1 }, "probe in flight")
 	h.o.Acquire("things", HealthOwner)() // the only owner leaves mid-probe
 	close(gate)
@@ -401,8 +434,8 @@ func TestDisappearanceAndReappearanceUseNewGenerations(t *testing.T) {
 	var served atomic.Bool
 	served.Store(true)
 	probe := func(context.Context) (Probe, error) { return Probe{Served: served.Load(), Version: "v1"}, nil }
-	h := start(t, Config{ReprobeEvery: 10 * time.Second, Kinds: []KindSpec{cmKind("cms", src)},
-		Domains: []DomainSpec{{ID: "things", Probe: probe, Parts: []PartSpec{cmPart("cms", "cms")}}}})
+	h := start(t, Config{ReprobeEvery: 10 * time.Second, Kinds: []KindSpec{withProbe(cmKind("cms", src), probe)},
+		Domains: []DomainSpec{{ID: "things", Parts: []PartSpec{cmPart("cms", "cms")}}}})
 	h.eventually(h.partIs("things", "cms", live), "live")
 
 	served.Store(false)
@@ -426,8 +459,8 @@ func TestNotFoundListReprobesAndFollowsTheServedVersion(t *testing.T) {
 		probes.Add(1)
 		return Probe{Served: true, Version: version.Load().(string)}, nil
 	}
-	h := start(t, Config{Kinds: []KindSpec{cmKind("cms", src)},
-		Domains: []DomainSpec{{ID: "things", Probe: probe, Parts: []PartSpec{cmPart("cms", "cms")}}}})
+	h := start(t, Config{Kinds: []KindSpec{withProbe(cmKind("cms", src), probe)},
+		Domains: []DomainSpec{{ID: "things", Parts: []PartSpec{cmPart("cms", "cms")}}}})
 	h.eventually(h.partIs("things", "cms", live), "live at v1")
 
 	version.Store("v2")
@@ -458,8 +491,8 @@ func TestADiscoveryErrorConfirmsNothing(t *testing.T) {
 		}
 		return Probe{Served: true, Version: "v1"}, nil
 	}
-	h := start(t, Config{ReprobeEvery: 10 * time.Second, BackoffMax: 2 * time.Second, Kinds: []KindSpec{cmKind("cms", src)},
-		Domains: []DomainSpec{{ID: "things", Probe: probe, Parts: []PartSpec{cmPart("cms", "cms")}}}})
+	h := start(t, Config{ReprobeEvery: 10 * time.Second, BackoffMax: 2 * time.Second, Kinds: []KindSpec{withProbe(cmKind("cms", src), probe)},
+		Domains: []DomainSpec{{ID: "things", Parts: []PartSpec{cmPart("cms", "cms")}}}})
 	h.eventually(h.partIs("things", "cms", func(p Part) bool {
 		return p.Coverage == Unreadable && p.Kinds[0].Class == ClassDiscovery
 	}), "a first probe that fails is a named gap, never absent")
@@ -838,5 +871,163 @@ func TestFinalPublishesOnceAndEndsEveryGoroutine(t *testing.T) {
 	}
 	if n := runtime.NumGoroutine(); n > baseline {
 		t.Fatalf("goroutines leaked: %d > baseline %d", n, baseline)
+	}
+}
+
+// ---- review findings (Codex, dd8d2ee) ---------------------------------------------
+
+func TestWatchListStreamErrorsAfterTheBarrierAreRecorded(t *testing.T) {
+	src := newSource()
+	src.watchList = true
+	src.put("a", nil)
+	h := start(t, Config{Kinds: []KindSpec{cmKind("cms", src)}, Domains: []DomainSpec{{ID: "things", Parts: []PartSpec{cmPart("cms", "cms")}}}})
+	h.eventually(h.partIs("things", "cms", func(p Part) bool { return live(p) && p.Counts.Total == 1 }), "live through initial events, bookmark and Replace")
+	src.mu.Lock()
+	wl, lists := src.wlCalls, src.lists
+	src.mu.Unlock()
+	if wl != 1 || lists != 0 {
+		t.Fatalf("the production default path must stream, not list: watch-list calls %d, lists %d", wl, lists)
+	}
+	src.put("b", nil) // the same stream now carries ordinary events
+	h.eventually(h.partIs("things", "cms", func(p Part) bool { return p.Counts.Total == 2 }), "events after the barrier")
+	forbidden := apierrors.NewForbidden(schema.GroupResource{Resource: "cms"}, "", errors.New("rbac revoked"))
+	src.liveWatcher().Error(&forbidden.ErrStatus)
+	h.eventually(h.partIs("things", "cms", func(p Part) bool {
+		return p.Coverage == Stale && kindOf(p).Class == ClassForbidden
+	}), "an error on the reused watch-list stream is recorded")
+}
+
+func TestWatchListInitialErrorFallsBackToAListWithoutAFault(t *testing.T) {
+	src := newSource()
+	src.watchList = true
+	src.wlErr = apierrors.NewBadRequest("watch-list is not supported")
+	src.put("a", nil)
+	h := start(t, Config{Kinds: []KindSpec{cmKind("cms", src)}, Domains: []DomainSpec{{ID: "things", Parts: []PartSpec{cmPart("cms", "cms")}}}})
+	h.eventually(h.partIs("things", "cms", live), "live through the list fallback")
+	h.sink.mu.Lock()
+	defer h.sink.mu.Unlock()
+	for _, s := range h.sink.sums {
+		if c := s.Tasks[0].Parts[0].Coverage; c == Stale || c == Unreadable {
+			t.Fatalf("a watch-list attempt that falls back is not a fault: %s", c)
+		}
+	}
+}
+
+func TestRowsNowNeverConsumesTheBroadcastOwedToSubscribers(t *testing.T) {
+	src := newSource()
+	src.put("a", nil)
+	h := start(t, Config{Kinds: []KindSpec{cmKind("cms", src)}, Domains: []DomainSpec{{ID: "things", Parts: []PartSpec{cmPart("cms", "cms")}}}})
+	h.o.SubscribeRows("things", "cms", Owner{Kind: "lens", ID: "open"})
+	h.eventually(func() bool { r, ok := h.sink.lastRows("things", "cms"); return ok && r.Part.Coverage == Live }, "the open lens has rows")
+	h.settle(300 * time.Millisecond) // past the throttle: the next change is not yet owed
+	src.put("b", nil)
+	var boot Rows
+	deadline := time.Now().Add(3 * time.Second)
+	for { // a second consumer bootstraps before the throttle tick
+		r, ok := h.o.RowsNow("things", "cms")
+		if ok && r.Part.Counts.Total == 2 {
+			boot = r
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("bootstrap never saw b")
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	h.eventually(func() bool {
+		r, ok := h.sink.lastRows("things", "cms")
+		return ok && r.Part.Ver >= boot.Part.Ver && r.Part.Counts.Total == 2
+	}, "the existing subscriber still receives the version the bootstrap advanced")
+}
+
+func TestDiscoveryIsPerKindAndSharedKindsHaveOneGeneration(t *testing.T) {
+	v1, beta, absentSrc, svc := newSource(), newSource(), newSource(), newSource()
+	v1.put("k1", nil)
+	beta.put("b1", map[string]string{"bad": "1"})
+	svc.put("s1", nil)
+	served := func(v string) func(context.Context) (Probe, error) {
+		return func(context.Context) (Probe, error) { return Probe{Served: true, Version: v}, nil }
+	}
+	notServed := func(context.Context) (Probe, error) { return Probe{Served: false}, nil }
+	mixed := PartSpec{ID: "sources", Classifier: "native", Counted: []string{"git", "oci", "helm"},
+		Evaluate: func(c Capture) PartResult {
+			n := len(c.Objects["git"]) + len(c.Objects["oci"]) + len(c.Objects["helm"])
+			return PartResult{Counts: &Counts{Total: n}}
+		}}
+	h := start(t, Config{
+		Kinds: []KindSpec{
+			withProbe(cmKind("git", v1), served("v1")), withProbe(cmKind("oci", beta), served("v1beta2")),
+			withProbe(cmKind("helm", absentSrc), notServed), cmKind("svc", svc),
+		},
+		Domains: []DomainSpec{
+			{ID: "flux", Parts: []PartSpec{mixed}},
+			{ID: "gateway", Parts: []PartSpec{{ID: "routes", Counted: []string{"helm"}, Deps: []string{"svc"}, Evaluate: evalCMs("helm")}}},
+			{ID: "services", Parts: []PartSpec{cmPart("svc", "svc")}},
+		}})
+	h.eventually(h.partIs("flux", "sources", func(p Part) bool { return live(p) && p.Counts.Total == 2 }), "a missing optional kind leaves the part observed")
+	p, _ := h.sink.part("flux", "sources")
+	if p.Kinds[2].Coverage != Absent {
+		t.Fatalf("the absent kind is named absent: %+v", p.Kinds[2])
+	}
+	v1.mu.Lock()
+	beta.mu.Lock()
+	if v1.versions[0] != "v1" || beta.versions[0] != "v1beta2" {
+		t.Fatalf("each kind lists at its own served version: %v %v", v1.versions, beta.versions)
+	}
+	beta.mu.Unlock()
+	v1.mu.Unlock()
+	h.eventually(h.partIs("gateway", "routes", func(p Part) bool { return p.Coverage == Absent && p.Counts == nil }),
+		"absent counted kinds make the part absent even with a live dependency")
+	h.eventually(h.partIs("services", "svc", live), "the shared kind is live")
+	if lists, _ := svc.counts(); lists != 1 {
+		t.Fatalf("two domains share one generation of svc; lists=%d", lists)
+	}
+	h.o.Acquire("services", HealthOwner)() // one reader leaves
+	h.settle(150 * time.Millisecond)
+	if lists, _ := svc.counts(); lists != 1 || svc.liveWatcher() == nil {
+		t.Fatal("the other reader keeps the shared generation running")
+	}
+}
+
+func TestTimedOutSnapshotReadIsNeverOverlappedAndDoneWaitsForIt(t *testing.T) {
+	var inflight, maxInflight atomic.Int32
+	var lastReturn atomic.Int64
+	var hang atomic.Bool
+	snap := SnapshotSpec{Name: "helm", Scope: "all namespaces", Cadence: 3 * time.Second, Timeout: time.Second,
+		Read: func(ctx context.Context) ([]any, bool, error) {
+			n := inflight.Add(1)
+			for m := maxInflight.Load(); n > m && !maxInflight.CompareAndSwap(m, n); m = maxInflight.Load() {
+			}
+			defer func() { inflight.Add(-1); lastReturn.Store(time.Now().UnixNano()) }()
+			if hang.Load() {
+				<-ctx.Done()
+				time.Sleep(150 * time.Millisecond) // slow to honour cancellation
+				return nil, false, ctx.Err()
+			}
+			return []any{"r1"}, false, nil
+		}}
+	eval := func(c Capture) PartResult { n := len(c.Objects["helm"]); return PartResult{Evidence: &n} }
+	clk := testingclock.NewFakeClock(t0)
+	sink := &recSink{}
+	o := New(Config{Cluster: "c1", Clock: clk, Sink: sink, InitialSyncTimeout: time.Hour, Snapshots: []SnapshotSpec{snap},
+		Domains: []DomainSpec{{ID: "helm", Parts: []PartSpec{{ID: "releases", Counted: []string{"helm"}, Evaluate: eval}}}}})
+	ctx, cancel := context.WithCancel(context.Background())
+	o.Start(ctx)
+	h := &harness{t: t, clk: clk, sink: sink, o: o, cancel: cancel}
+	h.eventually(h.partIs("helm", "releases", live), "first read")
+	hang.Store(true)
+	h.eventually(h.partIs("helm", "releases", func(p Part) bool {
+		return p.Coverage == Stale && kindOf(p).Class == ClassTimeout
+	}), "the timeout is visible while the read is still unwinding")
+	h.o.Refresh("helm") // a refresh during the abandoned read must not overlap it
+	h.settle(600 * time.Millisecond)
+	if m := maxInflight.Load(); m > 1 {
+		t.Fatalf("reads overlapped: %d concurrent", m)
+	}
+	cancel()
+	<-o.Done()
+	doneAt := time.Now().UnixNano()
+	if inflight.Load() != 0 || lastReturn.Load() > doneAt {
+		t.Fatal("Done closed before the last read returned")
 	}
 }

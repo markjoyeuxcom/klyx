@@ -8,6 +8,7 @@ import (
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/watch"
@@ -20,8 +21,12 @@ type KindSpec struct {
 	Name  string // unique in the Observer: "pods", "certificates", ...
 	GVR   string
 	Scope string // "all namespaces" | "cluster-scoped"
+	// Probe resolves this kind's served state and version from discovery;
+	// nil means always served (core kinds). Discovery is per kind: one
+	// domain can mix versions or miss an optional kind (spec §3.3).
+	Probe func(ctx context.Context) (Probe, error)
 	// NewListWatch builds the source for one reflector instance at the
-	// served version the domain probe chose ("" for core kinds).
+	// version Probe chose ("" without a probe).
 	NewListWatch func(version string) cache.ListerWatcherWithContext
 	ExpectedType runtime.Object
 	// Project returns the pruned copy kept in the model. It must not mutate
@@ -55,9 +60,129 @@ type kindGen struct {
 
 type kindState struct {
 	spec  KindSpec
-	refs  int
-	gen   *kindGen
-	parts []partKey // parts that count or depend on this kind
+	refs  int      // active domains reading this kind; one generation serves them all
+	gen   *kindGen // the single authoritative generation, while served
+	parts []partKey
+	// Discovery evidence, per kind:
+	probe    *probeGen
+	probed   bool // a probe has succeeded since activation
+	served   bool
+	version  string
+	probeErr string // the last failed probe while none has succeeded
+}
+
+type probeGen struct {
+	ctx     context.Context
+	cancel  context.CancelFunc
+	reprobe chan struct{}
+}
+
+// activateKind starts discovery (or, without a probe, the generation) for a
+// kind gaining its first reader. Caller holds o.mu.
+func (o *Observer) activateKind(ks *kindState) {
+	if ks.spec.Probe == nil {
+		ks.probed, ks.served = true, true
+		o.startKind(ks, "")
+		return
+	}
+	ctx, cancel := context.WithCancel(o.ctx)
+	pg := &probeGen{ctx: ctx, cancel: cancel, reprobe: make(chan struct{}, 1)}
+	ks.probe = pg
+	o.markKindLocked(ks)
+	o.goSafe(func() { o.probeLoop(ks, pg) })
+}
+
+// deactivateKind ends discovery and the generation when the last reader
+// leaves. A later reader starts both afresh. Caller holds o.mu.
+func (o *Observer) deactivateKind(ks *kindState) {
+	if ks.probe != nil {
+		ks.probe.cancel()
+		ks.probe = nil
+	}
+	o.stopKind(ks)
+	ks.probed, ks.served, ks.version, ks.probeErr = false, false, "", ""
+	o.markKindLocked(ks)
+}
+
+// probeLoop probes at once, then every ReprobeEvery or on a NotFound list. A
+// failed probe confirms nothing: the last known served state stands and the
+// probe is retried with backoff. A result for an ended discovery generation
+// (released mid-probe) is discarded.
+func (o *Observer) probeLoop(ks *kindState, pg *probeGen) {
+	backoff := o.cfg.BackoffMin
+	for {
+		res, err := ks.spec.Probe(pg.ctx)
+		wait := o.cfg.ReprobeEvery
+		o.mu.Lock()
+		if ks.probe != pg || pg.ctx.Err() != nil {
+			o.mu.Unlock()
+			return
+		}
+		if err != nil {
+			if !ks.probed {
+				ks.probeErr = err.Error()
+				o.markKindLocked(ks)
+			}
+			wait = backoff
+			backoff = min(backoff*2, o.cfg.BackoffMax)
+		} else {
+			backoff = o.cfg.BackoffMin
+			o.applyProbeLocked(ks, res)
+		}
+		o.mu.Unlock()
+		t := o.clk.NewTimer(wait)
+		select {
+		case <-pg.ctx.Done():
+			t.Stop()
+			return
+		case <-t.C():
+		case <-pg.reprobe:
+			t.Stop()
+		}
+	}
+}
+
+func (o *Observer) applyProbeLocked(ks *kindState, res Probe) {
+	ks.probeErr = ""
+	first := !ks.probed
+	ks.probed = true
+	switch {
+	case !res.Served:
+		if ks.served || first {
+			ks.served, ks.version = false, ""
+			o.stopKind(ks) // absent; a reappearance starts a new generation
+			o.markKindLocked(ks)
+		}
+	case !ks.served || ks.gen == nil || ks.gen.version != res.Version:
+		ks.served, ks.version = true, res.Version
+		o.stopKind(ks) // a version change starts a new generation
+		o.startKind(ks, res.Version)
+	}
+}
+
+// reprobeKindLocked asks a kind's discovery to run now (a NotFound list may
+// mean the CRD or its version went away). Caller holds o.mu.
+func (o *Observer) reprobeKindLocked(ks *kindState) {
+	if ks.probe != nil {
+		select {
+		case ks.probe.reprobe <- struct{}{}:
+		default:
+		}
+	}
+}
+
+// kindCoverageLocked is a kind's coverage when no generation decides it.
+func (o *Observer) kindCoverageLocked(ks *kindState) (Coverage, string, string) {
+	switch {
+	case ks.refs == 0:
+		return Checking, "", "" // not observed by any active domain
+	case ks.probed && !ks.served:
+		return Absent, "", ""
+	case !ks.probed && ks.probeErr != "":
+		return Unreadable, ClassDiscovery, ks.probeErr
+	default:
+		return Checking, "", ""
+	}
 }
 
 // startKind starts a new generation for ks. Caller holds o.mu.
@@ -310,10 +435,10 @@ func (l *recordingLW) WatchWithContext(ctx context.Context, o metav1.ListOptions
 		}
 		return nil, err
 	}
-	if watchList {
-		return w, nil
-	}
-	return newRecordingWatch(w, l.note), nil
+	// A successful watch-list stream is reused for ordinary watching after
+	// its initial-events-end bookmark and Replace (client-go reflector.go
+	// :508/:907): its errors are suppressed only before that barrier.
+	return newRecordingWatch(w, l.note, !watchList), nil
 }
 
 func (l *recordingLW) List(o metav1.ListOptions) (runtime.Object, error) {
@@ -333,7 +458,10 @@ func (l *recordingLW) IsWatchListSemanticsUnSupported() bool {
 	return false
 }
 
-// recordingWatch forwards a watch, noting watch.Error events.
+// recordingWatch forwards a watch, noting watch.Error events once armed. A
+// plain watch is armed from the start; a watch-list stream arms at its
+// initial-events-end bookmark - before it, errors make the reflector fall
+// back to a plain list, whose errors are recorded instead.
 type recordingWatch struct {
 	inner watch.Interface
 	out   chan watch.Event
@@ -341,7 +469,7 @@ type recordingWatch struct {
 	once  sync.Once
 }
 
-func newRecordingWatch(inner watch.Interface, note func(error)) *recordingWatch {
+func newRecordingWatch(inner watch.Interface, note func(error), armed bool) *recordingWatch {
 	w := &recordingWatch{inner: inner, out: make(chan watch.Event), stop: make(chan struct{})}
 	go func() {
 		defer close(w.out)
@@ -351,8 +479,11 @@ func newRecordingWatch(inner watch.Interface, note func(error)) *recordingWatch 
 				if !ok {
 					return
 				}
-				if ev.Type == watch.Error {
+				switch {
+				case ev.Type == watch.Error && armed:
 					note(apierrors.FromObject(ev.Object))
+				case ev.Type == watch.Bookmark && !armed && initialEventsEnd(ev.Object):
+					armed = true
 				}
 				select {
 				case w.out <- ev:
@@ -375,3 +506,8 @@ func (w *recordingWatch) Stop() {
 }
 
 func (w *recordingWatch) ResultChan() <-chan watch.Event { return w.out }
+
+func initialEventsEnd(obj runtime.Object) bool {
+	m, err := meta.Accessor(obj)
+	return err == nil && m.GetAnnotations()[metav1.InitialEventsAnnotationKey] == "true"
+}

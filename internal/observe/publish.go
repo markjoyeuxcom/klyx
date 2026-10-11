@@ -139,20 +139,28 @@ func (o *Observer) publish(now time.Time) {
 	o.summaryDirty = false
 	o.mu.Unlock()
 
-	var rowsOut []*partState
 	changed := false
 	for _, d := range o.domains {
 		for _, p := range d.parts {
-			if !keys[p.key] {
-				continue
+			if keys[p.key] {
+				verChanged, _ := o.evaluate(p, now, false)
+				changed = changed || verChanged
 			}
-			verChanged, rowsNew, _ := o.evaluate(p, now, false)
-			changed = changed || verChanged
-			if (verChanged || rowsNew) && p.hasRows {
+		}
+	}
+	// Rows owed to subscribers: any part whose version they have not been
+	// sent - including a version a RowsNow bootstrap advanced, which never
+	// consumes the broadcast.
+	var rowsOut []*partState
+	o.mu.Lock()
+	for _, d := range o.domains {
+		for _, p := range d.parts {
+			if len(p.subs) > 0 && p.hasRows && (!p.rowsPub || p.rowsPubVer != p.ver) {
 				rowsOut = append(rowsOut, p)
 			}
 		}
 	}
+	o.mu.Unlock()
 	if !changed && !summaryDirty && len(rowsOut) == 0 {
 		return
 	}
@@ -166,6 +174,7 @@ func (o *Observer) publish(now time.Time) {
 	}
 	for _, p := range rowsOut {
 		o.cfg.Sink.Rows(o.rowsOf(p, p.lastRows, now))
+		p.rowsPub, p.rowsPubVer = true, p.ver
 	}
 }
 
@@ -175,7 +184,7 @@ func (o *Observer) rowsOf(p *partState, rows any, now time.Time) Rows {
 
 // evaluate captures one part atomically, evaluates it and advances its
 // version on any part-visible change (spec §4). Loop goroutine only.
-func (o *Observer) evaluate(p *partState, now time.Time, forceRows bool) (verChanged, rowsNew bool, rows any) {
+func (o *Observer) evaluate(p *partState, now time.Time, forceRows bool) (verChanged bool, rows any) {
 	o.mu.Lock()
 	subscribed := len(p.subs) > 0
 	wantRows := subscribed || forceRows
@@ -199,14 +208,18 @@ func (o *Observer) evaluate(p *partState, now time.Time, forceRows bool) (verCha
 	}
 	part := Part{ID: p.spec.ID, Entity: p.spec.Entity, Scope: p.spec.Scope, Classifier: p.spec.Classifier,
 		Coverage: rollup(covs), Kinds: kinds, Obs: obs, AsOf: asOf}
-	if !absent {
+	if absent {
+		part.Coverage = Absent // every counted source is absent: a live dependency cannot make it observed
+	} else {
 		part.Counts, part.Native, part.Evidence, part.Top, part.Next = res.Counts, res.Native, res.Evidence, res.Top, res.Next
 	}
 
 	prev := p.last
 	verChanged = prev == nil || prev.Obs != part.Obs || !samePart(*prev, part) ||
 		(subscribed && p.hasRows && !reflect.DeepEqual(p.lastRows, res.Rows))
-	rowsNew = subscribed && !p.hasRows
+	if subscribed && !p.hasRows {
+		p.rowsPub = false // a new subscription period: its first rows are owed
+	}
 	if verChanged {
 		p.ver++
 	}
@@ -221,7 +234,7 @@ func (o *Observer) evaluate(p *partState, now time.Time, forceRows bool) (verCha
 	} else {
 		p.lastRows, p.hasRows = nil, false
 	}
-	return verChanged, rowsNew, res.Rows
+	return verChanged, res.Rows
 }
 
 // samePart compares everything a consumer can see, ignoring the version.
@@ -231,51 +244,48 @@ func samePart(a, b Part) bool {
 }
 
 // captureLocked takes one part's objects and coverage under the Observer
-// lock: model contents and the part's watermark are read together.
+// lock: model contents and the part's watermark are read together. A part is
+// absent only when every counted source is absent; an absent dependency or a
+// missing optional kind leaves the rest of the part observed.
 func (o *Observer) captureLocked(p *partState, now time.Time) (Capture, []KindCoverage, bool) {
-	d := p.dom
-	g := d.gen
-	absent := g != nil && g.probed && !g.served
 	c := Capture{Now: now, Objects: map[string][]any{}}
 	var kinds []KindCoverage
 	add := func(name, role string) {
 		kc := KindCoverage{Kind: name, Role: role}
-		switch {
-		case o.kinds[name] != nil:
-			ks := o.kinds[name]
+		if ks := o.kinds[name]; ks != nil {
 			kc.Scope = ks.spec.Scope
-			if absent || g == nil || !g.acquired || ks.gen == nil {
-				kc.Coverage, kc.Class, kc.Error = o.domainCoverageLocked(d)
-				break
+			if ks.gen == nil {
+				kc.Coverage, kc.Class, kc.Error = o.kindCoverageLocked(ks)
+			} else {
+				f := ks.gen.fresh
+				kc.Coverage, kc.Class, kc.Error = f.cov, f.class, f.err
+				if f.cov == Stale {
+					kc.AsOf, kc.LastGoodAt = copyTime(f.lastGoodAt), copyTime(f.lastGoodAt)
+				}
+				if f.cov == Live || f.cov == Stale {
+					c.Objects[name] = sortedValues(ks.gen.model)
+					kc.Objects = len(ks.gen.model)
+				}
 			}
-			f := ks.gen.fresh
-			kc.Coverage, kc.Class, kc.Error = f.cov, f.class, f.err
-			if f.cov == Stale {
-				kc.AsOf, kc.LastGoodAt = copyTime(f.lastGoodAt), copyTime(f.lastGoodAt)
-			}
-			if f.cov != Unreadable && f.cov != Checking {
-				c.Objects[name] = sortedValues(ks.gen.model)
-				kc.Objects = len(ks.gen.model)
-			}
-		case o.snaps[name] != nil:
+		} else {
 			ss := o.snaps[name]
 			kc.Scope = ss.spec.Scope
 			kc.CadenceSec = int64(ss.spec.Cadence / time.Second)
-			if absent || g == nil || !g.acquired || ss.gen == nil {
-				kc.Coverage, kc.Class, kc.Error = o.domainCoverageLocked(d)
-				break
-			}
-			f := ss.gen.fresh
-			kc.Coverage, kc.Class, kc.Error, kc.Truncated = f.cov, f.class, f.err, f.truncated
-			switch f.cov {
-			case Live:
-				kc.AsOf = copyTime(f.readAt)
-			case Stale:
-				kc.AsOf, kc.LastGoodAt = copyTime(f.lastGoodAt), copyTime(f.lastGoodAt)
-			}
-			if f.cov == Live || f.cov == Stale {
-				c.Objects[name] = append([]any(nil), ss.gen.items...)
-				kc.Objects = len(ss.gen.items)
+			if ss.gen == nil {
+				kc.Coverage = Checking // not observed by any active domain
+			} else {
+				f := ss.gen.fresh
+				kc.Coverage, kc.Class, kc.Error, kc.Truncated = f.cov, f.class, f.err, f.truncated
+				switch f.cov {
+				case Live:
+					kc.AsOf = copyTime(f.readAt)
+				case Stale:
+					kc.AsOf, kc.LastGoodAt = copyTime(f.lastGoodAt), copyTime(f.lastGoodAt)
+				}
+				if f.cov == Live || f.cov == Stale {
+					c.Objects[name] = append([]any(nil), ss.gen.items...)
+					kc.Objects = len(ss.gen.items)
+				}
 			}
 		}
 		kinds = append(kinds, kc)
@@ -286,23 +296,11 @@ func (o *Observer) captureLocked(p *partState, now time.Time) (Capture, []KindCo
 	for _, n := range p.spec.Deps {
 		add(n, "dependency")
 	}
-	return c, kinds, absent
-}
-
-// domainCoverageLocked is a kind's coverage when its domain decides it: not
-// installed, still probing, or a probe that never succeeded.
-func (o *Observer) domainCoverageLocked(d *domainState) (Coverage, string, string) {
-	g := d.gen
-	switch {
-	case g == nil:
-		return Checking, "", ""
-	case g.probed && !g.served:
-		return Absent, "", ""
-	case !g.probed && g.probeErr != "":
-		return Unreadable, ClassDiscovery, g.probeErr
-	default:
-		return Checking, "", ""
+	absent := len(p.spec.Counted) > 0
+	for _, k := range kinds[:len(p.spec.Counted)] {
+		absent = absent && k.Coverage == Absent
 	}
+	return c, kinds, absent
 }
 
 func (o *Observer) buildSummaryLocked(now time.Time) Summary {
@@ -342,14 +340,17 @@ func (o *Observer) serveRows(req rowsReq) bool {
 		return false
 	}
 	now := o.clk.Now()
-	verChanged, _, rows := o.evaluate(p, now, true)
+	verChanged, rows := o.evaluate(p, now, true)
 	req.reply <- rowsReply{rows: o.rowsOf(p, rows, now), ok: true}
 	if verChanged {
 		o.mu.Lock()
 		o.summaryDirty = true
 		o.mu.Unlock()
 	}
-	return verChanged
+	o.mu.Lock()
+	owed := len(p.subs) > 0 && p.hasRows && p.rowsPubVer != p.ver
+	o.mu.Unlock()
+	return verChanged || owed
 }
 
 // RowsNow returns a part's rows and counts from one fresh capture - the
@@ -375,8 +376,8 @@ func (o *Observer) RowsNow(task, part string) (Rows, bool) {
 func (o *Observer) final() {
 	o.mu.Lock()
 	for _, d := range o.domains {
-		if d.gen != nil {
-			o.stopDomainLocked(d)
+		if d.active {
+			o.deactivateLocked(d)
 		}
 	}
 	o.seq++

@@ -21,17 +21,17 @@ type Owner struct{ Kind, ID string }
 // HealthOwner is the Observer's own cluster-lifetime lease holder.
 var HealthOwner = Owner{Kind: "health", ID: "observer"}
 
-// Probe is a domain's served state from discovery.
+// Probe is one kind's served state from discovery.
 type Probe struct {
 	Served  bool
 	Version string
 }
 
-// DomainSpec is one task: its parts, the kinds and snapshots they read, and
-// an optional discovery probe (nil = always served, e.g. core kinds).
+// DomainSpec is one task: its parts and, through them, the kinds and
+// snapshots it reads. Discovery is per kind (KindSpec.Probe); a part is
+// absent when every counted source is absent, a task when every part is.
 type DomainSpec struct {
 	ID    string
-	Probe func(ctx context.Context) (Probe, error)
 	Parts []PartSpec
 }
 
@@ -45,8 +45,8 @@ type PartSpec struct {
 	Evaluate func(c Capture) PartResult
 }
 
-// Capture is one part's atomic view: every listed kind's objects (sorted by
-// key) taken under one lock, at one time.
+// Capture is one part's atomic view: every listed source's objects (sorted
+// by key) taken under one lock, at one time.
 type Capture struct {
 	Now     time.Time
 	Objects map[string][]any
@@ -90,7 +90,6 @@ type partKey struct{ task, part string }
 type partState struct {
 	spec PartSpec
 	key  partKey
-	dom  *domainState
 	obs  uint64 // advanced under o.mu by any counted/dependency mutation
 	subs map[Owner]bool
 	// Loop-owned (never touched under o.mu by other goroutines):
@@ -100,24 +99,15 @@ type partState struct {
 	hasRows       bool
 	boundaryFired bool      // its Next passed and it awaits re-evaluation
 	evaluatedAt   time.Time // the capture time of its current version
+	rowsPubVer    uint64    // the version last broadcast to subscribers
+	rowsPub       bool      // rows were broadcast in this subscription period
 }
 
 type domainState struct {
 	spec   DomainSpec
 	owners map[Owner]bool
-	gen    *domainGen
+	active bool
 	parts  []*partState
-}
-
-type domainGen struct {
-	ctx      context.Context
-	cancel   context.CancelFunc
-	probed   bool // a probe has succeeded in this generation
-	served   bool
-	version  string
-	acquired bool
-	probeErr string // the last failed probe, when none has succeeded
-	reprobe  chan struct{}
 }
 
 // Observer is one cluster's health observation (spec §2-§5).
@@ -148,7 +138,7 @@ type Observer struct {
 }
 
 // New builds an Observer. It panics on a spec that names an unregistered
-// kind or repeats an id - a programming error, not a runtime condition.
+// source or repeats an id - a programming error, not a runtime condition.
 func New(cfg Config) *Observer {
 	if cfg.Throttle <= 0 {
 		cfg.Throttle = time.Second
@@ -190,7 +180,7 @@ func New(cfg Config) *Observer {
 		}
 		ds := &domainState{spec: d, owners: map[Owner]bool{}}
 		for _, p := range d.Parts {
-			ps := &partState{spec: p, key: partKey{d.ID, p.ID}, dom: ds, subs: map[Owner]bool{}}
+			ps := &partState{spec: p, key: partKey{d.ID, p.ID}, subs: map[Owner]bool{}}
 			ds.parts = append(ds.parts, ps)
 			for _, name := range append(append([]string{}, p.Counted...), p.Deps...) {
 				switch {
@@ -212,7 +202,8 @@ func New(cfg Config) *Observer {
 // Incarnation identifies this Observer (spec §3.4).
 func (o *Observer) Incarnation() uint64 { return o.incarnation }
 
-// Done closes after the Final publish.
+// Done closes once the Final summary is published and every goroutine of
+// this Observer - snapshot reads included - has returned.
 func (o *Observer) Done() <-chan struct{} { return o.done }
 
 // Latest returns the last published summary.
@@ -245,7 +236,6 @@ func (o *Observer) Start(ctx context.Context) {
 		defer o.wg.Done()
 		o.loop()
 	}()
-	// Done closes once every goroutine of this Observer has exited.
 	go func() {
 		o.wg.Wait()
 		close(o.done)
@@ -286,8 +276,7 @@ func (o *Observer) SetConnection(word string) {
 // ---- leases ---------------------------------------------------------------
 
 // Acquire takes owner's lease on a domain and returns an idempotent release.
-// A repeated Acquire by the same owner returns an equivalent release and
-// does not add a reference.
+// A repeated Acquire by the same owner adds no reference.
 func (o *Observer) Acquire(task string, owner Owner) (release func()) {
 	o.mu.Lock()
 	d := o.byTask[task]
@@ -312,8 +301,12 @@ func (o *Observer) acquireLocked(d *domainState, owner Owner) {
 		return
 	}
 	d.owners[owner] = true
-	if d.gen == nil && o.ctx.Err() == nil {
-		o.startDomainLocked(d)
+	if !d.active && o.ctx.Err() == nil {
+		d.active = true
+		for _, n := range o.sourcesOf(d) {
+			o.refSourceLocked(n)
+		}
+		o.markDomainLocked(d)
 	}
 }
 
@@ -325,9 +318,17 @@ func (o *Observer) releaseLocked(d *domainState, owner Owner) {
 	for _, p := range d.parts {
 		delete(p.subs, owner)
 	}
-	if len(d.owners) == 0 && d.gen != nil {
-		o.stopDomainLocked(d)
+	if len(d.owners) == 0 && d.active {
+		o.deactivateLocked(d)
 	}
+}
+
+func (o *Observer) deactivateLocked(d *domainState) {
+	d.active = false
+	for _, n := range o.sourcesOf(d) {
+		o.unrefSourceLocked(n)
+	}
+	o.markDomainLocked(d)
 }
 
 // SubscribeRows asks for a part's rows on every version change, owned by
@@ -366,85 +367,6 @@ func (o *Observer) partLocked(task, part string) *partState {
 	return nil
 }
 
-// ---- domain generations and probes ---------------------------------------
-
-func (o *Observer) startDomainLocked(d *domainState) {
-	ctx, cancel := context.WithCancel(o.ctx)
-	g := &domainGen{ctx: ctx, cancel: cancel, reprobe: make(chan struct{}, 1)}
-	d.gen = g
-	o.markDomainLocked(d)
-	if d.spec.Probe == nil {
-		g.probed, g.served = true, true
-		o.acquireSourcesLocked(d, "")
-		return
-	}
-	o.goSafe(func() { o.probeLoop(d, g) })
-}
-
-func (o *Observer) stopDomainLocked(d *domainState) {
-	g := d.gen
-	g.cancel()
-	if g.acquired {
-		o.releaseSourcesLocked(d)
-	}
-	d.gen = nil
-	o.markDomainLocked(d)
-}
-
-// probeLoop probes at once, then every ReprobeEvery or on a NotFound list.
-// A failed probe confirms nothing: the last known served set stands and the
-// failure is retried with backoff.
-func (o *Observer) probeLoop(d *domainState, g *domainGen) {
-	backoff := o.cfg.BackoffMin
-	for {
-		res, err := d.spec.Probe(g.ctx)
-		wait := o.cfg.ReprobeEvery
-		o.mu.Lock()
-		if d.gen != g || g.ctx.Err() != nil {
-			o.mu.Unlock()
-			return // released or replaced while probing: the result is discarded
-		}
-		if err != nil {
-			if !g.probed {
-				g.probeErr = err.Error()
-				o.markDomainLocked(d)
-			}
-			wait = backoff
-			backoff = min(backoff*2, o.cfg.BackoffMax)
-		} else {
-			backoff = o.cfg.BackoffMin
-			o.applyProbeLocked(d, g, res)
-		}
-		o.mu.Unlock()
-		t := o.clk.NewTimer(wait)
-		select {
-		case <-g.ctx.Done():
-			t.Stop()
-			return
-		case <-t.C():
-		case <-g.reprobe:
-			t.Stop()
-		}
-	}
-}
-
-func (o *Observer) applyProbeLocked(d *domainState, g *domainGen, res Probe) {
-	g.probeErr = ""
-	changed := !g.probed || g.served != res.Served || (res.Served && g.version != res.Version)
-	g.probed = true
-	if !changed {
-		return
-	}
-	if g.acquired {
-		o.releaseSourcesLocked(d) // a version change starts new kind generations
-	}
-	g.served, g.version = res.Served, res.Version
-	if res.Served {
-		o.acquireSourcesLocked(d, res.Version)
-	}
-	o.markDomainLocked(d)
-}
-
 func (o *Observer) sourcesOf(d *domainState) []string {
 	seen := map[string]bool{}
 	var out []string
@@ -459,60 +381,36 @@ func (o *Observer) sourcesOf(d *domainState) []string {
 	return out
 }
 
-func (o *Observer) acquireSourcesLocked(d *domainState, version string) {
-	for _, n := range o.sourcesOf(d) {
-		if ks := o.kinds[n]; ks != nil {
-			ks.refs++
-			if ks.gen == nil {
-				o.startKind(ks, version)
-			} else if version != "" && ks.gen.version != version {
-				o.stopKind(ks)
-				o.startKind(ks, version)
-			}
-		} else if ss := o.snaps[n]; ss != nil {
-			ss.refs++
-			if ss.gen == nil {
-				o.startSnap(ss)
-			}
+// refSourceLocked adds an active domain's reference to a source. A kind's
+// first reference starts its discovery (or, without a probe, its single
+// authoritative generation); later references share it.
+func (o *Observer) refSourceLocked(name string) {
+	if ks := o.kinds[name]; ks != nil {
+		ks.refs++
+		if ks.refs == 1 {
+			o.activateKind(ks)
 		}
+		return
 	}
-	d.gen.acquired = true
+	ss := o.snaps[name]
+	ss.refs++
+	if ss.refs == 1 {
+		o.startSnap(ss)
+	}
 }
 
-func (o *Observer) releaseSourcesLocked(d *domainState) {
-	for _, n := range o.sourcesOf(d) {
-		if ks := o.kinds[n]; ks != nil {
-			ks.refs--
-			if ks.refs == 0 {
-				o.stopKind(ks)
-			}
-		} else if ss := o.snaps[n]; ss != nil {
-			ss.refs--
-			if ss.refs == 0 {
-				o.stopSnap(ss)
-			}
+func (o *Observer) unrefSourceLocked(name string) {
+	if ks := o.kinds[name]; ks != nil {
+		ks.refs--
+		if ks.refs == 0 {
+			o.deactivateKind(ks)
 		}
+		return
 	}
-	d.gen.acquired = false
-}
-
-// reprobeKindLocked asks every domain reading ks to probe again (a NotFound
-// list may mean the CRD or its version went away).
-func (o *Observer) reprobeKindLocked(ks *kindState) {
-	for _, d := range o.domains {
-		if d.gen == nil || d.spec.Probe == nil {
-			continue
-		}
-		reads := false
-		for _, n := range o.sourcesOf(d) {
-			reads = reads || n == ks.spec.Name
-		}
-		if reads {
-			select {
-			case d.gen.reprobe <- struct{}{}:
-			default:
-			}
-		}
+	ss := o.snaps[name]
+	ss.refs--
+	if ss.refs == 0 {
+		o.stopSnap(ss)
 	}
 }
 
