@@ -107,15 +107,21 @@ export function attentionAreas(a: AttentionSlice | null | undefined, cluster: st
 // Installed domains this summary does not read (spec §4 requires every
 // supported category; until the backend summary - health slice 1c - exists
 // they are named, never implied checked). Their lenses read them live.
-export type Uncovered = { id: string; label: string; groupId: string; destinationId: string };
-const UNCOVERED: (Uncovered & { cap: CapKey })[] = [
+// capability: "present" (installed, not read by the summary) or "unverified"
+// (detection is still checking or the cluster is unreadable - it may be).
+export type Uncovered = { id: string; label: string; groupId: string; destinationId: string; capability: "present" | "unverified" };
+const UNCOVERED: (Omit<Uncovered, "capability"> & { cap: CapKey })[] = [
   { id: "certs", label: "Certificates", groupId: "certs", destinationId: "certs", cap: "certManager" },
   { id: "eso", label: "External secrets", groupId: "eso", destinationId: "eso", cap: "externalSecrets" },
   { id: "gateway", label: "Gateways", groupId: "network", destinationId: "gateway", cap: "gatewayAPI" },
   { id: "karpenter", label: "Karpenter", groupId: "autoscaling", destinationId: "karpenter", cap: "karpenter" },
 ];
 export function uncoveredDomains(c: ClusterDTO | undefined): Uncovered[] {
-  return UNCOVERED.filter((u) => capState(c, u.cap) === "present").map((u) => ({ id: u.id, label: u.label, groupId: u.groupId, destinationId: u.destinationId }));
+  return UNCOVERED.flatMap((u) => {
+    const st = capState(c, u.cap);
+    if (st === "absent") return [];
+    return [{ id: u.id, label: u.label, groupId: u.groupId, destinationId: u.destinationId, capability: st === "present" ? "present" as const : "unverified" as const }];
+  });
 }
 
 // attentionSummary: the mast's one-line reading - areas needing attention, and the

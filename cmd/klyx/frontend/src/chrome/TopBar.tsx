@@ -102,7 +102,7 @@ function AttentionButton({ cluster }: { cluster: string }) {
   }
   const lines = [
     ...areas.map((a) => `${a.label}: ${a.text}`),
-    uncovered.length > 0 ? `Not covered by the summary (open their views): ${uncovered.map((u) => u.label).join(", ")}` : "",
+    uncovered.length > 0 ? `Not covered by the summary (open their views): ${uncovered.map((u) => (u.capability === "present" ? u.label : `${u.label} (capability not yet known)`)).join(", ")}` : "",
     asOf ? `Summary as of ${asOf}${refreshing ? " - refreshing" : ""}` : "",
   ].filter(Boolean);
   return (

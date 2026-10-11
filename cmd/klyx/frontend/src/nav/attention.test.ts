@@ -70,6 +70,9 @@ describe("cluster attention areas (redesign step 7e)", () => {
   it("installed domains outside the summary are named, absent ones are not", () => {
     const c = { name: "dev", state: "Synced", certManagerPresent: true, externalSecretsPresent: false, gatewayAPIVersion: "v1", karpenterPresent: false } as never;
     expect(uncoveredDomains(c).map((u) => u.label)).toEqual(["Certificates", "Gateways"]);
-    expect(uncoveredDomains({ name: "dev", state: "Connecting", certManagerPresent: true } as never)).toEqual([]);
+    // Detection still running: every such domain may exist - named as unverified, never omitted.
+    expect(uncoveredDomains({ name: "dev", state: "Connecting" } as never).map((u) => [u.label, u.capability])).toEqual([
+      ["Certificates", "unverified"], ["External secrets", "unverified"], ["Gateways", "unverified"], ["Karpenter", "unverified"],
+    ]);
   });
 });

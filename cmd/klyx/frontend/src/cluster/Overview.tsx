@@ -86,7 +86,7 @@ export function Overview({ c }: { c: ClusterDTO }) {
                 <span>connection</span><span style={{ color: stateTone }}>{freshnessText(c)}</span>
                 <span>nodes</span><span>{c.nodesReady}/{c.nodesTotal} ready</span>
                 <span>pods</span><span>{c.pods}</span>
-                <span>namespaces</span><span>{mine && attention.counts.namespaces != null ? attention.counts.namespaces : "—"}</span>
+                <span>namespaces</span><span>{mine && attention.counts.namespaces != null ? `${attention.counts.namespaces}${(attention.stale ?? []).includes("pods") ? " (last good)" : ""}` : "—"}</span>
                 <span>flux</span><span>{fluxCapability(c, attention.counts.flux)}</span>
                 {board?.argo && <><span>argo cd</span><span>{board.argo.broken > 0 ? `${board.argo.broken} of ${board.argo.total} need attention` : `${board.argo.total} applications`}</span></>}
                 <span>gateway</span><span>{gatewayCapability(c, board)}</span>
@@ -169,7 +169,7 @@ function AttentionSection({ cluster, areas, uncovered }: { cluster: string; area
           {uncovered.map((u) => (
             <button key={u.id} className="ov-area" data-state="uncovered" onClick={() => goUncovered(u)} title={`Open ${u.label}`}>
               <span className="ov-area-label">{u.label}</span>
-              <span className="ov-area-text">not covered by the summary - open to check</span>
+              <span className="ov-area-text">{u.capability === "present" ? "not covered by the summary - open to check" : "capability not yet known - not covered by the summary"}</span>
             </button>
           ))}
         </div>

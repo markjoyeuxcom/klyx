@@ -1,20 +1,17 @@
 import { useEffect, useRef, useState } from "react";
-import { useFleet, ResourceRef, InstanceRef, InstanceDetailDTO, SecretKeyDTO, ServiceBackingDTO, HPAScalingDTO, RelatedRefDTO, EventDTO, FactDTO, AIResultDTO, GitOpsOwnershipDTO } from "../store/fleet";
+import { useFleet, ResourceRef, InstanceRef, InstanceDetailDTO, SecretKeyDTO, ServiceBackingDTO, HPAScalingDTO, RelatedRefDTO, FactDTO, AIResultDTO, GitOpsOwnershipDTO } from "../store/fleet";
 import { getInstanceDetail, revealSecretKey, copyText, dryRunInstanceYAML, applyInstanceYAML, gitOpsOwnership, ActionResult } from "../bridge/crd";
 import { explainResource, suggestFix } from "../bridge/ai";
 import { useAIAvailability } from "./useAI";
 import { armProtected } from "../bridge/configsvc";
 import { openPodDetail } from "../bridge/pods";
 import { ForwardPopover } from "./ForwardPopover";
-import { InspectorStatus, conditionColor, InspectorConditions, InspectorEvents, InspectorSection, InspectorTabButton, InspectorFacts, InspectorKV, InspectorMeters, MetadataChips, inspectorStateBox } from "./ResourceInspector";
+import { InspectorStatus, conditionColor, InspectorConditions, InspectorEvents, InspectorSection, InspectorFacts, InspectorKV, InspectorMeters, MetadataChips, inspectorStateBox } from "./ResourceInspector";
 import { actionBtn, ellipsis, type Tone } from "../chrome/primitives";
-import { CopyButton } from "../chrome/CopyButton";
 import { DescribePane } from "../chrome/DescribePane";
-import { IconX, IconSparkles, IconAlertTriangle } from "@tabler/icons-react";
+import { IconAlertTriangle } from "@tabler/icons-react";
 import { InspectorBlock, InspectorLayout, type MenuItem } from "../layout/InspectorLayout";
 import { YamlBlock } from "../chrome/YamlBlock";
-
-type DetailTab = "summary" | "related" | "events" | "yaml";
 
 const TONE_SET = new Set<string>(["success", "warning", "danger", "info", "muted", "neutral"]);
 function asTone(s: string): Tone | undefined {
@@ -717,241 +714,6 @@ function ServiceBackingSection({
   );
 }
 
-// InstanceDetail renders as a resizable side panel inside InstanceList
-// (master-detail, the Pods pattern) - never as a full-page swap that throws
-// the list away. The panel header carries kind + name + refresh + close; the
-// drill path lives in the Header breadcrumb and the list beside it.
-// InstanceDetailLegacy - the pre-redesign inspector, kept for the reversible
-// rollout switch (localStorage "klyx.layout.v1.legacyResources" = "1").
-export function InstanceDetailLegacy({ cluster, resource, instance }: { cluster: string; resource: ResourceRef; instance: InstanceRef }) {
-  const id = useFleet((s) => s.instanceDetail);
-  const closeInstance = useFleet((s) => s.closeInstance);
-  const [copied, setCopied] = useState(false);
-  const [describing, setDescribing] = useState(false);
-  const [tab, setTab] = useState<DetailTab>("summary");
-
-  useEffect(() => {
-    setTab("summary");
-    void getInstanceDetail(cluster, resource, instance);
-    return () => useFleet.getState().clearInstanceDetail();
-  }, [cluster, resource.group, resource.version, resource.plural, instance.namespace, instance.name]);
-
-  const isCurrent = id.ref && id.ref.namespace === instance.namespace && id.ref.name === instance.name;
-  const d = isCurrent ? id.detail : null;
-
-  // AI assist — on-demand, read-only; two modes (cross-lens explain, and a fix
-  // suggestion the operator commits to Git). Reset on selection change.
-  const ai = useAIAvailability(cluster, true);
-  const [aiPanel, setAiPanel] = useState<{ mode: "explain" | "fix"; loading: boolean; result: AIResultDTO | null } | null>(null);
-  // Fence AI results against a mid-flight selection change: the panel component is
-  // reused across selections, so a slow explain/fix from the previous resource must
-  // not land under the new one. The token bumps on every selection change.
-  const aiTokenRef = useRef(0);
-  useEffect(() => { aiTokenRef.current++; setAiPanel(null); }, [resource.group, resource.plural, instance.namespace, instance.name]);
-  const runAI = (mode: "explain" | "fix") => {
-    const token = aiTokenRef.current;
-    setAiPanel({ mode, loading: true, result: null });
-    const verb = mode === "fix" ? "fix suggestion" : "explain";
-    const call = mode === "fix"
-      ? suggestFix(cluster, resource.group, resource.version, resource.plural, instance.namespace, instance.name)
-      : explainResource(cluster, resource.group, resource.version, resource.plural, instance.namespace, instance.name);
-    call
-      .then((r) => {
-        if (token !== aiTokenRef.current) return; // selection changed mid-flight
-        setAiPanel({ mode, loading: false, result: r });
-        if (r.error) {
-          useFleet.getState().setActionStatus({ kind: "error", message: `AI ${verb} failed: ${r.error}` });
-        } else {
-          useFleet.getState().setActionStatus({ kind: "success", message: `AI ${verb} — ${resource.kind}/${instance.namespace ? `${instance.namespace}/` : ""}${instance.name} via ${r.backend}` });
-        }
-      })
-      .catch((e) => {
-        if (token !== aiTokenRef.current) return;
-        setAiPanel({ mode, loading: false, result: null });
-        useFleet.getState().setActionStatus({ kind: "error", message: `AI ${verb} failed: ${String(e)}` });
-      });
-  };
-  const aiBusy = aiPanel?.loading ?? false;
-
-  const onCopy = () => {
-    if (!d) return;
-    void copyText(d.yaml);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
-  };
-
-  return (
-    <div style={{ height: "100%", minHeight: 0, overflow: "hidden", boxSizing: "border-box", display: "flex", flexDirection: "column" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, flexShrink: 0, paddingBottom: 6, borderBottom: "0.5px solid var(--color-border-tertiary)" }}>
-        <span style={{ fontSize: 10, color: "var(--color-text-tertiary)", flexShrink: 0 }}>{resource.kind}</span>
-        <span style={{ fontFamily: "var(--font-mono)", fontSize: 12, fontWeight: 500, color: "var(--color-text-primary)", ...ellipsis }} title={`${instance.namespace ? `${instance.namespace}/` : ""}${instance.name}`}>
-          {instance.namespace ? <span style={{ color: "var(--color-text-tertiary)" }}>{instance.namespace}/</span> : null}{instance.name}
-        </span>
-        <CopyButton text={instance.name} label={`copy name ${instance.name}`} />
-        {d && d.created && <span style={{ fontSize: 11, color: "var(--color-text-tertiary)", flexShrink: 0 }}>{age(d.created)}</span>}
-        <div style={{ flex: 1 }} />
-        {ai.ready && (
-          <>
-            <button
-              onClick={() => runAI("explain")}
-              disabled={!ai.egress || aiBusy}
-              title={ai.egress ? "Explain the root cause across related objects (AI, read-only)" : "AI is disabled for this protected cluster — the AI endpoint is not on this machine; use a model on localhost or set ai.allowProtectedEgress"}
-              style={{ ...actionBtn, display: "inline-flex", alignItems: "center", gap: 4, color: "var(--color-text-info)", borderColor: "var(--color-border-info)", opacity: ai.egress ? 1 : 0.5, cursor: ai.egress && !aiBusy ? "pointer" : "not-allowed" }}
-            >
-              <IconSparkles size={12} stroke={1.5} />
-              {aiPanel?.mode === "explain" && aiBusy ? "explaining…" : "Explain"}
-            </button>
-            <button
-              onClick={() => runAI("fix")}
-              disabled={!ai.egress || aiBusy}
-              title={ai.egress ? "Draft a fix to commit to Git (AI, read-only — Klyx never applies it)" : "AI is disabled for this protected cluster — the AI endpoint is not on this machine; use a model on localhost or set ai.allowProtectedEgress"}
-              style={{ ...actionBtn, display: "inline-flex", alignItems: "center", gap: 4, color: "var(--color-text-info)", borderColor: "var(--color-border-info)", opacity: ai.egress ? 1 : 0.5, cursor: ai.egress && !aiBusy ? "pointer" : "not-allowed" }}
-            >
-              <IconSparkles size={12} stroke={1.5} />
-              {aiPanel?.mode === "fix" && aiBusy ? "suggesting…" : "Suggest fix"}
-            </button>
-          </>
-        )}
-        {resource.kind === "ServiceAccount" && (
-          <button
-            onClick={() => {
-              useFleet.getState().requestNavIntent({ kind: "access-check", cluster, namespace: instance.namespace, name: instance.name });
-              useFleet.getState().setSection("access");
-            }}
-            title="Check what this ServiceAccount can do (SubjectAccessReview simulation, read-only)"
-            style={actionBtn}
-          >
-            check access
-          </button>
-        )}
-        <button onClick={() => setDescribing(true)} style={actionBtn}>describe</button>
-        <button onClick={() => void getInstanceDetail(cluster, resource, instance)} style={actionBtn}>Refresh</button>
-        <button onClick={closeInstance} aria-label="close instance panel" style={{ ...actionBtn, display: "inline-flex", alignItems: "center" }}><IconX size={13} stroke={1.5} /></button>
-      </div>
-
-      {describing && (
-        <DescribePane
-          cluster={cluster}
-          // kubectl's unambiguous resource argument: plural.group for CRDs and
-          // any grouped kind, plural alone for the core "" group.
-          kindArg={resource.group ? `${resource.plural}.${resource.group}` : resource.plural}
-          namespace={instance.namespace}
-          name={instance.name}
-          onClose={() => setDescribing(false)}
-        />
-      )}
-
-      {id.loading && !d ? (
-        <div style={inspectorStateBox}>Loading {resource.kind} detail…</div>
-      ) : !d ? (
-        <div style={inspectorStateBox}>Could not load {instance.namespace ? `${instance.namespace}/` : ""}{instance.name}.</div>
-      ) : d.error ? (
-        // The backend returns a zero DTO WITH the reason on a failed read;
-        // never render that as a real (empty) object.
-        <div role="alert" style={{ ...inspectorStateBox, color: "var(--color-text-danger)" }}>
-          Could not load {instance.namespace ? `${instance.namespace}/` : ""}{instance.name}: {d.error}
-        </div>
-      ) : (
-        <div style={{ minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column", flex: 1 }}>
-          {(() => {
-            // Verdict parity with the pod/workload panels: derive the headline
-            // from the object's own conditions when it has any. No conditions
-            // means no verdict - never a fabricated "healthy".
-            const primary = ["Ready", "Available", "Established", "Synced", "Accepted", "Programmed", "AbleToScale", "Progressing"]
-              .map((t) => d.conditions.find((c) => c.type === t))
-              .find(Boolean) ?? d.conditions[0];
-            if (!primary) return null;
-            const color = conditionColor(primary.status, primary.type);
-            const tone = color.includes("success") ? ("success" as const) : color.includes("danger") ? ("danger" as const) : ("info" as const);
-            return <InspectorStatus tone={tone} label={`${primary.type} ${primary.status}`} reason={primary.reason || undefined} />;
-          })()}
-          <div style={{ display: "flex", gap: 6, marginBottom: 12, flexShrink: 0 }}>
-            <InspectorTabButton active={tab === "summary"} onClick={() => setTab("summary")}>summary</InspectorTabButton>
-            <InspectorTabButton active={tab === "related"} onClick={() => setTab("related")}>related {d.related?.length ?? 0}</InspectorTabButton>
-            <InspectorTabButton active={tab === "events"} onClick={() => setTab("events")}>events {d.events.length}</InspectorTabButton>
-            <InspectorTabButton active={tab === "yaml"} onClick={() => setTab("yaml")}>yaml</InspectorTabButton>
-          </div>
-
-          <div data-testid="instance-detail-scroll" style={{ flex: 1, minHeight: 0, overflowY: "auto", paddingRight: 4 }}>
-            {tab === "summary" ? (
-              <>
-                {aiPanel && (
-                  <InspectorSection title={aiPanel.mode === "fix" ? "Suggested fix (AI)" : "Explain (AI)"}>
-                    {aiPanel.loading ? (
-                      <div style={{ fontSize: 11, color: "var(--color-text-tertiary)" }}>{aiPanel.mode === "fix" ? "drafting a change to commit to Git…" : "tracing the chain across related objects…"}</div>
-                    ) : aiPanel.result?.error ? (
-                      <div style={{ display: "flex", alignItems: "flex-start", gap: 5, fontSize: 11, color: "var(--color-text-danger)" }}>
-                        <IconAlertTriangle size={12} stroke={1.5} style={{ flexShrink: 0, marginTop: 1 }} />
-                        <span>{aiPanel.result.error}</span>
-                      </div>
-                    ) : aiPanel.result ? (
-                      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                        {aiPanel.mode === "fix" && (
-                          <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "5px 8px", borderRadius: 4, border: "0.5px solid var(--color-border-warning)", background: "var(--color-background-warning)", color: "var(--color-text-warning)", fontSize: 10 }}>
-                            <IconAlertTriangle size={12} stroke={1.5} style={{ flexShrink: 0 }} />
-                            <span>Review and commit this to Git — Klyx will not apply it. Desired state stays in your repo.</span>
-                          </div>
-                        )}
-                        <div style={{ fontSize: 11, color: "var(--color-text-secondary)", whiteSpace: "pre-wrap", lineHeight: 1.5, fontFamily: aiPanel.mode === "fix" ? "var(--font-mono)" : undefined }}>{aiPanel.result.explanation}</div>
-                        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                          {aiPanel.mode === "fix" && (
-                            <button onClick={() => { void copyText(aiPanel.result!.explanation); }} style={{ ...actionBtn, fontSize: 10 }}>copy suggestion</button>
-                          )}
-                          <div style={{ fontFamily: "var(--font-mono)", fontSize: 9, color: "var(--color-text-tertiary)" }}>Grounded on: {aiPanel.result.groundedOn} · {aiPanel.result.model}</div>
-                        </div>
-                        {aiPanel.mode === "fix" && (
-                          // Say what left the machine: the manifest is redacted
-                          // heuristically, not guaranteed secret-free (review
-                          // 2026-10-03 E).
-                          <div data-testid="ai-fix-redaction" style={{ fontSize: 9, color: "var(--color-text-tertiary)", fontStyle: "italic" }}>
-                            Sent the manifest with {aiPanel.result.redacted ?? 0} credential-like value{(aiPanel.result.redacted ?? 0) === 1 ? "" : "s"} redacted and last-applied removed - redaction is heuristic, so review what your manifests carry inline.
-                          </div>
-                        )}
-                        {aiPanel.mode !== "fix" && (
-                          <div style={{ fontSize: 9, color: "var(--color-text-tertiary)", fontStyle: "italic" }}>AI-generated from resolved health — verify before acting.</div>
-                        )}
-                      </div>
-                    ) : null}
-                  </InspectorSection>
-                )}
-                {/* The data path leads - the salient facts a platform engineer
-                    reads first - then metadata, typed sections, and conditions. */}
-                <FactsSummary facts={d.facts} />
-                <MetadataChips title="Labels" values={d.labels} />
-                <MetadataChips title="Annotations" values={d.annotations} defaultCollapsed />
-
-                {d.hpaScaling != null && (
-                  <HPAScalingSection cluster={cluster} scaling={d.hpaScaling} />
-                )}
-
-                {d.serviceBacking != null && (
-                  <ServiceBackingSection cluster={cluster} ns={instance.namespace} serviceName={instance.name} backing={d.serviceBacking} />
-                )}
-
-                {d.secretKeys && d.secretKeys.length > 0 && (
-                  <SecretDataSection cluster={cluster} ns={instance.namespace} name={instance.name} keys={d.secretKeys} />
-                )}
-
-                {d.conditions.length > 0 && (
-                  <InspectorSection title="Conditions" collapsible>
-                    <InspectorConditions conditions={d.conditions} />
-                  </InspectorSection>
-                )}
-              </>
-            ) : tab === "related" ? (
-              <RelatedSection cluster={cluster} related={d.related ?? []} />
-            ) : tab === "events" ? (
-              <EventsPanel events={d.events} />
-            ) : (
-              <YamlPanel cluster={cluster} resource={resource} instance={instance} detail={d} copied={copied} onCopy={onCopy} />
-            )}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
 // InstanceDetail - the generic (GVR) inspector on the shared InspectorLayout.
 // Lens descriptor (spec §3, documented variant): a raw resource has no domain
 // verb, so the primary is the universal read-only Describe; the secondary is
@@ -1212,14 +974,6 @@ function RelatedSection({ cluster, related }: { cluster: string; related: Relate
         </InspectorSection>
       ))}
     </>
-  );
-}
-
-function EventsPanel({ events }: { events: EventDTO[] }) {
-  return (
-    <InspectorSection title="Events" count={events.length}>
-      <InspectorEvents events={events} emptyText="No events for this object." />
-    </InspectorSection>
   );
 }
 

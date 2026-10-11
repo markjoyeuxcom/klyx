@@ -1002,7 +1002,9 @@ export const useFleet = create<FleetState>((set) => ({
     const stale: AttentionKey[] = [];
     for (const k of ATTENTION_KEYS) {
       const before = prev?.counts[k];
-      if (counts[k] === "unreadable" && prev && before !== undefined && before !== "unreadable" && prev.areaAt?.[k] !== undefined) {
+      // Only a reading is retained: a previously detected ABSENCE is not
+      // evidence about now - a failed read after it shows unreadable.
+      if (counts[k] === "unreadable" && prev && before !== undefined && before !== "unreadable" && before !== "absent" && prev.areaAt?.[k] !== undefined) {
         (merged as Record<AttentionKey, unknown>)[k] = before;
         if (k === "helm") merged.helmStuck = prev.counts.helmStuck;
         areaAt[k] = prev.areaAt[k];

@@ -169,3 +169,41 @@ describe("fetchAttention ordering and last-good (Codex 7e review)", () => {
     expect(useFleet.getState().attention.counts.helmStuck).toBe(1);
   });
 });
+
+describe("a previously absent tool after a failed read (Codex 7e re-review)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    useFleet.getState().clearAttention();
+    seedHealthy(); // Flux summary present, Argo "not detected" (absent)
+  });
+
+  it("absent -> failed is unreadable (a gap), never a retained absence; -> recovered present shows the reading", async () => {
+    const { attentionAreas, attentionSummary } = await import("../nav/attention");
+    await fetchAttention("a");
+    expect(useFleet.getState().attention.counts.argo).toBe("absent");
+    (ArgoService.ListApplications as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("timeout"));
+    await fetchAttention("a");
+    const s = useFleet.getState().attention;
+    expect(s.counts.argo).toBe("unreadable");
+    expect(s.stale ?? []).not.toContain("argo");
+    const areas = attentionAreas(s, "a");
+    expect(areas.find((x) => x.id === "argo")?.state).toBe("unreadable");
+    expect(attentionSummary(areas).gaps).toBeGreaterThan(0);
+    (ArgoService.ListApplications as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ available: true, apps: [{ broken: true }] });
+    await fetchAttention("a");
+    expect(useFleet.getState().attention.counts.argo).toBe(1);
+  });
+
+  it("absent -> failed -> confirmed absent again is omitted with no gap left", async () => {
+    const { attentionAreas, attentionSummary } = await import("../nav/attention");
+    await fetchAttention("a");
+    (ArgoService.ListApplications as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("timeout"));
+    await fetchAttention("a");
+    await fetchAttention("a"); // default mock: Argo not detected
+    const s = useFleet.getState().attention;
+    expect(s.counts.argo).toBe("absent");
+    const areas = attentionAreas(s, "a");
+    expect(areas.find((x) => x.id === "argo")).toBeUndefined();
+    expect(attentionSummary(areas).gaps).toBe(0);
+  });
+});

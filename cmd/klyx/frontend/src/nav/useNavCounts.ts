@@ -70,6 +70,7 @@ export function useNavCounts(cluster: string | null): NavCounts {
     }
     const destinationNote: Record<string, string> = {};
     for (const u of uncoveredDomains(clusters.find((x) => x.name === cluster))) {
+      if (u.capability !== "present") continue; // the tree already says checking/unknown
       destinationNote[u.destinationId] = "not summarized";
       if (u.groupId === "certs" || u.groupId === "eso") groupNote[u.groupId] = groupNote[u.groupId] ?? "not summarized";
     }
