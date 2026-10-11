@@ -85,7 +85,7 @@ func Core(d CoreDeps) ([]observe.KindSpec, []observe.DomainSpec) {
 				return typed.AppsV1().DaemonSets("").Watch(ctx, o)
 			})},
 		metaKind(d.Meta, KindReplicaSets, schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "replicasets"}, "all namespaces", ProjectOwnerMeta),
-		{Name: KindNodes, GVR: "v1/nodes", Scope: "cluster-scoped", ExpectedType: &corev1.Node{}, Project: ProjectNode,
+		{Name: KindNodes, GVR: "v1/nodes", Scope: "cluster-scoped", ExpectedType: &corev1.Node{}, Project: ProjectNode, Tally: NodeReadyTally,
 			NewListWatch: lw(typed, func(ctx context.Context, o metav1.ListOptions) (runtime.Object, error) {
 				return typed.CoreV1().Nodes().List(ctx, o)
 			}, func(ctx context.Context, o metav1.ListOptions) (watch.Interface, error) {
@@ -318,3 +318,30 @@ func verdictResult(cluster, route string, verdicts []health.Verdict, refs []refI
 	}
 	return observe.PartResult{Counts: &counts, Top: top, Next: next}
 }
+
+// NodeReadyTally is the nodes kind's native Ready tally (1c slice 3 §6): the
+// connection's node counts, from the same capture as the kind state. "ready"
+// counts nodes whose Ready condition is True - NodeReadiness's rule, not the
+// verdict's OK (a Ready node under pressure or cordoned is Ready here).
+func NodeReadyTally(objs []any) map[string]int {
+	ready := 0
+	for _, o := range objs {
+		n, ok := o.(*corev1.Node)
+		if !ok {
+			continue
+		}
+		for _, c := range n.Status.Conditions {
+			if c.Type == corev1.NodeReady && c.Status == corev1.ConditionTrue {
+				ready++
+				break
+			}
+		}
+	}
+	return map[string]int{TallyNodesReady: ready, TallyNodesTotal: len(objs)}
+}
+
+// The nodes kind's tally keys.
+const (
+	TallyNodesReady = "ready"
+	TallyNodesTotal = "total"
+)

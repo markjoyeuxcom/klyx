@@ -314,22 +314,39 @@ func (c *ClusterConn) Start(ctx context.Context) {
 	c.observed = h != nil
 	c.mu.Unlock()
 
+	// Nodes: with an Observer its nodes kind is the barrier, the freshness
+	// and - through its native Ready tally, from the same capture - the
+	// counts (1c slice 3 §6): no node informer of the connection's own; the
+	// Nodes lens reads the nodes part's rows. Without an Observer (tests,
+	// tools) the eager node informer keeps its pre-1c role.
+	if h == nil {
+		c.startNodeInformer(ctx)
+	}
+
+	// Pods: the health Observer's pods kind is the barrier, the count and
+	// the freshness (1c 2d) - one pod watch, not two. Without an Observer
+	// (tests, tools) the metadata pod informer it replaced still serves.
+	if h != nil {
+		h.WatchKind(healthsrc.KindPods, c.onKindState(&c.pods))       // ends with the Observer
+		h.WatchKind(healthsrc.KindNodes, c.onKindState(&c.nodesKind)) // ends with the Observer
+	} else {
+		c.startPodInformer(ctx)
+	}
+
+	go c.refreshLoop(ctx)
+	go c.connectLoop(ctx)
+}
+
+// startNodeInformer runs the eager node informer - only without an
+// Observer, where it is the node barrier, freshness and counts (pre-1c).
+func (c *ClusterConn) startNodeInformer(ctx context.Context) {
 	nodeFactory := informers.NewSharedInformerFactory(c.typed, defaultResync)
 	nodeInformer := nodeFactory.Core().V1().Nodes().Informer()
-	// Strip managedFields before caching: the eager set lives for the app's
-	// lifetime and nothing in Klyx reads them (same for every cached kind).
+	// Strip managedFields before caching: nothing in Klyx reads them.
 	// Register handlers BEFORE starting the informers. SetWatchErrorHandler
 	// errors only if called after Start, which we do not do; ignore defensively.
 	_ = nodeInformer.SetTransform(stripManagedFields)
-	// With an Observer the node informer is only the Nodes lens's cache and
-	// the counts' source: the connection's node freshness is the Observer's
-	// nodes kind, a complete-read barrier - an informer notification (a
-	// delayed one, or a local resync) is not a new observation. Without an
-	// Observer the informer keeps its pre-1c role.
 	_ = nodeInformer.SetWatchErrorHandler(func(_ *cache.Reflector, err error) {
-		if c.isObserved() {
-			return
-		}
 		c.mu.Lock()
 		c.nodeFailed = true
 		c.mu.Unlock()
@@ -344,19 +361,6 @@ func (c *ClusterConn) Start(ctx context.Context) {
 	c.nodeInf = nodeInformer
 	c.mu.Unlock()
 	nodeFactory.Start(ctx.Done())
-
-	// Pods: the health Observer's pods kind is the barrier, the count and
-	// the freshness (1c 2d) - one pod watch, not two. Without an Observer
-	// (tests, tools) the metadata pod informer it replaced still serves.
-	if h != nil {
-		h.WatchKind(healthsrc.KindPods, c.onKindState(&c.pods))       // ends with the Observer
-		h.WatchKind(healthsrc.KindNodes, c.onKindState(&c.nodesKind)) // ends with the Observer
-	} else {
-		c.startPodInformer(ctx)
-	}
-
-	go c.refreshLoop(ctx, nodeInformer)
-	go c.connectLoop(ctx, nodeInformer)
 }
 
 // onKindState applies the Observer's newest state of one kind the
@@ -385,21 +389,13 @@ func (c *ClusterConn) onKindState(dst *observe.KindState) func(observe.KindState
 	}
 }
 
-// onNodeInformerEvent handles a node informer notification: it refreshes
-// the counts, and only without an Observer is it the node freshness signal.
+// onNodeInformerEvent handles a node informer notification (no Observer):
+// the node freshness signal and a count refresh.
 func (c *ClusterConn) onNodeInformerEvent() {
-	if !c.isObserved() {
-		c.mu.Lock()
-		c.nodeFailed, c.nodeAt = false, c.clk.Now()
-		c.mu.Unlock()
-	}
+	c.mu.Lock()
+	c.nodeFailed, c.nodeAt = false, c.clk.Now()
+	c.mu.Unlock()
 	c.signalRefresh()
-}
-
-func (c *ClusterConn) isObserved() bool {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.observed
 }
 
 // startPodInformer is the pod source without an Observer.
@@ -431,11 +427,11 @@ func (c *ClusterConn) startPodInformer(ctx context.Context) {
 // has listed; without one, both informers have synced and no node watch
 // failure is outstanding (the pre-1c contract). Caller holds c.mu.
 func (c *ClusterConn) sourcesCurrentLocked() bool {
-	if c.nodeInf == nil || !c.nodeInf.HasSynced() {
-		return false
-	}
 	if c.observed {
 		return c.pods.Coverage == observe.Live && c.nodesKind.Coverage == observe.Live
+	}
+	if c.nodeInf == nil || !c.nodeInf.HasSynced() {
+		return false
 	}
 	return !c.nodeFailed && c.podInf != nil && c.podInf.HasSynced()
 }
@@ -486,7 +482,7 @@ func stripManagedFields(obj interface{}) (interface{}, error) {
 // cluster that has NOT YET synced self-heals (Failed -> Synced) once
 // connectivity returns. Note: this loop exits after the first successful sync,
 // so post-sync recovery is handled by refreshLoop (Stale -> Synced), not here.
-func (c *ClusterConn) connectLoop(ctx context.Context, nodeInformer cache.SharedIndexInformer) {
+func (c *ClusterConn) connectLoop(ctx context.Context) {
 	for {
 		tctx, cancel := context.WithTimeout(ctx, c.connectTimeout)
 		ok := cache.WaitForCacheSync(tctx.Done(), c.sourcesCurrent)
@@ -508,7 +504,7 @@ func (c *ClusterConn) connectLoop(ctx context.Context, nodeInformer cache.Shared
 			c.snapVersion = ver
 			c.mu.Unlock()
 
-			c.refreshCounts(nodeInformer)
+			c.refreshCounts()
 			if c.connectHook != nil {
 				c.connectHook()
 			}
@@ -545,16 +541,16 @@ func (c *ClusterConn) connectFailureReason() string {
 // resumes after a dropped watch. If the cluster was Degraded by a crashlooping
 // GitOps controller, the cap-health watch relists on the same recovery and
 // re-applies Degraded, so the overlay is restored without recovery-specific code.
-func (c *ClusterConn) refreshLoop(ctx context.Context, nodeInformer cache.SharedIndexInformer) {
+func (c *ClusterConn) refreshLoop(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-c.refresh:
-			if !nodeInformer.HasSynced() {
+			if !c.nodesCountable() {
 				continue
 			}
-			c.refreshCounts(nodeInformer) // retained counts show even while a source fails
+			c.refreshCounts() // retained counts show even while a source fails
 
 			// Recovery needs CURRENT nodes and pods, decided at the commit:
 			// a node event cannot recover a connection whose pods are
@@ -622,6 +618,17 @@ func (c *ClusterConn) applyGitOpsHealth(g capability.GitOpsCapability) {
 	}
 }
 
+// nodesCountable: the node counts have a source - the Observer's nodes
+// kind, or (without one) the synced node informer.
+func (c *ClusterConn) nodesCountable() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.observed {
+		return true
+	}
+	return c.nodeInf != nil && c.nodeInf.HasSynced()
+}
+
 // refreshCounts recomputes node and pod counts and lastSync. Called by
 // connectLoop on the first sync and by refreshLoop on every coalesced
 // signal. lastSync is the latest successful observation - a node event, or
@@ -629,18 +636,34 @@ func (c *ClusterConn) applyGitOpsHealth(g capability.GitOpsCapability) {
 // never a failure and never a summary publication. A pod count is evidence
 // only after a complete read; until then it is unknown, never zero, and a
 // stale one is the last good count, marked.
-func (c *ClusterConn) refreshCounts(nodeInformer cache.SharedIndexInformer) {
-	nodes := make([]*corev1.Node, 0)
-	for _, obj := range nodeInformer.GetStore().List() {
-		if n, ok := obj.(*corev1.Node); ok {
-			nodes = append(nodes, n)
+func (c *ClusterConn) refreshCounts() {
+	c.mu.RLock()
+	inf := c.nodeInf
+	c.mu.RUnlock()
+	ready, total, known := 0, 0, false
+	if inf != nil {
+		nodes := make([]*corev1.Node, 0)
+		for _, obj := range inf.GetStore().List() {
+			if n, ok := obj.(*corev1.Node); ok {
+				nodes = append(nodes, n)
+			}
 		}
+		ready, total = NodeReadiness(nodes)
+		known = true
 	}
-	ready, total := NodeReadiness(nodes)
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.snapNodesReady, c.snapNodesTotal = ready, total
+	if c.observed {
+		// the nodes kind's native Ready tally: the same capture as its state;
+		// without a complete read the last known counts stand
+		if t := c.nodesKind.Tally; c.nodesKind.CountKnown && t != nil {
+			ready, total, known = t[healthsrc.TallyNodesReady], t[healthsrc.TallyNodesTotal], true
+		}
+	}
+	if known {
+		c.snapNodesReady, c.snapNodesTotal = ready, total
+	}
 	podsAt, nodesAt := c.podAt, c.nodeAt
 	if c.podInf != nil {
 		if c.podInf.HasSynced() {

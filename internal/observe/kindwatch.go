@@ -24,6 +24,10 @@ type KindState struct {
 	// count is known, which is never zero.
 	CountKnown bool
 	Objects    int
+	// Tally is the kind's KindSpec.Tally over the same model as Objects
+	// (one capture: never a count from one read and a tally from another);
+	// set exactly when CountKnown and the kind has a tally hook.
+	Tally map[string]int
 	// ObservedAt is the last successful observation: a complete read or a
 	// model mutation. Never a failure, never a publication.
 	ObservedAt *time.Time
@@ -136,6 +140,13 @@ func (o *Observer) kindStateLocked(ks *kindState) KindState {
 	st.Coverage, st.Class, st.Err = f.cov, f.class, f.err
 	if f.cov == Live || f.cov == Stale {
 		st.CountKnown, st.Objects = true, len(g.model)
+		if ks.spec.Tally != nil {
+			objs := make([]any, 0, len(g.model))
+			for _, o := range g.model {
+				objs = append(objs, o)
+			}
+			st.Tally = ks.spec.Tally(objs)
+		}
 	}
 	if !g.observedAt.IsZero() {
 		st.ObservedAt = copyTime(&g.observedAt)

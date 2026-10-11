@@ -1515,3 +1515,66 @@ func TestKindListenersEndWithTheObserver(t *testing.T) {
 		t.Fatal("a stopped Observer returns a no-op cancel")
 	}
 }
+
+// The per-kind tally (1c slice 3 §6): computed from the SAME model as
+// Objects, set exactly when the count is known, kept as last good while
+// stale, and absent without a hook.
+func TestWatchKindCarriesTheTallyFromTheSameModel(t *testing.T) {
+	src := newSource()
+	tallied := cmKind("cms", src)
+	tallied.Tally = func(objs []any) map[string]int {
+		bad := 0
+		for _, o := range objs { // the projected model, as the hook sees it
+			if o.(cmView).Bad {
+				bad++
+			}
+		}
+		return map[string]int{"bad": bad, "total": len(objs)}
+	}
+	plainSrc := newSource()
+	h := start(t, Config{Kinds: []KindSpec{tallied, cmKind("plain", plainSrc)},
+		Domains: []DomainSpec{{ID: "things", Parts: []PartSpec{cmPart("cms", "cms"), cmPart("plain", "plain")}}}})
+	log, plain := &stateLog{}, &stateLog{}
+	defer h.o.WatchKind("cms", log.add)()
+	defer h.o.WatchKind("plain", plain.add)()
+	h.eventually(func() bool { st, ok := log.last(); return ok && st.Coverage == Live }, "live")
+	if st, _ := log.last(); st.Tally["total"] != 0 || st.Tally == nil {
+		t.Fatalf("an empty complete read is a known zero tally: %+v", st)
+	}
+	src.put("a", map[string]string{"bad": "1"})
+	src.put("b", nil)
+	h.eventually(func() bool { st, _ := log.last(); return st.Objects == 2 }, "two objects")
+	st, _ := log.last()
+	if st.Tally["total"] != st.Objects || st.Tally["bad"] != 1 {
+		t.Fatalf("the tally is the same model as the count: %+v", st)
+	}
+	src.mu.Lock()
+	src.listErr = errors.New("connection refused")
+	src.mu.Unlock()
+	src.liveWatcher().Error(&apierrors.NewServiceUnavailable("down").ErrStatus)
+	h.eventually(func() bool { st, _ := log.last(); return st.Coverage == Stale }, "stale")
+	if st, _ := log.last(); st.Tally["bad"] != 1 || st.Tally["total"] != 2 {
+		t.Fatalf("stale keeps the last good tally with the last good count: %+v", st)
+	}
+	h.eventually(func() bool { st, ok := plain.last(); return ok && st.Coverage == Live }, "plain live")
+	if st, _ := plain.last(); st.Tally != nil {
+		t.Fatalf("no hook, no tally: %+v", st)
+	}
+}
+
+// Before a complete read no count is known - and no tally either.
+func TestNoTallyBeforeACompleteRead(t *testing.T) {
+	src := newSource()
+	src.mu.Lock()
+	src.listErr = apierrors.NewForbidden(schema.GroupResource{Resource: "configmaps"}, "", errors.New("rbac"))
+	src.mu.Unlock()
+	k := cmKind("cms", src)
+	k.Tally = func(objs []any) map[string]int { return map[string]int{"total": len(objs)} }
+	h := start(t, Config{Kinds: []KindSpec{k}, Domains: []DomainSpec{{ID: "things", Parts: []PartSpec{cmPart("cms", "cms")}}}})
+	log := &stateLog{}
+	defer h.o.WatchKind("cms", log.add)()
+	h.eventually(func() bool { st, ok := log.last(); return ok && st.Coverage == Unreadable }, "unreadable")
+	if st, _ := log.last(); st.CountKnown || st.Tally != nil {
+		t.Fatalf("an unread kind has neither count nor tally: %+v", st)
+	}
+}

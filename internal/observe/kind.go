@@ -32,6 +32,12 @@ type KindSpec struct {
 	// Project returns the pruned copy kept in the model. It must not mutate
 	// its input. Nil keeps the object as decoded.
 	Project func(obj any) (any, error)
+	// Tally counts named properties of the kind's model - the nodes kind's
+	// native Ready tally (1c slice 3 §6) - from the SAME model as Objects,
+	// evaluated under the Observer's lock when a state is captured and
+	// carried on KindState. It must not mutate or retain the objects. Nil:
+	// none.
+	Tally func(objs []any) map[string]int
 }
 
 // freshness is one kind's or snapshot's state machine (spec §3.1).

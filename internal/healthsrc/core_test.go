@@ -272,3 +272,20 @@ func TestTopRefsCarryUIDAcrossSameNameRecreation(t *testing.T) {
 		}
 	}
 }
+
+// The nodes kind's native Ready tally (1c slice 3 §6) follows NodeReadiness:
+// Ready=True counts, whatever the verdict - a Ready node under pressure or
+// cordoned is Ready here, never folded into the verdict's OK.
+func TestNodeReadyTallyIsNodeReadiness(t *testing.T) {
+	node := func(status corev1.ConditionStatus, extra ...corev1.NodeCondition) any {
+		return &corev1.Node{Status: corev1.NodeStatus{Conditions: append([]corev1.NodeCondition{{Type: corev1.NodeReady, Status: status}}, extra...)}}
+	}
+	cordonedUnderPressure := node(corev1.ConditionTrue, corev1.NodeCondition{Type: corev1.NodeMemoryPressure, Status: corev1.ConditionTrue})
+	cordonedUnderPressure.(*corev1.Node).Spec.Unschedulable = true
+	// a NotReady node whose OTHER condition is True is still not ready
+	notReadyUnderPressure := node(corev1.ConditionFalse, corev1.NodeCondition{Type: corev1.NodeMemoryPressure, Status: corev1.ConditionTrue})
+	got := NodeReadyTally([]any{node(corev1.ConditionTrue), node(corev1.ConditionFalse), node(corev1.ConditionUnknown), cordonedUnderPressure, notReadyUnderPressure, &corev1.Node{}})
+	if got[TallyNodesReady] != 2 || got[TallyNodesTotal] != 6 {
+		t.Fatalf("tally: %v", got)
+	}
+}

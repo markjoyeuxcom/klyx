@@ -407,3 +407,57 @@ func TestAnEmptySuccessfulNodeRelistRecovers(t *testing.T) {
 	a.mu.Unlock()
 	waitUntil(t, "an empty relist is a complete read: recovered", func() bool { return c.Snapshot().State == Synced })
 }
+
+// Nodes come from the Observer too (1c slice 3 §6): no node informer of the
+// connection's own; the counts are the nodes kind's native Ready tally from
+// the same capture; ListNodes reads live without the informer cache.
+func TestNodesComeFromTheObserversTallyNotASecondWatch(t *testing.T) {
+	notReady := seamNode("n2")
+	notReady.Status.Conditions[0].Status = corev1.ConditionFalse
+	a := newSeamAPI(t, seamNode("n1"), notReady, seamPod("a"))
+	c, ctx, cancel := a.conn(t)
+	c.Start(ctx)
+	defer stop(c, cancel)
+	waitUntil(t, "synced with the tally's counts", func() bool {
+		s := c.Snapshot()
+		return s.State == Synced && s.NodesTotal == 2 && s.NodesReady == 1
+	})
+	c.mu.RLock()
+	nodeInf := c.nodeInf
+	c.mu.RUnlock()
+	if nodeInf != nil {
+		t.Fatal("with an Observer the connection starts no node informer")
+	}
+	a.mu.Lock()
+	watches := len(a.nodeWatch)
+	a.mu.Unlock()
+	if watches != 1 {
+		t.Fatalf("nodes are watched once, by the Observer: %d watches", watches)
+	}
+	nodes, err := c.ListNodes(context.Background())
+	if err != nil || len(nodes) != 2 {
+		t.Fatalf("ListNodes reads live without the informer: %v %v", nodes, err)
+	}
+}
+
+// The counts move with the kind's observations, and a stale kind keeps the
+// last good tally (one capture) - never a zero.
+func TestNodeCountsFollowTheTallyAndStayLastGoodWhileStale(t *testing.T) {
+	a := newSeamAPI(t, seamNode("n1"), seamPod("a"))
+	c, ctx, cancel := a.conn(t)
+	c.Start(ctx)
+	defer stop(c, cancel)
+	waitUntil(t, "synced", func() bool { s := c.Snapshot(); return s.State == Synced && s.NodesTotal == 1 })
+	a.mu.Lock()
+	ws := append([]*watch.RaceFreeFakeWatcher(nil), a.nodeWatch...)
+	a.mu.Unlock()
+	for _, w := range ws {
+		w.Add(seamNode("n2"))
+	}
+	waitUntil(t, "the added node is counted", func() bool { s := c.Snapshot(); return s.NodesTotal == 2 && s.NodesReady == 2 })
+	a.breakNodeWatch(apierrors.NewServiceUnavailable("down"))
+	waitUntil(t, "stale", func() bool { return c.Snapshot().State == Stale })
+	if s := c.Snapshot(); s.NodesTotal != 2 || s.NodesReady != 2 {
+		t.Fatalf("a stale kind keeps its last good tally: %+v", s)
+	}
+}
