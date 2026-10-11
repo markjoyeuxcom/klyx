@@ -1,7 +1,7 @@
 import { useFleet } from "../store/fleet";
-import type { AttentionCounts } from "../store/fleet";
+import type { AttentionCounts, HelmReleaseDTO } from "../store/fleet";
 import { unwrapSources, summariseSources, observations } from "./overview";
-import { releaseHealth } from "../cluster/helmHealth";
+import { releaseRule } from "../cluster/helmHealth";
 import {
   WorkloadsService,
   PodsService,
@@ -55,8 +55,8 @@ export async function fetchAttention(cluster: string): Promise<void> {
     // available=false is a definitive "helm not detected" (failedReleases is
     // null exactly when helm is unavailable), not a failure.
     helm: src.helm ? out.failedReleases ?? "absent" : "unreadable",
-    // Stuck uses the Helm lens's own rule, so the summary and the lens agree.
-    helmStuck: src.helm?.available ? (src.helm.releases ?? []).filter((r) => releaseHealth(r as { status: string; updatedUnix: number }, Math.floor(Date.now() / 1000)).kind === "degraded").length : 0,
+    // Stuck is the Go rule the Helm lens reads, so the summary and the lens agree.
+    helmStuck: src.helm?.available ? (src.helm.releases ?? []).filter((r) => releaseRule(r as HelmReleaseDTO, Math.floor(Date.now() / 1000)).role === "degraded").length : 0,
     // A summary read that failed carries `error`: unreadable, never "absent".
     flux: src.flux && !src.flux.error ? (out.flux ? out.flux.notReady : "absent") : "unreadable",
     argo: "unreadable",

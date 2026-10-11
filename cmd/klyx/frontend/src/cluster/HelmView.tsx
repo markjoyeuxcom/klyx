@@ -8,7 +8,7 @@ import { CopyButton } from "../chrome/CopyButton";
 import { EmptyState } from "../chrome/EmptyState";
 import { SkeletonRows } from "../chrome/SkeletonRows";
 import { WatchErrorBanner } from "../chrome/WatchErrorBanner";
-import { IN_FLIGHT, PENDING_DEADLINE_S, releaseHealth, type Role } from "./helmHealth";
+import { IN_FLIGHT, PENDING_DEADLINE_S, releaseRule, type Role } from "./helmHealth";
 import { VirtualList, type VirtualListHandle } from "../chrome/VirtualList";
 import { YamlBlock } from "../chrome/YamlBlock";
 import { Age, UpdatedAt, formatAge, useNow } from "../chrome/Age";
@@ -33,7 +33,7 @@ import { RollbackComposerDialog } from "./HelmRollbackDialog";
 // protected-cluster arming.
 
 const RANK: Record<Role["kind"], number> = { fault: 0, degraded: 1, progressing: 2, unknown: 3, ok: 4 };
-const needsAttention = (role: Role) => role.kind === "fault" || role.kind === "degraded";
+const rankOf = (role: Role) => RANK[role.kind] ?? RANK.unknown;
 const inFlight = (r: HelmReleaseDTO) => IN_FLIGHT.has(r.status);
 
 const ROLE_TEXT: Record<string, string> = {
@@ -100,24 +100,29 @@ export function HelmView({ cluster }: { cluster: string }) {
   // is pending, and a failure with no prior snapshot is failed
   const evidence: "complete" | "stale" | "pending" | "failed" = snapshotAt != null ? (listError ? "stale" : "complete") : listError || cliMissing ? "failed" : "pending";
 
-  const roleOf = useCallback((r: HelmReleaseDTO) => releaseHealth(r, nowS), [nowS]);
+  // The verdict is the Go rule (internal/helmcli rules.go, 1c addendum §2) at
+  // this second: its read-time value, or the step Go computed for a pending
+  // release's deadline. rule.included is the lens's inclusion (failed or
+  // appears stuck); role/label the presentation.
+  const ruleOf = useCallback((r: HelmReleaseDTO) => releaseRule(r, nowS), [nowS]);
+  const roleOf = useCallback((r: HelmReleaseDTO): Role => { const x = ruleOf(r); return { kind: x.role as Role["kind"], label: x.label }; }, [ruleOf]);
   const q = query.trim().toLowerCase();
   const ordered = useMemo(
-    () => [...releases].sort((a, b) => RANK[roleOf(a).kind] - RANK[roleOf(b).kind] || a.namespace.localeCompare(b.namespace) || a.name.localeCompare(b.name)),
+    () => [...releases].sort((a, b) => rankOf(roleOf(a)) - rankOf(roleOf(b)) || a.namespace.localeCompare(b.namespace) || a.name.localeCompare(b.name)),
     [releases, roleOf],
   );
   const namespaces = useMemo(() => Array.from(new Set(releases.map((r) => r.namespace))).sort(), [releases]);
   const visible = useMemo(() => ordered.filter((r) => {
     if (namespace && r.namespace !== namespace) return false;
-    if (filter === "failed" && r.status !== "failed") return false;
+    if (filter === "failed" && ruleOf(r).role !== "fault") return false;
     if (filter === "pending" && !inFlight(r)) return false;
     return matchesQuery(r, q);
-  }), [ordered, namespace, filter, q]);
+  }), [ordered, namespace, filter, q, ruleOf]);
 
-  const failed = releases.filter((r) => r.status === "failed").length;
+  const failed = releases.filter((r) => ruleOf(r).role === "fault").length;
   const pending = releases.filter(inFlight).length;
   const stuck = releases.filter((r) => roleOf(r).kind === "degraded").length;
-  const attention = releases.filter((r) => needsAttention(roleOf(r))).length;
+  const attention = releases.filter((r) => ruleOf(r).included).length;
 
   // selection: the store owns it (the palette opens releases too)
   const sel = mine ? helm.selected : null;
@@ -173,9 +178,9 @@ export function HelmView({ cluster }: { cluster: string }) {
     if (autoSelect.current === "done" || !freshRead) return;
     autoSelect.current = "done";
     if (useFleet.getState().helm.selected) return;
-    const r = visible.find((x) => needsAttention(roleOf(x)));
+    const r = visible.find((x) => ruleOf(x).included);
     if (r) { setCursorKey(keyOf(r)); select(r); }
-  }, [freshRead, visible, roleOf, select]);
+  }, [freshRead, visible, ruleOf, select]);
 
   const cursorIdx = cursorKey === null ? -1 : visible.findIndex((r) => keyOf(r) === cursorKey);
   const close = () => { autoSelect.current = "done"; select(null); };
@@ -469,4 +474,4 @@ function ReleaseInspector({ cluster, release: r, role, removed, stale, history, 
   );
 }
 
-export { PENDING_DEADLINE_S, releaseHealth };
+export { PENDING_DEADLINE_S };

@@ -208,6 +208,9 @@ export type GitOpsSlice = {
 // §2) - the lens's inclusion predicate and presentation role, kept separate.
 // Lenses read it; they never recompute it.
 export type RuleDTO = { included: boolean; role: string; label: string };
+// RuleStepDTO: the verdict a snapshot row takes from atUnix on - a time-only
+// boundary evaluated in Go at read time. The lens switches on its clock.
+export type RuleStepDTO = { atUnix: number; rule: RuleDTO };
 
 export type CertificateDTO = {
   rule: RuleDTO;
@@ -707,6 +710,10 @@ export type HelmReleaseDTO = {
   status: string;
   revision: number;
   updatedUnix: number;
+  // The Go rule at read time (internal/helmcli rules.go) and, when a pending
+  // release has a deadline ahead, the verdict it takes then with no new read.
+  rule: RuleDTO;
+  then?: RuleStepDTO;
 };
 
 export type HelmHistoryEntryDTO = {

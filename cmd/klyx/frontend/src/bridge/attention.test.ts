@@ -15,6 +15,7 @@ import {
   WorkloadsService, PodsService, EventsService, NodesService, HelmService, GitOpsService, ArgoService,
 } from "../../bindings/github.com/moomora/klyx/internal/appbridge/index.js";
 import { abandonAttention, fetchAttention } from "./attention";
+import { helmRelease } from "../test/backendRules";
 
 const ok = (fn: unknown, v: unknown) => (fn as ReturnType<typeof vi.fn>).mockResolvedValue(v);
 
@@ -162,11 +163,17 @@ describe("fetchAttention ordering and last-good (Codex 7e review)", () => {
     expect(after.areaAt?.workloads).toBeGreaterThan(nodesAt!);
   });
 
-  it("stuck Helm releases are counted with the lens's rule", async () => {
-    const old = Math.floor(Date.now() / 1000) - 3600;
-    (HelmService.ListHelmReleases as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ available: true, releases: [{ status: "pending-upgrade", updatedUnix: old }, { status: "pending-install", updatedUnix: Math.floor(Date.now() / 1000) }] });
+  it("stuck Helm releases are counted with the Go rule the lens reads", async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const base = { name: "r", namespace: "apps", chart: "c", appVersion: "1", revision: 1 };
+    (HelmService.ListHelmReleases as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ available: true, releases: [
+      helmRelease({ ...base, name: "stuck", status: "pending-upgrade", updatedUnix: now - 3600 }),
+      helmRelease({ ...base, name: "fresh", status: "pending-install", updatedUnix: now }),
+      // the backend's verdict wins over the status word
+      { ...helmRelease({ ...base, name: "flagged", status: "deployed", updatedUnix: now }), rule: { included: true, role: "degraded", label: "Flagged by backend" } },
+    ] });
     await fetchAttention("a");
-    expect(useFleet.getState().attention.counts.helmStuck).toBe(1);
+    expect(useFleet.getState().attention.counts.helmStuck).toBe(2);
   });
 });
 

@@ -1,4 +1,4 @@
-import type { ArgoAppDTO, ArgoApplicationSetDTO, CertificateDTO, GatewayRefDTO, ListenerDTO, RouteNodeDTO, ExternalSecretDTO, ExternalSecretStoreDTO, FluxResourceDTO, FluxSourceDTO, IssuerDTO, KarpenterClaimDTO, KarpenterPoolDTO, RuleDTO } from "../store/fleet";
+import type { ArgoAppDTO, ArgoApplicationSetDTO, CertificateDTO, GatewayRefDTO, HelmReleaseDTO, ListenerDTO, RouteNodeDTO, ExternalSecretDTO, ExternalSecretStoreDTO, FluxResourceDTO, FluxSourceDTO, IssuerDTO, KarpenterClaimDTO, KarpenterPoolDTO, RuleDTO, RuleStepDTO } from "../store/fleet";
 import { condState, routeIssues, RANK } from "../cluster/gatewayModel";
 
 // The relocated lens rules exactly as the backend computes them
@@ -143,4 +143,32 @@ export function routeRule(r: Omit<RouteNodeDTO, "rule">, listeners: ListenerDTO[
 // withRule stamps a fixture with the backend's rule unless the test set one.
 export function withRule<T extends { rule?: RuleDTO }>(dto: Omit<T, "rule"> & { rule?: RuleDTO }, f: (d: Omit<T, "rule">) => RuleDTO): T {
   return { ...dto, rule: dto.rule ?? f(dto) } as T;
+}
+
+// Helm (helmHealth.ts releaseHealth + HelmView needsAttention, verbatim):
+// the rule at read time and its one time step, as the bridge sends them.
+type ReleaseIn = Omit<HelmReleaseDTO, "rule" | "then">;
+const PENDING_DEADLINE_GO_S = 600;
+const IN_FLIGHT = new Set(["pending-install", "pending-upgrade", "pending-rollback", "uninstalling"]);
+export function helmRule(r: ReleaseIn, nowS: number): RuleDTO {
+  const verdict = (role: string, label: string) => rule(role === "fault" || role === "degraded", role, label);
+  if (r.status === "deployed") return verdict("ok", "deployed");
+  if (r.status === "failed") return verdict("fault", "failed");
+  if (IN_FLIGHT.has(r.status)) {
+    if (r.updatedUnix > 0 && nowS - r.updatedUnix > PENDING_DEADLINE_GO_S) return verdict("degraded", `${r.status}, appears stuck`);
+    return verdict("progressing", r.status);
+  }
+  if (r.status === "superseded" || r.status === "uninstalled") return verdict("unknown", `${r.status} (historical)`);
+  return verdict("unknown", r.status || "unknown");
+}
+export function helmStep(r: ReleaseIn, nowS: number): RuleStepDTO | undefined {
+  if (!IN_FLIGHT.has(r.status) || r.updatedUnix <= 0 || nowS - r.updatedUnix > PENDING_DEADLINE_GO_S) return undefined;
+  const atUnix = r.updatedUnix + PENDING_DEADLINE_GO_S + 1;
+  return { atUnix, rule: helmRule(r, atUnix) };
+}
+// helmRelease stamps a fixture the way ListHelmReleases does, read now.
+export function helmRelease(r: ReleaseIn): HelmReleaseDTO {
+  const at = nowSec();
+  const then = helmStep(r, at);
+  return { ...r, rule: helmRule(r, at), ...(then ? { then } : {}) };
 }

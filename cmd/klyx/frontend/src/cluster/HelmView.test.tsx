@@ -2,7 +2,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, fireEvent, within, screen, act } from "@testing-library/react";
 import { useFleet } from "../store/fleet";
 import type { HelmReleaseDTO, HelmHistoryEntryDTO } from "../store/fleet";
-import { HelmView, releaseHealth, PENDING_DEADLINE_S } from "./HelmView";
+import { HelmView } from "./HelmView";
+import { helmRelease } from "../test/backendRules";
 
 vi.mock("../bridge/helm", () => ({
   HELM_CLI_MISSING: "helm not found",
@@ -14,9 +15,14 @@ import { openHelmRelease, helmRollback } from "../bridge/helm";
 vi.mock("../bridge/configsvc", () => ({ armProtected: vi.fn(async () => ({ ok: true, error: "" })) }));
 
 const nowS = Math.floor(Date.now() / 1000);
-const rel = (over: Partial<HelmReleaseDTO>): HelmReleaseDTO => ({
-  name: "web", namespace: "apps", chart: "web-1.2.0", appVersion: "1.2", status: "deployed", revision: 3, updatedUnix: nowS - 600, ...over,
-});
+// Fixtures carry the rule the backend stamps at read time (test/backendRules,
+// held to the Go golden fixture); a fixture that sets its own rule keeps it.
+const rel = (over: Partial<HelmReleaseDTO>): HelmReleaseDTO => {
+  const base = { name: "web", namespace: "apps", chart: "web-1.2.0", appVersion: "1.2", status: "deployed", revision: 3, updatedUnix: nowS - 600, ...over };
+  const { rule, then, ...plain } = base;
+  const stamped = helmRelease(plain);
+  return rule ? { ...plain, rule, ...(then ? { then } : {}) } : stamped;
+};
 const hist = (revision: number, status: string, description = ""): HelmHistoryEntryDTO => ({
   revision, status, chart: `web-1.${revision}.0`, appVersion: `1.${revision}`, description, updatedUnix: nowS - 1000 * (10 - revision),
 });
@@ -30,15 +36,37 @@ function select(r: HelmReleaseDTO, history: HelmHistoryEntryDTO[] = [], extra: R
 const insp = () => within(screen.getByTestId("lens-inspector"));
 const rowsText = () => [...document.querySelectorAll(".lens-row")].map((r) => r.textContent ?? "");
 
-describe("releaseHealth", () => {
-  it("maps helm's vocabulary; pending past the deadline is stuck; historical never faults", () => {
-    expect(releaseHealth(rel({}), nowS).kind).toBe("ok");
-    expect(releaseHealth(rel({ status: "failed" }), nowS).kind).toBe("fault");
-    expect(releaseHealth(rel({ status: "pending-upgrade", updatedUnix: nowS - 60 }), nowS)).toEqual({ kind: "progressing", label: "pending-upgrade" });
-    expect(releaseHealth(rel({ status: "pending-upgrade", updatedUnix: nowS - PENDING_DEADLINE_S - 1 }), nowS)).toEqual({ kind: "degraded", label: "pending-upgrade, appears stuck" });
-    expect(releaseHealth(rel({ status: "pending-install", updatedUnix: 0 }), nowS).kind).toBe("progressing");
-    expect(releaseHealth(rel({ status: "superseded" }), nowS).kind).toBe("unknown");
-    expect(releaseHealth(rel({ status: "uninstalled" }), nowS).kind).toBe("unknown");
+describe("HelmView reads the Go rule (1c §2)", () => {
+  beforeEach(() => { useFleet.getState().clearHelm(); vi.clearAllMocks(); });
+
+  it("the verdict, the attention count and auto-select are the backend's, never the status word's", () => {
+    seed([
+      rel({ name: "flagged", status: "deployed", rule: { included: true, role: "fault", label: "Flagged by backend" } }),
+      rel({ name: "cleared", status: "failed", rule: { included: false, role: "ok", label: "deployed" } }),
+    ]);
+    render(<HelmView cluster="x" />);
+    const row = (n: string) => [...document.querySelectorAll(".lens-row")].find((r) => r.textContent?.includes(n)) as HTMLElement;
+    expect(within(row("flagged")).getByRole("img", { name: "Flagged by backend" })).toBeTruthy();
+    expect(within(row("cleared")).getByRole("img", { name: "deployed" })).toBeTruthy();
+    expect(rowsText()[0]).toContain("flagged"); // broken first, by the rule's role
+    // the header and the Failed filter count the rule's faults, not the status word
+    expect(screen.getByRole("button", { name: /^Failed/ }).textContent?.trim()).toBe("Failed 1");
+    fireEvent.click(screen.getByRole("button", { name: /^Failed/ }));
+    expect(rowsText().map((t) => t.includes("flagged"))).toEqual([true]);
+  });
+
+  // The lens clock ticks every 30s (useNow), so a step lands within one tick.
+  it("a pending release takes Go's step at its time, with no new read", () => {
+    const pending = { status: "pending-upgrade", rule: { included: false, role: "progressing", label: "pending-upgrade" } };
+    seed([
+      rel({ name: "crossed", ...pending, then: { atUnix: nowS - 60, rule: { included: true, role: "degraded", label: "pending-upgrade, appears stuck" } } }),
+      rel({ name: "ahead", ...pending, then: { atUnix: nowS + 3600, rule: { included: true, role: "degraded", label: "pending-upgrade, appears stuck" } } }),
+    ]);
+    render(<HelmView cluster="x" />);
+    const row = (n: string) => [...document.querySelectorAll(".lens-row")].find((r) => r.textContent?.includes(n)) as HTMLElement;
+    expect(within(row("crossed")).getByRole("img", { name: "pending-upgrade, appears stuck" })).toBeTruthy();
+    expect(within(row("ahead")).getByRole("img", { name: "pending-upgrade" })).toBeTruthy();
+    expect(screen.getByText(/1 pending, appears stuck/)).toBeTruthy();
   });
 });
 
