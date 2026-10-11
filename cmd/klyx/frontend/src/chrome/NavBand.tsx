@@ -156,12 +156,16 @@ function Tabs({ tabs, active, counts, resources, cluster }: { tabs: Destination[
       {resources.length > 0 && (
         <NavMenu label="Resources" title="Resources" items={resources} active={active} counts={counts} cluster={cluster} />
       )}
-      <div ref={measureRef} aria-hidden="true" className="navband-measure">
+      {/* Measured off-screen inside a zero-size clip: a hidden row still
+          counts toward scroll width and would widen the window at high zoom. */}
+      <div className="navband-measure-clip" aria-hidden="true">
+      <div ref={measureRef} className="navband-measure">
         {tabs.map((d) => (
           <span key={d.id} className="l-chip navband-tab" aria-current={d === active ? "page" : undefined}><TabLabel d={d} b={counts.destination[d.id]} /></span>
         ))}
         <span className="l-chip">More <IconChevronDown size={12} stroke={1.7} /></span>
         {resources.length > 0 && <span className="l-chip" data-holds-active={resHoldsActive ? "true" : undefined}>Resources <IconChevronDown size={12} stroke={1.7} /></span>}
+      </div>
       </div>
     </div>
   );

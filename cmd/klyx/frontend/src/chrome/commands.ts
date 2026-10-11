@@ -17,6 +17,7 @@ import { setThemeChoice, THEMES, toggleTheme } from "../theme/ThemeProvider";
 import { BUILTIN_CATALOG } from "../cluster/builtins";
 import { CAP_STATE_TEXT, NAV_GROUPS, connected, destState, navigate, type Destination, type NavGroup } from "../nav/registry";
 import { openTerminal } from "../bridge/configsvc";
+import { zoomIn, zoomOut, zoomPercent, zoomReset } from "../app/zoom";
 import { supportsRiskFilter } from "../cluster/resourceRisk";
 
 export type FleetStore = ReturnType<typeof useFleet.getState>;
@@ -119,6 +120,9 @@ export function buildCommands(s: FleetStore): Command[] {
   cmds.push({ id: "activity", group: "Application", title: "Activity log", hint: "recent action outcomes", run: () => s.openActivity() });
   cmds.push({ id: "settings", group: "Application", title: "Settings", hint: "fleet config · kubeconfig contexts", run: () => s.openSettings() });
   cmds.push({ id: "terminal", group: "Application", title: "Terminal", hint: "a shell with this fleet's kubeconfig", run: () => void openTerminal() });
+  cmds.push({ id: "zoom:in", group: "Application", title: "Zoom in", hint: `now ${zoomPercent()} · ⌘=`, run: () => zoomIn() });
+  cmds.push({ id: "zoom:out", group: "Application", title: "Zoom out", hint: `now ${zoomPercent()} · ⌘-`, run: () => zoomOut() });
+  cmds.push({ id: "zoom:reset", group: "Application", title: "Actual size", hint: `zoom ${zoomPercent()} · ⌘0`, run: () => zoomReset() });
   // Stopping a forward is the one palette verb that acts directly - it is how
   // the forwards popover already behaves (low-risk, instantly re-creatable).
   for (const f of s.forwards ?? []) {

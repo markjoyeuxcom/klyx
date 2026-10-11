@@ -73,4 +73,23 @@ describe("shell shortcuts yield to keyboard owners (step 7b review)", () => {
     handleShellMouse(new MouseEvent("mouseup", { button: 3, cancelable: true }));
     expect(back).toHaveBeenCalledTimes(1);
   });
+
+  it("mod+= / mod+- / mod+0 zoom anywhere - also from a text field - unless already handled", async () => {
+    const { getZoom, zoomReset } = await import("./zoom");
+    zoomReset();
+    const input = document.createElement("input");
+    document.body.appendChild(input);
+    handleShellKey(key("=", input));
+    expect(getZoom()).toBe(1.1);
+    handleShellKey(key("+", document.body, { shiftKey: true }));
+    expect(getZoom()).toBe(1.25);
+    handleShellKey(key("-"));
+    expect(getZoom()).toBe(1.1);
+    const handled = key("0");
+    handled.preventDefault();
+    handleShellKey(handled);
+    expect(getZoom()).toBe(1.1);
+    handleShellKey(key("0"));
+    expect(getZoom()).toBe(1);
+  });
 });

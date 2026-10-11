@@ -6,6 +6,10 @@ import { refreshNewContextCount } from "./bridge/configsvc";
 import { initRoutePersistence } from "./store/persist";
 import { initShellSync } from "./bridge/shell";
 import { initHistory } from "./nav/history";
+import { initZoom } from "./app/zoom";
+
+// Applied before first paint so a zoomed session never flashes at 100%.
+initZoom();
 
 export default function App() {
   useEffect(() => {

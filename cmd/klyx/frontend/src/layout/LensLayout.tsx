@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { unzoom } from "../app/zoom";
 import "./layout.css";
 
 // LensLayout owns the workspace geometry for a list + detail lens: header,
@@ -111,11 +112,11 @@ export function LensLayout({
   };
   const onPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
     if (!drag.current) return;
-    setRequested(Math.max(INSPECTOR_MIN, Math.min(INSPECTOR_MAX, drag.current.w + (drag.current.x - e.clientX))));
+    setRequested(Math.max(INSPECTOR_MIN, Math.min(INSPECTOR_MAX, drag.current.w + unzoom(drag.current.x - e.clientX))));
   };
   const onPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
     if (!drag.current) return;
-    const w = drag.current.w + (drag.current.x - e.clientX);
+    const w = drag.current.w + unzoom(drag.current.x - e.clientX);
     drag.current = null;
     commit(w);
   };

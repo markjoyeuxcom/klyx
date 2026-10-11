@@ -1,4 +1,5 @@
 import { useState, useCallback, useRef } from "react";
+import { unzoom } from "../app/zoom";
 
 const STORAGE_KEY = "klyx-logs-dock-height";
 const MIN_HEIGHT = 160;
@@ -59,7 +60,7 @@ export function useResizableDock(): ResizableDockHandle {
   const onPointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     if (!dragging.current) return;
     // Dragging up (negative delta) enlarges the dock; handle is on the TOP edge.
-    const delta = startY.current - e.clientY;
+    const delta = unzoom(startY.current - e.clientY);
     const next = clamp(startHeight.current + delta);
     setHeight(next);
   }, []);
@@ -67,7 +68,7 @@ export function useResizableDock(): ResizableDockHandle {
   const onPointerUp = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     if (!dragging.current) return;
     dragging.current = false;
-    const delta = startY.current - e.clientY;
+    const delta = unzoom(startY.current - e.clientY);
     const final = clamp(startHeight.current + delta);
     setHeight(final);
     try {

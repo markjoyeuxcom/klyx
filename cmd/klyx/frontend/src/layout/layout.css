@@ -191,7 +191,8 @@
   box-shadow: var(--bench-well-shadow, inset 0 0 0 1px var(--color-border-tertiary)); }
 .navband .l-chip[data-holds-active="true"] { color: var(--color-text-primary); font-weight: 600; }
 .navband-count { font: 600 11px/16px var(--font-mono); font-variant-numeric: tabular-nums; }
-.navband-measure { position: absolute; visibility: hidden; pointer-events: none; left: 0; top: 0; display: flex; gap: 2px; white-space: nowrap; }
+.navband-measure-clip { position: absolute; left: 0; top: 0; width: 0; height: 0; overflow: hidden; pointer-events: none; }
+.navband-measure { position: absolute; visibility: hidden; left: 0; top: 0; display: flex; gap: 2px; white-space: nowrap; width: max-content; }
 .navband-menu-wrap { position: relative; flex-shrink: 0; }
 .navband-menu { top: calc(100% + 4px); left: 0; max-height: min(60vh, 480px); overflow: auto; }
 .navtree { top: calc(100% + 4px); left: 0; width: 320px; max-height: min(70vh, 560px); padding: 0; }
@@ -224,14 +225,17 @@
   background: transparent; color: var(--color-text-secondary); cursor: pointer; }
 .mast-icon:hover:not(:disabled) { background: var(--color-background-secondary); color: var(--color-text-primary); }
 .mast-icon:disabled { color: var(--color-text-tertiary); opacity: 0.45; cursor: default; }
-.mast-identity { min-width: 0; display: flex; align-items: baseline; gap: 6px; white-space: nowrap; overflow: hidden; }
-.mast-cluster { font: 600 13px/18px var(--font-mono); color: var(--color-text-primary); min-width: 0; overflow: hidden; text-overflow: ellipsis; flex-shrink: 1; }
+.mast-identity { flex: 0 1 auto; min-width: 0; display: flex; align-items: baseline; gap: 6px; white-space: nowrap; overflow: hidden; }
+.mast-cluster { font: 600 13px/18px var(--font-mono); color: var(--color-text-primary); min-width: 4ch; overflow: hidden; text-overflow: ellipsis; flex-shrink: 1; }
 .mast-sep { color: var(--color-text-tertiary); flex-shrink: 0; }
-.mast-place { font: 400 12px/16px var(--font-sans); color: var(--color-text-secondary); min-width: 0; overflow: hidden; text-overflow: ellipsis; flex-shrink: 3; }
+.mast-place { font: 400 12px/16px var(--font-sans); color: var(--color-text-secondary); min-width: 0; overflow: hidden; text-overflow: ellipsis; flex-shrink: 20; }
 .mast-protected { flex-shrink: 0; font: 600 10px/14px var(--font-mono); padding: 2px 7px; border-radius: 3px; white-space: nowrap;
   color: var(--color-text-warning); background: var(--color-background-warning); box-shadow: inset 0 0 0 1px var(--color-border-warning); }
-.mast-right { flex: 0 1 auto; min-width: 0; display: flex; align-items: center; gap: 4px; }
-.mast-palette { flex: 0 1 230px; min-width: 32px; height: 24px; display: flex; align-items: center; gap: 8px; padding: 0 10px; border: 0; border-radius: 4px; cursor: pointer;
+/* Shrink order when the mast is tight (spec §1: context outranks utility
+   text): the palette label first, then the attention wording, then the
+   place, and the cluster name last; the protected cue never shrinks. */
+.mast-right { flex: 0 1000 auto; min-width: 0; display: flex; align-items: center; gap: 4px; }
+.mast-palette { flex: 0 1 230px; min-width: 32px; overflow: hidden; height: 24px; display: flex; align-items: center; gap: 8px; padding: 0 10px; border: 0; border-radius: 4px; cursor: pointer;
   font: 400 11px/16px var(--font-sans); color: var(--color-text-secondary); text-align: left;
   background: var(--bench-well-bg, var(--color-background-secondary)); box-shadow: var(--bench-well-shadow, inset 0 0 0 1px var(--color-border-tertiary)); }
 .mast-palette-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -252,6 +256,6 @@
 .ov-area-label { color: var(--color-text-primary); font-weight: 600; }
 .ov-area-text { min-width: 0; overflow-wrap: anywhere; }
 .ov-area[data-state="quiet"] .ov-area-text, .ov-area[data-state="evidence"] .ov-area-text { color: var(--color-text-secondary); }
-.mast-attention { flex-shrink: 0; height: 24px; padding: 0 8px; border: 0; border-radius: 4px; background: transparent; cursor: pointer; white-space: nowrap;
+.mast-attention { flex: 0 10 auto; min-width: 5ch; overflow: hidden; text-overflow: ellipsis; height: 24px; padding: 0 8px; border: 0; border-radius: 4px; background: transparent; cursor: pointer; white-space: nowrap;
   font: 600 11px/16px var(--font-sans); }
 .mast-attention:hover, .mast-attention:focus-visible { background: var(--color-background-secondary); outline: none; }
