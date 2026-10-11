@@ -17,39 +17,19 @@ import (
 // serves the resource, the documented fallback (or the first unreadable
 // version) is tried, and its watch shows whether it works.
 //
-// Discovery calls take no context, so the probe runs aside: the Observer
-// gets its answer within crdProbeTimeout, or a timeout that confirms
-// nothing, and at once when its context ends. An abandoned call stays
-// bounded by the discovery client's own request timeout (client-go's 32s).
+// One deadline, crdProbeTimeout, spans every discovery request of the probe,
+// and it and the caller's context reach the HTTP request itself (the
+// context-aware discovery read): when the probe returns, no request of it
+// is still running, and a result nobody waits for is never cached. A
+// deadline reached mid-probe is an error that confirms nothing - never a
+// guess at a version.
 func (c *ClusterConn) crdServed(ctx context.Context, group, resource, fallback string) (observe.Probe, error) {
 	ctx, cancel := context.WithTimeout(ctx, crdProbeTimeout)
 	defer cancel()
-	type result struct {
-		p   observe.Probe
-		err error
-	}
-	done := make(chan result, 1)
-	go func() {
-		p, err := c.crdServedNow(group, resource, fallback)
-		done <- result{p, err}
-	}()
-	select {
-	case r := <-done:
-		return r.p, r.err
-	case <-ctx.Done():
-		return observe.Probe{}, fmt.Errorf("discovery of %s/%s did not answer: %w", group, resource, ctx.Err())
-	}
-}
-
-// crdProbeTimeout bounds one probe across all of a group's versions. A test
-// seam.
-var crdProbeTimeout = 15 * time.Second
-
-func (c *ClusterConn) crdServedNow(group, resource, fallback string) (observe.Probe, error) {
-	disc := c.discovery()
-	groups, err := disc.ServerGroups()
+	disc := c.probeDiscovery()
+	groups, err := disc.ServerGroupsCtx(ctx)
 	if err != nil {
-		return observe.Probe{}, err
+		return observe.Probe{}, probeErr(group, resource, err)
 	}
 	var candidates []string
 	if groups != nil {
@@ -72,7 +52,10 @@ func (c *ClusterConn) crdServedNow(group, resource, fallback string) (observe.Pr
 	}
 	var unreadable []string
 	for _, v := range candidates {
-		rl, err := disc.ServerResourcesForGroupVersion(group + "/" + v)
+		rl, err := disc.ServerResourcesForGroupVersionCtx(ctx, group+"/"+v)
+		if ctx.Err() != nil {
+			return observe.Probe{}, probeErr(group, resource, ctx.Err())
+		}
 		if err != nil || rl == nil {
 			unreadable = append(unreadable, v)
 			continue
@@ -92,4 +75,12 @@ func (c *ClusterConn) crdServedNow(group, resource, fallback string) (observe.Pr
 		}
 	}
 	return observe.Probe{Served: true, Version: unreadable[0]}, nil
+}
+
+// crdProbeTimeout bounds one probe across all of a group's versions. A test
+// seam.
+var crdProbeTimeout = 15 * time.Second
+
+func probeErr(group, resource string, err error) error {
+	return fmt.Errorf("discovery of %s/%s: %w", group, resource, err)
 }

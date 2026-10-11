@@ -148,7 +148,7 @@ type Observer struct {
 	statPublishes atomic.Uint64
 	statEvalNanos atomic.Int64
 	statLastEval  atomic.Int64
-	started      bool
+	started       bool
 
 	wake chan struct{}
 	reqs chan rowsReq
@@ -562,8 +562,8 @@ func (o *Observer) partOf(k partKey) *partState {
 // single loop goroutine - an upper bound on the CPU evaluation uses.
 type Stats struct {
 	Publishes uint64        // summaries emitted
-	EvalTime  time.Duration // cumulative capture and evaluation time
-	LastEval  time.Duration // capture and evaluation time of the latest publish cycle
+	EvalTime  time.Duration // cumulative capture and evaluation WALL time (not CPU time)
+	LastEval  time.Duration // capture and evaluation wall time of the latest publish cycle
 }
 
 // Stats returns the cost counters so far.

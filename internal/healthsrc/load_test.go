@@ -131,9 +131,11 @@ func (s *loadSink) last() (observe.Summary, bool) {
 	return s.sums[len(s.sums)-1].s, true
 }
 
-// complete: every task observed (live) or confirmed absent.
+// complete: every task observed (live) or confirmed absent, and the
+// lifetime Namespaces kind - not a task - live too (Summary.Namespaces is
+// set only then).
 func complete(s observe.Summary) bool {
-	if len(s.Tasks) == 0 {
+	if len(s.Tasks) == 0 || s.Namespaces == nil {
 		return false
 	}
 	for _, t := range s.Tasks {
@@ -235,10 +237,10 @@ func TestLoad(t *testing.T) {
 	}
 	fmt.Fprintf(&b, "  heap above baseline: large %.1f MB, all six %.1f MB\n", mb(largeHeap), mb(allHeap))
 	fmt.Fprintf(&b, "  full evaluation, large (max of 5): %v\n", fullEval.Round(time.Microsecond))
-	fmt.Fprintf(&b, "  update storm: %d updates in %v; %d publishes (%.2f/s); delivery lag p50 %v p99 %v max %v; evaluation CPU %.1f%% of one core\n",
+	fmt.Fprintf(&b, "  update storm: %d updates in %v; %d publishes (%.2f/s); delivery lag p50 %v p99 %v max %v; evaluation wall-time occupancy %.1f%% of the loop (a conservative bound on its CPU)\n",
 		storm.updates, storm.window.Round(time.Millisecond), storm.publishes, storm.publishRate, storm.p50.Round(time.Millisecond),
 		storm.p99.Round(time.Millisecond), storm.max.Round(time.Millisecond), storm.cpuPct)
-	fmt.Fprintf(&b, "  recovery storm: Observers' live heap steady %.1f MB, peak %.1f MB (%.2fx); process live heap %.1f -> %.1f MB; HeapAlloc %.1f -> %.1f MB; every kind live %v after the API recovered\n",
+	fmt.Fprintf(&b, "  recovery storm: Observers' retained (post-GC live) heap steady %.1f MB, peak %.1f MB (%.2fx); process live heap %.1f -> %.1f MB; raw HeapAlloc %.1f -> %.1f MB (not RSS); every kind live %v after the API recovered\n",
 		mb(steady), mb(peak), float64(peak)/float64(steady), mb(steadyLive), mb(peakLive), mb(steadyAlloc), mb(peakAlloc), recovered.Round(time.Millisecond))
 	t.Log(b.String())
 
@@ -249,7 +251,7 @@ func TestLoad(t *testing.T) {
 	check(t, fullEval <= 50*time.Millisecond, "full evaluation %v > 50ms", fullEval)
 	check(t, storm.publishRate <= 1.05, "publishes %.2f/s > 1/s", storm.publishRate)
 	check(t, storm.p99 <= 1200*time.Millisecond, "delivery lag p99 %v > 1.2s", storm.p99)
-	check(t, storm.cpuPct <= 10, "evaluation CPU %.1f%% > 10%%", storm.cpuPct)
+	check(t, storm.cpuPct <= 10, "evaluation wall-time occupancy %.1f%% > 10%%", storm.cpuPct)
 	check(t, float64(peak) <= 1.5*float64(steady), "recovery peak heap %.2fx > 1.5x", float64(peak)/float64(steady))
 	check(t, recovered <= 15*time.Second, "recovery %v > 15s", recovered)
 }
@@ -665,4 +667,22 @@ func buildLoadCluster(t *testing.T, name string, sc loadScale) *loadCluster {
 	s := &loadSink{}
 	o := observe.New(observe.Config{Cluster: name, Sink: s, Kinds: kinds, Snapshots: snaps, Domains: domains, NamespacesKind: KindNamespaces})
 	return &loadCluster{name: name, o: o, sink: s, chaos: ch, typed: typed, pods: pods}
+}
+
+// The gate counts the lifetime Namespaces kind, which is not a task: every
+// task live with Namespaces still recovering is not complete.
+func TestLoadCompletenessWaitsForNamespaces(t *testing.T) {
+	n := 3
+	live := observe.Summary{Tasks: []observe.Task{{ID: TaskPods, Coverage: observe.Live}, {ID: TaskCerts, Coverage: observe.Absent}}}
+	if complete(live) {
+		t.Fatal("Namespaces not live: not complete")
+	}
+	live.Namespaces = &n
+	if !complete(live) {
+		t.Fatal("every task and Namespaces live: complete")
+	}
+	live.Tasks[0].Coverage = observe.Stale
+	if complete(live) {
+		t.Fatal("a stale task: not complete")
+	}
 }

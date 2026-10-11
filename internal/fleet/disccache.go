@@ -1,10 +1,12 @@
 package fleet
 
 import (
+	"context"
 	"sync"
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/rest"
 
 	"github.com/moomora/klyx/internal/clock"
 )
@@ -31,6 +33,10 @@ type discoveryLike interface {
 type cachedDiscovery struct {
 	disc discoveryLike
 	clk  clock.Clock
+	// ctxd is the context-aware network read behind the *Ctx methods: the
+	// discovery REST client in production, so a deadline or cancellation
+	// reaches the HTTP request itself.
+	ctxd ctxDiscovery
 
 	mu        sync.Mutex
 	groups    *metav1.APIGroupList
@@ -47,7 +53,100 @@ func newCachedDiscovery(disc discoveryLike, clk clock.Clock) *cachedDiscovery {
 	if clk == nil {
 		clk = clock.Real{}
 	}
-	return &cachedDiscovery{disc: disc, clk: clk, resources: map[string]discResourcesEntry{}}
+	return &cachedDiscovery{disc: disc, clk: clk, ctxd: syncDiscovery{disc}, resources: map[string]discResourcesEntry{}}
+}
+
+// ctxDiscovery is discovery read with a context.
+type ctxDiscovery interface {
+	groups(ctx context.Context) (*metav1.APIGroupList, error)
+	resources(ctx context.Context, groupVersion string) (*metav1.APIResourceList, error)
+}
+
+// restDiscovery reads /apis and /apis/<group>/<version> through the
+// discovery REST client: the request carries the context, so a deadline or
+// a cancellation ends it at the transport - no work survives its caller.
+type restDiscovery struct{ rc rest.Interface }
+
+func (d restDiscovery) groups(ctx context.Context) (*metav1.APIGroupList, error) {
+	var l metav1.APIGroupList
+	if err := d.rc.Get().AbsPath("/apis").Do(ctx).Into(&l); err != nil {
+		return nil, err
+	}
+	return &l, nil
+}
+
+func (d restDiscovery) resources(ctx context.Context, groupVersion string) (*metav1.APIResourceList, error) {
+	var l metav1.APIResourceList
+	if err := d.rc.Get().AbsPath("/apis", groupVersion).Do(ctx).Into(&l); err != nil {
+		return nil, err
+	}
+	return &l, nil
+}
+
+// syncDiscovery adapts a context-free discovery (test fakes, which have no
+// REST client): it honours a context already ended, and cannot cancel a
+// call in progress.
+type syncDiscovery struct{ d discoveryLike }
+
+func (s syncDiscovery) groups(ctx context.Context) (*metav1.APIGroupList, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return s.d.ServerGroups()
+}
+
+func (s syncDiscovery) resources(ctx context.Context, groupVersion string) (*metav1.APIResourceList, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return s.d.ServerResourcesForGroupVersion(groupVersion)
+}
+
+// ServerGroupsCtx is ServerGroups bounded by ctx. A result whose caller has
+// gone is never cached.
+func (c *cachedDiscovery) ServerGroupsCtx(ctx context.Context) (*metav1.APIGroupList, error) {
+	now := c.clk.Now()
+	c.mu.Lock()
+	if c.groups != nil && now.Sub(c.groupsAt) < discTTL {
+		g := c.groups
+		c.mu.Unlock()
+		return g, nil
+	}
+	c.mu.Unlock()
+	g, err := c.ctxd.groups(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	c.mu.Lock()
+	c.groups, c.groupsAt = g, now
+	c.mu.Unlock()
+	return g, nil
+}
+
+// ServerResourcesForGroupVersionCtx is ServerResourcesForGroupVersion
+// bounded by ctx, with the same no-late-write rule.
+func (c *cachedDiscovery) ServerResourcesForGroupVersionCtx(ctx context.Context, groupVersion string) (*metav1.APIResourceList, error) {
+	now := c.clk.Now()
+	c.mu.Lock()
+	if e, ok := c.resources[groupVersion]; ok && now.Sub(e.at) < discTTL {
+		c.mu.Unlock()
+		return e.list, nil
+	}
+	c.mu.Unlock()
+	rl, err := c.ctxd.resources(ctx, groupVersion)
+	if err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	c.mu.Lock()
+	c.resources[groupVersion] = discResourcesEntry{list: rl, at: now}
+	c.mu.Unlock()
+	return rl, nil
 }
 
 func (c *cachedDiscovery) ServerGroups() (*metav1.APIGroupList, error) {
@@ -97,7 +196,20 @@ func (c *ClusterConn) discovery() discoveryLike {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.disc == nil {
-		c.disc = newCachedDiscovery(c.typed.Discovery(), c.clk)
+		cd := newCachedDiscovery(c.typed.Discovery(), c.clk)
+		if rc := c.typed.Discovery().RESTClient(); rc != nil {
+			cd.ctxd = restDiscovery{rc}
+		}
+		c.disc = cd
 	}
 	return c.disc
+}
+
+// probeDiscovery is the context-aware view the health probes use.
+func (c *ClusterConn) probeDiscovery() *cachedDiscovery {
+	d := c.discovery()
+	if cd, ok := d.(*cachedDiscovery); ok {
+		return cd
+	}
+	return newCachedDiscovery(d, c.clk) // an injected test double
 }
