@@ -64,6 +64,7 @@ type NodeClaim struct {
 	CapacityType   string // "spot" | "on-demand" | ""
 	InstanceType   string
 	AgeSeconds     int
+	Created        time.Time // creation timestamp: the launch-deadline boundary
 }
 
 type condition struct {
@@ -153,6 +154,7 @@ func ParseNodeClaim(u *unstructured.Unstructured, now time.Time) NodeClaim {
 		CapacityType: labels[LabelCapacityType],
 		InstanceType: labels[LabelInstanceType],
 		AgeSeconds:   int(now.Sub(u.GetCreationTimestamp().Time).Seconds()),
+		Created:      u.GetCreationTimestamp().Time,
 	}
 	out.NodeName, _, _ = unstructured.NestedString(u.Object, "status", "nodeName")
 

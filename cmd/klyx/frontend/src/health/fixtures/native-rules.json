@@ -1,0 +1,1281 @@
+{
+  "certificates": [
+    {
+      "case": "ready, expires in 30d",
+      "nowUnix": 1791720000,
+      "dto": {
+        "namespace": "shop",
+        "name": "ready, expires in 30d",
+        "ready": "Ready",
+        "reason": "",
+        "message": "",
+        "issuerKind": "",
+        "issuerName": "",
+        "secretName": "",
+        "dnsNames": [],
+        "notBeforeUnix": 0,
+        "notAfterUnix": 1794312000,
+        "expiresInSeconds": 2592000,
+        "renewalUnix": 0,
+        "stale": false,
+        "generation": 0,
+        "observedGeneration": 0,
+        "rule": {
+          "included": false,
+          "role": "ok",
+          "label": "Ready"
+        }
+      },
+      "want": {
+        "included": false,
+        "role": "ok",
+        "label": "Ready"
+      }
+    },
+    {
+      "case": "ready, no notAfter",
+      "nowUnix": 1791720000,
+      "dto": {
+        "namespace": "shop",
+        "name": "ready, no notAfter",
+        "ready": "Ready",
+        "reason": "",
+        "message": "",
+        "issuerKind": "",
+        "issuerName": "",
+        "secretName": "",
+        "dnsNames": [],
+        "notBeforeUnix": 0,
+        "notAfterUnix": 0,
+        "expiresInSeconds": 0,
+        "renewalUnix": 0,
+        "stale": false,
+        "generation": 0,
+        "observedGeneration": 0,
+        "rule": {
+          "included": false,
+          "role": "ok",
+          "label": "Ready"
+        }
+      },
+      "want": {
+        "included": false,
+        "role": "ok",
+        "label": "Ready"
+      }
+    },
+    {
+      "case": "ready but expired an hour ago",
+      "nowUnix": 1791720000,
+      "dto": {
+        "namespace": "shop",
+        "name": "ready but expired an hour ago",
+        "ready": "Ready",
+        "reason": "",
+        "message": "",
+        "issuerKind": "",
+        "issuerName": "",
+        "secretName": "",
+        "dnsNames": [],
+        "notBeforeUnix": 0,
+        "notAfterUnix": 1791716400,
+        "expiresInSeconds": -3600,
+        "renewalUnix": 0,
+        "stale": false,
+        "generation": 0,
+        "observedGeneration": 0,
+        "rule": {
+          "included": true,
+          "role": "fault",
+          "label": "Expired"
+        }
+      },
+      "want": {
+        "included": true,
+        "role": "fault",
+        "label": "Expired"
+      }
+    },
+    {
+      "case": "expires exactly now",
+      "nowUnix": 1791720000,
+      "dto": {
+        "namespace": "shop",
+        "name": "expires exactly now",
+        "ready": "Ready",
+        "reason": "",
+        "message": "",
+        "issuerKind": "",
+        "issuerName": "",
+        "secretName": "",
+        "dnsNames": [],
+        "notBeforeUnix": 0,
+        "notAfterUnix": 1791720000,
+        "expiresInSeconds": 0,
+        "renewalUnix": 0,
+        "stale": false,
+        "generation": 0,
+        "observedGeneration": 0,
+        "rule": {
+          "included": true,
+          "role": "fault",
+          "label": "Expired"
+        }
+      },
+      "want": {
+        "included": true,
+        "role": "fault",
+        "label": "Expired"
+      }
+    },
+    {
+      "case": "expires in one second",
+      "nowUnix": 1791720000,
+      "dto": {
+        "namespace": "shop",
+        "name": "expires in one second",
+        "ready": "Ready",
+        "reason": "",
+        "message": "",
+        "issuerKind": "",
+        "issuerName": "",
+        "secretName": "",
+        "dnsNames": [],
+        "notBeforeUnix": 0,
+        "notAfterUnix": 1791720001,
+        "expiresInSeconds": 1,
+        "renewalUnix": 0,
+        "stale": false,
+        "generation": 0,
+        "observedGeneration": 0,
+        "rule": {
+          "included": false,
+          "role": "ok",
+          "label": "Ready"
+        }
+      },
+      "want": {
+        "included": false,
+        "role": "ok",
+        "label": "Ready"
+      }
+    },
+    {
+      "case": "issuing (included, progressing)",
+      "nowUnix": 1791720000,
+      "dto": {
+        "namespace": "shop",
+        "name": "issuing (included, progressing)",
+        "ready": "Issuing",
+        "reason": "",
+        "message": "",
+        "issuerKind": "",
+        "issuerName": "",
+        "secretName": "",
+        "dnsNames": [],
+        "notBeforeUnix": 0,
+        "notAfterUnix": 0,
+        "expiresInSeconds": 0,
+        "renewalUnix": 0,
+        "stale": false,
+        "generation": 0,
+        "observedGeneration": 0,
+        "rule": {
+          "included": true,
+          "role": "progressing",
+          "label": "Issuing"
+        }
+      },
+      "want": {
+        "included": true,
+        "role": "progressing",
+        "label": "Issuing"
+      }
+    },
+    {
+      "case": "failed",
+      "nowUnix": 1791720000,
+      "dto": {
+        "namespace": "shop",
+        "name": "failed",
+        "ready": "Failed",
+        "reason": "IncorrectIssuer",
+        "message": "",
+        "issuerKind": "",
+        "issuerName": "",
+        "secretName": "",
+        "dnsNames": [],
+        "notBeforeUnix": 0,
+        "notAfterUnix": 0,
+        "expiresInSeconds": 0,
+        "renewalUnix": 0,
+        "stale": false,
+        "generation": 0,
+        "observedGeneration": 0,
+        "rule": {
+          "included": true,
+          "role": "fault",
+          "label": "Failed"
+        }
+      },
+      "want": {
+        "included": true,
+        "role": "fault",
+        "label": "Failed"
+      }
+    },
+    {
+      "case": "unknown",
+      "nowUnix": 1791720000,
+      "dto": {
+        "namespace": "shop",
+        "name": "unknown",
+        "ready": "Unknown",
+        "reason": "",
+        "message": "",
+        "issuerKind": "",
+        "issuerName": "",
+        "secretName": "",
+        "dnsNames": [],
+        "notBeforeUnix": 0,
+        "notAfterUnix": 0,
+        "expiresInSeconds": 0,
+        "renewalUnix": 0,
+        "stale": false,
+        "generation": 0,
+        "observedGeneration": 0,
+        "rule": {
+          "included": true,
+          "role": "unknown",
+          "label": "Unknown"
+        }
+      },
+      "want": {
+        "included": true,
+        "role": "unknown",
+        "label": "Unknown"
+      }
+    },
+    {
+      "case": "no ready state",
+      "nowUnix": 1791720000,
+      "dto": {
+        "namespace": "shop",
+        "name": "no ready state",
+        "ready": "",
+        "reason": "",
+        "message": "",
+        "issuerKind": "",
+        "issuerName": "",
+        "secretName": "",
+        "dnsNames": [],
+        "notBeforeUnix": 0,
+        "notAfterUnix": 0,
+        "expiresInSeconds": 0,
+        "renewalUnix": 0,
+        "stale": false,
+        "generation": 0,
+        "observedGeneration": 0,
+        "rule": {
+          "included": true,
+          "role": "unknown",
+          "label": "Unknown"
+        }
+      },
+      "want": {
+        "included": true,
+        "role": "unknown",
+        "label": "Unknown"
+      }
+    },
+    {
+      "case": "ready but spec unobserved (Syncing…)",
+      "nowUnix": 1791720000,
+      "dto": {
+        "namespace": "shop",
+        "name": "ready but spec unobserved (Syncing…)",
+        "ready": "Ready",
+        "reason": "",
+        "message": "",
+        "issuerKind": "",
+        "issuerName": "",
+        "secretName": "",
+        "dnsNames": [],
+        "notBeforeUnix": 0,
+        "notAfterUnix": 1791723600,
+        "expiresInSeconds": 3600,
+        "renewalUnix": 0,
+        "stale": true,
+        "generation": 3,
+        "observedGeneration": 2,
+        "rule": {
+          "included": false,
+          "role": "progressing",
+          "label": "Syncing…"
+        }
+      },
+      "want": {
+        "included": false,
+        "role": "progressing",
+        "label": "Syncing…"
+      }
+    },
+    {
+      "case": "unobserved and expired",
+      "nowUnix": 1791720000,
+      "dto": {
+        "namespace": "shop",
+        "name": "unobserved and expired",
+        "ready": "Ready",
+        "reason": "",
+        "message": "",
+        "issuerKind": "",
+        "issuerName": "",
+        "secretName": "",
+        "dnsNames": [],
+        "notBeforeUnix": 0,
+        "notAfterUnix": 1791719940,
+        "expiresInSeconds": -60,
+        "renewalUnix": 0,
+        "stale": true,
+        "generation": 0,
+        "observedGeneration": 0,
+        "rule": {
+          "included": true,
+          "role": "fault",
+          "label": "Expired"
+        }
+      },
+      "want": {
+        "included": true,
+        "role": "fault",
+        "label": "Expired"
+      }
+    },
+    {
+      "case": "failed while unobserved",
+      "nowUnix": 1791720000,
+      "dto": {
+        "namespace": "shop",
+        "name": "failed while unobserved",
+        "ready": "Failed",
+        "reason": "",
+        "message": "",
+        "issuerKind": "",
+        "issuerName": "",
+        "secretName": "",
+        "dnsNames": [],
+        "notBeforeUnix": 0,
+        "notAfterUnix": 0,
+        "expiresInSeconds": 0,
+        "renewalUnix": 0,
+        "stale": true,
+        "generation": 0,
+        "observedGeneration": 0,
+        "rule": {
+          "included": true,
+          "role": "progressing",
+          "label": "Syncing…"
+        }
+      },
+      "want": {
+        "included": true,
+        "role": "progressing",
+        "label": "Syncing…"
+      }
+    },
+    {
+      "case": "unrecognised ready state",
+      "nowUnix": 1791720000,
+      "dto": {
+        "namespace": "shop",
+        "name": "unrecognised ready state",
+        "ready": "Pending",
+        "reason": "",
+        "message": "",
+        "issuerKind": "",
+        "issuerName": "",
+        "secretName": "",
+        "dnsNames": [],
+        "notBeforeUnix": 0,
+        "notAfterUnix": 0,
+        "expiresInSeconds": 0,
+        "renewalUnix": 0,
+        "stale": false,
+        "generation": 0,
+        "observedGeneration": 0,
+        "rule": {
+          "included": true,
+          "role": "degraded",
+          "label": "Pending"
+        }
+      },
+      "want": {
+        "included": true,
+        "role": "degraded",
+        "label": "Pending"
+      }
+    }
+  ],
+  "externalSecrets": [
+    {
+      "case": "synced and fresh",
+      "nowUnix": 1791720000,
+      "dto": {
+        "namespace": "shop",
+        "name": "synced and fresh",
+        "state": "Synced",
+        "reason": "",
+        "message": "",
+        "storeKind": "SecretStore",
+        "storeName": "vault",
+        "targetSecret": "synced and fresh",
+        "refreshIntervalSeconds": 3600,
+        "lastRefreshAgeSeconds": 600,
+        "refreshed": true,
+        "stale": false,
+        "rule": {
+          "included": false,
+          "role": "ok",
+          "label": "Synced"
+        }
+      },
+      "want": {
+        "included": false,
+        "role": "ok",
+        "label": "Synced"
+      }
+    },
+    {
+      "case": "synced but refresh overdue",
+      "nowUnix": 1791720000,
+      "dto": {
+        "namespace": "shop",
+        "name": "synced but refresh overdue",
+        "state": "Synced",
+        "reason": "",
+        "message": "",
+        "storeKind": "SecretStore",
+        "storeName": "vault",
+        "targetSecret": "synced but refresh overdue",
+        "refreshIntervalSeconds": 3600,
+        "lastRefreshAgeSeconds": 10800,
+        "refreshed": true,
+        "stale": true,
+        "rule": {
+          "included": true,
+          "role": "degraded",
+          "label": "Stale"
+        }
+      },
+      "want": {
+        "included": true,
+        "role": "degraded",
+        "label": "Stale"
+      }
+    },
+    {
+      "case": "synced, refresh disabled",
+      "nowUnix": 1791720000,
+      "dto": {
+        "namespace": "shop",
+        "name": "synced, refresh disabled",
+        "state": "Synced",
+        "reason": "",
+        "message": "",
+        "storeKind": "SecretStore",
+        "storeName": "vault",
+        "targetSecret": "synced, refresh disabled",
+        "refreshIntervalSeconds": 0,
+        "lastRefreshAgeSeconds": 172800,
+        "refreshed": true,
+        "stale": false,
+        "rule": {
+          "included": false,
+          "role": "ok",
+          "label": "Synced"
+        }
+      },
+      "want": {
+        "included": false,
+        "role": "ok",
+        "label": "Synced"
+      }
+    },
+    {
+      "case": "synced, never refreshed",
+      "nowUnix": 1791720000,
+      "dto": {
+        "namespace": "shop",
+        "name": "synced, never refreshed",
+        "state": "Synced",
+        "reason": "",
+        "message": "",
+        "storeKind": "SecretStore",
+        "storeName": "vault",
+        "targetSecret": "synced, never refreshed",
+        "refreshIntervalSeconds": 3600,
+        "lastRefreshAgeSeconds": 0,
+        "refreshed": false,
+        "stale": false,
+        "rule": {
+          "included": false,
+          "role": "ok",
+          "label": "Synced"
+        }
+      },
+      "want": {
+        "included": false,
+        "role": "ok",
+        "label": "Synced"
+      }
+    },
+    {
+      "case": "failed",
+      "nowUnix": 1791720000,
+      "dto": {
+        "namespace": "shop",
+        "name": "failed",
+        "state": "Failed",
+        "reason": "SecretSyncedError",
+        "message": "",
+        "storeKind": "SecretStore",
+        "storeName": "vault",
+        "targetSecret": "failed",
+        "refreshIntervalSeconds": 0,
+        "lastRefreshAgeSeconds": 0,
+        "refreshed": false,
+        "stale": false,
+        "rule": {
+          "included": true,
+          "role": "fault",
+          "label": "Failed"
+        }
+      },
+      "want": {
+        "included": true,
+        "role": "fault",
+        "label": "Failed"
+      }
+    },
+    {
+      "case": "failed and overdue",
+      "nowUnix": 1791720000,
+      "dto": {
+        "namespace": "shop",
+        "name": "failed and overdue",
+        "state": "Failed",
+        "reason": "",
+        "message": "",
+        "storeKind": "SecretStore",
+        "storeName": "vault",
+        "targetSecret": "failed and overdue",
+        "refreshIntervalSeconds": 3600,
+        "lastRefreshAgeSeconds": 10800,
+        "refreshed": true,
+        "stale": true,
+        "rule": {
+          "included": true,
+          "role": "fault",
+          "label": "Failed"
+        }
+      },
+      "want": {
+        "included": true,
+        "role": "fault",
+        "label": "Failed"
+      }
+    },
+    {
+      "case": "unknown",
+      "nowUnix": 1791720000,
+      "dto": {
+        "namespace": "shop",
+        "name": "unknown",
+        "state": "Unknown",
+        "reason": "",
+        "message": "",
+        "storeKind": "SecretStore",
+        "storeName": "vault",
+        "targetSecret": "unknown",
+        "refreshIntervalSeconds": 0,
+        "lastRefreshAgeSeconds": 0,
+        "refreshed": false,
+        "stale": false,
+        "rule": {
+          "included": true,
+          "role": "unknown",
+          "label": "Unknown"
+        }
+      },
+      "want": {
+        "included": true,
+        "role": "unknown",
+        "label": "Unknown"
+      }
+    },
+    {
+      "case": "no state",
+      "nowUnix": 1791720000,
+      "dto": {
+        "namespace": "shop",
+        "name": "no state",
+        "state": "",
+        "reason": "",
+        "message": "",
+        "storeKind": "SecretStore",
+        "storeName": "vault",
+        "targetSecret": "no state",
+        "refreshIntervalSeconds": 0,
+        "lastRefreshAgeSeconds": 0,
+        "refreshed": false,
+        "stale": false,
+        "rule": {
+          "included": true,
+          "role": "unknown",
+          "label": "Unknown"
+        }
+      },
+      "want": {
+        "included": true,
+        "role": "unknown",
+        "label": "Unknown"
+      }
+    },
+    {
+      "case": "unrecognised state",
+      "nowUnix": 1791720000,
+      "dto": {
+        "namespace": "shop",
+        "name": "unrecognised state",
+        "state": "Deleted",
+        "reason": "",
+        "message": "",
+        "storeKind": "SecretStore",
+        "storeName": "vault",
+        "targetSecret": "unrecognised state",
+        "refreshIntervalSeconds": 0,
+        "lastRefreshAgeSeconds": 0,
+        "refreshed": false,
+        "stale": false,
+        "rule": {
+          "included": true,
+          "role": "degraded",
+          "label": "Deleted"
+        }
+      },
+      "want": {
+        "included": true,
+        "role": "degraded",
+        "label": "Deleted"
+      }
+    }
+  ],
+  "issuers": [
+    {
+      "case": "ready",
+      "nowUnix": 1791720000,
+      "dto": {
+        "kind": "ClusterIssuer",
+        "namespace": "",
+        "name": "ready",
+        "ready": "Ready",
+        "reason": "",
+        "message": "",
+        "rule": {
+          "included": false,
+          "role": "ok",
+          "label": "Ready"
+        }
+      },
+      "want": {
+        "included": false,
+        "role": "ok",
+        "label": "Ready"
+      }
+    },
+    {
+      "case": "failed",
+      "nowUnix": 1791720000,
+      "dto": {
+        "kind": "ClusterIssuer",
+        "namespace": "",
+        "name": "failed",
+        "ready": "Failed",
+        "reason": "",
+        "message": "",
+        "rule": {
+          "included": true,
+          "role": "fault",
+          "label": "Failed"
+        }
+      },
+      "want": {
+        "included": true,
+        "role": "fault",
+        "label": "Failed"
+      }
+    },
+    {
+      "case": "unknown",
+      "nowUnix": 1791720000,
+      "dto": {
+        "kind": "ClusterIssuer",
+        "namespace": "",
+        "name": "unknown",
+        "ready": "Unknown",
+        "reason": "",
+        "message": "",
+        "rule": {
+          "included": true,
+          "role": "unknown",
+          "label": "Unknown"
+        }
+      },
+      "want": {
+        "included": true,
+        "role": "unknown",
+        "label": "Unknown"
+      }
+    },
+    {
+      "case": "no ready state",
+      "nowUnix": 1791720000,
+      "dto": {
+        "kind": "ClusterIssuer",
+        "namespace": "",
+        "name": "no ready state",
+        "ready": "",
+        "reason": "",
+        "message": "",
+        "rule": {
+          "included": true,
+          "role": "unknown",
+          "label": "Unknown"
+        }
+      },
+      "want": {
+        "included": true,
+        "role": "unknown",
+        "label": "Unknown"
+      }
+    },
+    {
+      "case": "issuing (unusual for an issuer)",
+      "nowUnix": 1791720000,
+      "dto": {
+        "kind": "ClusterIssuer",
+        "namespace": "",
+        "name": "issuing (unusual for an issuer)",
+        "ready": "Issuing",
+        "reason": "",
+        "message": "",
+        "rule": {
+          "included": true,
+          "role": "degraded",
+          "label": "Issuing"
+        }
+      },
+      "want": {
+        "included": true,
+        "role": "degraded",
+        "label": "Issuing"
+      }
+    }
+  ],
+  "nodeClaims": [
+    {
+      "case": "ready",
+      "nowUnix": 1791720000,
+      "dto": {
+        "name": "ready",
+        "pool": "default",
+        "nodeName": "n1",
+        "ready": "ready",
+        "failingType": "",
+        "failingStatus": "",
+        "failingReason": "",
+        "failingMessage": "",
+        "drifted": false,
+        "consolidatable": false,
+        "capacityType": "",
+        "instanceType": "",
+        "ageSeconds": 4000,
+        "rule": {
+          "included": false,
+          "role": "ok",
+          "label": "ready"
+        },
+        "createdUnix": 1791716000
+      },
+      "want": {
+        "included": false,
+        "role": "ok",
+        "label": "ready"
+      }
+    },
+    {
+      "case": "not ready, proven link",
+      "nowUnix": 1791720000,
+      "dto": {
+        "name": "not ready, proven link",
+        "pool": "default",
+        "nodeName": "",
+        "ready": "not-ready",
+        "failingType": "Launched",
+        "failingStatus": "False",
+        "failingReason": "",
+        "failingMessage": "",
+        "drifted": false,
+        "consolidatable": false,
+        "capacityType": "",
+        "instanceType": "",
+        "ageSeconds": 300,
+        "rule": {
+          "included": true,
+          "role": "fault",
+          "label": "failed at Launched"
+        },
+        "createdUnix": 1791719700
+      },
+      "want": {
+        "included": true,
+        "role": "fault",
+        "label": "failed at Launched"
+      }
+    },
+    {
+      "case": "not ready, unproven link",
+      "nowUnix": 1791720000,
+      "dto": {
+        "name": "not ready, unproven link",
+        "pool": "default",
+        "nodeName": "",
+        "ready": "not-ready",
+        "failingType": "Registered",
+        "failingStatus": "Unknown",
+        "failingReason": "",
+        "failingMessage": "",
+        "drifted": false,
+        "consolidatable": false,
+        "capacityType": "",
+        "instanceType": "",
+        "ageSeconds": 300,
+        "rule": {
+          "included": true,
+          "role": "fault",
+          "label": "not ready"
+        },
+        "createdUnix": 1791719700
+      },
+      "want": {
+        "included": true,
+        "role": "fault",
+        "label": "not ready"
+      }
+    },
+    {
+      "case": "not ready, no link",
+      "nowUnix": 1791720000,
+      "dto": {
+        "name": "not ready, no link",
+        "pool": "default",
+        "nodeName": "",
+        "ready": "not-ready",
+        "failingType": "",
+        "failingStatus": "",
+        "failingReason": "",
+        "failingMessage": "",
+        "drifted": false,
+        "consolidatable": false,
+        "capacityType": "",
+        "instanceType": "",
+        "ageSeconds": 300,
+        "rule": {
+          "included": true,
+          "role": "fault",
+          "label": "not ready"
+        },
+        "createdUnix": 1791719700
+      },
+      "want": {
+        "included": true,
+        "role": "fault",
+        "label": "not ready"
+      }
+    },
+    {
+      "case": "launching within the deadline",
+      "nowUnix": 1791720000,
+      "dto": {
+        "name": "launching within the deadline",
+        "pool": "default",
+        "nodeName": "",
+        "ready": "unknown",
+        "failingType": "",
+        "failingStatus": "",
+        "failingReason": "",
+        "failingMessage": "",
+        "drifted": false,
+        "consolidatable": false,
+        "capacityType": "",
+        "instanceType": "",
+        "ageSeconds": 100,
+        "rule": {
+          "included": false,
+          "role": "progressing",
+          "label": "launching"
+        },
+        "createdUnix": 1791719900
+      },
+      "want": {
+        "included": false,
+        "role": "progressing",
+        "label": "launching"
+      }
+    },
+    {
+      "case": "launching at exactly the deadline",
+      "nowUnix": 1791720000,
+      "dto": {
+        "name": "launching at exactly the deadline",
+        "pool": "default",
+        "nodeName": "",
+        "ready": "unknown",
+        "failingType": "",
+        "failingStatus": "",
+        "failingReason": "",
+        "failingMessage": "",
+        "drifted": false,
+        "consolidatable": false,
+        "capacityType": "",
+        "instanceType": "",
+        "ageSeconds": 900,
+        "rule": {
+          "included": false,
+          "role": "progressing",
+          "label": "launching"
+        },
+        "createdUnix": 1791719100
+      },
+      "want": {
+        "included": false,
+        "role": "progressing",
+        "label": "launching"
+      }
+    },
+    {
+      "case": "launching past the deadline",
+      "nowUnix": 1791720000,
+      "dto": {
+        "name": "launching past the deadline",
+        "pool": "default",
+        "nodeName": "",
+        "ready": "unknown",
+        "failingType": "",
+        "failingStatus": "",
+        "failingReason": "",
+        "failingMessage": "",
+        "drifted": false,
+        "consolidatable": false,
+        "capacityType": "",
+        "instanceType": "",
+        "ageSeconds": 901,
+        "rule": {
+          "included": true,
+          "role": "degraded",
+          "label": "launching, appears stuck"
+        },
+        "createdUnix": 1791719099
+      },
+      "want": {
+        "included": true,
+        "role": "degraded",
+        "label": "launching, appears stuck"
+      }
+    },
+    {
+      "case": "initializing within the deadline",
+      "nowUnix": 1791720000,
+      "dto": {
+        "name": "initializing within the deadline",
+        "pool": "default",
+        "nodeName": "n2",
+        "ready": "unknown",
+        "failingType": "",
+        "failingStatus": "",
+        "failingReason": "",
+        "failingMessage": "",
+        "drifted": false,
+        "consolidatable": false,
+        "capacityType": "",
+        "instanceType": "",
+        "ageSeconds": 600,
+        "rule": {
+          "included": false,
+          "role": "progressing",
+          "label": "initializing"
+        },
+        "createdUnix": 1791719400
+      },
+      "want": {
+        "included": false,
+        "role": "progressing",
+        "label": "initializing"
+      }
+    },
+    {
+      "case": "initializing past the deadline",
+      "nowUnix": 1791720000,
+      "dto": {
+        "name": "initializing past the deadline",
+        "pool": "default",
+        "nodeName": "n2",
+        "ready": "unknown",
+        "failingType": "",
+        "failingStatus": "",
+        "failingReason": "",
+        "failingMessage": "",
+        "drifted": false,
+        "consolidatable": false,
+        "capacityType": "",
+        "instanceType": "",
+        "ageSeconds": 2000,
+        "rule": {
+          "included": true,
+          "role": "degraded",
+          "label": "initializing, appears stuck"
+        },
+        "createdUnix": 1791718000
+      },
+      "want": {
+        "included": true,
+        "role": "degraded",
+        "label": "initializing, appears stuck"
+      }
+    }
+  ],
+  "nodePools": [
+    {
+      "case": "ready",
+      "nowUnix": 1791720000,
+      "dto": {
+        "name": "ready",
+        "ready": "ready",
+        "reason": "",
+        "message": "",
+        "weight": 0,
+        "cpuLimit": null,
+        "cpuUsed": null,
+        "memLimit": null,
+        "memUsed": null,
+        "nodes": 0,
+        "rule": {
+          "included": false,
+          "role": "ok",
+          "label": "ready"
+        }
+      },
+      "want": {
+        "included": false,
+        "role": "ok",
+        "label": "ready"
+      }
+    },
+    {
+      "case": "not ready",
+      "nowUnix": 1791720000,
+      "dto": {
+        "name": "not ready",
+        "ready": "not-ready",
+        "reason": "NodeClassNotReady",
+        "message": "",
+        "weight": 0,
+        "cpuLimit": null,
+        "cpuUsed": null,
+        "memLimit": null,
+        "memUsed": null,
+        "nodes": 0,
+        "rule": {
+          "included": true,
+          "role": "fault",
+          "label": "not ready"
+        }
+      },
+      "want": {
+        "included": true,
+        "role": "fault",
+        "label": "not ready"
+      }
+    },
+    {
+      "case": "unknown",
+      "nowUnix": 1791720000,
+      "dto": {
+        "name": "unknown",
+        "ready": "unknown",
+        "reason": "",
+        "message": "",
+        "weight": 0,
+        "cpuLimit": null,
+        "cpuUsed": null,
+        "memLimit": null,
+        "memUsed": null,
+        "nodes": 0,
+        "rule": {
+          "included": false,
+          "role": "unknown",
+          "label": "unknown"
+        }
+      },
+      "want": {
+        "included": false,
+        "role": "unknown",
+        "label": "unknown"
+      }
+    },
+    {
+      "case": "no state",
+      "nowUnix": 1791720000,
+      "dto": {
+        "name": "no state",
+        "ready": "",
+        "reason": "",
+        "message": "",
+        "weight": 0,
+        "cpuLimit": null,
+        "cpuUsed": null,
+        "memLimit": null,
+        "memUsed": null,
+        "nodes": 0,
+        "rule": {
+          "included": false,
+          "role": "unknown",
+          "label": "unknown"
+        }
+      },
+      "want": {
+        "included": false,
+        "role": "unknown",
+        "label": "unknown"
+      }
+    }
+  ],
+  "stores": [
+    {
+      "case": "ready",
+      "nowUnix": 1791720000,
+      "dto": {
+        "kind": "ClusterSecretStore",
+        "namespace": "",
+        "name": "ready",
+        "state": "Synced",
+        "reason": "",
+        "message": "",
+        "provider": "",
+        "rule": {
+          "included": false,
+          "role": "ok",
+          "label": "Ready"
+        }
+      },
+      "want": {
+        "included": false,
+        "role": "ok",
+        "label": "Ready"
+      }
+    },
+    {
+      "case": "failed",
+      "nowUnix": 1791720000,
+      "dto": {
+        "kind": "ClusterSecretStore",
+        "namespace": "",
+        "name": "failed",
+        "state": "Failed",
+        "reason": "",
+        "message": "",
+        "provider": "",
+        "rule": {
+          "included": true,
+          "role": "fault",
+          "label": "Failed"
+        }
+      },
+      "want": {
+        "included": true,
+        "role": "fault",
+        "label": "Failed"
+      }
+    },
+    {
+      "case": "unknown",
+      "nowUnix": 1791720000,
+      "dto": {
+        "kind": "ClusterSecretStore",
+        "namespace": "",
+        "name": "unknown",
+        "state": "Unknown",
+        "reason": "",
+        "message": "",
+        "provider": "",
+        "rule": {
+          "included": true,
+          "role": "unknown",
+          "label": "Unknown"
+        }
+      },
+      "want": {
+        "included": true,
+        "role": "unknown",
+        "label": "Unknown"
+      }
+    },
+    {
+      "case": "no state",
+      "nowUnix": 1791720000,
+      "dto": {
+        "kind": "ClusterSecretStore",
+        "namespace": "",
+        "name": "no state",
+        "state": "",
+        "reason": "",
+        "message": "",
+        "provider": "",
+        "rule": {
+          "included": true,
+          "role": "unknown",
+          "label": "Unknown"
+        }
+      },
+      "want": {
+        "included": true,
+        "role": "unknown",
+        "label": "Unknown"
+      }
+    },
+    {
+      "case": "unrecognised state",
+      "nowUnix": 1791720000,
+      "dto": {
+        "kind": "ClusterSecretStore",
+        "namespace": "",
+        "name": "unrecognised state",
+        "state": "Invalid",
+        "reason": "",
+        "message": "",
+        "provider": "",
+        "rule": {
+          "included": true,
+          "role": "degraded",
+          "label": "Invalid"
+        }
+      },
+      "want": {
+        "included": true,
+        "role": "degraded",
+        "label": "Invalid"
+      }
+    }
+  ]
+}

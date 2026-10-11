@@ -34,10 +34,13 @@ type CertificateDTO struct {
 	Stale              bool  `json:"stale"`
 	Generation         int64 `json:"generation"`
 	ObservedGeneration int64 `json:"observedGeneration"`
+	// Rule is the relocated lens rule (1c addendum §2).
+	Rule RuleDTO `json:"rule"`
 }
 
 func toCertificateDTO(c certmanager.Certificate, now time.Time) CertificateDTO {
 	dto := CertificateDTO{
+		Rule:       toRuleDTO(certmanager.CertificateRule(c, now)),
 		Namespace:  c.Namespace,
 		Name:       c.Name,
 		Ready:      string(c.Ready),
@@ -75,10 +78,13 @@ type IssuerDTO struct {
 	Ready     string `json:"ready"`
 	Reason    string `json:"reason"`
 	Message   string `json:"message"`
+	// Rule is the relocated lens rule (1c addendum §2).
+	Rule RuleDTO `json:"rule"`
 }
 
 func toIssuerDTO(i certmanager.Issuer) IssuerDTO {
 	return IssuerDTO{
+		Rule:      toRuleDTO(certmanager.IssuerRule(i)),
 		Kind:      string(i.Kind),
 		Namespace: i.Namespace,
 		Name:      i.Name,

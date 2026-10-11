@@ -569,3 +569,7 @@ function causeOf(e: ExternalSecretDTO, store: ExternalSecretStoreDTO | undefined
   return "";
 }
 
+
+// The lens rules, exported for the 1c golden parity harness
+// (src/health/nativeRules.test.ts) until the lens reads the Go-computed rule.
+export { needsAttention as secretNeedsAttention, secretHealth, storeHealth };

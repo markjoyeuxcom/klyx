@@ -789,3 +789,7 @@ function ChainRail({ nodes, failKey }: { nodes: ChainNodeDTO[]; failKey: string 
   );
 }
 
+
+// The lens rules, exported for the 1c golden parity harness
+// (src/health/nativeRules.test.ts) until the lens reads the Go-computed rule.
+export { needsAttention as certNeedsAttention, certHealth, issuerHealth };

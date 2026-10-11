@@ -31,10 +31,13 @@ type ExternalSecretDTO struct {
 	// the interval ago - the controller has stopped refreshing even though
 	// Ready may still describe the last good sync.
 	Stale bool `json:"stale"`
+	// Rule is the relocated lens rule (1c addendum §2).
+	Rule RuleDTO `json:"rule"`
 }
 
 func toExternalSecretDTO(e externalsecrets.ExternalSecret, now time.Time) ExternalSecretDTO {
 	dto := ExternalSecretDTO{
+		Rule:                   toRuleDTO(externalsecrets.ExternalSecretRule(e)),
 		Namespace:              e.Namespace,
 		Name:                   e.Name,
 		State:                  string(e.State),
@@ -67,10 +70,13 @@ type StoreDTO struct {
 	Reason    string `json:"reason"`
 	Message   string `json:"message"`
 	Provider  string `json:"provider"`
+	// Rule is the relocated lens rule (1c addendum §2).
+	Rule RuleDTO `json:"rule"`
 }
 
 func toStoreDTO(s externalsecrets.Store) StoreDTO {
 	return StoreDTO{
+		Rule:      toRuleDTO(externalsecrets.StoreRule(s)),
 		Kind:      string(s.Kind),
 		Namespace: s.Namespace,
 		Name:      s.Name,

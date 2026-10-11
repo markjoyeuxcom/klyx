@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/moomora/klyx/internal/fleet"
+	"github.com/moomora/klyx/internal/karpenter"
 )
 
 // KarpenterPoolDTO mirrors karpenter.NodePool.
@@ -18,6 +19,8 @@ type KarpenterPoolDTO struct {
 	MemLimit *float64 `json:"memLimit"`
 	MemUsed  *float64 `json:"memUsed"`
 	Nodes    int      `json:"nodes"`
+	// Rule is the relocated lens rule (1c addendum §2).
+	Rule RuleDTO `json:"rule"`
 }
 
 // KarpenterClaimDTO mirrors karpenter.NodeClaim.
@@ -35,6 +38,9 @@ type KarpenterClaimDTO struct {
 	CapacityType   string `json:"capacityType"`
 	InstanceType   string `json:"instanceType"`
 	AgeSeconds     int    `json:"ageSeconds"`
+	// Rule is the relocated lens rule (1c addendum §2).
+	Rule    RuleDTO `json:"rule"`
+	Created int64   `json:"createdUnix"` // creation time (unix): the launch-deadline anchor
 }
 
 // KarpenterEventDTO is one row of the disruption feed.
@@ -98,19 +104,10 @@ func (s *KarpenterService) GetKarpenterState(cluster string) KarpenterSnapshotDT
 	out.EventsError = snap.EventsError
 	out.EventsTruncated = snap.EventsTruncated
 	for _, p := range snap.Pools {
-		out.Pools = append(out.Pools, KarpenterPoolDTO{
-			Name: p.Name, Ready: p.Ready, Reason: p.Reason, Message: p.Message, Weight: p.Weight,
-			CPULimit: p.CPULimit, CPUUsed: p.CPUUsed, MemLimit: p.MemLimit, MemUsed: p.MemUsed,
-			Nodes: p.Nodes,
-		})
+		out.Pools = append(out.Pools, toKarpenterPoolDTO(p))
 	}
 	for _, cl := range snap.Claims {
-		out.Claims = append(out.Claims, KarpenterClaimDTO{
-			Name: cl.Name, Pool: cl.Pool, NodeName: cl.NodeName, Ready: cl.Ready,
-			FailingType: cl.FailingType, FailingStatus: cl.FailingStatus, FailingReason: cl.FailingReason, FailingMessage: cl.FailingMessage,
-			Drifted: cl.Drifted, Consolidatable: cl.Consolidatable,
-			CapacityType: cl.CapacityType, InstanceType: cl.InstanceType, AgeSeconds: cl.AgeSeconds,
-		})
+		out.Claims = append(out.Claims, toKarpenterClaimDTO(cl))
 	}
 	for _, e := range snap.Events {
 		out.Events = append(out.Events, KarpenterEventDTO{
@@ -119,4 +116,22 @@ func (s *KarpenterService) GetKarpenterState(cluster string) KarpenterSnapshotDT
 		})
 	}
 	return out
+}
+
+func toKarpenterPoolDTO(p karpenter.NodePool) KarpenterPoolDTO {
+	return KarpenterPoolDTO{
+		Name: p.Name, Ready: p.Ready, Reason: p.Reason, Message: p.Message, Weight: p.Weight,
+		CPULimit: p.CPULimit, CPUUsed: p.CPUUsed, MemLimit: p.MemLimit, MemUsed: p.MemUsed,
+		Nodes: p.Nodes, Rule: toRuleDTO(karpenter.PoolRule(p)),
+	}
+}
+
+func toKarpenterClaimDTO(cl karpenter.NodeClaim) KarpenterClaimDTO {
+	return KarpenterClaimDTO{
+		Name: cl.Name, Pool: cl.Pool, NodeName: cl.NodeName, Ready: cl.Ready,
+		FailingType: cl.FailingType, FailingStatus: cl.FailingStatus, FailingReason: cl.FailingReason, FailingMessage: cl.FailingMessage,
+		Drifted: cl.Drifted, Consolidatable: cl.Consolidatable,
+		CapacityType: cl.CapacityType, InstanceType: cl.InstanceType, AgeSeconds: cl.AgeSeconds,
+		Created: cl.Created.Unix(), Rule: toRuleDTO(karpenter.ClaimRule(cl)),
+	}
 }
