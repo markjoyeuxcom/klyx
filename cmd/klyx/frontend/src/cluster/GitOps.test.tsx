@@ -447,6 +447,75 @@ describe("GitOps workspace template (redesign)", () => {
     expect(screen.queryByText("src-cleared")).toBeNull(); // count and rows agree
   });
 
+  // The inspectors' headlines are the rule too (Codex 2b-2 #1): a fixture
+  // whose native fields contradict its rule shows the rule's word and tone.
+  const headline = (label: string) => inspector().getByText(label).parentElement as HTMLElement;
+  const detail = (over: Partial<import("../store/fleet").ResourceDetailDTO> = {}) => ({ kind: "Kustomization", namespace: "flux-system", name: "a",
+    suspended: false, appliedRevision: "main@a", attemptedRevision: "main@a", applyFailed: false, conditions: [], inventory: [], ...over });
+  const seedOpen = (r: FluxResourceDTO, d = detail({ name: r.name })) =>
+    useFleet.setState((st) => ({ gitops: { ...st.gitops, cluster: "x", resources: [r], sources: [], loading: false, expandedKey: `Kustomization/flux-system/${r.name}`, detail: d, detailCluster: "x", watchError: null } }));
+
+  it("the reconciliation inspector's verdict, reason and message follow the rule, not native ready", () => {
+    seedOpen(res({ name: "a", ready: "Ready", reason: "Flagged", message: "flagged by the backend", rule: { included: true, role: "fault", label: "Flagged by backend" } }));
+    const { unmount } = render(<GitOps cluster="x" />);
+    expect(headline("Flagged by backend").style.color).toBe("var(--color-text-danger)");
+    expect(inspector().getByText(/^Flagged ·/)).toBeTruthy(); // reason gated by rule.included
+    expect(inspector().getByText("flagged by the backend").style.color).toBe("var(--color-text-danger)");
+    unmount();
+    seedOpen(res({ name: "a", ready: "Failed", reason: "BuildFailed", message: "kustomize build failed", rule: { included: false, role: "ok", label: "Ready" } }));
+    render(<GitOps cluster="x" />);
+    expect(headline("Ready").style.color).toBe("var(--color-text-success)");
+    expect(inspector().queryByText(/BuildFailed/)).toBeNull();
+    expect(inspector().queryByText("kustomize build failed")).toBeNull();
+  });
+
+  it("Ready=Unknown with a Progressing reason reads Progressing in the row and the inspector alike", () => {
+    seedOpen(res({ name: "a", ready: "Unknown", reason: "Progressing", message: "Reconciliation in progress" }));
+    render(<GitOps cluster="x" />);
+    const row = screen.getAllByText("a").map((e) => e.closest(".lens-row")).find(Boolean) as HTMLElement;
+    expect(row.textContent).toContain("Progressing");
+    expect(headline("Progressing").style.color).toBe("var(--color-text-tertiary)");
+    expect(inspector().queryByText("Unknown")).toBeNull();
+  });
+
+  it("a generation lag stays evidence under the rule's verdict", () => {
+    seedOpen(res({ name: "a", ready: "Ready", stale: true, generation: 5, observedGeneration: 4, message: "Applied revision main@a" }));
+    render(<GitOps cluster="x" />);
+    expect(headline("Syncing…").style.color).toBe("var(--color-text-tertiary)"); // the ratified grey Syncing…
+    expect(inspector().getByText(/generation 5 not yet observed \(observed 4\)/)).toBeTruthy();
+    expect(inspector().getByText(/Last observed \(generation 4\)/)).toBeTruthy();
+  });
+
+  it("the bound source block follows the source's rule, not its native ready", () => {
+    seedOpen(res({ name: "a" }), detail({ source: src({ name: "repo", ready: "Ready", reason: "Flagged", rule: { included: true, role: "degraded", label: "Flagged by backend" } }) }));
+    const { unmount } = render(<GitOps cluster="x" />);
+    const flagged = inspector().getByText(/source not ready: Flagged/) as HTMLElement;
+    expect(flagged.style.color).toBe("var(--color-text-warning)");
+    expect(inspector().getByRole("img", { name: "Flagged by backend" })).toBeTruthy();
+    unmount();
+    seedOpen(res({ name: "a" }), detail({ source: src({ name: "repo", ready: "Failed", reason: "GitOperationFailed", rule: { included: false, role: "ok", label: "Ready" } }) }));
+    render(<GitOps cluster="x" />);
+    expect(inspector().queryByText(/source not ready/)).toBeNull();
+    expect(inspector().getByRole("img", { name: "Ready" })).toBeTruthy();
+  });
+
+  it("the source inspector's verdict, tone and reason follow the rule", () => {
+    seedRows([], { sources: [
+      src({ name: "src-flagged", ready: "Ready", reason: "Flagged", message: "flagged by the backend", rule: { included: true, role: "degraded", label: "Flagged by backend" } }),
+      src({ name: "src-cleared", ready: "Failed", reason: "GitOperationFailed", message: "auth required", rule: { included: false, role: "ok", label: "Ready" } }),
+    ] });
+    render(<GitOps cluster="x" />);
+    openSources();
+    fireEvent.click(screen.getByText("src-flagged"));
+    expect(headline("Flagged by backend").style.color).toBe("var(--color-text-warning)");
+    expect(inspector().getByText(/^Flagged ·/)).toBeTruthy();
+    expect(inspector().getByText("flagged by the backend").style.color).toBe("var(--color-text-warning)");
+    fireEvent.click(screen.getByText("src-cleared"));
+    expect(headline("Ready").style.color).toBe("var(--color-text-success)");
+    expect(inspector().queryByText(/GitOperationFailed/)).toBeNull();
+    expect(inspector().queryByText("auth required")).toBeNull();
+  });
+
   it("auto-selects the first failing resource once, from a fresh read only", () => {
     seedRows([res({ name: "ok" }), res({ name: "bad", ready: "Failed" })]);
     render(<GitOps cluster="x" />);

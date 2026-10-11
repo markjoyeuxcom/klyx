@@ -473,6 +473,38 @@ describe("ArgoView Codex rework (Argo review)", () => {
   const appSet = { namespace: "argocd", name: "tenant-apps", generators: ["list"], templateName: "", project: "platform", repoURL: "", path: "", targetRevision: "main", destNamespace: "", generatedApps: 0, generatedNames: ["team-a-apps"], healthy: true, conditions: [] };
   beforeEach(() => { vi.clearAllMocks(); useFleet.getState().clearArgo(); });
 
+  it("linked apps light by the evaluated role, never by inclusion - Project and ApplicationSet inspectors (Codex 2b-2 #2)", () => {
+    const linked = ruledApps([
+      { ...healthy, name: "rolling", project: "platform", applicationSet: "tenant-apps", syncStatus: "Synced", healthStatus: "Progressing" }, // excluded, progressing
+      { ...healthy, name: "parked", project: "platform", applicationSet: "tenant-apps", syncStatus: "Synced", healthStatus: "Suspended" }, // excluded, paused
+      { ...healthy, name: "drifting", project: "platform", applicationSet: "tenant-apps", syncStatus: "OutOfSync", healthStatus: "Healthy" }, // included, degraded
+      { ...healthy, name: "steady", project: "platform", applicationSet: "tenant-apps" },
+    ]);
+    expect(linked.map((a) => [a.rule.included, a.rule.role])).toEqual([[false, "progressing"], [false, "paused"], [true, "degraded"], [false, "ok"]]);
+    const lampOf = (name: string) => {
+      const row = inspector().getAllByTestId("linked-app").find((r) => r.textContent?.includes(name)) as HTMLElement;
+      return within(row).getByRole("img").outerHTML;
+    };
+    const check = () => {
+      expect(lampOf("rolling")).not.toContain("color-text-success");
+      expect(lampOf("parked")).toContain("solid var(--color-text-tertiary)"); // paused ring, never green
+      expect(lampOf("drifting")).toContain("lamp-glow-warning"); // degraded amber, never fault red
+      expect(lampOf("drifting")).not.toContain("color-text-danger");
+      expect(lampOf("steady")).toContain("color-text-success");
+    };
+    const seedLinked = () => useFleet.setState((s) => ({ argo: { ...s.argo, cluster: "homelab-nelli", projects: [project], projectsAvailable: true, projectsLoading: false,
+      apps: linked, loading: false, error: null, applicationSets: ruledSets([appSet]), applicationSetsAvailable: true, applicationSetsLoading: false } }));
+    seedLinked();
+    const { unmount } = render(<ArgoView cluster="homelab-nelli" mode="projects" />);
+    select("platform");
+    check();
+    unmount();
+    seedLinked(); // leaving a mode resets the reads it owned
+    render(<ArgoView cluster="homelab-nelli" mode="applicationsets" />);
+    select("tenant-apps");
+    check();
+  });
+
   it("3a. a failed Application read never makes a project 'unused' or claim zero apps", () => {
     useFleet.setState((s) => ({ argo: { ...s.argo, cluster: "homelab-nelli", projects: [project], projectsAvailable: true, projectsLoading: false,
       apps: ruledApps([]), loading: false, available: false, message: "forbidden", error: "forbidden" } }));

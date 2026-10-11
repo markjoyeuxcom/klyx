@@ -15,7 +15,7 @@ import { WatchErrorBanner } from "../chrome/WatchErrorBanner";
 import { VirtualList, type VirtualListHandle } from "../chrome/VirtualList";
 import { IconAlertTriangle, IconGitBranch } from "@tabler/icons-react";
 import { wellKnownResourceRef, FLUX_KIND_GROUPS } from "./resourceRefs";
-import { StatusDot, readyColor, ellipsis, type Tone } from "../chrome/primitives";
+import { StatusDot, ellipsis, type Tone } from "../chrome/primitives";
 import { compactCount } from "../chrome/format";
 import { InspectorConditions, InspectorStatus } from "./ResourceInspector";
 import { VerdictLamp } from "../health/VerdictView";
@@ -614,9 +614,9 @@ function SourceInspector({ source, removed, usedBy, onClose, onOpenResource }: {
           </div>
         ) : (
           <div>
-            <InspectorStatus tone={fluxTone(s)} label={h.label} reason={!s.suspended && s.ready !== "Ready" ? s.reason || undefined : undefined} detail={shortRev(s.revision) || undefined} />
-            {s.message && !s.suspended && s.ready !== "Ready" && (
-              <div className="t-body" style={{ color: s.ready === "Failed" ? "var(--color-text-danger)" : "var(--color-text-warning)", overflowWrap: "anywhere", marginTop: -4 }}>{s.message}</div>
+            <InspectorStatus tone={roleTone(h.kind)} label={h.label} reason={included(s) ? s.reason || undefined : undefined} detail={shortRev(s.revision) || undefined} />
+            {s.message && included(s) && (
+              <div className="t-body" style={{ color: h.kind === "fault" ? "var(--color-text-danger)" : "var(--color-text-warning)", overflowWrap: "anywhere", marginTop: -4 }}>{s.message}</div>
             )}
           </div>
         )}
@@ -673,6 +673,10 @@ function FluxInspector({ cluster, resource, removed, isProtected, detail, deps, 
   onToggleSuspend: (r: FluxResourceDTO, suspended: boolean) => void;
 }) {
   const r = resource;
+  const role = roleOf(r);
+  // A generation lag is evidence about the last observation, shown under the
+  // verdict; it is never a verdict of its own.
+  const lagging = !r.suspended && r.stale;
   const live = !removed;
   const isSuspended = detail?.suspended ?? r.suspended;
   const manifestRef = wellKnownResourceRef(FLUX_KIND_GROUPS[r.kind] ?? "", r.kind);
@@ -693,25 +697,21 @@ function FluxInspector({ cluster, resource, removed, isProtected, detail, deps, 
     </div>
   ) : (
     <div>
-      {!r.suspended && r.stale ? (
-        <>
-          <InspectorStatus tone="muted" label="Syncing…" reason={`generation ${r.generation} not yet observed (observed ${r.observedGeneration})`} />
-          {r.message && (
-            <div className="t-body" style={{ color: "var(--color-text-secondary)", overflowWrap: "anywhere", marginTop: -4 }}>
-              <span className="t-section-label">Last observed (generation {r.observedGeneration}): </span>{r.ready}{r.reason ? ` · ${r.reason}` : ""} - {r.message}
-            </div>
-          )}
-        </>
-      ) : (
-        <InspectorStatus
-          tone={fluxTone(r)}
-          label={r.suspended ? "Suspended" : r.ready}
-          reason={included(r) ? r.reason || undefined : undefined}
-          detail={shortRev(r.revision) || undefined}
-        />
+      {/* The headline is the Go rule's verdict; the generation lag and the
+          controller's own words below it are secondary evidence. */}
+      <InspectorStatus
+        tone={roleTone(role.kind)}
+        label={role.label}
+        reason={lagging ? `generation ${r.generation} not yet observed (observed ${r.observedGeneration})` : included(r) ? r.reason || undefined : undefined}
+        detail={lagging ? undefined : shortRev(r.revision) || undefined}
+      />
+      {lagging && r.message && (
+        <div className="t-body" style={{ color: "var(--color-text-secondary)", overflowWrap: "anywhere", marginTop: -4 }}>
+          <span className="t-section-label">Last observed (generation {r.observedGeneration}): </span>{r.ready}{r.reason ? ` · ${r.reason}` : ""} - {r.message}
+        </div>
       )}
-      {r.message && included(r) && !r.stale && (
-        <div className="t-body" style={{ color: r.ready === "Failed" ? "var(--color-text-danger)" : "var(--color-text-warning)", overflowWrap: "anywhere", marginTop: -4 }}>{r.message}</div>
+      {r.message && included(r) && !lagging && (
+        <div className="t-body" style={{ color: role.kind === "fault" ? "var(--color-text-danger)" : "var(--color-text-warning)", overflowWrap: "anywhere", marginTop: -4 }}>{r.message}</div>
       )}
     </div>
   );
@@ -887,18 +887,18 @@ function SourceSection({ source }: { source: FluxSourceDTO }) {
   // A suspended source is paused, not failed: its Ready condition goes stale by
   // design, so it must not surface the red "source not ready" root-cause headline
   // (the status dot already shows paused). Suspended-is-not-a-fault invariant.
-  const ready = source.suspended || source.ready === "Ready";
-  const dot = source.suspended ? "var(--color-text-warning)" : (readyColor[source.ready] ?? "var(--color-text-tertiary)");
+  const ready = !included(source);
+  const role = roleOf(source);
   const label = sourceKindLabel[source.kind] ?? source.kind;
   return (
     <InspectorBlock title="Source">
       {!ready && (
-        <div style={{ color: "var(--color-text-danger)", fontWeight: 500, marginBottom: 4 }}>
+        <div style={{ color: role.kind === "fault" ? "var(--color-text-danger)" : "var(--color-text-warning)", fontWeight: 500, marginBottom: 4 }}>
           source not ready{source.reason ? `: ${source.reason}` : ""}
         </div>
       )}
       <div style={{ display: "grid", gridTemplateColumns: "9px minmax(0,1fr)", gap: 8, alignItems: "baseline" }}>
-        <StatusDot color={dot} />
+        <span role="img" aria-label={role.label} style={{ display: "inline-flex" }}><VerdictLamp health={role} size={7} /></span>
         <div style={{ minWidth: 0 }}>
           <span style={{ fontFamily: "var(--font-mono)" }}>{label} · {source.namespace}/{source.name}</span>
           {source.revision && (
@@ -931,10 +931,10 @@ function DependsOnSection({ deps, kind, resolve, blocked }: {
       )}
       {deps.map((d) => {
         const state = stateOf(d);
-        const dot = state ? (readyColor[state] ?? "var(--color-text-tertiary)") : "var(--color-text-tertiary)";
+        const dep = resolve.get(`${kind}/${d.namespace}/${d.name}`);
         return (
           <div key={`${d.namespace}/${d.name}`} style={{ display: "grid", gridTemplateColumns: "9px minmax(0,1fr) auto", gap: 8, alignItems: "baseline" }}>
-            <StatusDot color={dot} />
+            {dep ? <span role="img" aria-label={dep.rule.label} style={{ display: "inline-flex" }}><VerdictLamp health={roleOf(dep)} size={7} /></span> : <StatusDot color="var(--color-text-tertiary)" />}
             <span style={{ fontFamily: "var(--font-mono)", ...ellipsis }}>{d.namespace}/{d.name}</span>
             <span style={{ color: "var(--color-text-tertiary)", fontSize: 11 }}>{state ? state.toLowerCase() : "not found"}</span>
           </div>
@@ -977,13 +977,13 @@ function EventsSection({ events }: { events: EventRowDTO[] }) {
   );
 }
 
-// fluxTone maps readyColor semantics onto the verdict tone: Failed=danger,
-// Ready=success, Reconciling=info, suspended=warning (an intended pause).
-function fluxTone(r: { ready: string; suspended: boolean }): Tone {
-  if (r.suspended) return "muted"; // an intended pause, not a fault
-  if (r.ready === "Failed") return "danger";
-  if (r.ready === "Ready") return "success";
-  if (r.ready === "Reconciling") return "info";
+// roleTone maps the Go rule's presentation role onto the verdict tone, as
+// every other lens does. Progressing stays grey: the ratified staleness
+// language is a grey "Syncing…", and paused is an intended pause, not a fault.
+function roleTone(k: string): Tone {
+  if (k === "fault") return "danger";
+  if (k === "degraded") return "warning";
+  if (k === "ok") return "success";
   return "muted";
 }
 

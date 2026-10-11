@@ -1011,13 +1011,18 @@ function LinkedApps({ apps }: { apps: ArgoAppDTO[] }) {
   if (apps.length === 0) return <div style={mutedLine}>no linked Applications loaded</div>;
   return (
     <div style={{ display: "grid", gap: 4 }}>
-      {apps.map((a) => (
-        <div key={keyOf(a)} style={{ display: "grid", gridTemplateColumns: "8px minmax(0,1fr) 82px", gap: 7, alignItems: "center" }}>
-          <span style={{ width: 6, height: 6, borderRadius: "50%", background: a.rule.included ? "var(--color-text-danger)" : "var(--color-text-success)" }} />
-          <span style={{ ...monoLine, ...ellipsis }} title={keyOf(a)}>{a.name}</span>
-          <span style={{ color: a.rule.included ? "var(--color-text-warning)" : "var(--color-text-tertiary)", fontSize: 10 }}>{a.syncStatus}</span>
-        </div>
-      ))}
+      {apps.map((a) => {
+        // The lamp is the evaluated presentation role, never inclusion:
+        // Progressing and Suspended are excluded yet not healthy-green.
+        const role = roleOf(a);
+        return (
+          <div key={keyOf(a)} data-testid="linked-app" style={{ display: "grid", gridTemplateColumns: "8px minmax(0,1fr) 82px", gap: 7, alignItems: "center" }}>
+            <RowLamp role={role} />
+            <span style={{ ...monoLine, ...ellipsis }} title={keyOf(a)}>{a.name}</span>
+            <span title={role.label} style={{ color: ROLE_COLOR[role.kind] ?? "var(--color-text-tertiary)", fontSize: 10 }}>{a.syncStatus}</span>
+          </div>
+        );
+      })}
     </div>
   );
 }
