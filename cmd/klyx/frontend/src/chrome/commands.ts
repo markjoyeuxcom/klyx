@@ -43,6 +43,10 @@ export type Command = {
   guard?: () => string | null;
   // Searchable aliases (registry keywords), matched like hints.
   keywords?: string[];
+  // Every eligible cluster's option, whether or not activation opens a step:
+  // an open Choose cluster step rebuilds from these when eligibility shrinks
+  // to one (the parent then runs directly) instead of emptying.
+  choices?: Command[];
 };
 
 function openSection(s: FleetStore, section: ClusterSection, targetCluster?: string | null): void {
@@ -554,13 +558,13 @@ function destinationCommands(s: FleetStore, g: NavGroup, d: Destination, here: s
       const others = eligible.filter((c) => c.name !== here);
       const why = mine && mine.state !== "present" ? `${CAP_STATE_TEXT[mine.state]} on ${here}` : `not available on ${here}`;
       out.push(others.length > 0
-        ? { id, group, title: d.label, hint: `${base} · ${why} - choose another cluster`, run: () => {}, next: chooser(others), keywords: d.keywords }
+        ? { id, group, title: d.label, hint: `${base} · ${why} - choose another cluster`, run: () => {}, next: chooser(others), keywords: d.keywords, choices: chooser(others)?.options }
         : { id, group, title: d.label, hint: base, run: () => {}, disabled: why, keywords: d.keywords });
     }
   } else if (eligible.length === 1) {
-    out.push({ id, group, title: d.label, hint: [base, eligible[0].name].join(" · "), run: open(eligible[0].name), guard: live(eligible[0].name), keywords: d.keywords });
+    out.push({ id, group, title: d.label, hint: [base, eligible[0].name].join(" · "), run: open(eligible[0].name), guard: live(eligible[0].name), keywords: d.keywords, choices: chooser(eligible)?.options });
   } else if (eligible.length > 1) {
-    out.push({ id, group, title: d.label, hint: `${base} · ${eligible.length} clusters`, run: () => {}, next: chooser(eligible), keywords: d.keywords });
+    out.push({ id, group, title: d.label, hint: `${base} · ${eligible.length} clusters`, run: () => {}, next: chooser(eligible), keywords: d.keywords, choices: chooser(eligible)?.options });
   } else {
     const anyConnected = s.clusters.some(connected);
     const connecting = s.clusters.some((c) => c.state === "Connecting");

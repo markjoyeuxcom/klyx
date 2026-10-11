@@ -251,7 +251,7 @@ describe("CommandPalette revalidates while open (Codex 7c review)", () => {
     expect(flux.guard?.()).toBe("dev is no longer in the fleet");
   });
 
-  it("Choose cluster follows membership: a removed option disappears; none left says so", () => {
+  it("Choose cluster follows membership 2 -> 1 -> 0 -> 2: one left stays a choice, none says so", () => {
     useFleet.setState({ clusters: [dev, prd], route: { name: "fleet" } });
     const { getByTestId, queryByTestId, getByText } = render(<CommandPalette />);
     pressCmdK();
@@ -261,8 +261,13 @@ describe("CommandPalette revalidates while open (Codex 7c review)", () => {
     expect(getByTestId("command-row-view:events@prd")).toBeTruthy();
     act(() => { useFleet.setState({ clusters: [dev] }); });
     expect(queryByTestId("command-row-view:events@prd")).toBeNull();
+    expect(getByTestId("command-row-view:events@dev")).toBeTruthy();
+    expect(useFleet.getState().route).toEqual({ name: "fleet" }); // never auto-navigated
     act(() => { useFleet.setState({ clusters: [] }); });
     expect(getByText("No eligible cluster remains for this view.")).toBeTruthy();
+    act(() => { useFleet.setState({ clusters: [dev, prd] }); });
+    expect(getByTestId("command-row-view:events@dev")).toBeTruthy();
+    expect(getByTestId("command-row-view:events@prd")).toBeTruthy();
   });
 
   it("the Results button works from the keyboard and restores the query", () => {

@@ -175,8 +175,10 @@ export function CommandPalette() {
       setCommands(next);
       setStep((cur) => {
         if (!cur) return cur;
+        // The step keeps the parent's current eligible clusters - one left is
+        // still a choice (never auto-navigated), none says so.
         const parent = next.find((c) => c.id === cur.parentId);
-        return parent?.next ? { ...cur, options: parent.next.options } : { ...cur, options: [] };
+        return { ...cur, options: parent?.next?.options ?? parent?.choices ?? [] };
       });
     });
   }, [open]);
