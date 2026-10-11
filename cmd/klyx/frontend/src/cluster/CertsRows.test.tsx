@@ -12,7 +12,7 @@ vi.mock("../bridge/ai", () => ({
   aiEgressAllowed: vi.fn(async () => false),
   explainCertificate: vi.fn(),
 }));
-vi.mock("../bridge/gateway", () => ({ getGatewayTopology: vi.fn(async () => {}), listGateways: vi.fn(async () => {}), getRouteMetrics: vi.fn(async () => {}), abandonRouteMetrics: vi.fn() }));
+vi.mock("../bridge/gateway", () => ({ getGatewayTopology: vi.fn(async () => {}), getRouteMetrics: vi.fn(async () => {}), abandonRouteMetrics: vi.fn() }));
 import { getCertificateChain } from "../bridge/certmanager";
 import { CertsView } from "./CertsView";
 import { GatewayTopology } from "./GatewayTopology";
@@ -76,7 +76,7 @@ function seedFleet(secret = "web-tls") {
   useFleet.setState({
     clusters: [clusterDTO],
     route: { name: "cluster", cluster: "x", section: "certs" },
-    network: { cluster: "x", served: true, gateways: [], listLoading: false, listError: null, selected: gateway, topology: topo(secret), topologyLoading: false, topologyError: null, topologyAt: Date.now(), routesAt: Date.now(), selectedRoute: "apps/web", routeMetrics: {}, routeMetricsStatus: null, routeMetricsStale: false },
+    network: { cluster: "x", selected: gateway, topology: topo(secret), topologyLoading: false, topologyError: null, topologyAt: Date.now(), routesAt: Date.now(), selectedRoute: "apps/web", routeMetrics: {}, routeMetricsStatus: null, routeMetricsStale: false },
   });
 }
 

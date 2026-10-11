@@ -143,6 +143,8 @@ type TopologyDTO struct {
 	RoutesError    string `json:"routesError,omitempty"`
 }
 type GatewayRefDTO struct {
+	UID        string              `json:"uid,omitempty"` // identity (1c slice 3 §2a)
+	GVR        string              `json:"gvr,omitempty"`
 	Namespace  string              `json:"namespace"`
 	Name       string              `json:"name"`
 	ClassName  string              `json:"className"`

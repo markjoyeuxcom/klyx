@@ -138,9 +138,16 @@ func (s *GatewayService) GetRouteMetrics(cluster string, routeKeys []string) Rou
 }
 
 func toGatewayRefDTO(r gwapi.GatewayRef) GatewayRefDTO {
+	g := gatewayRefFields(r)
+	g.Rule = toRuleDTO(gwapi.GatewayRule(r.AcceptedCond, r.ProgrammedCond, r.Generation))
+	return g
+}
+
+// gatewayRefFields is the pure field conversion: no rule (the rows converter
+// copies the capture's evaluation, slice 3 §2a).
+func gatewayRefFields(r gwapi.GatewayRef) GatewayRefDTO {
 	g := GatewayRefDTO{Namespace: r.Namespace, Name: r.Name, ClassName: r.ClassName, Accepted: r.Accepted, Programmed: r.Programmed, Stale: r.Stale, Generation: r.Generation, ObservedGeneration: r.ObservedGeneration,
-		AcceptedCond: condDTO(r.AcceptedCond), ProgrammedCond: condDTO(r.ProgrammedCond),
-		Rule: toRuleDTO(gwapi.GatewayRule(r.AcceptedCond, r.ProgrammedCond, r.Generation))}
+		AcceptedCond: condDTO(r.AcceptedCond), ProgrammedCond: condDTO(r.ProgrammedCond)}
 	for _, a := range r.Addresses {
 		g.Addresses = append(g.Addresses, GatewayAddressDTO{Type: a.Type, Value: a.Value})
 	}

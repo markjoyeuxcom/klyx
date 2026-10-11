@@ -19,6 +19,7 @@ import (
 	"github.com/moomora/klyx/internal/externalsecrets"
 	"github.com/moomora/klyx/internal/gitops/argo"
 	"github.com/moomora/klyx/internal/gitops/flux"
+	"github.com/moomora/klyx/internal/gwapi"
 	"github.com/moomora/klyx/internal/health"
 	"github.com/moomora/klyx/internal/healthsrc"
 	"github.com/moomora/klyx/internal/karpenter"
@@ -251,6 +252,29 @@ func TestKarpenterRowsCarryTheCapture(t *testing.T) {
 		t.Fatalf("serialization: %s %v", b, err)
 	}
 	if _, err := rowsConverters[healthsrc.TaskKarpenter+"/nodeclaims"]("not rows", at); err == nil {
+		t.Fatal("a payload of the wrong type is an error, never an empty list")
+	}
+}
+
+// The Gateways part (slice 3 §5.6): the captured evaluation and identity.
+func TestGatewayRowsCarryTheCapture(t *testing.T) {
+	g := gwapi.GatewayRef{Namespace: "infra", Name: "eg", ClassName: "envoy", Generation: 1, Listeners: []gwapi.Listener{{Name: "https", Protocol: "HTTPS", Port: 443}}}
+	set := healthsrc.RowSet[gwapi.GatewayRef]{Rows: []healthsrc.Row[gwapi.GatewayRef]{
+		{Ref: healthsrc.RowRef{UID: "g1", GVR: "gateway.networking.k8s.io/v1/gateways", Namespace: "infra", Name: "eg", Generation: 6},
+			Eval: health.NativeEval{Included: true, Role: health.Fault, Label: "Flagged at capture"}, Data: g},
+	}}
+	out, err := rowsConverters[healthsrc.TaskGateway+"/gateways"](set, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := out.([]GatewayRefDTO)[0]
+	if d.Rule != (RuleDTO{Included: true, Role: "fault", Label: "Flagged at capture"}) || d.UID != "g1" || d.GVR != "gateway.networking.k8s.io/v1/gateways" || d.Generation != 6 || d.ClassName != "envoy" || len(d.Listeners) != 1 {
+		t.Fatalf("gateway row (the capture's generation, not the data's): %+v", d)
+	}
+	if b, err := json.Marshal(d); err != nil || !strings.Contains(string(b), `"uid":"g1"`) || !strings.Contains(string(b), `"generation":6`) {
+		t.Fatalf("serialization: %s %v", b, err)
+	}
+	if _, err := rowsConverters[healthsrc.TaskGateway+"/gateways"]("not rows", time.Now()); err == nil {
 		t.Fatal("a payload of the wrong type is an error, never an empty list")
 	}
 }

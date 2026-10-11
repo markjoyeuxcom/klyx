@@ -14,7 +14,7 @@ vi.mock("../../bindings/github.com/moomora/klyx/internal/appbridge/index.js", ()
     GetRouteMetrics: (...a: unknown[]) => metrics(...a),
   },
 }));
-import { abandonRouteMetrics, getGatewayTopology, getRouteMetrics, listGateways } from "./gateway";
+import { abandonRouteMetrics, getGatewayTopology, getRouteMetrics } from "./gateway";
 
 const eg = { namespace: "envoy-gateway-system", name: "eg" };
 const t = (marker: string): TopologyDTO => ({
@@ -62,24 +62,6 @@ describe("Gateway bridge (redesign step 6)", () => {
     expect(useFleet.getState().network.routeMetrics).toEqual({});
   });
 
-  it("a failed list call is an error, never an empty list or a stuck loader", async () => {
-    list.mockRejectedValueOnce(new Error("connection refused"));
-    await expect(listGateways("A")).rejects.toThrow();
-    const n = useFleet.getState().network;
-    expect(n.listLoading).toBe(false);
-    expect(n.listError).toMatch(/connection refused/);
-  });
-
-  it("a superseded list read is dropped", async () => {
-    const a = deferred<unknown>();
-    list.mockReturnValueOnce(a.promise).mockResolvedValueOnce({ gatewayAPIServed: true, gateways: [{ ...eg, className: "new", accepted: true, programmed: true }] });
-    const first = listGateways("A");
-    await listGateways("A");
-    a.resolve({ gatewayAPIServed: true, gateways: [] });
-    await first;
-    expect(useFleet.getState().network.gateways.map((g) => g.className)).toEqual(["new"]);
-  });
-
   it("re-opening the Gateway already shown keeps its topology (the fetch would not re-run)", async () => {
     topo.mockResolvedValueOnce(t("kept"));
     await getGatewayTopology("A", eg);
@@ -102,16 +84,6 @@ describe("Gateway bridge (redesign step 6)", () => {
     expect(n.topology?.gateway.className).toBe("good");
     expect(n.topologyError).toMatch(/forbidden/);
     expect(n.topologyAt).toBe(at);
-  });
-
-  it("an in-band list error keeps the last good Gateways", async () => {
-    list.mockResolvedValueOnce({ gatewayAPIServed: true, gateways: [{ ...eg, className: "kept", accepted: true, programmed: true }] });
-    await listGateways("A");
-    list.mockResolvedValueOnce({ gatewayAPIServed: true, gateways: [], error: "list gateways: forbidden" });
-    await listGateways("A");
-    const n = useFleet.getState().network;
-    expect(n.gateways.map((g) => g.className)).toEqual(["kept"]);
-    expect(n.listError).toMatch(/forbidden/);
   });
 
   it("route metrics: the latest poll wins over an older one resolving late", async () => {

@@ -10,6 +10,7 @@ import (
 	"github.com/moomora/klyx/internal/externalsecrets"
 	"github.com/moomora/klyx/internal/gitops/argo"
 	"github.com/moomora/klyx/internal/gitops/flux"
+	"github.com/moomora/klyx/internal/gwapi"
 	"github.com/moomora/klyx/internal/healthsrc"
 	"github.com/moomora/klyx/internal/karpenter"
 	"github.com/moomora/klyx/internal/observe"
@@ -147,6 +148,20 @@ var rowsConverters = map[string]rowsConverter{
 		out := make([]KarpenterClaimDTO, 0, len(set.Rows))
 		for _, r := range set.Rows {
 			dto := karpenterClaimFields(r.Data)
+			dto.Rule = toRuleDTO(r.Eval)
+			dto.UID, dto.GVR, dto.Generation = r.Ref.UID, r.Ref.GVR, r.Ref.Generation
+			out = append(out, dto)
+		}
+		return out, nil
+	},
+	healthsrc.TaskGateway + "/gateways": func(rows any, _ time.Time) (any, error) {
+		set, err := rowSetOf[gwapi.GatewayRef](rows)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]GatewayRefDTO, 0, len(set.Rows))
+		for _, r := range set.Rows {
+			dto := gatewayRefFields(r.Data)
 			dto.Rule = toRuleDTO(r.Eval)
 			dto.UID, dto.GVR, dto.Generation = r.Ref.UID, r.Ref.GVR, r.Ref.Generation
 			out = append(out, dto)

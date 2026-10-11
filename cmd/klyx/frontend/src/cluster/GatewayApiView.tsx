@@ -2,10 +2,11 @@ import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { IconRoute } from "@tabler/icons-react";
 import { useFleet } from "../store/fleet";
 import type { GatewayRefDTO } from "../store/fleet";
-import { listGateways } from "../bridge/gateway";
+import { useGatewayRows } from "../health/useGatewayRows";
 import { EmptyState } from "../chrome/EmptyState";
 import { SkeletonRows } from "../chrome/SkeletonRows";
-import { UpdatedAt, useReceivedAt } from "../chrome/Age";
+import { WatchErrorBanner } from "../chrome/WatchErrorBanner";
+import { clock, coverageGaps, kindEvidence, lastGoodAt } from "../layout/coverage";
 import { VirtualList, type VirtualListHandle } from "../chrome/VirtualList";
 import { useListKeys } from "../chrome/useListKeys";
 import { VerdictLamp } from "../health/VerdictView";
@@ -49,7 +50,9 @@ function Lamp({ role }: { role: Role }) {
 }
 
 function GatewayList({ cluster }: { cluster: string }) {
-  const net = useFleet((s) => s.network);
+  // The Gateways are the Observer's shared rows (1c slice 3 §5.6) - live, not
+  // a snapshot; the topology stays a fetch.
+  const rows = useGatewayRows(cluster);
   const openGateway = useFleet((s) => s.openGateway);
   const [mode, setMode] = useState<Mode>("all");
   const [query, setQuery] = useState("");
@@ -59,22 +62,28 @@ function GatewayList({ cluster }: { cluster: string }) {
   const searchRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<VirtualListHandle>(null);
 
-  const refresh = () => void listGateways(cluster).catch(() => { /* rendered from the store */ });
-  useEffect(refresh, [cluster]);
-
-  const mine = net.cluster === cluster;
-  const loading = !mine || net.listLoading;
-  const error = mine ? net.listError ?? null : null;
-  const served = mine && net.served;
-  const gateways = useMemo(() => (mine ? net.gateways : []), [mine, net.gateways]);
-  const receivedAt = useReceivedAt(mine && !net.listLoading && !error ? net.gateways : null);
+  // Evidence is the Gateway kind's own coverage: only a confirmed absence is
+  // "not served"; a stale read keeps its last good rows, qualified.
+  const ev = kindEvidence(!rows.loading, rows.coverage, "Gateway", rows.watchError);
+  const absent = rows.coverage.find((k) => k.kind === "Gateway")?.coverage === "absent";
+  const error = rows.watchError;
+  const gateways = rows.gateways;
+  const rowsRefreshing = rows.rowsState.refreshing;
+  const rowsAsOf = rows.rowsState.evaluatedAt ? clock(rows.rowsState.evaluatedAt) : "the last read";
+  const asOf = rowsRefreshing ? ` (as of ${rowsAsOf})` : "";
+  const lastGood = lastGoodAt(rows.coverage, ["Gateway"]);
+  const discoveryGap = coverageGaps(rows.coverage);
+  const mark = ev === "complete" ? "" : ev === "stale" ? "*" : "+";
 
   const ordered = useMemo(() => [...gateways].sort((a, b) =>
     RANK[gatewayRole(a).kind] - RANK[gatewayRole(b).kind] || a.namespace.localeCompare(b.namespace) || a.name.localeCompare(b.name)), [gateways]);
-  const attention = gateways.filter((g) => g.rule.included).length;
+  // global: the count selector's (slice 3 §4a); row-scoped: the breakdown
+  const total = rows.partCounts?.total ?? gateways.length;
+  const attention = rows.partCounts?.included ?? gateways.filter((g) => g.rule.included).length;
   const notAccepted = gateways.filter((g) => gatewayRole(g).kind === "fault").length;
   const unverified = gateways.filter((g) => ["unknown", "progressing"].includes(gatewayRole(g).kind)).length;
-  const allOk = gateways.length > 0 && gateways.every((g) => gatewayRole(g).kind === "ok");
+  // "all programmed" is a claim about the present: a complete, current read
+  const allOk = gateways.length > 0 && ev === "complete" && !rows.rowsState.updating && !rowsRefreshing && gateways.every((g) => gatewayRole(g).kind === "ok");
   const q = query.trim().toLowerCase();
   const visible = useMemo(() => ordered.filter((g) => {
     const role = gatewayRole(g);
@@ -84,17 +93,24 @@ function GatewayList({ cluster }: { cluster: string }) {
     return [g.namespace, g.name, g.className, role.label, addressText(g.addresses), ...(g.listeners ?? []).map(listenerText)].some((v) => v.toLowerCase().includes(q));
   }), [ordered, mode, q]);
 
-  const selected = selKey ? gateways.find((g) => keyOf(g) === selKey) : undefined;
+  // A selection keeps its last row: removed only on a complete read,
+  // otherwise unverified (slice 3 §5a).
+  const live = selKey ? gateways.find((g) => keyOf(g) === selKey) : undefined;
+  const lastSel = useRef<GatewayRefDTO | null>(null);
+  if (live) lastSel.current = live;
+  const prior = lastSel.current && keyOf(lastSel.current) === selKey ? lastSel.current : null;
+  const selected = live ?? prior ?? undefined;
+  const gone: "removed" | "unverified" | null = !live && selected ? (ev === "complete" ? "removed" : "unverified") : null;
   const close = () => setSelKey(null);
 
   // First fresh read: select the first Gateway needing attention, once.
   const autoDone = useRef(false);
   useEffect(() => {
-    if (autoDone.current || loading || error || !served) return;
+    if (autoDone.current || ev !== "complete") return;
     autoDone.current = true;
     const first = visible[0];
     if (first && first.rule.included && selKey === null) { setSelKey(keyOf(first)); setCursorKey(keyOf(first)); }
-  }, [loading, error, served, visible, selKey]);
+  }, [ev, visible, selKey]);
   // Later operator filter edits win: one that hides the selection closes it.
   const filterEdits = useRef(0);
   useEffect(() => {
@@ -102,8 +118,6 @@ function GatewayList({ cluster }: { cluster: string }) {
     if (selected && !visible.includes(selected)) setSelKey(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode, q]);
-  // A Gateway gone from a complete list read closes; a failed read keeps it.
-  useEffect(() => { if (selKey && !selected && mine && !net.listLoading && !error) setSelKey(null); }, [selKey, selected, mine, net.listLoading, error]);
 
   const cursorIdx = cursorKey === null ? -1 : visible.findIndex((g) => keyOf(g) === cursorKey);
   useListKeys({
@@ -119,46 +133,48 @@ function GatewayList({ cluster }: { cluster: string }) {
   const show = (id: string) => fitted.visible.has(id);
   const gridStyle = { gridTemplateColumns: fitted.template };
 
+  // a confirmed absence is complete evidence of none: the empty state names it
   let state: DatasetState = "ready";
-  if (error && gateways.length === 0) state = "unreadable";
-  else if (loading && gateways.length === 0) state = "loading";
+  if (ev === "failed" && gateways.length === 0) state = "unreadable";
+  else if (ev === "pending" && gateways.length === 0) state = "loading";
   else if (gateways.length === 0) state = "empty";
   else if (visible.length === 0) state = "no-match";
 
   const icon = <IconRoute size={28} stroke={1.2} />;
   const clearFilters = () => { setMode("all"); setQuery(""); };
   const stateView = state === "loading" ? <SkeletonRows rows={5} label="reading Gateways" />
-    : state === "unreadable" ? <EmptyState icon={icon} title="Could not list Gateways." hint={error ?? undefined} action={{ label: "Retry", onClick: refresh }} />
-    : state === "empty" && !served ? <EmptyState icon={icon} title="Gateway API is not installed on this cluster." hint="Klyx found no gateway.networking.k8s.io API here." />
+    : state === "unreadable" ? <EmptyState icon={icon} title="Could not list Gateways." hint={error ?? undefined} />
+    : state === "empty" && absent ? <EmptyState icon={icon} title="Gateway API is not installed on this cluster." hint="Klyx observes no gateway.networking.k8s.io Gateways API here." />
+    : state === "empty" && rowsRefreshing && total > 0 ? <EmptyState icon={icon} title={`No Gateways as of ${rowsAsOf}.`} hint={`Refreshing - the cluster summary now counts ${total}.`} />
+    : state === "empty" && ev === "stale" ? <EmptyState icon={icon} title="No Gateways in the last good read." hint={`The read is failing now${lastGood ? ` - last good ${clock(lastGood)}` : ""}: ${error ?? "unverified"}.`} />
     : state === "empty" ? <EmptyState icon={icon} title="No Gateways on this cluster." hint="Gateway API is served, but no Gateway objects exist." />
-    : <EmptyState icon={icon} title="No Gateways match the current filters." hint={`${gateways.length} Gateways on this cluster.`} action={{ label: "Clear filters", onClick: clearFilters }} />;
+    : <EmptyState icon={icon} title="No Gateways match the current filters." hint={`${gateways.length} Gateways on this cluster${asOf}.`} action={{ label: "Clear filters", onClick: clearFilters }} />;
+
+  // Notices stack: each is its own evidence, none hides another.
+  const notices: React.ReactNode[] = [];
+  if (error && gateways.length > 0) notices.push(<WatchErrorBanner key="read" tool="Gateways" failure={`read failed - showing the last good list${lastGood ? ` from ${clock(lastGood)}` : ""}`} error={error} />);
+  if (rowsRefreshing) notices.push(<div key="a4" role="status" data-testid="rows-refreshing" className="t-secondary" style={{ padding: "4px 0" }}>Rows as of {rowsAsOf} - refreshing; the totals are the cluster summary's.{rows.rowsState.refreshError ? ` Last re-read failed: ${rows.rowsState.refreshError}` : ""}</div>);
+  if (discoveryGap) notices.push(<div key="gap" role="status" data-testid="discovery-gap" className="t-secondary" style={{ padding: "4px 0", color: "var(--color-text-warning)", overflowWrap: "anywhere" }}>Discovery re-check failing - {discoveryGap}. A capability gap only; the rows keep their own state.</div>);
 
   return (
     <LensLayout
       label="Gateways"
       title="Gateways"
-      summary={state === "loading" || state === "unreadable" || !served ? null : (
+      summary={state === "loading" || state === "unreadable" || absent ? null : (
         <>
-          <span className="t-number" style={{ color: "var(--color-text-secondary)" }}>{gateways.length}{error ? "*" : ""}</span>
-          <span className="t-secondary">Gateway{gateways.length === 1 ? "" : "s"}</span>
-          {attention > 0 && <span className="t-status" style={{ color: notAccepted > 0 ? "var(--color-text-danger)" : "var(--color-text-warning)" }}>{[notAccepted ? `▲ ${notAccepted}${error ? "*" : ""} not accepted` : "", attention > notAccepted ? `${attention - notAccepted}${error ? "*" : ""} need${attention - notAccepted === 1 ? "s" : ""} attention` : ""].filter(Boolean).join(" · ")}</span>}
-          {unverified > 0 && <span className="t-secondary">{unverified}{error ? "*" : ""} unverified</span>}
-          {allOk && <span className="t-secondary">all programmed{error ? " at the last read" : ""}</span>}
+          <span className="t-number" style={{ color: "var(--color-text-secondary)" }}>{total}{mark}</span>
+          <span className="t-secondary">Gateway{total === 1 ? "" : "s"}</span>
+          {attention > 0 && <span className="t-status" data-testid="gw-attention" style={{ color: notAccepted > 0 ? "var(--color-text-danger)" : "var(--color-text-warning)" }}>{rowsRefreshing ? `${attention} need attention` : [notAccepted ? `▲ ${notAccepted}${mark} not accepted` : "", attention > notAccepted ? `${attention - notAccepted}${mark} need${attention - notAccepted === 1 ? "s" : ""} attention` : ""].filter(Boolean).join(" · ")}</span>}
+          {unverified > 0 && <span className="t-secondary">{unverified}{mark} unverified{asOf}</span>}
+          {allOk && <span className="t-secondary">all programmed</span>}
         </>
       )}
-      headerEnd={
-        <>
-          <span className="t-secondary" title="Read on demand - not a live watch.">snapshot</span>
-          <UpdatedAt at={receivedAt} />
-          <button className="l-btn" onClick={refresh} disabled={mine && net.listLoading}>{mine && net.listLoading ? "Reading…" : "Refresh"}</button>
-        </>
-      }
       controls={gateways.length > 0 ? (
         <>
           {(
             <>
               <div role="group" aria-label="Gateway filter" style={{ display: "inline-flex", gap: 4 }}>
-                <button className="l-chip" aria-pressed={mode === "all"} onClick={() => setMode("all")}>All {gateways.length}</button>
+                <button className="l-chip" aria-pressed={mode === "all"} onClick={() => setMode("all")}>All {total}</button>
                 <button className="l-chip" aria-pressed={mode === "attention"} onClick={() => setMode("attention")}>Needs attention {attention > 0 && <span style={{ color: notAccepted > 0 ? "var(--color-text-danger)" : "var(--color-text-warning)" }}>{attention}</span>}</button>
                 <button className="l-chip" aria-pressed={mode === "programmed"} onClick={() => setMode("programmed")}>Programmed</button>
               </div>
@@ -171,11 +187,7 @@ function GatewayList({ cluster }: { cluster: string }) {
           )}
         </>
       ) : undefined}
-      notice={error && gateways.length > 0 ? (
-        <div role="status" className="t-body" style={{ color: "var(--color-text-warning)", padding: "4px 0", overflowWrap: "anywhere" }}>
-          <span className="t-status">Read failed - showing the last good list.</span> {error}
-        </div>
-      ) : undefined}
+      notice={notices.length > 0 ? <div style={{ display: "grid", gap: 2 }}>{notices}</div> : undefined}
       state={state}
       stateView={stateView}
       body={
@@ -207,15 +219,15 @@ function GatewayList({ cluster }: { cluster: string }) {
         </LensTable>
       }
       footer={<span className="t-legend">j k navigate · ↵ inspect · double-click opens topology · / search</span>}
-      footerEnd={<span className="t-secondary">{visible.length !== gateways.length ? `${visible.length} of ${gateways.length} · ` : ""}needs attention first</span>}
-      inspector={selected ? <GatewayInspector key={selKey} g={selected} stale={!!error} onOpen={() => openGateway(selected.namespace, selected.name)} onClose={close} /> : undefined}
+      footerEnd={<span className="t-secondary">{visible.length !== gateways.length ? `${visible.length} of ${gateways.length}${mark} · ` : ""}needs attention first{asOf}</span>}
+      inspector={selected ? <GatewayInspector key={selKey} g={selected} stale={ev === "stale"} gone={gone} onOpen={() => openGateway(selected.namespace, selected.name)} onClose={close} /> : undefined}
       inspectorLabel="Gateway details"
       onCloseInspector={close}
     />
   );
 }
 
-function GatewayInspector({ g, stale, onOpen, onClose }: { g: GatewayRefDTO; stale: boolean; onOpen: () => void; onClose: () => void }) {
+function GatewayInspector({ g, stale, gone, onOpen, onClose }: { g: GatewayRefDTO; stale: boolean; gone: "removed" | "unverified" | null; onOpen: () => void; onClose: () => void }) {
   const role = gatewayRole(g);
   const open = (ref: typeof REFS.gateway | typeof REFS.gatewayClass, ns: string, name: string) => {
     const nav = useFleet.getState();
@@ -227,14 +239,22 @@ function GatewayInspector({ g, stale, onOpen, onClose }: { g: GatewayRefDTO; sta
   return (
     <div data-testid="gateway-panel" style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
       <InspectorLayout kind="Gateway" namespace={g.namespace} name={g.name} meta={g.className ? `class ${g.className}` : "no class"} onClose={onClose}
-        verdict={
+        verdict={gone === "removed" ? (
+          <div role="status" className="t-body" style={{ padding: "8px 10px", borderRadius: 4, background: "var(--color-background-secondary)", boxShadow: "inset 0 0 0 1px var(--color-border-secondary)" }}>
+            <span className="t-status">Gateway removed.</span> It is no longer in the current read. The details below are its last evidence.
+          </div>
+        ) : gone === "unverified" ? (
+          <div role="status" data-testid="selection-unverified" className="t-body" style={{ padding: "8px 10px", borderRadius: 4, background: "var(--color-background-secondary)", boxShadow: "inset 0 0 0 1px var(--color-border-warning)" }}>
+            <span className="t-status">Not in the current Gateway read.</span> That read is incomplete, so this is unverified - it may still exist. The details below are its last observed row.
+          </div>
+        ) : (
           <div>
             <InspectorStatus tone={roleTone(role.kind)} label={role.label} />
             <div className="t-body" style={{ color: ROLE_TEXT[role.kind], overflowWrap: "anywhere", marginTop: -4 }}>{gatewayVerdictDetail(g)}</div>
             {stale && <div className="t-secondary" style={{ marginTop: 4 }}>From the last good list - the latest read failed.</div>}
           </div>
-        }
-        primary={{ label: "Open topology", onSelect: onOpen }}
+        )}
+        primary={gone === "removed" ? undefined : { label: "Open topology", onSelect: onOpen }}
         more={[
           { label: "Open Gateway object", onSelect: () => open(REFS.gateway, g.namespace, g.name) },
           ...(g.className ? [{ label: `Open GatewayClass ${g.className}`, onSelect: () => open(REFS.gatewayClass, "", g.className) }] : []),

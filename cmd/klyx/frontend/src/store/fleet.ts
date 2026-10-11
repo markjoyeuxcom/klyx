@@ -712,7 +712,7 @@ export type GatewayAddressDTO = { type: string; value: string };
 // CondDTO: one status condition as observed. status "" = absent (no
 // controller wrote it) - distinct from "False" (rejected) and "Unknown".
 export type CondDTO = { status: string; reason: string; message: string; observedGeneration: number };
-export type GatewayRefDTO = { rule: RuleDTO; namespace: string; name: string; className: string; addresses?: GatewayAddressDTO[]; listeners?: ListenerDTO[]; accepted: boolean; programmed: boolean; stale?: boolean; generation?: number; observedGeneration?: number; acceptedCond?: CondDTO; programmedCond?: CondDTO };
+export type GatewayRefDTO = { rule: RuleDTO; uid?: string; gvr?: string; namespace: string; name: string; className: string; addresses?: GatewayAddressDTO[]; listeners?: ListenerDTO[]; accepted: boolean; programmed: boolean; stale?: boolean; generation?: number; observedGeneration?: number; acceptedCond?: CondDTO; programmedCond?: CondDTO };
 export type GatewayListDTO = { gatewayAPIServed: boolean; gateways: GatewayRefDTO[]; error?: string };
 export type PolicyDetailDTO = { key: string; value: string };
 export type PolicyRefDTO = { kind: string; namespace: string; name: string; targetKind: string; targetNamespace: string; targetName: string; targetSectionName: string; summary: string; details: PolicyDetailDTO[]; inferred: boolean; match: string };
@@ -735,12 +735,10 @@ export type RouteMetricDTO = { rps: number | null; p50: number | null; p99: numb
 export type RouteMetricsStatusDTO = { available: boolean; message: string; updatedAt: string };
 export type RouteMetricsResultDTO = { status: RouteMetricsStatusDTO; routes: Record<string, RouteMetricDTO> };
 
+// The Gateways list is the health Observer's shared rows (health/
+// useGatewayRows, 1c slice 3 §5.6); this slice holds the topology fetch.
 export type NetworkSlice = {
   cluster: string | null;
-  served: boolean;
-  gateways: GatewayRefDTO[];
-  listLoading: boolean;
-  listError?: string | null; // list failed on a served API - distinct from "no Gateways"
   selected: GatewayRef | null;
   topology: TopologyDTO | null;
   topologyLoading: boolean;
@@ -1013,8 +1011,6 @@ type FleetState = {
   openGateway: (namespace: string, name: string) => void;
   closeGateway: () => void;
   network: NetworkSlice;
-  setGatewaysLoading: (cluster: string) => void;
-  setGateways: (cluster: string, l: GatewayListDTO) => void;
   setTopologyLoading: (cluster: string, ref: GatewayRef) => void;
   setTopology: (t: TopologyDTO) => void;
   setTopologyError: (error: string) => void;
@@ -1269,7 +1265,7 @@ export const useFleet = create<FleetState>((set) => ({
       if (s.route.name !== "cluster") return {};
       // Crossing clusters (palette jump straight to a topology): drop the
       // previous cluster's gateway list along with stamping the new owner.
-      const base = s.network.cluster === s.route.cluster ? s.network : { ...s.network, cluster: s.route.cluster, served: false, gateways: [], listLoading: false, listError: null };
+      const base = s.network.cluster === s.route.cluster ? s.network : { ...s.network, cluster: s.route.cluster };
       const route = { name: "cluster" as const, cluster: s.route.cluster, section: "gatewayApi" as const, gateway: { namespace, name } };
       // Re-opening the gateway already shown keeps its topology: the view's
       // fetch is keyed on the gateway identity and would not re-run, leaving
@@ -1284,27 +1280,14 @@ export const useFleet = create<FleetState>((set) => ({
     }),
   closeGateway: () =>
     set((s) => (s.route.name === "cluster" ? { route: { name: "cluster", cluster: s.route.cluster, section: "gatewayApi" } } : {})),
-  network: { cluster: null, served: false, gateways: [], listLoading: false, listError: null, selected: null, topology: null, topologyLoading: false, selectedRoute: null, routeMetrics: {}, routeMetricsStatus: null, routeMetricsStale: false },
-  setGatewaysLoading: (cluster) => set((s) => {
-    if (s.network.cluster === cluster) return { network: { ...s.network, listLoading: true, listError: null } };
-    // Cluster switch: drop the previous cluster's gateways instead of rendering
-    // them under the new cluster while the fresh list is in flight.
-    return { network: { cluster, served: false, gateways: [], listLoading: true, listError: null, selected: null, topology: null, topologyLoading: false, selectedRoute: null, routeMetrics: {}, routeMetricsStatus: null, routeMetricsStale: false } };
-  }),
-  setGateways: (cluster, l) => set((s) => {
-    if (s.network.cluster !== cluster) return {}; // stale in-flight response
-    // A failed read is not a snapshot: the last good rows stay, marked by
-    // listError; with none, the view shows the failure.
-    if (l.error) return { network: { ...s.network, served: s.network.served || l.gatewayAPIServed, listLoading: false, listError: l.error } };
-    return { network: { ...s.network, served: l.gatewayAPIServed, gateways: l.gateways ?? [], listLoading: false, listError: null } };
-  }),
+  network: { cluster: null, selected: null, topology: null, topologyLoading: false, selectedRoute: null, routeMetrics: {}, routeMetricsStatus: null, routeMetricsStale: false },
   setTopologyLoading: (cluster, ref) => set((s) => {
     // A refresh of the gateway already shown keeps its topology, selection
     // and metrics until the new read lands (or fails, marked as last good).
     if (s.network.cluster === cluster && s.network.selected?.namespace === ref.namespace && s.network.selected?.name === ref.name) {
       return { network: { ...s.network, topologyLoading: true } };
     }
-    const base = s.network.cluster === cluster ? s.network : { ...s.network, cluster, served: false, gateways: [], listLoading: false, listError: null };
+    const base = s.network.cluster === cluster ? s.network : { ...s.network, cluster };
     return { network: { ...base, selected: ref, topology: null, topologyLoading: true, topologyError: null, topologyAt: null, routesAt: null, routeMetricsAt: null, selectedRoute: null, routeMetrics: {}, routeMetricsStatus: null, routeMetricsStale: false } };
   }),
   setTopology: (topology) => set((s) => {

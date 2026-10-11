@@ -4,11 +4,15 @@ import { useFleet } from "../store/fleet";
 import type { CondDTO, GatewayRefDTO } from "../store/fleet";
 
 vi.mock("../bridge/gateway", () => ({
-  listGateways: vi.fn(async () => {}),
   getGatewayTopology: vi.fn(async () => {}),
   getRouteMetrics: vi.fn(async () => {}),
   abandonRouteMetrics: vi.fn(),
 }));
+// The Gateways are rows (health/useGatewayRows): these tests hand the list a
+// read with its coverage; the mounted transport tests are GatewayRows.test.
+let rowsValue: GatewayRows;
+vi.mock("../health/useGatewayRows", () => ({ useGatewayRows: () => rowsValue }));
+import type { GatewayRows } from "../health/useGatewayRows";
 import { GatewayApiView } from "./GatewayApiView";
 import { gatewayRule, withRule } from "../test/backendRules";
 
@@ -18,12 +22,22 @@ const gw = (name: string, over: Partial<GatewayRefDTO> = {}): GatewayRefDTO => w
   addresses: [{ type: "IPAddress", value: "192.0.2.10" }], listeners: [{ name: "https", protocol: "HTTPS", hostname: "", port: 443 }], ...over,
 }, gatewayRule);
 
-function net(over: Partial<ReturnType<typeof useFleet.getState>["network"]> = {}) {
+type Cov = NonNullable<GatewayRows["coverage"][number]["coverage"]>;
+// net seeds the route and the rows read: coverage live unless said otherwise
+function net(over: { gateways?: GatewayRefDTO[]; coverage?: Cov; error?: string } = {}) {
   useFleet.setState(() => ({
     route: { name: "cluster", cluster: "x", section: "gatewayApi" },
     clusters: [],
-    network: { cluster: "x", served: true, gateways: [], listLoading: false, listError: null, selected: null, topology: null, topologyLoading: false, topologyError: null, topologyAt: null, selectedRoute: null, routeMetrics: {}, routeMetricsStatus: null, routeMetricsStale: false, ...over },
   }));
+  const coverage = over.coverage ?? "live";
+  rowsValue = {
+    gateways: over.gateways ?? [],
+    coverage: [{ kind: "Gateway", served: coverage !== "absent", synced: coverage === "live" || coverage === "stale", coverage, error: over.error }],
+    watchError: over.error ? `Gateway: ${over.error}` : null,
+    loading: false,
+    rowsState: { updating: false, refreshing: false, evaluatedAt: null },
+    partCounts: null,
+  };
 }
 
 beforeEach(() => { vi.clearAllMocks(); });
@@ -103,33 +117,33 @@ describe("GatewayApiView (redesign step 6)", () => {
     expect(within(panel).getByText("Programmed was False for an unreported generation - AddressNotAssigned. The controller has not reported on generation 3; whether the data plane is configured now is unverified.")).toBeTruthy();
   });
 
-  it("not served, served-but-empty and a failed list are three different states", () => {
-    net({ served: false });
+  it("not served (a confirmed absence), served-but-empty and a failed read are three different states", () => {
+    net({ coverage: "absent" });
     const { unmount } = render(<GatewayApiView cluster="x" />);
     expect(screen.getByText(/Gateway API is not installed/)).toBeTruthy();
     unmount();
-    net({ served: true });
+    net();
     const second = render(<GatewayApiView cluster="x" />);
     expect(screen.getByText("No Gateways on this cluster.")).toBeTruthy();
     second.unmount();
-    net({ served: false, listError: "connection refused" });
-    render(<GatewayApiView cluster="x" />);
+    net({ coverage: "unreadable", error: "connection refused" });
+    const third = render(<GatewayApiView cluster="x" />);
     expect(screen.getByText("Could not list Gateways.")).toBeTruthy();
-    expect(screen.getByText("connection refused")).toBeTruthy();
+    expect(screen.getByText("Gateway: connection refused")).toBeTruthy();
+    third.unmount();
+    net({ coverage: "checking" }); // checking is not absence
+    render(<GatewayApiView cluster="x" />);
+    expect(screen.queryByText(/Gateway API is not installed/)).toBeNull();
+    expect(screen.getByLabelText("reading Gateways")).toBeTruthy();
   });
 
-  it("a failed refresh keeps the last list, marked", () => {
-    net({ gateways: [gw("eg")], listError: "forbidden" });
+  it("a stale read keeps the last list, marked - never 'all programmed'", () => {
+    net({ gateways: [gw("eg")], coverage: "stale", error: "forbidden" });
     render(<GatewayApiView cluster="x" />);
     expect(screen.getByText("eg")).toBeTruthy();
-    expect(screen.getByText("Read failed - showing the last good list.")).toBeTruthy();
-    expect(screen.getByText("all programmed at the last read")).toBeTruthy();
-  });
-
-  it("another cluster's gateways are never shown", () => {
-    net({ cluster: "other", gateways: [gw("foreign")] });
-    render(<GatewayApiView cluster="x" />);
-    expect(screen.queryByText("foreign")).toBeNull();
+    expect(screen.getByRole("alert").textContent).toMatch(/Gateways read failed - showing the last good list.*forbidden/);
+    expect(screen.queryByText(/all programmed/)).toBeNull();
+    expect(document.querySelector(".lens-header .t-number")?.textContent).toBe("1*");
   });
 
   it("a filter edit that hides the selection closes it", () => {

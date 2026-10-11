@@ -5,7 +5,8 @@
 // jump-to-resource bridge call) as a side effect.
 
 import { useFleet, ClusterSection } from "../store/fleet";
-import type { ClusterDTO, NavIntent, ResourceRef, RouteNodeDTO, WorkloadKind } from "../store/fleet";
+import type { ClusterDTO, GatewayRefDTO, NavIntent, ResourceRef, RouteNodeDTO, WorkloadKind } from "../store/fleet";
+import { bestSub, useHealth } from "../store/health";
 import { openPodDetail } from "../bridge/pods";
 import { openNodeDetail } from "../bridge/nodes";
 import { openHelmRelease } from "../bridge/helm";
@@ -400,10 +401,12 @@ export function buildCommands(s: FleetStore): Command[] {
   }
 
   // --- Gateway API (when loaded) ---------------------------------------------
-  // Only index the slice when it belongs to the current cluster - a stale slice
-  // from a previous cluster must not surface foreign gateways here.
-  if (cluster && s.network.cluster === cluster && s.network.gateways.length > 0) {
-    for (const g of s.network.gateways) {
+  // The Gateways are the Observer's shared rows (1c slice 3 §5.6): indexed
+  // while a subscription holds this cluster's current ones - never a
+  // previous cluster's or incarnation's (bestSub fences both).
+  const gatewayRows = cluster ? (bestSub(useHealth.getState(), cluster, "gateway", "gateways")?.rows as GatewayRefDTO[] | null | undefined) : null;
+  if (cluster && gatewayRows && gatewayRows.length > 0) {
+    for (const g of gatewayRows) {
       cmds.push({
         id: `gateway:${g.namespace}/${g.name}`,
         group: "Objects",

@@ -5,7 +5,7 @@ import type { CertificateDTO, CondDTO, GatewayRef, RouteNodeDTO, TopologyDTO } f
 
 // The rows hook is the transport; these tests seed the certmanager slice it fills.
 vi.mock("../health/useCertManagerRows", () => ({ useCertManagerRows: () => {} }));
-vi.mock("../bridge/gateway", () => ({ getGatewayTopology: vi.fn(async () => {}), listGateways: vi.fn(async () => {}), getRouteMetrics: vi.fn(async () => {}), abandonRouteMetrics: vi.fn() }));
+vi.mock("../bridge/gateway", () => ({ getGatewayTopology: vi.fn(async () => {}), getRouteMetrics: vi.fn(async () => {}), abandonRouteMetrics: vi.fn() }));
 import { GatewayTopology } from "./GatewayTopology";
 import { certStatus, routeIssues, sortWarnings } from "./gatewayModel";
 import { gatewayRule, routeRule } from "../test/backendRules";
@@ -45,7 +45,7 @@ const topo = (routes: Route[], over: Partial<Omit<TopologyDTO, "routes" | "gatew
 function seed(t: TopologyDTO | null, over: Partial<ReturnType<typeof useFleet.getState>["network"]> = {}) {
   useFleet.setState({
     route: { name: "cluster", cluster: "x", section: "gatewayApi", gateway },
-    network: { cluster: "x", served: true, gateways: [], listLoading: false, listError: null, selected: gateway, topology: t, topologyLoading: false, topologyError: null, topologyAt: t ? Date.now() : null, routesAt: t?.routesComplete ? Date.now() : null, selectedRoute: null, routeMetrics: {}, routeMetricsStatus: null, routeMetricsStale: false, ...over },
+    network: { cluster: "x", selected: gateway, topology: t, topologyLoading: false, topologyError: null, topologyAt: t ? Date.now() : null, routesAt: t?.routesComplete ? Date.now() : null, selectedRoute: null, routeMetrics: {}, routeMetricsStatus: null, routeMetricsStale: false, ...over },
     certmanager: { cluster: null, certificates: [], issuers: [], loading: false, selectedKey: null, chain: null, chainLoading: false },
   });
 }
