@@ -1,7 +1,13 @@
 package healthsrc
 
 import (
+	"context"
+	"fmt"
 	"testing"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	discoveryfake "k8s.io/client-go/discovery/fake"
+	"k8s.io/client-go/kubernetes/fake"
 
 	"github.com/moomora/klyx/internal/capability"
 	"github.com/moomora/klyx/internal/observe"
@@ -48,5 +54,47 @@ func TestControllerIssuesMapTheTiers(t *testing.T) {
 	unread := ControllerIssues(capability.Set{GitOps: capability.GitOpsCapability{Flux: capability.FluxInfo{Present: true, Why: "Deployment flux-system/kustomize-controller unreadable: forbidden"}}})
 	if got := unread[TaskFlux]; got == nil || got.State != ControllerUnknown || got.Reason != "Flux installed but kustomize-controller health is unverified (Deployment flux-system/kustomize-controller unreadable: forbidden)" {
 		t.Errorf("an unread Flux controller is unknown: %+v", got)
+	}
+}
+
+// Detection through to the issue: a current, explicit rejection of every
+// class is "not ready"; acceptance unreported or stale is "unknown".
+func TestGatewayClassVerdictsThroughDetection(t *testing.T) {
+	class := func(gen, observed int, status string) string {
+		obs := ""
+		if observed > 0 {
+			obs = fmt.Sprintf(`,"observedGeneration":%d`, observed)
+		}
+		return fmt.Sprintf(`{"metadata":{"generation":%d},"status":{"conditions":[{"type":"Accepted","status":%q%s}]}}`, gen, status, obs)
+	}
+	cases := []struct {
+		name, items, state string
+	}{
+		{"every class rejected now", class(3, 3, "False") + "," + class(1, 1, "False"), ControllerNotReady},
+		{"rejection without an observed generation", class(2, 0, "False"), ControllerUnknown},
+		{"acceptance without an observed generation", class(2, 0, "True"), ControllerUnknown},
+		{"a stale rejection", class(3, 2, "False"), ControllerUnknown},
+		{"one rejected, one pending", class(3, 3, "False") + "," + class(2, 1, "True"), ControllerUnknown},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cs := fake.NewClientset()
+			cs.Discovery().(*discoveryfake.FakeDiscovery).Resources = []*metav1.APIResourceList{{GroupVersion: "gateway.networking.k8s.io/v1"}}
+			d := capability.NewDetector(cs).WithGatewayClassReader(func(context.Context, string) ([]byte, error) {
+				return []byte(`{"items":[` + tc.items + `]}`), nil
+			})
+			got := ControllerIssues(d.Detect(context.Background()))[TaskGateway]
+			if got == nil || got.State != tc.state {
+				t.Fatalf("got %+v, want %s", got, tc.state)
+			}
+		})
+	}
+	cs := fake.NewClientset()
+	cs.Discovery().(*discoveryfake.FakeDiscovery).Resources = []*metav1.APIResourceList{{GroupVersion: "gateway.networking.k8s.io/v1"}}
+	d := capability.NewDetector(cs).WithGatewayClassReader(func(context.Context, string) ([]byte, error) {
+		return []byte(`{"items":[` + class(3, 3, "True") + `]}`), nil
+	})
+	if got := ControllerIssues(d.Detect(context.Background()))[TaskGateway]; got != nil {
+		t.Fatalf("a current acceptance is healthy: %+v", got)
 	}
 }

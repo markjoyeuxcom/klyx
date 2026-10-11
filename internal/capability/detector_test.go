@@ -525,3 +525,17 @@ func TestControllerHealthIsClaimedOnlyFromAWorkloadRead(t *testing.T) {
 		})
 	}
 }
+
+// Codex 2c re-review: a condition without a current observedGeneration is no
+// verdict - neither Accepted nor Rejected - on a class with a generation.
+func TestCountAcceptedGatewayClassesNeedsACurrentObservation(t *testing.T) {
+	raw := []byte(`{"items":[
+		{"metadata":{"generation":2},"status":{"conditions":[{"type":"Accepted","status":"True"}]}},
+		{"metadata":{"generation":2},"status":{"conditions":[{"type":"Accepted","status":"False"}]}},
+		{"metadata":{"generation":3},"status":{"conditions":[{"type":"Accepted","status":"False","observedGeneration":2}]}},
+		{"metadata":{"generation":3},"status":{"conditions":[{"type":"Accepted","status":"False","observedGeneration":3}]}}]}`)
+	gc, err := countAcceptedGatewayClasses(raw)
+	if err != nil || gc != (gatewayClassCounts{Total: 4, Accepted: 0, Rejected: 1}) {
+		t.Fatalf("only the current False is a verdict: %+v err=%v", gc, err)
+	}
+}

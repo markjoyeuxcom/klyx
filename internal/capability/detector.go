@@ -272,16 +272,31 @@ func (d *Detector) readGatewayClasses(ctx context.Context, version string) (gate
 	return countAcceptedGatewayClasses(raw)
 }
 
+// WithGatewayClassReader replaces how the GatewayClassList is read (its raw
+// JSON for a served version); counting stays the detector's. Tests and
+// tools use it where no discovery REST client exists.
+func (d *Detector) WithGatewayClassReader(read func(ctx context.Context, version string) ([]byte, error)) *Detector {
+	d.gatewayClasses = func(ctx context.Context, version string) (gatewayClassCounts, error) {
+		raw, err := read(ctx, version)
+		if err != nil {
+			return gatewayClassCounts{}, err
+		}
+		return countAcceptedGatewayClasses(raw)
+	}
+	return d
+}
+
 // gatewayClassCounts: Accepted and Rejected are current-spec verdicts
 // (Accepted True or False for the class's generation); the rest are pending
 // or unreported.
 type gatewayClassCounts struct{ Total, Accepted, Rejected int }
 
-// countAcceptedGatewayClasses parses a GatewayClassList and counts the classes
-// whose Accepted condition is True FOR THE CURRENT SPEC: a condition whose
-// observedGeneration lags metadata.generation describes an older spec the
-// controller has not yet re-evaluated, so it does not count (Codex batch-2
-// review R4). A condition without observedGeneration is taken as current.
+// countAcceptedGatewayClasses parses a GatewayClassList and counts the
+// classes whose Accepted condition is True, or False, FOR THE CURRENT SPEC.
+// A condition whose observedGeneration is absent or lags metadata.generation
+// describes no current decision (Codex batch-2 review R4; 2c review): the
+// class is pending or unreported. Only a class with no generation is taken
+// as current, as gwapi.condState does.
 func countAcceptedGatewayClasses(raw []byte) (gatewayClassCounts, error) {
 	var list struct {
 		Items []struct {
@@ -307,7 +322,10 @@ func countAcceptedGatewayClasses(raw []byte) (gatewayClassCounts, error) {
 			if c.Type != "Accepted" {
 				continue
 			}
-			if c.ObservedGeneration == 0 || gen == 0 || c.ObservedGeneration >= gen {
+			// Current only when it observed this spec (gwapi.condState): a
+			// condition with no or an older observedGeneration on a class with
+			// a known generation is pending or unreported, never a verdict.
+			if gen == 0 || c.ObservedGeneration >= gen {
 				switch c.Status {
 				case "True":
 					out.Accepted++
