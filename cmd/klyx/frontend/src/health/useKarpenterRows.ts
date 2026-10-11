@@ -2,7 +2,7 @@ import { useMemo } from "react";
 import type { KarpenterClaimDTO, KarpenterPoolDTO, KindCoverageDTO, PartCountsDTO, RowsStateDTO } from "../store/fleet";
 import { coverageError } from "../layout/coverage";
 import { useRows } from "./useRows";
-import { answered, partCounts, partCoverage, partRows, rowsState } from "./lensRows";
+import { answered, partCounts, partCoverage, partDependency, partRows, rowsState } from "./lensRows";
 
 // The Karpenter lens's NodePools and NodeClaims from the Observer's shared
 // rows (slice 3 §5.5). The lens is their only reader, so the hook hands them
@@ -14,7 +14,10 @@ const KIND_NAMES = { nodepools: "NodePool", nodeclaims: "NodeClaim" };
 export type KarpenterRows = {
   pools: KarpenterPoolDTO[];
   claims: KarpenterClaimDTO[];
-  coverage: KindCoverageDTO[];
+  coverage: KindCoverageDTO[]; // each part's OWN (counted) kinds
+  // the NodeClaim coverage the NodePools capture read its node counts from
+  // (a dependency of that part - never the NodeClaims list's evidence)
+  poolNodesDep: KindCoverageDTO | null;
   watchError: string | null;
   loading: boolean; // no part has answered yet
   rowsState: RowsStateDTO;
@@ -30,6 +33,7 @@ export function useKarpenterRows(cluster: string | null): KarpenterRows {
       pools: partRows(pools),
       claims: partRows(claims),
       coverage,
+      poolNodesDep: partDependency(pools, "NodeClaim", KIND_NAMES),
       watchError: coverageError(coverage),
       loading: !answered(pools) && !answered(claims),
       rowsState: rowsState([pools, claims]),

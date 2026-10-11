@@ -33,3 +33,20 @@ describe("coverageFromHealth (slice 3 §5a)", () => {
     expect(kindEvidence(true, [k], "Certificate", null)).toBe("complete");
   });
 });
+
+// Codex review of 442d42a #1: a part's dependency kinds are never its own
+// evidence; they are read separately, for joins.
+describe("coverageFromHealth roles", () => {
+  const kinds = [
+    { kind: "nodepools", role: "counted", coverage: "live" as const },
+    { kind: "nodeclaims", role: "dependency", coverage: "stale" as const, error: "dial tcp" },
+  ];
+  const names = { nodepools: "NodePool", nodeclaims: "NodeClaim" };
+  it("keeps counted kinds by default and dependencies on request", () => {
+    expect(coverageFromHealth(kinds, names).map((k) => k.kind)).toEqual(["NodePool"]);
+    expect(coverageFromHealth(kinds, names, "dependency").map((k) => [k.kind, k.coverage])).toEqual([["NodeClaim", "stale"]]);
+  });
+  it("treats a kind without a role as counted (older payloads)", () => {
+    expect(coverageFromHealth([{ kind: "nodepools", coverage: "live" }], names).map((k) => k.kind)).toEqual(["NodePool"]);
+  });
+});

@@ -26,8 +26,11 @@ const part = (id: string, ver: number, kinds: KindCoverage[], native: { total: n
   id, entity: id, scope: "", classifier: "native", coverage: "live", kinds, obs: ver, ver,
   native: { total: native.total, included: native.included, word: "", roles: { total: native.total, fault: native.included, degraded: 0, unknown: 0, progressing: 0, paused: 0, ok: native.total - native.included } },
 });
-const rowsDTO = (incarnation: number, id: string, ver: number, rows: { rule: { included: boolean } }[], k: KindCoverage, evaluatedAt = "2026-10-11T12:00:00Z"): RowsDTO => ({
-  cluster: "x", incarnation, task: "karpenter", part: part(id, ver, [k], { total: rows.length, included: rows.filter((r) => r.rule.included).length }), evaluatedAt, rows,
+// The production payload shape: the nodepools part counts NodePools and
+// carries the NodeClaims it read node counts from as a DEPENDENCY.
+const dep = (over: Partial<KindCoverage> = {}): KindCoverage => kind("nodeclaims", { role: "dependency", ...over });
+const rowsDTO = (incarnation: number, id: string, ver: number, rows: { rule: { included: boolean } }[], k: KindCoverage, evaluatedAt = "2026-10-11T12:00:00Z", depCov: KindCoverage = dep()): RowsDTO => ({
+  cluster: "x", incarnation, task: "karpenter", part: part(id, ver, id === "nodepools" ? [k, depCov] : [k], { total: rows.length, included: rows.filter((r) => r.rule.included).length }), evaluatedAt, rows,
 });
 const summary = (incarnation: number, seq: number, pools: [number, number, number], claims: [number, number, number]): HealthSummary => ({
   cluster: "x", incarnation, seq, evaluatedAt: "", connection: "connected",
@@ -124,15 +127,83 @@ describe("Karpenter rows, mounted end to end (slice 3 §5.5)", () => {
     }
   });
 
+  // Codex review of 442d42a #1: a part's dependency is never another part's
+  // evidence - each list reads its own counted kind; the pool node join
+  // reads the dependency in its own capture.
+  describe("own-part evidence vs dependency evidence", () => {
+    it("a pool reply with a live NodeClaim dependency never answers for an unanswered claims list", async () => {
+      open();
+      applyRows("p", rowsDTO(1, "nodepools", 1, [pool("default")], kind("nodepools"))); // claims part: no reply yet
+      render(<KarpenterView cluster="x" />);
+      expect(await screen.findByLabelText("reading NodePools and NodeClaims")).toBeTruthy();
+      expect(screen.queryByText("No NodeClaims.")).toBeNull();
+    });
+
+    it("a failed claims read is not masked by the pool capture's live dependency, and never removes", async () => {
+      seed([claim("a")]);
+      render(<KarpenterView cluster="x" />);
+      fireEvent.click((await screen.findByText("a")).closest(".lens-row")!);
+      act(() => { applyRows("c", rowsDTO(1, "nodeclaims", 2, [], kind("nodeclaims", { coverage: "unreadable", class: "forbidden", error: "rbac" }))); });
+      expect(inspector().queryByText(/NodeClaim removed\./)).toBeNull();
+      expect(inspector().getByTestId("selection-unverified")).toBeTruthy();
+    });
+
+    it("differing freshness: the pool join follows its own capture's dependency, the claims list its own read", async () => {
+      open();
+      applyRows("p", rowsDTO(1, "nodepools", 1, [pool("default", { nodes: 3 })], kind("nodepools"), undefined, dep({ coverage: "stale", class: "transport", error: "dial tcp" })));
+      applyRows("c", rowsDTO(1, "nodeclaims", 1, [claim("a")], kind("nodeclaims")));
+      render(<KarpenterView cluster="x" />);
+      expect(await screen.findByText("a")).toBeTruthy();
+      expect(headline()).toBe("1"); // the claims read is live: unstarred
+      fireEvent.click(screen.getByRole("button", { name: /^NodePools/ }));
+      expect(row("default")).toContain("3*"); // the pool capture read stale claims
+      act(() => { applyRows("p", rowsDTO(1, "nodepools", 2, [pool("default", { nodes: 3 })], kind("nodepools"))); });
+      expect(row("default")).not.toContain("3*");
+    });
+  });
+
+  // Codex review of 442d42a #2 and #4.
+  it("'all ready' needs both lists complete and current", async () => {
+    open();
+    applyRows("c", rowsDTO(1, "nodeclaims", 1, [claim("a")], kind("nodeclaims")));
+    render(<KarpenterView cluster="x" />);
+    expect(await screen.findByText("a")).toBeTruthy();
+    expect(screen.queryByText("all ready")).toBeNull(); // NodePools not answered
+    act(() => { applyRows("p", rowsDTO(1, "nodepools", 1, [pool("default")], kind("nodepools", { coverage: "stale", class: "transport", error: "dial tcp" }))); });
+    expect(screen.queryByText("all ready")).toBeNull();
+    expect(screen.getByTestId("karp-not-all-ready").textContent).toBe("none known not ready (last observed)");
+    act(() => { applyRows("p", rowsDTO(1, "nodepools", 2, [pool("default")], kind("nodepools"))); });
+    expect(screen.getByText("all ready")).toBeTruthy();
+    act(() => { applySummary(summary(1, 2, [2, 1, 0], [2, 2, 1])); }); // the summary newly includes a failure
+    expect(screen.queryByText("all ready")).toBeNull();
+  });
+
+  it("the A4 empty state never stands in for the disruption activity view", async () => {
+    vi.useFakeTimers({ now: 0, toFake: ["setTimeout", "setInterval", "Date"] });
+    try {
+      open();
+      applyRows("p", rowsDTO(1, "nodepools", 1, [], kind("nodepools")), 0);
+      applyRows("c", rowsDTO(1, "nodeclaims", 1, [], kind("nodeclaims")), 0);
+      render(<KarpenterView cluster="x" />);
+      await act(async () => { await Promise.resolve(); });
+      act(() => { applySummary(summary(1, 2, [2, 3, 0], [1, 0, 0]), 0); dueForBootstrap(1500); });
+      fireEvent.click(screen.getByRole("button", { name: /^Disruption activity/ }));
+      expect(screen.getByText("No recent disruption activity.")).toBeTruthy();
+      expect(screen.queryByText(/^No NodePools as of/)).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   // §5a joins: a pool's node count is read off the NodeClaims.
   it("a pool's node count carries the NodeClaim read's coverage", async () => {
     open();
-    applyRows("p", rowsDTO(1, "nodepools", 1, [pool("default", { nodes: 3 })], kind("nodepools")));
-    applyRows("c", rowsDTO(1, "nodeclaims", 1, [claim("a")], kind("nodeclaims", { coverage: "stale", class: "transport", error: "dial tcp" })));
+    applyRows("p", rowsDTO(1, "nodepools", 1, [pool("default", { nodes: 3 })], kind("nodepools"), undefined, dep({ coverage: "stale", class: "transport", error: "dial tcp" })));
+    applyRows("c", rowsDTO(1, "nodeclaims", 1, [claim("a")], kind("nodeclaims")));
     render(<KarpenterView cluster="x" />);
     fireEvent.click(await screen.findByRole("button", { name: /^NodePools/ }));
     expect(row("default")).toContain("3*");
-    act(() => { applyRows("c", rowsDTO(1, "nodeclaims", 2, [], kind("nodeclaims", { coverage: "unreadable", class: "forbidden", error: "rbac" }))); });
+    act(() => { applyRows("p", rowsDTO(1, "nodepools", 2, [pool("default", { nodes: 3 })], kind("nodepools"), undefined, dep({ coverage: "unreadable", class: "forbidden", error: "rbac" }))); });
     expect(row("default")).toContain("?");
     fireEvent.click(screen.getByText("default").closest(".lens-row")!);
     expect(inspector().getByText(/nodes unverified \(NodeClaim read unavailable\)/)).toBeTruthy();

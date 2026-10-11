@@ -46,17 +46,19 @@ const OBSERVER_EVIDENCE: Record<NonNullable<KindCoverageDTO["coverage"]>, KindEv
   live: "complete", stale: "stale", checking: "pending", unreadable: "failed", absent: "complete",
 };
 
-type HealthKind = { kind: string; coverage: NonNullable<KindCoverageDTO["coverage"]>; class?: string; error?: string; asOf?: string; lastGoodAt?: string; discovery?: string };
+type HealthKind = { kind: string; role?: string; coverage: NonNullable<KindCoverageDTO["coverage"]>; class?: string; error?: string; asOf?: string; lastGoodAt?: string; discovery?: string };
 
 /** coverageFromHealth maps an Observer part's per-kind coverage onto the
  * lens's KindCoverageDTO, renaming kinds by `names` (Observer kind -> lens
- * kind). Counted kinds only; nothing is reduced: the five-state coverage,
- * class, last good time and discovery gap travel along. */
-export function coverageFromHealth(kinds: HealthKind[] | undefined, names: Record<string, string>): KindCoverageDTO[] {
+ * kind). Counted kinds only - a part's dependency (a NodePool capture's
+ * NodeClaims) is never its own evidence (Codex review of 442d42a); nothing
+ * is reduced: the five-state coverage, class, last good time and discovery
+ * gap travel along. With role "dependency", the dependencies instead. */
+export function coverageFromHealth(kinds: HealthKind[] | undefined, names: Record<string, string>, role: "counted" | "dependency" = "counted"): KindCoverageDTO[] {
   const out: KindCoverageDTO[] = [];
   for (const k of kinds ?? []) {
     const kind = names[k.kind];
-    if (!kind) continue;
+    if (!kind || (k.role ?? "counted") !== role) continue;
     const served = k.coverage !== "absent";
     const synced = k.coverage === "live" || k.coverage === "stale";
     const error = k.error ? (k.class ? `${k.class}: ${k.error}` : k.error) : undefined;

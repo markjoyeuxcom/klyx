@@ -25,6 +25,14 @@ export function partCoverage<T>(r: LensRows<T>, kinds: string[], names: Record<s
   return kindsAs(kinds, "checking");
 }
 
+/** partDependency: the coverage a part's own capture had of one of its
+ * dependency kinds (what a join such as a NodePool's node count was read
+ * from), or null without a current capture. */
+export function partDependency<T>(r: LensRows<T>, kind: string, names: Record<string, string>): KindCoverageDTO | null {
+  if (!r.part) return null;
+  return coverageFromHealth(r.part.kinds, names, "dependency").find((k) => k.kind === kind) ?? null;
+}
+
 /** partRows: a part's rows only while it has current ones. */
 export const partRows = <T,>(r: LensRows<T>): T[] => (r.part ? r.rows ?? [] : []);
 

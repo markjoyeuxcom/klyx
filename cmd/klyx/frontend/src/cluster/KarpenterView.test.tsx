@@ -19,6 +19,7 @@ const liveCoverage = () => [
 function setRows(r: { claims?: KarpenterClaimDTO[]; pools?: KarpenterPoolDTO[]; coverage?: KarpenterRows["coverage"]; loading?: boolean; watchError?: string | null } = {}) {
   rowsValue = {
     claims: r.claims ?? [], pools: r.pools ?? [], coverage: r.coverage ?? liveCoverage(), watchError: r.watchError ?? null, loading: r.loading ?? false,
+    poolNodesDep: { kind: "NodeClaim", served: true, synced: true, coverage: "live" },
     rowsState: { updating: false, refreshing: false, evaluatedAt: null }, partCounts: { nodepools: null, nodeclaims: null },
   };
 }
@@ -106,7 +107,9 @@ describe("KarpenterView (redesign step 5)", () => {
   });
 
   it("not installed, unreadable rows, a failed snapshot and empty claims are distinct states", async () => {
+    // "not installed" is the rows' own confirmed absence of both kinds
     vi.mocked(getKarpenterState).mockResolvedValueOnce(snap({ detected: false }));
+    setRows({ coverage: [{ kind: "NodePool", served: false, synced: true, coverage: "absent" }, { kind: "NodeClaim", served: false, synced: true, coverage: "absent" }] });
     const first = render(<KarpenterView cluster="x" />);
     expect(await screen.findByText("Karpenter is not installed on this cluster.")).toBeTruthy();
     first.unmount();
@@ -215,5 +218,28 @@ describe("KarpenterView composes independent notices (Codex cfbf793c)", () => {
     expect(screen.getByTestId("karp-controller-down")).toBeTruthy();
     expect(screen.getByTestId("karp-feed-partial").textContent).toContain("Partial read - NodePool events: forbidden.");
     expect(screen.getByText("incomplete read · newest among the events read")).toBeTruthy();
+  });
+});
+
+// Codex review of 442d42a #3: the controller/feed snapshot never hides the
+// rows' own observation.
+describe("KarpenterView availability is the rows' own", () => {
+  beforeEach(() => { vi.clearAllMocks(); setRows(); });
+
+  it("a snapshot reporting Karpenter undetected never hides live observed claims", async () => {
+    vi.mocked(getKarpenterState).mockResolvedValue(snap({ detected: false, claims: [claim({ name: "observed" })] }));
+    render(<KarpenterView cluster="x" />);
+    expect(await screen.findByText("observed")).toBeTruthy();
+    expect(screen.queryByText("Karpenter is not installed on this cluster.")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /^Disruption activity/ }));
+    expect(screen.getByText("Disruption activity was not read.")).toBeTruthy();
+  });
+
+  it("checking coverage is not a confirmed absence", async () => {
+    vi.mocked(getKarpenterState).mockResolvedValue(snap({ detected: false }));
+    setRows({ coverage: [{ kind: "NodePool", served: true, synced: false, coverage: "checking" }, { kind: "NodeClaim", served: true, synced: false, coverage: "checking" }] });
+    render(<KarpenterView cluster="x" />);
+    expect(await screen.findByLabelText("reading NodePools and NodeClaims")).toBeTruthy();
+    expect(screen.queryByText("Karpenter is not installed on this cluster.")).toBeNull();
   });
 });

@@ -95,7 +95,6 @@ function capText(used: number | null, limit: number | null, fmt: (n: number) => 
 }
 
 export function KarpenterView({ cluster }: { cluster: string }) {
-  const present = useFleet((s) => s.clusters.find((c) => c.name === cluster)?.karpenterPresent);
   const rows = useKarpenterRows(cluster);
   const nowS = Math.floor(useNow() / 1000);
   const [pinned, setPinned] = useState<{ cluster: string; snap: KarpenterSnapshotDTO; at: number } | null>(null);
@@ -126,9 +125,14 @@ export function KarpenterView({ cluster }: { cluster: string }) {
 
   const snap = pinned && pinned.cluster === cluster ? pinned.snap : null;
   const ok = snap && !snap.error && snap.detected ? snap : null;
-  // Karpenter is present by the snapshot's capability read, else the
-  // cluster's own capability before that read lands.
-  const detected = snap && !snap.error ? snap.detected : present !== false;
+  // Availability (Codex review of 442d42a #3): the rows' own per-kind
+  // discovery owns it for the NodePools and NodeClaims - only a confirmed
+  // absence of both is "not installed"; checking is not absence. The
+  // controller/feed snapshot's capability read speaks for the activity view
+  // alone and never hides observed rows.
+  const kindCov = (kind: string) => rows.coverage.find((k) => k.kind === kind)?.coverage;
+  const rowsAbsent = kindCov("NodePool") === "absent" && kindCov("NodeClaim") === "absent";
+  const feedDetected = !!snap && !snap.error && snap.detected;
   const evidenceOf = (kind: string): KindEvidence => kindEvidence(!rows.loading, rows.coverage, kind, rows.watchError);
   const claimsEv = evidenceOf("NodeClaim");
   const poolsEv = evidenceOf("NodePool");
@@ -152,8 +156,15 @@ export function KarpenterView({ cluster }: { cluster: string }) {
   const poolsDown = pools.filter((p) => roleOf(p).kind === "fault").length;
   const poolsUnknown = pools.filter((p) => roleOf(p).kind === "unknown").length;
   const drifted = claims.filter((c) => c.drifted).length;
-  // a pool's node count is a join on the NodeClaims
-  const claimsCov = joinCoverage(claimsEv);
+  // "all ready" is a claim about the whole present (Codex review of 442d42a
+  // #2): both lists read in full and current, every role ready, and no
+  // summary ahead of the rows.
+  const allReady = claims.length > 0 && claimsEv === "complete" && poolsEv === "complete" && !rows.rowsState.updating && !rows.rowsState.refreshing
+    && claims.every((c) => roleOf(c).kind === "ok") && pools.every((p) => roleOf(p).kind === "ok");
+  // A pool's node count is a join read in the NodePools capture: it carries
+  // that capture's own NodeClaim dependency coverage - never the NodeClaims
+  // list's (Codex review of 442d42a #1).
+  const claimsCov = joinCoverage(rows.poolNodesDep ? kindEvidence(true, [rows.poolNodesDep], "NodeClaim", null) : "pending");
 
   // Selections keep their last row: removed only on a complete read of their
   // own kind, otherwise unverified (slice 3 §5a).
@@ -179,12 +190,13 @@ export function KarpenterView({ cluster }: { cluster: string }) {
   const eventsFailed = !!ok?.eventsError;
   const viewEv = view === "claims" ? claimsEv : poolsEv;
   let state: DatasetState = "ready";
-  if (!detected) state = "empty";
-  else if (view === "activity") {
+  if (view === "activity") {
     if (!snap) state = "loading";
+    else if (!snap.error && !snap.detected) state = "empty";
     else if (snap.error || (eventsFailed && keys.length === 0)) state = "unreadable";
     else if (keys.length === 0) state = "empty";
-  } else if (viewEv === "failed" && keys.length === 0) state = "unreadable";
+  } else if (rowsAbsent) state = "empty";
+  else if (viewEv === "failed" && keys.length === 0) state = "unreadable";
   else if (viewEv === "pending" && keys.length === 0) state = "loading";
   else if (keys.length === 0) state = "empty";
 
@@ -193,8 +205,9 @@ export function KarpenterView({ cluster }: { cluster: string }) {
     : state === "unreadable" && view === "activity" && !snap?.error ? <EmptyState icon={icon} title="Could not read disruption activity." hint={ok?.eventsError} action={{ label: "Retry", onClick: () => void fetchState() }} />
     : state === "unreadable" && view === "activity" ? <EmptyState icon={icon} title="Could not read Karpenter state." hint={snap?.error} action={{ label: "Retry", onClick: () => void fetchState() }} />
     : state === "unreadable" ? <EmptyState icon={icon} title={`Could not read the ${view === "claims" ? "NodeClaims" : "NodePools"}.`} hint={rows.watchError ?? undefined} />
-    : !detected ? <EmptyState icon={icon} title="Karpenter is not installed on this cluster." hint="Klyx detected no karpenter.sh resources here." />
-    : rowsRefreshing && (view === "claims" ? claimTotal : (rows.partCounts.nodepools?.total ?? 0)) > 0 ? <EmptyState icon={icon} title={`No ${view === "claims" ? "NodeClaims" : "NodePools"} as of ${rowsAsOf}.`} hint="Refreshing - the cluster summary counts more." />
+    : view === "activity" && snap && !snap.detected ? <EmptyState icon={icon} title="Disruption activity was not read." hint="The controller probe did not detect Karpenter on this cluster." />
+    : view !== "activity" && rowsAbsent ? <EmptyState icon={icon} title="Karpenter is not installed on this cluster." hint="Klyx observes no karpenter.sh NodePools or NodeClaims here." />
+    : view !== "activity" && rowsRefreshing && (view === "claims" ? claimTotal : (rows.partCounts.nodepools?.total ?? 0)) > 0 ? <EmptyState icon={icon} title={`No ${view === "claims" ? "NodeClaims" : "NodePools"} as of ${rowsAsOf}.`} hint="Refreshing - the cluster summary counts more." />
     : view !== "activity" && viewEv === "stale" ? <EmptyState icon={icon} title={`No ${view === "claims" ? "NodeClaims" : "NodePools"} in the last good read.`} hint={`The read is failing now${lastGood ? ` - last good ${clock(lastGood)}` : ""}: ${rows.watchError ?? "unverified"}.`} />
     : view === "claims" ? <EmptyState icon={icon} title="No NodeClaims." hint="Karpenter has provisioned nothing on this cluster right now." />
     : view === "pools" ? <EmptyState icon={icon} title="No NodePools defined." hint="Without a NodePool, Karpenter provisions nothing." />
@@ -253,7 +266,7 @@ export function KarpenterView({ cluster }: { cluster: string }) {
     <LensLayout
       label="Karpenter"
       title="Karpenter"
-      summary={!detected || state === "loading" || state === "unreadable" ? null : (
+      summary={rowsAbsent || claimsEv === "pending" && claims.length === 0 || claimsEv === "failed" && claims.length === 0 ? null : (
         <>
           <span className="t-number" style={{ color: "var(--color-text-secondary)" }}>{claimTotal}{claimsEv === "complete" ? "" : claimsEv === "stale" ? "*" : "+"}</span>
           <span className="t-secondary">NodeClaims</span>
@@ -261,7 +274,8 @@ export function KarpenterView({ cluster }: { cluster: string }) {
           {failed + stuck + poolsDown > 0
             ? <span className="t-status" style={{ color: failed + poolsDown > 0 ? "var(--color-text-danger)" : "var(--color-text-warning)" }}>{failed + poolsDown > 0 ? "▲ " : ""}{[failed ? `${failed} not ready` : "", stuck ? `${stuck} appear${stuck === 1 ? "s" : ""} stuck` : "", poolsDown ? `${poolsDown} NodePool${poolsDown === 1 ? "" : "s"} not ready` : ""].filter(Boolean).join(" · ")}</span>
             : launching > 0 ? <span className="t-secondary">{launching} in progress</span>
-            : poolsUnknown === 0 && claims.length > 0 ? <span className="t-secondary">all ready</span> : null}
+            : allReady ? <span className="t-secondary">all ready</span>
+            : claims.length > 0 && poolsUnknown === 0 ? <span className="t-secondary" data-testid="karp-not-all-ready">{claimsEv === "stale" || poolsEv === "stale" ? "none known not ready (last observed)" : rowsRefreshing || rows.rowsState.updating ? "none known not ready (summary changed - re-reading)" : "none known not ready (reads incomplete)"}</span> : null}
           {poolsUnknown > 0 && <span className="t-secondary">{poolsUnknown} NodePool{poolsUnknown === 1 ? "" : "s"} unverified</span>}
           {drifted > 0 && <span className="t-secondary">{drifted} drifted (eligible for replacement)</span>}
           {(failed + stuck + poolsDown + launching + drifted) > 0 && asOf && <span className="t-secondary" data-testid="karp-asof">{asOf.trim()}</span>}
@@ -274,7 +288,7 @@ export function KarpenterView({ cluster }: { cluster: string }) {
           <button className="l-btn" onClick={() => void fetchState()} disabled={loading}>{loading ? "Reading…" : "Refresh"}</button>
         </>
       }
-      controls={detected ? (
+      controls={!rowsAbsent || feedDetected ? (
         <div role="group" aria-label="Karpenter view" style={{ display: "inline-flex", gap: 4 }}>
           <button className="l-chip" aria-pressed={view === "claims"} onClick={() => switchView("claims")}>NodeClaims {claimAttention > 0 && <span style={{ color: failed ? "var(--color-text-danger)" : "var(--color-text-warning)" }}>{claimAttention}</span>}</button>
           <button className="l-chip" aria-pressed={view === "pools"} onClick={() => switchView("pools")}>NodePools {poolAttention > 0 && <span style={{ color: "var(--color-text-danger)" }}>{poolAttention}</span>}</button>
