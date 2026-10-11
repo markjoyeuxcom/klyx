@@ -1,8 +1,8 @@
-import type { CertificateDTO, ExternalSecretDTO, ExternalSecretStoreDTO, IssuerDTO, KarpenterClaimDTO, KarpenterPoolDTO, RuleDTO } from "../store/fleet";
+import type { ArgoAppDTO, ArgoApplicationSetDTO, CertificateDTO, ExternalSecretDTO, ExternalSecretStoreDTO, FluxResourceDTO, FluxSourceDTO, IssuerDTO, KarpenterClaimDTO, KarpenterPoolDTO, RuleDTO } from "../store/fleet";
 
 // The relocated lens rules exactly as the backend computes them
 // (internal/certmanager, internal/externalsecrets, internal/karpenter
-// rules.go), so lens tests can build DTOs the way the bridge sends them. Test
+// and internal/gitops/{flux,argo} rules.go), so lens tests can build DTOs the way the bridge sends them. Test
 // support only - lenses read the Go-computed `rule`. src/health/nativeRules
 // .test.ts holds every function here to the Go golden fixture, so this
 // module cannot drift from the backend.
@@ -72,6 +72,45 @@ export function poolRule(p: PoolIn): RuleDTO {
   if (p.ready === "ready") return rule(false, "ok", "ready");
   if (p.ready === "not-ready") return rule(true, "fault", "not ready");
   return rule(false, "unknown", "unknown");
+}
+
+// Flux (GitOps.tsx needsAttention / sourceNeedsAttention / fluxHealth).
+function fluxRole(r: { ready: string; suspended: boolean; stale?: boolean; reason?: string }): [string, string] {
+  if (r.suspended) return ["paused", "Suspended"];
+  if (r.stale) return ["progressing", "Syncing…"];
+  if (r.ready === "Failed") return ["fault", "Failed"];
+  if (r.ready === "Reconciling") return ["progressing", "Reconciling"];
+  if (r.ready === "Unknown") {
+    return /^(Progressing|ProgressingWithRetry|Reconciling)$/.test(r.reason ?? "") ? ["progressing", "Progressing"] : ["unknown", "Unknown"];
+  }
+  if (r.ready !== "Ready") return ["degraded", r.ready || "Not ready"];
+  return ["ok", "Ready"];
+}
+
+export function fluxRule(r: Omit<FluxResourceDTO, "rule">): RuleDTO {
+  const [role, label] = fluxRole(r);
+  return rule(!r.suspended && r.ready !== "Ready", role, label);
+}
+
+export function fluxSourceRule(s: Omit<FluxSourceDTO, "rule">): RuleDTO {
+  const [role, label] = fluxRole(s);
+  return rule(!s.suspended && s.ready !== "Ready", role, label);
+}
+
+// Argo CD (Application.Broken / ArgoView.argoHealth; ApplicationSets: not
+// healthy, row lamp healthy = ok else degraded "needs attention").
+export function argoAppRule(a: Omit<ArgoAppDTO, "rule">): RuleDTO {
+  const broken = a.syncStatus !== "Synced" || !["Healthy", "Progressing", "Suspended"].includes(a.healthStatus);
+  if (a.healthStatus === "Degraded" || a.healthStatus === "Missing") return rule(broken, "fault", a.healthStatus);
+  if (a.healthStatus === "Suspended") return rule(broken, "paused", "Suspended");
+  if (a.syncStatus === "OutOfSync") return rule(broken, "degraded", "OutOfSync");
+  if (a.healthStatus === "Progressing") return rule(broken, "progressing", "Progressing");
+  if (a.healthStatus === "Healthy" && a.syncStatus === "Synced") return rule(broken, "ok", "Healthy");
+  return rule(broken, "unknown", a.healthStatus || "Unknown");
+}
+
+export function argoAppSetRule(s: Omit<ArgoApplicationSetDTO, "rule">): RuleDTO {
+  return s.healthy ? rule(false, "ok", "healthy") : rule(true, "degraded", "needs attention");
 }
 
 // withRule stamps a fixture with the backend's rule unless the test set one.

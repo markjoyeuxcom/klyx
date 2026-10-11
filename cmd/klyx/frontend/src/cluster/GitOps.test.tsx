@@ -3,6 +3,7 @@ import { render, fireEvent, act, within, screen } from "@testing-library/react";
 import { useFleet, FluxResourceDTO, FluxSourceDTO, ClusterDTO } from "../store/fleet";
 import { reconcile, reconcileWithSource, setSuspend, resolveGitLink } from "../bridge/gitops";
 import { GitOps } from "./GitOps";
+import { fluxRule, fluxSourceRule, withRule } from "../test/backendRules";
 
 vi.mock("../bridge/gitops", () => ({
   openGitOps: async () => () => {},
@@ -26,16 +27,16 @@ const cluster = (tier: string): ClusterDTO => ({
   gitopsTier: tier, gitopsReason: "", networkTier: "Healthy", networkReason: "",
   env: "", region: "", provider: "", group: "", ageSeconds: 0,
 });
-const res = (over: Partial<FluxResourceDTO>): FluxResourceDTO => ({
+const res = (over: Partial<FluxResourceDTO>): FluxResourceDTO => withRule<FluxResourceDTO>({
   kind: "Kustomization", namespace: "flux-system", name: "flux-system", ready: "Ready",
   reason: "", message: "", revision: "main@abc", readySinceSeconds: 1, suspended: false,
   sourceKind: "", sourceName: "", ...over,
-});
+}, fluxRule);
 
-const src = (over: Partial<FluxSourceDTO>): FluxSourceDTO => ({
+const src = (over: Partial<FluxSourceDTO>): FluxSourceDTO => withRule<FluxSourceDTO>({
   kind: "GitRepository", namespace: "flux-system", name: "flux-system",
   ready: "Ready", reason: "", message: "", revision: "main@def", url: "https://x/y", suspended: false, ...over,
-});
+}, fluxSourceRule);
 
 const expandedDetail = (over: Partial<import("../store/fleet").ResourceDetailDTO> = {}) => ({
   cluster: "x",
@@ -429,6 +430,22 @@ describe("GitOps view", () => {
 describe("GitOps workspace template (redesign)", () => {
   const seedRows = (resources: FluxResourceDTO[], over: Partial<{ expandedKey: string | null; sources: FluxSourceDTO[] }> = {}) =>
     useFleet.setState((s) => ({ gitops: { ...s.gitops, cluster: "x", resources, sources: over.sources ?? [], loading: false, expandedKey: over.expandedKey ?? null, detail: null, watchError: null } }));
+
+  it("reads the Go-computed rule, never its own - reconciliations and sources (1c §2)", () => {
+    const flag = { included: true, role: "fault", label: "Flagged by backend" };
+    const clear = { included: false, role: "ok", label: "Ready" };
+    seedRows([res({ name: "flagged", ready: "Ready", rule: flag }), res({ name: "cleared", ready: "Failed", reason: "BuildFailed", rule: clear })],
+      { sources: [src({ name: "src-flagged", ready: "Ready", rule: flag }), src({ name: "src-cleared", ready: "Failed", rule: clear })] });
+    render(<GitOps cluster="x" />);
+    expect(screen.getByText("flagged").closest(".lens-row")?.textContent).toContain("Flagged by backend");
+    expect(screen.getByText("cleared").closest(".lens-row")?.textContent).not.toContain("Failed");
+    expect(screen.getByRole("button", { name: /^Not ready/ }).textContent?.trim()).toBe("Not ready 1");
+    openSources();
+    expect(screen.getByText("src-flagged").closest(".lens-row")?.textContent).toContain("Flagged by backend");
+    fireEvent.click(screen.getByRole("button", { name: /^Not ready/ }));
+    expect(screen.getByRole("button", { name: /^Not ready/ }).textContent?.trim()).toBe("Not ready 1");
+    expect(screen.queryByText("src-cleared")).toBeNull(); // count and rows agree
+  });
 
   it("auto-selects the first failing resource once, from a fresh read only", () => {
     seedRows([res({ name: "ok" }), res({ name: "bad", ready: "Failed" })]);

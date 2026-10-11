@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { useFleet } from "../store/fleet";
-import type { DependencyRefDTO, EventRowDTO, FluxResourceDTO, FluxSourceDTO, InventoryEntryDTO, ResourceDetailDTO } from "../store/fleet";
+import type { DependencyRefDTO, EventRowDTO, FluxResourceDTO, FluxSourceDTO, InventoryEntryDTO, ResourceDetailDTO, RuleDTO } from "../store/fleet";
 import { openGitOps, closeGitOps, getResourceDetail, reconcile, reconcileWithSource, setSuspend, resolveGitLink, fluxDiff } from "../bridge/gitops";
 import type { FluxDiffDTO } from "../bridge/gitops";
 import { ConfirmDialog } from "../chrome/ConfirmDialog";
@@ -51,12 +51,6 @@ function ago(sec: number): string {
   return `${Math.floor(sec / 3600)}h ago`;
 }
 
-function needsAttention(r: FluxResourceDTO): boolean {
-  // Suspended is an intended paused state, never a fault - it must not drive the
-  // attention badge/meter/filter (matches gitops_summary.go and argo.Broken()).
-  // It stays visible via its own suspended count/filter and warning color.
-  return !r.suspended && r.ready !== "Ready";
-}
 
 // Broken first. Suspension is checked BEFORE the (historical) Ready state: a
 // deliberately paused resource keeps its last Failed condition, and must not
@@ -129,23 +123,12 @@ const SOURCE_COLUMNS: (ColumnDef & { label: string })[] = [
   { id: "revision", label: "Revision", width: 150, priority: 2 },
 ];
 
-// fluxHealth maps Flux state onto the shared verdict roles so the lamp obeys
-// the template rule (only faults glow): Failed = fault; other not-Ready =
-// degraded; Reconciling or an unobserved spec ("Syncing…") = progressing;
-// Suspended = paused (an outlined ring - intentional, not broken); Ready = ok.
-function fluxHealth(r: { ready: string; suspended: boolean; stale?: boolean; reason?: string }): { kind: string; label: string } {
-  if (r.suspended) return { kind: "paused", label: "Suspended" };
-  if (r.stale) return { kind: "progressing", label: "Syncing…" };
-  if (r.ready === "Failed") return { kind: "fault", label: "Failed" };
-  if (r.ready === "Reconciling") return { kind: "progressing", label: "Reconciling" };
-  if (r.ready === "Unknown") {
-    // Flux reports Ready=Unknown while a reconcile is in flight (reason
-    // Progressing); any other Unknown is unverified, never a fault.
-    return /^(Progressing|ProgressingWithRetry|Reconciling)$/.test(r.reason ?? "") ? { kind: "progressing", label: "Progressing" } : { kind: "unknown", label: "Unknown" };
-  }
-  if (r.ready !== "Ready") return { kind: "degraded", label: r.ready || "Not ready" };
-  return { kind: "ok", label: "Ready" };
-}
+// The verdict is the relocated rule computed in Go (internal/gitops/flux
+// rules.go, 1c addendum §2): rule.included is the attention filter (not
+// suspended and not Ready - the legacy count, which includes progressing),
+// rule.role/label the presentation (Suspended = paused, never attention).
+const roleOf = (x: { rule: RuleDTO }) => ({ kind: x.rule.role, label: x.rule.label });
+const included = (x: { rule: RuleDTO }) => x.rule.included;
 const STATUS_COLOR: Record<string, string> = {
   fault: "var(--color-text-danger)",
   degraded: "var(--color-text-warning)",
@@ -155,8 +138,8 @@ const STATUS_COLOR: Record<string, string> = {
   ok: "var(--color-text-secondary)",
 };
 
-function Lamp({ r }: { r: { ready: string; suspended: boolean; stale?: boolean } }) {
-  const h = fluxHealth(r);
+function Lamp({ r }: { r: { rule: RuleDTO } }) {
+  const h = roleOf(r);
   return <span role="img" aria-label={h.label} style={{ display: "inline-flex", justifySelf: "center" }}><VerdictLamp health={h} size={8} /></span>;
 }
 
@@ -223,7 +206,7 @@ export function GitOps({ cluster }: { cluster: string }) {
     setView("reconciliation");
     // Direct navigation wins over pre-existing filters; a later operator edit
     // that excludes it still closes the inspector.
-    const passes = (!kindFilter || r.kind === kindFilter) && (status === "all" || (status === "attention" ? needsAttention(r) : r.suspended)) && matchesQuery(r, query);
+    const passes = (!kindFilter || r.kind === kindFilter) && (status === "all" || (status === "attention" ? included(r) : r.suspended)) && matchesQuery(r, query);
     if (!passes) { setStatus("all"); setKindFilter(""); setQuery(""); }
     setCursorKey(keyOf(r));
     expand(keyOf(r));
@@ -238,7 +221,7 @@ export function GitOps({ cluster }: { cluster: string }) {
   );
   const visibleRows = useMemo(() => orderedRows.filter((r) => {
     if (kindFilter && r.kind !== kindFilter) return false;
-    if (status === "attention" && !needsAttention(r)) return false;
+    if (status === "attention" && !included(r)) return false;
     if (status === "suspended" && !r.suspended) return false;
     return matchesQuery(r, query);
   }), [orderedRows, kindFilter, status, query]);
@@ -246,10 +229,9 @@ export function GitOps({ cluster }: { cluster: string }) {
     () => [...allSources].sort((a, b) => srcRank(a) - srcRank(b) || a.kind.localeCompare(b.kind) || a.namespace.localeCompare(b.namespace) || a.name.localeCompare(b.name)),
     [allSources],
   );
-  const sourceNeedsAttention = (s: FluxSourceDTO) => !s.suspended && s.ready !== "Ready";
   const visibleSources = useMemo(() => orderedSources.filter((s) => {
     if (sourceKind && s.kind !== sourceKind) return false;
-    if (status === "attention" && !sourceNeedsAttention(s)) return false;
+    if (status === "attention" && !included(s)) return false;
     if (status === "suspended" && !s.suspended) return false;
     const q = query.trim().toLowerCase();
     return !q || [s.kind, s.namespace, s.name, s.message, s.revision].some((v) => v.toLowerCase().includes(q));
@@ -307,7 +289,7 @@ export function GitOps({ cluster }: { cluster: string }) {
     if (autoSelect.current === "done" || !freshRead) return;
     autoSelect.current = "done";
     if (useFleet.getState().gitops.expandedKey) return;
-    const r = visibleRows.find(needsAttention);
+    const r = visibleRows.find(included);
     if (r) { setCursorKey(keyOf(r)); expand(keyOf(r)); }
   }, [freshRead, visibleRows, expand]);
 
@@ -349,11 +331,11 @@ export function GitOps({ cluster }: { cluster: string }) {
   const ks = rows.filter((r) => r.kind === "Kustomization").length;
   const hr = rows.filter((r) => r.kind === "HelmRelease").length;
   const failed = rows.filter((r) => !r.suspended && r.ready === "Failed").length;
-  const attention = rows.filter(needsAttention).length;
+  const attention = rows.filter(included).length;
   const suspended = rows.filter((r) => r.suspended).length;
   const reconciling = rows.filter((r) => !r.suspended && r.ready === "Reconciling").length;
   const syncing = rows.filter((r) => !r.suspended && r.stale).length;
-  const srcAttention = allSources.filter(sourceNeedsAttention).length;
+  const srcAttention = allSources.filter(included).length;
   const srcSuspended = allSources.filter((s) => s.suspended).length;
   const sourceKinds = [...new Set(allSources.map((s) => s.kind))].sort();
 
@@ -471,8 +453,8 @@ export function GitOps({ cluster }: { cluster: string }) {
                   {show("kind") && <span style={{ color: "var(--color-text-tertiary)" }}>{sourceKindLabel[s.kind] ?? s.kind}</span>}
                   {show("name") && <span className="lens-cell-name" title={`${s.namespace}/${s.name}`}><span style={{ color: "var(--color-text-tertiary)" }}>{s.namespace} / </span>{s.name}</span>}
                   {show("status") && (
-                    <span style={{ ...ellipsisCell, color: STATUS_COLOR[fluxHealth(s).kind] }}>
-                      {s.suspended ? "Suspended" : s.ready}{s.message && s.ready !== "Ready" && !s.suspended ? ` · ${s.message}` : ""}
+                    <span style={{ ...ellipsisCell, color: STATUS_COLOR[roleOf(s).kind] }}>
+                      {roleOf(s).label}{included(s) && s.message ? ` · ${s.message}` : ""}
                     </span>
                   )}
                   {show("revision") && <span style={{ ...ellipsisCell, color: "var(--color-text-secondary)" }} title={s.revision}>{shortRev(s.revision) || "-"}</span>}
@@ -493,7 +475,7 @@ export function GitOps({ cluster }: { cluster: string }) {
               style={{ flex: 1, minHeight: 0 }}
               render={(r) => {
                 const k = keyOf(r);
-                const h = fluxHealth(r);
+                const h = roleOf(r);
                 return (
                   <div
                     key={k}
@@ -519,11 +501,11 @@ export function GitOps({ cluster }: { cluster: string }) {
                       </span>
                     )}
                     {show("status") && (
-                      <span style={ellipsisCell} title={needsAttention(r) && r.message ? r.message : undefined}>
-                        {r.suspended ? <span style={{ color: "var(--color-text-secondary)" }}>Suspended</span>
-                          : r.stale ? <SyncingChip generation={r.generation} observedGeneration={r.observedGeneration} />
-                          : <span className={r.ready === "Failed" ? "klyx-danger-prefix" : undefined} style={{ color: STATUS_COLOR[h.kind], fontWeight: r.ready === "Failed" ? 600 : 400 }}>
-                              {r.ready}{needsAttention(r) && r.reason ? ` · ${r.reason}` : ""}
+                      <span style={ellipsisCell} title={included(r) && r.message ? r.message : undefined}>
+                        {h.kind === "paused" ? <span style={{ color: "var(--color-text-secondary)" }}>{h.label}</span>
+                          : h.label === "Syncing…" ? <SyncingChip generation={r.generation} observedGeneration={r.observedGeneration} />
+                          : <span className={h.kind === "fault" ? "klyx-danger-prefix" : undefined} style={{ color: STATUS_COLOR[h.kind], fontWeight: h.kind === "fault" ? 600 : 400 }}>
+                              {h.label}{included(r) && r.reason ? ` · ${r.reason}` : ""}
                             </span>}
                       </span>
                     )}
@@ -615,7 +597,7 @@ function SourceInspector({ source, removed, usedBy, onClose, onOpenResource }: {
   onOpenResource: (r: FluxResourceDTO) => void;
 }) {
   const s = source;
-  const h = fluxHealth(s);
+  const h = roleOf(s);
   const ref = wellKnownResourceRef(FLUX_KIND_GROUPS[s.kind] ?? "", s.kind);
   const view = ref ? () => { const nav = useFleet.getState(); nav.openResource(ref); nav.openInstance(s.namespace, s.name); } : null;
   return (
@@ -646,7 +628,7 @@ function SourceInspector({ source, removed, usedBy, onClose, onOpenResource }: {
               {usedBy.map((r) => (
                 <button key={keyOf(r)} onClick={() => onOpenResource(r)} className="t-identifier"
                   style={{ display: "flex", gap: 8, alignItems: "center", background: "none", border: 0, padding: "2px 0", cursor: "pointer", textAlign: "left", color: "var(--color-text-info)" }}>
-                  <VerdictLamp health={fluxHealth(r)} size={7} />
+                  <VerdictLamp health={roleOf(r)} size={7} />
                   <span style={{ overflowWrap: "anywhere" }}>{r.kind === "Kustomization" ? "ks" : "hr"} {r.namespace}/{r.name}</span>
                 </button>
               ))}
@@ -724,11 +706,11 @@ function FluxInspector({ cluster, resource, removed, isProtected, detail, deps, 
         <InspectorStatus
           tone={fluxTone(r)}
           label={r.suspended ? "Suspended" : r.ready}
-          reason={needsAttention(r) ? r.reason || undefined : undefined}
+          reason={included(r) ? r.reason || undefined : undefined}
           detail={shortRev(r.revision) || undefined}
         />
       )}
-      {r.message && needsAttention(r) && !r.stale && (
+      {r.message && included(r) && !r.stale && (
         <div className="t-body" style={{ color: r.ready === "Failed" ? "var(--color-text-danger)" : "var(--color-text-warning)", overflowWrap: "anywhere", marginTop: -4 }}>{r.message}</div>
       )}
     </div>
@@ -766,7 +748,7 @@ function FluxInspector({ cluster, resource, removed, isProtected, detail, deps, 
               <DependsOnSection deps={detail.dependsOn} kind={r.kind} resolve={deps} blocked={detail.reason === "DependencyNotReady"} />
             )}
             {detail.events && <EventsSection events={detail.events} />}
-            <InspectorBlock title="Conditions" count={detail.conditions.length} defaultOpen={needsAttention(r)}>
+            <InspectorBlock title="Conditions" count={detail.conditions.length} defaultOpen={included(r)}>
               <InspectorConditions conditions={detail.conditions} />
             </InspectorBlock>
             {r.kind === "Kustomization" ? (
@@ -1008,7 +990,3 @@ function fluxTone(r: { ready: string; suspended: boolean }): Tone {
 function Muted({ children }: { children: ReactNode }) {
   return <span style={{ color: "var(--color-text-tertiary)" }}>{children}</span>;
 }
-
-// The lens rules, exported for the 1c golden parity harness until the lens
-// reads the Go-computed rule.
-export { needsAttention as fluxNeedsAttention, fluxHealth };

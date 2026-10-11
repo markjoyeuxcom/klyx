@@ -44,6 +44,7 @@ export type ClusterDTO = {
 };
 
 export type FluxResourceDTO = {
+  rule: RuleDTO; // the relocated lens rule (1c addendum §2)
   kind: string;
   namespace: string;
   name: string;
@@ -134,11 +135,13 @@ export type ArgoProjectDTO = {
 };
 export type ArgoAppSetConditionDTO = { type: string; status: string; reason: string; message: string };
 export type ArgoApplicationSetDTO = {
+  rule: RuleDTO; // the relocated lens rule (1c addendum §2)
   namespace: string; name: string; generators: string[]; templateName: string;
   project: string; repoURL: string; path: string; targetRevision: string; destNamespace: string;
   destServer?: string; generatedApps: number; generatedNames?: string[]; healthy: boolean; conditions: ArgoAppSetConditionDTO[];
 };
 export type ArgoAppDTO = {
+  rule: RuleDTO; // the relocated lens rule (1c addendum §2)
   namespace: string; name: string; project: string;
   syncStatus: string; healthStatus: string; broken: boolean;
   revision: string; repoURL: string; path: string; chart: string; targetRevision: string;
@@ -157,6 +160,7 @@ export type ArgoApplicationSetsResultDTO = { available: boolean; message?: strin
 export type ConditionDTO = { type: string; status: string; reason: string; message: string; scope?: string };
 export type InventoryEntryDTO = { group: string; version: string; kind: string; namespace: string; name: string };
 export type FluxSourceDTO = {
+  rule: RuleDTO; // the relocated lens rule (1c addendum §2)
   kind: string;
   namespace: string;
   name: string;

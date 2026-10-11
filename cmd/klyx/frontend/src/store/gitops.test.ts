@@ -1,16 +1,17 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { useFleet, FluxResourceDTO, FluxSourceDTO } from "./fleet";
+import { fluxRule, fluxSourceRule, withRule } from "../test/backendRules";
 
-const r = (over: Partial<FluxResourceDTO>): FluxResourceDTO => ({
+const r = (over: Partial<FluxResourceDTO>): FluxResourceDTO => withRule<FluxResourceDTO>({
   kind: "Kustomization", namespace: "flux-system", name: "flux-system",
   ready: "Ready", reason: "", message: "", revision: "main@abc", readySinceSeconds: 1, suspended: false,
   sourceKind: "", sourceName: "", ...over,
-});
+}, fluxRule);
 
-const src = (over: Partial<FluxSourceDTO>): FluxSourceDTO => ({
+const src = (over: Partial<FluxSourceDTO>): FluxSourceDTO => withRule<FluxSourceDTO>({
   kind: "GitRepository", namespace: "flux-system", name: "flux-system",
   ready: "Ready", reason: "", message: "", revision: "main@def", url: "https://x/y", suspended: false, ...over,
-});
+}, fluxSourceRule);
 
 beforeEach(() => useFleet.setState({ gitops: { cluster: null, resources: [], sources: [], loading: false, expandedKey: null, detail: null } }));
 

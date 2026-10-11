@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, fireEvent, act, screen, within } from "@testing-library/react";
 import { ArgoView, resolveArgoResourceRef } from "./ArgoView";
 import { useFleet } from "../store/fleet";
-import type { ArgoAppDTO, ArgoResourceDTO } from "../store/fleet";
+import type { ArgoAppDTO, ArgoApplicationSetDTO, ArgoResourceDTO } from "../store/fleet";
 
 vi.mock("../bridge/argo", () => ({
   listArgoApps: vi.fn().mockResolvedValue(undefined),
@@ -12,8 +12,16 @@ vi.mock("../bridge/argo", () => ({
   syncArgoApp: vi.fn().mockResolvedValue(undefined),
 }));
 import { listArgoApps, refreshArgoApp, syncArgoApp } from "../bridge/argo";
+import { argoAppRule, argoAppSetRule } from "../test/backendRules";
 
-const healthy: ArgoAppDTO = {
+// Fixtures enter the store with the rule the backend computes
+// (test/backendRules.ts, held to the Go golden fixture). A fixture that sets
+// its own rule keeps it (contradiction tests).
+type NoRule<T> = Omit<T, "rule"> & { rule?: ArgoAppDTO["rule"] };
+const ruledApps = (xs: NoRule<ArgoAppDTO>[]): ArgoAppDTO[] => xs.map((a) => ({ ...a, rule: a.rule ?? argoAppRule(a) }));
+const ruledSets = (xs: NoRule<ArgoApplicationSetDTO>[]): ArgoApplicationSetDTO[] => xs.map((a) => ({ ...a, rule: a.rule ?? argoAppSetRule(a) }));
+
+const healthy: NoRule<ArgoAppDTO> = {
   namespace: "argocd", name: "console-dev", project: "default",
   syncStatus: "Synced", healthStatus: "Healthy", broken: false,
   revision: "abc1234def5678", repoURL: "https://gitlab.com/x/workloads.git",
@@ -27,14 +35,14 @@ const healthy: ArgoAppDTO = {
   ],
   reconciledUnix: Math.floor(Date.now() / 1000) - 120,
 };
-const broken: ArgoAppDTO = {
+const broken: NoRule<ArgoAppDTO> = {
   ...healthy, name: "ollama-prod", syncStatus: "OutOfSync", healthStatus: "Degraded",
   broken: true, destNamespace: "ollama-prod", autoSync: false,
   conditions: [{ type: "ComparisonError", message: "repo unreachable" }],
 };
 
-function seed(apps: ArgoAppDTO[], extra: Partial<{ available: boolean; message: string }> = {}) {
-  useFleet.setState((s) => ({ argo: { ...s.argo, cluster: "homelab-nelli", apps, available: extra.available ?? true, message: extra.message ?? "", loading: false } }));
+function seed(apps: NoRule<ArgoAppDTO>[], extra: Partial<{ available: boolean; message: string }> = {}) {
+  useFleet.setState((s) => ({ argo: { ...s.argo, cluster: "homelab-nelli", apps: ruledApps(apps), available: extra.available ?? true, message: extra.message ?? "", loading: false } }));
 }
 
 // The row is the first match: once selected, the inspector repeats the name.
@@ -42,6 +50,28 @@ function select(name: string) { fireEvent.click(screen.getAllByText(name)[0]); }
 const inspector = () => within(screen.getByTestId("lens-inspector"));
 
 describe("ArgoView", () => {
+  it("reads the Go-computed rule, never its own - applications and ApplicationSets (1c §2)", () => {
+    const flag = { included: true, role: "fault", label: "Flagged by backend" };
+    const clear = { included: false, role: "ok", label: "Healthy" };
+    seed([{ ...healthy, name: "flagged", rule: flag }, { ...broken, name: "cleared", rule: clear }]);
+    const { unmount } = render(<ArgoView cluster="homelab-nelli" />);
+    // Sync and health columns are Argo's native evidence; the verdict is the lamp.
+    expect(within(screen.getByText("flagged").closest(".lens-row") as HTMLElement).getByRole("img", { name: "Flagged by backend" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /^Attention/ }));
+    expect(screen.getByRole("button", { name: /^Attention/ }).textContent?.trim()).toBe("Attention 1");
+    expect(screen.queryByText("cleared")).toBeNull();
+    unmount();
+    const set = { namespace: "argocd", generators: ["list"], templateName: "", project: "default", repoURL: "", path: "", targetRevision: "", destNamespace: "", generatedApps: 0, generatedNames: [], conditions: [] };
+    useFleet.setState((s) => ({ argo: { ...s.argo, cluster: "homelab-nelli", applicationSetsAvailable: true, applicationSetsLoading: false,
+      applicationSets: ruledSets([{ ...set, name: "set-flagged", healthy: true, rule: { included: true, role: "degraded", label: "Flagged by backend" } },
+        { ...set, name: "set-cleared", healthy: false, rule: { included: false, role: "ok", label: "healthy" } }]) } }));
+    render(<ArgoView cluster="homelab-nelli" mode="applicationsets" />);
+    fireEvent.click(screen.getByRole("button", { name: /^Attention/ }));
+    expect(screen.getByRole("button", { name: /^Attention/ }).textContent?.trim()).toBe("Attention 1");
+    expect(screen.getByText("set-flagged")).toBeTruthy();
+    expect(screen.queryByText("set-cleared")).toBeNull();
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     useFleet.getState().clearArgo();
@@ -164,7 +194,7 @@ describe("ArgoView", () => {
       argo: {
         ...s.argo,
         cluster: "homelab-nelli",
-        applicationSets: [{
+        applicationSets: ruledSets([{
           namespace: "argocd",
           name: "platform-set",
           generators: ["clusters"],
@@ -178,7 +208,7 @@ describe("ArgoView", () => {
           healthy: false,
           // ErrorOccurred is adverse when True (Argo's polarity)
           conditions: [{ type: "ErrorOccurred", status: "True", reason: "RenderError", message: "bad template" }],
-        }],
+        }]),
         applicationSetsAvailable: true,
         applicationSetsLoading: false,
       },
@@ -198,8 +228,8 @@ describe("ArgoView", () => {
       argo: {
         ...s.argo,
         cluster: "homelab-nelli",
-        apps: [{ ...healthy, name: "dev-platform", project: "platform", destNamespace: "apps" }],
-        applicationSets: [{
+        apps: ruledApps([{ ...healthy, name: "dev-platform", project: "platform", destNamespace: "apps" }]),
+        applicationSets: ruledSets([{
           namespace: "argocd",
           name: "platform-set",
           generators: ["clusters"],
@@ -213,7 +243,7 @@ describe("ArgoView", () => {
           generatedNames: ["dev-platform", "prd-platform"],
           healthy: true,
           conditions: [],
-        }],
+        }]),
         applicationSetsAvailable: true,
         applicationSetsLoading: false,
       },
@@ -244,8 +274,8 @@ describe("ArgoView", () => {
       argo: {
         ...s.argo,
         cluster: "homelab-nelli",
-        apps: [{ ...healthy, name: "dev-platform", project: "platform", applicationSet: "platform-set" }],
-        applicationSets: [{
+        apps: ruledApps([{ ...healthy, name: "dev-platform", project: "platform", applicationSet: "platform-set" }]),
+        applicationSets: ruledSets([{
           namespace: "argocd",
           name: "platform-set",
           generators: ["clusters"],
@@ -258,7 +288,7 @@ describe("ArgoView", () => {
           generatedApps: 1,
           healthy: true,
           conditions: [],
-        }],
+        }]),
         applicationSetsAvailable: true,
         applicationSetsLoading: false,
       },
@@ -362,7 +392,7 @@ describe("ArgoView workspace template (redesign step 4b)", () => {
   });
 
   it("Suspended is an intended pause: never attention, paused lamp", () => {
-    const paused: ArgoAppDTO = { ...healthy, name: "paused-app", healthStatus: "Suspended", broken: false };
+    const paused: NoRule<ArgoAppDTO> = { ...healthy, name: "paused-app", healthStatus: "Suspended", broken: false };
     seed([paused]);
     const { getByText, getByRole } = render(<ArgoView cluster="homelab-nelli" />);
     expect(getByText("none out of sync or unhealthy reported")).toBeTruthy(); // no Healthy claim
@@ -390,7 +420,7 @@ describe("ArgoView workspace template (redesign step 4b)", () => {
     act(() => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "r", bubbles: true, cancelable: true })); });
     expect(getByText("refresh application")).toBeTruthy();
     rerender(<ArgoView cluster="other" />);
-    act(() => useFleet.setState((s) => ({ argo: { ...s.argo, cluster: "other", apps: [broken], loading: false, error: null } })));
+    act(() => useFleet.setState((s) => ({ argo: { ...s.argo, cluster: "other", apps: ruledApps([broken]), loading: false, error: null } })));
     expect(queryByText("refresh application")).toBeNull();
     expect(refreshArgoApp).not.toHaveBeenCalled();
   });
@@ -402,7 +432,7 @@ describe("ArgoView workspace template (redesign step 4b)", () => {
     expect(first.getByText(/showing the last good read/)).toBeTruthy();
     expect(first.getAllByText("ollama-prod").length).toBeGreaterThan(0);
     first.unmount();
-    useFleet.setState((s) => ({ argo: { ...s.argo, cluster: "homelab-nelli", apps: [], available: false, message: "forbidden", error: "forbidden", loading: false } }));
+    useFleet.setState((s) => ({ argo: { ...s.argo, cluster: "homelab-nelli", apps: ruledApps([]), available: false, message: "forbidden", error: "forbidden", loading: false } }));
     const second = render(<ArgoView cluster="homelab-nelli" />);
     expect(second.getByText("Argo CD applications could not be read.")).toBeTruthy();
     expect(second.queryByText(/not served/)).toBeNull();
@@ -423,12 +453,12 @@ describe("ArgoView ApplicationSet condition polarity (live pass)", () => {
   it("ErrorOccurred=True is the headline error; ResourcesUpToDate=False follows; unknown types make no claim", () => {
     useFleet.getState().clearArgo();
     useFleet.setState((s) => ({ argo: { ...s.argo, cluster: "homelab-nelli", applicationSetsAvailable: true, applicationSetsLoading: false,
-      applicationSets: [{ namespace: "argocd", name: "tenant-apps", generators: ["list"], templateName: "", project: "platform", repoURL: "", path: "", targetRevision: "main", destNamespace: "", generatedApps: 0, healthy: false,
+      applicationSets: ruledSets([{ namespace: "argocd", name: "tenant-apps", generators: ["list"], templateName: "", project: "platform", repoURL: "", path: "", targetRevision: "main", destNamespace: "", generatedApps: 0, healthy: false,
         conditions: [
           { type: "ResourcesUpToDate", status: "False", reason: "ApplicationGenerationFromParamsError", message: "generation failed" },
           { type: "ErrorOccurred", status: "True", reason: "ApplicationGenerationFromParamsError", message: "function tenant not defined" },
           { type: "SomethingNew", status: "False", reason: "X", message: "unknown polarity" },
-        ] }] } }));
+        ] }]) } }));
     render(<ArgoView cluster="homelab-nelli" mode="applicationsets" />);
     select("tenant-apps");
     const lines = inspector().getAllByText(/^(ErrorOccurred|ResourcesUpToDate|SomethingNew):/).map((e) => e.textContent);
@@ -445,7 +475,7 @@ describe("ArgoView Codex rework (Argo review)", () => {
 
   it("3a. a failed Application read never makes a project 'unused' or claim zero apps", () => {
     useFleet.setState((s) => ({ argo: { ...s.argo, cluster: "homelab-nelli", projects: [project], projectsAvailable: true, projectsLoading: false,
-      apps: [], loading: false, available: false, message: "forbidden", error: "forbidden" } }));
+      apps: ruledApps([]), loading: false, available: false, message: "forbidden", error: "forbidden" } }));
     const { queryByText, getByText, queryByRole } = render(<ArgoView cluster="homelab-nelli" mode="projects" />);
     expect(queryByText("unused")).toBeNull();
     expect(getByText(/app usage unverified/)).toBeTruthy();
@@ -455,8 +485,8 @@ describe("ArgoView Codex rework (Argo review)", () => {
   });
 
   it("3b. a still-loading Application read never claims missing generated apps", () => {
-    useFleet.setState((s) => ({ argo: { ...s.argo, cluster: "homelab-nelli", applicationSets: [appSet], applicationSetsAvailable: true, applicationSetsLoading: false,
-      apps: [], loading: true, error: null } }));
+    useFleet.setState((s) => ({ argo: { ...s.argo, cluster: "homelab-nelli", applicationSets: ruledSets([appSet]), applicationSetsAvailable: true, applicationSetsLoading: false,
+      apps: ruledApps([]), loading: true, error: null } }));
     const { getByText, queryByRole } = render(<ArgoView cluster="homelab-nelli" mode="applicationsets" />);
     expect(getByText(/generated apps unverified/)).toBeTruthy();
     expect(queryByRole("button", { name: /^Missing apps/ })).toBeNull();
@@ -466,7 +496,7 @@ describe("ArgoView Codex rework (Argo review)", () => {
 
   it("3c. stale retained apps are labelled as the last good read", () => {
     useFleet.setState((s) => ({ argo: { ...s.argo, cluster: "homelab-nelli", projects: [project], projectsAvailable: true, projectsLoading: false,
-      apps: [{ ...healthy, project: "platform" }], loading: false, error: "timeout" } }));
+      apps: ruledApps([{ ...healthy, project: "platform" }]), loading: false, error: "timeout" } }));
     render(<ArgoView cluster="homelab-nelli" mode="projects" />);
     select("platform");
     expect(screen.getByText(/From the last good Application read/)).toBeTruthy();
@@ -499,7 +529,7 @@ describe("ArgoView ApplicationSet polarity, full matrix (Codex rework #1)", () =
   const base = { namespace: "argocd", name: "s", generators: ["list"], templateName: "", project: "", repoURL: "", path: "", targetRevision: "", destNamespace: "", generatedApps: 0 };
   const show = (healthy: boolean, conditions: { type: string; status: string; reason: string; message: string }[]) => {
     useFleet.getState().clearArgo();
-    useFleet.setState((st) => ({ argo: { ...st.argo, cluster: "homelab-nelli", applicationSetsAvailable: true, applicationSetsLoading: false, applicationSets: [{ ...base, healthy, conditions }] } }));
+    useFleet.setState((st) => ({ argo: { ...st.argo, cluster: "homelab-nelli", applicationSetsAvailable: true, applicationSetsLoading: false, applicationSets: ruledSets([{ ...base, healthy, conditions }]) } }));
     const r = render(<ArgoView cluster="homelab-nelli" mode="applicationsets" />);
     select("s");
     return r;
@@ -550,8 +580,8 @@ describe("ArgoView Codex re-review (destination + join coverage + zero wording)"
 
   it("2a. Projects succeed, ApplicationSets fail: appset counts are '?' and the inspector says unverified", () => {
     useFleet.setState((st) => ({ argo: { ...st.argo, cluster: "homelab-nelli", projects: [project], projectsAvailable: true, projectsLoading: false,
-      apps: [{ ...healthy, project: "platform" }], loading: false,
-      applicationSets: [], applicationSetsLoading: false, applicationSetsAvailable: false, applicationSetsError: "forbidden" } }));
+      apps: ruledApps([{ ...healthy, project: "platform" }]), loading: false,
+      applicationSets: ruledSets([]), applicationSetsLoading: false, applicationSetsAvailable: false, applicationSetsError: "forbidden" } }));
     const { container, getByText } = render(<ArgoView cluster="homelab-nelli" mode="projects" />);
     const row = container.querySelector(".lens-row") as HTMLElement;
     expect(row.textContent).toContain("?");
@@ -560,9 +590,9 @@ describe("ArgoView Codex re-review (destination + join coverage + zero wording)"
   });
 
   it("2b. Applications succeed, Projects and ApplicationSets fail: attribution says unverified", () => {
-    useFleet.setState((st) => ({ argo: { ...st.argo, cluster: "homelab-nelli", apps: [healthy], loading: false, error: null, available: true,
+    useFleet.setState((st) => ({ argo: { ...st.argo, cluster: "homelab-nelli", apps: ruledApps([healthy]), loading: false, error: null, available: true,
       projects: [], projectsLoading: false, projectsError: "forbidden",
-      applicationSets: [], applicationSetsLoading: false, applicationSetsError: "forbidden" } }));
+      applicationSets: ruledSets([]), applicationSetsLoading: false, applicationSetsError: "forbidden" } }));
     render(<ArgoView cluster="homelab-nelli" />);
     select("console-dev");
     expect(inspector().getByText(/project read unavailable - unverified/)).toBeTruthy();
@@ -571,7 +601,7 @@ describe("ArgoView Codex re-review (destination + join coverage + zero wording)"
 
   it("2c. stale-derived headline counts and filter chips are marked last-good", () => {
     useFleet.setState((st) => ({ argo: { ...st.argo, cluster: "homelab-nelli", projects: [project], projectsAvailable: true, projectsLoading: false,
-      apps: [{ ...healthy, project: "other" }], loading: false, error: "timeout" } }));
+      apps: ruledApps([{ ...healthy, project: "other" }]), loading: false, error: "timeout" } }));
     const { getByText, getByRole } = render(<ArgoView cluster="homelab-nelli" mode="projects" />);
     expect(getByText(/1 unused \(last good Application read\)/)).toBeTruthy();
     expect(getByRole("button", { name: /^Unused 1\*/ })).toBeTruthy();

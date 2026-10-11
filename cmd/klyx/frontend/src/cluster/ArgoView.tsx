@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useFleet } from "../store/fleet";
-import type { ArgoApplicationSetDTO, ArgoAppDTO, ArgoProjectDTO, ArgoResourceDTO, ArgoResourceRuleDTO, ArgoViewMode, CRDGroupDTO, ResourceRef } from "../store/fleet";
+import type { ArgoApplicationSetDTO, ArgoAppDTO, ArgoProjectDTO, ArgoResourceDTO, ArgoResourceRuleDTO, ArgoViewMode, CRDGroupDTO, ResourceRef, RuleDTO } from "../store/fleet";
 import { listArgoApplicationSets, listArgoApps, listArgoProjects, refreshArgoApp, syncArgoApp } from "../bridge/argo";
 import type { ArgoSyncOptions } from "../bridge/argo";
 import { ConfirmDialog } from "../chrome/ConfirmDialog";
@@ -51,7 +51,7 @@ export function resolveArgoResourceRef(resource: ArgoResourceDTO, crdGroups: CRD
 // Three views of one lens: Applications, Projects, ApplicationSets (the route
 // keeps the mode). Argo's own vocabulary is kept - Synced/OutOfSync,
 // Healthy/Progressing/Degraded/Missing/Suspended - never translated into Flux
-// terms. Attention follows the ratified backend rule (Application.broken):
+// terms. Attention follows the ratified backend rule (the Go-computed rule):
 // Suspended is an intended pause, never attention. Primary verb Refresh,
 // secondary Sync (safeguarded composer, prune off by default) per spec §3.
 
@@ -60,18 +60,12 @@ type AppFilter = "all" | "attention" | "outofsync";
 type ProjectFilter = "all" | "risky" | "unused";
 type AppSetFilter = "all" | "attention" | "missing";
 
-// argoHealth maps Argo state onto the shared verdict roles so lamps follow
-// the template rule (only faults glow): Degraded/Missing = fault; OutOfSync =
-// degraded (drift); Progressing = progressing; Suspended = paused (outlined
-// ring); Healthy+Synced = ok; anything else = unknown.
-function argoHealth(a: ArgoAppDTO): { kind: string; label: string } {
-  if (a.healthStatus === "Degraded" || a.healthStatus === "Missing") return { kind: "fault", label: a.healthStatus };
-  if (a.healthStatus === "Suspended") return { kind: "paused", label: "Suspended" };
-  if (a.syncStatus === "OutOfSync") return { kind: "degraded", label: "OutOfSync" };
-  if (a.healthStatus === "Progressing") return { kind: "progressing", label: "Progressing" };
-  if (a.healthStatus === "Healthy" && a.syncStatus === "Synced") return { kind: "ok", label: "Healthy" };
-  return { kind: "unknown", label: a.healthStatus || "Unknown" };
-}
+// The verdict is the relocated rule computed in Go (internal/gitops/argo
+// rules.go, 1c addendum §2): rule.included is the ratified backend rule (not
+// Synced or unhealthy; Progressing and Suspended are not broken) - or, for an
+// ApplicationSet, not healthy - and rule.role/label the presentation in Argo's
+// own vocabulary.
+const roleOf = (x: { rule: RuleDTO }) => ({ kind: x.rule.role, label: x.rule.label });
 const ROLE_COLOR: Record<string, string> = {
   fault: "var(--color-text-danger)",
   degraded: "var(--color-text-warning)",
@@ -173,7 +167,7 @@ export function ArgoView({ cluster, mode = "applications" }: { cluster: string; 
   // Filtering per view.
   const q = query.trim().toLowerCase();
   const visibleApps = useMemo(() => apps.filter((a) => {
-    if (appFilter === "attention" && !a.broken) return false;
+    if (appFilter === "attention" && !a.rule.included) return false;
     if (appFilter === "outofsync" && a.syncStatus !== "OutOfSync") return false;
     return matchesAppQuery(a, q);
   }), [apps, appFilter, q]);
@@ -184,9 +178,9 @@ export function ArgoView({ cluster, mode = "applications" }: { cluster: string; 
     .sort((a, b) => projectRiskScore(b, apps, appsCov) - projectRiskScore(a, apps, appsCov) || a.name.localeCompare(b.name)), [projects, apps, q, projectFilter, appsCov]);
   const visibleAppSets = useMemo(() => [...appSets]
     .filter((a) => matchesAppSetQuery(a, q))
-    .filter((a) => appSetFilter !== "attention" || !a.healthy)
+    .filter((a) => appSetFilter !== "attention" || a.rule.included)
     .filter((a) => appSetFilter !== "missing" || (appsCov !== "unknown" && missingGeneratedNames(a, apps).length > 0))
-    .sort((a, b) => Number(a.healthy) - Number(b.healthy) || a.name.localeCompare(b.name)), [appSets, apps, q, appSetFilter, appsCov]);
+    .sort((a, b) => Number(b.rule.included) - Number(a.rule.included) || a.name.localeCompare(b.name)), [appSets, apps, q, appSetFilter, appsCov]);
 
   // Selection lifecycle per view: filter exclusion closes; absent from a
   // complete read = removed (last evidence, no actions).
@@ -239,7 +233,7 @@ export function ArgoView({ cluster, mode = "applications" }: { cluster: string; 
     if (autoSelect.current === "done" || !freshRead || mode !== "applications") return;
     autoSelect.current = "done";
     if (appKey) return;
-    const a = visibleApps.find((x) => x.broken);
+    const a = visibleApps.find((x) => x.rule.included);
     if (a) { setCursorKey(keyOf(a)); setAppKey(keyOf(a)); }
   }, [freshRead, visibleApps, appKey, mode]);
 
@@ -270,12 +264,12 @@ export function ArgoView({ cluster, mode = "applications" }: { cluster: string; 
   const gridStyle = { gridTemplateColumns: fitted.template };
 
   // Counts in Argo vocabulary.
-  const broken = apps.filter((a) => a.broken).length;
+  const broken = apps.filter((a) => a.rule.included).length;
   const byHealth = (h: string) => apps.filter((a) => a.healthStatus === h).length;
   const outOfSync = apps.filter((a) => a.syncStatus === "OutOfSync").length;
   const riskyProjects = projects.filter((p) => projectRiskBadges(p, appsForProject(apps, p.name), appsCov).some((r) => r.tone === "danger" || r.tone === "warning")).length;
   const unusedProjects = appsCov === "unknown" ? null : projects.filter((p) => appsForProject(apps, p.name).length === 0).length;
-  const unhealthySets = appSets.filter((a) => !a.healthy).length;
+  const unhealthySets = appSets.filter((a) => a.rule.included).length;
   const missingSets = appsCov === "unknown" ? null : appSets.filter((a) => missingGeneratedNames(a, apps).length > 0).length;
 
   const view = mode === "projects"
@@ -393,7 +387,7 @@ export function ArgoView({ cluster, mode = "applications" }: { cluster: string; 
                 style={{ flex: 1, minHeight: 0 }}
                 render={(a) => {
                   const k = keyOf(a);
-                  const role = argoHealth(a);
+                  const role = roleOf(a);
                   return (
                     <div key={k} role="button" tabIndex={0} className="lens-row" style={gridStyle}
                       aria-selected={k === cursorKey} data-cursor={k === cursorKey ? "true" : undefined} data-selected={k === appKey ? "true" : undefined}
@@ -455,7 +449,7 @@ export function ArgoView({ cluster, mode = "applications" }: { cluster: string; 
                       aria-selected={k === cursorKey} data-cursor={k === cursorKey ? "true" : undefined} data-selected={k === setKey ? "true" : undefined}
                       onClick={() => { setCursorKey(k); setSetKey(k === setKey ? null : k); }}
                       onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setSetKey(k); } }}>
-                      {show("lamp") && <RowLamp role={a.healthy ? { kind: "ok", label: "healthy" } : { kind: "degraded", label: "needs attention" }} />}
+                      {show("lamp") && <RowLamp role={roleOf(a)} />}
                       {show("name") && <span className="lens-cell-name" title={k}><span style={{ color: "var(--color-text-tertiary)" }}>{a.namespace} / </span>{a.name}</span>}
                       {show("generators") && <span style={{ ...cell, color: "var(--color-text-secondary)" }}>{a.generators.length === 0 ? "-" : a.generators.join(", ")}</span>}
                       {show("apps") && <span>{a.generatedApps || (appsCov === "unknown" ? "?" : generatedAppsForSet(apps, a).length || "-")}</span>}
@@ -603,7 +597,7 @@ function ApplicationInspector({ cluster, app, removed, isProtected, project, pro
   const conditions = arrayOf(app.conditions);
   const resources = arrayOf(app.resources);
   const badResources = resources.filter((r) => r.status === "OutOfSync" || r.health === "Degraded" || r.health === "Missing");
-  const role = argoHealth(app);
+  const role = roleOf(app);
   const tone = role.kind === "fault" ? "danger" : role.kind === "degraded" ? "warning" : role.kind === "ok" ? "success" : "muted";
   const live = !removed;
   const manifestRef = wellKnownResourceRef("argoproj.io", "Application");
@@ -792,8 +786,8 @@ function ApplicationSetInspector({ appSet, removed, allApps, appsCov, project, o
         verdict={removed ? <RemovedNotice kind="ApplicationSet" /> : (
           <div>
             <InspectorStatus
-              tone={appSet.healthy ? "success" : adverse.length > 0 ? "warning" : "muted"}
-              label={appSet.healthy ? "Healthy" : adverse.length > 0 ? "Needs attention" : "Unverified"}
+              tone={!appSet.rule.included ? "success" : adverse.length > 0 ? "warning" : "muted"}
+              label={!appSet.rule.included ? "Healthy" : adverse.length > 0 ? "Needs attention" : "Unverified"}
               reason={condition ? condition.reason || condition.type : undefined}
             />
             {adverse.map((c, i) => (
@@ -896,18 +890,18 @@ function appSetKey(a: ArgoApplicationSetDTO): string {
 }
 
 function appsForProject(apps: ArgoAppDTO[], project: string): ArgoAppDTO[] {
-  return apps.filter((a) => a.project === project).sort((a, b) => Number(b.broken) - Number(a.broken) || a.name.localeCompare(b.name));
+  return apps.filter((a) => a.project === project).sort((a, b) => Number(b.rule.included) - Number(a.rule.included) || a.name.localeCompare(b.name));
 }
 
 function appSetsForProject(appSets: ArgoApplicationSetDTO[], project: string): ArgoApplicationSetDTO[] {
-  return appSets.filter((a) => a.project === project).sort((a, b) => Number(a.healthy) - Number(b.healthy) || a.name.localeCompare(b.name));
+  return appSets.filter((a) => a.project === project).sort((a, b) => Number(b.rule.included) - Number(a.rule.included) || a.name.localeCompare(b.name));
 }
 
 function generatedAppsForSet(apps: ArgoAppDTO[], appSet: ArgoApplicationSetDTO): ArgoAppDTO[] {
   const names = new Set(arrayOf(appSet.generatedNames));
   return apps
     .filter((a) => names.has(a.name) || a.applicationSet === appSet.name)
-    .sort((a, b) => Number(b.broken) - Number(a.broken) || a.name.localeCompare(b.name));
+    .sort((a, b) => Number(b.rule.included) - Number(a.rule.included) || a.name.localeCompare(b.name));
 }
 
 function missingGeneratedNames(appSet: ArgoApplicationSetDTO, apps: ArgoAppDTO[]): string[] {
@@ -1019,9 +1013,9 @@ function LinkedApps({ apps }: { apps: ArgoAppDTO[] }) {
     <div style={{ display: "grid", gap: 4 }}>
       {apps.map((a) => (
         <div key={keyOf(a)} style={{ display: "grid", gridTemplateColumns: "8px minmax(0,1fr) 82px", gap: 7, alignItems: "center" }}>
-          <span style={{ width: 6, height: 6, borderRadius: "50%", background: a.broken ? "var(--color-text-danger)" : "var(--color-text-success)" }} />
+          <span style={{ width: 6, height: 6, borderRadius: "50%", background: a.rule.included ? "var(--color-text-danger)" : "var(--color-text-success)" }} />
           <span style={{ ...monoLine, ...ellipsis }} title={keyOf(a)}>{a.name}</span>
-          <span style={{ color: a.broken ? "var(--color-text-warning)" : "var(--color-text-tertiary)", fontSize: 10 }}>{a.syncStatus}</span>
+          <span style={{ color: a.rule.included ? "var(--color-text-warning)" : "var(--color-text-tertiary)", fontSize: 10 }}>{a.syncStatus}</span>
         </div>
       ))}
     </div>
@@ -1183,7 +1177,3 @@ const mutedLine: React.CSSProperties = { color: "var(--color-text-tertiary)", fo
 const monoLine: React.CSSProperties = { fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--color-text-secondary)" };
 const fieldLabel: React.CSSProperties = { color: "var(--color-text-tertiary)", fontSize: 10, textTransform: "uppercase", fontWeight: 600, letterSpacing: 0.2 };
 const inputStyle: React.CSSProperties = { width: "100%", boxSizing: "border-box", padding: "8px 10px", fontFamily: "var(--font-mono)", fontSize: 12, background: "var(--color-background-secondary)", border: "0.5px solid var(--color-border-tertiary)", borderRadius: 5, color: "var(--color-text-primary)", outline: "none" };
-
-// The lens rule, exported for the 1c golden parity harness until the lens
-// reads the Go-computed rule.
-export { argoHealth };

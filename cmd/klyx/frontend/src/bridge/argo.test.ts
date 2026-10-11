@@ -17,12 +17,13 @@ vi.mock("../../bindings/github.com/moomora/klyx/internal/appbridge/index.js", ()
   },
 }));
 import { listArgoApps } from "./argo";
+import { argoAppRule, withRule } from "../test/backendRules";
 
-const app = (name: string): ArgoAppDTO => ({
+const app = (name: string): ArgoAppDTO => withRule<ArgoAppDTO>({
   namespace: "argocd", name, project: "default", syncStatus: "Synced", healthStatus: "Healthy", broken: false,
   revision: "", repoURL: "", path: "", chart: "", targetRevision: "", extraSources: 0, destNamespace: "", autoSync: false,
   opPhase: "", opMessage: "", conditions: [], resources: [], reconciledUnix: 0,
-});
+}, argoAppRule);
 
 beforeEach(() => { calls.length = 0; useFleet.getState().clearArgo(); });
 
