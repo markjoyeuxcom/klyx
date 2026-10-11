@@ -11,6 +11,8 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/metadata"
 	"k8s.io/client-go/tools/cache"
 
 	"github.com/moomora/klyx/internal/certmanager"
@@ -44,6 +46,10 @@ type NativeDeps struct {
 	// Served resolves one CRD resource's served version from discovery
 	// (absent, a version, or an error that confirms nothing).
 	Served func(ctx context.Context, group, resource, fallback string) (observe.Probe, error)
+	// Typed and Meta serve the core kinds the Gateway routes part reads as
+	// evidence (EndpointSlices, Service existence).
+	Typed kubernetes.Interface
+	Meta  metadata.Interface
 }
 
 // Native returns the cert-manager, External Secrets and Karpenter kinds and
