@@ -153,6 +153,51 @@ describe("Argo CD rows, mounted end to end (slice 3 §5.4)", () => {
     expect(inspector().getByText(/Application removed\./)).toBeTruthy();
   });
 
+  // Codex review of 0777b3b: the rows' evidence is the Observer's per-kind
+  // coverage - never inferred from loading/error/row count.
+  describe("evidence is the per-kind coverage", () => {
+    const project = (name: string) => ({ namespace: "argocd", name, description: "", sourceRepos: ["https://git"], destinations: ["in-cluster/*"], roles: 0, roleNames: [], orphanWarn: false,
+      clusterResourceWhitelist: [], clusterResourceBlacklist: [], namespaceResourceWhitelist: [], namespaceResourceBlacklist: [] });
+    const withProjects = () => act(() => useFleet.getState().setArgoProjects("x", { available: true, projects: [project("platform"), project("idle")] }));
+
+    it("a live empty read that goes stale is last-good empty evidence, never unreadable", () => {
+      open();
+      applyRows("a", rowsDTO(1, "applications", 1, [], kind("applications")));
+      applyRows("s", rowsDTO(1, "applicationsets", 1, [appSet("set", { project: "platform", generatedNames: ["gen-app"] })], kind("applicationsets")));
+      const { rerender } = render(<ArgoView cluster="x" />);
+      withProjects();
+      expect(screen.getByText("No Argo CD applications on this cluster.")).toBeTruthy();
+      act(() => { applyRows("a", rowsDTO(1, "applications", 2, [], kind("applications", { coverage: "stale", class: "transport", error: "dial tcp", lastGoodAt: "2026-10-11T11:00:00Z" }))); });
+      expect(screen.queryByText("Argo CD applications could not be read.")).toBeNull();
+      expect(screen.getByText("No Argo CD applications in the last good read.")).toBeTruthy();
+      expect(headline()).toBe("0*");
+      rerender(<ArgoView cluster="x" mode="projects" />);
+      withProjects();
+      expect(screen.getByText(/2 unused \(last good Application read\)/)).toBeTruthy();
+      expect(screen.getByRole("button", { name: /^Unused/ }).textContent).toBe("Unused 2*");
+      rerender(<ArgoView cluster="x" mode="applicationsets" />);
+      expect(screen.getByText(/1 missing generated apps \(last good Application read\)/)).toBeTruthy();
+    });
+
+    it("retained rows under a checking read are unverified - joins qualified, never complete", () => {
+      open();
+      applyRows("a", rowsDTO(1, "applications", 1, [app("demo", { project: "platform" })], kind("applications")));
+      applyRows("s", rowsDTO(1, "applicationsets", 1, [appSet("set", { project: "platform", generatedNames: ["gen-app"] })], kind("applicationsets")));
+      const { rerender } = render(<ArgoView cluster="x" />);
+      expect(headline()).toBe("1");
+      act(() => { applyRows("a", rowsDTO(1, "applications", 2, [app("demo", { project: "platform" })], kind("applications", { coverage: "checking" }))); });
+      expect(rowNames()).toEqual(["demo"]); // the rows are still shown
+      expect(headline()).toBe("1+");
+      rerender(<ArgoView cluster="x" mode="projects" />);
+      withProjects();
+      expect(screen.getByText(/app usage unverified \(Application read unavailable\)/)).toBeTruthy();
+      const platform = screen.getAllByText("platform")[0].closest(".lens-row")!;
+      expect(platform.textContent).toContain("?"); // its app count is unverified, not 1
+      rerender(<ArgoView cluster="x" mode="applicationsets" />);
+      expect(screen.getByText(/generated apps unverified \(Application read unavailable\)/)).toBeTruthy();
+    });
+  });
+
   // Design §5b: refresh and sync are pinned to the armed Application.
   describe("verbs are pinned to the armed Application", () => {
     const recreate = () => act(() => { applyRows("a", rowsDTO(1, "applications", 2, [app("demo", { uid: "uid-demo-2" })], kind("applications"))); });

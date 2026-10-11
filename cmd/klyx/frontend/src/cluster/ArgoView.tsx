@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useFleet } from "../store/fleet";
-import type { ArgoApplicationSetDTO, ArgoAppDTO, ArgoProjectDTO, ArgoResourceDTO, ArgoResourceRuleDTO, ArgoViewMode, CRDGroupDTO, ResourceRef, RuleDTO } from "../store/fleet";
+import type { ArgoApplicationSetDTO, ArgoAppDTO, ArgoProjectDTO, ArgoResourceDTO, ArgoResourceRuleDTO, ArgoViewMode, CRDGroupDTO, KindCoverageDTO, ResourceRef, RuleDTO } from "../store/fleet";
 import { listArgoProjects, refreshArgoApp, syncArgoApp } from "../bridge/argo";
 import { useArgoRows } from "../health/useArgoRows";
 import { clock, coverageGaps, lastGoodAt } from "../layout/coverage";
@@ -140,9 +140,14 @@ export function ArgoView({ cluster, mode = "applications" }: { cluster: string; 
   useEffect(() => { void listArgoProjects(cluster); }, [cluster, mode]);
 
   const mine = argo.cluster === cluster;
-  const appsCov = coverageOf(mine, argo.loading, argo.error, argo.apps.length);
+  // Applications and ApplicationSets carry the Observer's per-kind coverage
+  // (Codex review of 0777b3b): live and absent are complete, stale is the
+  // last good read - empty included - and checking or unreadable is
+  // unverified even with retained rows. The fetched AppProjects keep the
+  // loading/error inference.
+  const appsCov = observedCoverage(mine, argo.coverage, "Application", coverageOf(mine, argo.loading, argo.error, argo.apps.length));
   const projectsCov = coverageOf(mine, argo.projectsLoading, argo.projectsError, argo.projects.length);
-  const appSetsCov = coverageOf(mine, argo.applicationSetsLoading, argo.applicationSetsError, argo.applicationSets.length);
+  const appSetsCov = observedCoverage(mine, argo.coverage, "ApplicationSet", coverageOf(mine, argo.applicationSetsLoading, argo.applicationSetsError, argo.applicationSets.length));
   // broken first, then namespace/name - the rows arrive in capture order
   const apps = useMemo(() => (mine ? [...argo.apps].sort((a, b) => Number(b.broken) - Number(a.broken) || a.namespace.localeCompare(b.namespace) || a.name.localeCompare(b.name)) : []), [mine, argo.apps]);
   const projects = useMemo(() => (mine ? argo.projects : []), [mine, argo.projects]);
@@ -309,9 +314,11 @@ export function ArgoView({ cluster, mode = "applications" }: { cluster: string; 
       ? { rows: appSets.length, shown: visibleAppSets.length, loading: argo.applicationSetsLoading, error: argo.applicationSetsError, available: argo.applicationSetsAvailable, message: argo.applicationSetsMessage, noun: "ApplicationSets" }
       : { rows: apps.length, shown: visibleApps.length, loading: argo.loading, error: argo.error, available: argo.available, message: argo.message, noun: "applications" };
   const clearFilters = () => { setQuery(""); setAppFilter("all"); setProjectFilter("all"); setAppSetFilter("all"); };
+  const viewCov = mode === "projects" ? projectsCov : mode === "applicationsets" ? appSetsCov : appsCov;
   let state: DatasetState = "ready";
   if (!mine || (view.loading && view.rows === 0)) state = "loading";
-  else if (view.error && view.rows === 0) state = "unreadable";
+  // a stale read that was empty is last-good empty evidence, never unreadable
+  else if (view.error && view.rows === 0 && viewCov !== "stale") state = "unreadable";
   else if (view.rows === 0) state = "empty";
   else if (view.shown === 0) state = "no-match";
   // only projects are a fetch to repeat; the rows retry on their own
@@ -322,13 +329,13 @@ export function ArgoView({ cluster, mode = "applications" }: { cluster: string; 
     : state === "empty" ? (!view.available
       ? <EmptyState icon={<IconGitMerge size={28} stroke={1.2} />} title={`Argo CD ${view.noun} are not served on this cluster.`} hint={view.message || undefined} />
       : rowsRefreshing && mode !== "projects" && globalTotal > 0 ? <EmptyState icon={<IconGitMerge size={28} stroke={1.2} />} title={`No Argo CD ${view.noun} as of ${rowsAsOf}.`} hint={`Refreshing - the cluster summary now counts ${globalTotal}.`} />
+      : viewCov === "stale" ? <EmptyState icon={<IconGitMerge size={28} stroke={1.2} />} title={`No Argo CD ${view.noun} in the last good read.`} hint={`The read is failing now${lastGood ? ` - last good ${clock(lastGood)}` : ""}: ${view.error ?? "unverified"}.`} />
       : <EmptyState icon={<IconGitMerge size={28} stroke={1.2} />} title={`No Argo CD ${view.noun} on this cluster.`} hint={mode === "applications" ? "Argo CD is installed but no Application objects exist yet." : mode === "projects" ? "Projects define allowed repos, destinations, and roles." : "ApplicationSets generate Applications from clusters, Git, pull requests, and other generators."} />)
     : <EmptyState icon={<IconGitMerge size={28} stroke={1.2} />} title={`No ${view.noun} match the current filters.`} hint={`${view.rows} ${view.noun} on this cluster${asOf}.`} action={{ label: "Clear filters", onClick: clearFilters }} />;
   // freshness follows the CURRENT view's own read, not Applications for all
   const viewRows: unknown[] = mode === "projects" ? projects : mode === "applicationsets" ? appSets : apps;
   const receivedAt = useReceivedAt(mine && !view.loading && !view.error && viewRows.length > 0 ? viewRows : null);
   // stale = the last observed set ("*"); pending/failed = a lower bound ("+")
-  const viewCov = mode === "projects" ? projectsCov : mode === "applicationsets" ? appSetsCov : appsCov;
   const partial = viewCov === "stale" ? "*" : view.error || viewCov === "unknown" ? "+" : "";
 
   // Notices stack: each is its own evidence, none hides another.
@@ -994,6 +1001,13 @@ function projectRiskScore(p: ArgoProjectDTO, apps: ArgoAppDTO[], appsCov: AppCov
 // last good read is retained after a failure; "unknown" = no successful read.
 type AppCoverage = "complete" | "stale" | "unknown";
 // the same coverage notion for any of the three reads
+// observedCoverage: a rows-backed kind's coverage from the Observer (the
+// fallback is the legacy inference, for a slice seeded without coverage).
+function observedCoverage(mine: boolean, coverage: KindCoverageDTO[] | undefined, kind: string, fallback: AppCoverage): AppCoverage {
+  const k = mine ? coverage?.find((c) => c.kind === kind) : undefined;
+  if (!k?.coverage) return fallback;
+  return k.coverage === "live" || k.coverage === "absent" ? "complete" : k.coverage === "stale" ? "stale" : "unknown";
+}
 const coverageOf = (mine: boolean, loading: boolean, error: string | null | undefined, rows: number): AppCoverage =>
   !mine ? "unknown" : error ? (rows > 0 ? "stale" : "unknown") : loading && rows === 0 ? "unknown" : "complete";
 // countText renders a join count honestly: "?" with no evidence, a trailing
