@@ -3,6 +3,7 @@ package observe
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -40,6 +41,10 @@ type DomainSpec struct {
 type PartSpec struct {
 	ID, Entity, Scope, Classifier string
 	Counted, Deps                 []string
+	// Facts names external inputs the evaluator reads (SetFact), e.g.
+	// whether Flux is installed. They are captured with the objects, and a
+	// change re-evaluates the part without touching its data watermark.
+	Facts []string
 	// Evaluate classifies one capture. It must be pure: same capture, same
 	// result. Rows are built only when c.Rows is set.
 	Evaluate func(c Capture) PartResult
@@ -50,6 +55,7 @@ type PartSpec struct {
 type Capture struct {
 	Now     time.Time
 	Objects map[string][]any
+	Facts   map[string]any
 	Rows    bool
 }
 
@@ -132,6 +138,7 @@ type Observer struct {
 	dirty        map[partKey]bool
 	summaryDirty bool
 	conn         string
+	facts        map[string]any
 	latest       *Summary
 	seq          uint64
 	started      bool
@@ -278,6 +285,39 @@ func (o *Observer) SetConnection(word string) {
 	}
 	o.conn = word
 	o.summaryDirty = true
+	o.mu.Unlock()
+	o.signal()
+}
+
+// Connection returns the connection word last handed to the Observer.
+func (o *Observer) Connection() string {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.conn
+}
+
+// SetFact records an external input. A changed value re-evaluates the parts
+// that declare it (their version advances if the result changes); an equal
+// value is a no-op.
+func (o *Observer) SetFact(name string, v any) {
+	o.mu.Lock()
+	if old, ok := o.facts[name]; ok && reflect.DeepEqual(old, v) {
+		o.mu.Unlock()
+		return
+	}
+	if o.facts == nil {
+		o.facts = map[string]any{}
+	}
+	o.facts[name] = v
+	for _, d := range o.domains {
+		for _, p := range d.parts {
+			for _, f := range p.spec.Facts {
+				if f == name {
+					o.dirty[p.key] = true
+				}
+			}
+		}
+	}
 	o.mu.Unlock()
 	o.signal()
 }

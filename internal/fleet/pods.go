@@ -2,6 +2,7 @@ package fleet
 
 import (
 	"context"
+	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/moomora/klyx/internal/clock"
 	"github.com/moomora/klyx/internal/workloads"
@@ -62,12 +63,12 @@ func (c *ClusterConn) resolveReplicaSetOwners(ctx context.Context, namespace str
 	if err != nil {
 		return
 	}
-	owner := map[string]metav1.OwnerReference{} // "ns/name" -> RS's controller ref
+	owner := map[types.UID]metav1.OwnerReference{} // RS UID -> the RS's controller ref
 	for i := range list.Items {
 		m := &list.Items[i]
 		for _, ref := range m.OwnerReferences {
 			if ref.Controller != nil && *ref.Controller {
-				owner[m.Namespace+"/"+m.Name] = ref
+				owner[m.UID] = ref
 				break
 			}
 		}

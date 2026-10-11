@@ -2,6 +2,7 @@ package fleet
 
 import (
 	"context"
+	"k8s.io/apimachinery/pkg/types"
 	"testing"
 	"time"
 
@@ -155,14 +156,15 @@ func TestListPodsResolvesReplicaSetOwner(t *testing.T) {
 				Namespace: "team", Name: name,
 				CreationTimestamp: metav1.NewTime(now.Add(-time.Hour)),
 				OwnerReferences: []metav1.OwnerReference{
-					{APIVersion: "apps/v1", Kind: "ReplicaSet", Name: rsName, Controller: &truth},
+					{APIVersion: "apps/v1", Kind: "ReplicaSet", Name: rsName, UID: types.UID("uid-" + rsName), Controller: &truth},
 				},
 			},
 			Spec:   corev1.PodSpec{Containers: []corev1.Container{{Name: "c", Image: "i"}}},
 			Status: corev1.PodStatus{Phase: corev1.PodRunning},
 		}
 	}
-	cs := fake.NewSimpleClientset(rsPod("web-7d4b9c6f9-abc", "web-7d4b9c6f9"), rsPod("bare-5c9d8-xyz", "bare-5c9d8"))
+	cs := fake.NewSimpleClientset(rsPod("web-7d4b9c6f9-abc", "web-7d4b9c6f9"), rsPod("bare-5c9d8-xyz", "bare-5c9d8"),
+		rsPod("orphan-xyz", "recreated")) // owner UID "uid-recreated": the old incarnation
 
 	mscheme := metadatafake.NewTestScheme()
 	_ = metav1.AddMetaToScheme(mscheme)
@@ -170,7 +172,7 @@ func TestListPodsResolvesReplicaSetOwner(t *testing.T) {
 	deployOwned := &metav1.PartialObjectMetadata{
 		TypeMeta: metav1.TypeMeta{APIVersion: "apps/v1", Kind: "ReplicaSet"},
 		ObjectMeta: metav1.ObjectMeta{
-			Namespace: "team", Name: "web-7d4b9c6f9",
+			Namespace: "team", Name: "web-7d4b9c6f9", UID: "uid-web-7d4b9c6f9",
 			OwnerReferences: []metav1.OwnerReference{
 				{APIVersion: "apps/v1", Kind: "Deployment", Name: "web", Controller: &truth},
 			},
@@ -178,9 +180,17 @@ func TestListPodsResolvesReplicaSetOwner(t *testing.T) {
 	}
 	bare := &metav1.PartialObjectMetadata{
 		TypeMeta:   metav1.TypeMeta{APIVersion: "apps/v1", Kind: "ReplicaSet"},
-		ObjectMeta: metav1.ObjectMeta{Namespace: "team", Name: "bare-5c9d8"},
+		ObjectMeta: metav1.ObjectMeta{Namespace: "team", Name: "bare-5c9d8", UID: "uid-bare-5c9d8"},
 	}
-	mclient := metadatafake.NewSimpleMetadataClient(mscheme, deployOwned, bare)
+	// "recreated" was deleted and recreated under the same name (new UID,
+	// another Deployment); an orphan pod still points at the old UID. It must
+	// never be adopted: ancestry joins by UID, never by name.
+	recreated := &metav1.PartialObjectMetadata{
+		TypeMeta: metav1.TypeMeta{APIVersion: "apps/v1", Kind: "ReplicaSet"},
+		ObjectMeta: metav1.ObjectMeta{Namespace: "team", Name: "recreated", UID: "uid-recreated-new",
+			OwnerReferences: []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "Deployment", Name: "wrong", Controller: &truth}}},
+	}
+	mclient := metadatafake.NewSimpleMetadataClient(mscheme, deployOwned, bare, recreated)
 
 	c := &ClusterConn{typed: cs, meta: mclient, clk: clock.NewFake(now)}
 	sums, _, err := c.ListPods(context.Background(), "team")
@@ -195,6 +205,9 @@ func TestListPodsResolvesReplicaSetOwner(t *testing.T) {
 	// never have to guess the name by stripping the pod-template-hash.
 	if got := byName["web-7d4b9c6f9-abc"]; got.OwnerKind != "Deployment" || got.OwnerName != "web" {
 		t.Fatalf("resolved owner: %s/%s", got.OwnerKind, got.OwnerName)
+	}
+	if got := byName["orphan-xyz"]; got.OwnerKind != "ReplicaSet" || got.OwnerName != "recreated" {
+		t.Fatalf("a same-name recreated ReplicaSet adopted an orphan: %s/%s", got.OwnerKind, got.OwnerName)
 	}
 	// A bare ReplicaSet keeps its own identity (nothing to restart).
 	if got := byName["bare-5c9d8-xyz"]; got.OwnerKind != "ReplicaSet" || got.OwnerName != "bare-5c9d8" {

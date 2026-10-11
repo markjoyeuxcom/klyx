@@ -10,11 +10,13 @@ import (
 	"github.com/moomora/klyx/internal/workloads"
 )
 
-// Projections build the pruned copy a model keeps (1c addendum §1.2). They
-// never write their input: every kept field is copied into a new object.
-// What each keeps is exactly what the current consumers read - pod and node
-// summaries, workload assembly, internal/health - and parity_test.go runs
-// those consumers over raw and projected fixtures to prove it.
+// Projections build the pruned object a model keeps (1c addendum §1.2). They
+// never write their input. Status and specs are deep-copied; label maps and
+// container ports/resources are shared with the decoded input, which only
+// the health-owned reflector holds and nothing writes - every consumer is
+// read-only. What each keeps is exactly what the current consumers read -
+// pod and node summaries, workload assembly, internal/health - and
+// parity_test.go runs those consumers over raw and projected fixtures.
 
 func projectMeta(m metav1.ObjectMeta, labels bool) metav1.ObjectMeta {
 	out := metav1.ObjectMeta{Name: m.Name, Namespace: m.Namespace, UID: m.UID, Generation: m.Generation,

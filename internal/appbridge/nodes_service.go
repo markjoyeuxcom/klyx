@@ -126,6 +126,8 @@ func toNodeSummaryDTO(n workloads.NodeSummary) NodeSummaryDTO {
 	}
 	return NodeSummaryDTO{
 		Name:           n.Name,
+		UID:            string(n.UID),
+		Generation:     n.Generation,
 		Roles:          roles,
 		Ready:          n.Ready,
 		Unschedulable:  n.Unschedulable,

@@ -37,17 +37,22 @@ const (
 	KindNodes        = "nodes"
 	KindNamespaces   = "namespaces"
 
+	// FactFluxPresent: whether Flux is installed. It gates GitOps owner
+	// extraction on workload rows, so it is an Observer fact - captured
+	// with the objects and re-evaluating Workloads when it changes.
+	FactFluxPresent = "fluxPresent"
+
 	TaskWorkloads = "workloads"
 	TaskPods      = "pods"
 	TaskNodes     = "nodes"
 )
 
-// CoreDeps are the clients and facts the core tasks need.
+// CoreDeps are the clients the core tasks need. Capability facts reach the
+// Observer through SetFact (FactFluxPresent).
 type CoreDeps struct {
-	Cluster     string
-	Typed       kubernetes.Interface
-	Meta        metadata.Interface
-	FluxPresent func() bool // gates GitOps owner extraction on workload rows
+	Cluster string
+	Typed   kubernetes.Interface
+	Meta    metadata.Interface
 }
 
 // Core returns the core kinds (no discovery: always served) and the
@@ -88,15 +93,12 @@ func Core(d CoreDeps) ([]observe.KindSpec, []observe.DomainSpec) {
 			})},
 		metaKind(d.Meta, KindNamespaces, schema.GroupVersionResource{Version: "v1", Resource: "namespaces"}, "cluster-scoped", ProjectNameMeta),
 	}
-	flux := d.FluxPresent
-	if flux == nil {
-		flux = func() bool { return false }
-	}
 	domains := []observe.DomainSpec{
 		{ID: TaskWorkloads, Parts: []observe.PartSpec{{
 			ID: "workloads", Entity: "workloads (Deployments, StatefulSets, DaemonSets)", Scope: "all namespaces", Classifier: "verdict",
 			Counted: []string{KindDeployments, KindStatefulSets, KindDaemonSets}, Deps: []string{KindPods, KindReplicaSets},
-			Evaluate: evalWorkloads(d.Cluster, flux),
+			Facts:    []string{FactFluxPresent},
+			Evaluate: evalWorkloads(d.Cluster),
 		}}},
 		{ID: TaskPods, Parts: []observe.PartSpec{{
 			ID: "pods", Entity: "pods", Scope: "all namespaces", Classifier: "verdict",
@@ -141,7 +143,7 @@ func gvrString(g schema.GroupVersionResource) string {
 
 // ---- evaluators -------------------------------------------------------------
 
-func evalWorkloads(cluster string, flux func() bool) func(observe.Capture) observe.PartResult {
+func evalWorkloads(cluster string) func(observe.Capture) observe.PartResult {
 	return func(c observe.Capture) observe.PartResult {
 		deploys, stss, dss, reload := []appsv1.Deployment{}, []appsv1.StatefulSet{}, []appsv1.DaemonSet{}, map[types.UID]*workloads.ReloadTargets{}
 		for _, o := range c.Objects[KindDeployments] {
@@ -169,13 +171,14 @@ func evalWorkloads(cluster string, flux func() bool) func(observe.Capture) obser
 		// Evidence: a dependency that is not read (checking, unreadable)
 		// makes attribution unverified, never assumed complete.
 		ev := workloads.Evidence{PodsComplete: podsRead, ReplicaSetsComplete: rsRead}
-		ws := workloads.AssembleProjected(deploys, rss, stss, dss, pods, ev, flux(), c.Now, reload)
+		flux, _ := c.Facts[FactFluxPresent].(bool)
+		ws := workloads.AssembleProjected(deploys, rss, stss, dss, pods, ev, flux, c.Now, reload)
 
 		verdicts := make([]health.Verdict, len(ws))
 		refs := make([]refInput, len(ws))
 		for i := range ws {
 			verdicts[i] = ws[i].Health
-			refs[i] = refInput{gvr: workloadGVR(ws[i].Kind), ns: ws[i].Namespace, name: ws[i].Name, generation: ws[i].Generation}
+			refs[i] = refInput{gvr: workloadGVR(ws[i].Kind), ns: ws[i].Namespace, name: ws[i].Name, uid: string(ws[i].UID), generation: ws[i].Generation}
 		}
 		r := verdictResult(cluster, TaskWorkloads, verdicts, refs)
 		if c.Rows {
@@ -189,11 +192,11 @@ func evalPods(cluster string) func(observe.Capture) observe.PartResult {
 	return func(c observe.Capture) observe.PartResult {
 		pods := podsOf(c.Objects[KindPods])
 		sums := workloads.SummarizePods(pods, c.Now)
-		controllers := map[string]metav1.OwnerReference{}
+		controllers := map[types.UID]metav1.OwnerReference{}
 		for _, o := range c.Objects[KindReplicaSets] {
 			m := o.(*metav1.PartialObjectMetadata)
 			if ref := metav1.GetControllerOf(m); ref != nil {
-				controllers[m.Namespace+"/"+m.Name] = *ref
+				controllers[m.UID] = *ref
 			}
 		}
 		workloads.ResolveReplicaSetOwners(sums, controllers)
@@ -201,7 +204,7 @@ func evalPods(cluster string) func(observe.Capture) observe.PartResult {
 		refs := make([]refInput, len(sums))
 		for i := range sums {
 			verdicts[i] = sums[i].Health
-			refs[i] = refInput{gvr: "v1/pods", ns: sums[i].Namespace, name: sums[i].Name}
+			refs[i] = refInput{gvr: "v1/pods", ns: sums[i].Namespace, name: sums[i].Name, uid: string(sums[i].UID), generation: sums[i].Generation}
 		}
 		r := verdictResult(cluster, TaskPods, verdicts, refs)
 		if c.Rows {
@@ -222,7 +225,7 @@ func evalNodes(cluster string) func(observe.Capture) observe.PartResult {
 		refs := make([]refInput, len(sums))
 		for i := range sums {
 			verdicts[i] = sums[i].Health
-			refs[i] = refInput{gvr: "v1/nodes", name: sums[i].Name}
+			refs[i] = refInput{gvr: "v1/nodes", name: sums[i].Name, uid: string(sums[i].UID), generation: sums[i].Generation}
 		}
 		r := verdictResult(cluster, TaskNodes, verdicts, refs)
 		if c.Rows {
@@ -252,8 +255,8 @@ func workloadGVR(kind string) string {
 }
 
 type refInput struct {
-	gvr, ns, name string
-	generation    int64
+	gvr, ns, name, uid string
+	generation         int64
 }
 
 // maxTop bounds Top refs per part (spec §5).
@@ -310,7 +313,7 @@ func verdictResult(cluster, route string, verdicts []health.Verdict, refs []refI
 			break
 		}
 		r := refs[i]
-		top = append(top, observe.Ref{Cluster: cluster, GVR: r.gvr, Namespace: r.ns, Name: r.name,
+		top = append(top, observe.Ref{Cluster: cluster, GVR: r.gvr, Namespace: r.ns, Name: r.name, UID: r.uid,
 			Role: verdicts[i].Kind.String(), Label: verdicts[i].Label, Generation: r.generation, Route: route})
 	}
 	return observe.PartResult{Counts: &counts, Top: top, Next: next}

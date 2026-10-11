@@ -191,6 +191,8 @@ type ClusterConn struct {
 	esoWanted      bool                      // desired state; an in-flight open aborts if false
 	healthSink     observe.Sink              // set before Start; nil = no health Observer (tests)
 	health         *observe.Observer         // the cluster's health observation (1c), from Start
+	healthSyncMu   sync.Mutex                // serializes state->Observer handoffs (see syncHealth)
+	healthSyncHook func()                    // test seam: runs between reading state and handing it over
 
 	// metricsMu guards the metrics cache. Note: ClusterMetrics holds it across
 	// the probe + sample network I/O (up to a few seconds). This serializes
@@ -259,7 +261,7 @@ func (c *ClusterConn) WithRESTConfig(rc *rest.Config) *ClusterConn {
 func (c *ClusterConn) Name() string { return c.name }
 
 func (c *ClusterConn) setState(ev Event, reason string) {
-	defer c.syncHealthConnection() // after the unlock below
+	defer c.syncHealth() // after the unlock below
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if next, ok := Transition(c.state, ev); ok {
@@ -282,7 +284,7 @@ func (c *ClusterConn) signalRefresh() {
 // failures instead of hiding them behind a generic timeout.
 func (c *ClusterConn) onWatchError(err error) {
 	msg := cluster.FriendlyErrorMessage(err)
-	defer c.syncHealthConnection() // after the unlock below
+	defer c.syncHealth() // after the unlock below
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	st := c.state
@@ -460,7 +462,7 @@ func (c *ClusterConn) applyGitOpsHealth(g capability.GitOpsCapability) {
 		c.mu.Unlock()
 		return
 	}
-	defer c.syncHealthConnection() // after the unlock below
+	defer c.syncHealth() // after the unlock below
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.caps.GitOps = g
@@ -541,28 +543,34 @@ func (c *ClusterConn) startHealth(ctx context.Context) {
 	if sink == nil || c.typed == nil || c.meta == nil {
 		return
 	}
-	kinds, domains := healthsrc.Core(healthsrc.CoreDeps{Cluster: c.name, Typed: c.typed, Meta: c.meta,
-		FluxPresent: func() bool {
-			c.mu.RLock()
-			defer c.mu.RUnlock()
-			return c.caps.GitOps.Flux.Present
-		}})
+	kinds, domains := healthsrc.Core(healthsrc.CoreDeps{Cluster: c.name, Typed: c.typed, Meta: c.meta})
 	o := observe.New(observe.Config{Cluster: c.name, Sink: sink, Kinds: kinds, Domains: domains, NamespacesKind: healthsrc.KindNamespaces})
 	c.mu.Lock()
 	c.health = o
 	c.mu.Unlock()
 	o.Start(ctx)
+	c.syncHealth()
 }
 
-// syncHealthConnection hands the Observer the connection word. It never
-// sets kind freshness (1c addendum §3.1). Called after c.mu is released.
-func (c *ClusterConn) syncHealthConnection() {
+// syncHealth hands the Observer the connection word and the capability
+// facts its tasks read. Handoffs are serialized and each re-reads the
+// current state, so the last one to run carries the latest state - an
+// older read can never overwrite a newer one. The word never sets kind
+// freshness (1c addendum §3.1). Called after c.mu is released.
+func (c *ClusterConn) syncHealth() {
+	c.healthSyncMu.Lock()
+	defer c.healthSyncMu.Unlock()
 	c.mu.RLock()
-	h, st, reason := c.health, c.state, c.reason
+	h, st, reason, flux, hook := c.health, c.state, c.reason, c.caps.GitOps.Flux.Present, c.healthSyncHook
 	c.mu.RUnlock()
-	if h != nil {
-		h.SetConnection(connectionWord(st, reason))
+	if h == nil {
+		return
 	}
+	if hook != nil {
+		hook()
+	}
+	h.SetConnection(connectionWord(st, reason))
+	h.SetFact(healthsrc.FactFluxPresent, flux)
 }
 
 // connectionWord is the health spec §2 connection axis.

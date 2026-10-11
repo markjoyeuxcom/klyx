@@ -83,20 +83,20 @@ func assemble(deploys []appsv1.Deployment, rss []appsv1.ReplicaSet, stss []appsv
 	out := make([]Workload, 0, len(deploys)+len(stss)+len(dss))
 	for i := range deploys {
 		d := &deploys[i]
-		w := build("Deployment", d.Namespace, d.Name, d.Labels, reloadOf(d.UID, d.Annotations, d.Spec.Template.Spec), d.Spec.Selector, classifyDeployment(d), pods, fluxPresent, now, d.Generation, d.Status.ObservedGeneration)
+		w := build("Deployment", d.UID, d.Namespace, d.Name, d.Labels, reloadOf(d.UID, d.Annotations, d.Spec.Template.Spec), d.Spec.Selector, classifyDeployment(d), pods, fluxPresent, now, d.Generation, d.Status.ObservedGeneration)
 		w.Paused = d.Spec.Paused
 		w.Health = classify(deploymentInput(d), ownedByDeployment(d.UID, rsOwner), d.Namespace, ev.PodsComplete && ev.ReplicaSetsComplete)
 		out = append(out, w)
 	}
 	for i := range stss {
 		s := &stss[i]
-		w := build("StatefulSet", s.Namespace, s.Name, s.Labels, reloadOf(s.UID, s.Annotations, s.Spec.Template.Spec), s.Spec.Selector, classifyStatefulSet(s), pods, fluxPresent, now, s.Generation, s.Status.ObservedGeneration)
+		w := build("StatefulSet", s.UID, s.Namespace, s.Name, s.Labels, reloadOf(s.UID, s.Annotations, s.Spec.Template.Spec), s.Spec.Selector, classifyStatefulSet(s), pods, fluxPresent, now, s.Generation, s.Status.ObservedGeneration)
 		w.Health = classify(statefulSetInput(s), ownedByUID("StatefulSet", s.UID), s.Namespace, ev.PodsComplete)
 		out = append(out, w)
 	}
 	for i := range dss {
 		ds := &dss[i]
-		w := build("DaemonSet", ds.Namespace, ds.Name, ds.Labels, reloadOf(ds.UID, ds.Annotations, ds.Spec.Template.Spec), ds.Spec.Selector, classifyDaemonSet(ds), pods, fluxPresent, now, ds.Generation, ds.Status.ObservedGeneration)
+		w := build("DaemonSet", ds.UID, ds.Namespace, ds.Name, ds.Labels, reloadOf(ds.UID, ds.Annotations, ds.Spec.Template.Spec), ds.Spec.Selector, classifyDaemonSet(ds), pods, fluxPresent, now, ds.Generation, ds.Status.ObservedGeneration)
 		w.Health = classify(daemonSetInput(ds), ownedByUID("DaemonSet", ds.UID), ds.Namespace, ev.PodsComplete)
 		out = append(out, w)
 	}
@@ -207,11 +207,11 @@ func daemonSetInput(ds *appsv1.DaemonSet) health.WorkloadInput {
 	return in
 }
 
-func build(kind, ns, name string, objLabels map[string]string, reload *ReloadTargets, selector *metav1.LabelSelector,
+func build(kind string, uid types.UID, ns, name string, objLabels map[string]string, reload *ReloadTargets, selector *metav1.LabelSelector,
 	c classified, allPods []corev1.Pod, fluxPresent bool, now time.Time,
 	generation, observedGeneration int64) Workload {
 
-	w := Workload{Kind: kind, Namespace: ns, Name: name,
+	w := Workload{Kind: kind, UID: uid, Namespace: ns, Name: name,
 		Desired: c.desired, Ready: c.ready, Available: c.available, Updated: c.updated,
 		Generation: generation, ObservedGeneration: observedGeneration,
 		Reloader: reload}

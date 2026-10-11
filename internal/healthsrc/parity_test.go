@@ -231,10 +231,10 @@ func TestProjectionParityPods(t *testing.T) {
 		}
 	}
 	rawSums, projSums := workloads.SummarizePods(raw, now), workloads.SummarizePods(proj, now)
-	controllers := map[string]metav1.OwnerReference{}
+	controllers := map[types.UID]metav1.OwnerReference{}
 	for _, rs := range fixtureReplicaSets() {
 		if ref := metav1.GetControllerOf(&rs); ref != nil {
-			controllers[rs.Namespace+"/"+rs.Name] = *ref
+			controllers[rs.UID] = *ref
 		}
 	}
 	workloads.ResolveReplicaSetOwners(rawSums, controllers)

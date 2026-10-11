@@ -3,6 +3,8 @@ package appbridge
 // NodeSummaryDTO is the nodes-lens row.
 type NodeSummaryDTO struct {
 	Name           string   `json:"name"`
+	UID            string   `json:"uid"`
+	Generation     int64    `json:"generation"`
 	Roles          []string `json:"roles"`
 	Ready          bool     `json:"ready"`
 	Unschedulable  bool     `json:"unschedulable"`

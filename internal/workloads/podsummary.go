@@ -7,12 +7,15 @@ import (
 	"github.com/moomora/klyx/internal/health"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 )
 
 // PodSummary is the pods-lens row: one pod classified with the same severity
 // engine the workloads lens uses (one interpretation of "broken", never two).
 type PodSummary struct {
 	Namespace, Name string
+	UID             types.UID // object identity: a same-name recreation is a different pod
+	Generation      int64
 	Ready           bool
 	Phase           string // pod phase as reported (Running/Pending/Succeeded/Failed/Unknown)
 	Reason          string // worst container/pod reason, "" if clean
@@ -21,6 +24,7 @@ type PodSummary struct {
 	Node, IP        string
 	OwnerKind       string // top controller ownerRef kind ("Deployment" is NOT resolved here — ReplicaSet/StatefulSet/DaemonSet/Job/Node/"")
 	OwnerName       string
+	OwnerUID        types.UID // the controller ownerRef's UID; ancestry joins by UID, never by name
 	AgeSeconds      int
 	Containers      []ContainerSummary
 	// Health is the shared verdict (internal/health); Rank/Reason are legacy
@@ -113,6 +117,8 @@ func SummarizePods(pods []corev1.Pod, now time.Time) []PodSummary {
 			AgeSeconds: ageSeconds(p.CreationTimestamp.Time, now),
 			Containers: buildContainerSummaries(p),
 			Health:     health.Pod(p, now),
+			UID:        p.UID,
+			Generation: p.Generation,
 		}
 
 		// Owner: first ownerRef where Controller is set and true.
@@ -120,6 +126,7 @@ func SummarizePods(pods []corev1.Pod, now time.Time) []PodSummary {
 			if ref.Controller != nil && *ref.Controller {
 				ps.OwnerKind = ref.Kind
 				ps.OwnerName = ref.Name
+				ps.OwnerUID = ref.UID
 				break
 			}
 		}
@@ -269,16 +276,16 @@ func containerStateString(s corev1.ContainerState) string {
 
 // ResolveReplicaSetOwners rewrites each pod's ReplicaSet owner to that
 // ReplicaSet's own controller (Deployment, Argo Rollout, ...). controllers
-// maps "namespace/replicaset" to the ReplicaSet's controller reference. Pods
-// under a bare ReplicaSet keep OwnerKind=ReplicaSet (nothing to restart).
-func ResolveReplicaSetOwners(sums []PodSummary, controllers map[string]metav1.OwnerReference) {
+// maps a ReplicaSet UID to its controller reference: the join is by the
+// pod's owner UID, so a recreated same-name ReplicaSet never adopts another
+// ReplicaSet's pods. Pods under a bare ReplicaSet keep OwnerKind=ReplicaSet.
+func ResolveReplicaSetOwners(sums []PodSummary, controllers map[types.UID]metav1.OwnerReference) {
 	for i := range sums {
-		if sums[i].OwnerKind != "ReplicaSet" {
+		if sums[i].OwnerKind != "ReplicaSet" || sums[i].OwnerUID == "" {
 			continue
 		}
-		if ref, ok := controllers[sums[i].Namespace+"/"+sums[i].OwnerName]; ok {
-			sums[i].OwnerKind = ref.Kind
-			sums[i].OwnerName = ref.Name
+		if ref, ok := controllers[sums[i].OwnerUID]; ok {
+			sums[i].OwnerKind, sums[i].OwnerName, sums[i].OwnerUID = ref.Kind, ref.Name, ref.UID
 		}
 	}
 }

@@ -249,6 +249,14 @@ func samePart(a, b Part) bool {
 // missing optional kind leaves the rest of the part observed.
 func (o *Observer) captureLocked(p *partState, now time.Time) (Capture, []KindCoverage, bool) {
 	c := Capture{Now: now, Objects: map[string][]any{}}
+	if len(p.spec.Facts) > 0 {
+		c.Facts = make(map[string]any, len(p.spec.Facts))
+		for _, f := range p.spec.Facts {
+			if v, ok := o.facts[f]; ok {
+				c.Facts[f] = v
+			}
+		}
+	}
 	var kinds []KindCoverage
 	add := func(name, role string) {
 		kc := KindCoverage{Kind: name, Role: role}

@@ -1101,3 +1101,44 @@ func TestFailedReprobeOfALiveKindNamesTheGapWithoutTearingItDown(t *testing.T) {
 		t.Fatalf("a failed re-probe must not tear down a valid reflector; lists=%d", lists)
 	}
 }
+
+// ---- facts (Codex 2a review #2) ---------------------------------------------------
+
+func TestFactsReevaluateOnlyTheirPartsWithoutData(t *testing.T) {
+	a, b := newSource(), newSource()
+	a.put("x", nil)
+	b.put("y", nil)
+	factual := PartSpec{ID: "a", Counted: []string{"a"}, Facts: []string{"mode"}, Evaluate: func(c Capture) PartResult {
+		mode, _ := c.Facts["mode"].(string)
+		r := PartResult{Counts: &Counts{Total: len(c.Objects["a"])}}
+		if c.Rows {
+			r.Rows = []string{"mode=" + mode}
+		}
+		return r
+	}}
+	h := start(t, Config{Kinds: []KindSpec{cmKind("a", a), cmKind("b", b)},
+		Domains: []DomainSpec{{ID: "workloads", Parts: []PartSpec{factual}}, {ID: "certs", Parts: []PartSpec{cmPart("b", "b")}}}})
+	h.o.SubscribeRows("workloads", "a", Owner{Kind: "lens", ID: "w"})
+	h.eventually(func() bool { r, ok := h.sink.lastRows("workloads", "a"); return ok && live(r.Part) }, "rows")
+	h.eventually(h.partIs("certs", "b", live), "b live")
+	r0, _ := h.sink.lastRows("workloads", "a")
+	pb, _ := h.sink.part("certs", "b")
+
+	h.o.SetFact("mode", "flux")
+	h.eventually(func() bool {
+		r, _ := h.sink.lastRows("workloads", "a")
+		return fmt.Sprint(r.Rows) == "[mode=flux]"
+	}, "a fact change re-evaluates the part with no object mutation")
+	r1, _ := h.sink.lastRows("workloads", "a")
+	if r1.Part.Ver <= r0.Part.Ver || r1.Part.Obs != r0.Part.Obs {
+		t.Fatalf("Ver advances, Obs does not: ver %d->%d obs %d->%d", r0.Part.Ver, r1.Part.Ver, r0.Part.Obs, r1.Part.Obs)
+	}
+	h.o.SetFact("mode", "flux") // unchanged: a no-op
+	h.settle(200 * time.Millisecond)
+	if r, _ := h.sink.lastRows("workloads", "a"); r.Part.Ver != r1.Part.Ver {
+		t.Fatalf("an equal fact must not advance Ver: %d -> %d", r1.Part.Ver, r.Part.Ver)
+	}
+	if p, _ := h.sink.part("certs", "b"); p.Ver != pb.Ver {
+		t.Fatal("a part that does not declare the fact is untouched")
+	}
+}

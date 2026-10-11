@@ -68,8 +68,10 @@ func main() {
 	defer cancel()
 
 	// The emitter exists before any cluster starts: each cluster's health
-	// Observer (1c) publishes through it from its first evaluation.
-	em := &emitterAdapter{}
+	// Observer (1c) publishes through it from its first evaluation. The app
+	// handle is installed atomically once it exists (events before that are
+	// dropped; HealthService.Summaries bootstraps the retained summaries).
+	em := &appbridge.LateEmitter{}
 	reg := fleet.NewRegistry(cfg, fleet.DefaultConnFactory(clock.Real{}))
 	reg.SetHealthSink(appbridge.NewHealthSink(em))
 	reg.Start(ctx)
@@ -495,7 +497,7 @@ func main() {
 		},
 	})
 
-	em.app = app
+	em.Install(&emitterAdapter{app: app})
 	winOpener.app = app
 
 	go appbridge.RunFleetPush(ctx, svc, em, time.Second)

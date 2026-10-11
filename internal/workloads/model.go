@@ -3,7 +3,10 @@
 // operates on API structs and is fixture-testable.
 package workloads
 
-import "github.com/moomora/klyx/internal/health"
+import (
+	"github.com/moomora/klyx/internal/health"
+	"k8s.io/apimachinery/pkg/types"
+)
 
 // HealthRank is the triage ordering; lower value sorts nearer the top (worse).
 type HealthRank int
@@ -44,6 +47,7 @@ type Pod struct {
 
 type Workload struct {
 	Kind, Namespace, Name              string
+	UID                                types.UID // object identity: a same-name recreation is a different workload
 	Desired, Ready, Available, Updated int
 	Restarts                           int
 	Reason                             string // single human-facing status string

@@ -1,6 +1,7 @@
 package workloads
 
 import (
+	"k8s.io/apimachinery/pkg/types"
 	"sort"
 	"strings"
 	"time"
@@ -13,6 +14,8 @@ import (
 // summary. Capacity bars use spec quantities only (no Prometheus in this path).
 type NodeSummary struct {
 	Name          string
+	UID           types.UID
+	Generation    int64
 	Roles         []string // from node-role.kubernetes.io/* labels; empty stays empty (render "-")
 	Ready         bool     // NodeReady condition True
 	Unschedulable bool     // spec.unschedulable (cordoned)
@@ -73,6 +76,8 @@ func SummarizeNodes(nodes []corev1.Node, now time.Time) []NodeSummary {
 func summarizeNode(n *corev1.Node, now time.Time) NodeSummary {
 	s := NodeSummary{
 		Name:          n.Name,
+		UID:           n.UID,
+		Generation:    n.Generation,
 		Unschedulable: n.Spec.Unschedulable,
 		Version:       n.Status.NodeInfo.KubeletVersion,
 		OS:            n.Status.NodeInfo.OperatingSystem,

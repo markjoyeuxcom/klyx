@@ -62,7 +62,8 @@ func shopFixture() ([]runtime.Object, []runtime.Object) {
 	created := metav1.NewTime(time.Now().Add(-2 * time.Hour))
 	dep := func(name string, replicas, ready int32) *appsv1.Deployment {
 		return &appsv1.Deployment{
-			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "shop", UID: types.UID("dep-" + name), Generation: 1, CreationTimestamp: created},
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "shop", UID: types.UID("dep-" + name), Generation: 1, CreationTimestamp: created,
+				Labels: map[string]string{"kustomize.toolkit.fluxcd.io/name": "shop", "kustomize.toolkit.fluxcd.io/namespace": "flux-system"}},
 			Spec: appsv1.DeploymentSpec{Replicas: &replicas, Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": name}},
 				Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": name}},
 					Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: name, Image: "shop/" + name}}}}},
@@ -166,4 +167,103 @@ func TestCoreTasksOnTheShopFixture(t *testing.T) {
 		p, ok := s.part(TaskPods)
 		return ok && p.Counts.Fault == 2
 	})
+}
+
+func startCore(t *testing.T) (*fake.Clientset, *observe.Observer, *sink, context.Context) {
+	t.Helper()
+	typedObjs, metaObjs := shopFixture()
+	typed := fake.NewClientset(typedObjs...)
+	scheme := runtime.NewScheme()
+	if err := metav1.AddMetaToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	kinds, domains := Core(CoreDeps{Cluster: "kind-klyx", Typed: typed, Meta: metafake.NewSimpleMetadataClient(scheme, metaObjs...)})
+	s := &sink{}
+	o := observe.New(observe.Config{Cluster: "kind-klyx", Sink: s, Kinds: kinds, Domains: domains, NamespacesKind: KindNamespaces, Throttle: 20 * time.Millisecond})
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(func() { cancel(); <-o.Done() })
+	o.Start(ctx)
+	return typed, o, s, ctx
+}
+
+func (s *sink) rowsOf(key string) (observe.Rows, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r, ok := s.rows[key]
+	return r, ok
+}
+
+// Flux presence is an Observer fact: detection arriving after the first
+// evaluation (false -> true) and Flux going away (true -> false) re-evaluate
+// Workloads with no object mutation; Pods is untouched (Codex 2a review #2).
+func TestFluxPresenceFactReevaluatesWorkloadOwnership(t *testing.T) {
+	_, o, s, _ := startCore(t)
+	o.SubscribeRows(TaskWorkloads, "workloads", observe.Owner{Kind: "lens", ID: "workloads"})
+	gitops := func() (int, uint64, uint64) {
+		r, ok := s.rowsOf(TaskWorkloads + "/workloads")
+		if !ok {
+			return -1, 0, 0
+		}
+		n := 0
+		for _, w := range r.Rows.([]workloads.Workload) {
+			if w.GitOps != nil {
+				n++
+			}
+		}
+		return n, r.Part.Ver, r.Part.Obs
+	}
+	waitFor(t, "all four workloads read, none with a GitOps owner before detection", func() bool {
+		r, ok := s.rowsOf(TaskWorkloads + "/workloads")
+		n, _, _ := gitops()
+		return ok && len(r.Rows.([]workloads.Workload)) == 4 && n == 0
+	})
+	_, v0, obs0 := gitops()
+	pods0, _ := s.part(TaskPods)
+	o.SetFact(FactFluxPresent, true)
+	waitFor(t, "detection: every Flux-labelled workload gains its owner", func() bool { n, _, _ := gitops(); return n == 4 })
+	_, v1, obs1 := gitops()
+	o.SetFact(FactFluxPresent, false)
+	waitFor(t, "Flux gone: owners cleared", func() bool { n, _, _ := gitops(); return n == 0 })
+	_, v2, obs2 := gitops()
+	if !(v0 < v1 && v1 < v2) || obs0 != obs1 || obs1 != obs2 {
+		t.Fatalf("Ver advances without Obs: ver %d/%d/%d obs %d/%d/%d", v0, v1, v2, obs0, obs1, obs2)
+	}
+	if pods, _ := s.part(TaskPods); pods.Ver != pods0.Ver {
+		t.Fatalf("an unrelated part moved: pods ver %d -> %d", pods0.Ver, pods.Ver)
+	}
+}
+
+// Top refs carry object identity: a same-name recreation is a different
+// object and never reuses the previous UID (Codex 2a review #4).
+func TestTopRefsCarryUIDAcrossSameNameRecreation(t *testing.T) {
+	typed, _, s, ctx := startCore(t)
+	refUID := func() types.UID {
+		p, ok := s.part(TaskPods)
+		if !ok {
+			return ""
+		}
+		for _, r := range p.Top {
+			if r.Name == "worker-1" {
+				return types.UID(r.UID)
+			}
+		}
+		return ""
+	}
+	waitFor(t, "worker-1 heads the pod faults with its UID", func() bool { return refUID() == "pod-worker-1" })
+	old, _ := typed.CoreV1().Pods("shop").Get(ctx, "worker-1", metav1.GetOptions{})
+	if err := typed.CoreV1().Pods("shop").Delete(ctx, "worker-1", metav1.DeleteOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	reborn := old.DeepCopy()
+	reborn.UID, reborn.ResourceVersion = "pod-worker-1-reborn", ""
+	if _, err := typed.CoreV1().Pods("shop").Create(ctx, reborn, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the recreated pod is a different ref", func() bool { return refUID() == "pod-worker-1-reborn" })
+	p, _ := s.part(TaskWorkloads)
+	for _, r := range p.Top {
+		if r.UID == "" {
+			t.Fatalf("every workload ref carries its UID: %+v", r)
+		}
+	}
 }
