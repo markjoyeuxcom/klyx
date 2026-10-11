@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { IconServerBolt } from "@tabler/icons-react";
 import { useFleet } from "../store/fleet";
-import type { KarpenterClaimDTO, KarpenterEventDTO, KarpenterPoolDTO, KarpenterSnapshotDTO } from "../store/fleet";
+import type { KarpenterClaimDTO, KarpenterEventDTO, KarpenterPoolDTO, KarpenterSnapshotDTO, RuleDTO } from "../store/fleet";
 import { getKarpenterState } from "../bridge/karpenter";
 import { EmptyState } from "../chrome/EmptyState";
 import { SkeletonRows } from "../chrome/SkeletonRows";
@@ -23,12 +23,12 @@ import { fmtCpu, fmtMem } from "./saturation";
 // limits; drift and consolidation are Karpenter's intended behaviour, never
 // faults; disruption activity is evidence (events), never a lamp.
 //
-// Roles: a claim whose chain has a False condition is a fault (it failed);
-// one still Unknown is launching (progressing) until LAUNCH_DEADLINE_S -
-// Karpenter's own 15m registration TTL, used here as Klyx's attention
-// heuristic - after which it "appears stuck". Elapsed time is not proof.
+// Roles come from the relocated rule computed in Go (internal/karpenter
+// rules.go, 1c addendum §2): a claim whose chain has a False condition is a
+// fault; one still Unknown is launching (progressing) until Karpenter's own
+// 15m registration TTL, Klyx's attention heuristic, after which it "appears
+// stuck". Elapsed time is not proof.
 
-export const LAUNCH_DEADLINE_S = 900;
 type Role = { kind: "fault" | "degraded" | "progressing" | "ok" | "unknown"; label: string };
 type View = "claims" | "pools" | "activity";
 
@@ -36,19 +36,10 @@ type View = "claims" | "pools" | "activity";
 // overall Ready=False with no proven link stays adverse but unattributed.
 // A claim with a node has registered: what remains is initialization.
 export const provenLink = (c: KarpenterClaimDTO) => (c.failingStatus === "False" ? c.failingType : "");
-export function claimHealth(c: KarpenterClaimDTO): Role {
-  if (c.ready === "ready") return { kind: "ok", label: "ready" };
-  if (c.ready === "not-ready") return { kind: "fault", label: provenLink(c) ? `failed at ${provenLink(c)}` : "not ready" };
-  const phase = c.nodeName ? "initializing" : "launching";
-  if (c.ageSeconds > LAUNCH_DEADLINE_S) return { kind: "degraded", label: `${phase}, appears stuck` };
-  return { kind: "progressing", label: phase };
-}
-export function poolHealth(p: KarpenterPoolDTO): Role {
-  if (p.ready === "ready") return { kind: "ok", label: "ready" };
-  if (p.ready === "not-ready") return { kind: "fault", label: "not ready" };
-  return { kind: "unknown", label: "unknown" };
-}
+const roleOf = (x: { rule: RuleDTO }): Role => ({ kind: x.rule.role as Role["kind"], label: x.rule.label });
 const RANK: Record<Role["kind"], number> = { fault: 0, degraded: 1, progressing: 2, unknown: 3, ok: 4 };
+// An unrecognised role ranks with unknown (fail closed, never as ok).
+const rankOf = (x: { rule: RuleDTO }) => RANK[x.rule.role as Role["kind"]] ?? RANK.unknown;
 const ROLE_TEXT: Record<string, string> = {
   fault: "var(--color-text-danger)", degraded: "var(--color-text-warning)", progressing: "var(--color-text-secondary)",
   ok: "var(--color-text-secondary)", unknown: "var(--color-text-tertiary)",
@@ -122,15 +113,15 @@ export function KarpenterView({ cluster }: { cluster: string }) {
 
   const snap = pinned && pinned.cluster === cluster ? pinned.snap : null;
   const ok = snap && !snap.error && snap.detected ? snap : null;
-  const claims = useMemo(() => [...(ok?.claims ?? [])].sort((a, b) => RANK[claimHealth(a).kind] - RANK[claimHealth(b).kind] || b.ageSeconds - a.ageSeconds || a.name.localeCompare(b.name)), [ok]);
-  const pools = useMemo(() => [...(ok?.pools ?? [])].sort((a, b) => RANK[poolHealth(a).kind] - RANK[poolHealth(b).kind] || a.name.localeCompare(b.name)), [ok]);
+  const claims = useMemo(() => [...(ok?.claims ?? [])].sort((a, b) => rankOf(a) - rankOf(b) || b.ageSeconds - a.ageSeconds || a.name.localeCompare(b.name)), [ok]);
+  const pools = useMemo(() => [...(ok?.pools ?? [])].sort((a, b) => rankOf(a) - rankOf(b) || a.name.localeCompare(b.name)), [ok]);
   const events = useMemo(() => [...(ok?.events ?? [])].sort((a, b) => b.lastSeenUnix - a.lastSeenUnix), [ok]);
 
-  const failed = claims.filter((c) => claimHealth(c).kind === "fault").length;
-  const stuck = claims.filter((c) => claimHealth(c).kind === "degraded").length;
-  const launching = claims.filter((c) => claimHealth(c).kind === "progressing").length;
-  const poolsDown = pools.filter((p) => poolHealth(p).kind === "fault").length;
-  const poolsUnknown = pools.filter((p) => poolHealth(p).kind === "unknown").length;
+  const failed = claims.filter((c) => roleOf(c).kind === "fault").length;
+  const stuck = claims.filter((c) => roleOf(c).kind === "degraded").length;
+  const launching = claims.filter((c) => roleOf(c).kind === "progressing").length;
+  const poolsDown = pools.filter((p) => roleOf(p).kind === "fault").length;
+  const poolsUnknown = pools.filter((p) => roleOf(p).kind === "unknown").length;
   const drifted = claims.filter((c) => c.drifted).length;
 
   const keys: string[] = view === "claims" ? claims.map((c) => c.name) : view === "pools" ? pools.map((p) => p.name) : events.map(eventKey);
@@ -239,7 +230,7 @@ export function KarpenterView({ cluster }: { cluster: string }) {
           {view === "claims" ? (
             <VirtualList ref={listRef} items={claims} rowHeight={TABLE_ROW_HEIGHT} rowKey={(c) => c.name} style={{ flex: 1, minHeight: 0 }}
               render={(c) => {
-                const role = claimHealth(c);
+                const role = roleOf(c);
                 return row(c.name, <>
                   {show("lamp") && <Lamp role={role} />}
                   {show("name") && <span className="lens-cell-name" title={c.nodeName ? `node ${c.nodeName}` : "no node yet"}>{c.name}</span>}
@@ -253,7 +244,7 @@ export function KarpenterView({ cluster }: { cluster: string }) {
           ) : view === "pools" ? (
             <VirtualList ref={listRef} items={pools} rowHeight={TABLE_ROW_HEIGHT} rowKey={(p) => p.name} style={{ flex: 1, minHeight: 0 }}
               render={(p) => {
-                const role = poolHealth(p);
+                const role = roleOf(p);
                 const cpu = capText(p.cpuUsed, p.cpuLimit, fmtCpu);
                 const mem = capText(p.memUsed, p.memLimit, fmtMem);
                 return row(p.name, <>
@@ -290,7 +281,7 @@ export function KarpenterView({ cluster }: { cluster: string }) {
 }
 
 function ClaimInspector({ cluster, c, onClose }: { cluster: string; c: KarpenterClaimDTO; onClose: () => void }) {
-  const role = claimHealth(c);
+  const role = roleOf(c);
   const openNode = () => { const nav = useFleet.getState(); nav.setSection("nodes"); nav.requestNavIntent({ kind: "select-node", cluster, node: c.nodeName }); };
   const link = provenLink(c);
   const pending = c.failingType && c.failingStatus !== "False" ? `${c.failingType} is ${c.failingStatus || "not reported"} (unverified)` : "";
@@ -336,7 +327,7 @@ function ClaimInspector({ cluster, c, onClose }: { cluster: string; c: Karpenter
 }
 
 function PoolInspector({ p, onClose }: { p: KarpenterPoolDTO; onClose: () => void }) {
-  const role = poolHealth(p);
+  const role = roleOf(p);
   const cpu = capText(p.cpuUsed, p.cpuLimit, fmtCpu);
   const mem = capText(p.memUsed, p.memLimit, fmtMem);
   return (

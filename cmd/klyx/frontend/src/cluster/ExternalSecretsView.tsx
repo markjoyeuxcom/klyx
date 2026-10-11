@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useFleet } from "../store/fleet";
-import type { ExternalSecretDTO, ExternalSecretStoreDTO } from "../store/fleet";
+import type { ExternalSecretDTO, ExternalSecretStoreDTO, RuleDTO } from "../store/fleet";
 import { openExternalSecrets, closeExternalSecrets } from "../bridge/externalsecrets";
 import { useListKeys } from "../chrome/useListKeys";
 import { CopyButton } from "../chrome/CopyButton";
@@ -39,12 +39,6 @@ function staleTitle(e: ExternalSecretDTO): string {
   return `last synced ${fmtDuration(e.lastRefreshAgeSeconds)} ago - refresh interval ${fmtDuration(e.refreshIntervalSeconds)}; the controller has stopped refreshing`;
 }
 
-// Broken-first principle: anything not confidently Synced needs eyes - a
-// Failed sync, an Unknown state, or a Synced state gone stale (the controller
-// stopped refreshing, so Ready describes an old sync).
-function needsAttention(e: ExternalSecretDTO): boolean {
-  return e.state !== "Synced" || !!e.stale;
-}
 
 function secretRank(e: ExternalSecretDTO): number {
   if (e.state === "Failed") return 0;
@@ -85,22 +79,11 @@ function matchesQuery(e: ExternalSecretDTO, query: string): boolean {
 type EsoView = "secrets" | "stores";
 type EsoStatus = "all" | "attention" | "stale";
 
-// Shared verdict roles (only faults glow): Failed = fault; stale (refresh
-// stopped) = degraded; Synced = ok; Unknown = unknown; anything else =
-// degraded.
-function secretHealth(e: ExternalSecretDTO): { kind: string; label: string } {
-  if (e.state === "Failed") return { kind: "fault", label: "Failed" };
-  if (e.state === "Synced" && e.stale) return { kind: "degraded", label: "Stale" };
-  if (e.state === "Synced") return { kind: "ok", label: "Synced" };
-  if (e.state === "Unknown" || !e.state) return { kind: "unknown", label: "Unknown" };
-  return { kind: "degraded", label: e.state };
-}
-function storeHealth(s: ExternalSecretStoreDTO): { kind: string; label: string } {
-  if (s.state === "Synced") return { kind: "ok", label: "Ready" };
-  if (s.state === "Failed") return { kind: "fault", label: "Failed" };
-  if (s.state === "Unknown" || !s.state) return { kind: "unknown", label: "Unknown" };
-  return { kind: "degraded", label: s.state };
-}
+// The verdict is the relocated rule computed in Go (1c addendum §2):
+// rule.included is the attention filter (not confidently Synced, or refresh
+// overdue), rule.role/label the presentation.
+const roleOf = (x: { rule: RuleDTO }) => ({ kind: x.rule.role, label: x.rule.label });
+const included = (x: { rule: RuleDTO }) => x.rule.included;
 const ROLE_TEXT: Record<string, string> = {
   fault: "var(--color-text-danger)",
   degraded: "var(--color-text-warning)",
@@ -183,7 +166,7 @@ export function ExternalSecretsView({ cluster }: { cluster: string }) {
   const namespaces = useMemo(() => Array.from(new Set(secrets.map((e) => e.namespace))).sort(), [secrets]);
   const visibleSecrets = useMemo(() => orderedSecrets.filter((e) => {
     if (namespace && e.namespace !== namespace) return false;
-    if (status === "attention" && !needsAttention(e)) return false;
+    if (status === "attention" && !included(e)) return false;
     if (status === "stale" && !e.stale) return false;
     return matchesQuery(e, q);
   }), [orderedSecrets, namespace, status, q]);
@@ -230,7 +213,7 @@ export function ExternalSecretsView({ cluster }: { cluster: string }) {
     if (autoSelect.current === "done" || !freshRead || view !== "secrets") return;
     autoSelect.current = "done";
     if (useFleet.getState().externalsecrets.selectedKey) return;
-    const e = visibleSecrets.find(needsAttention);
+    const e = visibleSecrets.find(included);
     if (e) { setCursorKey(keyOf(e)); selectSecret(keyOf(e)); }
   }, [freshRead, visibleSecrets, view, selectSecret]);
 
@@ -253,10 +236,10 @@ export function ExternalSecretsView({ cluster }: { cluster: string }) {
   const show = (id: string) => fitted.visible.has(id);
   const gridStyle = { gridTemplateColumns: fitted.template };
 
-  const attention = secrets.filter(needsAttention).length;
+  const attention = secrets.filter(included).length;
   const failed = secrets.filter((e) => e.state === "Failed").length;
   const stale = secrets.filter((e) => e.stale).length;
-  const storesNotReady = stores.filter((s) => s.state !== "Synced").length;
+  const storesNotReady = stores.filter(included).length;
   const storeProblems = secrets.filter((e) => { if (kindCov(e.storeKind) === "unknown") return false; const st = resolveStore(e, stores); return !st || st.state !== "Synced"; }).length;
 
   const clearFilters = () => { setStatus("all"); setQuery(""); setNamespace(""); };
@@ -315,7 +298,7 @@ export function ExternalSecretsView({ cluster }: { cluster: string }) {
             </select>
           </label>
           <button className="l-chip" aria-pressed={status === "all"} onClick={() => setStatus("all")}>All</button>
-          <button className="l-chip" aria-pressed={status === "attention"} onClick={() => setStatus("attention")}>{view === "stores" ? "Not ready" : "Not synced or stale"} {(view === "stores" ? storesNotReady : attention) > 0 && <span style={{ color: "var(--color-text-warning)" }}>{view === "stores" ? storesNotReady : attention}</span>}</button>
+          <button className="l-chip" aria-pressed={status === "attention"} onClick={() => setStatus("attention")}>{view === "stores" ? "Not ready" : "Not synced or refresh overdue"} {(view === "stores" ? storesNotReady : attention) > 0 && <span style={{ color: "var(--color-text-warning)" }}>{view === "stores" ? storesNotReady : attention}</span>}</button>
           {view === "secrets" && stale > 0 && <button className="l-chip" aria-pressed={status === "stale"} onClick={() => setStatus("stale")}>Stale <span style={{ color: "var(--color-text-warning)" }}>{stale}</span></button>}
           <label style={{ display: "flex", flex: "0 1 260px", minWidth: 140, marginLeft: "auto" }}>
             <span className="sr-only">Search External Secrets</span>
@@ -342,7 +325,7 @@ export function ExternalSecretsView({ cluster }: { cluster: string }) {
               style={{ flex: 1, minHeight: 0 }}
               render={(s) => {
                 const k = storeKey(s);
-                const role = storeHealth(s);
+                const role = roleOf(s);
                 return (
                   <div key={k} role="button" tabIndex={0} className="lens-row" style={gridStyle}
                     aria-selected={k === cursorKey} data-cursor={k === cursorKey ? "true" : undefined} data-selected={k === storeSel ? "true" : undefined}
@@ -367,7 +350,7 @@ export function ExternalSecretsView({ cluster }: { cluster: string }) {
               style={{ flex: 1, minHeight: 0 }}
               render={(e) => {
                 const k = keyOf(e);
-                const role = secretHealth(e);
+                const role = roleOf(e);
                 const storeCov = kindCov(e.storeKind);
                 const st = storeCov !== "unknown" ? resolveStore(e, stores) : undefined;
                 return (
@@ -438,12 +421,12 @@ function SecretInspector({ e, removed, store, storeCov, onClose, onOpenStore }: 
   onClose: () => void;
   onOpenStore: (s: ExternalSecretStoreDTO) => void;
 }) {
-  // store surfaces derive from storeHealth: only CONFIRMED adverse store
+  // store surfaces derive from the store's rule: only CONFIRMED adverse store
   // health is a diagnosed root cause; Unknown is unverified evidence
-  const storeRole = store ? storeHealth(store) : null;
+  const storeRole = store ? roleOf(store) : null;
   const storeBroken = !!storeRole && (storeRole.kind === "fault" || storeRole.kind === "degraded");
   const cause = causeOf(e, store, storeRole, storeCov);
-  const role = secretHealth(e);
+  const role = roleOf(e);
   const live = !removed;
   const manifestRef = wellKnownResourceRef("external-secrets.io", "ExternalSecret");
   const more: MenuItem[] = manifestRef ? [{ label: "View manifest in Resources", onSelect: () => { const nav = useFleet.getState(); nav.openResource(manifestRef); nav.openInstance(e.namespace, e.name); } }] : [];
@@ -510,10 +493,10 @@ function SecretInspector({ e, removed, store, storeCov, onClose, onOpenStore }: 
 }
 
 function StoreInspector({ store, removed, secrets, secretsCov, onClose, onOpenSecret }: { store: ExternalSecretStoreDTO; removed: boolean; secrets: ExternalSecretDTO[]; secretsCov: JoinCoverage; onClose: () => void; onOpenSecret: (e: ExternalSecretDTO) => void }) {
-  const role = storeHealth(store);
+  const role = roleOf(store);
   const ref = wellKnownResourceRef("external-secrets.io", store.kind);
   const view = ref ? () => { const nav = useFleet.getState(); nav.openResource(ref); nav.openInstance(store.kind === "ClusterSecretStore" ? "" : store.namespace, store.name); } : null;
-  const blocked = secrets.filter(needsAttention);
+  const blocked = secrets.filter(included);
   return (
     <div data-testid="eso-store-panel" style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
       <InspectorLayout
@@ -538,7 +521,7 @@ function StoreInspector({ store, removed, secrets, secretsCov, onClose, onOpenSe
               {[...blocked, ...secrets.filter((x) => !blocked.includes(x))].map((x) => (
                 <button key={keyOf(x)} onClick={() => onOpenSecret(x)} className="t-identifier"
                   style={{ display: "flex", gap: 8, alignItems: "center", background: "none", border: 0, padding: "2px 0", cursor: "pointer", textAlign: "left", color: "var(--color-text-info)" }}>
-                  <VerdictLamp health={secretHealth(x)} size={7} />
+                  <VerdictLamp health={roleOf(x)} size={7} />
                   <span style={{ overflowWrap: "anywhere" }}>{x.namespace}/{x.name}</span>
                 </button>
               ))}
@@ -569,7 +552,3 @@ function causeOf(e: ExternalSecretDTO, store: ExternalSecretStoreDTO | undefined
   return "";
 }
 
-
-// The lens rules, exported for the 1c golden parity harness
-// (src/health/nativeRules.test.ts) until the lens reads the Go-computed rule.
-export { needsAttention as secretNeedsAttention, secretHealth, storeHealth };

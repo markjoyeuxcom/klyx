@@ -16,6 +16,7 @@ vi.mock("../bridge/ai", () => ({
   explainCertificate: vi.fn(async () => ({ ok: true, explanation: "", model: "", backend: "", groundedOn: "", error: "" })),
 }));
 import { aiAvailability, aiEgressAllowed, explainCertificate } from "../bridge/ai";
+import { certRule, issuerRule, withRule } from "../test/backendRules";
 
 const cluster = (tier: string): ClusterDTO => ({
   name: "x", state: "Synced", reason: "", nodesReady: 1, nodesTotal: 1, pods: 1, version: "v1",
@@ -23,15 +24,17 @@ const cluster = (tier: string): ClusterDTO => ({
   certManagerTier: tier, env: "", region: "", provider: "", group: "", ageSeconds: 0,
 });
 
-const cert = (over: Partial<CertificateDTO>): CertificateDTO => ({
+// Fixtures carry the rule the backend computes (test/backendRules.ts, held to
+// the Go golden fixture), stamped at build time - the lens only reads it.
+const cert = (over: Partial<CertificateDTO>): CertificateDTO => withRule<CertificateDTO>({
   namespace: "payments", name: "acme-demo", ready: "Ready", reason: "", message: "",
   issuerKind: "ClusterIssuer", issuerName: "lab-acme-staging", secretName: "acme-demo-tls",
   dnsNames: ["acme-demo.klustr.io"], notBeforeUnix: 0, notAfterUnix: 0, expiresInSeconds: 0, renewalUnix: 0, ...over,
-});
+}, certRule);
 
-const issuer = (over: Partial<IssuerDTO>): IssuerDTO => ({
+const issuer = (over: Partial<IssuerDTO>): IssuerDTO => withRule<IssuerDTO>({
   kind: "ClusterIssuer", namespace: "", name: "lab-acme-staging", ready: "Ready", reason: "", message: "", ...over,
-});
+}, issuerRule);
 
 function setup(tier: string, certs: CertificateDTO[], issuers: IssuerDTO[], selectedKey: string | null = null, chain: CertChainDTO | null = null) {
   useFleet.setState({
@@ -45,6 +48,19 @@ const insp = () => within(screen.getByTestId("lens-inspector"));
 const rowsText = () => [...document.querySelectorAll(".lens-row")].map((r) => r.textContent ?? "");
 
 describe("CertsView", () => {
+  it("reads the Go-computed rule, never its own: verdict, label and the Not ready count (1c §2)", () => {
+    // The rules contradict the native fields on purpose: only the rule may decide.
+    setup("Healthy", [
+      cert({ name: "backend-flags", ready: "Ready", rule: { included: true, role: "fault", label: "Flagged by backend" } }),
+      cert({ name: "backend-clears", ready: "Failed", rule: { included: false, role: "ok", label: "Ready" } }),
+    ], [issuer({ ready: "Failed", rule: { included: false, role: "ok", label: "Ready" } })]);
+    render(<CertsView cluster="x" />);
+    expect(screen.getByText("backend-flags").closest(".lens-row")?.textContent).toContain("Flagged by backend");
+    expect(screen.getByText("backend-clears").closest(".lens-row")?.textContent).not.toContain("Failed");
+    expect(screen.getByRole("button", { name: /^Not ready/ }).textContent).toBe("Not ready 1");
+    expect(screen.queryByText(/issuers? not ready/)).toBeNull();
+  });
+
   it("a stale certificate dims and shows the Syncing chip", () => {
     setup("Healthy", [cert({ name: "edited-tls", ready: "Ready", stale: true, generation: 3, observedGeneration: 2 })], [issuer({})]);
     const { getByText, getByTitle } = render(<CertsView cluster="x" />);

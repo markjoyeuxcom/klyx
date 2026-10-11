@@ -21,7 +21,7 @@ vi.mock("@wailsio/runtime", () => ({ Events: { On: vi.fn((n: string, h: (ev: unk
 import { getCertificateChain, openCertManager } from "./certmanager";
 
 const chainFor = (marker: string): CertChainDTO => ({
-  certificate: { namespace: "ns", name: "c", ready: "Ready", reason: marker, message: "", issuerKind: "", issuerName: "", secretName: "", dnsNames: [], notAfterUnix: 0, expiresInSeconds: 0, renewalUnix: 0 },
+  certificate: { rule: { included: false, role: "ok", label: "Ready" }, namespace: "ns", name: "c", ready: "Ready", reason: marker, message: "", issuerKind: "", issuerName: "", secretName: "", dnsNames: [], notAfterUnix: 0, expiresInSeconds: 0, renewalUnix: 0 },
   issuer: null, requests: [], failingLink: null, warnings: [],
 });
 

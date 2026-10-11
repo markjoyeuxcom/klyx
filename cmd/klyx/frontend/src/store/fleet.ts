@@ -200,7 +200,13 @@ export type GitOpsSlice = {
 // cert-manager lens (M11). NotAfterUnix/RenewalUnix are 0 when unknown; expiry is
 // derived client-side from the absolute timestamps. A failing bound issuer is the
 // headline for a stuck cert, exactly as a failing source is for a stuck Kustomization.
+// RuleDTO: a relocated lens rule's verdict, computed once in Go (1c addendum
+// §2) - the lens's inclusion predicate and presentation role, kept separate.
+// Lenses read it; they never recompute it.
+export type RuleDTO = { included: boolean; role: string; label: string };
+
 export type CertificateDTO = {
+  rule: RuleDTO;
   namespace: string;
   name: string;
   ready: string;
@@ -219,6 +225,7 @@ export type CertificateDTO = {
   observedGeneration?: number;
 };
 export type IssuerDTO = {
+  rule: RuleDTO;
   kind: string;
   namespace: string;
   name: string;
@@ -268,6 +275,7 @@ export type CertManagerSlice = {
 // bound (Cluster)SecretStore is the headline for a stuck secret, exactly as a
 // failing issuer is for a stuck certificate.
 export type ExternalSecretDTO = {
+  rule: RuleDTO;
   namespace: string;
   name: string;
   state: string;
@@ -282,6 +290,7 @@ export type ExternalSecretDTO = {
   stale?: boolean;
 };
 export type ExternalSecretStoreDTO = {
+  rule: RuleDTO;
   kind: string;
   namespace: string;
   name: string;
@@ -358,8 +367,8 @@ export type HeadroomReportDTO = { result: HeadroomResultDTO; pdbBlockers: PDBBlo
 export type ExpiryItemDTO = { source: string; namespace: string; name: string; detail: string; subject: string; notAfterUnix: number };
 
 // Karpenter lens.
-export type KarpenterPoolDTO = { name: string; ready: string; reason: string; message: string; weight: number; cpuLimit: number | null; cpuUsed: number | null; memLimit: number | null; memUsed: number | null; nodes: number };
-export type KarpenterClaimDTO = { name: string; pool: string; nodeName: string; ready: string; failingType: string; failingStatus?: string; failingReason: string; failingMessage: string; drifted: boolean; consolidatable: boolean; capacityType: string; instanceType: string; ageSeconds: number };
+export type KarpenterPoolDTO = { rule: RuleDTO; name: string; ready: string; reason: string; message: string; weight: number; cpuLimit: number | null; cpuUsed: number | null; memLimit: number | null; memUsed: number | null; nodes: number };
+export type KarpenterClaimDTO = { rule: RuleDTO; createdUnix?: number; name: string; pool: string; nodeName: string; ready: string; failingType: string; failingStatus?: string; failingReason: string; failingMessage: string; drifted: boolean; consolidatable: boolean; capacityType: string; instanceType: string; ageSeconds: number };
 export type KarpenterEventDTO = { type: string; reason: string; message: string; kind: string; name: string; lastSeenUnix: number };
 // controllerVerified: a karpenter Deployment was actually read - otherwise
 // controllerHealthy carries no claim and controllerError says why. eventsError

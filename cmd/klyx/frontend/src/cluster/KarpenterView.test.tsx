@@ -1,35 +1,37 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, fireEvent, screen, act, within } from "@testing-library/react";
-import type { KarpenterClaimDTO, KarpenterSnapshotDTO } from "../store/fleet";
-import { KarpenterView, claimHealth, LAUNCH_DEADLINE_S } from "./KarpenterView";
+import type { KarpenterClaimDTO, KarpenterPoolDTO, KarpenterSnapshotDTO } from "../store/fleet";
+import { KarpenterView } from "./KarpenterView";
+import { claimRule, poolRule, withRule } from "../test/backendRules";
 
 vi.mock("../bridge/karpenter", () => ({ getKarpenterState: vi.fn(async () => ({}) as KarpenterSnapshotDTO) }));
 import { getKarpenterState } from "../bridge/karpenter";
 
 const snap = (over: Partial<KarpenterSnapshotDTO> = {}): KarpenterSnapshotDTO => ({ detected: true, controllerVerified: true, controllerHealthy: true, pools: [], claims: [], events: [], ...over });
-const claim = (over: Partial<KarpenterClaimDTO> = {}): KarpenterClaimDTO => ({
+// Fixtures carry the rule the backend computes (test/backendRules.ts, held to
+// the Go golden fixture, which also covers the rule's cases and its exact
+// launch-deadline boundary).
+const claim = (over: Partial<KarpenterClaimDTO> = {}): KarpenterClaimDTO => withRule<KarpenterClaimDTO>({
   name: "default-abcde", pool: "default", nodeName: "ip-10-0-1-1", ready: "ready", failingType: "", failingReason: "", failingMessage: "",
   drifted: false, consolidatable: false, capacityType: "spot", instanceType: "m6i.large", ageSeconds: 3600, ...over,
-});
+}, claimRule);
 type D<T> = { promise: Promise<T>; resolve: (v: T) => void };
 const deferred = <T,>(): D<T> => { let resolve!: (v: T) => void; const promise = new Promise<T>((r) => (resolve = r)); return { promise, resolve }; };
 const rows = () => [...document.querySelectorAll(".lens-row")].map((r) => r.textContent ?? "");
 
-describe("claimHealth", () => {
-  it("False chain = failed; Unknown = launching until the 15m heuristic, then appears stuck", () => {
-    expect(claimHealth(claim()).kind).toBe("ok");
-    expect(claimHealth(claim({ ready: "not-ready", failingType: "Launched", failingStatus: "False" }))).toEqual({ kind: "fault", label: "failed at Launched" });
-    // Ready=False with only an Unknown link: adverse, but no link is named failed
-    expect(claimHealth(claim({ ready: "not-ready", failingType: "Launched", failingStatus: "Unknown" }))).toEqual({ kind: "fault", label: "not ready" });
-    expect(claimHealth(claim({ ready: "unknown", ageSeconds: 60, nodeName: "" })).label).toBe("launching");
-    expect(claimHealth(claim({ ready: "unknown", ageSeconds: 60 })).label).toBe("initializing");
-    expect(claimHealth(claim({ ready: "unknown", ageSeconds: LAUNCH_DEADLINE_S + 1, nodeName: "" }))).toEqual({ kind: "degraded", label: "launching, appears stuck" });
-    expect(claimHealth(claim({ ready: "unknown", ageSeconds: LAUNCH_DEADLINE_S + 1 }))).toEqual({ kind: "degraded", label: "initializing, appears stuck" });
-  });
-});
-
 describe("KarpenterView (redesign step 5)", () => {
   beforeEach(() => vi.clearAllMocks());
+
+  it("reads the Go-computed rule, never its own: header counts and row labels (1c §2)", async () => {
+    // A natively ready claim the backend flags, and a natively failed one it clears.
+    vi.mocked(getKarpenterState).mockResolvedValue(snap({ claims: [
+      claim({ name: "backend-flags", ready: "ready", rule: { included: true, role: "fault", label: "flagged by backend" } }),
+      claim({ name: "backend-clears", ready: "not-ready", failingType: "Launched", failingStatus: "False", rule: { included: false, role: "ok", label: "ready" } }),
+    ] }));
+    render(<KarpenterView cluster="x" />);
+    expect(await screen.findByText("▲ 1 not ready")).toBeTruthy();
+    expect(rows()[0]).toContain("flagged by backend"); // ordered by the rule's role
+  });
 
   it("stuck first: failed, then appears stuck, then launching, then ready; header counts", async () => {
     vi.mocked(getKarpenterState).mockResolvedValue(snap({ claims: [
@@ -73,7 +75,7 @@ describe("KarpenterView (redesign step 5)", () => {
   });
 
   it("pools show capacity against limits and warn near a limit", async () => {
-    vi.mocked(getKarpenterState).mockResolvedValue(snap({ pools: [{ name: "default", ready: "ready", reason: "", message: "", weight: 10, cpuLimit: 100, cpuUsed: 95, memLimit: null, memUsed: 1024 ** 3, nodes: 3 }] }));
+    vi.mocked(getKarpenterState).mockResolvedValue(snap({ pools: [withRule<KarpenterPoolDTO>({ name: "default", ready: "ready", reason: "", message: "", weight: 10, cpuLimit: 100, cpuUsed: 95, memLimit: null, memUsed: 1024 ** 3, nodes: 3 }, poolRule)] }));
     render(<KarpenterView cluster="x" />);
     fireEvent.click(await screen.findByRole("button", { name: /^NodePools/ }));
     fireEvent.click(document.querySelector(".lens-row") as HTMLElement);
@@ -165,7 +167,7 @@ describe("KarpenterView evidence corrections (Codex 271342a7)", () => {
   });
 
   it("an Unknown NodePool is never folded into 'all ready'", async () => {
-    vi.mocked(getKarpenterState).mockResolvedValue(snap({ controllerVerified: true, claims: [claim()], pools: [{ name: "p", ready: "unknown", reason: "", message: "", weight: 0, cpuLimit: null, cpuUsed: null, memLimit: null, memUsed: null, nodes: 1 }] }));
+    vi.mocked(getKarpenterState).mockResolvedValue(snap({ controllerVerified: true, claims: [claim()], pools: [withRule<KarpenterPoolDTO>({ name: "p", ready: "unknown", reason: "", message: "", weight: 0, cpuLimit: null, cpuUsed: null, memLimit: null, memUsed: null, nodes: 1 }, poolRule)] }));
     render(<KarpenterView cluster="x" />);
     expect(await screen.findByText("1 NodePool unverified")).toBeTruthy();
     expect(screen.queryByText("all ready")).toBeNull();

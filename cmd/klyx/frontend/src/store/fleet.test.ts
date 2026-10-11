@@ -211,8 +211,8 @@ test("network slice is scoped to its cluster", () => {
 });
 
 describe("externalsecrets slice", () => {
-  const es = { namespace: "payments", name: "stripe-api", state: "Synced", reason: "", message: "", storeKind: "ClusterSecretStore", storeName: "azure-kv", targetSecret: "stripe-api-secret", refreshIntervalSeconds: 3600, lastRefreshAgeSeconds: 60 };
-  const st = { kind: "ClusterSecretStore", namespace: "", name: "azure-kv", state: "Synced", reason: "", message: "", provider: "azurekv" };
+  const es = { rule: { included: false, role: "ok", label: "Synced" }, namespace: "payments", name: "stripe-api", state: "Synced", reason: "", message: "", storeKind: "ClusterSecretStore", storeName: "azure-kv", targetSecret: "stripe-api-secret", refreshIntervalSeconds: 3600, lastRefreshAgeSeconds: 60 };
+  const st = { rule: { included: false, role: "ok", label: "Ready" }, kind: "ClusterSecretStore", namespace: "", name: "azure-kv", state: "Synced", reason: "", message: "", provider: "azurekv" };
 
   it("loading resets the slice for the claimed cluster", () => {
     useFleet.getState().setExternalSecrets("x", [es], [st]);

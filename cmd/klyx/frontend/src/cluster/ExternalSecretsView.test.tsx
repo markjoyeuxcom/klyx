@@ -3,6 +3,7 @@ import { render, fireEvent, within, screen, act } from "@testing-library/react";
 import { useFleet } from "../store/fleet";
 import type { ExternalSecretDTO, ExternalSecretStoreDTO, ClusterDTO } from "../store/fleet";
 import { ExternalSecretsView } from "./ExternalSecretsView";
+import { secretRule, storeRule, withRule } from "../test/backendRules";
 
 vi.mock("../bridge/externalsecrets", () => ({
   openExternalSecrets: async () => () => {},
@@ -15,15 +16,17 @@ const cluster = (tier: string): ClusterDTO => ({
   externalSecretsTier: tier, env: "", region: "", provider: "", group: "", ageSeconds: 0,
 });
 
-const secret = (over: Partial<ExternalSecretDTO>): ExternalSecretDTO => ({
+// Fixtures carry the rule the backend computes (test/backendRules.ts, held to
+// the Go golden fixture), stamped at build time - the lens only reads it.
+const secret = (over: Partial<ExternalSecretDTO>): ExternalSecretDTO => withRule<ExternalSecretDTO>({
   namespace: "payments", name: "stripe-api", state: "Synced", reason: "", message: "",
   storeKind: "ClusterSecretStore", storeName: "azure-kv", targetSecret: "stripe-api-secret",
   refreshIntervalSeconds: 3600, lastRefreshAgeSeconds: 60, ...over,
-});
+}, secretRule);
 
-const store = (over: Partial<ExternalSecretStoreDTO>): ExternalSecretStoreDTO => ({
+const store = (over: Partial<ExternalSecretStoreDTO>): ExternalSecretStoreDTO => withRule<ExternalSecretStoreDTO>({
   kind: "ClusterSecretStore", namespace: "", name: "azure-kv", state: "Synced", reason: "", message: "", provider: "azurekv", ...over,
-});
+}, storeRule);
 
 function setup(tier: string, secrets: ExternalSecretDTO[], stores: ExternalSecretStoreDTO[], selectedKey: string | null = null, watchError: string | null = null) {
   useFleet.setState({
@@ -37,6 +40,17 @@ const insp = () => within(screen.getByTestId("lens-inspector"));
 const rowsText = () => [...document.querySelectorAll(".lens-row")].map((r) => r.textContent ?? "");
 
 describe("ExternalSecretsView", () => {
+  it("reads the Go-computed rule, never its own: verdict, label and the attention count (1c §2)", () => {
+    // The rules contradict the native fields on purpose: only the rule may decide.
+    setup("Healthy", [
+      secret({ name: "backend-flags", state: "Synced", rule: { included: true, role: "fault", label: "Flagged by backend" } }),
+      secret({ name: "backend-clears", state: "Failed", rule: { included: false, role: "ok", label: "Synced" } }),
+    ], [store({ state: "Failed", rule: { included: false, role: "ok", label: "Ready" } })]);
+    render(<ExternalSecretsView cluster="x" />);
+    expect(screen.getByText("backend-flags").closest(".lens-row")?.textContent).toContain("Flagged by backend");
+    expect(screen.getByRole("button", { name: /^Not synced or refresh overdue/ }).textContent).toBe("Not synced or refresh overdue 1");
+  });
+
   it("renders an honest empty state when the operator is absent", () => {
     setup("Absent", [], []);
     const { getByText } = render(<ExternalSecretsView cluster="x" />);
