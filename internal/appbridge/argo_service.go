@@ -12,12 +12,16 @@ import (
 const argoTimeout = 30 * time.Second
 
 // ArgoConn is the per-cluster surface ArgoService needs (lookup seam).
+// The Applications and ApplicationSets are the health Observer's shared rows
+// (1c slice 3 §5.4); AppProjects stay a fetch. The verbs write only the armed
+// Application (uid): a same-name replacement is refused (design §5b).
 type ArgoConn interface {
+	// ListArgoApps serves ListApplications, which bridge/attention.ts and
+	// bridge/fleetboard.ts still call (they move in slices 4-5, §6).
 	ListArgoApps(ctx context.Context) ([]argo.App, error)
 	ListArgoProjects(ctx context.Context) ([]argo.Project, error)
-	ListArgoApplicationSets(ctx context.Context) ([]argo.ApplicationSet, error)
-	RefreshArgoApp(ctx context.Context, namespace, name string) error
-	SyncArgoApp(ctx context.Context, namespace, name string, opts argo.SyncOptions) error
+	RefreshArgoApp(ctx context.Context, namespace, name, uid string) error
+	SyncArgoApp(ctx context.Context, namespace, name, uid string, opts argo.SyncOptions) error
 }
 
 // ArgoConditionDTO is one Application condition (Argo: type + message).
@@ -74,6 +78,9 @@ type ArgoAppSetConditionDTO struct {
 }
 
 type ArgoApplicationSetDTO struct {
+	UID            string                   `json:"uid,omitempty"` // identity (1c slice 3 §2a)
+	GVR            string                   `json:"gvr,omitempty"`
+	Generation     int64                    `json:"generation,omitempty"`
 	Namespace      string                   `json:"namespace"`
 	Name           string                   `json:"name"`
 	Generators     []string                 `json:"generators"`
@@ -94,6 +101,9 @@ type ArgoApplicationSetDTO struct {
 
 // ArgoAppDTO is one Argo CD Application in Argo's own vocabulary.
 type ArgoAppDTO struct {
+	UID            string `json:"uid,omitempty"` // identity (1c slice 3 §2a)
+	GVR            string `json:"gvr,omitempty"`
+	Generation     int64  `json:"generation,omitempty"`
 	Namespace      string `json:"namespace"`
 	Name           string `json:"name"`
 	Project        string `json:"project"`
@@ -123,9 +133,6 @@ type ArgoAppDTO struct {
 	Rule RuleDTO `json:"rule"`
 }
 
-// ArgoResultDTO is the list payload. Available=false with Message covers both
-// "Argo CD not installed" and a failed list - never an empty list pretending
-// to be a healthy zero.
 // Result DTOs distinguish absence from failure: Available=false with no
 // Error means the kind is not served (Argo not installed); a non-empty Error
 // means the read failed (not connected, RBAC, timeout) and availability is
@@ -145,13 +152,6 @@ type ArgoProjectsResultDTO struct {
 	Projects  []ArgoProjectDTO `json:"projects"`
 }
 
-type ArgoApplicationSetsResultDTO struct {
-	Available       bool                    `json:"available"`
-	Message         string                  `json:"message,omitempty"`
-	Error           string                  `json:"error,omitempty"`
-	ApplicationSets []ArgoApplicationSetDTO `json:"applicationSets"`
-}
-
 // ArgoService is bound to JS: Application listing + the two imperative
 // triggers (refresh, sync). Like every write verb it returns ActionResultDTO.
 // On a protected cluster both consume the typed-confirmation grant the
@@ -165,7 +165,8 @@ func NewArgoService(lookup func(string) (ArgoConn, bool)) *ArgoService {
 	return &ArgoService{lookup: lookup}
 }
 
-// ListApplications returns every Application on the cluster, broken-first.
+// ListApplications returns every Application on the cluster, broken-first,
+// for the attention strip and the fleet board (the lens reads the rows).
 func (s *ArgoService) ListApplications(cluster string) ArgoResultDTO {
 	conn, ok := s.lookup(cluster)
 	if !ok {
@@ -221,27 +222,6 @@ func (s *ArgoService) ListProjects(cluster string) ArgoProjectsResultDTO {
 	return ArgoProjectsResultDTO{Available: true, Projects: out}
 }
 
-func (s *ArgoService) ListApplicationSets(cluster string) ArgoApplicationSetsResultDTO {
-	conn, ok := s.lookup(cluster)
-	if !ok {
-		return ArgoApplicationSetsResultDTO{Message: "cluster not connected: " + cluster, Error: "cluster not connected: " + cluster, ApplicationSets: []ArgoApplicationSetDTO{}}
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), argoTimeout)
-	defer cancel()
-	sets, err := conn.ListArgoApplicationSets(ctx)
-	if err != nil {
-		if apierrors.IsNotFound(err) {
-			return ArgoApplicationSetsResultDTO{Message: "Argo CD ApplicationSets not detected (no applicationsets.argoproj.io resource)", ApplicationSets: []ArgoApplicationSetDTO{}}
-		}
-		return ArgoApplicationSetsResultDTO{Message: err.Error(), Error: err.Error(), ApplicationSets: []ArgoApplicationSetDTO{}}
-	}
-	out := make([]ArgoApplicationSetDTO, 0, len(sets))
-	for _, a := range sets {
-		out = append(out, toArgoAppSetDTO(a))
-	}
-	return ArgoApplicationSetsResultDTO{Available: true, ApplicationSets: out}
-}
-
 func sliceOrEmpty[T any](in []T) []T {
 	if in == nil {
 		return []T{}
@@ -262,7 +242,8 @@ func toArgoResourceRuleDTOs(in []argo.ResourceRule) []ArgoResourceRuleDTO {
 // reconcile annotation - so it consumes the protected-cluster grant like
 // Reconcile does (review 2026-10-03, D: it was ungated, and the grant the
 // confirm dialog armed was left unconsumed for another verb to use).
-func (s *ArgoService) RefreshApp(cluster, namespace, name string) ActionResultDTO {
+// uid is the Application the verb was armed against: only it is written.
+func (s *ArgoService) RefreshApp(cluster, namespace, name, uid string) ActionResultDTO {
 	if err := checkProtected(cluster); err != nil {
 		return ActionResultDTO{Error: err.Error()}
 	}
@@ -272,7 +253,7 @@ func (s *ArgoService) RefreshApp(cluster, namespace, name string) ActionResultDT
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), argoTimeout)
 	defer cancel()
-	if err := conn.RefreshArgoApp(ctx, namespace, name); err != nil {
+	if err := conn.RefreshArgoApp(ctx, namespace, name, uid); err != nil {
 		return ActionResultDTO{Error: err.Error()}
 	}
 	return ActionResultDTO{OK: true}
@@ -283,7 +264,7 @@ func (s *ArgoService) RefreshApp(cluster, namespace, name string) ActionResultDT
 // (prune defaults OFF there and is never set implicitly - it deletes live
 // resources, so it must be an opt-in per sync; the M6 "never prune" contract
 // was relaxed to opt-in when the sync modal shipped).
-func (s *ArgoService) SyncApp(cluster, namespace, name string, opts ArgoSyncOptionsDTO) ActionResultDTO {
+func (s *ArgoService) SyncApp(cluster, namespace, name, uid string, opts ArgoSyncOptionsDTO) ActionResultDTO {
 	// Dry-run mutates nothing; a real sync (prune/force/replace included)
 	// consumes the protection grant.
 	if !opts.DryRun {
@@ -297,7 +278,7 @@ func (s *ArgoService) SyncApp(cluster, namespace, name string, opts ArgoSyncOpti
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), argoTimeout)
 	defer cancel()
-	if err := conn.SyncArgoApp(ctx, namespace, name, toArgoSyncOptions(opts)); err != nil {
+	if err := conn.SyncArgoApp(ctx, namespace, name, uid, toArgoSyncOptions(opts)); err != nil {
 		return ActionResultDTO{Error: err.Error()}
 	}
 	return ActionResultDTO{OK: true}
@@ -328,6 +309,14 @@ func toArgoSyncOptions(opts ArgoSyncOptionsDTO) argo.SyncOptions {
 }
 
 func toArgoAppDTO(a argo.App) ArgoAppDTO {
+	dto := argoAppFields(a)
+	dto.Rule = toRuleDTO(argo.AppRule(a))
+	return dto
+}
+
+// argoAppFields is the pure field conversion: no rule (the rows converter
+// copies the capture's evaluation, slice 3 §2a).
+func argoAppFields(a argo.App) ArgoAppDTO {
 	dto := ArgoAppDTO{
 		Namespace:      a.Namespace,
 		Name:           a.Name,
@@ -367,11 +356,17 @@ func toArgoAppDTO(a argo.App) ArgoAppDTO {
 	if !a.ReconciledAt.IsZero() {
 		dto.ReconciledUnix = a.ReconciledAt.Unix()
 	}
-	dto.Rule = toRuleDTO(argo.AppRule(a))
 	return dto
 }
 
 func toArgoAppSetDTO(a argo.ApplicationSet) ArgoApplicationSetDTO {
+	dto := argoAppSetFields(a)
+	dto.Rule = toRuleDTO(argo.AppSetRule(a))
+	return dto
+}
+
+// argoAppSetFields is the pure field conversion (no rule).
+func argoAppSetFields(a argo.ApplicationSet) ArgoApplicationSetDTO {
 	dto := ArgoApplicationSetDTO{
 		Namespace:      a.Namespace,
 		Name:           a.Name,
@@ -391,6 +386,5 @@ func toArgoAppSetDTO(a argo.ApplicationSet) ArgoApplicationSetDTO {
 	for _, c := range a.Conditions {
 		dto.Conditions = append(dto.Conditions, ArgoAppSetConditionDTO{Type: c.Type, Status: c.Status, Reason: c.Reason, Message: c.Message})
 	}
-	dto.Rule = toRuleDTO(argo.AppSetRule(a))
 	return dto
 }

@@ -244,7 +244,9 @@ func TestProtectGuard_GatesFluxVerbs(t *testing.T) {
 		name string
 		call func() ActionResultDTO
 	}{
-		{"Reconcile", func() ActionResultDTO { return svc.Reconcile("prd-cluster", "Kustomization", "flux-system", "app", "uid-app") }},
+		{"Reconcile", func() ActionResultDTO {
+			return svc.Reconcile("prd-cluster", "Kustomization", "flux-system", "app", "uid-app")
+		}},
 		{"ReconcileWithSource", func() ActionResultDTO {
 			return svc.ReconcileWithSource("prd-cluster", "Kustomization", "flux-system", "app", "uid-app")
 		}},
@@ -322,9 +324,15 @@ func TestResolveGitLinkReadFailuresAreErrors(t *testing.T) {
 // armed against to the conn, and a refused replacement is the verb's error.
 func TestFluxVerbsCarryTheArmedUID(t *testing.T) {
 	for name, call := range map[string]func(*GitOpsService) ActionResultDTO{
-		"reconcile":   func(s *GitOpsService) ActionResultDTO { return s.Reconcile("x", "Kustomization", "flux-system", "app", "uid-A") },
-		"with-source": func(s *GitOpsService) ActionResultDTO { return s.ReconcileWithSource("x", "Kustomization", "flux-system", "app", "uid-A") },
-		"suspend":     func(s *GitOpsService) ActionResultDTO { return s.SetSuspend("x", "Kustomization", "flux-system", "app", "uid-A", true) },
+		"reconcile": func(s *GitOpsService) ActionResultDTO {
+			return s.Reconcile("x", "Kustomization", "flux-system", "app", "uid-A")
+		},
+		"with-source": func(s *GitOpsService) ActionResultDTO {
+			return s.ReconcileWithSource("x", "Kustomization", "flux-system", "app", "uid-A")
+		},
+		"suspend": func(s *GitOpsService) ActionResultDTO {
+			return s.SetSuspend("x", "Kustomization", "flux-system", "app", "uid-A", true)
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			conn := &fakeGitOpsConn{}

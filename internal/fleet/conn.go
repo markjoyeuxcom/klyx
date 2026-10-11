@@ -111,9 +111,8 @@ type Conn interface {
 	HelmRollback(ctx context.Context, namespace, release string, revision int, opts helmcli.RollbackOptions) error
 	ListArgoApps(ctx context.Context) ([]argo.App, error)
 	ListArgoProjects(ctx context.Context) ([]argo.Project, error)
-	ListArgoApplicationSets(ctx context.Context) ([]argo.ApplicationSet, error)
-	RefreshArgoApp(ctx context.Context, namespace, name string) error
-	SyncArgoApp(ctx context.Context, namespace, name string, opts argo.SyncOptions) error
+	RefreshArgoApp(ctx context.Context, namespace, name, uid string) error
+	SyncArgoApp(ctx context.Context, namespace, name, uid string, opts argo.SyncOptions) error
 	GitOpsSummary(ctx context.Context) (GitOpsSummary, error)
 	GitOpsPromotion(ctx context.Context) (PromotionSnapshot, error)
 	UpgradeReadiness(ctx context.Context) (UpgradeReport, error)

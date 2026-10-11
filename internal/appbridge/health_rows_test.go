@@ -17,6 +17,7 @@ import (
 
 	"github.com/moomora/klyx/internal/certmanager"
 	"github.com/moomora/klyx/internal/externalsecrets"
+	"github.com/moomora/klyx/internal/gitops/argo"
 	"github.com/moomora/klyx/internal/gitops/flux"
 	"github.com/moomora/klyx/internal/health"
 	"github.com/moomora/klyx/internal/healthsrc"
@@ -178,6 +179,42 @@ func TestFluxRowsCarryTheCaptureAndAnAbsoluteReadySince(t *testing.T) {
 		t.Fatalf("source row: %+v", sd)
 	}
 	if _, err := rowsConverters[healthsrc.TaskFlux+"/sources"]("not rows", at); err == nil {
+		t.Fatal("a payload of the wrong type is an error, never an empty list")
+	}
+}
+
+// The Argo parts (slice 3 §5.4): the captured evaluation and identity.
+func TestArgoRowsCarryTheCapture(t *testing.T) {
+	at := time.Now()
+	app := argo.App{Namespace: "argocd", Name: "demo", SyncStatus: "Synced", HealthStatus: "Healthy", ReconciledAt: time.Unix(1000, 0)}
+	set := healthsrc.RowSet[argo.App]{Rows: []healthsrc.Row[argo.App]{
+		{Ref: healthsrc.RowRef{UID: "a1", GVR: "argoproj.io/v1alpha1/applications", Namespace: "argocd", Name: "demo", Generation: 5},
+			Eval: health.NativeEval{Included: true, Role: health.Fault, Label: "Flagged at capture"}, Data: app},
+	}}
+	out, err := rowsConverters[healthsrc.TaskArgo+"/applications"](set, at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := out.([]ArgoAppDTO)[0]
+	if d.Rule != (RuleDTO{Included: true, Role: "fault", Label: "Flagged at capture"}) || d.UID != "a1" || d.GVR != "argoproj.io/v1alpha1/applications" || d.Generation != 5 || d.ReconciledUnix != 1000 {
+		t.Fatalf("application row: %+v", d)
+	}
+	if b, err := json.Marshal(d); err != nil || !strings.Contains(string(b), `"uid":"a1"`) || !strings.Contains(string(b), `"generation":5`) {
+		t.Fatalf("serialization: %s %v", b, err)
+	}
+	sset := healthsrc.RowSet[argo.ApplicationSet]{Rows: []healthsrc.Row[argo.ApplicationSet]{
+		{Ref: healthsrc.RowRef{UID: "s1", GVR: "argoproj.io/v1alpha1/applicationsets", Generation: 2},
+			Eval: health.NativeEval{Role: health.OK, Label: "Healthy at capture"}, Data: argo.ApplicationSet{Namespace: "argocd", Name: "set", GeneratedApps: 3}},
+	}}
+	sout, err := rowsConverters[healthsrc.TaskArgo+"/applicationsets"](sset, at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sd := sout.([]ArgoApplicationSetDTO)[0]
+	if sd.UID != "s1" || sd.Generation != 2 || sd.GeneratedApps != 3 || sd.Rule.Label != "Healthy at capture" {
+		t.Fatalf("applicationset row: %+v", sd)
+	}
+	if _, err := rowsConverters[healthsrc.TaskArgo+"/applications"]("not rows", at); err == nil {
 		t.Fatal("a payload of the wrong type is an error, never an empty list")
 	}
 }

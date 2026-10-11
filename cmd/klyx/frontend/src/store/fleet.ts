@@ -145,12 +145,14 @@ export type ArgoProjectDTO = {
 export type ArgoAppSetConditionDTO = { type: string; status: string; reason: string; message: string };
 export type ArgoApplicationSetDTO = {
   rule: RuleDTO; // the relocated lens rule (1c addendum §2)
+  uid?: string; gvr?: string; generation?: number; // identity (1c slice 3 §2a)
   namespace: string; name: string; generators: string[]; templateName: string;
   project: string; repoURL: string; path: string; targetRevision: string; destNamespace: string;
   destServer?: string; generatedApps: number; generatedNames?: string[]; healthy: boolean; conditions: ArgoAppSetConditionDTO[];
 };
 export type ArgoAppDTO = {
   rule: RuleDTO; // the relocated lens rule (1c addendum §2)
+  uid?: string; gvr?: string; generation?: number; // identity (1c slice 3 §2a)
   namespace: string; name: string; project: string;
   syncStatus: string; healthStatus: string; broken: boolean;
   revision: string; repoURL: string; path: string; chart: string; targetRevision: string;
@@ -844,7 +846,17 @@ type ArgoSlice = {
   projectsError?: string | null;
   applicationSetsError?: string | null;
   expanded: string[]; // "<ns>/<name>" keys
+  // From the health Observer's shared rows (1c slice 3 §5.4) - Applications
+  // and ApplicationSets; AppProjects stay a fetch.
+  coverage?: KindCoverageDTO[];
+  rowsState?: RowsStateDTO;
+  partCounts?: { applications: PartCountsDTO | null; applicationsets: PartCountsDTO | null };
 };
+
+// What the Argo rows adapter (health/useArgoRows) writes.
+export type ArgoRowsPayload = Pick<ArgoSlice, "apps" | "available" | "message" | "error" | "loading"
+  | "applicationSets" | "applicationSetsAvailable" | "applicationSetsMessage" | "applicationSetsError" | "applicationSetsLoading"
+  | "coverage" | "rowsState" | "partCounts">;
 
 const ARGO_EMPTY_ROWS = {
   apps: [] as ArgoAppDTO[], projects: [] as ArgoProjectDTO[], applicationSets: [] as ArgoApplicationSetDTO[],
@@ -1062,6 +1074,8 @@ type FleetState = {
   setArgoProjects: (cluster: string, r: ArgoProjectsResultDTO) => void;
   setArgoApplicationSetsLoading: (cluster: string) => void;
   setArgoApplicationSets: (cluster: string, r: ArgoApplicationSetsResultDTO) => void;
+  setArgoVisit: (cluster: string) => void;
+  setArgoFromRows: (cluster: string, p: ArgoRowsPayload) => void;
   toggleArgoExpand: (key: string) => void;
   clearArgo: () => void;
   setHelmLoading: (cluster: string) => void;
@@ -1487,6 +1501,9 @@ export const useFleet = create<FleetState>((set) => ({
     ? (() => { const keep = s.argo.cluster === cluster ? s.argo.applicationSets : [];
         return { ...s.argo, cluster, applicationSets: keep, applicationSetsError: r.error, applicationSetsLoading: false, ...(keep.length === 0 ? { applicationSetsAvailable: false, applicationSetsMessage: r.error } : {}) }; })()
     : { ...s.argo, cluster, applicationSets: r.applicationSets ?? [], applicationSetsAvailable: r.available, applicationSetsMessage: r.message ?? "", applicationSetsError: null, applicationSetsLoading: false } })),
+  // A rows visit: a different cluster starts empty; the row lists load.
+  setArgoVisit: (cluster) => set((s) => ({ argo: { ...(s.argo.cluster === cluster ? s.argo : { ...s.argo, ...ARGO_EMPTY_ROWS, expanded: [] }), cluster, loading: true, applicationSetsLoading: true, coverage: undefined, rowsState: undefined, partCounts: undefined } })),
+  setArgoFromRows: (cluster, p) => set((s) => ({ argo: { ...s.argo, cluster, ...p } })),
   toggleArgoExpand: (key) => set((s) => ({ argo: { ...s.argo, expanded: s.argo.expanded.includes(key) ? s.argo.expanded.filter((k) => k !== key) : [...s.argo.expanded, key] } })),
   clearArgo: () => set({
     argo: {

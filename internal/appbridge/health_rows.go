@@ -8,6 +8,7 @@ import (
 
 	"github.com/moomora/klyx/internal/certmanager"
 	"github.com/moomora/klyx/internal/externalsecrets"
+	"github.com/moomora/klyx/internal/gitops/argo"
 	"github.com/moomora/klyx/internal/gitops/flux"
 	"github.com/moomora/klyx/internal/healthsrc"
 	"github.com/moomora/klyx/internal/observe"
@@ -89,6 +90,34 @@ var rowsConverters = map[string]rowsConverter{
 		out := make([]FluxSourceDTO, 0, len(set.Rows))
 		for _, r := range set.Rows {
 			dto := sourceFields(r.Data)
+			dto.Rule = toRuleDTO(r.Eval)
+			dto.UID, dto.GVR, dto.Generation = r.Ref.UID, r.Ref.GVR, r.Ref.Generation
+			out = append(out, dto)
+		}
+		return out, nil
+	},
+	healthsrc.TaskArgo + "/applications": func(rows any, _ time.Time) (any, error) {
+		set, err := rowSetOf[argo.App](rows)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]ArgoAppDTO, 0, len(set.Rows))
+		for _, r := range set.Rows {
+			dto := argoAppFields(r.Data)
+			dto.Rule = toRuleDTO(r.Eval)
+			dto.UID, dto.GVR, dto.Generation = r.Ref.UID, r.Ref.GVR, r.Ref.Generation
+			out = append(out, dto)
+		}
+		return out, nil
+	},
+	healthsrc.TaskArgo + "/applicationsets": func(rows any, _ time.Time) (any, error) {
+		set, err := rowSetOf[argo.ApplicationSet](rows)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]ArgoApplicationSetDTO, 0, len(set.Rows))
+		for _, r := range set.Rows {
+			dto := argoAppSetFields(r.Data)
 			dto.Rule = toRuleDTO(r.Eval)
 			dto.UID, dto.GVR, dto.Generation = r.Ref.UID, r.Ref.GVR, r.Ref.Generation
 			out = append(out, dto)

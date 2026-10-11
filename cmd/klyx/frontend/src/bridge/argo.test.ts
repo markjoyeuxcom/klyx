@@ -11,12 +11,10 @@ function deferred<T>(): Deferred<T> {
 const calls: Deferred<unknown>[] = [];
 vi.mock("../../bindings/github.com/moomora/klyx/internal/appbridge/index.js", () => ({
   ArgoService: {
-    ListApplications: vi.fn(() => { const d = deferred<unknown>(); calls.push(d); return d.promise; }),
     ListProjects: vi.fn(() => { const d = deferred<unknown>(); calls.push(d); return d.promise; }),
-    ListApplicationSets: vi.fn(() => { const d = deferred<unknown>(); calls.push(d); return d.promise; }),
   },
 }));
-import { listArgoApps } from "./argo";
+import { listArgoProjects } from "./argo";
 import { argoAppRule, withRule } from "../test/backendRules";
 
 const app = (name: string): ArgoAppDTO => withRule<ArgoAppDTO>({
@@ -25,69 +23,58 @@ const app = (name: string): ArgoAppDTO => withRule<ArgoAppDTO>({
   opPhase: "", opMessage: "", conditions: [], resources: [], reconciledUnix: 0,
 }, argoAppRule);
 
-beforeEach(() => { calls.length = 0; useFleet.getState().clearArgo(); });
+beforeEach(() => { calls.length = 0; vi.clearAllMocks(); useFleet.getState().clearArgo(); });
 
-describe("Argo bridge fences (redesign step 4b)", () => {
+// The Applications and ApplicationSets are rows now (health/useArgoRows);
+// the projects fetch keeps the fences the list reads had.
+const project = (name: string) => ({ namespace: "argocd", name, description: "", sourceRepos: [], destinations: [], roles: 0, roleNames: [], orphanWarn: false,
+  clusterResourceWhitelist: [], clusterResourceBlacklist: [], namespaceResourceWhitelist: [], namespaceResourceBlacklist: [] });
+
+describe("Argo projects fetch fences (redesign step 4b)", () => {
   it("overlapping reads: only the newest lands", async () => {
-    const older = listArgoApps("A");
-    const newer = listArgoApps("A");
-    calls[1].resolve({ available: true, apps: [app("newest")] });
+    const older = listArgoProjects("A");
+    const newer = listArgoProjects("A");
+    calls[1].resolve({ available: true, projects: [project("newest")] });
     await newer;
-    calls[0].resolve({ available: true, apps: [app("stale")] });
+    calls[0].resolve({ available: true, projects: [project("stale")] });
     await older;
-    expect(useFleet.getState().argo.apps.map((a) => a.name)).toEqual(["newest"]);
-  });
-
-  it("a cluster switch starts empty - B never shows A's rows while B loads", async () => {
-    const a = listArgoApps("A");
-    calls[0].resolve({ available: true, apps: [app("from-A")] });
-    await a;
-    void listArgoApps("B");
-    expect(useFleet.getState().argo.cluster).toBe("B");
-    expect(useFleet.getState().argo.apps).toEqual([]);
+    expect(useFleet.getState().argo.projects.map((p) => p.name)).toEqual(["newest"]);
   });
 
   it("a failed refresh keeps the last good rows and records the error", async () => {
-    const first = listArgoApps("A");
-    calls[0].resolve({ available: true, apps: [app("good")] });
+    const first = listArgoProjects("A");
+    calls[0].resolve({ available: true, projects: [project("good")] });
     await first;
-    const again = listArgoApps("A");
-    calls[1].resolve({ available: false, message: "forbidden", error: "forbidden", apps: [] });
+    const again = listArgoProjects("A");
+    calls[1].resolve({ available: false, message: "forbidden", error: "forbidden", projects: [] });
     await again;
     const s = useFleet.getState().argo;
-    expect(s.apps.map((a) => a.name)).toEqual(["good"]);
-    expect(s.error).toBe("forbidden");
-    expect(s.available).toBe(true); // a failed read is not "not installed"
-  });
-
-  it("a transport failure is an error, never absence", async () => {
-    const p = listArgoApps("A");
-    calls[0].reject(new Error("timeout"));
-    await p;
-    expect(useFleet.getState().argo.error).toMatch(/timeout/);
+    expect(s.projects.map((p) => p.name)).toEqual(["good"]);
+    expect(s.projectsError).toBe("forbidden");
+    expect(s.projectsAvailable).toBe(true); // a failed read is not "not installed"
   });
 });
 
-describe("Argo action completions are scoped to their cluster (Codex rework #2)", () => {
-  it("a late refresh/sync completion for A never re-lists or relabels B", async () => {
+describe("Argo verbs (design §5b)", () => {
+  it("carry the armed UID, and a completion never re-lists or relabels another cluster", async () => {
     const { ArgoService } = await import("../../bindings/github.com/moomora/klyx/internal/appbridge/index.js");
     const pending: Deferred<unknown>[] = [];
     (ArgoService as unknown as Record<string, unknown>).RefreshApp = vi.fn(() => { const d = deferred<unknown>(); pending.push(d); return d.promise; });
     (ArgoService as unknown as Record<string, unknown>).SyncApp = vi.fn(() => { const d = deferred<unknown>(); pending.push(d); return d.promise; });
     const { refreshArgoApp, syncArgoApp } = await import("./argo");
-    const r = refreshArgoApp("A", "argocd", "same-name");
-    const s = syncArgoApp("A", "argocd", "same-name", { revision: "", strategy: "hook", prune: false, dryRun: false, force: false, replace: false, serverSideApply: false, resources: [] });
-    // the operator moved to B, which loaded its own same-named app
-    void listArgoApps("B");
-    calls[calls.length - 1].resolve({ available: true, apps: [app("same-name")] });
-    await Promise.resolve(); await Promise.resolve();
-    const listsBefore = vi.mocked(ArgoService.ListApplications).mock.calls.length;
+    const opts = { revision: "", strategy: "hook" as const, prune: false, dryRun: false, force: false, replace: false, serverSideApply: false, resources: [] };
+    const r = refreshArgoApp("A", "argocd", "same-name", "uid-1");
+    const s = syncArgoApp("A", "argocd", "same-name", "uid-2", opts);
+    expect(ArgoService.RefreshApp).toHaveBeenCalledWith("A", "argocd", "same-name", "uid-1");
+    expect(ArgoService.SyncApp).toHaveBeenCalledWith("A", "argocd", "same-name", "uid-2", opts);
+    // the operator moved to B, which has its own same-named app
+    useFleet.setState((st) => ({ argo: { ...st.argo, cluster: "B", apps: [app("same-name")] } }));
     pending[0].resolve({ ok: true, error: "" });
     pending[1].resolve({ ok: true, error: "" });
     await r; await s;
     expect(useFleet.getState().argo.cluster).toBe("B");
     expect(useFleet.getState().argo.apps.map((a) => a.name)).toEqual(["same-name"]);
-    expect(vi.mocked(ArgoService.ListApplications).mock.calls.length).toBe(listsBefore); // no re-list of A
+    expect(ArgoService.ListProjects).not.toHaveBeenCalled(); // no re-list of anything
     expect(useFleet.getState().actionStatus?.message).toMatch(/on A$/);
   });
 });

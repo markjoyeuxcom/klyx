@@ -177,13 +177,10 @@ func (f *fakeConn) HelmValues(context.Context, string, string) (string, error) {
 func (f *fakeConn) HelmRollback(context.Context, string, string, int, helmcli.RollbackOptions) error {
 	return nil
 }
-func (f *fakeConn) ListArgoApps(context.Context) ([]argo.App, error)         { return nil, nil }
-func (f *fakeConn) ListArgoProjects(context.Context) ([]argo.Project, error) { return nil, nil }
-func (f *fakeConn) ListArgoApplicationSets(context.Context) ([]argo.ApplicationSet, error) {
-	return nil, nil
-}
-func (f *fakeConn) RefreshArgoApp(context.Context, string, string) error { return nil }
-func (f *fakeConn) SyncArgoApp(context.Context, string, string, argo.SyncOptions) error {
+func (f *fakeConn) ListArgoApps(context.Context) ([]argo.App, error)             { return nil, nil }
+func (f *fakeConn) ListArgoProjects(context.Context) ([]argo.Project, error)     { return nil, nil }
+func (f *fakeConn) RefreshArgoApp(context.Context, string, string, string) error { return nil }
+func (f *fakeConn) SyncArgoApp(context.Context, string, string, string, argo.SyncOptions) error {
 	return nil
 }
 func (f *fakeConn) RolloutHistory(context.Context, string, string, string) ([]workloads.RolloutRevision, error) {

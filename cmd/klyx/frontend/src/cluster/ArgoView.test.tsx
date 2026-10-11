@@ -4,14 +4,15 @@ import { ArgoView, resolveArgoResourceRef } from "./ArgoView";
 import { useFleet } from "../store/fleet";
 import type { ArgoAppDTO, ArgoApplicationSetDTO, ArgoResourceDTO } from "../store/fleet";
 
+// The rows hook is the transport for Applications and ApplicationSets; these
+// tests seed the argo slice it fills. Projects stay a fetch.
+vi.mock("../health/useArgoRows", () => ({ useArgoRows: () => {} }));
 vi.mock("../bridge/argo", () => ({
-  listArgoApps: vi.fn().mockResolvedValue(undefined),
   listArgoProjects: vi.fn().mockResolvedValue(undefined),
-  listArgoApplicationSets: vi.fn().mockResolvedValue(undefined),
   refreshArgoApp: vi.fn().mockResolvedValue(undefined),
   syncArgoApp: vi.fn().mockResolvedValue(undefined),
 }));
-import { listArgoApps, refreshArgoApp, syncArgoApp } from "../bridge/argo";
+import { listArgoProjects, refreshArgoApp, syncArgoApp } from "../bridge/argo";
 import { argoAppRule, argoAppSetRule } from "../test/backendRules";
 
 // Fixtures enter the store with the rule the backend computes
@@ -119,7 +120,7 @@ describe("ArgoView", () => {
     fireEvent.click(getByText("Prune"));
     fireEvent.click(getByLabelText("select Deployment console-dev/console"));
     fireEvent.click(getByRole("button", { name: "Synchronize" }));
-    expect(syncArgoApp).toHaveBeenCalledWith("homelab-nelli", "argocd", "ollama-prod", expect.objectContaining({
+    expect(syncArgoApp).toHaveBeenCalledWith("homelab-nelli", "argocd", "ollama-prod", "", expect.objectContaining({
       revision: "feature/test",
       strategy: "hook",
       prune: true,
@@ -137,7 +138,7 @@ describe("ArgoView", () => {
     select("ollama-prod");
     fireEvent.click(inspector().getByRole("button", { name: /^Sync/ }));
     fireEvent.click(getByRole("button", { name: "Synchronize" }));
-    expect(syncArgoApp).toHaveBeenCalledWith("homelab-nelli", "argocd", "ollama-prod", expect.objectContaining({
+    expect(syncArgoApp).toHaveBeenCalledWith("homelab-nelli", "argocd", "ollama-prod", "", expect.objectContaining({
       prune: false,
     }));
   });
@@ -149,12 +150,12 @@ describe("ArgoView", () => {
     fireEvent.click(inspector().getByRole("button", { name: /^Refresh/ }));
     const confirm = getAllByRole("button", { name: "Refresh" });
     fireEvent.click(confirm[confirm.length - 1]);
-    expect(refreshArgoApp).toHaveBeenCalledWith("homelab-nelli", "argocd", "console-dev");
+    expect(refreshArgoApp).toHaveBeenCalledWith("homelab-nelli", "argocd", "console-dev", ""); // uid-less fixture
   });
 
-  it("fetches on mount", () => {
+  it("fetches the projects on mount (Applications and ApplicationSets are rows)", () => {
     render(<ArgoView cluster="homelab-nelli" />);
-    expect(listArgoApps).toHaveBeenCalledWith("homelab-nelli");
+    expect(listArgoProjects).toHaveBeenCalledWith("homelab-nelli");
   });
 
   // --- Keyboard nav (applications mode only) ---
