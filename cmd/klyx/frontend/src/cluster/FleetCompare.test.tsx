@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, within, fireEvent, act } from "@testing-library/react";
+import { render, within, fireEvent, act, waitFor } from "@testing-library/react";
 import { useFleet, WorkloadCompareDTO, ClusterDTO } from "../store/fleet";
 import { FleetCompare, diffAgainst } from "./FleetCompare";
 
@@ -113,11 +113,13 @@ describe("FleetCompare", () => {
   it("flags other spec drift when hashes differ but images and resources match", async () => {
     vi.mocked(workloadCompare).mockImplementation(async (cluster) =>
       cluster === "prd-we" ? result({ specHash: "bbbb33334444" }) : result());
-    const { getByTestId, findByText } = render(
+    const { getByTestId, queryByText } = render(
       <FleetCompare origin="dev-we" kind="Deployment" namespace="shop" name="cart" onClose={() => {}} />,
     );
-    await findByText("origin"); // settle
-    expect(within(getByTestId("compare-col-prd-we")).getByText(/differs beyond images and resources/)).toBeTruthy();
+    // Wait for the asserted column's own result - "origin" appears as soon as
+    // the origin column lands, which under load can precede prd-we's read.
+    expect(await within(getByTestId("compare-col-prd-we")).findByText(/differs beyond images and resources/)).toBeTruthy();
+    await waitFor(() => expect(queryByText(/reading…/)).toBeNull());
     // Matching columns carry no such flag.
     expect(within(getByTestId("compare-col-stg-we")).queryByText(/differs beyond images/)).toBeNull();
   });
