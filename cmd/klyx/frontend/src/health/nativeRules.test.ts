@@ -3,7 +3,6 @@ import fixtures from "./fixtures/native-rules.json";
 import { certNeedsAttention, certHealth, issuerHealth } from "../cluster/CertsView";
 import { secretNeedsAttention, secretHealth, storeHealth } from "../cluster/ExternalSecretsView";
 import { claimHealth, poolHealth } from "../cluster/KarpenterView";
-import type { CertificateDTO, IssuerDTO } from "../bridge/certmanager";
 
 // The 1c addendum §2 golden parity gate: each case's DTO is what the lens
 // receives; "want" is the Go rule's verdict (internal/*/rules.go, recorded by
@@ -25,13 +24,13 @@ afterEach(() => vi.useRealTimers());
 describe("relocated lens rules equal the Go rules (golden fixture)", () => {
   it("certificates", () => {
     vi.useFakeTimers();
-    check(fixtures.certificates as Case[], (d: CertificateDTO) => {
+    check(fixtures.certificates as Case[], (d: Parameters<typeof certHealth>[0]) => {
       const h = certHealth(d);
       return { included: certNeedsAttention(d), role: h.kind, label: h.label };
     });
   });
   it("issuers", () => {
-    check(fixtures.issuers as Case[], (d: IssuerDTO) => {
+    check(fixtures.issuers as Case[], (d: Parameters<typeof issuerHealth>[0]) => {
       const h = issuerHealth(d);
       return { included: d.ready !== "Ready", role: h.kind, label: h.label };
     });
