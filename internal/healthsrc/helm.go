@@ -13,9 +13,10 @@ import (
 
 // The Helm task (1c spec §1.1): never live. `helm list -A --max 0` every
 // HelmCadence, single-flight, bounded by HelmReadTimeout. The Helm lens's
-// own successful reads - on open, on Refresh, and the re-read after a Klyx
-// rollback - are offered to the snapshot (Observer.Offer), so the lens and
-// the summary share one exec and one snapshot.
+// reads - on open, on Refresh, and the re-read after a Klyx rollback - are
+// requests for this snapshot's own read (Observer.ReadSnapshot): one helm
+// list at a time per cluster, applied in order, shared by the lens and the
+// summary.
 const (
 	SnapHelm = "helm"
 	TaskHelm = "helm"
@@ -54,8 +55,7 @@ func Helm(d HelmDeps) ([]observe.SnapshotSpec, []observe.DomainSpec) {
 	return []observe.SnapshotSpec{snap}, domains
 }
 
-// HelmItems is the snapshot's form of a release list, for its own reads and
-// for a lens read offered to it (Observer.Offer): a sorted copy, so an
+// HelmItems is the snapshot's form of a release list: a sorted copy, so an
 // unchanged list is an unchanged snapshot.
 func HelmItems(rs []helmcli.Release) []any {
 	sorted := append([]helmcli.Release(nil), rs...)
@@ -70,6 +70,15 @@ func HelmItems(rs []helmcli.Release) []any {
 		items[i] = sorted[i]
 	}
 	return items
+}
+
+// ReleasesOf turns a snapshot read's items back into releases.
+func ReleasesOf(items []any) []helmcli.Release {
+	out := make([]helmcli.Release, 0, len(items))
+	for _, o := range items {
+		out = append(out, o.(helmcli.Release))
+	}
+	return out
 }
 
 // evalReleases applies the relocated lens rule at the capture's time, so a

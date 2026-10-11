@@ -1143,60 +1143,200 @@ func TestFactsReevaluateOnlyTheirPartsWithoutData(t *testing.T) {
 	}
 }
 
-// ---- offers (the Helm lens's own read feeds the snapshot) -------------------
+// ---- ReadSnapshot: every read of a snapshot source is the snapshot's own ----
 
-func offerHarness(t *testing.T, read func(ctx context.Context) ([]any, bool, error)) *harness {
-	snap := SnapshotSpec{Name: "helm", Scope: "all namespaces", Cadence: 10 * time.Second, Timeout: 5 * time.Second, Read: read}
+// scriptedSnap is a snapshot source whose reads can be held, counted and
+// scripted; it records the most reads ever in flight at once.
+type scriptedSnap struct {
+	mu       sync.Mutex
+	n        int
+	inflight int
+	max      int
+	hold     map[int]chan struct{} // read number -> released when closed
+	fail     map[int]error
+	entered  chan int
+}
+
+func newScripted() *scriptedSnap {
+	return &scriptedSnap{hold: map[int]chan struct{}{}, fail: map[int]error{}, entered: make(chan int, 16)}
+}
+
+func (s *scriptedSnap) read(ctx context.Context) ([]any, bool, error) {
+	s.mu.Lock()
+	s.n++
+	n := s.n
+	s.inflight++
+	if s.inflight > s.max {
+		s.max = s.inflight
+	}
+	h, err := s.hold[n], s.fail[n]
+	s.mu.Unlock()
+	defer func() { s.mu.Lock(); s.inflight--; s.mu.Unlock() }()
+	s.entered <- n
+	if h != nil {
+		select {
+		case <-h:
+		case <-ctx.Done():
+			return nil, false, ctx.Err()
+		}
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	items := make([]any, n) // read n returns n items: its identity
+	for i := range items {
+		items[i] = fmt.Sprintf("r%d", i)
+	}
+	return items, false, nil
+}
+
+func (s *scriptedSnap) reads() int       { s.mu.Lock(); defer s.mu.Unlock(); return s.n }
+func (s *scriptedSnap) maxInFlight() int { s.mu.Lock(); defer s.mu.Unlock(); return s.max }
+
+func scriptedHarness(t *testing.T, s *scriptedSnap) *harness {
+	snap := SnapshotSpec{Name: "helm", Scope: "all namespaces", Cadence: 10 * time.Second, Timeout: 5 * time.Second, Read: s.read}
 	eval := func(c Capture) PartResult { n := len(c.Objects["helm"]); return PartResult{Evidence: &n} }
 	return start(t, Config{Snapshots: []SnapshotSpec{snap}, Domains: []DomainSpec{{ID: "helm", Parts: []PartSpec{{ID: "releases", Counted: []string{"helm"}, Evaluate: eval}}}}})
 }
 
-func TestOfferIsAReadAndRestartsTheCadence(t *testing.T) {
-	var reads atomic.Int32
-	h := offerHarness(t, func(context.Context) ([]any, bool, error) { reads.Add(1); return []any{"r1"}, false, nil })
-	h.eventually(h.partIs("helm", "releases", live), "first read")
-	h.clk.Step(8 * time.Second) // 2s short of the cadence
-	h.o.Offer("helm", []any{"r1", "r2"}, false)
-	h.eventually(h.partIs("helm", "releases", func(p Part) bool { return *p.Evidence == 2 && p.Coverage == Live }), "the offer applied")
-	n := reads.Load()
-	h.clk.Step(8 * time.Second) // past the old cadence, short of the restarted one
-	time.Sleep(50 * time.Millisecond)
-	if reads.Load() != n {
-		t.Fatalf("the cadence did not restart from the offer: %d -> %d reads", n, reads.Load())
-	}
-	h.clk.Step(3 * time.Second)
-	h.eventually(func() bool { return reads.Load() == n+1 }, "the next read runs a cadence after the offer")
+type readOut struct {
+	r   SnapshotRead
+	err error
 }
 
-func TestAReadInFlightBeforeAnOfferIsDropped(t *testing.T) {
-	var reads atomic.Int32
-	release, entered, returned := make(chan struct{}), make(chan struct{}, 1), make(chan struct{})
-	h := offerHarness(t, func(context.Context) ([]any, bool, error) {
-		switch reads.Add(1) {
-		case 1:
-			return []any{"r1"}, false, nil
-		case 2: // slow, and its evidence predates the offer
-			entered <- struct{}{}
-			<-release
-			defer close(returned)
-			return []any{"old"}, false, nil
-		default:
-			return []any{"new1", "new2", "new3"}, false, nil
-		}
-	})
+func asyncRead(ctx context.Context, o *Observer) chan readOut {
+	out := make(chan readOut, 1)
+	go func() { r, err := o.ReadSnapshot(ctx, "helm"); out <- readOut{r, err} }()
+	return out
+}
+
+func TestReadSnapshotIsTheSnapshotsOwnRead(t *testing.T) {
+	s := newScripted()
+	h := scriptedHarness(t, s)
+	<-s.entered // read 1, the snapshot's first
 	h.eventually(h.partIs("helm", "releases", live), "first read")
-	h.o.Refresh("helm")
-	<-entered
-	h.o.Offer("helm", []any{"new1", "new2", "new3"}, false)
-	h.eventually(h.partIs("helm", "releases", func(p Part) bool { return *p.Evidence == 3 }), "the offer applied")
-	close(release)
-	<-returned
-	time.Sleep(100 * time.Millisecond) // let its result reach apply; the clock stays put
-	h.o.mu.Lock()
-	items := len(h.o.snaps["helm"].gen.items)
-	h.o.mu.Unlock()
-	if items != 3 || reads.Load() != 2 {
-		t.Fatalf("an older in-flight read overwrote the offer: %d items after %d reads", items, reads.Load())
+	got := asyncRead(context.Background(), h.o)
+	if n := <-s.entered; n != 2 {
+		t.Fatalf("the request runs read 2, got %d", n)
+	}
+	out := <-got
+	if out.err != nil || len(out.r.Items) != 2 {
+		t.Fatalf("the caller gets the read it caused: %+v", out)
+	}
+	h.eventually(h.partIs("helm", "releases", func(p Part) bool { return *p.Evidence == 2 }), "and the summary has it")
+	if s.reads() != 2 {
+		t.Fatalf("one read served both: %d reads", s.reads())
+	}
+}
+
+// Requests made while a read is in flight are owed a read that starts after
+// them: they coalesce into one follow-up, applied after the older read - so
+// an older outcome can never land after a newer one.
+func TestRequestsDuringAReadCoalesceIntoAFollowUpInOrder(t *testing.T) {
+	s := newScripted()
+	release2 := make(chan struct{})
+	s.hold[2] = release2
+	h := scriptedHarness(t, s)
+	<-s.entered
+	h.eventually(h.partIs("helm", "releases", live), "first read")
+	first := asyncRead(context.Background(), h.o) // causes read 2, held
+	if n := <-s.entered; n != 2 {
+		t.Fatalf("want read 2 in flight, got %d", n)
+	}
+	a, b := asyncRead(context.Background(), h.o), asyncRead(context.Background(), h.o) // during read 2
+	time.Sleep(50 * time.Millisecond)                                                  // both are queued
+	close(release2)
+	if r := <-first; len(r.r.Items) != 2 {
+		t.Fatalf("the first caller gets read 2: %+v", r)
+	}
+	ra, rb := <-a, <-b
+	if len(ra.r.Items) != 3 || len(rb.r.Items) != 3 {
+		t.Fatalf("both later callers share read 3, never read 2: %d, %d", len(ra.r.Items), len(rb.r.Items))
+	}
+	h.eventually(h.partIs("helm", "releases", func(p Part) bool { return *p.Evidence == 3 }), "the newest read is the summary's")
+	time.Sleep(50 * time.Millisecond)
+	if s.reads() != 3 || s.maxInFlight() != 1 {
+		t.Fatalf("one follow-up read, never parallel: %d reads, %d at once", s.reads(), s.maxInFlight())
+	}
+}
+
+// A cadence read in flight serves no request made after it began, and a
+// cadence tick during a requested read cannot start a parallel one.
+func TestCadenceAndRequestedReadsNeverOverlap(t *testing.T) {
+	s := newScripted()
+	release2, release3 := make(chan struct{}), make(chan struct{})
+	s.hold[2], s.hold[3] = release2, release3
+	h := scriptedHarness(t, s)
+	<-s.entered
+	h.eventually(h.partIs("helm", "releases", live), "first read")
+	h.clk.Step(11 * time.Second) // the cadence starts read 2
+	if n := <-s.entered; n != 2 {
+		t.Fatalf("want the cadence's read 2, got %d", n)
+	}
+	got := asyncRead(context.Background(), h.o)
+	time.Sleep(20 * time.Millisecond)
+	close(release2)
+	if n := <-s.entered; n != 3 {
+		t.Fatalf("the request runs its own read 3, got %d", n)
+	}
+	h.clk.Step(4 * time.Second) // time passes while read 3 is held (within its timeout); the cadence timer runs only between reads
+	time.Sleep(50 * time.Millisecond)
+	close(release3)
+	if out := <-got; len(out.r.Items) != 3 {
+		t.Fatalf("a request during a cadence read is served by the next: %+v", out)
+	}
+	if s.maxInFlight() != 1 {
+		t.Fatalf("reads overlapped: %d", s.maxInFlight())
+	}
+}
+
+// A failed request is the snapshot's failure: the caller gets it, the
+// summary's freshness gap opens, and the last good evidence stays.
+func TestAFailedRequestOpensTheFreshnessGapAndKeepsLastGood(t *testing.T) {
+	s := newScripted()
+	s.fail[2] = apierrors.NewForbidden(schema.GroupResource{Resource: "secrets"}, "", errors.New("rbac"))
+	h := scriptedHarness(t, s)
+	<-s.entered
+	h.eventually(h.partIs("helm", "releases", live), "first read")
+	out := <-asyncRead(context.Background(), h.o)
+	if out.err != nil || out.r.Err == nil {
+		t.Fatalf("the caller gets the read's failure: %+v", out)
+	}
+	h.eventually(h.partIs("helm", "releases", func(p Part) bool {
+		return p.Coverage == Stale && kindOf(p).Class == ClassForbidden && *p.Evidence == 1
+	}), "stale, classed, last good retained")
+}
+
+// A caller that stops waiting does not cancel the read: it belongs to the
+// snapshot and is applied.
+func TestACallerThatGivesUpLeavesTheReadToTheSnapshot(t *testing.T) {
+	s := newScripted()
+	release2 := make(chan struct{})
+	s.hold[2] = release2
+	h := scriptedHarness(t, s)
+	<-s.entered
+	h.eventually(h.partIs("helm", "releases", live), "first read")
+	ctx, cancel := context.WithCancel(context.Background())
+	got := asyncRead(ctx, h.o)
+	<-s.entered
+	cancel()
+	if out := <-got; !errors.Is(out.err, context.Canceled) {
+		t.Fatalf("the caller's wait ends with its own context: %+v", out)
+	}
+	close(release2)
+	h.eventually(h.partIs("helm", "releases", func(p Part) bool { return *p.Evidence == 2 }), "the read still lands")
+}
+
+func TestReadSnapshotOfAStoppedOrUnknownSnapshot(t *testing.T) {
+	s := newScripted()
+	h := scriptedHarness(t, s)
+	if _, err := h.o.ReadSnapshot(context.Background(), "nope"); !errors.Is(err, ErrSnapshotNotRunning) {
+		t.Fatalf("unknown snapshot: %v", err)
+	}
+	h.cancel()
+	<-h.o.Done()
+	if _, err := h.o.ReadSnapshot(context.Background(), "helm"); !errors.Is(err, ErrSnapshotNotRunning) {
+		t.Fatalf("stopped Observer: %v", err)
 	}
 }
 

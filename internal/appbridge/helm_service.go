@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/moomora/klyx/internal/healthsrc"
 	"github.com/moomora/klyx/internal/helmcli"
 )
 
@@ -55,7 +56,10 @@ func (s *HelmService) ListHelmReleases(cluster string) HelmReleasesResultDTO {
 		}
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), helmTimeout)
+	// The read is the health snapshot's own (single-flight): a request may
+	// queue behind a read already in flight, so the wait covers that read
+	// and its own, each bounded by HelmReadTimeout.
+	ctx, cancel := context.WithTimeout(context.Background(), helmListWait)
 	defer cancel()
 
 	releases, err := conn.HelmReleases(ctx)
@@ -204,3 +208,7 @@ func (s *HelmService) HelmRollback(cluster, namespace, release string, revision 
 // queries talk to the cluster's Secrets store (release metadata) so they need
 // a real network budget.
 const helmTimeout = actionTimeout // 30s, same as other read ops
+
+// helmListWait bounds the lens's wait for a helm list: at most one read in
+// flight ahead of it, then its own.
+const helmListWait = 2 * healthsrc.HelmReadTimeout

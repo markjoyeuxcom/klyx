@@ -104,22 +104,43 @@ func (s *summarySink) part(task, part string) (observe.Part, bool) {
 	return observe.Part{}, false
 }
 
-// lockedHelmRunner counts helm execs; the Observer and the lens may call
-// it concurrently.
+// lockedHelmRunner counts helm execs and the most ever running at once; the
+// Observer and the lens may call it concurrently.
 type lockedHelmRunner struct {
-	mu  sync.Mutex
-	n   int
-	out string
+	mu       sync.Mutex
+	n        int
+	inflight int
+	max      int
+	out      string
+	err      error
+	delay    time.Duration
 }
 
 func (r *lockedHelmRunner) Run(context.Context, ...string) ([]byte, error) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	r.n++
-	return []byte(r.out), nil
+	r.inflight++
+	if r.inflight > r.max {
+		r.max = r.inflight
+	}
+	out, err, delay := r.out, r.err, r.delay
+	r.mu.Unlock()
+	time.Sleep(delay)
+	r.mu.Lock()
+	r.inflight--
+	r.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	return []byte(out), nil
 }
-func (r *lockedHelmRunner) set(out string) { r.mu.Lock(); r.out = out; r.mu.Unlock() }
+func (r *lockedHelmRunner) set(out string, err error) {
+	r.mu.Lock()
+	r.out, r.err = out, err
+	r.mu.Unlock()
+}
 func (r *lockedHelmRunner) execs() int     { r.mu.Lock(); defer r.mu.Unlock(); return r.n }
+func (r *lockedHelmRunner) maxAtOnce() int { r.mu.Lock(); defer r.mu.Unlock(); return r.max }
 
 // The Helm lens's read is the health snapshot's read: one helm list serves
 // both, and the summary reflects it with no exec of its own (1c §1.1).
@@ -156,7 +177,7 @@ func TestHelmLensReadFeedsTheHealthSnapshot(t *testing.T) {
 	if r.execs() != 1 {
 		t.Fatalf("want one exec for the first read, got %d", r.execs())
 	}
-	r.set("[" + rel("web", "failed") + "," + rel("api", "failed") + "]")
+	r.set("["+rel("web", "failed")+","+rel("api", "failed")+"]", nil)
 	if _, err := c.HelmReleases(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -164,6 +185,37 @@ func TestHelmLensReadFeedsTheHealthSnapshot(t *testing.T) {
 	if r.execs() != 2 {
 		t.Fatalf("the summary ran its own helm list after the lens read: %d execs", r.execs())
 	}
+
+	// Concurrent lens reads (two lenses, the attention summary) are the
+	// snapshot's single-flight reads: never two helm lists at once.
+	r.mu.Lock()
+	r.delay = 30 * time.Millisecond
+	r.mu.Unlock()
+	var wg sync.WaitGroup
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := c.HelmReleases(ctx); err != nil {
+				t.Error(err)
+			}
+		}()
+	}
+	wg.Wait()
+	if r.maxAtOnce() != 1 || r.execs() > 4 {
+		t.Fatalf("lens reads overlapped or did not coalesce: %d at once, %d execs", r.maxAtOnce(), r.execs())
+	}
+
+	// A failed lens read is the snapshot's failure: the lens gets it, the
+	// summary turns stale with the last good counts retained.
+	r.set("", errors.New("helm list: Kubernetes cluster unreachable"))
+	if _, err := c.HelmReleases(ctx); err == nil {
+		t.Fatal("the lens must see the failure")
+	}
+	waitUntil(t, "the summary opens its freshness gap", func() bool {
+		p, ok := s.part("helm", "releases")
+		return ok && p.Coverage == observe.Stale && p.Native.Included == 2 && len(p.Kinds) == 1 && p.Kinds[0].Error != ""
+	})
 }
 
 func waitUntil(t *testing.T, what string, cond func() bool) {

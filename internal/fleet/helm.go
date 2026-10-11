@@ -2,10 +2,12 @@ package fleet
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/moomora/klyx/internal/healthsrc"
 	"github.com/moomora/klyx/internal/helmcli"
+	"github.com/moomora/klyx/internal/observe"
 )
 
 // newHelmRunner builds the helm Runner for one call, carrying the cluster's
@@ -18,24 +20,32 @@ var helmDetect = helmcli.Detect
 
 // HelmReleases returns all Helm releases across all namespaces for this
 // cluster. Requires a non-empty kubeContext.
-// HelmReleases is the Helm lens's read. A successful one is also the health
-// snapshot's read (Observer.Offer): one helm list serves both.
+// HelmReleases is the Helm lens's read (on open, on Refresh, and the re-read
+// after a rollback). It is the health snapshot's own read: every helm list
+// of this cluster - the 5m cadence included - is one single-flight read,
+// applied in order, and a failure here opens the summary's freshness gap
+// like any other (Observer.ReadSnapshot). Without a running Observer it
+// reads directly.
 func (c *ClusterConn) HelmReleases(ctx context.Context) ([]helmcli.Release, error) {
-	rs, err := c.listHelm(ctx)
-	if err != nil {
-		return nil, err
-	}
 	c.mu.RLock()
 	h := c.health
 	c.mu.RUnlock()
 	if h != nil {
-		h.Offer(healthsrc.SnapHelm, healthsrc.HelmItems(rs), false)
+		r, err := h.ReadSnapshot(ctx, healthsrc.SnapHelm)
+		switch {
+		case errors.Is(err, observe.ErrSnapshotNotRunning):
+		case err != nil:
+			return nil, err
+		case r.Err != nil:
+			return nil, r.Err
+		default:
+			return healthsrc.ReleasesOf(r.Items), nil
+		}
 	}
-	return rs, nil
+	return c.listHelm(ctx)
 }
 
-// listHelm runs helm list for this cluster; the health snapshot's own reads
-// call it directly.
+// listHelm runs helm list for this cluster: the health snapshot's Read.
 func (c *ClusterConn) listHelm(ctx context.Context) ([]helmcli.Release, error) {
 	if c.kubeContext == "" {
 		return nil, fmt.Errorf("HelmReleases: kubeContext not set on conn %q", c.name)
