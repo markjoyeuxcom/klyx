@@ -241,3 +241,17 @@
 .fleet-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(360px, 100%), 480px)); gap: 8px; justify-content: start; align-items: stretch; min-width: 0; }
 .fleet-mesh { display: flex; flex-direction: column; gap: 4px; padding: 8px 12px; border-radius: 4px;
   background: var(--bench-well-bg, var(--color-background-secondary)); box-shadow: var(--bench-well-shadow, none); }
+
+/* ---- cluster overview (redesign step 7e) ---- */
+.ov-section { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.ov-columns { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr)); gap: 16px; align-items: start; }
+.ov-areas { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(260px, 100%), 1fr)); gap: 4px 8px; }
+.ov-area { display: grid; grid-template-columns: 104px minmax(0, 1fr); gap: 8px; align-items: baseline; min-height: 28px; padding: 4px 8px; border: 0; border-radius: 4px;
+  background: transparent; cursor: pointer; text-align: left; font: 400 12px/16px var(--font-sans); color: var(--color-text-secondary); }
+.ov-area:hover, .ov-area:focus-visible { background: var(--color-background-secondary); outline: none; }
+.ov-area-label { color: var(--color-text-primary); font-weight: 600; }
+.ov-area-text { min-width: 0; overflow-wrap: anywhere; }
+.ov-area[data-state="quiet"] .ov-area-text, .ov-area[data-state="evidence"] .ov-area-text { color: var(--color-text-secondary); }
+.mast-attention { flex-shrink: 0; height: 24px; padding: 0 8px; border: 0; border-radius: 4px; background: transparent; cursor: pointer; white-space: nowrap;
+  font: 600 11px/16px var(--font-sans); }
+.mast-attention:hover, .mast-attention:focus-visible { background: var(--color-background-secondary); outline: none; }

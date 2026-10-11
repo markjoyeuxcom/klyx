@@ -1,11 +1,11 @@
 import type { VerdictObservation } from "../health/verdict";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, fireEvent, waitFor } from "@testing-library/react";
+import { render, fireEvent, waitFor, screen } from "@testing-library/react";
 import { Overview } from "./Overview";
 import { useFleet } from "../store/fleet";
-import type { ClusterDTO, MetricsDTO, OverviewSummary } from "../store/fleet";
+import type { AttentionCounts, ClusterDTO, MetricsDTO } from "../store/fleet";
 
-// Default: sparklines unavailable so existing tests render without them.
+// Default: sparklines unavailable so tests render without them.
 import type { SparklinesDTO } from "../bridge/metrics";
 const mockGetClusterSparklines = vi.fn<(cluster: string) => Promise<SparklinesDTO>>(() =>
   Promise.resolve({ available: false, message: "metrics unavailable", cpu: [], mem: [] }),
@@ -14,310 +14,183 @@ vi.mock("../bridge/metrics", () => ({
   getClusterMetrics: vi.fn(),
   getClusterSparklines: (cluster: string) => mockGetClusterSparklines(cluster),
 }));
-vi.mock("../bridge/overview", () => ({ fetchOverviewSummary: vi.fn().mockResolvedValue(undefined) }));
+vi.mock("../bridge/attention", () => ({ fetchAttention: vi.fn().mockResolvedValue(undefined), attentionRepollMs: 60000 }));
 vi.mock("../bridge/fleetboard", () => ({ fetchFleetBoard: vi.fn().mockResolvedValue(undefined) }));
 vi.mock("../bridge/events", () => ({ fetchEventsSnapshot: vi.fn() }));
+vi.mock("../bridge/crd", () => ({ listInstancePage: vi.fn().mockResolvedValue({ items: [], nextToken: "" }) }));
 import { fetchEventsSnapshot } from "../bridge/events";
+import { fetchAttention } from "../bridge/attention";
 
 const dto: ClusterDTO = {
   name: "homelab-nelli", state: "Synced", reason: "", nodesReady: 1, nodesTotal: 1, pods: 58,
   version: "v1.36.1", gitopsTier: "Healthy", gitopsReason: "", networkTier: "Healthy", networkReason: "",
   env: "homelab", region: "", provider: "k3s", group: "", ageSeconds: 3,
 };
-
 const blue: ClusterDTO = { ...dto, name: "homelab-blue" };
 
 function setMetrics(d: MetricsDTO | null) {
   useFleet.setState({ metrics: { cluster: "homelab-blue", dto: d, loading: false } });
 }
 
-// obs builds a verdict observation with `attention` faults among `total` rows.
-function obs(fault = 0, total = 5): VerdictObservation {
-  return { coverage: "complete", counts: { total, fault, degraded: 0, unknown: 0, progressing: 0, paused: 0, ok: total - fault, attention: fault } };
+function obs(fault = 0, total = 5, over: Partial<VerdictObservation> = {}): VerdictObservation {
+  return { coverage: "complete", counts: { total, fault, degraded: 0, unknown: 0, progressing: 0, paused: 0, ok: total - fault, attention: fault }, ...over };
 }
 
-function seedSummary(cluster: string, partial: Partial<OverviewSummary> = {}) {
+function seedAttention(cluster: string, over: Partial<AttentionCounts> = {}) {
   useFleet.setState({
-    overviewSummary: {
-      cluster,
-      loading: false,
-      workloads: obs(),
-      pods: obs(),
-      warningEvents: 0,
-      nodes: obs(),
-      helmAvailable: false,
-      failedReleases: null,
-      namespaces: null,
-      flux: null,
-      fluxError: false,
-      ...partial,
+    attention: {
+      cluster, loading: false, at: Date.now(),
+      counts: { workloads: obs(), pods: obs(), events: 0, nodes: obs(), helm: "absent", flux: "absent", argo: "absent", namespaces: null, ...over },
     },
   });
 }
 
+const area = (label: string) => screen.getByRole("button", { name: new RegExp(`^${label}`) });
+
 beforeEach(() => {
   vi.mocked(fetchEventsSnapshot).mockResolvedValue({ namespaces: [], events: [] });
+  useFleet.setState({ metrics: { cluster: null, dto: null, loading: false }, fleetBoard: {} });
+  useFleet.getState().clearAttention();
 });
 
-describe("Overview", () => {
-  beforeEach(() => {
-    useFleet.setState({ metrics: { cluster: null, dto: null, loading: false } });
-    useFleet.getState().clearOverviewSummary();
+describe("Overview on the workspace template (redesign step 7e)", () => {
+  it("header carries state, version and tags; the mast already names the cluster", () => {
+    seedAttention("homelab-nelli");
+    render(<Overview c={dto} />);
+    expect(screen.getByRole("heading", { name: "Overview" })).toBeTruthy();
+    expect(screen.getByText("Connected")).toBeTruthy();
+    expect(screen.getByText("v1.36.1")).toBeTruthy();
+    expect(screen.getByText("homelab · k3s")).toBeTruthy();
+    expect(screen.getByText("1/1 ready")).toBeTruthy();
+    expect(screen.getByText("58")).toBeTruthy();
   });
 
-  it("renders summary fields from the DTO", () => {
-    const { getByText } = render(<Overview c={dto} />);
-    expect(getByText("homelab-nelli")).toBeTruthy();
-    expect(getByText("v1.36.1")).toBeTruthy();
-    expect(getByText("1/1")).toBeTruthy();
-    expect(getByText("58")).toBeTruthy();
-    expect(getByText("homelab")).toBeTruthy();
+  it("a failed cluster's reason is a notice, shaped", () => {
+    render(<Overview c={{ ...dto, state: "Failed", reason: "connect timed out" }} />);
+    expect(screen.getByText("▲ connect timed out")).toBeTruthy();
+    expect(screen.getByText("▲ Failed")).toBeTruthy();
   });
-  it("shows the reason for a failed cluster", () => {
-    const { getByText } = render(<Overview c={{ ...dto, state: "Failed", reason: "connect timed out" }} />);
-    expect(getByText(/connect timed out/i)).toBeTruthy();
+
+  it("Refresh re-reads the shared summary", () => {
+    seedAttention("homelab-nelli");
+    render(<Overview c={dto} />);
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    expect(fetchAttention).toHaveBeenCalledWith("homelab-nelli");
   });
 });
 
-describe("Overview critical events", () => {
-  beforeEach(() => {
-    useFleet.setState({ metrics: { cluster: null, dto: null, loading: false } });
-    useFleet.getState().clearOverviewSummary();
+describe("Overview attention reads the shared summary", () => {
+  it("while the first read runs it says so - no zeros", () => {
+    useFleet.setState({ attention: { cluster: "homelab-nelli", loading: true, at: null, counts: useFleet.getState().attention.counts } });
+    render(<Overview c={dto} />);
+    expect(screen.getByText("Reading homelab-nelli…")).toBeTruthy();
+    expect(screen.queryByText(/none need attention/)).toBeNull();
   });
 
+  it("one row per area: faults shaped and toned, absent tools omitted, nothing green", () => {
+    seedAttention("homelab-nelli", { workloads: obs(3), helm: 1, flux: 2, argo: "absent", events: 9 });
+    const { container } = render(<Overview c={dto} />);
+    expect(area("Workloads").textContent).toContain("▲ 3 need attention");
+    expect(area("Helm releases").textContent).toContain("▲ 1 failed");
+    expect(area("Flux").textContent).toContain("▲ 2 not ready");
+    expect(area("Events").textContent).toContain("9 warning events");
+    expect(screen.queryByRole("button", { name: /^Argo CD/ })).toBeNull();
+    expect(container.innerHTML).not.toMatch(/color-text-success/);
+  });
+
+  it("unreadable and capped areas are named, and the quiet line is scoped to what was read", () => {
+    seedAttention("homelab-nelli", { pods: obs(0, 5, { coverage: "partial" }), nodes: "unreadable" });
+    render(<Overview c={dto} />);
+    expect(area("Pods").textContent).toContain("unverified (capped)");
+    expect(area("Nodes").textContent).toContain("could not be read");
+    expect(screen.getByText("No attention found in the 2 areas read; 2 could not be established.")).toBeTruthy();
+  });
+
+  it("each area opens its lens with that lens's attention filter", () => {
+    seedAttention("homelab-nelli", { workloads: obs(1) });
+    useFleet.getState().openCluster("homelab-nelli");
+    render(<Overview c={dto} />);
+    fireEvent.click(area("Workloads"));
+    expect(useFleet.getState().route).toMatchObject({ section: "workloads" });
+    expect(useFleet.getState().workloads.needsAttention).toBe(true);
+    fireEvent.click(area("Events"));
+    expect(useFleet.getState().route).toMatchObject({ section: "events" });
+    expect(useFleet.getState().events.warningsOnly).toBe(true);
+  });
+
+  it("namespaces come from the summary; unknown is a dash, never zero", () => {
+    seedAttention("homelab-nelli", { namespaces: 7 });
+    const { unmount } = render(<Overview c={dto} />);
+    expect(screen.getByText("7")).toBeTruthy();
+    unmount();
+    seedAttention("homelab-nelli", { namespaces: null });
+    render(<Overview c={dto} />);
+    expect(screen.getByText("namespaces").nextElementSibling?.textContent).toBe("—");
+  });
+
+  it("another cluster's summary is never shown", () => {
+    seedAttention("homelab-blue", { workloads: obs(4) });
+    render(<Overview c={dto} />);
+    expect(screen.getByText("Reading homelab-nelli…")).toBeTruthy();
+  });
+});
+
+describe("Overview warning events", () => {
   it("shows warning events and opens the filtered Events page", async () => {
     vi.mocked(fetchEventsSnapshot).mockResolvedValueOnce({
       namespaces: ["apps"],
-      events: [{
-        type: "Warning",
-        reason: "BackOff",
-        message: "Back-off restarting failed container",
-        count: 3,
-        namespace: "apps",
-        kind: "Pod",
-        name: "api-1",
-        lastSeenUnix: 100,
-        firstSeenUnix: 10,
-      }],
+      events: [{ type: "Warning", reason: "BackOff", message: "Back-off restarting failed container", count: 3, namespace: "apps", kind: "Pod", name: "api-1", lastSeenUnix: 100, firstSeenUnix: 10 }],
     });
     useFleet.getState().openCluster("homelab-nelli");
-    const { getByText } = render(<Overview c={dto} />);
-    await waitFor(() => expect(getByText("BackOff")).toBeTruthy());
-    fireEvent.click(getByText("BackOff"));
+    render(<Overview c={dto} />);
+    await waitFor(() => expect(screen.getByText("BackOff")).toBeTruthy());
+    fireEvent.click(screen.getByText("BackOff"));
     const state = useFleet.getState();
     expect(state.route).toMatchObject({ name: "cluster", section: "events" });
     expect(state.events.warningsOnly).toBe(true);
     expect(state.events.search).toBe("api-1");
   });
+
+  it("a failed events read is a failure, never 'no warning events'", async () => {
+    vi.mocked(fetchEventsSnapshot).mockRejectedValueOnce(new Error("events is forbidden"));
+    render(<Overview c={dto} />);
+    expect(await screen.findByText(/Events could not be read: events is forbidden/)).toBeTruthy();
+    expect(screen.queryByText(/No warning events/)).toBeNull();
+  });
+
+  it("an empty read is neutral and scoped", async () => {
+    render(<Overview c={dto} />);
+    const line = await screen.findByText("No warning events in the current read.");
+    expect(line.className).toContain("t-secondary");
+  });
 });
 
 describe("Overview metrics", () => {
-  beforeEach(() => {
-    useFleet.setState({ metrics: { cluster: null, dto: null, loading: false } });
-    useFleet.getState().clearOverviewSummary();
-  });
-
-  it("renders cpu/mem percents and the discovered monitoring line", () => {
-    setMetrics({ available: true, mode: "discovered-service", source: "monitoring/prometheus-operated:9090", warning: "", reason: "", cpuFraction: 0.38, memFraction: 0.61 });
-    const { getByText } = render(<Overview c={blue} />);
-    expect(getByText("38%")).toBeTruthy();
-    expect(getByText("61%")).toBeTruthy();
-    expect(getByText(/monitoring: discovered · svc monitoring\/prometheus-operated:9090/)).toBeTruthy();
+  it("renders cpu/mem percents and the discovered monitoring line; used is never green", () => {
+    setMetrics({ available: true, mode: "discovered-service", source: "monitoring/prometheus-operated:9090", warning: "", reason: "", cpuFraction: 0.38, memFraction: 0.92 });
+    const { container } = render(<Overview c={blue} />);
+    expect(screen.getByText("38%")).toBeTruthy();
+    expect(screen.getByText("▲ 92%")).toBeTruthy();
+    expect(screen.getByText(/monitoring: discovered · svc monitoring\/prometheus-operated:9090/)).toBeTruthy();
+    expect(container.innerHTML).not.toMatch(/color-text-success/);
   });
 
   it("renders — for null fractions", () => {
     setMetrics({ available: true, mode: "explicit-endpoint", source: "https://h", warning: "", reason: "", cpuFraction: null, memFraction: null });
-    const { getAllByText } = render(<Overview c={blue} />);
-    expect(getAllByText("—").length).toBeGreaterThanOrEqual(2);
+    render(<Overview c={blue} />);
+    expect(screen.getAllByText("—").length).toBeGreaterThanOrEqual(2);
   });
 
   it("renders the unavailable reason", () => {
     setMetrics({ available: false, mode: "unavailable", source: "", warning: "", reason: "multiple candidate Services found, set metrics.serviceRef", cpuFraction: null, memFraction: null });
-    const { getByText } = render(<Overview c={blue} />);
-    expect(getByText(/monitoring unavailable: multiple candidate Services found/)).toBeTruthy();
-  });
-});
-
-// ---- Attention strip ---------------------------------------------------------
-
-describe("Overview attention strip", () => {
-  beforeEach(() => {
-    useFleet.setState({ metrics: { cluster: null, dto: null, loading: false } });
-    useFleet.getState().clearOverviewSummary();
-  });
-
-  it("shows — (muted) for all tiles while loading", () => {
-    useFleet.setState({ overviewSummary: { cluster: "homelab-nelli", loading: true, workloads: null, pods: null, warningEvents: null, nodes: null, helmAvailable: false, failedReleases: null, namespaces: null, flux: null, fluxError: false } });
-    const { getAllByText } = render(<Overview c={dto} />);
-    // During loading, all tiles show "—".
-    const dashes = getAllByText("—");
-    expect(dashes.length).toBeGreaterThanOrEqual(4); // 4 always-visible tiles + usage dashes
-  });
-
-  it("renders non-zero counts as numbers", () => {
-    seedSummary("homelab-nelli", { workloads: obs(3), pods: obs(1), warningEvents: 5, nodes: obs() });
-    const { getByText } = render(<Overview c={dto} />);
-    expect(getByText("3")).toBeTruthy();
-    expect(getByText("1")).toBeTruthy();
-    expect(getByText("5")).toBeTruthy();
-  });
-
-  it("zero counts render as '0' (quiet, not hidden)", () => {
-    seedSummary("homelab-nelli", { workloads: obs(), pods: obs(), warningEvents: 0, nodes: obs() });
-    const { getAllByText } = render(<Overview c={dto} />);
-    const zeros = getAllByText("0");
-    expect(zeros.length).toBeGreaterThanOrEqual(4);
-  });
-
-  it("navigates to workloads and sets needs-attention on tile click", () => {
-    useFleet.getState().openCluster("homelab-nelli");
-    seedSummary("homelab-nelli", { workloads: obs(2) });
-    const { getByText } = render(<Overview c={dto} />);
-    fireEvent.click(getByText("workloads need attention"));
-    const state = useFleet.getState();
-    expect(state.route).toMatchObject({ name: "cluster", section: "workloads" });
-    expect(state.workloads.needsAttention).toBe(true);
-  });
-
-  it("navigates to pods and sets needs-attention on tile click", () => {
-    useFleet.getState().openCluster("homelab-nelli");
-    seedSummary("homelab-nelli", { pods: obs(1) });
-    const { getByText } = render(<Overview c={dto} />);
-    fireEvent.click(getByText("pods need attention"));
-    const state = useFleet.getState();
-    expect(state.route).toMatchObject({ name: "cluster", section: "pods" });
-    expect(state.pods.needsAttention).toBe(true);
-  });
-
-  it("navigates to events and enables warnings-only on tile click", () => {
-    useFleet.getState().openCluster("homelab-nelli");
-    seedSummary("homelab-nelli", { warningEvents: 7 });
-    const { getByText } = render(<Overview c={dto} />);
-    fireEvent.click(getByText("warning events"));
-    const state = useFleet.getState();
-    expect(state.route).toMatchObject({ name: "cluster", section: "events" });
-    expect(state.events.warningsOnly).toBe(true);
-  });
-
-  it("helm tile is hidden when helmAvailable=false", () => {
-    seedSummary("homelab-nelli", { helmAvailable: false, failedReleases: null });
-    const { queryByText } = render(<Overview c={dto} />);
-    expect(queryByText("failed releases")).toBeNull();
-  });
-
-  it("helm tile is visible when helmAvailable=true", () => {
-    seedSummary("homelab-nelli", { helmAvailable: true, failedReleases: 0 });
-    const { getByText } = render(<Overview c={dto} />);
-    expect(getByText("failed releases")).toBeTruthy();
-  });
-
-  it("shows — with title='failed to load' when a tile has null count after load", () => {
-    seedSummary("homelab-nelli", { workloads: null });
-    const { getByTitle } = render(<Overview c={dto} />);
-    expect(getByTitle("failed to load")).toBeTruthy();
-  });
-});
-
-
-// ---- Flux attention strip tile -------------------------------------------------
-
-describe("Overview flux tile", () => {
-  beforeEach(() => {
-    useFleet.setState({ metrics: { cluster: null, dto: null, loading: false } });
-    useFleet.getState().clearOverviewSummary();
-  });
-
-  it("flux tile is hidden when flux is null", () => {
-    seedSummary("homelab-nelli", { flux: null });
-    const { queryByText } = render(<Overview c={dto} />);
-    expect(queryByText("flux not ready")).toBeNull();
-  });
-
-  it("flux tile is visible when flux.present=true", () => {
-    seedSummary("homelab-nelli", { flux: { present: true, notReady: 0, suspended: 0 } });
-    const { getByText } = render(<Overview c={dto} />);
-    expect(getByText("flux not ready")).toBeTruthy();
-  });
-
-  it("flux tile renders notReady count when >0", () => {
-    seedSummary("homelab-nelli", { flux: { present: true, notReady: 3, suspended: 0 } });
-    const { getByText } = render(<Overview c={dto} />);
-    expect(getByText("3")).toBeTruthy();
-  });
-
-  it("flux tile click navigates to gitops section", () => {
-    useFleet.getState().openCluster("homelab-nelli");
-    seedSummary("homelab-nelli", { flux: { present: true, notReady: 1, suspended: 0 } });
-    const { getByText } = render(<Overview c={dto} />);
-    fireEvent.click(getByText("flux not ready"));
-    const state = useFleet.getState();
-    expect(state.route).toMatchObject({ name: "cluster", section: "gitops" });
-  });
-
-  it("flux tile shows suspended count in title when >0", () => {
-    seedSummary("homelab-nelli", { flux: { present: true, notReady: 1, suspended: 2 } });
-    const { getByTitle } = render(<Overview c={dto} />);
-    expect(getByTitle("2 suspended")).toBeTruthy();
-  });
-
-  it("flux tile has no title when suspended is 0", () => {
-    seedSummary("homelab-nelli", { flux: { present: true, notReady: 0, suspended: 0 } });
-    const { queryByTitle } = render(<Overview c={dto} />);
-    expect(queryByTitle(/suspended/)).toBeNull();
-  });
-});
-
-// ---- Capacity namespaces row ---------------------------------------------------
-
-describe("Overview capacity namespace row", () => {
-  beforeEach(() => {
-    useFleet.setState({ metrics: { cluster: null, dto: null, loading: false } });
-    useFleet.getState().clearOverviewSummary();
-  });
-
-  it("shows namespace count in Capacity when summary is loaded", () => {
-    seedSummary("homelab-nelli", { namespaces: 7 });
-    const { getByText } = render(<Overview c={dto} />);
-    expect(getByText("7")).toBeTruthy();
-    expect(getByText("namespaces")).toBeTruthy();
-  });
-
-  it("omits namespace row when namespaces is null (not yet loaded)", () => {
-    seedSummary("homelab-nelli", { namespaces: null });
-    const { queryByText } = render(<Overview c={dto} />);
-    expect(queryByText("namespaces")).toBeNull();
-  });
-});
-
-describe("Overview sparklines", () => {
-  beforeEach(() => {
-    useFleet.setState({ metrics: { cluster: null, dto: null, loading: false } });
-    useFleet.getState().clearOverviewSummary();
+    render(<Overview c={blue} />);
+    expect(screen.getByText(/monitoring unavailable: multiple candidate Services found/)).toBeTruthy();
   });
 
   it("renders cpu/mem sparklines when the range series are available", async () => {
-    mockGetClusterSparklines.mockResolvedValueOnce({
-      available: true,
-      cpu: [{ t: 100, v: 0.4 }, { t: 160, v: 0.5 }],
-      mem: [{ t: 100, v: 0.6 }, { t: 160, v: 0.7 }],
-    });
-    const { findAllByRole } = render(<Overview c={dto} />);
-    const sparks = await findAllByRole("img", { name: /metric sparkline/i });
+    mockGetClusterSparklines.mockResolvedValueOnce({ available: true, cpu: [{ t: 100, v: 0.4 }, { t: 160, v: 0.5 }], mem: [{ t: 100, v: 0.6 }, { t: 160, v: 0.7 }] });
+    render(<Overview c={dto} />);
+    const sparks = await screen.findAllByRole("img", { name: /metric sparkline/i });
     expect(sparks.length).toBe(2);
   });
-
-  it("renders no sparklines when unavailable (default mock)", async () => {
-    const { queryAllByRole, findByText } = render(<Overview c={dto} />);
-    await findByText("cpu used"); // settle
-    expect(queryAllByRole("img", { name: /metric sparkline/i }).length).toBe(0);
-  });
 });
-
-describe("Overview verdict tiles never claim a quiet they cannot see", () => {
-  it("a capped zero-attention read shows ?, not 0", () => {
-    seedSummary("homelab-nelli", { pods: { coverage: "partial", counts: obs().counts } });
-    const { getByText } = render(<Overview c={dto} />);
-    expect(getByText(/pods need attention · unverified \(capped\)/)).toBeTruthy();
-  });
-});
-

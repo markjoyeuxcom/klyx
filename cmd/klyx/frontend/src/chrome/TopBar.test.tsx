@@ -153,3 +153,37 @@ describe("TopBar mast identity and history (redesign step 7b)", () => {
     off();
   });
 });
+
+describe("TopBar Attention button (redesign step 7e)", () => {
+  const ok = { coverage: "complete" as const, counts: { total: 5, fault: 0, degraded: 0, unknown: 0, progressing: 0, paused: 0, ok: 5, attention: 0 } };
+  beforeEach(() => {
+    useFleet.setState({ route: { name: "cluster", cluster: "dev", section: "pods" }, clusters: [{ name: "dev", state: "Synced" } as never], forwards: [] });
+  });
+
+  it("names areas needing attention (not an object sum) and opens the view tree", () => {
+    useFleet.setState({ attention: { cluster: "dev", loading: false, at: 1, counts: { workloads: { ...ok, counts: { ...ok.counts, fault: 3, ok: 2, attention: 3 } }, pods: ok, events: 4, nodes: ok, helm: 1, flux: "absent", argo: "absent" } } });
+    const opened = vi.fn();
+    window.addEventListener("klyx:open-nav-tree", opened);
+    const { getByRole } = render(<TopBar />);
+    const btn = getByRole("button", { name: /^Attention: ▲ 2 areas need attention/ });
+    fireEvent.click(btn);
+    expect(opened).toHaveBeenCalledTimes(1);
+    window.removeEventListener("klyx:open-nav-tree", opened);
+  });
+
+  it("checking while the first read runs; gaps are named, never quiet", () => {
+    useFleet.setState({ attention: { cluster: "dev", loading: true, at: null, counts: useFleet.getState().attention.counts } });
+    const { getByRole, unmount } = render(<TopBar />);
+    expect(getByRole("button", { name: /^Attention: Checking…/ })).toBeTruthy();
+    unmount();
+    useFleet.setState({ attention: { cluster: "dev", loading: false, at: 1, counts: { workloads: ok, pods: "unreadable", events: 0, nodes: ok, helm: 0, flux: 0, argo: 0 } } });
+    const r = render(<TopBar />);
+    expect(r.getByRole("button", { name: /^Attention: No attention found · 1 unverified/ })).toBeTruthy();
+  });
+
+  it("no Attention button outside a cluster", () => {
+    useFleet.setState({ route: { name: "fleet" } });
+    const { queryByRole } = render(<TopBar />);
+    expect(queryByRole("button", { name: /^Attention/ })).toBeNull();
+  });
+});

@@ -3,6 +3,7 @@ import { IconArrowLeft, IconArrowRight, IconArrowsLeftRight, IconClock, IconComm
 import { ThemeToggle } from "./ThemeToggle";
 import { KlyxMark } from "./KlyxMark";
 import { useFleet } from "../store/fleet";
+import { attentionAreas, attentionSummary, openNavTree } from "../nav/attention";
 import { back, backTarget, entryKey, entryLabel, forward, forwardTarget, go, recentPlaces, useHistory, type HistoryEntry } from "../nav/history";
 import { clusterDisplayName } from "../fleet/ClusterCard";
 import { stopAllForwards } from "../bridge/forwards";
@@ -40,6 +41,7 @@ export function TopBar() {
             </>
           ) : <span className="mast-cluster">{where.place}</span>}
         </div>
+        {route.name === "cluster" && <AttentionButton cluster={route.cluster} />}
         {/* The protected cue never clips: it does not shrink, the place does. */}
         {current?.protected && (
           <span className="mast-protected" style={noDrag} title={current.protectedInferred ? "Protected - inferred from the cluster's environment name; operations need typed confirmation" : "Protected - operations need typed confirmation"}>
@@ -73,6 +75,30 @@ export function TopBar() {
         <ThemeToggle />
       </div>
     </header>
+  );
+}
+
+// AttentionButton (spec §4): the cluster's actionable summary in one line -
+// how many AREAS need attention, never a sum of objects - and the gaps. It
+// opens the same fault-aware navigation tree, not a second ledger.
+function AttentionButton({ cluster }: { cluster: string }) {
+  const attention = useFleet((s) => s.attention);
+  const areas = attentionAreas(attention, cluster);
+  const sum = attentionSummary(areas);
+  const lines = areas.map((a) => `${a.label}: ${a.text}`).join("\n");
+  let text: string;
+  let color = "var(--color-text-secondary)";
+  if (sum.state === "loading") text = "Checking…";
+  else if (sum.state === "attention") {
+    text = `${sum.tone === "danger" ? "▲ " : ""}${sum.areas} area${sum.areas === 1 ? "" : "s"} need attention${sum.gaps > 0 ? ` · ${sum.gaps} unverified` : ""}`;
+    color = sum.tone === "danger" ? "var(--color-text-danger)" : "var(--color-text-warning)";
+  } else if (sum.state === "gaps") text = `No attention found · ${sum.gaps} unverified`;
+  else text = "No attention found";
+  return (
+    <button type="button" className="mast-attention" style={{ ...noDrag, color }} onClick={() => openNavTree("attention")}
+      aria-label={`Attention: ${text}. Opens the view tree.`} title={`${lines}\n\nOpen the view tree`}>
+      {text}
+    </button>
   );
 }
 

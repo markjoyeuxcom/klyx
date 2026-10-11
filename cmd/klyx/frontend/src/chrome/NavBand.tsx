@@ -5,6 +5,7 @@ import type { ClusterDTO, FleetView } from "../store/fleet";
 import { toneColor } from "./primitives/styles";
 import { CAP_STATE_TEXT, NAV_GROUPS, activeLocation, destState, groupState, navigate, type Destination, type NavGroup } from "../nav/registry";
 import { useNavCounts, type NavBadge, type NavCounts } from "../nav/useNavCounts";
+import { OPEN_TREE_EVENT } from "../nav/attention";
 
 // NavBand - the one 32px navigation row (redesign spec §4), replacing the two
 // stacked LensNav strips. Left: the current group, whose popover is the whole
@@ -277,6 +278,16 @@ function GroupSelector({ cluster, clusterName, current, counts }: { cluster: Clu
   const { destination: active } = activeLocation(route, kindFilter);
 
   const rows = useMemo(() => (open ? buildTree(cluster, query) : []), [open, cluster, query]);
+  // The mast Attention button opens this same tree (spec §4: no second ledger).
+  const focusAttention = useRef(false);
+  useEffect(() => {
+    const onOpen = (e: Event) => {
+      focusAttention.current = (e as CustomEvent<{ focus?: string }>).detail?.focus === "attention";
+      setOpen(true);
+    };
+    window.addEventListener(OPEN_TREE_EVENT, onOpen);
+    return () => window.removeEventListener(OPEN_TREE_EVENT, onOpen);
+  }, []);
   const choices = rows.filter((r): r is Extract<TreeRow, { kind: "dest" }> => r.kind === "dest" && r.disabled === null);
 
   const close = (refocus: boolean) => { setOpen(false); setQuery(""); if (refocus) triggerRef.current?.focus(); };
@@ -289,13 +300,20 @@ function GroupSelector({ cluster, clusterName, current, counts }: { cluster: Clu
     document.addEventListener("mousedown", onDown);
     return () => document.removeEventListener("mousedown", onDown);
   }, [open]);
-  // Opening starts on the active destination; typing starts on the first match.
+  // Opening starts on the active destination - or, from the Attention
+  // button, on the first destination needing attention; typing starts on the
+  // first match.
   useEffect(() => {
     if (!open) return;
-    const i = query ? 0 : Math.max(0, choices.findIndex((r) => r.d === active));
+    let i = query ? 0 : Math.max(0, choices.findIndex((r) => r.d === active));
+    if (!query && focusAttention.current) {
+      const lit = choices.findIndex((r) => (counts.destination[r.d.id]?.tone ?? undefined) !== undefined && (counts.destination[r.d.id]?.n ?? 0) > 0);
+      if (lit >= 0) i = lit;
+    }
     setSel(i);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, query]);
+  useEffect(() => { if (!open) focusAttention.current = false; }, [open]);
   useEffect(() => {
     const el = listRef.current?.querySelector('[data-selected="true"]') as HTMLElement | null;
     if (el && typeof el.scrollIntoView === "function") el.scrollIntoView({ block: "nearest" });
@@ -342,7 +360,12 @@ function GroupSelector({ cluster, clusterName, current, counts }: { cluster: Clu
                 return (
                   <div key={`g:${r.g.id}`} role="presentation" className="navtree-group">
                     <span style={{ flex: 1 }}>{r.g.label}</span>
-                    {note ? <span className="t-secondary">{note}</span> : <Count b={counts.group[r.g.id]} />}
+                    {note ? <span className="t-secondary">{note}</span> : (
+                      <>
+                        <Count b={counts.group[r.g.id]} />
+                        {counts.groupNote[r.g.id] && <span className="t-secondary">{counts.groupNote[r.g.id]}</span>}
+                      </>
+                    )}
                   </div>
                 );
               }

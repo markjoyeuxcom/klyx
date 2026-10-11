@@ -14,7 +14,7 @@ vi.mock("../../bindings/github.com/moomora/klyx/internal/appbridge/index.js", ()
 import {
   WorkloadsService, PodsService, EventsService, NodesService, HelmService, GitOpsService, ArgoService,
 } from "../../bindings/github.com/moomora/klyx/internal/appbridge/index.js";
-import { fetchTape } from "./tape";
+import { fetchAttention } from "./attention";
 
 const ok = (fn: unknown, v: unknown) => (fn as ReturnType<typeof vi.fn>).mockResolvedValue(v);
 
@@ -31,15 +31,15 @@ function seedHealthy() {
 // Review 2026-10-03 #10: the tape promises it "never claims quiet from missing
 // data". A read that failed resolves with `error` set and empty rows - that
 // must surface as unreadable, never as 0 or "absent".
-describe("fetchTape error honesty", () => {
+describe("fetchAttention error honesty", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     seedHealthy();
   });
 
   it("a successful empty read is quiet (0)", async () => {
-    await fetchTape("nelli");
-    const c = useFleet.getState().tape.counts;
+    await fetchAttention("nelli");
+    const c = useFleet.getState().attention.counts;
     expect(c.pods).toMatchObject({ coverage: "complete", counts: { attention: 0, total: 0 } });
     expect(c.workloads).toMatchObject({ coverage: "complete", counts: { attention: 0, total: 0 } });
     expect(c.helm).toBe(0);
@@ -49,8 +49,8 @@ describe("fetchTape error honesty", () => {
   it("a read carrying error is unreadable, not zero", async () => {
     ok(PodsService.ListPods, { namespaces: [], pods: [], error: "pods is forbidden" });
     ok(NodesService.ListNodes, { nodes: [], error: "cluster not connected: nelli" });
-    await fetchTape("nelli");
-    const c = useFleet.getState().tape.counts;
+    await fetchAttention("nelli");
+    const c = useFleet.getState().attention.counts;
     expect(c.pods).toBe("unreadable");
     expect(c.nodes).toBe("unreadable");
     expect(c.workloads).toMatchObject({ counts: { attention: 0 } }); // the others still read
@@ -58,17 +58,53 @@ describe("fetchTape error honesty", () => {
 
   it("a failed helm list is unreadable; only 'helm not found' is absent", async () => {
     ok(HelmService.ListHelmReleases, { available: false, message: "helm list: unreachable", releases: [], error: "helm list: unreachable" });
-    await fetchTape("nelli");
-    expect(useFleet.getState().tape.counts.helm).toBe("unreadable");
+    await fetchAttention("nelli");
+    expect(useFleet.getState().attention.counts.helm).toBe("unreadable");
 
     ok(HelmService.ListHelmReleases, { available: false, message: "helm not found", releases: [] });
-    await fetchTape("nelli");
-    expect(useFleet.getState().tape.counts.helm).toBe("absent");
+    await fetchAttention("nelli");
+    expect(useFleet.getState().attention.counts.helm).toBe("absent");
   });
 
   it("a failed flux summary is unreadable, not absent", async () => {
     ok(GitOpsService.GetGitOpsSummary, { fluxPresent: false, total: 0, notReady: 0, suspended: 0, error: "kustomizations is forbidden" });
-    await fetchTape("nelli");
-    expect(useFleet.getState().tape.counts.flux).toBe("unreadable");
+    await fetchAttention("nelli");
+    expect(useFleet.getState().attention.counts.flux).toBe("unreadable");
+  });
+});
+
+// Coverage and scope moved here with fetchOverviewSummary (step 7e): the
+// attention summary is now the only cluster summary read.
+describe("fetchAttention coverage and scope", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    seedHealthy();
+  });
+
+  it("a capped list is partial even with zero attention, and namespaces are not counted from it", async () => {
+    ok(WorkloadsService.ListWorkloads, { fluxPresent: false, namespaces: [], workloads: [{ health: { kind: "ok" } }], truncated: true });
+    ok(PodsService.ListPods, { namespaces: [], pods: [{ namespace: "a", health: { kind: "ok" } }], truncated: true });
+    await fetchAttention("homelab");
+    const c = useFleet.getState().attention.counts;
+    expect(typeof c.workloads === "object" && c.workloads.coverage).toBe("partial");
+    expect(typeof c.pods === "object" && c.pods.coverage).toBe("partial");
+    expect(c.namespaces).toBeNull();
+  });
+
+  it("namespaces are counted from a complete pods read", async () => {
+    ok(PodsService.ListPods, { namespaces: [], pods: [{ namespace: "a" }, { namespace: "b" }, { namespace: "a" }] });
+    await fetchAttention("homelab");
+    expect(useFleet.getState().attention.counts.namespaces).toBe(2);
+    expect(useFleet.getState().attention.at).not.toBeNull();
+  });
+
+  it("a read for a cluster left mid-flight is dropped", async () => {
+    let release!: (v: unknown) => void;
+    (WorkloadsService.ListWorkloads as ReturnType<typeof vi.fn>).mockReturnValue(new Promise((r) => { release = r; }));
+    const first = fetchAttention("a");
+    void fetchAttention("b");
+    release({ fluxPresent: false, namespaces: [], workloads: [] });
+    await first;
+    expect(useFleet.getState().attention.cluster).toBe("b");
   });
 });

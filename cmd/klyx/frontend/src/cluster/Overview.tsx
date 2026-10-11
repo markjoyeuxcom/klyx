@@ -1,33 +1,37 @@
-import { asOfText, describeObservation, type VerdictObservation } from "../health/verdict";
 import { useEffect, useState } from "react";
 import { useFleet } from "../store/fleet";
-import type { ClusterDTO, FleetBoardEntry, MetricsDTO } from "../store/fleet";
+import type { ClusterDTO, EventRowDTO, FleetBoardEntry, MetricsDTO, ResourceRef } from "../store/fleet";
 import { getClusterMetrics, getClusterSparklines } from "../bridge/metrics";
 import type { SparklinesDTO } from "../bridge/metrics";
-import { fetchOverviewSummary } from "../bridge/overview";
 import { fetchFleetBoard } from "../bridge/fleetboard";
+import { fetchAttention } from "../bridge/attention";
 import { Sparkline } from "../chrome/Sparkline";
-import { stateColor } from "./stateColors";
+import { UpdatedAt } from "../chrome/Age";
 import { listInstancePage } from "../bridge/crd";
 import { fetchEventsSnapshot } from "../bridge/events";
 import { CLUSTER_RISK_REFS, riskFor } from "./resourceRisk";
-import type { EventRowDTO, ResourceRef } from "../store/fleet";
+import { ellipsis } from "../chrome/primitives";
+import { LensLayout } from "../layout/LensLayout";
+import { attentionAreas, type Area } from "../nav/attention";
 
 type BoardEntry = FleetBoardEntry | undefined;
-import { Badge, ellipsis, StatusDot } from "../chrome/primitives";
 
+// Overview on the workspace template (redesign step 7e). Its attention
+// section reads the shared cluster summary - the same reading the navigation
+// tree and the mast use - so the three never disagree and nothing here is a
+// second ledger with its own fetch. Nothing is green: a quiet area is a
+// neutral fact scoped to what was read.
 export function Overview({ c }: { c: ClusterDTO }) {
   const tags = [c.env, c.region, c.provider, c.group].filter(Boolean);
   const metrics = useFleet((s) => s.metrics);
   const loading = useFleet((s) => s.metrics.loading);
-  const summary = useFleet((s) => s.overviewSummary);
+  const attention = useFleet((s) => s.attention);
   const board = useFleet((s) => s.fleetBoard[c.name]);
   // 30m cluster utilisation sparklines — fetched once per mount, local state.
   const [spark, setSpark] = useState<SparklinesDTO | null>(null);
 
   useEffect(() => {
     getClusterMetrics(c.name, false);
-    fetchOverviewSummary(c.name);
     void fetchFleetBoard([c.name]);
     let cancelled = false;
     getClusterSparklines(c.name).then((dto) => {
@@ -37,321 +41,156 @@ export function Overview({ c }: { c: ClusterDTO }) {
       cancelled = true;
       setSpark(null);
       useFleet.getState().clearMetrics();
-      useFleet.getState().clearOverviewSummary();
     };
   }, [c.name]);
 
   const m: MetricsDTO | null = metrics.cluster === c.name ? metrics.dto : null;
-  const s = summary.cluster === c.name ? summary : null;
+  const areas = attentionAreas(attention, c.name);
+  const mine = attention.cluster === c.name;
+  const stateTone = c.state === "Failed" ? "var(--color-text-danger)" : c.state === "Synced" ? "var(--color-text-secondary)" : "var(--color-text-warning)";
+  const refresh = () => {
+    void fetchAttention(c.name);
+    void fetchFleetBoard([c.name]);
+    getClusterMetrics(c.name, true);
+  };
 
   return (
-    <div style={{ padding: "14px 16px", display: "grid", gap: 12 }}>
-      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 16, borderBottom: "0.5px solid var(--color-border-tertiary)", paddingBottom: 12 }}>
-        <div style={{ minWidth: 0 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-            <StatusDot size={8} color={stateColor[c.state] ?? "var(--color-text-tertiary)"} />
-            <span style={{ fontFamily: "var(--font-mono)", fontWeight: 600, fontSize: 16 }}>{c.name}</span>
-            {c.version && <Badge variant="soft" tone="muted">{c.version}</Badge>}
+    <LensLayout
+      label="Overview"
+      title="Overview"
+      summary={
+        <>
+          <span className="t-status" style={{ color: stateTone }}>{c.state === "Failed" ? "▲ " : ""}{stateWord(c)}</span>
+          {c.version && <span className="t-secondary">{c.version}</span>}
+          {tags.length > 0 && <span className="t-secondary">{tags.join(" · ")}</span>}
+        </>
+      }
+      headerEnd={
+        <>
+          <UpdatedAt at={mine ? attention.at : null} />
+          <button className="l-btn" onClick={refresh} disabled={mine && attention.loading}>{mine && attention.loading ? "Reading…" : "Refresh"}</button>
+        </>
+      }
+      notice={c.reason ? (
+        <div className="t-body" role="status" style={{ color: stateTone, overflowWrap: "anywhere" }}>{c.state === "Failed" ? "▲ " : ""}{c.reason}</div>
+      ) : undefined}
+      state="ready"
+      body={
+        <div className="lens-canvas" data-testid="overview">
+          <AttentionSection cluster={c.name} areas={areas} />
+          <div className="ov-columns">
+            <section aria-label="Cluster facts" className="ov-section">
+              <h3 className="t-section-label">Cluster</h3>
+              <div className="insp-kv">
+                <span>connection</span><span style={{ color: stateTone }}>{freshnessText(c)}</span>
+                <span>nodes</span><span>{c.nodesReady}/{c.nodesTotal} ready</span>
+                <span>pods</span><span>{c.pods}</span>
+                <span>namespaces</span><span>{mine && attention.counts.namespaces != null ? attention.counts.namespaces : "—"}</span>
+                <span>flux</span><span>{fluxCapability(c, attention.counts.flux)}</span>
+                {board?.argo && <><span>argo cd</span><span>{board.argo.broken > 0 ? `${board.argo.broken} of ${board.argo.total} need attention` : `${board.argo.total} applications`}</span></>}
+                <span>gateway</span><span>{gatewayCapability(c, board)}</span>
+              </div>
+            </section>
+            <section aria-label="Resources" className="ov-section">
+              <h3 className="t-section-label">Resources</h3>
+              <div className="insp-kv">
+                <span>cpu used</span>
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 10 }}>
+                  <Usage frac={m?.cpuFraction ?? null} />
+                  {spark?.available && <Sparkline points={spark.cpu} height={16} width={90} />}
+                </span>
+                <span>mem used</span>
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 10 }}>
+                  <Usage frac={m?.memFraction ?? null} />
+                  {spark?.available && <Sparkline points={spark.mem} height={16} width={90} />}
+                </span>
+              </div>
+              <MonitoringLine dto={m} loading={loading} onRefresh={() => getClusterMetrics(c.name, true)} />
+            </section>
           </div>
-          <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
-            {tags.map((t) => <Badge key={t} variant="soft" tone="muted">{t}</Badge>)}
-          </div>
-        </div>
-        <span style={{ fontFamily: "var(--font-mono)", color: freshnessTone(c), fontSize: 12, whiteSpace: "nowrap" }}>
-          {freshnessText(c)}
-        </span>
-      </div>
-
-      <AttentionStrip cluster={c.name} summary={s} board={board} clusterState={c.state} loading={summary.loading && summary.cluster === c.name} />
-
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 32, alignItems: "flex-start" }}>
-        <div style={{ flex: "0 1 360px", minWidth: 260 }}>
-          <Section title="Health">
-            <Row label="state"><span style={{ color: stateColor[c.state] }}>{c.state}</span></Row>
-            {c.reason && <Row label="reason">{c.reason}</Row>}
-            <Row label="freshness">{freshnessText(c)}</Row>
-          </Section>
-
-          <Section title="Capacity">
-            <Row label="nodes">{c.nodesReady}/{c.nodesTotal}</Row>
-            <Row label="pods">{c.pods}</Row>
-            {s && s.namespaces !== null && <Row label="namespaces">{s.namespaces}</Row>}
-          </Section>
-
-          <Section title="Capabilities">
-            <Row label="flux">{fluxCapability(s)}</Row>
-            {board?.argo && <Row label="argo">{board.argo.broken > 0 ? `${board.argo.broken} degraded / ${board.argo.total}` : `${board.argo.total} synced`}</Row>}
-            <Row label="gateway">{gatewayCapability(c, board)}</Row>
-          </Section>
-        </div>
-
-        <div style={{ flex: "1 1 560px", maxWidth: 900, minWidth: 360 }}>
-          <Section title="Resources">
-            <Row label="cpu used">
-              <span style={{ display: "inline-flex", alignItems: "center", gap: 10 }}>
-                <Usage frac={m?.cpuFraction ?? null} />
-                {spark?.available && <Sparkline points={spark.cpu} height={16} width={90} />}
-              </span>
-            </Row>
-            <Row label="mem used">
-              <span style={{ display: "inline-flex", alignItems: "center", gap: 10 }}>
-                <Usage frac={m?.memFraction ?? null} />
-                {spark?.available && <Sparkline points={spark.mem} height={16} width={90} />}
-              </span>
-            </Row>
-            <MonitoringLine dto={m} loading={loading} onRefresh={() => getClusterMetrics(c.name, true)} />
-          </Section>
-
-          <NextActions summary={s} board={board} clusterState={c.state} />
           <CriticalEvents cluster={c.name} />
           <ClusterRisks cluster={c.name} />
         </div>
-      </div>
-    </div>
+      }
+    />
   );
 }
 
-// ---- Attention strip -----------------------------------------------------------
+function stateWord(c: ClusterDTO): string {
+  if (c.state === "Synced") return "Connected";
+  if (c.state === "Degraded") return "Connected with notes";
+  if (c.state === "Stale") return "Stale";
+  return c.state;
+}
 
-type SummaryForStrip = {
-  workloads: VerdictObservation | null;
-  pods: VerdictObservation | null;
-  warningEvents: number | null;
-  nodes: VerdictObservation | null;
-  helmAvailable: boolean;
-  failedReleases: number | null;
-  flux: { present: boolean; notReady: number; suspended: number } | null;
-  fluxError: boolean;
-};
+// ---- attention ---------------------------------------------------------------------
 
-function AttentionStrip({
-  cluster,
-  summary,
-  board,
-  clusterState,
-  loading,
-}: {
-  cluster: string;
-  summary: SummaryForStrip | null;
-  board: BoardEntry;
-  clusterState: string;
-  loading: boolean;
-}) {
+// Each area links to the lens it came from, with that lens's attention filter.
+function goArea(id: Area["id"]) {
   const nav = useFleet.getState();
+  switch (id) {
+    case "workloads": nav.setSection("workloads"); nav.setWorkloadsNeedsAttention(true); break;
+    case "pods": nav.setSection("pods"); nav.setPodsNeedsAttention(true); break;
+    case "events": nav.setSection("events"); nav.setWarningsOnly(true); break;
+    case "nodes": nav.setSection("nodes"); break;
+    case "helm": nav.setSection("helm"); break;
+    case "flux": nav.openFlux("reconciliation"); break;
+    case "argo": nav.openArgo("applications"); break;
+  }
+}
 
-  function goWorkloads() {
-    nav.setSection("workloads");
-    nav.setWorkloadsNeedsAttention(true);
-  }
-  function goPods() {
-    nav.setSection("pods");
-    nav.setPodsNeedsAttention(true);
-  }
-  function goEvents() {
-    nav.setSection("events");
-    nav.setWarningsOnly(true);
-  }
-  function goNodes() {
-    nav.setSection("nodes");
-  }
-  function goHelm() {
-    nav.setSection("helm");
-  }
-  function goGitOps() {
-    nav.setSection("gitops");
-  }
-  function goArgo() {
-    nav.setSection("argo");
-  }
-  function goNetwork() {
-    nav.setSection("gatewayApi");
-  }
-
-  const fluxTileTitle = (() => {
-    const suspended = summary?.flux?.suspended ?? 0;
-    return suspended > 0 ? `${suspended} suspended` : undefined;
-  })();
-
-  const tiles: Array<{
-    key: string;
-    value: string;
-    label: string;
-    variant: "danger" | "warning" | "success" | "info" | "neutral";
-    onClick?: () => void;
-    hidden?: boolean;
-    title?: string;
-  }> = [
-    verdictTile("workloads", "workloads need attention", summary?.workloads ?? null, loading, goWorkloads),
-    verdictTile("pods", "pods need attention", summary?.pods ?? null, loading, goPods),
-    // Warning events are evidence, not faults: a count, never a lit tone.
-    { key: "events", value: tileValue(summary?.warningEvents ?? null, loading), label: "warning events", variant: "neutral", onClick: goEvents },
-    verdictTile("nodes", "nodes need attention", summary?.nodes ?? null, loading, goNodes),
-    { key: "helm", value: tileValue(summary?.failedReleases ?? null, loading), label: "failed releases", variant: toneFor(summary?.failedReleases, "danger", loading), onClick: goHelm, hidden: !(summary?.helmAvailable ?? false) },
-    { key: "flux", value: tileValue(summary?.flux != null ? summary.flux.notReady : null, loading), label: "flux not ready", variant: toneFor(summary?.flux?.notReady, "danger", loading), onClick: goGitOps, hidden: !(summary?.flux?.present ?? false) && !(summary?.fluxError ?? false), title: (summary?.fluxError && !summary?.flux) ? "flux summary failed to load" : fluxTileTitle },
-    { key: "argo", value: board?.argo ? String(board.argo.broken) : "—", label: "argo degraded", variant: board?.argo?.broken ? "warning" : "success", onClick: goArgo, hidden: !board?.argo },
-    { key: "gateway", value: gatewayTileValue(board), label: "gateway issues", variant: gatewayTileTone(board), onClick: goNetwork, hidden: board?.gateway?.served === false || (!board?.gateway && clusterState === "Synced") },
-    { key: "freshness", value: clusterState === "Synced" ? "connected" : clusterState.toLowerCase(), label: "connection", variant: clusterState === "Synced" ? "neutral" : "warning", title: cluster },
-  ];
-
-  const visibleTiles = tiles.filter((t) => !t.hidden);
-
+function AttentionSection({ cluster, areas }: { cluster: string; areas: Area[] }) {
+  const lit = areas.filter((a) => a.state === "attention");
+  const gaps = areas.filter((a) => a.state === "unreadable" || a.state === "unverified");
+  const loadingAll = areas.every((a) => a.state === "loading");
   return (
-    <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 16 }}>
-      {visibleTiles.map((tile) => (
-        <StatTile
-          key={tile.key}
-          value={tile.value}
-          label={tile.label}
-          variant={tile.variant}
-          onClick={tile.onClick}
-          title={tile.title}
-        />
-      ))}
-    </div>
-  );
-}
-
-function StatTile({
-  value,
-  label,
-  variant,
-  onClick,
-  title: tileTitle,
-}: {
-  value: string;
-  label: string;
-  variant: "danger" | "warning" | "success" | "info" | "neutral";
-  onClick?: () => void;
-  title?: string;
-}) {
-  const isLoading = value === "—";
-  const countColor = isLoading
-    ? "var(--color-text-tertiary)"
-    : variant === "danger"
-      ? "var(--color-text-danger)"
-      : variant === "warning"
-        ? "var(--color-text-warning)"
-        : variant === "success"
-          ? "var(--color-text-success)"
-          : variant === "neutral"
-            ? "var(--color-text-primary)"
-            : "var(--color-text-info)";
-
-  return (
-    <button
-      onClick={onClick}
-      title={tileTitle ?? (value === "—" ? "failed to load" : undefined)}
-      disabled={!onClick}
-      style={{
-        display: "flex",
-        flexDirection: "column",
-        alignItems: "flex-start",
-        gap: 2,
-        padding: "6px 10px",
-        border: "0.5px solid var(--color-border-tertiary)",
-        borderRadius: 3,
-        background: "var(--color-background-primary)",
-        cursor: onClick ? "pointer" : "default",
-        minWidth: 104,
-      }}
-    >
-      <span style={{ fontSize: 17, fontWeight: 500, color: countColor, lineHeight: 1 }}>
-        {value}
-      </span>
-      <span style={{ fontSize: 10, color: "var(--color-text-tertiary)", lineHeight: 1 }}>{label}</span>
-    </button>
-  );
-}
-
-// verdictTile words a migrated domain's observation: the attention count in
-// the tone of its worst verdict, "+" on a capped read, and an explicit
-// "unverified" rather than a reassuring zero when the read was capped or
-// some rows could not be classified.
-function verdictTile(key: string, label: string, o: VerdictObservation | null, loading: boolean, onClick: () => void) {
-  if (loading || !o) return { key, value: "—", label, variant: "info" as const, onClick };
-  const d = describeObservation(o);
-  const asOf = asOfText(o);
-  if (d.attention > 0) return { key, value: `${d.attention}${o.coverage === "partial" ? "+" : ""}`, label, variant: (d.tone === "danger" ? "danger" : "warning") as "danger" | "warning", onClick, title: [`${o.counts.fault} fault · ${o.counts.degraded} degraded${o.counts.unknown ? ` · ${o.counts.unknown} unverified` : ""}`, asOf].filter(Boolean).join(" · ") };
-  if (!d.quiet) return { key, value: "?", label: `${label} · ${d.text}`, variant: "neutral" as const, onClick, title: asOf || undefined };
-  return { key, value: "0", label, variant: "neutral" as const, onClick, title: asOf || undefined };
-}
-
-function tileValue(count: number | null | undefined, loading: boolean): string {
-  if (loading || count == null) return "—";
-  return String(count);
-}
-
-// A zero is neutral, never success: absence of a fault is not evidence of health.
-function toneFor(count: number | null | undefined, alertTone: "danger" | "warning", loading: boolean): "danger" | "warning" | "neutral" | "info" {
-  if (loading || count == null) return "info";
-  return count > 0 ? alertTone : "neutral";
-}
-
-function gatewayTileValue(board: BoardEntry): string {
-  const g = board?.gateway;
-  if (!g) return "—";
-  const broken = (g.brokenRoutes ?? 0) + g.unprogrammed;
-  return String(broken);
-}
-
-function gatewayTileTone(board: BoardEntry): "danger" | "warning" | "success" | "info" {
-  const g = board?.gateway;
-  if (!g) return "info";
-  return (g.brokenRoutes ?? 0) + g.unprogrammed > 0 ? "warning" : "success";
-}
-
-function NextActions({
-  summary,
-  board,
-  clusterState,
-}: {
-  summary: SummaryForStrip | null;
-  board: BoardEntry;
-  clusterState: string;
-}) {
-  const nav = useFleet.getState();
-  const actions: Array<{ label: string; detail: string; run: () => void; tone: string }> = [];
-  const wd = summary?.workloads ? describeObservation(summary.workloads) : null;
-  const pd = summary?.pods ? describeObservation(summary.pods) : null;
-  if (wd && wd.attention > 0) actions.push({ label: "workloads", detail: wd.text, run: () => { nav.setSection("workloads"); nav.setWorkloadsNeedsAttention(true); }, tone: wd.tone === "danger" ? "var(--color-text-danger)" : "var(--color-text-warning)" });
-  if (pd && pd.attention > 0) actions.push({ label: "pods", detail: pd.text, run: () => { nav.setSection("pods"); nav.setPodsNeedsAttention(true); }, tone: pd.tone === "danger" ? "var(--color-text-danger)" : "var(--color-text-warning)" });
-  if ((summary?.warningEvents ?? 0) > 0) actions.push({ label: "events", detail: `${summary?.warningEvents} warnings`, run: () => { nav.setSection("events"); nav.setWarningsOnly(true); }, tone: "var(--color-text-warning)" });
-  if ((summary?.flux?.notReady ?? 0) > 0 || (summary?.flux?.suspended ?? 0) > 0) actions.push({ label: "flux", detail: `${summary?.flux?.notReady ?? 0} not ready · ${summary?.flux?.suspended ?? 0} suspended`, run: () => nav.setSection("gitops"), tone: "var(--color-text-warning)" });
-  if ((board?.argo?.broken ?? 0) > 0) actions.push({ label: "argo", detail: `${board?.argo?.broken} degraded`, run: () => nav.setSection("argo"), tone: "var(--color-text-warning)" });
-  if (((board?.gateway?.brokenRoutes ?? 0) + (board?.gateway?.unprogrammed ?? 0)) > 0) actions.push({ label: "gateway", detail: `${(board?.gateway?.brokenRoutes ?? 0) + (board?.gateway?.unprogrammed ?? 0)} issues`, run: () => nav.setSection("gatewayApi"), tone: "var(--color-text-warning)" });
-  if (clusterState !== "Synced") actions.push({ label: "watch", detail: clusterState.toLowerCase(), run: () => nav.setSection("overview"), tone: "var(--color-text-warning)" });
-
-  return (
-    <Section title="Needs Attention">
-      {actions.length === 0 ? (
-        <span style={{ color: "var(--color-text-success)", fontSize: 12, fontFamily: "var(--font-mono)" }}>nothing urgent</span>
-      ) : actions.slice(0, 5).map((a) => (
-        <button key={a.label} onClick={a.run} style={{ display: "grid", gridTemplateColumns: "84px 1fr", gap: 10, alignItems: "center", border: "0.5px solid var(--color-border-tertiary)", background: "var(--color-background-primary)", color: "var(--color-text-secondary)", padding: "5px 8px", cursor: "pointer", fontFamily: "var(--font-mono)", fontSize: 11, textAlign: "left" }}>
-          <span style={{ color: a.tone }}>{a.label}</span>
-          <span>{a.detail}</span>
-        </button>
-      ))}
-    </Section>
+    <section aria-label="Attention" className="ov-section">
+      <h3 className="t-section-label">Attention</h3>
+      {loadingAll ? <span className="t-secondary">Reading {cluster}…</span> : (
+        <div className="ov-areas">
+          {areas.map((a) => (
+            <button key={a.id} className="ov-area" data-state={a.state} onClick={() => goArea(a.id)} title={`Open ${a.label}`}>
+              <span className="ov-area-label">{a.label}</span>
+              <span className="ov-area-text" style={{ color: a.state === "attention" ? (a.tone === "danger" ? "var(--color-text-danger)" : "var(--color-text-warning)") : a.state === "unreadable" ? "var(--color-text-warning)" : undefined }}>
+                {a.state === "attention" && a.tone === "danger" ? "▲ " : ""}{a.text}
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
+      {!loadingAll && lit.length === 0 && (
+        <span className="t-secondary">
+          {gaps.length > 0
+            ? `No attention found in the ${areas.length - gaps.length} area${areas.length - gaps.length === 1 ? "" : "s"} read; ${gaps.length} could not be established.`
+            : `No attention found in the ${areas.length} areas read.`}
+        </span>
+      )}
+    </section>
   );
 }
 
 function CriticalEvents({ cluster }: { cluster: string }) {
   const [events, setEvents] = useState<EventRowDTO[] | null>(null);
+  // A failed read is not "no warning events".
+  const [failed, setFailed] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     setEvents(null);
+    setFailed(null);
     fetchEventsSnapshot(cluster, "")
       .then((result) => {
         if (cancelled) return;
+        const err = (result as { error?: string }).error;
+        if (err) { setFailed(err); setEvents([]); return; }
         const warnings = (result.events ?? [])
           .filter((e) => e.type === "Warning")
           .sort((a, b) => b.lastSeenUnix - a.lastSeenUnix)
           .slice(0, 5);
         setEvents(warnings);
       })
-      .catch(() => {
-        if (!cancelled) setEvents([]);
+      .catch((e) => {
+        if (!cancelled) { setFailed(String(e?.message ?? e ?? "read failed")); setEvents([]); }
       });
     return () => {
       cancelled = true;
@@ -366,11 +205,13 @@ function CriticalEvents({ cluster }: { cluster: string }) {
   };
 
   return (
-    <Section title="Critical Events">
+    <Section title="Recent warning events">
       {events === null ? (
-        <span style={{ color: "var(--color-text-tertiary)", fontSize: 12, fontFamily: "var(--font-mono)" }}>checking events…</span>
+        <span className="t-secondary">Reading events…</span>
+      ) : failed ? (
+        <span className="t-body" style={{ color: "var(--color-text-warning)", overflowWrap: "anywhere" }}>Events could not be read: {failed}</span>
       ) : events.length === 0 ? (
-        <span style={{ color: "var(--color-text-success)", fontSize: 12, fontFamily: "var(--font-mono)" }}>no warning events</span>
+        <span className="t-secondary">No warning events in the current read.</span>
       ) : events.map((event, i) => (
         <button
           key={`${event.namespace}/${event.kind}/${event.name}/${event.reason}/${i}`}
@@ -391,14 +232,14 @@ function CriticalEvents({ cluster }: { cluster: string }) {
             textAlign: "left",
           }}
         >
-          <span style={{ color: "var(--color-text-warning)" }}>{event.count > 1 ? `x${event.count}` : "warn"}</span>
+          <span style={{ color: "var(--color-text-secondary)" }}>{event.count > 1 ? `×${event.count}` : "warning"}</span>
           <span style={{ ...ellipsis }}>{event.reason}</span>
           <span style={{ color: "var(--color-text-tertiary)", ...ellipsis }}>{event.namespace}/{event.name}</span>
           <span style={{ minWidth: 0, ...ellipsis }}>{event.message}</span>
         </button>
       ))}
       {events && events.length > 0 && (
-        <button onClick={() => openEvents()} style={{ ...quietBtn, alignSelf: "flex-start" }}>open warnings</button>
+        <button className="l-btn" onClick={() => openEvents()} style={{ alignSelf: "flex-start" }}>Open warning events</button>
       )}
     </Section>
   );
@@ -456,11 +297,11 @@ function ClusterRisks({ cluster }: { cluster: string }) {
   };
 
   return (
-    <Section title="Cluster Risks">
+    <Section title="Resource risks">
       {risks === null ? (
-        <span style={{ color: "var(--color-text-tertiary)", fontSize: 12, fontFamily: "var(--font-mono)" }}>checking resources…</span>
+        <span className="t-secondary">Reading resources…</span>
       ) : risks.length === 0 && unreadable.length === 0 ? (
-        <span style={{ color: "var(--color-text-success)", fontSize: 12, fontFamily: "var(--font-mono)" }}>no resource risks found</span>
+        <span className="t-secondary">No resource risks found in the {CLUSTER_RISK_REFS.length} kinds read.</span>
       ) : risks.slice(0, 6).map((r) => (
         <button
           key={`${r.ref.group}/${r.ref.plural}`}
@@ -487,11 +328,13 @@ function ClusterRisks({ cluster }: { cluster: string }) {
           <span style={{ flex: "1 1 220px", minWidth: 0, color: "var(--color-text-tertiary)", ...ellipsis }}>{r.sample}</span>
         </button>
       ))}
+      {risks !== null && risks.length > 6 && <span className="t-secondary">+{risks.length - 6} more kinds with risks</span>}
       {risks !== null && unreadable.length > 0 && (
         <span
           data-testid="risks-unreadable"
           title={unreadable.join(", ")}
-          style={{ color: "var(--color-text-warning)", fontSize: 12, fontFamily: "var(--font-mono)" }}
+          className="t-body"
+          style={{ color: "var(--color-text-warning)" }}
         >
           {unreadable.length} kind{unreadable.length === 1 ? "" : "s"} could not be read - risks there are unknown
         </span>
@@ -504,10 +347,10 @@ function ClusterRisks({ cluster }: { cluster: string }) {
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <div style={{ marginBottom: 16 }}>
-      <div style={{ fontSize: 10, color: "var(--color-text-tertiary)", marginBottom: 6 }}>{title}</div>
+    <section aria-label={title} className="ov-section">
+      <h3 className="t-section-label">{title}</h3>
       <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>{children}</div>
-    </div>
+    </section>
   );
 }
 
@@ -519,21 +362,16 @@ function freshnessText(c: ClusterDTO): string {
   return c.state.toLowerCase();
 }
 
-function freshnessTone(c: ClusterDTO): string {
-  return c.state === "Synced" ? "var(--color-text-success)" : c.state === "Failed" ? "var(--color-text-danger)" : "var(--color-text-warning)";
-}
-
 function formatAge(seconds: number): string {
   if (seconds < 60) return `${seconds}s ago`;
   if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
   return `${Math.floor(seconds / 3600)}h ago`;
 }
 
-function fluxCapability(summary: SummaryForStrip | null): string {
-  if (!summary?.flux?.present) return "not detected";
-  const bits = [`${summary.flux.notReady} not ready`];
-  if (summary.flux.suspended > 0) bits.push(`${summary.flux.suspended} suspended`);
-  return bits.join(" · ");
+function fluxCapability(c: ClusterDTO, flux: import("../store/fleet").LensCount): string {
+  if (flux === "unreadable") return c.fluxPresent ? "installed · summary could not be read" : "summary could not be read";
+  if (flux === "absent") return "not detected";
+  return flux > 0 ? `${flux} not ready` : "none not ready";
 }
 
 function gatewayCapability(c: ClusterDTO, board: BoardEntry): string {
@@ -544,38 +382,20 @@ function gatewayCapability(c: ClusterDTO, board: BoardEntry): string {
   if (issues > 0) return `${issues} issues · ${g.routes ?? "?"} routes`;
   return g.routes != null ? `${g.routes} routes` : `${g.gateways} gateways`;
 }
-function Row({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div style={{ display: "flex", gap: 8, fontSize: 12 }}>
-      <span style={{ color: "var(--color-text-tertiary)", width: 72 }}>{label}</span>
-      <span style={{ fontWeight: 500 }}>{children}</span>
-    </div>
-  );
-}
-
 function Usage({ frac }: { frac: number | null }) {
   if (frac == null) return <span style={{ color: "var(--color-text-tertiary)" }}>—</span>;
   const pct = Math.max(0, Math.round(frac * 100));
-  const color = pct >= 90 ? "var(--color-text-danger)" : pct >= 75 ? "var(--color-text-warning)" : "var(--color-text-success)";
+  // Used is a measurement: neutral until it is high - never a green "fine".
+  const color = pct >= 90 ? "var(--color-text-danger)" : pct >= 75 ? "var(--color-text-warning)" : "var(--color-text-tertiary)";
   return (
     <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
-      <span>{pct}%</span>
+      <span>{pct >= 90 ? "▲ " : ""}{pct}%</span>
       <span style={{ width: 80, height: 4, background: "var(--color-background-secondary)", borderRadius: 2, overflow: "hidden" }}>
         <span style={{ display: "block", height: "100%", width: `${Math.min(100, Math.max(0, pct))}%`, background: color }} />
       </span>
     </span>
   );
 }
-
-const quietBtn: React.CSSProperties = {
-  fontSize: 10,
-  padding: "2px 8px",
-  borderRadius: 4,
-  cursor: "pointer",
-  border: "0.5px solid var(--color-border-tertiary)",
-  background: "var(--color-background-primary)",
-  color: "var(--color-text-secondary)",
-};
 
 function MonitoringLine({ dto, loading, onRefresh }: { dto: MetricsDTO | null; loading: boolean; onRefresh: () => void }) {
   let text: string;

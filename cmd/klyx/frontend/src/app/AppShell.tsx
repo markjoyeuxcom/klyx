@@ -4,7 +4,6 @@ import { NavBand } from "../chrome/NavBand";
 import { ShortcutsOverlay } from "../chrome/ShortcutsOverlay";
 import { FleetSpine, spineOrder } from "../chrome/FleetSpine";
 import { TopBar } from "../chrome/TopBar";
-import { TriageTape } from "../chrome/TriageTape";
 import { FleetView } from "../fleet/FleetView";
 import { FleetPromotion } from "../fleet/FleetPromotion";
 import { FleetExpiry } from "../fleet/FleetExpiry";
@@ -15,6 +14,7 @@ import { ClusterDetail } from "../cluster/ClusterDetail";
 import { CommandPalette, getPaletteOpen } from "../chrome/CommandPalette";
 import { ActionToast } from "../chrome/ActionToast";
 import { back, forward } from "../nav/history";
+import { useClusterAttention } from "../nav/attention";
 
 // AppShell owns the frame (redesign spec §1): an 8px inset, the 36px mast,
 // then the fleet spine beside the 32px navigation band and the workspace,
@@ -63,6 +63,9 @@ export function handleShellMouse(e: MouseEvent): void {
 
 export function AppShell() {
   const route = useFleet((s) => s.route);
+  // The shared cluster attention summary (spec §4) replaces the triage tape:
+  // read while a cluster is open, shown through the tree and the mast.
+  useClusterAttention(route.name === "cluster" ? route.cluster : null);
 
   useEffect(() => {
     window.addEventListener("keydown", handleShellKey);
@@ -80,7 +83,6 @@ export function AppShell() {
         <div className="shell-main">
           <NavBand />
           <main className="shell-workspace" aria-label="Workspace">
-            {route.name === "cluster" && <TriageTape cluster={route.cluster} />}
             <div style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
               {route.name === "fleet" ? (route.view === "promotion" ? <FleetPromotion /> : route.view === "expiry" ? <FleetExpiry /> : <FleetView />) : route.name === "forwards" ? <ForwardsView /> : route.name === "activity" ? <ActivityView /> : route.name === "settings" ? <SettingsView /> : <ClusterDetail />}
             </div>

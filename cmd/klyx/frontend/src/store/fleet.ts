@@ -91,14 +91,18 @@ export type FleetBoardEntry = {
   gateway?: { served: boolean; gateways: number; routes: number | null; brokenRoutes: number | null; unprogrammed: number } | null;
 };
 
-// LensCount is one triage-tape lens: a real count, "absent" (the tool is not
-// installed - expected, excluded from the tape), or "unreadable" (the fetch
-// failed - the tape must say so rather than implying quiet).
+// LensCount is one area of the cluster attention summary: a real count,
+// "absent" (the tool is not installed - expected, excluded), or "unreadable"
+// (the read failed - never implied quiet).
 export type LensCount = number | "absent" | "unreadable";
-// Migrated domains carry their verdict counts and coverage, so the tape can
+// Migrated domains carry their verdict counts and coverage, so a surface can
 // tell "quiet" from "capped" or "could not classify" (health model 1b).
 export type VerdictLensCount = VerdictObservation | "unreadable";
-export type TapeCounts = {
+// AttentionCounts is the shared cluster attention summary (redesign step 7e):
+// one read per cluster entry plus a gentle re-poll, consumed by the
+// navigation tree, the mast Attention button and Overview. It replaced the
+// triage tape's own fetch.
+export type AttentionCounts = {
   workloads: VerdictLensCount;
   pods: VerdictLensCount;
   events: LensCount;
@@ -106,9 +110,10 @@ export type TapeCounts = {
   helm: LensCount;
   flux: LensCount;
   argo: LensCount;
+  namespaces?: number | null;
 };
-type TapeSlice = { cluster: string | null; loading: boolean; counts: TapeCounts };
-const emptyTapeCounts: TapeCounts = { workloads: "unreadable", pods: "unreadable", events: "unreadable", nodes: "unreadable", helm: "unreadable", flux: "unreadable", argo: "unreadable" };
+export type AttentionSlice = { cluster: string | null; loading: boolean; counts: AttentionCounts; at: number | null };
+const emptyAttentionCounts: AttentionCounts = { workloads: "unreadable", pods: "unreadable", events: "unreadable", nodes: "unreadable", helm: "unreadable", flux: "unreadable", argo: "unreadable", namespaces: null };
 
 export type ArgoConditionDTO = { type: string; message: string };
 export type ArgoResourceDTO = { group: string; kind: string; namespace: string; name: string; status: string; health: string };
@@ -804,27 +809,6 @@ export type NavIntent =
   | { kind: "select-flux"; cluster: string; fluxKind: string; namespace: string; name: string }
   | { kind: "access-check"; cluster: string; namespace: string; name: string };
 
-// Overview triage summary — fetched once per cluster open, never mutated by the view slices.
-export type OverviewSummary = {
-  cluster: string | null;
-  loading: boolean;
-  // Verdict counts + coverage; null = the fetch failed for that tile.
-  workloads: VerdictObservation | null;
-  pods: VerdictObservation | null;
-  warningEvents: number | null;
-  nodes: VerdictObservation | null;
-  failedReleases: number | null;       // null also means helm unavailable (tile hidden)
-  helmAvailable: boolean;
-  namespaces: number | null;
-  // flux is null when Flux is not installed (tile hidden), or when the fetch
-  // failed (tile shows "—" via the null count path).
-  flux: { present: boolean; notReady: number; suspended: number } | null;
-  // fluxError is true when the summary read errored (transient RBAC/network) as
-  // opposed to a Flux-free cluster; the tile then shows "—" instead of hiding,
-  // so the failure is honest and never reads as "no Flux".
-  fluxError: boolean;
-};
-
 type FleetState = {
   clusters: ClusterDTO[];
   setClusters: (c: ClusterDTO[]) => void;
@@ -836,10 +820,10 @@ type FleetState = {
   setNewContexts: (n: number) => void;
   fleetBoard: Record<string, FleetBoardEntry>;
   setFleetBoardEntry: (cluster: string, e: FleetBoardEntry) => void;
-  tape: TapeSlice;
-  setTapeLoading: (cluster: string) => void;
-  setTape: (cluster: string, counts: TapeCounts) => void;
-  clearTape: () => void;
+  attention: AttentionSlice;
+  setAttentionLoading: (cluster: string) => void;
+  setAttention: (cluster: string, counts: AttentionCounts) => void;
+  clearAttention: () => void;
   openCluster: (name: string) => void;
   setSection: (s: ClusterSection) => void;
   openArgo: (mode?: ArgoViewMode) => void;
@@ -978,10 +962,6 @@ type FleetState = {
   selectHelmRelease: (ref: HelmRef | null) => void;
   setHelmDetail: (ref: HelmRef, history: HelmHistoryEntryDTO[], values: string, historyError?: string | null, valuesError?: string | null) => void;
   clearHelm: () => void;
-  overviewSummary: OverviewSummary;
-  setOverviewSummaryLoading: (cluster: string) => void;
-  setOverviewSummary: (s: OverviewSummary) => void;
-  clearOverviewSummary: () => void;
 };
 
 export const useFleet = create<FleetState>((set) => ({
@@ -995,15 +975,17 @@ export const useFleet = create<FleetState>((set) => ({
   setNewContexts: (newContexts) => set({ newContexts }),
   fleetBoard: {},
   setFleetBoardEntry: (cluster, e) => set((s) => ({ fleetBoard: { ...s.fleetBoard, [cluster]: e } })),
-  tape: { cluster: null, loading: false, counts: emptyTapeCounts },
+  attention: { cluster: null, loading: false, counts: emptyAttentionCounts, at: null },
   // Re-claiming the SAME cluster keeps the existing counts so a re-poll or
-  // manual refresh never flickers the tape back to "checking…".
-  setTapeLoading: (cluster) =>
+  // manual refresh never flickers back to "checking…".
+  setAttentionLoading: (cluster) =>
     set((s) => ({
-      tape: { cluster, loading: true, counts: s.tape.cluster === cluster ? s.tape.counts : emptyTapeCounts },
+      attention: s.attention.cluster === cluster
+        ? { ...s.attention, loading: true }
+        : { cluster, loading: true, counts: emptyAttentionCounts, at: null },
     })),
-  setTape: (cluster, counts) => set({ tape: { cluster, loading: false, counts } }),
-  clearTape: () => set({ tape: { cluster: null, loading: false, counts: emptyTapeCounts } }),
+  setAttention: (cluster, counts) => set({ attention: { cluster, loading: false, counts, at: Date.now() } }),
+  clearAttention: () => set({ attention: { cluster: null, loading: false, counts: emptyAttentionCounts, at: null } }),
   openCluster: (name) => set({ route: { name: "cluster", cluster: name, section: "overview" } }),
   setSection: (section) =>
     set((s) => (s.route.name === "cluster" ? { route: { name: "cluster", cluster: s.route.cluster, section } } : {})),
@@ -1410,8 +1392,4 @@ export const useFleet = create<FleetState>((set) => ({
     return { helm: { ...s.helm, history, values, detailLoading: false, historyError, valuesError } };
   }),
   clearHelm: () => set({ helm: { cluster: null, releases: [], available: true, message: "", loading: false, selected: null, history: [], values: "", detailLoading: false, snapshotAt: null, error: null, historyError: null, valuesError: null } }),
-  overviewSummary: { cluster: null, loading: false, workloads: null, pods: null, warningEvents: null, nodes: null, failedReleases: null, helmAvailable: false, namespaces: null, flux: null, fluxError: false },
-  setOverviewSummaryLoading: (cluster) => set({ overviewSummary: { cluster, loading: true, workloads: null, pods: null, warningEvents: null, nodes: null, failedReleases: null, helmAvailable: false, namespaces: null, flux: null, fluxError: false } }),
-  setOverviewSummary: (s) => set({ overviewSummary: s }),
-  clearOverviewSummary: () => set({ overviewSummary: { cluster: null, loading: false, workloads: null, pods: null, warningEvents: null, nodes: null, failedReleases: null, helmAvailable: false, namespaces: null, flux: null, fluxError: false } }),
 }));

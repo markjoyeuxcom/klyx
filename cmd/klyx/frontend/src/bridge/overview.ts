@@ -1,14 +1,4 @@
 import { summarize, type HealthLike, type VerdictCounts, type VerdictObservation } from "../health/verdict";
-import { useFleet, OverviewSummary } from "../store/fleet";
-import {
-  WorkloadsService,
-  PodsService,
-  EventsService,
-  NodesService,
-  HelmService,
-  GitOpsService,
-} from "../../bindings/github.com/moomora/klyx/internal/appbridge/index.js";
-
 // ---- pure summary math (exported for unit tests) --------------------------------
 
 // Workloads, pods and nodes are counted from the shared backend verdict
@@ -173,57 +163,4 @@ export function summariseSources(src: UnwrappedSources, nsSet: Set<string>): Sum
     },
     nsSet,
   );
-}
-
-/**
- * fetchOverviewSummary fetches all six data sources in parallel, derives counts
- * via summarise(), and writes the result into overviewSummary in the fleet store.
- * Stale-guarded: if the cluster changes before all promises settle, the result is
- * silently dropped.
- */
-export async function fetchOverviewSummary(cluster: string): Promise<void> {
-  useFleet.getState().setOverviewSummaryLoading(cluster);
-
-  const results = await Promise.allSettled([
-    WorkloadsService.ListWorkloads(cluster, ""),
-    PodsService.ListPods(cluster, ""),
-    EventsService.ListEvents(cluster, ""),
-    NodesService.ListNodes(cluster),
-    HelmService.ListHelmReleases(cluster),
-    GitOpsService.GetGitOpsSummary(cluster),
-  ]);
-
-  // Stale guard — cluster may have changed while requests were in flight.
-  if (useFleet.getState().overviewSummary.cluster !== cluster) return;
-
-  const src = unwrapSources(results);
-
-  // Distinct namespaces come from the pods list (the all-namespaces load).
-  const nsSet = new Set<string>();
-  for (const p of src.pods ?? []) {
-    if (p.namespace) nsSet.add(p.namespace);
-  }
-
-  const out = summariseSources(src, nsSet);
-  const obs = observations(src, out);
-
-  // Per-tile degradation: a failed source renders null ("?"), never a fake 0.
-  const summary: OverviewSummary = {
-    cluster,
-    loading: false,
-    workloads: obs.workloads,
-    pods: obs.pods,
-    warningEvents: src.events ? out.warningEvents : null,
-    nodes: obs.nodes,
-    helmAvailable: out.helmAvailable,
-    failedReleases: out.failedReleases,
-    namespaces: out.namespaces > 0 ? out.namespaces : null,
-    flux: out.flux,
-    // fluxError distinguishes a failed summary read (transient RBAC/network,
-    // carried as a non-empty error) from a Flux-free cluster - the tile shows
-    // "—" rather than hiding, so the failure never reads as "no Flux".
-    fluxError: !!(src.flux && src.flux.error),
-  };
-
-  useFleet.getState().setOverviewSummary(summary);
 }

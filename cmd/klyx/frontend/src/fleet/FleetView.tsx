@@ -72,7 +72,7 @@ export function FleetView() {
           {unverified > 0 && <span className="t-secondary" title="Connected clusters whose workload read failed, was capped or holds unclassified rows">{unverified} unverified</span>}
         </>
       )}
-      headerEnd={clusters.length === 0 ? undefined : <span className="t-secondary">{nodes} nodes · {pods} pods</span>}
+      headerEnd={clusters.length === 0 ? undefined : <span className="t-secondary">{nodes} node{nodes === 1 ? "" : "s"} · {pods} pod{pods === 1 ? "" : "s"}</span>}
       state={clusters.length === 0 ? "empty" : "ready"}
       stateView={
         <EmptyState

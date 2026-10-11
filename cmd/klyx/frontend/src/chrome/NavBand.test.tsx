@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render, fireEvent, screen, within } from "@testing-library/react";
+import { render, fireEvent, screen, within, act } from "@testing-library/react";
 import { useFleet, type ClusterDTO } from "../store/fleet";
 import { NavBand, fitTabs } from "./NavBand";
 import { useListKeys } from "./useListKeys";
@@ -191,6 +191,32 @@ describe("NavBand (redesign step 7a)", () => {
     expect(routeOf()).toEqual({ name: "fleet", view: "expiry" });
     fireEvent.click(screen.getByRole("button", { name: "Fleet board" }));
     expect(routeOf()).toEqual({ name: "fleet" });
+  });
+});
+
+describe("NavBand reads the shared attention summary (step 7e)", () => {
+  const ok = { coverage: "complete" as const, counts: { total: 5, fault: 0, degraded: 0, unknown: 0, progressing: 0, paused: 0, ok: 5, attention: 0 } };
+  it("group counts come from the summary; gaps are named beside them; the mast event opens the tree", () => {
+    useFleet.setState({ route: { name: "cluster", cluster: "dev", section: "overview" },
+      attention: { cluster: "dev", loading: false, at: 1, counts: { workloads: { ...ok, counts: { ...ok.counts, fault: 2, ok: 3, attention: 2 } }, pods: "unreadable", events: 0, nodes: ok, helm: 0, flux: 1, argo: "absent" } } });
+    render(<NavBand />);
+    act(() => { window.dispatchEvent(new Event("klyx:open-nav-tree")); });
+    const tree = screen.getByRole("dialog", { name: "All views" });
+    const wl = within(tree).getByText("Workloads").parentElement as HTMLElement;
+    expect(wl.textContent).toContain("▲ 2");
+    expect(wl.textContent).toContain("unreadable");
+    const flux = within(tree).getByText("Flux CD").parentElement as HTMLElement;
+    expect(flux.textContent).toContain("▲ 1");
+  });
+
+  it("opened by the Attention button, the tree starts on the first destination needing attention", () => {
+    useFleet.setState({ route: { name: "cluster", cluster: "dev", section: "overview" },
+      attention: { cluster: "dev", loading: false, at: 1, counts: { workloads: { ...ok, counts: { ...ok.counts, fault: 2, ok: 3, attention: 2 } }, pods: ok, events: 3, nodes: ok, helm: 0, flux: 0, argo: "absent" } } });
+    render(<NavBand />);
+    act(() => { window.dispatchEvent(new CustomEvent("klyx:open-nav-tree", { detail: { focus: "attention" } })); });
+    // Events (evidence, no tone) is skipped; All workloads (fault) is chosen.
+    const selected = screen.getAllByRole("option").find((o) => o.getAttribute("aria-selected") === "true");
+    expect(selected?.textContent).toMatch(/^All workloads/);
   });
 });
 

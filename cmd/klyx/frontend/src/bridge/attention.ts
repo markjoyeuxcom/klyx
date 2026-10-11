@@ -1,5 +1,5 @@
 import { useFleet } from "../store/fleet";
-import type { TapeCounts } from "../store/fleet";
+import type { AttentionCounts } from "../store/fleet";
 import { unwrapSources, summariseSources, observations } from "./overview";
 import {
   WorkloadsService,
@@ -11,15 +11,14 @@ import {
   ArgoService,
 } from "../../bindings/github.com/moomora/klyx/internal/appbridge/index.js";
 
-// fetchTape populates the persistent triage tape for a cluster: one fetch per
-// cluster ENTRY (not per section switch - the tape survives navigation). Count
-// derivations go through the same unwrapSources + summarise() pipeline as
-// fetchOverviewSummary (bridge/overview.ts) so the tape and the Overview tiles
-// never disagree. Each count degrades independently to "unreadable" (the tape
-// skips what it could not read - it never claims quiet from missing data);
-// helm/flux/argo additionally distinguish a definitive "absent".
-export async function fetchTape(cluster: string): Promise<void> {
-  useFleet.getState().setTapeLoading(cluster);
+// fetchAttention reads the shared cluster attention summary (redesign step
+// 7e): one fetch per cluster ENTRY plus a gentle re-poll, never per section
+// switch. Counts go through the shared unwrapSources + summarise() pipeline
+// (bridge/overview.ts). Each area degrades independently to "unreadable" -
+// nothing claims quiet from missing data - and helm/flux/argo additionally
+// distinguish a definitive "absent".
+export async function fetchAttention(cluster: string): Promise<void> {
+  useFleet.getState().setAttentionLoading(cluster);
 
   const [workloads, pods, events, nodes, helm, flux, argo] = await Promise.allSettled([
     WorkloadsService.ListWorkloads(cluster, ""),
@@ -31,13 +30,16 @@ export async function fetchTape(cluster: string): Promise<void> {
     ArgoService.ListApplications(cluster),
   ]);
 
-  if (useFleet.getState().tape.cluster !== cluster) return; // stale guard
+  if (useFleet.getState().attention.cluster !== cluster) return; // stale guard
 
   const src = unwrapSources([workloads, pods, events, nodes, helm, flux]);
-  const out = summariseSources(src, new Set());
+  // Distinct namespaces come from the all-namespaces pods list.
+  const nsSet = new Set<string>();
+  for (const p of src.pods ?? []) if (p.namespace) nsSet.add(p.namespace);
+  const out = summariseSources(src, nsSet);
   const obs = observations(src, out);
 
-  const counts: TapeCounts = {
+  const counts: AttentionCounts = {
     workloads: obs.workloads ?? "unreadable",
     pods: obs.pods ?? "unreadable",
     events: src.events ? out.warningEvents : "unreadable",
@@ -48,6 +50,9 @@ export async function fetchTape(cluster: string): Promise<void> {
     // A summary read that failed carries `error`: unreadable, never "absent".
     flux: src.flux && !src.flux.error ? (out.flux ? out.flux.notReady : "absent") : "unreadable",
     argo: "unreadable",
+    // Only a complete pods read can count namespaces; a capped one is a lower
+    // bound and an unread one is unknown.
+    namespaces: src.pods && !src.podsPartial ? out.namespaces : null,
   };
 
   if (argo.status === "fulfilled" && argo.value) {
@@ -57,5 +62,9 @@ export async function fetchTape(cluster: string): Promise<void> {
     else counts.argo = (a.message ?? "").includes("not detected") ? "absent" : "unreadable";
   }
 
-  useFleet.getState().setTape(cluster, counts);
+  useFleet.getState().setAttention(cluster, counts);
 }
+
+// A gentle re-poll keeps the summary honest about a cluster that breaks while
+// you work elsewhere in it, without hammering seven list endpoints.
+export const attentionRepollMs = 60_000;

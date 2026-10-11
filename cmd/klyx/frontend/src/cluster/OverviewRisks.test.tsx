@@ -8,7 +8,7 @@ vi.mock("../bridge/metrics", () => ({
   getClusterMetrics: vi.fn(),
   getClusterSparklines: vi.fn().mockResolvedValue({ available: false, message: "metrics unavailable", cpu: [], mem: [] }),
 }));
-vi.mock("../bridge/overview", () => ({ fetchOverviewSummary: vi.fn().mockResolvedValue(undefined) }));
+vi.mock("../bridge/attention", () => ({ fetchAttention: vi.fn().mockResolvedValue(undefined), attentionRepollMs: 60000 }));
 vi.mock("../bridge/fleetboard", () => ({ fetchFleetBoard: vi.fn().mockResolvedValue(undefined) }));
 vi.mock("../bridge/events", () => ({ fetchEventsSnapshot: vi.fn().mockResolvedValue({ namespaces: [], events: [] }) }));
 const listInstancePage = vi.fn();
@@ -26,13 +26,15 @@ describe("Overview cluster risks honesty", () => {
   beforeEach(() => {
     listInstancePage.mockReset();
     useFleet.setState({ metrics: { cluster: null, dto: null, loading: false } });
-    useFleet.getState().clearOverviewSummary();
+    useFleet.getState().clearAttention();
   });
 
   it("claims no risks only when every kind was read", async () => {
     listInstancePage.mockResolvedValue({ items: [], nextToken: "" });
     const { findByText, queryByTestId } = render(<Overview c={dto} />);
-    expect(await findByText("no resource risks found")).toBeTruthy();
+    // neutral and scoped to the kinds read - never a green all-clear
+    const line = await findByText(/No resource risks found in the \d+ kinds read\./);
+    expect(line.className).toContain("t-secondary");
     expect(queryByTestId("risks-unreadable")).toBeNull();
   });
 
@@ -45,6 +47,6 @@ describe("Overview cluster risks honesty", () => {
     const note = await findByTestId("risks-unreadable");
     expect(note.textContent).toMatch(/2 kinds could not be read/);
     expect(note.getAttribute("title")).toBe("Ingress, Job");
-    await waitFor(() => expect(queryByText("no resource risks found")).toBeNull());
+    await waitFor(() => expect(queryByText(/No resource risks found/)).toBeNull());
   });
 });
