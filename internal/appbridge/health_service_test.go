@@ -3,6 +3,8 @@ package appbridge
 import (
 	"testing"
 
+	"github.com/moomora/klyx/internal/certmanager"
+	"github.com/moomora/klyx/internal/healthsrc"
 	"github.com/moomora/klyx/internal/observe"
 )
 
@@ -14,8 +16,12 @@ func TestHealthSinkEventNames(t *testing.T) {
 	em := &recEmitter{}
 	s := NewHealthSink(em)
 	s.Summary(observe.Summary{Cluster: "dev"})
-	s.Rows(observe.Rows{Cluster: "dev", Task: "pods", Part: observe.Part{ID: "pods"}})
-	if len(em.names) != 2 || em.names[0] != "health:summary" || em.names[1] != "health:rows:dev:pods/pods" {
+	// A part no lens reads yet (no converter) is not emitted; a converted
+	// part goes out on its task/part name (slice 3 §2).
+	s.Rows(observe.Rows{Cluster: "dev", Task: "helm", Part: observe.Part{ID: "releases"}})
+	s.Rows(observe.Rows{Cluster: "dev", Task: healthsrc.TaskCerts, Part: observe.Part{ID: "certificates"},
+		Rows: healthsrc.RowSet[certmanager.Certificate]{}})
+	if len(em.names) != 2 || em.names[0] != "health:summary" || em.names[1] != "health:rows:dev:certs/certificates" {
 		t.Fatalf("events: %v", em.names)
 	}
 }
