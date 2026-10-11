@@ -1,6 +1,6 @@
 # Klyx health slice 1c: the cluster health summary (design addendum, v2.1)
 
-Date: 2026-10-11. Status: v2 APPROVED WITH CHANGES by Codex. v2.1 applies the four required amendments, A1-A4: part versions in §4, the reflector restart barrier in §3.1, route identity in §1.3, and the mismatch fallback in §4. It also applies the optional clarifications. Slice 1 may start once these are confirmed. Parent: `2026-10-10-klyx-redesign-health-model.md` §4 (binding requirements R1-R6). Consumer: `2026-10-10-klyx-redesign-layout-nav.md` §4 (fault discovery). The step 7e frontend summary is what this replaces.
+Date: 2026-10-11. Status: APPROVED by Codex (v2.1, confirmed against 1adaa7f). v2.1 applies the four required amendments, A1-A4: part versions in §4, the reflector restart barrier in §3.1, route identity in §1.3, and the mismatch fallback in §4. It also applies the optional clarifications. Slice 1 may start once these are confirmed. Parent: `2026-10-10-klyx-redesign-health-model.md` §4 (binding requirements R1-R6). Consumer: `2026-10-10-klyx-redesign-layout-nav.md` §4 (fault discovery). The step 7e frontend summary is what this replaces.
 
 v1 (e92a9ca) got REWORK with eight required changes (C1-C8). The Observer direction and a budget of about 190 watches were accepted in principle. v2 changes the publication, coverage and acceptance contracts. Each section names the change it answers.
 
@@ -215,10 +215,10 @@ Two different counters:
 
 **Throttle.** Any change marks the Observer dirty. A publish is scheduled at `max(now, lastPublish + 1s)`, so the maximum delivery delay is 1s. One publish tick emits:
 
-1. the summary at its `Seq`, with every part's `Obs`;
+1. the summary at its `Seq`, with every part's `Obs` and `Ver`;
 2. for each part whose `Ver` advanced and which has an open lens subscription, its rows with the counts from the same capture (atomic count + rows).
 
-**One number per task (C7, both directions).** For a task whose rows are on screen, the lens header, the nav tree and the mast's task state all take that task's counts from the rows payload. For other tasks they come from the summary. Both are produced by one capture per tick, so they normally carry the same `Obs`.
+**One number per task (C7, both directions).** For a task whose rows are on screen, the lens header, the nav tree and the mast's task state all take that task's counts from the rows payload. For other tasks they come from the summary. Both are produced by one capture per tick, so they normally carry the same `Ver` and `EvaluatedAt`.
 
 - **Rows newer than the summary:** their counts are used at once.
 - **Summary newer than the rows (A4).** A part's `Ver` in the summary above the rows' `Ver` opens a mismatch, and its deadline is fixed at the first unresolved mismatch: **1s**. Later summary ticks never reset it.
@@ -282,7 +282,7 @@ type Part struct {
 	Counts            *Counts    // verdict parts
 	Native            *NativeCounts
 	Evidence          *int
-	Top               []Ref      // worst first, max 5; attachments for route parts
+	Top               []Ref      // worst first, max 5; route parts: one ref per route UID, naming its worst parent
 	Obs               uint64     // data watermark (informational)
 	Ver               uint64     // part version: orders counts and rows (§4)
 	AsOf              time.Time  // MIN of its kinds' AsOf (the oldest freshness, conservative)
@@ -381,7 +381,7 @@ Each slice is reviewed before the next starts, and the app stays runnable with t
 
 ### Slice 1. Observer core
 
-`internal/observe` with no real domains: owners and leases, generations and fences, reflector-into-model with the freshness machine (§3.1), `Seq`/`Obs` and atomic capture, the throttle, reclassification, Final and tombstones, the clock.
+`internal/observe` with no real domains: owners and leases, generations and fences, reflector-into-model with the freshness machine (§3.1), `Seq`/`Obs`/`Ver` and atomic capture, the throttle, reclassification, Final and tombstones, the clock.
 
 Tests:
 
