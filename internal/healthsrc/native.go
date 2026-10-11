@@ -50,22 +50,7 @@ type NativeDeps struct {
 // tasks. Their rules are the relocated lens rules (internal/*/rules.go).
 func Native(d NativeDeps) ([]observe.KindSpec, []observe.DomainSpec) {
 	crd := func(name, group, resource, fallback, scope string) observe.KindSpec {
-		return observe.KindSpec{Name: name, GVR: group + "/" + resource, Scope: scope, ExpectedType: &unstructured.Unstructured{},
-			Project: ProjectUnstructured,
-			Probe: func(ctx context.Context) (observe.Probe, error) {
-				return d.Served(ctx, group, resource, fallback)
-			},
-			NewListWatch: func(version string) cache.ListerWatcherWithContext {
-				ri := d.Dyn.Resource(schema.GroupVersionResource{Group: group, Version: version, Resource: resource})
-				return cache.ToListWatcherWithWatchListSemantics(&cache.ListWatch{
-					ListWithContextFunc: func(ctx context.Context, o metav1.ListOptions) (runtime.Object, error) {
-						return ri.List(ctx, o)
-					},
-					WatchFuncWithContext: func(ctx context.Context, o metav1.ListOptions) (watch.Interface, error) {
-						return ri.Watch(ctx, o)
-					},
-				}, d.Dyn).(cache.ListerWatcherWithContext)
-			}}
+		return crdKind(d, name, group, resource, fallback, scope)
 	}
 	kinds := []observe.KindSpec{
 		crd(KindCertificates, "cert-manager.io", "certificates", "v1", "all namespaces"),
@@ -305,4 +290,27 @@ func evalNodePools(cluster string) func(observe.Capture) observe.PartResult {
 		}
 		return r
 	}
+}
+
+// crdKind is one CRD-backed kind: discovery picks its served version (the
+// fallback is only tried when discovery cannot rule it out), the projection
+// drops what no parser reads, and the client's watch-list support is
+// forwarded.
+func crdKind(d NativeDeps, name, group, resource, fallback, scope string) observe.KindSpec {
+	return observe.KindSpec{Name: name, GVR: group + "/" + resource, Scope: scope, ExpectedType: &unstructured.Unstructured{},
+		Project: ProjectUnstructured,
+		Probe: func(ctx context.Context) (observe.Probe, error) {
+			return d.Served(ctx, group, resource, fallback)
+		},
+		NewListWatch: func(version string) cache.ListerWatcherWithContext {
+			ri := d.Dyn.Resource(schema.GroupVersionResource{Group: group, Version: version, Resource: resource})
+			return cache.ToListWatcherWithWatchListSemantics(&cache.ListWatch{
+				ListWithContextFunc: func(ctx context.Context, o metav1.ListOptions) (runtime.Object, error) {
+					return ri.List(ctx, o)
+				},
+				WatchFuncWithContext: func(ctx context.Context, o metav1.ListOptions) (watch.Interface, error) {
+					return ri.Watch(ctx, o)
+				},
+			}, d.Dyn).(cache.ListerWatcherWithContext)
+		}}
 }

@@ -545,8 +545,10 @@ func (c *ClusterConn) startHealth(ctx context.Context) {
 	}
 	kinds, domains := healthsrc.Core(healthsrc.CoreDeps{Cluster: c.name, Typed: c.typed, Meta: c.meta})
 	if c.dyn != nil {
-		nk, nd := healthsrc.Native(healthsrc.NativeDeps{Cluster: c.name, Dyn: c.dyn, Served: c.crdServed})
-		kinds, domains = append(kinds, nk...), append(domains, nd...)
+		nd := healthsrc.NativeDeps{Cluster: c.name, Dyn: c.dyn, Served: c.crdServed}
+		gk, gd := healthsrc.GitOps(nd)
+		nk, ndoms := healthsrc.Native(nd)
+		kinds, domains = append(append(kinds, gk...), nk...), append(append(domains, gd...), ndoms...)
 	}
 	o := observe.New(observe.Config{Cluster: c.name, Sink: sink, Kinds: kinds, Domains: domains, NamespacesKind: healthsrc.KindNamespaces})
 	c.mu.Lock()
