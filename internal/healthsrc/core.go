@@ -182,7 +182,7 @@ func evalWorkloads(cluster string) func(observe.Capture) observe.PartResult {
 		}
 		r := verdictResult(cluster, TaskWorkloads, verdicts, refs)
 		if c.Rows {
-			r.Rows = ws
+			r.Rows = RowSet[workloads.Workload]{Rows: verdictRows(ws, refs), Facts: map[string]any{FactFluxPresent: flux}}
 		}
 		return r
 	}
@@ -208,7 +208,7 @@ func evalPods(cluster string) func(observe.Capture) observe.PartResult {
 		}
 		r := verdictResult(cluster, TaskPods, verdicts, refs)
 		if c.Rows {
-			r.Rows = sums
+			r.Rows = rowSet(verdictRows(sums, refs))
 		}
 		return r
 	}
@@ -229,7 +229,7 @@ func evalNodes(cluster string) func(observe.Capture) observe.PartResult {
 		}
 		r := verdictResult(cluster, TaskNodes, verdicts, refs)
 		if c.Rows {
-			r.Rows = sums
+			r.Rows = rowSet(verdictRows(sums, refs))
 		}
 		return r
 	}

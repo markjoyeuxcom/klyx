@@ -88,15 +88,16 @@ func ReleasesOf(items []any) []helmcli.Release {
 func evalReleases(cluster string) func(observe.Capture) observe.PartResult {
 	return func(c observe.Capture) observe.PartResult {
 		var items []nativeItem
-		var rows []helmcli.Release
+		var rows []Row[helmcli.Release]
 		for _, o := range c.Objects[SnapHelm] {
 			r := o.(helmcli.Release)
-			items = append(items, nativeItem{helmcli.ReleaseRule(r, c.Now), refInput{ns: r.Namespace, name: r.Name}})
-			rows = append(rows, r)
+			it := nativeItem{helmcli.ReleaseRule(r, c.Now), refInput{ns: r.Namespace, name: r.Name}}
+			items = append(items, it)
+			rows = append(rows, nativeRow(it, r))
 		}
 		res := nativeResult(cluster, TaskHelm, "failed or appear stuck", items)
 		if c.Rows {
-			res.Rows = rows
+			res.Rows = rowSet(rows)
 		}
 		return res
 	}

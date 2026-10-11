@@ -90,15 +90,16 @@ func ProjectEndpointSlice(obj any) (any, error) {
 func evalGateways(cluster string) func(observe.Capture) observe.PartResult {
 	return func(c observe.Capture) observe.PartResult {
 		var items []nativeItem
-		var rows []gwapi.GatewayRef
+		var rows []Row[gwapi.GatewayRef]
 		for _, u := range unstructuredOf(c.Objects[KindGateways]) {
 			g := gwapi.ParseGatewayRef(u)
-			items = append(items, nativeItem{gwapi.GatewayRule(g.AcceptedCond, g.ProgrammedCond, g.Generation), refOf(u, KindGateways)})
-			rows = append(rows, g)
+			it := nativeItem{gwapi.GatewayRule(g.AcceptedCond, g.ProgrammedCond, g.Generation), refOf(u, KindGateways)}
+			items = append(items, it)
+			rows = append(rows, nativeRow(it, g))
 		}
 		r := nativeResult(cluster, TaskGateway, "need attention", items)
 		if c.Rows {
-			r.Rows = rows
+			r.Rows = rowSet(rows)
 		}
 		return r
 	}
@@ -149,7 +150,6 @@ func evalRoutes(cluster string) func(observe.Capture) observe.PartResult {
 			}
 		}
 		var atts []observe.Attachment
-		var rows []observe.Attached
 		uidOf := map[string]*nativeRouteRef{}
 		for _, u := range unstructuredOf(c.Objects[KindHTTPRoutes]) {
 			for _, gw := range parents {
@@ -199,12 +199,17 @@ func evalRoutes(cluster string) func(observe.Capture) observe.PartResult {
 			top = append(top, observe.Ref{Cluster: cluster, GVR: ref.gvr, Namespace: a.Namespace, Name: a.Name, UID: a.UID,
 				Parent: a.Parent, Role: a.Role, Label: a.Label, Generation: ref.generation, Route: TaskGateway})
 		}
-		if c.Rows {
-			rows = reduced
-		}
 		res := observe.PartResult{Native: &nc, Top: top}
 		if c.Rows {
-			res.Rows = rows
+			// The reduced attachment carries its captured evaluation (role,
+			// label, inclusion) itself; the row adds the route's identity.
+			rows := make([]Row[observe.Attached], 0, len(reduced))
+			for _, a := range reduced {
+				ref := uidOf[a.UID].ref
+				ref.ns, ref.name, ref.uid = a.Namespace, a.Name, a.UID
+				rows = append(rows, Row[observe.Attached]{Ref: ref.rowRef(), Data: a})
+			}
+			res.Rows = rowSet(rows)
 		}
 		return res
 	}

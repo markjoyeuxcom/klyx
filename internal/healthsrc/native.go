@@ -190,15 +190,16 @@ func refOf(u *unstructured.Unstructured, resource string) refInput {
 func evalCertificates(cluster string) func(observe.Capture) observe.PartResult {
 	return func(c observe.Capture) observe.PartResult {
 		var items []nativeItem
-		var rows []certmanager.Certificate
+		var rows []Row[certmanager.Certificate]
 		for _, u := range unstructuredOf(c.Objects[KindCertificates]) {
 			cert := certmanager.ParseCertificate(u)
-			items = append(items, nativeItem{certmanager.CertificateRule(cert, c.Now), refOf(u, "certificates")})
-			rows = append(rows, cert)
+			it := nativeItem{certmanager.CertificateRule(cert, c.Now), refOf(u, "certificates")}
+			items = append(items, it)
+			rows = append(rows, nativeRow(it, cert))
 		}
 		r := nativeResult(cluster, TaskCerts, "not ready", items)
 		if c.Rows {
-			r.Rows = rows
+			r.Rows = rowSet(rows)
 		}
 		return r
 	}
@@ -207,17 +208,18 @@ func evalCertificates(cluster string) func(observe.Capture) observe.PartResult {
 func evalIssuers(cluster string) func(observe.Capture) observe.PartResult {
 	return func(c observe.Capture) observe.PartResult {
 		var items []nativeItem
-		var rows []certmanager.Issuer
+		var rows []Row[certmanager.Issuer]
 		for _, kind := range []string{KindIssuers, KindClusterIssuers} {
 			for _, u := range unstructuredOf(c.Objects[kind]) {
 				is := certmanager.ParseIssuer(u)
-				items = append(items, nativeItem{certmanager.IssuerRule(is), refOf(u, kind)})
-				rows = append(rows, is)
+				it := nativeItem{certmanager.IssuerRule(is), refOf(u, kind)}
+				items = append(items, it)
+				rows = append(rows, nativeRow(it, is))
 			}
 		}
 		r := nativeResult(cluster, TaskCerts, "not ready", items)
 		if c.Rows {
-			r.Rows = rows
+			r.Rows = rowSet(rows)
 		}
 		return r
 	}
@@ -226,15 +228,16 @@ func evalIssuers(cluster string) func(observe.Capture) observe.PartResult {
 func evalExternalSecrets(cluster string) func(observe.Capture) observe.PartResult {
 	return func(c observe.Capture) observe.PartResult {
 		var items []nativeItem
-		var rows []externalsecrets.ExternalSecret
+		var rows []Row[externalsecrets.ExternalSecret]
 		for _, u := range unstructuredOf(c.Objects[KindExternalSecrets]) {
 			e := externalsecrets.ParseExternalSecret(u, c.Now)
-			items = append(items, nativeItem{externalsecrets.ExternalSecretRule(e), refOf(u, "externalsecrets")})
-			rows = append(rows, e)
+			it := nativeItem{externalsecrets.ExternalSecretRule(e), refOf(u, "externalsecrets")}
+			items = append(items, it)
+			rows = append(rows, nativeRow(it, e))
 		}
 		r := nativeResult(cluster, TaskESO, "not synced or refresh overdue", items)
 		if c.Rows {
-			r.Rows = rows
+			r.Rows = rowSet(rows)
 		}
 		return r
 	}
@@ -243,17 +246,18 @@ func evalExternalSecrets(cluster string) func(observe.Capture) observe.PartResul
 func evalStores(cluster string) func(observe.Capture) observe.PartResult {
 	return func(c observe.Capture) observe.PartResult {
 		var items []nativeItem
-		var rows []externalsecrets.Store
+		var rows []Row[externalsecrets.Store]
 		for _, kind := range []string{KindSecretStores, KindClusterSecretStores} {
 			for _, u := range unstructuredOf(c.Objects[kind]) {
 				s := externalsecrets.ParseStore(u)
-				items = append(items, nativeItem{externalsecrets.StoreRule(s), refOf(u, kind)})
-				rows = append(rows, s)
+				it := nativeItem{externalsecrets.StoreRule(s), refOf(u, kind)}
+				items = append(items, it)
+				rows = append(rows, nativeRow(it, s))
 			}
 		}
 		r := nativeResult(cluster, TaskESO, "not ready", items)
 		if c.Rows {
-			r.Rows = rows
+			r.Rows = rowSet(rows)
 		}
 		return r
 	}
@@ -262,15 +266,16 @@ func evalStores(cluster string) func(observe.Capture) observe.PartResult {
 func evalNodeClaims(cluster string) func(observe.Capture) observe.PartResult {
 	return func(c observe.Capture) observe.PartResult {
 		var items []nativeItem
-		var rows []karpenter.NodeClaim
+		var rows []Row[karpenter.NodeClaim]
 		for _, u := range unstructuredOf(c.Objects[KindNodeClaims]) {
 			cl := karpenter.ParseNodeClaim(u, c.Now)
-			items = append(items, nativeItem{karpenter.ClaimRule(cl), refOf(u, "nodeclaims")})
-			rows = append(rows, cl)
+			it := nativeItem{karpenter.ClaimRule(cl), refOf(u, "nodeclaims")}
+			items = append(items, it)
+			rows = append(rows, nativeRow(it, cl))
 		}
 		r := nativeResult(cluster, TaskKarpenter, "not ready or appear stuck", items)
 		if c.Rows {
-			r.Rows = rows
+			r.Rows = rowSet(rows)
 		}
 		return r
 	}
@@ -283,16 +288,17 @@ func evalNodePools(cluster string) func(observe.Capture) observe.PartResult {
 			perPool[u.GetLabels()[karpenter.LabelNodePool]]++
 		}
 		var items []nativeItem
-		var rows []karpenter.NodePool
+		var rows []Row[karpenter.NodePool]
 		for _, u := range unstructuredOf(c.Objects[KindNodePools]) {
 			p := karpenter.ParseNodePool(u)
 			p.Nodes = perPool[p.Name]
-			items = append(items, nativeItem{karpenter.PoolRule(p), refOf(u, "nodepools")})
-			rows = append(rows, p)
+			it := nativeItem{karpenter.PoolRule(p), refOf(u, "nodepools")}
+			items = append(items, it)
+			rows = append(rows, nativeRow(it, p))
 		}
 		r := nativeResult(cluster, TaskKarpenter, "not ready", items)
 		if c.Rows {
-			r.Rows = rows
+			r.Rows = rowSet(rows)
 		}
 		return r
 	}

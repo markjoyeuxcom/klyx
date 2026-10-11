@@ -62,21 +62,23 @@ func GitOps(d NativeDeps) ([]observe.KindSpec, []observe.DomainSpec) {
 func evalFluxReconciliations(cluster string) func(observe.Capture) observe.PartResult {
 	return func(c observe.Capture) observe.PartResult {
 		var items []nativeItem
-		var rows []flux.Resource
+		var rows []Row[flux.Resource]
 		for _, u := range unstructuredOf(c.Objects[KindKustomizations]) {
 			r := flux.ParseKustomization(u)
-			items = append(items, nativeItem{flux.ReconciliationRule(r), refOf(u, KindKustomizations)})
-			rows = append(rows, r)
+			it := nativeItem{flux.ReconciliationRule(r), refOf(u, KindKustomizations)}
+			items = append(items, it)
+			rows = append(rows, nativeRow(it, r))
 		}
 		for _, u := range unstructuredOf(c.Objects[KindHelmReleases]) {
 			r := flux.ParseHelmRelease(u)
-			items = append(items, nativeItem{flux.ReconciliationRule(r), refOf(u, KindHelmReleases)})
-			rows = append(rows, r)
+			it := nativeItem{flux.ReconciliationRule(r), refOf(u, KindHelmReleases)}
+			items = append(items, it)
+			rows = append(rows, nativeRow(it, r))
 		}
 		// The lens's legacy word: "not ready" still includes progressing.
 		res := nativeResult(cluster, TaskFlux, "not ready", items)
 		if c.Rows {
-			res.Rows = rows
+			res.Rows = rowSet(rows)
 		}
 		return res
 	}
@@ -85,17 +87,18 @@ func evalFluxReconciliations(cluster string) func(observe.Capture) observe.PartR
 func evalFluxSources(cluster string) func(observe.Capture) observe.PartResult {
 	return func(c observe.Capture) observe.PartResult {
 		var items []nativeItem
-		var rows []flux.Source
+		var rows []Row[flux.Source]
 		for _, kind := range fluxSourceKinds {
 			for _, u := range unstructuredOf(c.Objects[kind]) {
 				src := flux.ParseSource(u)
-				items = append(items, nativeItem{flux.SourceRule(src), refOf(u, kind)})
-				rows = append(rows, src)
+				it := nativeItem{flux.SourceRule(src), refOf(u, kind)}
+				items = append(items, it)
+				rows = append(rows, nativeRow(it, src))
 			}
 		}
 		res := nativeResult(cluster, TaskFlux, "not ready", items)
 		if c.Rows {
-			res.Rows = rows
+			res.Rows = rowSet(rows)
 		}
 		return res
 	}
@@ -104,15 +107,16 @@ func evalFluxSources(cluster string) func(observe.Capture) observe.PartResult {
 func evalArgoApps(cluster string) func(observe.Capture) observe.PartResult {
 	return func(c observe.Capture) observe.PartResult {
 		var items []nativeItem
-		var rows []argo.App
+		var rows []Row[argo.App]
 		for _, u := range unstructuredOf(c.Objects[KindApplications]) {
 			a := argo.Parse(u)
-			items = append(items, nativeItem{argo.AppRule(a), refOf(u, KindApplications)})
-			rows = append(rows, a)
+			it := nativeItem{argo.AppRule(a), refOf(u, KindApplications)}
+			items = append(items, it)
+			rows = append(rows, nativeRow(it, a))
 		}
 		res := nativeResult(cluster, TaskArgo, "out of sync or unhealthy", items)
 		if c.Rows {
-			res.Rows = rows
+			res.Rows = rowSet(rows)
 		}
 		return res
 	}
@@ -121,15 +125,16 @@ func evalArgoApps(cluster string) func(observe.Capture) observe.PartResult {
 func evalArgoAppSets(cluster string) func(observe.Capture) observe.PartResult {
 	return func(c observe.Capture) observe.PartResult {
 		var items []nativeItem
-		var rows []argo.ApplicationSet
+		var rows []Row[argo.ApplicationSet]
 		for _, u := range unstructuredOf(c.Objects[KindApplicationSets]) {
 			s := argo.ParseApplicationSet(u)
-			items = append(items, nativeItem{argo.AppSetRule(s), refOf(u, KindApplicationSets)})
-			rows = append(rows, s)
+			it := nativeItem{argo.AppSetRule(s), refOf(u, KindApplicationSets)}
+			items = append(items, it)
+			rows = append(rows, nativeRow(it, s))
 		}
 		res := nativeResult(cluster, TaskArgo, "need attention", items)
 		if c.Rows {
-			res.Rows = rows
+			res.Rows = rowSet(rows)
 		}
 		return res
 	}

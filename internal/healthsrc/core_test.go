@@ -152,7 +152,7 @@ func TestCoreTasksOnTheShopFixture(t *testing.T) {
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		r, ok := s.rows[TaskWorkloads+"/workloads"]
-		return ok && len(r.Rows.([]workloads.Workload)) == r.Part.Counts.Total
+		return ok && len(r.Rows.(RowSet[workloads.Workload]).Rows) == r.Part.Counts.Total
 	})
 
 	// A live change flows through the watch: the crash-looping pod recovers.
@@ -205,17 +205,22 @@ func TestFluxPresenceFactReevaluatesWorkloadOwnership(t *testing.T) {
 			return -1, 0, 0
 		}
 		n := 0
-		for _, w := range r.Rows.([]workloads.Workload) {
-			if w.GitOps != nil {
+		set := r.Rows.(RowSet[workloads.Workload])
+		for _, w := range set.Rows {
+			if w.Data.GitOps != nil {
 				n++
 			}
+		}
+		// the fact the evaluation used travels with its rows (slice 3 §2a)
+		if flux, _ := set.Facts[FactFluxPresent].(bool); flux != (n > 0) && n > 0 {
+			return -2, 0, 0
 		}
 		return n, r.Part.Ver, r.Part.Obs
 	}
 	waitFor(t, "all four workloads read, none with a GitOps owner before detection", func() bool {
 		r, ok := s.rowsOf(TaskWorkloads + "/workloads")
 		n, _, _ := gitops()
-		return ok && len(r.Rows.([]workloads.Workload)) == 4 && n == 0
+		return ok && len(r.Rows.(RowSet[workloads.Workload]).Rows) == 4 && n == 0
 	})
 	_, v0, obs0 := gitops()
 	pods0, _ := s.part(TaskPods)

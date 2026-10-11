@@ -577,3 +577,13 @@ func (o *Observer) Stats() Stats {
 		LastEval:  time.Duration(o.statLastEval.Load()),
 	}
 }
+
+// Cluster is the cluster this Observer observes.
+func (o *Observer) Cluster() string { return o.cfg.Cluster }
+
+// HasPart reports whether task/part is one of this Observer's parts.
+func (o *Observer) HasPart(task, part string) bool {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.partLocked(task, part) != nil
+}

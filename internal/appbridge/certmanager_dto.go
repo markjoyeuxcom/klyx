@@ -8,6 +8,9 @@ import (
 
 // CertificateDTO is the JSON projection of a cert-manager Certificate.
 type CertificateDTO struct {
+	// UID is the object's identity (1c slice 3 §2a): rows key and select by
+	// it, so a same-name recreation is a different row.
+	UID        string   `json:"uid,omitempty"`
 	Namespace  string   `json:"namespace"`
 	Name       string   `json:"name"`
 	Ready      string   `json:"ready"`
@@ -72,12 +75,14 @@ func toCertificateDTO(c certmanager.Certificate, now time.Time) CertificateDTO {
 
 // IssuerDTO is the JSON projection of an Issuer/ClusterIssuer's Ready state.
 type IssuerDTO struct {
-	Kind      string `json:"kind"`
-	Namespace string `json:"namespace"`
-	Name      string `json:"name"`
-	Ready     string `json:"ready"`
-	Reason    string `json:"reason"`
-	Message   string `json:"message"`
+	UID        string `json:"uid,omitempty"`
+	Generation int64  `json:"generation,omitempty"`
+	Kind       string `json:"kind"`
+	Namespace  string `json:"namespace"`
+	Name       string `json:"name"`
+	Ready      string `json:"ready"`
+	Reason     string `json:"reason"`
+	Message    string `json:"message"`
 	// Rule is the relocated lens rule (1c addendum §2).
 	Rule RuleDTO `json:"rule"`
 }

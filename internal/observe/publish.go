@@ -1,6 +1,7 @@
 package observe
 
 import (
+	"context"
 	"reflect"
 	"sort"
 	"time"
@@ -383,20 +384,32 @@ func (o *Observer) serveRows(req rowsReq) bool {
 // RowsNow returns a part's rows and counts from one fresh capture - the
 // bootstrap after subscribing (spec §4). ok is false once the Observer ended.
 func (o *Observer) RowsNow(task, part string) (Rows, bool) {
+	return o.RowsNowCtx(context.Background(), task, part)
+}
+
+// RowsNowCtx is RowsNow bounded by ctx: a caller that stops waiting (an
+// unmounted lens, a bootstrap deadline) gets ok=false at once.
+func (o *Observer) RowsNowCtx(ctx context.Context, task, part string) (Rows, bool) {
 	o.mu.Lock()
 	started := o.started
 	o.mu.Unlock()
 	if !started {
 		return Rows{}, false
 	}
-	reply := make(chan rowsReply, 1)
+	reply := make(chan rowsReply, 1) // buffered: the loop never blocks on a gone caller
 	select {
 	case o.reqs <- rowsReq{task: task, part: part, reply: reply}:
 	case <-o.ctx.Done():
 		return Rows{}, false
+	case <-ctx.Done():
+		return Rows{}, false
 	}
-	r := <-reply
-	return r.rows, r.ok
+	select {
+	case r := <-reply:
+		return r.rows, r.ok
+	case <-ctx.Done():
+		return Rows{}, false
+	}
 }
 
 // final publishes the terminal summary once and stops every generation.
