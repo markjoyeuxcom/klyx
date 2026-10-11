@@ -156,3 +156,7 @@ func ProjectNameMeta(obj any) (any, error) {
 	}
 	return &metav1.PartialObjectMetadata{ObjectMeta: metav1.ObjectMeta{Name: m.Name, UID: m.UID}}, nil
 }
+
+func errWant(want string, got any) error {
+	return fmt.Errorf("healthsrc: want %s, got %T", want, got)
+}
