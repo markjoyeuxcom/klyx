@@ -2,6 +2,7 @@ package appbridge
 
 import (
 	"context"
+	"time"
 
 	"github.com/moomora/klyx/internal/helmcli"
 )
@@ -23,11 +24,12 @@ type HelmConn interface {
 // rollback; install/uninstall are intentionally excluded (Git owns desired state).
 type HelmService struct {
 	lookup func(string) (HelmConn, bool)
+	now    func() time.Time
 }
 
 // NewHelmService creates a HelmService with the given cluster-lookup function.
 func NewHelmService(lookup func(string) (HelmConn, bool)) *HelmService {
-	return &HelmService{lookup: lookup}
+	return &HelmService{lookup: lookup, now: time.Now}
 }
 
 // ListHelmReleases returns all Helm releases for a cluster. If the helm binary
@@ -66,17 +68,11 @@ func (s *HelmService) ListHelmReleases(cluster string) HelmReleasesResultDTO {
 		}
 	}
 
+	// The rule is evaluated at read time: the snapshot is as of now.
+	now := s.now()
 	dtos := make([]HelmReleaseDTO, 0, len(releases))
 	for _, r := range releases {
-		dtos = append(dtos, HelmReleaseDTO{
-			Name:        r.Name,
-			Namespace:   r.Namespace,
-			Chart:       r.Chart,
-			AppVersion:  r.AppVersion,
-			Status:      r.Status,
-			Revision:    r.Revision,
-			UpdatedUnix: r.UpdatedUnix,
-		})
+		dtos = append(dtos, toHelmReleaseDTO(r, now))
 	}
 	return HelmReleasesResultDTO{
 		Available: true,

@@ -1,5 +1,12 @@
 package appbridge
 
+import (
+	"time"
+
+	"github.com/moomora/klyx/internal/health"
+	"github.com/moomora/klyx/internal/helmcli"
+)
+
 // HelmReleaseDTO is the JSON projection of a single Helm release.
 type HelmReleaseDTO struct {
 	Name        string `json:"name"`
@@ -9,6 +16,25 @@ type HelmReleaseDTO struct {
 	Status      string `json:"status"`
 	Revision    int    `json:"revision"`
 	UpdatedUnix int64  `json:"updatedUnix"`
+	// Rule is the relocated lens rule at read time (1c addendum §2); Then is
+	// the verdict it takes when a pending release crosses Klyx's deadline.
+	Rule RuleDTO      `json:"rule"`
+	Then *RuleStepDTO `json:"then,omitempty"`
+}
+
+func toHelmReleaseDTO(r helmcli.Release, now time.Time) HelmReleaseDTO {
+	rule, then := ruleStep(func(t time.Time) health.NativeEval { return helmcli.ReleaseRule(r, t) }, now)
+	return HelmReleaseDTO{
+		Name:        r.Name,
+		Namespace:   r.Namespace,
+		Chart:       r.Chart,
+		AppVersion:  r.AppVersion,
+		Status:      r.Status,
+		Revision:    r.Revision,
+		UpdatedUnix: r.UpdatedUnix,
+		Rule:        rule,
+		Then:        then,
+	}
 }
 
 // HelmReleasesResultDTO is the response from ListHelmReleases.

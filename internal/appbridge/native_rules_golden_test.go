@@ -15,6 +15,7 @@ import (
 	"github.com/moomora/klyx/internal/gitops/argo"
 	"github.com/moomora/klyx/internal/gitops/flux"
 	"github.com/moomora/klyx/internal/gwapi"
+	"github.com/moomora/klyx/internal/helmcli"
 	"github.com/moomora/klyx/internal/karpenter"
 )
 
@@ -280,6 +281,23 @@ func TestNativeRulesGolden(t *testing.T) {
 		r.AcceptedCond = cond("False", 3)
 		return r
 	}())
+
+	release := func(name string, r helmcli.Release) {
+		r.Namespace, r.Name, r.Chart, r.Revision = "shop", name, "web-1.2.3", 4
+		dto := toHelmReleaseDTO(r, now)
+		out["helmReleases"] = append(out["helmReleases"], goldenCase{name, nowU, dto, dto.Rule})
+	}
+	release("deployed", helmcli.Release{Status: "deployed", UpdatedUnix: nowU - 86400})
+	release("failed", helmcli.Release{Status: "failed", UpdatedUnix: nowU - 60})
+	release("pending-install within the deadline", helmcli.Release{Status: "pending-install", UpdatedUnix: nowU - 60})
+	release("pending-upgrade at exactly the deadline", helmcli.Release{Status: "pending-upgrade", UpdatedUnix: nowU - 600})
+	release("pending-upgrade one second past the deadline", helmcli.Release{Status: "pending-upgrade", UpdatedUnix: nowU - 601})
+	release("pending-rollback with no updated time", helmcli.Release{Status: "pending-rollback"})
+	release("uninstalling past the deadline", helmcli.Release{Status: "uninstalling", UpdatedUnix: nowU - 3600})
+	release("superseded (historical)", helmcli.Release{Status: "superseded", UpdatedUnix: nowU - 3600})
+	release("uninstalled (historical)", helmcli.Release{Status: "uninstalled", UpdatedUnix: nowU - 3600})
+	release("no status", helmcli.Release{})
+	release("unrecognised status", helmcli.Release{Status: "unknown"})
 
 	got, err := json.MarshalIndent(out, "", "  ")
 	if err != nil {

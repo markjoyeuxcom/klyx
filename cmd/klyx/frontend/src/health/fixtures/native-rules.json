@@ -2542,6 +2542,277 @@
       }
     }
   ],
+  "helmReleases": [
+    {
+      "case": "deployed",
+      "nowUnix": 1791720000,
+      "dto": {
+        "name": "deployed",
+        "namespace": "shop",
+        "chart": "web-1.2.3",
+        "appVersion": "",
+        "status": "deployed",
+        "revision": 4,
+        "updatedUnix": 1791633600,
+        "rule": {
+          "included": false,
+          "role": "ok",
+          "label": "deployed"
+        }
+      },
+      "want": {
+        "included": false,
+        "role": "ok",
+        "label": "deployed"
+      }
+    },
+    {
+      "case": "failed",
+      "nowUnix": 1791720000,
+      "dto": {
+        "name": "failed",
+        "namespace": "shop",
+        "chart": "web-1.2.3",
+        "appVersion": "",
+        "status": "failed",
+        "revision": 4,
+        "updatedUnix": 1791719940,
+        "rule": {
+          "included": true,
+          "role": "fault",
+          "label": "failed"
+        }
+      },
+      "want": {
+        "included": true,
+        "role": "fault",
+        "label": "failed"
+      }
+    },
+    {
+      "case": "pending-install within the deadline",
+      "nowUnix": 1791720000,
+      "dto": {
+        "name": "pending-install within the deadline",
+        "namespace": "shop",
+        "chart": "web-1.2.3",
+        "appVersion": "",
+        "status": "pending-install",
+        "revision": 4,
+        "updatedUnix": 1791719940,
+        "rule": {
+          "included": false,
+          "role": "progressing",
+          "label": "pending-install"
+        },
+        "then": {
+          "atUnix": 1791720541,
+          "rule": {
+            "included": true,
+            "role": "degraded",
+            "label": "pending-install, appears stuck"
+          }
+        }
+      },
+      "want": {
+        "included": false,
+        "role": "progressing",
+        "label": "pending-install"
+      }
+    },
+    {
+      "case": "pending-upgrade at exactly the deadline",
+      "nowUnix": 1791720000,
+      "dto": {
+        "name": "pending-upgrade at exactly the deadline",
+        "namespace": "shop",
+        "chart": "web-1.2.3",
+        "appVersion": "",
+        "status": "pending-upgrade",
+        "revision": 4,
+        "updatedUnix": 1791719400,
+        "rule": {
+          "included": false,
+          "role": "progressing",
+          "label": "pending-upgrade"
+        },
+        "then": {
+          "atUnix": 1791720001,
+          "rule": {
+            "included": true,
+            "role": "degraded",
+            "label": "pending-upgrade, appears stuck"
+          }
+        }
+      },
+      "want": {
+        "included": false,
+        "role": "progressing",
+        "label": "pending-upgrade"
+      }
+    },
+    {
+      "case": "pending-upgrade one second past the deadline",
+      "nowUnix": 1791720000,
+      "dto": {
+        "name": "pending-upgrade one second past the deadline",
+        "namespace": "shop",
+        "chart": "web-1.2.3",
+        "appVersion": "",
+        "status": "pending-upgrade",
+        "revision": 4,
+        "updatedUnix": 1791719399,
+        "rule": {
+          "included": true,
+          "role": "degraded",
+          "label": "pending-upgrade, appears stuck"
+        }
+      },
+      "want": {
+        "included": true,
+        "role": "degraded",
+        "label": "pending-upgrade, appears stuck"
+      }
+    },
+    {
+      "case": "pending-rollback with no updated time",
+      "nowUnix": 1791720000,
+      "dto": {
+        "name": "pending-rollback with no updated time",
+        "namespace": "shop",
+        "chart": "web-1.2.3",
+        "appVersion": "",
+        "status": "pending-rollback",
+        "revision": 4,
+        "updatedUnix": 0,
+        "rule": {
+          "included": false,
+          "role": "progressing",
+          "label": "pending-rollback"
+        }
+      },
+      "want": {
+        "included": false,
+        "role": "progressing",
+        "label": "pending-rollback"
+      }
+    },
+    {
+      "case": "uninstalling past the deadline",
+      "nowUnix": 1791720000,
+      "dto": {
+        "name": "uninstalling past the deadline",
+        "namespace": "shop",
+        "chart": "web-1.2.3",
+        "appVersion": "",
+        "status": "uninstalling",
+        "revision": 4,
+        "updatedUnix": 1791716400,
+        "rule": {
+          "included": true,
+          "role": "degraded",
+          "label": "uninstalling, appears stuck"
+        }
+      },
+      "want": {
+        "included": true,
+        "role": "degraded",
+        "label": "uninstalling, appears stuck"
+      }
+    },
+    {
+      "case": "superseded (historical)",
+      "nowUnix": 1791720000,
+      "dto": {
+        "name": "superseded (historical)",
+        "namespace": "shop",
+        "chart": "web-1.2.3",
+        "appVersion": "",
+        "status": "superseded",
+        "revision": 4,
+        "updatedUnix": 1791716400,
+        "rule": {
+          "included": false,
+          "role": "unknown",
+          "label": "superseded (historical)"
+        }
+      },
+      "want": {
+        "included": false,
+        "role": "unknown",
+        "label": "superseded (historical)"
+      }
+    },
+    {
+      "case": "uninstalled (historical)",
+      "nowUnix": 1791720000,
+      "dto": {
+        "name": "uninstalled (historical)",
+        "namespace": "shop",
+        "chart": "web-1.2.3",
+        "appVersion": "",
+        "status": "uninstalled",
+        "revision": 4,
+        "updatedUnix": 1791716400,
+        "rule": {
+          "included": false,
+          "role": "unknown",
+          "label": "uninstalled (historical)"
+        }
+      },
+      "want": {
+        "included": false,
+        "role": "unknown",
+        "label": "uninstalled (historical)"
+      }
+    },
+    {
+      "case": "no status",
+      "nowUnix": 1791720000,
+      "dto": {
+        "name": "no status",
+        "namespace": "shop",
+        "chart": "web-1.2.3",
+        "appVersion": "",
+        "status": "",
+        "revision": 4,
+        "updatedUnix": 0,
+        "rule": {
+          "included": false,
+          "role": "unknown",
+          "label": "unknown"
+        }
+      },
+      "want": {
+        "included": false,
+        "role": "unknown",
+        "label": "unknown"
+      }
+    },
+    {
+      "case": "unrecognised status",
+      "nowUnix": 1791720000,
+      "dto": {
+        "name": "unrecognised status",
+        "namespace": "shop",
+        "chart": "web-1.2.3",
+        "appVersion": "",
+        "status": "unknown",
+        "revision": 4,
+        "updatedUnix": 0,
+        "rule": {
+          "included": false,
+          "role": "unknown",
+          "label": "unknown"
+        }
+      },
+      "want": {
+        "included": false,
+        "role": "unknown",
+        "label": "unknown"
+      }
+    }
+  ],
   "issuers": [
     {
       "case": "ready",
