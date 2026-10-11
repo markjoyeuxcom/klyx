@@ -45,6 +45,12 @@ const noResources = { cpu: { usage: null, request: null, limit: null }, mem: { u
 const broken: WorkloadDTO = { kind: "Deployment", namespace: "ollama-prod", name: "ollama", desired: 1, ready: 0, available: 0, updated: 1, restarts: 7, reason: "CrashLoopBackOff", rank: "unhealthy", gitops: { kind: "Kustomization", namespace: "flux-system", name: "ollama" }, pods: [{ name: "ollama-x", ready: false, restarts: 7, reason: "CrashLoopBackOff", node: "node-3", ageSeconds: 720 }], resources: noResources, health: { kind: "fault", label: "CrashLoopBackOff", reason: "CrashLoopBackOff", rule: "workload.pod-failure", rank: 70 } };
 const healthy: WorkloadDTO = { kind: "Deployment", namespace: "monitoring", name: "grafana", desired: 1, ready: 1, available: 1, updated: 1, restarts: 0, reason: "Available", rank: "healthy", gitops: null, pods: [], resources: noResources, health: { kind: "ok", label: "Available", reason: "Ready", rule: "workload.ready" } };
 
+// Every test starts from the store as the app boots it. Per-describe resets
+// cleared only the workloads slice, so clusters, route and NavIntents leaked
+// between tests and the file failed under a shuffled order.
+const initialStore = useFleet.getState();
+beforeEach(() => { useFleet.setState(initialStore, true); });
+
 function seed(items: WorkloadDTO[]) {
   // rowsScope: the rows were READ for this cluster + all namespaces (what the
   // real store records); lenses never show rows from another scope.
