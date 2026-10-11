@@ -24,10 +24,13 @@ function pressCmdK() {
   fireEvent.keyDown(window, { key: "k", metaKey: true });
 }
 
+// Some tests stub openCluster on the store; every test starts from the real one.
+const realOpenCluster = useFleet.getState().openCluster;
+
 beforeEach(() => {
   vi.clearAllMocks();
   useFleet.getState().clearPods();
-  useFleet.setState({ clusters: [], route: { name: "fleet" } });
+  useFleet.setState({ clusters: [], route: { name: "fleet" }, openCluster: realOpenCluster });
 });
 
 describe("CommandPalette", () => {
@@ -98,11 +101,11 @@ describe("CommandPalette", () => {
     const { getByTestId } = render(<CommandPalette />);
     pressCmdK();
     const input = getByTestId("command-palette-input");
-    // first row selected by default
-    expect(getByTestId("command-row-cluster:dev-we").getAttribute("data-selected")).toBe("true");
+    // first row selected by default (Application leads the empty list)
+    expect(getByTestId("command-row-fleet").getAttribute("data-selected")).toBe("true");
     fireEvent.keyDown(input, { key: "ArrowDown" });
-    expect(getByTestId("command-row-cluster:dev-we").getAttribute("data-selected")).toBe("false");
-    expect(getByTestId("command-row-cluster:prd-ne").getAttribute("data-selected")).toBe("true");
+    expect(getByTestId("command-row-fleet").getAttribute("data-selected")).toBe("false");
+    expect(getByTestId("command-row-forwards").getAttribute("data-selected")).toBe("true");
   });
 
   it("scrolls the selected row into view when navigating", () => {
@@ -115,7 +118,99 @@ describe("CommandPalette", () => {
     pressCmdK();
     scrollSpy.mockClear();
     fireEvent.keyDown(getByTestId("command-palette-input"), { key: "ArrowDown" });
-    expect(getByTestId("command-row-cluster:prd-ne").getAttribute("data-selected")).toBe("true");
+    expect(getByTestId("command-row-forwards").getAttribute("data-selected")).toBe("true");
     expect(scrollSpy).toHaveBeenCalledWith({ block: "nearest" });
+  });
+});
+
+describe("CommandPalette views from Fleet (redesign step 7c)", () => {
+  const two = () => useFleet.setState({
+    clusters: [{ name: "dev-we", state: "Synced" } as ClusterDTO, { name: "aks-prd-weu-platform-01", state: "Synced" } as ClusterDTO],
+    route: { name: "fleet" },
+  });
+  const type = (input: HTMLElement, value: string) => fireEvent.change(input, { target: { value } });
+
+  it("Events from Fleet opens Choose cluster; Back keeps the query; Escape changes nothing", () => {
+    two();
+    const { getByTestId, getByText, queryByText } = render(<CommandPalette />);
+    pressCmdK();
+    const input = getByTestId("command-palette-input");
+    type(input, "Events");
+    expect(getByTestId("command-row-view:events")).toBeTruthy();
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(getByText("Choose cluster for Events")).toBeTruthy();
+    expect(getByTestId("command-row-view:events@aks-prd-weu-platform-01")).toBeTruthy();
+    fireEvent.keyDown(input, { key: "Backspace" });
+    expect(queryByText("Choose cluster for Events")).toBeNull();
+    expect((input as HTMLInputElement).value).toBe("Events");
+    fireEvent.keyDown(input, { key: "Enter" });
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(useFleet.getState().route).toEqual({ name: "fleet" });
+  });
+
+  it("choosing a cluster opens the view there", () => {
+    two();
+    const { getByTestId } = render(<CommandPalette />);
+    pressCmdK();
+    const input = getByTestId("command-palette-input");
+    type(input, "All workloads");
+    fireEvent.keyDown(input, { key: "Enter" });
+    type(input, "prd");
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(useFleet.getState().route).toMatchObject({ name: "cluster", cluster: "aks-prd-weu-platform-01", section: "workloads" });
+  });
+
+  it("a cluster-named query offers that cluster's view directly; the full long name matches", () => {
+    two();
+    const { getByTestId, queryByTestId } = render(<CommandPalette />);
+    pressCmdK();
+    const input = getByTestId("command-palette-input");
+    type(input, "pods");
+    expect(queryByTestId("command-row-view:pods@aks-prd-weu-platform-01")).toBeNull();
+    type(input, "pods aks-prd-weu");
+    expect(getByTestId("command-row-view:pods@aks-prd-weu-platform-01")).toBeTruthy();
+    type(input, "aks-prd-weu-platform-01");
+    expect(getByTestId("command-row-cluster:aks-prd-weu-platform-01")).toBeTruthy();
+  });
+
+  it("Port-forwards is an Application result, and a disabled view runs nothing", () => {
+    useFleet.setState({ clusters: [{ name: "dev", state: "Connecting" } as ClusterDTO], route: { name: "fleet" } });
+    const { getByTestId } = render(<CommandPalette />);
+    pressCmdK();
+    const input = getByTestId("command-palette-input");
+    type(input, "Port-forwards");
+    expect(getByTestId("command-row-forwards")).toBeTruthy();
+    type(input, "Reconciliation");
+    const row = getByTestId("command-row-view:flux");
+    expect(row.getAttribute("aria-disabled")).toBe("true");
+    expect(row.textContent).toContain("checking capability");
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(useFleet.getState().route).toEqual({ name: "fleet" });
+    expect(getByTestId("command-palette")).toBeTruthy();
+  });
+
+  it("a long API kind is found by its kind name", () => {
+    useFleet.setState({ clusters: [{ name: "dev", state: "Synced", ciliumPresent: true } as ClusterDTO], route: { name: "fleet" } });
+    const { getByTestId } = render(<CommandPalette />);
+    pressCmdK();
+    type(getByTestId("command-palette-input"), "CiliumClusterwideNetworkPolicy");
+    expect(getByTestId("command-row-resource:res:cilium.io/v2/ciliumclusterwidenetworkpolicies")).toBeTruthy();
+  });
+});
+
+describe("rank match quality (redesign step 7c)", () => {
+  const cmd = (id: string, title: string, hint?: string) => ({ id, group: "Views" as const, title, hint, run: () => {} });
+  it("scattered letters across a long title are not a match; tight ones and short queries are", async () => {
+    const { rank } = await import("./CommandPalette");
+    const cmds = [cmd("events", "Events", "Cluster"), cmd("sa", "Service Accounts", "Access · raw resource view")];
+    expect(rank(cmds, "events").rows.map((r) => r.cmd.id)).toEqual(["events"]);
+    expect(rank([cmd("aw", "All workloads")], "allwl").rows).toHaveLength(1);
+    expect(rank(cmds, "sa").rows.map((r) => r.cmd.id)).toContain("sa");
+  });
+  it("hints match as a substring only", async () => {
+    const { rank } = await import("./CommandPalette");
+    const cmds = [cmd("p", "shop/api-1", "Pod · Running · dev")];
+    expect(rank(cmds, "running").rows).toHaveLength(1);
+    expect(rank(cmds, "rnng").rows).toHaveLength(0);
   });
 });

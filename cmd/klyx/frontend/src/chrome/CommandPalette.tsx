@@ -47,14 +47,22 @@ export type RankResult = { rows: Ranked[]; total: number };
 
 export function rank(commands: Command[], query: string, boost: (id: string) => number = () => 0): RankResult {
   if (query.trim() === "") {
-    const sorted = [...commands].sort((a, b) => boost(b.id) - boost(a.id)); // stable: untouched keep source order
-    return { rows: sorted.slice(0, LIMIT).map((cmd) => ({ cmd, positions: [] })), total: commands.length };
+    const plain = commands.filter((c) => !c.qualifier);
+    const sorted = [...plain].sort((a, b) => boost(b.id) - boost(a.id)); // stable: untouched keep source order
+    return { rows: sorted.slice(0, LIMIT).map((cmd) => ({ cmd, positions: [] })), total: plain.length };
   }
   const q = query.trim();
+  // A cluster-qualified result appears only when the query names its cluster.
+  const tokens = q.toLowerCase().split(/\s+/).filter((t) => t.length >= 2);
   const scored: { cmd: Command; positions: number[]; score: number }[] = [];
   for (const cmd of commands) {
-    const t = fuzzyMatch(q, cmd.title);
-    const h = cmd.hint ? fuzzyMatch(q, cmd.hint) : null;
+    if (cmd.qualifier && !tokens.some((t) => cmd.qualifier!.toLowerCase().includes(t))) continue;
+    // A title match must hang together: from four characters on, letters
+    // scattered across a long title ("events" in "Service Accounts") are
+    // noise. Hints are long prose, so they match only as a substring.
+    let t = fuzzyMatch(q, cmd.title);
+    if (t && q.length >= 4 && t.score < q.length * 1.5) t = null;
+    const h = cmd.hint && cmd.hint.toLowerCase().includes(q.toLowerCase()) ? fuzzyMatch(q, cmd.hint) : null;
     if (!t && !h) continue;
     const score = (t?.score ?? 0) + (h ? h.score * 0.5 : 0) + boost(cmd.id) * 0.75;
     scored.push({ cmd, positions: t?.positions ?? [], score });
@@ -87,6 +95,9 @@ export function CommandPalette() {
   const [query, setQuery] = useState("");
   const [sel, setSel] = useState(0);
   const [commands, setCommands] = useState<Command[]>([]);
+  // A second step (Choose cluster): its options replace the results; the
+  // first step's query comes back with Back.
+  const [step, setStep] = useState<{ title: string; options: Command[]; parentQuery: string } | null>(null);
   // Frecency boosts snapshot, taken once per open - rank() runs per keystroke
   // and must not re-read localStorage each time.
   const [boost, setBoost] = useState<(id: string) => number>(() => () => 0);
@@ -100,6 +111,7 @@ export function CommandPalette() {
     setOpen(false);
     setQuery("");
     setSel(0);
+    setStep(null);
     prevFocusRef.current?.focus?.();
     prevFocusRef.current = null;
   }, []);
@@ -111,6 +123,7 @@ export function CommandPalette() {
     setBoost(() => loadBoosts());
     setQuery("");
     setSel(0);
+    setStep(null);
     setOpen(true);
   }, []);
 
@@ -145,7 +158,7 @@ export function CommandPalette() {
     if (open) inputRef.current?.focus();
   }, [open]);
 
-  const ranked = useMemo(() => rank(commands, query, boost), [commands, query, boost]);
+  const ranked = useMemo(() => rank(step ? step.options : commands, query, step ? () => 0 : boost), [commands, step, query, boost]);
   const results = ranked.rows;
   const dropped = ranked.total - results.length;
 
@@ -167,12 +180,33 @@ export function CommandPalette() {
     (i: number) => {
       const r = results[i];
       if (!r) return;
-      recordUse(r.cmd.id);
+      const cmd = r.cmd;
+      if (cmd.disabled) {
+        // A disabled view runs nothing; its Connect action is explicit.
+        if (cmd.action) { close(); cmd.action.run(); }
+        return;
+      }
+      if (cmd.next) {
+        recordUse(cmd.id);
+        setStep({ title: cmd.next.title, options: cmd.next.options, parentQuery: query });
+        setQuery("");
+        setSel(0);
+        inputRef.current?.focus();
+        return;
+      }
+      recordUse(cmd.id);
       close();
-      r.cmd.run();
+      cmd.run();
     },
-    [results, close],
+    [results, close, query],
   );
+  const backToResults = () => {
+    if (!step) return;
+    setQuery(step.parentQuery);
+    setStep(null);
+    setSel(0);
+    inputRef.current?.focus();
+  };
 
   // Within-list keyboard nav: Arrow up/down wrap, Enter runs.
   const onInputKey = (e: React.KeyboardEvent) => {
@@ -185,6 +219,10 @@ export function CommandPalette() {
     } else if (e.key === "Enter") {
       e.preventDefault();
       run(sel);
+    } else if (e.key === "Backspace" && step && query === "") {
+      // Back from Choose cluster to the results, query intact.
+      e.preventDefault();
+      backToResults();
     }
   };
 
@@ -193,9 +231,10 @@ export function CommandPalette() {
   // Group results in first-appearance order, preserving the flat selection index.
   const groups: { group: string; rows: { r: Ranked; idx: number }[] }[] = [];
   results.forEach((r, idx) => {
-    let g = groups.find((x) => x.group === r.cmd.group);
+    const name = r.cmd.group;
+    let g = groups.find((x) => x.group === name);
     if (!g) {
-      g = { group: r.cmd.group, rows: [] };
+      g = { group: name, rows: [] };
       groups.push(g);
     }
     g.rows.push({ r, idx });
@@ -249,7 +288,7 @@ export function CommandPalette() {
               setSel(0);
             }}
             onKeyDown={onInputKey}
-            placeholder="jump or act: cluster, pod, drain, sync, scale…"
+            placeholder={step ? "filter clusters…" : "jump or act: view, cluster, pod, drain, sync…"}
             spellCheck={false}
             autoComplete="off"
             style={{
@@ -266,6 +305,12 @@ export function CommandPalette() {
           />
         </div>
 
+        {step && (
+          <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "0 16px 4px" }}>
+            <button type="button" className="l-btn" onMouseDown={(e) => { e.preventDefault(); backToResults(); }} title="Back to results (⌫ on an empty query)">‹ Results</button>
+            <span className="t-section-label">{step.title}</span>
+          </div>
+        )}
         <div ref={listRef} id="command-palette-list" role="listbox" style={{ maxHeight: "50vh", overflowY: "auto", padding: "4px 0" }}>
           {results.length === 0 ? (
             <div style={{ padding: "16px", fontSize: 13, color: "var(--color-text-tertiary)" }}>
@@ -293,6 +338,7 @@ export function CommandPalette() {
                       id={optionId(r.cmd.id)}
                       role="option"
                       aria-selected={selected}
+                      aria-disabled={r.cmd.disabled ? true : undefined}
                       data-testid={`command-row-${r.cmd.id}`}
                       data-selected={selected ? "true" : "false"}
                       onMouseMove={() => setSel(idx)}
@@ -307,21 +353,30 @@ export function CommandPalette() {
                         padding: "7px 16px",
                         cursor: "pointer",
                         fontSize: 13,
-                        color: "var(--color-text-primary)",
+                        color: r.cmd.disabled ? "var(--color-text-tertiary)" : "var(--color-text-primary)",
                         background: selected ? "var(--bench-selection-bg, var(--color-background-secondary))" : "transparent",
                         boxShadow: selected ? "inset 2px 0 0 var(--bench-selection-edge, var(--color-text-info))" : undefined,
                       }}
                     >
-                      <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {/* Labels keep 200px before hints and wrap to two
+                          lines; a name is never cut to a lone initial. */}
+                      <span style={{ flex: "1 1 200px", minWidth: 200, overflowWrap: "anywhere", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>
                         <Highlighted text={r.cmd.title} positions={r.positions} />
                       </span>
-                      {r.cmd.hint && (
+                      {r.cmd.disabled ? (
+                        <span style={{ fontSize: 11, color: "var(--color-text-tertiary)", flex: "0 1 auto", minWidth: 0, textAlign: "right" }}>
+                          {r.cmd.disabled}{r.cmd.action ? <> · <span style={{ color: "var(--color-text-info)" }}>↵ {r.cmd.action.label}</span></> : null}
+                        </span>
+                      ) : r.cmd.hint && (
                         <span
                           style={{
                             fontSize: 11,
                             color: "var(--color-text-tertiary)",
                             whiteSpace: "nowrap",
-                            flexShrink: 0,
+                            flex: "0 1 auto",
+                            minWidth: 0,
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
                           }}
                         >
                           {r.cmd.hint.includes("prd lock") ? (
@@ -350,7 +405,7 @@ export function CommandPalette() {
             background: "var(--color-background-secondary)",
           }}
         >
-          {dropped > 0 ? `+${dropped} more — keep typing · ` : ""}↑↓ navigate · ↵ open · esc close · showing loaded data
+          {dropped > 0 ? `+${dropped} more — keep typing · ` : ""}↑↓ navigate · ↵ open · {step ? "⌫ back · " : ""}esc close · views always searchable, objects from loaded data
         </div>
       </div>
     </div>

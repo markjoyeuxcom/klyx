@@ -74,61 +74,32 @@ beforeEach(() => {
 });
 
 describe("buildCommands", () => {
-  it("lists clusters plus a fleet-overview command", () => {
+  it("Clusters lists only clusters; app destinations are Application, never Clusters", () => {
     const s = makeStore({
       clusters: [
-        { name: "dev", env: "DEV", region: "westeurope" } as never,
-        { name: "prd", env: "PRD", region: "northeurope" } as never,
+        { name: "dev", env: "DEV", region: "westeurope", state: "Synced" } as never,
+        { name: "prd", env: "PRD", region: "northeurope", state: "Synced", protected: true } as never,
       ],
     });
     const cmds = buildCommands(s);
     const clusterCmds = cmds.filter((c) => c.group === "Clusters");
-    expect(clusterCmds.map((c) => c.title)).toEqual(["dev", "prd", "Fleet overview", "Settings", "Port-forwards", "Activity log", "Keyboard shortcuts"]);
+    expect(clusterCmds.map((c) => c.title)).toEqual(["dev", "prd"]);
     expect(clusterCmds[0].hint).toBe("DEV · westeurope");
+    expect(clusterCmds[1].hint).toBe("PRD · northeurope · prd lock");
+    const app = cmds.filter((c) => c.group === "Application").map((c) => c.title);
+    expect(app).toEqual(expect.arrayContaining(["Fleet board", "Port-forwards", "Activity log", "Settings", "Terminal", "Keyboard shortcuts"]));
   });
 
   it("navigates to the cluster when a cluster command runs", () => {
     const openCluster = vi.fn();
-    const s = makeStore({ clusters: [{ name: "dev", env: "DEV", region: "we" } as never], openCluster });
+    const s = makeStore({ clusters: [{ name: "dev", env: "DEV", region: "we", state: "Synced" } as never], openCluster });
     const cmd = buildCommands(s).find((c) => c.id === "cluster:dev")!;
     cmd.run();
     expect(openCluster).toHaveBeenCalledWith("dev");
   });
-
-  it("omits Sections when not inside a cluster", () => {
-    const s = makeStore({ route: { name: "fleet" } });
-    expect(buildCommands(s).some((c) => c.group === "Sections")).toBe(false);
-  });
-
-  it("includes Sections with cluster hint when inside a cluster", () => {
-    const setSection = vi.fn();
-    const s = makeStore({ route: { name: "cluster", cluster: "dev", section: "overview" } as never, setSection });
-    const sections = buildCommands(s).filter((c) => c.group === "Sections");
-    // 18 sections: observability removed; gitops label is "Flux" but id stays
-    // "gitops"; Argo CD added as its own section; External Secrets added in
-    // M12, Certificates joined the palette alongside it (M11 gap), the Access
-    // lens (RBAC can-i / who-can) with the access-review work, the
-    // Connectivity + Upgrade lenses with the fleet-ops batch, Karpenter, and
-    // Hubble flows as its own destination (redesign step 7a).
-    expect(sections.length).toBe(18);
-    expect(sections[0].hint).toBe("dev");
-    // gitops section is still reachable by id
-    sections.find((c) => c.id === "section:gitops")!.run();
-    expect(setSection).toHaveBeenCalledWith("gitops");
-    // gitops section title is "Flux" (design principle 8)
-    expect(sections.find((c) => c.id === "section:gitops")!.title).toBe("Flux");
-    // observability section is gone
-    expect(sections.find((c) => c.id === "section:observability")).toBeUndefined();
-    // triage-first order keeps Nodes in the operational loop and Network as its own lane.
-    const ids = sections.map((c) => c.id.replace("section:", ""));
-    expect(ids).toEqual(["overview", "workloads", "pods", "nodes", "events", "gitops",
-      "argo", "helm", "certs", "externalsecrets", "gatewayApi",
-      "flows", "access", "connectivity", "upgrade", "karpenter", "resources", "crds"]);
-  });
-
   it("omits Pods when the pods slice is empty", () => {
     const s = makeStore({ pods: { cluster: "dev", items: [], namespaces: [] } as never });
-    expect(buildCommands(s).some((c) => c.group === "Pods")).toBe(false);
+    expect(buildCommands(s).some((c) => c.id.startsWith("pod:"))).toBe(false);
   });
 
   it("includes Pods when seeded and jumps to detail on run", () => {
@@ -215,19 +186,28 @@ describe("buildCommands", () => {
     expect(toggleWorkloadExpand).toHaveBeenCalledWith("Deployment/team/api");
   });
 
-  it("includes built-in resources and opens their instance list", () => {
+  it("raw resource views open their instance list and keep the built-in category", () => {
     const openResource = vi.fn();
     const setBuiltinCategory = vi.fn();
     const s = makeStore({
+      clusters: [{ name: "dev", state: "Synced" } as never],
       route: { name: "cluster", cluster: "dev", section: "overview" } as never,
       openResource,
       setBuiltinCategory,
     });
-    const cmd = buildCommands(s).find((c) => c.id === "builtin:policy/v1/poddisruptionbudgets")!;
-    expect(cmd.title).toBe("PodDisruptionBudget");
+    const cmd = buildCommands(s).find((c) => c.id === "resource:res:policy/v1/poddisruptionbudgets")!;
+    expect(cmd.title).toBe("PodDisruptionBudgets");
+    expect(cmd.group).toBe("Resources");
+    expect(cmd.hint).toContain("raw resource view");
+    expect(cmd.hint).toContain("PodDisruptionBudget");
     cmd.run();
     expect(setBuiltinCategory).toHaveBeenCalledWith("Workloads");
     expect(openResource).toHaveBeenCalledWith(expect.objectContaining({ kind: "PodDisruptionBudget", plural: "poddisruptionbudgets" }));
+  });
+
+  it("built-in kinds the registry does not list stay reachable (raw Nodes)", () => {
+    const s = makeStore({ clusters: [{ name: "dev", state: "Synced" } as never], route: { name: "cluster", cluster: "dev", section: "overview" } as never });
+    expect(buildCommands(s).find((c) => c.id === "resource:res:core/v1/nodes")?.title).toBe("Node");
   });
 
   it("includes a broken-first action for supported resources", () => {
@@ -456,5 +436,78 @@ describe("action verbs", () => {
     expect(cmd.title).toBe("stop forward web/api :8080");
     cmd.run();
     expect(stopForward).toHaveBeenCalledWith("f1");
+  });
+});
+
+describe("views from every route (redesign step 7c)", () => {
+  const dev = { name: "dev", state: "Synced", fluxPresent: true } as never;
+  const prd = { name: "aks-prd-weu-platform-01", state: "Synced", fluxPresent: false } as never;
+  const view = (cmds: ReturnType<typeof buildCommands>, id: string) => cmds.find((c) => c.id === id)!;
+
+  it("from Fleet with one eligible cluster: names it and opens it", () => {
+    const openCluster = vi.fn();
+    const setSection = vi.fn();
+    const s = makeStore({ clusters: [dev], route: { name: "fleet" }, openCluster, setSection });
+    const events = view(buildCommands(s), "view:events");
+    expect(events.group).toBe("Views");
+    expect(events.hint).toContain("dev");
+    events.run();
+    expect(openCluster).toHaveBeenCalledWith("dev");
+    expect(setSection).toHaveBeenCalledWith("events");
+  });
+
+  it("from Fleet with several eligible clusters: a Choose cluster step, never a default", () => {
+    const openCluster = vi.fn();
+    const openWorkloads = vi.fn();
+    const s = makeStore({ clusters: [dev, prd], route: { name: "fleet" }, openCluster, openWorkloads });
+    const all = view(buildCommands(s), "view:workloads");
+    expect(all.next?.title).toBe("Choose cluster for All workloads");
+    expect(all.next?.options.map((o) => o.title)).toEqual(["dev", "aks-prd-weu-platform-01"]);
+    all.run();
+    expect(openCluster).not.toHaveBeenCalled();
+    all.next!.options[1].run();
+    expect(openCluster).toHaveBeenCalledWith("aks-prd-weu-platform-01");
+    expect(openWorkloads).toHaveBeenCalled();
+  });
+
+  it("capability limits eligibility: Flux from Fleet goes to the one cluster that has it", () => {
+    const s = makeStore({ clusters: [dev, prd], route: { name: "fleet" } });
+    const flux = view(buildCommands(s), "view:flux");
+    expect(flux.next).toBeUndefined();
+    expect(flux.hint).toContain("dev");
+  });
+
+  it("no clusters: the view is listed, disabled, with Connect cluster", () => {
+    const openSettings = vi.fn();
+    const s = makeStore({ clusters: [], route: { name: "settings" }, openSettings });
+    const pods = view(buildCommands(s), "view:pods");
+    expect(pods.disabled).toBe("no clusters in the fleet");
+    expect(pods.action?.label).toBe("Connect cluster");
+    pods.action!.run();
+    expect(openSettings).toHaveBeenCalled();
+  });
+
+  it("a connecting cluster is 'checking capability', not 'no matches'", () => {
+    const s = makeStore({ clusters: [{ name: "dev", state: "Connecting" } as never], route: { name: "fleet" } });
+    expect(view(buildCommands(s), "view:flux").disabled).toBe("checking capability…");
+  });
+
+  it("inside a cluster a view stays on it; one missing here offers the others explicitly", () => {
+    const openCluster = vi.fn();
+    const s = makeStore({ clusters: [dev, prd], route: { name: "cluster", cluster: "aks-prd-weu-platform-01", section: "overview" } as never, openCluster });
+    const cmds = buildCommands(s);
+    view(cmds, "view:events").run();
+    expect(openCluster).not.toHaveBeenCalled();
+    const flux = view(cmds, "view:flux");
+    expect(flux.hint).toContain("not installed on aks-prd-weu-platform-01");
+    expect(flux.next?.options.map((o) => o.title)).toEqual(["dev"]);
+  });
+
+  it("cluster-qualified results exist for other eligible clusters only", () => {
+    const s = makeStore({ clusters: [dev, prd], route: { name: "cluster", cluster: "dev", section: "overview" } as never });
+    const q = buildCommands(s).filter((c) => c.qualifier).map((c) => c.id);
+    expect(q).toContain("view:events@aks-prd-weu-platform-01");
+    expect(q).not.toContain("view:events@dev");
+    expect(q).not.toContain("view:flux@aks-prd-weu-platform-01");
   });
 });

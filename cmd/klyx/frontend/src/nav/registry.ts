@@ -274,19 +274,25 @@ export function activeLocation(route: Route, kindFilter: Record<WorkloadKind, bo
 
 // ---- navigation --------------------------------------------------------------
 
+type Store = ReturnType<typeof useFleet.getState>;
+export type NavActions = Pick<Store, "route" | "openCluster" | "openResource" | "openWorkloads" | "openArgo" | "openFlux" | "setSection">;
+
 // navigate opens a destination on a cluster. Switching cluster is explicit:
 // the caller names the cluster; the current one is never assumed for another.
-export function navigate(cluster: string, d: Destination): void {
-  const s = useFleet.getState();
-  if (s.route.name !== "cluster" || s.route.cluster !== cluster) s.openCluster(cluster);
+// The store is injectable so the palette's command index stays testable.
+export function navigate(cluster: string, d: Destination, nav: NavActions = useFleet.getState()): void {
+  if (nav.route.name !== "cluster" || nav.route.cluster !== cluster) nav.openCluster(cluster);
   const t = d.target;
-  const nav = useFleet.getState();
   if (t.kind === "resource") { nav.openResource(t.ref); return; }
   if (t.section === "workloads" && t.workloadKinds) nav.openWorkloads(t.workloadKinds);
   else if (t.section === "argo") nav.openArgo(t.argoView ?? "applications");
   else if (t.section === "gitops") nav.openFlux(t.fluxView ?? "reconciliation");
   else nav.setSection(t.section);
 }
+
+// A cluster can be navigated to when it is connected (Stale keeps its
+// last-good capability detection).
+export const connected = (c: ClusterDTO) => c.state === "Synced" || c.state === "Degraded" || c.state === "Stale";
 
 // The first destination a group selection opens: its first available task,
 // else its first available resource (Config and Storage have no tasks).
