@@ -12,6 +12,7 @@ vi.mock("../bridge/gateway", () => ({
 // read with its coverage; the mounted transport tests are GatewayRows.test.
 let rowsValue: GatewayRows;
 vi.mock("../health/useGatewayRows", () => ({ useGatewayRows: () => rowsValue }));
+vi.mock("../health/useGatewayRouteRows", () => ({ useGatewayRouteRows: () => ({ routes: [], coverage: [], dependencies: [], watchError: null, loading: true, rowsState: { updating: false, refreshing: false, evaluatedAt: null }, partCounts: null }) }));
 import type { GatewayRows } from "../health/useGatewayRows";
 import { GatewayApiView } from "./GatewayApiView";
 import { gatewayRule, withRule } from "../test/backendRules";

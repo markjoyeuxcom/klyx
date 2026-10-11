@@ -713,6 +713,11 @@ export type GatewayAddressDTO = { type: string; value: string };
 // controller wrote it) - distinct from "False" (rejected) and "Unknown".
 export type CondDTO = { status: string; reason: string; message: string; observedGeneration: number };
 export type GatewayRefDTO = { rule: RuleDTO; uid?: string; gvr?: string; namespace: string; name: string; className: string; addresses?: GatewayAddressDTO[]; listeners?: ListenerDTO[]; accepted: boolean; programmed: boolean; stale?: boolean; generation?: number; observedGeneration?: number; acceptedCond?: CondDTO; programmedCond?: CondDTO };
+// One HTTPRoute of the Gateways task's routes part (1c slice 3 §4a): counted
+// once by UID with its worst attachment's captured role/label/parent, and
+// every attachment. The topology stays the route's data path.
+export type GatewayRouteAttachmentDTO = { parent: string; rule: RuleDTO };
+export type GatewayRouteRowDTO = { uid?: string; gvr?: string; generation?: number; namespace: string; name: string; parent: string; rule: RuleDTO; attachments: GatewayRouteAttachmentDTO[] };
 export type GatewayListDTO = { gatewayAPIServed: boolean; gateways: GatewayRefDTO[]; error?: string };
 export type PolicyDetailDTO = { key: string; value: string };
 export type PolicyRefDTO = { kind: string; namespace: string; name: string; targetKind: string; targetNamespace: string; targetName: string; targetSectionName: string; summary: string; details: PolicyDetailDTO[]; inferred: boolean; match: string };

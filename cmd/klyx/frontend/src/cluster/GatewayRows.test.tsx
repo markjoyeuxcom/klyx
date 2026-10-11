@@ -9,7 +9,7 @@ vi.mock("../bridge/gateway", () => ({ getGatewayTopology: vi.fn(async () => {}),
 import { GatewayApiView } from "./GatewayApiView";
 import { buildCommands } from "../chrome/commands";
 import { resetHealthStore, addSub, openStarted, openSucceeded, applyRows, applySummary, dueForBootstrap, bootstrapSettled, useHealth, type HealthPart, type HealthSummary, type KindCoverage, type RowsDTO } from "../store/health";
-import { useFleet, type CondDTO, type GatewayRefDTO } from "../store/fleet";
+import { useFleet, type CondDTO, type GatewayRefDTO, type GatewayRouteRowDTO } from "../store/fleet";
 import { gatewayRule, withRule } from "../test/backendRules";
 import { clock } from "../layout/coverage";
 
@@ -133,5 +133,102 @@ describe("Gateways rows, mounted end to end (slice 3 §5.6)", () => {
     expect(ids).not.toContain("gateway:infra/foreign");
     act(() => applySummary({ ...summary(1, 9, 1, 1, 0), final: true }));
     expect(buildCommands(useFleet.getState()).map((c) => c.id)).not.toContain("gateway:infra/eg");
+  });
+});
+
+// Codex review of f9a52c7: the routes part view (slice 3 §4a) - one row per
+// route UID with its worst attachment, the part's own counts, own-kind
+// evidence and dependency qualifiers, Open topology on the worst parent.
+describe("the Routes part view", () => {
+  const att = (parent: string, role: string, label: string, included = false) => ({ parent, rule: { included, role, label } });
+  const route = (name: string, attachments: { parent: string; rule: { included: boolean; role: string; label: string } }[]): GatewayRouteRowDTO => {
+    const rank: Record<string, number> = { fault: 0, degraded: 1, progressing: 2, unknown: 3, paused: 4, ok: 5 };
+    const worst = [...attachments].sort((a, b) => rank[a.rule.role] - rank[b.rule.role] || a.parent.localeCompare(b.parent))[0];
+    return { uid: `uid-${name}`, namespace: "apps", name, parent: worst.parent, rule: { ...worst.rule, included: attachments.some((a) => a.rule.included) }, attachments };
+  };
+  const routeKinds = (own: Partial<KindCoverage> = {}, deps: Record<string, Partial<KindCoverage>> = {}) => [
+    kind("httproutes", own),
+    ...["gateways", "services", "endpointslices"].map((k) => kind(k, { role: "dependency", ...deps[k] })),
+  ];
+  const routesDTO = (incarnation: number, ver: number, rows: GatewayRouteRowDTO[], k = routeKinds()): RowsDTO => ({
+    cluster: "x", incarnation, task: "gateway", evaluatedAt: "2026-10-11T12:00:00Z", rows,
+    part: { ...part(ver, k, { total: rows.length, included: rows.filter((r) => r.rule.included).length }), id: "routes", entity: "HTTPRoutes with a failing attachment" },
+  });
+  const openRoutes = (incarnation = 1) => {
+    if (!useHealth.getState().subs.r) addSub("r", "x", "gateway", "routes");
+    openStarted("r", `tok-r-${incarnation}`);
+    openSucceeded("r", `tok-r-${incarnation}`, incarnation);
+  };
+  const toRoutes = () => fireEvent.click(screen.getByRole("button", { name: /^Routes/ }));
+
+  it("a healthy Gateway with a broken route: the Routes view carries the route's own count", () => {
+    open(); applyRows("g", rowsDTO(1, 1, [gw("eg")]));
+    openRoutes(); applyRows("r", routesDTO(1, 1, [route("web", [att("infra/eg", "fault", "no ready endpoints", true)])]));
+    render(<GatewayApiView cluster="x" />);
+    expect(screen.getByText("all programmed")).toBeTruthy(); // the Gateway itself is healthy
+    expect(screen.getByRole("button", { name: /^Routes/ }).textContent).toBe("Routes 1");
+    toRoutes();
+    expect(headline()).toBe("1");
+    expect(screen.getByTestId("route-attention").textContent).toBe("1 with a failing attachment");
+    expect(screen.getByRole("button", { name: /^Needs attention/ }).textContent?.trim()).toBe("Needs attention 1");
+  });
+
+  it("healthy and rejecting parents: counted once, by the worst parent, and Open topology targets it", () => {
+    open(); applyRows("g", rowsDTO(1, 1, [gw("a"), gw("b")]));
+    openRoutes(); applyRows("r", routesDTO(1, 1, [route("web", [att("infra/a", "ok", "attached"), att("infra/b", "fault", "not accepted", true)])]));
+    render(<GatewayApiView cluster="x" />);
+    toRoutes();
+    expect(rowNames()).toEqual(["apps/web"]);
+    expect(headline()).toBe("1");
+    fireEvent.click(screen.getByText("web").closest(".lens-row")!);
+    const panel = within(screen.getByTestId("route-row-panel"));
+    expect(panel.getAllByTestId("route-attachment").map((n) => n.textContent)).toEqual([expect.stringContaining("infra/a"), expect.stringContaining("infra/b")]);
+    fireEvent.click(panel.getByRole("button", { name: "Open topology (infra/b)" }));
+    const r = useFleet.getState().route;
+    expect(r.name === "cluster" && r.gateway).toEqual({ namespace: "infra", name: "b" });
+    expect(useFleet.getState().network.selectedRoute).toBe("apps/web");
+  });
+
+  it("A4 moves the routes part's counts with the notice", () => {
+    vi.useFakeTimers({ now: 0 });
+    try {
+      openRoutes(); applyRows("r", routesDTO(1, 1, [route("web", [att("infra/eg", "ok", "attached")])]), 0);
+      render(<GatewayApiView cluster="x" />);
+      toRoutes();
+      act(() => {
+        applySummary({ cluster: "x", incarnation: 1, seq: 2, evaluatedAt: "", connection: "connected", tasks: [{ id: "gateway", coverage: "live", parts: [
+          { ...part(2, routeKinds(), { total: 5, included: 3 }), id: "routes", entity: "routes" },
+        ] }] }, 0);
+        dueForBootstrap(1500);
+      });
+      expect(screen.getByTestId("rows-refreshing")).toBeTruthy();
+      expect(headline()).toBe("5");
+      expect(screen.getByTestId("route-attention").textContent).toBe("3 with a failing attachment");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("an incomplete dependency qualifies the verdicts, never the list's completeness", () => {
+    openRoutes(); applyRows("r", routesDTO(1, 1, [route("web", [att("infra/eg", "fault", "no ready endpoints", true)])], routeKinds({}, { services: { coverage: "unreadable", class: "forbidden", error: "rbac" } })));
+    render(<GatewayApiView cluster="x" />);
+    toRoutes();
+    expect(headline()).toBe("1"); // the HTTPRoute read itself is complete
+    expect(screen.getByTestId("route-deps").textContent).toMatch(/Route verdicts are unverified: they were evaluated against Service without a current read/);
+    expect(screen.getByTestId("route-attention").textContent).toBe("1 with a failing attachment (unverified)");
+    expect(screen.getByText("web").closest(".lens-row")!.textContent).toContain("no ready endpoints *");
+  });
+
+  it("removal needs the HTTPRoute kind's complete read; a stale one keeps the selection, unverified", () => {
+    openRoutes(); applyRows("r", routesDTO(1, 1, [route("web", [att("infra/eg", "ok", "attached")])]));
+    render(<GatewayApiView cluster="x" />);
+    toRoutes();
+    fireEvent.click(screen.getByText("web").closest(".lens-row")!);
+    act(() => { applyRows("r", routesDTO(1, 2, [], routeKinds({ coverage: "stale", class: "transport", error: "dial tcp" }))); });
+    const panel = () => within(screen.getByTestId("route-row-panel"));
+    expect(panel().getByTestId("selection-unverified")).toBeTruthy();
+    act(() => { applyRows("r", routesDTO(1, 3, [], routeKinds())); });
+    expect(panel().getByText(/HTTPRoute removed\./)).toBeTruthy();
+    expect(panel().queryByRole("button", { name: /^Open topology/ })).toBeNull();
   });
 });

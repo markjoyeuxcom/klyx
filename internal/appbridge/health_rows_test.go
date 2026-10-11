@@ -279,6 +279,36 @@ func TestGatewayRowsCarryTheCapture(t *testing.T) {
 	}
 }
 
+// The routes part (slice 3 §4a): one row per route UID with the captured
+// worst-parent evaluation and every attachment.
+func TestGatewayRouteRowsCarryTheReducedCapture(t *testing.T) {
+	a := observe.Attached{UID: "r1", Namespace: "apps", Name: "web", Role: "fault", Label: "not accepted", Parent: "infra/b", Included: true,
+		Attachments: []observe.Attachment{
+			{UID: "r1", Namespace: "apps", Name: "web", Parent: "infra/a", Role: "ok", Label: "attached"},
+			{UID: "r1", Namespace: "apps", Name: "web", Parent: "infra/b", Role: "fault", Label: "not accepted", Included: true},
+		}}
+	set := healthsrc.RowSet[observe.Attached]{Rows: []healthsrc.Row[observe.Attached]{
+		{Ref: healthsrc.RowRef{UID: "r1", GVR: "gateway.networking.k8s.io/v1/httproutes", Namespace: "apps", Name: "web", Generation: 3}, Data: a},
+	}}
+	out, err := rowsConverters[healthsrc.TaskGateway+"/routes"](set, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := out.([]GatewayRouteRowDTO)[0]
+	if d.UID != "r1" || d.Generation != 3 || d.Parent != "infra/b" || d.Rule != (RuleDTO{Included: true, Role: "fault", Label: "not accepted"}) {
+		t.Fatalf("route row: %+v", d)
+	}
+	if len(d.Attachments) != 2 || d.Attachments[0].Parent != "infra/a" || d.Attachments[0].Rule.Role != "ok" || !d.Attachments[1].Rule.Included {
+		t.Fatalf("attachments: %+v", d.Attachments)
+	}
+	if b, err := json.Marshal(d); err != nil || !strings.Contains(string(b), `"parent":"infra/b"`) || !strings.Contains(string(b), `"attachments":[`) {
+		t.Fatalf("serialization: %s %v", b, err)
+	}
+	if _, err := rowsConverters[healthsrc.TaskGateway+"/routes"]("not rows", time.Now()); err == nil {
+		t.Fatal("a payload of the wrong type is an error, never an empty list")
+	}
+}
+
 // ---- the transport on a real Observer ----------------------------------------
 
 type rowsSinkRec struct {

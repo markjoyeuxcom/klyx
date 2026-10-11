@@ -168,6 +168,25 @@ var rowsConverters = map[string]rowsConverter{
 		}
 		return out, nil
 	},
+	healthsrc.TaskGateway + "/routes": func(rows any, _ time.Time) (any, error) {
+		set, err := rowSetOf[observe.Attached](rows)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]GatewayRouteRowDTO, 0, len(set.Rows))
+		for _, r := range set.Rows {
+			a := r.Data // the reduced attachment carries its captured evaluation
+			dto := GatewayRouteRowDTO{UID: r.Ref.UID, GVR: r.Ref.GVR, Generation: r.Ref.Generation,
+				Namespace: a.Namespace, Name: a.Name, Parent: a.Parent,
+				Rule:        RuleDTO{Included: a.Included, Role: a.Role, Label: a.Label},
+				Attachments: make([]GatewayRouteAttachmentDTO, 0, len(a.Attachments))}
+			for _, at := range a.Attachments {
+				dto.Attachments = append(dto.Attachments, GatewayRouteAttachmentDTO{Parent: at.Parent, Rule: RuleDTO{Included: at.Included, Role: at.Role, Label: at.Label}})
+			}
+			out = append(out, dto)
+		}
+		return out, nil
+	},
 	healthsrc.TaskESO + "/externalsecrets": func(rows any, at time.Time) (any, error) {
 		set, err := rowSetOf[externalsecrets.ExternalSecret](rows)
 		if err != nil {

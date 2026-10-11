@@ -163,6 +163,29 @@ type GatewayRefDTO struct {
 	// Rule is the relocated lens rule (1c addendum §2).
 	Rule RuleDTO `json:"rule"`
 }
+
+// GatewayRouteAttachmentDTO is one route x parent Gateway attachment with
+// its captured evaluation.
+type GatewayRouteAttachmentDTO struct {
+	Parent string  `json:"parent"` // "namespace/name" of the parent Gateway
+	Rule   RuleDTO `json:"rule"`
+}
+
+// GatewayRouteRowDTO is one HTTPRoute of the Gateways task's routes part
+// (1c slice 3 §4a): counted once by UID, with its worst attachment's role,
+// label and parent - the captured evaluation, never a new one - and every
+// attachment. The topology stays the route's data path.
+type GatewayRouteRowDTO struct {
+	UID         string                      `json:"uid,omitempty"`
+	GVR         string                      `json:"gvr,omitempty"`
+	Generation  int64                       `json:"generation,omitempty"`
+	Namespace   string                      `json:"namespace"`
+	Name        string                      `json:"name"`
+	Parent      string                      `json:"parent"` // the worst attachment's parent
+	Rule        RuleDTO                     `json:"rule"`
+	Attachments []GatewayRouteAttachmentDTO `json:"attachments"`
+}
+
 type GatewayListDTO struct {
 	GatewayAPIServed bool            `json:"gatewayAPIServed"`
 	Gateways         []GatewayRefDTO `json:"gateways"`

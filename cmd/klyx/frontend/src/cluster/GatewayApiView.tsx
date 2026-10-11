@@ -2,7 +2,9 @@ import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { IconRoute } from "@tabler/icons-react";
 import { useFleet } from "../store/fleet";
 import type { GatewayRefDTO } from "../store/fleet";
-import { useGatewayRows } from "../health/useGatewayRows";
+import { useGatewayRows, type GatewayRows } from "../health/useGatewayRows";
+import { useGatewayRouteRows } from "../health/useGatewayRouteRows";
+import { RouteList } from "./GatewayRoutesView";
 import { EmptyState } from "../chrome/EmptyState";
 import { SkeletonRows } from "../chrome/SkeletonRows";
 import { WatchErrorBanner } from "../chrome/WatchErrorBanner";
@@ -29,7 +31,27 @@ export function GatewayApiView({ cluster }: { cluster: string }) {
   // Keyed: filters, selection and one-shot auto-selection never carry over
   // between clusters or Gateways.
   if (gateway) return <GatewayTopology key={`${cluster}|${gateway.namespace}/${gateway.name}`} cluster={cluster} gateway={gateway} />;
-  return <GatewayList key={cluster} cluster={cluster} />;
+  return <GatewayLists key={cluster} cluster={cluster} />;
+}
+
+// GatewayLists - the Gateways task's two parts as two views of one list
+// (1c slice 3 §4a): the Gateways, and the HTTPRoutes counted once by UID
+// with their worst attachment. Each view's counts are its own part's.
+function GatewayLists({ cluster }: { cluster: string }) {
+  const [view, setView] = useState<"gateways" | "routes">("gateways");
+  const rows = useGatewayRows(cluster);
+  const routeRows = useGatewayRouteRows(cluster);
+  const gwAttention = rows.partCounts?.included ?? rows.gateways.filter((g) => g.rule.included).length;
+  const routeAttention = routeRows.partCounts?.included ?? routeRows.routes.filter((r) => r.rule.included).length;
+  const toggle = (
+    <div role="group" aria-label="Gateway API view" style={{ display: "inline-flex", gap: 4 }}>
+      <button className="l-chip" aria-pressed={view === "gateways"} onClick={() => setView("gateways")}>Gateways {gwAttention > 0 && <span style={{ color: "var(--color-text-warning)" }}>{gwAttention}</span>}</button>
+      <button className="l-chip" aria-pressed={view === "routes"} onClick={() => setView("routes")}>Routes {routeAttention > 0 && <span style={{ color: "var(--color-text-warning)" }}>{routeAttention}</span>}</button>
+    </div>
+  );
+  return view === "routes"
+    ? <RouteList rows={routeRows} toggle={toggle} />
+    : <GatewayList rows={rows} toggle={toggle} />;
 }
 
 type Mode = "all" | "attention" | "programmed";
@@ -49,10 +71,9 @@ function Lamp({ role }: { role: Role }) {
   return <span role="img" aria-label={role.label} style={{ display: "inline-flex", justifySelf: "center" }}><VerdictLamp health={role} size={8} /></span>;
 }
 
-function GatewayList({ cluster }: { cluster: string }) {
+function GatewayList({ rows, toggle }: { rows: GatewayRows; toggle: React.ReactNode }) {
   // The Gateways are the Observer's shared rows (1c slice 3 §5.6) - live, not
   // a snapshot; the topology stays a fetch.
-  const rows = useGatewayRows(cluster);
   const openGateway = useFleet((s) => s.openGateway);
   const [mode, setMode] = useState<Mode>("all");
   const [query, setQuery] = useState("");
@@ -169,9 +190,10 @@ function GatewayList({ cluster }: { cluster: string }) {
           {allOk && <span className="t-secondary">all programmed</span>}
         </>
       )}
-      controls={gateways.length > 0 ? (
+      controls={(
         <>
-          {(
+          {toggle}
+          {gateways.length > 0 && (
             <>
               <div role="group" aria-label="Gateway filter" style={{ display: "inline-flex", gap: 4 }}>
                 <button className="l-chip" aria-pressed={mode === "all"} onClick={() => setMode("all")}>All {total}</button>
@@ -186,7 +208,7 @@ function GatewayList({ cluster }: { cluster: string }) {
             </>
           )}
         </>
-      ) : undefined}
+      )}
       notice={notices.length > 0 ? <div style={{ display: "grid", gap: 2 }}>{notices}</div> : undefined}
       state={state}
       stateView={stateView}
