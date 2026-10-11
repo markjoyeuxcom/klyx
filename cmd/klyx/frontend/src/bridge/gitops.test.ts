@@ -12,25 +12,22 @@ function deferred<T>(): Deferred<T> {
 const calls: Deferred<unknown>[] = [];
 vi.mock("../../bindings/github.com/moomora/klyx/internal/appbridge/index.js", () => ({
   GitOpsService: {
-    Open: vi.fn(async () => {}),
-    Close: vi.fn(() => { const d = deferred<unknown>(); calls.push(d); return d.promise; }),
     GetResourceDetail: vi.fn(() => { const d = deferred<unknown>(); calls.push(d); return d.promise; }),
+    ResolveGitLink: vi.fn(async () => resolved),
   },
 }));
-const handlers: Record<string, (ev: unknown) => void> = {};
+let resolved: unknown = null;
 vi.mock("@wailsio/runtime", () => ({
-  Events: { On: vi.fn((name: string, h: (ev: unknown) => void) => { handlers[name] = h; return () => {}; }) },
-  Browser: {}, Clipboard: {},
+  Browser: { OpenURL: vi.fn(async () => {}) }, Clipboard: { SetText: vi.fn(async () => {}) },
 }));
 
-import { getResourceDetail, closeGitOps, openGitOps } from "./gitops";
+import { getResourceDetail, resolveGitLink } from "./gitops";
 
 const KEY = "Kustomization/flux-system/apps";
 const detailFrom = (marker: string): ResourceDetailDTO => ({
   kind: "Kustomization", namespace: "flux-system", name: "apps", appliedRevision: marker, attemptedRevision: marker,
   applyFailed: false, conditions: [], inventory: [],
 });
-const flush = () => new Promise((r) => setTimeout(r, 0));
 
 beforeEach(() => {
   calls.length = 0;
@@ -68,22 +65,19 @@ describe("Flux bridge lifecycle fences (Codex Flux review #1)", () => {
     expect(useFleet.getState().gitops.detailCluster).toBe("A");
   });
 
-  it("a late closeGitOps(A) never clears B's freshly opened state", async () => {
-    const p = closeGitOps("A");
-    useFleet.getState().setGitOpsLoading("B");
-    calls[0].resolve(undefined);
+  // Design §5b: a failed detail read is the request's outcome - it lands
+  // for its key (the lens shows it apart from evidence), never dropped.
+  it("an error detail lands for the selection's key", async () => {
+    const p = getResourceDetail("A", "Kustomization", "flux-system", "apps");
+    calls[0].resolve({ kind: "Kustomization", namespace: "flux-system", name: "apps", error: "forbidden" });
     await p;
-    expect(useFleet.getState().gitops.cluster).toBe("B");
-    expect(useFleet.getState().gitops.loading).toBe(true);
+    expect(useFleet.getState().gitops.detail).toMatchObject({ name: "apps", error: "forbidden" });
   });
 
-  it("a late watch callback for A never overwrites B", async () => {
-    await openGitOps("A");
-    useFleet.getState().setGitOpsLoading("B");
-    handlers["gitops:updated"]({ data: { cluster: "A", resources: [{ kind: "Kustomization", namespace: "x", name: "from-A" }], sources: [] } });
-    await flush();
-    expect(useFleet.getState().gitops.cluster).toBe("B");
-    expect(useFleet.getState().gitops.resources).toEqual([]);
+  it("a Git link read that failed is named, never 'no Git source'", async () => {
+    resolved = { url: "", isDeepLink: false, copyText: "", error: "GitRepository flux-system/src: forbidden" };
+    await resolveGitLink("A", "Kustomization", "flux-system", "apps");
+    expect(useFleet.getState().actionStatus).toEqual({ kind: "error", message: "Could not resolve the Git source: GitRepository flux-system/src: forbidden" });
   });
 
   it("switching cluster drops the selection and detail", () => {

@@ -15,6 +15,8 @@ type ActionResultDTO struct {
 
 // FluxResourceDTO is the JSON projection of a Flux reconciliation resource.
 type FluxResourceDTO struct {
+	UID               string `json:"uid,omitempty"` // identity (1c slice 3 §2a)
+	GVR               string `json:"gvr,omitempty"` // the served group/version/resource
 	Kind              string `json:"kind"`
 	Namespace         string `json:"namespace"`
 	Name              string `json:"name"`
@@ -23,6 +25,10 @@ type FluxResourceDTO struct {
 	Message           string `json:"message"`
 	Revision          string `json:"revision"`
 	ReadySinceSeconds int64  `json:"readySinceSeconds"`
+	// ReadySinceUnix is the Ready condition's transition time itself (0 when
+	// unknown): shared rows are pushed only when they change, so the lens
+	// ticks the age from it (1c slice 3 §3).
+	ReadySinceUnix int64 `json:"readySinceUnix,omitempty"`
 	// Stale: the spec changed and the controller has not observed it yet -
 	// Ready reflects the previous spec; the row renders as transitioning.
 	Stale              bool   `json:"stale"`
@@ -37,15 +43,23 @@ type FluxResourceDTO struct {
 }
 
 func ToFluxDTO(r flux.Resource, now time.Time) FluxResourceDTO {
-	age := int64(0)
+	dto := fluxResourceFields(r, now)
+	dto.Rule = toRuleDTO(flux.ReconciliationRule(r))
+	return dto
+}
+
+// fluxResourceFields is the pure field conversion: no rule (the rows
+// converter copies the capture's evaluation, slice 3 §2a).
+func fluxResourceFields(r flux.Resource, now time.Time) FluxResourceDTO {
+	age, since := int64(0), int64(0)
 	if !r.ReadySince.IsZero() {
 		age = int64(now.Sub(r.ReadySince).Seconds())
 		if age < 0 {
 			age = 0
 		}
+		since = r.ReadySince.Unix()
 	}
 	return FluxResourceDTO{
-		Rule:               toRuleDTO(flux.ReconciliationRule(r)),
 		Kind:               string(r.Kind),
 		Namespace:          r.Namespace,
 		Name:               r.Name,
@@ -54,6 +68,7 @@ func ToFluxDTO(r flux.Resource, now time.Time) FluxResourceDTO {
 		Message:            r.Message,
 		Revision:           r.Revision,
 		ReadySinceSeconds:  age,
+		ReadySinceUnix:     since,
 		Stale:              r.Stale,
 		Generation:         r.Generation,
 		ObservedGeneration: r.ObservedGeneration,
@@ -69,26 +84,38 @@ type GitLinkDTO struct {
 	URL        string `json:"url"`
 	IsDeepLink bool   `json:"isDeepLink"`
 	CopyText   string `json:"copyText"`
+	// Error: a read on the way failed - the link is unverified, never "no
+	// Git source".
+	Error string `json:"error,omitempty"`
 }
 
 // FluxSourceDTO is the JSON projection of a Flux source object's fetch state.
 type FluxSourceDTO struct {
-	Kind      string `json:"kind"`
-	Namespace string `json:"namespace"`
-	Name      string `json:"name"`
-	Ready     string `json:"ready"`
-	Reason    string `json:"reason"`
-	Message   string `json:"message"`
-	Revision  string `json:"revision"`
-	URL       string `json:"url"`
-	Suspended bool   `json:"suspended"`
+	UID        string `json:"uid,omitempty"`
+	GVR        string `json:"gvr,omitempty"`
+	Generation int64  `json:"generation,omitempty"`
+	Kind       string `json:"kind"`
+	Namespace  string `json:"namespace"`
+	Name       string `json:"name"`
+	Ready      string `json:"ready"`
+	Reason     string `json:"reason"`
+	Message    string `json:"message"`
+	Revision   string `json:"revision"`
+	URL        string `json:"url"`
+	Suspended  bool   `json:"suspended"`
 	// Rule is the relocated lens rule (1c addendum §2).
 	Rule RuleDTO `json:"rule"`
 }
 
 func toSourceDTO(s flux.Source) FluxSourceDTO {
+	dto := sourceFields(s)
+	dto.Rule = toRuleDTO(flux.SourceRule(s))
+	return dto
+}
+
+// sourceFields is the pure field conversion (no rule).
+func sourceFields(s flux.Source) FluxSourceDTO {
 	return FluxSourceDTO{
-		Rule:      toRuleDTO(flux.SourceRule(s)),
 		Kind:      string(s.Kind),
 		Namespace: s.Namespace,
 		Name:      s.Name,
@@ -135,6 +162,16 @@ type FluxDiffDTO struct {
 }
 
 type ResourceDetailDTO struct {
+	// UID, Generation and AsOfUnix: the read object's identity and when it was
+	// read (design §5b) - the lens shows a detail only for the selected
+	// row's UID. Error: the read failed; the DTO then carries only the
+	// requested kind/namespace/name. SourceWarning: the bound source could
+	// not be read (not found, or unverified) - never a silent gap.
+	UID               string              `json:"uid,omitempty"`
+	Generation        int64               `json:"generation,omitempty"`
+	AsOfUnix          int64               `json:"asOfUnix,omitempty"`
+	Error             string              `json:"error,omitempty"`
+	SourceWarning     string              `json:"sourceWarning,omitempty"`
 	Kind              string              `json:"kind"`
 	Namespace         string              `json:"namespace"`
 	Name              string              `json:"name"`

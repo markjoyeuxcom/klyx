@@ -2,7 +2,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { useFleet } from "../store/fleet";
 import type { DependencyRefDTO, EventRowDTO, FluxResourceDTO, FluxSourceDTO, InventoryEntryDTO, ResourceDetailDTO, RuleDTO } from "../store/fleet";
-import { openGitOps, closeGitOps, getResourceDetail, reconcile, reconcileWithSource, setSuspend, resolveGitLink, fluxDiff } from "../bridge/gitops";
+import { getResourceDetail, reconcile, reconcileWithSource, setSuspend, resolveGitLink, fluxDiff } from "../bridge/gitops";
+import { FLUX_PART_KINDS, useFluxRows } from "../health/useFluxRows";
+import { useNow } from "../chrome/Age";
+import { clock, combineEvidence, coverageGaps, kindEvidence, lastGoodAt, type KindEvidence } from "../layout/coverage";
 import type { FluxDiffDTO } from "../bridge/gitops";
 import { ConfirmDialog } from "../chrome/ConfirmDialog";
 import { MetaTile, OperationDialog, OptionTile } from "../chrome/OperationDialog";
@@ -43,6 +46,11 @@ function shortRev(rev: string): string {
   const sha = s.slice(at + 1).replace(/^sha1:/, "").replace(/^sha256:/, "");
   return `${branch}@${sha.slice(0, 7)}`;
 }
+
+// sinceOf ticks the age since the Ready transition from its absolute time
+// (shared rows are pushed only when they change - slice 3 §3); the
+// capture-relative age is the fallback for a payload without it.
+const sinceOf = (r: FluxResourceDTO, nowS: number) => (r.readySinceUnix ? Math.max(0, nowS - r.readySinceUnix) : r.readySinceSeconds);
 
 function ago(sec: number): string {
   if (sec <= 0) return "";
@@ -168,31 +176,35 @@ export function GitOps({ cluster }: { cluster: string }) {
   const listRef = useRef<VirtualListHandle>(null);
   const absent = tier === "Absent";
 
-  useEffect(() => {
-    if (absent) return;
-    // If cleanup runs before openGitOps resolves, invoke the late-arriving
-    // unsubscriber immediately - otherwise its listener leaks.
-    let cancelled = false;
-    let off = () => {};
-    openGitOps(cluster).then((u) => (cancelled ? u() : (off = u))).catch((e) => console.error("openGitOps", e));
-    return () => {
-      cancelled = true;
-      off();
-      void closeGitOps(cluster);
-    };
-  }, [cluster, absent]);
+  // The data are the Observer's shared rows (1c slice 3 §5.3): the same
+  // capture as the cluster summary's flux task, never a watch of the lens's own.
+  useFluxRows(absent ? null : cluster);
+  const nowS = Math.floor(useNow() / 1000);
 
   const mine = gitops.cluster === cluster;
   const rows = useMemo(() => (mine ? gitops.resources : []), [mine, gitops.resources]);
   const allSources = useMemo(() => (mine ? (gitops.sources ?? []) : []), [mine, gitops.sources]);
   const watchError = mine ? gitops.watchError : null;
   const loaded = mine && !gitops.loading;
-  const complete = loaded && !watchError;
+  // Evidence per kind (layout/coverage.ts): removal, a verb's target and the
+  // headlines read their OWN kinds - a live Kustomization read never vouches
+  // for a failing HelmRelease or source read, or the reverse.
+  const evidenceOf = useCallback((kind: string): KindEvidence => kindEvidence(loaded, gitops.coverage, kind, watchError), [loaded, gitops.coverage, watchError]);
+  const recsEv = combineEvidence(FLUX_PART_KINDS.reconciliations.map(evidenceOf));
+  const srcEv = combineEvidence(FLUX_PART_KINDS.sources.map(evidenceOf));
+  // A4 (slice 3 §4): past the deadline the rows are evidence as of their
+  // capture, and the totals are the summary's until a re-read lands.
+  const rowsRefreshing = mine && !!gitops.rowsState?.refreshing;
+  const rowsAsOf = gitops.rowsState?.evaluatedAt ? clock(gitops.rowsState.evaluatedAt) : "the last read";
+  const globalCounts = mine ? gitops.partCounts : undefined;
+  const lastGood = mine ? lastGoodAt(gitops.coverage, [...FLUX_PART_KINDS.reconciliations, ...FLUX_PART_KINDS.sources]) : null;
+  const discoveryGap = mine ? coverageGaps(gitops.coverage ?? []) : null;
 
   // Pending verbs are pinned to the cluster + resource they were raised on and
-  // dropped when that target leaves a complete read or the cluster changes.
+  // dropped when that target leaves a complete read of its kind or the cluster
+  // changes.
   const setPinned = useCallback((v: Omit<PinnedVerb, "cluster"> | null) => setPinnedState(v ? ({ ...v, cluster } as PinnedVerb) : null), [cluster]);
-  const targetLive = (v: PinnedVerb) => v.cluster === cluster && (!complete || rows.some((x) => keyOf(x) === keyOf(v.r)));
+  const targetLive = (v: PinnedVerb) => v.cluster === cluster && (evidenceOf(v.r.kind) !== "complete" || rows.some((x) => keyOf(x) === keyOf(v.r)));
   const verb = pinned && targetLive(pinned) ? pinned : null;
   useEffect(() => { if (pinned && !verb) setPinnedState(null); }, [pinned, verb]);
 
@@ -238,9 +250,14 @@ export function GitOps({ cluster }: { cluster: string }) {
   }), [orderedSources, sourceKind, status, query]);
   const openSource = useCallback((s: FluxSourceDTO) => { setCursorKey(keyOf(s)); setSourceKey(keyOf(s)); }, []);
   const selectedSource = sourceKey ? allSources.find((x) => keyOf(x) === sourceKey) : undefined;
-  const lastSource = useRef<FluxSourceDTO | null>(null);
-  if (selectedSource) lastSource.current = selectedSource;
-  const sourceRemoved = !!sourceKey && complete && !selectedSource;
+  const lastSource = useRef<{ cluster: string; s: FluxSourceDTO } | null>(null);
+  if (selectedSource) lastSource.current = { cluster, s: selectedSource };
+  // removed only on a complete read of the source's own kind; otherwise kept
+  // with its last row, unverified (slice 3 §5a)
+  const sourceRemoved = !!sourceKey && evidenceOf(sourceKey.split("/")[0]) === "complete" && !selectedSource;
+  const priorSource = lastSource.current?.cluster === cluster && keyOf(lastSource.current.s) === sourceKey ? lastSource.current.s : null;
+  const sourceUnverified = !!sourceKey && !selectedSource && !sourceRemoved && !!priorSource;
+  const sourceSubject = selectedSource ?? priorSource;
   useEffect(() => {
     if (selectedSource && !visibleSources.includes(selectedSource)) setSourceKey(null);
   }, [selectedSource, visibleSources]);
@@ -255,14 +272,27 @@ export function GitOps({ cluster }: { cluster: string }) {
   // the selection closes it; a resource gone from a complete read is removed.
   const selKey = mine ? gitops.expandedKey : null;
   const selected = selKey ? byKey.get(selKey) : undefined;
-  const lastSelected = useRef<FluxResourceDTO | null>(null);
-  if (selected) lastSelected.current = selected;
-  const removed = !!selKey && complete && !selected;
-  // Detail is evidence for the selection only with matching cluster AND key.
-  const liveDetail = mine && gitops.detail && gitops.detailCluster === cluster && keyOf(gitops.detail) === selKey ? gitops.detail : null;
-  const lastDetail = useRef<{ key: string; d: ResourceDetailDTO } | null>(null);
-  if (liveDetail && selKey) lastDetail.current = { key: `${cluster}/${selKey}`, d: liveDetail };
-  const shownDetail = liveDetail ?? (removed && lastDetail.current?.key === `${cluster}/${selKey}` ? lastDetail.current.d : null);
+  const lastSelected = useRef<{ cluster: string; r: FluxResourceDTO } | null>(null);
+  if (selected) lastSelected.current = { cluster, r: selected };
+  const removed = !!selKey && evidenceOf(selKey.split("/")[0]) === "complete" && !selected;
+  const priorSelected = lastSelected.current?.cluster === cluster && keyOf(lastSelected.current.r) === selKey ? lastSelected.current.r : null;
+  const unverified = !!selKey && !selected && !removed && !!priorSelected;
+  const subject = selected ?? priorSelected;
+  // Detail is evidence for the selection only with matching cluster AND key,
+  // and - with a known UID - the same object: a same-name recreation's
+  // detail never becomes the old row's, nor the old detail the new row's
+  // (design §5b). A failed read is the request's outcome, shown apart.
+  const forSelection = mine && gitops.detail && gitops.detailCluster === cluster && keyOf(gitops.detail) === selKey ? gitops.detail : null;
+  const detailError = forSelection?.error || null;
+  const sameObject = (d: ResourceDetailDTO) => !subject?.uid || d.uid === subject.uid;
+  const liveDetail = forSelection && !forSelection.error && sameObject(forSelection) ? forSelection : null;
+  const detailOfOther = !!forSelection && !forSelection.error && !liveDetail;
+  // the last detail read for an object, by UID: kept for a removed row or a
+  // failed re-read of the same object, never for a recreation
+  const lastDetail = useRef<{ cluster: string; uid: string; d: ResourceDetailDTO } | null>(null);
+  if (liveDetail?.uid) lastDetail.current = { cluster, uid: liveDetail.uid, d: liveDetail };
+  const priorDetail = !liveDetail && (removed || detailError) && subject?.uid && lastDetail.current?.cluster === cluster && lastDetail.current.uid === subject.uid ? lastDetail.current.d : null;
+  const shownDetail = liveDetail ?? priorDetail;
   useEffect(() => {
     if (selected && view === "reconciliation" && !visibleRows.includes(selected)) collapse();
   }, [selected, visibleRows, view, collapse]);
@@ -284,7 +314,7 @@ export function GitOps({ cluster }: { cluster: string }) {
     entryRows.current = useFleet.getState().gitops.resources;
     setCursorKey(null);
   }, [cluster]);
-  const freshRead = loaded && !watchError && gitops.resources !== entryRows.current;
+  const freshRead = recsEv === "complete" && gitops.resources !== entryRows.current;
   useEffect(() => {
     if (autoSelect.current === "done" || !freshRead) return;
     autoSelect.current = "done";
@@ -328,34 +358,54 @@ export function GitOps({ cluster }: { cluster: string }) {
   const show = (id: string) => fitted.visible.has(id);
   const gridStyle = { gridTemplateColumns: fitted.template };
 
+  // global: the count selector's (slice 3 §4a); row-scoped: the breakdown,
+  // filters and footer ("as of" while refreshing)
+  const recTotal = globalCounts?.reconciliations?.total ?? rows.length;
+  const attention = globalCounts?.reconciliations?.included ?? rows.filter(included).length;
+  const srcTotal = globalCounts?.sources?.total ?? allSources.length;
+  const srcAttention = globalCounts?.sources?.included ?? allSources.filter(included).length;
   const ks = rows.filter((r) => r.kind === "Kustomization").length;
   const hr = rows.filter((r) => r.kind === "HelmRelease").length;
   const failed = rows.filter((r) => !r.suspended && r.ready === "Failed").length;
-  const attention = rows.filter(included).length;
   const suspended = rows.filter((r) => r.suspended).length;
   const reconciling = rows.filter((r) => !r.suspended && r.ready === "Reconciling").length;
   const syncing = rows.filter((r) => !r.suspended && r.stale).length;
-  const srcAttention = allSources.filter(included).length;
   const srcSuspended = allSources.filter((s) => s.suspended).length;
+  const asOf = rowsRefreshing ? ` (as of ${rowsAsOf})` : "";
   const sourceKinds = [...new Set(allSources.map((s) => s.kind))].sort();
 
   const clearFilters = () => { setStatus("all"); setKindFilter(""); setSourceKind(""); setQuery(""); };
+  // total: the rows in hand (dataset state, filters, footer); the headline
+  // reads the global count
   const total = view === "sources" ? allSources.length : rows.length;
+  const globalTotal = view === "sources" ? srcTotal : recTotal;
   const shown = view === "sources" ? visibleSources.length : visibleRows.length;
+  const viewEv = view === "sources" ? srcEv : recsEv;
   let state: DatasetState = "ready";
   if (absent) state = "empty";
-  else if (!loaded && total === 0) state = "loading";
-  else if (watchError && total === 0) state = "unreadable";
+  else if (viewEv === "failed" && total === 0) state = "unreadable";
+  else if (viewEv === "pending" && total === 0) state = "loading";
   else if (total === 0) state = "empty";
   else if (shown === 0) state = "no-match";
   const stateView = state === "loading" ? <div style={{ width: "100%", alignSelf: "flex-start" }}><SkeletonRows rows={7} label="loading reconciliation state" /></div>
     : state === "unreadable" ? <EmptyState icon={<IconAlertTriangle size={28} stroke={1.2} />} title="Flux state could not be read." hint={watchError ?? undefined} />
     : state === "empty" ? (absent
       ? <EmptyState icon={<IconGitBranch size={28} stroke={1.2} />} title="Flux is not installed on this cluster." hint="Klyx detected no Flux controllers or CRDs here." />
+      : rowsRefreshing && globalTotal > 0 ? <EmptyState icon={<IconGitBranch size={28} stroke={1.2} />} title={`No ${view === "sources" ? "Flux sources" : "Flux resources"} as of ${rowsAsOf}.`} hint={`Refreshing - the cluster summary now counts ${globalTotal}.`} />
       : <EmptyState icon={<IconGitBranch size={28} stroke={1.2} />} title={view === "sources" ? "No Flux sources on this cluster." : "No Flux resources on this cluster."} hint={view === "sources" ? undefined : "Flux is installed but no Kustomizations or HelmReleases exist yet."} />)
-    : <EmptyState icon={<IconGitBranch size={28} stroke={1.2} />} title={view === "sources" ? "No Flux sources match the current filters." : "No Flux resources match the current filters."} hint={`${total} ${view === "sources" ? "sources" : "resources"} on this cluster.`} action={{ label: "Clear filters", onClick: clearFilters }} />;
+    : <EmptyState icon={<IconGitBranch size={28} stroke={1.2} />} title={view === "sources" ? "No Flux sources match the current filters." : "No Flux resources match the current filters."} hint={`${total} ${view === "sources" ? "sources" : "resources"} on this cluster${asOf}.`} action={{ label: "Clear filters", onClick: clearFilters }} />;
 
-  const partial = watchError ? "+" : "";
+  // pending/failed = a lower bound ("+"); stale = the last observed set ("*")
+  const partial = viewEv === "complete" ? "" : viewEv === "stale" ? "*" : "+";
+  const notKnown = (ev: KindEvidence) => (ev === "stale" ? "none known not ready (last observed)" : "none known not ready");
+
+  // Notices stack: each is its own evidence, none hides another.
+  const statusLine = { minHeight: 28, display: "flex", alignItems: "center" } as const;
+  const notices: ReactNode[] = [];
+  if (watchError && total > 0) notices.push(<WatchErrorBanner key="watch" tool="Flux" failure={`watch failed - showing the last good state${lastGood ? ` from ${clock(lastGood)}` : ""}`} error={watchError} />);
+  else if (viewEv === "pending" && total > 0) notices.push(<div key="pending" role="status" className="t-secondary" style={statusLine}>Still reading - this {view === "sources" ? "source" : "Kustomization / HelmRelease"} list is incomplete.</div>);
+  if (rowsRefreshing && !absent) notices.push(<div key="a4" role="status" data-testid="rows-refreshing" className="t-secondary" style={statusLine}>Rows as of {rowsAsOf} - refreshing; the totals are the cluster summary's.{gitops.rowsState?.refreshError ? ` Last re-read failed: ${gitops.rowsState.refreshError}` : ""}</div>);
+  if (discoveryGap && !absent) notices.push(<div key="gap" role="status" data-testid="discovery-gap" className="t-secondary" style={{ ...statusLine, color: "var(--color-text-warning)", overflowWrap: "anywhere" }}>Discovery re-check failing - {discoveryGap}. A capability gap only; the rows keep their own state.</div>);
   const filterBits = [status !== "all" ? status : "", view === "reconciliation" && kindFilter ? (kindFilter === "Kustomization" ? "ks" : "hr") : "", view === "sources" && sourceKind ? (sourceKindLabel[sourceKind] ?? sourceKind) : "", query ? "search" : ""].filter(Boolean);
   const attnHere = view === "sources" ? srcAttention : attention;
 
@@ -366,23 +416,23 @@ export function GitOps({ cluster }: { cluster: string }) {
         title={view === "sources" ? "Flux sources" : "Flux reconciliation"}
         summary={state === "loading" || state === "unreadable" || absent ? null : view === "sources" ? (
           <>
-            <span className="t-number" style={{ color: "var(--color-text-secondary)" }}>{allSources.length}{partial}</span>
+            <span className="t-number" style={{ color: "var(--color-text-secondary)" }}>{srcTotal}{partial}</span>
             {srcAttention > 0
               ? <span className="t-status" style={{ color: "var(--color-text-warning)" }}>{srcAttention} not ready</span>
-              : <span className="t-secondary">{watchError ? "none known not ready" : srcSuspended > 0 ? "all active sources ready" : "all sources ready"}</span>}
-            {srcSuspended > 0 && <span className="t-secondary">{srcSuspended} suspended</span>}
+              : <span className="t-secondary">{srcEv !== "complete" ? notKnown(srcEv) : srcSuspended > 0 ? "all active sources ready" : "all sources ready"}</span>}
+            {srcSuspended > 0 && <span className="t-secondary">{srcSuspended} suspended{asOf}</span>}
           </>
         ) : (
           <>
-            <span className="t-number" style={{ color: "var(--color-text-secondary)" }}>{rows.length}{partial}</span>
+            <span className="t-number" style={{ color: "var(--color-text-secondary)" }}>{recTotal}{partial}</span>
             {attention > 0
               // "not ready", not "need attention": this legacy count still
               // includes neutral progressing/stale/unknown rows until the shared
               // Flux health slice aligns backend summary, tape and lens together.
               ? <span className="t-status" style={{ color: failed > 0 ? "var(--color-text-danger)" : "var(--color-text-warning)" }}>{failed > 0 ? "▲ " : ""}{attention} not ready</span>
-              : <span className="t-secondary">{watchError ? "none known not ready" : "all ready"}</span>}
-            <span className="t-secondary">
-              {[`${ks} ks · ${hr} hr`, failed ? `${failed} failed` : "", reconciling ? `${reconciling} reconciling` : "", syncing ? `${syncing} syncing` : "", suspended ? `${suspended} suspended` : ""].filter(Boolean).join(" · ")}
+              : <span className="t-secondary">{recsEv !== "complete" ? notKnown(recsEv) : "all ready"}</span>}
+            <span className="t-secondary" data-testid="flux-breakdown">
+              {[`${ks} ks · ${hr} hr`, failed ? `${failed} failed` : "", reconciling ? `${reconciling} reconciling` : "", syncing ? `${syncing} syncing` : "", suspended ? `${suspended} suspended` : ""].filter(Boolean).join(" · ")}{asOf}
             </span>
           </>
         )}
@@ -421,7 +471,7 @@ export function GitOps({ cluster }: { cluster: string }) {
             </label>
           </>
         )}
-        notice={watchError && total > 0 ? <WatchErrorBanner tool="Flux" failure="watch failed - showing the last good state" error={watchError} /> : undefined}
+        notice={notices.length > 0 ? <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>{notices}</div> : undefined}
         state={state}
         stateView={stateView}
         body={view === "sources" ? (
@@ -511,7 +561,7 @@ export function GitOps({ cluster }: { cluster: string }) {
                     )}
                     {show("source") && <span style={{ ...ellipsisCell, color: "var(--color-text-secondary)" }} title={sourceText(r)}>{sourceText(r) || "-"}</span>}
                     {show("revision") && <span style={{ ...ellipsisCell, color: "var(--color-text-secondary)" }} title={r.revision}>{shortRev(r.revision) || "-"}</span>}
-                    {show("since") && <span style={{ color: "var(--color-text-tertiary)" }}>{ago(r.readySinceSeconds) || "-"}</span>}
+                    {show("since") && <span style={{ color: "var(--color-text-tertiary)" }}>{ago(sinceOf(r, nowS)) || "-"}</span>}
                   </div>
                 );
               }}
@@ -521,27 +571,33 @@ export function GitOps({ cluster }: { cluster: string }) {
         footer={<span className="t-legend">{view === "sources" ? "j k navigate · ↵ inspect · / search" : "j k navigate · ↵ inspect · r reconcile · s suspend · / search"}</span>}
         footerEnd={
           <>
-            <span className="t-secondary">{shown} of {total}{partial} {view === "sources" ? "sources" : "resources"} · broken first{filterBits.length ? ` · filter: ${filterBits.join(", ")}` : ""}</span>
+            <span className="t-secondary">{shown} of {total}{partial} {view === "sources" ? "sources" : "resources"}{asOf} · broken first{filterBits.length ? ` · filter: ${filterBits.join(", ")}` : ""}</span>
             {filterBits.length > 0 && <button className="l-chip" style={{ height: 20, color: "var(--color-text-info)" }} onClick={clearFilters}>Show all</button>}
           </>
         }
-        inspector={view === "sources" ? (sourceKey && (selectedSource || sourceRemoved) && lastSource.current ? (
+        inspector={view === "sources" ? (sourceKey && sourceSubject ? (
           <SourceInspector
             key={`${cluster}/${sourceKey}`}
-            source={selectedSource ?? lastSource.current}
+            source={sourceSubject}
             removed={sourceRemoved}
-            usedBy={rows.filter((r) => boundTo(r, (selectedSource ?? lastSource.current)!))}
+            unverified={sourceUnverified}
+            usedBy={rows.filter((r) => boundTo(r, sourceSubject))}
             onClose={() => setSourceKey(null)}
             onOpenResource={(r) => { setView("reconciliation"); setSourceKey(null); openRow(r); }}
           />
-        ) : undefined) : view === "reconciliation" && selKey && (selected || removed) && lastSelected.current ? (
+        ) : undefined) : view === "reconciliation" && selKey && subject ? (
           <FluxInspector
             key={`${cluster}/${selKey}`}
             cluster={cluster}
-            resource={selected ?? lastSelected.current}
+            resource={subject}
+            nowS={nowS}
             removed={removed}
+            unverified={unverified}
             isProtected={isProtected}
             detail={shownDetail}
+            detailPrior={shownDetail !== null && (removed || shownDetail === priorDetail)}
+            detailError={detailError}
+            detailOfOther={detailOfOther}
             deps={byKey}
             onClose={close}
             onReconcile={(r) => setPinned({ kind: "reconcile", r })}
@@ -589,9 +645,10 @@ export function GitOps({ cluster }: { cluster: string }) {
 // SourceInspector - a source's full diagnosis (wrapped message, URL,
 // revision) and the resources bound to it, which is how a source failure
 // reaches the operator's attention. Manifest opens the guarded editor.
-function SourceInspector({ source, removed, usedBy, onClose, onOpenResource }: {
+function SourceInspector({ source, removed, unverified, usedBy, onClose, onOpenResource }: {
   source: FluxSourceDTO;
   removed: boolean;
+  unverified: boolean;
   usedBy: FluxResourceDTO[];
   onClose: () => void;
   onOpenResource: (r: FluxResourceDTO) => void;
@@ -612,7 +669,7 @@ function SourceInspector({ source, removed, usedBy, onClose, onOpenResource }: {
           <div role="status" className="t-body" style={{ padding: "8px 10px", borderRadius: 4, background: "var(--color-background-secondary)", boxShadow: "inset 0 0 0 1px var(--color-border-secondary)" }}>
             <span className="t-status">{s.kind} removed.</span> It is no longer in the current read. The details below are its last evidence.
           </div>
-        ) : (
+        ) : unverified ? <UnverifiedNotice kind={s.kind} /> : (
           <div>
             <InspectorStatus tone={roleTone(h.kind)} label={h.label} reason={included(s) ? s.reason || undefined : undefined} detail={shortRev(s.revision) || undefined} />
             {s.message && included(s) && (
@@ -661,12 +718,19 @@ function sinceWord(r: FluxResourceDTO): string {
 // full message; Reconcile (primary), Suspend/Resume (secondary), More (view in
 // Git, manifest); then the bound source (the usual root cause), dependsOn
 // blockers, drift/events, conditions, inventory, and the gated live diff.
-function FluxInspector({ cluster, resource, removed, isProtected, detail, deps, onClose, onReconcile, onToggleSuspend }: {
+function FluxInspector({ cluster, resource, nowS, removed, unverified, isProtected, detail, detailPrior, detailError, detailOfOther, deps, onClose, onReconcile, onToggleSuspend }: {
   cluster: string;
   resource: FluxResourceDTO;
+  nowS: number;
   removed: boolean;
+  unverified: boolean;
   isProtected: boolean;
   detail: ResourceDetailDTO | null;
+  // detailPrior: the detail is this object's last good read, not the current one
+  detailPrior: boolean;
+  detailError: string | null;
+  // detailOfOther: the last detail read was of an earlier object with this name
+  detailOfOther: boolean;
   deps: Map<string, FluxResourceDTO>;
   onClose: () => void;
   onReconcile: (r: FluxResourceDTO) => void;
@@ -695,7 +759,7 @@ function FluxInspector({ cluster, resource, removed, isProtected, detail, deps, 
     <div role="status" className="t-body" style={{ padding: "8px 10px", borderRadius: 4, background: "var(--color-background-secondary)", boxShadow: "inset 0 0 0 1px var(--color-border-secondary)" }}>
       <span className="t-status">{r.kind} removed.</span> It is no longer in the current read. The details below are its last evidence; actions are disabled.
     </div>
-  ) : (
+  ) : unverified ? <UnverifiedNotice kind={r.kind} /> : (
     <div>
       {/* The headline is the Go rule's verdict; the generation lag and the
           controller's own words below it are secondary evidence. */}
@@ -725,7 +789,7 @@ function FluxInspector({ cluster, resource, removed, isProtected, detail, deps, 
         meta={
           <>
             {isProtected && <span style={{ color: "var(--color-text-warning)", fontWeight: 600 }}>protected · </span>}
-            {[sourceText(r) ? `source ${sourceText(r)}` : "", r.readySinceSeconds > 0 ? (r.suspended ? `${sinceWord(r)} ${ago(r.readySinceSeconds)}` : `${sinceWord(r)} since ${ago(r.readySinceSeconds)}`) : ""].filter(Boolean).join(" · ") || "Flux"}
+            {[sourceText(r) ? `source ${sourceText(r)}` : "", sinceOf(r, nowS) > 0 ? (r.suspended ? `${sinceWord(r)} ${ago(sinceOf(r, nowS))}` : `${sinceWord(r)} since ${ago(sinceOf(r, nowS))}`) : ""].filter(Boolean).join(" · ") || "Flux"}
           </>
         }
         onClose={onClose}
@@ -734,16 +798,29 @@ function FluxInspector({ cluster, resource, removed, isProtected, detail, deps, 
         secondary={live ? { label: isSuspended ? "Resume" : "Suspend", kbd: "s", onSelect: () => onToggleSuspend(r, isSuspended) } : undefined}
         more={more}
       >
+        {detailError && !removed && (
+          <div role="alert" data-testid="detail-error" className="t-body" style={{ display: "flex", alignItems: "flex-start", gap: 5, color: "var(--color-text-danger)", overflowWrap: "anywhere" }}>
+            <IconAlertTriangle size={12} stroke={1.5} style={{ flexShrink: 0, marginTop: 2 }} />
+            <span>Detail read failed: {detailError}{detail ? "" : " - the detail is unverified, not empty."}</span>
+          </div>
+        )}
         {!detail ? (
-          <span className="t-secondary">{removed ? "No detail was loaded before it was removed." : "Loading detail…"}</span>
+          detailError && !removed ? null
+            : <span className="t-secondary" data-testid="detail-unloaded">{removed ? "No detail was loaded before it was removed." : detailOfOther ? "Detail not loaded for this object - the last read was of an earlier object with this name." : "Loading detail…"}</span>
         ) : (
           <>
+            {detailPrior && <span className="t-secondary">{detail.asOfUnix ? `Last read ${new Date(detail.asOfUnix * 1000).toLocaleTimeString()}` : "Last read detail"}{removed ? " - before it was removed." : "."}</span>}
             {detail.applyFailed && (
               <div className="t-body" style={{ color: "var(--color-text-danger)" }}>
                 Apply failed at <span className="t-identifier">{shortRev(detail.attemptedRevision)}</span>
               </div>
             )}
-            {detail.source && <SourceSection source={detail.source} />}
+            {detail.source ? <SourceSection source={detail.source} />
+              : detail.sourceWarning ? (
+                <InspectorBlock title="Source">
+                  <div data-testid="source-warning" style={{ color: "var(--color-text-warning)", overflowWrap: "anywhere" }}>{detail.sourceWarning}</div>
+                </InspectorBlock>
+              ) : null}
             {detail.dependsOn && detail.dependsOn.length > 0 && (
               <DependsOnSection deps={detail.dependsOn} kind={r.kind} resolve={deps} blocked={detail.reason === "DependencyNotReady"} />
             )}
@@ -974,6 +1051,16 @@ function EventsSection({ events }: { events: EventRowDTO[] }) {
         );
       })}
     </InspectorBlock>
+  );
+}
+
+// UnverifiedNotice: the selection is missing from a read that is not live
+// and complete for its kind - kept with its last row, never called removed.
+function UnverifiedNotice({ kind }: { kind: string }) {
+  return (
+    <div role="status" data-testid="selection-unverified" className="t-body" style={{ padding: "8px 10px", borderRadius: 4, background: "var(--color-background-secondary)", boxShadow: "inset 0 0 0 1px var(--color-border-warning)" }}>
+      <span className="t-status">Not in the current {kind} read.</span> That read is incomplete, so this is unverified - it may still exist. The details below are its last observed row.
+    </div>
   );
 }
 

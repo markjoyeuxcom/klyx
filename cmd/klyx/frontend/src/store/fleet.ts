@@ -49,6 +49,8 @@ export type ClusterDTO = {
 
 export type FluxResourceDTO = {
   rule: RuleDTO; // the relocated lens rule (1c addendum §2)
+  uid?: string; // identity (1c slice 3 §2a): a same-name recreation is another object
+  gvr?: string;
   kind: string;
   namespace: string;
   name: string;
@@ -57,6 +59,9 @@ export type FluxResourceDTO = {
   message: string;
   revision: string;
   readySinceSeconds: number;
+  // the Ready transition time itself (0/absent = unknown): shared rows are
+  // pushed only when they change, so the lens ticks the age from it
+  readySinceUnix?: number;
   suspended: boolean;
   sourceKind: string;
   sourceName: string;
@@ -165,6 +170,9 @@ export type ConditionDTO = { type: string; status: string; reason: string; messa
 export type InventoryEntryDTO = { group: string; version: string; kind: string; namespace: string; name: string };
 export type FluxSourceDTO = {
   rule: RuleDTO; // the relocated lens rule (1c addendum §2)
+  uid?: string;
+  gvr?: string;
+  generation?: number;
   kind: string;
   namespace: string;
   name: string;
@@ -177,6 +185,15 @@ export type FluxSourceDTO = {
 };
 export type DependencyRefDTO = { namespace: string; name: string };
 export type ResourceDetailDTO = {
+  // The read object's identity and when it was read (design §5b): a detail
+  // is shown only for the selected row's UID. error: the read failed - the
+  // DTO then carries only the requested kind/namespace/name, never evidence.
+  // sourceWarning: the bound source could not be read (not found/unverified).
+  uid?: string;
+  generation?: number;
+  asOfUnix?: number;
+  error?: string;
+  sourceWarning?: string;
   kind: string;
   namespace: string;
   name: string;
@@ -203,7 +220,15 @@ export type GitOpsSlice = {
   // The cluster the detail was read from: DEV/STG/PRD share kind/ns/name, so
   // a detail is only evidence for the selection when this matches too.
   detailCluster?: string | null;
+  // From the health Observer's shared rows (1c slice 3 §5.3): per-kind
+  // coverage, the A4 state and the one count selector's per-part counts.
+  coverage?: KindCoverageDTO[];
+  rowsState?: RowsStateDTO;
+  partCounts?: { reconciliations: PartCountsDTO | null; sources: PartCountsDTO | null };
 };
+
+// What the Flux rows adapter (health/useFluxRows) writes.
+export type GitOpsRowsPayload = Pick<GitOpsSlice, "resources" | "sources" | "coverage" | "watchError" | "loading" | "rowsState" | "partCounts">;
 
 // cert-manager lens (M11). NotAfterUnix/RenewalUnix are 0 when unknown; expiry is
 // derived client-side from the absolute timestamps. A failing bound issuer is the
@@ -927,6 +952,7 @@ type FleetState = {
   gitops: GitOpsSlice;
   setGitOps: (cluster: string, resources: FluxResourceDTO[], sources: FluxSourceDTO[], watchError?: string) => void;
   setGitOpsLoading: (cluster: string) => void;
+  setGitOpsFromRows: (cluster: string, p: GitOpsRowsPayload) => void;
   clearGitOps: () => void;
   expand: (key: string) => void;
   collapse: () => void;
@@ -1163,8 +1189,9 @@ export const useFleet = create<FleetState>((set) => ({
   setGitOps: (cluster, resources, sources, watchError) => set((s) => ({ gitops: { ...s.gitops, cluster, resources, sources, loading: false, watchError: watchError || null } })),
   // A different cluster starts from no selection and no detail: a same-key
   // selection must never carry another cluster's evidence over.
-  setGitOpsLoading: (cluster) => set((s) => ({ gitops: { ...s.gitops, cluster, resources: [], sources: [], loading: true, watchError: null,
+  setGitOpsLoading: (cluster) => set((s) => ({ gitops: { ...s.gitops, cluster, resources: [], sources: [], loading: true, watchError: null, coverage: undefined, rowsState: undefined, partCounts: undefined,
     ...(s.gitops.cluster !== cluster ? { expandedKey: null, detail: null, detailCluster: null } : {}) } })),
+  setGitOpsFromRows: (cluster, p) => set((s) => ({ gitops: { ...s.gitops, cluster, ...p } })),
   clearGitOps: () => set({ gitops: { cluster: null, resources: [], sources: [], loading: false, watchError: null, expandedKey: null, detail: null } }),
   expand: (key) => set((s) => ({ gitops: { ...s.gitops, expandedKey: key, detail: null } })),
   collapse: () => set((s) => ({ gitops: { ...s.gitops, expandedKey: null, detail: null } })),

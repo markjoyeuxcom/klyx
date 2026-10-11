@@ -33,7 +33,6 @@ import (
 	"github.com/moomora/klyx/internal/execenv"
 	"github.com/moomora/klyx/internal/fluxcli"
 	"github.com/moomora/klyx/internal/gitops/argo"
-	"github.com/moomora/klyx/internal/gitops/flux"
 	"github.com/moomora/klyx/internal/gwapi"
 	"github.com/moomora/klyx/internal/healthsrc"
 	"github.com/moomora/klyx/internal/helmcli"
@@ -50,13 +49,7 @@ type Conn interface {
 	Name() string
 	Start(ctx context.Context)
 	Snapshot() Snapshot
-	OpenGitOps()
-	CloseGitOps()
-	GitOpsResources() []flux.Resource
-	GitOpsObject(kind, namespace, name string) (*unstructured.Unstructured, bool)
-	GitOpsSources() []flux.Source
-	GitOpsSourceObject(kind, namespace, name string) (*unstructured.Unstructured, bool)
-	GitOpsWatchHealth() (synced bool, lastErr string)
+	FluxObject(ctx context.Context, kind, ns, name string) (*unstructured.Unstructured, error)
 	GetCertificateChain(ctx context.Context, ns, name string) (certmanager.Chain, error)
 	FluxEvents(ctx context.Context, kind, ns, name string) ([]workloads.EventSummary, error)
 	FluxAvailable() bool
@@ -64,7 +57,6 @@ type Conn interface {
 	Reconcile(ctx context.Context, kind, ns, name string) error
 	ReconcileWithSource(ctx context.Context, kind, ns, name string) error
 	SetSuspend(ctx context.Context, kind, ns, name string, suspend bool) error
-	SourceURL(ctx context.Context, kind, ns, name string) (string, bool)
 	ListCRDs(ctx context.Context) ([]crd.Info, error)
 	ListWorkloads(ctx context.Context, namespace string) ([]workloads.Workload, bool, bool, error)
 	WorkloadCompare(ctx context.Context, kind, ns, name string) (WorkloadCompareInfo, error)
@@ -179,9 +171,6 @@ type ClusterConn struct {
 	podInf         cache.SharedIndexInformer // without an Observer only: the metadata pod informer it replaced
 	podAt          time.Time                 // without an Observer only: the last pod event
 	disc           discoveryLike             // TTL-cached discovery; built lazily via c.discovery()
-	gitops         *gitopsWatch              // lazy; nil until OpenGitOps
-	gitopsOpening  bool                      // single-flights OpenGitOps' out-of-lock install
-	gitopsWanted   bool                      // desired state; an in-flight open aborts if false
 	healthSink     observe.Sink              // set before Start; nil = no health Observer (tests)
 	health         *observe.Observer         // the cluster's health observation (1c), from Start
 	healthSyncMu   sync.Mutex                // serializes state->Observer handoffs (see syncHealth)

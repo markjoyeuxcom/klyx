@@ -4,22 +4,16 @@ import (
 	"context"
 	"errors"
 	"strings"
-	"sync/atomic"
 	"testing"
-	"time"
 
-	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/apimachinery/pkg/watch"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
-	clientfeatures "k8s.io/client-go/features"
-	clientfeaturestesting "k8s.io/client-go/features/testing"
 	"k8s.io/client-go/kubernetes/fake"
 	clienttesting "k8s.io/client-go/testing"
-	"k8s.io/client-go/tools/cache"
 
 	"github.com/moomora/klyx/internal/capability"
 	"github.com/moomora/klyx/internal/clock"
@@ -106,38 +100,21 @@ func TestServedVersion_ResolvesPerResource(t *testing.T) {
 	}
 }
 
-// The watch, the source URL read and the reconcile-with-source patch all use
-// OCIRepository's own served version, and an unserved source kind is not
-// watched at all (no informer, no error).
+// The direct read (FluxObject, design §5b) and the reconcile-with-source
+// patch both use OCIRepository's own served version; an unserved source kind
+// is not found, never a guessed version.
 func TestFluxGVRs_UseTheResourcesOwnServedVersion(t *testing.T) {
 	ks := ksObj("apps")
 	ks.Object["spec"] = map[string]interface{}{"sourceRef": map[string]interface{}{"kind": "OCIRepository", "name": "manifests"}}
 	c, dyn, cancel := splitConn(t, ociRepo("manifests"), ks)
 	defer cancel()
 
-	c.OpenGitOps()
-	defer c.CloseGitOps()
-	waitFor(t, 2*time.Second, func() bool {
-		for _, s := range c.GitOpsSources() {
-			if s.Kind == flux.OCIRepositoryKind && s.Name == "manifests" {
-				return true
-			}
-		}
-		return false
-	})
-	c.mu.RLock()
-	_, bucketWatched := c.gitops.srcInf[flux.BucketKind]
-	c.mu.RUnlock()
-	if bucketWatched {
-		t.Fatal("an unserved source kind must not be watched")
+	u, err := c.FluxObject(context.Background(), "OCIRepository", "flux-system", "manifests")
+	if err != nil || u.GetAPIVersion() != "source.toolkit.fluxcd.io/v1beta2" {
+		t.Fatalf("FluxObject = %v, %v; want the v1beta2 object", u, err)
 	}
-	waitFor(t, 2*time.Second, func() bool { synced, _ := c.GitOpsWatchHealth(); return synced })
-	if _, lastErr := c.GitOpsWatchHealth(); lastErr != "" {
-		t.Fatalf("a healthy split-version watch reported %q", lastErr)
-	}
-
-	if url, ok := c.SourceURL(context.Background(), "OCIRepository", "flux-system", "manifests"); !ok || url != "oci://ghcr.io/org/manifests" {
-		t.Fatalf("SourceURL = (%q, %v)", url, ok)
+	if _, err := c.FluxObject(context.Background(), "Bucket", "flux-system", "b"); !apierrors.IsNotFound(err) {
+		t.Fatalf("an unserved source kind is not found: %v", err)
 	}
 
 	dyn.ClearActions()
@@ -159,27 +136,6 @@ func TestFluxGVRs_UseTheResourcesOwnServedVersion(t *testing.T) {
 
 	if _, err := c.gvrForKind(flux.Kind("Bucket")); err == nil {
 		t.Fatal("gvrForKind must refuse a kind it does not handle")
-	}
-}
-
-// A failing SOURCE watch surfaces even though Kustomizations and HelmReleases
-// synced - it used to read as a clean, empty source list.
-func TestGitOpsWatchHealth_IncludesSourceInformers(t *testing.T) {
-	c, dyn, cancel := splitConn(t)
-	defer cancel()
-	dyn.PrependReactor("list", "ocirepositories", func(clienttesting.Action) (bool, runtime.Object, error) {
-		return true, nil, errors.New("ocirepositories.source.toolkit.fluxcd.io is forbidden")
-	})
-	c.OpenGitOps()
-	defer c.CloseGitOps()
-
-	waitFor(t, 2*time.Second, func() bool { _, e := c.GitOpsWatchHealth(); return e != "" })
-	synced, lastErr := c.GitOpsWatchHealth()
-	if synced {
-		t.Fatal("health must not be synced while a source informer is failing")
-	}
-	if !strings.Contains(lastErr, "OCIRepository") || !strings.Contains(lastErr, "forbidden") {
-		t.Fatalf("the failing source watch must be named: %q", lastErr)
 	}
 }
 
@@ -210,91 +166,14 @@ func TestServedVersion_PartialDiscoveryIsNotAbsence(t *testing.T) {
 	}
 }
 
-func TestOpenGitOps_PartialDiscoveryCannotHideAnInstalledSource(t *testing.T) {
+// Codex batch-3 review R2, on the direct read: one unreadable discovery
+// version is uncertainty, never absence - an installed OCIRepository is read
+// at the version that could not be ruled out.
+func TestFluxObject_PartialDiscoveryCannotHideAnInstalledSource(t *testing.T) {
 	c, _, cancel := splitConn(t, ociRepo("present"))
 	defer cancel()
 	c.disc = newCachedDiscovery(partialDiscovery{c.typed.Discovery()}, nil)
-	c.OpenGitOps()
-	defer c.CloseGitOps()
-	waitFor(t, 2*time.Second, func() bool {
-		for _, s := range c.GitOpsSources() {
-			if s.Name == "present" {
-				return true
-			}
-		}
-		return false
-	})
-}
-
-// Codex batch-3 review R3 probe, adopted (WatchListClient off, as in the
-// probe): a watch fails once, then the relist and reopened watch succeed at
-// the SAME resourceVersion. Recovery is explicit (withRecovery), so the
-// failure stops being current; RV movement was no signal.
-func TestWatchErrTracker_RecoveryAtSameRV(t *testing.T) {
-	clientfeaturestesting.SetFeatureDuringTest(t, clientfeatures.WatchListClient, false)
-	var watches atomic.Int32
-	watcher := watch.NewRaceFreeFake()
-	defer watcher.Stop()
-	tr := &watchErrTracker{}
-	inf := cache.NewSharedIndexInformer(withRecovery(&cache.ListWatch{
-		ListWithContextFunc: func(context.Context, metav1.ListOptions) (runtime.Object, error) {
-			return &corev1.PodList{ListMeta: metav1.ListMeta{ResourceVersion: "100"}}, nil
-		},
-		WatchFuncWithContext: func(context.Context, metav1.ListOptions) (watch.Interface, error) {
-			if watches.Add(1) == 1 {
-				return nil, errors.New("transient watch setup failure")
-			}
-			return watcher, nil
-		},
-	}, tr), &corev1.Pod{}, 0, cache.Indexers{})
-	trackWatchErrors(inf, tr)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go inf.Run(ctx.Done())
-
-	waitFor(t, 5*time.Second, func() bool { return tr.lastError() != "" })
-	waitFor(t, 10*time.Second, func() bool { return watches.Load() >= 2 && inf.HasSynced() })
-	if rv := inf.LastSyncResourceVersion(); rv != "100" {
-		t.Fatalf("fixture RV %q", rv)
+	if u, err := c.FluxObject(context.Background(), "OCIRepository", "flux-system", "present"); err != nil || u.GetName() != "present" {
+		t.Fatalf("partial discovery hid an installed source: %v %v", u, err)
 	}
-	waitFor(t, 2*time.Second, func() bool { return tr.currentError() == "" })
-}
-
-// A failure AFTER a success is current - the "synced, then broke" case the
-// old sync-gated check never reported - and only a later success clears it.
-func TestWatchErrTracker_FailureAfterSuccessIsCurrent(t *testing.T) {
-	tr := &watchErrTracker{}
-	tr.recovered()
-	tr.record(errors.New("watch failed: forbidden"))
-	if tr.currentError() == "" {
-		t.Fatal("a failure after a success must be current")
-	}
-	tr.recovered()
-	if got := tr.currentError(); got != "" {
-		t.Fatalf("a recovered watch must not report %q", got)
-	}
-	if tr.lastError() == "" {
-		t.Fatal("lastError keeps the history")
-	}
-}
-
-// End to end: a Flux source watch that fails once and then recovers stops
-// reporting through GitOpsWatchHealth.
-func TestGitOpsWatchHealth_ClearsAfterRecovery(t *testing.T) {
-	c, dyn, cancel := splitConn(t, ociRepo("manifests"))
-	defer cancel()
-	var failed atomic.Bool
-	dyn.PrependWatchReactor("ocirepositories", func(clienttesting.Action) (bool, watch.Interface, error) {
-		if failed.CompareAndSwap(false, true) {
-			return true, nil, errors.New("transient watch failure")
-		}
-		return false, nil, nil
-	})
-	c.OpenGitOps()
-	defer c.CloseGitOps()
-	waitFor(t, 5*time.Second, func() bool { return failed.Load() })
-	waitFor(t, 10*time.Second, func() bool {
-		synced, e := c.GitOpsWatchHealth()
-		return synced && e == ""
-	})
 }

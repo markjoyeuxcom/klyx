@@ -5,9 +5,9 @@ import { reconcile, reconcileWithSource, setSuspend, resolveGitLink } from "../b
 import { GitOps } from "./GitOps";
 import { fluxRule, fluxSourceRule, withRule } from "../test/backendRules";
 
+// The rows hook is the transport; these tests seed the gitops slice it fills.
+vi.mock("../health/useFluxRows", async (orig) => ({ ...(await orig<typeof import("../health/useFluxRows")>()), useFluxRows: () => {} }));
 vi.mock("../bridge/gitops", () => ({
-  openGitOps: async () => () => {},
-  closeGitOps: async () => {},
   getResourceDetail: async () => {},
   reconcile: vi.fn(),
   reconcileWithSource: vi.fn(),

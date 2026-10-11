@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
-	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -166,43 +165,11 @@ func nsName(ns, name string) string {
 }
 
 // chainReadTimeout bounds one chain read (design §5b).
-const chainReadTimeout = 15 * time.Second
+const chainReadTimeout = detailReadTimeout
 
-// getCertManagerObject GETs one cert-manager object at its served version.
-// A NotFound re-probes the version once (the served version may have moved
-// since the cached discovery) before it is believed. NotFound - the object
-// is gone - stays distinguishable from forbidden and transport failures.
+// getCertManagerObject GETs one cert-manager object at its served version
+// (getServedObject: NotFound re-probes once, and stays distinguishable from
+// forbidden and transport failures).
 func (c *ClusterConn) getCertManagerObject(ctx context.Context, resource, ns, name string) (*unstructured.Unstructured, error) {
-	get := func(version string) (*unstructured.Unstructured, error) {
-		r := c.dyn.Resource(schema.GroupVersionResource{Group: "cert-manager.io", Version: version, Resource: resource})
-		if ns == "" {
-			return r.Get(ctx, name, metav1.GetOptions{})
-		}
-		return r.Namespace(ns).Get(ctx, name, metav1.GetOptions{})
-	}
-	p, err := c.crdServed(ctx, "cert-manager.io", resource, "v1")
-	if err != nil {
-		return nil, err
-	}
-	if !p.Served {
-		return nil, apierrors.NewNotFound(schema.GroupResource{Group: "cert-manager.io", Resource: resource}, name)
-	}
-	u, err := get(p.Version)
-	if !apierrors.IsNotFound(err) {
-		return u, err
-	}
-	// NotFound is believed only after discovery confirms the version: a
-	// re-probe that cannot be read (forbidden, transport, deadline) leaves
-	// the object unverified, never confirmed missing (Codex review #4).
-	c.probeDiscovery().invalidate("cert-manager.io")
-	p2, perr := c.crdServed(ctx, "cert-manager.io", resource, "v1")
-	switch {
-	case perr != nil:
-		return nil, fmt.Errorf("re-checking the served version after a NotFound: %w", perr)
-	case !p2.Served:
-		return nil, err // confirmed: the kind is not served at all
-	case p2.Version != p.Version:
-		return get(p2.Version)
-	}
-	return nil, err // confirmed at the same version
+	return c.getServedObject(ctx, "cert-manager.io", resource, "v1", ns, name)
 }

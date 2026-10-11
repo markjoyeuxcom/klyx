@@ -3,34 +3,32 @@ package appbridge
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/moomora/klyx/internal/fluxcli"
-	"github.com/moomora/klyx/internal/gitops/flux"
 	"github.com/moomora/klyx/internal/workloads"
 )
 
 type fakeGitOpsConn struct {
 	mu     sync.Mutex
-	opened int
-	closed int
-	res    []flux.Resource
-	obj    *unstructured.Unstructured
-	srcObj *unstructured.Unstructured
-	srcs   []flux.Source
+	obj    *unstructured.Unstructured // the Kustomization/HelmRelease FluxObject returns
+	objErr error
+	srcObj *unstructured.Unstructured // the source FluxObject returns
+	srcErr error
 	events []workloads.EventSummary
 
 	fluxAvailable bool
 	diff          fluxcli.DiffResult
 	diffErr       error
 
-	sourceURL string
-
-	watchErr string // GitOpsWatchHealth's current failure
+	sourceURL string // a GitRepository with this spec.url, when srcObj is unset
 
 	reconcileErr   error
 	suspendErr     error
@@ -40,29 +38,31 @@ type fakeGitOpsConn struct {
 	suspendCalls   int
 }
 
-func (f *fakeGitOpsConn) OpenGitOps()  { f.mu.Lock(); f.opened++; f.mu.Unlock() }
-func (f *fakeGitOpsConn) CloseGitOps() { f.mu.Lock(); f.closed++; f.mu.Unlock() }
-func (f *fakeGitOpsConn) GitOpsResources() []flux.Resource {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.res
+// FluxObject: the direct read (design §5b) - a missing object is NotFound,
+// an injected error is returned as is.
+func (f *fakeGitOpsConn) FluxObject(_ context.Context, kind, ns, name string) (*unstructured.Unstructured, error) {
+	notFound := apierrors.NewNotFound(schema.GroupResource{Resource: kind}, name)
+	switch kind {
+	case "Kustomization", "HelmRelease":
+		if f.objErr != nil {
+			return nil, f.objErr
+		}
+		if f.obj == nil {
+			return nil, notFound
+		}
+		return f.obj, nil
+	}
+	switch {
+	case f.srcErr != nil:
+		return nil, f.srcErr
+	case f.srcObj != nil:
+		return f.srcObj, nil
+	case f.sourceURL != "":
+		return &unstructured.Unstructured{Object: map[string]interface{}{"spec": map[string]interface{}{"url": f.sourceURL}}}, nil
+	}
+	return nil, notFound
 }
 
-func (f *fakeGitOpsConn) GitOpsObject(kind, namespace, name string) (*unstructured.Unstructured, bool) {
-	if f.obj == nil {
-		return nil, false
-	}
-	return f.obj, true
-}
-
-func (f *fakeGitOpsConn) GitOpsSources() []flux.Source      { return f.srcs }
-func (f *fakeGitOpsConn) GitOpsWatchHealth() (bool, string) { return true, f.watchErr }
-func (f *fakeGitOpsConn) GitOpsSourceObject(kind, namespace, name string) (*unstructured.Unstructured, bool) {
-	if f.srcObj == nil {
-		return nil, false
-	}
-	return f.srcObj, true
-}
 func (f *fakeGitOpsConn) FluxEvents(ctx context.Context, kind, ns, name string) ([]workloads.EventSummary, error) {
 	return f.events, nil
 }
@@ -92,13 +92,6 @@ func (f *fakeGitOpsConn) SetSuspend(ctx context.Context, kind, ns, name string, 
 	return f.suspendErr
 }
 
-func (f *fakeGitOpsConn) SourceURL(ctx context.Context, kind, ns, name string) (string, bool) {
-	if f.sourceURL == "" {
-		return "", false
-	}
-	return f.sourceURL, true
-}
-
 func (f *fakeGitOpsConn) GitOpsSummaryFlux(ctx context.Context) (bool, int, int, int, error) {
 	return false, 0, 0, 0, nil
 }
@@ -114,7 +107,7 @@ func TestResolveGitLinkDeepLink(t *testing.T) {
 		"status": map[string]interface{}{"lastAppliedRevision": "main@sha1:abc"},
 	}}
 	conn := &fakeGitOpsConn{obj: ks, sourceURL: "https://gitlab.com/org/repo.git"}
-	svc := NewGitOpsService(func(string) (GitOpsConn, bool) { return conn, true }, &fakeEmitter{}, time.Now, time.Second)
+	svc := NewGitOpsService(func(string) (GitOpsConn, bool) { return conn, true }, time.Now)
 
 	link := svc.ResolveGitLink("x", "Kustomization", "flux-system", "app")
 	if !link.IsDeepLink || link.URL != "https://gitlab.com/org/repo/-/tree/main/apps/x" {
@@ -124,7 +117,7 @@ func TestResolveGitLinkDeepLink(t *testing.T) {
 
 func TestResolveGitLinkNonKustomizationIsEmpty(t *testing.T) {
 	conn := &fakeGitOpsConn{}
-	svc := NewGitOpsService(func(string) (GitOpsConn, bool) { return conn, true }, &fakeEmitter{}, time.Now, time.Second)
+	svc := NewGitOpsService(func(string) (GitOpsConn, bool) { return conn, true }, time.Now)
 	if link := svc.ResolveGitLink("x", "HelmRelease", "ns", "app"); link.URL != "" || link.IsDeepLink {
 		t.Fatalf("HelmRelease must be empty, got %+v", link)
 	}
@@ -135,88 +128,17 @@ func TestResolveGitLinkNoSourceURLIsEmpty(t *testing.T) {
 		"metadata": map[string]interface{}{"name": "app", "namespace": "flux-system"},
 		"spec":     map[string]interface{}{"sourceRef": map[string]interface{}{"kind": "GitRepository", "name": "src"}},
 	}}
-	conn := &fakeGitOpsConn{obj: ks} // sourceURL empty -> SourceURL returns ok=false
-	svc := NewGitOpsService(func(string) (GitOpsConn, bool) { return conn, true }, &fakeEmitter{}, time.Now, time.Second)
+	repo := &unstructured.Unstructured{Object: map[string]interface{}{"spec": map[string]interface{}{}}}
+	conn := &fakeGitOpsConn{obj: ks, srcObj: repo} // the source has no spec.url
+	svc := NewGitOpsService(func(string) (GitOpsConn, bool) { return conn, true }, time.Now)
 	if link := svc.ResolveGitLink("x", "Kustomization", "flux-system", "app"); link.URL != "" || link.IsDeepLink {
 		t.Fatalf("want empty link when source url missing, got %+v", link)
 	}
 }
 
-func TestGitOpsServiceOpenEmitsAndCloseStops(t *testing.T) {
-	conn := &fakeGitOpsConn{res: []flux.Resource{
-		{Kind: flux.KustomizationKind, Name: "flux-system", Ready: flux.Ready},
-	}}
-	lookup := func(name string) (GitOpsConn, bool) {
-		if name == "x" {
-			return conn, true
-		}
-		return nil, false
-	}
-	em := &fakeEmitter{}
-	svc := NewGitOpsService(lookup, em, func() time.Time { return time.Now() }, 10*time.Millisecond)
-
-	svc.Open("x")
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) {
-		em.mu.Lock()
-		n := em.events
-		em.mu.Unlock()
-		if n >= 1 {
-			break
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	em.mu.Lock()
-	got := em.events
-	em.mu.Unlock()
-	if got < 1 {
-		t.Fatal("expected at least one gitops:updated emit")
-	}
-
-	svc.Close("x")
-	conn.mu.Lock()
-	opened, closed := conn.opened, conn.closed
-	conn.mu.Unlock()
-	if opened != 1 || closed != 1 {
-		t.Fatalf("want opened=1 closed=1, got %d/%d", opened, closed)
-	}
-}
-
-// Review 2026-10-03 #11: a current failure on an informer that already synced
-// (or on a source informer) reached the view only while the primaries had not
-// synced - a broken OCIRepository watch read as a clean source list.
-func TestGitOpsPush_SurfacesFailureAfterSync(t *testing.T) {
-	conn := &fakeGitOpsConn{watchErr: "OCIRepository watch failing (showing last-known state): forbidden"}
-	em := &fakeEmitter{}
-	svc := NewGitOpsService(func(string) (GitOpsConn, bool) { return conn, true }, em, time.Now, 10*time.Millisecond)
-	svc.Open("x")
-	defer svc.Close("x")
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) {
-		em.mu.Lock()
-		p, ok := em.last.(gitOpsPayload)
-		em.mu.Unlock()
-		if ok {
-			if p.WatchError != conn.watchErr {
-				t.Fatalf("payload WatchError = %q, want the synced-informer failure", p.WatchError)
-			}
-			return
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	t.Fatal("no gitops:updated emit")
-}
-
-func TestGitOpsServiceOpenUnknownClusterNoop(t *testing.T) {
-	lookup := func(string) (GitOpsConn, bool) { return nil, false }
-	svc := NewGitOpsService(lookup, &fakeEmitter{}, time.Now, time.Second)
-	svc.Open("ghost") // must not panic
-	svc.Close("ghost")
-}
-
 func TestReconcileActionResult(t *testing.T) {
 	conn := &fakeGitOpsConn{}
-	svc := NewGitOpsService(func(string) (GitOpsConn, bool) { return conn, true }, &fakeEmitter{}, time.Now, time.Second)
+	svc := NewGitOpsService(func(string) (GitOpsConn, bool) { return conn, true }, time.Now)
 	if r := svc.Reconcile("x", "Kustomization", "flux-system", "app"); !r.OK || r.Error != "" {
 		t.Fatalf("want OK, got %+v", r)
 	}
@@ -224,7 +146,7 @@ func TestReconcileActionResult(t *testing.T) {
 
 func TestReconcileActionSurfacesError(t *testing.T) {
 	conn := &fakeGitOpsConn{reconcileErr: errors.New("forbidden: cannot patch")}
-	svc := NewGitOpsService(func(string) (GitOpsConn, bool) { return conn, true }, &fakeEmitter{}, time.Now, time.Second)
+	svc := NewGitOpsService(func(string) (GitOpsConn, bool) { return conn, true }, time.Now)
 	r := svc.Reconcile("x", "Kustomization", "flux-system", "app")
 	if r.OK || r.Error == "" {
 		t.Fatalf("want failure surfaced, got %+v", r)
@@ -233,7 +155,7 @@ func TestReconcileActionSurfacesError(t *testing.T) {
 
 func TestReconcileWithSourceActionResult(t *testing.T) {
 	conn := &fakeGitOpsConn{}
-	svc := NewGitOpsService(func(string) (GitOpsConn, bool) { return conn, true }, &fakeEmitter{}, time.Now, time.Second)
+	svc := NewGitOpsService(func(string) (GitOpsConn, bool) { return conn, true }, time.Now)
 	if r := svc.ReconcileWithSource("x", "Kustomization", "flux-system", "app"); !r.OK || r.Error != "" {
 		t.Fatalf("want OK, got %+v", r)
 	}
@@ -246,7 +168,7 @@ func TestReconcileWithSourceActionResult(t *testing.T) {
 
 func TestFluxDiffUnavailableHidesAffordance(t *testing.T) {
 	conn := &fakeGitOpsConn{fluxAvailable: false}
-	svc := NewGitOpsService(func(string) (GitOpsConn, bool) { return conn, true }, &fakeEmitter{}, time.Now, time.Second)
+	svc := NewGitOpsService(func(string) (GitOpsConn, bool) { return conn, true }, time.Now)
 	dto := svc.FluxDiff("x", "flux-system", "app", "")
 	if dto.Available {
 		t.Fatalf("want Available=false when flux missing, got %+v", dto)
@@ -255,7 +177,7 @@ func TestFluxDiffUnavailableHidesAffordance(t *testing.T) {
 
 func TestFluxDiffReturnsChanges(t *testing.T) {
 	conn := &fakeGitOpsConn{fluxAvailable: true, diff: fluxcli.DiffResult{HasChanges: true, Output: "± spec.replicas: 2 -> 3"}}
-	svc := NewGitOpsService(func(string) (GitOpsConn, bool) { return conn, true }, &fakeEmitter{}, time.Now, time.Second)
+	svc := NewGitOpsService(func(string) (GitOpsConn, bool) { return conn, true }, time.Now)
 	dto := svc.FluxDiff("x", "flux-system", "app", "./apps")
 	if !dto.Available || !dto.HasChanges || dto.Output == "" || dto.Error != "" {
 		t.Fatalf("want available diff with changes, got %+v", dto)
@@ -263,7 +185,7 @@ func TestFluxDiffReturnsChanges(t *testing.T) {
 }
 
 func TestReconcileWithSourceUnknownClusterIsError(t *testing.T) {
-	svc := NewGitOpsService(func(string) (GitOpsConn, bool) { return nil, false }, &fakeEmitter{}, time.Now, time.Second)
+	svc := NewGitOpsService(func(string) (GitOpsConn, bool) { return nil, false }, time.Now)
 	if r := svc.ReconcileWithSource("ghost", "Kustomization", "n", "x"); r.OK || r.Error == "" {
 		t.Fatalf("want failure for unknown cluster, got %+v", r)
 	}
@@ -271,7 +193,7 @@ func TestReconcileWithSourceUnknownClusterIsError(t *testing.T) {
 
 func TestSetSuspendActionPassesFlag(t *testing.T) {
 	conn := &fakeGitOpsConn{}
-	svc := NewGitOpsService(func(string) (GitOpsConn, bool) { return conn, true }, &fakeEmitter{}, time.Now, time.Second)
+	svc := NewGitOpsService(func(string) (GitOpsConn, bool) { return conn, true }, time.Now)
 	if r := svc.SetSuspend("x", "Kustomization", "flux-system", "app", true); !r.OK {
 		t.Fatalf("want OK, got %+v", r)
 	}
@@ -283,7 +205,7 @@ func TestSetSuspendActionPassesFlag(t *testing.T) {
 }
 
 func TestActionUnknownClusterIsError(t *testing.T) {
-	svc := NewGitOpsService(func(string) (GitOpsConn, bool) { return nil, false }, &fakeEmitter{}, time.Now, time.Second)
+	svc := NewGitOpsService(func(string) (GitOpsConn, bool) { return nil, false }, time.Now)
 	if r := svc.Reconcile("ghost", "Kustomization", "n", "x"); r.OK || r.Error == "" {
 		t.Fatalf("want failure for unknown cluster, got %+v", r)
 	}
@@ -303,7 +225,7 @@ func TestProtectGuard_GatesFluxVerbs(t *testing.T) {
 	t.Cleanup(func() { SetProtectGuard(nil) })
 
 	conn := &fakeGitOpsConn{}
-	svc := NewGitOpsService(func(string) (GitOpsConn, bool) { return conn, true }, &fakeEmitter{}, time.Now, time.Second)
+	svc := NewGitOpsService(func(string) (GitOpsConn, bool) { return conn, true }, time.Now)
 
 	callCounts := func() (reconcile, suspend int) {
 		conn.mu.Lock()
@@ -356,5 +278,37 @@ func TestProtectGuard_GatesFluxVerbs(t *testing.T) {
 	conn.fluxAvailable = true
 	if dto := svc.FluxDiff("prd-cluster", "flux-system", "app", ""); !dto.Available {
 		t.Fatalf("FluxDiff must stay ungated on a protected cluster, got %+v", dto)
+	}
+}
+
+// Design §5b: a read that fails on the way to the link says so - an
+// unreadable or missing object is never "no Git source".
+func TestResolveGitLinkReadFailuresAreErrors(t *testing.T) {
+	ks := &unstructured.Unstructured{Object: map[string]interface{}{
+		"metadata": map[string]interface{}{"name": "app", "namespace": "flux-system"},
+		"spec":     map[string]interface{}{"sourceRef": map[string]interface{}{"kind": "GitRepository", "name": "src"}},
+	}}
+	for _, tc := range []struct {
+		name string
+		conn *fakeGitOpsConn
+		want string
+	}{
+		{"kustomization forbidden", &fakeGitOpsConn{objErr: errors.New("kustomizations is forbidden")}, "Kustomization flux-system/app: kustomizations is forbidden"},
+		{"kustomization gone", &fakeGitOpsConn{}, "Kustomization flux-system/app: "},
+		{"source forbidden", &fakeGitOpsConn{obj: ks, srcErr: errors.New("gitrepositories is forbidden")}, "GitRepository flux-system/src: gitrepositories is forbidden"},
+		{"source gone", &fakeGitOpsConn{obj: ks}, "GitRepository flux-system/src: "},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			conn := tc.conn
+			svc := NewGitOpsService(func(string) (GitOpsConn, bool) { return conn, true }, time.Now)
+			link := svc.ResolveGitLink("x", "Kustomization", "flux-system", "app")
+			if !strings.HasPrefix(link.Error, tc.want) || link.URL != "" || link.CopyText != "" {
+				t.Fatalf("link %+v, want error prefix %q", link, tc.want)
+			}
+		})
+	}
+	svc := NewGitOpsService(func(string) (GitOpsConn, bool) { return nil, false }, time.Now)
+	if link := svc.ResolveGitLink("gone", "Kustomization", "ns", "app"); link.Error != "cluster not connected" {
+		t.Fatalf("a cluster miss is an error: %+v", link)
 	}
 }

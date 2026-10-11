@@ -63,3 +63,24 @@ func servedVersion(disc discoveryLike, group, resource, fallback string) (versio
 	}
 	return unreadable[0], true
 }
+
+// preferredVersion returns the served preferred version for a CRD group, or
+// fallback when the group is not advertised (the fake discovery in tests has no
+// groups, so the fallback is used there).
+func preferredVersion(disc discoveryLike, group, fallback string) string {
+	groups, err := disc.ServerGroups()
+	if err != nil || groups == nil {
+		return fallback
+	}
+	for _, g := range groups.Groups {
+		if g.Name == group {
+			if g.PreferredVersion.Version != "" {
+				return g.PreferredVersion.Version
+			}
+			if len(g.Versions) > 0 {
+				return g.Versions[0].Version
+			}
+		}
+	}
+	return fallback
+}

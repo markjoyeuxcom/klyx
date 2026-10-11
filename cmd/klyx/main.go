@@ -106,7 +106,7 @@ func main() {
 			}
 			return c, true
 		},
-		em, time.Now, time.Second,
+		time.Now,
 	)
 
 	certManagerSvc := appbridge.NewCertManagerService(

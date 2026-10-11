@@ -3,6 +3,7 @@ package appbridge
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/moomora/klyx/internal/certmanager"
 	"github.com/moomora/klyx/internal/externalsecrets"
+	"github.com/moomora/klyx/internal/gitops/flux"
 	"github.com/moomora/klyx/internal/health"
 	"github.com/moomora/klyx/internal/healthsrc"
 	"github.com/moomora/klyx/internal/observe"
@@ -127,7 +129,55 @@ func TestStoreRowsCarryTheCaptureAndIdentity(t *testing.T) {
 	if dtos[0].Rule != (RuleDTO{Included: true, Role: "fault", Label: "Flagged at capture"}) {
 		t.Fatalf("the converter re-evaluated instead of copying: %+v", dtos[0].Rule)
 	}
+	if b, err := json.Marshal(dtos[0]); err != nil || !strings.Contains(string(b), `"generation":3`) || !strings.Contains(string(b), `"uid":"s1"`) {
+		t.Fatalf("serialization keeps identity and generation: %s %v", b, err)
+	}
 	if _, err := rowsConverters[healthsrc.TaskESO+"/stores"]("not rows", time.Now()); err == nil {
+		t.Fatal("a payload of the wrong type is an error, never an empty list")
+	}
+}
+
+// The Flux parts (slice 3 §5.3): the captured evaluation and identity, and
+// the absolute Ready transition time beside the capture-relative age (§3).
+func TestFluxRowsCarryTheCaptureAndAnAbsoluteReadySince(t *testing.T) {
+	at := time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)
+	ready := flux.Resource{Kind: flux.KustomizationKind, Namespace: "flux-system", Name: "apps", Ready: flux.Ready, ReadySince: at.Add(-2 * time.Minute), Generation: 1}
+	set := healthsrc.RowSet[flux.Resource]{Rows: []healthsrc.Row[flux.Resource]{
+		{Ref: healthsrc.RowRef{UID: "k1", GVR: "kustomize.toolkit.fluxcd.io/v1/kustomizations", Namespace: "flux-system", Name: "apps", Generation: 9},
+			Eval: health.NativeEval{Included: true, Role: health.Fault, Label: "Flagged at capture"}, Data: ready},
+	}}
+	out, err := rowsConverters[healthsrc.TaskFlux+"/reconciliations"](set, at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := out.([]FluxResourceDTO)[0]
+	if d.Rule != (RuleDTO{Included: true, Role: "fault", Label: "Flagged at capture"}) {
+		t.Fatalf("the converter re-evaluated instead of copying: %+v", d.Rule)
+	}
+	if d.UID != "k1" || d.GVR != "kustomize.toolkit.fluxcd.io/v1/kustomizations" || d.Generation != 9 {
+		t.Fatalf("identity - the capture's generation, not the data's: %+v", d)
+	}
+	if d.ReadySinceUnix != at.Add(-2*time.Minute).Unix() || d.ReadySinceSeconds != 120 {
+		t.Fatalf("ready since: unix=%d age=%d", d.ReadySinceUnix, d.ReadySinceSeconds)
+	}
+	if b, err := json.Marshal(d); err != nil || !strings.Contains(string(b), `"readySinceUnix":`) || !strings.Contains(string(b), `"generation":9`) {
+		t.Fatalf("serialization: %s %v", b, err)
+	}
+
+	src := flux.Source{Kind: flux.GitRepositoryKind, Namespace: "flux-system", Name: "repo", Ready: flux.Ready, URL: "https://x/y"}
+	sset := healthsrc.RowSet[flux.Source]{Rows: []healthsrc.Row[flux.Source]{
+		{Ref: healthsrc.RowRef{UID: "g1", GVR: "source.toolkit.fluxcd.io/v1/gitrepositories", Generation: 2},
+			Eval: health.NativeEval{Role: health.OK, Label: "Ready at capture"}, Data: src},
+	}}
+	sout, err := rowsConverters[healthsrc.TaskFlux+"/sources"](sset, at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sd := sout.([]FluxSourceDTO)[0]
+	if sd.UID != "g1" || sd.GVR != "source.toolkit.fluxcd.io/v1/gitrepositories" || sd.Generation != 2 || sd.URL != "https://x/y" || sd.Rule.Label != "Ready at capture" {
+		t.Fatalf("source row: %+v", sd)
+	}
+	if _, err := rowsConverters[healthsrc.TaskFlux+"/sources"]("not rows", at); err == nil {
 		t.Fatal("a payload of the wrong type is an error, never an empty list")
 	}
 }

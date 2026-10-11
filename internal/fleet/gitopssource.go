@@ -2,8 +2,8 @@ package fleet
 
 import (
 	"context"
+	"fmt"
 
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
@@ -43,21 +43,29 @@ func (c *ClusterConn) sourceServedGVR(kind string) (schema.GroupVersionResource,
 	return schema.GroupVersionResource{Group: group, Version: version, Resource: resource}, true
 }
 
-// SourceURL fetches spec.url from a Flux source object via a one-off dynamic Get
-// (the source is not watched). Returns ok=false for an unsupported kind, a Get
-// error, or an empty url.
-func (c *ClusterConn) SourceURL(ctx context.Context, kind, ns, name string) (string, bool) {
-	gvr, ok := c.sourceServedGVR(kind)
+// fluxGVR maps a Flux kind Klyx reads to its group, fallback version and
+// resource: the reconciliation kinds, then the source kinds.
+func fluxGVR(kind string) (group, fallbackVersion, resource string, ok bool) {
+	switch kind {
+	case "Kustomization":
+		return "kustomize.toolkit.fluxcd.io", "v1", "kustomizations", true
+	case "HelmRelease":
+		return "helm.toolkit.fluxcd.io", "v2", "helmreleases", true
+	}
+	return sourceGVR(kind)
+}
+
+// FluxObject reads one Flux object directly at its served version (1c slice
+// 3 design §5b), under detailReadTimeout and the caller's cancellation: the
+// detail and Git-link reads never depend on a lazy watch's store. NotFound
+// is believed only after one re-probe; forbidden and transport failures stay
+// errors of their own (the object is unverified, not gone).
+func (c *ClusterConn) FluxObject(ctx context.Context, kind, ns, name string) (*unstructured.Unstructured, error) {
+	group, fallback, resource, ok := fluxGVR(kind)
 	if !ok {
-		return "", false
+		return nil, fmt.Errorf("%s is not a Flux kind Klyx reads", kind)
 	}
-	u, err := c.dyn.Resource(gvr).Namespace(ns).Get(ctx, name, metav1.GetOptions{})
-	if err != nil {
-		return "", false
-	}
-	url, _, _ := unstructured.NestedString(u.Object, "spec", "url")
-	if url == "" {
-		return "", false
-	}
-	return url, true
+	ctx, cancel := context.WithTimeout(ctx, detailReadTimeout)
+	defer cancel()
+	return c.getServedObject(ctx, group, resource, fallback, ns, name)
 }

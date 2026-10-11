@@ -2,10 +2,10 @@ package appbridge
 
 import (
 	"context"
-	"reflect"
-	"sync"
+	"fmt"
 	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/moomora/klyx/internal/fluxcli"
@@ -13,24 +13,19 @@ import (
 	"github.com/moomora/klyx/internal/workloads"
 )
 
-// GitOpsConn is the per-cluster watch surface GitOpsService needs.
+// GitOpsConn is the per-cluster surface GitOpsService needs. The lists are
+// the health Observer's shared rows (1c slice 3 §5.3); this service keeps
+// the on-demand reads and the day-2 verbs.
 type GitOpsConn interface {
-	OpenGitOps()
-	CloseGitOps()
-	GitOpsResources() []flux.Resource
-	GitOpsObject(kind, namespace, name string) (*unstructured.Unstructured, bool)
-	GitOpsSources() []flux.Source
-	// GitOpsWatchHealth reports informer sync + the last watch error, so a
-	// failing watch renders as an error instead of an empty list.
-	GitOpsWatchHealth() (synced bool, lastErr string)
-	GitOpsSourceObject(kind, namespace, name string) (*unstructured.Unstructured, bool)
+	// FluxObject reads one Flux object directly at its served version
+	// (design §5b): NotFound is distinguishable from an unreadable object.
+	FluxObject(ctx context.Context, kind, ns, name string) (*unstructured.Unstructured, error)
 	FluxEvents(ctx context.Context, kind, ns, name string) ([]workloads.EventSummary, error)
 	FluxAvailable() bool
 	FluxDiffKustomization(ctx context.Context, ns, name, path string) (fluxcli.DiffResult, error)
 	Reconcile(ctx context.Context, kind, ns, name string) error
 	ReconcileWithSource(ctx context.Context, kind, ns, name string) error
 	SetSuspend(ctx context.Context, kind, ns, name string, suspend bool) error
-	SourceURL(ctx context.Context, kind, ns, name string) (string, bool)
 	// GitOpsSummaryFlux performs a cluster-wide on-demand LIST and returns counts.
 	// Separated from fleet.GitOpsSummary to keep GitOpsConn free of fleet types.
 	GitOpsSummaryFlux(ctx context.Context) (fluxPresent bool, total, notReady, suspended int, err error)
@@ -45,128 +40,15 @@ type GitOpsSummaryDTO struct {
 	Error       string `json:"error,omitempty"` // non-empty = the summary read failed (never confuse with FluxPresent:false)
 }
 
-// GitOpsUpdatedEvent is emitted with { cluster, resources }.
-const GitOpsUpdatedEvent = "gitops:updated"
-
-type gitOpsPayload struct {
-	Cluster   string            `json:"cluster"`
-	Resources []FluxResourceDTO `json:"resources"`
-	Sources   []FluxSourceDTO   `json:"sources"`
-	// WatchError names every CURRENT Flux watch failure, primary or source
-	// (RBAC denied, CRD mismatch, a watch that synced and then broke): the
-	// view must show the failure, never an empty or quietly stale list. Empty
-	// once every failing watch has recovered.
-	WatchError string `json:"watchError,omitempty"`
-}
-
-// GitOpsService is bound to JS. Open starts a cluster's lazy watch and pushes
-// gitops:updated on a tick; Close stops it.
+// GitOpsService is bound to JS: the Flux lens's on-demand reads (detail, Git
+// link, diff, summary) and its day-2 verbs.
 type GitOpsService struct {
-	lookup   func(string) (GitOpsConn, bool)
-	em       Emitter
-	now      func() time.Time
-	interval time.Duration
-
-	mu      sync.Mutex
-	cancels map[string]context.CancelFunc
+	lookup func(string) (GitOpsConn, bool)
+	now    func() time.Time
 }
 
-func NewGitOpsService(lookup func(string) (GitOpsConn, bool), em Emitter, now func() time.Time, interval time.Duration) *GitOpsService {
-	return &GitOpsService{lookup: lookup, em: em, now: now, interval: interval, cancels: map[string]context.CancelFunc{}}
-}
-
-func (s *GitOpsService) Open(cluster string) {
-	conn, ok := s.lookup(cluster)
-	if !ok {
-		return
-	}
-	s.mu.Lock()
-	if _, active := s.cancels[cluster]; active {
-		s.mu.Unlock()
-		return // idempotent
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	s.cancels[cluster] = cancel
-	s.mu.Unlock()
-
-	conn.OpenGitOps()
-
-	// Re-check after the (slow, discovery-bound) open: a Close that landed in
-	// between already cancelled our entry, and the watch it closed at the conn
-	// may have been re-opened by the line above - tear it down again so no
-	// consumer-less watch survives.
-	s.mu.Lock()
-	_, stillActive := s.cancels[cluster]
-	s.mu.Unlock()
-	if !stillActive {
-		conn.CloseGitOps()
-		return
-	}
-	safeGo("gitops-push:"+cluster, func() { s.pushLoop(ctx, cluster, conn) })
-}
-
-func (s *GitOpsService) Close(cluster string) {
-	s.mu.Lock()
-	cancel := s.cancels[cluster]
-	delete(s.cancels, cluster)
-	s.mu.Unlock()
-	if cancel != nil {
-		cancel()
-	}
-	if conn, ok := s.lookup(cluster); ok {
-		conn.CloseGitOps()
-	}
-}
-
-// pushHeartbeat bounds how long an unchanged push payload may be skipped. The
-// DTOs carry relative ages (seconds since applied / until expiry) that the
-// frontend renders as-is, so a periodic re-emit keeps them honest even when
-// nothing on the cluster changed; every tick in between that carries no domain
-// change is skipped instead of re-serialized into the webview.
-const pushHeartbeat = 30 * time.Second
-
-// gitopsDomainSnap is the change-detection unit for the gitops push loop: the
-// parsed domain values (absolute timestamps - stable between ticks), not the
-// DTOs (relative ages - different every second).
-type gitopsDomainSnap struct {
-	res      []flux.Resource
-	srcs     []flux.Source
-	watchErr string
-}
-
-func (s *GitOpsService) pushLoop(ctx context.Context, cluster string, conn GitOpsConn) {
-	t := time.NewTicker(s.interval)
-	defer t.Stop()
-	var last *gitopsDomainSnap
-	var lastEmit time.Time
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
-			now := s.now()
-			// Any CURRENT watch failure is shown, including one on a source
-			// informer or after the initial sync (review 2026-10-03 #11); the
-			// fleet layer stops reporting it once the watch recovers.
-			_, watchErr := conn.GitOpsWatchHealth()
-			snap := gitopsDomainSnap{res: conn.GitOpsResources(), srcs: conn.GitOpsSources(), watchErr: watchErr}
-			if last != nil && now.Sub(lastEmit) < pushHeartbeat && reflect.DeepEqual(*last, snap) {
-				continue
-			}
-			last = &snap
-			lastEmit = now
-
-			dtos := make([]FluxResourceDTO, 0, len(snap.res))
-			for _, r := range snap.res {
-				dtos = append(dtos, ToFluxDTO(r, now))
-			}
-			srcDTOs := make([]FluxSourceDTO, 0, len(snap.srcs))
-			for _, sr := range snap.srcs {
-				srcDTOs = append(srcDTOs, toSourceDTO(sr))
-			}
-			s.em.Emit(GitOpsUpdatedEvent, gitOpsPayload{Cluster: cluster, Resources: dtos, Sources: srcDTOs, WatchError: watchErr})
-		}
-	}
+func NewGitOpsService(lookup func(string) (GitOpsConn, bool), now func() time.Time) *GitOpsService {
+	return &GitOpsService{lookup: lookup, now: now}
 }
 
 const actionTimeout = 30 * time.Second
@@ -253,35 +135,53 @@ func (s *GitOpsService) SetSuspend(cluster, kind, namespace, name string, suspen
 	return ActionResultDTO{OK: true}
 }
 
-// GetResourceDetail returns the detail view for one Flux resource from the live
-// watch store. Zero-value DTO when the cluster/object isn't available.
+// GetResourceDetail reads the detail view for one Flux resource directly
+// (design §5b): its object at the served version, carrying UID, generation
+// and as-of. A failed read is the request's outcome (Error, keyed by
+// kind/namespace/name only) - never an empty detail; the lens shows a detail
+// only for the selected row's UID.
 func (s *GitOpsService) GetResourceDetail(cluster, kind, namespace, name string) ResourceDetailDTO {
 	conn, ok := s.lookup(cluster)
 	if !ok {
-		return ResourceDetailDTO{}
+		return detailErrorDTO(kind, namespace, name, "cluster not connected")
 	}
-	u, ok := conn.GitOpsObject(kind, namespace, name)
-	if !ok {
-		return ResourceDetailDTO{}
+	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
+	defer cancel()
+	u, err := conn.FluxObject(ctx, kind, namespace, name)
+	if err != nil {
+		return detailErrorDTO(kind, namespace, name, err.Error())
 	}
 	d := toDetailDTO(flux.ParseDetail(u))
+	d.UID, d.Generation, d.AsOfUnix = string(u.GetUID()), u.GetGeneration(), s.now().Unix()
 	// Embed the bound source's health so a stuck resource's root cause (a source
-	// that is not pulling) is visible in the detail panel without a separate read.
+	// that is not pulling) is visible in the detail panel without a separate
+	// read. Its absence is never silent: not found and unreadable each say so.
 	if ref, ok := flux.BoundSource(u); ok {
-		if su, ok := conn.GitOpsSourceObject(ref.Kind, ref.Namespace, ref.Name); ok {
+		what := fmt.Sprintf("bound source %s %s/%s", ref.Kind, ref.Namespace, ref.Name)
+		su, err := conn.FluxObject(ctx, ref.Kind, ref.Namespace, ref.Name)
+		switch {
+		case err == nil:
 			src := toSourceDTO(flux.ParseSource(su))
 			d.Source = &src
+		case apierrors.IsNotFound(err):
+			d.SourceWarning = what + " was not found - its health is unknown"
+		default:
+			d.SourceWarning = what + " is unverified: " + err.Error()
 		}
 	}
 	// Drift surface: the controller's own record of what it did (M10-e).
-	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
-	defer cancel()
 	if evs, err := conn.FluxEvents(ctx, kind, namespace, name); err == nil {
 		for _, e := range evs {
 			d.Events = append(d.Events, toEventRowDTO(e))
 		}
 	}
 	return d
+}
+
+// detailErrorDTO is a failed detail read for the requested resource: its
+// key and the error, never an identity or detail evidence.
+func detailErrorDTO(kind, namespace, name, msg string) ResourceDetailDTO {
+	return ResourceDetailDTO{Kind: kind, Namespace: namespace, Name: name, Error: msg}
 }
 
 // GetGitOpsSummary returns a point-in-time Flux summary for the named cluster.
@@ -305,28 +205,33 @@ func (s *GitOpsService) GetGitOpsSummary(cluster string) GitOpsSummaryDTO {
 }
 
 // ResolveGitLink resolves a Kustomization's GitRepository source to a browsable
-// link (or a copyable reference). Zero-value DTO for non-Kustomizations, a
-// non-GitRepository source, or any lookup miss.
+// link (or a copyable reference). Zero-value DTO for non-Kustomizations or a
+// non-GitRepository source; a read that fails says so (Error), never "no
+// Git source" (design §5b).
 func (s *GitOpsService) ResolveGitLink(cluster, kind, namespace, name string) GitLinkDTO {
 	conn, ok := s.lookup(cluster)
 	if !ok {
-		return GitLinkDTO{}
+		return GitLinkDTO{Error: "cluster not connected"}
 	}
 	if flux.Kind(kind) != flux.KustomizationKind {
 		return GitLinkDTO{}
 	}
-	u, ok := conn.GitOpsObject(kind, namespace, name)
-	if !ok {
-		return GitLinkDTO{}
+	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
+	defer cancel()
+	u, err := conn.FluxObject(ctx, kind, namespace, name)
+	if err != nil {
+		return GitLinkDTO{Error: fmt.Sprintf("%s %s/%s: %v", kind, namespace, name, err)}
 	}
 	src := flux.ParseKustomizationSource(u)
 	if src.SourceKind != "GitRepository" || src.SourceName == "" {
 		return GitLinkDTO{}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
-	defer cancel()
-	url, ok := conn.SourceURL(ctx, "GitRepository", src.SourceNamespace, src.SourceName)
-	if !ok {
+	repo, err := conn.FluxObject(ctx, "GitRepository", src.SourceNamespace, src.SourceName)
+	if err != nil {
+		return GitLinkDTO{Error: fmt.Sprintf("GitRepository %s/%s: %v", src.SourceNamespace, src.SourceName, err)}
+	}
+	url, _, _ := unstructured.NestedString(repo.Object, "spec", "url")
+	if url == "" {
 		return GitLinkDTO{}
 	}
 	link := flux.ResolveGitLink(url, src.Path, src.Revision)

@@ -4,10 +4,9 @@ import { useFleet } from "../store/fleet";
 import type { ClusterDTO } from "../store/fleet";
 import { ClusterDetail } from "./ClusterDetail";
 
-vi.mock("../bridge/gitops", () => ({
-  openGitOps: async () => () => {},
-  closeGitOps: async () => {},
-}));
+// The Flux rows hook is the transport; this test seeds the gitops slice it fills.
+vi.mock("../health/useFluxRows", async (orig) => ({ ...(await orig<typeof import("../health/useFluxRows")>()), useFluxRows: () => {} }));
+vi.mock("../bridge/gitops", () => ({ getResourceDetail: async () => {} }));
 
 vi.mock("../bridge/metrics", () => ({
   getClusterMetrics: vi.fn(),

@@ -8,6 +8,7 @@ import (
 
 	"github.com/moomora/klyx/internal/certmanager"
 	"github.com/moomora/klyx/internal/externalsecrets"
+	"github.com/moomora/klyx/internal/gitops/flux"
 	"github.com/moomora/klyx/internal/healthsrc"
 	"github.com/moomora/klyx/internal/observe"
 )
@@ -60,6 +61,34 @@ var rowsConverters = map[string]rowsConverter{
 		out := make([]IssuerDTO, 0, len(set.Rows))
 		for _, r := range set.Rows {
 			dto := issuerFields(r.Data)
+			dto.Rule = toRuleDTO(r.Eval)
+			dto.UID, dto.GVR, dto.Generation = r.Ref.UID, r.Ref.GVR, r.Ref.Generation
+			out = append(out, dto)
+		}
+		return out, nil
+	},
+	healthsrc.TaskFlux + "/reconciliations": func(rows any, at time.Time) (any, error) {
+		set, err := rowSetOf[flux.Resource](rows)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]FluxResourceDTO, 0, len(set.Rows))
+		for _, r := range set.Rows {
+			dto := fluxResourceFields(r.Data, at)
+			dto.Rule = toRuleDTO(r.Eval)
+			dto.UID, dto.GVR, dto.Generation = r.Ref.UID, r.Ref.GVR, r.Ref.Generation
+			out = append(out, dto)
+		}
+		return out, nil
+	},
+	healthsrc.TaskFlux + "/sources": func(rows any, _ time.Time) (any, error) {
+		set, err := rowSetOf[flux.Source](rows)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]FluxSourceDTO, 0, len(set.Rows))
+		for _, r := range set.Rows {
+			dto := sourceFields(r.Data)
 			dto.Rule = toRuleDTO(r.Eval)
 			dto.UID, dto.GVR, dto.Generation = r.Ref.UID, r.Ref.GVR, r.Ref.Generation
 			out = append(out, dto)

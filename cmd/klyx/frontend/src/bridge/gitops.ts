@@ -1,30 +1,9 @@
-import { useFleet, FluxResourceDTO, FluxSourceDTO, ResourceDetailDTO } from "../store/fleet";
-import { Events, Browser, Clipboard } from "@wailsio/runtime";
+import { useFleet, ResourceDetailDTO } from "../store/fleet";
+import { Browser, Clipboard } from "@wailsio/runtime";
 import { GitOpsService } from "../../bindings/github.com/moomora/klyx/internal/appbridge/index.js";
 
-const GITOPS_UPDATED = "gitops:updated";
-
-export async function openGitOps(cluster: string): Promise<() => void> {
-  useFleet.getState().setGitOpsLoading(cluster);
-  await GitOpsService.Open(cluster);
-  const off = Events.On(GITOPS_UPDATED, (ev: { data: { cluster: string; resources: FluxResourceDTO[]; sources: FluxSourceDTO[]; watchError?: string } }) => {
-    const d = ev.data;
-    // A late callback for a cluster the lens has left must not overwrite it.
-    if (d && d.cluster === cluster && useFleet.getState().gitops.cluster === cluster) {
-      useFleet.getState().setGitOps(cluster, d.resources ?? [], d.sources ?? [], d.watchError);
-    }
-  });
-  return typeof off === "function" ? off : () => {};
-}
-
-export async function closeGitOps(cluster: string): Promise<void> {
-  try {
-    await GitOpsService.Close(cluster);
-  } finally {
-    // A late close of A must not clear B's freshly opened state.
-    if (useFleet.getState().gitops.cluster === cluster) useFleet.getState().clearGitOps();
-  }
-}
+// The Flux lists are the health Observer's shared rows (health/useFluxRows);
+// this bridge keeps the on-demand reads and the day-2 verbs.
 
 // Detail reads are fenced by request generation, cluster and selected key:
 // only the newest read for the CURRENT cluster's CURRENT selection may land,
@@ -88,11 +67,14 @@ export async function fluxDiff(cluster: string, namespace: string, name: string,
   return (await GitOpsService.FluxDiff(cluster, namespace, name, path)) as FluxDiffDTO;
 }
 
-type GitLinkDTO = { url: string; isDeepLink: boolean; copyText: string };
+type GitLinkDTO = { url: string; isDeepLink: boolean; copyText: string; error?: string };
 
 export async function resolveGitLink(cluster: string, kind: string, namespace: string, name: string): Promise<void> {
   const link = (await GitOpsService.ResolveGitLink(cluster, kind, namespace, name)) as GitLinkDTO;
-  if (link.isDeepLink && link.url) {
+  // a read that failed on the way is named - never "no Git source" (§5b)
+  if (link.error) {
+    useFleet.getState().setActionStatus({ kind: "error", message: `Could not resolve the Git source: ${link.error}` });
+  } else if (link.isDeepLink && link.url) {
     await Browser.OpenURL(link.url);
     useFleet.getState().setActionStatus({ kind: "success", message: `Opened ${link.url}` });
   } else if (link.copyText) {

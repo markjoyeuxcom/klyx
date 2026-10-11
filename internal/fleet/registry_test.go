@@ -16,7 +16,6 @@ import (
 	"github.com/moomora/klyx/internal/crd"
 	"github.com/moomora/klyx/internal/fluxcli"
 	"github.com/moomora/klyx/internal/gitops/argo"
-	"github.com/moomora/klyx/internal/gitops/flux"
 	"github.com/moomora/klyx/internal/gwapi"
 	"github.com/moomora/klyx/internal/helmcli"
 	"github.com/moomora/klyx/internal/hubble"
@@ -38,17 +37,9 @@ func (f *fakeConn) Start(ctx context.Context) {
 		f.start()
 	}
 }
-func (f *fakeConn) Snapshot() Snapshot               { return f.snap }
-func (f *fakeConn) OpenGitOps()                      {}
-func (f *fakeConn) CloseGitOps()                     {}
-func (f *fakeConn) GitOpsResources() []flux.Resource { return nil }
-func (f *fakeConn) GitOpsObject(kind, namespace, name string) (*unstructured.Unstructured, bool) {
-	return nil, false
-}
-func (f *fakeConn) GitOpsWatchHealth() (bool, string) { return true, "" }
-func (f *fakeConn) GitOpsSources() []flux.Source      { return nil }
-func (f *fakeConn) GitOpsSourceObject(kind, namespace, name string) (*unstructured.Unstructured, bool) {
-	return nil, false
+func (f *fakeConn) Snapshot() Snapshot { return f.snap }
+func (f *fakeConn) FluxObject(context.Context, string, string, string) (*unstructured.Unstructured, error) {
+	return nil, nil
 }
 func (f *fakeConn) GetCertificateChain(ctx context.Context, ns, name string) (certmanager.Chain, error) {
 	return certmanager.Chain{}, nil
@@ -66,9 +57,6 @@ func (f *fakeConn) ReconcileWithSource(ctx context.Context, kind, ns, name strin
 }
 func (f *fakeConn) SetSuspend(ctx context.Context, kind, ns, name string, suspend bool) error {
 	return nil
-}
-func (f *fakeConn) SourceURL(ctx context.Context, kind, ns, name string) (string, bool) {
-	return "", false
 }
 func (f *fakeConn) ListCRDs(ctx context.Context) ([]crd.Info, error) { return nil, nil }
 func (f *fakeConn) ListWorkloads(context.Context, string) ([]workloads.Workload, bool, bool, error) {

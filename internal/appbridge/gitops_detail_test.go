@@ -76,16 +76,8 @@ type fakeGitOpsSummaryConn struct {
 	err       error
 }
 
-func (f *fakeGitOpsSummaryConn) OpenGitOps()                      {}
-func (f *fakeGitOpsSummaryConn) CloseGitOps()                     {}
-func (f *fakeGitOpsSummaryConn) GitOpsResources() []flux.Resource { return nil }
-func (f *fakeGitOpsSummaryConn) GitOpsObject(kind, namespace, name string) (*unstructured.Unstructured, bool) {
-	return nil, false
-}
-func (f *fakeGitOpsSummaryConn) GitOpsSources() []flux.Source      { return nil }
-func (f *fakeGitOpsSummaryConn) GitOpsWatchHealth() (bool, string) { return true, "" }
-func (f *fakeGitOpsSummaryConn) GitOpsSourceObject(kind, namespace, name string) (*unstructured.Unstructured, bool) {
-	return nil, false
+func (f *fakeGitOpsSummaryConn) FluxObject(context.Context, string, string, string) (*unstructured.Unstructured, error) {
+	return nil, errors.New("not used")
 }
 func (f *fakeGitOpsSummaryConn) Reconcile(ctx context.Context, kind, ns, name string) error {
 	return nil
@@ -103,9 +95,6 @@ func (f *fakeGitOpsSummaryConn) FluxDiffKustomization(ctx context.Context, ns, n
 func (f *fakeGitOpsSummaryConn) SetSuspend(ctx context.Context, kind, ns, name string, suspend bool) error {
 	return nil
 }
-func (f *fakeGitOpsSummaryConn) SourceURL(ctx context.Context, kind, ns, name string) (string, bool) {
-	return "", false
-}
 func (f *fakeGitOpsSummaryConn) GitOpsSummaryFlux(ctx context.Context) (bool, int, int, int, error) {
 	return f.present, f.total, f.notReady, f.suspended, f.err
 }
@@ -117,7 +106,7 @@ func newSummarySvc(conn GitOpsConn) *GitOpsService {
 		}
 		return nil, false
 	}
-	return NewGitOpsService(lookup, &fakeEmitter{}, time.Now, time.Second)
+	return NewGitOpsService(lookup, time.Now)
 }
 
 func TestGetGitOpsSummaryMissIsEmpty(t *testing.T) {
@@ -173,13 +162,15 @@ func TestGetResourceDetailReadsConn(t *testing.T) {
 		}
 		return nil, false
 	}
-	svc := NewGitOpsService(lookup, &fakeEmitter{}, func() time.Time { return time.Now() }, time.Second)
+	svc := NewGitOpsService(lookup, func() time.Time { return time.Now() })
 	dto := svc.GetResourceDetail("x", "Kustomization", "flux-system", "flux-system")
 	if dto.Name != "flux-system" || dto.Kind != "Kustomization" {
 		t.Fatalf("detail: %+v", dto)
 	}
-	empty := svc.GetResourceDetail("ghost", "Kustomization", "a", "b")
-	if empty.Name != "" {
-		t.Fatalf("want zero DTO for unknown cluster, got %+v", empty)
+	// an unknown cluster is an error for the requested key, never an
+	// empty detail (design §5b)
+	miss := svc.GetResourceDetail("ghost", "Kustomization", "a", "b")
+	if miss.Error != "cluster not connected" || miss.Name != "b" || miss.UID != "" {
+		t.Fatalf("want the request's error for an unknown cluster, got %+v", miss)
 	}
 }

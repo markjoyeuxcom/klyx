@@ -140,23 +140,11 @@ func (c *ClusterConn) GitOpsOwnership(ctx context.Context, group, kind, ns, name
 	return out
 }
 
-// kustomizationsForOwnership returns the Kustomization unstructureds - from the
-// open GitOps informer store when available (free), else one bounded live list.
-// The warning distinguishes a degraded check from a clean "none found".
+// kustomizationsForOwnership returns the Kustomization unstructureds from one
+// bounded live list (the lens's lazy watch it once borrowed is gone - 1c
+// slice 3 §6). The warning distinguishes a degraded check from a clean
+// "none found".
 func (c *ClusterConn) kustomizationsForOwnership(ctx context.Context) ([]*unstructured.Unstructured, string) {
-	c.mu.RLock()
-	g := c.gitops
-	c.mu.RUnlock()
-	if g != nil && g.ksInf != nil && g.ksInf.HasSynced() {
-		items := g.ksInf.GetStore().List()
-		out := make([]*unstructured.Unstructured, 0, len(items))
-		for _, o := range items {
-			if u, ok := o.(*unstructured.Unstructured); ok {
-				out = append(out, u)
-			}
-		}
-		return out, ""
-	}
 	if c.dyn == nil {
 		return nil, "Flux ownership check unavailable: no cluster connection"
 	}
