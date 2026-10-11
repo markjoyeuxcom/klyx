@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { IconRoute } from "@tabler/icons-react";
 import { useFleet } from "../store/fleet";
 import type { GatewayRouteRowDTO } from "../store/fleet";
@@ -13,7 +13,7 @@ import { InspectorStatus } from "./ResourceInspector";
 import { LensLayout, LensTable, TABLE_ROW_HEIGHT, type DatasetState } from "../layout/LensLayout";
 import { InspectorBlock, InspectorLayout } from "../layout/InspectorLayout";
 import { fitColumns, type ColumnDef } from "../layout/columns";
-import { clock, coverageGaps, kindEvidence, lastGoodAt, type KindEvidence } from "../layout/coverage";
+import { clock, combineEvidence, coverageGaps, kindEvidence, lastGoodAt, type KindEvidence } from "../layout/coverage";
 import { RANK, ROLE_TEXT, roleTone, routeRole, type Role } from "./gatewayModel";
 
 // RouteList - the Gateways task's routes part (1c slice 3 §4a): every
@@ -62,14 +62,22 @@ export function RouteList({ rows, toggle }: { rows: GatewayRouteRows; toggle: Re
 
   const ev: KindEvidence = kindEvidence(!rows.loading, rows.coverage, "HTTPRoute", rows.watchError);
   const absent = rows.coverage.find((k) => k.kind === "HTTPRoute")?.coverage === "absent";
+  // These are ATTACHED routes (Codex review of b2eff54 #1): a route counts
+  // only through a parent Gateway in the same capture, so membership needs
+  // the HTTPRoute read AND the parent Gateways read. Services and
+  // EndpointSlices qualify verdicts only, never membership.
+  const gatewaysDep = rows.dependencies.find((k) => k.kind === "Gateway");
+  const parentsEv: KindEvidence = gatewaysDep ? kindEvidence(true, [gatewaysDep], "Gateway", null) : rows.loading ? "pending" : "complete";
+  const memberEv = combineEvidence([ev, parentsEv]);
   const dep = depQualifier(rows.dependencies);
   const routes = rows.routes;
   const rowsRefreshing = rows.rowsState.refreshing;
   const rowsAsOf = rows.rowsState.evaluatedAt ? clock(rows.rowsState.evaluatedAt) : "the last read";
   const asOf = rowsRefreshing ? ` (as of ${rowsAsOf})` : "";
   const lastGood = lastGoodAt(rows.coverage, ["HTTPRoute"]);
-  const discoveryGap = coverageGaps(rows.coverage);
-  const mark = ev === "complete" ? "" : ev === "stale" ? "*" : "+";
+  // a discovery gap of the route kind or of anything it was joined with
+  const discoveryGap = coverageGaps([...rows.coverage, ...rows.dependencies]);
+  const mark = memberEv === "complete" ? "" : memberEv === "stale" ? "*" : "+";
   // global: the count selector's (slice 3 §4a) - the header and the filter
   // count equal the part's Included
   const total = rows.partCounts?.total ?? routes.length;
@@ -83,15 +91,24 @@ export function RouteList({ rows, toggle }: { rows: GatewayRouteRows; toggle: Re
     return !q || [r.namespace, r.name, r.parent, r.rule.label].some((v) => v.toLowerCase().includes(q));
   }), [ordered, mode, q]);
 
-  // A selection keeps its last row: removed only on a complete read of the
-  // HTTPRoute kind, otherwise unverified (slice 3 §5a).
+  // A selection keeps its last row. Missing from a membership read that is
+  // complete (routes AND parent Gateways current) it is no longer attached -
+  // not necessarily deleted; otherwise unverified (slice 3 §5a).
   const live = selKey ? routes.find((r) => keyOf(r) === selKey) : undefined;
   const lastSel = useRef<GatewayRouteRowDTO | null>(null);
   if (live) lastSel.current = live;
   const prior = lastSel.current && keyOf(lastSel.current) === selKey ? lastSel.current : null;
   const selected = live ?? prior ?? undefined;
-  const gone: "removed" | "unverified" | null = !live && selected ? (ev === "complete" ? "removed" : "unverified") : null;
+  const gone: "detached" | "unverified" | null = !live && selected ? (memberEv === "complete" ? "detached" : "unverified") : null;
   const close = () => setSelKey(null);
+  // Operator filter edits win: one that hides the selection closes it; a
+  // read change never does (Codex review of b2eff54 #2).
+  const filterEdits = useRef(0);
+  useEffect(() => {
+    if (filterEdits.current++ === 0) return;
+    if (selected && !visible.some((r) => keyOf(r) === keyOf(selected))) setSelKey(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, q]);
   const openTopology = (r: GatewayRouteRowDTO) => {
     const slash = r.parent.indexOf("/");
     openGateway(r.parent.slice(0, slash), r.parent.slice(slash + 1));
@@ -112,17 +129,19 @@ export function RouteList({ rows, toggle }: { rows: GatewayRouteRows; toggle: Re
   const gridStyle = { gridTemplateColumns: fitted.template };
 
   let state: DatasetState = "ready";
-  if (ev === "failed" && routes.length === 0) state = "unreadable";
-  else if (ev === "pending" && routes.length === 0) state = "loading";
+  if (memberEv === "failed" && routes.length === 0) state = "unreadable";
+  else if (memberEv === "pending" && routes.length === 0) state = "loading";
   else if (routes.length === 0) state = "empty";
   else if (visible.length === 0) state = "no-match";
   const icon = <IconRoute size={28} stroke={1.2} />;
   const clearFilters = () => { setMode("all"); setQuery(""); };
   const stateView = state === "loading" ? <SkeletonRows rows={5} label="reading HTTPRoutes" />
-    : state === "unreadable" ? <EmptyState icon={icon} title="Could not list HTTPRoutes." hint={rows.watchError ?? undefined} />
+    : state === "unreadable" ? (ev === "failed"
+      ? <EmptyState icon={icon} title="Could not list HTTPRoutes." hint={rows.watchError ?? undefined} />
+      : <EmptyState icon={icon} title="Attached HTTPRoutes are unverified." hint={`The parent Gateways could not be read${gatewaysDep?.error ? `: ${gatewaysDep.error}` : ""} - which routes are attached is unknown, not none.`} />)
     : state === "empty" && absent ? <EmptyState icon={icon} title="HTTPRoutes are not served on this cluster." hint="Klyx observes no gateway.networking.k8s.io HTTPRoute API here." />
     : state === "empty" && rowsRefreshing && total > 0 ? <EmptyState icon={icon} title={`No HTTPRoutes as of ${rowsAsOf}.`} hint={`Refreshing - the cluster summary now counts ${total}.`} />
-    : state === "empty" && ev === "stale" ? <EmptyState icon={icon} title="No HTTPRoutes in the last good read." hint={`The read is failing now${lastGood ? ` - last good ${clock(lastGood)}` : ""}: ${rows.watchError ?? "unverified"}.`} />
+    : state === "empty" && memberEv === "stale" ? <EmptyState icon={icon} title="No attached HTTPRoutes in the last good read." hint={ev === "stale" ? `The read is failing now${lastGood ? ` - last good ${clock(lastGood)}` : ""}: ${rows.watchError ?? "unverified"}.` : "The parent Gateways read is failing: the attachments are last observed."} />
     : state === "empty" ? <EmptyState icon={icon} title="No HTTPRoutes attached to a Gateway." hint="A route whose only parent Gateway is gone is not counted." />
     : <EmptyState icon={icon} title="No HTTPRoutes match the current filters." hint={`${routes.length} routes on this cluster${asOf}.`} action={{ label: "Clear filters", onClick: clearFilters }} />;
 
@@ -195,13 +214,13 @@ export function RouteList({ rows, toggle }: { rows: GatewayRouteRows; toggle: Re
       inspector={selected ? (
         <div data-testid="route-row-panel" style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
           <InspectorLayout kind="HTTPRoute" namespace={selected.namespace} name={selected.name} meta={`worst parent ${selected.parent}`} onClose={close}
-            verdict={gone === "removed" ? (
-              <div role="status" className="t-body" style={{ padding: "8px 10px", borderRadius: 4, background: "var(--color-background-secondary)", boxShadow: "inset 0 0 0 1px var(--color-border-secondary)" }}>
-                <span className="t-status">HTTPRoute removed.</span> It is no longer in the current read (or no longer attached to a Gateway). The details below are its last evidence.
+            verdict={gone === "detached" ? (
+              <div role="status" data-testid="route-detached" className="t-body" style={{ padding: "8px 10px", borderRadius: 4, background: "var(--color-background-secondary)", boxShadow: "inset 0 0 0 1px var(--color-border-secondary)" }}>
+                <span className="t-status">No longer attached to a Gateway.</span> The route and its parent Gateways were both read in full and it is not in the attached set - it may still exist. The details below are its last evidence.
               </div>
             ) : gone === "unverified" ? (
               <div role="status" data-testid="selection-unverified" className="t-body" style={{ padding: "8px 10px", borderRadius: 4, background: "var(--color-background-secondary)", boxShadow: "inset 0 0 0 1px var(--color-border-warning)" }}>
-                <span className="t-status">Not in the current HTTPRoute read.</span> That read is incomplete, so this is unverified - it may still exist. The details below are its last observed row.
+                <span className="t-status">Not in the current attached-route read.</span> The HTTPRoute or parent Gateway read is incomplete, so this is unverified - it may still be attached. The details below are its last observed row.
               </div>
             ) : (
               <div>
@@ -209,7 +228,7 @@ export function RouteList({ rows, toggle }: { rows: GatewayRouteRows; toggle: Re
                 {dep.word && <div className="t-secondary" style={{ marginTop: -4 }}>The verdict is {dep.word} - evaluated against {dep.kinds.join(", ")}.</div>}
               </div>
             )}
-            primary={gone === "removed" ? undefined : { label: `Open topology (${selected.parent})`, onSelect: () => openTopology(selected) }}>
+            primary={gone === "detached" ? undefined : { label: `Open topology (${selected.parent})`, onSelect: () => openTopology(selected) }}>
             <InspectorBlock title="Parents" count={selected.attachments.length}>
               {selected.attachments.map((a) => {
                 const role = routeRole(a);

@@ -219,16 +219,78 @@ describe("the Routes part view", () => {
     expect(screen.getByText("web").closest(".lens-row")!.textContent).toContain("no ready endpoints *");
   });
 
-  it("removal needs the HTTPRoute kind's complete read; a stale one keeps the selection, unverified", () => {
-    openRoutes(); applyRows("r", routesDTO(1, 1, [route("web", [att("infra/eg", "ok", "attached")])]));
+  // Codex review of b2eff54 #1: membership in the attached set needs the
+  // HTTPRoute read AND the parent Gateways read; Services and EndpointSlices
+  // never block it; a confirmed absence is "no longer attached", not deletion.
+  describe("attached-set membership", () => {
+    const select = () => {
+      openRoutes(); applyRows("r", routesDTO(1, 1, [route("web", [att("infra/eg", "ok", "attached")])]));
+      render(<GatewayApiView cluster="x" />);
+      toRoutes();
+      fireEvent.click(screen.getByText("web").closest(".lens-row")!);
+    };
+    const panel = () => within(screen.getByTestId("route-row-panel"));
+
+    it("a stale HTTPRoute read keeps the selection, unverified", () => {
+      select();
+      act(() => { applyRows("r", routesDTO(1, 2, [], routeKinds({ coverage: "stale", class: "transport", error: "dial tcp" }))); });
+      expect(panel().getByTestId("selection-unverified")).toBeTruthy();
+    });
+
+    for (const gwCov of ["checking", "unreadable", "stale"] as const) {
+      it(`a live HTTPRoute read with the parent Gateways ${gwCov} never confirms a detachment`, () => {
+        select();
+        act(() => { applyRows("r", routesDTO(1, 2, [], routeKinds({}, { gateways: { coverage: gwCov, class: "transport", error: "dial tcp" } }))); });
+        expect(panel().getByTestId("selection-unverified")).toBeTruthy();
+        expect(panel().queryByTestId("route-detached")).toBeNull();
+        expect(headline()).not.toBe("0"); // the attached count is qualified, never a bare 0
+      });
+    }
+
+    for (const dep of ["services", "endpointslices"] as const) {
+      it(`an unreadable ${dep} dependency never blocks a confirmed detachment`, () => {
+        select();
+        act(() => { applyRows("r", routesDTO(1, 2, [], routeKinds({}, { [dep]: { coverage: "unreadable", class: "forbidden", error: "rbac" } }))); });
+        expect(panel().getByTestId("route-detached").textContent).toMatch(/No longer attached to a Gateway\..*may still exist/);
+      });
+    }
+
+    it("the parent removed while the route still exists reads as detached, never removed", () => {
+      select();
+      act(() => { applyRows("r", routesDTO(1, 2, [], routeKinds())); }); // the parent Gateway is gone; the route was not deleted
+      expect(panel().getByTestId("route-detached")).toBeTruthy();
+      expect(panel().queryByText(/removed/)).toBeNull();
+      expect(panel().queryByRole("button", { name: /^Open topology/ })).toBeNull();
+    });
+
+    it("an empty attached set under an unreadable parent read is unverified, not none", () => {
+      openRoutes(); applyRows("r", routesDTO(1, 1, [], routeKinds({}, { gateways: { coverage: "unreadable", class: "forbidden", error: "rbac" } })));
+      render(<GatewayApiView cluster="x" />);
+      toRoutes();
+      expect(screen.getByText("Attached HTTPRoutes are unverified.")).toBeTruthy();
+      expect(screen.queryByText("No HTTPRoutes attached to a Gateway.")).toBeNull();
+    });
+  });
+
+  it("a dependency's discovery gap is named too", () => {
+    openRoutes(); applyRows("r", routesDTO(1, 1, [route("web", [att("infra/eg", "ok", "attached")])], routeKinds({}, { gateways: { discovery: "forbidden: discovery re-check" } })));
     render(<GatewayApiView cluster="x" />);
     toRoutes();
-    fireEvent.click(screen.getByText("web").closest(".lens-row")!);
-    act(() => { applyRows("r", routesDTO(1, 2, [], routeKinds({ coverage: "stale", class: "transport", error: "dial tcp" }))); });
-    const panel = () => within(screen.getByTestId("route-row-panel"));
-    expect(panel().getByTestId("selection-unverified")).toBeTruthy();
-    act(() => { applyRows("r", routesDTO(1, 3, [], routeKinds())); });
-    expect(panel().getByText(/HTTPRoute removed\./)).toBeTruthy();
-    expect(panel().queryByRole("button", { name: /^Open topology/ })).toBeNull();
+    expect(screen.getByTestId("discovery-gap").textContent).toMatch(/Gateway: forbidden: discovery re-check/);
+  });
+
+  // Codex review of b2eff54 #2: an operator filter edit closes an excluded
+  // selection; a read change does not.
+  it("an attention-filter or search edit that hides the selection closes it", () => {
+    openRoutes(); applyRows("r", routesDTO(1, 1, [route("ok", [att("infra/eg", "ok", "attached")]), route("bad", [att("infra/eg", "fault", "not accepted", true)])]));
+    render(<GatewayApiView cluster="x" />);
+    toRoutes();
+    fireEvent.click(screen.getByText("ok").closest(".lens-row")!);
+    fireEvent.click(screen.getByRole("button", { name: /^Needs attention/ }));
+    expect(screen.queryByTestId("route-row-panel")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /^All/ }));
+    fireEvent.click(screen.getByText("bad").closest(".lens-row")!);
+    fireEvent.change(screen.getByLabelText("Search HTTPRoutes"), { target: { value: "ok" } });
+    expect(screen.queryByTestId("route-row-panel")).toBeNull();
   });
 });
