@@ -21,21 +21,25 @@ vi.mock("../../bindings/github.com/moomora/klyx/internal/appbridge/index.js", ()
 }));
 import { HealthService } from "../../bindings/github.com/moomora/klyx/internal/appbridge/index.js";
 import { openRows, rowsEvent, _resetHealthRowsForTest } from "./healthRows";
-import { useHealth, type HealthPart, type HealthSummary, type RowsDTO } from "../store/health";
+import { useHealth, resetHealthStore, backoff, type HealthPart, type HealthSummary, type RowsDTO } from "../store/health";
 
 const part = (ver: number): HealthPart => ({ id: "certificates", entity: "Certificates", scope: "all namespaces", classifier: "native", coverage: "live", kinds: [], obs: ver, ver });
-const rows = (ver: number, incarnation = 1): RowsDTO => ({ cluster: "c1", incarnation, task: "certs", part: part(ver), evaluatedAt: "", rows: [{ uid: `v${ver}` }] });
+const rows = (ver: number, incarnation = 1): RowsDTO => ({ cluster: "c1", incarnation, task: "certs", part: part(ver), evaluatedAt: "", rows: [{ uid: `i${incarnation}v${ver}` }] });
+const summary = (incarnation: number, seq: number, ver: number): HealthSummary => ({ cluster: "c1", incarnation, seq, evaluatedAt: "", connection: "connected",
+  tasks: [{ id: "certs", coverage: "live", parts: [part(ver)] }] });
 const emit = (name: string, data: unknown) => (handlers.get(name) ?? []).forEach((f) => f({ data }));
 const subs = () => Object.values(useHealth.getState().subs);
-const flush = () => new Promise((r) => setTimeout(r, 0));
+const flush = async () => { for (let i = 0; i < 5; i++) await Promise.resolve(); };
+const openMock = HealthService.OpenRows as ReturnType<typeof vi.fn>;
+const tokens = () => openMock.mock.calls.map((c) => c[3] as string);
 
 beforeEach(() => {
   vi.clearAllMocks();
   handlers.clear();
   order.length = 0;
-  useHealth.setState({ summaries: {}, finalizedThrough: {}, subs: {} });
+  resetHealthStore();
   _resetHealthRowsForTest();
-  (HealthService.OpenRows as ReturnType<typeof vi.fn>).mockImplementation(async (...a: unknown[]) => {
+  openMock.mockImplementation(async (...a: unknown[]) => {
     order.push(`open:${a[3]}`);
     return { rows: rows(1) };
   });
@@ -50,17 +54,16 @@ describe("health rows transport (design §2b)", () => {
     const openIdx = order.findIndex((o) => o.startsWith("open:"));
     expect(evIdx).toBeGreaterThanOrEqual(0);
     expect(evIdx).toBeLessThan(openIdx);
-    const tokens = (HealthService.OpenRows as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[3]);
-    expect(new Set(tokens).size).toBe(2);
+    expect(new Set(tokens()).size).toBe(2);
     await flush();
-    expect(subs().every((s) => s.ver === 1)).toBe(true);
+    expect(subs().every((s) => s.ver === 1 && s.open === "open" && s.boundIncarnation === 1)).toBe(true);
     close();
     close2();
   });
 
   it("an event that beats the bootstrap reply wins; the older reply is dropped", async () => {
     let resolve!: (v: unknown) => void;
-    (HealthService.OpenRows as ReturnType<typeof vi.fn>).mockImplementation(() => new Promise((r) => { resolve = r; }));
+    openMock.mockImplementation(() => new Promise((r) => { resolve = r; }));
     const close = openRows("c1", "certs", "certificates");
     emit(rowsEvent("c1", "certs", "certificates"), rows(3));
     resolve({ rows: rows(2) });
@@ -71,9 +74,9 @@ describe("health rows transport (design §2b)", () => {
 
   it("closing before the bootstrap reply: the reply never lands, and the token is closed", async () => {
     let resolve!: (v: unknown) => void;
-    (HealthService.OpenRows as ReturnType<typeof vi.fn>).mockImplementation(() => new Promise((r) => { resolve = r; }));
+    openMock.mockImplementation(() => new Promise((r) => { resolve = r; }));
     const close = openRows("c1", "certs", "certificates");
-    const token = (HealthService.OpenRows as ReturnType<typeof vi.fn>).mock.calls[0][3];
+    const [token] = tokens();
     close();
     expect(HealthService.CloseRows).toHaveBeenCalledWith(token);
     resolve({ rows: rows(5) });
@@ -83,31 +86,68 @@ describe("health rows transport (design §2b)", () => {
     expect(subs()).toHaveLength(0);
   });
 
-  it("an open error is the subscription's error, never empty rows", async () => {
-    (HealthService.OpenRows as ReturnType<typeof vi.fn>).mockImplementation(async () => ({ error: "cluster not observed: c1" }));
+  // Codex infra review #2: a mounted subscription follows a replaced
+  // Observer on the same cluster - a fresh token, the old one closed - with
+  // no other lens supplying rows.
+  it("rebinds to a replacement Observer without a cluster change", async () => {
+    openMock.mockImplementation(async (...a: unknown[]) => ({ rows: rows(1, tokens().length === 1 ? 1 : 2) }));
     const close = openRows("c1", "certs", "certificates");
     await flush();
-    expect(subs()[0]).toMatchObject({ error: "cluster not observed: c1", rows: null });
+    const [t1] = tokens();
+    expect(subs()[0]).toMatchObject({ boundIncarnation: 1, incarnation: 1 });
+    emit("health:summary", summary(1, 5, 1));
+    emit("health:summary", { ...summary(1, 6, 1), final: true }); // the old Observer ends
+    expect(subs()[0].rows).toBeNull();
+    emit("health:summary", summary(2, 1, 1)); // its replacement
+    await flush();
+    expect(HealthService.CloseRows).toHaveBeenCalledWith(t1);
+    expect(tokens()).toHaveLength(2);
+    expect(tokens()[1]).not.toBe(t1);
+    expect(subs()[0]).toMatchObject({ boundIncarnation: 2, incarnation: 2, open: "open" });
+    expect((subs()[0].rows as { uid: string }[])[0].uid).toBe("i2v1");
     close();
   });
 
-  it("the A4 deadline issues a fenced re-bootstrap; its reply resolves the mismatch", async () => {
+  it("a failed first open shows its error, then recovers with a fresh token after backoff", async () => {
     vi.useFakeTimers({ now: 0 });
-    (HealthService.RowsBootstrap as ReturnType<typeof vi.fn>).mockImplementation(async (_t: string, gen: number) => ({ rows: rows(4), requestGen: gen }));
+    openMock.mockImplementationOnce(async () => { throw new Error("connection refused"); });
     const close = openRows("c1", "certs", "certificates");
-    await vi.runAllTicks();
-    await Promise.resolve();
-    await Promise.resolve();
+    await flush();
+    expect(subs()[0]).toMatchObject({ open: "failed", error: "connection refused", rows: null });
+    await vi.advanceTimersByTimeAsync(backoff(1));
+    await flush();
+    expect(tokens()).toHaveLength(2);
+    expect(subs()[0]).toMatchObject({ open: "open", error: null, ver: 1 });
+    close();
+  });
+
+  it("an open error reply is the subscription's error, never empty rows", async () => {
+    openMock.mockImplementation(async () => ({ error: "cluster not observed: c1" }));
+    const close = openRows("c1", "certs", "certificates");
+    await flush();
+    expect(subs()[0]).toMatchObject({ error: "cluster not observed: c1", rows: null, open: "failed" });
+    close();
+  });
+
+  it("the A4 deadline issues a fenced re-bootstrap; a rejection retries with backoff until it resolves", async () => {
+    vi.useFakeTimers({ now: 0 });
+    const boot = HealthService.RowsBootstrap as ReturnType<typeof vi.fn>;
+    boot.mockImplementationOnce(async () => { throw new Error("capture timed out"); });
+    boot.mockImplementation(async (_t: string, gen: number) => ({ rows: rows(4), requestGen: gen }));
+    const close = openRows("c1", "certs", "certificates");
+    await flush();
     expect(subs()[0].ver).toBe(1);
-    const summary: HealthSummary = { cluster: "c1", incarnation: 1, seq: 2, evaluatedAt: "", connection: "connected",
-      tasks: [{ id: "certs", coverage: "live", parts: [part(4)] }] };
-    emit("health:summary", summary);
+    emit("health:summary", summary(1, 2, 4));
     expect(subs()[0].mismatchSince).not.toBeNull();
     await vi.advanceTimersByTimeAsync(1000);
-    const token = (HealthService.OpenRows as ReturnType<typeof vi.fn>).mock.calls[0][3];
-    expect(HealthService.RowsBootstrap).toHaveBeenCalledWith(token, 1);
-    await vi.advanceTimersByTimeAsync(1);
-    expect(subs()[0]).toMatchObject({ ver: 4, mismatchSince: null, refreshing: false });
+    await flush();
+    expect(boot).toHaveBeenCalledTimes(1);
+    expect(subs()[0]).toMatchObject({ refreshing: true, attempt: 1, refreshError: "capture timed out" });
+    await vi.advanceTimersByTimeAsync(backoff(1));
+    await flush();
+    expect(boot).toHaveBeenCalledTimes(2);
+    expect(boot.mock.calls[1][1]).toBe(2); // a new request generation
+    expect(subs()[0]).toMatchObject({ ver: 4, mismatchSince: null, refreshing: false, refreshError: null, error: null });
     close();
   });
 });

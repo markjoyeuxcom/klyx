@@ -1,13 +1,15 @@
 import { Events } from "@wailsio/runtime";
 import { HealthService } from "../../bindings/github.com/moomora/klyx/internal/appbridge/index.js";
 import {
-  MISMATCH_DEADLINE_MS, addSub, applyBootstrap, applyRows, applySummary, dueForBootstrap, removeSub, setSubError, useHealth,
-  type HealthSummary, type RowsDTO,
+  addSub, applyRows, applySummary, bootstrapSettled, dueForBootstrap, needsReopen, nextWake, openFailed, openStarted, openSucceeded,
+  removeSub, useHealth, type HealthSummary, type RowsDTO,
 } from "../store/health";
 
 // The transport for the health summaries and the lenses' shared rows
 // (slice 3 design §2b). Every subscription subscribes to its event BEFORE
-// it bootstraps, and the store keeps only strictly newer data.
+// it bootstraps, and the store keeps only strictly newer data. A mounted
+// subscription survives the cluster's Observer being replaced (it reopens
+// with a fresh token) and a failed open (it retries with backoff).
 
 const SUMMARY_EVENT = "health:summary";
 export const rowsEvent = (cluster: string, task: string, part: string) => `health:rows:${cluster}:${task}/${part}`;
@@ -22,77 +24,91 @@ export function startSummaries(): void {
   Events.On(SUMMARY_EVENT, (ev: { data: HealthSummary }) => {
     if (ev?.data) {
       applySummary(ev.data);
-      scheduleDeadlines();
+      service();
     }
   });
   void HealthService.Summaries()
     .then((all) => {
       for (const s of (all ?? []) as unknown as HealthSummary[]) applySummary(s);
-      scheduleDeadlines();
+      service();
     })
-    .catch(() => { /* the events keep arriving; a failed bootstrap is retried by the next summary */ });
+    .catch(() => { /* the events keep arriving */ });
 }
 
-// tokens are minted per open: never reused, so a late reply for a closed
-// subscription can never land on its successor (design §2b).
-let tokenSeq = 0;
-const mint = () => `rows-${Date.now().toString(36)}-${++tokenSeq}`;
+// Handles are stable per mounted consumer; tokens are minted per open and
+// never reused, so a late reply for a closed token can never land on its
+// successor (design §2b).
+let seq = 0;
+const mint = (kind: string) => `${kind}-${Date.now().toString(36)}-${++seq}`;
 
-// openRows opens one part's rows for a lens and returns its close. Closing
-// before the bootstrap reply arrives is safe: the backend tombstones the
-// token, and the store drops anything for a removed subscription.
+// openRows opens one part's rows for a lens and returns its close.
 export function openRows(cluster: string, task: string, part: string): () => void {
   startSummaries();
-  const token = mint();
-  let open = true;
-  addSub(token, cluster, task, part);
+  const handle = mint("h");
+  addSub(handle, cluster, task, part);
   const off = Events.On(rowsEvent(cluster, task, part), (ev: { data: RowsDTO }) => {
-    if (open && ev?.data && applyRows(token, ev.data)) scheduleDeadlines();
+    if (ev?.data && applyRows(handle, ev.data)) service();
   });
-  void HealthService.OpenRows(cluster, task, part, token)
-    .then((reply) => {
-      if (!open || !reply || reply.closed) return;
-      if (reply.error) setSubError(token, reply.error);
-      else if (reply.rows) {
-        applyRows(token, reply.rows as unknown as RowsDTO);
-        scheduleDeadlines();
-      }
-    })
-    .catch((e: unknown) => { if (open) setSubError(token, e instanceof Error ? e.message : String(e)); });
+  reopen(handle);
   return () => {
-    if (!open) return;
-    open = false;
+    const sub = useHealth.getState().subs[handle];
     if (typeof off === "function") off();
-    removeSub(token);
-    void HealthService.CloseRows(token).catch(() => { /* the token is tombstoned or the app is closing */ });
+    removeSub(handle);
+    if (sub?.token) void HealthService.CloseRows(sub.token).catch(() => { /* tombstoned or closing */ });
   };
 }
 
-// The A4 deadline: one timer, re-armed at the earliest open mismatch.
-let deadline: ReturnType<typeof setTimeout> | null = null;
-
-export function scheduleDeadlines(now = Date.now()): void {
-  const pending = Object.values(useHealth.getState().subs).filter((s) => s.mismatchSince !== null && !s.refreshing);
-  if (deadline) { clearTimeout(deadline); deadline = null; }
-  if (pending.length === 0) return;
-  const at = Math.min(...pending.map((s) => (s.mismatchSince as number) + MISMATCH_DEADLINE_MS));
-  deadline = setTimeout(fireDeadlines, Math.max(0, at - now));
+// reopen (re)opens a subscription with a fresh token, closing the token it
+// held (bound to a replaced Observer, or failed).
+function reopen(handle: string): void {
+  const sub = useHealth.getState().subs[handle];
+  if (!sub) return;
+  if (sub.token) void HealthService.CloseRows(sub.token).catch(() => {});
+  const token = mint("rows");
+  openStarted(handle, token);
+  HealthService.OpenRows(sub.cluster, sub.task, sub.part, token)
+    .then((reply) => {
+      const cur = useHealth.getState().subs[handle];
+      if (!cur || cur.token !== token) { // closed or reopened meanwhile
+        void HealthService.CloseRows(token).catch(() => {});
+        return;
+      }
+      if (!reply || reply.closed) return;
+      if (reply.error || !reply.rows) {
+        openFailed(handle, token, reply.error || "no rows");
+      } else {
+        const rows = reply.rows as unknown as RowsDTO;
+        openSucceeded(handle, token, rows.incarnation);
+        applyRows(handle, rows);
+      }
+      service();
+    })
+    .catch((e: unknown) => {
+      openFailed(handle, token, e instanceof Error ? e.message : String(e));
+      service();
+    });
 }
 
-function fireDeadlines(): void {
-  deadline = null;
-  for (const { token, requestGen } of dueForBootstrap()) {
-    void HealthService.RowsBootstrap(token, requestGen)
-      .then((reply) => { if (reply && applyBootstrap(token, reply as never)) scheduleDeadlines(); })
-      .catch(() => { /* the next event, or the next deadline, retries */ });
+// service runs what is due now (reopens, A4 re-bootstraps) and arms one
+// timer for the next wake.
+let timer: ReturnType<typeof setTimeout> | null = null;
+
+export function service(now = Date.now()): void {
+  for (const h of needsReopen(now)) reopen(h);
+  for (const { handle, token, requestGen } of dueForBootstrap(now)) {
+    HealthService.RowsBootstrap(token, requestGen)
+      .then((reply) => { bootstrapSettled(handle, requestGen, { rows: (reply?.rows as unknown as RowsDTO) ?? null, error: reply?.error ?? null, closed: reply?.closed }); service(); })
+      .catch((e: unknown) => { bootstrapSettled(handle, requestGen, { error: e instanceof Error ? e.message : String(e) }); service(); });
   }
-  scheduleDeadlines();
+  if (timer) { clearTimeout(timer); timer = null; }
+  const at = nextWake();
+  if (at !== null) timer = setTimeout(() => { timer = null; service(); }, Math.max(0, at - Date.now()));
 }
 
 // test seam: reset module state between tests
 export function _resetHealthRowsForTest(): void {
   summariesStarted = false;
-  tokenSeq = 0;
-  if (deadline) clearTimeout(deadline);
-  deadline = null;
+  seq = 0;
+  if (timer) clearTimeout(timer);
+  timer = null;
 }
