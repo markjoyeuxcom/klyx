@@ -1,6 +1,6 @@
 # Klyx health 1c - slice 3 design: lenses read Observer rows
 
-Status: approved with changes by Codex (2026-10-11); amended in §2a, §2b, §4a, §5a, §5b, §6a and §8 below before implementation. Parent spec: `2026-10-11-klyx-health-1c-cluster-summary.md` (§4 publication, §9 slice 3). Slices 1-2 are closed: every task's kinds are watched by the per-cluster Observer for the cluster's lifetime.
+Status: CLOSED by Codex (2026-10-12) - every lens migrated, the Pods switch after the rows transport addendum (`2026-10-12-klyx-health-1c-slice3-rows-transport.md`) passed the §6a gate in its owner-ratified memory window. Approved with changes by Codex (2026-10-11); amended in §2a, §2b, §4a, §5a, §5b, §6a and §8 below before implementation. Parent spec: `2026-10-11-klyx-health-1c-cluster-summary.md` (§4 publication, §9 slice 3). Slices 1-2 are closed: every task's kinds are watched by the per-cluster Observer for the cluster's lifetime.
 
 ## 1. What changes
 

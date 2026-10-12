@@ -1,6 +1,6 @@
 # Klyx health 1c, slice 3 addendum: the rows transport after the §6a gate
 
-Status: Codex APPROVE-WITH-CHANGES to the delta direction (2026-10-12); amended (§3-§5), implemented (c28a566, accepted by Codex), and re-measured (§6). The memory window was ratified by the owner and the declared confirming run passes every §6a limit (§6.4). Parent: `2026-10-11-klyx-health-1c-slice3-rows.md` §6a ("If any limit is missed, the transport changes before the Pods lens switches ... reviewed before it is built").
+Status: Codex APPROVE-WITH-CHANGES to the delta direction (2026-10-12); amended (§3-§5), implemented (c28a566, accepted by Codex), and re-measured (§6). The memory window was ratified by the owner and the declared confirming run passes every §6a limit (§6.4). Codex closed Pods and slice 3 (2026-10-12). Parent: `2026-10-11-klyx-health-1c-slice3-rows.md` §6a ("If any limit is missed, the transport changes before the Pods lens switches ... reviewed before it is built").
 
 ## 1. What the gate measured
 
@@ -156,7 +156,7 @@ Three controls, 10 minutes each, the Pods lens on screen over the same 5017 pods
 - The event-delivery hypothesis is refuted: uniquely sourced events at about the delta rate add nothing measurable.
 - Churn raises the plateau (about 268 to 342 MB with interaction) and reaches it sooner; after it, nothing grows (+0.9% over the last 5 minutes of a 15-minute churn).
 
-So no transport can meet the growth limit read from launch: the no-churn control fails it. Its intent - no churn-driven growth - is what the plateau shows, but by Codex's ruling that reading needs the owner's ratification before the confirming run.
+So the growth limit read from launch measures the webview's warm-up rather than churn: the no-churn control fails it too. The controls weaken the delivery explanation; they do not prove that every possible transport would fail a from-launch reading. The limit's intent - no churn-driven growth - is what the plateau shows, but by Codex's ruling that reading needed the owner's ratification before the confirming run.
 
 Proposed amendment (for the owner): the memory limit is measured on a churn run of at least 15 minutes with the lens on screen; the 400 MB ceiling holds for the whole run; the growth limit (10%) applies to the last 5 minutes of churn, after the webview's warm-up. Then one confirming run, declared in advance.
 
