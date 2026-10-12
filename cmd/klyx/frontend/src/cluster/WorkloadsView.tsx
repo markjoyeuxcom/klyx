@@ -236,11 +236,12 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
 
   // Palette verbs / cross-links: select the workload (revealing it past the
   // filters), then open the verb's confirm or scale input.
+  // A target not in the rows is missing only on a complete read of its own
+  // kind; until then it waits (slice 4 review of 4d8b545 #1).
   useNavIntent(cluster, ["restart-workload", "scale-workload", "select-workload"], (intent) => {
-    if (allItems.length === 0) return ev === "complete" ? "missing" : "wait";
     if (!("workloadKind" in intent)) return "missing";
     const w = allItems.find((x) => x.kind === intent.workloadKind && x.namespace === intent.namespace && x.name === intent.name);
-    if (!w) return "missing";
+    if (!w) return kindEv(intent.workloadKind) === "complete" ? "missing" : "wait";
     autoSelect.current = "done";
     if (!rows.some((x) => keyOf(x) === keyOf(w))) {
       const st = useFleet.getState();
@@ -251,7 +252,7 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
     if (intent.kind === "restart-workload") setPending({ kind: "restart", w });
     else if (intent.kind === "scale-workload") setPending({ kind: "scale-input", w });
     return "consumed";
-  }, [allItems, rows, ev]);
+  }, [allItems, rows, kindEv]);
 
   // One-shot auto-select of the first attention row from a FRESH complete read.
   const autoSelect = useRef<"pending" | "done">("pending");

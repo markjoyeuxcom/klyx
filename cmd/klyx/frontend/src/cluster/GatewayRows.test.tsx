@@ -326,4 +326,18 @@ describe("a Top link reveals its object", () => {
     expect(selectedRow()).toContain("bad");
     expect(useFleet.getState().navIntent).toBeNull();
   });
+
+  it("a route absent from a complete membership read is detached, not proven deleted (review of 4d8b545 #3)", () => {
+    open(); applyRows("g", rowsDTO(1, 1, [gw("eg")]));
+    if (!useHealth.getState().subs.r) addSub("r", "x", "gateway", "routes");
+    openStarted("r", "tok-r"); openSucceeded("r", "tok-r", 1);
+    // the parent was removed: the HTTPRoute still exists but is attached to nothing
+    applyRows("r", { cluster: "x", incarnation: 1, task: "gateway", evaluatedAt: "x", rows: [],
+      part: { ...part(1, [kind("httproutes"), ...["gateways", "services", "endpointslices"].map((k) => kind(k, { role: "dependency" }))], { total: 0, included: 0 }), id: "routes" } });
+    render(<GatewayApiView cluster="x" />);
+    reveal("routes", { gvr: "gateway.networking.k8s.io/v1/httproutes", namespace: "apps", name: "web", parent: "gateway infra/eg" });
+    expect(useFleet.getState().navIntent).toBeNull();
+    expect(useFleet.getState().actionStatus?.message).toBe("route apps/web is no longer attached to a Gateway - it may still exist");
+  });
 });
+

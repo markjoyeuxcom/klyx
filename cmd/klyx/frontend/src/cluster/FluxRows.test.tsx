@@ -347,3 +347,34 @@ describe("a Top link reveals a source", () => {
     expect(useFleet.getState().navIntent).toBeNull();
   });
 });
+
+// Slice 4 review of 4d8b545 #1: select-flux decides 'missing' from the
+// target's own kind - a HelmRelease row never vouches for Kustomizations.
+describe("select-flux decides 'missing' from the target's own kind", () => {
+  const want = (fluxKind: string, name: string) =>
+    act(() => { useFleet.getState().requestNavIntent({ kind: "select-flux", cluster: "x", fluxKind, namespace: "flux-system", name }); });
+
+  it("a Kustomization target waits while Kustomizations are unreadable, beside HelmRelease rows; it selects on recovery", () => {
+    open();
+    applyRows("r", rowsDTO(1, "reconciliations", 1, [res("hr", { kind: "HelmRelease" })], REC_KINDS({ kustomizations: { coverage: "unreadable", class: "forbidden" } })), 0);
+    applyRows("s", rowsDTO(1, "sources", 1, [src("repo")], SRC_KINDS()), 0);
+    setView("reconciliation");
+    render(<GitOps cluster="x" />);
+    want("Kustomization", "app");
+    expect(useFleet.getState().navIntent).toMatchObject({ kind: "select-flux", name: "app" });
+    expect(useFleet.getState().actionStatus).toBeNull();
+    act(() => { applyRows("r", rowsDTO(1, "reconciliations", 2, [res("hr", { kind: "HelmRelease" }), res("app")], REC_KINDS()), 0); });
+    expect(useFleet.getState().navIntent).toBeNull();
+  });
+
+  it("a complete empty reconciliation read reports the target missing - never waits forever", () => {
+    open();
+    applyRows("r", rowsDTO(1, "reconciliations", 1, [], REC_KINDS()), 0);
+    applyRows("s", rowsDTO(1, "sources", 1, [src("repo")], SRC_KINDS()), 0);
+    setView("reconciliation");
+    render(<GitOps cluster="x" />);
+    want("Kustomization", "app");
+    expect(useFleet.getState().navIntent).toBeNull();
+    expect(useFleet.getState().actionStatus).toMatchObject({ kind: "error", message: expect.stringMatching(/app is no longer present/) });
+  });
+});

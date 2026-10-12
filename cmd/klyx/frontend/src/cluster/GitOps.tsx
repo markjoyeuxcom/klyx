@@ -226,11 +226,12 @@ export function GitOps({ cluster }: { cluster: string }) {
   useEffect(() => { if (pinned && !verb) setPinnedState(null); }, [pinned, verb]);
 
   // Palette verbs / cross-links: select the resource, then open its confirm.
+  // A target not in the rows is missing only on a complete read of its own
+  // kind; until then it waits (slice 4 review of 4d8b545 #1).
   useNavIntent(cluster, ["reconcile-flux", "suspend-flux", "select-flux"], (intent) => {
-    if (gitops.loading || rows.length === 0) return "wait";
     if (!("fluxKind" in intent)) return "missing";
     const r = rows.find((x) => x.kind === intent.fluxKind && x.namespace === intent.namespace && x.name === intent.name);
-    if (!r) return "missing";
+    if (!r) return evidenceOf(intent.fluxKind) === "complete" ? "missing" : "wait";
     autoSelect.current = "done";
     setView("reconciliation");
     // Direct navigation wins over pre-existing filters; a later operator edit
@@ -242,7 +243,7 @@ export function GitOps({ cluster }: { cluster: string }) {
     if (intent.kind === "reconcile-flux") setPinned({ kind: "reconcile", r });
     else if (intent.kind === "suspend-flux") setPinned({ kind: intent.suspend ? "suspend" : "resume", r });
     return "consumed";
-  }, [rows, gitops.loading, kindFilter, status, query]);
+  }, [rows, evidenceOf, kindFilter, status, query]);
 
   // A summary Top link to a source (health 1c slice 4 §5.4): select it in
   // the Sources view past the filters - selection only.

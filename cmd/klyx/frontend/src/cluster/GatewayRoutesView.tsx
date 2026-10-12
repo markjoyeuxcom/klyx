@@ -97,7 +97,12 @@ export function RouteList({ cluster, rows, toggle }: { cluster: string; rows: Ga
   useNavIntent(cluster, ["reveal"], (intent) => {
     if (intent.kind !== "reveal" || intent.task !== "gateway" || intent.part !== "routes") return "wait";
     const key = `${intent.ref.namespace ?? ""}/${intent.ref.name}`;
-    if (!routes.some((r) => keyOf(r) === key)) return ev === "complete" && parentsEv === "complete" ? "missing" : "wait";
+    if (!routes.some((r) => keyOf(r) === key)) {
+      if (ev !== "complete" || parentsEv !== "complete") return "wait";
+      // absent from a complete membership read: detached, not proven deleted
+      useFleet.getState().setActionStatus({ kind: "error", message: `route ${key} is no longer attached to a Gateway - it may still exist` });
+      return "consumed";
+    }
     setMode("all"); setQuery("");
     setCursorKey(key);
     setSelKey(key);

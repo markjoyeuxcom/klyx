@@ -336,3 +336,39 @@ describe("rollout history is fenced by UID", () => {
     expect(inspector().queryByText("undo →")).toBeNull();
   });
 });
+
+// Slice 4 review of 4d8b545 #1: a Top link's target missing from the rows is
+// reported only on a complete read of its own kind - mixed kinds wait.
+describe("select-workload decides 'missing' from the target's own kind", () => {
+  const want = (workloadKind: string, name: string) =>
+    act(() => { useFleet.getState().requestNavIntent({ kind: "select-workload", cluster: "x", workloadKind, namespace: "app", name }); });
+
+  it("a StatefulSet target waits while StatefulSets are not read, then selects on recovery; a complete read without it is missing", () => {
+    seed([wl("web")], kindsOf({ statefulsets: { coverage: "checking" } }));
+    render(<WorkloadsView cluster="x" />);
+    want("StatefulSet", "pg");
+    expect(useFleet.getState().navIntent).toMatchObject({ kind: "select-workload", name: "pg" }); // waiting, not "gone"
+    expect(useFleet.getState().actionStatus).toBeNull();
+    push(2, [wl("web"), wl("pg", "fault", { kind: "StatefulSet", gvr: "apps/v1/statefulsets" })]);
+    expect(useFleet.getState().navIntent).toBeNull();
+    expect(inspector().getAllByText("pg").length).toBeGreaterThan(0);
+    want("StatefulSet", "gone");
+    expect(useFleet.getState().actionStatus).toMatchObject({ kind: "error", message: expect.stringMatching(/gone is no longer present/) });
+  });
+
+  it("the target's own kind decides: Deployments read completely report a missing Deployment while DaemonSets are unreadable", () => {
+    seed([wl("web")], kindsOf({ daemonsets: { coverage: "unreadable", class: "forbidden" } }));
+    render(<WorkloadsView cluster="x" />);
+    want("Deployment", "gone");
+    expect(useFleet.getState().navIntent).toBeNull();
+    expect(useFleet.getState().actionStatus).toMatchObject({ kind: "error", message: expect.stringMatching(/gone is no longer present/) });
+  });
+
+  it("a complete empty read reports the target missing at once", () => {
+    seed([]);
+    render(<WorkloadsView cluster="x" />);
+    want("Deployment", "web");
+    expect(useFleet.getState().navIntent).toBeNull();
+    expect(useFleet.getState().actionStatus).toMatchObject({ kind: "error" });
+  });
+});

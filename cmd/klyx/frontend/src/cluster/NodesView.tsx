@@ -583,17 +583,21 @@ export function NodesView({ cluster }: { cluster: string }) {
     searchRef,
   });
 
+  // A target not in the rows is missing only on a complete Node read; a
+  // selection reveals the node past the filters (slice 4 review of 4d8b545).
   useNavIntent(cluster, ["drain-node", "cordon-node", "select-node"], (intent) => {
-    if (scopedNodes.length === 0) return ev === "complete" ? "missing" : "wait";
     const name = "node" in intent ? intent.node : "";
     const n = scopedNodes.find((x) => x.name === name);
-    if (!n) return "missing";
+    if (!n) return ev === "complete" ? "missing" : "wait";
     const target = { cluster, node: n.name, uid: n.uid ?? "" };
     if (intent.kind === "drain-node") setDrainPending(target);
     else if (intent.kind === "cordon-node") setCordonPending({ ...target, cordon: intent.cordon });
-    else activate(n);
+    else {
+      if (!visibleNodes.includes(n)) { setFilter("all"); setRoleFilter(null); setQuery(""); }
+      activate(n);
+    }
     return "consumed";
-  }, [scopedNodes, ev]);
+  }, [scopedNodes, visibleNodes, ev]);
 
   // One-shot auto-select of the first attention node from a FRESH complete
   // read after route entry (same contract as Pods).

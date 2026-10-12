@@ -328,3 +328,35 @@ describe("verbs are pinned to the armed node", () => {
     expect(cordonNode).toHaveBeenCalledWith("x", "a", "uid-a", true);
   });
 });
+
+// Slice 4 review of 4d8b545 #1-#2: select-node decides 'missing' from the
+// Node read's own evidence, and reveals the node past the filters.
+describe("select-node reveals through the filters and waits for evidence", () => {
+  const want = (name: string) => act(() => { useFleet.getState().requestNavIntent({ kind: "select-node", cluster: "x", node: name }); });
+
+  it("a node hidden by the search and a chip is revealed and selected", () => {
+    seed([node("unique-a"), node("down", "fault")]);
+    render(<NodesView cluster="x" />);
+    fireEvent.change(screen.getByPlaceholderText("Search nodes"), { target: { value: "unique-a" } });
+    expect(rowNames()).toEqual(["unique-a"]);
+    want("down");
+    expect(rowNames()).toContain("down");
+    expect(useFleet.getState().nodes.selected?.name).toBe("down");
+    expect(useFleet.getState().navIntent).toBeNull();
+  });
+
+  it("an unread or stale Node read waits; a complete empty read is missing", () => {
+    seed([node("a")], kind({ coverage: "stale", lastGoodAt: "2026-10-12T11:00:00Z" }));
+    const { unmount } = render(<NodesView cluster="x" />);
+    want("b");
+    expect(useFleet.getState().navIntent).toMatchObject({ node: "b" });
+    unmount();
+    resetHealthStore();
+    useFleet.setState({ navIntent: null });
+    seed([]);
+    render(<NodesView cluster="x" />);
+    want("b");
+    expect(useFleet.getState().navIntent).toBeNull();
+    expect(useFleet.getState().actionStatus).toMatchObject({ kind: "error", message: expect.stringMatching(/b is no longer present/) });
+  });
+});
