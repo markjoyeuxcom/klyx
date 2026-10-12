@@ -51,6 +51,7 @@ Each case is applied on B, asserted at the settled barrier (§3), then reverted,
 | 5b | a healthy Gateway with a route whose resolved backend Service has an EndpointSlice with endpoints, none ready (one endpoint `ready=false`) - "no ready endpoints" (review 6) | `gateway/routes` lit with 1; `gateway/gateways` quiet |
 | 5c | the same with an EndpointSlice holding zero endpoints - the distinct "no endpoints" branch (`internal/gwapi/rules.go`) | `gateway/routes` lit with 1; `gateway/gateways` quiet |
 | 6 | a controller down with no cert-manager object fault (`cert-manager` held unschedulable) | the `certs` area lit by "controller not ready" with no object count; every certs part quiet. Declared core expectations: `workloads` has the `cert-manager` Deployment unavailable and `pods` its Pending pod - the core attention this case causes, asserted, not ignored |
+| 6b | the Flux controller down (`kustomize-controller` held unschedulable) - added on review: the GitOps tier degrades the connection, so the overlay is asserted | the `flux` area lit by "controller not ready" with no object count; the connection Degraded exactly (the summary's "connected · <reason>", the ClusterDTO, the spine's first line, the card's connection row); the same declared core faults as case 6; the revert returns to Synced exactly |
 | 7 | a forbidden kind from the first read (no `list` and no `watch` on ClusterIssuers, so watch-list cannot bypass the denial) | `certs/issuers` a named gap, "ClusterIssuers could not be read (forbidden)"; the Issuers it can read are compared; never quiet, never a count presented as complete |
 | 8 | RBAC revoked after a sync (`list` and `watch` on ExternalSecrets removed once the part is verified Live) | `eso/externalsecrets` reads last-good: stale, the recorded forbidden fault, the retained identities and counts unchanged, and the original `LastGoodAt`; never quiet, never "checking" |
 
@@ -99,26 +100,29 @@ If a case fails, the failure is fixed in the Observer or the model as its own re
 
 ## 7. The gate run (2026-10-12)
 
-PASS at commit `5b37f36` (tracked tree clean), run `48dfa639b5e1faf9`, capability re-probe overridden to 10s for the run (the production detector unchanged), on `kind-klyx-parity` (kind v0.33.0, node v1.37.0).
+Codex's review of the first run (5b37f36) required four changes, made in `692e655`: the script owns only its marked directory and named files (a stub-kind script test proves an unrelated file survives `down` and `up`); every row's own evaluation - the verdict row's Health, the route's reduced attachment, the native rule's Eval - is matched to its object's declaration by UID and derives the part's counts, in Go on the Observer's rows and in the frontend stage on the production sink's emitted lens DTOs; the connection is exact per case (case 6b added); cases 7 and 8 recover to the baseline on the same connection and Observer, with cleanup that always restores the fixture.
 
-Go stage (`TestParityGate`, 64s): every case settled against its oracle in one summary - every part's classifier, counted kinds, coverage, roles and included count, every controller, the connection - with every part's rows at the same incarnation and Ver and counted membership equal by UID.
+PASS at commit `692e655` (tracked tree clean), run `00ab805b5c428cab`, capability re-probe overridden to 10s for the run (the production detector unchanged), on `kind-klyx-parity` (kind v0.33.0, node v1.37.0).
 
-| Case | Settled | Baseline back |
-|------|---------|---------------|
-| B | 0.97s | - |
-| 1 failed unused Issuer | 1.00s | 0.96s |
-| 2 failed unused SecretStore | 0.95s | 0.97s |
-| 3 ApplicationSet failure | 0.96s | 0.97s |
-| 4 failing GitRepository | 0.97s | 1.02s |
-| 5a route, backend not found | 1.03s | 1.05s |
-| 5b route, no ready endpoints | 0.97s | 1.03s |
-| 5c route, no endpoints | 1.03s | 0.97s |
-| 6 cert-manager down | 8.73s | 10.19s |
-| 7 ClusterIssuers forbidden from the first read | 0.97s (incarnation 2) | - |
-| 8 ExternalSecrets revoked after Live | at the restart's return (incarnation 3, unchanged) | - |
+Go stage (`TestParityGate`, 100s): every case settled against its oracle in one summary - every part's classifier, counted kinds, coverage, roles and included count, every controller, the exact connection - with every part's rows at the same incarnation and Ver, each row's own evaluation equal to its declaration, and the rows deriving the summary's counts.
 
-Case 8: last good 13:51:26.280, between verified Live (13:51:24.457) and the API-server restart's return (13:51:27.421), unchanged 15s later; the recorded fault forbidden; the retained set equal to the Live oracle.
+| Case | Settled | Connection | Baseline back |
+|------|---------|------------|---------------|
+| B | 1.05s | Synced | - |
+| 1 failed unused Issuer | 1.05s | Synced | 1.04s |
+| 2 failed unused SecretStore | 0.99s | Synced | 1.01s |
+| 3 ApplicationSet failure | 0.98s | Synced | 1.03s |
+| 4 failing GitRepository | 1.03s | Synced | 1.08s |
+| 5a route, backend not found | 1.07s | Synced | 1.05s |
+| 5b route, no ready endpoints | 1.00s | Synced | 1.06s |
+| 5c route, no endpoints | 1.04s | Synced | 1.03s |
+| 6 cert-manager down | 7.30s | Synced | 8.57s |
+| 6b Flux controller down | 1.09s | Degraded | 1.10s |
+| 7 ClusterIssuers forbidden from the first read | 0.99s (incarnation 2) | Synced | 1.08s after the grant, same connection |
+| 8 ExternalSecrets revoked after Live | at the restart's return (incarnation 3, unchanged) | Synced | 2.49s after the grant, same Observer |
 
-Frontend stage (`nav/parityGate.test.tsx`): 2/2 - the model from the summary and with the open cluster's rows (one number either way), and the mast, tree, spine, card and Overview mounted on every capture with no list endpoint called. "cluster ok" (the healthy lamp, band 0, the mast's unqualified quiet) in B only.
+Case 8: last good 14:14:56.271, between verified Live (14:14:27.065) and the API-server restart's return (14:14:58.333), unchanged 15s later; the recorded fault forbidden; the retained set equal to the Live oracle.
 
-Mutation checks are listed in the step 1 commit (`5b37f36`): eight frontend mutants and two Observer-rule mutants caught; a stale run id and a missing case fail the frontend stage.
+Frontend stage (`nav/parityGate.test.tsx`): 2/2 - every lens DTO row's rule or verdict equal to its declaration and deriving the summary part; the model from the summary and with the open cluster's real DTO rows (one number either way); the mast, tree, spine, card and Overview mounted on every capture with no list endpoint called; the connection exact on the spine and the card. "cluster ok" (the healthy lamp, band 0, the mast's unqualified quiet) in B only.
+
+Mutation checks are listed in `5b37f36` and `692e655`: Codex's corrupted Issuer DTO rows, a row Eval forced OK with the counts intact, the Degraded word suppressed, the DTO rule forced to ok (caught by the frontend stage), eight frontend model and surface mutants, two Observer-rule mutants, the script's two directory checks - all caught; a stale run id and a missing case fail the frontend stage.
