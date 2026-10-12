@@ -9,13 +9,18 @@
 #   scripts/lab/klyx-parity.sh sa-kubeconfig   a one-hour token kubeconfig for that identity
 #   scripts/lab/klyx-parity.sh restart-apiserver   end every open watch (case 8)
 #   scripts/lab/klyx-parity.sh check           the exact-target check alone
-#   scripts/lab/klyx-parity.sh down            delete the cluster, its kubeconfig and the marker state
+#   scripts/lab/klyx-parity.sh down            delete the cluster and the script's own files
 #
 # Isolation (spec §1): every write goes to exactly one target - the kind
 # cluster klyx-parity this script created, recognised by its ownership
 # marker and its loopback API server. Its kubeconfig is a separate file
 # ($KLYX_PARITY_KUBECONFIG), never ~/.kube/config, so no current-context
 # changes. The CRD source (kind-klyx) is only ever read.
+#
+# The state directory ($KLYX_PARITY_DIR) is the script's only when it holds
+# the script's directory marker: up refuses a non-empty directory without
+# it, down refuses without it (cluster or not), and down removes only the
+# script's named files - never anything else in the directory.
 set -euo pipefail
 
 cmd=${1:-}
@@ -23,8 +28,10 @@ arg=${2:-}
 name=klyx-parity
 ctx=kind-$name
 dir=${KLYX_PARITY_DIR:-${TMPDIR:-/tmp}/klyx-parity}
-kubeconfig=${KLYX_PARITY_KUBECONFIG:-$dir/kubeconfig}
+dirmark=$dir/.klyx-parity-dir
+kubeconfig=$dir/kubeconfig
 state=$dir/owner
+own_files=("$kubeconfig" "$state" "$dir/sa-kubeconfig" "$dirmark")
 src=${KLYX_PARITY_CRD_SOURCE:-kind-klyx}
 here=$(cd "$(dirname "$0")" && pwd)
 fixtures=$here/parity
@@ -38,6 +45,7 @@ exists() { kind get clusters 2>/dev/null | grep -qx "$name"; }
 # name, its API server (equal to kind's own record, on loopback) and the
 # ownership marker must all match.
 owned() {
+	[[ -f $dirmark ]] || die "refusing: $dir is not a klyx-parity directory (no $dirmark)"
 	[[ -f $kubeconfig ]] || die "no parity kubeconfig at $kubeconfig"
 	[[ -f $state ]] || die "no ownership state at $state"
 	local have want token
@@ -90,8 +98,13 @@ status() {
 }
 
 up() {
+	# the state directory: new, empty, or already the script's
+	if [[ -d $dir && ! -f $dirmark && -n $(ls -A "$dir") ]]; then
+		die "refusing: $dir is not empty and not a klyx-parity directory"
+	fi
 	mkdir -p "$dir"
 	chmod 700 "$dir"
+	touch "$dirmark"
 	if exists; then
 		owned # an existing cluster is only ever reused when it is ours
 	else
@@ -109,10 +122,13 @@ up() {
 }
 
 down() {
-	exists || { rm -rf "$dir"; return; }
-	owned
-	kind delete cluster --name "$name" --kubeconfig "$kubeconfig"
-	rm -rf "$dir"
+	[[ -f $dirmark ]] || die "refusing: $dir is not a klyx-parity directory (no $dirmark)"
+	if exists; then
+		owned
+		kind delete cluster --name "$name" --kubeconfig "$kubeconfig"
+	fi
+	rm -f "${own_files[@]}"
+	rmdir "$dir" 2>/dev/null || true # only when nothing else is there
 }
 
 # shellcheck source=parity/fixture.sh

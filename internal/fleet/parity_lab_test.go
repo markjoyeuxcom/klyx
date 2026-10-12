@@ -30,7 +30,7 @@ import (
 //
 //	scripts/lab/klyx-parity.sh up
 //	KLYX_PARITY_CONTEXT=kind-klyx-parity KLYX_PARITY_DIR=<dir> KLYX_PARITY_OUT=<dir> \
-//	  go test ./internal/fleet -run TestParityGate -v -count=1 -timeout 60m
+//	  go test ./internal/fleet -run '^TestParityGate$' -v -count=1 -timeout 60m
 //
 // It refuses any target but the cluster the script created and marked.
 
@@ -56,17 +56,36 @@ type parityLab struct {
 	script string
 	run    parityRun
 	report []string
+	active string // the case applied and not yet reverted (cleanup reverts it)
+	rbac   bool   // the restricted identity may hold a denial (cleanup restores it)
+}
+
+func (l *parityLab) shErr(args ...string) (string, error) {
+	cmd := exec.Command("bash", append([]string{l.script}, args...)...)
+	cmd.Env = append(os.Environ(), "KLYX_PARITY_DIR="+l.dir)
+	out, err := cmd.CombinedOutput()
+	return strings.TrimSpace(string(out)), err
 }
 
 func (l *parityLab) sh(args ...string) string {
 	l.t.Helper()
-	cmd := exec.Command("bash", append([]string{l.script}, args...)...)
-	cmd.Env = append(os.Environ(), "KLYX_PARITY_DIR="+l.dir)
-	out, err := cmd.CombinedOutput()
+	out, err := l.shErr(args...)
 	if err != nil {
 		l.t.Fatalf("klyx-parity.sh %s: %v\n%s", strings.Join(args, " "), err, out)
 	}
-	return strings.TrimSpace(string(out))
+	return out
+}
+
+func (l *parityLab) apply(name string) {
+	l.t.Helper()
+	l.active = name
+	l.sh("case", name)
+}
+
+func (l *parityLab) revert(name string) {
+	l.t.Helper()
+	l.sh("revert", name)
+	l.active = ""
 }
 
 // kubectl reads the parity cluster for the oracle - independent of Klyx's
@@ -81,32 +100,80 @@ func (l *parityLab) kubectl(args ...string) []byte {
 	return out
 }
 
-// ---- the sink: the latest summary and every part's latest rows ----------
+// ---- the sink: the latest summary, every part's rows and their DTOs -----
+
+// dtoRecorder is the frontend's side of the wire: the production
+// HealthSink's emitted rows messages (the converted lens DTOs).
+type dtoRecorder struct {
+	mu   sync.Mutex
+	last map[string]json.RawMessage
+}
+
+func (d *dtoRecorder) Emit(name string, data any) {
+	b, err := json.Marshal(data)
+	if err != nil {
+		return
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.last == nil {
+		d.last = map[string]json.RawMessage{}
+	}
+	d.last[name] = b
+}
+
+func (d *dtoRecorder) get(name string) json.RawMessage {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.last[name]
+}
 
 type paritySink struct {
 	mu   sync.Mutex
 	sum  observe.Summary
 	ok   bool
 	rows map[string]observe.Rows
+	dtos map[string]json.RawMessage
+	rec  *dtoRecorder
+	hs   *appbridge.HealthSink
+}
+
+func newParitySink() *paritySink {
+	rec := &dtoRecorder{}
+	return &paritySink{rec: rec, hs: appbridge.NewHealthSink(rec)}
 }
 
 func (s *paritySink) Summary(x observe.Summary) { s.mu.Lock(); s.sum, s.ok = x, true; s.mu.Unlock() }
 func (s *paritySink) Rows(r observe.Rows) {
+	// the production sink converts the same capture the gate reads, so the
+	// DTO and the rows are paired by construction
+	s.hs.Rows(r)
+	dto := s.rec.get(appbridge.HealthRowsEventPrefix + r.Cluster + ":" + r.Task + "/" + r.Part.ID)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.rows == nil {
-		s.rows = map[string]observe.Rows{}
+		s.rows, s.dtos = map[string]observe.Rows{}, map[string]json.RawMessage{}
 	}
-	s.rows[r.Task+"/"+r.Part.ID] = r
+	key := r.Task + "/" + r.Part.ID
+	s.rows[key] = r
+	if dto != nil {
+		s.dtos[key] = dto
+	} else {
+		delete(s.dtos, key)
+	}
 }
-func (s *paritySink) state() (observe.Summary, map[string]observe.Rows, bool) {
+func (s *paritySink) state() (observe.Summary, map[string]observe.Rows, map[string]json.RawMessage, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	rows := make(map[string]observe.Rows, len(s.rows))
 	for k, v := range s.rows {
 		rows[k] = v
 	}
-	return s.sum, rows, s.ok
+	dtos := make(map[string]json.RawMessage, len(s.dtos))
+	for k, v := range s.dtos {
+		dtos[k] = v
+	}
+	return s.sum, rows, dtos, s.ok
 }
 
 // ---- the oracle (spec §1) ------------------------------------------------
@@ -153,16 +220,22 @@ var parityResource = map[string]string{
 	"nodeclaims": "nodeclaims.karpenter.sh", "nodepools": "nodepools.karpenter.sh",
 }
 
+// parityMember is one counted object's declared evaluation.
+type parityMember struct {
+	Role     string `json:"role"`
+	Included bool   `json:"included"`
+}
+
 // partExpect is the oracle for one part at one case.
 type partExpect struct {
-	Task       string            `json:"task"`
-	Part       string            `json:"part"`
-	Classifier string            `json:"classifier"`
-	Counted    []string          `json:"counted"`
-	Roles      observe.Counts    `json:"roles"` // Total included
-	Included   int               `json:"included"`
-	UIDs       []string          `json:"uids"`
-	Coverage   map[string]string `json:"coverage"` // counted kind -> live | stale | unreadable:<class>
+	Task       string                  `json:"task"`
+	Part       string                  `json:"part"`
+	Classifier string                  `json:"classifier"`
+	Counted    []string                `json:"counted"`
+	Roles      observe.Counts          `json:"roles"` // Total included
+	Included   int                     `json:"included"`
+	Members    map[string]parityMember `json:"members"`  // uid -> declared evaluation
+	Coverage   map[string]string       `json:"coverage"` // counted kind -> live | stale | unreadable:<class>
 }
 
 // caseExpect is one case's declared state.
@@ -170,16 +243,13 @@ type caseExpect struct {
 	Case        string            `json:"case"`
 	Parts       []partExpect      `json:"parts"`
 	Controllers map[string]string `json:"controllers"` // task -> "" | not ready | unknown
-	Connection  string            `json:"connection"`  // a prefix of the summary's connection word
-	Notes       []string          `json:"notes,omitempty"`
+	State       string            `json:"state"`       // the connection: Synced | Degraded (exact)
 }
 
 type parityObj struct {
 	Metadata struct {
 		UID         string            `json:"uid"`
 		Annotations map[string]string `json:"annotations"`
-		Name        string            `json:"name"`
-		Namespace   string            `json:"namespace"`
 	} `json:"metadata"`
 }
 
@@ -201,16 +271,15 @@ func addRole(c *observe.Counts, role string) {
 	}
 }
 
-// oracle builds a case's expectations from the objects' declarations.
-// readable: kinds the case's identity may read (nil = all); coverage
-// overrides a kind's expected coverage.
-func (l *parityLab) oracle(name string, coverage map[string]string, controllers map[string]string) caseExpect {
-	ex := caseExpect{Case: name, Controllers: map[string]string{}, Connection: "connected"}
+// oracle builds a case's expectations from the objects' declarations;
+// coverage overrides a kind's expected coverage.
+func (l *parityLab) oracle(name, state string, coverage map[string]string, controllers map[string]string) caseExpect {
+	ex := caseExpect{Case: name, Controllers: map[string]string{}, State: state}
 	for _, t := range []string{"flux", "argo", "certs", "eso", "gateway", "karpenter"} {
 		ex.Controllers[t] = controllers[t]
 	}
 	for _, p := range parityParts {
-		pe := partExpect{Task: p.Task, Part: p.Part, Classifier: p.Classifier, Counted: p.Counted, Coverage: map[string]string{}}
+		pe := partExpect{Task: p.Task, Part: p.Part, Classifier: p.Classifier, Counted: p.Counted, Coverage: map[string]string{}, Members: map[string]parityMember{}}
 		for _, kind := range p.Counted {
 			cov := "live"
 			if c, ok := coverage[kind]; ok {
@@ -225,18 +294,17 @@ func (l *parityLab) oracle(name string, coverage map[string]string, controllers 
 				l.t.Fatalf("oracle %s: %v", kind, err)
 			}
 			for _, o := range list.Items {
-				role, included := o.Metadata.Annotations["klyx.dev/parity-role"], o.Metadata.Annotations["klyx.dev/parity-included"] == "true"
-				if role == "" {
-					role = "ok"
+				m := parityMember{Role: o.Metadata.Annotations["klyx.dev/parity-role"], Included: o.Metadata.Annotations["klyx.dev/parity-included"] == "true"}
+				if m.Role == "" {
+					m.Role = "ok"
 				}
-				addRole(&pe.Roles, role)
-				if included {
+				addRole(&pe.Roles, m.Role)
+				if m.Included {
 					pe.Included++
 				}
-				pe.UIDs = append(pe.UIDs, o.Metadata.UID)
+				pe.Members[o.Metadata.UID] = m
 			}
 		}
-		sort.Strings(pe.UIDs)
 		ex.Parts = append(ex.Parts, pe)
 	}
 	return ex
@@ -271,13 +339,103 @@ func roleCounts(p *observe.Part) (observe.Counts, int, bool) {
 	return observe.Counts{}, 0, false
 }
 
+// kindRole names health.Kind's values (verdict.go: Fault=0 ... OK=5).
+var kindRole = []string{"fault", "degraded", "unknown", "progressing", "paused", "ok"}
+
+// rowEvals derives each row's own evaluation from the row body, from the
+// part's declared source - a verdict row's Health, a route's reduced
+// attachment, or a native rule's Eval - never from the part's copied
+// counts (review finding 2). A row whose source carries no evaluation is
+// an error, never a zero value read as a role.
+func rowEvals(r observe.Rows, key string) (map[string]parityMember, error) {
+	b, err := json.Marshal(r.Rows)
+	if err != nil {
+		return nil, err
+	}
+	var env struct {
+		Rows []struct {
+			Ref  struct{ UID string }
+			Eval struct {
+				Included bool
+				Role     int
+				Label    string
+			}
+			Data struct {
+				Health   *struct{ Kind int }
+				Role     string
+				Included bool
+			}
+		}
+	}
+	if err := json.Unmarshal(b, &env); err != nil {
+		return nil, err
+	}
+	out := make(map[string]parityMember, len(env.Rows))
+	for _, x := range env.Rows {
+		var m parityMember
+		switch {
+		case key == "workloads/workloads" || key == "pods/pods" || key == "nodes/nodes":
+			if x.Data.Health == nil || x.Data.Health.Kind < 0 || x.Data.Health.Kind >= len(kindRole) {
+				return nil, fmt.Errorf("row %s carries no verdict", x.Ref.UID)
+			}
+			m.Role = kindRole[x.Data.Health.Kind]
+		case key == "gateway/routes":
+			if x.Data.Role == "" {
+				return nil, fmt.Errorf("route %s carries no reduced evaluation", x.Ref.UID)
+			}
+			m = parityMember{Role: x.Data.Role, Included: x.Data.Included}
+		default:
+			if x.Eval.Label == "" || x.Eval.Role < 0 || x.Eval.Role >= len(kindRole) {
+				return nil, fmt.Errorf("row %s carries no rule evaluation", x.Ref.UID)
+			}
+			m = parityMember{Role: kindRole[x.Eval.Role], Included: x.Eval.Included}
+		}
+		out[x.Ref.UID] = m
+	}
+	return out, nil
+}
+
+// memberDiff compares derived row evaluations with the declared members.
+func memberDiff(got, want map[string]parityMember, native bool) []string {
+	var bad []string
+	for uid, w := range want {
+		g, ok := got[uid]
+		switch {
+		case !ok:
+			bad = append(bad, "missing "+uid)
+		case g.Role != w.Role || (native && g.Included != w.Included):
+			bad = append(bad, fmt.Sprintf("%s %+v, declared %+v", uid, g, w))
+		}
+	}
+	for uid := range got {
+		if _, ok := want[uid]; !ok {
+			bad = append(bad, "unexpected "+uid)
+		}
+	}
+	sort.Strings(bad)
+	return bad
+}
+
+type connState struct{ State, Reason string }
+
 // mismatches compares one summary (and the subscribed rows) with a case's
 // oracle: every expected part, its coverage, its counts, every controller,
-// the connection - and the rows at the same incarnation and Ver.
-func mismatches(ex caseExpect, sum observe.Summary, rows map[string]observe.Rows) []string {
+// the exact connection - and every row's own evaluation at the same
+// incarnation and Ver.
+func mismatches(ex caseExpect, sum observe.Summary, rows map[string]observe.Rows, conn connState) []string {
 	var bad []string
-	if !strings.HasPrefix(sum.Connection, ex.Connection) {
-		bad = append(bad, fmt.Sprintf("connection %q, want %q", sum.Connection, ex.Connection))
+	if conn.State != ex.State {
+		bad = append(bad, fmt.Sprintf("connection state %s, want %s", conn.State, ex.State))
+	}
+	switch ex.State {
+	case "Synced":
+		if sum.Connection != "connected" {
+			bad = append(bad, fmt.Sprintf("summary connection %q, want \"connected\"", sum.Connection))
+		}
+	case "Degraded":
+		if conn.Reason == "" || sum.Connection != "connected · "+conn.Reason {
+			bad = append(bad, fmt.Sprintf("summary connection %q, want \"connected · \" and the reason %q", sum.Connection, conn.Reason))
+		}
 	}
 	for task, want := range ex.Controllers {
 		t, _ := findPart(sum, task, "")
@@ -336,55 +494,45 @@ func mismatches(ex caseExpect, sum observe.Summary, rows map[string]observe.Rows
 		if inc >= 0 && inc != pe.Included {
 			bad = append(bad, fmt.Sprintf("%s included %d, want %d", key, inc, pe.Included))
 		}
-		if r, ok := rows[key]; ok {
-			if r.Incarnation != sum.Incarnation || r.Part.Ver != p.Ver {
-				bad = append(bad, fmt.Sprintf("%s rows at incarnation %d ver %d, summary %d ver %d", key, r.Incarnation, r.Part.Ver, sum.Incarnation, p.Ver))
-			} else if rc, rinc, _ := roleCounts(&r.Part); rc != got || rinc != inc {
-				bad = append(bad, fmt.Sprintf("%s rows %+v/%d, summary %+v/%d", key, rc, rinc, got, inc))
-			} else if uids := rowUIDs(r); strings.Join(uids, ",") != strings.Join(pe.UIDs, ",") {
-				bad = append(bad, fmt.Sprintf("%s counted members %v, want %v", key, uids, pe.UIDs))
-			}
-		} else {
+		if rows == nil {
+			continue // a re-check of the summary alone
+		}
+		r, ok := rows[key]
+		if !ok {
 			bad = append(bad, key+" has no rows")
+			continue
+		}
+		if r.Incarnation != sum.Incarnation || r.Part.Ver != p.Ver {
+			bad = append(bad, fmt.Sprintf("%s rows at incarnation %d ver %d, summary %d ver %d", key, r.Incarnation, r.Part.Ver, sum.Incarnation, p.Ver))
+			continue
+		}
+		evals, err := rowEvals(r, key)
+		if err != nil {
+			bad = append(bad, fmt.Sprintf("%s rows: %v", key, err))
+			continue
+		}
+		if d := memberDiff(evals, pe.Members, pe.Classifier == "native"); len(d) > 0 {
+			bad = append(bad, fmt.Sprintf("%s row evaluations: %s", key, strings.Join(d, "; ")))
+		}
+		var derived observe.Counts
+		derivedInc := 0
+		for _, m := range evals {
+			addRole(&derived, m.Role)
+			if m.Included {
+				derivedInc++
+			}
+		}
+		if derived != got || (inc >= 0 && derivedInc != inc) {
+			bad = append(bad, fmt.Sprintf("%s rows derive %+v/%d, summary %+v/%d", key, derived, derivedInc, got, inc))
 		}
 	}
 	return bad
 }
 
-// onlyRowsMissing: a re-check without the rows map flags only "has no rows".
-func onlyRowsMissing(bad []string) bool {
-	for _, b := range bad {
-		if !strings.HasSuffix(b, " has no rows") {
-			return false
-		}
-	}
-	return true
-}
-
-// rowUIDs is a part's counted membership as its rows carry it.
-func rowUIDs(r observe.Rows) []string {
-	b, err := json.Marshal(r.Rows)
-	if err != nil {
-		return nil
-	}
-	var env struct {
-		Rows []struct{ Ref struct{ UID string } }
-	}
-	if json.Unmarshal(b, &env) != nil {
-		return nil
-	}
-	out := make([]string, 0, len(env.Rows))
-	for _, x := range env.Rows {
-		out = append(out, x.Ref.UID)
-	}
-	sort.Strings(out)
-	return out
-}
-
 // settle waits for the barrier: every mismatch gone in one summary. The
 // oracle is re-read every 2s, so both sides describe the same cluster
 // state (a Recreate rollout's old pod is gone from both, never one).
-func (l *parityLab) settle(sink *paritySink, oracle func() caseExpect, limit time.Duration) (caseExpect, observe.Summary, map[string]observe.Rows, time.Duration) {
+func (l *parityLab) settle(pc *parityConn, oracle func() caseExpect, limit time.Duration) settled {
 	l.t.Helper()
 	t0 := time.Now()
 	ex, read := oracle(), time.Now()
@@ -393,40 +541,54 @@ func (l *parityLab) settle(sink *paritySink, oracle func() caseExpect, limit tim
 		if time.Since(read) > 2*time.Second {
 			ex, read = oracle(), time.Now()
 		}
-		sum, rows, ok := sink.state()
+		sum, rows, dtos, ok := pc.sink.state()
 		if !ok {
 			continue
 		}
-		if last = mismatches(ex, sum, rows); len(last) == 0 {
-			return ex, sum, rows, time.Since(t0)
+		snap := pc.conn.Snapshot()
+		if last = mismatches(ex, sum, rows, connState{snap.State.String(), snap.Reason}); len(last) == 0 {
+			return settled{ex: ex, sum: sum, rows: rows, dtos: dtos, took: time.Since(t0)}
 		}
 	}
 	l.t.Fatalf("case %s did not settle within %v:\n  %s", ex.Case, limit, strings.Join(last, "\n  "))
-	return caseExpect{}, observe.Summary{}, nil, 0
+	return settled{}
+}
+
+type settled struct {
+	ex   caseExpect
+	sum  observe.Summary
+	rows map[string]observe.Rows
+	dtos map[string]json.RawMessage
+	took time.Duration
 }
 
 // ---- capture (spec §3) ---------------------------------------------------
 
 type parityCapture struct {
-	Run     parityRun            `json:"run"`
-	Case    string               `json:"case"`
-	Expect  caseExpect           `json:"expect"`
-	Summary observe.Summary      `json:"summary"`
-	Cluster appbridge.ClusterDTO `json:"cluster"`
-	Rows    []observe.Rows       `json:"rows"`
-	Settled string               `json:"settled"`
+	Run     parityRun                  `json:"run"`
+	Case    string                     `json:"case"`
+	Expect  caseExpect                 `json:"expect"`
+	Summary observe.Summary            `json:"summary"`
+	Cluster appbridge.ClusterDTO       `json:"cluster"`
+	Rows    []observe.Rows             `json:"rows"`
+	DTOs    map[string]json.RawMessage `json:"dtos"` // task/part -> the emitted rows message (the lens DTOs)
+	Settled string                     `json:"settled"`
 }
 
-func (l *parityLab) capture(name string, ex caseExpect, conn *fleet.ClusterConn, cc config.ClusterConfig, sum observe.Summary, rows map[string]observe.Rows, took time.Duration) {
+func (l *parityLab) capture(name string, pc *parityConn, s settled) {
 	l.t.Helper()
-	c := parityCapture{Run: l.run, Case: name, Expect: ex, Summary: sum, Cluster: appbridge.ToDTO(conn.Snapshot(), cc, time.Now()), Settled: took.Round(time.Millisecond).String()}
-	keys := make([]string, 0, len(rows))
-	for k := range rows {
+	cluster := appbridge.ToDTO(pc.conn.Snapshot(), pc.cc, time.Now())
+	if cluster.State != s.ex.State {
+		l.t.Fatalf("case %s: the ClusterDTO state is %s at capture, want %s", name, cluster.State, s.ex.State)
+	}
+	c := parityCapture{Run: l.run, Case: name, Expect: s.ex, Summary: s.sum, Cluster: cluster, DTOs: s.dtos, Settled: s.took.Round(time.Millisecond).String()}
+	keys := make([]string, 0, len(s.rows))
+	for k := range s.rows {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
 	for _, k := range keys {
-		c.Rows = append(c.Rows, rows[k])
+		c.Rows = append(c.Rows, s.rows[k])
 	}
 	b, err := json.MarshalIndent(c, "", " ")
 	if err != nil {
@@ -435,7 +597,7 @@ func (l *parityLab) capture(name string, ex caseExpect, conn *fleet.ClusterConn,
 	if err := os.WriteFile(filepath.Join(l.out, name+".json"), b, 0o600); err != nil {
 		l.t.Fatal(err)
 	}
-	l.report = append(l.report, fmt.Sprintf("  %-4s settled in %v (incarnation %d, seq %d)", name, took.Round(time.Millisecond), sum.Incarnation, sum.Seq))
+	l.report = append(l.report, fmt.Sprintf("  %-4s settled in %v (incarnation %d, seq %d, %s)", name, s.took.Round(time.Millisecond), s.sum.Incarnation, s.sum.Seq, cluster.State))
 }
 
 // ---- connections ----------------------------------------------------------
@@ -446,6 +608,7 @@ type parityConn struct {
 	cc     config.ClusterConfig
 	cancel context.CancelFunc
 	unsub  []func()
+	once   sync.Once
 }
 
 func (l *parityLab) connect(kubeconfig string) *parityConn {
@@ -456,13 +619,13 @@ func (l *parityLab) connect(kubeconfig string) *parityConn {
 		l.t.Fatal(err)
 	}
 	c := conn.(*fleet.ClusterConn)
-	pc := &parityConn{conn: c, sink: &paritySink{}, cc: cc}
+	pc := &parityConn{conn: c, sink: newParitySink(), cc: cc}
 	c.SetHealthSink(pc.sink)
 	ctx, cancel := context.WithCancel(context.Background())
 	pc.cancel = cancel
 	c.Start(ctx)
-	// every part's rows subscribed, as the lenses will be
-	waitParity(l.t, 120*time.Second, "a first summary", func() bool { _, _, ok := pc.sink.state(); return ok })
+	l.t.Cleanup(pc.close) // a failed assertion never leaves a connection open
+	waitParity(l.t, 120*time.Second, "a first summary", func() bool { _, _, _, ok := pc.sink.state(); return ok })
 	h := c.Health()
 	owner := observe.Owner{Kind: "parity", ID: "rows"}
 	for _, p := range parityParts {
@@ -472,14 +635,16 @@ func (l *parityLab) connect(kubeconfig string) *parityConn {
 }
 
 func (pc *parityConn) close() {
-	for _, u := range pc.unsub {
-		u()
-	}
-	h := pc.conn.Health()
-	pc.cancel()
-	if h != nil {
-		<-h.Done()
-	}
+	pc.once.Do(func() {
+		for _, u := range pc.unsub {
+			u()
+		}
+		h := pc.conn.Health()
+		pc.cancel()
+		if h != nil {
+			<-h.Done()
+		}
+	})
 }
 
 func waitParity(t *testing.T, limit time.Duration, what string, cond func() bool) {
@@ -520,72 +685,97 @@ func TestParityGate(t *testing.T) {
 
 	prev := *fleet.CapReprobeEvery
 	*fleet.CapReprobeEvery = parityReprobe
-	defer func() { *fleet.CapReprobeEvery = prev }()
+	saConfig := filepath.Join(l.dir, "sa-kubeconfig")
+	// Registered first, so it runs after every connection has closed: the
+	// fixture back to its baseline whatever failed. A failed restoration is
+	// reported, never hidden (review finding 4).
+	t.Cleanup(func() {
+		*fleet.CapReprobeEvery = prev
+		if l.active != "" {
+			if out, err := l.shErr("revert", l.active); err != nil {
+				t.Errorf("cleanup: revert %s: %v\n%s", l.active, err, out)
+			}
+		}
+		if l.rbac {
+			if out, err := l.shErr("rbac", "none"); err != nil {
+				t.Errorf("cleanup: restore the observer identity's grants: %v\n%s", err, out)
+			}
+		}
+		if err := os.Remove(saConfig); err != nil && !os.IsNotExist(err) {
+			t.Errorf("cleanup: remove the token kubeconfig: %v", err)
+		}
+	})
 
 	none := map[string]string{}
 	var cases []string
 
-	// B and cases 1-6: the cluster admin.
+	// B and cases 1-6b: the cluster admin.
 	admin := l.connect(filepath.Join(l.dir, "kubeconfig"))
-	base := func() caseExpect { return l.oracle("B", nil, none) }
-	ex, sum, rows, took := l.settle(admin.sink, base, paritySettle)
-	l.capture("B", ex, admin.conn, admin.cc, sum, rows, took)
+	base := func() caseExpect { return l.oracle("B", "Synced", nil, none) }
+	l.capture("B", admin, l.settle(admin, base, paritySettle))
 	cases = append(cases, "B")
 	for _, c := range []struct {
-		name        string
+		name, state string
 		controllers map[string]string
 	}{
-		{"1", none}, {"2", none}, {"3", none}, {"4", none}, {"5a", none}, {"5b", none}, {"5c", none},
-		{"6", map[string]string{"certs": "not ready"}},
+		{"1", "Synced", none}, {"2", "Synced", none}, {"3", "Synced", none}, {"4", "Synced", none},
+		{"5a", "Synced", none}, {"5b", "Synced", none}, {"5c", "Synced", none},
+		{"6", "Synced", map[string]string{"certs": "not ready"}},   // cert-manager is not a connection subsystem
+		{"6b", "Degraded", map[string]string{"flux": "not ready"}}, // the GitOps tier degrades the connection
 	} {
-		l.sh("case", c.name)
-		ex, sum, rows, took := l.settle(admin.sink, func() caseExpect { return l.oracle(c.name, nil, c.controllers) }, paritySettle)
-		l.capture(c.name, ex, admin.conn, admin.cc, sum, rows, took)
+		l.apply(c.name)
+		l.capture(c.name, admin, l.settle(admin, func() caseExpect { return l.oracle(c.name, c.state, nil, c.controllers) }, paritySettle))
 		cases = append(cases, c.name)
-		l.sh("revert", c.name)
-		_, _, _, back := l.settle(admin.sink, base, paritySettle)
-		l.report = append(l.report, fmt.Sprintf("       baseline back in %v", back.Round(time.Millisecond)))
+		l.revert(c.name)
+		back := l.settle(admin, base, paritySettle) // Synced again, exactly
+		l.report = append(l.report, fmt.Sprintf("       baseline back in %v", back.took.Round(time.Millisecond)))
 	}
 	admin.close()
 
-	// Case 7: a forbidden kind from the first read (no list, no watch).
-	saConfig := filepath.Join(l.dir, "sa-kubeconfig")
-	defer os.Remove(saConfig)
+	// Case 7: a forbidden kind from the first read (no list, no watch); then
+	// the grant restored and the baseline recovered on the same connection.
+	l.rbac = true
 	l.sh("rbac", "clusterissuers.cert-manager.io")
 	l.sh("sa-kubeconfig")
 	sa7 := l.connect(saConfig)
-	ex, sum, rows, took = l.settle(sa7.sink, func() caseExpect {
-		return l.oracle("7", map[string]string{"clusterissuers": "unreadable:forbidden"}, none)
-	}, paritySettle)
-	l.capture("7", ex, sa7.conn, sa7.cc, sum, rows, took)
+	l.capture("7", sa7, l.settle(sa7, func() caseExpect {
+		return l.oracle("7", "Synced", map[string]string{"clusterissuers": "unreadable:forbidden"}, none)
+	}, paritySettle))
 	cases = append(cases, "7")
+	inc7, _, _, _ := sa7.sink.state()
+	l.sh("rbac", "none")
+	rec7 := l.settle(sa7, base, paritySettle)
+	if rec7.sum.Incarnation != inc7.Incarnation {
+		t.Fatalf("case 7 recovered on incarnation %d, not %d", rec7.sum.Incarnation, inc7.Incarnation)
+	}
+	l.report = append(l.report, fmt.Sprintf("       grant restored: baseline back on the same connection in %v", rec7.took.Round(time.Millisecond)))
 	sa7.close()
 
 	// Case 8: RBAC revoked after a sync - same connection and incarnation;
-	// the open watch ended by an API-server restart (spec §3).
-	l.sh("rbac", "none")
+	// the open watch ended by an API-server restart (spec §3); then the
+	// grant restored and the baseline recovered, still the same Observer.
 	l.sh("sa-kubeconfig")
 	sa8 := l.connect(saConfig)
-	live, sum, _, _ := l.settle(sa8.sink, func() caseExpect { return l.oracle("8-live", nil, none) }, paritySettle)
-	incarnation, liveAt := sum.Incarnation, time.Now()
+	live := l.settle(sa8, func() caseExpect { return l.oracle("8-live", "Synced", nil, none) }, paritySettle)
+	incarnation, liveAt := live.sum.Incarnation, time.Now()
 	l.sh("rbac", "externalsecrets.external-secrets.io")
 	l.sh("restart-apiserver")
 	restarted := time.Now()
 	// the stale part is compared with its last-good set: the oracle read at
 	// verified Live, never the current admin objects (spec §1)
-	ex8 := l.oracle("8", map[string]string{"externalsecrets": "stale"}, none)
+	ex8 := l.oracle("8", "Synced", map[string]string{"externalsecrets": "stale"}, none)
 	for i := range ex8.Parts {
 		if ex8.Parts[i].Task == "eso" && ex8.Parts[i].Part == "externalsecrets" {
-			for _, lp := range live.Parts {
+			for _, lp := range live.ex.Parts {
 				if lp.Task == "eso" && lp.Part == "externalsecrets" {
-					ex8.Parts[i].Roles, ex8.Parts[i].Included, ex8.Parts[i].UIDs = lp.Roles, lp.Included, lp.UIDs
+					ex8.Parts[i].Roles, ex8.Parts[i].Included, ex8.Parts[i].Members = lp.Roles, lp.Included, lp.Members
 				}
 			}
 		}
 	}
-	_, sum, rows, took = l.settle(sa8.sink, func() caseExpect { return ex8 }, parityRestart)
-	if sum.Incarnation != incarnation {
-		t.Fatalf("case 8: incarnation %d after the revocation, %d before - the same Observer must hold", sum.Incarnation, incarnation)
+	s8 := l.settle(sa8, func() caseExpect { return ex8 }, parityRestart)
+	if s8.sum.Incarnation != incarnation {
+		t.Fatalf("case 8: incarnation %d after the revocation, %d before - the same Observer must hold", s8.sum.Incarnation, incarnation)
 	}
 	// last good is when the authorized stream ended: after verified Live,
 	// by the restart's return - and it stays put while re-lists keep failing
@@ -599,17 +789,19 @@ func TestParityGate(t *testing.T) {
 		t.Fatal("case 8: no externalsecrets kind")
 		return observe.KindCoverage{}
 	}
-	k8 := esKind(sum)
+	k8 := esKind(s8.sum)
 	if k8.LastGoodAt == nil || k8.LastGoodAt.Before(liveAt) || k8.LastGoodAt.After(restarted) {
 		t.Fatalf("case 8: last good %v, want between verified Live %v and the restart's return %v", k8.LastGoodAt, liveAt, restarted)
 	}
 	if k8.Class != "forbidden" && !strings.Contains(strings.ToLower(k8.Error), "forbidden") {
 		t.Fatalf("case 8: the recorded fault is %q/%q, want forbidden", k8.Class, k8.Error)
 	}
-	l.capture("8", ex8, sa8.conn, sa8.cc, sum, rows, took)
+	l.capture("8", sa8, s8)
+	cases = append(cases, "8")
 	time.Sleep(15 * time.Second)
-	later, _, _ := sa8.sink.state()
-	if bad := mismatches(ex8, later, nil); len(bad) > 0 && !onlyRowsMissing(bad) {
+	later, _, _, _ := sa8.sink.state()
+	snap := sa8.conn.Snapshot()
+	if bad := mismatches(ex8, later, nil, connState{snap.State.String(), snap.Reason}); len(bad) > 0 {
 		t.Fatalf("case 8 did not hold 15s later:\n  %s", strings.Join(bad, "\n  "))
 	}
 	if k := esKind(later); k.LastGoodAt == nil || !k.LastGoodAt.Equal(*k8.LastGoodAt) || later.Incarnation != incarnation {
@@ -617,9 +809,16 @@ func TestParityGate(t *testing.T) {
 	}
 	l.report = append(l.report, fmt.Sprintf("       last good %s held 15s later (verified Live %s, restart returned %s)",
 		k8.LastGoodAt.Format("15:04:05.000"), liveAt.Format("15:04:05.000"), restarted.Format("15:04:05.000")))
-	cases = append(cases, "8")
+	l.sh("rbac", "none")
+	rec8 := l.settle(sa8, base, paritySettle)
+	if rec8.sum.Incarnation != incarnation {
+		t.Fatalf("case 8 recovered on incarnation %d, not %d", rec8.sum.Incarnation, incarnation)
+	}
+	l.rbac = false
+	l.report = append(l.report, fmt.Sprintf("       grant restored: baseline back on the same Observer in %v", rec8.took.Round(time.Millisecond)))
 	sa8.close()
 
+	// the manifest only after every case and every recovery passed
 	manifest, err := json.MarshalIndent(map[string]any{"run": l.run, "cases": cases}, "", " ")
 	if err != nil {
 		t.Fatal(err)

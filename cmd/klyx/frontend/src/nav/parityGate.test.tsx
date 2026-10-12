@@ -36,9 +36,9 @@ vi.mock("../bridge/configsvc", () => ({ openTerminal: vi.fn(async () => {}) }));
 vi.mock("../chrome/ThemeToggle", () => ({ ThemeToggle: () => null }));
 vi.mock("../chrome/CommandPalette", () => ({ openCommandPalette: vi.fn() }));
 import { useFleet, type ClusterDTO } from "../store/fleet";
-import { useHealth, resetHealthStore, applySummary, applyRows, addSub, openStarted, openSucceeded, type HealthSummary, type HealthPart } from "../store/health";
+import { useHealth, resetHealthStore, applySummary, applyRows, addSub, openStarted, openSucceeded, findPart, type HealthSummary, type HealthPart, type RowsDTO } from "../store/health";
 import { TASKS, clusterAttention, lineText, mastReading, type Area, type ClusterAttention, type Line } from "./clusterAttention";
-import { spineLamp, healthReading } from "./fleetAttention";
+import { spineLamp, healthReading, connectionText } from "./fleetAttention";
 import { NAV_GROUPS } from "./registry";
 import { clusterDiagnosticScore, ClusterCard } from "../fleet/ClusterCard";
 import { TopBar } from "../chrome/TopBar";
@@ -47,16 +47,22 @@ import { FleetSpine } from "../chrome/FleetSpine";
 import { Overview } from "../cluster/Overview";
 
 type Roles = { total: number; fault: number; degraded: number; unknown: number; progressing: number; paused: number; ok: number };
-type PartExpect = { task: string; part: string; classifier: string; counted: string[]; roles: Roles; included: number; uids: string[]; coverage: Record<string, string> };
-type CaseExpect = { case: string; parts: PartExpect[]; controllers: Record<string, string>; connection: string };
+type Member = { role: string; included: boolean };
+type PartExpect = { task: string; part: string; classifier: string; counted: string[]; roles: Roles; included: number; members: Record<string, Member>; coverage: Record<string, string> };
+type CaseExpect = { case: string; parts: PartExpect[]; controllers: Record<string, string>; state: string };
 type Run = { id: string; commit: string; dirty: boolean; startedAt: string; reprobe: string };
 type Capture = {
   run: Run; case: string; expect: CaseExpect; summary: HealthSummary; cluster: ClusterDTO; settled: string;
   rows: { cluster: string; incarnation: number; task: string; evaluatedAt: string; part: HealthPart }[];
+  dtos: Record<string, RowsDTO<DtoRow>>; // the production sink's emitted messages: the lens DTOs
 };
+type DtoRow = { uid?: string; rule?: { included: boolean; role: string }; health?: { kind?: string } };
+// the parts with a rows transport (Events and Helm are per-fetch snapshots)
+const ROW_PARTS = ["workloads/workloads", "pods/pods", "nodes/nodes", "flux/reconciliations", "flux/sources", "argo/applications", "argo/applicationsets",
+  "certs/certificates", "certs/issuers", "eso/externalsecrets", "eso/stores", "gateway/gateways", "gateway/routes", "karpenter/nodeclaims", "karpenter/nodepools"];
 
 const OUT = process.env.KLYX_PARITY_OUT;
-const CASES = ["B", "1", "2", "3", "4", "5a", "5b", "5c", "6", "7", "8"];
+const CASES = ["B", "1", "2", "3", "4", "5a", "5b", "5c", "6", "6b", "7", "8"];
 
 function captures(): Capture[] {
   const manifest = JSON.parse(fs.readFileSync(path.join(OUT!, "manifest.json"), "utf8")) as { run: Run; cases: string[] };
@@ -71,19 +77,55 @@ function captures(): Capture[] {
 }
 
 // load: the capture into the real store - the summary, and (the open
-// cluster) every part's rows at the summary's incarnation and Ver.
+// cluster) every part's lens rows as the production sink emitted them, at
+// the summary's incarnation and Ver.
 function load(c: Capture, withRows: boolean) {
   resetHealthStore();
   useFleet.setState({ clusters: [c.cluster], route: { name: "cluster", cluster: c.cluster.name, section: "overview" }, forwards: [], mesh: null });
   const now = Date.parse(c.summary.evaluatedAt);
   applySummary(c.summary, now);
   if (!withRows) return;
-  for (const r of c.rows) {
-    const h = `${r.task}/${r.part.id}`;
-    addSub(h, r.cluster, r.task, r.part.id);
+  for (const [h, dto] of Object.entries(c.dtos)) {
+    addSub(h, dto.cluster, dto.task, dto.part.id);
     openStarted(h, "t");
-    openSucceeded(h, "t", r.incarnation);
-    applyRows(h, { cluster: r.cluster, incarnation: r.incarnation, task: r.task, part: r.part, evaluatedAt: r.evaluatedAt, rows: [], full: true }, now);
+    openSucceeded(h, "t", dto.incarnation);
+    expect(applyRows(h, dto, now), `${c.case} ${h}`).toBe("applied");
+  }
+}
+
+const ROLE_COUNT: Record<string, keyof Roles> = { fault: "fault", degraded: "degraded", unknown: "unknown", progressing: "progressing", paused: "paused", ok: "ok" };
+
+// assertRowDTOs: every lens row's own evaluation - its rule, or its
+// verdict - equals the object's declaration, and the rows derive the
+// summary part's counts (review finding 2: never the copied part counts).
+function assertRowDTOs(c: Capture) {
+  expect(Object.keys(c.dtos).sort(), c.case).toEqual([...ROW_PARTS].sort());
+  for (const pe of c.expect.parts) {
+    const key = `${pe.task}/${pe.part}`;
+    const dto = c.dtos[key];
+    if (!dto) continue;
+    const native = pe.classifier === "native";
+    const derived: Roles = { total: 0, fault: 0, degraded: 0, unknown: 0, progressing: 0, paused: 0, ok: 0 };
+    let included = 0;
+    const seen = new Set<string>();
+    for (const row of dto.rows ?? []) {
+      const uid = row.uid ?? "";
+      const role = native ? row.rule?.role : row.health?.kind;
+      expect(role, `${c.case} ${key} ${uid}: no evaluation`).toBeTruthy();
+      const want = pe.members[uid];
+      expect(want, `${c.case} ${key}: unexpected row ${uid}`).toBeTruthy();
+      expect(role, `${c.case} ${key} ${uid} role`).toBe(want.role);
+      if (native) expect(row.rule?.included, `${c.case} ${key} ${uid} included`).toBe(want.included);
+      derived.total++;
+      derived[ROLE_COUNT[role!] ?? "unknown"]++;
+      if (native && row.rule?.included) included++;
+      seen.add(uid);
+    }
+    expect([...seen].sort(), `${c.case} ${key} members`).toEqual(Object.keys(pe.members).sort());
+    const part = findPart(c.summary, pe.task, pe.part)!;
+    const counts = native ? { ...part.native!.roles, total: part.native!.total } : part.counts!;
+    expect(derived, `${c.case} ${key} rows vs summary`).toEqual(counts);
+    if (native) expect(included, `${c.case} ${key} included`).toBe(part.native!.included);
   }
 }
 
@@ -103,8 +145,10 @@ const litAreas = (ex: CaseExpect) => new Set([
 
 function assertModel(c: Capture, m: ClusterAttention) {
   const ex = c.expect;
+  expect(c.cluster.state, `${c.case} connection`).toBe(ex.state); // exact, never a prefix
   expect(m.ended).toBeNull();
-  expect(m.notCovered).toEqual([]);
+  // every expected part answered: none still checking (formerly "not covered")
+  expect(m.areas.flatMap((a) => a.lines.filter((l) => l.state === "checking").map((l) => `${a.id}/${l.part}`)), c.case).toEqual([]);
   // every step 7e area present
   expect(m.areas.map((a) => a.id).sort()).toEqual(TASKS.map((t) => t.task).sort());
   for (const pe of ex.parts) {
@@ -148,7 +192,7 @@ function assertModel(c: Capture, m: ClusterAttention) {
   const ok = c.case === "B";
   expect(lamp.kind === "healthy", `${c.case} lamp ${lamp.kind}`).toBe(ok);
   expect(clusterDiagnosticScore(c.cluster, m) === 0, `${c.case} band`).toBe(ok);
-  expect(r.state === "quiet" && r.gaps === 0 && r.notCovered === 0, `${c.case} mast`).toBe(ok);
+  expect(r.state === "quiet" && r.gaps === 0, `${c.case} mast`).toBe(ok);
 }
 
 const suite = OUT ? describe : describe.skip;
@@ -158,6 +202,7 @@ suite("the parity gate's frontend stage (slice 6 §3)", () => {
 
   it("the model reads every captured case as the oracle declares - from the summary, and with the open cluster's rows", () => {
     for (const c of captures()) {
+      assertRowDTOs(c);
       load(c, false);
       const fromSummary = model(c);
       assertModel(c, fromSummary);
@@ -215,12 +260,16 @@ suite("the parity gate's frontend stage (slice 6 §3)", () => {
       const spine = render(<FleetSpine />);
       const want = spineLamp(c.cluster, m).title;
       expect(Array.from(spine.container.querySelectorAll("[title]")).some((e) => e.getAttribute("title") === want), c.case).toBe(true);
+      expect(want.split("\n")[0], c.case).toBe(`${c.cluster.name} — ${connectionText(c.cluster)}`); // both axes: the connection first
+      expect(connectionText(c.cluster).startsWith(c.expect.state.toLowerCase()), c.case).toBe(true);
       expect(want).toContain(healthReading(m)[0]);
       spine.unmount();
 
       // the card
       const card = render(<ClusterCard c={c.cluster} />);
       const text = card.container.textContent ?? "";
+      const conn = card.getByText("connection").nextElementSibling?.textContent;
+      expect(conn, `${c.case} connection row`).toBe(c.expect.state === "Degraded" ? "connected · notes" : "connected");
       if (r.state === "attention") expect(text, c.case).toContain(`${r.areas} area${r.areas === 1 ? "" : "s"} need${r.areas === 1 ? "s" : ""} attention`);
       else expect(text, c.case).toContain(c.case === "B" ? "nothing raised" : "health partly unverified");
       for (const { l } of [...litLines, ...gapLines]) expect(text, `${c.case} ${l.part}`).toContain(lineText(l));

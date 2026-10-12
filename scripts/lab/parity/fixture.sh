@@ -409,6 +409,8 @@ EOF
 	6) # cert-manager down, no cert-manager object fault (core: its
 		# Deployment and the Pending pod are faults, declared)
 		stand_in cert-manager cert-manager fault ;;
+	6b) # the Flux controller down: the GitOps tier degrades the connection
+		stand_in flux-system kustomize-controller fault ;;
 	*) die "unknown case '$1'" ;;
 	esac
 	echo "klyx-parity: case $1 applied"
@@ -426,6 +428,7 @@ revert_case() {
 	5c) k -n "$ns" delete httproutes.gateway.networking.k8s.io parity-route-empty --wait >/dev/null
 		k -n "$ns" delete service/parity-empty endpointslice/parity-empty-1 --wait >/dev/null ;;
 	6) stand_in cert-manager cert-manager "" ;;
+	6b) stand_in flux-system kustomize-controller "" ;;
 	*) die "unknown case '$1'" ;;
 	esac
 	echo "klyx-parity: case $1 reverted"
