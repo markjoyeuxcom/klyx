@@ -1,6 +1,6 @@
 # Klyx health 1c, slice 3 addendum: the rows transport after the §6a gate
 
-Status: Codex APPROVE-WITH-CHANGES to the delta direction (2026-10-12); amended (§3-§5) per its four required changes, implemented, and re-measured (§6) - for review. Parent: `2026-10-11-klyx-health-1c-slice3-rows.md` §6a ("If any limit is missed, the transport changes before the Pods lens switches ... reviewed before it is built").
+Status: Codex APPROVE-WITH-CHANGES to the delta direction (2026-10-12); amended (§3-§5), implemented (c28a566, accepted by Codex), and re-measured (§6). Open: the memory growth limit (§6.3) - an owner decision. Parent: `2026-10-11-klyx-health-1c-slice3-rows.md` §6a ("If any limit is missed, the transport changes before the Pods lens switches ... reviewed before it is built").
 
 ## 1. What the gate measured
 
@@ -139,5 +139,24 @@ Bootstraps (measured, one-off):
 
 RSS warm-up: from launch the WebContent process grows in steps (about 10-28 MB each) while churn runs - 142 MB at launch, 200 MB when churn starts, 306 MB at 6 minutes, 339 MB at 11 minutes - and then holds at 339-342 MB for the last five minutes of a 15-minute run (45000 updates) and after it. The steps do not follow the forced re-bootstraps (a run without them grows the same way) and stop at a plateau while the churn continues, which points to the webview's heap and code caches sizing up rather than retained rows - an inference, not a trace (Wails delivers every event as a uniquely sourced `ExecJS` script, which the webview compiles). In a 5-minute window inside the warm-up the growth exceeds 10% (for example 181 to 258 MB in the 6-minute run); the old full-push transport was measured only in its steady window (550-620 MB). Metadata-only churn (labels) ran at 2 KB a push and 183-236 MB.
 
-Question for review: is the steady-state reading of the RSS growth limit (the plateau, after warm-up) the gate's intent, given the warm-up above? If not, the remaining lever is the delivery path (fetching rows over the call path instead of `ExecJS` events), which this slice has not built.
+Codex (review of c28a566): the transport is accepted; the memory growth limit as written is not met (181 to 258 MB in a 5-minute churn window is about +43%), and a plateau chosen after the run cannot establish it. Either the cause is fixed and the run repeated, or the owner ratifies an amendment that names the warm-up boundary and the window before another run. The cold open is not a push and is reported apart.
+
+### 6.3 Where the growth comes from: controls
+
+Three controls, 10 minutes each, the Pods lens on screen over the same 5017 pods, RSS of the WebContent process every 15 s (launch, 1 min, 5-6 min, plateau):
+
+| run | launch | 1 min | 6 min | plateau |
+|---|---|---|---|---|
+| no churn, probe interaction every 1.5 s | 160 | 183 | 195 | 266-268 MB from 8 min |
+| no churn, interaction, plus about 22 KB/s of uniquely valued events nothing consumes (`KLYX_LAB_NOISE_BYTES`) | 142 | 184 | 203 | 255-256 MB from 11 min |
+| no churn, no interaction | 134 | 158 | 211 | 234-235 MB from 8 min |
+| churn 50/s, row-visible, interaction (the 15-minute run) | 142 | 187 | 306 | 339-342 MB from 12 min |
+
+- The webview grows in steps to a plateau in every configuration, with no churn and with no interaction; a from-launch 5-minute window exceeds 10% even with nothing changing (no churn, no interaction: 158 to 211 MB, +34%).
+- The event-delivery hypothesis is refuted: uniquely sourced events at about the delta rate add nothing measurable.
+- Churn raises the plateau (about 268 to 342 MB with interaction) and reaches it sooner; after it, nothing grows (+0.9% over the last 5 minutes of a 15-minute churn).
+
+So no transport can meet the growth limit read from launch: the no-churn control fails it. Its intent - no churn-driven growth - is what the plateau shows, but by Codex's ruling that reading needs the owner's ratification before the confirming run.
+
+Proposed amendment (for the owner): the memory limit is measured on a churn run of at least 15 minutes with the lens on screen; the 400 MB ceiling holds for the whole run; the growth limit (10%) applies to the last 5 minutes of churn, after the webview's warm-up. Then one confirming run, declared in advance.
 

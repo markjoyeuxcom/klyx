@@ -24,7 +24,11 @@ type HealthSink struct {
 }
 
 func NewHealthSink(em Emitter) *HealthSink {
-	return &HealthSink{em: em, lineage: newRowsLineage(), trace: openRowsTrace(os.Getenv("KLYX_ROWS_TRACE"))}
+	h := &HealthSink{em: em, lineage: newRowsLineage(), trace: openRowsTrace(os.Getenv("KLYX_ROWS_TRACE"))}
+	if h.trace != nil {
+		startLabNoise(em) // lab-only, and only when asked for
+	}
+	return h
 }
 
 func (h *HealthSink) Summary(s observe.Summary) {

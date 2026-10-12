@@ -142,6 +142,9 @@ export function install(): void {
     const first = document.querySelector(".lens-row .lens-cell-name")?.textContent ?? "";
     return `${shown}|${first}`;
   };
+  // VITE_KLYX_PERF_INTERACT_MS sets the cadence (default 1.5s; 0 is off,
+  // for a memory run without the probe's own workload)
+  const interactMs = Number(import.meta.env.VITE_KLYX_PERF_INTERACT_MS ?? 1500);
   let turn = 0;
   const measure = (act: () => void, key: string) => {
     const before = listSig();
@@ -152,7 +155,7 @@ export function install(): void {
       else add(`${key}:nochange`, 1);
     }));
   };
-  setInterval(() => {
+  if (interactMs > 0) setInterval(() => {
     const input = document.querySelector<HTMLInputElement>('input[placeholder="Search pods"]');
     if (!input) return;
     turn++;
@@ -168,7 +171,7 @@ export function install(): void {
       const target = attention?.getAttribute("aria-pressed") === "true" ? all : attention;
       if (target) measure(() => target.click(), "interact:filter");
     }
-  }, 1500);
+  }, interactMs);
 
   // overlay (diagnostic) and the report
   const el = document.createElement("pre");

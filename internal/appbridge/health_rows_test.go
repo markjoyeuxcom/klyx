@@ -781,3 +781,43 @@ func TestLabReportOnlyWithTheTrace(t *testing.T) {
 		t.Fatalf("report: %q %v", got, err)
 	}
 }
+
+// The §6a lab's delivery control emits only when asked for, about n bytes
+// of uniquely valued rows a second, on its own event.
+func TestLabNoiseOnlyWhenAsked(t *testing.T) {
+	t.Setenv("KLYX_LAB_NOISE_BYTES", "")
+	off := &noiseRec{}
+	startLabNoise(off)
+	t.Setenv("KLYX_LAB_NOISE_BYTES", "5000")
+	on := &noiseRec{}
+	startLabNoise(on)
+	waitRows(t, "a noise event", func() bool { return on.count() >= 2 })
+	if off.count() != 0 {
+		t.Fatal("no noise unless KLYX_LAB_NOISE_BYTES asks for it")
+	}
+	on.mu.Lock()
+	defer on.mu.Unlock()
+	a, b := on.payloads[0], on.payloads[1]
+	if on.names[0] != LabNoiseEvent || len(a) < 5000 || len(a) > 6000 || a == b {
+		t.Fatalf("noise: %s %d bytes, unique %v", on.names[0], len(a), a != b)
+	}
+}
+
+type noiseRec struct {
+	mu       sync.Mutex
+	names    []string
+	payloads []string
+}
+
+func (r *noiseRec) Emit(name string, data any) {
+	b, _ := json.Marshal(data)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.names, r.payloads = append(r.names, name), append(r.payloads, string(b))
+}
+
+func (r *noiseRec) count() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.names)
+}
