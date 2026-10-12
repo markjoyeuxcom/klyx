@@ -424,7 +424,8 @@ export type WorkloadDTO = { kind: string; namespace: string; name: string; uid?:
 // Rollout history (newest first). Images may be empty when a
 // ControllerRevision's patch data carries no template - never fabricated.
 export type RolloutRevisionDTO = { revision: number; ageSeconds: number; images: string[]; current: boolean; changeCause?: string };
-export type RolloutHistoryResultDTO = { revisions: RolloutRevisionDTO[]; error?: string };
+// uid/asOfUnix: the workload the history was read from, and when (§5b).
+export type RolloutHistoryResultDTO = { revisions: RolloutRevisionDTO[]; uid?: string; asOfUnix?: number; error?: string };
 
 // Fleet promotion tracker: one cluster's applied GitOps state.
 export type PromotionUnitDTO = { kind: string; namespace: string; name: string; sourceKind: string; sourceName: string; revision: string; ready: string; suspended: boolean; stale: boolean; message: string };

@@ -63,9 +63,12 @@ func TestRolloutHistory_DeploymentNewestFirstWithCurrent(t *testing.T) {
 	)
 	c := &ClusterConn{typed: typed, clk: clock.NewFake(base)}
 
-	got, err := c.RolloutHistory(context.Background(), "Deployment", "shop", "cart")
+	got, uid, err := c.RolloutHistory(context.Background(), "Deployment", "shop", "cart")
 	if err != nil {
 		t.Fatal(err)
+	}
+	if uid != depUID {
+		t.Fatalf("the history names the object it read: %q", uid)
 	}
 	if len(got) != 3 {
 		t.Fatalf("want 3 revisions, got %+v", got)
@@ -306,9 +309,12 @@ func TestRolloutHistoryAndUndo_StatefulSetViaControllerRevisions(t *testing.T) {
 	})
 	c := &ClusterConn{typed: typed, clk: clock.NewFake(time.Unix(0, 0))}
 
-	hist, err := c.RolloutHistory(context.Background(), "StatefulSet", "db", "pg")
+	hist, histUID, err := c.RolloutHistory(context.Background(), "StatefulSet", "db", "pg")
 	if err != nil {
 		t.Fatal(err)
+	}
+	if histUID != stsUID {
+		t.Fatalf("the history names the object it read: %q", histUID)
 	}
 	if len(hist) != 2 || hist[0].Revision != 2 || !hist[0].Current || hist[1].Current {
 		t.Fatalf("history: %+v", hist)
@@ -351,7 +357,7 @@ func TestRolloutPauseAndResumePatchSpecPaused(t *testing.T) {
 
 func TestRolloutHistory_UnsupportedKind(t *testing.T) {
 	c := &ClusterConn{typed: k8sfake.NewSimpleClientset(), clk: clock.NewFake(time.Unix(0, 0))}
-	if _, err := c.RolloutHistory(context.Background(), "CronJob", "x", "y"); err == nil {
+	if _, _, err := c.RolloutHistory(context.Background(), "CronJob", "x", "y"); err == nil {
 		t.Fatal("unsupported kind must error")
 	}
 }

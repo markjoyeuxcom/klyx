@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"k8s.io/apimachinery/pkg/types"
+
 	"github.com/moomora/klyx/internal/fleet"
 	"github.com/moomora/klyx/internal/workloads"
 )
@@ -23,6 +25,7 @@ type fakeWLConn struct {
 	compareInfo     fleet.WorkloadCompareInfo
 	compareErr      error
 	history         []workloads.RolloutRevision
+	historyUID      types.UID
 	historyErr      error
 	undoErr         error
 	lastUndoRev     int64
@@ -30,8 +33,8 @@ type fakeWLConn struct {
 	lastUID         string // the armed UID the last verb carried
 }
 
-func (f *fakeWLConn) RolloutHistory(context.Context, string, string, string) ([]workloads.RolloutRevision, error) {
-	return f.history, f.historyErr
+func (f *fakeWLConn) RolloutHistory(context.Context, string, string, string) ([]workloads.RolloutRevision, types.UID, error) {
+	return f.history, f.historyUID, f.historyErr
 }
 
 func (f *fakeWLConn) RolloutUndo(_ context.Context, _, _, _, uid string, revision int64) error {
@@ -287,13 +290,19 @@ func wlSvc(conn *fakeWLConn) *WorkloadsService {
 }
 
 func TestRolloutHistoryMapsToDTO(t *testing.T) {
-	conn := &fakeWLConn{history: []workloads.RolloutRevision{
+	conn := &fakeWLConn{historyUID: "uid-cart", history: []workloads.RolloutRevision{
 		{Revision: 3, AgeSeconds: 600, Images: []string{"shop/cart:v3"}, Current: true},
 		{Revision: 2, AgeSeconds: 3600, Images: nil, ChangeCause: "hotfix"},
 	}}
-	dto := wlSvc(conn).RolloutHistory("c", "Deployment", "shop", "cart")
+	svc := wlSvc(conn)
+	svc.now = func() time.Time { return time.Unix(5000, 0) }
+	dto := svc.RolloutHistory("c", "Deployment", "shop", "cart")
 	if dto.Error != "" || len(dto.Revisions) != 2 {
 		t.Fatalf("dto: %+v", dto)
+	}
+	// the history names the object it was read from, and when (§5b)
+	if dto.UID != "uid-cart" || dto.AsOfUnix != 5000 {
+		t.Fatalf("history identity: uid=%q asOf=%d", dto.UID, dto.AsOfUnix)
 	}
 	if !dto.Revisions[0].Current || dto.Revisions[0].Images[0] != "shop/cart:v3" {
 		t.Fatalf("head: %+v", dto.Revisions[0])

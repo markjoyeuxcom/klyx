@@ -6,6 +6,8 @@ import (
 	"sort"
 	"time"
 
+	"k8s.io/apimachinery/pkg/types"
+
 	"github.com/moomora/klyx/internal/fleet"
 	"github.com/moomora/klyx/internal/workloads"
 )
@@ -36,7 +38,9 @@ func (s *WorkloadsService) ScaleWorkload(cluster, kind, namespace, name, uid str
 	return ActionResultDTO{OK: true}
 }
 
-// RolloutHistory returns a workload's revision history, newest first.
+// RolloutHistory returns a workload's revision history, newest first, with
+// the UID of the object it was read from and when (design §5b): the lens
+// shows - and arms an undo from - a history only for the selected row's UID.
 // Read-only: no protected gating.
 func (s *WorkloadsService) RolloutHistory(cluster, kind, namespace, name string) RolloutHistoryResultDTO {
 	conn, ok := s.lookup(cluster)
@@ -45,11 +49,11 @@ func (s *WorkloadsService) RolloutHistory(cluster, kind, namespace, name string)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
 	defer cancel()
-	revs, err := conn.RolloutHistory(ctx, kind, namespace, name)
+	revs, uid, err := conn.RolloutHistory(ctx, kind, namespace, name)
 	if err != nil {
 		return RolloutHistoryResultDTO{Revisions: []RolloutRevisionDTO{}, Error: err.Error()}
 	}
-	out := RolloutHistoryResultDTO{Revisions: make([]RolloutRevisionDTO, 0, len(revs))}
+	out := RolloutHistoryResultDTO{Revisions: make([]RolloutRevisionDTO, 0, len(revs)), UID: string(uid), AsOfUnix: s.now().Unix()}
 	for _, r := range revs {
 		images := r.Images
 		if images == nil {
@@ -127,7 +131,7 @@ type WorkloadsConn interface {
 	WorkloadMetrics(ctx context.Context, namespace string) (map[string]workloads.Usage, workloads.UsageStatus)
 	WorkloadCompare(ctx context.Context, kind, ns, name string) (fleet.WorkloadCompareInfo, error)
 	RolloutRestart(ctx context.Context, kind, namespace, name, uid string) error
-	RolloutHistory(ctx context.Context, kind, namespace, name string) ([]workloads.RolloutRevision, error)
+	RolloutHistory(ctx context.Context, kind, namespace, name string) ([]workloads.RolloutRevision, types.UID, error)
 	RolloutUndo(ctx context.Context, kind, namespace, name, uid string, revision int64) error
 	RolloutPause(ctx context.Context, namespace, name, uid string, pause bool) error
 	ScaleWorkload(ctx context.Context, kind, namespace, name, uid string, replicas int32) error
@@ -138,10 +142,11 @@ type WorkloadsConn interface {
 // slice 3 §5.8); ListWorkloads stays for the attention and fleet-board reads.
 type WorkloadsService struct {
 	lookup func(string) (WorkloadsConn, bool)
+	now    func() time.Time
 }
 
 func NewWorkloadsService(lookup func(string) (WorkloadsConn, bool)) *WorkloadsService {
-	return &WorkloadsService{lookup: lookup}
+	return &WorkloadsService{lookup: lookup, now: time.Now}
 }
 
 // ListWorkloads returns the health-ranked workloads for a cluster, scoped to

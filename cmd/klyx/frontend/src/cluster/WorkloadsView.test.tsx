@@ -105,6 +105,7 @@ describe("WorkloadsView", () => {
 
   it("rollout history lists revisions; undo opens the danger confirm with the GitOps warning", async () => {
     vi.mocked(rolloutHistory).mockResolvedValue({
+      uid: "uid-ollama",
       revisions: [
         { revision: 3, ageSeconds: 600, images: ["shop/cart:v3"], current: true },
         { revision: 2, ageSeconds: 7200, images: ["shop/cart:v2"], current: false, changeCause: "hotfix" },

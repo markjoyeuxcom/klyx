@@ -185,6 +185,10 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
   const ev = combineEvidence(KINDS.map(kindEv));
   const depEv = (k: string) => (mine && wl.dependencies?.some((d) => d.kind === k) ? kindEvidence(true, wl.dependencies, k, null) : "pending");
   const podsEv = depEv("Pod");
+  // what pod attribution read: Pods for every kind, ReplicaSets to join a
+  // Deployment's pods - each qualifies the verdicts with its own freshness
+  const attribution = (["Pod", "ReplicaSet"] as const).map((k) => ({ kind: k, ev: depEv(k) }));
+  const attributionComplete = attribution.every((a) => a.ev === "complete");
   const rowsRefreshing = mine && !!wl.rowsState?.refreshing;
   const rowsAsOf = mine && wl.rowsState?.evaluatedAt ? clock(wl.rowsState.evaluatedAt) : "the last read";
   const asOf = rowsRefreshing ? ` (as of ${rowsAsOf})` : "";
@@ -214,8 +218,9 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
   }), [scopedItems, wl.kindFilter, wl.needsAttention, unknownOnly, query]);
   const rows = showMetrics && wl.nearLimitSort ? nearLimitSort(filtered) : filtered;
   const cursorIdx = cursorKey === null ? -1 : rows.findIndex((w) => keyOf(w) === cursorKey);
-  // "none need attention" is a claim about the present: a complete, current read
-  const current = ev === "complete" && !wl.rowsState?.updating && !rowsRefreshing;
+  // "none need attention" is a claim about the present: a complete, current
+  // read - of the workloads and of the attribution evidence their verdicts need
+  const current = ev === "complete" && attributionComplete && !wl.rowsState?.updating && !rowsRefreshing;
 
   const closeInspector = useCallback(() => { autoSelect.current = "done"; setSelectedKey(null); }, []);
   const open = useCallback((w: WorkloadDTO) => { setCursorKey(keyOf(w)); setSelectedKey(keyOf(w)); }, []);
@@ -358,13 +363,14 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
   // Notices stack: each is its own evidence, none hides another.
   const notices: React.ReactNode[] = [];
   if (wl.error && allItems.length > 0) notices.push(<WatchErrorBanner key="read" tool="Workloads" failure={`read failed - showing the last good read${lastGood ? ` from ${clock(lastGood)}` : ""}`} error={wl.error} />);
-  if (allItems.length > 0 && podsEv !== "complete") notices.push(
-    <div key="deps" role="status" data-testid="attribution-evidence" className="t-secondary" style={{ ...statusLine, color: "var(--color-text-warning)", overflowWrap: "anywhere" }}>
-      {podsEv === "stale"
-        ? `Pod read failing - verdicts that need pod evidence are as last observed${depError(wl.dependencies, "Pod")}.`
-        : `Pods ${podsEv === "failed" ? "could not be read" : "are not read yet"} - verdicts that need pod evidence are unverified${depError(wl.dependencies, "Pod")}.`}
-    </div>,
-  );
+  for (const a of attribution) {
+    if (allItems.length === 0 || a.ev === "complete") continue;
+    notices.push(
+      <div key={`deps-${a.kind}`} role="status" data-testid={`attribution-evidence-${a.kind}`} className="t-secondary" style={{ ...statusLine, color: "var(--color-text-warning)", overflowWrap: "anywhere" }}>
+        {attributionText(a.kind, a.ev, wl.dependencies)}
+      </div>,
+    );
+  }
   if (rowsRefreshing) notices.push(<div key="a4" role="status" data-testid="rows-refreshing" className="t-secondary" style={statusLine}>Rows as of {rowsAsOf} - refreshing; the totals are the cluster summary's.{wl.rowsState?.refreshError ? ` Last re-read failed: ${wl.rowsState.refreshError}` : ""}</div>);
   if (discoveryGap) notices.push(<div key="gap" role="status" data-testid="discovery-gap" className="t-secondary" style={{ ...statusLine, color: "var(--color-text-warning)", overflowWrap: "anywhere" }}>Discovery re-check failing - {discoveryGap}. A capability gap only; the rows keep their own state.</div>);
 
@@ -632,10 +638,16 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
 }
 
 const statusLine: React.CSSProperties = { minHeight: 24, display: "flex", alignItems: "center", padding: "0 10px" };
-const depError = (deps: KindCoverageDTO[] | undefined, kind: string) => {
-  const e = deps?.find((d) => d.kind === kind)?.error;
-  return e ? ` (${e})` : "";
-};
+// attributionText names one attribution dependency's evidence: what it is
+// for, its freshness (last good time when stale) and its error.
+function attributionText(kind: "Pod" | "ReplicaSet", ev: KindEvidence, deps: KindCoverageDTO[] | undefined): string {
+  const d = deps?.find((x) => x.kind === kind);
+  const err = d?.error ? ` (${d.error})` : "";
+  const what = kind === "Pod" ? "verdicts that need pod evidence" : "Deployment pod attribution (via ReplicaSets)";
+  const noun = kind === "Pod" ? "Pods" : "ReplicaSets";
+  if (ev === "stale") return `${kind} read failing${d?.lastGoodAt ? ` - last good ${clock(d.lastGoodAt)}` : ""} - ${what} ${kind === "Pod" ? "are" : "is"} as last observed${err}.`;
+  return `${noun} ${ev === "failed" ? "could not be read" : "are not read yet"} - ${what} ${kind === "Pod" ? "are" : "is"} unverified${err}.`;
+}
 
 // WorkloadInspector - investigation order: verdict; Logs (primary), Restart
 // (secondary), More (scale, pause/resume, compare, manifest, delete a pod);
@@ -961,24 +973,34 @@ function RolloutSection({ cluster, workload, onUndo }: {
   workload: WorkloadDTO;
   onUndo?: (w: WorkloadDTO, rev: RolloutRevisionDTO) => void; // absent = read-only (removed object)
 }) {
-  const [history, setHistory] = useState<{ key: string; revisions: RolloutRevisionDTO[]; error?: string } | null>(null);
-  const key = keyOf(workload);
+  // The history is the selected OBJECT's (design §5b): requested per
+  // cluster + UID, accepted only when it was read from that UID, and read
+  // afresh on a same-name replacement - an earlier object's revisions (and an
+  // undo bound to them) never show under the new one.
+  const [history, setHistory] = useState<{ key: string; uid?: string; revisions: RolloutRevisionDTO[]; error?: string } | null>(null);
+  const key = `${cluster}|${keyOf(workload)}|${workload.uid ?? ""}`;
   useEffect(() => {
     let live = true;
     setHistory(null);
     void rolloutHistory(cluster, workload.kind, workload.namespace, workload.name).then((r) => {
-      if (live) setHistory({ key, revisions: r.revisions, error: r.error });
+      if (live) setHistory({ key, uid: r.uid, revisions: r.revisions, error: r.error });
     });
     return () => { live = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cluster, key]);
+  }, [key]);
 
-  const rows = history?.key === key ? history.revisions : null;
+  const current = history?.key === key ? history : null;
+  const ofOther = !!current && !current.error && !!workload.uid && current.uid !== workload.uid;
+  const rows = current && !ofOther ? current.revisions : null;
   return (
     <div data-testid="rollout-section">
       <InspectorBlock title="Rollout history" count={rows ? rows.length : undefined}>
-        {history?.error ? (
-          <div className="t-body" style={{ color: "var(--color-text-danger)", overflowWrap: "anywhere" }}>{history.error}</div>
+        {current?.error ? (
+          <div className="t-body" style={{ color: "var(--color-text-danger)", overflowWrap: "anywhere" }}>{current.error}</div>
+        ) : ofOther ? (
+          <span className="t-secondary" data-testid="history-of-other" style={{ color: "var(--color-text-warning)" }}>
+            The history read found another object with this name (UID {current?.uid || "unknown"}, not {workload.uid}) - no revision is shown or undoable until the list catches up.
+          </span>
         ) : rows === null ? (
           <span className="t-secondary">Reading revisions…</span>
         ) : rows.length === 0 ? (

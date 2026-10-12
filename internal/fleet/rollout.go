@@ -27,8 +27,10 @@ const changeCauseAnn = "kubernetes.io/change-cause"
 // join key, exactly kubectl's view); StatefulSets/DaemonSets read their owned
 // ControllerRevisions. Current is annotation-derived for Deployments,
 // updateRevision-derived for StatefulSets, and highest-revision for DaemonSets
-// (their status names no revision).
-func (c *ClusterConn) RolloutHistory(ctx context.Context, kind, namespace, name string) ([]workloads.RolloutRevision, error) {
+// (their status names no revision). It also returns the UID of the workload
+// it read: the history is that object's, never a same-name replacement's
+// (design §5b).
+func (c *ClusterConn) RolloutHistory(ctx context.Context, kind, namespace, name string) ([]workloads.RolloutRevision, types.UID, error) {
 	clk := c.clk
 	if clk == nil {
 		clk = clock.Real{}
@@ -41,20 +43,20 @@ func (c *ClusterConn) RolloutHistory(ctx context.Context, kind, namespace, name 
 	case "StatefulSet", "DaemonSet":
 		return c.controllerRevisionHistory(ctx, kind, namespace, name, now)
 	default:
-		return nil, fmt.Errorf("unsupported kind %q: must be Deployment, StatefulSet, or DaemonSet", kind)
+		return nil, "", fmt.Errorf("unsupported kind %q: must be Deployment, StatefulSet, or DaemonSet", kind)
 	}
 }
 
-func (c *ClusterConn) deploymentHistory(ctx context.Context, namespace, name string, now time.Time) ([]workloads.RolloutRevision, error) {
+func (c *ClusterConn) deploymentHistory(ctx context.Context, namespace, name string, now time.Time) ([]workloads.RolloutRevision, types.UID, error) {
 	dep, err := c.typed.AppsV1().Deployments(namespace).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
-		return nil, fmt.Errorf("get deployment %s/%s: %w", namespace, name, err)
+		return nil, "", fmt.Errorf("get deployment %s/%s: %w", namespace, name, err)
 	}
 	currentRev, _ := strconv.ParseInt(dep.Annotations[deployRevisionAnn], 10, 64)
 
 	rss, err := c.typed.AppsV1().ReplicaSets(namespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
-		return nil, fmt.Errorf("list replicasets in %s: %w", namespace, err)
+		return nil, "", fmt.Errorf("list replicasets in %s: %w", namespace, err)
 	}
 	var out []workloads.RolloutRevision
 	for i := range rss.Items {
@@ -75,17 +77,17 @@ func (c *ClusterConn) deploymentHistory(ctx context.Context, namespace, name str
 		})
 	}
 	sortRevisionsDesc(out)
-	return out, nil
+	return out, dep.UID, nil
 }
 
-func (c *ClusterConn) controllerRevisionHistory(ctx context.Context, kind, namespace, name string, now time.Time) ([]workloads.RolloutRevision, error) {
+func (c *ClusterConn) controllerRevisionHistory(ctx context.Context, kind, namespace, name string, now time.Time) ([]workloads.RolloutRevision, types.UID, error) {
 	uid, updateRevName, err := c.rolloutTargetIdentity(ctx, kind, namespace, name)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	crs, err := c.typed.AppsV1().ControllerRevisions(namespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
-		return nil, fmt.Errorf("list controllerrevisions in %s: %w", namespace, err)
+		return nil, "", fmt.Errorf("list controllerrevisions in %s: %w", namespace, err)
 	}
 	var maxRev int64
 	for i := range crs.Items {
@@ -112,7 +114,7 @@ func (c *ClusterConn) controllerRevisionHistory(ctx context.Context, kind, names
 		})
 	}
 	sortRevisionsDesc(out)
-	return out, nil
+	return out, uid, nil
 }
 
 // rolloutTargetIdentity returns the workload's UID plus, for StatefulSets, the
@@ -148,9 +150,12 @@ func (c *ClusterConn) RolloutUndo(ctx context.Context, kind, namespace, name, ui
 	if err := c.CheckWorkloadArmed(ctx, kind, namespace, name, uid); err != nil {
 		return fmt.Errorf("rollout undo %w - nothing was written", err)
 	}
-	history, err := c.RolloutHistory(ctx, kind, namespace, name)
+	history, histUID, err := c.RolloutHistory(ctx, kind, namespace, name)
 	if err != nil {
 		return err
+	}
+	if string(histUID) != uid { // replaced between the check and the history read
+		return fmt.Errorf("rollout undo %s %s/%s: %w - nothing was written", kind, namespace, name, ErrReplaced)
 	}
 	var target *workloads.RolloutRevision
 	for i := range history {

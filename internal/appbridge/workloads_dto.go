@@ -103,7 +103,11 @@ type RolloutRevisionDTO struct {
 // failure channel; Revisions is never nil.
 type RolloutHistoryResultDTO struct {
 	Revisions []RolloutRevisionDTO `json:"revisions"`
-	Error     string               `json:"error,omitempty"`
+	// UID is the workload the history was read from, AsOfUnix when: the
+	// lens accepts a history only for the selected row's UID (§5b).
+	UID      string `json:"uid,omitempty"`
+	AsOfUnix int64  `json:"asOfUnix,omitempty"`
+	Error    string `json:"error,omitempty"`
 }
 
 // CompareContainerDTO is one container's drift-relevant identity in the fleet

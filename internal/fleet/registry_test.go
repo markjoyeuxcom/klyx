@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/moomora/klyx/internal/certmanager"
 	"github.com/moomora/klyx/internal/clustermesh"
@@ -184,8 +185,8 @@ func (f *fakeConn) RefreshArgoApp(context.Context, string, string, string) error
 func (f *fakeConn) SyncArgoApp(context.Context, string, string, string, argo.SyncOptions) error {
 	return nil
 }
-func (f *fakeConn) RolloutHistory(context.Context, string, string, string) ([]workloads.RolloutRevision, error) {
-	return nil, nil
+func (f *fakeConn) RolloutHistory(context.Context, string, string, string) ([]workloads.RolloutRevision, types.UID, error) {
+	return nil, "", nil
 }
 func (f *fakeConn) RolloutUndo(context.Context, string, string, string, string, int64) error {
 	return nil

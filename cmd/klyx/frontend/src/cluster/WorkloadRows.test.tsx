@@ -26,7 +26,8 @@ vi.mock("../bridge/configsvc", () => ({ armProtected: vi.fn(async () => ({ ok: t
 vi.mock("../bridge/crd", () => ({ copyText: vi.fn(async () => {}) }));
 vi.mock("./LogsPane", () => ({ LogsPane: () => null }));
 vi.mock("../../bindings/github.com/moomora/klyx/internal/appbridge/index.js", () => ({}));
-import { rolloutRestart, scaleWorkload } from "../bridge/workloads";
+import { rolloutHistory, rolloutRestart, rolloutUndo, scaleWorkload } from "../bridge/workloads";
+import type { RolloutHistoryResultDTO } from "../store/fleet";
 import { deletePod } from "../bridge/pods";
 import { WorkloadsView } from "./WorkloadsView";
 import { _resetWorkloadRowsForTest } from "../health/useWorkloadRows";
@@ -145,13 +146,13 @@ describe("Workloads rows, mounted end to end (slice 3 §5.8)", () => {
     seed([wl("api")], kindsOf({ pods: { coverage: "unreadable", class: "forbidden", error: "pods rbac" } }));
     render(<WorkloadsView cluster="x" />);
     expect(headline()).toBe("1"); // the counted kinds are live
-    expect(screen.getByTestId("attribution-evidence").textContent).toMatch(/^Pods could not be read - verdicts that need pod evidence are unverified/);
+    expect(screen.getByTestId("attribution-evidence-Pod").textContent).toMatch(/^Pods could not be read - verdicts that need pod evidence are unverified/);
     select("api");
     expect(inspector().getByTestId("pods-evidence").textContent).toBe("pod read unverified");
     push(2, [wl("api", "ok", { pods: [] })], kindsOf({ pods: { coverage: "unreadable", class: "forbidden", error: "pods rbac" } }));
     expect(inspector().getByText("Pods are not read - the selector match is unverified.")).toBeTruthy();
     push(3, [wl("api", "ok", { pods: [] })]);
-    expect(screen.queryByTestId("attribution-evidence")).toBeNull();
+    expect(screen.queryByTestId("attribution-evidence-Pod")).toBeNull();
     expect(inspector().getByText("No pods match this workload's selector.")).toBeTruthy();
   });
 
@@ -250,5 +251,88 @@ describe("verbs are pinned to the armed workload and pod", () => {
     push(2, [wl("api", "ok", { pods: [] })], kindsOf({ pods: { coverage: "stale", class: "transport", error: "dial tcp" } }));
     fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Delete" }));
     expect(deletePod).toHaveBeenCalledWith("x", "app", "api-p1", "uid-api-p1");
+  });
+});
+
+// Codex review of 24442cd: the verdicts' attribution evidence is both Pods
+// and ReplicaSets, each qualified on its own; neither governs membership.
+describe("attribution evidence: Pods and ReplicaSets", () => {
+  for (const coverage of ["checking", "unreadable", "stale"] as const) {
+    it(`ReplicaSets ${coverage} beside live Pods qualify the verdicts; no present-tense quiet`, () => {
+      const rs = { coverage, class: coverage === "checking" ? undefined : "forbidden", error: coverage === "checking" ? undefined : "rs rbac", lastGoodAt: coverage === "stale" ? "2026-10-12T09:00:00Z" : undefined };
+      seed([wl("api")], kindsOf({ replicasets: rs }));
+      render(<WorkloadsView cluster="x" />);
+      expect(headline()).toBe("1"); // membership is the counted kinds'
+      const notice = screen.getByTestId("attribution-evidence-ReplicaSet").textContent;
+      expect(notice).toMatch(coverage === "stale" ? /^ReplicaSet read failing - last good .* - Deployment pod attribution \(via ReplicaSets\) is as last observed \(forbidden: rs rbac\)\.$/
+        : coverage === "unreadable" ? /^ReplicaSets could not be read - Deployment pod attribution \(via ReplicaSets\) is unverified \(forbidden: rs rbac\)\.$/
+        : /^ReplicaSets are not read yet - Deployment pod attribution \(via ReplicaSets\) is unverified\.$/);
+      expect(screen.queryByTestId("attribution-evidence-Pod")).toBeNull();
+      expect(screen.queryByText("none need attention")).toBeNull();
+      expect(screen.getByText("no known attention")).toBeTruthy();
+      push(2, [wl("api")]); // recovery
+      expect(screen.queryByTestId("attribution-evidence-ReplicaSet")).toBeNull();
+      expect(screen.getByText("none need attention")).toBeTruthy();
+    });
+  }
+
+  it("stale Pods say last observed with their last good time", () => {
+    seed([wl("api")], kindsOf({ pods: { coverage: "stale", class: "transport", error: "dial tcp", lastGoodAt: "2026-10-12T09:00:00Z" } }));
+    render(<WorkloadsView cluster="x" />);
+    expect(screen.getByTestId("attribution-evidence-Pod").textContent).toMatch(/^Pod read failing - last good .* - verdicts that need pod evidence are as last observed \(transport: dial tcp\)\.$/);
+    expect(screen.queryByText("none need attention")).toBeNull();
+  });
+});
+
+// Codex review of 24442cd: the rollout history is the selected OBJECT's.
+describe("rollout history is fenced by UID", () => {
+  const hist = (uid: string, image: string): RolloutHistoryResultDTO => ({ uid, revisions: [
+    { revision: 2, ageSeconds: 60, images: [`${image}:v2`], current: true },
+    { revision: 1, ageSeconds: 600, images: [`${image}:v1`], current: false },
+  ] });
+  function deferred<T>() {
+    let resolve!: (v: T) => void;
+    const promise = new Promise<T>((r) => { resolve = r; });
+    return { promise, resolve };
+  }
+
+  it("a recreation drops the loaded history and its undo; the new object's history is read", async () => {
+    vi.mocked(rolloutHistory).mockResolvedValueOnce(hist("uid-api", "old-object-image"));
+    seed([wl("api")]);
+    render(<WorkloadsView cluster="x" />);
+    select("api");
+    expect(await inspector().findByText(/old-object-image:v1/)).toBeTruthy();
+    const next = deferred<RolloutHistoryResultDTO>();
+    vi.mocked(rolloutHistory).mockReturnValueOnce(next.promise);
+    push(2, [wl("api", "ok", { uid: "uid-api-2" })]);
+    expect(inspector().queryByText(/old-object-image/)).toBeNull();
+    expect(inspector().queryByText("undo →")).toBeNull();
+    await act(async () => { next.resolve(hist("uid-api-2", "new-object-image")); });
+    expect(inspector().getByText(/new-object-image:v1/)).toBeTruthy();
+    fireEvent.click(inspector().getByText("undo →"));
+    fireEvent.click(screen.getByText("Roll back"));
+    expect(rolloutUndo).toHaveBeenCalledWith("x", "Deployment", "app", "api", "uid-api-2", 1);
+  });
+
+  it("a deferred reply for the earlier object never lands on the replacement", async () => {
+    const old = deferred<RolloutHistoryResultDTO>();
+    vi.mocked(rolloutHistory).mockReturnValueOnce(old.promise).mockResolvedValueOnce(hist("uid-api-2", "new-object-image"));
+    seed([wl("api")]);
+    render(<WorkloadsView cluster="x" />);
+    select("api");
+    push(2, [wl("api", "ok", { uid: "uid-api-2" })]);
+    await act(async () => { old.resolve(hist("uid-api", "old-object-image")); });
+    expect(inspector().queryByText(/old-object-image/)).toBeNull();
+    expect(await inspector().findByText(/new-object-image:v1/)).toBeTruthy();
+  });
+
+  it("a history read from another object (a replacement before the GET) shows no revision and no undo", async () => {
+    vi.mocked(rolloutHistory).mockResolvedValueOnce(hist("uid-api-2", "replacement-image"));
+    seed([wl("api")]);
+    render(<WorkloadsView cluster="x" />);
+    select("api");
+    expect((await inspector().findByTestId("history-of-other")).textContent).toMatch(/another object with this name \(UID uid-api-2, not uid-api\)/);
+    expect(inspector().queryByText(/replacement-image/)).toBeNull();
+    expect(inspector().queryByText("undo →")).toBeNull();
   });
 });

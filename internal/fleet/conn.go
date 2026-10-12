@@ -15,6 +15,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
@@ -75,7 +76,7 @@ type Conn interface {
 	WorkloadSparklines(ctx context.Context, kind, namespace, name string) (SparklineSet, error)
 	ClusterSparklines(ctx context.Context) (SparklineSet, error)
 	RolloutRestart(ctx context.Context, kind, namespace, name, uid string) error
-	RolloutHistory(ctx context.Context, kind, namespace, name string) ([]workloads.RolloutRevision, error)
+	RolloutHistory(ctx context.Context, kind, namespace, name string) ([]workloads.RolloutRevision, types.UID, error)
 	RolloutUndo(ctx context.Context, kind, namespace, name, uid string, revision int64) error
 	RolloutPause(ctx context.Context, namespace, name, uid string, pause bool) error
 	ScaleWorkload(ctx context.Context, kind, namespace, name, uid string, replicas int32) error

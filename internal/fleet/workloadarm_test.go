@@ -267,3 +267,30 @@ func TestRolloutUndo_ReadObjectMustBeTheArmedOne(t *testing.T) {
 		}
 	}
 }
+
+// A replacement landing between the arm check and the history read is
+// refused: the history read names another UID, so nothing is written.
+func TestRolloutUndo_HistoryOfAReplacementIsRefused(t *testing.T) {
+	dep := rolloutDeployment(false, "2")
+	typed := typedfake.NewClientset(dep, rolloutRS("cart-1", "1", "v1", "", time.Now()), rolloutRS("cart-2", "2", "v2", "", time.Now()))
+	gets := 0
+	typed.PrependReactor("get", "deployments", func(k8stesting.Action) (bool, runtime.Object, error) {
+		gets++
+		if gets == 1 {
+			return false, nil, nil // the arm check sees the armed object
+		}
+		newer := dep.DeepCopy()
+		newer.UID = "replacement-uid"
+		return true, newer, nil
+	})
+	c := newPodActionsConn(typed, clock.NewFake(time.Unix(0, 0)))
+	err := c.RolloutUndo(context.Background(), "Deployment", "shop", "cart", string(depUID), 1)
+	if !errors.Is(err, ErrReplaced) || !strings.Contains(err.Error(), "nothing was written") {
+		t.Fatalf("the history of a replacement is refused: %v", err)
+	}
+	for _, a := range typed.Actions() {
+		if a.GetVerb() == "patch" {
+			t.Fatal("a replaced workload must not be written")
+		}
+	}
+}
