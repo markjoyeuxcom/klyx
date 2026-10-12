@@ -110,18 +110,6 @@ export function matchesFilter(k: VerdictKind, f: VerdictFilter): boolean {
  */
 export type Coverage = "complete" | "partial" | "stale" | "unavailable";
 
-export type ObservedSlice = {
-  rowsScope?: string | null;
-  error?: string | null;
-  truncated?: boolean;
-};
-
-export function coverageOf(slice: ObservedSlice, cluster: string, scope: string): Coverage {
-  if (!cluster || slice.rowsScope !== `${cluster}|${scope}`) return "unavailable";
-  if (slice.error) return "stale";
-  if (slice.truncated) return "partial";
-  return "complete";
-}
 
 /** A count is shown as a plain number only on complete coverage. */
 export function countIsExact(c: Coverage): boolean {

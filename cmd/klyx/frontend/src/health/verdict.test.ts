@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { asOfText, attentionTone, coverageOf, describeObservation, observe, isAttention, kindOf, labelOf, matchesFilter, summarize, VERDICT_ORDER } from "./verdict";
+import { asOfText, attentionTone, describeObservation, observe, isAttention, kindOf, labelOf, matchesFilter, summarize, VERDICT_ORDER } from "./verdict";
 
 describe("kindOf fails closed", () => {
   it("passes known kinds through", () => {
@@ -61,21 +61,6 @@ describe("matchesFilter", () => {
   });
   it("unknown filter matches only unknown", () => {
     expect(VERDICT_ORDER.filter((k) => matchesFilter(k, "unknown"))).toEqual(["unknown"]);
-  });
-});
-
-describe("coverageOf", () => {
-  it("is complete only for the exact cluster+scope, no error, not truncated", () => {
-    expect(coverageOf({ rowsScope: "kind|" }, "kind", "")).toBe("complete");
-  });
-  it("is unavailable while switching scope or cluster (retained rows are not this scope)", () => {
-    expect(coverageOf({ rowsScope: "kind|shop" }, "kind", "")).toBe("unavailable");
-    expect(coverageOf({ rowsScope: "other|" }, "kind", "")).toBe("unavailable");
-    expect(coverageOf({ rowsScope: null }, "kind", "")).toBe("unavailable");
-  });
-  it("marks a failed refresh stale and a capped list partial", () => {
-    expect(coverageOf({ rowsScope: "kind|", error: "boom" }, "kind", "")).toBe("stale");
-    expect(coverageOf({ rowsScope: "kind|", truncated: true }, "kind", "")).toBe("partial");
   });
 });
 

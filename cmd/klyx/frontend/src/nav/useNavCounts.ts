@@ -1,7 +1,8 @@
 import { useMemo } from "react";
 import { useFleet } from "../store/fleet";
 import type { Tone } from "../chrome/primitives/styles";
-import { attentionTone, coverageOf, summarize } from "../health/verdict";
+import { attentionTone } from "../health/verdict";
+import { kindEvidence } from "../layout/coverage";
 import { attentionAreas, uncoveredDomains, type Area } from "./attention";
 
 // A navigation count: a number with the tone of its worst verdict (danger for
@@ -46,11 +47,14 @@ export function useNavCounts(cluster: string | null): NavCounts {
     const by = Object.fromEntries(areas.map((a) => [a.id, a])) as Partial<Record<Area["id"], Area>>;
 
     let podsBadge = badgeOf(by.pods);
-    // The REQUESTED scope must be all-namespaces too: during a switch to a
-    // namespace the store still holds the old all-namespaces rows.
-    if (pods.namespace === "" && coverageOf(pods, cluster, "") === "complete") {
-      const c = summarize(pods.items, (p) => p.health);
-      podsBadge = c.attention > 0 ? { n: c.attention, tone: attentionTone(c), title: `Pods: ${c.attention} need attention (${c.fault} fault, ${c.degraded} degraded) - live Pods lens read` } : NONE;
+    // The open Pods lens holds the Observer's rows with the one count
+    // selector's global verdict counts (1c slice 3 §4a) - fresher than the
+    // poll, so they win while the Pod kind's read is complete. The namespace
+    // filter never scopes them: the rows are all namespaces.
+    if (pods.cluster === cluster && pods.counts && kindEvidence(!pods.loading, pods.coverage, "Pod", pods.error) === "complete") {
+      const g = pods.counts;
+      const c = { ...g, attention: g.fault + g.degraded };
+      podsBadge = c.attention > 0 ? { n: c.attention, tone: attentionTone(c), title: `Pods: ${c.attention} need attention (${c.fault} fault, ${c.degraded} degraded) - Pods lens rows` } : NONE;
     }
     const fluxMine = gitops.cluster === cluster && !gitops.loading;
     const srcNotReady = fluxMine ? (gitops.sources ?? []).filter((s) => !s.suspended && s.ready !== "Ready").length : 0;

@@ -237,19 +237,31 @@ describe("NavBand counts (health model)", () => {
     namespace: "shop", name, ready: false, phase: "Running", reason: "", rank: "unhealthy" as const, restarts: 0,
     node: "n", ip: "", ownerKind: "", ownerName: "", ageSeconds: 1, containers: [], health,
   });
+  // The Pods lens holds the Observer's rows with the global verdict counts
+  // (1c slice 3 §4a); a complete Pod read wins over the poll.
+  const live = [{ kind: "Pod", served: true, synced: true, coverage: "live" as const }];
   const seedPods = (over: object) => useFleet.setState((s) => ({
     route: { name: "cluster", cluster: "dev", section: "pods" },
-    pods: { ...s.pods, cluster: "dev", namespace: "", items: [pod("a", fault), pod("b", fault)], loading: false, rowsScope: "dev|", error: null, truncated: false, ...over },
+    pods: { ...s.pods, cluster: "dev", namespace: "", items: [pod("a", fault), pod("b", fault)], loading: false, error: null, coverage: live,
+      counts: { total: 2, fault: 2, degraded: 0, unknown: 0, progressing: 0, paused: 0, ok: 0 }, ...over },
   }));
 
-  it("shows the pods count for this cluster's complete all-namespaces read, with fault shape", () => {
-    seedPods({});
-    render(<NavBand />);
-    expect(tab("Pods").textContent).toContain("▲ 2");
+  it("shows the pods count for this cluster's complete read, with fault shape - whatever the namespace filter", () => {
+    for (const over of [{}, { namespace: "shop" }]) {
+      seedPods(over);
+      const { unmount } = render(<NavBand />);
+      expect(tab("Pods").textContent).toContain("▲ 2");
+      unmount();
+    }
   });
 
-  it("drops the count during a namespace switch, a capped, failed or other-cluster read", () => {
-    for (const over of [{ namespace: "shop", loading: true }, { truncated: true }, { error: "boom" }, { rowsScope: "prd|" }]) {
+  it("drops the count for an incomplete or other-cluster read", () => {
+    for (const over of [
+      { coverage: [{ kind: "Pod", served: true, synced: true, coverage: "stale", error: "boom" }], error: "Pod: boom" },
+      { coverage: [{ kind: "Pod", served: true, synced: false, coverage: "checking" }] },
+      { loading: true },
+      { cluster: "prd" },
+    ]) {
       seedPods(over);
       const { unmount } = render(<NavBand />);
       expect(tab("Pods").textContent).not.toMatch(/\d/);
