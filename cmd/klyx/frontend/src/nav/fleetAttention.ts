@@ -17,7 +17,7 @@ export const connectionText = (c: ClusterDTO) => `${c.state.toLowerCase()}${c.re
 export function healthGaps(m: ClusterAttention): boolean {
   if (m.ended) return true;
   const r = mastReading(m);
-  return r.state === "checking" || r.gaps > 0 || r.notCovered > 0;
+  return r.state === "checking" || r.gaps > 0;
 }
 
 /** healthReading: the model in words, one line each, every answered line
@@ -46,7 +46,6 @@ export function healthReading(m: ClusterAttention): string[] {
   }
   const out = [...lit, ...rest];
   for (const [p, names] of quiet) out.push(`no attention: ${names.join(", ")} (${p})`);
-  if (m.notCovered.length > 0) out.push(`not covered by the summary: ${m.notCovered.map((u) => (u.capability === "present" ? u.label : `${u.label} (capability not yet known)`)).join(", ")}`);
   return out;
 }
 

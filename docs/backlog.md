@@ -14,6 +14,22 @@ Everything for v1.0 is already on `main` and CI-green. The tag is gated on
 verification, not code (section 0). Sections 1–7 are demand-driven — build when
 the need is real, not top-to-bottom.
 
+**In flight on `redesign/2026-10-10` (not on `main`): health 1c.** One Observer
+per cluster publishes a cluster summary that every attention surface reads -
+the open cluster's mast, tree and Overview, the fleet's spine, meters and
+cards - and the lenses read its shared rows. Closed by the slice 6
+coverage-parity gate on a kind fixture
+(`docs/superpowers/specs/2026-10-12-klyx-health-1c-slice6-parity.md` §7).
+Acceptance: attention is derived from the cluster summary, with per-kind
+coverage and as-of times. The informer-backed parts are live. The Helm and
+Events parts are periodic snapshots (Helm every 5 minutes, plus coordinated
+reads; Events every 60 seconds), not watches, and Events is evidence only,
+never attention. The remaining request reads, each with an as-of time, are
+the Helm and Events lens lists, the Gateway topology, Argo CD projects, and
+Karpenter's controller and activity reads. A part the summary does not carry
+reads "checking…" - a gap, never quiet. Before merge: the owner's real-cluster
+smoke test.
+
 ---
 
 ## 0. v1.0.0 release gate — the only thing blocking the tag

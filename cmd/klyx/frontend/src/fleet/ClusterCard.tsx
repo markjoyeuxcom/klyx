@@ -5,7 +5,7 @@ import type { ClusterDTO, MeshGraphDTO } from "../store/fleet";
 import { useFleet } from "../store/fleet";
 import { useHealth } from "../store/health";
 import { type Tone, StatusDot, toneColor, toneBg, toneBorder } from "../chrome/primitives";
-import { clusterAttention, lineText, mastReading, provenance, type Area, type ClusterAttention, type Line } from "../nav/clusterAttention";
+import { checkingText, clusterAttention, lineText, mastReading, provenance, type Area, type ClusterAttention, type Line } from "../nav/clusterAttention";
 import { healthGaps, healthReading, spineLamp, unreachable as isUnreachable } from "../nav/fleetAttention";
 
 type Signal = {
@@ -18,7 +18,7 @@ type Signal = {
 
 // clusterDiagnosticScore orders the board (health 1c slice 5 §4) in bands:
 // unreachable, danger areas, warning areas, a stale or degraded connection,
-// gaps or not covered, quiet; within a band, more areas needing attention
+// gaps (a checking part is one), quiet; within a band, more areas needing attention
 // first (the board then sorts by name).
 export function clusterDiagnosticScore(c: ClusterDTO, m: ClusterAttention | undefined): number {
   if (isUnreachable(c)) return 10000;
@@ -198,16 +198,17 @@ const worst = (tones: Tone[]): Tone => (tones.includes("danger") ? "danger" : to
 const shown = (a: Area) => (a.lines.some((l) => l.state === "attention") ? a.lines.filter((l) => l.state === "attention") : a.lines.slice(0, 1));
 const lineOf = (a: Area, l: Line, prefix = "") => `${prefix}${a.lines.length > 1 ? `${l.label.toLowerCase()} ` : ""}${lineText(l)}`;
 
-// toolValue: one tool's reading - its lines, "not covered", "checking…", or
-// "not detected" only on confirmed absence (no area, nothing not covered).
+// toolValue: one tool's reading - its lines, "checking…" while nothing has
+// answered, or null: "not detected" only on confirmed absence (no area).
 function toolValue(m: ClusterAttention, task: string, prefix: string): { value: string; tones: Tone[]; title: string } | null {
   const a = m.areas.find((x) => x.id === task);
+  const checking = a ? checkingText(a) : null;
+  if (a && checking) return { value: `${prefix}${checking}`, tones: ["muted"], title: a.lines.map((l) => provenance(a, l)).join("; ") };
   if (a) {
     const ls = shown(a);
     const ctl = a.controller?.state === "not ready" ? [`${prefix}controller not ready`] : [];
     return { value: [...ctl, ...ls.map((l) => lineOf(a, l, prefix))].join(" · ") || `${prefix}controller ${a.controller?.state ?? ""}`, tones: [...(ctl.length ? ["danger" as Tone] : []), ...ls.map(toneOf)], title: ls.map((l) => provenance(a, l)).join("; ") };
   }
-  if (m.notCovered.some((u) => u.task === task)) return { value: `${prefix}not covered`, tones: ["muted"], title: "not covered by the summary" };
   return null;
 }
 
@@ -238,7 +239,7 @@ function healthSignals(m: ClusterAttention): Signal[] {
   }
   // every expected area's coverage, lit or not (§4): each gap line in full
   // (lineText: its gaps, re-read state and failure) with its provenance, an
-  // unknown controller with its reason, and the parts not covered
+  // unknown controller with its reason
   const gaps: { text: string; prov: string }[] = [];
   for (const a of m.areas) {
     if (a.controller?.state === "unknown") gaps.push({ text: `${a.label}: controller health unknown${a.controller.reason ? ` (${a.controller.reason})` : ""}`, prov: "" });
@@ -248,7 +249,6 @@ function healthSignals(m: ClusterAttention): Signal[] {
       gaps.push({ text: `${a.label}: ${a.lines.length > 1 ? `${l.label} ` : ""}${lineText(l)}`, prov: provenance(a, l) });
     }
   }
-  for (const u of m.notCovered) gaps.push({ text: `${u.label}: ${u.capability === "present" ? "not covered by the summary" : "capability not yet known"}`, prov: "" });
   if (gaps.length > 0) out.push({ label: "unverified", value: gaps.map((g) => g.text).join(" · "), tone: "muted", fraction: null, title: gaps.map((g) => (g.prov ? `${g.text} (${g.prov})` : g.text)).join("\n") });
   return out;
 }

@@ -1,5 +1,5 @@
 import type { ClusterDTO } from "../store/fleet";
-import { findPart, taskCounts, type HealthRef, type HealthState, type HealthSummary, type HealthTask, type KindCoverage, type SelectedCounts } from "../store/health";
+import { taskCounts, type HealthRef, type HealthState, type HealthSummary, type HealthTask, type KindCoverage, type SelectedCounts } from "../store/health";
 import { capState, type CapKey } from "./registry";
 
 // The open cluster's attention from the Observer's publications (health 1c
@@ -87,20 +87,30 @@ export type Area = {
   tone: "danger" | "warning" | undefined;
   gap: boolean;
 };
-export type NotCovered = { task: string; part?: string; label: string; groupId: string; destinationId: string; capability: "present" | "unverified" };
 export type ClusterAttention = {
   ended: string | null; // the observation ended at (a Final for the current incarnation)
   areas: Area[];
-  notCovered: NotCovered[];
 };
+
+// CAP_UNKNOWN qualifies a checking part while capability detection has not
+// established its tool: nothing is implied, present or absent.
+export const CAP_UNKNOWN = "capability not yet known";
+
+// checkingText: an area nothing has answered yet, in one phrase - or null
+// when any part is answered or a controller state is known.
+export function checkingText(a: Area): string | null {
+  if (a.controller || !a.lines.every((l) => l.state === "checking")) return null;
+  return a.lines.some((l) => l.gaps.includes(CAP_UNKNOWN)) ? `checking… · ${CAP_UNKNOWN}` : "checking…";
+}
 
 function currentSummary(st: HealthState, cluster: string): HealthSummary | undefined {
   const s = st.summaries[cluster];
   return s && s.incarnation >= (st.knownIncarnation[cluster] ?? 0) ? s : undefined;
 }
 
-// line reads one part from its selected counts (§2.1, §3).
-function line(meta: TaskMeta, pm: PartMeta, sel: SelectedCounts): Line | null {
+// line reads one part from its selected counts (§2.1, §3). A part nothing
+// answers is checking - a gap, never quiet, never a count (slice 6 §4).
+function line(meta: TaskMeta, pm: PartMeta, sel: SelectedCounts, capUnknown: boolean): Line | null {
   const base = {
     task: meta.task, part: pm.part, label: pm.label, destinationId: pm.destinationId,
     source: sel.source, at: sel.at, updating: sel.updating, refreshing: sel.refreshing,
@@ -110,7 +120,7 @@ function line(meta: TaskMeta, pm: PartMeta, sel: SelectedCounts): Line | null {
   if (sel.refreshError) qualify.push(`last re-read failed: ${sel.refreshError}`);
   const p = sel.part;
   if (!p) {
-    return { ...base, classifier: CLASSIFIER[meta.task] ?? "native", state: "checking", n: 0, bound: "as-read", tone: undefined, text: "checking…", gaps: qualify, asOf: null, top: [] };
+    return { ...base, classifier: CLASSIFIER[meta.task] ?? "native", state: "checking", n: 0, bound: "as-read", tone: undefined, text: "checking…", gaps: capUnknown ? [CAP_UNKNOWN, ...qualify] : qualify, asOf: null, top: [] };
   }
   if (p.coverage === "absent") return null;
   const member = MEMBERSHIP[`${meta.task}/${pm.part}`] ?? [];
@@ -195,14 +205,14 @@ function areaOf(meta: TaskMeta, lines: Line[], task: HealthTask | undefined): Ar
 // clusterAttention builds the model: the expected tasks (core always;
 // capability tasks when present, not yet known, or carried by the summary),
 // each part answered by current-incarnation rows or the current summary,
-// else checking - or, when the summary leaves it out, not covered (§1, §6).
+// else checking (§1; slice 6 §4: "not covered" went once the coverage-parity
+// gate passed - a part the summary does not carry is checking, a gap).
 export function clusterAttention(st: HealthState, cluster: string, c: ClusterDTO | undefined): ClusterAttention {
   const known = st.knownIncarnation[cluster] ?? 0;
   const ended = st.ended[cluster];
-  if (ended && ended.incarnation >= known) return { ended: ended.at, areas: [], notCovered: [] };
+  if (ended && ended.incarnation >= known) return { ended: ended.at, areas: [] };
   const summary = currentSummary(st, cluster);
   const areas: Area[] = [];
-  const notCovered: NotCovered[] = [];
   for (const meta of TASKS) {
     const task = summary?.tasks.find((t) => t.id === meta.task);
     const sels = meta.parts.map((pm) => taskCounts(st, cluster, meta.task, pm.part));
@@ -211,26 +221,15 @@ export function clusterAttention(st: HealthState, cluster: string, c: ClusterDTO
     const carried = (!!task && task.parts.some((p) => p.coverage !== "absent")) || sels.some((x) => x.source === "rows" && x.part?.coverage !== "absent");
     const cap = meta.cap ? capState(c, meta.cap) : "present";
     if (meta.cap && cap === "absent" && !carried) continue; // confirmed absent
-    const capability = cap === "present" ? "present" as const : "unverified" as const;
     const lines: Line[] = [];
-    const left: PartMeta[] = []; // parts the summary leaves out and no rows answer
     for (const [i, pm] of meta.parts.entries()) {
-      const sel = sels[i];
-      if (sel.source === "none" && summary && !findPart(summary, meta.task, pm.part)) { left.push(pm); continue; }
-      const l = line(meta, pm, sel);
+      const l = line(meta, pm, sels[i], cap !== "present");
       if (l) lines.push(l);
     }
-    // fail closed (§6): a task the summary leaves out is one entry; a part
-    // left out of a carried task is its own
-    if (left.length > 0 && !task && lines.length === 0) {
-      notCovered.push({ task: meta.task, label: meta.label, groupId: meta.groupId, destinationId: meta.destinationId, capability });
-    } else {
-      for (const pm of left) notCovered.push({ task: meta.task, part: pm.part, label: `${meta.label}: ${pm.label}`, groupId: meta.groupId, destinationId: meta.destinationId, capability });
-    }
-    if (lines.length === 0 && !task?.controller) continue; // every part absent or not covered
+    if (lines.length === 0 && !task?.controller) continue; // every part absent
     areas.push(areaOf(meta, lines, task));
   }
-  return { ended: null, areas, notCovered };
+  return { ended: null, areas };
 }
 
 // strongestLine: the line a badge shows - lit lines only, danger before
@@ -248,27 +247,26 @@ export type MastReading = {
   state: "ended" | "checking" | "attention" | "quiet";
   areas: number; // areas needing attention (lit lines or a verified not-ready controller)
   tone: "danger" | "warning" | undefined;
-  gaps: number; // areas with a gap, lit or not
-  notCovered: number;
+  gaps: number; // areas with a gap, lit or not (a checking part is one)
   read: number; // areas with at least one answered part
 };
 
-// mastReading: areas, never objects; gaps and not-covered counted apart
+// mastReading: areas, never objects; gaps counted apart
 // from the lit areas; never an unqualified all-clear (§5.1).
 export function mastReading(a: ClusterAttention): MastReading {
-  if (a.ended) return { state: "ended", areas: 0, tone: undefined, gaps: 0, notCovered: 0, read: 0 };
+  if (a.ended) return { state: "ended", areas: 0, tone: undefined, gaps: 0, read: 0 };
   // read: an area with at least one counted line (unreadable is not read)
   const read = a.areas.filter((x) => x.lines.some((l) => l.state !== "checking" && l.state !== "unreadable")).length;
   const lit = a.areas.filter((x) => x.state === "attention");
   const gaps = a.areas.filter((x) => x.gap).length;
-  if (a.areas.length > 0 && a.areas.every((x) => x.state === "checking") && a.notCovered.length === 0) {
-    return { state: "checking", areas: 0, tone: undefined, gaps, notCovered: 0, read };
+  if (a.areas.length > 0 && a.areas.every((x) => x.state === "checking")) {
+    return { state: "checking", areas: 0, tone: undefined, gaps, read };
   }
   return {
     state: lit.length > 0 ? "attention" : "quiet",
     areas: lit.length,
     tone: lit.some((x) => x.tone === "danger") ? "danger" : lit.length > 0 ? "warning" : undefined,
-    gaps, notCovered: a.notCovered.length, read,
+    gaps, read,
   };
 }
 

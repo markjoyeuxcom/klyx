@@ -111,7 +111,7 @@ function AttentionButton({ cluster }: { cluster: string }) {
   if (!m) return null;
   const r = mastReading(m);
   const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? "" : "s"}`;
-  const quals = [r.gaps > 0 ? plural(r.gaps, "gap") : "", r.notCovered > 0 ? `${r.notCovered} not covered` : ""].filter(Boolean);
+  const quals = [r.gaps > 0 ? plural(r.gaps, "gap") : ""].filter(Boolean);
   const refreshing = m.areas.some((a) => a.lines.some((l) => l.refreshing));
   let text: string;
   let color = "var(--color-text-secondary)";
@@ -128,7 +128,6 @@ function AttentionButton({ cluster }: { cluster: string }) {
       `${a.label}${a.controller ? ` (controller ${a.controller.state}${a.controller.reason ? `: ${a.controller.reason}` : ""})` : ""}`,
       ...a.lines.map((l) => `  ${l.label}: ${lineText(l)} - ${provenance(a, l)}`),
     ]),
-    m.notCovered.length > 0 ? `Not covered by the summary (open their views): ${m.notCovered.map((u) => (u.capability === "present" ? u.label : `${u.label} (capability not yet known)`)).join(", ")}` : "",
   ].filter(Boolean);
   return (
     <button type="button" className="mast-attention" style={{ ...noDrag, color }} onClick={() => openNavTree("attention")}

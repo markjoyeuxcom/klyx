@@ -76,11 +76,12 @@ describe("the spine lamp: first matching rule (§2)", () => {
     expect(lamp(cl("q")).title).toMatch(/observation ended at /);
   });
 
-  it("a part not covered by the summary keeps the lamp unverified and is named", () => {
+  it("a part the summary does not carry is checking: the lamp stays unverified and names it (slice 6 §4)", () => {
     quiet("a");
     const l = lamp(cl("a", "Synced", { certManagerPresent: true }));
     expect(l.kind).toBe("unverified");
-    expect(l.title).toContain("not covered by the summary: Certificates");
+    expect(l.title).toMatch(/Certificates Certificates: checking… \(not read yet\)/);
+    expect(l.title).not.toContain("not covered");
   });
 });
 

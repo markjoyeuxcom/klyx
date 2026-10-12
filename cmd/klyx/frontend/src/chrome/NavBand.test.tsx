@@ -216,14 +216,16 @@ describe("NavBand reads the cluster's summary (health 1c slice 4)", () => {
     expect(fx.textContent).toContain("▲ 1");
   });
 
-  it("the tree names what the summary does not cover, and last-good reads", () => {
+  it("the tree names a part the summary does not carry as checking (on its group, once), and last-good reads", () => {
     useFleet.setState({ clusters: [cluster({ certManagerPresent: true, gatewayAPIVersion: "v1.2" })], route: { name: "cluster", cluster: "dev", section: "overview" } });
     applySummary(sum([...replace(core(), task("nodes", [verdict("nodes", { ok: 3 }, [kind("nodes", { coverage: "stale", lastGoodAt: "2026-10-12T11:00:00Z" })], { coverage: "stale" })])), flux(0)]));
     render(<NavBand />);
     act(() => { window.dispatchEvent(new Event("klyx:open-nav-tree")); });
     const tree = screen.getByRole("dialog", { name: "All views" });
-    expect((within(tree).getByText("cert-manager").parentElement as HTMLElement).textContent).toContain("not covered");
-    expect(within(tree).getByRole("option", { name: /^Gateway topology/ }).textContent).toContain("not covered");
+    expect((within(tree).getByText("cert-manager").parentElement as HTMLElement).textContent).toContain("checking…");
+    expect((within(tree).getByText("Network").parentElement as HTMLElement).textContent).toContain("checking…");
+    expect(within(tree).getByRole("option", { name: /^Gateway topology/ }).textContent).not.toContain("checking…");
+    expect(tree.textContent).not.toContain("not covered");
     expect((within(tree).getByText("Cluster").parentElement as HTMLElement).textContent).toContain("last good");
   });
 

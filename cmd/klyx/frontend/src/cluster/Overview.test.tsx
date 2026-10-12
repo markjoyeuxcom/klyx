@@ -216,12 +216,12 @@ describe("Overview metrics", () => {
 });
 
 describe("Overview's tool facts read the model (health 1c slice 5 §5)", () => {
-  it("argo cd and gateway: their lines, not covered, or not detected only on confirmed absence", () => {
+  it("argo cd and gateway: their lines, checking, or not detected only on confirmed absence", () => {
     const c = { ...dto, argoPresent: true, gatewayAPIVersion: "" };
     useFleet.setState({ clusters: [c] });
     seed(core());
     const { unmount } = render(<Overview c={c} />);
-    expect(screen.getByText("argo cd").nextElementSibling?.textContent).toBe("installed · not covered by the summary");
+    expect(screen.getByText("argo cd").nextElementSibling?.textContent).toBe("checking…");
     expect(screen.getByText("gateway").nextElementSibling?.textContent).toBe("not detected");
     unmount();
     seed([...core(), task("argo", [native("applications", { fault: 1, ok: 2 }, 1, "need attention", [kind("applications")]), native("applicationsets", { ok: 1 }, 0, "not healthy", [kind("applicationsets")])])], { seq: 2 });
@@ -240,7 +240,7 @@ describe("Overview's tool facts follow the model's lifecycle", () => {
     useFleet.setState({ clusters: [c] });
     seed(core());
     render(<Overview c={c} />);
-    for (const label of ["flux", "argo cd", "gateway"]) expect(fact(label)).toBe("capability not yet known · not covered by the summary");
+    for (const label of ["flux", "argo cd", "gateway"]) expect(fact(label)).toBe("checking… · capability not yet known");
   });
 
   it("after a Final every fact says the observation ended - never checking, never not detected", () => {
@@ -272,16 +272,18 @@ describe("Overview's tool facts follow the model's lifecycle", () => {
   });
 });
 
-describe("Overview names what the summary does not cover", () => {
-  it("installed domains outside the summary are rows, and the quiet line says so", () => {
+describe("Overview names what the summary does not carry (slice 6 §4)", () => {
+  it("installed domains outside the summary are checking areas, and the quiet line counts them as gaps", () => {
     const c = { ...dto, certManagerPresent: true, externalSecretsPresent: true, gatewayAPIVersion: "v1.2", karpenterPresent: true };
     useFleet.setState({ clusters: [c] });
     seed();
-    render(<Overview c={c} />);
-    for (const label of ["Certificates", "External secrets", "Gateways", "Karpenter"]) {
-      expect(screen.getByRole("button", { name: new RegExp(`^${label}`) }).textContent).toContain("not covered by the summary");
+    const { container } = render(<Overview c={c} />);
+    for (const id of ["certs", "eso", "gateway", "karpenter"]) {
+      expect(area(id).getAttribute("data-state")).toBe("checking");
+      expect(area(id).textContent).toContain("checking…");
     }
-    expect(screen.getByText(/; 4 not covered by the summary\./)).toBeTruthy();
+    expect(screen.getByText(/No attention in the 5 areas read; 4 with gaps\./)).toBeTruthy();
+    expect(container.textContent).not.toContain("not covered");
   });
 
   it("a stale area says when its value was last good", () => {

@@ -123,14 +123,18 @@ describe("ClusterCard health from the cluster's summary", () => {
     const gaps = row("unverified").textContent ?? "";
     expect(gaps).toContain("Certificates: Certificates could not be read (forbidden)");
     expect(gaps).toContain("Karpenter: NodeClaims none failing · 1 unknown");
-    expect(gaps).toContain("Argo CD: ApplicationSets: not covered by the summary");
+    expect(gaps).toContain("Argo CD: ApplicationSets checking…"); // a part the summary does not carry (slice 6 §4)
     expect(screen.getByText(/health partly unverified/)).toBeTruthy();
   });
 
-  it("'not detected' only for a confirmed absence; an expected tool the summary leaves out is not covered", () => {
+  it("'not detected' only for a confirmed absence; an expected tool the summary does not carry is checking", () => {
     seed(core());
-    render(<ClusterCard c={{ ...base, fluxPresent: false, argoPresent: true }} />);
-    expect(row("gitops").textContent).toBe("argo not covered");
+    const r = render(<ClusterCard c={{ ...base, fluxPresent: false, argoPresent: true }} />);
+    expect(row("gitops").textContent).toBe("argo checking…");
+    expect(row("unverified").textContent).toContain("Argo CD: Applications checking…");
+    r.unmount();
+    render(<ClusterCard c={{ ...base, state: "Connecting", fluxPresent: false, argoPresent: false }} />); // detection not run: never "not detected"
+    expect(row("gitops").textContent).toBe("flux checking… · capability not yet known · argo checking… · capability not yet known");
   });
 
   it("other areas needing attention are listed by name; evidence never counts", () => {

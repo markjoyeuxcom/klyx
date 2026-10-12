@@ -12,7 +12,7 @@ import { ellipsis } from "../chrome/primitives";
 import { LensLayout } from "../layout/LensLayout";
 import { NAV_GROUPS, navigate } from "../nav/registry";
 import { useHealth } from "../store/health";
-import { lineText, mastReading, provenance, type Area, type ClusterAttention, type Line, type NotCovered } from "../nav/clusterAttention";
+import { checkingText, lineText, mastReading, provenance, type Area, type ClusterAttention, type Line } from "../nav/clusterAttention";
 import { useAttentionModel } from "../nav/useAttentionModel";
 import { reveal, selectsOnReveal } from "../nav/reveal";
 
@@ -186,19 +186,11 @@ function AttentionSection({ cluster, m }: { cluster: string; m: ClusterAttention
               ))}
             </div>
           ))}
-          {/* Expected parts the summary leaves out are named, so no quiet
-              line implies they were checked (fail-closed until slice 6). */}
-          {m.notCovered.map((u: NotCovered) => (
-            <button key={`${u.task}/${u.part ?? ""}`} className="ov-area" data-state="uncovered" onClick={() => goDestination(cluster, u.destinationId)} title={`Open ${u.label}`}>
-              <span className="ov-area-label">{u.label}</span>
-              <span className="ov-area-text">{u.capability === "present" ? "not covered by the summary - open to check" : "capability not yet known - not covered by the summary"}</span>
-            </button>
-          ))}
         </div>
       )}
       {!m.ended && r.state === "quiet" && (
         <span className="t-secondary">
-          No attention in the {r.read} area{r.read === 1 ? "" : "s"} read{r.gaps > 0 ? `; ${r.gaps} with gaps` : ""}{r.notCovered > 0 ? `; ${r.notCovered} not covered by the summary` : ""}.
+          No attention in the {r.read} area{r.read === 1 ? "" : "s"} read{r.gaps > 0 ? `; ${r.gaps} with gaps` : ""}.
         </span>
       )}
     </section>
@@ -406,21 +398,21 @@ function formatAge(seconds: number): string {
 
 // toolFact: a tool's reading from the attention model (health 1c slice 5
 // §5), lifecycle first: an ended observation, then its lines in its own
-// vocabulary (checking when unanswered), "not covered" qualified by what
-// capability detection knows (unknown is never "installed"), and "not
-// detected" only when the model confirms the absence - never from a
-// presence flag that may lag.
+// vocabulary, "checking…" while nothing has answered (qualified while
+// capability detection has not established the tool - unknown is never
+// "installed"), and "not detected" only when the model confirms the
+// absence - never from a presence flag that may lag.
 function toolFact(m: ClusterAttention | null, task: string): string {
   if (!m) return "checking…";
   if (m.ended) return `observation ended at ${new Date(m.ended).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}`;
   const a = m.areas.find((x) => x.id === task);
   if (a) {
+    const checking = checkingText(a);
+    if (checking) return checking;
     const lines = a.lines.map((l) => `${a.lines.length > 1 ? `${l.label.toLowerCase()} ` : ""}${lineText(l)}`);
     const ctl = a.controller ? [`controller ${a.controller.state}${a.controller.reason ? ` (${a.controller.reason})` : ""}`] : [];
     return [...ctl, ...lines].join(" · ");
   }
-  const nc = m.notCovered.find((u) => u.task === task);
-  if (nc) return nc.capability === "present" ? "installed · not covered by the summary" : "capability not yet known · not covered by the summary";
   return "not detected";
 }
 

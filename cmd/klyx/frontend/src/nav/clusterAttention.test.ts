@@ -5,7 +5,7 @@ import {
 } from "../store/health";
 import { C, absentPart, core, dep, evidence, kind, native, replace, summary, task, verdict } from "../test/healthFixtures";
 import type { ClusterDTO } from "../store/fleet";
-import { clusterAttention, mastReading, strongestLine, provenance, lineText, type Area } from "./clusterAttention";
+import { CAP_UNKNOWN, checkingText, clusterAttention, mastReading, strongestLine, provenance, lineText, type Area } from "./clusterAttention";
 
 // Health 1c slice 4: the open cluster's attention from the Observer's
 // publications, on the real health store.
@@ -39,7 +39,7 @@ describe("lifecycle (§1)", () => {
   it("a Final ends the observation: no counts, nothing quiet; a late older Final is ignored; a newer incarnation clears it", () => {
     applySummary(summary(core()));
     applySummary(summary([], { seq: 2, final: true, evaluatedAt: "2026-10-12T12:05:00Z" }));
-    expect(model()).toEqual({ ended: "2026-10-12T12:05:00Z", areas: [], notCovered: [] });
+    expect(model()).toEqual({ ended: "2026-10-12T12:05:00Z", areas: [] });
     expect(mastReading(model()).state).toBe("ended");
     applySummary(summary([], { seq: 9, final: true, evaluatedAt: "2026-10-12T12:09:00Z" })); // late, same incarnation
     expect(model().ended).toBe("2026-10-12T12:05:00Z");
@@ -221,34 +221,48 @@ describe("the selector's A4 contract and provenance (§3)", () => {
   });
 });
 
-describe("not covered: summary-derived and fail-closed (§6)", () => {
+// Slice 6 §4: once the coverage-parity gate passed, "not covered" went. A
+// part the summary does not carry is checking - a gap, never quiet, never a
+// count - qualified while capability detection has not established its tool.
+describe("a part the summary does not carry is checking, never quiet (slice 6 §4)", () => {
   it("a missing core task, a task missing a part, a present capability without its task, an unknown capability without its task; a confirmed absence omitted", () => {
     const tasks = core().filter((t) => t.id !== "nodes");
     tasks.push(task("certs", [native("certificates", { ok: 1 }, 0, "not ready", [kind("certificates")])])); // issuers missing
     applySummary(summary(tasks));
     const c = cluster({ certManagerPresent: true, fluxPresent: true, argoPresent: false });
     const m = model(c);
-    expect(m.notCovered).toEqual(expect.arrayContaining([
-      expect.objectContaining({ task: "nodes", capability: "present" }),
-      expect.objectContaining({ task: "certs", part: "issuers" }),
-      expect.objectContaining({ task: "flux", capability: "present" }),
-    ]));
-    expect(m.notCovered.find((n) => n.task === "flux")?.part).toBeUndefined(); // a whole task is one entry
-    expect(m.notCovered.some((n) => n.task === "argo")).toBe(false); // confirmed absent
+    const at = (id: string) => m.areas.find((a) => a.id === id);
+    expect(at("nodes")).toMatchObject({ state: "checking", gap: true });
+    expect(at("certs")?.lines.find((l) => l.part === "issuers")).toMatchObject({ state: "checking", n: 0, text: "checking…", gaps: [] });
+    expect(at("certs")).toMatchObject({ state: "gaps", gap: true }); // its answered part stands, the missing one is a gap
+    expect(at("flux")?.lines.every((l) => l.state === "checking" && l.gaps.length === 0)).toBe(true); // present: no qualifier
+    expect(at("argo")).toBeUndefined(); // confirmed absent
     const unknown = model(cluster({ state: "Connecting" } as Partial<ClusterDTO>));
-    expect(unknown.notCovered.filter((n) => ["flux", "argo", "certs", "eso", "gateway", "karpenter"].includes(n.task)).every((n) => n.capability === "unverified")).toBe(true);
-    expect(unknown.notCovered.some((n) => n.task === "karpenter")).toBe(true); // never silently gone
-    expect(mastReading(m)).toMatchObject({ notCovered: 3 });
+    for (const id of ["flux", "argo", "eso", "gateway", "karpenter"]) {
+      const a = unknown.areas.find((x) => x.id === id);
+      expect(a, id).toBeDefined(); // never silently gone
+      expect(checkingText(a!), id).toBe(`checking… · ${CAP_UNKNOWN}`);
+    }
+    // a carried task's missing part is qualified too; its answered part stands
+    const certs = unknown.areas.find((x) => x.id === "certs")!;
+    expect(certs.lines.find((l) => l.part === "issuers")?.gaps).toEqual([CAP_UNKNOWN]);
+    expect(certs.lines.find((l) => l.part === "certificates")?.state).toBe("quiet");
+    expect(mastReading(m)).toMatchObject({ state: "quiet", gaps: 3 }); // nodes, certs, flux: never an all-clear
   });
 
   it("a part the Observer reports absent has no line; a task with every part absent is omitted", () => {
     applySummary(summary([...core(), task("eso", [absentPart("externalsecrets", "externalsecrets"), absentPart("stores", "secretstores")])]));
     expect(model(cluster({ externalSecretsPresent: true })).areas.some((a) => a.id === "eso")).toBe(false);
-    expect(model(cluster({ externalSecretsPresent: true })).notCovered).toEqual([]);
   });
 
-  it("the mast counts areas, gaps and not-covered apart, and is never an unqualified all-clear", () => {
+  it("the mast counts areas and gaps apart, and is never an unqualified all-clear", () => {
     applySummary(summary(replace(core(), task("nodes", [verdict("nodes", { unknown: 1, ok: 2 }, [kind("nodes")])]))));
-    expect(mastReading(model())).toEqual({ state: "quiet", areas: 0, tone: undefined, gaps: 1, notCovered: 0, read: 5 });
+    expect(mastReading(model())).toEqual({ state: "quiet", areas: 0, tone: undefined, gaps: 1, read: 5 });
+  });
+
+  it("checkingText speaks only for an area nothing has answered", () => {
+    applySummary(summary([...core(), task("flux", [native("reconciliations", { ok: 1 }, 0, "not ready", [kind("kustomizations")])], { controller: { state: "unknown" } })]));
+    const fx = model(cluster({ fluxPresent: true })).areas.find((a) => a.id === "flux")!;
+    expect(checkingText(fx)).toBeNull(); // a part answered, and a controller state known
   });
 });

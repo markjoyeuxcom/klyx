@@ -13,7 +13,7 @@ export type NavCounts = {
   group: Record<string, NavBadge>;
   destination: Record<string, NavBadge>;
   // What could not be established ("controller not ready", "unreadable",
-  // "last good", "unverified", "not covered", "checking…"), beside the
+  // "last good", "unverified", "checking…"), beside the
   // count and never as zero; a destination's note also names a lit part
   // that has no destination of its own ("issuers: 1 not ready").
   groupNote: Record<string, string>;
@@ -25,7 +25,7 @@ export type NavCounts = {
 };
 
 const EMPTY: NavCounts = { group: {}, destination: {}, groupNote: {}, destinationNote: {}, attention: new Set() };
-const WEIGHT: Record<string, number> = { "observation ended": 7, "controller not ready": 6, unreadable: 5, "last good": 4, unverified: 3, "not covered": 2, "checking…": 1 };
+const WEIGHT: Record<string, number> = { "observation ended": 6, "controller not ready": 5, unreadable: 4, "last good": 3, unverified: 2, "checking…": 1 };
 const stronger = (a: string | undefined, b: string) => (!a || WEIGHT[b] > WEIGHT[a] ? b : a);
 
 const badge = (a: Area, l: Line): NavBadge => ({
@@ -86,10 +86,6 @@ export function navCounts(m: ClusterAttention | null): NavCounts {
     if (a.controller?.state === "not ready") notes.unshift("controller not ready");
     if (a.controller?.state === "not ready" || a.lines.some((l) => l.state === "attention" && !l.destinationId)) out.attention.add(a.destinationId);
     if (notes.length) out.destinationNote[a.destinationId] = [out.destinationNote[a.destinationId], ...notes].filter(Boolean).join(" · ");
-  }
-  for (const n of m.notCovered) {
-    out.groupNote[n.groupId] = stronger(out.groupNote[n.groupId], "not covered");
-    out.destinationNote[n.destinationId] = [out.destinationNote[n.destinationId], n.part ? `${n.part}: not covered` : "not covered"].filter(Boolean).join(" · ");
   }
   return out;
 }

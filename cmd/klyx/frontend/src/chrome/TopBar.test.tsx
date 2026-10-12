@@ -194,12 +194,14 @@ describe("TopBar Attention button (health 1c slice 4)", () => {
     expect(queryByRole("button", { name: /^Attention/ })).toBeNull();
   });
 
-  it("never an unqualified all-clear: installed domains the summary leaves out are named", () => {
+  it("never an unqualified all-clear: installed domains the summary does not carry are checking gaps (slice 6 §4)", () => {
     useFleet.setState({ clusters: [dev({ certManagerPresent: true, gatewayAPIVersion: "v1.2" })] });
     applySummary(sum(core()));
     const btn = button(render(<TopBar />));
-    expect(btn.getAttribute("aria-label")).toMatch(/^Attention: No attention in 5 areas read · 2 not covered\./);
-    expect(btn.getAttribute("title")).toMatch(/Not covered by the summary \(open their views\): Certificates, Gateways/);
+    expect(btn.getAttribute("aria-label")).toMatch(/^Attention: No attention in 5 areas read · 2 gaps\./);
+    expect(btn.getAttribute("title")).toMatch(/Certificates\n {2}Certificates: checking… - not read yet/);
+    expect(btn.getAttribute("title")).toMatch(/Gateways\n {2}Gateways: checking… - not read yet/);
+    expect(btn.getAttribute("title")).not.toContain("not covered");
   });
 
   it("a fault with a gap is lit AND a gap; the tooltip names each line's provenance", () => {
