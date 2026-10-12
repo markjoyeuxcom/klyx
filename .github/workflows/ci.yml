@@ -18,7 +18,7 @@ permissions:
 env:
   NODE_VERSION: "24"
   WAILS_VERSION: "v3.0.0-alpha2.103"
-  GOLANGCI_VERSION: "v2.12.2"
+  GOLANGCI_VERSION: "v2.14.0"
   GOVULNCHECK_VERSION: "v1.8.0"
 
 jobs:
