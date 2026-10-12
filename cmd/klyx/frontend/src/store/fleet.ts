@@ -101,38 +101,6 @@ export type FleetBoardEntry = {
   gateway?: { served: boolean; gateways: number; routes: number | null; brokenRoutes: number | null; unprogrammed: number } | null;
 };
 
-// LensCount is one area of the cluster attention summary: a real count,
-// "absent" (the tool is not installed - expected, excluded), or "unreadable"
-// (the read failed - never implied quiet).
-export type LensCount = number | "absent" | "unreadable";
-// Migrated domains carry their verdict counts and coverage, so a surface can
-// tell "quiet" from "capped" or "could not classify" (health model 1b).
-export type VerdictLensCount = VerdictObservation | "unreadable";
-// AttentionCounts is the shared cluster attention summary (redesign step 7e):
-// one read per cluster entry plus a gentle re-poll, consumed by the
-// navigation tree, the mast Attention button and Overview. It replaced the
-// triage tape's own fetch.
-export type AttentionCounts = {
-  workloads: VerdictLensCount;
-  pods: VerdictLensCount;
-  events: LensCount;
-  nodes: VerdictLensCount;
-  helm: LensCount;
-  flux: LensCount;
-  argo: LensCount;
-  // Helm releases past Klyx's pending deadline ("appears stuck"), counted
-  // with the lens's own rule; meaningful only when helm is readable.
-  helmStuck?: number;
-  namespaces?: number | null;
-};
-export type AttentionKey = "workloads" | "pods" | "events" | "nodes" | "helm" | "flux" | "argo";
-export const ATTENTION_KEYS: AttentionKey[] = ["workloads", "pods", "events", "nodes", "helm", "flux", "argo"];
-// at: when the latest read completed; areaAt: when each area's shown value
-// was read; stale: areas whose latest read failed, shown from their last
-// good read (never restamped).
-export type AttentionSlice = { cluster: string | null; loading: boolean; counts: AttentionCounts; at: number | null; areaAt?: Partial<Record<AttentionKey, number>>; stale?: AttentionKey[] };
-const emptyAttentionCounts: AttentionCounts = { workloads: "unreadable", pods: "unreadable", events: "unreadable", nodes: "unreadable", helm: "unreadable", flux: "unreadable", argo: "unreadable", namespaces: null };
-
 export type ArgoConditionDTO = { type: string; message: string };
 export type ArgoResourceDTO = { group: string; kind: string; namespace: string; name: string; status: string; health: string };
 export type ArgoResourceRuleDTO = { group: string; kind: string };
@@ -991,10 +959,6 @@ type FleetState = {
   setNewContexts: (n: number) => void;
   fleetBoard: Record<string, FleetBoardEntry>;
   setFleetBoardEntry: (cluster: string, e: FleetBoardEntry) => void;
-  attention: AttentionSlice;
-  setAttentionLoading: (cluster: string) => void;
-  setAttention: (cluster: string, counts: AttentionCounts) => void;
-  clearAttention: () => void;
   openCluster: (name: string) => void;
   setSection: (s: ClusterSection) => void;
   openArgo: (mode?: ArgoViewMode) => void;
@@ -1149,40 +1113,6 @@ export const useFleet = create<FleetState>((set) => ({
   setNewContexts: (newContexts) => set({ newContexts }),
   fleetBoard: {},
   setFleetBoardEntry: (cluster, e) => set((s) => ({ fleetBoard: { ...s.fleetBoard, [cluster]: e } })),
-  attention: { cluster: null, loading: false, counts: emptyAttentionCounts, at: null },
-  // Re-claiming the SAME cluster keeps the existing counts so a re-poll or
-  // manual refresh never flickers back to "checking…".
-  setAttentionLoading: (cluster) =>
-    set((s) => ({
-      attention: s.attention.cluster === cluster
-        ? { ...s.attention, loading: true }
-        : { cluster, loading: true, counts: emptyAttentionCounts, at: null },
-    })),
-  // A failed area in a re-poll keeps its last good value and time, marked
-  // stale; a read area is restamped. A different cluster starts clean.
-  setAttention: (cluster, counts) => set((s) => {
-    const now = Date.now();
-    const prev = s.attention.cluster === cluster ? s.attention : null;
-    const merged: AttentionCounts = { ...counts };
-    const areaAt: Partial<Record<AttentionKey, number>> = {};
-    const stale: AttentionKey[] = [];
-    for (const k of ATTENTION_KEYS) {
-      const before = prev?.counts[k];
-      // Only a reading is retained: a previously detected ABSENCE is not
-      // evidence about now - a failed read after it shows unreadable.
-      if (counts[k] === "unreadable" && prev && before !== undefined && before !== "unreadable" && before !== "absent" && prev.areaAt?.[k] !== undefined) {
-        (merged as Record<AttentionKey, unknown>)[k] = before;
-        if (k === "helm") merged.helmStuck = prev.counts.helmStuck;
-        areaAt[k] = prev.areaAt[k];
-        stale.push(k);
-      } else if (counts[k] !== "unreadable") {
-        areaAt[k] = now;
-      }
-    }
-    if (counts.pods === "unreadable" && prev && stale.includes("pods")) merged.namespaces = prev.counts.namespaces;
-    return { attention: { cluster, loading: false, counts: merged, at: now, areaAt, stale } };
-  }),
-  clearAttention: () => set({ attention: { cluster: null, loading: false, counts: emptyAttentionCounts, at: null } }),
   openCluster: (name) => set({ route: { name: "cluster", cluster: name, section: "overview" } }),
   setSection: (section) =>
     set((s) => (s.route.name === "cluster" ? { route: { name: "cluster", cluster: s.route.cluster, section } } : {})),

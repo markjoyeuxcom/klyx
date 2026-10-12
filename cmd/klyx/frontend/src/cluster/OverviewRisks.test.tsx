@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, waitFor } from "@testing-library/react";
 import { Overview } from "./Overview";
+import { resetHealthStore } from "../store/health";
 import { useFleet } from "../store/fleet";
 import type { ClusterDTO } from "../store/fleet";
 
@@ -8,7 +9,7 @@ vi.mock("../bridge/metrics", () => ({
   getClusterMetrics: vi.fn(),
   getClusterSparklines: vi.fn().mockResolvedValue({ available: false, message: "metrics unavailable", cpu: [], mem: [] }),
 }));
-vi.mock("../bridge/attention", () => ({ fetchAttention: vi.fn().mockResolvedValue(undefined), attentionRepollMs: 60000 }));
+vi.mock("../bridge/healthRows", () => ({ startSummaries: vi.fn() }));
 vi.mock("../bridge/fleetboard", () => ({ fetchFleetBoard: vi.fn().mockResolvedValue(undefined) }));
 vi.mock("../bridge/events", () => ({ fetchEventsSnapshot: vi.fn().mockResolvedValue({ namespaces: [], events: [] }) }));
 const listInstancePage = vi.fn();
@@ -26,7 +27,7 @@ describe("Overview cluster risks honesty", () => {
   beforeEach(() => {
     listInstancePage.mockReset();
     useFleet.setState({ metrics: { cluster: null, dto: null, loading: false } });
-    useFleet.getState().clearAttention();
+    resetHealthStore();
   });
 
   it("claims no risks only when every kind was read", async () => {

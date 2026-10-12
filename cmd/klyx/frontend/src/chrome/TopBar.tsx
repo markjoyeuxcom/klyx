@@ -3,7 +3,7 @@ import { IconArrowLeft, IconArrowRight, IconArrowsLeftRight, IconClock, IconComm
 import { ThemeToggle } from "./ThemeToggle";
 import { KlyxMark } from "./KlyxMark";
 import { useFleet } from "../store/fleet";
-import { openNavTree } from "../nav/attention";
+import { openNavTree } from "../nav/navTree";
 import { lineText, mastReading, provenance } from "../nav/clusterAttention";
 import { useAttentionModel } from "../nav/useAttentionModel";
 import { back, backTarget, entryKey, entryLabel, forward, forwardTarget, go, recentPlaces, useHistory, type HistoryEntry } from "../nav/history";

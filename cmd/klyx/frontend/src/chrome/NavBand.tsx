@@ -5,7 +5,7 @@ import type { ClusterDTO, FleetView } from "../store/fleet";
 import { toneColor } from "./primitives/styles";
 import { CAP_STATE_TEXT, NAV_GROUPS, activeLocation, destState, groupState, navigate, type Destination, type NavGroup } from "../nav/registry";
 import { useNavCounts, type NavBadge, type NavCounts } from "../nav/useNavCounts";
-import { OPEN_TREE_EVENT } from "../nav/attention";
+import { OPEN_TREE_EVENT } from "../nav/navTree";
 
 // NavBand - the one 32px navigation row (redesign spec §4), replacing the two
 // stacked LensNav strips. Left: the current group, whose popover is the whole

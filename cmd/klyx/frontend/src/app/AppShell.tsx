@@ -14,7 +14,6 @@ import { ClusterDetail } from "../cluster/ClusterDetail";
 import { CommandPalette, getPaletteOpen } from "../chrome/CommandPalette";
 import { ActionToast } from "../chrome/ActionToast";
 import { back, forward } from "../nav/history";
-import { useClusterAttention } from "../nav/attention";
 import { handleZoomKey } from "./zoom";
 
 // AppShell owns the frame (redesign spec §1): an 8px inset, the 36px mast,
@@ -66,9 +65,6 @@ export function handleShellMouse(e: MouseEvent): void {
 
 export function AppShell() {
   const route = useFleet((s) => s.route);
-  // The shared cluster attention summary (spec §4) replaces the triage tape:
-  // read while a cluster is open, shown through the tree and the mast.
-  useClusterAttention(route.name === "cluster" ? route.cluster : null);
 
   useEffect(() => {
     window.addEventListener("keydown", handleShellKey);
