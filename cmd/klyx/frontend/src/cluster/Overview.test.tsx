@@ -17,11 +17,9 @@ vi.mock("../bridge/metrics", () => ({
 }));
 vi.mock("../bridge/healthRows", () => ({ startSummaries: vi.fn() }));
 vi.mock("../bridge/helm", () => ({ openHelmRelease: vi.fn(async () => {}) }));
-vi.mock("../bridge/fleetboard", () => ({ fetchFleetBoard: vi.fn().mockResolvedValue(undefined) }));
 vi.mock("../bridge/events", () => ({ fetchEventsSnapshot: vi.fn() }));
 vi.mock("../bridge/crd", () => ({ listInstancePage: vi.fn().mockResolvedValue({ items: [], nextToken: "" }) }));
 import { fetchEventsSnapshot } from "../bridge/events";
-import { fetchFleetBoard } from "../bridge/fleetboard";
 import { getClusterMetrics } from "../bridge/metrics";
 
 const dto: ClusterDTO = {
@@ -43,7 +41,7 @@ const area = (id: string) => screen.getByTestId(`ov-area-${id}`);
 
 beforeEach(() => {
   vi.mocked(fetchEventsSnapshot).mockResolvedValue({ namespaces: [], events: [] });
-  useFleet.setState({ metrics: { cluster: null, dto: null, loading: false }, fleetBoard: {}, navIntent: null, clusters: [dto] });
+  useFleet.setState({ metrics: { cluster: null, dto: null, loading: false }, navIntent: null, clusters: [dto] });
   resetHealthStore();
 });
 
@@ -65,12 +63,10 @@ describe("Overview on the workspace template (redesign step 7e)", () => {
     expect(screen.getByText("▲ Failed")).toBeTruthy();
   });
 
-  it("Refresh re-reads what is still fetched; the attention is pushed", () => {
+  it("Refresh re-reads what is still fetched - the metrics; the attention is pushed", () => {
     seed();
     render(<Overview c={dto} />);
-    vi.mocked(fetchFleetBoard).mockClear();
     fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
-    expect(fetchFleetBoard).toHaveBeenCalledWith([NELLI]);
     expect(getClusterMetrics).toHaveBeenCalledWith(NELLI, true);
   });
 });
@@ -216,6 +212,21 @@ describe("Overview metrics", () => {
     render(<Overview c={dto} />);
     const sparks = await screen.findAllByRole("img", { name: /metric sparkline/i });
     expect(sparks.length).toBe(2);
+  });
+});
+
+describe("Overview's tool facts read the model (health 1c slice 5 §5)", () => {
+  it("argo cd and gateway: their lines, not covered, or not detected only on confirmed absence", () => {
+    const c = { ...dto, argoPresent: true, gatewayAPIVersion: "" };
+    useFleet.setState({ clusters: [c] });
+    seed(core());
+    const { unmount } = render(<Overview c={c} />);
+    expect(screen.getByText("argo cd").nextElementSibling?.textContent).toBe("installed · not covered by the summary");
+    expect(screen.getByText("gateway").nextElementSibling?.textContent).toBe("not detected");
+    unmount();
+    seed([...core(), task("argo", [native("applications", { fault: 1, ok: 2 }, 1, "need attention", [kind("applications")]), native("applicationsets", { ok: 1 }, 0, "not healthy", [kind("applicationsets")])])], { seq: 2 });
+    render(<Overview c={c} />);
+    expect(screen.getByText("argo cd").nextElementSibling?.textContent).toBe("applications 1 need attention · applicationsets none not healthy");
   });
 });
 

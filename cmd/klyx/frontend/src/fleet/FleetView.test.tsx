@@ -6,7 +6,6 @@ import { applySummary, resetHealthStore } from "../store/health";
 import { core, kind, replace, summary, task, verdict } from "../test/healthFixtures";
 
 vi.mock("../bridge/mesh", () => ({ getMeshGraph: vi.fn(async () => {}) }));
-vi.mock("../bridge/fleetboard", () => ({ fetchFleetBoard: vi.fn(async () => {}) }));
 vi.mock("./ClusterCard", () => ({
   ClusterCard: ({ c }: { c: ClusterDTO }) => <div data-testid="card">{c.name}</div>,
   clusterDiagnosticScore: () => 0,
@@ -15,7 +14,7 @@ import { FleetView, fleetColumns } from "./FleetView";
 
 const c = (name: string, state = "Synced"): ClusterDTO => ({ name, state, nodesTotal: 1, pods: 10 } as unknown as ClusterDTO);
 
-beforeEach(() => { useFleet.setState({ clusters: [], fleetBoard: {}, mesh: null, route: { name: "fleet" } }); resetHealthStore(); });
+beforeEach(() => { useFleet.setState({ clusters: [], mesh: null, route: { name: "fleet" } }); resetHealthStore(); });
 
 describe("FleetView on the workspace template (redesign step 7d)", () => {
   it("no clusters: one empty state with the way forward", () => {

@@ -22,7 +22,7 @@ const tab = (name: string) => screen.getByRole("button", { name: new RegExp(`^${
 const openTree = () => fireEvent.click(screen.getByRole("button", { expanded: false, name: /all views/ }));
 
 beforeEach(() => {
-  useFleet.setState((s) => ({ clusters: [cluster()], route: { name: "fleet" }, forwards: [], newContexts: 0, fleetBoard: {},
+  useFleet.setState((s) => ({ clusters: [cluster()], route: { name: "fleet" }, forwards: [], newContexts: 0,
     workloads: { ...s.workloads, kindFilter: { Deployment: true, StatefulSet: true, DaemonSet: true } } }));
 });
 

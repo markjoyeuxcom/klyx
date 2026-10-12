@@ -1,5 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
-import { asOfText, attentionTone, describeObservation, observe, isAttention, kindOf, labelOf, matchesFilter, summarize, VERDICT_ORDER } from "./verdict";
+import { describe, expect, it } from "vitest";
+import { attentionTone, isAttention, kindOf, labelOf, matchesFilter, summarize, VERDICT_ORDER } from "./verdict";
 
 describe("kindOf fails closed", () => {
   it("passes known kinds through", () => {
@@ -64,39 +64,3 @@ describe("matchesFilter", () => {
   });
 });
 
-describe("describeObservation never claims a quiet it cannot see", () => {
-  const ok = (n: number) => Array.from({ length: n }, () => ({ h: { kind: "ok" } }));
-  it("complete and all ok is quiet", () => {
-    expect(describeObservation(observe(ok(3), (r) => r.h, false)).quiet).toBe(true);
-  });
-  it("a capped zero-attention read is not quiet", () => {
-    const d = describeObservation(observe(ok(3), (r) => r.h, true));
-    expect(d.quiet).toBe(false);
-    expect(d.text).toBe("unverified (capped)");
-  });
-  it("an all-unknown read is not quiet", () => {
-    const d = describeObservation(observe([{ h: undefined }, { h: { kind: "" } }], (r) => r.h, false));
-    expect(d.quiet).toBe(false);
-    expect(d.text).toBe("2 unverified");
-  });
-  it("degraded-only attention is amber, any fault is danger, capped is a lower bound", () => {
-    expect(describeObservation(observe([{ h: { kind: "degraded" } }], (r) => r.h, false)).tone).toBe("warning");
-    expect(describeObservation(observe([{ h: { kind: "fault" } }, { h: { kind: "degraded" } }], (r) => r.h, true))).toMatchObject({ tone: "danger", text: "2+ need attention" });
-  });
-});
-
-describe("observe stamps receipt time", () => {
-  it("records when the observation was received", () => {
-    vi.useFakeTimers();
-    try {
-      vi.setSystemTime(new Date(2026, 9, 10, 9, 0, 0));
-      const a = observe([], () => undefined, false);
-      vi.setSystemTime(new Date(2026, 9, 10, 9, 5, 0));
-      const b = observe([], () => undefined, false);
-      expect(asOfText(a)).toBe("as of 09:00:00");
-      expect(asOfText(b)).toBe("as of 09:05:00");
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-});

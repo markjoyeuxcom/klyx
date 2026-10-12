@@ -45,7 +45,7 @@ Independent facts, each counted as clusters, never objects or areas summed acros
 - **Every expected area's coverage**, lit or not: each area with a gap, a checking or unreadable part, an unknown native role, an unknown controller, or a not-covered part is named on the card ("Certificates: could not be read (forbidden)", "Karpenter: NodeClaims 1 unknown", "Argo CD: ApplicationSets not covered by the summary"), and so is an ended observation. A tool reads "not detected" only on confirmed absence (capability absent and no non-absent summary part); a missing expected area or part reads checking or not covered, never "not detected". Every cluster the header counts as unknown coverage names why on its card.
 - **Other areas** needing attention (pods, nodes, certificates, external secrets, Karpenter, Helm, a controller not ready) are listed by name; evidence (warning events) is never attention.
 - **Provenance per line**: each health line carries its selected part's provenance - lens rows or cluster summary, with that part's own time - and its updating, refreshing, resync and re-read-failure state, through the model's `provenance` and `lineText` (no second count formatter). A row-derived count is never captioned with an older summary's time. The card shows "checking…" or "observation ended at …" instead of counts when those hold.
-- **Utilisation** (cpu, memory) stays the metrics read's.
+- **Utilisation**: the cards show none (they never rendered the fleet board's cpu and memory); Overview's utilisation is its own metrics read, unchanged.
 - **Ordering** (`clusterDiagnosticScore`): unreachable, then clusters with danger areas, then warning areas, then a stale or degraded connection, then gaps or not covered, then quiet - from the model, not the fan-out; within a band, more areas needing attention first, then name.
 
 ## 5. Overview's fleet-board facts
@@ -54,8 +54,8 @@ Overview's "argo cd" and "gateway" facts read the model's argo and gateway areas
 
 ## 6. Removals
 
-- `fetchFleetBoard`'s health reads (GitOps summary, Argo applications, workloads, Gateways and topologies) and the `FleetBoardEntry` health fields; the entry keeps cpu and memory only (renamed to what it is, the utilisation read).
-- `boardAttention` and the other `fleetBoard`-health helpers in `health/verdict.ts` with no remaining caller.
+- `fetchFleetBoard`, `FleetBoardEntry` and the store's `fleetBoard` slice, entirely. Adjusted during implementation with Codex's agreement: no surface read the entry's cpu and memory - Overview's utilisation, sparklines and metrics refresh are its own metrics read and stay - so a utilisation-only entry would be unused fetching and state.
+- `boardAttention` and the fleet-board observation helpers in `health/verdict.ts` (`observe`, `describeObservation`, `asOfText`, `VerdictObservation`), with no remaining caller.
 - Bound service methods with no remaining caller, with their result envelopes where unused: `WorkloadsService.ListWorkloads`, `PodsService.ListPods`, `NodesService.ListNodes`, `GatewayService.ListGateways`, `GitOpsService.GetGitOpsSummary`, `ArgoService.ListApplications`. The connection-level reads they wrap stay (headroom, node and workload metrics, the upgrade check use them), and so do the detail and verb endpoints, the converter field helpers and their identity, serialization and parity tests. The Events, Helm and Gateway-topology request paths stay (per-fetch lenses, slice 3).
 
 ## 7. Tests

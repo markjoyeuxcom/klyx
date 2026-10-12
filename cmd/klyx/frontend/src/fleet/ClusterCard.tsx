@@ -1,9 +1,12 @@
 import type { CSSProperties, ReactNode } from "react";
 import { IconLock } from "@tabler/icons-react";
-import type { ClusterDTO, FleetBoardEntry, MeshGraphDTO } from "../store/fleet";
+import { useMemo } from "react";
+import type { ClusterDTO, MeshGraphDTO } from "../store/fleet";
 import { useFleet } from "../store/fleet";
+import { useHealth } from "../store/health";
 import { type Tone, StatusDot, toneColor, toneBg, toneBorder } from "../chrome/primitives";
-import { asOfText, attentionTone, boardAttention } from "../health/verdict";
+import { clusterAttention, lineText, mastReading, provenance, type Area, type ClusterAttention, type Line } from "../nav/clusterAttention";
+import { healthGaps, healthReading, spineLamp, unreachable as isUnreachable } from "../nav/fleetAttention";
 
 type Signal = {
   label: string;
@@ -13,19 +16,24 @@ type Signal = {
   title?: string;
 };
 
-export function clusterDiagnosticScore(c: ClusterDTO, board: FleetBoardEntry | undefined): number {
-  if (c.state === "Failed" || c.state === "Unconnected") return 1000;
-  let score = 0;
-  const attention = boardAttention(board) ?? 0;
-  if (attention > 0) score += 500 + Math.min(100, attention * 10);
-  if (c.state === "Stale") score += 420;
-  if (c.state === "Degraded") score += 360;
-  if ((board?.flux?.notReady ?? 0) > 0) score += 260;
-  if ((board?.argo?.broken ?? 0) > 0) score += 240;
-  if ((board?.gateway?.brokenRoutes ?? 0) > 0 || (board?.gateway?.unprogrammed ?? 0) > 0) score += 180;
-  if (c.nodesReady < c.nodesTotal) score += 140;
-  if (c.protected) score += 10;
-  return score;
+// clusterDiagnosticScore orders the board (health 1c slice 5 §4) in bands:
+// unreachable, danger areas, warning areas, a stale or degraded connection,
+// gaps or not covered, quiet; within a band, more areas needing attention
+// first (the board then sorts by name).
+export function clusterDiagnosticScore(c: ClusterDTO, m: ClusterAttention | undefined): number {
+  if (isUnreachable(c)) return 10000;
+  const r = m && !m.ended ? mastReading(m) : null;
+  if (r?.state === "attention") return (r.tone === "danger" ? 5000 : 4000) + Math.min(99, r.areas) * 10;
+  if (c.state === "Stale" || c.state === "Degraded") return 3000;
+  if (!m || healthGaps(m)) return 2000;
+  return 0;
+}
+
+// useClusterModel is one cluster's attention model (the slice 4 model; the
+// open cluster's includes its lens rows).
+function useClusterModel(c: ClusterDTO): { m: ClusterAttention; summaryAt: string | null } {
+  const st = useHealth((s) => s);
+  return useMemo(() => ({ m: clusterAttention(st, c.name, c), summaryAt: st.summaries[c.name]?.evaluatedAt ?? null }), [st, c]);
 }
 
 // ClusterCard - one dense fleet-board ledger. The rows mirror the mockup:
@@ -33,8 +41,8 @@ export function clusterDiagnosticScore(c: ClusterDTO, board: FleetBoardEntry | u
 export function ClusterCard({ c }: { c: ClusterDTO }) {
   const openCluster = useFleet((s) => s.openCluster);
   const mesh = useFleet((s) => s.mesh);
-  const board: FleetBoardEntry | undefined = useFleet((s) => s.fleetBoard[c.name]);
-  const unreachable = c.state === "Failed" || c.state === "Unconnected";
+  const { m, summaryAt } = useClusterModel(c);
+  const unreachable = isUnreachable(c);
 
   if (unreachable) {
     const displayName = clusterDisplayName(c.name);
@@ -66,14 +74,13 @@ export function ClusterCard({ c }: { c: ClusterDTO }) {
   }
 
   const signals = [
-    workloadSignal(board),
-    gitopsSignal(board),
-    gatewaySignal(c, board),
+    ...healthSignals(m),
     meshSignal(mesh, c.name),
     freshnessSignal(c),
   ];
-  const rail = cardRail(c, board, signals);
-  const badge = cardBadge(c, board, signals);
+  const lamp = spineLamp(c, m);
+  const rail = lamp.tone;
+  const badge = cardBadge(m);
   const displayName = clusterDisplayName(c.name);
 
   return (
@@ -144,7 +151,7 @@ export function ClusterCard({ c }: { c: ClusterDTO }) {
       </div>
 
       <div style={{ padding: "8px 12px", borderTop: "0.5px solid var(--color-border-tertiary)", fontSize: 11, fontFamily: "var(--font-mono)", color: "var(--color-text-tertiary)", ...ellipsis }}>
-        {diagnosticReason(c, board, signals)}
+        {diagnosticReason(c, m)}{summaryAt && !m.ended ? ` · summary as of ${new Date(summaryAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}` : ""}
       </div>
     </div>
   );
@@ -182,61 +189,59 @@ function Badge({ tone, children }: { tone: Tone; children: ReactNode }) {
   );
 }
 
-// workloadSignal: workload verdict counts with their entity and coverage -
-// "3 of 8 need attention", never a bar without a denominator.
-function workloadSignal(board: FleetBoardEntry | undefined): Signal {
-  const w = board?.workloads;
-  if (!w) return { label: "workloads", value: "unreadable", tone: "muted", fraction: null };
-  const { counts, coverage } = w;
-  const partial = coverage === "partial" ? " (partial)" : "";
-  if (counts.attention > 0) {
-    return {
-      label: "workloads",
-      value: `${counts.attention} of ${counts.total} need attention${partial}`,
-      tone: attentionTone(counts) ?? "warning",
-      fraction: null,
-      title: [`${counts.fault} fault · ${counts.degraded} degraded${counts.unknown ? ` · ${counts.unknown} unknown` : ""}`, asOfText(w)].filter(Boolean).join(" · "),
-    };
+// The health signals (health 1c slice 5 §4): each from the model, in its
+// area's own vocabulary and never summed across areas or tools; each line's
+// title is its own provenance. Quiet is neutral, never green.
+const toneOf = (l: Line): Tone => (l.state === "attention" ? l.tone ?? "warning" : l.state === "checking" || l.state === "unreadable" ? "muted" : "neutral");
+const worst = (tones: Tone[]): Tone => (tones.includes("danger") ? "danger" : tones.includes("warning") ? "warning" : tones.every((t) => t === "muted") && tones.length > 0 ? "muted" : "neutral");
+// shown: an area's lit lines, else its primary line
+const shown = (a: Area) => (a.lines.some((l) => l.state === "attention") ? a.lines.filter((l) => l.state === "attention") : a.lines.slice(0, 1));
+const lineOf = (a: Area, l: Line, prefix = "") => `${prefix}${a.lines.length > 1 ? `${l.label.toLowerCase()} ` : ""}${lineText(l)}`;
+
+// toolValue: one tool's reading - its lines, "not covered", "checking…", or
+// "not detected" only on confirmed absence (no area, nothing not covered).
+function toolValue(m: ClusterAttention, task: string, prefix: string): { value: string; tones: Tone[]; title: string } | null {
+  const a = m.areas.find((x) => x.id === task);
+  if (a) {
+    const ls = shown(a);
+    const ctl = a.controller?.state === "not ready" ? [`${prefix}controller not ready`] : [];
+    return { value: [...ctl, ...ls.map((l) => lineOf(a, l, prefix))].join(" · ") || `${prefix}controller ${a.controller?.state ?? ""}`, tones: [...(ctl.length ? ["danger" as Tone] : []), ...ls.map(toneOf)], title: ls.map((l) => provenance(a, l)).join("; ") };
   }
-  if (counts.unknown > 0) {
-    return { label: "workloads", value: `${counts.unknown} of ${counts.total} unverified${partial}`, tone: "muted", fraction: null, title: asOfText(w) || undefined };
-  }
-  return { label: "workloads", value: `${counts.total} · none need attention${partial}`, tone: "neutral", fraction: null, title: asOfText(w) || undefined };
+  if (m.notCovered.some((u) => u.task === task)) return { value: `${prefix}not covered`, tones: ["muted"], title: "not covered by the summary" };
+  return null;
 }
 
-function gitopsSignal(board: FleetBoardEntry | undefined): Signal {
-  if (!board) return { label: "gitops", value: "unreadable", tone: "muted", fraction: null };
-  const total = (board.flux?.total ?? 0) + (board.argo?.total ?? 0);
-  const bad = (board.flux?.notReady ?? 0) + (board.argo?.broken ?? 0);
-  if (!board.flux && !board.argo) return { label: "gitops", value: "not detected", tone: "muted", fraction: null };
-  if (bad > 0) {
-    const bits: string[] = [];
-    if ((board.flux?.notReady ?? 0) > 0) bits.push(`${board.flux?.notReady} flux`);
-    if ((board.argo?.broken ?? 0) > 0) bits.push(`${board.argo?.broken} argo`);
-    return { label: "gitops", value: `${bits.join(" / ")} bad`, tone: "warning", fraction: total > 0 ? Math.max(0.12, 1 - bad / total) : 0.55 };
+function healthSignals(m: ClusterAttention): Signal[] {
+  if (m.ended) return [{ label: "health", value: healthReading(m)[0], tone: "muted", fraction: null }];
+  if (mastReading(m).state === "checking") return [{ label: "health", value: "checking…", tone: "muted", fraction: null }];
+  const out: Signal[] = [];
+  const w = toolValue(m, "workloads", "");
+  out.push(w ? { label: "workloads", value: w.value, tone: worst(w.tones), fraction: null, title: w.title } : { label: "workloads", value: "checking…", tone: "muted", fraction: null });
+  const flux = toolValue(m, "flux", "flux ");
+  const argo = toolValue(m, "argo", "argo ");
+  const tools = [flux, argo].filter((x): x is NonNullable<typeof x> => !!x);
+  out.push(tools.length > 0
+    ? { label: "gitops", value: tools.map((t) => t.value).join(" · "), tone: worst(tools.flatMap((t) => t.tones)), fraction: null, title: tools.map((t) => t.title).join("; ") }
+    : { label: "gitops", value: "not detected", tone: "muted", fraction: null });
+  const gw = toolValue(m, "gateway", "");
+  out.push(gw ? { label: "gateway", value: gw.value, tone: worst(gw.tones), fraction: null, title: gw.title } : { label: "gateway", value: "not detected", tone: "muted", fraction: null });
+  // other areas needing attention, by name (evidence is never attention)
+  const others = m.areas.filter((a) => !["workloads", "flux", "argo", "gateway"].includes(a.id) && a.state === "attention");
+  if (others.length > 0) {
+    out.push({ label: "also", value: others.map((a) => `${a.label} - ${(a.controller?.state === "not ready" ? ["controller not ready"] : []).concat(shown(a).filter((l) => l.state === "attention").map((l) => lineOf(a, l))).join(" · ")}`).join("; "),
+      tone: others.some((a) => a.tone === "danger") ? "danger" : "warning", fraction: null });
   }
-  const bits: string[] = [];
-  if (board.flux) bits.push(`flux ${board.flux.total} ready`);
-  if (board.argo) bits.push(`argo ${board.argo.total} synced`);
-  return { label: "gitops", value: bits.join(" · "), tone: "success", fraction: 1 };
-}
-
-function gatewaySignal(c: ClusterDTO, board: FleetBoardEntry | undefined): Signal {
-  const g = board?.gateway;
-  if (!g) {
-    if (c.networkTier === "Absent") return { label: "gateway", value: "not detected", tone: "muted", fraction: null };
-    if (c.networkTier && c.networkTier !== "Healthy") return { label: "gateway", value: c.networkTier.toLowerCase(), tone: "warning", fraction: 0.58, title: c.networkReason };
-    return { label: "gateway", value: "ready", tone: "success", fraction: 1 };
-  }
-  if (!g.served) return { label: "gateway", value: "not served", tone: "muted", fraction: null };
-  if (g.unprogrammed > 0) {
-    return { label: "gateway", value: `${g.unprogrammed} pending`, tone: "warning", fraction: 0.58 };
-  }
-  if ((g.brokenRoutes ?? 0) > 0) {
-    return { label: "gateway", value: `${g.brokenRoutes} bad routes`, tone: "warning", fraction: g.routes && g.routes > 0 ? Math.max(0.12, 1 - (g.brokenRoutes ?? 0) / g.routes) : 0.5 };
-  }
-  if (g.routes != null) return { label: "gateway", value: `${g.routes} routes`, tone: "success", fraction: 1 };
-  return { label: "gateway", value: `${g.gateways} gateways`, tone: "success", fraction: 1 };
+  // every expected area's coverage, lit or not (§4): named, never quiet
+  const gaps = [
+    ...m.areas.filter((a) => a.gap).map((a) => `${a.label}: ${[
+      ...(a.controller?.state === "unknown" ? ["controller health unknown"] : []),
+      ...a.lines.filter((l) => l.state === "checking" || l.state === "unreadable" || l.gaps.length > 0)
+        .map((l) => `${a.lines.length > 1 ? `${l.label} ` : ""}${l.state === "checking" || l.state === "unreadable" ? l.text : l.gaps.join(", ")}`),
+    ].join("; ")}`),
+    ...m.notCovered.map((u) => `${u.label}: ${u.capability === "present" ? "not covered by the summary" : "capability not yet known"}`),
+  ];
+  if (gaps.length > 0) out.push({ label: "unverified", value: gaps.join(" · "), tone: "muted", fraction: null, title: gaps.join("\n") });
+  return out;
 }
 
 function meshSignal(graph: MeshGraphDTO | null, cluster: string): Signal {
@@ -276,37 +281,25 @@ function freshnessSignal(c: ClusterDTO): Signal {
   return { label: "connection", value: c.state.toLowerCase(), tone: "muted", fraction: null };
 }
 
-// cardBadge names workload attention as exactly that - it is not a
-// whole-cluster fault total (other domains are their own signal rows).
-// No "healthy" badge: connection alone never asserts health.
-function cardBadge(_c: ClusterDTO, board: FleetBoardEntry | undefined, signals: Signal[]): { label: string; tone: Tone } | null {
-  const w = board?.workloads;
-  if (w && w.counts.attention > 0) return { label: `${w.counts.attention} workload attention`, tone: attentionTone(w.counts) ?? "warning" };
-  const warning = signals.find((s) => s.tone === "warning");
-  if (warning) return { label: `${warning.label}: ${warning.value}`, tone: "warning" };
-  return null;
+// cardBadge counts AREAS needing attention - never objects, never a
+// whole-cluster sum. No "healthy" badge: nothing here asserts health.
+function cardBadge(m: ClusterAttention): { label: string; tone: Tone } | null {
+  if (m.ended) return null;
+  const r = mastReading(m);
+  if (r.state !== "attention") return null;
+  return { label: `${r.areas} area${r.areas === 1 ? "" : "s"} need${r.areas === 1 ? "s" : ""} attention`, tone: r.tone ?? "warning" };
 }
 
-function cardRail(c: ClusterDTO, board: FleetBoardEntry | undefined, signals: Signal[]): Tone {
-  const w = board?.workloads;
-  if (w && w.counts.attention > 0) return attentionTone(w.counts) ?? "warning";
-  if (c.state === "Stale" || c.state === "Degraded" || signals.some((s) => s.tone === "warning")) return "warning";
-  return "muted";
-}
-
-function diagnosticReason(c: ClusterDTO, board: FleetBoardEntry | undefined, signals: Signal[]): string {
-  const attention = boardAttention(board) ?? 0;
-  if (c.protected && attention > 0) return "first because a protected cluster has workloads needing attention";
-  if (attention > 0) return "raised because workloads need attention";
+// diagnosticReason says why the card sits where it does - what is known,
+// never "healthy" on missing or partial evidence.
+function diagnosticReason(c: ClusterDTO, m: ClusterAttention): string {
+  const r = mastReading(m);
+  if (m.ended) return healthReading(m)[0];
+  if (r.state === "attention") return `raised because ${r.areas} area${r.areas === 1 ? "" : "s"} need${r.areas === 1 ? "s" : ""} attention`;
   if (c.state === "Stale") return "raised because cluster watches are stale";
   if (c.state === "Degraded") return c.reason || "raised because cluster capability health is degraded";
-  if ((board?.flux?.notReady ?? 0) > 0 || (board?.argo?.broken ?? 0) > 0) return "raised because GitOps needs attention";
-  if (signals.some((s) => s.label === "gateway" && s.tone === "warning")) return "raised because Gateway API needs attention";
-  if (c.nodesReady < c.nodesTotal) return "raised because node readiness is below target";
-  // Say what is known - never "healthy" on missing or partial evidence.
-  const w = board?.workloads;
-  if (!w) return "workload health unreadable";
-  if (w.coverage !== "complete" || w.counts.unknown > 0) return "workload health partly unverified";
+  if (r.state === "checking") return "health checking…";
+  if (healthGaps(m)) return "health partly unverified";
   return "nothing raised";
 }
 

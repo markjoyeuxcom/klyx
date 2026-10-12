@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { HealthLike, VerdictObservation } from "../health/verdict";
+import type { HealthLike } from "../health/verdict";
 
 export type ClusterDTO = {
   name: string;
@@ -87,19 +87,6 @@ export type ForwardDTO = {
   status: string; // "active" | "broken"
 };
 
-// FleetBoardEntry enriches one fleet card with health-board rows. Fields stay
-// nullable so a failed read says unreadable instead of fabricating a zero.
-export type FleetBoardEntry = {
-  cpuFraction: number | null;
-  memFraction: number | null;
-  // WORKLOAD verdict counts (internal/health) for the whole cluster, with the
-  // coverage of the read behind them. null = the read failed (unreadable).
-  // This is workload attention only - never a whole-cluster fault total.
-  workloads: VerdictObservation | null;
-  flux: { total: number; notReady: number } | null;
-  argo: { total: number; broken: number } | null;
-  gateway?: { served: boolean; gateways: number; routes: number | null; brokenRoutes: number | null; unprogrammed: number } | null;
-};
 
 export type ArgoConditionDTO = { type: string; message: string };
 export type ArgoResourceDTO = { group: string; kind: string; namespace: string; name: string; status: string; health: string };
@@ -957,8 +944,6 @@ type FleetState = {
   openSettings: () => void;
   newContexts: number;
   setNewContexts: (n: number) => void;
-  fleetBoard: Record<string, FleetBoardEntry>;
-  setFleetBoardEntry: (cluster: string, e: FleetBoardEntry) => void;
   openCluster: (name: string) => void;
   setSection: (s: ClusterSection) => void;
   openArgo: (mode?: ArgoViewMode) => void;
@@ -1111,8 +1096,6 @@ export const useFleet = create<FleetState>((set) => ({
   openSettings: () => set({ route: { name: "settings" } }),
   newContexts: 0,
   setNewContexts: (newContexts) => set({ newContexts }),
-  fleetBoard: {},
-  setFleetBoardEntry: (cluster, e) => set((s) => ({ fleetBoard: { ...s.fleetBoard, [cluster]: e } })),
   openCluster: (name) => set({ route: { name: "cluster", cluster: name, section: "overview" } }),
   setSection: (section) =>
     set((s) => (s.route.name === "cluster" ? { route: { name: "cluster", cluster: s.route.cluster, section } } : {})),

@@ -16,9 +16,11 @@ vi.mock("../../bindings/github.com/moomora/klyx/internal/appbridge/index.js", ()
   HelmService: { ListHelmReleases: spy("ListHelmReleases") },
   GitOpsService: { GetGitOpsSummary: spy("GetGitOpsSummary") },
   ArgoService: { ListApplications: spy("ListApplications") },
+  GatewayService: { ListGateways: spy("ListGateways"), GetGatewayTopology: spy("GetGatewayTopology") },
+  MetricsService: { GetClusterMetrics: spy("GetClusterMetrics") },
 }));
+vi.mock("../bridge/mesh", () => ({ getMeshGraph: vi.fn(async () => {}) }));
 vi.mock("../bridge/healthRows", () => ({ startSummaries: vi.fn() }));
-vi.mock("../bridge/fleetboard", () => ({ fetchFleetBoard: vi.fn(async () => {}) }));
 vi.mock("../bridge/metrics", () => ({ getClusterMetrics: vi.fn(), getClusterSparklines: vi.fn(async () => ({ available: false, cpu: [], mem: [] })) }));
 vi.mock("../bridge/events", () => ({ fetchEventsSnapshot: vi.fn(async () => ({ namespaces: [], events: [] })) }));
 vi.mock("../bridge/crd", () => ({ listInstancePage: vi.fn(async () => ({ items: [], nextToken: "" })) }));
@@ -32,6 +34,8 @@ import { core, summary } from "../test/healthFixtures";
 import { TopBar } from "../chrome/TopBar";
 import { NavBand } from "../chrome/NavBand";
 import { Overview } from "../cluster/Overview";
+import { FleetView } from "../fleet/FleetView";
+import { FleetSpine } from "../chrome/FleetSpine";
 
 const c = { name: "dev", state: "Synced", reason: "", nodesReady: 1, nodesTotal: 1, pods: 1, version: "v1", gitopsTier: "Absent", gitopsReason: "",
   networkTier: "Absent", networkReason: "", env: "", region: "", provider: "", group: "", ageSeconds: 0 } as ClusterDTO;
@@ -50,3 +54,14 @@ describe("no attention fan-out on cluster entry", () => {
     expect(calls).toEqual([]);
   });
 });
+
+describe("no health fan-out on the fleet board (slice 5)", () => {
+  it("the board, its cards and the spine read summaries and call no list endpoint", async () => {
+    useFleet.setState({ clusters: [c, { ...c, name: "prd" }], route: { name: "fleet" }, mesh: null });
+    applySummary(summary(core(), {}, "dev"));
+    render(<><FleetSpine /><FleetView /></>);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(calls).toEqual([]);
+  });
+});
+

@@ -18,7 +18,7 @@ const cluster = (name: string, state = "Synced", reason = ""): ClusterDTO => ({
 
 describe("FleetSpine", () => {
   beforeEach(() => {
-    useFleet.setState({ clusters: [], fleetBoard: {}, route: { name: "fleet" } });
+    useFleet.setState({ clusters: [], route: { name: "fleet" } });
     resetHealthStore();
     localStorage.removeItem("klyx-spine-expanded");
   });
@@ -147,7 +147,7 @@ describe("spineCodes", () => {
   });
 
   it("a connected cluster without complete workload evidence is never green", () => {
-    useFleet.setState({ clusters: [cluster("dev")], fleetBoard: {} });
+    useFleet.setState({ clusters: [cluster("dev")] });
     const { getByLabelText } = render(<FleetSpine />);
     const lamp = getByLabelText("cluster dev").querySelector("span") as HTMLElement;
     expect(lamp.style.background).not.toContain("success");

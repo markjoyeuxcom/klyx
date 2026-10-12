@@ -6,30 +6,20 @@ import { LensLayout } from "../layout/LensLayout";
 import { ClusterCard, clusterDiagnosticScore } from "./ClusterCard";
 import { MeshStrip } from "./MeshStrip";
 import { getMeshGraph } from "../bridge/mesh";
-import { fetchFleetBoard } from "../bridge/fleetboard";
 import { fleetMeters, useFleetAttention } from "../nav/fleetAttention";
 
 export function FleetView() {
   const clusters = useFleet((s) => s.clusters);
   const mesh = useFleet((s) => s.mesh);
-  const fleetBoard = useFleet((s) => s.fleetBoard);
+  // Each cluster's health is its summary (health 1c slice 5): the board
+  // fetches no health of its own.
   const models = useFleetAttention();
-  // Board enrichment fetches once per set of CONNECTED clusters (a cluster
-  // coming online re-triggers); per-card fields degrade independently.
-  const connectedKey = clusters
-    .filter((c) => c.state !== "Failed" && c.state !== "Unconnected")
-    .map((c) => c.name)
-    .join(",");
   useEffect(() => {
     getMeshGraph().catch((e) => console.error("getMeshGraph", e));
   }, []);
-  useEffect(() => {
-    if (connectedKey === "") return;
-    void fetchFleetBoard(connectedKey.split(","));
-  }, [connectedKey]);
 
   const orderedClusters = [...clusters].sort((a, b) => {
-    const score = clusterDiagnosticScore(b, fleetBoard[b.name]) - clusterDiagnosticScore(a, fleetBoard[a.name]);
+    const score = clusterDiagnosticScore(b, models[b.name]) - clusterDiagnosticScore(a, models[a.name]);
     if (score !== 0) return score;
     return a.name.localeCompare(b.name);
   });

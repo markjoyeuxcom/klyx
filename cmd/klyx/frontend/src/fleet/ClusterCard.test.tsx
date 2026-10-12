@@ -1,8 +1,11 @@
 import { beforeEach, describe, it, expect } from "vitest";
 import { render, screen } from "@testing-library/react";
-import { ClusterCard } from "./ClusterCard";
+import { ClusterCard, clusterDiagnosticScore } from "./ClusterCard";
 import type { ClusterDTO } from "../store/fleet";
 import { useFleet } from "../store/fleet";
+import { useHealth, resetHealthStore, applySummary, applyRows, addSub, openStarted, openSucceeded, dueForBootstrap } from "../store/health";
+import { core, dep, evidence, kind, native, replace, summary, task, verdict } from "../test/healthFixtures";
+import { clusterAttention } from "../nav/clusterAttention";
 
 const base: ClusterDTO = {
   name: "plt-sea-prd-we-aks-01", state: "Synced", reason: "",
@@ -12,7 +15,8 @@ const base: ClusterDTO = {
 };
 
 beforeEach(() => {
-  useFleet.setState({ fleetBoard: {}, mesh: null, route: { name: "fleet" } });
+  useFleet.setState({ mesh: null, route: { name: "fleet" } });
+  resetHealthStore();
 });
 
 describe("ClusterCard", () => {
@@ -87,25 +91,79 @@ it("shows 'mesh enabled, no peers' for an installed-but-peerless cluster", () =>
   expect(getByText("no peers")).toBeTruthy();
 });
 
-describe("ClusterCard fleet board", () => {
-  // --- Fleet board enrichment ---
+// Health 1c slice 5 §4: the card's health lines come from the cluster's
+// attention model - each area in its own vocabulary, never summed; every
+// expected area's coverage named; per-line provenance; nothing green.
+describe("ClusterCard health from the cluster's summary", () => {
+  const N = base.name;
+  const seed = (tasks = core(), over: Parameters<typeof summary>[1] = {}) => applySummary(summary(tasks, over, N));
+  const flux = (recFault = 0) => task("flux", [native("reconciliations", { fault: recFault, ok: 4 }, recFault, "not ready", [kind("kustomizations")]), native("sources", { ok: 2 }, 0, "not ready", [kind("gitrepositories")])]);
+  const argo = (fault = 0, sets = true) => task("argo", [native("applications", { fault, ok: 5 }, fault, "need attention", [kind("applications")]),
+    ...(sets ? [native("applicationsets", { ok: 1 }, 0, "not healthy", [kind("applicationsets")])] : [])]);
+  const row = (label: string) => screen.getByText(label).nextElementSibling as HTMLElement;
 
-  it("renders the gitops line in each tool's vocabulary when board data exists", () => {
-    useFleet.setState({ fleetBoard: { [base.name]: { cpuFraction: 0.62, memFraction: 0.81, workloads: { counts: { total: 142, fault: 0, degraded: 0, unknown: 0, progressing: 0, paused: 0, ok: 142, attention: 0 }, coverage: "complete" }, flux: { total: 47, notReady: 0 }, argo: { total: 6, broken: 0 }, gateway: { served: true, gateways: 2, routes: 18, brokenRoutes: 0, unprogrammed: 0 } } } });
-    const { getByText } = render(<ClusterCard c={base} />);
-    expect(getByText("142 · none need attention")).toBeTruthy();
-    expect(getByText("flux 47 ready · argo 6 synced")).toBeTruthy();
-    expect(getByText("18 routes")).toBeTruthy();
-    expect(getByText("connected")).toBeTruthy();
+  it("each tool in its own vocabulary, never summed; quiet is neutral, never green", () => {
+    seed([...core(), flux(2), argo(1)]);
+    const { container } = render(<ClusterCard c={{ ...base, fluxPresent: true, argoPresent: true }} />);
+    expect(row("workloads").textContent).toBe("none need attention");
+    expect(row("gitops").textContent).toBe("flux reconciliations 2 not ready · argo applications 1 need attention");
+    expect(row("gateway").textContent).toBe("not detected");
+    expect(screen.getByText("2 areas need attention")).toBeTruthy(); // areas, never objects
+    expect(container.innerHTML).not.toMatch(/color-text-success/);
+    expect(screen.getByText(/raised because 2 areas need attention · summary as of /)).toBeTruthy();
   });
 
-  it("workload attention shows a count with its entity, never hidden", () => {
-    useFleet.setState({ fleetBoard: { [base.name]: { cpuFraction: null, memFraction: null, workloads: { counts: { total: 10, fault: 3, degraded: 0, unknown: 0, progressing: 0, paused: 0, ok: 7, attention: 3 }, coverage: "complete" }, flux: null, argo: null, gateway: { served: false, gateways: 0, routes: null, brokenRoutes: null, unprogrammed: 0 } } } });
-    const { getByText } = render(<ClusterCard c={base} />);
-    expect(getByText("3 of 10 need attention")).toBeTruthy();
-    expect(getByText("3 workload attention")).toBeTruthy(); // badge names its entity, never "critical"
-    expect(getByText("not detected")).toBeTruthy(); // no GitOps tools detected never implies healthy
-    expect(getByText(/raised because workloads/i)).toBeTruthy();
+  it("every expected area's coverage is named, lit or not: unreadable Certificates beside quiet workloads, unknown NodeClaims, a missing Argo part", () => {
+    seed([...core(),
+      task("certs", [native("certificates", {}, 0, "not ready", [kind("certificates", { coverage: "unreadable", class: "forbidden" })], { coverage: "unreadable" }), native("issuers", { ok: 1 }, 0, "not ready", [kind("issuers")])]),
+      task("karpenter", [native("nodeclaims", { unknown: 1, ok: 3 }, 0, "failing", [kind("nodeclaims")]), native("nodepools", { ok: 1 }, 0, "not ready", [kind("nodepools")])]),
+      argo(0, false)]);
+    render(<ClusterCard c={{ ...base, certManagerPresent: true, karpenterPresent: true, argoPresent: true }} />);
+    expect(row("workloads").textContent).toBe("none need attention");
+    const gaps = row("unverified").textContent ?? "";
+    expect(gaps).toContain("Certificates: Certificates could not be read (forbidden)");
+    expect(gaps).toContain("Karpenter: NodeClaims 1 unknown");
+    expect(gaps).toContain("Argo CD: ApplicationSets: not covered by the summary");
+    expect(screen.getByText(/health partly unverified/)).toBeTruthy();
+  });
+
+  it("'not detected' only for a confirmed absence; an expected tool the summary leaves out is not covered", () => {
+    seed(core());
+    render(<ClusterCard c={{ ...base, fluxPresent: false, argoPresent: true }} />);
+    expect(row("gitops").textContent).toBe("argo not covered");
+  });
+
+  it("other areas needing attention are listed by name; evidence never counts", () => {
+    seed(replace(replace(core(), task("nodes", [verdict("nodes", { degraded: 1, ok: 2 }, [kind("nodes")])])), task("events", [evidence(40, [kind("events")])])));
+    render(<ClusterCard c={base} />);
+    expect(row("also").textContent).toBe("Nodes - 1 need attention");
+    expect(screen.getByText("1 area needs attention")).toBeTruthy();
+  });
+
+  it("checking before anything answers; ended after a Final - never counts", () => {
+    const r1 = render(<ClusterCard c={base} />);
+    expect(row("health").textContent).toBe("checking…");
+    r1.unmount();
+    seed();
+    seed([], { seq: 2, final: true, evaluatedAt: "2026-10-12T12:05:00Z" });
+    render(<ClusterCard c={base} />);
+    expect(row("health").textContent).toMatch(/^observation ended at /);
+  });
+
+  it("a line's title is its own provenance, on both sides of A4 - never a row count with the summary's time", () => {
+    seed(core(), { evaluatedAt: "2026-10-12T12:00:00Z" });
+    addSub("w", N, "workloads", "workloads"); openStarted("w", "t"); openSucceeded("w", "t", 1);
+    applyRows("w", { cluster: N, incarnation: 1, task: "workloads", evaluatedAt: "2026-10-12T12:00:03Z", rows: [], full: true,
+      part: { ...verdict("workloads", { fault: 1, ok: 2 }, [kind("deployments")]), ver: 3, obs: 3 } }, 0);
+    applySummary(summary(replace(core(), task("workloads", [{ ...verdict("workloads", { fault: 2, ok: 1 }, [kind("deployments")]), ver: 6, obs: 6 }])), { seq: 2 }, N), 100);
+    const r1 = render(<ClusterCard c={base} />);
+    expect(row("workloads").textContent).toBe("1 need attention"); // the rows, held
+    expect(row("workloads").parentElement?.title).toMatch(/Workloads lens rows as of .* - updating/);
+    r1.unmount();
+    dueForBootstrap(1200);
+    render(<ClusterCard c={base} />);
+    expect(row("workloads").textContent).toBe("2 need attention"); // the summary's, refreshing
+    expect(row("workloads").parentElement?.title).toMatch(/cluster summary as of .* - refreshing/);
   });
 
   it("an unreachable cluster renders as a ghost stating reason and recovery", () => {
@@ -117,17 +175,15 @@ describe("ClusterCard fleet board", () => {
     expect(queryByText(/nodes/)).toBeNull(); // no fabricated stats
   });
 
-  it("an unreadable workload read is never a zero", () => {
-    useFleet.setState({ fleetBoard: { [base.name]: { cpuFraction: null, memFraction: null, workloads: null, flux: null, argo: null } } });
-    const { getAllByText, queryByText } = render(<ClusterCard c={base} />);
-    expect(getAllByText("unreadable").length).toBeGreaterThan(0);
-    expect(queryByText(/healthy/)).toBeNull();
-  });
-
-  it("a capped workload read is labelled partial", () => {
-    useFleet.setState({ fleetBoard: { [base.name]: { cpuFraction: null, memFraction: null, workloads: { counts: { total: 10, fault: 0, degraded: 1, unknown: 0, progressing: 0, paused: 0, ok: 9, attention: 1 }, coverage: "partial" }, flux: null, argo: null } } });
-    const { getByText } = render(<ClusterCard c={base} />);
-    expect(getByText("1 of 10 need attention (partial)")).toBeTruthy();
+  it("ordering bands come from the model: unreachable, danger, warning, connection, gaps, quiet", () => {
+    const score = (name: string, state = "Synced") => clusterDiagnosticScore({ ...base, name, state }, clusterAttention(useHealth.getState(), name, { ...base, name, state }));
+    applySummary(summary(replace(core(), task("workloads", [verdict("workloads", { fault: 1 }, [kind("deployments")])])), {}, "d"));
+    applySummary(summary(replace(core(), task("nodes", [verdict("nodes", { degraded: 1 }, [kind("nodes")])])), {}, "w"));
+    applySummary(summary(replace(core(), task("pods", [verdict("pods", { ok: 1 }, [kind("pods"), dep("replicasets", { coverage: "unreadable" })])])), {}, "g"));
+    applySummary(summary(core(), {}, "q")); applySummary(summary(core(), {}, "s"));
+    const order = [score("u", "Failed"), score("d"), score("w"), score("s", "Stale"), score("g"), score("q")];
+    expect([...order].sort((a, b) => b - a)).toEqual(order);
+    expect(new Set(order).size).toBe(order.length);
   });
 });
 

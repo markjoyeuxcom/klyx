@@ -1,9 +1,8 @@
 import { useEffect, useState } from "react";
 import { useFleet, podsText } from "../store/fleet";
-import type { ClusterDTO, EventRowDTO, FleetBoardEntry, MetricsDTO, ResourceRef } from "../store/fleet";
+import type { ClusterDTO, EventRowDTO, MetricsDTO, ResourceRef } from "../store/fleet";
 import { getClusterMetrics, getClusterSparklines } from "../bridge/metrics";
 import type { SparklinesDTO } from "../bridge/metrics";
-import { fetchFleetBoard } from "../bridge/fleetboard";
 import { Sparkline } from "../chrome/Sparkline";
 import { UpdatedAt } from "../chrome/Age";
 import { listInstancePage } from "../bridge/crd";
@@ -17,7 +16,6 @@ import { lineText, mastReading, provenance, type Area, type ClusterAttention, ty
 import { useAttentionModel } from "../nav/useAttentionModel";
 import { reveal, selectsOnReveal } from "../nav/reveal";
 
-type BoardEntry = FleetBoardEntry | undefined;
 
 // Overview on the workspace template (redesign step 7e). Its attention
 // section reads the cluster's attention model (health 1c slice 4) - the same
@@ -32,13 +30,11 @@ export function Overview({ c }: { c: ClusterDTO }) {
   // the current incarnation's summary: the namespace count and its time
   // (the store keeps only that one - a newer incarnation and a Final drop it)
   const summary = useHealth((s) => s.summaries[c.name]);
-  const board = useFleet((s) => s.fleetBoard[c.name]);
   // 30m cluster utilisation sparklines — fetched once per mount, local state.
   const [spark, setSpark] = useState<SparklinesDTO | null>(null);
 
   useEffect(() => {
     getClusterMetrics(c.name, false);
-    void fetchFleetBoard([c.name]);
     let cancelled = false;
     getClusterSparklines(c.name).then((dto) => {
       if (!cancelled) setSpark(dto);
@@ -53,9 +49,8 @@ export function Overview({ c }: { c: ClusterDTO }) {
   const m: MetricsDTO | null = metrics.cluster === c.name ? metrics.dto : null;
   const stateTone = c.state === "Failed" ? "var(--color-text-danger)" : c.state === "Synced" ? "var(--color-text-secondary)" : "var(--color-text-warning)";
   // the attention is pushed (the summary and lens rows); a refresh re-reads
-  // what is still fetched here
+  // what is still fetched here - the metrics
   const refresh = () => {
-    void fetchFleetBoard([c.name]);
     getClusterMetrics(c.name, true);
   };
 
@@ -91,9 +86,9 @@ export function Overview({ c }: { c: ClusterDTO }) {
                 <span>nodes</span><span>{c.nodesReady}/{c.nodesTotal} ready</span>
                 <span>pods</span><span>{podsText(c)}</span>
                 <span>namespaces</span><span>{summary?.namespaces != null ? summary.namespaces : "—"}</span>
-                <span>flux</span><span>{fluxFact(c, model)}</span>
-                {board?.argo && <><span>argo cd</span><span>{board.argo.broken > 0 ? `${board.argo.broken} of ${board.argo.total} need attention` : `${board.argo.total} applications`}</span></>}
-                <span>gateway</span><span>{gatewayCapability(c, board)}</span>
+                <span>flux</span><span>{toolFact(model, "flux", c.fluxPresent)}</span>
+                <span>argo cd</span><span>{toolFact(model, "argo", c.argoPresent)}</span>
+                <span>gateway</span><span>{toolFact(model, "gateway", !!c.gatewayAPIVersion)}</span>
               </div>
             </section>
             <section aria-label="Resources" className="ov-section">
@@ -409,22 +404,20 @@ function formatAge(seconds: number): string {
   return `${Math.floor(seconds / 3600)}h ago`;
 }
 
-// fluxFact: the Flux reconciliations line of the attention model.
-function fluxFact(c: ClusterDTO, m: ClusterAttention | null): string {
-  const l = m?.areas.find((a) => a.id === "flux")?.lines.find((x) => x.part === "reconciliations");
-  if (l) return lineText(l);
-  if (m?.notCovered.some((u) => u.task === "flux")) return "installed · not covered by the summary";
-  return c.fluxPresent ? "checking…" : "not detected";
+// toolFact: a tool's reading from the attention model (health 1c slice 5
+// §5) - its lines in its own vocabulary, "not covered", "checking…", or
+// "not detected" only on confirmed absence.
+function toolFact(m: ClusterAttention | null, task: string, present: boolean | undefined): string {
+  const a = m?.areas.find((x) => x.id === task);
+  if (a) {
+    const lines = a.lines.map((l) => `${a.lines.length > 1 ? `${l.label.toLowerCase()} ` : ""}${lineText(l)}`);
+    const ctl = a.controller ? [`controller ${a.controller.state}`] : [];
+    return [...ctl, ...lines].join(" · ");
+  }
+  if (m?.notCovered.some((u) => u.task === task)) return "installed · not covered by the summary";
+  return present ? "checking…" : "not detected";
 }
 
-function gatewayCapability(c: ClusterDTO, board: BoardEntry): string {
-  const g = board?.gateway;
-  if (!g) return c.networkTier + (c.networkReason ? ` - ${c.networkReason}` : "");
-  if (!g.served) return "not served";
-  const issues = (g.brokenRoutes ?? 0) + g.unprogrammed;
-  if (issues > 0) return `${issues} issues · ${g.routes ?? "?"} routes`;
-  return g.routes != null ? `${g.routes} routes` : `${g.gateways} gateways`;
-}
 function Usage({ frac }: { frac: number | null }) {
   if (frac == null) return <span style={{ color: "var(--color-text-tertiary)" }}>—</span>;
   const pct = Math.max(0, Math.round(frac * 100));

@@ -10,7 +10,6 @@ vi.mock("../bridge/metrics", () => ({
   getClusterSparklines: vi.fn().mockResolvedValue({ available: false, message: "metrics unavailable", cpu: [], mem: [] }),
 }));
 vi.mock("../bridge/healthRows", () => ({ startSummaries: vi.fn() }));
-vi.mock("../bridge/fleetboard", () => ({ fetchFleetBoard: vi.fn().mockResolvedValue(undefined) }));
 vi.mock("../bridge/events", () => ({ fetchEventsSnapshot: vi.fn().mockResolvedValue({ namespaces: [], events: [] }) }));
 const listInstancePage = vi.fn();
 vi.mock("../bridge/crd", () => ({ listInstancePage: (...a: unknown[]) => listInstancePage(...a) }));
