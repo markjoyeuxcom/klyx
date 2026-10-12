@@ -35,6 +35,9 @@ type RowsDTO struct {
 	// Facts the evaluation used (for workloads, fluxPresent), from the same
 	// capture as the rows - never read from a later summary (§2a).
 	Facts map[string]any `json:"facts,omitempty"`
+	// EmittedAtMs is set only while the §6a lab trace is on: the emit time,
+	// so the webview probe can time a push from emit to store commit.
+	EmittedAtMs int64 `json:"emittedAtMs,omitempty"`
 }
 
 // rowsConverter turns a part's evaluated rows into its lens DTOs. It copies

@@ -83,7 +83,13 @@ export function PodsView({ cluster }: { cluster: string }) {
 
   const [cursor, setCursor] = useState(-1);
   const [unknownOnly, setUnknownOnly] = useState(false);
-  const [logsTarget, setLogsTarget] = useState<LogsTarget | null>(null);
+  // The logs dock is pinned to the cluster it was opened on: it renders only
+  // there, closes on a cluster change, and a late pop-out never closes a
+  // later dock - DEV/STG/PRD share namespace/name.
+  const [logsPinned, setLogsPinned] = useState<(LogsTarget & { cluster: string }) | null>(null);
+  const setLogsTarget = useCallback((t: LogsTarget | null) => setLogsPinned(t ? { ...t, cluster } : null), [cluster]);
+  const logsTarget = logsPinned && logsPinned.cluster === cluster ? logsPinned : null;
+  useEffect(() => { setLogsPinned((cur) => (cur && cur.cluster !== cluster ? null : cur)); }, [cluster]);
   const [bulk, setBulk] = useState<Set<string>>(new Set());
   // the bulk delete is pinned to the pod OBJECTS it was confirmed for
   const [bulkConfirm, setBulkConfirm] = useState<PodTarget[] | null>(null);
@@ -240,7 +246,7 @@ export function PodsView({ cluster }: { cluster: string }) {
   const logsFor = useCallback((idx: number) => {
     const p = filtered[idx];
     if (p) setLogsTarget({ namespace: p.namespace, name: p.name, containers: p.containers });
-  }, [filtered]);
+  }, [filtered, setLogsTarget]);
   const toggleBulk = useCallback((key: string) => {
     setBulk((prev) => { const next = new Set(prev); if (next.has(key)) next.delete(key); else next.add(key); return next; });
   }, []);
@@ -491,12 +497,14 @@ export function PodsView({ cluster }: { cluster: string }) {
 
       {logsTarget && (
         <LogsDock
-          cluster={cluster}
+          cluster={logsTarget.cluster}
           target={logsTarget}
           onClose={() => setLogsTarget(null)}
           onPopOut={async (container) => {
-            const ok = await openLogsWindow(cluster, logsTarget.namespace, logsTarget.name, container);
-            if (ok) setLogsTarget(null);
+            const t = logsTarget; // rendered only on its own cluster
+            const ok = await openLogsWindow(t.cluster, t.namespace, t.name, container);
+            // close only the dock that popped out, never a later one
+            if (ok) setLogsPinned((cur) => (cur === t ? null : cur));
           }}
         />
       )}

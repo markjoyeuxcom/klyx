@@ -21,12 +21,21 @@ vi.mock("../bridge/exec", () => ({
 }));
 vi.mock("../bridge/configsvc", () => ({ armProtected: vi.fn(async () => ({ ok: true, error: "" })) }));
 vi.mock("../bridge/crd", () => ({ copyText: vi.fn(async () => {}) }));
-vi.mock("./LogsPane", () => ({ LogsPane: () => null }));
+// every render's target is recorded: a log stream must never start against
+// another cluster, not even for one render
+const logsRenders: string[] = [];
+vi.mock("./LogsPane", () => ({
+  LogsPane: ({ cluster, pod }: { cluster: string; pod: { namespace: string; name: string } }) => {
+    logsRenders.push(`${cluster}:${pod.namespace}/${pod.name}`);
+    return <div data-testid="logs-pane">{`${cluster}:${pod.namespace}/${pod.name}`}</div>;
+  },
+}));
 vi.mock("../../bindings/github.com/moomora/klyx/internal/appbridge/index.js", () => ({}));
 vi.mock("@wailsio/runtime", () => ({ Events: { On: vi.fn(() => () => {}) } }));
 import { openPodDetail, deletePod } from "../bridge/pods";
 import { rolloutRestart } from "../bridge/workloads";
 import { openDebugTerminal } from "../bridge/exec";
+import { openLogsWindow } from "../bridge/windows";
 import { PodsView } from "./PodsView";
 import { _resetPodRowsForTest } from "../health/usePodRows";
 import { resetHealthStore, addSub, openStarted, openSucceeded, applyRows, applySummary, dueForBootstrap, bootstrapSettled, useHealth, type HealthPart, type HealthSummary, type KindCoverage, type RowsDTO } from "../store/health";
@@ -337,5 +346,37 @@ describe("verbs are pinned to the armed pod and owner", () => {
     push(2, [pod("a", "ok", { uid: "uid-a-2" })]);
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(deletePod).not.toHaveBeenCalled();
+  });
+});
+
+// Codex review of 2ec1168: the logs dock is pinned to the cluster it was
+// opened on - DEV/STG/PRD share namespace/name.
+describe("the logs dock is pinned to its cluster", () => {
+  it("a cluster switch closes it - never one render against the other cluster - and coming back does not reopen it", () => {
+    logsRenders.length = 0;
+    seed([pod("a")]);
+    const { rerender } = render(<PodsView cluster="x" />);
+    fireEvent.click(screen.getByRole("button", { name: "logs for app/a" }));
+    expect(screen.getByTestId("logs-pane").textContent).toBe("x:app/a");
+    const before = logsRenders.length;
+    rerender(<PodsView cluster="y" />);
+    expect(screen.queryByTestId("logs-dock")).toBeNull();
+    // the dock is not rendered on y's page at all, not even for one render
+    expect(logsRenders.slice(before)).toEqual([]);
+    rerender(<PodsView cluster="x" />);
+    expect(screen.queryByTestId("logs-dock")).toBeNull();
+  });
+
+  it("pop-out opens the dock's own cluster, and a late completion never closes a later dock", async () => {
+    seed([pod("a"), pod("b")]);
+    render(<PodsView cluster="x" />);
+    fireEvent.click(screen.getByRole("button", { name: "logs for app/a" }));
+    let done!: (ok: boolean) => void;
+    vi.mocked(openLogsWindow).mockReturnValueOnce(new Promise((r) => { done = r; }));
+    fireEvent.click(screen.getByRole("button", { name: "open logs in window" }));
+    expect(openLogsWindow).toHaveBeenCalledWith("x", "app", "a", expect.any(String));
+    fireEvent.click(screen.getByRole("button", { name: "logs for app/b" })); // a later dock
+    await act(async () => { done(true); });
+    expect(screen.getByTestId("logs-pane").textContent).toBe("x:app/b");
   });
 });

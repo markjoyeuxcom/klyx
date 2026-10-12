@@ -32,7 +32,10 @@ func (h *HealthSink) Summary(s observe.Summary) { h.em.Emit(HealthSummaryEvent, 
 // no lens reads yet has no converter and is not emitted.
 func (h *HealthSink) Rows(r observe.Rows) {
 	if dto, ok := toRowsDTO(r); ok {
-		h.trace.record(dto)
+		if h.trace != nil {
+			dto.EmittedAtMs = time.Now().UnixMilli()
+			h.trace.record(dto)
+		}
 		h.em.Emit(HealthRowsEventPrefix+r.Cluster+":"+r.Task+"/"+r.Part.ID, dto)
 	}
 }
@@ -82,6 +85,22 @@ type HealthService struct {
 
 func NewHealthService(observers func() []*observe.Observer) *HealthService {
 	return &HealthService{observers: observers, rows: newRowsRegistry()}
+}
+
+// LabReport appends the §6a webview probe's report beside the rows trace
+// (KLYX_ROWS_TRACE + ".probe"), so a lab run reads the webview's numbers
+// without the screen. A no-op unless the lab trace is on.
+func (s *HealthService) LabReport(text string) {
+	path := os.Getenv("KLYX_ROWS_TRACE")
+	if path == "" {
+		return
+	}
+	f, err := os.OpenFile(path+".probe", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return
+	}
+	_, _ = fmt.Fprintf(f, "--- %s\n%s\n", time.Now().Format(time.RFC3339), text)
+	_ = f.Close()
 }
 
 // Summaries returns the latest summary of every running cluster Observer.

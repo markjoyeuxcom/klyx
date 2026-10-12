@@ -25,7 +25,7 @@ export type HealthSummary = {
   cluster: string; incarnation: number; seq: number; evaluatedAt: string; connection: string;
   namespaces?: number; tasks: HealthTask[]; final?: boolean;
 };
-export type RowsDTO<T = unknown> = { cluster: string; incarnation: number; task: string; part: HealthPart; evaluatedAt: string; rows: T[] | null; facts?: Record<string, unknown> };
+export type RowsDTO<T = unknown> = { cluster: string; incarnation: number; task: string; part: HealthPart; evaluatedAt: string; rows: T[] | null; facts?: Record<string, unknown>; emittedAtMs?: number };
 
 // A4: how long a summary may be ahead of the on-screen rows before the
 // counts switch to the summary and the rows are qualified (spec §4).

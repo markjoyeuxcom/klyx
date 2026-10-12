@@ -730,3 +730,20 @@ func TestRowsTraceRecordsPayloadSizes(t *testing.T) {
 		t.Fatalf("trace line: %q, want suffix %q", got, want)
 	}
 }
+
+// The probe's report lands beside the trace, and nowhere without it.
+func TestLabReportOnlyWithTheTrace(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("KLYX_ROWS_TRACE", "")
+	(&HealthService{}).LabReport("ignored")
+	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
+		t.Fatal("no trace, no report")
+	}
+	path := filepath.Join(dir, "rows.trace")
+	t.Setenv("KLYX_ROWS_TRACE", path)
+	(&HealthService{}).LabReport("pods/pods pushes 3")
+	got, err := os.ReadFile(path + ".probe")
+	if err != nil || !strings.Contains(string(got), "pods/pods pushes 3") {
+		t.Fatalf("report: %q %v", got, err)
+	}
+}

@@ -19,7 +19,7 @@ let summariesStarted = false;
 // perfHooks is the §6a lab probe's seam (app/perfProbe, compiled in only with
 // VITE_KLYX_PERF=1): unset in every normal build, so a rows push costs one
 // property read.
-export const perfHooks: { rows?: (key: string, start: number, end: number, rows: unknown[] | null) => void } = {};
+export const perfHooks: { rows?: (key: string, start: number, end: number, dto: RowsDTO | null, receivedAtMs: number) => void } = {};
 
 // startSummaries subscribes to every cluster's summary, then bootstraps.
 // Idempotent: the first caller starts it for the app's lifetime.
@@ -53,9 +53,10 @@ export function openRows(cluster: string, task: string, part: string): () => voi
   addSub(handle, cluster, task, part);
   const off = Events.On(rowsEvent(cluster, task, part), (ev: { data: RowsDTO }) => {
     const probe = perfHooks.rows;
+    const receivedAtMs = probe ? Date.now() : 0;
     const start = probe ? performance.now() : 0;
     if (ev?.data && applyRows(handle, ev.data)) service();
-    if (probe) probe(`${task}/${part}`, start, performance.now(), ev?.data?.rows ?? null);
+    if (probe) probe(`${task}/${part}`, start, performance.now(), ev?.data ?? null, receivedAtMs);
   });
   reopen(handle);
   return () => {
