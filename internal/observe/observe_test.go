@@ -891,6 +891,14 @@ func TestWatchListStreamErrorsAfterTheBarrierAreRecorded(t *testing.T) {
 	src.put("b", nil) // the same stream now carries ordinary events
 	h.eventually(h.partIs("things", "cms", func(p Part) bool { return p.Counts.Total == 2 }), "events after the barrier")
 	forbidden := apierrors.NewForbidden(schema.GroupResource{Resource: "cms"}, "", errors.New("rbac revoked"))
+	// The reflector's retry is held - its watch-list falls back to a list
+	// that never answers - so the only error the part can show is the one on
+	// the reused stream, and a retry that succeeded before the next summary
+	// cannot hide it on a slow runner.
+	src.mu.Lock()
+	src.wlErr = apierrors.NewBadRequest("watch-list is not supported")
+	src.listGate = make(chan struct{})
+	src.mu.Unlock()
 	src.liveWatcher().Error(&forbidden.ErrStatus)
 	h.eventually(h.partIs("things", "cms", func(p Part) bool {
 		return p.Coverage == Stale && kindOf(p).Class == ClassForbidden
