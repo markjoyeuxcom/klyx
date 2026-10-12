@@ -16,9 +16,6 @@ const argoTimeout = 30 * time.Second
 // (1c slice 3 §5.4); AppProjects stay a fetch. The verbs write only the armed
 // Application (uid): a same-name replacement is refused (design §5b).
 type ArgoConn interface {
-	// ListArgoApps serves ListApplications, which bridge/attention.ts and
-	// bridge/fleetboard.ts still call (they move in slices 4-5, §6).
-	ListArgoApps(ctx context.Context) ([]argo.App, error)
 	ListArgoProjects(ctx context.Context) ([]argo.Project, error)
 	RefreshArgoApp(ctx context.Context, namespace, name, uid string) error
 	SyncArgoApp(ctx context.Context, namespace, name, uid string, opts argo.SyncOptions) error
@@ -133,18 +130,6 @@ type ArgoAppDTO struct {
 	Rule RuleDTO `json:"rule"`
 }
 
-// Result DTOs distinguish absence from failure: Available=false with no
-// Error means the kind is not served (Argo not installed); a non-empty Error
-// means the read failed (not connected, RBAC, timeout) and availability is
-// unknown - the lens must keep the last good read or say "could not be read",
-// never "not installed". Message stays populated for older callers.
-type ArgoResultDTO struct {
-	Available bool         `json:"available"`
-	Message   string       `json:"message,omitempty"`
-	Error     string       `json:"error,omitempty"`
-	Apps      []ArgoAppDTO `json:"apps"`
-}
-
 type ArgoProjectsResultDTO struct {
 	Available bool             `json:"available"`
 	Message   string           `json:"message,omitempty"`
@@ -163,29 +148,6 @@ type ArgoService struct {
 
 func NewArgoService(lookup func(string) (ArgoConn, bool)) *ArgoService {
 	return &ArgoService{lookup: lookup}
-}
-
-// ListApplications returns every Application on the cluster, broken-first,
-// for the attention strip and the fleet board (the lens reads the rows).
-func (s *ArgoService) ListApplications(cluster string) ArgoResultDTO {
-	conn, ok := s.lookup(cluster)
-	if !ok {
-		return ArgoResultDTO{Message: "cluster not connected: " + cluster, Error: "cluster not connected: " + cluster, Apps: []ArgoAppDTO{}}
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), argoTimeout)
-	defer cancel()
-	apps, err := conn.ListArgoApps(ctx)
-	if err != nil {
-		if apierrors.IsNotFound(err) {
-			return ArgoResultDTO{Message: "Argo CD not detected (no applications.argoproj.io resource)", Apps: []ArgoAppDTO{}}
-		}
-		return ArgoResultDTO{Message: err.Error(), Error: err.Error(), Apps: []ArgoAppDTO{}}
-	}
-	out := make([]ArgoAppDTO, 0, len(apps))
-	for _, a := range apps {
-		out = append(out, toArgoAppDTO(a))
-	}
-	return ArgoResultDTO{Available: true, Apps: out}
 }
 
 func (s *ArgoService) ListProjects(cluster string) ArgoProjectsResultDTO {

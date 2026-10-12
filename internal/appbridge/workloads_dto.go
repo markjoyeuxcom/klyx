@@ -142,19 +142,3 @@ type WorkloadCompareDTO struct {
 	OwnerRevisionNote string `json:"ownerRevisionNote,omitempty"`
 	Error             string `json:"error"`
 }
-
-type WorkloadsResultDTO struct {
-	FluxPresent bool          `json:"fluxPresent"`
-	Namespaces  []string      `json:"namespaces"` // populated only when namespace==""
-	Workloads   []WorkloadDTO `json:"workloads"`
-	// Truncated: a list hit the server cap, so these rows are an incomplete
-	// (pre-ranking) slice - the UI must tell the user to scope by namespace for
-	// complete broken-first triage, never imply this is the whole picture.
-	Truncated bool `json:"truncated,omitempty"`
-	// Error is set when the read FAILED (cluster not connected, list/get
-	// error). The collections stay empty-but-non-nil, so a caller that ignores
-	// it still cannot crash - but an error must never read as "nothing found":
-	// the triage tape and Overview treat a source with Error as unreadable,
-	// not quiet (review 2026-10-03 #10).
-	Error string `json:"error,omitempty"`
-}

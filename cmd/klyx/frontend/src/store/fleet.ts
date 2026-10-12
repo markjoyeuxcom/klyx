@@ -119,9 +119,7 @@ export type ArgoAppDTO = {
 };
 // error set = the read failed (availability unknown); available=false with no
 // error = the kind is not served. Never render a failed read as "not installed".
-export type ArgoResultDTO = { available: boolean; message?: string; error?: string; apps: ArgoAppDTO[] };
 export type ArgoProjectsResultDTO = { available: boolean; message?: string; error?: string; projects: ArgoProjectDTO[] };
-export type ArgoApplicationSetsResultDTO = { available: boolean; message?: string; error?: string; applicationSets: ArgoApplicationSetDTO[] };
 
 export type ConditionDTO = { type: string; status: string; reason: string; message: string; scope?: string };
 export type InventoryEntryDTO = { group: string; version: string; kind: string; namespace: string; name: string };
@@ -423,9 +421,6 @@ export type ExpiryScanResultDTO = { items: ExpiryItemDTO[]; warnings: string[]; 
 export type WorkloadUsageDTO = { cpuUsage: number | null; memUsage: number | null };
 export type WorkloadMetricsStatusDTO = { available: boolean; message: string; updatedAt: string };
 export type WorkloadMetricsResultDTO = { status: WorkloadMetricsStatusDTO; usage: Record<string, WorkloadUsageDTO> };
-// error: the read FAILED (cluster not connected, forbidden, timeout). Rows are
-// then empty - never "nothing found" (review 2026-10-03 #10).
-export type WorkloadsResultDTO = { fluxPresent: boolean; namespaces: string[]; workloads: WorkloadDTO[]; truncated?: boolean; error?: string };
 export const WORKLOAD_KINDS = ["Deployment", "StatefulSet", "DaemonSet"] as const;
 export type WorkloadKind = typeof WORKLOAD_KINDS[number];
 export type WorkloadsSlice = {
@@ -482,7 +477,6 @@ export type NodeUtilizationResultDTO = { available: boolean; message?: string; u
 export type ContainerUsageDTO = { container: string; cpu: number | null; mem: number | null };
 export type PodUsageResultDTO = { available: boolean; message?: string; updatedAtUnix: number; items: ContainerUsageDTO[] };
 export type PodSummaryDTO = { namespace: string; name: string; uid?: string; gvr?: string; generation?: number; createdUnix?: number; ready: boolean; phase: string; reason: string; rank: "unhealthy"|"degraded"|"restarts"|"healthy"; restarts: number; node: string; ip: string; ownerKind: string; ownerName: string; ownerUid?: string; ageSeconds: number; containers: ContainerSummaryDTO[]; health?: HealthLike };
-export type PodsResultDTO = { namespaces: string[]; pods: PodSummaryDTO[]; truncated?: boolean; error?: string };
 // A pod on the rows transport (1c slice 3 addendum §3.2): bounded and
 // time-stable - no relative age (ticked from createdUnix), no legacy
 // rank/reason/phase. The verdict message and each container's image, ports,
@@ -703,7 +697,6 @@ export type GatewayRefDTO = { rule: RuleDTO; uid?: string; gvr?: string; namespa
 // every attachment. The topology stays the route's data path.
 export type GatewayRouteAttachmentDTO = { parent: string; rule: RuleDTO };
 export type GatewayRouteRowDTO = { uid?: string; gvr?: string; generation?: number; namespace: string; name: string; parent: string; rule: RuleDTO; attachments: GatewayRouteAttachmentDTO[] };
-export type GatewayListDTO = { gatewayAPIServed: boolean; gateways: GatewayRefDTO[]; error?: string };
 export type PolicyDetailDTO = { key: string; value: string };
 export type PolicyRefDTO = { kind: string; namespace: string; name: string; targetKind: string; targetNamespace: string; targetName: string; targetSectionName: string; summary: string; details: PolicyDetailDTO[]; inferred: boolean; match: string };
 export type CertificateRefDTO = { group: string; kind: string; namespace: string; name: string };
@@ -755,7 +748,6 @@ export type NodeSummaryDTO = { name: string; uid?: string; gvr?: string; generat
 // A node on the rows transport: time-stable, so never a relative age (the
 // lens ticks it from createdUnix; addendum §3.1).
 export type NodeRowDTO = Omit<NodeSummaryDTO, "ageSeconds">;
-export type NodesResultDTO = { nodes: NodeSummaryDTO[]; error?: string };
 export type NodeTaintDTO = { key: string; value: string; effect: string };
 export type PodOnNodeDTO = { namespace: string; name: string; phase: string };
 export type NodeDetailDTO = { summary: NodeSummaryDTO; labels: Record<string, string>; annotations?: Record<string, string>; taints: NodeTaintDTO[]; conditions: ConditionDTO[]; events: EventDTO[]; yaml: string; podsOnNode: PodOnNodeDTO[]; asOfUnix?: number; error?: string };
@@ -1069,12 +1061,8 @@ type FleetState = {
   clearNodes: () => void;
   helm: HelmSlice;
   argo: ArgoSlice;
-  setArgoLoading: (cluster: string) => void;
-  setArgo: (cluster: string, r: ArgoResultDTO) => void;
   setArgoProjectsLoading: (cluster: string) => void;
   setArgoProjects: (cluster: string, r: ArgoProjectsResultDTO) => void;
-  setArgoApplicationSetsLoading: (cluster: string) => void;
-  setArgoApplicationSets: (cluster: string, r: ArgoApplicationSetsResultDTO) => void;
   setArgoVisit: (cluster: string) => void;
   setArgoFromRows: (cluster: string, p: ArgoRowsPayload) => void;
   toggleArgoExpand: (key: string) => void;
@@ -1407,23 +1395,11 @@ export const useFleet = create<FleetState>((set) => ({
   },
   // A different cluster starts empty: B's lens must never show A's rows while
   // B's first read is in flight.
-  setArgoLoading: (cluster) => set((s) => ({ argo: { ...(s.argo.cluster === cluster ? s.argo : { ...s.argo, ...ARGO_EMPTY_ROWS }), cluster, loading: true } })),
-  setArgo: (cluster, r) => set((s) => ({ argo: r.error
-    // failed read: keep this cluster's last good rows, record the failure
-    ? (() => { const keep = s.argo.cluster === cluster ? s.argo.apps : [];
-        // legacy readers key off available/message: with nothing kept, say why
-        return { ...s.argo, cluster, apps: keep, error: r.error, loading: false, ...(keep.length === 0 ? { available: false, message: r.error } : {}) }; })()
-    : { ...s.argo, cluster, apps: r.apps ?? [], available: r.available, message: r.message ?? "", error: null, loading: false } })),
   setArgoProjectsLoading: (cluster) => set((s) => ({ argo: { ...(s.argo.cluster === cluster ? s.argo : { ...s.argo, ...ARGO_EMPTY_ROWS }), cluster, projectsLoading: true } })),
   setArgoProjects: (cluster, r) => set((s) => ({ argo: r.error
     ? (() => { const keep = s.argo.cluster === cluster ? s.argo.projects : [];
         return { ...s.argo, cluster, projects: keep, projectsError: r.error, projectsLoading: false, ...(keep.length === 0 ? { projectsAvailable: false, projectsMessage: r.error } : {}) }; })()
     : { ...s.argo, cluster, projects: r.projects ?? [], projectsAvailable: r.available, projectsMessage: r.message ?? "", projectsError: null, projectsLoading: false } })),
-  setArgoApplicationSetsLoading: (cluster) => set((s) => ({ argo: { ...(s.argo.cluster === cluster ? s.argo : { ...s.argo, ...ARGO_EMPTY_ROWS }), cluster, applicationSetsLoading: true } })),
-  setArgoApplicationSets: (cluster, r) => set((s) => ({ argo: r.error
-    ? (() => { const keep = s.argo.cluster === cluster ? s.argo.applicationSets : [];
-        return { ...s.argo, cluster, applicationSets: keep, applicationSetsError: r.error, applicationSetsLoading: false, ...(keep.length === 0 ? { applicationSetsAvailable: false, applicationSetsMessage: r.error } : {}) }; })()
-    : { ...s.argo, cluster, applicationSets: r.applicationSets ?? [], applicationSetsAvailable: r.available, applicationSetsMessage: r.message ?? "", applicationSetsError: null, applicationSetsLoading: false } })),
   // A rows visit: a different cluster starts empty; the row lists load.
   setArgoVisit: (cluster) => set((s) => ({ argo: { ...(s.argo.cluster === cluster ? s.argo : { ...s.argo, ...ARGO_EMPTY_ROWS, expanded: [] }), cluster, loading: true, applicationSetsLoading: true, coverage: undefined, rowsState: undefined, partCounts: undefined } })),
   setArgoFromRows: (cluster, p) => set((s) => ({ argo: { ...s.argo, cluster, ...p } })),

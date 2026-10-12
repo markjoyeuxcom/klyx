@@ -126,30 +126,6 @@ func TestGetGatewayTopologyUnresolvedBackendWarns(t *testing.T) {
 	}
 }
 
-func TestListGatewaysServedFlag(t *testing.T) {
-	dyn := seedGW(t, map[schema.GroupVersionResource][]*unstructured.Unstructured{
-		gwGVR(): {gw("eg", "infra")},
-	})
-	typed := typedfake.NewSimpleClientset()
-	c := NewClusterConn("x", typed, nil, dyn, nil, clock.Real{}, config.MetricsConfig{})
-
-	refs, served, err := c.ListGateways(context.Background())
-	if err != nil {
-		t.Fatalf("list: %v", err)
-	}
-	// The fake discovery has no Gateway API group, so served is false (fallback path).
-	_ = served
-	if len(refs) != 1 || refs[0].Name != "eg" || !refs[0].Programmed {
-		t.Fatalf("refs: %+v", refs)
-	}
-	if len(refs[0].Addresses) != 1 || refs[0].Addresses[0].Value != "192.0.2.10" {
-		t.Fatalf("addresses: %+v", refs[0].Addresses)
-	}
-	if len(refs[0].Listeners) != 1 || refs[0].Listeners[0].Port != 80 {
-		t.Fatalf("listeners: %+v", refs[0].Listeners)
-	}
-}
-
 // hrBackends builds an HTTPRoute with an arbitrary ordered list of backendRefs,
 // each a {kind, name} pair, so a route can mix non-Service and Service kinds.
 func hrBackends(name, ns, gwName, gwNS string, backends []map[string]interface{}) *unstructured.Unstructured {

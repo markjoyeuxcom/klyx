@@ -1,16 +1,12 @@
 package appbridge
 
 import (
-	"context"
-	"errors"
 	"testing"
 	"time"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
-	"github.com/moomora/klyx/internal/fluxcli"
 	"github.com/moomora/klyx/internal/gitops/flux"
-	"github.com/moomora/klyx/internal/workloads"
 )
 
 func TestToDetailDTOApplyFailed(t *testing.T) {
@@ -63,84 +59,6 @@ func TestToDetailDTOReasonAndDependsOn(t *testing.T) {
 	}
 	if len(dto.DependsOn) != 2 || dto.DependsOn[1].Namespace != "data" || dto.DependsOn[1].Name != "db" {
 		t.Fatalf("dependsOn: %+v", dto.DependsOn)
-	}
-}
-
-// ---- GetGitOpsSummary tests -----------------------------------------------
-
-type fakeGitOpsSummaryConn struct {
-	present   bool
-	total     int
-	notReady  int
-	suspended int
-	err       error
-}
-
-func (f *fakeGitOpsSummaryConn) FluxObject(context.Context, string, string, string) (*unstructured.Unstructured, error) {
-	return nil, errors.New("not used")
-}
-func (f *fakeGitOpsSummaryConn) Reconcile(ctx context.Context, kind, ns, name, uid string) error {
-	return nil
-}
-func (f *fakeGitOpsSummaryConn) ReconcileWithSource(ctx context.Context, kind, ns, name, uid string) error {
-	return nil
-}
-func (f *fakeGitOpsSummaryConn) FluxEvents(ctx context.Context, kind, ns, name string) ([]workloads.EventSummary, error) {
-	return nil, nil
-}
-func (f *fakeGitOpsSummaryConn) FluxAvailable() bool { return false }
-func (f *fakeGitOpsSummaryConn) FluxDiffKustomization(ctx context.Context, ns, name, path string) (fluxcli.DiffResult, error) {
-	return fluxcli.DiffResult{}, nil
-}
-func (f *fakeGitOpsSummaryConn) SetSuspend(ctx context.Context, kind, ns, name, uid string, suspend bool) error {
-	return nil
-}
-func (f *fakeGitOpsSummaryConn) GitOpsSummaryFlux(ctx context.Context) (bool, int, int, int, error) {
-	return f.present, f.total, f.notReady, f.suspended, f.err
-}
-
-func newSummarySvc(conn GitOpsConn) *GitOpsService {
-	lookup := func(name string) (GitOpsConn, bool) {
-		if name == "x" {
-			return conn, true
-		}
-		return nil, false
-	}
-	return NewGitOpsService(lookup, time.Now)
-}
-
-func TestGetGitOpsSummaryMissIsEmpty(t *testing.T) {
-	svc := newSummarySvc(&fakeGitOpsSummaryConn{present: true, total: 5})
-	dto := svc.GetGitOpsSummary("ghost") // unknown cluster
-	if dto.FluxPresent || dto.Total != 0 {
-		t.Fatalf("want zero DTO for unknown cluster, got %+v", dto)
-	}
-}
-
-func TestGetGitOpsSummaryMapsValues(t *testing.T) {
-	conn := &fakeGitOpsSummaryConn{present: true, total: 3, notReady: 1, suspended: 1}
-	svc := newSummarySvc(conn)
-	dto := svc.GetGitOpsSummary("x")
-	if !dto.FluxPresent || dto.Total != 3 || dto.NotReady != 1 || dto.Suspended != 1 {
-		t.Fatalf("mapping wrong: %+v", dto)
-	}
-}
-
-func TestGetGitOpsSummaryAbsentFlux(t *testing.T) {
-	conn := &fakeGitOpsSummaryConn{present: false}
-	svc := newSummarySvc(conn)
-	dto := svc.GetGitOpsSummary("x")
-	if dto.FluxPresent {
-		t.Fatalf("want FluxPresent=false when flux absent, got %+v", dto)
-	}
-}
-
-func TestGetGitOpsSummaryErrorIsEmpty(t *testing.T) {
-	conn := &fakeGitOpsSummaryConn{present: true, err: errors.New("forbidden")}
-	svc := newSummarySvc(conn)
-	dto := svc.GetGitOpsSummary("x")
-	if dto.FluxPresent || dto.Total != 0 {
-		t.Fatalf("want zero DTO on error, got %+v", dto)
 	}
 }
 

@@ -13,10 +13,6 @@ import (
 )
 
 type fakeWLConn struct {
-	wl              []workloads.Workload
-	listErr         error
-	flux            bool
-	truncated       bool
 	rolloutErr      error
 	lastRestartKind string
 	scaleErr        error
@@ -47,10 +43,6 @@ func (f *fakeWLConn) RolloutPause(_ context.Context, _, _, uid string, pause boo
 	return nil
 }
 
-func (f *fakeWLConn) ListWorkloads(context.Context, string) ([]workloads.Workload, bool, bool, error) {
-	return f.wl, f.flux, f.truncated, f.listErr
-}
-
 func (f *fakeWLConn) WorkloadCompare(context.Context, string, string, string) (fleet.WorkloadCompareInfo, error) {
 	return f.compareInfo, f.compareErr
 }
@@ -75,56 +67,21 @@ func (f *fakeWLConn) WatchDirty(context.Context, string, []string, func(), func(
 	return func() {}, nil
 }
 
-func TestListWorkloadsDTO(t *testing.T) {
-	t.Run("cluster miss -> empty non-nil", func(t *testing.T) {
-		s := NewWorkloadsService(func(string) (WorkloadsConn, bool) { return nil, false })
-		dto := s.ListWorkloads("nope", "")
-		if dto.Workloads == nil || dto.Namespaces == nil {
-			t.Fatal("slices must be non-nil")
-		}
-	})
-	t.Run("maps + namespaces on all-load + rank string + flux", func(t *testing.T) {
-		conn := &fakeWLConn{flux: true, wl: []workloads.Workload{
-			{Kind: "Deployment", Namespace: "b", Name: "x", Desired: 1, Ready: 0, Rank: workloads.Unhealthy, Reason: "CrashLoopBackOff",
-				GitOps: &workloads.Owner{Kind: "Kustomization", Namespace: "flux-system", Name: "x"},
-				Pods:   []workloads.Pod{{Name: "x-1", Ready: false, Restarts: 5, Reason: "CrashLoopBackOff", Node: "n1", AgeSeconds: 30}}},
-			{Kind: "DaemonSet", Namespace: "a", Name: "y", Desired: 3, Ready: 3, Rank: workloads.Healthy},
-		}}
-		s := NewWorkloadsService(func(string) (WorkloadsConn, bool) { return conn, true })
-
-		all := s.ListWorkloads("c", "")
-		if !all.FluxPresent {
-			t.Fatal("want FluxPresent true")
-		}
-		if len(all.Workloads) != 2 || all.Workloads[0].Rank != "unhealthy" {
-			t.Fatalf("workloads: %+v", all.Workloads)
-		}
-		if all.Workloads[0].GitOps == nil || all.Workloads[0].GitOps.Name != "x" {
-			t.Fatalf("owner: %+v", all.Workloads[0].GitOps)
-		}
-		if len(all.Workloads[0].Pods) != 1 || all.Workloads[0].Pods[0].AgeSeconds != 30 {
-			t.Fatalf("pods: %+v", all.Workloads[0].Pods)
-		}
-		// Namespaces populated (sorted distinct) ONLY on all-load.
-		if len(all.Namespaces) != 2 || all.Namespaces[0] != "a" || all.Namespaces[1] != "b" {
-			t.Fatalf("namespaces: %+v", all.Namespaces)
-		}
-		scoped := s.ListWorkloads("c", "b")
-		if len(scoped.Namespaces) != 0 {
-			t.Fatalf("scoped namespaces should be empty, got %+v", scoped.Namespaces)
-		}
-	})
-	t.Run("truncated flag propagates", func(t *testing.T) {
-		conn := &fakeWLConn{truncated: true}
-		s := NewWorkloadsService(func(string) (WorkloadsConn, bool) { return conn, true })
-		if dto := s.ListWorkloads("c", ""); !dto.Truncated {
-			t.Fatalf("truncated must propagate, got %+v", dto)
-		}
-		conn.truncated = false
-		if dto := s.ListWorkloads("c", ""); dto.Truncated {
-			t.Fatal("non-truncated list must not set Truncated")
-		}
-	})
+// The workload converter (the rows transport uses it): rank string, GitOps
+// owner and the nested pods.
+func TestToWorkloadDTO(t *testing.T) {
+	w := toWorkloadDTO(workloads.Workload{Kind: "Deployment", Namespace: "b", Name: "x", Desired: 1, Ready: 0, Rank: workloads.Unhealthy, Reason: "CrashLoopBackOff",
+		GitOps: &workloads.Owner{Kind: "Kustomization", Namespace: "flux-system", Name: "x"},
+		Pods:   []workloads.Pod{{Name: "x-1", Ready: false, Restarts: 5, Reason: "CrashLoopBackOff", Node: "n1", AgeSeconds: 30}}})
+	if w.Rank != "unhealthy" {
+		t.Fatalf("rank: %+v", w)
+	}
+	if w.GitOps == nil || w.GitOps.Name != "x" {
+		t.Fatalf("owner: %+v", w.GitOps)
+	}
+	if len(w.Pods) != 1 || w.Pods[0].AgeSeconds != 30 {
+		t.Fatalf("pods: %+v", w.Pods)
+	}
 }
 
 func TestWorkloadCompareMapsToDTO(t *testing.T) {

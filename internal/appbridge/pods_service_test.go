@@ -2,8 +2,6 @@ package appbridge
 
 import (
 	"context"
-	"errors"
-	"strings"
 	"testing"
 	"time"
 
@@ -14,19 +12,12 @@ import (
 
 // fakePodConn satisfies PodsConn without importing the real fleet.ClusterConn.
 type fakePodConn struct {
-	pods      []workloads.PodSummary
-	truncated bool
-	listErr   error
 	detail    fleet.PodDetail
 	detErr    error
 	deleteErr error
 	deleted   []string // records "<namespace>/<name>" for assertion
 	launched  string   // records "<name>|<image>" for assertion
 	launchTTL int64
-}
-
-func (f *fakePodConn) ListPods(_ context.Context, _ string) ([]workloads.PodSummary, bool, error) {
-	return f.pods, f.truncated, f.listErr
 }
 
 func (f *fakePodConn) LaunchDiagnosticPod(_ context.Context, name, image string, ttl int64) fleet.AdhocResult {
@@ -48,35 +39,10 @@ func (f *fakePodConn) WatchDirty(context.Context, string, []string, func(), func
 	return func() {}, nil
 }
 
-// --- ListPods tests ---
+// --- converter tests ---
 
-func TestPodsService_ClusterMiss_NonNilEmpties(t *testing.T) {
-	svc := NewPodsService(func(string) (PodsConn, bool) { return nil, false })
-	dto := svc.ListPods("nope", "")
-	if dto.Pods == nil || dto.Namespaces == nil {
-		t.Fatal("slices must be non-nil on cluster miss")
-	}
-	if len(dto.Pods) != 0 || len(dto.Namespaces) != 0 {
-		t.Fatalf("want empty slices, got pods=%d ns=%d", len(dto.Pods), len(dto.Namespaces))
-	}
-	if !strings.Contains(dto.Error, "not connected") {
-		t.Errorf("a cluster miss must carry Error, got %q", dto.Error)
-	}
-}
-
-func TestPodsService_Truncated(t *testing.T) {
-	conn := &fakePodConn{pods: []workloads.PodSummary{{Namespace: "a", Name: "p", Rank: workloads.Healthy}}, truncated: true}
-	svc := NewPodsService(func(string) (PodsConn, bool) { return conn, true })
-	if dto := svc.ListPods("c", ""); !dto.Truncated {
-		t.Fatalf("truncated must propagate to the DTO, got %+v", dto)
-	}
-	conn.truncated = false
-	if dto := svc.ListPods("c", ""); dto.Truncated {
-		t.Fatal("non-truncated list must not set Truncated")
-	}
-}
-
-func TestPodsService_ListPods_MappingAndRankString(t *testing.T) {
+// The pod summary converter (the UID-fenced detail uses it).
+func TestToPodSummaryDTO_MappingAndRankString(t *testing.T) {
 	pods := []workloads.PodSummary{
 		{
 			Namespace: "b", Name: "crash", Ready: false,
@@ -99,13 +65,7 @@ func TestPodsService_ListPods_MappingAndRankString(t *testing.T) {
 			},
 		},
 	}
-	conn := &fakePodConn{pods: pods}
-	svc := NewPodsService(func(string) (PodsConn, bool) { return conn, true })
-
-	all := svc.ListPods("c", "")
-	if len(all.Pods) != 2 {
-		t.Fatalf("want 2 pods, got %d", len(all.Pods))
-	}
+	all := struct{ Pods []PodSummaryDTO }{Pods: []PodSummaryDTO{toPodSummaryDTO(pods[0]), toPodSummaryDTO(pods[1])}}
 	// Rank as string.
 	if all.Pods[0].Rank != "unhealthy" {
 		t.Errorf("rank[0]: got %q, want unhealthy", all.Pods[0].Rank)
@@ -126,16 +86,6 @@ func TestPodsService_ListPods_MappingAndRankString(t *testing.T) {
 	}
 	if c := p.Containers[0]; c.LastReason != "OOMKilled" || c.LastExitCode != 137 || c.LastFinishedUnix != 1_700_000_000 {
 		t.Errorf("last termination not mapped: %+v", c)
-	}
-
-	// Namespaces populated (sorted distinct) only on all-ns.
-	if len(all.Namespaces) != 2 || all.Namespaces[0] != "a" || all.Namespaces[1] != "b" {
-		t.Errorf("namespaces all-load: %+v", all.Namespaces)
-	}
-
-	scoped := svc.ListPods("c", "b")
-	if len(scoped.Namespaces) != 0 {
-		t.Errorf("scoped: namespaces must be empty, got %+v", scoped.Namespaces)
 	}
 }
 
@@ -242,43 +192,10 @@ func TestPodsService_DeletePod_ErrorSurfaced(t *testing.T) {
 	}
 }
 
-// Review 2026-10-03 #10: every request/response list carries Error when the
-// read fails, so the Overview and triage tape can mark the source unreadable
-// instead of counting zero problems.
-func TestListReads_FailureCarriesError(t *testing.T) {
-	boom := errors.New("pods is forbidden: User cannot list resource")
-
-	pods := NewPodsService(func(string) (PodsConn, bool) { return &fakePodConn{listErr: boom}, true }).ListPods("c", "")
-	if pods.Error != boom.Error() || pods.Pods == nil {
-		t.Errorf("ListPods: error=%q pods-nil=%v", pods.Error, pods.Pods == nil)
-	}
-	wl := NewWorkloadsService(func(string) (WorkloadsConn, bool) { return &fakeWLConn{listErr: boom}, true }).ListWorkloads("c", "")
-	if wl.Error != boom.Error() || wl.Workloads == nil {
-		t.Errorf("ListWorkloads: error=%q workloads-nil=%v", wl.Error, wl.Workloads == nil)
-	}
-	nodes := NewNodesService(func(string) (NodesConn, bool) { return &fakeNodeConn{listErr: boom}, true }).ListNodes("c")
-	if nodes.Error != boom.Error() || nodes.Nodes == nil {
-		t.Errorf("ListNodes: error=%q nodes-nil=%v", nodes.Error, nodes.Nodes == nil)
-	}
-	// Cluster misses say so too.
-	if r := NewNodesService(func(string) (NodesConn, bool) { return nil, false }).ListNodes("gone"); !strings.Contains(r.Error, "not connected") {
-		t.Errorf("ListNodes cluster miss: %q", r.Error)
-	}
-	if r := NewWorkloadsService(func(string) (WorkloadsConn, bool) { return nil, false }).ListWorkloads("gone", ""); !strings.Contains(r.Error, "not connected") {
-		t.Errorf("ListWorkloads cluster miss: %q", r.Error)
-	}
-	// A successful empty list carries no error: quiet is only claimed from data.
-	if r := NewPodsService(func(string) (PodsConn, bool) { return &fakePodConn{}, true }).ListPods("c", ""); r.Error != "" {
-		t.Errorf("successful empty list must not carry an error: %q", r.Error)
-	}
-}
-
 // A pod row names the pod object and its owner object: the lens arms a
 // delete with the pod UID and an owner restart with the owner UID (§5b).
-func TestPodsService_ListPods_CarriesPodAndOwnerIdentity(t *testing.T) {
-	conn := &fakePodConn{pods: []workloads.PodSummary{{Namespace: "prod", Name: "web-abc", UID: "uid-pod", OwnerKind: "Deployment", OwnerName: "web", OwnerUID: "uid-web"}}}
-	svc := NewPodsService(func(string) (PodsConn, bool) { return conn, true })
-	p := svc.ListPods("c", "").Pods[0]
+func TestToPodSummaryDTO_CarriesPodAndOwnerIdentity(t *testing.T) {
+	p := toPodSummaryDTO(workloads.PodSummary{Namespace: "prod", Name: "web-abc", UID: "uid-pod", OwnerKind: "Deployment", OwnerName: "web", OwnerUID: "uid-web"})
 	if p.UID != "uid-pod" || p.OwnerUID != "uid-web" {
 		t.Fatalf("pod row identity: uid=%q ownerUid=%q", p.UID, p.OwnerUID)
 	}

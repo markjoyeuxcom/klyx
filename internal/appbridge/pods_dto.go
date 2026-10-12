@@ -91,24 +91,6 @@ type PodRowContainerDTO struct {
 
 func (r PodRowDTO) rowUID() string { return r.UID }
 
-// PodsResultDTO is the response from ListPods.
-type PodsResultDTO struct {
-	// Namespaces is the sorted distinct set of pod namespaces. Populated ONLY
-	// when namespace=="" (all-namespaces load); empty slice otherwise.
-	Namespaces []string        `json:"namespaces"`
-	Pods       []PodSummaryDTO `json:"pods"`
-	// Truncated: the list hit the server cap, so the rows are an incomplete
-	// (pre-ranking) slice - the UI must tell the user to scope by namespace for
-	// complete broken-first triage, never imply this is the whole picture.
-	Truncated bool `json:"truncated,omitempty"`
-	// Error is set when the read FAILED (cluster not connected, list/get
-	// error). The collections stay empty-but-non-nil, so a caller that ignores
-	// it still cannot crash - but an error must never read as "nothing found":
-	// the triage tape and Overview treat a source with Error as unreadable,
-	// not quiet (review 2026-10-03 #10).
-	Error string `json:"error,omitempty"`
-}
-
 // PodDetailDTO is the full per-pod detail view.
 type PodDetailDTO struct {
 	Summary        PodSummaryDTO     `json:"summary"`

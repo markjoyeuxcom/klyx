@@ -60,14 +60,8 @@ func (f *fakeConn) SetSuspend(ctx context.Context, kind, ns, name, uid string, s
 	return nil
 }
 func (f *fakeConn) ListCRDs(ctx context.Context) ([]crd.Info, error) { return nil, nil }
-func (f *fakeConn) ListWorkloads(context.Context, string) ([]workloads.Workload, bool, bool, error) {
-	return nil, false, false, nil
-}
 func (f *fakeConn) WorkloadCompare(context.Context, string, string, string) (WorkloadCompareInfo, error) {
 	return WorkloadCompareInfo{}, nil
-}
-func (f *fakeConn) ListNodes(context.Context) ([]workloads.NodeSummary, error) {
-	return nil, nil
 }
 func (f *fakeConn) NodeDetail(context.Context, string) (NodeDetail, error) {
 	return NodeDetail{}, nil
@@ -84,9 +78,6 @@ func (f *fakeConn) LaunchDiagnosticPod(context.Context, string, string, int64) A
 func (f *fakeConn) ListAdhocObjects(context.Context) []AdhocObject { return nil }
 func (f *fakeConn) DeleteAdhocObject(context.Context, string, string, string, string, string) error {
 	return nil
-}
-func (f *fakeConn) ListPods(context.Context, string) ([]workloads.PodSummary, bool, error) {
-	return nil, false, nil
 }
 func (f *fakeConn) DeletePod(context.Context, string, string, string) error { return nil }
 func (f *fakeConn) ListEvents(context.Context, string) ([]workloads.EventSummary, bool, error) {
@@ -128,9 +119,6 @@ func (f *fakeConn) GetInstanceDetail(ctx context.Context, group, version, plural
 }
 func (f *fakeConn) ApplyResourceYAML(ctx context.Context, group, version, plural, kind, scope, ns, name, yaml string, dryRun bool) error {
 	return nil
-}
-func (f *fakeConn) ListGateways(ctx context.Context) ([]gwapi.GatewayRef, bool, error) {
-	return nil, false, nil
 }
 func (f *fakeConn) GetGatewayTopology(ctx context.Context, namespace, name string) (gwapi.Topology, error) {
 	return gwapi.Topology{}, nil
@@ -180,7 +168,6 @@ func (f *fakeConn) HelmValues(context.Context, string, string) (string, error) {
 func (f *fakeConn) HelmRollback(context.Context, string, string, int, helmcli.RollbackOptions) error {
 	return nil
 }
-func (f *fakeConn) ListArgoApps(context.Context) ([]argo.App, error)             { return nil, nil }
 func (f *fakeConn) ListArgoProjects(context.Context) ([]argo.Project, error)     { return nil, nil }
 func (f *fakeConn) RefreshArgoApp(context.Context, string, string, string) error { return nil }
 func (f *fakeConn) SyncArgoApp(context.Context, string, string, string, argo.SyncOptions) error {
@@ -222,12 +209,6 @@ func (f *fakeConn) ExpiryScan(context.Context) (ExpiryScanResult, error) {
 }
 func (f *fakeConn) KarpenterState(context.Context) (KarpenterSnapshot, error) {
 	return KarpenterSnapshot{}, nil
-}
-func (f *fakeConn) GitOpsSummary(context.Context) (GitOpsSummary, error) {
-	return GitOpsSummary{}, nil
-}
-func (f *fakeConn) GitOpsSummaryFlux(context.Context) (bool, int, int, int, error) {
-	return false, 0, 0, 0, nil
 }
 
 func TestRegistryStartsAllConnsAndIsolatesFailure(t *testing.T) {

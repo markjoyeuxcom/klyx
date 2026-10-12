@@ -3,7 +3,6 @@ package appbridge
 import (
 	"context"
 	"fmt"
-	"sort"
 	"time"
 
 	"k8s.io/apimachinery/pkg/types"
@@ -127,7 +126,6 @@ func (s *WorkloadsService) RolloutRestart(cluster, kind, namespace, name, uid st
 const workloadsTimeout = 30 * time.Second
 
 type WorkloadsConn interface {
-	ListWorkloads(ctx context.Context, namespace string) ([]workloads.Workload, bool, bool, error)
 	WorkloadMetrics(ctx context.Context, namespace string) (map[string]workloads.Usage, workloads.UsageStatus)
 	WorkloadCompare(ctx context.Context, kind, ns, name string) (fleet.WorkloadCompareInfo, error)
 	RolloutRestart(ctx context.Context, kind, namespace, name, uid string) error
@@ -139,7 +137,7 @@ type WorkloadsConn interface {
 
 // WorkloadsService is bound to JS: the workload verbs, rollout history, the
 // fleet compare and usage. The Workloads lens reads the Observer's rows (1c
-// slice 3 §5.8); ListWorkloads stays for the attention and fleet-board reads.
+// slice 3 §5.8).
 type WorkloadsService struct {
 	lookup func(string) (WorkloadsConn, bool)
 	now    func() time.Time
@@ -147,47 +145,6 @@ type WorkloadsService struct {
 
 func NewWorkloadsService(lookup func(string) (WorkloadsConn, bool)) *WorkloadsService {
 	return &WorkloadsService{lookup: lookup, now: time.Now}
-}
-
-// ListWorkloads returns the health-ranked workloads for a cluster, scoped to
-// namespace ("" = all). Namespaces is the sorted distinct set of workload
-// namespaces, populated ONLY on the all-namespaces load (dropdown source).
-func (s *WorkloadsService) ListWorkloads(cluster, namespace string) WorkloadsResultDTO {
-	conn, ok := s.lookup(cluster)
-	if !ok {
-		return WorkloadsResultDTO{Namespaces: []string{}, Workloads: []WorkloadDTO{}, Error: "cluster not connected: " + cluster}
-	}
-	out, _ := computeWorkloads(conn, namespace)
-	return out
-}
-
-// computeWorkloads lists workloads on conn and builds the WorkloadsResultDTO
-// with the flux-present, namespace-set, and mapping rules ListWorkloads uses.
-// ok=false means the list failed (returns non-nil empties).
-func computeWorkloads(conn WorkloadsConn, namespace string) (WorkloadsResultDTO, bool) {
-	out := WorkloadsResultDTO{Namespaces: []string{}, Workloads: []WorkloadDTO{}}
-	ctx, cancel := context.WithTimeout(context.Background(), workloadsTimeout)
-	defer cancel()
-	wl, fluxPresent, truncated, err := conn.ListWorkloads(ctx, namespace)
-	if err != nil {
-		out.Error = err.Error()
-		return out, false
-	}
-	out.FluxPresent = fluxPresent
-	out.Truncated = truncated
-
-	nsSet := map[string]bool{}
-	for _, w := range wl {
-		nsSet[w.Namespace] = true
-		out.Workloads = append(out.Workloads, toWorkloadDTO(w))
-	}
-	if namespace == "" {
-		for ns := range nsSet {
-			out.Namespaces = append(out.Namespaces, ns)
-		}
-		sort.Strings(out.Namespaces)
-	}
-	return out, true
 }
 
 func toWorkloadDTO(w workloads.Workload) WorkloadDTO {
@@ -255,7 +212,7 @@ func (s *WorkloadsService) WorkloadCompare(cluster, kind, namespace, name string
 
 // GetWorkloadMetrics returns live per-workload cpu/memory usage keyed by
 // "<kind>/<ns>/<name>" plus a status. On-demand; the frontend polls it. Usage
-// only - requests/limits already ship with ListWorkloads. Cluster miss / failure
+// only - requests/limits already ship with the workload rows. Cluster miss / failure
 // returns a non-nil empty map with an unavailable status (never panics on null).
 func (s *WorkloadsService) GetWorkloadMetrics(cluster, namespace string) WorkloadMetricsResultDTO {
 	empty := WorkloadMetricsResultDTO{Usage: map[string]WorkloadUsageDTO{}}

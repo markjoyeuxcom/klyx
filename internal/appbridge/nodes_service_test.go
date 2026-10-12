@@ -12,14 +12,8 @@ import (
 
 // fakeNodeConn satisfies NodesConn without importing the real fleet.ClusterConn.
 type fakeNodeConn struct {
-	nodes   []workloads.NodeSummary
-	listErr error
-	detail  fleet.NodeDetail
-	detErr  error
-}
-
-func (f *fakeNodeConn) ListNodes(_ context.Context) ([]workloads.NodeSummary, error) {
-	return f.nodes, f.listErr
+	detail fleet.NodeDetail
+	detErr error
 }
 
 func (f *fakeNodeConn) NodeHeadroom(context.Context, string, string) (fleet.HeadroomReport, error) {
@@ -30,20 +24,10 @@ func (f *fakeNodeConn) NodeDetail(_ context.Context, _ string) (fleet.NodeDetail
 	return f.detail, f.detErr
 }
 
-// --- ListNodes tests ---
+// --- converter tests ---
 
-func TestNodesService_ClusterMiss_NonNilEmpties(t *testing.T) {
-	svc := NewNodesService(func(string) (NodesConn, bool) { return nil, false })
-	dto := svc.ListNodes("nope")
-	if dto.Nodes == nil {
-		t.Fatal("Nodes slice must be non-nil on cluster miss")
-	}
-	if len(dto.Nodes) != 0 {
-		t.Fatalf("want empty nodes, got %d", len(dto.Nodes))
-	}
-}
-
-func TestNodesService_ListNodes_Mapping(t *testing.T) {
+// The node converter (the rows transport and the detail use it).
+func TestToNodeSummaryDTO_Mapping(t *testing.T) {
 	nodes := []workloads.NodeSummary{
 		{
 			Name:           "node-1",
@@ -68,14 +52,7 @@ func TestNodesService_ListNodes_Mapping(t *testing.T) {
 			AgeSeconds: 7200,
 		},
 	}
-	conn := &fakeNodeConn{nodes: nodes}
-	svc := NewNodesService(func(string) (NodesConn, bool) { return conn, true })
-
-	dto := svc.ListNodes("c")
-	if len(dto.Nodes) != 2 {
-		t.Fatalf("want 2 nodes, got %d", len(dto.Nodes))
-	}
-	n := dto.Nodes[0]
+	n := toNodeSummaryDTO(nodes[0])
 	if n.Name != "node-1" {
 		t.Errorf("Name: %q", n.Name)
 	}
@@ -96,16 +73,12 @@ func TestNodesService_ListNodes_Mapping(t *testing.T) {
 	}
 }
 
-func TestNodesService_ListNodes_NonNilRolesAndProblems(t *testing.T) {
+func TestToNodeSummaryDTO_NonNilRolesAndProblems(t *testing.T) {
 	// NodeSummary with nil slices → DTOs must be non-nil.
 	nodes := []workloads.NodeSummary{
 		{Name: "worker", Ready: true}, // nil Roles, nil Problems
 	}
-	conn := &fakeNodeConn{nodes: nodes}
-	svc := NewNodesService(func(string) (NodesConn, bool) { return conn, true })
-
-	dto := svc.ListNodes("c")
-	n := dto.Nodes[0]
+	n := toNodeSummaryDTO(nodes[0])
 	if n.Roles == nil {
 		t.Error("Roles must be non-nil")
 	}

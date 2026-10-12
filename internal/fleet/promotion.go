@@ -61,7 +61,7 @@ func readyString(r flux.ReadyState) string {
 // promotion tracker: Flux Kustomizations/HelmReleases with their applied
 // revisions, source heads (GitRepository/OCIRepository artifact revisions),
 // and Argo Applications with their deployed sync revision. On-demand dynamic
-// lists - independent of the lazy GitOps watch, exactly like GitOpsSummary.
+// lists - independent of the lazy GitOps watch.
 // Neither tool present → an honest empty snapshot, nil error.
 func (c *ClusterConn) GitOpsPromotion(ctx context.Context) (PromotionSnapshot, error) {
 	c.mu.RLock()

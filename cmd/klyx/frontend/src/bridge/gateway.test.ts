@@ -4,12 +4,10 @@ import type { TopologyDTO } from "../store/fleet";
 
 type Deferred<T> = { promise: Promise<T>; resolve: (v: T) => void; reject: (e: unknown) => void };
 const deferred = <T,>(): Deferred<T> => { let resolve!: (v: T) => void; let reject!: (e: unknown) => void; const promise = new Promise<T>((r, j) => { resolve = r; reject = j; }); return { promise, resolve, reject }; };
-const list = vi.fn();
 const topo = vi.fn();
 const metrics = vi.fn();
 vi.mock("../../bindings/github.com/moomora/klyx/internal/appbridge/index.js", () => ({
   GatewayService: {
-    ListGateways: (...a: unknown[]) => list(...a),
     GetGatewayTopology: (...a: unknown[]) => topo(...a),
     GetRouteMetrics: (...a: unknown[]) => metrics(...a),
   },

@@ -16,6 +16,8 @@ import (
 )
 
 var (
+	ksGVRProm  = schema.GroupVersionResource{Group: "kustomize.toolkit.fluxcd.io", Version: "v1", Resource: "kustomizations"}
+	hrGVRProm  = schema.GroupVersionResource{Group: "helm.toolkit.fluxcd.io", Version: "v2", Resource: "helmreleases"}
 	gitGVRProm = schema.GroupVersionResource{Group: "source.toolkit.fluxcd.io", Version: "v1", Resource: "gitrepositories"}
 	ociGVRProm = schema.GroupVersionResource{Group: "source.toolkit.fluxcd.io", Version: "v1beta2", Resource: "ocirepositories"} // the discovery-less fallback, as for the watch
 )
@@ -57,10 +59,10 @@ func promGitRepo(name, revision string) *unstructured.Unstructured {
 
 func newPromConn(fluxPresent bool, objs ...runtime.Object) *ClusterConn {
 	listKinds := map[schema.GroupVersionResource]string{
-		ksGVRSummary: "KustomizationList",
-		hrGVRSummary: "HelmReleaseList",
-		gitGVRProm:   "GitRepositoryList",
-		ociGVRProm:   "OCIRepositoryList",
+		ksGVRProm:  "KustomizationList",
+		hrGVRProm:  "HelmReleaseList",
+		gitGVRProm: "GitRepositoryList",
+		ociGVRProm: "OCIRepositoryList",
 	}
 	scheme := runtime.NewScheme()
 	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(scheme, listKinds, objs...)

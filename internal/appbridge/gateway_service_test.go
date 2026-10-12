@@ -12,15 +12,10 @@ import (
 type fakeGatewayConn struct {
 	hubbleStats  hubble.FlowStats
 	hubbleStatus hubble.Status
-	refs         []gwapi.GatewayRef
-	served       bool
 	topo         gwapi.Topology
 	err          error
 }
 
-func (f *fakeGatewayConn) ListGateways(ctx context.Context) ([]gwapi.GatewayRef, bool, error) {
-	return f.refs, f.served, nil
-}
 func (f *fakeGatewayConn) GetGatewayTopology(ctx context.Context, namespace, name string) (gwapi.Topology, error) {
 	return f.topo, f.err
 }
@@ -31,16 +26,15 @@ func (f *fakeGatewayConn) RouteMetrics(context.Context, []string) (map[string]ro
 	return nil, routemetrics.Status{}
 }
 
-func TestListGatewaysDTO(t *testing.T) {
-	conn := &fakeGatewayConn{served: true, refs: []gwapi.GatewayRef{{
+// The Gateway converter (the rows transport uses it).
+func TestToGatewayRefDTO(t *testing.T) {
+	out := struct{ Gateways []GatewayRefDTO }{Gateways: []GatewayRefDTO{toGatewayRefDTO(gwapi.GatewayRef{
 		Namespace: "infra", Name: "eg", ClassName: "envoy-gateway", Accepted: true, Programmed: true,
 		Addresses: []gwapi.GatewayAddress{{Type: "IPAddress", Value: "192.0.2.10"}},
 		Listeners: []gwapi.Listener{{Name: "https", Protocol: "HTTPS", Port: 443, CertificateRefs: []gwapi.CertificateRef{{Kind: "Secret", Namespace: "infra", Name: "eg-tls"}}}},
-	}}}
-	svc := NewGatewayService(func(string) (GatewayConn, bool) { return conn, true })
-	out := svc.ListGateways("x")
-	if !out.GatewayAPIServed || len(out.Gateways) != 1 || out.Gateways[0].Name != "eg" {
-		t.Fatalf("list: %+v", out)
+	})}}
+	if out.Gateways[0].Name != "eg" {
+		t.Fatalf("gateway: %+v", out)
 	}
 	if len(out.Gateways[0].Addresses) != 1 || out.Gateways[0].Addresses[0].Value != "192.0.2.10" {
 		t.Fatalf("addresses: %+v", out.Gateways[0].Addresses)
@@ -111,13 +105,6 @@ func TestGetGatewayTopologyErrorSurfaced(t *testing.T) {
 	d := svc.GetGatewayTopology("x", "infra", "eg")
 	if d.Error == "" {
 		t.Fatalf("a core error must surface in Error, got %+v", d)
-	}
-}
-
-func TestGatewayUnknownClusterEmpty(t *testing.T) {
-	svc := NewGatewayService(func(string) (GatewayConn, bool) { return nil, false })
-	if out := svc.ListGateways("ghost"); out.GatewayAPIServed || len(out.Gateways) != 0 {
-		t.Fatalf("want empty, got %+v", out)
 	}
 }
 

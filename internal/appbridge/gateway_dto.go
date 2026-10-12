@@ -186,14 +186,6 @@ type GatewayRouteRowDTO struct {
 	Attachments []GatewayRouteAttachmentDTO `json:"attachments"`
 }
 
-type GatewayListDTO struct {
-	GatewayAPIServed bool            `json:"gatewayAPIServed"`
-	Gateways         []GatewayRefDTO `json:"gateways"`
-	// Error is set when the list failed on a served API (auth, network, RBAC) -
-	// distinct from an empty list, which means "no Gateways exist".
-	Error string `json:"error,omitempty"`
-}
-
 // RouteMetricDTO is a route's traffic readout. Nil fractions serialize as JSON
 // null (UI renders "—"), never 0. ErrRate is a fraction 0..1.
 type RouteMetricDTO struct {

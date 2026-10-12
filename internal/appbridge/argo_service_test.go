@@ -2,7 +2,6 @@ package appbridge
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -13,7 +12,6 @@ import (
 )
 
 type fakeArgoConn struct {
-	apps     []argo.App
 	projects []argo.Project
 	listErr  error
 	verbErr  error
@@ -21,9 +19,6 @@ type fakeArgoConn struct {
 	syncOpts []argo.SyncOptions // full options captured per SyncArgoApp call
 }
 
-func (f *fakeArgoConn) ListArgoApps(context.Context) ([]argo.App, error) {
-	return f.apps, f.listErr
-}
 func (f *fakeArgoConn) ListArgoProjects(context.Context) ([]argo.Project, error) {
 	return f.projects, f.listErr
 }
@@ -52,24 +47,6 @@ func TestArgoAppFields(t *testing.T) {
 	set := argoAppSetFields(argo.ApplicationSet{Namespace: "argocd", Name: "platform-set", Generators: []string{"clusters"}, DestServer: "https://kubernetes.default.svc", GeneratedApps: 3, GeneratedNames: []string{"dev-platform"}, Healthy: true})
 	if set.GeneratedApps != 3 || set.DestServer == "" || len(set.GeneratedNames) != 1 || set.Conditions == nil {
 		t.Fatalf("applicationset mapping: %+v", set)
-	}
-}
-
-func TestListApplicationsError(t *testing.T) {
-	conn := &fakeArgoConn{listErr: errors.New("boom")}
-	s := NewArgoService(func(string) (ArgoConn, bool) { return conn, true })
-	if r := s.ListProjects("c"); r.Available || r.Message != "boom" || r.Error != "boom" {
-		t.Fatalf("list error must surface as an error, not absence: %+v", r)
-	}
-	if r := s.ListApplications("c"); r.Available || r.Error != "boom" {
-		t.Fatalf("applications: a list error is an error, not absence: %+v", r)
-	}
-	disconnected := NewArgoService(func(string) (ArgoConn, bool) { return nil, false })
-	if r := disconnected.ListApplications("c"); r.Error == "" {
-		t.Fatalf("applications: not connected must be an error: %+v", r)
-	}
-	if r := disconnected.ListProjects("c"); r.Error == "" {
-		t.Fatalf("projects: not connected must be an error: %+v", r)
 	}
 }
 

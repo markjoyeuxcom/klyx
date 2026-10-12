@@ -1,22 +1,18 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render } from "@testing-library/react";
 
-// Health 1c slice 4 §7-§8: the open cluster's attention surfaces read the
-// summary; entering a cluster fans out to no list endpoint for them. (The
-// fleet board's per-visit reads are slice 5's and are stubbed here.)
+// Health 1c slice 4 §7-§8 and slice 5: the open cluster's attention surfaces
+// and the fleet board read summaries. The health list endpoints are gone
+// (slice 5 3/3); the reads that remain are spied so none fans out.
 const { calls, spy } = vi.hoisted(() => {
   const calls: string[] = [];
   return { calls, spy: (name: string) => vi.fn(async () => { calls.push(name); return {}; }) };
 });
 vi.mock("../../bindings/github.com/moomora/klyx/internal/appbridge/index.js", () => ({
-  WorkloadsService: { ListWorkloads: spy("ListWorkloads") },
-  PodsService: { ListPods: spy("ListPods") },
   EventsService: { ListEvents: spy("ListEvents") },
-  NodesService: { ListNodes: spy("ListNodes") },
   HelmService: { ListHelmReleases: spy("ListHelmReleases") },
-  GitOpsService: { GetGitOpsSummary: spy("GetGitOpsSummary") },
-  ArgoService: { ListApplications: spy("ListApplications") },
-  GatewayService: { ListGateways: spy("ListGateways"), GetGatewayTopology: spy("GetGatewayTopology") },
+  ArgoService: { ListProjects: spy("ListProjects") },
+  GatewayService: { GetGatewayTopology: spy("GetGatewayTopology") },
   MetricsService: { GetClusterMetrics: spy("GetClusterMetrics") },
 }));
 vi.mock("../bridge/mesh", () => ({ getMeshGraph: vi.fn(async () => {}) }));

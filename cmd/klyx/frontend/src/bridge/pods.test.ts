@@ -5,7 +5,6 @@ import { useFleet, type PodDetailDTO } from "../store/fleet";
 vi.mock("../../bindings/github.com/moomora/klyx/internal/appbridge/index.js", () => ({
   PodsService: {
     DeletePod: vi.fn(),
-    ListPods: vi.fn(),
     GetPodDetail: vi.fn(),
   },
 }));
@@ -27,17 +26,16 @@ beforeEach(() => {
   useFleet.getState().setPodsVisit("homelab");
 });
 
-// The Pods lens reads the Observer's live rows (1c slice 3 §5.9): a verb never
-// re-reads the list, and it carries the pod OBJECT it was armed against.
+// The Pods lens reads the Observer's live rows (1c slice 3 §5.9; there is no
+// list endpoint to re-read): a verb carries the pod OBJECT it was armed against.
 describe("deletePod bridge", () => {
-  it("success: reports the delete and carries the armed UID; no list re-read", async () => {
+  it("success: reports the delete and carries the armed UID", async () => {
     vi.mocked(PodsService.DeletePod).mockResolvedValue({ ok: true, error: "" } as never);
     await deletePod("homelab", "default", "api-xyz", "uid-api-xyz");
     const status = useFleet.getState().actionStatus;
     expect(status?.kind).toBe("success");
     expect(status?.message).toBe("pod default/api-xyz deleted");
     expect(PodsService.DeletePod).toHaveBeenCalledWith("homelab", "default", "api-xyz", "uid-api-xyz");
-    expect(PodsService.ListPods).not.toHaveBeenCalled();
   });
 
   it("error: reports the backend's reason - a replacement included", async () => {

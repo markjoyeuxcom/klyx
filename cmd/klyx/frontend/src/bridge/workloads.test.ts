@@ -8,7 +8,6 @@ vi.mock("../../bindings/github.com/moomora/klyx/internal/appbridge/index.js", ()
     ScaleWorkload: vi.fn(),
     RolloutUndo: vi.fn(),
     RolloutPause: vi.fn(),
-    ListWorkloads: vi.fn(),
   },
 }));
 
@@ -23,8 +22,8 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
-// Design §5b: every workload verb carries the UID it was armed against, and
-// the rows are live - no verb re-reads the list.
+// Design §5b: every workload verb carries the UID it was armed against (the
+// rows are live; there is no list endpoint to re-read).
 describe("workload verbs carry the armed UID", () => {
   it("restart, scale, undo and pause pass it to the backend", async () => {
     for (const fn of [WorkloadsService.RolloutRestart, WorkloadsService.ScaleWorkload, WorkloadsService.RolloutUndo, WorkloadsService.RolloutPause]) {
@@ -38,7 +37,6 @@ describe("workload verbs carry the armed UID", () => {
     expect(WorkloadsService.ScaleWorkload).toHaveBeenCalledWith("homelab", "StatefulSet", "db", "pg", "uid-pg", 3);
     expect(WorkloadsService.RolloutUndo).toHaveBeenCalledWith("homelab", "Deployment", "monitoring", "grafana", "uid-g", 2);
     expect(WorkloadsService.RolloutPause).toHaveBeenCalledWith("homelab", "monitoring", "grafana", "uid-g", true);
-    expect(WorkloadsService.ListWorkloads).not.toHaveBeenCalled();
   });
 });
 

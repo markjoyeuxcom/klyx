@@ -28,22 +28,10 @@ type GitOpsConn interface {
 	Reconcile(ctx context.Context, kind, ns, name, uid string) error
 	ReconcileWithSource(ctx context.Context, kind, ns, name, uid string) error
 	SetSuspend(ctx context.Context, kind, ns, name, uid string, suspend bool) error
-	// GitOpsSummaryFlux performs a cluster-wide on-demand LIST and returns counts.
-	// Separated from fleet.GitOpsSummary to keep GitOpsConn free of fleet types.
-	GitOpsSummaryFlux(ctx context.Context) (fluxPresent bool, total, notReady, suspended int, err error)
-}
-
-// GitOpsSummaryDTO is the serialised form of GitOpsSummary for the JS bridge.
-type GitOpsSummaryDTO struct {
-	FluxPresent bool   `json:"fluxPresent"`
-	Total       int    `json:"total"`
-	NotReady    int    `json:"notReady"`
-	Suspended   int    `json:"suspended"`
-	Error       string `json:"error,omitempty"` // non-empty = the summary read failed (never confuse with FluxPresent:false)
 }
 
 // GitOpsService is bound to JS: the Flux lens's on-demand reads (detail, Git
-// link, diff, summary) and its day-2 verbs.
+// link, diff) and its day-2 verbs.
 type GitOpsService struct {
 	lookup func(string) (GitOpsConn, bool)
 	now    func() time.Time
@@ -186,26 +174,6 @@ func (s *GitOpsService) GetResourceDetail(cluster, kind, namespace, name string)
 // key and the error, never an identity or detail evidence.
 func detailErrorDTO(kind, namespace, name, msg string) ResourceDetailDTO {
 	return ResourceDetailDTO{Kind: kind, Namespace: namespace, Name: name, Error: msg}
-}
-
-// GetGitOpsSummary returns a point-in-time Flux summary for the named cluster.
-// A cluster miss returns {FluxPresent: false} - semantically "no Flux here", so
-// the strip tile hides. A list error is different: it returns {Error: ...} so
-// the tile renders the failure marker ("—") rather than masquerading as a
-// Flux-free cluster (error-honesty - a transient RBAC/network fault must not
-// read as "no Flux").
-func (s *GitOpsService) GetGitOpsSummary(cluster string) GitOpsSummaryDTO {
-	conn, ok := s.lookup(cluster)
-	if !ok {
-		return GitOpsSummaryDTO{}
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
-	defer cancel()
-	present, total, notReady, suspended, err := conn.GitOpsSummaryFlux(ctx)
-	if err != nil {
-		return GitOpsSummaryDTO{Error: err.Error()}
-	}
-	return GitOpsSummaryDTO{FluxPresent: present, Total: total, NotReady: notReady, Suspended: suspended}
 }
 
 // ResolveGitLink resolves a Kustomization's GitRepository source to a browsable

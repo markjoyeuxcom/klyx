@@ -12,13 +12,12 @@ const nodesTimeout = 30 * time.Second
 
 // NodesConn is the per-cluster surface NodesService needs.
 type NodesConn interface {
-	ListNodes(ctx context.Context) ([]workloads.NodeSummary, error)
 	NodeDetail(ctx context.Context, name string) (fleet.NodeDetail, error)
 	NodeHeadroom(ctx context.Context, loseKind, loseName string) (fleet.HeadroomReport, error)
 }
 
-// NodesService is bound to JS. Pure request/response: ListNodes returns
-// problem-first node rows; GetNodeDetail returns the full drill-down.
+// NodesService is bound to JS: the node drill-down and the survivability
+// headroom. The Nodes lens reads the Observer's rows (1c slice 3).
 type NodesService struct {
 	lookup func(string) (NodesConn, bool)
 	now    func() time.Time
@@ -27,28 +26,6 @@ type NodesService struct {
 // NewNodesService creates a NodesService with the given cluster-lookup function.
 func NewNodesService(lookup func(string) (NodesConn, bool)) *NodesService {
 	return &NodesService{lookup: lookup, now: time.Now}
-}
-
-// ListNodes returns problem-first node rows for a cluster. Cluster miss returns
-// non-nil empty.
-func (s *NodesService) ListNodes(cluster string) NodesResultDTO {
-	out := NodesResultDTO{Nodes: []NodeSummaryDTO{}}
-	conn, ok := s.lookup(cluster)
-	if !ok {
-		out.Error = "cluster not connected: " + cluster
-		return out
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), nodesTimeout)
-	defer cancel()
-	nodes, err := conn.ListNodes(ctx)
-	if err != nil {
-		out.Error = err.Error()
-		return out
-	}
-	for _, n := range nodes {
-		out.Nodes = append(out.Nodes, toNodeSummaryDTO(n))
-	}
-	return out
 }
 
 // GetNodeDetail returns the full node detail. Cluster miss or error returns a

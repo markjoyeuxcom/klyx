@@ -155,43 +155,6 @@ func (c *ClusterConn) gwGVR(resource string) schema.GroupVersionResource {
 	return schema.GroupVersionResource{Group: gwGroup, Version: v, Resource: resource}
 }
 
-// gatewayAPIServed reports whether the Gateway API group is advertised.
-func (c *ClusterConn) gatewayAPIServed() bool {
-	groups, err := c.discovery().ServerGroups()
-	if err != nil || groups == nil {
-		return false
-	}
-	for _, g := range groups.Groups {
-		if g.Name == gwGroup {
-			return true
-		}
-	}
-	return false
-}
-
-// ListGateways lists Gateways (refs) and whether the Gateway API is served.
-// A list failure on a served API is a real error (auth, network, RBAC) and is
-// returned as one - rendering it as "no Gateways" would be indistinguishable
-// from a genuinely empty cluster. A failure when the group is not advertised
-// is the expected not-installed case (and the fake-discovery fallback in
-// tests) and stays an empty list.
-func (c *ClusterConn) ListGateways(ctx context.Context) ([]gwapi.GatewayRef, bool, error) {
-	served := c.gatewayAPIServed()
-	list, err := c.dyn.Resource(c.gwGVR("gateways")).List(ctx, metav1.ListOptions{})
-	if err != nil {
-		if !served {
-			return nil, false, nil
-		}
-		return nil, served, fmt.Errorf("list gateways: %w", err)
-	}
-	out := make([]gwapi.GatewayRef, 0, len(list.Items))
-	for i := range list.Items {
-		u := &unstructured.Unstructured{Object: list.Items[i].Object}
-		out = append(out, gwapi.ParseGatewayRef(u))
-	}
-	return out, served, nil
-}
-
 // GetGatewayTopology builds the per-Gateway data path. A core failure (the Gateway
 // cannot be read) returns an error; soft issues accumulate in Topology.Warnings.
 func (c *ClusterConn) GetGatewayTopology(ctx context.Context, namespace, name string) (gwapi.Topology, error) {

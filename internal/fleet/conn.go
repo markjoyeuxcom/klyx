@@ -59,11 +59,8 @@ type Conn interface {
 	ReconcileWithSource(ctx context.Context, kind, ns, name, uid string) error
 	SetSuspend(ctx context.Context, kind, ns, name, uid string, suspend bool) error
 	ListCRDs(ctx context.Context) ([]crd.Info, error)
-	ListWorkloads(ctx context.Context, namespace string) ([]workloads.Workload, bool, bool, error)
 	WorkloadCompare(ctx context.Context, kind, ns, name string) (WorkloadCompareInfo, error)
-	ListNodes(ctx context.Context) ([]workloads.NodeSummary, error)
 	NodeDetail(ctx context.Context, name string) (NodeDetail, error)
-	ListPods(ctx context.Context, namespace string) ([]workloads.PodSummary, bool, error)
 	DeletePod(ctx context.Context, namespace, name, uid string) error
 	ListEvents(ctx context.Context, namespace string) ([]workloads.EventSummary, bool, error)
 	WatchDirty(ctx context.Context, namespace string, kinds []string, onDirty func(), onLive func(bool)) (stop func(), err error)
@@ -92,7 +89,6 @@ type Conn interface {
 	AccessCanI(ctx context.Context, spec rbac.CheckSpec, saNamespace, saName string) (rbac.Verdict, error)
 	AccessWhoCan(ctx context.Context, spec rbac.CheckSpec) (rbac.Enumeration, error)
 	RevealSecretKey(ctx context.Context, ns, name, key string) (string, error)
-	ListGateways(ctx context.Context) ([]gwapi.GatewayRef, bool, error)
 	GetGatewayTopology(ctx context.Context, namespace, name string) (gwapi.Topology, error)
 	MeshMember(ctx context.Context) (clustermesh.Member, MeshReadStatus)
 	HasGlobalService(ctx context.Context, ns, name string) bool
@@ -112,18 +108,15 @@ type Conn interface {
 	HelmHistory(ctx context.Context, namespace, release string) ([]helmcli.HistoryEntry, error)
 	HelmValues(ctx context.Context, namespace, release string) (string, error)
 	HelmRollback(ctx context.Context, namespace, release string, revision int, opts helmcli.RollbackOptions) error
-	ListArgoApps(ctx context.Context) ([]argo.App, error)
 	ListArgoProjects(ctx context.Context) ([]argo.Project, error)
 	RefreshArgoApp(ctx context.Context, namespace, name, uid string) error
 	SyncArgoApp(ctx context.Context, namespace, name, uid string, opts argo.SyncOptions) error
-	GitOpsSummary(ctx context.Context) (GitOpsSummary, error)
 	GitOpsPromotion(ctx context.Context) (PromotionSnapshot, error)
 	UpgradeReadiness(ctx context.Context) (UpgradeReport, error)
 	ConnectivityCanI(ctx context.Context, srcNS, srcPod, dstNS, dstPod string, port int, protocol string) (ConnectivityReport, error)
 	NodeHeadroom(ctx context.Context, loseKind, loseName string) (HeadroomReport, error)
 	ExpiryScan(ctx context.Context) (ExpiryScanResult, error)
 	KarpenterState(ctx context.Context) (KarpenterSnapshot, error)
-	GitOpsSummaryFlux(ctx context.Context) (fluxPresent bool, total, notReady, suspended int, err error)
 }
 
 var podGVR = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "pods"}

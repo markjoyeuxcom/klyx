@@ -10,7 +10,6 @@ import (
 )
 
 type GatewayConn interface {
-	ListGateways(ctx context.Context) ([]gwapi.GatewayRef, bool, error)
 	GetGatewayTopology(ctx context.Context, namespace, name string) (gwapi.Topology, error)
 	RouteMetrics(ctx context.Context, routeKeys []string) (map[string]routemetrics.RouteMetrics, routemetrics.Status)
 	HubbleFlowStats(ctx context.Context) (hubble.FlowStats, hubble.Status)
@@ -32,25 +31,6 @@ func NewGatewayService(lookup func(string) (GatewayConn, bool)) *GatewayService 
 // render (just without the confirmed-peer list).
 func (s *GatewayService) SetGlobalReach(f func(cluster, ns, name string) ([]string, bool)) {
 	s.globalReach = f
-}
-
-func (s *GatewayService) ListGateways(cluster string) GatewayListDTO {
-	conn, ok := s.lookup(cluster)
-	if !ok {
-		return GatewayListDTO{Gateways: []GatewayRefDTO{}, Error: "cluster not connected: " + cluster}
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), gatewayTimeout)
-	defer cancel()
-	refs, served, err := conn.ListGateways(ctx)
-	if err != nil {
-		// Served but unlistable is an error state, not an empty cluster.
-		return GatewayListDTO{GatewayAPIServed: served, Gateways: []GatewayRefDTO{}, Error: err.Error()}
-	}
-	out := GatewayListDTO{GatewayAPIServed: served, Gateways: make([]GatewayRefDTO, 0, len(refs))}
-	for _, r := range refs {
-		out.Gateways = append(out.Gateways, toGatewayRefDTO(r))
-	}
-	return out
 }
 
 func (s *GatewayService) GetGatewayTopology(cluster, namespace, name string) TopologyDTO {

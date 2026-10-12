@@ -2,7 +2,6 @@ package appbridge
 
 import (
 	"context"
-	"sort"
 	"time"
 
 	"github.com/moomora/klyx/internal/fleet"
@@ -14,15 +13,13 @@ const podsTimeout = 30 * time.Second
 // PodsConn is the per-cluster surface PodsService needs. No fleet import
 // in the interface itself — the lookup closure bridges to the real fleet.Conn.
 type PodsConn interface {
-	ListPods(ctx context.Context, namespace string) ([]workloads.PodSummary, bool, error)
 	LaunchDiagnosticPod(ctx context.Context, name, image string, ttlSeconds int64) fleet.AdhocResult
 	PodDetail(ctx context.Context, namespace, name string) (fleet.PodDetail, error)
 	DeletePod(ctx context.Context, namespace, name, uid string) error
 }
 
 // PodsService is bound to JS: pod detail, the pod verbs and the diagnostic
-// pod. The Pods lens reads the Observer's rows (1c slice 3 §5.9); ListPods
-// stays for the attention and fleet-board reads.
+// pod. The Pods lens reads the Observer's rows (1c slice 3 §5.9).
 type PodsService struct {
 	lookup func(string) (PodsConn, bool)
 	now    func() time.Time
@@ -31,46 +28,6 @@ type PodsService struct {
 // NewPodsService creates a PodsService with the given cluster-lookup function.
 func NewPodsService(lookup func(string) (PodsConn, bool)) *PodsService {
 	return &PodsService{lookup: lookup, now: time.Now}
-}
-
-// ListPods returns health-ranked pod rows for a cluster, scoped to namespace
-// ("" = all). Namespaces is the sorted distinct set, populated ONLY on the
-// all-namespaces load (dropdown source). Cluster miss returns non-nil empties.
-func (s *PodsService) ListPods(cluster, namespace string) PodsResultDTO {
-	conn, ok := s.lookup(cluster)
-	if !ok {
-		return PodsResultDTO{Namespaces: []string{}, Pods: []PodSummaryDTO{}, Error: "cluster not connected: " + cluster}
-	}
-	out, _ := computePods(conn, namespace)
-	return out
-}
-
-// computePods lists pods on conn and builds the PodsResultDTO with the
-// namespace-set and mapping rules ListPods uses. ok=false means the list
-// failed (returns non-nil empties).
-func computePods(conn PodsConn, namespace string) (PodsResultDTO, bool) {
-	out := PodsResultDTO{Namespaces: []string{}, Pods: []PodSummaryDTO{}}
-	ctx, cancel := context.WithTimeout(context.Background(), podsTimeout)
-	defer cancel()
-	pods, truncated, err := conn.ListPods(ctx, namespace)
-	if err != nil {
-		out.Error = err.Error()
-		return out, false
-	}
-	out.Truncated = truncated
-
-	nsSet := map[string]bool{}
-	for _, p := range pods {
-		nsSet[p.Namespace] = true
-		out.Pods = append(out.Pods, toPodSummaryDTO(p))
-	}
-	if namespace == "" {
-		for ns := range nsSet {
-			out.Namespaces = append(out.Namespaces, ns)
-		}
-		sort.Strings(out.Namespaces)
-	}
-	return out, true
 }
 
 // GetPodDetail returns the full pod detail. Cluster miss or error returns a
