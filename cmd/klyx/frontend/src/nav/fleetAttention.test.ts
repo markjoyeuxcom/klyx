@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { useHealth, resetHealthStore, applySummary, applyRows, addSub, openStarted, openSucceeded } from "../store/health";
+import { useHealth, resetHealthStore, applySummary, applyRows, addSub, openStarted, openSucceeded, dueForBootstrap } from "../store/health";
 import type { ClusterDTO } from "../store/fleet";
 import { core, dep, kind, native, replace, summary, task, verdict } from "../test/healthFixtures";
 import { clusterAttention, mastReading } from "./clusterAttention";
@@ -46,7 +46,7 @@ describe("the spine lamp: first matching rule (§2)", () => {
     const l = lamp(cl("a", "Stale", { reason: "watch lagging" }));
     expect(l.kind).toBe("connection");
     expect(l.title).toContain("stale: watch lagging");
-    expect(l.title).toContain("Pods: ReplicaSets could not be read - a dependency");
+    expect(l.title).toMatch(/Pods: none need attention · ReplicaSets could not be read - a dependency \(cluster summary as of /);
   });
 
   it("degraded plus an unknown controller: the connection's lamp, the controller gap named", () => {
@@ -131,3 +131,49 @@ describe("the board meters: clusters, never objects (§3)", () => {
     expect(healthReading(model(cl("c"))).join("\n")).toContain("ReplicaSets could not be read");
   });
 });
+
+// Codex review of 6f74371: a lit area keeps its other gaps, and every
+// answered line - quiet and unlit too - keeps its provenance.
+describe("the health reading keeps every gap and every time", () => {
+  const flux = (recs: ReturnType<typeof native>, srcs: ReturnType<typeof native>, controller?: { state: string; reason?: string }) =>
+    task("flux", [recs, srcs], controller ? { controller } : {});
+
+  it("a lit area keeps its unreadable part and its unknown controller, with the reason", () => {
+    applySummary(summary([...core(), flux(native("reconciliations", {}, 0, "not ready", [kind("kustomizations", { coverage: "unreadable", class: "forbidden" })], { coverage: "unreadable" }),
+      native("sources", { fault: 1 }, 1, "not ready", [kind("gitrepositories")]), { state: "unknown", reason: "kustomize-controller unreadable" })], {}, "a"));
+    const t = lamp(cl("a", "Synced", { fluxPresent: true })).title;
+    expect(t).toMatch(/Flux Sources: 1 not ready \(cluster summary as of /);
+    expect(t).toMatch(/Flux Reconciliations: could not be read \(forbidden\) \(cluster summary as of /);
+    expect(t).toContain("Flux: controller health unknown - kustomize-controller unreadable");
+  });
+
+  it("failing certificates beside unreadable issuers: both named", () => {
+    applySummary(summary([...core(), task("certs", [native("certificates", { fault: 2 }, 2, "not ready", [kind("certificates")]),
+      native("issuers", {}, 0, "not ready", [kind("issuers", { coverage: "unreadable" }), kind("clusterissuers", { coverage: "unreadable" })], { coverage: "unreadable" })])], {}, "a"));
+    const t = lamp(cl("a", "Synced", { certManagerPresent: true })).title;
+    expect(t).toContain("Certificates Certificates: 2 not ready");
+    expect(t).toContain("Certificates Issuers: could not be read");
+  });
+
+  it("quiet and unlit lines are dated; an unreachable cluster's last reading is dated too", () => {
+    applySummary(summary([...core(), flux(native("reconciliations", { progressing: 2, ok: 1 }, 2, "not ready", [kind("kustomizations")]),
+      native("sources", { ok: 1 }, 0, "not ready", [kind("gitrepositories")]))], {}, "a"));
+    const t = lamp(cl("a", "Synced", { fluxPresent: true })).title;
+    expect(t).toMatch(/Flux Reconciliations: 2 not ready \(cluster summary as of /);
+    expect(t).toMatch(/no attention: Workloads, Pods, Nodes, Events, Helm releases, Flux Sources \(cluster summary as of /);
+    const u = lamp(cl("a", "Failed", { reason: "dial tcp", fluxPresent: true })).title;
+    expect(u).toMatch(/^a — failed: dial tcp\n/);
+    expect(u).toMatch(/no attention: .* \(cluster summary as of /);
+  });
+
+  it("held rows during the first second are captioned as the rows', updating - never the newer summary's time", () => {
+    applySummary(summary(core(), { evaluatedAt: "2026-10-12T12:00:00Z" }, "a"), 0);
+    addSub("p", "a", "pods", "pods"); openStarted("p", "t"); openSucceeded("p", "t", 1);
+    applyRows("p", { cluster: "a", incarnation: 1, task: "pods", evaluatedAt: "2026-10-12T12:00:03Z", rows: [], full: true, part: { ...verdict("pods", { ok: 2 }, [kind("pods")]), ver: 3, obs: 3 } }, 0);
+    applySummary(summary(replace(core(), task("pods", [{ ...verdict("pods", { ok: 2 }, [kind("pods")]), ver: 6, obs: 6 }])), { seq: 2, evaluatedAt: "2026-10-12T12:00:09Z" }, "a"), 100);
+    expect(lamp(cl("a")).title).toMatch(/no attention: Pods \(Pods lens rows as of .* - updating\)/);
+    dueForBootstrap(1200); // past the deadline: the summary's counts, refreshing
+    expect(lamp(cl("a")).title).toMatch(/Pods \(cluster summary as of .* - refreshing\)/);
+  });
+});
+

@@ -20,31 +20,33 @@ export function healthGaps(m: ClusterAttention): boolean {
   return r.state === "checking" || r.gaps > 0 || r.notCovered > 0;
 }
 
-/** healthReading: the model in words, one line each - what needs attention
- * (each line with its own provenance), what could not be established, what
- * the summary does not cover, or the observation's end. */
+/** healthReading: the model in words, one line each, every answered line
+ * with its own provenance (lens rows or cluster summary, its time, and its
+ * A4 state) so no reading is untimed: what needs attention first, then
+ * unlit counts in the tool's word, gaps (unreadable, checking, dependency,
+ * unknown roles, an unknown controller - in a lit area too), evidence, the
+ * quiet parts grouped by provenance, and what the summary does not cover. */
 export function healthReading(m: ClusterAttention): string[] {
   if (m.ended) return [`observation ended at ${clock(m.ended)}`];
-  const r = mastReading(m);
-  if (r.state === "checking") return ["health checking…"];
-  const out: string[] = [];
+  if (mastReading(m).state === "checking") return ["health checking…"];
+  const lit: string[] = [];
+  const rest: string[] = [];
+  const quiet = new Map<string, string[]>(); // provenance -> parts
+  const reason = (a: { controller: { reason?: string } | null }) => (a.controller?.reason ? ` - ${a.controller.reason}` : "");
   for (const a of m.areas) {
-    if (a.controller?.state === "not ready") out.push(`${a.label}: controller not ready${a.controller.reason ? ` - ${a.controller.reason}` : ""}`);
+    if (a.controller?.state === "not ready") lit.push(`${a.label}: controller not ready${reason(a)}`);
+    else if (a.controller?.state === "unknown") rest.push(`${a.label}: controller health unknown${reason(a)}`);
     for (const l of a.lines) {
-      if (l.state === "attention") out.push(`${a.label}${a.lines.length > 1 ? ` ${l.label}` : ""}: ${lineText(l)} (${provenance(a, l)})`);
+      const name = `${a.label}${a.lines.length > 1 ? ` ${l.label}` : ""}`;
+      const p = provenance(a, l);
+      if (l.state === "attention") lit.push(`${name}: ${lineText(l)} (${p})`);
+      else if (l.state !== "quiet" || l.gaps.length > 0) rest.push(`${name}: ${lineText(l)} (${p})`);
+      else quiet.set(p, [...(quiet.get(p) ?? []), name]);
     }
   }
-  for (const a of m.areas) {
-    if (a.state === "attention" || !a.gap) continue;
-    const gaps = [
-      ...(a.controller?.state === "unknown" ? ["controller health unknown"] : []),
-      ...a.lines.filter((l) => l.state === "checking" || l.state === "unreadable" || l.gaps.length > 0)
-        .map((l) => `${a.lines.length > 1 ? `${l.label} ` : ""}${l.state === "checking" || l.state === "unreadable" ? l.text : l.gaps.join(", ")}`),
-    ];
-    out.push(`${a.label}: ${gaps.join("; ")}`);
-  }
+  const out = [...lit, ...rest];
+  for (const [p, names] of quiet) out.push(`no attention: ${names.join(", ")} (${p})`);
   if (m.notCovered.length > 0) out.push(`not covered by the summary: ${m.notCovered.map((u) => (u.capability === "present" ? u.label : `${u.label} (capability not yet known)`)).join(", ")}`);
-  if (r.state === "quiet" && !healthGaps(m)) out.push(`no attention in ${r.read} area${r.read === 1 ? "" : "s"} read`);
   return out;
 }
 
