@@ -1,6 +1,6 @@
 # Klyx health 1c, slice 3 addendum: the rows transport after the §6a gate
 
-Status: Codex APPROVE-WITH-CHANGES to the delta direction (2026-10-12); amended (§3-§5), implemented (c28a566, accepted by Codex), and re-measured (§6). The memory window was ratified by the owner (§6.4); the confirming run follows. Parent: `2026-10-11-klyx-health-1c-slice3-rows.md` §6a ("If any limit is missed, the transport changes before the Pods lens switches ... reviewed before it is built").
+Status: Codex APPROVE-WITH-CHANGES to the delta direction (2026-10-12); amended (§3-§5), implemented (c28a566, accepted by Codex), and re-measured (§6). The memory window was ratified by the owner and the declared confirming run passes every §6a limit (§6.4). Parent: `2026-10-11-klyx-health-1c-slice3-rows.md` §6a ("If any limit is missed, the transport changes before the Pods lens switches ... reviewed before it is built").
 
 ## 1. What the gate measured
 
@@ -169,4 +169,18 @@ The owner ratified the post-warm-up reading (2026-10-12), now in the parent spec
 - the probe as in §3.4 - interaction every 1.5 s, a forced lost pods message every 90 s (so the re-bootstrap is timed in the same run);
 - RSS of the WebContent process every 15 s from launch to 150 s after the churn;
 - pass: every §6a limit - one push per part per second, pods push and full form ≤ 4 MB, emit to lens commit ≤ 50 ms p95 for accepted pushes (the probe's last window), interaction ≤ 100 ms p95, RSS ≤ 400 MB at every sample, and RSS growth ≤ 10% over the last 5 minutes of churn (the last sample before the churn ends against the sample 5 minutes earlier).
+
+Result (perf build of 901aee8's tree; 45000 status patches in 15 minutes, 0 failed):
+
+| §6a limit | measured | |
+|---|---|---|
+| one push per part per second | pods and workloads 1.00/s (min gap 973 ms) over the churn | pass |
+| pods push ≤ 4 MB | 0.027 MB p95 (about 50 upserts a push) | pass |
+| full form ≤ 4 MB | 2.53-2.54 MB (the forced re-bootstraps' replies) | pass |
+| emit to lens commit ≤ 50 ms p95, accepted pushes (last window during churn) | 4 ms (n 116; transport + decode p95 1, handler ≤ 1, handler to commit p95 3) | pass |
+| interaction ≤ 100 ms p95 | search 33 ms, filter 32 ms (n 40 each, every sample a list change) | pass |
+| RSS ≤ 400 MB at every sample | max 285 MB over 70 samples | pass |
+| RSS growth ≤ 10% over the last 5 minutes of churn | 268.4 to 284.4 MB, +6.0% | pass |
+
+Reported apart (not pushes): cold open 42 ms call, 57 ms to the lens commit; re-bootstrap 24-26 ms call, 29-33 ms to commit; a forced lost message to the commit of its full reply 6-22 ms.
 
