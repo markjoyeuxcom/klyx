@@ -3,6 +3,7 @@ package fleet
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strconv"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
@@ -138,8 +140,14 @@ func (c *ClusterConn) rolloutTargetIdentity(ctx context.Context, kind, namespace
 // DaemonSets the target ControllerRevision's data IS the patch. Undoing to the
 // CURRENT revision is refused - a no-op undo presented as success would be a
 // lie. Destructive by design: the caller (appbridge) gates it behind the
-// protected-cluster grant.
-func (c *ClusterConn) RolloutUndo(ctx context.Context, kind, namespace, name string, revision int64) error {
+// protected-cluster grant. uid is the workload the undo was armed against
+// (design §5b): it is confirmed before the history is read, and the write
+// itself is guarded by it (a JSON-patch test for a Deployment, metadata.uid
+// for a StatefulSet/DaemonSet patch).
+func (c *ClusterConn) RolloutUndo(ctx context.Context, kind, namespace, name, uid string, revision int64) error {
+	if err := c.CheckWorkloadArmed(ctx, kind, namespace, name, uid); err != nil {
+		return fmt.Errorf("rollout undo %w - nothing was written", err)
+	}
 	history, err := c.RolloutHistory(ctx, kind, namespace, name)
 	if err != nil {
 		return err
@@ -160,18 +168,21 @@ func (c *ClusterConn) RolloutUndo(ctx context.Context, kind, namespace, name str
 
 	switch kind {
 	case "Deployment":
-		return c.undoDeployment(ctx, namespace, name, revision)
+		return c.undoDeployment(ctx, namespace, name, uid, revision)
 	case "StatefulSet", "DaemonSet":
-		return c.undoFromControllerRevision(ctx, kind, namespace, name, revision)
+		return c.undoFromControllerRevision(ctx, kind, namespace, name, uid, revision)
 	default:
 		return fmt.Errorf("unsupported kind %q", kind)
 	}
 }
 
-func (c *ClusterConn) undoDeployment(ctx context.Context, namespace, name string, revision int64) error {
+func (c *ClusterConn) undoDeployment(ctx context.Context, namespace, name, uid string, revision int64) error {
 	dep, err := c.typed.AppsV1().Deployments(namespace).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
 		return fmt.Errorf("get deployment %s/%s: %w", namespace, name, err)
+	}
+	if string(dep.UID) != uid {
+		return fmt.Errorf("rollout undo Deployment %s/%s: %w - nothing was written", namespace, name, ErrReplaced)
 	}
 	rss, err := c.typed.AppsV1().ReplicaSets(namespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
@@ -196,10 +207,15 @@ func (c *ClusterConn) undoDeployment(ctx context.Context, namespace, name string
 	if err != nil {
 		return fmt.Errorf("rollout undo marshal: %w", err)
 	}
-	if _, err := c.typed.AppsV1().Deployments(namespace).Patch(ctx, name, types.JSONPatchType, body, metav1.PatchOptions{}); err != nil {
-		return fmt.Errorf("rollout undo deployment %s/%s to revision %d: %w", namespace, name, revision, err)
+	_, err = c.typed.AppsV1().Deployments(namespace).Patch(ctx, name, types.JSONPatchType, body, metav1.PatchOptions{})
+	if apierrors.IsInvalid(err) {
+		// A failed JSON-patch op is a 422 that does not say which op failed:
+		// name a replacement only when one is confirmed (the uid test op).
+		if cerr := c.CheckWorkloadArmed(ctx, "Deployment", namespace, name, uid); errors.Is(cerr, ErrReplaced) {
+			return fmt.Errorf("rollout undo Deployment %s/%s to revision %d: %w - its write was refused (%v)", namespace, name, revision, ErrReplaced, err)
+		}
 	}
-	return nil
+	return armedWriteErr("rollout undo", fmt.Sprintf("Deployment %s/%s to revision %d", namespace, name, revision), err)
 }
 
 // deploymentUndoPatch builds the JSON patch that rolls dep back to target's
@@ -247,10 +263,13 @@ func jsonPointerEscape(token string) string {
 	return strings.ReplaceAll(strings.ReplaceAll(token, "~", "~0"), "/", "~1")
 }
 
-func (c *ClusterConn) undoFromControllerRevision(ctx context.Context, kind, namespace, name string, revision int64) error {
+func (c *ClusterConn) undoFromControllerRevision(ctx context.Context, kind, namespace, name, armed string, revision int64) error {
 	uid, _, err := c.rolloutTargetIdentity(ctx, kind, namespace, name)
 	if err != nil {
 		return err
+	}
+	if string(uid) != armed {
+		return fmt.Errorf("rollout undo %s %s/%s: %w - nothing was written", kind, namespace, name, ErrReplaced)
 	}
 	crs, err := c.typed.AppsV1().ControllerRevisions(namespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
@@ -259,39 +278,43 @@ func (c *ClusterConn) undoFromControllerRevision(ctx context.Context, kind, name
 	for i := range crs.Items {
 		cr := &crs.Items[i]
 		if ownedByUID(cr.OwnerReferences, uid) && cr.Revision == revision {
-			// kubectl's rollback for apps/v1: the revision data IS the patch.
+			// kubectl's rollback for apps/v1: the revision data IS the patch,
+			// guarded by the armed UID.
+			body, gerr := guardUID(cr.Data.Raw, armed)
+			if gerr != nil {
+				return fmt.Errorf("rollout undo %s %s/%s: controllerrevision %d data: %w", kind, namespace, name, revision, gerr)
+			}
 			var perr error
 			switch kind {
 			case "StatefulSet":
-				_, perr = c.typed.AppsV1().StatefulSets(namespace).Patch(ctx, name, types.StrategicMergePatchType, cr.Data.Raw, metav1.PatchOptions{})
+				_, perr = c.typed.AppsV1().StatefulSets(namespace).Patch(ctx, name, types.StrategicMergePatchType, body, metav1.PatchOptions{})
 			default:
-				_, perr = c.typed.AppsV1().DaemonSets(namespace).Patch(ctx, name, types.StrategicMergePatchType, cr.Data.Raw, metav1.PatchOptions{})
+				_, perr = c.typed.AppsV1().DaemonSets(namespace).Patch(ctx, name, types.StrategicMergePatchType, body, metav1.PatchOptions{})
 			}
-			if perr != nil {
-				return fmt.Errorf("rollout undo %s %s/%s to revision %d: %w", kind, namespace, name, revision, perr)
-			}
-			return nil
+			return armedWriteErr("rollout undo", fmt.Sprintf("%s %s/%s to revision %d", kind, namespace, name, revision), perr)
 		}
 	}
 	return fmt.Errorf("controllerrevision %d of %s %s/%s not found", revision, kind, namespace, name)
 }
 
-// RolloutPause sets a Deployment's spec.paused - holds rollouts without
-// touching pods. Reversible and Deployment-only (the API has no paused on
-// StatefulSet/DaemonSet).
-func (c *ClusterConn) RolloutPause(ctx context.Context, namespace, name string, pause bool) error {
-	body, err := json.Marshal(map[string]interface{}{"spec": map[string]bool{"paused": pause}})
+// RolloutPause sets the ARMED Deployment's spec.paused (uid, design §5b) -
+// holds rollouts without touching pods. Reversible and Deployment-only (the
+// API has no paused on StatefulSet/DaemonSet). The patch carries metadata.uid
+// so a same-name replacement is refused by the server.
+func (c *ClusterConn) RolloutPause(ctx context.Context, namespace, name, uid string, pause bool) error {
+	verb := "rollout pause"
+	if !pause {
+		verb = "rollout resume"
+	}
+	if err := c.CheckWorkloadArmed(ctx, "Deployment", namespace, name, uid); err != nil {
+		return fmt.Errorf("%s %w - nothing was written", verb, err)
+	}
+	body, err := json.Marshal(map[string]interface{}{"metadata": map[string]string{"uid": uid}, "spec": map[string]bool{"paused": pause}})
 	if err != nil {
-		return fmt.Errorf("rollout pause marshal: %w", err)
+		return fmt.Errorf("%s marshal: %w", verb, err)
 	}
-	if _, err := c.typed.AppsV1().Deployments(namespace).Patch(ctx, name, types.StrategicMergePatchType, body, metav1.PatchOptions{}); err != nil {
-		verb := "pause"
-		if !pause {
-			verb = "resume"
-		}
-		return fmt.Errorf("rollout %s deployment %s/%s: %w", verb, namespace, name, err)
-	}
-	return nil
+	_, err = c.typed.AppsV1().Deployments(namespace).Patch(ctx, name, types.StrategicMergePatchType, body, metav1.PatchOptions{})
+	return armedWriteErr(verb, fmt.Sprintf("Deployment %s/%s", namespace, name), err)
 }
 
 func ownedByUID(refs []metav1.OwnerReference, uid types.UID) bool {

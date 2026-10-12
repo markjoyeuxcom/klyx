@@ -32,6 +32,7 @@ type ContainerPortDTO struct {
 type PodSummaryDTO struct {
 	Namespace  string                `json:"namespace"`
 	Name       string                `json:"name"`
+	UID        string                `json:"uid,omitempty"` // the pod object: verbs are armed against it (§5b)
 	Ready      bool                  `json:"ready"`
 	Phase      string                `json:"phase"`
 	Reason     string                `json:"reason"`
@@ -41,6 +42,7 @@ type PodSummaryDTO struct {
 	IP         string                `json:"ip"`
 	OwnerKind  string                `json:"ownerKind"`
 	OwnerName  string                `json:"ownerName"`
+	OwnerUID   string                `json:"ownerUid,omitempty"` // the owner a restart is armed against (§5b)
 	AgeSeconds int                   `json:"ageSeconds"`
 	Containers []ContainerSummaryDTO `json:"containers"`
 	// Health is the shared verdict; Rank/Reason/Phase are legacy fields kept

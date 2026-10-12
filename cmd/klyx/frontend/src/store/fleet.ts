@@ -403,7 +403,7 @@ export type ArgoViewMode = "applications" | "projects" | "applicationsets";
 export type FluxViewMode = "reconciliation" | "sources";
 
 export type OwnerDTO = { kind: string; namespace: string; name: string };
-export type PodDTO = { name: string; ready: boolean; restarts: number; reason: string; node: string; ageSeconds: number };
+export type PodDTO = { name: string; uid?: string; createdUnix?: number; ready: boolean; restarts: number; reason: string; node: string; ageSeconds: number };
 export type ResourceCellDTO = { usage: number | null; request: number | null; limit: number | null };
 export type WorkloadResourcesDTO = { cpu: ResourceCellDTO; mem: ResourceCellDTO };
 // stale: spec changed, controller has not observed it - status/rank reflect
@@ -419,7 +419,7 @@ export type WorkloadCompareDTO = {
   ownerRevisionNote?: string; // why ownerRevision is empty for an owned workload
   error: string;
 };
-export type WorkloadDTO = { kind: string; namespace: string; name: string; desired: number; ready: number; available: number; updated: number; restarts: number; reason: string; rank: "unhealthy"|"degraded"|"restarts"|"healthy"; gitops: OwnerDTO | null; pods: PodDTO[]; resources: WorkloadResourcesDTO; stale?: boolean; generation?: number; observedGeneration?: number; reloader?: ReloadTargetsDTO | null; paused?: boolean; health?: HealthLike };
+export type WorkloadDTO = { kind: string; namespace: string; name: string; uid?: string; gvr?: string; desired: number; ready: number; available: number; updated: number; restarts: number; reason: string; rank: "unhealthy"|"degraded"|"restarts"|"healthy"; gitops: OwnerDTO | null; pods: PodDTO[]; resources: WorkloadResourcesDTO; stale?: boolean; generation?: number; observedGeneration?: number; reloader?: ReloadTargetsDTO | null; paused?: boolean; health?: HealthLike };
 
 // Rollout history (newest first). Images may be empty when a
 // ControllerRevision's patch data carries no template - never fabricated.
@@ -473,11 +473,20 @@ export const WORKLOAD_KINDS = ["Deployment", "StatefulSet", "DaemonSet"] as cons
 export type WorkloadKind = typeof WORKLOAD_KINDS[number];
 export type WorkloadsSlice = {
   cluster: string | null;
+  // The rows are the Observer's, all namespaces (1c slice 3 §5.8): the
+  // namespace is a list filter, and namespaces are the rows' own.
   namespace: string;        // "" = all
   items: WorkloadDTO[];
   namespaces: string[];
-  fluxPresent: boolean;
-  loading: boolean;
+  fluxPresent: boolean; // the fact the rows were evaluated with (§2a)
+  loading: boolean; // the visit has no rows payload yet
+  coverage?: KindCoverageDTO[]; // the counted kinds (Deployment, StatefulSet, DaemonSet)
+  dependencies?: KindCoverageDTO[]; // what attribution read (Pod, ReplicaSet), from the same capture
+  rowsState?: RowsStateDTO;
+  counts?: VerdictPartCounts | null; // the one count selector's (global) verdict counts
+  // Live usage by "<kind>/<namespace>/<name>", a separate fetch joined at
+  // render: a rows push never erases it.
+  usage: Record<string, { cpu: number | null; mem: number | null }>;
   kindFilter: Record<WorkloadKind, boolean>;
   // True when the kinds were chosen - by navigation, history or an edit in
   // the view - rather than hydrated from saved preferences. A chosen "All
@@ -490,11 +499,10 @@ export type WorkloadsSlice = {
   metricsStatus: WorkloadMetricsStatusDTO | null;
   metricsStale: boolean;
   nearLimitSort: boolean;
-  live: boolean;
-  truncated?: boolean; // a list hit the server cap: rows are incomplete, scope by namespace
-  error?: string | null; // the last read FAILED; items are the last good read (or empty)
-  rowsScope?: string | null; // "<cluster>|<namespace>" the current items were READ for
+  error?: string | null; // the counted kinds' read failure (stale: items are the last good read)
 };
+// What the Workloads rows adapter (health/useWorkloadRows) writes.
+export type WorkloadsRowsPayload = Pick<WorkloadsSlice, "items" | "namespaces" | "fluxPresent" | "loading" | "error" | "coverage" | "dependencies" | "rowsState" | "counts">;
 
 function workloadKindFilterFor(kinds: readonly WorkloadKind[]): Record<WorkloadKind, boolean> {
   const selected = new Set(kinds.length === 0 ? WORKLOAD_KINDS : kinds);
@@ -516,7 +524,7 @@ export type NodeUsageDTO = { node: string; cpu: number | null; mem: number | nul
 export type NodeUtilizationResultDTO = { available: boolean; message?: string; updatedAtUnix: number; items: NodeUsageDTO[] };
 export type ContainerUsageDTO = { container: string; cpu: number | null; mem: number | null };
 export type PodUsageResultDTO = { available: boolean; message?: string; updatedAtUnix: number; items: ContainerUsageDTO[] };
-export type PodSummaryDTO = { namespace: string; name: string; ready: boolean; phase: string; reason: string; rank: "unhealthy"|"degraded"|"restarts"|"healthy"; restarts: number; node: string; ip: string; ownerKind: string; ownerName: string; ageSeconds: number; containers: ContainerSummaryDTO[]; health?: HealthLike };
+export type PodSummaryDTO = { namespace: string; name: string; uid?: string; ready: boolean; phase: string; reason: string; rank: "unhealthy"|"degraded"|"restarts"|"healthy"; restarts: number; node: string; ip: string; ownerKind: string; ownerName: string; ownerUid?: string; ageSeconds: number; containers: ContainerSummaryDTO[]; health?: HealthLike };
 export type PodsResultDTO = { namespaces: string[]; pods: PodSummaryDTO[]; truncated?: boolean; error?: string };
 export type PodDetailDTO = { summary: PodSummaryDTO; labels: Record<string, string>; annotations?: Record<string, string>; conditions: ConditionDTO[]; events: EventDTO[]; yaml: string; qosClass: string; serviceAccount: string; error?: string };
 
@@ -1040,8 +1048,9 @@ type FleetState = {
   setMetrics: (cluster: string, dto: MetricsDTO) => void;
   clearMetrics: () => void;
   workloads: WorkloadsSlice;
-  setWorkloadsLoading: (cluster: string, namespace: string) => void;
-  setWorkloads: (cluster: string, namespace: string, result: WorkloadsResultDTO) => void;
+  setWorkloadsVisit: (cluster: string) => void;
+  setWorkloadsFromRows: (cluster: string, p: WorkloadsRowsPayload) => void;
+  setWorkloadsNamespace: (namespace: string) => void;
   toggleWorkloadKind: (k: WorkloadKind) => void;
   setWorkloadKindFilter: (kinds: readonly WorkloadKind[]) => void;
   hydrateWorkloadKinds: (kinds: readonly WorkloadKind[]) => void;
@@ -1052,7 +1061,6 @@ type FleetState = {
   toggleWorkloadExpand: (key: string) => void;
   setWorkloadUsage: (cluster: string, namespace: string, result: WorkloadMetricsResultDTO) => void;
   toggleNearLimitSort: () => void;
-  setWorkloadsLive: (cluster: string, namespace: string, live: boolean) => void;
   clearWorkloads: () => void;
   pods: PodsSlice;
   setPodsLoading: (cluster: string, namespace: string) => void;
@@ -1342,26 +1350,13 @@ export const useFleet = create<FleetState>((set) => ({
   setMetricsLoading: (cluster) => set((s) => ({ metrics: { cluster, dto: s.metrics.cluster === cluster ? s.metrics.dto : null, loading: true } })),
   setMetrics: (cluster, dto) => set({ metrics: { cluster, dto, loading: false } }),
   clearMetrics: () => set({ metrics: { cluster: null, dto: null, loading: false } }),
-  workloads: { cluster: null, namespace: "", items: [], namespaces: [], fluxPresent: false, loading: false,
+  workloads: { cluster: null, namespace: "", items: [], namespaces: [], fluxPresent: false, loading: false, usage: {},
     kindFilter: workloadKindFilterFor(WORKLOAD_KINDS), needsAttention: false, search: "", expanded: [],
-    metricsAvailable: false, metricsStatus: null, metricsStale: false, nearLimitSort: false, live: false },
-  setWorkloadsLoading: (cluster, namespace) => set((s) => ({ workloads: { ...s.workloads, cluster, namespace, loading: true } })),
-  setWorkloads: (cluster, namespace, result) => set((s) => {
-    // namespace-list preservation: replace only on all-load; fallback to [namespace] if empty.
-    let namespaces = s.workloads.namespaces;
-    if (namespace === "") namespaces = result.namespaces ?? [];
-    if (namespaces.length === 0 && namespace !== "") namespaces = [namespace];
-    const scope = `${cluster}|${namespace}`;
-    if (result.error) {
-      // A failed read keeps the last good rows ONLY if they were read for this
-      // same scope - the loading setters retag cluster/namespace before the
-      // read, so the scope the rows came from is tracked separately (Codex
-      // batch-2 review R2). Rows from another namespace/cluster are dropped.
-      const same = s.workloads.rowsScope === scope;
-      return { workloads: { ...s.workloads, cluster, namespace, items: same ? s.workloads.items : [], rowsScope: same ? scope : null, error: result.error, loading: false } };
-    }
-    return { workloads: { ...s.workloads, cluster, namespace, items: result.workloads ?? [], namespaces, fluxPresent: result.fluxPresent, truncated: result.truncated ?? false, rowsScope: scope, error: null, loading: false } };
-  }),
+    metricsAvailable: false, metricsStatus: null, metricsStale: false, nearLimitSort: false },
+  // A new cluster's visit starts empty; a revisit keeps its filters.
+  setWorkloadsVisit: (cluster) => set((s) => ({ workloads: { ...s.workloads, ...(s.workloads.cluster === cluster ? {} : { items: [], namespaces: [], usage: {}, error: null }), cluster, loading: true, coverage: undefined, dependencies: undefined, rowsState: undefined, counts: undefined } })),
+  setWorkloadsFromRows: (cluster, p) => set((s) => ({ workloads: { ...s.workloads, cluster, ...p } })),
+  setWorkloadsNamespace: (namespace) => set((s) => ({ workloads: { ...s.workloads, namespace } })),
   toggleWorkloadKind: (k) => set((s) => ({ workloads: { ...s.workloads, kindFilter: { ...s.workloads.kindFilter, [k]: !s.workloads.kindFilter[k] }, kindExplicit: true } })),
   setWorkloadKindFilter: (kinds) => set((s) => ({ workloads: { ...s.workloads, kindFilter: workloadKindFilterFor(kinds), kindExplicit: true } })),
   hydrateWorkloadKinds: (kinds) => set((s) => ({ workloads: { ...s.workloads, kindFilter: workloadKindFilterFor(kinds), kindExplicit: false } })),
@@ -1373,32 +1368,22 @@ export const useFleet = create<FleetState>((set) => ({
     set((s) => {
       if (s.workloads.cluster !== cluster || s.workloads.namespace !== namespace) return {};
       if (result.status.available) {
-        const items = s.workloads.items.map((w) => {
-          const u = result.usage[`${w.kind}/${w.namespace}/${w.name}`];
-          if (!u) return w;
-          return { ...w, resources: {
-            cpu: { ...w.resources.cpu, usage: u.cpuUsage },
-            mem: { ...w.resources.mem, usage: u.memUsage },
-          } };
-        });
-        return { workloads: { ...s.workloads, items, metricsAvailable: true, metricsStatus: result.status, metricsStale: false } };
+        const usage: WorkloadsSlice["usage"] = {};
+        for (const [k, u] of Object.entries(result.usage)) usage[k] = { cpu: u.cpuUsage ?? null, mem: u.memUsage ?? null };
+        return { workloads: { ...s.workloads, usage, metricsAvailable: true, metricsStatus: result.status, metricsStale: false } };
       }
       const keptUpdatedAt = s.workloads.metricsStatus?.updatedAt ?? "";
       return { workloads: { ...s.workloads, metricsStatus: { ...result.status, updatedAt: keptUpdatedAt }, metricsStale: s.workloads.metricsAvailable } };
     }),
   toggleNearLimitSort: () => set((s) => ({ workloads: { ...s.workloads, nearLimitSort: !s.workloads.nearLimitSort } })),
-  setWorkloadsLive: (cluster, namespace, live) =>
-    set((s) => {
-      if (s.workloads.cluster !== cluster || s.workloads.namespace !== namespace) return {};
-      return { workloads: { ...s.workloads, live } };
-    }),
   // The view's cleanup. When the route still shows the workloads task (a
   // cluster switch by history or the palette reuses the mounted view), an
   // explicit kind choice belongs to the incoming place and is kept.
   clearWorkloads: () => set((s) => {
     const keepKinds = !!s.workloads.kindExplicit && s.route.name === "cluster" && s.route.section === "workloads" && !s.route.resource;
-    return { workloads: { ...s.workloads, cluster: null, items: [], namespaces: [], expanded: [],
-      kindFilter: keepKinds ? s.workloads.kindFilter : workloadKindFilterFor(WORKLOAD_KINDS), kindExplicit: keepKinds, needsAttention: false, search: "", namespace: "", metricsAvailable: false, metricsStatus: null, metricsStale: false, nearLimitSort: false, live: false, truncated: false, error: null, rowsScope: null } };
+    return { workloads: { ...s.workloads, cluster: null, items: [], namespaces: [], expanded: [], usage: {}, loading: false,
+      kindFilter: keepKinds ? s.workloads.kindFilter : workloadKindFilterFor(WORKLOAD_KINDS), kindExplicit: keepKinds, needsAttention: false, search: "", namespace: "", metricsAvailable: false, metricsStatus: null, metricsStale: false, nearLimitSort: false, error: null,
+      coverage: undefined, dependencies: undefined, rowsState: undefined, counts: undefined } };
   }),
   pods: { cluster: null, namespace: "", items: [], namespaces: [], loading: false, needsAttention: false, search: "", selected: null, detail: null, detailLoading: false, live: false },
   setPodsLoading: (cluster, namespace) => set((s) => ({ pods: { ...s.pods, cluster, namespace, loading: true } })),

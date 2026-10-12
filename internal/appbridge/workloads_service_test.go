@@ -27,19 +27,20 @@ type fakeWLConn struct {
 	undoErr         error
 	lastUndoRev     int64
 	lastPause       *bool
+	lastUID         string // the armed UID the last verb carried
 }
 
 func (f *fakeWLConn) RolloutHistory(context.Context, string, string, string) ([]workloads.RolloutRevision, error) {
 	return f.history, f.historyErr
 }
 
-func (f *fakeWLConn) RolloutUndo(_ context.Context, _, _, _ string, revision int64) error {
-	f.lastUndoRev = revision
+func (f *fakeWLConn) RolloutUndo(_ context.Context, _, _, _, uid string, revision int64) error {
+	f.lastUndoRev, f.lastUID = revision, uid
 	return f.undoErr
 }
 
-func (f *fakeWLConn) RolloutPause(_ context.Context, _, _ string, pause bool) error {
-	f.lastPause = &pause
+func (f *fakeWLConn) RolloutPause(_ context.Context, _, _, uid string, pause bool) error {
+	f.lastPause, f.lastUID = &pause, uid
 	return nil
 }
 
@@ -56,13 +57,13 @@ func (f *fakeWLConn) WorkloadMetrics(context.Context, string) (map[string]worklo
 	return map[string]workloads.Usage{"Deployment/ns/api": {CPU: &cpu}}, workloads.UsageStatus{Available: true}
 }
 
-func (f *fakeWLConn) RolloutRestart(_ context.Context, kind, _, _ string) error {
-	f.lastRestartKind = kind
+func (f *fakeWLConn) RolloutRestart(_ context.Context, kind, _, _, uid string) error {
+	f.lastRestartKind, f.lastUID = kind, uid
 	return f.rolloutErr
 }
 
-func (f *fakeWLConn) ScaleWorkload(_ context.Context, kind, _, _ string, replicas int32) error {
-	f.lastScaleKind = kind
+func (f *fakeWLConn) ScaleWorkload(_ context.Context, kind, _, _, uid string, replicas int32) error {
+	f.lastScaleKind, f.lastUID = kind, uid
 	f.lastScaleN = replicas
 	return f.scaleErr
 }
@@ -73,7 +74,7 @@ func (f *fakeWLConn) WatchDirty(context.Context, string, []string, func(), func(
 
 func TestListWorkloadsDTO(t *testing.T) {
 	t.Run("cluster miss -> empty non-nil", func(t *testing.T) {
-		s := NewWorkloadsService(func(string) (WorkloadsConn, bool) { return nil, false }, nil)
+		s := NewWorkloadsService(func(string) (WorkloadsConn, bool) { return nil, false })
 		dto := s.ListWorkloads("nope", "")
 		if dto.Workloads == nil || dto.Namespaces == nil {
 			t.Fatal("slices must be non-nil")
@@ -86,7 +87,7 @@ func TestListWorkloadsDTO(t *testing.T) {
 				Pods:   []workloads.Pod{{Name: "x-1", Ready: false, Restarts: 5, Reason: "CrashLoopBackOff", Node: "n1", AgeSeconds: 30}}},
 			{Kind: "DaemonSet", Namespace: "a", Name: "y", Desired: 3, Ready: 3, Rank: workloads.Healthy},
 		}}
-		s := NewWorkloadsService(func(string) (WorkloadsConn, bool) { return conn, true }, nil)
+		s := NewWorkloadsService(func(string) (WorkloadsConn, bool) { return conn, true })
 
 		all := s.ListWorkloads("c", "")
 		if !all.FluxPresent {
@@ -112,7 +113,7 @@ func TestListWorkloadsDTO(t *testing.T) {
 	})
 	t.Run("truncated flag propagates", func(t *testing.T) {
 		conn := &fakeWLConn{truncated: true}
-		s := NewWorkloadsService(func(string) (WorkloadsConn, bool) { return conn, true }, nil)
+		s := NewWorkloadsService(func(string) (WorkloadsConn, bool) { return conn, true })
 		if dto := s.ListWorkloads("c", ""); !dto.Truncated {
 			t.Fatalf("truncated must propagate, got %+v", dto)
 		}
@@ -130,7 +131,7 @@ func TestWorkloadCompareMapsToDTO(t *testing.T) {
 		Containers: []fleet.CompareContainer{{Name: "app", Image: "shop/cart:v1", Resources: "req 100m/128Mi"}},
 		OwnerKind:  "Kustomization", OwnerName: "apps", OwnerRevision: "main@sha1:abc",
 	}}
-	s := NewWorkloadsService(func(string) (WorkloadsConn, bool) { return conn, true }, nil)
+	s := NewWorkloadsService(func(string) (WorkloadsConn, bool) { return conn, true })
 
 	dto := s.WorkloadCompare("c", "Deployment", "shop", "cart")
 	if !dto.Found || dto.SpecHash != "abc123def456" || dto.OwnerRevision != "main@sha1:abc" {
@@ -146,7 +147,7 @@ func TestWorkloadCompareMapsToDTO(t *testing.T) {
 		t.Fatalf("error must fold into DTO: %+v", d)
 	}
 	// Cluster miss too.
-	miss := NewWorkloadsService(func(string) (WorkloadsConn, bool) { return nil, false }, nil)
+	miss := NewWorkloadsService(func(string) (WorkloadsConn, bool) { return nil, false })
 	if d := miss.WorkloadCompare("nope", "Deployment", "shop", "cart"); d.Error == "" {
 		t.Fatalf("cluster miss must carry an error: %+v", d)
 	}
@@ -158,7 +159,7 @@ func TestGetWorkloadMetricsDTO(t *testing.T) {
 			return &fakeWLConn{}, true
 		}
 		return nil, false
-	}, nil)
+	})
 
 	t.Run("cluster miss returns non-nil empty + unavailable", func(t *testing.T) {
 		r := s.GetWorkloadMetrics("nope", "")
@@ -185,8 +186,8 @@ func TestGetWorkloadMetricsDTO(t *testing.T) {
 // --- RolloutRestart tests ---
 
 func TestWorkloadsService_RolloutRestart_ClusterMiss(t *testing.T) {
-	s := NewWorkloadsService(func(string) (WorkloadsConn, bool) { return nil, false }, nil)
-	r := s.RolloutRestart("ghost", "Deployment", "ns", "api")
+	s := NewWorkloadsService(func(string) (WorkloadsConn, bool) { return nil, false })
+	r := s.RolloutRestart("ghost", "Deployment", "ns", "api", "uid-api")
 	if r.OK || r.Error == "" {
 		t.Fatalf("want failure for unknown cluster, got %+v", r)
 	}
@@ -197,8 +198,8 @@ func TestWorkloadsService_RolloutRestart_ClusterMiss(t *testing.T) {
 
 func TestWorkloadsService_RolloutRestart_Success(t *testing.T) {
 	conn := &fakeWLConn{}
-	s := NewWorkloadsService(func(string) (WorkloadsConn, bool) { return conn, true }, nil)
-	r := s.RolloutRestart("c", "Deployment", "default", "api")
+	s := NewWorkloadsService(func(string) (WorkloadsConn, bool) { return conn, true })
+	r := s.RolloutRestart("c", "Deployment", "default", "api", "uid-api")
 	if !r.OK || r.Error != "" {
 		t.Fatalf("want OK, got %+v", r)
 	}
@@ -209,8 +210,8 @@ func TestWorkloadsService_RolloutRestart_Success(t *testing.T) {
 
 func TestWorkloadsService_RolloutRestart_ErrorSurfaced(t *testing.T) {
 	conn := &fakeWLConn{rolloutErr: errors.New("unsupported kind \"Job\"")}
-	s := NewWorkloadsService(func(string) (WorkloadsConn, bool) { return conn, true }, nil)
-	r := s.RolloutRestart("c", "Job", "default", "migrate")
+	s := NewWorkloadsService(func(string) (WorkloadsConn, bool) { return conn, true })
+	r := s.RolloutRestart("c", "Job", "default", "migrate", "uid-migrate")
 	if r.OK || r.Error == "" {
 		t.Fatalf("want failure surfaced, got %+v", r)
 	}
@@ -219,8 +220,8 @@ func TestWorkloadsService_RolloutRestart_ErrorSurfaced(t *testing.T) {
 // --- ScaleWorkload tests ---
 
 func TestWorkloadsService_ScaleWorkload_ClusterMiss(t *testing.T) {
-	s := NewWorkloadsService(func(string) (WorkloadsConn, bool) { return nil, false }, nil)
-	r := s.ScaleWorkload("ghost", "Deployment", "ns", "api", 3)
+	s := NewWorkloadsService(func(string) (WorkloadsConn, bool) { return nil, false })
+	r := s.ScaleWorkload("ghost", "Deployment", "ns", "api", "uid-api", 3)
 	if r.OK || r.Error == "" {
 		t.Fatalf("want failure for unknown cluster, got %+v", r)
 	}
@@ -231,8 +232,8 @@ func TestWorkloadsService_ScaleWorkload_ClusterMiss(t *testing.T) {
 
 func TestWorkloadsService_ScaleWorkload_Success(t *testing.T) {
 	conn := &fakeWLConn{}
-	s := NewWorkloadsService(func(string) (WorkloadsConn, bool) { return conn, true }, nil)
-	r := s.ScaleWorkload("c", "Deployment", "prod", "api", 5)
+	s := NewWorkloadsService(func(string) (WorkloadsConn, bool) { return conn, true })
+	r := s.ScaleWorkload("c", "Deployment", "prod", "api", "uid-api", 5)
 	if !r.OK || r.Error != "" {
 		t.Fatalf("want OK, got %+v", r)
 	}
@@ -246,8 +247,8 @@ func TestWorkloadsService_ScaleWorkload_Success(t *testing.T) {
 
 func TestWorkloadsService_ScaleWorkload_StatefulSet(t *testing.T) {
 	conn := &fakeWLConn{}
-	s := NewWorkloadsService(func(string) (WorkloadsConn, bool) { return conn, true }, nil)
-	r := s.ScaleWorkload("c", "StatefulSet", "db", "pg", 3)
+	s := NewWorkloadsService(func(string) (WorkloadsConn, bool) { return conn, true })
+	r := s.ScaleWorkload("c", "StatefulSet", "db", "pg", "uid-pg", 3)
 	if !r.OK || r.Error != "" {
 		t.Fatalf("want OK for StatefulSet, got %+v", r)
 	}
@@ -258,31 +259,31 @@ func TestWorkloadsService_ScaleWorkload_StatefulSet(t *testing.T) {
 
 func TestWorkloadsService_ScaleWorkload_ErrorSurfaced(t *testing.T) {
 	conn := &fakeWLConn{scaleErr: errors.New("unsupported kind \"DaemonSet\"")}
-	s := NewWorkloadsService(func(string) (WorkloadsConn, bool) { return conn, true }, nil)
-	r := s.ScaleWorkload("c", "DaemonSet", "kube-system", "cilium", 1)
+	s := NewWorkloadsService(func(string) (WorkloadsConn, bool) { return conn, true })
+	r := s.ScaleWorkload("c", "DaemonSet", "kube-system", "cilium", "uid-cilium", 1)
 	if r.OK || r.Error == "" {
 		t.Fatalf("want failure surfaced, got %+v", r)
 	}
 }
 
 func TestWorkloadsService_ScaleWorkload_NegativeBoundsRejected(t *testing.T) {
-	s := NewWorkloadsService(func(string) (WorkloadsConn, bool) { return &fakeWLConn{}, true }, nil)
-	r := s.ScaleWorkload("c", "Deployment", "ns", "api", -1)
+	s := NewWorkloadsService(func(string) (WorkloadsConn, bool) { return &fakeWLConn{}, true })
+	r := s.ScaleWorkload("c", "Deployment", "ns", "api", "uid-api", -1)
 	if r.OK || r.Error == "" {
 		t.Fatalf("want bounds error, got %+v", r)
 	}
 }
 
 func TestWorkloadsService_ScaleWorkload_UpperBoundsRejected(t *testing.T) {
-	s := NewWorkloadsService(func(string) (WorkloadsConn, bool) { return &fakeWLConn{}, true }, nil)
-	r := s.ScaleWorkload("c", "Deployment", "ns", "api", maxScaleReplicas+1)
+	s := NewWorkloadsService(func(string) (WorkloadsConn, bool) { return &fakeWLConn{}, true })
+	r := s.ScaleWorkload("c", "Deployment", "ns", "api", "uid-api", maxScaleReplicas+1)
 	if r.OK || r.Error == "" {
 		t.Fatalf("want bounds error for replicas > %d, got %+v", maxScaleReplicas, r)
 	}
 }
 
 func wlSvc(conn *fakeWLConn) *WorkloadsService {
-	return NewWorkloadsService(func(string) (WorkloadsConn, bool) { return conn, true }, nil)
+	return NewWorkloadsService(func(string) (WorkloadsConn, bool) { return conn, true })
 }
 
 func TestRolloutHistoryMapsToDTO(t *testing.T) {
@@ -317,7 +318,7 @@ func TestRolloutUndoGatedByProtectGuard(t *testing.T) {
 	svc := wlSvc(conn)
 
 	// Unarmed on a protected cluster: refused before the conn is touched.
-	if r := svc.RolloutUndo("prd", "Deployment", "shop", "cart", 2); r.OK || r.Error == "" {
+	if r := svc.RolloutUndo("prd", "Deployment", "shop", "cart", "uid-cart", 2); r.OK || r.Error == "" {
 		t.Fatalf("unarmed undo on prd must refuse: %+v", r)
 	}
 	if conn.lastUndoRev != 0 {
@@ -328,14 +329,14 @@ func TestRolloutUndoGatedByProtectGuard(t *testing.T) {
 	if err := activeProtectGuard.Load().Arm("prd", "prd"); err != nil {
 		t.Fatal(err)
 	}
-	if r := svc.RolloutUndo("prd", "Deployment", "shop", "cart", 2); !r.OK {
+	if r := svc.RolloutUndo("prd", "Deployment", "shop", "cart", "uid-cart", 2); !r.OK {
 		t.Fatalf("armed undo: %+v", r)
 	}
 	if conn.lastUndoRev != 2 {
 		t.Fatalf("revision passthrough: %d", conn.lastUndoRev)
 	}
 	// The grant was consumed - a second undo without re-arming refuses.
-	if r := svc.RolloutUndo("prd", "Deployment", "shop", "cart", 1); r.OK {
+	if r := svc.RolloutUndo("prd", "Deployment", "shop", "cart", "uid-cart", 1); r.OK {
 		t.Fatalf("grant must be one-shot: %+v", r)
 	}
 }
@@ -347,13 +348,13 @@ func TestRolloutPausePassesThroughAndGates(t *testing.T) {
 
 	conn := &fakeWLConn{}
 	svc := wlSvc(conn)
-	if r := svc.RolloutPause("dev", "shop", "cart", true); !r.OK || conn.lastPause == nil || !*conn.lastPause {
+	if r := svc.RolloutPause("dev", "shop", "cart", "uid-cart", true); !r.OK || conn.lastPause == nil || !*conn.lastPause {
 		t.Fatalf("pause on unprotected: %+v %+v", r, conn.lastPause)
 	}
-	if r := svc.RolloutPause("dev", "shop", "cart", false); !r.OK || *conn.lastPause {
+	if r := svc.RolloutPause("dev", "shop", "cart", "uid-cart", false); !r.OK || *conn.lastPause {
 		t.Fatalf("resume: %+v", r)
 	}
-	if r := svc.RolloutPause("prd", "shop", "cart", true); r.OK {
+	if r := svc.RolloutPause("prd", "shop", "cart", "uid-cart", true); r.OK {
 		t.Fatalf("unarmed pause on prd must refuse: %+v", r)
 	}
 }
@@ -362,5 +363,23 @@ func TestWorkloadDTOCarriesPaused(t *testing.T) {
 	dto := toWorkloadDTO(workloads.Workload{Kind: "Deployment", Namespace: "x", Name: "held", Paused: true})
 	if !dto.Paused {
 		t.Fatalf("paused must carry: %+v", dto)
+	}
+}
+
+// Every workload verb passes the UID it was armed against to the cluster
+// (design §5b): the fleet layer writes only that object.
+func TestWorkloadsService_VerbsCarryTheArmedUID(t *testing.T) {
+	conn := &fakeWLConn{}
+	s := NewWorkloadsService(func(string) (WorkloadsConn, bool) { return conn, true })
+	for name, run := range map[string]func() ActionResultDTO{
+		"restart": func() ActionResultDTO { return s.RolloutRestart("c", "Deployment", "ns", "api", "uid-armed") },
+		"scale":   func() ActionResultDTO { return s.ScaleWorkload("c", "Deployment", "ns", "api", "uid-armed", 2) },
+		"undo":    func() ActionResultDTO { return s.RolloutUndo("c", "Deployment", "ns", "api", "uid-armed", 1) },
+		"pause":   func() ActionResultDTO { return s.RolloutPause("c", "ns", "api", "uid-armed", true) },
+	} {
+		conn.lastUID = ""
+		if r := run(); !r.OK || conn.lastUID != "uid-armed" {
+			t.Fatalf("%s: the armed UID must reach the cluster: %+v uid=%q", name, r, conn.lastUID)
+		}
 	}
 }

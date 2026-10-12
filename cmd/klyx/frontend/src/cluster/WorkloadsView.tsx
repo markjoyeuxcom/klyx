@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { IconTerminal2, IconExternalLink, IconBox, IconX, IconAlertTriangle, IconTrash } from "@tabler/icons-react";
 import { useFleet } from "../store/fleet";
-import type { WorkloadDTO, PodDTO, WorkloadKind, ResourceCellDTO, RolloutRevisionDTO } from "../store/fleet";
-import { listWorkloads, openLiveWorkloads, rolloutRestart, rolloutHistory, rolloutUndo, rolloutPause, scaleWorkload } from "../bridge/workloads";
+import type { WorkloadDTO, PodDTO, WorkloadKind, ResourceCellDTO, RolloutRevisionDTO, KindCoverageDTO } from "../store/fleet";
+import { rolloutRestart, rolloutHistory, rolloutUndo, rolloutPause, scaleWorkload } from "../bridge/workloads";
 import { deletePod, openPodDetail } from "../bridge/pods";
 import { getWorkloadMetrics } from "../bridge/workload-metrics";
 import { getWorkloadSparklines } from "../bridge/metrics";
@@ -20,7 +20,7 @@ import { useResizableDock } from "../chrome/useResizableDock";
 import { CopyButton } from "../chrome/CopyButton";
 import { EmptyState } from "../chrome/EmptyState";
 import { SkeletonRows } from "../chrome/SkeletonRows";
-import { LiveIndicator, btn, ellipsis } from "../chrome/primitives";
+import { btn, ellipsis } from "../chrome/primitives";
 import { loadClusterPrefs, loadSearch, saveSearch, saveWorkloadsViewPrefs } from "../store/persist";
 import { staleStyle } from "./staleness";
 import { wellKnownResourceRef } from "./resourceRefs";
@@ -28,7 +28,9 @@ import { FleetCompare } from "./FleetCompare";
 import { WatchErrorBanner } from "../chrome/WatchErrorBanner";
 
 import { VerdictLabel, VerdictLamp, VerdictStatus } from "../health/VerdictView";
-import { attentionTone, coverageOf, isAttention, kindOf, labelOf, summarize } from "../health/verdict";
+import { type VerdictCounts, attentionTone, isAttention, kindOf, labelOf, orderOf, summarize } from "../health/verdict";
+import { useWorkloadRows } from "../health/useWorkloadRows";
+import { clock, combineEvidence, coverageGaps, kindEvidence, lastGoodAt, type KindEvidence } from "../layout/coverage";
 import { UpdatedAt, useReceivedAt } from "../chrome/Age";
 import { LensLayout, LensTable, TABLE_ROW_HEIGHT, type DatasetState } from "../layout/LensLayout";
 import { InspectorBlock, InspectorLayout, type MenuItem } from "../layout/InspectorLayout";
@@ -106,6 +108,18 @@ const WL_COLUMNS: ColumnDef[] = [
 ];
 const WL_LABEL: Record<string, string> = { lamp: "", kind: "Kind", name: "Workload", status: "Status", ready: "Ready", cpu: "CPU", mem: "Memory", restarts: "Restarts", gitops: "GitOps owner", logs: "" };
 
+const byTriage = (a: WorkloadDTO, b: WorkloadDTO) =>
+  orderOf(kindOf(a.health)) - orderOf(kindOf(b.health)) || (b.health?.rank ?? 0) - (a.health?.rank ?? 0)
+  || a.namespace.localeCompare(b.namespace) || a.name.localeCompare(b.name);
+
+// withUsage joins the live usage fetch to a row (separate from the rows, so a
+// rows push never erases it).
+function withUsage(w: WorkloadDTO, usage: Record<string, { cpu: number | null; mem: number | null }>): WorkloadDTO {
+  const u = usage[keyOf(w)];
+  if (!u) return w;
+  return { ...w, resources: { cpu: { ...w.resources.cpu, usage: u.cpu }, mem: { ...w.resources.mem, usage: u.mem } } };
+}
+
 export function WorkloadsView({ cluster }: { cluster: string }) {
   const wl = useFleet((s) => s.workloads);
   const isProtected = useFleet((s) => s.clusters.find((c) => c.name === cluster)?.protected ?? false);
@@ -128,12 +142,14 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
   const [bodyWidth, setBodyWidth] = useState(1100);
   const searchRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<VirtualListHandle>(null);
-  const liveCleanupRef = useRef<(() => void) | null>(null);
 
+  // The workloads are the Observer's shared rows, all namespaces (1c slice 3
+  // §5.8) - live; the namespace is a list filter. Usage is a separate fetch.
+  useWorkloadRows(cluster);
+  const mine = wl.cluster === cluster;
   useEffect(() => {
-    // Live list subscription; usage metrics poll separately. Hydration fills
-    // only fields still at their reset defaults, so an intent set just before
-    // mount wins.
+    // Hydration fills only fields still at their reset defaults, so an intent
+    // set just before mount wins.
     const st = useFleet.getState();
     const prefs = loadClusterPrefs(cluster).workloads ?? {};
     if (prefs.needsAttention && !st.workloads.needsAttention) st.setWorkloadsNeedsAttention(true);
@@ -144,53 +160,48 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
     if (prefs.kinds && prefs.kinds.length > 0 && prefs.kinds.length < KINDS.length && kindsAtDefault) st.hydrateWorkloadKinds(prefs.kinds);
     const savedSearch = loadSearch(cluster, "workloads");
     if (savedSearch && st.workloads.search === "") st.setWorkloadsSearch(savedSearch);
-    const ns = st.workloads.namespace || (prefs.namespace ?? "");
-    liveCleanupRef.current = openLiveWorkloads(cluster, ns);
+    if (prefs.namespace && st.workloads.namespace === "") st.setWorkloadsNamespace(prefs.namespace);
+  }, [cluster]);
+  useEffect(() => {
+    if (!mine) return;
+    const ns = wl.namespace;
     void getWorkloadMetrics(cluster, ns);
     const id = setInterval(() => {
       const cur = useFleet.getState().workloads;
-      if (cur.cluster === cluster) getWorkloadMetrics(cluster, cur.namespace);
+      if (cur.cluster === cluster && cur.namespace === ns) void getWorkloadMetrics(cluster, ns);
     }, 30000);
-    return () => {
-      clearInterval(id);
-      if (liveCleanupRef.current) { liveCleanupRef.current(); liveCleanupRef.current = null; }
-      useFleet.getState().clearWorkloads();
-    };
-  }, [cluster]);
+    return () => clearInterval(id);
+  }, [cluster, mine, wl.namespace]);
 
   useEffect(() => {
-    if (wl.cluster !== cluster) return;
+    if (!mine) return;
     saveWorkloadsViewPrefs(cluster, { namespace: wl.namespace, needsAttention: wl.needsAttention, kinds: KINDS.filter((k) => wl.kindFilter[k]), nearLimitSort: wl.nearLimitSort });
     saveSearch(cluster, "workloads", wl.search);
-  }, [cluster, wl.cluster, wl.namespace, wl.needsAttention, wl.kindFilter, wl.nearLimitSort, wl.search]);
+  }, [cluster, mine, wl.namespace, wl.needsAttention, wl.kindFilter, wl.nearLimitSort, wl.search]);
 
-  // Palette verbs / cross-links: select the workload, then open the verb's
-  // confirm or scale input.
-  useNavIntent(cluster, ["restart-workload", "scale-workload", "select-workload"], (intent) => {
-    if (wl.loading || wl.items.length === 0) return "wait";
-    if (!("workloadKind" in intent)) return "missing";
-    const w = wl.items.find((x) => x.kind === intent.workloadKind && x.namespace === intent.namespace && x.name === intent.name);
-    if (!w) return "missing";
-    autoSelect.current = "done";
-    setCursorKey(keyOf(w));
-    setSelectedKey(keyOf(w));
-    if (intent.kind === "restart-workload") setPending({ kind: "restart", w });
-    else if (intent.kind === "scale-workload") setPending({ kind: "scale-input", w });
-    return "consumed";
-  }, [wl.items, wl.loading]);
-
-  const onNamespace = (ns: string) => {
-    if (liveCleanupRef.current) { liveCleanupRef.current(); liveCleanupRef.current = null; }
-    liveCleanupRef.current = openLiveWorkloads(cluster, ns);
-    void getWorkloadMetrics(cluster, ns);
-  };
-  const onRefresh = () => { listWorkloads(cluster, wl.namespace).then(() => getWorkloadMetrics(cluster, wl.namespace)); };
+  // Evidence is each counted kind's own coverage; what pod attribution read
+  // (Pods, ReplicaSets) qualifies the verdicts, never the list.
+  const kindEv = useCallback((k: string) => kindEvidence(mine && !wl.loading, wl.coverage, k, wl.error), [mine, wl.loading, wl.coverage, wl.error]);
+  const ev = combineEvidence(KINDS.map(kindEv));
+  const depEv = (k: string) => (mine && wl.dependencies?.some((d) => d.kind === k) ? kindEvidence(true, wl.dependencies, k, null) : "pending");
+  const podsEv = depEv("Pod");
+  const rowsRefreshing = mine && !!wl.rowsState?.refreshing;
+  const rowsAsOf = mine && wl.rowsState?.evaluatedAt ? clock(wl.rowsState.evaluatedAt) : "the last read";
+  const asOf = rowsRefreshing ? ` (as of ${rowsAsOf})` : "";
+  const lastGood = mine ? lastGoodAt(wl.coverage, KINDS) : null;
+  const discoveryGap = mine ? coverageGaps([...(wl.coverage ?? []), ...(wl.dependencies ?? [])]) : null;
+  const mark = ev === "complete" ? "" : ev === "stale" ? "*" : "+";
 
   const showMetrics = wl.metricsAvailable;
-  const coverage = coverageOf(wl, cluster, wl.namespace);
-  const scopedItems = useMemo(() => (coverage === "unavailable" ? [] : wl.items), [coverage, wl.items]);
-  const counts = summarize(scopedItems, (w) => w.health);
-  const receivedAt = useReceivedAt(coverage === "complete" || coverage === "partial" ? wl.items : null);
+  // faults first, then severity, namespace and name - the lens's own order,
+  // never the capture's (slice 3 §5.8)
+  const allItems = useMemo(() => (mine ? wl.items.map((w) => withUsage(w, wl.usage)).sort(byTriage) : []), [mine, wl.items, wl.usage]);
+  // the namespace filter scopes the list; the global counts stay cluster-wide
+  const scopedItems = useMemo(() => (wl.namespace ? allItems.filter((w) => w.namespace === wl.namespace) : allItems), [allItems, wl.namespace]);
+  const rowCounts = summarize(scopedItems, (w) => w.health);
+  const globalCounts = mine ? wl.counts : null;
+  const counts: VerdictCounts = globalCounts ? { ...globalCounts, attention: globalCounts.fault + globalCounts.degraded } : summarize(allItems, (w) => w.health);
+  const receivedAt = useReceivedAt(allItems.length > 0 ? wl.items : null);
   const query = wl.search.trim().toLowerCase();
   const filtered = useMemo(() => scopedItems.filter((w) => {
     if (!wl.kindFilter[w.kind as WorkloadKind]) return false;
@@ -203,6 +214,8 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
   }), [scopedItems, wl.kindFilter, wl.needsAttention, unknownOnly, query]);
   const rows = showMetrics && wl.nearLimitSort ? nearLimitSort(filtered) : filtered;
   const cursorIdx = cursorKey === null ? -1 : rows.findIndex((w) => keyOf(w) === cursorKey);
+  // "none need attention" is a claim about the present: a complete, current read
+  const current = ev === "complete" && !wl.rowsState?.updating && !rowsRefreshing;
 
   const closeInspector = useCallback(() => { autoSelect.current = "done"; setSelectedKey(null); }, []);
   const open = useCallback((w: WorkloadDTO) => { setCursorKey(keyOf(w)); setSelectedKey(keyOf(w)); }, []);
@@ -216,7 +229,26 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
     extraKeys: { l: (idx) => { const w = rows[idx]; if (w) setLogsTarget({ namespace: w.namespace, name: w.name, kind: w.kind as WorkloadKind }); } },
   });
 
-  // One-shot auto-select of the first attention row from a FRESH read.
+  // Palette verbs / cross-links: select the workload (revealing it past the
+  // filters), then open the verb's confirm or scale input.
+  useNavIntent(cluster, ["restart-workload", "scale-workload", "select-workload"], (intent) => {
+    if (allItems.length === 0) return ev === "complete" ? "missing" : "wait";
+    if (!("workloadKind" in intent)) return "missing";
+    const w = allItems.find((x) => x.kind === intent.workloadKind && x.namespace === intent.namespace && x.name === intent.name);
+    if (!w) return "missing";
+    autoSelect.current = "done";
+    if (!rows.some((x) => keyOf(x) === keyOf(w))) {
+      const st = useFleet.getState();
+      st.setWorkloadsNamespace(""); st.setWorkloadsSearch(""); st.setWorkloadsNeedsAttention(false); st.setWorkloadKindFilter(KINDS); setUnknownOnly(false);
+    }
+    setCursorKey(keyOf(w));
+    setSelectedKey(keyOf(w));
+    if (intent.kind === "restart-workload") setPending({ kind: "restart", w });
+    else if (intent.kind === "scale-workload") setPending({ kind: "scale-input", w });
+    return "consumed";
+  }, [allItems, rows, ev]);
+
+  // One-shot auto-select of the first attention row from a FRESH complete read.
   const autoSelect = useRef<"pending" | "done">("pending");
   const itemsAtEntry = useRef<WorkloadDTO[] | null>(null);
   if (itemsAtEntry.current === null) itemsAtEntry.current = wl.items;
@@ -233,40 +265,58 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
     setLogsPinned(null);
     setCompareTarget(null);
   }, [cluster]);
-  const freshRead = !wl.loading && !wl.error && wl.items !== itemsAtEntry.current;
+  const freshRead = mine && ev === "complete" && wl.items !== itemsAtEntry.current;
   useEffect(() => {
-    if (autoSelect.current === "done" || !freshRead || (coverage !== "complete" && coverage !== "partial")) return;
+    if (autoSelect.current === "done" || !freshRead) return;
     autoSelect.current = "done";
     if (selectedKey) return;
     const w = rows.find((x) => isAttention(kindOf(x.health)));
     if (w) open(w);
-  }, [freshRead, coverage, rows, selectedKey, open]);
+  }, [freshRead, rows, selectedKey, open]);
 
-  // Selection lifecycle: a filter or scope excluding it closes the inspector;
-  // a workload gone from a complete in-scope read is removed (last evidence,
-  // no actions) and any pending verb for it is cancelled.
-  const selected = selectedKey ? scopedItems.find((w) => keyOf(w) === selectedKey) : undefined;
-  const lastSelected = useRef<WorkloadDTO | null>(null);
-  if (selected) lastSelected.current = selected;
-  const selNs = selectedKey ? selectedKey.split("/")[1] : "";
-  const selInScope = !!selectedKey && (wl.namespace === "" || wl.namespace === selNs);
-  const selRemoved = !!selectedKey && selInScope && coverage === "complete" && !selected;
+  // Selection follows the key; verbs follow the UID. A workload missing from
+  // the rows keeps its last row: removed only on a complete read of its own
+  // kind, otherwise unverified (slice 3 §5a).
+  const selected = selectedKey ? allItems.find((w) => keyOf(w) === selectedKey) : undefined;
+  const lastSelected = useRef<{ cluster: string; w: WorkloadDTO } | null>(null);
+  if (selected) lastSelected.current = { cluster, w: selected };
+  const prior = selectedKey && lastSelected.current?.cluster === cluster && keyOf(lastSelected.current.w) === selectedKey ? lastSelected.current.w : null;
+  const subject = selected ?? prior;
+  const selKind = selectedKey ? selectedKey.split("/")[0] : "";
+  const gone: "removed" | "unverified" | null = selectedKey && !selected && subject ? (kindEv(selKind) === "complete" ? "removed" : "unverified") : null;
+  // Operator filter edits win: one that hides the selection closes it. A
+  // read change never does - the selection keeps its last evidence.
+  const filterEdits = useRef(0);
   useEffect(() => {
-    if (!selectedKey || coverage === "unavailable") return;
-    if (!selInScope) { setSelectedKey(null); return; }
+    if (filterEdits.current++ === 0) return;
     if (selected && !rows.includes(selected)) setSelectedKey(null);
-  }, [rows, selected, selectedKey, selInScope, coverage]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [wl.namespace, wl.kindFilter, wl.needsAttention, unknownOnly, query]);
+
+  // A pending verb is pinned to the workload OBJECT (and, for a pod delete,
+  // the pod object) it was armed on: dropped on a same-name replacement or a
+  // removal from a complete read of its kind, and re-checked at dispatch. The
+  // backend writes only those UIDs (design §5b).
   const targetLive = (p: PinnedPending) => {
-    if (p.cluster !== cluster || (wl.namespace !== "" && wl.namespace !== p.w.namespace)) return false;
-    if (coverage !== "complete") return true;
-    const cur = scopedItems.find((w) => keyOf(w) === keyOf(p.w));
-    if (!cur) return false;
-    // A pod deletion targets that exact pod: gone from the current evidence
-    // means cancelled, never retargeted to a replacement.
-    return p.kind !== "delete-pod" || cur.pods.some((x) => x.name === p.pod.name);
+    if (p.cluster !== cluster) return false;
+    const cur = allItems.find((w) => keyOf(w) === keyOf(p.w));
+    if (!cur) return kindEv(p.w.kind) !== "complete";
+    if (cur.uid !== p.w.uid) return false;
+    if (p.kind !== "delete-pod") return true;
+    const pod = cur.pods.find((x) => x.name === p.pod.name);
+    if (pod) return pod.uid === p.pod.uid;
+    return podsEv !== "complete";
   };
   const pending = pinned && targetLive(pinned) ? pinned : null;
   useEffect(() => { if (pinned && !pending) setPinned(null); }, [pinned, pending]);
+  const dispatchArmed = (p: PinnedPending, send: () => void) => {
+    setPinned(null);
+    if (!targetLive(p)) {
+      useFleet.getState().setActionStatus({ kind: "error", message: `${p.kind === "delete-pod" ? `pod ${p.w.namespace}/${p.pod.name}` : `${p.w.kind.toLowerCase()} ${p.w.namespace}/${p.w.name}`} was replaced or removed since the action was armed - nothing was sent` });
+      return;
+    }
+    send();
+  };
 
   const fitted = useMemo(
     () => fitColumns(WL_COLUMNS.filter((c) => showMetrics || (c.id !== "cpu" && c.id !== "mem")), bodyWidth),
@@ -280,30 +330,47 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
     st.setWorkloadsSearch("");
     st.setWorkloadsNeedsAttention(false);
     st.setWorkloadKindFilter(KINDS);
+    st.setWorkloadsNamespace("");
     setUnknownOnly(false);
   };
   const oneKind = KINDS.filter((k) => wl.kindFilter[k]);
   const kindValue = oneKind.length === KINDS.length ? "" : oneKind.length === 1 ? oneKind[0] : "custom";
 
   let state: DatasetState = "ready";
-  if (wl.loading && scopedItems.length === 0) state = "loading";
-  else if (coverage === "unavailable" && wl.error) state = "unreadable";
-  else if (coverage === "unavailable") state = "loading";
+  if (ev === "failed" && allItems.length === 0) state = "unreadable";
+  else if (ev === "pending" && allItems.length === 0) state = "loading";
   else if (scopedItems.length === 0) state = "empty";
   else if (rows.length === 0) state = "no-match";
   const scope = wl.namespace || "all namespaces";
+  const icon = <IconBox size={28} stroke={1.2} />;
   const stateView = state === "loading" ? <div style={{ width: "100%", alignSelf: "flex-start" }}><SkeletonRows rows={8} label="loading workloads" /></div>
-    : state === "unreadable" ? <EmptyState icon={<IconAlertTriangle size={28} stroke={1.2} />} title={`Workloads in ${scope} could not be read.`} hint={wl.error ?? undefined} action={{ label: "Retry", onClick: onRefresh }} />
-    : state === "empty" ? <EmptyState icon={<IconBox size={28} stroke={1.2} />} title={`No workloads in ${scope}.`} />
-    : <EmptyState icon={<IconBox size={28} stroke={1.2} />} title="No workloads match the current filters."
-        hint={wl.needsAttention && !wl.search && (counts.unknown > 0 || coverage !== "complete")
-          ? `No known attention - but ${counts.unknown > 0 ? `${counts.unknown} workload${counts.unknown === 1 ? " is" : "s are"} unverified` : "the read was incomplete"}.`
-          : `${scopedItems.length} workload${scopedItems.length === 1 ? "" : "s"} in ${scope}.`}
+    : state === "unreadable" ? <EmptyState icon={<IconAlertTriangle size={28} stroke={1.2} />} title="Workloads could not be read." hint={wl.error ?? undefined} />
+    : state === "empty" && rowsRefreshing && counts.total > 0 && !wl.namespace ? <EmptyState icon={icon} title={`No workloads as of ${rowsAsOf}.`} hint={`Refreshing - the cluster summary now counts ${counts.total}.`} />
+    : state === "empty" && ev === "stale" ? <EmptyState icon={icon} title={`No workloads in ${scope} in the last good read.`} hint={`The read is failing now${lastGood ? ` - last good ${clock(lastGood)}` : ""}: ${wl.error ?? "unverified"}.`} />
+    : state === "empty" && ev !== "complete" ? <EmptyState icon={icon} title={`No workloads in ${scope} in the read so far.`} hint={`Not every workload kind has been read: ${wl.error ?? "a read is still in progress"}.`} />
+    : state === "empty" ? <EmptyState icon={icon} title={`No workloads in ${scope}.`} action={wl.namespace ? { label: "All namespaces", onClick: () => useFleet.getState().setWorkloadsNamespace("") } : undefined} />
+    : <EmptyState icon={icon} title="No workloads match the current filters."
+        hint={wl.needsAttention && !wl.search && (rowCounts.unknown > 0 || ev !== "complete")
+          ? `No known attention - but ${rowCounts.unknown > 0 ? `${rowCounts.unknown} workload${rowCounts.unknown === 1 ? " is" : "s are"} unverified` : "the read was incomplete"}.`
+          : `${scopedItems.length} workload${scopedItems.length === 1 ? "" : "s"} in ${scope}${asOf}.`}
         action={{ label: "Clear filters", onClick: clearFilters }} />;
 
+  // Notices stack: each is its own evidence, none hides another.
+  const notices: React.ReactNode[] = [];
+  if (wl.error && allItems.length > 0) notices.push(<WatchErrorBanner key="read" tool="Workloads" failure={`read failed - showing the last good read${lastGood ? ` from ${clock(lastGood)}` : ""}`} error={wl.error} />);
+  if (allItems.length > 0 && podsEv !== "complete") notices.push(
+    <div key="deps" role="status" data-testid="attribution-evidence" className="t-secondary" style={{ ...statusLine, color: "var(--color-text-warning)", overflowWrap: "anywhere" }}>
+      {podsEv === "stale"
+        ? `Pod read failing - verdicts that need pod evidence are as last observed${depError(wl.dependencies, "Pod")}.`
+        : `Pods ${podsEv === "failed" ? "could not be read" : "are not read yet"} - verdicts that need pod evidence are unverified${depError(wl.dependencies, "Pod")}.`}
+    </div>,
+  );
+  if (rowsRefreshing) notices.push(<div key="a4" role="status" data-testid="rows-refreshing" className="t-secondary" style={statusLine}>Rows as of {rowsAsOf} - refreshing; the totals are the cluster summary's.{wl.rowsState?.refreshError ? ` Last re-read failed: ${wl.rowsState.refreshError}` : ""}</div>);
+  if (discoveryGap) notices.push(<div key="gap" role="status" data-testid="discovery-gap" className="t-secondary" style={{ ...statusLine, color: "var(--color-text-warning)", overflowWrap: "anywhere" }}>Discovery re-check failing - {discoveryGap}. A capability gap only; the rows keep their own state.</div>);
+
   const tone = attentionTone(counts);
-  const partial = coverage === "partial" ? "+" : "";
-  const filterBits = [wl.needsAttention ? "Attention" : unknownOnly ? "Unknown" : "", kindValue && kindValue !== "custom" ? kindShort[kindValue as WorkloadKind] : kindValue === "custom" ? "kinds" : "", wl.search ? "search" : ""].filter(Boolean);
+  const rowTone = attentionTone(rowCounts);
+  const filterBits = [wl.namespace ? `namespace ${wl.namespace}` : "", wl.needsAttention ? "Attention" : unknownOnly ? "Unknown" : "", kindValue && kindValue !== "custom" ? kindShort[kindValue as WorkloadKind] : kindValue === "custom" ? "kinds" : "", wl.search ? "search" : ""].filter(Boolean);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
@@ -311,33 +378,37 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
         <LensLayout
           label="Workloads"
           title="Workloads"
-          summary={coverage === "unavailable" ? null : (
+          summary={state === "loading" || state === "unreadable" ? null : (
             <>
-              <span className="t-number" style={{ color: "var(--color-text-secondary)" }}>{counts.total}{partial}</span>
+              <span className="t-number" data-testid="workloads-total" style={{ color: "var(--color-text-secondary)" }}>{counts.total}{mark}</span>
               {counts.attention > 0 ? (
-                <span className="t-status" style={{ color: tone === "danger" ? "var(--color-text-danger)" : "var(--color-text-warning)" }}>
-                  {tone === "danger" ? "▲ " : ""}{counts.attention}{partial} need attention
+                <span className="t-status" data-testid="workloads-attention" style={{ color: tone === "danger" ? "var(--color-text-danger)" : "var(--color-text-warning)" }}>
+                  {tone === "danger" ? "▲ " : ""}{counts.attention}{mark} need attention
                 </span>
-              ) : <span className="t-secondary">{counts.unknown > 0 || coverage !== "complete" ? "no known attention" : "none need attention"}</span>}
+              ) : <span className="t-secondary">{counts.unknown > 0 || !current ? "no known attention" : "none need attention"}</span>}
               <span className="t-secondary">
-                {[counts.fault ? `${counts.fault} fault` : "", counts.degraded ? `${counts.degraded} degraded` : "", counts.unknown ? `${counts.unknown} unverified` : "", counts.progressing ? `${counts.progressing} rolling out` : "", counts.paused ? `${counts.paused} paused` : ""].filter(Boolean).join(" · ")}
+                {[counts.fault ? `${counts.fault}${mark} fault` : "", counts.degraded ? `${counts.degraded}${mark} degraded` : "", counts.unknown ? `${counts.unknown}${mark} unverified` : "", counts.progressing ? `${counts.progressing}${mark} rolling out` : "", counts.paused ? `${counts.paused}${mark} paused` : ""].filter(Boolean).join(" · ")}
               </span>
+              {wl.namespace && (
+                <span className="t-secondary" data-testid="workloads-scoped">
+                  in {wl.namespace}: {rowCounts.total}{rowCounts.attention > 0 ? ` · ${rowCounts.attention} need attention` : ""}{asOf}
+                </span>
+              )}
             </>
           )}
           headerEnd={
             <>
-              <LiveIndicator live={wl.live} />
               <UpdatedAt at={receivedAt} />
-              <button className="l-btn" onClick={onRefresh}>Refresh</button>
+              <button className="l-btn" onClick={() => { void getWorkloadMetrics(cluster, wl.namespace); }} title="The workloads are live; this re-reads the usage columns">Refresh usage</button>
             </>
           }
           controls={
             <>
               <label style={{ display: "flex" }}>
                 <span className="sr-only">Namespace</span>
-                <select className="l-input" value={wl.namespace} onChange={(e) => onNamespace(e.target.value)}>
+                <select className="l-input" value={wl.namespace} onChange={(e) => useFleet.getState().setWorkloadsNamespace(e.target.value)}>
                   <option value="">All namespaces</option>
-                  {wl.namespaces.map((ns) => <option key={ns} value={ns}>{ns}</option>)}
+                  {(wl.namespace && !wl.namespaces.includes(wl.namespace) ? [...wl.namespaces, wl.namespace] : wl.namespaces).map((ns) => <option key={ns} value={ns}>{ns}</option>)}
                 </select>
               </label>
               <label style={{ display: "flex" }}>
@@ -349,14 +420,14 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
                 </select>
               </label>
               <button className="l-chip" aria-pressed={!wl.needsAttention && !unknownOnly} onClick={() => { setUnknownOnly(false); if (wl.needsAttention) useFleet.getState().toggleNeedsAttention(); }}>
-                All <span style={{ color: "var(--color-text-tertiary)" }}>{counts.total || ""}</span>
+                All <span style={{ color: "var(--color-text-tertiary)" }}>{rowCounts.total || ""}</span>
               </button>
               <button className="l-chip" aria-pressed={wl.needsAttention} onClick={() => { setUnknownOnly(false); if (!wl.needsAttention) useFleet.getState().toggleNeedsAttention(); }}>
-                Attention {counts.attention > 0 && <span style={{ color: tone === "danger" ? "var(--color-text-danger)" : "var(--color-text-warning)" }}>{counts.attention}</span>}
+                Attention {rowCounts.attention > 0 && <span style={{ color: rowTone === "danger" ? "var(--color-text-danger)" : "var(--color-text-warning)" }}>{rowCounts.attention}</span>}
               </button>
-              {(counts.unknown > 0 || unknownOnly) && (
+              {(rowCounts.unknown > 0 || unknownOnly) && (
                 <button className="l-chip" aria-pressed={unknownOnly} onClick={() => { if (wl.needsAttention) useFleet.getState().toggleNeedsAttention(); setUnknownOnly(!unknownOnly); }}>
-                  Unknown <span style={{ color: "var(--color-text-tertiary)" }}>{counts.unknown || ""}</span>
+                  Unknown <span style={{ color: "var(--color-text-tertiary)" }}>{rowCounts.unknown || ""}</span>
                 </button>
               )}
               <label style={{ display: "flex", flex: "0 1 280px", minWidth: 160 }}>
@@ -370,17 +441,7 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
               )}
             </>
           }
-          notice={(wl.error && coverage !== "unavailable") || wl.truncated ? (
-            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-              {wl.error && coverage !== "unavailable" && <WatchErrorBanner tool="Workloads" failure="read failed - showing the last good read" error={wl.error} />}
-              {wl.truncated && (
-                <div role="status" className="t-control" style={{ minHeight: 32, display: "flex", alignItems: "center", gap: 8, padding: "0 10px", borderRadius: 4, background: "var(--color-background-warning)", boxShadow: "inset 0 0 0 1px var(--color-border-warning)", color: "var(--color-text-warning)" }}>
-                  <IconAlertTriangle size={14} stroke={1.6} aria-hidden="true" />
-                  <span style={{ flex: 1, minWidth: 0 }}>The list hit the 5000 cap: counts are a lower bound and a fault past the cap is not shown. Scope by namespace for the full picture.</span>
-                </div>
-              )}
-            </div>
-          ) : undefined}
+          notice={notices.length > 0 ? <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>{notices}</div> : undefined}
           state={state}
           stateView={stateView}
           body={
@@ -428,7 +489,7 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
                       {show("mem") && <ResourceCellView resource="mem" cell={w.resources.mem} hasPods={w.pods.length > 0} />}
                       {show("restarts") && <span style={{ color: w.restarts > 0 ? "var(--color-text-secondary)" : "var(--color-text-tertiary)" }}>{w.restarts}</span>}
                       {show("gitops") && (
-                        <span style={{ ...ellipsis, color: "var(--color-text-tertiary)" }} title={w.gitops ? `Flux ownership label: ${w.gitops.kind} ${w.gitops.namespace}/${w.gitops.name}` : undefined}>
+                        <span style={{ ...ellipsis, color: "var(--color-text-tertiary)" }} title={w.gitops ? `Flux ownership label: ${w.gitops.kind} ${w.gitops.namespace}/${w.gitops.name}` : wl.fluxPresent ? undefined : "Flux was not detected when these rows were evaluated"}>
                           {w.gitops ? `flux ${w.gitops.kind === "HelmRelease" ? "hr" : "ks"}/${w.gitops.name}` : "-"}
                         </span>
                       )}
@@ -444,16 +505,17 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
           footer={<span className="t-legend">j k navigate · ↵ inspect · l logs · / search</span>}
           footerEnd={
             <>
-              <span className="t-secondary">{rows.length} of {scopedItems.length}{partial} workloads{filterBits.length ? ` · filter: ${filterBits.join(", ")}` : ""}</span>
-              {filterBits.length > 0 && <button className="l-chip" style={{ height: 20, color: "var(--color-text-info)" }} onClick={clearFilters}>Show all {scopedItems.length}{partial} workloads</button>}
+              <span className="t-secondary">{rows.length} of {scopedItems.length}{mark} workloads shown{filterBits.length ? ` · filter: ${filterBits.join(", ")}` : ""}{asOf}</span>
+              {filterBits.length > 0 && <button className="l-chip" style={{ height: 20, color: "var(--color-text-info)" }} onClick={clearFilters}>Show all {allItems.length}{mark} workloads</button>}
             </>
           }
-          inspector={selectedKey && wl.cluster === cluster && (selected || selRemoved) && lastSelected.current ? (
+          inspector={selectedKey && mine && subject ? (
             <WorkloadInspector
               key={`${cluster}/${selectedKey}`}
               cluster={cluster}
-              workload={selected ?? lastSelected.current}
-              removed={selRemoved}
+              workload={subject}
+              gone={gone}
+              podsEv={podsEv}
               showMetrics={showMetrics}
               isProtected={isProtected}
               reloaderPresent={reloaderPresent}
@@ -465,7 +527,7 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
               onScale={(w) => setPending({ kind: "scale-input", w })}
               onScaleConfirm={(w, replicas) => {
                 if (isProtected) setPending({ kind: "scale", w, replicas });
-                else { setPending(null); void scaleWorkload(cluster, w.kind, w.namespace, w.name, replicas); }
+                else dispatchArmed({ kind: "scale", w, replicas, cluster }, () => void scaleWorkload(cluster, w.kind, w.namespace, w.name, w.uid ?? "", replicas));
               }}
               onCancelScale={() => setPending(null)}
               onDeletePod={(w, pod) => setPending({ kind: "delete-pod", w, pod })}
@@ -511,7 +573,7 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
           danger
           confirmLabel="Restart"
           onCancel={() => setPending(null)}
-          onConfirm={() => { const { w } = pending; setPending(null); void rolloutRestart(pending.cluster, w.kind, w.namespace, w.name); }}
+          onConfirm={() => { const p = pending; dispatchArmed(p, () => void rolloutRestart(p.cluster, p.w.kind, p.w.namespace, p.w.name, p.w.uid ?? "")); }}
         />
       )}
       {pending?.kind === "scale" && (
@@ -523,7 +585,7 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
           danger={pending.replicas < pending.w.desired}
           confirmLabel="Scale"
           onCancel={() => setPending(null)}
-          onConfirm={() => { const { w, replicas } = pending; setPending(null); void scaleWorkload(pending.cluster, w.kind, w.namespace, w.name, replicas); }}
+          onConfirm={() => { const p = pending; dispatchArmed(p, () => void scaleWorkload(p.cluster, p.w.kind, p.w.namespace, p.w.name, p.w.uid ?? "", p.replicas)); }}
         />
       )}
       {pending?.kind === "undo" && (
@@ -539,7 +601,7 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
           danger
           confirmLabel="Roll back"
           onCancel={() => setPending(null)}
-          onConfirm={() => { const { w, rev } = pending; setPending(null); void rolloutUndo(pending.cluster, w.kind, w.namespace, w.name, rev.revision); }}
+          onConfirm={() => { const p = pending; dispatchArmed(p, () => void rolloutUndo(p.cluster, p.w.kind, p.w.namespace, p.w.name, p.w.uid ?? "", p.rev.revision)); }}
         />
       )}
       {pending?.kind === "pause" && (
@@ -550,7 +612,7 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
           protected={isProtected}
           confirmLabel={pending.pause ? "Pause" : "Resume"}
           onCancel={() => setPending(null)}
-          onConfirm={() => { const { w, pause } = pending; setPending(null); void rolloutPause(pending.cluster, w.namespace, w.name, pause); }}
+          onConfirm={() => { const p = pending; dispatchArmed(p, () => void rolloutPause(p.cluster, p.w.namespace, p.w.name, p.w.uid ?? "", p.pause)); }}
         />
       )}
       {pending?.kind === "delete-pod" && (
@@ -562,23 +624,30 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
           danger
           confirmLabel="Delete"
           onCancel={() => setPending(null)}
-          onConfirm={() => { const { w, pod, cluster: target } = pending; setPending(null); void deletePod(target, w.namespace, pod.name).then(() => { if (target === cluster) void listWorkloads(cluster, wl.namespace); }); }}
+          onConfirm={() => { const p = pending; dispatchArmed(p, () => void deletePod(p.cluster, p.w.namespace, p.pod.name, p.pod.uid ?? "")); }}
         />
       )}
     </div>
   );
 }
 
+const statusLine: React.CSSProperties = { minHeight: 24, display: "flex", alignItems: "center", padding: "0 10px" };
+const depError = (deps: KindCoverageDTO[] | undefined, kind: string) => {
+  const e = deps?.find((d) => d.kind === kind)?.error;
+  return e ? ` (${e})` : "";
+};
+
 // WorkloadInspector - investigation order: verdict; Logs (primary), Restart
 // (secondary), More (scale, pause/resume, compare, manifest, delete a pod);
 // pods, rollout history (undo), usage, reloads-on, then controller facts.
 function WorkloadInspector({
-  cluster, workload, removed, showMetrics, isProtected, reloaderPresent, reloaderHealthy, pending,
+  cluster, workload, gone, podsEv, showMetrics, isProtected, reloaderPresent, reloaderHealthy, pending,
   onClose, onLogs, onRestart, onScale, onScaleConfirm, onCancelScale, onDeletePod, onOpenPod, onOpenNode, onOpenFluxOwner, onCompare, onUndo, onPause,
 }: {
   cluster: string;
   workload: WorkloadDTO;
-  removed: boolean;
+  gone: "removed" | "unverified" | null;
+  podsEv: KindEvidence; // what the pod list was read from
   showMetrics: boolean;
   isProtected: boolean;
   reloaderPresent: boolean;
@@ -599,7 +668,7 @@ function WorkloadInspector({
   onPause: (w: WorkloadDTO, pause: boolean) => void;
 }) {
   const w = workload;
-  const live = !removed;
+  const live = gone !== "removed";
   // Selector-matched pods carry no verdict of their own: native facts only.
   const notReadyPods = w.pods.filter((p) => !p.ready).length;
   const scaling = pending?.kind === "scale-input" && keyOf(pending.w) === keyOf(w);
@@ -634,9 +703,13 @@ function WorkloadInspector({
           </>
         }
         onClose={onClose}
-        verdict={removed ? (
+        verdict={gone === "removed" ? (
           <div role="status" className="t-body" style={{ padding: "8px 10px", borderRadius: 4, background: "var(--color-background-secondary)", boxShadow: "inset 0 0 0 1px var(--color-border-secondary)" }}>
-            <span className="t-status">Workload removed.</span> It is no longer in the current read of {w.namespace}. The details below are its last evidence; actions are disabled.
+            <span className="t-status">Workload removed.</span> It is no longer in the current read. The details below are its last evidence; actions are disabled.
+          </div>
+        ) : gone === "unverified" ? (
+          <div role="status" data-testid="selection-unverified" className="t-body" style={{ padding: "8px 10px", borderRadius: 4, background: "var(--color-background-secondary)", boxShadow: "inset 0 0 0 1px var(--color-border-warning)" }}>
+            <span className="t-status">Not in the current {w.kind} read.</span> That read is incomplete, so this is unverified - it may still exist. The details below are its last observed row.
           </div>
         ) : <VerdictStatus
           health={w.health}
@@ -655,8 +728,9 @@ function WorkloadInspector({
         )}
 
         <InspectorBlock title="Pods · selector match" count={w.pods.length}
-          extra={notReadyPods > 0 ? <span className="t-secondary">{notReadyPods} not ready</span> : undefined}>
-          {w.pods.length === 0 ? <span className="t-secondary">No pods match this workload's selector.</span> : (
+          extra={podsEv !== "complete" ? <span className="t-secondary" data-testid="pods-evidence" style={{ color: "var(--color-text-warning)" }}>{podsEv === "stale" ? "as last observed" : "pod read unverified"}</span>
+            : notReadyPods > 0 ? <span className="t-secondary">{notReadyPods} not ready</span> : undefined}>
+          {w.pods.length === 0 ? <span className="t-secondary">{podsEv === "complete" ? "No pods match this workload's selector." : podsEv === "stale" ? "No pods matched in the last good pod read." : "Pods are not read - the selector match is unverified."}</span> : (
             <div style={{ display: "flex", flexDirection: "column" }}>
               {w.pods.slice(0, 8).map((p) => (
                 <div key={p.name} className="t-identifier" style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) auto", columnGap: 8, padding: "3px 0" }}>

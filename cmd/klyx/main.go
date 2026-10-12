@@ -213,7 +213,7 @@ func main() {
 			return nil, false
 		}
 		return c, true
-	}, em)
+	})
 
 	podsSvc := appbridge.NewPodsService(func(name string) (appbridge.PodsConn, bool) {
 		c, ok := reg.Conn(name)
@@ -480,7 +480,6 @@ func main() {
 			// Live-list subscriptions hold per-cluster watch goroutines; drain them
 			// so no watcher outlives the app.
 			podsSvc.CloseAll()
-			workloadsSvc.CloseAll()
 			eventsSvc.CloseAll()
 		},
 	})

@@ -219,13 +219,13 @@ func TestProtectGuard_LiveSourceGatesHotAddedProdCluster(t *testing.T) {
 
 	svc := NewPodsService(func(string) (PodsConn, bool) { return &fakeLivePodConn{}, true }, &anyEmitter{})
 
-	if r := svc.DeletePod("prod-eu", "ns", "pod"); r.OK || r.Error == "" {
+	if r := svc.DeletePod("prod-eu", "ns", "pod", "uid-pod"); r.OK || r.Error == "" {
 		t.Fatalf("destructive verb on hot-added prod cluster must require a typed grant, got %+v", r)
 	}
 	if r := s.ArmProtected("prod-eu", "prod-eu"); !r.OK {
 		t.Fatalf("arm: %+v", r)
 	}
-	if r := svc.DeletePod("prod-eu", "ns", "pod"); !r.OK {
+	if r := svc.DeletePod("prod-eu", "ns", "pod", "uid-pod"); !r.OK {
 		t.Fatalf("armed delete on hot-added prod cluster must pass: %+v", r)
 	}
 }

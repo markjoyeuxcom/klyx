@@ -4,6 +4,8 @@
 package workloads
 
 import (
+	"time"
+
 	"github.com/moomora/klyx/internal/health"
 	"k8s.io/apimachinery/pkg/types"
 )
@@ -38,11 +40,13 @@ type Owner struct {
 
 type Pod struct {
 	Name       string
+	UID        types.UID // object identity: a verb on it writes only this pod
 	Ready      bool
 	Restarts   int
 	Reason     string // worst container/pod reason, "" if running clean
 	Node       string
-	AgeSeconds int
+	AgeSeconds int       // age at the assembly's now
+	Created    time.Time // creation time: the anchor a live view ticks the age from
 }
 
 type Workload struct {

@@ -4,9 +4,11 @@ import { WorkloadsView } from "./WorkloadsView";
 import { useFleet } from "../store/fleet";
 import type { WorkloadDTO, ClusterDTO } from "../store/fleet";
 
+// The rows adapter is mocked: these tests seed the workloads slice directly
+// (WorkloadRows.test.tsx mounts the real adapter over the health store).
+vi.mock("../health/useWorkloadRows", () => ({ useWorkloadRows: () => {} }));
+
 vi.mock("../bridge/workloads", () => ({
-  listWorkloads: vi.fn().mockResolvedValue(undefined),
-  openLiveWorkloads: vi.fn().mockReturnValue(() => {}),
   rolloutRestart: vi.fn().mockResolvedValue(undefined),
   rolloutHistory: vi.fn(async () => ({ revisions: [] })),
   rolloutUndo: vi.fn().mockResolvedValue(undefined),
@@ -37,13 +39,13 @@ vi.mock("./LogsPane", () => ({
     <div data-testid="logs-pane-stub">{workload ? `${workload.kind}:${pod.namespace}/${workload.name}` : `pod:${pod.namespace}/${pod.name}`}</div>
   ),
 }));
-import { rolloutRestart, rolloutHistory, rolloutUndo, rolloutPause, scaleWorkload, openLiveWorkloads } from "../bridge/workloads";
+import { rolloutRestart, rolloutHistory, rolloutUndo, rolloutPause, scaleWorkload } from "../bridge/workloads";
 import { openWorkloadLogsWindow } from "../bridge/windows";
 import { deletePod } from "../bridge/pods";
 
 const noResources = { cpu: { usage: null, request: null, limit: null }, mem: { usage: null, request: null, limit: null } };
-const broken: WorkloadDTO = { kind: "Deployment", namespace: "ollama-prod", name: "ollama", desired: 1, ready: 0, available: 0, updated: 1, restarts: 7, reason: "CrashLoopBackOff", rank: "unhealthy", gitops: { kind: "Kustomization", namespace: "flux-system", name: "ollama" }, pods: [{ name: "ollama-x", ready: false, restarts: 7, reason: "CrashLoopBackOff", node: "node-3", ageSeconds: 720 }], resources: noResources, health: { kind: "fault", label: "CrashLoopBackOff", reason: "CrashLoopBackOff", rule: "workload.pod-failure", rank: 70 } };
-const healthy: WorkloadDTO = { kind: "Deployment", namespace: "monitoring", name: "grafana", desired: 1, ready: 1, available: 1, updated: 1, restarts: 0, reason: "Available", rank: "healthy", gitops: null, pods: [], resources: noResources, health: { kind: "ok", label: "Available", reason: "Ready", rule: "workload.ready" } };
+const broken: WorkloadDTO = { kind: "Deployment", namespace: "ollama-prod", name: "ollama", uid: "uid-ollama", desired: 1, ready: 0, available: 0, updated: 1, restarts: 7, reason: "CrashLoopBackOff", rank: "unhealthy", gitops: { kind: "Kustomization", namespace: "flux-system", name: "ollama" }, pods: [{ name: "ollama-x", uid: "uid-ollama-x", ready: false, restarts: 7, reason: "CrashLoopBackOff", node: "node-3", ageSeconds: 720 }], resources: noResources, health: { kind: "fault", label: "CrashLoopBackOff", reason: "CrashLoopBackOff", rule: "workload.pod-failure", rank: 70 } };
+const healthy: WorkloadDTO = { kind: "Deployment", namespace: "monitoring", name: "grafana", uid: "uid-grafana", desired: 1, ready: 1, available: 1, updated: 1, restarts: 0, reason: "Available", rank: "healthy", gitops: null, pods: [], resources: noResources, health: { kind: "ok", label: "Available", reason: "Ready", rule: "workload.ready" } };
 
 // Every test starts from the store as the app boots it. Per-describe resets
 // cleared only the workloads slice, so clusters, route and NavIntents leaked
@@ -52,9 +54,9 @@ const initialStore = useFleet.getState();
 beforeEach(() => { useFleet.setState(initialStore, true); });
 
 function seed(items: WorkloadDTO[]) {
-  // rowsScope: the rows were READ for this cluster + all namespaces (what the
-  // real store records); lenses never show rows from another scope.
-  useFleet.setState((s) => ({ workloads: { ...s.workloads, cluster: "homelab-nelli", items, namespaces: ["monitoring", "ollama-prod"], loading: false, rowsScope: "homelab-nelli|" } }));
+  // the pods attribution read is live (the dependency the rows were evaluated with)
+  useFleet.setState((s) => ({ workloads: { ...s.workloads, cluster: "homelab-nelli", items, namespaces: ["monitoring", "ollama-prod"], loading: false,
+    dependencies: [{ kind: "Pod", served: true, synced: true, coverage: "live" }, { kind: "ReplicaSet", served: true, synced: true, coverage: "live" }] } }));
 }
 
 // The row is the first match: once selected, the inspector repeats the name.
@@ -77,6 +79,7 @@ describe("WorkloadsView", () => {
     // section link) still restores the saved kinds.
     useFleet.getState().setSection("pods");
     unmount();
+    useFleet.getState().clearWorkloads(); // the rows adapter's slice owner (mocked here) clears on the last unmount
     useFleet.getState().setSection("workloads");
     render(<WorkloadsView cluster="homelab-nelli" />);
     expect(useFleet.getState().workloads.kindFilter).toEqual({ Deployment: false, StatefulSet: true, DaemonSet: false });
@@ -121,7 +124,7 @@ describe("WorkloadsView", () => {
     expect(getByText("Roll back")).toBeTruthy();
     expect(vi.mocked(rolloutUndo)).not.toHaveBeenCalled();
     fireEvent.click(getByText("Roll back"));
-    expect(vi.mocked(rolloutUndo)).toHaveBeenCalledWith("homelab-nelli", "Deployment", "ollama-prod", "ollama", 2);
+    expect(vi.mocked(rolloutUndo)).toHaveBeenCalledWith("homelab-nelli", "Deployment", "ollama-prod", "ollama", "uid-ollama", 2);
     expect(queryByText("Roll back")).toBeNull();
   });
 
@@ -142,7 +145,7 @@ describe("WorkloadsView", () => {
     chooseMore("Resume rollouts");
     expect(await findByText("Resume")).toBeTruthy();
     fireEvent.click(getByText("Resume"));
-    expect(vi.mocked(rolloutPause)).toHaveBeenCalledWith("homelab-nelli", "monitoring", "grafana", false);
+    expect(vi.mocked(rolloutPause)).toHaveBeenCalledWith("homelab-nelli", "monitoring", "grafana", "uid-grafana", false);
   });
 
   it("pause is Deployment-only: no button on other kinds", async () => {
@@ -208,7 +211,7 @@ describe("WorkloadsView", () => {
     fireEvent.click(getAllByRole("button", { name: "Restart" })[0]); // open confirm
     const confirmBtns = getAllByRole("button", { name: "Restart" });
     fireEvent.click(confirmBtns[confirmBtns.length - 1]); // confirm
-    expect(rolloutRestart).toHaveBeenCalledWith("homelab-nelli", "Deployment", "ollama-prod", "ollama");
+    expect(rolloutRestart).toHaveBeenCalledWith("homelab-nelli", "Deployment", "ollama-prod", "ollama", "uid-ollama");
   });
 
   // --- Scale (More menu) ---
@@ -247,16 +250,7 @@ describe("WorkloadsView", () => {
     chooseMore(/^Scale/);
     fireEvent.change(getByRole("spinbutton", { name: /replica count/i }), { target: { value: "3" } });
     fireEvent.click(getByRole("button", { name: "apply scale" }));
-    expect(scaleWorkload).toHaveBeenCalledWith("homelab-nelli", "Deployment", "ollama-prod", "ollama", 3);
-  });
-
-  it("shows a loud truncation banner only when the list was capped", () => {
-    seed([healthy]);
-    const { queryByText, rerender } = render(<WorkloadsView cluster="homelab-nelli" />);
-    expect(queryByText(/hit the 5000 cap/)).toBeNull();
-    act(() => { useFleet.setState((s) => ({ workloads: { ...s.workloads, truncated: true } })); });
-    rerender(<WorkloadsView cluster="homelab-nelli" />);
-    expect(queryByText(/hit the 5000 cap/)).toBeTruthy();
+    expect(scaleWorkload).toHaveBeenCalledWith("homelab-nelli", "Deployment", "ollama-prod", "ollama", "uid-ollama", 3);
   });
 
   // --- Reloader forward "reloads on" view ---
@@ -359,25 +353,6 @@ describe("WorkloadsView", () => {
     chooseMore(/^Scale/);
     fireEvent.click(getByRole("button", { name: "cancel scale" }));
     expect(queryByRole("spinbutton", { name: /replica count/i })).toBeNull();
-  });
-
-  it("openLiveWorkloads is called on mount (replaces listWorkloads)", () => {
-    render(<WorkloadsView cluster="homelab-nelli" />);
-    expect(openLiveWorkloads).toHaveBeenCalledWith("homelab-nelli", "");
-  });
-
-  it("live=true renders green live indicator", () => {
-    seed([broken]);
-    useFleet.setState((s) => ({ workloads: { ...s.workloads, live: true } }));
-    const { getByText } = render(<WorkloadsView cluster="homelab-nelli" />);
-    expect(getByText("live")).toBeTruthy();
-  });
-
-  it("live=false renders manual fallback indicator", () => {
-    seed([broken]);
-    useFleet.setState((s) => ({ workloads: { ...s.workloads, live: false } }));
-    const { getByText } = render(<WorkloadsView cluster="homelab-nelli" />);
-    expect(getByText("○ manual")).toBeTruthy();
   });
 
   // --- Aggregate logs dock ---
@@ -545,8 +520,8 @@ describe("WorkloadsView health model (1b rework)", () => {
     expect(queryByText(/\d+ healthy/)).toBeNull();
   });
 
-  it("rows read for another scope are neither shown nor counted", () => {
-    useFleet.setState((s) => ({ workloads: { ...s.workloads, cluster: "homelab-nelli", namespace: "monitoring", items: [broken], loading: true, rowsScope: "homelab-nelli|" } }));
+  it("rows read for another cluster are neither shown nor counted", () => {
+    useFleet.setState((s) => ({ workloads: { ...s.workloads, cluster: "other", items: [broken], loading: false } }));
     const { queryByText } = render(<WorkloadsView cluster="homelab-nelli" />);
     expect(queryByText("ollama")).toBeNull();
   });
@@ -556,9 +531,9 @@ describe("WorkloadsView empty states never claim a quiet they did not see", () =
   beforeEach(() => { localStorage.clear(); useFleet.getState().clearWorkloads(); });
 
   it("a failed first read never says 'No workloads'", () => {
-    useFleet.setState((s) => ({ workloads: { ...s.workloads, cluster: "homelab-nelli", items: [], loading: false, rowsScope: null, error: "forbidden" } }));
+    useFleet.setState((s) => ({ workloads: { ...s.workloads, cluster: "homelab-nelli", items: [], loading: false, error: "forbidden" } }));
     const { getByText, queryByText } = render(<WorkloadsView cluster="homelab-nelli" />);
-    expect(getByText(/Workloads in all namespaces could not be read/)).toBeTruthy();
+    expect(getByText(/Workloads could not be read/)).toBeTruthy();
     expect(queryByText(/^No workloads\.$/)).toBeNull();
   });
 
@@ -642,13 +617,13 @@ describe("WorkloadsView pending verbs are pinned to their own target", () => {
     fireEvent.click(getAllByRole("button", { name: "Restart" })[0]);
     rerender(<WorkloadsView cluster="other" />);
     expect(rolloutRestart).not.toHaveBeenCalled();
-    act(() => useFleet.setState((s) => ({ workloads: { ...s.workloads, cluster: "other", items: [broken], loading: false, rowsScope: "other|" } })));
+    act(() => useFleet.setState((s) => ({ workloads: { ...s.workloads, cluster: "other", items: [broken], loading: false } })));
     expect(queryAllByRole("button", { name: "Cancel" }).length).toBe(0); // the confirm is gone
     fireEvent.click(getAllByRole("button", { name: "Restart" })[0]); // a NEW restart on "other" is fine
     const confirm = getAllByRole("button", { name: "Restart" });
     fireEvent.click(confirm[confirm.length - 1]);
     expect(rolloutRestart).toHaveBeenCalledTimes(1);
-    expect(rolloutRestart).toHaveBeenCalledWith("other", "Deployment", "ollama-prod", "ollama");
+    expect(rolloutRestart).toHaveBeenCalledWith("other", "Deployment", "ollama-prod", "ollama", "uid-ollama");
   });
 });
 
@@ -656,7 +631,7 @@ describe("WorkloadsView Codex review corrections", () => {
   beforeEach(() => { localStorage.clear(); useFleet.getState().clearWorkloads(); useFleet.setState({ navIntent: null, clusters: [] }); vi.clearAllMocks(); });
   const switchTo = (rerender: (ui: React.ReactElement) => void, c: string, items: WorkloadDTO[]) => {
     rerender(<WorkloadsView cluster={c} />);
-    act(() => useFleet.setState((s) => ({ workloads: { ...s.workloads, cluster: c, items, loading: false, rowsScope: `${c}|` } })));
+    act(() => useFleet.setState((s) => ({ workloads: { ...s.workloads, cluster: c, items, loading: false } })));
   };
 
   it("the logs dock belongs to its origin cluster: a switch to a same-name workload closes it", () => {
@@ -692,7 +667,7 @@ describe("WorkloadsView Codex review corrections", () => {
   });
 
   it("pod deletion is a per-pod action and is cancelled when that pod leaves the evidence", () => {
-    const two: WorkloadDTO = { ...broken, pods: [broken.pods[0], { name: "ollama-y", ready: true, restarts: 0, reason: "", node: "node-1", ageSeconds: 60 }] };
+    const two: WorkloadDTO = { ...broken, pods: [broken.pods[0], { name: "ollama-y", uid: "uid-ollama-y", ready: true, restarts: 0, reason: "", node: "node-1", ageSeconds: 60 }] };
     seed([two]);
     const { getByRole, queryByText, queryByRole } = render(<WorkloadsView cluster="homelab-nelli" />);
     select("ollama");
@@ -702,7 +677,7 @@ describe("WorkloadsView Codex review corrections", () => {
     fireEvent.click(getByRole("button", { name: "delete pod ollama-x" }));
     expect(queryByText(/ollama-x - matched by deployment ollama's selector/)).toBeTruthy();
     // the chosen pod is replaced; the workload remains
-    act(() => seed([{ ...two, pods: [{ ...two.pods[1] }, { ...broken.pods[0], name: "ollama-z" }] }]));
+    act(() => seed([{ ...two, pods: [{ ...two.pods[1] }, { ...broken.pods[0], name: "ollama-z", uid: "uid-ollama-z" }] }]));
     expect(queryByText(/ollama-x - matched by/)).toBeNull();
     expect(queryByRole("button", { name: "Delete" })).toBeNull();
     expect(deletePod).not.toHaveBeenCalled();

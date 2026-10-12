@@ -218,7 +218,7 @@ export function PodsView({ cluster }: { cluster: string }) {
           return;
         }
       }
-      await deletePod(cluster, p.namespace, p.name);
+      await deletePod(cluster, p.namespace, p.name, p.uid ?? "");
     }
   }, [bulk, cluster, isProtected]);
 
@@ -665,10 +665,10 @@ function PodInspector({ cluster, namespace, name, detail, loading, removed, isPr
             setPending(null);
             // Re-check at dispatch: the pod may have gone since the dialog opened.
             if (removed) return;
-            if (pd.verb === "delete") void deletePod(cluster, pd.summary.namespace, pd.summary.name);
+            if (pd.verb === "delete") void deletePod(cluster, pd.summary.namespace, pd.summary.name, pd.summary.uid ?? "");
             else if (pd.verb === "debug") void openDebugTerminal(cluster, pd.summary.namespace, pd.summary.name, pd.container);
             // The backend resolves the controller chain into ownerKind/ownerName.
-            else void rolloutRestart(cluster, pd.summary.ownerKind, pd.summary.namespace, pd.summary.ownerName);
+            else void rolloutRestart(cluster, pd.summary.ownerKind, pd.summary.namespace, pd.summary.ownerName, pd.summary.ownerUid ?? "");
           }}
         />
       )}

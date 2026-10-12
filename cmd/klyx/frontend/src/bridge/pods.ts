@@ -80,8 +80,10 @@ export function openLivePods(cluster: string, namespace: string): () => void {
   };
 }
 
-export async function deletePod(cluster: string, namespace: string, name: string): Promise<void> {
-  const r = (await PodsService.DeletePod(cluster, namespace, name)) as ActionResultDTO;
+// deletePod deletes the pod OBJECT the verb was armed against (uid, design
+// §5b): the API server's UID precondition refuses a same-name replacement.
+export async function deletePod(cluster: string, namespace: string, name: string, uid: string): Promise<void> {
+  const r = (await PodsService.DeletePod(cluster, namespace, name, uid)) as ActionResultDTO;
   useFleet.getState().setActionStatus(
     r.ok
       ? { kind: "success", message: `pod ${namespace}/${name} deleted` }

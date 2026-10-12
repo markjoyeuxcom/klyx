@@ -39,8 +39,8 @@ func (f *fakePodConn) PodDetail(_ context.Context, _, _ string) (fleet.PodDetail
 	return f.detail, f.detErr
 }
 
-func (f *fakePodConn) DeletePod(_ context.Context, namespace, name string) error {
-	f.deleted = append(f.deleted, namespace+"/"+name)
+func (f *fakePodConn) DeletePod(_ context.Context, namespace, name, uid string) error {
+	f.deleted = append(f.deleted, namespace+"/"+name+"@"+uid)
 	return f.deleteErr
 }
 
@@ -212,7 +212,7 @@ func TestPodsService_GetPodDetail_ErrorReturnsEmpties(t *testing.T) {
 
 func TestPodsService_DeletePod_ClusterMiss(t *testing.T) {
 	svc := NewPodsService(func(string) (PodsConn, bool) { return nil, false }, nil)
-	r := svc.DeletePod("ghost", "ns", "pod")
+	r := svc.DeletePod("ghost", "ns", "pod", "uid-pod")
 	if r.OK || r.Error == "" {
 		t.Fatalf("want failure for unknown cluster, got %+v", r)
 	}
@@ -224,11 +224,11 @@ func TestPodsService_DeletePod_ClusterMiss(t *testing.T) {
 func TestPodsService_DeletePod_Success(t *testing.T) {
 	conn := &fakePodConn{}
 	svc := NewPodsService(func(string) (PodsConn, bool) { return conn, true }, nil)
-	r := svc.DeletePod("c", "default", "web-xyz")
+	r := svc.DeletePod("c", "default", "web-xyz", "uid-web-xyz")
 	if !r.OK || r.Error != "" {
 		t.Fatalf("want OK, got %+v", r)
 	}
-	if len(conn.deleted) != 1 || conn.deleted[0] != "default/web-xyz" {
+	if len(conn.deleted) != 1 || conn.deleted[0] != "default/web-xyz@uid-web-xyz" {
 		t.Errorf("deleted records: %v", conn.deleted)
 	}
 }
@@ -236,7 +236,7 @@ func TestPodsService_DeletePod_Success(t *testing.T) {
 func TestPodsService_DeletePod_ErrorSurfaced(t *testing.T) {
 	conn := &fakePodConn{deleteErr: context.DeadlineExceeded}
 	svc := NewPodsService(func(string) (PodsConn, bool) { return conn, true }, nil)
-	r := svc.DeletePod("c", "ns", "pod")
+	r := svc.DeletePod("c", "ns", "pod", "uid-pod")
 	if r.OK || r.Error == "" {
 		t.Fatalf("want failure surfaced, got %+v", r)
 	}
@@ -252,7 +252,7 @@ func TestListReads_FailureCarriesError(t *testing.T) {
 	if pods.Error != boom.Error() || pods.Pods == nil {
 		t.Errorf("ListPods: error=%q pods-nil=%v", pods.Error, pods.Pods == nil)
 	}
-	wl := NewWorkloadsService(func(string) (WorkloadsConn, bool) { return &fakeWLConn{listErr: boom}, true }, nil).ListWorkloads("c", "")
+	wl := NewWorkloadsService(func(string) (WorkloadsConn, bool) { return &fakeWLConn{listErr: boom}, true }).ListWorkloads("c", "")
 	if wl.Error != boom.Error() || wl.Workloads == nil {
 		t.Errorf("ListWorkloads: error=%q workloads-nil=%v", wl.Error, wl.Workloads == nil)
 	}
@@ -264,11 +264,22 @@ func TestListReads_FailureCarriesError(t *testing.T) {
 	if r := NewNodesService(func(string) (NodesConn, bool) { return nil, false }).ListNodes("gone"); !strings.Contains(r.Error, "not connected") {
 		t.Errorf("ListNodes cluster miss: %q", r.Error)
 	}
-	if r := NewWorkloadsService(func(string) (WorkloadsConn, bool) { return nil, false }, nil).ListWorkloads("gone", ""); !strings.Contains(r.Error, "not connected") {
+	if r := NewWorkloadsService(func(string) (WorkloadsConn, bool) { return nil, false }).ListWorkloads("gone", ""); !strings.Contains(r.Error, "not connected") {
 		t.Errorf("ListWorkloads cluster miss: %q", r.Error)
 	}
 	// A successful empty list carries no error: quiet is only claimed from data.
 	if r := NewPodsService(func(string) (PodsConn, bool) { return &fakePodConn{}, true }, nil).ListPods("c", ""); r.Error != "" {
 		t.Errorf("successful empty list must not carry an error: %q", r.Error)
+	}
+}
+
+// A pod row names the pod object and its owner object: the lens arms a
+// delete with the pod UID and an owner restart with the owner UID (§5b).
+func TestPodsService_ListPods_CarriesPodAndOwnerIdentity(t *testing.T) {
+	conn := &fakePodConn{pods: []workloads.PodSummary{{Namespace: "prod", Name: "web-abc", UID: "uid-pod", OwnerKind: "Deployment", OwnerName: "web", OwnerUID: "uid-web"}}}
+	svc := NewPodsService(func(string) (PodsConn, bool) { return conn, true }, nil)
+	p := svc.ListPods("c", "").Pods[0]
+	if p.UID != "uid-pod" || p.OwnerUID != "uid-web" {
+		t.Fatalf("pod row identity: uid=%q ownerUid=%q", p.UID, p.OwnerUID)
 	}
 }

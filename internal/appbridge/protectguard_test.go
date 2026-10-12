@@ -75,17 +75,17 @@ func TestProtectGuard_GatesDestructiveVerbs(t *testing.T) {
 
 	svc := NewPodsService(func(string) (PodsConn, bool) { return &fakeLivePodConn{}, true }, &anyEmitter{})
 
-	if r := svc.DeletePod("prd-cluster", "ns", "pod"); r.OK || r.Error == "" {
+	if r := svc.DeletePod("prd-cluster", "ns", "pod", "uid-pod"); r.OK || r.Error == "" {
 		t.Fatalf("unarmed DeletePod on protected cluster must refuse, got %+v", r)
 	}
 	if err := g.Arm("prd-cluster", "prd-cluster"); err != nil {
 		t.Fatalf("arm: %v", err)
 	}
-	if r := svc.DeletePod("prd-cluster", "ns", "pod"); !r.OK {
+	if r := svc.DeletePod("prd-cluster", "ns", "pod", "uid-pod"); !r.OK {
 		t.Fatalf("armed DeletePod must pass the gate: %+v", r)
 	}
 	// The grant was consumed by the first delete.
-	if r := svc.DeletePod("prd-cluster", "ns", "pod"); r.OK {
+	if r := svc.DeletePod("prd-cluster", "ns", "pod", "uid-pod"); r.OK {
 		t.Fatal("second DeletePod must be refused (one-shot grant)")
 	}
 }

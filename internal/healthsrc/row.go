@@ -31,6 +31,10 @@ type RowSet[T any] struct {
 	Facts map[string]any
 }
 
+// RowFacts exposes the captured facts to the rows transport, which carries
+// them beside the converted rows.
+func (r RowSet[T]) RowFacts() map[string]any { return r.Facts }
+
 func (r refInput) rowRef() RowRef {
 	return RowRef{UID: r.uid, GVR: r.gvr, Namespace: r.ns, Name: r.name, Generation: r.generation}
 }

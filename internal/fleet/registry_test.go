@@ -87,7 +87,7 @@ func (f *fakeConn) DeleteAdhocObject(context.Context, string, string, string, st
 func (f *fakeConn) ListPods(context.Context, string) ([]workloads.PodSummary, bool, error) {
 	return nil, false, nil
 }
-func (f *fakeConn) DeletePod(context.Context, string, string) error { return nil }
+func (f *fakeConn) DeletePod(context.Context, string, string, string) error { return nil }
 func (f *fakeConn) ListEvents(context.Context, string) ([]workloads.EventSummary, bool, error) {
 	return nil, false, nil
 }
@@ -112,8 +112,8 @@ func (f *fakeConn) WorkloadSparklines(context.Context, string, string, string) (
 func (f *fakeConn) ClusterSparklines(context.Context) (SparklineSet, error) {
 	return SparklineSet{}, nil
 }
-func (f *fakeConn) RolloutRestart(context.Context, string, string, string) error { return nil }
-func (f *fakeConn) ScaleWorkload(context.Context, string, string, string, int32) error {
+func (f *fakeConn) RolloutRestart(context.Context, string, string, string, string) error { return nil }
+func (f *fakeConn) ScaleWorkload(context.Context, string, string, string, string, int32) error {
 	return nil
 }
 func (f *fakeConn) CountResource(ctx context.Context, group, version, plural string) (int, bool, error) {
@@ -187,8 +187,10 @@ func (f *fakeConn) SyncArgoApp(context.Context, string, string, string, argo.Syn
 func (f *fakeConn) RolloutHistory(context.Context, string, string, string) ([]workloads.RolloutRevision, error) {
 	return nil, nil
 }
-func (f *fakeConn) RolloutUndo(context.Context, string, string, string, int64) error { return nil }
-func (f *fakeConn) RolloutPause(context.Context, string, string, bool) error         { return nil }
+func (f *fakeConn) RolloutUndo(context.Context, string, string, string, string, int64) error {
+	return nil
+}
+func (f *fakeConn) RolloutPause(context.Context, string, string, string, bool) error { return nil }
 func (f *fakeConn) NodeUtilization(context.Context) ([]workloads.NodeUsage, workloads.UsageStatus) {
 	return nil, workloads.UsageStatus{}
 }

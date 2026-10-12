@@ -267,8 +267,8 @@ func build(kind string, uid types.UID, ns, name string, objLabels map[string]str
 		pr, _ := worstPodReasonOf([]*corev1.Pod{p})
 		w.Restarts += podRestarts(p)
 		w.Pods = append(w.Pods, Pod{
-			Name: p.Name, Ready: podReady(p), Restarts: podRestarts(p), Reason: pr,
-			Node: p.Spec.NodeName, AgeSeconds: ageSeconds(p.CreationTimestamp.Time, now),
+			Name: p.Name, UID: p.UID, Ready: podReady(p), Restarts: podRestarts(p), Reason: pr,
+			Node: p.Spec.NodeName, AgeSeconds: ageSeconds(p.CreationTimestamp.Time, now), Created: p.CreationTimestamp.Time,
 		})
 	}
 

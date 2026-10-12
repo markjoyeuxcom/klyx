@@ -288,6 +288,43 @@ func TestNodeRowsCarryTheCapture(t *testing.T) {
 	}
 }
 
+// The Workloads part (slice 3 §5.8): the captured verdict and identity, pod
+// identity and creation anchors, and the fluxPresent fact the rows were
+// evaluated with - carried on the envelope, never read from a later summary.
+func TestWorkloadRowsCarryTheCaptureAndItsFacts(t *testing.T) {
+	at := time.Unix(2000, 0)
+	set := healthsrc.RowSet[workloads.Workload]{
+		Rows: []healthsrc.Row[workloads.Workload]{{
+			Ref: healthsrc.RowRef{UID: "w1", GVR: "apps/v1/deployments", Namespace: "app", Name: "api", Generation: 4},
+			Data: workloads.Workload{Kind: "Deployment", Namespace: "app", Name: "api", UID: "w1", Generation: 4, ObservedGeneration: 4,
+				Pods:   []workloads.Pod{{Name: "api-1", UID: "p1", AgeSeconds: 30, Created: time.Unix(1970, 0)}},
+				Health: health.Verdict{Kind: health.Fault, Label: "CrashLoopBackOff at capture"}},
+		}},
+		Facts: map[string]any{healthsrc.FactFluxPresent: true},
+	}
+	out, err := rowsConverters[healthsrc.TaskWorkloads+"/workloads"](set, at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := out.([]WorkloadDTO)[0]
+	if w.UID != "w1" || w.GVR != "apps/v1/deployments" || w.Generation != 4 || w.Health.Kind != "fault" || w.Health.Label != "CrashLoopBackOff at capture" {
+		t.Fatalf("workload row: %+v", w)
+	}
+	if len(w.Pods) != 1 || w.Pods[0].UID != "p1" || w.Pods[0].Created != 1970 {
+		t.Fatalf("pod identity and anchor: %+v", w.Pods)
+	}
+	dto, ok := toRowsDTO(observe.Rows{Cluster: "c", Incarnation: 1, Task: healthsrc.TaskWorkloads, Part: observe.Part{ID: "workloads"}, EvaluatedAt: at, Rows: set})
+	if !ok || dto.Facts[healthsrc.FactFluxPresent] != true {
+		t.Fatalf("the envelope must carry the captured facts: ok=%v facts=%v", ok, dto.Facts)
+	}
+	if b, err := json.Marshal(dto); err != nil || !strings.Contains(string(b), `"facts":{"fluxPresent":true}`) {
+		t.Fatalf("serialization: %s %v", b, err)
+	}
+	if _, err := rowsConverters[healthsrc.TaskWorkloads+"/workloads"]("not rows", at); err == nil {
+		t.Fatal("a payload of the wrong type is an error, never an empty list")
+	}
+}
+
 // The Gateways part (slice 3 §5.6): the captured evaluation and identity.
 func TestGatewayRowsCarryTheCapture(t *testing.T) {
 	g := gwapi.GatewayRef{Namespace: "infra", Name: "eg", ClassName: "envoy", Generation: 1, Listeners: []gwapi.Listener{{Name: "https", Protocol: "HTTPS", Port: 443}}}

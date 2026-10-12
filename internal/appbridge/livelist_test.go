@@ -116,7 +116,7 @@ func (f *fakeLivePodConn) LaunchDiagnosticPod(context.Context, string, string, i
 	return fleet.AdhocResult{}
 }
 
-func (f *fakeLivePodConn) DeletePod(context.Context, string, string) error { return nil }
+func (f *fakeLivePodConn) DeletePod(context.Context, string, string, string) error { return nil }
 
 func (f *fakeLivePodConn) WatchDirty(_ context.Context, _ string, _ []string, onDirty func(), onLive func(bool)) (func(), error) {
 	f.mu.Lock()

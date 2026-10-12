@@ -25,7 +25,7 @@ export type HealthSummary = {
   cluster: string; incarnation: number; seq: number; evaluatedAt: string; connection: string;
   namespaces?: number; tasks: HealthTask[]; final?: boolean;
 };
-export type RowsDTO<T = unknown> = { cluster: string; incarnation: number; task: string; part: HealthPart; evaluatedAt: string; rows: T[] | null };
+export type RowsDTO<T = unknown> = { cluster: string; incarnation: number; task: string; part: HealthPart; evaluatedAt: string; rows: T[] | null; facts?: Record<string, unknown> };
 
 // A4: how long a summary may be ahead of the on-screen rows before the
 // counts switch to the summary and the rows are qualified (spec §4).
@@ -49,6 +49,7 @@ export type RowsSub = {
   ver: number; // -1 before any rows
   partData: HealthPart | null;
   rows: unknown[] | null;
+  facts: Record<string, unknown> | null; // what the rows' evaluation used (§2a), from their capture
   evaluatedAt: string | null;
   mismatchSince: number | null; // when the summary first got ahead (ms); fixed until resolved
   refreshing: boolean; // past the deadline: summary counts, rows "as of … - refreshing"
@@ -80,7 +81,7 @@ export function findPart(s: HealthSummary | undefined, task: string, part: strin
 }
 
 const cleared = (sub: RowsSub): RowsSub => ({
-  ...sub, incarnation: null, ver: -1, partData: null, rows: null, evaluatedAt: null,
+  ...sub, incarnation: null, ver: -1, partData: null, rows: null, facts: null, evaluatedAt: null,
   mismatchSince: null, refreshing: false, inflight: false, attempt: 0, retryAt: null, refreshError: null,
 });
 
@@ -156,7 +157,7 @@ export function addSub(handle: string, cluster: string, task: string, part: stri
       ...st.subs,
       [handle]: {
         handle, cluster, task, part, token: null, boundIncarnation: null, open: "opening", openAttempt: 0, openRetryAt: null,
-        incarnation: null, ver: -1, partData: null, rows: null, evaluatedAt: null,
+        incarnation: null, ver: -1, partData: null, rows: null, facts: null, evaluatedAt: null,
         mismatchSince: null, refreshing: false, requestGen: 0, inflight: false, attempt: 0, retryAt: null, error: null, refreshError: null,
       },
     },
@@ -211,7 +212,7 @@ export function applyRows(handle: string, dto: RowsDTO, now = Date.now()): boole
     if (sub.incarnation !== null && !newer(dto.incarnation, dto.part.ver, sub.incarnation, sub.ver)) return st;
     applied = true;
     const base = sub.incarnation !== null && dto.incarnation > sub.incarnation ? cleared(sub) : sub;
-    const next: RowsSub = { ...base, incarnation: dto.incarnation, ver: dto.part.ver, partData: dto.part, rows: dto.rows ?? [], evaluatedAt: dto.evaluatedAt };
+    const next: RowsSub = { ...base, incarnation: dto.incarnation, ver: dto.part.ver, partData: dto.part, rows: dto.rows ?? [], facts: dto.facts ?? null, evaluatedAt: dto.evaluatedAt };
     return { ...st, subs: { ...st.subs, [handle]: reconcile(next, st.summaries[sub.cluster], now) } };
   });
   return applied;

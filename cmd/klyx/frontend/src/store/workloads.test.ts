@@ -1,23 +1,29 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { useFleet } from "./fleet";
-import type { WorkloadsResultDTO } from "./fleet";
+import type { WorkloadDTO } from "./fleet";
 
-const all: WorkloadsResultDTO = { fluxPresent: true, namespaces: ["a", "b"], workloads: [] };
+const wl = (name: string, ns = "ns"): WorkloadDTO => ({
+  kind: "Deployment", namespace: ns, name, uid: `uid-${name}`, desired: 1, ready: 1, available: 1, updated: 1, restarts: 0, reason: "Available", rank: "healthy", gitops: null, pods: [],
+  resources: { cpu: { usage: null, request: 0.25, limit: 0.5 }, mem: { usage: null, request: null, limit: 536870912 } },
+});
 
+// The workloads slice is filled by the rows adapter (health/useWorkloadRows,
+// 1c slice 3 §5.8); the namespace is a list filter over all-namespace rows.
 describe("workloads slice", () => {
   beforeEach(() => useFleet.getState().clearWorkloads());
 
-  it("populates namespaces on all-load and preserves them on a scoped load", () => {
-    useFleet.getState().setWorkloads("c", "", all);
-    expect(useFleet.getState().workloads.namespaces).toEqual(["a", "b"]);
-    // scoped load (namespace != "") must NOT replace the namespace list
-    useFleet.getState().setWorkloads("c", "b", { fluxPresent: true, namespaces: [], workloads: [] });
-    expect(useFleet.getState().workloads.namespaces).toEqual(["a", "b"]);
-  });
-
-  it("falls back to [namespace] when first load is scoped", () => {
-    useFleet.getState().setWorkloads("c", "team", { fluxPresent: false, namespaces: [], workloads: [] });
-    expect(useFleet.getState().workloads.namespaces).toEqual(["team"]);
+  it("a new cluster's visit starts empty; a revisit keeps its rows and filters", () => {
+    const f = useFleet.getState();
+    f.setWorkloadsVisit("c");
+    f.setWorkloadsFromRows("c", { items: [wl("api")], namespaces: ["ns"], fluxPresent: true, loading: false });
+    f.setWorkloadsNamespace("ns");
+    f.setWorkloadsVisit("c");
+    expect(useFleet.getState().workloads.items).toHaveLength(1);
+    expect(useFleet.getState().workloads.namespace).toBe("ns");
+    f.setWorkloadsVisit("other");
+    expect(useFleet.getState().workloads.items).toEqual([]);
+    expect(useFleet.getState().workloads.namespaces).toEqual([]);
+    expect(useFleet.getState().workloads.loading).toBe(true);
   });
 
   it("toggles expand by key", () => {
@@ -27,18 +33,20 @@ describe("workloads slice", () => {
     expect(useFleet.getState().workloads.expanded).not.toContain("Deployment/x/y");
   });
 
-  it("clearWorkloads resets kindFilter, needsAttention, and live", () => {
-    useFleet.getState().toggleWorkloadKind("Deployment");
-    useFleet.getState().toggleNeedsAttention();
-    useFleet.getState().setWorkloadsSearch("api");
+  it("clearWorkloads resets kindFilter, needsAttention, search, namespace and usage", () => {
+    const f = useFleet.getState();
+    f.toggleWorkloadKind("Deployment");
+    f.toggleNeedsAttention();
+    f.setWorkloadsSearch("api");
+    f.setWorkloadsNamespace("team");
     expect(useFleet.getState().workloads.kindFilter.Deployment).toBe(false);
-    // Manually set live to true.
-    useFleet.setState((s) => ({ workloads: { ...s.workloads, live: true } }));
-    useFleet.getState().clearWorkloads();
-    expect(useFleet.getState().workloads.kindFilter.Deployment).toBe(true);
-    expect(useFleet.getState().workloads.needsAttention).toBe(false);
-    expect(useFleet.getState().workloads.search).toBe("");
-    expect(useFleet.getState().workloads.live).toBe(false);
+    f.clearWorkloads();
+    const s = useFleet.getState().workloads;
+    expect(s.kindFilter.Deployment).toBe(true);
+    expect(s.needsAttention).toBe(false);
+    expect(s.search).toBe("");
+    expect(s.namespace).toBe("");
+    expect(s.usage).toEqual({});
   });
 
   it("setWorkloadsSearch stores the search string", () => {
@@ -46,60 +54,39 @@ describe("workloads slice", () => {
     expect(useFleet.getState().workloads.search).toBe("grafana");
   });
 
-  it("setWorkloadsLive updates live when cluster+namespace match", () => {
-    useFleet.getState().setWorkloads("c", "", { fluxPresent: false, namespaces: [], workloads: [] });
-    useFleet.getState().setWorkloadsLive("c", "", true);
-    expect(useFleet.getState().workloads.live).toBe(true);
-    useFleet.getState().setWorkloadsLive("c", "", false);
-    expect(useFleet.getState().workloads.live).toBe(false);
-  });
-
-  it("setWorkloadsLive stale-guard: wrong cluster is a no-op", () => {
-    useFleet.getState().setWorkloads("c", "", { fluxPresent: false, namespaces: [], workloads: [] });
-    useFleet.getState().setWorkloadsLive("other", "", true);
-    expect(useFleet.getState().workloads.live).toBe(false);
-  });
-
-  it("setWorkloadsLive stale-guard: wrong namespace is a no-op", () => {
-    useFleet.getState().setWorkloads("c", "monitoring", { fluxPresent: false, namespaces: ["monitoring"], workloads: [] });
-    useFleet.getState().setWorkloadsLive("c", "kube-system", true);
-    expect(useFleet.getState().workloads.live).toBe(false);
-  });
-
-  it("setWorkloadUsage patches usage by key without replacing rows", () => {
+  it("usage is kept apart from the rows: a rows push never erases it", () => {
     const f = useFleet.getState();
-    f.setWorkloads("c", "", { fluxPresent: false, namespaces: [], workloads: [
-      { kind: "Deployment", namespace: "ns", name: "api", desired: 1, ready: 1, available: 1, updated: 1, restarts: 0, reason: "Available", rank: "healthy", gitops: null, pods: [],
-        resources: { cpu: { usage: null, request: 0.25, limit: 0.5 }, mem: { usage: null, request: null, limit: 536870912 } } },
-    ] });
+    f.setWorkloadsVisit("c");
+    f.setWorkloadsFromRows("c", { items: [wl("api")], namespaces: ["ns"], fluxPresent: false, loading: false });
     f.setWorkloadUsage("c", "", { status: { available: true, message: "", updatedAt: "t1" }, usage: { "Deployment/ns/api": { cpuUsage: 0.3, memUsage: 400000000 } } });
-    const w = useFleet.getState().workloads.items[0];
-    expect(w.resources.cpu.usage).toBe(0.3);
-    expect(w.resources.cpu.limit).toBe(0.5);
-    expect(w.reason).toBe("Available");
-    expect(useFleet.getState().workloads.metricsAvailable).toBe(true);
+    f.setWorkloadsFromRows("c", { items: [{ ...wl("api"), reason: "Progressing" }], namespaces: ["ns"], fluxPresent: false, loading: false });
+    const s = useFleet.getState().workloads;
+    expect(s.usage["Deployment/ns/api"]).toEqual({ cpu: 0.3, mem: 400000000 });
+    expect(s.items[0].resources.cpu.usage).toBeNull(); // the rows stay as captured; usage joins at render
+    expect(s.metricsAvailable).toBe(true);
+  });
+
+  it("setWorkloadUsage drops an answer for another namespace scope", () => {
+    const f = useFleet.getState();
+    f.setWorkloadsVisit("c");
+    f.setWorkloadsNamespace("team");
+    f.setWorkloadUsage("c", "", { status: { available: true, message: "", updatedAt: "t1" }, usage: { "Deployment/ns/api": { cpuUsage: 0.3, memUsage: null } } });
+    expect(useFleet.getState().workloads.usage).toEqual({});
   });
 
   it("setWorkloadUsage transient failure keeps last-good usage, marks stale", () => {
     const f = useFleet.getState();
-    f.setWorkloads("c", "", { fluxPresent: false, namespaces: [], workloads: [
-      { kind: "Deployment", namespace: "ns", name: "api", desired: 1, ready: 1, available: 1, updated: 1, restarts: 0, reason: "", rank: "healthy", gitops: null, pods: [],
-        resources: { cpu: { usage: null, request: null, limit: 0.5 }, mem: { usage: null, request: null, limit: null } } },
-    ] });
+    f.setWorkloadsVisit("c");
     f.setWorkloadUsage("c", "", { status: { available: true, message: "", updatedAt: "t1" }, usage: { "Deployment/ns/api": { cpuUsage: 0.3, memUsage: null } } });
     f.setWorkloadUsage("c", "", { status: { available: false, message: "down", updatedAt: "" }, usage: {} });
     const s = useFleet.getState().workloads;
-    expect(s.items[0].resources.cpu.usage).toBe(0.3);
+    expect(s.usage["Deployment/ns/api"].cpu).toBe(0.3);
     expect(s.metricsStale).toBe(true);
   });
 
   it("setWorkloadUsage first-load unavailable keeps metricsAvailable false (columns hidden)", () => {
     const f = useFleet.getState();
-    f.setWorkloads("c", "", { fluxPresent: false, namespaces: [], workloads: [
-      { kind: "Deployment", namespace: "ns", name: "api", desired: 1, ready: 1, available: 1, updated: 1, restarts: 0, reason: "", rank: "healthy", gitops: null, pods: [],
-        resources: { cpu: { usage: null, request: null, limit: null }, mem: { usage: null, request: null, limit: null } } },
-    ] });
-    // No prior available response → an unavailable response must NOT reveal columns.
+    f.setWorkloadsVisit("c");
     f.setWorkloadUsage("c", "", { status: { available: false, message: "no source", updatedAt: "" }, usage: {} });
     const s = useFleet.getState().workloads;
     expect(s.metricsAvailable).toBe(false);

@@ -50,13 +50,13 @@ const makeContainer = (overrides = {}) => ({
 });
 
 const healthy: PodSummaryDTO = {
-  namespace: "monitoring", name: "grafana-xyz", ready: true, phase: "Running", reason: "", rank: "healthy",
-  restarts: 0, node: "node-1", ip: "10.0.0.1", ownerKind: "Deployment", ownerName: "grafana",
+  namespace: "monitoring", name: "grafana-xyz", uid: "uid-grafana-xyz", ready: true, phase: "Running", reason: "", rank: "healthy",
+  restarts: 0, node: "node-1", ip: "10.0.0.1", ownerKind: "Deployment", ownerName: "grafana", ownerUid: "uid-grafana",
   ageSeconds: 3600, containers: [makeContainer()],
   health: { kind: "ok", label: "Running", reason: "Ready", rule: "pod.ready" },
 };
 const broken: PodSummaryDTO = {
-  namespace: "default", name: "api-crash", ready: false, phase: "Running", reason: "CrashLoopBackOff", rank: "unhealthy",
+  namespace: "default", name: "api-crash", uid: "uid-api-crash", ready: false, phase: "Running", reason: "CrashLoopBackOff", rank: "unhealthy",
   restarts: 7, node: "node-2", ip: "10.0.0.2", ownerKind: "Deployment", ownerName: "api",
   ageSeconds: 600, containers: [makeContainer({ ready: false, restarts: 7, state: "waiting:CrashLoopBackOff" })],
   health: { kind: "fault", label: "CrashLoopBackOff", reason: "CrashLoopBackOff", message: "app: back-off 5m0s restarting failed container", rule: "pod.current-failure", rank: 70 },
@@ -478,7 +478,7 @@ describe("PodsView", () => {
     // Confirm button is the last "Delete" in the DOM (inside the dialog).
     const confirmBtns = getAllByRole("button", { name: "Delete" });
     fireEvent.click(confirmBtns[confirmBtns.length - 1]);
-    expect(deletePod).toHaveBeenCalledWith("homelab", "monitoring", "grafana-xyz");
+    expect(deletePod).toHaveBeenCalledWith("homelab", "monitoring", "grafana-xyz", "uid-grafana-xyz");
   });
 
   // Review 2026-10-03 (finding A): kubectl debug permanently adds an ephemeral
@@ -542,7 +542,7 @@ describe("PodsView", () => {
     const deployPod: PodSummaryDTO = {
       ...healthy,
       namespace: "prod", name: "web-7d4b9c6f9-abc",
-      ownerKind: "Deployment", ownerName: "web",
+      ownerKind: "Deployment", ownerName: "web", ownerUid: "uid-web",
     };
     const detailDeploy = { ...fakeDetail, summary: deployPod };
     seed([deployPod]);
@@ -553,7 +553,7 @@ describe("PodsView", () => {
     chooseMore("Restart deployment web", getByRole);
     const confirmBtns = getAllByRole("button", { name: "Restart" });
     fireEvent.click(confirmBtns[confirmBtns.length - 1]);
-    expect(rolloutRestart).toHaveBeenCalledWith("homelab", "Deployment", "prod", "web");
+    expect(rolloutRestart).toHaveBeenCalledWith("homelab", "Deployment", "prod", "web", "uid-web");
   });
 
   // --- Keyboard nav + a11y ---
@@ -711,7 +711,7 @@ describe("PodsView", () => {
   it("StatefulSet owner calls rolloutRestart directly without name transformation", () => {
     const stsPod: PodSummaryDTO = {
       ...healthy, namespace: "db", name: "postgres-0",
-      ownerKind: "StatefulSet", ownerName: "postgres",
+      ownerKind: "StatefulSet", ownerName: "postgres", ownerUid: "uid-postgres",
     };
     const detailSts = { ...fakeDetail, summary: stsPod };
     seed([stsPod]);
@@ -722,7 +722,7 @@ describe("PodsView", () => {
     chooseMore("Restart statefulset postgres", getByRole);
     const confirmBtns = getAllByRole("button", { name: "Restart" });
     fireEvent.click(confirmBtns[confirmBtns.length - 1]);
-    expect(rolloutRestart).toHaveBeenCalledWith("homelab", "StatefulSet", "db", "postgres");
+    expect(rolloutRestart).toHaveBeenCalledWith("homelab", "StatefulSet", "db", "postgres", "uid-postgres");
   });
 
   // --- Bulk selection -------------------------------------------------------
@@ -739,8 +739,8 @@ describe("PodsView", () => {
     await act(async () => {
       fireEvent.click(confirmBtns[confirmBtns.length - 1]);
     });
-    expect(deletePod).toHaveBeenCalledWith("homelab", "monitoring", "grafana-xyz");
-    expect(deletePod).toHaveBeenCalledWith("homelab", "default", "api-crash");
+    expect(deletePod).toHaveBeenCalledWith("homelab", "monitoring", "grafana-xyz", "uid-grafana-xyz");
+    expect(deletePod).toHaveBeenCalledWith("homelab", "default", "api-crash", "uid-api-crash");
     // selection cleared after the batch
     expect(useFleet.getState().pods.items.length).toBe(2);
   });

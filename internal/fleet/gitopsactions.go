@@ -125,6 +125,21 @@ func (c *ClusterConn) patchArmed(ctx context.Context, gvr schema.GroupVersionRes
 	return fmt.Errorf("%s %s/%s: %w", kind, ns, name, err)
 }
 
+// armedWriteErr reports a UID-guarded write's outcome honestly: a refusal for
+// the UID is ErrReplaced ("its write was refused"); another definite refusal
+// wrote nothing; anything else (transport, deadline, 5xx) may have landed.
+func armedWriteErr(verb, what string, err error) error {
+	switch {
+	case err == nil:
+		return nil
+	case refusedForUID(err):
+		return fmt.Errorf("%s %s: %w - its write was refused (%v)", verb, what, ErrReplaced, err)
+	case definiteRefusal(err):
+		return fmt.Errorf("%s %s: %w - nothing was written", verb, what, err)
+	}
+	return fmt.Errorf("%s %s: %w - the outcome is unverified", verb, what, err)
+}
+
 // refusedForUID: a UID-guarded write the server refused because the object
 // at that name is not the armed one - gone (NotFound), or another UID (the
 // immutable-field Invalid, or a UID precondition Conflict).

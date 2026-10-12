@@ -35,15 +35,7 @@ func (c *ClusterConn) SetCordon(ctx context.Context, nodeName, uid string, cordo
 		return fmt.Errorf("%s marshal: %w", verb, err)
 	}
 	_, err = c.typed.CoreV1().Nodes().Patch(ctx, nodeName, types.StrategicMergePatchType, body, metav1.PatchOptions{})
-	switch {
-	case err == nil:
-		return nil
-	case refusedForUID(err):
-		return fmt.Errorf("%s node %s: %w - its write was refused (%v)", verb, nodeName, ErrReplaced, err)
-	case definiteRefusal(err):
-		return fmt.Errorf("%s node %s: %w - nothing was written", verb, nodeName, err)
-	}
-	return fmt.Errorf("%s node %s: %w - the outcome is unverified", verb, nodeName, err)
+	return armedWriteErr(verb, "node "+nodeName, err)
 }
 
 // CheckNodeArmed confirms the node at nodeName is the armed object (by UID)

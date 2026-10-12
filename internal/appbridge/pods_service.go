@@ -17,7 +17,7 @@ type PodsConn interface {
 	ListPods(ctx context.Context, namespace string) ([]workloads.PodSummary, bool, error)
 	LaunchDiagnosticPod(ctx context.Context, name, image string, ttlSeconds int64) fleet.AdhocResult
 	PodDetail(ctx context.Context, namespace, name string) (fleet.PodDetail, error)
-	DeletePod(ctx context.Context, namespace, name string) error
+	DeletePod(ctx context.Context, namespace, name, uid string) error
 	WatchDirty(ctx context.Context, namespace string, kinds []string, onDirty func(), onLive func(bool)) (stop func(), err error)
 }
 
@@ -160,8 +160,6 @@ func (s *PodsService) GetPodDetail(cluster, namespace, name string) PodDetailDTO
 	}
 }
 
-// DeletePod deletes a single pod via the cluster connection. The owning
-// controller recreates it; this is the standard imperative bounce.
 // LaunchDiagnosticPod creates a TTL-bounded scratch debugging pod in the
 // klyx-scratch namespace (created on first use). A create is a mutation, so it
 // consumes the protected-cluster grant like every destructive verb.
@@ -179,7 +177,10 @@ func (s *PodsService) LaunchDiagnosticPod(cluster, name, image string, ttlSecond
 	return AdhocResultDTO{Kind: r.Kind, Namespace: r.Namespace, Name: r.Name, OK: r.OK, Error: r.Error}
 }
 
-func (s *PodsService) DeletePod(cluster, namespace, name string) ActionResultDTO {
+// DeletePod deletes the pod OBJECT the verb was armed against (uid, design
+// §5b) - never a same-name replacement. The owning controller recreates it;
+// this is the standard imperative bounce.
+func (s *PodsService) DeletePod(cluster, namespace, name, uid string) ActionResultDTO {
 	if err := checkProtected(cluster); err != nil {
 		return ActionResultDTO{Error: err.Error()}
 	}
@@ -189,7 +190,7 @@ func (s *PodsService) DeletePod(cluster, namespace, name string) ActionResultDTO
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
 	defer cancel()
-	if err := conn.DeletePod(ctx, namespace, name); err != nil {
+	if err := conn.DeletePod(ctx, namespace, name, uid); err != nil {
 		return ActionResultDTO{Error: err.Error()}
 	}
 	return ActionResultDTO{OK: true}
@@ -222,6 +223,7 @@ func toPodSummaryDTO(p workloads.PodSummary) PodSummaryDTO {
 	return PodSummaryDTO{
 		Namespace:  p.Namespace,
 		Name:       p.Name,
+		UID:        string(p.UID),
 		Ready:      p.Ready,
 		Phase:      p.Phase,
 		Reason:     p.Reason,
@@ -231,6 +233,7 @@ func toPodSummaryDTO(p workloads.PodSummary) PodSummaryDTO {
 		IP:         p.IP,
 		OwnerKind:  p.OwnerKind,
 		OwnerName:  p.OwnerName,
+		OwnerUID:   string(p.OwnerUID),
 		AgeSeconds: p.AgeSeconds,
 		Containers: containers,
 		Health:     toHealthDTO(p.Health),

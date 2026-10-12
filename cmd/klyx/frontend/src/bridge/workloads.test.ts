@@ -6,214 +6,92 @@ vi.mock("../../bindings/github.com/moomora/klyx/internal/appbridge/index.js", ()
   WorkloadsService: {
     RolloutRestart: vi.fn(),
     ScaleWorkload: vi.fn(),
-    ListWorkloads: vi.fn().mockResolvedValue({ fluxPresent: false, namespaces: [], workloads: [] }),
-    OpenLiveWorkloads: vi.fn().mockResolvedValue({ ok: true, error: "" }),
-    CloseAll: vi.fn().mockResolvedValue(undefined),
-    CloseWorkloads: vi.fn().mockResolvedValue(undefined),
-    CloseLiveWorkloads: vi.fn().mockResolvedValue(undefined),
-  },
-}));
-
-const eventHandlers: Record<string, (ev: unknown) => void> = {};
-const offFns: Record<string, ReturnType<typeof vi.fn>> = {};
-vi.mock("@wailsio/runtime", () => ({
-  Events: {
-    On: vi.fn((name: string, handler: (ev: unknown) => void) => {
-      eventHandlers[name] = handler;
-      const off = vi.fn();
-      offFns[name] = off;
-      return off;
-    }),
+    RolloutUndo: vi.fn(),
+    RolloutPause: vi.fn(),
+    ListWorkloads: vi.fn(),
   },
 }));
 
 import { WorkloadsService } from "../../bindings/github.com/moomora/klyx/internal/appbridge/index.js";
-import { Events } from "@wailsio/runtime";
-import { rolloutRestart, scaleWorkload, openLiveWorkloads } from "./workloads";
+import { rolloutPause, rolloutRestart, rolloutUndo, scaleWorkload } from "./workloads";
 
-function seedWorkloads(cluster: string, namespace: string) {
-  useFleet.setState((s) => ({
-    workloads: {
-      ...s.workloads, cluster, namespace, items: [], namespaces: [], fluxPresent: false, loading: false,
-      kindFilter: { Deployment: true, StatefulSet: true, DaemonSet: true },
-      needsAttention: false, expanded: [], metricsAvailable: false, metricsStatus: null, metricsStale: false, nearLimitSort: false,
-    },
-  }));
-}
+const ok = { ok: true, error: "" };
+
+beforeEach(() => {
+  useFleet.getState().clearWorkloads();
+  useFleet.getState().clearActionStatus();
+  vi.clearAllMocks();
+});
+
+// Design §5b: every workload verb carries the UID it was armed against, and
+// the rows are live - no verb re-reads the list.
+describe("workload verbs carry the armed UID", () => {
+  it("restart, scale, undo and pause pass it to the backend", async () => {
+    for (const fn of [WorkloadsService.RolloutRestart, WorkloadsService.ScaleWorkload, WorkloadsService.RolloutUndo, WorkloadsService.RolloutPause]) {
+      vi.mocked(fn).mockResolvedValue(ok as never);
+    }
+    await rolloutRestart("homelab", "Deployment", "monitoring", "grafana", "uid-g");
+    await scaleWorkload("homelab", "StatefulSet", "db", "pg", "uid-pg", 3);
+    await rolloutUndo("homelab", "Deployment", "monitoring", "grafana", "uid-g", 2);
+    await rolloutPause("homelab", "monitoring", "grafana", "uid-g", true);
+    expect(WorkloadsService.RolloutRestart).toHaveBeenCalledWith("homelab", "Deployment", "monitoring", "grafana", "uid-g");
+    expect(WorkloadsService.ScaleWorkload).toHaveBeenCalledWith("homelab", "StatefulSet", "db", "pg", "uid-pg", 3);
+    expect(WorkloadsService.RolloutUndo).toHaveBeenCalledWith("homelab", "Deployment", "monitoring", "grafana", "uid-g", 2);
+    expect(WorkloadsService.RolloutPause).toHaveBeenCalledWith("homelab", "monitoring", "grafana", "uid-g", true);
+    expect(WorkloadsService.ListWorkloads).not.toHaveBeenCalled();
+  });
+});
 
 describe("rolloutRestart bridge", () => {
-  beforeEach(() => {
-    useFleet.getState().clearWorkloads();
-    useFleet.getState().clearActionStatus();
-    vi.clearAllMocks();
-  });
-
   it("success: sets success actionStatus with correct message (Deployment)", async () => {
-    (WorkloadsService.RolloutRestart as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: true, error: "" });
-    (WorkloadsService.ListWorkloads as ReturnType<typeof vi.fn>).mockResolvedValue({ fluxPresent: false, namespaces: [], workloads: [] });
-    seedWorkloads("homelab", "monitoring");
-
-    await rolloutRestart("homelab", "Deployment", "monitoring", "grafana");
-
+    vi.mocked(WorkloadsService.RolloutRestart).mockResolvedValue(ok as never);
+    await rolloutRestart("homelab", "Deployment", "monitoring", "grafana", "uid-g");
     const status = useFleet.getState().actionStatus;
     expect(status?.kind).toBe("success");
     expect(status?.message).toBe("restart triggered for deployment monitoring/grafana");
   });
 
   it("success: message lowercases the kind (StatefulSet)", async () => {
-    (WorkloadsService.RolloutRestart as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: true, error: "" });
-    (WorkloadsService.ListWorkloads as ReturnType<typeof vi.fn>).mockResolvedValue({ fluxPresent: false, namespaces: [], workloads: [] });
-    seedWorkloads("homelab", "db");
-
-    await rolloutRestart("homelab", "StatefulSet", "db", "postgres");
-
+    vi.mocked(WorkloadsService.RolloutRestart).mockResolvedValue(ok as never);
+    await rolloutRestart("homelab", "StatefulSet", "db", "postgres", "uid-p");
     expect(useFleet.getState().actionStatus?.message).toBe("restart triggered for statefulset db/postgres");
   });
 
-  it("success: re-runs listWorkloads on the current namespace", async () => {
-    (WorkloadsService.RolloutRestart as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: true, error: "" });
-    (WorkloadsService.ListWorkloads as ReturnType<typeof vi.fn>).mockResolvedValue({ fluxPresent: false, namespaces: [], workloads: [] });
-    seedWorkloads("homelab", "monitoring");
-
-    await rolloutRestart("homelab", "Deployment", "monitoring", "grafana");
-
-    expect(WorkloadsService.ListWorkloads).toHaveBeenCalledWith("homelab", "monitoring");
-  });
-
-  it("error: sets error actionStatus and does NOT refresh the list", async () => {
-    (WorkloadsService.RolloutRestart as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: false, error: "not found" });
-    seedWorkloads("homelab", "monitoring");
-
-    await rolloutRestart("homelab", "Deployment", "monitoring", "grafana");
-
+  it("error: reports the backend's reason - a replacement included", async () => {
+    vi.mocked(WorkloadsService.RolloutRestart).mockResolvedValue({ ok: false, error: "rollout restart Deployment monitoring/grafana: the object was replaced since the action was armed - nothing was written" } as never);
+    await rolloutRestart("homelab", "Deployment", "monitoring", "grafana", "uid-g");
     const status = useFleet.getState().actionStatus;
     expect(status?.kind).toBe("error");
-    expect(status?.message).toBe("not found");
-    expect(WorkloadsService.ListWorkloads).not.toHaveBeenCalled();
+    expect(status?.message).toMatch(/replaced since the action was armed - nothing was written/);
   });
 
   it("error: uses fallback message when error field is empty", async () => {
-    (WorkloadsService.RolloutRestart as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: false, error: "" });
-    seedWorkloads("homelab", "monitoring");
-
-    await rolloutRestart("homelab", "Deployment", "monitoring", "grafana");
-
+    vi.mocked(WorkloadsService.RolloutRestart).mockResolvedValue({ ok: false, error: "" } as never);
+    await rolloutRestart("homelab", "Deployment", "monitoring", "grafana", "uid-g");
     expect(useFleet.getState().actionStatus?.message).toBe("Restart failed");
   });
 });
 
 describe("scaleWorkload bridge", () => {
-  beforeEach(() => {
-    useFleet.getState().clearWorkloads();
-    useFleet.getState().clearActionStatus();
-    vi.clearAllMocks();
-  });
-
   it("success: sets success actionStatus with kind, ns, name and replica count", async () => {
-    (WorkloadsService.ScaleWorkload as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: true, error: "" });
-    (WorkloadsService.ListWorkloads as ReturnType<typeof vi.fn>).mockResolvedValue({ fluxPresent: false, namespaces: [], workloads: [] });
-    seedWorkloads("homelab", "monitoring");
-
-    await scaleWorkload("homelab", "Deployment", "monitoring", "grafana", 3);
-
+    vi.mocked(WorkloadsService.ScaleWorkload).mockResolvedValue(ok as never);
+    await scaleWorkload("homelab", "Deployment", "monitoring", "grafana", "uid-g", 3);
     const status = useFleet.getState().actionStatus;
     expect(status?.kind).toBe("success");
     expect(status?.message).toBe("scaled deployment monitoring/grafana to 3");
   });
 
-  it("success: re-runs listWorkloads on the current namespace", async () => {
-    (WorkloadsService.ScaleWorkload as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: true, error: "" });
-    (WorkloadsService.ListWorkloads as ReturnType<typeof vi.fn>).mockResolvedValue({ fluxPresent: false, namespaces: [], workloads: [] });
-    seedWorkloads("homelab", "db");
-
-    await scaleWorkload("homelab", "StatefulSet", "db", "postgres", 0);
-
-    expect(WorkloadsService.ListWorkloads).toHaveBeenCalledWith("homelab", "db");
-  });
-
-  it("error: sets error actionStatus and does NOT refresh the list", async () => {
-    (WorkloadsService.ScaleWorkload as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: false, error: "unsupported kind" });
-    seedWorkloads("homelab", "kube-system");
-
-    await scaleWorkload("homelab", "DaemonSet", "kube-system", "cilium", 1);
-
+  it("error: sets error actionStatus", async () => {
+    vi.mocked(WorkloadsService.ScaleWorkload).mockResolvedValue({ ok: false, error: "unsupported kind" } as never);
+    await scaleWorkload("homelab", "DaemonSet", "kube-system", "cilium", "uid-c", 1);
     const status = useFleet.getState().actionStatus;
     expect(status?.kind).toBe("error");
     expect(status?.message).toBe("unsupported kind");
-    expect(WorkloadsService.ListWorkloads).not.toHaveBeenCalled();
   });
 
   it("error: uses fallback message when error field is empty", async () => {
-    (WorkloadsService.ScaleWorkload as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: false, error: "" });
-    seedWorkloads("homelab", "ns");
-
-    await scaleWorkload("homelab", "Deployment", "ns", "api", 1);
-
+    vi.mocked(WorkloadsService.ScaleWorkload).mockResolvedValue({ ok: false, error: "" } as never);
+    await scaleWorkload("homelab", "Deployment", "ns", "api", "uid-a", 1);
     expect(useFleet.getState().actionStatus?.message).toBe("Scale failed");
-  });
-});
-
-describe("openLiveWorkloads bridge", () => {
-  beforeEach(() => {
-    useFleet.getState().clearWorkloads();
-    vi.clearAllMocks();
-    for (const k of Object.keys(eventHandlers)) delete eventHandlers[k];
-    for (const k of Object.keys(offFns)) delete offFns[k];
-  });
-
-  it("subscribes to data and status events and calls OpenLiveWorkloads", () => {
-    seedWorkloads("homelab", "");
-    openLiveWorkloads("homelab", "");
-
-    expect(Events.On).toHaveBeenCalledWith("liveWorkloads:homelab:", expect.any(Function));
-    expect(Events.On).toHaveBeenCalledWith("liveWorkloadsStatus:homelab:", expect.any(Function));
-    expect(WorkloadsService.OpenLiveWorkloads).toHaveBeenCalledWith("homelab", "");
-  });
-
-  it("data event payload updates the workloads store", () => {
-    seedWorkloads("homelab", "");
-    openLiveWorkloads("homelab", "");
-
-    const handler = eventHandlers["liveWorkloads:homelab:"];
-    expect(handler).toBeDefined();
-    handler({ data: { fluxPresent: true, namespaces: ["monitoring"], workloads: [] } });
-
-    expect(useFleet.getState().workloads.namespaces).toEqual(["monitoring"]);
-    expect(useFleet.getState().workloads.fluxPresent).toBe(true);
-  });
-
-  it("status event sets live flag in store", () => {
-    seedWorkloads("homelab", "");
-    openLiveWorkloads("homelab", "");
-
-    const statusHandler = eventHandlers["liveWorkloadsStatus:homelab:"];
-    expect(statusHandler).toBeDefined();
-    statusHandler({ data: { live: true } });
-
-    expect(useFleet.getState().workloads.live).toBe(true);
-  });
-
-  it("cleanup unsubscribes both events and calls CloseLiveWorkloads", () => {
-    seedWorkloads("homelab", "");
-    const cleanup = openLiveWorkloads("homelab", "");
-
-    cleanup();
-
-    expect(offFns["liveWorkloads:homelab:"]!).toHaveBeenCalled();
-    expect(offFns["liveWorkloadsStatus:homelab:"]!).toHaveBeenCalled();
-    expect(WorkloadsService.CloseLiveWorkloads).toHaveBeenCalledWith("homelab", "");
-  });
-
-  it("stale-guard: emit from a replaced sub (old namespace) is dropped", () => {
-    // Open kube-system, then switch to monitoring: the new open claims the
-    // slice. A late emit from the old namespace's handler must be dropped.
-    openLiveWorkloads("homelab", "kube-system");
-    const oldHandler = eventHandlers["liveWorkloads:homelab:kube-system"];
-    openLiveWorkloads("homelab", "monitoring");
-
-    oldHandler({ data: { fluxPresent: false, namespaces: ["kube-system"], workloads: [] } });
-
-    expect(useFleet.getState().workloads.namespace).toBe("monitoring");
-    expect(useFleet.getState().workloads.items).toHaveLength(0);
   });
 });

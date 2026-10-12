@@ -32,6 +32,9 @@ type RowsDTO struct {
 	Part        observe.Part `json:"part"`
 	EvaluatedAt time.Time    `json:"evaluatedAt"`
 	Rows        any          `json:"rows"`
+	// Facts the evaluation used (for workloads, fluxPresent), from the same
+	// capture as the rows - never read from a later summary (§2a).
+	Facts map[string]any `json:"facts,omitempty"`
 }
 
 // rowsConverter turns a part's evaluated rows into its lens DTOs. It copies
@@ -202,6 +205,21 @@ var rowsConverters = map[string]rowsConverter{
 		}
 		return out, nil
 	},
+	healthsrc.TaskWorkloads + "/workloads": func(rows any, _ time.Time) (any, error) {
+		set, err := rowSetOf[workloads.Workload](rows)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]WorkloadDTO, 0, len(set.Rows))
+		for _, r := range set.Rows {
+			// a verdict part: the captured verdict is in the workload's Health;
+			// fluxPresent travels in the set's facts (§2a)
+			dto := toWorkloadDTO(r.Data)
+			dto.UID, dto.GVR, dto.Generation = r.Ref.UID, r.Ref.GVR, r.Ref.Generation
+			out = append(out, dto)
+		}
+		return out, nil
+	},
 	healthsrc.TaskESO + "/externalsecrets": func(rows any, at time.Time) (any, error) {
 		set, err := rowSetOf[externalsecrets.ExternalSecret](rows)
 		if err != nil {
@@ -257,7 +275,11 @@ func toRowsDTO(r observe.Rows) (RowsDTO, bool) {
 	if err != nil {
 		return RowsDTO{}, false
 	}
-	return RowsDTO{Cluster: r.Cluster, Incarnation: r.Incarnation, Task: r.Task, Part: r.Part, EvaluatedAt: r.EvaluatedAt, Rows: rows}, true
+	out := RowsDTO{Cluster: r.Cluster, Incarnation: r.Incarnation, Task: r.Task, Part: r.Part, EvaluatedAt: r.EvaluatedAt, Rows: rows}
+	if f, ok := r.Rows.(interface{ RowFacts() map[string]any }); ok {
+		out.Facts = f.RowFacts()
+	}
+	return out, true
 }
 
 // RowsReplyDTO answers OpenRows and RowsBootstrap. Closed: the token was

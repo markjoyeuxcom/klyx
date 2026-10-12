@@ -50,11 +50,13 @@ describe("deletePod bridge", () => {
     (PodsService.ListPods as ReturnType<typeof vi.fn>).mockResolvedValue({ namespaces: [], pods: [] });
     seedPods("homelab", "default");
 
-    await deletePod("homelab", "default", "api-xyz");
+    await deletePod("homelab", "default", "api-xyz", "uid-api-xyz");
 
     const status = useFleet.getState().actionStatus;
     expect(status?.kind).toBe("success");
     expect(status?.message).toBe("pod default/api-xyz deleted");
+    // the pod OBJECT the delete was armed against (design §5b)
+    expect(PodsService.DeletePod).toHaveBeenCalledWith("homelab", "default", "api-xyz", "uid-api-xyz");
   });
 
   it("success: re-runs listPods on the current namespace", async () => {
@@ -62,7 +64,7 @@ describe("deletePod bridge", () => {
     (PodsService.ListPods as ReturnType<typeof vi.fn>).mockResolvedValue({ namespaces: [], pods: [] });
     seedPods("homelab", "monitoring");
 
-    await deletePod("homelab", "monitoring", "grafana-abc");
+    await deletePod("homelab", "monitoring", "grafana-abc", "uid-grafana-abc");
 
     expect(PodsService.ListPods).toHaveBeenCalledWith("homelab", "monitoring");
   });
@@ -71,7 +73,7 @@ describe("deletePod bridge", () => {
     (PodsService.DeletePod as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: false, error: "forbidden" });
     seedPods("homelab", "default");
 
-    await deletePod("homelab", "default", "api-xyz");
+    await deletePod("homelab", "default", "api-xyz", "uid-api-xyz");
 
     const status = useFleet.getState().actionStatus;
     expect(status?.kind).toBe("error");
@@ -84,7 +86,7 @@ describe("deletePod bridge", () => {
     (PodsService.DeletePod as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: false, error: "" });
     seedPods("homelab", "default");
 
-    await deletePod("homelab", "default", "api-xyz");
+    await deletePod("homelab", "default", "api-xyz", "uid-api-xyz");
 
     expect(useFleet.getState().actionStatus?.message).toBe("Delete failed");
   });

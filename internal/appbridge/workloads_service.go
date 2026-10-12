@@ -14,8 +14,10 @@ const maxScaleReplicas = 10000
 
 // ScaleWorkload sets the replica count on a Deployment or StatefulSet. replicas
 // must be in [0, 10000]; negative or out-of-range values are rejected here
-// before the network round-trip. kind must be Deployment or StatefulSet.
-func (s *WorkloadsService) ScaleWorkload(cluster, kind, namespace, name string, replicas int) ActionResultDTO {
+// before the network round-trip. kind must be Deployment or StatefulSet. uid
+// is the workload the verb was armed against (design §5b): a same-name
+// replacement is never scaled.
+func (s *WorkloadsService) ScaleWorkload(cluster, kind, namespace, name, uid string, replicas int) ActionResultDTO {
 	if replicas < 0 || replicas > maxScaleReplicas {
 		return ActionResultDTO{Error: fmt.Sprintf("replicas %d out of range [0, %d]", replicas, maxScaleReplicas)}
 	}
@@ -28,7 +30,7 @@ func (s *WorkloadsService) ScaleWorkload(cluster, kind, namespace, name string, 
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
 	defer cancel()
-	if err := conn.ScaleWorkload(ctx, kind, namespace, name, int32(replicas)); err != nil {
+	if err := conn.ScaleWorkload(ctx, kind, namespace, name, uid, int32(replicas)); err != nil {
 		return ActionResultDTO{Error: err.Error()}
 	}
 	return ActionResultDTO{OK: true}
@@ -63,8 +65,8 @@ func (s *WorkloadsService) RolloutHistory(cluster, kind, namespace, name string)
 
 // RolloutUndo rolls a workload back to a prior revision. Destructive: consumes
 // the protected-cluster grant, and the frontend confirm carries the
-// GitOps-owned-will-be-reverted warning.
-func (s *WorkloadsService) RolloutUndo(cluster, kind, namespace, name string, revision int) ActionResultDTO {
+// GitOps-owned-will-be-reverted warning. uid is the armed workload (§5b).
+func (s *WorkloadsService) RolloutUndo(cluster, kind, namespace, name, uid string, revision int) ActionResultDTO {
 	if err := checkProtected(cluster); err != nil {
 		return ActionResultDTO{Error: err.Error()}
 	}
@@ -74,7 +76,7 @@ func (s *WorkloadsService) RolloutUndo(cluster, kind, namespace, name string, re
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
 	defer cancel()
-	if err := conn.RolloutUndo(ctx, kind, namespace, name, int64(revision)); err != nil {
+	if err := conn.RolloutUndo(ctx, kind, namespace, name, uid, int64(revision)); err != nil {
 		return ActionResultDTO{Error: err.Error()}
 	}
 	return ActionResultDTO{OK: true}
@@ -82,8 +84,8 @@ func (s *WorkloadsService) RolloutUndo(cluster, kind, namespace, name string, re
 
 // RolloutPause pauses/resumes a Deployment's rollouts (spec.paused). Reversible
 // but still a spec mutation on a possibly-protected cluster, so it consumes the
-// grant like restart/scale.
-func (s *WorkloadsService) RolloutPause(cluster, namespace, name string, pause bool) ActionResultDTO {
+// grant like restart/scale. uid is the armed Deployment (§5b).
+func (s *WorkloadsService) RolloutPause(cluster, namespace, name, uid string, pause bool) ActionResultDTO {
 	if err := checkProtected(cluster); err != nil {
 		return ActionResultDTO{Error: err.Error()}
 	}
@@ -93,7 +95,7 @@ func (s *WorkloadsService) RolloutPause(cluster, namespace, name string, pause b
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
 	defer cancel()
-	if err := conn.RolloutPause(ctx, namespace, name, pause); err != nil {
+	if err := conn.RolloutPause(ctx, namespace, name, uid, pause); err != nil {
 		return ActionResultDTO{Error: err.Error()}
 	}
 	return ActionResultDTO{OK: true}
@@ -101,8 +103,8 @@ func (s *WorkloadsService) RolloutPause(cluster, namespace, name string, pause b
 
 // RolloutRestart triggers a rolling restart for a workload by patching the
 // pod-template restartedAt annotation. kind must be Deployment, StatefulSet,
-// or DaemonSet.
-func (s *WorkloadsService) RolloutRestart(cluster, kind, namespace, name string) ActionResultDTO {
+// or DaemonSet. uid is the armed workload (§5b).
+func (s *WorkloadsService) RolloutRestart(cluster, kind, namespace, name, uid string) ActionResultDTO {
 	if err := checkProtected(cluster); err != nil {
 		return ActionResultDTO{Error: err.Error()}
 	}
@@ -112,7 +114,7 @@ func (s *WorkloadsService) RolloutRestart(cluster, kind, namespace, name string)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
 	defer cancel()
-	if err := conn.RolloutRestart(ctx, kind, namespace, name); err != nil {
+	if err := conn.RolloutRestart(ctx, kind, namespace, name, uid); err != nil {
 		return ActionResultDTO{Error: err.Error()}
 	}
 	return ActionResultDTO{OK: true}
@@ -124,22 +126,22 @@ type WorkloadsConn interface {
 	ListWorkloads(ctx context.Context, namespace string) ([]workloads.Workload, bool, bool, error)
 	WorkloadMetrics(ctx context.Context, namespace string) (map[string]workloads.Usage, workloads.UsageStatus)
 	WorkloadCompare(ctx context.Context, kind, ns, name string) (fleet.WorkloadCompareInfo, error)
-	RolloutRestart(ctx context.Context, kind, namespace, name string) error
+	RolloutRestart(ctx context.Context, kind, namespace, name, uid string) error
 	RolloutHistory(ctx context.Context, kind, namespace, name string) ([]workloads.RolloutRevision, error)
-	RolloutUndo(ctx context.Context, kind, namespace, name string, revision int64) error
-	RolloutPause(ctx context.Context, namespace, name string, pause bool) error
-	ScaleWorkload(ctx context.Context, kind, namespace, name string, replicas int32) error
-	WatchDirty(ctx context.Context, namespace string, kinds []string, onDirty func(), onLive func(bool)) (stop func(), err error)
+	RolloutUndo(ctx context.Context, kind, namespace, name, uid string, revision int64) error
+	RolloutPause(ctx context.Context, namespace, name, uid string, pause bool) error
+	ScaleWorkload(ctx context.Context, kind, namespace, name, uid string, replicas int32) error
 }
 
+// WorkloadsService is bound to JS: the workload verbs, rollout history, the
+// fleet compare and usage. The Workloads lens reads the Observer's rows (1c
+// slice 3 §5.8); ListWorkloads stays for the attention and fleet-board reads.
 type WorkloadsService struct {
 	lookup func(string) (WorkloadsConn, bool)
-	em     Emitter
-	live   *liveRegistry
 }
 
-func NewWorkloadsService(lookup func(string) (WorkloadsConn, bool), em Emitter) *WorkloadsService {
-	return &WorkloadsService{lookup: lookup, em: em, live: newLiveRegistry()}
+func NewWorkloadsService(lookup func(string) (WorkloadsConn, bool)) *WorkloadsService {
+	return &WorkloadsService{lookup: lookup}
 }
 
 // ListWorkloads returns the health-ranked workloads for a cluster, scoped to
@@ -155,9 +157,8 @@ func (s *WorkloadsService) ListWorkloads(cluster, namespace string) WorkloadsRes
 }
 
 // computeWorkloads lists workloads on conn and builds the WorkloadsResultDTO
-// with the same flux-present, namespace-set, and mapping rules ListWorkloads
-// uses. ok=false means the list failed (returns non-nil empties); the live
-// runner uses ok to gate emit/liveness.
+// with the flux-present, namespace-set, and mapping rules ListWorkloads uses.
+// ok=false means the list failed (returns non-nil empties).
 func computeWorkloads(conn WorkloadsConn, namespace string) (WorkloadsResultDTO, bool) {
 	out := WorkloadsResultDTO{Namespaces: []string{}, Workloads: []WorkloadDTO{}}
 	ctx, cancel := context.WithTimeout(context.Background(), workloadsTimeout)
@@ -184,46 +185,9 @@ func computeWorkloads(conn WorkloadsConn, namespace string) (WorkloadsResultDTO,
 	return out, true
 }
 
-// workloadWatchKinds are the resource kinds a live workloads subscription
-// watches: the controllers plus pods (a pod flip changes a workload's ready/
-// reason without touching the controller object).
-var workloadWatchKinds = []string{"pods", "deployments", "statefulsets", "daemonsets"}
-
-// OpenLiveWorkloads starts (or replaces) a watch-backed live subscription for
-// the cluster+namespace. It emits liveWorkloads:<cluster>:<ns>
-// (WorkloadsResultDTO) on each debounced change and liveWorkloadsStatus:...
-// ({live:bool}) on liveness edges. Cluster miss returns an error.
-func (s *WorkloadsService) OpenLiveWorkloads(cluster, namespace string) ActionResultDTO {
-	conn, ok := s.lookup(cluster)
-	if !ok {
-		return ActionResultDTO{Error: "cluster not connected: " + cluster}
-	}
-	key := "workloads:" + cluster + ":" + namespace
-	dataEvent := "liveWorkloads:" + cluster + ":" + namespace
-	liveEvent := "liveWorkloadsStatus:" + cluster + ":" + namespace
-
-	s.live.open(key,
-		func(onDirty func(), onLive func(bool)) (func(), error) {
-			return conn.WatchDirty(context.Background(), namespace, workloadWatchKinds, onDirty, onLive)
-		},
-		func() (any, bool) { return computeWorkloads(conn, namespace) },
-		func(payload any) { s.em.Emit(dataEvent, payload) },
-		func(live bool) { s.em.Emit(liveEvent, liveStatusDTO{Live: live}) },
-	)
-	return ActionResultDTO{OK: true}
-}
-
-// CloseLiveWorkloads stops the live subscription. Idempotent.
-func (s *WorkloadsService) CloseLiveWorkloads(cluster, namespace string) {
-	s.live.close("workloads:" + cluster + ":" + namespace)
-}
-
-// CloseAll stops every live workload subscription. Called on app shutdown.
-func (s *WorkloadsService) CloseAll() { s.live.closeAll() }
-
 func toWorkloadDTO(w workloads.Workload) WorkloadDTO {
 	d := WorkloadDTO{
-		Kind: w.Kind, Namespace: w.Namespace, Name: w.Name,
+		Kind: w.Kind, Namespace: w.Namespace, Name: w.Name, UID: string(w.UID),
 		Desired: w.Desired, Ready: w.Ready, Available: w.Available, Updated: w.Updated,
 		Restarts: w.Restarts, Reason: w.Reason, Rank: w.Rank.String(),
 		Pods:  make([]PodDTO, 0, len(w.Pods)),
@@ -235,7 +199,7 @@ func toWorkloadDTO(w workloads.Workload) WorkloadDTO {
 		d.GitOps = &OwnerDTO{Kind: w.GitOps.Kind, Namespace: w.GitOps.Namespace, Name: w.GitOps.Name}
 	}
 	for _, p := range w.Pods {
-		d.Pods = append(d.Pods, PodDTO{Name: p.Name, Ready: p.Ready, Restarts: p.Restarts, Reason: p.Reason, Node: p.Node, AgeSeconds: p.AgeSeconds})
+		d.Pods = append(d.Pods, PodDTO{Name: p.Name, UID: string(p.UID), Ready: p.Ready, Restarts: p.Restarts, Reason: p.Reason, Node: p.Node, AgeSeconds: p.AgeSeconds, Created: unixOrZero(p.Created)})
 	}
 	d.Resources = WorkloadResourcesDTO{
 		CPU: ResourceCellDTO{Usage: w.Resources.CPU.Usage, Request: w.Resources.CPU.Request, Limit: w.Resources.CPU.Limit},

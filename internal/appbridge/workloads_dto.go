@@ -8,11 +8,14 @@ type OwnerDTO struct {
 
 type PodDTO struct {
 	Name       string `json:"name"`
+	UID        string `json:"uid,omitempty"`
 	Ready      bool   `json:"ready"`
 	Restarts   int    `json:"restarts"`
 	Reason     string `json:"reason"`
 	Node       string `json:"node"`
 	AgeSeconds int    `json:"ageSeconds"`
+	// Created (unix) anchors the age the lens ticks (1c slice 3 §3).
+	Created int64 `json:"createdUnix,omitempty"`
 }
 
 // ResourceCellDTO is one resource (cpu cores / memory bytes). Nil = JSON null ->
@@ -57,6 +60,8 @@ type WorkloadDTO struct {
 	Kind      string               `json:"kind"`
 	Namespace string               `json:"namespace"`
 	Name      string               `json:"name"`
+	UID       string               `json:"uid,omitempty"`
+	GVR       string               `json:"gvr,omitempty"`
 	Desired   int                  `json:"desired"`
 	Ready     int                  `json:"ready"`
 	Available int                  `json:"available"`
