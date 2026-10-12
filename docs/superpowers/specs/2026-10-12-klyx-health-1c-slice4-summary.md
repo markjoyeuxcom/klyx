@@ -49,7 +49,7 @@ Each part is one wording line of its area, from its classifier:
 
 ### 2.2 Area value
 
-An area is lit when any of its lines is lit. Its badge is its strongest line - danger before warning, then the first counted part - never a sum across parts (two parts are two representations or two vocabularies, as the tree does today for Flux and its sources). Each part also badges its own destination where it has one (Flux sources, Argo ApplicationSets, Gateways routes, Certificates issuers, External secrets stores, Karpenter NodeClaims), using the destinations the lenses already have.
+An area is lit when any of its lines is lit. Its badge is its strongest line - danger before warning, then the first counted part - never a sum across parts (two parts are two representations or two vocabularies, as the tree does today for Flux and its sources). A part also badges its own destination only where a lens destination for exactly that part exists: Flux sources (`flux-sources`) and Argo ApplicationSets (`argo-appsets`). The other second parts (Certificates issuers, External secrets stores, Gateways routes, Karpenter NodeClaims) have no lens destination of their own - their registry entries are generic resource destinations whose kinds differ from the part's (Issuers without ClusterIssuers, for example) - so they show as a line on their task's destination (its note and tooltip), never as a badge on a resource destination.
 
 The mast counts AREAS needing attention, never objects (unchanged).
 
@@ -103,7 +103,7 @@ Question for review: is the summary-derived mechanism acceptable as the slice 4 
 
 - Area mapping per classifier (verdict, native, evidence) and per coverage state (live, stale with last good, checking, unreadable with class, absent omitted, discovery gap named, truncated lower bound, snapshot as-of).
 - A controller issue lights its area with no object count.
-- Strongest-line badges: danger over warning; never a sum across parts; per-part destination badges.
+- Strongest-line badges: danger over warning; never a sum across parts; per-part badges only on `flux-sources` and `argo-appsets`, and no part badge on a generic resource destination.
 - One number: with a lens open, the lens header, tree badge and mast agree; rows newer than the summary win on all three; under A4 all three switch to the summary together and back after the re-bootstrap.
 - No summary, a Final summary, and a newer incarnation (no carry-over).
 - Top ref links route through the existing intents.
