@@ -217,7 +217,7 @@ func TestProtectGuard_LiveSourceGatesHotAddedProdCluster(t *testing.T) {
 	SetProtectGuard(NewProtectGuard(s.IsProtected, time.Now))
 	t.Cleanup(func() { SetProtectGuard(nil) })
 
-	svc := NewPodsService(func(string) (PodsConn, bool) { return &fakeLivePodConn{}, true }, &anyEmitter{})
+	svc := NewPodsService(func(string) (PodsConn, bool) { return &fakeLivePodConn{}, true })
 
 	if r := svc.DeletePod("prod-eu", "ns", "pod", "uid-pod"); r.OK || r.Error == "" {
 		t.Fatalf("destructive verb on hot-added prod cluster must require a typed grant, got %+v", r)

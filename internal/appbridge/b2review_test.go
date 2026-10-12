@@ -51,14 +51,14 @@ func TestLiveList_ComputeSpanningReconnectDoesNotCertifyLive(t *testing.T) {
 func TestLiveList_ReadFailureReachesFrontend(t *testing.T) {
 	conn := &fakeLivePodConn{computeFail: true}
 	em := &anyEmitter{}
-	svc := NewPodsService(func(string) (PodsConn, bool) { return conn, true }, em)
+	svc := NewEventsService(func(string) (EventsConn, bool) { return conn, true }, em)
 	svc.live.interval = time.Hour
 	defer svc.CloseAll()
-	if r := svc.OpenLivePods("c", "ns"); !r.OK {
+	if r := svc.OpenLiveEvents("c", "ns"); !r.OK {
 		t.Fatalf("open failed: %+v", r)
 	}
 	for _, ev := range em.snapshot() {
-		if dto, ok := ev.data.(PodsResultDTO); ok && dto.Error != "" {
+		if dto, ok := ev.data.(EventsResultDTO); ok && dto.Error != "" {
 			return
 		}
 	}

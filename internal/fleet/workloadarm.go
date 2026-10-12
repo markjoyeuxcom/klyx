@@ -48,3 +48,23 @@ func (c *ClusterConn) CheckWorkloadArmed(ctx context.Context, kind, namespace, n
 	}
 	return nil
 }
+
+// CheckPodArmed confirms the pod at namespace/name is the object a verb was
+// armed against (its UID, design §5b). It fences a verb that can only name
+// a pod (kubectl debug); a delete uses the server's UID precondition instead.
+func (c *ClusterConn) CheckPodArmed(ctx context.Context, namespace, name, uid string) error {
+	what := fmt.Sprintf("pod %s/%s", namespace, name)
+	if uid == "" {
+		return fmt.Errorf("%s: no object identity was armed - reload the list and retry", what)
+	}
+	p, err := c.typed.CoreV1().Pods(namespace).Get(ctx, name, metav1.GetOptions{})
+	switch {
+	case apierrors.IsNotFound(err):
+		return fmt.Errorf("%s: %w", what, ErrReplaced)
+	case err != nil:
+		return fmt.Errorf("%s: %w", what, err)
+	case string(p.UID) != uid:
+		return fmt.Errorf("%s: %w", what, ErrReplaced)
+	}
+	return nil
+}

@@ -30,20 +30,25 @@ type ContainerPortDTO struct {
 
 // PodSummaryDTO is the pods-lens row.
 type PodSummaryDTO struct {
-	Namespace  string                `json:"namespace"`
-	Name       string                `json:"name"`
-	UID        string                `json:"uid,omitempty"` // the pod object: verbs are armed against it (§5b)
-	Ready      bool                  `json:"ready"`
-	Phase      string                `json:"phase"`
-	Reason     string                `json:"reason"`
-	Rank       string                `json:"rank"` // "unhealthy"|"degraded"|"restarts"|"healthy"
-	Restarts   int                   `json:"restarts"`
-	Node       string                `json:"node"`
-	IP         string                `json:"ip"`
-	OwnerKind  string                `json:"ownerKind"`
-	OwnerName  string                `json:"ownerName"`
-	OwnerUID   string                `json:"ownerUid,omitempty"` // the owner a restart is armed against (§5b)
-	AgeSeconds int                   `json:"ageSeconds"`
+	Namespace  string `json:"namespace"`
+	Name       string `json:"name"`
+	UID        string `json:"uid,omitempty"` // the pod object: verbs are armed against it (§5b)
+	Ready      bool   `json:"ready"`
+	Phase      string `json:"phase"`
+	Reason     string `json:"reason"`
+	Rank       string `json:"rank"` // "unhealthy"|"degraded"|"restarts"|"healthy"
+	Restarts   int    `json:"restarts"`
+	Node       string `json:"node"`
+	IP         string `json:"ip"`
+	OwnerKind  string `json:"ownerKind"`
+	OwnerName  string `json:"ownerName"`
+	OwnerUID   string `json:"ownerUid,omitempty"` // the owner a restart is armed against (§5b)
+	GVR        string `json:"gvr,omitempty"`
+	Generation int64  `json:"generation,omitempty"`
+	AgeSeconds int    `json:"ageSeconds"`
+	// Created (unix) anchors the age the lens ticks (1c slice 3 §3);
+	// AgeSeconds is the age at the read or capture.
+	Created    int64                 `json:"createdUnix,omitempty"`
 	Containers []ContainerSummaryDTO `json:"containers"`
 	// Health is the shared verdict; Rank/Reason/Phase are legacy fields kept
 	// until every consumer has migrated.
@@ -78,6 +83,9 @@ type PodDetailDTO struct {
 	YAML           string            `json:"yaml"`
 	QosClass       string            `json:"qosClass"`
 	ServiceAccount string            `json:"serviceAccount"`
+	// AsOfUnix is when the pod was read; Summary.UID is the object read. The
+	// inspector shows a detail only for the selected row's UID (design §5b).
+	AsOfUnix int64 `json:"asOfUnix,omitempty"`
 	// Error is set when the detail read failed; the zero DTO is never a pod.
 	Error string `json:"error,omitempty"`
 }

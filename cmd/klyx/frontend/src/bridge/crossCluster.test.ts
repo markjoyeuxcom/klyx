@@ -75,10 +75,10 @@ describe("cross-cluster stale responses", () => {
   it("pod, node and helm details are dropped when the cluster changed", async () => {
     const pod = deferred<unknown>();
     vi.mocked(PodsService.GetPodDetail).mockReturnValueOnce(pod.promise as never);
-    useFleet.getState().setPodsLoading("A", "");
-    const p = openPodDetail("A", "default", "api");
-    useFleet.getState().setPodsLoading("B", ""); // switched cluster; same pod name selected there
-    useFleet.getState().selectPod({ namespace: "default", name: "api" });
+    useFleet.getState().setPodsVisit("A");
+    const p = openPodDetail("A", "default", "api", "uid-api");
+    useFleet.getState().setPodsVisit("B"); // switched cluster; same pod object name selected there
+    useFleet.getState().selectPod({ namespace: "default", name: "api", uid: "uid-api" });
     pod.resolve({ summary: { name: "from-A" }, yaml: "from-A" });
     await p;
     expect(useFleet.getState().pods.detail).toBeNull();

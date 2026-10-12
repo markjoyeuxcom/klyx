@@ -540,3 +540,13 @@ func TestSummarizePods_ContainerPorts(t *testing.T) {
 		t.Errorf("sidecar with no spec ports should have nil ports, got %+v", s.Containers[2].Ports)
 	}
 }
+
+// A summary carries its creation time beside the age at its now, so a live
+// view ticks the age instead of freezing it between pushes (1c slice 3 §3).
+func TestSummarizePods_CarriesTheCreationAnchor(t *testing.T) {
+	p := makePod("prod", "web-xyz", corev1.PodRunning, true)
+	s := SummarizePods([]corev1.Pod{p}, psNow)[0]
+	if !s.Created.Equal(psNow.Add(-10*time.Minute)) || s.AgeSeconds != 600 {
+		t.Fatalf("anchor: created=%v age=%d", s.Created, s.AgeSeconds)
+	}
+}

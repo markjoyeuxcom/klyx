@@ -1,7 +1,11 @@
 import { Events } from "@wailsio/runtime";
 import { useFleet, EventsResultDTO } from "../store/fleet";
 import { EventsService } from "../../bindings/github.com/moomora/klyx/internal/appbridge/index.js";
-import { liveOpenRetryMs } from "./pods";
+
+// liveOpenRetryMs paces re-attempts when OpenLiveEvents reports the cluster is
+// not connected yet (app launch race: the view can mount before the registry
+// finishes connecting).
+export const liveOpenRetryMs = 3000;
 
 export async function fetchEventsSnapshot(cluster: string, namespace: string): Promise<EventsResultDTO> {
   const r = (await EventsService.ListEvents(cluster, namespace)) as EventsResultDTO;

@@ -205,6 +205,20 @@ var rowsConverters = map[string]rowsConverter{
 		}
 		return out, nil
 	},
+	healthsrc.TaskPods + "/pods": func(rows any, _ time.Time) (any, error) {
+		set, err := rowSetOf[workloads.PodSummary](rows)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]PodSummaryDTO, 0, len(set.Rows))
+		for _, r := range set.Rows {
+			// a verdict part: the captured verdict is in the summary's Health
+			dto := toPodSummaryDTO(r.Data)
+			dto.UID, dto.GVR, dto.Generation = r.Ref.UID, r.Ref.GVR, r.Ref.Generation
+			out = append(out, dto)
+		}
+		return out, nil
+	},
 	healthsrc.TaskWorkloads + "/workloads": func(rows any, _ time.Time) (any, error) {
 		set, err := rowSetOf[workloads.Workload](rows)
 		if err != nil {

@@ -103,7 +103,9 @@ describe("EventsView (redesign step 5)", () => {
     render(<EventsView cluster="x" />);
     fireEvent.click(document.querySelector(".lens-row") as HTMLElement);
     fireEvent.click(insp().getByRole("button", { name: "Open Pod" }));
-    expect(openPodDetail).toHaveBeenCalledWith("x", "apps", "web-1");
+    // the Pods lens resolves the name to its row's object (design §5b)
+    expect(useFleet.getState().navIntent).toMatchObject({ kind: "select-pod", cluster: "x", namespace: "apps", name: "web-1" });
+    expect(openPodDetail).not.toHaveBeenCalled(); // never a name-only read
     expect(destinationOf("x", ev({ kind: "Widget" }))).toBeNull();
     expect(destinationOf("x", ev({ kind: "Deployment" }))?.label).toBe("Open Deployment");
     expect(destinationOf("x", ev({ kind: "Kustomization" }))?.label).toBe("Open Kustomization");

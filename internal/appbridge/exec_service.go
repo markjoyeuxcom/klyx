@@ -13,6 +13,7 @@ import (
 type ExecConn interface {
 	ExecCommand(namespace, pod, container string) ([]string, error)
 	DebugCommand(namespace, pod, container string) ([]string, error)
+	CheckPodArmed(ctx context.Context, namespace, name, uid string) error
 	DescribeCmd(ctx context.Context, kindArg, namespace, name string) (*exec.Cmd, error)
 }
 
@@ -104,7 +105,13 @@ func (s *ExecService) GetDebugCommand(cluster, ns, pod, container string) ExecCo
 // it consumes the protected-cluster grant like every other mutating verb - the
 // frontend arms it through the shared ConfirmDialog. GetDebugCommand (copy the
 // command) stays ungated: copying runs nothing.
-func (s *ExecService) OpenDebugTerminal(cluster, ns, pod, container string) ActionResultDTO {
+//
+// uid is the pod object the debug shell was armed against (design §5b): it is
+// confirmed by a GET before the terminal launches, and a replaced or missing
+// pod launches nothing. kubectl debug takes a name, so a same-name
+// replacement landing between that check and kubectl's own request is the
+// residual window (a StatefulSet's recreated pod-0, say).
+func (s *ExecService) OpenDebugTerminal(cluster, ns, pod, uid, container string) ActionResultDTO {
 	if err := checkProtected(cluster); err != nil {
 		return ActionResultDTO{Error: err.Error()}
 	}
@@ -115,6 +122,11 @@ func (s *ExecService) OpenDebugTerminal(cluster, ns, pod, container string) Acti
 	argv, err := conn.DebugCommand(ns, pod, container)
 	if err != nil {
 		return ActionResultDTO{Error: err.Error()}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
+	defer cancel()
+	if err := conn.CheckPodArmed(ctx, ns, pod, uid); err != nil {
+		return ActionResultDTO{Error: "debug " + err.Error() + " - nothing was started"}
 	}
 	return launchTerminal(argv)
 }

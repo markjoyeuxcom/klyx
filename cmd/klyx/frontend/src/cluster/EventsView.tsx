@@ -12,7 +12,6 @@ import { useFleet } from "../store/fleet";
 import type { EventRowDTO, ResourceRef } from "../store/fleet";
 import { WORKLOAD_KINDS } from "../store/fleet";
 import { listEvents, openLiveEvents } from "../bridge/events";
-import { openPodDetail } from "../bridge/pods";
 import { loadClusterPrefs, loadSearch, saveEventsViewPrefs, saveSearch } from "../store/persist";
 import { WELL_KNOWN_RESOURCE_REFS } from "./resourceRefs";
 import { LensLayout, LensTable, TABLE_ROW_HEIGHT, type DatasetState } from "../layout/LensLayout";
@@ -51,7 +50,7 @@ function refForKind(kind: string): ResourceRef | null {
 }
 export function destinationOf(cluster: string, e: EventRowDTO): Destination {
   const nav = useFleet.getState();
-  if (e.kind === "Pod") return { label: "Open Pod", open: () => { nav.setSection("pods"); void openPodDetail(cluster, e.namespace, e.name); } };
+  if (e.kind === "Pod") return { label: "Open Pod", open: () => { nav.setSection("pods"); nav.requestNavIntent({ kind: "select-pod", cluster, namespace: e.namespace, name: e.name }); } };
   if (e.kind === "Node") return { label: "Open Node", open: () => { nav.setSection("nodes"); nav.requestNavIntent({ kind: "select-node", cluster, node: e.name }); } };
   if ((WORKLOAD_KINDS as readonly string[]).includes(e.kind)) {
     return { label: `Open ${e.kind}`, open: () => { nav.setSection("workloads"); nav.requestNavIntent({ kind: "select-workload", cluster, workloadKind: e.kind, namespace: e.namespace, name: e.name }); } };

@@ -99,8 +99,9 @@ function routeHint(r: RouteNodeDTO): string | undefined {
 
 function openRelatedObject(s: FleetStore, cluster: string, ref: { kind: string; namespace: string; name: string; group: string; version: string; plural: string; scope: string }): void {
   if (ref.kind === "Pod") {
+    // the Pods lens resolves the name to its row's object (design §5b)
     openSection(s, "pods", cluster);
-    void openPodDetail(cluster, ref.namespace, ref.name);
+    s.requestNavIntent({ kind: "select-pod", cluster, namespace: ref.namespace, name: ref.name });
     return;
   }
   openSection(s, "resources", cluster);
@@ -230,7 +231,7 @@ export function buildCommands(s: FleetStore): Command[] {
         hint: `Pod · ${p.phase || p.rank} · ${podCluster}`,
         run: () => {
           openSection(s, "pods", podCluster);
-          void openPodDetail(podCluster, p.namespace, p.name);
+          void openPodDetail(podCluster, p.namespace, p.name, p.uid ?? "");
         },
       });
       cmds.push({

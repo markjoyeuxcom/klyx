@@ -19,6 +19,10 @@ const popout = isLogsWindow(window.location.search)
 // flashes at 100%.
 initZoom()
 
+// The slice 3 §6a webview gate's probe: only a lab build (VITE_KLYX_PERF=1)
+// carries it; every other build drops this branch and its chunk.
+if (import.meta.env.VITE_KLYX_PERF === '1' && !popout) void import('./app/perfProbe').then((m) => m.install())
+
 ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
   <React.StrictMode>
     <ThemeProvider>

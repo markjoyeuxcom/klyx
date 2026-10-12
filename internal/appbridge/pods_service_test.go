@@ -51,7 +51,7 @@ func (f *fakePodConn) WatchDirty(context.Context, string, []string, func(), func
 // --- ListPods tests ---
 
 func TestPodsService_ClusterMiss_NonNilEmpties(t *testing.T) {
-	svc := NewPodsService(func(string) (PodsConn, bool) { return nil, false }, nil)
+	svc := NewPodsService(func(string) (PodsConn, bool) { return nil, false })
 	dto := svc.ListPods("nope", "")
 	if dto.Pods == nil || dto.Namespaces == nil {
 		t.Fatal("slices must be non-nil on cluster miss")
@@ -66,7 +66,7 @@ func TestPodsService_ClusterMiss_NonNilEmpties(t *testing.T) {
 
 func TestPodsService_Truncated(t *testing.T) {
 	conn := &fakePodConn{pods: []workloads.PodSummary{{Namespace: "a", Name: "p", Rank: workloads.Healthy}}, truncated: true}
-	svc := NewPodsService(func(string) (PodsConn, bool) { return conn, true }, nil)
+	svc := NewPodsService(func(string) (PodsConn, bool) { return conn, true })
 	if dto := svc.ListPods("c", ""); !dto.Truncated {
 		t.Fatalf("truncated must propagate to the DTO, got %+v", dto)
 	}
@@ -100,7 +100,7 @@ func TestPodsService_ListPods_MappingAndRankString(t *testing.T) {
 		},
 	}
 	conn := &fakePodConn{pods: pods}
-	svc := NewPodsService(func(string) (PodsConn, bool) { return conn, true }, nil)
+	svc := NewPodsService(func(string) (PodsConn, bool) { return conn, true })
 
 	all := svc.ListPods("c", "")
 	if len(all.Pods) != 2 {
@@ -142,7 +142,7 @@ func TestPodsService_ListPods_MappingAndRankString(t *testing.T) {
 // --- GetPodDetail tests ---
 
 func TestPodsService_GetPodDetail_ClusterMiss_NonNilEmpties(t *testing.T) {
-	svc := NewPodsService(func(string) (PodsConn, bool) { return nil, false }, nil)
+	svc := NewPodsService(func(string) (PodsConn, bool) { return nil, false })
 	d := svc.GetPodDetail("nope", "ns", "pod")
 	if d.Labels == nil || d.Annotations == nil || d.Conditions == nil || d.Events == nil {
 		t.Fatal("collections must be non-nil on cluster miss")
@@ -167,7 +167,7 @@ func TestPodsService_GetPodDetail_Mapping(t *testing.T) {
 		ServiceAccount: "web-sa",
 	}
 	conn := &fakePodConn{detail: detail}
-	svc := NewPodsService(func(string) (PodsConn, bool) { return conn, true }, nil)
+	svc := NewPodsService(func(string) (PodsConn, bool) { return conn, true })
 
 	d := svc.GetPodDetail("c", "ns", "web")
 	if d.Summary.Name != "web" || d.Summary.Rank != "healthy" {
@@ -195,7 +195,7 @@ func TestPodsService_GetPodDetail_Mapping(t *testing.T) {
 
 func TestPodsService_GetPodDetail_ErrorReturnsEmpties(t *testing.T) {
 	conn := &fakePodConn{detErr: context.DeadlineExceeded}
-	svc := NewPodsService(func(string) (PodsConn, bool) { return conn, true }, nil)
+	svc := NewPodsService(func(string) (PodsConn, bool) { return conn, true })
 	d := svc.GetPodDetail("c", "ns", "missing")
 	if d.Labels == nil || d.Annotations == nil || d.Conditions == nil || d.Events == nil {
 		t.Fatal("collections must be non-nil on error")
@@ -211,7 +211,7 @@ func TestPodsService_GetPodDetail_ErrorReturnsEmpties(t *testing.T) {
 // --- DeletePod tests ---
 
 func TestPodsService_DeletePod_ClusterMiss(t *testing.T) {
-	svc := NewPodsService(func(string) (PodsConn, bool) { return nil, false }, nil)
+	svc := NewPodsService(func(string) (PodsConn, bool) { return nil, false })
 	r := svc.DeletePod("ghost", "ns", "pod", "uid-pod")
 	if r.OK || r.Error == "" {
 		t.Fatalf("want failure for unknown cluster, got %+v", r)
@@ -223,7 +223,7 @@ func TestPodsService_DeletePod_ClusterMiss(t *testing.T) {
 
 func TestPodsService_DeletePod_Success(t *testing.T) {
 	conn := &fakePodConn{}
-	svc := NewPodsService(func(string) (PodsConn, bool) { return conn, true }, nil)
+	svc := NewPodsService(func(string) (PodsConn, bool) { return conn, true })
 	r := svc.DeletePod("c", "default", "web-xyz", "uid-web-xyz")
 	if !r.OK || r.Error != "" {
 		t.Fatalf("want OK, got %+v", r)
@@ -235,7 +235,7 @@ func TestPodsService_DeletePod_Success(t *testing.T) {
 
 func TestPodsService_DeletePod_ErrorSurfaced(t *testing.T) {
 	conn := &fakePodConn{deleteErr: context.DeadlineExceeded}
-	svc := NewPodsService(func(string) (PodsConn, bool) { return conn, true }, nil)
+	svc := NewPodsService(func(string) (PodsConn, bool) { return conn, true })
 	r := svc.DeletePod("c", "ns", "pod", "uid-pod")
 	if r.OK || r.Error == "" {
 		t.Fatalf("want failure surfaced, got %+v", r)
@@ -248,7 +248,7 @@ func TestPodsService_DeletePod_ErrorSurfaced(t *testing.T) {
 func TestListReads_FailureCarriesError(t *testing.T) {
 	boom := errors.New("pods is forbidden: User cannot list resource")
 
-	pods := NewPodsService(func(string) (PodsConn, bool) { return &fakePodConn{listErr: boom}, true }, nil).ListPods("c", "")
+	pods := NewPodsService(func(string) (PodsConn, bool) { return &fakePodConn{listErr: boom}, true }).ListPods("c", "")
 	if pods.Error != boom.Error() || pods.Pods == nil {
 		t.Errorf("ListPods: error=%q pods-nil=%v", pods.Error, pods.Pods == nil)
 	}
@@ -268,7 +268,7 @@ func TestListReads_FailureCarriesError(t *testing.T) {
 		t.Errorf("ListWorkloads cluster miss: %q", r.Error)
 	}
 	// A successful empty list carries no error: quiet is only claimed from data.
-	if r := NewPodsService(func(string) (PodsConn, bool) { return &fakePodConn{}, true }, nil).ListPods("c", ""); r.Error != "" {
+	if r := NewPodsService(func(string) (PodsConn, bool) { return &fakePodConn{}, true }).ListPods("c", ""); r.Error != "" {
 		t.Errorf("successful empty list must not carry an error: %q", r.Error)
 	}
 }
@@ -277,9 +277,21 @@ func TestListReads_FailureCarriesError(t *testing.T) {
 // delete with the pod UID and an owner restart with the owner UID (§5b).
 func TestPodsService_ListPods_CarriesPodAndOwnerIdentity(t *testing.T) {
 	conn := &fakePodConn{pods: []workloads.PodSummary{{Namespace: "prod", Name: "web-abc", UID: "uid-pod", OwnerKind: "Deployment", OwnerName: "web", OwnerUID: "uid-web"}}}
-	svc := NewPodsService(func(string) (PodsConn, bool) { return conn, true }, nil)
+	svc := NewPodsService(func(string) (PodsConn, bool) { return conn, true })
 	p := svc.ListPods("c", "").Pods[0]
 	if p.UID != "uid-pod" || p.OwnerUID != "uid-web" {
 		t.Fatalf("pod row identity: uid=%q ownerUid=%q", p.UID, p.OwnerUID)
+	}
+}
+
+// The detail names the object it read and when (design §5b): the lens shows
+// a detail only for the selected row's UID.
+func TestPodsService_GetPodDetail_CarriesIdentityAndAsOf(t *testing.T) {
+	conn := &fakePodConn{detail: fleet.PodDetail{Summary: workloads.PodSummary{Namespace: "ns", Name: "web-0", UID: "uid-web-0"}}}
+	svc := NewPodsService(func(string) (PodsConn, bool) { return conn, true })
+	svc.now = func() time.Time { return time.Unix(7000, 0) }
+	d := svc.GetPodDetail("c", "ns", "web-0")
+	if d.Summary.UID != "uid-web-0" || d.AsOfUnix != 7000 {
+		t.Fatalf("detail identity/as-of: uid=%q asOf=%d", d.Summary.UID, d.AsOfUnix)
 	}
 }

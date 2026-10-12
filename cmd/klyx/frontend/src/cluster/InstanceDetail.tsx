@@ -4,7 +4,6 @@ import { getInstanceDetail, revealSecretKey, copyText, dryRunInstanceYAML, apply
 import { explainResource, suggestFix } from "../bridge/ai";
 import { useAIAvailability } from "./useAI";
 import { armProtected } from "../bridge/configsvc";
-import { openPodDetail } from "../bridge/pods";
 import { ForwardPopover } from "./ForwardPopover";
 import { InspectorStatus, conditionColor, InspectorConditions, InspectorEvents, InspectorSection, InspectorFacts, InspectorKV, InspectorMeters, MetadataChips, inspectorStateBox } from "./ResourceInspector";
 import { actionBtn, ellipsis, type Tone } from "../chrome/primitives";
@@ -634,7 +633,7 @@ function ServiceBackingSection({
 
   const handlePodLink = (name: string) => {
     useFleet.getState().setSection("pods");
-    void openPodDetail(cluster, ns, name);
+    useFleet.getState().requestNavIntent({ kind: "select-pod", cluster, namespace: ns, name });
   };
 
   return (
@@ -920,7 +919,7 @@ function RelatedSection({ cluster, related }: { cluster: string; related: Relate
   const openRelated = (ref: RelatedRefDTO) => {
     if (ref.kind === "Pod") {
       useFleet.getState().setSection("pods");
-      void openPodDetail(cluster, ref.namespace, ref.name);
+      useFleet.getState().requestNavIntent({ kind: "select-pod", cluster, namespace: ref.namespace, name: ref.name });
       return;
     }
     useFleet.getState().openResource({

@@ -525,31 +525,37 @@ export type NodeUsageDTO = { node: string; cpu: number | null; mem: number | nul
 export type NodeUtilizationResultDTO = { available: boolean; message?: string; updatedAtUnix: number; items: NodeUsageDTO[] };
 export type ContainerUsageDTO = { container: string; cpu: number | null; mem: number | null };
 export type PodUsageResultDTO = { available: boolean; message?: string; updatedAtUnix: number; items: ContainerUsageDTO[] };
-export type PodSummaryDTO = { namespace: string; name: string; uid?: string; ready: boolean; phase: string; reason: string; rank: "unhealthy"|"degraded"|"restarts"|"healthy"; restarts: number; node: string; ip: string; ownerKind: string; ownerName: string; ownerUid?: string; ageSeconds: number; containers: ContainerSummaryDTO[]; health?: HealthLike };
+export type PodSummaryDTO = { namespace: string; name: string; uid?: string; gvr?: string; generation?: number; createdUnix?: number; ready: boolean; phase: string; reason: string; rank: "unhealthy"|"degraded"|"restarts"|"healthy"; restarts: number; node: string; ip: string; ownerKind: string; ownerName: string; ownerUid?: string; ageSeconds: number; containers: ContainerSummaryDTO[]; health?: HealthLike };
 export type PodsResultDTO = { namespaces: string[]; pods: PodSummaryDTO[]; truncated?: boolean; error?: string };
-export type PodDetailDTO = { summary: PodSummaryDTO; labels: Record<string, string>; annotations?: Record<string, string>; conditions: ConditionDTO[]; events: EventDTO[]; yaml: string; qosClass: string; serviceAccount: string; error?: string };
+export type PodDetailDTO = { summary: PodSummaryDTO; labels: Record<string, string>; annotations?: Record<string, string>; conditions: ConditionDTO[]; events: EventDTO[]; yaml: string; qosClass: string; serviceAccount: string; asOfUnix?: number; error?: string };
 
-export type PodRef = { namespace: string; name: string };
+// A pod selection names the OBJECT (its UID, design §5b): a detail is shown
+// only for that UID, and a verb armed from it writes only that UID.
+export type PodRef = { namespace: string; name: string; uid: string };
 export type PodsSlice = {
   cluster: string | null;
+  // The rows are the Observer's, all namespaces and uncapped (1c slice 3
+  // §5.9): the namespace is a list filter, and namespaces are the rows' own.
   namespace: string;
   items: PodSummaryDTO[];
   namespaces: string[];
-  loading: boolean;
+  loading: boolean; // the visit has no rows payload yet
   needsAttention: boolean;
   search: string;
   selected: PodRef | null;
   detail: PodDetailDTO | null;
   detailLoading: boolean;
-  live: boolean;
-  truncated?: boolean; // the pod list hit the server cap: rows are incomplete, scope by namespace
-  error?: string | null; // the last read FAILED; items are the last good read (or empty)
-  rowsScope?: string | null; // "<cluster>|<namespace>" the current items were READ for
-  // Palette "jump to namespace": consumed by PodsView, which re-opens its live
-  // subscription for the namespace. A raced one-shot list would be discarded
-  // by the live sub's stale guard - the subscription itself must move.
+  error?: string | null; // the Pod kind's read failure (stale: items are the last good read)
+  coverage?: KindCoverageDTO[]; // the counted kind (Pod)
+  dependencies?: KindCoverageDTO[]; // what owner resolution read (ReplicaSet), from the same capture
+  rowsState?: RowsStateDTO;
+  counts?: VerdictPartCounts | null; // the one count selector's (global) verdict counts
+  // Palette "jump to namespace" (and a scratch pod launch): consumed by
+  // PodsView as its namespace filter.
   nsRequest?: { cluster: string; namespace: string } | null;
 };
+// What the Pods rows adapter (health/usePodRows) writes.
+export type PodsRowsPayload = Pick<PodsSlice, "items" | "namespaces" | "loading" | "error" | "coverage" | "dependencies" | "rowsState" | "counts">;
 
 export type EventRowDTO = { type: "Normal" | "Warning"; reason: string; message: string; count: number; namespace: string; kind: string; name: string; lastSeenUnix: number; firstSeenUnix: number };
 export type EventsResultDTO = { namespaces: string[]; events: EventRowDTO[]; truncated?: boolean; error?: string };
@@ -1064,14 +1070,14 @@ type FleetState = {
   toggleNearLimitSort: () => void;
   clearWorkloads: () => void;
   pods: PodsSlice;
-  setPodsLoading: (cluster: string, namespace: string) => void;
-  setPods: (cluster: string, namespace: string, result: PodsResultDTO) => void;
+  setPodsVisit: (cluster: string) => void;
+  setPodsFromRows: (cluster: string, p: PodsRowsPayload) => void;
+  setPodsNamespace: (namespace: string) => void;
   togglePodsNeedsAttention: () => void;
   setPodsNeedsAttention: (v: boolean) => void;
   setPodsSearch: (s: string) => void;
   selectPod: (ref: PodRef | null) => void;
   setPodDetail: (ref: PodRef, detail: PodDetailDTO) => void;
-  setPodsLive: (cluster: string, namespace: string, live: boolean) => void;
   clearPods: () => void;
   requestPodsNamespace: (cluster: string, namespace: string) => void;
   clearPodsNsRequest: () => void;
@@ -1386,34 +1392,28 @@ export const useFleet = create<FleetState>((set) => ({
       kindFilter: keepKinds ? s.workloads.kindFilter : workloadKindFilterFor(WORKLOAD_KINDS), kindExplicit: keepKinds, needsAttention: false, search: "", namespace: "", metricsAvailable: false, metricsStatus: null, metricsStale: false, nearLimitSort: false, error: null,
       coverage: undefined, dependencies: undefined, rowsState: undefined, counts: undefined } };
   }),
-  pods: { cluster: null, namespace: "", items: [], namespaces: [], loading: false, needsAttention: false, search: "", selected: null, detail: null, detailLoading: false, live: false },
-  setPodsLoading: (cluster, namespace) => set((s) => ({ pods: { ...s.pods, cluster, namespace, loading: true } })),
-  setPods: (cluster, namespace, result) => set((s) => {
-    let namespaces = s.pods.namespaces;
-    if (namespace === "") namespaces = result.namespaces ?? [];
-    if (namespaces.length === 0 && namespace !== "") namespaces = [namespace];
-    const scope = `${cluster}|${namespace}`;
-    if (result.error) {
-      const same = s.pods.rowsScope === scope;
-      return { pods: { ...s.pods, cluster, namespace, items: same ? s.pods.items : [], rowsScope: same ? scope : null, error: result.error, loading: false } };
-    }
-    return { pods: { ...s.pods, cluster, namespace, items: result.pods ?? [], namespaces, truncated: result.truncated ?? false, rowsScope: scope, error: null, loading: false } };
-  }),
+  pods: { cluster: null, namespace: "", items: [], namespaces: [], loading: false, needsAttention: false, search: "", selected: null, detail: null, detailLoading: false },
+  // A new cluster's visit starts empty; a revisit keeps its filters.
+  setPodsVisit: (cluster) => set((s) => ({ pods: { ...s.pods, ...(s.pods.cluster === cluster ? {} : { items: [], namespaces: [], error: null, selected: null, detail: null, detailLoading: false }), cluster, loading: true, coverage: undefined, dependencies: undefined, rowsState: undefined, counts: undefined } })),
+  setPodsFromRows: (cluster, p) => set((s) => ({ pods: { ...s.pods, cluster, ...p } })),
+  setPodsNamespace: (namespace) => set((s) => ({ pods: { ...s.pods, namespace } })),
   togglePodsNeedsAttention: () => set((s) => ({ pods: { ...s.pods, needsAttention: !s.pods.needsAttention } })),
   setPodsNeedsAttention: (v) => set((s) => ({ pods: { ...s.pods, needsAttention: v } })),
   setPodsSearch: (search) => set((s) => ({ pods: { ...s.pods, search } })),
-  selectPod: (ref) => set((s) => ({ pods: { ...s.pods, selected: ref, detail: null, detailLoading: ref !== null } })),
+  // Re-selecting the same object keeps its detail while it is re-read.
+  selectPod: (ref) => set((s) => {
+    const cur = s.pods.selected;
+    const same = !!ref && !!cur && cur.namespace === ref.namespace && cur.name === ref.name && cur.uid === ref.uid;
+    return { pods: { ...s.pods, selected: ref, detail: same ? s.pods.detail : null, detailLoading: ref !== null } };
+  }),
+  // The single selection-identity guard: a detail lands only on the object
+  // (namespace, name and uid) it was read for.
   setPodDetail: (ref, detail) => set((s) => {
     const sel = s.pods.selected;
-    if (!sel || sel.namespace !== ref.namespace || sel.name !== ref.name) return {};
+    if (!sel || sel.namespace !== ref.namespace || sel.name !== ref.name || sel.uid !== ref.uid) return {};
     return { pods: { ...s.pods, detail, detailLoading: false } };
   }),
-  setPodsLive: (cluster, namespace, live) =>
-    set((s) => {
-      if (s.pods.cluster !== cluster || s.pods.namespace !== namespace) return {};
-      return { pods: { ...s.pods, live } };
-    }),
-  clearPods: () => set((s) => ({ pods: { cluster: null, namespace: "", items: [], namespaces: [], loading: false, needsAttention: false, search: "", selected: null, detail: null, detailLoading: false, live: false, nsRequest: s.pods.nsRequest } })),
+  clearPods: () => set((s) => ({ pods: { cluster: null, namespace: "", items: [], namespaces: [], loading: false, needsAttention: false, search: "", selected: null, detail: null, detailLoading: false, nsRequest: s.pods.nsRequest } })),
   requestPodsNamespace: (cluster, namespace) => set((s) => ({ pods: { ...s.pods, nsRequest: { cluster, namespace } } })),
   clearPodsNsRequest: () => set((s) => ({ pods: { ...s.pods, nsRequest: null } })),
   events: { cluster: null, namespace: "", items: [], namespaces: [], loading: false, warningsOnly: false, search: "", live: false, truncated: false },

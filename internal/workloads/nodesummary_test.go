@@ -194,3 +194,12 @@ func TestSummarizeNodes_NotReadyProblemString(t *testing.T) {
 		t.Error("Ready should be false")
 	}
 }
+
+// A summary carries its creation time beside the age at its now, so a live
+// view ticks the age instead of freezing it between pushes (1c slice 3 §3).
+func TestSummarizeNodes_CarriesTheCreationAnchor(t *testing.T) {
+	s := SummarizeNodes([]corev1.Node{*makeNode("n1", true, nil)}, testNow)[0]
+	if !s.Created.Equal(testNow.Add(-time.Hour)) || s.AgeSeconds != 3600 {
+		t.Fatalf("anchor: created=%v age=%d", s.Created, s.AgeSeconds)
+	}
+}

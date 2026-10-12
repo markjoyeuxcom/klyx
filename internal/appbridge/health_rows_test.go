@@ -3,6 +3,9 @@ package appbridge
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -321,6 +324,36 @@ func TestWorkloadRowsCarryTheCaptureAndItsFacts(t *testing.T) {
 		t.Fatalf("serialization: %s %v", b, err)
 	}
 	if _, err := rowsConverters[healthsrc.TaskWorkloads+"/workloads"]("not rows", at); err == nil {
+		t.Fatal("a payload of the wrong type is an error, never an empty list")
+	}
+}
+
+// The Pods part (slice 3 §5.9): the captured verdict, the capture's identity,
+// the owner identity a restart is armed against, and the creation anchor.
+func TestPodRowsCarryTheCapture(t *testing.T) {
+	at := time.Unix(2000, 0)
+	set := healthsrc.RowSet[workloads.PodSummary]{Rows: []healthsrc.Row[workloads.PodSummary]{
+		{Ref: healthsrc.RowRef{UID: "p1", GVR: "v1/pods", Namespace: "app", Name: "web-1", Generation: 1},
+			Data: workloads.PodSummary{Namespace: "app", Name: "web-1", OwnerKind: "Deployment", OwnerName: "web", OwnerUID: "uid-web",
+				AgeSeconds: 30, Created: time.Unix(1970, 0), Health: health.Verdict{Kind: health.Fault, Label: "CrashLoopBackOff at capture"}}},
+	}}
+	out, err := rowsConverters[healthsrc.TaskPods+"/pods"](set, at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := out.([]PodSummaryDTO)[0]
+	if p.UID != "p1" || p.GVR != "v1/pods" || p.Generation != 1 || p.Health.Kind != "fault" || p.Health.Label != "CrashLoopBackOff at capture" ||
+		p.OwnerUID != "uid-web" || p.Created != 1970 || p.AgeSeconds != 30 {
+		t.Fatalf("pod row: %+v", p)
+	}
+	if b, err := json.Marshal(p); err != nil || !strings.Contains(string(b), `"createdUnix":1970`) || !strings.Contains(string(b), `"ownerUid":"uid-web"`) || !strings.Contains(string(b), `"uid":"p1"`) {
+		t.Fatalf("serialization: %s %v", b, err)
+	}
+	empty, err := rowsConverters[healthsrc.TaskPods+"/pods"](nil, at)
+	if err != nil || len(empty.([]PodSummaryDTO)) != 0 {
+		t.Fatalf("an unevaluated part is an empty set: %v %v", empty, err)
+	}
+	if _, err := rowsConverters[healthsrc.TaskPods+"/pods"]("not rows", at); err == nil {
 		t.Fatal("a payload of the wrong type is an error, never an empty list")
 	}
 }
@@ -673,5 +706,27 @@ func TestCloseCancelsAWaitingBootstrap(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("the bootstrap kept waiting after its close")
+	}
+}
+
+// The §6a lab trace records each rows push's JSON size, and is off (nil, a
+// no-op) without KLYX_ROWS_TRACE.
+func TestRowsTraceRecordsPayloadSizes(t *testing.T) {
+	if openRowsTrace("") != nil {
+		t.Fatal("the trace is off without a path")
+	}
+	var off *rowsTrace
+	off.record(RowsDTO{}) // a nil trace is a no-op
+	path := filepath.Join(t.TempDir(), "rows.trace")
+	tr := openRowsTrace(path)
+	dto := RowsDTO{Task: "pods", Part: observe.Part{ID: "pods"}, Rows: []PodSummaryDTO{{Name: "a"}, {Name: "b"}}}
+	tr.record(dto)
+	b, _ := json.Marshal(dto)
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := fmt.Sprintf("pods/pods bytes=%d rows=2\n", len(b)); !strings.HasSuffix(string(got), want) {
+		t.Fatalf("trace line: %q, want suffix %q", got, want)
 	}
 }

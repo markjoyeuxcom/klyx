@@ -50,6 +50,7 @@ func TestAssembleRankAndJoinAndOwner(t *testing.T) {
 		pod("ollama-prod", "ollama-x", map[string]string{"app": "ollama"}, false, 7, "CrashLoopBackOff"),
 		pod("monitoring", "grafana-y", map[string]string{"app": "grafana"}, true, 0, ""),
 	}
+	pods[0].UID = "uid-ollama-x"
 
 	out := Assemble([]appsv1.Deployment{healthy, broken}, nil, nil, pods, true, now)
 	if len(out) != 2 {
@@ -62,8 +63,8 @@ func TestAssembleRankAndJoinAndOwner(t *testing.T) {
 	if out[0].GitOps == nil || out[0].GitOps.Kind != "Kustomization" || out[0].GitOps.Name != "ollama" {
 		t.Fatalf("owner: %+v", out[0].GitOps)
 	}
-	if len(out[0].Pods) != 1 || out[0].Pods[0].AgeSeconds != 600 {
-		t.Fatalf("pods/age: %+v", out[0].Pods)
+	if len(out[0].Pods) != 1 || out[0].Pods[0].AgeSeconds != 600 || !out[0].Pods[0].Created.Equal(time.Unix(0, 0)) || out[0].Pods[0].UID != "uid-ollama-x" {
+		t.Fatalf("pods/age, identity and the creation anchor a live view ticks from: %+v", out[0].Pods)
 	}
 	if out[1].Name != "grafana" || out[1].Rank != Healthy || out[1].GitOps != nil || out[1].Reason != "Available" {
 		t.Fatalf("row1: %+v", out[1])

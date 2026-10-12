@@ -18,22 +18,19 @@ type PodsConn interface {
 	LaunchDiagnosticPod(ctx context.Context, name, image string, ttlSeconds int64) fleet.AdhocResult
 	PodDetail(ctx context.Context, namespace, name string) (fleet.PodDetail, error)
 	DeletePod(ctx context.Context, namespace, name, uid string) error
-	WatchDirty(ctx context.Context, namespace string, kinds []string, onDirty func(), onLive func(bool)) (stop func(), err error)
 }
 
-// PodsService is bound to JS. ListPods/GetPodDetail are request/response;
-// OpenLivePods/CloseLivePods drive a watch-backed live subscription that emits
-// livePods:<cluster>:<ns> on change.
+// PodsService is bound to JS: pod detail, the pod verbs and the diagnostic
+// pod. The Pods lens reads the Observer's rows (1c slice 3 §5.9); ListPods
+// stays for the attention and fleet-board reads.
 type PodsService struct {
 	lookup func(string) (PodsConn, bool)
-	em     Emitter
-	live   *liveRegistry
+	now    func() time.Time
 }
 
-// NewPodsService creates a PodsService with the given cluster-lookup function
-// and event emitter (for the live-list subscription).
-func NewPodsService(lookup func(string) (PodsConn, bool), em Emitter) *PodsService {
-	return &PodsService{lookup: lookup, em: em, live: newLiveRegistry()}
+// NewPodsService creates a PodsService with the given cluster-lookup function.
+func NewPodsService(lookup func(string) (PodsConn, bool)) *PodsService {
+	return &PodsService{lookup: lookup, now: time.Now}
 }
 
 // ListPods returns health-ranked pod rows for a cluster, scoped to namespace
@@ -48,9 +45,9 @@ func (s *PodsService) ListPods(cluster, namespace string) PodsResultDTO {
 	return out
 }
 
-// computePods lists pods on conn and builds the PodsResultDTO with the same
-// namespace-set and mapping rules ListPods uses. ok=false means the list failed
-// (returns non-nil empties); the live runner uses ok to gate emit/liveness.
+// computePods lists pods on conn and builds the PodsResultDTO with the
+// namespace-set and mapping rules ListPods uses. ok=false means the list
+// failed (returns non-nil empties).
 func computePods(conn PodsConn, namespace string) (PodsResultDTO, bool) {
 	out := PodsResultDTO{Namespaces: []string{}, Pods: []PodSummaryDTO{}}
 	ctx, cancel := context.WithTimeout(context.Background(), podsTimeout)
@@ -75,40 +72,6 @@ func computePods(conn PodsConn, namespace string) (PodsResultDTO, bool) {
 	}
 	return out, true
 }
-
-// OpenLivePods starts (or replaces) a watch-backed live subscription for the
-// cluster+namespace. It emits livePods:<cluster>:<ns> (PodsResultDTO) on each
-// debounced change and livePodsStatus:<cluster>:<ns> ({live:bool}) on liveness
-// edges. Cluster miss returns an error and starts nothing.
-func (s *PodsService) OpenLivePods(cluster, namespace string) ActionResultDTO {
-	conn, ok := s.lookup(cluster)
-	if !ok {
-		return ActionResultDTO{Error: "cluster not connected: " + cluster}
-	}
-	key := "pods:" + cluster + ":" + namespace
-	dataEvent := "livePods:" + cluster + ":" + namespace
-	liveEvent := "livePodsStatus:" + cluster + ":" + namespace
-
-	s.live.open(key,
-		func(onDirty func(), onLive func(bool)) (func(), error) {
-			ctx := context.Background()
-			return conn.WatchDirty(ctx, namespace, []string{"pods"}, onDirty, onLive)
-		},
-		func() (any, bool) { return computePods(conn, namespace) },
-		func(payload any) { s.em.Emit(dataEvent, payload) },
-		func(live bool) { s.em.Emit(liveEvent, liveStatusDTO{Live: live}) },
-	)
-	return ActionResultDTO{OK: true}
-}
-
-// CloseLivePods stops the live subscription for the cluster+namespace.
-// Idempotent.
-func (s *PodsService) CloseLivePods(cluster, namespace string) {
-	s.live.close("pods:" + cluster + ":" + namespace)
-}
-
-// CloseAll stops every live pod subscription. Called on app shutdown.
-func (s *PodsService) CloseAll() { s.live.closeAll() }
 
 // GetPodDetail returns the full pod detail. Cluster miss or error returns a
 // zero DTO with empty-but-non-nil collections (never panics on null).
@@ -157,6 +120,7 @@ func (s *PodsService) GetPodDetail(cluster, namespace, name string) PodDetailDTO
 		YAML:           d.YAML,
 		QosClass:       d.QoSClass,
 		ServiceAccount: d.ServiceAccount,
+		AsOfUnix:       s.now().Unix(),
 	}
 }
 
@@ -234,6 +198,8 @@ func toPodSummaryDTO(p workloads.PodSummary) PodSummaryDTO {
 		OwnerKind:  p.OwnerKind,
 		OwnerName:  p.OwnerName,
 		OwnerUID:   string(p.OwnerUID),
+		Generation: p.Generation,
+		Created:    unixOrZero(p.Created),
 		AgeSeconds: p.AgeSeconds,
 		Containers: containers,
 		Health:     toHealthDTO(p.Health),

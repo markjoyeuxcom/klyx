@@ -3,7 +3,7 @@ import { IconTerminal2, IconExternalLink, IconBox, IconX, IconAlertTriangle, Ico
 import { useFleet } from "../store/fleet";
 import type { WorkloadDTO, PodDTO, WorkloadKind, ResourceCellDTO, RolloutRevisionDTO, KindCoverageDTO } from "../store/fleet";
 import { rolloutRestart, rolloutHistory, rolloutUndo, rolloutPause, scaleWorkload } from "../bridge/workloads";
-import { deletePod, openPodDetail } from "../bridge/pods";
+import { deletePod } from "../bridge/pods";
 import { getWorkloadMetrics } from "../bridge/workload-metrics";
 import { getWorkloadSparklines } from "../bridge/metrics";
 import type { SparklinesDTO } from "../bridge/metrics";
@@ -537,7 +537,7 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
               }}
               onCancelScale={() => setPending(null)}
               onDeletePod={(w, pod) => setPending({ kind: "delete-pod", w, pod })}
-              onOpenPod={(w, pod) => { useFleet.getState().setSection("pods"); void openPodDetail(cluster, w.namespace, pod.name); }}
+              onOpenPod={(w, pod) => { useFleet.getState().setSection("pods"); useFleet.getState().requestNavIntent({ kind: "select-pod", cluster, namespace: w.namespace, name: pod.name }); }}
               onOpenNode={(node) => { useFleet.getState().setSection("nodes"); useFleet.getState().requestNavIntent({ kind: "select-node", cluster, node }); }}
               onOpenFluxOwner={(w) => {
                 if (!w.gitops) return;

@@ -113,14 +113,18 @@ export async function copyDebugCommand(
 
 // openDebugTerminal opens the OS terminal running kubectl debug against the
 // pod. Errors surface via the action toast, same as openExecTerminal.
+// openDebugTerminal attaches an ephemeral debug container to the pod OBJECT
+// the verb was armed against (uid, design §5b): the backend confirms it
+// before kubectl debug starts, and a replaced pod launches nothing.
 export async function openDebugTerminal(
   cluster: string,
   ns: string,
   pod: string,
+  uid: string,
   container: string,
 ): Promise<void> {
   try {
-    const r = (await ExecService.OpenDebugTerminal(cluster, ns, pod, container)) as ActionResultDTO;
+    const r = (await ExecService.OpenDebugTerminal(cluster, ns, pod, uid, container)) as ActionResultDTO;
     if (!r?.ok) {
       useFleet.getState().setActionStatus({ kind: "error", message: r?.error || "could not open debug terminal" });
     }

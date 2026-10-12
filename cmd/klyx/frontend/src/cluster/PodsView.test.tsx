@@ -4,9 +4,11 @@ import { PodsView, imageShort } from "./PodsView";
 import { useFleet } from "../store/fleet";
 import type { PodSummaryDTO, PodDetailDTO } from "../store/fleet";
 
+// The rows adapter is mocked: these tests seed the pods slice directly
+// (PodRows.test.tsx mounts the real adapter over the health store).
+vi.mock("../health/usePodRows", () => ({ usePodRows: () => {} }));
+
 vi.mock("../bridge/pods", () => ({
-  listPods: vi.fn().mockResolvedValue(undefined),
-  openLivePods: vi.fn().mockReturnValue(() => {}),
   openPodDetail: vi.fn().mockResolvedValue(undefined),
   deletePod: vi.fn().mockResolvedValue(undefined),
 }));
@@ -27,7 +29,7 @@ vi.mock("../bridge/exec", () => ({
   openDebugTerminal: vi.fn().mockResolvedValue(undefined),
   describeResource: vi.fn().mockResolvedValue({ ok: true, output: "Name:         grafana-xyz", error: "" }),
 }));
-import { openLivePods, openPodDetail, deletePod } from "../bridge/pods";
+import { openPodDetail, deletePod } from "../bridge/pods";
 import { rolloutRestart } from "../bridge/workloads";
 import { openLogsWindow } from "../bridge/windows";
 import { describeResource, openDebugTerminal, openExecTerminal } from "../bridge/exec";
@@ -92,7 +94,8 @@ function seed(items: PodSummaryDTO[]) {
       items,
       namespaces: ["default", "monitoring"],
       loading: false,
-      rowsScope: "homelab|",
+      // owner resolution read the ReplicaSets (the capture's dependency)
+      dependencies: [{ kind: "ReplicaSet", served: true, synced: true, coverage: "live" }],
     },
   }));
 }
@@ -109,15 +112,6 @@ describe("PodsView", () => {
     expect(getByText("api-crash")).toBeTruthy();
     expect(getByText("grafana-xyz")).toBeTruthy();
     expect(getByText(/CrashLoopBackOff/)).toBeTruthy();
-  });
-
-  it("shows a loud truncation banner only when the list was capped", () => {
-    seed([broken, healthy]);
-    const { queryByText, rerender } = render(<PodsView cluster="homelab" />);
-    expect(queryByText(/a fault past the cap is not shown/)).toBeNull();
-    useFleet.setState((s) => ({ pods: { ...s.pods, truncated: true } }));
-    rerender(<PodsView cluster="homelab" />);
-    expect(queryByText(/a fault past the cap is not shown/)).toBeTruthy();
   });
 
   it("the attention filter hides healthy rows and carries the honest count", () => {
@@ -150,7 +144,7 @@ describe("PodsView", () => {
     seed([broken]);
     const { getByText } = render(<PodsView cluster="homelab" />);
     fireEvent.click(getByText("api-crash"));
-    expect(openPodDetail).toHaveBeenCalledWith("homelab", "default", "api-crash");
+    expect(openPodDetail).toHaveBeenCalledWith("homelab", "default", "api-crash", "uid-api-crash");
   });
 
   it("detail panel renders sections from seeded detail", () => {
@@ -158,7 +152,7 @@ describe("PodsView", () => {
     useFleet.setState((s) => ({
       pods: {
         ...s.pods,
-        selected: { namespace: "monitoring", name: "grafana-xyz" },
+        selected: { namespace: "monitoring", name: "grafana-xyz", uid: "uid-grafana-xyz" },
         detail: fakeDetail,
         detailLoading: false,
       },
@@ -184,7 +178,7 @@ describe("PodsView", () => {
     useFleet.setState((s) => ({
       pods: {
         ...s.pods,
-        selected: { namespace: "monitoring", name: "grafana-xyz" },
+        selected: { namespace: "monitoring", name: "grafana-xyz", uid: "uid-grafana-xyz" },
         detail: fakeDetail,
         detailLoading: false,
       },
@@ -204,7 +198,7 @@ describe("PodsView", () => {
     useFleet.setState((s) => ({
       pods: {
         ...s.pods,
-        selected: { namespace: "monitoring", name: "grafana-xyz" },
+        selected: { namespace: "monitoring", name: "grafana-xyz", uid: "uid-grafana-xyz" },
         detail: fakeDetail,
         detailLoading: false,
       },
@@ -225,7 +219,7 @@ describe("PodsView", () => {
     useFleet.setState((s) => ({
       pods: {
         ...s.pods,
-        selected: { namespace: "default", name: "api-crash" },
+        selected: { namespace: "default", name: "api-crash", uid: "uid-api-crash" },
         detail: detailCrash,
         detailLoading: false,
       },
@@ -243,7 +237,7 @@ describe("PodsView", () => {
     useFleet.setState((s) => ({
       pods: {
         ...s.pods,
-        selected: { namespace: "monitoring", name: "grafana-xyz" },
+        selected: { namespace: "monitoring", name: "grafana-xyz", uid: "uid-grafana-xyz" },
         detail: fakeDetail,
         detailLoading: false,
       },
@@ -259,7 +253,7 @@ describe("PodsView", () => {
     useFleet.setState((s) => ({
       pods: {
         ...s.pods,
-        selected: { namespace: "monitoring", name: "grafana-xyz" },
+        selected: { namespace: "monitoring", name: "grafana-xyz", uid: "uid-grafana-xyz" },
         detail: fakeDetail,
         detailLoading: false,
       },
@@ -277,7 +271,7 @@ describe("PodsView", () => {
     useFleet.setState((s) => ({
       pods: {
         ...s.pods,
-        selected: { namespace: "monitoring", name: "grafana-xyz" },
+        selected: { namespace: "monitoring", name: "grafana-xyz", uid: "uid-grafana-xyz" },
         detail: fakeDetail,
         detailLoading: false,
       },
@@ -297,7 +291,7 @@ describe("PodsView", () => {
     useFleet.setState((s) => ({
       pods: {
         ...s.pods,
-        selected: { namespace: "monitoring", name: "grafana-xyz" },
+        selected: { namespace: "monitoring", name: "grafana-xyz", uid: "uid-grafana-xyz" },
         detail: fakeDetail,
         detailLoading: false,
       },
@@ -319,7 +313,7 @@ describe("PodsView", () => {
     useFleet.setState((s) => ({
       pods: {
         ...s.pods,
-        selected: { namespace: "monitoring", name: "grafana-xyz" },
+        selected: { namespace: "monitoring", name: "grafana-xyz", uid: "uid-grafana-xyz" },
         detail: fakeDetail,
         detailLoading: false,
       },
@@ -332,7 +326,7 @@ describe("PodsView", () => {
     useFleet.setState((s) => ({
       pods: {
         ...s.pods,
-        selected: { namespace: "default", name: "api-crash" },
+        selected: { namespace: "default", name: "api-crash", uid: "uid-api-crash" },
         detail: { ...fakeDetail, summary: api },
         detailLoading: false,
       },
@@ -349,7 +343,7 @@ describe("PodsView", () => {
     useFleet.setState((s) => ({
       pods: {
         ...s.pods,
-        selected: { namespace: "monitoring", name: "grafana-xyz" },
+        selected: { namespace: "monitoring", name: "grafana-xyz", uid: "uid-grafana-xyz" },
         detail: fakeDetail,
         detailLoading: false,
       },
@@ -367,7 +361,7 @@ describe("PodsView", () => {
     useFleet.setState((s) => ({
       pods: {
         ...s.pods,
-        selected: { namespace: "default", name: "api-crash" },
+        selected: { namespace: "default", name: "api-crash", uid: "uid-api-crash" },
         detail: apiDetail,
         detailLoading: false,
       },
@@ -389,7 +383,7 @@ describe("PodsView", () => {
     useFleet.setState((s) => ({
       pods: {
         ...s.pods,
-        selected: { namespace: "monitoring", name: "grafana-xyz" },
+        selected: { namespace: "monitoring", name: "grafana-xyz", uid: "uid-grafana-xyz" },
         detail: fakeDetail,
         detailLoading: false,
       },
@@ -406,7 +400,7 @@ describe("PodsView", () => {
     useFleet.setState((s) => ({
       pods: {
         ...s.pods,
-        selected: { namespace: "monitoring", name: "grafana-xyz" },
+        selected: { namespace: "monitoring", name: "grafana-xyz", uid: "uid-grafana-xyz" },
         detail: fakeDetail,
         detailLoading: false,
       },
@@ -421,7 +415,7 @@ describe("PodsView", () => {
     useFleet.setState((s) => ({
       pods: {
         ...s.pods,
-        selected: { namespace: "monitoring", name: "grafana-xyz" },
+        selected: { namespace: "monitoring", name: "grafana-xyz", uid: "uid-grafana-xyz" },
         detail: fakeDetail,
         detailLoading: false,
       },
@@ -436,17 +430,21 @@ describe("PodsView", () => {
   function openDetailPanel(pod = healthy, detail = fakeDetail) {
     seed([pod]);
     useFleet.setState((s) => ({
-      pods: { ...s.pods, selected: { namespace: pod.namespace, name: pod.name }, detail, detailLoading: false },
+      pods: { ...s.pods, selected: { namespace: pod.namespace, name: pod.name, uid: pod.uid ?? "" }, detail, detailLoading: false },
     }));
   }
 
   // Review 2026-10-03 #10: failures render as errors, never as an empty list
   // or an empty pod.
-  it("a failed list read shows the read-failure banner", () => {
+  it("a failed read with no rows is unreadable, naming the error; with last good rows it is a banner", () => {
     seed([]);
     useFleet.setState((s) => ({ pods: { ...s.pods, error: "pods is forbidden: User cannot list" } }));
-    const { getByRole } = render(<PodsView cluster="homelab" />);
-    expect(getByRole("alert").textContent).toMatch(/Pods read failed .*pods is forbidden/);
+    const { getByText, rerender } = render(<PodsView cluster="homelab" />);
+    expect(getByText("Pods could not be read.")).toBeTruthy();
+    expect(getByText(/pods is forbidden: User cannot list/)).toBeTruthy();
+    act(() => seed([healthy]));
+    rerender(<PodsView cluster="homelab" />);
+    expect(document.querySelector('[role="alert"]')?.textContent).toMatch(/Pods read failed .*pods is forbidden/);
   });
 
   it("a failed detail read shows the reason, not an empty pod", () => {
@@ -490,7 +488,7 @@ describe("PodsView", () => {
     expect(openDebugTerminal).not.toHaveBeenCalled();
     expect(getByText(/stays on the pod spec until the pod is recreated/i)).toBeTruthy();
     fireEvent.click(getByRole("button", { name: "Attach" }));
-    expect(openDebugTerminal).toHaveBeenCalledWith("homelab", "monitoring", "grafana-xyz", "app");
+    expect(openDebugTerminal).toHaveBeenCalledWith("homelab", "monitoring", "grafana-xyz", "uid-grafana-xyz", "app");
   });
 
   it("cancelling the debug shell confirmation launches nothing", () => {
@@ -541,13 +539,13 @@ describe("PodsView", () => {
   it("restart dispatches the backend-resolved owner verbatim (no name guessing)", () => {
     const deployPod: PodSummaryDTO = {
       ...healthy,
-      namespace: "prod", name: "web-7d4b9c6f9-abc",
+      namespace: "prod", name: "web-7d4b9c6f9-abc", uid: "uid-web-7d4b9c6f9-abc",
       ownerKind: "Deployment", ownerName: "web", ownerUid: "uid-web",
     };
     const detailDeploy = { ...fakeDetail, summary: deployPod };
     seed([deployPod]);
     useFleet.setState((s) => ({
-      pods: { ...s.pods, selected: { namespace: "prod", name: "web-7d4b9c6f9-abc" }, detail: detailDeploy, detailLoading: false },
+      pods: { ...s.pods, selected: { namespace: "prod", name: "web-7d4b9c6f9-abc", uid: "uid-web-7d4b9c6f9-abc" }, detail: detailDeploy, detailLoading: false },
     }));
     const { getByRole, getAllByRole } = render(<PodsView cluster="homelab" />);
     chooseMore("Restart deployment web", getByRole);
@@ -559,14 +557,14 @@ describe("PodsView", () => {
   // --- Keyboard nav + a11y ---
 
   it("j then Enter opens the second row (keyboard nav)", async () => {
-    const second: PodSummaryDTO = { ...broken, namespace: "default", name: "pod-second" };
+    const second: PodSummaryDTO = { ...broken, namespace: "default", name: "pod-second", uid: "uid-pod-second" };
     seed([broken, second]);
     render(<PodsView cluster="homelab" />);
     // j → select index 0; wait for re-render; j → select index 1; Enter → activate index 1
     act(() => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "j", bubbles: true, cancelable: true })); });
     act(() => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "j", bubbles: true, cancelable: true })); });
     act(() => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })); });
-    expect(openPodDetail).toHaveBeenCalledWith("homelab", "default", "pod-second");
+    expect(openPodDetail).toHaveBeenCalledWith("homelab", "default", "pod-second", "uid-pod-second");
   });
 
   it("/ focuses the filter input", () => {
@@ -629,7 +627,7 @@ describe("PodsView", () => {
   });
 
   it("keyboard 'l' on second row opens dock for that pod", () => {
-    const second: PodSummaryDTO = { ...broken, namespace: "default", name: "pod-second" };
+    const second: PodSummaryDTO = { ...broken, namespace: "default", name: "pod-second", uid: "uid-pod-second" };
     seed([broken, second]);
     const { getByTestId } = render(<PodsView cluster="homelab" />);
     // j → select index 0; j → select index 1 (second)
@@ -650,7 +648,7 @@ describe("PodsView", () => {
     useFleet.setState((s) => ({
       pods: {
         ...s.pods,
-        selected: { namespace: "monitoring", name: "grafana-xyz" },
+        selected: { namespace: "monitoring", name: "grafana-xyz", uid: "uid-grafana-xyz" },
         detail: fakeDetail,
         detailLoading: false,
       },
@@ -671,18 +669,15 @@ describe("PodsView", () => {
     expect(queryByTestId("logs-dock")).toBeNull();
   });
 
-  it("openLivePods is called on mount (replaces listPods)", () => {
-    render(<PodsView cluster="homelab" />);
-    expect(openLivePods).toHaveBeenCalledWith("homelab", "");
-  });
-
-  it("palette namespace request re-opens the live subscription for that namespace", () => {
+  it("a palette namespace request sets the namespace filter", () => {
     // A pending nsRequest (set by the ⌘K namespace jump before the view
-    // mounts) must move the live subscription - a one-shot list would be
-    // dropped by the sub's stale guard.
-    useFleet.getState().requestPodsNamespace("homelab", "payments");
-    render(<PodsView cluster="homelab" />);
-    expect(openLivePods).toHaveBeenCalledWith("homelab", "payments");
+    // mounts) scopes the list: the rows are all namespaces (1c slice 3 §5.9).
+    seed([broken, healthy]);
+    useFleet.getState().requestPodsNamespace("homelab", "monitoring");
+    const { getByText, queryByText } = render(<PodsView cluster="homelab" />);
+    expect(useFleet.getState().pods.namespace).toBe("monitoring");
+    expect(getByText("grafana-xyz")).toBeTruthy();
+    expect(queryByText("api-crash")).toBeNull();
     // The request is consumed.
     expect(useFleet.getState().pods.nsRequest).toBeNull();
   });
@@ -690,33 +685,19 @@ describe("PodsView", () => {
   it("a namespace request for another cluster is discarded", () => {
     useFleet.getState().requestPodsNamespace("other-cluster", "payments");
     render(<PodsView cluster="homelab" />);
-    expect(openLivePods).not.toHaveBeenCalledWith("homelab", "payments");
+    expect(useFleet.getState().pods.namespace).toBe("");
     expect(useFleet.getState().pods.nsRequest).toBeNull();
-  });
-
-  it("live=true renders green live indicator", () => {
-    seed([broken]);
-    useFleet.setState((s) => ({ pods: { ...s.pods, live: true } }));
-    const { getByText } = render(<PodsView cluster="homelab" />);
-    expect(getByText("live")).toBeTruthy();
-  });
-
-  it("live=false renders manual fallback indicator", () => {
-    seed([broken]);
-    useFleet.setState((s) => ({ pods: { ...s.pods, live: false } }));
-    const { getByText } = render(<PodsView cluster="homelab" />);
-    expect(getByText("○ manual")).toBeTruthy();
   });
 
   it("StatefulSet owner calls rolloutRestart directly without name transformation", () => {
     const stsPod: PodSummaryDTO = {
-      ...healthy, namespace: "db", name: "postgres-0",
+      ...healthy, namespace: "db", name: "postgres-0", uid: "uid-postgres-0",
       ownerKind: "StatefulSet", ownerName: "postgres", ownerUid: "uid-postgres",
     };
     const detailSts = { ...fakeDetail, summary: stsPod };
     seed([stsPod]);
     useFleet.setState((s) => ({
-      pods: { ...s.pods, selected: { namespace: "db", name: "postgres-0" }, detail: detailSts, detailLoading: false },
+      pods: { ...s.pods, selected: { namespace: "db", name: "postgres-0", uid: "uid-postgres-0" }, detail: detailSts, detailLoading: false },
     }));
     const { getByRole, getAllByRole } = render(<PodsView cluster="homelab" />);
     chooseMore("Restart statefulset postgres", getByRole);
@@ -779,7 +760,7 @@ describe("PodsView health model (1b)", () => {
   beforeEach(() => { useFleet.getState().clearPods(); vi.clearAllMocks(); });
 
   it("a pod without a verdict reads unknown, never healthy from legacy rank", () => {
-    const legacyOnly: PodSummaryDTO = { ...healthy, name: "no-verdict", health: undefined };
+    const legacyOnly: PodSummaryDTO = { ...healthy, name: "no-verdict", uid: "uid-no-verdict", health: undefined };
     seed([legacyOnly]);
     const { getAllByText, getByRole, getByText } = render(<PodsView cluster="homelab" />);
     // the row's verdict label reads Unknown (and the Unknown filter appears)
@@ -790,7 +771,7 @@ describe("PodsView health model (1b)", () => {
   });
 
   it("a restarted-but-healthy pod is not attention", () => {
-    const restarted: PodSummaryDTO = { ...healthy, name: "restarted", rank: "restarts", restarts: 3,
+    const restarted: PodSummaryDTO = { ...healthy, name: "restarted", uid: "uid-restarted", rank: "restarts", restarts: 3,
       health: { kind: "ok", label: "Running", reason: "Ready", rule: "pod.ready", note: "restarted 4m ago" } };
     seed([restarted]);
     const { getByRole } = render(<PodsView cluster="homelab" />);
@@ -808,9 +789,9 @@ describe("PodsView workspace template (redesign pilot)", () => {
     expect(openPodDetail).not.toHaveBeenCalled();
     act(() => seed([healthy, broken]));
     expect(openPodDetail).toHaveBeenCalledTimes(1);
-    expect(openPodDetail).toHaveBeenCalledWith("homelab", "default", "api-crash");
+    expect(openPodDetail).toHaveBeenCalledWith("homelab", "default", "api-crash", "uid-api-crash");
     // later updates never re-select
-    seed([healthy, broken, { ...broken, name: "api-crash-2" }]);
+    seed([healthy, broken, { ...broken, name: "api-crash-2", uid: "uid-api-crash-2" }]);
     rerender(<PodsView cluster="homelab" />);
     expect(openPodDetail).toHaveBeenCalledTimes(1);
   });
@@ -823,9 +804,9 @@ describe("PodsView workspace template (redesign pilot)", () => {
     expect(queryByTestId("inspector-idle")).toBeNull();
   });
 
-  it("does not auto-select from data read for another scope", () => {
+  it("does not auto-select from data read for another cluster", () => {
     seed([broken]);
-    useFleet.setState((s) => ({ pods: { ...s.pods, rowsScope: "other|" } }));
+    useFleet.setState((s) => ({ pods: { ...s.pods, cluster: "other" } }));
     render(<PodsView cluster="homelab" />);
     expect(openPodDetail).not.toHaveBeenCalled();
   });
@@ -835,22 +816,22 @@ describe("PodsView workspace template (redesign pilot)", () => {
     const { getByText, getByRole } = render(<PodsView cluster="homelab" />);
     expect(getByText(/1 need attention/)).toBeTruthy();
     fireEvent.click(getByRole("button", { name: /^Attention/ }));
-    expect(getByText("1 of 2 pods · filter: Attention")).toBeTruthy();
+    expect(getByText("1 of 2 pods shown · filter: Attention")).toBeTruthy();
     fireEvent.click(getByRole("button", { name: "Show all 2 pods" }));
     expect(useFleet.getState().pods.needsAttention).toBe(false);
   });
 
   it("a failed first read is a readable error state, not an empty list", () => {
-    useFleet.setState((s) => ({ pods: { ...s.pods, cluster: "homelab", items: [], loading: false, rowsScope: null, error: "pods is forbidden" } }));
+    useFleet.setState((s) => ({ pods: { ...s.pods, cluster: "homelab", items: [], loading: false, error: "pods is forbidden" } }));
     const { getByText, queryByText } = render(<PodsView cluster="homelab" />);
-    expect(getByText("Pods in all namespaces could not be read.")).toBeTruthy();
+    expect(getByText("Pods could not be read.")).toBeTruthy();
     expect(queryByText(/^No pods/)).toBeNull();
   });
 
   it("the Shell action picks a container when the pod has several", () => {
     const multi: PodSummaryDTO = { ...healthy, containers: [makeContainer({ name: "app" }), makeContainer({ name: "sidecar" })] };
     seed([multi]);
-    useFleet.setState((s) => ({ pods: { ...s.pods, selected: { namespace: "monitoring", name: "grafana-xyz" }, detail: { ...fakeDetail, summary: multi }, detailLoading: false } }));
+    useFleet.setState((s) => ({ pods: { ...s.pods, selected: { namespace: "monitoring", name: "grafana-xyz", uid: "uid-grafana-xyz" }, detail: { ...fakeDetail, summary: multi }, detailLoading: false } }));
     const { getByRole } = render(<PodsView cluster="homelab" />);
     fireEvent.click(getByRole("button", { name: /^Shell/ }));
     fireEvent.click(getByRole("menuitem", { name: "sidecar" }));
@@ -863,7 +844,7 @@ describe("PodsView pilot rework (Codex review)", () => {
   beforeEach(() => { useFleet.getState().clearPods(); vi.clearAllMocks(); });
 
   function select(pod: PodSummaryDTO, detail: PodDetailDTO = { ...fakeDetail, summary: pod }) {
-    useFleet.setState((s) => ({ pods: { ...s.pods, selected: { namespace: pod.namespace, name: pod.name }, detail, detailLoading: false } }));
+    useFleet.setState((s) => ({ pods: { ...s.pods, selected: { namespace: pod.namespace, name: pod.name, uid: pod.uid ?? "" }, detail, detailLoading: false } }));
   }
 
   it("cached healthy rows then a broken fresh read: selects the broken pod", () => {
@@ -871,7 +852,7 @@ describe("PodsView pilot rework (Codex review)", () => {
     render(<PodsView cluster="homelab" />);
     expect(openPodDetail).not.toHaveBeenCalled();
     act(() => seed([healthy, broken]));
-    expect(openPodDetail).toHaveBeenCalledWith("homelab", "default", "api-crash");
+    expect(openPodDetail).toHaveBeenCalledWith("homelab", "default", "api-crash", "uid-api-crash");
   });
 
   it("cached broken rows while a read is pending select nothing", () => {
@@ -887,7 +868,7 @@ describe("PodsView pilot rework (Codex review)", () => {
     act(() => seed([healthy, broken]));
     expect(openPodDetail).toHaveBeenCalledTimes(1);
     act(() => { useFleet.getState().selectPod(null); });
-    act(() => seed([healthy, broken, { ...broken, name: "api-crash-2" }]));
+    act(() => seed([healthy, broken, { ...broken, name: "api-crash-2", uid: "uid-api-crash-2" }]));
     rerender(<PodsView cluster="homelab" />);
     expect(openPodDetail).toHaveBeenCalledTimes(1);
   });
@@ -895,12 +876,12 @@ describe("PodsView pilot rework (Codex review)", () => {
   it("an unreadable fresh read selects nothing", () => {
     seed([broken]);
     render(<PodsView cluster="homelab" />);
-    act(() => useFleet.getState().setPods("homelab", "", { namespaces: [], pods: [], error: "forbidden" }));
+    act(() => useFleet.getState().setPodsFromRows("homelab", { items: [], namespaces: [], loading: false, error: "Pod: forbidden", coverage: [{ kind: "Pod", served: true, synced: false, coverage: "unreadable", error: "forbidden" }] }));
     expect(openPodDetail).not.toHaveBeenCalled();
   });
 
   it("selecting B never carries A's pending confirmation", () => {
-    const b: PodSummaryDTO = { ...healthy, name: "grafana-b" };
+    const b: PodSummaryDTO = { ...healthy, name: "grafana-b", uid: "uid-grafana-b" };
     seed([healthy, b]);
     select(healthy);
     const { getByRole, queryByText } = render(<PodsView cluster="homelab" />);
@@ -910,11 +891,11 @@ describe("PodsView pilot rework (Codex review)", () => {
     expect(queryByText(/the controller will recreate it/)).toBeNull();
   });
 
-  it("a namespace scope that excludes the selection closes the inspector", () => {
-    seed([healthy]);
+  it("a namespace filter that excludes the selection closes the inspector", () => {
+    seed([healthy, broken]);
     select(healthy);
     render(<PodsView cluster="homelab" />);
-    act(() => useFleet.getState().setPods("homelab", "default", { namespaces: [], pods: [broken] }));
+    act(() => useFleet.getState().setPodsNamespace("default"));
     expect(useFleet.getState().pods.selected).toBeNull();
   });
 

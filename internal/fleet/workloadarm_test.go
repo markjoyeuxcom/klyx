@@ -294,3 +294,27 @@ func TestRolloutUndo_HistoryOfAReplacementIsRefused(t *testing.T) {
 		}
 	}
 }
+
+// CheckPodArmed fences a verb that can only name a pod (kubectl debug).
+func TestCheckPodArmed(t *testing.T) {
+	ctx := context.Background()
+	typed := typedfake.NewClientset(seedPod("ns", "web-0"))
+	c := newPodActionsConn(typed, clock.NewFake(time.Unix(0, 0)))
+	if err := c.CheckPodArmed(ctx, "ns", "web-0", "uid-web-0"); err != nil {
+		t.Fatalf("the armed pod must pass: %v", err)
+	}
+	for _, tc := range [][3]string{{"ns", "web-0", "uid-old"}, {"ns", "gone", "uid-gone"}} {
+		if err := c.CheckPodArmed(ctx, tc[0], tc[1], tc[2]); !errors.Is(err, ErrReplaced) {
+			t.Fatalf("%v must be ErrReplaced, got %v", tc, err)
+		}
+	}
+	if err := c.CheckPodArmed(ctx, "ns", "web-0", ""); err == nil || errors.Is(err, ErrReplaced) || !strings.Contains(err.Error(), "no object identity was armed") {
+		t.Fatalf("an unarmed check is refused: %v", err)
+	}
+	typed.PrependReactor("get", "pods", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, errors.New("connection reset")
+	})
+	if err := c.CheckPodArmed(ctx, "ns", "web-0", "uid-web-0"); err == nil || errors.Is(err, ErrReplaced) {
+		t.Fatalf("a failed read is not a replacement: %v", err)
+	}
+}

@@ -675,12 +675,14 @@ describe("InstanceDetail — service backing", () => {
     expect(getByTestId("pod-link-web-pod-1")).toBeTruthy();
   });
 
-  it("pod link calls openPodDetail and switches section to pods", () => {
+  it("pod link asks the Pods lens to select the pod and switches section to pods", () => {
     useFleet.getState().openCluster("x");
     seedService();
     const { getByTestId } = render(<InstanceDetail cluster="x" resource={serviceResource} instance={serviceInstance} />);
     fireEvent.click(getByTestId("pod-link-web-pod-1"));
-    expect(openPodDetail).toHaveBeenCalledWith("x", "default", "web-pod-1");
+    // the Pods lens resolves the name to its row's object (design §5b)
+    expect(useFleet.getState().navIntent).toMatchObject({ kind: "select-pod", cluster: "x", namespace: "default", name: "web-pod-1" });
+    expect(openPodDetail).not.toHaveBeenCalled(); // never a name-only read
     expect(useFleet.getState().route).toMatchObject({ section: "pods" });
   });
 

@@ -89,7 +89,8 @@ describe("CommandPalette", () => {
 
   it("shows a Pods group when the pods slice is seeded", () => {
     seedClusters();
-    useFleet.getState().setPods("dev-we", "", { namespaces: ["team"], pods: [mkPod("team", "api-1")] });
+    useFleet.getState().setPodsVisit("dev-we");
+    useFleet.getState().setPodsFromRows("dev-we", { items: [mkPod("team", "api-1")], namespaces: ["team"], loading: false });
     const { getByTestId, queryByTestId } = render(<CommandPalette />);
     pressCmdK();
     fireEvent.change(getByTestId("command-palette-input"), { target: { value: "api-1" } });

@@ -2,10 +2,13 @@ package appbridge
 
 import (
 	"context"
+	"fmt"
 	"os/exec"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/moomora/klyx/internal/fleet"
 )
 
 // fakeExecConn implements ExecConn for testing.
@@ -17,6 +20,8 @@ type fakeExecConn struct {
 	describeErr error
 	// gotDescribe records the arguments DescribeCmd was called with.
 	gotDescribe []string
+	armErr      error    // CheckPodArmed's answer
+	armChecks   []string // ns/name@uid the arm check was asked about
 }
 
 func (f *fakeExecConn) DescribeCmd(ctx context.Context, kindArg, namespace, name string) (*exec.Cmd, error) {
@@ -28,6 +33,11 @@ func (f *fakeExecConn) DescribeCmd(ctx context.Context, kindArg, namespace, name
 		return f.describeCmd(ctx), nil
 	}
 	return exec.CommandContext(ctx, "true"), nil
+}
+
+func (f *fakeExecConn) CheckPodArmed(_ context.Context, namespace, name, uid string) error {
+	f.armChecks = append(f.armChecks, namespace+"/"+name+"@"+uid)
+	return f.armErr
 }
 
 func (f *fakeExecConn) DebugCommand(namespace, pod, container string) ([]string, error) {
@@ -333,7 +343,7 @@ func TestOpenDebugTerminal_ProtectedClusterNeedsGrant(t *testing.T) {
 		return &fakeExecConn{kubeContext: "prd"}, true
 	})
 
-	r := svc.OpenDebugTerminal("prd-cluster", "ns", "pod", "app")
+	r := svc.OpenDebugTerminal("prd-cluster", "ns", "pod", "uid-pod", "app")
 	if r.OK || !strings.Contains(r.Error, "not armed") {
 		t.Fatalf("unarmed debug launch on a protected cluster must refuse, got %+v", r)
 	}
@@ -343,5 +353,19 @@ func TestOpenDebugTerminal_ProtectedClusterNeedsGrant(t *testing.T) {
 
 	if dto := svc.GetDebugCommand("prd-cluster", "ns", "pod", "app"); dto.Error != "" || dto.Command == "" {
 		t.Fatalf("copying the debug command must stay ungated, got %+v", dto)
+	}
+}
+
+// The debug shell mutates the pod (an ephemeral container): it is armed
+// against the pod object, and a replaced or missing pod launches nothing.
+func TestOpenDebugTerminal_RefusesAReplacedPod(t *testing.T) {
+	conn := &fakeExecConn{kubeContext: "dev", armErr: fmt.Errorf("pod ns/web-0: %w", fleet.ErrReplaced)}
+	svc := NewExecService(func(string) (ExecConn, bool) { return conn, true })
+	r := svc.OpenDebugTerminal("c", "ns", "web-0", "uid-old", "app")
+	if r.OK || !strings.Contains(r.Error, "replaced") || !strings.Contains(r.Error, "nothing was started") {
+		t.Fatalf("a replaced pod must launch nothing: %+v", r)
+	}
+	if len(conn.armChecks) != 1 || conn.armChecks[0] != "ns/web-0@uid-old" {
+		t.Fatalf("the armed UID must be checked: %v", conn.armChecks)
 	}
 }

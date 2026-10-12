@@ -73,7 +73,7 @@ func TestProtectGuard_GatesDestructiveVerbs(t *testing.T) {
 	SetProtectGuard(g)
 	t.Cleanup(func() { SetProtectGuard(nil) })
 
-	svc := NewPodsService(func(string) (PodsConn, bool) { return &fakeLivePodConn{}, true }, &anyEmitter{})
+	svc := NewPodsService(func(string) (PodsConn, bool) { return &fakeLivePodConn{}, true })
 
 	if r := svc.DeletePod("prd-cluster", "ns", "pod", "uid-pod"); r.OK || r.Error == "" {
 		t.Fatalf("unarmed DeletePod on protected cluster must refuse, got %+v", r)

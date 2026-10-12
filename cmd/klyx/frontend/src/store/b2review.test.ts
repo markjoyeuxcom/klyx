@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { useFleet } from "./fleet";
-import type { PodsResultDTO, NodeSummaryDTO } from "./fleet";
+import type { PodSummaryDTO, NodeSummaryDTO } from "./fleet";
 
 vi.mock("../../bindings/github.com/moomora/klyx/internal/appbridge/index.js", () => ({ CRDService: { ListCRDs: vi.fn(), CountKind: vi.fn() } }));
 vi.mock("@wailsio/runtime", () => ({ Clipboard: { SetText: vi.fn() } }));
@@ -8,7 +8,7 @@ import { CRDService } from "../../bindings/github.com/moomora/klyx/internal/appb
 import { listCRDs, countKind } from "../bridge/crd";
 import { crdCountKey } from "./fleet";
 
-const pod = (name: string, namespace: string) => ({ name, namespace } as unknown as PodsResultDTO["pods"][number]);
+const pod = (name: string, namespace: string) => ({ name, namespace } as unknown as PodSummaryDTO);
 
 // Codex's batch-2 review probes (R2, R7), adopted.
 describe("read-failure scope honesty", () => {
@@ -19,21 +19,25 @@ describe("read-failure scope honesty", () => {
     vi.clearAllMocks();
   });
 
-  it("keeps rows on a failed re-read of the SAME scope", () => {
+  // The Pods lens reads the Observer's rows (1c slice 3 §5.9): the slice
+  // takes the adapter's payload; a visit to another cluster starts empty.
+  it("a revisit of the SAME cluster keeps its rows until the rows answer", () => {
     const s = useFleet.getState();
-    s.setPods("c", "a", { pods: [pod("old", "a")], namespaces: ["a"] });
-    s.setPodsLoading("c", "a");
-    s.setPods("c", "a", { pods: [], namespaces: [], error: "forbidden" });
+    s.setPodsVisit("c");
+    s.setPodsFromRows("c", { items: [pod("old", "a")], namespaces: ["a"], loading: false });
+    s.setPodsVisit("c");
     expect(useFleet.getState().pods.items).toHaveLength(1);
   });
 
-  it("never relabels another namespace's rows when the new namespace fails (R2)", () => {
+  it("never relabels another cluster's pods when a new cluster's visit begins (R2)", () => {
     const s = useFleet.getState();
-    s.setPods("c", "a", { pods: [pod("old", "a")], namespaces: ["a"] });
-    s.setPodsLoading("c", "b"); // retags the slice to b before the read
-    s.setPods("c", "b", { pods: [], namespaces: [], error: "forbidden" });
+    s.setPodsVisit("c");
+    s.setPodsFromRows("c", { items: [pod("old", "a")], namespaces: ["a"], loading: false });
+    s.setPodsVisit("d");
     expect(useFleet.getState().pods.items).toHaveLength(0);
-    expect(useFleet.getState().pods.error).toBe("forbidden");
+    s.setPodsFromRows("d", { items: [], namespaces: [], loading: false, error: "Pod: forbidden" });
+    expect(useFleet.getState().pods.items).toHaveLength(0);
+    expect(useFleet.getState().pods.error).toBe("Pod: forbidden");
   });
 
   it("never relabels another cluster's nodes when the new cluster fails (R2)", () => {

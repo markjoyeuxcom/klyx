@@ -463,15 +463,15 @@ describe("WorkloadsView", () => {
     expect(getByText(/^1 of 2 workloads/)).toBeTruthy();
   });
 
-  it("context-panel pod rows open the pod detail in the Pods section", async () => {
-    const { openPodDetail } = await import("../bridge/pods");
+  it("context-panel pod rows open the pod in the Pods section", async () => {
     useFleet.getState().openCluster("homelab-nelli");
     seed([broken]);
     const { getByRole } = render(<WorkloadsView cluster="homelab-nelli" />);
     select("ollama"); // select -> context panel
     fireEvent.click(getByRole("button", { name: "open pod ollama-x" }));
     expect(useFleet.getState().route).toMatchObject({ name: "cluster", section: "pods" });
-    expect(openPodDetail).toHaveBeenCalledWith("homelab-nelli", "ollama-prod", "ollama-x");
+    // the Pods lens resolves the name to its row's object (design §5b)
+    expect(useFleet.getState().navIntent).toMatchObject({ kind: "select-pod", cluster: "homelab-nelli", namespace: "ollama-prod", name: "ollama-x" });
   });
 
   it("context-panel flux owner jumps to the GitOps lens with a select intent", () => {

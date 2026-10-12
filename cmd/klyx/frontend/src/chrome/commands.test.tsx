@@ -109,7 +109,7 @@ describe("buildCommands", () => {
       pods: {
         cluster: "dev",
         namespaces: ["team"],
-        items: [{ namespace: "team", name: "api-1", phase: "Running", rank: "healthy" }],
+        items: [{ namespace: "team", name: "api-1", uid: "uid-api-1", phase: "Running", rank: "healthy" }],
       } as never,
     });
     const cmds = buildCommands(s);
@@ -117,7 +117,7 @@ describe("buildCommands", () => {
     expect(pod.title).toBe("team/api-1");
     pod.run();
     expect(setSection).toHaveBeenCalledWith("pods");
-    expect(openPodDetail).toHaveBeenCalledWith("dev", "team", "api-1");
+    expect(openPodDetail).toHaveBeenCalledWith("dev", "team", "api-1", "uid-api-1");
   });
 
   it("includes a Namespaces command that requests the pods namespace", () => {
@@ -230,6 +230,7 @@ describe("buildCommands", () => {
     const ref = { group: "cert-manager.io", version: "v1", plural: "certificates", kind: "Certificate", scope: "Namespaced" };
     const openResource = vi.fn();
     const openInstance = vi.fn();
+    const requestNavIntent = vi.fn();
     const s = makeStore({
       route: { name: "cluster", cluster: "dev", section: "resources", resource: ref, instance: { namespace: "apps", name: "web" } } as never,
       openResource,
@@ -246,9 +247,13 @@ describe("buildCommands", () => {
           conditions: [],
           events: [],
           yaml: "kind: Certificate\n",
-          related: [{ kind: "Secret", namespace: "apps", name: "web-tls", group: "", version: "v1", plural: "secrets", scope: "Namespaced", relation: "certificate secret" }],
+          related: [
+            { kind: "Secret", namespace: "apps", name: "web-tls", group: "", version: "v1", plural: "secrets", scope: "Namespaced", relation: "certificate secret" },
+            { kind: "Pod", namespace: "apps", name: "web-0", group: "", version: "v1", plural: "pods", scope: "Namespaced", relation: "backs" },
+          ],
         },
       } as never,
+      requestNavIntent,
     });
     const cmds = buildCommands(s);
     cmds.find((c) => c.id === "resource-copy-yaml:cert-manager.io/v1/certificates/apps/web")!.run();
@@ -258,6 +263,10 @@ describe("buildCommands", () => {
     cmds.find((c) => c.id === "resource-related:/v1/secrets/apps/web-tls")!.run();
     expect(openResource).toHaveBeenCalledWith(expect.objectContaining({ kind: "Secret", plural: "secrets" }));
     expect(openInstance).toHaveBeenCalledWith("apps", "web-tls");
+    // a related Pod is resolved by the Pods lens to its row's object (§5b)
+    cmds.find((c) => c.id === "resource-related:/v1/pods/apps/web-0")!.run();
+    expect(requestNavIntent).toHaveBeenCalledWith({ kind: "select-pod", cluster: "dev", namespace: "apps", name: "web-0" });
+    expect(openPodDetail).not.toHaveBeenCalled();
   });
 
   it("includes Flux objects and expands the selected resource", () => {

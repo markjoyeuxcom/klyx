@@ -25,7 +25,8 @@ type PodSummary struct {
 	OwnerKind       string // top controller ownerRef kind ("Deployment" is NOT resolved here — ReplicaSet/StatefulSet/DaemonSet/Job/Node/"")
 	OwnerName       string
 	OwnerUID        types.UID // the controller ownerRef's UID; ancestry joins by UID, never by name
-	AgeSeconds      int
+	AgeSeconds      int       // age at the summary's now
+	Created         time.Time // creation time: the anchor a live view ticks the age from
 	Containers      []ContainerSummary
 	// Health is the shared verdict (internal/health); Rank/Reason are legacy
 	// and stay only until every consumer has migrated.
@@ -115,6 +116,7 @@ func SummarizePods(pods []corev1.Pod, now time.Time) []PodSummary {
 			Node:       p.Spec.NodeName,
 			IP:         p.Status.PodIP,
 			AgeSeconds: ageSeconds(p.CreationTimestamp.Time, now),
+			Created:    p.CreationTimestamp.Time,
 			Containers: buildContainerSummaries(p),
 			Health:     health.Pod(p, now),
 			UID:        p.UID,
