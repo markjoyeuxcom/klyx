@@ -1,6 +1,6 @@
 # Klyx health 1c, slice 3 addendum: the rows transport after the §6a gate
 
-Status: Codex APPROVE-WITH-CHANGES to the delta direction (2026-10-12); amended (§3-§5), implemented (c28a566, accepted by Codex), and re-measured (§6). Open: the memory growth limit (§6.3) - an owner decision. Parent: `2026-10-11-klyx-health-1c-slice3-rows.md` §6a ("If any limit is missed, the transport changes before the Pods lens switches ... reviewed before it is built").
+Status: Codex APPROVE-WITH-CHANGES to the delta direction (2026-10-12); amended (§3-§5), implemented (c28a566, accepted by Codex), and re-measured (§6). The memory window was ratified by the owner (§6.4); the confirming run follows. Parent: `2026-10-11-klyx-health-1c-slice3-rows.md` §6a ("If any limit is missed, the transport changes before the Pods lens switches ... reviewed before it is built").
 
 ## 1. What the gate measured
 
@@ -159,4 +159,14 @@ Three controls, 10 minutes each, the Pods lens on screen over the same 5017 pods
 So no transport can meet the growth limit read from launch: the no-churn control fails it. Its intent - no churn-driven growth - is what the plateau shows, but by Codex's ruling that reading needs the owner's ratification before the confirming run.
 
 Proposed amendment (for the owner): the memory limit is measured on a churn run of at least 15 minutes with the lens on screen; the 400 MB ceiling holds for the whole run; the growth limit (10%) applies to the last 5 minutes of churn, after the webview's warm-up. Then one confirming run, declared in advance.
+
+### 6.4 The ratified window and the declared confirming run
+
+The owner ratified the post-warm-up reading (2026-10-12), now in the parent spec §6a. Declared before the run:
+
+- one run on the kind lab, 5017 pods, the perf build of this commit's tree, the Pods lens on screen with Workloads and Nodes rows open, the trace on;
+- 60 s settle after launch, then 15 minutes of row-visible churn at 50 updates/s (`KLYX_LAB_CHURN_KIND=status`);
+- the probe as in §3.4 - interaction every 1.5 s, a forced lost pods message every 90 s (so the re-bootstrap is timed in the same run);
+- RSS of the WebContent process every 15 s from launch to 150 s after the churn;
+- pass: every §6a limit - one push per part per second, pods push and full form ≤ 4 MB, emit to lens commit ≤ 50 ms p95 for accepted pushes (the probe's last window), interaction ≤ 100 ms p95, RSS ≤ 400 MB at every sample, and RSS growth ≤ 10% over the last 5 minutes of churn (the last sample before the churn ends against the sample 5 minutes earlier).
 

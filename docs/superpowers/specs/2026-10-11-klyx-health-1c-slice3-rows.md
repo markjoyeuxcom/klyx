@@ -236,6 +236,7 @@ The gate is measured in the real Wails webview on the kind lab, with 5000 pods, 
 - **main thread:** event receipt to store committed (decode, merge, sort) ≤ 50 ms p95 per push, so ≤ 5% of the main thread;
 - **interaction:** a keystroke in the lens search or a filter click, to paint, ≤ 100 ms p95 during churn;
 - **memory:** the WebContent process RSS steady ≤ 400 MB, with no growth beyond 10% over 5 minutes of churn.
+  - Amendment, owner-ratified 2026-10-12 (addendum `2026-10-12-klyx-health-1c-slice3-rows-transport.md` §6.3): the webview grows in steps to a plateau even with no churn and no interaction, so the growth limit is read after its warm-up. A memory run churns for at least 15 minutes with the lens on screen; the 400 MB ceiling holds for the whole run, from launch; the 10% growth limit applies to the last 5 minutes of churn.
 
 If any limit is missed, the transport changes before the Pods lens switches. Per-owner namespace-filtered payloads are the candidate. That transport (owner and scope identity, separate global part counts and visible counts, no shared broadcast name) is reviewed before it is built.
 
