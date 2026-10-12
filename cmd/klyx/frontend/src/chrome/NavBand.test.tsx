@@ -238,6 +238,24 @@ describe("NavBand reads the cluster's summary (health 1c slice 4)", () => {
     expect(selected?.textContent).toMatch(/^All workloads/);
   });
 
+  it("the Attention shortcut opens a secondary part's or a controller's task destination - no badge needed (review 1/3 #3)", () => {
+    useFleet.setState({ clusters: [cluster({ certManagerPresent: true, argoPresent: true })], route: { name: "cluster", cluster: "dev", section: "nodes" } });
+    const certs = task("certs", [native("certificates", { ok: 4 }, 0, "not ready", [kind("certificates")]), native("issuers", { fault: 1 }, 1, "not ready", [kind("issuers")])]);
+    const argo = task("argo", [native("applications", { ok: 3 }, 0, "need attention", [kind("applications")]), native("applicationsets", { ok: 1 }, 0, "not healthy", [kind("applicationsets")])], { controller: { state: "not ready" } });
+    const open = () => {
+      const r = render(<NavBand />);
+      act(() => { window.dispatchEvent(new CustomEvent("klyx:open-nav-tree", { detail: { focus: "attention" } })); });
+      const selected = screen.getAllByRole("option").find((o) => o.getAttribute("aria-selected") === "true");
+      r.unmount();
+      return selected?.textContent ?? "";
+    };
+    applySummary(sum([...core(), flux(0), certs]));
+    expect(open()).toMatch(/^Certificates/);
+    resetHealthStore();
+    applySummary(sum([...core(), flux(0), argo]));
+    expect(open()).toMatch(/^Applications/);
+  });
+
   it("the Pods count is the selector's: the summary's, or newer lens rows; an unreadable or another cluster's read shows none", () => {
     at("pods");
     applySummary(sum([...replace(core(), task("pods", [verdict("pods", { fault: 2 }, [kind("pods")])])), flux(0)]));

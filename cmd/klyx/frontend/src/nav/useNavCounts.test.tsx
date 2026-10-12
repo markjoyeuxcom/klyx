@@ -83,4 +83,26 @@ describe("useNavCounts on the cluster's attention model", () => {
     expect(n.group).toEqual({});
     expect(n.groupNote.workloads).toBe("observation ended");
   });
+
+  it("an unlit count in the tool's word is a neutral destination badge; its group stays unlit (review 1/3 #2)", () => {
+    caps({ fluxPresent: true });
+    applySummary(summary([...core(), task("flux", [
+      native("reconciliations", { progressing: 2, ok: 3 }, 2, "not ready", [kind("kustomizations")]),
+      native("sources", { ok: 1 }, 0, "not ready", [kind("gitrepositories")]),
+    ])]));
+    const n = counts();
+    expect(n.destination.flux).toMatchObject({ n: 2, tone: undefined });
+    expect(n.group.flux).toBeUndefined();
+    expect(n.attention.has("flux")).toBe(false);
+  });
+
+  it("the attention targets: a lit part's destination, else its task's (a secondary part, a controller)", () => {
+    caps({ certManagerPresent: true, argoPresent: true });
+    applySummary(summary([...core(),
+      task("certs", [native("certificates", { ok: 4 }, 0, "not ready", [kind("certificates")]), native("issuers", { fault: 1 }, 1, "not ready", [kind("issuers")])]),
+      task("argo", [native("applications", { ok: 3 }, 0, "need attention", [kind("applications")]), native("applicationsets", { ok: 1 }, 0, "not healthy", [kind("applicationsets")])], { controller: { state: "not ready" } }),
+    ]));
+    expect([...counts().attention].sort()).toEqual(["argo", "certs"]);
+  });
 });
+

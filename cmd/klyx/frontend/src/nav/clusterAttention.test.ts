@@ -59,6 +59,28 @@ describe("lifecycle (§1)", () => {
   });
 });
 
+describe("optional tasks carried by rows (review 1/3 #1)", () => {
+  const certRows = (ver: number, coverage: "live" | "absent" = "live") => ({
+    cluster: C, incarnation: 1, task: "certs", evaluatedAt: "2026-10-12T12:00:07Z", rows: [], full: true,
+    part: { ...native("certificates", { fault: 1, ok: 2 }, 1, "not ready", [kind("certificates", { coverage })]), ver, obs: ver, coverage },
+  });
+
+  it("live rows arriving before any summary keep the task, whatever capability detection says", () => {
+    openRows("c", "certs", "certificates");
+    applyRows("c", certRows(1));
+    expect(area("certs")).toMatchObject({ state: "attention", tone: "danger" }); // capability absent in the fleet DTO
+    expect(mastReading(model())).toMatchObject({ state: "attention", areas: 1 });
+  });
+
+  it("newer live rows outrank an older summary that said absent", () => {
+    applySummary(summary([...core(), task("certs", [absentPart("certificates", "certificates"), absentPart("issuers", "issuers")])]));
+    expect(model().areas.some((a) => a.id === "certs")).toBe(false);
+    openRows("c", "certs", "certificates");
+    applyRows("c", certRows(5));
+    expect(lineOf("certs", "certificates")).toMatchObject({ state: "attention", n: 1, source: "rows" });
+  });
+});
+
 describe("evidence: counted kinds, dependencies, membership (§2.1)", () => {
   it("a live count with an unreadable dependency keeps its known fault and names the gap", () => {
     applySummary(summary(replace(core(), task("workloads", [verdict("workloads", { fault: 1, ok: 2 }, [kind("deployments"), kind("statefulsets"), kind("daemonsets"), dep("replicasets", { coverage: "unreadable", class: "forbidden" })], { coverage: "unreadable" })]))));

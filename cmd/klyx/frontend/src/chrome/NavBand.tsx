@@ -311,7 +311,7 @@ function GroupSelector({ cluster, clusterName, current, counts }: { cluster: Clu
     if (!open) return;
     let i = query ? 0 : Math.max(0, choices.findIndex((r) => r.d === active));
     if (!query && focusAttention.current) {
-      const lit = choices.findIndex((r) => (counts.destination[r.d.id]?.tone ?? undefined) !== undefined && (counts.destination[r.d.id]?.n ?? 0) > 0);
+      const lit = choices.findIndex((r) => counts.attention.has(r.d.id));
       if (lit >= 0) i = lit;
     }
     setSel(i);

@@ -205,14 +205,17 @@ export function clusterAttention(st: HealthState, cluster: string, c: ClusterDTO
   const notCovered: NotCovered[] = [];
   for (const meta of TASKS) {
     const task = summary?.tasks.find((t) => t.id === meta.task);
-    const carried = !!task && task.parts.some((p) => p.coverage !== "absent");
+    const sels = meta.parts.map((pm) => taskCounts(st, cluster, meta.task, pm.part));
+    // the task is carried by the Observer's own evidence - the summary's, or
+    // current-incarnation rows that may be newer than it (review 1/3 #1)
+    const carried = (!!task && task.parts.some((p) => p.coverage !== "absent")) || sels.some((x) => x.source === "rows" && x.part?.coverage !== "absent");
     const cap = meta.cap ? capState(c, meta.cap) : "present";
     if (meta.cap && cap === "absent" && !carried) continue; // confirmed absent
     const capability = cap === "present" ? "present" as const : "unverified" as const;
     const lines: Line[] = [];
     const left: PartMeta[] = []; // parts the summary leaves out and no rows answer
-    for (const pm of meta.parts) {
-      const sel = taskCounts(st, cluster, meta.task, pm.part);
+    for (const [i, pm] of meta.parts.entries()) {
+      const sel = sels[i];
       if (sel.source === "none" && summary && !findPart(summary, meta.task, pm.part)) { left.push(pm); continue; }
       const l = line(meta, pm, sel);
       if (l) lines.push(l);

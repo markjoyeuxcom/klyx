@@ -18,9 +18,13 @@ export type NavCounts = {
   // that has no destination of its own ("issuers: 1 not ready").
   groupNote: Record<string, string>;
   destinationNote: Record<string, string>;
+  // attention: the destinations to open for what needs attention - a lit
+  // part's own destination, else its task's (a secondary part or a
+  // controller has no badge of its own; review 1/3 #3)
+  attention: Set<string>;
 };
 
-const EMPTY: NavCounts = { group: {}, destination: {}, groupNote: {}, destinationNote: {} };
+const EMPTY: NavCounts = { group: {}, destination: {}, groupNote: {}, destinationNote: {}, attention: new Set() };
 const WEIGHT: Record<string, number> = { "observation ended": 7, "controller not ready": 6, unreadable: 5, "last good": 4, unverified: 3, "not covered": 2, "checking…": 1 };
 const stronger = (a: string | undefined, b: string) => (!a || WEIGHT[b] > WEIGHT[a] ? b : a);
 
@@ -41,7 +45,7 @@ function noteOf(l: Line): string {
 // never a sum; a destination shows exactly its own part.
 export function navCounts(m: ClusterAttention | null): NavCounts {
   if (!m) return EMPTY;
-  const out: NavCounts = { group: {}, destination: {}, groupNote: {}, destinationNote: {} };
+  const out: NavCounts = { group: {}, destination: {}, groupNote: {}, destinationNote: {}, attention: new Set() };
   if (m.ended) {
     for (const t of TASKS) out.groupNote[t.groupId] = "observation ended";
     return out;
@@ -66,7 +70,10 @@ export function navCounts(m: ClusterAttention | null): NavCounts {
     const notes: string[] = [];
     for (const l of a.lines) {
       if (l.destinationId) {
-        if (l.state === "attention" || l.state === "evidence") out.destination[l.destinationId] = badge(a, l);
+        // the part's own count: lit, evidence, or an unlit count in the
+        // tool's word (neutral, as its lens shows it; review 1/3 #2)
+        if (l.state === "attention" || l.state === "evidence" || l.state === "unlit") out.destination[l.destinationId] = badge(a, l);
+        if (l.state === "attention") out.attention.add(l.destinationId);
         const w = noteOf(l);
         // "checking…" is said once, on the group - not beside every view
         if (w && w !== "checking…") out.destinationNote[l.destinationId] = w;
@@ -77,6 +84,7 @@ export function navCounts(m: ClusterAttention | null): NavCounts {
       }
     }
     if (a.controller?.state === "not ready") notes.unshift("controller not ready");
+    if (a.controller?.state === "not ready" || a.lines.some((l) => l.state === "attention" && !l.destinationId)) out.attention.add(a.destinationId);
     if (notes.length) out.destinationNote[a.destinationId] = [out.destinationNote[a.destinationId], ...notes].filter(Boolean).join(" · ");
   }
   for (const n of m.notCovered) {
