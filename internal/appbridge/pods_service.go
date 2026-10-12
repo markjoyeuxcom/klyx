@@ -160,6 +160,22 @@ func (s *PodsService) DeletePod(cluster, namespace, name, uid string) ActionResu
 	return ActionResultDTO{OK: true}
 }
 
+// toPodRowDTO is the bounded rows-transport form of a pod (addendum §3.2).
+func toPodRowDTO(p workloads.PodSummary) PodRowDTO {
+	containers := make([]PodRowContainerDTO, 0, len(p.Containers))
+	for _, c := range p.Containers {
+		containers = append(containers, PodRowContainerDTO{Name: c.Name, Init: c.Init, Ready: c.Ready, Restarts: c.Restarts, State: c.State})
+	}
+	h := toHealthDTO(p.Health)
+	h.Message = "" // read from the detail
+	return PodRowDTO{
+		Namespace: p.Namespace, Name: p.Name, UID: string(p.UID), Generation: p.Generation,
+		OwnerKind: p.OwnerKind, OwnerName: p.OwnerName, OwnerUID: string(p.OwnerUID),
+		Node: p.Node, IP: p.IP, Ready: p.Ready, Restarts: p.Restarts, Created: unixOrZero(p.Created),
+		Health: h, Containers: containers,
+	}
+}
+
 func toPodSummaryDTO(p workloads.PodSummary) PodSummaryDTO {
 	containers := make([]ContainerSummaryDTO, 0, len(p.Containers))
 	for _, c := range p.Containers {

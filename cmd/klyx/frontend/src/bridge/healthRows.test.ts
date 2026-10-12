@@ -180,4 +180,26 @@ describe("health rows transport (design §2b)", () => {
     expect(subs()[0]).toMatchObject({ open: "open", ver: 4, refreshing: false, mismatchSince: null, error: null });
     close();
   });
+
+  // Addendum §3.3: a newer delta with a wrong base asks, on its own, for one
+  // fenced full bootstrap - with no summary at all - and the reply lands.
+  it("a wrong-base delta event re-bootstraps without a summary; the delta waits for its base", async () => {
+    openMock.mockImplementation(async () => ({ rows: { ...rows(3), full: true } }));
+    const boot = HealthService.RowsBootstrap as ReturnType<typeof vi.fn>;
+    boot.mockImplementation(async (_t: string, gen: number) => ({ rows: { ...rows(6), full: true }, requestGen: gen }));
+    const close = openRows("c1", "certs", "certificates");
+    await flush();
+    const ev = rowsEvent("c1", "certs", "certificates");
+    emit(ev, { ...rows(5), rows: null, full: false, base: 4, upserts: [{ uid: "x" }], removed: [] });
+    expect(subs()[0]).toMatchObject({ ver: 3, resync: true });
+    expect(boot).toHaveBeenCalledTimes(1);
+    expect(boot.mock.calls[0][0]).toBe(tokens()[0]);
+    await flush();
+    expect(subs()[0]).toMatchObject({ ver: 6, resync: false, pending: [] });
+    emit(ev, { ...rows(6), rows: null, full: false, base: 5, upserts: [], removed: [] }); // an older one: ignored, no retry
+    expect(boot).toHaveBeenCalledTimes(1);
+    emit(ev, { ...rows(7), rows: null, full: false, base: 6, upserts: [{ uid: "y" }], removed: ["i1v6"] });
+    expect(subs()[0]).toMatchObject({ ver: 7, rows: [{ uid: "y" }] });
+    close();
+  });
 });

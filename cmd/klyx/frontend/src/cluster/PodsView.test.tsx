@@ -3,6 +3,7 @@ import { render, fireEvent, act, within } from "@testing-library/react";
 import { PodsView, imageShort } from "./PodsView";
 import { useFleet } from "../store/fleet";
 import type { PodSummaryDTO, PodDetailDTO } from "../store/fleet";
+import { rowOf } from "../test/podRows";
 
 // The rows adapter is mocked: these tests seed the pods slice directly
 // (PodRows.test.tsx mounts the real adapter over the health store).
@@ -54,13 +55,13 @@ const makeContainer = (overrides = {}) => ({
 const healthy: PodSummaryDTO = {
   namespace: "monitoring", name: "grafana-xyz", uid: "uid-grafana-xyz", ready: true, phase: "Running", reason: "", rank: "healthy",
   restarts: 0, node: "node-1", ip: "10.0.0.1", ownerKind: "Deployment", ownerName: "grafana", ownerUid: "uid-grafana",
-  ageSeconds: 3600, containers: [makeContainer()],
+  ageSeconds: 3600, createdUnix: Math.floor(Date.now() / 1000) - 3700, containers: [makeContainer()],
   health: { kind: "ok", label: "Running", reason: "Ready", rule: "pod.ready" },
 };
 const broken: PodSummaryDTO = {
   namespace: "default", name: "api-crash", uid: "uid-api-crash", ready: false, phase: "Running", reason: "CrashLoopBackOff", rank: "unhealthy",
   restarts: 7, node: "node-2", ip: "10.0.0.2", ownerKind: "Deployment", ownerName: "api",
-  ageSeconds: 600, containers: [makeContainer({ ready: false, restarts: 7, state: "waiting:CrashLoopBackOff" })],
+  ageSeconds: 600, createdUnix: Math.floor(Date.now() / 1000) - 600, containers: [makeContainer({ ready: false, restarts: 7, state: "waiting:CrashLoopBackOff" })],
   health: { kind: "fault", label: "CrashLoopBackOff", reason: "CrashLoopBackOff", message: "app: back-off 5m0s restarting failed container", rule: "pod.current-failure", rank: 70 },
 };
 
@@ -86,12 +87,14 @@ function chooseMore(label: string | RegExp, getByRole: (role: string, opts?: { n
   fireEvent.click(getByRole("menuitem", { name: label }));
 }
 
+// seed takes full summaries and seeds their bounded rows (the detail keeps
+// the full summary).
 function seed(items: PodSummaryDTO[]) {
   useFleet.setState((s) => ({
     pods: {
       ...s.pods,
       cluster: "homelab",
-      items,
+      items: items.map(rowOf),
       namespaces: ["default", "monitoring"],
       loading: false,
       // owner resolution read the ReplicaSets (the capture's dependency)

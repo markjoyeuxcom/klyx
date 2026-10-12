@@ -81,7 +81,7 @@ describe("health store: one number per task (spec §4, A4)", () => {
     applySummary(summary(1, 2, 3), 0); // its rows event never arrives
     expect(dueForBootstrap(MISMATCH_DEADLINE_MS)).toHaveLength(1);
     bootstrapSettled("t", 1, { rows: rows(1, 3) }, MISMATCH_DEADLINE_MS + 5);
-    expect(applyRows("t", rows(1, 2))).toBe(false); // delayed, older
+    expect(applyRows("t", rows(1, 2))).toBe("ignored"); // delayed, older
     expect(counts().part?.ver).toBe(3);
   });
 
@@ -89,7 +89,7 @@ describe("health store: one number per task (spec §4, A4)", () => {
     applyRows("t", rows(1, 2), 0);
     applySummary(summary(1, 2, 4), 0);
     const [{ requestGen }] = dueForBootstrap(MISMATCH_DEADLINE_MS);
-    expect(applyRows("t", rows(1, 5))).toBe(true); // the event lands first and resolves
+    expect(applyRows("t", rows(1, 5))).toBe("applied"); // the event lands first and resolves
     bootstrapSettled("t", requestGen, { rows: rows(1, 4) });
     expect(counts().part?.ver).toBe(5);
   });
@@ -128,10 +128,10 @@ describe("health store: one number per task (spec §4, A4)", () => {
     applySummary(summary(1, 10, 7, { final: true }));
     expect(sub().rows).toBeNull();
     expect(useHealth.getState().summaries.c1).toBeUndefined();
-    expect(applyRows("t", rows(1, 8))).toBe(false); // the old incarnation, after Final
+    expect(applyRows("t", rows(1, 8))).toBe("ignored"); // the old incarnation, after Final
     applySummary(summary(1, 11, 8)); // an old summary after Final
     expect(useHealth.getState().summaries.c1).toBeUndefined();
-    expect(applyRows("t", rows(2, 1))).toBe(true); // the replacement Observer
+    expect(applyRows("t", rows(2, 1))).toBe("applied"); // the replacement Observer
     expect(sub()).toMatchObject({ incarnation: 2, ver: 1, mismatchSince: null, refreshing: false });
   });
 
@@ -144,11 +144,11 @@ describe("health store: one number per task (spec §4, A4)", () => {
     expect(sub()).toMatchObject({ rows: null, incarnation: null, ver: -1 });
     expect(counts()).toMatchObject({ source: "summary" });
     expect(counts().part?.ver).toBe(1);
-    expect(applyRows("t", rows(1, 51))).toBe(false); // a late old event or reply
+    expect(applyRows("t", rows(1, 51))).toBe("ignored"); // a late old event or reply
     applySummary(summary(1, 60, 60, { final: true })); // a late old Final
     expect(useHealth.getState().summaries.c1.incarnation).toBe(2);
     expect(useHealth.getState().finalizedThrough.c1).toBeUndefined();
-    expect(applyRows("t", rows(2, 1))).toBe(true);
+    expect(applyRows("t", rows(2, 1))).toBe("applied");
     expect(counts()).toMatchObject({ source: "rows" });
   });
 
@@ -162,7 +162,7 @@ describe("health store: one number per task (spec §4, A4)", () => {
     applySummary(withIssuers(1, 50, 50));
     const issuerCounts = () => taskCounts(useHealth.getState(), "c1", "certs", "issuers");
     expect(issuerCounts()).toMatchObject({ source: "summary" });
-    expect(applyRows("t", rows(2, 1))).toBe(true); // the new Observer's rows arrive first
+    expect(applyRows("t", rows(2, 1))).toBe("applied"); // the new Observer's rows arrive first
     expect(issuerCounts()).toMatchObject({ source: "none", part: null });
     expect(counts()).toMatchObject({ source: "rows" });
     applySummary(withIssuers(2, 1, 1)); // the new summary restores them
@@ -176,7 +176,7 @@ describe("health store: one number per task (spec §4, A4)", () => {
     applyRows("u", rows(2, 1)); // the new Observer: advances the cluster, clears t
     expect(sub("t").rows).toBeNull();
     expect(counts().part?.ver).toBe(1);
-    expect(applyRows("t", rows(1, 52))).toBe(false);
+    expect(applyRows("t", rows(1, 52))).toBe("ignored");
   });
 
   it("a newer incarnation's rows reset an open mismatch", () => {
@@ -206,9 +206,9 @@ describe("health store: one number per task (spec §4, A4)", () => {
   });
 
   it("rows only for their own part, and nothing for a removed subscription", () => {
-    expect(applyRows("t", { ...rows(1, 1), task: "eso" })).toBe(false);
+    expect(applyRows("t", { ...rows(1, 1), task: "eso" })).toBe("ignored");
     removeSub("t");
-    expect(applyRows("t", rows(1, 1))).toBe(false);
+    expect(applyRows("t", rows(1, 1))).toBe("ignored");
   });
 
   it("without rows on screen a part shows the summary's counts", () => {

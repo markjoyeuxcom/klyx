@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useCallback, useMemo, useState, useRef, useLayoutEffect } from "react";
 import { Events } from "@wailsio/runtime";
 import { useFleet } from "../store/fleet";
-import type { ConditionDTO, NodeDetailDTO, NodeSummaryDTO, PodOnNodeDTO } from "../store/fleet";
+import type { ConditionDTO, NodeDetailDTO, NodeRowDTO, PodOnNodeDTO } from "../store/fleet";
 import { openNodeDetail, cordonNode, startDrain, cancelDrain, getNodeHeadroom } from "../bridge/nodes";
 import type { HeadroomReportDTO } from "../store/fleet";
 import type { DrainOptions } from "../bridge/nodes";
@@ -64,11 +64,11 @@ const condColor = (c: ConditionDTO) => ({
 // Node health is the backend verdict (internal/health): fault (NotReady),
 // degraded (pressure), unknown (Ready missing/Unknown), paused (cordoned), ok.
 // Taints are a fact, never a verdict.
-function nodeNeedsAttention(n: NodeSummaryDTO): boolean {
+function nodeNeedsAttention(n: NodeRowDTO): boolean {
   return isAttention(kindOf(n.health));
 }
 
-function nodeMatchesFilter(n: NodeSummaryDTO, filter: NodeFilter): boolean {
+function nodeMatchesFilter(n: NodeRowDTO, filter: NodeFilter): boolean {
   if (filter === "attention") return nodeNeedsAttention(n);
   if (filter === "unknown") return kindOf(n.health) === "unknown";
   if (filter === "cordoned") return n.unschedulable;
@@ -76,7 +76,7 @@ function nodeMatchesFilter(n: NodeSummaryDTO, filter: NodeFilter): boolean {
   return true;
 }
 
-function nodeMatchesQuery(n: NodeSummaryDTO, query: string, role: string | null): boolean {
+function nodeMatchesQuery(n: NodeRowDTO, query: string, role: string | null): boolean {
   if (role && !n.roles.includes(role)) return false;
   const q = query.trim().toLowerCase();
   if (!q) return true;
@@ -455,13 +455,13 @@ const COLUMN_LABEL: Record<string, string> = {
 // A verb's target: the cluster + node OBJECT (its UID) it was armed against.
 type NodeVerb = { cluster: string; node: string; uid: string };
 
-// The age ticks from the creation time (1c slice 3 §3); ageSeconds is the
-// age at the capture.
-const ageOf = (n: NodeSummaryDTO, nowS: number) => (n.createdUnix ? Math.max(0, nowS - n.createdUnix) : n.ageSeconds);
+// The age ticks from the creation time (1c slice 3 §3): the rows carry no
+// relative age (addendum §3.1).
+const ageText = (n: NodeRowDTO, nowS: number) => (n.createdUnix ? formatAge(Math.max(0, nowS - n.createdUnix)) : "-");
 
 // What a selected row's detail is re-read on: its identity and the facts the
 // detail explains. A heartbeat alone re-reads nothing.
-const detailSig = (cluster: string, n: NodeSummaryDTO) =>
+const detailSig = (cluster: string, n: NodeRowDTO) =>
   [cluster, n.name, n.uid ?? "", n.generation ?? 0, kindOf(n.health), n.health?.label ?? "", n.unschedulable, n.taintCount].join("|");
 
 export function NodesView({ cluster }: { cluster: string }) {
@@ -543,7 +543,7 @@ export function NodesView({ cluster }: { cluster: string }) {
   // read of the Node kind, otherwise unverified (slice 3 §5a).
   const sel = mine ? nodes.selected : null;
   const live = sel ? scopedNodes.find((n) => n.name === sel.name) : undefined;
-  const lastRow = useRef<{ cluster: string; n: NodeSummaryDTO } | null>(null);
+  const lastRow = useRef<{ cluster: string; n: NodeRowDTO } | null>(null);
   if (live) lastRow.current = { cluster, n: live };
   const prior = sel && lastRow.current?.cluster === cluster && lastRow.current.n.name === sel.name ? lastRow.current.n : null;
   const subject = live ?? prior;
@@ -553,7 +553,7 @@ export function NodesView({ cluster }: { cluster: string }) {
   // same-name replacement is read afresh - the old object's detail never
   // becomes the new one's (design §5b).
   const readSig = useRef<string | null>(null);
-  const openRow = useCallback((n: NodeSummaryDTO) => {
+  const openRow = useCallback((n: NodeRowDTO) => {
     readSig.current = detailSig(cluster, n);
     void openNodeDetail(cluster, n.name, n.uid ?? "");
   }, [cluster]);
@@ -573,7 +573,7 @@ export function NodesView({ cluster }: { cluster: string }) {
     autoSelect.current = "done";
     useFleet.getState().selectNode(null);
   }, []);
-  const activate = (n: NodeSummaryDTO) => { autoSelect.current = "done"; setKbName(n.name); openRow(n); };
+  const activate = (n: NodeRowDTO) => { autoSelect.current = "done"; setKbName(n.name); openRow(n); };
   useListKeys({
     count: visibleNodes.length,
     selected: kbIdx,
@@ -598,7 +598,7 @@ export function NodesView({ cluster }: { cluster: string }) {
   // One-shot auto-select of the first attention node from a FRESH complete
   // read after route entry (same contract as Pods).
   const autoSelect = useRef<"pending" | "done">("pending");
-  const itemsAtEntry = useRef<NodeSummaryDTO[] | null>(null);
+  const itemsAtEntry = useRef<NodeRowDTO[] | null>(null);
   if (itemsAtEntry.current === null) itemsAtEntry.current = nodes.items;
   useEffect(() => { autoSelect.current = "pending"; itemsAtEntry.current = useFleet.getState().nodes.items; }, [cluster]);
   const freshRead = mine && ev === "complete" && nodes.items !== itemsAtEntry.current;
@@ -770,7 +770,7 @@ export function NodesView({ cluster }: { cluster: string }) {
                     {show("taints") && <span style={{ color: n.taintCount > 0 ? "var(--color-text-secondary)" : "var(--color-text-tertiary)" }}>{n.taintCount > 0 ? n.taintCount : "-"}</span>}
                     {show("cpuAlloc") && <CapacityCell value={n.cpuAllocatable} total={n.cpuCapacity} format={(v) => v.toFixed(1)} />}
                     {show("memAlloc") && <CapacityCell value={n.memAllocatable} total={n.memCapacity} format={fmtMem} />}
-                    {show("age") && <span style={{ color: "var(--color-text-tertiary)" }}>{formatAge(ageOf(n, nowS))}</span>}
+                    {show("age") && <span style={{ color: "var(--color-text-tertiary)" }}>{ageText(n, nowS)}</span>}
                   </div>
                 );
               })}
@@ -856,7 +856,7 @@ const statusLine: React.CSSProperties = { minHeight: 24, display: "flex", alignI
 // derived from the LOADED nodes (zones + pools + single nodes); the verdict
 // states its caveats: requests-based upper bound, affinity/taints not
 // modeled, DaemonSet pods excluded, PDB blockers listed separately.
-function SurvivabilityModule({ cluster, nodes }: { cluster: string; nodes: NodeSummaryDTO[] }) {
+function SurvivabilityModule({ cluster, nodes }: { cluster: string; nodes: NodeRowDTO[] }) {
   // Autoscaler honesty: with Karpenter present, lost capacity would be
   // re-provisioned - the fixed-capacity verdict is a FLOOR, not the outcome.
   const hasKarpenter = useFleet((s) => s.clusters.find((c) => c.name === cluster)?.karpenterPresent ?? false);
@@ -988,7 +988,7 @@ function CapacityCell({ value, total, format }: { value: number; total: number; 
 // (design §5b) - a same-name replacement's detail never becomes this one's.
 function NodeInspector({ cluster, row, uid, nowS, detail, loading, gone, onCordon, onDrain, onClose }: {
   cluster: string;
-  row: NodeSummaryDTO;
+  row: NodeRowDTO;
   uid: string;
   nowS: number;
   detail: NodeDetailDTO | null;
@@ -1038,7 +1038,7 @@ function NodeInspector({ cluster, row, uid, nowS, detail, loading, gone, onCordo
       <InspectorLayout
         kind="Node"
         name={name}
-        meta={[row.roles.join(", "), row.version, `${formatAge(ageOf(row, nowS))} old`, row.pool ? `pool ${row.pool}` : "", row.zone ? `zone ${row.zone}` : ""].filter(Boolean).join(" · ")}
+        meta={[row.roles.join(", "), row.version, `${ageText(row, nowS)} old`, row.pool ? `pool ${row.pool}` : "", row.zone ? `zone ${row.zone}` : ""].filter(Boolean).join(" · ")}
         onClose={onClose}
         verdict={gone === "removed" ? (
           <div role="status" className="t-body" style={{ padding: "8px 10px", borderRadius: 4, background: "var(--color-background-secondary)", boxShadow: "inset 0 0 0 1px var(--color-border-secondary)" }}>

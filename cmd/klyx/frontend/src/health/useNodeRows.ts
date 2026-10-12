@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { useFleet, type NodeSummaryDTO } from "../store/fleet";
+import { useFleet, type NodeRowDTO } from "../store/fleet";
 import { coverageError } from "../layout/coverage";
 import { useRows } from "./useRows";
 import { partCoverage, partRows, rowsState, sliceOwner } from "./lensRows";
@@ -20,7 +20,7 @@ const owner = sliceOwner(
 );
 
 export function useNodeRows(cluster: string | null): void {
-  const r = useRows<NodeSummaryDTO>(cluster, "nodes", "nodes");
+  const r = useRows<NodeRowDTO>(cluster, "nodes", "nodes");
   owner.useOwner(cluster);
 
   useEffect(() => {

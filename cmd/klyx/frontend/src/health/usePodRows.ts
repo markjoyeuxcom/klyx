@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { useFleet, type PodSummaryDTO } from "../store/fleet";
+import { useFleet, type PodRowDTO } from "../store/fleet";
 import { coverageError, coverageFromHealth } from "../layout/coverage";
 import { useRows } from "./useRows";
 import { partCoverage, partRows, rowsState, sliceOwner } from "./lensRows";
@@ -23,7 +23,7 @@ const owner = sliceOwner(
 );
 
 export function usePodRows(cluster: string | null): void {
-  const r = useRows<PodSummaryDTO>(cluster, "pods", "pods");
+  const r = useRows<PodRowDTO>(cluster, "pods", "pods");
   owner.useOwner(cluster);
 
   useEffect(() => {
@@ -43,10 +43,11 @@ export function usePodRows(cluster: string | null): void {
       dependencies: r.part ? coverageFromHealth(r.part.kinds, POD_DEP_NAMES, "dependency") : [],
       rowsState: rowsState([r]),
       counts: r.counts.part?.counts ?? null,
+      rowsVer: r.ver, // anchors the §6a probe's timing to the lens commit
     });
     // reference-stable picks only: the hook's result object is rebuilt per render
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cluster, r.rows, r.part, r.error, r.refreshError, r.evaluatedAt, r.counts.part, r.counts.updating, r.counts.refreshing]);
+  }, [cluster, r.rows, r.part, r.error, r.refreshError, r.evaluatedAt, r.counts.part, r.counts.updating, r.counts.refreshing, r.ver?.incarnation, r.ver?.ver]);
 }
 
 // test seam

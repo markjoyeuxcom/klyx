@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, fireEvent, act } from "@testing-library/react";
 import { CommandPalette } from "./CommandPalette";
 import { useFleet } from "../store/fleet";
-import type { ClusterDTO, PodSummaryDTO } from "../store/fleet";
+import type { ClusterDTO, PodRowDTO } from "../store/fleet";
 
 vi.mock("../bridge/pods", () => ({ openPodDetail: vi.fn(), listPods: vi.fn() }));
 vi.mock("../bridge/helm", () => ({ openHelmRelease: vi.fn() }));
@@ -10,8 +10,8 @@ vi.mock("../bridge/helm", () => ({ openHelmRelease: vi.fn() }));
 const mkCluster = (name: string, env: string, region: string): ClusterDTO =>
   ({ name, env, region } as ClusterDTO);
 
-const mkPod = (namespace: string, name: string): PodSummaryDTO =>
-  ({ namespace, name, phase: "Running", rank: "healthy" } as PodSummaryDTO);
+const mkPod = (namespace: string, name: string): PodRowDTO =>
+  ({ namespace, name, uid: `uid-${name}`, health: { kind: "ok", label: "Running" } } as PodRowDTO);
 
 function seedClusters() {
   useFleet.setState({

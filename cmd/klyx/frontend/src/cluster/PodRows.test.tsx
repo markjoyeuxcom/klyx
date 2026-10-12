@@ -42,6 +42,9 @@ import { resetHealthStore, addSub, openStarted, openSucceeded, applyRows, applyS
 import { useFleet, type PodDetailDTO, type PodSummaryDTO } from "../store/fleet";
 import { clock } from "../layout/coverage";
 import { formatAge } from "../chrome/Age";
+import { rowOf } from "../test/podRows";
+import { buildCommands } from "../chrome/commands";
+import { perfHooks } from "../health/perfHooks";
 
 type Kind = "ok" | "fault" | "degraded" | "unknown" | "progressing";
 const container = { name: "app", image: "nginx:1.27", ready: true, restarts: 0, state: "running", init: false };
@@ -66,9 +69,19 @@ const countsOf = (rows: PodSummaryDTO[]) => {
 const part = (ver: number, kinds: KindCoverage[], counts: ReturnType<typeof countsOf>): HealthPart => ({
   id: "pods", entity: "pods", scope: "all namespaces", classifier: "verdict", coverage: "live", kinds, obs: ver, ver, counts,
 });
+// the wire form: bounded rows (addendum §3.2), in full
 const rowsDTO = (ver: number, rows: PodSummaryDTO[], kinds = kindsOf()): RowsDTO => ({
-  cluster: "x", incarnation: 1, task: "pods", part: part(ver, kinds, countsOf(rows)), evaluatedAt: "2026-10-12T12:00:00Z", rows,
+  cluster: "x", incarnation: 1, task: "pods", part: part(ver, kinds, countsOf(rows)), evaluatedAt: "2026-10-12T12:00:00Z", rows: rows.map(rowOf), full: true,
 });
+// a delta against base: the rows of `after` whose wire form changed, and the UIDs gone
+const deltaDTO = (base: number, ver: number, before: PodSummaryDTO[], after: PodSummaryDTO[]): RowsDTO => {
+  const was = new Map(before.map((p) => [p.uid, JSON.stringify(rowOf(p))]));
+  return {
+    ...rowsDTO(ver, after), rows: null, full: false, base,
+    upserts: after.filter((p) => was.get(p.uid) !== JSON.stringify(rowOf(p))).map(rowOf),
+    removed: before.filter((p) => !after.some((a) => a.uid === p.uid)).map((p) => p.uid ?? ""),
+  };
+};
 const summary = (seq: number, ver: number, counts: ReturnType<typeof countsOf>): HealthSummary => ({
   cluster: "x", incarnation: 1, seq, evaluatedAt: "", connection: "connected",
   tasks: [{ id: "pods", coverage: "live", parts: [part(ver, kindsOf(), counts)] }],
@@ -378,5 +391,121 @@ describe("the logs dock is pinned to its cluster", () => {
     fireEvent.click(screen.getByRole("button", { name: "logs for app/b" })); // a later dock
     await act(async () => { done(true); });
     expect(screen.getByTestId("logs-pane").textContent).toBe("x:app/b");
+  });
+});
+
+// Addendum §3.2-§3.3: the rows travel bounded and as deltas; the inspector
+// reads the verdict message and the container detail from the selected
+// UID's detail, never from the row.
+describe("bounded rows and deltas through the Pods lens", () => {
+  const crash = (over: Partial<PodSummaryDTO> = {}) => pod("a", "fault", {
+    containers: [{ ...container, ready: false, restarts: 3, state: "waiting:CrashLoopBackOff", lastReason: "OOMKilled", lastExitCode: 137, cpuRequest: 0.25,
+      ports: [{ name: "http", port: 8080, protocol: "TCP" }] }],
+    health: { kind: "fault", label: "CrashLoopBackOff", reason: "CrashLoopBackOff", rule: "pod.current-failure", rank: 70, message: "app: back-off 5m0s restarting" },
+    ...over,
+  });
+
+  it("the verdict message and container detail are 'loading' until this UID's detail lands", () => {
+    seed([crash()]);
+    render(<PodsView cluster="x" />);
+    select("a");
+    expect(inspector().queryByText("app: back-off 5m0s restarting")).toBeNull();
+    expect(inspector().getByTestId("verdict-message-pending").textContent).toMatch(/Reading the verdict message/);
+    expect(inspector().getByTestId("container-detail-pending").textContent).toBe("loading…");
+    expect(inspector().getByText("waiting · CrashLoopBackOff")).toBeTruthy(); // the live state is the row's
+    landDetail(detail(crash()));
+    expect(inspector().getByText("app: back-off 5m0s restarting")).toBeTruthy();
+    expect(inspector().queryByTestId("verdict-message-pending")).toBeNull();
+    expect(inspector().getByTitle("nginx:1.27")).toBeTruthy();
+    expect(inspector().getByText(/OOMKilled \(exit 137\)/)).toBeTruthy();
+    expect(inspector().getByText(/cpu 250m/)).toBeTruthy();
+  });
+
+  it("a detail of another verdict never lends its message", () => {
+    seed([crash()]);
+    render(<PodsView cluster="x" />);
+    select("a");
+    landDetail(detail(crash({ health: { kind: "degraded", label: "Pending", reason: "PendingTooLong", rule: "pod.pending-overdue", message: "pending for 9m" } })));
+    expect(inspector().queryByText("pending for 9m")).toBeNull();
+    expect(inspector().getByTestId("verdict-message-pending")).toBeTruthy();
+    expect(inspector().getByTitle("nginx:1.27")).toBeTruthy(); // the container detail is this object's
+  });
+
+  it("another object's detail lends neither the message nor the container detail", () => {
+    seed([crash()]);
+    render(<PodsView cluster="x" />);
+    select("a");
+    landDetail(detail(crash({ uid: "uid-a-2" })));
+    expect(inspector().queryByText("app: back-off 5m0s restarting")).toBeNull();
+    expect(inspector().queryByTitle("nginx:1.27")).toBeNull();
+    expect(inspector().getByTestId("container-detail-pending").textContent).toBe("not read");
+    expect(inspector().getByTestId("verdict-message-pending").textContent).toBe("Verdict message not read.");
+  });
+
+  it("a failed detail read says the container detail was not read - never an empty claim", () => {
+    seed([crash()]);
+    render(<PodsView cluster="x" />);
+    select("a");
+    landDetail(detail(crash(), { error: "forbidden" }));
+    expect(inspector().getByTestId("container-detail-pending").textContent).toBe("not read");
+    expect(inspector().queryByTestId("verdict-message-pending")).toBeNull();
+  });
+
+  it("deltas upsert and remove rows through the real adapter; a wrong base changes nothing", () => {
+    const a = pod("a"), b = pod("b"), c = pod("c");
+    seed([a, b, c]);
+    render(<PodsView cluster="x" />);
+    expect(rowNames()).toEqual(["app / a", "app / b", "app / c"]);
+    const b2 = pod("b", "fault");
+    act(() => { applyRows("p", deltaDTO(1, 2, [a, b, c], [a, b2]), 0); });
+    expect(rowNames()).toEqual(["app / b", "app / a"]); // the fault first, c removed
+    expect(useFleet.getState().pods.rowsVer).toEqual({ incarnation: 1, ver: 2 });
+    act(() => { applyRows("p", deltaDTO(5, 6, [a, b2], [a]), 0); }); // a lost delta: wrong base
+    expect(rowNames()).toEqual(["app / b", "app / a"]);
+    expect(useFleet.getState().pods.rowsVer).toEqual({ incarnation: 1, ver: 2 });
+    expect(useHealth.getState().subs.p.resync).toBe(true);
+  });
+
+  it("the palette and the row read the row's own fields", () => {
+    seed([crash()]);
+    render(<PodsView cluster="x" />);
+    const cmds = buildCommands(useFleet.getState());
+    expect(cmds.find((c) => c.id === "pod:app/a")?.hint).toBe("Pod · CrashLoopBackOff · x");
+  });
+
+  it("port-forward suggests the detail's declared ports once it is read", () => {
+    seed([crash()]);
+    render(<PodsView cluster="x" />);
+    select("a");
+    chooseMore("Port-forward…");
+    expect(screen.queryByRole("button", { name: "use port 8080" })).toBeNull(); // the row carries no ports
+    landDetail(detail(crash()));
+    expect(screen.getByRole("button", { name: "use port 8080" })).toBeTruthy();
+  });
+
+  it("a generation bump or a new reason under the same label re-reads the detail", () => {
+    seed([crash()]);
+    render(<PodsView cluster="x" />);
+    select("a");
+    landDetail(detail(crash()));
+    expect(openPodDetail).toHaveBeenCalledTimes(1);
+    push(2, [crash({ generation: 2 })]);
+    expect(openPodDetail).toHaveBeenCalledTimes(2);
+    push(3, [crash({ generation: 2, health: { kind: "fault", label: "CrashLoopBackOff", reason: "Exited", rule: "pod.current-failure", rank: 70 } })]);
+    expect(openPodDetail).toHaveBeenCalledTimes(3);
+  });
+
+  it("the lens reports the rows Ver its committed render shows (the §6a probe's anchor)", () => {
+    const commits: string[] = [];
+    perfHooks.commit = (key, inc, ver) => { commits.push(`${key}@${inc}:${ver}`); };
+    try {
+      seed([pod("a")]);
+      render(<PodsView cluster="x" />);
+      push(2, [pod("a"), pod("b")]);
+      expect(commits).toEqual(["pods/pods@1:1", "pods/pods@1:2"]);
+      expect(rowNames()).toEqual(["app / a", "app / b"]); // that commit shows Ver 2's rows
+    } finally {
+      delete perfHooks.commit;
+    }
   });
 });

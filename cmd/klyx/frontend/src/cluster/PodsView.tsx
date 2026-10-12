@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import { IconExternalLink, IconX, IconAlertTriangle, IconTerminal2, IconCircleDot } from "@tabler/icons-react";
 import { useFleet } from "../store/fleet";
-import type { PodDetailDTO, PodSummaryDTO, ContainerSummaryDTO, ContainerUsageDTO, PodUsageResultDTO, KindCoverageDTO } from "../store/fleet";
+import type { PodDetailDTO, PodRowDTO, PodRowContainerDTO, ContainerSummaryDTO, ContainerUsageDTO, PodUsageResultDTO, KindCoverageDTO } from "../store/fleet";
 import { openPodDetail, deletePod } from "../bridge/pods";
 import { getPodContainerUsage } from "../bridge/metrics";
 import { rightsizing, fmtCpu, fmtMem } from "./saturation";
@@ -32,13 +32,14 @@ import { InspectorBlock, InspectorLayout, type MenuItem } from "../layout/Inspec
 import { VerdictLabel, VerdictLamp, VerdictStatus } from "../health/VerdictView";
 import { type VerdictCounts, attentionTone, isAttention, kindOf, labelOf, orderOf, summarize } from "../health/verdict";
 import { usePodRows } from "../health/usePodRows";
+import { useCommitProbe } from "../health/perfHooks";
 import { clock, coverageGaps, kindEvidence, lastGoodAt, type KindEvidence } from "../layout/coverage";
 
 // Pods lens on the shared workspace template (2026-10 redesign pilot). The
 // template owns geometry; this file owns pod data, filters, selection and the
 // day-2 operations, which route through the same confirm/arming as before.
 
-function readyOf(p: PodSummaryDTO): string {
+function readyOf(p: PodRowDTO): string {
   const nonInit = p.containers.filter((c) => !c.init);
   return `${nonInit.filter((c) => c.ready).length}/${nonInit.length}`;
 }
@@ -57,21 +58,21 @@ export function imageShort(image: string): string {
   return s;
 }
 
-type LogsTarget = { namespace: string; name: string; containers: ContainerSummaryDTO[] };
+type LogsTarget = { namespace: string; name: string; containers: { name: string; init?: boolean }[] };
 
-// The age ticks from the creation time (1c slice 3 §3); ageSeconds is the
-// age at the capture.
-const ageOf = (p: PodSummaryDTO, nowS: number) => (p.createdUnix ? Math.max(0, nowS - p.createdUnix) : p.ageSeconds);
+// The age ticks from the creation time (1c slice 3 §3): the rows carry no
+// relative age (addendum §3.1).
+const ageText = (p: PodRowDTO, nowS: number) => (p.createdUnix ? formatAge(Math.max(0, nowS - p.createdUnix)) : "-");
 const keyOf = (p: { namespace: string; name: string }) => `${p.namespace}/${p.name}`;
 // faults first, then severity, namespace and name - the lens's own order,
 // never the capture's
-const byTriage = (a: PodSummaryDTO, b: PodSummaryDTO) =>
+const byTriage = (a: PodRowDTO, b: PodRowDTO) =>
   orderOf(kindOf(a.health)) - orderOf(kindOf(b.health)) || (b.health?.rank ?? 0) - (a.health?.rank ?? 0)
   || a.namespace.localeCompare(b.namespace) || a.name.localeCompare(b.name);
 // What a selected row's detail is re-read on: its identity and the facts the
 // detail explains. A capture that changes none of them re-reads nothing.
-const detailSig = (cluster: string, p: PodSummaryDTO) =>
-  [cluster, p.namespace, p.name, p.uid ?? "", kindOf(p.health), p.health?.label ?? "", p.phase, p.restarts, p.node].join("|");
+const detailSig = (cluster: string, p: PodRowDTO) =>
+  [cluster, p.namespace, p.name, p.uid, p.generation ?? 0, kindOf(p.health), p.health?.label ?? "", p.health?.reason ?? "", p.ready, p.restarts, p.node].join("|");
 
 // A verb's target: the pod OBJECT (its UID) it was armed against.
 type PodTarget = { namespace: string; name: string; uid: string };
@@ -101,6 +102,7 @@ export function PodsView({ cluster }: { cluster: string }) {
   // (1c slice 3 §5.9) - live; the namespace is a list filter.
   usePodRows(cluster);
   const mine = pods.cluster === cluster;
+  useCommitProbe("pods/pods", mine ? pods.rowsVer : null);
   useEffect(() => {
     // Hydration fills only fields still at their reset defaults.
     const st = useFleet.getState();
@@ -167,7 +169,7 @@ export function PodsView({ cluster }: { cluster: string }) {
   // read of the Pod kind, otherwise unverified (slice 3 §5a).
   const sel = mine ? pods.selected : null;
   const live = sel ? allItems.find((p) => p.namespace === sel.namespace && p.name === sel.name) : undefined;
-  const lastRow = useRef<{ cluster: string; p: PodSummaryDTO } | null>(null);
+  const lastRow = useRef<{ cluster: string; p: PodRowDTO } | null>(null);
   if (live) lastRow.current = { cluster, p: live };
   const prior = sel && lastRow.current?.cluster === cluster && keyOf(lastRow.current.p) === keyOf(sel) ? lastRow.current.p : null;
   const subject = live ?? prior;
@@ -177,7 +179,7 @@ export function PodsView({ cluster }: { cluster: string }) {
   // same-name replacement is read afresh - the old object's detail never
   // becomes the new one's (design §5b).
   const readSig = useRef<string | null>(null);
-  const openRow = useCallback((p: PodSummaryDTO) => {
+  const openRow = useCallback((p: PodRowDTO) => {
     readSig.current = detailSig(cluster, p);
     void openPodDetail(cluster, p.namespace, p.name, p.uid ?? "");
   }, [cluster]);
@@ -194,7 +196,7 @@ export function PodsView({ cluster }: { cluster: string }) {
   // after Escape/close, on later pushes or filter changes - and never move
   // focus.
   const autoSelect = useRef<"pending" | "done">("pending");
-  const itemsAtEntry = useRef<PodSummaryDTO[] | null>(null);
+  const itemsAtEntry = useRef<PodRowDTO[] | null>(null);
   if (itemsAtEntry.current === null) itemsAtEntry.current = pods.items;
   useEffect(() => { autoSelect.current = "pending"; itemsAtEntry.current = useFleet.getState().pods.items; }, [cluster]);
   const freshRead = mine && ev === "complete" && pods.items !== itemsAtEntry.current;
@@ -528,7 +530,7 @@ function ownerText(ev: KindEvidence, deps: KindCoverageDTO[] | undefined): strin
 // ---------------------------------------------------------------------------
 
 function PodRow({ p, nowS, cursor, selected, bulkSelected, onToggleBulk, onOpen, onLogs }: {
-  p: PodSummaryDTO;
+  p: PodRowDTO;
   nowS: number;
   cursor: boolean;
   selected: boolean;
@@ -572,7 +574,7 @@ function PodRow({ p, nowS, cursor, selected, bulkSelected, onToggleBulk, onOpen,
       <span style={{ color: "var(--color-text-secondary)" }}>{ready}/{nonInit.length}</span>
       <span className="col-restarts" style={{ color: p.restarts > 0 ? "var(--color-text-secondary)" : "var(--color-text-tertiary)" }}>{p.restarts}</span>
       <span className="col-node" style={{ ...ellipsis, color: "var(--color-text-tertiary)" }} title={p.node}>{p.node || "-"}</span>
-      <span className="col-age" style={{ color: "var(--color-text-tertiary)" }}>{formatAge(ageOf(p, nowS))}</span>
+      <span className="col-age" style={{ color: "var(--color-text-tertiary)" }}>{ageText(p, nowS)}</span>
       <button
         aria-label={`logs for ${p.namespace}/${p.name}`}
         title="logs"
@@ -592,7 +594,7 @@ function PodRow({ p, nowS, cursor, selected, bulkSelected, onToggleBulk, onOpen,
 
 // A pending verb is pinned to the pod OBJECT (and, for an owner restart, the
 // owner object) it was armed on.
-type Pending = { verb: "restart" | "delete"; summary: PodSummaryDTO } | { verb: "debug"; summary: PodSummaryDTO; container: string };
+type Pending = { verb: "restart" | "delete"; summary: PodRowDTO } | { verb: "debug"; summary: PodRowDTO; container: string };
 
 // PodInspector - investigation order: verdict, actions, runtime, events,
 // placement, then collapsed metadata. The row (live, or the selection's last)
@@ -600,7 +602,7 @@ type Pending = { verb: "restart" | "delete"; summary: PodSummaryDTO } | { verb: 
 // (design §5b) - a same-name replacement's detail never becomes this one's.
 function PodInspector({ cluster, row, uid, nowS, gone, rsEv, detail, loading, isProtected, onClose, onOpenLogs }: {
   cluster: string;
-  row: PodSummaryDTO;
+  row: PodRowDTO;
   uid: string;
   nowS: number;
   gone: "removed" | "unverified" | null;
@@ -661,6 +663,15 @@ function PodInspector({ cluster, row, uid, nowS, gone, rsEv, detail, loading, is
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [live, row.uid, row.ownerUid, pending]);
   const p = row;
+  // The row carries no verdict message and no container detail (addendum
+  // §3.2): both are this UID's detail - "loading" until it is read, and the
+  // message only while the detail's verdict is the row's.
+  const sameVerdict = !!shown && kindOf(shown.summary.health) === kindOf(p.health) && labelOf(shown.summary.health) === labelOf(p.health)
+    && (shown.summary.health?.reason ?? "") === (p.health?.reason ?? "");
+  const message = sameVerdict ? shown?.summary.health?.message : undefined;
+  const detailContainers = new Map((shown?.summary.containers ?? []).map((c) => [c.name, c]));
+  const detailState: "read" | "loading" | "unread" = shown ? "read" : loading ? "loading" : "unread";
+  const pendingMessage = sameVerdict ? undefined : loading ? "Reading the verdict message…" : detailError ? undefined : "Verdict message not read.";
   const containers = p.containers.filter((c) => !c.init);
   const per = (fn: (container: string) => void) => containers.map((c) => ({ label: c.name, onSelect: () => fn(c.name) }));
   const showRestart = p.ownerKind === "Deployment" || p.ownerKind === "StatefulSet" || p.ownerKind === "DaemonSet";
@@ -686,7 +697,7 @@ function PodInspector({ cluster, row, uid, nowS, gone, rsEv, detail, loading, is
           onClick={() => { useFleet.getState().setSection("nodes"); useFleet.getState().requestNavIntent({ kind: "select-node", cluster, node: p.node }); }}
           title="open in Nodes">{p.node}</button>
       )}
-      {p.node ? " · " : ""}{formatAge(ageOf(p, nowS))} old{p.ip ? ` · ${p.ip}` : ""}
+      {p.node ? " · " : ""}{ageText(p, nowS)} old{p.ip ? ` · ${p.ip}` : ""}
     </>
   );
 
@@ -708,7 +719,8 @@ function PodInspector({ cluster, row, uid, nowS, gone, rsEv, detail, loading, is
           <div role="status" data-testid="selection-unverified" className="t-body" style={{ padding: "8px 10px", borderRadius: 4, background: "var(--color-background-secondary)", boxShadow: "inset 0 0 0 1px var(--color-border-warning)" }}>
             <span className="t-status">Not in the current Pod read.</span> That read is incomplete, so this is unverified - it may still exist. The details below are its last observed row.
           </div>
-        ) : <VerdictStatus health={p.health} detail={`${readyOf(p)} ready`} />}
+        ) : <VerdictStatus health={message ? { ...p.health, message } : p.health} detail={`${readyOf(p)} ready`}
+          pendingMessage={pendingMessage} />}
         primary={live ? { label: "Logs", kbd: "l", onSelect: () => onOpenLogs({ namespace, name, containers: p.containers }) } : undefined}
         secondary={live && containers.length > 0 ? { label: "Shell", onSelect: () => void openExecTerminal(cluster, namespace, name, containers[0].name), options: per((c) => void openExecTerminal(cluster, namespace, name, c)) } : undefined}
         more={live ? more : []}
@@ -722,7 +734,7 @@ function PodInspector({ cluster, row, uid, nowS, gone, rsEv, detail, loading, is
             namespace={namespace}
             kind="Pod"
             name={name}
-            ports={containers.flatMap((c) => (c.ports ?? []).map((pt) => ({ name: pt.name, port: pt.port })))}
+            ports={[...detailContainers.values()].filter((c) => !c.init).flatMap((c) => (c.ports ?? []).map((pt) => ({ name: pt.name, port: pt.port })))}
             onClose={() => setForwarding(false)}
           />
         )}
@@ -732,7 +744,7 @@ function PodInspector({ cluster, row, uid, nowS, gone, rsEv, detail, loading, is
           {ctUsage !== null && !ctUsage.available && (
             <div className="t-secondary">Live usage unavailable - {ctUsage.message || "no metrics source"}</div>
           )}
-          {p.containers.map((c) => <ContainerBlock key={c.name} c={c} u={usageByContainer.get(c.name)} />)}
+          {p.containers.map((c) => <ContainerBlock key={c.name} c={c} d={detailContainers.get(c.name)} detailState={detailState} u={usageByContainer.get(c.name)} />)}
         </InspectorBlock>
 
         <InspectorBlock title="Placement">
@@ -882,15 +894,18 @@ function containerStateParts(state: string): { word: string; reason: string } {
   return i < 0 ? { word: state, reason: "" } : { word: state.slice(0, i), reason: state.slice(i + 1) };
 }
 
-function ContainerBlock({ c, u }: { c: ContainerSummaryDTO; u?: ContainerUsageDTO }) {
+// ContainerBlock: the live state is the row's (c); the image, last
+// termination and declared resources are the pod detail's (d), read for this
+// UID - "loading" until then, never an empty claim.
+function ContainerBlock({ c, d, detailState, u }: { c: PodRowContainerDTO; d?: ContainerSummaryDTO; detailState: "read" | "loading" | "unread"; u?: ContainerUsageDTO }) {
   const { word, reason } = containerStateParts(c.state);
-  const findings = [
-    rightsizing("cpu", u?.cpu ?? null, c.cpuRequest, c.cpuLimit),
-    rightsizing("mem", u?.mem ?? null, c.memRequest, c.memLimit),
-  ].filter((f): f is NonNullable<typeof f> => f !== null);
+  const findings = d ? [
+    rightsizing("cpu", u?.cpu ?? null, d.cpuRequest, d.cpuLimit),
+    rightsizing("mem", u?.mem ?? null, d.memRequest, d.memLimit),
+  ].filter((f): f is NonNullable<typeof f> => f !== null) : [];
   const fmtRes = (v: number | null | undefined, format: (n: number) => string) => (v == null ? "—" : format(v));
   const faulted = word !== "" && word !== "running" && reason !== "Completed";
-  const lastFinished = c.lastFinishedUnix ?? 0;
+  const lastFinished = d?.lastFinishedUnix ?? 0;
   const lastAgo = lastFinished > 0 ? ago(Math.max(0, Math.floor(Date.now() / 1000) - lastFinished)) : "";
   return (
     <div data-rowhost="true" className="insp-kv">
@@ -899,15 +914,17 @@ function ContainerBlock({ c, u }: { c: ContainerSummaryDTO; u?: ContainerUsageDT
         {word || "—"}{reason ? ` · ${reason}` : ""}
       </span>
       <span>image</span>
-      <span style={{ display: "flex", alignItems: "center", gap: 4, minWidth: 0 }}>
-        <span title={c.image} style={{ minWidth: 0, overflowWrap: "anywhere" }}>{imageShort(c.image)}</span>
-        <CopyButton text={c.image} label={`copy image ref ${imageShort(c.image)}`} size={11} appearOnRowHover />
-      </span>
-      {c.lastReason && (
+      {d ? (
+        <span style={{ display: "flex", alignItems: "center", gap: 4, minWidth: 0 }}>
+          <span title={d.image} style={{ minWidth: 0, overflowWrap: "anywhere" }}>{imageShort(d.image)}</span>
+          <CopyButton text={d.image} label={`copy image ref ${imageShort(d.image)}`} size={11} appearOnRowHover />
+        </span>
+      ) : <span data-testid="container-detail-pending" style={{ color: "var(--color-text-tertiary)" }}>{detailState === "loading" ? "loading…" : "not read"}</span>}
+      {d?.lastReason && (
         <>
           <span>last exit</span>
           <span>
-            {c.lastReason}{c.lastExitCode ? ` (exit ${c.lastExitCode})` : ""}
+            {d.lastReason}{d.lastExitCode ? ` (exit ${d.lastExitCode})` : ""}
             {lastAgo && <span style={{ color: "var(--color-text-tertiary)" }}>{` · ${lastAgo} ago`}</span>}
           </span>
         </>
@@ -916,8 +933,8 @@ function ContainerBlock({ c, u }: { c: ContainerSummaryDTO; u?: ContainerUsageDT
       {u && (u.cpu != null || u.mem != null) && (
         <><span>usage</span><span>cpu {fmtRes(u.cpu, fmtCpu)} · mem {fmtRes(u.mem, fmtMem)}</span></>
       )}
-      {(c.cpuRequest != null || c.memRequest != null || c.cpuLimit != null || c.memLimit != null) && (
-        <><span>req / lim</span><span>cpu {fmtRes(c.cpuRequest, fmtCpu)}/{fmtRes(c.cpuLimit, fmtCpu)} · mem {fmtRes(c.memRequest, fmtMem)}/{fmtRes(c.memLimit, fmtMem)}</span></>
+      {d && (d.cpuRequest != null || d.memRequest != null || d.cpuLimit != null || d.memLimit != null) && (
+        <><span>req / lim</span><span>cpu {fmtRes(d.cpuRequest, fmtCpu)}/{fmtRes(d.cpuLimit, fmtCpu)} · mem {fmtRes(d.memRequest, fmtMem)}/{fmtRes(d.memLimit, fmtMem)}</span></>
       )}
       {findings.map((f) => (
         <span key={f.label} style={{ gridColumn: "1 / -1", fontSize: 11, color: f.tier === "danger" ? "var(--color-text-danger)" : f.tier === "warn" ? "var(--color-text-warning)" : "var(--color-text-info)" }}>{f.label}</span>

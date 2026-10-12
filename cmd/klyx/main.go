@@ -73,7 +73,8 @@ func main() {
 	// dropped; HealthService.Summaries bootstraps the retained summaries).
 	em := &appbridge.LateEmitter{}
 	reg := fleet.NewRegistry(cfg, fleet.DefaultConnFactory(clock.Real{}))
-	reg.SetHealthSink(appbridge.NewHealthSink(em))
+	healthSink := appbridge.NewHealthSink(em)
+	reg.SetHealthSink(healthSink)
 	reg.Start(ctx)
 
 	// configSvc is built before the fleet service: the fleet DTOs resolve each
@@ -95,6 +96,8 @@ func main() {
 		}
 		return out
 	})
+	// Bootstraps answer from the rows lineage the sink publishes against.
+	appbridge.LinkRowsLineage(healthSvc, healthSink)
 
 	winOpener := &windowOpener{}
 

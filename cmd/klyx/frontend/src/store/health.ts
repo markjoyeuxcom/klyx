@@ -25,7 +25,20 @@ export type HealthSummary = {
   cluster: string; incarnation: number; seq: number; evaluatedAt: string; connection: string;
   namespaces?: number; tasks: HealthTask[]; final?: boolean;
 };
-export type RowsDTO<T = unknown> = { cluster: string; incarnation: number; task: string; part: HealthPart; evaluatedAt: string; rows: T[] | null; facts?: Record<string, unknown>; emittedAtMs?: number };
+// A rows message (slice 3 addendum §3.3): full (rows is the complete set),
+// or a delta against base - the Ver it applies to - carrying the rows whose
+// sent form changed (upserts, by UID) and the UIDs gone (removed). Part,
+// facts and evaluatedAt travel on both. A message without full: false is
+// full (bootstrap replies and native parts).
+export type RowsDTO<T = unknown> = {
+  cluster: string; incarnation: number; task: string; part: HealthPart; evaluatedAt: string; rows: T[] | null;
+  facts?: Record<string, unknown>; emittedAtMs?: number;
+  full?: boolean; base?: number; upserts?: T[] | null; removed?: string[] | null;
+};
+
+// PENDING_MAX bounds the deltas held while they cannot apply (no rows yet,
+// or a wrong base awaiting the full bootstrap).
+export const PENDING_MAX = 16;
 
 // A4: how long a summary may be ahead of the on-screen rows before the
 // counts switch to the summary and the rows are qualified (spec §4).
@@ -59,6 +72,12 @@ export type RowsSub = {
   retryAt: number | null; // the next re-bootstrap attempt (ms)
   error: string | null; // the open's failure (the subscription has no rows of its own)
   refreshError: string | null; // the last failed re-bootstrap, while the mismatch is unresolved
+  // deltas newer than the rows held that cannot apply yet, oldest first
+  pending: RowsDTO[];
+  // resync: a newer delta of the held incarnation did not chain from the
+  // held Ver - a fenced full bootstrap is due, backed off, whether or not a
+  // newer summary arrived (addendum §3.3)
+  resync: boolean;
 };
 
 type HealthState = {
@@ -83,6 +102,7 @@ export function findPart(s: HealthSummary | undefined, task: string, part: strin
 const cleared = (sub: RowsSub): RowsSub => ({
   ...sub, incarnation: null, ver: -1, partData: null, rows: null, facts: null, evaluatedAt: null,
   mismatchSince: null, refreshing: false, inflight: false, attempt: 0, retryAt: null, refreshError: null,
+  pending: [], resync: false, // a delta that arrives later is held afresh
 });
 
 // newer compares (incarnation, ver) as one key.
@@ -93,6 +113,9 @@ function reconcile(sub: RowsSub, summary: HealthSummary | undefined, now: number
   const sp = summary && sub.incarnation !== null && summary.incarnation === sub.incarnation ? findPart(summary, sub.task, sub.part) : undefined;
   if (!sp || sp.ver <= sub.ver) {
     if (sub.mismatchSince === null && !sub.refreshing && !sub.inflight && sub.retryAt === null && sub.refreshError === null) return sub;
+    // a resync keeps its bootstrap in flight and its backoff: a summary
+    // that is not ahead resolves the mismatch, never the wrong base
+    if (sub.resync) return sub.mismatchSince === null && !sub.refreshing ? sub : { ...sub, mismatchSince: null, refreshing: false };
     return { ...sub, mismatchSince: null, refreshing: false, inflight: false, attempt: 0, retryAt: null, refreshError: null };
   }
   // The deadline is fixed at the FIRST unresolved mismatch; later ticks never reset it.
@@ -159,6 +182,7 @@ export function addSub(handle: string, cluster: string, task: string, part: stri
         handle, cluster, task, part, token: null, boundIncarnation: null, open: "opening", openAttempt: 0, openRetryAt: null,
         incarnation: null, ver: -1, partData: null, rows: null, facts: null, evaluatedAt: null,
         mismatchSince: null, refreshing: false, requestGen: 0, inflight: false, attempt: 0, retryAt: null, error: null, refreshError: null,
+        pending: [], resync: false,
       },
     },
   }));
@@ -197,11 +221,58 @@ export function openFailed(handle: string, token: string, error: string, now = D
   return true;
 }
 
-// applyRows takes a rows payload for one subscription: only its own part,
+const uidOf = (r: unknown) => (r as { uid?: string } | null)?.uid ?? "";
+
+// withMessage moves a subscription to a full message, or a delta whose base
+// is the Ver held: rows upserted and removed by UID (a kept row keeps its
+// object), the part, facts and evaluation time replaced.
+function withMessage(sub: RowsSub, dto: RowsDTO): RowsSub {
+  let rows: unknown[];
+  if (dto.full === false && !dto.upserts?.length && !dto.removed?.length) rows = sub.rows ?? []; // metadata only: the rows keep their identity
+  else if (dto.full === false) {
+    const gone = new Set(dto.removed ?? []);
+    const up = new Map<string, unknown>();
+    for (const r of dto.upserts ?? []) up.set(uidOf(r), r);
+    rows = [];
+    for (const r of sub.rows ?? []) {
+      const u = uidOf(r);
+      if (gone.has(u)) continue;
+      const n = up.get(u);
+      if (n !== undefined) { rows.push(n); up.delete(u); } else rows.push(r);
+    }
+    for (const r of up.values()) rows.push(r);
+  } else rows = dto.rows ?? [];
+  return { ...sub, incarnation: dto.incarnation, ver: dto.part.ver, partData: dto.part, rows, facts: dto.facts ?? null, evaluatedAt: dto.evaluatedAt };
+}
+
+const chains = (sub: RowsSub, d: RowsDTO) => d.full !== false || (sub.incarnation === d.incarnation && d.base === sub.ver);
+
+// drain applies the held deltas that now chain, in order, and keeps only
+// those still newer than the rows. One left over in the held incarnation
+// cannot chain until a full arrives: a resync.
+function drain(sub: RowsSub): RowsSub {
+  let s = sub;
+  for (;;) {
+    const cur = s;
+    const d = cur.pending.find((x) => chains(cur, x));
+    if (!d) break;
+    s = { ...withMessage(cur, d), pending: cur.pending.filter((x) => x !== d) };
+  }
+  const pending = s.incarnation === null ? s.pending : s.pending.filter((d) => newer(d.incarnation, d.part.ver, s.incarnation as number, s.ver));
+  return { ...s, pending, resync: s.incarnation !== null && pending.some((d) => d.incarnation === s.incarnation) };
+}
+
+export type RowsOutcome = "applied" | "held" | "ignored";
+
+// applyRows takes a rows message for one subscription: only its own part,
 // never a finalized or superseded incarnation, and only a strictly newer
-// (incarnation, Ver). A newer incarnation advances the cluster's.
-export function applyRows(handle: string, dto: RowsDTO, now = Date.now()): boolean {
-  let applied = false;
+// (incarnation, Ver) - an older or equal one is ignored, with no retry. A
+// newer incarnation advances the cluster's. A full message, or a delta
+// whose base is the Ver held, applies; any other newer delta leaves the
+// rows and their metadata unchanged and is held - in the held incarnation
+// it requests a full bootstrap (resync). Held deltas apply once they chain.
+export function applyRows(handle: string, dto: RowsDTO, now = Date.now()): RowsOutcome {
+  let outcome: RowsOutcome = "ignored";
   useHealth.setState((st0) => {
     const sub0 = st0.subs[handle];
     if (!sub0 || dto.cluster !== sub0.cluster || dto.task !== sub0.task || dto.part.id !== sub0.part) return st0;
@@ -210,32 +281,41 @@ export function applyRows(handle: string, dto: RowsDTO, now = Date.now()): boole
     const st = advance(st0, sub0.cluster, dto.incarnation);
     const sub = st.subs[handle];
     if (sub.incarnation !== null && !newer(dto.incarnation, dto.part.ver, sub.incarnation, sub.ver)) return st;
-    applied = true;
-    const base = sub.incarnation !== null && dto.incarnation > sub.incarnation ? cleared(sub) : sub;
-    const next: RowsSub = { ...base, incarnation: dto.incarnation, ver: dto.part.ver, partData: dto.part, rows: dto.rows ?? [], facts: dto.facts ?? null, evaluatedAt: dto.evaluatedAt };
+    let next: RowsSub;
+    if (chains(sub, dto)) {
+      outcome = "applied";
+      const base = sub.incarnation !== null && dto.incarnation > sub.incarnation ? cleared(sub) : sub;
+      next = drain(withMessage(base, dto));
+    } else {
+      outcome = "held";
+      next = drain({ ...sub, pending: [...sub.pending, dto].slice(-PENDING_MAX) });
+    }
     return { ...st, subs: { ...st.subs, [handle]: reconcile(next, st.summaries[sub.cluster], now) } };
   });
-  return applied;
+  return outcome;
 }
 
 // dueForBootstrap: a subscription past its A4 deadline turns refreshing
 // (the deadline stays fixed); while unresolved and not in flight, it is due
-// for a fenced re-bootstrap at its retry time.
+// for a fenced re-bootstrap at its retry time. A resync is due at once (and
+// then at its retry time) without waiting for a summary or the deadline; it
+// does not by itself switch the counts to the summary.
 export function dueForBootstrap(now = Date.now()): { handle: string; token: string; requestGen: number }[] {
   const due: { handle: string; token: string; requestGen: number }[] = [];
   useHealth.setState((st) => {
     let subs: Record<string, RowsSub> | null = null;
     for (const [h, sub] of Object.entries(st.subs)) {
-      if (sub.mismatchSince === null || now - sub.mismatchSince < MISMATCH_DEADLINE_MS) continue;
+      const late = sub.mismatchSince !== null && now - sub.mismatchSince >= MISMATCH_DEADLINE_MS;
+      if (!late && !sub.resync) continue;
       if (sub.inflight || !sub.token || (sub.retryAt !== null && now < sub.retryAt)) {
-        if (!sub.refreshing) {
+        if (late && !sub.refreshing) {
           subs ??= { ...st.subs };
           subs[h] = { ...sub, refreshing: true };
         }
         continue;
       }
       subs ??= { ...st.subs };
-      subs[h] = { ...sub, refreshing: true, inflight: true, requestGen: sub.requestGen + 1 };
+      subs[h] = { ...sub, refreshing: sub.refreshing || late, inflight: true, requestGen: sub.requestGen + 1 };
       due.push({ handle: h, token: sub.token, requestGen: sub.requestGen + 1 });
     }
     return subs ? { subs } : st;
@@ -244,15 +324,16 @@ export function dueForBootstrap(now = Date.now()): { handle: string; token: stri
 }
 
 // bootstrapSettled records one re-bootstrap's outcome: a reply for an old
-// request generation is ignored; a resolved mismatch clears the retry
-// state; an error, a rejection or a reply still behind schedules the next
-// attempt with backoff (the counts stay on the summary meanwhile).
+// request generation is ignored; a resolved mismatch and resync clear the
+// retry state; an error, a rejection or a reply still behind (or one the
+// held deltas still do not chain from) schedules the next attempt with
+// backoff (A4's counts stay on the summary meanwhile).
 export function bootstrapSettled(handle: string, requestGen: number, outcome: { rows?: RowsDTO | null; error?: string | null; closed?: boolean }, now = Date.now()): void {
   const sub = useHealth.getState().subs[handle];
   if (!sub || requestGen !== sub.requestGen || !sub.inflight) return;
   if (outcome.rows && !outcome.closed) applyRows(handle, outcome.rows, now);
   patch(handle, (s) => {
-    if (s.mismatchSince === null) return { ...s, inflight: false, attempt: 0, retryAt: null, refreshError: null };
+    if (s.mismatchSince === null && !s.resync) return { ...s, inflight: false, attempt: 0, retryAt: null, refreshError: null };
     const attempt = s.attempt + 1;
     return { ...s, inflight: false, attempt, retryAt: now + backoff(attempt), refreshError: outcome.error ?? s.refreshError };
   });
@@ -272,6 +353,7 @@ export function nextWake(): number | null {
       if (!s.refreshing) min(s.mismatchSince + MISMATCH_DEADLINE_MS);
       else if (s.token && s.retryAt !== null) min(s.retryAt);
     }
+    if (s.resync && !s.inflight && s.token) min(s.retryAt ?? 0);
     if (s.open === "failed" && s.openRetryAt !== null) min(s.openRetryAt);
   }
   return at;
@@ -294,7 +376,7 @@ export function needsReopen(now = Date.now()): string[] {
 export type SelectedCounts = {
   part: HealthPart | null; // whose counts to show
   source: "rows" | "summary" | "none";
-  updating: boolean; // summary ahead, inside the deadline: rows' counts, marked
+  updating: boolean; // summary ahead inside the deadline, or a resync: rows' counts, marked
   refreshing: boolean; // past the deadline: the summary's counts; rows qualified as of their evaluation
 };
 
@@ -319,5 +401,6 @@ export function taskCounts(st: HealthState, cluster: string, task: string, part:
   const best = bestSub(st, cluster, task, part);
   if (!best) return { part: summaryPart, source: summaryPart ? "summary" : "none", updating: false, refreshing: false };
   if (best.refreshing && summaryPart) return { part: summaryPart, source: "summary", updating: false, refreshing: true };
-  return { part: best.partData, source: "rows", updating: best.mismatchSince !== null, refreshing: false };
+  // a resync's rows are known to be behind a newer Ver: marked, as updating
+  return { part: best.partData, source: "rows", updating: best.mismatchSince !== null || best.resync, refreshing: false };
 }

@@ -19,16 +19,19 @@ type NodeSummaryDTO struct {
 	MemCapacity    float64  `json:"memCapacity"`
 	MemAllocatable float64  `json:"memAllocatable"`
 	PodCapacity    int64    `json:"podCapacity"`
-	AgeSeconds     int      `json:"ageSeconds"`
-	// Created (unix) anchors the age the lens ticks (1c slice 3 §3);
-	// AgeSeconds is the age at the read or capture.
-	Created int64  `json:"createdUnix,omitempty"`
-	Pool    string `json:"pool"`
-	Zone    string `json:"zone"`
+	// AgeSeconds is the age at a list read. The rows transport never sends
+	// it (time-stable rows, slice 3 addendum §3.1): the lens ticks the age
+	// from Created (unix, 1c slice 3 §3).
+	AgeSeconds int    `json:"ageSeconds,omitempty"`
+	Created    int64  `json:"createdUnix,omitempty"`
+	Pool       string `json:"pool"`
+	Zone       string `json:"zone"`
 	// Health is the shared verdict; Ready/Problems are legacy fields kept
 	// until every consumer has migrated.
 	Health HealthDTO `json:"health"`
 }
+
+func (n NodeSummaryDTO) rowUID() string { return n.UID }
 
 // HeadroomPodRefDTO mirrors workloads.PodRef (an unplaced pod + its requests).
 type HeadroomPodRefDTO struct {

@@ -276,10 +276,11 @@ func TestNodeRowsCarryTheCapture(t *testing.T) {
 	}
 	n := out.([]NodeSummaryDTO)[0]
 	if n.UID != "n1" || n.GVR != "v1/nodes" || n.Generation != 3 || n.Health.Kind != "degraded" || n.Health.Label != "MemoryPressure at capture" ||
-		!n.Unschedulable || n.AgeSeconds != 1500 || n.Created != 500 {
+		!n.Unschedulable || n.AgeSeconds != 0 || n.Created != 500 {
 		t.Fatalf("node row: %+v", n)
 	}
-	if b, err := json.Marshal(n); err != nil || !strings.Contains(string(b), `"createdUnix":500`) || !strings.Contains(string(b), `"uid":"n1"`) || !strings.Contains(string(b), `"gvr":"v1/nodes"`) {
+	// time-stable rows (addendum §3.1): the creation anchor, never the age
+	if b, err := json.Marshal(n); err != nil || !strings.Contains(string(b), `"createdUnix":500`) || !strings.Contains(string(b), `"uid":"n1"`) || !strings.Contains(string(b), `"gvr":"v1/nodes"`) || strings.Contains(string(b), "ageSeconds") {
 		t.Fatalf("serialization: %s %v", b, err)
 	}
 	empty, err := rowsConverters[healthsrc.TaskNodes+"/nodes"](nil, at)
@@ -313,8 +314,11 @@ func TestWorkloadRowsCarryTheCaptureAndItsFacts(t *testing.T) {
 	if w.UID != "w1" || w.GVR != "apps/v1/deployments" || w.Generation != 4 || w.Health.Kind != "fault" || w.Health.Label != "CrashLoopBackOff at capture" {
 		t.Fatalf("workload row: %+v", w)
 	}
-	if len(w.Pods) != 1 || w.Pods[0].UID != "p1" || w.Pods[0].Created != 1970 {
+	if len(w.Pods) != 1 || w.Pods[0].UID != "p1" || w.Pods[0].Created != 1970 || w.Pods[0].AgeSeconds != 0 {
 		t.Fatalf("pod identity and anchor: %+v", w.Pods)
+	}
+	if b, err := json.Marshal(w); err != nil || strings.Contains(string(b), "ageSeconds") {
+		t.Fatalf("time-stable rows carry no relative age: %s %v", b, err)
 	}
 	dto, ok := toRowsDTO(observe.Rows{Cluster: "c", Incarnation: 1, Task: healthsrc.TaskWorkloads, Part: observe.Part{ID: "workloads"}, EvaluatedAt: at, Rows: set})
 	if !ok || dto.Facts[healthsrc.FactFluxPresent] != true {
@@ -329,28 +333,52 @@ func TestWorkloadRowsCarryTheCaptureAndItsFacts(t *testing.T) {
 }
 
 // The Pods part (slice 3 §5.9): the captured verdict, the capture's identity,
-// the owner identity a restart is armed against, and the creation anchor.
+// the owner identity a restart is armed against, and the creation anchor -
+// as the bounded row (addendum §3.2): no relative age, no message, no
+// container detail, no legacy fields. The detail still carries them.
 func TestPodRowsCarryTheCapture(t *testing.T) {
 	at := time.Unix(2000, 0)
+	cpu := 0.5
+	sum := workloads.PodSummary{Namespace: "app", Name: "web-1", OwnerKind: "Deployment", OwnerName: "web", OwnerUID: "uid-web",
+		Phase: "Running", Reason: "CrashLoopBackOff", Rank: workloads.Unhealthy, Node: "n1", IP: "10.0.0.9", Restarts: 4,
+		AgeSeconds: 30, Created: time.Unix(1970, 0),
+		Containers: []workloads.ContainerSummary{{Name: "web", Image: "shop/web:1", Ready: false, Restarts: 4, State: "waiting:CrashLoopBackOff",
+			Ports: []workloads.ContainerPort{{Name: "http", Port: 8080, Protocol: "TCP"}}, LastReason: "OOMKilled", LastExitCode: 137, LastFinishedUnix: 1990, CPURequest: &cpu}},
+		Health: health.Verdict{Kind: health.Fault, Label: "CrashLoopBackOff at capture", Reason: "CrashLoopBackOff", Message: "back-off 5m restarting", Note: "last OOMKilled 10s ago", Rank: 7}}
 	set := healthsrc.RowSet[workloads.PodSummary]{Rows: []healthsrc.Row[workloads.PodSummary]{
-		{Ref: healthsrc.RowRef{UID: "p1", GVR: "v1/pods", Namespace: "app", Name: "web-1", Generation: 1},
-			Data: workloads.PodSummary{Namespace: "app", Name: "web-1", OwnerKind: "Deployment", OwnerName: "web", OwnerUID: "uid-web",
-				AgeSeconds: 30, Created: time.Unix(1970, 0), Health: health.Verdict{Kind: health.Fault, Label: "CrashLoopBackOff at capture"}}},
+		{Ref: healthsrc.RowRef{UID: "p1", GVR: "v1/pods", Namespace: "app", Name: "web-1", Generation: 1}, Data: sum},
 	}}
 	out, err := rowsConverters[healthsrc.TaskPods+"/pods"](set, at)
 	if err != nil {
 		t.Fatal(err)
 	}
-	p := out.([]PodSummaryDTO)[0]
+	p := out.([]PodRowDTO)[0]
 	if p.UID != "p1" || p.GVR != "v1/pods" || p.Generation != 1 || p.Health.Kind != "fault" || p.Health.Label != "CrashLoopBackOff at capture" ||
-		p.OwnerUID != "uid-web" || p.Created != 1970 || p.AgeSeconds != 30 {
+		p.Health.Note != "last OOMKilled 10s ago" || p.Health.Rank != 7 || p.Health.Message != "" ||
+		p.OwnerKind != "Deployment" || p.OwnerName != "web" || p.OwnerUID != "uid-web" || p.Created != 1970 || p.Node != "n1" || p.IP != "10.0.0.9" || p.Restarts != 4 {
 		t.Fatalf("pod row: %+v", p)
 	}
-	if b, err := json.Marshal(p); err != nil || !strings.Contains(string(b), `"createdUnix":1970`) || !strings.Contains(string(b), `"ownerUid":"uid-web"`) || !strings.Contains(string(b), `"uid":"p1"`) {
+	if len(p.Containers) != 1 || p.Containers[0] != (PodRowContainerDTO{Name: "web", Ready: false, Restarts: 4, State: "waiting:CrashLoopBackOff"}) {
+		t.Fatalf("container state: %+v", p.Containers)
+	}
+	b, err := json.Marshal(p)
+	if err != nil || !strings.Contains(string(b), `"createdUnix":1970`) || !strings.Contains(string(b), `"ownerUid":"uid-web"`) || !strings.Contains(string(b), `"uid":"p1"`) {
 		t.Fatalf("serialization: %s %v", b, err)
 	}
+	for _, absent := range []string{"ageSeconds", "message", "image", "ports", "cpuRequest", "lastReason", "lastExitCode", "lastFinishedUnix", `"phase"`, `"rank":"`, "back-off"} {
+		if strings.Contains(string(b), absent) {
+			t.Fatalf("the bounded row carries no %s: %s", absent, b)
+		}
+	}
+	// the detail's summary keeps everything the row leaves out
+	d, _ := json.Marshal(toPodSummaryDTO(sum))
+	for _, present := range []string{`"message":"back-off 5m restarting"`, `"image":"shop/web:1"`, `"ports":[`, `"cpuRequest":0.5`, `"lastReason":"OOMKilled"`} {
+		if !strings.Contains(string(d), present) {
+			t.Fatalf("the detail carries %s: %s", present, d)
+		}
+	}
 	empty, err := rowsConverters[healthsrc.TaskPods+"/pods"](nil, at)
-	if err != nil || len(empty.([]PodSummaryDTO)) != 0 {
+	if err != nil || len(empty.([]PodRowDTO)) != 0 {
 		t.Fatalf("an unevaluated part is an empty set: %v %v", empty, err)
 	}
 	if _, err := rowsConverters[healthsrc.TaskPods+"/pods"]("not rows", at); err == nil {
@@ -719,15 +747,21 @@ func TestRowsTraceRecordsPayloadSizes(t *testing.T) {
 	off.record(RowsDTO{}) // a nil trace is a no-op
 	path := filepath.Join(t.TempDir(), "rows.trace")
 	tr := openRowsTrace(path)
-	dto := RowsDTO{Task: "pods", Part: observe.Part{ID: "pods"}, Rows: []PodSummaryDTO{{Name: "a"}, {Name: "b"}}}
+	dto := RowsDTO{Task: "pods", Part: observe.Part{ID: "pods"}, Rows: []PodRowDTO{{Name: "a"}, {Name: "b"}}, Full: true}
 	tr.record(dto)
 	b, _ := json.Marshal(dto)
+	delta := RowsDTO{Task: "pods", Part: observe.Part{ID: "pods"}, Base: 3, Upserts: []PodRowDTO{{Name: "a"}}, Removed: []string{"u1", "u2"}}
+	tr.record(delta)
+	db, _ := json.Marshal(delta)
 	got, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := fmt.Sprintf("pods/pods bytes=%d rows=2\n", len(b)); !strings.HasSuffix(string(got), want) {
-		t.Fatalf("trace line: %q, want suffix %q", got, want)
+	if want := fmt.Sprintf("pods/pods bytes=%d rows=2 full=true removed=0\n", len(b)); !strings.Contains(string(got), want) {
+		t.Fatalf("trace line: %q, want %q", got, want)
+	}
+	if want := fmt.Sprintf("pods/pods bytes=%d rows=1 full=false removed=2\n", len(db)); !strings.HasSuffix(string(got), want) {
+		t.Fatalf("delta trace line: %q, want suffix %q", got, want)
 	}
 }
 

@@ -45,7 +45,9 @@ export function VerdictLabel({ health, mono = false }: { health: HealthLike | nu
 // VerdictStatus is the inspector's verdict head: one chip (lamp + label in the
 // verdict tone), then the FULL diagnostic message, wrapped - never truncated
 // behind a tooltip - then the native state and any history note, secondary.
-export function VerdictStatus({ health, detail }: { health: HealthLike | null | undefined; detail?: string }) {
+// pendingMessage stands where the message will be while it is still being
+// read (a row that does not carry its message); it is never the message.
+export function VerdictStatus({ health, detail, pendingMessage }: { health: HealthLike | null | undefined; detail?: string; pendingMessage?: string }) {
   const k = kindOf(health);
   const tone = verdictTone[k];
   const lit = k === "fault" || k === "degraded";
@@ -71,11 +73,13 @@ export function VerdictStatus({ health, detail }: { health: HealthLike | null | 
         <VerdictLamp health={health} size={8} />
         <span>{k === "fault" ? "▲ " : ""}{labelOf(health)}</span>
       </span>
-      {health?.message && (
+      {health?.message ? (
         <span style={{ fontSize: 12, lineHeight: 1.45, color: lit ? toneColor[tone] : "var(--color-text-primary)", overflowWrap: "anywhere", userSelect: "text" }}>
           {health.message}
         </span>
-      )}
+      ) : pendingMessage ? (
+        <span data-testid="verdict-message-pending" style={{ fontSize: 12, color: "var(--color-text-tertiary)" }}>{pendingMessage}</span>
+      ) : null}
       {secondary && (
         <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--color-text-secondary)", overflowWrap: "anywhere" }}>{secondary}</span>
       )}

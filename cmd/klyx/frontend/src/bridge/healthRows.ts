@@ -4,10 +4,12 @@ import {
   addSub, applyRows, applySummary, bootstrapSettled, dueForBootstrap, needsReopen, nextWake, openFailed, openStarted, openSucceeded,
   removeSub, useHealth, type HealthSummary, type RowsDTO,
 } from "../store/health";
+import { perfHooks } from "../health/perfHooks";
 
 // The transport for the health summaries and the lenses' shared rows
 // (slice 3 design §2b). Every subscription subscribes to its event BEFORE
-// it bootstraps, and the store keeps only strictly newer data. A mounted
+// it bootstraps, and the store keeps only strictly newer data; a delta
+// that arrives before its base is held until it chains (addendum §3.3). A mounted
 // subscription survives the cluster's Observer being replaced (it reopens
 // with a fresh token) and a failed open (it retries with backoff).
 
@@ -16,10 +18,6 @@ export const rowsEvent = (cluster: string, task: string, part: string) => `healt
 
 let summariesStarted = false;
 
-// perfHooks is the §6a lab probe's seam (app/perfProbe, compiled in only with
-// VITE_KLYX_PERF=1): unset in every normal build, so a rows push costs one
-// property read.
-export const perfHooks: { rows?: (key: string, start: number, end: number, dto: RowsDTO | null, receivedAtMs: number) => void } = {};
 
 // startSummaries subscribes to every cluster's summary, then bootstraps.
 // Idempotent: the first caller starts it for the app's lifetime.
@@ -52,11 +50,13 @@ export function openRows(cluster: string, task: string, part: string): () => voi
   const handle = mint("h");
   addSub(handle, cluster, task, part);
   const off = Events.On(rowsEvent(cluster, task, part), (ev: { data: RowsDTO }) => {
+    if (perfHooks.drop?.(`${task}/${part}`)) return;
     const probe = perfHooks.rows;
     const receivedAtMs = probe ? Date.now() : 0;
     const start = probe ? performance.now() : 0;
-    if (ev?.data && applyRows(handle, ev.data)) service();
-    if (probe) probe(`${task}/${part}`, start, performance.now(), ev?.data ?? null, receivedAtMs);
+    const outcome = ev?.data ? applyRows(handle, ev.data) : "ignored";
+    if (outcome !== "ignored") service(); // a held delta may need its resync
+    if (probe) probe(`${task}/${part}`, start, performance.now(), ev?.data ?? null, receivedAtMs, outcome);
   });
   reopen(handle);
   return () => {
@@ -75,6 +75,7 @@ function reopen(handle: string): void {
   if (sub.token) void HealthService.CloseRows(sub.token).catch(() => {});
   const token = mint("rows");
   openStarted(handle, token);
+  const t0 = perfHooks.bootstrap ? performance.now() : 0;
   HealthService.OpenRows(sub.cluster, sub.task, sub.part, token)
     .then((reply) => {
       const cur = useHealth.getState().subs[handle];
@@ -88,7 +89,8 @@ function reopen(handle: string): void {
       } else {
         const rows = reply.rows as unknown as RowsDTO;
         openSucceeded(handle, token, rows.incarnation);
-        applyRows(handle, rows);
+        const outcome = applyRows(handle, rows);
+        perfHooks.bootstrap?.(`${sub.task}/${sub.part}`, "open", t0, performance.now(), rows, outcome);
       }
       service();
     })
@@ -105,8 +107,18 @@ let timer: ReturnType<typeof setTimeout> | null = null;
 export function service(now = Date.now()): void {
   for (const h of needsReopen(now)) reopen(h);
   for (const { handle, token, requestGen } of dueForBootstrap(now)) {
+    const t0 = perfHooks.bootstrap ? performance.now() : 0;
     HealthService.RowsBootstrap(token, requestGen)
-      .then((reply) => { bootstrapSettled(handle, requestGen, { rows: (reply?.rows as unknown as RowsDTO) ?? null, error: reply?.error ?? null, closed: reply?.closed }); service(); })
+      .then((reply) => {
+        const rows = (reply?.rows as unknown as RowsDTO) ?? null;
+        const before = perfHooks.bootstrap ? useHealth.getState().subs[handle] : undefined;
+        bootstrapSettled(handle, requestGen, { rows, error: reply?.error ?? null, closed: reply?.closed });
+        if (before && rows) {
+          const after = useHealth.getState().subs[handle];
+          perfHooks.bootstrap?.(`${before.task}/${before.part}`, "rebootstrap", t0, performance.now(), rows, after && after.ver !== before.ver ? "applied" : "ignored");
+        }
+        service();
+      })
       .catch((e: unknown) => { bootstrapSettled(handle, requestGen, { error: e instanceof Error ? e.message : String(e) }); service(); });
   }
   if (timer) { clearTimeout(timer); timer = null; }

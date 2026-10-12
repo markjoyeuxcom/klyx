@@ -42,7 +42,7 @@ interface LogChunkDTO {
 interface PodRef {
   namespace: string;
   name: string;
-  containers: ContainerSummaryDTO[];
+  containers: Pick<ContainerSummaryDTO, "name" | "init">[] | { name: string; init?: boolean }[];
 }
 
 interface LogLineDetail {

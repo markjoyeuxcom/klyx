@@ -7,15 +7,17 @@ type OwnerDTO struct {
 }
 
 type PodDTO struct {
-	Name       string `json:"name"`
-	UID        string `json:"uid,omitempty"`
-	Ready      bool   `json:"ready"`
-	Restarts   int    `json:"restarts"`
-	Reason     string `json:"reason"`
-	Node       string `json:"node"`
-	AgeSeconds int    `json:"ageSeconds"`
-	// Created (unix) anchors the age the lens ticks (1c slice 3 §3).
-	Created int64 `json:"createdUnix,omitempty"`
+	Name     string `json:"name"`
+	UID      string `json:"uid,omitempty"`
+	Ready    bool   `json:"ready"`
+	Restarts int    `json:"restarts"`
+	Reason   string `json:"reason"`
+	Node     string `json:"node"`
+	// AgeSeconds is the age at a list read; the rows transport never sends
+	// it (slice 3 addendum §3.1). Created (unix) anchors the age the lens
+	// ticks (1c slice 3 §3).
+	AgeSeconds int   `json:"ageSeconds,omitempty"`
+	Created    int64 `json:"createdUnix,omitempty"`
 }
 
 // ResourceCellDTO is one resource (cpu cores / memory bytes). Nil = JSON null ->
@@ -88,6 +90,8 @@ type WorkloadDTO struct {
 	// held), not an error. Always false for StatefulSet/DaemonSet.
 	Paused bool `json:"paused,omitempty"`
 }
+
+func (w WorkloadDTO) rowUID() string { return w.UID }
 
 // RolloutRevisionDTO mirrors workloads.RolloutRevision - one rollout history
 // entry.

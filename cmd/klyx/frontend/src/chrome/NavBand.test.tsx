@@ -234,8 +234,8 @@ describe("NavBand reads the shared attention summary (step 7e)", () => {
 describe("NavBand counts (health model)", () => {
   const fault = { kind: "fault", label: "CrashLoopBackOff", reason: "CrashLoopBackOff", rule: "pod.current-failure" };
   const pod = (name: string, health: object) => ({
-    namespace: "shop", name, ready: false, phase: "Running", reason: "", rank: "unhealthy" as const, restarts: 0,
-    node: "n", ip: "", ownerKind: "", ownerName: "", ageSeconds: 1, containers: [], health,
+    namespace: "shop", name, uid: `uid-${name}`, ready: false, restarts: 0,
+    node: "n", ip: "", ownerKind: "", ownerName: "", containers: [], health,
   });
   // The Pods lens holds the Observer's rows with the global verdict counts
   // (1c slice 3 §4a); a complete Pod read wins over the poll.

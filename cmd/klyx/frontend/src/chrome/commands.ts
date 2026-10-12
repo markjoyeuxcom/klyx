@@ -7,6 +7,7 @@
 import { useFleet, ClusterSection } from "../store/fleet";
 import type { ClusterDTO, GatewayRefDTO, NavIntent, ResourceRef, RouteNodeDTO, WorkloadKind } from "../store/fleet";
 import { bestSub, useHealth } from "../store/health";
+import { labelOf } from "../health/verdict";
 import { openPodDetail } from "../bridge/pods";
 import { openNodeDetail } from "../bridge/nodes";
 import { openHelmRelease } from "../bridge/helm";
@@ -228,7 +229,7 @@ export function buildCommands(s: FleetStore): Command[] {
         id: `pod:${p.namespace}/${p.name}`,
         group: "Objects",
         title: `${p.namespace}/${p.name}`,
-        hint: `Pod · ${p.phase || p.rank} · ${podCluster}`,
+        hint: `Pod · ${labelOf(p.health)} · ${podCluster}`,
         run: () => {
           openSection(s, "pods", podCluster);
           void openPodDetail(podCluster, p.namespace, p.name, p.uid ?? "");

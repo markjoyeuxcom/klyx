@@ -147,7 +147,11 @@ func TestLab(t *testing.T) {
 }
 
 // TestLabChurn is the update generator TestLab runs as a separate process:
-// rate pod label patches per second, across the fixture's pods.
+// rate pod patches per second, across the fixture's pods. By default they
+// patch a label, which no lens row carries (metadata-only rows deltas);
+// KLYX_LAB_CHURN_KIND=status patches each pod's status IP instead, so every
+// update changes its pods row (the slice 3 addendum's row-visible churn).
+// The fixture's pods are unschedulable, so no kubelet rewrites the status.
 func TestLabChurn(t *testing.T) {
 	spec := os.Getenv("KLYX_LAB_CHURN")
 	if spec == "" {
@@ -177,6 +181,11 @@ func TestLabChurn(t *testing.T) {
 	// Values unique to this run: a patch to an unchanged value is a no-op
 	// the API server emits no event for.
 	run := time.Now().UnixNano()
+	status := os.Getenv("KLYX_LAB_CHURN_KIND") == "status"
+	kind := "label"
+	if status {
+		kind = "status"
+	}
 	tick := time.NewTicker(time.Second / time.Duration(rate))
 	defer tick.Stop()
 	var wg sync.WaitGroup
@@ -190,7 +199,12 @@ func TestLabChurn(t *testing.T) {
 		go func(ns, name string, n int) {
 			defer wg.Done()
 			patch := []byte(fmt.Sprintf(`{"metadata":{"labels":{"klyx.dev/churn":"%d-%d"}}}`, run, n))
-			if _, err := cs.CoreV1().Pods(ns).Patch(ctx, name, types.MergePatchType, patch, metav1.PatchOptions{}); err != nil {
+			var sub []string
+			if status {
+				ip := fmt.Sprintf("10.%d.%d.%d", 100+(n>>16)%100, (n>>8)%256, n%256)
+				patch, sub = []byte(fmt.Sprintf(`{"status":{"podIP":%q,"podIPs":[{"ip":%q}]}}`, ip, ip)), []string{"status"}
+			}
+			if _, err := cs.CoreV1().Pods(ns).Patch(ctx, name, types.MergePatchType, patch, metav1.PatchOptions{}, sub...); err != nil {
 				mu.Lock()
 				fails++
 				mu.Unlock()
@@ -198,7 +212,7 @@ func TestLabChurn(t *testing.T) {
 		}(p.Namespace, p.Name, sent)
 	}
 	wg.Wait()
-	fmt.Printf("churn: %d label patches in %v (%d failed)\n", sent, d, fails)
+	fmt.Printf("churn: %d %s patches in %v (%d failed)\n", sent, kind, d, fails)
 }
 
 type labSink struct {

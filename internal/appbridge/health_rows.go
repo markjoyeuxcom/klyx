@@ -38,6 +38,15 @@ type RowsDTO struct {
 	// EmittedAtMs is set only while the §6a lab trace is on: the emit time,
 	// so the webview probe can time a push from emit to store commit.
 	EmittedAtMs int64 `json:"emittedAtMs,omitempty"`
+	// Full: Rows is the part's complete row set. Otherwise the message is a
+	// delta (slice 3 addendum §3.3) against Base, the Ver it applies to:
+	// Upserts are the rows, by UID, whose sent form changed and Removed the
+	// UIDs gone. Part, Facts and EvaluatedAt travel on both, so an empty
+	// delta still carries a fact-, freshness- or coverage-only change.
+	Full    bool     `json:"full"`
+	Base    uint64   `json:"base,omitempty"`
+	Upserts any      `json:"upserts,omitempty"`
+	Removed []string `json:"removed,omitempty"`
 }
 
 // rowsConverter turns a part's evaluated rows into its lens DTOs. It copies
@@ -204,6 +213,7 @@ var rowsConverters = map[string]rowsConverter{
 			// a verdict part: the captured verdict is in the summary's Health
 			dto := toNodeSummaryDTO(r.Data)
 			dto.UID, dto.GVR, dto.Generation = r.Ref.UID, r.Ref.GVR, r.Ref.Generation
+			dto.AgeSeconds = 0 // time-stable rows: the lens ticks the age from Created (addendum §3.1)
 			out = append(out, dto)
 		}
 		return out, nil
@@ -213,10 +223,12 @@ var rowsConverters = map[string]rowsConverter{
 		if err != nil {
 			return nil, err
 		}
-		out := make([]PodSummaryDTO, 0, len(set.Rows))
+		out := make([]PodRowDTO, 0, len(set.Rows))
 		for _, r := range set.Rows {
-			// a verdict part: the captured verdict is in the summary's Health
-			dto := toPodSummaryDTO(r.Data)
+			// a verdict part: the captured verdict is in the summary's Health;
+			// the bounded row (addendum §3.2) leaves the message and the
+			// container detail to the UID-fenced detail
+			dto := toPodRowDTO(r.Data)
 			dto.UID, dto.GVR, dto.Generation = r.Ref.UID, r.Ref.GVR, r.Ref.Generation
 			out = append(out, dto)
 		}
@@ -233,6 +245,9 @@ var rowsConverters = map[string]rowsConverter{
 			// fluxPresent travels in the set's facts (§2a)
 			dto := toWorkloadDTO(r.Data)
 			dto.UID, dto.GVR, dto.Generation = r.Ref.UID, r.Ref.GVR, r.Ref.Generation
+			for i := range dto.Pods {
+				dto.Pods[i].AgeSeconds = 0 // time-stable rows (addendum §3.1)
+			}
 			out = append(out, dto)
 		}
 		return out, nil
@@ -292,7 +307,7 @@ func toRowsDTO(r observe.Rows) (RowsDTO, bool) {
 	if err != nil {
 		return RowsDTO{}, false
 	}
-	out := RowsDTO{Cluster: r.Cluster, Incarnation: r.Incarnation, Task: r.Task, Part: r.Part, EvaluatedAt: r.EvaluatedAt, Rows: rows}
+	out := RowsDTO{Cluster: r.Cluster, Incarnation: r.Incarnation, Task: r.Task, Part: r.Part, EvaluatedAt: r.EvaluatedAt, Rows: rows, Full: true}
 	if f, ok := r.Rows.(interface{ RowFacts() map[string]any }); ok {
 		out.Facts = f.RowFacts()
 	}
@@ -319,6 +334,7 @@ const rowsTombstones = 4096
 type rowsSub struct {
 	cluster, task, part string
 	o                   *observe.Observer
+	key                 lineageKey // its part's delta lineage (addendum §3.3)
 	release, unsub      func()
 	// ctx lives as long as the subscription: a close cancels any bootstrap
 	// still waiting on its capture (§2b).
@@ -397,10 +413,14 @@ func (s *HealthService) OpenRows(cluster, task, part, token string) RowsReplyDTO
 			g.mu.Unlock()
 			return RowsReplyDTO{Error: "no part " + task + "/" + part}
 		}
+		key := lineageKey{cluster: cluster, incarnation: o.Incarnation(), task: task, part: part}
+		if s.lineage != nil {
+			s.lineage.retain(key) // before subscribing: the first broadcast is kept
+		}
 		release := o.Acquire(task, rowsOwner(token))
 		unsub := o.SubscribeRows(task, part, rowsOwner(token))
 		ctx, cancel := context.WithCancel(context.Background())
-		sub = &rowsSub{cluster: cluster, task: task, part: part, o: o, release: release, unsub: unsub, ctx: ctx, cancel: cancel}
+		sub = &rowsSub{cluster: cluster, task: task, part: part, o: o, key: key, release: release, unsub: unsub, ctx: ctx, cancel: cancel}
 		g.subs[token] = sub
 	}
 	g.mu.Unlock()
@@ -424,6 +444,9 @@ func (s *HealthService) CloseRows(token string) {
 		sub.cancel() // a bootstrap still waiting answers Closed at once
 		sub.unsub()
 		sub.release()
+		if s.lineage != nil {
+			s.lineage.release(sub.key)
+		}
 	}
 }
 
@@ -444,7 +467,17 @@ func (s *HealthService) RowsBootstrap(token string, requestGen uint64) RowsReply
 	return reply
 }
 
+// bootstrap answers with the part's rows in full. A delta part answers
+// with its lineage's published state (addendum §3.3): a fresh capture can
+// run ahead of the broadcast, and a subscriber holding a Ver the broadcast
+// skips could apply no later delta. Only a part with no published state
+// yet captures, and that capture becomes the published state.
 func (s *HealthService) bootstrap(token string, sub *rowsSub) RowsReplyDTO {
+	if s.lineage != nil {
+		if dto, ok := s.lineage.current(sub.key); ok {
+			return s.replyOpen(token, dto)
+		}
+	}
 	ctx, cancel := context.WithTimeout(sub.ctx, rowsBootstrapTimeout)
 	defer cancel()
 	r, ok := sub.o.RowsNowCtx(ctx, sub.task, sub.part)
@@ -458,6 +491,13 @@ func (s *HealthService) bootstrap(token string, sub *rowsSub) RowsReplyDTO {
 	if !ok {
 		return RowsReplyDTO{Error: "rows of " + sub.task + "/" + sub.part + " could not be converted"}
 	}
+	if s.lineage != nil {
+		dto = s.lineage.seedFrom(dto)
+	}
+	return s.replyOpen(token, dto)
+}
+
+func (s *HealthService) replyOpen(token string, dto RowsDTO) RowsReplyDTO {
 	g := s.rows
 	g.mu.Lock()
 	_, closed := g.closed[token]

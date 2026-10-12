@@ -55,6 +55,42 @@ type PodSummaryDTO struct {
 	Health HealthDTO `json:"health"`
 }
 
+// PodRowDTO is a pod on the rows transport (1c slice 3 addendum §3.2): what
+// the list, its filters, the palette and the verbs read. It is bounded and
+// time-stable - no relative age (the lens ticks it from createdUnix) and no
+// legacy rank/reason/phase. The verdict message and each container's image,
+// ports, resources and last termination are read from the UID-fenced detail
+// (GetPodDetail, whose summary is the full PodSummaryDTO).
+type PodRowDTO struct {
+	Namespace  string `json:"namespace"`
+	Name       string `json:"name"`
+	UID        string `json:"uid"`
+	GVR        string `json:"gvr,omitempty"`
+	Generation int64  `json:"generation,omitempty"`
+	OwnerKind  string `json:"ownerKind"`
+	OwnerName  string `json:"ownerName"`
+	OwnerUID   string `json:"ownerUid,omitempty"`
+	Node       string `json:"node"`
+	IP         string `json:"ip"`
+	Ready      bool   `json:"ready"`
+	Restarts   int    `json:"restarts"`
+	Created    int64  `json:"createdUnix,omitempty"`
+	// Health is the captured verdict without its message.
+	Health     HealthDTO            `json:"health"`
+	Containers []PodRowContainerDTO `json:"containers"`
+}
+
+// PodRowContainerDTO is a container on a pod row: its live state only.
+type PodRowContainerDTO struct {
+	Name     string `json:"name"`
+	Init     bool   `json:"init,omitempty"`
+	Ready    bool   `json:"ready"`
+	Restarts int    `json:"restarts"`
+	State    string `json:"state"`
+}
+
+func (r PodRowDTO) rowUID() string { return r.UID }
+
 // PodsResultDTO is the response from ListPods.
 type PodsResultDTO struct {
 	// Namespaces is the sorted distinct set of pod namespaces. Populated ONLY

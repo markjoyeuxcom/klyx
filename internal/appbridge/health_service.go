@@ -18,27 +18,43 @@ const HealthSummaryEvent = "health:summary"
 
 // HealthSink publishes Observer output as Wails events.
 type HealthSink struct {
-	em    Emitter
-	trace *rowsTrace // nil unless KLYX_ROWS_TRACE names a file (the 1c §6a lab gate)
+	em      Emitter
+	lineage *rowsLineage
+	trace   *rowsTrace // nil unless KLYX_ROWS_TRACE names a file (the 1c §6a lab gate)
 }
 
 func NewHealthSink(em Emitter) *HealthSink {
-	return &HealthSink{em: em, trace: openRowsTrace(os.Getenv("KLYX_ROWS_TRACE"))}
+	return &HealthSink{em: em, lineage: newRowsLineage(), trace: openRowsTrace(os.Getenv("KLYX_ROWS_TRACE"))}
 }
 
-func (h *HealthSink) Summary(s observe.Summary) { h.em.Emit(HealthSummaryEvent, s) }
+func (h *HealthSink) Summary(s observe.Summary) {
+	h.lineage.summary(s)
+	h.em.Emit(HealthSummaryEvent, s)
+}
 
 // Rows go to one event per part, as the lens's DTOs (slice 3 §2): a part
-// no lens reads yet has no converter and is not emitted.
+// no lens reads yet has no converter and is not emitted. A delta part with
+// a subscribed lineage is sent as a delta against it (addendum §3.3).
 func (h *HealthSink) Rows(r observe.Rows) {
-	if dto, ok := toRowsDTO(r); ok {
-		if h.trace != nil {
-			dto.EmittedAtMs = time.Now().UnixMilli()
-			h.trace.record(dto)
-		}
-		h.em.Emit(HealthRowsEventPrefix+r.Cluster+":"+r.Task+"/"+r.Part.ID, dto)
+	dto, ok := toRowsDTO(r)
+	if !ok {
+		return
 	}
+	msg, emit := h.lineage.publish(dto)
+	if !emit {
+		return
+	}
+	if h.trace != nil {
+		msg.EmittedAtMs = time.Now().UnixMilli()
+		h.trace.record(msg)
+	}
+	h.em.Emit(HealthRowsEventPrefix+r.Cluster+":"+r.Task+"/"+r.Part.ID, msg)
 }
+
+// LinkRowsLineage makes the service's bootstraps and subscriptions share the
+// sink's lineage (addendum §3.3). Unlinked, no lineage is retained, so the
+// sink sends every part in full and bootstraps capture afresh.
+func LinkRowsLineage(svc *HealthService, sink *HealthSink) { svc.lineage = sink.lineage }
 
 // rowsTrace records each rows push's JSON size for the slice 3 §6a webview
 // gate (payload: at most one push per part per second, each pods push at
@@ -69,18 +85,23 @@ func (t *rowsTrace) record(dto RowsDTO) {
 		return
 	}
 	n := 0
-	if v := reflect.ValueOf(dto.Rows); v.Kind() == reflect.Slice {
+	rows := dto.Rows
+	if !dto.Full {
+		rows = dto.Upserts
+	}
+	if v := reflect.ValueOf(rows); v.Kind() == reflect.Slice {
 		n = v.Len()
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	_, _ = fmt.Fprintf(t.f, "%d %s/%s bytes=%d rows=%d\n", time.Now().UnixMilli(), dto.Task, dto.Part.ID, len(b), n)
+	_, _ = fmt.Fprintf(t.f, "%d %s/%s bytes=%d rows=%d full=%t removed=%d\n", time.Now().UnixMilli(), dto.Task, dto.Part.ID, len(b), n, dto.Full, len(dto.Removed))
 }
 
 // HealthService is the bootstrap side of the health summary.
 type HealthService struct {
 	observers func() []*observe.Observer
 	rows      *rowsRegistry
+	lineage   *rowsLineage // the sink's, once linked (LinkRowsLineage)
 }
 
 func NewHealthService(observers func() []*observe.Observer) *HealthService {

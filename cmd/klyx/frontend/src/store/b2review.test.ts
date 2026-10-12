@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { useFleet } from "./fleet";
-import type { PodSummaryDTO, NodeSummaryDTO } from "./fleet";
+import type { PodRowDTO, NodeSummaryDTO } from "./fleet";
 
 vi.mock("../../bindings/github.com/moomora/klyx/internal/appbridge/index.js", () => ({ CRDService: { ListCRDs: vi.fn(), CountKind: vi.fn() } }));
 vi.mock("@wailsio/runtime", () => ({ Clipboard: { SetText: vi.fn() } }));
@@ -8,7 +8,7 @@ import { CRDService } from "../../bindings/github.com/moomora/klyx/internal/appb
 import { listCRDs, countKind } from "../bridge/crd";
 import { crdCountKey } from "./fleet";
 
-const pod = (name: string, namespace: string) => ({ name, namespace } as unknown as PodSummaryDTO);
+const pod = (name: string, namespace: string) => ({ name, namespace } as unknown as PodRowDTO);
 
 // Codex's batch-2 review probes (R2, R7), adopted.
 describe("read-failure scope honesty", () => {

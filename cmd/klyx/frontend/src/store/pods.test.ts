@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { useFleet } from "./fleet";
 import type { PodSummaryDTO } from "./fleet";
+import { rowOf } from "../test/podRows";
 
 const makeContainer = () => ({ name: "app", image: "nginx:latest", ready: true, restarts: 0, state: "running", init: false });
 
@@ -25,7 +26,7 @@ describe("pods slice", () => {
   it("a new cluster's visit starts empty; a revisit keeps its rows and filters", () => {
     const f = useFleet.getState();
     f.setPodsVisit("c");
-    f.setPodsFromRows("c", { items: [healthy, broken], namespaces: ["default", "kube-system"], loading: false });
+    f.setPodsFromRows("c", { items: [rowOf(healthy), rowOf(broken)], namespaces: ["default", "kube-system"], loading: false });
     f.setPodsNamespace("default");
     f.setPodsVisit("c");
     expect(useFleet.getState().pods.items).toHaveLength(2);
@@ -89,7 +90,7 @@ describe("pods slice", () => {
   it("clearPods resets everything but a pending namespace request", () => {
     const f = useFleet.getState();
     f.setPodsVisit("c");
-    f.setPodsFromRows("c", { items: [healthy], namespaces: ["default"], loading: false });
+    f.setPodsFromRows("c", { items: [rowOf(healthy)], namespaces: ["default"], loading: false });
     f.selectPod(ref(healthy));
     f.togglePodsNeedsAttention();
     f.setPodsSearch("xyz");

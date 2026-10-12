@@ -403,7 +403,8 @@ export type ArgoViewMode = "applications" | "projects" | "applicationsets";
 export type FluxViewMode = "reconciliation" | "sources";
 
 export type OwnerDTO = { kind: string; namespace: string; name: string };
-export type PodDTO = { name: string; uid?: string; createdUnix?: number; ready: boolean; restarts: number; reason: string; node: string; ageSeconds: number };
+// ageSeconds is a list read's; the rows transport never sends it (addendum §3.1).
+export type PodDTO = { name: string; uid?: string; createdUnix?: number; ready: boolean; restarts: number; reason: string; node: string; ageSeconds?: number };
 export type ResourceCellDTO = { usage: number | null; request: number | null; limit: number | null };
 export type WorkloadResourcesDTO = { cpu: ResourceCellDTO; mem: ResourceCellDTO };
 // stale: spec changed, controller has not observed it - status/rank reflect
@@ -527,6 +528,19 @@ export type ContainerUsageDTO = { container: string; cpu: number | null; mem: nu
 export type PodUsageResultDTO = { available: boolean; message?: string; updatedAtUnix: number; items: ContainerUsageDTO[] };
 export type PodSummaryDTO = { namespace: string; name: string; uid?: string; gvr?: string; generation?: number; createdUnix?: number; ready: boolean; phase: string; reason: string; rank: "unhealthy"|"degraded"|"restarts"|"healthy"; restarts: number; node: string; ip: string; ownerKind: string; ownerName: string; ownerUid?: string; ageSeconds: number; containers: ContainerSummaryDTO[]; health?: HealthLike };
 export type PodsResultDTO = { namespaces: string[]; pods: PodSummaryDTO[]; truncated?: boolean; error?: string };
+// A pod on the rows transport (1c slice 3 addendum §3.2): bounded and
+// time-stable - no relative age (ticked from createdUnix), no legacy
+// rank/reason/phase. The verdict message and each container's image, ports,
+// resources and last termination are the UID-fenced detail's (PodDetailDTO).
+export type PodRowContainerDTO = { name: string; init?: boolean; ready: boolean; restarts: number; state: string };
+export type PodRowDTO = {
+  namespace: string; name: string; uid: string; gvr?: string; generation?: number;
+  ownerKind: string; ownerName: string; ownerUid?: string; node: string; ip: string;
+  ready: boolean; restarts: number; createdUnix?: number; health?: HealthLike; containers: PodRowContainerDTO[];
+};
+// RowsVer is the (incarnation, Ver) of the rows a slice holds - the §6a
+// probe anchors a push's timing to the lens commit that shows it.
+export type RowsVer = { incarnation: number; ver: number };
 export type PodDetailDTO = { summary: PodSummaryDTO; labels: Record<string, string>; annotations?: Record<string, string>; conditions: ConditionDTO[]; events: EventDTO[]; yaml: string; qosClass: string; serviceAccount: string; asOfUnix?: number; error?: string };
 
 // A pod selection names the OBJECT (its UID, design §5b): a detail is shown
@@ -537,7 +551,7 @@ export type PodsSlice = {
   // The rows are the Observer's, all namespaces and uncapped (1c slice 3
   // §5.9): the namespace is a list filter, and namespaces are the rows' own.
   namespace: string;
-  items: PodSummaryDTO[];
+  items: PodRowDTO[];
   namespaces: string[];
   loading: boolean; // the visit has no rows payload yet
   needsAttention: boolean;
@@ -550,12 +564,13 @@ export type PodsSlice = {
   dependencies?: KindCoverageDTO[]; // what owner resolution read (ReplicaSet), from the same capture
   rowsState?: RowsStateDTO;
   counts?: VerdictPartCounts | null; // the one count selector's (global) verdict counts
+  rowsVer?: RowsVer | null;
   // Palette "jump to namespace" (and a scratch pod launch): consumed by
   // PodsView as its namespace filter.
   nsRequest?: { cluster: string; namespace: string } | null;
 };
 // What the Pods rows adapter (health/usePodRows) writes.
-export type PodsRowsPayload = Pick<PodsSlice, "items" | "namespaces" | "loading" | "error" | "coverage" | "dependencies" | "rowsState" | "counts">;
+export type PodsRowsPayload = Pick<PodsSlice, "items" | "namespaces" | "loading" | "error" | "coverage" | "dependencies" | "rowsState" | "counts"> & { rowsVer?: RowsVer | null };
 
 export type EventRowDTO = { type: "Normal" | "Warning"; reason: string; message: string; count: number; namespace: string; kind: string; name: string; lastSeenUnix: number; firstSeenUnix: number };
 export type EventsResultDTO = { namespaces: string[]; events: EventRowDTO[]; truncated?: boolean; error?: string };
@@ -781,7 +796,10 @@ export type MetricsDTO = { available: boolean; mode: string; source: string; war
 export type MetricsSlice = { cluster: string | null; dto: MetricsDTO | null; loading: boolean };
 
 // Nodes types
-export type NodeSummaryDTO = { name: string; uid?: string; gvr?: string; generation?: number; createdUnix?: number; roles: string[]; ready: boolean; unschedulable: boolean; problems: string[]; version: string; os: string; arch: string; taintCount: number; cpuCapacity: number; cpuAllocatable: number; memCapacity: number; memAllocatable: number; podCapacity: number; ageSeconds: number; pool?: string; zone?: string; health?: HealthLike };
+export type NodeSummaryDTO = { name: string; uid?: string; gvr?: string; generation?: number; createdUnix?: number; roles: string[]; ready: boolean; unschedulable: boolean; problems: string[]; version: string; os: string; arch: string; taintCount: number; cpuCapacity: number; cpuAllocatable: number; memCapacity: number; memAllocatable: number; podCapacity: number; ageSeconds?: number; pool?: string; zone?: string; health?: HealthLike };
+// A node on the rows transport: time-stable, so never a relative age (the
+// lens ticks it from createdUnix; addendum §3.1).
+export type NodeRowDTO = Omit<NodeSummaryDTO, "ageSeconds">;
 export type NodesResultDTO = { nodes: NodeSummaryDTO[]; error?: string };
 export type NodeTaintDTO = { key: string; value: string; effect: string };
 export type PodOnNodeDTO = { namespace: string; name: string; phase: string };
@@ -792,7 +810,7 @@ export type NodeDetailDTO = { summary: NodeSummaryDTO; labels: Record<string, st
 export type NodeRef = { name: string; uid: string };
 export type NodesSlice = {
   cluster: string | null;
-  items: NodeSummaryDTO[];
+  items: NodeRowDTO[];
   loading: boolean; // the rows part has not answered yet
   error?: string | null; // the Node kind's read failure (stale: items are the last good read)
   // From the health Observer's shared rows (1c slice 3 §5.7).

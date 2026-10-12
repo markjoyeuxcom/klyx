@@ -5,6 +5,7 @@ import { bestSub, taskCounts, useHealth, type HealthPart, type SelectedCounts } 
 
 export type LensRows<T> = {
   rows: T[] | null; // null until the first rows arrive (or after an incarnation reset)
+  ver: { incarnation: number; ver: number } | null; // the rows' (incarnation, Ver)
   facts: Record<string, unknown> | null; // the facts the rows' evaluation used (§2a)
   part: HealthPart | null; // the rows' own part (coverage, kinds), from their capture
   evaluatedAt: string | null;
@@ -29,6 +30,8 @@ export function useRows<T>(cluster: string | null, task: string, part: string): 
     const c = cluster ? taskCounts(st, cluster, task, part) : null;
     return {
       rows: (best?.rows as T[] | null) ?? null,
+      inc: best?.incarnation ?? null,
+      ver: best?.ver ?? -1,
       facts: best?.facts ?? null,
       part: best?.partData ?? null,
       evaluatedAt: best?.evaluatedAt ?? null,
@@ -41,7 +44,7 @@ export function useRows<T>(cluster: string | null, task: string, part: string): 
     };
   }));
   return {
-    rows: v.rows, facts: v.facts, part: v.part, evaluatedAt: v.evaluatedAt, error: v.error, refreshError: v.refreshError,
+    rows: v.rows, ver: v.inc === null ? null : { incarnation: v.inc, ver: v.ver }, facts: v.facts, part: v.part, evaluatedAt: v.evaluatedAt, error: v.error, refreshError: v.refreshError,
     counts: { part: v.countsPart, source: v.countsSource, updating: v.updating, refreshing: v.refreshing },
   };
 }
