@@ -294,3 +294,36 @@ describe("the Routes part view", () => {
     expect(screen.queryByTestId("route-row-panel")).toBeNull();
   });
 });
+
+// Health 1c slice 4 §5.4: a summary Top link reveals its object - the
+// outer view switches, then that view's list selects it past its filters.
+describe("a Top link reveals its object", () => {
+  const selectedRow = () => document.querySelector('[data-selected="true"]')?.textContent ?? "";
+  const reveal = (part: string, ref: { gvr: string; namespace?: string; name: string; parent?: string }) =>
+    act(() => { useFleet.getState().requestNavIntent({ kind: "reveal", cluster: "x", task: "gateway", part, ref }); });
+  const routeRow = (name: string): GatewayRouteRowDTO => ({ uid: `uid-${name}`, namespace: "apps", name, parent: "infra/eg",
+    rule: { included: true, role: "fault", label: "no ready endpoints" }, attachments: [{ parent: "infra/eg", rule: { included: true, role: "fault", label: "no ready endpoints" } }] });
+
+  it("a route opens the Routes view and is selected; a Gateway is selected in the Gateways view", () => {
+    open(); applyRows("g", rowsDTO(1, 1, [gw("eg"), brokenGw("bad")]));
+    if (!useHealth.getState().subs.r) addSub("r", "x", "gateway", "routes");
+    openStarted("r", "tok-r"); openSucceeded("r", "tok-r", 1);
+    applyRows("r", { cluster: "x", incarnation: 1, task: "gateway", evaluatedAt: "x", rows: [routeRow("web"), routeRow("api")],
+      part: { ...part(1, [kind("httproutes"), ...["gateways", "services", "endpointslices"].map((k) => kind(k, { role: "dependency" }))], { total: 2, included: 2 }), id: "routes" } });
+    render(<GatewayApiView cluster="x" />);
+    fireEvent.change(screen.getByRole("searchbox"), { target: { value: "nothing-matches" } }); // the Gateways list's filter
+    reveal("routes", { gvr: "gateway.networking.k8s.io/v1/httproutes", namespace: "apps", name: "api", parent: "gateway infra/eg" });
+    expect(screen.getByRole("button", { name: /^Routes/ }).getAttribute("aria-pressed")).toBe("true");
+    expect(selectedRow()).toContain("api");
+    expect(useFleet.getState().navIntent).toBeNull();
+    fireEvent.change(screen.getByRole("searchbox"), { target: { value: "nothing-matches" } }); // the Routes list's filter
+    reveal("routes", { gvr: "gateway.networking.k8s.io/v1/httproutes", namespace: "apps", name: "web", parent: "gateway infra/eg" });
+    expect(selectedRow()).toContain("web");
+    fireEvent.click(screen.getByRole("button", { name: /^Gateways/ }));
+    fireEvent.change(screen.getByRole("searchbox"), { target: { value: "nothing-matches" } }); // the Gateways list's own filter
+    reveal("gateways", { gvr: "gateway.networking.k8s.io/v1/gateways", namespace: "infra", name: "bad" });
+    expect(screen.getByRole("button", { name: /^Gateways/ }).getAttribute("aria-pressed")).toBe("true");
+    expect(selectedRow()).toContain("bad");
+    expect(useFleet.getState().navIntent).toBeNull();
+  });
+});

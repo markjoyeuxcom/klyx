@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { IconServerBolt } from "@tabler/icons-react";
+import { useNavIntent } from "../chrome/useNavIntent";
 import { useFleet } from "../store/fleet";
 import type { KarpenterClaimDTO, KarpenterEventDTO, KarpenterPoolDTO, KarpenterSnapshotDTO, RuleDTO } from "../store/fleet";
 import { getKarpenterState } from "../bridge/karpenter";
@@ -186,6 +187,18 @@ export function KarpenterView({ cluster }: { cluster: string }) {
   const show = (id: string) => fitted.visible.has(id);
   const gridStyle = { gridTemplateColumns: fitted.template };
   const switchView = (v: View) => { setView(v); setSelKey(null); setCursorKey(null); };
+  // A summary Top link (health 1c slice 4 §5.4): open the part's view and
+  // select the object - selection only, never an action.
+  useNavIntent(cluster, ["reveal"], (intent) => {
+    if (intent.kind !== "reveal" || intent.task !== "karpenter") return "wait";
+    const pool = intent.part === "nodepools";
+    const found = pool ? pools.some((p) => p.name === intent.ref.name) : claims.some((c) => c.name === intent.ref.name);
+    if (!found) return (pool ? poolsEv : claimsEv) === "complete" ? "missing" : "wait";
+    setView(pool ? "pools" : "claims");
+    setCursorKey(intent.ref.name);
+    setSelKey(intent.ref.name);
+    return "consumed";
+  }, [claims, pools, claimsEv, poolsEv]);
 
   const eventsFailed = !!ok?.eventsError;
   const viewEv = view === "claims" ? claimsEv : poolsEv;

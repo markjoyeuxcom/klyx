@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { IconRoute } from "@tabler/icons-react";
+import { useNavIntent } from "../chrome/useNavIntent";
 import { useFleet } from "../store/fleet";
 import type { GatewayRouteRowDTO } from "../store/fleet";
 import type { GatewayRouteRows } from "../health/useGatewayRouteRows";
@@ -49,7 +50,7 @@ function depQualifier(deps: { kind: string; coverage?: string }[]): { word: "" |
   return stale.length ? { word: "last observed", kinds: stale } : { word: "", kinds: [] };
 }
 
-export function RouteList({ rows, toggle }: { rows: GatewayRouteRows; toggle: React.ReactNode }) {
+export function RouteList({ cluster, rows, toggle }: { cluster: string; rows: GatewayRouteRows; toggle: React.ReactNode }) {
   const openGateway = useFleet((s) => s.openGateway);
   const selectRoute = useFleet((s) => s.selectRoute);
   const [mode, setMode] = useState<Mode>("all");
@@ -90,6 +91,18 @@ export function RouteList({ rows, toggle }: { rows: GatewayRouteRows; toggle: Re
     if (mode === "attention" && !r.rule.included) return false;
     return !q || [r.namespace, r.name, r.parent, r.rule.label].some((v) => v.toLowerCase().includes(q));
   }), [ordered, mode, q]);
+
+  // A summary Top link for an attached route (its worst parent named on
+  // the ref): select it past the filters.
+  useNavIntent(cluster, ["reveal"], (intent) => {
+    if (intent.kind !== "reveal" || intent.task !== "gateway" || intent.part !== "routes") return "wait";
+    const key = `${intent.ref.namespace ?? ""}/${intent.ref.name}`;
+    if (!routes.some((r) => keyOf(r) === key)) return ev === "complete" && parentsEv === "complete" ? "missing" : "wait";
+    setMode("all"); setQuery("");
+    setCursorKey(key);
+    setSelKey(key);
+    return "consumed";
+  }, [routes, ev, parentsEv]);
 
   // A selection keeps its last row. Missing from a membership read that is
   // complete (routes AND parent Gateways current) it is no longer attached -

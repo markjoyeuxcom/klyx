@@ -256,6 +256,22 @@ export function ArgoView({ cluster, mode = "applications" }: { cluster: string; 
     return "consumed";
   }, [apps, argo.loading, visibleApps, mode]);
 
+  // A summary Top link (health 1c slice 4 §5.4): select the Application or
+  // ApplicationSet past the filters - selection only, never an action. The
+  // router already opened the part's view.
+  useNavIntent(cluster, ["reveal"], (intent) => {
+    if (intent.kind !== "reveal" || intent.task !== "argo") return "wait";
+    const sets = intent.part === "applicationsets";
+    const key = `${intent.ref.namespace ?? ""}/${intent.ref.name}`;
+    const found = sets ? appSets.some((a) => appSetKey(a) === key) : apps.some((a) => keyOf(a) === key);
+    if (!found) return (sets ? appSetsCov : appsCov) === "complete" ? "missing" : "wait";
+    autoSelect.current = "done";
+    clearFilters();
+    setCursorKey(key);
+    if (sets) setSetKey(key); else setAppKey(key);
+    return "consumed";
+  }, [apps, appSets, appsCov, appSetsCov]);
+
   // One-shot auto-select of the first broken Application from a fresh read.
   const autoSelect = useRef<"pending" | "done">("pending");
   const entryApps = useRef<ArgoAppDTO[] | null>(null);

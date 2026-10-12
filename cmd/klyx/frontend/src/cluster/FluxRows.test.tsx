@@ -331,3 +331,19 @@ describe("Flux rows, mounted end to end (slice 3 §5.3)", () => {
     });
   });
 });
+
+// Health 1c slice 4 §5.4: a summary Top link to a source opens the Sources
+// view and selects it past the filters.
+describe("a Top link reveals a source", () => {
+  it("opens Sources and selects the source by kind, namespace and name", () => {
+    seed([res("app")], [src("repo"), src("charts", { kind: "HelmRepository", ready: "False", reason: "IndexationFailed" })]);
+    setView("sources");
+    render(<GitOps cluster="x" />);
+    fireEvent.change(screen.getByRole("searchbox"), { target: { value: "nothing-matches" } });
+    setView("reconciliation");
+    act(() => { useFleet.getState().requestNavIntent({ kind: "reveal", cluster: "x", task: "flux", part: "sources", ref: { gvr: "source.toolkit.fluxcd.io/v1/helmrepositories", namespace: "flux-system", name: "charts" } }); });
+    expect(useFleet.getState().route).toMatchObject({ fluxView: "sources" });
+    expect(document.querySelector('[data-selected="true"]')?.textContent ?? "").toContain("charts");
+    expect(useFleet.getState().navIntent).toBeNull();
+  });
+});

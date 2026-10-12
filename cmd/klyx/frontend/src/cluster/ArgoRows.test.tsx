@@ -231,3 +231,24 @@ describe("Argo CD rows, mounted end to end (slice 3 §5.4)", () => {
     });
   });
 });
+
+// Health 1c slice 4 §5.4: a summary Top link reveals its object past the
+// filters (the router opened the part's view).
+describe("a Top link reveals its object", () => {
+  const selectedRow = () => document.querySelector('[data-selected="true"]')?.textContent ?? "";
+  const reveal = (part: string, name: string) =>
+    act(() => { useFleet.getState().requestNavIntent({ kind: "reveal", cluster: "x", task: "argo", part, ref: { gvr: `argoproj.io/v1alpha1/${part}`, namespace: "argocd", name } }); });
+
+  it("an Application and an ApplicationSet are selected in their views, past the search", () => {
+    seed([app("web"), brokenApp("api")], [appSet("set"), appSet("fleet", { healthy: false })]);
+    const { rerender } = render(<ArgoView cluster="x" />);
+    fireEvent.change(screen.getByRole("searchbox"), { target: { value: "nothing-matches" } });
+    reveal("applications", "web");
+    expect(selectedRow()).toContain("web");
+    expect(useFleet.getState().navIntent).toBeNull();
+    rerender(<ArgoView cluster="x" mode="applicationsets" />);
+    reveal("applicationsets", "fleet");
+    expect(selectedRow()).toContain("fleet");
+    expect(useFleet.getState().navIntent).toBeNull();
+  });
+});

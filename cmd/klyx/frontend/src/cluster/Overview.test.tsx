@@ -1,9 +1,10 @@
-import type { VerdictObservation } from "../health/verdict";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, fireEvent, waitFor, screen } from "@testing-library/react";
 import { Overview } from "./Overview";
 import { useFleet } from "../store/fleet";
-import type { AttentionCounts, ClusterDTO, MetricsDTO } from "../store/fleet";
+import type { ClusterDTO, MetricsDTO } from "../store/fleet";
+import { applySummary, resetHealthStore, type HealthRef } from "../store/health";
+import { core, dep, evidence, kind, native, replace, summary, task, verdict } from "../test/healthFixtures";
 
 // Default: sparklines unavailable so tests render without them.
 import type { SparklinesDTO } from "../bridge/metrics";
@@ -14,12 +15,14 @@ vi.mock("../bridge/metrics", () => ({
   getClusterMetrics: vi.fn(),
   getClusterSparklines: (cluster: string) => mockGetClusterSparklines(cluster),
 }));
-vi.mock("../bridge/attention", () => ({ fetchAttention: vi.fn().mockResolvedValue(undefined), attentionRepollMs: 60000 }));
+vi.mock("../bridge/healthRows", () => ({ startSummaries: vi.fn() }));
+vi.mock("../bridge/helm", () => ({ openHelmRelease: vi.fn(async () => {}) }));
 vi.mock("../bridge/fleetboard", () => ({ fetchFleetBoard: vi.fn().mockResolvedValue(undefined) }));
 vi.mock("../bridge/events", () => ({ fetchEventsSnapshot: vi.fn() }));
 vi.mock("../bridge/crd", () => ({ listInstancePage: vi.fn().mockResolvedValue({ items: [], nextToken: "" }) }));
 import { fetchEventsSnapshot } from "../bridge/events";
-import { fetchAttention } from "../bridge/attention";
+import { fetchFleetBoard } from "../bridge/fleetboard";
+import { getClusterMetrics } from "../bridge/metrics";
 
 const dto: ClusterDTO = {
   name: "homelab-nelli", state: "Synced", reason: "", nodesReady: 1, nodesTotal: 1, pods: 58,
@@ -27,35 +30,26 @@ const dto: ClusterDTO = {
   env: "homelab", region: "", provider: "k3s", group: "", ageSeconds: 3,
 };
 const blue: ClusterDTO = { ...dto, name: "homelab-blue" };
+const NELLI = "homelab-nelli";
 
 function setMetrics(d: MetricsDTO | null) {
   useFleet.setState({ metrics: { cluster: "homelab-blue", dto: d, loading: false } });
 }
 
-function obs(fault = 0, total = 5, over: Partial<VerdictObservation> = {}): VerdictObservation {
-  return { coverage: "complete", counts: { total, fault, degraded: 0, unknown: 0, progressing: 0, paused: 0, ok: total - fault, attention: fault }, ...over };
-}
-
-function seedAttention(cluster: string, over: Partial<AttentionCounts> = {}) {
-  useFleet.setState({
-    attention: {
-      cluster, loading: false, at: Date.now(),
-      counts: { workloads: obs(), pods: obs(), events: 0, nodes: obs(), helm: "absent", flux: "absent", argo: "absent", namespaces: null, ...over },
-    },
-  });
-}
-
-const area = (label: string) => screen.getByRole("button", { name: new RegExp(`^${label}`) });
+// the cluster's summary (health 1c slice 4): core tasks plus extras
+const seed = (tasks = core(), over: Parameters<typeof summary>[1] = {}, cluster = NELLI) => applySummary(summary(tasks, over, cluster));
+const ref = (gvr: string, name: string, namespace?: string, label = ""): HealthRef => ({ cluster: NELLI, gvr, namespace, name, role: "fault", label });
+const area = (id: string) => screen.getByTestId(`ov-area-${id}`);
 
 beforeEach(() => {
   vi.mocked(fetchEventsSnapshot).mockResolvedValue({ namespaces: [], events: [] });
-  useFleet.setState({ metrics: { cluster: null, dto: null, loading: false }, fleetBoard: {} });
-  useFleet.getState().clearAttention();
+  useFleet.setState({ metrics: { cluster: null, dto: null, loading: false }, fleetBoard: {}, navIntent: null, clusters: [dto] });
+  resetHealthStore();
 });
 
 describe("Overview on the workspace template (redesign step 7e)", () => {
   it("header carries state, version and tags; the mast already names the cluster", () => {
-    seedAttention("homelab-nelli");
+    seed();
     render(<Overview c={dto} />);
     expect(screen.getByRole("heading", { name: "Overview" })).toBeTruthy();
     expect(screen.getByText("Connected")).toBeTruthy();
@@ -71,67 +65,97 @@ describe("Overview on the workspace template (redesign step 7e)", () => {
     expect(screen.getByText("▲ Failed")).toBeTruthy();
   });
 
-  it("Refresh re-reads the shared summary", () => {
-    seedAttention("homelab-nelli");
+  it("Refresh re-reads what is still fetched; the attention is pushed", () => {
+    seed();
     render(<Overview c={dto} />);
+    vi.mocked(fetchFleetBoard).mockClear();
     fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
-    expect(fetchAttention).toHaveBeenCalledWith("homelab-nelli");
+    expect(fetchFleetBoard).toHaveBeenCalledWith([NELLI]);
+    expect(getClusterMetrics).toHaveBeenCalledWith(NELLI, true);
   });
 });
 
-describe("Overview attention reads the shared summary", () => {
-  it("while the first read runs it says so - no zeros", () => {
-    useFleet.setState({ attention: { cluster: "homelab-nelli", loading: true, at: null, counts: useFleet.getState().attention.counts } });
+describe("Overview attention reads the cluster's summary (health 1c slice 4)", () => {
+  it("before anything answers it says so - no zeros", () => {
     render(<Overview c={dto} />);
     expect(screen.getByText("Reading homelab-nelli…")).toBeTruthy();
     expect(screen.queryByText(/none need attention/)).toBeNull();
   });
 
-  it("one row per area: faults shaped and toned, absent tools omitted, nothing green", () => {
-    seedAttention("homelab-nelli", { workloads: obs(3), helm: 1, flux: 2, argo: "absent", events: 9 });
-    const { container } = render(<Overview c={dto} />);
-    expect(area("Workloads").textContent).toContain("▲ 3 need attention");
-    expect(area("Helm releases").textContent).toContain("▲ 1 failed");
-    expect(area("Flux").textContent).toContain("▲ 2 not ready");
-    expect(area("Events").textContent).toContain("9 warning events");
-    expect(screen.queryByRole("button", { name: /^Argo CD/ })).toBeNull();
+  it("one row per area with its lines: faults shaped and toned, absent tools omitted, nothing green", () => {
+    seed([...replace(replace(replace(core(), task("workloads", [verdict("workloads", { fault: 3, ok: 2 }, [kind("deployments")])])),
+      task("helm", [native("releases", { fault: 1, ok: 1 }, 1, "failed or pending", [kind("helm")])])),
+      task("events", [evidence(9, [kind("events")])])),
+      task("flux", [native("reconciliations", { fault: 2 }, 2, "not ready", [kind("kustomizations")]), native("sources", { ok: 1 }, 0, "not ready", [kind("gitrepositories")])])]);
+    const { container } = render(<Overview c={{ ...dto, fluxPresent: true }} />);
+    expect(area("workloads").textContent).toContain("▲ 3 need attention");
+    expect(area("helm").textContent).toContain("▲ 1 failed or pending");
+    expect(area("flux").textContent).toContain("Reconciliations: ▲ 2 not ready");
+    expect(area("flux").textContent).toContain("Sources: none not ready");
+    expect(area("events").textContent).toContain("9 warning events");
+    expect(screen.queryByTestId("ov-area-argo")).toBeNull();
     expect(container.innerHTML).not.toMatch(/color-text-success/);
   });
 
-  it("unreadable and capped areas are named, and the quiet line is scoped to what was read", () => {
-    seedAttention("homelab-nelli", { pods: obs(0, 5, { coverage: "partial" }), nodes: "unreadable" });
+  it("unreadable and qualified areas are named, and the quiet line is scoped to what was read", () => {
+    seed(replace(replace(core(), task("pods", [verdict("pods", { unknown: 1, ok: 4 }, [kind("pods")])])),
+      task("nodes", [verdict("nodes", {}, [kind("nodes", { coverage: "unreadable", class: "forbidden" })], { coverage: "unreadable" })])));
     render(<Overview c={dto} />);
-    expect(area("Pods").textContent).toContain("unverified (capped)");
-    expect(area("Nodes").textContent).toContain("could not be read");
-    expect(screen.getByText("No attention found in the 2 summarized areas read; 2 could not be established.")).toBeTruthy();
+    expect(area("pods").textContent).toContain("1 unverified");
+    expect(area("nodes").textContent).toContain("could not be read (forbidden)");
+    expect(screen.getByText("No attention in the 4 areas read; 2 with gaps.")).toBeTruthy();
   });
 
   it("each area opens its lens with that lens's attention filter", () => {
-    seedAttention("homelab-nelli", { workloads: obs(1) });
-    useFleet.getState().openCluster("homelab-nelli");
+    seed(replace(core(), task("workloads", [verdict("workloads", { fault: 1 }, [kind("deployments")])])));
+    useFleet.getState().openCluster(NELLI);
     render(<Overview c={dto} />);
-    fireEvent.click(area("Workloads"));
+    fireEvent.click(screen.getByRole("button", { name: "Workloads" }));
     expect(useFleet.getState().route).toMatchObject({ section: "workloads" });
     expect(useFleet.getState().workloads.needsAttention).toBe(true);
-    fireEvent.click(area("Events"));
+    fireEvent.click(screen.getByRole("button", { name: "Events" }));
     expect(useFleet.getState().route).toMatchObject({ section: "events" });
     expect(useFleet.getState().events.warningsOnly).toBe(true);
   });
 
-  it("namespaces come from the summary; unknown is a dash, never zero", () => {
-    seedAttention("homelab-nelli", { namespaces: 7 });
+  it("a lit line's Top refs enter the emitting part's view through selection intents", () => {
+    useFleet.getState().openCluster(NELLI);
+    seed([...replace(core(), task("pods", [verdict("pods", { fault: 4 }, [kind("pods")], { top: ["api-1", "api-2", "api-3", "api-4"].map((n) => ref("v1/pods", n, "shop", "CrashLoopBackOff")) })])),
+      task("certs", [native("certificates", { ok: 2 }, 0, "not ready", [kind("certificates")]),
+        native("issuers", { fault: 1 }, 1, "not ready", [kind("issuers"), kind("clusterissuers")], { top: [ref("cert-manager.io/v1/clusterissuers", "letsencrypt")] })])]);
+    render(<Overview c={{ ...dto, certManagerPresent: true }} />);
+    expect(screen.getAllByTestId("ov-top").filter((b) => b.textContent?.startsWith("shop/"))).toHaveLength(3); // up to three per line
+    fireEvent.click(screen.getByRole("button", { name: /^shop\/api-1/ }));
+    expect(useFleet.getState().route).toMatchObject({ section: "pods" });
+    expect(useFleet.getState().navIntent).toEqual({ kind: "select-pod", cluster: NELLI, namespace: "shop", name: "api-1" });
+    fireEvent.click(screen.getByRole("button", { name: /^letsencrypt/ }));
+    expect(useFleet.getState().route).toMatchObject({ section: "certs" });
+    expect(useFleet.getState().navIntent).toMatchObject({ kind: "reveal", task: "certs", part: "issuers", ref: { gvr: "cert-manager.io/v1/clusterissuers", name: "letsencrypt" } });
+  });
+
+  it("namespaces come from the current summary; unknown is a dash, never zero", () => {
+    seed(core(), { namespaces: 7 });
     const { unmount } = render(<Overview c={dto} />);
     expect(screen.getByText("7")).toBeTruthy();
     unmount();
-    seedAttention("homelab-nelli", { namespaces: null });
+    resetHealthStore();
+    seed(core(), { namespaces: undefined });
     render(<Overview c={dto} />);
     expect(screen.getByText("namespaces").nextElementSibling?.textContent).toBe("—");
   });
 
   it("another cluster's summary is never shown", () => {
-    seedAttention("homelab-blue", { workloads: obs(4) });
+    seed(replace(core(), task("workloads", [verdict("workloads", { fault: 4 }, [kind("deployments")])])), {}, "homelab-blue");
     render(<Overview c={dto} />);
     expect(screen.getByText("Reading homelab-nelli…")).toBeTruthy();
+  });
+
+  it("after a Final nothing is current", () => {
+    seed();
+    seed([], { seq: 2, final: true, evaluatedAt: "2026-10-12T12:05:00Z" });
+    render(<Overview c={dto} />);
+    expect(screen.getByTestId("ov-ended").textContent).toMatch(/^Observation ended at /);
+    expect(screen.queryByTestId("ov-area-workloads")).toBeNull();
   });
 });
 
@@ -195,20 +219,27 @@ describe("Overview metrics", () => {
   });
 });
 
-describe("Overview names what the summary does not cover (Codex 7e review)", () => {
+describe("Overview names what the summary does not cover", () => {
   it("installed domains outside the summary are rows, and the quiet line says so", () => {
-    seedAttention("homelab-nelli");
-    render(<Overview c={{ ...dto, certManagerPresent: true, externalSecretsPresent: true, gatewayAPIVersion: "v1.2", karpenterPresent: true }} />);
+    const c = { ...dto, certManagerPresent: true, externalSecretsPresent: true, gatewayAPIVersion: "v1.2", karpenterPresent: true };
+    useFleet.setState({ clusters: [c] });
+    seed();
+    render(<Overview c={c} />);
     for (const label of ["Certificates", "External secrets", "Gateways", "Karpenter"]) {
       expect(screen.getByRole("button", { name: new RegExp(`^${label}`) }).textContent).toContain("not covered by the summary");
     }
-    expect(screen.getByText(/4 installed views are not covered by the summary\./)).toBeTruthy();
+    expect(screen.getByText(/; 4 not covered by the summary\./)).toBeTruthy();
   });
 
-  it("a stale area says when its value was read and that the latest read failed", () => {
-    useFleet.setState({ attention: { cluster: "homelab-nelli", loading: false, at: Date.now(), stale: ["nodes"], areaAt: { nodes: new Date(2026, 9, 11, 9, 5).getTime() },
-      counts: { workloads: obs(), pods: obs(), events: 0, nodes: obs(1), helm: "absent", flux: "absent", argo: "absent" } } });
+  it("a stale area says when its value was last good", () => {
+    seed(replace(core(), task("nodes", [verdict("nodes", { fault: 1 }, [kind("nodes", { coverage: "stale", lastGoodAt: new Date(2026, 9, 11, 9, 5).toISOString() })], { coverage: "stale" })])));
     render(<Overview c={dto} />);
-    expect(screen.getByRole("button", { name: /^Nodes/ }).textContent).toContain("(last good 09:05, latest read failed)");
+    expect(area("nodes").textContent).toContain("Nodes last good 09:05");
+  });
+
+  it("a dependency gap is named beside a known fault", () => {
+    seed(replace(core(), task("pods", [verdict("pods", { fault: 2 }, [kind("pods"), dep("replicasets", { coverage: "unreadable" })])])));
+    render(<Overview c={dto} />);
+    expect(area("pods").textContent).toContain("▲ 2 need attention · ReplicaSets could not be read - a dependency");
   });
 });

@@ -188,3 +188,25 @@ describe("External Secrets rows, mounted end to end (slice 3 §5.2)", () => {
     expect(screen.queryByTestId("eso-breakdown")?.textContent ?? "").not.toMatch(/store problem/);
   });
 });
+
+// Health 1c slice 4 §5.4: a summary Top link reveals its object.
+describe("a Top link reveals its object", () => {
+  const selectedRow = () => document.querySelector('[data-selected="true"]')?.textContent ?? "";
+  const reveal = (part: string, ref: { gvr: string; namespace?: string; name: string }) =>
+    act(() => { useFleet.getState().requestNavIntent({ kind: "reveal", cluster: "x", task: "eso", part, ref }); });
+
+  it("a store opens the stores view and is selected past the filters; an ExternalSecret is selected in its view", () => {
+    open();
+    applyRows("s", rowsDTO(1, "externalsecrets", 1, [secret("db"), secret("api", { state: "Failed", reason: "SecretSyncedError" })], SECRET_KINDS()), 0);
+    applyRows("t", rowsDTO(1, "stores", 1, [store("vault"), store("aws", { state: "Failed" })], STORE_KINDS()), 0);
+    render(<ExternalSecretsView cluster="x" />);
+    fireEvent.change(screen.getByRole("searchbox"), { target: { value: "nothing-matches" } });
+    reveal("stores", { gvr: "external-secrets.io/v1/clustersecretstores", name: "aws" });
+    expect(screen.getByRole("button", { name: /^Stores/ }).getAttribute("aria-pressed")).toBe("true");
+    expect(selectedRow()).toContain("aws");
+    expect(useFleet.getState().navIntent).toBeNull();
+    reveal("externalsecrets", { gvr: "external-secrets.io/v1/externalsecrets", namespace: "payments", name: "db" });
+    expect(screen.getByRole("button", { name: /^ExternalSecrets/ }).getAttribute("aria-pressed")).toBe("true");
+    expect(useFleet.getState().externalsecrets.selectedKey).toBe("payments/db");
+  });
+});

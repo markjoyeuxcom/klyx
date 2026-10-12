@@ -973,7 +973,12 @@ export type NavIntent =
   | { kind: "select-workload"; cluster: string; workloadKind: string; namespace: string; name: string }
   | { kind: "select-node"; cluster: string; node: string }
   | { kind: "select-flux"; cluster: string; fluxKind: string; namespace: string; name: string }
-  | { kind: "access-check"; cluster: string; namespace: string; name: string };
+  | { kind: "access-check"; cluster: string; namespace: string; name: string }
+  // reveal: open a part's view and select its object (health 1c slice 4
+  // §5.4) - selection only, never an action
+  | { kind: "reveal"; cluster: string; task: string; part: string; ref: RevealRef };
+// RevealRef names one object a summary part points at (its Top ref).
+export type RevealRef = { gvr: string; namespace?: string; name: string; uid?: string; parent?: string };
 
 type FleetState = {
   clusters: ClusterDTO[];

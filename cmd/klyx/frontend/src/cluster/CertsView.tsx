@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useNavIntent } from "../chrome/useNavIntent";
+import { kindOfRef } from "../nav/reveal";
 import { useFleet } from "../store/fleet";
 import type { CertificateDTO, IssuerDTO, ChainNodeDTO, CertChainDTO, RuleDTO } from "../store/fleet";
 import { getCertificateChain } from "../bridge/certmanager";
@@ -284,6 +286,21 @@ export function CertsView({ cluster }: { cluster: string }) {
     const c = visibleCerts.find(included);
     if (c) { setCursorKey(keyOf(c)); selectCert(keyOf(c)); }
   }, [freshRead, visibleCerts, view, selectCert]);
+
+  // A summary Top link (health 1c slice 4 §5.4): open the part's view and
+  // select the object past the filters - selection only, never an action.
+  useNavIntent(cluster, ["reveal"], (intent) => {
+    if (intent.kind !== "reveal" || intent.task !== "certs") return "wait";
+    const issuer = intent.part === "issuers";
+    const key = issuer ? `${kindOfRef(intent.ref)}/${intent.ref.namespace ?? ""}/${intent.ref.name}` : `${intent.ref.namespace ?? ""}/${intent.ref.name}`;
+    const found = issuer ? issuers.some((i) => issuerKey(i) === key) : certs.some((c) => keyOf(c) === key);
+    if (!found) return (issuer ? issuersEv : certsEv) === "complete" ? "missing" : "wait";
+    autoSelect.current = "done";
+    setView(issuer ? "issuers" : "certificates"); setStatus("all"); setQuery(""); setNamespace("");
+    setCursorKey(key);
+    if (issuer) setIssuerSel(key); else selectCert(key);
+    return "consumed";
+  }, [certs, issuers, certsEv, issuersEv]);
 
   // Keyboard: j/k/Enter/Esc in both views.
   const nav: { key: string; open: () => void }[] = view === "issuers"

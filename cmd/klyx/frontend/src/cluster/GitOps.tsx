@@ -11,6 +11,7 @@ import { ConfirmDialog } from "../chrome/ConfirmDialog";
 import { MetaTile, OperationDialog, OptionTile } from "../chrome/OperationDialog";
 import { useListKeys } from "../chrome/useListKeys";
 import { useNavIntent } from "../chrome/useNavIntent";
+import { kindOfRef } from "../nav/reveal";
 import { CopyButton } from "../chrome/CopyButton";
 import { EmptyState } from "../chrome/EmptyState";
 import { SkeletonRows } from "../chrome/SkeletonRows";
@@ -242,6 +243,20 @@ export function GitOps({ cluster }: { cluster: string }) {
     else if (intent.kind === "suspend-flux") setPinned({ kind: intent.suspend ? "suspend" : "resume", r });
     return "consumed";
   }, [rows, gitops.loading, kindFilter, status, query]);
+
+  // A summary Top link to a source (health 1c slice 4 §5.4): select it in
+  // the Sources view past the filters - selection only.
+  useNavIntent(cluster, ["reveal"], (intent) => {
+    if (intent.kind !== "reveal" || intent.task !== "flux" || intent.part !== "sources") return "wait";
+    const kind = kindOfRef(intent.ref);
+    const key = `${kind}/${intent.ref.namespace ?? ""}/${intent.ref.name}`;
+    if (!allSources.some((x) => keyOf(x) === key)) return evidenceOf(kind) === "complete" ? "missing" : "wait";
+    setView("sources");
+    setStatus("all"); setSourceKind(""); setQuery("");
+    setCursorKey(key);
+    setSourceKey(key);
+    return "consumed";
+  }, [allSources, evidenceOf]);
 
   const orderedRows = useMemo(
     () => [...rows].sort((a, b) => rank(a) - rank(b) || a.namespace.localeCompare(b.namespace) || a.name.localeCompare(b.name)),

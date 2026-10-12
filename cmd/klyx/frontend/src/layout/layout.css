@@ -253,8 +253,15 @@
 .ov-area { display: grid; grid-template-columns: 104px minmax(0, 1fr); gap: 8px; align-items: baseline; min-height: 28px; padding: 4px 8px; border: 0; border-radius: 4px;
   background: transparent; cursor: pointer; text-align: left; font: 400 12px/16px var(--font-sans); color: var(--color-text-secondary); }
 .ov-area:hover, .ov-area:focus-visible { background: var(--color-background-secondary); outline: none; }
+div.ov-area { cursor: default; } /* a container: its label and links are the controls */
 .ov-area-label { color: var(--color-text-primary); font-weight: 600; }
-.ov-area-text { min-width: 0; overflow-wrap: anywhere; }
+.ov-area-text { min-width: 0; overflow-wrap: anywhere; grid-column: 2; }
+/* an area's label is its lens link; its lines and Top links stack beside it */
+button.ov-area-label { grid-column: 1; grid-row: 1 / span 9; align-self: start; background: none; border: 0; padding: 0; text-align: left; font: inherit; font-weight: 600; cursor: pointer; }
+button.ov-area-label:hover, button.ov-area-label:focus-visible { text-decoration: underline; outline: none; }
+.ov-tops { display: inline-flex; flex-wrap: wrap; gap: 2px 8px; margin-left: 8px; }
+.ov-top { background: none; border: 0; padding: 0; font: inherit; font-size: 11px; color: var(--color-text-info); cursor: pointer; overflow-wrap: anywhere; text-align: left; }
+.ov-top:hover, .ov-top:focus-visible { text-decoration: underline; outline: none; }
 .ov-area[data-state="quiet"] .ov-area-text, .ov-area[data-state="evidence"] .ov-area-text { color: var(--color-text-secondary); }
 .mast-attention { flex: 0 10 auto; min-width: 5ch; overflow: hidden; text-overflow: ellipsis; height: 24px; padding: 0 8px; border: 0; border-radius: 4px; background: transparent; cursor: pointer; white-space: nowrap;
   font: 600 11px/16px var(--font-sans); }

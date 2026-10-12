@@ -1,5 +1,6 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { IconRoute } from "@tabler/icons-react";
+import { useNavIntent } from "../chrome/useNavIntent";
 import { useFleet } from "../store/fleet";
 import type { GatewayRefDTO } from "../store/fleet";
 import { useGatewayRows, type GatewayRows } from "../health/useGatewayRows";
@@ -43,6 +44,15 @@ function GatewayLists({ cluster }: { cluster: string }) {
   const routeRows = useGatewayRouteRows(cluster);
   const gwAttention = rows.partCounts?.included ?? rows.gateways.filter((g) => g.rule.included).length;
   const routeAttention = routeRows.partCounts?.included ?? routeRows.routes.filter((r) => r.rule.included).length;
+  // A summary Top link (health 1c slice 4 §5.4): this switches to the
+  // part's view and leaves the intent for that view's list to select.
+  useNavIntent(cluster, ["reveal"], (intent) => {
+    if (intent.kind === "reveal" && intent.task === "gateway") {
+      const target = intent.part === "routes" ? "routes" : "gateways";
+      if (view !== target) setView(target);
+    }
+    return "wait";
+  }, [view]);
   const toggle = (
     <div role="group" aria-label="Gateway API view" style={{ display: "inline-flex", gap: 4 }}>
       <button className="l-chip" aria-pressed={view === "gateways"} onClick={() => setView("gateways")}>Gateways {gwAttention > 0 && <span style={{ color: "var(--color-text-warning)" }}>{gwAttention}</span>}</button>
@@ -50,8 +60,8 @@ function GatewayLists({ cluster }: { cluster: string }) {
     </div>
   );
   return view === "routes"
-    ? <RouteList rows={routeRows} toggle={toggle} />
-    : <GatewayList rows={rows} toggle={toggle} />;
+    ? <RouteList cluster={cluster} rows={routeRows} toggle={toggle} />
+    : <GatewayList cluster={cluster} rows={rows} toggle={toggle} />;
 }
 
 type Mode = "all" | "attention" | "programmed";
@@ -71,7 +81,7 @@ function Lamp({ role }: { role: Role }) {
   return <span role="img" aria-label={role.label} style={{ display: "inline-flex", justifySelf: "center" }}><VerdictLamp health={role} size={8} /></span>;
 }
 
-function GatewayList({ rows, toggle }: { rows: GatewayRows; toggle: React.ReactNode }) {
+function GatewayList({ cluster, rows, toggle }: { cluster: string; rows: GatewayRows; toggle: React.ReactNode }) {
   // The Gateways are the Observer's shared rows (1c slice 3 §5.6) - live, not
   // a snapshot; the topology stays a fetch.
   const openGateway = useFleet((s) => s.openGateway);
@@ -113,6 +123,17 @@ function GatewayList({ rows, toggle }: { rows: GatewayRows; toggle: React.ReactN
     if (!q) return true;
     return [g.namespace, g.name, g.className, role.label, addressText(g.addresses), ...(g.listeners ?? []).map(listenerText)].some((v) => v.toLowerCase().includes(q));
   }), [ordered, mode, q]);
+
+  // A summary Top link for a Gateway: select it past the filters.
+  useNavIntent(cluster, ["reveal"], (intent) => {
+    if (intent.kind !== "reveal" || intent.task !== "gateway" || intent.part !== "gateways") return "wait";
+    const key = `${intent.ref.namespace ?? ""}/${intent.ref.name}`;
+    if (!gateways.some((g) => keyOf(g) === key)) return ev === "complete" ? "missing" : "wait";
+    setMode("all"); setQuery("");
+    setCursorKey(key);
+    setSelKey(key);
+    return "consumed";
+  }, [gateways, ev]);
 
   // A selection keeps its last row: removed only on a complete read,
   // otherwise unverified (slice 3 §5a).

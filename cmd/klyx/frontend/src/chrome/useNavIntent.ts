@@ -24,7 +24,7 @@ export function useNavIntent(
     if (outcome === "wait") return;
     useFleet.getState().clearNavIntent();
     if (outcome === "missing") {
-      const target = "node" in intent ? intent.node : `${intent.namespace}/${intent.name}`;
+      const target = "node" in intent ? intent.node : "ref" in intent ? [intent.ref.namespace, intent.ref.name].filter(Boolean).join("/") : `${intent.namespace}/${intent.name}`;
       useFleet.getState().setActionStatus({
         kind: "error",
         message: `${intent.kind.replace(/-/g, " ")}: ${target} is no longer present`,

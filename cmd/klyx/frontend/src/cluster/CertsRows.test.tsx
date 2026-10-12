@@ -266,3 +266,38 @@ describe("cert-manager rows, mounted end to end (Codex review of 9de9d73)", () =
     });
   });
 });
+
+// Health 1c slice 4 §5.4: a summary Top link reveals its object - the part's
+// view, past the filters, selected; selection only.
+describe("a Top link reveals its object", () => {
+  const selectedRow = () => document.querySelector('[data-selected="true"]')?.textContent ?? "";
+  const reveal = (part: string, ref: { gvr: string; namespace?: string; name: string }) =>
+    act(() => { useFleet.getState().requestNavIntent({ kind: "reveal", cluster: "x", task: "certs", part, ref }); });
+
+  it("an Issuer opens the issuers view and is selected; a Certificate is selected in its view", () => {
+    open();
+    applyRows("c", rowsDTO(1, "certificates", 1, [cert("web"), cert("api", { ready: "Failed", reason: "Boom" })], CERT_KINDS()), 0);
+    applyRows("i", rowsDTO(1, "issuers", 1, [issuer("le"), issuer("zerossl", { ready: "False" })], ISSUER_KINDS()), 0);
+    render(<CertsView cluster="x" />);
+    fireEvent.change(screen.getByRole("searchbox"), { target: { value: "nothing-matches" } });
+    reveal("issuers", { gvr: "cert-manager.io/v1/clusterissuers", name: "zerossl" });
+    expect(screen.getByRole("button", { name: /^Issuers/ }).getAttribute("aria-pressed")).toBe("true");
+    expect(selectedRow()).toContain("zerossl");
+    expect(useFleet.getState().navIntent).toBeNull();
+    reveal("certificates", { gvr: "cert-manager.io/v1/certificates", namespace: "payments", name: "web" });
+    expect(screen.getByRole("button", { name: /^Certificates/ }).getAttribute("aria-pressed")).toBe("true");
+    expect(useFleet.getState().certmanager.selectedKey).toBe("payments/web");
+    expect(useFleet.getState().navIntent).toBeNull();
+  });
+
+  it("an object gone from a complete read is reported, never a silent no-op; another task's reveal is left alone", () => {
+    open();
+    applyRows("c", rowsDTO(1, "certificates", 1, [cert("web")], CERT_KINDS()), 0);
+    applyRows("i", rowsDTO(1, "issuers", 1, [issuer("le")], ISSUER_KINDS()), 0);
+    render(<CertsView cluster="x" />);
+    act(() => { useFleet.getState().requestNavIntent({ kind: "reveal", cluster: "x", task: "eso", part: "stores", ref: { gvr: "external-secrets.io/v1/secretstores", name: "s" } }); });
+    expect(useFleet.getState().navIntent).toMatchObject({ task: "eso" });
+    reveal("issuers", { gvr: "cert-manager.io/v1/clusterissuers", name: "gone" });
+    expect(useFleet.getState().actionStatus).toMatchObject({ kind: "error", message: expect.stringMatching(/gone is no longer present/) });
+  });
+});

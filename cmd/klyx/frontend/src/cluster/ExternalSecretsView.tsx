@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useFleet } from "../store/fleet";
+import { useNavIntent } from "../chrome/useNavIntent";
+import { kindOfRef } from "../nav/reveal";
 import type { ExternalSecretDTO, ExternalSecretStoreDTO, RuleDTO } from "../store/fleet";
 import { useExternalSecretsRows } from "../health/useExternalSecretsRows";
 import { useNow } from "../chrome/Age";
@@ -233,6 +235,21 @@ export function ExternalSecretsView({ cluster }: { cluster: string }) {
     const e = visibleSecrets.find(included);
     if (e) { setCursorKey(keyOf(e)); selectSecret(keyOf(e)); }
   }, [freshRead, visibleSecrets, view, selectSecret]);
+
+  // A summary Top link (health 1c slice 4 §5.4): open the part's view and
+  // select the object past the filters - selection only, never an action.
+  useNavIntent(cluster, ["reveal"], (intent) => {
+    if (intent.kind !== "reveal" || intent.task !== "eso") return "wait";
+    const store = intent.part === "stores";
+    const key = store ? `${kindOfRef(intent.ref)}/${intent.ref.namespace ?? ""}/${intent.ref.name}` : `${intent.ref.namespace ?? ""}/${intent.ref.name}`;
+    const found = store ? stores.some((x) => storeKey(x) === key) : secrets.some((e) => keyOf(e) === key);
+    if (!found) return (store ? storesEv : secretsEv) === "complete" ? "missing" : "wait";
+    autoSelect.current = "done";
+    setView(store ? "stores" : "secrets"); setStatus("all"); setQuery(""); setNamespace("");
+    setCursorKey(key);
+    if (store) setStoreSel(key); else selectSecret(key);
+    return "consumed";
+  }, [secrets, stores, secretsEv, storesEv]);
 
   const nav: { key: string; open: () => void }[] = view === "stores"
     ? visibleStores.map((s) => ({ key: storeKey(s), open: () => setStoreSel(storeKey(s)) }))

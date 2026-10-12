@@ -4,7 +4,6 @@ import type { ClusterDTO, EventRowDTO, FleetBoardEntry, MetricsDTO, ResourceRef 
 import { getClusterMetrics, getClusterSparklines } from "../bridge/metrics";
 import type { SparklinesDTO } from "../bridge/metrics";
 import { fetchFleetBoard } from "../bridge/fleetboard";
-import { fetchAttention } from "../bridge/attention";
 import { Sparkline } from "../chrome/Sparkline";
 import { UpdatedAt } from "../chrome/Age";
 import { listInstancePage } from "../bridge/crd";
@@ -12,21 +11,27 @@ import { fetchEventsSnapshot } from "../bridge/events";
 import { CLUSTER_RISK_REFS, riskFor } from "./resourceRisk";
 import { ellipsis } from "../chrome/primitives";
 import { LensLayout } from "../layout/LensLayout";
-import { attentionAreas, uncoveredDomains, type Area, type Uncovered } from "../nav/attention";
 import { NAV_GROUPS, navigate } from "../nav/registry";
+import { useHealth } from "../store/health";
+import { lineText, mastReading, provenance, type Area, type ClusterAttention, type Line, type NotCovered } from "../nav/clusterAttention";
+import { useAttentionModel } from "../nav/useAttentionModel";
+import { reveal, selectsOnReveal } from "../nav/reveal";
 
 type BoardEntry = FleetBoardEntry | undefined;
 
 // Overview on the workspace template (redesign step 7e). Its attention
-// section reads the shared cluster summary - the same reading the navigation
-// tree and the mast use - so the three never disagree and nothing here is a
-// second ledger with its own fetch. Nothing is green: a quiet area is a
-// neutral fact scoped to what was read.
+// section reads the cluster's attention model (health 1c slice 4) - the same
+// reading the navigation tree and the mast use - so the three never disagree
+// and nothing here is a second ledger with its own fetch. Nothing is green:
+// a quiet area is a neutral fact scoped to what was read.
 export function Overview({ c }: { c: ClusterDTO }) {
   const tags = [c.env, c.region, c.provider, c.group].filter(Boolean);
   const metrics = useFleet((s) => s.metrics);
   const loading = useFleet((s) => s.metrics.loading);
-  const attention = useFleet((s) => s.attention);
+  const model = useAttentionModel(c.name);
+  // the current incarnation's summary: the namespace count and its time
+  // (the store keeps only that one - a newer incarnation and a Final drop it)
+  const summary = useHealth((s) => s.summaries[c.name]);
   const board = useFleet((s) => s.fleetBoard[c.name]);
   // 30m cluster utilisation sparklines — fetched once per mount, local state.
   const [spark, setSpark] = useState<SparklinesDTO | null>(null);
@@ -46,11 +51,10 @@ export function Overview({ c }: { c: ClusterDTO }) {
   }, [c.name]);
 
   const m: MetricsDTO | null = metrics.cluster === c.name ? metrics.dto : null;
-  const areas = attentionAreas(attention, c.name);
-  const mine = attention.cluster === c.name;
   const stateTone = c.state === "Failed" ? "var(--color-text-danger)" : c.state === "Synced" ? "var(--color-text-secondary)" : "var(--color-text-warning)";
+  // the attention is pushed (the summary and lens rows); a refresh re-reads
+  // what is still fetched here
   const refresh = () => {
-    void fetchAttention(c.name);
     void fetchFleetBoard([c.name]);
     getClusterMetrics(c.name, true);
   };
@@ -68,8 +72,8 @@ export function Overview({ c }: { c: ClusterDTO }) {
       }
       headerEnd={
         <>
-          <UpdatedAt at={mine ? attention.at : null} />
-          <button className="l-btn" onClick={refresh} disabled={mine && attention.loading}>{mine && attention.loading ? "Reading…" : "Refresh"}</button>
+          <UpdatedAt at={summary ? Date.parse(summary.evaluatedAt) : null} />
+          <button className="l-btn" onClick={refresh}>Refresh</button>
         </>
       }
       notice={c.reason ? (
@@ -78,7 +82,7 @@ export function Overview({ c }: { c: ClusterDTO }) {
       state="ready"
       body={
         <div className="lens-canvas" data-testid="overview">
-          <AttentionSection cluster={c.name} areas={areas} uncovered={uncoveredDomains(c)} />
+          <AttentionSection cluster={c.name} m={model} />
           <div className="ov-columns">
             <section aria-label="Cluster facts" className="ov-section">
               <h3 className="t-section-label">Cluster</h3>
@@ -86,8 +90,8 @@ export function Overview({ c }: { c: ClusterDTO }) {
                 <span>connection</span><span style={{ color: stateTone }}>{freshnessText(c)}</span>
                 <span>nodes</span><span>{c.nodesReady}/{c.nodesTotal} ready</span>
                 <span>pods</span><span>{podsText(c)}</span>
-                <span>namespaces</span><span>{mine && attention.counts.namespaces != null ? `${attention.counts.namespaces}${(attention.stale ?? []).includes("pods") ? " (last good)" : ""}` : "—"}</span>
-                <span>flux</span><span>{fluxCapability(c, attention.counts.flux)}</span>
+                <span>namespaces</span><span>{summary?.namespaces != null ? summary.namespaces : "—"}</span>
+                <span>flux</span><span>{fluxFact(c, model)}</span>
                 {board?.argo && <><span>argo cd</span><span>{board.argo.broken > 0 ? `${board.argo.broken} of ${board.argo.total} need attention` : `${board.argo.total} applications`}</span></>}
                 <span>gateway</span><span>{gatewayCapability(c, board)}</span>
               </div>
@@ -126,60 +130,80 @@ function stateWord(c: ClusterDTO): string {
 
 // ---- attention ---------------------------------------------------------------------
 
-// Each area links to the lens it came from, with that lens's attention filter.
-function goArea(id: Area["id"]) {
+// Each area links to its task's lens, with that lens's attention filter
+// where it has one.
+function goArea(cluster: string, a: Area) {
   const nav = useFleet.getState();
-  switch (id) {
-    case "workloads": nav.setSection("workloads"); nav.setWorkloadsNeedsAttention(true); break;
-    case "pods": nav.setSection("pods"); nav.setPodsNeedsAttention(true); break;
-    case "events": nav.setSection("events"); nav.setWarningsOnly(true); break;
-    case "nodes": nav.setSection("nodes"); break;
-    case "helm": nav.setSection("helm"); break;
-    case "flux": nav.openFlux("reconciliation"); break;
-    case "argo": nav.openArgo("applications"); break;
+  switch (a.id) {
+    case "workloads": nav.setSection("workloads"); nav.setWorkloadsNeedsAttention(true); return;
+    case "pods": nav.setSection("pods"); nav.setPodsNeedsAttention(true); return;
+    case "events": nav.setSection("events"); nav.setWarningsOnly(true); return;
   }
+  goDestination(cluster, a.destinationId);
 }
 
-function goUncovered(u: Uncovered) {
-  const nav = useFleet.getState();
-  if (nav.route.name !== "cluster") return;
-  const d = NAV_GROUPS.flatMap((g) => g.destinations).find((x) => x.id === u.destinationId);
-  if (d) navigate(nav.route.cluster, d);
+function goDestination(cluster: string, destinationId: string) {
+  const d = NAV_GROUPS.flatMap((g) => g.destinations).find((x) => x.id === destinationId);
+  if (d) navigate(cluster, d);
 }
 
-function AttentionSection({ cluster, areas, uncovered }: { cluster: string; areas: Area[]; uncovered: Uncovered[] }) {
-  const lit = areas.filter((a) => a.state === "attention");
-  const gaps = areas.filter((a) => a.gap || a.state === "unreadable" || a.state === "unverified");
-  const loadingAll = areas.every((a) => a.state === "loading");
+// A Top ref's link (slice 4 §5.4): the object's name when its lens selects
+// it, else the part's view, said as such.
+function TopLink({ cluster, l, r }: { cluster: string; l: Line; r: Line["top"][number] }) {
+  const selects = selectsOnReveal(l.task, l.part);
+  const name = `${r.namespace ? `${r.namespace}/` : ""}${r.name}`;
+  return (
+    <button type="button" className="ov-top" data-testid="ov-top"
+      onClick={() => reveal(cluster, l.task, l.part, { gvr: r.gvr, namespace: r.namespace, name: r.name, uid: r.uid, parent: r.parent })}
+      title={`${selects ? `Open ${name}` : `Open ${l.label}`}${r.label ? ` - ${r.label}` : ""}${r.parent ? ` (via ${r.parent})` : ""}`}>
+      {selects ? name : `open ${l.label}`}{r.label ? <span className="t-secondary"> {r.label}</span> : null}
+    </button>
+  );
+}
+
+function AttentionSection({ cluster, m }: { cluster: string; m: ClusterAttention | null }) {
+  if (!m) return null;
+  const r = mastReading(m);
+  const clock = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
   return (
     <section aria-label="Attention" className="ov-section">
       <h3 className="t-section-label">Attention</h3>
-      {loadingAll ? <span className="t-secondary">Reading {cluster}…</span> : (
+      {m.ended ? (
+        <span className="t-secondary" data-testid="ov-ended">Observation ended at {clock(m.ended)} - nothing here is current.</span>
+      ) : r.state === "checking" ? <span className="t-secondary">Reading {cluster}…</span> : (
         <div className="ov-areas">
-          {areas.map((a) => (
-            <button key={a.id} className="ov-area" data-state={a.state} onClick={() => goArea(a.id)} title={`Open ${a.label}`}>
-              <span className="ov-area-label">{a.label}</span>
-              <span className="ov-area-text" style={{ color: a.state === "attention" ? (a.tone === "danger" ? "var(--color-text-danger)" : "var(--color-text-warning)") : a.state === "unreadable" || a.stale ? "var(--color-text-warning)" : undefined }}>
-                {a.state === "attention" && a.tone === "danger" ? "▲ " : ""}{a.text}
-              </span>
-            </button>
+          {m.areas.map((a) => (
+            <div key={a.id} className="ov-area" data-state={a.state} data-testid={`ov-area-${a.id}`}>
+              <button type="button" className="ov-area-label" onClick={() => goArea(cluster, a)} title={`Open ${a.label}`}>{a.label}</button>
+              {a.controller && (
+                <span className="ov-area-text" style={{ color: a.controller.state === "not ready" ? "var(--color-text-danger)" : "var(--color-text-warning)" }}>
+                  {a.controller.state === "not ready" ? "▲ controller not ready" : "controller health unknown"}{a.controller.reason ? ` - ${a.controller.reason}` : ""}
+                </span>
+              )}
+              {a.lines.map((l) => (
+                <span key={l.part} className="ov-area-text" title={provenance(a, l)}
+                  style={{ color: l.state === "attention" ? (l.tone === "danger" ? "var(--color-text-danger)" : "var(--color-text-warning)") : l.state === "unreadable" || l.gaps.length > 0 ? "var(--color-text-warning)" : undefined }}>
+                  {a.lines.length > 1 ? `${l.label}: ` : ""}{l.state === "attention" && l.tone === "danger" ? "▲ " : ""}{lineText(l)}
+                  {l.state === "attention" && l.top.length > 0 && (
+                    <span className="ov-tops">{l.top.slice(0, 3).map((t) => <TopLink key={`${t.gvr}/${t.namespace ?? ""}/${t.name}`} cluster={cluster} l={l} r={t} />)}</span>
+                  )}
+                </span>
+              ))}
+            </div>
           ))}
-          {/* Installed domains the summary does not read are named, so no
-              quiet line implies they were checked. */}
-          {uncovered.map((u) => (
-            <button key={u.id} className="ov-area" data-state="uncovered" onClick={() => goUncovered(u)} title={`Open ${u.label}`}>
+          {/* Expected parts the summary leaves out are named, so no quiet
+              line implies they were checked (fail-closed until slice 6). */}
+          {m.notCovered.map((u: NotCovered) => (
+            <button key={`${u.task}/${u.part ?? ""}`} className="ov-area" data-state="uncovered" onClick={() => goDestination(cluster, u.destinationId)} title={`Open ${u.label}`}>
               <span className="ov-area-label">{u.label}</span>
               <span className="ov-area-text">{u.capability === "present" ? "not covered by the summary - open to check" : "capability not yet known - not covered by the summary"}</span>
             </button>
           ))}
         </div>
       )}
-      {!loadingAll && lit.length === 0 && (
+      {!m.ended && r.state === "quiet" && (
         <span className="t-secondary">
-          {gaps.length > 0
-            ? `No attention found in the ${areas.length - gaps.length} summarized area${areas.length - gaps.length === 1 ? "" : "s"} read; ${gaps.length} could not be established.`
-            : `No attention found in the ${areas.length} summarized areas read.`}
-          {uncovered.length > 0 ? ` ${uncovered.length} installed view${uncovered.length === 1 ? " is" : "s are"} not covered by the summary.` : ""}
+          No attention in the {r.read} area{r.read === 1 ? "" : "s"} read{r.gaps > 0 ? `; ${r.gaps} with gaps` : ""}{r.notCovered > 0 ? `; ${r.notCovered} not covered by the summary` : ""}.
         </span>
       )}
     </section>
@@ -385,10 +409,12 @@ function formatAge(seconds: number): string {
   return `${Math.floor(seconds / 3600)}h ago`;
 }
 
-function fluxCapability(c: ClusterDTO, flux: import("../store/fleet").LensCount): string {
-  if (flux === "unreadable") return c.fluxPresent ? "installed · summary could not be read" : "summary could not be read";
-  if (flux === "absent") return "not detected";
-  return flux > 0 ? `${flux} not ready` : "none not ready";
+// fluxFact: the Flux reconciliations line of the attention model.
+function fluxFact(c: ClusterDTO, m: ClusterAttention | null): string {
+  const l = m?.areas.find((a) => a.id === "flux")?.lines.find((x) => x.part === "reconciliations");
+  if (l) return lineText(l);
+  if (m?.notCovered.some((u) => u.task === "flux")) return "installed · not covered by the summary";
+  return c.fluxPresent ? "checking…" : "not detected";
 }
 
 function gatewayCapability(c: ClusterDTO, board: BoardEntry): string {

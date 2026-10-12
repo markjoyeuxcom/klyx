@@ -220,3 +220,22 @@ describe("Karpenter rows, mounted end to end (slice 3 §5.5)", () => {
     expect(inspector().queryByRole("button", { name: "Open node" })).toBeNull();
   });
 });
+
+// Health 1c slice 4 §5.4: a summary Top link reveals its object.
+describe("a Top link reveals its object", () => {
+  const selectedRow = () => document.querySelector('[data-selected="true"]')?.textContent ?? "";
+  const reveal = (part: string, name: string) =>
+    act(() => { useFleet.getState().requestNavIntent({ kind: "reveal", cluster: "x", task: "karpenter", part, ref: { gvr: `karpenter.sh/v1/${part}`, name } }); });
+
+  it("a NodePool opens the pools view and is selected; a NodeClaim the claims view", () => {
+    seed([claim("a"), badClaim("b")], [pool("default"), pool("gpu", { ready: "not-ready", reason: "NodeClassNotReady" })]);
+    render(<KarpenterView cluster="x" />);
+    reveal("nodepools", "gpu");
+    expect(screen.getByRole("button", { name: /^NodePools/ }).getAttribute("aria-pressed")).toBe("true");
+    expect(selectedRow()).toContain("gpu");
+    expect(useFleet.getState().navIntent).toBeNull();
+    reveal("nodeclaims", "b");
+    expect(screen.getByRole("button", { name: /^NodeClaims/ }).getAttribute("aria-pressed")).toBe("true");
+    expect(selectedRow()).toContain("b");
+  });
+});
