@@ -275,10 +275,13 @@ jobs:
             libgtk-4-dev \
             libwebkitgtk-6.0-dev
 
+      # The CLI runs on the runner, so it is built for the host: under the
+      # job's GOARCH=arm64, go install would cross-compile it into
+      # bin/linux_arm64/, off PATH ("wails3: command not found").
       - name: Install Wails CLI
         run: |
           echo "$(go env GOPATH)/bin" >> "${GITHUB_PATH}"
-          go install github.com/wailsapp/wails/v3/cmd/wails3@${WAILS_VERSION}
+          GOARCH="$(go env GOHOSTARCH)" go install github.com/wailsapp/wails/v3/cmd/wails3@${WAILS_VERSION}
 
       - name: Install frontend dependencies
         working-directory: cmd/klyx/frontend
