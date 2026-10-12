@@ -217,10 +217,21 @@ func TestFluxPresenceFactReevaluatesWorkloadOwnership(t *testing.T) {
 		}
 		return n, r.Part.Ver, r.Part.Obs
 	}
-	waitFor(t, "all four workloads read, none with a GitOps owner before detection", func() bool {
+	// the baseline is taken only once every kind the part reads - its
+	// dependencies (pods, ReplicaSets) included - has finished its initial
+	// list: a late list advances Obs and is not a fact change
+	waitFor(t, "all four workloads read from live kinds, none with a GitOps owner before detection", func() bool {
 		r, ok := s.rowsOf(TaskWorkloads + "/workloads")
+		if !ok {
+			return false
+		}
+		for _, k := range r.Part.Kinds {
+			if k.Coverage != observe.Live {
+				return false
+			}
+		}
 		n, _, _ := gitops()
-		return ok && len(r.Rows.(RowSet[workloads.Workload]).Rows) == 4 && n == 0
+		return len(r.Rows.(RowSet[workloads.Workload]).Rows) == 4 && n == 0
 	})
 	_, v0, obs0 := gitops()
 	pods0, _ := s.part(TaskPods)
