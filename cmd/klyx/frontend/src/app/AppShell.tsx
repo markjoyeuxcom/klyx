@@ -15,6 +15,7 @@ import { CommandPalette, getPaletteOpen } from "../chrome/CommandPalette";
 import { ActionToast } from "../chrome/ActionToast";
 import { back, forward } from "../nav/history";
 import { handleZoomKey } from "./zoom";
+import { startSummaries } from "../bridge/healthRows";
 
 // AppShell owns the frame (redesign spec §1): an 8px inset, the 36px mast,
 // then the fleet spine beside the 32px navigation band and the workspace,
@@ -65,6 +66,9 @@ export function handleShellMouse(e: MouseEvent): void {
 
 export function AppShell() {
   const route = useFleet((s) => s.route);
+  // Every cluster's summary from app start (health 1c slice 5 §1): the
+  // spine, the fleet board and the open cluster read them; idempotent.
+  useEffect(() => { startSummaries(); }, []);
 
   useEffect(() => {
     window.addEventListener("keydown", handleShellKey);

@@ -2,6 +2,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { useFleet } from "../store/fleet";
 import type { ClusterDTO } from "../store/fleet";
+import { applySummary, resetHealthStore } from "../store/health";
+import { core, kind, replace, summary, task, verdict } from "../test/healthFixtures";
 
 vi.mock("../bridge/mesh", () => ({ getMeshGraph: vi.fn(async () => {}) }));
 vi.mock("../bridge/fleetboard", () => ({ fetchFleetBoard: vi.fn(async () => {}) }));
@@ -12,10 +14,8 @@ vi.mock("./ClusterCard", () => ({
 import { FleetView, fleetColumns } from "./FleetView";
 
 const c = (name: string, state = "Synced"): ClusterDTO => ({ name, state, nodesTotal: 1, pods: 10 } as unknown as ClusterDTO);
-const att = (fault: number, degraded: number) => ({ cpuFraction: null, memFraction: null, flux: null, argo: null,
-  workloads: { counts: { total: 5, fault, degraded, unknown: 0, progressing: 0, paused: 0, ok: 5 - fault - degraded, attention: fault + degraded }, coverage: "complete" } });
 
-beforeEach(() => { useFleet.setState({ clusters: [], fleetBoard: {}, mesh: null, route: { name: "fleet" } }); });
+beforeEach(() => { useFleet.setState({ clusters: [], fleetBoard: {}, mesh: null, route: { name: "fleet" } }); resetHealthStore(); });
 
 describe("FleetView on the workspace template (redesign step 7d)", () => {
   it("no clusters: one empty state with the way forward", () => {
@@ -24,15 +24,17 @@ describe("FleetView on the workspace template (redesign step 7d)", () => {
     expect(screen.queryByTestId("fleet-board")).toBeNull();
   });
 
-  it("header facts replace the meter strip: zero neutral, faults shaped, nothing green", () => {
-    useFleet.setState({ clusters: [c("a"), c("b"), c("c", "Failed")], fleetBoard: { a: att(1, 0) as never, b: att(0, 0) as never } });
+  it("header facts replace the meter strip: clusters counted, zero neutral, faults shaped, nothing green", () => {
+    useFleet.setState({ clusters: [c("a"), c("b"), c("d"), c("c", "Failed")] });
+    applySummary(summary(replace(core(), task("workloads", [verdict("workloads", { fault: 1, ok: 4 }, [kind("deployments")])])), {}, "a"));
+    applySummary(summary(core(), {}, "b"));
     const { container } = render(<FleetView />);
-    expect(screen.getByText("3")).toBeTruthy();
-    expect(screen.getByText(/clusters · 2 connected/)).toBeTruthy();
+    expect(screen.getByText("4")).toBeTruthy();
+    expect(screen.getByText(/clusters · 3 connected/)).toBeTruthy();
     expect(screen.getByText("▲ 1 unreachable")).toBeTruthy();
-    expect(screen.getByText("▲ 1 with workload attention")).toBeTruthy();
+    expect(screen.getByTestId("fleet-attention").textContent).toBe("▲ 1 needs attention");
+    expect(screen.getByTestId("fleet-unknown").textContent).toBe("1 with unknown coverage"); // d: no summary yet
     expect(container.innerHTML).not.toMatch(/color-text-success/);
-    expect(screen.queryByText(/workload attention/i)?.textContent).not.toMatch(/^0/);
   });
 
   it("cards sit in the bounded grid; ClusterMesh only when a cluster participates", () => {

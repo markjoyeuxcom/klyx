@@ -3,6 +3,12 @@ import { render, fireEvent } from "@testing-library/react";
 import { FleetSpine, spineCodes, spineGroups, spineOrder } from "./FleetSpine";
 import { useFleet } from "../store/fleet";
 import type { ClusterDTO } from "../store/fleet";
+import { applySummary, resetHealthStore } from "../store/health";
+import { core, kind, replace, summary, task, verdict } from "../test/healthFixtures";
+
+// the cluster's summary with its workloads part's verdict counts (health 1c slice 5)
+const workloads = (cluster: string, counts: Parameters<typeof verdict>[1]) =>
+  applySummary(summary(replace(core(), task("workloads", [verdict("workloads", counts, [kind("deployments")])])), {}, cluster));
 
 const cluster = (name: string, state = "Synced", reason = ""): ClusterDTO => ({
   name, state, reason, nodesReady: 1, nodesTotal: 1, pods: 10, version: "v1.36.1",
@@ -13,6 +19,7 @@ const cluster = (name: string, state = "Synced", reason = ""): ClusterDTO => ({
 describe("FleetSpine", () => {
   beforeEach(() => {
     useFleet.setState({ clusters: [], fleetBoard: {}, route: { name: "fleet" } });
+    resetHealthStore();
     localStorage.removeItem("klyx-spine-expanded");
   });
 
@@ -52,14 +59,13 @@ describe("FleetSpine", () => {
     expect(block.title).toContain("connect timed out");
   });
 
-  it("workload faults (from the fleet board) light the lamp danger and blink it - the spine is the one legal blink site", () => {
-    useFleet.setState({
-      clusters: [cluster("prd")],
-      fleetBoard: { prd: { cpuFraction: null, memFraction: null, workloads: { counts: { total: 7, fault: 2, degraded: 0, unknown: 0, progressing: 0, paused: 0, ok: 5, attention: 2 }, coverage: "complete" }, flux: null, argo: null } },
-    });
+  it("a fault area (from the cluster's summary) lights the lamp danger and blinks it - the spine is the one legal blink site", () => {
+    useFleet.setState({ clusters: [cluster("prd")] });
+    workloads("prd", { fault: 2, ok: 5 });
     const { getByLabelText } = render(<FleetSpine />);
     const block = getByLabelText("cluster prd");
-    expect(block.title).toContain("2 workloads need attention");
+    expect(block.title).toMatch(/^prd — synced\n/);
+    expect(block.title).toContain("Workloads: 2 need attention");
     const lamp = block.querySelector("span") as HTMLElement;
     expect(lamp.style.background).toContain("danger");
     expect(lamp.className).toContain("klyx-lamp-blink");
@@ -76,14 +82,13 @@ describe("FleetSpine", () => {
     expect(localStorage.getItem("klyx.layout.v1.spineExpanded")).toBe("0");
   });
 
-  it("expanded rows show the broken count beside the name", () => {
+  it("expanded rows show the number of AREAS needing attention beside the name, never objects", () => {
     localStorage.setItem("klyx-spine-expanded", "1");
-    useFleet.setState({
-      clusters: [cluster("prd")],
-      fleetBoard: { prd: { cpuFraction: null, memFraction: null, workloads: { counts: { total: 3, fault: 3, degraded: 0, unknown: 0, progressing: 0, paused: 0, ok: 0, attention: 3 }, coverage: "complete" }, flux: null, argo: null } },
-    });
+    useFleet.setState({ clusters: [cluster("prd")] });
+    applySummary(summary(replace(replace(core(), task("workloads", [verdict("workloads", { fault: 3 }, [kind("deployments")])])),
+      task("nodes", [verdict("nodes", { degraded: 4 }, [kind("nodes")])])), {}, "prd"));
     const { getByLabelText } = render(<FleetSpine />);
-    expect(getByLabelText("cluster prd").textContent).toContain("3");
+    expect(getByLabelText("cluster prd").textContent).toBe("prd2");
     localStorage.removeItem("klyx-spine-expanded");
   });
 
@@ -132,10 +137,9 @@ describe("spineCodes", () => {
   });
 
   it("degraded-only workloads glow amber and do not blink", () => {
-    useFleet.setState({
-      clusters: [cluster("stg")],
-      fleetBoard: { stg: { cpuFraction: null, memFraction: null, workloads: { counts: { total: 5, fault: 0, degraded: 1, unknown: 0, progressing: 0, paused: 0, ok: 4, attention: 1 }, coverage: "complete" }, flux: null, argo: null } },
-    });
+    resetHealthStore();
+    useFleet.setState({ clusters: [cluster("stg")] });
+    workloads("stg", { degraded: 1, ok: 4 });
     const { getByLabelText } = render(<FleetSpine />);
     const lamp = getByLabelText("cluster stg").querySelector("span") as HTMLElement;
     expect(lamp.style.background).toContain("warning");
@@ -152,10 +156,9 @@ describe("spineCodes", () => {
 
 describe("FleetSpine unknown workload verdicts", () => {
   it("a Synced cluster whose workloads are all unknown is never green, and says so", () => {
-    useFleet.setState({
-      clusters: [{ name: "dev", state: "Synced", reason: "" } as never],
-      fleetBoard: { dev: { cpuFraction: null, memFraction: null, workloads: { counts: { total: 2, fault: 0, degraded: 0, unknown: 2, progressing: 0, paused: 0, ok: 0, attention: 0 }, coverage: "complete" }, flux: null, argo: null } },
-    });
+    resetHealthStore();
+    useFleet.setState({ clusters: [{ name: "dev", state: "Synced", reason: "" } as never] });
+    workloads("dev", { unknown: 2 });
     const { getByLabelText } = render(<FleetSpine />);
     const block = getByLabelText("cluster dev");
     const lamp = block.querySelector("span") as HTMLElement;

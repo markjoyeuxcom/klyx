@@ -7,11 +7,13 @@ import { ClusterCard, clusterDiagnosticScore } from "./ClusterCard";
 import { MeshStrip } from "./MeshStrip";
 import { getMeshGraph } from "../bridge/mesh";
 import { fetchFleetBoard } from "../bridge/fleetboard";
+import { fleetMeters, useFleetAttention } from "../nav/fleetAttention";
 
 export function FleetView() {
   const clusters = useFleet((s) => s.clusters);
   const mesh = useFleet((s) => s.mesh);
   const fleetBoard = useFleet((s) => s.fleetBoard);
+  const models = useFleetAttention();
   // Board enrichment fetches once per set of CONNECTED clusters (a cluster
   // coming online re-triggers); per-card fields degrade independently.
   const connectedKey = clusters
@@ -36,15 +38,10 @@ export function FleetView() {
   const connected = clusters.filter((c) => c.state === "Synced" || c.state === "Degraded").length;
   const unreachable = clusters.filter((c) => c.state === "Failed" || c.state === "Unconnected").length;
   const stale = clusters.filter((c) => c.state === "Stale").length;
-  // Workload attention per cluster - explicitly workloads, not a whole-cluster
-  // fault total. Clusters whose workload read failed or was capped are
-  // "unverified"; buckets may overlap and are labelled as independent facts.
-  const workloadAttention = clusters.filter((c) => (fleetBoard[c.name]?.workloads?.counts.attention ?? 0) > 0).length;
-  const workloadFault = clusters.some((c) => (fleetBoard[c.name]?.workloads?.counts.fault ?? 0) > 0);
-  const unverified = clusters.filter((c) => {
-    const w = fleetBoard[c.name]?.workloads;
-    return (c.state === "Synced" || c.state === "Degraded") && (!w || w.coverage !== "complete" || w.counts.unknown > 0);
-  }).length;
+  // Attention and unknown coverage from each cluster's summary (health 1c
+  // slice 5 §3): counted as clusters - never objects, never areas summed
+  // across clusters - and independent facts that may overlap.
+  const meters = fleetMeters(clusters, models);
   // ClusterMesh is capability-gated: no patch bay when no cluster runs it.
   const meshPresent = !!mesh && mesh.nodes.some((n) => n.state !== "unavailable");
   const nodes = clusters.reduce((n, c) => n + c.nodesTotal, 0);
@@ -66,12 +63,12 @@ export function FleetView() {
           <span className="t-secondary">cluster{clusters.length === 1 ? "" : "s"} · {connected} connected</span>
           {unreachable > 0 && <span className="t-status" style={{ color: "var(--color-text-danger)" }}>▲ {unreachable} unreachable</span>}
           {stale > 0 && <span className="t-status" style={{ color: "var(--color-text-warning)" }}>{stale} stale</span>}
-          {workloadAttention > 0 && (
-            <span className="t-status" style={{ color: workloadFault ? "var(--color-text-danger)" : "var(--color-text-warning)" }}>
-              {workloadFault ? "▲ " : ""}{workloadAttention} with workload attention
+          {meters.attention > 0 && (
+            <span className="t-status" data-testid="fleet-attention" style={{ color: meters.attentionDanger ? "var(--color-text-danger)" : "var(--color-text-warning)" }}>
+              {meters.attentionDanger ? "▲ " : ""}{meters.attention} need{meters.attention === 1 ? "s" : ""} attention
             </span>
           )}
-          {unverified > 0 && <span className="t-secondary" title="Connected clusters whose workload read failed, was capped or holds unclassified rows">{unverified} unverified</span>}
+          {meters.unknown > 0 && <span className="t-secondary" data-testid="fleet-unknown" title="Connected clusters whose summary leaves something unestablished: a gap, a part not covered, a read still checking, or an ended observation - each card names it">{meters.unknown} with unknown coverage</span>}
         </>
       )}
       headerEnd={clusters.length === 0 ? undefined : <span className="t-secondary">{nodes} node{nodes === 1 ? "" : "s"} · {pods} pod{pods === 1 ? "" : "s"}{podsUnknown > 0 ? ` (${podsUnknown} cluster${podsUnknown === 1 ? "" : "s"} unknown)` : ""}</span>}
