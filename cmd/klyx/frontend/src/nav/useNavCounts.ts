@@ -1,97 +1,95 @@
 import { useMemo } from "react";
-import { useFleet } from "../store/fleet";
 import type { Tone } from "../chrome/primitives/styles";
-import { attentionTone } from "../health/verdict";
-import { kindEvidence } from "../layout/coverage";
-import { attentionAreas, uncoveredDomains, type Area } from "./attention";
+import { TASKS, lineText, provenance, strongestLine, type Area, type ClusterAttention, type Line } from "./clusterAttention";
+import { useAttentionModel } from "./useAttentionModel";
 
-// A navigation count: a number with the tone of its worst verdict (danger for
-// any fault, warning for degraded only). Zero renders nothing - it is never a
-// green "0" and never a claim that an unread area is quiet. Evidence (warning
+// A navigation count: a number with the tone of its line (danger for any
+// fault, warning for degraded only). Zero renders nothing - never a green
+// "0" and never a claim that an unread area is quiet. Evidence (warning
 // events) carries no tone.
 export type NavBadge = { n: number; tone: Tone | undefined; title: string };
-const NONE: NavBadge = { n: 0, tone: undefined, title: "" };
 
 export type NavCounts = {
   group: Record<string, NavBadge>;
   destination: Record<string, NavBadge>;
-  // Per group: what the summary could not establish ("unverified",
-  // "unreadable", "checking…", "last good", "not summarized") - shown beside
-  // the count, never as zero.
+  // What could not be established ("controller not ready", "unreadable",
+  // "last good", "unverified", "not covered", "checking…"), beside the
+  // count and never as zero; a destination's note also names a lit part
+  // that has no destination of its own ("issuers: 1 not ready").
   groupNote: Record<string, string>;
-  // Per destination: the same, for destinations the summary does not cover.
   destinationNote: Record<string, string>;
 };
 
-const clock = (t: number | null) => { if (!t) return ""; const d = new Date(t); const p = (n: number) => String(n).padStart(2, "0"); return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`; };
+const EMPTY: NavCounts = { group: {}, destination: {}, groupNote: {}, destinationNote: {} };
+const WEIGHT: Record<string, number> = { "observation ended": 7, "controller not ready": 6, unreadable: 5, "last good": 4, unverified: 3, "not covered": 2, "checking…": 1 };
+const stronger = (a: string | undefined, b: string) => (!a || WEIGHT[b] > WEIGHT[a] ? b : a);
 
-// Each count names its observation: the shared summary (with its as-of time)
-// or a live lens read, so two surfaces that disagree say why.
-const badgeOf = (a: Area | undefined): NavBadge =>
-  a && (a.state === "attention" || a.state === "evidence") ? { n: a.n, tone: a.tone, title: `${a.label}: ${a.text} - cluster summary${a.at ? ` as of ${clock(a.at)}` : ""}` } : NONE;
+const badge = (a: Area, l: Line): NavBadge => ({
+  n: l.n, tone: l.state === "attention" ? l.tone : undefined,
+  title: `${a.label} - ${l.label}: ${lineText(l)} - ${provenance(a, l)}`,
+});
 
-// useNavCounts reads the shared cluster attention summary (step 7e). A lens
-// that is open and holds this cluster's complete all-namespaces read is
-// fresher than the poll, so its count wins (Pods). Flux sources come from the
-// Flux lens when it is loaded. Groups show their strongest member, never a
-// sum of two representations (workloads and the pods they own) or two
-// vocabularies.
-export function useNavCounts(cluster: string | null): NavCounts {
-  const attention = useFleet((s) => s.attention);
-  const pods = useFleet((s) => s.pods);
-  const gitops = useFleet((s) => s.gitops);
-  const clusters = useFleet((s) => s.clusters);
-  return useMemo((): NavCounts => {
-    if (!cluster) return { group: {}, destination: {}, groupNote: {}, destinationNote: {} };
-    const areas = attentionAreas(attention, cluster);
-    const by = Object.fromEntries(areas.map((a) => [a.id, a])) as Partial<Record<Area["id"], Area>>;
+// noteOf is a line's coverage word, or "".
+function noteOf(l: Line): string {
+  if (l.state === "unreadable") return "unreadable";
+  if (l.state === "checking") return "checking…";
+  if (l.gaps.some((g) => g.includes("last good"))) return "last good";
+  return l.gaps.length > 0 ? "unverified" : "";
+}
 
-    let podsBadge = badgeOf(by.pods);
-    // The open Pods lens holds the Observer's rows with the one count
-    // selector's global verdict counts (1c slice 3 §4a) - fresher than the
-    // poll, so they win while the Pod kind's read is complete. The namespace
-    // filter never scopes them: the rows are all namespaces.
-    if (pods.cluster === cluster && pods.counts && kindEvidence(!pods.loading, pods.coverage, "Pod", pods.error) === "complete") {
-      const g = pods.counts;
-      const c = { ...g, attention: g.fault + g.degraded };
-      podsBadge = c.attention > 0 ? { n: c.attention, tone: attentionTone(c), title: `Pods: ${c.attention} need attention (${c.fault} fault, ${c.degraded} degraded) - Pods lens rows` } : NONE;
-    }
-    const fluxMine = gitops.cluster === cluster && !gitops.loading;
-    const srcNotReady = fluxMine ? (gitops.sources ?? []).filter((s) => !s.suspended && s.ready !== "Ready").length : 0;
-    const sources: NavBadge = srcNotReady > 0 ? { n: srcNotReady, tone: "warning", title: `${srcNotReady} Flux sources not ready` } : NONE;
-
-    const workloads = badgeOf(by.workloads);
-    const strongest = (...b: NavBadge[]) => b.reduce((acc, x) => (x.n === 0 ? acc : acc.n === 0 || (x.tone === "danger" && acc.tone !== "danger") ? x : acc), NONE);
-    const flux = badgeOf(by.flux);
-
-    // Coverage notes, independent of the counts: a lit area can also be a gap.
-    const groupNote: Record<string, string> = {};
-    const weight = { unreadable: 4, "last good": 3, unverified: 2, "checking…": 1 } as Record<string, number>;
+// navCounts (slice 4 §2.2, §5.2): a group shows its strongest lit line,
+// never a sum; a destination shows exactly its own part.
+export function navCounts(m: ClusterAttention | null): NavCounts {
+  if (!m) return EMPTY;
+  const out: NavCounts = { group: {}, destination: {}, groupNote: {}, destinationNote: {} };
+  if (m.ended) {
+    for (const t of TASKS) out.groupNote[t.groupId] = "observation ended";
+    return out;
+  }
+  const byGroup = new Map<string, Area[]>();
+  for (const a of m.areas) byGroup.set(a.groupId, [...(byGroup.get(a.groupId) ?? []), a]);
+  for (const [g, areas] of byGroup) {
+    const lines = areas.flatMap((a) => a.lines.map((l) => ({ a, l })));
+    const best = strongestLine(lines.map((x) => x.l));
+    const owner = best ? lines.find((x) => x.l === best)!.a : null;
+    if (best && owner) out.group[g] = badge(owner, best);
     for (const a of areas) {
-      const word = a.state === "unreadable" ? "unreadable" : a.stale ? "last good" : a.state === "loading" ? "checking…" : a.gap || a.state === "unverified" ? "unverified" : "";
-      if (!word) continue;
-      if (!groupNote[a.groupId] || weight[word] > weight[groupNote[a.groupId]]) groupNote[a.groupId] = word;
+      if (a.controller?.state === "not ready") out.groupNote[g] = stronger(out.groupNote[g], "controller not ready");
+      if (a.controller?.state === "unknown") out.groupNote[g] = stronger(out.groupNote[g], "unverified");
+      for (const l of a.lines) {
+        const w = noteOf(l);
+        if (w) out.groupNote[g] = stronger(out.groupNote[g], w);
+      }
     }
-    const destinationNote: Record<string, string> = {};
-    for (const u of uncoveredDomains(clusters.find((x) => x.name === cluster))) {
-      if (u.capability !== "present") continue; // the tree already says checking/unknown
-      destinationNote[u.destinationId] = "not summarized";
-      if (u.groupId === "certs" || u.groupId === "eso") groupNote[u.groupId] = groupNote[u.groupId] ?? "not summarized";
+  }
+  for (const a of m.areas) {
+    const notes: string[] = [];
+    for (const l of a.lines) {
+      if (l.destinationId) {
+        if (l.state === "attention" || l.state === "evidence") out.destination[l.destinationId] = badge(a, l);
+        const w = noteOf(l);
+        // "checking…" is said once, on the group - not beside every view
+        if (w && w !== "checking…") out.destinationNote[l.destinationId] = w;
+      } else if (l.state === "attention" || l.state === "unlit" || (noteOf(l) && noteOf(l) !== "checking…")) {
+        // a part without a destination of its own: a note on its task's
+        // destination, never a number on that badge or a resource's
+        notes.push(`${l.label.toLowerCase()}: ${l.state === "attention" || l.state === "unlit" ? l.text : noteOf(l)}`);
+      }
     }
-    return {
-      group: {
-        workloads: strongest(workloads, podsBadge),
-        cluster: badgeOf(by.nodes),
-        flux: flux.n > 0 ? flux : sources,
-        argo: badgeOf(by.argo),
-        helm: badgeOf(by.helm),
-      },
-      destination: {
-        workloads, pods: podsBadge, nodes: badgeOf(by.nodes), events: badgeOf(by.events),
-        flux, "flux-sources": sources, argo: badgeOf(by.argo), helm: badgeOf(by.helm),
-      },
-      groupNote,
-      destinationNote,
-    };
-  }, [cluster, attention, pods, gitops, clusters]);
+    if (a.controller?.state === "not ready") notes.unshift("controller not ready");
+    if (notes.length) out.destinationNote[a.destinationId] = [out.destinationNote[a.destinationId], ...notes].filter(Boolean).join(" · ");
+  }
+  for (const n of m.notCovered) {
+    out.groupNote[n.groupId] = stronger(out.groupNote[n.groupId], "not covered");
+    out.destinationNote[n.destinationId] = [out.destinationNote[n.destinationId], n.part ? `${n.part}: not covered` : "not covered"].filter(Boolean).join(" · ");
+  }
+  return out;
+}
+
+// useNavCounts reads the open cluster's attention model: every number
+// through the one count selector, so a lens header, its badge and the mast
+// agree.
+export function useNavCounts(cluster: string | null): NavCounts {
+  const m = useAttentionModel(cluster);
+  return useMemo(() => navCounts(m), [m]);
 }

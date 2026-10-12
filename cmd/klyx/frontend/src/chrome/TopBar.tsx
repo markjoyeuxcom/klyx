@@ -3,7 +3,9 @@ import { IconArrowLeft, IconArrowRight, IconArrowsLeftRight, IconClock, IconComm
 import { ThemeToggle } from "./ThemeToggle";
 import { KlyxMark } from "./KlyxMark";
 import { useFleet } from "../store/fleet";
-import { attentionAreas, attentionSummary, openNavTree, uncoveredDomains } from "../nav/attention";
+import { openNavTree } from "../nav/attention";
+import { lineText, mastReading, provenance } from "../nav/clusterAttention";
+import { useAttentionModel } from "../nav/useAttentionModel";
 import { back, backTarget, entryKey, entryLabel, forward, forwardTarget, go, recentPlaces, useHistory, type HistoryEntry } from "../nav/history";
 import { clusterDisplayName } from "../fleet/ClusterCard";
 import { stopAllForwards } from "../bridge/forwards";
@@ -99,41 +101,45 @@ export function PopoutBar({ title }: { title: string }) {
   );
 }
 
-// AttentionButton (spec §4): the cluster's actionable summary in one line -
-// how many AREAS need attention, never a sum of objects - and the gaps. It
-// opens the same fault-aware navigation tree, not a second ledger.
+// AttentionButton (spec §4, health 1c slice 4): the cluster's actionable
+// summary in one line - how many AREAS need attention, never a sum of
+// objects - and the gaps and parts the summary does not cover, counted
+// apart. Never an unqualified all-clear. It opens the same fault-aware
+// navigation tree, not a second ledger.
 function AttentionButton({ cluster }: { cluster: string }) {
-  const attention = useFleet((s) => s.attention);
-  const c = useFleet((s) => s.clusters.find((x) => x.name === cluster));
-  const areas = attentionAreas(attention, cluster);
-  const sum = attentionSummary(areas);
-  const uncovered = uncoveredDomains(c);
-  const mine = attention.cluster === cluster;
-  const refreshing = mine && attention.loading && attention.at !== null;
-  const asOf = mine && attention.at ? new Date(attention.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : null;
+  const m = useAttentionModel(cluster);
+  if (!m) return null;
+  const r = mastReading(m);
+  const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? "" : "s"}`;
+  const quals = [r.gaps > 0 ? plural(r.gaps, "gap") : "", r.notCovered > 0 ? `${r.notCovered} not covered` : ""].filter(Boolean);
+  const refreshing = m.areas.some((a) => a.lines.some((l) => l.refreshing));
   let text: string;
   let color = "var(--color-text-secondary)";
-  if (sum.state === "loading") text = "Checking…";
-  else if (sum.state === "attention") {
-    text = `${sum.tone === "danger" ? "▲ " : ""}${sum.areas} area${sum.areas === 1 ? "" : "s"} need attention${sum.gaps > 0 ? ` · ${sum.gaps} unverified` : ""}`;
-    color = sum.tone === "danger" ? "var(--color-text-danger)" : "var(--color-text-warning)";
+  if (r.state === "ended") text = `Observation ended at ${clockOf(m.ended)}`;
+  else if (r.state === "checking") text = "Checking…";
+  else if (r.state === "attention") {
+    text = [`${r.tone === "danger" ? "▲ " : ""}${r.areas} area${r.areas === 1 ? "" : "s"} need attention`, ...quals].join(" · ");
+    color = r.tone === "danger" ? "var(--color-text-danger)" : "var(--color-text-warning)";
   } else {
-    // Never an unqualified all-clear: the summary covers named areas only.
-    text = `No attention in summary${sum.gaps > 0 ? ` · ${sum.gaps} unverified` : ""}${uncovered.length > 0 ? ` · ${uncovered.length} not covered` : ""}`;
+    text = [`No attention in ${plural(r.read, "area")} read`, ...quals].join(" · ");
   }
   const lines = [
-    ...areas.map((a) => `${a.label}: ${a.text}`),
-    uncovered.length > 0 ? `Not covered by the summary (open their views): ${uncovered.map((u) => (u.capability === "present" ? u.label : `${u.label} (capability not yet known)`)).join(", ")}` : "",
-    asOf ? `Summary as of ${asOf}${refreshing ? " - refreshing" : ""}` : "",
+    ...m.areas.flatMap((a) => [
+      `${a.label}${a.controller ? ` (controller ${a.controller.state}${a.controller.reason ? `: ${a.controller.reason}` : ""})` : ""}`,
+      ...a.lines.map((l) => `  ${l.label}: ${lineText(l)} - ${provenance(a, l)}`),
+    ]),
+    m.notCovered.length > 0 ? `Not covered by the summary (open their views): ${m.notCovered.map((u) => (u.capability === "present" ? u.label : `${u.label} (capability not yet known)`)).join(", ")}` : "",
   ].filter(Boolean);
   return (
     <button type="button" className="mast-attention" style={{ ...noDrag, color }} onClick={() => openNavTree("attention")}
-      aria-label={`Attention: ${text}.${asOf ? ` Summary as of ${asOf}${refreshing ? ", refreshing" : ""}.` : ""} Opens the view tree.`}
+      aria-label={`Attention: ${text}.${refreshing ? " Refreshing." : ""} Opens the view tree.`}
       title={`${lines.join("\n")}\n\nOpen the view tree`}>
       {text}{refreshing && <span className="t-secondary" style={{ fontWeight: 400 }}> · refreshing</span>}
     </button>
   );
 }
+
+const clockOf = (iso: string | null) => (iso ? new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "");
 
 // HistoryControls: Back / Forward (⌘[ / ⌘]) and the Recent menu. They move
 // between places; nothing they restore runs an action.

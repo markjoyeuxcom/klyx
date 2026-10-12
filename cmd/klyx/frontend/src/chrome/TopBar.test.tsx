@@ -2,6 +2,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, fireEvent } from "@testing-library/react";
 import { TopBar } from "./TopBar";
 import { useFleet } from "../store/fleet";
+import { applySummary, resetHealthStore } from "../store/health";
+import { core, dep, kind, native, replace, summary, task, verdict } from "../test/healthFixtures";
 import type { ForwardDTO } from "../store/fleet";
 
 // Mock the forwards bridge so no Wails runtime is needed; assert dispatches.
@@ -16,6 +18,7 @@ vi.mock("./ThemeToggle", () => ({ ThemeToggle: () => null }));
 vi.mock("./CommandPalette", () => ({ openCommandPalette: vi.fn() }));
 import { openCommandPalette } from "./CommandPalette";
 vi.mock("../bridge/configsvc", () => ({ openTerminal: vi.fn(async () => {}) }));
+vi.mock("../bridge/healthRows", () => ({ startSummaries: vi.fn() }));
 import { openTerminal } from "../bridge/configsvc";
 
 const active: ForwardDTO = {
@@ -154,31 +157,35 @@ describe("TopBar mast identity and history (redesign step 7b)", () => {
   });
 });
 
-describe("TopBar Attention button (redesign step 7e)", () => {
-  const ok = { coverage: "complete" as const, counts: { total: 5, fault: 0, degraded: 0, unknown: 0, progressing: 0, paused: 0, ok: 5, attention: 0 } };
+describe("TopBar Attention button (health 1c slice 4)", () => {
+  const dev = (over: Record<string, unknown> = {}) => ({ name: "dev", state: "Synced", ...over } as never);
+  const sum = (tasks: Parameters<typeof summary>[0], over: Parameters<typeof summary>[1] = {}) => summary(tasks, over, "dev");
   beforeEach(() => {
-    useFleet.setState({ route: { name: "cluster", cluster: "dev", section: "pods" }, clusters: [{ name: "dev", state: "Synced" } as never], forwards: [] });
+    resetHealthStore();
+    useFleet.setState({ route: { name: "cluster", cluster: "dev", section: "pods" }, clusters: [dev()], forwards: [] });
   });
+  const button = (r: ReturnType<typeof render>) => r.getByRole("button", { name: /^Attention/ });
 
   it("names areas needing attention (not an object sum) and opens the view tree", () => {
-    useFleet.setState({ attention: { cluster: "dev", loading: false, at: 1, counts: { workloads: { ...ok, counts: { ...ok.counts, fault: 3, ok: 2, attention: 3 } }, pods: ok, events: 4, nodes: ok, helm: 1, flux: "absent", argo: "absent" } } });
+    applySummary(sum(replace(replace(core(), task("workloads", [verdict("workloads", { fault: 3, ok: 2 }, [kind("deployments")])])),
+      task("helm", [native("releases", { fault: 1, ok: 1 }, 1, "failed or pending", [kind("helm")])]))));
     const opened = vi.fn();
     window.addEventListener("klyx:open-nav-tree", opened);
-    const { getByRole } = render(<TopBar />);
-    const btn = getByRole("button", { name: /^Attention: ▲ 2 areas need attention/ });
+    const r = render(<TopBar />);
+    const btn = button(r);
+    expect(btn.getAttribute("aria-label")).toMatch(/^Attention: ▲ 2 areas need attention\./);
     fireEvent.click(btn);
     expect(opened).toHaveBeenCalledTimes(1);
     window.removeEventListener("klyx:open-nav-tree", opened);
   });
 
-  it("checking while the first read runs; gaps are named, never quiet", () => {
-    useFleet.setState({ attention: { cluster: "dev", loading: true, at: null, counts: useFleet.getState().attention.counts } });
-    const { getByRole, unmount } = render(<TopBar />);
-    expect(getByRole("button", { name: /^Attention: Checking…/ })).toBeTruthy();
-    unmount();
-    useFleet.setState({ attention: { cluster: "dev", loading: false, at: 1, counts: { workloads: ok, pods: "unreadable", events: 0, nodes: ok, helm: 0, flux: 0, argo: 0 } } });
-    const r = render(<TopBar />);
-    expect(r.getByRole("button", { name: /^Attention: No attention in summary · 1 unverified/ })).toBeTruthy();
+  it("checking before anything answers; an unreadable area is a gap and not read, never quiet", () => {
+    const r1 = render(<TopBar />);
+    expect(button(r1).getAttribute("aria-label")).toMatch(/^Attention: Checking…/);
+    r1.unmount();
+    applySummary(sum(replace(core(), task("pods", [verdict("pods", {}, [kind("pods", { coverage: "unreadable", class: "forbidden" })], { coverage: "unreadable" })]))));
+    const r2 = render(<TopBar />);
+    expect(button(r2).getAttribute("aria-label")).toMatch(/^Attention: No attention in 4 areas read · 1 gap\./);
   });
 
   it("no Attention button outside a cluster", () => {
@@ -187,19 +194,24 @@ describe("TopBar Attention button (redesign step 7e)", () => {
     expect(queryByRole("button", { name: /^Attention/ })).toBeNull();
   });
 
-  it("never an unqualified all-clear: uncovered installed domains and the as-of time are named", () => {
-    useFleet.setState({ clusters: [{ name: "dev", state: "Synced", certManagerPresent: true, gatewayAPIVersion: "v1.2" } as never],
-      attention: { cluster: "dev", loading: true, at: Date.now(), counts: { workloads: ok, pods: ok, events: 0, nodes: ok, helm: 0, flux: 0, argo: 0 } } });
-    const { getByRole } = render(<TopBar />);
-    const btn = getByRole("button", { name: /^Attention: No attention in summary · 2 not covered/ });
-    expect(btn.getAttribute("aria-label")).toMatch(/Summary as of .*, refreshing/);
+  it("never an unqualified all-clear: installed domains the summary leaves out are named", () => {
+    useFleet.setState({ clusters: [dev({ certManagerPresent: true, gatewayAPIVersion: "v1.2" })] });
+    applySummary(sum(core()));
+    const btn = button(render(<TopBar />));
+    expect(btn.getAttribute("aria-label")).toMatch(/^Attention: No attention in 5 areas read · 2 not covered\./);
     expect(btn.getAttribute("title")).toMatch(/Not covered by the summary \(open their views\): Certificates, Gateways/);
-    expect(btn.textContent).toContain("refreshing");
   });
 
-  it("a fault with a capped read is lit AND a gap", () => {
-    useFleet.setState({ attention: { cluster: "dev", loading: false, at: 1, counts: { workloads: ok, pods: { coverage: "partial", counts: { ...ok.counts, fault: 1, ok: 4, attention: 1 } }, events: 0, nodes: ok, helm: 0, flux: 0, argo: 0 } } });
-    const { getByRole } = render(<TopBar />);
-    expect(getByRole("button", { name: /^Attention: ▲ 1 area need attention · 1 unverified/ })).toBeTruthy();
+  it("a fault with a gap is lit AND a gap; the tooltip names each line's provenance", () => {
+    applySummary(sum(replace(core(), task("pods", [verdict("pods", { fault: 1, ok: 4 }, [kind("pods"), dep("replicasets", { coverage: "unreadable" })])]))));
+    const btn = button(render(<TopBar />));
+    expect(btn.getAttribute("aria-label")).toMatch(/^Attention: ▲ 1 area need attention · 1 gap\./);
+    expect(btn.getAttribute("title")).toMatch(/Pods: 1 need attention · ReplicaSets could not be read - a dependency - cluster summary as of/);
+  });
+
+  it("after a Final the observation has ended: no counts, nothing quiet", () => {
+    applySummary(sum(core()));
+    applySummary(sum([], { seq: 2, final: true, evaluatedAt: "2026-10-12T12:05:00Z" }));
+    expect(button(render(<TopBar />)).getAttribute("aria-label")).toMatch(/^Attention: Observation ended at /);
   });
 });

@@ -3,8 +3,11 @@ import { render, fireEvent, screen, within, act } from "@testing-library/react";
 import { useFleet, type ClusterDTO } from "../store/fleet";
 import { NavBand, fitTabs } from "./NavBand";
 import { useListKeys } from "./useListKeys";
+import { addSub, applyRows, applySummary, openStarted, openSucceeded, resetHealthStore } from "../store/health";
+import { core, evidence, kind, native, replace, summary, task, verdict } from "../test/healthFixtures";
 
 vi.mock("../bridge/configsvc", () => ({ openTerminal: vi.fn(async () => {}) }));
+vi.mock("../bridge/healthRows", () => ({ startSummaries: vi.fn() }));
 
 const cluster = (over: Partial<ClusterDTO> = {}): ClusterDTO => ({
   name: "dev", state: "Synced", reason: "", nodesReady: 3, nodesTotal: 3, pods: 42, version: "v1.31",
@@ -194,79 +197,67 @@ describe("NavBand (redesign step 7a)", () => {
   });
 });
 
-describe("NavBand reads the shared attention summary (step 7e)", () => {
-  const ok = { coverage: "complete" as const, counts: { total: 5, fault: 0, degraded: 0, unknown: 0, progressing: 0, paused: 0, ok: 5, attention: 0 } };
+describe("NavBand reads the cluster's summary (health 1c slice 4)", () => {
+  const sum = (tasks: Parameters<typeof summary>[0], over: Parameters<typeof summary>[1] = {}) => summary(tasks, over, "dev");
+  const flux = (fault: number) => task("flux", [native("reconciliations", { fault, ok: 2 }, fault, "not ready", [kind("kustomizations")]), native("sources", { ok: 1 }, 0, "not ready", [kind("gitrepositories")])]);
+  beforeEach(() => resetHealthStore());
+
   it("group counts come from the summary; gaps are named beside them; the mast event opens the tree", () => {
-    useFleet.setState({ route: { name: "cluster", cluster: "dev", section: "overview" },
-      attention: { cluster: "dev", loading: false, at: 1, counts: { workloads: { ...ok, counts: { ...ok.counts, fault: 2, ok: 3, attention: 2 } }, pods: "unreadable", events: 0, nodes: ok, helm: 0, flux: 1, argo: "absent" } } });
+    useFleet.setState({ route: { name: "cluster", cluster: "dev", section: "overview" } });
+    applySummary(sum([...replace(replace(core(), task("workloads", [verdict("workloads", { fault: 2, ok: 3 }, [kind("deployments")])])),
+      task("pods", [verdict("pods", {}, [kind("pods", { coverage: "unreadable" })], { coverage: "unreadable" })])), flux(1)]));
     render(<NavBand />);
     act(() => { window.dispatchEvent(new Event("klyx:open-nav-tree")); });
     const tree = screen.getByRole("dialog", { name: "All views" });
     const wl = within(tree).getByText("Workloads").parentElement as HTMLElement;
     expect(wl.textContent).toContain("▲ 2");
     expect(wl.textContent).toContain("unreadable");
-    const flux = within(tree).getByText("Flux CD").parentElement as HTMLElement;
-    expect(flux.textContent).toContain("▲ 1");
+    const fx = within(tree).getByText("Flux CD").parentElement as HTMLElement;
+    expect(fx.textContent).toContain("▲ 1");
   });
 
-  it("the tree names what the summary does not cover and areas shown from a failed re-poll", () => {
-    useFleet.setState({ clusters: [cluster({ certManagerPresent: true, gatewayAPIVersion: "v1.2" })], route: { name: "cluster", cluster: "dev", section: "overview" },
-      attention: { cluster: "dev", loading: false, at: 2, stale: ["nodes"], areaAt: { nodes: 1 }, counts: { workloads: ok, pods: ok, events: 0, nodes: ok, helm: 0, flux: 0, argo: "absent" } } });
+  it("the tree names what the summary does not cover, and last-good reads", () => {
+    useFleet.setState({ clusters: [cluster({ certManagerPresent: true, gatewayAPIVersion: "v1.2" })], route: { name: "cluster", cluster: "dev", section: "overview" } });
+    applySummary(sum([...replace(core(), task("nodes", [verdict("nodes", { ok: 3 }, [kind("nodes", { coverage: "stale", lastGoodAt: "2026-10-12T11:00:00Z" })], { coverage: "stale" })])), flux(0)]));
     render(<NavBand />);
     act(() => { window.dispatchEvent(new Event("klyx:open-nav-tree")); });
     const tree = screen.getByRole("dialog", { name: "All views" });
-    expect((within(tree).getByText("cert-manager").parentElement as HTMLElement).textContent).toContain("not summarized");
-    expect(within(tree).getByRole("option", { name: /^Gateway topology/ }).textContent).toContain("not summarized");
+    expect((within(tree).getByText("cert-manager").parentElement as HTMLElement).textContent).toContain("not covered");
+    expect(within(tree).getByRole("option", { name: /^Gateway topology/ }).textContent).toContain("not covered");
     expect((within(tree).getByText("Cluster").parentElement as HTMLElement).textContent).toContain("last good");
   });
 
   it("opened by the Attention button, the tree starts on the first destination needing attention", () => {
-    useFleet.setState({ route: { name: "cluster", cluster: "dev", section: "overview" },
-      attention: { cluster: "dev", loading: false, at: 1, counts: { workloads: { ...ok, counts: { ...ok.counts, fault: 2, ok: 3, attention: 2 } }, pods: ok, events: 3, nodes: ok, helm: 0, flux: 0, argo: "absent" } } });
+    useFleet.setState({ route: { name: "cluster", cluster: "dev", section: "overview" } });
+    applySummary(sum([...replace(replace(core(), task("workloads", [verdict("workloads", { fault: 2, ok: 3 }, [kind("deployments")])])),
+      task("events", [evidence(3, [kind("events")])])), flux(0)]));
     render(<NavBand />);
     act(() => { window.dispatchEvent(new CustomEvent("klyx:open-nav-tree", { detail: { focus: "attention" } })); });
     // Events (evidence, no tone) is skipped; All workloads (fault) is chosen.
     const selected = screen.getAllByRole("option").find((o) => o.getAttribute("aria-selected") === "true");
     expect(selected?.textContent).toMatch(/^All workloads/);
   });
-});
 
-describe("NavBand counts (health model)", () => {
-  const fault = { kind: "fault", label: "CrashLoopBackOff", reason: "CrashLoopBackOff", rule: "pod.current-failure" };
-  const pod = (name: string, health: object) => ({
-    namespace: "shop", name, uid: `uid-${name}`, ready: false, restarts: 0,
-    node: "n", ip: "", ownerKind: "", ownerName: "", containers: [], health,
-  });
-  // The Pods lens holds the Observer's rows with the global verdict counts
-  // (1c slice 3 §4a); a complete Pod read wins over the poll.
-  const live = [{ kind: "Pod", served: true, synced: true, coverage: "live" as const }];
-  const seedPods = (over: object) => useFleet.setState((s) => ({
-    route: { name: "cluster", cluster: "dev", section: "pods" },
-    pods: { ...s.pods, cluster: "dev", namespace: "", items: [pod("a", fault), pod("b", fault)], loading: false, error: null, coverage: live,
-      counts: { total: 2, fault: 2, degraded: 0, unknown: 0, progressing: 0, paused: 0, ok: 0 }, ...over },
-  }));
-
-  it("shows the pods count for this cluster's complete read, with fault shape - whatever the namespace filter", () => {
-    for (const over of [{}, { namespace: "shop" }]) {
-      seedPods(over);
-      const { unmount } = render(<NavBand />);
-      expect(tab("Pods").textContent).toContain("▲ 2");
-      unmount();
-    }
-  });
-
-  it("drops the count for an incomplete or other-cluster read", () => {
-    for (const over of [
-      { coverage: [{ kind: "Pod", served: true, synced: true, coverage: "stale", error: "boom" }], error: "Pod: boom" },
-      { coverage: [{ kind: "Pod", served: true, synced: false, coverage: "checking" }] },
-      { loading: true },
-      { cluster: "prd" },
-    ]) {
-      seedPods(over);
-      const { unmount } = render(<NavBand />);
-      expect(tab("Pods").textContent).not.toMatch(/\d/);
-      unmount();
-    }
+  it("the Pods count is the selector's: the summary's, or newer lens rows; an unreadable or another cluster's read shows none", () => {
+    at("pods");
+    applySummary(sum([...replace(core(), task("pods", [verdict("pods", { fault: 2 }, [kind("pods")])])), flux(0)]));
+    const r1 = render(<NavBand />);
+    expect(tab("Pods").textContent).toContain("▲ 2");
+    r1.unmount();
+    addSub("p", "dev", "pods", "pods"); openStarted("p", "t"); openSucceeded("p", "t", 1);
+    applyRows("p", { cluster: "dev", incarnation: 1, task: "pods", part: { ...verdict("pods", { fault: 3 }, [kind("pods")]), ver: 2, obs: 2 }, evaluatedAt: "x", rows: [], full: true });
+    const r2 = render(<NavBand />);
+    expect(tab("Pods").textContent).toContain("▲ 3");
+    r2.unmount();
+    resetHealthStore();
+    applySummary(sum([...replace(core(), task("pods", [verdict("pods", {}, [kind("pods", { coverage: "unreadable" })], { coverage: "unreadable" })])), flux(0)]));
+    const r3 = render(<NavBand />);
+    expect(tab("Pods").textContent).not.toMatch(/\d/);
+    r3.unmount();
+    resetHealthStore();
+    applySummary(summary([...replace(core(), task("pods", [verdict("pods", { fault: 2 }, [kind("pods")])])), flux(0)], {}, "prd"));
+    render(<NavBand />);
+    expect(tab("Pods").textContent).not.toMatch(/\d/);
   });
 });
 

@@ -80,19 +80,22 @@ export type RowsSub = {
   resync: boolean;
 };
 
-type HealthState = {
+export type HealthState = {
   summaries: Record<string, HealthSummary>;
   finalizedThrough: Record<string, number>;
+  // ended: a cluster's observation ended (its Final) - fenced to that
+  // incarnation and cleared by a newer one (slice 4 §1).
+  ended: Record<string, { incarnation: number; at: string }>;
   // knownIncarnation is the newest Observer incarnation seen for a cluster,
   // from either channel; anything older is fenced out.
   knownIncarnation: Record<string, number>;
   subs: Record<string, RowsSub>;
 };
 
-export const useHealth = create<HealthState>(() => ({ summaries: {}, finalizedThrough: {}, knownIncarnation: {}, subs: {} }));
+export const useHealth = create<HealthState>(() => ({ summaries: {}, finalizedThrough: {}, ended: {}, knownIncarnation: {}, subs: {} }));
 
 export function resetHealthStore(): void {
-  useHealth.setState({ summaries: {}, finalizedThrough: {}, knownIncarnation: {}, subs: {} });
+  useHealth.setState({ summaries: {}, finalizedThrough: {}, ended: {}, knownIncarnation: {}, subs: {} });
 }
 
 export function findPart(s: HealthSummary | undefined, task: string, part: string): HealthPart | undefined {
@@ -138,7 +141,12 @@ function advance(st: HealthState, cluster: string, incarnation: number): HealthS
     summaries = { ...summaries };
     delete summaries[cluster];
   }
-  return { ...st, subs, summaries, knownIncarnation: { ...st.knownIncarnation, [cluster]: incarnation } };
+  let ended = st.ended;
+  if (ended[cluster] && ended[cluster].incarnation < incarnation) {
+    ended = { ...ended };
+    delete ended[cluster];
+  }
+  return { ...st, subs, summaries, ended, knownIncarnation: { ...st.knownIncarnation, [cluster]: incarnation } };
 }
 
 // currentSummary is a cluster's summary only if it belongs to the known
@@ -165,7 +173,8 @@ export function applySummary(s: HealthSummary, now = Date.now()): void {
       for (const [h, sub] of Object.entries(subs)) {
         if (sub.cluster === s.cluster && (sub.incarnation === null || sub.incarnation <= s.incarnation)) subs[h] = cleared(sub);
       }
-      return { ...st, summaries, subs, finalizedThrough: { ...st.finalizedThrough, [s.cluster]: s.incarnation } };
+      return { ...st, summaries, subs, finalizedThrough: { ...st.finalizedThrough, [s.cluster]: s.incarnation },
+        ended: { ...st.ended, [s.cluster]: { incarnation: s.incarnation, at: s.evaluatedAt } } };
     }
     const summaries = { ...st.summaries, [s.cluster]: s };
     const subs = { ...st.subs };
@@ -378,6 +387,11 @@ export type SelectedCounts = {
   source: "rows" | "summary" | "none";
   updating: boolean; // summary ahead inside the deadline, or a resync: rows' counts, marked
   refreshing: boolean; // past the deadline: the summary's counts; rows qualified as of their evaluation
+  // the selected part's own evaluation time: the rows' or the summary's,
+  // never one for the other's counts (slice 4 §3)
+  at: string | null;
+  resync: boolean; // the rows wait for a full re-read after a wrong base
+  refreshError: string | null; // the last failed re-bootstrap
 };
 
 // bestSub picks, among a part's consumers, the newest rows of the cluster's
@@ -397,10 +411,13 @@ export function bestSub(st: HealthState, cluster: string, task: string, part: st
 // rows' counts until A4 switches every surface to the summary together;
 // any other part shows the summary's.
 export function taskCounts(st: HealthState, cluster: string, task: string, part: string): SelectedCounts {
-  const summaryPart = findPart(currentSummary(st, cluster), task, part) ?? null;
+  const summary = currentSummary(st, cluster);
+  const summaryPart = findPart(summary, task, part) ?? null;
+  const summaryAt = summaryPart && summary ? summary.evaluatedAt : null;
   const best = bestSub(st, cluster, task, part);
-  if (!best) return { part: summaryPart, source: summaryPart ? "summary" : "none", updating: false, refreshing: false };
-  if (best.refreshing && summaryPart) return { part: summaryPart, source: "summary", updating: false, refreshing: true };
+  if (!best) return { part: summaryPart, source: summaryPart ? "summary" : "none", updating: false, refreshing: false, at: summaryAt, resync: false, refreshError: null };
+  const qual = { resync: best.resync, refreshError: best.refreshError };
+  if (best.refreshing && summaryPart) return { part: summaryPart, source: "summary", updating: false, refreshing: true, at: summaryAt, ...qual };
   // a resync's rows are known to be behind a newer Ver: marked, as updating
-  return { part: best.partData, source: "rows", updating: best.mismatchSince !== null || best.resync, refreshing: false };
+  return { part: best.partData, source: "rows", updating: best.mismatchSince !== null || best.resync, refreshing: false, at: best.evaluatedAt, ...qual };
 }

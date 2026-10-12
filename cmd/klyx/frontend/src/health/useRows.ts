@@ -41,10 +41,13 @@ export function useRows<T>(cluster: string | null, task: string, part: string): 
       countsSource: c?.source ?? ("none" as const),
       updating: c?.updating ?? false,
       refreshing: c?.refreshing ?? false,
+      countsAt: c?.at ?? null,
+      resync: c?.resync ?? false,
+      countsRefreshError: c?.refreshError ?? null,
     };
   }));
   return {
     rows: v.rows, ver: v.inc === null ? null : { incarnation: v.inc, ver: v.ver }, facts: v.facts, part: v.part, evaluatedAt: v.evaluatedAt, error: v.error, refreshError: v.refreshError,
-    counts: { part: v.countsPart, source: v.countsSource, updating: v.updating, refreshing: v.refreshing },
+    counts: { part: v.countsPart, source: v.countsSource, updating: v.updating, refreshing: v.refreshing, at: v.countsAt, resync: v.resync, refreshError: v.countsRefreshError },
   };
 }
