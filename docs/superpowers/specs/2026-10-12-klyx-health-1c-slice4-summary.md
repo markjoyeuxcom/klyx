@@ -1,6 +1,6 @@
 # Klyx health 1c, slice 4: the open cluster's mast, tree and Overview on the summary
 
-Status: Codex APPROVE-WITH-CHANGES (2026-10-12); amended below per its seven required changes (§1, §2.1, §2.2, §3, §5.4, §6) before implementation. Parent spec: `2026-10-11-klyx-health-1c-cluster-summary.md` (§2 native counts, §5 coverage, §8 Frontend, §9 slice 4). Slice 3 (`2026-10-11-klyx-health-1c-slice3-rows.md`) is closed; its §4a count selector "lands now, the mast and tree are wired to it in slice 4".
+Status: Codex APPROVE-WITH-CHANGES (2026-10-12); amended per its seven required changes (§1, §2.1, §2.2, §3, §5.4, §6), and per its confirmation's two corrections (Karpenter's primary part is nodeclaims; a mixed read with a stale kind is "current and last observed", not a lower bound). Parent spec: `2026-10-11-klyx-health-1c-cluster-summary.md` (§2 native counts, §5 coverage, §8 Frontend, §9 slice 4). Slice 3 (`2026-10-11-klyx-health-1c-slice3-rows.md`) is closed; its §4a count selector "lands now, the mast and tree are wired to it in slice 4".
 
 ## 0. Outcome and limits
 
@@ -41,7 +41,7 @@ Each expected task (§6) is one area, mapped by the nav registry to a group and 
 | certs | certs / certs | certificates, issuers (native) | capability `certManager` present or not yet known |
 | eso | eso / eso | externalsecrets, stores (native) | capability `externalSecrets` present or not yet known |
 | gateway | network / gateway | gateways, routes (native) | capability `gatewayAPI` present or not yet known |
-| karpenter | autoscaling / karpenter | nodepools, nodeclaims (native) | capability `karpenter` present or not yet known |
+| karpenter | autoscaling / karpenter | nodeclaims, nodepools (native) | capability `karpenter` present or not yet known |
 
 A part whose coverage the Observer reports `absent` (its counted kinds are not served) has no line; an area whose parts are all absent is omitted. A task the summary carries with a non-absent part is shown even if capability detection says absent (the Observer reads the cluster; detection may lag).
 
@@ -53,7 +53,10 @@ A part whose coverage the Observer reports `absent` (its counted kinds are not s
 - counted stale: the counts as last read, with "last good HH:MM", a gap;
 - counted checking: "checking…", a gap, no count;
 - counted unreadable: "could not be read (class)", a gap, no count;
-- mixed counted kinds (for example Deployments live, StatefulSets unreadable): the counts are a lower bound over the kinds read - "3+ need attention" - with the unreadable kinds named as a gap. A known fault stays discoverable and nothing reads quiet.
+- mixed counted kinds, all read ones live (for example Deployments live, StatefulSets not yet read or unreadable): the counts are a lower bound on current attention over the kinds read - "3+ need attention" - with the missing kinds named as a gap;
+- mixed counted kinds with a stale one (for example Deployments live, StatefulSets stale, DaemonSets unreadable): the retained stale objects may have recovered or gone, so the total is not a lower bound on current attention. The line keeps the counts and the faults, qualified as a reading of current and last-observed objects ("3 need attention - current and last observed"), and names each stale kind with its last good time and each missing kind. Nothing is recomputed per kind: the per-kind coverage qualifies the one count.
+
+A known fault stays discoverable and nothing reads quiet in any of these.
 
 **Dependencies qualify, they never hide.** A dependency kind that is not live (for example ReplicaSets unreadable for workloads or pods) names a gap beside the line ("owners unresolved - ReplicaSets could not be read"); the counted kinds' counts still show. **Derived membership is the exception:** a Gateway-attached route exists only through its parent, so for the routes part the parent Gateways count as evidence alongside HTTPRoutes - with Gateways not live, attachment membership is not established and the routes line follows the worse of the two (stale with last good, or no count). Services and EndpointSlices only qualify backend verdicts (a gap note; the counts stand).
 
@@ -87,9 +90,9 @@ A discovery gap (`KindCoverage.discovery`) is named beside a live count as a cap
 | helm | helm/releases |
 | flux, flux-sources | flux/reconciliations, flux/sources |
 | argo, argo-appsets | argo/applications, argo/applicationsets |
-| certs, eso, gateway, karpenter | certs/certificates, eso/externalsecrets, gateway/gateways, karpenter/nodepools |
+| certs, eso, gateway, karpenter | certs/certificates, eso/externalsecrets, gateway/gateways, karpenter/nodeclaims |
 
-The destination badge equals that part's lens count (its header in that view), at one selection. A multi-view lens destination (certs, eso, gateway, karpenter) badges its primary view's part only; a lit secondary part (issuers, stores, routes, nodeclaims) is the destination's note ("issuers: 1 not ready"), never a number on its badge. A generic resource destination (Issuers, SecretStores, NodeClaims, ApplicationSets as raw resources) never carries a part's count: its kinds differ from the part's. Argo Projects has no part and no badge.
+The destination badge equals that part's lens count (its header in that view), at one selection. A multi-view lens destination (certs, eso, gateway, karpenter) badges the part of the view the lens opens on - its primary - only (Karpenter opens on Claims); a lit secondary part (issuers, stores, routes, nodepools) is the destination's note ("issuers: 1 not ready"), never a number on its badge. A generic resource destination (Issuers, SecretStores, NodeClaims, ApplicationSets as raw resources) never carries a part's count: its kinds differ from the part's. Argo Projects has no part and no badge.
 
 The mast counts AREAS needing attention, never objects (unchanged).
 
@@ -136,7 +139,7 @@ A Top ref names a task (`Route`); the link is navigated by task, part and ref th
 { kind: "reveal"; cluster: string; task: string; part: string; ref: { gvr: string; namespace?: string; name: string; uid?: string; parent?: string } }
 ```
 
-- the part's view is opened: Flux `fluxView: "sources"` for flux/sources, Argo `argoView: "applicationsets"` for argo/applicationsets, and the lens-local views - certs "issuers", eso "stores", gateway "routes", karpenter "claims" - which the lens switches to on consuming the intent;
+- the part's view is opened: Flux `fluxView: "sources"` for flux/sources, Argo `argoView: "applicationsets"` for argo/applicationsets, and the lens-local views - certs "issuers", eso "stores", gateway "routes", karpenter "claims" and "pools" - which the lens switches to on consuming the intent;
 - the object is revealed through the lens's filters and selected where the lens supports selection (the existing selection intents for pods, workloads, nodes and Flux reconciliations - `select-pod`, `select-workload`, `select-node`, `select-flux` - remain the route for those parts; Issuer and ClusterIssuer are told apart by `gvr`; an attached route by its `parent`, the worst parent);
 - a lens that cannot select the object opens the part's view and the link says so ("open Issuers"), never the object's name as if it were selected.
 
@@ -164,12 +167,12 @@ Not-covered parts count in the mast and Overview independently of lit areas and 
 Mounted on the real health store (the slice 3 pattern), plus mutation checks:
 
 - Lifecycle: no summary; rows before the summary (answered parts show, unanswered checking); Final (ended at, no counts, nothing quiet); a late older Final ignored; a newer incarnation clearing `ended` and carrying nothing over; staggered parts of a newer incarnation; namespaces unknown until a current summary.
-- Evidence: counted live with an unreadable dependency (the known fault shows, the gap is named, the lens agrees); mixed counted kinds (lower bound, gap, no quiet); routes with Gateways not live (membership not established); Services/EndpointSlices only qualifying; discovery gap; truncated Events; snapshot as-of.
+- Evidence: counted live with an unreadable dependency (the known fault shows, the gap is named, the lens agrees); mixed counted kinds, live and missing (lower bound, gap, no quiet); mixed live, stale and unreadable (no lower bound, "current and last observed", stale and missing kinds named); routes with Gateways not live (membership not established); Services/EndpointSlices only qualifying; discovery gap; truncated Events; snapshot as-of.
 - Native and controller: lit only by fault/degraded roles; `Included` of progressing/paused unlit in the tool's word; unknown-only native part (gap, no quiet, `Included` 0); controller not ready (lit, no count, counted in the mast); controller unknown alone (gap, not attention); objects lit plus controller unknown.
-- Badges: strongest line never summed, titled with its part; a secondary part stronger than the primary (group badge from the secondary, destination badge stays the primary's, the secondary as a note); flux and flux-sources, argo and argo-appsets each equal to their part's lens count with each view open in turn; no part count on a generic resource destination.
+- Badges: strongest line never summed, titled with its part; Karpenter with a healthy pool and a failing claim (the destination badge agrees with the Claims view the lens opens on); a secondary part stronger than the primary (group badge from the secondary, destination badge stays the primary's, the secondary as a note); flux and flux-sources, argo and argo-appsets each equal to their part's lens count with each view open in turn; no part count on a generic resource destination.
 - Selector: rows newer than the summary win on all three surfaces with the rows' own time; inside the first second (updating) all three keep the rows' counts marked; past the deadline all three switch to the summary together and return after the re-bootstrap; a summary-less resync and a failed re-bootstrap are visible gaps; counts, Top refs and time from one selected part.
 - Not covered: a missing core task; a task missing a part; a present capability without its task; an unknown capability without its task; a confirmed absence omitted.
-- Top links: Issuer and ClusterIssuer, a Store, a Flux source, an ApplicationSet, an attached route with its worst parent - each opens the part's view and reveals or labels; no action intent is raised.
+- Top links: Issuer and ClusterIssuer, a Store, a Flux source, an ApplicationSet, a NodeClaim and a NodePool, an attached route with its worst parent - each opens the part's view and reveals or labels; no action intent is raised.
 - No fetch fan-out remains (no `ListWorkloads`/`ListPods`/… call on cluster entry).
 
 ## 9. Order of work
