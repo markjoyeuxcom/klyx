@@ -96,3 +96,29 @@ One reviewed commit each:
 2. On a pass: the "not covered" removal (§4) and the acceptance text (§5).
 
 If a case fails, the failure is fixed in the Observer or the model as its own reviewed commit before step 2, and the gate is re-run in full.
+
+## 7. The gate run (2026-10-12)
+
+PASS at commit `5b37f36` (tracked tree clean), run `48dfa639b5e1faf9`, capability re-probe overridden to 10s for the run (the production detector unchanged), on `kind-klyx-parity` (kind v0.33.0, node v1.37.0).
+
+Go stage (`TestParityGate`, 64s): every case settled against its oracle in one summary - every part's classifier, counted kinds, coverage, roles and included count, every controller, the connection - with every part's rows at the same incarnation and Ver and counted membership equal by UID.
+
+| Case | Settled | Baseline back |
+|------|---------|---------------|
+| B | 0.97s | - |
+| 1 failed unused Issuer | 1.00s | 0.96s |
+| 2 failed unused SecretStore | 0.95s | 0.97s |
+| 3 ApplicationSet failure | 0.96s | 0.97s |
+| 4 failing GitRepository | 0.97s | 1.02s |
+| 5a route, backend not found | 1.03s | 1.05s |
+| 5b route, no ready endpoints | 0.97s | 1.03s |
+| 5c route, no endpoints | 1.03s | 0.97s |
+| 6 cert-manager down | 8.73s | 10.19s |
+| 7 ClusterIssuers forbidden from the first read | 0.97s (incarnation 2) | - |
+| 8 ExternalSecrets revoked after Live | at the restart's return (incarnation 3, unchanged) | - |
+
+Case 8: last good 13:51:26.280, between verified Live (13:51:24.457) and the API-server restart's return (13:51:27.421), unchanged 15s later; the recorded fault forbidden; the retained set equal to the Live oracle.
+
+Frontend stage (`nav/parityGate.test.tsx`): 2/2 - the model from the summary and with the open cluster's rows (one number either way), and the mast, tree, spine, card and Overview mounted on every capture with no list endpoint called. "cluster ok" (the healthy lamp, band 0, the mast's unqualified quiet) in B only.
+
+Mutation checks are listed in the step 1 commit (`5b37f36`): eight frontend mutants and two Observer-rule mutants caught; a stale run id and a missing case fail the frontend stage.
