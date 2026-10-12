@@ -225,6 +225,18 @@ describe("the detail is fenced by UID", () => {
     expect(inspector().getByTestId("node-detail-asof").textContent).toBe(`Detail read ${new Date(1_760_000_000_000).toLocaleTimeString()}.`);
   });
 
+  it("a re-read finding another object keeps this object's detail as last evidence, naming the mismatch", () => {
+    seed([node("a")]);
+    render(<NodesView cluster="x" />);
+    select("a");
+    landDetail(detail(node("a")));
+    expect(inspector().getByTestId("node-detail-asof").textContent).toMatch(/^Detail read /);
+    landDetail(detail(node("a", "ok", { uid: "uid-a-2" }), { podsOnNode: [{ namespace: "default", name: "pod-on-replacement", phase: "Running" }] }));
+    expect(inspector().getByText("pod-on-a")).toBeTruthy(); // uid-a's own last detail
+    expect(inspector().queryByText("pod-on-replacement")).toBeNull();
+    expect(inspector().getByTestId("node-detail-asof").textContent).toMatch(/^Last read .* - the latest read found another object with this name \(UID uid-a-2, not uid-a\)\.$/);
+  });
+
   it("a same-name replacement is read afresh; the old object's detail never becomes the new one's", () => {
     seed([node("a")]);
     render(<NodesView cluster="x" />);

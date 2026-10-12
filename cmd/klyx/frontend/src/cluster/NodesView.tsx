@@ -1014,7 +1014,9 @@ function NodeInspector({ cluster, row, uid, nowS, detail, loading, gone, onCordo
   const lastDetail = useRef<{ uid: string; d: NodeDetailDTO } | null>(null);
   if (forObject) lastDetail.current = { uid, d: forObject };
   const shown = forObject ?? (lastDetail.current?.uid === uid ? lastDetail.current.d : null);
-  const lastEvidence = !!gone || !!detailError;
+  // the shown detail is last evidence - never "Detail read" - when the node
+  // left the read, the re-read failed, or the re-read found another object
+  const lastEvidence = !!gone || !!detailError || detailOfOther;
   const readAt = shown?.asOfUnix ? new Date(shown.asOfUnix * 1000).toLocaleTimeString() : null;
 
   const openPod = (pod: PodOnNodeDTO) => {
@@ -1068,9 +1070,12 @@ function NodeInspector({ cluster, row, uid, nowS, detail, loading, gone, onCordo
         ) : (
           <>
             {readAt && (
-              <span className="t-secondary" data-testid="node-detail-asof" style={{ color: detailError ? "var(--color-text-warning)" : undefined }}>
+              <span className="t-secondary" data-testid="node-detail-asof" style={{ color: detailError || detailOfOther ? "var(--color-text-warning)" : undefined }}>
                 {lastEvidence
-                  ? `Last read ${readAt}${gone === "removed" ? " - before it was removed." : detailError ? ` - the re-read failed: ${detailError}` : "."}`
+                  ? `Last read ${readAt}${gone === "removed" ? " - before it was removed."
+                    : detailError ? ` - the re-read failed: ${detailError}`
+                    : detailOfOther ? ` - the latest read found another object with this name (UID ${detail?.summary.uid || "unknown"}, not ${uid}).`
+                    : "."}`
                   : `Detail read ${readAt}.`}
               </span>
             )}
