@@ -14,7 +14,7 @@ Everything for v1.0 is already on `main` and CI-green. The tag is gated on
 verification, not code (section 0). Sections 1–7 are demand-driven — build when
 the need is real, not top-to-bottom.
 
-**In flight on `redesign/2026-10-10` (not on `main`): health 1c.** One Observer
+**Shipped in v0.10.0 (2026-10-12): health 1c.** One Observer
 per cluster publishes a cluster summary that every attention surface reads -
 the open cluster's mast, tree and Overview, the fleet's spine, meters and
 cards - and the lenses read its shared rows. Closed by the slice 6
@@ -27,8 +27,8 @@ reads; Events every 60 seconds), not watches, and Events is evidence only,
 never attention. The remaining request reads, each with an as-of time, are
 the Helm and Events lens lists, the Gateway topology, Argo CD projects, and
 Karpenter's controller and activity reads. A part the summary does not carry
-reads "checking…" - a gap, never quiet. Before merge: the owner's real-cluster
-smoke test.
+reads "checking…" - a gap, never quiet. Verified on a local kind fixture; the
+real-cluster smoke is on the v1.0.0 gate below.
 
 ---
 
@@ -64,6 +64,10 @@ smoke test.
       Karpenter lens (against the EKS lab once Karpenter lands there: does
       detection fire, do stuck claims name the right chain link, does the
       floor caption appear on the survivability module)
+- [ ] **Real-cluster smoke of health 1c** (shipped in v0.10.0, verified only on
+      the kind parity fixture): the mast, tree, Overview, fleet spine, meters and
+      cards against the live AKS fleet - do the attention areas, counts and
+      "checking…" gaps match what the lenses and kubectl show
 - [ ] **Real-LLM smoke test** of the AI feature (local Ollama backend, or a hosted
       key) — everything is currently verified against a fake client
 - [ ] **Live-cluster smoke of the write paths** (nothing destructive committed
