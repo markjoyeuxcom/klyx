@@ -1,6 +1,6 @@
 # Klyx health 1c, slice 4: the open cluster's mast, tree and Overview on the summary
 
-Status: Codex APPROVE-WITH-CHANGES (2026-10-12); amended per its seven required changes (§1, §2.1, §2.2, §3, §5.4, §6), and per its confirmation's two corrections (Karpenter's primary part is nodeclaims; a mixed read with a stale kind is "current and last observed", not a lower bound). Parent spec: `2026-10-11-klyx-health-1c-cluster-summary.md` (§2 native counts, §5 coverage, §8 Frontend, §9 slice 4). Slice 3 (`2026-10-11-klyx-health-1c-slice3-rows.md`) is closed; its §4a count selector "lands now, the mast and tree are wired to it in slice 4".
+Status: CLOSED by Codex (2026-10-12): a3cb975 + 070d3de (mast and tree), 4d8b545 + cc3546d (Overview, Top links, reveal), cc9b32b (removals). Spec: Codex APPROVE-WITH-CHANGES (2026-10-12); amended per its seven required changes (§1, §2.1, §2.2, §3, §5.4, §6), and per its confirmation's two corrections (Karpenter's primary part is nodeclaims; a mixed read with a stale kind is "current and last observed", not a lower bound). Parent spec: `2026-10-11-klyx-health-1c-cluster-summary.md` (§2 native counts, §5 coverage, §8 Frontend, §9 slice 4). Slice 3 (`2026-10-11-klyx-health-1c-slice3-rows.md`) is closed; its §4a count selector "lands now, the mast and tree are wired to it in slice 4".
 
 ## 0. Outcome and limits
 
