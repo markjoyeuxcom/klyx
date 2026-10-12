@@ -244,7 +244,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        arch: [amd64, arm64]
+        # arm64 is off until it builds: the Wails Docker cross-compile reads
+        # go.mod from cmd/klyx and mounts only cmd/klyx, but the module root
+        # is the repo root (docs/backlog.md, engineering backlog).
+        arch: [amd64]
     env:
       KLYX_VERSION: ${{ needs.version.outputs.version }}
       KLYX_ARCH: ${{ matrix.arch }}

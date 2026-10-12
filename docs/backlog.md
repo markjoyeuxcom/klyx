@@ -183,6 +183,14 @@ entirely demand-driven from sections 1–4.
 
 ## 6. Engineering backlog
 
+- [ ] **Linux arm64 release build** — off in `release.yml` since v0.10.0 (it
+      never built): the Wails Docker cross-compile (`wails3 tool
+      docker-mounts`, `Dockerfile.cross`) reads `go.mod` from `cmd/klyx` and
+      mounts only `cmd/klyx`, but the module root is the repo root. Options:
+      an arm64 runner (GitHub's free arm64 Linux runners are public-repo
+      only), an aarch64 cross toolchain with arm64 GTK4/WebKitGTK dev libs on
+      the amd64 runner, or a custom Docker build that mounts the module root
+      and builds `./cmd/klyx`
 - [ ] **metadata-informers** for heavy list views — the interim (5000-cap + honest
       truncation banner) shipped; the full shared-informer refactor only if
       per-second re-lists actually bite

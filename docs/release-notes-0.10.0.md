@@ -101,7 +101,7 @@ v0.10.0 covers everything since v0.9.0. That includes the July feature work merg
 
 ## Platform and distribution
 
-- **Assets:** a macOS universal zip; Linux x86_64 and ARM64 (ARM64 is new) as tar.gz, deb and rpm; Windows x64 and ARM64 as an NSIS installer plus a zipped executable.
+- **Assets:** a macOS universal zip; Linux x86_64 as tar.gz, deb and rpm; Windows x64 and ARM64 as an NSIS installer plus a zipped executable. Linux ARM64 is not built yet.
 - **Checksums:** every build ships a `.sha256` that records the bare file names, so `sha256sum -c` / `shasum -a 256 -c` works from the download directory.
 - **Signing:** macOS notarization and Windows Authenticode are wired into the release workflow but not active, because the signing secrets are not configured. Your OS may warn on first launch. Verify each asset against its `.sha256`.
 
