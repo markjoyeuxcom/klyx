@@ -86,9 +86,9 @@ export function Overview({ c }: { c: ClusterDTO }) {
                 <span>nodes</span><span>{c.nodesReady}/{c.nodesTotal} ready</span>
                 <span>pods</span><span>{podsText(c)}</span>
                 <span>namespaces</span><span>{summary?.namespaces != null ? summary.namespaces : "—"}</span>
-                <span>flux</span><span>{toolFact(model, "flux", c.fluxPresent)}</span>
-                <span>argo cd</span><span>{toolFact(model, "argo", c.argoPresent)}</span>
-                <span>gateway</span><span>{toolFact(model, "gateway", !!c.gatewayAPIVersion)}</span>
+                <span>flux</span><span>{toolFact(model, "flux")}</span>
+                <span>argo cd</span><span>{toolFact(model, "argo")}</span>
+                <span>gateway</span><span>{toolFact(model, "gateway")}</span>
               </div>
             </section>
             <section aria-label="Resources" className="ov-section">
@@ -405,17 +405,23 @@ function formatAge(seconds: number): string {
 }
 
 // toolFact: a tool's reading from the attention model (health 1c slice 5
-// §5) - its lines in its own vocabulary, "not covered", "checking…", or
-// "not detected" only on confirmed absence.
-function toolFact(m: ClusterAttention | null, task: string, present: boolean | undefined): string {
-  const a = m?.areas.find((x) => x.id === task);
+// §5), lifecycle first: an ended observation, then its lines in its own
+// vocabulary (checking when unanswered), "not covered" qualified by what
+// capability detection knows (unknown is never "installed"), and "not
+// detected" only when the model confirms the absence - never from a
+// presence flag that may lag.
+function toolFact(m: ClusterAttention | null, task: string): string {
+  if (!m) return "checking…";
+  if (m.ended) return `observation ended at ${new Date(m.ended).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}`;
+  const a = m.areas.find((x) => x.id === task);
   if (a) {
     const lines = a.lines.map((l) => `${a.lines.length > 1 ? `${l.label.toLowerCase()} ` : ""}${lineText(l)}`);
-    const ctl = a.controller ? [`controller ${a.controller.state}`] : [];
+    const ctl = a.controller ? [`controller ${a.controller.state}${a.controller.reason ? ` (${a.controller.reason})` : ""}`] : [];
     return [...ctl, ...lines].join(" · ");
   }
-  if (m?.notCovered.some((u) => u.task === task)) return "installed · not covered by the summary";
-  return present ? "checking…" : "not detected";
+  const nc = m.notCovered.find((u) => u.task === task);
+  if (nc) return nc.capability === "present" ? "installed · not covered by the summary" : "capability not yet known · not covered by the summary";
+  return "not detected";
 }
 
 function Usage({ frac }: { frac: number | null }) {

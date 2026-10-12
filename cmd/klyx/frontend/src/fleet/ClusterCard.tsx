@@ -225,22 +225,31 @@ function healthSignals(m: ClusterAttention): Signal[] {
     : { label: "gitops", value: "not detected", tone: "muted", fraction: null });
   const gw = toolValue(m, "gateway", "");
   out.push(gw ? { label: "gateway", value: gw.value, tone: worst(gw.tones), fraction: null, title: gw.title } : { label: "gateway", value: "not detected", tone: "muted", fraction: null });
-  // other areas needing attention, by name (evidence is never attention)
+  // other areas needing attention, by name (evidence is never attention);
+  // each line keeps its own provenance (§4)
   const others = m.areas.filter((a) => !["workloads", "flux", "argo", "gateway"].includes(a.id) && a.state === "attention");
   if (others.length > 0) {
-    out.push({ label: "also", value: others.map((a) => `${a.label} - ${(a.controller?.state === "not ready" ? ["controller not ready"] : []).concat(shown(a).filter((l) => l.state === "attention").map((l) => lineOf(a, l))).join(" · ")}`).join("; "),
-      tone: others.some((a) => a.tone === "danger") ? "danger" : "warning", fraction: null });
+    const entries = others.map((a) => ({
+      text: `${a.label} - ${(a.controller?.state === "not ready" ? [`controller not ready${a.controller.reason ? ` (${a.controller.reason})` : ""}`] : []).concat(a.lines.filter((l) => l.state === "attention").map((l) => lineOf(a, l))).join(" · ")}`,
+      prov: a.lines.filter((l) => l.state === "attention").map((l) => `${a.label}${a.lines.length > 1 ? ` ${l.label}` : ""}: ${provenance(a, l)}`),
+    }));
+    out.push({ label: "also", value: entries.map((e) => e.text).join("; "), tone: others.some((a) => a.tone === "danger") ? "danger" : "warning", fraction: null,
+      title: entries.flatMap((e) => e.prov).join("\n") });
   }
-  // every expected area's coverage, lit or not (§4): named, never quiet
-  const gaps = [
-    ...m.areas.filter((a) => a.gap).map((a) => `${a.label}: ${[
-      ...(a.controller?.state === "unknown" ? ["controller health unknown"] : []),
-      ...a.lines.filter((l) => l.state === "checking" || l.state === "unreadable" || l.gaps.length > 0)
-        .map((l) => `${a.lines.length > 1 ? `${l.label} ` : ""}${l.state === "checking" || l.state === "unreadable" ? l.text : l.gaps.join(", ")}`),
-    ].join("; ")}`),
-    ...m.notCovered.map((u) => `${u.label}: ${u.capability === "present" ? "not covered by the summary" : "capability not yet known"}`),
-  ];
-  if (gaps.length > 0) out.push({ label: "unverified", value: gaps.join(" · "), tone: "muted", fraction: null, title: gaps.join("\n") });
+  // every expected area's coverage, lit or not (§4): each gap line in full
+  // (lineText: its gaps, re-read state and failure) with its provenance, an
+  // unknown controller with its reason, and the parts not covered
+  const gaps: { text: string; prov: string }[] = [];
+  for (const a of m.areas) {
+    if (a.controller?.state === "unknown") gaps.push({ text: `${a.label}: controller health unknown${a.controller.reason ? ` (${a.controller.reason})` : ""}`, prov: "" });
+    for (const l of a.lines) {
+      if (l.state === "attention") continue; // on its tool's row or under "also", gaps included
+      if (l.state !== "checking" && l.state !== "unreadable" && l.gaps.length === 0) continue;
+      gaps.push({ text: `${a.label}: ${a.lines.length > 1 ? `${l.label} ` : ""}${lineText(l)}`, prov: provenance(a, l) });
+    }
+  }
+  for (const u of m.notCovered) gaps.push({ text: `${u.label}: ${u.capability === "present" ? "not covered by the summary" : "capability not yet known"}`, prov: "" });
+  if (gaps.length > 0) out.push({ label: "unverified", value: gaps.map((g) => g.text).join(" · "), tone: "muted", fraction: null, title: gaps.map((g) => (g.prov ? `${g.text} (${g.prov})` : g.text)).join("\n") });
   return out;
 }
 

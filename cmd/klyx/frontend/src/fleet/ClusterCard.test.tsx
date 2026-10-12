@@ -3,7 +3,7 @@ import { render, screen } from "@testing-library/react";
 import { ClusterCard, clusterDiagnosticScore } from "./ClusterCard";
 import type { ClusterDTO } from "../store/fleet";
 import { useFleet } from "../store/fleet";
-import { useHealth, resetHealthStore, applySummary, applyRows, addSub, openStarted, openSucceeded, dueForBootstrap } from "../store/health";
+import { useHealth, resetHealthStore, applySummary, applyRows, addSub, openStarted, openSucceeded, dueForBootstrap, bootstrapSettled } from "../store/health";
 import { core, dep, evidence, kind, native, replace, summary, task, verdict } from "../test/healthFixtures";
 import { clusterAttention } from "../nav/clusterAttention";
 
@@ -122,7 +122,7 @@ describe("ClusterCard health from the cluster's summary", () => {
     expect(row("workloads").textContent).toBe("none need attention");
     const gaps = row("unverified").textContent ?? "";
     expect(gaps).toContain("Certificates: Certificates could not be read (forbidden)");
-    expect(gaps).toContain("Karpenter: NodeClaims 1 unknown");
+    expect(gaps).toContain("Karpenter: NodeClaims none failing · 1 unknown");
     expect(gaps).toContain("Argo CD: ApplicationSets: not covered by the summary");
     expect(screen.getByText(/health partly unverified/)).toBeTruthy();
   });
@@ -164,6 +164,56 @@ describe("ClusterCard health from the cluster's summary", () => {
     render(<ClusterCard c={base} />);
     expect(row("workloads").textContent).toBe("2 need attention"); // the summary's, refreshing
     expect(row("workloads").parentElement?.title).toMatch(/cluster summary as of .* - refreshing/);
+  });
+
+  // Codex review of 06559e1: "also" and "unverified" keep each line's own
+  // provenance, controller reasons and re-read state.
+  it("'also' captions newer rows as the rows', on both sides of A4", () => {
+    seed(core(), { evaluatedAt: "2026-10-12T12:00:00Z" });
+    addSub("n", N, "nodes", "nodes"); openStarted("n", "t"); openSucceeded("n", "t", 1);
+    applyRows("n", { cluster: N, incarnation: 1, task: "nodes", evaluatedAt: "2026-10-12T12:00:03Z", rows: [], full: true,
+      part: { ...verdict("nodes", { degraded: 1, ok: 2 }, [kind("nodes")]), ver: 3, obs: 3 } }, 0);
+    const r1 = render(<ClusterCard c={base} />);
+    expect(row("also").textContent).toBe("Nodes - 1 need attention");
+    expect(row("also").parentElement?.title).toMatch(/^Nodes: Nodes lens rows as of [^-]+$/); // the rows' time, not the older summary's
+    r1.unmount();
+    applySummary(summary(replace(core(), task("nodes", [{ ...verdict("nodes", { degraded: 2, ok: 1 }, [kind("nodes")]), ver: 6, obs: 6 }])), { seq: 2 }, N), 100);
+    const r2 = render(<ClusterCard c={base} />);
+    expect(row("also").textContent).toBe("Nodes - 1 need attention"); // the rows, held
+    expect(row("also").parentElement?.title).toMatch(/Nodes lens rows as of .* - updating/);
+    r2.unmount();
+    dueForBootstrap(1200);
+    render(<ClusterCard c={base} />);
+    expect(row("also").textContent).toBe("Nodes - 2 need attention"); // the summary's, refreshing
+    expect(row("also").parentElement?.title).toMatch(/Nodes: cluster summary as of .* - refreshing/);
+  });
+
+  it("'also' keeps a not-ready controller's reason; 'unverified' keeps an unknown controller's", () => {
+    seed([...core(),
+      task("certs", [native("certificates", { ok: 2 }, 0, "not ready", [kind("certificates")]), native("issuers", { ok: 1 }, 0, "not ready", [kind("issuers")])], { controller: { state: "not ready", reason: "cert-manager 0/1 available" } }),
+      task("karpenter", [native("nodeclaims", { ok: 3 }, 0, "failing", [kind("nodeclaims")]), native("nodepools", { ok: 1 }, 0, "not ready", [kind("nodepools")])], { controller: { state: "unknown", reason: "deployment unreadable" } })]);
+    render(<ClusterCard c={{ ...base, certManagerPresent: true, karpenterPresent: true }} />);
+    expect(row("also").textContent).toBe("Certificates - controller not ready (cert-manager 0/1 available)");
+    expect(row("unverified").textContent).toContain("Karpenter: controller health unknown (deployment unreadable)");
+  });
+
+  it("a non-primary gap and a failed re-read are named with their provenance", () => {
+    seed([...core(), task("certs", [native("certificates", { ok: 2 }, 0, "not ready", [kind("certificates")]),
+      native("issuers", {}, 0, "not ready", [kind("issuers", { coverage: "unreadable", class: "forbidden" })], { coverage: "unreadable" })])], { evaluatedAt: "2026-10-12T12:00:00Z" });
+    addSub("n", N, "nodes", "nodes"); openStarted("n", "t"); openSucceeded("n", "t", 1);
+    applyRows("n", { cluster: N, incarnation: 1, task: "nodes", evaluatedAt: "2026-10-12T12:00:03Z", rows: [], full: true,
+      part: { ...verdict("nodes", { ok: 3 }, [kind("nodes")]), ver: 3, obs: 3 } }, 0);
+    applySummary(summary([...replace(core(), task("nodes", [{ ...verdict("nodes", { ok: 3 }, [kind("nodes")]), ver: 6, obs: 6 }])),
+      task("certs", [native("certificates", { ok: 2 }, 0, "not ready", [kind("certificates")]),
+        native("issuers", {}, 0, "not ready", [kind("issuers", { coverage: "unreadable", class: "forbidden" })], { coverage: "unreadable" })])], { seq: 2 }, N), 100);
+    const [req] = dueForBootstrap(1200);
+    bootstrapSettled(req.handle, req.requestGen, { error: "context deadline exceeded" }, 1300);
+    render(<ClusterCard c={{ ...base, certManagerPresent: true }} />);
+    const g = row("unverified");
+    expect(g.textContent).toContain("Certificates: Issuers could not be read (forbidden)");
+    expect(g.textContent).toContain("Nodes: none need attention · last re-read failed: context deadline exceeded");
+    expect(g.parentElement?.title).toMatch(/Certificates: Issuers could not be read \(forbidden\) \(cluster summary as of /);
+    expect(g.parentElement?.title).toMatch(/last re-read failed: context deadline exceeded \(cluster summary as of .* - refreshing\)/);
   });
 
   it("an unreachable cluster renders as a ghost stating reason and recovery", () => {

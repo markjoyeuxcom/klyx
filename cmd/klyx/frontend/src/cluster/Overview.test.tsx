@@ -4,7 +4,7 @@ import { Overview } from "./Overview";
 import { useFleet } from "../store/fleet";
 import type { ClusterDTO, MetricsDTO } from "../store/fleet";
 import { applySummary, resetHealthStore, type HealthRef } from "../store/health";
-import { core, dep, evidence, kind, native, replace, summary, task, verdict } from "../test/healthFixtures";
+import { absentPart, core, dep, evidence, kind, native, replace, summary, task, verdict } from "../test/healthFixtures";
 
 // Default: sparklines unavailable so tests render without them.
 import type { SparklinesDTO } from "../bridge/metrics";
@@ -227,6 +227,48 @@ describe("Overview's tool facts read the model (health 1c slice 5 §5)", () => {
     seed([...core(), task("argo", [native("applications", { fault: 1, ok: 2 }, 1, "need attention", [kind("applications")]), native("applicationsets", { ok: 1 }, 0, "not healthy", [kind("applicationsets")])])], { seq: 2 });
     render(<Overview c={c} />);
     expect(screen.getByText("argo cd").nextElementSibling?.textContent).toBe("applications 1 need attention · applicationsets none not healthy");
+  });
+});
+
+// Codex review of 06559e1: the facts read the model's lifecycle and
+// coverage - never a capability flag that may be unknown or lagging.
+describe("Overview's tool facts follow the model's lifecycle", () => {
+  const fact = (label: string) => screen.getByText(label).nextElementSibling?.textContent;
+
+  it("an unknown capability is never called installed", () => {
+    const c = { ...dto, state: "Connecting" };
+    useFleet.setState({ clusters: [c] });
+    seed(core());
+    render(<Overview c={c} />);
+    for (const label of ["flux", "argo cd", "gateway"]) expect(fact(label)).toBe("capability not yet known · not covered by the summary");
+  });
+
+  it("after a Final every fact says the observation ended - never checking, never not detected", () => {
+    const c = { ...dto, fluxPresent: true, argoPresent: false, gatewayAPIVersion: "v1.2" };
+    useFleet.setState({ clusters: [c] });
+    seed(core());
+    seed([], { seq: 2, final: true, evaluatedAt: "2026-10-12T12:05:00Z" });
+    render(<Overview c={c} />);
+    for (const label of ["flux", "argo cd", "gateway"]) expect(fact(label)).toMatch(/^observation ended at /);
+  });
+
+  it("a controller's state keeps its reason", () => {
+    const c = { ...dto, fluxPresent: true };
+    useFleet.setState({ clusters: [c] });
+    seed([...core(), task("flux", [native("reconciliations", { ok: 2 }, 0, "not ready", [kind("kustomizations")]), native("sources", { ok: 1 }, 0, "not ready", [kind("gitrepositories")])],
+      { controller: { state: "unknown", reason: "kustomize-controller unreadable" } })]);
+    render(<Overview c={c} />);
+    expect(fact("flux")).toMatch(/^controller unknown \(kustomize-controller unreadable\) · reconciliations /);
+  });
+
+  it("the Observer's confirmed absence wins over a lagging present flag", () => {
+    const c = { ...dto, fluxPresent: true, argoPresent: true, gatewayAPIVersion: "v1.2" };
+    useFleet.setState({ clusters: [c] });
+    seed([...core(), task("flux", [absentPart("reconciliations", "kustomizations"), absentPart("sources", "gitrepositories")]),
+      task("argo", [absentPart("applications", "applications"), absentPart("applicationsets", "applicationsets")]),
+      task("gateway", [absentPart("gateways", "gateways"), absentPart("routes", "httproutes")])]);
+    render(<Overview c={c} />);
+    for (const label of ["flux", "argo cd", "gateway"]) expect(fact(label)).toBe("not detected");
   });
 });
 
