@@ -6,8 +6,11 @@ import type { NodeSummaryDTO, NodeDetailDTO } from "../store/fleet";
 
 // Mock the bridge/nodes module. cordonNode and startDrain/cancelDrain are
 // also mocked so no Wails runtime is needed.
+// The rows adapter is mocked: these tests seed the nodes slice directly
+// (NodesRows.test.tsx mounts the real adapter over the health store).
+vi.mock("../health/useNodeRows", () => ({ useNodeRows: () => {} }));
+
 vi.mock("../bridge/nodes", () => ({
-  listNodes: vi.fn().mockResolvedValue(undefined),
   openNodeDetail: vi.fn().mockResolvedValue(undefined),
   cordonNode: vi.fn().mockResolvedValue(undefined),
   startDrain: vi.fn().mockResolvedValue({ streamId: "test-stream-1" }),
@@ -61,6 +64,7 @@ import { Events } from "@wailsio/runtime";
 
 const healthy: NodeSummaryDTO = {
   name: "node-healthy",
+  uid: "uid-node-healthy",
   pool: "workers",
   zone: "westeurope-1",
   roles: ["worker"],
@@ -82,6 +86,7 @@ const healthy: NodeSummaryDTO = {
 
 const notReady: NodeSummaryDTO = {
   name: "a-notready",
+  uid: "uid-a-notready",
   roles: [],
   ready: false,
   unschedulable: false,
@@ -101,6 +106,7 @@ const notReady: NodeSummaryDTO = {
 
 const cordoned: NodeSummaryDTO = {
   name: "b-cordoned",
+  uid: "uid-b-cordoned",
   roles: ["worker"],
   ready: true,
   unschedulable: true,
@@ -148,7 +154,6 @@ function seed(items: NodeSummaryDTO[]) {
       ...s.nodes,
       cluster: "homelab",
       items,
-      rowsCluster: "homelab",
       loading: false,
     },
   }));
@@ -160,9 +165,8 @@ function seedWithDetail(summary: NodeSummaryDTO, detail: NodeDetailDTO) {
       ...s.nodes,
       cluster: "homelab",
       items: [summary],
-      rowsCluster: "homelab",
       loading: false,
-      selected: { name: summary.name },
+      selected: { name: summary.name, uid: summary.uid ?? "" },
       detail,
       detailLoading: false,
     },
@@ -309,7 +313,7 @@ describe("NodesView", () => {
     seed([healthy]);
     const { getByText } = render(<NodesView cluster="homelab" />);
     fireEvent.click(getByText("node-healthy"));
-    expect(openNodeDetail).toHaveBeenCalledWith("homelab", "node-healthy");
+    expect(openNodeDetail).toHaveBeenCalledWith("homelab", "node-healthy", "uid-node-healthy");
   });
 
   it("owns scrolling for the node list inside the hidden cluster shell", () => {
@@ -339,7 +343,7 @@ describe("NodesView", () => {
     useFleet.setState((s) => ({
       nodes: {
         ...s.nodes,
-        selected: { name: "node-healthy" },
+        selected: { name: "node-healthy", uid: "uid-node-healthy" },
         detail: fakeDetail,
         detailLoading: false,
       },
@@ -381,7 +385,7 @@ describe("NodesView", () => {
     useFleet.setState((s) => ({
       nodes: {
         ...s.nodes,
-        selected: { name: "node-healthy" },
+        selected: { name: "node-healthy", uid: "uid-node-healthy" },
         detail: fakeDetail,
         detailLoading: false,
       },
@@ -396,7 +400,7 @@ describe("NodesView", () => {
     useFleet.setState((s) => ({
       nodes: {
         ...s.nodes,
-        selected: { name: "node-healthy" },
+        selected: { name: "node-healthy", uid: "uid-node-healthy" },
         detail: fakeDetail,
         detailLoading: false,
       },
@@ -421,7 +425,7 @@ describe("NodesView", () => {
     useFleet.setState((s) => ({
       nodes: {
         ...s.nodes,
-        selected: { name: "node-healthy" },
+        selected: { name: "node-healthy", uid: "uid-node-healthy" },
         detail: fakeDetail,
         detailLoading: false,
       },
@@ -436,7 +440,7 @@ describe("NodesView", () => {
     useFleet.setState((s) => ({
       nodes: {
         ...s.nodes,
-        selected: { name: "node-healthy" },
+        selected: { name: "node-healthy", uid: "uid-node-healthy" },
         detail: fakeDetail,
         detailLoading: false,
       },
@@ -451,7 +455,7 @@ describe("NodesView", () => {
     useFleet.setState((s) => ({
       nodes: {
         ...s.nodes,
-        selected: { name: "node-healthy" },
+        selected: { name: "node-healthy", uid: "uid-node-healthy" },
         detail: fakeDetail,
         detailLoading: false,
       },
@@ -481,7 +485,7 @@ describe("NodesView", () => {
     fireEvent.click(screen.getByRole("button", { name: "Cordon" }));
     // Click the confirm button in the dialog
     fireEvent.click(screen.getAllByText("Cordon").slice(-1)[0]);
-    expect(cordonNode).toHaveBeenCalledWith("homelab", "node-healthy", true);
+    expect(cordonNode).toHaveBeenCalledWith("homelab", "node-healthy", "uid-node-healthy", true);
   });
 
   it("cancelling cordon dialog does not call cordonNode", () => {
@@ -503,7 +507,7 @@ describe("NodesView", () => {
     render(<NodesView cluster="homelab" />);
     fireEvent.click(screen.getByRole("button", { name: "Uncordon" }));
     fireEvent.click(screen.getAllByText("Uncordon").slice(-1)[0]);
-    expect(cordonNode).toHaveBeenCalledWith("homelab", "b-cordoned", false);
+    expect(cordonNode).toHaveBeenCalledWith("homelab", "b-cordoned", "uid-b-cordoned", false);
   });
 
   // --- Drain action tests ---
@@ -546,7 +550,7 @@ describe("NodesView", () => {
     await act(async () => {
       fireEvent.click(getByRole("button", { name: "Drain" }));
     });
-    expect(startDrain).toHaveBeenCalledWith("homelab", "node-healthy", {
+    expect(startDrain).toHaveBeenCalledWith("homelab", "node-healthy", "uid-node-healthy", {
       ignoreDaemonSets: true,
       deleteEmptyDirData: false,
       force: false,
@@ -564,7 +568,7 @@ describe("NodesView", () => {
     await act(async () => {
       fireEvent.click(getByRole("button", { name: "Drain" }));
     });
-    expect(startDrain).toHaveBeenCalledWith("homelab", "node-healthy", expect.objectContaining({
+    expect(startDrain).toHaveBeenCalledWith("homelab", "node-healthy", "uid-node-healthy", expect.objectContaining({
       deleteEmptyDirData: true,
     }), "test-stream-1");
   });
@@ -729,7 +733,7 @@ describe("NodesView health model (1b rework)", () => {
 
 describe("NodesView scope switch", () => {
   it("switching A->B with B's read deferred exposes none of A's numbers, roles or capacity", () => {
-    useFleet.setState((s) => ({ nodes: { ...s.nodes, cluster: "blue", items: [healthy, notReady], rowsCluster: "homelab", loading: true, error: null } }));
+    useFleet.setState((s) => ({ nodes: { ...s.nodes, cluster: "homelab", items: [healthy, notReady], loading: false, error: null } }));
     const { queryByText, getByRole } = render(<NodesView cluster="blue" />);
     expect(queryByText(healthy.name)).toBeNull();
     expect(queryByText("cpu alloc")).toBeNull();
@@ -751,8 +755,8 @@ describe("NodesView workspace template (redesign)", () => {
     expect(openNodeDetail).not.toHaveBeenCalled(); // cached rows at entry
     act(() => seed([healthy, notReady]));
     expect(openNodeDetail).toHaveBeenCalledTimes(1);
-    expect(openNodeDetail).toHaveBeenCalledWith("homelab", "a-notready");
-    act(() => seed([healthy, notReady, { ...notReady, name: "b-notready" }]));
+    expect(openNodeDetail).toHaveBeenCalledWith("homelab", "a-notready", "uid-a-notready");
+    act(() => seed([healthy, notReady, { ...notReady, name: "b-notready", uid: "uid-b-notready" }]));
     expect(openNodeDetail).toHaveBeenCalledTimes(1);
   });
 
@@ -808,7 +812,7 @@ describe("NodesView pending verbs are pinned to their own target (Codex review, 
     fireEvent.click(screen.getByRole("button", { name: "Cordon" }));
     expect(getByText("Cordon node")).toBeTruthy();
     act(() => seed([healthy, cordoned]));
-    act(() => useFleet.getState().selectNode({ name: "b-cordoned" }));
+    act(() => useFleet.getState().selectNode({ name: "b-cordoned", uid: "uid-b-cordoned" }));
     expect(getByText("Cordon node")).toBeTruthy(); // its target still exists
     act(() => seed([cordoned]));
     expect(queryByText("Cordon node")).toBeNull();
@@ -820,7 +824,7 @@ describe("NodesView pending verbs are pinned to their own target (Codex review, 
     const { queryByText, rerender } = render(<NodesView cluster="homelab" />);
     fireEvent.click(screen.getByRole("button", { name: "Cordon" }));
     rerender(<NodesView cluster="other" />);
-    act(() => useFleet.setState((s) => ({ nodes: { ...s.nodes, cluster: "other", items: [healthy], rowsCluster: "other", loading: false } })));
+    act(() => useFleet.setState((s) => ({ nodes: { ...s.nodes, cluster: "other", items: [healthy], loading: false } })));
     expect(queryByText("Cordon node")).toBeNull();
     expect(cordonNode).not.toHaveBeenCalled();
   });

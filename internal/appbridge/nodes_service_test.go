@@ -129,6 +129,7 @@ func TestNodesService_GetNodeDetail_Mapping(t *testing.T) {
 	detail := fleet.NodeDetail{
 		Summary: workloads.NodeSummary{
 			Name:    "node-1",
+			UID:     "uid-node-1",
 			Ready:   true,
 			Version: "v1.30.0",
 		},
@@ -150,10 +151,15 @@ func TestNodesService_GetNodeDetail_Mapping(t *testing.T) {
 	}
 	conn := &fakeNodeConn{detail: detail}
 	svc := NewNodesService(func(string) (NodesConn, bool) { return conn, true })
+	svc.now = func() time.Time { return time.Unix(4000, 0) }
 
 	d := svc.GetNodeDetail("c", "node-1")
 	if d.Summary.Name != "node-1" || !d.Summary.Ready {
 		t.Errorf("summary: %+v", d.Summary)
+	}
+	// the read's identity and time: the lens fences a detail by UID (§5b)
+	if d.Summary.UID != "uid-node-1" || d.AsOfUnix != 4000 {
+		t.Errorf("detail identity/as-of: uid=%q asOf=%d", d.Summary.UID, d.AsOfUnix)
 	}
 	if d.Labels["region"] != "westeurope" {
 		t.Errorf("labels: %+v", d.Labels)

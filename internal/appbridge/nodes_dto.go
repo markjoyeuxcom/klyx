@@ -4,6 +4,7 @@ package appbridge
 type NodeSummaryDTO struct {
 	Name           string   `json:"name"`
 	UID            string   `json:"uid"`
+	GVR            string   `json:"gvr,omitempty"`
 	Generation     int64    `json:"generation"`
 	Roles          []string `json:"roles"`
 	Ready          bool     `json:"ready"`
@@ -19,8 +20,11 @@ type NodeSummaryDTO struct {
 	MemAllocatable float64  `json:"memAllocatable"`
 	PodCapacity    int64    `json:"podCapacity"`
 	AgeSeconds     int      `json:"ageSeconds"`
-	Pool           string   `json:"pool"`
-	Zone           string   `json:"zone"`
+	// Created (unix) anchors the age the lens ticks (1c slice 3 §3);
+	// AgeSeconds is the age at the read or capture.
+	Created int64  `json:"createdUnix,omitempty"`
+	Pool    string `json:"pool"`
+	Zone    string `json:"zone"`
 	// Health is the shared verdict; Ready/Problems are legacy fields kept
 	// until every consumer has migrated.
 	Health HealthDTO `json:"health"`
@@ -95,6 +99,9 @@ type NodeDetailDTO struct {
 	Events      []EventDTO        `json:"events"`
 	YAML        string            `json:"yaml"`
 	PodsOnNode  []PodOnNodeDTO    `json:"podsOnNode"`
+	// AsOfUnix is when the node was read; Summary.UID is the object read. The
+	// inspector shows a detail only for the selected row's UID (design §5b).
+	AsOfUnix int64 `json:"asOfUnix,omitempty"`
 	// Error is set when the detail read failed; the zero DTO is never a node.
 	Error string `json:"error,omitempty"`
 }

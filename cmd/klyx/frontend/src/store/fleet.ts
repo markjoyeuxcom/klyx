@@ -766,23 +766,32 @@ export type MetricsDTO = { available: boolean; mode: string; source: string; war
 export type MetricsSlice = { cluster: string | null; dto: MetricsDTO | null; loading: boolean };
 
 // Nodes types
-export type NodeSummaryDTO = { name: string; roles: string[]; ready: boolean; unschedulable: boolean; problems: string[]; version: string; os: string; arch: string; taintCount: number; cpuCapacity: number; cpuAllocatable: number; memCapacity: number; memAllocatable: number; podCapacity: number; ageSeconds: number; pool?: string; zone?: string; health?: HealthLike };
+export type NodeSummaryDTO = { name: string; uid?: string; gvr?: string; generation?: number; createdUnix?: number; roles: string[]; ready: boolean; unschedulable: boolean; problems: string[]; version: string; os: string; arch: string; taintCount: number; cpuCapacity: number; cpuAllocatable: number; memCapacity: number; memAllocatable: number; podCapacity: number; ageSeconds: number; pool?: string; zone?: string; health?: HealthLike };
 export type NodesResultDTO = { nodes: NodeSummaryDTO[]; error?: string };
 export type NodeTaintDTO = { key: string; value: string; effect: string };
 export type PodOnNodeDTO = { namespace: string; name: string; phase: string };
-export type NodeDetailDTO = { summary: NodeSummaryDTO; labels: Record<string, string>; annotations?: Record<string, string>; taints: NodeTaintDTO[]; conditions: ConditionDTO[]; events: EventDTO[]; yaml: string; podsOnNode: PodOnNodeDTO[]; error?: string };
+export type NodeDetailDTO = { summary: NodeSummaryDTO; labels: Record<string, string>; annotations?: Record<string, string>; taints: NodeTaintDTO[]; conditions: ConditionDTO[]; events: EventDTO[]; yaml: string; podsOnNode: PodOnNodeDTO[]; asOfUnix?: number; error?: string };
 
-export type NodeRef = { name: string };
+// A node selection names the OBJECT (its UID, design §5b): a detail is shown
+// only for that UID, and a verb armed from it writes only that UID.
+export type NodeRef = { name: string; uid: string };
 export type NodesSlice = {
   cluster: string | null;
   items: NodeSummaryDTO[];
-  loading: boolean;
-  error?: string | null; // the last read FAILED; items are the last good read (or empty)
-  rowsCluster?: string | null; // the cluster the current items were READ for
+  loading: boolean; // the rows part has not answered yet
+  error?: string | null; // the Node kind's read failure (stale: items are the last good read)
+  // From the health Observer's shared rows (1c slice 3 §5.7).
+  coverage?: KindCoverageDTO[];
+  rowsState?: RowsStateDTO;
+  counts?: VerdictPartCounts | null; // the one count selector's (global) verdict counts
   selected: NodeRef | null;
   detail: NodeDetailDTO | null;
   detailLoading: boolean;
 };
+// A verdict part's counts (observe.Counts).
+export type VerdictPartCounts = { total: number; fault: number; degraded: number; unknown: number; progressing: number; paused: number; ok: number };
+// What the Nodes rows adapter (health/useNodeRows) writes.
+export type NodesRowsPayload = Pick<NodesSlice, "items" | "loading" | "error" | "coverage" | "rowsState" | "counts">;
 
 // ---- Helm types ---------------------------------------------------------------
 
@@ -862,6 +871,8 @@ type ArgoSlice = {
 export type ArgoRowsPayload = Pick<ArgoSlice, "apps" | "available" | "message" | "error" | "loading"
   | "applicationSets" | "applicationSetsAvailable" | "applicationSetsMessage" | "applicationSetsError" | "applicationSetsLoading"
   | "coverage" | "rowsState" | "partCounts">;
+
+const NODES_EMPTY: NodesSlice = { cluster: null, items: [], loading: false, selected: null, detail: null, detailLoading: false };
 
 const ARGO_EMPTY_ROWS = {
   apps: [] as ArgoAppDTO[], projects: [] as ArgoProjectDTO[], applicationSets: [] as ArgoApplicationSetDTO[],
@@ -1064,8 +1075,8 @@ type FleetState = {
   setEventsLive: (cluster: string, namespace: string, live: boolean) => void;
   clearEvents: () => void;
   nodes: NodesSlice;
-  setNodesLoading: (cluster: string) => void;
-  setNodes: (cluster: string, result: NodesResultDTO) => void;
+  setNodesVisit: (cluster: string) => void;
+  setNodesFromRows: (cluster: string, p: NodesRowsPayload) => void;
   selectNode: (ref: NodeRef | null) => void;
   setNodeDetail: (ref: NodeRef, detail: NodeDetailDTO) => void;
   clearNodes: () => void;
@@ -1441,20 +1452,20 @@ export const useFleet = create<FleetState>((set) => ({
       return { events: { ...s.events, live } };
     }),
   clearEvents: () => set({ events: { cluster: null, namespace: "", items: [], namespaces: [], loading: false, warningsOnly: false, search: "", live: false, truncated: false } }),
-  nodes: { cluster: null, items: [], loading: false, selected: null, detail: null, detailLoading: false },
-  setNodesLoading: (cluster) => set((s) => ({ nodes: { ...s.nodes, cluster, loading: true } })),
-  setNodes: (cluster, result) => set((s) => result.error
-    // Keep rows only if they were READ for this cluster (R2): setNodesLoading
-    // retags the slice's cluster before the read.
-    ? { nodes: { ...s.nodes, cluster, items: s.nodes.rowsCluster === cluster ? s.nodes.items : [], rowsCluster: s.nodes.rowsCluster === cluster ? cluster : null, error: result.error, loading: false } }
-    : { nodes: { ...s.nodes, cluster, items: result.nodes ?? [], rowsCluster: cluster, error: null, loading: false } }),
-  selectNode: (ref) => set((s) => ({ nodes: { ...s.nodes, selected: ref, detail: null, detailLoading: ref !== null } })),
+  nodes: { ...NODES_EMPTY },
+  setNodesVisit: (cluster) => set((s) => ({ nodes: { ...(s.nodes.cluster === cluster ? s.nodes : { ...NODES_EMPTY }), cluster, loading: true, coverage: undefined, rowsState: undefined, counts: undefined } })),
+  setNodesFromRows: (cluster, p) => set((s) => ({ nodes: { ...s.nodes, cluster, ...p } })),
+  // Re-selecting the same object keeps its detail while it is re-read.
+  selectNode: (ref) => set((s) => {
+    const same = !!ref && s.nodes.selected?.name === ref.name && s.nodes.selected.uid === ref.uid;
+    return { nodes: { ...s.nodes, selected: ref, detail: same ? s.nodes.detail : null, detailLoading: ref !== null } };
+  }),
   setNodeDetail: (ref, detail) => set((s) => {
     const sel = s.nodes.selected;
-    if (!sel || sel.name !== ref.name) return {};
+    if (!sel || sel.name !== ref.name || sel.uid !== ref.uid) return {};
     return { nodes: { ...s.nodes, detail, detailLoading: false } };
   }),
-  clearNodes: () => set({ nodes: { cluster: null, items: [], loading: false, selected: null, detail: null, detailLoading: false } }),
+  clearNodes: () => set({ nodes: { ...NODES_EMPTY } }),
   helm: { cluster: null, releases: [], available: true, message: "", loading: false, selected: null, history: [], values: "", detailLoading: false },
   argo: {
     cluster: null,

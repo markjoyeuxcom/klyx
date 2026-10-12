@@ -6,28 +6,60 @@ import (
 	"fmt"
 	"os/exec"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/moomora/klyx/internal/execenv"
 )
 
-// SetCordon marks a node schedulable (false) or unschedulable (true) via a
-// strategic-merge patch on spec.unschedulable. This is equivalent to
-// `kubectl cordon` / `kubectl uncordon` without shelling out.
-func (c *ClusterConn) SetCordon(ctx context.Context, nodeName string, cordon bool) error {
-	patch := map[string]interface{}{
-		"spec": map[string]interface{}{
-			"unschedulable": cordon,
-		},
+// SetCordon marks the ARMED node schedulable (false) or unschedulable (true)
+// via a strategic-merge patch on spec.unschedulable - `kubectl cordon` /
+// `kubectl uncordon` without shelling out. uid is the node object the verb
+// was armed against (design §5b): it is confirmed before the write, and the
+// patch carries it as metadata.uid, so a same-name replacement (a recycled
+// node name) is refused by the API server even if it lands after the check.
+func (c *ClusterConn) SetCordon(ctx context.Context, nodeName, uid string, cordon bool) error {
+	verb := "cordon"
+	if !cordon {
+		verb = "uncordon"
 	}
-	body, err := json.Marshal(patch)
+	if err := c.CheckNodeArmed(ctx, nodeName, uid); err != nil {
+		return fmt.Errorf("%s %w - nothing was written", verb, err)
+	}
+	body, err := json.Marshal(map[string]any{
+		"metadata": map[string]any{"uid": uid},
+		"spec":     map[string]any{"unschedulable": cordon},
+	})
 	if err != nil {
-		return fmt.Errorf("SetCordon marshal: %w", err)
+		return fmt.Errorf("%s marshal: %w", verb, err)
 	}
 	_, err = c.typed.CoreV1().Nodes().Patch(ctx, nodeName, types.StrategicMergePatchType, body, metav1.PatchOptions{})
-	if err != nil {
-		return fmt.Errorf("SetCordon %q cordon=%v: %w", nodeName, cordon, err)
+	switch {
+	case err == nil:
+		return nil
+	case refusedForUID(err):
+		return fmt.Errorf("%s node %s: %w - its write was refused (%v)", verb, nodeName, ErrReplaced, err)
+	case definiteRefusal(err):
+		return fmt.Errorf("%s node %s: %w - nothing was written", verb, nodeName, err)
+	}
+	return fmt.Errorf("%s node %s: %w - the outcome is unverified", verb, nodeName, err)
+}
+
+// CheckNodeArmed confirms the node at nodeName is the armed object (by UID)
+// before a verb acts on it. A missing node or another UID is ErrReplaced.
+func (c *ClusterConn) CheckNodeArmed(ctx context.Context, nodeName, uid string) error {
+	if uid == "" {
+		return fmt.Errorf("node %s: no object identity was armed - reload the list and retry", nodeName)
+	}
+	n, err := c.typed.CoreV1().Nodes().Get(ctx, nodeName, metav1.GetOptions{})
+	switch {
+	case apierrors.IsNotFound(err):
+		return fmt.Errorf("node %s: %w", nodeName, ErrReplaced)
+	case err != nil:
+		return fmt.Errorf("node %s: %w", nodeName, err)
+	case string(n.UID) != uid:
+		return fmt.Errorf("node %s: %w", nodeName, ErrReplaced)
 	}
 	return nil
 }

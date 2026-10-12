@@ -1,35 +1,20 @@
-import { useFleet, NodesResultDTO, NodeDetailDTO, HeadroomReportDTO } from "../store/fleet";
+import { useFleet, NodeDetailDTO, HeadroomReportDTO } from "../store/fleet";
 import { NodesService, NodeOpsService } from "../../bindings/github.com/moomora/klyx/internal/appbridge/index.js";
 
 type ActionResultDTO = { ok: boolean; error: string };
 type OpenLogStreamResultDTO = { streamId: string; error?: string };
 
-export async function listNodes(cluster: string): Promise<void> {
-  useFleet.getState().setNodesLoading(cluster);
-  try {
-    const r = (await NodesService.ListNodes(cluster)) as NodesResultDTO;
-    // Drop a stale response if the user changed cluster while in flight.
-    const cur = useFleet.getState().nodes;
-    if (cur.cluster !== cluster) return;
-    useFleet.getState().setNodes(cluster, r ?? { nodes: [] });
-  } catch {
-    // Clear the loading flag so the view doesn't get stuck on "Loading…".
-    if (useFleet.getState().nodes.cluster === cluster) {
-      useFleet.setState((s) => ({ nodes: { ...s.nodes, loading: false } }));
-    }
-  }
-}
-
-export async function cordonNode(cluster: string, node: string, cordon: boolean): Promise<void> {
-  const r = (await NodeOpsService.Cordon(cluster, node, cordon)) as ActionResultDTO;
+// cordonNode cordons or uncordons the node OBJECT the verb was armed against
+// (uid, design §5b): the backend confirms it and the write carries it, so a
+// same-name replacement is never written. The list is the Observer's live
+// rows - no re-read follows.
+export async function cordonNode(cluster: string, node: string, uid: string, cordon: boolean): Promise<void> {
+  const r = (await NodeOpsService.Cordon(cluster, node, uid, cordon)) as ActionResultDTO;
   useFleet.getState().setActionStatus(
     r.ok
       ? { kind: "success", message: `node ${node} ${cordon ? "cordoned" : "uncordoned"}` }
       : { kind: "error", message: r.error || (cordon ? "Cordon failed" : "Uncordon failed") },
   );
-  if (r.ok) {
-    void listNodes(cluster);
-  }
 }
 
 // DrainOptions are the user-composed kubectl drain flags from the drain
@@ -46,34 +31,42 @@ export type DrainOptions = {
 // startDrain starts the drain on streamId, which the caller minted
 // (newStreamId) and has ALREADY subscribed to as `nodedrain:<streamId>` - the
 // backend emits kubectl output from the moment it starts (review 2026-10-03 #8).
-export async function startDrain(cluster: string, node: string, opts: DrainOptions, streamId: string): Promise<OpenLogStreamResultDTO> {
-  return (await NodeOpsService.StartDrain(cluster, node, opts, streamId)) as OpenLogStreamResultDTO;
+// uid is the node object the drain was armed against: a replaced or missing
+// node starts nothing.
+export async function startDrain(cluster: string, node: string, uid: string, opts: DrainOptions, streamId: string): Promise<OpenLogStreamResultDTO> {
+  return (await NodeOpsService.StartDrain(cluster, node, uid, opts, streamId)) as OpenLogStreamResultDTO;
 }
 
 export async function cancelDrain(streamId: string): Promise<void> {
   await NodeOpsService.CancelDrain(streamId);
 }
 
-export async function openNodeDetail(cluster: string, name: string): Promise<void> {
-  const ref = { name };
+// openNodeDetail selects the node OBJECT (name + uid) and reads its detail
+// directly. Re-opening the same object keeps the shown detail while the
+// re-read is in flight. Only the latest read lands, and only on its own
+// cluster (review 2026-10-03 #5); setNodeDetail drops it unless the selection
+// is still that object - another node or another object with the name never
+// takes it (design §5b). A failed read is the read's outcome, never an empty
+// detail.
+let detailSeq = 0;
+export async function openNodeDetail(cluster: string, name: string, uid: string): Promise<void> {
+  const ref = { name, uid };
+  const seq = ++detailSeq;
   useFleet.getState().selectNode(ref);
+  const current = () => seq === detailSeq && useFleet.getState().nodes.cluster === cluster;
+  let d: NodeDetailDTO;
   try {
-    const d = (await NodesService.GetNodeDetail(cluster, name)) as NodeDetailDTO;
-    // Drop a late detail for another node OR another cluster (review 2026-10-03 #5).
-    const cur = useFleet.getState().nodes;
-    const sel = cur.selected;
-    if (cur.cluster !== cluster || !sel || sel.name !== name) return;
-    useFleet.getState().setNodeDetail(ref, d);
-  } catch {
-    // On failure, clear detailLoading so the panel doesn't spin forever - only
-    // for THIS cluster's selection.
-    const cur = useFleet.getState().nodes;
-    const sel = cur.selected;
-    if (cur.cluster === cluster && sel && sel.name === name) {
-      useFleet.setState((s) => ({ nodes: { ...s.nodes, detailLoading: false } }));
-    }
+    d = (await NodesService.GetNodeDetail(cluster, name)) as NodeDetailDTO;
+  } catch (e) {
+    d = { ...EMPTY_DETAIL, error: e instanceof Error ? e.message : "node detail read failed" };
   }
+  if (current()) useFleet.getState().setNodeDetail(ref, d);
 }
+
+const EMPTY_DETAIL: NodeDetailDTO = {
+  summary: { name: "", roles: [], ready: false, unschedulable: false, problems: [], version: "", os: "", arch: "", taintCount: 0, cpuCapacity: 0, cpuAllocatable: 0, memCapacity: 0, memAllocatable: 0, podCapacity: 0, ageSeconds: 0 },
+  labels: {}, annotations: {}, taints: [], conditions: [], events: [], yaml: "", podsOnNode: [],
+};
 
 // Survivability simulation: lose a node/zone/pool, do the displaced pods fit?
 export async function getNodeHeadroom(cluster: string, loseKind: string, loseName: string): Promise<HeadroomReportDTO> {

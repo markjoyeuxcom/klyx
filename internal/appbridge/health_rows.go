@@ -14,6 +14,7 @@ import (
 	"github.com/moomora/klyx/internal/healthsrc"
 	"github.com/moomora/klyx/internal/karpenter"
 	"github.com/moomora/klyx/internal/observe"
+	"github.com/moomora/klyx/internal/workloads"
 )
 
 // The shared rows transport (1c slice 3 §2, §2a, §2b): a lens reads its
@@ -183,6 +184,20 @@ var rowsConverters = map[string]rowsConverter{
 			for _, at := range a.Attachments {
 				dto.Attachments = append(dto.Attachments, GatewayRouteAttachmentDTO{Parent: at.Parent, Rule: RuleDTO{Included: at.Included, Role: at.Role, Label: at.Label}})
 			}
+			out = append(out, dto)
+		}
+		return out, nil
+	},
+	healthsrc.TaskNodes + "/nodes": func(rows any, _ time.Time) (any, error) {
+		set, err := rowSetOf[workloads.NodeSummary](rows)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]NodeSummaryDTO, 0, len(set.Rows))
+		for _, r := range set.Rows {
+			// a verdict part: the captured verdict is in the summary's Health
+			dto := toNodeSummaryDTO(r.Data)
+			dto.UID, dto.GVR, dto.Generation = r.Ref.UID, r.Ref.GVR, r.Ref.Generation
 			out = append(out, dto)
 		}
 		return out, nil

@@ -165,13 +165,14 @@ describe("buildCommands", () => {
     const s = makeStore({
       nodes: {
         cluster: "dev",
-        items: [{ name: "aks-node-1", ready: true, unschedulable: false, problems: [], roles: ["worker"], version: "v1.30.0" }],
+        items: [{ name: "aks-node-1", uid: "uid-aks-node-1", ready: true, unschedulable: false, problems: [], roles: ["worker"], version: "v1.30.0" }],
       } as never,
     });
     const cmd = buildCommands(s).find((c) => c.id === "node:aks-node-1")!;
     expect(cmd.hint).toContain("ready");
     cmd.run();
-    expect(openNodeDetail).toHaveBeenCalledWith("dev", "aks-node-1");
+    // the node OBJECT the row names (design §5b)
+    expect(openNodeDetail).toHaveBeenCalledWith("dev", "aks-node-1", "uid-aks-node-1");
   });
 
   it("includes Workloads and expands the row on run", () => {

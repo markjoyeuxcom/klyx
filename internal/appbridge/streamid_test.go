@@ -91,7 +91,7 @@ func TestStreamOpens_RefuseInvalidIDBeforeTouchingTheCluster(t *testing.T) {
 		t.Fatal("an invalid id must be refused before any cluster call")
 	}
 	drains, _ := newNodeOpsTestSvc(&fakeNodeOpsConn{})
-	if r := drains.StartDrain("test", "node-1", DrainOptionsDTO{}, "x/y"); r.Error == "" {
+	if r := drains.StartDrain("test", "node-1", "uid-node-1", DrainOptionsDTO{}, "x/y"); r.Error == "" {
 		t.Fatalf("StartDrain must refuse an invalid id: %+v", r)
 	}
 }
@@ -141,10 +141,10 @@ func TestDrain_CancelIsReportedDistinctly(t *testing.T) {
 	conn := &fakeNodeOpsConn{cmdFunc: func(string) (*exec.Cmd, error) { return exec.Command("sh", "-c", "sleep 60"), nil }}
 	svc, em := newNodeOpsTestSvc(conn)
 	id := tid()
-	if r := svc.StartDrain("test", "node-cancel", DrainOptionsDTO{}, id); r.Error != "" {
+	if r := svc.StartDrain("test", "node-cancel", "uid-node-cancel", DrainOptionsDTO{}, id); r.Error != "" {
 		t.Fatalf("start: %+v", r)
 	}
-	if r := svc.StartDrain("test", "node-cancel", DrainOptionsDTO{}, id); r.Error == "" {
+	if r := svc.StartDrain("test", "node-cancel", "uid-node-cancel", DrainOptionsDTO{}, id); r.Error == "" {
 		t.Fatal("a second drain on a live id must be refused")
 	}
 	svc.CancelDrain(id)
@@ -156,7 +156,7 @@ func TestDrain_CancelIsReportedDistinctly(t *testing.T) {
 	ok := &fakeNodeOpsConn{cmdFunc: func(string) (*exec.Cmd, error) { return exec.Command("sh", "-c", "echo evicted"), nil }}
 	svc2, em2 := newNodeOpsTestSvc(ok)
 	id2 := tid()
-	if r := svc2.StartDrain("test", "node-ok", DrainOptionsDTO{}, id2); r.Error != "" {
+	if r := svc2.StartDrain("test", "node-ok", "uid-node-ok", DrainOptionsDTO{}, id2); r.Error != "" {
 		t.Fatalf("start: %+v", r)
 	}
 	if final := drainTerminal(t, em2, id2); final.Cancelled || final.Error != "" {

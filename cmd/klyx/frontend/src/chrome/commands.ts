@@ -256,7 +256,7 @@ export function buildCommands(s: FleetStore): Command[] {
         hint: `Node · ${health} · ${roles} · ${n.version}`,
         run: () => {
           openSection(s, "nodes", nodeCluster);
-          void openNodeDetail(nodeCluster, n.name);
+          void openNodeDetail(nodeCluster, n.name, n.uid ?? "");
         },
       });
       cmds.push({

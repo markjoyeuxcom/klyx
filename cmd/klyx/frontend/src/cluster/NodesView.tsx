@@ -2,7 +2,7 @@ import { Fragment, useEffect, useCallback, useMemo, useState, useRef, useLayoutE
 import { Events } from "@wailsio/runtime";
 import { useFleet } from "../store/fleet";
 import type { ConditionDTO, NodeDetailDTO, NodeSummaryDTO, PodOnNodeDTO } from "../store/fleet";
-import { listNodes, openNodeDetail, cordonNode, startDrain, cancelDrain, getNodeHeadroom } from "../bridge/nodes";
+import { openNodeDetail, cordonNode, startDrain, cancelDrain, getNodeHeadroom } from "../bridge/nodes";
 import type { HeadroomReportDTO } from "../store/fleet";
 import type { DrainOptions } from "../bridge/nodes";
 import { newStreamId } from "../bridge/streams";
@@ -19,11 +19,13 @@ import { CopyButton } from "../chrome/CopyButton";
 import { YamlBlock } from "../chrome/YamlBlock";
 import { EmptyState } from "../chrome/EmptyState";
 import { SkeletonRows } from "../chrome/SkeletonRows";
-import { UpdatedAt, useReceivedAt } from "../chrome/Age";
+import { UpdatedAt, formatAge, useNow, useReceivedAt } from "../chrome/Age";
 import { IconAlertTriangle, IconServer } from "@tabler/icons-react";
 import { ellipsis, btn, StatusDot } from "../chrome/primitives";
 import { VerdictLabel, VerdictLamp, VerdictStatus } from "../health/VerdictView";
-import { type Coverage, attentionTone, isAttention, kindOf, orderOf, summarize } from "../health/verdict";
+import { type VerdictCounts, attentionTone, isAttention, kindOf, orderOf, summarize } from "../health/verdict";
+import { useNodeRows } from "../health/useNodeRows";
+import { clock, coverageGaps, kindEvidence, lastGoodAt } from "../layout/coverage";
 import { InspectorConditions, InspectorEvents } from "./ResourceInspector";
 import { wellKnownResourceRef } from "./resourceRefs";
 import { LensLayout, LensTable, type DatasetState } from "../layout/LensLayout";
@@ -31,12 +33,6 @@ import { InspectorBlock, InspectorLayout, type MenuItem } from "../layout/Inspec
 import { fitColumns, type ColumnDef } from "../layout/columns";
 import { WatchErrorBanner } from "../chrome/WatchErrorBanner";
 import { vh } from "../app/zoom";
-
-function ago(s: number): string {
-  return s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)}m` : s < 86400 ? `${Math.floor(s / 3600)}h` : `${Math.floor(s / 86400)}d`;
-}
-
-
 
 // columns: dot | name | roles | status | version | cpu alloc/cap | mem alloc/cap | taints | age
 type NodeFilter = "all" | "attention" | "unknown" | "cordoned" | "tainted";
@@ -114,7 +110,7 @@ interface LogChunkDTO {
 // stays open for the terminal "cancelled" report instead of vanishing.
 type DrainStatus = "starting" | "running" | "cancelling" | "ended" | "cancelled" | "error";
 
-function DrainModal({ cluster, node, opts, onClose }: { cluster: string; node: string; opts: DrainOptions; onClose: () => void }) {
+function DrainModal({ cluster, node, uid, opts, onClose }: { cluster: string; node: string; uid: string; opts: DrainOptions; onClose: () => void }) {
   const [status, setStatus] = useState<DrainStatus>("starting");
   const [errorMsg, setErrorMsg] = useState<string | undefined>(undefined);
   const streamIdRef = useRef<string>("");
@@ -187,7 +183,7 @@ function DrainModal({ cluster, node, opts, onClose }: { cluster: string; node: s
       // reach it.
       streamIdRef.current = streamId;
 
-      const result = await startDrain(cluster, node, opts, streamId);
+      const result = await startDrain(cluster, node, uid, opts, streamId);
       if (stale) {
         // Unmounted while the start was in flight: the cleanup's cancel ran
         // before the drain was registered (a no-op), so cancel now - never
@@ -223,7 +219,7 @@ function DrainModal({ cluster, node, opts, onClose }: { cluster: string; node: s
     };
     // opts is composed once in the drain dialog and set with the node in one
     // state write, so its identity is stable for this modal's lifetime.
-  }, [cluster, node, opts]);
+  }, [cluster, node, uid, opts]);
 
   // Cancel keeps the subscription: the terminal chunk reports the drain as
   // cancelled with the node still cordoned, and the operator closes the modal
@@ -456,31 +452,50 @@ const COLUMN_LABEL: Record<string, string> = {
   version: "Version", taints: "Taints", cpuAlloc: "CPU alloc / cap", memAlloc: "Mem alloc / cap", age: "Age",
 };
 
+// A verb's target: the cluster + node OBJECT (its UID) it was armed against.
+type NodeVerb = { cluster: string; node: string; uid: string };
+
+// The age ticks from the creation time (1c slice 3 §3); ageSeconds is the
+// age at the capture.
+const ageOf = (n: NodeSummaryDTO, nowS: number) => (n.createdUnix ? Math.max(0, nowS - n.createdUnix) : n.ageSeconds);
+
+// What a selected row's detail is re-read on: its identity and the facts the
+// detail explains. A heartbeat alone re-reads nothing.
+const detailSig = (cluster: string, n: NodeSummaryDTO) =>
+  [cluster, n.name, n.uid ?? "", n.generation ?? 0, kindOf(n.health), n.health?.label ?? "", n.unschedulable, n.taintCount].join("|");
+
 export function NodesView({ cluster }: { cluster: string }) {
   const nodes = useFleet((s) => s.nodes);
   const isProtected = useFleet((s) => s.clusters.find((c) => c.name === cluster)?.protected ?? false);
+  const nowS = Math.floor(useNow() / 1000);
 
-  // drainPending holds the node while the composer dialog is open; confirming
-  // moves node + composed options into drainActive, which mounts the modal.
-  // drainActive pins the cluster the drain was confirmed on: the modal never
-  // restarts the drain against another cluster.
-  const [drainActive, setDrainActive] = useState<{ cluster: string; node: string; opts: DrainOptions } | null>(null);
-  // Pending (not yet confirmed) verbs are pinned to their own cluster + node,
-  // independent of selection: they are cancelled on a cluster switch or when
-  // their target leaves a complete read, and always dispatch to the pinned
-  // cluster.
-  const [cordonPending, setCordonPending] = useState<{ cluster: string; node: string; cordon: boolean } | null>(null);
-  const [drainPending, setDrainPending] = useState<{ cluster: string; node: string } | null>(null);
+  // Verbs are pinned to the cluster + node OBJECT (its UID, design §5b) they
+  // were raised on, independent of selection: dropped on a cluster change,
+  // when a same-name replacement takes the row, or when the node leaves a
+  // complete read, and re-checked at dispatch. The backend writes - or
+  // drains - only that UID. drainPending holds the composer; confirming moves
+  // the target + composed options into drainActive, which mounts the modal.
+  const [drainActive, setDrainActive] = useState<(NodeVerb & { opts: DrainOptions }) | null>(null);
+  const [cordonPending, setCordonPending] = useState<(NodeVerb & { cordon: boolean }) | null>(null);
+  const [drainPending, setDrainPending] = useState<NodeVerb | null>(null);
   const [filter, setFilter] = useState<NodeFilter>("all");
   const [roleFilter, setRoleFilter] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [simulating, setSimulating] = useState(false);
   const [bodyWidth, setBodyWidth] = useState(1100);
 
-  useEffect(() => {
-    void listNodes(cluster);
-    return () => { useFleet.getState().clearNodes(); };
-  }, [cluster]);
+  // The nodes are the Observer's shared rows (1c slice 3 §5.7) - live, not a
+  // snapshot. Their evidence is the Node kind's own coverage.
+  useNodeRows(cluster);
+  const mine = nodes.cluster === cluster;
+  const ev = kindEvidence(mine && !nodes.loading, nodes.coverage, "Node", nodes.error);
+  const error = mine ? nodes.error ?? null : null;
+  const rowsRefreshing = mine && !!nodes.rowsState?.refreshing;
+  const rowsAsOf = mine && nodes.rowsState?.evaluatedAt ? clock(nodes.rowsState.evaluatedAt) : "the last read";
+  const asOf = rowsRefreshing ? ` (as of ${rowsAsOf})` : "";
+  const lastGood = mine ? lastGoodAt(nodes.coverage, ["Node"]) : null;
+  const discoveryGap = mine ? coverageGaps(nodes.coverage ?? []) : null;
+  const mark = ev === "complete" ? "" : ev === "stale" ? "*" : "+";
 
   // Live per-node usage (pod-attributed), joined by node name at render.
   const [util, setUtil] = useState<NodeUtilizationResultDTO | null>(null);
@@ -495,26 +510,11 @@ export function NodesView({ cluster }: { cluster: string }) {
     for (const it of util?.items ?? []) m.set(it.node, { cpu: it.cpu, mem: it.mem });
     return m;
   }, [util]);
-
-  useNavIntent(cluster, ["drain-node", "cordon-node", "select-node"], (intent) => {
-    if (nodes.loading || nodes.items.length === 0) return "wait";
-    const name = "node" in intent ? intent.node : "";
-    const n = nodes.items.find((x) => x.name === name);
-    if (!n) return "missing";
-    if (intent.kind === "drain-node") setDrainPending({ cluster, node: n.name });
-    else if (intent.kind === "cordon-node") setCordonPending({ cluster, node: n.name, cordon: intent.cordon });
-    else void openNodeDetail(cluster, n.name);
-    return "consumed";
-  }, [nodes.items, nodes.loading]);
-
-  const onRefresh = () => {
-    void listNodes(cluster);
-    void getNodeUtilization(cluster).then(setUtil);
-  };
+  const refreshUsage = () => { void getNodeUtilization(cluster).then((r) => { if (useFleet.getState().nodes.cluster === cluster) setUtil(r); }); };
 
   // Only rows read for THIS cluster are shown or counted.
-  const scopedNodes = useMemo(() => (nodes.rowsCluster === cluster ? nodes.items : []), [nodes.items, nodes.rowsCluster, cluster]);
-  const receivedAt = useReceivedAt(!nodes.loading && scopedNodes.length > 0 ? scopedNodes : null);
+  const scopedNodes = useMemo(() => (mine ? nodes.items : []), [nodes.items, mine]);
+  const receivedAt = useReceivedAt(scopedNodes.length > 0 ? scopedNodes : null);
   const orderedNodes = useMemo(
     () => [...scopedNodes].sort((a, b) => orderOf(kindOf(a.health)) - orderOf(kindOf(b.health)) || a.name.localeCompare(b.name)),
     [scopedNodes],
@@ -523,14 +523,47 @@ export function NodesView({ cluster }: { cluster: string }) {
     () => orderedNodes.filter((n) => nodeMatchesFilter(n, filter) && nodeMatchesQuery(n, query, roleFilter)),
     [orderedNodes, filter, query, roleFilter],
   );
-  const coverage: Coverage = nodes.rowsCluster !== cluster ? "unavailable" : nodes.error ? "stale" : "complete";
-  const counts = summarize(scopedNodes, (n) => n.health);
+  // global: the count selector's verdict counts (slice 3 §4a) - the rows'
+  // own, or the summary's past the A4 deadline; row-scoped: cordoned and
+  // tainted, the filter chips and the footer ("as of" while refreshing).
+  const globalCounts = mine ? nodes.counts : null;
+  const rowCounts = summarize(scopedNodes, (n) => n.health);
+  const counts: VerdictCounts = globalCounts ? { ...globalCounts, attention: globalCounts.fault + globalCounts.degraded } : rowCounts;
   const cordonedCount = scopedNodes.filter((n) => n.unschedulable).length;
   const taintedCount = scopedNodes.filter((n) => n.taintCount > 0).length;
   const roles = useMemo(() => [...new Set(scopedNodes.flatMap((n) => n.roles))].sort(), [scopedNodes]);
   const cpuAlloc = scopedNodes.reduce((sum, n) => sum + n.cpuAllocatable, 0);
   const memAlloc = scopedNodes.reduce((sum, n) => sum + n.memAllocatable, 0);
   const podCap = scopedNodes.reduce((sum, n) => sum + n.podCapacity, 0);
+  // "none need attention" is a claim about the present: a complete, current read
+  const current = ev === "complete" && !nodes.rowsState?.updating && !rowsRefreshing;
+
+  // Selection follows the node NAME; its detail and verbs follow the UID. A
+  // node missing from the rows keeps its last row: removed only on a complete
+  // read of the Node kind, otherwise unverified (slice 3 §5a).
+  const sel = mine ? nodes.selected : null;
+  const live = sel ? scopedNodes.find((n) => n.name === sel.name) : undefined;
+  const lastRow = useRef<{ cluster: string; n: NodeSummaryDTO } | null>(null);
+  if (live) lastRow.current = { cluster, n: live };
+  const prior = sel && lastRow.current?.cluster === cluster && lastRow.current.n.name === sel.name ? lastRow.current.n : null;
+  const subject = live ?? prior;
+  const gone: "removed" | "unverified" | null = sel && !live ? (ev === "complete" ? "removed" : "unverified") : null;
+
+  // Opening a row reads its detail; the row's later changes re-read it, and a
+  // same-name replacement is read afresh - the old object's detail never
+  // becomes the new one's (design §5b).
+  const readSig = useRef<string | null>(null);
+  const openRow = useCallback((n: NodeSummaryDTO) => {
+    readSig.current = detailSig(cluster, n);
+    void openNodeDetail(cluster, n.name, n.uid ?? "");
+  }, [cluster]);
+  const liveSig = live ? detailSig(cluster, live) : null;
+  useEffect(() => {
+    if (!sel || !live || !liveSig || readSig.current === liveSig) return;
+    readSig.current = liveSig;
+    void openNodeDetail(cluster, live.name, live.uid ?? "");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cluster, sel, liveSig]);
 
   // Keyboard: j/k cursor (key-stable), Enter opens, Esc closes, / searches.
   const [kbName, setKbName] = useState<string | null>(null);
@@ -540,52 +573,74 @@ export function NodesView({ cluster }: { cluster: string }) {
     autoSelect.current = "done";
     useFleet.getState().selectNode(null);
   }, []);
+  const activate = (n: NodeSummaryDTO) => { autoSelect.current = "done"; setKbName(n.name); openRow(n); };
   useListKeys({
     count: visibleNodes.length,
     selected: kbIdx,
     onSelect: (idx) => { const n = visibleNodes[idx]; if (n) setKbName(n.name); },
-    onActivate: (idx) => { const n = visibleNodes[idx]; if (n) void openNodeDetail(cluster, n.name); },
+    onActivate: (idx) => { const n = visibleNodes[idx]; if (n) activate(n); },
     onEscape: () => { if (useFleet.getState().nodes.selected) closeInspector(); },
     searchRef,
   });
 
-  // One-shot auto-select of the first attention node from a FRESH successful
+  useNavIntent(cluster, ["drain-node", "cordon-node", "select-node"], (intent) => {
+    if (scopedNodes.length === 0) return ev === "complete" ? "missing" : "wait";
+    const name = "node" in intent ? intent.node : "";
+    const n = scopedNodes.find((x) => x.name === name);
+    if (!n) return "missing";
+    const target = { cluster, node: n.name, uid: n.uid ?? "" };
+    if (intent.kind === "drain-node") setDrainPending(target);
+    else if (intent.kind === "cordon-node") setCordonPending({ ...target, cordon: intent.cordon });
+    else activate(n);
+    return "consumed";
+  }, [scopedNodes, ev]);
+
+  // One-shot auto-select of the first attention node from a FRESH complete
   // read after route entry (same contract as Pods).
   const autoSelect = useRef<"pending" | "done">("pending");
   const itemsAtEntry = useRef<NodeSummaryDTO[] | null>(null);
   if (itemsAtEntry.current === null) itemsAtEntry.current = nodes.items;
   useEffect(() => { autoSelect.current = "pending"; itemsAtEntry.current = useFleet.getState().nodes.items; }, [cluster]);
-  const freshRead = !nodes.loading && !nodes.error && nodes.items !== itemsAtEntry.current;
+  const freshRead = mine && ev === "complete" && nodes.items !== itemsAtEntry.current;
   useEffect(() => {
-    if (autoSelect.current === "done" || !freshRead || coverage !== "complete") return;
+    if (autoSelect.current === "done" || !freshRead) return;
     autoSelect.current = "done";
     if (useFleet.getState().nodes.selected) return;
     const n = visibleNodes.find((x) => isAttention(kindOf(x.health)));
     if (!n) return;
     setKbName(n.name);
-    void openNodeDetail(cluster, n.name);
-  }, [freshRead, coverage, visibleNodes, cluster]);
+    openRow(n);
+  }, [freshRead, visibleNodes, openRow]);
 
-  // Selection: a filter excluding it closes the inspector; a node gone from a
-  // complete read is "removed" (identity + last evidence, no operations).
-  const sel = nodes.selected;
-  const selRow = sel ? scopedNodes.find((n) => n.name === sel.name) : undefined;
-  const selRemoved = !!sel && coverage === "complete" && !selRow;
+  // Operator filter edits win: one that hides the selection closes it. A
+  // read change never does - the selection keeps its last evidence.
+  const filterEdits = useRef(0);
   useEffect(() => {
-    if (!sel || !selRow) return;
-    if (!visibleNodes.includes(selRow)) useFleet.getState().selectNode(null);
-  }, [visibleNodes, selRow, sel]);
-  // A pending verb whose target is gone (another cluster, or absent from a
-  // complete read) must not stay one click from dispatch.
-  const targetLive = useCallback(
-    (p: { cluster: string; node: string } | null) =>
-      !!p && p.cluster === cluster && (coverage !== "complete" || scopedNodes.some((x) => x.name === p.node)),
-    [cluster, coverage, scopedNodes],
-  );
+    if (filterEdits.current++ === 0) return;
+    if (live && !visibleNodes.includes(live)) useFleet.getState().selectNode(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filter, query, roleFilter]);
+
+  // A pending verb whose target is gone (another cluster, a same-name
+  // replacement, or absent from a complete read) must not stay one click
+  // from dispatch; dispatch re-checks against the current rows.
+  const targetLive = useCallback((p: NodeVerb | null) => {
+    if (!p || p.cluster !== cluster) return false;
+    const cur = scopedNodes.find((x) => x.name === p.node);
+    if (cur) return cur.uid === p.uid;
+    return ev !== "complete";
+  }, [cluster, ev, scopedNodes]);
   useEffect(() => {
     setCordonPending((p) => (p && !targetLive(p) ? null : p));
     setDrainPending((p) => (p && !targetLive(p) ? null : p));
   }, [targetLive]);
+  const dispatchArmed = (p: NodeVerb, send: () => void) => {
+    if (!targetLive(p)) {
+      useFleet.getState().setActionStatus({ kind: "error", message: `node ${p.node} was replaced or removed since the action was armed - nothing was sent` });
+      return;
+    }
+    send();
+  };
 
   const usageAvailable = util?.available !== false;
   const fitted = useMemo(
@@ -596,16 +651,27 @@ export function NodesView({ cluster }: { cluster: string }) {
   const gridStyle = { gridTemplateColumns: fitted.template };
 
   let state: DatasetState = "ready";
-  if (nodes.loading && scopedNodes.length === 0) state = "loading";
-  else if (coverage === "unavailable" && nodes.error) state = "unreadable";
-  else if (coverage === "unavailable") state = "loading";
+  if (ev === "failed" && scopedNodes.length === 0) state = "unreadable";
+  else if (ev === "pending" && scopedNodes.length === 0) state = "loading";
   else if (scopedNodes.length === 0) state = "empty";
   else if (visibleNodes.length === 0) state = "no-match";
   const clearFilters = () => { setFilter("all"); setRoleFilter(null); setQuery(""); };
+  const icon = <IconServer size={28} stroke={1.2} />;
   const stateView = state === "loading" ? <div style={{ width: "100%", alignSelf: "flex-start" }}><SkeletonRows rows={6} label="loading nodes" /></div>
-    : state === "unreadable" ? <EmptyState icon={<IconAlertTriangle size={28} stroke={1.2} />} title="Nodes could not be read." hint={nodes.error ?? undefined} action={{ label: "Retry", onClick: onRefresh }} />
-    : state === "empty" ? <EmptyState icon={<IconServer size={28} stroke={1.2} />} title="The read returned no nodes." hint="RBAC may hide nodes from this identity." />
-    : <EmptyState icon={<IconServer size={28} stroke={1.2} />} title="No nodes match the current filters." hint={`${scopedNodes.length} node${scopedNodes.length === 1 ? "" : "s"} in this cluster.`} action={{ label: "Clear filters", onClick: clearFilters }} />;
+    : state === "unreadable" ? <EmptyState icon={<IconAlertTriangle size={28} stroke={1.2} />} title="Nodes could not be read." hint={error ?? undefined} />
+    : state === "empty" && rowsRefreshing && counts.total > 0 ? <EmptyState icon={icon} title={`No nodes as of ${rowsAsOf}.`} hint={`Refreshing - the cluster summary now counts ${counts.total}.`} />
+    : state === "empty" && ev === "stale" ? <EmptyState icon={icon} title="No nodes in the last good read." hint={`The read is failing now${lastGood ? ` - last good ${clock(lastGood)}` : ""}: ${error ?? "unverified"}.`} />
+    : state === "empty" ? <EmptyState icon={icon} title="The read returned no nodes." hint="RBAC may hide nodes from this identity." />
+    : <EmptyState icon={icon} title="No nodes match the current filters." hint={`${scopedNodes.length} node${scopedNodes.length === 1 ? "" : "s"} in this cluster${asOf}.`} action={{ label: "Clear filters", onClick: clearFilters }} />;
+
+  // Notices stack: each is its own evidence, none hides another.
+  const notices: React.ReactNode[] = [];
+  if (error && scopedNodes.length > 0) notices.push(<WatchErrorBanner key="read" tool="Nodes" failure={`read failed - showing the last good read${lastGood ? ` from ${clock(lastGood)}` : ""}`} error={error} />);
+  if (rowsRefreshing) notices.push(<div key="a4" role="status" data-testid="rows-refreshing" className="t-secondary" style={statusLine}>Rows as of {rowsAsOf} - refreshing; the totals are the cluster summary's.{nodes.rowsState?.refreshError ? ` Last re-read failed: ${nodes.rowsState.refreshError}` : ""}</div>);
+  if (discoveryGap) notices.push(<div key="gap" role="status" data-testid="discovery-gap" className="t-secondary" style={{ ...statusLine, color: "var(--color-text-warning)", overflowWrap: "anywhere" }}>Discovery re-check failing - {discoveryGap}. A capability gap only; the rows keep their own state.</div>);
+  if (util && !util.available) notices.push(<div key="util" data-testid="node-util-unavailable" className="t-secondary" style={statusLine}>Live usage unavailable - {util.message || "no metrics source"}. Usage columns are hidden.</div>);
+  if (util && util.available && util.message) notices.push(<div key="caveat" role="status" className="t-secondary" style={{ ...statusLine, color: "var(--color-text-warning)" }}>Usage caveat: {util.message}</div>);
+  if (simulating) notices.push(<SurvivabilityModule key="sim" cluster={cluster} nodes={scopedNodes} />);
 
   const tone = attentionTone(counts);
   const filterLabel = filter !== "all" ? filter[0].toUpperCase() + filter.slice(1) : roleFilter ? `role ${roleFilter}` : query ? "search" : "";
@@ -615,16 +681,16 @@ export function NodesView({ cluster }: { cluster: string }) {
       <LensLayout
         label="Nodes"
         title="Nodes"
-        summary={coverage === "unavailable" ? null : (
+        summary={state === "loading" || state === "unreadable" ? null : (
           <>
-            <span className="t-number" style={{ color: "var(--color-text-secondary)" }}>{counts.total}</span>
+            <span className="t-number" data-testid="nodes-total" style={{ color: "var(--color-text-secondary)" }}>{counts.total}{mark}</span>
             {counts.attention > 0 ? (
-              <span className="t-status" style={{ color: tone === "danger" ? "var(--color-text-danger)" : "var(--color-text-warning)" }}>
-                {tone === "danger" ? "▲ " : ""}{counts.attention} need attention
+              <span className="t-status" data-testid="nodes-attention" style={{ color: tone === "danger" ? "var(--color-text-danger)" : "var(--color-text-warning)" }}>
+                {tone === "danger" ? "▲ " : ""}{counts.attention}{mark} need attention
               </span>
-            ) : <span className="t-secondary">{counts.unknown > 0 ? "no known attention" : "none need attention"}</span>}
+            ) : <span className="t-secondary">{counts.unknown > 0 ? "no known attention" : current ? "none need attention" : "none known to need attention"}</span>}
             <span className="t-secondary">
-              {[counts.fault ? `${counts.fault} not ready` : "", counts.degraded ? `${counts.degraded} under pressure` : "", counts.unknown ? `${counts.unknown} unverified` : "", cordonedCount ? `${cordonedCount} cordoned` : ""].filter(Boolean).join(" · ")}
+              {[counts.fault ? `${counts.fault}${mark} not ready` : "", counts.degraded ? `${counts.degraded}${mark} under pressure` : "", counts.unknown ? `${counts.unknown}${mark} unverified` : "", cordonedCount ? `${cordonedCount}${mark} cordoned${asOf}` : ""].filter(Boolean).join(" · ")}
             </span>
           </>
         )}
@@ -632,17 +698,17 @@ export function NodesView({ cluster }: { cluster: string }) {
           <>
             <UpdatedAt at={receivedAt} />
             <button className="l-btn" aria-pressed={simulating} onClick={() => setSimulating(!simulating)} title="Does this cluster survive losing a node, zone or pool?">Simulate loss</button>
-            <button className="l-btn" onClick={onRefresh}>Refresh</button>
+            <button className="l-btn" onClick={refreshUsage} title="The nodes are live; this re-reads the usage columns">Refresh usage</button>
           </>
         }
         controls={
           <>
             <button className="l-chip" aria-pressed={filter === "all"} onClick={() => setFilter("all")}>All <span style={{ color: "var(--color-text-tertiary)" }}>{scopedNodes.length || ""}</span></button>
             <button className="l-chip" aria-pressed={filter === "attention"} onClick={() => setFilter("attention")}>
-              Attention {counts.attention > 0 && <span style={{ color: tone === "danger" ? "var(--color-text-danger)" : "var(--color-text-warning)" }}>{counts.attention}</span>}
+              Attention {rowCounts.attention > 0 && <span style={{ color: tone === "danger" ? "var(--color-text-danger)" : "var(--color-text-warning)" }}>{rowCounts.attention}</span>}
             </button>
-            {(counts.unknown > 0 || filter === "unknown") && (
-              <button className="l-chip" aria-pressed={filter === "unknown"} onClick={() => setFilter("unknown")}>Unknown <span style={{ color: "var(--color-text-tertiary)" }}>{counts.unknown || ""}</span></button>
+            {(rowCounts.unknown > 0 || filter === "unknown") && (
+              <button className="l-chip" aria-pressed={filter === "unknown"} onClick={() => setFilter("unknown")}>Unknown <span style={{ color: "var(--color-text-tertiary)" }}>{rowCounts.unknown || ""}</span></button>
             )}
             <button className="l-chip" aria-pressed={filter === "cordoned"} onClick={() => setFilter("cordoned")}>Cordoned <span style={{ color: "var(--color-text-tertiary)" }}>{cordonedCount || ""}</span></button>
             <button className="l-chip" aria-pressed={filter === "tainted"} onClick={() => setFilter("tainted")}>Tainted <span style={{ color: "var(--color-text-tertiary)" }}>{taintedCount || ""}</span></button>
@@ -661,22 +727,7 @@ export function NodesView({ cluster }: { cluster: string }) {
             </label>
           </>
         }
-        notice={(nodes.error && coverage !== "unavailable") || (util && (!util.available || util.message)) || simulating ? (
-          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-            {nodes.error && coverage !== "unavailable" && <WatchErrorBanner tool="Nodes" failure="read failed - showing the last good read" error={nodes.error} />}
-            {util && !util.available && (
-              <div data-testid="node-util-unavailable" className="t-secondary" style={{ minHeight: 24, display: "flex", alignItems: "center", padding: "0 10px" }}>
-                Live usage unavailable - {util.message || "no metrics source"}. Usage columns are hidden.
-              </div>
-            )}
-            {util && util.available && util.message && (
-              <div role="status" className="t-secondary" style={{ minHeight: 24, display: "flex", alignItems: "center", padding: "0 10px", color: "var(--color-text-warning)" }}>
-                Usage caveat: {util.message}
-              </div>
-            )}
-            {simulating && <SurvivabilityModule cluster={cluster} nodes={scopedNodes} />}
-          </div>
-        ) : undefined}
+        notice={notices.length > 0 ? <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>{notices}</div> : undefined}
         state={state}
         stateView={stateView}
         body={
@@ -691,7 +742,7 @@ export function NodesView({ cluster }: { cluster: string }) {
                 const usage = usageByNode.get(n.name);
                 return (
                   <div
-                    key={n.name}
+                    key={n.uid || n.name}
                     role="button"
                     tabIndex={0}
                     data-rowhost="true"
@@ -701,8 +752,8 @@ export function NodesView({ cluster }: { cluster: string }) {
                     data-cursor={kbName === n.name ? "true" : undefined}
                     data-selected={sel?.name === n.name ? "true" : undefined}
                     ref={kbName === n.name ? (el) => el?.scrollIntoView?.({ block: "nearest" }) : undefined}
-                    onClick={() => { setKbName(n.name); void openNodeDetail(cluster, n.name); }}
-                    onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); void openNodeDetail(cluster, n.name); } }}
+                    onClick={() => activate(n)}
+                    onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); activate(n); } }}
                   >
                     {show("lamp") && <VerdictLamp health={n.health} size={8} />}
                     {show("name") && (
@@ -719,7 +770,7 @@ export function NodesView({ cluster }: { cluster: string }) {
                     {show("taints") && <span style={{ color: n.taintCount > 0 ? "var(--color-text-secondary)" : "var(--color-text-tertiary)" }}>{n.taintCount > 0 ? n.taintCount : "-"}</span>}
                     {show("cpuAlloc") && <CapacityCell value={n.cpuAllocatable} total={n.cpuCapacity} format={(v) => v.toFixed(1)} />}
                     {show("memAlloc") && <CapacityCell value={n.memAllocatable} total={n.memCapacity} format={fmtMem} />}
-                    {show("age") && <span style={{ color: "var(--color-text-tertiary)" }}>{ago(n.ageSeconds)}</span>}
+                    {show("age") && <span style={{ color: "var(--color-text-tertiary)" }}>{formatAge(ageOf(n, nowS))}</span>}
                   </div>
                 );
               })}
@@ -730,21 +781,23 @@ export function NodesView({ cluster }: { cluster: string }) {
         footerEnd={
           <>
             <span className="t-secondary">
-              {visibleNodes.length} of {scopedNodes.length} nodes{filterLabel ? ` · filter: ${filterLabel}` : ""} · allocatable {cpuAlloc.toFixed(1)} CPU · {fmtMem(memAlloc)} · {podCap} pod slots
+              {visibleNodes.length} of {scopedNodes.length}{mark} nodes{filterLabel ? ` · filter: ${filterLabel}` : ""}{asOf} · allocatable {cpuAlloc.toFixed(1)} CPU · {fmtMem(memAlloc)} · {podCap} pod slots
             </span>
             {filterLabel && <button className="l-chip" style={{ height: 20, color: "var(--color-text-info)" }} onClick={clearFilters}>Show all {scopedNodes.length} nodes</button>}
           </>
         }
-        inspector={sel && nodes.cluster === cluster ? (
+        inspector={sel && subject ? (
           <NodeInspector
             key={`${cluster}/${sel.name}`}
             cluster={cluster}
-            name={sel.name}
+            row={subject}
+            uid={subject.uid ?? sel.uid}
+            nowS={nowS}
             detail={nodes.detail}
             loading={nodes.detailLoading}
-            removed={selRemoved}
-            onCordon={(node, cordon) => setCordonPending({ cluster, node, cordon })}
-            onDrain={(node) => setDrainPending({ cluster, node })}
+            gone={gone}
+            onCordon={(cordon) => setCordonPending({ cluster, node: subject.name, uid: subject.uid ?? "", cordon })}
+            onDrain={() => setDrainPending({ cluster, node: subject.name, uid: subject.uid ?? "" })}
             onClose={closeInspector}
           />
         ) : undefined}
@@ -761,9 +814,9 @@ export function NodesView({ cluster }: { cluster: string }) {
           danger={cordonPending.cordon}
           confirmLabel={cordonPending.cordon ? "Cordon" : "Uncordon"}
           onConfirm={() => {
-            const { cluster: target, node, cordon } = cordonPending;
+            const p = cordonPending;
             setCordonPending(null);
-            void cordonNode(target, node, cordon);
+            dispatchArmed(p, () => void cordonNode(p.cluster, p.node, p.uid, p.cordon));
           }}
           onCancel={() => setCordonPending(null)}
         />
@@ -775,9 +828,9 @@ export function NodesView({ cluster }: { cluster: string }) {
           node={drainPending.node}
           isProtected={isProtected}
           onConfirm={(opts) => {
-            const { cluster: target, node } = drainPending;
+            const p = drainPending;
             setDrainPending(null);
-            setDrainActive({ cluster: target, node, opts });
+            dispatchArmed(p, () => setDrainActive({ ...p, opts }));
           }}
           onCancel={() => setDrainPending(null)}
         />
@@ -787,17 +840,16 @@ export function NodesView({ cluster }: { cluster: string }) {
         <DrainModal
           cluster={drainActive.cluster}
           node={drainActive.node}
+          uid={drainActive.uid}
           opts={drainActive.opts}
-          onClose={() => {
-            const drained = drainActive.cluster;
-            setDrainActive(null);
-            if (drained === cluster) void listNodes(cluster);
-          }}
+          onClose={() => setDrainActive(null)}
         />
       )}
     </div>
   );
 }
+
+const statusLine: React.CSSProperties = { minHeight: 24, display: "flex", alignItems: "center", padding: "0 10px" };
 
 // SurvivabilityModule: "does this cluster survive losing X?" - a requests-
 // based bin-pack simulation (backend workloads.SimulateLoss). Targets are
@@ -931,86 +983,116 @@ function CapacityCell({ value, total, format }: { value: number; total: number; 
 
 // NodeInspector - investigation order: verdict, actions (pods on the node
 // first, cordon/drain safeguarded), failing conditions, pods, events, capacity,
-// then taints and collapsed metadata.
-function NodeInspector({ cluster, name, detail, loading, removed, onCordon, onDrain, onClose }: {
+// then taints and collapsed metadata. The row (live, or the selection's last)
+// is the verdict and the facts; the detail is shown only for the row's UID
+// (design §5b) - a same-name replacement's detail never becomes this one's.
+function NodeInspector({ cluster, row, uid, nowS, detail, loading, gone, onCordon, onDrain, onClose }: {
   cluster: string;
-  name: string;
+  row: NodeSummaryDTO;
+  uid: string;
+  nowS: number;
   detail: NodeDetailDTO | null;
   loading: boolean;
-  removed: boolean;
-  onCordon: (node: string, cordon: boolean) => void;
-  onDrain: (node: string) => void;
+  gone: "removed" | "unverified" | null;
+  onCordon: (cordon: boolean) => void;
+  onDrain: () => void;
   onClose: () => void;
 }) {
   const [tab, setTab] = useState<"overview" | "manifest">("overview");
   const [describing, setDescribing] = useState(false);
   const podsRef = useRef<HTMLDivElement>(null);
-  const rowHealth = useFleet((s) => s.nodes.items.find((x) => x.name === name)?.health);
-  const n = detail && !detail.error ? detail.summary : null;
-  const live = !removed;
+  const name = row.name;
+  const live = gone !== "removed";
   const manifestRef = wellKnownResourceRef("", "Node");
+
+  const detailError = detail?.error || null;
+  const forObject = detail && !detail.error && detail.summary.uid === uid ? detail : null;
+  const detailOfOther = !!detail && !detail.error && !forObject;
+  // the last detail read for this object, by UID: when the node leaves the
+  // read or a re-read fails it is the object's last evidence, said as such -
+  // never a recreation's
+  const lastDetail = useRef<{ uid: string; d: NodeDetailDTO } | null>(null);
+  if (forObject) lastDetail.current = { uid, d: forObject };
+  const shown = forObject ?? (lastDetail.current?.uid === uid ? lastDetail.current.d : null);
+  const lastEvidence = !!gone || !!detailError;
+  const readAt = shown?.asOfUnix ? new Date(shown.asOfUnix * 1000).toLocaleTimeString() : null;
 
   const openPod = (pod: PodOnNodeDTO) => {
     useFleet.getState().setSection("pods");
     useFleet.getState().requestNavIntent({ kind: "select-pod", cluster, namespace: pod.namespace, name: pod.name });
   };
 
-  const more: MenuItem[] = n ? [
-    { label: `Drain ${n.name}…`, danger: true, onSelect: () => onDrain(n.name) },
+  const more: MenuItem[] = live ? [
+    { label: `Drain ${name}…`, danger: true, onSelect: onDrain },
     { label: "Describe", onSelect: () => setDescribing(true) },
     ...(manifestRef ? [{ label: "Edit manifest in Resources", onSelect: () => { const nav = useFleet.getState(); nav.openResource(manifestRef); nav.openInstance("", name); } }] : []),
   ] : [];
 
-  const problems = detail?.conditions.filter(isAdverse) ?? [];
-  const unverified = detail?.conditions.filter((c) => conditionTone(c) === "unknown") ?? [];
+  const problems = shown?.conditions.filter(isAdverse) ?? [];
+  const unverifiedConds = shown?.conditions.filter((c) => conditionTone(c) === "unknown") ?? [];
 
   return (
     <div data-testid="node-detail-panel" style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
       <InspectorLayout
         kind="Node"
         name={name}
-        meta={n ? [n.roles.join(", "), n.version, `${ago(n.ageSeconds)} old`, n.pool ? `pool ${n.pool}` : "", n.zone ? `zone ${n.zone}` : ""].filter(Boolean).join(" · ") : undefined}
+        meta={[row.roles.join(", "), row.version, `${formatAge(ageOf(row, nowS))} old`, row.pool ? `pool ${row.pool}` : "", row.zone ? `zone ${row.zone}` : ""].filter(Boolean).join(" · ")}
         onClose={onClose}
-        verdict={removed ? (
+        verdict={gone === "removed" ? (
           <div role="status" className="t-body" style={{ padding: "8px 10px", borderRadius: 4, background: "var(--color-background-secondary)", boxShadow: "inset 0 0 0 1px var(--color-border-secondary)" }}>
             <span className="t-status">Node removed.</span> It is no longer in the current read. The details below are its last evidence; actions are disabled.
           </div>
-        ) : n ? <VerdictStatus health={rowHealth ?? n.health} detail={[n.unschedulable ? "cordoned" : "", n.taintCount > 0 ? `${n.taintCount} taints` : ""].filter(Boolean).join(" · ")} /> : undefined}
-        primary={n && live ? { label: `Pods on node · ${detail?.podsOnNode.length ?? 0}`, onSelect: () => { setTab("overview"); requestAnimationFrame(() => podsRef.current?.scrollIntoView({ block: "start" })); } } : undefined}
-        secondary={n && live ? (n.unschedulable ? { label: "Uncordon", onSelect: () => onCordon(n.name, false) } : { label: "Cordon", onSelect: () => onCordon(n.name, true) }) : undefined}
-        more={live ? more : []}
+        ) : gone === "unverified" ? (
+          <div role="status" data-testid="selection-unverified" className="t-body" style={{ padding: "8px 10px", borderRadius: 4, background: "var(--color-background-secondary)", boxShadow: "inset 0 0 0 1px var(--color-border-warning)" }}>
+            <span className="t-status">Not in the current Node read.</span> That read is incomplete, so this is unverified - it may still exist. The details below are its last observed row.
+          </div>
+        ) : <VerdictStatus health={row.health} detail={[row.unschedulable ? "cordoned" : "", row.taintCount > 0 ? `${row.taintCount} taints` : ""].filter(Boolean).join(" · ")} />}
+        primary={shown && live ? { label: `Pods on node · ${shown.podsOnNode.length}`, onSelect: () => { setTab("overview"); requestAnimationFrame(() => podsRef.current?.scrollIntoView({ block: "start" })); } } : undefined}
+        secondary={live ? (row.unschedulable ? { label: "Uncordon", onSelect: () => onCordon(false) } : { label: "Cordon", onSelect: () => onCordon(true) }) : undefined}
+        more={more}
         tab={tab}
         onTab={setTab}
-        manifest={detail && !detail.error ? <YamlBlock text={detail.yaml} copyLabel="node YAML" /> : null}
+        manifest={shown ? <YamlBlock text={shown.yaml} copyLabel="node YAML" /> : null}
       >
-        {loading && !detail ? (
-          <div className="t-body" style={{ color: "var(--color-text-tertiary)" }}>Loading node detail…</div>
-        ) : !detail ? (
-          <div className="t-body" style={{ color: "var(--color-text-tertiary)" }}>This node is no longer available.</div>
-        ) : detail.error ? (
-          <div role="alert" className="t-body" style={{ color: "var(--color-text-danger)" }}>Could not load node detail: {detail.error}</div>
-        ) : n && (
+        {describing && live && <DescribePane cluster={cluster} kindArg="node" namespace="" name={name} onClose={() => setDescribing(false)} />}
+        {!shown ? (
+          detailError && !loading ? (
+            <div role="alert" className="t-body" style={{ color: "var(--color-text-danger)" }}>Could not load node detail: {detailError}</div>
+          ) : (
+            <div className="t-body" data-testid="node-detail-unloaded" style={{ color: "var(--color-text-tertiary)" }}>
+              {gone === "removed" ? "No detail was loaded before it was removed."
+                : detailOfOther && !loading ? "Detail not loaded for this object - the last read found another object with this name."
+                : "Loading node detail…"}
+            </div>
+          )
+        ) : (
           <>
-            {describing && <DescribePane cluster={cluster} kindArg="node" namespace="" name={n.name} onClose={() => setDescribing(false)} />}
+            {readAt && (
+              <span className="t-secondary" data-testid="node-detail-asof" style={{ color: detailError ? "var(--color-text-warning)" : undefined }}>
+                {lastEvidence
+                  ? `Last read ${readAt}${gone === "removed" ? " - before it was removed." : detailError ? ` - the re-read failed: ${detailError}` : "."}`
+                  : `Detail read ${readAt}.`}
+              </span>
+            )}
 
             {problems.length > 0 && (
               <InspectorBlock title="Failing conditions" count={problems.length}>
                 <InspectorConditions conditions={problems} colorOf={condColor} />
               </InspectorBlock>
             )}
-            {unverified.length > 0 && (
-              <InspectorBlock title="Unverified conditions" count={unverified.length}>
-                <InspectorConditions conditions={unverified} colorOf={condColor} />
+            {unverifiedConds.length > 0 && (
+              <InspectorBlock title="Unverified conditions" count={unverifiedConds.length}>
+                <InspectorConditions conditions={unverifiedConds} colorOf={condColor} />
               </InspectorBlock>
             )}
 
             <div ref={podsRef}>
-              <InspectorBlock title="Pods on node" count={detail.podsOnNode.length}>
-                {detail.podsOnNode.length === 0 ? (
+              <InspectorBlock title="Pods on node" count={shown.podsOnNode.length}>
+                {shown.podsOnNode.length === 0 ? (
                   <span className="t-secondary">No pods scheduled on this node.</span>
                 ) : (
                   <div style={{ display: "flex", flexDirection: "column" }}>
-                    {detail.podsOnNode.map((p) => (
+                    {shown.podsOnNode.map((p) => (
                       <button
                         key={`${p.namespace}/${p.name}`}
                         onClick={() => openPod(p)}
@@ -1027,23 +1109,23 @@ function NodeInspector({ cluster, name, detail, loading, removed, onCordon, onDr
               </InspectorBlock>
             </div>
 
-            <InspectorBlock title="Recent events" count={detail.events.length}>
-              <InspectorEvents events={detail.events} emptyText="No events for this node." wrap />
+            <InspectorBlock title="Recent events" count={shown.events.length}>
+              <InspectorEvents events={shown.events} emptyText="No events for this node." wrap />
             </InspectorBlock>
 
             <InspectorBlock title="Capacity">
               <div className="insp-kv">
-                <span>CPU</span><span>{n.cpuAllocatable.toFixed(1)} allocatable / {n.cpuCapacity.toFixed(1)} capacity</span>
-                <span>memory</span><span>{fmtMem(n.memAllocatable)} allocatable / {fmtMem(n.memCapacity)} capacity</span>
-                {n.podCapacity > 0 && <><span>pods</span><span>{n.podCapacity} max</span></>}
-                <span>OS / arch</span><span>{n.os || "-"} / {n.arch || "-"}</span>
+                <span>CPU</span><span>{row.cpuAllocatable.toFixed(1)} allocatable / {row.cpuCapacity.toFixed(1)} capacity</span>
+                <span>memory</span><span>{fmtMem(row.memAllocatable)} allocatable / {fmtMem(row.memCapacity)} capacity</span>
+                {row.podCapacity > 0 && <><span>pods</span><span>{row.podCapacity} max</span></>}
+                <span>OS / arch</span><span>{row.os || "-"} / {row.arch || "-"}</span>
               </div>
             </InspectorBlock>
 
-            {detail.taints.length > 0 && (
-              <InspectorBlock title="Taints" count={detail.taints.length}>
+            {shown.taints.length > 0 && (
+              <InspectorBlock title="Taints" count={shown.taints.length}>
                 <div className="insp-kv" style={{ gridTemplateColumns: "minmax(0,1fr) 120px" }}>
-                  {detail.taints.map((t, i) => (
+                  {shown.taints.map((t, i) => (
                     <Fragment key={i}>
                       <span style={{ overflowWrap: "anywhere", color: "var(--color-text-primary)" }}>{t.key}{t.value ? `=${t.value}` : ""}</span>
                       <span>{t.effect}</span>
@@ -1053,17 +1135,17 @@ function NodeInspector({ cluster, name, detail, loading, removed, onCordon, onDr
               </InspectorBlock>
             )}
 
-            <InspectorBlock title="Conditions" count={detail.conditions.length} defaultOpen={false}>
+            <InspectorBlock title="Conditions" count={shown.conditions.length} defaultOpen={false}>
               <InspectorConditions
-                conditions={[...detail.conditions].sort((a, b) => TONE_ORDER[conditionTone(a)] - TONE_ORDER[conditionTone(b)] || a.type.localeCompare(b.type))}
+                conditions={[...shown.conditions].sort((a, b) => TONE_ORDER[conditionTone(a)] - TONE_ORDER[conditionTone(b)] || a.type.localeCompare(b.type))}
                 colorOf={condColor}
               />
             </InspectorBlock>
-            <InspectorBlock title="Labels" count={Object.keys(detail.labels ?? {}).length} defaultOpen={false}>
-              <NodeChips values={detail.labels} />
+            <InspectorBlock title="Labels" count={Object.keys(shown.labels ?? {}).length} defaultOpen={false}>
+              <NodeChips values={shown.labels} />
             </InspectorBlock>
-            <InspectorBlock title="Annotations" count={Object.keys(detail.annotations ?? {}).length} defaultOpen={false}>
-              <NodeChips values={detail.annotations} />
+            <InspectorBlock title="Annotations" count={Object.keys(shown.annotations ?? {}).length} defaultOpen={false}>
+              <NodeChips values={shown.annotations} />
             </InspectorBlock>
           </>
         )}

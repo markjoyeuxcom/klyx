@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { useFleet } from "./fleet";
-import type { PodsResultDTO, NodesResultDTO } from "./fleet";
+import type { PodsResultDTO, NodeSummaryDTO } from "./fleet";
 
 vi.mock("../../bindings/github.com/moomora/klyx/internal/appbridge/index.js", () => ({ CRDService: { ListCRDs: vi.fn(), CountKind: vi.fn() } }));
 vi.mock("@wailsio/runtime", () => ({ Clipboard: { SetText: vi.fn() } }));
@@ -38,9 +38,11 @@ describe("read-failure scope honesty", () => {
 
   it("never relabels another cluster's nodes when the new cluster fails (R2)", () => {
     const s = useFleet.getState();
-    s.setNodes("dev", { nodes: [{ name: "same-node" }] } as unknown as NodesResultDTO);
-    s.setNodesLoading("prd");
-    s.setNodes("prd", { nodes: [], error: "forbidden" });
+    s.setNodesVisit("dev");
+    s.setNodesFromRows("dev", { items: [{ name: "same-node" }] as unknown as NodeSummaryDTO[], loading: false });
+    s.setNodesVisit("prd"); // a new cluster's visit starts empty, before any read
+    expect(useFleet.getState().nodes.items).toHaveLength(0);
+    s.setNodesFromRows("prd", { items: [], loading: false, error: "forbidden" });
     expect(useFleet.getState().nodes.items).toHaveLength(0);
   });
 

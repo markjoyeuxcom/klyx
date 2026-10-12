@@ -150,7 +150,8 @@ func (f *fakeConn) HubbleFlowStats(context.Context) (hubble.FlowStats, hubble.St
 func (f *fakeConn) RevealSecretKey(ctx context.Context, ns, name, key string) (string, error) {
 	return "", nil
 }
-func (f *fakeConn) SetCordon(context.Context, string, bool) error { return nil }
+func (f *fakeConn) SetCordon(context.Context, string, string, bool) error { return nil }
+func (f *fakeConn) CheckNodeArmed(context.Context, string, string) error  { return nil }
 func (f *fakeConn) DrainNodeCmd(nodeName string, opts DrainOptions) (*exec.Cmd, error) {
 	return exec.Command("true"), nil
 }

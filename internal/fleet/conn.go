@@ -98,7 +98,8 @@ type Conn interface {
 	ClusterMetrics(ctx context.Context, forceReprobe bool) (metrics.ClusterMetrics, metrics.MetricsCapability)
 	RouteMetrics(ctx context.Context, routeKeys []string) (map[string]routemetrics.RouteMetrics, routemetrics.Status)
 	HubbleFlowStats(ctx context.Context) (hubble.FlowStats, hubble.Status)
-	SetCordon(ctx context.Context, nodeName string, cordon bool) error
+	SetCordon(ctx context.Context, nodeName, uid string, cordon bool) error
+	CheckNodeArmed(ctx context.Context, nodeName, uid string) error
 	DrainNodeCmd(nodeName string, opts DrainOptions) (*exec.Cmd, error)
 	DescribeCmd(ctx context.Context, kindArg, namespace, name string) (*exec.Cmd, error)
 	ExecCommand(namespace, pod, container string) ([]string, error)

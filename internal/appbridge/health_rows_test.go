@@ -24,6 +24,7 @@ import (
 	"github.com/moomora/klyx/internal/healthsrc"
 	"github.com/moomora/klyx/internal/karpenter"
 	"github.com/moomora/klyx/internal/observe"
+	"github.com/moomora/klyx/internal/workloads"
 )
 
 // ---- the converter: the captured evaluation, never a new one (§2a) ---------
@@ -252,6 +253,37 @@ func TestKarpenterRowsCarryTheCapture(t *testing.T) {
 		t.Fatalf("serialization: %s %v", b, err)
 	}
 	if _, err := rowsConverters[healthsrc.TaskKarpenter+"/nodeclaims"]("not rows", at); err == nil {
+		t.Fatal("a payload of the wrong type is an error, never an empty list")
+	}
+}
+
+// The Nodes part (slice 3 §5.7): a verdict part - the captured verdict in
+// the summary, the capture's identity, and the creation anchor the lens
+// ticks the age from.
+func TestNodeRowsCarryTheCapture(t *testing.T) {
+	at := time.Unix(2000, 0)
+	set := healthsrc.RowSet[workloads.NodeSummary]{Rows: []healthsrc.Row[workloads.NodeSummary]{
+		{Ref: healthsrc.RowRef{UID: "n1", GVR: "v1/nodes", Name: "worker-1", Generation: 3},
+			Data: workloads.NodeSummary{Name: "worker-1", Ready: true, Unschedulable: true, AgeSeconds: 1500, Created: time.Unix(500, 0),
+				Health: health.Verdict{Kind: health.Degraded, Label: "MemoryPressure at capture"}}},
+	}}
+	out, err := rowsConverters[healthsrc.TaskNodes+"/nodes"](set, at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := out.([]NodeSummaryDTO)[0]
+	if n.UID != "n1" || n.GVR != "v1/nodes" || n.Generation != 3 || n.Health.Kind != "degraded" || n.Health.Label != "MemoryPressure at capture" ||
+		!n.Unschedulable || n.AgeSeconds != 1500 || n.Created != 500 {
+		t.Fatalf("node row: %+v", n)
+	}
+	if b, err := json.Marshal(n); err != nil || !strings.Contains(string(b), `"createdUnix":500`) || !strings.Contains(string(b), `"uid":"n1"`) || !strings.Contains(string(b), `"gvr":"v1/nodes"`) {
+		t.Fatalf("serialization: %s %v", b, err)
+	}
+	empty, err := rowsConverters[healthsrc.TaskNodes+"/nodes"](nil, at)
+	if err != nil || len(empty.([]NodeSummaryDTO)) != 0 {
+		t.Fatalf("an unevaluated part is an empty set: %v %v", empty, err)
+	}
+	if _, err := rowsConverters[healthsrc.TaskNodes+"/nodes"]("not rows", at); err == nil {
 		t.Fatal("a payload of the wrong type is an error, never an empty list")
 	}
 }

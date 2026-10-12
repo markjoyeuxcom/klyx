@@ -2,47 +2,149 @@ package fleet
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 )
 
 func newCordonTestConn(nodeName string, initialUnschedulable bool) *ClusterConn {
 	node := &corev1.Node{
-		ObjectMeta: metav1.ObjectMeta{Name: nodeName},
+		ObjectMeta: metav1.ObjectMeta{Name: nodeName, UID: types.UID("uid-" + nodeName)},
 		Spec:       corev1.NodeSpec{Unschedulable: initialUnschedulable},
 	}
-	cs := fake.NewSimpleClientset(node)
+	cs := fake.NewClientset(node)
 	return &ClusterConn{name: "test", kubeContext: "test-ctx", typed: cs}
+}
+
+func unschedulable(t *testing.T, conn *ClusterConn, name string) bool {
+	t.Helper()
+	n, err := conn.typed.CoreV1().Nodes().Get(context.Background(), name, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get node: %v", err)
+	}
+	return n.Spec.Unschedulable
 }
 
 func TestSetCordon_Cordon(t *testing.T) {
 	conn := newCordonTestConn("node-1", false)
-	if err := conn.SetCordon(context.Background(), "node-1", true); err != nil {
+	if err := conn.SetCordon(context.Background(), "node-1", "uid-node-1", true); err != nil {
 		t.Fatalf("SetCordon(true) error: %v", err)
 	}
-	n, err := conn.typed.CoreV1().Nodes().Get(context.Background(), "node-1", metav1.GetOptions{})
-	if err != nil {
-		t.Fatalf("get node: %v", err)
-	}
-	if !n.Spec.Unschedulable {
+	if !unschedulable(t, conn, "node-1") {
 		t.Errorf("expected Unschedulable=true, got false")
 	}
 }
 
 func TestSetCordon_Uncordon(t *testing.T) {
 	conn := newCordonTestConn("node-2", true)
-	if err := conn.SetCordon(context.Background(), "node-2", false); err != nil {
+	if err := conn.SetCordon(context.Background(), "node-2", "uid-node-2", false); err != nil {
 		t.Fatalf("SetCordon(false) error: %v", err)
 	}
-	n, err := conn.typed.CoreV1().Nodes().Get(context.Background(), "node-2", metav1.GetOptions{})
-	if err != nil {
-		t.Fatalf("get node: %v", err)
-	}
-	if n.Spec.Unschedulable {
+	if unschedulable(t, conn, "node-2") {
 		t.Errorf("expected Unschedulable=false, got true")
+	}
+}
+
+// The patch carries the armed UID as metadata.uid: the API server refuses
+// it for a same-name replacement that lands after the pre-check.
+func TestSetCordon_PatchCarriesTheArmedUID(t *testing.T) {
+	conn := newCordonTestConn("node-1", false)
+	var body string
+	conn.typed.(*fake.Clientset).PrependReactor("patch", "nodes", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		body = string(a.(k8stesting.PatchAction).GetPatch())
+		return false, nil, nil
+	})
+	if err := conn.SetCordon(context.Background(), "node-1", "uid-node-1", true); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(body, `"uid":"uid-node-1"`) || !strings.Contains(body, `"unschedulable":true`) {
+		t.Fatalf("patch must name the armed UID: %s", body)
+	}
+}
+
+// A verb armed against another object, or a node that is gone, writes
+// nothing; an unarmed verb is refused.
+func TestSetCordon_RefusesAnUnarmedOrReplacedNode(t *testing.T) {
+	for _, tc := range []struct {
+		name, node, uid, want string
+		replaced              bool
+	}{
+		{"replaced", "node-1", "uid-old", "nothing was written", true},
+		{"gone", "node-x", "uid-node-x", "nothing was written", true},
+		{"unarmed", "node-1", "", "no object identity was armed", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			conn := newCordonTestConn("node-1", false)
+			patched := false
+			conn.typed.(*fake.Clientset).PrependReactor("patch", "nodes", func(k8stesting.Action) (bool, runtime.Object, error) {
+				patched = true
+				return false, nil, nil
+			})
+			err := conn.SetCordon(context.Background(), tc.node, tc.uid, true)
+			if err == nil || errors.Is(err, ErrReplaced) != tc.replaced || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("want a refusal (%s), got %v", tc.want, err)
+			}
+			if patched || unschedulable(t, conn, "node-1") {
+				t.Fatal("a refused cordon must not write")
+			}
+		})
+	}
+}
+
+// A replacement after the pre-check is refused by the server for the UID:
+// ErrReplaced, honestly "refused", never "nothing was written" by guess.
+// Other failures say whether the write may have landed.
+func TestSetCordon_ReportsTheServersAnswer(t *testing.T) {
+	uidRefusal := apierrors.NewInvalid(schema.GroupKind{Kind: "Node"}, "node-1",
+		field.ErrorList{field.Invalid(field.NewPath("metadata", "uid"), "uid-node-1", "field is immutable")})
+	for _, tc := range []struct {
+		name     string
+		err      error
+		replaced bool
+		want     string
+	}{
+		{"uid refused", uidRefusal, true, "its write was refused"},
+		{"forbidden", apierrors.NewForbidden(schema.GroupResource{Resource: "nodes"}, "node-1", errors.New("rbac")), false, "nothing was written"},
+		{"transport", errors.New("connection reset"), false, "the outcome is unverified"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			conn := newCordonTestConn("node-1", false)
+			conn.typed.(*fake.Clientset).PrependReactor("patch", "nodes", func(k8stesting.Action) (bool, runtime.Object, error) {
+				return true, nil, tc.err
+			})
+			err := conn.SetCordon(context.Background(), "node-1", "uid-node-1", true)
+			if err == nil || errors.Is(err, ErrReplaced) != tc.replaced || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("want %q (replaced=%v), got %v", tc.want, tc.replaced, err)
+			}
+		})
+	}
+}
+
+func TestCheckNodeArmed(t *testing.T) {
+	conn := newCordonTestConn("node-1", false)
+	if err := conn.CheckNodeArmed(context.Background(), "node-1", "uid-node-1"); err != nil {
+		t.Fatalf("the armed node must pass: %v", err)
+	}
+	for _, c := range [][2]string{{"node-1", "uid-old"}, {"node-x", "uid-node-x"}} {
+		if err := conn.CheckNodeArmed(context.Background(), c[0], c[1]); !errors.Is(err, ErrReplaced) {
+			t.Fatalf("%v must be ErrReplaced, got %v", c, err)
+		}
+	}
+	conn.typed.(*fake.Clientset).PrependReactor("get", "nodes", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, errors.New("connection reset")
+	})
+	if err := conn.CheckNodeArmed(context.Background(), "node-1", "uid-node-1"); err == nil || errors.Is(err, ErrReplaced) {
+		t.Fatalf("a failed read is not a replacement: %v", err)
 	}
 }
 

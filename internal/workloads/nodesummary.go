@@ -30,7 +30,8 @@ type NodeSummary struct {
 	MemCapacity    float64 // bytes
 	MemAllocatable float64 // bytes
 	PodCapacity    int64
-	AgeSeconds     int
+	AgeSeconds     int       // age at the summary's now
+	Created        time.Time // creation time: the anchor a live view ticks the age from
 	// Pool is the provider node-pool/group identity (AKS agentpool, EKS
 	// nodegroup, GKE nodepool, Karpenter nodepool), "" when no known label.
 	// Zone is topology.kubernetes.io/zone (rack/zone on on-prem via the same
@@ -84,6 +85,7 @@ func summarizeNode(n *corev1.Node, now time.Time) NodeSummary {
 		Arch:          n.Status.NodeInfo.Architecture,
 		TaintCount:    len(n.Spec.Taints),
 		AgeSeconds:    ageSeconds(n.CreationTimestamp.Time, now),
+		Created:       n.CreationTimestamp.Time,
 	}
 
 	// Roles from node-role.kubernetes.io/* labels.

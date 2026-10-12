@@ -85,10 +85,10 @@ describe("cross-cluster stale responses", () => {
 
     const node = deferred<unknown>();
     vi.mocked(NodesService.GetNodeDetail).mockReturnValueOnce(node.promise as never);
-    useFleet.getState().setNodesLoading("A");
-    const n = openNodeDetail("A", "node-1");
-    useFleet.getState().setNodesLoading("B");
-    useFleet.getState().selectNode({ name: "node-1" });
+    useFleet.getState().setNodesVisit("A");
+    const n = openNodeDetail("A", "node-1", "uid-1");
+    useFleet.getState().setNodesVisit("B");
+    useFleet.getState().selectNode({ name: "node-1", uid: "uid-1" });
     node.resolve({ summary: { name: "from-A" }, yaml: "from-A" });
     await n;
     expect(useFleet.getState().nodes.detail).toBeNull();

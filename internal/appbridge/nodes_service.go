@@ -21,11 +21,12 @@ type NodesConn interface {
 // problem-first node rows; GetNodeDetail returns the full drill-down.
 type NodesService struct {
 	lookup func(string) (NodesConn, bool)
+	now    func() time.Time
 }
 
 // NewNodesService creates a NodesService with the given cluster-lookup function.
 func NewNodesService(lookup func(string) (NodesConn, bool)) *NodesService {
-	return &NodesService{lookup: lookup}
+	return &NodesService{lookup: lookup, now: time.Now}
 }
 
 // ListNodes returns problem-first node rows for a cluster. Cluster miss returns
@@ -112,6 +113,7 @@ func (s *NodesService) GetNodeDetail(cluster, name string) NodeDetailDTO {
 		Events:      events,
 		YAML:        d.YAML,
 		PodsOnNode:  pods,
+		AsOfUnix:    s.now().Unix(),
 	}
 }
 
@@ -142,6 +144,7 @@ func toNodeSummaryDTO(n workloads.NodeSummary) NodeSummaryDTO {
 		MemAllocatable: n.MemAllocatable,
 		PodCapacity:    n.PodCapacity,
 		AgeSeconds:     n.AgeSeconds,
+		Created:        unixOrZero(n.Created),
 		Pool:           n.Pool,
 		Zone:           n.Zone,
 		Health:         toHealthDTO(n.Health),

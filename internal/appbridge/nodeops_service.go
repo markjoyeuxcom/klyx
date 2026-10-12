@@ -14,7 +14,8 @@ import (
 
 // NodeOpsConn is the per-cluster surface NodeOpsService needs.
 type NodeOpsConn interface {
-	SetCordon(ctx context.Context, nodeName string, cordon bool) error
+	SetCordon(ctx context.Context, nodeName, uid string, cordon bool) error
+	CheckNodeArmed(ctx context.Context, nodeName, uid string) error
 	DrainNodeCmd(nodeName string, opts fleet.DrainOptions) (*exec.Cmd, error)
 }
 
@@ -64,8 +65,10 @@ func NewNodeOpsService(lookup func(string) (NodeOpsConn, bool), em Emitter) *Nod
 	}
 }
 
-// Cordon cordons (unschedulable=true) or uncordons (unschedulable=false) a node.
-func (s *NodeOpsService) Cordon(cluster, node string, cordon bool) ActionResultDTO {
+// Cordon cordons (unschedulable=true) or uncordons (unschedulable=false) the
+// node object the verb was armed against (uid; design §5b) - never a
+// same-name replacement.
+func (s *NodeOpsService) Cordon(cluster, node, uid string, cordon bool) ActionResultDTO {
 	if err := checkProtected(cluster); err != nil {
 		return ActionResultDTO{Error: err.Error()}
 	}
@@ -75,7 +78,7 @@ func (s *NodeOpsService) Cordon(cluster, node string, cordon bool) ActionResultD
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
 	defer cancel()
-	if err := conn.SetCordon(ctx, node, cordon); err != nil {
+	if err := conn.SetCordon(ctx, node, uid, cordon); err != nil {
 		return ActionResultDTO{Error: err.Error()}
 	}
 	return ActionResultDTO{OK: true}
@@ -101,11 +104,18 @@ func (p *drainPipe) Close() error {
 // is reported as Cancelled with an Error saying the node stays cordoned - never
 // as a clean finish (review 2026-10-03, H).
 //
+// uid is the node object the drain was armed against (design §5b): it is
+// confirmed by a GET before kubectl starts, and a replaced or missing node
+// starts nothing. kubectl drain itself takes a name, so a same-name
+// replacement landing in the moment between that check and kubectl's own
+// cordon is the residual window; a recycled node name inside it is not
+// something this check can see.
+//
 // Cap: if maxConcurrentDrains drains are already running, StartDrain refuses.
 // A drain is a user-initiated destructive operation mid-flight - evicting one
 // would leave its node cordoned and half-drained while reporting a clean
 // stream end (same policy as forwards: never silently kill user-managed work).
-func (s *NodeOpsService) StartDrain(cluster, node string, opts DrainOptionsDTO, streamID string) OpenLogStreamResultDTO {
+func (s *NodeOpsService) StartDrain(cluster, node, uid string, opts DrainOptionsDTO, streamID string) OpenLogStreamResultDTO {
 	if err := validStreamID(streamID); err != nil {
 		return OpenLogStreamResultDTO{Error: err.Error()}
 	}
@@ -125,6 +135,12 @@ func (s *NodeOpsService) StartDrain(cluster, node string, opts DrainOptionsDTO, 
 	})
 	if err != nil {
 		return OpenLogStreamResultDTO{Error: err.Error()}
+	}
+	checkCtx, checkCancel := context.WithTimeout(context.Background(), actionTimeout)
+	err = conn.CheckNodeArmed(checkCtx, node, uid)
+	checkCancel()
+	if err != nil {
+		return OpenLogStreamResultDTO{Error: "drain " + err.Error() + " - nothing was started"}
 	}
 
 	// Combine stdout+stderr into a single io.Pipe. The write end is owned by the

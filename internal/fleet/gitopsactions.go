@@ -119,10 +119,18 @@ func (c *ClusterConn) patchArmed(ctx context.Context, gvr schema.GroupVersionRes
 	switch {
 	case err == nil:
 		return nil
-	case apierrors.IsNotFound(err), (apierrors.IsInvalid(err) || apierrors.IsConflict(err)) && strings.Contains(strings.ToLower(err.Error()), "uid"):
+	case refusedForUID(err):
 		return fmt.Errorf("%s %s/%s: %w - its write was refused (%v)", kind, ns, name, ErrReplaced, err)
 	}
 	return fmt.Errorf("%s %s/%s: %w", kind, ns, name, err)
+}
+
+// refusedForUID: a UID-guarded write the server refused because the object
+// at that name is not the armed one - gone (NotFound), or another UID (the
+// immutable-field Invalid, or a UID precondition Conflict).
+func refusedForUID(err error) bool {
+	return apierrors.IsNotFound(err) ||
+		(apierrors.IsInvalid(err) || apierrors.IsConflict(err)) && strings.Contains(strings.ToLower(err.Error()), "uid")
 }
 
 // Reconcile stamps the Flux reconcile annotation so the controller
