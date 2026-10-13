@@ -90,6 +90,8 @@ func (s *AIService) Explain(cluster string, t ExplainTargetDTO) AIResultDTO {
 	user := "<evidence>\n" + string(raw) + "\n</evidence>"
 	res := complete(ctx, st, ai.Request{System: explainSystem, User: user, Purpose: ai.PurposeExplain}, grounded, 0)
 	res.Scrubbed = sc.n
+	anchor := ev.Anchor
+	res.Anchor = &anchor
 	return res
 }
 
@@ -129,11 +131,11 @@ func (s *AIService) rowEvidence(ctx context.Context, conn AIConn, cluster string
 	}
 	fetchedAt := time.Now().UTC().Format(time.RFC3339)
 
-	ev := explainEvidence{Target: sc.detailObject(detail, ""), KlyxVerdict: &verdict}
+	ev := explainEvidence{Target: sc.detailObject(detail, ""), KlyxVerdict: &verdict, Anchor: anchorRecord(rows, row, fetchedAt, sc)}
 	ev.WarningEvents = sc.warningEvents(detail.Events)
 	ev.LensFields = lensFields(key, rows, row, allowed, sc)
 	ev.Related = s.relatedEvidence(ctx, conn, detail, sc)
-	ev.Operators = s.operators(cluster)
+	ev.Operators = sc.operators(s.operators(cluster))
 	ev.Qualifications = qualifications(rows, row, detail.Generation, fetchedAt)
 	grounded := fmt.Sprintf("Klyx verdict %q as of %s · %s/%s", verdictLabel(verdict), verdict.EvaluatedAt, detail.Kind, nsName(detail.Namespace, detail.Name))
 	return ev, grounded, nil
@@ -152,12 +154,15 @@ func (s *AIService) objectEvidence(ctx context.Context, conn AIConn, cluster str
 	if detail.UID != t.UID {
 		return explainEvidence{}, "", errReplaced
 	}
+	fetchedAt := time.Now().UTC().Format(time.RFC3339)
 	ev := explainEvidence{
-		Target:        sc.detailObject(detail, ""),
-		NoVerdict:     "Klyx has no verdict for this kind; explain from the conditions, facts and events only.",
-		WarningEvents: sc.warningEvents(detail.Events),
-		Related:       s.relatedEvidence(ctx, conn, detail, sc),
-		Operators:     s.operators(cluster),
+		Target:         sc.detailObject(detail, ""),
+		NoVerdict:      "Klyx has no verdict for this kind; explain from the conditions, facts and events only.",
+		Anchor:         AIAnchorDTO{Source: "none", UID: detail.UID, GVR: gvrOf(t.Group, t.Version, t.Plural), Generation: detail.Generation, FetchedAt: fetchedAt},
+		WarningEvents:  sc.warningEvents(detail.Events),
+		Related:        s.relatedEvidence(ctx, conn, detail, sc),
+		Operators:      sc.operators(s.operators(cluster)),
+		Qualifications: []string{"Conditions, facts and events were fetched at " + fetchedAt + "."},
 	}
 	return ev, fmt.Sprintf("%s/%s (no Klyx verdict for this kind)", detail.Kind, nsName(detail.Namespace, detail.Name)), nil
 }
@@ -176,8 +181,9 @@ func helmEvidence(ctx context.Context, conn AIConn, t ExplainTargetDTO, sc *scru
 			break
 		}
 	}
-	ev := explainEvidence{Target: evidenceObject{Kind: "HelmRelease", Namespace: t.Namespace, Name: t.Name}}
 	readAt := time.Now()
+	ev := explainEvidence{Target: evidenceObject{Kind: "HelmRelease", Namespace: t.Namespace, Name: t.Name},
+		Anchor: AIAnchorDTO{Source: "helm-read", EvaluatedAt: readAt.UTC().Format(time.RFC3339)}}
 	if rel == nil {
 		ev.NoVerdict = "The release is not in Klyx's last Helm read; explain from its history only."
 	} else {
@@ -189,6 +195,7 @@ func helmEvidence(ctx context.Context, conn AIConn, t ExplainTargetDTO, sc *scru
 	if err != nil {
 		return explainEvidence{}, "", errors.New("read Helm history: " + ai.Scrub(err.Error()))
 	}
+	ev.Anchor.FetchedAt = time.Now().UTC().Format(time.RFC3339)
 	fields := map[string]any{}
 	if rel != nil {
 		fields = map[string]any{"chart": rel.Chart, "appVersion": rel.AppVersion, "status": rel.Status, "revision": rel.Revision, "updated": unixRFC3339(rel.UpdatedUnix)}
@@ -304,6 +311,34 @@ func lensFields(key string, rows observe.Rows, row capturedRow, allowed allow, s
 	}
 	m, _ := sc.project(list[0], allowed).(map[string]any)
 	return m
+}
+
+// anchorRecord is the capture's provenance: its identity, version and the
+// coverage of every kind it read, as of when.
+func anchorRecord(rows observe.Rows, row capturedRow, fetchedAt string, sc *scrubber) AIAnchorDTO {
+	a := AIAnchorDTO{
+		Source: "observer", Task: rows.Task, Part: rows.Part.ID, Incarnation: rows.Incarnation, Ver: rows.Part.Ver,
+		UID: row.ref.UID, GVR: row.ref.GVR, Generation: row.ref.Generation,
+		EvaluatedAt: rows.EvaluatedAt.UTC().Format(time.RFC3339), Coverage: string(rows.Part.Coverage), FetchedAt: fetchedAt,
+	}
+	for _, k := range rows.Part.Kinds {
+		if len(a.Kinds) == evidenceListMax {
+			break
+		}
+		c := AICoverageDTO{Kind: k.Kind, Role: k.Role, Coverage: string(k.Coverage), Error: sc.text(k.Error)}
+		if k.AsOf != nil {
+			c.AsOf = k.AsOf.UTC().Format(time.RFC3339)
+		}
+		a.Kinds = append(a.Kinds, c)
+	}
+	return a
+}
+
+func gvrOf(group, version, plural string) string {
+	if group == "" {
+		return version + "/" + plural
+	}
+	return group + "/" + version + "/" + plural
 }
 
 // qualifications state what may make Klyx's verdict out of date.

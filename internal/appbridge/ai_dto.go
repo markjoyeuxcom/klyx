@@ -20,6 +20,8 @@ type AIResultDTO struct {
 	// truncated in, Explain's evidence. Scrubbing reduces what leaves; it does
 	// not prove the evidence secret-free.
 	Scrubbed int `json:"scrubbed,omitempty"`
+	// Anchor is where Klyx's verdict came from (Explain only).
+	Anchor *AIAnchorDTO `json:"anchor,omitempty"`
 }
 
 // AIAvailabilityDTO tells the frontend whether to render an AI affordance at all

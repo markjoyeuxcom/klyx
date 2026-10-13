@@ -151,8 +151,41 @@ type evidenceVerdict struct {
 	Generation          int64  `json:"generation,omitempty"`
 }
 
+// AIAnchorDTO is where Klyx's verdict came from (spec §4.1): the capture's
+// identity and its coverage, so a reader can tell a live verdict from a
+// last-observed one, and two captures apart.
+type AIAnchorDTO struct {
+	Source      string          `json:"source"` // observer | helm-read | none
+	Task        string          `json:"task,omitempty"`
+	Part        string          `json:"part,omitempty"`
+	Incarnation uint64          `json:"incarnation,omitempty"`
+	Ver         uint64          `json:"ver,omitempty"`
+	UID         string          `json:"uid,omitempty"`
+	GVR         string          `json:"gvr,omitempty"`
+	Generation  int64           `json:"generation,omitempty"`
+	EvaluatedAt string          `json:"evaluatedAt,omitempty"`
+	Coverage    string          `json:"coverage,omitempty"`
+	Kinds       []AICoverageDTO `json:"kinds,omitempty"`
+	// FetchedAt is when the object's conditions, facts and events were read -
+	// independently of, and after, the capture.
+	FetchedAt string `json:"fetchedAt,omitempty"`
+}
+
+// AICoverageDTO is one kind's coverage in the capture.
+type AICoverageDTO struct {
+	Kind     string `json:"kind"`
+	Role     string `json:"role"` // counted | dependency
+	Coverage string `json:"coverage"`
+	AsOf     string `json:"asOf,omitempty"` // when it left live, or the read time of a snapshot
+	Error    string `json:"error,omitempty"`
+}
+
 type evidenceCondition struct {
-	Type    string `json:"type"`
+	Type string `json:"type"`
+	// Scope names the sub-object a nested condition belongs to (a Gateway
+	// listener, an HTTPRoute parent), so conflicting conditions stay
+	// attributable (Codex review of 0825767).
+	Scope   string `json:"scope,omitempty"`
 	Status  string `json:"status"`
 	Reason  string `json:"reason,omitempty"`
 	Message string `json:"message,omitempty"`
@@ -183,6 +216,7 @@ type evidenceObject struct {
 type explainEvidence struct {
 	Target         evidenceObject   `json:"target"`
 	KlyxVerdict    *evidenceVerdict `json:"klyxVerdict,omitempty"`
+	Anchor         AIAnchorDTO      `json:"anchor"`
 	NoVerdict      string           `json:"noVerdict,omitempty"`
 	LensFields     map[string]any   `json:"lensFields,omitempty"`
 	WarningEvents  []evidenceEvent  `json:"warningEvents,omitempty"`
@@ -190,6 +224,24 @@ type explainEvidence struct {
 	Operators      *operatorHealth  `json:"operators,omitempty"`
 	Qualifications []string         `json:"qualifications,omitempty"`
 	Truncated      bool             `json:"truncated,omitempty"`
+}
+
+// operators projects controller health through the scrubber: a controller's
+// Reason can carry API or transport error text (Codex review of 0825767).
+func (sc *scrubber) operators(oh *operatorHealth) *operatorHealth {
+	if oh == nil {
+		return nil
+	}
+	view := func(v *operatorView) *operatorView {
+		if v == nil {
+			return nil
+		}
+		cp := *v
+		cp.Reason = sc.text(v.Reason)
+		return &cp
+	}
+	return &operatorHealth{Flux: view(oh.Flux), Argo: view(oh.Argo), CertManager: view(oh.CertManager),
+		ExternalSecrets: view(oh.ExternalSecrets), Reloader: view(oh.Reloader), Gateway: view(oh.Gateway)}
 }
 
 // detailObject projects a resolved object's conditions and facts - never its
@@ -201,7 +253,7 @@ func (sc *scrubber) detailObject(d crd.InstanceDetail, relation string) evidence
 			sc.n++
 			break
 		}
-		o.Conditions = append(o.Conditions, evidenceCondition{Type: sc.text(c.Type), Status: sc.text(c.Status), Reason: sc.text(c.Reason), Message: sc.text(c.Message)})
+		o.Conditions = append(o.Conditions, evidenceCondition{Type: sc.text(c.Type), Scope: sc.text(c.Scope), Status: sc.text(c.Status), Reason: sc.text(c.Reason), Message: sc.text(c.Message)})
 	}
 	for _, f := range d.Facts {
 		if len(o.Facts) == 2*evidenceListMax {

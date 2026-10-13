@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/moomora/klyx/internal/ai"
+	"github.com/moomora/klyx/internal/capability"
 	"github.com/moomora/klyx/internal/crd"
 	"github.com/moomora/klyx/internal/gitops/flux"
 	"github.com/moomora/klyx/internal/health"
@@ -351,5 +352,129 @@ func TestExplain_TotalCap(t *testing.T) {
 	ev := evidenceOf(t, cl.gotUser)
 	if ev["truncated"] != true || ev["klyxVerdict"] == nil {
 		t.Fatalf("want a truncated document that keeps the anchor: truncated=%v verdict=%v", ev["truncated"], ev["klyxVerdict"])
+	}
+}
+
+// Codex review of 0825767 (P1): every operator reason passes the scrubber on
+// both the row and the object path, and counts toward Scrubbed.
+func TestExplain_OperatorReasonsAreScrubbed(t *testing.T) {
+	const secret = "token=ghp_abcdefghijklmnopqrstuvwxyz0123456789"
+	caps := func(string) capability.Set {
+		return capability.Set{
+			GitOps:          capability.GitOpsCapability{Base: capability.Base{Tier: capability.Degraded, Reason: "gitops " + secret}, Flux: capability.FluxInfo{Present: true}, Argo: capability.ArgoInfo{Present: true}},
+			Network:         capability.NetworkCapability{Base: capability.Base{Tier: capability.Degraded, Reason: "network " + secret}, GatewayAPIVersion: "v1"},
+			CertManager:     capability.CertManagerCapability{Base: capability.Base{Tier: capability.Degraded, Reason: "cert " + secret}, Present: true},
+			ExternalSecrets: capability.ExternalSecretsCapability{Base: capability.Base{Tier: capability.Degraded, Reason: "eso " + secret}, Present: true},
+			Reloader:        capability.ReloaderCapability{Base: capability.Base{Tier: capability.Degraded, Reason: "reloader " + secret}, Present: true},
+		}
+	}
+	targets := map[string]struct {
+		conn   *fakeExplainConn
+		target ExplainTargetDTO
+	}{
+		"row":    {&fakeExplainConn{rows: map[string]observe.Rows{"pods/pods": podRows("pod-uid", 1)}, details: map[string]crd.InstanceDetail{"/pods/shop/api-7f9": podDetail("pod-uid", 1)}}, rowTarget()},
+		"object": {&fakeExplainConn{details: map[string]crd.InstanceDetail{"/pods/shop/api-7f9": podDetail("pod-uid", 1)}}, ExplainTargetDTO{Kind: "object", Version: "v1", Plural: "pods", Namespace: "shop", Name: "api-7f9", UID: "pod-uid"}},
+	}
+	for name, tc := range targets {
+		t.Run(name, func(t *testing.T) {
+			cl := &fakeCompleter{reply: "x"}
+			conn := tc.conn
+			s := NewAIService(func(string) (AIConn, bool) { return conn, true }, aiTestState(cl, "hosted", true), func(string) bool { return false }, caps)
+			r := s.Explain("c", tc.target)
+			if !r.OK {
+				t.Fatalf("got %+v", r)
+			}
+			if strings.Contains(cl.gotUser, "ghp_abcdefghijklmnopqrstuvwxyz0123456789") {
+				t.Fatal("an operator reason leaked a credential")
+			}
+			ops := evidenceOf(t, cl.gotUser)["operators"].(map[string]any)
+			for _, op := range []string{"flux", "argo", "certManager", "externalSecrets", "reloader", "gateway"} {
+				if ops[op] == nil {
+					t.Fatalf("operator %s missing: %v", op, ops)
+				}
+			}
+			if r.Scrubbed < 6 {
+				t.Fatalf("the operator scrubs must count: scrubbed=%d", r.Scrubbed)
+			}
+		})
+	}
+}
+
+// Codex review of 0825767 (P2): nested conditions keep their scope, so two
+// parents with conflicting Accepted conditions stay distinguishable; a scope
+// is scrubbed like any other text.
+func TestExplain_ConditionScopesSurvive(t *testing.T) {
+	set := healthsrc.RowSet[observe.Attached]{Rows: []healthsrc.Row[observe.Attached]{{
+		Ref:  healthsrc.RowRef{UID: "rt-uid", GVR: "gateway.networking.k8s.io/v1/httproutes", Namespace: "shop", Name: "api"},
+		Data: observe.Attached{UID: "rt-uid", Role: "fault", Label: "not accepted by infra/eg", Included: true},
+	}}}
+	rows := observe.Rows{Task: healthsrc.TaskGateway, EvaluatedAt: evalAt, Part: observe.Part{ID: "routes", Classifier: "native"}, Rows: set}
+	detail := crd.InstanceDetail{Kind: "HTTPRoute", Namespace: "shop", Name: "api", UID: "rt-uid", Conditions: []crd.Condition{
+		{Type: "Accepted", Status: "True", Scope: "parent infra/public"},
+		{Type: "Accepted", Status: "False", Reason: "NotAllowedByListeners", Scope: "parent infra/eg"},
+		{Type: "ResolvedRefs", Status: "True", Scope: "parent https://deploy:s3cr3tpassw0rd@infra.example/eg"},
+	}}
+	cl := &fakeCompleter{reply: "x"}
+	conn := &fakeExplainConn{rows: map[string]observe.Rows{"gateway/routes": rows}, details: map[string]crd.InstanceDetail{"gateway.networking.k8s.io/httproutes/shop/api": detail}}
+	if r := explainSvc(cl, conn).Explain("c", ExplainTargetDTO{Kind: "row", Task: healthsrc.TaskGateway, Part: "routes", UID: "rt-uid"}); !r.OK {
+		t.Fatalf("got %+v", r)
+	}
+	conds := evidenceOf(t, cl.gotUser)["target"].(map[string]any)["conditions"].([]any)
+	scopes := map[string]string{}
+	for _, c := range conds {
+		m := c.(map[string]any)
+		scopes[m["scope"].(string)] = m["status"].(string)
+	}
+	if scopes["parent infra/public"] != "True" || scopes["parent infra/eg"] != "False" {
+		t.Fatalf("conflicting parent conditions must stay attributed: %v", scopes)
+	}
+	if strings.Contains(cl.gotUser, "s3cr3tpassw0rd") {
+		t.Fatal("a condition scope leaked a credential")
+	}
+}
+
+// Codex review of 0825767 (P2): the anchor's provenance - capture identity,
+// version, coverage with as-of - survives into the evidence and the result,
+// and distinct captures stay distinct; a generic object carries its read time.
+func TestExplain_AnchorProvenance(t *testing.T) {
+	asOf := evalAt.Add(-5 * time.Minute)
+	run := func(inc, ver uint64) (map[string]any, AIResultDTO) {
+		rows := podRows("pod-uid", 1, observe.KindCoverage{Kind: "pods", Role: "counted", Coverage: observe.Live}, observe.KindCoverage{Kind: "replicasets", Role: "dependency", Coverage: observe.Stale, AsOf: &asOf, Error: "watch failed: Bearer abcdefghijklmnop0123"})
+		rows.Incarnation = inc
+		rows.Part.Ver = ver
+		rows.Part.Coverage = observe.Stale
+		cl := &fakeCompleter{reply: "x"}
+		conn := &fakeExplainConn{rows: map[string]observe.Rows{"pods/pods": rows}, details: map[string]crd.InstanceDetail{"/pods/shop/api-7f9": podDetail("pod-uid", 1)}}
+		r := explainSvc(cl, conn).Explain("c", rowTarget())
+		if !r.OK {
+			t.Fatalf("got %+v", r)
+		}
+		if strings.Contains(cl.gotUser, "abcdefghijklmnop0123") {
+			t.Fatal("a coverage error leaked a credential")
+		}
+		return evidenceOf(t, cl.gotUser)["anchor"].(map[string]any), r
+	}
+	a1, r1 := run(3, 17)
+	a2, _ := run(4, 2)
+	if a1["incarnation"] != float64(3) || a1["ver"] != float64(17) || a2["incarnation"] != float64(4) || a2["ver"] != float64(2) {
+		t.Fatalf("captures must stay distinct: %v / %v", a1, a2)
+	}
+	if a1["uid"] != "pod-uid" || a1["gvr"] != "v1/pods" || a1["task"] != "pods" || a1["part"] != "pods" || a1["coverage"] != "stale" || a1["fetchedAt"] == nil {
+		t.Fatalf("anchor: %v", a1)
+	}
+	kinds := a1["kinds"].([]any)
+	stale := kinds[1].(map[string]any)
+	if stale["coverage"] != "stale" || stale["asOf"] != asOf.UTC().Format(time.RFC3339) {
+		t.Fatalf("dependency coverage: %v", stale)
+	}
+	if r1.Anchor == nil || r1.Anchor.Incarnation != 3 || r1.Anchor.Ver != 17 {
+		t.Fatalf("the result must carry the anchor: %+v", r1.Anchor)
+	}
+
+	cl := &fakeCompleter{reply: "x"}
+	conn := &fakeExplainConn{details: map[string]crd.InstanceDetail{"/configmaps/shop/cfg": {Kind: "ConfigMap", Namespace: "shop", Name: "cfg", UID: "cm-uid"}}}
+	r := explainSvc(cl, conn).Explain("c", ExplainTargetDTO{Kind: "object", Version: "v1", Plural: "configmaps", Namespace: "shop", Name: "cfg", UID: "cm-uid"})
+	if !r.OK || r.Anchor == nil || r.Anchor.Source != "none" || r.Anchor.FetchedAt == "" || r.Anchor.UID != "cm-uid" {
+		t.Fatalf("a generic object carries its read time: %+v", r.Anchor)
 	}
 }
