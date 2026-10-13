@@ -319,6 +319,9 @@ func main() {
 			return capability.Set{}
 		},
 	)
+	// Settings > AI writes fleet.yaml's ai block under the shared fleet write
+	// lock and swaps aiSvc's snapshot after a successful build and write.
+	aiSettingsSvc := appbridge.NewAISettingsService(configPath(), ai.OSKeyStore{}, os.Getenv, aiSvc, cfg.AI)
 
 	argoSvc := appbridge.NewArgoService(func(name string) (appbridge.ArgoConn, bool) {
 		c, ok := reg.Conn(name)
@@ -441,6 +444,7 @@ func main() {
 			application.NewService(expirySvc),
 			application.NewService(karpenterSvc),
 			application.NewService(aiSvc),
+			application.NewService(aiSettingsSvc),
 			application.NewService(dockSvc),
 			application.NewService(notifySvc),
 			application.NewService(shellSvc),

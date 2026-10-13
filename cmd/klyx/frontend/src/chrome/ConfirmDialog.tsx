@@ -13,6 +13,9 @@ export function ConfirmDialog({
   onConfirm,
   onConfirmTyped,
   onCancel,
+  arm,
+  lockName = "prd lock",
+  showScope = true,
 }: {
   title: string;
   cluster: string;
@@ -29,6 +32,16 @@ export function ConfirmDialog({
    */
   onConfirmTyped?: (typed: string) => void;
   onCancel: () => void;
+  /**
+   * Registers the typed confirmation with a backend grant other than the
+   * protected-cluster one (Settings > AI egress). Defaults to armProtected;
+   * `cluster` is then the phrase to type.
+   */
+  arm?: (typed: string) => Promise<{ ok: boolean; error: string }>;
+  /** The lock's name in the typed-confirmation line (default "prd lock"). */
+  lockName?: string;
+  /** Show the "on <cluster>" line (off when `cluster` is a phrase). */
+  showScope?: boolean;
 }) {
   const [typed, setTyped] = useState("");
   const [armError, setArmError] = useState<string | null>(null);
@@ -64,7 +77,7 @@ export function ConfirmDialog({
   const confirm = async () => {
     if (isProtected) {
       setArming(true);
-      const r = await armProtected(cluster, typed);
+      const r = await (arm ? arm(typed) : armProtected(cluster, typed));
       setArming(false);
       if (!r.ok) {
         setArmError(r.error || "could not arm protected action");
@@ -124,13 +137,15 @@ export function ConfirmDialog({
           {title}
         </div>
         <div data-testid="confirm-detail" style={{ color: "var(--color-text-secondary)", marginBottom: 6, minHeight: 0, overflowY: "auto" }}>{detail}</div>
-        <div style={{ color: "var(--color-text-tertiary)", fontSize: 12, marginBottom: 14 }}>
-          on <span style={{ fontFamily: "var(--font-mono)" }}>{cluster}</span>
-        </div>
+        {showScope && (
+          <div style={{ color: "var(--color-text-tertiary)", fontSize: 12, marginBottom: 14 }}>
+            on <span style={{ fontFamily: "var(--font-mono)" }}>{cluster}</span>
+          </div>
+        )}
         {isProtected && (
           <div style={{ marginBottom: 14 }}>
             <div style={{ color: "var(--color-text-warning)", fontSize: 12, marginBottom: 6 }}>
-              <span style={{ fontFamily: "var(--font-mono)", fontWeight: 600 }}>prd lock</span>
+              <span style={{ fontFamily: "var(--font-mono)", fontWeight: 600 }}>{lockName}</span>
               {" "}active. Type <b>{cluster}</b> to confirm.
             </div>
             <input

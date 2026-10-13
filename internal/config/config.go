@@ -200,6 +200,10 @@ func (c *Config) applyDefaults() {
 	}
 }
 
+// ApplyDefaults fills the defaults Load applies (the legacy backend mapping,
+// the key source, the local base URL), for a block built in code.
+func (a *AIConfig) ApplyDefaults() { a.applyDefaults() }
+
 func (a *AIConfig) applyDefaults() {
 	if a.Provider == "" {
 		switch a.Backend {

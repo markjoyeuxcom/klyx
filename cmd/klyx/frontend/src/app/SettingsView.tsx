@@ -6,6 +6,7 @@ import { LensLayout, type DatasetState } from "../layout/LensLayout";
 import { getFleetConfig, addClusters, refreshNewContextCount } from "../bridge/configsvc";
 import type { FleetConfigDTO } from "../bridge/configsvc";
 import { btn, ellipsis } from "../chrome/primitives";
+import { AISettingsPanel } from "./AISettingsPanel";
 
 // SettingsView is the fleet-configuration surface: the loaded fleet.yaml
 // (path, clusters, load warnings) and a fresh kubeconfig context scan with
@@ -103,6 +104,10 @@ export function SettingsView() {
             <span style={{ color: "var(--color-text-tertiary)" }}>{c.hasMetrics ? "yes" : "—"}</span>
           </div>
         ))}
+      </Section>
+
+      <Section title="AI assist">
+        <AISettingsPanel />
       </Section>
 
       <Section title="Kubeconfig contexts">
