@@ -195,6 +195,58 @@ A failed probe revokes admission.
 
 **Every real call** is checked the same way. Any tool event, unknown event type or schema mismatch discards the answer, reports "This CLI attempted a tool or returned an unknown event; Klyx discarded the answer", and revokes admission until the next Test.
 
+### 1.5 The Claude Code adapter contract (slice 3, from research on 2026-10-13)
+Sources: the Claude Code docs (cli-reference, managed-settings, server-managed-settings, headless, env vars) and local evidence on 2.1.296. No model call was made. Everything below is checked without one, except the optional probe (§1.4).
+
+**Pinned binary:**
+- Resolve the executable through symlinks. It must be a native Mach-O, ELF or PE file under the vendor's versioned install, and its sha256 is hashed.
+- `--version` must parse to a version Klyx has a contract for (2.1.x, ≥ 2.1.296). Anything else is unsupported.
+
+**Flag-recognition probe (no model call):**
+- `--version` short-circuits even unknown flags, so it proves nothing.
+- Instead, run the exact production argv followed by a random sentinel flag, with stdin `/dev/null` and a proxy pointing at a closed port as a safety net.
+- Require exit 1, empty stdout, and stderr matching `unknown option '<sentinel>'` (case-insensitive). The parser reports the first unknown option, so that error proves every real flag was recognised.
+- This proves recognition, not meaning: the meaning is pinned by the version contract.
+
+**Production argv:**
+`claude -p --output-format stream-json --verbose --tools "" --disallowedTools "*" --restricted --safe-mode --strict-mcp-config --mcp-config '{"mcpServers":{}}' --disable-slash-commands --no-session-persistence --system-prompt-file <tmp>/system.txt --model <model>`
+- The evidence goes on stdin only, never as an argument. The prompt text never starts with `/` or `@`.
+
+**Environment (allowlist, not denylist):**
+- Built from scratch: `HOME`, `PATH`, `TMPDIR`, `LANG`/`LC_*`, `USER`/`LOGNAME`.
+- Plus these, always set:
+  - `CLAUDE_CODE_DISABLE_ATTACHMENTS=1`. Without it, `@path` text in the prompt is expanded into file contents even with every tool off, so cluster text containing `@~/.kube/config` would read the kubeconfig.
+  - `CLAUDE_CODE_DISABLE_CLAUDE_MDS=1`, `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`, `CLAUDE_CODE_SKIP_PROMPT_HISTORY=1`, `ENABLE_CLAUDEAI_MCP_SERVERS=false`, `CLAUDE_AGENT_SDK_DISABLE_BUILTIN_AGENTS=1`.
+  - `DISABLE_AUTOUPDATER=1`, `DISABLE_TELEMETRY=1`, `DISABLE_ERROR_REPORTING=1`.
+- Never passed through, whatever the parent has: `ANTHROPIC_*`, `CLAUDE_CODE_*` (other than the above), `CLAUDE_CONFIG_DIR` (it also re-keys the keychain login), `CLAUDE_CODE_REMOTE_SETTINGS_PATH` and `CLAUDE_CODE_MANAGED_SETTINGS_PATH` (they inject policy), `NODE_OPTIONS`, `OTEL_*`, proxies, `KUBECONFIG`, cloud credentials.
+
+**Policy checks before every call (fail closed):**
+1. **Endpoint policy:** any entry, or any unreadable path other than "missing", in:
+   - `/Library/Application Support/ClaudeCode/`
+   - `/Library/Managed Preferences/com.anthropic.claudecode.plist`
+   - `/Library/Managed Preferences/<user>/com.anthropic.claudecode.plist`
+   - on Linux, `/etc/claude-code/`
+   - on Windows, `C:\Program Files\ClaudeCode\` and `HKLM` or `HKCU\SOFTWARE\Policies\ClaudeCode` `Settings`, plus the WSL `/mnt/c/...` equivalents.
+2. **Account:** `claude auth status` (JSON, no model call) must show `apiProvider: firstParty`, an OAuth login, and `subscriptionType` pro or max.
+   - Team and Enterprise accounts are refused: their organisation can push server-managed policy, which can change hourly and applies inside the `-p` run after Klyx's check.
+   - API-key auth is refused as well; a Klyx API provider covers that case.
+3. **Remote policy:** `claude doctor`, run from an empty temp dir with the same environment, must print exactly the version-pinned lines "Managed settings (remote): not fetched - requires an Enterprise or Team subscription" and "Organization policy: not applicable to Pro and Max accounts". Any other, missing, "checking", "loaded" or "fetch failed" line fails closed.
+4. **Caches:** `~/.claude/remote-settings.json` and `~/.claude/policy-limits.json` must be absent.
+
+Checks 2 and 3 run at admission and again whenever the executable identity changes. Check 1 runs before every call, as Codex required.
+
+**Per-call output contract** (stream-json, verbose). The answer is discarded unless all of these hold:
+- `system/init` reports `tools == []`, `mcp_servers == []`, `slash_commands == []`, `skills == []` and `plugins == []`, the pinned `claude_code_version`, and `cwd` equal to the call's temp dir;
+- there is no hook event, no `tool_use`, `server_tool_use`, `tool_result` or `permission_denied`, and no unknown message type;
+- the run ends with exactly one assistant turn (`num_turns == 1`), `subtype == "success"`, `is_error == false` and exit 0.
+
+**Containment:** a fresh 0700 temp dir that is not a git repo; capped stdout and stderr; a process group (POSIX) or Job Object (Windows); the deadline from §1.2.
+
+**Open risks the owner accepts or vetoes:**
+- The `claude doctor` text is not a documented machine contract; it is pinned per version.
+- Server-side feature flags can change behaviour without a version bump.
+- Subscription auth under `--restricted --safe-mode` is documented for `--safe-mode` but unproven together; the slice 5 smoke settles it, with a before/after diff of `~/.claude`.
+
 ## 2. Keys and settings
 
 ### 2.1 Credential lifecycle
