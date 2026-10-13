@@ -100,6 +100,7 @@ func TestBuild_Origins(t *testing.T) {
 	}{
 		{"custom https origin for a vendor", Settings{Provider: ProviderAnthropic, KeySource: KeySourceKeychain, BaseURL: "https://gateway.example:8443/anthropic"}, "", "https://gateway.example:8443", false},
 		{"http origin for a vendor key", Settings{Provider: ProviderAnthropic, KeySource: KeySourceKeychain, BaseURL: "http://gateway.example"}, "HTTPS", "", false},
+		{"http loopback origin for a vendor", Settings{Provider: ProviderAnthropic, KeySource: KeySourceKeychain, BaseURL: "http://127.0.0.1:8080"}, "HTTPS", "", false},
 		{"userinfo refused", Settings{Provider: ProviderAnthropic, KeySource: KeySourceKeychain, BaseURL: "https://u:p@gateway.example"}, "username", "", false},
 		{"query refused", Settings{Provider: ProviderAnthropic, KeySource: KeySourceKeychain, BaseURL: "https://gateway.example/?key=x"}, "query", "", false},
 		{"keyless LAN server over http", Settings{Provider: ProviderOpenAICompatible, Model: "m", KeySource: KeySourceNone, BaseURL: "http://192.168.1.10:11434"}, "", "http://192.168.1.10:11434", false},

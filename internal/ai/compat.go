@@ -50,11 +50,12 @@ func (p *compatProvider) Complete(ctx context.Context, req Request) (Result, err
 	var out struct {
 		Model   string `json:"model"`
 		Choices []struct {
-			FinishReason string `json:"finish_reason"`
+			FinishReason *string `json:"finish_reason"`
 			Message      struct {
-				Content   string            `json:"content"`
-				Refusal   string            `json:"refusal"`
-				ToolCalls []json.RawMessage `json:"tool_calls"`
+				Content      string            `json:"content"`
+				Refusal      string            `json:"refusal"`
+				ToolCalls    []json.RawMessage `json:"tool_calls"`
+				FunctionCall json.RawMessage   `json:"function_call"`
 			} `json:"message"`
 		} `json:"choices"`
 	}
@@ -65,15 +66,28 @@ func (p *compatProvider) Complete(ctx context.Context, req Request) (Result, err
 		return Result{}, ErrEmpty
 	}
 	c := out.Choices[0]
-	switch {
-	case c.Message.Refusal != "":
-		return Result{}, &RefusedError{Explanation: c.Message.Refusal}
-	case c.FinishReason == "content_filter":
-		return Result{}, &RefusedError{Category: "content_filter"}
-	case c.FinishReason == "length":
-		return Result{}, ErrTruncated
-	case c.FinishReason == "tool_calls" || len(c.Message.ToolCalls) > 0:
+	finish := ""
+	if c.FinishReason != nil {
+		finish = *c.FinishReason
+	}
+	// Tool output first: a call is never an answer, whatever the reason says
+	// (tool_calls, or the legacy function_call, with or without content).
+	if len(c.Message.ToolCalls) > 0 || hasJSONValue(c.Message.FunctionCall) || finish == "tool_calls" || finish == "function_call" {
 		return Result{}, ErrUnexpectedOutput
+	}
+	if c.Message.Refusal != "" {
+		return Result{}, refused("", c.Message.Refusal, p.key)
+	}
+	// Only an explicit "stop" confirms a finished answer; a missing, null or
+	// unknown finish reason is not success (Codex review of 104f4c8).
+	switch finish {
+	case "stop":
+	case "content_filter":
+		return Result{}, refused("content_filter", "", p.key)
+	case "length":
+		return Result{}, ErrTruncated
+	default:
+		return Result{}, ErrUnconfirmed
 	}
 	text, err := joinText([]string{c.Message.Content})
 	if err != nil {
@@ -84,6 +98,12 @@ func (p *compatProvider) Complete(ctx context.Context, req Request) (Result, err
 		model = p.model
 	}
 	return Result{Text: text, ModelUsed: model}, nil
+}
+
+// hasJSONValue reports whether a raw JSON field is present and not null.
+func hasJSONValue(raw json.RawMessage) bool {
+	v := strings.TrimSpace(string(raw))
+	return v != "" && v != "null"
 }
 
 // ListModels reads `GET /v1/models` (Ollama and llama.cpp serve it).

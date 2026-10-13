@@ -78,15 +78,15 @@ func (p *anthropicProvider) Complete(ctx context.Context, req Request) (Result, 
 	if err != nil {
 		return Result{}, scrubErr(err, p.key)
 	}
-	return anthropicResult(msg)
+	return anthropicResult(msg, p.key)
 }
 
 // anthropicResult reads a finished message: only end_turn/stop_sequence with
 // text-only content is an answer.
-func anthropicResult(msg *anthropic.BetaMessage) (Result, error) {
+func anthropicResult(msg *anthropic.BetaMessage, key string) (Result, error) {
 	switch msg.StopReason {
 	case anthropic.BetaStopReasonRefusal:
-		return Result{}, &RefusedError{Category: string(msg.StopDetails.Category), Explanation: msg.StopDetails.Explanation}
+		return Result{}, refused(string(msg.StopDetails.Category), msg.StopDetails.Explanation, key)
 	case anthropic.BetaStopReasonMaxTokens, anthropic.BetaStopReasonModelContextWindowExceeded:
 		return Result{}, ErrTruncated
 	case anthropic.BetaStopReasonEndTurn, anthropic.BetaStopReasonStopSequence:

@@ -79,10 +79,15 @@ var (
 	// ErrUnexpectedOutput: the vendor returned a tool call or another output
 	// kind Klyx never asked for.
 	ErrUnexpectedOutput = errors.New("the model returned output other than text (a tool call or similar); Klyx discarded it")
+	// ErrUnconfirmed: the response did not state that the answer finished (a
+	// missing or unknown finish reason). It is never taken as success.
+	ErrUnconfirmed = errors.New("the model's response did not confirm that the answer finished; Klyx discarded it")
 )
 
 // RefusedError: the vendor declined the request (a refusal stop reason, a
-// safety block). Category is the vendor's own label when it gives one.
+// safety block). Category is the vendor's own label when it gives one. Both
+// fields are vendor-controlled text: build one only through refused(), which
+// scrubs them with the active key and bounds them.
 type RefusedError struct {
 	Category    string
 	Explanation string
@@ -98,6 +103,19 @@ func (e *RefusedError) Error() string {
 		b.WriteString(": " + e.Explanation)
 	}
 	return b.String()
+}
+
+// refusedCategoryMax bounds a refusal category: it is a label, not prose.
+const refusedCategoryMax = 64
+
+// refused builds a RefusedError with its vendor-controlled fields scrubbed of
+// the active key (and credential shapes) and bounded (Codex review of 104f4c8).
+func refused(category, explanation, key string) *RefusedError {
+	category = Scrub(category, key)
+	if len(category) > refusedCategoryMax {
+		category = category[:refusedCategoryMax] + "…"
+	}
+	return &RefusedError{Category: category, Explanation: Scrub(explanation, key)}
 }
 
 // joinText concatenates a completion's text parts and refuses an empty result.

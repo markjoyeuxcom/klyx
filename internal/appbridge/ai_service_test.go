@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -679,5 +682,41 @@ func TestBuildAIState_Problems(t *testing.T) {
 	}
 	if off := BuildAIState(nil, nil, nil); off.Provider != nil || off.ProviderID != ai.ProviderOff || off.Problem != "" {
 		t.Fatalf("nil config is off: %+v", off)
+	}
+}
+
+// Codex review of 104f4c8 (P1), end to end: a vendor-controlled failure that
+// echoes the exact active key never reaches the DTO, through a real provider
+// and the service (a sentinel no credential pattern matches).
+func TestAI_DTOCarriesNoKeyFromStructuredFailures(t *testing.T) {
+	const key = "plainsentinel42"
+	for name, tc := range map[string]struct {
+		mk    func(url string) ai.Provider
+		reply string
+	}{
+		"gemini block reason": {func(u string) ai.Provider { return ai.NewGemini(key, u, "m", ai.NewHTTPClient(false)) },
+			`{"promptFeedback":{"blockReason":"` + key + `","blockReasonMessage":"saw ` + key + `"}}`},
+		"openai 200 failure": {func(u string) ai.Provider { return ai.NewOpenAI(key, u, "m", ai.NewHTTPClient(false)) },
+			`{"status":"failed","error":{"code":"x","message":"key ` + key + `"},"output":[]}`},
+		"anthropic refusal": {func(u string) ai.Provider {
+			return ai.NewAnthropic(key, u, "claude-opus-5-5", ai.NewHTTPClient(false), false)
+		}, `{"id":"m","type":"message","role":"assistant","model":"claude-opus-5-5","stop_reason":"refusal","stop_details":{"type":"refusal","category":"` + key + `","explanation":"` + key + `"},"usage":{},"content":[]}`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(w, tc.reply)
+			}))
+			defer srv.Close()
+			st := &AIState{Provider: tc.mk(srv.URL), ProviderID: ai.ProviderGemini, AllowEgress: true}
+			s := NewAIService(func(string) (AIConn, bool) { return &fakeExplainConn{chain: stuckChain()}, true }, st, func(string) bool { return false }, nil)
+			r := s.ExplainCertificate("c", "ns", "n")
+			if r.OK {
+				t.Fatalf("want a failure, got %+v", r)
+			}
+			if strings.Contains(r.Error, key) || strings.Contains(r.Explanation, key) {
+				t.Fatalf("the DTO carries the key: %+v", r)
+			}
+		})
 	}
 }

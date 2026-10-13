@@ -25,7 +25,9 @@ var secretShapes = []*regexp.Regexp{
 // they reach a DTO, the Activity log or a log line (spec §2.1).
 func Scrub(s string, secrets ...string) string {
 	for _, sec := range secrets {
-		if len(sec) >= 6 {
+		// Every non-empty secret, however short: a garbled message is
+		// acceptable, a leaked key is not.
+		if sec != "" {
 			s = strings.ReplaceAll(s, sec, "[redacted]")
 		}
 	}
@@ -55,14 +57,15 @@ type scrubbedError struct {
 func (e *scrubbedError) Error() string { return e.msg }
 func (e *scrubbedError) Unwrap() error { return e.err }
 
-// scrubErr scrubs err's message of secrets. Typed outcome errors (refusal,
-// truncation, ...) carry no secret and pass through unchanged.
+// scrubErr scrubs err's message of secrets. Typed outcome errors pass through
+// unchanged: the sentinels carry fixed text, and a RefusedError's
+// vendor-controlled fields were scrubbed when refused() built it.
 func scrubErr(err error, secrets ...string) error {
 	if err == nil {
 		return nil
 	}
 	var refused *RefusedError
-	if errors.As(err, &refused) || errors.Is(err, ErrTruncated) || errors.Is(err, ErrEmpty) || errors.Is(err, ErrUnexpectedOutput) {
+	if errors.As(err, &refused) || errors.Is(err, ErrTruncated) || errors.Is(err, ErrEmpty) || errors.Is(err, ErrUnexpectedOutput) || errors.Is(err, ErrUnconfirmed) {
 		return err
 	}
 	return &scrubbedError{msg: Scrub(err.Error(), secrets...), err: err}

@@ -338,3 +338,129 @@ func TestIsLoopbackEndpoint(t *testing.T) {
 		}
 	}
 }
+
+// Codex review of 104f4c8 (P1): every vendor-controlled failure field - an
+// HTTP error body, an HTTP-200 structured error, a refusal's category and
+// explanation, a block reason - is scrubbed with the EXACT active key before
+// it leaves the provider. The sentinels below match no credential pattern, so
+// only exact-key scrubbing can remove them; one vendor-shaped key per vendor
+// is checked too, and a short key is not exempt.
+func TestScrub_StructuredFailuresDropTheExactKey(t *testing.T) {
+	type mk func(key, url string) Provider
+	anth := func(key, url string) Provider {
+		return NewAnthropic(key, url, "claude-opus-5-5", NewHTTPClient(false), false)
+	}
+	oai := func(key, url string) Provider { return NewOpenAI(key, url, "m", NewHTTPClient(false)) }
+	gem := func(key, url string) Provider { return NewGemini(key, url, "m", NewHTTPClient(false)) }
+	cmp := func(key, url string) Provider { return NewOpenAICompatible(url, key, "m", NewHTTPClient(false)) }
+
+	cases := []struct {
+		name   string
+		mk     mk
+		status int
+		reply  func(key string) string
+	}{
+		{"anthropic 401 body", anth, 401, func(k string) string {
+			return `{"type":"error","error":{"type":"authentication_error","message":"bad key ` + k + `"}}`
+		}},
+		{"anthropic refusal explanation", anth, 200, func(k string) string {
+			return `{"id":"m","type":"message","role":"assistant","model":"claude-opus-5-5","stop_reason":"refusal","stop_details":{"type":"refusal","category":"` + k + `","explanation":"echo ` + k + `"},"usage":{},"content":[]}`
+		}},
+		{"openai 401 body", oai, 401, func(k string) string { return `{"error":{"message":"Incorrect API key provided: ` + k + `"}}` }},
+		{"openai 200 failed message", oai, 200, func(k string) string {
+			return `{"status":"failed","error":{"code":"x","message":"key ` + k + ` rejected"},"output":[]}`
+		}},
+		{"openai refusal text", oai, 200, func(k string) string {
+			return `{"status":"completed","output":[{"type":"message","content":[{"type":"refusal","refusal":"I saw ` + k + `"}]}]}`
+		}},
+		{"gemini block reason", gem, 200, func(k string) string {
+			return `{"promptFeedback":{"blockReason":"` + k + `","blockReasonMessage":"blocked ` + k + `"}}`
+		}},
+		{"gemini finish message", gem, 200, func(k string) string {
+			return `{"candidates":[{"finishReason":"SAFETY","finishMessage":"saw ` + k + `"}]}`
+		}},
+		{"gemini 400 body", gem, 400, func(k string) string { return `{"error":{"message":"API key not valid: ` + k + `"}}` }},
+		{"compat refusal", cmp, 200, func(k string) string {
+			return `{"choices":[{"finish_reason":"stop","message":{"content":"","refusal":"saw ` + k + `"}}]}`
+		}},
+	}
+	keys := map[string]string{
+		"plain sentinel":    "plainsentinel42",
+		"short key":         "k9x",
+		"vendor-shaped key": "sk-ant-api03-Zq9vendorShapedKey0123456789",
+	}
+	for _, tc := range cases {
+		for kname, key := range keys {
+			t.Run(tc.name+"/"+kname, func(t *testing.T) {
+				srv, _ := vendor(t, tc.status, tc.reply(key))
+				_, err := tc.mk(key, srv.URL).Complete(context.Background(), req)
+				if err == nil {
+					t.Fatal("want an error")
+				}
+				if strings.Contains(err.Error(), key) {
+					t.Fatalf("the active key survived: %v", err)
+				}
+				var r *RefusedError
+				if errors.As(err, &r) && (strings.Contains(r.Category, key) || strings.Contains(r.Explanation, key)) {
+					t.Fatalf("a RefusedError field kept the key: %+v", r)
+				}
+			})
+		}
+	}
+}
+
+// Codex review of 104f4c8 (P2): only an explicit "stop" confirms an
+// OpenAI-compatible answer, and a function or tool call is never an answer,
+// even with text beside it.
+func TestCompat_RequiresAConfirmedFinish(t *testing.T) {
+	cases := map[string]struct {
+		reply string
+		want  error
+	}{
+		"missing finish_reason":         {`{"choices":[{"message":{"content":"looks fine"}}]}`, ErrUnconfirmed},
+		"null finish_reason":            {`{"choices":[{"finish_reason":null,"message":{"content":"looks fine"}}]}`, ErrUnconfirmed},
+		"unknown finish_reason":         {`{"choices":[{"finish_reason":"eos_token","message":{"content":"looks fine"}}]}`, ErrUnconfirmed},
+		"legacy function_call + text":   {`{"choices":[{"finish_reason":"stop","message":{"content":"text","function_call":{"name":"x","arguments":"{}"}}}]}`, ErrUnexpectedOutput},
+		"finish function_call + text":   {`{"choices":[{"finish_reason":"function_call","message":{"content":"text"}}]}`, ErrUnexpectedOutput},
+		"tool_calls beside stop + text": {`{"choices":[{"finish_reason":"stop","message":{"content":"text","tool_calls":[{"id":"t"}]}}]}`, ErrUnexpectedOutput},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			srv, _ := vendor(t, 200, tc.reply)
+			_, err := NewOpenAICompatible(srv.URL, "", "m", NewHTTPClient(false)).Complete(context.Background(), req)
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("err = %v, want %v", err, tc.want)
+			}
+		})
+	}
+	srv, _ := vendor(t, 200, `{"choices":[{"finish_reason":"stop","message":{"content":"ok","function_call":null}}]}`)
+	if res, err := NewOpenAICompatible(srv.URL, "", "m", NewHTTPClient(false)).Complete(context.Background(), req); err != nil || res.Text != "ok" {
+		t.Fatalf("a null function_call with stop is a normal answer: %+v %v", res, err)
+	}
+}
+
+// Codex review of 104f4c8 (P2): a Gemini answer with any non-text Part
+// payload beside its text is rejected, not decoded away; a thought signature
+// accompanying text is allowed.
+func TestGemini_RejectsNonTextPartsBesideText(t *testing.T) {
+	for name, extra := range map[string]string{
+		"executableCode":      `{"executableCode":{"language":"PYTHON","code":"import os"}}`,
+		"codeExecutionResult": `{"codeExecutionResult":{"outcome":"OUTCOME_OK","output":"x"}}`,
+		"functionCall":        `{"functionCall":{"name":"x","args":{}}}`,
+		"inlineData":          `{"inlineData":{"mimeType":"image/png","data":"AA=="}}`,
+		"unknown field":       `{"somethingNew":{"x":1}}`,
+		"text plus extra":     `{"text":"also","executableCode":{"code":"x"}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			srv, _ := vendor(t, 200, `{"candidates":[{"finishReason":"STOP","content":{"parts":[{"text":"The answer."},`+extra+`]}}]}`)
+			_, err := NewGemini("AIzaTestKey123456789012345", srv.URL, "m", NewHTTPClient(false)).Complete(context.Background(), req)
+			if !errors.Is(err, ErrUnexpectedOutput) {
+				t.Fatalf("err = %v, want ErrUnexpectedOutput", err)
+			}
+		})
+	}
+	srv, _ := vendor(t, 200, `{"candidates":[{"finishReason":"STOP","content":{"parts":[{"text":"…","thought":true,"thoughtSignature":"c2ln"},{"text":"The answer.","thoughtSignature":"c2ln"}]}}]}`)
+	if res, err := NewGemini("AIzaTestKey123456789012345", srv.URL, "m", NewHTTPClient(false)).Complete(context.Background(), req); err != nil || res.Text != "The answer." {
+		t.Fatalf("thought signatures beside text are allowed: %+v %v", res, err)
+	}
+}

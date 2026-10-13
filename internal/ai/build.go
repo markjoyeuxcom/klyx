@@ -90,9 +90,14 @@ func Build(s Settings, keys KeyStore, getenv func(string) string) (*Built, error
 	}
 	origin := map[ProviderID]string{ProviderAnthropic: DefaultAnthropicOrigin, ProviderOpenAI: DefaultOpenAIOrigin, ProviderGemini: DefaultGeminiOrigin}[s.Provider]
 	if s.BaseURL != "" {
+		// A hosted vendor's custom origin is HTTPS, always: the loopback HTTP
+		// exception belongs to openaiCompatible only (Codex review of 104f4c8).
 		o, _, err := checkOrigin(s.BaseURL, true)
 		if err != nil {
 			return nil, err
+		}
+		if !strings.HasPrefix(o, "https://") {
+			return nil, errors.New("a custom origin for a hosted AI vendor must use HTTPS")
 		}
 		origin = o
 	}

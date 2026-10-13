@@ -163,7 +163,7 @@ func modelError(err error) string {
 		return "The model declined to answer" + refusalDetail(refused) + "."
 	case errors.Is(err, ai.ErrTruncated):
 		return "The model's answer was cut off before it finished; nothing partial is shown. Try again, or choose a model with a larger output limit."
-	case errors.Is(err, ai.ErrUnexpectedOutput), errors.Is(err, ai.ErrEmpty):
+	case errors.Is(err, ai.ErrUnexpectedOutput), errors.Is(err, ai.ErrEmpty), errors.Is(err, ai.ErrUnconfirmed):
 		return err.Error() + "."
 	case errors.Is(err, context.DeadlineExceeded):
 		return "The model did not answer in time."

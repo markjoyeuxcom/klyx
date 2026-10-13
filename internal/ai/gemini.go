@@ -58,7 +58,7 @@ func (p *geminiProvider) Complete(ctx context.Context, req Request) (Result, err
 	if err != nil {
 		return Result{}, err
 	}
-	return geminiResult(body, p.model)
+	return geminiResult(body, p.model, p.key)
 }
 
 // geminiRefusalReasons are finish reasons that mean the vendor declined.
@@ -66,7 +66,16 @@ var geminiRefusalReasons = map[string]bool{
 	"SAFETY": true, "RECITATION": true, "BLOCKLIST": true, "PROHIBITED_CONTENT": true, "SPII": true, "IMAGE_SAFETY": true, "LANGUAGE": true,
 }
 
-func geminiResult(body []byte, configured string) (Result, error) {
+// geminiAllowedPartFields are the Part fields an answer may carry: text, the
+// thought flag, and the thought signature that accompanies thinking. Any other
+// payload - functionCall, executableCode, codeExecutionResult, inlineData,
+// fileData or a field this build does not know - rejects the answer rather
+// than being dropped in decoding (Codex review of 104f4c8).
+var geminiAllowedPartFields = map[string]bool{"text": true, "thought": true, "thoughtSignature": true}
+
+// geminiResult reads a generateContent body. Vendor-controlled failure text is
+// scrubbed with the active key.
+func geminiResult(body []byte, configured, key string) (Result, error) {
 	var out struct {
 		ModelVersion   string `json:"modelVersion"`
 		PromptFeedback *struct {
@@ -77,11 +86,7 @@ func geminiResult(body []byte, configured string) (Result, error) {
 			FinishReason  string `json:"finishReason"`
 			FinishMessage string `json:"finishMessage"`
 			Content       *struct {
-				Parts []struct {
-					Text         string          `json:"text"`
-					Thought      bool            `json:"thought"`
-					FunctionCall json.RawMessage `json:"functionCall"`
-				} `json:"parts"`
+				Parts []map[string]json.RawMessage `json:"parts"`
 			} `json:"content"`
 		} `json:"candidates"`
 	}
@@ -89,7 +94,7 @@ func geminiResult(body []byte, configured string) (Result, error) {
 		return Result{}, fmt.Errorf("decode Gemini response: %w", err)
 	}
 	if out.PromptFeedback != nil && out.PromptFeedback.BlockReason != "" {
-		return Result{}, &RefusedError{Category: out.PromptFeedback.BlockReason, Explanation: out.PromptFeedback.BlockReasonMessage}
+		return Result{}, refused(out.PromptFeedback.BlockReason, out.PromptFeedback.BlockReasonMessage, key)
 	}
 	if len(out.Candidates) == 0 {
 		return Result{}, ErrEmpty
@@ -100,7 +105,7 @@ func geminiResult(body []byte, configured string) (Result, error) {
 	case c.FinishReason == "MAX_TOKENS":
 		return Result{}, ErrTruncated
 	case geminiRefusalReasons[c.FinishReason]:
-		return Result{}, &RefusedError{Category: c.FinishReason, Explanation: c.FinishMessage}
+		return Result{}, refused(c.FinishReason, c.FinishMessage, key)
 	default:
 		// MALFORMED_FUNCTION_CALL, UNEXPECTED_TOOL_CALL, OTHER, unspecified.
 		return Result{}, ErrUnexpectedOutput
@@ -108,13 +113,27 @@ func geminiResult(body []byte, configured string) (Result, error) {
 	var parts []string
 	if c.Content != nil {
 		for _, part := range c.Content.Parts {
-			if len(part.FunctionCall) > 0 {
-				return Result{}, ErrUnexpectedOutput
+			for field := range part {
+				if !geminiAllowedPartFields[field] {
+					return Result{}, ErrUnexpectedOutput
+				}
 			}
-			if part.Thought {
+			var thought bool
+			if raw, ok := part["thought"]; ok {
+				if err := json.Unmarshal(raw, &thought); err != nil {
+					return Result{}, ErrUnexpectedOutput
+				}
+			}
+			if thought {
 				continue
 			}
-			parts = append(parts, part.Text)
+			var text string
+			if raw, ok := part["text"]; ok {
+				if err := json.Unmarshal(raw, &text); err != nil {
+					return Result{}, ErrUnexpectedOutput
+				}
+			}
+			parts = append(parts, text)
 		}
 	}
 	text, err := joinText(parts)

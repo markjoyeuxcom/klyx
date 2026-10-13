@@ -51,10 +51,12 @@ func (p *openaiProvider) Complete(ctx context.Context, req Request) (Result, err
 	if err != nil {
 		return Result{}, err
 	}
-	return openaiResult(body, p.model)
+	return openaiResult(body, p.model, p.key)
 }
 
-func openaiResult(body []byte, configured string) (Result, error) {
+// openaiResult reads a Responses API body. Every vendor-controlled failure
+// field is scrubbed with the active key before it leaves.
+func openaiResult(body []byte, configured, key string) (Result, error) {
 	var out struct {
 		Model             string `json:"model"`
 		Status            string `json:"status"`
@@ -81,14 +83,14 @@ func openaiResult(body []byte, configured string) (Result, error) {
 	case "completed":
 	case "incomplete":
 		if out.IncompleteDetails != nil && out.IncompleteDetails.Reason == "content_filter" {
-			return Result{}, &RefusedError{Category: "content_filter"}
+			return Result{}, refused("content_filter", "", key)
 		}
 		return Result{}, ErrTruncated
 	default:
 		if out.Error != nil && out.Error.Message != "" {
-			return Result{}, fmt.Errorf("OpenAI response %s: %s", out.Status, Scrub(out.Error.Message))
+			return Result{}, fmt.Errorf("OpenAI response %s: %s", Scrub(out.Status, key), Scrub(out.Error.Message, key))
 		}
-		return Result{}, fmt.Errorf("OpenAI response status %q", out.Status)
+		return Result{}, fmt.Errorf("OpenAI response status %q", Scrub(out.Status, key))
 	}
 	var parts []string
 	for _, item := range out.Output {
@@ -99,7 +101,7 @@ func openaiResult(body []byte, configured string) (Result, error) {
 				case "output_text":
 					parts = append(parts, c.Text)
 				case "refusal":
-					return Result{}, &RefusedError{Explanation: c.Refusal}
+					return Result{}, refused("", c.Refusal, key)
 				default:
 					return Result{}, ErrUnexpectedOutput
 				}
