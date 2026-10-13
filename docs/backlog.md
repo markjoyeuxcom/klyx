@@ -226,6 +226,21 @@ See `docs/brainstorm-questions.md` (Q16 pinned resources, etc.).
 
 Merged to `main` — do not re-add to the backlog:
 
+**2026-10-14 — UI polish and code-quality fixes (v0.12.0, notes
+`docs/release-notes-0.12.0.md`):**
+- The 2026-10-13 joint UI review, all items in three slices: palette ranking
+  and new entries, modal cheatsheet, keyboard fleet cards, 4.5:1 text
+  contrast (pinned by a test), a calmer Overview, per-tool fleet cards,
+  lamp-only syncing dim, one fault glyph, clamped messages, honest Settings
+  copy and an unsaved-AI cue, plainer vocabulary, the shared Expiry table,
+  Karpenter auto-select and a YAML Wrap toggle
+- Codex's ten code-quality findings: a cluster-fenced, UID-pinned,
+  discovery-wide Scratch inventory (with client-go-exact cached discovery),
+  per-rule Gateway backend verdicts, nil-ready endpoints, periodic-only ESO
+  staleness, scheduler-effective headroom, numbered CRD reads,
+  reserved log-stream slots and a discarded-answer error for Claude Code.
+  Each slice Codex-reviewed; live-cluster smoke pending (§0)
+
 **2026-10-13 — AI providers and Explain everywhere (v0.11.0, spec
 `docs/superpowers/specs/2026-10-13-klyx-ai-providers-and-explain.md`):**
 - Settings > AI: Claude, OpenAI and Gemini keys in the OS keychain (or a named
