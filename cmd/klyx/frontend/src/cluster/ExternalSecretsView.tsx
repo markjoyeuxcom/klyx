@@ -23,6 +23,15 @@ import { useInspectorAI } from "../ai/AIExplain";
 
 const keyOf = (e: { namespace: string; name: string }) => `${e.namespace}/${e.name}`;
 
+// refreshText states the secret's refresh policy in ESO's own terms: only
+// Periodic refreshes on the interval (the stale check applies to it alone).
+function refreshText(e: ExternalSecretDTO): string {
+  if (e.refreshPolicy === "CreatedOnce") return "created once - never refreshed";
+  if (e.refreshPolicy === "OnChange") return "on spec change only";
+  if (e.refreshPolicy && e.refreshPolicy !== "Periodic") return e.refreshPolicy;
+  return e.refreshIntervalSeconds > 0 ? `every ${fmtDuration(e.refreshIntervalSeconds)}` : "disabled";
+}
+
 function fmtDuration(secs: number): string {
   if (secs <= 0) return "0s";
   if (secs < 60) return `${Math.floor(secs)}s`;
@@ -541,7 +550,7 @@ function SecretInspector({ e, nowS, removed, unverified, store, storeCov, onClos
         </InspectorBlock>
         <InspectorBlock title="Refresh">
           <div className="insp-kv">
-            <span>interval</span><span>{e.refreshIntervalSeconds > 0 ? fmtDuration(e.refreshIntervalSeconds) : "disabled"}</span>
+            <span>refresh</span><span>{refreshText(e)}</span>
             <span>last sync</span>
             <span style={{ color: e.stale ? "var(--color-text-warning)" : hasRefreshed(e) ? undefined : "var(--color-text-danger)" }}>
               {hasRefreshed(e) ? `${fmtDuration(ageOf(e, nowS))} ago` : "never synced"}

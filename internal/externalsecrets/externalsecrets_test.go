@@ -156,3 +156,36 @@ func TestParseStoreInvalid(t *testing.T) {
 		t.Fatalf("invalid store: %+v", s)
 	}
 }
+
+// Codex review 2026-10-13 #8: only Periodic refresh goes stale with time. A
+// CreatedOnce or OnChange secret synced long ago is not overdue, and the rule
+// schedules no stale check for it.
+func TestNonPeriodicRefreshNeverGoesStale(t *testing.T) {
+	for _, policy := range []string{"CreatedOnce", "OnChange"} {
+		t.Run(policy, func(t *testing.T) {
+			st := ready("True", "SecretSynced", "")
+			st["refreshTime"] = now.Add(-3 * time.Hour).Format(time.RFC3339)
+			e := ParseExternalSecret(es(map[string]interface{}{"refreshPolicy": policy, "refreshInterval": "1h"}, st), now)
+			if e.Stale || e.RefreshPolicy != policy {
+				t.Fatalf("a %s secret is never stale: %+v", policy, e)
+			}
+			ev := ExternalSecretRule(e)
+			if ev.Label != "Synced" || ev.Included || ev.Next != nil {
+				t.Fatalf("a %s secret reads Synced with no stale check scheduled: %+v", policy, ev)
+			}
+		})
+	}
+}
+
+func TestPeriodicRefreshIsTheDefaultAndGoesStale(t *testing.T) {
+	st := ready("True", "SecretSynced", "")
+	st["refreshTime"] = now.Add(-3 * time.Hour).Format(time.RFC3339)
+	e := ParseExternalSecret(es(map[string]interface{}{"refreshInterval": "1h"}, st), now)
+	if e.RefreshPolicy != RefreshPolicyPeriodic || !e.Stale {
+		t.Fatalf("an unset policy is Periodic and 3h past a 1h interval is stale: %+v", e)
+	}
+	explicit := ParseExternalSecret(es(map[string]interface{}{"refreshPolicy": "Periodic", "refreshInterval": "1h"}, st), now)
+	if !explicit.Stale {
+		t.Fatalf("an explicit Periodic policy goes stale too: %+v", explicit)
+	}
+}

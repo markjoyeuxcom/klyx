@@ -5,6 +5,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -548,5 +549,50 @@ func TestSummarizePods_CarriesTheCreationAnchor(t *testing.T) {
 	s := SummarizePods([]corev1.Pod{p}, psNow)[0]
 	if !s.Created.Equal(psNow.Add(-10*time.Minute)) || s.AgeSeconds != 600 {
 		t.Fatalf("anchor: created=%v age=%d", s.Created, s.AgeSeconds)
+	}
+}
+
+// podRequest is the scheduler's rule: the app sum plus sidecars, at least
+// the init peak (each init beside the sidecars started before it), pod-level
+// requests replacing the container sum, plus overhead.
+func TestPodRequestSchedulerEffective(t *testing.T) {
+	always := corev1.ContainerRestartPolicyAlways
+	cpu := func(v string) corev1.ResourceRequirements {
+		return corev1.ResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse(v)}}
+	}
+	cases := []struct {
+		name string
+		spec corev1.PodSpec
+		want float64
+	}{
+		{"app containers sum", corev1.PodSpec{Containers: []corev1.Container{{Resources: cpu("100m")}, {Resources: cpu("200m")}}}, 0.3},
+		{"a heavy init container sets the floor", corev1.PodSpec{
+			InitContainers: []corev1.Container{{Resources: cpu("4")}},
+			Containers:     []corev1.Container{{Resources: cpu("100m")}},
+		}, 4},
+		{"a sidecar adds to the app sum", corev1.PodSpec{
+			InitContainers: []corev1.Container{{Resources: cpu("250m"), RestartPolicy: &always}},
+			Containers:     []corev1.Container{{Resources: cpu("500m")}},
+		}, 0.75},
+		{"an init after a sidecar runs beside it", corev1.PodSpec{
+			InitContainers: []corev1.Container{{Resources: cpu("1"), RestartPolicy: &always}, {Resources: cpu("2")}},
+			Containers:     []corev1.Container{{Resources: cpu("100m")}},
+		}, 3},
+		{"pod-level requests replace the container sum", corev1.PodSpec{
+			Resources:  &corev1.ResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("1500m")}},
+			Containers: []corev1.Container{{Resources: cpu("100m")}},
+		}, 1.5},
+		{"overhead is added", corev1.PodSpec{
+			Overhead:   corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("250m")},
+			Containers: []corev1.Container{{Resources: cpu("500m")}},
+		}, 0.75},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			p := &corev1.Pod{Spec: c.spec}
+			if got := podRequest(p, corev1.ResourceCPU); got < c.want-1e-9 || got > c.want+1e-9 {
+				t.Fatalf("want %v cores, got %v", c.want, got)
+			}
+		})
 	}
 }

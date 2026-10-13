@@ -79,6 +79,9 @@ type Match struct{ PathType, PathValue, Method string }
 type Backend struct {
 	Kind, Name, Namespace string
 	Port, Weight          int32
+	// WeightSet: the backendRef wrote a weight. Unset means the Gateway API
+	// default of 1; an explicit 0 sends this backend no traffic.
+	WeightSet bool
 
 	// Filled by the fleet layer, per backend, so a lane is diagnosed from
 	// its own backend's evidence.
@@ -86,6 +89,10 @@ type Backend struct {
 	Error     string         // why State is unreadable
 	Endpoints *EndpointCount // resolved Service backends only
 }
+
+// CarriesTraffic: the backend receives a share of the rule's requests - its
+// weight is unset (default 1) or positive.
+func (b Backend) CarriesTraffic() bool { return !b.WeightSet || b.Weight > 0 }
 
 // BackendState is what Klyx could establish about one backendRef.
 type BackendState string

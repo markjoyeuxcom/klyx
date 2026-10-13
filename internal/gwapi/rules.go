@@ -132,45 +132,46 @@ func RouteRule(rn RouteNode, listeners []Listener) health.NativeEval {
 		add(health.Fault, "listener missing")
 	}
 
-	several := len(rn.Backends) > 1
-	primary := func(role health.Kind) health.Kind {
-		if several && role == health.Fault {
-			return health.Degraded // other backends may still carry traffic
-		}
-		return role
-	}
+	// Every backend that carries traffic is diagnosed, not only the lane's
+	// primary (Codex review 2026-10-13: an equal-weight second backend with
+	// no endpoints read as "resolved"). A weight-0 backend carries none and
+	// is left out. With several carrying backends a fault is degraded -
+	// the others still take traffic - unless every one of them faults.
 	switch {
 	case len(rn.Backends) == 0:
 		add(health.Unknown, "no backendRefs")
 	default:
-		b := rn.Backends[0]
-		switch {
-		case b.State == BackendUnsupported:
-			// (The lens's undefined-state branch only serves pre-state
-			// payloads; the bridge always sends state, "" included.)
-			add(health.Unknown, b.Kind+" backend not evaluated")
-		case b.State == BackendNotFound:
+		var carrying []Backend
+		for _, b := range rn.Backends {
+			if b.CarriesTraffic() {
+				carrying = append(carrying, b)
+			}
+		}
+		if len(carrying) == 0 {
+			add(health.Fault, "every backend has weight 0")
+			break
+		}
+		several := len(carrying) > 1
+		var found []routeIssue
+		faults := 0
+		for _, b := range carrying {
+			role, short := BackendIssue(b)
+			if role == health.OK {
+				continue
+			}
+			if role == health.Fault {
+				faults++
+			}
 			if several {
-				add(primary(health.Fault), "primary backend not found")
-			} else {
-				add(primary(health.Fault), "backend not found")
+				short = b.Name + ": " + short
 			}
-		case b.State == BackendUnreadable:
-			add(health.Unknown, "backend unreadable")
-		case b.State == BackendResolved:
-			ep := b.Endpoints
-			switch {
-			case ep == nil || ep.Error != "":
-				add(health.Unknown, "endpoints unreadable")
-			case ep.Total == 0:
-				add(primary(health.Fault), "no endpoints")
-			case ep.Ready == 0:
-				add(primary(health.Fault), "no ready endpoints")
-			case ep.Ready < ep.Total:
-				add(health.Degraded, fmt.Sprintf("%d/%d endpoints ready", ep.Ready, ep.Total))
+			found = append(found, routeIssue{role, short})
+		}
+		for _, is := range found {
+			if several && is.role == health.Fault && faults < len(carrying) {
+				is.role = health.Degraded
 			}
-		default:
-			add(health.Unknown, "backend not evaluated")
+			issues = append(issues, is)
 		}
 	}
 	if len(issues) == 0 {
@@ -183,6 +184,36 @@ func RouteRule(rn RouteNode, listeners []Listener) health.NativeEval {
 		}
 	}
 	return health.NativeEval{Included: worst.role == health.Fault || worst.role == health.Degraded, Role: worst.role, Label: worst.short}
+}
+
+// BackendIssue is one backend's own verdict: OK when Klyx found nothing
+// wrong, otherwise the role and short label as if it were the only backend.
+func BackendIssue(b Backend) (health.Kind, string) {
+	switch b.State {
+	case BackendUnsupported:
+		// (The lens's undefined-state branch only serves pre-state
+		// payloads; the bridge always sends state, "" included.)
+		return health.Unknown, b.Kind + " backend not evaluated"
+	case BackendNotFound:
+		return health.Fault, "backend not found"
+	case BackendUnreadable:
+		return health.Unknown, "backend unreadable"
+	case BackendResolved:
+		ep := b.Endpoints
+		switch {
+		case ep == nil || ep.Error != "":
+			return health.Unknown, "endpoints unreadable"
+		case ep.Total == 0:
+			return health.Fault, "no endpoints"
+		case ep.Ready == 0:
+			return health.Fault, "no ready endpoints"
+		case ep.Ready < ep.Total:
+			return health.Degraded, fmt.Sprintf("%d/%d endpoints ready", ep.Ready, ep.Total)
+		}
+		return health.OK, ""
+	default:
+		return health.Unknown, "backend not evaluated"
+	}
 }
 
 // CountEndpoints counts a Service's EndpointSlice endpoints, deduplicated by
@@ -209,7 +240,9 @@ func CountEndpoints(slices []discoveryv1.EndpointSlice) EndpointCount {
 			if e.TargetRef == nil || e.TargetRef.Kind != "Pod" {
 				out.NonPod++
 			}
-			if e.Conditions.Ready != nil && *e.Conditions.Ready {
+			// The EndpointSlice API: a nil Ready is an unknown state that
+			// consumers should treat as ready (Codex review 2026-10-13).
+			if e.Conditions.Ready == nil || *e.Conditions.Ready {
 				out.Ready++
 			}
 		}

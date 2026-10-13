@@ -85,3 +85,20 @@ func TestNodeHeadroom_RejectsUnknownTarget(t *testing.T) {
 		t.Fatal("unknown target kind must error")
 	}
 }
+
+// Codex review 2026-10-13 #9: the simulation uses the scheduler-effective
+// request. A 4-core init container cannot land on a 2-core survivor even
+// though the app container asks for 100m.
+func TestNodeHeadroomCountsInitContainerRequests(t *testing.T) {
+	p := headroomPod("ns", "heavy-init", "lost", "100m")
+	p.Spec.InitContainers = []corev1.Container{{Name: "setup", Resources: corev1.ResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("4")}}}}
+	cs := k8sfake.NewSimpleClientset(headroomNode("lost", "a", "8"), headroomNode("survivor", "b", "2"), p)
+	c := &ClusterConn{typed: cs}
+	r, err := c.NodeHeadroom(context.Background(), "node", "lost")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(r.Result.Unplaced) == 0 {
+		t.Fatalf("a 4-core init container cannot fit a 2-core survivor: %+v", r.Result)
+	}
+}

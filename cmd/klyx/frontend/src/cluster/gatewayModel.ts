@@ -1,4 +1,4 @@
-import type { CertificateDTO, CondDTO, GatewayRefDTO, ListenerDTO, PolicyRefDTO, ResourceRef, RouteNodeDTO, RuleDTO } from "../store/fleet";
+import type { BackendDTO, CertificateDTO, CondDTO, GatewayRefDTO, ListenerDTO, PolicyRefDTO, ResourceRef, RouteNodeDTO, RuleDTO } from "../store/fleet";
 import { clock, type KindEvidence } from "../layout/coverage";
 
 // gatewayModel - the Gateway API lens's health and wording, shared by the
@@ -81,12 +81,13 @@ export type RouteIssue = { short: string; text: string; severity: Role["kind"] }
 
 const endpointsText = (r: number, t: number, nonPod: number) => `${r}/${t} endpoints ready${nonPod > 0 ? ` (${nonPod} not backed by a pod)` : ""}`;
 
-// routeIssues reads this route's status FOR THIS Gateway and its primary
-// backend (backends[0], the lane). Each issue says how sure Klyx is:
-// fault = explicit current negative; degraded = partial or last observed;
-// progressing = the controller is deciding; unknown = Klyx could not read
-// or does not evaluate it. With several backends, a primary-backend
-// problem is degraded: other backends may still carry traffic.
+// routeIssues reads this route's status FOR THIS Gateway and every backend
+// that carries traffic. Each issue says how sure Klyx is: fault = explicit
+// current negative; degraded = partial or last observed; progressing = the
+// controller is deciding; unknown = Klyx could not read or does not evaluate
+// it. With several traffic-carrying backends a backend fault is degraded -
+// the others may still carry traffic - unless every one of them faults. A
+// weight-0 backend carries none and is not diagnosed.
 export function routeIssues(r: Omit<RouteNodeDTO, "rule">, listeners: ListenerDTO[] = []): RouteIssue[] {
   const out: RouteIssue[] = [];
   const legacy = r.parentFound === undefined; // older payload: booleans only
@@ -112,30 +113,52 @@ export function routeIssues(r: Omit<RouteNodeDTO, "rule">, listeners: ListenerDT
   const names = new Set(listeners.map((l) => l.name).filter(Boolean));
   if (r.parentSectionName && names.size > 0 && !names.has(r.parentSectionName)) out.push({ short: "listener missing", text: `Listener ${r.parentSectionName} does not exist on this Gateway.`, severity: "fault" });
 
-  const b = r.backends[0];
-  const several = r.backends.length > 1;
-  const primary = (sev: "fault" | "degraded") => (several && sev === "fault" ? "degraded" : sev);
-  const scope = several ? ` This is the primary backend; ${r.backends.length - 1} other backend${r.backends.length === 2 ? " is" : "s are"} not diagnosed on the lane.` : "";
-  if (!b) {
+  if (r.backends.length === 0) {
     out.push({ short: "no backendRefs", text: "No backendRefs - a redirect or filter-only route, or a misconfiguration. Klyx does not evaluate filters.", severity: "unknown" });
-  } else if (b.state === "unsupported" || (b.state === undefined && b.kind !== "Service")) {
-    out.push({ short: `${b.kind} backend not evaluated`, text: `The primary backend is a ${b.kind}; Klyx evaluates Service backends only.${scope}`, severity: "unknown" });
-  } else if (b.state === "not-found") {
-    out.push({ short: several ? "primary backend not found" : "backend not found", text: `Backend Service ${b.namespace}/${b.name} not found.${scope}`, severity: primary("fault") });
-  } else if (b.state === "unreadable") {
-    out.push({ short: "backend unreadable", text: `Backend Service ${b.namespace}/${b.name} could not be read${b.error ? ` - ${b.error}` : ""}; whether it exists is unknown.`, severity: "unknown" });
-  } else if (b.state === "resolved") {
-    const ep = b.endpoints;
-    if (!ep || ep.error) out.push({ short: "endpoints unreadable", text: `The backend's EndpointSlices could not be read${ep?.error ? ` - ${ep.error}` : ""}.`, severity: "unknown" });
-    else if (ep.total === 0) out.push({ short: "no endpoints", text: `The backend Service has no endpoints.${scope}`, severity: primary("fault") });
-    else if (ep.ready === 0) out.push({ short: "no ready endpoints", text: `${ep.total === 1 ? "The backend's only endpoint is not ready" : `None of the backend's ${ep.total} endpoints is ready`}.${scope}`, severity: primary("fault") });
-    else if (ep.ready < ep.total) out.push({ short: `${ep.ready}/${ep.total} endpoints ready`, text: `${endpointsText(ep.ready, ep.total, ep.nonPod)} - reduced capacity.`, severity: "degraded" });
-  } else {
-    out.push({ short: "backend not evaluated", text: "Klyx has no evidence for the primary backend.", severity: "unknown" });
+    return out;
+  }
+  const carrying = r.backends.filter(carriesTraffic);
+  if (carrying.length === 0) {
+    out.push({ short: "every backend has weight 0", text: "Every backendRef has weight 0, so no backend receives this rule's traffic.", severity: "fault" });
+    return out;
+  }
+  const several = carrying.length > 1;
+  const found = carrying.flatMap((b) => {
+    const is = backendIssue(b);
+    return is ? [{ b, is }] : [];
+  });
+  const faults = found.filter((x) => x.is.severity === "fault").length;
+  for (const { b, is } of found) {
+    const demote = several && is.severity === "fault" && faults < carrying.length;
+    out.push({
+      short: several ? `${b.name}: ${is.short}` : is.short,
+      text: `${several ? `${b.namespace}/${b.name}: ` : ""}${is.text}${demote ? " Other backends may still carry traffic." : ""}`,
+      severity: demote ? "degraded" : is.severity,
+    });
   }
   return out;
 }
 
+/** A backend carries traffic when its weight is unset (default 1) or positive. */
+export const carriesTraffic = (b: BackendDTO) => b.weightSet !== true || b.weight > 0;
+
+/** One backend's own issue, as if it were the only backend; null when Klyx found nothing wrong. */
+export function backendIssue(b: BackendDTO): RouteIssue | null {
+  if (b.state === "unsupported" || (b.state === undefined && b.kind !== "Service")) {
+    return { short: `${b.kind} backend not evaluated`, text: `The backend is a ${b.kind}; Klyx evaluates Service backends only.`, severity: "unknown" };
+  }
+  if (b.state === "not-found") return { short: "backend not found", text: `Backend Service ${b.namespace}/${b.name} not found.`, severity: "fault" };
+  if (b.state === "unreadable") return { short: "backend unreadable", text: `Backend Service ${b.namespace}/${b.name} could not be read${b.error ? ` - ${b.error}` : ""}; whether it exists is unknown.`, severity: "unknown" };
+  if (b.state === "resolved") {
+    const ep = b.endpoints;
+    if (!ep || ep.error) return { short: "endpoints unreadable", text: `The backend's EndpointSlices could not be read${ep?.error ? ` - ${ep.error}` : ""}.`, severity: "unknown" };
+    if (ep.total === 0) return { short: "no endpoints", text: "The backend Service has no endpoints.", severity: "fault" };
+    if (ep.ready === 0) return { short: "no ready endpoints", text: `${ep.total === 1 ? "The backend's only endpoint is not ready" : `None of the backend's ${ep.total} endpoints is ready`}.`, severity: "fault" };
+    if (ep.ready < ep.total) return { short: `${ep.ready}/${ep.total} endpoints ready`, text: `${endpointsText(ep.ready, ep.total, ep.nonPod)} - reduced capacity.`, severity: "degraded" };
+    return null;
+  }
+  return { short: "backend not evaluated", text: "Klyx has no evidence for this backend.", severity: "unknown" };
+}
 
 /** What the lane's backend box says about the primary backend. */
 export function primaryBackendText(r: RouteNodeDTO): string {

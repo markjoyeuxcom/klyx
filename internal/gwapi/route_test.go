@@ -194,8 +194,33 @@ func TestRouteForGatewayFloat64Ports(t *testing.T) {
 	if !ok {
 		t.Fatal("route should attach to infra/eg")
 	}
-	if len(rn.Backends) != 1 || rn.Backends[0].Port != 8080 || rn.Backends[0].Weight != 50 {
+	if len(rn.Backends) != 1 || rn.Backends[0].Port != 8080 || rn.Backends[0].Weight != 50 || !rn.Backends[0].WeightSet {
 		t.Fatalf("float64 port/weight must decode: %+v", rn.Backends)
+	}
+}
+
+// An unset weight is the Gateway API default of 1 (the backend carries
+// traffic); an explicit 0 carries none.
+func TestRouteForGatewayWeightSet(t *testing.T) {
+	u := hrObj("w", "apps",
+		[]interface{}{parentRef("eg", "infra", "")},
+		[]interface{}{map[string]interface{}{
+			"backendRefs": []interface{}{
+				map[string]interface{}{"name": "unset", "port": float64(80)},
+				map[string]interface{}{"name": "zero", "port": float64(80), "weight": float64(0)},
+			},
+		}},
+		[]interface{}{statusParent("eg", "infra", "True", "True")},
+		nil)
+	rn, ok := RouteForGateway(u, "infra", "eg")
+	if !ok || len(rn.Backends) != 2 {
+		t.Fatalf("route should attach with two backends: %+v", rn)
+	}
+	if rn.Backends[0].WeightSet || !rn.Backends[0].CarriesTraffic() {
+		t.Fatalf("an unset weight carries traffic: %+v", rn.Backends[0])
+	}
+	if !rn.Backends[1].WeightSet || rn.Backends[1].CarriesTraffic() {
+		t.Fatalf("an explicit weight 0 carries none: %+v", rn.Backends[1])
 	}
 }
 

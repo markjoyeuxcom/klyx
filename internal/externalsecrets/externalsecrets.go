@@ -46,6 +46,10 @@ type ExternalSecret struct {
 	// RefreshInterval is spec.refreshInterval (ESO defaults it to 1h; an
 	// explicit "0" disables refresh). Zero here means refresh is disabled.
 	RefreshInterval time.Duration
+	// RefreshPolicy is spec.refreshPolicy: Periodic (the default when
+	// unset), CreatedOnce or OnChange. Only Periodic refreshes on the
+	// interval; the others never go stale with time.
+	RefreshPolicy string
 	// RefreshTime is status.refreshTime: the last successful sync. Zero when
 	// the secret has never synced.
 	RefreshTime time.Time
@@ -69,6 +73,19 @@ type Store struct {
 	// Provider is the single key under spec.provider (azurekv, vault, aws,
 	// gcpsm, kubernetes, ...) - display-only.
 	Provider string
+}
+
+// RefreshPolicyPeriodic is ESO's default refresh policy: re-sync every
+// refreshInterval. CreatedOnce syncs once; OnChange re-syncs only when the
+// ExternalSecret's spec changes.
+const RefreshPolicyPeriodic = "Periodic"
+
+// RefreshesPeriodically: the secret re-syncs on its interval, so an overdue
+// refresh means the controller stopped. An empty policy is ESO's default,
+// Periodic. Any other policy (CreatedOnce, OnChange, or one Klyx does not
+// know) makes no time-based promise.
+func (e ExternalSecret) RefreshesPeriodically() bool {
+	return (e.RefreshPolicy == "" || e.RefreshPolicy == RefreshPolicyPeriodic) && e.RefreshInterval > 0
 }
 
 // esoDefaultRefreshInterval mirrors ESO's API default for
@@ -99,10 +116,16 @@ func ParseExternalSecret(u *unstructured.Unstructured, now time.Time) ExternalSe
 	}
 
 	e.RefreshInterval = parseRefreshInterval(u)
+	e.RefreshPolicy, _, _ = unstructured.NestedString(u.Object, "spec", "refreshPolicy")
+	if e.RefreshPolicy == "" {
+		e.RefreshPolicy = RefreshPolicyPeriodic
+	}
 	e.RefreshTime = parseTime(u, "status", "refreshTime")
-	// Stale only applies once a first sync happened: a never-synced secret is
-	// already loud via State (Failed/Unknown), and its age is meaningless.
-	if e.RefreshInterval > 0 && !e.RefreshTime.IsZero() {
+	// Stale only applies to periodic refresh (Codex review 2026-10-13: a
+	// CreatedOnce or OnChange secret is never overdue) and once a first sync
+	// happened: a never-synced secret is already loud via State
+	// (Failed/Unknown), and its age is meaningless.
+	if e.RefreshesPeriodically() && !e.RefreshTime.IsZero() {
 		e.Stale = now.Sub(e.RefreshTime) > staleGraceFactor*e.RefreshInterval
 	}
 	return e

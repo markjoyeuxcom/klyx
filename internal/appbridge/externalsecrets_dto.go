@@ -24,6 +24,9 @@ type ExternalSecretDTO struct {
 	TargetSecret string `json:"targetSecret"`
 	// RefreshIntervalSeconds is spec.refreshInterval; 0 means refresh disabled.
 	RefreshIntervalSeconds int64 `json:"refreshIntervalSeconds"`
+	// RefreshPolicy is spec.refreshPolicy (Periodic when unset). Only
+	// Periodic refreshes on the interval.
+	RefreshPolicy string `json:"refreshPolicy"`
 	// LastRefreshAgeSeconds is now->status.refreshTime, computed server-side
 	// for determinism. 0 both when never synced and when synced under a
 	// second ago - Refreshed is the presence fact that tells them apart.
@@ -62,6 +65,7 @@ func externalSecretFields(e externalsecrets.ExternalSecret, now time.Time) Exter
 		StoreName:              e.StoreName,
 		TargetSecret:           e.TargetSecret,
 		RefreshIntervalSeconds: int64(e.RefreshInterval.Seconds()),
+		RefreshPolicy:          e.RefreshPolicy,
 		Stale:                  e.Stale,
 	}
 	if !e.RefreshTime.IsZero() {

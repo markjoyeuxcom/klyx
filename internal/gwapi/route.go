@@ -87,6 +87,7 @@ func RouteForGateway(u *unstructured.Unstructured, gwNamespace, gwName string) (
 			}
 			if w, ok, _ := unstructured.NestedNumberAsFloat64(bm, "weight"); ok {
 				be.Weight = int32(w)
+				be.WeightSet = true
 			}
 			rn.Backends = append(rn.Backends, be)
 		}

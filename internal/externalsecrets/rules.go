@@ -8,8 +8,8 @@ import (
 
 // ExternalSecretRule is the External Secrets lens rule, relocated verbatim
 // (ExternalSecretsView.needsAttention / secretHealth): Included = not Synced
-// or stale (refresh overdue). Next is the moment a synced secret goes stale
-// (refreshTime + 2x interval) while it has not.
+// or stale (refresh overdue). Next is the moment a periodically refreshed
+// secret goes stale (refreshTime + 2x interval) while it has not.
 func ExternalSecretRule(e ExternalSecret) health.NativeEval {
 	ev := health.NativeEval{Included: e.State != Synced || e.Stale}
 	switch {
@@ -24,7 +24,7 @@ func ExternalSecretRule(e ExternalSecret) health.NativeEval {
 	default:
 		ev.Role, ev.Label = health.Degraded, string(e.State)
 	}
-	if !e.Stale && e.RefreshInterval > 0 && !e.RefreshTime.IsZero() {
+	if !e.Stale && e.RefreshesPeriodically() && !e.RefreshTime.IsZero() {
 		// Stale is now - refreshTime > 2x interval: the first instant past it.
 		ev.Next = health.At(e.RefreshTime.Add(staleGraceFactor*e.RefreshInterval + time.Nanosecond))
 	}

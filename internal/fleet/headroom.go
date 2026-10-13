@@ -58,21 +58,12 @@ func (c *ClusterConn) NodeHeadroom(ctx context.Context, loseKind, loseName strin
 		if p.Node == "" || p.Phase == "Succeeded" || p.Phase == "Failed" {
 			continue
 		}
-		var cpu, mem float64
-		for _, ct := range p.Containers {
-			if ct.Init {
-				continue // scheduling footprint approximated by the main containers
-			}
-			if ct.CPURequest != nil {
-				cpu += *ct.CPURequest
-			}
-			if ct.MemRequest != nil {
-				mem += *ct.MemRequest
-			}
-		}
+		// The scheduler-effective request: init containers, sidecars,
+		// pod-level requests and overhead included - what a survivor must
+		// actually have free to take the pod.
 		simPods = append(simPods, workloads.SimPod{
 			Namespace: p.Namespace, Name: p.Name, Node: p.Node,
-			CPUReq: cpu, MemReq: mem,
+			CPUReq: p.SchedCPU, MemReq: p.SchedMem,
 			DaemonSet: p.OwnerKind == "DaemonSet",
 		})
 	}

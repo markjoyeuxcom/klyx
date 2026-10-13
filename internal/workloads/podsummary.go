@@ -28,6 +28,9 @@ type PodSummary struct {
 	AgeSeconds      int       // age at the summary's now
 	Created         time.Time // creation time: the anchor a live view ticks the age from
 	Containers      []ContainerSummary
+	// SchedCPU/SchedMem are the scheduler-effective requests (cores, bytes):
+	// what the scheduler reserves on a node for this pod (podRequests).
+	SchedCPU, SchedMem float64
 	// Health is the shared verdict (internal/health); Rank/Reason are legacy
 	// and stay only until every consumer has migrated.
 	Health health.Verdict
@@ -119,6 +122,8 @@ func SummarizePods(pods []corev1.Pod, now time.Time) []PodSummary {
 			Created:    p.CreationTimestamp.Time,
 			Containers: buildContainerSummaries(p),
 			Health:     health.Pod(p, now),
+			SchedCPU:   podRequest(p, corev1.ResourceCPU),
+			SchedMem:   podRequest(p, corev1.ResourceMemory),
 			UID:        p.UID,
 			Generation: p.Generation,
 		}
@@ -209,6 +214,45 @@ func buildContainerSummaries(p *corev1.Pod) []ContainerSummary {
 // containerPorts maps spec ports onto the summary shape. Init containers are
 // skipped by the caller (they never serve traffic); protocol defaults to TCP
 // per the API convention.
+// podRequest is the scheduler-effective request for one resource, the
+// kube-scheduler's podRequests rule (Codex review 2026-10-13: init requests
+// were skipped, so a 4-core init container "fit" a 2-core node):
+//   - the app containers' sum, plus every restartable init container
+//     (sidecar), which keeps running beside them;
+//   - at least the init peak: each regular init container runs alone
+//     beside the sidecars started before it;
+//   - pod-level requests replace the container sum when set;
+//   - plus the RuntimeClass overhead.
+func podRequest(p *corev1.Pod, name corev1.ResourceName) float64 {
+	q := func(l corev1.ResourceList) float64 {
+		if v, ok := l[name]; ok {
+			return v.AsApproximateFloat64()
+		}
+		return 0
+	}
+	var apps float64
+	for _, c := range p.Spec.Containers {
+		apps += q(c.Resources.Requests)
+	}
+	var sidecars, initPeak float64
+	for _, c := range p.Spec.InitContainers {
+		r := q(c.Resources.Requests)
+		if c.RestartPolicy != nil && *c.RestartPolicy == corev1.ContainerRestartPolicyAlways {
+			sidecars += r
+			initPeak = max(initPeak, sidecars)
+			continue
+		}
+		initPeak = max(initPeak, sidecars+r)
+	}
+	total := max(apps+sidecars, initPeak)
+	if p.Spec.Resources != nil {
+		if v, ok := p.Spec.Resources.Requests[name]; ok {
+			total = v.AsApproximateFloat64()
+		}
+	}
+	return total + q(p.Spec.Overhead)
+}
+
 // applyContainerResources copies the spec's declared cpu/memory requests and
 // limits (cores, bytes). Absent quantities stay nil - never a fabricated zero.
 func applyContainerResources(sum *ContainerSummary, c corev1.Container) {

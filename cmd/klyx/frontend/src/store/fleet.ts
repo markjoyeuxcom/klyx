@@ -313,6 +313,7 @@ export type ExternalSecretDTO = {
   storeName: string;
   targetSecret: string;
   refreshIntervalSeconds: number; // 0 = refresh disabled
+  refreshPolicy?: string; // Periodic (default) | CreatedOnce | OnChange - only Periodic refreshes on the interval
   lastRefreshAgeSeconds: number; // 0 = never synced OR under a second ago - read `refreshed`
   refreshed?: boolean; // status.refreshTime is set; older payloads omit it (fall back to age > 0)
   // status.refreshTime itself (0/absent = never synced): shared rows are
@@ -712,7 +713,9 @@ export type ListenerDTO = { name: string; protocol: string; hostname: string; po
 export type MatchDTO = { pathType: string; pathValue: string; method: string };
 // Endpoints, not pods: nonPod counts endpoints without a pod TargetRef.
 export type EndpointCountDTO = { ready: number; total: number; nonPod: number; error?: string };
-export type BackendDTO = { kind: string; name: string; namespace: string; port: number; weight: number; state?: "resolved" | "not-found" | "unreadable" | "unsupported"; error?: string; endpoints?: EndpointCountDTO };
+// weightSet false: the backendRef wrote no weight (the Gateway API default
+// of 1); an explicit weight 0 sends the backend no traffic.
+export type BackendDTO = { kind: string; name: string; namespace: string; port: number; weight: number; weightSet?: boolean; state?: "resolved" | "not-found" | "unreadable" | "unsupported"; error?: string; endpoints?: EndpointCountDTO };
 export type PodCountDTO = { ready: number; total: number; unknown: boolean };
 export type ServiceNodeDTO = { namespace: string; name: string; type: string; port: number; resolved: boolean; global: boolean; meshClusters: string[]; meshUnconfirmed: boolean; policies: PolicyRefDTO[]; cnps: PolicyRefDTO[] };
 export type GatewayNodeDTO = { rule: RuleDTO; namespace: string; name: string; className: string; listeners: ListenerDTO[]; addresses?: GatewayAddressDTO[]; accepted: boolean; programmed: boolean; policies: PolicyRefDTO[]; acceptedCond?: CondDTO; programmedCond?: CondDTO; generation?: number };

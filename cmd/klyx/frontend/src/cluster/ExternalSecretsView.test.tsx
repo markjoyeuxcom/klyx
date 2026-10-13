@@ -172,11 +172,24 @@ describe("ExternalSecretsView", () => {
     const e = secret({ name: "stripe-api", state: "Synced", refreshIntervalSeconds: 3600, lastRefreshAgeSeconds: 120 });
     setup("Healthy", [e], [store({})], "payments/stripe-api");
     render(<ExternalSecretsView cluster="x" />);
-    expect(insp().getByText("1h")).toBeTruthy();
+    expect(insp().getByText("every 1h")).toBeTruthy();
     expect(insp().getByText("2m ago")).toBeTruthy();
     expect(insp().getByText(/Secret stripe-api-secret/)).toBeTruthy();
     expect(insp().getByText("azurekv")).toBeTruthy();
     expect(insp().getByRole("button", { name: "Open target Secret" })).toBeTruthy();
+  });
+
+  it("names a non-periodic refresh policy instead of an interval (Codex review 2026-10-13)", () => {
+    const once = secret({ name: "once", state: "Synced", refreshIntervalSeconds: 3600, refreshPolicy: "CreatedOnce", lastRefreshAgeSeconds: 3 * 86400 });
+    setup("Healthy", [once], [store({})], "payments/once");
+    const { unmount } = render(<ExternalSecretsView cluster="x" />);
+    expect(insp().getByText("created once - never refreshed")).toBeTruthy();
+    expect(insp().queryByText("every 1h")).toBeNull();
+    unmount();
+    const onChange = secret({ name: "onchange", state: "Synced", refreshIntervalSeconds: 3600, refreshPolicy: "OnChange", lastRefreshAgeSeconds: 120 });
+    setup("Healthy", [onChange], [store({})], "payments/onchange");
+    render(<ExternalSecretsView cluster="x" />);
+    expect(insp().getByText("on spec change only")).toBeTruthy();
   });
 });
 

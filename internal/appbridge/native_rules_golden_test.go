@@ -83,6 +83,9 @@ func TestNativeRulesGolden(t *testing.T) {
 	secret("synced but refresh overdue", externalsecrets.ExternalSecret{State: externalsecrets.Synced, RefreshInterval: time.Hour, RefreshTime: now.Add(-3 * time.Hour), Stale: true})
 	secret("synced, refresh disabled", externalsecrets.ExternalSecret{State: externalsecrets.Synced, RefreshTime: now.Add(-48 * time.Hour)})
 	secret("synced, never refreshed", externalsecrets.ExternalSecret{State: externalsecrets.Synced, RefreshInterval: time.Hour})
+	// Only Periodic refresh goes stale (Codex review 2026-10-13 #8).
+	secret("synced once (CreatedOnce), long ago", externalsecrets.ExternalSecret{State: externalsecrets.Synced, RefreshPolicy: "CreatedOnce", RefreshInterval: time.Hour, RefreshTime: now.Add(-72 * time.Hour)})
+	secret("refreshes on change (OnChange), long ago", externalsecrets.ExternalSecret{State: externalsecrets.Synced, RefreshPolicy: "OnChange", RefreshInterval: time.Hour, RefreshTime: now.Add(-72 * time.Hour)})
 	secret("failed", externalsecrets.ExternalSecret{State: externalsecrets.Failed, Reason: "SecretSyncedError"})
 	secret("failed and overdue", externalsecrets.ExternalSecret{State: externalsecrets.Failed, RefreshInterval: time.Hour, RefreshTime: now.Add(-3 * time.Hour), Stale: true})
 	secret("unknown", externalsecrets.ExternalSecret{State: externalsecrets.Unknown})
@@ -276,6 +279,34 @@ func TestNativeRulesGolden(t *testing.T) {
 	route("no endpoints, primary of several", acc(gwapi.RouteNode{Backends: withPrimary(resolved(&gwapi.EndpointCount{}), 2)}))
 	route("no ready endpoints", acc(gwapi.RouteNode{Backends: []gwapi.Backend{resolved(&gwapi.EndpointCount{Ready: 0, Total: 2})}}))
 	route("some endpoints ready", acc(gwapi.RouteNode{Backends: []gwapi.Backend{resolved(&gwapi.EndpointCount{Ready: 2, Total: 3})}}))
+	// Every traffic-carrying backend is diagnosed (Codex review 2026-10-13 #6).
+	route("second backend of two has no endpoints", acc(gwapi.RouteNode{Backends: append(ok(1), func() gwapi.Backend {
+		b := resolved(&gwapi.EndpointCount{})
+		b.Name = "web-b"
+		return b
+	}())}))
+	route("every carrying backend has no endpoints", acc(gwapi.RouteNode{Backends: func() []gwapi.Backend {
+		a, b := resolved(&gwapi.EndpointCount{}), resolved(&gwapi.EndpointCount{Ready: 0, Total: 2})
+		a.Name, b.Name = "web-a", "web-b"
+		return []gwapi.Backend{a, b}
+	}()}))
+	route("a weight-0 backend is not diagnosed", acc(gwapi.RouteNode{Backends: append(ok(1), func() gwapi.Backend {
+		b := resolved(&gwapi.EndpointCount{})
+		b.Name, b.Weight, b.WeightSet = "canary", 0, true
+		return b
+	}())}))
+	route("every backend has weight 0", acc(gwapi.RouteNode{Backends: func() []gwapi.Backend {
+		bs := ok(2)
+		for i := range bs {
+			bs[i].WeightSet = true
+		}
+		return bs
+	}()}))
+	route("second backend partly ready", acc(gwapi.RouteNode{Backends: append(ok(1), func() gwapi.Backend {
+		b := resolved(&gwapi.EndpointCount{Ready: 1, Total: 3})
+		b.Name = "web-b"
+		return b
+	}())}))
 	route("not accepted and no endpoints (fault first)", func() gwapi.RouteNode {
 		r := acc(gwapi.RouteNode{Backends: []gwapi.Backend{resolved(&gwapi.EndpointCount{})}})
 		r.AcceptedCond = cond("False", 3)

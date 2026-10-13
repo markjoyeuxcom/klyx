@@ -80,10 +80,26 @@ describe("routeHealth (evidence, Codex review)", () => {
       { kind: "Service", name: "gone", namespace: "a", port: 80, weight: 50, state: "not-found" },
       { kind: "Service", name: "ok", namespace: "a", port: 80, weight: 50, state: "resolved", endpoints: { ready: 3, total: 3, nonPod: 0 } },
     ];
-    expect(routeHealth(r)).toEqual({ kind: "degraded", label: "primary backend not found" });
-    expect(routeIssues(r)[0].text).toMatch(/1 other backend is not diagnosed/);
+    expect(routeHealth(r)).toEqual({ kind: "degraded", label: "gone: backend not found" });
+    expect(routeIssues(r)[0].text).toBe("a/gone: Backend Service a/gone not found. Other backends may still carry traffic.");
     r.backends = [r.backends[0]];
     expect(routeHealth(r)).toEqual({ kind: "fault", label: "backend not found" });
+  });
+  it("diagnoses every backend that carries traffic, not only the lane's (Codex review 2026-10-13)", () => {
+    const r = route("a", "r");
+    const svc = (name: string, ready: number, total: number, weight?: number) =>
+      ({ kind: "Service", name, namespace: "a", port: 80, weight: weight ?? 0, weightSet: weight !== undefined, state: "resolved" as const, endpoints: { ready, total, nonPod: 0 } });
+    // An equal-weight second backend with no endpoints is never "resolved".
+    r.backends = [svc("first", 2, 2), svc("second", 0, 0)];
+    expect(routeHealth(r)).toEqual({ kind: "degraded", label: "second: no endpoints" });
+    // Every carrying backend faulting is a fault.
+    r.backends = [svc("first", 0, 0), svc("second", 0, 2)];
+    expect(routeHealth(r).kind).toBe("fault");
+    // A weight-0 backend carries no traffic and is not diagnosed.
+    r.backends = [svc("first", 2, 2), svc("canary", 0, 0, 0)];
+    expect(routeHealth(r)).toEqual({ kind: "ok", label: "resolved" });
+    r.backends = [svc("first", 2, 2, 0), svc("second", 2, 2, 0)];
+    expect(routeHealth(r)).toEqual({ kind: "fault", label: "every backend has weight 0" });
   });
   it("a forbidden Service read and a non-Service backend are unverified, not missing", () => {
     const r = route("a", "r");

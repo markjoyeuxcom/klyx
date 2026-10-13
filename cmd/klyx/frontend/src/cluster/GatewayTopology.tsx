@@ -17,6 +17,7 @@ import {
   POLICY_ABBREV, POLICY_REFS, RANK, REFS, ROLE_TEXT, addressText, certBySecret, certStatus, errColor, fmtErr, fmtMs, fmtRps,
   gatewayRole, listenerText, policyKey, primaryBackendText, roleTone, routeHasGlobal, routeHasPolicies, routeIssues, routeRole, routeKey, sortWarnings,
   type CertLookup, type Role,
+  carriesTraffic,
 } from "./gatewayModel";
 
 // GatewayTopology - one Gateway's data path on the canvas-detail template
@@ -426,11 +427,11 @@ function RouteInspector({ route, gone, unproven, gateway, listeners, notes, metr
   const issues = routeIssues(route, listeners);
   const gwRole = gatewayRole(gateway);
   const primary = route.backends[0];
+  const carrying = route.backends.filter(carriesTraffic);
   const scoped = route.parentSectionName ? listeners.filter((l) => l.name === route.parentSectionName) : listeners;
   const policies = [...route.policies, ...route.services.flatMap((s) => s.policies)];
   const cnps = route.services.flatMap((s) => s.cnps);
   const services = route.backends.filter((b) => b.kind === "Service" && b.state !== "not-found");
-  const ep = primary?.endpoints;
 
   const more: MenuItem[] = [];
   if (services.length > 1) more.push({ kind: "choose", label: "Open backend Service", options: services.map((b) => ({ label: `${b.namespace}/${b.name}`, onSelect: () => onOpenObject(REFS.service, b.namespace, b.name) })) });
@@ -453,7 +454,7 @@ function RouteInspector({ route, gone, unproven, gateway, listeners, notes, metr
                 ? issues.map((i) => <div key={i.short} className="t-body" style={{ color: ROLE_TEXT[i.severity], overflowWrap: "anywhere" }}>{i.text}</div>)
                 : (
                   <div className="t-body" style={{ color: "var(--color-text-secondary)" }}>
-                    Accepted by this Gateway with references resolved; the primary backend {primary?.name} has {ep ? `${ep.ready}/${ep.total} endpoints ready` : "endpoints"}. Klyx reads status and endpoints - it does not test the path end to end.
+                    Accepted by this Gateway with references resolved; {carrying.length > 1 ? "every backend that carries traffic has ready endpoints" : <>the backend {carrying[0]?.name} has {carrying[0]?.endpoints ? `${carrying[0].endpoints.ready}/${carrying[0].endpoints.total} endpoints ready` : "endpoints"}</>}. Klyx reads status and endpoints - it does not test the path end to end.
                   </div>
                 )}
               {RANK[gwRole.kind] <= RANK.degraded && <div className="t-body" style={{ color: ROLE_TEXT[gwRole.kind] }}>The Gateway itself is {gwRole.label}.</div>}
@@ -480,7 +481,7 @@ function RouteInspector({ route, gone, unproven, gateway, listeners, notes, metr
               <Fragment key={i}>
                 <span>{b.kind}</span>
                 <span>
-                  {b.namespace}/{b.name}:{b.port}{b.weight ? ` · weight ${b.weight}` : ""}{i === 0 ? <span className="t-secondary"> (lane)</span> : null}
+                  {b.namespace}/{b.name}:{b.port}{b.weightSet || b.weight ? ` · weight ${b.weight}${carriesTraffic(b) ? "" : " (no traffic)"}` : ""}{i === 0 ? <span className="t-secondary"> (lane)</span> : null}
                   <span className="t-secondary" style={{ display: "block" }}>{backendEvidence(b)}</span>
                 </span>
               </Fragment>
