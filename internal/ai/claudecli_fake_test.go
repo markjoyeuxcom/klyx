@@ -43,8 +43,9 @@ type fakeSpec struct {
 	EchoFile      bool   `json:"echoFile"` // append the file the prompt names (and the cwd listing) to the answer
 	StreamExit    int    `json:"streamExit"`
 	Stderr        string `json:"stderr"`
-	Hang          bool   `json:"hang"`  // -p: start a child, then sleep
-	Flood         int    `json:"flood"` // -p: print this many bytes
+	Hang          bool   `json:"hang"`   // -p: start a child, then sleep
+	NoRead        bool   `json:"noRead"` // -p: never read stdin
+	Flood         int    `json:"flood"`  // -p: print this many bytes
 }
 
 func TestMain(m *testing.M) {
@@ -126,6 +127,9 @@ func fakeClaude() (int, bool) {
 	logCall("prompt")
 	cwd, _ := os.Getwd()
 	os.WriteFile(filepath.Join(home, "started"), nil, 0o600)
+	if spec.NoRead {
+		time.Sleep(time.Hour)
+	}
 	stdin, _ := io.ReadAll(os.Stdin)
 	rec, _ := json.Marshal(map[string]any{"argv": args, "env": os.Environ(), "cwd": cwd, "stdin": string(stdin)})
 	os.WriteFile(filepath.Join(home, "record.json"), rec, 0o600)
@@ -238,7 +242,7 @@ func newFakeCLI(t *testing.T) *fakeCLI {
 		policyRoot: f.policyRoot,
 		// Generous for -race, where each re-exec of this binary takes about
 		// a second.
-		authDeadline: 20 * time.Second, doctorDeadline: 20 * time.Second,
+		authDeadline: 20 * time.Second, doctorDeadline: 20 * time.Second, stdinDeadline: 20 * time.Second,
 	}
 	f.write()
 	return f
@@ -774,6 +778,50 @@ func TestClaudeCLI_RevocationIsAtomic(t *testing.T) {
 			t.Fatal("no prompt after a revocation")
 		}
 	})
+	// Codex review of 5cb9a9a (P1): paused after the last check and before
+	// the first stdin byte, a revocation or Test cannot take effect until the
+	// whole prompt is handed over - and the answer that comes back is then
+	// discarded, since its admission no longer holds.
+	for _, tc := range []struct {
+		name string
+		act  func(s *claudeAdmissionStore)
+		want string
+	}{
+		{"revoked after the last check", func(s *claudeAdmissionStore) { s.revoke("a concurrent call attempted a tool") }, "concurrent call attempted a tool"},
+		{"Test after the last check", func(s *claudeAdmissionStore) { s.reset() }, "admission changed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFakeCLI(t)
+			if _, err := f.complete(); err != nil {
+				t.Fatal(err)
+			}
+			os.Remove(filepath.Join(f.home, "record.json"))
+			done := make(chan struct{})
+			f.p.store.afterValidate = func() {
+				f.p.store.afterValidate = nil // once; the store's lock is held here
+				started := make(chan struct{})
+				go func() {
+					close(started)
+					tc.act(f.p.store) // blocks until the prompt is handed over
+					close(done)
+				}()
+				<-started
+				time.Sleep(50 * time.Millisecond)
+				select {
+				case <-done:
+					t.Error("a revocation or Test completed between the last check and the prompt")
+				default:
+				}
+			}
+			_, err := f.complete()
+			wantRefused(t, err, tc.want)
+			<-done
+			b, _ := os.ReadFile(filepath.Join(f.home, "record.json"))
+			if !strings.Contains(string(b), "EVIDENCE-TEXT") {
+				t.Fatalf("the prompt was released before the change, so it is whole: %s", b)
+			}
+		})
+	}
 	t.Run("Test completed during a call", func(t *testing.T) {
 		f := newFakeCLI(t)
 		if _, err := f.complete(); err != nil {
@@ -916,5 +964,79 @@ func TestClaudeAdmissionStore_Valid(t *testing.T) {
 	}
 	if err := s.valid(ok); err == nil {
 		t.Fatal("nothing is released after a revocation")
+	}
+}
+
+// The prompt is handed over under the admission lock: a revocation or Test
+// waits for a release in progress, and a release after one writes nothing.
+func TestClaudeAdmissionStore_ReleaseIsAtomic(t *testing.T) {
+	for name, act := range map[string]func(s *claudeAdmissionStore){
+		"revoke": func(s *claudeAdmissionStore) { s.revoke("x") },
+		"reset":  func(s *claudeAdmissionStore) { s.reset() },
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := &claudeAdmissionStore{}
+			epoch := s.reset()
+			exe := exeIdentity{SHA256: "exe-1", Contract: reviewedClaudeContracts[0]}
+			if err := s.publish(epoch, exe, "acct", "argv"); err != nil {
+				t.Fatal(err)
+			}
+			tk := callTicket{exe: exe, account: "acct", argv: "argv", epoch: epoch}
+			writing, finish, released := make(chan struct{}), make(chan struct{}), make(chan error, 1)
+			go func() {
+				released <- s.release(tk, func() error {
+					close(writing)
+					<-finish
+					return nil
+				})
+			}()
+			<-writing
+			acted := make(chan struct{})
+			go func() {
+				act(s)
+				close(acted)
+			}()
+			select {
+			case <-acted:
+				t.Fatalf("%s completed while a prompt was being handed over", name)
+			case <-time.After(100 * time.Millisecond):
+			}
+			close(finish)
+			if err := <-released; err != nil {
+				t.Fatal(err)
+			}
+			<-acted
+			wrote := false
+			if err := s.release(tk, func() error { wrote = true; return nil }); err == nil || wrote {
+				t.Fatalf("after %s, a release must write nothing (err %v)", name, err)
+			}
+		})
+	}
+}
+
+// A CLI that never reads its stdin cannot hold the hand-over, or the
+// admission lock, open: the write has a deadline and the process is killed.
+func TestClaudeCLI_StdinHandOverIsBounded(t *testing.T) {
+	t.Parallel()
+	f := newFakeCLI(t)
+	if _, err := f.complete(); err != nil {
+		t.Fatal(err)
+	}
+	f.spec.NoRead = true
+	f.write()
+	f.p.stdinDeadline = 2 * time.Second
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	start := time.Now()
+	_, err := f.p.Complete(ctx, Request{System: "s", User: strings.Repeat("x", 1<<20), Purpose: PurposeExplain})
+	wantRefused(t, err, "could not hand the prompt")
+	if time.Since(start) > 45*time.Second {
+		t.Fatal("the hand-over was not bounded")
+	}
+	// The lock is free again: another call goes through at once.
+	f.spec.NoRead = false
+	f.write()
+	if _, err := f.complete(); err != nil {
+		t.Fatalf("the next call: %v", err)
 	}
 }

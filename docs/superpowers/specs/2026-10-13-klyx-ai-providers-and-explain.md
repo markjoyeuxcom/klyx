@@ -285,6 +285,9 @@ Codex's design review (274535f) required four changes before implementation. The
    - Write `system.txt` (`0600`) into a fresh `0700` call dir, and start the production argv with stdin held open and empty.
    - Re-check the endpoint policy and the caches.
    - Only then write the evidence to stdin and close it. If the re-check fails, the process group is killed and nothing is written.
+   - The last admission check and the whole stdin write happen under the admission lock (Codex review of 5cb9a9a). A revocation or Test either lands first, and nothing is written, or waits until the prompt is fully handed over; there is no gap between the check and the first byte.
+   - The write goes to a pipe Klyx owns, with a 10 s write deadline. A cancel kills the process and closes the pipe, so a CLI that never reads cannot hold the lock.
+   - When the answer arrives, the admission is checked again. An answer whose admission was revoked or replaced while the CLI ran is discarded.
 
 Check-to-launch race (documented, accepted for Pro and Max only):
 - Between check 6 and the CLI's own startup, the owner could switch the login, or Anthropic could start delivering policy to a personal account. The re-check in step 8 narrows that window, but Klyx cannot observe the CLI's own policy load.

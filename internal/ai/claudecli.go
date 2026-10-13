@@ -31,6 +31,7 @@ const (
 	claudeAuthDeadline  = 10 * time.Second
 	claudeDocDeadline   = 30 * time.Second
 	claudeShortDeadline = 15 * time.Second
+	claudeStdinDeadline = 10 * time.Second
 	claudeWaitDelay     = 2 * time.Second
 )
 
@@ -75,6 +76,9 @@ type claudeAdmissionStore struct {
 	epoch   uint64
 	rec     *CLIAdmission
 	revoked string
+	// afterValidate runs inside release, between the check and the write;
+	// tests only.
+	afterValidate func()
 }
 
 var defaultClaudeAdmissions = &claudeAdmissionStore{}
@@ -178,11 +182,9 @@ func (s *claudeAdmissionStore) publish(epoch uint64, exe exeIdentity, account, a
 	return nil
 }
 
-// valid is the last check before a prompt is released: the call's epoch is
-// current and its binary, account and configuration are the admitted ones.
-func (s *claudeAdmissionStore) valid(t callTicket) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+// validLocked: the call's epoch is current and its binary, account and
+// configuration are the admitted ones.
+func (s *claudeAdmissionStore) validLocked(t callTicket) error {
 	if err := s.currentLocked(t.epoch); err != nil {
 		return err
 	}
@@ -190,6 +192,33 @@ func (s *claudeAdmissionStore) valid(t callTicket) error {
 		return cliRefused("%s", admissionChanged)
 	}
 	return nil
+}
+
+// valid checks that a call's admission still holds - when its answer
+// arrives, so no answer is shown from an admission revoked or replaced while
+// it ran.
+func (s *claudeAdmissionStore) valid(t callTicket) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.validLocked(t)
+}
+
+// release hands a call's prompt to the CLI while holding the admission lock
+// (Codex review of 5cb9a9a): a revocation or Test either happens first, and
+// nothing is written, or waits until the whole prompt has been handed over.
+// There is no gap between the last check and the first byte. write is
+// bounded by a pipe deadline, and by the call's cancellation, which kills
+// the process and closes the pipe.
+func (s *claudeAdmissionStore) release(t callTicket, write func() error) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.validLocked(t); err != nil {
+		return err
+	}
+	if s.afterValidate != nil {
+		s.afterValidate()
+	}
+	return write()
 }
 
 // callTicket is what one call's preflight established: the binary, the
@@ -306,9 +335,10 @@ type claudeCLIProvider struct {
 	tmpDir    string // "" = the system temp dir
 	// policyRoot prefixes the absolute managed-policy paths; tests only.
 	policyRoot string
-	// Helper deadlines; tests shorten them.
+	// Helper and stdin hand-over deadlines; tests shorten them.
 	authDeadline   time.Duration
 	doctorDeadline time.Duration
+	stdinDeadline  time.Duration
 	// Tests only: afterHelpers runs after doctor, beforePublish before an
 	// admission is published, and afterLaunch between starting the CLI and
 	// the final checks.
@@ -327,7 +357,7 @@ func newClaudeCLI(cliPath, model string) *claudeCLIProvider {
 		cliPath: cliPath, model: model, environ: os.Environ, lookPath: exec.LookPath,
 		contracts: reviewedClaudeContracts, goos: runtime.GOOS, goarch: runtime.GOARCH,
 		store: defaultClaudeAdmissions, hashes: defaultExeHashes,
-		authDeadline: claudeAuthDeadline, doctorDeadline: claudeDocDeadline,
+		authDeadline: claudeAuthDeadline, doctorDeadline: claudeDocDeadline, stdinDeadline: claudeStdinDeadline,
 	}
 }
 
@@ -494,9 +524,13 @@ type runSpec struct {
 	stdoutMax int
 	stderrMax int
 	deadline  time.Duration
-	// beforeStdin runs after the process started and before stdin is
-	// written; an error kills the process group and nothing is written.
-	beforeStdin func() error
+	// stdinDeadline bounds handing stdin over.
+	stdinDeadline time.Duration
+	// release gates handing stdin over, after the process started: it calls
+	// write, under whatever must not change meanwhile, or refuses. A refusal
+	// or a failed write kills the process group, and nothing more is
+	// written.
+	release func(write func() error) error
 }
 
 type runResult struct {
@@ -543,32 +577,45 @@ func runContained(ctx context.Context, s runSpec) runResult {
 	cmd.WaitDelay = claudeWaitDelay
 	so, se := &cappedBuffer{max: s.stdoutMax}, &cappedBuffer{max: s.stderrMax}
 	cmd.Stdout, cmd.Stderr = so, se
-	var stdinW io.WriteCloser
+	// stdin is a pipe Klyx owns, so the hand-over can carry a deadline and
+	// happen synchronously inside the release gate.
+	var pr, pw *os.File
 	if s.stdin != nil {
-		w, err := cmd.StdinPipe()
+		r, w, err := os.Pipe()
 		if err != nil {
 			return runResult{startErr: err}
 		}
-		stdinW = w
+		pr, pw = r, w
+		cmd.Stdin = pr
 	}
 	if err := cmd.Start(); err != nil {
+		if pr != nil {
+			_ = pr.Close()
+			_ = pw.Close()
+		}
 		return runResult{startErr: err}
 	}
-	if s.beforeStdin != nil {
-		if err := s.beforeStdin(); err != nil {
-			_ = killGroup(cmd)
-			if stdinW != nil {
-				_ = stdinW.Close()
+	if pr != nil {
+		_ = pr.Close() // the child holds its own copy of the read end
+		write := func() error {
+			if err := pw.SetWriteDeadline(time.Now().Add(s.stdinDeadline)); err != nil {
+				return err
 			}
+			if _, err := pw.Write(s.stdin); err != nil {
+				return err
+			}
+			return pw.Close()
+		}
+		release := s.release
+		if release == nil {
+			release = func(w func() error) error { return w() }
+		}
+		if err := release(write); err != nil {
+			_ = pw.Close()
+			_ = killGroup(cmd)
 			_ = cmd.Wait()
 			return runResult{gateErr: err}
 		}
-	}
-	if stdinW != nil {
-		go func() {
-			_, _ = stdinW.Write(s.stdin)
-			_ = stdinW.Close()
-		}()
 	}
 	_ = cmd.Wait()
 	_ = killGroup(cmd) // anything the CLI left running in its group
@@ -789,15 +836,20 @@ func (p *claudeCLIProvider) run(ctx context.Context, t callTicket, req Request, 
 	r := runContained(ctx, runSpec{
 		exe: exe.Path, args: claudeArgv(sys, p.model), env: claudeEnv(p.environ()), dir: dir,
 		stdin: []byte(claudeStdinPrefix + req.User), stdoutMax: claudeStdoutMax, stderrMax: claudeStderrMax,
-		deadline: Deadline(req.Purpose),
-		beforeStdin: func() error {
+		deadline: Deadline(req.Purpose), stdinDeadline: p.stdinDeadline,
+		release: func(write func() error) error {
 			if p.afterLaunch != nil {
 				p.afterLaunch()
 			}
 			if err := p.checkPolicy(); err != nil {
 				return err
 			}
-			return p.store.valid(t)
+			return p.store.release(t, func() error {
+				if err := write(); err != nil {
+					return cliRefused("Klyx could not hand the prompt to Claude Code: %v", err)
+				}
+				return nil
+			})
 		},
 	})
 	switch {
@@ -825,6 +877,9 @@ func (p *claudeCLIProvider) run(ctx context.Context, t callTicket, req Request, 
 	}
 	if perr != nil {
 		return "", perr
+	}
+	if err := p.store.valid(t); err != nil {
+		return "", err // revoked or replaced while the CLI ran
 	}
 	return text, nil
 }
