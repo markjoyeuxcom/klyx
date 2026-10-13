@@ -11,6 +11,7 @@ const bridge = vi.hoisted(() => ({
   armAIEgress: vi.fn(),
   listAIModels: vi.fn(),
   testAIProvider: vi.fn(),
+  getCLIStatus: vi.fn(),
 }));
 vi.mock("../bridge/aiSettings", async (orig) => ({ ...(await orig<typeof import("../bridge/aiSettings")>()), ...bridge }));
 vi.mock("../bridge/configsvc", () => ({ armProtected: vi.fn() }));
@@ -20,7 +21,7 @@ import { AISettingsPanel } from "./AISettingsPanel";
 function state(over: Partial<AISettingsState> = {}): AISettingsState {
   return {
     path: "/x/fleet.yaml",
-    persisted: { provider: "off", model: "", keySource: "none", apiKeyEnv: "", baseUrl: "", allowProtectedEgress: false, tlsSkipVerify: false, refusalFallback: true },
+    persisted: { provider: "off", model: "", keySource: "none", apiKeyEnv: "", baseUrl: "", allowProtectedEgress: false, tlsSkipVerify: false, refusalFallback: true, cliPath: "" },
     legacyKeyInFile: false,
     keysStored: {},
     active: { backend: "off", ready: false },
@@ -190,5 +191,55 @@ describe("AISettingsPanel draft fencing (Codex review of c488e34)", () => {
     fireEvent.click(screen.getByRole("button", { name: "Load models" }));
     await waitFor(() => expect(bridge.listAIModels).toHaveBeenCalledWith(expect.objectContaining({ provider: "gemini", model: "" })));
     await waitFor(() => expect(document.querySelector("datalist option")?.getAttribute("value")).toBe("gemini-x"));
+  });
+});
+
+describe("AISettingsPanel: Claude Code CLI", () => {
+  const reviewed = { path: "/Users/o/.local/share/claude/versions/2.1.296", version: "2.1.296", sha256: "c9b5341637be", reviewed: true, admitted: false };
+
+  it("sets up the CLI with no key and no origin, and shows what Klyx found", async () => {
+    bridge.getAISettings.mockResolvedValue(state());
+    bridge.getCLIStatus.mockResolvedValue(reviewed);
+    render(<AISettingsPanel />);
+    fireEvent.change(await screen.findByLabelText("AI provider"), { target: { value: "claudeCLI" } });
+
+    const status = await screen.findByTestId("ai-cli-status");
+    await waitFor(() => expect(status.textContent).toContain("Claude Code 2.1.296 · sha256 c9b5341637be… · not admitted yet"));
+    expect(screen.queryByLabelText("API key")).toBeNull();
+    expect(screen.queryByLabelText("Key source")).toBeNull();
+    expect(screen.queryByLabelText("Custom origin")).toBeNull();
+    expect(screen.getByLabelText("Model").getAttribute("placeholder")).toBe("claude-opus-5-5 (default)");
+    expect(screen.getByTestId("ai-settings").textContent).toContain("asks Claude Code to read a file and run a command");
+
+    fireEvent.change(screen.getByLabelText("Claude Code path"), { target: { value: "/opt/claude" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(bridge.saveAISettings).toHaveBeenCalledWith(expect.objectContaining({ provider: "claudeCLI", keySource: "none", cliPath: "/opt/claude", baseUrl: "" })));
+  });
+
+  it("shows why an installed build is refused", async () => {
+    bridge.getAISettings.mockResolvedValue(state());
+    bridge.getCLIStatus.mockResolvedValue({ path: "/x/claude", version: "", sha256: "", reviewed: false, admitted: false, problem: "This Claude Code build (2.1.300, sha256 0123456789ab) has no reviewed Klyx contract" });
+    render(<AISettingsPanel />);
+    fireEvent.change(await screen.findByLabelText("AI provider"), { target: { value: "claudeCLI" } });
+    await waitFor(() => expect(screen.getByTestId("ai-cli-status").textContent).toContain("no reviewed Klyx contract"));
+  });
+
+  it("drops a status reply for an older path, and re-reads after Test", async () => {
+    bridge.getAISettings.mockResolvedValue(state());
+    let resolveOld!: (v: unknown) => void;
+    bridge.getCLIStatus.mockReturnValueOnce(new Promise((r) => (resolveOld = r))).mockResolvedValue(reviewed);
+    render(<AISettingsPanel />);
+    fireEvent.change(await screen.findByLabelText("AI provider"), { target: { value: "claudeCLI" } });
+    fireEvent.change(screen.getByLabelText("Claude Code path"), { target: { value: "/new/claude" } });
+    await waitFor(() => expect(screen.getByTestId("ai-cli-status").textContent).toContain("2.1.296"));
+    resolveOld({ ...reviewed, version: "OLD", problem: "old path" });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(screen.getByTestId("ai-cli-status").textContent).not.toContain("old path");
+
+    const calls = bridge.getCLIStatus.mock.calls.length;
+    bridge.testAIProvider.mockResolvedValue({ ok: true, model: "claude-opus-5-5", origin: "Anthropic, via the Claude Code CLI on your Claude sign-in", reply: "I cannot access files." });
+    fireEvent.click(screen.getByRole("button", { name: "Test" }));
+    await waitFor(() => expect(bridge.getCLIStatus.mock.calls.length).toBeGreaterThan(calls));
+    expect(screen.getByTestId("ai-test-result").textContent).toContain("I cannot access files.");
   });
 });

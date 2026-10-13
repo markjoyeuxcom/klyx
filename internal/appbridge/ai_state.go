@@ -71,6 +71,7 @@ func AISettingsFromConfig(c *config.AIConfig) ai.Settings {
 		LegacyKey:       c.APIKey,
 		TLSSkipVerify:   c.TLSSkipVerify,
 		RefusalFallback: c.UsesRefusalFallback(),
+		CLIPath:         c.CLIPath,
 	}
 }
 

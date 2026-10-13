@@ -34,6 +34,7 @@ type AISettingsDTO struct {
 	AllowProtectedEgress bool   `json:"allowProtectedEgress"`
 	TLSSkipVerify        bool   `json:"tlsSkipVerify"`
 	RefusalFallback      bool   `json:"refusalFallback"`
+	CLIPath              string `json:"cliPath"` // claudeCLI: an explicit binary; empty finds claude
 }
 
 // AISettingsStateDTO is everything the Settings > AI panel shows. It never
@@ -80,6 +81,7 @@ type AISettingsService struct {
 	now    func() time.Time
 	saveAI func(string, config.AIConfig) error // seam: config.SaveAI
 	loadAI func(string) (*config.AIConfig, error)
+	build  func(ai.Settings, ai.KeyStore, func(string) string) (*ai.Built, error) // seam: ai.Build, for drafts
 
 	mu          sync.Mutex
 	applied     config.AIConfig // what the active snapshot was built from
@@ -89,7 +91,7 @@ type AISettingsService struct {
 // NewAISettingsService wires the writer. initial is the ai block the startup
 // snapshot was built from (nil = off).
 func NewAISettingsService(path string, keys ai.KeyStore, getenv func(string) string, aiSvc *AIService, initial *config.AIConfig) *AISettingsService {
-	s := &AISettingsService{path: path, keys: keys, getenv: getenv, aiSvc: aiSvc, now: time.Now, saveAI: config.SaveAI, loadAI: loadAIBlock}
+	s := &AISettingsService{path: path, keys: keys, getenv: getenv, aiSvc: aiSvc, now: time.Now, saveAI: config.SaveAI, loadAI: loadAIBlock, build: ai.Build}
 	s.applied = normalizedAI(initial)
 	return s
 }
@@ -117,16 +119,17 @@ func toDTO(a config.AIConfig) AISettingsDTO {
 	return AISettingsDTO{
 		Provider: a.Provider, Model: a.Model, KeySource: a.KeySource, APIKeyEnv: a.APIKeyEnv, BaseURL: a.BaseURL,
 		AllowProtectedEgress: a.AllowProtectedEgress, TLSSkipVerify: a.TLSSkipVerify, RefusalFallback: a.UsesRefusalFallback(),
+		CLIPath: a.CLIPath,
 	}
 }
 
 // fromDTO builds the ai block to save from the panel's draft, carrying over
-// what the panel never edits (a legacy key, the CLI path).
+// what the panel never edits (a legacy key).
 func fromDTO(d AISettingsDTO, cur config.AIConfig) config.AIConfig {
 	fallback := d.RefusalFallback
 	a := config.AIConfig{
 		Provider: strings.TrimSpace(d.Provider), Model: strings.TrimSpace(d.Model), KeySource: d.KeySource,
-		APIKeyEnv: strings.TrimSpace(d.APIKeyEnv), BaseURL: strings.TrimSpace(d.BaseURL), CLIPath: cur.CLIPath,
+		APIKeyEnv: strings.TrimSpace(d.APIKeyEnv), BaseURL: strings.TrimSpace(d.BaseURL), CLIPath: strings.TrimSpace(d.CLIPath),
 		AllowProtectedEgress: d.AllowProtectedEgress, TLSSkipVerify: d.TLSSkipVerify, RefusalFallback: &fallback,
 	}
 	if a.KeySource == string(ai.KeySourceLegacy) {
@@ -344,7 +347,7 @@ func (s *AISettingsService) MoveKeyToKeychain() ActionResultDTO {
 func (s *AISettingsService) draftBuild(d AISettingsDTO, listerOnly bool) (*ai.Built, error) {
 	cur, _ := s.loadAI(s.path)
 	next := fromDTO(d, normalizedAI(cur))
-	build := ai.Build
+	build := s.build
 	if listerOnly {
 		build = ai.BuildLister
 	}
@@ -382,7 +385,9 @@ func (s *AISettingsService) ListModels(d AISettingsDTO) AIModelsDTO {
 const aiProbeSystem = "This is a connectivity check from Klyx. Reply with exactly one word: ready"
 
 // TestProvider sends the draft provider one tiny completion with no cluster
-// data and reports what came back.
+// data and reports what came back. For the Claude Code CLI, Test re-admits
+// it (lifting a revocation) and sends the tool-exposing probe of spec §1.4
+// instead: one small prompt on the owner's Claude sign-in.
 func (s *AISettingsService) TestProvider(d AISettingsDTO) AITestDTO {
 	s.mu.Lock()
 	b, err := s.draftBuild(d, false)
@@ -392,9 +397,47 @@ func (s *AISettingsService) TestProvider(d AISettingsDTO) AITestDTO {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), ai.Deadline(ai.PurposeProbe))
 	defer cancel()
-	res, err := b.Provider.Complete(ctx, ai.Request{System: aiProbeSystem, User: "ready?", Purpose: ai.PurposeProbe})
+	var res ai.Result
+	if prober, ok := b.Provider.(ai.CLIProber); ok {
+		res, err = prober.Probe(ctx)
+	} else {
+		res, err = b.Provider.Complete(ctx, ai.Request{System: aiProbeSystem, User: "ready?", Purpose: ai.PurposeProbe})
+	}
 	if err != nil {
 		return AITestDTO{Origin: b.Origin, Error: modelError(err)}
 	}
 	return AITestDTO{OK: true, Model: res.ModelUsed, Origin: b.Origin, Reply: ai.Scrub(res.Text)}
+}
+
+// AICLIStatusDTO is what Settings shows about an installed CLI: where it is,
+// whether it is a build Klyx has reviewed, and whether it is admitted. It
+// never runs the CLI.
+type AICLIStatusDTO struct {
+	Path      string `json:"path"`
+	Version   string `json:"version"`
+	SHA256    string `json:"sha256"` // short
+	Reviewed  bool   `json:"reviewed"`
+	Admitted  bool   `json:"admitted"`
+	CheckedAt string `json:"checkedAt,omitempty"` // RFC 3339
+	Problem   string `json:"problem,omitempty"`
+}
+
+// CLIStatus describes the draft's CLI provider without running it.
+func (s *AISettingsService) CLIStatus(d AISettingsDTO) AICLIStatusDTO {
+	s.mu.Lock()
+	b, err := s.draftBuild(d, false)
+	s.mu.Unlock()
+	if err != nil {
+		return AICLIStatusDTO{Problem: err.Error()}
+	}
+	r, ok := b.Provider.(ai.CLIStatusReporter)
+	if !ok {
+		return AICLIStatusDTO{Problem: "this provider is not a CLI"}
+	}
+	st := r.Status()
+	out := AICLIStatusDTO{Path: st.Path, Version: st.Version, SHA256: st.SHA256, Reviewed: st.Reviewed, Admitted: st.Admitted, Problem: st.Problem}
+	if !st.CheckedAt.IsZero() {
+		out.CheckedAt = st.CheckedAt.UTC().Format(time.RFC3339)
+	}
+	return out
 }

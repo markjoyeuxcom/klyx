@@ -1,0 +1,9 @@
+{
+  "loggedIn": true,
+  "authMethod": "api_key_helper",
+  "apiProvider": "firstParty",
+  "analyticsDisabled": true,
+  "projectsDirectory": "/HOME/.claude-throwaway/projects",
+  "configDirectory": "/HOME/.claude-throwaway",
+  "apiKeySource": "apiKeyHelper"
+}

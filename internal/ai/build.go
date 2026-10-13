@@ -30,6 +30,7 @@ type Settings struct {
 	LegacyKey       string // KeySourceLegacy: ai.apiKey
 	TLSSkipVerify   bool   // openaiCompatible only
 	RefusalFallback bool   // anthropic only
+	CLIPath         string // claudeCLI: an explicit path to the claude binary
 }
 
 // Built is a ready provider plus the facts the egress policy and the UI need.
@@ -68,7 +69,7 @@ func build(s Settings, keys KeyStore, getenv func(string) string, requireModel b
 		return nil, nil
 	case ProviderAnthropic, ProviderOpenAI, ProviderGemini, ProviderOpenAICompatible:
 	case ProviderClaudeCLI:
-		return nil, errors.New("CLI providers are not available in this build yet")
+		return buildClaudeCLI(s)
 	default:
 		return nil, fmt.Errorf("unknown AI provider %q", s.Provider)
 	}
@@ -140,6 +141,26 @@ func build(s Settings, keys KeyStore, getenv func(string) string, requireModel b
 	}
 	b.Origin = origin
 	return b, nil
+}
+
+// buildClaudeCLI builds the Claude Code provider. It runs nothing: the
+// binary, sign-in and policy are checked before every call, and Ready says up
+// front when the binary is not a reviewed build (spec §1.5).
+func buildClaudeCLI(s Settings) (*Built, error) {
+	switch {
+	case s.KeySource != "" && s.KeySource != KeySourceNone:
+		return nil, errors.New("the Claude Code CLI uses its own Claude sign-in, not an API key")
+	case s.BaseURL != "":
+		return nil, errors.New("a custom origin does not apply to the Claude Code CLI")
+	case s.TLSSkipVerify:
+		return nil, errors.New("tlsSkipVerify applies only to an OpenAI-compatible server")
+	}
+	model := s.Model
+	if model == "" {
+		model = DefaultAnthropicModel
+	}
+	p := newClaudeCLI(s.CLIPath, model)
+	return &Built{ID: ProviderClaudeCLI, Provider: p, Lister: p, Model: model, Origin: ClaudeCLIOrigin, KeySource: KeySourceNone}, nil
 }
 
 // resolveKey reads the key from exactly the configured source.

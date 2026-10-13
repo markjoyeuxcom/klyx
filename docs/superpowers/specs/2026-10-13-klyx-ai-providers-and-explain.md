@@ -252,7 +252,7 @@ Codex's design review (274535f) required four changes before implementation. The
 
 **Checks before every prompt-bearing call (fail closed), in this order:**
 1. **Executable:** the reviewed tuple (above).
-2. **Endpoint policy, before any helper runs.** Fail on any entry, or any unreadable path other than "missing", in:
+2. **Endpoint policy, before any helper runs.** Fail if any of these exists (an empty directory included), or cannot be checked for any reason other than "missing":
    - `/Library/Application Support/ClaudeCode/`;
    - `/Library/Managed Preferences/com.anthropic.claudecode.plist`;
    - `/Library/Managed Preferences/<user>/com.anthropic.claudecode.plist`.
@@ -296,7 +296,7 @@ Admission is revoked until the next Test by any of:
 - a tool or unknown event;
 - a contract mismatch in the output.
 
-A transient helper failure, such as a timeout, fails that call only.
+A transient helper failure, such as a timeout, fails that call only. A new model changes the argv hash, so it re-runs admission rather than revoking it.
 
 **Per-call output contract** (stream-json, verbose, pinned for 2.1.296). The answer is accepted only as an explicitly confirmed, complete, non-refusal, text-only answer. Everything else discards it.
 
@@ -536,7 +536,7 @@ Order as built (2026-10-13):
 - Slice 4 runs before slice 3 and is split in two:
   - **4a** is the backend: the anchored capture, the evidence contract, `Explain`.
   - **4b** is the frontend: the shared block in every lens, and the palette verb.
-- Slice 3 waits on research into Claude Code's managed and remote policy channels, which its admission must inspect.
+- Slice 3 followed the research into Claude Code's managed and remote policy channels (§1.5, design accepted by Codex at 91ff616). It is built against a fake CLI plus an opt-in real-binary contract test that uses no login and makes no model call (`KLYX_CLAUDE_CONTRACT=1`).
 
 1. **Transport and config.**
    - `ai.Provider` and the immutable snapshot.

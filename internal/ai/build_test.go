@@ -107,7 +107,9 @@ func TestBuild_Origins(t *testing.T) {
 		{"credentialed LAN server over http", Settings{Provider: ProviderOpenAICompatible, Model: "m", KeySource: KeySourceKeychain, BaseURL: "http://192.168.1.10:11434"}, "HTTPS", "", false},
 		{"credentialed loopback over http", Settings{Provider: ProviderOpenAICompatible, Model: "m", KeySource: KeySourceKeychain, BaseURL: "http://127.0.0.1:11434"}, "", "http://127.0.0.1:11434", true},
 		{"tlsSkipVerify only for a local server", Settings{Provider: ProviderAnthropic, KeySource: KeySourceKeychain, TLSSkipVerify: true}, "tlsSkipVerify", "", false},
-		{"CLI not in this build", Settings{Provider: ProviderClaudeCLI}, "not available", "", false},
+		{"Claude Code builds without running anything", Settings{Provider: ProviderClaudeCLI, KeySource: KeySourceNone}, "", ClaudeCLIOrigin, false},
+		{"Claude Code takes no API key", Settings{Provider: ProviderClaudeCLI, KeySource: KeySourceKeychain}, "sign-in", "", false},
+		{"Claude Code takes no custom origin", Settings{Provider: ProviderClaudeCLI, BaseURL: "https://x.example"}, "origin", "", false},
 		{"unknown provider", Settings{Provider: "wat"}, "unknown", "", false},
 		{"OpenAI needs a model", Settings{Provider: ProviderOpenAI, KeySource: KeySourceLegacy, LegacyKey: "sk"}, "model", "", false},
 	}

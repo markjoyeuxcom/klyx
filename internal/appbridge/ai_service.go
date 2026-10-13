@@ -96,7 +96,24 @@ func (s *AIService) operators(cluster string) *operatorHealth {
 // where prompts go.
 func (s *AIService) Available() AIAvailabilityDTO {
 	st := s.load()
-	return AIAvailabilityDTO{Backend: string(st.ProviderID), Ready: st.Provider != nil, Model: st.Model, Origin: st.Origin, Problem: st.Problem}
+	d := AIAvailabilityDTO{Backend: string(st.ProviderID), Ready: st.Provider != nil, Model: st.Model, Origin: st.Origin, Problem: st.Problem}
+	if problem := notReady(st); problem != "" {
+		d.Ready, d.Problem = false, problem
+	}
+	return d
+}
+
+// notReady is why a built provider would refuse a call before it starts -
+// a CLI whose binary is not a reviewed build, or whose admission was
+// revoked - so the UI disables Explain with that reason instead of failing
+// on click. It runs nothing.
+func notReady(st *AIState) string {
+	if r, ok := st.Provider.(ai.ReadinessReporter); ok {
+		if err := r.Ready(); err != nil {
+			return err.Error()
+		}
+	}
+	return ""
 }
 
 // EgressAllowed reports whether an AI call is permitted for this cluster: false
@@ -131,6 +148,9 @@ func (s *AIService) precheck(st *AIState, cluster string) (AIConn, string) {
 		}
 		return nil, "AI backend not configured"
 	}
+	if problem := notReady(st); problem != "" {
+		return nil, "AI is unavailable: " + problem
+	}
 	if !s.egressAllowed(st, cluster) {
 		return nil, egressRefusal(cluster)
 	}
@@ -163,9 +183,12 @@ func complete(ctx context.Context, st *AIState, req ai.Request, grounded string,
 // modelError is the user-facing text for a failed completion.
 func modelError(err error) string {
 	var refused *ai.RefusedError
+	var cli *ai.CLIRefusedError
 	switch {
 	case errors.As(err, &refused):
 		return "The model declined to answer" + refusalDetail(refused) + "."
+	case errors.As(err, &cli):
+		return "Klyx did not send this to Claude Code: " + cli.Reason + "."
 	case errors.Is(err, ai.ErrTruncated):
 		return "The model's answer was cut off before it finished; nothing partial is shown. Try again, or choose a model with a larger output limit."
 	case errors.Is(err, ai.ErrUnexpectedOutput), errors.Is(err, ai.ErrEmpty), errors.Is(err, ai.ErrUnconfirmed):

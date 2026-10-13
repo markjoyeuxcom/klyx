@@ -59,6 +59,25 @@ type Provider interface {
 	Complete(ctx context.Context, req Request) (Result, error)
 }
 
+// ReadinessReporter is a provider that can say, without a call, why it would
+// refuse one (a CLI whose binary is not a reviewed build, or whose admission
+// was revoked).
+type ReadinessReporter interface {
+	Ready() error
+}
+
+// CLIProber is a CLI provider's Settings Test: it re-admits the CLI and sends
+// one small prompt that would expose a tool if one ran (spec §1.4).
+type CLIProber interface {
+	Probe(ctx context.Context) (Result, error)
+}
+
+// CLIStatusReporter describes a CLI provider's binary and admission for
+// Settings, without running it.
+type CLIStatusReporter interface {
+	Status() CLIStatus
+}
+
 // ModelInfo is one entry of a provider's model list.
 type ModelInfo struct {
 	ID          string `json:"id"`

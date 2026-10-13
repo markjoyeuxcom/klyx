@@ -6,11 +6,13 @@ import {
   armAIEgress,
   clearAPIKey,
   getAISettings,
+  getCLIStatus,
   listAIModels,
   moveKeyToKeychain,
   saveAISettings,
   setAPIKey,
   testAIProvider,
+  type AICLIStatus,
   type AISettings,
   type AISettingsState,
   type AITest,
@@ -29,6 +31,7 @@ export const PROVIDERS: { id: string; label: string; keyed: boolean; defaultOrig
   { id: "openai", label: "OpenAI (API key)", keyed: true, defaultOrigin: "https://api.openai.com" },
   { id: "gemini", label: "Gemini (API key)", keyed: true, defaultOrigin: "https://generativelanguage.googleapis.com" },
   { id: "openaiCompatible", label: "Local server (OpenAI-compatible, e.g. Ollama)", keyed: true },
+  { id: "claudeCLI", label: "Claude Code CLI (your Claude sign-in)", keyed: false },
 ];
 
 export function providerLabel(id: string): string {
@@ -49,6 +52,8 @@ export function AISettingsPanel() {
   const [busy, setBusy] = useState(false);
   const [confirmEgress, setConfirmEgress] = useState(false);
   const [loadFailed, setLoadFailed] = useState(false);
+  const [cli, setCli] = useState<AICLIStatus | null>(null);
+  const [cliCheck, setCliCheck] = useState(0); // bumped to re-read the CLI status
   const modelListId = useId();
   // Draft generation: every draft edit bumps it, and a model list or Test
   // reply for an older generation is dropped - a late reply for the previous
@@ -67,6 +72,25 @@ export function AISettingsPanel() {
     void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // The installed Claude Code, described without running it. A reply for an
+  // older path or provider is dropped.
+  const cliPath = draft?.provider === "claudeCLI" ? draft.cliPath : null;
+  useEffect(() => {
+    if (cliPath === null || !draft) {
+      setCli(null);
+      return;
+    }
+    let live = true;
+    setCli(null);
+    void getCLIStatus(draft).then((st) => {
+      if (live) setCli(st);
+    });
+    return () => {
+      live = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cliPath, cliCheck]);
 
   if (loadFailed && !state) {
     return (
@@ -103,6 +127,7 @@ export function AISettingsPanel() {
       baseUrl: same ? state.persisted.baseUrl : id === "openaiCompatible" ? "http://localhost:11434" : "",
       keySource: same ? state.persisted.keySource : PROVIDERS.find((p) => p.id === id)?.keyed ? "keychain" : "none",
       tlsSkipVerify: same ? state.persisted.tlsSkipVerify : false,
+      cliPath: same ? state.persisted.cliPath : "",
     });
   };
   const save = (d: AISettings) => run(() => saveAISettings(d), "Saved. Explain and Suggest-fix now use these settings.");
@@ -138,7 +163,6 @@ export function AISettingsPanel() {
           {PROVIDERS.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
         </select>
       </div>
-      <div style={{ ...hint, marginLeft: 118, marginBottom: 4 }}>Installed CLIs (Claude Code) arrive in a later update.</div>
 
       {provider.id !== "off" && (
         <>
@@ -199,7 +223,7 @@ export function AISettingsPanel() {
               className="l-input"
               list={modelListId}
               style={{ flex: 1, minWidth: 0, fontFamily: "var(--font-mono)" }}
-              placeholder={provider.id === "anthropic" ? "claude-opus-5-5 (default)" : "choose a model"}
+              placeholder={provider.id === "anthropic" || provider.id === "claudeCLI" ? "claude-opus-5-5 (default)" : "choose a model"}
               value={draft.model}
               onChange={(e) => update({ model: e.target.value })}
             />
@@ -223,6 +247,37 @@ export function AISettingsPanel() {
             </button>
           </div>
 
+          {provider.id === "claudeCLI" && (
+            <>
+              <div style={row}>
+                <span style={labelStyle}>CLI path</span>
+                <input
+                  aria-label="Claude Code path"
+                  className="l-input"
+                  style={{ flex: 1, minWidth: 0, fontFamily: "var(--font-mono)" }}
+                  placeholder="found automatically (PATH, then ~/.local/bin/claude)"
+                  value={draft.cliPath}
+                  onChange={(e) => update({ cliPath: e.target.value })}
+                />
+              </div>
+              <div data-testid="ai-cli-status" style={{ ...hint, marginLeft: 118, color: cli?.problem ? "var(--color-text-warning)" : undefined }}>
+                {cli === null ? (
+                  "Checking the installed Claude Code…"
+                ) : (
+                  <>
+                    {cli.path && <span style={{ fontFamily: "var(--font-mono)" }}>{cli.path}</span>}
+                    {cli.reviewed && <> · Claude Code {cli.version} · sha256 {cli.sha256}… · {cli.admitted ? "admitted" : "not admitted yet (Test or the first call admits it)"}</>}
+                    {cli.problem && <div>{cli.problem}</div>}
+                  </>
+                )}
+              </div>
+              <div style={{ ...hint, marginLeft: 118 }}>
+                Klyx runs only a Claude Code build it has reviewed, signed in to a personal Pro or Max account, with no tools, MCP servers, hooks or settings. Before every call it re-checks the sign-in and administrator policy, and refuses if either changed.
+              </div>
+            </>
+          )}
+
+          {provider.id !== "claudeCLI" && (
           <div style={row}>
             <span style={labelStyle}>{provider.id === "openaiCompatible" ? "server URL" : "custom origin"}</span>
             <input
@@ -234,6 +289,7 @@ export function AISettingsPanel() {
               onChange={(e) => update({ baseUrl: e.target.value })}
             />
           </div>
+          )}
           {customOrigin && (
             <div data-testid="ai-origin-disclosure" style={{ ...hint, marginLeft: 118, color: "var(--color-text-warning)" }}>
               Your {providerLabel(provider.id).split(" (")[0]} key will be sent to {customOrigin}, not to {provider.defaultOrigin}.
@@ -283,6 +339,7 @@ export function AISettingsPanel() {
               const r = await testAIProvider(draft);
               setBusy(false);
               if (gen === draftGen.current) setTest(r); // else the draft changed meanwhile
+              if (provider.id === "claudeCLI") setCliCheck((n) => n + 1); // Test admits, or revokes
             }}
           >
             Test
@@ -300,7 +357,12 @@ export function AISettingsPanel() {
           {message.kind === "error" ? "▲ " : ""}{message.text}
         </div>
       )}
-      <div style={{ ...hint, marginTop: 6 }}>Test sends one short prompt with no cluster data. Saving writes the ai block of fleet.yaml; keys stay in the keychain.</div>
+      <div style={{ ...hint, marginTop: 6 }}>
+        {provider.id === "claudeCLI"
+          ? "Test re-checks the Claude Code build, sign-in and policy, then sends one short prompt with no cluster data on your Claude sign-in. The prompt asks Claude Code to read a file and run a command; an answer that shows it could fails the Test and revokes the CLI."
+          : "Test sends one short prompt with no cluster data."}{" "}
+        Saving writes the ai block of fleet.yaml; keys stay in the keychain.
+      </div>
 
       {confirmEgress && (
         <ConfirmDialog
