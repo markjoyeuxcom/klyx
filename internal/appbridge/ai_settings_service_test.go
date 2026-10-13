@@ -321,3 +321,87 @@ func TestAISettings_TestAndModelsUseTheDraft(t *testing.T) {
 		t.Fatalf("unexpected request bodies: %v", bodies)
 	}
 }
+
+// Codex review of c488e34 (P1): once the running provider's keychain key is
+// deleted, new calls stop using it - even when fleet.yaml cannot be read or
+// written - and the failed file update shows as divergence. The decision
+// follows the running snapshot, not the file.
+func TestAISettings_ClearStopsTheRunningProviderWhateverTheFile(t *testing.T) {
+	keyed := baseFleet + "ai:\n  provider: openaiCompatible\n  model: m\n  baseUrl: http://localhost:11434\n  keySource: keychain\n"
+	setup := func(t *testing.T, fleet string) *settingsFixture {
+		f := newSettingsFixture(t, fleet)
+		_ = f.keys.Set(ai.ProviderOpenAICompatible, "local-key-123")
+		SetAIState(f.ai, BuildAIState(&config.AIConfig{Provider: "openaiCompatible", Model: "m", BaseURL: "http://localhost:11434", KeySource: "keychain"}, f.keys, nil))
+		if f.ai.load().Provider == nil {
+			t.Fatal("fixture: the running provider must be up")
+		}
+		return f
+	}
+
+	t.Run("fleet.yaml unreadable", func(t *testing.T) {
+		f := setup(t, keyed)
+		f.svc.loadAI = func(string) (*config.AIConfig, error) { return nil, errors.New("permission denied") }
+		r := f.svc.ClearAPIKey("openaiCompatible")
+		if r.OK || !strings.Contains(r.Error, "no longer uses it") {
+			t.Fatalf("got %+v", r)
+		}
+		if st := f.ai.load(); st.Provider != nil || !strings.Contains(st.Problem, "removed") {
+			t.Fatalf("the running provider must stop: %+v", st)
+		}
+	})
+	t.Run("fleet.yaml write fails", func(t *testing.T) {
+		f := setup(t, keyed)
+		f.svc.saveAI = func(string, config.AIConfig) error { return errors.New("disk full") }
+		r := f.svc.ClearAPIKey("openaiCompatible")
+		if r.OK || !strings.Contains(r.Error, "was not updated") {
+			t.Fatalf("got %+v", r)
+		}
+		if f.ai.load().Provider != nil {
+			t.Fatal("the running provider must stop")
+		}
+		if !f.svc.GetAISettings().Diverged {
+			t.Fatal("the unwritten file must show as divergence")
+		}
+	})
+	t.Run("file selects another provider", func(t *testing.T) {
+		f := setup(t, baseFleet+"ai:\n  provider: openai\n  model: m\n  keySource: keychain\n")
+		before := f.file(t)
+		if r := f.svc.ClearAPIKey("openaiCompatible"); !r.OK {
+			t.Fatalf("got %+v", r)
+		}
+		if f.ai.load().Provider != nil {
+			t.Fatal("the running provider used the deleted key; it must stop")
+		}
+		if f.file(t) != before {
+			t.Fatal("the file selects another provider; it must not be rewritten")
+		}
+	})
+	t.Run("another provider's key", func(t *testing.T) {
+		f := setup(t, keyed)
+		_ = f.keys.Set(ai.ProviderOpenAI, "sk-openai")
+		if r := f.svc.ClearAPIKey("openai"); !r.OK || f.ai.load().Provider == nil {
+			t.Fatalf("clearing an unused key must not stop the running provider: %+v", r)
+		}
+	})
+}
+
+// Codex review of c488e34 (P2): the model list needs no model, so first-time
+// setup is not circular; Test and Save still require one.
+func TestAISettings_ModelsListWithoutAModel(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"data":[{"id":"llama3.1"}]}`)
+	}))
+	defer srv.Close()
+	f := newSettingsFixture(t, baseFleet)
+	draft := AISettingsDTO{Provider: "openaiCompatible", BaseURL: srv.URL, KeySource: "none"}
+	if m := f.svc.ListModels(draft); m.Error != "" || len(m.Models) != 1 {
+		t.Fatalf("models without a model: %+v", m)
+	}
+	if res := f.svc.TestProvider(draft); res.OK || !strings.Contains(res.Error, "model") {
+		t.Fatalf("Test still needs a model: %+v", res)
+	}
+	if r := f.svc.SaveAISettings(draft); r.OK {
+		t.Fatal("Save still needs a model")
+	}
+}

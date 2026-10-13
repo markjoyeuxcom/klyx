@@ -1,4 +1,4 @@
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { IconAlertTriangle } from "@tabler/icons-react";
 import { ConfirmDialog } from "../chrome/ConfirmDialog";
 import {
@@ -50,6 +50,11 @@ export function AISettingsPanel() {
   const [confirmEgress, setConfirmEgress] = useState(false);
   const [loadFailed, setLoadFailed] = useState(false);
   const modelListId = useId();
+  // Draft generation: every draft edit bumps it, and a model list or Test
+  // reply for an older generation is dropped - a late reply for the previous
+  // provider or origin must never land against the current draft (Codex
+  // review of c488e34).
+  const draftGen = useRef(0);
 
   const load = async (keepDraft = false) => {
     const s = await getAISettings();
@@ -83,8 +88,11 @@ export function AISettingsPanel() {
     if (r.ok) await load(keepDraft);
   };
   const update = (patch: Partial<AISettings>) => {
+    draftGen.current++;
     setDraft({ ...draft, ...patch });
     setTest(null);
+    // A list belongs to one provider, origin and key: any change voids it.
+    if ("provider" in patch || "baseUrl" in patch || "keySource" in patch || "apiKeyEnv" in patch) setModels([]);
   };
   const chooseProvider = (id: string) => {
     const same = id === state.persisted.provider;
@@ -202,9 +210,11 @@ export function AISettingsPanel() {
               className="l-btn"
               disabled={busy}
               onClick={async () => {
+                const gen = draftGen.current;
                 setBusy(true);
                 const r = await listAIModels(draft);
                 setBusy(false);
+                if (gen !== draftGen.current) return; // the draft changed meanwhile
                 setModels(r.models);
                 setMessage(r.error ? { kind: "error", text: r.error } : { kind: "ok", text: `${r.models.length} model${r.models.length === 1 ? "" : "s"} available.` });
               }}
@@ -268,9 +278,11 @@ export function AISettingsPanel() {
             className="l-btn"
             disabled={busy}
             onClick={async () => {
+              const gen = draftGen.current;
               setBusy(true);
-              setTest(await testAIProvider(draft));
+              const r = await testAIProvider(draft);
               setBusy(false);
+              if (gen === draftGen.current) setTest(r); // else the draft changed meanwhile
             }}
           >
             Test

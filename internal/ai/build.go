@@ -47,6 +47,22 @@ type Built struct {
 // provider. It returns (nil, nil) for "off". An error means AI stays
 // unavailable, with that reason; nothing falls back.
 func Build(s Settings, keys KeyStore, getenv func(string) string) (*Built, error) {
+	return build(s, keys, getenv, true)
+}
+
+// BuildLister builds only the model lister for s: the same key and origin
+// rules as Build, without requiring a model - choosing one is what the list is
+// for (Codex review of c488e34: first-time setup was circular). The result has
+// no Provider, so nothing can be completed through it.
+func BuildLister(s Settings, keys KeyStore, getenv func(string) string) (*Built, error) {
+	b, err := build(s, keys, getenv, false)
+	if b != nil {
+		b.Provider = nil
+	}
+	return b, err
+}
+
+func build(s Settings, keys KeyStore, getenv func(string) string, requireModel bool) (*Built, error) {
 	switch s.Provider {
 	case "", ProviderOff:
 		return nil, nil
@@ -72,7 +88,7 @@ func Build(s Settings, keys KeyStore, getenv func(string) string) (*Built, error
 		if err != nil {
 			return nil, err
 		}
-		if s.Model == "" {
+		if s.Model == "" && requireModel {
 			return nil, errors.New("choose a model for the OpenAI-compatible server")
 		}
 		hc := NewHTTPClient(s.TLSSkipVerify)
@@ -110,13 +126,13 @@ func Build(s Settings, keys KeyStore, getenv func(string) string) (*Built, error
 		p := NewAnthropic(key, s.BaseURL, b.Model, hc, s.RefusalFallback).(*anthropicProvider)
 		b.Provider, b.Lister = p, p
 	case ProviderOpenAI:
-		if b.Model == "" {
+		if b.Model == "" && requireModel {
 			return nil, errors.New("choose an OpenAI model")
 		}
 		p := NewOpenAI(key, s.BaseURL, b.Model, hc).(*openaiProvider)
 		b.Provider, b.Lister = p, p
 	case ProviderGemini:
-		if b.Model == "" {
+		if b.Model == "" && requireModel {
 			return nil, errors.New("choose a Gemini model")
 		}
 		p := NewGemini(key, s.BaseURL, b.Model, hc).(*geminiProvider)

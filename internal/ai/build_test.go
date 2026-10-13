@@ -129,3 +129,24 @@ func TestBuild_Origins(t *testing.T) {
 		})
 	}
 }
+
+// BuildLister keeps Build's key and origin rules but needs no model, and
+// yields nothing that can complete.
+func TestBuildLister(t *testing.T) {
+	keys := &fakeKeys{keys: map[ProviderID]string{ProviderOpenAI: "sk-o", ProviderGemini: "AIza-g"}}
+	for _, p := range []ProviderID{ProviderOpenAI, ProviderGemini} {
+		b, err := BuildLister(Settings{Provider: p, KeySource: KeySourceKeychain}, keys, nil)
+		if err != nil || b.Lister == nil || b.Provider != nil {
+			t.Fatalf("%s: got (%+v, %v)", p, b, err)
+		}
+		if _, err := Build(Settings{Provider: p, KeySource: KeySourceKeychain}, keys, nil); err == nil {
+			t.Fatalf("%s: Build must still require a model", p)
+		}
+	}
+	if _, err := BuildLister(Settings{Provider: ProviderAnthropic, KeySource: KeySourceKeychain}, keys, nil); !errors.Is(err, ErrNoKey) {
+		t.Fatalf("the key rule still applies: %v", err)
+	}
+	if _, err := BuildLister(Settings{Provider: ProviderOpenAI, KeySource: KeySourceKeychain, BaseURL: "http://gateway.example"}, keys, nil); err == nil {
+		t.Fatal("the origin rule still applies")
+	}
+}

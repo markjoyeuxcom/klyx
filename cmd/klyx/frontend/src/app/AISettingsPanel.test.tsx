@@ -136,3 +136,59 @@ describe("AISettingsPanel", () => {
     expect((await screen.findByTestId("ai-status")).textContent).toContain("AI is off");
   });
 });
+
+describe("AISettingsPanel draft fencing (Codex review of c488e34)", () => {
+  function deferred<T>() {
+    let resolve!: (v: T) => void;
+    const promise = new Promise<T>((r) => (resolve = r));
+    return { promise, resolve };
+  }
+
+  it("drops a model list that arrives after the provider changed", async () => {
+    bridge.getAISettings.mockResolvedValue(state());
+    const late = deferred<{ models: { id: string }[] }>();
+    bridge.listAIModels.mockReturnValueOnce(late.promise);
+    render(<AISettingsPanel />);
+    fireEvent.change(await screen.findByLabelText("AI provider"), { target: { value: "openai" } });
+    fireEvent.click(screen.getByRole("button", { name: "Load models" }));
+    fireEvent.change(screen.getByLabelText("AI provider"), { target: { value: "gemini" } });
+    late.resolve({ models: [{ id: "gpt-x" }] });
+    await waitFor(() => expect(screen.queryByText("working…")).toBeNull());
+    expect(document.querySelector("datalist option")).toBeNull();
+    expect(screen.queryByTestId("ai-message")).toBeNull();
+  });
+
+  it("drops a Test result that arrives after the origin changed", async () => {
+    bridge.getAISettings.mockResolvedValue(state());
+    const late = deferred<{ ok: boolean; model: string; origin: string; reply: string }>();
+    bridge.testAIProvider.mockReturnValueOnce(late.promise);
+    render(<AISettingsPanel />);
+    fireEvent.change(await screen.findByLabelText("AI provider"), { target: { value: "openaiCompatible" } });
+    fireEvent.click(screen.getByRole("button", { name: "Test" }));
+    fireEvent.change(screen.getByLabelText("Server URL"), { target: { value: "http://192.168.1.10:11434" } });
+    late.resolve({ ok: true, model: "m", origin: "http://localhost:11434", reply: "ready" });
+    await waitFor(() => expect(screen.queryByText("working…")).toBeNull());
+    expect(screen.queryByTestId("ai-test-result")).toBeNull();
+  });
+
+  it("clears loaded models when the origin changes", async () => {
+    bridge.getAISettings.mockResolvedValue(state());
+    bridge.listAIModels.mockResolvedValue({ models: [{ id: "llama3.1" }] });
+    render(<AISettingsPanel />);
+    fireEvent.change(await screen.findByLabelText("AI provider"), { target: { value: "openaiCompatible" } });
+    fireEvent.click(screen.getByRole("button", { name: "Load models" }));
+    await waitFor(() => expect(document.querySelector("datalist option")).not.toBeNull());
+    fireEvent.change(screen.getByLabelText("Server URL"), { target: { value: "http://other:11434" } });
+    expect(document.querySelector("datalist option")).toBeNull();
+  });
+
+  it("lists models for a first-time setup with no model chosen", async () => {
+    bridge.getAISettings.mockResolvedValue(state());
+    bridge.listAIModels.mockResolvedValue({ models: [{ id: "gemini-x" }] });
+    render(<AISettingsPanel />);
+    fireEvent.change(await screen.findByLabelText("AI provider"), { target: { value: "gemini" } });
+    fireEvent.click(screen.getByRole("button", { name: "Load models" }));
+    await waitFor(() => expect(bridge.listAIModels).toHaveBeenCalledWith(expect.objectContaining({ provider: "gemini", model: "" })));
+    await waitFor(() => expect(document.querySelector("datalist option")?.getAttribute("value")).toBe("gemini-x"));
+  });
+});

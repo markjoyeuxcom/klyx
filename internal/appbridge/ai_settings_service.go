@@ -269,9 +269,12 @@ func (s *AISettingsService) SetAPIKey(provider, key string) ActionResultDTO {
 	return ActionResultDTO{OK: true}
 }
 
-// ClearAPIKey deletes a keychain key. For the selected provider the key
-// source becomes none: AI turns unavailable, and no environment or legacy key
-// takes over (spec §2.1).
+// ClearAPIKey deletes a keychain key. If the RUNNING provider used that
+// keychain key, new calls stop at once - even if fleet.yaml cannot then be
+// updated - so a deleted credential is never used again (Codex review of
+// c488e34). For the provider fleet.yaml selects, the key source becomes none:
+// AI turns unavailable, and no environment or legacy key takes over (spec
+// §2.1). A failed file update is reported and shows as divergence.
 func (s *AISettingsService) ClearAPIKey(provider string) ActionResultDTO {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -282,9 +285,20 @@ func (s *AISettingsService) ClearAPIKey(provider string) ActionResultDTO {
 	if err := s.keys.Delete(p); err != nil {
 		return ActionResultDTO{Error: aiProblem(err)}
 	}
+
+	// The running snapshot first, decided from the snapshot itself, not from
+	// the file. In-flight calls finish on the snapshot they loaded.
+	if active := s.aiSvc.load(); active.ProviderID == p && active.KeySource == ai.KeySourceKeychain {
+		off := &AIState{ProviderID: p, AllowEgress: active.AllowEgress, Problem: "The API key was removed. Add one in Settings > AI."}
+		SetAIState(s.aiSvc, off)
+		if s.applied.Provider == string(p) {
+			s.applied.KeySource = string(ai.KeySourceNone)
+		}
+	}
+
 	cur, err := s.loadAI(s.path)
 	if err != nil {
-		return ActionResultDTO{Error: "Key removed from the keychain, but fleet.yaml cannot be read: " + ai.Scrub(err.Error())}
+		return ActionResultDTO{Error: "Key removed from the keychain; AI no longer uses it, but fleet.yaml cannot be read: " + ai.Scrub(err.Error())}
 	}
 	curN := normalizedAI(cur)
 	if curN.Provider != string(p) || curN.KeySource != string(ai.KeySourceKeychain) {
@@ -293,7 +307,7 @@ func (s *AISettingsService) ClearAPIKey(provider string) ActionResultDTO {
 	next := curN
 	next.KeySource = string(ai.KeySourceNone)
 	if err := s.apply(next, false); err != nil {
-		return ActionResultDTO{Error: "Key removed from the keychain, but fleet.yaml was not updated: " + err.Error()}
+		return ActionResultDTO{Error: "Key removed from the keychain; AI no longer uses it, but fleet.yaml was not updated: " + err.Error()}
 	}
 	return ActionResultDTO{OK: true}
 }
@@ -324,12 +338,17 @@ func (s *AISettingsService) MoveKeyToKeychain() ActionResultDTO {
 	return ActionResultDTO{OK: true}
 }
 
-// draftBuild builds a provider from the panel's draft without saving it, for
-// the model list and Test.
-func (s *AISettingsService) draftBuild(d AISettingsDTO) (*ai.Built, error) {
+// draftBuild builds from the panel's draft without saving it: the full
+// provider for Test, or only the model lister (no model required) for the
+// picker.
+func (s *AISettingsService) draftBuild(d AISettingsDTO, listerOnly bool) (*ai.Built, error) {
 	cur, _ := s.loadAI(s.path)
 	next := fromDTO(d, normalizedAI(cur))
-	b, err := ai.Build(AISettingsFromConfig(&next), s.keys, s.getenv)
+	build := ai.Build
+	if listerOnly {
+		build = ai.BuildLister
+	}
+	b, err := build(AISettingsFromConfig(&next), s.keys, s.getenv)
 	if err != nil {
 		return nil, errors.New(aiProblem(err))
 	}
@@ -342,7 +361,7 @@ func (s *AISettingsService) draftBuild(d AISettingsDTO) (*ai.Built, error) {
 // ListModels lists the draft provider's models. It sends no cluster data.
 func (s *AISettingsService) ListModels(d AISettingsDTO) AIModelsDTO {
 	s.mu.Lock()
-	b, err := s.draftBuild(d)
+	b, err := s.draftBuild(d, true)
 	s.mu.Unlock()
 	if err != nil {
 		return AIModelsDTO{Error: err.Error()}
@@ -366,7 +385,7 @@ const aiProbeSystem = "This is a connectivity check from Klyx. Reply with exactl
 // data and reports what came back.
 func (s *AISettingsService) TestProvider(d AISettingsDTO) AITestDTO {
 	s.mu.Lock()
-	b, err := s.draftBuild(d)
+	b, err := s.draftBuild(d, false)
 	s.mu.Unlock()
 	if err != nil {
 		return AITestDTO{Error: err.Error()}
