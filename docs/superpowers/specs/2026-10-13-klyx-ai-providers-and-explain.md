@@ -146,6 +146,7 @@ An unknown version, a missing flag, an unknown output schema or an unknown event
     - `--restricted` removes command and code tools and WebFetch, ignores user, project and local settings, and confines file tools.
     - `--safe-mode` disables CLAUDE.md, skills, plugins, hooks, MCP, custom commands and agents, and output styles, while auth keeps working.
     - Strict MCP with an empty config removes MCP servers.
+  - `--system-prompt-file` is real but hidden: the help names it only inside the `--bare` text ("--system-prompt[-file]"). Contract verification must therefore confirm it by a flag-parse check that makes no model call, not by its own help line. If it is missing, fail closed; the system prompt does not move into argv.
   - Managed settings still apply, so they are detected and refused as above.
   - `--bare` is not used: it disables OAuth and keychain login.
   - This is the one adapter expected to pass.
