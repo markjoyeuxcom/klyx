@@ -10,7 +10,11 @@ Status:
   5. a UID-fenced Explain capture (§4.1)
   6. hard transport limits and failure mapping (§1.2)
   7. an allowlist-based, value-tested prompt contract (§4.2)
-- Re-review requested. No code before approval.
+- Re-review on 39a3602: APPROVE-WITH-CHANGES with two narrow gaps, both fixed here:
+  - managed policy is re-checked before every CLI invocation, and only self-contained native installs are admitted (§1.4);
+  - the UID fence also covers unanchored generic Resources (§4.1).
+- Codex judged every other section acceptable at design level.
+- Implementation starts with slice 1, which these two fixes do not touch. Codex's note stands: the Claude adapter still needs implementation review and real contract tests, and this design verdict does not certify the installed CLI.
 
 Owner decisions (2026-10-13):
 - In-app AI setup takes API keys for Claude (Anthropic), OpenAI and Gemini.
@@ -165,6 +169,19 @@ Admission is re-checked:
 - on Settings "Test";
 - whenever the resolved executable's identity changes, checked before every call by a cheap stat plus a hash cache.
 
+**Before every invocation, managed policy is re-checked** (Codex re-review, 39a3602). The executable and argv can stay identical while an admin hook or policy appears after admission. So, immediately before launch, Klyx re-reads every policy source the adapter's vendor supports:
+- the managed-settings files and directories for the platform (for Claude Code on macOS, `/Library/Application Support/ClaudeCode/`; the Linux and Windows equivalents are listed in the adapter);
+- the managed-policy environment variables.
+
+If any policy source exists, or its absence cannot be established, the call fails closed. A vendor with a remote or admin-policy channel Klyx cannot inspect is unsupported. This is a configuration check, not a model probe.
+
+**Self-contained installs only.** Admission covers the actual CLI runtime. Klyx admits only an executable that resolves, after following symlinks, to a self-contained native binary (Mach-O, ELF or PE), and hashes that binary. On this Mac, `~/.local/bin/claude` links to `~/.local/share/claude/versions/2.1.296`, a native arm64 binary. A launcher script or interpreter shim (for example an npm `node` wrapper) is refused, because an unchanged launcher can front a changed runtime.
+
+Tests for both:
+- A clean adapter is admitted, then a managed-policy file appears with the executable and version unchanged: no prompt is delivered.
+- Undeterminable policy fails closed.
+- A shim install is refused.
+
 **The probe** is regression evidence, not proof. It runs on "Test", with the owner told that it sends one small prompt on their CLI login, and in slice 3's tests against the real CLI.
 1. Create a randomly named file `R` inside the call's working dir, and a file containing token `T1` outside it.
 2. Prompt the model to list the working directory's files, to read the T1 file, and to run a command.
@@ -273,8 +290,14 @@ The target names a `(task, part, uid)` row, a Helm release `(ns, name)`, or a ge
 - A different generation is recorded as "Klyx's verdict is for generation N; the object is now at M", and the prompt must say the verdict may be out of date.
 - Independently fetched evidence is labelled "fetched at <time>". Evidence from stale or unreadable dependencies is labelled last-observed or unverified, with its as-of time.
 
+**Identity is fenced on every path, anchored or not** (Codex re-review, 39a3602). A missing verdict is allowed; missing identity fencing is not.
+- Every target carries the UID of the object the operator selected.
+- Before any model call, the backend compares the fetched main object's UID against `target.uid`.
+- A mismatch is refused, the same as a replaced anchored object.
+- A target without a UID fails closed. The inspector always has the UID of the object it shows, and Explain is disabled until it does.
+
 **Missing anchors:**
-- **Generic Resources** (no Observer row): the prompt states "Klyx has no verdict for this kind", and the model explains only from conditions, facts and events.
+- **Generic Resources** (no Observer row): the prompt states "Klyx has no verdict for this kind", and the model explains only from conditions, facts and events. The UID fence above still applies. Test: the resource is recreated under the same name between selection and the GET, with no Observer row. Then there is no provider call, and no explanation of the replacement appears under the old selection.
 - **Helm releases:** the anchor is the Observer's Helm snapshot entry (release, revision, status, read time). If the history read shows a newer revision, the result is qualified as "the release changed since Klyx's last read (revision N to M)". A release absent from the snapshot gets no anchor, the same as generic Resources.
 
 ### 4.2 The prompt contract (allowlisted, value-tested, untrusted)
