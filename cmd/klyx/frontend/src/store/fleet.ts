@@ -573,7 +573,12 @@ export type AdhocResultDTO = {
 
 // AdhocObjectDTO is one Klyx-created scratch object (label klyx.dev/adhoc) in
 // the cleanup inventory.
-export type AdhocObjectDTO = { kind: string; group: string; version: string; plural: string; scope: string; namespace: string; name: string; ageSeconds: number };
+// uid pins a delete to the object the inventory showed.
+export type AdhocObjectDTO = { kind: string; group: string; version: string; plural: string; scope: string; namespace: string; name: string; uid: string; ageSeconds: number };
+// The scratch inventory. unread names the kinds whose list failed (the
+// inventory is incomplete); error means the sweep itself failed and objects
+// is unreadable, never "no scratch objects".
+export type AdhocInventoryDTO = { objects: AdhocObjectDTO[]; unread: string[]; error?: string };
 
 // Hubble flow/drop triage readout. Nil/absent numeric fields mean "that metric
 // set is not enabled/scraped" - never a fabricated zero.

@@ -76,8 +76,10 @@ func (f *fakeConn) CreateResourceYAML(context.Context, string, bool) []AdhocResu
 func (f *fakeConn) LaunchDiagnosticPod(context.Context, string, string, int64) AdhocResult {
 	return AdhocResult{}
 }
-func (f *fakeConn) ListAdhocObjects(context.Context) []AdhocObject { return nil }
-func (f *fakeConn) DeleteAdhocObject(context.Context, string, string, string, string, string) error {
+func (f *fakeConn) ListAdhocObjects(context.Context) (AdhocInventory, error) {
+	return AdhocInventory{}, nil
+}
+func (f *fakeConn) DeleteAdhocObject(context.Context, string, string, string, string, string, string) error {
 	return nil
 }
 func (f *fakeConn) DeletePod(context.Context, string, string, string) error { return nil }

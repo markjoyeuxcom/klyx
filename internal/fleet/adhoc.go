@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -14,6 +16,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/yaml"
 
 	"github.com/moomora/klyx/internal/clock"
@@ -130,11 +133,19 @@ func (c *ClusterConn) applyAdhocDoc(ctx context.Context, doc string, dryRun bool
 		return r
 	}
 
-	gvr, namespaced, err := c.resolveGVK(u.GetAPIVersion(), kind)
+	gvr, res, err := c.resolveGVK(u.GetAPIVersion(), kind)
 	if err != nil {
 		r.Error = err.Error()
 		return r
 	}
+	// Every ad-hoc object must be findable and removable from Scratch, so the
+	// composer creates only kinds the inventory can list and delete (Codex
+	// review 2026-10-13: a create the inventory cannot see is an orphan).
+	if !hasVerbs(res.Verbs, "list", "delete") {
+		r.Error = fmt.Sprintf("%s cannot be listed and deleted on this cluster, so Scratch could not clean it up - the composer does not create it", kind)
+		return r
+	}
+	namespaced := res.Namespaced
 	if namespaced && ns == "" {
 		r.Error = "set metadata.namespace explicitly - ad-hoc objects must land where you aimed, never an implicit default"
 		return r
@@ -406,48 +417,196 @@ type AdhocObject struct {
 	Scope      string
 	Namespace  string
 	Name       string
+	UID        string
 	AgeSeconds int64
 }
 
-// adhocListGVRs is the curated set of kinds the scratch list sweeps. Bounded by
-// design: a label-selector list per kind is cheap, and scratch objects are by
-// construction things Klyx itself created. Extend as the composer grows uses.
-var adhocListGVRs = []struct {
+// AdhocInventory is the Scratch sweep: every object labeled klyx.dev/adhoc,
+// and the kinds that could not be read. A non-empty Unread means the
+// inventory is INCOMPLETE - never "nothing else exists".
+type AdhocInventory struct {
+	Objects []AdhocObject
+	Unread  []string
+}
+
+const (
+	adhocSweepWorkers = 8
+	adhocListPage     = 500
+)
+
+type adhocKind struct {
 	gvr   schema.GroupVersionResource
 	kind  string
 	scope string
-}{
-	{schema.GroupVersionResource{Group: "", Version: "v1", Resource: "pods"}, "Pod", "Namespaced"},
-	{schema.GroupVersionResource{Group: "", Version: "v1", Resource: "configmaps"}, "ConfigMap", "Namespaced"},
-	{schema.GroupVersionResource{Group: "", Version: "v1", Resource: "services"}, "Service", "Namespaced"},
-	{schema.GroupVersionResource{Group: "", Version: "v1", Resource: "namespaces"}, "Namespace", "Cluster"},
-	{schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}, "Deployment", "Namespaced"},
-	{schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "statefulsets"}, "StatefulSet", "Namespaced"},
-	{schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "daemonsets"}, "DaemonSet", "Namespaced"},
-	{schema.GroupVersionResource{Group: "batch", Version: "v1", Resource: "jobs"}, "Job", "Namespaced"},
-	{schema.GroupVersionResource{Group: "batch", Version: "v1", Resource: "cronjobs"}, "CronJob", "Namespaced"},
-	{schema.GroupVersionResource{Group: "networking.k8s.io", Version: "v1", Resource: "networkpolicies"}, "NetworkPolicy", "Namespaced"},
-	{schema.GroupVersionResource{Group: "", Version: "v1", Resource: "persistentvolumeclaims"}, "PersistentVolumeClaim", "Namespaced"},
 }
 
-// ListAdhocObjects sweeps the curated kinds for everything Klyx created ad-hoc
-// (label klyx.dev/adhoc) - the cleanup backstop for TTL'd scratch objects. Kinds
-// whose list fails (CRD absent, RBAC) are skipped; this is a best-effort
-// inventory of Klyx's OWN objects, not a cluster audit.
-func (c *ClusterConn) ListAdhocObjects(ctx context.Context) []AdhocObject {
+func hasVerbs(verbs []string, want ...string) bool {
+	for _, w := range want {
+		found := false
+		for _, v := range verbs {
+			if v == w {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
+}
+
+func resourceLabel(gvr schema.GroupVersionResource) string {
+	if gvr.Group == "" {
+		return gvr.Resource
+	}
+	return gvr.Resource + "." + gvr.Group
+}
+
+// adhocSweepKinds is every served kind the composer can create and Scratch
+// can clean up: top-level resources that support list and delete, each group's
+// preferred version first, plus any resource served only in another version.
+// It matches what applyAdhocDoc admits, so nothing Klyx created is left out.
+// Secrets are skipped - the composer refuses them, so none can be Klyx's.
+func (c *ClusterConn) adhocSweepKinds() ([]adhocKind, []string, error) {
+	if c.typed == nil {
+		return nil, nil, errors.New("discovery unavailable: no cluster connection")
+	}
+	d := c.discovery()
+	groups, err := d.ServerGroups()
+	if err != nil || groups == nil {
+		return nil, nil, fmt.Errorf("discovery failed: %v", err)
+	}
+	var kinds []adhocKind
+	var unread []string
+	for _, g := range groups.Groups {
+		versions := make([]string, 0, len(g.Versions)+1)
+		if g.PreferredVersion.GroupVersion != "" {
+			versions = append(versions, g.PreferredVersion.GroupVersion)
+		}
+		for _, v := range g.Versions {
+			if v.GroupVersion != g.PreferredVersion.GroupVersion {
+				versions = append(versions, v.GroupVersion)
+			}
+		}
+		seen := map[string]bool{}
+		for _, gvStr := range versions {
+			gv, err := schema.ParseGroupVersion(gvStr)
+			if err != nil {
+				continue
+			}
+			rl, err := d.ServerResourcesForGroupVersion(gvStr)
+			if err != nil || rl == nil {
+				unread = append(unread, fmt.Sprintf("%s: discovery failed: %v", gvStr, err))
+				continue
+			}
+			for _, r := range rl.APIResources {
+				if strings.Contains(r.Name, "/") || seen[r.Name] || !hasVerbs(r.Verbs, "list", "delete") {
+					continue
+				}
+				if gv.Group == "" && r.Name == "secrets" {
+					continue
+				}
+				seen[r.Name] = true
+				scope := "Cluster"
+				if r.Namespaced {
+					scope = "Namespaced"
+				}
+				kinds = append(kinds, adhocKind{gvr: gv.WithResource(r.Name), kind: r.Kind, scope: scope})
+			}
+		}
+	}
+	return kinds, unread, nil
+}
+
+// ListAdhocObjects sweeps every kind the composer can create for objects
+// labeled klyx.dev/adhoc - the cleanup backstop for TTL'd scratch objects.
+// Each kind is read page by page; a kind whose list fails (RBAC, an
+// unavailable aggregated API, a timeout) is named in Unread rather than
+// silently dropped. Objects served under two groups (events) appear once.
+func (c *ClusterConn) ListAdhocObjects(ctx context.Context) (AdhocInventory, error) {
 	if c.dyn == nil {
-		return nil
+		return AdhocInventory{}, errors.New("dynamic client unavailable")
+	}
+	kinds, unread, err := c.adhocSweepKinds()
+	if err != nil {
+		return AdhocInventory{}, err
 	}
 	clk := c.clk
 	if clk == nil {
 		clk = clock.Real{}
 	}
 	now := clk.Now()
+
+	type result struct {
+		objs []AdhocObject
+		err  string
+	}
+	results := make([]result, len(kinds))
+	sem := make(chan struct{}, adhocSweepWorkers)
+	var wg sync.WaitGroup
+	for i, k := range kinds {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			select {
+			case sem <- struct{}{}:
+			case <-ctx.Done():
+				results[i] = result{err: fmt.Sprintf("%s: not read: %v", resourceLabel(k.gvr), ctx.Err())}
+				return
+			}
+			defer func() { <-sem }()
+			objs, err := c.sweepAdhocKind(ctx, k, now)
+			results[i] = result{objs: objs}
+			if err != nil {
+				results[i].err = fmt.Sprintf("%s: %v", resourceLabel(k.gvr), err)
+			}
+		}()
+	}
+	wg.Wait()
+
+	inv := AdhocInventory{Unread: unread}
+	seen := map[types.UID]bool{}
+	for _, r := range results {
+		if r.err != "" {
+			inv.Unread = append(inv.Unread, r.err)
+		}
+		for _, o := range r.objs {
+			if o.UID != "" {
+				if seen[types.UID(o.UID)] {
+					continue
+				}
+				seen[types.UID(o.UID)] = true
+			}
+			inv.Objects = append(inv.Objects, o)
+		}
+	}
+	sort.SliceStable(inv.Objects, func(i, j int) bool {
+		a, b := inv.Objects[i], inv.Objects[j]
+		if a.Kind != b.Kind {
+			return a.Kind < b.Kind
+		}
+		if a.Namespace != b.Namespace {
+			return a.Namespace < b.Namespace
+		}
+		return a.Name < b.Name
+	})
+	sort.Strings(inv.Unread)
+	return inv, nil
+}
+
+// sweepAdhocKind reads one kind's labeled objects, following continue tokens.
+// On a mid-way failure it returns what it read and the error.
+func (c *ClusterConn) sweepAdhocKind(ctx context.Context, k adhocKind, now time.Time) ([]AdhocObject, error) {
 	var out []AdhocObject
-	for _, e := range adhocListGVRs {
-		list, err := c.dyn.Resource(e.gvr).List(ctx, metav1.ListOptions{LabelSelector: AdhocLabel + "=true", Limit: 500})
-		if err != nil || list == nil {
-			continue
+	opts := metav1.ListOptions{LabelSelector: AdhocLabel + "=true", Limit: adhocListPage}
+	for {
+		list, err := c.dyn.Resource(k.gvr).List(ctx, opts)
+		if err != nil {
+			return out, err
+		}
+		if list == nil {
+			return out, nil
 		}
 		for i := range list.Items {
 			u := &list.Items[i]
@@ -459,20 +618,30 @@ func (c *ClusterConn) ListAdhocObjects(ctx context.Context) []AdhocObject {
 				}
 			}
 			out = append(out, AdhocObject{
-				Kind: e.kind, Group: e.gvr.Group, Version: e.gvr.Version, Plural: e.gvr.Resource,
-				Scope: e.scope, Namespace: u.GetNamespace(), Name: u.GetName(), AgeSeconds: age,
+				Kind: k.kind, Group: k.gvr.Group, Version: k.gvr.Version, Plural: k.gvr.Resource,
+				Scope: k.scope, Namespace: u.GetNamespace(), Name: u.GetName(), UID: string(u.GetUID()), AgeSeconds: age,
 			})
 		}
+		cont := list.GetContinue()
+		if cont == "" {
+			return out, nil
+		}
+		opts.Continue = cont
 	}
-	return out
 }
 
-// DeleteAdhocObject deletes one Klyx-created scratch object. The label guard is
-// load-bearing: the object is fetched first and MUST carry klyx.dev/adhoc, so
-// this verb can never be aimed at anything Klyx did not create.
-func (c *ClusterConn) DeleteAdhocObject(ctx context.Context, group, version, plural, ns, name string) error {
+// DeleteAdhocObject deletes one Klyx-created scratch object. Two guards: the
+// object is fetched first and MUST carry klyx.dev/adhoc, so this verb can
+// never be aimed at anything Klyx did not create; and the delete is pinned to
+// the UID the inventory showed, with a server-side UID precondition, so an
+// object replaced under the same name - before the check or between the check
+// and the delete - is never removed.
+func (c *ClusterConn) DeleteAdhocObject(ctx context.Context, group, version, plural, ns, name, uid string) error {
 	if c.dyn == nil {
 		return errors.New("dynamic client unavailable")
+	}
+	if uid == "" {
+		return errors.New("no object UID given - refresh the scratch list and try again")
 	}
 	gvr := schema.GroupVersionResource{Group: group, Version: version, Resource: plural}
 	resource := c.dyn.Resource(gvr)
@@ -489,12 +658,20 @@ func (c *ClusterConn) DeleteAdhocObject(ctx context.Context, group, version, plu
 	if u.GetLabels()[AdhocLabel] != "true" {
 		return fmt.Errorf("%s %q is not a Klyx ad-hoc object (missing %s label) - refusing to delete", u.GetKind(), name, AdhocLabel)
 	}
+	if string(u.GetUID()) != uid {
+		return fmt.Errorf("%s %q was replaced since the scratch list was read - refresh and check it before deleting", u.GetKind(), name)
+	}
+	pinned := types.UID(uid)
+	opts := metav1.DeleteOptions{Preconditions: &metav1.Preconditions{UID: &pinned}}
 	if ns != "" {
-		err = resource.Namespace(ns).Delete(ctx, name, metav1.DeleteOptions{})
+		err = resource.Namespace(ns).Delete(ctx, name, opts)
 	} else {
-		err = resource.Delete(ctx, name, metav1.DeleteOptions{})
+		err = resource.Delete(ctx, name, opts)
 	}
 	if err != nil {
+		if apierrors.IsConflict(err) {
+			return fmt.Errorf("%s %q changed between the check and the delete, so nothing was deleted - refresh and try again", u.GetKind(), name)
+		}
 		return err
 	}
 	c.signalRefresh()
@@ -505,25 +682,25 @@ func (c *ClusterConn) DeleteAdhocObject(ctx context.Context, group, version, plu
 // via the TTL-cached discovery. The doc declares its version, so this is exact -
 // no preferred-version guessing. A miss names the likely causes (typo, CRD not
 // installed, or discovery cache staleness for a just-installed CRD).
-func (c *ClusterConn) resolveGVK(apiVersion, kind string) (schema.GroupVersionResource, bool, error) {
+func (c *ClusterConn) resolveGVK(apiVersion, kind string) (schema.GroupVersionResource, metav1.APIResource, error) {
 	if c.typed == nil {
-		return schema.GroupVersionResource{}, false, fmt.Errorf("discovery unavailable: no cluster connection")
+		return schema.GroupVersionResource{}, metav1.APIResource{}, fmt.Errorf("discovery unavailable: no cluster connection")
 	}
 	rl, err := c.discovery().ServerResourcesForGroupVersion(apiVersion)
 	if err != nil || rl == nil {
-		return schema.GroupVersionResource{}, false, fmt.Errorf("apiVersion %q is not served (typo, or the CRD is not installed)", apiVersion)
+		return schema.GroupVersionResource{}, metav1.APIResource{}, fmt.Errorf("apiVersion %q is not served (typo, or the CRD is not installed)", apiVersion)
 	}
 	gv, err := schema.ParseGroupVersion(apiVersion)
 	if err != nil {
-		return schema.GroupVersionResource{}, false, fmt.Errorf("parse apiVersion %q: %v", apiVersion, err)
+		return schema.GroupVersionResource{}, metav1.APIResource{}, fmt.Errorf("parse apiVersion %q: %v", apiVersion, err)
 	}
 	for _, res := range rl.APIResources {
 		if strings.Contains(res.Name, "/") { // subresources (pods/log, ...)
 			continue
 		}
 		if res.Kind == kind {
-			return schema.GroupVersionResource{Group: gv.Group, Version: gv.Version, Resource: res.Name}, res.Namespaced, nil
+			return schema.GroupVersionResource{Group: gv.Group, Version: gv.Version, Resource: res.Name}, res, nil
 		}
 	}
-	return schema.GroupVersionResource{}, false, fmt.Errorf("kind %q is not served under %q (typo, or a just-installed CRD - discovery refreshes within a minute)", kind, apiVersion)
+	return schema.GroupVersionResource{}, metav1.APIResource{}, fmt.Errorf("kind %q is not served under %q (typo, or a just-installed CRD - discovery refreshes within a minute)", kind, apiVersion)
 }

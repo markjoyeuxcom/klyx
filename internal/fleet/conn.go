@@ -84,8 +84,8 @@ type Conn interface {
 	ApplyResourceYAML(ctx context.Context, group, version, plural, kind, scope, ns, name, yaml string, dryRun bool) error
 	CreateResourceYAML(ctx context.Context, yamlDocs string, dryRun bool) []AdhocResult
 	LaunchDiagnosticPod(ctx context.Context, name, image string, ttlSeconds int64) AdhocResult
-	ListAdhocObjects(ctx context.Context) []AdhocObject
-	DeleteAdhocObject(ctx context.Context, group, version, plural, ns, name string) error
+	ListAdhocObjects(ctx context.Context) (AdhocInventory, error)
+	DeleteAdhocObject(ctx context.Context, group, version, plural, ns, name, uid string) error
 	GitOpsOwnership(ctx context.Context, group, kind, ns, name string) GitOpsOwnership
 	AccessCanI(ctx context.Context, spec rbac.CheckSpec, saNamespace, saName string) (rbac.Verdict, error)
 	AccessWhoCan(ctx context.Context, spec rbac.CheckSpec) (rbac.Enumeration, error)

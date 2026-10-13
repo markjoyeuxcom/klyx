@@ -1,4 +1,4 @@
-import { useFleet, sameResource, CRDGroupDTO, CRDCountDTO, crdCountKey, ResourceRef, InstanceDTO, InstanceRef, InstanceDetailDTO, GitOpsOwnershipDTO, AdhocResultDTO, AdhocObjectDTO } from "../store/fleet";
+import { useFleet, sameResource, CRDGroupDTO, CRDCountDTO, crdCountKey, ResourceRef, InstanceDTO, InstanceRef, InstanceDetailDTO, GitOpsOwnershipDTO, AdhocResultDTO, AdhocObjectDTO, AdhocInventoryDTO } from "../store/fleet";
 import { CRDService } from "../../bindings/github.com/moomora/klyx/internal/appbridge/index.js";
 import { Clipboard } from "@wailsio/runtime";
 
@@ -178,15 +178,23 @@ export async function createResourceYAML(cluster: string, yaml: string, dryRun: 
   return ((await CRDService.CreateResourceYAML(cluster, yaml, dryRun)) as AdhocResultDTO[]) ?? [];
 }
 
-// listAdhocObjects returns Klyx-created scratch objects (the cleanup inventory).
-export async function listAdhocObjects(cluster: string): Promise<AdhocObjectDTO[]> {
-  return ((await CRDService.ListAdhocObjects(cluster)) as AdhocObjectDTO[]) ?? [];
+// listAdhocObjects returns the Klyx-created scratch objects (the cleanup
+// inventory), the kinds that could not be read, and an error when the sweep
+// failed - a failed read is never an empty inventory.
+export async function listAdhocObjects(cluster: string): Promise<AdhocInventoryDTO> {
+  try {
+    const r = (await CRDService.ListAdhocObjects(cluster)) as AdhocInventoryDTO | null;
+    return { objects: r?.objects ?? [], unread: r?.unread ?? [], error: r?.error || undefined };
+  } catch (e) {
+    return { objects: [], unread: [], error: String(e) };
+  }
 }
 
-// deleteAdhocObject deletes one Klyx-created scratch object (label-guarded in
-// the backend: never deletes anything Klyx did not create).
+// deleteAdhocObject deletes one Klyx-created scratch object (label-guarded and
+// UID-pinned in the backend: never deletes anything Klyx did not create, nor a
+// replacement under the same name).
 export async function deleteAdhocObject(cluster: string, o: AdhocObjectDTO): Promise<{ ok: boolean; error: string }> {
-  const r = (await CRDService.DeleteAdhocObject(cluster, o.group, o.version, o.plural, o.namespace, o.name)) as { ok: boolean; error: string };
+  const r = (await CRDService.DeleteAdhocObject(cluster, o.group, o.version, o.plural, o.namespace, o.name, o.uid)) as { ok: boolean; error: string };
   return { ok: !!r.ok, error: r.error ?? "" };
 }
 

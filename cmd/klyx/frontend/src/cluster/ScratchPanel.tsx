@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { useFleet, AdhocObjectDTO } from "../store/fleet";
+import { useEffect, useRef, useState } from "react";
+import { useFleet, AdhocObjectDTO, AdhocInventoryDTO } from "../store/fleet";
 import { listAdhocObjects, deleteAdhocObject } from "../bridge/crd";
 import { launchDiagnosticPod } from "../bridge/pods";
 import { armProtected } from "../bridge/configsvc";
@@ -30,7 +30,13 @@ function ago(sec: number): string {
 // objects - a deadline kills a pod but does not delete it; this list does.
 export function ScratchPanel({ cluster, onClose, onLaunched }: { cluster: string; onClose: () => void; onLaunched?: (namespace: string) => void }) {
   const isProtected = useFleet((s) => s.clusters.find((c) => c.name === cluster)?.protected ?? false);
-  const [objects, setObjects] = useState<AdhocObjectDTO[] | null>(null);
+  // The inventory belongs to the cluster it was read from: a list read on one
+  // cluster never drives a delete on another (Codex review 2026-10-13), and a
+  // late reply for an older read is dropped by generation.
+  const [inv, setInv] = useState<(AdhocInventoryDTO & { cluster: string }) | null>(null);
+  const shown = inv && inv.cluster === cluster ? inv : null;
+  const objects = shown && !shown.error ? shown.objects : null;
+  const readGen = useRef(0);
   const [busy, setBusy] = useState(false);
   const [typed, setTyped] = useState("");
   const [podName, setPodName] = useState("dbg");
@@ -38,8 +44,24 @@ export function ScratchPanel({ cluster, onClose, onLaunched }: { cluster: string
   const [ttl, setTtl] = useState(TTL_CHOICES[1].seconds);
   const armed = !isProtected || typed === cluster;
 
-  const refresh = async () => setObjects(await listAdhocObjects(cluster));
-  useEffect(() => { void refresh(); }, [cluster]); // eslint-disable-line react-hooks/exhaustive-deps
+  const refresh = async () => {
+    const gen = ++readGen.current;
+    const from = cluster;
+    const r = await listAdhocObjects(from);
+    if (gen === readGen.current) setInv({ ...r, cluster: from });
+  };
+  // The panel is opened for one cluster. When the cluster changes underneath
+  // it, the arming text is cleared and the panel closes; a host that keeps it
+  // open gets a fresh read for the new cluster, never the old list.
+  const openedFor = useRef(cluster);
+  useEffect(() => {
+    if (openedFor.current !== cluster) {
+      openedFor.current = cluster;
+      setTyped("");
+      onClose();
+    }
+    void refresh();
+  }, [cluster]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const arm = async (): Promise<boolean> => {
     if (!isProtected) return true;
@@ -69,10 +91,12 @@ export function ScratchPanel({ cluster, onClose, onLaunched }: { cluster: string
   };
 
   const remove = async (o: AdhocObjectDTO) => {
+    const from = shown?.cluster;
+    if (from !== cluster) return; // the list on screen is not this cluster's
     setBusy(true);
     try {
       if (!(await arm())) return;
-      const r = await deleteAdhocObject(cluster, o);
+      const r = await deleteAdhocObject(from, o);
       useFleet.getState().setActionStatus(r.ok
         ? { kind: "success", message: `Deleted scratch ${o.kind} ${o.namespace ? `${o.namespace}/` : ""}${o.name}` }
         : { kind: "error", message: `Delete failed: ${r.error}` });
@@ -83,7 +107,8 @@ export function ScratchPanel({ cluster, onClose, onLaunched }: { cluster: string
   };
 
   const removeAll = async () => {
-    if (!objects || objects.length === 0) return;
+    const from = shown?.cluster;
+    if (!objects || objects.length === 0 || from !== cluster) return;
     setBusy(true);
     try {
       let failed = 0;
@@ -92,7 +117,7 @@ export function ScratchPanel({ cluster, onClose, onLaunched }: { cluster: string
       const ordered = [...objects.filter((o) => o.kind !== "Namespace"), ...objects.filter((o) => o.kind === "Namespace")];
       for (const o of ordered) {
         if (!(await arm())) return; // protected: the one-shot grant re-arms per call
-        const r = await deleteAdhocObject(cluster, o);
+        const r = await deleteAdhocObject(from, o);
         if (!r.ok) failed++;
       }
       useFleet.getState().setActionStatus(failed === 0
@@ -152,14 +177,29 @@ export function ScratchPanel({ cluster, onClose, onLaunched }: { cluster: string
           </button>
         </div>
 
-        {objects === null ? (
+        {shown && shown.unread.length > 0 && (
+          <details data-testid="scratch-unread" style={{ fontSize: 11, color: "var(--color-text-warning)" }}>
+            <summary style={{ cursor: "pointer" }}>Inventory incomplete - {shown.unread.length} kind{shown.unread.length === 1 ? "" : "s"} could not be read</summary>
+            <ul style={{ margin: "4px 0 0", paddingLeft: 16, fontFamily: "var(--font-mono)", color: "var(--color-text-secondary)" }}>
+              {shown.unread.map((u) => <li key={u}>{u}</li>)}
+            </ul>
+          </details>
+        )}
+
+        {shown?.error ? (
+          <div role="alert" style={{ fontSize: 11, color: "var(--color-text-danger)" }}>Could not read the scratch inventory on {cluster}: {shown.error}</div>
+        ) : objects === null ? (
           <div style={{ fontSize: 11, color: "var(--color-text-tertiary)" }}>loading…</div>
         ) : objects.length === 0 ? (
-          <div style={{ fontSize: 11, color: "var(--color-text-tertiary)" }}>No scratch objects on {cluster}. Everything Klyx creates ad-hoc shows up here.</div>
+          <div style={{ fontSize: 11, color: "var(--color-text-tertiary)" }}>
+            {shown && shown.unread.length > 0
+              ? `No scratch objects in the kinds Klyx could read on ${cluster}.`
+              : `No scratch objects on ${cluster}. Everything Klyx creates ad-hoc shows up here.`}
+          </div>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
             {objects.map((o) => (
-              <div key={`${o.plural}/${o.namespace}/${o.name}`} style={{ display: "flex", alignItems: "center", gap: 8, padding: "5px 9px", borderRadius: 4, border: "0.5px solid var(--color-border-tertiary)", background: "var(--color-background-secondary)", fontFamily: "var(--font-mono)", fontSize: 11 }}>
+              <div key={o.uid || `${o.plural}/${o.namespace}/${o.name}`} style={{ display: "flex", alignItems: "center", gap: 8, padding: "5px 9px", borderRadius: 4, border: "0.5px solid var(--color-border-tertiary)", background: "var(--color-background-secondary)", fontFamily: "var(--font-mono)", fontSize: 11 }}>
                 <span style={{ color: "var(--color-text-tertiary)", width: 110, flexShrink: 0 }}>{o.kind}</span>
                 <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{o.namespace ? `${o.namespace}/` : ""}{o.name}</span>
                 <div style={{ flex: 1 }} />

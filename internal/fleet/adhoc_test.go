@@ -2,13 +2,16 @@ package fleet
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	discoveryfake "k8s.io/client-go/discovery/fake"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	k8sfake "k8s.io/client-go/kubernetes/fake"
@@ -24,23 +27,25 @@ import (
 func adhocConn(t *testing.T) (*ClusterConn, *dynamicfake.FakeDynamicClient) {
 	t.Helper()
 	typed := k8sfake.NewSimpleClientset()
+	crud := []string{"create", "get", "list", "watch", "update", "patch", "delete"}
 	typed.Discovery().(*discoveryfake.FakeDiscovery).Resources = []*metav1.APIResourceList{
 		{GroupVersion: "v1", APIResources: []metav1.APIResource{
-			{Name: "pods", Kind: "Pod", Namespaced: true},
-			{Name: "pods/log", Kind: "Pod", Namespaced: true}, // subresource: must be skipped
-			{Name: "configmaps", Kind: "ConfigMap", Namespaced: true},
-			{Name: "secrets", Kind: "Secret", Namespaced: true},
+			{Name: "pods", Kind: "Pod", Namespaced: true, Verbs: crud},
+			{Name: "pods/log", Kind: "Pod", Namespaced: true, Verbs: []string{"get"}}, // subresource: must be skipped
+			{Name: "configmaps", Kind: "ConfigMap", Namespaced: true, Verbs: crud},
+			{Name: "secrets", Kind: "Secret", Namespaced: true, Verbs: crud},
+			{Name: "bindings", Kind: "Binding", Namespaced: true, Verbs: []string{"create"}}, // no list/delete: Scratch could not clean it
 		}},
 		{GroupVersion: "rbac.authorization.k8s.io/v1", APIResources: []metav1.APIResource{
-			{Name: "clusterroles", Kind: "ClusterRole", Namespaced: false},
+			{Name: "clusterroles", Kind: "ClusterRole", Namespaced: false, Verbs: crud},
 		}},
 	}
+	// Every GVR the scratch sweep lists must be registered with the fake.
 	listKinds := map[schema.GroupVersionResource]string{
+		{Group: "", Version: "v1", Resource: "pods"}:                                  "PodList",
+		{Group: "", Version: "v1", Resource: "configmaps"}:                            "ConfigMapList",
+		{Group: "", Version: "v1", Resource: "secrets"}:                               "SecretList",
 		{Group: "rbac.authorization.k8s.io", Version: "v1", Resource: "clusterroles"}: "ClusterRoleList",
-	}
-	// Every GVR the adhoc scratch sweep lists must be registered with the fake.
-	for _, e := range adhocListGVRs {
-		listKinds[e.gvr] = e.kind + "List"
 	}
 	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(dynScheme(), listKinds)
 	c := NewClusterConn("x", typed, nil, dyn, nil, clock.Real{}, config.MetricsConfig{})
@@ -187,13 +192,13 @@ func TestListAndDeleteAdhocObjects(t *testing.T) {
 	adhocPod := &unstructured.Unstructured{Object: map[string]interface{}{
 		"apiVersion": "v1", "kind": "Pod",
 		"metadata": map[string]interface{}{
-			"name": "dbg", "namespace": ScratchNamespace,
+			"name": "dbg", "namespace": ScratchNamespace, "uid": "uid-dbg",
 			"labels": map[string]interface{}{AdhocLabel: "true"},
 		},
 	}}
 	plainPod := &unstructured.Unstructured{Object: map[string]interface{}{
 		"apiVersion": "v1", "kind": "Pod",
-		"metadata": map[string]interface{}{"name": "app", "namespace": "prod"},
+		"metadata": map[string]interface{}{"name": "app", "namespace": "prod", "uid": "uid-app"},
 	}}
 	for _, p := range []*unstructured.Unstructured{adhocPod, plainPod} {
 		if _, err := dyn.Resource(podGVR).Namespace(p.GetNamespace()).Create(context.Background(), p, metav1.CreateOptions{}); err != nil {
@@ -201,17 +206,24 @@ func TestListAndDeleteAdhocObjects(t *testing.T) {
 		}
 	}
 
-	objs := c.ListAdhocObjects(context.Background())
-	if len(objs) != 1 || objs[0].Name != "dbg" || objs[0].Kind != "Pod" {
-		t.Fatalf("want exactly the adhoc pod, got %+v", objs)
+	inv, err := c.ListAdhocObjects(context.Background())
+	if err != nil || len(inv.Objects) != 1 || inv.Objects[0].Name != "dbg" || inv.Objects[0].Kind != "Pod" || inv.Objects[0].UID != "uid-dbg" || len(inv.Unread) != 0 {
+		t.Fatalf("want exactly the adhoc pod, got %+v %v", inv, err)
 	}
 
 	// The label guard refuses to delete a non-adhoc object...
-	if err := c.DeleteAdhocObject(context.Background(), "", "v1", "pods", "prod", "app"); err == nil || !strings.Contains(err.Error(), "not a Klyx ad-hoc object") {
+	if err := c.DeleteAdhocObject(context.Background(), "", "v1", "pods", "prod", "app", "uid-app"); err == nil || !strings.Contains(err.Error(), "not a Klyx ad-hoc object") {
 		t.Fatalf("non-adhoc delete must refuse: %v", err)
 	}
-	// ...and deletes a stamped one.
-	if err := c.DeleteAdhocObject(context.Background(), "", "v1", "pods", ScratchNamespace, "dbg"); err != nil {
+	// ...refuses without the listed UID, or when the object was replaced...
+	if err := c.DeleteAdhocObject(context.Background(), "", "v1", "pods", ScratchNamespace, "dbg", ""); err == nil {
+		t.Fatal("a delete without the listed UID must refuse")
+	}
+	if err := c.DeleteAdhocObject(context.Background(), "", "v1", "pods", ScratchNamespace, "dbg", "uid-older"); err == nil || !strings.Contains(err.Error(), "was replaced") {
+		t.Fatalf("a replaced object must not be deleted: %v", err)
+	}
+	// ...and deletes the stamped one it listed.
+	if err := c.DeleteAdhocObject(context.Background(), "", "v1", "pods", ScratchNamespace, "dbg", "uid-dbg"); err != nil {
 		t.Fatalf("adhoc delete failed: %v", err)
 	}
 	if _, err := dyn.Resource(podGVR).Namespace(ScratchNamespace).Get(context.Background(), "dbg", metav1.GetOptions{}); err == nil {
@@ -256,5 +268,143 @@ func TestCreateResourceYAML_DryRunDoesNotPersistAndWarnsOnPruneReach(t *testing.
 	// Dry-run must not persist.
 	if _, err := dyn2.Resource(schema.GroupVersionResource{Group: "", Version: "v1", Resource: "pods"}).Namespace("scratch").Get(context.Background(), "dbg", metav1.GetOptions{}); err == nil {
 		t.Fatal("dry-run persisted the object")
+	}
+}
+
+// Codex review 2026-10-13 #2: the delete carries a server-side UID
+// precondition, so a replacement created between the check and the delete
+// is never removed.
+func TestDeleteAdhocObjectPinsTheCheckedUID(t *testing.T) {
+	c, dyn := adhocConn(t)
+	dyn.PrependReactor("get", "pods", func(k8stesting.Action) (bool, runtime.Object, error) {
+		u := &unstructured.Unstructured{}
+		u.SetName("dbg")
+		u.SetNamespace("scratch")
+		u.SetUID("old")
+		u.SetLabels(map[string]string{AdhocLabel: "true"})
+		return true, u, nil
+	})
+	var opts metav1.DeleteOptions
+	dyn.PrependReactor("delete", "pods", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		opts = a.(k8stesting.DeleteAction).GetDeleteOptions()
+		return true, nil, nil
+	})
+	if err := c.DeleteAdhocObject(context.Background(), "", "v1", "pods", "scratch", "dbg", "old"); err != nil {
+		t.Fatal(err)
+	}
+	if opts.Preconditions == nil || opts.Preconditions.UID == nil || string(*opts.Preconditions.UID) != "old" {
+		t.Fatalf("delete can target a replacement: %+v", opts)
+	}
+
+	// A precondition conflict says nothing was deleted.
+	dyn.PrependReactor("delete", "pods", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewConflict(schema.GroupResource{Resource: "pods"}, "dbg", errors.New("Precondition failed: UID in precondition: old, UID in object meta: new"))
+	})
+	if err := c.DeleteAdhocObject(context.Background(), "", "v1", "pods", "scratch", "dbg", "old"); err == nil || !strings.Contains(err.Error(), "nothing was deleted") {
+		t.Fatalf("a precondition conflict must say nothing was deleted: %v", err)
+	}
+}
+
+// Codex review 2026-10-13 #5: the inventory sweeps every kind the composer can
+// create (a ClusterRole too), never a curated subset.
+func TestAdhocInventoryCoversEveryCreatableKind(t *testing.T) {
+	c, _ := adhocConn(t)
+	res := c.CreateResourceYAML(context.Background(), "apiVersion: rbac.authorization.k8s.io/v1\nkind: ClusterRole\nmetadata:\n  name: scratch-role\nrules: []\n", false)
+	if len(res) != 1 || !res[0].OK {
+		t.Fatalf("create failed: %+v", res)
+	}
+	inv, err := c.ListAdhocObjects(context.Background())
+	if err != nil || len(inv.Objects) != 1 || inv.Objects[0].Kind != "ClusterRole" || inv.Objects[0].Scope != "Cluster" {
+		t.Fatalf("the composer-created ClusterRole must be in the inventory: %+v %v", inv, err)
+	}
+}
+
+// The composer refuses a kind Scratch could not list and delete.
+func TestCreateRefusesKindsScratchCannotClean(t *testing.T) {
+	c, _ := adhocConn(t)
+	res := c.CreateResourceYAML(context.Background(), "apiVersion: v1\nkind: Binding\nmetadata:\n  name: b\n  namespace: scratch\n", false)
+	if len(res) != 1 || res[0].OK || !strings.Contains(res[0].Error, "could not clean it up") {
+		t.Fatalf("a kind without list/delete must be refused: %+v", res)
+	}
+}
+
+// A kind whose list fails is named, never silently dropped; the readable
+// kinds still come back.
+func TestAdhocInventoryNamesUnreadKinds(t *testing.T) {
+	c, dyn := adhocConn(t)
+	podGVR := schema.GroupVersionResource{Version: "v1", Resource: "pods"}
+	pod := &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "v1", "kind": "Pod",
+		"metadata": map[string]interface{}{"name": "dbg", "namespace": ScratchNamespace, "uid": "u1", "labels": map[string]interface{}{AdhocLabel: "true"}},
+	}}
+	if _, err := dyn.Resource(podGVR).Namespace(ScratchNamespace).Create(context.Background(), pod, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	dyn.PrependReactor("list", "clusterroles", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewForbidden(schema.GroupResource{Group: "rbac.authorization.k8s.io", Resource: "clusterroles"}, "", errors.New("no list"))
+	})
+	inv, err := c.ListAdhocObjects(context.Background())
+	if err != nil || len(inv.Objects) != 1 || inv.Objects[0].Name != "dbg" {
+		t.Fatalf("readable kinds must still be listed: %+v %v", inv, err)
+	}
+	if len(inv.Unread) != 1 || !strings.HasPrefix(inv.Unread[0], "clusterroles.rbac.authorization.k8s.io: ") {
+		t.Fatalf("the unreadable kind must be named: %+v", inv.Unread)
+	}
+}
+
+// The sweep follows continue tokens: objects past the first page are listed.
+func TestAdhocInventoryFollowsContinueTokens(t *testing.T) {
+	c, dyn := adhocConn(t)
+	page := func(names []string, cont string) *unstructured.UnstructuredList {
+		l := &unstructured.UnstructuredList{}
+		l.SetContinue(cont)
+		for _, n := range names {
+			u := unstructured.Unstructured{}
+			u.SetAPIVersion("v1")
+			u.SetKind("ConfigMap")
+			u.SetName(n)
+			u.SetNamespace(ScratchNamespace)
+			u.SetUID(types.UID("uid-" + n))
+			u.SetLabels(map[string]string{AdhocLabel: "true"}) // the fake applies the selector itself
+			l.Items = append(l.Items, u)
+		}
+		return l
+	}
+	// The fake drops ListOptions before reactors see them (known client-go
+	// issue), so pages are served by call order.
+	calls := 0
+	dyn.PrependReactor("list", "configmaps", func(k8stesting.Action) (bool, runtime.Object, error) {
+		calls++
+		if calls == 1 {
+			return true, page([]string{"a", "b"}, "next"), nil
+		}
+		return true, page([]string{"c"}, ""), nil
+	})
+	inv, err := c.ListAdhocObjects(context.Background())
+	if err != nil || len(inv.Objects) != 3 || calls != 2 {
+		t.Fatalf("want all three pages' objects in two calls, got %d objects in %d calls: %+v %v", len(inv.Objects), calls, inv, err)
+	}
+}
+
+// An object served under two resources (core and events.k8s.io Events, for
+// example) is listed once, by UID.
+func TestAdhocInventoryDedupesByUID(t *testing.T) {
+	c, dyn := adhocConn(t)
+	same := func() *unstructured.UnstructuredList {
+		l := &unstructured.UnstructuredList{}
+		u := unstructured.Unstructured{}
+		u.SetName("dup")
+		u.SetNamespace(ScratchNamespace)
+		u.SetUID("shared-uid")
+		u.SetLabels(map[string]string{AdhocLabel: "true"})
+		l.Items = append(l.Items, u)
+		return l
+	}
+	for _, r := range []string{"pods", "configmaps"} {
+		dyn.PrependReactor("list", r, func(k8stesting.Action) (bool, runtime.Object, error) { return true, same(), nil })
+	}
+	inv, err := c.ListAdhocObjects(context.Background())
+	if err != nil || len(inv.Objects) != 1 {
+		t.Fatalf("one UID must be listed once: %+v %v", inv, err)
 	}
 }

@@ -18,8 +18,8 @@ type CRDConn interface {
 	GetInstanceDetail(ctx context.Context, group, version, plural, ns, name string) (crd.InstanceDetail, error)
 	ApplyResourceYAML(ctx context.Context, group, version, plural, kind, scope, ns, name, yaml string, dryRun bool) error
 	CreateResourceYAML(ctx context.Context, yamlDocs string, dryRun bool) []fleet.AdhocResult
-	ListAdhocObjects(ctx context.Context) []fleet.AdhocObject
-	DeleteAdhocObject(ctx context.Context, group, version, plural, ns, name string) error
+	ListAdhocObjects(ctx context.Context) (fleet.AdhocInventory, error)
+	DeleteAdhocObject(ctx context.Context, group, version, plural, ns, name, uid string) error
 	RevealSecretKey(ctx context.Context, ns, name, key string) (string, error)
 	GitOpsOwnership(ctx context.Context, group, kind, ns, name string) fleet.GitOpsOwnership
 }
@@ -230,29 +230,34 @@ func (s *CRDService) CreateResourceYAML(cluster, yaml string, dryRun bool) []Adh
 }
 
 // ListAdhocObjects returns everything Klyx created ad-hoc on the cluster (the
-// scratch inventory: label klyx.dev/adhoc). Read-only.
-func (s *CRDService) ListAdhocObjects(cluster string) []AdhocObjectDTO {
+// scratch inventory: label klyx.dev/adhoc), the kinds that could not be read,
+// and an error when the sweep itself failed. Read-only.
+func (s *CRDService) ListAdhocObjects(cluster string) AdhocInventoryDTO {
 	conn, ok := s.lookup(cluster)
 	if !ok {
-		return []AdhocObjectDTO{}
+		return AdhocInventoryDTO{Objects: []AdhocObjectDTO{}, Unread: []string{}, Error: "cluster not connected: " + cluster}
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), crdTimeout)
 	defer cancel()
-	objs := conn.ListAdhocObjects(ctx)
-	out := make([]AdhocObjectDTO, 0, len(objs))
-	for _, o := range objs {
-		out = append(out, AdhocObjectDTO{
+	inv, err := conn.ListAdhocObjects(ctx)
+	if err != nil {
+		return AdhocInventoryDTO{Objects: []AdhocObjectDTO{}, Unread: []string{}, Error: err.Error()}
+	}
+	out := AdhocInventoryDTO{Objects: make([]AdhocObjectDTO, 0, len(inv.Objects)), Unread: append([]string{}, inv.Unread...)}
+	for _, o := range inv.Objects {
+		out.Objects = append(out.Objects, AdhocObjectDTO{
 			Kind: o.Kind, Group: o.Group, Version: o.Version, Plural: o.Plural,
-			Scope: o.Scope, Namespace: o.Namespace, Name: o.Name, AgeSeconds: o.AgeSeconds,
+			Scope: o.Scope, Namespace: o.Namespace, Name: o.Name, UID: o.UID, AgeSeconds: o.AgeSeconds,
 		})
 	}
 	return out
 }
 
-// DeleteAdhocObject deletes one Klyx-created scratch object. Label-guarded in
-// the data layer (never deletes anything Klyx did not create) and consumes the
+// DeleteAdhocObject deletes one Klyx-created scratch object. Label-guarded and
+// pinned to the listed UID in the data layer (never deletes anything Klyx did
+// not create, nor a replacement under the same name) and consumes the
 // protected-cluster grant like every destructive verb.
-func (s *CRDService) DeleteAdhocObject(cluster, group, version, plural, namespace, name string) ActionResultDTO {
+func (s *CRDService) DeleteAdhocObject(cluster, group, version, plural, namespace, name, uid string) ActionResultDTO {
 	if err := checkProtected(cluster); err != nil {
 		return ActionResultDTO{Error: err.Error()}
 	}
@@ -262,7 +267,7 @@ func (s *CRDService) DeleteAdhocObject(cluster, group, version, plural, namespac
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), crdTimeout)
 	defer cancel()
-	if err := conn.DeleteAdhocObject(ctx, group, version, plural, namespace, name); err != nil {
+	if err := conn.DeleteAdhocObject(ctx, group, version, plural, namespace, name, uid); err != nil {
 		return ActionResultDTO{Error: err.Error()}
 	}
 	return ActionResultDTO{OK: true}

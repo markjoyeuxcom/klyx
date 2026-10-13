@@ -32,6 +32,8 @@ type fakeCRDConn struct {
 	adhocObjects   []fleet.AdhocObject
 	adhocDeleted   []string
 	adhocDeleteErr error
+	adhocUnread    []string
+	adhocListErr   error
 
 	// read failures, for the error-honesty tests
 	listErr, countErr, instErr, detailErr error
@@ -72,10 +74,12 @@ func (f *fakeCRDConn) CreateResourceYAML(_ context.Context, yamlDocs string, dry
 	return f.createResults
 }
 
-func (f *fakeCRDConn) ListAdhocObjects(context.Context) []fleet.AdhocObject { return f.adhocObjects }
+func (f *fakeCRDConn) ListAdhocObjects(context.Context) (fleet.AdhocInventory, error) {
+	return fleet.AdhocInventory{Objects: f.adhocObjects, Unread: f.adhocUnread}, f.adhocListErr
+}
 
-func (f *fakeCRDConn) DeleteAdhocObject(_ context.Context, group, version, plural, ns, name string) error {
-	f.adhocDeleted = append(f.adhocDeleted, plural+"/"+ns+"/"+name)
+func (f *fakeCRDConn) DeleteAdhocObject(_ context.Context, group, version, plural, ns, name, uid string) error {
+	f.adhocDeleted = append(f.adhocDeleted, plural+"/"+ns+"/"+name+"@"+uid)
 	return f.adhocDeleteErr
 }
 
@@ -144,23 +148,36 @@ func TestCreateResourceYAMLMapsToDTO(t *testing.T) {
 
 func TestAdhocListAndDelete(t *testing.T) {
 	conn := &fakeCRDConn{adhocObjects: []fleet.AdhocObject{
-		{Kind: "Pod", Version: "v1", Plural: "pods", Scope: "Namespaced", Namespace: "klyx-scratch", Name: "dbg", AgeSeconds: 60},
-	}}
+		{Kind: "Pod", Version: "v1", Plural: "pods", Scope: "Namespaced", Namespace: "klyx-scratch", Name: "dbg", UID: "u-1", AgeSeconds: 60},
+	}, adhocUnread: []string{"clusterroles.rbac.authorization.k8s.io: forbidden"}}
 	svc := NewCRDService(func(string) (CRDConn, bool) { return conn, true })
 
-	objs := svc.ListAdhocObjects("x")
-	if len(objs) != 1 || objs[0].Name != "dbg" || objs[0].AgeSeconds != 60 {
-		t.Fatalf("list not mapped: %+v", objs)
+	inv := svc.ListAdhocObjects("x")
+	if inv.Error != "" || len(inv.Objects) != 1 || inv.Objects[0].Name != "dbg" || inv.Objects[0].UID != "u-1" || inv.Objects[0].AgeSeconds != 60 {
+		t.Fatalf("list not mapped: %+v", inv)
+	}
+	if len(inv.Unread) != 1 {
+		t.Fatalf("unread kinds must reach the DTO: %+v", inv)
 	}
 
-	r := svc.DeleteAdhocObject("x", "", "v1", "pods", "klyx-scratch", "dbg")
-	if !r.OK || len(conn.adhocDeleted) != 1 || conn.adhocDeleted[0] != "pods/klyx-scratch/dbg" {
-		t.Fatalf("delete not forwarded: %+v %v", r, conn.adhocDeleted)
+	r := svc.DeleteAdhocObject("x", "", "v1", "pods", "klyx-scratch", "dbg", "u-1")
+	if !r.OK || len(conn.adhocDeleted) != 1 || conn.adhocDeleted[0] != "pods/klyx-scratch/dbg@u-1" {
+		t.Fatalf("delete not forwarded with its UID: %+v %v", r, conn.adhocDeleted)
 	}
 
 	conn.adhocDeleteErr = errors.New("not a Klyx ad-hoc object")
-	if r := svc.DeleteAdhocObject("x", "", "v1", "pods", "prod", "app"); r.OK || r.Error == "" {
+	if r := svc.DeleteAdhocObject("x", "", "v1", "pods", "prod", "app", "u-2"); r.OK || r.Error == "" {
 		t.Fatalf("guard refusal must surface: %+v", r)
+	}
+
+	// A failed sweep is an error, never an empty inventory.
+	conn.adhocListErr = errors.New("discovery failed: timeout")
+	if inv := svc.ListAdhocObjects("x"); inv.Error == "" || len(inv.Objects) != 0 {
+		t.Fatalf("sweep failure must surface: %+v", inv)
+	}
+	miss := NewCRDService(func(string) (CRDConn, bool) { return nil, false })
+	if inv := miss.ListAdhocObjects("nope"); inv.Error == "" {
+		t.Fatalf("cluster miss must surface: %+v", inv)
 	}
 }
 

@@ -128,7 +128,18 @@ type AdhocObjectDTO struct {
 	Scope      string `json:"scope"`
 	Namespace  string `json:"namespace"`
 	Name       string `json:"name"`
+	UID        string `json:"uid"`
 	AgeSeconds int64  `json:"ageSeconds"`
+}
+
+// AdhocInventoryDTO is the scratch inventory. Unread names the kinds whose
+// list failed - non-empty means the inventory is incomplete. Error is set when
+// the sweep itself failed (no discovery, not connected); Objects is then
+// unreadable, never "no scratch objects".
+type AdhocInventoryDTO struct {
+	Objects []AdhocObjectDTO `json:"objects"`
+	Unread  []string         `json:"unread"`
+	Error   string           `json:"error,omitempty"`
 }
 
 // GitOpsOwnershipDTO is the authoritative pre-write verdict for one target
