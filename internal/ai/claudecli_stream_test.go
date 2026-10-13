@@ -260,6 +260,14 @@ func TestParseClaudeStream_Framing(t *testing.T) {
 		{"malformed line", []byte(strings.Replace(string(clean), `"type":"rate_limit_event"`, `"type":`, 1)), ErrUnexpectedOutput},
 		{"duplicate key", []byte(strings.Replace(string(clean), `"type":"result"`, `"type":"result","type":"assistant"`, 1)), ErrUnexpectedOutput},
 		{"not UTF-8", append([]byte{0xff}, clean...), ErrUnexpectedOutput},
+		// Codex review of 09cb2d8: duplicate keys at any depth, and null or
+		// mistyped required values.
+		{"duplicate type in a content block", []byte(strings.Replace(string(clean), `{"text":"`+answer+`","type":"text"}`, `{"type":"tool_use","text":"`+answer+`","type":"text"}`, 1)), ErrUnexpectedOutput},
+		{"duplicate key in usage", []byte(strings.Replace(string(clean), `"input_tokens":10,`, `"input_tokens":10,"input_tokens":11,`, 1)), ErrUnexpectedOutput},
+		{"is_error null", []byte(strings.Replace(string(clean), `"is_error":false`, `"is_error":null`, 1)), ErrUnexpectedOutput},
+		{"is_error as a string", []byte(strings.Replace(string(clean), `"is_error":false`, `"is_error":"false"`, 1)), ErrUnexpectedOutput},
+		{"num_turns as a string", []byte(strings.Replace(string(clean), `"num_turns":1`, `"num_turns":"1"`, 1)), ErrUnexpectedOutput},
+		{"result text null", []byte(strings.Replace(string(clean), `"result":"`+answer+`"`, `"result":null`, 1)), ErrUnexpectedOutput},
 		{"plain text", []byte("I can't help with that.\n"), ErrUnexpectedOutput},
 	}
 	for _, tc := range cases {

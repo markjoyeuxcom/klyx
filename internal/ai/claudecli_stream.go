@@ -277,8 +277,7 @@ func checkResult(m map[string]json.RawMessage, w streamWant, sessionID, streamed
 	if v, ok := rawBool(m, "is_error"); !ok || v {
 		return "", contractBreak("a success result that reports an error")
 	}
-	var turns json.Number
-	if err := json.Unmarshal(m["num_turns"], &turns); err != nil || turns.String() != "1" {
+	if string(bytes.TrimSpace(m["num_turns"])) != "1" {
 		return "", contractBreak("a result with other than one turn")
 	}
 	if !rawNull(m, "errors") || !rawNull(m, "structured_output") {

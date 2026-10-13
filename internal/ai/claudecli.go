@@ -50,51 +50,164 @@ func cliRefused(format string, args ...any) error {
 }
 
 // CLIAdmission is the record of an admitted Claude Code (spec §1.4): the
-// exact binary, the lockdown configuration and the account it was checked
-// against. It lives in memory only.
+// exact binary, the account it was checked against, and the lockdown
+// configurations (argv hashes, one per model) whose flags were proven. It
+// lives in memory only and is never mutated once published.
 type CLIAdmission struct {
 	ExeSHA256 string
 	Version   string
 	Platform  string
-	ArgvHash  string
 	CheckedAt time.Time
-	account   string // the account identity hash
+	account   string          // the account identity hash
+	argv      map[string]bool // admitted lockdown configurations
 }
 
 // claudeAdmissionStore holds the one admission of this Klyx run, shared by
-// every Claude Code provider built from settings, so a revocation survives a
-// settings save and only Test lifts it.
+// every Claude Code provider built from settings. A call works within the
+// epoch it started in: it can publish an admission, and release its prompt,
+// only while nothing is revoked and that epoch is current - so a revocation
+// by a concurrent call is never overwritten, and a prompt never leaves after
+// one (Codex review of 09cb2d8). Only Test (reset) clears a revocation, and
+// it starts a new epoch as it does, so no call from before the Test can
+// carry on under the new admission.
 type claudeAdmissionStore struct {
 	mu      sync.Mutex
+	epoch   uint64
 	rec     *CLIAdmission
 	revoked string
 }
 
 var defaultClaudeAdmissions = &claudeAdmissionStore{}
 
-func (s *claudeAdmissionStore) get() (*CLIAdmission, string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.rec, s.revoked
-}
+const admissionChanged = "Claude Code's admission changed while this call was being checked; try again"
 
-func (s *claudeAdmissionStore) set(rec *CLIAdmission) {
+func (s *claudeAdmissionStore) snapshot() (*CLIAdmission, string, uint64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.rec, s.revoked = rec, ""
+	return s.rec, s.revoked, s.epoch
 }
 
 func (s *claudeAdmissionStore) revoke(reason string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.revokeLocked(reason)
+}
+
+func (s *claudeAdmissionStore) revokeLocked(reason string) {
 	s.rec, s.revoked = nil, reason
 }
 
-func (s *claudeAdmissionStore) reset() {
+// reset is Test: it clears any admission and revocation and starts a new
+// epoch, which in-flight calls of the old one can no longer use.
+func (s *claudeAdmissionStore) reset() uint64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.rec, s.revoked = nil, ""
+	s.epoch++
+	return s.epoch
 }
+
+// currentLocked refuses a call whose epoch is over: revoked, or reset by a
+// Test, since it started.
+func (s *claudeAdmissionStore) currentLocked(epoch uint64) error {
+	if s.revoked != "" {
+		return cliRefused("%s", s.revoked)
+	}
+	if s.epoch != epoch {
+		return cliRefused("%s", admissionChanged)
+	}
+	return nil
+}
+
+// identityLocked revokes when the call's binary or account is not the
+// admitted one.
+func (s *claudeAdmissionStore) identityLocked(exe, account string) error {
+	var why string
+	switch {
+	case s.rec.ExeSHA256 != exe:
+		why = "The Claude Code binary changed since it was admitted; run Test in Settings > AI to admit it"
+	case s.rec.account != account:
+		why = "The Claude Code account changed since it was admitted; run Test in Settings > AI to admit the new one"
+	default:
+		return nil
+	}
+	s.revokeLocked(why)
+	return cliRefused("%s", why)
+}
+
+// check compares a call's binary and account with the admission, within the
+// call's epoch, and reports whether this lockdown configuration still needs
+// admitting.
+func (s *claudeAdmissionStore) check(epoch uint64, exe, account, argv string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.currentLocked(epoch); err != nil {
+		return false, err
+	}
+	if s.rec == nil {
+		return true, nil
+	}
+	if err := s.identityLocked(exe, account); err != nil {
+		return false, err
+	}
+	return !s.rec.argv[argv], nil
+}
+
+// publish records an admission made within epoch. It never clears a newer
+// revocation, and an admission published meanwhile for another binary or
+// account is an identity change.
+func (s *claudeAdmissionStore) publish(epoch uint64, exe exeIdentity, account, argv string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.currentLocked(epoch); err != nil {
+		return err
+	}
+	if s.rec != nil {
+		if err := s.identityLocked(exe.SHA256, account); err != nil {
+			return err
+		}
+	}
+	next := &CLIAdmission{ExeSHA256: exe.SHA256, Version: exe.Contract.Version, Platform: exe.Contract.platform(), CheckedAt: time.Now(), account: account, argv: map[string]bool{argv: true}}
+	if s.rec != nil {
+		next.CheckedAt = s.rec.CheckedAt
+		for a := range s.rec.argv {
+			next.argv[a] = true
+		}
+	}
+	s.rec = next
+	return nil
+}
+
+// valid is the last check before a prompt is released: the call's epoch is
+// current and its binary, account and configuration are the admitted ones.
+func (s *claudeAdmissionStore) valid(t callTicket) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.currentLocked(t.epoch); err != nil {
+		return err
+	}
+	if s.rec == nil || s.rec.ExeSHA256 != t.exe.SHA256 || s.rec.account != t.account || !s.rec.argv[t.argv] {
+		return cliRefused("%s", admissionChanged)
+	}
+	return nil
+}
+
+// callTicket is what one call's preflight established: the binary, the
+// account and configuration it was checked against, and its epoch.
+type callTicket struct {
+	exe     exeIdentity
+	account string
+	argv    string
+	epoch   uint64
+}
+
+// transientError marks a helper failure that says nothing about the CLI's
+// identity or contract - a timeout, a cancel, a process that did not start:
+// it fails the call without revoking admission.
+type transientError struct{ err error }
+
+func (e *transientError) Error() string { return e.err.Error() }
+func (e *transientError) Unwrap() error { return e.err }
 
 // exeHashCache avoids re-hashing a 240 MB binary on every call: an entry is
 // reused only while the file's size, mtime and inode are unchanged.
@@ -193,9 +306,15 @@ type claudeCLIProvider struct {
 	tmpDir    string // "" = the system temp dir
 	// policyRoot prefixes the absolute managed-policy paths; tests only.
 	policyRoot string
-	// afterLaunch runs between starting the CLI and the final policy
-	// re-check; tests only.
-	afterLaunch func()
+	// Helper deadlines; tests shorten them.
+	authDeadline   time.Duration
+	doctorDeadline time.Duration
+	// Tests only: afterHelpers runs after doctor, beforePublish before an
+	// admission is published, and afterLaunch between starting the CLI and
+	// the final checks.
+	afterHelpers  func()
+	beforePublish func()
+	afterLaunch   func()
 }
 
 // NewClaudeCLI builds the Claude Code provider. Nothing runs until a call.
@@ -208,6 +327,7 @@ func newClaudeCLI(cliPath, model string) *claudeCLIProvider {
 		cliPath: cliPath, model: model, environ: os.Environ, lookPath: exec.LookPath,
 		contracts: reviewedClaudeContracts, goos: runtime.GOOS, goarch: runtime.GOARCH,
 		store: defaultClaudeAdmissions, hashes: defaultExeHashes,
+		authDeadline: claudeAuthDeadline, doctorDeadline: claudeDocDeadline,
 	}
 }
 
@@ -469,7 +589,7 @@ func runContained(ctx context.Context, s runSpec) runResult {
 func (p *claudeCLIProvider) helper(ctx context.Context, exe exeIdentity, deadline time.Duration, rootSwitches bool, args ...string) ([]byte, int, error) {
 	dir, err := p.callDir()
 	if err != nil {
-		return nil, 0, cliRefused("Klyx could not make a working directory for Claude Code: %v", err)
+		return nil, 0, &transientError{cliRefused("Klyx could not make a working directory for Claude Code: %v", err)}
 	}
 	defer func() { _ = os.RemoveAll(dir) }() // best-effort temp cleanup
 	if rootSwitches {
@@ -479,12 +599,12 @@ func (p *claudeCLIProvider) helper(ctx context.Context, exe exeIdentity, deadlin
 	name := "claude " + strings.Join(args, " ")
 	switch {
 	case r.startErr != nil:
-		return nil, 0, cliRefused("%s could not start: %v", name, r.startErr)
+		return nil, 0, &transientError{cliRefused("%s could not start: %v", name, r.startErr)}
 	case r.timedOut:
 		if err := ctx.Err(); err != nil {
-			return nil, 0, err
+			return nil, 0, &transientError{err}
 		}
-		return nil, 0, cliRefused("%s did not finish in time", name)
+		return nil, 0, &transientError{cliRefused("%s did not finish in time", name)}
 	case r.stdoutOver || r.stderrOver:
 		return nil, 0, cliRefused("%s printed more output than its reviewed contract allows", name)
 	}
@@ -496,7 +616,7 @@ func (p *claudeCLIProvider) account(ctx context.Context, exe exeIdentity) (claud
 	if err != nil {
 		return claudeAccount{}, err
 	}
-	out, code, err := p.helper(ctx, exe, claudeAuthDeadline, true, "auth", "status", "--json")
+	out, code, err := p.helper(ctx, exe, p.authDeadline, true, "auth", "status", "--json")
 	if err != nil {
 		return claudeAccount{}, err
 	}
@@ -511,7 +631,7 @@ func (p *claudeCLIProvider) account(ctx context.Context, exe exeIdentity) (claud
 }
 
 func (p *claudeCLIProvider) doctor(ctx context.Context, exe exeIdentity) error {
-	out, code, err := p.helper(ctx, exe, claudeDocDeadline, true, "doctor")
+	out, code, err := p.helper(ctx, exe, p.doctorDeadline, true, "doctor")
 	if err != nil {
 		return err
 	}
@@ -574,71 +694,84 @@ func (p *claudeCLIProvider) flagProbe(ctx context.Context, exe exeIdentity) erro
 }
 
 // preflight is every check before a prompt-bearing call (spec §1.5 checks
-// 1-7), plus admission. Test (admit) clears any revocation and admits
-// afresh; otherwise an existing admission is compared - a changed binary or
-// account revokes it until the next Test - and one is established when there
-// is none for this lockdown configuration (the first call of a run, or a new
-// model).
-func (p *claudeCLIProvider) preflight(ctx context.Context, admit bool) (exeIdentity, error) {
+// 1-7), plus admission, all within one admission epoch. Test (admit) clears
+// any revocation and starts a new epoch; otherwise a revoked CLI is refused
+// at once. A changed binary or account, or a sign-in that is disallowed or
+// cannot be determined, revokes admission until the next Test; a timeout or
+// cancel fails only this call. A lockdown configuration not yet admitted (the
+// first call of a run, or a new model) is admitted and published - unless the
+// epoch ended meanwhile.
+func (p *claudeCLIProvider) preflight(ctx context.Context, admit bool) (callTicket, error) {
+	var epoch uint64
 	if admit {
-		p.store.reset()
-	} else if _, revoked := p.store.get(); revoked != "" {
-		return exeIdentity{}, cliRefused("%s", revoked)
+		epoch = p.store.reset()
+	} else {
+		_, revoked, e := p.store.snapshot()
+		if revoked != "" {
+			return callTicket{}, cliRefused("%s", revoked)
+		}
+		epoch = e
 	}
 	exe, err := p.executable()
 	if err != nil {
-		return exeIdentity{}, err
+		return callTicket{}, err
 	}
 	if err := p.checkPolicy(); err != nil {
-		return exeIdentity{}, err
+		return callTicket{}, err
 	}
 	acct, err := p.account(ctx, exe)
 	if err != nil {
-		return exeIdentity{}, err
+		var te *transientError
+		if !errors.As(err, &te) {
+			reason := strings.TrimRight(err.Error(), ".") + ". Klyx revoked the CLI's admission; run Test in Settings > AI to admit it again"
+			p.store.revoke(reason)
+			return callTicket{}, cliRefused("%s", reason)
+		}
+		return callTicket{}, err
 	}
 	if err := p.doctor(ctx, exe); err != nil {
-		return exeIdentity{}, err
+		return callTicket{}, err
+	}
+	if p.afterHelpers != nil {
+		p.afterHelpers()
 	}
 	if err := p.checkPolicy(); err != nil {
-		return exeIdentity{}, err
+		return callTicket{}, err
 	}
-	rec, _ := p.store.get()
-	if rec != nil {
-		var why string
-		switch {
-		case rec.ExeSHA256 != exe.SHA256:
-			why = "The Claude Code binary changed since it was admitted; run Test in Settings > AI to admit it"
-		case rec.account != acct.identity:
-			why = "The Claude Code account changed since it was admitted; run Test in Settings > AI to admit the new one"
-		}
-		if why != "" {
-			p.store.revoke(why)
-			return exeIdentity{}, cliRefused("%s", why)
-		}
+	t := callTicket{exe: exe, account: acct.identity, argv: claudeArgvHash(p.model), epoch: epoch}
+	need, err := p.store.check(epoch, exe.SHA256, acct.identity, t.argv)
+	if err != nil {
+		return callTicket{}, err
 	}
-	argv := claudeArgvHash(p.model)
-	if rec == nil || rec.ArgvHash != argv {
+	if need {
 		// Admission for this binary, account and lockdown configuration:
 		// the version line and the flag-recognition probe, then policy once
 		// more, since both took time.
 		if err := p.version(ctx, exe); err != nil {
-			return exeIdentity{}, err
+			return callTicket{}, err
 		}
 		if err := p.flagProbe(ctx, exe); err != nil {
-			return exeIdentity{}, err
+			return callTicket{}, err
 		}
 		if err := p.checkPolicy(); err != nil {
-			return exeIdentity{}, err
+			return callTicket{}, err
 		}
-		p.store.set(&CLIAdmission{ExeSHA256: exe.SHA256, Version: exe.Contract.Version, Platform: exe.Contract.platform(), ArgvHash: argv, CheckedAt: time.Now(), account: acct.identity})
+		if p.beforePublish != nil {
+			p.beforePublish()
+		}
+		if err := p.store.publish(epoch, exe, acct.identity, t.argv); err != nil {
+			return callTicket{}, err
+		}
 	}
-	return exe, nil
+	return t, nil
 }
 
 // run is one prompt-bearing Claude Code process: the system text in a 0600
-// file, the evidence on stdin only after a final policy re-check, and the
-// output held to the reviewed contract.
-func (p *claudeCLIProvider) run(ctx context.Context, exe exeIdentity, req Request, setup func(dir string) error) (string, error) {
+// file, the evidence on stdin only after a final policy re-check and a check
+// that the call's admission epoch is still current, and the output held to
+// the reviewed contract.
+func (p *claudeCLIProvider) run(ctx context.Context, t callTicket, req Request, setup func(dir string) error) (string, error) {
+	exe := t.exe
 	dir, err := p.callDir()
 	if err != nil {
 		return "", cliRefused("Klyx could not make a working directory for Claude Code: %v", err)
@@ -661,7 +794,10 @@ func (p *claudeCLIProvider) run(ctx context.Context, exe exeIdentity, req Reques
 			if p.afterLaunch != nil {
 				p.afterLaunch()
 			}
-			return p.checkPolicy()
+			if err := p.checkPolicy(); err != nil {
+				return err
+			}
+			return p.store.valid(t)
 		},
 	})
 	switch {
@@ -695,11 +831,11 @@ func (p *claudeCLIProvider) run(ctx context.Context, exe exeIdentity, req Reques
 
 // Complete runs one completion through Claude Code.
 func (p *claudeCLIProvider) Complete(ctx context.Context, req Request) (Result, error) {
-	exe, err := p.preflight(ctx, false)
+	t, err := p.preflight(ctx, false)
 	if err != nil {
 		return Result{}, err
 	}
-	text, err := p.run(ctx, exe, req, nil)
+	text, err := p.run(ctx, t, req, nil)
 	if err != nil {
 		return Result{}, err
 	}
@@ -717,7 +853,7 @@ const (
 // command. A reply that quotes the marker file's name or the canary's token
 // could only come from a tool: admission is revoked.
 func (p *claudeCLIProvider) Probe(ctx context.Context) (Result, error) {
-	exe, err := p.preflight(ctx, true)
+	t, err := p.preflight(ctx, true)
 	if err != nil {
 		return Result{}, err
 	}
@@ -732,7 +868,7 @@ func (p *claudeCLIProvider) Probe(ctx context.Context) (Result, error) {
 		return Result{}, err
 	}
 	marker := "klyx-marker-" + randHex(8)
-	text, err := p.run(ctx, exe, Request{System: claudeProbeSystem, User: fmt.Sprintf(claudeProbePrompt, canary), Purpose: PurposeProbe}, func(dir string) error {
+	text, err := p.run(ctx, t, Request{System: claudeProbeSystem, User: fmt.Sprintf(claudeProbePrompt, canary), Purpose: PurposeProbe}, func(dir string) error {
 		return os.WriteFile(filepath.Join(dir, marker), []byte("x\n"), 0o600)
 	})
 	if err != nil {
@@ -749,7 +885,7 @@ func (p *claudeCLIProvider) Probe(ctx context.Context) (Result, error) {
 // Ready reports, without running Claude Code, whether a call could be
 // admitted: the binary is a reviewed build and admission was not revoked.
 func (p *claudeCLIProvider) Ready() error {
-	if _, revoked := p.store.get(); revoked != "" {
+	if _, revoked, _ := p.store.snapshot(); revoked != "" {
 		return cliRefused("%s", revoked)
 	}
 	_, err := p.executable()
@@ -782,7 +918,7 @@ func (p *claudeCLIProvider) Status() CLIStatus {
 	} else {
 		st.Version, st.SHA256, st.Reviewed = exe.Contract.Version, exe.SHA256[:12], true
 	}
-	rec, revoked := p.store.get()
+	rec, revoked, _ := p.store.snapshot()
 	switch {
 	case revoked != "":
 		st.Problem = revoked

@@ -9,12 +9,15 @@ import (
 )
 
 // strictObject decodes data as exactly one JSON object and returns its
-// top-level members undecoded. A duplicate key, a value that is not an
-// object, or anything after the object other than whitespace is an error:
-// encoding/json alone keeps the last of two duplicate keys and stops reading
-// at the end of the first value, and either could hide a second, contrary
-// answer from a pinned CLI contract (spec §1.5).
+// top-level members undecoded. A duplicate key at any depth, a value that is
+// not an object, or anything after the object other than whitespace is an
+// error: encoding/json alone keeps the last of two duplicate keys and stops
+// reading at the end of the first value, and either could hide a second,
+// contrary answer from a pinned CLI contract (spec §1.5).
 func strictObject(data []byte) (map[string]json.RawMessage, error) {
+	if err := noDuplicateKeys(data); err != nil {
+		return nil, err
+	}
 	dec := json.NewDecoder(bytes.NewReader(data))
 	tok, err := dec.Token()
 	if err != nil {
@@ -51,11 +54,59 @@ func strictObject(data []byte) (map[string]json.RawMessage, error) {
 	return out, nil
 }
 
-// rawString reads member k as a string; ok is false when it is absent or not
-// a string.
+// noDuplicateKeys walks a JSON text and refuses a key repeated in any one
+// object, at any depth (Codex review of 09cb2d8: a content block with two
+// "type" keys must not read as whichever came last).
+func noDuplicateKeys(data []byte) error {
+	type frame struct {
+		obj     bool
+		wantKey bool
+		keys    map[string]bool
+	}
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.UseNumber()
+	var stack []*frame
+	for {
+		tok, err := dec.Token()
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if d, ok := tok.(json.Delim); ok && (d == '}' || d == ']') {
+			stack = stack[:len(stack)-1]
+			continue
+		}
+		var top *frame
+		if len(stack) > 0 {
+			top = stack[len(stack)-1]
+		}
+		if top != nil && top.obj && top.wantKey {
+			k, ok := tok.(string)
+			if !ok {
+				return errors.New("malformed JSON object key")
+			}
+			if top.keys[k] {
+				return fmt.Errorf("duplicate key %q", label(k))
+			}
+			top.keys[k], top.wantKey = true, false
+			continue
+		}
+		if top != nil && top.obj {
+			top.wantKey = true // after this value, the next token is a key
+		}
+		if d, ok := tok.(json.Delim); ok {
+			stack = append(stack, &frame{obj: d == '{', wantKey: d == '{', keys: map[string]bool{}})
+		}
+	}
+}
+
+// rawString reads member k as a string; ok is false when it is absent, null
+// or not a string.
 func rawString(m map[string]json.RawMessage, k string) (string, bool) {
-	raw, present := m[k]
-	if !present {
+	raw := bytes.TrimSpace(m[k])
+	if len(raw) == 0 || raw[0] != '"' {
 		return "", false
 	}
 	var s string
@@ -65,17 +116,16 @@ func rawString(m map[string]json.RawMessage, k string) (string, bool) {
 	return s, true
 }
 
-// rawBool reads member k as a boolean; ok is false when it is absent or not
-// a boolean.
+// rawBool reads member k as a literal boolean; ok is false when it is
+// absent, null or anything else (json.Unmarshal alone reads null as false).
 func rawBool(m map[string]json.RawMessage, k string) (v, ok bool) {
-	raw, present := m[k]
-	if !present {
-		return false, false
+	switch string(bytes.TrimSpace(m[k])) {
+	case "true":
+		return true, true
+	case "false":
+		return false, true
 	}
-	if err := json.Unmarshal(raw, &v); err != nil {
-		return false, false
-	}
-	return v, true
+	return false, false
 }
 
 // rawNull reports whether member k is absent or JSON null.

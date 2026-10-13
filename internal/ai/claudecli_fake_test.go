@@ -33,6 +33,7 @@ type fakeSpec struct {
 	Version       string `json:"version"`
 	Auth          string `json:"auth"`
 	AuthExit      int    `json:"authExit"`
+	AuthHang      bool   `json:"authHang"`
 	Doctor        string `json:"doctor"`
 	DoctorCreates string `json:"doctorCreates"` // a path doctor creates (policy appearing)
 	IgnoreFlags   bool   `json:"ignoreFlags"`   // accept the sentinel (a CLI that does not know the flags)
@@ -93,6 +94,9 @@ func fakeClaude() (int, bool) {
 		return 0, true
 	case has("auth") && has("status"):
 		logCall("auth " + strings.Join(args, " "))
+		if spec.AuthHang {
+			time.Sleep(time.Hour)
+		}
 		fmt.Print(spec.Auth)
 		return spec.AuthExit, true
 	case has("doctor"):
@@ -147,7 +151,14 @@ func fakeClaude() (int, bool) {
 		}
 	}
 	jt, _ := json.Marshal(text)
+	model := ""
+	for i, a := range args {
+		if a == "--model" && i+1 < len(args) {
+			model = args[i+1]
+		}
+	}
 	out := strings.ReplaceAll(spec.Stream, "{{CWD}}", cwd)
+	out = strings.ReplaceAll(out, "{{MODEL}}", model)
 	out = strings.ReplaceAll(out, `"{{TEXT}}"`, string(jt))
 	fmt.Print(out)
 	fmt.Fprint(os.Stderr, spec.Stderr)
@@ -172,8 +183,12 @@ func fakeStream(t *testing.T) string {
 	events := cleanEvents()
 	events[0]["cwd"] = "{{CWD}}"
 	events[0]["claude_code_version"] = fakeVersion
+	events[0]["model"] = "{{MODEL}}"
+	events[1]["message"].(map[string]any)["model"] = "{{MODEL}}"
 	events[2] = assistantEvent(map[string]any{"type": "text", "text": "{{TEXT}}"})
+	events[2]["message"].(map[string]any)["model"] = "{{MODEL}}"
 	events[5]["result"] = "{{TEXT}}"
+	events[5]["modelUsage"] = map[string]any{"{{MODEL}}": map[string]any{"inputTokens": 1}}
 	return string(stream(t, events))
 }
 
@@ -221,6 +236,9 @@ func newFakeCLI(t *testing.T) *fakeCLI {
 		hashes:     &exeHashCache{m: map[string]exeHashEntry{}},
 		tmpDir:     tmp,
 		policyRoot: f.policyRoot,
+		// Generous for -race, where each re-exec of this binary takes about
+		// a second.
+		authDeadline: 20 * time.Second, doctorDeadline: 20 * time.Second,
 	}
 	f.write()
 	return f
@@ -263,6 +281,7 @@ func wantRefused(t *testing.T, err error, want string) {
 }
 
 func TestClaudeCLI_CleanCall(t *testing.T) {
+	t.Parallel() // each fake owns its HOME, temp dir and admission store
 	f := newFakeCLI(t)
 	res, err := f.complete()
 	if err != nil || res.Text != answer || res.ModelUsed != tModel {
@@ -309,7 +328,7 @@ func TestClaudeCLI_CleanCall(t *testing.T) {
 	if _, err := os.Stat(rec.Cwd); !os.IsNotExist(err) {
 		t.Fatalf("the call dir %s outlived the call", rec.Cwd)
 	}
-	rec2, _ := f.p.store.get()
+	rec2, _, _ := f.p.store.snapshot()
 	if rec2 == nil || rec2.ExeSHA256 != f.contract.SHA256 || rec2.Version != fakeVersion {
 		t.Fatalf("admission = %+v", rec2)
 	}
@@ -325,6 +344,7 @@ func TestClaudeCLI_CleanCall(t *testing.T) {
 }
 
 func TestClaudeCLI_UnreviewedBinaryRunsNothing(t *testing.T) {
+	t.Parallel() // each fake owns its HOME, temp dir and admission store
 	f := newFakeCLI(t)
 	f.p.contracts = []claudeContract{{Version: "2.1.296", GOOS: runtime.GOOS, GOARCH: runtime.GOARCH, SHA256: strings.Repeat("0", 64)}}
 	_, err := f.complete()
@@ -346,6 +366,7 @@ func TestClaudeCLI_UnreviewedBinaryRunsNothing(t *testing.T) {
 }
 
 func TestClaudeCLI_ShimRefused(t *testing.T) {
+	t.Parallel() // each fake owns its HOME, temp dir and admission store
 	f := newFakeCLI(t)
 	shim := filepath.Join(t.TempDir(), "claude")
 	os.WriteFile(shim, []byte("#!/bin/sh\nexec node cli.js \"$@\"\n"), 0o755)
@@ -355,6 +376,7 @@ func TestClaudeCLI_ShimRefused(t *testing.T) {
 }
 
 func TestClaudeCLI_PolicyRefusesBeforeAnyHelper(t *testing.T) {
+	t.Parallel() // each fake owns its HOME, temp dir and admission store
 	for _, path := range []string{
 		"/Library/Application Support/ClaudeCode/managed-settings.json",
 		"/etc/claude-code/managed-settings.json",
@@ -386,6 +408,7 @@ func TestClaudeCLI_PolicyRefusesBeforeAnyHelper(t *testing.T) {
 // Policy that appears while the helpers run is caught before launch - on an
 // admitted CLI too, where no admission re-check follows the helpers.
 func TestClaudeCLI_PolicyAppearsDuringHelpers(t *testing.T) {
+	t.Parallel() // each fake owns its HOME, temp dir and admission store
 	pp := claudePolicyPaths(runtime.GOOS, "tester")
 	if len(pp) == 0 {
 		t.Skip("no policy paths on this platform")
@@ -411,6 +434,7 @@ func TestClaudeCLI_PolicyAppearsDuringHelpers(t *testing.T) {
 
 // Policy that appears after launch kills the CLI before stdin is written.
 func TestClaudeCLI_PolicyAppearsAfterLaunch(t *testing.T) {
+	t.Parallel() // each fake owns its HOME, temp dir and admission store
 	f := newFakeCLI(t)
 	f.p.afterLaunch = func() {
 		os.MkdirAll(filepath.Join(f.home, ".claude"), 0o700)
@@ -427,6 +451,7 @@ func TestClaudeCLI_PolicyAppearsAfterLaunch(t *testing.T) {
 // API-key or other login, a cache appearing, or undeterminable auth delivers
 // no evidence.
 func TestClaudeCLI_AccountChecksEveryCall(t *testing.T) {
+	t.Parallel() // each fake owns its HOME, temp dir and admission store
 	cases := []struct {
 		name   string
 		mutate func(f *fakeCLI)
@@ -471,6 +496,7 @@ func TestClaudeCLI_AccountChecksEveryCall(t *testing.T) {
 // A changed account revokes admission: switching back does not restore it;
 // only Test does.
 func TestClaudeCLI_RevocationHoldsUntilTest(t *testing.T) {
+	t.Parallel() // each fake owns its HOME, temp dir and admission store
 	f := newFakeCLI(t)
 	if _, err := f.complete(); err != nil {
 		t.Fatal(err)
@@ -499,14 +525,16 @@ func TestClaudeCLI_RevocationHoldsUntilTest(t *testing.T) {
 }
 
 func TestClaudeCLI_BinaryChangeRevokes(t *testing.T) {
+	t.Parallel() // each fake owns its HOME, temp dir and admission store
 	f := newFakeCLI(t)
 	if _, err := f.complete(); err != nil {
 		t.Fatal(err)
 	}
-	rec, _ := f.p.store.get()
-	changed := *rec
+	f.p.store.mu.Lock()
+	changed := *f.p.store.rec
 	changed.ExeSHA256 = strings.Repeat("a", 64) // admitted against another build
-	f.p.store.set(&changed)
+	f.p.store.rec = &changed
+	f.p.store.mu.Unlock()
 	_, err := f.complete()
 	wantRefused(t, err, "binary changed")
 	if f.prompts() != 1 {
@@ -515,6 +543,7 @@ func TestClaudeCLI_BinaryChangeRevokes(t *testing.T) {
 }
 
 func TestClaudeCLI_FlagsNotRecognised(t *testing.T) {
+	t.Parallel() // each fake owns its HOME, temp dir and admission store
 	for _, mode := range []string{"ignores the sentinel", "reports it but exits 0"} {
 		f := newFakeCLI(t)
 		f.spec.IgnoreFlags = mode == "ignores the sentinel"
@@ -529,6 +558,7 @@ func TestClaudeCLI_FlagsNotRecognised(t *testing.T) {
 }
 
 func TestClaudeCLI_WrongVersionLine(t *testing.T) {
+	t.Parallel() // each fake owns its HOME, temp dir and admission store
 	f := newFakeCLI(t)
 	f.spec.Version = "9.9.10 (Claude Code)"
 	f.write()
@@ -537,6 +567,7 @@ func TestClaudeCLI_WrongVersionLine(t *testing.T) {
 }
 
 func TestClaudeCLI_ToolEventRevokes(t *testing.T) {
+	t.Parallel() // each fake owns its HOME, temp dir and admission store
 	f := newFakeCLI(t)
 	events := cleanEvents()
 	events[0]["cwd"], events[0]["claude_code_version"] = "{{CWD}}", fakeVersion
@@ -549,14 +580,16 @@ func TestClaudeCLI_ToolEventRevokes(t *testing.T) {
 	}
 	f.spec.Stream = fakeStream(t)
 	f.write()
+	before := len(f.calls())
 	_, err = f.complete()
 	wantRefused(t, err, "attempted a tool")
-	if f.prompts() != 1 {
-		t.Fatal("a revoked CLI gets no further prompts")
+	if len(f.calls()) != before {
+		t.Fatalf("a revoked CLI is not run at all until Test: %v", f.calls()[before:])
 	}
 }
 
 func TestClaudeCLI_ExitAndStderr(t *testing.T) {
+	t.Parallel() // each fake owns its HOME, temp dir and admission store
 	f := newFakeCLI(t)
 	f.spec.StreamExit = 1
 	f.spec.Stderr = "fatal: auth header x-api-key: sk-ant-api03-abcdefghijklmnop rejected"
@@ -568,6 +601,7 @@ func TestClaudeCLI_ExitAndStderr(t *testing.T) {
 }
 
 func TestClaudeCLI_OversizedStdout(t *testing.T) {
+	t.Parallel() // each fake owns its HOME, temp dir and admission store
 	f := newFakeCLI(t)
 	f.spec.Flood = claudeStdoutMax + 1024
 	f.write()
@@ -582,15 +616,17 @@ func TestClaudeCLI_OversizedStdout(t *testing.T) {
 
 // A deadline kills the whole process group, including what the CLI started.
 func TestClaudeCLI_DeadlineKillsGroup(t *testing.T) {
+	t.Parallel() // each fake owns its HOME, temp dir and admission store
 	f := newFakeCLI(t)
 	if _, err := f.complete(); err != nil { // admit first, so the deadline is the call's
 		t.Fatal(err)
 	}
 	f.spec.Hang = true
 	f.write()
-	// Long enough for the preflight helpers under -race (each re-exec of
-	// this binary takes about a second), far shorter than the hang.
-	const budget = 8 * time.Second
+	// Long enough for the preflight helpers under -race with the other fake
+	// tests running in parallel (each re-exec of this binary takes about a
+	// second), far shorter than the hang.
+	const budget = 15 * time.Second
 	ctx, cancel := context.WithTimeout(context.Background(), budget)
 	defer cancel()
 	start := time.Now()
@@ -619,6 +655,7 @@ func TestClaudeCLI_DeadlineKillsGroup(t *testing.T) {
 // The Test probe: a reply that quotes the canary or the working dir's marker
 // could only come from a tool, and revokes admission.
 func TestClaudeCLI_ProbeCatchesALocalRead(t *testing.T) {
+	t.Parallel() // each fake owns its HOME, temp dir and admission store
 	f := newFakeCLI(t)
 	f.spec.Text = "I cannot access files."
 	f.write()
@@ -638,6 +675,7 @@ func TestClaudeCLI_ProbeCatchesALocalRead(t *testing.T) {
 }
 
 func TestClaudeCLI_Status(t *testing.T) {
+	t.Parallel() // each fake owns its HOME, temp dir and admission store
 	f := newFakeCLI(t)
 	st := f.p.Status()
 	if !st.Reviewed || st.Admitted || st.Version != fakeVersion || len(st.SHA256) != 12 {
@@ -648,5 +686,235 @@ func TestClaudeCLI_Status(t *testing.T) {
 	}
 	if st := f.p.Status(); !st.Admitted || st.Problem != "" {
 		t.Fatalf("after admission: %+v", st)
+	}
+}
+
+// sibling is a second provider on the same fake CLI and admission store,
+// configured with another model - as a draft in Settings and the active
+// provider are.
+func (f *fakeCLI) sibling(model string) *claudeCLIProvider {
+	q := *f.p
+	q.model, q.afterHelpers, q.beforePublish, q.afterLaunch = model, nil, nil, nil
+	return &q
+}
+
+func callWith(p *claudeCLIProvider) (Result, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	return p.Complete(ctx, Request{System: "s", User: "EVIDENCE", Purpose: PurposeExplain})
+}
+
+// Codex review of 09cb2d8 (P1): a revocation by a concurrent call is never
+// overwritten by another call's admission, and no prompt is released after
+// it. Only Test lifts it.
+func TestClaudeCLI_RevocationIsAtomic(t *testing.T) {
+	t.Parallel() // each fake owns its HOME, temp dir and admission store
+	t.Run("revoked between launch and stdin", func(t *testing.T) {
+		f := newFakeCLI(t)
+		if _, err := f.complete(); err != nil {
+			t.Fatal(err)
+		}
+		os.Remove(filepath.Join(f.home, "record.json"))
+		f.p.afterLaunch = func() { f.p.store.revoke("a concurrent call attempted a tool") }
+		_, err := f.complete()
+		wantRefused(t, err, "concurrent call attempted a tool")
+		if _, err := os.Stat(filepath.Join(f.home, "record.json")); !os.IsNotExist(err) {
+			t.Fatal("the prompt must not be released after a revocation")
+		}
+	})
+	t.Run("revoked while another model is being admitted", func(t *testing.T) {
+		f := newFakeCLI(t)
+		if _, err := f.complete(); err != nil { // model A admitted
+			t.Fatal(err)
+		}
+		b := f.sibling("claude-sonnet-5-5")
+		b.afterHelpers = func() { f.p.store.revoke("a concurrent call attempted a tool") }
+		_, err := callWith(b)
+		wantRefused(t, err, "concurrent call attempted a tool")
+		_, revoked, _ := f.p.store.snapshot()
+		if revoked == "" {
+			t.Fatal("admitting another model must never clear a revocation")
+		}
+		_, err = f.complete()
+		wantRefused(t, err, "concurrent call attempted a tool")
+
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if _, err := f.p.Probe(ctx); err != nil {
+			t.Fatalf("Test lifts the revocation: %v", err)
+		}
+		if _, err := callWith(f.sibling("claude-sonnet-5-5")); err != nil {
+			t.Fatalf("after Test, another model is admitted alongside: %v", err)
+		}
+		if _, err := f.complete(); err != nil {
+			t.Fatalf("and the first model stays admitted: %v", err)
+		}
+		probes := strings.Count(strings.Join(f.calls(), " "), "sentinel")
+		for i := 0; i < 2; i++ {
+			if _, err := callWith(f.sibling("claude-sonnet-5-5")); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := f.complete(); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if got := strings.Count(strings.Join(f.calls(), " "), "sentinel"); got != probes {
+			t.Fatalf("alternating between two admitted models must not re-admit either (%d flag probes, was %d)", got, probes)
+		}
+	})
+	t.Run("revoked while this call proves its flags", func(t *testing.T) {
+		f := newFakeCLI(t)
+		f.p.beforePublish = func() { f.p.store.revoke("a concurrent call attempted a tool") }
+		_, err := f.complete()
+		wantRefused(t, err, "concurrent call attempted a tool")
+		if rec, revoked, _ := f.p.store.snapshot(); rec != nil || revoked == "" {
+			t.Fatalf("publishing must not replace the revocation: rec=%v revoked=%q", rec, revoked)
+		}
+		if f.prompts() != 0 {
+			t.Fatal("no prompt after a revocation")
+		}
+	})
+	t.Run("Test completed during a call", func(t *testing.T) {
+		f := newFakeCLI(t)
+		if _, err := f.complete(); err != nil {
+			t.Fatal(err)
+		}
+		launched := false
+		f.p.afterLaunch = func() { launched = true }
+		f.p.afterHelpers = func() {
+			f.p.store.reset()
+			if _, err := callWith(f.sibling(tModel)); err != nil { // admits in the new epoch
+				t.Errorf("the other call: %v", err)
+			}
+		}
+		_, err := f.complete()
+		wantRefused(t, err, "admission changed")
+		if launched {
+			t.Fatal("a call from before the Test must stop before launch")
+		}
+	})
+	t.Run("Test started during a call", func(t *testing.T) {
+		f := newFakeCLI(t)
+		if _, err := f.complete(); err != nil {
+			t.Fatal(err)
+		}
+		f.p.afterHelpers = func() { f.p.store.reset() }
+		_, err := f.complete()
+		wantRefused(t, err, "admission changed")
+		f.p.afterHelpers = nil
+		if _, err := f.complete(); err != nil {
+			t.Fatalf("the next call re-admits: %v", err)
+		}
+	})
+	t.Run("Test started between launch and stdin", func(t *testing.T) {
+		f := newFakeCLI(t)
+		if _, err := f.complete(); err != nil {
+			t.Fatal(err)
+		}
+		os.Remove(filepath.Join(f.home, "record.json"))
+		f.p.afterLaunch = func() { f.p.store.reset() }
+		_, err := f.complete()
+		wantRefused(t, err, "admission changed")
+		if _, err := os.Stat(filepath.Join(f.home, "record.json")); !os.IsNotExist(err) {
+			t.Fatal("the prompt must not be released into a new epoch")
+		}
+	})
+}
+
+// Codex review of 09cb2d8 (P2): a disallowed or undeterminable sign-in
+// revokes admission, so returning to the admitted account does not resume
+// without Test; a helper timeout fails only that call.
+func TestClaudeCLI_AccountFailuresRevokeUntilTest(t *testing.T) {
+	t.Parallel() // each fake owns its HOME, temp dir and admission store
+	cases := []struct {
+		name   string
+		mutate func(f *fakeCLI)
+	}{
+		{"Team", func(f *fakeCLI) {
+			f.spec.Auth = string(authWith(t, map[string]any{"configDirectory": filepath.Join(f.home, ".claude"), "subscriptionType": "team"}))
+		}},
+		{"API key", func(f *fakeCLI) {
+			f.spec.Auth = string(authWith(t, map[string]any{"configDirectory": filepath.Join(f.home, ".claude"), "apiKeySource": "ANTHROPIC_API_KEY"}))
+		}},
+		{"malformed", func(f *fakeCLI) { f.spec.Auth = "Logged in\n" }},
+		{"non-zero exit", func(f *fakeCLI) { f.spec.AuthExit = 2 }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFakeCLI(t)
+			if _, err := f.complete(); err != nil {
+				t.Fatal(err)
+			}
+			orig := f.spec
+			tc.mutate(f)
+			f.write()
+			_, err := f.complete()
+			wantRefused(t, err, "revoked")
+			f.spec = orig
+			f.write()
+			_, err = f.complete()
+			wantRefused(t, err, "revoked")
+			if f.prompts() != 1 {
+				t.Fatalf("no prompt until Test: %v", f.calls())
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			if _, err := f.p.Probe(ctx); err != nil {
+				t.Fatalf("Test re-admits: %v", err)
+			}
+		})
+	}
+	t.Run("a timeout does not revoke", func(t *testing.T) {
+		f := newFakeCLI(t)
+		if _, err := f.complete(); err != nil {
+			t.Fatal(err)
+		}
+		f.spec.AuthHang = true
+		f.write()
+		f.p.authDeadline = 3 * time.Second
+		_, err := f.complete()
+		wantRefused(t, err, "did not finish in time")
+		f.spec.AuthHang = false
+		f.write()
+		f.p.authDeadline = 20 * time.Second
+		if _, err := f.complete(); err != nil {
+			t.Fatalf("a timed-out check fails only its call: %v", err)
+		}
+	})
+}
+
+// The last gate before a prompt is released compares the call's binary,
+// account and configuration with the admission, not only its epoch.
+func TestClaudeAdmissionStore_Valid(t *testing.T) {
+	s := &claudeAdmissionStore{}
+	epoch := s.reset()
+	exe := exeIdentity{SHA256: "exe-1", Contract: reviewedClaudeContracts[0]}
+	if err := s.publish(epoch, exe, "acct-1", "argv-1"); err != nil {
+		t.Fatal(err)
+	}
+	ok := callTicket{exe: exe, account: "acct-1", argv: "argv-1", epoch: epoch}
+	if err := s.valid(ok); err != nil {
+		t.Fatalf("the admitted call is valid: %v", err)
+	}
+	for name, bad := range map[string]callTicket{
+		"another binary":       {exe: exeIdentity{SHA256: "exe-2"}, account: "acct-1", argv: "argv-1", epoch: epoch},
+		"another account":      {exe: exe, account: "acct-2", argv: "argv-1", epoch: epoch},
+		"an unadmitted config": {exe: exe, account: "acct-1", argv: "argv-2", epoch: epoch},
+		"an older epoch":       {exe: exe, account: "acct-1", argv: "argv-1", epoch: epoch - 1},
+	} {
+		if err := s.valid(bad); err == nil {
+			t.Errorf("%s must not be released", name)
+		}
+	}
+	// Publishing for another account within the epoch is an identity
+	// change: it revokes.
+	if err := s.publish(epoch, exe, "acct-2", "argv-1"); err == nil {
+		t.Fatal("another account's admission must not be published")
+	}
+	if _, revoked, _ := s.snapshot(); revoked == "" {
+		t.Fatal("it revokes")
+	}
+	if err := s.valid(ok); err == nil {
+		t.Fatal("nothing is released after a revocation")
 	}
 }

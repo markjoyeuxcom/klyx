@@ -269,7 +269,8 @@ Codex's design review (274535f) required four changes before implementation. The
    - API-key auth is refused as well; a Klyx API provider covers that case.
 5. **Account identity binding:** the identity is `sha256(authMethod, apiProvider, subscriptionType, orgId, email)`.
    - Admission records it.
-   - A call whose identity differs from the admitted one, or cannot be determined, is refused and revokes admission until the next Test.
+   - A call whose identity differs from the admitted one, or is disallowed, or cannot be determined, is refused and revokes admission until the next Test. That covers a Team, Enterprise or API-key sign-in, malformed output, and a non-zero exit. So returning to the admitted account does not resume without Test.
+   - A helper timeout, a cancel or a process that did not start says nothing about the identity. It fails that call only.
 6. **Remote policy** (`doctor`, pinned lines for 2.1.296):
    - The output must contain, each exactly once, these lines:
      - `Running: native (2.1.296)`;
@@ -296,12 +297,20 @@ Admission is revoked until the next Test by any of:
 - a tool or unknown event;
 - a contract mismatch in the output.
 
+Admission and revocation are atomic across concurrent calls (Codex review of 09cb2d8). The store is shared by every Claude Code provider in the run, for every model:
+- Each call works within the admission epoch it started in.
+- A call publishes an admission, and releases its prompt, only while nothing is revoked and its epoch is current. Its last check, just before stdin, compares its binary, account and configuration with the admission.
+- Publishing never clears a revocation. An admission published meanwhile for another binary or account is an identity change.
+- Only Test clears a revocation, and it starts a new epoch, so no call from before the Test carries on under the new admission.
+- Each model's configuration is admitted once and kept alongside the others.
+
 A transient helper failure, such as a timeout, fails that call only. A new model changes the argv hash, so it re-runs admission rather than revoking it.
 
 **Per-call output contract** (stream-json, verbose, pinned for 2.1.296). The answer is accepted only as an explicitly confirmed, complete, non-refusal, text-only answer. Everything else discards it.
 
 - **Framing:**
-  - stdout is newline-delimited JSON, capped at 4 MiB, and every line is exactly one JSON object.
+  - stdout is newline-delimited JSON, capped at 4 MiB, and every line is exactly one JSON object, with no key repeated in any object at any depth.
+  - Required booleans, strings and numbers must be literal values of their type. A `null` is never read as `false` or as an empty string.
   - A malformed line, a blank line inside the stream, or data after the final newline refuses.
   - The process must exit 0. stderr is capped at 64 KiB and only a short, scrubbed excerpt is ever shown.
 - **Sequence:**
