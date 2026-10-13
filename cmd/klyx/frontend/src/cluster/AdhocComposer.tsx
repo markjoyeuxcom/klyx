@@ -55,8 +55,8 @@ export function AdhocComposer({ cluster, onClose }: { cluster: string; onClose: 
       const failCount = rs.length - okCount;
       useFleet.getState().setActionStatus(
         failCount === 0
-          ? { kind: "success", message: `Ad-hoc create — ${okCount} object${okCount === 1 ? "" : "s"} on ${cluster} (labeled klyx.dev/adhoc)` }
-          : { kind: "error", message: `Ad-hoc create — ${okCount} ok, ${failCount} failed on ${cluster}` },
+          ? { kind: "success", message: `Ad-hoc create - ${okCount} object${okCount === 1 ? "" : "s"} on ${cluster} (labeled klyx.dev/adhoc)` }
+          : { kind: "error", message: `Ad-hoc create - ${okCount} ok, ${failCount} failed on ${cluster}` },
       );
     } finally {
       setBusy(null);
@@ -72,7 +72,7 @@ export function AdhocComposer({ cluster, onClose }: { cluster: string; onClose: 
           <button onClick={onClose} aria-label="close composer" style={{ ...btn, display: "inline-flex", alignItems: "center" }}><IconX size={13} stroke={1.5} /></button>
         </div>
         <div style={{ fontSize: 11, color: "var(--color-text-secondary)" }}>
-          Scratch/diagnostic objects only — everything is labeled <span style={{ fontFamily: "var(--font-mono)" }}>klyx.dev/adhoc</span> and is <b>not</b> in Git.
+          Scratch/diagnostic objects only - everything is labeled <span style={{ fontFamily: "var(--font-mono)" }}>klyx.dev/adhoc</span> and is <b>not</b> in Git.
           Author real desired state as Helm/Kustomize in your repo. Secrets are refused here (use ESO/SOPS).
         </div>
         <textarea

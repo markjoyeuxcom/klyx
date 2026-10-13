@@ -66,7 +66,7 @@ describe("NavBand (redesign step 7a)", () => {
     fireEvent.click(screen.getByRole("button", { name: /Resources/ }));
     const jobs = within(screen.getByRole("menu", { name: "Resources" })).getByRole("menuitem", { name: /^Jobs/ });
     expect(jobs.textContent).toContain("raw");
-    expect(jobs.getAttribute("title")).toMatch(/raw resource view/);
+    expect(jobs.getAttribute("title")).toMatch(/resource list/);
   });
 
   it("a focused nav control owns its keys: Enter, j/k and lens verbs never reach the list", () => {
@@ -186,11 +186,11 @@ describe("NavBand (redesign step 7a)", () => {
 
   it("Fleet task tabs: board, promotion and expiry are fleet views (step 7d)", () => {
     render(<NavBand />);
-    fireEvent.click(screen.getByRole("button", { name: "Promotion" }));
+    fireEvent.click(screen.getByRole("button", { name: "Promotion tracker" }));
     expect(routeOf()).toEqual({ name: "fleet", view: "promotion" });
-    expect(screen.getByRole("button", { name: "Promotion" }).getAttribute("aria-current")).toBe("page");
+    expect(screen.getByRole("button", { name: "Promotion tracker" }).getAttribute("aria-current")).toBe("page");
     expect(screen.getByRole("button", { name: "Fleet board" }).getAttribute("aria-current")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Expiry" }));
+    fireEvent.click(screen.getByRole("button", { name: "Expiry horizon" }));
     expect(routeOf()).toEqual({ name: "fleet", view: "expiry" });
     fireEvent.click(screen.getByRole("button", { name: "Fleet board" }));
     expect(routeOf()).toEqual({ name: "fleet" });
@@ -224,7 +224,7 @@ describe("NavBand reads the cluster's summary (health 1c slice 4)", () => {
     const tree = screen.getByRole("dialog", { name: "All views" });
     expect((within(tree).getByText("cert-manager").parentElement as HTMLElement).textContent).toContain("checking…");
     expect((within(tree).getByText("Network").parentElement as HTMLElement).textContent).toContain("checking…");
-    expect(within(tree).getByRole("option", { name: /^Gateway topology/ }).textContent).not.toContain("checking…");
+    expect(within(tree).getByRole("option", { name: /^Gateways and routes/ }).textContent).not.toContain("checking…");
     expect(tree.textContent).not.toContain("not covered");
     expect((within(tree).getByText("Cluster").parentElement as HTMLElement).textContent).toContain("last good");
   });

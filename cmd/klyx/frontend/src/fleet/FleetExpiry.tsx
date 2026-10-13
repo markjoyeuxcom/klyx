@@ -5,7 +5,7 @@ import { ellipsis } from "../chrome/primitives";
 import { IconCertificate } from "@tabler/icons-react";
 import { EmptyState } from "../chrome/EmptyState";
 import { SkeletonRows } from "../chrome/SkeletonRows";
-import { LensLayout, type DatasetState } from "../layout/LensLayout";
+import { LensLayout, LensTable, type DatasetState } from "../layout/LensLayout";
 import { UpdatedAt } from "../chrome/Age";
 import { useFleetBatch } from "./useFleetBatch";
 import { MembershipNote } from "./MembershipNote";
@@ -58,6 +58,10 @@ export function FleetExpiry() {
   const expired = inWindow.filter((r) => r.notAfterUnix <= now).length;
   const soon = inWindow.filter((r) => r.notAfterUnix > now && daysLeft(r.notAfterUnix) <= 14).length;
   const horizon = windowDays === 0 ? "at any time" : `within ${windowDays} days`;
+  // A Subject column with no value in this scan is left out, and the footer
+  // says so - never a column of dashes that reads as "no subject".
+  const hasSubject = inWindow.some((r) => !!r.subject);
+  const grid = hasSubject ? "80px 110px minmax(180px, 1.4fr) minmax(140px, 1fr) minmax(110px, 0.6fr)" : "80px 110px minmax(180px, 1.6fr) minmax(110px, 0.6fr)";
 
   // Step 7d: a Fleet view on the workspace template. An empty window is
   // scoped to the clusters that were scanned - partial and unreadable scans
@@ -112,17 +116,17 @@ export function FleetExpiry() {
       state={state}
       stateView={stateView}
       body={
-        <div className="lens-canvas">
-          <div style={{ display: "grid", gridTemplateColumns: "80px 100px minmax(160px, 1fr) minmax(140px, 1fr) minmax(110px, 0.6fr)", gap: "4px 12px", fontFamily: "var(--font-mono)", fontSize: 12, alignItems: "baseline" }}>
-            <span className="t-section-label">Expires</span>
-            <span className="t-section-label">Source</span>
-            <span className="t-section-label">Object</span>
-            <span className="t-section-label">Subject</span>
-            <span className="t-section-label">Cluster</span>
+        // The shared lens table (UI review 2026-10-13): one header, the
+        // standard row height and hover. Rows are read-only - nothing opens.
+        <LensTable minWidth={560}>
+          <div className="lens-table-head" role="row" style={{ gridTemplateColumns: grid }}>
+            <span>Expires</span><span>Source</span><span>Object</span>{hasSubject && <span>Subject</span>}<span>Cluster</span>
+          </div>
+          <div style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
             {inWindow.map((r) => {
               const d = daysLeft(r.notAfterUnix);
               return (
-                <div key={`${r.cluster}/${r.source}/${r.namespace}/${r.name}/${r.detail}`} style={{ display: "contents" }}>
+                <div key={`${r.cluster}/${r.source}/${r.namespace}/${r.name}/${r.detail}`} role="row" className="lens-row" style={{ gridTemplateColumns: grid, cursor: "default" }}>
                   <span style={{ color: tone(d), fontWeight: d <= 14 ? 600 : undefined }}>
                     {d <= 14 ? "▲ " : ""}{d < 0 ? `${-d}d ago` : `${d}d`}
                   </span>
@@ -132,15 +136,15 @@ export function FleetExpiry() {
                   <span style={{ ...ellipsis, color: "var(--color-text-primary)" }} title={`${r.namespace ? r.namespace + "/" : ""}${r.name}${r.detail ? ` (${r.detail})` : ""}`}>
                     {r.namespace ? `${r.namespace}/` : ""}{r.name}
                   </span>
-                  <span style={{ ...ellipsis, color: "var(--color-text-tertiary)" }} title={r.subject}>{r.subject || "—"}</span>
+                  {hasSubject && <span style={{ ...ellipsis, color: "var(--color-text-tertiary)" }} title={r.subject}>{r.subject || "-"}</span>}
                   <span style={{ ...ellipsis, color: "var(--color-text-tertiary)" }} title={r.cluster}>{r.cluster}</span>
                 </div>
               );
             })}
           </div>
-        </div>
+        </LensTable>
       }
-      footerEnd={<span className="t-secondary">cert-manager rows are renewal-managed · raw TLS secrets and webhook CAs have no renewer · public certificate material only, keys never read</span>}
+      footerEnd={<span className="t-secondary">{hasSubject ? "" : "subjects were not read for these rows · "}cert-manager rows are renewal-managed · raw TLS secrets and webhook CAs have no renewer · public certificate material only, keys never read</span>}
     />
   );
 }

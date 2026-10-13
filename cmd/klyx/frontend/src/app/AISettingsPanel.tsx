@@ -134,16 +134,26 @@ export function AISettingsPanel() {
 
   const a = state.active;
   const customOrigin = provider.defaultOrigin && draft.baseUrl ? draft.baseUrl : "";
+  // The status line is what is IN USE; a draft that differs from the saved
+  // settings says so, so a chosen provider never reads as applied (UI review
+  // 2026-10-13: "AI is off" sat beside a chosen, unsaved Claude Code).
+  const dirty = (Object.keys(draft) as (keyof AISettings)[]).some((k) => (draft[k] ?? "") !== (state.persisted[k] ?? ""));
 
   return (
     <div data-testid="ai-settings">
       <div data-testid="ai-status" role="status" style={{ fontSize: 12, marginBottom: 8, color: a.problem ? "var(--color-text-warning)" : "var(--color-text-primary)" }}>
+        <span className="t-secondary">In use: </span>
         {a.backend === "off" || !a.backend
           ? "AI is off. Choose a provider to enable Explain and Suggest-fix."
           : a.ready
             ? <>Prompts go to <span style={{ fontFamily: "var(--font-mono)" }}>{a.origin}</span> · {providerLabel(a.backend)} · <span style={{ fontFamily: "var(--font-mono)" }}>{a.model}</span></>
             : <>AI is unavailable: {a.problem}</>}
       </div>
+      {dirty && (
+        <div data-testid="ai-unsaved" role="status" style={{ fontSize: 11, marginBottom: 8, color: "var(--color-text-warning)" }}>
+          Unsaved changes - Save to apply {providerLabel(draft.provider)}{draft.model ? ` · ${draft.model}` : ""}. Test checks the draft without saving it.
+        </div>
+      )}
 
       {state.diverged && (
         <Notice testId="ai-diverged">The AI settings in fleet.yaml differ from the ones in use. Save to apply them, or check the file.</Notice>

@@ -84,7 +84,9 @@ export const NAV_GROUPS: NavGroup[] = [
   {
     id: "network", label: "Network", destinations: [
       task("connectivity", "Connectivity check", section("connectivity"), { keywords: ["can reach", "network policy"] }),
-      task("gateway", "Gateway topology", section("gatewayApi"), { cap: "gatewayAPI", keywords: ["gateway api", "httproute", "envoy"] }),
+      // The list of Gateways and their routes; "Gateway topology" is the graph
+      // a Gateway opens (UI review 2026-10-13).
+      task("gateway", "Gateways and routes", section("gatewayApi"), { cap: "gatewayAPI", keywords: ["gateway api", "httproute", "envoy", "topology"] }),
       task("flows", "Hubble flows", section("flows"), { cap: "hubble", keywords: ["cilium", "drops"] }),
       res("Services", r("", "v1", "services", "Service", "Namespaced")),
       res("Ingresses", r("networking.k8s.io", "v1", "ingresses", "Ingress", "Namespaced")),

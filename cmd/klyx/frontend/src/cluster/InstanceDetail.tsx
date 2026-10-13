@@ -1126,7 +1126,7 @@ function YamlPanel({
       {owned ? (
         <div style={noticeStyle("warning")}>
           {owned.ownerKind} {owned.ownerNamespace ? `${owned.ownerNamespace}/` : ""}{owned.ownerName} owns this object
-          {owned.basis === "flux-inventory" ? " (Flux inventory)" : owned.basis === "argo-resources" ? " (Argo resources)" : ""} —
+          {owned.basis === "flux-inventory" ? " (Flux inventory)" : owned.basis === "argo-resources" ? " (Argo resources)" : ""} -
           your edit will be reverted on the next reconcile{owned.ownerSuspended ? " (currently suspended, so deferred until resumed)" : ""}.
         </div>
       ) : gitOwner ? (

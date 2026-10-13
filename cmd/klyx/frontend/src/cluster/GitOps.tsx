@@ -466,7 +466,7 @@ export function GitOps({ cluster }: { cluster: string }) {
               ? <span className="t-status" style={{ color: failed > 0 ? "var(--color-text-danger)" : "var(--color-text-warning)" }}>{failed > 0 ? "▲ " : ""}{attention} not ready</span>
               : <span className="t-secondary">{recsEv !== "complete" ? notKnown(recsEv) : "all ready"}</span>}
             <span className="t-secondary" data-testid="flux-breakdown">
-              {[`${ks} ks · ${hr} hr`, failed ? `${failed} failed` : "", reconciling ? `${reconciling} reconciling` : "", syncing ? `${syncing} syncing` : "", suspended ? `${suspended} suspended` : ""].filter(Boolean).join(" · ")}{asOf}
+              {[`${ks} Kustomization${ks === 1 ? "" : "s"} · ${hr} HelmRelease${hr === 1 ? "" : "s"}`, failed ? `${failed} failed` : "", reconciling ? `${reconciling} reconciling` : "", syncing ? `${syncing} syncing` : "", suspended ? `${suspended} suspended` : ""].filter(Boolean).join(" · ")}{asOf}
             </span>
           </>
         )}
@@ -575,7 +575,7 @@ export function GitOps({ cluster }: { cluster: string }) {
                     onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openRow(r); } }}
                   >
                     {show("lamp") && <Lamp r={r} />}
-                    {show("kind") && <span style={{ color: "var(--color-text-tertiary)" }}>{r.kind === "Kustomization" ? "ks" : "hr"}</span>}
+                    {show("kind") && <span style={{ color: "var(--color-text-tertiary)" }} title={r.kind}>{r.kind === "Kustomization" ? "ks" : "hr"}</span>}
                     {show("name") && (
                       <span style={{ display: "flex", alignItems: "center", gap: 4, minWidth: 0 }}>
                         <span className="lens-cell-name" title={`${r.namespace}/${r.name}`}>
@@ -1012,7 +1012,7 @@ function DiffSection({ cluster, namespace, name }: { cluster: string; namespace:
         <div style={{ color: "var(--color-text-danger)", marginTop: 6, ...ellipsis }} title={result.error}>{result.error}</div>
       )}
       {result && !result.error && !result.hasChanges && (
-        <div style={{ color: "var(--color-text-success)", marginTop: 6 }}>no changes — live matches Git</div>
+        <div style={{ color: "var(--color-text-success)", marginTop: 6 }}>no changes - live matches Git</div>
       )}
       {result && result.hasChanges && (
         <pre style={{ marginTop: 6, padding: 8, maxHeight: 280, overflow: "auto", background: "var(--color-background-secondary)", border: "0.5px solid var(--color-border-tertiary)", borderRadius: 4, fontFamily: "var(--font-mono)", fontSize: 11, whiteSpace: "pre", lineHeight: 1.4 }}>{result.output}</pre>

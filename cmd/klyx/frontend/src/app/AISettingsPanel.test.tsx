@@ -120,6 +120,24 @@ describe("AISettingsPanel", () => {
     expect(bridge.saveAISettings).not.toHaveBeenCalled();
   });
 
+  it("says a chosen provider is unsaved until Save applies it (UI review 2026-10-13)", async () => {
+    const saved = state({ persisted: { ...state().persisted, provider: "anthropic", keySource: "keychain" } });
+    bridge.getAISettings.mockResolvedValueOnce(state()).mockResolvedValue(saved);
+    render(<AISettingsPanel />);
+    expect((await screen.findByTestId("ai-status")).textContent).toMatch(/^In use: AI is off/);
+    expect(screen.queryByTestId("ai-unsaved")).toBeNull();
+
+    fireEvent.change(screen.getByLabelText("AI provider"), { target: { value: "anthropic" } });
+    const notice = screen.getByTestId("ai-unsaved");
+    expect(notice.textContent).toContain("Unsaved changes - Save to apply Claude");
+    expect(notice.textContent).toContain("Test checks the draft without saving it");
+    // The status line still names what is in use, never the draft.
+    expect(screen.getByTestId("ai-status").textContent).toContain("AI is off");
+
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(screen.queryByTestId("ai-unsaved")).toBeNull());
+  });
+
   it("shows a save failure and keeps the draft", async () => {
     bridge.getAISettings.mockResolvedValue(state());
     bridge.saveAISettings.mockResolvedValue({ ok: false, error: "No API key is stored for this provider. Add one in Settings > AI." });

@@ -131,7 +131,7 @@ export function UpgradeView({ cluster }: { cluster: string }) {
   return (
     <LensLayout
       label="Upgrade"
-      title="Upgrade readiness"
+      title="Upgrade check"
       summary={!ok ? null : (
         <>
           <span className="t-number" style={{ color: "var(--color-text-secondary)" }}>{ok.serverVersion || "?"}</span>

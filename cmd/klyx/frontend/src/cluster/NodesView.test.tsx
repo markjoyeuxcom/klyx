@@ -245,7 +245,7 @@ describe("NodesView", () => {
     expect([...select.options].map((o) => o.text)).toContain("pool workers");
     fireEvent.click(getByText("simulate"));
     const verdict = await findByTestId("survivability-verdict");
-    expect(verdict.textContent).toContain("fits — 5 displaced pods reschedule onto 2 nodes");
+    expect(verdict.textContent).toContain("fits - 5 displaced pods reschedule onto 2 nodes");
     expect(getByText(/drain blockers: team-a\/pg-pdb/)).toBeTruthy();
     expect(getByText(/requests-based upper bound/)).toBeTruthy();
   });

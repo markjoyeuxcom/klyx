@@ -258,7 +258,7 @@ describe("the detail is fenced by UID", () => {
     expect(inspector().queryByText("Event-of-uid-a-other")).toBeNull();
     landDetail(detail(pod("a")));
     expect(inspector().getByText("Event-of-uid-a")).toBeTruthy();
-    expect(inspector().getByTestId("pod-detail-asof").textContent).toBe(`Detail read ${new Date(1_760_000_000_000).toLocaleTimeString()}.`);
+    expect(inspector().getByTestId("pod-detail-asof").textContent).toBe(`Detail read ${new Date(1_760_000_000_000).toLocaleTimeString()}`);
   });
 
   it("a re-read finding another object keeps this object's detail as last evidence, naming the mismatch", () => {

@@ -33,8 +33,8 @@ export function NavBand() {
 // Fleet task tabs (spec §1): the board and the fleet-wide operations views.
 const FLEET_TABS: { label: string; view: FleetView | undefined; title: string }[] = [
   { label: "Fleet board", view: undefined, title: "Every cluster, attention first" },
-  { label: "Promotion", view: "promotion", title: "Applied GitOps revisions per cluster - did a change land everywhere?" },
-  { label: "Expiry", view: "expiry", title: "Certificates, raw TLS secrets and webhook CAs fleet-wide, soonest first" },
+  { label: "Promotion tracker", view: "promotion", title: "Applied GitOps revisions per cluster - did a change land everywhere?" },
+  { label: "Expiry horizon", view: "expiry", title: "Certificates, raw TLS secrets and webhook CAs fleet-wide, soonest first" },
 ];
 
 const APP_TITLE: Record<"forwards" | "activity" | "settings", string> = { forwards: "Port-forwards", activity: "Activity", settings: "Settings" };
@@ -145,7 +145,7 @@ function Tabs({ tabs, active, counts, resources, cluster }: { tabs: Destination[
     <div ref={rowRef} className="navband-tabs">
       {shown.map((d) => (
         <button key={d.id} className="l-chip navband-tab" aria-current={d === active ? "page" : undefined}
-          title={isRaw(d) ? `${d.label} - raw resource view` : undefined}
+          title={isRaw(d) ? `${d.label} - resource list` : undefined}
           onClick={() => navigate(cluster, d)}>
           <TabLabel d={d} b={counts.destination[d.id]} />
         </button>
@@ -216,7 +216,7 @@ function NavMenu({ label, title, items, active, counts, cluster }: { label: stri
         <div ref={menuRef} id={id} role="menu" aria-label={title} className="l-menu navband-menu">
           {items.map((d) => (
             <button key={d.id} role="menuitem" className="l-menu-item" aria-current={d === active ? "page" : undefined}
-              title={isRaw(d) ? `${d.label} - raw resource view` : undefined}
+              title={isRaw(d) ? `${d.label} - resource list` : undefined}
               onClick={() => { setOpen(false); triggerRef.current?.focus(); navigate(cluster, d); }}>
               <span style={{ flex: 1 }}>{d.label}</span>
               {isRaw(d) && <span className="t-secondary">raw</span>}

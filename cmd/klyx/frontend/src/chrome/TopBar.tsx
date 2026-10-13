@@ -111,7 +111,9 @@ function AttentionButton({ cluster }: { cluster: string }) {
   if (!m) return null;
   const r = mastReading(m);
   const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? "" : "s"}`;
-  const quals = [r.gaps > 0 ? plural(r.gaps, "gap") : ""].filter(Boolean);
+  // "unverified", not "gaps": the count is of areas whose reading is not
+  // fully established (UI review 2026-10-13).
+  const quals = [r.gaps > 0 ? `${r.gaps} unverified` : ""].filter(Boolean);
   const refreshing = m.areas.some((a) => a.lines.some((l) => l.refreshing));
   let text: string;
   let color = "var(--color-text-secondary)";
@@ -322,7 +324,7 @@ function ForwardsIndicator() {
                 key={f.id}
                 data-testid={`forward-row-${f.id}`}
                 onClick={() => { useFleet.getState().openForwards(); setOpen(false); }}
-                title={`${f.cluster} ${f.namespace}/${f.targetName} — manage in Forwards`}
+                title={`${f.cluster} ${f.namespace}/${f.targetName} - manage in Forwards`}
                 style={{
                   display: "grid", gridTemplateColumns: "8px 1fr", gap: 8, alignItems: "center",
                   width: "100%", textAlign: "left", cursor: "pointer",

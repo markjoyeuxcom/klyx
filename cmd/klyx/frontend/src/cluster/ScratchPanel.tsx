@@ -96,8 +96,8 @@ export function ScratchPanel({ cluster, onClose, onLaunched }: { cluster: string
         if (!r.ok) failed++;
       }
       useFleet.getState().setActionStatus(failed === 0
-        ? { kind: "success", message: `Scratch cleanup — ${ordered.length} object${ordered.length === 1 ? "" : "s"} deleted` }
-        : { kind: "error", message: `Scratch cleanup — ${failed} of ${ordered.length} deletes failed` });
+        ? { kind: "success", message: `Scratch cleanup - ${ordered.length} object${ordered.length === 1 ? "" : "s"} deleted` }
+        : { kind: "error", message: `Scratch cleanup - ${failed} of ${ordered.length} deletes failed` });
       await refresh();
     } finally {
       setBusy(false);
@@ -109,7 +109,7 @@ export function ScratchPanel({ cluster, onClose, onLaunched }: { cluster: string
       <div style={{ width: 640, maxWidth: vw(92), maxHeight: vh(88), overflowY: "auto", background: "var(--color-background-primary)", border: "0.5px solid var(--color-border-secondary)", borderRadius: "var(--border-radius-md)", padding: 16, display: "flex", flexDirection: "column", gap: 12 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <div style={{ fontSize: 13, fontWeight: 600 }}>Scratch</div>
-          <div style={{ fontSize: 11, color: "var(--color-text-tertiary)" }}>ad-hoc objects Klyx created (klyx.dev/adhoc) — not in Git</div>
+          <div style={{ fontSize: 11, color: "var(--color-text-tertiary)" }}>ad-hoc objects Klyx created (klyx.dev/adhoc) - not in Git</div>
           <div style={{ flex: 1 }} />
           <button onClick={onClose} aria-label="close scratch panel" style={{ ...btn, display: "inline-flex", alignItems: "center" }}><IconX size={13} stroke={1.5} /></button>
         </div>

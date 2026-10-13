@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, fireEvent, screen, act, within } from "@testing-library/react";
+import { render, fireEvent, screen, act, within, waitFor } from "@testing-library/react";
 import type { KarpenterClaimDTO, KarpenterPoolDTO, KarpenterSnapshotDTO } from "../store/fleet";
 import type { KarpenterRows } from "../health/useKarpenterRows";
 import { KarpenterView } from "./KarpenterView";
@@ -76,7 +76,7 @@ describe("KarpenterView (redesign step 5)", () => {
   it("a failed claim names the failing link and its message in words; Open node when registered", async () => {
     vi.mocked(getKarpenterState).mockResolvedValue(snap({ claims: [claim({ ready: "not-ready", failingType: "Registered", failingStatus: "False", failingReason: "NodeNotFound", failingMessage: "node did not join within 15m" })] }));
     render(<KarpenterView cluster="x" />);
-    fireEvent.click((await screen.findByText("default-abcde")).closest(".lens-row") as HTMLElement);
+    await screen.findByTestId("lens-inspector"); // the first claim needing attention is auto-selected (UI review 2026-10-13)
     const p = within(screen.getByTestId("lens-inspector"));
     expect(p.getByText("The launch chain failed at Registered: NodeNotFound.")).toBeTruthy();
     expect(p.getByText("node did not join within 15m")).toBeTruthy();
@@ -157,7 +157,7 @@ describe("KarpenterView evidence corrections (Codex 271342a7)", () => {
   it("Ready=False with an unproven link names no failure; its message is not presented as the cause", async () => {
     vi.mocked(getKarpenterState).mockResolvedValue(snap({ controllerVerified: true, claims: [claim({ ready: "not-ready", failingType: "Launched", failingStatus: "Unknown", failingMessage: "waiting" })] }));
     render(<KarpenterView cluster="x" />);
-    fireEvent.click((await screen.findByText("default-abcde")).closest(".lens-row") as HTMLElement);
+    await screen.findByTestId("lens-inspector"); // the first claim needing attention is auto-selected (UI review 2026-10-13)
     const p = within(screen.getByTestId("lens-inspector"));
     expect(p.getByText("Ready is False, but no launch-chain link is confirmed failed - Launched is Unknown (unverified).")).toBeTruthy();
     expect(p.queryByText("waiting")).toBeNull();
@@ -241,5 +241,18 @@ describe("KarpenterView availability is the rows' own", () => {
     render(<KarpenterView cluster="x" />);
     expect(await screen.findByLabelText("reading NodePools and NodeClaims")).toBeTruthy();
     expect(screen.queryByText("Karpenter is not installed on this cluster.")).toBeNull();
+  });
+});
+
+// UI review 2026-10-13: like the other lenses, the first NodeClaim needing
+// attention opens once from the first complete read; a dismissal sticks.
+describe("KarpenterView auto-select", () => {
+  it("opens the first claim needing attention once, and a dismissal is not undone", async () => {
+    vi.mocked(getKarpenterState).mockResolvedValue(snap({ controllerVerified: true, claims: [claim({ ready: "not-ready", failingType: "Launched", failingStatus: "False", failingReason: "InsufficientCapacity" })] }));
+    render(<KarpenterView cluster="x" />);
+    const insp = await screen.findByTestId("lens-inspector");
+    expect(within(insp).getAllByText(/default-abcde/).length).toBeGreaterThan(0);
+    fireEvent.keyDown(window, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByTestId("lens-inspector")).toBeNull());
   });
 });

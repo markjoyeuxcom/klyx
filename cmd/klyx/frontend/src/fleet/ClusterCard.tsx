@@ -336,9 +336,9 @@ function cardBadge(m: ClusterAttention): { label: string; tone: Tone } | null {
 function diagnosticReason(c: ClusterDTO, m: ClusterAttention): string {
   const r = mastReading(m);
   if (m.ended) return healthReading(m)[0];
-  if (r.state === "attention") return `raised because ${r.areas} area${r.areas === 1 ? "" : "s"} need${r.areas === 1 ? "s" : ""} attention`;
-  if (c.state === "Stale") return "raised because cluster watches are stale";
-  if (c.state === "Degraded") return c.reason || "raised because cluster capability health is degraded";
+  if (r.state === "attention") return `sorted first: ${r.areas} area${r.areas === 1 ? "" : "s"} need${r.areas === 1 ? "s" : ""} attention`;
+  if (c.state === "Stale") return "sorted early: cluster watches are stale";
+  if (c.state === "Degraded") return c.reason || "sorted early: cluster capability health is degraded";
   if (r.state === "checking") return "health checking…";
   if (healthGaps(m)) return "health partly unverified";
   return "nothing raised";

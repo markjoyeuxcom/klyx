@@ -904,7 +904,7 @@ function SurvivabilityModule({ cluster, nodes }: { cluster: string; nodes: NodeR
         {report && !report.error && r && (
           <span data-testid="survivability-verdict" style={{ fontFamily: "var(--font-mono)", fontSize: 11, fontWeight: 600, color: fits ? "var(--color-text-success)" : "var(--color-text-danger)" }}>
             {fits
-              ? `fits — ${r.displaced} displaced pod${r.displaced === 1 ? "" : "s"} reschedule onto ${r.survivorNodes} node${r.survivorNodes === 1 ? "" : "s"}`
+              ? `fits - ${r.displaced} displaced pod${r.displaced === 1 ? "" : "s"} reschedule onto ${r.survivorNodes} node${r.survivorNodes === 1 ? "" : "s"}`
               : `${r.unplaced.length} pod${r.unplaced.length === 1 ? "" : "s"} won't fit (short ${fmtCpu(r.cpuShortfall)} cpu / ${fmtMem(r.memShortfall)})`}
           </span>
         )}
@@ -925,11 +925,11 @@ function SurvivabilityModule({ cluster, nodes }: { cluster: string; nodes: NodeR
           {report.pdbBlockers.length > 0 && (
             <div style={{ fontSize: 10, color: "var(--color-text-warning)" }}>
               drain blockers: {report.pdbBlockers.slice(0, 4).map((b) => `${b.namespace}/${b.name}`).join(", ")}
-              {report.pdbBlockers.length > 4 ? ` +${report.pdbBlockers.length - 4} more` : ""} — PDBs at 0 allowed disruptions stall the drain even when capacity fits
+              {report.pdbBlockers.length > 4 ? ` +${report.pdbBlockers.length - 4} more` : ""} - PDBs at 0 allowed disruptions stall the drain even when capacity fits
             </div>
           )}
           <div style={{ fontSize: 9, color: "var(--color-text-tertiary)" }}>
-            requests-based upper bound — affinity, taints, and topology spread not modeled; DaemonSet pods excluded
+            requests-based upper bound - affinity, taints, and topology spread not modeled; DaemonSet pods excluded
             {hasKarpenter ? " · Karpenter present: lost capacity would be re-provisioned, this verdict is a floor" : ""}
             {report.podListCapped ? " · pod list capped: the verdict may be optimistic" : ""}
           </div>
@@ -1083,7 +1083,7 @@ function NodeInspector({ cluster, row, uid, nowS, detail, loading, gone, onCordo
                     : detailError ? ` - the re-read failed: ${detailError}`
                     : detailOfOther ? ` - the latest read found another object with this name (UID ${detail?.summary.uid || "unknown"}, not ${uid}).`
                     : "."}`
-                  : `Detail read ${readAt}.`}
+                  : `Detail read ${readAt}`}
               </span>
             )}
 

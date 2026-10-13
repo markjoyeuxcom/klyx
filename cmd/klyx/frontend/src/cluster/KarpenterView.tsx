@@ -106,7 +106,13 @@ export function KarpenterView({ cluster }: { cluster: string }) {
   const [loading, setLoading] = useState(false);
   const [view, setView] = useState<View>("claims");
   const [cursorKey, setCursorKey] = useState<string | null>(null);
-  const [selKey, setSelKey] = useState<string | null>(null);
+  const [selKey, setSelKeyRaw] = useState<string | null>(null);
+  // One-shot auto-select of the first NodeClaim needing attention, like the
+  // other lenses (UI review 2026-10-13): once, from the first complete read,
+  // never over a selection the operator made, a dismissal, a view switch or a
+  // reveal. Every selection below goes through setSelKey, which ends it.
+  const autoSelect = useRef<"pending" | "done">("pending");
+  const setSelKey = (k: string | null) => { autoSelect.current = "done"; setSelKeyRaw(k); };
   const [bodyWidth, setBodyWidth] = useState(1100);
   const listRef = useRef<VirtualListHandle>(null);
   const gen = useRef(0);
@@ -123,7 +129,8 @@ export function KarpenterView({ cluster }: { cluster: string }) {
     setPinned({ cluster: origin, snap: s, at: Date.now() });
   };
   useEffect(() => {
-    setPinned(null); setSelKey(null); setCursorKey(null);
+    setPinned(null); setSelKeyRaw(null); setCursorKey(null);
+    autoSelect.current = "pending";
     void fetchState();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cluster]);
@@ -191,6 +198,12 @@ export function KarpenterView({ cluster }: { cluster: string }) {
   const show = (id: string) => fitted.visible.has(id);
   const gridStyle = { gridTemplateColumns: fitted.template };
   const switchView = (v: View) => { setView(v); setSelKey(null); setCursorKey(null); };
+  useEffect(() => {
+    if (autoSelect.current === "done" || view !== "claims" || claimsEv !== "complete") return;
+    autoSelect.current = "done";
+    const c = claims.find((x) => x.rule.included);
+    if (c) { setCursorKey(c.name); setSelKeyRaw(c.name); }
+  }, [view, claimsEv, claims]);
   // A summary Top link (health 1c slice 4 §5.4): open the part's view and
   // select the object - selection only, never an action.
   useNavIntent(cluster, ["reveal"], (intent) => {
@@ -239,7 +252,7 @@ export function KarpenterView({ cluster }: { cluster: string }) {
     </div>
   ) : ok.controllerVerified === false ? (
     <div data-testid="karp-controller-unverified" role="status" className="t-body" style={{ color: "var(--color-text-tertiary)", padding: "4px 0", overflowWrap: "anywhere" }}>
-      <span className="t-status" style={{ color: "var(--color-text-secondary)" }}>Controller health unverified.</span> {ok.controllerError || "The controller Deployment could not be read."}
+      <span className="t-status" style={{ color: "var(--color-text-secondary)" }}>Controller health unverified.</span> {ok.controllerError ? ok.controllerError.charAt(0).toUpperCase() + ok.controllerError.slice(1) : "The controller Deployment could not be read."}
     </div>
   ) : null;
   // a capped read is the newest among the events READ - never a claim about

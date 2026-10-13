@@ -233,7 +233,7 @@ suite("the parity gate's frontend stage (slice 6 §3)", () => {
       const btn = mast.getByRole("button", { name: /^Attention/ });
       const label = btn.getAttribute("aria-label") ?? "";
       if (r.state === "attention") expect(label, c.case).toMatch(new RegExp(`^Attention: (▲ )?${r.areas} areas? need attention`));
-      else expect(label, c.case).toMatch(new RegExp(`^Attention: No attention in ${r.read} areas? read${r.gaps > 0 ? ` · ${r.gaps} gaps?` : "\\."}`));
+      else expect(label, c.case).toMatch(new RegExp(`^Attention: No attention in ${r.read} areas? read${r.gaps > 0 ? ` · ${r.gaps} unverified` : "\\."}`));
       for (const { l } of [...litLines, ...gapLines]) expect(btn.getAttribute("title"), c.case).toContain(`${l.label}: ${lineText(l)}`);
       for (const a of ctl) expect(btn.getAttribute("title"), c.case).toContain(`${a.label} (controller not ready`);
       mast.unmount();
@@ -260,7 +260,7 @@ suite("the parity gate's frontend stage (slice 6 §3)", () => {
       const spine = render(<FleetSpine />);
       const want = spineLamp(c.cluster, m).title;
       expect(Array.from(spine.container.querySelectorAll("[title]")).some((e) => e.getAttribute("title") === want), c.case).toBe(true);
-      expect(want.split("\n")[0], c.case).toBe(`${c.cluster.name} — ${connectionText(c.cluster)}`); // both axes: the connection first
+      expect(want.split("\n")[0], c.case).toBe(`${c.cluster.name} - ${connectionText(c.cluster)}`); // both axes: the connection first
       expect(connectionText(c.cluster).startsWith(c.expect.state.toLowerCase()), c.case).toBe(true);
       expect(want).toContain(healthReading(m)[0]);
       spine.unmount();

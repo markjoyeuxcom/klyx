@@ -185,7 +185,7 @@ describe("TopBar Attention button (health 1c slice 4)", () => {
     r1.unmount();
     applySummary(sum(replace(core(), task("pods", [verdict("pods", {}, [kind("pods", { coverage: "unreadable", class: "forbidden" })], { coverage: "unreadable" })]))));
     const r2 = render(<TopBar />);
-    expect(button(r2).getAttribute("aria-label")).toMatch(/^Attention: No attention in 4 areas read · 1 gap\./);
+    expect(button(r2).getAttribute("aria-label")).toMatch(/^Attention: No attention in 4 areas read · 1 unverified\./);
   });
 
   it("no Attention button outside a cluster", () => {
@@ -198,7 +198,7 @@ describe("TopBar Attention button (health 1c slice 4)", () => {
     useFleet.setState({ clusters: [dev({ certManagerPresent: true, gatewayAPIVersion: "v1.2" })] });
     applySummary(sum(core()));
     const btn = button(render(<TopBar />));
-    expect(btn.getAttribute("aria-label")).toMatch(/^Attention: No attention in 5 areas read · 2 gaps\./);
+    expect(btn.getAttribute("aria-label")).toMatch(/^Attention: No attention in 5 areas read · 2 unverified\./);
     expect(btn.getAttribute("title")).toMatch(/Certificates\n {2}Certificates: checking… - not read yet/);
     expect(btn.getAttribute("title")).toMatch(/Gateways\n {2}Gateways: checking… - not read yet/);
     expect(btn.getAttribute("title")).not.toContain("not covered");
@@ -207,7 +207,7 @@ describe("TopBar Attention button (health 1c slice 4)", () => {
   it("a fault with a gap is lit AND a gap; the tooltip names each line's provenance", () => {
     applySummary(sum(replace(core(), task("pods", [verdict("pods", { fault: 1, ok: 4 }, [kind("pods"), dep("replicasets", { coverage: "unreadable" })])]))));
     const btn = button(render(<TopBar />));
-    expect(btn.getAttribute("aria-label")).toMatch(/^Attention: ▲ 1 area need attention · 1 gap\./);
+    expect(btn.getAttribute("aria-label")).toMatch(/^Attention: ▲ 1 area need attention · 1 unverified\./);
     expect(btn.getAttribute("title")).toMatch(/Pods: 1 need attention · ReplicaSets could not be read - a dependency - cluster summary as of/);
   });
 

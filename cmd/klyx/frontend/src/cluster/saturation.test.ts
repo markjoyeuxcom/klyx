@@ -60,8 +60,8 @@ describe("rightsizing", () => {
   });
 
   it("mem near limit → OOM danger; cpu at limit → throttling danger", () => {
-    expect(rightsizing("mem", 95 * Mi, null, 100 * Mi)).toEqual({ tier: "danger", label: "near mem limit — OOM risk" });
-    expect(rightsizing("cpu", 1.0, null, 1.0)).toEqual({ tier: "danger", label: "cpu at limit — throttling" });
+    expect(rightsizing("mem", 95 * Mi, null, 100 * Mi)).toEqual({ tier: "danger", label: "near mem limit - OOM risk" });
+    expect(rightsizing("cpu", 1.0, null, 1.0)).toEqual({ tier: "danger", label: "cpu at limit - throttling" });
   });
 
   it("warn tiers name the approach", () => {

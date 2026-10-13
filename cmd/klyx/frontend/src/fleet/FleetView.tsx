@@ -58,7 +58,7 @@ export function FleetView() {
               {meters.attentionDanger ? "▲ " : ""}{meters.attention} need{meters.attention === 1 ? "s" : ""} attention
             </span>
           )}
-          {meters.unknown > 0 && <span className="t-secondary" data-testid="fleet-unknown" title="Connected clusters whose summary leaves something unestablished: a gap, a part still checking, or an ended observation - each card names it">{meters.unknown} with unknown coverage</span>}
+          {meters.unknown > 0 && <span className="t-secondary" data-testid="fleet-unknown" title="Connected clusters whose summary leaves something unestablished: a gap, a part still checking, or an ended observation - each card names it">{meters.unknown} partly unverified</span>}
         </>
       )}
       headerEnd={clusters.length === 0 ? undefined : <span className="t-secondary">{nodes} node{nodes === 1 ? "" : "s"} · {pods} pod{pods === 1 ? "" : "s"}{podsUnknown > 0 ? ` (${podsUnknown} cluster${podsUnknown === 1 ? "" : "s"} unknown)` : ""}</span>}

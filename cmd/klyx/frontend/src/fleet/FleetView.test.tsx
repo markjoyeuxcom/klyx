@@ -32,7 +32,7 @@ describe("FleetView on the workspace template (redesign step 7d)", () => {
     expect(screen.getByText(/clusters · 3 connected/)).toBeTruthy();
     expect(screen.getByText("▲ 1 unreachable")).toBeTruthy();
     expect(screen.getByTestId("fleet-attention").textContent).toBe("▲ 1 needs attention");
-    expect(screen.getByTestId("fleet-unknown").textContent).toBe("1 with unknown coverage"); // d: no summary yet
+    expect(screen.getByTestId("fleet-unknown").textContent).toBe("1 partly unverified"); // d: no summary yet
     expect(container.innerHTML).not.toMatch(/color-text-success/);
   });
 

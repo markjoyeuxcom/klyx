@@ -910,7 +910,7 @@ describe("PodsView pilot rework (Codex review)", () => {
     select(healthy);
     const { getByRole, queryByText } = render(<PodsView cluster="homelab" />);
     chooseMore("Delete pod", getByRole);
-    expect(queryByText(/grafana-xyz — the controller will recreate it/)).toBeTruthy();
+    expect(queryByText(/grafana-xyz - the controller will recreate it/)).toBeTruthy();
     act(() => select(b));
     expect(queryByText(/the controller will recreate it/)).toBeNull();
   });

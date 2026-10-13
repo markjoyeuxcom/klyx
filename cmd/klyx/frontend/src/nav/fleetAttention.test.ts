@@ -23,7 +23,7 @@ describe("the spine lamp: first matching rule (§2)", () => {
     faulty("a");
     const l = lamp(cl("a", "Failed", { reason: "dial tcp" }));
     expect(l.kind).toBe("unreachable");
-    expect(l.title).toMatch(/^a — failed: dial tcp\n/);
+    expect(l.title).toMatch(/^a - failed: dial tcp\n/);
     expect(l.title).toContain("Workloads: 2 need attention");
   });
 
@@ -38,7 +38,7 @@ describe("the spine lamp: first matching rule (§2)", () => {
     faulty("a");
     const l = lamp(cl("a", "Stale", { reason: "watch lagging" }));
     expect(l.kind).toBe("danger");
-    expect(l.title).toMatch(/^a — stale: watch lagging\n/);
+    expect(l.title).toMatch(/^a - stale: watch lagging\n/);
   });
 
   it("stale plus gaps: the connection's lamp, both readings in the title", () => {
@@ -60,7 +60,7 @@ describe("the spine lamp: first matching rule (§2)", () => {
     quiet("a");
     const l = lamp(cl("a", "Connecting"));
     expect(l).toMatchObject({ kind: "connecting", tone: "muted" });
-    expect(l.title).toMatch(/^a — connecting\n/);
+    expect(l.title).toMatch(/^a - connecting\n/);
     expect(l.title).toContain("capability not yet known"); // detection is still checking: nothing is implied
   });
 
@@ -163,7 +163,7 @@ describe("the health reading keeps every gap and every time", () => {
     expect(t).toMatch(/Flux Reconciliations: 2 not ready \(cluster summary as of /);
     expect(t).toMatch(/no attention: Workloads, Pods, Nodes, Events, Helm releases, Flux Sources \(cluster summary as of /);
     const u = lamp(cl("a", "Failed", { reason: "dial tcp", fluxPresent: true })).title;
-    expect(u).toMatch(/^a — failed: dial tcp\n/);
+    expect(u).toMatch(/^a - failed: dial tcp\n/);
     expect(u).toMatch(/no attention: .* \(cluster summary as of /);
   });
 

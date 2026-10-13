@@ -619,7 +619,7 @@ function destinationCommands(s: FleetStore, g: NavGroup, d: Destination, here: s
   const raw = d.target.kind === "resource";
   const group: CommandGroup = d.type === "task" ? "Views" : "Resources";
   const kindHint = d.target.kind === "resource" ? `${d.target.ref.kind} · ${d.target.ref.group ? `${d.target.ref.group}/` : ""}${d.target.ref.version}` : "";
-  const base = [g.label, raw ? "raw resource view" : "", kindHint].filter(Boolean).join(" · ");
+  const base = [g.label, raw ? "resource list" : "", kindHint].filter(Boolean).join(" · ");
   // Eligibility at activation, from live state (the index is built when the
   // palette opens): never navigate to a cluster that left, disconnected or
   // lost the capability since.
@@ -646,7 +646,7 @@ function destinationCommands(s: FleetStore, g: NavGroup, d: Destination, here: s
     options: clusters.map((c) => ({ id: `${id}@${c.name}`, group: "Clusters", title: c.name, hint: [c.env, c.region, c.protected ? "prd lock" : ""].filter(Boolean).join(" · ") || undefined, run: open(c.name), guard: live(c.name) })),
   });
   // A lens is findable by its tool's name too: "helm" finds Helm's Releases,
-  // "network" its Gateway topology (Codex UI review 2026-10-13).
+  // "network" its Gateways and routes (Codex UI review 2026-10-13).
   const keywords = d.type === "task" ? [g.label, ...(d.keywords ?? [])] : d.keywords;
   const out: Command[] = [];
   if (here) {

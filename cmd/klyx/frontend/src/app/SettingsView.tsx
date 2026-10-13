@@ -40,7 +40,7 @@ export function SettingsView() {
     const r = await addClusters(selected);
     setBusy(false);
     if (r.ok) {
-      setBanner({ kind: "success", text: `Added ${selected.length} cluster${selected.length === 1 ? "" : "s"} to fleet.yaml — connecting now, watch the fleet spine.` });
+      setBanner({ kind: "success", text: `Added ${selected.length} cluster${selected.length === 1 ? "" : "s"} to fleet.yaml - connecting now, watch the fleet spine.` });
       setSelected([]);
       void load();
       void refreshNewContextCount();
@@ -77,7 +77,7 @@ export function SettingsView() {
       <Section title="Fleet configuration">
         <PathRow label="file" path={cfg.path} />
         <div style={{ color: "var(--color-text-tertiary)", fontSize: 11, marginBottom: 8 }}>
-          Cluster identity, tags, protection, and metrics endpoints live here. Edit the file directly for anything beyond adding clusters — Klyx never rewrites your hand-written entries.
+          Cluster identity, tags, protection, and metrics endpoints live here. Klyx writes this file in two places only: it appends clusters you add below, and Settings &gt; AI saves the ai block (comments inside that block are not kept). Your cluster entries and every other line stay as you wrote them; edit the file directly for anything else.
         </div>
         {cfg.warnings.length > 0 && (
           <div style={{ marginBottom: 8 }}>
@@ -119,7 +119,7 @@ export function SettingsView() {
         ) : (
           <>
             <div style={{ color: "var(--color-text-tertiary)", fontSize: 11, marginBottom: 6 }}>
-              Re-scanned every time this page opens — a context added to the kubeconfig shows up here without restarting.
+              Re-scanned every time this page opens - a context added to the kubeconfig shows up here without restarting.
             </div>
             {cfg.contexts.map((c) => (
               <div key={c.name} style={{ display: "flex", alignItems: "center", gap: 8, fontFamily: "var(--font-mono)", fontSize: 11, padding: "4px 0", borderBottom: "0.5px solid var(--color-border-tertiary)" }}>

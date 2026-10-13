@@ -33,15 +33,15 @@ function arcKind(e: MeshEdgeDTO, byKey: Map<string, MeshNodeDTO>): ArcKind {
 }
 
 function arcTitle(e: MeshEdgeDTO, kind: ArcKind): string {
-  if (kind === "mutual") return `${e.a} ⇄ ${e.b} — mutual peering`;
+  if (kind === "mutual") return `${e.a} ⇄ ${e.b} - mutual peering`;
   if (kind === "offFleet") {
     const from = e.from || e.a;
     const other = from === e.a ? e.b : e.a;
-    return `${from} → ${other} — off-fleet peer (not connected to Klyx; mutuality unknown)`;
+    return `${from} → ${other} - off-fleet peer (not connected to Klyx; mutuality unknown)`;
   }
   const from = e.from || e.a;
   const other = from === e.a ? e.b : e.a;
-  return `${from} → ${other} — one-way: ${other} does not list ${from}`;
+  return `${from} → ${other} - one-way: ${other} does not list ${from}`;
 }
 
 const arcStroke: Record<ArcKind, { color: string; dash?: string }> = {

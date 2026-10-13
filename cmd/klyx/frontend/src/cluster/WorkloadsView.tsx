@@ -605,7 +605,7 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
           detail={
             `${pending.w.kind.toLowerCase()} ${pending.w.namespace}/${pending.w.name} → revision ${pending.rev.revision}` +
             (pending.rev.images.length > 0 ? ` (${pending.rev.images.join(", ")})` : "") +
-            (pending.w.gitops ? ` — GitOps-owned (${pending.w.gitops.kind}/${pending.w.gitops.name}): Flux will revert this on its next reconcile. Undo is incident response; make the real fix in Git.` : "")
+            (pending.w.gitops ? ` - GitOps-owned (${pending.w.gitops.kind}/${pending.w.gitops.name}): Flux will revert this on its next reconcile. Undo is incident response; make the real fix in Git.` : "")
           }
           protected={isProtected}
           danger
@@ -618,7 +618,7 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
         <ConfirmDialog
           title={pending.pause ? "pause rollouts" : "resume rollouts"}
           cluster={cluster}
-          detail={`deployment ${pending.w.namespace}/${pending.w.name} — ${pending.pause ? "hold rollouts (running pods untouched)" : "apply any held template changes"}`}
+          detail={`deployment ${pending.w.namespace}/${pending.w.name} - ${pending.pause ? "hold rollouts (running pods untouched)" : "apply any held template changes"}`}
           protected={isProtected}
           confirmLabel={pending.pause ? "Pause" : "Resume"}
           onCancel={() => setPending(null)}

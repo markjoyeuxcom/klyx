@@ -316,8 +316,8 @@ export function ExternalSecretsView({ cluster }: { cluster: string }) {
 
   return (
     <LensLayout
-      label="External Secrets"
-      title={view === "stores" ? "Secret stores" : "External Secrets"}
+      label="External secrets"
+      title={view === "stores" ? "Secret stores" : "External secrets"}
       summary={state === "loading" || state === "unreadable" || absent ? null : view === "stores" ? (
         <>
           <span className="t-number" style={{ color: "var(--color-text-secondary)" }}>{storeTotal}{partial}</span>

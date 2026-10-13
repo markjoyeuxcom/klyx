@@ -114,7 +114,7 @@ describe("ClusterCard health from the cluster's summary", () => {
     expect(row("gateway").textContent).toBe("not detected");
     expect(screen.getByText("2 areas need attention")).toBeTruthy(); // areas, never objects
     expect(container.innerHTML).not.toMatch(/color-text-success/);
-    expect(screen.getByText(/raised because 2 areas need attention · summary as of /)).toBeTruthy();
+    expect(screen.getByText(/sorted first: 2 areas need attention · summary as of /)).toBeTruthy();
   });
 
   it("every expected area's coverage is named, lit or not: unreadable Certificates beside quiet workloads, unknown NodeClaims, a missing Argo part", () => {

@@ -227,7 +227,7 @@ function AttentionSection({ cluster, m }: { cluster: string; m: ClusterAttention
       )}
       {!m.ended && r.state === "quiet" && (
         <span className="t-secondary">
-          No attention in the {r.read} area{r.read === 1 ? "" : "s"} read{r.gaps > 0 ? `; ${r.gaps} with gaps` : ""}.
+          No attention in the {r.read} area{r.read === 1 ? "" : "s"} read{r.gaps > 0 ? `; ${r.gaps} unverified` : ""}.
         </span>
       )}
     </section>

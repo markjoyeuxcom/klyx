@@ -56,7 +56,7 @@ export type Lamp = { kind: LampKind; tone: Tone; blink: boolean; title: string }
 // always keeps both axes.
 export function spineLamp(c: ClusterDTO, m: ClusterAttention): Lamp {
   const r = mastReading(m);
-  const title = [`${c.name} — ${connectionText(c)}`, ...healthReading(m)].join("\n");
+  const title = [`${c.name} - ${connectionText(c)}`, ...healthReading(m)].join("\n");
   const lamp = (kind: LampKind, tone: Tone, blink = false): Lamp => ({ kind, tone, blink, title });
   if (unreachable(c)) return lamp("unreachable", "muted");
   if (r.state === "attention" && r.tone === "danger") return lamp("danger", "danger", true);

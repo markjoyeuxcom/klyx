@@ -297,7 +297,7 @@ export function InstanceList({ cluster, resource }: { cluster: string; resource:
           {riskSupported && (attentionCount > 0
             ? <span className="t-status" style={{ color: "var(--color-text-warning)" }}>{attentionCount}{more} need attention</span>
             : <span className="t-secondary">{partial ? "no known attention in what was read" : "none need attention"}</span>)}
-          <span className="t-secondary">{resource.scope === "Cluster" ? "cluster-scoped" : "namespaced"} · {resource.group || "core"}/{resource.version} · raw resource view</span>
+          <span className="t-secondary">{resource.scope === "Cluster" ? "cluster-scoped" : "namespaced"} · {resource.group || "core"}/{resource.version} · resource list</span>
         </>
       )}
       controls={

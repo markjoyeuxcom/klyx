@@ -222,7 +222,7 @@ describe("the detail is fenced by UID", () => {
     expect(inspector().queryByText("pod-on-a")).toBeNull();
     landDetail(detail(node("a")));
     expect(inspector().getByText("pod-on-a")).toBeTruthy();
-    expect(inspector().getByTestId("node-detail-asof").textContent).toBe(`Detail read ${new Date(1_760_000_000_000).toLocaleTimeString()}.`);
+    expect(inspector().getByTestId("node-detail-asof").textContent).toBe(`Detail read ${new Date(1_760_000_000_000).toLocaleTimeString()}`);
   });
 
   it("a re-read finding another object keeps this object's detail as last evidence, naming the mismatch", () => {

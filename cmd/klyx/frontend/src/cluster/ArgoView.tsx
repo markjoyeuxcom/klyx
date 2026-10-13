@@ -402,11 +402,9 @@ export function ArgoView({ cluster, mode = "applications" }: { cluster: string; 
         }
         controls={
           <>
-            <div role="group" aria-label="Argo CD view" style={{ display: "inline-flex", gap: 4 }}>
-              <button className="l-chip" aria-pressed={mode === "applications"} onClick={() => openArgo("applications")}>Applications</button>
-              <button className="l-chip" aria-pressed={mode === "projects"} onClick={() => openArgo("projects")}>Projects</button>
-              <button className="l-chip" aria-pressed={mode === "applicationsets"} onClick={() => openArgo("applicationsets")}>ApplicationSets</button>
-            </div>
+            {/* The view (Applications, Projects, ApplicationSets) is chosen in
+                the navigation band - one switch, not two (UI review 2026-10-13);
+                this row holds only filters and search. */}
             {mode === "applications" && (
               <>
                 <button className="l-chip" aria-pressed={appFilter === "all"} onClick={() => setAppFilter("all")}>All</button>
@@ -926,7 +924,7 @@ function MetricTile({ label, value, tone }: { label: string; value: string; tone
 function ArgoResourceRow({ resource: r, resolvable, onOpen }: { resource: ArgoResourceDTO; resolvable: boolean; onOpen: () => void }) {
   const body = (
     <>
-      <span style={{ color: resourceTone(r), fontSize: 10 }}>{r.kind}</span>
+      <span style={{ color: "var(--color-text-secondary)", fontSize: 10 }}>{r.kind}</span>
       <span style={{ ...monoLine, ...ellipsis }} title={`${r.namespace}/${r.name}`}>{r.namespace ? `${r.namespace}/` : ""}{r.name}</span>
       <span style={{ color: resourceTone(r), fontSize: 10, textAlign: "right" }}>{r.status || r.health || "-"}</span>
     </>

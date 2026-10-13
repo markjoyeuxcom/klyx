@@ -64,7 +64,7 @@ describe("FleetSpine", () => {
     workloads("prd", { fault: 2, ok: 5 });
     const { getByLabelText } = render(<FleetSpine />);
     const block = getByLabelText("cluster prd");
-    expect(block.title).toMatch(/^prd — synced\n/);
+    expect(block.title).toMatch(/^prd - synced\n/);
     expect(block.title).toContain("Workloads: 2 need attention");
     const lamp = block.querySelector("span") as HTMLElement;
     expect(lamp.style.background).toContain("danger");

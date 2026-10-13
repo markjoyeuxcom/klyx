@@ -69,7 +69,7 @@ export function rightsizing(
   if (usage == null) return null;
   const sat = saturation(resource, usage, limit ?? null);
   if (sat.tier === "danger") {
-    return { tier: "danger", label: resource === "mem" ? "near mem limit — OOM risk" : "cpu at limit — throttling" };
+    return { tier: "danger", label: resource === "mem" ? "near mem limit - OOM risk" : "cpu at limit - throttling" };
   }
   if (sat.tier === "warn") {
     return { tier: "warn", label: resource === "mem" ? "approaching mem limit" : "approaching cpu limit" };
@@ -78,7 +78,7 @@ export function rightsizing(
   if (request != null && request >= floor && usage < request / OVERSIZE_RATIO) {
     const ratio = usage > 0 ? request / usage : Infinity;
     const shown = ratio >= OVERSIZE_CAP ? `≥${OVERSIZE_CAP}×` : `${Math.round(ratio)}×`;
-    return { tier: "info", label: `${resource} request ${shown} actual — oversized` };
+    return { tier: "info", label: `${resource} request ${shown} actual - oversized` };
   }
   return null;
 }

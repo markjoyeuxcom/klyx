@@ -47,6 +47,33 @@ describe("FleetExpiry", () => {
     expect(await findByText("x/far-tls")).toBeTruthy();
   });
 
+  it("leaves out a Subject column no row has, and says so (UI review 2026-10-13)", async () => {
+    useFleet.setState({ clusters: [cl("homelab")] });
+    vi.mocked(getExpiryScan).mockResolvedValue({
+      items: [{ source: "webhook-ca", namespace: "", name: "hook-ca", detail: "hook", subject: "", notAfterUnix: days(30) }],
+      warnings: [],
+    });
+    const { findByText, queryByText, getByText } = render(<FleetExpiry />);
+    expect(await findByText("hook-ca")).toBeTruthy();
+    expect(queryByText("Subject")).toBeNull();
+    expect(getByText(/subjects were not read for these rows/)).toBeTruthy();
+  });
+
+  it("keeps the Subject column when any row has one", async () => {
+    useFleet.setState({ clusters: [cl("homelab")] });
+    vi.mocked(getExpiryScan).mockResolvedValue({
+      items: [
+        { source: "tls-secret", namespace: "a", name: "with-subject", detail: "tls.crt", subject: "CN=web", notAfterUnix: days(20) },
+        { source: "webhook-ca", namespace: "", name: "no-subject", detail: "hook", subject: "", notAfterUnix: days(40) },
+      ],
+      warnings: [],
+    });
+    const { findByText, getByText, queryByText } = render(<FleetExpiry />);
+    expect(await findByText("CN=web")).toBeTruthy();
+    expect(getByText("Subject")).toBeTruthy();
+    expect(queryByText(/subjects were not read/)).toBeNull();
+  });
+
   it("expired items render as overdue", async () => {
     useFleet.setState({ clusters: [cl("homelab")] });
     vi.mocked(getExpiryScan).mockResolvedValue({

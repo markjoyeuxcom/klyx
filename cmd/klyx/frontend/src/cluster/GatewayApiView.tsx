@@ -207,7 +207,6 @@ function GatewayList({ cluster, rows, toggle }: { cluster: string; rows: Gateway
       summary={state === "loading" || state === "unreadable" || absent ? null : (
         <>
           <span className="t-number" style={{ color: "var(--color-text-secondary)" }}>{total}{mark}</span>
-          <span className="t-secondary">Gateway{total === 1 ? "" : "s"}</span>
           {attention > 0 && <span className="t-status" data-testid="gw-attention" style={{ color: notAccepted > 0 ? "var(--color-text-danger)" : "var(--color-text-warning)" }}>{rowsRefreshing ? `${attention} need attention` : [notAccepted ? `▲ ${notAccepted}${mark} not accepted` : "", attention > notAccepted ? `${attention - notAccepted}${mark} need${attention - notAccepted === 1 ? "s" : ""} attention` : ""].filter(Boolean).join(" · ")}</span>}
           {unverified > 0 && <span className="t-secondary">{unverified}{mark} unverified{asOf}</span>}
           {allOk && <span className="t-secondary">all programmed</span>}

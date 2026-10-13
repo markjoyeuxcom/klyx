@@ -60,3 +60,21 @@ describe("YamlBlock", () => {
     expect(getByText("1/2")).toBeTruthy();
   });
 });
+
+// UI review 2026-10-13: unwrapped by default, a Wrap toggle the viewer keeps.
+describe("YamlBlock wrap", () => {
+  it("scrolls sideways by default and wraps on request, remembered", async () => {
+    const { render, fireEvent } = await import("@testing-library/react");
+    try { localStorage.removeItem("klyx.yaml.wrap"); } catch { /* storage may be absent */ }
+    const { container, getByRole, unmount } = render(<YamlBlock text={"metadata:\n  uid: 0d7b7d0e-1a51-4e1e-9d44-000000000001"} copyLabel="pod YAML" />);
+    const pre = () => container.querySelector("pre") as HTMLPreElement;
+    expect(pre().style.whiteSpace).toBe("pre");
+    const toggle = getByRole("button", { name: "Wrap" });
+    expect(toggle.getAttribute("aria-pressed")).toBe("false");
+    fireEvent.click(toggle);
+    expect(pre().style.whiteSpace).toBe("pre-wrap");
+    unmount();
+    const again = render(<YamlBlock text="a: 1" copyLabel="pod YAML" />);
+    expect((again.container.querySelector("pre") as HTMLPreElement).style.whiteSpace).toBe("pre-wrap");
+  });
+});

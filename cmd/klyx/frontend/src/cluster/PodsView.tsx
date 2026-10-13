@@ -494,7 +494,7 @@ export function PodsView({ cluster }: { cluster: string }) {
         <ConfirmDialog
           title={`delete ${bulkConfirm.length} pod${bulkConfirm.length === 1 ? "" : "s"}`}
           cluster={cluster}
-          detail={`${bulkConfirm.slice(0, 5).map(keyOf).join(", ")}${bulkConfirm.length > 5 ? ` and ${bulkConfirm.length - 5} more` : ""} — controllers recreate owned pods; bare pods are NOT recreated.`}
+          detail={`${bulkConfirm.slice(0, 5).map(keyOf).join(", ")}${bulkConfirm.length > 5 ? ` and ${bulkConfirm.length - 5} more` : ""} - controllers recreate owned pods; bare pods are NOT recreated.`}
           protected={isProtected}
           danger
           confirmLabel={`Delete ${bulkConfirm.length}`}
@@ -751,7 +751,7 @@ function PodInspector({ cluster, row, uid, nowS, gone, rsEv, detail, loading, is
 
         <InspectorBlock title="Containers" count={p.containers.length}>
           {ctUsage !== null && !ctUsage.available && (
-            <div className="t-secondary">Live usage unavailable - {ctUsage.message || "no metrics source"}</div>
+            <div className="t-secondary">Live usage unavailable - {(ctUsage.message || "no metrics source").replace(/^metrics unavailable:\s*/, "")}</div>
           )}
           {p.containers.map((c) => <ContainerBlock key={c.name} c={c} d={detailContainers.get(c.name)} detailState={detailState} u={usageByContainer.get(c.name)} />)}
         </InspectorBlock>
@@ -793,7 +793,7 @@ function PodInspector({ cluster, row, uid, nowS, gone, rsEv, detail, loading, is
                     : detailError ? ` - the re-read failed: ${detailError}`
                     : detailOfOther ? ` - the latest read found another object with this name (UID ${detail?.summary.uid || "unknown"}, not ${uid}).`
                     : "."}`
-                  : `Detail read ${readAt}.`}
+                  : `Detail read ${readAt}`}
               </span>
             )}
             <InspectorBlock title="Recent events" count={shown.events.length}>
@@ -822,8 +822,8 @@ function PodInspector({ cluster, row, uid, nowS, gone, rsEv, detail, loading, is
           cluster={cluster}
           detail={pending.verb === "delete"
             ? (pending.summary.ownerKind === ""
-              ? `${pending.summary.namespace}/${pending.summary.name} — this pod has no controller; it will NOT be recreated.`
-              : `${pending.summary.namespace}/${pending.summary.name} — the controller will recreate it.`)
+              ? `${pending.summary.namespace}/${pending.summary.name} - this pod has no controller; it will NOT be recreated.`
+              : `${pending.summary.namespace}/${pending.summary.name} - the controller will recreate it.`)
             : pending.verb === "debug"
               ? `${pending.summary.namespace}/${pending.summary.name}${pending.container ? ` (target ${pending.container})` : ""} - kubectl debug adds an ephemeral busybox container to this pod. It stays on the pod spec until the pod is recreated; Kubernetes cannot remove it.`
               : `${pending.summary.ownerKind} ${pending.summary.namespace}/${pending.summary.ownerName}`}

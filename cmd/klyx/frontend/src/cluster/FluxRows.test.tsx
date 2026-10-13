@@ -93,7 +93,7 @@ describe("Flux rows, mounted end to end (slice 3 §5.3)", () => {
       expect(headline()).toBe("7");
       expect(screen.getByText(/^▲ 4 not ready$/)).toBeTruthy();
       expect(chip(/^Not ready/)).toBe("Not ready 4");
-      expect(screen.getByTestId("flux-breakdown").textContent).toMatch(/2 ks · 0 hr · 1 failed \(as of /);
+      expect(screen.getByTestId("flux-breakdown").textContent).toMatch(/2 Kustomizations · 0 HelmReleases · 1 failed \(as of /);
       setView("sources");
       expect(headline()).toBe("6*"); // the summary's source total, last observed (a stale source kind)
       expect(screen.getByText("3 not ready")).toBeTruthy();

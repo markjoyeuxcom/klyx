@@ -199,7 +199,7 @@ describe("buildCommands", () => {
     const cmd = buildCommands(s).find((c) => c.id === "resource:res:policy/v1/poddisruptionbudgets")!;
     expect(cmd.title).toBe("PodDisruptionBudgets");
     expect(cmd.group).toBe("Resources");
-    expect(cmd.hint).toContain("raw resource view");
+    expect(cmd.hint).toContain("resource list");
     expect(cmd.hint).toContain("PodDisruptionBudget");
     cmd.run();
     expect(setBuiltinCategory).toHaveBeenCalledWith("Workloads");

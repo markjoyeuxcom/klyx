@@ -127,7 +127,7 @@ export function FleetSpine() {
     // connection, a transition, a gap - and the title keeps both the
     // connection and the health reading. Never quiet without a full read.
     const m = models[c.name];
-    const l = m ? spineLamp(c, m) : { kind: "connecting" as const, tone: "muted" as const, blink: false, title: `${c.name} — ${c.state.toLowerCase()}` };
+    const l = m ? spineLamp(c, m) : { kind: "connecting" as const, tone: "muted" as const, blink: false, title: `${c.name} - ${c.state.toLowerCase()}` };
     const unreachable = l.kind === "unreachable";
     const areas = m && !m.ended ? mastReading(m).areas : 0;
     const isSelected = c.name === selected;

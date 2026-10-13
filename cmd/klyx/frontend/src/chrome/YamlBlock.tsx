@@ -99,8 +99,31 @@ function LineView({ line, query, isCurrentLine }: { line: string; query: string;
   );
 }
 
+// Manifests read unwrapped by default - indentation is the structure, and
+// UIDs and timestamps never break mid-token - with a Wrap toggle the viewer's
+// choice remembers (UI review 2026-10-13).
+const WRAP_KEY = "klyx.yaml.wrap";
+function loadWrap(): boolean {
+  try {
+    return localStorage.getItem(WRAP_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
 export function YamlBlock({ text, copyLabel, maxHeight }: { text: string; copyLabel: string; maxHeight?: number }) {
   const [query, setQuery] = useState("");
+  const [wrap, setWrap] = useState(loadWrap);
+  const toggleWrap = () => {
+    setWrap((w) => {
+      try {
+        localStorage.setItem(WRAP_KEY, w ? "0" : "1");
+      } catch {
+        // a per-viewer convenience: without storage the toggle still works
+      }
+      return !w;
+    });
+  };
   const [current, setCurrent] = useState(0);
   const scrollRef = useRef<HTMLPreElement>(null);
 
@@ -152,6 +175,7 @@ export function YamlBlock({ text, copyLabel, maxHeight }: { text: string; copyLa
             {matchLines.length > 0 ? `${Math.min(current, matchLines.length - 1) + 1}/${matchLines.length}` : "0"}
           </span>
         )}
+        <button type="button" className="l-chip" aria-pressed={wrap} onClick={toggleWrap} title={wrap ? "Lines wrap - click to scroll sideways instead" : "Long lines scroll sideways - click to wrap them"} style={{ fontSize: 10, padding: "1px 6px" }}>Wrap</button>
         <CopyButton text={text} label={`copy ${copyLabel}`} />
       </div>
       <pre
@@ -163,7 +187,7 @@ export function YamlBlock({ text, copyLabel, maxHeight }: { text: string; copyLa
           borderRadius: 4,
           fontFamily: "var(--font-mono)", fontSize: 11, lineHeight: 1.5,
           overflowX: "auto", overflowY: maxHeight ? "auto" : undefined, maxHeight,
-          whiteSpace: "pre-wrap", wordBreak: "break-all",
+          whiteSpace: wrap ? "pre-wrap" : "pre", wordBreak: wrap ? "break-word" : "normal",
           color: "var(--color-text-primary)",
         }}
       >

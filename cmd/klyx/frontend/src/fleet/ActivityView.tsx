@@ -40,7 +40,7 @@ export function ActivityView() {
         <EmptyState
           icon={<IconHistory size={28} stroke={1.2} />}
           title="No actions recorded yet."
-          hint="Day-2 results (reconcile, drain, scale, sync, forwards) land here as they happen."
+          hint="Action results (reconcile, drain, scale, sync, forwards) land here as they happen."
         />
       }
       body={

@@ -56,7 +56,7 @@ describe("MeshStrip", () => {
     const arc = container.querySelector('path[data-kind="mutual"]') as SVGPathElement;
     expect(arc).toBeTruthy();
     expect(arc.getAttribute("stroke-dasharray")).toBeNull(); // solid
-    expect(arc.querySelector("title")?.textContent).toBe("ctx-blue ⇄ ctx-orange — mutual peering");
+    expect(arc.querySelector("title")?.textContent).toBe("ctx-blue ⇄ ctx-orange - mutual peering");
   });
 
   it("draws a dashed muted arc to an off-fleet peer and never calls it mutual", () => {
@@ -81,7 +81,7 @@ describe("MeshStrip", () => {
     expect(arc).toBeTruthy();
     expect(arc.getAttribute("stroke-dasharray")).toBeTruthy();
     // Direction matters: the title says who configured it and who is missing.
-    expect(arc.querySelector("title")?.textContent).toBe("ctx-blue → ctx-orange — one-way: ctx-orange does not list ctx-blue");
+    expect(arc.querySelector("title")?.textContent).toBe("ctx-blue → ctx-orange - one-way: ctx-orange does not list ctx-blue");
     expect(getByText(/one-way peering/)).toBeTruthy(); // legend appears
   });
 
