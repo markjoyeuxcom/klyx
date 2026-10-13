@@ -68,8 +68,11 @@ const CLAIM_COLUMNS: (ColumnDef & { label: string })[] = [
   { id: "lamp", label: "", width: 16, priority: 0 },
   { id: "name", label: "NodeClaim", width: 220, priority: 0, flex: true },
   { id: "status", label: "Status", width: 190, priority: 0 },
-  { id: "pool", label: "NodePool", width: 130, priority: 1 },
-  { id: "type", label: "Instance", width: 130, priority: 2 },
+  // The NodePool name is an identifier: it shares spare width with the
+  // claim name rather than clipping beside a short Instance value
+  // (UI review 2026-10-13).
+  { id: "pool", label: "NodePool", width: 170, priority: 1, grow: 0.5 },
+  { id: "type", label: "Instance", width: 110, priority: 2 },
   { id: "capacity", label: "Capacity", width: 80, priority: 3 },
   { id: "age", label: "Age", width: 56, priority: 1 },
 ];

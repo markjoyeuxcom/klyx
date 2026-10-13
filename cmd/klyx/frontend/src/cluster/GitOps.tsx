@@ -23,11 +23,12 @@ import { StatusDot, ellipsis, type Tone } from "../chrome/primitives";
 import { compactCount } from "../chrome/format";
 import { InspectorConditions, InspectorStatus } from "./ResourceInspector";
 import { VerdictLamp } from "../health/VerdictView";
-import { SyncingChip, staleStyle } from "./staleness";
+import { SyncingChip, staleProps } from "./staleness";
 import { LensLayout, LensTable, TABLE_ROW_HEIGHT, type DatasetState } from "../layout/LensLayout";
 import { InspectorBlock, InspectorLayout, type MenuItem } from "../layout/InspectorLayout";
 import { fitColumns, type ColumnDef } from "../layout/columns";
 import { useInspectorAI } from "../ai/AIExplain";
+import { ClampedText } from "../chrome/ClampedText";
 
 const keyOf = (r: { kind: string; namespace: string; name: string }) => `${r.kind}/${r.namespace}/${r.name}`;
 
@@ -536,8 +537,8 @@ export function GitOps({ cluster }: { cluster: string }) {
                   {show("kind") && <span style={{ color: "var(--color-text-tertiary)" }}>{sourceKindLabel[s.kind] ?? s.kind}</span>}
                   {show("name") && <span className="lens-cell-name" title={`${s.namespace}/${s.name}`}><span style={{ color: "var(--color-text-tertiary)" }}>{s.namespace} / </span>{s.name}</span>}
                   {show("status") && (
-                    <span style={{ ...ellipsisCell, color: STATUS_COLOR[roleOf(s).kind] }}>
-                      {roleOf(s).label}{included(s) && s.message ? ` · ${s.message}` : ""}
+                    <span style={{ ...ellipsisCell, color: STATUS_COLOR[roleOf(s).kind], fontWeight: roleOf(s).kind === "fault" ? 600 : 400 }}>
+                      {roleOf(s).kind === "fault" ? "▲ " : ""}{roleOf(s).label}{included(s) && s.message ? ` · ${s.message}` : ""}
                     </span>
                   )}
                   {show("revision") && <span style={{ ...ellipsisCell, color: "var(--color-text-secondary)" }} title={s.revision}>{shortRev(s.revision) || "-"}</span>}
@@ -568,7 +569,8 @@ export function GitOps({ cluster }: { cluster: string }) {
                     aria-selected={k === cursorKey}
                     data-cursor={k === cursorKey ? "true" : undefined}
                     data-selected={k === selKey ? "true" : undefined}
-                    style={{ ...gridStyle, ...staleStyle(!r.suspended && r.stale) }}
+                    {...staleProps(!r.suspended && r.stale)}
+                    style={gridStyle}
                     onClick={() => (k === selKey ? close() : openRow(r))}
                     onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openRow(r); } }}
                   >
@@ -833,7 +835,7 @@ function FluxInspector({ cluster, resource, nowS, removed, unverified, isProtect
         </div>
       )}
       {r.message && included(r) && !lagging && (
-        <div className="t-body" style={{ color: role.kind === "fault" ? "var(--color-text-danger)" : "var(--color-text-warning)", overflowWrap: "anywhere", marginTop: -4 }}>{r.message}</div>
+        <ClampedText key={r.message} className="t-body" text={r.message} style={{ color: role.kind === "fault" ? "var(--color-text-danger)" : "var(--color-text-warning)", overflowWrap: "anywhere", marginTop: -4 }} />
       )}
     </div>
   );

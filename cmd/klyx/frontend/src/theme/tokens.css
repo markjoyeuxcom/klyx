@@ -379,7 +379,7 @@ div[role="button"]:hover {
 
   --color-text-primary: #e9eaeb;
   --color-text-secondary: #9ea1a6;
-  --color-text-tertiary: #71747a;
+  --color-text-tertiary: #8b8e93; /* >= 4.7:1 on module, panel and well (UI review 2026-10-13) */
   --color-text-info: #7fb8ee;
   --color-text-danger: #ff7d7d;
   --color-text-success: #8fc75e;
@@ -430,8 +430,8 @@ div[role="button"]:hover {
   --color-background-warning: rgba(154,95,10,0.10);
 
   --color-text-primary: #232323;
-  --color-text-secondary: #63656a;
-  --color-text-tertiary: #8e9095;
+  --color-text-secondary: #515357; /* a step above tertiary */
+  --color-text-tertiary: #65676c; /* >= 4.7:1 on module, panel and well (UI review 2026-10-13) */
   --color-text-info: #1d64a8;
   --color-text-danger: #b23333;
   --color-text-success: #4a7d1c;
@@ -470,9 +470,10 @@ div[role="button"]:hover {
 }
 
 /* Danger gets shape, not just colour: status text carrying this class leads
-   with a small triangle, so red vs amber survives colour-blindness. Dialogs
-   additionally keep the alert-triangle icon. */
+   with a triangle, so red vs amber survives colour-blindness. Dialogs
+   additionally keep the alert-triangle icon. The triangle matches the text
+   form "▲ " used by the verdict labels - the same size and a full space - so
+   "▲ Failed" reads the same in every lens (UI review 2026-10-13). */
 .klyx-danger-prefix::before {
-  content: "\25B2 ";
-  font-size: 9px;
+  content: "\25B2\00a0";
 }

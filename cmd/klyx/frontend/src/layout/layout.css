@@ -74,21 +74,26 @@
 .lens-row[data-cursor="true"] { box-shadow: inset 2px 0 0 var(--bench-selection-edge, var(--color-text-info)); }
 .lens-row[data-selected="true"] { background: var(--bench-selection-bg, var(--color-background-secondary)); }
 .lens-row:focus-visible { box-shadow: inset 0 0 0 2px var(--color-text-info); }
+/* Staleness (ratified 2026-07-02, refined 2026-10-13): a row whose changes
+   are not yet realized dims every cell but its identity, which stays readable. */
+.lens-row[data-stale="true"] > *:not(.lens-cell-name):not(:has(.lens-cell-name)) { opacity: 0.6; }
 .lens-cell-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* Pods columns. Optional columns fold away before the name loses its 240px
- * floor. Breakpoints are the sums of each grid's floors:
- *   full    16+240+168+48+64+160+44+24 + 7x12 gaps + 16 padding = 864
- *   no node 16+240+168+48+64+44+24     + 6x12 gaps + 16 padding = 692
- *   minimal 16+240+168+48+24           + 4x12 gaps + 16 padding = 560
- * Below 560 the shared LensTable scrolls horizontally (never clips). */
-.pods-grid { grid-template-columns: 16px minmax(240px, 1fr) 168px 48px 64px 160px 44px 24px; }
-@container lens-body (max-width: 863px) {
-  .pods-grid { grid-template-columns: 16px minmax(240px, 1fr) 168px 48px 64px 44px 24px; }
+ * floor. Status, Restarts and Node are sized to what they hold, so the pod
+ * name - the identifier - gets the slack (UI review 2026-10-13).
+ * Breakpoints are the sums of each grid's floors:
+ *   full    16+240+156+48+60+140+44+24 + 7x12 gaps + 16 padding = 828
+ *   no node 16+240+156+48+60+44+24     + 6x12 gaps + 16 padding = 676
+ *   minimal 16+240+156+48+24           + 4x12 gaps + 16 padding = 548
+ * Below 548 the shared LensTable scrolls horizontally (never clips). */
+.pods-grid { grid-template-columns: 16px minmax(240px, 1fr) 156px 48px 60px 140px 44px 24px; }
+@container lens-body (max-width: 827px) {
+  .pods-grid { grid-template-columns: 16px minmax(240px, 1fr) 156px 48px 60px 44px 24px; }
   .pods-grid .col-node { display: none; }
 }
-@container lens-body (max-width: 691px) {
-  .pods-grid { grid-template-columns: 16px minmax(240px, 1fr) 168px 48px 24px; }
+@container lens-body (max-width: 675px) {
+  .pods-grid { grid-template-columns: 16px minmax(240px, 1fr) 156px 48px 24px; }
   .pods-grid .col-restarts, .pods-grid .col-age, .pods-grid .col-node { display: none; }
 }
 
@@ -249,18 +254,28 @@
 /* ---- cluster overview (redesign step 7e) ---- */
 .ov-section { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 .ov-columns { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr)); gap: 16px; align-items: start; }
-.ov-areas { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(260px, 100%), 1fr)); gap: 4px 8px; }
-.ov-area { display: grid; grid-template-columns: 104px minmax(0, 1fr); gap: 8px; align-items: baseline; min-height: 28px; padding: 4px 8px; border: 0; border-radius: 4px;
+/* Areas flow in columns: a quiet area keeps its own height instead of
+   stretching to a long neighbour's, and its label sits above its lines so the
+   diagnosis gets the column's full width (UI review 2026-10-13). */
+.ov-areas { columns: 300px; column-gap: 12px; }
+.ov-area { display: grid; grid-template-columns: minmax(0, 1fr); gap: 2px; align-items: baseline; break-inside: avoid; margin-bottom: 6px; min-height: 28px; padding: 4px 8px; border: 0; border-radius: 4px;
   background: transparent; cursor: pointer; text-align: left; font: 400 12px/16px var(--font-sans); color: var(--color-text-secondary); }
 .ov-area:hover, .ov-area:focus-visible { background: var(--color-background-secondary); outline: none; }
 div.ov-area { cursor: default; } /* a container: its label and links are the controls */
 .ov-area-label { color: var(--color-text-primary); font-weight: 600; }
-.ov-area-text { min-width: 0; overflow-wrap: anywhere; grid-column: 2; }
+.ov-area-text { min-width: 0; overflow-wrap: anywhere; grid-column: 1; }
 /* an area's label is its lens link; its lines and Top links stack beside it */
-button.ov-area-label { grid-column: 1; grid-row: 1 / span 9; align-self: start; background: none; border: 0; padding: 0; text-align: left; font: inherit; font-weight: 600; cursor: pointer; }
+button.ov-area-label { grid-column: 1; justify-self: start; background: none; border: 0; padding: 0; text-align: left; font: inherit; font-weight: 600; cursor: pointer; }
 button.ov-area-label:hover, button.ov-area-label:focus-visible { text-decoration: underline; outline: none; }
 .ov-tops { display: inline-flex; flex-wrap: wrap; gap: 2px 8px; margin-left: 8px; }
-.ov-top { background: none; border: 0; padding: 0; font: inherit; font-size: 11px; color: var(--color-text-info); cursor: pointer; overflow-wrap: anywhere; text-align: left; }
+/* An object name never breaks mid-token: it truncates, its full name in the
+   title (UI review 2026-10-13). */
+.ov-top { background: none; border: 0; padding: 0; font: inherit; font-size: 11px; color: var(--color-text-info); cursor: pointer; text-align: left;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.ov-tops { min-width: 0; max-width: 100%; }
+.ov-why > summary, .ov-notice > summary { cursor: pointer; }
+.ov-why > span { display: block; margin-top: 2px; font-size: 11px; overflow-wrap: anywhere; }
+.ov-notice-notes { margin: 4px 0 0; padding-left: 18px; font-size: 12px; overflow-wrap: anywhere; }
 .ov-top:hover, .ov-top:focus-visible { text-decoration: underline; outline: none; }
 .ov-area[data-state="quiet"] .ov-area-text, .ov-area[data-state="evidence"] .ov-area-text { color: var(--color-text-secondary); }
 .mast-attention { flex: 0 10 auto; min-width: 5ch; overflow: hidden; text-overflow: ellipsis; height: 24px; padding: 0 8px; border: 0; border-radius: 4px; background: transparent; cursor: pointer; white-space: nowrap;

@@ -427,7 +427,7 @@ export function PodsView({ cluster }: { cluster: string }) {
           state={state}
           stateView={stateView}
           body={
-            <LensTable minWidth={560}>
+            <LensTable minWidth={548}>
               <div className="lens-table-head pods-grid" role="row">
                 <span /><span>Pod</span><span>Status</span><span>Ready</span><span className="col-restarts">Restarts</span><span className="col-node">Node</span><span className="col-age">Age</span><span />
               </div>

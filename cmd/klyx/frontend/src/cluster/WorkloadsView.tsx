@@ -22,7 +22,7 @@ import { EmptyState } from "../chrome/EmptyState";
 import { SkeletonRows } from "../chrome/SkeletonRows";
 import { btn, ellipsis } from "../chrome/primitives";
 import { loadClusterPrefs, loadSearch, saveSearch, saveWorkloadsViewPrefs } from "../store/persist";
-import { staleStyle } from "./staleness";
+import { staleProps } from "./staleness";
 import { wellKnownResourceRef } from "./resourceRefs";
 import { FleetCompare } from "./FleetCompare";
 import { WatchErrorBanner } from "../chrome/WatchErrorBanner";
@@ -477,7 +477,8 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
                       data-selected={k === selectedKey ? "true" : undefined}
                       data-rowhost="true"
                       className="lens-row"
-                      style={{ ...gridStyle, ...staleStyle(quietStale) }}
+                      {...staleProps(quietStale)}
+                      style={gridStyle}
                       onClick={() => open(w)}
                       onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(w); } }}
                     >

@@ -21,6 +21,7 @@ import { LensLayout, LensTable, TABLE_ROW_HEIGHT, type DatasetState } from "../l
 import { InspectorBlock, InspectorLayout, type MenuItem } from "../layout/InspectorLayout";
 import { fitColumns, type ColumnDef } from "../layout/columns";
 import { useInspectorAI } from "../ai/AIExplain";
+import { ClampedText } from "../chrome/ClampedText";
 
 // ArgoView is the Argo CD lens, speaking Argo's vocabulary (synced/degraded,
 // never translated into Flux terms). Applications and ApplicationSets are the
@@ -709,10 +710,10 @@ function ApplicationInspector({ cluster, app, removed, unverified, isProtected, 
           <div>
             <InspectorStatus tone={tone} label={`${app.healthStatus || "Unknown"} · ${app.syncStatus || "Unknown"}`} reason={badResources.length > 0 ? `${badResources.length} resource${badResources.length === 1 ? " needs" : "s need"} attention` : undefined} detail={app.revision ? short(app.revision) : undefined} />
             {conditions.map((c, i) => (
-              <div key={`${c.type}/${i}`} className="t-body" style={{ color: conditionSeverityColor(c.type), overflowWrap: "anywhere", marginTop: i === 0 ? -4 : 2 }}>{c.type}: {c.message || "-"}</div>
+              <ClampedText key={`${c.type}/${i}/${c.message}`} className="t-body" lines={2} prefix={`${c.type}: `} text={c.message || "-"} style={{ color: conditionSeverityColor(c.type), overflowWrap: "anywhere", marginTop: i === 0 ? -4 : 2 }} />
             ))}
             {opFailed && app.opMessage && (
-              <div className="t-body" style={{ color: "var(--color-text-warning)", overflowWrap: "anywhere", marginTop: 2 }}>Last operation {app.opPhase}: {app.opMessage}</div>
+              <ClampedText key={app.opMessage} className="t-body" lines={2} prefix={`Last operation ${app.opPhase}: `} text={app.opMessage} style={{ color: "var(--color-text-warning)", overflowWrap: "anywhere", marginTop: 2 }} />
             )}
           </div>
         )}

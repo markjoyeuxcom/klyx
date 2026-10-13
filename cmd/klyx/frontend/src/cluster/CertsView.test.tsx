@@ -84,7 +84,7 @@ describe("CertsView", () => {
     expect(getByText("Syncing…")).toBeTruthy();
     expect(row.textContent).not.toContain("Ready");
     expect(getByTitle(/Observed Gen: 2 vs Current: 3/)).toBeTruthy();
-    expect(row.style.opacity).toBe("0.6");
+    expect(row.dataset.stale).toBe("true"); // dims every cell but the row's identity (layout.css)
   });
 
 

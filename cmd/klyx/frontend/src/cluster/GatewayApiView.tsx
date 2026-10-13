@@ -20,6 +20,7 @@ import { InspectorBlock, InspectorLayout } from "../layout/InspectorLayout";
 import { fitColumns, type ColumnDef } from "../layout/columns";
 import { RANK, REFS, ROLE_TEXT, addressText, gatewayRole, gatewayVerdictDetail, listenerText, roleTone, type Role } from "./gatewayModel";
 import { useInspectorAI } from "../ai/AIExplain";
+import { staleProps } from "./staleness";
 
 // GatewayApiView - the Gateway API lens on the workspace template (spec §6
 // step 6). Without a selected Gateway it is the Gateways table (not accepted
@@ -245,7 +246,7 @@ function GatewayList({ cluster, rows, toggle }: { cluster: string; rows: Gateway
               const role = gatewayRole(g);
               const address = addressText(g.addresses);
               return (
-                <div key={k} role="button" tabIndex={0} className="lens-row" style={{ ...gridStyle, opacity: g.stale ? 0.6 : undefined }}
+                <div key={k} role="button" tabIndex={0} className="lens-row" {...staleProps(g.stale)} style={gridStyle}
                   aria-selected={k === cursorKey} data-cursor={k === cursorKey ? "true" : undefined} data-selected={k === selKey ? "true" : undefined}
                   onClick={() => { setCursorKey(k); setSelKey(k === selKey ? null : k); }}
                   onDoubleClick={() => openGateway(g.namespace, g.name)}

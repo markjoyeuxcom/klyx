@@ -14,7 +14,14 @@ type Signal = {
   tone: Tone;
   fraction: number | null;
   title?: string;
+  // lines: a list shown one entry per line (the unverified areas), each
+  // clipped to its line with its full text on hover.
+  lines?: string[];
 };
+
+// UNVERIFIED_LINES caps the unverified list on a card; the rest are on the
+// cluster's Overview.
+const UNVERIFIED_LINES = 6;
 
 // clusterDiagnosticScore orders the board (health 1c slice 5 §4) in bands:
 // unreachable, danger areas, warning areas, a stale or degraded connection,
@@ -175,12 +182,22 @@ export function ClusterCard({ c }: { c: ClusterDTO }) {
 // SignalRow: label and value in words. No bar: these signals have no honest
 // denominator, and a bar without one is decoration posing as measurement.
 // Only warnings and faults take colour.
+// A value wraps to two lines before it clips: what is wrong stays visible on
+// the card, not only in a tooltip (UI review 2026-10-13).
 function SignalRow({ signal }: { signal: Signal }) {
   const lit = signal.tone === "danger" || signal.tone === "warning";
   return (
-    <div title={signal.title ?? signal.value} style={{ display: "grid", gridTemplateColumns: "86px minmax(0, 1fr)", alignItems: "center", gap: 10, fontFamily: "var(--font-mono)", fontSize: 11, minWidth: 0 }}>
+    <div title={signal.title ?? signal.value} style={{ display: "grid", gridTemplateColumns: "112px minmax(0, 1fr)", alignItems: "baseline", gap: 10, fontFamily: "var(--font-mono)", fontSize: 11, minWidth: 0 }}>
       <span style={{ color: "var(--color-text-tertiary)", ...ellipsis }}>{signal.label}</span>
-      <span style={{ color: lit ? toneColor[signal.tone] : signal.tone === "muted" ? "var(--color-text-tertiary)" : "var(--color-text-secondary)", ...ellipsis }}>{signal.value}</span>
+      {signal.lines ? (
+        <span style={{ display: "grid", gap: 2, minWidth: 0, color: lit ? toneColor[signal.tone] : signal.tone === "muted" ? "var(--color-text-tertiary)" : "var(--color-text-secondary)" }}>
+          {signal.lines.slice(0, UNVERIFIED_LINES).map((l) => <span key={l} title={l} style={{ ...ellipsis }}>{l}</span>)}
+          {signal.lines.length > UNVERIFIED_LINES && <span>+{signal.lines.length - UNVERIFIED_LINES} more on the cluster's Overview</span>}
+        </span>
+      ) : (
+        <span style={{ color: lit ? toneColor[signal.tone] : signal.tone === "muted" ? "var(--color-text-tertiary)" : "var(--color-text-secondary)",
+          overflow: "hidden", overflowWrap: "anywhere", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" }}>{signal.value}</span>
+      )}
     </div>
   );
 }
@@ -233,24 +250,22 @@ function healthSignals(m: ClusterAttention): Signal[] {
   const out: Signal[] = [];
   const w = toolValue(m, "workloads", "");
   out.push(w ? { label: "workloads", value: w.value, tone: worst(w.tones), fraction: null, title: w.title } : { label: "workloads", value: "checking…", tone: "muted", fraction: null });
-  const flux = toolValue(m, "flux", "flux ");
-  const argo = toolValue(m, "argo", "argo ");
-  const tools = [flux, argo].filter((x): x is NonNullable<typeof x> => !!x);
-  out.push(tools.length > 0
-    ? { label: "gitops", value: tools.map((t) => t.value).join(" · "), tone: worst(tools.flatMap((t) => t.tones)), fraction: null, title: tools.map((t) => t.title).join("; ") }
-    : { label: "gitops", value: "not detected", tone: "muted", fraction: null });
+  // One line per GitOps tool, in its own vocabulary - never combined or
+  // summed (UI review 2026-10-13: the shared gitops line clipped Argo off).
+  const flux = toolValue(m, "flux", "");
+  const argo = toolValue(m, "argo", "");
+  if (flux) out.push({ label: "flux", value: flux.value, tone: worst(flux.tones), fraction: null, title: flux.title });
+  if (argo) out.push({ label: "argo cd", value: argo.value, tone: worst(argo.tones), fraction: null, title: argo.title });
+  if (!flux && !argo) out.push({ label: "gitops", value: "not detected", tone: "muted", fraction: null });
   const gw = toolValue(m, "gateway", "");
   out.push(gw ? { label: "gateway", value: gw.value, tone: worst(gw.tones), fraction: null, title: gw.title } : { label: "gateway", value: "not detected", tone: "muted", fraction: null });
-  // other areas needing attention, by name (evidence is never attention);
-  // each line keeps its own provenance (§4)
-  const others = m.areas.filter((a) => !["workloads", "flux", "argo", "gateway"].includes(a.id) && a.state === "attention");
-  if (others.length > 0) {
-    const entries = others.map((a) => ({
-      text: `${a.label} - ${(a.controller?.state === "not ready" ? [`controller not ready${a.controller.reason ? ` (${a.controller.reason})` : ""}`] : []).concat(a.lines.filter((l) => l.state === "attention").map((l) => lineOf(a, l))).join(" · ")}`,
-      prov: a.lines.filter((l) => l.state === "attention").map((l) => `${a.label}${a.lines.length > 1 ? ` ${l.label}` : ""}: ${provenance(a, l)}`),
-    }));
-    out.push({ label: "also", value: entries.map((e) => e.text).join("; "), tone: others.some((a) => a.tone === "danger") ? "danger" : "warning", fraction: null,
-      title: entries.flatMap((e) => e.prov).join("\n") });
+  // Every other area needing attention gets its own line, by name (evidence
+  // is never attention); each keeps its own provenance (§4).
+  for (const a of m.areas) {
+    if (["workloads", "flux", "argo", "gateway"].includes(a.id) || a.state !== "attention") continue;
+    const parts = (a.controller?.state === "not ready" ? [`controller not ready${a.controller.reason ? ` (${a.controller.reason})` : ""}`] : []).concat(a.lines.filter((l) => l.state === "attention").map((l) => lineOf(a, l)));
+    out.push({ label: a.label.toLowerCase(), value: parts.join(" · "), tone: a.tone === "danger" ? "danger" : "warning", fraction: null,
+      title: a.lines.filter((l) => l.state === "attention").map((l) => `${a.label}${a.lines.length > 1 ? ` ${l.label}` : ""}: ${provenance(a, l)}`).concat(a.controller?.reason ? [a.controller.reason] : []).join("\n") });
   }
   // every expected area's coverage, lit or not (§4): each gap line in full
   // (lineText: its gaps, re-read state and failure) with its provenance, an
@@ -264,7 +279,9 @@ function healthSignals(m: ClusterAttention): Signal[] {
       gaps.push({ text: `${a.label}: ${a.lines.length > 1 ? `${l.label} ` : ""}${lineText(l)}`, prov: provenance(a, l) });
     }
   }
-  if (gaps.length > 0) out.push({ label: "unverified", value: gaps.map((g) => g.text).join(" · "), tone: "muted", fraction: null, title: gaps.map((g) => (g.prov ? `${g.text} (${g.prov})` : g.text)).join("\n") });
+  // One entry per line, each named with its reason (§4); a long list ends
+  // with how many more the cluster's Overview shows.
+  if (gaps.length > 0) out.push({ label: "unverified", value: gaps.map((g) => g.text).join(" · "), lines: gaps.map((g) => g.text), tone: "muted", fraction: null, title: gaps.map((g) => (g.prov ? `${g.text} (${g.prov})` : g.text)).join("\n") });
   return out;
 }
 

@@ -1,6 +1,7 @@
 import { StatusDot } from "../chrome/primitives/StatusDot";
 import { toneBg, toneBorder, toneColor } from "../chrome/primitives/styles";
 import { type HealthLike, kindOf, labelOf, verdictTone } from "./verdict";
+import { ClampedText } from "../chrome/ClampedText";
 
 // VerdictLamp is a row's single status lamp. Only fault/degraded glow (Signal
 // Bench rule); unknown reads as a dashed, unlit ring so "cannot tell" never
@@ -74,9 +75,7 @@ export function VerdictStatus({ health, detail, pendingMessage }: { health: Heal
         <span>{k === "fault" ? "▲ " : ""}{labelOf(health)}</span>
       </span>
       {health?.message ? (
-        <span style={{ fontSize: 12, lineHeight: 1.45, color: lit ? toneColor[tone] : "var(--color-text-primary)", overflowWrap: "anywhere", userSelect: "text" }}>
-          {health.message}
-        </span>
+        <ClampedText key={health.message} text={health.message} style={{ fontSize: 12, lineHeight: 1.45, color: lit ? toneColor[tone] : "var(--color-text-primary)", overflowWrap: "anywhere", userSelect: "text" }} />
       ) : pendingMessage ? (
         <span data-testid="verdict-message-pending" style={{ fontSize: 12, color: "var(--color-text-tertiary)" }}>{pendingMessage}</span>
       ) : null}

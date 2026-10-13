@@ -71,9 +71,7 @@ export function Overview({ c }: { c: ClusterDTO }) {
           <button className="l-btn" onClick={refresh}>Refresh</button>
         </>
       }
-      notice={c.reason ? (
-        <div className="t-body" role="status" style={{ color: stateTone, overflowWrap: "anywhere" }}>{c.state === "Failed" ? "▲ " : ""}{c.reason}</div>
-      ) : undefined}
+      notice={c.reason ? <ConnectionNotice c={c} m={model} tone={stateTone} /> : undefined}
       state="ready"
       body={
         <div className="lens-canvas" data-testid="overview">
@@ -113,6 +111,32 @@ export function Overview({ c }: { c: ClusterDTO }) {
         </div>
       }
     />
+  );
+}
+
+// ConnectionNotice: a failed connection's reason in full; a connection with
+// notes as one line naming what is unverified, the full notes one click
+// away (UI review 2026-10-13: the same long controller sentences were
+// repeated above the grid and inside it).
+function ConnectionNotice({ c, m, tone }: { c: ClusterDTO; m: ClusterAttention | null; tone: string }) {
+  if (c.state === "Failed") {
+    return <div className="t-body" role="status" style={{ color: tone, overflowWrap: "anywhere" }}>▲ {c.reason}</div>;
+  }
+  const notes = c.reason.split(/;\s+/).map((n) => n.trim()).filter(Boolean);
+  const areas = m?.areas.filter((a) => a.controller) ?? [];
+  const notReady = areas.filter((a) => a.controller?.state === "not ready").map((a) => a.label);
+  const unverified = areas.filter((a) => a.controller?.state !== "not ready").map((a) => a.label);
+  const headline = areas.length > 0
+    ? [notReady.length > 0 ? `▲ Controller not ready: ${notReady.join(", ")}` : "", unverified.length > 0 ? `Controller health unverified: ${unverified.join(", ")}` : ""].filter(Boolean).join(" · ")
+    : notes[0];
+  if (notes.length <= 1 && areas.length === 0) {
+    return <div className="t-body" role="status" style={{ color: tone, overflowWrap: "anywhere" }}>{c.reason}</div>;
+  }
+  return (
+    <details className="ov-notice" role="status" style={{ color: tone }}>
+      <summary className="t-body">{headline}<span className="t-secondary"> · {notes.length === 1 ? "details" : `${notes.length} notes`}</span></summary>
+      <ul className="ov-notice-notes t-secondary">{notes.map((n) => <li key={n}>{n}</li>)}</ul>
+    </details>
   );
 }
 
@@ -171,8 +195,15 @@ function AttentionSection({ cluster, m }: { cluster: string; m: ClusterAttention
             <div key={a.id} className="ov-area" data-state={a.state} data-testid={`ov-area-${a.id}`}>
               <button type="button" className="ov-area-label" onClick={() => goArea(cluster, a)} title={`Open ${a.label}`}>{a.label}</button>
               {a.controller && (
+                // One line; the controller's reason is a click away, not a
+                // paragraph repeated in every area.
                 <span className="ov-area-text" style={{ color: a.controller.state === "not ready" ? "var(--color-text-danger)" : "var(--color-text-warning)" }}>
-                  {a.controller.state === "not ready" ? "▲ controller not ready" : "controller health unknown"}{a.controller.reason ? ` - ${a.controller.reason}` : ""}
+                  {a.controller.reason ? (
+                    <details className="ov-why">
+                      <summary>{a.controller.state === "not ready" ? "▲ controller not ready" : "controller health unverified"}</summary>
+                      <span className="t-secondary">{a.controller.reason}</span>
+                    </details>
+                  ) : a.controller.state === "not ready" ? "▲ controller not ready" : "controller health unverified"}
                 </span>
               )}
               {a.lines.map((l) => (

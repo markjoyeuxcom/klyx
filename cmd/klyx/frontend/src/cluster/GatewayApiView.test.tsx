@@ -82,7 +82,7 @@ describe("GatewayApiView (redesign step 6)", () => {
     const row = screen.getByText("eg").closest(".lens-row") as HTMLElement;
     expect(row.textContent).toContain("syncing");
     expect(row.textContent).not.toContain("programmed");
-    expect(row.style.opacity).toBe("0.6");
+    expect(row.dataset.stale).toBe("true"); // dims every cell but the row's identity (layout.css)
   });
 
   it("absent, Unknown, explicit False and last-observed False are four different claims", () => {

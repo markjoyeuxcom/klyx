@@ -16,7 +16,7 @@ import { WatchErrorBanner } from "../chrome/WatchErrorBanner";
 import { VirtualList, type VirtualListHandle } from "../chrome/VirtualList";
 import { IconCertificate, IconAlertTriangle } from "@tabler/icons-react";
 import { SECRET_REF, wellKnownResourceRef } from "./resourceRefs";
-import { SyncingChip, staleStyle } from "./staleness";
+import { SyncingChip, staleProps } from "./staleness";
 import { VerdictLamp } from "../health/VerdictView";
 import { LensLayout, LensTable, TABLE_ROW_HEIGHT, type DatasetState } from "../layout/LensLayout";
 import { InspectorBlock, InspectorLayout, type MenuItem } from "../layout/InspectorLayout";
@@ -456,7 +456,7 @@ export function CertsView({ cluster }: { cluster: string }) {
                 const role = roleOf(c);
                 const soon = expiringSoon(c);
                 return (
-                  <div key={k} role="button" tabIndex={0} className="lens-row" style={{ ...gridStyle, ...staleStyle(c.stale && !expired(c)) }}
+                  <div key={k} role="button" tabIndex={0} className="lens-row" {...staleProps(c.stale && !expired(c))} style={gridStyle}
                     aria-selected={k === cursorKey} data-cursor={k === cursorKey ? "true" : undefined} data-selected={k === selKey ? "true" : undefined}
                     onClick={() => { setCursorKey(k); autoSelect.current = "done"; selectCert(k === selKey ? null : k); }}
                     onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); selectCert(k); } }}>
@@ -629,7 +629,7 @@ function CertInspector({ c, cluster, removed, unverified, issuer, issuersKnown, 
       >
         {issuerBroken && (
           <div className="t-body" style={{ padding: "8px 10px", borderRadius: 4, background: issuerRole!.kind === "fault" ? "var(--color-background-danger)" : "var(--color-background-warning)", boxShadow: `inset 0 0 0 1px ${issuerRole!.kind === "fault" ? "var(--color-border-danger)" : "var(--color-border-warning)"}` }}>
-            <div style={{ color: ROLE_TEXT[issuerRole!.kind], fontWeight: 600 }}>{issuerRole!.kind === "fault" ? "Issuer failed" : "Issuer not ready"}{issuerCov === "stale" ? " (last observed - the issuer watch is failing)" : ""}: {boundIssuer!.reason || "unknown"}</div>
+            <div style={{ color: ROLE_TEXT[issuerRole!.kind], fontWeight: 600 }}>{issuerRole!.kind === "fault" ? "▲ Issuer failed" : "Issuer not ready"}{issuerCov === "stale" ? " (last observed - the issuer watch is failing)" : ""}: {boundIssuer!.reason || "unknown"}</div>
             <button onClick={() => onOpenIssuer(boundIssuer!)} className="t-identifier" style={{ background: "none", border: 0, padding: 0, cursor: "pointer", color: "var(--color-text-info)", marginTop: 2 }}>{boundIssuer!.kind}/{boundIssuer!.name}</button>
             {boundIssuer!.message && <div style={{ color: "var(--color-text-secondary)", marginTop: 3, overflowWrap: "anywhere" }}>{boundIssuer!.message}</div>}
           </div>

@@ -100,13 +100,17 @@ describe("ClusterCard health from the cluster's summary", () => {
   const flux = (recFault = 0) => task("flux", [native("reconciliations", { fault: recFault, ok: 4 }, recFault, "not ready", [kind("kustomizations")]), native("sources", { ok: 2 }, 0, "not ready", [kind("gitrepositories")])]);
   const argo = (fault = 0, sets = true) => task("argo", [native("applications", { fault, ok: 5 }, fault, "need attention", [kind("applications")]),
     ...(sets ? [native("applicationsets", { ok: 1 }, 0, "not healthy", [kind("applicationsets")])] : [])]);
-  const row = (label: string) => screen.getByText(label).nextElementSibling as HTMLElement;
+  // A signal row is a label with its value beside it (the "nodes" counter
+  // caption shares the word but has no value sibling).
+  const row = (label: string) => screen.getAllByText(label).map((e) => e.nextElementSibling).find(Boolean) as HTMLElement;
 
   it("each tool in its own vocabulary, never summed; quiet is neutral, never green", () => {
     seed([...core(), flux(2), argo(1)]);
     const { container } = render(<ClusterCard c={{ ...base, fluxPresent: true, argoPresent: true }} />);
     expect(row("workloads").textContent).toBe("none need attention");
-    expect(row("gitops").textContent).toBe("flux reconciliations 2 not ready · argo applications 1 need attention");
+    // one line per tool (UI review 2026-10-13), each in its own vocabulary
+    expect(row("flux").textContent).toBe("reconciliations 2 not ready");
+    expect(row("argo cd").textContent).toBe("applications 1 need attention");
     expect(row("gateway").textContent).toBe("not detected");
     expect(screen.getByText("2 areas need attention")).toBeTruthy(); // areas, never objects
     expect(container.innerHTML).not.toMatch(/color-text-success/);
@@ -130,17 +134,19 @@ describe("ClusterCard health from the cluster's summary", () => {
   it("'not detected' only for a confirmed absence; an expected tool the summary does not carry is checking", () => {
     seed(core());
     const r = render(<ClusterCard c={{ ...base, fluxPresent: false, argoPresent: true }} />);
-    expect(row("gitops").textContent).toBe("argo checking…");
+    expect(row("argo cd").textContent).toBe("checking…");
+    expect(screen.queryByText("flux")).toBeNull(); // confirmed absent: no line
     expect(row("unverified").textContent).toContain("Argo CD: Applications checking…");
     r.unmount();
     render(<ClusterCard c={{ ...base, state: "Connecting", fluxPresent: false, argoPresent: false }} />); // detection not run: never "not detected"
-    expect(row("gitops").textContent).toBe("flux checking… · capability not yet known · argo checking… · capability not yet known");
+    expect(row("flux").textContent).toBe("checking… · capability not yet known");
+    expect(row("argo cd").textContent).toBe("checking… · capability not yet known");
   });
 
   it("other areas needing attention are listed by name; evidence never counts", () => {
     seed(replace(replace(core(), task("nodes", [verdict("nodes", { degraded: 1, ok: 2 }, [kind("nodes")])])), task("events", [evidence(40, [kind("events")])])));
     render(<ClusterCard c={base} />);
-    expect(row("also").textContent).toBe("Nodes - 1 need attention");
+    expect(row("nodes").textContent).toBe("1 need attention"); // its own line, by name
     expect(screen.getByText("1 area needs attention")).toBeTruthy();
   });
 
@@ -178,18 +184,18 @@ describe("ClusterCard health from the cluster's summary", () => {
     applyRows("n", { cluster: N, incarnation: 1, task: "nodes", evaluatedAt: "2026-10-12T12:00:03Z", rows: [], full: true,
       part: { ...verdict("nodes", { degraded: 1, ok: 2 }, [kind("nodes")]), ver: 3, obs: 3 } }, 0);
     const r1 = render(<ClusterCard c={base} />);
-    expect(row("also").textContent).toBe("Nodes - 1 need attention");
-    expect(row("also").parentElement?.title).toMatch(/^Nodes: Nodes lens rows as of [^-]+$/); // the rows' time, not the older summary's
+    expect(row("nodes").textContent).toBe("1 need attention");
+    expect(row("nodes").parentElement?.title).toMatch(/^Nodes: Nodes lens rows as of [^-]+$/); // the rows' time, not the older summary's
     r1.unmount();
     applySummary(summary(replace(core(), task("nodes", [{ ...verdict("nodes", { degraded: 2, ok: 1 }, [kind("nodes")]), ver: 6, obs: 6 }])), { seq: 2 }, N), 100);
     const r2 = render(<ClusterCard c={base} />);
-    expect(row("also").textContent).toBe("Nodes - 1 need attention"); // the rows, held
-    expect(row("also").parentElement?.title).toMatch(/Nodes lens rows as of .* - updating/);
+    expect(row("nodes").textContent).toBe("1 need attention"); // the rows, held
+    expect(row("nodes").parentElement?.title).toMatch(/Nodes lens rows as of .* - updating/);
     r2.unmount();
     dueForBootstrap(1200);
     render(<ClusterCard c={base} />);
-    expect(row("also").textContent).toBe("Nodes - 2 need attention"); // the summary's, refreshing
-    expect(row("also").parentElement?.title).toMatch(/Nodes: cluster summary as of .* - refreshing/);
+    expect(row("nodes").textContent).toBe("2 need attention"); // the summary's, refreshing
+    expect(row("nodes").parentElement?.title).toMatch(/Nodes: cluster summary as of .* - refreshing/);
   });
 
   it("'also' keeps a not-ready controller's reason; 'unverified' keeps an unknown controller's", () => {
@@ -197,7 +203,7 @@ describe("ClusterCard health from the cluster's summary", () => {
       task("certs", [native("certificates", { ok: 2 }, 0, "not ready", [kind("certificates")]), native("issuers", { ok: 1 }, 0, "not ready", [kind("issuers")])], { controller: { state: "not ready", reason: "cert-manager 0/1 available" } }),
       task("karpenter", [native("nodeclaims", { ok: 3 }, 0, "failing", [kind("nodeclaims")]), native("nodepools", { ok: 1 }, 0, "not ready", [kind("nodepools")])], { controller: { state: "unknown", reason: "deployment unreadable" } })]);
     render(<ClusterCard c={{ ...base, certManagerPresent: true, karpenterPresent: true }} />);
-    expect(row("also").textContent).toBe("Certificates - controller not ready (cert-manager 0/1 available)");
+    expect(row("certificates").textContent).toBe("controller not ready (cert-manager 0/1 available)");
     expect(row("unverified").textContent).toContain("Karpenter: controller health unknown (deployment unreadable)");
   });
 

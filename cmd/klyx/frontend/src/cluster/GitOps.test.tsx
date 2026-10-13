@@ -81,7 +81,7 @@ describe("GitOps view", () => {
     expect(row.textContent).not.toContain("Ready");
     expect(getByTitle(/Observed Gen: 4 vs Current: 5/)).toBeTruthy();
     // Dim = not yet realized.
-    expect(row.style.opacity).toBe("0.6");
+    expect(row.dataset.stale).toBe("true"); // dims every cell but the row's identity (layout.css)
   });
 
 

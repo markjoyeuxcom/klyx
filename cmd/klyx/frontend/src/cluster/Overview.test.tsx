@@ -298,3 +298,33 @@ describe("Overview names what the summary does not carry (slice 6 §4)", () => {
     expect(area("pods").textContent).toContain("▲ 2 need attention · ReplicaSets could not be read - a dependency");
   });
 });
+
+// UI review 2026-10-13: a connection with notes reads as one line naming
+// what is unverified; the full notes stay one click away, and each area says
+// "controller health unverified" in one line with its reason behind it.
+describe("Overview connection notes", () => {
+  beforeEach(() => { resetHealthStore(); });
+
+  it("summarises controller notes and keeps every note in a disclosure", () => {
+    seed([...core(),
+      task("certs", [native("certificates", { ok: 2 }, 0, "not ready", [kind("certificates")])], { controller: { state: "unknown", reason: "no Deployment cert-manager/cert-manager" } }),
+      task("karpenter", [native("nodeclaims", { ok: 1 }, 0, "failing", [kind("nodeclaims")])], { controller: { state: "unknown", reason: "no Deployment kube-system/karpenter" } })]);
+    const reason = "cert-manager installed but cert-manager health is unverified (no Deployment cert-manager/cert-manager); Karpenter CRDs installed but the karpenter controller's health is unverified (no Deployment kube-system/karpenter)";
+    const { container } = render(<Overview c={{ ...dto, state: "Degraded", reason, certManagerPresent: true, karpenterPresent: true }} />);
+    const notice = container.querySelector("details.ov-notice") as HTMLDetailsElement;
+    expect(notice).toBeTruthy();
+    expect(notice.querySelector("summary")?.textContent).toMatch(/^Controller health unverified: Certificates, Karpenter · 2 notes$/);
+    expect(notice.querySelectorAll("li")).toHaveLength(2);
+    expect(notice.textContent).toContain("no Deployment kube-system/karpenter");
+    // each area: one line, its reason behind a disclosure
+    const why = screen.getByTestId("ov-area-certs").querySelector("details.ov-why") as HTMLDetailsElement;
+    expect(why.querySelector("summary")?.textContent).toBe("controller health unverified");
+    expect(why.textContent).toContain("no Deployment cert-manager/cert-manager");
+  });
+
+  it("a failed connection keeps its reason in full", () => {
+    seed();
+    render(<Overview c={{ ...dto, state: "Failed", reason: "connect timed out" }} />);
+    expect(screen.getByText("▲ connect timed out")).toBeTruthy();
+  });
+});
