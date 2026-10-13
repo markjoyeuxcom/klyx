@@ -241,6 +241,10 @@ Merged to `main` — do not re-add to the backlog:
 - The Claude Code CLI under a reviewed contract (2.1.296 macOS arm64, Pro/Max
   only, per-call sign-in and policy checks, revocation until Test). Codex and
   agy stay unsupported. Each slice Codex-reviewed; real-model smoke pending (§0)
+- v0.11.1 (same day): the first real-sign-in Test found that `--safe-mode` keeps
+  Claude Code's built-in plugins on. The contract now pins each reviewed
+  version's built-ins, and admission checks the startup report offline, with a
+  fixed prompt, before any evidence is sent
 
 **2026-07-25 — the Karpenter lens (#48):**
 - Autoscaling diagnosis in Karpenter's vocabulary: capability detection
