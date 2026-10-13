@@ -1,8 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { getPaletteOpen } from "./CommandPalette";
 import { vh, vw } from "../app/zoom";
+import { trapTab } from "./modalFocus";
+import { useRestoreFocus } from "./useRestoreFocus";
 
-// ShortcutsOverlay — the "?" cheatsheet. Every shortcut in the app was
+// ShortcutsOverlay - the "?" cheatsheet. Every shortcut in the app was
 // previously undiscoverable outside the palette's footer line; this overlay
 // is the one place they are all written down.
 
@@ -23,7 +25,7 @@ const GROUPS: { title: string; rows: [string, string][] }[] = [
   {
     title: "Global",
     rows: [
-      [`${MOD} K`, "command palette — jump anywhere, run day-2 verbs"],
+      [`${MOD} K`, "command palette - jump anywhere, run actions"],
       [`${MOD} 1…9`, "switch to the nth cluster (fleet spine order)"],
       [`${MOD} [  ·  ${MOD} ]`, "back / forward between places (never re-runs an action)"],
       [`${MOD} =  ·  ${MOD} -  ·  ${MOD} 0`, "zoom in / out / actual size (80-200%)"],
@@ -38,6 +40,8 @@ const GROUPS: { title: string; rows: [string, string][] }[] = [
       ["Enter", "open the selected row"],
       ["/", "focus the filter box"],
       ["l", "logs for the selected pod / workload"],
+      ["x", "select rows for a bulk action (pods)"],
+      ["r  ·  s", "a lens's own verbs, such as reconcile and suspend - each lens footer lists them"],
     ],
   },
   {
@@ -72,12 +76,26 @@ export function ShortcutsOverlay() {
   }, [open]);
 
   if (!open) return null;
+  return <ShortcutsDialog onClose={() => setOpen(false)} />;
+}
+
+// ShortcutsDialog is the open cheatsheet. It is a real modal: focus moves to
+// its Close button, Tab stays inside, and closing returns focus to whatever
+// had it (Codex UI review 2026-10-13).
+function ShortcutsDialog({ onClose }: { onClose: () => void }) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const closeRef = useRef<HTMLButtonElement>(null);
+  const titleId = useId();
+  useRestoreFocus();
+  useEffect(() => {
+    closeRef.current?.focus();
+  }, []);
 
   return (
     <div
       data-testid="shortcuts-overlay"
       onMouseDown={(e) => {
-        if (e.target === e.currentTarget) setOpen(false);
+        if (e.target === e.currentTarget) onClose();
       }}
       style={{
         position: "fixed", inset: 0, zIndex: 1500,
@@ -86,9 +104,20 @@ export function ShortcutsOverlay() {
       }}
     >
       <div
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
-        aria-label="Keyboard shortcuts"
+        aria-labelledby={titleId}
+        onKeyDown={(e) => {
+          // Keys stay in the dialog: list navigation behind it never acts.
+          e.stopPropagation();
+          if (e.key === "Escape") {
+            e.preventDefault();
+            onClose();
+          } else {
+            trapTab(e, dialogRef.current);
+          }
+        }}
         style={{
           width: 480, maxWidth: vw(90), maxHeight: vh(80), overflowY: "auto",
           background: "var(--color-background-primary)",
@@ -98,7 +127,10 @@ export function ShortcutsOverlay() {
           padding: "16px 20px 18px",
         }}
       >
-        <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 12 }}>Keyboard shortcuts</div>
+        <div style={{ display: "flex", alignItems: "center", marginBottom: 12 }}>
+          <div id={titleId} style={{ fontSize: 14, fontWeight: 600 }}>Keyboard shortcuts</div>
+          <button ref={closeRef} type="button" className="l-btn" style={{ marginLeft: "auto" }} onClick={onClose}>Close</button>
+        </div>
         {GROUPS.map((g) => (
           <div key={g.title} style={{ marginBottom: 12 }}>
             <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: 0.6, color: "var(--color-text-tertiary)", marginBottom: 6 }}>{g.title}</div>
@@ -110,7 +142,7 @@ export function ShortcutsOverlay() {
             ))}
           </div>
         ))}
-        <div style={{ fontSize: 10, color: "var(--color-text-tertiary)", marginTop: 4 }}>esc or click outside to close</div>
+        <div style={{ fontSize: 10, color: "var(--color-text-tertiary)", marginTop: 4 }}>Esc, Close or a click outside closes this</div>
       </div>
     </div>
   );

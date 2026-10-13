@@ -766,3 +766,28 @@ describe("WorkloadsView history across clusters (Codex 7b re-review)", () => {
     });
   }
 });
+
+// Codex UI review 2026-10-13: the palette's compare verb opens the existing
+// fleet compare for its workload; with one cluster it opens nothing.
+describe("WorkloadsView compare-workload intent", () => {
+  beforeEach(() => { localStorage.clear(); useFleet.getState().clearWorkloads(); useFleet.setState({ navIntent: null, clusters: [] }); vi.clearAllMocks(); });
+  const c = (name: string): ClusterDTO => ({ name, state: "connected", reason: "", nodesReady: 1, nodesTotal: 1, pods: 1, version: "v1.30", gitopsTier: "Absent", gitopsReason: "", networkTier: "Absent", networkReason: "", env: "", region: "", provider: "", group: "", ageSeconds: 1 });
+
+  it("opens fleet compare for the named workload when the fleet has two clusters", () => {
+    useFleet.setState({ clusters: [c("homelab-nelli"), c("other")] });
+    seed([broken, healthy]);
+    useFleet.getState().requestNavIntent({ kind: "compare-workload", cluster: "homelab-nelli", workloadKind: "Deployment", namespace: "ollama-prod", name: "ollama" });
+    const { getByRole } = render(<WorkloadsView cluster="homelab-nelli" />);
+    expect(getByRole("dialog", { name: "Fleet compare" })).toBeTruthy();
+    expect(useFleet.getState().navIntent).toBeNull();
+  });
+
+  it("with one cluster it selects the workload and opens nothing", () => {
+    useFleet.setState({ clusters: [c("homelab-nelli")] });
+    seed([broken, healthy]);
+    useFleet.getState().requestNavIntent({ kind: "compare-workload", cluster: "homelab-nelli", workloadKind: "Deployment", namespace: "ollama-prod", name: "ollama" });
+    const { queryByRole } = render(<WorkloadsView cluster="homelab-nelli" />);
+    expect(queryByRole("dialog", { name: "Fleet compare" })).toBeNull();
+    expect(useFleet.getState().navIntent).toBeNull();
+  });
+});

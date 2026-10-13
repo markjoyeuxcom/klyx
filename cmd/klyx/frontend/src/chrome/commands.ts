@@ -332,6 +332,17 @@ export function buildCommands(s: FleetStore): Command[] {
           hint: `${workloadCluster}${lockMark(s, workloadCluster)}`,
           run: () => openWithIntent(s, "workloads", workloadCluster, { kind: "restart-workload", cluster: workloadCluster, workloadKind: w.kind as WorkloadKind, namespace: w.namespace, name: w.name }),
         });
+        // Fleet compare: the same workload across every cluster. It opens the
+        // existing compare panel; with one cluster there is nothing to compare.
+        if (s.clusters.length > 1) {
+          cmds.push({
+            id: `verb:compare:${workloadCluster}/${key}`,
+            group: "Actions",
+            title: `compare ${w.kind.toLowerCase()} ${w.namespace}/${w.name} across the fleet`,
+            hint: `${s.clusters.length} clusters · read-only`,
+            run: () => openWithIntent(s, "workloads", workloadCluster, { kind: "compare-workload", cluster: workloadCluster, workloadKind: w.kind as WorkloadKind, namespace: w.namespace, name: w.name }),
+          });
+        }
         // DaemonSets have no replica count - scale does not apply.
         if (w.kind !== "DaemonSet") {
           cmds.push({
@@ -533,8 +544,33 @@ export function buildCommands(s: FleetStore): Command[] {
     group: "Application",
     title: "Keyboard shortcuts",
     hint: "also on ?",
+    keywords: ["help", "keys", "cheatsheet", "?"],
     run: () => openShortcutsOverlay(),
   });
+
+  // Fleet compare lives on a workload (its inspector and the palette verbs
+  // above); this entry makes it findable, and says when it cannot apply.
+  cmds.push(s.clusters.length > 1
+    ? { id: "fleet-compare", group: "Application", title: "Fleet compare", hint: "one workload across every cluster - type compare and its name", keywords: ["compare", "diff"], run: () => { if (cluster) openSection(s, "workloads", cluster); else s.openFleet(); } }
+    : { id: "fleet-compare", group: "Application", title: "Fleet compare", hint: "one workload across every cluster", keywords: ["compare", "diff"], run: () => {}, disabled: "needs two or more clusters in the fleet" });
+
+  // Scratch: what Klyx itself created (debug pods, ad-hoc objects), in the
+  // unmanaged klyx-scratch namespace. It opens the existing panel; deleting
+  // there keeps its own confirm.
+  const scratchHere = cluster && s.clusters.some((c) => c.name === cluster && connected(c)) ? cluster : null;
+  const scratchConnected = s.clusters.filter(connected);
+  const openScratch = (c: string) => () => openWithIntent(s, "pods", c, { kind: "open-scratch", cluster: c });
+  const scratchBase = { id: "scratch", group: "Application" as const, title: "Scratch", keywords: ["debug pod", "ad-hoc", "klyx-scratch"] };
+  if (scratchHere) {
+    cmds.push({ ...scratchBase, hint: `debug pods and ad-hoc objects Klyx created · ${scratchHere}`, run: openScratch(scratchHere) });
+  } else if (scratchConnected.length === 1) {
+    cmds.push({ ...scratchBase, hint: `debug pods and ad-hoc objects Klyx created · ${scratchConnected[0].name}`, run: openScratch(scratchConnected[0].name) });
+  } else if (scratchConnected.length > 1) {
+    const options = scratchConnected.map((c) => ({ id: `scratch@${c.name}`, group: "Clusters" as const, title: c.name, hint: [c.env, c.region].filter(Boolean).join(" · ") || undefined, run: openScratch(c.name) }));
+    cmds.push({ ...scratchBase, hint: `debug pods and ad-hoc objects Klyx created · ${scratchConnected.length} clusters`, run: () => {}, next: { title: "Choose cluster for Scratch", options }, choices: options });
+  } else {
+    cmds.push({ ...scratchBase, hint: "debug pods and ad-hoc objects Klyx created", run: () => {}, disabled: "no connected cluster" });
+  }
 
   // --- Theme ------------------------------------------------------------------
   cmds.push({
@@ -593,22 +629,25 @@ function destinationCommands(s: FleetStore, g: NavGroup, d: Destination, here: s
     title: `Choose cluster for ${d.label}`,
     options: clusters.map((c) => ({ id: `${id}@${c.name}`, group: "Clusters", title: c.name, hint: [c.env, c.region, c.protected ? "prd lock" : ""].filter(Boolean).join(" · ") || undefined, run: open(c.name), guard: live(c.name) })),
   });
+  // A lens is findable by its tool's name too: "helm" finds Helm's Releases,
+  // "network" its Gateway topology (Codex UI review 2026-10-13).
+  const keywords = d.type === "task" ? [g.label, ...(d.keywords ?? [])] : d.keywords;
   const out: Command[] = [];
   if (here) {
     const mine = states.find((x) => x.c.name === here);
     if (mine && mine.state === "present") {
-      out.push({ id, group, title: d.label, hint: [base, here].join(" · "), run: open(here), guard: live(here), keywords: d.keywords });
+      out.push({ id, group, title: d.label, hint: [base, here].join(" · "), run: open(here), guard: live(here), keywords });
     } else {
       const others = eligible.filter((c) => c.name !== here);
       const why = mine && mine.state !== "present" ? `${CAP_STATE_TEXT[mine.state]} on ${here}` : `not available on ${here}`;
       out.push(others.length > 0
-        ? { id, group, title: d.label, hint: `${base} · ${why} - choose another cluster`, run: () => {}, next: chooser(others), keywords: d.keywords, choices: chooser(others)?.options }
-        : { id, group, title: d.label, hint: base, run: () => {}, disabled: why, keywords: d.keywords });
+        ? { id, group, title: d.label, hint: `${base} · ${why} - choose another cluster`, run: () => {}, next: chooser(others), keywords, choices: chooser(others)?.options }
+        : { id, group, title: d.label, hint: base, run: () => {}, disabled: why, keywords });
     }
   } else if (eligible.length === 1) {
-    out.push({ id, group, title: d.label, hint: [base, eligible[0].name].join(" · "), run: open(eligible[0].name), guard: live(eligible[0].name), keywords: d.keywords, choices: chooser(eligible)?.options });
+    out.push({ id, group, title: d.label, hint: [base, eligible[0].name].join(" · "), run: open(eligible[0].name), guard: live(eligible[0].name), keywords, choices: chooser(eligible)?.options });
   } else if (eligible.length > 1) {
-    out.push({ id, group, title: d.label, hint: `${base} · ${eligible.length} clusters`, run: () => {}, next: chooser(eligible), keywords: d.keywords, choices: chooser(eligible)?.options });
+    out.push({ id, group, title: d.label, hint: `${base} · ${eligible.length} clusters`, run: () => {}, next: chooser(eligible), keywords, choices: chooser(eligible)?.options });
   } else {
     const anyConnected = s.clusters.some(connected);
     const connecting = s.clusters.some((c) => c.state === "Connecting");
@@ -620,7 +659,7 @@ function destinationCommands(s: FleetStore, g: NavGroup, d: Destination, here: s
       : "not detected on any connected cluster";
     // Connect cluster only where connecting one is the way forward.
     const canConnect = s.clusters.length === 0 || (!anyConnected && !connecting);
-    out.push({ id, group, title: d.label, hint: base, run: () => {}, disabled: why, keywords: d.keywords,
+    out.push({ id, group, title: d.label, hint: base, run: () => {}, disabled: why, keywords,
       ...(canConnect ? { action: { label: "Connect cluster", run: () => s.openSettings() } } : {}) });
   }
   // Cluster-qualified task results: "events prd-weu" opens Events there.

@@ -43,13 +43,28 @@ export function ClusterCard({ c }: { c: ClusterDTO }) {
   const mesh = useFleet((s) => s.mesh);
   const { m, summaryAt } = useClusterModel(c);
   const unreachable = isUnreachable(c);
+  // The card is the cluster's open control: a button for the keyboard too
+  // (Codex UI review 2026-10-13), with Enter and Space like any button. Its
+  // contents are text only, so nothing interactive nests inside it.
+  const asButton = {
+    role: "button" as const,
+    tabIndex: 0,
+    "aria-label": `Open cluster ${c.name}`,
+    onClick: () => openCluster(c.name),
+    onKeyDown: (e: React.KeyboardEvent) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        openCluster(c.name);
+      }
+    },
+  };
 
   if (unreachable) {
     const displayName = clusterDisplayName(c.name);
     return (
       <div
         data-testid={`cluster-card-${c.name}`}
-        onClick={() => openCluster(c.name)}
+        {...asButton}
         style={{
           background: "var(--color-background-primary)",
           border: "0.5px dashed var(--color-border-secondary)",
@@ -86,7 +101,7 @@ export function ClusterCard({ c }: { c: ClusterDTO }) {
   return (
     <div
       data-testid={`cluster-card-${c.name}`}
-      onClick={() => openCluster(c.name)}
+      {...asButton}
       style={{
         // Module face (Signal Bench): the lamp in the name plate carries the
         // severity the 3px rail used to - the machining is the card's edge.

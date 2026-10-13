@@ -49,6 +49,11 @@ vi.mock("../../bindings/github.com/moomora/klyx/internal/appbridge/index.js", ()
     CloseLogStream: vi.fn().mockResolvedValue(undefined),
     CloseAll: vi.fn().mockResolvedValue(undefined),
   },
+  // The Scratch panel lists what Klyx created; the open-scratch tests open it.
+  CRDService: {
+    ListAdhocObjects: vi.fn().mockResolvedValue([]),
+    DeleteAdhocObject: vi.fn().mockResolvedValue({ ok: true, error: "" }),
+  },
 }));
 vi.mock("@wailsio/runtime", () => ({
   Events: { On: vi.fn().mockReturnValue(() => {}) },
@@ -977,5 +982,31 @@ describe("PodsView pilot rework (Codex review)", () => {
     expect(queryByTestId("forward-popover")).toBeNull();
     expect(container.querySelector('[data-testid="forward-start"]')).toBeNull();
     expect(document.body.textContent).toContain("Pod removed.");
+  });
+});
+
+// Codex UI review 2026-10-13: the palette's Scratch entry opens the existing
+// Scratch panel for its cluster, and nothing for another cluster's intent.
+describe("PodsView open-scratch intent", () => {
+  beforeEach(() => {
+    useFleet.getState().clearPods();
+    useFleet.setState({ navIntent: null });
+    vi.clearAllMocks();
+  });
+
+  it("opens the Scratch panel and consumes the intent", () => {
+    seed([broken, healthy]);
+    useFleet.getState().requestNavIntent({ kind: "open-scratch", cluster: "homelab" });
+    const { getByRole } = render(<PodsView cluster="homelab" />);
+    expect(getByRole("dialog", { name: "scratch objects" })).toBeTruthy();
+    expect(useFleet.getState().navIntent).toBeNull();
+  });
+
+  it("leaves another cluster's intent parked", () => {
+    seed([broken, healthy]);
+    useFleet.getState().requestNavIntent({ kind: "open-scratch", cluster: "elsewhere" });
+    const { queryByRole } = render(<PodsView cluster="homelab" />);
+    expect(queryByRole("dialog", { name: "scratch objects" })).toBeNull();
+    expect(useFleet.getState().navIntent).toEqual({ kind: "open-scratch", cluster: "elsewhere" });
   });
 });

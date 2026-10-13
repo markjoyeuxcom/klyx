@@ -220,6 +220,12 @@ export function PodsView({ cluster }: { cluster: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pods.namespace, pods.needsAttention, pods.search, unknownOnly]);
 
+  // The palette's Scratch entry opens the existing Scratch panel here.
+  useNavIntent(cluster, ["open-scratch"], () => {
+    setScratchOpen(true);
+    return "consumed";
+  }, []);
+
   // Cross-links name a pod: resolve it to its row's object, revealing it past
   // the filters.
   useNavIntent(cluster, ["logs-pod", "select-pod"], (intent) => {

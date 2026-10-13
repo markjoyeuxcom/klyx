@@ -924,6 +924,10 @@ export type NavIntent =
   | { kind: "select-node"; cluster: string; node: string }
   | { kind: "select-flux"; cluster: string; fluxKind: string; namespace: string; name: string }
   | { kind: "access-check"; cluster: string; namespace: string; name: string }
+  // open-scratch opens the Scratch panel (Pods); compare-workload opens a
+  // workload's fleet compare. Both only open existing read-first surfaces.
+  | { kind: "open-scratch"; cluster: string }
+  | { kind: "compare-workload"; cluster: string; workloadKind: WorkloadKind; namespace: string; name: string }
   // reveal: open a part's view and select its object (health 1c slice 4
   // §5.4) - selection only, never an action
   | { kind: "reveal"; cluster: string; task: string; part: string; ref: RevealRef };

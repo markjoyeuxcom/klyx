@@ -2,6 +2,7 @@ import { useEffect, useId, useRef, useState } from "react";
 import { IconAlertTriangle } from "@tabler/icons-react";
 import { armProtected } from "../bridge/configsvc";
 import { useRestoreFocus } from "./useRestoreFocus";
+import { trapTab } from "./modalFocus";
 
 export function ConfirmDialog({
   title,
@@ -96,20 +97,8 @@ export function ConfirmDialog({
     e.stopPropagation();
     if (e.key === "Escape") {
       onCancel();
-    } else if (e.key === "Tab") {
-      const focusable = dialogRef.current?.querySelectorAll<HTMLElement>(
-        'button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])',
-      );
-      if (!focusable || focusable.length === 0) return;
-      const first = focusable[0];
-      const last = focusable[focusable.length - 1];
-      if (e.shiftKey && document.activeElement === first) {
-        e.preventDefault();
-        last.focus();
-      } else if (!e.shiftKey && document.activeElement === last) {
-        e.preventDefault();
-        first.focus();
-      }
+    } else {
+      trapTab(e, dialogRef.current);
     }
   };
 

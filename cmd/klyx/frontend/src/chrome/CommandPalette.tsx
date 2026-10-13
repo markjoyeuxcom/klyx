@@ -44,11 +44,27 @@ function inEditable(t: EventTarget | null): boolean {
 }
 
 // Rank commands against the query. Title is full-weight; hint contributes at
-// half weight. Frecency (loadBoosts) reorders the empty-query list toward
-// recently used commands and tiebreaks fuzzy matches at 0.75 weight - enough
-// to float a habit, never enough to outrank a clearly better match.
-// `total` counts every match so the footer can be honest about truncation.
+// half weight, capped, so a raw resource view's long hint ("raw resource view
+// · PodDisruptionBudget · policy/v1") never outweighs a primary view's title.
+// A title that starts with the query - or a word in it, or a view alias such
+// as its group name ("helm" for Helm's Releases) - ranks first, and a primary
+// view outranks a raw resource view on an equal match (Codex UI review
+// 2026-10-13: "po" listed twelve raw kinds before Pods). Frecency
+// (loadBoosts) reorders the empty-query list toward recently used commands
+// and tiebreaks fuzzy matches at 0.75 weight - enough to float a habit, never
+// enough to outrank a clearly better match. `total` counts every match so the
+// footer can be honest about truncation.
 export type RankResult = { rows: Ranked[]; total: number };
+
+const HINT_CAP = 4;
+const PREFIX = 30;
+const WORD_PREFIX = 12;
+const GROUP_BONUS: Partial<Record<Command["group"], number>> = { Views: 8, Application: 4, Clusters: 4 };
+
+// wordStarts: whether a word after the first in text starts with q.
+function wordStarts(text: string, q: string): boolean {
+  return text.split(/[\s/·:._-]+/).slice(1).some((w) => w.startsWith(q));
+}
 
 export function rank(commands: Command[], query: string, boost: (id: string) => number = () => 0): RankResult {
   if (query.trim() === "") {
@@ -70,15 +86,45 @@ export function rank(commands: Command[], query: string, boost: (id: string) => 
     const lq = q.toLowerCase();
     const h = cmd.hint && cmd.hint.toLowerCase().includes(lq) ? fuzzyMatch(q, cmd.hint)
       : cmd.keywords?.some((k) => k.toLowerCase().includes(lq)) ? { score: 4, positions: [] } : null;
-    if (!t && !h) continue;
+    const title = cmd.title.toLowerCase();
+    let prefix = title.startsWith(lq) ? PREFIX : wordStarts(title, lq) ? WORD_PREFIX : 0;
+    // An alias that starts with the query stands in for the title.
+    let titleScore = t?.score ?? 0;
+    if (prefix === 0) {
+      const alias = cmd.keywords?.find((k) => k.toLowerCase().startsWith(lq));
+      if (alias) {
+        prefix = PREFIX;
+        titleScore = Math.max(titleScore, fuzzyMatch(q, alias)?.score ?? 0);
+      }
+    }
+    if (!t && !h && prefix === 0) continue;
     // Typing a result's whole title picks it: an exact match outranks any
     // frecency habit ("theme: bench" over a recently used "theme: bench light").
-    const exact = cmd.title.toLowerCase() === q.toLowerCase() ? 1000 : 0;
-    const score = exact + (t?.score ?? 0) + (h ? h.score * 0.5 : 0) + boost(cmd.id) * 0.75;
+    const exact = title === lq ? 1000 : 0;
+    const hint = h ? Math.min(h.score * 0.5, HINT_CAP) : 0;
+    const primary = (GROUP_BONUS[cmd.group] ?? 0) - (cmd.disabled ? 10 : 0);
+    const brevity = -Math.min(cmd.title.length, 60) * 0.02;
+    const score = exact + titleScore + prefix + hint + primary + brevity + boost(cmd.id) * 0.75;
     scored.push({ cmd, positions: t?.positions ?? [], score });
   }
   scored.sort((a, b) => b.score - a.score);
   return { rows: scored.slice(0, LIMIT).map(({ cmd, positions }) => ({ cmd, positions })), total: scored.length };
+}
+
+// inDisplayOrder groups ranked rows by their group, groups in the order of
+// their best result, rows in rank order within a group. The first row is
+// still the top-ranked result.
+export function inDisplayOrder(rows: Ranked[]): Ranked[] {
+  const order: string[] = [];
+  const by = new Map<string, Ranked[]>();
+  for (const r of rows) {
+    if (!by.has(r.cmd.group)) {
+      by.set(r.cmd.group, []);
+      order.push(r.cmd.group);
+    }
+    by.get(r.cmd.group)!.push(r);
+  }
+  return order.flatMap((g) => by.get(g)!);
 }
 
 // Splits a title into <mark>-highlighted runs at the matched positions.
@@ -193,7 +239,10 @@ export function CommandPalette() {
   }, [open]);
 
   const ranked = useMemo(() => rank(step ? step.options : commands, query, step ? () => 0 : boost), [commands, step, query, boost]);
-  const results = ranked.rows;
+  // Results are shown grouped, and the arrow keys, Enter and the scroll
+  // follow exactly that order (Codex UI review 2026-10-13: grouping kept the
+  // ranked index, so Down could jump between groups).
+  const results = useMemo(() => inDisplayOrder(ranked.rows), [ranked.rows]);
   const dropped = ranked.total - results.length;
 
   // Keep selection in range as the result set shrinks/grows.
@@ -266,16 +315,12 @@ export function CommandPalette() {
 
   if (!open) return null;
 
-  // Group results in first-appearance order, preserving the flat selection index.
+  // results is already grouped: each group's rows are contiguous.
   const groups: { group: string; rows: { r: Ranked; idx: number }[] }[] = [];
   results.forEach((r, idx) => {
-    const name = r.cmd.group;
-    let g = groups.find((x) => x.group === name);
-    if (!g) {
-      g = { group: name, rows: [] };
-      groups.push(g);
-    }
-    g.rows.push({ r, idx });
+    const last = groups[groups.length - 1];
+    if (last && last.group === r.cmd.group) last.rows.push({ r, idx });
+    else groups.push({ group: r.cmd.group, rows: [{ r, idx }] });
   });
 
   return (
@@ -445,7 +490,7 @@ export function CommandPalette() {
           }}
         >
           {blocked && <span role="status" style={{ color: "var(--color-text-warning)" }}>Unavailable: {blocked.why} · </span>}
-          {dropped > 0 ? `+${dropped} more — keep typing · ` : ""}↑↓ navigate · ↵ open · {step ? "⌫ back · " : ""}esc close · views always searchable, objects from loaded data
+          {dropped > 0 ? `+${dropped} more - keep typing · ` : ""}↑↓ navigate · ↵ open · {step ? "⌫ back · " : ""}esc close · views always searchable, objects from loaded data
         </div>
       </div>
     </div>

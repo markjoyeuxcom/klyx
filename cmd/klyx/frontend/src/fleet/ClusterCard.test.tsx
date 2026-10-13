@@ -1,4 +1,4 @@
-import { beforeEach, describe, it, expect } from "vitest";
+import { beforeEach, describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { ClusterCard, clusterDiagnosticScore } from "./ClusterCard";
 import type { ClusterDTO } from "../store/fleet";
@@ -248,5 +248,28 @@ describe("pod count honesty (1c 2d)", () => {
     unmount();
     render(<ClusterCard c={{ ...base, pods: 42, podsKnown: true, podsStale: true }} />);
     expect(screen.getByTitle("last good count - the pod read is failing").textContent).toBe("42");
+  });
+});
+
+// Codex UI review 2026-10-13: a card opens its cluster from the keyboard.
+describe("ClusterCard keyboard", () => {
+  it("is a focusable button that opens on Enter and on Space, reachable or not", async () => {
+    const { fireEvent } = await import("@testing-library/react");
+    const openCluster = vi.fn();
+    useFleet.setState({ openCluster });
+    for (const c of [base, { ...base, name: "down-01", state: "Unreachable" as ClusterDTO["state"] }]) {
+      const { getByTestId, unmount } = render(<ClusterCard c={c} />);
+      const card = getByTestId(`cluster-card-${c.name}`);
+      expect(card.getAttribute("role")).toBe("button");
+      expect(card.tabIndex).toBe(0);
+      expect(card.getAttribute("aria-label")).toBe(`Open cluster ${c.name}`);
+      fireEvent.keyDown(card, { key: "Enter" });
+      fireEvent.keyDown(card, { key: " " });
+      fireEvent.keyDown(card, { key: "a" });
+      expect(openCluster).toHaveBeenCalledTimes(2);
+      expect(openCluster).toHaveBeenLastCalledWith(c.name);
+      openCluster.mockClear();
+      unmount();
+    }
   });
 });

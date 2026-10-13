@@ -319,3 +319,78 @@ describe("CommandPalette revalidates while open (Codex 7c review)", () => {
     expect(loadBoosts()("view:events@prd")).toBeGreaterThan(0);
   });
 });
+
+describe("Codex UI review 2026-10-13: palette order and ranking", () => {
+  const dev = { name: "dev", state: "Synced", fluxPresent: true, gatewayAPIVersion: "v1", karpenterPresent: true } as ClusterDTO;
+  const type = (input: HTMLElement, value: string) => fireEvent.change(input, { target: { value } });
+  const options = (c: HTMLElement) => Array.from(c.querySelectorAll<HTMLElement>('[role="option"]'));
+  const selectedIndex = (c: HTMLElement) => options(c).findIndex((o) => o.dataset.selected === "true");
+
+  it("groups keep rank order and the first row is the top result", async () => {
+    const { inDisplayOrder } = await import("./CommandPalette");
+    const r = (id: string, group: "Views" | "Resources") => ({ cmd: { id, group, title: id, run: () => {} }, positions: [] });
+    // Ranked: a view, a raw kind, a view, a raw kind - interleaved.
+    const out = inDisplayOrder([r("v1", "Views"), r("r1", "Resources"), r("v2", "Views"), r("r2", "Resources")]);
+    expect(out.map((x) => x.cmd.id)).toEqual(["v1", "v2", "r1", "r2"]);
+  });
+
+  it("the arrow keys move through the rows in the order they are shown, and Enter runs the shown row", () => {
+    useFleet.setState({ clusters: [dev], route: { name: "fleet" } });
+    const { getByTestId } = render(<CommandPalette />);
+    pressCmdK();
+    const input = getByTestId("command-palette-input");
+    type(input, "po"); // views and raw kinds interleave in rank
+    const list = getByTestId("command-palette");
+    const n = options(list).length;
+    expect(n).toBeGreaterThan(3);
+    expect(selectedIndex(list)).toBe(0);
+    for (let i = 1; i < Math.min(n, 8); i++) {
+      fireEvent.keyDown(input, { key: "ArrowDown" });
+      expect(selectedIndex(list)).toBe(i);
+    }
+    fireEvent.keyDown(input, { key: "ArrowUp" });
+    expect(selectedIndex(list)).toBe(Math.min(n, 8) - 2);
+  });
+
+  it("a short query puts the primary view first: po, helm, gateway", () => {
+    useFleet.setState({ clusters: [dev], route: { name: "fleet" } });
+    const { getByTestId } = render(<CommandPalette />);
+    pressCmdK();
+    const input = getByTestId("command-palette-input");
+    const list = getByTestId("command-palette");
+    type(input, "po");
+    expect(options(list)[0].dataset.testid).toBe("command-row-view:pods");
+    type(input, "helm");
+    expect(options(list)[0].dataset.testid).toBe("command-row-view:helm");
+    type(input, "gateway");
+    expect(options(list)[0].dataset.testid).toBe("command-row-view:gateway");
+    // The raw kinds stay findable by their own names.
+    type(input, "poddisruption");
+    expect(options(list)[0].dataset.testid).toBe("command-row-resource:res:policy/v1/poddisruptionbudgets");
+  });
+
+  it("help, scratch and compare are findable; compare says why it cannot apply to one cluster", () => {
+    useFleet.setState({ clusters: [dev], route: { name: "fleet" } });
+    const { getByTestId } = render(<CommandPalette />);
+    pressCmdK();
+    const input = getByTestId("command-palette-input");
+    const list = getByTestId("command-palette");
+    type(input, "help");
+    expect(options(list)[0].dataset.testid).toBe("command-row-shortcuts");
+    type(input, "scratch");
+    expect(options(list)[0].dataset.testid).toBe("command-row-scratch");
+    type(input, "compare");
+    const compare = getByTestId("command-row-fleet-compare");
+    expect(compare.getAttribute("aria-disabled")).toBe("true");
+    expect(compare.textContent).toContain("needs two or more clusters");
+  });
+
+  it("Scratch parks an open-scratch intent for its cluster", () => {
+    useFleet.setState({ clusters: [dev], route: { name: "fleet" }, navIntent: null });
+    const { getByTestId } = render(<CommandPalette />);
+    pressCmdK();
+    type(getByTestId("command-palette-input"), "scratch");
+    fireEvent.keyDown(getByTestId("command-palette-input"), { key: "Enter" });
+    expect(useFleet.getState().navIntent).toEqual({ kind: "open-scratch", cluster: "dev" });
+  });
+});
