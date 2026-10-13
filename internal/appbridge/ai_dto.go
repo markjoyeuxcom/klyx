@@ -8,8 +8,9 @@ package appbridge
 type AIResultDTO struct {
 	OK          bool   `json:"ok"`
 	Explanation string `json:"explanation"`
-	Model       string `json:"model"`
-	Backend     string `json:"backend"`
+	Model       string `json:"model"`   // the model the vendor reports having used
+	Backend     string `json:"backend"` // the provider id
+	Origin      string `json:"origin"`  // where the prompt went
 	GroundedOn  string `json:"groundedOn"`
 	Error       string `json:"error"`
 	// Redacted counts the manifest values masked before a fix suggestion was
@@ -20,6 +21,9 @@ type AIResultDTO struct {
 // AIAvailabilityDTO tells the frontend whether to render an AI affordance at all
 // (Ready is false when the backend is off / no client is configured).
 type AIAvailabilityDTO struct {
-	Backend string `json:"backend"`
+	Backend string `json:"backend"` // the configured provider id ("off" when none)
 	Ready   bool   `json:"ready"`
+	Model   string `json:"model"`
+	Origin  string `json:"origin"`  // where prompts go
+	Problem string `json:"problem"` // why it is not ready, when a provider is configured
 }

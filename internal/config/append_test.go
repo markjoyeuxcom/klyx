@@ -1,10 +1,13 @@
 package config
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -419,5 +422,66 @@ func TestOnlyClustersAdded(t *testing.T) {
 		if onlyClustersAdded(orig, []byte(bad), 1) == nil {
 			t.Errorf("%s: must be refused", name)
 		}
+	}
+}
+
+// Spec 2026-10-13 §2.3: the atomic rename stops a torn file, not a lost
+// update. An edit made on disk after AppendClusters read the file is refused,
+// and the edit survives.
+func TestAppendClustersRefusesAnEditMadeMeanwhile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "fleet.yaml")
+	if err := os.WriteFile(path, []byte("clusters:\n  - name: a\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	edited := "clusters:\n  - name: a\n# edited in another tool\nai:\n  provider: anthropic\n"
+	beforeReplace = func() { _ = os.WriteFile(path, []byte(edited), 0o644) }
+	defer func() { beforeReplace = nil }()
+
+	err := AppendClusters(path, []string{"b"})
+	if !errors.Is(err, ErrFleetChangedOnDisk) {
+		t.Fatalf("want ErrFleetChangedOnDisk, got %v", err)
+	}
+	if got, _ := os.ReadFile(path); string(got) != edited {
+		t.Fatalf("the on-disk edit was overwritten:\n%s", got)
+	}
+
+	// A file created meanwhile on the create-new path is refused too.
+	fresh := filepath.Join(dir, "new.yaml")
+	beforeReplace = func() { _ = os.WriteFile(fresh, []byte("clusters:\n  - name: z\n"), 0o644) }
+	if err := AppendClusters(fresh, []string{"b"}); !errors.Is(err, ErrFleetChangedOnDisk) {
+		t.Fatalf("create-new: want ErrFleetChangedOnDisk, got %v", err)
+	}
+}
+
+// Concurrent writers in this process are serialised: every add lands.
+func TestAppendClustersSerialisesWriters(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "fleet.yaml")
+	if err := os.WriteFile(path, []byte("clusters:\n  - name: seed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	errs := make(chan error, 8)
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			errs <- AppendClusters(path, []string{fmt.Sprintf("ctx-%d", i)})
+		}(i)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("a serialised append failed: %v", err)
+		}
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Clusters) != 9 {
+		t.Fatalf("want 9 clusters (no lost update), got %d", len(cfg.Clusters))
 	}
 }

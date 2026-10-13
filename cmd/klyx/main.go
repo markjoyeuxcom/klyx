@@ -2,10 +2,8 @@ package main
 
 import (
 	"context"
-	"crypto/tls"
 	"embed"
 	"log"
-	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -294,20 +292,14 @@ func main() {
 	// consulted until a destructive verb runs at request time.
 	appbridge.SetProtectGuard(appbridge.NewProtectGuard(configSvc.IsProtected, time.Now))
 
-	// AI-assist (read-only "Explain this"). Off unless fleet.yaml configures a
-	// backend. The client is built once from the startup config; nil when off, so
-	// AIService.Available() reports not-ready and the UI hides the affordance. The
-	// egress gate reuses configSvc.IsProtected (live) exactly like the ProtectGuard.
-	var aiClient appbridge.Completer
-	aiBackend, aiAllowEgress := "off", false
-	if cfg.AI.Enabled() {
-		aiBackend, aiAllowEgress = cfg.AI.Backend, cfg.AI.AllowProtectedEgress
-		tr := &http.Transport{}
-		if cfg.AI.TLSSkipVerify {
-			tr.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec // user opt-in for a local self-signed endpoint
-		}
-		httpc := &http.Client{Transport: tr, Timeout: 90 * time.Second}
-		aiClient = ai.NewClient(ai.Backend(cfg.AI.Backend), cfg.AI.BaseURL, cfg.AI.APIKey, cfg.AI.Model, httpc)
+	// AI-assist (read-only Explain and Suggest-fix). Off unless fleet.yaml
+	// configures a provider. The snapshot is built once from the startup config:
+	// the key comes from exactly the configured source (the OS keychain by
+	// default), and a problem leaves AI unavailable with that reason. The egress
+	// gate reuses configSvc.IsProtected (live) exactly like the ProtectGuard.
+	aiState := appbridge.BuildAIState(cfg.AI, ai.OSKeyStore{}, os.Getenv)
+	if aiState.Problem != "" {
+		log.Printf("klyx: AI (%s) unavailable: %s", aiState.ProviderID, aiState.Problem)
 	}
 	aiSvc := appbridge.NewAIService(
 		func(name string) (appbridge.AIConn, bool) {
@@ -317,11 +309,7 @@ func main() {
 			}
 			return c, true
 		},
-		// onMachine: only a loopback endpoint keeps cluster context on this
-		// machine; any other endpoint (hosted, or "local" pointed at a LAN/hosted
-		// OpenAI-compatible server) needs ai.allowProtectedEgress for protected
-		// clusters.
-		aiClient, aiBackend, aiClient != nil && ai.IsLoopbackEndpoint(cfg.AI.BaseURL), aiAllowEgress, configSvc.IsProtected,
+		aiState, configSvc.IsProtected,
 		func(name string) capability.Set {
 			for _, sn := range reg.Snapshots() {
 				if sn.Name == name {

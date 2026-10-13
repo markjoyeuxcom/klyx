@@ -2,12 +2,14 @@ package appbridge
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
-	"time"
+	"sync/atomic"
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/moomora/klyx/internal/ai"
 	"github.com/moomora/klyx/internal/capability"
 	"github.com/moomora/klyx/internal/certmanager"
 	"github.com/moomora/klyx/internal/crd"
@@ -15,9 +17,6 @@ import (
 )
 
 const (
-	aiTimeout      = 60 * time.Second
-	aiMaxTokens    = 512
-	aiFixMaxTokens = 900 // a suggested patch needs more room than an explanation
 	// aiRelatedCap bounds how many related objects the cross-lens bundle resolves,
 	// so an Explain on a highly-connected object stays a handful of Gets, not a
 	// cluster crawl.
@@ -29,14 +28,6 @@ const (
 	aiManifestCap = 8000
 )
 
-// Completer is the LLM surface AIService needs; *ai.Client satisfies it and
-// tests inject a fake. Kept minimal so the appbridge never imports the transport
-// details.
-type Completer interface {
-	Complete(ctx context.Context, system, user string, maxTokens int) (string, error)
-	Model() string
-}
-
 // AIConn is the narrow per-cluster surface AIService borrows - the on-demand
 // resolvers the cert lens and the generic inspector already expose. The generic
 // GetInstanceDetail is what powers cross-lens synthesis: its Related refs are the
@@ -46,28 +37,42 @@ type AIConn interface {
 	GetInstanceDetail(ctx context.Context, group, version, plural, ns, name string) (crd.InstanceDetail, error)
 }
 
-// AIService is the Wails-bound, READ-ONLY AI-assist surface. Stateless and not
-// per-cluster: it borrows the data layer's chain resolver on demand, sends only
-// the resolved (secret-free) chain to the model, and never mutates cluster state.
-// Errors fold into the result DTO; it never throws across the bridge.
+// AIService is the Wails-bound, READ-ONLY AI-assist surface. It borrows the
+// data layer's resolvers on demand, sends only resolved, redacted evidence to
+// the model, and never mutates cluster state. Errors fold into the result DTO;
+// it never throws across the bridge.
+//
+// The provider and its egress policy are one immutable AIState, swapped as a
+// whole (SetAIState) and loaded once per call (spec 2026-10-13 §1.1).
 type AIService struct {
 	lookup       func(string) (AIConn, bool)
-	client       Completer // nil when the backend is off
-	backend      string
-	onMachine    bool // the endpoint is THIS machine (loopback) - nothing leaves it
-	allowEgress  bool
+	state        atomic.Pointer[AIState]
+	rev          atomic.Uint64
 	isProtected  func(string) bool
 	capabilities func(string) capability.Set // per-cluster operator health; may be nil
 }
 
-// NewAIService wires the read-only AI surface. onMachine must be true ONLY when
-// the configured endpoint is this machine (ai.IsLoopbackEndpoint): it is what
-// lets a protected cluster's context reach the model without an explicit
-// opt-in. The backend label alone ("local" = OpenAI-compatible protocol) says
-// nothing about where the server runs.
-func NewAIService(lookup func(string) (AIConn, bool), client Completer, backend string, onMachine, allowEgress bool, isProtected func(string) bool, capabilities func(string) capability.Set) *AIService {
-	return &AIService{lookup: lookup, client: client, backend: backend, onMachine: onMachine, allowEgress: allowEgress, isProtected: isProtected, capabilities: capabilities}
+// NewAIService wires the read-only AI surface with its first snapshot.
+func NewAIService(lookup func(string) (AIConn, bool), initial *AIState, isProtected func(string) bool, capabilities func(string) capability.Set) *AIService {
+	s := &AIService{lookup: lookup, isProtected: isProtected, capabilities: capabilities}
+	SetAIState(s, initial)
+	return s
 }
+
+// SetAIState publishes a new snapshot. A free function, not a method: every
+// exported method of a bound service is callable from the webview, and only
+// Go (the settings writer) may swap the provider. In-flight calls finish on
+// the snapshot they loaded.
+func SetAIState(s *AIService, st *AIState) {
+	if st == nil {
+		st = &AIState{ProviderID: ai.ProviderOff}
+	}
+	cp := *st
+	cp.Rev = s.rev.Add(1)
+	s.state.Store(&cp)
+}
+
+func (s *AIService) load() *AIState { return s.state.Load() }
 
 // egressRefusal is the reason a protected cluster's context may not be sent.
 func egressRefusal(cluster string) string {
@@ -82,22 +87,27 @@ func (s *AIService) operators(cluster string) *operatorHealth {
 	return projectOperators(s.capabilities(cluster))
 }
 
-// Available reports whether the Explain affordance should render at all.
+// Available reports whether the Explain affordance should render at all, and
+// where prompts go.
 func (s *AIService) Available() AIAvailabilityDTO {
-	return AIAvailabilityDTO{Backend: s.backend, Ready: s.client != nil}
+	st := s.load()
+	return AIAvailabilityDTO{Backend: string(st.ProviderID), Ready: st.Provider != nil, Model: st.Model, Origin: st.Origin, Problem: st.Problem}
 }
 
 // EgressAllowed reports whether an AI call is permitted for this cluster: false
 // when a protected cluster's context would leave the machine without the
 // explicit ai.allowProtectedEgress opt-in. Only an endpoint on this machine
-// (loopback) needs no opt-in - a "local" (OpenAI-compatible) backend pointed at
-// a LAN or hosted server is egress like any other (review 2026-10-03 #14).
-// Lets the UI disable-with-tooltip rather than fail on click.
+// (loopback) needs no opt-in (review 2026-10-03 #14). Lets the UI
+// disable-with-tooltip rather than fail on click.
 func (s *AIService) EgressAllowed(cluster string) bool {
-	if s.client == nil {
+	return s.egressAllowed(s.load(), cluster)
+}
+
+func (s *AIService) egressAllowed(st *AIState, cluster string) bool {
+	if st.Provider == nil {
 		return false
 	}
-	if !s.onMachine && s.protected(cluster) && !s.allowEgress {
+	if !st.OnMachine && s.protected(cluster) && !st.AllowEgress {
 		return false
 	}
 	return true
@@ -107,21 +117,78 @@ func (s *AIService) protected(cluster string) bool {
 	return s.isProtected != nil && s.isProtected(cluster)
 }
 
+// precheck is the shared gate: a provider exists, the cluster's context may
+// go to it, and the cluster is connected. It reads only the given snapshot.
+func (s *AIService) precheck(st *AIState, cluster string) (AIConn, string) {
+	if st.Provider == nil {
+		if st.Problem != "" {
+			return nil, "AI is unavailable: " + st.Problem
+		}
+		return nil, "AI backend not configured"
+	}
+	if !s.egressAllowed(st, cluster) {
+		return nil, egressRefusal(cluster)
+	}
+	conn, ok := s.lookup(cluster)
+	if !ok {
+		return nil, "cluster not connected"
+	}
+	return conn, ""
+}
+
+// complete runs one completion on the snapshot's provider and folds the
+// outcome into a DTO: a refusal, a truncation or tool output is an error,
+// never an explanation (spec §1.2).
+func complete(ctx context.Context, st *AIState, req ai.Request, grounded string, redacted int) AIResultDTO {
+	res, err := st.Provider.Complete(ctx, req)
+	if err != nil {
+		return AIResultDTO{Error: modelError(err), Backend: string(st.ProviderID), Origin: st.Origin}
+	}
+	return AIResultDTO{
+		OK:          true,
+		Explanation: res.Text,
+		Model:       res.ModelUsed,
+		Backend:     string(st.ProviderID),
+		Origin:      st.Origin,
+		GroundedOn:  grounded,
+		Redacted:    redacted,
+	}
+}
+
+// modelError is the user-facing text for a failed completion.
+func modelError(err error) string {
+	var refused *ai.RefusedError
+	switch {
+	case errors.As(err, &refused):
+		return "The model declined to answer" + refusalDetail(refused) + "."
+	case errors.Is(err, ai.ErrTruncated):
+		return "The model's answer was cut off before it finished; nothing partial is shown. Try again, or choose a model with a larger output limit."
+	case errors.Is(err, ai.ErrUnexpectedOutput), errors.Is(err, ai.ErrEmpty):
+		return err.Error() + "."
+	case errors.Is(err, context.DeadlineExceeded):
+		return "The model did not answer in time."
+	default:
+		return "model call failed: " + ai.Scrub(err.Error())
+	}
+}
+
+func refusalDetail(r *ai.RefusedError) string {
+	if r.Category == "" {
+		return ""
+	}
+	return " (" + r.Category + ")"
+}
+
 // ExplainCertificate resolves the certificate's issuance chain fresh (server-
 // authoritative), sends the resolved chain - no secrets - to the model, and
 // returns a grounded explanation. Read-only.
 func (s *AIService) ExplainCertificate(cluster, ns, name string) AIResultDTO {
-	if s.client == nil {
-		return AIResultDTO{Error: "AI backend not configured"}
+	st := s.load()
+	conn, refusal := s.precheck(st, cluster)
+	if refusal != "" {
+		return AIResultDTO{Error: refusal}
 	}
-	if !s.EgressAllowed(cluster) {
-		return AIResultDTO{Error: egressRefusal(cluster)}
-	}
-	conn, ok := s.lookup(cluster)
-	if !ok {
-		return AIResultDTO{Error: "cluster not connected"}
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), aiTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), ai.Deadline(ai.PurposeExplain))
 	defer cancel()
 
 	chain, err := conn.GetCertificateChain(ctx, ns, name)
@@ -129,17 +196,7 @@ func (s *AIService) ExplainCertificate(cluster, ns, name string) AIResultDTO {
 		return AIResultDTO{Error: "resolve chain: " + err.Error()}
 	}
 	system, user := BuildCertExplainPrompt(chain)
-	text, err := s.client.Complete(ctx, system, user, aiMaxTokens)
-	if err != nil {
-		return AIResultDTO{Error: "model call failed: " + err.Error()}
-	}
-	return AIResultDTO{
-		OK:          true,
-		Explanation: strings.TrimSpace(text),
-		Model:       s.client.Model(),
-		Backend:     s.backend,
-		GroundedOn:  certChainIdentities(chain),
-	}
+	return complete(ctx, st, ai.Request{System: system, User: user, Purpose: ai.PurposeExplain}, certChainIdentities(chain), 0)
 }
 
 // ExplainResource is the cross-lens flagship: it assembles the resolved health of
@@ -147,17 +204,12 @@ func (s *AIService) ExplainCertificate(cluster, ns, name string) AIResultDTO {
 // then asks the model for one causal root-cause narrative. Read-only; only
 // conditions + facts cross into the prompt (never YAML or secret data).
 func (s *AIService) ExplainResource(cluster, group, version, plural, ns, name string) AIResultDTO {
-	if s.client == nil {
-		return AIResultDTO{Error: "AI backend not configured"}
+	st := s.load()
+	conn, refusal := s.precheck(st, cluster)
+	if refusal != "" {
+		return AIResultDTO{Error: refusal}
 	}
-	if !s.EgressAllowed(cluster) {
-		return AIResultDTO{Error: egressRefusal(cluster)}
-	}
-	conn, ok := s.lookup(cluster)
-	if !ok {
-		return AIResultDTO{Error: "cluster not connected"}
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), aiTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), ai.Deadline(ai.PurposeExplain))
 	defer cancel()
 
 	bundle, _, err := buildResourceBundle(ctx, conn, group, version, plural, ns, name)
@@ -166,17 +218,7 @@ func (s *AIService) ExplainResource(cluster, group, version, plural, ns, name st
 	}
 	bundle.Operators = s.operators(cluster)
 	system, user := BuildResourceExplainPrompt(bundle)
-	text, err := s.client.Complete(ctx, system, user, aiMaxTokens)
-	if err != nil {
-		return AIResultDTO{Error: "model call failed: " + err.Error()}
-	}
-	return AIResultDTO{
-		OK:          true,
-		Explanation: strings.TrimSpace(text),
-		Model:       s.client.Model(),
-		Backend:     s.backend,
-		GroundedOn:  resourceBundleIdentities(bundle),
-	}
+	return complete(ctx, st, ai.Request{System: system, User: user, Purpose: ai.PurposeExplain}, resourceBundleIdentities(bundle), 0)
 }
 
 // SuggestFix drafts the MINIMAL change to desired state that would fix the
@@ -185,17 +227,12 @@ func (s *AIService) ExplainResource(cluster, group, version, plural, ns, name st
 // Explain; it additionally sends the resource's current manifest (secret values
 // already masked upstream, and capped) so the model can target a specific edit.
 func (s *AIService) SuggestFix(cluster, group, version, plural, ns, name string) AIResultDTO {
-	if s.client == nil {
-		return AIResultDTO{Error: "AI backend not configured"}
+	st := s.load()
+	conn, refusal := s.precheck(st, cluster)
+	if refusal != "" {
+		return AIResultDTO{Error: refusal}
 	}
-	if !s.EgressAllowed(cluster) {
-		return AIResultDTO{Error: egressRefusal(cluster)}
-	}
-	conn, ok := s.lookup(cluster)
-	if !ok {
-		return AIResultDTO{Error: "cluster not connected"}
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), aiTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), ai.Deadline(ai.PurposeFix))
 	defer cancel()
 
 	bundle, root, err := buildResourceBundle(ctx, conn, group, version, plural, ns, name)
@@ -212,18 +249,7 @@ func (s *AIService) SuggestFix(cluster, group, version, plural, ns, name string)
 		return AIResultDTO{Error: "could not redact the manifest, so nothing was sent: " + err.Error()}
 	}
 	system, user := BuildFixPrompt(bundle, manifest)
-	text, err := s.client.Complete(ctx, system, user, aiFixMaxTokens)
-	if err != nil {
-		return AIResultDTO{Error: "model call failed: " + err.Error()}
-	}
-	return AIResultDTO{
-		OK:          true,
-		Explanation: strings.TrimSpace(text),
-		Model:       s.client.Model(),
-		Backend:     s.backend,
-		GroundedOn:  resourceBundleIdentities(bundle),
-		Redacted:    redacted,
-	}
+	return complete(ctx, st, ai.Request{System: system, User: user, Purpose: ai.PurposeFix}, resourceBundleIdentities(bundle), redacted)
 }
 
 // buildResourceBundle resolves the root object plus (capped) its related objects'

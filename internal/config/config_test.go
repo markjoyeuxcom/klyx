@@ -105,54 +105,65 @@ func TestAIConfigDefaultsAndValidation(t *testing.T) {
 		t.Fatal("nil AIConfig must not be Enabled")
 	}
 
-	// hosted backend fills BaseURL + Model defaults.
+	// The pre-2026-10-13 hosted form reads as anthropic with its plain-text
+	// key as the explicit legacy source. No model or origin is pinned here:
+	// the old default (claude-sonnet-5) fails on current models, and the
+	// provider supplies today's default.
 	c := &Config{Clusters: []ClusterConfig{{Name: "a"}}, AI: &AIConfig{Backend: "hosted", APIKey: "sk"}}
 	c.applyDefaults()
-	if c.AI.BaseURL != "https://api.anthropic.com" || c.AI.Model != "claude-sonnet-5" {
-		t.Fatalf("hosted defaults not applied: %+v", c.AI)
+	if c.AI.Provider != "anthropic" || c.AI.KeySource != "legacy" || c.AI.Model != "" || c.AI.BaseURL != "" {
+		t.Fatalf("legacy hosted not mapped: %+v", c.AI)
 	}
-	if !c.AI.Enabled() {
-		t.Fatal("hosted backend must be Enabled")
+	if !c.AI.Enabled() || !c.AI.UsesRefusalFallback() {
+		t.Fatal("anthropic must be Enabled, with the refusal fallback on by default")
 	}
 	if err := c.validate(); err != nil {
-		t.Fatalf("valid hosted config rejected: %v", err)
+		t.Fatalf("valid legacy hosted config rejected: %v", err)
 	}
 
-	// empty backend defaults to off (not enabled).
+	// A hosted vendor without a key is no longer a config error: the key is
+	// in the keychain, and a missing one is reported at run time.
+	keychain := &Config{Clusters: []ClusterConfig{{Name: "a"}}, AI: &AIConfig{Provider: "openai", Model: "m"}}
+	keychain.applyDefaults()
+	if keychain.AI.KeySource != "keychain" {
+		t.Fatalf("a vendor without apiKey defaults to the keychain: %+v", keychain.AI)
+	}
+	if err := keychain.validate(); err != nil {
+		t.Fatalf("keychain config rejected: %v", err)
+	}
+
+	// empty provider and backend default to off (not enabled).
 	off := &Config{Clusters: []ClusterConfig{{Name: "a"}}, AI: &AIConfig{}}
 	off.applyDefaults()
-	if off.AI.Backend != "off" || off.AI.Enabled() {
-		t.Fatalf("empty backend must default off, got %+v", off.AI)
+	if off.AI.Provider != "off" || off.AI.Enabled() || off.AI.KeySource != "none" {
+		t.Fatalf("empty AI must default off, got %+v", off.AI)
 	}
 
-	// hosted without an API key is rejected.
-	noKey := &Config{Clusters: []ClusterConfig{{Name: "a"}}, AI: &AIConfig{Backend: "hosted"}}
-	noKey.applyDefaults()
-	if err := noKey.validate(); err == nil {
-		t.Fatal("hosted backend without apiKey must be rejected")
-	}
-
-	// unknown backend is rejected.
-	bad := &Config{Clusters: []ClusterConfig{{Name: "a"}}, AI: &AIConfig{Backend: "wat"}}
-	if err := bad.validate(); err == nil {
-		t.Fatal("unknown ai.backend must be rejected")
-	}
-
-	// local backend defaults the Ollama base URL and needs no key.
+	// local (legacy) maps to openaiCompatible with the Ollama default.
 	local := &Config{Clusters: []ClusterConfig{{Name: "a"}}, AI: &AIConfig{Backend: "local", Model: "llama3.1"}}
 	local.applyDefaults()
-	if local.AI.BaseURL != "http://localhost:11434" {
-		t.Fatalf("local base URL default not applied: %+v", local.AI)
+	if local.AI.Provider != "openaiCompatible" || local.AI.BaseURL != "http://localhost:11434" {
+		t.Fatalf("legacy local not mapped: %+v", local.AI)
 	}
 	if err := local.validate(); err != nil {
 		t.Fatalf("valid local config rejected: %v", err)
 	}
 
-	// local backend without a model is rejected (there is no local model default).
-	localNoModel := &Config{Clusters: []ClusterConfig{{Name: "a"}}, AI: &AIConfig{Backend: "local"}}
-	localNoModel.applyDefaults()
-	if err := localNoModel.validate(); err == nil {
-		t.Fatal("local backend without a model must be rejected")
+	invalid := map[string]*AIConfig{
+		"unknown backend":              {Backend: "wat"},
+		"unknown provider":             {Provider: "wat"},
+		"unknown key source":           {Provider: "anthropic", KeySource: "vault"},
+		"env without a name":           {Provider: "anthropic", KeySource: "env"},
+		"legacy without a key":         {Provider: "anthropic", KeySource: "legacy"},
+		"tlsSkipVerify on a vendor":    {Provider: "anthropic", TLSSkipVerify: true},
+		"local server without a model": {Backend: "local"},
+	}
+	for name, ai := range invalid {
+		cfg := &Config{Clusters: []ClusterConfig{{Name: "a"}}, AI: ai}
+		cfg.applyDefaults()
+		if err := cfg.validate(); err == nil {
+			t.Errorf("%s: must be rejected (%+v)", name, ai)
+		}
 	}
 }
 

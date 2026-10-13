@@ -18,21 +18,36 @@ type Config struct {
 	AI       *AIConfig       `yaml:"ai"`
 }
 
-// AIConfig is the global (not per-cluster) AI-assist settings. AI is opt-in and
-// OFF by default. Backend "local" points at an OpenAI-compatible endpoint (Ollama
-// / llama.cpp) so nothing leaves the machine; "hosted" uses the Anthropic API.
-// Hosted egress to a protected cluster is refused unless AllowProtectedEgress.
+// AIConfig is the global (not per-cluster) AI-assist settings (spec
+// 2026-10-13 §2.2). AI is opt-in and OFF by default. Only non-secret settings
+// live here: an API key is in the OS credential store (keySource keychain), an
+// environment variable (keySource env), or - the pre-2026-10-13 form - in
+// plain text as apiKey (keySource legacy). A protected cluster's context goes
+// to an off-machine provider only with allowProtectedEgress.
 type AIConfig struct {
-	Backend              string `yaml:"backend"` // "off" (default) | "hosted" | "local"
-	BaseURL              string `yaml:"baseUrl"` // hosted default api.anthropic.com; local default localhost:11434
-	APIKey               string `yaml:"apiKey"`
-	Model                string `yaml:"model"`                // hosted default claude-sonnet-5; local must be set
-	AllowProtectedEgress bool   `yaml:"allowProtectedEgress"` // default false: hosted refused on protected clusters
-	TLSSkipVerify        bool   `yaml:"tlsSkipVerify"`        // for a local self-signed endpoint
+	Provider             string `yaml:"provider"`  // off (default) | anthropic | openai | gemini | openaiCompatible | claudeCLI
+	Model                string `yaml:"model"`     // anthropic defaults to claude-opus-5-5; the others must be chosen
+	KeySource            string `yaml:"keySource"` // keychain | env | legacy | none
+	APIKeyEnv            string `yaml:"apiKeyEnv"` // keySource env: the variable's name
+	BaseURL              string `yaml:"baseUrl"`   // openaiCompatible (default localhost:11434); optional HTTPS override for a vendor
+	CLIPath              string `yaml:"cliPath"`   // optional override for a CLI provider
+	AllowProtectedEgress bool   `yaml:"allowProtectedEgress"`
+	TLSSkipVerify        bool   `yaml:"tlsSkipVerify"`   // openaiCompatible only: a self-signed local server
+	RefusalFallback      *bool  `yaml:"refusalFallback"` // anthropic: server-side refusal fallback, default on
+
+	// The pre-2026-10-13 spelling, still read: backend hosted = anthropic,
+	// local = openaiCompatible; apiKey is a plain-text key (keySource legacy).
+	Backend string `yaml:"backend"`
+	APIKey  string `yaml:"apiKey"`
 }
 
 // Enabled reports whether AI is configured to run (a non-nil, non-off backend).
-func (a *AIConfig) Enabled() bool { return a != nil && a.Backend != "" && a.Backend != "off" }
+func (a *AIConfig) Enabled() bool { return a != nil && a.Provider != "" && a.Provider != "off" }
+
+// UsesRefusalFallback reports the anthropic refusal-fallback setting (default on).
+func (a *AIConfig) UsesRefusalFallback() bool {
+	return a == nil || a.RefusalFallback == nil || *a.RefusalFallback
+}
 
 type ClusterConfig struct {
 	Name        string            `yaml:"name"`
@@ -186,22 +201,63 @@ func (c *Config) applyDefaults() {
 }
 
 func (a *AIConfig) applyDefaults() {
-	if a.Backend == "" {
-		a.Backend = "off"
+	if a.Provider == "" {
+		switch a.Backend {
+		case "hosted":
+			a.Provider = "anthropic"
+		case "local":
+			a.Provider = "openaiCompatible"
+		case "", "off":
+			a.Provider = "off"
+		}
 	}
+	if a.Provider == "openaiCompatible" && a.BaseURL == "" {
+		a.BaseURL = "http://localhost:11434"
+	}
+	if a.KeySource == "" {
+		switch {
+		case a.APIKey != "":
+			a.KeySource = "legacy"
+		case a.Provider == "anthropic" || a.Provider == "openai" || a.Provider == "gemini" || a.Provider == "openaiCompatible":
+			a.KeySource = "keychain"
+		default:
+			a.KeySource = "none"
+		}
+	}
+}
+
+// validate checks the AI block's structure. A missing key is not a config
+// error - AI reports it at run time - but an unknown provider or key source,
+// or a field that does not apply, is.
+func (a *AIConfig) validate() error {
 	switch a.Backend {
-	case "hosted":
-		if a.BaseURL == "" {
-			a.BaseURL = "https://api.anthropic.com"
-		}
-		if a.Model == "" {
-			a.Model = "claude-sonnet-5"
-		}
-	case "local":
-		if a.BaseURL == "" {
-			a.BaseURL = "http://localhost:11434"
-		}
+	case "", "off", "hosted", "local":
+	default:
+		return fmt.Errorf("ai.backend must be off, hosted, or local (got %q); new configs use ai.provider", a.Backend)
 	}
+	switch a.Provider {
+	case "", "off", "anthropic", "openai", "gemini", "openaiCompatible", "claudeCLI":
+	default:
+		return fmt.Errorf("ai.provider must be off, anthropic, openai, gemini, openaiCompatible or claudeCLI (got %q)", a.Provider)
+	}
+	switch a.KeySource {
+	case "", "keychain", "env", "legacy", "none":
+	default:
+		return fmt.Errorf("ai.keySource must be keychain, env, legacy or none (got %q)", a.KeySource)
+	}
+	if a.KeySource == "env" && a.APIKeyEnv == "" {
+		return fmt.Errorf("ai.apiKeyEnv (the variable's name) is required when ai.keySource is env")
+	}
+	if a.KeySource == "legacy" && a.APIKey == "" && a.Provider != "openaiCompatible" {
+		return fmt.Errorf("ai.apiKey is required when ai.keySource is legacy")
+	}
+	if a.TLSSkipVerify && a.Provider != "openaiCompatible" {
+		return fmt.Errorf("ai.tlsSkipVerify applies only to ai.provider openaiCompatible")
+	}
+	if a.Provider == "openaiCompatible" && a.Model == "" {
+		return fmt.Errorf("ai.model is required for an OpenAI-compatible server (e.g. llama3.1)")
+	}
+	return nil
 }
 
 // errNoClusters is the one validation failure adding clusters can repair.
@@ -212,16 +268,8 @@ func (c *Config) validate() error {
 		return errNoClusters
 	}
 	if c.AI != nil {
-		switch c.AI.Backend {
-		case "", "off", "hosted", "local":
-		default:
-			return fmt.Errorf("ai.backend must be off, hosted, or local (got %q)", c.AI.Backend)
-		}
-		if c.AI.Backend == "hosted" && c.AI.APIKey == "" {
-			return fmt.Errorf("ai.apiKey is required when ai.backend is hosted")
-		}
-		if c.AI.Backend == "local" && c.AI.Model == "" {
-			return fmt.Errorf("ai.model is required when ai.backend is local (e.g. llama3.1)")
+		if err := c.AI.validate(); err != nil {
+			return err
 		}
 	}
 	seen := make(map[string]bool, len(c.Clusters))

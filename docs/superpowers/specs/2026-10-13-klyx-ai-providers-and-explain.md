@@ -71,12 +71,13 @@ type aiState struct {
 - In-flight calls finish on their snapshot.
 
 ### 1.2 API providers
-**SDKs.** Official Go SDKs:
-- `github.com/anthropics/anthropic-sdk-go`
-- `github.com/openai/openai-go`
-- `google.golang.org/genai` (the Gemini API backend)
-
-`openaiCompatible` keeps Klyx's current raw chat-completions client. Request shapes are re-checked against each vendor's current API reference at implementation.
+**Clients** (amended at slice 1 implementation, 2026-10-13):
+- **Claude** uses the official `github.com/anthropics/anthropic-sdk-go` (v1.76.0), built with `option.WithoutEnvironmentDefaults()` so no `ANTHROPIC_*` variable, profile or custom header joins a request.
+- **OpenAI and Gemini** use small raw-HTTP clients in `internal/ai`, not their SDKs, because both SDKs break §2.1's one-explicit-source rule:
+  - `openai-go` folds ambient `OPENAI_ORG_ID`, `OPENAI_PROJECT_ID`, `OPENAI_CUSTOM_HEADERS` and `OPENAI_BASE_URL` into every request, and its switch to disable that is internal-only.
+  - `google.golang.org/genai` falls back to `GOOGLE_API_KEY`/`GEMINI_API_KEY`, environment base URLs and a Vertex backend switch when a field is empty. It also pulls grpc and opencensus in for one REST call.
+- **`openaiCompatible`** keeps Klyx's raw chat-completions client.
+- Each client is tested against recorded request shapes (§6).
 
 **Transport limits** apply to all providers, through one Klyx `RoundTripper` handed to every SDK:
 - The 4 MiB response-body cap applies to model replies, model lists and error bodies.
@@ -106,7 +107,7 @@ Text blocks are joined only after a confirmed successful completion. `Result.Mod
 
 **Origins:**
 - **Credentialed API providers** use the vendor's default origin. A custom origin must be HTTPS, carry no userinfo, query or fragment, and comes with an explicit disclosure: "Your <vendor> key will be sent to <origin>".
-- **openaiCompatible** may use HTTP only on loopback.
+- **openaiCompatible** that receives a key must be HTTPS unless it is on loopback. A keyless server on the local network may use HTTP; this is the owner's LAN model server case. It counts as off-machine for egress, and Settings shows its unencrypted origin.
 - Settings always shows the actual origin.
 
 ### 1.3 CLI adapters (verified contracts)

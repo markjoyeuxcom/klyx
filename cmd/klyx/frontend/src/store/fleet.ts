@@ -617,8 +617,11 @@ export type GitOpsOwnershipDTO = {
 // AI-assist ("Explain this"). Read-only; errors fold into `error` (ok stays false).
 // groundedOn names the resolved nodes sent to the model, for traceability.
 // redacted: manifest values masked before a fix suggestion was sent.
-export type AIResultDTO = { ok: boolean; explanation: string; model: string; backend: string; groundedOn: string; error: string; redacted?: number };
-export type AIAvailabilityDTO = { backend: string; ready: boolean };
+// backend is the provider id (anthropic, openai, gemini, openaiCompatible, ...);
+// model is the model the vendor reports having used; origin is where the
+// prompt went.
+export type AIResultDTO = { ok: boolean; explanation: string; model: string; backend: string; origin?: string; groundedOn: string; error: string; redacted?: number };
+export type AIAvailabilityDTO = { backend: string; ready: boolean; model?: string; origin?: string; problem?: string };
 export type InstanceDetailDTO = { kind: string; namespace: string; name: string; created: string; labels: Record<string, string>; annotations?: Record<string, string>; conditions: ConditionDTO[]; events: EventDTO[]; yaml: string; secretKeys?: SecretKeyDTO[]; serviceBacking?: ServiceBackingDTO | null; hpaScaling?: HPAScalingDTO | null; related?: RelatedRefDTO[]; facts?: FactDTO[]; error?: string };
 // cluster + resource + ref identify the object a detail belongs to: DEV/STG/PRD
 // share namespace/name, so ns/name alone let a late DEV detail render under the

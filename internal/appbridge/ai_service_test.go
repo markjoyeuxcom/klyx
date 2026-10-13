@@ -5,31 +5,58 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/moomora/klyx/internal/ai"
 	"github.com/moomora/klyx/internal/capability"
 	"github.com/moomora/klyx/internal/certmanager"
+	"github.com/moomora/klyx/internal/config"
 	"github.com/moomora/klyx/internal/crd"
 )
 
-// The real transport must satisfy the Completer interface main.go passes in.
-var _ Completer = (*ai.Client)(nil)
-
+// fakeCompleter is a fake ai.Provider. It returns reply trimmed, as a real
+// provider does, or err.
 type fakeCompleter struct {
+	mu        sync.Mutex
 	reply     string
 	err       error
 	gotSystem string
 	gotUser   string
+	gotReq    ai.Request
 	calls     int
 }
 
-func (f *fakeCompleter) Complete(_ context.Context, system, user string, _ int) (string, error) {
+func (f *fakeCompleter) Complete(_ context.Context, req ai.Request) (ai.Result, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.calls++
-	f.gotSystem, f.gotUser = system, user
-	return f.reply, f.err
+	f.gotSystem, f.gotUser, f.gotReq = req.System, req.User, req
+	if f.err != nil {
+		return ai.Result{}, f.err
+	}
+	return ai.Result{Text: strings.TrimSpace(f.reply), ModelUsed: "test-model"}, nil
 }
-func (f *fakeCompleter) Model() string { return "test-model" }
+
+// aiTestState builds a snapshot for the tests: "local" is a model on THIS
+// machine (loopback), "hosted" is off-machine, "off" (or a nil client) is no
+// provider.
+func aiTestState(client *fakeCompleter, backend string, allowEgress bool) *AIState {
+	st := &AIState{ProviderID: ai.ProviderOff, AllowEgress: allowEgress}
+	if client == nil || backend == "off" {
+		return st
+	}
+	st.Provider = client
+	switch backend {
+	case "local":
+		st.ProviderID, st.OnMachine, st.Origin = ai.ProviderOpenAICompatible, true, "http://localhost:11434"
+	case "localOffMachine":
+		st.ProviderID, st.Origin = ai.ProviderOpenAICompatible, "http://192.168.1.10:11434"
+	default:
+		st.ProviderID, st.Origin = ai.ProviderAnthropic, ai.DefaultAnthropicOrigin
+	}
+	return st
+}
 
 type fakeExplainConn struct {
 	chain   certmanager.Chain
@@ -73,10 +100,10 @@ func stuckChain() certmanager.Chain {
 
 // newAI builds the service for the egress tests: "local" here means a model on
 // THIS machine (loopback endpoint); hosted is off-machine.
-func newAI(client Completer, backend string, allowEgress bool, protected bool, conn AIConn) *AIService {
+func newAI(client *fakeCompleter, backend string, allowEgress bool, protected bool, conn AIConn) *AIService {
 	return NewAIService(
 		func(string) (AIConn, bool) { return conn, conn != nil },
-		client, backend, backend == "local", allowEgress,
+		aiTestState(client, backend, allowEgress),
 		func(string) bool { return protected },
 		nil, // capabilities: exercised separately
 	)
@@ -133,8 +160,8 @@ func TestAI_ExplainHappyPath(t *testing.T) {
 	if r.Explanation != "The Challenge ollama-tls-1-abc-0 failed on presentError - the DNS-01 record has not propagated." {
 		t.Fatalf("explanation not trimmed/returned: %q", r.Explanation)
 	}
-	if r.Model != "test-model" || r.Backend != "hosted" {
-		t.Fatalf("model/backend: %+v", r)
+	if r.Model != "test-model" || r.Backend != "anthropic" || r.Origin != ai.DefaultAnthropicOrigin {
+		t.Fatalf("model/backend/origin: %+v", r)
 	}
 	if !strings.Contains(r.GroundedOn, "Certificate/prod/ollama-tls") || !strings.Contains(r.GroundedOn, "failingLink") {
 		t.Fatalf("groundedOn must name the cert + failing link: %q", r.GroundedOn)
@@ -280,7 +307,7 @@ func TestAI_ExplainResource_IncludesOperatorHealth(t *testing.T) {
 	}
 	s := NewAIService(
 		func(string) (AIConn, bool) { return conn, true },
-		cl, "local", true, false, func(string) bool { return false }, caps,
+		aiTestState(cl, "local", false), func(string) bool { return false }, caps,
 	)
 
 	r := s.ExplainResource("c", "cert-manager.io", "v1", "certificates", "prod", "tls")
@@ -293,7 +320,7 @@ func TestAI_ExplainResource_IncludesOperatorHealth(t *testing.T) {
 		}
 	}
 	// A cluster with no operators installed carries no operators section.
-	empty := NewAIService(func(string) (AIConn, bool) { return conn, true }, cl, "local", true, false, func(string) bool { return false },
+	empty := NewAIService(func(string) (AIConn, bool) { return conn, true }, aiTestState(cl, "local", false), func(string) bool { return false },
 		func(string) capability.Set { return capability.Set{} })
 	empty.ExplainResource("c", "cert-manager.io", "v1", "certificates", "prod", "tls")
 	if strings.Contains(cl.gotUser, "\"operators\"") {
@@ -420,7 +447,7 @@ func TestAI_Errors_FoldIntoDTO(t *testing.T) {
 func TestAI_LocalProtocolOffMachineIsEgress(t *testing.T) {
 	offMachine := NewAIService(
 		func(string) (AIConn, bool) { return nil, false },
-		&fakeCompleter{}, "local", false /* onMachine */, false,
+		aiTestState(&fakeCompleter{}, "localOffMachine", false),
 		func(string) bool { return true }, nil,
 	)
 	if offMachine.EgressAllowed("prd") {
@@ -431,7 +458,7 @@ func TestAI_LocalProtocolOffMachineIsEgress(t *testing.T) {
 	}
 	optedIn := NewAIService(
 		func(string) (AIConn, bool) { return nil, false },
-		&fakeCompleter{}, "local", false, true, /* allowEgress */
+		aiTestState(&fakeCompleter{}, "localOffMachine", true),
 		func(string) bool { return true }, nil,
 	)
 	if !optedIn.EgressAllowed("prd") {
@@ -504,5 +531,153 @@ func TestAI_SuggestFix_UnredactableManifestIsNotSent(t *testing.T) {
 	r := s.SuggestFix("c", "apps", "v1", "deployments", "app", "api")
 	if r.OK || !strings.Contains(r.Error, "nothing was sent") || cl.calls != 0 {
 		t.Fatalf("want a fail-closed refusal with no model call, got %+v (calls=%d)", r, cl.calls)
+	}
+}
+
+// swapConn swaps the service's snapshot while the call is between its egress
+// check and its send (inside the chain resolve).
+type swapConn struct {
+	fakeExplainConn
+	onResolve func()
+}
+
+func (c *swapConn) GetCertificateChain(ctx context.Context, ns, name string) (certmanager.Chain, error) {
+	if c.onResolve != nil {
+		c.onResolve()
+	}
+	return c.fakeExplainConn.GetCertificateChain(ctx, ns, name)
+}
+
+// Spec 2026-10-13 §1.1 (Codex review 3): the egress check, the send and the
+// returned provenance read ONE snapshot. A swap mid-call - here from an
+// on-machine provider to an off-machine one without the protected opt-in -
+// must not pair the local check with a cloud send.
+func TestAI_SnapshotCheckAndSendAgree(t *testing.T) {
+	local := &fakeCompleter{reply: "local answer"}
+	cloud := &fakeCompleter{reply: "cloud answer"}
+	conn := &swapConn{fakeExplainConn: fakeExplainConn{chain: stuckChain()}}
+	s := NewAIService(func(string) (AIConn, bool) { return conn, true }, aiTestState(local, "local", false), func(string) bool { return true }, nil)
+	conn.onResolve = func() { SetAIState(s, aiTestState(cloud, "hosted", false)) }
+
+	r := s.ExplainCertificate("prd", "ns", "n")
+	if !r.OK || r.Explanation != "local answer" || r.Backend != string(ai.ProviderOpenAICompatible) {
+		t.Fatalf("the call must finish on the snapshot it checked: %+v", r)
+	}
+	if cloud.calls != 0 {
+		t.Fatal("a protected cluster's context reached the provider swapped in after the egress check")
+	}
+	// The next call uses the new snapshot, and its own check refuses.
+	if r := s.ExplainCertificate("prd", "ns", "n"); r.OK || !strings.Contains(r.Error, "protected") {
+		t.Fatalf("the new off-machine snapshot must be refused for a protected cluster: %+v", r)
+	}
+}
+
+// Concurrent calls during swaps (run with -race): every result's provenance
+// matches the provider that produced its text.
+func TestAI_ConcurrentCallsDuringSwaps(t *testing.T) {
+	a := &fakeCompleter{reply: "from-a"}
+	b := &fakeCompleter{reply: "from-b"}
+	stA, stB := aiTestState(a, "hosted", true), aiTestState(b, "local", true)
+	s := NewAIService(func(string) (AIConn, bool) { return &fakeExplainConn{chain: stuckChain()}, true }, stA, func(string) bool { return false }, nil)
+	var wg sync.WaitGroup
+	stop := make(chan struct{})
+	go func() {
+		for i := 0; ; i++ {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			if i%2 == 0 {
+				SetAIState(s, stB)
+			} else {
+				SetAIState(s, stA)
+			}
+		}
+	}()
+	for i := 0; i < 64; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			r := s.ExplainCertificate("c", "ns", "n")
+			want := map[string]string{"from-a": string(ai.ProviderAnthropic), "from-b": string(ai.ProviderOpenAICompatible)}[r.Explanation]
+			if !r.OK || r.Backend != want {
+				t.Errorf("provenance does not match the answering provider: %+v", r)
+			}
+		}()
+	}
+	wg.Wait()
+	close(stop)
+}
+
+// A refusal, a truncation or tool output is an error in the DTO - never a
+// partial explanation (spec §0 defect 3).
+func TestAI_ModelOutcomesFoldIntoErrors(t *testing.T) {
+	cases := map[string]struct {
+		err  error
+		want string
+	}{
+		"refused":    {&ai.RefusedError{Category: "cyber"}, "declined to answer (cyber)"},
+		"truncated":  {ai.ErrTruncated, "cut off"},
+		"tool":       {ai.ErrUnexpectedOutput, "other than text"},
+		"keyed http": {errors.New("HTTP 401: invalid x-api-key: sk-ant-secret-123456789"), "model call failed"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			s := newAI(&fakeCompleter{err: tc.err}, "hosted", true, false, &fakeExplainConn{chain: stuckChain()})
+			r := s.ExplainCertificate("c", "ns", "n")
+			if r.OK || r.Explanation != "" || !strings.Contains(r.Error, tc.want) {
+				t.Fatalf("got %+v, want an error containing %q", r, tc.want)
+			}
+			if strings.Contains(r.Error, "sk-ant-secret-123456789") {
+				t.Fatalf("the error leaks a key: %s", r.Error)
+			}
+		})
+	}
+}
+
+// keysFake is an in-memory ai.KeyStore for BuildAIState.
+type keysFake struct {
+	key string
+	err error
+}
+
+func (k keysFake) Get(ai.ProviderID) (string, error) {
+	if k.err != nil {
+		return "", k.err
+	}
+	if k.key == "" {
+		return "", ai.ErrNoKey
+	}
+	return k.key, nil
+}
+func (keysFake) Set(ai.ProviderID, string) error { return nil }
+func (keysFake) Delete(ai.ProviderID) error      { return nil }
+
+// A configured provider that cannot be built is unavailable with a reason,
+// never silently off and never falling back to another key.
+func TestBuildAIState_Problems(t *testing.T) {
+	cfg := &config.AIConfig{Provider: "anthropic", KeySource: "keychain", APIKey: ""}
+	st := BuildAIState(cfg, keysFake{}, func(string) string { return "sk-from-env" })
+	if st.Provider != nil || !strings.Contains(st.Problem, "No API key") || st.ProviderID != ai.ProviderAnthropic {
+		t.Fatalf("missing keychain key: %+v", st)
+	}
+	st = BuildAIState(cfg, keysFake{err: &ai.KeychainError{Err: errors.New("user interaction is not allowed")}}, nil)
+	if st.Provider != nil || !strings.Contains(st.Problem, "keychain unavailable") {
+		t.Fatalf("locked keychain: %+v", st)
+	}
+	st = BuildAIState(cfg, keysFake{key: "sk-ant-k"}, nil)
+	if st.Provider == nil || st.Origin != ai.DefaultAnthropicOrigin || st.Model != ai.DefaultAnthropicModel {
+		t.Fatalf("keychain key: %+v", st)
+	}
+	s := NewAIService(func(string) (AIConn, bool) { return nil, false }, BuildAIState(cfg, keysFake{}, nil), nil, nil)
+	if av := s.Available(); av.Ready || av.Backend != "anthropic" || av.Problem == "" {
+		t.Fatalf("Available must report the problem: %+v", av)
+	}
+	if r := s.ExplainCertificate("c", "ns", "n"); !strings.Contains(r.Error, "No API key") {
+		t.Fatalf("a call must surface the problem: %+v", r)
+	}
+	if off := BuildAIState(nil, nil, nil); off.Provider != nil || off.ProviderID != ai.ProviderOff || off.Problem != "" {
+		t.Fatalf("nil config is off: %+v", off)
 	}
 }

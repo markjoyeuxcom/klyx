@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"os"
@@ -8,9 +9,48 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+	"sync"
 
 	"gopkg.in/yaml.v3"
 )
+
+// fleetWriteMu serialises every writer of the fleet file in this process
+// (AppendClusters and the AI settings writer). The atomic rename prevents a
+// torn file; it does not prevent a lost update, which this lock and
+// replaceUnchanged do (spec 2026-10-13 §2.3).
+var fleetWriteMu sync.Mutex
+
+// beforeReplace is a test seam: it runs just before replaceUnchanged checks
+// the file on disk. Nil in production.
+var beforeReplace func()
+
+// ErrFleetChangedOnDisk: the fleet file changed on disk after a writer read
+// it, so the write was refused rather than overwriting that edit.
+var ErrFleetChangedOnDisk = errors.New("fleet config changed on disk while Klyx was updating it; nothing was written - reload and try again")
+
+// replaceUnchanged renames tmpPath over path only if path still holds
+// original (or still does not exist when it did not before). An edit made on
+// disk - by another tool or an editor - since the writer read the file is
+// refused, not overwritten. A narrow window remains between this check and
+// the rename; the in-process lock covers Klyx's own writers.
+func replaceUnchanged(path, tmpPath string, original []byte, existed bool) error {
+	if beforeReplace != nil {
+		beforeReplace()
+	}
+	cur, err := os.ReadFile(path)
+	switch {
+	case err == nil && (!existed || !bytes.Equal(cur, original)):
+		return ErrFleetChangedOnDisk
+	case err != nil && !os.IsNotExist(err):
+		return fmt.Errorf("re-read fleet config: %w", err)
+	case err != nil && existed:
+		return ErrFleetChangedOnDisk // deleted meanwhile
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		return fmt.Errorf("replace fleet config: %w", err)
+	}
+	return nil
+}
 
 // AppendClusters adds minimal cluster entries (name = context) to the fleet
 // file by TEXTUAL insertion: the existing bytes - including comments and hand
@@ -24,6 +64,8 @@ func AppendClusters(path string, contexts []string) error {
 	if len(contexts) == 0 {
 		return fmt.Errorf("no contexts to add")
 	}
+	fleetWriteMu.Lock()
+	defer fleetWriteMu.Unlock()
 	entries := make([]ClusterConfig, 0, len(contexts))
 	for _, ctx := range contexts {
 		entries = append(entries, ClusterConfigForContext(ctx))
@@ -130,10 +172,7 @@ func AppendClusters(path string, contexts []string) error {
 			return fmt.Errorf("appended config does not list cluster %q (file unchanged)", entry.Name)
 		}
 	}
-	if err := os.Rename(tmpPath, path); err != nil {
-		return fmt.Errorf("replace fleet config: %w", err)
-	}
-	return nil
+	return replaceUnchanged(path, tmpPath, original, exists)
 }
 
 // insertClusters inserts entries into the top-level clusters list of an
