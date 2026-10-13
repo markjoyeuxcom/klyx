@@ -87,6 +87,7 @@ type BackendDTO struct {
 	Port      int32  `json:"port"`
 	Weight    int32  `json:"weight"`
 	WeightSet bool   `json:"weightSet"` // false: unset, the Gateway API default of 1
+	Rule      int    `json:"rule"`      // the spec.rules index listing it; weights split within one rule
 
 	// state: resolved | not-found | unreadable | unsupported
 	State     string            `json:"state"`
@@ -266,7 +267,7 @@ func toRouteNodeDTO(r gwapi.RouteNode, listeners []gwapi.Listener) RouteNodeDTO 
 		rd.Matches = append(rd.Matches, MatchDTO{PathType: m.PathType, PathValue: m.PathValue, Method: m.Method})
 	}
 	for _, b := range r.Backends {
-		bd := BackendDTO{Kind: b.Kind, Name: b.Name, Namespace: b.Namespace, Port: b.Port, Weight: b.Weight, WeightSet: b.WeightSet, State: string(b.State), Error: b.Error}
+		bd := BackendDTO{Kind: b.Kind, Name: b.Name, Namespace: b.Namespace, Port: b.Port, Weight: b.Weight, WeightSet: b.WeightSet, Rule: b.Rule, State: string(b.State), Error: b.Error}
 		if b.Endpoints != nil {
 			bd.Endpoints = &EndpointCountDTO{Ready: b.Endpoints.Ready, Total: b.Endpoints.Total, NonPod: b.Endpoints.NonPod, Error: b.Endpoints.Error}
 		}

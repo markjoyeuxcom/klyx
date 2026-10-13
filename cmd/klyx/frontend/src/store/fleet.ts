@@ -714,8 +714,9 @@ export type MatchDTO = { pathType: string; pathValue: string; method: string };
 // Endpoints, not pods: nonPod counts endpoints without a pod TargetRef.
 export type EndpointCountDTO = { ready: number; total: number; nonPod: number; error?: string };
 // weightSet false: the backendRef wrote no weight (the Gateway API default
-// of 1); an explicit weight 0 sends the backend no traffic.
-export type BackendDTO = { kind: string; name: string; namespace: string; port: number; weight: number; weightSet?: boolean; state?: "resolved" | "not-found" | "unreadable" | "unsupported"; error?: string; endpoints?: EndpointCountDTO };
+// of 1); an explicit weight 0 sends the backend no traffic. rule is the
+// spec.rules index listing it - weights split traffic within one rule.
+export type BackendDTO = { kind: string; name: string; namespace: string; port: number; weight: number; weightSet?: boolean; rule?: number; state?: "resolved" | "not-found" | "unreadable" | "unsupported"; error?: string; endpoints?: EndpointCountDTO };
 export type PodCountDTO = { ready: number; total: number; unknown: boolean };
 export type ServiceNodeDTO = { namespace: string; name: string; type: string; port: number; resolved: boolean; global: boolean; meshClusters: string[]; meshUnconfirmed: boolean; policies: PolicyRefDTO[]; cnps: PolicyRefDTO[] };
 export type GatewayNodeDTO = { rule: RuleDTO; namespace: string; name: string; className: string; listeners: ListenerDTO[]; addresses?: GatewayAddressDTO[]; accepted: boolean; programmed: boolean; policies: PolicyRefDTO[]; acceptedCond?: CondDTO; programmedCond?: CondDTO; generation?: number };

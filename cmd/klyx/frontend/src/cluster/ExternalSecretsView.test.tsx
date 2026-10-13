@@ -183,13 +183,13 @@ describe("ExternalSecretsView", () => {
     const once = secret({ name: "once", state: "Synced", refreshIntervalSeconds: 3600, refreshPolicy: "CreatedOnce", lastRefreshAgeSeconds: 3 * 86400 });
     setup("Healthy", [once], [store({})], "payments/once");
     const { unmount } = render(<ExternalSecretsView cluster="x" />);
-    expect(insp().getByText("created once - never refreshed")).toBeTruthy();
+    expect(insp().getByText("created once - no periodic refresh (re-synced if the target Secret is changed or deleted)")).toBeTruthy();
     expect(insp().queryByText("every 1h")).toBeNull();
     unmount();
     const onChange = secret({ name: "onchange", state: "Synced", refreshIntervalSeconds: 3600, refreshPolicy: "OnChange", lastRefreshAgeSeconds: 120 });
     setup("Healthy", [onChange], [store({})], "payments/onchange");
     render(<ExternalSecretsView cluster="x" />);
-    expect(insp().getByText("on spec change only")).toBeTruthy();
+    expect(insp().getByText("on metadata or spec change - no periodic refresh")).toBeTruthy();
   });
 });
 

@@ -134,44 +134,62 @@ func RouteRule(rn RouteNode, listeners []Listener) health.NativeEval {
 
 	// Every backend that carries traffic is diagnosed, not only the lane's
 	// primary (Codex review 2026-10-13: an equal-weight second backend with
-	// no endpoints read as "resolved"). A weight-0 backend carries none and
-	// is left out. With several carrying backends a fault is degraded -
-	// the others still take traffic - unless every one of them faults.
+	// no endpoints read as "resolved"). Weights split traffic within one
+	// rule's backendRefs (Gateway API BackendRef.Weight), so each rule is
+	// judged on its own: a rule whose backends all have weight 0 serves
+	// nothing and is a fault; within a rule a weight-0 backend is left out,
+	// and a backend fault is degraded - the rule's other backends still take
+	// its traffic - unless every one of them faults.
 	switch {
 	case len(rn.Backends) == 0:
 		add(health.Unknown, "no backendRefs")
 	default:
-		var carrying []Backend
+		var order []int
+		carrying := map[int][]Backend{}
+		listed := map[int]bool{}
+		total := 0
 		for _, b := range rn.Backends {
+			if !listed[b.Rule] {
+				listed[b.Rule] = true
+				order = append(order, b.Rule)
+			}
 			if b.CarriesTraffic() {
-				carrying = append(carrying, b)
+				carrying[b.Rule] = append(carrying[b.Rule], b)
+				total++
 			}
 		}
-		if len(carrying) == 0 {
-			add(health.Fault, "every backend has weight 0")
-			break
-		}
-		several := len(carrying) > 1
-		var found []routeIssue
-		faults := 0
-		for _, b := range carrying {
-			role, short := BackendIssue(b)
-			if role == health.OK {
+		named := total > 1
+		for _, ri := range order {
+			rc := carrying[ri]
+			if len(rc) == 0 {
+				if len(order) > 1 {
+					add(health.Fault, fmt.Sprintf("rule %d: every backend has weight 0", ri+1))
+				} else {
+					add(health.Fault, "every backend has weight 0")
+				}
 				continue
 			}
-			if role == health.Fault {
-				faults++
+			var found []routeIssue
+			faults := 0
+			for _, b := range rc {
+				role, short := BackendIssue(b)
+				if role == health.OK {
+					continue
+				}
+				if role == health.Fault {
+					faults++
+				}
+				if named {
+					short = b.Name + ": " + short
+				}
+				found = append(found, routeIssue{role, short})
 			}
-			if several {
-				short = b.Name + ": " + short
+			for _, is := range found {
+				if len(rc) > 1 && is.role == health.Fault && faults < len(rc) {
+					is.role = health.Degraded
+				}
+				issues = append(issues, is)
 			}
-			found = append(found, routeIssue{role, short})
-		}
-		for _, is := range found {
-			if several && is.role == health.Fault && faults < len(carrying) {
-				is.role = health.Degraded
-			}
-			issues = append(issues, is)
 		}
 	}
 	if len(issues) == 0 {

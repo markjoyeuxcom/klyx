@@ -3397,6 +3397,7 @@
               "port": 80,
               "weight": 0,
               "weightSet": false,
+              "rule": 0,
               "state": "resolved",
               "endpoints": {
                 "ready": 3,
@@ -3475,6 +3476,7 @@
               "port": 80,
               "weight": 0,
               "weightSet": false,
+              "rule": 0,
               "state": "resolved",
               "endpoints": {
                 "ready": 3,
@@ -3553,6 +3555,7 @@
               "port": 80,
               "weight": 0,
               "weightSet": false,
+              "rule": 0,
               "state": "resolved",
               "endpoints": {
                 "ready": 3,
@@ -3631,6 +3634,7 @@
               "port": 80,
               "weight": 0,
               "weightSet": false,
+              "rule": 0,
               "state": "resolved",
               "endpoints": {
                 "ready": 3,
@@ -3709,6 +3713,7 @@
               "port": 80,
               "weight": 0,
               "weightSet": false,
+              "rule": 0,
               "state": "resolved",
               "endpoints": {
                 "ready": 3,
@@ -3787,6 +3792,7 @@
               "port": 80,
               "weight": 0,
               "weightSet": false,
+              "rule": 0,
               "state": "resolved",
               "endpoints": {
                 "ready": 3,
@@ -3865,6 +3871,7 @@
               "port": 80,
               "weight": 0,
               "weightSet": false,
+              "rule": 0,
               "state": "resolved",
               "endpoints": {
                 "ready": 3,
@@ -3943,6 +3950,7 @@
               "port": 80,
               "weight": 0,
               "weightSet": false,
+              "rule": 0,
               "state": "resolved",
               "endpoints": {
                 "ready": 3,
@@ -4021,6 +4029,7 @@
               "port": 80,
               "weight": 0,
               "weightSet": false,
+              "rule": 0,
               "state": "resolved",
               "endpoints": {
                 "ready": 3,
@@ -4099,6 +4108,7 @@
               "port": 80,
               "weight": 0,
               "weightSet": false,
+              "rule": 0,
               "state": "resolved",
               "endpoints": {
                 "ready": 3,
@@ -4177,6 +4187,7 @@
               "port": 80,
               "weight": 0,
               "weightSet": false,
+              "rule": 0,
               "state": "resolved",
               "endpoints": {
                 "ready": 3,
@@ -4255,6 +4266,7 @@
               "port": 80,
               "weight": 0,
               "weightSet": false,
+              "rule": 0,
               "state": "resolved",
               "endpoints": {
                 "ready": 3,
@@ -4396,6 +4408,7 @@
               "port": 0,
               "weight": 0,
               "weightSet": false,
+              "rule": 0,
               "state": "unsupported"
             }
           ],
@@ -4469,6 +4482,7 @@
               "port": 0,
               "weight": 0,
               "weightSet": false,
+              "rule": 0,
               "state": ""
             }
           ],
@@ -4542,6 +4556,7 @@
               "port": 0,
               "weight": 0,
               "weightSet": false,
+              "rule": 0,
               "state": "not-found"
             }
           ],
@@ -4615,6 +4630,7 @@
               "port": 0,
               "weight": 0,
               "weightSet": false,
+              "rule": 0,
               "state": "not-found"
             },
             {
@@ -4624,6 +4640,7 @@
               "port": 80,
               "weight": 0,
               "weightSet": false,
+              "rule": 0,
               "state": "resolved",
               "endpoints": {
                 "ready": 3,
@@ -4702,6 +4719,7 @@
               "port": 0,
               "weight": 0,
               "weightSet": false,
+              "rule": 0,
               "state": "unreadable",
               "error": "forbidden"
             }
@@ -4776,6 +4794,7 @@
               "port": 80,
               "weight": 0,
               "weightSet": false,
+              "rule": 0,
               "state": "resolved"
             }
           ],
@@ -4849,6 +4868,7 @@
               "port": 80,
               "weight": 0,
               "weightSet": false,
+              "rule": 0,
               "state": "resolved",
               "endpoints": {
                 "ready": 0,
@@ -4928,6 +4948,7 @@
               "port": 80,
               "weight": 0,
               "weightSet": false,
+              "rule": 0,
               "state": "resolved",
               "endpoints": {
                 "ready": 0,
@@ -5006,6 +5027,7 @@
               "port": 80,
               "weight": 0,
               "weightSet": false,
+              "rule": 0,
               "state": "resolved",
               "endpoints": {
                 "ready": 0,
@@ -5020,6 +5042,7 @@
               "port": 80,
               "weight": 0,
               "weightSet": false,
+              "rule": 0,
               "state": "resolved",
               "endpoints": {
                 "ready": 3,
@@ -5034,6 +5057,7 @@
               "port": 80,
               "weight": 0,
               "weightSet": false,
+              "rule": 0,
               "state": "resolved",
               "endpoints": {
                 "ready": 3,
@@ -5112,6 +5136,7 @@
               "port": 80,
               "weight": 0,
               "weightSet": false,
+              "rule": 0,
               "state": "resolved",
               "endpoints": {
                 "ready": 0,
@@ -5190,6 +5215,7 @@
               "port": 80,
               "weight": 0,
               "weightSet": false,
+              "rule": 0,
               "state": "resolved",
               "endpoints": {
                 "ready": 2,
@@ -5268,6 +5294,7 @@
               "port": 80,
               "weight": 0,
               "weightSet": false,
+              "rule": 0,
               "state": "resolved",
               "endpoints": {
                 "ready": 3,
@@ -5282,6 +5309,7 @@
               "port": 80,
               "weight": 0,
               "weightSet": false,
+              "rule": 0,
               "state": "resolved",
               "endpoints": {
                 "ready": 0,
@@ -5360,6 +5388,7 @@
               "port": 80,
               "weight": 0,
               "weightSet": false,
+              "rule": 0,
               "state": "resolved",
               "endpoints": {
                 "ready": 0,
@@ -5374,6 +5403,7 @@
               "port": 80,
               "weight": 0,
               "weightSet": false,
+              "rule": 0,
               "state": "resolved",
               "endpoints": {
                 "ready": 0,
@@ -5452,6 +5482,7 @@
               "port": 80,
               "weight": 0,
               "weightSet": false,
+              "rule": 0,
               "state": "resolved",
               "endpoints": {
                 "ready": 3,
@@ -5466,6 +5497,7 @@
               "port": 80,
               "weight": 0,
               "weightSet": true,
+              "rule": 0,
               "state": "resolved",
               "endpoints": {
                 "ready": 0,
@@ -5544,6 +5576,7 @@
               "port": 80,
               "weight": 0,
               "weightSet": true,
+              "rule": 0,
               "state": "resolved",
               "endpoints": {
                 "ready": 3,
@@ -5558,6 +5591,7 @@
               "port": 80,
               "weight": 0,
               "weightSet": true,
+              "rule": 0,
               "state": "resolved",
               "endpoints": {
                 "ready": 3,
@@ -5617,6 +5651,194 @@
       }
     },
     {
+      "case": "a zero-weight-only rule beside a healthy rule",
+      "nowUnix": 1791720000,
+      "dto": {
+        "route": {
+          "namespace": "shop",
+          "name": "a zero-weight-only rule beside a healthy rule",
+          "hostnames": [],
+          "matches": [],
+          "parentSectionName": "",
+          "accepted": false,
+          "resolvedRefs": false,
+          "backends": [
+            {
+              "kind": "Service",
+              "name": "dead",
+              "namespace": "shop",
+              "port": 80,
+              "weight": 0,
+              "weightSet": true,
+              "rule": 0,
+              "state": "resolved",
+              "endpoints": {
+                "ready": 0,
+                "total": 0,
+                "nonPod": 0
+              }
+            },
+            {
+              "kind": "Service",
+              "name": "web-0",
+              "namespace": "shop",
+              "port": 80,
+              "weight": 0,
+              "weightSet": false,
+              "rule": 1,
+              "state": "resolved",
+              "endpoints": {
+                "ready": 3,
+                "total": 3,
+                "nonPod": 0
+              }
+            }
+          ],
+          "services": [],
+          "pods": {
+            "ready": 0,
+            "total": 0,
+            "unknown": false
+          },
+          "policies": [],
+          "parentFound": true,
+          "acceptedCond": {
+            "status": "True",
+            "reason": "R",
+            "message": "m",
+            "observedGeneration": 3
+          },
+          "resolvedRefsCond": {
+            "status": "True",
+            "reason": "R",
+            "message": "m",
+            "observedGeneration": 3
+          },
+          "generation": 3,
+          "rule": {
+            "included": true,
+            "role": "fault",
+            "label": "rule 1: every backend has weight 0"
+          }
+        },
+        "listeners": [
+          {
+            "name": "https",
+            "protocol": "HTTPS",
+            "hostname": "",
+            "port": 443,
+            "certificateRefs": null
+          },
+          {
+            "name": "http",
+            "protocol": "HTTP",
+            "hostname": "",
+            "port": 80,
+            "certificateRefs": null
+          }
+        ]
+      },
+      "want": {
+        "included": true,
+        "role": "fault",
+        "label": "rule 1: every backend has weight 0"
+      }
+    },
+    {
+      "case": "a sole backend failing in the second rule",
+      "nowUnix": 1791720000,
+      "dto": {
+        "route": {
+          "namespace": "shop",
+          "name": "a sole backend failing in the second rule",
+          "hostnames": [],
+          "matches": [],
+          "parentSectionName": "",
+          "accepted": false,
+          "resolvedRefs": false,
+          "backends": [
+            {
+              "kind": "Service",
+              "name": "web-0",
+              "namespace": "shop",
+              "port": 80,
+              "weight": 0,
+              "weightSet": false,
+              "rule": 0,
+              "state": "resolved",
+              "endpoints": {
+                "ready": 3,
+                "total": 3,
+                "nonPod": 0
+              }
+            },
+            {
+              "kind": "Service",
+              "name": "empty",
+              "namespace": "shop",
+              "port": 80,
+              "weight": 0,
+              "weightSet": false,
+              "rule": 1,
+              "state": "resolved",
+              "endpoints": {
+                "ready": 0,
+                "total": 0,
+                "nonPod": 0
+              }
+            }
+          ],
+          "services": [],
+          "pods": {
+            "ready": 0,
+            "total": 0,
+            "unknown": false
+          },
+          "policies": [],
+          "parentFound": true,
+          "acceptedCond": {
+            "status": "True",
+            "reason": "R",
+            "message": "m",
+            "observedGeneration": 3
+          },
+          "resolvedRefsCond": {
+            "status": "True",
+            "reason": "R",
+            "message": "m",
+            "observedGeneration": 3
+          },
+          "generation": 3,
+          "rule": {
+            "included": true,
+            "role": "fault",
+            "label": "empty: no endpoints"
+          }
+        },
+        "listeners": [
+          {
+            "name": "https",
+            "protocol": "HTTPS",
+            "hostname": "",
+            "port": 443,
+            "certificateRefs": null
+          },
+          {
+            "name": "http",
+            "protocol": "HTTP",
+            "hostname": "",
+            "port": 80,
+            "certificateRefs": null
+          }
+        ]
+      },
+      "want": {
+        "included": true,
+        "role": "fault",
+        "label": "empty: no endpoints"
+      }
+    },
+    {
       "case": "second backend partly ready",
       "nowUnix": 1791720000,
       "dto": {
@@ -5636,6 +5858,7 @@
               "port": 80,
               "weight": 0,
               "weightSet": false,
+              "rule": 0,
               "state": "resolved",
               "endpoints": {
                 "ready": 3,
@@ -5650,6 +5873,7 @@
               "port": 80,
               "weight": 0,
               "weightSet": false,
+              "rule": 0,
               "state": "resolved",
               "endpoints": {
                 "ready": 1,
@@ -5728,6 +5952,7 @@
               "port": 80,
               "weight": 0,
               "weightSet": false,
+              "rule": 0,
               "state": "resolved",
               "endpoints": {
                 "ready": 0,

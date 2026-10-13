@@ -4,6 +4,8 @@ import (
 	"testing"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+
+	"github.com/moomora/klyx/internal/health"
 )
 
 func hrObj(name, ns string, parentRefs, rules, statusParents, hostnames []interface{}) *unstructured.Unstructured {
@@ -231,5 +233,29 @@ func TestRouteForGatewayWrongGroupParentDoesNotMatch(t *testing.T) {
 		nil, nil)
 	if _, ok := RouteForGateway(u, "infra", "eg"); ok {
 		t.Fatal("parentRef with non-default group must not attach")
+	}
+}
+
+// Parser to rule (Codex review of afef050): each backend keeps the rule that
+// lists it, so a /dead rule whose only backend has weight 0 is a fault even
+// beside a healthy /healthy rule.
+func TestRouteForGatewayKeepsRuleBoundaries(t *testing.T) {
+	u := hrObj("split", "apps",
+		[]interface{}{parentRef("eg", "infra", "")},
+		[]interface{}{
+			map[string]interface{}{"backendRefs": []interface{}{map[string]interface{}{"name": "dead", "port": float64(80), "weight": float64(0)}}},
+			map[string]interface{}{"backendRefs": []interface{}{map[string]interface{}{"name": "healthy", "port": float64(80), "weight": float64(1)}}},
+		},
+		[]interface{}{statusParent("eg", "infra", "True", "True")},
+		nil)
+	rn, ok := RouteForGateway(u, "infra", "eg")
+	if !ok || len(rn.Backends) != 2 || rn.Backends[0].Rule != 0 || rn.Backends[1].Rule != 1 {
+		t.Fatalf("each backend keeps its rule: %+v", rn.Backends)
+	}
+	rn.Backends[0].State, rn.Backends[0].Endpoints = BackendResolved, &EndpointCount{}
+	rn.Backends[1].State, rn.Backends[1].Endpoints = BackendResolved, &EndpointCount{Ready: 2, Total: 2}
+	got := RouteRule(rn, nil)
+	if got.Role != health.Fault || got.Label != "rule 1: every backend has weight 0" || !got.Included {
+		t.Fatalf("a dead rule is never hidden by a healthy one: %+v", got)
 	}
 }

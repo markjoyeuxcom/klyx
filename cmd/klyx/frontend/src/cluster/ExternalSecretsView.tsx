@@ -26,8 +26,8 @@ const keyOf = (e: { namespace: string; name: string }) => `${e.namespace}/${e.na
 // refreshText states the secret's refresh policy in ESO's own terms: only
 // Periodic refreshes on the interval (the stale check applies to it alone).
 function refreshText(e: ExternalSecretDTO): string {
-  if (e.refreshPolicy === "CreatedOnce") return "created once - never refreshed";
-  if (e.refreshPolicy === "OnChange") return "on spec change only";
+  if (e.refreshPolicy === "CreatedOnce") return "created once - no periodic refresh (re-synced if the target Secret is changed or deleted)";
+  if (e.refreshPolicy === "OnChange") return "on metadata or spec change - no periodic refresh";
   if (e.refreshPolicy && e.refreshPolicy !== "Periodic") return e.refreshPolicy;
   return e.refreshIntervalSeconds > 0 ? `every ${fmtDuration(e.refreshIntervalSeconds)}` : "disabled";
 }

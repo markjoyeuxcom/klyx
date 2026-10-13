@@ -81,7 +81,7 @@ describe("routeHealth (evidence, Codex review)", () => {
       { kind: "Service", name: "ok", namespace: "a", port: 80, weight: 50, state: "resolved", endpoints: { ready: 3, total: 3, nonPod: 0 } },
     ];
     expect(routeHealth(r)).toEqual({ kind: "degraded", label: "gone: backend not found" });
-    expect(routeIssues(r)[0].text).toBe("a/gone: Backend Service a/gone not found. Other backends may still carry traffic.");
+    expect(routeIssues(r)[0].text).toBe("a/gone: Backend Service a/gone not found. Other backends in its rule may still carry the traffic.");
     r.backends = [r.backends[0]];
     expect(routeHealth(r)).toEqual({ kind: "fault", label: "backend not found" });
   });
@@ -100,6 +100,19 @@ describe("routeHealth (evidence, Codex review)", () => {
     expect(routeHealth(r)).toEqual({ kind: "ok", label: "resolved" });
     r.backends = [svc("first", 2, 2, 0), svc("second", 2, 2, 0)];
     expect(routeHealth(r)).toEqual({ kind: "fault", label: "every backend has weight 0" });
+  });
+  it("judges weights per rule: a dead zero-weight rule is never hidden by a healthy one (Codex review 2026-10-13)", () => {
+    const r = route("a", "r");
+    const svc = (name: string, rule: number, ready: number, total: number, weight?: number) =>
+      ({ kind: "Service", name, namespace: "a", port: 80, rule, weight: weight ?? 0, weightSet: weight !== undefined, state: "resolved" as const, endpoints: { ready, total, nonPod: 0 } });
+    r.backends = [svc("dead", 0, 0, 0, 0), svc("healthy", 1, 2, 2)];
+    expect(routeHealth(r)).toEqual({ kind: "fault", label: "rule 1: every backend has weight 0" });
+    r.backends = [svc("healthy", 0, 2, 2), svc("dead", 1, 0, 0, 0)];
+    expect(routeHealth(r)).toEqual({ kind: "fault", label: "rule 2: every backend has weight 0" });
+    // A sole backend failing in one rule is a fault for that rule's traffic,
+    // whatever another rule's backends do.
+    r.backends = [svc("healthy", 0, 2, 2), svc("empty", 1, 0, 0)];
+    expect(routeHealth(r)).toEqual({ kind: "fault", label: "empty: no endpoints" });
   });
   it("a forbidden Service read and a non-Service backend are unverified, not missing", () => {
     const r = route("a", "r");

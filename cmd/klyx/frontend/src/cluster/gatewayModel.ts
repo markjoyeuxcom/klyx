@@ -85,9 +85,11 @@ const endpointsText = (r: number, t: number, nonPod: number) => `${r}/${t} endpo
 // that carries traffic. Each issue says how sure Klyx is: fault = explicit
 // current negative; degraded = partial or last observed; progressing = the
 // controller is deciding; unknown = Klyx could not read or does not evaluate
-// it. With several traffic-carrying backends a backend fault is degraded -
-// the others may still carry traffic - unless every one of them faults. A
-// weight-0 backend carries none and is not diagnosed.
+// it. Weights split traffic within one rule's backendRefs, so each rule is
+// judged on its own: a rule whose backends all have weight 0 serves nothing
+// (fault); within a rule a weight-0 backend is not diagnosed, and a backend
+// fault is degraded - the rule's other backends may still carry its traffic
+// - unless every one of them faults.
 export function routeIssues(r: Omit<RouteNodeDTO, "rule">, listeners: ListenerDTO[] = []): RouteIssue[] {
   const out: RouteIssue[] = [];
   const legacy = r.parentFound === undefined; // older payload: booleans only
@@ -117,24 +119,35 @@ export function routeIssues(r: Omit<RouteNodeDTO, "rule">, listeners: ListenerDT
     out.push({ short: "no backendRefs", text: "No backendRefs - a redirect or filter-only route, or a misconfiguration. Klyx does not evaluate filters.", severity: "unknown" });
     return out;
   }
-  const carrying = r.backends.filter(carriesTraffic);
-  if (carrying.length === 0) {
-    out.push({ short: "every backend has weight 0", text: "Every backendRef has weight 0, so no backend receives this rule's traffic.", severity: "fault" });
-    return out;
+  const order: number[] = [];
+  const byRule = new Map<number, BackendDTO[]>();
+  for (const b of r.backends) {
+    const ri = b.rule ?? 0;
+    if (!byRule.has(ri)) { byRule.set(ri, []); order.push(ri); }
+    if (carriesTraffic(b)) byRule.get(ri)!.push(b);
   }
-  const several = carrying.length > 1;
-  const found = carrying.flatMap((b) => {
-    const is = backendIssue(b);
-    return is ? [{ b, is }] : [];
-  });
-  const faults = found.filter((x) => x.is.severity === "fault").length;
-  for (const { b, is } of found) {
-    const demote = several && is.severity === "fault" && faults < carrying.length;
-    out.push({
-      short: several ? `${b.name}: ${is.short}` : is.short,
-      text: `${several ? `${b.namespace}/${b.name}: ` : ""}${is.text}${demote ? " Other backends may still carry traffic." : ""}`,
-      severity: demote ? "degraded" : is.severity,
+  const named = r.backends.filter(carriesTraffic).length > 1;
+  for (const ri of order) {
+    const carrying = byRule.get(ri)!;
+    if (carrying.length === 0) {
+      out.push(order.length > 1
+        ? { short: `rule ${ri + 1}: every backend has weight 0`, text: `Every backendRef in rule ${ri + 1} has weight 0, so that rule's traffic reaches no backend.`, severity: "fault" }
+        : { short: "every backend has weight 0", text: "Every backendRef has weight 0, so no backend receives this rule's traffic.", severity: "fault" });
+      continue;
+    }
+    const found = carrying.flatMap((b) => {
+      const is = backendIssue(b);
+      return is ? [{ b, is }] : [];
     });
+    const faults = found.filter((x) => x.is.severity === "fault").length;
+    for (const { b, is } of found) {
+      const demote = carrying.length > 1 && is.severity === "fault" && faults < carrying.length;
+      out.push({
+        short: named ? `${b.name}: ${is.short}` : is.short,
+        text: `${named ? `${b.namespace}/${b.name}: ` : ""}${is.text}${demote ? " Other backends in its rule may still carry the traffic." : ""}`,
+        severity: demote ? "degraded" : is.severity,
+      });
+    }
   }
   return out;
 }

@@ -302,6 +302,18 @@ func TestNativeRulesGolden(t *testing.T) {
 		}
 		return bs
 	}()}))
+	// Weights split traffic within one rule (Codex review of afef050).
+	route("a zero-weight-only rule beside a healthy rule", acc(gwapi.RouteNode{Backends: func() []gwapi.Backend {
+		dead, healthy := resolved(&gwapi.EndpointCount{}), ok(1)[0]
+		dead.Name, dead.WeightSet = "dead", true
+		healthy.Rule = 1
+		return []gwapi.Backend{dead, healthy}
+	}()}))
+	route("a sole backend failing in the second rule", acc(gwapi.RouteNode{Backends: func() []gwapi.Backend {
+		empty := resolved(&gwapi.EndpointCount{})
+		empty.Name, empty.Rule = "empty", 1
+		return append(ok(1), empty)
+	}()}))
 	route("second backend partly ready", acc(gwapi.RouteNode{Backends: append(ok(1), func() gwapi.Backend {
 		b := resolved(&gwapi.EndpointCount{Ready: 1, Total: 3})
 		b.Name = "web-b"

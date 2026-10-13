@@ -82,6 +82,9 @@ type Backend struct {
 	// WeightSet: the backendRef wrote a weight. Unset means the Gateway API
 	// default of 1; an explicit 0 sends this backend no traffic.
 	WeightSet bool
+	// Rule is the index of the spec.rules entry that lists this backend.
+	// Weights split traffic within one rule's backendRefs only.
+	Rule int
 
 	// Filled by the fleet layer, per backend, so a lane is diagnosed from
 	// its own backend's evidence.
