@@ -59,7 +59,8 @@ export function FleetExpiry() {
   const soon = inWindow.filter((r) => r.notAfterUnix > now && daysLeft(r.notAfterUnix) <= 14).length;
   const horizon = windowDays === 0 ? "at any time" : `within ${windowDays} days`;
   // A Subject column with no value in this scan is left out, and the footer
-  // says so - never a column of dashes that reads as "no subject".
+  // says no subject was reported (an empty value, e.g. a SAN-only cert - not
+  // an unread one). Never a column of dashes.
   const hasSubject = inWindow.some((r) => !!r.subject);
   const grid = hasSubject ? "80px 110px minmax(180px, 1.4fr) minmax(140px, 1fr) minmax(110px, 0.6fr)" : "80px 110px minmax(180px, 1.6fr) minmax(110px, 0.6fr)";
 
@@ -144,7 +145,7 @@ export function FleetExpiry() {
           </div>
         </LensTable>
       }
-      footerEnd={<span className="t-secondary">{hasSubject ? "" : "subjects were not read for these rows · "}cert-manager rows are renewal-managed · raw TLS secrets and webhook CAs have no renewer · public certificate material only, keys never read</span>}
+      footerEnd={<span className="t-secondary">{hasSubject ? "" : "no subject reported for these rows · "}cert-manager rows are renewal-managed · raw TLS secrets and webhook CAs have no renewer · public certificate material only, keys never read</span>}
     />
   );
 }

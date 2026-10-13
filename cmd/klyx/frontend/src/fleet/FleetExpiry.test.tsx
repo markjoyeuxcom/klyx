@@ -56,7 +56,7 @@ describe("FleetExpiry", () => {
     const { findByText, queryByText, getByText } = render(<FleetExpiry />);
     expect(await findByText("hook-ca")).toBeTruthy();
     expect(queryByText("Subject")).toBeNull();
-    expect(getByText(/subjects were not read for these rows/)).toBeTruthy();
+    expect(getByText(/no subject reported for these rows/)).toBeTruthy();
   });
 
   it("keeps the Subject column when any row has one", async () => {
@@ -71,7 +71,7 @@ describe("FleetExpiry", () => {
     const { findByText, getByText, queryByText } = render(<FleetExpiry />);
     expect(await findByText("CN=web")).toBeTruthy();
     expect(getByText("Subject")).toBeTruthy();
-    expect(queryByText(/subjects were not read/)).toBeNull();
+    expect(queryByText(/no subject reported/)).toBeNull();
   });
 
   it("expired items render as overdue", async () => {
