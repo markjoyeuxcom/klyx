@@ -44,7 +44,7 @@ beforeEach(() => {
   bridge.aiAvailability.mockReset().mockResolvedValue({ backend: "anthropic", ready: true });
   bridge.aiEgressAllowed.mockReset().mockResolvedValue(true);
   bridge.explain.mockReset().mockResolvedValue(ok());
-  usePendingExplain.setState({ key: null, at: 0 });
+  usePendingExplain.setState({ key: null, at: 0, seq: 0 });
 });
 afterEach(() => vi.useRealTimers());
 
@@ -103,6 +103,18 @@ describe("useInspectorAI", () => {
     expect(status).not.toHaveBeenCalled(); // no Activity entry for a dropped reply
   });
 
+  // Codex review of f83c7cd (P2): an unmounted inspector's reply is dropped.
+  it("drops a reply that arrives after the inspector unmounted", async () => {
+    const late = deferred<AIResultDTO>();
+    bridge.explain.mockReturnValueOnce(late.promise);
+    const { unmount } = render(<Harness target={pod} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Explain with AI" }));
+    unmount();
+    const status = vi.spyOn(useFleet.getState(), "setActionStatus");
+    await act(async () => late.resolve(ok()));
+    expect(status).not.toHaveBeenCalled();
+  });
+
   it("offers nothing for a removed or unverified selection", async () => {
     render(<Harness target={pod} enabled={false} />);
     await act(async () => { await Promise.resolve(); });
@@ -116,6 +128,25 @@ describe("palette Explain (parked request)", () => {
     render(<Harness target={pod} />);
     await waitFor(() => expect(bridge.explain).toHaveBeenCalledTimes(1));
     expect(usePendingExplain.getState().key).toBeNull();
+  });
+
+  // Codex review of f83c7cd (P2): an open inspector sees a new request, and a
+  // repeated request for the same target runs again; a disabled selection
+  // never runs one.
+  it("runs for an inspector that is already open, once per request", async () => {
+    render(<Harness target={pod} />);
+    await screen.findByRole("button", { name: "Explain with AI" });
+    act(() => usePendingExplain.getState().request(targetKey("c1", pod)));
+    await waitFor(() => expect(bridge.explain).toHaveBeenCalledTimes(1));
+    act(() => usePendingExplain.getState().request(targetKey("c1", pod)));
+    await waitFor(() => expect(bridge.explain).toHaveBeenCalledTimes(2));
+  });
+
+  it("never runs a request for a disabled selection", async () => {
+    render(<Harness target={pod} enabled={false} />);
+    act(() => usePendingExplain.getState().request(targetKey("c1", pod)));
+    await act(async () => { await Promise.resolve(); });
+    expect(bridge.explain).not.toHaveBeenCalled();
   });
 
   it("never fires for another target, nor after it expired", async () => {

@@ -323,6 +323,7 @@ type evidenceChain struct {
 	Requests    []chainNodeView `json:"requests,omitempty"`
 	FailingLink string          `json:"failingLink,omitempty"`
 	Warnings    []string        `json:"warnings,omitempty"`
+	FetchedAt   string          `json:"fetchedAt,omitempty"` // when the chain was resolved
 }
 
 // detailObject projects a resolved object's conditions and facts - never its

@@ -140,10 +140,24 @@ func (s *AIService) rowEvidence(ctx context.Context, conn AIConn, cluster string
 	if key == healthsrc.TaskCerts+"/certificates" {
 		// A certificate's cause usually sits down its issuance chain; resolve
 		// it fresh, as the Certs lens does.
-		if chain, cerr := conn.GetCertificateChain(ctx, detail.Namespace, detail.Name); cerr == nil {
-			ev.IssuanceChain = sc.chain(chain)
-		} else {
+		chain, cerr := conn.GetCertificateChain(ctx, detail.Namespace, detail.Name)
+		switch {
+		case cerr != nil:
 			ev.Qualifications = append(ev.Qualifications, "The issuance chain could not be read: "+sc.text(cerr.Error()))
+		case chain.Certificate.UID != t.UID:
+			// The chain is read by name: its root must be the certificate
+			// Klyx evaluated, or a replacement's chain would explain the
+			// old object's verdict (Codex review of f83c7cd).
+			return explainEvidence{}, "", errReplaced
+		default:
+			ev.IssuanceChain = sc.chain(chain)
+			ev.IssuanceChain.FetchedAt = chain.AsOf.UTC().Format(time.RFC3339)
+			if chain.AsOf.IsZero() {
+				ev.IssuanceChain.FetchedAt = time.Now().UTC().Format(time.RFC3339)
+			}
+			if g := chain.Certificate.Generation; g != 0 && row.ref.Generation != 0 && g != row.ref.Generation {
+				ev.Qualifications = append(ev.Qualifications, fmt.Sprintf("The issuance chain was read at certificate generation %d; Klyx's verdict is for generation %d.", g, row.ref.Generation))
+			}
 		}
 	}
 	grounded := fmt.Sprintf("Klyx verdict %q as of %s · %s/%s", verdictLabel(verdict), verdict.EvaluatedAt, detail.Kind, nsName(detail.Namespace, detail.Name))

@@ -749,25 +749,30 @@ export function InstanceDetail({ cluster, resource, instance, removed = false }:
   const live = !removed && !!d && !d.error;
   const target = d?.uid ? { kind: "object" as const, group: resource.group, version: resource.version, plural: resource.plural, namespace: instance.namespace, name: instance.name, uid: d.uid } : null;
   const ai = useInspectorAI(target, `${resource.kind}/${instance.namespace ? `${instance.namespace}/` : ""}${instance.name}`, live, cluster);
-  const [aiPanel, setAiPanel] = useState<{ loading: boolean; result: AIResultDTO | null } | null>(null);
-  // Fence AI results against a mid-flight selection change.
+  // A suggestion belongs to one object: its UID. A same-name recreation, a
+  // removal or an unmount drops it, and a late reply for another UID never
+  // shows (Codex review of f83c7cd).
+  const [aiPanel, setAiPanel] = useState<{ uid: string; loading: boolean; result: AIResultDTO | null } | null>(null);
   const aiTokenRef = useRef(0);
-  useEffect(() => { aiTokenRef.current++; setAiPanel(null); }, [cluster, resource.group, resource.version, resource.plural, instance.namespace, instance.name]);
+  const selectedUID = live ? d?.uid ?? "" : "";
+  useEffect(() => { aiTokenRef.current++; setAiPanel(null); }, [cluster, resource.group, resource.version, resource.plural, instance.namespace, instance.name, selectedUID]);
+  useEffect(() => () => { aiTokenRef.current++; }, []);
   const runFix = () => {
-    if (!d?.uid) return;
+    if (!selectedUID) return;
+    const uid = selectedUID;
     const token = aiTokenRef.current;
     setTab("overview");
-    setAiPanel({ loading: true, result: null });
-    suggestFix(cluster, resource.group, resource.version, resource.plural, instance.namespace, instance.name, d.uid)
+    setAiPanel({ uid, loading: true, result: null });
+    suggestFix(cluster, resource.group, resource.version, resource.plural, instance.namespace, instance.name, uid)
       .then((r) => {
         if (token !== aiTokenRef.current) return;
-        setAiPanel({ loading: false, result: r });
+        setAiPanel({ uid, loading: false, result: r });
         if (r.error) useFleet.getState().setActionStatus({ kind: "error", message: `AI fix suggestion failed: ${r.error}` });
         else useFleet.getState().setActionStatus({ kind: "success", message: `AI fix suggestion - ${resource.kind}/${instance.namespace ? `${instance.namespace}/` : ""}${instance.name} via ${r.backend}` });
       })
       .catch((e) => {
         if (token !== aiTokenRef.current) return;
-        setAiPanel({ loading: false, result: null });
+        setAiPanel({ uid, loading: false, result: null });
         useFleet.getState().setActionStatus({ kind: "error", message: `AI fix suggestion failed: ${String(e)}` });
       });
   };
@@ -860,7 +865,7 @@ export function InstanceDetail({ cluster, resource, instance, removed = false }:
               />
             )}
             {ai.block}
-            {aiPanel && (
+            {aiPanel && aiPanel.uid === selectedUID && (
               <InspectorBlock title="Suggested fix (AI)">
                 {aiPanel.loading ? (
                   <span className="t-secondary">Drafting a change to commit to Git…</span>

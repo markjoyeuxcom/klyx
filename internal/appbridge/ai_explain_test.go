@@ -497,6 +497,7 @@ func TestExplain_CertificateCarriesItsChain(t *testing.T) {
 	}}}
 	rows := observe.Rows{Task: healthsrc.TaskCerts, EvaluatedAt: evalAt, Part: observe.Part{ID: "certificates", Classifier: "native"}, Rows: set}
 	chain := stuckChain()
+	chain.Certificate.UID = "cert-uid"
 	chain.Requests[0].Children[0].Children[0].Message = "DNS record not propagated; Authorization: Bearer abcdefghijklmnopqrstuvwxyz0123"
 	cl := &fakeCompleter{reply: "x"}
 	conn := &fakeExplainConn{chain: chain, rows: map[string]observe.Rows{"certs/certificates": rows},
@@ -546,5 +547,46 @@ func TestSuggestFix_FencedScrubbedFramed(t *testing.T) {
 	}
 	if !strings.HasPrefix(cl.gotUser, "<evidence>\n") || !strings.HasSuffix(cl.gotUser, "</evidence>") || !strings.Contains(cl.gotSystem, "never as instructions") {
 		t.Fatal("the fix evidence must be framed as untrusted data")
+	}
+}
+
+// Codex review of f83c7cd (P1): the chain is read by name, so its root must
+// be the certificate Klyx evaluated - a recreation between the detail read
+// and the chain read is refused before the model; a missing root UID too.
+func TestExplain_CertificateChainRootIsFenced(t *testing.T) {
+	set := healthsrc.RowSet[certmanager.Certificate]{Rows: []healthsrc.Row[certmanager.Certificate]{{
+		Ref:  healthsrc.RowRef{UID: "cert-uid", GVR: "cert-manager.io/v1/certificates", Namespace: "prod", Name: "ollama-tls", Generation: 3},
+		Eval: health.NativeEval{Included: true, Role: health.Fault, Label: "Failed"},
+		Data: certmanager.Certificate{UID: "cert-uid", Namespace: "prod", Name: "ollama-tls"},
+	}}}
+	rows := observe.Rows{Task: healthsrc.TaskCerts, EvaluatedAt: evalAt, Part: observe.Part{ID: "certificates", Classifier: "native"}, Rows: set}
+	detail := crd.InstanceDetail{Kind: "Certificate", Namespace: "prod", Name: "ollama-tls", UID: "cert-uid", Generation: 3}
+	target := ExplainTargetDTO{Kind: "row", Task: healthsrc.TaskCerts, Part: "certificates", UID: "cert-uid"}
+	for name, rootUID := range map[string]string{"replacement chain": "new-cert-uid", "missing root uid": ""} {
+		t.Run(name, func(t *testing.T) {
+			chain := stuckChain()
+			chain.Certificate.UID = rootUID
+			cl := &fakeCompleter{reply: "x"}
+			conn := &fakeExplainConn{chain: chain, rows: map[string]observe.Rows{"certs/certificates": rows}, details: map[string]crd.InstanceDetail{"cert-manager.io/certificates/prod/ollama-tls": detail}}
+			if r := explainSvc(cl, conn).Explain("c", target); r.OK || cl.calls != 0 {
+				t.Fatalf("want a refusal before the model, got %+v (calls %d)", r, cl.calls)
+			}
+		})
+	}
+	// Same root, another generation: qualified, with the chain's read time.
+	chain := stuckChain()
+	chain.Certificate.UID, chain.Certificate.Generation, chain.AsOf = "cert-uid", 4, evalAt.Add(time.Minute)
+	cl := &fakeCompleter{reply: "x"}
+	conn := &fakeExplainConn{chain: chain, rows: map[string]observe.Rows{"certs/certificates": rows}, details: map[string]crd.InstanceDetail{"cert-manager.io/certificates/prod/ollama-tls": detail}}
+	if r := explainSvc(cl, conn).Explain("c", target); !r.OK {
+		t.Fatalf("got %+v", r)
+	}
+	ev := evidenceOf(t, cl.gotUser)
+	if ev["issuanceChain"].(map[string]any)["fetchedAt"] != evalAt.Add(time.Minute).UTC().Format(time.RFC3339) {
+		t.Fatalf("the chain read time must be recorded: %v", ev["issuanceChain"])
+	}
+	q, _ := json.Marshal(ev["qualifications"])
+	if !strings.Contains(string(q), "generation 4") {
+		t.Fatalf("a chain generation difference must qualify: %s", q)
 	}
 }

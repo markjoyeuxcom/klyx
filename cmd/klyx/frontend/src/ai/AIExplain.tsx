@@ -26,11 +26,14 @@ export function targetKey(cluster: string, t: ExplainTarget | null): string {
 // target runs it once when AI is ready. A request expires after
 // pendingExplainTTL, so one that never found its inspector cannot fire later.
 export const pendingExplainTTL = 30_000;
-type PendingExplain = { key: string | null; at: number; request: (key: string) => void; take: (key: string) => boolean };
+// seq numbers every request, so a second request for the same target runs
+// again, and an inspector that is already open sees it (it subscribes).
+type PendingExplain = { key: string | null; at: number; seq: number; request: (key: string) => void; take: (key: string) => boolean };
 export const usePendingExplain = create<PendingExplain>((set, get) => ({
   key: null,
   at: 0,
-  request: (key) => set({ key, at: Date.now() }),
+  seq: 0,
+  request: (key) => set((s) => ({ key, at: Date.now(), seq: s.seq + 1 })),
   take: (key) => {
     const { key: pending, at } = get();
     if (pending !== key) return false;
@@ -105,10 +108,18 @@ export function useAIExplain(cluster: string, target: ExplainTarget | null, read
     });
   }, [cluster, key, describe]);
 
-  // A palette "Explain" for this target runs once when it is ready.
+  // A palette "Explain" for this target runs once when it is ready - also
+  // when this inspector is already open, and again for a repeated request.
+  const pendingSeq = usePendingExplain((p) => p.seq);
   useEffect(() => {
     if (key && readiness.ready && usePendingExplain.getState().take(key)) run();
-  }, [key, readiness.ready, run]);
+  }, [key, readiness.ready, run, pendingSeq]);
+
+  // An unmounted inspector drops its reply: no block, no Activity entry
+  // (Codex review of f83c7cd).
+  useEffect(() => () => {
+    token.current++;
+  }, []);
 
   const dismiss = useCallback(() => {
     token.current++;

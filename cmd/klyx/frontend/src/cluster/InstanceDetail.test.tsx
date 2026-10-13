@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, fireEvent, waitFor, act, screen } from "@testing-library/react";
-import { useFleet, ResourceRef, InstanceRef, InstanceDetailDTO, ServiceBackingDTO, HPAScalingDTO } from "../store/fleet";
+import { useFleet, ResourceRef, InstanceRef, InstanceDetailDTO, AIResultDTO, ServiceBackingDTO, HPAScalingDTO } from "../store/fleet";
 import { InstanceDetail, buildFoldedDiffRows, buildLineDiff, cursorPositionForOffset, detectGitOwner, formatDiffPlainText, formatKubernetesActionError, validateResourceYAML } from "./InstanceDetail";
 
 vi.mock("../bridge/crd", () => ({
@@ -908,6 +908,36 @@ describe("InstanceDetail cross-lens Explain (AI)", () => {
     expect(item.disabled).toBe(true);
     expect(item.title).toMatch(/protected cluster/i);
     expect(queryByRole("button", { name: /^explain$/i })).toBeNull();
+  });
+
+  // Codex review of f83c7cd (P2): a suggestion belongs to one UID.
+  it("drops a late Suggest-fix reply after a same-name recreation", async () => {
+    vi.mocked(aiAvailability).mockResolvedValue({ backend: "local", ready: true });
+    vi.mocked(aiEgressAllowed).mockResolvedValue(true);
+    let resolve!: (v: AIResultDTO) => void;
+    vi.mocked(suggestFix).mockReturnValueOnce(new Promise<AIResultDTO>((r) => (resolve = r)));
+    seed();
+    const { findByRole, queryByText } = render(<InstanceDetail cluster="x" resource={resource} instance={instance} />);
+    fireEvent.click(await findByRole("button", { name: /^More/ }));
+    fireEvent.click(await findByRole("menuitem", { name: /Suggest fix/ }));
+    // the object is recreated under the same name before the reply lands
+    act(() => seed({ detail: { ...detail, uid: "web-tls-uid-2" } }));
+    await act(async () => resolve({ ok: true, backend: "local", model: "m", groundedOn: "g", explanation: "patch for the OLD object", error: "" }));
+    expect(queryByText(/patch for the OLD object/)).toBeNull();
+    expect(queryByText(/Klyx will not apply it/)).toBeNull();
+  });
+
+  it("clears a completed suggestion when the object is recreated or removed", async () => {
+    vi.mocked(aiAvailability).mockResolvedValue({ backend: "local", ready: true });
+    vi.mocked(aiEgressAllowed).mockResolvedValue(true);
+    vi.mocked(suggestFix).mockResolvedValueOnce({ ok: true, backend: "local", model: "m", groundedOn: "g", explanation: "patch for web-tls", error: "" });
+    seed();
+    const { findByRole, findByText, queryByText } = render(<InstanceDetail cluster="x" resource={resource} instance={instance} />);
+    fireEvent.click(await findByRole("button", { name: /^More/ }));
+    fireEvent.click(await findByRole("menuitem", { name: /Suggest fix/ }));
+    expect(await findByText(/patch for web-tls/)).toBeTruthy();
+    act(() => seed({ detail: { ...detail, uid: "web-tls-uid-2" } }));
+    expect(queryByText(/patch for web-tls/)).toBeNull();
   });
 
   it("Suggest fix renders a copyable patch with a loud commit-to-Git disclaimer", async () => {
