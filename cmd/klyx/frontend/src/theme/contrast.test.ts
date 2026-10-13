@@ -1,10 +1,16 @@
 import { describe, it, expect } from "vitest";
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+
+// tokens.css is read from disk: CSS imports are stubbed under vitest, and the
+// app's tsconfig has no Node types, so fs is loaded by a computed specifier.
+const fsModule = "node:fs";
+const { readFileSync } = (await import(/* @vite-ignore */ fsModule)) as { readFileSync: (p: URL, enc: "utf8") => string };
+// vitest runs from the frontend root; under jsdom import.meta.url is not a
+// file URL, so the path is resolved from the working directory.
+const cwd = (globalThis as unknown as { process: { cwd(): string } }).process.cwd();
+const css = readFileSync(new URL(`file://${cwd}/src/theme/tokens.css`), "utf8");
 
 // UI review 2026-10-13: readable text in the default bench themes. Measured
 // on the surfaces text sits on (module, panel, well), WCAG AA for body text.
-const css = readFileSync(fileURLToPath(new URL("./tokens.css", import.meta.url)), "utf8");
 
 function block(theme: string): Record<string, string> {
   const start = css.indexOf(`[data-theme="${theme}"]`);
