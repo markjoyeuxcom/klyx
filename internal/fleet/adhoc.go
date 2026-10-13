@@ -468,12 +468,16 @@ func resourceLabel(gvr schema.GroupVersionResource) string {
 // preferred version first, plus any resource served only in another version.
 // It matches what applyAdhocDoc admits, so nothing Klyx created is left out.
 // Secrets are skipped - the composer refuses them, so none can be Klyx's.
-func (c *ClusterConn) adhocSweepKinds() ([]adhocKind, []string, error) {
+//
+// Discovery is read with ctx (the context-aware cache the health probes
+// share), so the caller's deadline or cancellation ends it at the transport;
+// once ctx ends the sweep stops and says the inventory was not read.
+func (c *ClusterConn) adhocSweepKinds(ctx context.Context) ([]adhocKind, []string, error) {
 	if c.typed == nil {
 		return nil, nil, errors.New("discovery unavailable: no cluster connection")
 	}
-	d := c.discovery()
-	groups, err := d.ServerGroups()
+	d := c.probeDiscovery()
+	groups, err := d.ServerGroupsCtx(ctx)
 	if err != nil || groups == nil {
 		return nil, nil, fmt.Errorf("discovery failed: %v", err)
 	}
@@ -491,11 +495,17 @@ func (c *ClusterConn) adhocSweepKinds() ([]adhocKind, []string, error) {
 		}
 		seen := map[string]bool{}
 		for _, gvStr := range versions {
+			if err := ctx.Err(); err != nil {
+				return nil, nil, fmt.Errorf("discovery stopped: %v", err)
+			}
 			gv, err := schema.ParseGroupVersion(gvStr)
 			if err != nil {
 				continue
 			}
-			rl, err := d.ServerResourcesForGroupVersion(gvStr)
+			rl, err := d.ServerResourcesForGroupVersionCtx(ctx, gvStr)
+			if err := ctx.Err(); err != nil {
+				return nil, nil, fmt.Errorf("discovery stopped: %v", err)
+			}
 			if err != nil || rl == nil {
 				unread = append(unread, fmt.Sprintf("%s: discovery failed: %v", gvStr, err))
 				continue
@@ -528,7 +538,7 @@ func (c *ClusterConn) ListAdhocObjects(ctx context.Context) (AdhocInventory, err
 	if c.dyn == nil {
 		return AdhocInventory{}, errors.New("dynamic client unavailable")
 	}
-	kinds, unread, err := c.adhocSweepKinds()
+	kinds, unread, err := c.adhocSweepKinds(ctx)
 	if err != nil {
 		return AdhocInventory{}, err
 	}

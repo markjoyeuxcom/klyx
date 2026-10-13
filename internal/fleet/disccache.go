@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/rest"
 
@@ -63,22 +64,44 @@ type ctxDiscovery interface {
 	resources(ctx context.Context, groupVersion string) (*metav1.APIResourceList, error)
 }
 
-// restDiscovery reads /apis and /apis/<group>/<version> through the
-// discovery REST client: the request carries the context, so a deadline or
-// a cancellation ends it at the transport - no work survives its caller.
+// restDiscovery reads discovery through the REST client: the request
+// carries the context, so a deadline or a cancellation ends it at the
+// transport - no work survives its caller. It answers exactly as client-go's
+// ServerGroups and ServerResourcesForGroupVersion do - the legacy core group
+// (/api) first, then /apis; core versions at /api/<v>, named groups at
+// /apis/<group>/<v> - because both paths share one cache (Codex review
+// 2026-10-13: a cache warmed from /apis alone had no core group).
 type restDiscovery struct{ rc rest.Interface }
 
 func (d restDiscovery) groups(ctx context.Context) (*metav1.APIGroupList, error) {
-	var l metav1.APIGroupList
-	if err := d.rc.Get().AbsPath("/apis").Do(ctx).Into(&l); err != nil {
+	var core metav1.APIVersions
+	if err := d.rc.Get().AbsPath("/api").Do(ctx).Into(&core); err != nil && !apierrors.IsNotFound(err) && !apierrors.IsForbidden(err) {
 		return nil, err
 	}
-	return &l, nil
+	var named metav1.APIGroupList
+	if err := d.rc.Get().AbsPath("/apis").Do(ctx).Into(&named); err != nil && !apierrors.IsNotFound(err) && !apierrors.IsForbidden(err) {
+		return nil, err
+	}
+	out := &metav1.APIGroupList{}
+	if len(core.Versions) > 0 {
+		legacy := metav1.APIGroup{Name: ""}
+		for _, v := range core.Versions {
+			legacy.Versions = append(legacy.Versions, metav1.GroupVersionForDiscovery{GroupVersion: v, Version: v})
+		}
+		legacy.PreferredVersion = legacy.Versions[0]
+		out.Groups = append(out.Groups, legacy)
+	}
+	out.Groups = append(out.Groups, named.Groups...)
+	return out, nil
 }
 
 func (d restDiscovery) resources(ctx context.Context, groupVersion string) (*metav1.APIResourceList, error) {
+	path := "/apis/" + groupVersion
+	if !strings.Contains(groupVersion, "/") {
+		path = "/api/" + groupVersion // the legacy core group ("v1")
+	}
 	var l metav1.APIResourceList
-	if err := d.rc.Get().AbsPath("/apis", groupVersion).Do(ctx).Into(&l); err != nil {
+	if err := d.rc.Get().AbsPath(path).Do(ctx).Into(&l); err != nil {
 		return nil, err
 	}
 	return &l, nil
