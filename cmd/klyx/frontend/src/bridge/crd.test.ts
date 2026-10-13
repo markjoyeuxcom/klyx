@@ -109,4 +109,23 @@ describe("CRD bridge read ordering", () => {
     expect(s.rows.map((x) => x.name)).toEqual(["a", "b"]);
     expect(s.nextToken).toBe("");
   });
+
+  it("a failed duplicate continuation cannot taint a page that already landed (Codex review of cd291bd)", async () => {
+    const old = deferred<unknown>();
+    const fresh = deferred<unknown>();
+    vi.mocked(CRDService.ListInstances)
+      .mockResolvedValueOnce({ items: [{ namespace: "ns", name: "a" }], nextToken: "t1" } as never)
+      .mockImplementationOnce(() => old.promise as never)
+      .mockImplementationOnce(() => fresh.promise as never);
+    await loadInstances("c", ref);
+    const first = loadInstances("c", ref, "t1");
+    const second = loadInstances("c", ref, "t1");
+    fresh.resolve({ items: [{ namespace: "ns", name: "b" }], nextToken: "" });
+    await second;
+    old.resolve({ items: [], nextToken: "", error: "old duplicate timed out" });
+    await first;
+    const s = useFleet.getState().instances;
+    expect(s.rows.map((x) => x.name)).toEqual(["a", "b"]);
+    expect(s.error).toBeNull();
+  });
 });

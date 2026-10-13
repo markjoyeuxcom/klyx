@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -165,17 +164,14 @@ func (s *LogsService) release(streamID string, st *logStream) {
 }
 
 // openDeadline cancels a reservation's context if establishing it takes
-// longer than logOpenTimeout. stop reports whether the deadline fired.
+// longer than logOpenTimeout. stop reports whether the deadline fired. It
+// trusts Stop's own answer: false means the callback has run or is about to
+// (AfterFunc's Stop does not wait for it), so the open counts as timed out -
+// a stream is never handed over that its deadline may still cancel (Codex
+// review of cd291bd).
 func openDeadline(st *logStream) (stop func() (timedOut bool)) {
-	var fired atomic.Bool
-	t := time.AfterFunc(logOpenTimeout, func() {
-		fired.Store(true)
-		st.cancel()
-	})
-	return func() bool {
-		t.Stop()
-		return fired.Load()
-	}
+	t := time.AfterFunc(logOpenTimeout, st.cancel)
+	return func() bool { return !t.Stop() }
 }
 
 // openFailure names why establishing a stream ended without one.

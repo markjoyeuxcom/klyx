@@ -110,7 +110,9 @@ export async function loadInstances(cluster: string, ref: ResourceRef, token?: s
     console.error("loadInstances", e);
     // Clear the loading flag so the view doesn't get stuck on "Loading…", and
     // record WHY: the list must say it could not read, not that it is empty.
-    if (current()) {
+    // A failed continuation is fenced like a successful one: once the list no
+    // longer ends at its token (another page landed), its error is obsolete.
+    if (current() && (!token || useFleet.getState().instances.nextToken === token)) {
       const error = e instanceof Error ? e.message : String(e);
       useFleet.setState((s) => ({ instances: { ...s.instances, loading: false, error } }));
     }

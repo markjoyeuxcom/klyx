@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -166,5 +167,29 @@ func TestCloseCancelsAPendingWorkloadOpen(t *testing.T) {
 	}
 	if r := waitResult(t, res); !strings.Contains(r.Error, "closed before it opened") {
 		t.Fatalf("a cancelled aggregate open must say so: %+v", r)
+	}
+}
+
+// Codex review of cd291bd: once stop reports no timeout, the deadline can
+// never cancel the stream afterwards - Stop's own answer decides, with no
+// window where the callback is scheduled but has not yet run.
+func TestOpenDeadlineNeverCancelsAfterReportingNoTimeout(t *testing.T) {
+	old := logOpenTimeout
+	logOpenTimeout = time.Nanosecond
+	defer func() { logOpenTimeout = old }()
+	type trial struct{ cancelled *atomic.Bool }
+	var passed []trial
+	for i := 0; i < 20000; i++ {
+		c := &atomic.Bool{}
+		stop := openDeadline(&logStream{cancel: func() { c.Store(true) }})
+		if !stop() {
+			passed = append(passed, trial{c})
+		}
+	}
+	time.Sleep(20 * time.Millisecond)
+	for i, tr := range passed {
+		if tr.cancelled.Load() {
+			t.Fatalf("trial %d: cancelled after stop reported no timeout", i)
+		}
 	}
 }
