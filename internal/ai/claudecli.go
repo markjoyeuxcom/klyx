@@ -50,6 +50,19 @@ func cliRefused(format string, args ...any) error {
 	return &CLIRefusedError{Reason: fmt.Sprintf(format, args...)}
 }
 
+// CLIDiscardedError: the prompt reached Claude Code, but Klyx discarded the
+// outcome. Partial false: the whole prompt was handed over and the answer is
+// dropped because the call's admission was revoked or replaced while the CLI
+// ran. Partial true: the hand-off broke midway, so part of the prompt may
+// have been delivered. Never reported as "not sent" - that is
+// CLIRefusedError (Codex review 2026-10-13 #10).
+type CLIDiscardedError struct {
+	Reason  string
+	Partial bool
+}
+
+func (e *CLIDiscardedError) Error() string { return e.Reason }
+
 // CLIAdmission is the record of an admitted Claude Code (spec §1.4): the
 // exact binary, the account it was checked against, and the lockdown
 // configurations (argv hashes, one per model) whose flags were proven. It
@@ -967,7 +980,7 @@ func (p *claudeCLIProvider) run(ctx context.Context, t callTicket, req Request, 
 			}
 			return p.store.release(t, func() error {
 				if err := write(); err != nil {
-					return cliRefused("Klyx could not hand the prompt to Claude Code: %v", err)
+					return &CLIDiscardedError{Reason: fmt.Sprintf("Klyx could not finish handing the prompt to Claude Code: %v", err), Partial: true}
 				}
 				return nil
 			})
@@ -1000,7 +1013,9 @@ func (p *claudeCLIProvider) run(ctx context.Context, t callTicket, req Request, 
 		return "", perr
 	}
 	if err := p.store.valid(t); err != nil {
-		return "", err // revoked or replaced while the CLI ran
+		// Revoked or replaced while the CLI ran: the prompt was sent, the
+		// answer is dropped.
+		return "", &CLIDiscardedError{Reason: err.Error()}
 	}
 	return text, nil
 }

@@ -184,9 +184,16 @@ func complete(ctx context.Context, st *AIState, req ai.Request, grounded string,
 func modelError(err error) string {
 	var refused *ai.RefusedError
 	var cli *ai.CLIRefusedError
+	var discarded *ai.CLIDiscardedError
 	switch {
 	case errors.As(err, &refused):
 		return "The model declined to answer" + refusalDetail(refused) + "."
+	case errors.As(err, &discarded):
+		// Sent, then dropped: never "did not send" (Codex review 2026-10-13).
+		if discarded.Partial {
+			return "Part of this may have reached Claude Code before the hand-off failed (" + discarded.Reason + "); no answer is shown."
+		}
+		return "Claude Code received this, but Klyx discarded its answer: " + discarded.Reason + "."
 	case errors.As(err, &cli):
 		return "Klyx did not send this to Claude Code: " + cli.Reason + "."
 	case errors.Is(err, ai.ErrTruncated):

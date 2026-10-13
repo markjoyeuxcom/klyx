@@ -2,7 +2,6 @@ package appbridge
 
 import (
 	"bufio"
-	"context"
 	"fmt"
 	"strings"
 	"sync"
@@ -47,17 +46,25 @@ func (s *LogsService) OpenWorkloadLogStream(cluster, namespace, kind, name, cont
 		return OpenLogStreamResultDTO{Error: "cluster not connected"}
 	}
 
-	// Long-lived: cancellation is the lifecycle, not a timeout.
-	ctx, cancel := context.WithCancel(context.Background())
+	// Reserved before any network I/O, like OpenLogStream: the pending open
+	// counts as ONE stream against the cap and a close cancels it.
+	st, ctx, err := s.reserve(streamID)
+	if err != nil {
+		return OpenLogStreamResultDTO{Error: err.Error()}
+	}
+	stop := openDeadline(st)
+	fail := func(timedOut bool, err error) OpenLogStreamResultDTO {
+		msg := openFailure(ctx, timedOut, err) // before release cancels ctx
+		s.release(streamID, st)
+		return OpenLogStreamResultDTO{Error: msg}
+	}
 
 	pods, err := conn.WorkloadPods(ctx, kind, namespace, name)
 	if err != nil {
-		cancel()
-		return OpenLogStreamResultDTO{Error: err.Error()}
+		return fail(stop(), err)
 	}
 	if len(pods) == 0 {
-		cancel()
-		return OpenLogStreamResultDTO{Error: fmt.Sprintf("no pods for %s %s/%s", kind, namespace, name)}
+		return fail(stop(), fmt.Errorf("no pods for %s %s/%s", kind, namespace, name))
 	}
 
 	// Cap the fan-out. Pods are already sorted by WorkloadPods; take the first N.
@@ -89,6 +96,9 @@ func (s *LogsService) OpenWorkloadLogStream(cluster, namespace, kind, name, cont
 	var readers []podReader
 	for _, pod := range pods {
 		short := podShort(name, pod)
+		if ctx.Err() != nil {
+			break // closed, evicted or timed out while opening
+		}
 		rc, perr := conn.PodLogStream(ctx, namespace, pod, container, false, int64(perPodTail))
 		if perr != nil {
 			prelude = append(prelude, fmt.Sprintf("%s › … failed to open: %s", short, perr.Error()))
@@ -96,25 +106,15 @@ func (s *LogsService) OpenWorkloadLogStream(cluster, namespace, kind, name, cont
 		}
 		readers = append(readers, podReader{short: short, rc: rc})
 	}
-	if len(readers) == 0 {
-		cancel()
-		return OpenLogStreamResultDTO{Error: fmt.Sprintf("all pod streams failed to open for %s %s/%s", kind, namespace, name)}
-	}
-
-	st := &logStream{cancel: cancel, done: make(chan struct{})}
-
-	s.mu.Lock()
-	// Same registration as OpenLogStream (shared helper: in-use id refusal +
-	// synchronous eviction, an evicted stream moved to draining): an aggregate
-	// counts as ONE stream against the cap.
-	err = s.registerLocked(streamID, st)
-	s.mu.Unlock()
-	if err != nil {
-		cancel()
+	timedOut := stop()
+	if timedOut || ctx.Err() != nil || len(readers) == 0 {
 		for _, pr := range readers {
 			_ = pr.rc.Close()
 		}
-		return OpenLogStreamResultDTO{Error: err.Error()}
+		if timedOut || ctx.Err() != nil {
+			return fail(timedOut, nil)
+		}
+		return fail(false, fmt.Errorf("all pod streams failed to open for %s %s/%s", kind, namespace, name))
 	}
 
 	// lines is the single shared fan-in channel. closed=cap len(readers) is not

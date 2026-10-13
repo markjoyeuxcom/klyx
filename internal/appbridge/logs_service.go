@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -38,6 +39,11 @@ const (
 	// thread is never blocked indefinitely.
 	closeWaitTimeout = 2 * time.Second
 )
+
+// logOpenTimeout bounds establishing a stream (listing a workload's pods and
+// opening each log request). Past it the open is cancelled like a close.
+// A var so tests can shorten it.
+var logOpenTimeout = 30 * time.Second
 
 // logStream is one live tail. cancel triggers the supervisor (which closes the
 // ReadCloser to unblock a stuck Read); done closes when the reader goroutine has
@@ -118,6 +124,73 @@ func (s *LogsService) registerLocked(streamID string, st *logStream) error {
 	return nil
 }
 
+// reserve registers a stream under its id BEFORE any network I/O (Codex
+// review 2026-10-13 #4): a pending open then counts against the cap, and
+// CloseLogStream, CloseAll or an eviction cancel it through its context. The
+// caller either starts the stream's reader or calls release.
+func (s *LogsService) reserve(streamID string) (*logStream, context.Context, error) {
+	// Long-lived: cancellation is the lifecycle, not a timeout.
+	ctx, cancel := context.WithCancel(context.Background())
+	st := &logStream{cancel: cancel, done: make(chan struct{})}
+	s.mu.Lock()
+	err := s.registerLocked(streamID, st)
+	s.mu.Unlock()
+	if err != nil {
+		cancel()
+		return nil, nil, err
+	}
+	return st, ctx, nil
+}
+
+// release undoes a reservation whose open failed or was cancelled: the entry
+// leaves streams (or draining, if it was evicted meanwhile), its context is
+// cancelled and done closes, so a waiting CloseLogStream returns at once.
+func (s *LogsService) release(streamID string, st *logStream) {
+	s.mu.Lock()
+	if s.streams[streamID] == st {
+		delete(s.streams, streamID)
+		for i, id := range s.order {
+			if id == streamID {
+				s.order = append(s.order[:i], s.order[i+1:]...)
+				break
+			}
+		}
+	}
+	if s.draining[streamID] == st {
+		delete(s.draining, streamID)
+	}
+	s.mu.Unlock()
+	st.cancel()
+	close(st.done)
+}
+
+// openDeadline cancels a reservation's context if establishing it takes
+// longer than logOpenTimeout. stop reports whether the deadline fired.
+func openDeadline(st *logStream) (stop func() (timedOut bool)) {
+	var fired atomic.Bool
+	t := time.AfterFunc(logOpenTimeout, func() {
+		fired.Store(true)
+		st.cancel()
+	})
+	return func() bool {
+		t.Stop()
+		return fired.Load()
+	}
+}
+
+// openFailure names why establishing a stream ended without one.
+func openFailure(ctx context.Context, timedOut bool, err error) string {
+	switch {
+	case timedOut:
+		return fmt.Sprintf("timed out opening the log stream after %s", logOpenTimeout)
+	case ctx.Err() != nil:
+		return "the log stream was closed before it opened"
+	case err != nil:
+		return err.Error()
+	}
+	return "the log stream did not open"
+}
+
 // OpenLogStream opens a live tail for one container on the frontend-chosen
 // streamID (validStreamID). The frontend subscribes to "podlogs:"+streamID
 // BEFORE calling, so the first batch - often the whole tail, emitted before
@@ -134,23 +207,20 @@ func (s *LogsService) OpenLogStream(cluster, namespace, pod, container string, p
 		return OpenLogStreamResultDTO{Error: "cluster not connected"}
 	}
 
-	// Long-lived: cancellation is the lifecycle, not a timeout.
-	ctx, cancel := context.WithCancel(context.Background())
-	rc, err := conn.PodLogStream(ctx, namespace, pod, container, previous, int64(tailLines))
+	st, ctx, err := s.reserve(streamID)
 	if err != nil {
-		cancel()
 		return OpenLogStreamResultDTO{Error: err.Error()}
 	}
-
-	st := &logStream{cancel: cancel, done: make(chan struct{})}
-
-	s.mu.Lock()
-	err = s.registerLocked(streamID, st)
-	s.mu.Unlock()
-	if err != nil {
-		cancel()
-		_ = rc.Close()
-		return OpenLogStreamResultDTO{Error: err.Error()}
+	stop := openDeadline(st)
+	rc, err := conn.PodLogStream(ctx, namespace, pod, container, previous, int64(tailLines))
+	timedOut := stop()
+	if err != nil || timedOut || ctx.Err() != nil {
+		if rc != nil {
+			_ = rc.Close()
+		}
+		msg := openFailure(ctx, timedOut, err) // before release cancels ctx
+		s.release(streamID, st)
+		return OpenLogStreamResultDTO{Error: msg}
 	}
 
 	// Supervisor: the ONLY thing that unblocks a stuck Read. ctx is cancelled by

@@ -837,7 +837,16 @@ func TestClaudeCLI_RevocationIsAtomic(t *testing.T) {
 				}
 			}
 			_, err := f.complete()
-			wantRefused(t, err, tc.want)
+			// The prompt was handed over whole; the answer is discarded,
+			// never reported as "not sent" (Codex review 2026-10-13 #10).
+			var d *CLIDiscardedError
+			if !errors.As(err, &d) || d.Partial || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("want a discarded answer containing %q, got %T %v", tc.want, err, err)
+			}
+			var r *CLIRefusedError
+			if errors.As(err, &r) {
+				t.Fatal("a sent prompt must never read as a refusal")
+			}
 			<-done
 			b, _ := os.ReadFile(filepath.Join(f.home, "record.json"))
 			if !strings.Contains(string(b), "EVIDENCE-TEXT") {
@@ -1052,7 +1061,12 @@ func TestClaudeCLI_StdinHandOverIsBounded(t *testing.T) {
 	defer cancel()
 	start := time.Now()
 	_, err := f.p.Complete(ctx, Request{System: "s", User: strings.Repeat("x", 1<<20), Purpose: PurposeExplain})
-	wantRefused(t, err, "could not hand the prompt")
+	// Part of the prompt may already sit in the pipe: a partial hand-off,
+	// never "not sent" (Codex review 2026-10-13 #10).
+	var d *CLIDiscardedError
+	if !errors.As(err, &d) || !d.Partial || !strings.Contains(err.Error(), "could not finish handing the prompt") {
+		t.Fatalf("want a partial hand-off, got %T %v", err, err)
+	}
 	if time.Since(start) > 45*time.Second {
 		t.Fatal("the hand-over was not bounded")
 	}

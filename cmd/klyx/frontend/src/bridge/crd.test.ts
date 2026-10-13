@@ -12,7 +12,7 @@ vi.mock("../../bindings/github.com/moomora/klyx/internal/appbridge/index.js", ()
 vi.mock("@wailsio/runtime", () => ({ Clipboard: { SetText: vi.fn() } }));
 
 import { CRDService } from "../../bindings/github.com/moomora/klyx/internal/appbridge/index.js";
-import { listCRDs, countKind, listInstancePage, loadInstances } from "./crd";
+import { listCRDs, countKind, listInstancePage, loadInstances, getInstanceDetail } from "./crd";
 
 const ok = (fn: unknown, v: unknown) => (fn as ReturnType<typeof vi.fn>).mockResolvedValue(v);
 const ref = { group: "cert-manager.io", version: "v1", plural: "certificates", kind: "Certificate", scope: "Namespaced" };
@@ -52,5 +52,61 @@ describe("CRD bridge error honesty", () => {
     const s = useFleet.getState().instances;
     expect(s.loading).toBe(false);
     expect(s.error).toMatch(/forbidden/);
+  });
+});
+
+function deferred<T>() {
+  let resolve!: (v: T) => void;
+  const promise = new Promise<T>((r) => { resolve = r; });
+  return { promise, resolve };
+}
+
+// Review 2026-10-13 #3: identity guards alone let an older read of the same
+// target win; reads are numbered and only the latest lands.
+describe("CRD bridge read ordering", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    useFleet.getState().clearInstances();
+  });
+
+  it("the latest detail read wins for the same object", async () => {
+    const old = deferred<unknown>();
+    const fresh = deferred<unknown>();
+    vi.mocked(CRDService.GetInstanceDetail).mockImplementationOnce(() => old.promise as never).mockImplementationOnce(() => fresh.promise as never);
+    const first = getInstanceDetail("c", ref, { namespace: "ns", name: "cert" });
+    const second = getInstanceDetail("c", ref, { namespace: "ns", name: "cert" });
+    fresh.resolve({ uid: "new", yaml: "new" });
+    await second;
+    old.resolve({ uid: "old", yaml: "old" });
+    await first;
+    expect(useFleet.getState().instanceDetail.detail?.uid).toBe("new");
+  });
+
+  it("a late page from an older list never appends to a refreshed one", async () => {
+    const old = deferred<unknown>();
+    useFleet.getState().setInstancesLoading("c", ref);
+    useFleet.getState().setInstancePage([{ name: "first", namespace: "ns" } as never], "old-token");
+    vi.mocked(CRDService.ListInstances)
+      .mockImplementationOnce(() => old.promise as never)
+      .mockResolvedValueOnce({ items: [{ name: "fresh", namespace: "ns" }], nextToken: "fresh-token" } as never);
+    const page = loadInstances("c", ref, "old-token");
+    await loadInstances("c", ref); // Refresh: a new list
+    old.resolve({ items: [{ name: "obsolete", namespace: "ns" }], nextToken: "old-next" });
+    await page;
+    const s = useFleet.getState().instances;
+    expect(s.rows.map((x) => x.name)).toEqual(["fresh"]);
+    expect(s.nextToken).toBe("fresh-token");
+  });
+
+  it("load more appends when the list still ends at its token", async () => {
+    useFleet.getState().setInstancesLoading("c", ref);
+    vi.mocked(CRDService.ListInstances)
+      .mockResolvedValueOnce({ items: [{ name: "a", namespace: "ns" }], nextToken: "t1" } as never)
+      .mockResolvedValueOnce({ items: [{ name: "b", namespace: "ns" }], nextToken: "" } as never);
+    await loadInstances("c", ref);
+    await loadInstances("c", ref, "t1");
+    const s = useFleet.getState().instances;
+    expect(s.rows.map((x) => x.name)).toEqual(["a", "b"]);
+    expect(s.nextToken).toBe("");
   });
 });

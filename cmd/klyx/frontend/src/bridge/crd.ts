@@ -80,21 +80,32 @@ export async function listInstancePage(cluster: string, ref: ResourceRef, token 
   return { items: page.items ?? [], nextToken: page.nextToken ?? "", notServed: !!page.notServed };
 }
 
+// listGen numbers instance-list reads: every first-page read (open, Refresh)
+// starts a new list, and "load more" continues the list current when it was
+// asked for (review 2026-10-13 #3: an old continuation appended obsolete rows
+// to a refreshed list).
+let listGen = 0;
+
 export async function loadInstances(cluster: string, ref: ResourceRef, token?: string): Promise<void> {
+  const gen = token ? listGen : ++listGen;
   if (!token) useFleet.getState().setInstancesLoading(cluster, ref);
-  // A page belongs to exactly one cluster + GVR: drop it if the user moved to
-  // another kind OR another cluster meanwhile (review 2026-10-03 #5).
+  // A page belongs to exactly one cluster + GVR and one list read: drop it if
+  // the user moved to another kind or cluster (review 2026-10-03 #5), or the
+  // list was read again since.
   const current = () => {
     const s = useFleet.getState().instances;
-    return s.cluster === cluster && sameResource(s.ref, ref);
+    return gen === listGen && s.cluster === cluster && sameResource(s.ref, ref);
   };
   try {
     const page = await listInstancePage(cluster, ref, token ?? "");
     if (!current()) return;
     // First page REPLACES (idempotent against StrictMode's double effect invoke and
-    // any re-trigger); only "load more" (token set) appends.
-    if (token) useFleet.getState().addInstancePage(page.items ?? [], page.nextToken ?? "");
-    else useFleet.getState().setInstancePage(page.items ?? [], page.nextToken ?? "");
+    // any re-trigger); only "load more" (token set) appends, and only onto the
+    // list that still ends at the token it continued from.
+    if (token) {
+      if (useFleet.getState().instances.nextToken !== token) return;
+      useFleet.getState().addInstancePage(page.items ?? [], page.nextToken ?? "");
+    } else useFleet.getState().setInstancePage(page.items ?? [], page.nextToken ?? "");
   } catch (e) {
     console.error("loadInstances", e);
     // Clear the loading flag so the view doesn't get stuck on "Loading…", and
@@ -106,14 +117,20 @@ export async function loadInstances(cluster: string, ref: ResourceRef, token?: s
   }
 }
 
+// detailGen numbers detail reads: only the latest read for the panel may
+// land (review 2026-10-13 #3: an older read of the same object overwrote a
+// newer one).
+let detailGen = 0;
+
 export async function getInstanceDetail(cluster: string, resource: ResourceRef, instance: InstanceRef): Promise<void> {
+  const gen = ++detailGen;
   useFleet.getState().setInstanceDetailLoading(cluster, resource, instance);
   // A detail belongs to exactly one cluster + GVR + ns/name. DEV/STG/PRD share
   // namespace/name, so ns/name alone let a late DEV detail render under the PRD
   // header (review 2026-10-03 #5).
   const current = () => {
     const s = useFleet.getState().instanceDetail;
-    return s.cluster === cluster && sameResource(s.resource, resource)
+    return gen === detailGen && s.cluster === cluster && sameResource(s.resource, resource)
       && s.ref?.namespace === instance.namespace && s.ref?.name === instance.name;
   };
   try {

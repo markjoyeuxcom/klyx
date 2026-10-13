@@ -67,6 +67,19 @@ func TestAI_CLIRefusalWording(t *testing.T) {
 	}
 }
 
+// Codex review 2026-10-13 #10: an answer discarded after the prompt was sent
+// never reads as "did not send".
+func TestAI_CLIDiscardedWording(t *testing.T) {
+	got := modelError(&ai.CLIDiscardedError{Reason: "a concurrent call attempted a tool"})
+	if got != "Claude Code received this, but Klyx discarded its answer: a concurrent call attempted a tool." {
+		t.Fatalf("got %q", got)
+	}
+	got = modelError(&ai.CLIDiscardedError{Reason: "Klyx could not finish handing the prompt to Claude Code: broken pipe", Partial: true})
+	if !strings.HasPrefix(got, "Part of this may have reached Claude Code") || strings.Contains(got, "did not send") {
+		t.Fatalf("got %q", got)
+	}
+}
+
 func TestAISettings_TestProbesACLI(t *testing.T) {
 	f := newSettingsFixture(t, baseFleet)
 	shim := filepath.Join(t.TempDir(), "claude")
