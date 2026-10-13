@@ -3,13 +3,15 @@ package ai
 import (
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
 
-// The stream-json fixtures below are SYNTHESIZED from the 2.1.296 emitters
-// in the binary's string table (system/init, assistant, result); the slice 5
-// smoke replaces them with a captured run (testdata/claude-2.1.296/README.md).
+// The init event is CAPTURED from the real 2.1.296 (network blocked; see
+// testdata/claude-2.1.296/README.md). The assistant and result events are
+// still SYNTHESIZED from the binary's emitters until a full run is captured.
 
 const (
 	tModel = "claude-opus-5-5"
@@ -17,17 +19,23 @@ const (
 	tSess  = "5d7b7d0e-1a51-4e1e-9d44-000000000001"
 )
 
-var tWant = streamWant{Version: "2.1.296", Model: tModel, Cwd: tCwd}
+var tWant = streamWant{Version: "2.1.296", Model: tModel, Cwd: tCwd, BuiltinPlugins: reviewedClaudeContracts[0].BuiltinPlugins}
 
 func ev(m map[string]any) map[string]any { return m }
 
+// initEvent is the captured init, with this test's cwd and session.
 func initEvent() map[string]any {
-	return ev(map[string]any{
-		"type": "system", "subtype": "init", "cwd": tCwd, "session_id": tSess,
-		"tools": []any{}, "mcp_servers": []any{}, "model": tModel, "permissionMode": "default",
-		"slash_commands": []any{}, "apiKeySource": "none", "betas": []any{}, "claude_code_version": "2.1.296",
-		"output_style": "default", "agents": []any{}, "skills": []any{}, "plugins": []any{}, "uuid": "u-init",
-	})
+	b, err := os.ReadFile(filepath.Join("testdata", "claude-2.1.296", "stream-offline-init.captured.jsonl"))
+	if err != nil {
+		panic(err)
+	}
+	line, _, _ := strings.Cut(string(b), "\n")
+	var m map[string]any
+	if err := json.Unmarshal([]byte(line), &m); err != nil {
+		panic(err)
+	}
+	m["cwd"], m["session_id"] = tCwd, tSess
+	return m
 }
 
 func assistantEvent(blocks ...map[string]any) map[string]any {
@@ -90,6 +98,17 @@ func TestParseClaudeStream_Clean(t *testing.T) {
 	got, err := parseClaudeStream(stream(t, cleanEvents()), tWant)
 	if err != nil || got != answer {
 		t.Fatalf("got (%q, %v)", got, err)
+	}
+	for _, none := range []any{[]any{}, nil} {
+		e := cleanEvents()
+		if none == nil {
+			delete(e[0], "plugins")
+		} else {
+			e[0]["plugins"] = none
+		}
+		if _, err := parseClaudeStream(stream(t, e), tWant); err != nil {
+			t.Fatalf("an init with no plugins passes: %v", err)
+		}
 	}
 	if strings.Contains(got, "Looking at the probe") {
 		t.Fatal("thinking is reasoning, never part of the answer")
@@ -182,6 +201,20 @@ func TestParseClaudeStream_Refusals(t *testing.T) {
 		}, ErrUnexpectedOutput, true},
 		{"init lists skills", set(0, "skills", []any{"pdf"}), ErrUnexpectedOutput, true},
 		{"init lists agents", set(0, "agents", []any{"general-purpose"}), ErrUnexpectedOutput, true},
+		// Plugins: only the reviewed version's own built-ins (the slice 5
+		// smoke's first finding).
+		{"a plugin synced from claude.ai", plugins(map[string]any{"name": "cowork-plugin-management", "path": "/Users/o/.claude/plugins/synced/x/cowork-plugin-management", "source": "cowork-plugin-management@synced"}), ErrUnexpectedOutput, true},
+		{"an installed plugin", plugins(map[string]any{"name": "superpowers", "path": "/Users/o/.claude/plugins/cache/superpowers", "source": "superpowers@marketplace"}), ErrUnexpectedOutput, true},
+		{"an unreviewed built-in", plugins(map[string]any{"name": "cc-plugin-tips", "path": "builtin", "source": "cc-plugin-tips@builtin"}), ErrUnexpectedOutput, true},
+		// These replace the list, so only the path or source is wrong.
+		{"a reviewed name from elsewhere", set(0, "plugins", []any{map[string]any{"name": "cc-plugin-agents-md", "path": "/tmp/evil", "source": "cc-plugin-agents-md@builtin"}}), ErrUnexpectedOutput, true},
+		{"a reviewed name from a marketplace", set(0, "plugins", []any{map[string]any{"name": "cc-plugin-agents-md", "path": "builtin", "source": "cc-plugin-agents-md@evil"}}), ErrUnexpectedOutput, true},
+		{"a built-in listed twice", plugins(map[string]any{"name": "cc-plugin-agents-md", "path": "builtin", "source": "cc-plugin-agents-md@builtin"}), ErrUnexpectedOutput, true},
+		{"a built-in with extra members", func(e []map[string]any) []map[string]any { // replaces the list
+			e[0]["plugins"] = []any{map[string]any{"name": "cc-plugin-agents-md", "path": "builtin", "source": "cc-plugin-agents-md@builtin", "hooks": map[string]any{"SessionStart": 1}}}
+			return e
+		}, ErrUnexpectedOutput, true},
+		{"plugin load errors", set(0, "plugin_errors", []any{map[string]any{"plugin": "x"}}), ErrUnexpectedOutput, true},
 
 		// Framing and sequence.
 		{"first event not init", func(e []map[string]any) []map[string]any { return e[1:] }, ErrUnexpectedOutput, true},
@@ -222,6 +255,14 @@ func TestParseClaudeStream_Refusals(t *testing.T) {
 			_, err := parseClaudeStream(stream(t, tc.m(cleanEvents())), tWant)
 			assertStreamErr(t, err, tc.is, tc.revoke)
 		})
+	}
+}
+
+// plugins appends a plugin to the captured init's list.
+func plugins(p map[string]any) func([]map[string]any) []map[string]any {
+	return func(e []map[string]any) []map[string]any {
+		e[0]["plugins"] = append(e[0]["plugins"].([]any), p)
+		return e
 	}
 }
 
@@ -277,5 +318,36 @@ func TestParseClaudeStream_Framing(t *testing.T) {
 				t.Fatalf("want %v, got %v", tc.is, err)
 			}
 		})
+	}
+}
+
+// The real init, as captured, passes; its retry events are allowed.
+func TestCapturedInitPasses(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("testdata", "claude-2.1.296", "stream-offline-init.captured.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(b)), "\n")
+	m, err := strictObject([]byte(lines[0]))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := tWant
+	want.Cwd = "/CALLDIR"
+	if _, err := checkInit(m, want); err != nil {
+		t.Fatalf("the captured init must pass: %v", err)
+	}
+	for _, l := range lines[1:] {
+		r, _ := strictObject([]byte(l))
+		if typ, _ := rawString(r, "type"); typ != "system" {
+			t.Fatalf("unexpected captured event %s", l)
+		}
+		if sub, _ := rawString(r, "subtype"); sub != "api_retry" {
+			t.Fatalf("unexpected captured event %s", l)
+		}
+	}
+	want.BuiltinPlugins = nil
+	if _, err := checkInit(m, want); err == nil {
+		t.Fatal("built-ins a contract has not reviewed must refuse")
 	}
 }

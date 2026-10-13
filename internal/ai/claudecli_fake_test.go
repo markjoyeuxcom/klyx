@@ -43,9 +43,10 @@ type fakeSpec struct {
 	EchoFile      bool   `json:"echoFile"` // append the file the prompt names (and the cwd listing) to the answer
 	StreamExit    int    `json:"streamExit"`
 	Stderr        string `json:"stderr"`
-	Hang          bool   `json:"hang"`   // -p: start a child, then sleep
-	NoRead        bool   `json:"noRead"` // -p: never read stdin
-	Flood         int    `json:"flood"`  // -p: print this many bytes
+	Hang          bool   `json:"hang"`       // -p: start a child, then sleep
+	NoRead        bool   `json:"noRead"`     // -p: never read stdin
+	InitStream    string `json:"initStream"` // the admission init check's output, then hang
+	Flood         int    `json:"flood"`      // -p: print this many bytes
 }
 
 func TestMain(m *testing.M) {
@@ -124,15 +125,28 @@ func fakeClaude() (int, bool) {
 	if !has("-p") {
 		return 4, true
 	}
-	logCall("prompt")
 	cwd, _ := os.Getwd()
 	os.WriteFile(filepath.Join(home, "started"), nil, 0o600)
 	if spec.NoRead {
+		logCall("prompt")
 		time.Sleep(time.Hour)
 	}
 	stdin, _ := io.ReadAll(os.Stdin)
-	rec, _ := json.Marshal(map[string]any{"argv": args, "env": os.Environ(), "cwd": cwd, "stdin": string(stdin)})
-	os.WriteFile(filepath.Join(home, "record.json"), rec, 0o600)
+	if strings.Contains(string(stdin), "Klyx admission check") {
+		// The admission init check: Klyx reads only the first line. It is
+		// logged apart, and leaves no record, so the record is always the
+		// evidence run's.
+		logCall("initcheck")
+		if spec.InitStream != "" {
+			fmt.Print(strings.ReplaceAll(spec.InitStream, "{{CWD}}", cwd))
+			time.Sleep(time.Hour) // Klyx kills it after the first line
+			return 0, true
+		}
+	} else {
+		logCall("prompt")
+		rec, _ := json.Marshal(map[string]any{"argv": args, "env": os.Environ(), "cwd": cwd, "stdin": string(stdin)})
+		os.WriteFile(filepath.Join(home, "record.json"), rec, 0o600)
+	}
 	if spec.Hang {
 		child := exec.Command(os.Args[0], "klyx-fake-sleep")
 		child.Start()
@@ -211,6 +225,7 @@ func newFakeCLI(t *testing.T) *fakeCLI {
 	c := claudeContract{
 		Version: fakeVersion, GOOS: runtime.GOOS, GOARCH: runtime.GOARCH, SHA256: hex.EncodeToString(sum[:]),
 		RemotePolicyLine: reviewedClaudeContracts[0].RemotePolicyLine, OrgPolicyLine: reviewedClaudeContracts[0].OrgPolicyLine,
+		BuiltinPlugins: reviewedClaudeContracts[0].BuiltinPlugins,
 	}
 	home := t.TempDir()
 	home, _ = filepath.EvalSymlinks(home)
@@ -243,6 +258,7 @@ func newFakeCLI(t *testing.T) *fakeCLI {
 		// Generous for -race, where each re-exec of this binary takes about
 		// a second.
 		authDeadline: 20 * time.Second, doctorDeadline: 20 * time.Second, stdinDeadline: 20 * time.Second,
+		offline: func(exe string, args []string) (string, []string) { return exe, args }, // no sandbox-exec on Linux CI
 	}
 	f.write()
 	return f
@@ -292,7 +308,7 @@ func TestClaudeCLI_CleanCall(t *testing.T) {
 		t.Fatalf("got (%+v, %v)", res, err)
 	}
 	// Admission ran once: version and the sentinel probe, after the helpers.
-	if got := strings.Join(f.calls(), " "); !regexp.MustCompile(`^auth_--restricted_--safe-mode_auth_status_--json doctor_--restricted_--safe-mode_doctor version sentinel prompt$`).MatchString(got) {
+	if got := strings.Join(f.calls(), " "); !regexp.MustCompile(`^auth_--restricted_--safe-mode_auth_status_--json doctor_--restricted_--safe-mode_doctor version sentinel initcheck prompt$`).MatchString(got) {
 		t.Fatalf("calls = %s", got)
 	}
 	var rec struct {
@@ -607,6 +623,9 @@ func TestClaudeCLI_ExitAndStderr(t *testing.T) {
 func TestClaudeCLI_OversizedStdout(t *testing.T) {
 	t.Parallel() // each fake owns its HOME, temp dir and admission store
 	f := newFakeCLI(t)
+	if _, err := f.complete(); err != nil { // admit first: the flood is the evidence run's
+		t.Fatal(err)
+	}
 	f.spec.Flood = claudeStdoutMax + 1024
 	f.write()
 	_, err := f.complete()
@@ -1038,5 +1057,103 @@ func TestClaudeCLI_StdinHandOverIsBounded(t *testing.T) {
 	f.write()
 	if _, err := f.complete(); err != nil {
 		t.Fatalf("the next call: %v", err)
+	}
+}
+
+// The slice 5 smoke's finding: the init event arrives only after a prompt
+// has been handed over. So admission confirms the lockdown from the CLI's own
+// startup report first, with a fixed prompt and no cluster data, and a CLI
+// whose init breaks the contract never receives evidence.
+func TestClaudeCLI_InitCheckedBeforeEvidence(t *testing.T) {
+	t.Parallel()
+	initWith := func(t *testing.T, change func(m map[string]any)) string {
+		e := initEvent()
+		e["cwd"], e["claude_code_version"] = "{{CWD}}", fakeVersion
+		change(e)
+		b, _ := json.Marshal(e)
+		return string(b) + "\n"
+	}
+	cases := []struct {
+		name   string
+		change func(m map[string]any)
+		want   string
+	}{
+		{"tools listed", func(m map[string]any) { m["tools"] = []any{"Read", "Bash"} }, "init lists tools"},
+		{"a synced plugin", func(m map[string]any) {
+			m["plugins"] = append(m["plugins"].([]any), map[string]any{"name": "cowork-plugin-management", "path": "/x", "source": "cowork-plugin-management@synced"})
+		}, "init lists plugin cowork-plugin-management"},
+		{"another model", func(m map[string]any) { m["model"] = "claude-haiku-5-5" }, "another model"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFakeCLI(t)
+			f.spec.InitStream = initWith(t, tc.change)
+			f.write()
+			_, err := f.complete()
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("want a refusal naming %q, got %v", tc.want, err)
+			}
+			if f.prompts() != 0 {
+				t.Fatal("no evidence may reach a CLI whose startup report breaks the contract")
+			}
+			if !strings.Contains(strings.Join(f.calls(), " "), "initcheck") {
+				t.Fatal("the init check ran")
+			}
+			if tc.name != "another model" && f.p.Ready() == nil {
+				t.Fatal("a lockdown failure at startup revokes admission")
+			}
+		})
+	}
+	t.Run("a first event that is not init", func(t *testing.T) {
+		f := newFakeCLI(t)
+		f.spec.InitStream = `{"type":"system","subtype":"ui_invalidate","event":"ui.render","session_id":"s","uuid":"u"}` + "\n"
+		f.write()
+		_, err := f.complete()
+		wantRefused(t, err, "not its startup report")
+		if f.prompts() != 0 {
+			t.Fatal("no evidence without a startup report")
+		}
+	})
+	t.Run("a good init admits, and only admission runs the check, offline", func(t *testing.T) {
+		f := newFakeCLI(t)
+		f.spec.InitStream = initWith(t, func(map[string]any) {})
+		f.write()
+		wrapped := 0
+		var checkStarted time.Time
+		var checkTook time.Duration
+		f.p.offline = func(exe string, args []string) (string, []string) {
+			wrapped++
+			checkStarted = time.Now()
+			return exe, args
+		}
+		f.p.beforePublish = func() { checkTook = time.Since(checkStarted) }
+		for i := 0; i < 2; i++ {
+			if _, err := f.complete(); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if wrapped != 1 || strings.Count(strings.Join(f.calls(), " "), "initcheck") != 1 || f.prompts() != 2 {
+			t.Fatalf("wrapped %d, calls %v", wrapped, f.calls())
+		}
+		// The fake hangs after its init line: the check must kill it there,
+		// well inside the check's own 15 s deadline.
+		if checkTook > 10*time.Second {
+			t.Fatalf("the init check took %v: it must stop at the first line", checkTook)
+		}
+	})
+}
+
+// On macOS the init check runs under sandbox-exec with outbound network
+// denied, the CLI and its argv after the profile.
+func TestClaudeOffline(t *testing.T) {
+	name, args := claudeOffline("/x/claude", []string{"-p", "--model", "m"})
+	if runtime.GOOS != "darwin" {
+		if name != "/x/claude" || len(args) != 3 {
+			t.Fatalf("got %s %v", name, args)
+		}
+		return
+	}
+	if name != "/usr/bin/sandbox-exec" || args[0] != "-p" || !strings.Contains(args[1], "(deny network-outbound") || args[2] != "/x/claude" || args[3] != "-p" {
+		t.Fatalf("got %s %v", name, args)
 	}
 }

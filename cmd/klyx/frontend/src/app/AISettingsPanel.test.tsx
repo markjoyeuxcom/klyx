@@ -216,6 +216,15 @@ describe("AISettingsPanel: Claude Code CLI", () => {
     await waitFor(() => expect(bridge.saveAISettings).toHaveBeenCalledWith(expect.objectContaining({ provider: "claudeCLI", keySource: "none", cliPath: "/opt/claude", baseUrl: "" })));
   });
 
+  it("after a revocation, says only Test admits it", async () => {
+    bridge.getAISettings.mockResolvedValue(state());
+    bridge.getCLIStatus.mockResolvedValue({ ...reviewed, problem: "Claude Code attempted a tool or returned an unknown event; Klyx revoked the CLI's admission until the next Test" });
+    render(<AISettingsPanel />);
+    fireEvent.change(await screen.findByLabelText("AI provider"), { target: { value: "claudeCLI" } });
+    await waitFor(() => expect(screen.getByTestId("ai-cli-status").textContent).toContain("not admitted (Test admits it)"));
+    expect(screen.getByTestId("ai-cli-status").textContent).not.toContain("first call");
+  });
+
   it("shows why an installed build is refused", async () => {
     bridge.getAISettings.mockResolvedValue(state());
     bridge.getCLIStatus.mockResolvedValue({ path: "/x/claude", version: "", sha256: "", reviewed: false, admitted: false, problem: "This Claude Code build (2.1.300, sha256 0123456789ab) has no reviewed Klyx contract" });

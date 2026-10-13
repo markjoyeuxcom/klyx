@@ -23,6 +23,13 @@ type claudeContract struct {
 	// machine interface).
 	RemotePolicyLine string
 	OrgPolicyLine    string
+	// BuiltinPlugins are the plugins bundled in this binary that its init
+	// event may list under the lockdown. They ship inside the hashed binary,
+	// and the version's review established that none of them exposes
+	// anything: init reports no tools, skills, commands, agents or MCP
+	// servers. Any other plugin - installed, synced from claude.ai, or a
+	// built-in not reviewed here - refuses.
+	BuiltinPlugins []string
 }
 
 // reviewedClaudeContracts are the builds Klyx has reviewed. 2.1.296 was
@@ -35,6 +42,12 @@ var reviewedClaudeContracts = []claudeContract{{
 	SHA256:           "c9b5341637becbd423ddffc5b254afb645682a3868cb708bbc6cc0e7bb419937",
 	RemotePolicyLine: "Managed settings (remote): not fetched — requires an Enterprise or Team subscription",
 	OrgPolicyLine:    "Organization policy: not applicable to Pro and Max accounts",
+	// Captured from the real init on 2026-10-13, network blocked (the slice 5
+	// smoke's first finding). agents-md only changes which memory files are
+	// read, and every memory loader returns early under
+	// CLAUDE_CODE_DISABLE_CLAUDE_MDS, which Klyx sets and --safe-mode sets
+	// too. plugin-authoring only contributes a skill, and skills is empty.
+	BuiltinPlugins: []string{"cc-plugin-agents-md", "cc-plugin-plugin-authoring"},
 }}
 
 func (c claudeContract) platform() string    { return c.GOOS + "/" + c.GOARCH }

@@ -49,14 +49,15 @@ func unconfirmed(what string) error {
 
 // streamWant is what a run must report about itself.
 type streamWant struct {
-	Version string // the reviewed claude_code_version
-	Model   string // the model asked for
-	Cwd     string // the call dir, symlinks resolved
+	Version        string   // the reviewed claude_code_version
+	Model          string   // the model asked for
+	Cwd            string   // the call dir, symlinks resolved
+	BuiltinPlugins []string // the reviewed version's built-in plugins
 }
 
 // emptyInitLists are the init members that must be absent or empty: what the
-// lockdown removes.
-var emptyInitLists = []string{"tools", "mcp_servers", "slash_commands", "skills", "plugins", "agents"}
+// lockdown removes. plugins is checked separately (checkPlugins).
+var emptyInitLists = []string{"tools", "mcp_servers", "slash_commands", "skills", "agents"}
 
 // parseClaudeStream applies the per-call output contract (spec §1.5) to a
 // run's stdout and returns the answer. It accepts only an explicitly
@@ -143,6 +144,9 @@ func checkInit(m map[string]json.RawMessage, w streamWant) (string, error) {
 			return "", toolEvent("init lists " + k)
 		}
 	}
+	if err := checkPlugins(m, w.BuiltinPlugins); err != nil {
+		return "", err
+	}
 	if v, _ := rawString(m, "claude_code_version"); v != w.Version {
 		return "", contractBreak("init reports another Claude Code version")
 	}
@@ -160,6 +164,48 @@ func checkInit(m map[string]json.RawMessage, w streamWant) (string, error) {
 		return "", contractBreak("init has no session")
 	}
 	return id, nil
+}
+
+// checkPlugins allows only the reviewed version's own built-in plugins in
+// init: each exactly {name, path "builtin", source "<name>@builtin"}, at most
+// once. Anything else - an installed or claude.ai-synced plugin, an
+// unreviewed built-in, a plugin load error or warning - revokes admission.
+func checkPlugins(m map[string]json.RawMessage, builtins []string) error {
+	for _, k := range []string{"plugin_errors", "plugin_warnings"} {
+		if !rawEmpty(m, k) {
+			return toolEvent("init reports " + k)
+		}
+	}
+	if rawNull(m, "plugins") {
+		return nil
+	}
+	var list []json.RawMessage
+	if err := json.Unmarshal(m["plugins"], &list); err != nil {
+		return contractBreak("init plugins is not a list")
+	}
+	allowed := map[string]bool{}
+	for _, b := range builtins {
+		allowed[b] = true
+	}
+	seen := map[string]bool{}
+	for _, raw := range list {
+		p, err := strictObject(raw)
+		if err != nil {
+			return contractBreak("a malformed init plugin")
+		}
+		name, _ := rawString(p, "name")
+		path, _ := rawString(p, "path")
+		source, _ := rawString(p, "source")
+		extra := false
+		for k := range p {
+			extra = extra || (k != "name" && k != "path" && k != "source" && k != "version")
+		}
+		if !allowed[name] || path != "builtin" || source != name+"@builtin" || extra || seen[name] {
+			return toolEvent("init lists plugin " + label(name))
+		}
+		seen[name] = true
+	}
+	return nil
 }
 
 // checkAssistant checks one assistant event and appends its text blocks to

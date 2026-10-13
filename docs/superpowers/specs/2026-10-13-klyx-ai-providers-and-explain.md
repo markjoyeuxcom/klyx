@@ -325,7 +325,8 @@ A transient helper failure, such as a timeout, fails that call only. A new model
   - A model switch refuses: `system/model_fallback`, `system/model_refusal_fallback` and `system/model_consent_fallback` mean another model answered.
   - `system/model_refusal_no_fallback` maps to `RefusedError`.
 - **`system/init`:**
-  - `tools`, `mcp_servers`, `slash_commands`, `skills`, `plugins` and `agents` are empty or absent;
+  - `tools`, `mcp_servers`, `slash_commands`, `skills` and `agents` are empty or absent;
+  - `plugins` is empty, absent, or lists only the reviewed version's own built-in plugins, at most once each. Each entry must be exactly `{name, path: "builtin", source: "<name>@builtin"}`, plus an optional `version`. For 2.1.296 those are `cc-plugin-agents-md` and `cc-plugin-plugin-authoring`. An installed plugin, a plugin synced from claude.ai, or an unreviewed built-in revokes admission, and so do `plugin_errors` or `plugin_warnings`;
   - `claude_code_version` is `2.1.296`;
   - `cwd` is the call dir;
   - `model` is the requested model;
@@ -354,7 +355,19 @@ A transient helper failure, such as a timeout, fails that call only. A new model
   - tool blocks or events → `ErrUnexpectedOutput`, which also revokes admission;
   - contradictory metadata (for example `is_error` true with subtype `success`, or `result` not matching the streamed text) → `ErrUnexpectedOutput`.
 
-The stream-json fixtures for slice 3 are synthesized from the 2.1.296 emitter in the binary's string table. They are marked as such, and the slice 5 smoke replaces them with a captured run.
+The stream-json fixtures for slice 3 were synthesized from the 2.1.296 emitter in the binary's string table. The init event is now a captured one (below); the `assistant` and `result` events stay synthesized until a full run is captured.
+
+**The slice 5 smoke's first finding (2026-10-13), and the admission init check.** The owner's first Test passed every preflight on the real Max sign-in: the binary hash, `auth status`, the `doctor` lines and the flag probe. It then failed closed on `init lists plugins`.
+- **What the plugins are.** The init was captured again under `sandbox-exec` with all outbound network denied, so no prompt left the machine. It lists two **built-in** plugins, `cc-plugin-agents-md@builtin` and `cc-plugin-plugin-authoring@builtin`. `--safe-mode` disables installed plugins, but its own help says built-in plugins "work normally". Every other component list in init is empty.
+- **Why they are inert.** Built-ins ship inside the hash-pinned binary.
+  - `plugin-authoring` contributes only a skill, and `skills` is empty.
+  - `agents-md` changes which memory files are read (CLAUDE.md and AGENTS.md). Every memory loader in 2.1.296 returns early when `CLAUDE_CODE_DISABLE_CLAUDE_MDS` is set, and Klyx sets it; `--safe-mode` sets it too. So AGENTS.md discovery stays off (§1.3).
+  - The contract therefore pins each reviewed version's built-in list, instead of requiring an empty list.
+- **The gap the finding exposed.** The init event arrives only after the CLI has read its prompt. With `--input-format stream-json`, 2.1.296 prints only `system/ui_invalidate` until the first message. So the per-call init check is detection, not prevention: a run whose lockdown did not take has already received its prompt.
+- **The admission init check.** Admission (Test, or the first call of a run, or a new model) now runs the production argv and environment once more, with a fixed prompt carrying no cluster data. It reads only the first line, kills the process group, and holds that init to this contract before any evidence is released. A lockdown failure revokes admission.
+  - On macOS the check runs under `sandbox-exec` with outbound network denied, so even the fixed prompt stays on the machine. Without the sandbox the prompt still carries no cluster data.
+  - After admission, per-call checks of the binary, account and policy keep the same configuration in place. The per-call init check remains as detection.
+  - The opt-in `KLYX_CLAUDE_CONTRACT=1` test runs this check against the real binary.
 
 **Containment:**
 - a fresh 0700 call dir that is not a git repo, removed afterwards;

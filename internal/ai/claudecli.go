@@ -339,6 +339,9 @@ type claudeCLIProvider struct {
 	authDeadline   time.Duration
 	doctorDeadline time.Duration
 	stdinDeadline  time.Duration
+	// offline wraps the admission init check so it cannot reach the
+	// network (claudeOffline); tests replace it.
+	offline func(exe string, args []string) (string, []string)
 	// Tests only: afterHelpers runs after doctor, beforePublish before an
 	// admission is published, and afterLaunch between starting the CLI and
 	// the final checks.
@@ -358,6 +361,7 @@ func newClaudeCLI(cliPath, model string) *claudeCLIProvider {
 		contracts: reviewedClaudeContracts, goos: runtime.GOOS, goarch: runtime.GOARCH,
 		store: defaultClaudeAdmissions, hashes: defaultExeHashes,
 		authDeadline: claudeAuthDeadline, doctorDeadline: claudeDocDeadline, stdinDeadline: claudeStdinDeadline,
+		offline: claudeOffline,
 	}
 }
 
@@ -531,6 +535,9 @@ type runSpec struct {
 	// or a failed write kills the process group, and nothing more is
 	// written.
 	release func(write func() error) error
+	// stopAtFirstLine kills the process group as soon as stdout has one
+	// complete line: the admission init check needs only the init event.
+	stopAtFirstLine bool
 }
 
 type runResult struct {
@@ -541,14 +548,20 @@ type runResult struct {
 	startErr, gateErr      error
 }
 
-// cappedBuffer keeps at most max bytes and records that more arrived.
+// cappedBuffer keeps at most max bytes and records that more arrived. With
+// firstLine set, it closes the channel once the first newline has arrived.
 type cappedBuffer struct {
-	buf  bytes.Buffer
-	max  int
-	over bool
+	buf       bytes.Buffer
+	max       int
+	over      bool
+	firstLine chan struct{}
+	sawLine   bool
 }
 
 func (c *cappedBuffer) Write(b []byte) (int, error) {
+	if c.firstLine != nil && !c.sawLine && bytes.IndexByte(b, '\n') >= 0 {
+		defer func() { c.sawLine = true; close(c.firstLine) }()
+	}
 	room := c.max - c.buf.Len()
 	if len(b) > room {
 		c.over = true
@@ -576,6 +589,9 @@ func runContained(ctx context.Context, s runSpec) runResult {
 	cmd.Cancel = func() error { return killGroup(cmd) }
 	cmd.WaitDelay = claudeWaitDelay
 	so, se := &cappedBuffer{max: s.stdoutMax}, &cappedBuffer{max: s.stderrMax}
+	if s.stopAtFirstLine {
+		so.firstLine = make(chan struct{})
+	}
 	cmd.Stdout, cmd.Stderr = so, se
 	// stdin is a pipe Klyx owns, so the hand-over can carry a deadline and
 	// happen synchronously inside the release gate.
@@ -616,6 +632,17 @@ func runContained(ctx context.Context, s runSpec) runResult {
 			_ = cmd.Wait()
 			return runResult{gateErr: err}
 		}
+	}
+	if s.stopAtFirstLine {
+		exited := make(chan struct{})
+		defer close(exited)
+		go func() {
+			select {
+			case <-so.firstLine:
+				_ = killGroup(cmd)
+			case <-exited:
+			}
+		}()
 	}
 	_ = cmd.Wait()
 	_ = killGroup(cmd) // anything the CLI left running in its group
@@ -740,6 +767,79 @@ func (p *claudeCLIProvider) flagProbe(ctx context.Context, exe exeIdentity) erro
 	return nil
 }
 
+// claudeInitPrompt is the whole prompt of the admission init check: no
+// cluster data.
+const claudeInitPrompt = "Klyx admission check. Reply with one word: ready"
+
+// noNetworkProfile is the sandbox-exec profile for the admission init check:
+// every outbound connection is denied.
+const noNetworkProfile = "(version 1)(allow default)(deny network-outbound (remote ip))(deny network-outbound (remote tcp))(deny network-outbound (remote udp))"
+
+// claudeOffline wraps the admission init check so it cannot reach the
+// network: on macOS under sandbox-exec. The check's prompt carries no
+// cluster data either way; the sandbox keeps even that on the machine.
+func claudeOffline(exe string, args []string) (string, []string) {
+	if runtime.GOOS == "darwin" {
+		return "/usr/bin/sandbox-exec", append([]string{"-p", noNetworkProfile, exe}, args...)
+	}
+	return exe, args
+}
+
+// initCheck confirms the lockdown from the CLI's own report before any
+// evidence is released (the slice 5 smoke's finding: the init event arrives
+// only after the prompt has been handed over, so checking it per call is
+// detection, not prevention). It runs the production argv and environment
+// with a fixed prompt, reads only the init event, kills the process, and
+// holds the init to the reviewed contract. A lockdown failure revokes.
+func (p *claudeCLIProvider) initCheck(ctx context.Context, exe exeIdentity) error {
+	dir, err := p.callDir()
+	if err != nil {
+		return cliRefused("Klyx could not make a working directory for Claude Code: %v", err)
+	}
+	defer func() { _ = os.RemoveAll(dir) }() // best-effort temp cleanup
+	sys := filepath.Join(dir, "system.txt")
+	if err := os.WriteFile(sys, []byte(claudeProbeSystem), 0o600); err != nil {
+		return cliRefused("Klyx could not prepare the init check: %v", err)
+	}
+	name, args := p.offline(exe.Path, claudeArgv(sys, p.model))
+	r := runContained(ctx, runSpec{
+		exe: name, args: args, env: claudeEnv(p.environ()), dir: dir,
+		stdin: []byte(claudeStdinPrefix + claudeInitPrompt), stdoutMax: claudeHelperOutMax, stderrMax: claudeStderrMax,
+		deadline: claudeShortDeadline, stdinDeadline: p.stdinDeadline, stopAtFirstLine: true,
+	})
+	switch {
+	case r.startErr != nil:
+		return cliRefused("Claude Code could not start for its init check: %v", r.startErr)
+	case r.gateErr != nil:
+		return cliRefused("Klyx could not hand Claude Code its init check: %v", r.gateErr)
+	}
+	first, _, ok := bytes.Cut(r.stdout, []byte("\n"))
+	if !ok {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		return cliRefused("Claude Code did not report its configuration at startup, so Klyx refuses it")
+	}
+	m, err := strictObject(first)
+	if err != nil {
+		return cliRefused("Claude Code's startup report could not be read (%v)", err)
+	}
+	typ, _ := rawString(m, "type")
+	sub, _ := rawString(m, "subtype")
+	if typ != "system" || sub != "init" {
+		return cliRefused("Claude Code's first event is not its startup report, so Klyx refuses it")
+	}
+	want := streamWant{Version: exe.Contract.Version, Model: p.model, Cwd: dir, BuiltinPlugins: exe.Contract.BuiltinPlugins}
+	if _, err := checkInit(m, want); err != nil {
+		var ce *cliContractError
+		if errors.As(err, &ce) && ce.revoke {
+			p.store.revoke(ce.msg)
+		}
+		return err
+	}
+	return nil
+}
+
 // preflight is every check before a prompt-bearing call (spec §1.5 checks
 // 1-7), plus admission, all within one admission epoch. Test (admit) clears
 // any revocation and starts a new epoch; otherwise a revoked CLI is refused
@@ -798,6 +898,9 @@ func (p *claudeCLIProvider) preflight(ctx context.Context, admit bool) (callTick
 			return callTicket{}, err
 		}
 		if err := p.flagProbe(ctx, exe); err != nil {
+			return callTicket{}, err
+		}
+		if err := p.initCheck(ctx, exe); err != nil {
 			return callTicket{}, err
 		}
 		if err := p.checkPolicy(); err != nil {
@@ -866,7 +969,7 @@ func (p *claudeCLIProvider) run(ctx context.Context, t callTicket, req Request, 
 		p.store.revoke("Claude Code printed more output than its reviewed contract allows")
 		return "", contractBreak("output over the 4 MiB cap")
 	}
-	text, perr := parseClaudeStream(r.stdout, streamWant{Version: exe.Contract.Version, Model: p.model, Cwd: dir})
+	text, perr := parseClaudeStream(r.stdout, streamWant{Version: exe.Contract.Version, Model: p.model, Cwd: dir, BuiltinPlugins: exe.Contract.BuiltinPlugins})
 	var ce *cliContractError
 	if errors.As(perr, &ce) && ce.revoke {
 		p.store.revoke(ce.msg)

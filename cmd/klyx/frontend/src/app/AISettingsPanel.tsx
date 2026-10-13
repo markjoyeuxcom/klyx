@@ -266,7 +266,7 @@ export function AISettingsPanel() {
                 ) : (
                   <>
                     {cli.path && <span style={{ fontFamily: "var(--font-mono)" }}>{cli.path}</span>}
-                    {cli.reviewed && <> · Claude Code {cli.version} · sha256 {cli.sha256}… · {cli.admitted ? "admitted" : "not admitted yet (Test or the first call admits it)"}</>}
+                    {cli.reviewed && <> · Claude Code {cli.version} · sha256 {cli.sha256}… · {cli.admitted ? "admitted" : cli.problem ? "not admitted (Test admits it)" : "not admitted yet (Test or the first call admits it)"}</>}
                     {cli.problem && <div>{cli.problem}</div>}
                   </>
                 )}

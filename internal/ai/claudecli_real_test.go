@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -48,6 +49,15 @@ func TestClaudeContract_RealBinary(t *testing.T) {
 	}
 	if err := p.flagProbe(ctx, exe); err != nil {
 		t.Fatal(err)
+	}
+	// The admission init check, as production runs it: sandbox-exec on macOS,
+	// stopped at the first line.
+	start := time.Now()
+	if err := p.initCheck(ctx, exe); err != nil {
+		t.Fatalf("the real init check refused: %v", err)
+	}
+	if time.Since(start) > 20*time.Second {
+		t.Fatal("the init check must stop at the first line, not wait for the run")
 	}
 
 	// The preflight helpers run no user-settings command, with or without
@@ -107,6 +117,38 @@ func TestClaudeContract_RealBinary(t *testing.T) {
 	}
 	if err := parseClaudeDoctor(doc, c); err == nil {
 		t.Fatal("doctor without a sign-in must not pass the Pro/Max check")
+	}
+	// The production run's init, with no sign-in and all outbound network
+	// denied by sandbox-exec (macOS), so nothing can leave the machine: it
+	// must meet the reviewed init contract - including the built-in plugin
+	// list - and the "not logged in" reply that follows must be refused.
+	if runtime.GOOS == "darwin" {
+		dir, err := p.callDir()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer os.RemoveAll(dir)
+		sys := filepath.Join(dir, "system.txt")
+		os.WriteFile(sys, []byte("Answer in one short sentence."), 0o600)
+		const noNetwork = "(version 1)(allow default)(deny network-outbound (remote ip))(deny network-outbound (remote tcp))(deny network-outbound (remote udp))"
+		args := append([]string{"-p", noNetwork, exe.Path}, claudeArgv(sys, DefaultAnthropicModel)...)
+		r := runContained(ctx, runSpec{exe: "/usr/bin/sandbox-exec", args: args, env: env, dir: dir, stdin: []byte(claudeStdinPrefix + "Say hello."),
+			stdoutMax: claudeStdoutMax, stderrMax: claudeStderrMax, deadline: time.Minute, stdinDeadline: 10 * time.Second})
+		if r.startErr != nil || r.gateErr != nil {
+			t.Fatalf("offline run: %+v", r)
+		}
+		first, _, _ := strings.Cut(string(r.stdout), "\n")
+		m, err := strictObject([]byte(first))
+		if err != nil {
+			t.Fatalf("offline run printed no init: %v\n%s", err, r.stdout)
+		}
+		want := streamWant{Version: c.Version, Model: DefaultAnthropicModel, Cwd: dir, BuiltinPlugins: c.BuiltinPlugins}
+		if _, err := checkInit(m, want); err != nil {
+			t.Fatalf("the real init no longer meets the reviewed contract: %v\n%s", err, first)
+		}
+		if _, err := parseClaudeStream(r.stdout, want); err == nil {
+			t.Fatal("a reply with no sign-in must be refused")
+		}
 	}
 	if entries, _ := os.ReadDir(sentinels); len(entries) != 0 {
 		var names []string
