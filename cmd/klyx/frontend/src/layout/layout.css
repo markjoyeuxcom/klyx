@@ -75,8 +75,11 @@
 .lens-row[data-selected="true"] { background: var(--bench-selection-bg, var(--color-background-secondary)); }
 .lens-row:focus-visible { box-shadow: inset 0 0 0 2px var(--color-text-info); }
 /* Staleness (ratified 2026-07-02, refined 2026-10-13): a row whose changes
-   are not yet realized dims every cell but its identity, which stays readable. */
-.lens-row[data-stale="true"] > *:not(.lens-cell-name):not(:has(.lens-cell-name)) { opacity: 0.6; }
+   are not yet realized dims its lamp, and its status cell carries the neutral
+   "Syncing…" chip. Text is never dimmed: a composited 0.6 took status and
+   source text below a readable contrast (Codex review of da40ac6). The lamp
+   is the row's first cell in every lens that marks staleness. */
+.lens-row[data-stale="true"] > :first-child { opacity: 0.45; }
 .lens-cell-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* Pods columns. Optional columns fold away before the name loses its 240px

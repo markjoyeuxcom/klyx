@@ -114,22 +114,28 @@ export function Overview({ c }: { c: ClusterDTO }) {
   );
 }
 
-// ConnectionNotice: a failed connection's reason in full; a connection with
-// notes as one line naming what is unverified, the full notes one click
-// away (UI review 2026-10-13: the same long controller sentences were
-// repeated above the grid and inside it).
+// ConnectionNotice: a connection that is not merely "connected with notes"
+// (failed, stale, connecting) shows its reason in full. A connection with
+// notes shows one line: its first note that is NOT a controller note, or -
+// when every note is a controller's - the controllers named; the full notes
+// are one click away (UI review 2026-10-13: the same long controller
+// sentences were repeated above the grid and inside it). A controller
+// summary never stands in for a different problem (Codex review of da40ac6).
 function ConnectionNotice({ c, m, tone }: { c: ClusterDTO; m: ClusterAttention | null; tone: string }) {
-  if (c.state === "Failed") {
-    return <div className="t-body" role="status" style={{ color: tone, overflowWrap: "anywhere" }}>▲ {c.reason}</div>;
+  if (c.state !== "Degraded") {
+    return <div className="t-body" role="status" style={{ color: tone, overflowWrap: "anywhere" }}>{c.state === "Failed" ? "▲ " : ""}{c.reason}</div>;
   }
   const notes = c.reason.split(/;\s+/).map((n) => n.trim()).filter(Boolean);
   const areas = m?.areas.filter((a) => a.controller) ?? [];
-  const notReady = areas.filter((a) => a.controller?.state === "not ready").map((a) => a.label);
-  const unverified = areas.filter((a) => a.controller?.state !== "not ready").map((a) => a.label);
-  const headline = areas.length > 0
-    ? [notReady.length > 0 ? `▲ Controller not ready: ${notReady.join(", ")}` : "", unverified.length > 0 ? `Controller health unverified: ${unverified.join(", ")}` : ""].filter(Boolean).join(" · ")
-    : notes[0];
-  if (notes.length <= 1 && areas.length === 0) {
+  const controllerReasons = new Set(areas.map((a) => a.controller?.reason).filter(Boolean));
+  const isControllerNote = (n: string) => controllerReasons.has(n) || [...controllerReasons].some((r) => !!r && (n.includes(r) || r.includes(n)));
+  const other = notes.filter((n) => !isControllerNote(n));
+  const named = areas.filter((a) => notes.some((n) => isControllerNote(n) && (!a.controller?.reason || n.includes(a.controller.reason) || a.controller.reason.includes(n))));
+  const notReady = named.filter((a) => a.controller?.state === "not ready").map((a) => a.label);
+  const unverified = named.filter((a) => a.controller?.state !== "not ready").map((a) => a.label);
+  const controllerLine = [notReady.length > 0 ? `▲ Controller not ready: ${notReady.join(", ")}` : "", unverified.length > 0 ? `Controller health unverified: ${unverified.join(", ")}` : ""].filter(Boolean).join(" · ");
+  const headline = other.length > 0 ? other[0] : controllerLine || notes[0];
+  if (notes.length <= 1 && other.length === notes.length) {
     return <div className="t-body" role="status" style={{ color: tone, overflowWrap: "anywhere" }}>{c.reason}</div>;
   }
   return (

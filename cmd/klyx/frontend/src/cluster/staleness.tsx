@@ -6,10 +6,11 @@
 // the generations, so the at-a-glance signal never reads as confidently
 // green while changes are pending.
 //
-// Since the UI review of 2026-10-13 the dim (0.6) applies to every cell but
-// the row's identity, which stays at full strength: a whole-row dim took the
-// namespace and name below a readable contrast, so a pending row looked
-// disabled. The rule lives in layout.css (.lens-row[data-stale]).
+// Since the UI review of 2026-10-13 the dim applies to the row's lamp only;
+// its text stays at full strength and the neutral chip says "Syncing…". A
+// whole-row (or every-text-cell) 0.6 dim took the identity, status and
+// source text below a readable contrast, so a pending row looked disabled.
+// The rule lives in layout.css (.lens-row[data-stale]).
 
 export function staleTitle(generation?: number, observedGeneration?: number): string {
   return `Changes detected. Waiting for controller reconciliation (Observed Gen: ${observedGeneration ?? "?"} vs Current: ${generation ?? "?"}).`;

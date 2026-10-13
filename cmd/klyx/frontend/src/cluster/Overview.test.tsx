@@ -328,3 +328,27 @@ describe("Overview connection notes", () => {
     expect(screen.getByText("▲ connect timed out")).toBeTruthy();
   });
 });
+
+// Codex review of da40ac6: a controller summary never stands in for a
+// different connection problem.
+describe("Overview connection notes keep the real problem first", () => {
+  beforeEach(() => { resetHealthStore(); });
+  const fluxUnknown = () => [...core(), task("flux", [native("reconciliations", { ok: 2 }, 0, "not ready", [kind("kustomizations")])],
+    { controller: { state: "unknown", reason: "no Deployment flux-system/kustomize-controller" } })];
+
+  it("a stale watch error is shown in full, never as a controller summary", () => {
+    seed(fluxUnknown());
+    const { container } = render(<Overview c={{ ...dto, state: "Stale", reason: "pods watch failed: forbidden", fluxPresent: true }} />);
+    expect(container.querySelector("details.ov-notice")).toBeNull();
+    expect(screen.getByText("pods watch failed: forbidden")).toBeTruthy();
+  });
+
+  it("with notes of both kinds, the non-controller note leads", () => {
+    seed(fluxUnknown());
+    const reason = "pods watch failed: forbidden; Flux installed but kustomize-controller health is unverified (no Deployment flux-system/kustomize-controller)";
+    const { container } = render(<Overview c={{ ...dto, state: "Degraded", reason, fluxPresent: true }} />);
+    const summary = container.querySelector("details.ov-notice > summary")?.textContent ?? "";
+    expect(summary).toBe("pods watch failed: forbidden · 2 notes");
+    expect(container.querySelectorAll("details.ov-notice li")).toHaveLength(2);
+  });
+});
