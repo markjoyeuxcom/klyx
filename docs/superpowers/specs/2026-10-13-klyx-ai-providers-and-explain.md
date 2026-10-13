@@ -163,12 +163,11 @@ An unknown version, a missing flag, an unknown output schema or an unknown event
 API setup and Explain never wait on CLI support.
 
 ### 1.4 Admission and the regression probe
-**Admission** is granted when, and only when, the §1.3 contract verifies for the exact executable identity and lockdown configuration. It is recorded as `CLIAdmission{ExeSHA256, Version, Platform, ArgvHash, ManagedPolicy: none, CheckedAt}`.
+**Admission** is granted when, and only when, the §1.3 contract verifies for the exact executable identity and lockdown configuration. It is recorded as `CLIAdmission{ExeSHA256, Version, Platform, ArgvHash, AccountHash, CheckedAt}`; no managed policy is a precondition.
 
 Admission is re-checked:
-- at Klyx start;
-- on Settings "Test";
-- whenever the resolved executable's identity changes, checked before every call by a cheap stat plus a hash cache.
+- on Settings "Test", or automatically before the first call in a Klyx run;
+- before every call, against the executable identity (a cheap stat plus a hash cache) and the account identity. For Claude Code, §1.5 lists every per-call check (Codex design review of 274535f).
 
 **Before every invocation, managed policy is re-checked** (Codex re-review, 39a3602). The executable and argv can stay identical while an admin hook or policy appears after admission. So, immediately before launch, Klyx re-reads every policy source the adapter's vendor supports:
 - the managed-settings files and directories for the platform (for Claude Code on macOS, `/Library/Application Support/ClaudeCode/`; the Linux and Windows equivalents are listed in the adapter);
@@ -196,56 +195,171 @@ A failed probe revokes admission.
 **Every real call** is checked the same way. Any tool event, unknown event type or schema mismatch discards the answer, reports "This CLI attempted a tool or returned an unknown event; Klyx discarded the answer", and revokes admission until the next Test.
 
 ### 1.5 The Claude Code adapter contract (slice 3, from research on 2026-10-13)
-Sources: the Claude Code docs (cli-reference, managed-settings, server-managed-settings, headless, env vars) and local evidence on 2.1.296. No model call was made. Everything below is checked without one, except the optional probe (§1.4).
+Sources: the Claude Code docs (cli-reference, managed-settings, server-managed-settings, headless, env vars) and local evidence on 2.1.296. That evidence is its `--help` output, its string table, and runs of `auth status` and `doctor` in a throwaway `CLAUDE_CONFIG_DIR` with no login. No model call was made. Everything below is checked without one, except the optional probe (§1.4).
+
+Codex's design review (274535f) required four changes before implementation. They are folded in below:
+- per-call account and policy checks;
+- exact reviewed versions;
+- locked-down preflight helpers;
+- a confirmed-completion output contract.
+
+**Reviewed contracts (exact, not a range):**
+- A contract is one reviewed tuple `{version, GOOS/GOARCH, sha256 of the binary}`. Today there is exactly one: Claude Code `2.1.296`, `darwin/arm64`, sha256 `c9b5341637becbd423ddffc5b254afb645682a3868cb708bbc6cc0e7bb419937`.
+- Any other version, platform or hash is refused before any helper runs: "Claude Code <v> on <platform> has no reviewed Klyx contract (reviewed: 2.1.296 darwin/arm64)". A recognised flag set on a new binary proves neither its meaning nor its output or policy contract.
+- Adding a version is a reviewed change that carries the version's bounded fixtures (`auth status`, `doctor`, the sentinel probe, and a captured stream-json run).
+- Claude Code updates itself often. Until Klyx ships a reviewed entry, the owner can point `ai.cliPath` at a reviewed binary that is still in `~/.local/share/claude/versions/`.
 
 **Pinned binary:**
-- Resolve the executable through symlinks. It must be a native Mach-O, ELF or PE file under the vendor's versioned install, and its sha256 is hashed.
-- `--version` must parse to a version Klyx has a contract for (2.1.x, ≥ 2.1.296). Anything else is unsupported.
+- Resolve the executable through symlinks. It must be a native Mach-O, ELF or PE file, and it is hashed.
+- A cache keyed on path, size, mtime and inode avoids re-hashing 240 MB per call. Any change to the key forces a re-hash.
+- The sha256 must equal the reviewed tuple's.
+- `--version` must print exactly `2.1.296 (Claude Code)`.
 
 **Flag-recognition probe (no model call):**
 - `--version` short-circuits even unknown flags, so it proves nothing.
-- Instead, run the exact production argv followed by a random sentinel flag, with stdin `/dev/null` and a proxy pointing at a closed port as a safety net.
-- Require exit 1, empty stdout, and stderr matching `unknown option '<sentinel>'` (case-insensitive). The parser reports the first unknown option, so that error proves every real flag was recognised.
-- This proves recognition, not meaning: the meaning is pinned by the version contract.
+- Instead, run the exact production argv followed by a random sentinel flag. Run it under the call environment, with stdin `/dev/null` and a proxy pointing at a closed port as a safety net.
+- Require a non-zero exit, empty stdout, and stderr matching `unknown option '<sentinel>'` (case-insensitive). The parser reports the first unknown option, so that error proves every real flag was recognised.
+- This proves recognition, not meaning: the meaning is pinned by the reviewed tuple.
 
 **Production argv:**
 `claude -p --output-format stream-json --verbose --tools "" --disallowedTools "*" --restricted --safe-mode --strict-mcp-config --mcp-config '{"mcpServers":{}}' --disable-slash-commands --no-session-persistence --system-prompt-file <tmp>/system.txt --model <model>`
 - The evidence goes on stdin only, never as an argument. The prompt text never starts with `/` or `@`.
 
-**Environment (allowlist, not denylist):**
-- Built from scratch: `HOME`, `PATH`, `TMPDIR`, `LANG`/`LC_*`, `USER`/`LOGNAME`.
+**Environment (allowlist, not denylist), for every process Klyx starts from this binary:**
+- Built from scratch: `HOME`, `PATH`, `TMPDIR`, `LANG`/`LC_*`, `USER`/`LOGNAME`, plus `NO_COLOR=1` and `TERM=dumb`.
 - Plus these, always set:
   - `CLAUDE_CODE_DISABLE_ATTACHMENTS=1`. Without it, `@path` text in the prompt is expanded into file contents even with every tool off, so cluster text containing `@~/.kube/config` would read the kubeconfig.
   - `CLAUDE_CODE_DISABLE_CLAUDE_MDS=1`, `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`, `CLAUDE_CODE_SKIP_PROMPT_HISTORY=1`, `ENABLE_CLAUDEAI_MCP_SERVERS=false`, `CLAUDE_AGENT_SDK_DISABLE_BUILTIN_AGENTS=1`.
   - `DISABLE_AUTOUPDATER=1`, `DISABLE_TELEMETRY=1`, `DISABLE_ERROR_REPORTING=1`.
-- Never passed through, whatever the parent has: `ANTHROPIC_*`, `CLAUDE_CODE_*` (other than the above), `CLAUDE_CONFIG_DIR` (it also re-keys the keychain login), `CLAUDE_CODE_REMOTE_SETTINGS_PATH` and `CLAUDE_CODE_MANAGED_SETTINGS_PATH` (they inject policy), `NODE_OPTIONS`, `OTEL_*`, proxies, `KUBECONFIG`, cloud credentials.
+- Never passed through, whatever the parent has:
+  - `ANTHROPIC_*`, and `CLAUDE_CODE_*` other than the above;
+  - `CLAUDE_CONFIG_DIR`, which also re-keys the keychain login;
+  - `CLAUDE_CODE_REMOTE_SETTINGS_PATH` and `CLAUDE_CODE_MANAGED_SETTINGS_PATH`, which inject policy;
+  - `NODE_OPTIONS`, `OTEL_*`, proxies, `KUBECONFIG`, and cloud credentials.
 
-**Policy checks before every call (fail closed):**
-1. **Endpoint policy:** any entry, or any unreadable path other than "missing", in:
-   - `/Library/Application Support/ClaudeCode/`
-   - `/Library/Managed Preferences/com.anthropic.claudecode.plist`
-   - `/Library/Managed Preferences/<user>/com.anthropic.claudecode.plist`
-   - on Linux, `/etc/claude-code/`
-   - on Windows, `C:\Program Files\ClaudeCode\` and `HKLM` or `HKCU\SOFTWARE\Policies\ClaudeCode` `Settings`, plus the WSL `/mnt/c/...` equivalents.
-2. **Account:** `claude auth status` (JSON, no model call) must show `apiProvider: firstParty`, an OAuth login, and `subscriptionType` pro or max.
-   - Team and Enterprise accounts are refused: their organisation can push server-managed policy, which can change hourly and applies inside the `-p` run after Klyx's check.
+**Preflight helpers (`auth status`, `doctor`): locked down too.**
+- Both helpers run with:
+  - the root lockdown switches placed before the subcommand: `claude --restricted --safe-mode auth status --json` and `claude --restricted --safe-mode doctor`;
+  - the allowlisted environment above;
+  - a fresh empty `0700` working dir that is not a git repo (doctor reads settings files in the working dir), and stdin `/dev/null`;
+  - stdout and stderr each capped at 64 KiB, a 10 s deadline for `auth status` and 30 s for `doctor`, and process-group kill.
+- Pinned by evidence on 2.1.296. A throwaway config dir had user settings that defined `apiKeyHelper`, `otelHeadersHelper`, `awsAuthRefresh`, `awsCredentialExport`, a command `statusLine`, `SessionStart`/`SessionEnd` hooks and an `env` block.
+  - Neither helper ran any of those commands, with or without the switches.
+  - With the switches, `auth status` ignored user settings: it reported `authMethod: none` instead of `api_key_helper`. So the helpers observe the same configuration as the `--restricted` call.
+  - An opt-in contract test (`KLYX_CLAUDE_CONTRACT=1`) repeats this against the real binary: a throwaway config dir, no login, no model call. If a reviewed version ever runs a helper there, that version's contract fails and the adapter is refused.
+- Helper output is parsed for the pinned fields only. It is never surfaced verbatim: email, organization name and paths stay out of the UI, logs and Activity. The account identity is kept only as a hash.
+- No cluster evidence exists at preflight. The prompt is written only after every check has passed.
+
+**Checks before every prompt-bearing call (fail closed), in this order:**
+1. **Executable:** the reviewed tuple (above).
+2. **Endpoint policy, before any helper runs.** Fail on any entry, or any unreadable path other than "missing", in:
+   - `/Library/Application Support/ClaudeCode/`;
+   - `/Library/Managed Preferences/com.anthropic.claudecode.plist`;
+   - `/Library/Managed Preferences/<user>/com.anthropic.claudecode.plist`.
+
+   The Linux (`/etc/claude-code/`) and Windows (`C:\Program Files\ClaudeCode\`, the `HKLM`/`HKCU\SOFTWARE\Policies\ClaudeCode` `Settings` value, and the WSL `/mnt/c/...` equivalents) locations join the check when a contract for those platforms is reviewed.
+3. **Policy caches:** `~/.claude/remote-settings.json` and `~/.claude/policy-limits.json` must be absent. "Missing" is the only accepted error.
+4. **Account** (`auth status`, pinned schema for 2.1.296):
+   - The JSON object must have exactly the known keys: `loggedIn`, `authMethod`, `apiProvider`, `analyticsDisabled`, `projectsDirectory`, `configDirectory`, `email`, `orgId`, `orgName`, `subscriptionType`.
+   - It must show `loggedIn: true`, `authMethod: "claude.ai"`, `apiProvider: "firstParty"`, and `subscriptionType` `"pro"` or `"max"`.
+   - It must not have `apiKeySource`, `forcedLoginMethod` or `allowedProviders`; the last two come from policy.
+   - `configDirectory` must be `~/.claude`.
+   - An unknown key, a duplicate key, unparseable output, trailing data or a non-zero exit refuses.
+   - Team and Enterprise accounts are refused. Their organisation can push server-managed policy, delivered at startup and hourly, which can include hooks and applies inside the `-p` run after Klyx's check.
    - API-key auth is refused as well; a Klyx API provider covers that case.
-3. **Remote policy:** `claude doctor`, run from an empty temp dir with the same environment, must print exactly the version-pinned lines "Managed settings (remote): not fetched - requires an Enterprise or Team subscription" and "Organization policy: not applicable to Pro and Max accounts". Any other, missing, "checking", "loaded" or "fetch failed" line fails closed.
-4. **Caches:** `~/.claude/remote-settings.json` and `~/.claude/policy-limits.json` must be absent.
+5. **Account identity binding:** the identity is `sha256(authMethod, apiProvider, subscriptionType, orgId, email)`.
+   - Admission records it.
+   - A call whose identity differs from the admitted one, or cannot be determined, is refused and revokes admission until the next Test.
+6. **Remote policy** (`doctor`, pinned lines for 2.1.296):
+   - The output must contain, each exactly once, these lines:
+     - `Running: native (2.1.296)`;
+     - `Platform: darwin-arm64`;
+     - `Managed settings (remote): not fetched — requires an Enterprise or Team subscription`, with an em dash, from the reason `unsupported_subscription`;
+     - `Organization policy: not applicable to Pro and Max accounts`, from the reason `prosumer_oauth`.
+   - Any other line whose label mentions "managed" or "polic" refuses.
+   - So do a missing or duplicate pinned line, a "checking", "loaded", "cached" or "fetch failed" value, truncated output, a deadline hit, or a non-zero exit.
+   - Doctor is a diagnostic, not a documented machine interface, so this parse is pinned per reviewed version and never generalised.
+7. **Re-check after the helpers:** the endpoint policy and the caches again.
+8. **Launch, then re-check before releasing stdin.**
+   - Write `system.txt` (`0600`) into a fresh `0700` call dir, and start the production argv with stdin held open and empty.
+   - Re-check the endpoint policy and the caches.
+   - Only then write the evidence to stdin and close it. If the re-check fails, the process group is killed and nothing is written.
 
-Checks 2 and 3 run at admission and again whenever the executable identity changes. Check 1 runs before every call, as Codex required.
+Check-to-launch race (documented, accepted for Pro and Max only):
+- Between check 6 and the CLI's own startup, the owner could switch the login, or Anthropic could start delivering policy to a personal account. The re-check in step 8 narrows that window, but Klyx cannot observe the CLI's own policy load.
+- The output contract below catches some after-the-fact signs: a hook event, or a changed init. Rejecting the output after a hook ran is detection, not prevention. That is why Team and Enterprise accounts, which have a policy channel, are refused outright.
 
-**Per-call output contract** (stream-json, verbose). The answer is discarded unless all of these hold:
-- `system/init` reports `tools == []`, `mcp_servers == []`, `slash_commands == []`, `skills == []` and `plugins == []`, the pinned `claude_code_version`, and `cwd` equal to the call's temp dir;
-- there is no hook event, no `tool_use`, `server_tool_use`, `tool_result` or `permission_denied`, and no unknown message type;
-- the run ends with exactly one assistant turn (`num_turns == 1`), `subtype == "success"`, `is_error == false` and exit 0.
+**Admission** is established on Settings "Test", or automatically before the first call in a Klyx run. It runs steps 1-7 plus the flag-recognition probe. It records `CLIAdmission{ExeSHA256, Version, Platform, ArgvHash, AccountHash, CheckedAt}`, in memory only.
 
-**Containment:** a fresh 0700 temp dir that is not a git repo; capped stdout and stderr; a process group (POSIX) or Job Object (Windows); the deadline from §1.2.
+Admission is revoked until the next Test by any of:
+- an identity change;
+- a tool or unknown event;
+- a contract mismatch in the output.
+
+A transient helper failure, such as a timeout, fails that call only.
+
+**Per-call output contract** (stream-json, verbose, pinned for 2.1.296). The answer is accepted only as an explicitly confirmed, complete, non-refusal, text-only answer. Everything else discards it.
+
+- **Framing:**
+  - stdout is newline-delimited JSON, capped at 4 MiB, and every line is exactly one JSON object.
+  - A malformed line, a blank line inside the stream, or data after the final newline refuses.
+  - The process must exit 0. stderr is capped at 64 KiB and only a short, scrubbed excerpt is ever shown.
+- **Sequence:**
+  - exactly one `system/init`, and it is the first event;
+  - then only `assistant`, `rate_limit_event` and `system/api_retry` events;
+  - then exactly one `result`, the last event; anything after it refuses.
+  - Every other type or subtype refuses, including `user`, `stream_event`, `tool_progress`, hook events, `system/status`, `system/informational`, `system/notification`, `system/compact_boundary` and `system/permission_denied`.
+  - A second `init` or a second `result` refuses.
+  - A model switch refuses: `system/model_fallback`, `system/model_refusal_fallback` and `system/model_consent_fallback` mean another model answered.
+  - `system/model_refusal_no_fallback` maps to `RefusedError`.
+- **`system/init`:**
+  - `tools`, `mcp_servers`, `slash_commands`, `skills`, `plugins` and `agents` are empty or absent;
+  - `claude_code_version` is `2.1.296`;
+  - `cwd` is the call dir;
+  - `model` is the requested model;
+  - `apiKeySource` is `"none"`.
+- **`assistant` events:**
+  - `parent_tool_use_id` is null;
+  - every event carries the same `message.id`, so there was one model message;
+  - `message.model` is the requested model;
+  - content blocks are only `text`, `thinking` or `redacted_thinking`. Thinking blocks are allowlisted reasoning, never part of the answer, as with the approved Gemini part allowlist;
+  - `message.stop_reason` is null or `end_turn` on every event.
+- **`result`:**
+  - `subtype: "success"`, `is_error: false`, `num_turns: 1`;
+  - `stop_reason: "end_turn"` and `terminal_reason: "completed"`, both present;
+  - `permission_denials` empty;
+  - no `errors`, `api_error_status`, `api_error`, `api_error_code`, `deferred_tool_use` or `structured_output`;
+  - `safety_stops` absent or empty;
+  - `subagent_stats` absent or empty;
+  - every `modelUsage` key is the requested model;
+  - `session_id` equals the init's;
+  - `result` is non-empty and equals the concatenated text blocks of the assistant events.
+- **Failure mapping:**
+  - `stop_reason` `refusal` → `RefusedError`;
+  - `max_tokens` or `model_context_window_exceeded` → `ErrTruncated`;
+  - empty text → `ErrEmpty`;
+  - a missing or unknown `stop_reason` or `terminal_reason` → `ErrUnconfirmed`, even when `subtype` is `success`, the exit is 0 and `num_turns` is 1;
+  - tool blocks or events → `ErrUnexpectedOutput`, which also revokes admission;
+  - contradictory metadata (for example `is_error` true with subtype `success`, or `result` not matching the streamed text) → `ErrUnexpectedOutput`.
+
+The stream-json fixtures for slice 3 are synthesized from the 2.1.296 emitter in the binary's string table. They are marked as such, and the slice 5 smoke replaces them with a captured run.
+
+**Containment:**
+- a fresh 0700 call dir that is not a git repo, removed afterwards;
+- capped stdout and stderr;
+- a POSIX process group, killed as a whole on deadline or cancel;
+- the deadline from §1.2.
+
+Windows (a Job Object) waits for a reviewed Windows contract; until then the adapter refuses there before starting anything.
 
 **Open risks the owner accepts or vetoes:**
-- The `claude doctor` text is not a documented machine contract; it is pinned per version.
-- Server-side feature flags can change behaviour without a version bump.
-- Subscription auth under `--restricted --safe-mode` is documented for `--safe-mode` but unproven together; the slice 5 smoke settles it, with a before/after diff of `~/.claude`.
+- The `claude doctor` text is not a documented machine contract. It is pinned per reviewed version and fails closed on any drift.
+- Server-side feature flags can change behaviour without a version bump. The output contract fails closed on what it can see.
+- The check-to-launch race above.
+- Subscription auth under `--restricted --safe-mode` is documented for `--safe-mode` but unproven together. The slice 5 smoke settles it, with a before/after diff of `~/.claude`. The same smoke also covers:
+  - embedded-`@path` regression evidence, in both the system text and the evidence;
+  - startup-hook and memory sentinels;
+  - the no-transcript checks.
 
 ## 2. Keys and settings
 
@@ -451,7 +565,10 @@ Order as built (2026-10-13):
   - the keychain faked behind an interface (locked, unavailable, denied, absent);
   - the Clear, Move and failed-removal paths.
 - **CLI:**
-  - Contract verification is tested against recorded `--help` outputs: missing flag, unknown version, managed-policy present.
+  - Contract verification is tested against recorded outputs: an unreviewed version, platform or hash; a failed sentinel probe; managed policy present; a policy cache present.
+  - Pinned `auth status` and `doctor` fixtures: Pro admission followed by a Team, Enterprise or API-key login; an unknown, duplicate or missing key or line; undeterminable auth. In each case no evidence is delivered.
+  - The stream-json contract: one fixture per refusal path in §1.5 (max tokens, refusal, missing or unknown finish data, duplicate init or result, events after the result, malformed or trailing data, contradictory metadata, a model switch, tool and unknown events).
+  - Policy appearing between the helpers and launch, and between launch and stdin: the process is killed and stdin is never written.
   - A fake CLI binary emits each event shape: clean, tool event, unknown event, oversized stdout or stderr, hang.
   - argv carries no prompt content.
   - The environment is scrubbed and the working dir confined.
