@@ -16,6 +16,8 @@ import (
 	"github.com/moomora/klyx/internal/certmanager"
 	"github.com/moomora/klyx/internal/config"
 	"github.com/moomora/klyx/internal/crd"
+	"github.com/moomora/klyx/internal/helmcli"
+	"github.com/moomora/klyx/internal/observe"
 )
 
 // fakeCompleter is a fake ai.Provider. It returns reply trimmed, as a real
@@ -62,11 +64,27 @@ func aiTestState(client *fakeCompleter, backend string, allowEgress bool) *AISta
 }
 
 type fakeExplainConn struct {
-	chain   certmanager.Chain
-	err     error
-	details map[string]crd.InstanceDetail // keyed "group/plural/ns/name"
-	detErr  error
-	getCall int
+	chain    certmanager.Chain
+	err      error
+	details  map[string]crd.InstanceDetail // keyed "group/plural/ns/name"
+	detErr   error
+	getCall  int
+	rows     map[string]observe.Rows // keyed "task/part"
+	releases []helmcli.Release
+	history  []helmcli.HistoryEntry
+}
+
+func (f *fakeExplainConn) HealthRowsNow(_ context.Context, task, part string) (observe.Rows, bool) {
+	r, ok := f.rows[task+"/"+part]
+	return r, ok
+}
+
+func (f *fakeExplainConn) HelmReleases(context.Context) ([]helmcli.Release, error) {
+	return f.releases, nil
+}
+
+func (f *fakeExplainConn) HelmHistory(context.Context, string, string) ([]helmcli.HistoryEntry, error) {
+	return f.history, nil
 }
 
 func (f *fakeExplainConn) GetCertificateChain(context.Context, string, string) (certmanager.Chain, error) {

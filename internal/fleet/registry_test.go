@@ -3,6 +3,7 @@ package fleet
 import (
 	"context"
 	"errors"
+	"github.com/moomora/klyx/internal/observe"
 	"io"
 	"os/exec"
 	"strings"
@@ -116,6 +117,9 @@ func (f *fakeConn) ListInstances(ctx context.Context, group, version, plural str
 }
 func (f *fakeConn) GetInstanceDetail(ctx context.Context, group, version, plural, ns, name string) (crd.InstanceDetail, error) {
 	return crd.InstanceDetail{}, nil
+}
+func (f *fakeConn) HealthRowsNow(context.Context, string, string) (observe.Rows, bool) {
+	return observe.Rows{}, false
 }
 func (f *fakeConn) ApplyResourceYAML(ctx context.Context, group, version, plural, kind, scope, ns, name, yaml string, dryRun bool) error {
 	return nil

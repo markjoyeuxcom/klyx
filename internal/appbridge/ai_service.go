@@ -14,6 +14,7 @@ import (
 	"github.com/moomora/klyx/internal/certmanager"
 	"github.com/moomora/klyx/internal/crd"
 	"github.com/moomora/klyx/internal/helmcli"
+	"github.com/moomora/klyx/internal/observe"
 )
 
 const (
@@ -35,6 +36,10 @@ const (
 type AIConn interface {
 	GetCertificateChain(ctx context.Context, ns, name string) (certmanager.Chain, error)
 	GetInstanceDetail(ctx context.Context, group, version, plural, ns, name string) (crd.InstanceDetail, error)
+	// HealthRowsNow is Explain's anchor: one fresh Observer capture of a part.
+	HealthRowsNow(ctx context.Context, task, part string) (observe.Rows, bool)
+	HelmReleases(ctx context.Context) ([]helmcli.Release, error)
+	HelmHistory(ctx context.Context, namespace, release string) ([]helmcli.HistoryEntry, error)
 }
 
 // AIService is the Wails-bound, READ-ONLY AI-assist surface. It borrows the

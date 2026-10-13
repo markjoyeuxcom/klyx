@@ -365,6 +365,13 @@ Never sent: YAML (except Suggest-fix's masked manifest, as today), Secret data, 
 ## 5. Slices
 Codex review per slice, with full gates. CLI work never blocks API setup or Explain.
 
+Order as built (2026-10-13):
+- Slices 1 and 2 are accepted.
+- Slice 4 runs before slice 3 and is split in two:
+  - **4a** is the backend: the anchored capture, the evidence contract, `Explain`.
+  - **4b** is the frontend: the shared block in every lens, and the palette verb.
+- Slice 3 waits on research into Claude Code's managed and remote policy channels, which its admission must inspect.
+
 1. **Transport and config.**
    - `ai.Provider` and the immutable snapshot.
    - The Anthropic fix (§0), the OpenAI and Gemini providers, `openaiCompatible`.

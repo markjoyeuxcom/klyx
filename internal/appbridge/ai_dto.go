@@ -16,6 +16,10 @@ type AIResultDTO struct {
 	// Redacted counts the manifest values masked before a fix suggestion was
 	// sent (credential-like keys; secret references stay readable).
 	Redacted int `json:"redacted,omitempty"`
+	// Scrubbed counts the credential shapes removed from, and the values
+	// truncated in, Explain's evidence. Scrubbing reduces what leaves; it does
+	// not prove the evidence secret-free.
+	Scrubbed int `json:"scrubbed,omitempty"`
 }
 
 // AIAvailabilityDTO tells the frontend whether to render an AI affordance at all

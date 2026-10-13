@@ -1229,6 +1229,8 @@ func (c *ClusterConn) GetInstanceDetail(ctx context.Context, group, version, plu
 		Kind:           u.GetKind(),
 		Namespace:      ns,
 		Name:           name,
+		UID:            string(u.GetUID()),
+		Generation:     u.GetGeneration(),
 		Created:        u.GetCreationTimestamp().Time,
 		Labels:         sanitised.GetLabels(),
 		Annotations:    sanitised.GetAnnotations(),

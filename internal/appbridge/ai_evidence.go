@@ -1,0 +1,275 @@
+package appbridge
+
+import (
+	"encoding/json"
+	"errors"
+	"sort"
+	"time"
+
+	"github.com/moomora/klyx/internal/ai"
+	"github.com/moomora/klyx/internal/crd"
+	"github.com/moomora/klyx/internal/healthsrc"
+)
+
+// The Explain prompt contract (spec 2026-10-13 §4.2). Exactly the fields
+// declared here cross into a prompt; every string among them is scrubbed of
+// credential shapes and capped; the whole document is capped; and the model
+// is told all of it is untrusted data written by the cluster.
+
+// evidenceTotalMax caps the serialized evidence document.
+const evidenceTotalMax = 24 << 10 // 24 KiB
+
+// evidenceListMax caps every list in the evidence (events, related objects,
+// a lens field's array).
+const evidenceListMax = 10
+
+// allow is an allowlist node. A key mapped to nil admits a scalar (or a list
+// of scalars); a key mapped to a non-nil allow admits an object - or a list of
+// objects - holding only the listed keys. Anything not listed is dropped.
+type allow map[string]allow
+
+var (
+	condAllow  = allow{"status": nil, "reason": nil, "message": nil, "observedGeneration": nil}
+	argoCond   = allow{"type": nil, "status": nil, "reason": nil, "message": nil}
+	attachment = allow{"parent": nil, "rule": allow{"included": nil, "role": nil, "label": nil}}
+)
+
+// aiEvidenceFields is the allowlist of lens row fields per part (the lens's
+// own DTO, from the same capture as Klyx's verdict). Identity (uid, gvr), the
+// evaluation (health, rule - carried separately as the anchor) and anything
+// not needed to explain a state (pod IPs, ownership UIDs) are left out.
+var aiEvidenceFields = map[string]allow{
+	healthsrc.TaskCerts + "/certificates": {"ready": nil, "reason": nil, "message": nil, "issuerKind": nil, "issuerName": nil, "secretName": nil,
+		"dnsNames": nil, "notAfterUnix": nil, "expiresInSeconds": nil, "renewalUnix": nil, "stale": nil, "generation": nil, "observedGeneration": nil},
+	healthsrc.TaskCerts + "/issuers": {"kind": nil, "ready": nil, "reason": nil, "message": nil, "generation": nil},
+	healthsrc.TaskFlux + "/reconciliations": {"kind": nil, "ready": nil, "reason": nil, "message": nil, "revision": nil, "readySinceUnix": nil, "stale": nil,
+		"generation": nil, "observedGeneration": nil, "suspended": nil, "sourceKind": nil, "sourceName": nil, "sourceNamespace": nil},
+	healthsrc.TaskFlux + "/sources": {"kind": nil, "ready": nil, "reason": nil, "message": nil, "revision": nil, "url": nil, "suspended": nil, "generation": nil},
+	healthsrc.TaskArgo + "/applications": {"project": nil, "syncStatus": nil, "healthStatus": nil, "broken": nil, "revision": nil, "repoURL": nil, "path": nil,
+		"chart": nil, "targetRevision": nil, "destNamespace": nil, "destServer": nil, "destName": nil, "applicationSet": nil, "autoSync": nil,
+		"opPhase": nil, "opMessage": nil, "conditions": argoCond,
+		"resources": allow{"group": nil, "kind": nil, "namespace": nil, "name": nil, "status": nil, "health": nil}},
+	healthsrc.TaskArgo + "/applicationsets": {"generators": nil, "templateName": nil, "project": nil, "repoURL": nil, "path": nil, "targetRevision": nil,
+		"destNamespace": nil, "generatedApps": nil, "healthy": nil, "conditions": argoCond},
+	healthsrc.TaskKarpenter + "/nodepools": {"ready": nil, "reason": nil, "message": nil, "weight": nil, "cpuLimit": nil, "cpuUsed": nil, "memLimit": nil,
+		"memUsed": nil, "nodes": nil},
+	healthsrc.TaskKarpenter + "/nodeclaims": {"pool": nil, "nodeName": nil, "ready": nil, "failingType": nil, "failingStatus": nil, "failingReason": nil,
+		"failingMessage": nil, "drifted": nil, "consolidatable": nil, "capacityType": nil, "instanceType": nil, "ageSeconds": nil},
+	healthsrc.TaskGateway + "/gateways": {"className": nil, "listeners": allow{"name": nil, "protocol": nil, "hostname": nil, "port": nil},
+		"accepted": nil, "programmed": nil, "stale": nil, "generation": nil, "observedGeneration": nil, "acceptedCond": condAllow, "programmedCond": condAllow},
+	healthsrc.TaskGateway + "/routes": {"parent": nil, "attachments": attachment, "generation": nil},
+	healthsrc.TaskNodes + "/nodes": {"roles": nil, "ready": nil, "unschedulable": nil, "problems": nil, "version": nil, "os": nil, "arch": nil,
+		"taintCount": nil, "cpuCapacity": nil, "cpuAllocatable": nil, "memCapacity": nil, "memAllocatable": nil, "podCapacity": nil,
+		"ageSeconds": nil, "pool": nil, "zone": nil},
+	healthsrc.TaskPods + "/pods": {"ownerKind": nil, "ownerName": nil, "node": nil, "ready": nil, "restarts": nil,
+		"containers": allow{"name": nil, "init": nil, "ready": nil, "restarts": nil, "state": nil}},
+	healthsrc.TaskWorkloads + "/workloads": {"kind": nil, "desired": nil, "ready": nil, "available": nil, "updated": nil, "restarts": nil,
+		"reason": nil, "stale": nil, "generation": nil, "observedGeneration": nil, "paused": nil,
+		"pods":   allow{"name": nil, "ready": nil, "restarts": nil, "reason": nil, "node": nil, "ageSeconds": nil},
+		"gitops": allow{"kind": nil, "namespace": nil, "name": nil}},
+	healthsrc.TaskESO + "/externalsecrets": {"state": nil, "reason": nil, "message": nil, "storeKind": nil, "storeName": nil, "targetSecret": nil,
+		"refreshIntervalSeconds": nil, "lastRefreshAgeSeconds": nil, "refreshed": nil, "stale": nil, "generation": nil},
+	healthsrc.TaskESO + "/stores": {"kind": nil, "state": nil, "reason": nil, "message": nil, "provider": nil, "generation": nil},
+}
+
+// helmEvidenceFields is the allowlist for a Helm release (it has no row).
+var helmEvidenceFields = allow{"chart": nil, "appVersion": nil, "status": nil, "revision": nil, "updated": nil,
+	"history": allow{"revision": nil, "status": nil, "updated": nil, "description": nil}}
+
+// scrubber counts what was scrubbed while projecting.
+type scrubber struct{ n int }
+
+func (sc *scrubber) text(s string) string {
+	out, n := ai.ScrubEvidence(s, ai.EvidenceFieldMax)
+	sc.n += n
+	return out
+}
+
+// project keeps only the allowed keys of v (decoded JSON), scrubbing every
+// string and capping every list.
+func (sc *scrubber) project(v any, a allow) any {
+	switch t := v.(type) {
+	case map[string]any:
+		if a == nil {
+			return nil // an object where a scalar was declared: dropped
+		}
+		out := map[string]any{}
+		for k, sub := range a {
+			if val, ok := t[k]; ok && val != nil {
+				if p := sc.project(val, sub); p != nil {
+					out[k] = p
+				}
+			}
+		}
+		if len(out) == 0 {
+			return nil
+		}
+		return out
+	case []any:
+		var out []any
+		for _, el := range t {
+			if len(out) == evidenceListMax {
+				sc.n++
+				break
+			}
+			if p := sc.project(el, a); p != nil {
+				out = append(out, p)
+			}
+		}
+		if len(out) == 0 {
+			return nil
+		}
+		return out
+	case string:
+		if a != nil {
+			return nil
+		}
+		return sc.text(t)
+	default: // numbers and booleans
+		if a != nil {
+			return nil
+		}
+		return t
+	}
+}
+
+// evidenceVerdict is Klyx's own conclusion for the object - the anchor the
+// model is asked to explain.
+type evidenceVerdict struct {
+	Classifier string `json:"classifier"` // verdict | native
+	// verdict parts
+	Kind    string `json:"kind,omitempty"`
+	Label   string `json:"label,omitempty"`
+	Reason  string `json:"reason,omitempty"`
+	Message string `json:"message,omitempty"`
+	Rule    string `json:"rule,omitempty"`
+	// native parts: the presentation role and, separately, whether the lens
+	// counts the object for attention. Included never means "failed".
+	Role                string `json:"role,omitempty"`
+	IncludedInAttention *bool  `json:"includedInAttention,omitempty"`
+	EvaluatedAt         string `json:"evaluatedAt"`
+	Generation          int64  `json:"generation,omitempty"`
+}
+
+type evidenceCondition struct {
+	Type    string `json:"type"`
+	Status  string `json:"status"`
+	Reason  string `json:"reason,omitempty"`
+	Message string `json:"message,omitempty"`
+}
+
+type evidenceFact struct {
+	Label string `json:"label"`
+	Value string `json:"value"`
+}
+
+type evidenceEvent struct {
+	Reason   string `json:"reason"`
+	Count    int32  `json:"count,omitempty"`
+	Message  string `json:"message,omitempty"`
+	LastSeen string `json:"lastSeen,omitempty"`
+}
+
+type evidenceObject struct {
+	Kind       string              `json:"kind"`
+	Namespace  string              `json:"namespace,omitempty"`
+	Name       string              `json:"name"`
+	Relation   string              `json:"relation,omitempty"`
+	Conditions []evidenceCondition `json:"conditions,omitempty"`
+	Facts      []evidenceFact      `json:"facts,omitempty"`
+}
+
+// explainEvidence is the whole evidence document.
+type explainEvidence struct {
+	Target         evidenceObject   `json:"target"`
+	KlyxVerdict    *evidenceVerdict `json:"klyxVerdict,omitempty"`
+	NoVerdict      string           `json:"noVerdict,omitempty"`
+	LensFields     map[string]any   `json:"lensFields,omitempty"`
+	WarningEvents  []evidenceEvent  `json:"warningEvents,omitempty"`
+	Related        []evidenceObject `json:"related,omitempty"`
+	Operators      *operatorHealth  `json:"operators,omitempty"`
+	Qualifications []string         `json:"qualifications,omitempty"`
+	Truncated      bool             `json:"truncated,omitempty"`
+}
+
+// detailObject projects a resolved object's conditions and facts - never its
+// YAML, labels, annotations or secret keys.
+func (sc *scrubber) detailObject(d crd.InstanceDetail, relation string) evidenceObject {
+	o := evidenceObject{Kind: d.Kind, Namespace: d.Namespace, Name: d.Name, Relation: relation}
+	for _, c := range d.Conditions {
+		if len(o.Conditions) == 2*evidenceListMax {
+			sc.n++
+			break
+		}
+		o.Conditions = append(o.Conditions, evidenceCondition{Type: sc.text(c.Type), Status: sc.text(c.Status), Reason: sc.text(c.Reason), Message: sc.text(c.Message)})
+	}
+	for _, f := range d.Facts {
+		if len(o.Facts) == 2*evidenceListMax {
+			break
+		}
+		o.Facts = append(o.Facts, evidenceFact{Label: sc.text(f.Label), Value: sc.text(f.Value)})
+	}
+	return o
+}
+
+// warningEvents keeps the newest Warning events, scrubbed.
+func (sc *scrubber) warningEvents(evs []crd.Event) []evidenceEvent {
+	var w []crd.Event
+	for _, e := range evs {
+		if e.Type == "Warning" {
+			w = append(w, e)
+		}
+	}
+	sort.SliceStable(w, func(i, j int) bool { return w[i].Last.After(w[j].Last) })
+	var out []evidenceEvent
+	for _, e := range w {
+		if len(out) == evidenceListMax {
+			break
+		}
+		ev := evidenceEvent{Reason: sc.text(e.Reason), Count: e.Count, Message: sc.text(e.Message)}
+		if !e.Last.IsZero() {
+			ev.LastSeen = e.Last.UTC().Format(time.RFC3339)
+		}
+		out = append(out, ev)
+	}
+	return out
+}
+
+// marshalCapped serializes the evidence within evidenceTotalMax, shedding the
+// least essential parts first: related objects, then events, then facts, then
+// lens fields, then all but three conditions. The anchor and the target's
+// identity always stay. Evidence that still does not fit is refused, never
+// cut mid-document.
+func marshalCapped(ev explainEvidence) ([]byte, bool, error) {
+	raw, err := json.Marshal(ev)
+	if err != nil {
+		return nil, false, err
+	}
+	if len(raw) <= evidenceTotalMax {
+		return raw, false, nil
+	}
+	ev.Truncated = true
+	steps := []func(){
+		func() { ev.Related = nil },
+		func() { ev.WarningEvents = nil },
+		func() { ev.Target.Facts = nil },
+		func() { ev.LensFields = nil },
+		func() {
+			if len(ev.Target.Conditions) > 3 {
+				ev.Target.Conditions = ev.Target.Conditions[:3]
+			}
+		},
+	}
+	for _, step := range steps {
+		step()
+		if raw, err = json.Marshal(ev); err != nil {
+			return nil, true, err
+		}
+		if len(raw) <= evidenceTotalMax {
+			return raw, true, nil
+		}
+	}
+	return nil, true, errEvidenceTooLarge
+}
+
+var errEvidenceTooLarge = errors.New("the evidence for this object is too large to send, even trimmed; nothing was sent")

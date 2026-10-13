@@ -80,6 +80,7 @@ type Conn interface {
 	CountResource(ctx context.Context, group, version, plural string) (int, bool, error)
 	ListInstances(ctx context.Context, group, version, plural string, limit int64, continueToken string) ([]crd.InstanceMeta, string, error)
 	GetInstanceDetail(ctx context.Context, group, version, plural, ns, name string) (crd.InstanceDetail, error)
+	HealthRowsNow(ctx context.Context, task, part string) (observe.Rows, bool)
 	ApplyResourceYAML(ctx context.Context, group, version, plural, kind, scope, ns, name, yaml string, dryRun bool) error
 	CreateResourceYAML(ctx context.Context, yamlDocs string, dryRun bool) []AdhocResult
 	LaunchDiagnosticPod(ctx context.Context, name, image string, ttlSeconds int64) AdhocResult
@@ -716,6 +717,17 @@ func (c *ClusterConn) SetHealthSink(s observe.Sink) {
 
 // Health returns the cluster's health Observer (nil before Start or without
 // a sink).
+// HealthRowsNow returns one fresh capture of a part's rows from this
+// cluster's Observer (the AI Explain anchor, spec 2026-10-13 §4.1). ok is
+// false without an Observer, or once it has ended.
+func (c *ClusterConn) HealthRowsNow(ctx context.Context, task, part string) (observe.Rows, bool) {
+	h := c.Health()
+	if h == nil {
+		return observe.Rows{}, false
+	}
+	return h.RowsNowCtx(ctx, task, part)
+}
+
 func (c *ClusterConn) Health() *observe.Observer {
 	c.mu.RLock()
 	defer c.mu.RUnlock()

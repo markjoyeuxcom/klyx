@@ -72,9 +72,13 @@ type RelatedRef struct {
 
 // InstanceDetail is the full per-instance detail: header, conditions, events, YAML.
 type InstanceDetail struct {
-	Kind        string
-	Namespace   string
-	Name        string
+	Kind      string
+	Namespace string
+	Name      string
+	// UID and Generation identify the exact object read, so a caller can
+	// fence against a same-name replacement (spec 2026-10-13 §4.1).
+	UID         string
+	Generation  int64
 	Created     time.Time
 	Labels      map[string]string
 	Annotations map[string]string
