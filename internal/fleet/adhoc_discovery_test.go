@@ -2,9 +2,11 @@ package fleet
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -156,5 +158,108 @@ func TestAdhocInventorySendsTheContinueToken(t *testing.T) {
 	sent := rec.sent["configmaps"]
 	if len(sent) != 2 || sent[0].Continue != "" || sent[1].Continue != "page-2-token" || sent[1].LabelSelector != AdhocLabel+"=true" || sent[1].Limit != adhocListPage {
 		t.Fatalf("the second page must carry the token and the selector: %+v", sent)
+	}
+}
+
+func statusReply(w http.ResponseWriter, code int, reason string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	_, _ = fmt.Fprintf(w, `{"kind":"Status","apiVersion":"v1","status":"Failure","reason":%q,"message":"discovery denied or unavailable","code":%d}`, reason, code)
+}
+
+// Codex review 2026-10-13 (slice A, b3c2c84): a discovery root that fails is
+// an error, never a successful list with groups missing - for the scratch
+// sweep and for the health probes' capability check alike. Only client-go's
+// own toleration holds: a 404 on the legacy /api root.
+func TestDiscoveryRootFailureIsNotAbsence(t *testing.T) {
+	for _, tc := range []struct {
+		path   string
+		code   int
+		reason string
+	}{{"/api", 403, "Forbidden"}, {"/apis", 403, "Forbidden"}, {"/apis", 404, "NotFound"}, {"/apis", 500, "InternalError"}} {
+		t.Run(fmt.Sprintf("%s %d", tc.path, tc.code), func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == tc.path {
+					statusReply(w, tc.code, tc.reason)
+					return
+				}
+				discoveryReply(w, r)
+			}))
+			defer srv.Close()
+			cs, err := kubernetes.NewForConfig(&rest.Config{Host: srv.URL})
+			if err != nil {
+				t.Fatal(err)
+			}
+			c, _ := adhocConn(t)
+			c.typed = cs
+			if inv, err := c.ListAdhocObjects(context.Background()); err == nil {
+				t.Fatalf("a failed discovery root must fail the sweep, not read as complete: %+v", inv)
+			}
+			if p, err := c.crdServed(context.Background(), "cert-manager.io", "certificates", "v1"); err == nil {
+				t.Fatalf("a failed discovery root must not confirm a capability answer: %+v", p)
+			}
+		})
+	}
+}
+
+// The legacy /api root may 404 (aggregated API servers do): the named groups
+// still count, as client-go has it.
+func TestDiscoveryToleratesALegacyRoot404(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api":
+			statusReply(w, 404, "NotFound")
+		case "/apis":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"kind":"APIGroupList","apiVersion":"v1","groups":[{"name":"rbac.authorization.k8s.io","versions":[{"groupVersion":"rbac.authorization.k8s.io/v1","version":"v1"}],"preferredVersion":{"groupVersion":"rbac.authorization.k8s.io/v1","version":"v1"}}]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	cs, err := kubernetes.NewForConfig(&rest.Config{Host: srv.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, _ := adhocConn(t)
+	c.typed = cs
+	g, err := c.probeDiscovery().ServerGroupsCtx(context.Background())
+	if err != nil || len(g.Groups) != 1 || g.Groups[0].Name != "rbac.authorization.k8s.io" {
+		t.Fatalf("a legacy-root 404 keeps the named groups: %+v %v", g, err)
+	}
+}
+
+// A failed discovery is never cached: once the server answers again, the
+// next sweep reads the real groups.
+func TestDiscoveryFailureIsNotCachedAsAbsence(t *testing.T) {
+	var denied atomic.Bool
+	denied.Store(true)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if denied.Load() && r.URL.Path == "/apis" {
+			statusReply(w, 403, "Forbidden")
+			return
+		}
+		discoveryReply(w, r)
+	}))
+	defer srv.Close()
+	cs, err := kubernetes.NewForConfig(&rest.Config{Host: srv.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, dyn := adhocConn(t)
+	c.typed = cs
+	pod := &unstructured.Unstructured{Object: map[string]interface{}{"apiVersion": "v1", "kind": "Pod", "metadata": map[string]interface{}{
+		"name": "dbg", "namespace": "scratch", "uid": "pod-uid", "labels": map[string]interface{}{AdhocLabel: "true"},
+	}}}
+	if _, err := dyn.Resource(schema.GroupVersionResource{Version: "v1", Resource: "pods"}).Namespace("scratch").Create(context.Background(), pod, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.ListAdhocObjects(context.Background()); err == nil {
+		t.Fatal("a denied /apis must fail the sweep")
+	}
+	denied.Store(false)
+	inv, err := c.ListAdhocObjects(context.Background())
+	if err != nil || len(inv.Objects) != 1 {
+		t.Fatalf("after recovery the sweep reads the real groups: %+v %v", inv, err)
 	}
 }

@@ -70,16 +70,19 @@ type ctxDiscovery interface {
 // ServerGroups and ServerResourcesForGroupVersion do - the legacy core group
 // (/api) first, then /apis; core versions at /api/<v>, named groups at
 // /apis/<group>/<v> - because both paths share one cache (Codex review
-// 2026-10-13: a cache warmed from /apis alone had no core group).
+// 2026-10-13: a cache warmed from /apis alone had no core group). Like
+// client-go it tolerates only a 404 on the legacy /api root (aggregated API
+// servers return it) and a 404 for core v1; every other failure is an error,
+// never a successful list with groups missing.
 type restDiscovery struct{ rc rest.Interface }
 
 func (d restDiscovery) groups(ctx context.Context) (*metav1.APIGroupList, error) {
 	var core metav1.APIVersions
-	if err := d.rc.Get().AbsPath("/api").Do(ctx).Into(&core); err != nil && !apierrors.IsNotFound(err) && !apierrors.IsForbidden(err) {
+	if err := d.rc.Get().AbsPath("/api").Do(ctx).Into(&core); err != nil && !apierrors.IsNotFound(err) {
 		return nil, err
 	}
 	var named metav1.APIGroupList
-	if err := d.rc.Get().AbsPath("/apis").Do(ctx).Into(&named); err != nil && !apierrors.IsNotFound(err) && !apierrors.IsForbidden(err) {
+	if err := d.rc.Get().AbsPath("/apis").Do(ctx).Into(&named); err != nil {
 		return nil, err
 	}
 	out := &metav1.APIGroupList{}
@@ -100,8 +103,11 @@ func (d restDiscovery) resources(ctx context.Context, groupVersion string) (*met
 	if !strings.Contains(groupVersion, "/") {
 		path = "/api/" + groupVersion // the legacy core group ("v1")
 	}
-	var l metav1.APIResourceList
+	l := metav1.APIResourceList{GroupVersion: groupVersion}
 	if err := d.rc.Get().AbsPath(path).Do(ctx).Into(&l); err != nil {
+		if groupVersion == "v1" && apierrors.IsNotFound(err) {
+			return &l, nil // client-go's core/v1 404 toleration
+		}
 		return nil, err
 	}
 	return &l, nil
