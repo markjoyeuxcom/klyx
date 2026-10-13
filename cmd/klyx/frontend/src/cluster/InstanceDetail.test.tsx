@@ -39,15 +39,15 @@ import { describeResource } from "../bridge/exec";
 vi.mock("../bridge/ai", () => ({
   aiAvailability: vi.fn(async () => ({ backend: "off", ready: false })),
   aiEgressAllowed: vi.fn(async () => false),
-  explainResource: vi.fn(async () => ({ ok: true, explanation: "", model: "", backend: "", groundedOn: "", error: "" })),
+  explain: vi.fn(async () => ({ ok: true, explanation: "", model: "", backend: "", groundedOn: "", error: "" })),
   suggestFix: vi.fn(async () => ({ ok: true, explanation: "", model: "", backend: "", groundedOn: "", error: "" })),
 }));
-import { aiAvailability, aiEgressAllowed, explainResource, suggestFix } from "../bridge/ai";
+import { aiAvailability, aiEgressAllowed, explain, suggestFix } from "../bridge/ai";
 
 const resource: ResourceRef = { group: "cert-manager.io", version: "v1", plural: "certificates", kind: "Certificate", scope: "Namespaced" };
 const instance: InstanceRef = { namespace: "default", name: "web-tls" };
 const detail: InstanceDetailDTO = {
-  kind: "Certificate", namespace: "default", name: "web-tls", created: "", labels: { app: "web" },
+  kind: "Certificate", namespace: "default", name: "web-tls", uid: "web-tls-uid", created: "", labels: { app: "web" },
   annotations: { owner: "platform" },
   conditions: [{ type: "Ready", status: "True", reason: "Issued", message: "Certificate is up to date" }],
   events: [{ type: "Warning", reason: "Failed", message: "order failed", count: 2, lastSeen: "" }],
@@ -878,7 +878,7 @@ describe("InstanceDetail cross-lens Explain (AI)", () => {
   it("shows Explain and renders a grounded cross-lens result on click", async () => {
     vi.mocked(aiAvailability).mockResolvedValueOnce({ backend: "local", ready: true });
     vi.mocked(aiEgressAllowed).mockResolvedValueOnce(true);
-    vi.mocked(explainResource).mockResolvedValueOnce({
+    vi.mocked(explain).mockResolvedValueOnce({
       ok: true, backend: "local", model: "llama3.1",
       groundedOn: "Certificate/default/web-tls, ClusterIssuer/le-prod",
       explanation: "Issuance is stuck: the bound ClusterIssuer le-prod is not Ready.",
@@ -893,7 +893,8 @@ describe("InstanceDetail cross-lens Explain (AI)", () => {
     expect(await findByText(/bound ClusterIssuer le-prod is not Ready/)).toBeTruthy();
     expect(getByText(/Grounded on:/)).toBeTruthy();
     expect(getByText(/verify before acting/)).toBeTruthy();
-    expect(vi.mocked(explainResource)).toHaveBeenCalledWith("x", "cert-manager.io", "v1", "certificates", "default", "web-tls");
+    // The shared, UID-fenced object path (no Klyx verdict for a generic kind).
+    expect(vi.mocked(explain)).toHaveBeenCalledWith("x", { kind: "object", group: "cert-manager.io", version: "v1", plural: "certificates", namespace: "default", name: "web-tls", uid: "web-tls-uid" });
   });
 
   it("disables Explain when hosted egress is refused on a protected cluster", async () => {
@@ -903,7 +904,7 @@ describe("InstanceDetail cross-lens Explain (AI)", () => {
     const { findByRole, queryByRole } = render(<InstanceDetail cluster="x" resource={resource} instance={instance} />);
     // no live Explain action; the blocked reason is stated in More
     fireEvent.click(await findByRole("button", { name: /^More/ }));
-    const item = (await findByRole("menuitem", { name: "Explain (AI)" })) as HTMLButtonElement;
+    const item = (await findByRole("menuitem", { name: "Explain with AI" })) as HTMLButtonElement;
     expect(item.disabled).toBe(true);
     expect(item.title).toMatch(/protected cluster/i);
     expect(queryByRole("button", { name: /^explain$/i })).toBeNull();
@@ -930,6 +931,6 @@ describe("InstanceDetail cross-lens Explain (AI)", () => {
     expect(getByText("Copy suggestion")).toBeTruthy();
     // Review 2026-10-03 E: say what left the machine, and that redaction is heuristic.
     expect(getByText(/2 credential-like values redacted.*heuristic/)).toBeTruthy();
-    expect(vi.mocked(suggestFix)).toHaveBeenCalledWith("x", "cert-manager.io", "v1", "certificates", "default", "web-tls");
+    expect(vi.mocked(suggestFix)).toHaveBeenCalledWith("x", "cert-manager.io", "v1", "certificates", "default", "web-tls", "web-tls-uid");
   });
 });

@@ -5,9 +5,7 @@ import { useFleet } from "../store/fleet";
 import type { CertificateDTO, IssuerDTO, ChainNodeDTO, CertChainDTO, RuleDTO } from "../store/fleet";
 import { getCertificateChain } from "../bridge/certmanager";
 import { useCertManagerRows } from "../health/useCertManagerRows";
-import { explainCertificate } from "../bridge/ai";
-import { useAIAvailability } from "./useAI";
-import type { AIResultDTO } from "../store/fleet";
+import { useInspectorAI } from "../ai/AIExplain";
 import { useListKeys } from "../chrome/useListKeys";
 import { StatusDot, mono, readyColor, type Tone } from "../chrome/primitives";
 import { InspectorStatus } from "./ResourceInspector";
@@ -186,7 +184,6 @@ export function CertsView({ cluster }: { cluster: string }) {
   }, [cluster]);
   useEffect(() => { if (selKey) resolveChain(selKey); }, [selKey, resolveChain]);
 
-  const ai = useAIAvailability(cluster, !absent);
 
   const q = query.trim().toLowerCase();
   const orderedCerts = useMemo(
@@ -503,8 +500,6 @@ export function CertsView({ cluster }: { cluster: string }) {
           chainError={chainError}
           chainOfOther={chainOfOther}
           chainLoading={!shownChain && !chainError && mine && cm.chainLoading}
-          aiReady={ai.ready}
-          aiEgress={ai.egress}
           onClose={() => { autoSelect.current = "done"; selectCert(null); }}
           onResolve={() => selKey && resolveChain(selKey)}
           onOpenIssuer={(i) => { setView("issuers"); setStatus("all"); setIssuerSel(issuerKey(i)); setCursorKey(issuerKey(i)); }}
@@ -548,7 +543,7 @@ function RemovedNotice({ kind }: { kind: string }) {
 // CertInspector - investigation order: the cert verdict; the bound issuer
 // (headline when not ready), the likely cause, the issuance chain with the
 // deepest stuck node flagged; then secret, validity, DNS names, message.
-function CertInspector({ c, cluster, removed, unverified, issuer, issuersKnown, issuerCov, chain, chainPrior, chainError, chainOfOther, chainLoading, aiReady, aiEgress, onClose, onResolve, onOpenIssuer }: {
+function CertInspector({ c, cluster, removed, unverified, issuer, issuersKnown, issuerCov, chain, chainPrior, chainError, chainOfOther, chainLoading, onClose, onResolve, onOpenIssuer }: {
   c: CertificateDTO;
   cluster: string;
   removed: boolean;
@@ -563,8 +558,6 @@ function CertInspector({ c, cluster, removed, unverified, issuer, issuersKnown, 
   // chainOfOther: the last chain read was of an earlier object with this name
   chainOfOther: boolean;
   chainLoading: boolean;
-  aiReady: boolean;
-  aiEgress: boolean;
   onClose: () => void;
   onResolve: () => void;
   onOpenIssuer: (i: IssuerDTO) => void;
@@ -592,31 +585,14 @@ function CertInspector({ c, cluster, removed, unverified, issuer, issuersKnown, 
   const live = !removed;
   const role = roleOf(c);
 
-  const [explain, setExplain] = useState<{ loading: boolean; result: AIResultDTO | null }>({ loading: false, result: null });
-  const explainTokenRef = useRef(0);
-  useEffect(() => { explainTokenRef.current++; setExplain({ loading: false, result: null }); }, [cluster, c.namespace, c.name]);
-  const runExplain = () => {
-    const token = explainTokenRef.current;
-    setExplain({ loading: true, result: null });
-    explainCertificate(cluster, c.namespace, c.name)
-      .then((r) => {
-        if (token !== explainTokenRef.current) return;
-        setExplain({ loading: false, result: r });
-        if (r.error) useFleet.getState().setActionStatus({ kind: "error", message: `Explain failed: ${r.error}` });
-        else useFleet.getState().setActionStatus({ kind: "success", message: `AI explain - Certificate/${c.namespace}/${c.name} via ${r.backend}` });
-      })
-      .catch((e) => {
-        if (token !== explainTokenRef.current) return;
-        setExplain({ loading: false, result: null });
-        useFleet.getState().setActionStatus({ kind: "error", message: `Explain failed: ${String(e)}` });
-      });
-  };
-  const aiBlocked = "AI is disabled for this protected cluster - the AI endpoint is not on this machine; use a model on localhost or set ai.allowProtectedEgress";
+  // Explain anchors on Klyx's row verdict and adds the issuance chain
+  // (spec 2026-10-13 §4.1), fenced by the certificate's UID.
+  const ai = useInspectorAI(c.uid ? { kind: "row", task: "certs", part: "certificates", uid: c.uid } : null, `Certificate/${c.namespace}/${c.name}`, live, cluster)
   const manifestRef = wellKnownResourceRef("cert-manager.io", "Certificate");
   const more: MenuItem[] = [
     ...(manifestRef ? [{ label: "View manifest in Resources", onSelect: () => { const nav = useFleet.getState(); nav.openResource(manifestRef); nav.openInstance(c.namespace, c.name); } }] : []),
     ...(c.secretName ? [{ label: `Open Secret ${c.secretName}`, onSelect: () => { const nav = useFleet.getState(); nav.openResource(SECRET_REF); nav.openInstance(c.namespace, c.secretName); } }] : []),
-    ...(live && aiReady && !aiEgress ? [{ label: "Explain (AI)", disabled: true, hint: aiBlocked, onSelect: () => {} }] : []),
+    ...(ai.readiness.ready ? [] : ai.menu),
   ];
 
   return (
@@ -648,7 +624,7 @@ function CertInspector({ c, cluster, removed, unverified, issuer, issuersKnown, 
           </div>
         )}
         primary={live ? { label: chainLoading ? "Resolving chain…" : "Re-resolve chain", onSelect: onResolve } : undefined}
-        secondary={live && aiReady && aiEgress ? { label: explain.loading ? "Explaining…" : "Explain", onSelect: () => { if (!explain.loading) runExplain(); } } : undefined}
+        secondary={live && ai.readiness.ready && c.uid ? { label: ai.state.status === "loading" ? "Explaining…" : "Explain", onSelect: () => { if (ai.state.status !== "loading") ai.run(); } } : undefined}
         more={more}
       >
         {issuerBroken && (
@@ -664,22 +640,7 @@ function CertInspector({ c, cluster, removed, unverified, issuer, issuersKnown, 
             <div style={{ color: "var(--color-text-secondary)", marginTop: 3, overflowWrap: "anywhere" }}>{cause}</div>
           </div>
         )}
-        {(explain.loading || explain.result) && (
-          <InspectorBlock title="Explain (AI)">
-            {explain.loading ? <span className="t-secondary">Asking the model…</span> : explain.result?.error ? (
-              <div className="t-body" style={{ display: "flex", alignItems: "flex-start", gap: 5, color: "var(--color-text-danger)" }}>
-                <IconAlertTriangle size={12} stroke={1.5} style={{ flexShrink: 0, marginTop: 2 }} />
-                <span>{explain.result.error}</span>
-              </div>
-            ) : explain.result ? (
-              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                <div className="t-body" style={{ color: "var(--color-text-secondary)", whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{explain.result.explanation}</div>
-                <span className="t-secondary">Grounded on: {explain.result.groundedOn} · {explain.result.model}</span>
-                <span className="t-secondary" style={{ fontStyle: "italic" }}>AI-generated from the resolved chain - verify before acting.</span>
-              </div>
-            ) : null}
-          </InspectorBlock>
-        )}
+        {ai.block}
         <InspectorBlock title={failing ? "Issuance chain - deepest stuck node flagged" : "Issuance chain"} count={chain ? requests.length : undefined}>
           {chainError && !removed && (
             <div role="alert" data-testid="chain-error" className="t-body" style={{ display: "flex", alignItems: "flex-start", gap: 5, color: "var(--color-text-danger)", marginBottom: 4, overflowWrap: "anywhere" }}>
@@ -728,6 +689,7 @@ function CertInspector({ c, cluster, removed, unverified, issuer, issuersKnown, 
 }
 
 function IssuerInspector({ issuer, removed, unverified, certs, certsCov, onClose, onOpenCert }: { issuer: IssuerDTO; removed: boolean; unverified: boolean; certs: CertificateDTO[]; certsCov: JoinCoverage; onClose: () => void; onOpenCert: (c: CertificateDTO) => void }) {
+  const ai = useInspectorAI(issuer.uid ? { kind: "row" as const, task: "certs", part: "issuers", uid: issuer.uid } : null, `${issuer.kind}/${issuer.namespace ? `${issuer.namespace}/` : ""}${issuer.name}`, !removed && !unverified);
   const role = roleOf(issuer);
   const ref = wellKnownResourceRef("cert-manager.io", issuer.kind);
   const view = ref ? () => { const nav = useFleet.getState(); nav.openResource(ref); nav.openInstance(issuer.kind === "ClusterIssuer" ? "" : issuer.namespace, issuer.name); } : null;
@@ -747,7 +709,9 @@ function IssuerInspector({ issuer, removed, unverified, certs, certsCov, onClose
           </div>
         )}
         primary={view ? { label: "View manifest in Resources", onSelect: view } : undefined}
+        more={ai.menu}
       >
+        {ai.block}
         <InspectorBlock title="Certificates using it" count={certsCov === "unknown" ? undefined : certs.length} extra={blocked.length > 0 ? <span className="t-secondary" style={{ color: "var(--color-text-warning)" }}>{blocked.length} not ready or expired</span> : undefined}>
           {certsCov === "stale" && <span className="t-secondary">From the last observed Certificate list; the watch is currently failing.</span>}
           {certsCov === "unknown" ? <span className="t-secondary">Certificate read unavailable - usage unverified, not zero.</span>

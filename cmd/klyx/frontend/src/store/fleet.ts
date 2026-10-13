@@ -620,9 +620,9 @@ export type GitOpsOwnershipDTO = {
 // backend is the provider id (anthropic, openai, gemini, openaiCompatible, ...);
 // model is the model the vendor reports having used; origin is where the
 // prompt went.
-export type AIResultDTO = { ok: boolean; explanation: string; model: string; backend: string; origin?: string; groundedOn: string; error: string; redacted?: number };
+export type AIResultDTO = { ok: boolean; explanation: string; model: string; backend: string; origin?: string; groundedOn: string; error: string; redacted?: number; scrubbed?: number };
 export type AIAvailabilityDTO = { backend: string; ready: boolean; model?: string; origin?: string; problem?: string };
-export type InstanceDetailDTO = { kind: string; namespace: string; name: string; created: string; labels: Record<string, string>; annotations?: Record<string, string>; conditions: ConditionDTO[]; events: EventDTO[]; yaml: string; secretKeys?: SecretKeyDTO[]; serviceBacking?: ServiceBackingDTO | null; hpaScaling?: HPAScalingDTO | null; related?: RelatedRefDTO[]; facts?: FactDTO[]; error?: string };
+export type InstanceDetailDTO = { kind: string; namespace: string; name: string; uid?: string; generation?: number; created: string; labels: Record<string, string>; annotations?: Record<string, string>; conditions: ConditionDTO[]; events: EventDTO[]; yaml: string; secretKeys?: SecretKeyDTO[]; serviceBacking?: ServiceBackingDTO | null; hpaScaling?: HPAScalingDTO | null; related?: RelatedRefDTO[]; facts?: FactDTO[]; error?: string };
 // cluster + resource + ref identify the object a detail belongs to: DEV/STG/PRD
 // share namespace/name, so ns/name alone let a late DEV detail render under the
 // PRD header (review 2026-10-03 #5).

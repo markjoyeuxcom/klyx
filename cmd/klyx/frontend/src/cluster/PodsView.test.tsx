@@ -9,6 +9,12 @@ import { rowOf } from "../test/podRows";
 // (PodRows.test.tsx mounts the real adapter over the health store).
 vi.mock("../health/usePodRows", () => ({ usePodRows: () => {} }));
 
+const aiBridge = vi.hoisted(() => ({
+  aiAvailability: vi.fn(async () => ({ backend: "anthropic", ready: true })),
+  aiEgressAllowed: vi.fn(async () => true),
+  explain: vi.fn(async () => ({ ok: true, explanation: "The container keeps exiting.", model: "m", backend: "anthropic", groundedOn: "g", error: "" })),
+}));
+vi.mock("../bridge/ai", () => aiBridge);
 vi.mock("../bridge/pods", () => ({
   openPodDetail: vi.fn().mockResolvedValue(undefined),
   deletePod: vi.fn().mockResolvedValue(undefined),
@@ -436,6 +442,16 @@ describe("PodsView", () => {
       pods: { ...s.pods, selected: { namespace: pod.namespace, name: pod.name, uid: pod.uid ?? "" }, detail, detailLoading: false },
     }));
   }
+
+  // spec 2026-10-13 §4.3
+  it("offers Explain with AI in More and asks for the selected pod's row, fenced by its UID", async () => {
+    openDetailPanel(healthy);
+    const { findByRole, getByRole, findByTestId } = render(<PodsView cluster="homelab" />);
+    fireEvent.click(getByRole("button", { name: /^More/ }));
+    fireEvent.click(await findByRole("menuitem", { name: "Explain with AI" }));
+    expect((await findByTestId("ai-explain")).textContent).toContain("keeps exiting");
+    expect(aiBridge.explain).toHaveBeenCalledWith("homelab", { kind: "row", task: "pods", part: "pods", uid: healthy.uid });
+  });
 
   // Review 2026-10-03 #10: failures render as errors, never as an empty list
   // or an empty pod.
@@ -963,4 +979,3 @@ describe("PodsView pilot rework (Codex review)", () => {
     expect(document.body.textContent).toContain("Pod removed.");
   });
 });
-

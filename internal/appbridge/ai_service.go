@@ -184,67 +184,35 @@ func refusalDetail(r *ai.RefusedError) string {
 	return " (" + r.Category + ")"
 }
 
-// ExplainCertificate resolves the certificate's issuance chain fresh (server-
-// authoritative), sends the resolved chain - no secrets - to the model, and
-// returns a grounded explanation. Read-only.
-func (s *AIService) ExplainCertificate(cluster, ns, name string) AIResultDTO {
-	st := s.load()
-	conn, refusal := s.precheck(st, cluster)
-	if refusal != "" {
-		return AIResultDTO{Error: refusal}
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), ai.Deadline(ai.PurposeExplain))
-	defer cancel()
-
-	chain, err := conn.GetCertificateChain(ctx, ns, name)
-	if err != nil {
-		return AIResultDTO{Error: "resolve chain: " + err.Error()}
-	}
-	system, user := BuildCertExplainPrompt(chain)
-	return complete(ctx, st, ai.Request{System: system, User: user, Purpose: ai.PurposeExplain}, certChainIdentities(chain), 0)
-}
-
-// ExplainResource is the cross-lens flagship: it assembles the resolved health of
-// a resource AND the objects it relates to (its Related refs, which span lenses),
-// then asks the model for one causal root-cause narrative. Read-only; only
-// conditions + facts cross into the prompt (never YAML or secret data).
-func (s *AIService) ExplainResource(cluster, group, version, plural, ns, name string) AIResultDTO {
-	st := s.load()
-	conn, refusal := s.precheck(st, cluster)
-	if refusal != "" {
-		return AIResultDTO{Error: refusal}
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), ai.Deadline(ai.PurposeExplain))
-	defer cancel()
-
-	bundle, _, err := buildResourceBundle(ctx, conn, group, version, plural, ns, name)
-	if err != nil {
-		return AIResultDTO{Error: "resolve resource: " + err.Error()}
-	}
-	bundle.Operators = s.operators(cluster)
-	system, user := BuildResourceExplainPrompt(bundle)
-	return complete(ctx, st, ai.Request{System: system, User: user, Purpose: ai.PurposeExplain}, resourceBundleIdentities(bundle), 0)
-}
-
 // SuggestFix drafts the MINIMAL change to desired state that would fix the
 // diagnosed problem, as a copyable patch the operator commits to Git. Klyx never
-// applies it - Git stays the source of truth. Same read-only + egress posture as
-// Explain; it additionally sends the resource's current manifest (secret values
-// already masked upstream, and capped) so the model can target a specific edit.
-func (s *AIService) SuggestFix(cluster, group, version, plural, ns, name string) AIResultDTO {
+// applies it - Git stays the source of truth. The same posture as Explain: the
+// object is fenced by the UID the operator selected, its cluster text is
+// scrubbed and capped, and the evidence is framed as untrusted data. It
+// additionally sends the resource's current manifest (Secret data masked
+// upstream, credential-like values redacted, capped).
+func (s *AIService) SuggestFix(cluster, group, version, plural, ns, name, uid string) AIResultDTO {
 	st := s.load()
 	conn, refusal := s.precheck(st, cluster)
 	if refusal != "" {
 		return AIResultDTO{Error: refusal}
+	}
+	if uid == "" {
+		return AIResultDTO{Error: "the selected object has no identity yet; nothing was sent"}
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), ai.Deadline(ai.PurposeFix))
 	defer cancel()
 
 	bundle, root, err := buildResourceBundle(ctx, conn, group, version, plural, ns, name)
 	if err != nil {
-		return AIResultDTO{Error: "resolve resource: " + err.Error()}
+		return AIResultDTO{Error: "resolve resource: " + ai.Scrub(err.Error())}
 	}
-	bundle.Operators = s.operators(cluster)
+	if root.UID != uid {
+		return AIResultDTO{Error: errReplaced.Error()}
+	}
+	sc := &scrubber{}
+	bundle = sc.bundle(bundle)
+	bundle.Operators = sc.operators(s.operators(cluster))
 	// The manifest leaves the machine (unless the endpoint is loopback): drop the
 	// last-applied annotation and mask credential-like values first. Fail
 	// closed - a manifest that cannot be redacted is not sent (review
@@ -254,7 +222,9 @@ func (s *AIService) SuggestFix(cluster, group, version, plural, ns, name string)
 		return AIResultDTO{Error: "could not redact the manifest, so nothing was sent: " + err.Error()}
 	}
 	system, user := BuildFixPrompt(bundle, manifest)
-	return complete(ctx, st, ai.Request{System: system, User: user, Purpose: ai.PurposeFix}, resourceBundleIdentities(bundle), redacted)
+	res := complete(ctx, st, ai.Request{System: system, User: user, Purpose: ai.PurposeFix}, resourceBundleIdentities(bundle), redacted)
+	res.Scrubbed = sc.n
+	return res
 }
 
 // buildResourceBundle resolves the root object plus (capped) its related objects'

@@ -19,6 +19,7 @@ import { LensLayout, LensTable, TABLE_ROW_HEIGHT, type DatasetState } from "../l
 import { InspectorBlock, InspectorLayout } from "../layout/InspectorLayout";
 import { fitColumns, type ColumnDef } from "../layout/columns";
 import { RANK, REFS, ROLE_TEXT, addressText, gatewayRole, gatewayVerdictDetail, listenerText, roleTone, type Role } from "./gatewayModel";
+import { useInspectorAI } from "../ai/AIExplain";
 
 // GatewayApiView - the Gateway API lens on the workspace template (spec §6
 // step 6). Without a selected Gateway it is the Gateways table (not accepted
@@ -271,6 +272,7 @@ function GatewayList({ cluster, rows, toggle }: { cluster: string; rows: Gateway
 }
 
 function GatewayInspector({ g, stale, gone, onOpen, onClose }: { g: GatewayRefDTO; stale: boolean; gone: "removed" | "unverified" | null; onOpen: () => void; onClose: () => void }) {
+  const ai = useInspectorAI(g.uid ? { kind: "row" as const, task: "gateway", part: "gateways", uid: g.uid } : null, `Gateway/${g.namespace}/${g.name}`, !gone);
   const role = gatewayRole(g);
   const open = (ref: typeof REFS.gateway | typeof REFS.gatewayClass, ns: string, name: string) => {
     const nav = useFleet.getState();
@@ -298,10 +300,11 @@ function GatewayInspector({ g, stale, gone, onOpen, onClose }: { g: GatewayRefDT
           </div>
         )}
         primary={gone === "removed" ? undefined : { label: "Open topology", onSelect: onOpen }}
-        more={[
+        more={[...([
           { label: "Open Gateway object", onSelect: () => open(REFS.gateway, g.namespace, g.name) },
           ...(g.className ? [{ label: `Open GatewayClass ${g.className}`, onSelect: () => open(REFS.gatewayClass, "", g.className) }] : []),
-        ]}>
+        ]), ...ai.menu]}>
+        {ai.block}
         <InspectorBlock title="Listeners" count={listeners.length}>
           {listeners.length === 0 ? <div className="t-secondary">No listeners reported.</div> : (
             <div className="insp-kv">

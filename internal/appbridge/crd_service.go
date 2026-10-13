@@ -165,7 +165,7 @@ func (s *CRDService) GetInstanceDetail(cluster, group, version, plural, namespac
 		})
 	}
 	return InstanceDetailDTO{
-		Kind: d.Kind, Namespace: d.Namespace, Name: d.Name,
+		Kind: d.Kind, Namespace: d.Namespace, Name: d.Name, UID: d.UID, Generation: d.Generation,
 		Created: rfc3339(d.Created), Labels: labels, Annotations: annotations,
 		Conditions: conds, Events: events, YAML: d.YAML,
 		SecretKeys:     secretKeys,

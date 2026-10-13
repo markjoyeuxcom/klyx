@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/moomora/klyx/internal/ai"
+	"github.com/moomora/klyx/internal/certmanager"
 	"github.com/moomora/klyx/internal/crd"
 	"github.com/moomora/klyx/internal/healthsrc"
 )
@@ -221,6 +222,7 @@ type explainEvidence struct {
 	LensFields     map[string]any   `json:"lensFields,omitempty"`
 	WarningEvents  []evidenceEvent  `json:"warningEvents,omitempty"`
 	Related        []evidenceObject `json:"related,omitempty"`
+	IssuanceChain  *evidenceChain   `json:"issuanceChain,omitempty"`
 	Operators      *operatorHealth  `json:"operators,omitempty"`
 	Qualifications []string         `json:"qualifications,omitempty"`
 	Truncated      bool             `json:"truncated,omitempty"`
@@ -242,6 +244,85 @@ func (sc *scrubber) operators(oh *operatorHealth) *operatorHealth {
 	}
 	return &operatorHealth{Flux: view(oh.Flux), Argo: view(oh.Argo), CertManager: view(oh.CertManager),
 		ExternalSecrets: view(oh.ExternalSecrets), Reloader: view(oh.Reloader), Gateway: view(oh.Gateway)}
+}
+
+// bundle scrubs and caps Suggest-fix's resolved bundle the way Explain's
+// evidence is: every free-text value through the scrubber, lists capped.
+func (sc *scrubber) bundle(b resourceBundle) resourceBundle {
+	view := func(v resourceView) resourceView {
+		out := resourceView{Kind: v.Kind, Namespace: v.Namespace, Name: v.Name, Relation: v.Relation}
+		for i, c := range v.Conditions {
+			if i == 2*evidenceListMax {
+				sc.n++
+				break
+			}
+			out.Conditions = append(out.Conditions, conditionView{Type: sc.text(c.Type), Status: sc.text(c.Status), Reason: sc.text(c.Reason), Message: sc.text(c.Message), Scope: sc.text(c.Scope)})
+		}
+		for i, f := range v.Facts {
+			if i == 2*evidenceListMax {
+				sc.n++
+				break
+			}
+			out.Facts = append(out.Facts, factView{Group: sc.text(f.Group), Label: sc.text(f.Label), Value: sc.text(f.Value), Tone: f.Tone})
+		}
+		return out
+	}
+	out := resourceBundle{Root: view(b.Root)}
+	for _, r := range b.Related {
+		out.Related = append(out.Related, view(r))
+	}
+	return out
+}
+
+// chain projects a resolved issuance chain (cert-manager) for the evidence:
+// identity, ready state, scrubbed reason and message, children bounded.
+func (sc *scrubber) chain(c certmanager.Chain) *evidenceChain {
+	var node func(n chainNodeView, depth int) chainNodeView
+	node = func(n chainNodeView, depth int) chainNodeView {
+		out := chainNodeView{Kind: n.Kind, Namespace: n.Namespace, Name: n.Name, Ready: n.Ready, Reason: sc.text(n.Reason), Message: sc.text(n.Message)}
+		if depth < 3 {
+			for i, ch := range n.Children {
+				if i == evidenceListMax {
+					sc.n++
+					break
+				}
+				out.Children = append(out.Children, node(ch, depth+1))
+			}
+		}
+		return out
+	}
+	ev := &evidenceChain{}
+	if c.Issuer != nil {
+		bi := node(chainNodeView{Kind: string(c.Issuer.Kind), Namespace: c.Issuer.Namespace, Name: c.Issuer.Name, Ready: string(c.Issuer.Ready), Reason: c.Issuer.Reason, Message: c.Issuer.Message}, 0)
+		ev.BoundIssuer = &bi
+	}
+	for i, r := range c.Requests {
+		if i == evidenceListMax {
+			sc.n++
+			break
+		}
+		ev.Requests = append(ev.Requests, node(toChainNodeView(r), 0))
+	}
+	if c.FailingLink != nil {
+		ev.FailingLink = string(c.FailingLink.Kind) + "/" + c.FailingLink.Name + " (ready=" + string(c.FailingLink.Ready) + ")"
+	}
+	for i, w := range c.Warnings {
+		if i == evidenceListMax {
+			break
+		}
+		ev.Warnings = append(ev.Warnings, sc.text(w))
+	}
+	return ev
+}
+
+// evidenceChain is a certificate's issuance chain: the bound issuer, the
+// CertificateRequest -> Order -> Challenge tree, and Klyx's deepest-stuck
+// node.
+type evidenceChain struct {
+	BoundIssuer *chainNodeView  `json:"boundIssuer,omitempty"`
+	Requests    []chainNodeView `json:"requests,omitempty"`
+	FailingLink string          `json:"failingLink,omitempty"`
+	Warnings    []string        `json:"warnings,omitempty"`
 }
 
 // detailObject projects a resolved object's conditions and facts - never its

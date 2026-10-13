@@ -26,6 +26,7 @@ import { staleStyle } from "./staleness";
 import { wellKnownResourceRef } from "./resourceRefs";
 import { FleetCompare } from "./FleetCompare";
 import { WatchErrorBanner } from "../chrome/WatchErrorBanner";
+import { useInspectorAI } from "../ai/AIExplain";
 
 import { VerdictLabel, VerdictLamp, VerdictStatus } from "../health/VerdictView";
 import { type VerdictCounts, attentionTone, isAttention, kindOf, labelOf, orderOf, summarize } from "../health/verdict";
@@ -680,6 +681,7 @@ function WorkloadInspector({
   onUndo: (w: WorkloadDTO, rev: RolloutRevisionDTO) => void;
   onPause: (w: WorkloadDTO, pause: boolean) => void;
 }) {
+  const ai = useInspectorAI(workload.uid ? { kind: "row" as const, task: "workloads", part: "workloads", uid: workload.uid } : null, `${workload.kind}/${workload.namespace}/${workload.name}`, !gone, cluster);
   const w = workload;
   const live = gone !== "removed";
   // Selector-matched pods carry no verdict of their own: native facts only.
@@ -732,8 +734,9 @@ function WorkloadInspector({
         />}
         primary={live ? { label: "Logs", kbd: "l", onSelect: () => onLogs(w) } : undefined}
         secondary={live ? { label: "Restart", onSelect: () => onRestart(w) } : undefined}
-        more={live ? more : viewManifest ? [viewManifest] : []}
+        more={[...(live ? more : viewManifest ? [viewManifest] : []), ...ai.menu]}
       >
+        {ai.block}
         {live && scaling && (
           <InspectorBlock title="Scale">
             <ScalePopover initial={w.desired} onConfirm={(n) => onScaleConfirm(w, n)} onCancel={onCancelScale} />

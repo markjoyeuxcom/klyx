@@ -91,7 +91,7 @@ spec:
 	conn := &fakeExplainConn{details: map[string]crd.InstanceDetail{"helm.toolkit.fluxcd.io/helmreleases/app/app": root}}
 	cl := &fakeCompleter{reply: "ok"}
 	svc := newAI(cl, "hosted", true, false, conn)
-	if r := svc.SuggestFix("c", "helm.toolkit.fluxcd.io", "v2", "helmreleases", "app", "app"); !r.OK {
+	if r := svc.SuggestFix("c", "helm.toolkit.fluxcd.io", "v2", "helmreleases", "app", "app", "app-uid"); !r.OK {
 		t.Fatalf("fix failed: %+v", r)
 	}
 	if strings.Contains(cl.gotUser, "b2-review-private-password") {
@@ -138,7 +138,7 @@ spec:
 			conn := &fakeExplainConn{details: map[string]crd.InstanceDetail{tc.group + "/" + tc.plural + "/app/app": root}}
 			cl := &fakeCompleter{reply: "ok"}
 			svc := newAI(cl, "hosted", true, false, conn)
-			if r := svc.SuggestFix("c", tc.group, "v1", tc.plural, "app", "app"); !r.OK {
+			if r := svc.SuggestFix("c", tc.group, "v1", tc.plural, "app", "app", "app-uid"); !r.OK {
 				t.Fatalf("fix failed: %+v", r)
 			}
 			if strings.Contains(cl.gotUser, "b2-rereview-inline-credential") {
@@ -181,7 +181,7 @@ spec:
 			conn := &fakeExplainConn{details: map[string]crd.InstanceDetail{"example.com/widgets/app/app": root}}
 			cl := &fakeCompleter{reply: "ok"}
 			svc := newAI(cl, "hosted", true, false, conn)
-			if r := svc.SuggestFix("c", "example.com", "v1", "widgets", "app", "app"); !r.OK {
+			if r := svc.SuggestFix("c", "example.com", "v1", "widgets", "app", "app", "app-uid"); !r.OK {
 				t.Fatalf("fix failed: %+v", r)
 			}
 			if strings.Contains(cl.gotUser, "b2-final-private-value") {

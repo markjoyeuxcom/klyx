@@ -19,6 +19,7 @@ import { LensLayout, LensTable, TABLE_ROW_HEIGHT, type DatasetState } from "../l
 import { InspectorBlock, InspectorLayout, type MenuItem } from "../layout/InspectorLayout";
 import { fitColumns, type ColumnDef } from "../layout/columns";
 import { clock, combineEvidence, coverageGaps, joinCoverage, kindEvidence, lastGoodAt, type JoinCoverage, type KindEvidence } from "../layout/coverage";
+import { useInspectorAI } from "../ai/AIExplain";
 
 const keyOf = (e: { namespace: string; name: string }) => `${e.namespace}/${e.name}`;
 
@@ -484,6 +485,7 @@ function SecretInspector({ e, nowS, removed, unverified, store, storeCov, onClos
   onClose: () => void;
   onOpenStore: (s: ExternalSecretStoreDTO) => void;
 }) {
+  const ai = useInspectorAI(e.uid ? { kind: "row" as const, task: "eso", part: "externalsecrets", uid: e.uid } : null, `ExternalSecret/${e.namespace}/${e.name}`, !removed && !unverified);
   // store surfaces derive from the store's rule: only CONFIRMED adverse store
   // health is a diagnosed root cause; Unknown is unverified evidence
   const storeRole = store ? roleOf(store) : null;
@@ -509,8 +511,9 @@ function SecretInspector({ e, nowS, removed, unverified, store, storeCov, onClos
           </div>
         )}
         primary={live && e.targetSecret ? { label: "Open target Secret", onSelect: () => { const nav = useFleet.getState(); nav.openResource(SECRET_REF); nav.openInstance(e.namespace, e.targetSecret); } } : undefined}
-        more={more}
+        more={[...(more), ...ai.menu]}
       >
+        {ai.block}
         {storeBroken && (
           <div className="t-body" style={{ padding: "8px 10px", borderRadius: 4, background: storeRole!.kind === "fault" ? "var(--color-background-danger)" : "var(--color-background-warning)", boxShadow: `inset 0 0 0 1px ${storeRole!.kind === "fault" ? "var(--color-border-danger)" : "var(--color-border-warning)"}` }}>
             <div style={{ color: ROLE_TEXT[storeRole!.kind], fontWeight: 600 }}>{storeRole!.kind === "fault" ? "Store failed" : "Store not ready"}{storeCov === "stale" ? " (last observed - the store watch is failing)" : ""}: {store!.reason || "unknown"}</div>
@@ -556,6 +559,7 @@ function SecretInspector({ e, nowS, removed, unverified, store, storeCov, onClos
 }
 
 function StoreInspector({ store, removed, unverified, secrets, secretsCov, onClose, onOpenSecret }: { store: ExternalSecretStoreDTO; removed: boolean; unverified: boolean; secrets: ExternalSecretDTO[]; secretsCov: JoinCoverage; onClose: () => void; onOpenSecret: (e: ExternalSecretDTO) => void }) {
+  const ai = useInspectorAI(store.uid ? { kind: "row" as const, task: "eso", part: "stores", uid: store.uid } : null, `${store.kind}/${store.namespace ? `${store.namespace}/` : ""}${store.name}`, !removed && !unverified);
   const role = roleOf(store);
   const ref = wellKnownResourceRef("external-secrets.io", store.kind);
   const view = ref ? () => { const nav = useFleet.getState(); nav.openResource(ref); nav.openInstance(store.kind === "ClusterSecretStore" ? "" : store.namespace, store.name); } : null;
@@ -575,7 +579,9 @@ function StoreInspector({ store, removed, unverified, secrets, secretsCov, onClo
           </div>
         )}
         primary={view ? { label: "View manifest in Resources", onSelect: view } : undefined}
+        more={ai.menu}
       >
+        {ai.block}
         <InspectorBlock title="ExternalSecrets using it" count={secretsCov === "unknown" ? undefined : secrets.length} extra={blocked.length > 0 ? <span className="t-secondary" style={{ color: "var(--color-text-warning)" }}>{blocked.length} not synced or stale</span> : undefined}>
           {secretsCov === "stale" && <span className="t-secondary">From the last observed ExternalSecret list; the watch is currently failing.</span>}
           {secretsCov === "unknown" ? <span className="t-secondary">ExternalSecret read unavailable - usage unverified, not zero.</span>

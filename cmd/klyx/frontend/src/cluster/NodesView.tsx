@@ -33,6 +33,7 @@ import { InspectorBlock, InspectorLayout, type MenuItem } from "../layout/Inspec
 import { fitColumns, type ColumnDef } from "../layout/columns";
 import { WatchErrorBanner } from "../chrome/WatchErrorBanner";
 import { vh } from "../app/zoom";
+import { useInspectorAI } from "../ai/AIExplain";
 
 // columns: dot | name | roles | status | version | cpu alloc/cap | mem alloc/cap | taints | age
 type NodeFilter = "all" | "attention" | "unknown" | "cordoned" | "tainted";
@@ -1002,6 +1003,7 @@ function NodeInspector({ cluster, row, uid, nowS, detail, loading, gone, onCordo
   onDrain: () => void;
   onClose: () => void;
 }) {
+  const ai = useInspectorAI(uid ? { kind: "row" as const, task: "nodes", part: "nodes", uid: uid } : null, `Node/${row.name}`, !gone, cluster);
   const [tab, setTab] = useState<"overview" | "manifest">("overview");
   const [describing, setDescribing] = useState(false);
   const podsRef = useRef<HTMLDivElement>(null);
@@ -1055,11 +1057,12 @@ function NodeInspector({ cluster, row, uid, nowS, detail, loading, gone, onCordo
         ) : <VerdictStatus health={row.health} detail={[row.unschedulable ? "cordoned" : "", row.taintCount > 0 ? `${row.taintCount} taints` : ""].filter(Boolean).join(" · ")} />}
         primary={shown && live ? { label: `Pods on node · ${shown.podsOnNode.length}`, onSelect: () => { setTab("overview"); requestAnimationFrame(() => podsRef.current?.scrollIntoView({ block: "start" })); } } : undefined}
         secondary={live ? (row.unschedulable ? { label: "Uncordon", onSelect: () => onCordon(false) } : { label: "Cordon", onSelect: () => onCordon(true) }) : undefined}
-        more={more}
+        more={[...(more), ...ai.menu]}
         tab={tab}
         onTab={setTab}
         manifest={shown ? <YamlBlock text={shown.yaml} copyLabel="node YAML" /> : null}
       >
+        {ai.block}
         {describing && live && <DescribePane cluster={cluster} kindArg="node" namespace="" name={name} onClose={() => setDescribing(false)} />}
         {!shown ? (
           detailError && !loading ? (

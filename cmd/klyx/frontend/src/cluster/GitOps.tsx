@@ -27,6 +27,7 @@ import { SyncingChip, staleStyle } from "./staleness";
 import { LensLayout, LensTable, TABLE_ROW_HEIGHT, type DatasetState } from "../layout/LensLayout";
 import { InspectorBlock, InspectorLayout, type MenuItem } from "../layout/InspectorLayout";
 import { fitColumns, type ColumnDef } from "../layout/columns";
+import { useInspectorAI } from "../ai/AIExplain";
 
 const keyOf = (r: { kind: string; namespace: string; name: string }) => `${r.kind}/${r.namespace}/${r.name}`;
 
@@ -686,6 +687,7 @@ function SourceInspector({ source, removed, unverified, usedBy, usageCov, onClos
   onClose: () => void;
   onOpenResource: (r: FluxResourceDTO) => void;
 }) {
+  const ai = useInspectorAI(source.uid ? { kind: "row" as const, task: "flux", part: "sources", uid: source.uid } : null, `${source.kind}/${source.namespace}/${source.name}`, !removed && !unverified);
   const s = source;
   const h = roleOf(s);
   const usage = usageQualifier(usageCov);
@@ -712,7 +714,9 @@ function SourceInspector({ source, removed, unverified, usedBy, usageCov, onClos
           </div>
         )}
         primary={view ? { label: "View manifest in Resources", onSelect: view } : undefined}
+        more={ai.menu}
       >
+        {ai.block}
         <InspectorBlock title="Used by" count={usage.mark ? undefined : usedBy.length} extra={usage.mark ? <span className="t-secondary" data-testid="used-by-count">{usage.allUnknown ? "?" : `${usedBy.length}${usage.mark}`}</span> : undefined}>
           {usage.note && <Muted>{usage.note}</Muted>}
           {usedBy.length === 0 ? (usage.allUnknown ? null : <Muted>{usage.unknown.length ? `None among the ${usage.read.join(" and ")} read.` : usage.stale.length ? `None in the last observed ${usage.stale.join(" and ")} list.` : "No Kustomization or HelmRelease in this cluster names this source."}</Muted>) : (
@@ -789,6 +793,7 @@ function FluxInspector({ cluster, resource, nowS, removed, unverified, isProtect
   onReconcile: (r: FluxResourceDTO) => void;
   onToggleSuspend: (r: FluxResourceDTO, suspended: boolean) => void;
 }) {
+  const ai = useInspectorAI(resource.uid ? { kind: "row" as const, task: "flux", part: "reconciliations", uid: resource.uid } : null, `${resource.kind}/${resource.namespace}/${resource.name}`, !removed && !unverified, cluster);
   const r = resource;
   const role = roleOf(r);
   // A generation lag is evidence about the last observation, shown under the
@@ -849,8 +854,9 @@ function FluxInspector({ cluster, resource, nowS, removed, unverified, isProtect
         verdict={verdict}
         primary={live ? { label: "Reconcile", kbd: "r", onSelect: () => onReconcile(r) } : undefined}
         secondary={live ? { label: isSuspended ? "Resume" : "Suspend", kbd: "s", onSelect: () => onToggleSuspend(r, isSuspended) } : undefined}
-        more={more}
+        more={[...(more), ...ai.menu]}
       >
+        {ai.block}
         {detailError && !removed && (
           <div role="alert" data-testid="detail-error" className="t-body" style={{ display: "flex", alignItems: "flex-start", gap: 5, color: "var(--color-text-danger)", overflowWrap: "anywhere" }}>
             <IconAlertTriangle size={12} stroke={1.5} style={{ flexShrink: 0, marginTop: 2 }} />

@@ -19,6 +19,7 @@ import { InspectorBlock, InspectorLayout, type MenuItem } from "../layout/Inspec
 import { fitColumns, type ColumnDef } from "../layout/columns";
 import { loadClusterPrefs, loadSearch, saveHelmViewPrefs, saveSearch } from "../store/persist";
 import { RollbackComposerDialog } from "./HelmRollbackDialog";
+import { useInspectorAI } from "../ai/AIExplain";
 
 // HelmView - Helm releases on the workspace template (spec §6 step 5). Helm is
 // a bounded CLI snapshot (`helm list` on demand), never a live watch: the
@@ -367,6 +368,7 @@ function ReleaseInspector({ cluster, release: r, role, removed, stale, history, 
   nowS: number;
   onClose: () => void;
 }) {
+  const ai = useInspectorAI({ kind: "helm" as const, namespace: r.namespace, name: r.name }, `HelmRelease/${r.namespace}/${r.name}`, !removed, cluster);
   // The pending rollback pins its full evidence at open (target and current
   // revision), and is cancelled the moment the release is removed - a later
   // snapshot restoring the name never revives the old confirmation.
@@ -410,8 +412,9 @@ function ReleaseInspector({ cluster, release: r, role, removed, stale, history, 
         )}
         primary={live ? { label: detailLoading ? "Reading…" : "Re-read history", onSelect: reread } : undefined}
         secondary={live && good ? { label: `Roll back to rev ${good.revision}…`, onSelect: () => setRollbackTo(good.revision) } : undefined}
-        more={more}
+        more={[...(more), ...ai.menu]}
       >
+        {ai.block}
         <InspectorBlock title="History" count={history.length || undefined}>
           {historyError ? (
             <div className="t-body" style={{ color: "var(--color-text-warning)", overflowWrap: "anywhere" }}>History unreadable: {historyError}</div>

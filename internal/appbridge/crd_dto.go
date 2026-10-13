@@ -173,9 +173,13 @@ type FactDTO struct {
 
 // InstanceDetailDTO is the full per-instance detail.
 type InstanceDetailDTO struct {
-	Kind        string            `json:"kind"`
-	Namespace   string            `json:"namespace"`
-	Name        string            `json:"name"`
+	Kind      string `json:"kind"`
+	Namespace string `json:"namespace"`
+	Name      string `json:"name"`
+	// UID and Generation identify the exact object read: Explain and
+	// Suggest-fix are fenced by it.
+	UID         string            `json:"uid"`
+	Generation  int64             `json:"generation"`
 	Created     string            `json:"created"` // RFC3339; "" when unset
 	Labels      map[string]string `json:"labels"`
 	Annotations map[string]string `json:"annotations"`

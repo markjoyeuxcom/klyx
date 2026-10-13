@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { useFleet, ResourceRef, InstanceRef, InstanceDetailDTO, SecretKeyDTO, ServiceBackingDTO, HPAScalingDTO, RelatedRefDTO, FactDTO, AIResultDTO, GitOpsOwnershipDTO } from "../store/fleet";
 import { getInstanceDetail, revealSecretKey, copyText, dryRunInstanceYAML, applyInstanceYAML, gitOpsOwnership, ActionResult } from "../bridge/crd";
-import { explainResource, suggestFix } from "../bridge/ai";
-import { useAIAvailability } from "./useAI";
+import { suggestFix } from "../bridge/ai";
+import { useInspectorAI } from "../ai/AIExplain";
 import { armProtected } from "../bridge/configsvc";
 import { ForwardPopover } from "./ForwardPopover";
 import { InspectorStatus, conditionColor, InspectorConditions, InspectorEvents, InspectorSection, InspectorFacts, InspectorKV, InspectorMeters, MetadataChips, inspectorStateBox } from "./ResourceInspector";
@@ -744,34 +744,34 @@ export function InstanceDetail({ cluster, resource, instance, removed = false }:
     id.resource?.plural === resource.plural && id.ref?.namespace === instance.namespace && id.ref?.name === instance.name;
   const d = isCurrent ? id.detail : null;
 
-  const ai = useAIAvailability(cluster, true);
-  const [aiPanel, setAiPanel] = useState<{ mode: "explain" | "fix"; loading: boolean; result: AIResultDTO | null } | null>(null);
+  // Explain is the shared, UID-fenced path (spec 2026-10-13 §4); this panel
+  // keeps only Suggest-fix, fenced by the same UID.
+  const live = !removed && !!d && !d.error;
+  const target = d?.uid ? { kind: "object" as const, group: resource.group, version: resource.version, plural: resource.plural, namespace: instance.namespace, name: instance.name, uid: d.uid } : null;
+  const ai = useInspectorAI(target, `${resource.kind}/${instance.namespace ? `${instance.namespace}/` : ""}${instance.name}`, live, cluster);
+  const [aiPanel, setAiPanel] = useState<{ loading: boolean; result: AIResultDTO | null } | null>(null);
   // Fence AI results against a mid-flight selection change.
   const aiTokenRef = useRef(0);
   useEffect(() => { aiTokenRef.current++; setAiPanel(null); }, [cluster, resource.group, resource.version, resource.plural, instance.namespace, instance.name]);
-  const runAI = (mode: "explain" | "fix") => {
+  const runFix = () => {
+    if (!d?.uid) return;
     const token = aiTokenRef.current;
     setTab("overview");
-    setAiPanel({ mode, loading: true, result: null });
-    const verb = mode === "fix" ? "fix suggestion" : "explain";
-    const call = mode === "fix"
-      ? suggestFix(cluster, resource.group, resource.version, resource.plural, instance.namespace, instance.name)
-      : explainResource(cluster, resource.group, resource.version, resource.plural, instance.namespace, instance.name);
-    call
+    setAiPanel({ loading: true, result: null });
+    suggestFix(cluster, resource.group, resource.version, resource.plural, instance.namespace, instance.name, d.uid)
       .then((r) => {
         if (token !== aiTokenRef.current) return;
-        setAiPanel({ mode, loading: false, result: r });
-        if (r.error) useFleet.getState().setActionStatus({ kind: "error", message: `AI ${verb} failed: ${r.error}` });
-        else useFleet.getState().setActionStatus({ kind: "success", message: `AI ${verb} - ${resource.kind}/${instance.namespace ? `${instance.namespace}/` : ""}${instance.name} via ${r.backend}` });
+        setAiPanel({ loading: false, result: r });
+        if (r.error) useFleet.getState().setActionStatus({ kind: "error", message: `AI fix suggestion failed: ${r.error}` });
+        else useFleet.getState().setActionStatus({ kind: "success", message: `AI fix suggestion - ${resource.kind}/${instance.namespace ? `${instance.namespace}/` : ""}${instance.name} via ${r.backend}` });
       })
       .catch((e) => {
         if (token !== aiTokenRef.current) return;
-        setAiPanel({ mode, loading: false, result: null });
-        useFleet.getState().setActionStatus({ kind: "error", message: `AI ${verb} failed: ${String(e)}` });
+        setAiPanel({ loading: false, result: null });
+        useFleet.getState().setActionStatus({ kind: "error", message: `AI fix suggestion failed: ${String(e)}` });
       });
   };
-  const aiBusy = aiPanel?.loading ?? false;
-  const aiBlocked = "AI is disabled for this protected cluster - the AI endpoint is not on this machine; use a model on localhost or set ai.allowProtectedEgress";
+  const aiBusy = (aiPanel?.loading ?? false) || ai.state.status === "loading";
 
   const onCopy = () => {
     if (!d) return;
@@ -780,11 +780,10 @@ export function InstanceDetail({ cluster, resource, instance, removed = false }:
     setTimeout(() => setCopied(false), 1500);
   };
 
-  const live = !removed && !!d && !d.error;
   const more: MenuItem[] = [];
-  if (live && ai.ready) {
-    if (!ai.egress) more.push({ label: "Explain (AI)", disabled: true, hint: aiBlocked, onSelect: () => {} });
-    more.push({ label: "Suggest fix (AI, Git-only)", disabled: !ai.egress || aiBusy, hint: ai.egress ? "Draft a fix to commit to Git - Klyx never applies it" : aiBlocked, onSelect: () => runAI("fix") });
+  if (live && target) {
+    if (!ai.readiness.ready) more.push(...ai.menu);
+    if (ai.readiness.configured) more.push({ label: "Suggest fix (AI, Git-only)", disabled: !ai.readiness.ready || aiBusy, hint: ai.readiness.ready ? "Draft a fix to commit to Git - Klyx never applies it" : ai.readiness.reason, onSelect: runFix });
   }
   if (live && resource.kind === "ServiceAccount") {
     more.push({ label: "Check access", hint: "SubjectAccessReview simulation, read-only", onSelect: () => {
@@ -837,7 +836,7 @@ export function InstanceDetail({ cluster, resource, instance, removed = false }:
         onClose={closeInstance}
         verdict={verdict}
         primary={live ? { label: "Describe", onSelect: () => { setTab("overview"); setDescribing(true); } } : undefined}
-        secondary={live && ai.ready && ai.egress ? { label: aiPanel?.mode === "explain" && aiBusy ? "Explaining…" : "Explain", onSelect: () => { if (!aiBusy) runAI("explain"); } } : undefined}
+        secondary={live && target && ai.readiness.ready ? { label: ai.state.status === "loading" ? "Explaining…" : "Explain", onSelect: () => { if (!aiBusy) ai.run(); } } : undefined}
         more={more}
         tab={tab}
         onTab={setTab}
@@ -860,10 +859,11 @@ export function InstanceDetail({ cluster, resource, instance, removed = false }:
                 onClose={() => setDescribing(false)}
               />
             )}
+            {ai.block}
             {aiPanel && (
-              <InspectorBlock title={aiPanel.mode === "fix" ? "Suggested fix (AI)" : "Explain (AI)"}>
+              <InspectorBlock title="Suggested fix (AI)">
                 {aiPanel.loading ? (
-                  <span className="t-secondary">{aiPanel.mode === "fix" ? "Drafting a change to commit to Git…" : "Tracing the chain across related objects…"}</span>
+                  <span className="t-secondary">Drafting a change to commit to Git…</span>
                 ) : aiPanel.result?.error ? (
                   <div className="t-body" style={{ display: "flex", alignItems: "flex-start", gap: 5, color: "var(--color-text-danger)" }}>
                     <IconAlertTriangle size={12} stroke={1.5} style={{ flexShrink: 0, marginTop: 2 }} />
@@ -871,24 +871,18 @@ export function InstanceDetail({ cluster, resource, instance, removed = false }:
                   </div>
                 ) : aiPanel.result ? (
                   <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                    {aiPanel.mode === "fix" && (
-                      <div className="t-secondary" style={{ display: "flex", alignItems: "center", gap: 6, padding: "5px 8px", borderRadius: 4, boxShadow: "inset 0 0 0 1px var(--color-border-warning)", background: "var(--color-background-warning)", color: "var(--color-text-warning)" }}>
-                        <IconAlertTriangle size={12} stroke={1.5} style={{ flexShrink: 0 }} />
-                        <span>Review and commit this to Git - Klyx will not apply it. Desired state stays in your repo.</span>
-                      </div>
-                    )}
-                    <div className={aiPanel.mode === "fix" ? "t-identifier" : "t-body"} style={{ color: "var(--color-text-secondary)", whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{aiPanel.result.explanation}</div>
+                    <div className="t-secondary" style={{ display: "flex", alignItems: "center", gap: 6, padding: "5px 8px", borderRadius: 4, boxShadow: "inset 0 0 0 1px var(--color-border-warning)", background: "var(--color-background-warning)", color: "var(--color-text-warning)" }}>
+                      <IconAlertTriangle size={12} stroke={1.5} style={{ flexShrink: 0 }} />
+                      <span>Review and commit this to Git - Klyx will not apply it. Desired state stays in your repo.</span>
+                    </div>
+                    <div className="t-identifier" style={{ color: "var(--color-text-secondary)", whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{aiPanel.result.explanation}</div>
                     <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                      {aiPanel.mode === "fix" && <button className="l-btn" onClick={() => { void copyText(aiPanel.result!.explanation); }}>Copy suggestion</button>}
+                      <button className="l-btn" onClick={() => { void copyText(aiPanel.result!.explanation); }}>Copy suggestion</button>
                       <span className="t-secondary">Grounded on: {aiPanel.result.groundedOn} · {aiPanel.result.model}</span>
                     </div>
-                    {aiPanel.mode === "fix" ? (
-                      <div data-testid="ai-fix-redaction" className="t-secondary" style={{ fontStyle: "italic" }}>
-                        Sent the manifest with {aiPanel.result.redacted ?? 0} credential-like value{(aiPanel.result.redacted ?? 0) === 1 ? "" : "s"} redacted and last-applied removed - redaction is heuristic, so review what your manifests carry inline.
-                      </div>
-                    ) : (
-                      <div className="t-secondary" style={{ fontStyle: "italic" }}>AI-generated from resolved health - verify before acting.</div>
-                    )}
+                    <div data-testid="ai-fix-redaction" className="t-secondary" style={{ fontStyle: "italic" }}>
+                      Sent the manifest with {aiPanel.result.redacted ?? 0} credential-like value{(aiPanel.result.redacted ?? 0) === 1 ? "" : "s"} redacted and last-applied removed - redaction is heuristic, so review what your manifests carry inline.
+                    </div>
                   </div>
                 ) : null}
               </InspectorBlock>

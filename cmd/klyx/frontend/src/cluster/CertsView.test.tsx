@@ -15,9 +15,9 @@ vi.mock("../bridge/certmanager", () => ({
 vi.mock("../bridge/ai", () => ({
   aiAvailability: vi.fn(async () => ({ backend: "off", ready: false })),
   aiEgressAllowed: vi.fn(async () => false),
-  explainCertificate: vi.fn(async () => ({ ok: true, explanation: "", model: "", backend: "", groundedOn: "", error: "" })),
+  explain: vi.fn(async () => ({ ok: true, explanation: "", model: "", backend: "", groundedOn: "", error: "" })),
 }));
-import { aiAvailability, aiEgressAllowed, explainCertificate } from "../bridge/ai";
+import { aiAvailability, aiEgressAllowed, explain } from "../bridge/ai";
 import { certRule, issuerRule, withRule } from "../test/backendRules";
 
 const cluster = (tier: string): ClusterDTO => ({
@@ -271,13 +271,13 @@ describe("CertsView", () => {
   it("shows Explain and renders a grounded, disclaimed result on click", async () => {
     vi.mocked(aiAvailability).mockResolvedValueOnce({ backend: "hosted", ready: true });
     vi.mocked(aiEgressAllowed).mockResolvedValueOnce(true);
-    vi.mocked(explainCertificate).mockResolvedValueOnce({
+    vi.mocked(explain).mockResolvedValueOnce({
       ok: true, backend: "hosted", model: "claude-sonnet-5",
       groundedOn: "Certificate/payments/acme-demo, ClusterIssuer/lab-acme-staging",
       explanation: "The bound ClusterIssuer is healthy; the Challenge is stuck on a DNS record.",
       error: "",
     });
-    const c = cert({ name: "acme-demo", ready: "Failed", reason: "DoesNotExist" });
+    const c = cert({ name: "acme-demo", ready: "Failed", reason: "DoesNotExist", uid: "cert-uid" });
     setup("Healthy", [c], [issuer({})], "payments/acme-demo");
     const { findByRole, findByText, getByText } = render(<CertsView cluster="x" />);
 
@@ -287,18 +287,19 @@ describe("CertsView", () => {
     expect(await findByText(/Challenge is stuck on a DNS record/)).toBeTruthy();
     expect(getByText(/Grounded on:/)).toBeTruthy();
     expect(getByText(/verify before acting/)).toBeTruthy();
-    expect(vi.mocked(explainCertificate)).toHaveBeenCalledWith("x", "payments", "acme-demo");
+    // The shared, UID-fenced path anchored on the certificate's row.
+    expect(vi.mocked(explain)).toHaveBeenCalledWith("x", { kind: "row", task: "certs", part: "certificates", uid: "cert-uid" });
   });
 
   it("disables Explain when hosted egress is refused on a protected cluster", async () => {
     vi.mocked(aiAvailability).mockResolvedValueOnce({ backend: "hosted", ready: true });
     vi.mocked(aiEgressAllowed).mockResolvedValueOnce(false);
-    const c = cert({ name: "acme-demo", ready: "Failed", reason: "DoesNotExist" });
+    const c = cert({ name: "acme-demo", ready: "Failed", reason: "DoesNotExist", uid: "cert-uid" });
     setup("Healthy", [c], [issuer({})], "payments/acme-demo");
     const { findByRole, queryByRole } = render(<CertsView cluster="x" />);
     // no live Explain action; the blocked reason is stated in More
     fireEvent.click(await findByRole("button", { name: /^More/ }));
-    const item = (await findByRole("menuitem", { name: "Explain (AI)" })) as HTMLButtonElement;
+    const item = (await findByRole("menuitem", { name: "Explain with AI" })) as HTMLButtonElement;
     expect(item.disabled).toBe(true);
     expect(item.title).toMatch(/protected cluster/i);
     expect(queryByRole("button", { name: /^Explain$/ })).toBeNull();

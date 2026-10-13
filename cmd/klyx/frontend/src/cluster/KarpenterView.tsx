@@ -18,6 +18,7 @@ import { LensLayout, LensTable, TABLE_ROW_HEIGHT, type DatasetState } from "../l
 import { InspectorBlock, InspectorLayout } from "../layout/InspectorLayout";
 import { fitColumns, type ColumnDef } from "../layout/columns";
 import { fmtCpu, fmtMem } from "./saturation";
+import { useInspectorAI } from "../ai/AIExplain";
 
 // KarpenterView - the node-autoscaling diagnosis lens on the workspace
 // template (spec §6 step 5), in Karpenter's vocabulary. Read-only. NodePools
@@ -382,6 +383,7 @@ function GoneNotice({ kind, gone }: { kind: string; gone: "removed" | "unverifie
 }
 
 function ClaimInspector({ cluster, c, nowS, gone, onClose }: { cluster: string; c: KarpenterClaimDTO; nowS: number; gone: "removed" | "unverified" | null; onClose: () => void }) {
+  const ai = useInspectorAI(c.uid ? { kind: "row" as const, task: "karpenter", part: "nodeclaims", uid: c.uid } : null, `NodeClaim/${c.name}`, !gone, cluster);
   const role = roleOf(c);
   const age = formatAge(ageOf(c, nowS));
   const openNode = () => { const nav = useFleet.getState(); nav.setSection("nodes"); nav.requestNavIntent({ kind: "select-node", cluster, node: c.nodeName }); };
@@ -406,7 +408,10 @@ function ClaimInspector({ cluster, c, nowS, gone, onClose }: { cluster: string; 
             {role.kind === "fault" && link && c.failingMessage && <div className="t-body" style={{ color: ROLE_TEXT[role.kind], overflowWrap: "anywhere", marginTop: 4 }}>{c.failingMessage}</div>}
           </div>
         )}
-        primary={c.nodeName && gone !== "removed" ? { label: "Open node", onSelect: openNode } : undefined}>
+        primary={c.nodeName && gone !== "removed" ? { label: "Open node", onSelect: openNode } : undefined}
+        more={ai.menu}
+      >
+        {ai.block}
         <InspectorBlock title="Claim">
           <div className="insp-kv">
             <span>node</span><span style={{ overflowWrap: "anywhere" }}>{c.nodeName || "not registered yet"}</span>
@@ -429,6 +434,7 @@ function ClaimInspector({ cluster, c, nowS, gone, onClose }: { cluster: string; 
 }
 
 function PoolInspector({ p, gone, claimsCov, onClose }: { p: KarpenterPoolDTO; gone: "removed" | "unverified" | null; claimsCov: JoinCoverage; onClose: () => void }) {
+  const ai = useInspectorAI(p.uid ? { kind: "row" as const, task: "karpenter", part: "nodepools", uid: p.uid } : null, `NodePool/${p.name}`, !gone);
   const role = roleOf(p);
   const cpu = capText(p.cpuUsed, p.cpuLimit, fmtCpu);
   const mem = capText(p.memUsed, p.memLimit, fmtMem);
@@ -440,7 +446,10 @@ function PoolInspector({ p, gone, claimsCov, onClose }: { p: KarpenterPoolDTO; g
             <InspectorStatus tone={roleTone(role.kind)} label={role.label} reason={p.ready === "not-ready" ? p.reason || undefined : undefined} />
             {p.ready === "not-ready" && p.message && <div className="t-body" style={{ color: ROLE_TEXT[role.kind], overflowWrap: "anywhere", marginTop: -4 }}>{p.message}</div>}
           </div>
-        )}>
+        )}
+        more={ai.menu}
+      >
+        {ai.block}
         <InspectorBlock title="Capacity vs limits">
           <div className="insp-kv">
             <span>cpu</span><span style={{ color: cpu.near ? "var(--color-text-warning)" : undefined }}>{cpu.text}</span>

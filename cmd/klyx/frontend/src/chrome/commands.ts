@@ -5,7 +5,7 @@
 // jump-to-resource bridge call) as a side effect.
 
 import { useFleet, ClusterSection } from "../store/fleet";
-import type { ClusterDTO, GatewayRefDTO, NavIntent, ResourceRef, RouteNodeDTO, WorkloadKind } from "../store/fleet";
+import type { ClusterDTO, GatewayRefDTO, NavIntent, ResourceRef, RevealRef, RouteNodeDTO, WorkloadKind } from "../store/fleet";
 import { bestSub, useHealth } from "../store/health";
 import { labelOf } from "../health/verdict";
 import { openPodDetail } from "../bridge/pods";
@@ -21,6 +21,9 @@ import { CAP_STATE_TEXT, NAV_GROUPS, connected, destState, navigate, type Destin
 import { openTerminal } from "../bridge/configsvc";
 import { zoomIn, zoomOut, zoomPercent, zoomReset } from "../app/zoom";
 import { supportsRiskFilter } from "../cluster/resourceRisk";
+import { reveal } from "../nav/reveal";
+import { targetKey, usePendingExplain } from "../ai/AIExplain";
+import type { ExplainTarget } from "../bridge/ai";
 
 export type FleetStore = ReturnType<typeof useFleet.getState>;
 
@@ -108,6 +111,22 @@ function openRelatedObject(s: FleetStore, cluster: string, ref: { kind: string; 
   openSection(s, "resources", cluster);
   s.openResource({ group: ref.group, version: ref.version, plural: ref.plural, kind: ref.kind, scope: ref.scope });
   s.openInstance(ref.namespace, ref.name);
+}
+
+// explainVerb parks an AI Explain for one object and reveals it: its lens
+// selects it, and the inspector runs the request once AI is ready (spec
+// 2026-10-13 §4.3). Read-only; the backend fences the object by UID.
+function explainVerb(cluster: string, task: string, part: string, label: string, ref: RevealRef, target: ExplainTarget): Command {
+  return {
+    id: `verb:explain:${cluster}/${task}/${part}/${ref.namespace ?? ""}/${ref.name}`,
+    group: "Actions",
+    title: `explain ${label}`,
+    hint: `${cluster} · AI, read-only`,
+    run: () => {
+      usePendingExplain.getState().request(targetKey(cluster, target));
+      reveal(cluster, task, part, ref);
+    },
+  };
 }
 
 export function buildCommands(s: FleetStore): Command[] {
@@ -235,6 +254,9 @@ export function buildCommands(s: FleetStore): Command[] {
           void openPodDetail(podCluster, p.namespace, p.name, p.uid ?? "");
         },
       });
+      if (p.uid) {
+        cmds.push(explainVerb(podCluster, "pods", "pods", `pod ${p.namespace}/${p.name}`, { gvr: "v1/pods", namespace: p.namespace, name: p.name, uid: p.uid }, { kind: "row", task: "pods", part: "pods", uid: p.uid }));
+      }
       cmds.push({
         id: `verb:logs:${podCluster}/${p.namespace}/${p.name}`,
         group: "Actions",
@@ -261,6 +283,9 @@ export function buildCommands(s: FleetStore): Command[] {
           void openNodeDetail(nodeCluster, n.name, n.uid ?? "");
         },
       });
+      if (n.uid) {
+        cmds.push(explainVerb(nodeCluster, "nodes", "nodes", `node ${n.name}`, { gvr: "v1/nodes", name: n.name, uid: n.uid }, { kind: "row", task: "nodes", part: "nodes", uid: n.uid }));
+      }
       cmds.push({
         id: `verb:drain:${nodeCluster}/${n.name}`,
         group: "Actions",
@@ -296,6 +321,9 @@ export function buildCommands(s: FleetStore): Command[] {
           }
         },
       });
+      if (workloadCluster && w.uid && w.gvr) {
+        cmds.push(explainVerb(workloadCluster, "workloads", "workloads", `${w.kind.toLowerCase()} ${w.namespace}/${w.name}`, { gvr: w.gvr, namespace: w.namespace, name: w.name, uid: w.uid }, { kind: "row", task: "workloads", part: "workloads", uid: w.uid }));
+      }
       if (workloadCluster) {
         cmds.push({
           id: `verb:restart:${workloadCluster}/${key}`,
@@ -332,6 +360,7 @@ export function buildCommands(s: FleetStore): Command[] {
           void openHelmRelease(helmCluster, r.namespace, r.name);
         },
       });
+      cmds.push(explainVerb(helmCluster, "helm", "releases", `helm release ${r.namespace}/${r.name}`, { gvr: "", namespace: r.namespace, name: r.name }, { kind: "helm", namespace: r.namespace, name: r.name }));
     }
   }
 
@@ -351,6 +380,9 @@ export function buildCommands(s: FleetStore): Command[] {
           void getResourceDetail(gitopsCluster, r.kind, r.namespace, r.name);
         },
       });
+      if (r.uid && r.gvr) {
+        cmds.push(explainVerb(gitopsCluster, "flux", "reconciliations", `${r.kind.toLowerCase()} ${r.namespace}/${r.name}`, { gvr: r.gvr, namespace: r.namespace, name: r.name, uid: r.uid }, { kind: "row", task: "flux", part: "reconciliations", uid: r.uid }));
+      }
       cmds.push({
         id: `verb:reconcile:${gitopsCluster}/${key}`,
         group: "Actions",
@@ -385,6 +417,9 @@ export function buildCommands(s: FleetStore): Command[] {
           }
         },
       });
+      if (a.uid && a.gvr) {
+        cmds.push(explainVerb(argoCluster, "argo", "applications", `application ${a.namespace}/${a.name}`, { gvr: a.gvr, namespace: a.namespace, name: a.name, uid: a.uid }, { kind: "row", task: "argo", part: "applications", uid: a.uid }));
+      }
       cmds.push({
         id: `verb:argo-sync:${argoCluster}/${key}`,
         group: "Actions",

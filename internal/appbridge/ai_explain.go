@@ -137,6 +137,15 @@ func (s *AIService) rowEvidence(ctx context.Context, conn AIConn, cluster string
 	ev.Related = s.relatedEvidence(ctx, conn, detail, sc)
 	ev.Operators = sc.operators(s.operators(cluster))
 	ev.Qualifications = qualifications(rows, row, detail.Generation, fetchedAt)
+	if key == healthsrc.TaskCerts+"/certificates" {
+		// A certificate's cause usually sits down its issuance chain; resolve
+		// it fresh, as the Certs lens does.
+		if chain, cerr := conn.GetCertificateChain(ctx, detail.Namespace, detail.Name); cerr == nil {
+			ev.IssuanceChain = sc.chain(chain)
+		} else {
+			ev.Qualifications = append(ev.Qualifications, "The issuance chain could not be read: "+sc.text(cerr.Error()))
+		}
+	}
 	grounded := fmt.Sprintf("Klyx verdict %q as of %s · %s/%s", verdictLabel(verdict), verdict.EvaluatedAt, detail.Kind, nsName(detail.Namespace, detail.Name))
 	return ev, grounded, nil
 }

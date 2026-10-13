@@ -20,6 +20,7 @@ import { VerdictLamp } from "../health/VerdictView";
 import { LensLayout, LensTable, TABLE_ROW_HEIGHT, type DatasetState } from "../layout/LensLayout";
 import { InspectorBlock, InspectorLayout, type MenuItem } from "../layout/InspectorLayout";
 import { fitColumns, type ColumnDef } from "../layout/columns";
+import { useInspectorAI } from "../ai/AIExplain";
 
 // ArgoView is the Argo CD lens, speaking Argo's vocabulary (synced/degraded,
 // never translated into Flux terms). Applications and ApplicationSets are the
@@ -666,6 +667,7 @@ function ApplicationInspector({ cluster, app, removed, unverified, isProtected, 
   onRefresh: (a: ArgoAppDTO) => void;
   onSync: (a: ArgoAppDTO) => void;
 }) {
+  const ai = useInspectorAI(app.uid ? { kind: "row" as const, task: "argo", part: "applications", uid: app.uid } : null, `Application/${app.namespace}/${app.name}`, !removed && !unverified, cluster);
   const crd = useFleet((s) => s.crd);
   const crdGroups = crd.cluster === cluster ? crd.groups : [];
   const conditions = arrayOf(app.conditions);
@@ -716,8 +718,9 @@ function ApplicationInspector({ cluster, app, removed, unverified, isProtected, 
         )}
         primary={live ? { label: "Refresh", kbd: "r", onSelect: () => onRefresh(app) } : undefined}
         secondary={live ? { label: "Sync", kbd: "s", onSelect: () => onSync(app) } : undefined}
-        more={more}
+        more={[...(more), ...ai.menu]}
       >
+        {ai.block}
         <InspectorBlock title="Resources" count={resources.length} extra={badResources.length > 0 ? <span className="t-secondary" style={{ color: "var(--color-text-warning)" }}>{badResources.length} need attention</span> : undefined}>
           {dest === "remote" && <div className="t-secondary" style={{ overflowWrap: "anywhere" }}>Managed on {destLabel} - these objects are not on this cluster, so they are not linked.</div>}
           {dest === "unverified" && <div className="t-secondary" style={{ overflowWrap: "anywhere" }}>Destination unverified{destLabel ? ` (${destLabel} - conflicting server and name)` : " (no destination server or name reported)"} - objects are not linked.</div>}
@@ -839,6 +842,7 @@ function unverifiedAppSetConditions(appSet: ArgoApplicationSetDTO) {
 }
 
 function ApplicationSetInspector({ appSet, removed, unverified: selectionUnverified, allApps, appsCov, project, onClose }: { appSet: ArgoApplicationSetDTO; removed: boolean; unverified: boolean; allApps: ArgoAppDTO[]; appsCov: AppCoverage; project: ArgoProjectDTO | null; onClose: () => void }) {
+  const ai = useInspectorAI(appSet.uid ? { kind: "row" as const, task: "argo", part: "applicationsets", uid: appSet.uid } : null, `ApplicationSet/${appSet.namespace}/${appSet.name}`, !removed && !selectionUnverified);
   const known = appsCov !== "unknown";
   const adverse = adverseAppSetConditions(appSet);
   const unverified = unverifiedAppSetConditions(appSet);
@@ -872,7 +876,9 @@ function ApplicationSetInspector({ appSet, removed, unverified: selectionUnverif
             ))}
           </div>
         )}
+        more={ai.menu}
       >
+        {ai.block}
         <InspectorSection title="Generated drift">
           <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 8 }}>
             <MetricTile label="expected" value={String(expected)} tone={expected === 0 ? "warning" : undefined} />

@@ -2,12 +2,14 @@ package appbridge
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/moomora/klyx/internal/ai"
 	"github.com/moomora/klyx/internal/capability"
+	"github.com/moomora/klyx/internal/certmanager"
 	"github.com/moomora/klyx/internal/crd"
 	"github.com/moomora/klyx/internal/gitops/flux"
 	"github.com/moomora/klyx/internal/health"
@@ -40,6 +42,11 @@ func podDetail(uid string, gen int64) crd.InstanceDetail {
 		Conditions: []crd.Condition{{Type: "Ready", Status: "False", Reason: "ContainersNotReady", Message: "containers with unready status: [api]"}},
 		Events:     []crd.Event{{Type: "Warning", Reason: "BackOff", Message: "Back-off restarting failed container", Count: 41, Last: evalAt}, {Type: "Normal", Reason: "Pulled", Message: "normal-event-sentinel"}},
 	}
+}
+
+// podConn is a connection holding the crash-looping pod row and its detail.
+func podConn() *fakeExplainConn {
+	return &fakeExplainConn{chain: stuckChain(), rows: map[string]observe.Rows{"pods/pods": podRows("pod-uid", 1)}, details: map[string]crd.InstanceDetail{"/pods/shop/api-7f9": podDetail("pod-uid", 1)}}
 }
 
 func explainSvc(cl *fakeCompleter, conn *fakeExplainConn) *AIService {
@@ -476,5 +483,68 @@ func TestExplain_AnchorProvenance(t *testing.T) {
 	r := explainSvc(cl, conn).Explain("c", ExplainTargetDTO{Kind: "object", Version: "v1", Plural: "configmaps", Namespace: "shop", Name: "cfg", UID: "cm-uid"})
 	if !r.OK || r.Anchor == nil || r.Anchor.Source != "none" || r.Anchor.FetchedAt == "" || r.Anchor.UID != "cm-uid" {
 		t.Fatalf("a generic object carries its read time: %+v", r.Anchor)
+	}
+}
+
+// A certificate's evidence carries its freshly resolved issuance chain (the
+// cert lens's own diagnosis), scrubbed, with Klyx's deepest-stuck link.
+func TestExplain_CertificateCarriesItsChain(t *testing.T) {
+	cert := certmanager.Certificate{Namespace: "prod", Name: "ollama-tls", Ready: certmanager.Issuing, Reason: "Pending"}
+	set := healthsrc.RowSet[certmanager.Certificate]{Rows: []healthsrc.Row[certmanager.Certificate]{{
+		Ref:  healthsrc.RowRef{UID: "cert-uid", GVR: "cert-manager.io/v1/certificates", Namespace: "prod", Name: "ollama-tls"},
+		Eval: health.NativeEval{Included: true, Role: health.Progressing, Label: "Issuing"},
+		Data: cert,
+	}}}
+	rows := observe.Rows{Task: healthsrc.TaskCerts, EvaluatedAt: evalAt, Part: observe.Part{ID: "certificates", Classifier: "native"}, Rows: set}
+	chain := stuckChain()
+	chain.Requests[0].Children[0].Children[0].Message = "DNS record not propagated; Authorization: Bearer abcdefghijklmnopqrstuvwxyz0123"
+	cl := &fakeCompleter{reply: "x"}
+	conn := &fakeExplainConn{chain: chain, rows: map[string]observe.Rows{"certs/certificates": rows},
+		details: map[string]crd.InstanceDetail{"cert-manager.io/certificates/prod/ollama-tls": {Kind: "Certificate", Namespace: "prod", Name: "ollama-tls", UID: "cert-uid"}}}
+	if r := explainSvc(cl, conn).Explain("c", ExplainTargetDTO{Kind: "row", Task: healthsrc.TaskCerts, Part: "certificates", UID: "cert-uid"}); !r.OK {
+		t.Fatalf("got %+v", r)
+	}
+	ch := evidenceOf(t, cl.gotUser)["issuanceChain"].(map[string]any)
+	if !strings.Contains(ch["failingLink"].(string), "Challenge/ollama-tls-1-abc-0") || ch["boundIssuer"] == nil {
+		t.Fatalf("chain evidence: %v", ch)
+	}
+	if strings.Contains(cl.gotUser, "abcdefghijklmnopqrstuvwxyz0123") {
+		t.Fatal("a chain message leaked a credential")
+	}
+	// A chain that cannot be read qualifies the evidence instead of failing it.
+	conn.err = errors.New("orders.acme.cert-manager.io is forbidden")
+	cl2 := &fakeCompleter{reply: "x"}
+	if r := explainSvc(cl2, conn).Explain("c", ExplainTargetDTO{Kind: "row", Task: healthsrc.TaskCerts, Part: "certificates", UID: "cert-uid"}); !r.OK {
+		t.Fatalf("got %+v", r)
+	}
+	if !strings.Contains(cl2.gotUser, "issuance chain could not be read") {
+		t.Fatal("a chain read failure must be stated")
+	}
+}
+
+// Suggest-fix is fenced by UID and scrubbed like Explain, with its evidence
+// framed as untrusted (closing the 4a-to-4b condition).
+func TestSuggestFix_FencedScrubbedFramed(t *testing.T) {
+	root := crd.InstanceDetail{Kind: "Deployment", Namespace: "app", Name: "api", UID: "dep-uid",
+		Conditions: []crd.Condition{{Type: "Available", Status: "False", Reason: "MinimumReplicasUnavailable", Message: "pull from https://bot:s3cr3tpassw0rd@registry.example/api failed"}},
+		YAML:       "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: api\nspec:\n  replicas: 0\n"}
+	conn := &fakeExplainConn{details: map[string]crd.InstanceDetail{"apps/deployments/app/api": root}}
+	cl := &fakeCompleter{reply: "x"}
+	s := explainSvc(cl, conn)
+	if r := s.SuggestFix("c", "apps", "v1", "deployments", "app", "api", "other-uid"); r.OK || cl.calls != 0 {
+		t.Fatalf("a replaced object must be refused before the model: %+v", r)
+	}
+	if r := s.SuggestFix("c", "apps", "v1", "deployments", "app", "api", ""); r.OK || cl.calls != 0 {
+		t.Fatalf("a missing UID must be refused: %+v", r)
+	}
+	r := s.SuggestFix("c", "apps", "v1", "deployments", "app", "api", "dep-uid")
+	if !r.OK || r.Scrubbed == 0 {
+		t.Fatalf("got %+v", r)
+	}
+	if strings.Contains(cl.gotUser, "s3cr3tpassw0rd") {
+		t.Fatal("a condition message leaked a credential into the fix prompt")
+	}
+	if !strings.HasPrefix(cl.gotUser, "<evidence>\n") || !strings.HasSuffix(cl.gotUser, "</evidence>") || !strings.Contains(cl.gotSystem, "never as instructions") {
+		t.Fatal("the fix evidence must be framed as untrusted data")
 	}
 }

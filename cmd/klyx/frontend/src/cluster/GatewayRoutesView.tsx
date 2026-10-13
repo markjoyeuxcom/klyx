@@ -16,6 +16,7 @@ import { InspectorBlock, InspectorLayout } from "../layout/InspectorLayout";
 import { fitColumns, type ColumnDef } from "../layout/columns";
 import { clock, combineEvidence, coverageGaps, kindEvidence, lastGoodAt, type KindEvidence } from "../layout/coverage";
 import { RANK, ROLE_TEXT, roleTone, routeRole, type Role } from "./gatewayModel";
+import { useInspectorAI } from "../ai/AIExplain";
 
 // RouteList - the Gateways task's routes part (1c slice 3 §4a): every
 // HTTPRoute attached to a Gateway, counted once by UID with the role, label
@@ -171,6 +172,9 @@ export function RouteList({ cluster, rows, toggle }: { cluster: string; rows: Ga
   if (discoveryGap) notices.push(<div key="gap" role="status" data-testid="discovery-gap" className="t-secondary" style={{ padding: "4px 0", color: "var(--color-text-warning)", overflowWrap: "anywhere" }}>Discovery re-check failing - {discoveryGap}. A capability gap only; the rows keep their own state.</div>);
   const verdictMark = dep.word ? " *" : "";
 
+  // Explain anchors on the route's captured attachment (its worst parent),
+  // fenced by UID; a detached or unverified selection does not ask.
+  const ai = useInspectorAI(selected?.uid ? { kind: "row" as const, task: "gateway", part: "routes", uid: selected.uid } : null, selected ? `HTTPRoute/${selected.namespace}/${selected.name}` : "", !!selected && !gone, cluster);
   return (
     <LensLayout
       label="Gateways"
@@ -246,7 +250,9 @@ export function RouteList({ cluster, rows, toggle }: { cluster: string; rows: Ga
                 {dep.word && <div className="t-secondary" style={{ marginTop: -4 }}>The verdict is {dep.word} - evaluated against {dep.kinds.join(", ")}.</div>}
               </div>
             )}
-            primary={gone === "detached" ? undefined : { label: `Open topology (${selected.parent})`, onSelect: () => openTopology(selected) }}>
+            primary={gone === "detached" ? undefined : { label: `Open topology (${selected.parent})`, onSelect: () => openTopology(selected) }}
+            more={ai.menu}>
+            {ai.block}
             <InspectorBlock title="Parents" count={selected.attachments.length}>
               {selected.attachments.map((a) => {
                 const role = routeRole(a);

@@ -34,6 +34,7 @@ import { type VerdictCounts, attentionTone, isAttention, kindOf, labelOf, orderO
 import { usePodRows } from "../health/usePodRows";
 import { useCommitProbe } from "../health/perfHooks";
 import { clock, coverageGaps, kindEvidence, lastGoodAt, type KindEvidence } from "../layout/coverage";
+import { useInspectorAI } from "../ai/AIExplain";
 
 // Pods lens on the shared workspace template (2026-10 redesign pilot). The
 // template owns geometry; this file owns pod data, filters, selection and the
@@ -613,6 +614,7 @@ function PodInspector({ cluster, row, uid, nowS, gone, rsEv, detail, loading, is
   onClose: () => void;
   onOpenLogs: (t: LogsTarget) => void;
 }) {
+  const ai = useInspectorAI(uid ? { kind: "row" as const, task: "pods", part: "pods", uid: uid } : null, `Pod/${row.namespace}/${row.name}`, !gone, cluster);
   const { namespace, name } = row;
   const [tab, setTab] = useState<"overview" | "manifest">("overview");
   const [pending, setPending] = useState<Pending | null>(null);
@@ -723,11 +725,12 @@ function PodInspector({ cluster, row, uid, nowS, gone, rsEv, detail, loading, is
           pendingMessage={pendingMessage} />}
         primary={live ? { label: "Logs", kbd: "l", onSelect: () => onOpenLogs({ namespace, name, containers: p.containers }) } : undefined}
         secondary={live && containers.length > 0 ? { label: "Shell", onSelect: () => void openExecTerminal(cluster, namespace, name, containers[0].name), options: per((c) => void openExecTerminal(cluster, namespace, name, c)) } : undefined}
-        more={live ? more : []}
+        more={[...(live ? more : []), ...ai.menu]}
         tab={tab}
         onTab={setTab}
         manifest={shown ? <YamlBlock text={shown.yaml} copyLabel="pod YAML" /> : null}
       >
+        {ai.block}
         {forwarding && live && (
           <ForwardPopover
             cluster={cluster}
