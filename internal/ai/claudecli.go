@@ -335,9 +335,10 @@ type claudeCLIProvider struct {
 	tmpDir    string // "" = the system temp dir
 	// policyRoot prefixes the absolute managed-policy paths; tests only.
 	policyRoot string
-	// Helper and stdin hand-over deadlines; tests shorten them.
+	// Helper, init-check and stdin hand-over deadlines; tests shorten them.
 	authDeadline   time.Duration
 	doctorDeadline time.Duration
+	initDeadline   time.Duration
 	stdinDeadline  time.Duration
 	// offline wraps the admission init check so it cannot reach the
 	// network (claudeOffline); tests replace it.
@@ -360,8 +361,8 @@ func newClaudeCLI(cliPath, model string) *claudeCLIProvider {
 		cliPath: cliPath, model: model, environ: os.Environ, lookPath: exec.LookPath,
 		contracts: reviewedClaudeContracts, goos: runtime.GOOS, goarch: runtime.GOARCH,
 		store: defaultClaudeAdmissions, hashes: defaultExeHashes,
-		authDeadline: claudeAuthDeadline, doctorDeadline: claudeDocDeadline, stdinDeadline: claudeStdinDeadline,
-		offline: claudeOffline,
+		authDeadline: claudeAuthDeadline, doctorDeadline: claudeDocDeadline, initDeadline: claudeShortDeadline,
+		stdinDeadline: claudeStdinDeadline, offline: claudeOffline,
 	}
 }
 
@@ -805,37 +806,54 @@ func (p *claudeCLIProvider) initCheck(ctx context.Context, exe exeIdentity) erro
 	r := runContained(ctx, runSpec{
 		exe: name, args: args, env: claudeEnv(p.environ()), dir: dir,
 		stdin: []byte(claudeStdinPrefix + claudeInitPrompt), stdoutMax: claudeHelperOutMax, stderrMax: claudeStderrMax,
-		deadline: claudeShortDeadline, stdinDeadline: p.stdinDeadline, stopAtFirstLine: true,
+		deadline: p.initDeadline, stdinDeadline: p.stdinDeadline, stopAtFirstLine: true,
 	})
+	// A process that did not start, a hand-over that failed, or a check that
+	// ran out of time says nothing about the CLI's contract: it fails this
+	// call only.
 	switch {
 	case r.startErr != nil:
-		return cliRefused("Claude Code could not start for its init check: %v", r.startErr)
+		return &transientError{cliRefused("Claude Code could not start for its init check: %v", r.startErr)}
 	case r.gateErr != nil:
-		return cliRefused("Klyx could not hand Claude Code its init check: %v", r.gateErr)
+		return &transientError{cliRefused("Klyx could not hand Claude Code its init check: %v", r.gateErr)}
 	}
 	first, _, ok := bytes.Cut(r.stdout, []byte("\n"))
-	if !ok {
+	if !ok && r.timedOut {
 		if err := ctx.Err(); err != nil {
-			return err
+			return &transientError{err}
 		}
-		return cliRefused("Claude Code did not report its configuration at startup, so Klyx refuses it")
+		return &transientError{cliRefused("Claude Code did not report its configuration in time")}
 	}
-	m, err := strictObject(first)
-	if err != nil {
-		return cliRefused("Claude Code's startup report could not be read (%v)", err)
+	// Anything the CLI did print that is not a valid startup report is an
+	// observed violation of its contract, and revokes admission until Test
+	// (Codex review of 5f19f50): no report at all, a malformed line, a first
+	// event that is not init, or an init that breaks the contract.
+	var verr error
+	switch m, perr := strictObject(first); {
+	case !ok:
+		verr = contractBreak("no startup report")
+	case perr != nil:
+		verr = contractBreak("a malformed startup report")
+	default:
+		typ, _ := rawString(m, "type")
+		sub, _ := rawString(m, "subtype")
+		if typ != "system" || sub != "init" {
+			what := label(typ)
+			if sub != "" {
+				what += "/" + label(sub)
+			}
+			verr = toolEvent("its first event is " + what + ", not its startup report")
+			break
+		}
+		want := streamWant{Version: exe.Contract.Version, Model: p.model, Cwd: dir, BuiltinPlugins: exe.Contract.BuiltinPlugins}
+		_, verr = checkInit(m, want)
 	}
-	typ, _ := rawString(m, "type")
-	sub, _ := rawString(m, "subtype")
-	if typ != "system" || sub != "init" {
-		return cliRefused("Claude Code's first event is not its startup report, so Klyx refuses it")
-	}
-	want := streamWant{Version: exe.Contract.Version, Model: p.model, Cwd: dir, BuiltinPlugins: exe.Contract.BuiltinPlugins}
-	if _, err := checkInit(m, want); err != nil {
+	if verr != nil {
 		var ce *cliContractError
-		if errors.As(err, &ce) && ce.revoke {
+		if errors.As(verr, &ce) && ce.revoke {
 			p.store.revoke(ce.msg)
 		}
-		return err
+		return verr
 	}
 	return nil
 }

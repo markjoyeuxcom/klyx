@@ -46,6 +46,7 @@ type fakeSpec struct {
 	Hang          bool   `json:"hang"`       // -p: start a child, then sleep
 	NoRead        bool   `json:"noRead"`     // -p: never read stdin
 	InitStream    string `json:"initStream"` // the admission init check's output, then hang
+	InitHang      bool   `json:"initHang"`   // the admission init check prints nothing
 	Flood         int    `json:"flood"`      // -p: print this many bytes
 }
 
@@ -137,6 +138,9 @@ func fakeClaude() (int, bool) {
 		// logged apart, and leaves no record, so the record is always the
 		// evidence run's.
 		logCall("initcheck")
+		if spec.InitHang {
+			time.Sleep(time.Hour)
+		}
 		if spec.InitStream != "" {
 			fmt.Print(strings.ReplaceAll(spec.InitStream, "{{CWD}}", cwd))
 			time.Sleep(time.Hour) // Klyx kills it after the first line
@@ -257,7 +261,7 @@ func newFakeCLI(t *testing.T) *fakeCLI {
 		policyRoot: f.policyRoot,
 		// Generous for -race, where each re-exec of this binary takes about
 		// a second.
-		authDeadline: 20 * time.Second, doctorDeadline: 20 * time.Second, stdinDeadline: 20 * time.Second,
+		authDeadline: 20 * time.Second, doctorDeadline: 20 * time.Second, initDeadline: 20 * time.Second, stdinDeadline: 20 * time.Second,
 		offline: func(exe string, args []string) (string, []string) { return exe, args }, // no sandbox-exec on Linux CI
 	}
 	f.write()
@@ -1104,14 +1108,55 @@ func TestClaudeCLI_InitCheckedBeforeEvidence(t *testing.T) {
 			}
 		})
 	}
-	t.Run("a first event that is not init", func(t *testing.T) {
+	// Codex review of 5f19f50: any startup output that is not a valid report
+	// revokes, so a clean startup afterwards does not resume without Test.
+	for _, v := range []struct{ name, first, want string }{
+		{"a tool event first", `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read"}]}}`, "first event is assistant"},
+		{"a hook event first", `{"type":"system","subtype":"hook_started","hook_name":"SessionStart"}`, "first event is system/hook_started"},
+		{"an unknown event first", `{"type":"system","subtype":"ui_invalidate","event":"ui.render"}`, "first event is system/ui_invalidate"},
+		{"a malformed first line", `{"type":"system","subtype":`, "malformed startup report"},
+		{"duplicate keys", `{"type":"system","subtype":"init","subtype":"init"}`, "malformed startup report"},
+		{"exit with no report", "", "no startup report"},
+	} {
+		t.Run(v.name, func(t *testing.T) {
+			f := newFakeCLI(t)
+			f.spec.InitStream = v.first + "\n"
+			if v.first == "" {
+				f.spec.InitStream = "" // the fake prints nothing then runs on; see below
+				f.spec.Stream = ""
+			}
+			f.write()
+			_, err := f.complete()
+			if err == nil || !strings.Contains(err.Error(), v.want) {
+				t.Fatalf("want %q, got %v", v.want, err)
+			}
+			// A clean startup now: still refused, until Test.
+			f.spec.InitStream, f.spec.Stream = "", fakeStream(t)
+			f.write()
+			_, err = f.complete()
+			wantRefused(t, err, "revoked")
+			if f.prompts() != 0 {
+				t.Fatal("no evidence until Test")
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			if _, err := f.p.Probe(ctx); err != nil {
+				t.Fatalf("Test re-admits: %v", err)
+			}
+		})
+	}
+	t.Run("a check that times out does not revoke", func(t *testing.T) {
 		f := newFakeCLI(t)
-		f.spec.InitStream = `{"type":"system","subtype":"ui_invalidate","event":"ui.render","session_id":"s","uuid":"u"}` + "\n"
+		f.spec.InitHang = true
 		f.write()
+		f.p.initDeadline = 2 * time.Second
 		_, err := f.complete()
-		wantRefused(t, err, "not its startup report")
-		if f.prompts() != 0 {
-			t.Fatal("no evidence without a startup report")
+		wantRefused(t, err, "did not report its configuration in time")
+		f.spec.InitHang = false
+		f.write()
+		f.p.initDeadline = 20 * time.Second
+		if _, err := f.complete(); err != nil {
+			t.Fatalf("a timed-out check fails only its call: %v", err)
 		}
 	})
 	t.Run("a good init admits, and only admission runs the check, offline", func(t *testing.T) {

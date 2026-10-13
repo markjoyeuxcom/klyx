@@ -366,6 +366,7 @@ The stream-json fixtures for slice 3 were synthesized from the 2.1.296 emitter i
 - **The gap the finding exposed.** The init event arrives only after the CLI has read its prompt. With `--input-format stream-json`, 2.1.296 prints only `system/ui_invalidate` until the first message. So the per-call init check is detection, not prevention: a run whose lockdown did not take has already received its prompt.
 - **The admission init check.** Admission (Test, or the first call of a run, or a new model) now runs the production argv and environment once more, with a fixed prompt carrying no cluster data. It reads only the first line, kills the process group, and holds that init to this contract before any evidence is released. A lockdown failure revokes admission.
   - On macOS the check runs under `sandbox-exec` with outbound network denied, so even the fixed prompt stays on the machine. Without the sandbox the prompt still carries no cluster data.
+  - Any startup output that is not a valid report revokes admission until Test (Codex review of 5f19f50). That covers no report, a malformed or duplicate-key line, a tool, hook or unknown first event, or an init that breaks the contract. A process that did not start, a failed hand-over, a timeout or a cancel fails only that call.
   - After admission, per-call checks of the binary, account and policy keep the same configuration in place. The per-call init check remains as detection.
   - The opt-in `KLYX_CLAUDE_CONTRACT=1` test runs this check against the real binary.
 
