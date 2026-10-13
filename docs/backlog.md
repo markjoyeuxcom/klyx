@@ -68,8 +68,13 @@ real-cluster smoke is on the v1.0.0 gate below.
       the kind parity fixture): the mast, tree, Overview, fleet spine, meters and
       cards against the live AKS fleet - do the attention areas, counts and
       "checking…" gaps match what the lenses and kubectl show
-- [ ] **Real-LLM smoke test** of the AI feature (local Ollama backend, or a hosted
-      key) — everything is currently verified against a fake client
+- [ ] **Real-LLM smoke test** of AI (spec 2026-10-13 §5, slice 5) - Test then
+      Explain on a local kind cluster through every provider: Claude, OpenAI and
+      Gemini keys, a local Ollama server, and the Claude Code CLI on a Pro/Max
+      sign-in. The CLI run also captures real stream-json, auth-status and doctor
+      fixtures to replace the synthesized ones in
+      `internal/ai/testdata/claude-2.1.296/`. Everything is so far verified
+      against fake vendors and a no-login check of the real Claude Code binary
 - [ ] **Live-cluster smoke of the write paths** (nothing destructive committed
       blind): a Force:false apply against a Flux-owned object should 409 naming
       kustomize-controller; a create into a namespace a pruning unit deploys into should state that the unit leaves an untracked object alone (amber; red only for an object carrying the Argo app's tracking metadata - semantics corrected in the 2026-10-03 review remediation);
@@ -102,13 +107,13 @@ This is a walk-the-app-and-tick-boxes exercise; no coding is blocking 1.0.
 
 ## 2. AI feature follow-ups (slices 1–5 shipped + merged 2026-07-09)
 
-- [ ] **Settings write path for the AI config** — deferred by the 2026-07-09
-      review verdict (sub-second restart makes file-edit friction trivial). The
-      cheap stopgap first: a read-only "AI backend" panel in Settings showing
-      current state + the exact `ai:` YAML to paste. Full write path
-      (`ConfigService.SetAI` + `AIService.Reconfigure` + form) only if backend
-      churn becomes a recurring complaint. (NOT SQLite — a local DB adds no
-      security and loses diffability.)
+- [ ] **Review each new Claude Code release** for the CLI provider: run
+      `KLYX_CLAUDE_CONTRACT=1 KLYX_CLAUDE_BIN=<binary> go test ./internal/ai -run
+      TestClaudeContract_RealBinary`, capture the version's fixtures, and add its
+      `{version, platform, sha256}` to `reviewedClaudeContracts`. Until then a
+      Claude Code auto-update turns the CLI provider off (spec §1.5)
+- [ ] Claude Code CLI provider on Linux and Windows (a reviewed contract per
+      platform; Windows needs Job Object containment)
 - [ ] Render the Suggest-fix YAML patch as a real fenced **code block** (currently
       mono pre-wrap) + a "copy just the patch" affordance
 - [ ] Streaming responses; per-result caching
@@ -117,8 +122,6 @@ This is a walk-the-app-and-tick-boxes exercise; no coding is blocking 1.0.
       JSONL likely beats SQLite for a single-user desktop app
 - [ ] Fold **metrics correlation** into the bundle (Prometheus / M7) — "the latency
       spike correlates with this reconciliation"
-- [ ] Native Explain affordance in the other diagnosis lenses (Flux, ESO, Gateway)
-      — today it's the generic inspector + the cert lens
 - [ ] **North star: the conversational assistant** — spec'd in
       `docs/superpowers/plans/2026-07-09-klyx-editable-and-features.md` (tool-
       grounded chat over the diagnosis resolvers; per-action system-owned
@@ -222,6 +225,22 @@ See `docs/brainstorm-questions.md` (Q16 pinned resources, etc.).
 ## Recently shipped (so it's not mistaken for open)
 
 Merged to `main` — do not re-add to the backlog:
+
+**2026-10-13 — AI providers and Explain everywhere (v0.11.0, spec
+`docs/superpowers/specs/2026-10-13-klyx-ai-providers-and-explain.md`):**
+- Settings > AI: Claude, OpenAI and Gemini keys in the OS keychain (or a named
+  env var), a local OpenAI-compatible server, or the installed Claude Code CLI;
+  model picker, Test, origin disclosure, backend-armed protected egress, and one
+  guarded write path for the `ai:` block (supersedes the old "Settings write
+  path for the AI config" item)
+- The Claude API fixes (no temperature, a thinking-sized budget, stop reasons
+  decoded) and the same confirmed-finish rule for OpenAI and Gemini
+- Explain with AI in every lens inspector and the palette, anchored on Klyx's
+  verdict, UID-fenced, from an allowlisted, scrubbed, capped evidence document
+  (supersedes "Native Explain affordance in the other diagnosis lenses")
+- The Claude Code CLI under a reviewed contract (2.1.296 macOS arm64, Pro/Max
+  only, per-call sign-in and policy checks, revocation until Test). Codex and
+  agy stay unsupported. Each slice Codex-reviewed; real-model smoke pending (§0)
 
 **2026-07-25 — the Karpenter lens (#48):**
 - Autoscaling diagnosis in Karpenter's vocabulary: capability detection
