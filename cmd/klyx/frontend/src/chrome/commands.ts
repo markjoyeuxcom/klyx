@@ -548,11 +548,27 @@ export function buildCommands(s: FleetStore): Command[] {
     run: () => openShortcutsOverlay(),
   });
 
-  // Fleet compare lives on a workload (its inspector and the palette verbs
-  // above); this entry makes it findable, and says when it cannot apply.
-  cmds.push(s.clusters.length > 1
-    ? { id: "fleet-compare", group: "Application", title: "Fleet compare", hint: "one workload across every cluster - type compare and its name", keywords: ["compare", "diff"], run: () => { if (cluster) openSection(s, "workloads", cluster); else s.openFleet(); } }
-    : { id: "fleet-compare", group: "Application", title: "Fleet compare", hint: "one workload across every cluster", keywords: ["compare", "diff"], run: () => {}, disabled: "needs two or more clusters in the fleet" });
+  // Fleet compare starts from a workload (its inspector's More menu, or the
+  // palette verbs above). This entry makes it findable: it opens Workloads to
+  // pick one - here, in the one connected cluster, or after Choose cluster -
+  // and says when it cannot apply (Codex review of 05c9732: from the fleet
+  // board it must not be a dead end).
+  const compareBase = { id: "fleet-compare", group: "Application" as const, title: "Fleet compare", keywords: ["compare", "diff"] };
+  const compareHint = "pick a workload, then More > Compare across the fleet";
+  const connectedClusters = s.clusters.filter(connected);
+  const openWorkloads = (c: string) => () => openSection(s, "workloads", c);
+  if (s.clusters.length < 2) {
+    cmds.push({ ...compareBase, hint: "one workload across every cluster", run: () => {}, disabled: "needs two or more clusters in the fleet" });
+  } else if (cluster && connectedClusters.some((c) => c.name === cluster)) {
+    cmds.push({ ...compareBase, hint: `${compareHint} · ${cluster}`, run: openWorkloads(cluster) });
+  } else if (connectedClusters.length === 1) {
+    cmds.push({ ...compareBase, hint: `${compareHint} · ${connectedClusters[0].name}`, run: openWorkloads(connectedClusters[0].name) });
+  } else if (connectedClusters.length > 1) {
+    const options = connectedClusters.map((c) => ({ id: `fleet-compare@${c.name}`, group: "Clusters" as const, title: c.name, hint: [c.env, c.region].filter(Boolean).join(" · ") || undefined, run: openWorkloads(c.name) }));
+    cmds.push({ ...compareBase, hint: `${compareHint} · ${connectedClusters.length} clusters`, run: () => {}, next: { title: "Choose cluster for Fleet compare", options }, choices: options });
+  } else {
+    cmds.push({ ...compareBase, hint: "one workload across every cluster", run: () => {}, disabled: "no connected cluster" });
+  }
 
   // Scratch: what Klyx itself created (debug pods, ad-hoc objects), in the
   // unmanaged klyx-scratch namespace. It opens the existing panel; deleting

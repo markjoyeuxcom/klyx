@@ -394,3 +394,32 @@ describe("Codex UI review 2026-10-13: palette order and ranking", () => {
     expect(useFleet.getState().navIntent).toEqual({ kind: "open-scratch", cluster: "dev" });
   });
 });
+
+describe("Fleet compare from the fleet board (Codex review of 05c9732)", () => {
+  const a = { name: "dev", state: "Synced" } as ClusterDTO;
+  const b = { name: "prd", state: "Synced" } as ClusterDTO;
+  const type = (input: HTMLElement, value: string) => fireEvent.change(input, { target: { value } });
+
+  it("with two connected clusters it asks which cluster, then opens Workloads there", () => {
+    useFleet.setState({ clusters: [a, b], route: { name: "fleet" } });
+    const { getByTestId } = render(<CommandPalette />);
+    pressCmdK();
+    const input = getByTestId("command-palette-input");
+    type(input, "compare");
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(getByTestId("command-row-fleet-compare@prd")).toBeTruthy(); // the Choose cluster step
+    fireEvent.mouseDown(getByTestId("command-row-fleet-compare@prd"));
+    const r = useFleet.getState().route;
+    expect(r.name === "cluster" && r.cluster === "prd" && r.section === "workloads").toBe(true);
+  });
+
+  it("with no connected cluster it says so and runs nothing", () => {
+    useFleet.setState({ clusters: [{ ...a, state: "Unreachable" } as ClusterDTO, { ...b, state: "Unreachable" } as ClusterDTO], route: { name: "fleet" } });
+    const { getByTestId } = render(<CommandPalette />);
+    pressCmdK();
+    type(getByTestId("command-palette-input"), "compare");
+    const row = getByTestId("command-row-fleet-compare");
+    expect(row.getAttribute("aria-disabled")).toBe("true");
+    expect(row.textContent).toContain("no connected cluster");
+  });
+});
