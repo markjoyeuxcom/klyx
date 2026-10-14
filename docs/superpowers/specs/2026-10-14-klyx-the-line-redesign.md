@@ -10,6 +10,9 @@
   - Ask in day mode
 - **What this replaces:** Signal Bench's visual language (direction C, 2026-07-05) and the chrome of the 2026-10-10 workspace redesign.
 - **What it keeps:** the engineering principles, the health 1c model (one Observer per cluster, one cluster summary, the verdict engine), every honesty rule, and every write-path guard.
+- **Git access (folded in after the first draft):** Klyx gains read-only Git access through the system `git` (§7).
+  - With an allowed, fetched repo, the line can order revisions ("3 commits behind"), and the Ledger shows real commits.
+  - Without one, the opaque-revision rules hold.
 
 **The idea.** The fleet is drawn as a railway signal box: regions are parallel tracks, and environments are stations along them (dev, then stg, then prd). ClusterMesh peerings are links between tracks. The track is lit as far as the fleet's GitOps revision runs, and a red signal stands where a station is held. The same track motif carries every causal or positional relation in the app: the Flux cause chain, the Gateway data path, the chat read ledger, and a position glyph beside every object. A healthy object carries no mark at all.
 
@@ -39,6 +42,11 @@
   - Backend verdicts per HTTPRoute rule (v0.12.0).
   - `internal/routemetrics` holds inline Envoy rates when a metrics endpoint is configured.
 - **Shared panel anatomy:** `LensTable`, `InspectorStatus`, `InspectorConditions`, `InspectorEvents` and `useResizableDock`.
+- **No Git access.**
+  - Klyx sees only the revision strings Flux and Argo report.
+  - `internal/clibin` resolves the external CLIs (kubectl, helm, flux).
+  - `internal/fluxcli` runs `flux diff kustomization --path`. The path defaults to `spec.path`, because Klyx has no local clone: the open M10-f follow-up.
+- **Promotion snapshot:** `PromotionUnit.Revision` is a unit's applied revision, and `PromotionSource.Revision` is a source's fetched head.
 
 ## 1. Principles
 
@@ -58,7 +66,7 @@
 7. **Honesty rules carry over unchanged.**
    - A failed read is an error, never an empty result.
    - An unknown is "checking…".
-   - Revisions are opaque strings: Klyx never says "behind" (§3.2).
+   - Revisions are opaque strings unless an allowed repo's fetched history orders them (§7). Without that history, Klyx never says "behind" (§3.2).
    - Counts are exact or labelled as a lower bound.
 
 **What this supersedes in the Signal Bench rules:**
@@ -118,7 +126,7 @@
 - `system` follows the OS into night or day.
 - Every other saved theme is left as it is.
 
-The other themes' fate is an open decision (§12).
+The other themes' fate is an open decision (§13).
 
 ### 2.2 Type
 
@@ -215,6 +223,20 @@ The other themes' fate is an open decision (§12).
 | **differs** | it differs, and nothing is failing (a pinned ref, a deliberate hold) | a dashed track labelled "differs". Never "behind". |
 | **checking** | the source or its units are unread or unreadable | a dashed grey segment with "checking…" or the read error |
 
+- **With Git history (§7).** This applies when the line source's repo is allowed and fetched, and every station revision is in that history.
+  - **The reference** is the fetched tip of the ref the stations' sources track: a branch tip, a tag's commit, or a pinned commit. All stations must track the same ref. When they do not, the majority rule above stays, and ordering is shown pairwise only.
+  - **The states refine:**
+
+| State | When | Drawn as |
+|---|---|---|
+| **reached** | the station revision is the reference | lit |
+| **behind by N** | an ancestor of the reference (N = `rev-list --count`), with nothing failing | a dashed track labelled "behind by N" |
+| **held · N behind** | behind or not applied, and failing | red, with a signal head |
+| **ahead by N** | the reference is an ancestor of the station revision | dashed, labelled |
+| **diverged** | neither is an ancestor of the other | dashed, labelled "diverged at <merge-base>" |
+
+  - A station revision missing from the fetched history stays "differs (not in fetched history)". It is never ordered.
+  - The headline may then say "prd · North Europe is held, 3 commits behind".
 - **The aspect** on a station card is that cluster summary's worst role (health 1c). It is independent of the lighting: converged is not the same as healthy.
 - **The headline** is generated from the states. For example: "Revision a1b9e3c runs on 5 of 6 stations; prd · North Europe is held". When the cause chain (§5.1) knows the root cause, the subline names it.
 - **New reads.** The promotion snapshot already has each unit's applied revision (`PromotionUnit.Revision`) and each source's fetched head (`PromotionSource.Revision`). `LineService` adds three reads on top of it:
@@ -244,9 +266,12 @@ From top to bottom:
   - A row shows: aspect, kind, name, the verdict's reason, a `LinePos` station tag, age, and a link into the lens with the object selected.
   - Filters are All, Prd only and Faults, kept for the session.
 - **The aside:**
-  - **Ledger:** "revisions on the line now". Each distinct station revision is shown with its per-track dots (lit, held or unread) and its artifact time.
-    - Commit messages are out of scope, because Klyx has no Git API.
-    - "Open in Git" appears when the source URL is on a known host (GitHub, GitLab, Azure DevOps).
+  - **Ledger.**
+    - **Without Git history:** "revisions on the line now". Each distinct station revision is shown with its per-track dots (lit, held or unread) and its artifact time.
+    - **With history (§7):** the commits from the oldest station revision to the reference, newest first, at most 20.
+      - Each shows its short sha, subject, author and commit time.
+      - Each carries per-track dots for which stations contain it, meaning the station's revision descends from the commit.
+    - **"Open in Git"** links to the commit. It is built for known hosts (GitHub, GitLab, Azure DevOps), or from `git.repos[].web`.
   - **Horizon:** the next 30 days from `FleetExpiry`.
 - **Footer rail:** clusters watched, the age of the last change seen, and the AI provider.
 
@@ -295,6 +320,9 @@ Every cluster screen's location bar draws the cluster's own track: dev — stg �
 - **The "Root cause" tag** goes on the deepest failing step whose upstream Klyx read in full. If an upstream step could not be read, the chain ends in a dashed grey stub ("could not read: …") and no step is tagged.
 - **Evidence lines:** the source fetch error, conditions, and controller events.
 - **"Where the fix lives"** appears only when typed facts name the owner. For example: the source's credential Secret is managed by an ExternalSecret (the existing cross-link) gives "A credential, not a manifest". It is never free text.
+- **With Git history (§7),** a held step gains "not here yet":
+  - the commits between the station's applied revision and the reference that touch the unit's `spec.path` (`git log -- <path>`);
+  - the changed files, as name-status from trees, with no file contents.
 - **Out of scope:** change-time correlation, such as the mockup's "Secret changed 19m before the first 401". It needs change history that Klyx does not keep.
 - **Reuse:** cert-manager's issuance chain (M11-c) and ESO's store → ExternalSecret → Secret use the same `Chain`.
 
@@ -336,7 +364,77 @@ Specified in §3.
   - esc closes.
 - Results never animate.
 
-## 7. Applying it to every lens
+## 7. Git access (read-only, through the system git)
+
+**Why.** History lets Klyx:
+- order revisions on the line ("3 commits behind");
+- show commit subjects and authors in the Ledger;
+- show a held station what it does not have yet;
+- link "Open in Git" to the commit;
+- give `flux diff --path` a local clone root, closing the M10-f follow-up.
+
+**The binary.**
+- Klyx runs the system `git`, resolved through `internal/clibin` like kubectl, helm and flux.
+- It uses no hosting API and stores no tokens. Authentication is the owner's own: the SSH agent, `~/.ssh/config`, or Git's credential helper.
+- If git is missing, every Git feature is off, with one note ("Git not found: install git to order revisions"), and the line keeps its opaque rules.
+
+**What it may run.** Klyx builds every argv itself, and only these subcommands are allowed:
+
+| Command | Purpose |
+|---|---|
+| `git clone --bare --filter=blob:none --no-tags --template= <url> <cache>` | once per allowed repo |
+| `git fetch --prune --filter=blob:none origin <tracked refs>` | refresh |
+| `git log`, `git rev-list --count`, `git merge-base [--is-ancestor]`, `git diff --name-status` | trees and commits only, no file contents |
+| `git diff <a> <b> -- <path>` | only on an explicit "show changes" click. It fetches the blobs it needs, within the bounds below. |
+| `git archive <rev> -- <path>` | into a temp dir, for `flux diff --path` |
+
+Never allowed: `push`, `commit`, `tag`, `branch`, a checkout into the owner's working trees, `config --global`, hooks or submodules.
+
+**Hardening on every call.**
+- **Config flags:**
+  - `-c core.hooksPath=/dev/null`, and the clone's empty `--template=` leaves no sample hooks;
+  - `-c protocol.allow=never -c protocol.https.allow=always -c protocol.ssh.allow=always`: no `file`, no `ext`, no local paths;
+  - `-c core.fsmonitor=false` and `-c submodule.recurse=false`.
+- **Environment:**
+  - It is the owner's environment, minus what other shell-outs already drop (KUBECONFIG and cloud credentials).
+  - Plus `GIT_TERMINAL_PROMPT=0`, and `GIT_SSH_COMMAND` adding `-o BatchMode=yes` to the owner's ssh.
+  - Klyx never shows or waits on a prompt, so a passphrase-protected key works only through the agent.
+- **Arguments:**
+  - Revisions must be hex shas (`[0-9a-f]{7,64}`) or the exact ref a source tracks, placed after `--end-of-options`.
+  - Paths come after `--`.
+  - Nothing read from a cluster object ever becomes an option.
+- **Deadlines:** 60s for clone and fetch, 10s for local queries. The process group is killed on a deadline or a cancel, and output is capped.
+
+**Which repos.** Repo URLs come from cluster objects, which Klyx treats as untrusted. A mistaken or malicious GitRepository could point Klyx's fetch, and with it the owner's credentials, at any host. So Klyx fetches only repos the owner has allowed:
+- **Listed in `fleet.yaml`** under `git.repos`. Each entry has a `url`, plus an optional `web` for commit links on hosts Klyx does not know.
+- **Or allowed once in Settings > Git,** which writes the same list, so there is one source of truth. The allow dialog shows the exact URL and which clusters reference it.
+- **Matching:** URLs are compared normalised (scheme, user, `.git`, and host case).
+- **A source whose URL is not allowed** shows "Allow <url> in Settings > Git to read its history" and keeps the opaque rules.
+- **Never automatic:** a new URL seen on a cluster never triggers a fetch.
+
+**The cache.**
+- **Location:** `<config dir>/git-cache/<sha256 of the normalised URL>.git`, beside `fleet.yaml`, mode 0700.
+- **Contents:** only the refs the line sources track (a branch, a tag, or the pinned commit), with full commit and tree history and no file contents.
+- **Settings > Git** shows each repo's size and last fetch, with "Fetch now" and "Clear cache".
+- **Size limit:** a cache over 1 GiB stops fetching, and says so.
+
+**When it fetches.**
+- When the fleet view opens.
+- At most every 5 minutes while the fleet view stays open.
+- On "Fetch now".
+- One fetch per repo at a time.
+
+**Failing honestly.**
+- A failed fetch keeps the last good history, labelled "history as of <time>; fetch failed: <scrubbed error>".
+- With no good history, the line falls back to the opaque rules, with that note.
+- A revision that is not in the fetched history is never ordered.
+
+**Untrusted text.**
+- Commit subjects, author names and file paths are plain text, never markdown or HTML.
+- Caps: a subject at 200 characters; at most 20 commits and 200 paths per view.
+- This spec never sends them to an AI provider.
+
+## 8. Applying it to every lens
 
 - **Lenses keep** their data, verdict logic and keyboard paths.
 - **Each lens takes:**
@@ -345,7 +443,7 @@ Specified in §3.
   - the §4 inspector anatomy.
 - **Retired:** the remaining Signal Bench primitives, meaning lamp glow, module and well machining, and the pressed-filter styling. Filters become segmented controls on sunk wells.
 
-## 8. Accessibility
+## 9. Accessibility
 
 - **Never colour alone:** every `Aspect` has a text equivalent, and fill versus outline separates fault from look at.
 - **Focus:** a 2px route ring with a 2px offset on every control.
@@ -356,7 +454,7 @@ Specified in §3.
 - **Tables** keep their roles. Icon-only buttons carry `aria-label`.
 - **Reduced motion:** opacity only.
 
-## 9. Slices (each Codex-reviewed)
+## 10. Slices (each Codex-reviewed)
 
 1. **Tokens and type.**
    - The `night` and `day` themes and the semantic mapping, including success → neutral.
@@ -374,20 +472,27 @@ Specified in §3.
 3. **The line.**
    - Backend `LineService`: tracks, stations, the line source, the reference revision, station states, mesh and ledger, with honesty tests.
    - The fleet screen: board, queue, ledger, horizon.
-4. **Drawings.**
+4. **Git access** (§7).
+   - The `gitcli` package: allowlisted subcommands, hardening, deadlines.
+   - `git.repos` in `fleet.yaml`, and Settings > Git (allow, fetch now, sizes, clear).
+   - The cache.
+   - Ordering states on the line, and the Ledger's commits.
+   - "Not here yet" in the chain.
+   - **4b (may follow later):** `flux diff --path` from `git archive` of the cache (M10-f).
+5. **Drawings.**
    - `Rail` and `Chain`, used for Flux, cert-manager and ESO.
    - The Gateway data path.
    - The chat ledger rail.
    - `LinePos`.
-5. **Console.** The empty state, the groups, the fleet attention objects, open beside, `LinePos`.
-6. **Lens sweep.**
+6. **Console.** The empty state, the groups, the fleet attention objects, open beside, `LinePos`.
+7. **Lens sweep.**
    - Every lens onto the header, `LensTable` and the inspector anatomy.
    - Retire the remaining bench primitives.
    - Headless captures of every lens in both themes.
    - The parity gate re-run.
-7. **Smoke** on the kind lab (the parity fixture), in both themes, with an eyeball checklist.
+8. **Smoke** on the kind lab (the parity fixture), in both themes, with an eyeball checklist.
 
-## 10. Testing
+## 11. Testing
 
 - **Line semantics (Go, table tests):**
   - placement: rank and region, collisions, a missing environment going to the siding, the single-row fallback;
@@ -396,6 +501,16 @@ Specified in §3.
   - station states: reached, held (a failing source; a failing bound unit), differs (no failure), checking (an unread or failed read);
   - "held Nm" timing;
   - the mesh drawing rules.
+- **Git (Go, against local bare repos built in the test):**
+  - The allowlist: an unlisted URL never fetches, and a URL normalising to a listed one does.
+  - The protocol allowlist: `file://`, `ext::` and local paths are refused.
+  - No hooks run. No prompt appears: a key that needs a passphrase fails fast.
+  - Revision and path validation: an option-looking value is refused.
+  - Deadlines and caps.
+  - Ordering: behind, ahead, diverged, and a revision not in the history.
+  - The Ledger's contains-dots.
+  - A failed fetch keeps the last good history.
+  - Missing git falls back with the note.
 - **The chain:**
   - the depth cap;
   - a `dependsOn` cycle;
@@ -411,15 +526,16 @@ Specified in §3.
   - contrast tests on both themes.
 - **Parity:** the health 1c gate stays green. The redesign changes presentation, not summary semantics.
 
-## 11. Non-goals
+## 12. Non-goals
 
-- Git hosting APIs: no commit messages, and no "behind by N commits".
+- Git hosting APIs (tokens, pull requests, issues, CI status). Git access is the local `git` binary only (§7).
+- Any write to a repo: no push, commit, tag or branch.
 - New health semantics: the verdict engine is unchanged.
 - A fleet-wide object index (backlog).
 - Changes to write-path guards, grants or typed confirmation.
 - Phone or tablet layouts beyond "nothing breaks when narrow".
 
-## 12. Open decisions for the owner
+## 13. Open decisions for the owner
 
 1. **The other themes.**
    - Proposal: keep `light` and `dark` as "classic", flat via `var()` fallbacks.
@@ -428,3 +544,5 @@ Specified in §3.
 2. **The region key.** Proposal: `tags.region`, falling back to `group`.
 3. **The default line source.** Proposal: the most-shared GitRepository URL, with `line.source` as the override, rather than explicit configuration only.
 4. **The spine's pager role.** Proposal: the `Fleet` crumb's "N faults elsewhere" plus the console's empty state. This gives up the per-cluster lamp column.
+5. **Allowing a repo.** Proposal: Settings > Git writes `git.repos` in `fleet.yaml` (one list), and nothing else ever adds to it.
+6. **Fetch cadence and history.** Proposal: fetch when the fleet view opens, every 5 minutes while it is open, and on "Fetch now"; keep the full commit and tree history of the tracked refs only, with a 1 GiB limit.
