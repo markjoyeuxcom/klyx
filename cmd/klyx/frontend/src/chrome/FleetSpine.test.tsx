@@ -59,7 +59,7 @@ describe("FleetSpine", () => {
     expect(block.title).toContain("connect timed out");
   });
 
-  it("a fault area (from the cluster's summary) lights the lamp danger and blinks it - the spine is the one legal blink site", () => {
+  it("a fault area (from the cluster's summary) shows the fault aspect, and nothing blinks (The Line)", () => {
     useFleet.setState({ clusters: [cluster("prd")] });
     workloads("prd", { fault: 2, ok: 5 });
     const { getByLabelText } = render(<FleetSpine />);
@@ -67,8 +67,9 @@ describe("FleetSpine", () => {
     expect(block.title).toMatch(/^prd - synced\n/);
     expect(block.title).toContain("Workloads: 2 need attention");
     const lamp = block.querySelector("span") as HTMLElement;
+    expect(lamp.getAttribute("data-aspect")).toBe("fault");
     expect(lamp.style.background).toContain("danger");
-    expect(lamp.className).toContain("klyx-lamp-blink");
+    expect(lamp.className).toBe("");
   });
 
   it("expand toggle shows full names and persists the choice", () => {
@@ -136,14 +137,15 @@ describe("spineCodes", () => {
     expect(spineCodes(["nelli"])).toEqual({ nelli: "ne" });
   });
 
-  it("degraded-only workloads glow amber and do not blink", () => {
+  it("degraded-only workloads show the look-at aspect and do not blink", () => {
     resetHealthStore();
     useFleet.setState({ clusters: [cluster("stg")] });
     workloads("stg", { degraded: 1, ok: 4 });
     const { getByLabelText } = render(<FleetSpine />);
     const lamp = getByLabelText("cluster stg").querySelector("span") as HTMLElement;
-    expect(lamp.style.background).toContain("warning");
-    expect(lamp.className).not.toContain("klyx-lamp-blink");
+    expect(lamp.getAttribute("data-aspect")).toBe("attention");
+    expect(lamp.style.border).toContain("warning");
+    expect(lamp.className).toBe("");
   });
 
   it("a connected cluster without complete workload evidence is never green", () => {

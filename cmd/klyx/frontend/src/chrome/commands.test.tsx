@@ -341,16 +341,17 @@ describe("buildCommands", () => {
     expect(selectRoute).toHaveBeenCalledWith("apps/api");
   });
 
-  it("offers theme commands including midnight", () => {
+  it("offers theme commands for night and day, and no retired palette", () => {
     const s = makeStore({});
     const cmds = buildCommands(s);
     expect(cmds.some((c) => c.id === "theme:toggle" && c.title === "cycle theme")).toBe(true);
-    expect(cmds.some((c) => c.id === "theme:set:crimson" && c.title === "theme: crimson")).toBe(true);
-    const midnight = cmds.find((c) => c.id === "theme:set:midnight")!;
-    expect(midnight.title).toBe("theme: midnight");
-    midnight.run();
-    expect(document.documentElement.getAttribute("data-theme")).toBe("midnight");
-    expect(localStorage.getItem("klyx-theme")).toBe("midnight");
+    expect(cmds.some((c) => c.id === "theme:set:crimson")).toBe(false);
+    expect(cmds.some((c) => c.id === "theme:set:night" && c.title === "theme: night")).toBe(true);
+    const day = cmds.find((c) => c.id === "theme:set:day")!;
+    expect(day.title).toBe("theme: day");
+    day.run();
+    expect(document.documentElement.getAttribute("data-theme")).toBe("day");
+    expect(localStorage.getItem("klyx-theme")).toBe("day");
   });
 });
 

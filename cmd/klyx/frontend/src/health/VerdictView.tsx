@@ -1,29 +1,24 @@
-import { StatusDot } from "../chrome/primitives/StatusDot";
+import { Aspect, type AspectKind } from "../chrome/primitives/Aspect";
 import { toneBg, toneBorder, toneColor } from "../chrome/primitives/styles";
 import { type HealthLike, kindOf, labelOf, verdictTone } from "./verdict";
 import { ClampedText } from "../chrome/ClampedText";
 
-// VerdictLamp is a row's single status lamp. Only fault/degraded glow (Signal
-// Bench rule); unknown reads as a dashed, unlit ring so "cannot tell" never
-// looks like "fine"; paused is an outlined ring (intentional, not broken).
+// VerdictLamp is a row's single status mark, an Aspect (The Line, spec
+// 2026-10-14 §2.4): fault is a filled square, degraded a hollow one, unknown
+// dotted so "cannot tell" never looks like "fine", progressing dashed (not
+// yet realized), paused a plain outline (intentional, not broken), and ok
+// carries no mark.
+const ASPECT: Record<ReturnType<typeof kindOf>, AspectKind> = {
+  fault: "fault",
+  degraded: "attention",
+  unknown: "checking",
+  progressing: "syncing",
+  paused: "paused",
+  ok: "none",
+};
+
 export function VerdictLamp({ health, size = 7 }: { health: HealthLike | null | undefined; size?: number }) {
-  const k = kindOf(health);
-  if (k === "unknown" || k === "paused") {
-    return (
-      <span
-        aria-hidden
-        style={{
-          width: size,
-          height: size,
-          borderRadius: "50%",
-          flexShrink: 0,
-          boxSizing: "border-box",
-          border: `1px ${k === "unknown" ? "dashed" : "solid"} var(--color-text-tertiary)`,
-        }}
-      />
-    );
-  }
-  return <StatusDot tone={verdictTone[k]} size={size} />;
+  return <Aspect kind={ASPECT[kindOf(health)]} size={size} />;
 }
 
 // VerdictLabel is the headline word in the verdict's tone. Danger carries the

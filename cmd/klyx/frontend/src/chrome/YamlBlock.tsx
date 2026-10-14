@@ -10,9 +10,11 @@ import { CopyButton } from "./CopyButton";
 
 type Tok = { text: string; color?: string };
 
-const C_KEY = "var(--color-text-info)";
-const C_STR = "var(--color-text-success)";
-const C_NUM = "var(--color-text-warning)";
+// Syntax colours are not status: the line themes give code its own
+// (--line-syntax-*), so a number never reads as "look at" (spec §2.1).
+const C_KEY = "var(--line-syntax-key, var(--color-text-info))";
+const C_STR = "var(--line-syntax-str, var(--color-text-success))";
+const C_NUM = "var(--line-syntax-num, var(--color-text-warning))";
 const C_CMT = "var(--color-text-tertiary)";
 const C_PUNC = "var(--color-text-tertiary)";
 

@@ -13,13 +13,14 @@ beforeEach(() => {
 });
 
 describe("ThemeToggle", () => {
-  it("opens a theme menu and selects midnight", () => {
-    const { getByLabelText, getByRole } = render(<ThemeProvider><ThemeToggle /></ThemeProvider>);
-    expect(document.documentElement.getAttribute("data-theme")).toBe("bench");
-    fireEvent.click(getByLabelText("Theme: Bench"));
-    expect(getByRole("menuitemradio", { name: "Crimson" })).toBeTruthy();
-    fireEvent.click(getByRole("menuitemradio", { name: "Midnight" }));
-    expect(document.documentElement.getAttribute("data-theme")).toBe("midnight");
-    expect(localStorage.getItem("klyx-theme")).toBe("midnight");
+  it("opens a theme menu and selects day; the retired palettes are gone", () => {
+    const { getByLabelText, getByRole, queryByRole } = render(<ThemeProvider><ThemeToggle /></ThemeProvider>);
+    expect(document.documentElement.getAttribute("data-theme")).toBe("night");
+    fireEvent.click(getByLabelText("Theme: Night"));
+    expect(queryByRole("menuitemradio", { name: "Crimson" })).toBeNull();
+    expect(getByRole("menuitemradio", { name: "Light (classic)" })).toBeTruthy();
+    fireEvent.click(getByRole("menuitemradio", { name: "Day" }));
+    expect(document.documentElement.getAttribute("data-theme")).toBe("day");
+    expect(localStorage.getItem("klyx-theme")).toBe("day");
   });
 });

@@ -1,6 +1,7 @@
 // The Klyx primitive set: one source for the small components and style tokens
 // every view shares. Import from here, not from per-view local copies.
 export { StatusDot } from "./StatusDot";
+export { Aspect, type AspectKind } from "./Aspect";
 export {
   type Tone,
   toneColor,

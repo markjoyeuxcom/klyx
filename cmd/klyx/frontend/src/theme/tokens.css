@@ -23,8 +23,11 @@
   --color-border-danger: #f7c1c1;
   --color-border-success: #c0dd97;
   --color-border-warning: #fac775;
-  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  /* The Line type (2026-10-14 spec §2.2): bundled through @fontsource, never
+     loaded from the network; each stack falls back to a close system face. */
+  --font-sans: "Barlow", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-label: "Barlow Condensed", "Arial Narrow", -apple-system, sans-serif;
+  --font-mono: "DM Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
   --border-radius-md: 8px;
   --border-radius-lg: 12px;
 
@@ -75,156 +78,6 @@
   --color-border-success: rgba(151,196,89,0.4);
   --color-border-warning: rgba(239,159,39,0.4);
 }
-[data-theme="midnight"] {
-  color-scheme: dark;
-  --color-background-primary: #101923;
-  --color-background-secondary: #132232;
-  --color-background-tertiary: #07111d;
-  --color-background-info: rgba(88,166,255,0.18);
-  --color-background-accent: rgba(88,166,255,0.34);
-  --color-background-danger: rgba(244,91,105,0.20);
-  --color-background-success: rgba(129,201,149,0.18);
-  --color-background-warning: rgba(236,176,67,0.20);
-  --color-text-primary: #e8f1fb;
-  --color-text-secondary: #a9b9c8;
-  --color-text-tertiary: #7a8b9d;
-  --color-text-info: #8cc8ff;
-  --color-text-danger: #ff8994;
-  --color-text-success: #9ad46b;
-  --color-text-warning: #f4b84f;
-  --color-border-tertiary: rgba(184,212,240,0.13);
-  --color-border-secondary: rgba(184,212,240,0.24);
-  --color-border-primary: rgba(184,212,240,0.36);
-  --color-border-info: rgba(140,200,255,0.42);
-  --color-border-danger: rgba(255,137,148,0.42);
-  --color-border-success: rgba(154,212,107,0.42);
-  --color-border-warning: rgba(244,184,79,0.42);
-}
-[data-theme="graphite"] {
-  color-scheme: dark;
-  --color-background-primary: #15171a;
-  --color-background-secondary: #1d2025;
-  --color-background-tertiary: #090b0e;
-  --color-background-info: rgba(93,170,255,0.17);
-  --color-background-accent: rgba(93,170,255,0.33);
-  --color-background-danger: rgba(255,101,101,0.19);
-  --color-background-success: rgba(137,199,95,0.17);
-  --color-background-warning: rgba(239,181,78,0.20);
-  --color-text-primary: #edf1f5;
-  --color-text-secondary: #aeb8c4;
-  --color-text-tertiary: #7d8a97;
-  --color-text-info: #8fc7ff;
-  --color-text-danger: #ff8585;
-  --color-text-success: #91d16a;
-  --color-text-warning: #f1bc55;
-  --color-border-tertiary: rgba(211,225,240,0.12);
-  --color-border-secondary: rgba(211,225,240,0.23);
-  --color-border-primary: rgba(211,225,240,0.36);
-  --color-border-info: rgba(143,199,255,0.42);
-  --color-border-danger: rgba(255,133,133,0.42);
-  --color-border-success: rgba(145,209,106,0.42);
-  --color-border-warning: rgba(241,188,85,0.42);
-}
-[data-theme="crimson"] {
-  color-scheme: dark;
-  --color-background-primary: #211416;
-  --color-background-secondary: #2a171b;
-  --color-background-tertiary: #10090b;
-  --color-background-info: rgba(117,170,255,0.17);
-  --color-background-accent: rgba(117,170,255,0.33);
-  --color-background-danger: rgba(255,107,122,0.22);
-  --color-background-success: rgba(155,204,99,0.17);
-  --color-background-warning: rgba(239,180,94,0.19);
-  --color-text-primary: #fff0f1;
-  --color-text-secondary: #cdb5b8;
-  --color-text-tertiary: #978083;
-  --color-text-info: #9cc9ff;
-  --color-text-danger: #ff9aa3;
-  --color-text-success: #a9d66f;
-  --color-text-warning: #f2bd66;
-  --color-border-tertiary: rgba(255,217,222,0.13);
-  --color-border-secondary: rgba(255,217,222,0.24);
-  --color-border-primary: rgba(255,217,222,0.37);
-  --color-border-info: rgba(156,201,255,0.42);
-  --color-border-danger: rgba(255,154,163,0.45);
-  --color-border-success: rgba(169,214,111,0.42);
-  --color-border-warning: rgba(242,189,102,0.42);
-}
-[data-theme="forest"] {
-  color-scheme: dark;
-  --color-background-primary: #101b16;
-  --color-background-secondary: #15251d;
-  --color-background-tertiary: #08120d;
-  --color-background-info: rgba(95,177,255,0.16);
-  --color-background-accent: rgba(95,177,255,0.32);
-  --color-background-danger: rgba(244,99,99,0.19);
-  --color-background-success: rgba(116,203,115,0.20);
-  --color-background-warning: rgba(236,181,80,0.19);
-  --color-text-primary: #e8f6ef;
-  --color-text-secondary: #aec4b8;
-  --color-text-tertiary: #759080;
-  --color-text-info: #8dc8ff;
-  --color-text-danger: #ff8d8d;
-  --color-text-success: #98d469;
-  --color-text-warning: #efc05c;
-  --color-border-tertiary: rgba(196,230,211,0.13);
-  --color-border-secondary: rgba(196,230,211,0.24);
-  --color-border-primary: rgba(196,230,211,0.36);
-  --color-border-info: rgba(141,200,255,0.42);
-  --color-border-danger: rgba(255,141,141,0.42);
-  --color-border-success: rgba(152,212,105,0.43);
-  --color-border-warning: rgba(239,192,92,0.42);
-}
-[data-theme="amber"] {
-  color-scheme: dark;
-  --color-background-primary: #1d1810;
-  --color-background-secondary: #262013;
-  --color-background-tertiary: #0f0b06;
-  --color-background-info: rgba(91,169,255,0.16);
-  --color-background-accent: rgba(91,169,255,0.32);
-  --color-background-danger: rgba(244,98,98,0.19);
-  --color-background-success: rgba(145,205,99,0.17);
-  --color-background-warning: rgba(238,177,70,0.23);
-  --color-text-primary: #fff3df;
-  --color-text-secondary: #ccb99a;
-  --color-text-tertiary: #9b8661;
-  --color-text-info: #8cc8ff;
-  --color-text-danger: #ff8d8d;
-  --color-text-success: #a9d76f;
-  --color-text-warning: #f1c15a;
-  --color-border-tertiary: rgba(246,222,184,0.13);
-  --color-border-secondary: rgba(246,222,184,0.24);
-  --color-border-primary: rgba(246,222,184,0.37);
-  --color-border-info: rgba(140,200,255,0.42);
-  --color-border-danger: rgba(255,141,141,0.42);
-  --color-border-success: rgba(169,215,111,0.42);
-  --color-border-warning: rgba(241,193,90,0.45);
-}
-[data-theme="violet"] {
-  color-scheme: dark;
-  --color-background-primary: #191422;
-  --color-background-secondary: #21192f;
-  --color-background-tertiary: #0e0915;
-  --color-background-info: rgba(132,174,255,0.17);
-  --color-background-accent: rgba(132,174,255,0.33);
-  --color-background-danger: rgba(244,91,119,0.19);
-  --color-background-success: rgba(142,204,109,0.17);
-  --color-background-warning: rgba(235,178,78,0.19);
-  --color-text-primary: #f3eefe;
-  --color-text-secondary: #bdb0cf;
-  --color-text-tertiary: #8f809d;
-  --color-text-info: #a8c7ff;
-  --color-text-danger: #ff8fa3;
-  --color-text-success: #9fd37a;
-  --color-text-warning: #f0bf5a;
-  --color-border-tertiary: rgba(224,209,247,0.13);
-  --color-border-secondary: rgba(224,209,247,0.24);
-  --color-border-primary: rgba(224,209,247,0.37);
-  --color-border-info: rgba(168,199,255,0.42);
-  --color-border-danger: rgba(255,143,163,0.42);
-  --color-border-success: rgba(159,211,122,0.42);
-  --color-border-warning: rgba(240,191,90,0.42);
-}
 * { box-sizing: border-box; }
 html, body, #root { height: 100%; }
 body {
@@ -249,24 +102,14 @@ button:not(:disabled):hover {
   filter: brightness(0.97);
 }
 [data-theme="dark"] button:not(:disabled):hover,
-[data-theme="midnight"] button:not(:disabled):hover,
-[data-theme="graphite"] button:not(:disabled):hover,
-[data-theme="crimson"] button:not(:disabled):hover,
-[data-theme="forest"] button:not(:disabled):hover,
-[data-theme="amber"] button:not(:disabled):hover,
-[data-theme="violet"] button:not(:disabled):hover {
+[data-theme="night"] button:not(:disabled):hover {
   filter: brightness(1.15);
 }
 button:not(:disabled):active {
   filter: brightness(0.93);
 }
 [data-theme="dark"] button:not(:disabled):active,
-[data-theme="midnight"] button:not(:disabled):active,
-[data-theme="graphite"] button:not(:disabled):active,
-[data-theme="crimson"] button:not(:disabled):active,
-[data-theme="forest"] button:not(:disabled):active,
-[data-theme="amber"] button:not(:disabled):active,
-[data-theme="violet"] button:not(:disabled):active {
+[data-theme="night"] button:not(:disabled):active {
   filter: brightness(1.25);
 }
 button:disabled,
@@ -459,14 +302,158 @@ div[role="button"]:hover {
   --bench-selection-edge: var(--color-text-info);
 }
 
-/* -------------------------------------------------- motion discipline --- */
-/* .klyx-lamp-blink is legal ONLY inside FleetSpine (the peripheral pager).
-   In-content lamps are steady — the user is already looking at them. */
-@keyframes klyx-lamp-blink { 0%, 70% { opacity: 1; } 85% { opacity: 0.35; } 100% { opacity: 1; } }
-.klyx-lamp-blink { animation: klyx-lamp-blink 1.6s ease-in-out infinite; }
+/* ============================================================ the line --- */
+/* "The Line" (spec docs/superpowers/specs/2026-10-14-klyx-the-line-redesign.md
+ * §2.1): night and day are the default themes. They define every semantic
+ * token, so each lens restyles without per-component work, plus --line-*
+ * tokens for the new primitives. Healthy carries no mark: success maps to
+ * neutral ink with no fill. Edit evidence (diffs) keeps its own colours in
+ * --line-diff-*, and code its own in --line-syntax-*. Outlines that carry
+ * meaning are solid; the alpha -line/-wash tokens are decoration only.
+ * contrast.test.ts pins every pairing. Nothing blinks. */
+[data-theme="night"] {
+  color-scheme: dark;
 
-@media (prefers-reduced-motion: reduce) {
-  .klyx-lamp-blink { animation: none; }
+  --line-ground: #0E1316;
+  --line-raised: #141A1E;
+  --line-raised-2: #1A2126;
+  --line-sunk: #0A0E10;
+  --line-hair: rgba(203,216,222,0.08);
+  --line-hair-2: rgba(203,216,222,0.15);
+  --line-control: #66747B;
+  --line-ink-1: #E3E8E9;
+  --line-ink-2: #A6B1B6;
+  --line-ink-3: #7F8C93;
+  --line-ink-4: #56636A;
+  --line-track: #606E75;
+  --line-route: #79C2E4;
+  --line-route-ink: #0B2533;
+  --line-route-wash: rgba(121,194,228,0.10);
+  --line-danger: #F0565B;
+  --line-danger-line: rgba(240,86,91,0.55);
+  --line-danger-wash: rgba(240,86,91,0.10);
+  --line-caution: #E9A23B;
+  --line-caution-line: rgba(233,162,59,0.50);
+  --line-caution-wash: rgba(233,162,59,0.10);
+  --line-diff-add: #7FCB9B;
+  --line-diff-add-bg: rgba(127,203,155,0.10);
+  --line-diff-del: #F08A8D;
+  --line-diff-del-bg: rgba(240,138,141,0.10);
+  --line-syntax-key: #A6C8DB;
+  --line-syntax-str: #8FCFA4;
+  --line-syntax-num: #C5A8E6;
+  --line-lift: 0 0 0 1px rgba(203,216,222,0.12), 0 24px 60px rgba(0,0,0,0.5);
+
+  --color-background-tertiary: var(--line-ground);
+  --color-background-primary: var(--line-raised);
+  --color-background-secondary: var(--line-raised-2);
+  --color-background-info: var(--line-route-wash);
+  --color-background-accent: rgba(121,194,228,0.22);
+  --color-background-danger: var(--line-danger-wash);
+  --color-background-success: transparent;
+  --color-background-warning: var(--line-caution-wash);
+  --color-text-primary: var(--line-ink-1);
+  --color-text-secondary: var(--line-ink-2);
+  --color-text-tertiary: var(--line-ink-3);
+  --color-text-info: var(--line-route);
+  --color-text-danger: var(--line-danger);
+  --color-text-success: var(--line-ink-2);
+  --color-text-warning: var(--line-caution);
+  --color-border-tertiary: var(--line-hair);
+  --color-border-secondary: var(--line-hair-2);
+  --color-border-primary: var(--line-control);
+  --color-border-info: var(--line-route);
+  --color-border-danger: var(--line-danger);
+  --color-border-success: var(--line-hair-2);
+  --color-border-warning: var(--line-caution);
+
+  /* Signal Bench extras, flattened: wells are sunk with a hairline, modules
+     carry no shadow, nothing glows. */
+  --bench-edge-hi: transparent;
+  --bench-edge-lo: transparent;
+  --bench-well-bg: var(--line-sunk);
+  --bench-well-shadow: inset 0 0 0 1px var(--line-hair);
+  --bench-module-shadow: none;
+  --lamp-off: var(--line-track);
+  --lamp-glow-warning: none;
+  --lamp-glow-danger: none;
+  --bench-selection-bg: var(--line-route-wash);
+  --bench-selection-edge: var(--line-route);
+}
+
+[data-theme="day"] {
+  color-scheme: light;
+
+  --line-ground: #F1F2EE;
+  --line-raised: #FAFAF7;
+  --line-raised-2: #FFFFFF;
+  --line-sunk: #E6E8E2;
+  --line-hair: rgba(20,30,36,0.10);
+  --line-hair-2: rgba(20,30,36,0.18);
+  --line-control: #737E79;
+  --line-ink-1: #131B20;
+  --line-ink-2: #44515A;
+  --line-ink-3: #56636B;
+  --line-ink-4: #98A1A6;
+  --line-track: #737E79;
+  --line-route: #1A6190;
+  --line-route-ink: #FFFFFF;
+  --line-route-wash: rgba(26,97,144,0.08);
+  --line-danger: #B42A30;
+  --line-danger-line: rgba(180,42,48,0.45);
+  --line-danger-wash: rgba(180,42,48,0.07);
+  --line-caution: #8A5100;
+  --line-caution-line: rgba(138,81,0,0.40);
+  --line-caution-wash: rgba(138,81,0,0.08);
+  --line-diff-add: #1F6B3A;
+  --line-diff-add-bg: rgba(31,107,58,0.08);
+  --line-diff-del: #9E2B30;
+  --line-diff-del-bg: rgba(158,43,48,0.07);
+  --line-syntax-key: #1F5A80;
+  --line-syntax-str: #2B6A43;
+  --line-syntax-num: #6A3D9C;
+  --line-lift: 0 0 0 1px rgba(20,30,36,0.10), 0 2px 4px rgba(20,30,36,0.06), 0 24px 60px rgba(20,30,36,0.18);
+
+  --color-background-tertiary: var(--line-ground);
+  --color-background-primary: var(--line-raised);
+  --color-background-secondary: var(--line-raised-2);
+  --color-background-info: var(--line-route-wash);
+  --color-background-accent: rgba(26,97,144,0.18);
+  --color-background-danger: var(--line-danger-wash);
+  --color-background-success: transparent;
+  --color-background-warning: var(--line-caution-wash);
+  --color-text-primary: var(--line-ink-1);
+  --color-text-secondary: var(--line-ink-2);
+  --color-text-tertiary: var(--line-ink-3);
+  --color-text-info: var(--line-route);
+  --color-text-danger: var(--line-danger);
+  --color-text-success: var(--line-ink-2);
+  --color-text-warning: var(--line-caution);
+  --color-border-tertiary: var(--line-hair);
+  --color-border-secondary: var(--line-hair-2);
+  --color-border-primary: var(--line-control);
+  --color-border-info: var(--line-route);
+  --color-border-danger: var(--line-danger);
+  --color-border-success: var(--line-hair-2);
+  --color-border-warning: var(--line-caution);
+
+  --bench-edge-hi: transparent;
+  --bench-edge-lo: transparent;
+  --bench-well-bg: var(--line-sunk);
+  --bench-well-shadow: inset 0 0 0 1px var(--line-hair);
+  --bench-module-shadow: none;
+  --lamp-off: var(--line-track);
+  --lamp-glow-warning: none;
+  --lamp-glow-danger: none;
+  --bench-selection-bg: var(--line-route-wash);
+  --bench-selection-edge: var(--line-route);
+}
+
+/* Focus in the line themes: a 2px route ring, 2px out (spec §10). */
+[data-theme="night"] :focus-visible,
+[data-theme="day"] :focus-visible {
+  outline: 2px solid var(--line-route);
+  outline-offset: 2px;
 }
 
 /* Danger gets shape, not just colour: status text carrying this class leads

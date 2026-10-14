@@ -487,11 +487,12 @@ describe("ArgoView Codex rework (Argo review)", () => {
       return within(row).getByRole("img").outerHTML;
     };
     const check = () => {
-      expect(lampOf("rolling")).not.toContain("color-text-success");
-      expect(lampOf("parked")).toContain("solid var(--color-text-tertiary)"); // paused ring, never green
-      expect(lampOf("drifting")).toContain("lamp-glow-warning"); // degraded amber, never fault red
+      // The Line aspects (spec 2026-10-14 §2.4): shape carries the role.
+      expect(lampOf("rolling")).toContain('data-aspect="syncing"');
+      expect(lampOf("parked")).toContain('data-aspect="paused"'); // intentional, never healthy
+      expect(lampOf("drifting")).toContain('data-aspect="attention"'); // degraded, never fault
       expect(lampOf("drifting")).not.toContain("color-text-danger");
-      expect(lampOf("steady")).toContain("color-text-success");
+      expect(lampOf("steady")).toContain('data-aspect="none"'); // healthy carries no mark
     };
     const seedLinked = () => useFleet.setState((s) => ({ argo: { ...s.argo, cluster: "homelab-nelli", projects: [project], projectsAvailable: true, projectsLoading: false,
       apps: linked, loading: false, error: null, applicationSets: ruledSets([appSet]), applicationSetsAvailable: true, applicationSetsLoading: false } }));

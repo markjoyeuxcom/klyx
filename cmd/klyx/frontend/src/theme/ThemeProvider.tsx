@@ -1,6 +1,9 @@
 import { createContext, useContext, useEffect, useState, ReactNode } from "react";
 
-export type Theme = "system" | "bench" | "bench-light" | "light" | "dark" | "midnight" | "graphite" | "crimson" | "forest" | "amber" | "violet";
+// The Line (2026-10-14): night and day are the app's look. Light and dark stay
+// as "classic"; bench and bench-light remain selectable for one release after
+// the migration (owner decision 1), and the six palettes are gone.
+export type Theme = "system" | "night" | "day" | "light" | "dark" | "bench" | "bench-light";
 export type EffectiveTheme = Exclude<Theme, "system">;
 type Ctx = { theme: Theme; effectiveTheme: EffectiveTheme; setTheme: (theme: Theme) => void; toggle: () => void };
 
@@ -10,40 +13,46 @@ const STORAGE_KEY = "klyx-theme";
 const CHANGE_EVENT = "klyx:theme-change";
 export const THEMES: ReadonlyArray<{ id: Theme; label: string }> = [
   { id: "system", label: "System" },
-  { id: "bench", label: "Bench" },
-  { id: "bench-light", label: "Bench Light" },
-  { id: "light", label: "Light" },
-  { id: "dark", label: "Dark" },
-  { id: "midnight", label: "Midnight" },
-  { id: "graphite", label: "Graphite" },
-  { id: "crimson", label: "Crimson" },
-  { id: "forest", label: "Forest" },
-  { id: "amber", label: "Amber" },
-  { id: "violet", label: "Violet" },
+  { id: "night", label: "Night" },
+  { id: "day", label: "Day" },
+  { id: "light", label: "Light (classic)" },
+  { id: "dark", label: "Dark (classic)" },
+  { id: "bench", label: "Bench (retiring)" },
+  { id: "bench-light", label: "Bench Light (retiring)" },
 ];
 
+const ORDER: Theme[] = ["night", "day", "light", "dark", "bench", "bench-light"];
+
 function isTheme(value: string | null): value is Theme {
-  return value === "system" || value === "bench" || value === "bench-light" ||
-    value === "light" || value === "dark" || value === "midnight" ||
-    value === "graphite" || value === "crimson" || value === "forest" || value === "amber" || value === "violet";
+  return value === "system" || value === "night" || value === "day" || value === "light" ||
+    value === "dark" || value === "bench" || value === "bench-light";
 }
 
-const MIGRATED_KEY = "klyx-theme-bench-migrated";
+// The six palettes removed on 2026-10-14; all were dark.
+const RETIRED = new Set(["midnight", "graphite", "crimson", "forest", "amber", "violet"]);
+const BENCH_MIGRATED_KEY = "klyx-theme-bench-migrated";
+const LINE_MIGRATED_KEY = "klyx-theme-line-migrated";
 
-function initial(): Theme {
+// initial applies the one-time move to The Line (spec §2.1). A choice saved
+// before it maps once onto night or day - bench onto night, bench-light onto
+// day, a retired palette onto night, and a light or dark saved even before
+// the July bench migration onto day or night. A choice made afterwards
+// sticks, classic light and dark included; the flag is never read again.
+export function initial(): Theme {
   const saved = localStorage.getItem(STORAGE_KEY);
-  if (!isTheme(saved)) return "bench";
-  // One-time migration to direction C (2026-07-05): a palette saved before
-  // the redesign maps onto its bench face ONCE - otherwise the redesign is
-  // invisible to everyone with a stored theme. Any choice made after this
-  // sticks permanently (the flag is never consulted again).
-  if (!localStorage.getItem(MIGRATED_KEY)) {
-    localStorage.setItem(MIGRATED_KEY, "1");
-    if (saved === "light") return "bench-light";
-    if (saved !== "bench" && saved !== "bench-light" && saved !== "system") return "bench";
-  }
-  return saved;
+  if (localStorage.getItem(LINE_MIGRATED_KEY)) return isTheme(saved) ? saved : "night";
+  localStorage.setItem(LINE_MIGRATED_KEY, "1");
+  const benchMigrated = !!localStorage.getItem(BENCH_MIGRATED_KEY);
+  localStorage.setItem(BENCH_MIGRATED_KEY, "1");
+  if (saved === null) return "night";
+  if (saved === "bench" || RETIRED.has(saved)) return "night";
+  if (saved === "bench-light") return "day";
+  if (!benchMigrated && saved === "light") return "day";
+  if (!benchMigrated && saved === "dark") return "night";
+  return isTheme(saved) ? saved : "night";
 }
+
+const isLight = (t: EffectiveTheme) => t === "day" || t === "light" || t === "bench-light";
 
 function prefersDark(): boolean {
   return typeof window !== "undefined" && typeof window.matchMedia === "function"
@@ -52,16 +61,16 @@ function prefersDark(): boolean {
 }
 
 export function resolveTheme(theme: Theme): EffectiveTheme {
-  // "system" follows the OS into the bench faces - direction C is the app's
-  // look; the OS only chooses dark or light.
-  return theme === "system" ? (prefersDark() ? "bench" : "bench-light") : theme;
+  // "system" follows the OS into night or day - The Line is the app's look;
+  // the OS only chooses dark or light.
+  return theme === "system" ? (prefersDark() ? "night" : "day") : theme;
 }
 
 function applyTheme(theme: Theme): EffectiveTheme {
   const effective = resolveTheme(theme);
   document.documentElement.setAttribute("data-theme-choice", theme);
   document.documentElement.setAttribute("data-theme", effective);
-  document.documentElement.style.colorScheme = effective === "light" || effective === "bench-light" ? "light" : "dark";
+  document.documentElement.style.colorScheme = isLight(effective) ? "light" : "dark";
   localStorage.setItem(STORAGE_KEY, theme);
   return effective;
 }
@@ -78,25 +87,21 @@ export function setThemeChoice(theme: Theme): EffectiveTheme {
 // moves through the concrete palettes.
 export function toggleTheme(): Theme {
   const stored = document.documentElement.getAttribute("data-theme-choice") ?? localStorage.getItem(STORAGE_KEY);
-  const current: Theme = isTheme(stored) ? stored : "bench";
-  const order: Theme[] = ["bench", "bench-light", "light", "dark", "midnight", "graphite", "crimson", "forest", "amber", "violet"];
-  const next = order[(Math.max(0, order.indexOf(current)) + 1) % order.length];
+  const current: Theme = isTheme(stored) ? stored : "night";
+  const next = ORDER[(Math.max(0, ORDER.indexOf(current)) + 1) % ORDER.length];
   setThemeChoice(next);
   return next;
 }
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
   const [theme, setTheme] = useState<Theme>(initial);
-  const [effectiveTheme, setEffectiveTheme] = useState<EffectiveTheme>(() => resolveTheme(initial()));
+  const [effectiveTheme, setEffectiveTheme] = useState<EffectiveTheme>(() => resolveTheme(theme));
 
   useEffect(() => {
     setEffectiveTheme(applyTheme(theme));
   }, [theme]);
 
-  const toggle = () => setTheme((t) => {
-    const order: Theme[] = ["bench", "bench-light", "light", "dark", "midnight", "graphite", "crimson", "forest", "amber", "violet"];
-    return order[(Math.max(0, order.indexOf(t)) + 1) % order.length];
-  });
+  const toggle = () => setTheme((t) => ORDER[(Math.max(0, ORDER.indexOf(t)) + 1) % ORDER.length]);
   const choose = (next: Theme) => setTheme(next);
 
   useEffect(() => {

@@ -44,7 +44,7 @@ export function ThemeToggle() {
           color: "var(--color-text-primary)", cursor: "pointer",
         }}
       >
-        {effectiveTheme === "light" ? <IconSun size={16} stroke={1.5} /> : <IconMoon size={16} stroke={1.5} />}
+        {effectiveTheme === "light" || effectiveTheme === "day" || effectiveTheme === "bench-light" ? <IconSun size={16} stroke={1.5} /> : <IconMoon size={16} stroke={1.5} />}
       </button>
 
       {open && (
@@ -103,15 +103,11 @@ export function ThemeToggle() {
 }
 
 function swatch(theme: Theme): React.CSSProperties {
+  if (theme === "night") return { background: "#0E1316" };
+  if (theme === "day") return { background: "#F1F2EE" };
   if (theme === "bench") return { background: "#1c1e21" };
   if (theme === "bench-light") return { background: "#eceae5" };
   if (theme === "light") return { background: "#f5f4ed" };
   if (theme === "dark") return { background: "#262624" };
-  if (theme === "midnight") return { background: "#0a1724" };
-  if (theme === "graphite") return { background: "#15171a" };
-  if (theme === "crimson") return { background: "#7f1d2d" };
-  if (theme === "forest") return { background: "#174c2a" };
-  if (theme === "amber") return { background: "#7a5114" };
-  if (theme === "violet") return { background: "#4c2a85" };
-  return { background: "linear-gradient(135deg, #f5f4ed 0 50%, #262624 50% 100%)" };
+  return { background: "linear-gradient(135deg, #F1F2EE 0 50%, #0E1316 50% 100%)" };
 }

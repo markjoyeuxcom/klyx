@@ -1529,14 +1529,16 @@ const diffBody: React.CSSProperties = {
   lineHeight: 1.45,
 };
 
+// Diffs are edit evidence, not health: in the line themes they keep their own
+// colours (--line-diff-*, spec 2026-10-14 §2.1), and the "+"/"-" markers stay.
 function diffLineStyle(type: DiffLine["type"]): React.CSSProperties {
   return {
     display: "grid",
     gridTemplateColumns: "36px 36px 16px minmax(0, 1fr)",
     gap: 6,
     padding: "1px 8px",
-    color: type === "added" ? "var(--color-text-success)" : type === "removed" ? "var(--color-text-danger)" : "var(--color-text-secondary)",
-    background: type === "added" ? "var(--color-background-success)" : type === "removed" ? "var(--color-background-danger)" : "transparent",
+    color: type === "added" ? "var(--line-diff-add, var(--color-text-success))" : type === "removed" ? "var(--line-diff-del, var(--color-text-danger))" : "var(--color-text-secondary)",
+    background: type === "added" ? "var(--line-diff-add-bg, var(--color-background-success))" : type === "removed" ? "var(--line-diff-del-bg, var(--color-background-danger))" : "transparent",
   };
 }
 
