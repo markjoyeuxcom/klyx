@@ -35,8 +35,8 @@ Revised after Codex's design review of 162b9ec (eight findings, §§2-8 below).
 - **Read-only.** No tool changes anything, and chat never runs a verb. It may suggest a palette command or a Git change as text; the operator runs it.
 - **Egress is the same gate as Explain.** A protected cluster needs `allowProtectedEgress`. The gate is checked with each model call's own settings snapshot (§5.3).
 - **Guarantees, stated as they are:**
-  - **Enforced structurally,** so tests can prove it: never sent are Secret data, Helm values (in any form, §2), binary data, managed fields, the last-applied annotation, and every annotation outside the allowlist.
-  - **Heuristic:** logs, ConfigMap values, messages and other free text pass the scrubber and caps. They are scrubbed, not proven secret-free.
+  - **Enforced structurally,** so tests can prove it: never sent are Secret data, ConfigMap values, Helm values (inline in a HelmRelease or Application, or in release storage), binary data, `env` values, `command` and `args`, managed fields, the last-applied annotation, and every annotation outside the allowlist.
+  - **Heuristic:** logs, condition and event messages, labels, and the string fields that cross pass the scrubber and caps. They are scrubbed, not proven secret-free.
   - **Injection.** Cluster text can contain instructions. It travels only as tool results or the snapshot's data block, and the system prompt says it is data. Even so, an injected instruction can lead the model to read more of the same cluster. Those reads go to the configured provider. They are recorded and visible (§5.4), and they are never written back to the cluster.
 - **The drawer says this once, plainly:** "Chat sends what it reads to \<provider\>. Logs and text are scrubbed, not guaranteed secret-free. Secret values and Helm values are never sent."
 - **Nothing on disk.** A conversation lives in memory until the app quits, the operator clears it, or it ends (§5.3).
@@ -52,7 +52,7 @@ Every object that chat reads goes through one projection, `chatProject(gvr, obj)
 
 **Status:**
 - Conditions: type, status, reason, message (scrubbed) and the last transition time.
-- The kind's facts, using the existing per-kind fact builders.
+- The kind's facts, using the existing per-kind fact builders, run on a **structurally sanitized copy**, never the raw object. The copy keeps only the allowlisted annotations and drops every data map (`data`, `stringData`, `binaryData`) and every dropped subtree below. Fact values are then scrubbed. Some builders copy ownership annotations into fact values (`internal/crd/facts.go:138`), so without the sanitized copy facts would bypass the annotation allowlist (Codex re-review of f012dc1).
 - Klyx's verdict, when the Observer carries one (§3.3).
 
 **Spec, per kind:**
@@ -61,7 +61,7 @@ Every object that chat reads goes through one projection, `chatProject(gvr, obj)
 |---|---|---|
 | Pod, and the workload templates of Deployment, StatefulSet, DaemonSet, ReplicaSet, Job and CronJob | Replicas, selector and strategy. Per container: name, image, ports, resources, probe types and ports. `env` names, with `valueFrom` reference names only. `envFrom` reference names. Volume types, with reference names only. Node selector, tolerations, affinity summary, service account | `env` values, `command` and `args`, probe `httpHeaders` values |
 | Secret | Type and key names | `data`, `stringData` |
-| ConfigMap | Key names. A value is scrubbed and capped at 500 characters, unless its key name matches the sensitive-key pattern (password, token, secret, key, credential, auth, cert, private), in which case it is masked | `binaryData` values |
+| ConfigMap | Key names and value sizes only | Every `data` and `binaryData` value. A ConfigMap can carry Helm values through a HelmRelease `valuesFrom` under any key (`values.yaml`, `app.conf`), so no ConfigMap value is classified as safe |
 | Service, Ingress, Gateway API routes and Gateways, NetworkPolicy, HPA, PDB, Node | Their spec, with string values scrubbed and capped | Annotations, per the allowlist |
 | Flux HelmRelease | Chart reference, interval, install and upgrade remediation settings, `valuesFrom` reference names | `values`, `postRenderers` patches |
 | Argo Application and ApplicationSet | Source and destination, sync policy, Helm parameter names | `helm.values`, `helm.valuesObject`, parameter values, plugin env values |
@@ -163,15 +163,17 @@ A user message starts one turn: a model call, tool calls, tool results, and repe
 - **Question:** 4 KiB.
 - **Each tool result:** 16 KiB serialized.
 - **Each stored answer:** 32 KiB. The model's output limit stays at the existing per-purpose value.
-- **What one model call carries:** at most 160 KiB of history.
-  - Whole old exchanges are dropped oldest-first, each exchange being a question, its tool calls and results, and its answer.
+- **Each response's continuation:** at most 256 KiB. A larger one ends the turn with an error. Continuation is never sliced.
+- **What one model call carries:** at most 384 KiB, measured as the serialized size of everything sent - questions, answers, tool-call arguments, tool results, and the continuation state of the exchanges included.
+  - Whole old exchanges are dropped oldest-first, each with its own continuation. An exchange is a question, its tool calls and results, its continuation and its answer.
   - A tool call is never separated from its result, and the current exchange is never cut.
   - The drawer shows "earlier messages are no longer sent to the model".
-  - If the current exchange alone passes 160 KiB, the turn ends with an error.
+  - If the current exchange's complete serialized representation passes 384 KiB on its own, the turn ends with an error before sending.
+- **What the backend retains per conversation:** at most 20 exchanges and 1 MiB, counting failed and cancelled turns and their ledgers. Beyond that the oldest exchanges are removed from the backend and the drawer, with a notice.
 - **Conversations:** one per cluster, at most 8 at once.
 
 ### 5.3 Lifetime, settings changes and fencing
-- **The backend owns conversations.** Each has an ID, the cluster, the pinned connection, and the provider identity it started with (provider, origin, model). Only the operator's question text comes from the frontend. System prompts, tool calls and results, and continuation state stay in the backend.
+- **The backend owns conversations.** Each has an ID, the cluster, the pinned connection, and the AI settings revision it started with (`AIState.Rev`, which changes on every settings publication, `internal/appbridge/ai_state.go:26`). Only the operator's question text comes from the frontend. System prompts, tool calls and results, and continuation state stay in the backend.
 - **One active turn per conversation.** A second question while a turn runs is refused.
 - **Turns are fenced.**
   - Each turn has an ID.
@@ -179,9 +181,10 @@ A user message starts one turn: a model call, tool calls, tool results, and repe
   - A result or event that arrives after cancellation is dropped by turn ID.
   - Clear ends the conversation, and a new one starts fresh.
 - **Disconnects.** Before every read and every model call, the turn checks that the registry's connection for the cluster is the pinned one and that it is connected. If not, the turn ends and the conversation closes with "the cluster disconnected". A reconnect starts a new conversation.
-- **Settings changes.** Each model call loads the current immutable AI state.
-  - If the provider identity changed since the conversation started, or egress for this cluster is no longer allowed, the turn stops before sending.
-  - The conversation then ends with "AI settings changed; start a new conversation". Its history is never sent to a different provider, and continuation state is never migrated.
+- **Settings changes.** Each model call loads the current immutable AI state, and that one snapshot decides both the egress check and the provider for that send.
+  - If its revision differs from the conversation's pinned revision, the turn stops before sending. A provider change, a model change, a replaced key for the same provider, and a change away and back while idle all bump the revision.
+  - The conversation then ends with "AI settings changed; start a new conversation". Its history is never sent under other settings, and continuation state is never migrated.
+  - If egress for this cluster is no longer allowed, the turn stops the same way.
 
 ### 5.4 The read ledger
 - Every attempted read is recorded with its tool, its arguments (names only) and an outcome: completed, failed, truncated or cancelled. This includes reads in turns that later error or are cancelled.
@@ -275,7 +278,8 @@ The CLI contract stays exactly as reviewed: one process per question, no tools, 
 
 ## 10. Testing
 
-- **Projection sentinels.** Two kinds of sentinel are planted in every never-sent field: arbitrary strings with no credential shape, and recognized credential shapes. The fields are Secret data, Helm values (HelmRelease `values`, Argo `helm.values` and `valuesObject`, Helm storage), `env` values, `command` and `args`, non-allowlisted annotations, `binaryData`, and masked ConfigMap keys. None may appear in any tool result, snapshot or Activity entry. The heuristic fields are tested with recognized shapes only, and the tests say so.
+- **Projection sentinels.** Two kinds of sentinel are planted in every never-sent field: arbitrary strings with no credential shape, and recognized credential shapes. The fields are Secret data, ConfigMap values (including one referenced by a HelmRelease `valuesFrom` under a custom `valuesKey`), Helm values (HelmRelease `values`, Argo `helm.values` and `valuesObject`, Helm storage), `env` values, `command` and `args`, non-allowlisted annotations (including the ownership annotations fact builders read) and `binaryData`. None may appear in any tool result, fact, snapshot or Activity entry. The heuristic fields are tested with recognized shapes only, and the tests say so.
+- **Identity joins.** A verdict joins an object only by UID equality, as Explain does. A seeded read checks the seed's UID against the object it reads, so an old UID's verdict never attaches to a replacement.
 - **The log read:**
   - a quiet pod returns promptly;
   - one oversized line is capped;
@@ -296,12 +300,14 @@ The CLI contract stays exactly as reviewed: one process per question, no tools, 
 - **Lifetime:**
   - navigating from cluster A to B, and a disconnect then reconnect;
   - Clear and a new turn, and late responses after Stop;
-  - egress disabled between two model calls, and a provider change mid-conversation;
+  - egress disabled between two model calls, a provider change mid-conversation, a replaced key for the same provider, and a change away and back while idle;
   - a second question during an active turn.
 - **Budgets:**
   - a parallel batch over the limit, and the 7th model call;
   - history trimming with and without tool results;
-  - a current exchange over budget.
+  - a small visible answer with a large continuation, counted in the request budget;
+  - a current exchange over budget, rejected before sending;
+  - repeated turns past the retention bound, including failed and cancelled ones.
 - **Providers:**
   - two sequential tool steps, and parallel calls;
   - signed continuation round-trips per vendor;
