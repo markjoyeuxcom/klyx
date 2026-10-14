@@ -34,7 +34,7 @@
   - the position glyph.
 - **A healthy object carries no mark.**
 
-Revised after Codex's design reviews of 4c654fc (nine findings) and 3fdd4f7 (ten findings), all folded into §§0-14.
+Revised after Codex's design reviews of 4c654fc (nine findings), 3fdd4f7 (ten) and fe9ced4 (nine), all folded into §§0-14.
 
 ## 0. What exists
 
@@ -272,7 +272,12 @@ Revised after Codex's design reviews of 4c654fc (nine findings) and 3fdd4f7 (ten
 | **compared** (desired, not deployed) | the source's fetched artifact | `status.sync.revision(s)`, paired with `status.sync.comparedTo.source(s)`, never with the current `spec.sources` order | Argo: `targetRevision`, which may be a range such as `1.*`; never treated as a version |
 
 - **Pairing:** Argo revisions are always paired with the source definitions recorded in the same status block or history entry. A source reorder or edit since then is flagged "source changed since last deployment".
-- **"Never applied":** a unit with no applied fact (no history, or none deployed) is eligible but never applied.
+- **"Applied unknown":** a unit with no deployment record has an unknown applied revision, which is never assumed to be "never applied". The cases:
+  - Argo `revisionHistoryLimit: 0`, or truncated history;
+  - Helm with no deployed history entry;
+  - Flux with an empty `lastAppliedRevision`.
+
+  Such a unit counts toward no match.
 - **Chart units** compare the chart version (`chartVersion` for Flux, the history entry's revision for Argo). A differing Flux `configDigest` adds "values differ".
 
 **Revision identity:**
@@ -304,7 +309,7 @@ Revised after Codex's design reviews of 4c654fc (nine findings) and 3fdd4f7 (ten
 |---|---|
 | **E** | the eligible units |
 | **A** | the applied revisions of the units that have one |
-| **N** | the units that were never applied |
+| **U** | the units whose applied revision is unknown (no deployment record) |
 | **failing** | an eligible unit or its bound source is Ready False or its sync failed (suspended units excluded) |
 | **syncing** | `generation > observedGeneration`, or an attempted fact differs from applied with no failure |
 | **suspended** | a unit is suspended |
@@ -316,13 +321,13 @@ Revised after Codex's design reviews of 4c654fc (nine findings) and 3fdd4f7 (ten
 |---|---|---|
 | 1 | **checking** | the station read is not ok, or any eligible unit is unread or stale. Last good facts show as "as of …". It can never match or be at target. |
 | 2 | **not compared** | \|E\| = 0. The card lists what was excluded. |
-| 3 | **never applied** | every eligible unit is never applied |
-| 4 | **mixed** | \|A\| > 1, or some units are applied and some never applied |
-| 5 | **matches R / differs** | \|A\| = 1, compared to R (below) |
+| 3 | **applied unknown** | no eligible unit has a known applied revision |
+| 4 | **mixed** | the known applied revisions differ, or some units are known and some unknown |
+| 5 | **matches R / differs** | every eligible unit has a known applied revision, and all are equal; compared to R (below) |
 | 6 | **(Git)** at target, behind, ahead, diverged, unrelated, not in history | §3.4, replacing step 5 when Git ordering applies to this station |
 
 **The comparison revision R** (no Git ordering):
-- R is the revision that is the only applied revision (\|A\| = 1, read ok) on the most stations.
+- R is the single revision of the most stations **in state 5**. Mixed, unknown, checking and not-compared stations never vote.
 - Ties are broken by the newest source artifact time, disclosed: "tie broken by fetch time, not commit order".
 - When no station has a single applied revision, there is no R. Nothing is lit, and the board says "no comparison revision".
 - R is a comparison reference, never a rollout target.
@@ -427,7 +432,7 @@ Semver ranges, `HEAD` and unqualified Argo refs have no T: they stay comparison-
 - **Ledger:**
   - Without Git history, it is "revisions on the line now": each distinct station sha with its per-track dots and artifact time.
   - **With history (§7), "commits not yet everywhere":**
-    - the commits reachable from T but not from every ordered station (`git log T --not <merge-bases>`), newest first, at most 20;
+    - the union, de-duplicated, of each ordered station's missing set (`git rev-list T ^<station sha>`), in topological order, newest first, capped at 20;
     - each with its short sha, subject, author and time, and dots for which ordered stations contain it.
     - Commits that exist only on a diverged or ahead station are listed under that station, never merged into one order.
   - "Open in Git" links to the commit, on known hosts or through `git.repos[].web`.
@@ -603,7 +608,7 @@ It is **pinned to its object's cluster and UID**. Every verb, follow-up and Expl
 
 **The binary.**
 - Klyx runs the system `git`, resolved through `internal/clibin`.
-- **Git 2.44 or newer is required,** for `GIT_NO_LAZY_FETCH`. Older or missing git turns every Git feature off, with one note naming the reason, and the §3.3 rules hold.
+- **Git 2.45 or newer is required,** for `GIT_NO_LAZY_FETCH` (`--no-lazy-fetch`, new in 2.45). Older or missing git turns every Git feature off, with one note naming the reason, and the §3.3 rules hold.
 - No hosting API. Klyx stores no tokens.
 
 **The transport boundary:**
@@ -640,8 +645,10 @@ It is **pinned to its object's cluster and UID**. Every verb, follow-up and Expl
 
 | Command | Purpose |
 |---|---|
-| `git init --bare --template=` | create the cache |
-| `git fetch --no-tags --filter=blob:none origin +<ref>:<ref>` | explicit refspecs, only for the refs compared sources track (no other heads) |
+| `git init --bare --template=` | create the cache, or a staging repo |
+| `git fetch --atomic --no-tags --filter=blob:none origin +<ref>:refs/klyx/staging/<ref>` | into a staging repo only (below), with explicit refspecs for the tracked refs |
+| `git cat-file --batch-all-objects --batch-check` | validate a staging repo |
+| `git update-ref --stdin` | publish, in one transaction |
 | `git log --no-renames`, `git rev-list --count`, `git merge-base [--is-ancestor]` | metadata reads |
 | `git diff --name-status --no-renames --no-ext-diff --no-textconv` | metadata reads |
 | `git diff --no-ext-diff --no-textconv <a> <b> -- <path>` | only on an explicit "show changes" click; it may fetch blobs, within the caps |
@@ -656,16 +663,40 @@ It is **pinned to its object's cluster and UID**. Every verb, follow-up and Expl
   - Revisions are hex shas or the tracked ref, placed after `--end-of-options`.
   - Paths come after `--`, under `--literal-pathspecs` (`GIT_LITERAL_PATHSPECS=1`).
 - **Never allowed:** `push`, `commit`, `tag`, `branch`, a checkout into the owner's working trees, `config --global`, hooks, submodules.
-- **A server that does not support `--filter=blob:none`:** the fetch is refused ("this server does not support partial clone"). Klyx never falls back to a full clone.
+- **Deadlines and bounds:** 60s for a fetch and 10s for a local query. Each call runs in its own process group, killed on a deadline or a cancel. Captured output is capped at 1 MiB.
 
-**`flux diff --path` from the cache** (slice 6b) is a separate authorisation from reading history:
-- **Extraction:**
-  - `git archive` of the Kustomization's literal `spec.path` only.
-  - Klyx's own tar reader extracts it into a fresh 0700 temp dir, and refuses absolute paths, `..`, and symlinks or hardlinks leaving the root.
-  - Caps: 5,000 files and 64 MiB, after which it is refused.
-  - The temp dir is removed afterwards.
-- **Remote bases:** a `kustomization.yaml` naming a remote base (`http(s)://`, `git::`, `github.com/…`) is refused by default ("remote base: not allowed"), unless the owner enables remote bases for that repo in Settings > Git.
-- **No exec plugins.** Klyx passes no decryption keys. SOPS-encrypted files are diffed as stored, and the result says so.
+**Acquisition is staged and published atomically:**
+1. **Stage.** Each fetch goes into a fresh staging repo beside the cache. The staging repo borrows the cache's objects through an alternates file that Klyx writes (never an environment variable), so only new objects land in it. The fetch is `--atomic`.
+2. **Validate.**
+   - **The filter held:** `cat-file --batch-all-objects` finds no blob in the staging repo. A server that ignored `--filter=blob:none` is refused ("this server does not support partial clone"), and nothing is kept.
+   - **The refs resolve.**
+   - **The size is within budget.**
+3. **Publish.**
+   - The staging repo's packs move into the cache: `.pack` and `.rev` first, `.idx` last.
+   - One `update-ref --stdin` transaction then moves every published ref, so all refs update or none do.
+4. **Roll back on any failure,** a kill or a cap included, by deleting the whole staging repo. Nothing from a failed acquisition ever reaches the cache, and the last good history stays.
+5. **Budget:**
+   - One fetch runs at a time across the fleet, so the global budget is checked against one acquisition.
+   - Before a fetch, Klyx reserves the room left under both the per-repo and the total cap.
+   - The staging repo's size is sampled every 250ms, and the fetch is killed when it passes its reservation.
+   - Overshoot is limited to the transfer within one sampling interval. It sits in the staging repo only, and is deleted.
+
+**The cache diff** (slice 6b, replacing the M10-f `flux diff --path` follow-up) is a separate authorisation from reading history. The build must be confined, not just the extraction: a Kustomize generator, patch, schema or nested base can otherwise read outside the tree. Codex reproduced exactly that with the flux CLI, which builds without confinement.
+- **Klyx does not run the flux CLI for cache builds.** It builds in-process:
+  1. `git archive` of the Kustomization's literal `spec.path` *and* the repo root's tree, so relative bases inside the repo resolve.
+  2. Klyx's tar reader loads it into an **in-memory filesystem**, refusing absolute paths, `..`, and links that leave the root. Caps: 5,000 files and 64 MiB.
+  3. The Kustomize API builds over that filesystem only:
+     - root-only load restrictions;
+     - plugins and exec functions off;
+     - a loader that refuses every remote URL.
+
+     Because nothing outside the archive exists in that filesystem, no generator, patch, schema or nested base can read the owner's disk.
+  4. The objects built are diffed against the cluster with a server-side dry-run, through Flux's `ssa` package, which is what `flux diff` itself uses. It runs on the station's pinned connection.
+- **Remote bases** are refused, unless the owner enables them per repo in Settings > Git. In that case they are fetched only from approved `git.repos` URLs, through the same staged acquisition.
+- **Not done:**
+  - **Decryption:** never. SOPS-encrypted files are diffed as stored, and the result says so.
+  - **Flux post-build substitution:** not applied. The diff says "variables shown unsubstituted".
+- **A fixture** proves that a generator reading `../outside.txt` fails, and so does a nested base escaping the root.
 
 **The cache and its bounds:**
 - **Location:** `<config dir>/git-cache/<sha256 of the approved URL>.git`, 0700.
@@ -734,8 +765,9 @@ Each source below is new, and each declares where its claims come from.
   - "Since <time> (observed)" is used only with continuous coverage from before the change.
   - "Already present by <time>" is used only when other evidence, such as a condition time, proves it.
 - **Bounds:** 24 hours, or 20,000 entries per cluster.
-  - On eviction, each object keeps a **continuity watermark**: the earliest time of continuous observation.
-  - Ages beyond the trimmed log read "at least since <watermark> (log trimmed)".
+  - On eviction, each object keeps one **state proof**: its current state, plus either a proven lower bound for when that state began (a transition seen with continuous coverage, or a rule-backed time) or "start unknown".
+  - The proof resets on every state change and every coverage gap. It is purged when the object is deleted or replaced, and once its episode closes.
+  - Ages beyond the trimmed log read "at least since <proven lower bound> (log trimmed)". When no proof exists, they read "start unknown". A watermark of when observation began is never used as a state's age.
 - **The console join:** an object's aspect comes from this evaluated state. A kind the Observer does not evaluate is "health unverified".
 - **On disk:** persistence is an owner decision (§14).
 
@@ -756,10 +788,26 @@ Each source below is new, and each declares where its claims come from.
 - **Projection before retention:**
   - An informer transform keeps `{GVR, UID, namespace, name, labels, creationTimestamp}`. Labels are capped at 2 KiB per object, with a truncation marker.
   - Annotations and `managedFields` are dropped before anything is stored or queued.
+- **Default kinds:**
+  - namespaces and nodes;
+  - Deployments, StatefulSets, DaemonSets, ReplicaSets, Jobs, CronJobs and Pods;
+  - Services, Ingresses, Gateways, HTTPRoutes and GRPCRoutes;
+  - ConfigMaps and Secrets, by name only;
+  - PVCs;
+  - the Flux, Argo, cert-manager and ESO kinds.
+  - Each is configurable in `fleet.yaml`.
 - **Bounds** across the store, the buffers and the search index:
   - 50,000 objects and 32 MiB per cluster;
   - 200,000 objects and 128 MiB across the fleet (§14).
-  - At a cap, that kind's list stops and its watch is not started. The kind reads "capped: first N". Vacancies are not refilled, and the index never claims to be complete.
+- **Admission:**
+  - Every list page *and* every watch event (an Add, or an Update that grows labels) is admitted against both budgets before it is retained.
+  - The accounting is shared and atomic across kinds and clusters.
+  - **At a cap:**
+    - the kind that would cross it stops: its list stops, or its watch is closed;
+    - the subset it already holds is frozen, and reads "capped at N · as of <time> · stale";
+    - other kinds continue until they too would grow past the cap.
+  - Vacancies are not refilled, and the index never claims to be complete.
+- **Kinds the Observer already watches:** the cap applies to the *derived index entries*. The shared Observer is never stopped.
 - **Per-kind states:**
 
 | State | Meaning |
@@ -796,7 +844,11 @@ Each source below is new, and each declares where its claims come from.
   - retries;
   - the per-backend split.
 - **The per-backend split** only where the gateway exposes per-backend clusters for that rule.
-- **Rule indices are tied to the route's current generation.** When the rule list changed inside the window (seen by the generation, or by the observation log), the sparkline is cut at the change: "rules changed at <time>". A recreated or reordered route never joins history to today's backends.
+- **Attributed history needs a proven interval.**
+  - **What an interval is:** a span where Klyx observed the same route UID and the same **rule fingerprint** continuously. The fingerprint is a hash of each rule index's matches, backends and weights. Prometheus labels carry neither the generation nor the UID, so the proof comes from the observation log.
+  - **Outside it** (before Klyx first saw the route, across a coverage gap, before a fingerprint change), the series reads "unattributable before <time>" and is not drawn as this rule's.
+  - **Samples within one rate window** (1 minute) after an interval's start are excluded, because `rate()` over that window still includes the previous rule's samples.
+  - A recreated or reordered route never joins history to today's backends.
 - **`internal/routemetrics` parsing** keeps the rule index (today it discards it).
 - **Captured-metric fixtures:**
   - dedicated and shared clusters;
@@ -816,7 +868,8 @@ Each source below is new, and each declares where its claims come from.
 | **Baseline** | at connect or reconnect, or after a loss marker, faults already present are listed once in the app ("3 faults present at connect"). They never become notifications (§14). |
 | **New episode** | a non-fault → fault transition with continuous coverage. It notifies, subject to the triggers below. |
 | **Coverage lost** | the episode is suspended. No recovery is claimed. |
-| **Recovered** | fault → non-fault with live coverage. It notifies only if recoveries are enabled. |
+| **Unknown** | fault → unknown or checking, even with live coverage (a Node's Ready=Unknown, for example) suspends the episode. A return to fault resumes the same episode, with no new notification. |
+| **Recovered** | only a transition into a **positive healthy role** (ok) with live coverage. Unknown, checking and unverified are never recovery. It notifies only if recoveries are enabled. |
 | **Deleted** | the UID is gone. The episode closes as "deleted", with no recovery. |
 | **Replaced** | a new UID under the same name starts a new episode. |
 | **Incarnation change** | everything is re-baselined. |
@@ -920,6 +973,8 @@ Each source below is new, and each declares where its claims come from.
     - an Argo source reorder or edit since the last deployment;
     - an Argo chart range in `targetRevision`;
     - an Argo multi-source app (one unit per source);
+    - a successful Argo app with `revisionHistoryLimit: 0` (applied unknown, kept out of matches and the vote);
+    - a station with one known applied revision plus an unknown unit (mixed, no vote);
     - an unqualified Argo ref against a Flux branch of the same name (separate keys);
     - an unrecognised revision string.
   - Key selection:
@@ -933,7 +988,7 @@ Each source below is new, and each declares where its claims come from.
     - mixed stations kept out of the vote.
   - States and flags:
     - the precedence table;
-    - eligible but never applied;
+    - applied unknown (no deployment record);
     - an empty A;
     - every station mixed (no R);
     - mixed;
@@ -979,7 +1034,10 @@ Each source below is new, and each declares where its claims come from.
   - no metrics endpoint;
   - per-backend split not exposed;
   - onset detection (a flat series; a step; noise below 1%);
-  - revision proximity both inside and outside the 10-minute window.
+  - revision proximity both inside and outside the 10-minute window;
+  - the first observation after a reorder or recreation (unattributable before);
+  - a change missed during a gap;
+  - a rate window crossing the boundary, excluded.
 - **New data:**
   - Transition stream and log:
     - more than 5 faults in one part;
@@ -991,7 +1049,10 @@ Each source below is new, and each declares where its claims come from.
     - loss markers;
     - baseline wording;
     - gap wording;
-    - watermarks after eviction;
+    - healthy → fault → log eviction, never "fault since" the first observation;
+    - a baseline fault after eviction ("start unknown");
+    - a coverage gap resetting the proof;
+    - purging on delete and replace;
     - a reference change never logged as a deployment;
     - rule-specific `since` (condition, derived, observed).
   - Managed-field updates:
@@ -1007,7 +1068,11 @@ Each source below is new, and each declares where its claims come from.
     - no content fallback on a 406;
     - Observer kinds never watched twice;
     - fencing, cancellation and recovery;
-    - peak memory across several clusters at the caps.
+    - peak memory across several clusters at the caps;
+    - an under-cap list whose watch then crosses the cap;
+    - byte-only growth (labels);
+    - concurrent fleet exhaustion;
+    - an Observer-backed kind capped without stopping the Observer.
   - Chart comparison:
     - chart version and values digest;
     - never mixed with Git keys.
@@ -1016,6 +1081,7 @@ Each source below is new, and each declares where its claims come from.
     - off by default;
     - permission refused;
     - every episode phase;
+    - Fault → Unknown → Fault → OK with live coverage (one episode, one recovery);
     - existing faults at connect never notified;
     - de-duplication;
     - bursts, including recovery before sending;
@@ -1027,6 +1093,13 @@ Each source below is new, and each declares where its claims come from.
   - No hooks; no prompt (a passphrase key fails fast).
   - Option-shaped values refused.
   - Deadlines and caps.
+  - The Ledger: a linear A-B-C with stations at A and C lists B and C; divergent stations.
+  - Acquisition:
+    - a server ignoring the filter (blob found, staging deleted, nothing published);
+    - a two-ref fetch where one ref fails (no ref published);
+    - a kill at the cap (staging deleted, cache unchanged);
+    - one fetch at a time across the fleet;
+    - git 2.44 refused, and a missing object never fetched lazily on 2.45.
   - The orderings:
     - behind, ahead, diverged;
     - unrelated history;
@@ -1041,11 +1114,15 @@ Each source below is new, and each declares where its claims come from.
     - pathspec magic refused;
     - a server without filter support refused;
     - the cap enforced mid-fetch, with temporaries cleaned and last good kept.
-  - `flux diff` extraction:
+  - The cache diff:
     - an archive escape (`..`, absolute, symlink) refused;
     - the file and size caps;
+    - a `configMapGenerator` reading `../outside.txt` failing;
+    - a nested base or patch escaping the root failing;
     - an unapproved remote base refused;
-    - no decryption.
+    - plugins off;
+    - no decryption;
+    - unsubstituted variables labelled.
   - The Ledger's dots.
   - A failed fetch keeping the last good history.
   - Missing git.
@@ -1082,7 +1159,7 @@ Each source below is new, and each declares where its claims come from.
 6. **Fetch cadence and the Git budget.** Proposal:
    - Fetch when the fleet view opens, every 5 minutes while it is open, and on "Fetch now".
    - Keep the tracked refs' full commit and tree history.
-   - Limits: 1 GiB per repo and 2 GiB in total. Git 2.44 or newer is required.
+   - Limits: 1 GiB per repo and 2 GiB in total, with one fetch at a time. Git 2.45 or newer is required.
 7. **Comparison reference or rollout target.** Proposal: with Git history, the fetched tip T is the target, and the headline speaks of it; without Git, R is only a comparison and never a target.
 8. **A fleet with several repos or refs.** Proposal: one selected comparison, with every other key shown as an exclusion count per station. The alternative is one line per key, stacked.
 9. **Notification defaults.** Proposal:
@@ -1094,4 +1171,8 @@ Each source below is new, and each declares where its claims come from.
     - 50,000 objects and 32 MiB per cluster; 200,000 objects and 128 MiB across the fleet.
     - Pods capped first.
     - Each configurable in `fleet.yaml`.
-12. **Git previews and builds.** Proposal: reading an allowed repo never authorises remote Kustomize bases, exec plugins or decryption. Remote bases can be enabled per repo, explicitly. Decryption is never offered.
+12. **Git previews and builds.** Proposal:
+    - Reading an allowed repo never authorises remote Kustomize bases, plugins or decryption.
+    - Remote bases can be enabled per repo, explicitly, and only from approved repos.
+    - Cache builds are in-process and confined; the flux CLI is not used for them.
+    - Decryption is never offered.
