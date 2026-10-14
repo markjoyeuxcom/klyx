@@ -42,7 +42,7 @@ describe("ChatDrawer", () => {
     bridge.onChatRead.mockImplementation(() => () => {});
     bridge.chatStop.mockImplementation(async () => {});
     bridge.chatClear.mockImplementation(async () => {});
-    useChat.setState({ open: false, cluster: null, states: {}, drafts: {}, seeds: {}, asking: {}, cleared: {} });
+    useChat.setState({ open: false, cluster: null, states: {}, drafts: {}, seeds: {}, asking: {}, cleared: {}, failures: {}, reqs: {} });
   });
 
   it("starts a conversation and states what it sends and to whom", async () => {
@@ -177,5 +177,53 @@ describe("ChatDrawer", () => {
     const { findByRole, getByLabelText } = render(<ChatDrawer />);
     expect((await findByRole("alert")).textContent).toContain("protected cluster");
     expect((getByLabelText("question") as HTMLTextAreaElement).disabled).toBe(true);
+  });
+
+  // Codex review of 0725e47: a Start refusal is a current state, and a
+  // bridge failure shows beside the conversation without replacing it.
+  it("shows a Start refusal that follows a newer-looking empty State", async () => {
+    bridge.chatState.mockResolvedValue(state({ conversationId: undefined, version: 9000 }));
+    bridge.chatStart.mockResolvedValue(state({ conversationId: undefined, error: "the cluster is not connected", version: 9001 }));
+    act(() => openChat("x"));
+    const { findByRole } = render(<ChatDrawer />);
+    expect((await findByRole("alert")).textContent).toContain("not connected");
+  });
+
+  // A refusal is its request's outcome: it shows even when its state is
+  // older than the one on screen, and the conversation stays.
+  it("shows a refusal whose state loses the version check", async () => {
+    bridge.chatState.mockResolvedValue(state({ conversationId: undefined, version: 9050 }));
+    bridge.chatStart.mockResolvedValue(state({ conversationId: undefined, version: 0, error: "the cluster is not connected" }));
+    act(() => openChat("x"));
+    const { findByRole } = render(<ChatDrawer />);
+    expect((await findByRole("alert")).textContent).toContain("not connected");
+    expect(useChat.getState().states.x.version).toBe(9050);
+  });
+
+  it("an Ask refusal with an older state keeps the conversation and gives the question back", async () => {
+    bridge.chatState.mockResolvedValue(state({ version: 9060 }));
+    bridge.chatAsk.mockResolvedValue(state({ conversationId: undefined, version: 0, error: "this conversation was cleared" }));
+    act(() => openChat("x"));
+    const { findByLabelText, findByTestId } = render(<ChatDrawer />);
+    const input = (await findByLabelText("question")) as HTMLTextAreaElement;
+    fireEvent.change(input, { target: { value: "anyone?" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect((await findByTestId("chat-failure")).textContent).toContain("was cleared");
+    await waitFor(() => expect(input.value).toBe("anyone?"));
+    expect(useChat.getState().states.x.conversationId).toBe("c1");
+  });
+
+  it("a failed Ask call keeps the conversation, says so, and gives the question back", async () => {
+    bridge.chatState.mockResolvedValue(state({ version: 9100 }));
+    bridge.chatAsk.mockRejectedValue(new Error("bridge closed"));
+    act(() => openChat("x"));
+    const { findByLabelText, findByTestId } = render(<ChatDrawer />);
+    const input = (await findByLabelText("question")) as HTMLTextAreaElement;
+    fireEvent.change(input, { target: { value: "still there?" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect((await findByTestId("chat-failure")).textContent).toContain("bridge closed");
+    await waitFor(() => expect(input.value).toBe("still there?"));
+    expect(input.disabled).toBe(false);
+    expect(useChat.getState().states.x.conversationId).toBe("c1");
   });
 });

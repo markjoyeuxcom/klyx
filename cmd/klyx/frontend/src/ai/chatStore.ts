@@ -18,6 +18,14 @@ type ChatUI = {
   seeds: Record<string, ChatFollowUp | undefined>;
   asking: Record<string, ChatAsking | undefined>;
   cleared: Record<string, boolean>;
+  // failures are bridge failures, shown beside the state, never as one;
+  // reqs numbers requests per cluster so only the latest one's failure
+  // shows (an older request failing later says nothing).
+  failures: Record<string, string | undefined>;
+  reqs: Record<string, number>;
+  nextReq: (cluster: string) => number;
+  fail: (cluster: string, req: number, message: string) => void;
+  succeed: (cluster: string, req: number) => void;
   openFor: (cluster: string, followUp?: ChatFollowUp) => void;
   close: () => void;
   apply: (cluster: string, st: ChatState) => boolean;
@@ -35,6 +43,19 @@ export const useChat = create<ChatUI>((set, get) => ({
   seeds: {},
   asking: {},
   cleared: {},
+  failures: {},
+  reqs: {},
+  nextReq: (cluster) => {
+    const n = (get().reqs[cluster] ?? 0) + 1;
+    set((s) => ({ reqs: { ...s.reqs, [cluster]: n } }));
+    return n;
+  },
+  fail: (cluster, req, message) => {
+    if (get().reqs[cluster] === req) set((s) => ({ failures: { ...s.failures, [cluster]: message } }));
+  },
+  succeed: (cluster, req) => {
+    if (get().reqs[cluster] === req) set((s) => ({ failures: { ...s.failures, [cluster]: undefined } }));
+  },
   openFor: (cluster, followUp) =>
     set((s) => ({ open: true, cluster, seeds: followUp ? { ...s.seeds, [cluster]: followUp } : s.seeds })),
   close: () => set({ open: false }),

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -582,5 +583,55 @@ func TestChatSeedRefusesAReplacement(t *testing.T) {
 	st = f.svc.Ask("x", st.ConversationID, "why?", &ChatSeedDTO{Kind: "row", Task: "pods", Part: "pods"})
 	if !strings.Contains(st.Notice, "not valid") {
 		t.Fatalf("a seed without its UID is refused before any read: %+v", st)
+	}
+}
+
+// ---- Codex review of 0725e47 ------------------------------------------------------
+
+// A refusal carries the current version: never older than an empty State
+// read just before it.
+func TestChatStartRefusalIsVersioned(t *testing.T) {
+	f := newToolsFixture(t)
+	f.svc.Start("x")
+	f.usable = false
+	empty := f.svc.State("y")
+	refused := f.svc.Start("y")
+	if refused.Error == "" || refused.Version <= empty.Version {
+		t.Fatalf("a Start refusal is a newer state than the empty one before it: %d <= %d (%q)", refused.Version, empty.Version, refused.Error)
+	}
+}
+
+// Retention counts a follow-up's seed envelope and, for a sole oversized
+// exchange, sheds it too.
+func TestChatRetentionCountsSeedEnvelopes(t *testing.T) {
+	f := newToolsFixture(t)
+	f.svc.Start("x")
+	c := f.svc.convs["x"]
+	for i := 0; i < 18; i++ {
+		c.exchanges = append(c.exchanges, &exchange{id: fmt.Sprintf("e%d", i), question: "q", answer: strings.Repeat("a", 32000), outcome: "answered",
+			seedData: strings.Repeat("s", 16*1024), seed: &ChatSeedDTO{Kind: "row", Task: "pods", Part: "pods", UID: "u"},
+			msgs: []ai.ConvMessage{{Role: "assistant", Continuation: &ai.Continuation{Provider: ai.ProviderOpenAI, Raw: json.RawMessage(`"` + strings.Repeat("x", 20000) + `"`)}}}})
+	}
+	f.svc.mu.Lock()
+	f.svc.retainLocked(c)
+	f.svc.mu.Unlock()
+	// Measured independently of exchangeBytes: every retained payload the
+	// exchange holds, counted once.
+	total := 0
+	for _, e := range c.exchanges {
+		seed, _ := json.Marshal(e.seed)
+		msgs, _ := json.Marshal(e.msgs)
+		total += len(e.question) + len(e.answer) + len(e.seedData) + len(seed) + len(msgs)
+	}
+	if total > chatRetainBytes {
+		t.Fatalf("seed envelopes count toward the bound: %d bytes kept in %d exchanges", total, len(c.exchanges))
+	}
+	one := &exchange{id: "big", question: "q", outcome: "answered", seedData: strings.Repeat("s", 2<<20)}
+	c.exchanges = []*exchange{one}
+	f.svc.mu.Lock()
+	f.svc.retainLocked(c)
+	f.svc.mu.Unlock()
+	if len(c.exchanges) == 1 && (c.exchanges[0].seedData != "" || exchangeBytes(c.exchanges[0]) > chatRetainBytes) {
+		t.Fatalf("a sole oversized exchange sheds its seed: %d bytes", exchangeBytes(c.exchanges[0]))
 	}
 }

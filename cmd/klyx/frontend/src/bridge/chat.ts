@@ -45,32 +45,19 @@ export type ChatSeed =
   | { kind: "object"; group: string; version: string; plural: string; namespace?: string; name: string; uid: string }
   | { kind: "helm"; namespace: string; name: string };
 
-function failed(cluster: string, e: unknown): ChatState {
-  return { cluster, protected: false, trimmed: false, removed: 0, active: false, exchanges: [], version: 0, error: e instanceof Error ? e.message : String(e) };
-}
-
+// The calls below return the backend's state, or throw when the bridge
+// itself failed: a transport failure is never turned into a conversation
+// state (Codex review of 0725e47) - the drawer shows it beside the state.
 export async function chatStart(cluster: string): Promise<ChatState> {
-  try {
-    return (await ChatService.Start(cluster)) as ChatState;
-  } catch (e) {
-    return failed(cluster, e);
-  }
+  return (await ChatService.Start(cluster)) as ChatState;
 }
 
 export async function chatState(cluster: string): Promise<ChatState> {
-  try {
-    return (await ChatService.State(cluster)) as ChatState;
-  } catch (e) {
-    return failed(cluster, e);
-  }
+  return (await ChatService.State(cluster)) as ChatState;
 }
 
 export async function chatAsk(cluster: string, conversationId: string, question: string, seed?: ChatSeed): Promise<ChatState> {
-  try {
-    return (await ChatService.Ask(cluster, conversationId, question, (seed ?? null) as never)) as ChatState;
-  } catch (e) {
-    return failed(cluster, e);
-  }
+  return (await ChatService.Ask(cluster, conversationId, question, (seed ?? null) as never)) as ChatState;
 }
 
 export async function chatStop(cluster: string, conversationId: string): Promise<void> {

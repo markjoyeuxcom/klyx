@@ -188,16 +188,23 @@ func (s *ChatService) Start(cluster string) ChatStateDTO {
 	if c := s.convs[cluster]; c != nil && c.ended == "" {
 		return s.stateLocked(c)
 	}
+	// A refusal is a state like any other: it carries the current version,
+	// so the drawer never drops it as older than what it shows (Codex
+	// review of 0725e47).
+	refuse := func(msg string) ChatStateDTO {
+		s.version++
+		return ChatStateDTO{Cluster: cluster, Error: msg, Protected: s.ai.protected(cluster), Exchanges: []ChatExchangeDTO{}, Version: s.version}
+	}
 	st := s.ai.load()
 	if refusal := s.refusal(st, cluster); refusal != "" {
-		return ChatStateDTO{Cluster: cluster, Error: refusal, Protected: s.ai.protected(cluster)}
+		return refuse(refusal)
 	}
 	conn, usable := s.state(cluster)
 	if conn == nil || !usable {
-		return ChatStateDTO{Cluster: cluster, Error: "the cluster is not connected", Protected: s.ai.protected(cluster)}
+		return refuse("the cluster is not connected")
 	}
 	if len(s.convs) >= chatMaxConvs && s.convs[cluster] == nil {
-		return ChatStateDTO{Cluster: cluster, Error: fmt.Sprintf("at most %d conversations at once; clear one first", chatMaxConvs)}
+		return refuse(fmt.Sprintf("at most %d conversations at once; clear one first", chatMaxConvs))
 	}
 	mode := "snapshot"
 	if _, ok := st.Provider.(ai.Converser); ok {
@@ -350,7 +357,7 @@ func (s *ChatService) Ask(cluster, conversationID, question string, seed *ChatSe
 	defer s.mu.Unlock()
 	if s.convs[cluster] != c || c.active != turn {
 		// Cleared or replaced while the turn ran: the late result is dropped.
-		return ChatStateDTO{Cluster: cluster, Error: "this conversation was cleared"}
+		return ChatStateDTO{Cluster: cluster, Error: "this conversation was cleared", Exchanges: []ChatExchangeDTO{}, Version: s.version}
 	}
 	c.active = nil
 	if turn.stopped && err == nil {
@@ -453,7 +460,7 @@ func (s *ChatService) retainLocked(c *conversation) {
 	}
 	if len(c.exchanges) == 1 && size() > chatRetainBytes {
 		e := c.exchanges[0]
-		e.msgs, e.noHistory = nil, true
+		e.msgs, e.seedData, e.seed, e.noHistory = nil, "", nil, true
 		e.note = "this exchange was too large to keep for follow-ups"
 		if exchangeBytes(e) > chatRetainBytes {
 			c.exchanges = nil
@@ -463,7 +470,11 @@ func (s *ChatService) retainLocked(c *conversation) {
 }
 
 func exchangeBytes(e *exchange) int {
-	n := len(e.question) + len(e.answer) + len(e.err) + len(e.note)
+	n := len(e.question) + len(e.answer) + len(e.err) + len(e.note) + len(e.seedData)
+	if e.seed != nil {
+		b, _ := json.Marshal(e.seed)
+		n += len(b)
+	}
 	for _, m := range e.msgs {
 		n += msgBytes(m)
 	}

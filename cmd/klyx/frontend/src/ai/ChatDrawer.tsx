@@ -22,13 +22,45 @@ export function ChatDrawer() {
   return <ChatPanel key={cluster} cluster={cluster} />;
 }
 
-// refresh reads the conversation back; the store keeps it only if it is not
-// older than what the drawer shows.
-async function refresh(cluster: string): Promise<ChatState> {
-  const st = await chatState(cluster);
-  useChat.getState().apply(cluster, st);
-  logCalls(cluster, useChat.getState().states[cluster]);
-  return st;
+const messageOf = (e: unknown) => (e instanceof Error ? e.message : String(e));
+
+// request runs one bridge call: its state goes through the version guard,
+// and a bridge failure is shown beside the state - only if it is the
+// cluster's latest request. A refusal is that request's outcome, not a
+// conversation state: when its state loses to a newer one, its error or
+// notice still shows, fenced by request order (Codex review of 0725e47).
+async function request(cluster: string, call: () => Promise<ChatState>): Promise<ChatState | null> {
+  const chat = useChat.getState();
+  const n = chat.nextReq(cluster);
+  try {
+    const st = await call();
+    const outcome = st.error || st.notice;
+    if (useChat.getState().apply(cluster, st) || !outcome) useChat.getState().succeed(cluster, n);
+    else useChat.getState().fail(cluster, n, outcome);
+    logCalls(cluster, useChat.getState().states[cluster]);
+    return st;
+  } catch (e) {
+    useChat.getState().fail(cluster, n, `Klyx could not reach its chat service: ${messageOf(e)}`);
+    return null;
+  }
+}
+
+// refresh reads the conversation back as a request of its own.
+function refresh(cluster: string): Promise<ChatState | null> {
+  return request(cluster, () => chatState(cluster));
+}
+
+// background reads the conversation back while something else is the
+// latest request (a running Ask, a read event): its state still goes
+// through the version guard, but it never claims or clears the failure
+// slot, so an Ask's own failure is not hidden by it.
+async function background(cluster: string): Promise<void> {
+  try {
+    useChat.getState().apply(cluster, await chatState(cluster));
+    logCalls(cluster, useChat.getState().states[cluster]);
+  } catch {
+    // the next request reports a lasting failure
+  }
 }
 
 function ChatPanel({ cluster }: { cluster: string }) {
@@ -37,9 +69,10 @@ function ChatPanel({ cluster }: { cluster: string }) {
   const followUp = useChat((s) => s.seeds[cluster]);
   const asking = useChat((s) => s.asking[cluster]);
   const cleared = useChat((s) => s.cleared[cluster] ?? false);
+  const failure = useChat((s) => s.failures[cluster]);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
-  const { setDraft, setSeed, setAsking, setCleared, close, apply } = useChat.getState();
+  const { setDraft, setSeed, setAsking, setCleared, close } = useChat.getState();
 
   useEffect(() => {
     let alive = true;
@@ -47,21 +80,20 @@ function ChatPanel({ cluster }: { cluster: string }) {
       const s = await refresh(cluster);
       // Opening the drawer starts a conversation - unless the operator
       // cleared it, which never starts another by itself.
-      if (alive && !s.conversationId && !s.error && !useChat.getState().cleared[cluster]) {
-        const started = await chatStart(cluster);
-        apply(cluster, started);
+      if (alive && s && !s.conversationId && !s.error && !useChat.getState().cleared[cluster]) {
+        await request(cluster, () => chatStart(cluster));
       }
     })();
     inputRef.current?.focus();
     return () => {
       alive = false;
     };
-  }, [cluster, apply]);
+  }, [cluster]);
 
   const conversationId = st?.conversationId;
   useEffect(() => {
     if (!conversationId) return;
-    return onChatRead(conversationId, () => void refresh(cluster));
+    return onChatRead(conversationId, () => void background(cluster));
   }, [conversationId, cluster]);
 
   useEffect(() => {
@@ -78,15 +110,14 @@ function ChatPanel({ cluster }: { cluster: string }) {
     setDraft(cluster, "");
     setSeed(cluster, undefined);
     setAsking(cluster, { conversationId, question: q });
-    const pending = chatAsk(cluster, conversationId, q, seed);
-    void refresh(cluster); // shows the question as soon as the backend has it
+    const pending = request(cluster, () => chatAsk(cluster, conversationId, q, seed));
+    void background(cluster); // shows the question as soon as the backend has it
     const next = await pending;
-    apply(cluster, next);
-    logCalls(cluster, useChat.getState().states[cluster]);
     if (useChat.getState().asking[cluster]?.question === q) setAsking(cluster, undefined);
-    if (next.notice && !next.exchanges.some((e) => e.question === q) && !useChat.getState().drafts[cluster]) {
-      // A recoverable refusal (too long, one already running): the question
-      // comes back to the editor, and its follow-up target too.
+    const refused = next === null || ((!!next.notice || !!next.error) && !next.exchanges.some((e) => e.question === q));
+    if (refused && !useChat.getState().drafts[cluster]) {
+      // A refusal (too long, one already running, the conversation gone):
+      // the question comes back to the editor, and its follow-up target too.
       setDraft(cluster, q);
       if (seed && followUp) setSeed(cluster, followUp);
     }
@@ -102,7 +133,7 @@ function ChatPanel({ cluster }: { cluster: string }) {
   const start = async () => {
     if (conversationId) await chatClear(cluster, conversationId);
     setCleared(cluster, false);
-    apply(cluster, await chatStart(cluster));
+    await request(cluster, () => chatStart(cluster));
   };
 
   const inFlight = st?.exchanges.find((e) => e.outcome === "");
@@ -190,6 +221,7 @@ function ChatPanel({ cluster }: { cluster: string }) {
             }
           }}
         />
+        {failure && <div className="chat-small" role="alert" style={{ color: "var(--color-text-danger)" }} data-testid="chat-failure">{failure}</div>}
         {(tooLong || st?.notice) && (
           <div className="chat-small" role="status" style={{ color: "var(--color-text-warning)" }} data-testid="chat-input-notice">
             {tooLong ? `The question is ${bytes} bytes; the limit is ${QUESTION_MAX_BYTES} (UTF-8). Shorten it.` : st?.notice}
