@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"github.com/moomora/klyx/internal/health"
-	"github.com/moomora/klyx/internal/kmeta"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
@@ -80,31 +79,41 @@ func TestParseAttemptedRevisionAndHelmHistory(t *testing.T) {
 	}
 }
 
-// Since is filled only when Ready's own time dates the role; Reason only for
-// a role that is neither ok nor unknown.
-func TestRuleSinceAndReasonAreReadyBacked(t *testing.T) {
+// Ready's time is the condition's age, never the role's start: Cond is
+// filled when the role is read from Ready, Since never; Reason only for a
+// role that is neither ok nor unknown.
+func TestRuleCondAndReasonAreReadyBacked(t *testing.T) {
 	at := time.Date(2026, 10, 14, 9, 0, 0, 0, time.UTC)
 	base := Resource{Kind: KustomizationKind, Ready: Failed, Reason: "BuildFailed", Message: "kustomize build failed", ReadySince: at, Generation: 1}
-	if e := ReconciliationRule(base); e.Role != health.Fault || e.Since == nil || !e.Since.Equal(at) || e.Reason != "BuildFailed: kustomize build failed" {
-		t.Fatalf("a failure is dated by Ready and carries its reason: %+v", e)
+	e := ReconciliationRule(base)
+	if e.Role != health.Fault || e.Since != nil || e.Reason != "BuildFailed: kustomize build failed" {
+		t.Fatalf("a failure carries its reason and no role start: %+v", e)
+	}
+	if e.Cond == nil || e.Cond.Type != "Ready" || e.Cond.Status != "False" || !e.Cond.At.Equal(at) {
+		t.Fatalf("a failure carries Ready's own time as condition evidence: %+v", e.Cond)
 	}
 	ok := base
 	ok.Ready, ok.Reason, ok.Message = Ready, "ReconciliationSucceeded", "applied"
-	if e := ReconciliationRule(ok); e.Since == nil || e.Reason != "" {
-		t.Fatalf("ready is dated, with no reason: %+v", e)
+	if e := ReconciliationRule(ok); e.Since != nil || e.Cond == nil || e.Cond.Status != "True" || e.Reason != "" {
+		t.Fatalf("ready: condition evidence, no reason: %+v", e)
 	}
 	for name, r := range map[string]Resource{
 		"suspended":   func() Resource { x := base; x.Suspended = true; return x }(),
 		"stale":       func() Resource { x := base; x.Stale = true; return x }(),
 		"reconciling": func() Resource { x := base; x.Ready = Reconciling; return x }(),
 	} {
-		if e := ReconciliationRule(r); e.Since != nil || e.Reason != "" {
-			t.Errorf("%s: Ready's time does not date this role: %+v", name, e)
+		if e := ReconciliationRule(r); e.Since != nil || e.Cond != nil || e.Reason != "" {
+			t.Errorf("%s: not read from Ready: %+v", name, e)
 		}
 	}
-	src := Source{Ready: Failed, Reason: "GitOperationFailed", Message: "auth", ReadySince: at, Generation: 1}
-	if e := SourceRule(src); e.Since == nil || e.Reason != "GitOperationFailed: auth" {
-		t.Fatalf("a failing source is dated: %+v", e)
+	noTime := base
+	noTime.ReadySince = time.Time{}
+	if e := ReconciliationRule(noTime); e.Cond != nil || e.Reason == "" {
+		t.Errorf("no Ready time: no evidence, reason kept: %+v", e)
+	}
+	src := Source{Ready: Failed, Reason: "GitOperationFailed", Message: "auth", ReadySince: at}
+	if e := SourceRule(src); e.Since != nil || e.Cond == nil || e.Reason != "GitOperationFailed: auth" {
+		t.Fatalf("a failing source: condition evidence and reason: %+v", e)
 	}
 	long := health.CapReason("R", string(make([]rune, 500)))
 	if n := len([]rune(long)); n != health.ReasonMax {
@@ -112,40 +121,29 @@ func TestRuleSinceAndReasonAreReadyBacked(t *testing.T) {
 	}
 }
 
-// Codex review of 75b3990: an overlay that ends without changing Ready (a
-// spec edit the controller re-observes, a suspend and resume) must not leave
-// Ready's older time dating the role that follows it.
-func TestRuleSinceNeedsAnUndisturbedReady(t *testing.T) {
+// Codex review of 7f1957f: a reconcile ends by removing Reconciling with
+// Ready unchanged, even at generation 1 - so the OK after it is never dated
+// by Ready's time, for a Kustomization or a source.
+func TestStatusOverlayLeavesTheRoleUndated(t *testing.T) {
 	at := time.Date(2026, 10, 14, 9, 0, 0, 0, time.UTC)
-	edited := Resource{Kind: KustomizationKind, Ready: Failed, Reason: "BuildFailed", ReadySince: at, Generation: 3}
-	if e := ReconciliationRule(edited); e.Since != nil || e.Reason == "" {
-		t.Errorf("edited, no managedFields: no Since, reason kept: %+v", e)
-	}
-	edited.Writes = kmeta.Writes{Main: at.Add(-time.Hour), Status: at, Known: true}
-	if e := ReconciliationRule(edited); e.Since == nil || !e.Since.Equal(at) {
-		t.Errorf("edited before Ready changed, no write since: dated: %+v", e)
-	}
-	// Failed at 09:00, edited at 10:00 (Syncing...), re-observed at 11:00
-	// with Ready still False and its time unchanged.
-	edited.Writes = kmeta.Writes{Main: at.Add(time.Hour), Status: at.Add(2 * time.Hour), Known: true}
-	if e := ReconciliationRule(edited); e.Since != nil || e.Reason == "" {
-		t.Errorf("an overlay ended after Ready's time: no Since: %+v", e)
-	}
-	// Re-observed without a spec edit after Ready's time (a status write
-	// alone): still a possible overlay end.
-	edited.Writes = kmeta.Writes{Main: at.Add(-time.Hour), Status: at.Add(time.Hour), Known: true}
-	if e := ReconciliationRule(edited); e.Since != nil {
-		t.Errorf("a status write after Ready's time: no Since: %+v", e)
-	}
-
-	// A source suspended and resumed after Ready's time.
-	src := Source{Ready: Failed, Reason: "GitOperationFailed", ReadySince: at, Generation: 2,
-		Writes: kmeta.Writes{Main: at.Add(time.Hour), Known: true}}
-	if e := SourceRule(src); e.Since != nil || e.Reason == "" {
-		t.Errorf("a resumed source: no Since, reason kept: %+v", e)
-	}
-	src.Writes = kmeta.Writes{Main: at.Add(-time.Hour), Status: at.Add(time.Hour), Known: true}
-	if e := SourceRule(src); e.Since == nil {
-		t.Errorf("a source's later status writes do not matter (no generation overlay): %+v", e)
+	for _, kind := range []string{"Kustomization", "GitRepository"} {
+		rc := readyCond("True", "Succeeded", "", at.Format(time.RFC3339))
+		u := lineObj(kind, map[string]any{}, map[string]any{"observedGeneration": int64(1), "conditions": []any{rc}})
+		u.SetGeneration(1)
+		rule := func() health.NativeEval {
+			if kind == "Kustomization" {
+				return ReconciliationRule(ParseKustomization(u))
+			}
+			return SourceRule(ParseSource(u))
+		}
+		st := u.Object["status"].(map[string]any)
+		st["conditions"] = []any{rc, map[string]any{"type": "Reconciling", "status": "True", "lastTransitionTime": at.Add(time.Hour).Format(time.RFC3339)}}
+		if e := rule(); e.Role != health.Progressing {
+			t.Fatalf("%s: the overlay: %+v", kind, e)
+		}
+		st["conditions"] = []any{rc}
+		if e := rule(); e.Role != health.OK || e.Since != nil || e.Cond == nil || !e.Cond.At.Equal(at) {
+			t.Fatalf("%s: after the reconcile, undated with Ready's age as evidence: %+v", kind, e)
+		}
 	}
 }

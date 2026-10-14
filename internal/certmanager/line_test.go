@@ -8,7 +8,6 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/moomora/klyx/internal/health"
-	"github.com/moomora/klyx/internal/kmeta"
 )
 
 // The Line §8.1: the parser keeps each condition's lastTransitionTime.
@@ -43,13 +42,16 @@ func TestCertificateRuleSinceAndReason(t *testing.T) {
 	if e := CertificateRule(failed, now); e.Role != health.Fault || e.Since == nil || !e.Since.Equal(issuing) || e.Reason != "DoesNotExist: secret missing" {
 		t.Errorf("failed after an issuance: the later Issuing time dates the role, got %+v", e)
 	}
-	failed.IssuingChanged = time.Time{}
-	if e := CertificateRule(failed, now); e.Since == nil || !e.Since.Equal(ready) {
-		t.Errorf("failed, no Issuing condition: Ready's time, got %+v", e)
+	if e := CertificateRule(failed, now); e.Cond == nil || e.Cond.Type != "Ready" || e.Cond.Status != "False" || !e.Cond.At.Equal(ready) {
+		t.Errorf("failed: Ready's own time is condition evidence, got %+v", e.Cond)
 	}
-	unknown := Certificate{Ready: Unknown, Reason: "Pending", ReadySince: ready, Generation: 1}
-	if e := CertificateRule(unknown, now); e.Since == nil || e.Reason != "" {
-		t.Errorf("unknown with a Ready condition: dated, no reason, got %+v", e)
+	failed.IssuingChanged = time.Time{}
+	if e := CertificateRule(failed, now); e.Since != nil || e.Cond == nil || e.Reason == "" {
+		t.Errorf("failed, no Issuing condition (it may have been removed unseen): undated, evidence and reason kept, got %+v", e)
+	}
+	unknown := Certificate{Ready: Unknown, Reason: "Pending", ReadySince: ready, IssuingChanged: issuing, Generation: 1}
+	if e := CertificateRule(unknown, now); e.Since != nil || e.Cond == nil || e.Cond.Status != "Unknown" || e.Reason != "" {
+		t.Errorf("unknown: an expiry can overlay it unseen, so undated; evidence, no reason, got %+v", e)
 	}
 
 	expired := Certificate{Ready: Ready, NotAfter: now.Add(-90 * time.Minute), ReadySince: ready}
@@ -88,27 +90,21 @@ func TestIssuerRuleSinceAndReason(t *testing.T) {
 // Codex review of 75b3990: Ready=False since 09:00; a spec edit at 10:00
 // makes the certificate Syncing...; cert-manager re-observes it at 11:00
 // without changing Ready (it keeps the transition time when the status is
-// unchanged). The fault that follows is not dated 09:00.
+// unchanged). An edited certificate's fault is never dated by Ready's time.
 func TestCertificateSinceAcrossASpecOverlay(t *testing.T) {
 	at := time.Date(2026, 10, 14, 9, 0, 0, 0, time.UTC)
-	c := Certificate{Ready: Failed, Reason: "DoesNotExist", ReadySince: at, Generation: 1, ObservedGeneration: 1}
+	c := Certificate{Ready: Failed, Reason: "DoesNotExist", ReadySince: at, IssuingChanged: at.Add(-time.Minute), Generation: 1, ObservedGeneration: 1}
 	if e := CertificateRule(c, at); e.Since == nil || !e.Since.Equal(at) {
-		t.Fatalf("never edited: dated, got %+v", e)
+		t.Fatalf("never edited, Issuing present: dated, got %+v", e)
 	}
 	c.Generation, c.Stale = 2, true
-	c.Writes = kmeta.Writes{Main: at.Add(time.Hour), Status: at, Known: true}
 	if e := CertificateRule(c, at.Add(time.Hour)); e.Role != health.Progressing {
 		t.Fatalf("the overlay: progressing, got %+v", e)
 	}
 	c.Stale, c.ObservedGeneration = false, 2
-	c.Writes.Status = at.Add(2 * time.Hour)
-	if e := CertificateRule(c, at.Add(2*time.Hour)); e.Role != health.Fault || e.Since != nil || e.Reason == "" {
-		t.Fatalf("after the overlay: fault, undated, reason kept, got %+v", e)
-	}
-	// Edited before the failure and nothing written since: dated.
-	c.Writes = kmeta.Writes{Main: at.Add(-time.Hour), Status: at, Known: true}
-	if e := CertificateRule(c, at.Add(2*time.Hour)); e.Since == nil || !e.Since.Equal(at) {
-		t.Fatalf("no write after the failure: dated, got %+v", e)
+	e := CertificateRule(c, at.Add(2*time.Hour))
+	if e.Role != health.Fault || e.Since != nil || e.Reason == "" || e.Cond == nil || !e.Cond.At.Equal(at) {
+		t.Fatalf("after the overlay: fault, undated, Ready's age kept as evidence, got %+v", e)
 	}
 }
 

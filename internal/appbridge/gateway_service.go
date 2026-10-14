@@ -119,7 +119,7 @@ func (s *GatewayService) GetRouteMetrics(cluster string, routeKeys []string) Rou
 
 func toGatewayRefDTO(r gwapi.GatewayRef) GatewayRefDTO {
 	g := gatewayRefFields(r)
-	g.Rule = toRuleDTO(gwapi.GatewayRule(r.AcceptedCond, r.ProgrammedCond, r.Generation, r.Writes))
+	g.Rule = toRuleDTO(gwapi.GatewayRule(r.AcceptedCond, r.ProgrammedCond, r.Generation))
 	return g
 }
 

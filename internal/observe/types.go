@@ -108,11 +108,21 @@ type Ref struct {
 	Label      string `json:"label"`
 	Generation int64  `json:"generation,omitempty"`
 	Route      string `json:"route,omitempty"` // nav registry destination id
-	// Since is when the current role began, when the rule backs it with a
-	// timestamp (health.NativeEval.Since); Reason the rule's capped reason
-	// and message (The Line §8.1). Absent otherwise.
-	Since  *time.Time `json:"since,omitempty"`
-	Reason string     `json:"reason,omitempty"`
+	// Since is when the current role began, when the rule proves it
+	// (health.NativeEval.Since); Condition the deciding condition's own
+	// transition, qualified evidence that never dates the role; Reason the
+	// rule's capped reason and message (The Line §8.1). Absent otherwise.
+	Since     *time.Time `json:"since,omitempty"`
+	Condition *Condition `json:"condition,omitempty"`
+	Reason    string     `json:"reason,omitempty"`
+}
+
+// Condition is one condition's own transition: it has had Status since
+// Since ("Ready=False since 09:00, condition time").
+type Condition struct {
+	Type   string    `json:"type"`
+	Status string    `json:"status"`
+	Since  time.Time `json:"since"`
 }
 
 // Part is one counted entity set inside a task.

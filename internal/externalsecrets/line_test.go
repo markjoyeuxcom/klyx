@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/moomora/klyx/internal/health"
-	"github.com/moomora/klyx/internal/kmeta"
 )
 
 // The Line §8.1: the parser keeps the Ready condition's lastTransitionTime.
@@ -65,30 +64,32 @@ func TestStoreRuleSinceAndReason(t *testing.T) {
 }
 
 // Codex review of 75b3990: the stale threshold is computed from the current
-// interval and policy, so a spec edit after it moves the role's start.
-func TestExternalSecretSinceNeedsASettledSpec(t *testing.T) {
+// interval and policy, so only a never-edited spec lets it date the role.
+func TestExternalSecretSinceNeedsAnUneditedSpec(t *testing.T) {
 	// OK at 12:00 with a 2h interval and refreshTime 09:00; the interval is
-	// shortened to 1h at 12:01, so the secret is stale from 12:01, not 11:00.
+	// shortened to 1h at 12:01 (generation 2), so the secret is stale from
+	// 12:01, not 11:00 - and nothing on the object says when it changed.
 	stale := ExternalSecret{State: Synced, Stale: true, RefreshInterval: time.Hour, RefreshTime: now.Add(-3 * time.Hour),
-		ReadySince: now.Add(-5 * time.Hour), Generation: 2, Writes: kmeta.Writes{Main: now.Add(time.Minute), Known: true}}
+		ReadySince: now.Add(-5 * time.Hour), Generation: 2}
 	if e := ExternalSecretRule(stale); e.Role != health.Degraded || e.Since != nil || e.Reason == "" {
-		t.Errorf("an interval edited after the threshold: undated, reason kept: %+v", e)
+		t.Errorf("an edited spec: undated, reason kept: %+v", e)
 	}
-	stale.Writes.Main = now.Add(-4 * time.Hour) // edited before the threshold (10:00)
+	stale.Generation = 1
 	if e := ExternalSecretRule(stale); e.Since == nil || !e.Since.Equal(stale.StaleAt()) {
-		t.Errorf("a spec settled before the threshold: dated: %+v", e)
-	}
-	stale.Generation, stale.Writes = 2, kmeta.Writes{}
-	if e := ExternalSecretRule(stale); e.Since != nil {
-		t.Errorf("edited, no managedFields: undated: %+v", e)
+		t.Errorf("a never-edited spec: dated by the threshold: %+v", e)
 	}
 
-	// A stale periodic secret switched to CreatedOnce just now is OK from
-	// now, not from Ready's old time.
-	once := ExternalSecret{State: Synced, RefreshPolicy: "CreatedOnce", RefreshInterval: time.Hour, ReadySince: now.Add(-5 * time.Hour),
-		Generation: 3, Writes: kmeta.Writes{Main: now.Add(-time.Minute), Known: true}}
-	if e := ExternalSecretRule(once); e.Since != nil {
-		t.Errorf("a policy switched after Ready's time: undated: %+v", e)
+	// A stale periodic secret switched to CreatedOnce is OK from the switch,
+	// not from Ready's old time.
+	once := ExternalSecret{State: Synced, RefreshPolicy: "CreatedOnce", RefreshInterval: time.Hour, ReadySince: now.Add(-5 * time.Hour), Generation: 3}
+	if e := ExternalSecretRule(once); e.Since != nil || e.Cond == nil || e.Cond.Status != "True" {
+		t.Errorf("an edited non-periodic secret: undated, Ready's age as evidence: %+v", e)
+	}
+
+	// Failed is a function of Ready alone: dated at any generation.
+	failed := ExternalSecret{State: Failed, Reason: "SecretSyncedError", ReadySince: now.Add(-time.Hour), Generation: 7}
+	if e := ExternalSecretRule(failed); e.Since == nil || e.Cond == nil || e.Cond.Status != "False" {
+		t.Errorf("failed: dated by Ready at any generation: %+v", e)
 	}
 }
 

@@ -4,11 +4,7 @@
 // unstructured. Policy attachment is M5-b (the Policies fields stay empty here).
 package gwapi
 
-import (
-	"time"
-
-	"github.com/moomora/klyx/internal/kmeta"
-)
+import "time"
 
 // Topology is the per-Gateway data path.
 type Topology struct {
@@ -44,7 +40,6 @@ type GatewayNode struct {
 
 	AcceptedCond, ProgrammedCond Cond
 	Generation                   int64
-	Writes                       kmeta.Writes // dates spec and status writes (GatewayRule's Since)
 }
 
 type RouteNode struct {
@@ -175,5 +170,4 @@ type GatewayRef struct {
 	ObservedGeneration int64
 
 	AcceptedCond, ProgrammedCond Cond
-	Writes                       kmeta.Writes // dates spec and status writes (GatewayRule's Since)
 }

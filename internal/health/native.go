@@ -19,14 +19,37 @@ type NativeEval struct {
 	// Next is the time boundary the rule depends on, if any (an expiry, a
 	// refresh deadline, a launch deadline); nil when none is pending.
 	Next *time.Time
-	// Since is when the current role began, only when the rule can back it
-	// with a timestamp that matches the role (a condition's
-	// lastTransitionTime, or a time derived from fields); nil otherwise, so
-	// the age comes from Klyx's own observation instead (The Line §8.1).
+	// Since is when the current role began, only when the rule can prove it:
+	// the role is a function of inputs that have not changed since, and every
+	// change of those inputs is timestamped (a condition read alone, a field
+	// that never changes, or a time derived from fields). An overlay that can
+	// end without a timestamp - an unobserved spec, a reconcile, a suspension
+	// - makes the start unprovable, and Since stays nil: the age comes from
+	// Klyx's own observation instead (The Line §8.1).
 	Since *time.Time
+	// Cond is the condition the role was read from, with its own transition
+	// time: qualified evidence ("Ready=False since 09:00, condition time"),
+	// never the role's start. Nil when no condition decided the role or its
+	// time is absent.
+	Cond *CondSince
 	// Reason is the rule's own reason and message for a non-ok role,
 	// "reason: message", capped by CapReason; empty when ok or unknown.
 	Reason string
+}
+
+// CondSince is one condition's own transition: it has had Status since At.
+type CondSince struct {
+	Type, Status string
+	At           time.Time
+}
+
+// CondAt returns the condition evidence, nil when at is zero (an absent or
+// invalid lastTransitionTime proves nothing).
+func CondAt(condType, status string, at time.Time) *CondSince {
+	if at.IsZero() {
+		return nil
+	}
+	return &CondSince{Type: condType, Status: status, At: at}
 }
 
 // ReasonMax caps NativeEval.Reason (and the Ref that carries it).

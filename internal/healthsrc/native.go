@@ -92,22 +92,15 @@ func Native(d NativeDeps) ([]observe.KindSpec, []observe.DomainSpec) {
 	return kinds, domains
 }
 
-// ProjectUnstructured drops what no parser reads: each managedFields entry's
-// field set (its manager, operation, subresource and time stay - they date
-// writes, kmeta.WritesOf) and the kubectl last-applied annotation (often the
-// largest field). It copies.
+// ProjectUnstructured drops what no parser reads: managedFields and the
+// kubectl last-applied annotation (often the largest field). It copies.
 func ProjectUnstructured(obj any) (any, error) {
 	u, ok := obj.(*unstructured.Unstructured)
 	if !ok {
 		return nil, errWant("*Unstructured", obj)
 	}
 	out := u.DeepCopy()
-	if mf := out.GetManagedFields(); len(mf) > 0 {
-		for i := range mf {
-			mf[i].FieldsType, mf[i].FieldsV1 = "", nil
-		}
-		out.SetManagedFields(mf)
-	}
+	out.SetManagedFields(nil)
 	if ann := out.GetAnnotations(); ann != nil {
 		if _, big := ann["kubectl.kubernetes.io/last-applied-configuration"]; big {
 			delete(ann, "kubectl.kubernetes.io/last-applied-configuration")
@@ -182,9 +175,17 @@ func nativeResult(cluster, route, word string, items []nativeItem) observe.PartR
 		}
 		top = append(top, observe.Ref{Cluster: cluster, GVR: it.ref.gvr, Namespace: it.ref.ns, Name: it.ref.name, UID: it.ref.uid,
 			Role: it.eval.Role.String(), Label: it.eval.Label, Generation: it.ref.generation, Route: route,
-			Since: it.eval.Since, Reason: it.eval.Reason})
+			Since: it.eval.Since, Condition: conditionOf(it.eval.Cond), Reason: it.eval.Reason})
 	}
 	return observe.PartResult{Native: &nc, Top: top, Next: next}
+}
+
+// conditionOf carries a rule's condition evidence onto a ref.
+func conditionOf(c *health.CondSince) *observe.Condition {
+	if c == nil {
+		return nil
+	}
+	return &observe.Condition{Type: c.Type, Status: c.Status, Since: c.At}
 }
 
 // refOf builds a Top ref whose GVR is the version the object was served at

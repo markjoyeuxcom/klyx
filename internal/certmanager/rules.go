@@ -4,7 +4,6 @@ import (
 	"time"
 
 	"github.com/moomora/klyx/internal/health"
-	"github.com/moomora/klyx/internal/kmeta"
 )
 
 // Expired: a known NotAfter at or before now, at the second granularity the
@@ -43,18 +42,23 @@ func CertificateRule(c Certificate, now time.Time) health.NativeEval {
 	return e
 }
 
-// certificateDated fills Since and Reason (The Line §8.1); Reason never
-// depends on a time. Expiry is derived: the role began at notAfter, and it
-// overrides every other role. A role read from the Ready condition (failed,
-// degraded, unknown) began at Ready's lastTransitionTime, or at the Issuing
-// condition's if later - a failed issuance flips Issuing to False while Ready
-// stays False - so the later time never overstates the age. Even then an
-// unobserved spec (Syncing...) can have followed it and ended without changing
-// either condition, so the time dates the role only when kmeta.Undisturbed
-// proves no such overlay. An issuance in flight is not what either time
-// records. Ready=True keeps Since nil too: a successful renewal removes the
-// Issuing condition without a timestamp, so Ready's time would overstate how
-// long the certificate has read Ready rather than Issuing.
+// certificateDated fills Since, Cond and Reason (The Line §8.1); Reason
+// never depends on a time. Expiry is derived: the role began at notAfter, and
+// it overrides every other role. A role read from the Ready condition
+// carries Ready's own time as Cond. Since is set only for a fault whose start
+// is provable:
+//   - generation 1: the spec never changed, so no unobserved spec (Syncing...)
+//     can have overlaid the fault and ended without changing Ready - every
+//     condition write was for generation 1;
+//   - an Issuing condition is present: every Issuing change since then is
+//     timestamped (a removal and re-add would reset its time), so an issuance
+//     in flight cannot have come and gone unseen;
+//   - an expiry in between is a fault too, so it never interrupts the role.
+//
+// The fault then began at the later of Ready's and Issuing's times. Unknown
+// and Ready=True stay undated: an expiry can overlay them and end without a
+// timestamp (a replaced Secret moves notAfter), and a successful renewal
+// removes Issuing without one.
 func certificateDated(e *health.NativeEval, c Certificate, expired bool) {
 	if expired {
 		at := time.Unix(c.NotAfter.Unix(), 0).UTC()
@@ -65,15 +69,30 @@ func certificateDated(e *health.NativeEval, c Certificate, expired bool) {
 	if e.Role == health.Fault || e.Role == health.Degraded {
 		e.Reason = health.CapReason(c.Reason, c.Message)
 	}
-	if e.Role == health.Progressing || e.Role == health.OK || c.ReadySince.IsZero() {
+	if e.Role == health.Progressing {
+		return
+	}
+	e.Cond = health.CondAt("Ready", certReadyStatus(c.Ready), c.ReadySince)
+	if e.Role != health.Fault || c.Generation != 1 || c.ReadySince.IsZero() || c.IssuingChanged.IsZero() {
 		return
 	}
 	since := c.ReadySince
 	if c.IssuingChanged.After(since) {
 		since = c.IssuingChanged
 	}
-	if kmeta.Undisturbed(c.Generation, c.Writes, since) {
-		e.Since = &since
+	e.Since = &since
+}
+
+// certReadyStatus is the Ready condition status a non-issuing state was read
+// from.
+func certReadyStatus(r ReadyState) string {
+	switch r {
+	case Ready:
+		return "True"
+	case Failed:
+		return "False"
+	default:
+		return "Unknown"
 	}
 }
 
@@ -91,12 +110,14 @@ func IssuerRule(i Issuer) health.NativeEval {
 	default:
 		e.Role, e.Label = health.Degraded, string(i.Ready)
 	}
-	// Every issuer role is read from the Ready condition alone, so Ready's
-	// lastTransitionTime dates it (The Line §8.1).
+	// Every issuer role is a function of the Ready condition alone (no
+	// overlay), so Ready's lastTransitionTime is the role's start (The Line
+	// §8.1).
 	if !i.ReadySince.IsZero() {
 		since := i.ReadySince
 		e.Since = &since
 	}
+	e.Cond = health.CondAt("Ready", certReadyStatus(i.Ready), i.ReadySince)
 	if e.Role != health.OK && e.Role != health.Unknown {
 		e.Reason = health.CapReason(i.Reason, i.Message)
 	}

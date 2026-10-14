@@ -8,8 +8,6 @@ import (
 	"time"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-
-	"github.com/moomora/klyx/internal/kmeta"
 )
 
 type Kind string
@@ -63,11 +61,10 @@ type ExternalSecret struct {
 	// ReadySince is the Ready condition's lastTransitionTime, zero when
 	// absent (The Line §8.1).
 	ReadySince time.Time
-	// Generation and Writes date spec changes (the refresh interval and
-	// policy are spec): whether a time still dates the role
-	// (kmeta.SpecSettled).
+	// Generation is metadata.generation: 1 proves the spec (the refresh
+	// interval and policy) never changed, so a time computed from it dates
+	// the role (The Line §8.1).
 	Generation int64
-	Writes     kmeta.Writes
 }
 
 // Store is a SecretStore or ClusterSecretStore's validation state. Namespace
@@ -122,7 +119,6 @@ func ParseExternalSecret(u *unstructured.Unstructured, now time.Time) ExternalSe
 	e.State, e.Reason, e.Message = readyFromConditions(u)
 	e.ReadySince = readySince(u)
 	e.Generation = u.GetGeneration()
-	e.Writes = kmeta.WritesOf(u)
 
 	e.StoreName, _, _ = unstructured.NestedString(u.Object, "spec", "secretStoreRef", "name")
 	kind, _, _ := unstructured.NestedString(u.Object, "spec", "secretStoreRef", "kind")

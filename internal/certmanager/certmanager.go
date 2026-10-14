@@ -7,8 +7,6 @@ import (
 	"time"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-
-	"github.com/moomora/klyx/internal/kmeta"
 )
 
 type Kind string
@@ -59,9 +57,6 @@ type Certificate struct {
 	// that can date the rule's role (The Line §8.1).
 	ReadySince     time.Time
 	IssuingChanged time.Time
-	// Writes date the latest spec and status writes (managedFields): whether
-	// those times still date the role (kmeta.Undisturbed).
-	Writes kmeta.Writes
 }
 
 // ParseCertificate extracts a Certificate's issuance state from a watched CR.
@@ -81,7 +76,6 @@ func ParseCertificate(u *unstructured.Unstructured) Certificate {
 	c.RenewalTime = parseTime(u, "status", "renewalTime")
 	c.ReadySince = conditionSince(u, "Ready")
 	c.IssuingChanged = conditionSince(u, "Issuing")
-	c.Writes = kmeta.WritesOf(u)
 	return c
 }
 

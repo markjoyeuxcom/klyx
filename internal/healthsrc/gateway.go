@@ -93,7 +93,7 @@ func evalGateways(cluster string) func(observe.Capture) observe.PartResult {
 		var rows []Row[gwapi.GatewayRef]
 		for _, u := range unstructuredOf(c.Objects[KindGateways]) {
 			g := gwapi.ParseGatewayRef(u)
-			it := nativeItem{gwapi.GatewayRule(g.AcceptedCond, g.ProgrammedCond, g.Generation, g.Writes), refOf(u, KindGateways)}
+			it := nativeItem{gwapi.GatewayRule(g.AcceptedCond, g.ProgrammedCond, g.Generation), refOf(u, KindGateways)}
 			items = append(items, it)
 			rows = append(rows, nativeRow(it, g))
 		}

@@ -44,10 +44,12 @@ func ClaimRule(c NodeClaim) health.NativeEval {
 	return e
 }
 
-// claimDated fills Since and Reason (The Line §8.1). Ready and not-ready are
-// read from the Ready condition, so its lastTransitionTime dates them.
-// "Appears stuck" is derived: it began at the launch deadline, or when Ready
-// last changed if that is later. Launching and initializing keep Since nil.
+// claimDated fills Since, Cond and Reason (The Line §8.1). Ready and
+// not-ready are functions of the Ready condition alone (a NodeClaim has no
+// spec overlay), so its lastTransitionTime is the role's start, and Ready's
+// time is also the condition evidence. "Appears stuck" is derived: it began
+// at the launch deadline (creation never changes), or when Ready last changed
+// if that is later. Launching and initializing keep Since nil.
 func claimDated(e *health.NativeEval, c NodeClaim) {
 	switch e.Role {
 	case health.OK, health.Fault:
@@ -55,6 +57,11 @@ func claimDated(e *health.NativeEval, c NodeClaim) {
 			since := c.ReadySince
 			e.Since = &since
 		}
+		status := "False"
+		if e.Role == health.OK {
+			status = "True"
+		}
+		e.Cond = health.CondAt("Ready", status, c.ReadySince)
 	case health.Degraded:
 		if c.Created.IsZero() {
 			break
@@ -87,12 +94,17 @@ func PoolRule(p NodePool) health.NativeEval {
 		e.Role, e.Label = health.Unknown, "unknown"
 	}
 	e.Included = e.Role == health.Fault
-	// Every pool role is read from the Ready condition alone, so Ready's
-	// lastTransitionTime dates it (The Line §8.1).
+	// Every pool role is a function of the Ready condition alone, so Ready's
+	// lastTransitionTime is the role's start (The Line §8.1).
 	if !p.ReadySince.IsZero() {
 		since := p.ReadySince
 		e.Since = &since
 	}
+	status := map[string]string{"ready": "True", "not-ready": "False"}[p.Ready]
+	if status == "" {
+		status = "Unknown"
+	}
+	e.Cond = health.CondAt("Ready", status, p.ReadySince)
 	if e.Role == health.Fault {
 		e.Reason = health.CapReason(p.Reason, p.Message)
 	}

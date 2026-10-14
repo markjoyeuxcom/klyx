@@ -51,7 +51,7 @@ type RoleEntry struct {
     NS     string
     Name   string
     Role   string     // a health role
-    Since  *time.Time // the rule-backed Since (2a and 75b3990), when the rule has one
+    Since  *time.Time // the proven rule Since (§8.1 as revised), when the rule has one
 }
 ```
 
@@ -210,7 +210,7 @@ type TransitionBatch struct {
 type Transition struct {
     Key, NS, Name string
     From, To      string     // a role, "absent" (new), "gone", or "unevaluated"
-    Since         *time.Time // the rule-backed Since now
+    Since         *time.Time // the proven rule Since now (§8.1 as revised)
     Restated      bool       // same role, Since changed (§4.3)
     Derived       bool       // a time-only change from the same read (§4.4)
 }
@@ -232,10 +232,11 @@ type Transition struct {
 - **A proof** is `{role, since *time.Time, notBefore *time.Time, source: rule | observed | sampled | unknown, partition}`.
 - **Proofs are kept only for non-ok roles,** which is what the queue, the inspector and the "failing since" wording need. A key that goes ok, `gone` or `unevaluated` has its proof purged or ended.
 - **Precedence:**
-  1. **A rule-backed `Since` wins whenever present.** It is controller evidence and survives Klyx's own gaps while it is unchanged.
+  1. **A proven rule `Since` wins whenever present** (§8.1 as revised: set only when the role's start is provable). It survives Klyx's own gaps while it is unchanged.
   2. **observed:** a `changes` item under continuous watch coverage, with no rule `Since`. The role began in `(PrevAt, At]`, worded "since ~<At> (observed)".
   3. **sampled:** the same from two reads, worded "between <prevReadAt> and <readAt>".
   4. **unknown:** a baseline, after-gap or post-cap first sight with no rule `Since`, worded "start unknown; first seen <At>". An observed-only baseline never proves a start.
+- **The ref's `condition`** (the deciding condition's own age) is shown beside any of these as qualified evidence: "Ready=False since 09:00 (condition time)". It never becomes the proof's start.
 - **A restated item** replaces the proof's `since` with the new rule `Since`. Nil downgrades the proof to unknown.
 - **On loss,** the partition's proofs are suspended.
 - **On after-gap,** every observed or sampled proof in that partition, changed or not, is downgraded to unknown ("seen before and after a gap"). Rule-backed proofs stay while their `Since` is unchanged.

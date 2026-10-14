@@ -779,15 +779,16 @@ Each source below is new, and each declares where its claims come from.
 - **HelmRelease rows add:** the `status.history[]` entries, at most 5, each with its chart version, `configDigest` and status.
 - **Source rows add:** `spec.url`, `spec.ref`, the artifact revision and its `lastUpdateTime`.
 - **Argo rows** keep every source pair from `spec.sources`, `status.sync.comparedTo` with `sync.revision(s)`, `status.operationState` (phase plus `syncResult` revisions), and `status.history[]` (at most 5 entries, each with its own source(s)).
-- **Refs carry `since` and `reason`,** with per-rule meaning:
+- **Refs carry `since`, `condition` and `reason`,** with per-rule meaning (revised 2026-10-15 after Codex's reviews of 75b3990 and 7f1957f):
 
-| Rule kind | `since` comes from |
+| Field | Meaning |
 |---|---|
-| **Condition-backed** (Flux Ready, Argo health and sync, cert-manager Ready, Gateway Accepted/Programmed) | the matching condition's `lastTransitionTime` |
-| **Derived** | a time computed from fields. ESO overdue: last refresh + 2 × interval. Expiry: `notAfter` minus the warning window. |
-| **Observed only** (CrashLoopBackOff, restart counts, zero endpoints, and any rule without a matching timestamp) | the observation log's wording, never an unrelated condition's age |
+| **`since`: a proven role start** | Set only when the role is a function of inputs that have not changed since, and every change of those inputs is timestamped:<br>- **a condition read alone:** issuers, stores, Karpenter claims and pools, ESO failed and unknown;<br>- **a derived instant:** certificate expiry at `notAfter`, a Karpenter launch deadline, ESO overdue at last refresh + 2 × interval;<br>- **generation 1 (never edited), where every overlay is timestamped:** Gateways, ESO stale and non-periodic synced, a certificate fault with an Issuing condition present. |
+| **`condition`: qualified evidence** | The deciding condition's type, status and `lastTransitionTime`, worded "Ready=False since 09:00 (condition time)". It is never the role's start: an unobserved spec, a reconcile or a suspension can overlay the role and end without changing the condition's time. Flux and edited objects carry only this. |
+| **Observed** (CrashLoopBackOff, restart counts, zero endpoints, routes, and anything without a proven start) | The observation log's wording (§8.2). It is never an unrelated condition's age. |
 
-  `reason` is the condition's reason and message, scrubbed and capped at 200 characters.
+  - `managedFields` cannot prove that no write happened: a manager's entry vanishes when its last owned field is removed. So write times are never used as negative proof.
+  - `reason` is the condition's reason and message, scrubbed and capped at 200 characters. It never depends on a time being present.
 - **All of this is additive.** Existing lens rules and the parity gate are unchanged.
 
 ### 8.2 The observation log and the transition stream

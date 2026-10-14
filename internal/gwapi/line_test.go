@@ -1,11 +1,11 @@
 package gwapi
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/moomora/klyx/internal/health"
-	"github.com/moomora/klyx/internal/kmeta"
 )
 
 // The Line §8.1: condOf keeps lastTransitionTime.
@@ -19,37 +19,33 @@ func TestCondOfKeepsTransitionTime(t *testing.T) {
 func TestGatewayRuleSinceAndReason(t *testing.T) {
 	t1 := time.Date(2026, 10, 14, 9, 0, 0, 0, time.UTC)
 	t2 := t1.Add(time.Hour)
-
 	cond := func(status string, observed int64, at time.Time) Cond {
 		return Cond{Status: status, Reason: "R" + status, Message: "m", ObservedGeneration: observed, LastTransitionTime: at}
 	}
 	cases := []struct {
 		name               string
+		gen                int64
 		accepted, programd Cond
 		role               health.Kind
 		since              *time.Time
+		cond               string // "Type=Status@hour", "" for none
 		reason             string
 	}{
-		{"not accepted: Accepted's time", cond("False", 2, t1), Cond{}, health.Fault, &t1, "RFalse: m"},
-		{"not accepted, last observed: reason, no Since", cond("False", 1, t1), Cond{}, health.Degraded, nil, "RFalse: m"},
-		{"not programmed after a later acceptance: the later time", cond("True", 2, t2), cond("False", 2, t1), health.Degraded, &t2, "RFalse: m"},
-		{"not programmed after an earlier acceptance: Programmed's time", cond("True", 2, t1), cond("False", 2, t2), health.Degraded, &t2, "RFalse: m"},
-		{"not programmed, last observed", cond("True", 2, t1), cond("False", 1, t2), health.Degraded, nil, "RFalse: m"},
-		{"programmed: the later of both, no reason", cond("True", 2, t1), cond("True", 2, t2), health.OK, &t2, ""},
-		{"programmed without Accepted's time: undated", cond("True", 2, time.Time{}), cond("True", 2, t2), health.OK, nil, ""},
-		{"syncing: undated", cond("True", 1, t1), cond("True", 1, t2), health.Progressing, nil, ""},
-		{"pending: undated", cond("Unknown", 2, t1), Cond{}, health.Progressing, nil, ""},
-		{"no status: undated", Cond{}, Cond{}, health.Unknown, nil, ""},
+		{"not accepted: Accepted's time", 1, cond("False", 1, t1), Cond{}, health.Fault, &t1, "Accepted=False@9", "RFalse: m"},
+		{"not accepted on an edited Gateway: evidence only", 2, cond("False", 2, t1), Cond{}, health.Fault, nil, "Accepted=False@9", "RFalse: m"},
+		{"not accepted, last observed: reason and evidence, no Since", 2, cond("False", 1, t1), Cond{}, health.Degraded, nil, "Accepted=False@9", "RFalse: m"},
+		{"not programmed after a later acceptance: the later time", 1, cond("True", 1, t2), cond("False", 1, t1), health.Degraded, &t2, "Programmed=False@9", "RFalse: m"},
+		{"not programmed after an earlier acceptance: Programmed's time", 1, cond("True", 1, t1), cond("False", 1, t2), health.Degraded, &t2, "Programmed=False@10", "RFalse: m"},
+		{"not programmed, last observed", 2, cond("True", 2, t1), cond("False", 1, t2), health.Degraded, nil, "Programmed=False@10", "RFalse: m"},
+		{"programmed: the later of both, no reason", 1, cond("True", 1, t1), cond("True", 1, t2), health.OK, &t2, "Programmed=True@10", ""},
+		{"programmed without Accepted's time: undated", 1, cond("True", 1, time.Time{}), cond("True", 1, t2), health.OK, nil, "Programmed=True@10", ""},
+		{"syncing: undated", 2, cond("True", 1, t1), cond("True", 1, t2), health.Progressing, nil, "", ""},
+		{"pending: undated", 1, cond("Unknown", 1, t1), Cond{}, health.Progressing, nil, "", ""},
+		{"no status: undated", 1, Cond{}, Cond{}, health.Unknown, nil, "", ""},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			// Edited (generation 2) before t1, and the last status write is
-			// the dated transition itself: no overlay can have followed it.
-			settled := kmeta.Writes{Main: t1.Add(-time.Hour), Status: t1, Known: true}
-			if c.since != nil {
-				settled.Status = *c.since
-			}
-			e := GatewayRule(c.accepted, c.programd, 2, settled)
+			e := GatewayRule(c.accepted, c.programd, c.gen)
 			if e.Role != c.role || e.Reason != c.reason {
 				t.Fatalf("role %s reason %q, want %s %q", e.Role, e.Reason, c.role, c.reason)
 			}
@@ -58,6 +54,13 @@ func TestGatewayRuleSinceAndReason(t *testing.T) {
 				t.Fatalf("want no Since, got %v", *e.Since)
 			case c.since != nil && (e.Since == nil || !e.Since.Equal(*c.since)):
 				t.Fatalf("want Since %v, got %v", *c.since, e.Since)
+			}
+			got := ""
+			if e.Cond != nil {
+				got = fmt.Sprintf("%s=%s@%d", e.Cond.Type, e.Cond.Status, e.Cond.At.Hour())
+			}
+			if got != c.cond {
+				t.Fatalf("condition evidence %q, want %q", got, c.cond)
 			}
 		})
 	}
@@ -83,18 +86,14 @@ func TestRouteRuleReasonWithoutSince(t *testing.T) {
 func TestGatewaySinceAcrossALastObservedOverlay(t *testing.T) {
 	at := time.Date(2026, 10, 14, 9, 0, 0, 0, time.UTC)
 	c := Cond{Status: "False", Reason: "Invalid", ObservedGeneration: 1, LastTransitionTime: at}
-	if e := GatewayRule(c, Cond{}, 1, kmeta.Writes{}); e.Role != health.Fault || e.Since == nil || !e.Since.Equal(at) {
+	if e := GatewayRule(c, Cond{}, 1); e.Role != health.Fault || e.Since == nil || !e.Since.Equal(at) {
 		t.Fatalf("never edited: dated, got %+v", e)
 	}
-	w := kmeta.Writes{Main: at.Add(time.Hour), Status: at, Known: true}
-	if e := GatewayRule(c, Cond{}, 2, w); e.Role != health.Degraded || e.Since != nil {
+	if e := GatewayRule(c, Cond{}, 2); e.Role != health.Degraded || e.Since != nil {
 		t.Fatalf("the overlay: last observed, undated, got %+v", e)
 	}
-	c.ObservedGeneration, w.Status = 2, at.Add(2*time.Hour)
-	if e := GatewayRule(c, Cond{}, 2, w); e.Role != health.Fault || e.Since != nil || e.Reason == "" {
-		t.Fatalf("after the overlay: fault, undated, reason kept, got %+v", e)
-	}
-	if e := GatewayRule(c, Cond{}, 2, kmeta.Writes{}); e.Since != nil {
-		t.Fatalf("edited, no managedFields: undated, got %+v", e)
+	c.ObservedGeneration = 2
+	if e := GatewayRule(c, Cond{}, 2); e.Role != health.Fault || e.Since != nil || e.Reason == "" || e.Cond == nil || !e.Cond.At.Equal(at) {
+		t.Fatalf("after the overlay: fault, undated, Accepted's age kept as evidence, got %+v", e)
 	}
 }

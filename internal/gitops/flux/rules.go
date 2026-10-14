@@ -4,7 +4,6 @@ import (
 	"time"
 
 	"github.com/moomora/klyx/internal/health"
-	"github.com/moomora/klyx/internal/kmeta"
 )
 
 // fluxRole is the Flux lens's presentation role, relocated verbatim
@@ -45,30 +44,37 @@ func fluxRole(ready ReadyState, suspended, stale bool, reason string) (health.Ki
 func ReconciliationRule(r Resource) health.NativeEval {
 	role, label := fluxRole(r.Ready, r.Suspended, r.Stale, r.Reason)
 	e := health.NativeEval{Included: !r.Suspended && r.Ready != Ready, Role: role, Label: label}
-	// A suspension or an unobserved spec overlays Ready and can end without
-	// changing it, so Ready's time dates the role only when no such overlay
-	// can have followed it.
-	readyBacked(&e, r.Suspended, r.Stale, r.Ready, r.ReadySince, r.Reason, r.Message,
-		kmeta.Undisturbed(r.Generation, r.Writes, r.ReadySince))
+	readyBacked(&e, r.Suspended, r.Stale, r.Ready, r.ReadySince, r.Reason, r.Message)
 	return e
 }
 
-// readyBacked fills Since and Reason when the role comes from the Ready
-// condition itself (fault, degraded, unknown, ok): Ready's lastTransitionTime
-// then dates the role, when undisturbed says no overlay since it can have
-// interrupted the role. A pause, an unobserved spec or a reconcile in flight
-// is not what Ready's time records, so those keep Since nil (The Line §8.1).
-// Reason does not depend on the time.
-func readyBacked(e *health.NativeEval, suspended, stale bool, ready ReadyState, since time.Time, reason, message string, undisturbed bool) {
+// readyBacked fills Cond and Reason when the role comes from the Ready
+// condition itself (fault, degraded, unknown, ok). Since stays nil: a
+// suspension, an unobserved spec (status.observedGeneration can be written
+// after Ready) and a reconcile (Reconciling is removed, untimed, when it
+// ends) all overlay Ready and can end without changing its time, so Ready's
+// time is the condition's age, never proof of the role's start (The Line
+// §8.1). A pause, an unobserved spec or a reconcile in flight is not read
+// from Ready at all. Reason does not depend on the time.
+func readyBacked(e *health.NativeEval, suspended, stale bool, ready ReadyState, since time.Time, reason, message string) {
 	if suspended || stale || ready == Reconciling || e.Role == health.Progressing {
 		return
 	}
-	if !since.IsZero() && undisturbed {
-		t := since
-		e.Since = &t
-	}
+	e.Cond = health.CondAt("Ready", readyStatus(ready), since)
 	if e.Role != health.OK && e.Role != health.Unknown {
 		e.Reason = health.CapReason(reason, message)
+	}
+}
+
+// readyStatus is the Ready condition status a ready state was read from.
+func readyStatus(r ReadyState) string {
+	switch r {
+	case Ready:
+		return "True"
+	case Failed:
+		return "False"
+	default:
+		return "Unknown"
 	}
 }
 
@@ -77,9 +83,6 @@ func readyBacked(e *health.NativeEval, suspended, stale bool, ready ReadyState, 
 func SourceRule(s Source) health.NativeEval {
 	role, label := fluxRole(s.Ready, s.Suspended, false, s.Reason)
 	e := health.NativeEval{Included: !s.Suspended && s.Ready != Ready, Role: role, Label: label}
-	// A source's rule has no generation overlay, but a suspension (a spec
-	// write) still overlays Ready: the spec must be settled since Ready's time.
-	readyBacked(&e, s.Suspended, false, s.Ready, s.ReadySince, s.Reason, s.Message,
-		kmeta.SpecSettled(s.Generation, s.Writes, s.ReadySince))
+	readyBacked(&e, s.Suspended, false, s.Ready, s.ReadySince, s.Reason, s.Message)
 	return e
 }

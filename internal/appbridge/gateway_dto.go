@@ -236,7 +236,7 @@ func toTopologyDTO(t gwapi.Topology) TopologyDTO {
 	g := t.Gateway
 	gd := GatewayNodeDTO{Namespace: g.Namespace, Name: g.Name, ClassName: g.ClassName, Accepted: g.Accepted, Programmed: g.Programmed, Policies: policyDTOs(g.Policies),
 		AcceptedCond: condDTO(g.AcceptedCond), ProgrammedCond: condDTO(g.ProgrammedCond), Generation: g.Generation,
-		Rule: toRuleDTO(gwapi.GatewayRule(g.AcceptedCond, g.ProgrammedCond, g.Generation, g.Writes))}
+		Rule: toRuleDTO(gwapi.GatewayRule(g.AcceptedCond, g.ProgrammedCond, g.Generation))}
 	for _, l := range g.Listeners {
 		gd.Listeners = append(gd.Listeners, ListenerDTO{Name: l.Name, Protocol: l.Protocol, Hostname: l.Hostname, Port: l.Port, CertificateRefs: certificateRefDTOs(l.CertificateRefs)})
 	}
