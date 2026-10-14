@@ -53,25 +53,42 @@ type claudeBuildsFile struct {
 	Builds []testedBuild `json:"builds"`
 }
 
-func (s *claudeBuildStore) loadLocked() []testedBuild {
+// readLocked reads the record as it is on disk, whether or not lookup would
+// trust it. A missing or malformed record holds no builds; any other failure
+// is returned.
+func (s *claudeBuildStore) readLocked() ([]testedBuild, error) {
 	if s.path == "" {
-		return append([]testedBuild(nil), s.mem...)
+		return append([]testedBuild(nil), s.mem...), nil
 	}
-	// Writable or nothing: a revocation must be able to reach this file.
-	w, err := os.OpenFile(s.path, os.O_WRONLY, 0)
-	if err != nil {
-		return nil
-	}
-	_ = w.Close()
 	b, err := os.ReadFile(s.path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	var f claudeBuildsFile
 	if json.Unmarshal(b, &f) != nil {
+		return nil, nil
+	}
+	return f.Builds, nil
+}
+
+// trustedLocked is what lookup may trust: the record, only while Klyx can
+// write it, so a revocation can always reach what lookup reads.
+func (s *claudeBuildStore) trustedLocked() []testedBuild {
+	if s.path != "" {
+		w, err := os.OpenFile(s.path, os.O_WRONLY, 0)
+		if err != nil {
+			return nil
+		}
+		_ = w.Close()
+	}
+	builds, err := s.readLocked()
+	if err != nil {
 		return nil
 	}
-	return f.Builds
+	return builds
 }
 
 func (s *claudeBuildStore) saveLocked(builds []testedBuild) error {
@@ -127,7 +144,7 @@ func (s *claudeBuildStore) replaceLocked(data []byte) error {
 func (s *claudeBuildStore) lookup(sha, platform string) (testedBuild, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for _, b := range s.loadLocked() {
+	for _, b := range s.trustedLocked() {
 		if b.SHA256 == sha && b.Platform == platform {
 			return b, true
 		}
@@ -140,8 +157,10 @@ func (s *claudeBuildStore) lookup(sha, platform string) (testedBuild, bool) {
 func (s *claudeBuildStore) record(t testedBuild) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// An unreadable record holds nothing worth keeping; Test starts it over.
+	cur, _ := s.readLocked()
 	builds := []testedBuild{t}
-	for _, b := range s.loadLocked() {
+	for _, b := range cur {
 		if b.SHA256 != t.SHA256 {
 			builds = append(builds, b)
 		}
@@ -157,12 +176,36 @@ func (s *claudeBuildStore) record(t testedBuild) error {
 }
 
 // forget drops a build that broke the contract, so it needs Test again even
-// after a restart. A record that cannot be rewritten is reported, naming the
-// file to delete; the in-memory revocation holds for this run either way.
+// after a restart. It reaches the record whatever its permissions: a record
+// lookup would not trust today can be trusted again once its permissions are
+// repaired, so its entry must go too (Codex review of 7872e17). Klyx owns
+// the file, so it can restore its own access for the rewrite, then puts the
+// mode back. A removal that still fails is reported with the file to delete.
 func (s *claudeBuildStore) forget(sha string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	cur := s.loadLocked()
+	fail := func(err error) error {
+		return fmt.Errorf("Klyx could not drop this build from its tested record (%v); delete %s before restarting Klyx", err, s.path)
+	}
+	if s.path != "" {
+		fi, err := os.Stat(s.path)
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		if err != nil {
+			return fail(err)
+		}
+		if mode := fi.Mode().Perm(); mode&0o600 != 0o600 {
+			if err := os.Chmod(s.path, 0o600); err != nil {
+				return fail(err)
+			}
+			defer func() { _ = os.Chmod(s.path, mode) }() // the owner's mode; lookup still distrusts it
+		}
+	}
+	cur, err := s.readLocked()
+	if err != nil {
+		return fail(err)
+	}
 	kept := cur[:0:0]
 	for _, b := range cur {
 		if b.SHA256 != sha {
@@ -172,8 +215,8 @@ func (s *claudeBuildStore) forget(sha string) error {
 	if len(kept) == len(cur) {
 		return nil
 	}
-	if err := s.saveLocked(kept); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return fmt.Errorf("Klyx could not drop this build from its tested record (%v); delete %s before restarting Klyx", err, s.path)
+	if err := s.saveLocked(kept); err != nil {
+		return fail(err)
 	}
 	return nil
 }

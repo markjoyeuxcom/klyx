@@ -39,8 +39,8 @@ func TestClaudeBuildStore(t *testing.T) {
 	if err := s.record(testedBuild{SHA256: "sha-5", Version: "2.1.305", Platform: "darwin/arm64", TestedAt: t0.Add(100 * time.Hour)}); err != nil {
 		t.Fatal(err)
 	}
-	if got := len((&claudeBuildStore{path: path}).loadLocked()); got != claudeBuildsKept {
-		t.Fatalf("a re-test does not add a second record: %d kept", got)
+	if got, _ := (&claudeBuildStore{path: path}).readLocked(); len(got) != claudeBuildsKept {
+		t.Fatalf("a re-test does not add a second record: %d kept", len(got))
 	}
 	// forget drops one build, and a second store reading the file agrees.
 	if err := s.forget("sha-5"); err != nil {

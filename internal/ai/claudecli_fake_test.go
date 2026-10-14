@@ -467,47 +467,73 @@ func TestClaudeCLI_DistrustDuringTestIsNeverRecorded(t *testing.T) {
 	}
 }
 
-// A distrust reaches the record on disk even when its directory refuses the
-// atomic replace, and a record Klyx could not write is never trusted.
-func TestClaudeCLI_DistrustSurvivesAReadOnlyDirectory(t *testing.T) {
+// A distrust reaches the record on disk whatever its permissions - a record
+// lookup distrusts today is trusted again once someone repairs it - and a
+// removal that genuinely fails is reported with the file to delete (Codex
+// reviews of b0b977b and 7872e17).
+func TestClaudeCLI_DistrustReachesAReadOnlyRecord(t *testing.T) {
 	t.Parallel() // each fake owns its HOME, temp dir and admission store
 	if os.Geteuid() == 0 {
 		t.Skip("permissions do not bind root")
 	}
+	for name, parent := range map[string]os.FileMode{"writable parent": 0o700, "read-only parent": 0o500} {
+		t.Run(name, func(t *testing.T) {
+			f := newFakeCLI(t)
+			dir := t.TempDir()
+			path := filepath.Join(dir, "claude-builds.json")
+			f.p.builds = &claudeBuildStore{path: path}
+			if err := f.p.builds.record(testedBuild{SHA256: f.sha, Version: fakeVersion, Platform: fakePlatform, TestedAt: time.Now()}); err != nil {
+				t.Fatal(err)
+			}
+			// The record turns read-only while the call runs.
+			f.p.afterLaunch = func() {
+				_ = os.Chmod(path, 0o400)
+				_ = os.Chmod(dir, parent)
+			}
+			t.Cleanup(func() { _ = os.Chmod(dir, 0o700); _ = os.Chmod(path, 0o600) })
+			events := cleanEvents()
+			events[0]["cwd"], events[0]["claude_code_version"] = "{{CWD}}", fakeVersion
+			events[2] = assistantEvent(map[string]any{"type": "tool_use", "id": "t1", "name": "Read", "input": map[string]any{"file_path": "/etc/hosts"}})
+			f.spec.Stream = string(stream(t, events))
+			f.write()
+			if _, err := f.complete(); !errors.Is(err, ErrUnexpectedOutput) || strings.Contains(err.Error(), "could not drop") {
+				t.Fatalf("the tool event revokes and the entry is removed: %v", err)
+			}
+			if fi, err := os.Stat(path); err != nil || fi.Mode().Perm() != 0o400 {
+				t.Fatalf("the owner's mode is put back: %v %v", fi, err)
+			}
+			// Someone repairs the permissions and Klyx restarts: still untested.
+			_ = os.Chmod(dir, 0o700)
+			_ = os.Chmod(path, 0o600)
+			q := f.sibling(tModel)
+			q.store, q.builds = &claudeAdmissionStore{}, &claudeBuildStore{path: path}
+			if err := q.Ready(); err == nil {
+				t.Fatal("a repaired record trusts the build that attempted a tool")
+			}
+		})
+	}
+	// A record that cannot be read at all: the removal fails, and the
+	// revocation says so, naming the file.
 	f := newFakeCLI(t)
-	dir := t.TempDir()
-	path := filepath.Join(dir, "claude-builds.json")
+	path := t.TempDir() // a directory where the record should be
 	f.p.builds = &claudeBuildStore{path: path}
-	if err := f.p.builds.record(testedBuild{SHA256: f.sha, Version: fakeVersion, Platform: fakePlatform, TestedAt: time.Now()}); err != nil {
-		t.Fatal(err)
+	err := f.p.distrust(exeIdentity{SHA256: f.sha}, "Claude Code attempted a tool")
+	if err == nil || !strings.Contains(err.Error(), "could not drop this build") || !strings.Contains(err.Error(), path) {
+		t.Fatalf("a failed removal is reported with the file to delete: %v", err)
 	}
-	if err := os.Chmod(dir, 0o500); err != nil {
-		t.Fatal(err)
+	if r := f.p.Ready(); r == nil || !strings.Contains(r.Error(), "could not drop this build") {
+		t.Fatalf("the revocation carries the failure: %v", r)
 	}
-	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
-	events := cleanEvents()
-	events[0]["cwd"], events[0]["claude_code_version"] = "{{CWD}}", fakeVersion
-	events[2] = assistantEvent(map[string]any{"type": "tool_use", "id": "t1", "name": "Read", "input": map[string]any{"file_path": "/etc/hosts"}})
-	f.spec.Stream = string(stream(t, events))
-	f.write()
-	if _, err := f.complete(); !errors.Is(err, ErrUnexpectedOutput) || strings.Contains(err.Error(), "could not drop") {
-		t.Fatalf("the tool event revokes and the record is rewritten in place: %v", err)
-	}
-	if _, ok := (&claudeBuildStore{path: path}).lookup(f.sha, fakePlatform); ok {
-		t.Fatal("a restarted Klyx trusts the build that attempted a tool")
-	}
-
-	// A record that is not writable holds no builds at all.
-	if err := os.Chmod(dir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := f.p.builds.record(testedBuild{SHA256: f.sha, Version: fakeVersion, Platform: fakePlatform, TestedAt: time.Now()}); err != nil {
+	// A record lookup cannot write is not trusted, even before any distrust.
+	path = filepath.Join(t.TempDir(), "claude-builds.json")
+	s := &claudeBuildStore{path: path}
+	if err := s.record(testedBuild{SHA256: f.sha, Version: fakeVersion, Platform: fakePlatform, TestedAt: time.Now()}); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Chmod(path, 0o400); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := (&claudeBuildStore{path: path}).lookup(f.sha, fakePlatform); ok {
+	if _, ok := s.lookup(f.sha, fakePlatform); ok {
 		t.Fatal("a record Klyx could not revoke from is trusted")
 	}
 }
