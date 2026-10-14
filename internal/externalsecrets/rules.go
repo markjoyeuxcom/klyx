@@ -36,11 +36,12 @@ func ExternalSecretRule(e ExternalSecret) health.NativeEval {
 // depends on a time.
 //   - Failed and unknown are functions of the Ready condition alone, so
 //     Ready's time is the role's start.
-//   - Stale is derived from refreshTime and the CURRENT interval and policy:
-//     it began at the first stale instant (or when Ready last turned True, if
-//     later) only when that spec never changed (generation 1) - an interval
-//     shortened just now made the secret stale now, not at the recomputed
-//     instant.
+//   - Stale is Ready=True AND overdue, derived from refreshTime and the
+//     CURRENT interval and policy: it began at the first stale instant or
+//     when Ready last turned True, whichever is later - so only when that
+//     spec never changed (generation 1: an interval shortened just now made
+//     the secret stale now, not at the recomputed instant) and Ready's time is
+//     known (lastTransitionTime is optional in ESO's API).
 //   - Synced began at Ready's time only when it cannot have been stale in
 //     between: a non-periodic secret whose spec never changed. A periodic one
 //     may have been stale, and the refresh that ended it leaves no time but
@@ -51,7 +52,7 @@ func secretDated(ev *health.NativeEval, e ExternalSecret) {
 	if e.State == Synced && e.Stale {
 		ev.Reason = health.CapReason("", fmt.Sprintf("refresh overdue: last refresh %s, interval %s",
 			e.RefreshTime.UTC().Format(time.RFC3339), e.RefreshInterval))
-		if e.Generation == 1 {
+		if e.Generation == 1 && !e.ReadySince.IsZero() {
 			since := e.StaleAt()
 			if e.ReadySince.After(since) {
 				since = e.ReadySince

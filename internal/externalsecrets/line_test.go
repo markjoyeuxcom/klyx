@@ -78,6 +78,13 @@ func TestExternalSecretSinceNeedsAnUneditedSpec(t *testing.T) {
 	if e := ExternalSecretRule(stale); e.Since == nil || !e.Since.Equal(stale.StaleAt()) {
 		t.Errorf("a never-edited spec: dated by the threshold: %+v", e)
 	}
+	// Codex review of 696afee: stale is Ready=True and overdue, so without
+	// Ready's time its start is unknown; the reason stays.
+	noReady := stale
+	noReady.ReadySince = time.Time{}
+	if e := ExternalSecretRule(noReady); e.Since != nil || e.Reason == "" {
+		t.Errorf("no Ready time: undated, reason kept: %+v", e)
+	}
 
 	// A stale periodic secret switched to CreatedOnce is OK from the switch,
 	// not from Ready's old time.

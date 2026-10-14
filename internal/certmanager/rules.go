@@ -43,8 +43,11 @@ func CertificateRule(c Certificate, now time.Time) health.NativeEval {
 }
 
 // certificateDated fills Since, Cond and Reason (The Line §8.1); Reason
-// never depends on a time. Expiry is derived: the role began at notAfter, and
-// it overrides every other role. A role read from the Ready condition
+// never depends on a time. Expiry overrides every other role, but it is not
+// dated: cert-manager copies notAfter from the current Secret, which can be
+// replaced with already-expired material at any time without changing the
+// Certificate's generation, so notAfter can lie before a role Klyx saw as ok.
+// It stays evidence, in the reason. A role read from the Ready condition
 // carries Ready's own time as Cond. Since is set only for a fault whose start
 // is provable:
 //   - generation 1: the spec never changed, so no unobserved spec (Syncing...)
@@ -61,9 +64,7 @@ func CertificateRule(c Certificate, now time.Time) health.NativeEval {
 // removes Issuing without one.
 func certificateDated(e *health.NativeEval, c Certificate, expired bool) {
 	if expired {
-		at := time.Unix(c.NotAfter.Unix(), 0).UTC()
-		e.Since = &at
-		e.Reason = health.CapReason("Expired", "notAfter "+at.UTC().Format(time.RFC3339))
+		e.Reason = health.CapReason("Expired", "notAfter "+c.NotAfter.UTC().Format(time.RFC3339))
 		return
 	}
 	if e.Role == health.Fault || e.Role == health.Degraded {

@@ -54,10 +54,13 @@ func TestCertificateRuleSinceAndReason(t *testing.T) {
 		t.Errorf("unknown: an expiry can overlay it unseen, so undated; evidence, no reason, got %+v", e)
 	}
 
-	expired := Certificate{Ready: Ready, NotAfter: now.Add(-90 * time.Minute), ReadySince: ready}
+	// Codex review of 696afee: notAfter comes from the current Secret, which
+	// can be replaced with already-expired material, so it is evidence (in
+	// the reason), never the role's start.
+	expired := Certificate{Ready: Ready, NotAfter: now.Add(-90 * time.Minute), ReadySince: ready, Generation: 1}
 	e := CertificateRule(expired, now)
-	if e.Role != health.Fault || e.Since == nil || !e.Since.Equal(now.Add(-90*time.Minute)) || !strings.HasPrefix(e.Reason, "Expired: notAfter ") {
-		t.Errorf("expired is derived from notAfter, got %+v", e)
+	if e.Role != health.Fault || e.Since != nil || e.Reason != "Expired: notAfter "+now.Add(-90*time.Minute).Format(time.RFC3339) {
+		t.Errorf("expired: undated, notAfter in the reason, got %+v", e)
 	}
 
 	// Ready=True, an issuance in flight, an unobserved spec, and no Ready
