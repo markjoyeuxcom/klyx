@@ -319,6 +319,26 @@ func main() {
 			return capability.Set{}
 		},
 	)
+	// The cluster chat (spec 2026-10-14): one conversation per cluster, pinned
+	// to the conn the registry holds now. A conn is usable while it is
+	// synced, degraded or stale (reads can still work); a failed, connecting
+	// or replaced conn ends the conversation.
+	chatSvc := appbridge.NewChatService(func(name string) (appbridge.ChatConn, bool) {
+		c, ok := reg.Conn(name)
+		if !ok {
+			return nil, false
+		}
+		cc, ok := c.(appbridge.ChatConn)
+		if !ok {
+			return nil, false
+		}
+		switch c.Snapshot().State {
+		case fleet.Synced, fleet.Degraded, fleet.Stale:
+			return cc, true
+		}
+		return cc, false
+	}, aiSvc, em)
+
 	// Settings > AI writes fleet.yaml's ai block under the shared fleet write
 	// lock and swaps aiSvc's snapshot after a successful build and write.
 	aiSettingsSvc := appbridge.NewAISettingsService(configPath(), ai.OSKeyStore{}, os.Getenv, aiSvc, cfg.AI)
@@ -445,6 +465,7 @@ func main() {
 			application.NewService(karpenterSvc),
 			application.NewService(aiSvc),
 			application.NewService(aiSettingsSvc),
+			application.NewService(chatSvc),
 			application.NewService(dockSvc),
 			application.NewService(notifySvc),
 			application.NewService(shellSvc),

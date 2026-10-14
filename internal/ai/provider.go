@@ -33,6 +33,8 @@ const (
 	PurposeExplain Purpose = iota
 	PurposeFix
 	PurposeProbe
+	// PurposeChat is one cluster-chat model call (spec 2026-10-14).
+	PurposeChat
 )
 
 // Request is one single-turn completion. System holds Klyx's own instructions;

@@ -572,7 +572,7 @@ func (p *compatProvider) Converse(ctx context.Context, req ConvRequest) (Turn, e
 	for _, t := range req.Tools {
 		tools = append(tools, map[string]any{"type": "function", "function": map[string]any{"name": t.Name, "description": t.Description, "parameters": t.Schema}})
 	}
-	payload := map[string]any{"model": p.model, "max_tokens": compatMaxTokens(PurposeExplain), "temperature": 0, "messages": msgs, "tools": tools}
+	payload := map[string]any{"model": p.model, "max_tokens": compatMaxTokens(PurposeChat), "temperature": 0, "messages": msgs, "tools": tools}
 	body, err := postJSON(ctx, p.http, p.baseURL+"/v1/chat/completions", p.headers(), payload, p.key)
 	if err != nil {
 		if toolsUnsupported(err) {

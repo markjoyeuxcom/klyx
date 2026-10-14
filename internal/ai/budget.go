@@ -26,6 +26,8 @@ func compatMaxTokens(p Purpose) int {
 		return 4096
 	case PurposeProbe:
 		return 256
+	case PurposeChat:
+		return 4096
 	default:
 		return 2048
 	}
