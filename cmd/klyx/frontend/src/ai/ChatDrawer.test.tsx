@@ -75,7 +75,7 @@ describe("ChatDrawer", () => {
     fireEvent.keyDown(input, { key: "Enter" });
     await waitFor(() => expect(bridge.chatAsk).toHaveBeenCalledWith("x", "c1", "why is web failing?", undefined));
     expect((await findByTestId("chat-reads")).textContent).toContain("2 reads · 2 redacted");
-    expect(getByTestId("chat-chips").textContent).toBe("shop/web-7f");
+    expect(getByTestId("chat-chips").textContent).toBe("Pod shop/web-7f");
     expect(log).toHaveBeenCalledWith(expect.objectContaining({ kind: "success", message: expect.stringContaining("AI chat call - x · tools · ") }));
     expect(log.mock.calls[0][0].message).toContain("tools: get_resource · completed");
   });
@@ -225,6 +225,31 @@ describe("ChatDrawer", () => {
     await waitFor(() => expect(input.value).toBe("still there?"));
     expect(input.disabled).toBe(false);
     expect(useChat.getState().states.x.conversationId).toBe("c1");
+  });
+
+  // The first real-model run (2026-10-14, kind lab): a Deployment and an
+  // HTTPRoute both named shop/api showed as two identical chips, and the
+  // row stopped at 12 of the objects the answer named without saying so.
+  it("chips name their kind and say how many they hold back", async () => {
+    const names = Array.from({ length: 14 }, (_, i) => `obj-${i}`);
+    bridge.chatState.mockResolvedValue(state({ version: 9150, exchanges: [exchange({
+      answer: `api is failing; route api too; also ${names.join(", ")}.`,
+      reads: [{ tool: "list_attention", outcome: "completed", refs: [
+        { gvr: "apps/v1/deployments", namespace: "shop", name: "api", uid: "d1" },
+        { gvr: "gateway.networking.k8s.io/v1/httproutes", namespace: "shop", name: "api", uid: "r1" },
+        ...names.map((n, i) => ({ gvr: "karpenter.sh/v1/nodeclaims", name: n, uid: `n${i}` })),
+      ] }],
+    })] }));
+    act(() => openChat("x"));
+    const { findByTestId, getByTestId } = render(<ChatDrawer />);
+    const chips = await findByTestId("chat-chips");
+    expect(chips.textContent).toContain("Deployment shop/api");
+    expect(chips.textContent).toContain("HTTPRoute shop/api");
+    expect(chips.textContent).toContain("nodeclaims obj-0");
+    expect(chips.querySelectorAll(".l-chip")).toHaveLength(12);
+    expect(getByTestId("chat-chips-more").textContent).toBe("+4 more");
+    fireEvent.click(getByTestId("chat-chips-more"));
+    expect(getByTestId("chat-chips").querySelectorAll(".l-chip")).toHaveLength(16);
   });
 
   // Codex review of c4ae925: a refusal never replaces the conversation on

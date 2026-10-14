@@ -1,8 +1,9 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { IconX, IconMessageChatbot } from "@tabler/icons-react";
 import { useFleet, type ResourceRef } from "../store/fleet";
 import { chatAsk, chatClear, chatStart, chatState, chatStop, onChatRead, type ChatExchange, type ChatRead, type ChatRef, type ChatState } from "../bridge/chat";
 import { providerLabel } from "../app/AISettingsPanel";
+import { WELL_KNOWN_RESOURCE_REFS } from "../cluster/resourceRefs";
 import { SafeMarkdown } from "./SafeMarkdown";
 import { useChat } from "./chatStore";
 
@@ -287,7 +288,13 @@ function Reads({ reads, open }: { reads: ChatRead[]; open?: boolean }) {
 // references in this exchange's reads (same cluster, GVR, namespace, name,
 // UID) whose name the answer mentions. Text that merely looks like a
 // reference stays text (spec §8).
+// A chip names its kind, so two objects that share a namespace and name
+// (Deployment shop/api, HTTPRoute shop/api) never look alike, and the row
+// says how many it holds back instead of dropping them silently.
+const CHIPS_SHOWN = 12;
+
 export function RefChips({ cluster, answer, reads }: { cluster: string; answer: string; reads: ChatRead[] }) {
+  const [all, setAll] = useState(false);
   const seen = new Set<string>();
   const refs: ChatRef[] = [];
   for (const r of reads) {
@@ -299,16 +306,38 @@ export function RefChips({ cluster, answer, reads }: { cluster: string; answer: 
     }
   }
   if (refs.length === 0) return null;
+  const shown = all ? refs : refs.slice(0, CHIPS_SHOWN);
+  const more = refs.length - shown.length;
   return (
     <div className="chat-chips" data-testid="chat-chips">
-      {refs.slice(0, 12).map((ref) => (
-        <button key={`${ref.gvr}|${ref.namespace}|${ref.name}`} type="button" className="l-chip" title={`Open ${ref.gvr} ${ref.namespace ? `${ref.namespace}/` : ""}${ref.name} in Klyx`}
-          onClick={() => openRef(cluster, ref)}>
-          {ref.namespace ? `${ref.namespace}/` : ""}{ref.name}
-        </button>
-      ))}
+      {shown.map((ref) => {
+        const label = `${kindOf(ref.gvr)} ${ref.namespace ? `${ref.namespace}/` : ""}${ref.name}`;
+        return (
+          <button key={`${ref.gvr}|${ref.namespace}|${ref.name}`} type="button" className="l-chip" title={`Open ${label} (${ref.gvr}) in Klyx`}
+            onClick={() => openRef(cluster, ref)}>
+            {label}
+          </button>
+        );
+      })}
+      {more > 0 && (
+        <button type="button" className="l-btn" data-testid="chat-chips-more" onClick={() => setAll(true)}>+{more} more</button>
+      )}
     </div>
   );
+}
+
+// splitGVR reads a ledger GVR: "group/version/plural", or "version/plural"
+// for the core group.
+function splitGVR(gvr: string): [string, string, string] {
+  const parts = gvr.split("/");
+  return parts.length === 3 ? [parts[0], parts[1], parts[2]] : ["", parts[0], parts[1]];
+}
+
+// kindOf names a chip's kind from its GVR: the well-known kind, else the
+// plural as served (a CRD such as nodeclaims).
+function kindOf(gvr: string): string {
+  const [group, , plural] = splitGVR(gvr);
+  return Object.values(WELL_KNOWN_RESOURCE_REFS).find((r) => r.group === group && r.plural === plural)?.kind ?? plural;
 }
 
 function mentions(text: string, name: string): boolean {
@@ -318,8 +347,7 @@ function mentions(text: string, name: string): boolean {
 }
 
 function openRef(cluster: string, ref: ChatRef): void {
-  const parts = ref.gvr.split("/");
-  const [group, version, plural] = parts.length === 3 ? parts : ["", parts[0], parts[1]];
+  const [group, version, plural] = splitGVR(ref.gvr);
   const resource: ResourceRef = { group, version, plural, kind: plural, scope: ref.namespace ? "Namespaced" : "Cluster" };
   const nav = useFleet.getState();
   nav.openCluster(cluster);
