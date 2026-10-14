@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -48,6 +49,10 @@ type PartSpec struct {
 	// Evaluate classifies one capture. It must be pure: same capture, same
 	// result. Rows are built only when c.Rows is set.
 	Evaluate func(c Capture) PartResult
+	// Ledger: the evaluator emits PartResult.Roles on every evaluation, and
+	// the Observer keeps a role ledger and transition stream for the part
+	// (The Line slice 2b). Evidence-only parts leave it off.
+	Ledger bool
 }
 
 // Capture is one part's atomic view: every listed source's objects (sorted
@@ -57,6 +62,10 @@ type Capture struct {
 	Objects map[string][]any
 	Facts   map[string]any
 	Rows    bool
+	// RoleCap bounds PartResult.Roles: an evaluator appends at most RoleCap
+	// entries, then sets RolesCapped and stops appending. 0 when the part
+	// keeps no ledger.
+	RoleCap int
 }
 
 // PartResult is what an evaluator returns.
@@ -67,6 +76,10 @@ type PartResult struct {
 	Top      []Ref
 	Rows     any
 	Next     *time.Time
+	// Roles is every evaluated object's role, for a part with a ledger;
+	// RolesCapped reports that it stopped at Capture.RoleCap.
+	Roles       []RoleEntry
+	RolesCapped bool
 }
 
 // Sink receives publications. Calls come from the Observer's loop goroutine,
@@ -92,6 +105,8 @@ type Config struct {
 	ReprobeEvery       time.Duration // 5m
 	BackoffMin         time.Duration // 1s
 	BackoffMax         time.Duration // 30s
+	// RoleCap bounds each ledger part's role list and ledger (50,000).
+	RoleCap int
 }
 
 type partKey struct{ task, part string }
@@ -106,10 +121,11 @@ type partState struct {
 	last          *Part
 	lastRows      any
 	hasRows       bool
-	boundaryFired bool      // its Next passed and it awaits re-evaluation
-	evaluatedAt   time.Time // the capture time of its current version
-	rowsPubVer    uint64    // the version last broadcast to subscribers
-	rowsPub       bool      // rows were broadcast in this subscription period
+	boundaryFired bool        // its Next passed and it awaits re-evaluation
+	evaluatedAt   time.Time   // the capture time of its current version
+	rowsPubVer    uint64      // the version last broadcast to subscribers
+	rowsPub       bool        // rows were broadcast in this subscription period
+	ledger        *partLedger // the role ledger (Ledger parts only)
 }
 
 type domainState struct {
@@ -142,9 +158,18 @@ type Observer struct {
 	dirty        map[partKey]bool
 	summaryDirty bool
 	conn         string
-	facts        map[string]any
-	latest       *Summary
-	seq          uint64
+	// connUsable is whether the connection word allows observation
+	// ("connected", or "connected · <reason>"); connEpoch advances on every
+	// flip (slice 2b §3). Unset words read as usable.
+	connUsable bool
+	connEpoch  uint64
+	// tsink receives transition batches (nil when the Sink does not
+	// implement TransitionSink); tseq numbers them. Loop goroutine only.
+	tsink  TransitionSink
+	tseq   uint64
+	facts  map[string]any
+	latest *Summary
+	seq    uint64
 	// stats: the Observer's own cost (Stats); written on the loop goroutine.
 	statPublishes atomic.Uint64
 	statEvalNanos atomic.Int64
@@ -173,13 +198,17 @@ func New(cfg Config) *Observer {
 	if cfg.BackoffMax <= 0 {
 		cfg.BackoffMax = 30 * time.Second
 	}
+	if cfg.RoleCap <= 0 {
+		cfg.RoleCap = DefaultRoleCap
+	}
 	clk := cfg.Clock
 	if clk == nil {
 		clk = clock.RealClock{}
 	}
 	o := &Observer{cfg: cfg, clk: clk, incarnation: incarnations.Add(1),
 		kinds: map[string]*kindState{}, snaps: map[string]*snapState{}, byTask: map[string]*domainState{},
-		dirty: map[partKey]bool{}, done: make(chan struct{}), wake: make(chan struct{}, 1), reqs: make(chan rowsReq)}
+		dirty: map[partKey]bool{}, done: make(chan struct{}), wake: make(chan struct{}, 1), reqs: make(chan rowsReq), connUsable: true}
+	o.tsink, _ = cfg.Sink.(TransitionSink)
 	for _, k := range cfg.Kinds {
 		if _, dup := o.kinds[k.Name]; dup {
 			panic("observe: duplicate kind " + k.Name)
@@ -202,6 +231,9 @@ func New(cfg Config) *Observer {
 		ds := &domainState{spec: d, owners: map[Owner]bool{}}
 		for _, p := range d.Parts {
 			ps := &partState{spec: p, key: partKey{d.ID, p.ID}, subs: map[Owner]bool{}}
+			if p.Ledger {
+				ps.ledger = newPartLedger()
+			}
 			ds.parts = append(ds.parts, ps)
 			for _, name := range append(append([]string{}, p.Counted...), p.Deps...) {
 				switch {
@@ -284,7 +316,10 @@ func (o *Observer) signal() {
 }
 
 // SetConnection records the connection word (health spec §2). It never sets
-// kind freshness (spec §3.1).
+// kind freshness (spec §3.1). A flip between usable and down advances the
+// connection epoch and re-evaluates every part, so each ledger records the
+// loss and, on recovery, reconciles (slice 2b §3); a controller-note change
+// within "connected · <reason>" is neither.
 func (o *Observer) SetConnection(word string) {
 	o.mu.Lock()
 	if o.conn == word {
@@ -293,8 +328,23 @@ func (o *Observer) SetConnection(word string) {
 	}
 	o.conn = word
 	o.summaryDirty = true
+	if usable := connectionUsable(word); usable != o.connUsable {
+		o.connUsable = usable
+		o.connEpoch++
+		for _, d := range o.domains {
+			for _, p := range d.parts {
+				o.dirty[p.key] = true
+			}
+		}
+	}
 	o.mu.Unlock()
 	o.signal()
+}
+
+// connectionUsable: the connection allows observation. "connected · <reason>"
+// is a degraded but connected cluster (fleet connectionWord).
+func connectionUsable(word string) bool {
+	return word == "" || word == "connected" || strings.HasPrefix(word, "connected · ")
 }
 
 // Connection returns the connection word last handed to the Observer.

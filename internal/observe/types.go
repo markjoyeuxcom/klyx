@@ -180,3 +180,124 @@ type Rows struct {
 	Part        Part      `json:"part"`
 	Rows        any       `json:"rows"`
 }
+
+// ---- the role ledger and transition stream (The Line slice 2b) ----------
+
+// RoleEntry is one evaluated object's role, emitted by an evaluator on every
+// evaluation of a part that keeps a ledger (PartSpec.Ledger). It is output,
+// never state: Evaluate stays pure.
+type RoleEntry struct {
+	Source    string     // the counted kind or snapshot the object came from
+	GVR       string     // the object's served API: its apiVersion + "/" + resource
+	Key       string     // the UID; for a snapshot, the evaluator's locator
+	NS, Name  string     // namespace (empty when cluster-scoped) and name
+	Role      string     // a health role
+	Label     string     // the rule's label
+	Since     *time.Time // a proven role start (health.NativeEval.Since)
+	Boundary  *time.Time // the time-only threshold this role crossed, evidence only
+	Condition *Condition // the deciding condition's own time, evidence only
+	Reason    string     // scrubbed, at most 200 runes
+}
+
+// Batch kinds.
+const (
+	BatchBaseline = "baseline"  // a replacement checkpoint for its partition
+	BatchChanges  = "changes"   // deltas under continuous coverage
+	BatchAfterGap = "after-gap" // deltas against the ledger frozen at a loss
+	BatchLoss     = "loss"      // continuity ended; no items
+	BatchEnd      = "end"       // the Observer ended (Final)
+)
+
+// Transition states beside the health roles.
+const (
+	StateAbsent      = "absent"      // not in the ledger before (new)
+	StateGone        = "gone"        // deleted: absent from a Live source's membership
+	StateUnevaluated = "unevaluated" // present in the source but not evaluated
+)
+
+// Loss reasons.
+const (
+	LossCoverage   = "coverage"   // the source or a dependency left live
+	LossRelist     = "relist"     // a list replaced the model, or an error awaits one
+	LossGeneration = "generation" // a new kind generation (served version, reappearance)
+	LossConnection = "connection" // the cluster connection is not usable
+	LossAbsent     = "absent"     // the source is not installed; never a deletion
+	LossCapped     = "capped"     // the part exceeded RoleCap
+)
+
+// SourceIdentity is one source's continuity at a capture. Any field change
+// between two captures is a gap.
+type SourceIdentity struct {
+	Source     string   `json:"source"`
+	Generation uint64   `json:"generation"`
+	Epoch      uint64   `json:"epoch"`
+	Coverage   Coverage `json:"coverage"`
+	Relisting  bool     `json:"relisting,omitempty"`
+	GVR        string   `json:"gvr,omitempty"` // the effective served GVR (group/version/resource)
+}
+
+// ContinuityIdentity is a partition's continuity at a capture: its own
+// source, its part's dependencies and the connection.
+type ContinuityIdentity struct {
+	Sources    []SourceIdentity `json:"sources"`
+	ConnEpoch  uint64           `json:"connEpoch"`
+	ConnUsable bool             `json:"connUsable"`
+}
+
+// Loss is why a partition's continuity ended.
+type Loss struct {
+	Reason   string   `json:"reason"`
+	Coverage Coverage `json:"coverage,omitempty"`
+}
+
+// Transition is one key's change in a batch.
+type Transition struct {
+	Key       string     `json:"key"`
+	NS        string     `json:"namespace,omitempty"`
+	Name      string     `json:"name"`
+	GVR       string     `json:"gvr,omitempty"`
+	From      string     `json:"from"` // a role, StateAbsent or StateUnevaluated
+	To        string     `json:"to"`   // a role, StateGone or StateUnevaluated
+	Label     string     `json:"label,omitempty"`
+	Reason    string     `json:"reason,omitempty"`
+	Since     *time.Time `json:"since,omitempty"`
+	Boundary  *time.Time `json:"boundary,omitempty"`
+	Condition *Condition `json:"condition,omitempty"`
+	Restated  bool       `json:"restated,omitempty"` // same role, Since changed
+	Derived   bool       `json:"derived,omitempty"`  // a time-only change from the same read
+}
+
+// TransitionBatch is one partition's committed diff, emitted at commit.
+type TransitionBatch struct {
+	Cluster     string             `json:"cluster"`
+	Incarnation uint64             `json:"incarnation"`
+	Seq         uint64             `json:"seq"` // strictly increasing per Observer, in emission order
+	Task        string             `json:"task,omitempty"`
+	Part        string             `json:"part,omitempty"`
+	Source      string             `json:"source,omitempty"` // empty on an end batch
+	GVR         string             `json:"gvr,omitempty"`    // the source's effective served GVR at this capture
+	Mode        string             `json:"mode,omitempty"`   // watch | sampled
+	Kind        string             `json:"kind"`
+	PartVer     uint64             `json:"partVer,omitempty"`
+	Identity    ContinuityIdentity `json:"identity"`
+	At          time.Time          `json:"at"`               // the clock under the capture lock
+	PrevAt      *time.Time         `json:"prevAt,omitempty"` // previous commit (changes, loss) or loss time (after-gap)
+	ReadAt      *time.Time         `json:"readAt,omitempty"`
+	PrevReadAt  *time.Time         `json:"prevReadAt,omitempty"`
+	Loss        *Loss              `json:"loss,omitempty"`
+	AfterCap    bool               `json:"afterCap,omitempty"`
+	Items       []Transition       `json:"items,omitempty"`
+}
+
+// Batch modes.
+const (
+	ModeWatch   = "watch"
+	ModeSampled = "sampled"
+)
+
+// TransitionSink receives transition batches. A Config.Sink that implements
+// it gets them synchronously on the loop goroutine, at commit; Final ends
+// with one BatchEnd.
+type TransitionSink interface {
+	Transitions(TransitionBatch)
+}

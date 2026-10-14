@@ -37,6 +37,10 @@ type snapGen struct {
 	// waiters are ReadSnapshot requests owed the next read to START (under
 	// o.mu): a read already in flight began before them.
 	waiters []chan SnapshotRead
+	// id is the generation's identity; epoch advances on every failed or
+	// overdue read (slice 2b §2): the next good read follows a gap.
+	id    uint64
+	epoch uint64
 }
 
 // SnapshotRead is one read's outcome as ReadSnapshot returns it - the
@@ -54,7 +58,8 @@ var ErrSnapshotNotRunning = errors.New("snapshot is not running")
 // startSnap starts a generation. Caller holds o.mu.
 func (o *Observer) startSnap(ss *snapState) {
 	ctx, cancel := context.WithCancel(o.ctx)
-	g := &snapGen{o: o, ss: ss, ctx: ctx, cancel: cancel, fresh: freshness{cov: Checking}, refresh: make(chan struct{}, 1)}
+	o.kindGenSeq++
+	g := &snapGen{o: o, ss: ss, ctx: ctx, cancel: cancel, fresh: freshness{cov: Checking}, refresh: make(chan struct{}, 1), id: o.kindGenSeq}
 	ss.gen = g
 	o.markSnapLocked(ss)
 	o.goSafe(func() { g.run() })
@@ -179,6 +184,7 @@ func (g *snapGen) apply(r SnapshotRead) bool {
 	}
 	now := o.clk.Now()
 	if r.Err != nil {
+		g.epoch++
 		switch g.fresh.cov {
 		case Live:
 			g.fresh.cov, g.fresh.lastGoodAt = Stale, g.fresh.readAt
@@ -210,5 +216,6 @@ func (g *snapGen) overdue(now time.Time) bool {
 	}
 	g.fresh.cov, g.fresh.lastGoodAt = Stale, g.fresh.readAt
 	g.fresh.class, g.fresh.err = ClassOverdue, "no successful read for 2x its cadence"
+	g.epoch++
 	return true
 }

@@ -196,13 +196,16 @@ func (o *Observer) evaluate(p *partState, now time.Time, forceRows bool) (verCha
 	o.mu.Lock()
 	subscribed := len(p.subs) > 0
 	wantRows := subscribed || forceRows
-	c, kinds, absent := o.captureLocked(p, now)
+	c, kinds, absent, cp := o.captureLocked(p, now)
 	obs := p.obs
 	o.mu.Unlock()
 
 	var res PartResult
 	if !absent && p.spec.Evaluate != nil {
 		c.Rows = wantRows
+		if p.ledger != nil && o.tsink != nil {
+			c.RoleCap = o.cfg.RoleCap
+		}
 		res = p.spec.Evaluate(c)
 	}
 	covs := make([]Coverage, len(kinds))
@@ -242,6 +245,9 @@ func (o *Observer) evaluate(p *partState, now time.Time, forceRows bool) (verCha
 	} else {
 		p.lastRows, p.hasRows = nil, false
 	}
+	// Commit and emit together (slice 2b §5.1): this evaluation's batches go
+	// out now, before any summary or rows of the cycle.
+	o.commitLedger(p, cp, c, res, p.ver)
 	return verChanged, res.Rows
 }
 
@@ -255,8 +261,12 @@ func samePart(a, b Part) bool {
 // lock: model contents and the part's watermark are read together. A part is
 // absent only when every counted source is absent; an absent dependency or a
 // missing optional kind leaves the rest of the part observed.
-func (o *Observer) captureLocked(p *partState, now time.Time) (Capture, []KindCoverage, bool) {
+func (o *Observer) captureLocked(p *partState, now time.Time) (Capture, []KindCoverage, bool, captured) {
 	c := Capture{Now: now, Objects: map[string][]any{}}
+	cp := captured{at: o.clk.Now(), connEpoch: o.connEpoch, connUsable: o.connUsable}
+	if p.ledger != nil {
+		cp.ids, cp.readAt, cp.truncated = map[string]SourceIdentity{}, map[string]*time.Time{}, map[string]bool{}
+	}
 	if len(p.spec.Facts) > 0 {
 		c.Facts = make(map[string]any, len(p.spec.Facts))
 		for _, f := range p.spec.Facts {
@@ -296,6 +306,9 @@ func (o *Observer) captureLocked(p *partState, now time.Time) (Capture, []KindCo
 			} else {
 				f := ss.gen.fresh
 				kc.Coverage, kc.Class, kc.Error, kc.Truncated = f.cov, f.class, f.err, f.truncated
+				if cp.readAt != nil {
+					cp.readAt[name], cp.truncated[name] = copyTime(f.readAt), f.truncated
+				}
 				switch f.cov {
 				case Live:
 					kc.AsOf = copyTime(f.readAt)
@@ -309,6 +322,9 @@ func (o *Observer) captureLocked(p *partState, now time.Time) (Capture, []KindCo
 			}
 		}
 		kinds = append(kinds, kc)
+		if cp.ids != nil {
+			cp.ids[name] = o.sourceIdentityLocked(name, kc.Coverage)
+		}
 	}
 	for _, n := range p.spec.Counted {
 		add(n, "counted")
@@ -320,7 +336,7 @@ func (o *Observer) captureLocked(p *partState, now time.Time) (Capture, []KindCo
 	for _, k := range kinds[:len(p.spec.Counted)] {
 		absent = absent && k.Coverage == Absent
 	}
-	return c, kinds, absent
+	return c, kinds, absent, cp
 }
 
 func (o *Observer) buildSummaryLocked(now time.Time) Summary {
@@ -426,9 +442,15 @@ func (o *Observer) final() {
 		o.unrefSourceLocked(o.cfg.NamespacesKind)
 	}
 	o.seq++
-	s := Summary{Cluster: o.cfg.Cluster, Incarnation: o.incarnation, Seq: o.seq, EvaluatedAt: o.clk.Now(), Connection: o.conn, Final: true}
+	now := o.clk.Now()
+	s := Summary{Cluster: o.cfg.Cluster, Incarnation: o.incarnation, Seq: o.seq, EvaluatedAt: now, Connection: o.conn, Final: true}
 	o.latest = &s
 	o.mu.Unlock()
+	// Every batch was emitted at its commit, so nothing is pending: the end
+	// batch closes the stream before the Final summary (slice 2b §3).
+	if o.tsink != nil {
+		o.emit(nil, TransitionBatch{Kind: BatchEnd, At: now})
+	}
 	o.cfg.Sink.Summary(s)
 }
 

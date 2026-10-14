@@ -142,6 +142,42 @@ func (f *fakeSource) put(name string, data map[string]string) {
 	}
 }
 
+// putUID writes an object with an explicit UID (a same-name recreation).
+func (f *fakeSource) putUID(name, uid string, data map[string]string) {
+	f.mu.Lock()
+	f.rv++
+	cm := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "ns", UID: types.UID(uid), ResourceVersion: strconv.Itoa(f.rv)}, Data: data}
+	old, existed := f.objs[name]
+	f.objs[name] = cm
+	w := f.liveWatcherLocked()
+	f.mu.Unlock()
+	if w != nil {
+		if existed && old.UID == cm.UID {
+			w.Modify(cm.DeepCopy())
+		} else {
+			if existed {
+				w.Delete(old.DeepCopy())
+			}
+			w.Add(cm.DeepCopy())
+		}
+	}
+}
+
+// remove deletes an object.
+func (f *fakeSource) remove(name string) {
+	f.mu.Lock()
+	f.rv++
+	old, existed := f.objs[name]
+	delete(f.objs, name)
+	w := f.liveWatcherLocked()
+	f.mu.Unlock()
+	if w != nil && existed {
+		old = old.DeepCopy()
+		old.ResourceVersion = strconv.Itoa(f.rv)
+		w.Delete(old)
+	}
+}
+
 func (f *fakeSource) liveWatcherLocked() *watch.RaceFreeFakeWatcher {
 	if n := len(f.watchers); n > 0 && !f.watchers[n-1].IsStopped() {
 		return f.watchers[n-1]
@@ -218,13 +254,19 @@ func evalCMs(kind string) func(Capture) PartResult {
 }
 
 type recSink struct {
-	mu   sync.Mutex
-	sums []Summary
-	rows []Rows
+	mu      sync.Mutex
+	sums    []Summary
+	rows    []Rows
+	batches []TransitionBatch
 }
 
 func (s *recSink) Summary(x Summary) { s.mu.Lock(); s.sums = append(s.sums, x); s.mu.Unlock() }
 func (s *recSink) Rows(x Rows)       { s.mu.Lock(); s.rows = append(s.rows, x); s.mu.Unlock() }
+func (s *recSink) Transitions(b TransitionBatch) {
+	s.mu.Lock()
+	s.batches = append(s.batches, b)
+	s.mu.Unlock()
+}
 
 func (s *recSink) last() (Summary, bool) {
 	s.mu.Lock()

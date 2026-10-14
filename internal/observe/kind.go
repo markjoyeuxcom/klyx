@@ -64,6 +64,11 @@ type kindGen struct {
 	nextInst   uint64
 	fresh      freshness
 	backoff    time.Duration
+	// Continuity (The Line slice 2b §2): epoch advances on every recorded
+	// error, benign or not, and every Replace; relisting holds from an error
+	// until the next Replace. A resumable watch rotation changes neither.
+	epoch     uint64
+	relisting bool
 }
 
 type kindState struct {
@@ -305,12 +310,22 @@ func (g *kindGen) initialTimeout() {
 // instance. Errors after the instance was cancelled, and the protocol's own
 // recovery paths, are not freshness events.
 func (g *kindGen) record(inst uint64, err error, cancelInst context.CancelFunc) {
-	if err == nil || benign(err) {
+	if err == nil {
 		return
 	}
 	o := g.o
 	o.mu.Lock()
 	if g.ks.gen != g || g.current != inst || g.ctx.Err() != nil {
+		o.mu.Unlock()
+		return
+	}
+	// Continuity (slice 2b §2): any error, benign included, means watch
+	// history may be lost until the next complete list. It schedules an
+	// evaluation without advancing the data watermark.
+	g.epoch++
+	g.relisting = true
+	if benign(err) {
+		o.markKindLocked(g.ks)
 		o.mu.Unlock()
 		return
 	}
@@ -416,15 +431,17 @@ func (a *modelAdapter) Replace(list []any, _ string) error {
 	changed := !reflect.DeepEqual(g.model, next)
 	g.model = next
 	g.observedAt = o.clk.Now() // a complete read is an observation, changed or not
-	if changed {
-		o.bumpKindLocked(g.ks)
-	}
+	// Every list replaces the model: continuity is unproven across it (slice
+	// 2b §2), so it schedules an evaluation even when nothing changed.
+	g.epoch++
+	g.relisting = false
 	if g.fresh.cov != Live {
 		g.fresh = freshness{cov: Live}
-		o.markKindLocked(g.ks)
 	}
-	if !changed {
-		o.notifyKindLocked(g.ks) // the observation time moved
+	if changed {
+		o.bumpKindLocked(g.ks)
+	} else {
+		o.markKindLocked(g.ks) // also notifies: the observation time moved
 	}
 	g.backoff = o.cfg.BackoffMin
 	return nil
