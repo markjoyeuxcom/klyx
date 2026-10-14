@@ -419,7 +419,7 @@ function ClaimInspector({ cluster, c, nowS, gone, onClose }: { cluster: string; 
       <InspectorLayout kind="NodeClaim" name={c.name} meta={[c.pool && `pool ${c.pool}`, c.instanceType, c.capacityType].filter(Boolean).join(" · ")} onClose={onClose}
         verdict={gone ? <GoneNotice kind="NodeClaim" gone={gone} /> : (
           <div>
-            <InspectorStatus tone={roleTone(role.kind)} label={role.label} />
+            <InspectorStatus tone={roleTone(role.kind)} kind={role.kind} label={role.label} />
             {detail && <div className="t-body" style={{ color: ROLE_TEXT[role.kind], overflowWrap: "anywhere", marginTop: -4 }}>{detail}</div>}
             {role.kind === "fault" && link && c.failingMessage && <div className="t-body" style={{ color: ROLE_TEXT[role.kind], overflowWrap: "anywhere", marginTop: 4 }}>{c.failingMessage}</div>}
           </div>
@@ -459,7 +459,7 @@ function PoolInspector({ p, gone, claimsCov, onClose }: { p: KarpenterPoolDTO; g
       <InspectorLayout kind="NodePool" name={p.name} meta={`${claimsCov === "unknown" ? "nodes unverified (NodeClaim read unavailable)" : `${countText(p.nodes, claimsCov)} node${p.nodes === 1 ? "" : "s"}`} · weight ${p.weight}`} onClose={onClose}
         verdict={gone ? <GoneNotice kind="NodePool" gone={gone} /> : (
           <div>
-            <InspectorStatus tone={roleTone(role.kind)} label={role.label} reason={p.ready === "not-ready" ? p.reason || undefined : undefined} />
+            <InspectorStatus tone={roleTone(role.kind)} kind={role.kind} label={role.label} reason={p.ready === "not-ready" ? p.reason || undefined : undefined} />
             {p.ready === "not-ready" && p.message && <div className="t-body" style={{ color: ROLE_TEXT[role.kind], overflowWrap: "anywhere", marginTop: -4 }}>{p.message}</div>}
           </div>
         )}

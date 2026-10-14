@@ -1,4 +1,4 @@
-import { Aspect, type AspectKind } from "../chrome/primitives/Aspect";
+import { Aspect, aspectOfVerdict } from "../chrome/primitives/Aspect";
 import { toneBg, toneBorder, toneColor } from "../chrome/primitives/styles";
 import { type HealthLike, kindOf, labelOf, verdictTone } from "./verdict";
 import { ClampedText } from "../chrome/ClampedText";
@@ -8,17 +8,8 @@ import { ClampedText } from "../chrome/ClampedText";
 // dotted so "cannot tell" never looks like "fine", progressing dashed (not
 // yet realized), paused a plain outline (intentional, not broken), and ok
 // carries no mark.
-const ASPECT: Record<ReturnType<typeof kindOf>, AspectKind> = {
-  fault: "fault",
-  degraded: "attention",
-  unknown: "checking",
-  progressing: "syncing",
-  paused: "paused",
-  ok: "none",
-};
-
 export function VerdictLamp({ health, size = 7 }: { health: HealthLike | null | undefined; size?: number }) {
-  return <Aspect kind={ASPECT[kindOf(health)]} size={size} />;
+  return <Aspect kind={aspectOfVerdict(kindOf(health))} size={size} />;
 }
 
 // VerdictLabel is the headline word in the verdict's tone. Danger carries the

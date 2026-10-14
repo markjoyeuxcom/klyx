@@ -11,6 +11,20 @@ import type { CSSProperties } from "react";
 //   none       healthy: an empty box of the same footprint, so rows align
 export type AspectKind = "fault" | "attention" | "checking" | "syncing" | "paused" | "none";
 
+// aspectOfVerdict maps a verdict or rule role kind onto its mark. Unknown and
+// anything unrecognised read as "checking", never as healthy; an intentional
+// pause and work in progress keep their own marks.
+export function aspectOfVerdict(kind: string): AspectKind {
+  switch (kind) {
+    case "fault": return "fault";
+    case "degraded": return "attention";
+    case "progressing": return "syncing";
+    case "paused": return "paused";
+    case "ok": return "none";
+    default: return "checking";
+  }
+}
+
 export function Aspect({ kind, size = 8, label }: { kind: AspectKind; size?: number; label?: string }) {
   const edge = size >= 10 ? 2 : 1.5;
   const base: CSSProperties = { display: "inline-block", width: size, height: size, flexShrink: 0, boxSizing: "border-box", borderRadius: 1 };

@@ -706,7 +706,7 @@ function ApplicationInspector({ cluster, app, removed, unverified, isProtected, 
         onClose={onClose}
         verdict={removed ? <RemovedNotice kind="Application" /> : unverified ? <UnverifiedNotice kind="Application" /> : (
           <div>
-            <InspectorStatus tone={tone} label={`${app.healthStatus || "Unknown"} · ${app.syncStatus || "Unknown"}`} reason={badResources.length > 0 ? `${badResources.length} resource${badResources.length === 1 ? " needs" : "s need"} attention` : undefined} detail={app.revision ? short(app.revision) : undefined} />
+            <InspectorStatus tone={tone} kind={role.kind} label={`${app.healthStatus || "Unknown"} · ${app.syncStatus || "Unknown"}`} reason={badResources.length > 0 ? `${badResources.length} resource${badResources.length === 1 ? " needs" : "s need"} attention` : undefined} detail={app.revision ? short(app.revision) : undefined} />
             {conditions.map((c, i) => (
               <ClampedText key={`${c.type}/${i}/${c.message}`} className="t-body" lines={2} prefix={`${c.type}: `} text={c.message || "-"} style={{ color: conditionSeverityColor(c.type), overflowWrap: "anywhere", marginTop: i === 0 ? -4 : 2 }} />
             ))}
@@ -779,7 +779,7 @@ function ProjectInspector({ project, removed, unverified, apps, appsCov, appSets
         onClose={onClose}
         verdict={removed ? <RemovedNotice kind="AppProject" /> : unverified ? <UnverifiedNotice kind="AppProject" /> : (
           <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 12 }}>
-            <InspectorStatus tone={role.kind === "degraded" ? "warning" : "success"} label={role.label} />
+            <InspectorStatus tone={role.kind === "degraded" ? "warning" : "success"} kind={role.kind} label={role.label} />
             {risks.length > 0 && <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>{risks.map((r) => <RiskBadge key={r.label} tone={r.tone}>{r.label}</RiskBadge>)}</div>}
           </div>
         )}

@@ -448,7 +448,7 @@ function RouteInspector({ route, gone, unproven, gateway, listeners, notes, metr
           <div>
             {gone && <div role="status" className="t-body" style={{ marginBottom: 8 }}><span className="t-status">No longer attached.</span> The latest complete HTTPRoute list did not include it; this is its last evidence.</div>}
             {unproven && <div role="status" className="t-body" style={{ marginBottom: 8 }}><span className="t-status">Not in the current read.</span> The HTTPRoute list was incomplete, so its absence proves nothing; this is its last evidence.</div>}
-            <InspectorStatus tone={roleTone(role.kind)} label={role.label} />
+            <InspectorStatus tone={roleTone(role.kind)} kind={role.kind} label={role.label} />
             <div style={{ display: "grid", gap: 4, marginTop: -4 }}>
               {issues.length > 0
                 ? issues.map((i) => <div key={i.short} className="t-body" style={{ color: ROLE_TEXT[i.severity], overflowWrap: "anywhere" }}>{i.text}</div>)

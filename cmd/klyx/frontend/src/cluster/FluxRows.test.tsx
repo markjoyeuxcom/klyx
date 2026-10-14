@@ -378,3 +378,19 @@ describe("select-flux decides 'missing' from the target's own kind", () => {
     expect(useFleet.getState().actionStatus).toMatchObject({ kind: "error", message: expect.stringMatching(/app is no longer present/) });
   });
 });
+
+// Codex review of f2e47cc: a pause or work in progress keeps its own aspect in
+// the inspector, beside the same aspect in its row - never collapsed into the
+// text tone's "checking".
+describe("The Line aspects in the Flux inspector", () => {
+  for (const [wanted, over] of [["paused", { suspended: true }], ["syncing", { stale: true, generation: 2, observedGeneration: 1 }]] as const) {
+    it(`keeps ${wanted} distinct from checking beside its row`, () => {
+      seed([res("aspect", over)]);
+      render(<GitOps cluster="x" />);
+      select("aspect");
+      land(detailFor("aspect", { suspended: wanted === "paused" }));
+      expect(document.querySelector(".lens-row [data-aspect]")?.getAttribute("data-aspect")).toBe(wanted);
+      expect(screen.getByTestId("flux-detail-panel").querySelector("[data-aspect]")?.getAttribute("data-aspect")).toBe(wanted);
+    });
+  }
+});

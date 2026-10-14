@@ -514,7 +514,7 @@ function SecretInspector({ e, nowS, removed, unverified, store, storeCov, onClos
         onClose={onClose}
         verdict={removed ? <RemovedNotice kind="ExternalSecret" /> : unverified ? <UnverifiedNotice kind="ExternalSecret" /> : (
           <div>
-            <InspectorStatus tone={roleTone(role.kind)} label={role.label} reason={e.state === "Failed" ? e.reason || undefined : e.stale ? "refresh stopped - last sync ok" : undefined} />
+            <InspectorStatus tone={roleTone(role.kind)} kind={role.kind} label={role.label} reason={e.state === "Failed" ? e.reason || undefined : e.stale ? "refresh stopped - last sync ok" : undefined} />
             {e.message && e.state !== "Synced" && <div className="t-body" style={{ color: ROLE_TEXT[role.kind], overflowWrap: "anywhere", marginTop: -4 }}>{e.message}</div>}
             {e.stale && <div className="t-body" style={{ color: "var(--color-text-warning)", overflowWrap: "anywhere", marginTop: -4 }}>{staleTitle(e, nowS)}</div>}
           </div>
@@ -583,7 +583,7 @@ function StoreInspector({ store, removed, unverified, secrets, secretsCov, onClo
         onClose={onClose}
         verdict={removed ? <RemovedNotice kind={store.kind} /> : unverified ? <UnverifiedNotice kind={store.kind} /> : (
           <div>
-            <InspectorStatus tone={roleTone(role.kind)} label={role.label} reason={store.state !== "Synced" ? store.reason || undefined : undefined} />
+            <InspectorStatus tone={roleTone(role.kind)} kind={role.kind} label={role.label} reason={store.state !== "Synced" ? store.reason || undefined : undefined} />
             {store.message && store.state !== "Synced" && <div className="t-body" style={{ color: ROLE_TEXT[role.kind], overflowWrap: "anywhere", marginTop: -4 }}>{store.message}</div>}
           </div>
         )}

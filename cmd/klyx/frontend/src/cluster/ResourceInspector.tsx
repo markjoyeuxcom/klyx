@@ -1,7 +1,7 @@
 import { Fragment, useContext, useState } from "react";
 import { InspectorBlock, InspectorTemplate } from "../layout/InspectorLayout";
 import { IconChevronRight } from "@tabler/icons-react";
-import { StatusDot, toneBg, toneBorder, toneColor, type Tone } from "../chrome/primitives";
+import { Aspect, aspectOfVerdict, StatusDot, toneBg, toneBorder, toneColor, type Tone } from "../chrome/primitives";
 import { Age } from "../chrome/Age";
 import { compactCount } from "../chrome/format";
 import type { ConditionDTO, EventDTO } from "../store/fleet";
@@ -254,11 +254,15 @@ export function InspectorIdle({ subject, attention, hint, width }: {
   );
 }
 
-// InspectorStatus is the mockup's verdict (Signal Bench): ONE big element -
-// lamp + state word in a toned box with an inset ring - and a mono sub-line
-// joining reason and detail. Not a row of disconnected chips.
-export function InspectorStatus({ tone, label, reason, detail }: {
+// InspectorStatus is the inspector's verdict: ONE element - mark + state word
+// in a toned box with an inset ring - and a mono sub-line joining reason and
+// detail. `kind` is the verdict's role kind when the caller has one: it picks
+// the mark (The Line aspects), so a pause or work in progress keeps its own
+// shape beside its row instead of collapsing into the text tone's "muted"
+// (Codex review of f2e47cc). The tone still colours the box and the word.
+export function InspectorStatus({ tone, kind, label, reason, detail }: {
   tone: Tone;
+  kind?: string;
   label: string;
   reason?: string;
   detail?: string;
@@ -280,7 +284,7 @@ export function InspectorStatus({ tone, label, reason, detail }: {
         boxShadow: `inset 0 0 0 1px ${toneBorder[tone]}`,
         whiteSpace: "nowrap",
       }}>
-        <StatusDot size={8} tone={tone} />
+        {kind ? <Aspect kind={aspectOfVerdict(kind)} size={8} /> : <StatusDot size={8} tone={tone} />}
         <span className={tone === "danger" ? "klyx-danger-prefix" : undefined}>{label}</span>
       </span>
       {sub && (

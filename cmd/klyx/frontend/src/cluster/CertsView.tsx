@@ -606,10 +606,11 @@ function CertInspector({ c, cluster, removed, unverified, issuer, issuersKnown, 
         verdict={removed ? <RemovedNotice kind="Certificate" /> : unverified ? <UnverifiedNotice kind="Certificate" /> : (
           <div>
             {c.stale && !expired(c) ? (
-              <InspectorStatus tone="muted" label="Syncing…" reason={`generation ${c.generation} not yet observed (observed ${c.observedGeneration})`} />
+              <InspectorStatus tone="muted" kind="progressing" label="Syncing…" reason={`generation ${c.generation} not yet observed (observed ${c.observedGeneration})`} />
             ) : (
               <InspectorStatus
                 tone={roleTone(role.kind)}
+                kind={role.kind}
                 label={role.label}
                 reason={included(c) || c.ready === "Issuing" ? c.reason || undefined : expiringSoon(c) ? "renewal window" : undefined}
                 detail={c.notAfterUnix > 0 && !expired(c) ? `expires ${expiryText(c)}` : undefined}
@@ -704,7 +705,7 @@ function IssuerInspector({ issuer, removed, unverified, certs, certsCov, onClose
         onClose={onClose}
         verdict={removed ? <RemovedNotice kind={issuer.kind} /> : unverified ? <UnverifiedNotice kind={issuer.kind} /> : (
           <div>
-            <InspectorStatus tone={role.kind === "fault" ? "danger" : role.kind === "degraded" ? "warning" : role.kind === "ok" ? "success" : "muted"} label={role.label} reason={issuer.ready !== "Ready" ? issuer.reason || undefined : undefined} />
+            <InspectorStatus tone={role.kind === "fault" ? "danger" : role.kind === "degraded" ? "warning" : role.kind === "ok" ? "success" : "muted"} kind={role.kind} label={role.label} reason={issuer.ready !== "Ready" ? issuer.reason || undefined : undefined} />
             {issuer.message && issuer.ready !== "Ready" && <div className="t-body" style={{ color: ROLE_TEXT[role.kind], overflowWrap: "anywhere", marginTop: -4 }}>{issuer.message}</div>}
           </div>
         )}

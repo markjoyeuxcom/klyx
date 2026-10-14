@@ -709,7 +709,7 @@ function SourceInspector({ source, removed, unverified, usedBy, usageCov, onClos
           </div>
         ) : unverified ? <UnverifiedNotice kind={s.kind} /> : (
           <div>
-            <InspectorStatus tone={roleTone(h.kind)} label={h.label} reason={included(s) ? s.reason || undefined : undefined} detail={shortRev(s.revision) || undefined} />
+            <InspectorStatus tone={roleTone(h.kind)} kind={h.kind} label={h.label} reason={included(s) ? s.reason || undefined : undefined} detail={shortRev(s.revision) || undefined} />
             {s.message && included(s) && (
               <div className="t-body" style={{ color: h.kind === "fault" ? "var(--color-text-danger)" : "var(--color-text-warning)", overflowWrap: "anywhere", marginTop: -4 }}>{s.message}</div>
             )}
@@ -825,6 +825,7 @@ function FluxInspector({ cluster, resource, nowS, removed, unverified, isProtect
           controller's own words below it are secondary evidence. */}
       <InspectorStatus
         tone={roleTone(role.kind)}
+        kind={role.kind}
         label={role.label}
         reason={lagging ? `generation ${r.generation} not yet observed (observed ${r.observedGeneration})` : included(r) ? r.reason || undefined : undefined}
         detail={lagging ? undefined : shortRev(r.revision) || undefined}

@@ -246,7 +246,7 @@ export function RouteList({ cluster, rows, toggle }: { cluster: string; rows: Ga
               </div>
             ) : (
               <div>
-                <InspectorStatus tone={roleTone(routeRole(selected).kind)} label={routeRole(selected).label} reason={`worst parent ${selected.parent}`} />
+                <InspectorStatus tone={roleTone(routeRole(selected).kind)} kind={routeRole(selected).kind} label={routeRole(selected).label} reason={`worst parent ${selected.parent}`} />
                 {dep.word && <div className="t-secondary" style={{ marginTop: -4 }}>The verdict is {dep.word} - evaluated against {dep.kinds.join(", ")}.</div>}
               </div>
             )}

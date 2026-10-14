@@ -399,7 +399,7 @@ function ReleaseInspector({ cluster, release: r, role, removed, stale, history, 
         onClose={onClose}
         verdict={removed ? <RemovedNotice /> : (
           <div>
-            <InspectorStatus tone={roleTone(role.kind)} label={role.label} reason={stale ? "last snapshot" : undefined} />
+            <InspectorStatus tone={roleTone(role.kind)} kind={role.kind} label={role.label} reason={stale ? "last snapshot" : undefined} />
             {detail && <div className="t-body" style={{ color: ROLE_TEXT[role.kind], overflowWrap: "anywhere", marginTop: -4 }}>{detail}</div>}
             {(role.kind === "fault" || role.kind === "degraded" || role.kind === "progressing") && (
               current?.description
