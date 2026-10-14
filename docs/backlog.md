@@ -74,7 +74,10 @@ real-cluster smoke is on the v1.0.0 gate below.
       sign-in. The CLI run also captures real stream-json, auth-status and doctor
       fixtures to replace the synthesized ones in
       `internal/ai/testdata/claude-2.1.296/`. Everything is so far verified
-      against fake vendors and a no-login check of the real Claude Code binary
+      against fake vendors and a no-login check of the real Claude Code binary.
+      Cluster chat (v0.13.0, spec 2026-10-14 §9 slice 6) joins this smoke on the
+      kind lab: a tools conversation per API-key provider, the snapshot mode on
+      the Claude Code CLI, an Explain follow-up, a pod-log read, Stop and Clear
 - [ ] **Live-cluster smoke of the write paths** (nothing destructive committed
       blind): a Force:false apply against a Flux-owned object should 409 naming
       kustomize-controller; a create into a namespace a pruning unit deploys into should state that the unit leaves an untracked object alone (amber; red only for an object carrying the Argo app's tracking metadata - semantics corrected in the 2026-10-03 review remediation);
@@ -225,6 +228,22 @@ See `docs/brainstorm-questions.md` (Q16 pinned resources, etc.).
 ## Recently shipped (so it's not mistaken for open)
 
 Merged to `main` — do not re-add to the backlog:
+
+**2026-10-14 — Cluster chat (v0.13.0, spec
+`docs/superpowers/specs/2026-10-14-klyx-cluster-chat.md`, notes
+`docs/release-notes-0.13.0.md`):**
+- A read-only chat drawer, one conversation per cluster (at most 8): the mast
+  button, ⌘K and "Ask a follow-up" under Explain (seeded, UID-fenced)
+- Seven validated read-only tools for API-key providers; a bounded
+  per-question snapshot for the Claude Code CLI (no-tools contract unchanged)
+  and for an OpenAI-compatible server that positively refuses tools
+- One structural projection for every object (Secret, ConfigMap and Helm
+  values never sent), a finite UID-checked pod-log read, byte budgets per
+  result, call and conversation, turn fencing on Stop, Clear, disconnect and
+  settings changes, a per-answer read ledger and metadata-only Activity
+- Klyx's own markdown renderer, ledger-backed resource chips, and replies
+  ordered by backend version with refusals kept apart from the conversation.
+  Each slice Codex-reviewed; real-model smoke pending (§0)
 
 **2026-10-14 — UI polish and code-quality fixes (v0.12.0, notes
 `docs/release-notes-0.12.0.md`):**
