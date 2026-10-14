@@ -4,17 +4,18 @@
 
 This note turns §8.2 into an Observer design, grounded in how the Observer works today.
 
-**Revision 2** answers Codex's review of a8a669f (seven findings):
+**Revision 2** answered Codex's review of a8a669f (seven findings). **Revision 3** answers its review of revision 2 (six findings):
 
-| Finding | Where it is addressed |
+| Revision 3 finding | Where it is addressed |
 |---|---|
-| 1. Continuity is recorded at the source, not sampled from coverage | §2 |
-| 2. Connection, Final and incarnation lifecycle | §3 |
-| 3. One commit and broadcast rule, with exactly-once delivery past `RowsNow` | §5 |
-| 4. Same-role `Since` changes and proof precedence | §4.3, §6.2 |
-| 5. Membership is not deletion; absence | §1.2, §4.2 |
-| 6. Helm is sampled evidence with weak identity | §4.4 |
-| 7. Bounded work, output and retained state | §7 |
+| 1. A continuity change must schedule an evaluation | §2 |
+| 2. The pending-queue cap and overflow recovery were incoherent | §5: there is no queue; a batch is emitted at commit |
+| 3. A baseline is not the largest diff | §5.3, §7 |
+| 4. Final must settle pending commits | §5: nothing is ever pending |
+| 5. The proof for a derived Helm item | §4.4, §6.2 |
+| 6. Capture the effective served GVR | §1.1, §2 |
+
+The revision 2 findings stay addressed: continuity at the source (§2), lifecycle (§3), exactly-once delivery (§5), same-role `Since` changes (§4.3), membership and absence (§1.2, §4.2), Helm sampling (§4.4), and bounds (§7).
 
 ## 0. Constraints from the current Observer
 
@@ -24,43 +25,47 @@ All references are to `internal/observe` and `internal/healthsrc`.
   - Every evaluation computes all items, but only the `Part` survives it.
   - Rows are built only when the part is subscribed or `RowsNow` is called (`publish.go:196-246`).
 - **`PartSpec.Evaluate` must be pure.**
-- **The loop is the only evaluator.** It evaluates on a publish (throttled to 1s) and on a `RowsNow` bootstrap (`serveRows`).
+- **The loop goroutine is the only evaluator.** It evaluates on a publish (throttled to 1s) and on a `RowsNow` bootstrap.
+  - `serveRows` runs on the loop goroutine, from its `select`.
   - The bootstrap clears the part's dirty flag and advances `p.last` and `p.ver` outside the throttle (`publish.go:359-381`).
 - **Freshness is sampled, not sticky.**
   - `record` turns Live into Stale (`kind.go:307`), and the next `Replace` restores Live (`kind.go:422`).
   - A 410 or expired resourceVersion is benign: the reflector re-lists and `Replace`s inside the same instance, and coverage stays Live (`errors.go:40`).
-  - An outage and recovery inside one throttle window, or a 410 re-list, therefore look like Live to Live.
+  - An identical Live `Replace` and a benign error schedule no evaluation today (`kind.go:416-427`, `kindwatch.go:119`).
 - **The incarnation is per connection lifetime.**
   - It changes only on a new connection (`fleet/conn.go` `startHealth`).
-  - `SetConnection` changes only `summaryDirty`. It neither dirties parts nor changes freshness (`observer.go:286`).
+  - `SetConnection` changes only `summaryDirty` (`observer.go:286`).
   - The degraded word is `connected · <reason>` (`fleet/conn.go:800`).
+- **A CRD `KindSpec.GVR` is `group/resource`, without a version** (`native.go:320`). Only the generation's version, or the object's `apiVersion`, knows the served API. Refs already use the object's `apiVersion` (`native.go:191-196`).
 - **`final()` emits only the Final summary** (`publish.go:417`).
 - **Sink calls are synchronous** on the loop goroutine.
-- **Helm is a snapshot read every five minutes.** A successful read is Live (`snapshot.go:196`).
+- **Helm is a snapshot read every five minutes.** A successful read is Live (`snapshot.go:196`). `ReleaseRule` supplies `Next` (the pending deadline), never `Since`.
 
 ## 1. Evaluators emit a role list
 
 ### 1.1 The entry
 
-`observe.PartResult` gains `Roles []RoleEntry`, `RolesCapped bool`:
+`observe.PartResult` gains `Roles []RoleEntry` and `RolesCapped bool`:
 
 ```go
 type RoleEntry struct {
-    Source string     // the counted kind or snapshot the object came from
-    Key    string     // the UID; for a snapshot, the evaluator's locator (Helm: namespace/name)
-    NS     string
-    Name   string
-    Role   string     // a health role
-    Since  *time.Time // the proven rule Since (§8.1 as revised), when the rule has one
+    Source    string     // the counted kind or snapshot the object came from
+    GVR       string     // the object's served API: its apiVersion + "/" + resource (refOf)
+    Key       string     // the UID; for a snapshot, the evaluator's locator (Helm: namespace/name)
+    NS, Name  string
+    Role      string     // a health role
+    Label     string     // the rule's label
+    Since     *time.Time // the proven rule Since (parent §8.1), when the rule has one
+    Condition *Condition // the deciding condition's own time (parent §8.1), evidence only
+    Reason    string     // scrubbed, at most 200 runes
 }
 ```
 
 - **Every evaluator produces it on every evaluation, subscribed or not.** The exception is the evidence-only Events part, which produces none.
-- **The GVR comes from the Source's `KindSpec`,** not from each entry.
+- **Strings are shared** with the evaluator's own values, never copied.
 - **Evaluate stays pure.** The list is output, never state.
 - **Producers:**
-  - native parts: from their `nativeItem`s (which gain their source kind);
-  - verdict parts (workloads, pods, nodes): from each object's verdict;
+  - native and verdict parts: centrally, in `nativeResult` and `verdictResult`, from refs that gain their source kind;
   - routes: one entry per HTTPRoute after reduction;
   - Helm: from its releases.
 - **Capture carries `RoleCap`** (§7). An evaluator appends at most `RoleCap` entries, then sets `RolesCapped` and stops appending. Its counts, Top and rows are unaffected.
@@ -71,148 +76,174 @@ type RoleEntry struct {
   - Example: a route whose parent Gateway was removed stays in the HTTPRoute model, but is not evaluated (`healthsrc/gateway.go:154-168`).
 - **The Observer derives authoritative membership** for each counted watched kind from the same capture: the UIDs of its captured objects, via `meta.Accessor`.
   - Every projected type keeps its `ObjectMeta`.
-  - An object without accessible metadata makes that source's membership unknown. That source then claims no deletions (fail closed).
+  - An object without accessible metadata makes that source's membership unknown, and that source claims no deletions (fail closed).
 - **For a key in the ledger but not in Roles:**
   - **gone:** the key is absent from a Live source's membership, and the source's continuity is unbroken (§2);
-  - **unevaluated:** the key is present in membership but was not evaluated. It is a state, not a role. It ends a proof (§6.2), never counts, and never notifies a recovery;
+  - **unevaluated:** the key is present in membership but was not evaluated. It is a ledger state, not a role. It ends a proof (§6.2), never counts, and never notifies a recovery;
   - **unobserved:** the source is not Live, or its membership is unknown. This falls under the loss rules (§4.2).
-- **For a snapshot source** (Helm), membership is the keys of a complete (untruncated) successful read (§4.4).
+- **For a snapshot source** (Helm), membership is the keys of a complete, untruncated successful read (§4.4).
 
-## 2. Continuity is recorded where it breaks (finding 1)
+## 2. Continuity is recorded where it breaks, and schedules an evaluation
 
-Each kind generation gains a **continuity epoch** (`kindGen.epoch uint64`). It advances under `o.mu`, at the source event:
+- **Each kind generation gains:**
+  - a continuity epoch (`epoch uint64`);
+  - a `relisting` flag, true from an error until the next `Replace`.
+- **Both are changed under `o.mu`,** at the source event, behind the existing generation and instance fences:
 
-| Event | Freshness (unchanged) | Epoch |
-|---|---|---|
-| A recorded non-benign error (`record`) | Live → Stale, as today | advances |
-| A benign error (410, expired or too-large resourceVersion) | stays Live, as today | advances: watch history was lost, so continuity is unproven |
-| Every `Replace` (a list replaced the model, changed or not) | → Live, as today | advances |
-| A resumable watch rotation (a watch closes and resumes from its resourceVersion, with no list) | Live | unchanged |
+| Event | Freshness (unchanged) | Epoch | `relisting` |
+|---|---|---|---|
+| A recorded non-benign error (`record`) | Live → Stale, as today | advances | set |
+| A benign error (410, expired or too-large resourceVersion) | stays Live, as today | advances | set |
+| Every `Replace` (a list replaced the model, changed or not) | → Live, as today | advances | cleared |
+| A resumable watch rotation (a watch closes and resumes from its resourceVersion, with no list) | Live | unchanged | unchanged |
 
-- **`record` gains one line for benign errors:** it advances the epoch, then returns as today. Freshness semantics are unchanged.
-- **The first `Replace` of a generation** is that generation's baseline.
-- **Snapshots** advance a read epoch on every failed read and on every overdue transition. A successful read after either is an after-gap read (§4.4).
-- **`captureLocked` returns a continuity identity** alongside the objects, taken under the same lock. It is never part of `Part`, so `samePart`, `Part.Ver` and rows are unaffected:
-  - for each kind or snapshot the part reads (counted and dependencies): `{source, generation id, epoch, coverage}`;
-  - plus the Observer's connection epoch (§3);
-  - plus `capturedAt`, the clock read under that lock.
-- **A source partition (§4) was observed continuously** between its last ledger commit and this capture if, and only if:
+- **Every epoch change schedules an evaluation** (finding 1): it marks the kind's parts dirty and wakes the loop.
+  - It does not advance `Obs`, so it never forces a `Part.Ver` change.
+  - A benign error followed by an identical relist therefore produces a loss and an after-gap with no other mutation, bootstrap or object change.
+- **A source is Live for the ledger** only when its coverage is Live and it is not `relisting`. While a benign error's relist is held, the partition is lost, not continuous.
+- **Snapshots:**
+  - Their read epoch advances on every failed read and on every overdue transition.
+  - Both already mark the snapshot's parts dirty (`snapshot.go`).
+  - A successful read after either is an after-gap read (§4.4).
+- **`captureLocked` returns a continuity identity** alongside the objects, under the same lock. It is never part of `Part`, so `samePart`, `Part.Ver` and rows are unaffected. It records:
+  - for each kind or snapshot the part reads (counted and dependencies): `{source, generation id, epoch, coverage, relisting, gvr}`. `gvr` is the **effective served GVR**: group/version/resource, from the generation's probed version (finding 6);
+  - the Observer's connection epoch and usable state (§3);
+  - `capturedAt`, the clock read under that lock.
+- **A source partition (§4) was observed continuously** between its last commit and this capture if, and only if:
   - the connection was usable at both and its epoch is unchanged;
-  - its own source's identity is unchanged and Live;
-  - every dependency's identity is unchanged and Live, or Absent at both.
-- **An outage and recovery wholly inside one throttle window,** a 410 re-list, and a gap while the loop was busy evaluating all change an epoch. All three are gaps, never Live to Live.
+  - its own source's identity is unchanged and Live for the ledger;
+  - every dependency's identity is unchanged and Live for the ledger, or Absent at both.
+- **These are all gaps, never Live to Live:**
+  - an outage and recovery wholly inside one throttle window;
+  - a 410 re-list;
+  - a gap while the loop was busy.
 
-## 3. Connection, Final and incarnations (finding 2)
+## 3. Connection, Final and incarnations
 
 - **A connection is usable when its word is `connected` or starts with `connected · `.**
   - A controller-note change (`connected · <reason>`) is neither a loss nor a recovery.
-- **`SetConnection` tracks a usable/down state and a connection epoch:**
-  - **usable → down:** the epoch advances and every part is marked dirty. The next publish emits a `connection` loss batch for every partition with a ledger.
-  - **down → usable:** the epoch advances and every part is marked dirty. This is the defined reconciliation: each partition's next evaluation that is Live with a usable connection emits an after-gap batch against its frozen ledger, even if no object changed.
-  - **While down,** evaluations still publish summaries as today, but the ledger treats every partition as not Live.
-- **Final:** `final()` emits one `end` batch for the cluster, before the Final summary. obslog ends every proof of that incarnation ("observation ended at <t>").
+- **`SetConnection` tracks a usable/down state and a connection epoch.** Either flip advances the epoch, marks every part dirty and wakes the loop.
+  - **usable → down:** the next evaluation of each partition with a ledger emits a `connection` loss.
+  - **down → usable:** each partition's next evaluation that is Live and continuous with a usable connection emits an after-gap against its frozen ledger, even if no object changed. This is the defined reconciliation.
+- **Final:** `final()` emits one `end` batch for the cluster, before the Final summary.
+  - Nothing is pending at that point, because batches are emitted at commit (§5), so no committed batch can be lost.
+  - Stopped generations are never re-evaluated.
 - **Incarnations in obslog:**
-  - A batch from a newer incarnation of a cluster starts a new proof generation: older proofs end ("superseded at <t>"); their log entries are kept, tagged with their incarnation.
+  - A batch from a newer incarnation of a cluster ends the older incarnation's proofs ("superseded at <t>"). Its log entries are kept, tagged with their incarnation.
   - A batch from an older incarnation than the newest seen is ignored. This covers an old Observer completing after its replacement.
 
 ## 4. The ledger and what a diff means
 
-### 4.1 State and identity
+### 4.1 State
 
 - **The ledger is per part, partitioned by source** (`partState.ledger map[source]*partition`). Each partition holds:
-  - the entries of its last committed evaluation, keyed by `Key`: `{role, since, ns, name}`;
+  - its committed entries, keyed by `Key`: `{role, label, since, condition, reason, ns, name, gvr}`, or the `unevaluated` state;
   - the continuity identity it was committed under (§2);
-  - its `committedAt` (the capture time);
-  - its state: `live`, `frozen` (a loss was emitted), or `capped`.
-- **Partitioning by source** lets one part mix kinds with different coverage. An absent or failing kind affects only its own partition, plus every partition when it is a dependency.
-- **The ledger is loop-owned.** It is committed on the loop after evaluation, never under `o.mu`, and never by `captureLocked`.
+  - `committedAt` (the capture time) and, for a snapshot, `readAt`;
+  - its state: `live`, `frozen` (a loss was emitted), or none (dropped).
+- **Partitioning by source** lets one part mix kinds with different coverage. An absent or failing kind affects only its own partition, and every partition of a part that has it as a dependency.
+- **The ledger is loop-owned.** It is committed on the loop goroutine after evaluation, never under `o.mu`, and never by `captureLocked`.
 
 ### 4.2 The lifecycle table, per partition
 
 | Before | Now | Emits | Ledger |
 |---|---|---|---|
-| none | Live, continuous identity | **baseline**: every entry, nothing a transition | committed |
-| live | Live, continuous (§2) | **changes**: role changes, `absent` → role (new), role → `gone` (§1.2), role → `unevaluated`, and restatements (§4.3) | committed |
-| live | not Live, or not continuous | **loss** `{reason: coverage \| generation \| relist \| connection, coverage}` | frozen at the last commit |
+| none | Live, continuous identity | **baseline**: a replacement checkpoint (§5.2) | committed |
+| live | Live, continuous (§2) | **changes**: role changes, `absent` → role (new), role → `gone` (§1.2), role ↔ `unevaluated`, and restatements (§4.3) | committed |
+| live | not Live for the ledger | **loss** `{reason: coverage \| relist \| generation \| connection}` | frozen at the last commit |
+| live | Live, but the identity moved (a gap between two Live captures) | **loss**, then **after-gap**, in one commit | committed |
 | frozen | not Live | nothing | frozen |
-| frozen | Live (identity now stable) | **after-gap** `{from: lossAt, to: now}`: each key that differs from the frozen ledger | committed |
+| frozen | Live | **after-gap** `{from: lossAt, to: now}`: every key that differs from the frozen ledger, including `gone`, new and `unevaluated` | committed |
 | live or frozen | the source is **Absent** | **loss** `{reason: absent}`. A capability loss is never a deletion and never a recovery. | dropped |
-| dropped (absent) | Live again | **baseline** (a new generation) | committed |
-| any | capped (§7) | one **loss** `{reason: capped}` for the episode | dropped |
-| capped | under the cap again | **baseline** `{afterCap: true}` | committed |
+| any | capped (§7) | **loss** `{reason: capped}`, once per episode | dropped |
+| dropped | Live (back under the cap, or present again) | **baseline** (`afterCap` when it follows a cap) | committed |
 
 - **A same-name recreation** is `gone` plus a new key (UIDs differ).
 - **A relist that collapses an outage into one model swap** is exactly the after-gap rule. Unchanged keys are re-confirmed without a transition.
-- **A partition that is Live but not continuous with its ledger** (the epoch moved between two Live captures) emits its loss and its after-gap in one cycle: the loss at the last commit, then the after-gap at this capture.
-- **Part-wide gating is not used.** A failing Flux source kind suspends only its own partition, plus any part that depends on it. A suspended partition never claims absence or health.
+- **A suspended partition** never claims absence or health. A failing Flux source kind suspends only its own partition, plus any part that depends on it.
 
-### 4.3 Same-role changes of `Since` (finding 4)
+### 4.3 Same-role changes of `Since`
 
-- **A key whose role is unchanged but whose rule-backed `Since` changed** (nil → t, t → t', or t → nil) emits a **restated** item. Example: fault → ok → fault inside one window, where Ready's time moved.
+- **A key whose role is unchanged but whose proven `Since` changed** (nil → t, t → t', or t → nil) emits a **restated** item. Example: fault → ok → fault between two evaluations, on a rule that proves its start.
   - It is not a transition: it opens no episode, notifies nothing, and never counts as a recovery.
   - It updates the proof (§6.2).
-- **Reason changes are not diffed.** Reason is display text, carried on the item when one is emitted.
+- **Label, reason and condition changes are not diffed.** They travel on any item that is emitted.
 
-### 4.4 Sampled sources: Helm (finding 6)
+### 4.4 Sampled sources: Helm
 
 - **A snapshot partition is `sampled`.** Every batch carries:
   - `mode: sampled`;
-  - the `readAt` of the read it used;
-  - the `prevReadAt` of the read its ledger was committed under.
-- **Changes are differences between two reads,** worded "found <role> at read <t>; <old role> at read <t0>". Nothing between reads is claimed.
-  - A failed or overdue read is a loss, and the next good read is an after-gap read.
+  - `ReadAt`, the read the evaluation used;
+  - `PrevReadAt`, the read its ledger was committed under. This is distinct from `PrevAt`: a bootstrap moves `PrevAt` without a read (finding 5).
+- **When `ReadAt != PrevReadAt`,** changes are differences between two reads, worded "found <role> at read <t>; <old role> at read <t0>". Nothing between reads is claimed.
+- **When `ReadAt == PrevReadAt`** (a time-only re-evaluation: a boundary fired with no new read), items are **derived**: the rule recomputed the role from the same read at the boundary instant. Each derived item carries its boundary (`At`) and its source read (`ReadAt`). It is never "found at read" and never a fresh observation (§6.2).
+- **A failed or overdue read is a loss.** The next good read is an after-gap read.
 - **A truncated read** claims no `gone` and no new keys beyond the cap. It is treated as capped (§7).
-- **A time-only re-evaluation** (a boundary fired, with no new read: `readAt == prevReadAt`) emits **derived** items. These are role changes the rule computes from the same read at a known instant (the boundary). They are kept distinct from a fresh read, and are never "found at read".
 - **Identity is weak.**
   - The key is namespace/name: a release locator, not a recreation-proof identity.
   - An uninstall and reinstall between two reads is invisible. The wording and the notifications (§8) say so.
-  - Helm keys never get observed-since proofs or UID-based deletion guarantees.
+  - Helm keys never get observed proofs or UID-based deletion guarantees.
 
-## 5. One commit and broadcast rule (finding 3)
+## 5. Delivery: a batch is emitted at commit
 
-- **Every evaluation commits.** Both the publish and the `RowsNow` bootstrap diff against the ledger, commit it, and append the resulting batch to the part's **pending queue**.
-  - A bootstrap is a real capture, so it is an observation.
-  - The throttle claim is stated precisely: transitions are observed only at evaluations. That means publishes (at most one per second per part) and row bootstraps. A flip and flip-back between two evaluations is never seen.
-- **`publish` flushes every pending queue on every cycle,** in task/part order, after `Summary` and before `Rows`.
-  - The early return (`!changed && !summaryDirty && len(rowsOut) == 0`) also checks pending queues, so a ledger publication is never gated on summary or row output.
-  - `serveRows` reports "schedule" when the part has pending batches.
-- **Each batch carries:**
-  - a per-Observer stream sequence (`Seq`, strictly increasing in flush order);
-  - the part, its source and the part version (`PartVer`) of the evaluation;
-  - the continuity identity;
-  - `At` = `capturedAt`, the clock read under the capture lock;
-  - `PrevAt` = the partition's previous commit time.
-- **Exactly once:**
-  - A batch is appended once at commit and flushed once.
-  - A repeated bootstrap diffs against the already-committed ledger, so it cannot duplicate a transition.
-- **Rows are unchanged.** `rowsLineage`, `Part.Ver`, `samePart` and the rows broadcast keep their contracts. The ledger reads only `Roles` and the continuity identity, which are not part of `Part`.
-- **The Sink interface is unchanged.** Transitions go to an optional `TransitionSink` (asserted at `New`), so existing sinks and tests compile.
+### 5.1 Commit and emit together
+
+- **Every evaluation commits.** Both the publish and the `RowsNow` bootstrap diff against the ledger and commit it.
+- **The same call then hands the resulting batches to the `TransitionSink`,** synchronously on the loop goroutine (`serveRows` runs there too).
+  - There is no pending queue. Nothing can overflow (finding 2), and nothing is outstanding at Final (finding 4).
+  - A batch is emitted exactly once, at its commit. A repeated bootstrap diffs against the already-committed ledger, so it cannot duplicate an item.
+  - In a publish cycle, batches go out as each part is evaluated: before that cycle's `Summary` and `Rows`.
+  - A bootstrap's batches go out before its reply's next publish. A consumer orders by `Seq` and correlates with summaries by `PartVer`.
+- **Bootstraps are observations.** Transitions are observed only at evaluations: publishes (at most one per second per part) and row bootstraps. A flip and flip-back between two evaluations is never seen.
+- **Rows are unchanged.** `rowsLineage`, `Part.Ver`, `samePart` and the rows broadcast keep their contracts. The ledger reads only `Roles`, membership and the continuity identity, none of which are part of `Part`.
+- **The `Sink` interface is unchanged.** Transitions go to an optional `TransitionSink` (asserted at `New`), so existing sinks and tests compile.
+
+### 5.2 Replacement checkpoints
+
+- **A baseline is a replacement checkpoint for its partition.** The consumer drops everything it holds for that partition, and its proofs end, before adopting the checkpoint. This covers:
+  - keys absent after a cap or an absence (finding 2's "old fault UID disappeared");
+  - every first sight.
+- **A `loss {capped | absent}` drops the ledger.** The consumer ends that partition's proofs at once.
+- **After-gap and changes are deltas** against the last emitted state, which with emit-at-commit is always the committed ledger.
+
+### 5.3 Size
+
+- **A batch holds at most `2 × RoleCap` items** (finding 3). The worst case is a full UID turnover between two evaluations: every old key `gone` plus every new key.
+  - The ledger, which counts `unevaluated` entries, never exceeds `RoleCap`, so a diff cannot exceed both sides together.
+  - Nothing is truncated: a part over the cap goes capped (§4.2) before a diff is computed.
+- **A batch is one value handed to the sink, never split.** The sink applies it atomically under its own lock, so no reader sees half of a replacement. Paging for any wire transport belongs to that consumer.
+
+### 5.4 Types
 
 ```go
 type TransitionBatch struct {
     Cluster     string
     Incarnation uint64
-    Seq         uint64
+    Seq         uint64           // per-Observer, strictly increasing in emission order
     Task, Part  string
-    Source      string     // the partition; empty on an end batch
-    GVR         string
-    Mode        string     // watch | sampled
-    Kind        string     // baseline | changes | after-gap | loss | end
-    PartVer     uint64
-    At          time.Time  // the atomic capture time
-    PrevAt      *time.Time // the previous commit (changes), or the loss time (after-gap)
-    ReadAt      *time.Time // sampled: the read used
-    Loss        *Loss      // {Reason, Coverage}
+    Source      string           // the partition; empty on an end batch
+    GVR         string           // the effective served GVR captured with this evaluation (§2), kept on losses
+    Mode        string           // watch | sampled
+    Kind        string           // baseline | changes | after-gap | loss | end
+    PartVer     uint64           // the part version of the evaluation
+    Identity    ContinuityIdentity // the source's and dependencies' {generation, epoch, coverage, relisting, gvr}, plus the connection epoch
+    At          time.Time        // capturedAt: the clock under the capture lock
+    PrevAt      *time.Time       // the partition's previous commit (changes), or the loss time (after-gap)
+    ReadAt      *time.Time       // sampled: the read used
+    PrevReadAt  *time.Time       // sampled: the read the previous commit used
+    Loss        *Loss            // {Reason, Coverage}
     AfterCap    bool
-    Items       []Transition
+    Items       []Transition     // at most 2 × RoleCap
 }
 
 type Transition struct {
-    Key, NS, Name string
-    From, To      string     // a role, "absent" (new), "gone", or "unevaluated"
-    Since         *time.Time // the proven rule Since now (§8.1 as revised)
-    Restated      bool       // same role, Since changed (§4.3)
-    Derived       bool       // a time-only change from the same read (§4.4)
+    Key, NS, Name, GVR string
+    From, To           string     // a role, "absent" (new), "gone", or "unevaluated"
+    Label, Reason      string     // the new state's, reason at most 200 runes
+    Since              *time.Time // the proven rule Since now
+    Condition          *Condition // the deciding condition's own time, evidence only
+    Restated           bool       // same role, Since changed (§4.3)
+    Derived            bool       // a time-only change from the same read (§4.4)
 }
 ```
 
@@ -220,8 +251,9 @@ type Transition struct {
 
 ### 6.1 Entries
 
-- **Consumes the stream** through `HealthSink`. Batches are accepted per cluster in incarnation order (§3).
-- **An entry** is `{at, prevAt, cluster, incarnation, part, source, GVR, key, ns/name, from → to, kind, mode, restated, derived, loss?}`.
+- **Consumes the stream** through `HealthSink`. Batches are accepted per cluster in incarnation order (§3), and applied whole under obslog's lock.
+- **An entry** is `{at, prevAt, cluster, incarnation, part, source, GVR, key, ns/name, from → to, label, reason, kind, mode, readAt, restated, derived, loss?}`.
+  - A baseline or a replacement is one entry ("baseline: N objects, F faults"), not one per item.
   - Loss and end batches are entries too.
   - LineService's station states and reference changes join in slice 3.
 - **Bounds:** 24 hours, or 20,000 entries per cluster, whichever comes first (§7).
@@ -229,56 +261,69 @@ type Transition struct {
 
 ### 6.2 Proofs
 
-- **A proof** is `{role, since *time.Time, notBefore *time.Time, source: rule | observed | sampled | unknown, partition}`.
+- **A proof** is `{role, since *time.Time, notBefore *time.Time, source: rule | observed | sampled | derived | unknown, boundary, readAt, condition, partition}`.
 - **Proofs are kept only for non-ok roles,** which is what the queue, the inspector and the "failing since" wording need. A key that goes ok, `gone` or `unevaluated` has its proof purged or ended.
 - **Precedence:**
-  1. **A proven rule `Since` wins whenever present** (§8.1 as revised: set only when the role's start is provable). It survives Klyx's own gaps while it is unchanged.
+  1. **rule:** a proven rule `Since` (parent §8.1) wins whenever present. It survives Klyx's own gaps while it is unchanged.
   2. **observed:** a `changes` item under continuous watch coverage, with no rule `Since`. The role began in `(PrevAt, At]`, worded "since ~<At> (observed)".
-  3. **sampled:** the same from two reads, worded "between <prevReadAt> and <readAt>".
-  4. **unknown:** a baseline, after-gap or post-cap first sight with no rule `Since`, worded "start unknown; first seen <At>". An observed-only baseline never proves a start.
+  3. **sampled:** a change between two reads (`ReadAt != PrevReadAt`), worded "between <PrevReadAt> and <ReadAt>".
+  4. **derived** (finding 5): a time-only change from the same read. The start is unknown, and the proof keeps two pieces of evidence: the rule's boundary and the read it came from. Example wording: "past its pending deadline at 12:01, from the read at 12:00 · start unknown". It is never a sampled interval and never a fresh observation.
+  5. **unknown:** a baseline, after-gap or replacement first sight with no rule `Since`, worded "start unknown; first seen <At>". An observed-only baseline never proves a start.
 - **The ref's `condition`** (the deciding condition's own age) is shown beside any of these as qualified evidence: "Ready=False since 09:00 (condition time)". It never becomes the proof's start.
 - **A restated item** replaces the proof's `since` with the new rule `Since`. Nil downgrades the proof to unknown.
-- **On loss,** the partition's proofs are suspended.
-- **On after-gap,** every observed or sampled proof in that partition, changed or not, is downgraded to unknown ("seen before and after a gap"). Rule-backed proofs stay while their `Since` is unchanged.
+- **On loss,** the partition's proofs are suspended. A `capped` or `absent` loss ends them.
+- **On after-gap,** every observed, sampled or derived proof in that partition, changed or not, is downgraded to unknown ("seen before and after a gap"). Rule proofs stay while their `Since` is unchanged.
+- **On a baseline,** the partition's proofs are replaced (§5.2).
 - **Proofs are never derived from when observation began.**
 - **Queries:**
   - `Proof(cluster, key)`;
   - `Recent(cluster, limit)`;
   - `Partition(cluster, task, part)` for the queue's coverage rows.
 
-## 7. Bounds (finding 7)
+## 7. Bounds
 
 | What | Bound | Fallback |
 |---|---|---|
 | `Roles` per evaluation | `RoleCap` = 50,000 per part | `RolesCapped`. Counts, Top and rows continue; the partition goes capped (one loss, then a baseline when back under the cap). |
-| Ledger | ≤ `RoleCap` entries per partition. Entries reference the evaluator's strings, with no copies. | dropped while capped |
-| Pending batches | ≤ 4 per part between flushes (only bootstraps can add a second) | overflow drops the oldest batch, and the partition emits a `loss {reason: overflow}` with an after-gap |
-| Items per batch | ≤ `RoleCap` (a baseline is the worst case) | flushed in chunks of 5,000 items, each with the same `Seq` lineage (`Chunk n/m`) |
-| obslog entries | 20,000 per cluster, 24h | oldest first. A trimmed age reads "at least since <bound> (log trimmed)". |
+| Ledger | ≤ `RoleCap` entries per partition, `unevaluated` entries included. Strings are shared with the evaluator. | dropped while capped |
+| Pending batches | none: emitted at commit (§5.1) | n/a |
+| Items per batch | ≤ 2 × `RoleCap` (a full UID turnover) | n/a: a capped partition emits no diff |
+| obslog entries | 20,000 per cluster, 24h. A baseline is one entry. | oldest first. A trimmed age reads "at least since <bound> (log trimmed)". |
 | obslog proofs | ≤ 20,000 per cluster (non-ok keys only) | new proofs beyond the cap are not kept, and their queries read "start unknown (proof capped)" |
-| Clusters | per-cluster bounds × connected clusters | a cluster's state is released on its `end` plus the 24h window |
+| Clusters | per-cluster bounds × connected clusters | a cluster's state is released on its `end`, plus the 24h window |
 
-- **Measurement before merge:**
-  - a benchmark of evaluate + diff on an unsubscribed 10,000- and 50,000-pod part (allocations and latency), with the numbers recorded in the commit;
-  - a multi-cluster cap-and-recovery fixture.
+**Measurement before merge:**
 
-## 8. Health notifications (§8.6) consume the same stream later
+- a benchmark of evaluate + diff on an unsubscribed 10,000- and 50,000-pod part, including a full-turnover diff (allocations and latency), with the numbers recorded in the commit;
+- a multi-cluster cap-and-recovery fixture.
 
-- **Never notify:** baseline, after-gap, restated, derived, `unevaluated` and loss items.
-- **A new episode** is a `changes` item into fault, under continuous watch coverage.
-- **A sampled source** may notify a change between two reads, worded as such, with no deletion or reinstall claims.
-- **A loss suspends episodes.** Recovery is only a `changes` item into ok, under continuous coverage.
+## 8. Health notifications (parent §8.6) consume the same stream later
+
+The parent's episode state machine applies unchanged. This section only names how each stream item maps to it.
+
+- **Baseline** (any replacement checkpoint): never notifies. Faults present are listed once in the app.
+- **New episode:** a `changes` item from a non-fault role into fault, under continuous watch coverage.
+- **Unknown:** fault → unknown (or `unevaluated`) suspends the episode, even with live coverage. A later `changes` item back into fault resumes the same episode, with no new notification. A `changes` item into fault opens a new episode only when no suspended episode exists for that key.
+- **Coverage lost** (a loss): suspends episodes, and claims no recovery. A following after-gap never notifies. A fault still present resumes its episode, and a fault gone, ok or unknown after the gap leaves it suspended until a later `changes` item.
+- **Recovered:** only a `changes` item into ok under continuous coverage.
+- **Deleted:** `gone` closes the episode as deleted, with no recovery.
+- **Replaced:** a new UID starts its own episode.
+- **Incarnation change or end:** everything is re-baselined.
+- **Restated and derived items** never open, close or resume an episode.
+- **Sampled sources (Helm)** may open an episode from a change between two reads, worded as such. They make no deletion or reinstall claims.
 
 ## 9. Tests
 
-`internal/observe` tests follow `observe_test.go` and its fake clock.
+`internal/observe` tests follow `observe_test.go` and its fake clock. Tests that need membership use a projection that keeps `ObjectMeta`.
 
 ### 9.1 Continuity
 
 - an outage and recovery wholly within one throttle window: a gap;
-- a 410 re-list: a gap; a resumable watch rotation: continuous;
+- a benign error followed by an identical relist, with no object change and no `RowsNow`: a loss and an after-gap with no items (finding 1);
+- a benign error with the relist held: a loss, and no after-gap until the relist;
+- a resumable watch rotation: continuous;
 - a gap while the loop is busy (evaluate held on a blocked fake);
-- a served-version change: a new generation, so a gap.
+- a served-version change: a new generation and a gap, with batches carrying the old and then the new effective GVR (v1beta2 → v1; extends `TestNativeRefsCarryTheServedVersion`).
 
 ### 9.2 Lifecycle
 
@@ -291,24 +336,29 @@ type Transition struct {
 ### 9.3 Connection and lifecycle
 
 - a controller-note change: nothing;
-- down/up without object changes: a loss, then after-gap with no items;
+- down/up without object changes: a loss, then an after-gap with no items;
 - Final: an `end` batch;
+- `RowsNow` then cancel before the scheduled publish: the bootstrap's batch was already emitted, then `end` (finding 4);
 - an old Observer completing after its replacement: ignored by obslog.
 
 ### 9.4 Delivery
 
-- bootstrap-before-flush: exactly once;
+- all five Flux source kinds in one initial evaluation: five baselines, nothing dropped (finding 2);
+- bootstrap then publish: exactly once;
 - repeated bootstraps: exactly once;
-- a pending-only cycle flushes with no summary or rows change;
+- a cap and recovery where an old fault UID disappeared: the baseline replacement ends its proof (finding 2);
+- a full UID turnover of N keys: one batch of 2N items (finding 3);
+- retained `unevaluated` entries plus new members: they count toward the cap (finding 3);
 - `rowsLineage` and the existing rows tests are unchanged;
 - the parity gate stays green.
 
 ### 9.5 Since and proofs
 
-- same role with a new `Since`: restated, no notification-eligible item;
+- same role with a new `Since`: restated, no episode effect;
 - loss and recovery with unchanged roles and a changed `Since`;
 - proof deletion on `gone`;
-- observed proofs downgraded after a gap, rule proofs kept.
+- observed, sampled and derived proofs downgraded after a gap, rule proofs kept;
+- condition evidence carried and never used as a start.
 
 ### 9.6 Membership and absence
 
@@ -318,13 +368,16 @@ type Transition struct {
 
 ### 9.7 Helm
 
-- two reads spanning a change;
+- two reads spanning a change: sampled, with the proof wording "between <t0> and <t>";
 - a same-name reinstall: no `gone`, worded as weak identity;
-- a time-only pending deadline with no new read: a derived item.
+- a time-only pending deadline with no new read: a derived item. Its proof carries the boundary and source read and reads "start unknown", never "between 12:00 and 12:00" (finding 5).
 
 ### 9.8 Bounds
 
 - the cap: a capped loss, then a baseline;
-- pending overflow;
 - obslog entry, proof and age bounds;
 - the benchmarks in §7.
+
+### 9.9 Notifications (when §8.6 lands)
+
+- fault → unknown → fault: one episode, one notification.
