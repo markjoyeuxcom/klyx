@@ -4,7 +4,12 @@
 
 This note turns §8.2 into an Observer design, grounded in how the Observer works today.
 
-**Revision 2** answered Codex's review of a8a669f (seven findings). **Revision 3** answers its review of revision 2 (six findings):
+**Revision 2** answered Codex's review of a8a669f (seven findings). **Revision 3** answered its review of revision 2 (six findings). **Revision 4** answers its review of revision 3 (94b8825):
+
+- **Per-item boundaries:** each derived item carries its own boundary (§1.1, §4.4, §5.4, §6.2).
+- **Silent closing after a gap:** an after-gap ok or `gone` closes a suspended episode without notifying (§8).
+
+Revision 3's findings:
 
 | Revision 3 finding | Where it is addressed |
 |---|---|
@@ -56,10 +61,19 @@ type RoleEntry struct {
     Role      string     // a health role
     Label     string     // the rule's label
     Since     *time.Time // the proven rule Since (parent §8.1), when the rule has one
+    Boundary  *time.Time // the time-only threshold this role crossed (NativeEval.Boundary), per object
     Condition *Condition // the deciding condition's own time (parent §8.1), evidence only
     Reason    string     // scrubbed, at most 200 runes
 }
 ```
+
+- **`Boundary` is new on `health.NativeEval`.** It is the instant a time-only threshold flipped this object's role, set by the rule that computes it, while the role is the crossed one. It is evidence, never a proven start.
+  - It matters because `Next` is cleared once the role flips (`helmcli/rules.go:40-46`).
+  - **Producers:**
+    - a Helm release past its pending deadline: updated + 601s;
+    - a Karpenter claim that appears stuck: created + 15m + 1s;
+    - an overdue ExternalSecret: `StaleAt`;
+    - an expired certificate: `notAfter`.
 
 - **Every evaluator produces it on every evaluation, subscribed or not.** The exception is the evidence-only Events part, which produces none.
 - **Strings are shared** with the evaluator's own values, never copied.
@@ -176,7 +190,10 @@ type RoleEntry struct {
   - `ReadAt`, the read the evaluation used;
   - `PrevReadAt`, the read its ledger was committed under. This is distinct from `PrevAt`: a bootstrap moves `PrevAt` without a read (finding 5).
 - **When `ReadAt != PrevReadAt`,** changes are differences between two reads, worded "found <role> at read <t>; <old role> at read <t0>". Nothing between reads is claimed.
-- **When `ReadAt == PrevReadAt`** (a time-only re-evaluation: a boundary fired with no new read), items are **derived**: the rule recomputed the role from the same read at the boundary instant. Each derived item carries its boundary (`At`) and its source read (`ReadAt`). It is never "found at read" and never a fresh observation (§6.2).
+- **When `ReadAt == PrevReadAt`** (a time-only re-evaluation: a boundary fired with no new read), items are **derived**: the rule recomputed the role from the same read.
+  - Each derived item carries its own `Boundary`, from its entry, and the batch carries the source read (`ReadAt`).
+  - `At` stays the capture time. One delayed evaluation can cross several objects' boundaries (release A's at 12:01 and B's at 12:02, captured at 12:03), and each keeps its own.
+  - A derived item is never "found at read" and never a fresh observation (§6.2).
 - **A failed or overdue read is a loss.** The next good read is an after-gap read.
 - **A truncated read** claims no `gone` and no new keys beyond the cap. It is treated as capped (§7).
 - **Identity is weak.**
@@ -241,6 +258,7 @@ type Transition struct {
     From, To           string     // a role, "absent" (new), "gone", or "unevaluated"
     Label, Reason      string     // the new state's, reason at most 200 runes
     Since              *time.Time // the proven rule Since now
+    Boundary           *time.Time // the time-only threshold the new role crossed, per item (§1.1)
     Condition          *Condition // the deciding condition's own time, evidence only
     Restated           bool       // same role, Since changed (§4.3)
     Derived            bool       // a time-only change from the same read (§4.4)
@@ -261,13 +279,13 @@ type Transition struct {
 
 ### 6.2 Proofs
 
-- **A proof** is `{role, since *time.Time, notBefore *time.Time, source: rule | observed | sampled | derived | unknown, boundary, readAt, condition, partition}`.
+- **A proof** is `{role, since *time.Time, notBefore *time.Time, source: rule | observed | sampled | derived | unknown, boundary (the item's own), readAt, condition, partition}`.
 - **Proofs are kept only for non-ok roles,** which is what the queue, the inspector and the "failing since" wording need. A key that goes ok, `gone` or `unevaluated` has its proof purged or ended.
 - **Precedence:**
   1. **rule:** a proven rule `Since` (parent §8.1) wins whenever present. It survives Klyx's own gaps while it is unchanged.
   2. **observed:** a `changes` item under continuous watch coverage, with no rule `Since`. The role began in `(PrevAt, At]`, worded "since ~<At> (observed)".
   3. **sampled:** a change between two reads (`ReadAt != PrevReadAt`), worded "between <PrevReadAt> and <ReadAt>".
-  4. **derived** (finding 5): a time-only change from the same read. The start is unknown, and the proof keeps two pieces of evidence: the rule's boundary and the read it came from. Example wording: "past its pending deadline at 12:01, from the read at 12:00 · start unknown". It is never a sampled interval and never a fresh observation.
+  4. **derived:** a time-only change from the same read. The start is unknown. The proof keeps two pieces of evidence: the item's own `Boundary` and the read it came from. Example wording: "past its pending deadline at 12:01, from the read at 12:00 · start unknown". It is never a sampled interval and never a fresh observation.
   5. **unknown:** a baseline, after-gap or replacement first sight with no rule `Since`, worded "start unknown; first seen <At>". An observed-only baseline never proves a start.
 - **The ref's `condition`** (the deciding condition's own age) is shown beside any of these as qualified evidence: "Ready=False since 09:00 (condition time)". It never becomes the proof's start.
 - **A restated item** replaces the proof's `since` with the new rule `Since`. Nil downgrades the proof to unknown.
@@ -304,7 +322,11 @@ The parent's episode state machine applies unchanged. This section only names ho
 - **Baseline** (any replacement checkpoint): never notifies. Faults present are listed once in the app.
 - **New episode:** a `changes` item from a non-fault role into fault, under continuous watch coverage.
 - **Unknown:** fault → unknown (or `unevaluated`) suspends the episode, even with live coverage. A later `changes` item back into fault resumes the same episode, with no new notification. A `changes` item into fault opens a new episode only when no suspended episode exists for that key.
-- **Coverage lost** (a loss): suspends episodes, and claims no recovery. A following after-gap never notifies. A fault still present resumes its episode, and a fault gone, ok or unknown after the gap leaves it suspended until a later `changes` item.
+- **Coverage lost** (a loss): suspends episodes, and claims no recovery. A following after-gap never notifies, and settles each suspended episode silently:
+  - **still fault:** the episode resumes;
+  - **ok:** the episode closes with no recovery notification and no asserted recovery time. A later fault is a new episode;
+  - **`gone`:** the episode closes as deleted, silently;
+  - **unknown or `unevaluated`:** the episode stays suspended.
 - **Recovered:** only a `changes` item into ok under continuous coverage.
 - **Deleted:** `gone` closes the episode as deleted, with no recovery.
 - **Replaced:** a new UID starts its own episode.
@@ -370,7 +392,8 @@ The parent's episode state machine applies unchanged. This section only names ho
 
 - two reads spanning a change: sampled, with the proof wording "between <t0> and <t>";
 - a same-name reinstall: no `gone`, worded as weak identity;
-- a time-only pending deadline with no new read: a derived item. Its proof carries the boundary and source read and reads "start unknown", never "between 12:00 and 12:00" (finding 5).
+- a time-only pending deadline with no new read: a derived item. Its proof carries the boundary and source read and reads "start unknown", never "between 12:00 and 12:00";
+- one delayed evaluation from the same read crosses release A's 12:01 deadline and B's 12:02 deadline: two derived items with their own boundaries, and `At` is the capture time.
 
 ### 9.8 Bounds
 
@@ -380,4 +403,6 @@ The parent's episode state machine applies unchanged. This section only names ho
 
 ### 9.9 Notifications (when §8.6 lands)
 
-- fault → unknown → fault: one episode, one notification.
+- fault → unknown → fault: one episode, one notification;
+- fault → loss → after-gap ok → continuous ok → fault, outside the de-duplication window: the old episode closed silently, then a new episode that notifies;
+- fault → loss → after-gap `gone`: the episode closed as deleted, silently, never left suspended.
