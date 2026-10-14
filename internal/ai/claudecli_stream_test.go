@@ -202,6 +202,12 @@ func TestParseClaudeStream_Refusals(t *testing.T) {
 		{"subagent stats", set(last, "subagent_stats", map[string]any{"count": 1}), ErrUnexpectedOutput, true},
 		{"a spawned subagent in the 2.1.296 shape", set(last, "subagent_stats", map[string]any{"spawned": 1, "requested": map[string]any{"background": 0, "foreground": 1, "unset": 0}, "by_type": map[string]any{"general": 1}}), ErrUnexpectedOutput, true},
 		{"a refused subagent", set(last, "subagent_stats", map[string]any{"spawned": 0, "refused": map[string]any{"depth_limit": 1}}), ErrUnexpectedOutput, true},
+		{"subagent stats with a boolean leaf", set(last, "subagent_stats", map[string]any{"spawned": true}), ErrUnexpectedOutput, true},
+		{"subagent stats with a negative count", set(last, "subagent_stats", map[string]any{"failed": -1}), ErrUnexpectedOutput, true},
+		{"subagent stats with an array leaf", set(last, "subagent_stats", map[string]any{"by_type": []any{0}}), ErrUnexpectedOutput, true},
+		{"subagent stats with a null leaf", set(last, "subagent_stats", map[string]any{"completed": nil}), ErrUnexpectedOutput, true},
+		{"subagent stats that are not an object", set(last, "subagent_stats", "none"), ErrUnexpectedOutput, true},
+		{"oversized subagent stats", set(last, "subagent_stats", map[string]any{"padding": map[string]any{strings.Repeat("k", 5000): 0}}), ErrUnexpectedOutput, true},
 		{"subagent message", func(e []map[string]any) []map[string]any {
 			e[2]["parent_tool_use_id"] = "toolu_1"
 			return e

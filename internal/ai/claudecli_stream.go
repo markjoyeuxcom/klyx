@@ -295,7 +295,7 @@ func checkResult(m map[string]json.RawMessage, w streamWant, sessionID, streamed
 	// Claude Code 2.1.296 writes subagent_stats on every result, as running
 	// totals that are all zero when no subagent ran (read from the shipped
 	// binary, 2026-10-14). Only a non-zero counter is subagent use.
-	if !rawNull(m, "subagent_stats") && !allZero(m["subagent_stats"]) {
+	if !rawNull(m, "subagent_stats") && !zeroCounters(m["subagent_stats"]) {
 		return "", toolEvent("subagent use")
 	}
 	if !rawNull(m, "deferred_tool_use") {
@@ -357,12 +357,22 @@ func checkResult(m map[string]json.RawMessage, w streamWant, sessionID, streamed
 	return joinText([]string{text})
 }
 
-// allZero reports whether raw is null, zero, an empty string or array, or an
-// object whose every member is itself allZero: counters that record nothing.
-func allZero(raw json.RawMessage) bool {
+// maxCountersSize bounds a counters object: the real 2.1.296
+// subagent_stats is about 300 bytes. Anything far larger is drift, refused
+// before it is walked.
+const maxCountersSize = 4096
+
+// zeroCounters reports whether raw is a counters object in which nothing was
+// counted: exactly 0, or an object whose every member is itself zero
+// counters. That is all the 2.1.296 schema allows (ints and maps of ints);
+// any other leaf - null, a string, an array, a boolean, any other number -
+// is not a zero count and fails.
+func zeroCounters(raw json.RawMessage) bool {
+	if len(raw) > maxCountersSize {
+		return false
+	}
 	t := bytes.TrimSpace(raw)
-	switch string(t) {
-	case "null", "0", `""`, "[]", "{}":
+	if string(t) == "0" {
 		return true
 	}
 	if len(t) == 0 || t[0] != '{' {
@@ -373,7 +383,7 @@ func allZero(raw json.RawMessage) bool {
 		return false
 	}
 	for _, v := range obj {
-		if !allZero(v) {
+		if !zeroCounters(v) {
 			return false
 		}
 	}
