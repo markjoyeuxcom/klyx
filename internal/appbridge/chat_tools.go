@@ -732,13 +732,6 @@ func (t *chatTools) overview() ChatToolResult {
 	return t.finish(env, ChatRead{Tool: toolOverview, Outcome: "completed", Redacted: p.redacted})
 }
 
-func errSuffix(class string) string {
-	if class == "" {
-		return ""
-	}
-	return " (" + class + ")"
-}
-
 type chatAttentionData struct {
 	Parts []chatPart      `json:"parts"`
 	Rows  []chatAttention `json:"rows"`
