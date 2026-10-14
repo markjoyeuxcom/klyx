@@ -34,7 +34,7 @@
   - the position glyph.
 - **A healthy object carries no mark.**
 
-Revised after Codex's design reviews of 4c654fc (nine findings), 3fdd4f7 (ten) and fe9ced4 (nine), all folded into §§0-14.
+Revised after Codex's design reviews of 4c654fc (nine findings), 3fdd4f7 (ten), fe9ced4 (nine) and c1268b1 (four), all folded into §§0-14.
 
 ## 0. What exists
 
@@ -634,8 +634,8 @@ It is **pinned to its object's cluster and UID**. Every verb, follow-up and Expl
 - **Set by Klyx:**
   - `GIT_CONFIG_NOSYSTEM=1`;
   - `GIT_CONFIG_GLOBAL=<a Klyx-generated file>`;
-  - `GIT_DIR=<the cache dir>`, with the working directory also set to it;
-  - `GIT_NO_LAZY_FETCH=1` for metadata reads;
+  - `GIT_DIR` set per operation: the staging repo for an acquisition, the cache for reads and publication. The working directory matches it.
+  - `GIT_NO_LAZY_FETCH=1` on **every** command except an acquisition fetch. Only a staged acquisition (below) ever downloads objects.
   - `GIT_PAGER=cat` and `PAGER=cat`;
   - the prompt variables above.
 - **Never passed:** every other `GIT_*` variable (exec path, alternates, config overrides), cloud credentials, and KUBECONFIG.
@@ -646,40 +646,70 @@ It is **pinned to its object's cluster and UID**. Every verb, follow-up and Expl
 | Command | Purpose |
 |---|---|
 | `git init --bare --template=` | create the cache, or a staging repo |
-| `git fetch --atomic --no-tags --filter=blob:none origin +<ref>:refs/klyx/staging/<ref>` | into a staging repo only (below), with explicit refspecs for the tracked refs |
-| `git cat-file --batch-all-objects --batch-check` | validate a staging repo |
-| `git update-ref --stdin` | publish, in one transaction |
+| `git fetch --atomic --no-tags --filter=blob:none origin +<ref>:refs/klyx/staging/<ref>` | history acquisition, into a staging repo only, with explicit refspecs for the tracked refs |
+| `git fetch --no-tags --no-write-fetch-head --filter=blob:none --stdin origin` | content acquisition: named blob ids on stdin, into a staging repo only |
+| `git rev-list --objects --missing=print <rev> -- <path>` | list the blobs a preview needs that the cache lacks |
+| `git verify-pack -v <staging pack>.idx` | validate only the packs this acquisition created |
+| `git update-ref --stdin` | publish refs, in one transaction |
 | `git log --no-renames`, `git rev-list --count`, `git merge-base [--is-ancestor]` | metadata reads |
 | `git diff --name-status --no-renames --no-ext-diff --no-textconv` | metadata reads |
-| `git diff --no-ext-diff --no-textconv <a> <b> -- <path>` | only on an explicit "show changes" click; it may fetch blobs, within the caps |
-| `git archive --format=tar <rev> -- <path>` | for `flux diff --path` (below) |
+| `git diff --no-ext-diff --no-textconv <a> <b> -- <path>` | a content diff, only after its blobs were acquired (below) |
+| `git archive --format=tar <rev> -- <path>` | the cache diff's input, only after its blobs were acquired |
 
 - **On every call:**
   - `--no-pager`;
   - `-c core.hooksPath=/dev/null`;
   - `-c protocol.allow=never -c protocol.https.allow=always -c protocol.ssh.allow=always`;
-  - `-c core.fsmonitor=false -c submodule.recurse=false -c diff.external= -c http.followRedirects=false`.
+  - `-c core.fsmonitor=false -c submodule.recurse=false -c diff.external= -c http.followRedirects=false`;
+  - `-c fetch.unpackLimit=1 -c transfer.unpackLimit=1`, so every acquisition stays in packs Klyx can enumerate, never in loose objects.
 - **Arguments:**
   - Revisions are hex shas or the tracked ref, placed after `--end-of-options`.
   - Paths come after `--`, under `--literal-pathspecs` (`GIT_LITERAL_PATHSPECS=1`).
 - **Never allowed:** `push`, `commit`, `tag`, `branch`, a checkout into the owner's working trees, `config --global`, hooks, submodules.
 - **Deadlines and bounds:** 60s for a fetch and 10s for a local query. Each call runs in its own process group, killed on a deadline or a cancel. Captured output is capped at 1 MiB.
 
-**Acquisition is staged and published atomically:**
-1. **Stage.** Each fetch goes into a fresh staging repo beside the cache. The staging repo borrows the cache's objects through an alternates file that Klyx writes (never an environment variable), so only new objects land in it. The fetch is `--atomic`.
-2. **Validate.**
-   - **The filter held:** `cat-file --batch-all-objects` finds no blob in the staging repo. A server that ignored `--filter=blob:none` is refused ("this server does not support partial clone"), and nothing is kept.
-   - **The refs resolve.**
-   - **The size is within budget.**
-3. **Publish.**
-   - The staging repo's packs move into the cache: `.pack` and `.rev` first, `.idx` last.
-   - One `update-ref --stdin` transaction then moves every published ref, so all refs update or none do.
-4. **Roll back on any failure,** a kill or a cap included, by deleting the whole staging repo. Nothing from a failed acquisition ever reaches the cache, and the last good history stays.
-5. **Budget:**
-   - One fetch runs at a time across the fleet, so the global budget is checked against one acquisition.
-   - Before a fetch, Klyx reserves the room left under both the per-repo and the total cap.
-   - The staging repo's size is sampled every 250ms, and the fetch is killed when it passes its reservation.
-   - Overshoot is limited to the transfer within one sampling interval. It sits in the staging repo only, and is deleted.
+**Acquisition: one contract for history and content.**
+
+Every download goes through these steps, under one fleet-wide acquisition lock. Two kinds of download use it: a history refresh, and the content a preview or a cache diff needs.
+
+1. **Reserve.**
+   - The lock means one acquisition at a time across the fleet. A refresh and a preview queue behind each other.
+   - Klyx reserves the room left under the per-repo cap and the total cap.
+   - A preview's reservation is also capped at 64 MiB.
+2. **Stage.**
+   - A fresh staging repo is created beside the cache. It borrows the cache's objects through an alternates file that Klyx writes, never an environment variable.
+   - **A history refresh** fetches `--atomic` into `refs/klyx/staging/*`.
+   - **A content acquisition:**
+     - first lists the missing blobs with `rev-list --objects --missing=print`, run with `GIT_NO_LAZY_FETCH` against the cache;
+     - then fetches exactly those ids through `--stdin`;
+     - and is refused when there are more than 5,000.
+3. **Validate the new packs only.**
+   - The staging repo's *own* packs are enumerated with `verify-pack -v`. Alternates are never enumerated, so blobs already in the cache neither fail validation nor hide an incoming one. The unpack limits keep every object in a pack.
+   - **A history refresh** must bring no blob. A server that ignored the filter is refused ("this server does not support partial clone").
+   - **A content acquisition** must bring only the blob ids it asked for.
+   - The refs resolve, and the size is within the reservation.
+4. **Publish, journaled.**
+   - **The journal first.** Klyx writes a journal into the cache that lists every file it is about to move, and syncs it to disk.
+   - **The pack files.** For each new pack, Klyx moves every file the pack has, including the `.promisor` marker a filtered fetch creates: `.pack`, `.rev` and `.promisor` first, `.idx` last.
+   - **The refs.** A history refresh then runs one `update-ref --stdin` transaction (prepare, then commit).
+   - **The commit mark.** The journal is marked committed and removed.
+5. **Roll back.** On any failure before the commit mark, Klyx deletes exactly the files in the journal, then the staging repo. Failures include a kill, a cap, a validation refusal, a failed ref prepare or commit, and cancellation.
+   - On start, and before every acquisition, Klyx replays any leftover journal the same way. An interruption between moving files and the ref transaction therefore never leaves orphan packs or leaks the budget.
+   - The last good history stays.
+6. **Size while staging.**
+   - The staging repo is sampled every 250ms, and the fetch is killed when it passes its reservation.
+   - Overshoot is bounded to one interval's transfer. It lives only in staging, and is deleted.
+
+**The cache's own config,** written by Klyx when it creates the cache, keeps the partial clone valid:
+- `core.repositoryformatversion=1`;
+- `extensions.partialClone=origin`;
+- `remote.origin.url=<the approved URL>`;
+- `remote.origin.promisor=true`;
+- `remote.origin.partialclonefilter=blob:none`.
+
+A published cache passes `git fsck --connectivity-only` with its blobs missing, including after a restart. This is a test check, not something the app runs.
+
+**Content for previews and the cache diff.** `git diff` with content, and `git archive`, run only after a content acquisition has brought every blob they need. They run with `GIT_NO_LAZY_FETCH`, so a blob still missing fails the preview ("content incomplete") and never downloads behind the budget.
 
 **The cache diff** (slice 6b, replacing the M10-f `flux diff --path` follow-up) is a separate authorisation from reading history. The build must be confined, not just the extraction: a Kustomize generator, patch, schema or nested base can otherwise read outside the tree. Codex reproduced exactly that with the flux CLI, which builds without confinement.
 - **Klyx does not run the flux CLI for cache builds.** It builds in-process:
@@ -700,19 +730,15 @@ It is **pinned to its object's cluster and UID**. Every verb, follow-up and Expl
 
 **The cache and its bounds:**
 - **Location:** `<config dir>/git-cache/<sha256 of the approved URL>.git`, 0700.
-- **Contents:** commits and trees for the tracked refs. Blobs appear only after an explicit "show changes" or a `flux diff` extraction, and "Clear cache" removes them.
-- **Caps:**
-  - 1 GiB per repo, and 2 GiB across all repos (§14).
-  - They are enforced *during* acquisition: Klyx watches the cache directory and kills a fetch that would pass a cap.
-  - After a killed or failed fetch, Klyx removes `objects/pack/tmp_*` and any other temporaries.
-  - Refs update only on success, so the last good history stays.
+- **Contents:** commits and trees for the tracked refs. Blobs appear only after a content acquisition for a preview or a cache diff. "Clear cache" removes everything.
+- **Caps:** 1 GiB per repo and 2 GiB across all repos (§14). They are enforced only through the acquisition contract above.
 - **Settings > Git** shows each repo's size, last fetch, the cluster URLs mapped to it, and "Fetch now" and "Clear cache".
 
 **When it fetches.**
 - When the fleet view opens.
 - At most every 5 minutes while it stays open.
 - On "Fetch now".
-- One fetch per repo at a time.
+- One acquisition at a time across the fleet (above).
 
 **Failing honestly.**
 - A failed or capped fetch keeps the last good history, labelled "history as of <time>; fetch failed: <scrubbed error>".
@@ -1095,10 +1121,17 @@ Each source below is new, and each declares where its claims come from.
   - Deadlines and caps.
   - The Ledger: a linear A-B-C with stations at A and C lists B and C; divergent stations.
   - Acquisition:
-    - a server ignoring the filter (blob found, staging deleted, nothing published);
+    - a server ignoring the filter (blob found in the new pack, staging deleted, nothing published);
+    - a preview followed by a normal refresh (an alternate blob does not fail validation);
+    - an incoming unfiltered blob with alternates present (still caught);
     - a two-ref fetch where one ref fails (no ref published);
+    - failure injected after each file move, and at ref prepare and commit (exactly the journaled files removed, no orphan pack);
+    - a crash between moving files and the ref transaction, replayed on restart;
+    - `.promisor` published, with `fsck --connectivity-only` passing with blobs missing and after a restart;
     - a kill at the cap (staging deleted, cache unchanged);
-    - one fetch at a time across the fleet;
+    - an over-budget preview refused before download;
+    - a history refresh and a preview at the same time (serialised);
+    - archive and content diff never lazily fetching;
     - git 2.44 refused, and a missing object never fetched lazily on 2.45.
   - The orderings:
     - behind, ahead, diverged;
