@@ -8,6 +8,10 @@ import type { ChatSeed, ChatState } from "../bridge/chat";
 // a follow-up's target, a question in flight, and whether the operator
 // cleared the conversation (Clear never starts another by itself).
 export type ChatAsking = { conversationId: string; question: string };
+// ChatOutcome is what became of the cluster's latest request when it did
+// not simply succeed: a refusal or a bridge failure (error), or a
+// recoverable notice. It is kept apart from the conversation state.
+export type ChatOutcome = { kind: "error" | "notice"; text: string };
 export type ChatFollowUp = { seed: ChatSeed; label: string };
 
 type ChatUI = {
@@ -18,14 +22,14 @@ type ChatUI = {
   seeds: Record<string, ChatFollowUp | undefined>;
   asking: Record<string, ChatAsking | undefined>;
   cleared: Record<string, boolean>;
-  // failures are bridge failures, shown beside the state, never as one;
-  // reqs numbers requests per cluster so only the latest one's failure
-  // shows (an older request failing later says nothing).
-  failures: Record<string, string | undefined>;
+  // outcomes hold each cluster's latest request outcome, shown beside the
+  // state and never as one; reqs numbers requests per cluster so only the
+  // latest request settles it (an older request answering later says
+  // nothing), and state reads never touch it (Codex review of c4ae925).
+  outcomes: Record<string, ChatOutcome | undefined>;
   reqs: Record<string, number>;
   nextReq: (cluster: string) => number;
-  fail: (cluster: string, req: number, message: string) => void;
-  succeed: (cluster: string, req: number) => void;
+  settle: (cluster: string, req: number, outcome: ChatOutcome | undefined) => void;
   openFor: (cluster: string, followUp?: ChatFollowUp) => void;
   close: () => void;
   apply: (cluster: string, st: ChatState) => boolean;
@@ -43,26 +47,26 @@ export const useChat = create<ChatUI>((set, get) => ({
   seeds: {},
   asking: {},
   cleared: {},
-  failures: {},
+  outcomes: {},
   reqs: {},
   nextReq: (cluster) => {
     const n = (get().reqs[cluster] ?? 0) + 1;
     set((s) => ({ reqs: { ...s.reqs, [cluster]: n } }));
     return n;
   },
-  fail: (cluster, req, message) => {
-    if (get().reqs[cluster] === req) set((s) => ({ failures: { ...s.failures, [cluster]: message } }));
-  },
-  succeed: (cluster, req) => {
-    if (get().reqs[cluster] === req) set((s) => ({ failures: { ...s.failures, [cluster]: undefined } }));
+  settle: (cluster, req, outcome) => {
+    if (get().reqs[cluster] === req) set((s) => ({ outcomes: { ...s.outcomes, [cluster]: outcome } }));
   },
   openFor: (cluster, followUp) =>
     set((s) => ({ open: true, cluster, seeds: followUp ? { ...s.seeds, [cluster]: followUp } : s.seeds })),
   close: () => set({ open: false }),
   // apply keeps the newest state per cluster: an older reply (a lower
-  // version) is dropped whatever order replies arrive in.
+  // version) is dropped whatever order replies arrive in. A reply with an
+  // error is a refusal, not a conversation: it is never applied, whatever
+  // its version, so it cannot replace the conversation on screen.
   apply: (cluster, st) => {
     const cur = get().states[cluster];
+    if (st.error) return false;
     if (cur && (st.version ?? 0) < (cur.version ?? 0)) return false;
     set((s) => ({ states: { ...s.states, [cluster]: st } }));
     return true;

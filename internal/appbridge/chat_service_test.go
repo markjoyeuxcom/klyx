@@ -230,7 +230,7 @@ func TestChatStopAndClearFenceLateResults(t *testing.T) {
 	waitFor(t, func() bool { return f2.svc.State("x").Active })
 	f2.svc.Clear("x", st2.ConversationID)
 	res = <-done
-	if !strings.Contains(res.Error, "cleared") || f2.svc.State("x").ConversationID != "" {
+	if !strings.Contains(res.Notice, "cleared") || res.Error != "" || res.ConversationID != "" || f2.svc.State("x").ConversationID != "" {
 		t.Fatalf("a cleared conversation drops its late result: %+v", res)
 	}
 }
@@ -589,15 +589,46 @@ func TestChatSeedRefusesAReplacement(t *testing.T) {
 // ---- Codex review of 0725e47 ------------------------------------------------------
 
 // A refusal carries the current version: never older than an empty State
-// read just before it.
+// read just before it, and it changes nothing.
 func TestChatStartRefusalIsVersioned(t *testing.T) {
 	f := newToolsFixture(t)
 	f.svc.Start("x")
 	f.usable = false
 	empty := f.svc.State("y")
 	refused := f.svc.Start("y")
-	if refused.Error == "" || refused.Version <= empty.Version {
-		t.Fatalf("a Start refusal is a newer state than the empty one before it: %d <= %d (%q)", refused.Version, empty.Version, refused.Error)
+	if refused.Error == "" || refused.Version < empty.Version {
+		t.Fatalf("a Start refusal is never older than the state before it: %d < %d (%q)", refused.Version, empty.Version, refused.Error)
+	}
+	if after := f.svc.State("y"); after.Version != empty.Version {
+		t.Fatalf("a refusal changes nothing: version %d -> %d", empty.Version, after.Version)
+	}
+}
+
+// ---- Codex review of c4ae925 ------------------------------------------------------
+
+// An Ask that outlives its conversation answers with the conversation that
+// is current - never an empty state at the current version - and says why
+// as a notice.
+func TestChatLateAskReturnsTheCurrentConversation(t *testing.T) {
+	f := newToolsFixture(t, answer("late"))
+	f.prov.block = make(chan struct{})
+	old := f.svc.Start("x")
+	done := make(chan ChatStateDTO, 1)
+	go func() { done <- f.svc.Ask("x", old.ConversationID, "q", nil) }()
+	waitFor(t, func() bool { return f.svc.State("x").Active })
+	f.svc.Clear("x", old.ConversationID)
+	fresh := f.svc.Start("x")
+	close(f.prov.block)
+	late := <-done
+	if late.ConversationID != fresh.ConversationID || late.Error != "" || !strings.Contains(late.Notice, "cleared") || late.Version < fresh.Version {
+		t.Fatalf("a late Ask returns the current conversation with a notice: fresh %s@%d, late %+v", fresh.ConversationID, fresh.Version, late)
+	}
+	if again := f.svc.Ask("x", old.ConversationID, "q", nil); again.ConversationID != fresh.ConversationID || again.Error != "" || !strings.Contains(again.Notice, "ended") {
+		t.Fatalf("an Ask for an old conversation returns the current one with a notice: %+v", again)
+	}
+	f.svc.Clear("x", fresh.ConversationID)
+	if gone := f.svc.Ask("x", fresh.ConversationID, "q", nil); gone.ConversationID != "" || gone.Error != "" || !strings.Contains(gone.Notice, "start a new one") {
+		t.Fatalf("an Ask after Clear returns the empty state with a notice: %+v", gone)
 	}
 }
 

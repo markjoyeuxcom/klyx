@@ -24,23 +24,20 @@ export function ChatDrawer() {
 
 const messageOf = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
-// request runs one bridge call: its state goes through the version guard,
-// and a bridge failure is shown beside the state - only if it is the
-// cluster's latest request. A refusal is that request's outcome, not a
-// conversation state: when its state loses to a newer one, its error or
-// notice still shows, fenced by request order (Codex review of 0725e47).
+// request runs one bridge call: its state goes through the version guard
+// (a refusal is never applied), and its outcome - a refusal, a notice or a
+// bridge failure - settles the outcome slot only if it is the cluster's
+// latest request (Codex reviews of 0725e47 and c4ae925).
 async function request(cluster: string, call: () => Promise<ChatState>): Promise<ChatState | null> {
-  const chat = useChat.getState();
-  const n = chat.nextReq(cluster);
+  const n = useChat.getState().nextReq(cluster);
   try {
     const st = await call();
-    const outcome = st.error || st.notice;
-    if (useChat.getState().apply(cluster, st) || !outcome) useChat.getState().succeed(cluster, n);
-    else useChat.getState().fail(cluster, n, outcome);
+    useChat.getState().apply(cluster, st);
+    useChat.getState().settle(cluster, n, st.error ? { kind: "error", text: st.error } : st.notice ? { kind: "notice", text: st.notice } : undefined);
     logCalls(cluster, useChat.getState().states[cluster]);
     return st;
   } catch (e) {
-    useChat.getState().fail(cluster, n, `Klyx could not reach its chat service: ${messageOf(e)}`);
+    useChat.getState().settle(cluster, n, { kind: "error", text: `Klyx could not reach its chat service: ${messageOf(e)}` });
     return null;
   }
 }
@@ -52,8 +49,8 @@ function refresh(cluster: string): Promise<ChatState | null> {
 
 // background reads the conversation back while something else is the
 // latest request (a running Ask, a read event): its state still goes
-// through the version guard, but it never claims or clears the failure
-// slot, so an Ask's own failure is not hidden by it.
+// through the version guard, but it never claims or settles the outcome
+// slot, so a request's own outcome is not hidden by it.
 async function background(cluster: string): Promise<void> {
   try {
     useChat.getState().apply(cluster, await chatState(cluster));
@@ -69,7 +66,7 @@ function ChatPanel({ cluster }: { cluster: string }) {
   const followUp = useChat((s) => s.seeds[cluster]);
   const asking = useChat((s) => s.asking[cluster]);
   const cleared = useChat((s) => s.cleared[cluster] ?? false);
-  const failure = useChat((s) => s.failures[cluster]);
+  const outcome = useChat((s) => s.outcomes[cluster]);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
   const { setDraft, setSeed, setAsking, setCleared, close } = useChat.getState();
@@ -80,7 +77,7 @@ function ChatPanel({ cluster }: { cluster: string }) {
       const s = await refresh(cluster);
       // Opening the drawer starts a conversation - unless the operator
       // cleared it, which never starts another by itself.
-      if (alive && s && !s.conversationId && !s.error && !useChat.getState().cleared[cluster]) {
+      if (alive && s && !s.conversationId && !useChat.getState().cleared[cluster]) {
         await request(cluster, () => chatStart(cluster));
       }
     })();
@@ -138,7 +135,9 @@ function ChatPanel({ cluster }: { cluster: string }) {
 
   const inFlight = st?.exchanges.find((e) => e.outcome === "");
   const busy = !!asking || !!st?.active;
-  const available = !!st && !st.error && !st.ended && !!conversationId;
+  const available = !!st && !st.ended && !!conversationId;
+  const failure = outcome?.kind === "error" ? outcome.text : undefined;
+  const notice = outcome?.kind === "notice" ? outcome.text : undefined;
 
   return (
     <aside className="chat-drawer" role="complementary" aria-label={`Ask about ${cluster}`} data-testid="chat-drawer"
@@ -165,15 +164,15 @@ function ChatPanel({ cluster }: { cluster: string }) {
 
       <div className="chat-body" data-testid="chat-body">
         {!st && <div className="chat-small">Loading…</div>}
-        {st?.error && (
-          <div className="chat-notice" role="alert">
-            ▲ {st.error}
-            {/Settings > AI|AI is off|unavailable|protected/.test(st.error) && (
+        {failure && !conversationId && (
+          <div className="chat-notice" role="alert" data-testid="chat-failure">
+            ▲ {failure}
+            {/Settings > AI|AI is off|unavailable|protected/.test(failure) && (
               <div><button type="button" className="l-btn" onClick={() => useFleet.getState().openSettings()}>Open Settings</button></div>
             )}
           </div>
         )}
-        {st && !st.conversationId && !st.error && cleared && (
+        {st && !st.conversationId && !failure && cleared && (
           <div className="chat-notice" role="status">
             The conversation was cleared.
             <div><button type="button" className="l-btn" onClick={() => void start()}>Start a conversation</button></div>
@@ -221,10 +220,10 @@ function ChatPanel({ cluster }: { cluster: string }) {
             }
           }}
         />
-        {failure && <div className="chat-small" role="alert" style={{ color: "var(--color-text-danger)" }} data-testid="chat-failure">{failure}</div>}
-        {(tooLong || st?.notice) && (
+        {failure && conversationId && <div className="chat-small" role="alert" style={{ color: "var(--color-text-danger)" }} data-testid="chat-failure">▲ {failure}</div>}
+        {(tooLong || notice) && (
           <div className="chat-small" role="status" style={{ color: "var(--color-text-warning)" }} data-testid="chat-input-notice">
-            {tooLong ? `The question is ${bytes} bytes; the limit is ${QUESTION_MAX_BYTES} (UTF-8). Shorten it.` : st?.notice}
+            {tooLong ? `The question is ${bytes} bytes; the limit is ${QUESTION_MAX_BYTES} (UTF-8). Shorten it.` : notice}
           </div>
         )}
         <div className="chat-actions">

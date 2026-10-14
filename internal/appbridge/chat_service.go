@@ -188,11 +188,11 @@ func (s *ChatService) Start(cluster string) ChatStateDTO {
 	if c := s.convs[cluster]; c != nil && c.ended == "" {
 		return s.stateLocked(c)
 	}
-	// A refusal is a state like any other: it carries the current version,
-	// so the drawer never drops it as older than what it shows (Codex
-	// review of 0725e47).
+	// A refusal changes nothing; it carries the current version (never an
+	// older one) and its Error marks it a refusal, which the drawer shows
+	// as the request's outcome and never applies as the conversation
+	// (Codex reviews of 0725e47 and c4ae925).
 	refuse := func(msg string) ChatStateDTO {
-		s.version++
 		return ChatStateDTO{Cluster: cluster, Error: msg, Protected: s.ai.protected(cluster), Exchanges: []ChatExchangeDTO{}, Version: s.version}
 	}
 	st := s.ai.load()
@@ -237,11 +237,31 @@ func (s *ChatService) refusal(st *AIState, cluster string) string {
 func (s *ChatService) State(cluster string) ChatStateDTO {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	c := s.convs[cluster]
-	if c == nil {
-		return ChatStateDTO{Cluster: cluster, Protected: s.ai.protected(cluster), Exchanges: []ChatExchangeDTO{}, Version: s.version}
+	return s.currentLocked(cluster)
+}
+
+// currentLocked is the cluster's conversation as it stands, or the empty
+// state when it has none.
+func (s *ChatService) currentLocked(cluster string) ChatStateDTO {
+	if c := s.convs[cluster]; c != nil {
+		return s.stateLocked(c)
 	}
-	return s.stateLocked(c)
+	return ChatStateDTO{Cluster: cluster, Protected: s.ai.protected(cluster), Exchanges: []ChatExchangeDTO{}, Version: s.version}
+}
+
+// obsoleteLocked answers a request for a conversation that is no longer
+// the cluster's: the reply is the conversation that is current, never an
+// empty state stamped with the current version, and the refusal is its
+// notice (Codex review of c4ae925).
+func (s *ChatService) obsoleteLocked(cluster, msg string) ChatStateDTO {
+	st := s.currentLocked(cluster)
+	if st.ConversationID != "" {
+		msg += "; this is the current conversation"
+	} else {
+		msg += "; start a new one"
+	}
+	st.Notice = msg
+	return st
 }
 
 func (s *ChatService) stateLocked(c *conversation) ChatStateDTO {
@@ -313,13 +333,11 @@ func (s *ChatService) Ask(cluster, conversationID, question string, seed *ChatSe
 	}
 	switch {
 	case c == nil || c.id != conversationID:
-		v := s.version
-		s.mu.Unlock()
-		return ChatStateDTO{Cluster: cluster, Error: "this conversation has ended; start a new one", Exchanges: []ChatExchangeDTO{}, Version: v}
-	case c.ended != "":
-		st := s.stateLocked(c)
+		st := s.obsoleteLocked(cluster, "that conversation has ended")
 		s.mu.Unlock()
 		return st
+	case c.ended != "":
+		return notice("this conversation has ended; start a new one")
 	case c.active != nil:
 		return notice("a question is already being answered; stop it or wait")
 	case question == "":
@@ -357,7 +375,7 @@ func (s *ChatService) Ask(cluster, conversationID, question string, seed *ChatSe
 	defer s.mu.Unlock()
 	if s.convs[cluster] != c || c.active != turn {
 		// Cleared or replaced while the turn ran: the late result is dropped.
-		return ChatStateDTO{Cluster: cluster, Error: "this conversation was cleared", Exchanges: []ChatExchangeDTO{}, Version: s.version}
+		return s.obsoleteLocked(cluster, "that conversation was cleared before its answer arrived")
 	}
 	c.active = nil
 	if turn.stopped && err == nil {

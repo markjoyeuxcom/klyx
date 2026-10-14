@@ -42,7 +42,7 @@ describe("ChatDrawer", () => {
     bridge.onChatRead.mockImplementation(() => () => {});
     bridge.chatStop.mockImplementation(async () => {});
     bridge.chatClear.mockImplementation(async () => {});
-    useChat.setState({ open: false, cluster: null, states: {}, drafts: {}, seeds: {}, asking: {}, cleared: {}, failures: {}, reqs: {} });
+    useChat.setState({ open: false, cluster: null, states: {}, drafts: {}, seeds: {}, asking: {}, cleared: {}, outcomes: {}, reqs: {} });
   });
 
   it("starts a conversation and states what it sends and to whom", async () => {
@@ -225,5 +225,44 @@ describe("ChatDrawer", () => {
     await waitFor(() => expect(input.value).toBe("still there?"));
     expect(input.disabled).toBe(false);
     expect(useChat.getState().states.x.conversationId).toBe("c1");
+  });
+
+  // Codex review of c4ae925: a refusal never replaces the conversation on
+  // screen, even at an equal version, and a state read never erases the
+  // latest request's outcome.
+  it("a late refusal for an older request never replaces the current conversation", async () => {
+    const old = deferred<ChatState>();
+    bridge.chatState.mockResolvedValue(state({ version: 9200 }));
+    bridge.chatAsk.mockReturnValue(old.promise);
+    act(() => openChat("x"));
+    const { findByLabelText, queryByTestId } = render(<ChatDrawer />);
+    const input = (await findByLabelText("question")) as HTMLTextAreaElement;
+    await waitFor(() => expect(input.disabled).toBe(false));
+    fireEvent.change(input, { target: { value: "old question" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => expect(bridge.chatAsk).toHaveBeenCalled());
+    act(() => {
+      useChat.getState().nextReq("x"); // a newer request is now the latest
+      useChat.getState().apply("x", state({ version: 9300, conversationId: "c2" }));
+    });
+    await act(async () => old.resolve(state({ version: 9300, conversationId: undefined, error: "that conversation was cleared" })));
+    expect(useChat.getState().states.x.conversationId).toBe("c2");
+    expect(input.disabled).toBe(false);
+    expect(queryByTestId("chat-failure")).toBeNull();
+  });
+
+  it("a background read keeps the latest request's notice", async () => {
+    const bg = deferred<ChatState>();
+    bridge.chatState.mockResolvedValueOnce(state({ version: 9400, active: true })).mockReturnValueOnce(bg.promise);
+    bridge.chatAsk.mockResolvedValue(state({ version: 9400, active: true, notice: "a question is already being answered; stop it or wait" }));
+    act(() => openChat("x"));
+    const { findByLabelText, findByTestId, getByTestId } = render(<ChatDrawer />);
+    const input = (await findByLabelText("question")) as HTMLTextAreaElement;
+    await waitFor(() => expect(input.disabled).toBe(false));
+    fireEvent.change(input, { target: { value: "my next question" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect((await findByTestId("chat-input-notice")).textContent).toContain("already being answered");
+    await act(async () => bg.resolve(state({ version: 9400, active: true })));
+    expect(getByTestId("chat-input-notice").textContent).toContain("already being answered");
   });
 });
