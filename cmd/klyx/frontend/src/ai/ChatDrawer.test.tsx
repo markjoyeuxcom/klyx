@@ -55,7 +55,7 @@ describe("ChatDrawer", () => {
         { tool: "get_resource", target: "Pod shop/web-7f", outcome: "completed", redacted: 2, refs: [{ gvr: "v1/pods", namespace: "shop", name: "web-7f", uid: "u1" }] },
         { tool: "list_resources", target: "Pod in shop", outcome: "completed", refs: [{ gvr: "v1/pods", namespace: "shop", name: "unmentioned", uid: "u2" }] },
       ],
-      calls: [{ provider: "anthropic", model: "claude-opus-5-5", mode: "tools", tools: ["get_resource"] }],
+      calls: [{ provider: "anthropic", model: "claude-opus-5-5", mode: "tools", tools: ["get_resource"], outcome: "completed" }],
     }] }));
     const status = vi.spyOn(useFleet.getState(), "setActionStatus");
     act(() => openChat("x"));

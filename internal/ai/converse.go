@@ -63,11 +63,28 @@ type ConvMessage struct {
 	Results      []ToolResult
 }
 
-// ConvRequest is one model call in a conversation.
+// ConvRequest is one model call in a conversation. MaxBytes, when set,
+// bounds the request body exactly as it would be sent: a provider measures
+// its own serialized request and returns ErrRequestTooLarge without sending
+// anything (spec 2026-10-14 §5.2; Codex review of 5d8003e).
 type ConvRequest struct {
 	System   string
 	Messages []ConvMessage
 	Tools    []Tool
+	MaxBytes int
+}
+
+// ErrRequestTooLarge: the serialized request would pass ConvRequest.MaxBytes.
+// Nothing was sent.
+var ErrRequestTooLarge = errors.New("the request is larger than its budget; nothing was sent")
+
+// overBudget reports whether a serialized request passes req.MaxBytes.
+func overBudget(req ConvRequest, payload any) bool {
+	if req.MaxBytes <= 0 {
+		return false
+	}
+	b, err := json.Marshal(payload)
+	return err != nil || len(b) > req.MaxBytes
 }
 
 // Turn is one response: final Text (Done), or Calls to run first. ModelUsed
@@ -186,6 +203,9 @@ func (p *anthropicProvider) Converse(ctx context.Context, req ConvRequest) (Turn
 		params.Betas = []anthropic.AnthropicBeta{anthropic.AnthropicBetaServerSideFallback2026_07_01}
 		params.Fallbacks = anthropic.BetaFallbacksParamOfDefault()
 	}
+	if overBudget(req, params) {
+		return Turn{}, ErrRequestTooLarge
+	}
 	msg, err := p.client.Beta.Messages.New(ctx, params)
 	if err != nil {
 		return Turn{}, scrubErr(err, p.key)
@@ -261,6 +281,9 @@ func (p *openaiProvider) Converse(ctx context.Context, req ConvRequest) (Turn, e
 		"max_output_tokens": apiMaxOutputTokens,
 		"store":             false,
 		"include":           []string{"reasoning.encrypted_content"},
+	}
+	if overBudget(req, payload) {
+		return Turn{}, ErrRequestTooLarge
 	}
 	body, err := postJSON(ctx, p.http, p.baseURL+"/v1/responses", p.headers(), payload, p.key)
 	if err != nil {
@@ -431,6 +454,9 @@ func (p *geminiProvider) Converse(ctx context.Context, req ConvRequest) (Turn, e
 		"tools":             []map[string]any{{"functionDeclarations": decls}},
 		"generationConfig":  map[string]any{"maxOutputTokens": apiMaxOutputTokens},
 	}
+	if overBudget(req, payload) {
+		return Turn{}, ErrRequestTooLarge
+	}
 	body, err := postJSON(ctx, p.http, p.baseURL+"/v1beta/models/"+geminiModelPath(p.model)+":generateContent", p.headers(), payload, p.key)
 	if err != nil {
 		return Turn{}, err
@@ -580,6 +606,9 @@ func (p *compatProvider) Converse(ctx context.Context, req ConvRequest) (Turn, e
 		tools = append(tools, map[string]any{"type": "function", "function": map[string]any{"name": t.Name, "description": t.Description, "parameters": t.Schema}})
 	}
 	payload := map[string]any{"model": p.model, "max_tokens": compatMaxTokens(PurposeChat), "temperature": 0, "messages": msgs, "tools": tools}
+	if overBudget(req, payload) {
+		return Turn{}, ErrRequestTooLarge
+	}
 	body, err := postJSON(ctx, p.http, p.baseURL+"/v1/chat/completions", p.headers(), payload, p.key)
 	if err != nil {
 		if toolsUnsupported(err) {

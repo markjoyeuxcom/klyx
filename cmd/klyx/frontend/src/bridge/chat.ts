@@ -7,7 +7,7 @@ import { ChatService } from "../../bindings/github.com/moomora/klyx/internal/app
 
 export type ChatRef = { gvr: string; namespace?: string; name: string; uid?: string };
 export type ChatRead = { tool: string; target?: string; outcome: string; detail?: string; redacted?: number; refs?: ChatRef[] };
-export type ChatModelCall = { provider: string; model: string; mode: string; tools?: string[] };
+export type ChatModelCall = { provider: string; model: string; mode: string; tools?: string[]; outcome: string };
 export type ChatExchange = {
   id: string;
   question: string;
@@ -17,6 +17,7 @@ export type ChatExchange = {
   reads: ChatRead[];
   calls: ChatModelCall[];
   snapshot?: string[];
+  note?: string;
   at: string;
 };
 export type ChatState = {

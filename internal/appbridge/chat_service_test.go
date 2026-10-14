@@ -341,3 +341,163 @@ func TestChatSnapshotResolvesReferences(t *testing.T) {
 		t.Fatalf("an ambiguous bare name lists its choices and reads nothing: %s", doc)
 	}
 }
+
+// ---- Codex review of 5d8003e ------------------------------------------------------
+
+// A provider that ignores cancellation and answers after Stop: the late
+// success is never published as an answer.
+func TestChatStopDropsALateSuccess(t *testing.T) {
+	release := make(chan struct{})
+	p := &fakeConverser{turns: []func(ai.ConvRequest) (ai.Turn, error){func(ai.ConvRequest) (ai.Turn, error) {
+		<-release
+		return ai.Turn{Text: "late", Done: true, ModelUsed: "m", Continuation: &ai.Continuation{Provider: ai.ProviderAnthropic, Raw: json.RawMessage(`{}`)}}, nil
+	}}}
+	f := newChatFixture(t, p)
+	st := f.svc.Start("x")
+	done := make(chan ChatStateDTO, 1)
+	go func() { done <- f.svc.Ask("x", st.ConversationID, "q") }()
+	waitFor(t, func() bool { return f.svc.State("x").Active })
+	f.svc.Stop("x", st.ConversationID)
+	close(release)
+	res := <-done
+	if ex := res.Exchanges[0]; ex.Outcome != "cancelled" || ex.Answer != "" {
+		t.Fatalf("a success after Stop is not an answer: %+v", ex)
+	}
+}
+
+// The connection replaced during the final model call: no answer, and the
+// conversation ends.
+func TestChatDisconnectDuringTheFinalCall(t *testing.T) {
+	var f *chatFixture
+	p := &fakeConverser{turns: []func(ai.ConvRequest) (ai.Turn, error){func(ai.ConvRequest) (ai.Turn, error) {
+		f.mu.Lock()
+		f.cur = newFakeChat()
+		f.mu.Unlock()
+		return ai.Turn{Text: "answer", Done: true, ModelUsed: "m", Continuation: &ai.Continuation{Provider: ai.ProviderAnthropic, Raw: json.RawMessage(`{}`)}}, nil
+	}}}
+	f = newChatFixture(t, p)
+	st := f.svc.Start("x")
+	st = f.svc.Ask("x", st.ConversationID, "q")
+	if ex := st.Exchanges[0]; ex.Answer != "" || !strings.Contains(st.Ended, "disconnected") {
+		t.Fatalf("an answer that arrives after a disconnect is not published: %+v / %q", ex, st.Ended)
+	}
+}
+
+// After Clear, a read that finishes late is neither recorded nor pushed.
+func TestChatReadAfterClearIsDropped(t *testing.T) {
+	em := &chatEventCounter{}
+	f := newToolsFixture(t)
+	f.svc.em = em
+	st := f.svc.Start("x")
+	c := f.svc.convs["x"]
+	turn := &activeTurn{id: "t", cancel: func() {}}
+	ex := &exchange{id: "e"}
+	c.active, c.exchanges = turn, []*exchange{ex}
+	r := &turnRunner{s: f.svc, c: c, turn: turn, ex: ex}
+	f.svc.Clear("x", st.ConversationID)
+	r.addRead(ChatRead{Tool: toolOverview, Outcome: "completed"})
+	if em.n != 0 || len(ex.reads) != 0 {
+		t.Fatalf("a read after Clear is dropped: %d events, %d reads", em.n, len(ex.reads))
+	}
+}
+
+type chatEventCounter struct{ n int }
+
+func (e *chatEventCounter) Emit(string, any) { e.n++ }
+
+// A failed send is still recorded for the Activity log.
+func TestChatRecordsAFailedModelCall(t *testing.T) {
+	p := &fakeConverser{turns: []func(ai.ConvRequest) (ai.Turn, error){func(ai.ConvRequest) (ai.Turn, error) {
+		return ai.Turn{}, errors.New("upstream 503")
+	}}}
+	f := newChatFixture(t, p)
+	st := f.svc.Start("x")
+	st = f.svc.Ask("x", st.ConversationID, "q")
+	if c := st.Exchanges[0].Calls; len(c) != 1 || c[0].Outcome != "failed" || c[0].Provider != "anthropic" {
+		t.Fatalf("the attempted call is recorded as failed: %+v", c)
+	}
+}
+
+// The provider's exact size check drops one more old exchange and builds the
+// request again; the refused attempt is not a recorded call.
+func TestChatExactBudgetDropsOldExchanges(t *testing.T) {
+	first := true
+	p := &fakeConverser{turns: []func(ai.ConvRequest) (ai.Turn, error){
+		answer("one"),
+		func(req ai.ConvRequest) (ai.Turn, error) {
+			if first {
+				first = false
+				return ai.Turn{}, ai.ErrRequestTooLarge
+			}
+			return answer("two")(req)
+		},
+		answer("two"),
+	}}
+	f := newChatFixture(t, p)
+	st := f.svc.Start("x")
+	f.svc.Ask("x", st.ConversationID, "q1")
+	st = f.svc.Ask("x", st.ConversationID, "q2")
+	ex := st.Exchanges[1]
+	if ex.Outcome != "answered" || len(ex.Calls) != 1 || !st.Trimmed {
+		t.Fatalf("one recorded call, history trimmed: %+v trimmed=%v", ex, st.Trimmed)
+	}
+	if last := p.reqs[len(p.reqs)-1]; len(last.Messages) != 1 || last.MaxBytes != chatRequestBudget {
+		t.Fatalf("the retry carries only the current question, with the exact budget: %+v", last)
+	}
+}
+
+// The snapshot index reads nothing once the guard fails.
+func TestChatSnapshotIndexIsGuarded(t *testing.T) {
+	f := newChatFixture(t, snapshotOnly{&fakeConverser{}})
+	f.svc.Start("x")
+	c := f.svc.convs["x"]
+	turn := &activeTurn{id: "t", cancel: func() {}}
+	ex := &exchange{id: "e", question: "web"}
+	c.active, c.exchanges = turn, []*exchange{ex}
+	r := &turnRunner{s: f.svc, c: c, turn: turn, ex: ex}
+	f.mu.Lock()
+	f.cur = newFakeChat()
+	f.mu.Unlock()
+	f.conn.listErr = errors.New("must not be called")
+	if _, err := r.index(context.Background()); err == nil || !strings.Contains(err.Error(), "disconnected") {
+		t.Fatalf("the index stops at the guard: %v", err)
+	}
+}
+
+func TestChatSnapshotDocIsBoundedWithAmbiguity(t *testing.T) {
+	f := newChatFixture(t, snapshotOnly{&fakeConverser{}})
+	f.svc.Start("x")
+	c := f.svc.convs["x"]
+	ex := &exchange{question: "which web pod is failing"}
+	c.exchanges = []*exchange{ex}
+	r := &turnRunner{s: f.svc, c: c, ex: ex}
+	var amb []string
+	for i := 0; i < 40; i++ {
+		amb = append(amb, strings.Repeat("web-ambiguous-name ", 20))
+	}
+	doc := r.snapshotDoc([]string{strings.Repeat("a", 16000), strings.Repeat("b", 16000), strings.Repeat("c", 16000)}, amb)
+	if len(doc) > chatSnapshotMax || !strings.HasSuffix(doc, "Question: which web pod is failing") {
+		t.Fatalf("the whole document, ambiguity and delimiters included, stays under %d: %d", chatSnapshotMax, len(doc))
+	}
+}
+
+// Vendor metadata is bounded and a sole oversized exchange still respects the
+// retention ceiling.
+func TestChatRetentionBoundsMetadataAndASoleLargeExchange(t *testing.T) {
+	huge := strings.Repeat("m", 2<<20)
+	big := json.RawMessage(`"` + strings.Repeat("x", 1100*1024) + `"`)
+	p := &fakeConverser{turns: []func(ai.ConvRequest) (ai.Turn, error){func(ai.ConvRequest) (ai.Turn, error) {
+		return ai.Turn{Text: "ok", Done: true, ModelUsed: huge, Continuation: &ai.Continuation{Provider: ai.ProviderAnthropic, Raw: big}}, nil
+	}}}
+	f := newChatFixture(t, p)
+	st := f.svc.Start("x")
+	st = f.svc.Ask("x", st.ConversationID, "q")
+	b, _ := json.Marshal(st)
+	if len(b) > chatRetainBytes {
+		t.Fatalf("the retained conversation is %d bytes, over %d", len(b), chatRetainBytes)
+	}
+	ex := st.Exchanges[0]
+	if len(ex.Calls[0].Model) > chatModelNameMax+4 || !strings.Contains(ex.Note, "too large") {
+		t.Fatalf("model metadata is capped and the oversized steps dropped with a note: %+v", ex.Note)
+	}
+}

@@ -72,9 +72,13 @@ type conversation struct {
 	active    *activeTurn
 }
 
+// activeTurn is the one running turn. stopped is set under the service lock
+// by Stop or Clear; from then on nothing the turn produces is published
+// (Codex review of 5d8003e).
 type activeTurn struct {
-	id     string
-	cancel context.CancelFunc
+	id      string
+	cancel  context.CancelFunc
+	stopped bool
 }
 
 // exchange is one question and everything it caused.
@@ -89,14 +93,21 @@ type exchange struct {
 	calls    []ChatModelCallDTO
 	snapshot []string // what a snapshot included (snapshot mode)
 	at       time.Time
+	// noHistory: the exchange is kept for the drawer but too large to send
+	// again as history (its steps were dropped by the retention bound).
+	noHistory bool
+	note      string
 }
 
-// ChatModelCallDTO is one model call, for the Activity log: never text.
+// ChatModelCallDTO is one attempted model call, for the Activity log: never
+// text. Outcome is sent (in flight), completed, failed, cancelled or
+// tools-unsupported.
 type ChatModelCallDTO struct {
 	Provider string   `json:"provider"`
 	Model    string   `json:"model"`
 	Mode     string   `json:"mode"`
 	Tools    []string `json:"tools,omitempty"`
+	Outcome  string   `json:"outcome"`
 }
 
 // ChatExchangeDTO is one question and its outcome.
@@ -109,6 +120,7 @@ type ChatExchangeDTO struct {
 	Reads    []ChatRead         `json:"reads"`
 	Calls    []ChatModelCallDTO `json:"calls"`
 	Snapshot []string           `json:"snapshot,omitempty"`
+	Note     string             `json:"note,omitempty"`
 	At       string             `json:"at"`
 }
 
@@ -218,7 +230,7 @@ func (e *exchange) dto() ChatExchangeDTO {
 		calls = []ChatModelCallDTO{}
 	}
 	return ChatExchangeDTO{ID: e.id, Question: e.question, Answer: e.answer, Outcome: e.outcome, Error: e.err, Reads: reads, Calls: calls,
-		Snapshot: e.snapshot, At: e.at.UTC().Format(time.RFC3339)}
+		Snapshot: e.snapshot, Note: e.note, At: e.at.UTC().Format(time.RFC3339)}
 }
 
 // Stop cancels the conversation's active turn, if it is that conversation's.
@@ -226,6 +238,7 @@ func (s *ChatService) Stop(cluster, conversationID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if c := s.convs[cluster]; c != nil && c.id == conversationID && c.active != nil {
+		c.active.stopped = true
 		c.active.cancel()
 	}
 }
@@ -237,6 +250,7 @@ func (s *ChatService) Clear(cluster, conversationID string) {
 	defer s.mu.Unlock()
 	if c := s.convs[cluster]; c != nil && c.id == conversationID {
 		if c.active != nil {
+			c.active.stopped = true
 			c.active.cancel()
 		}
 		delete(s.convs, cluster)
@@ -284,6 +298,15 @@ func (s *ChatService) Ask(cluster, conversationID, question string) ChatStateDTO
 	defer cancel()
 	r := &turnRunner{s: s, c: c, turn: turn, ex: ex}
 	answer, err := r.run(ctx)
+	if err == nil {
+		// An answer is published only if the turn was not stopped and the
+		// pinned conn and settings still hold when it arrives.
+		if ctx.Err() != nil {
+			err = ctx.Err()
+		} else if _, gerr := r.guard(); gerr != nil {
+			err = gerr
+		}
+	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -292,6 +315,9 @@ func (s *ChatService) Ask(cluster, conversationID, question string) ChatStateDTO
 		return ChatStateDTO{Cluster: cluster, Error: "this conversation was cleared"}
 	}
 	c.active = nil
+	if turn.stopped && err == nil {
+		err = context.Canceled // stopped: a late success is never an answer
+	}
 	switch {
 	case err == nil:
 		ex.answer, ex.outcome = capAnswer(answer), "answered"
@@ -342,8 +368,11 @@ type endError struct{ reason string }
 func (e *endError) Error() string { return e.reason }
 
 // retainLocked bounds what a conversation keeps (spec §5.2): at most
-// chatRetainExchange exchanges and chatRetainBytes, failed and cancelled
-// ones counted too; the oldest go first.
+// chatRetainExchange exchanges and chatRetainBytes, every retained field
+// counted, failed and cancelled exchanges too; the oldest go first. A
+// single exchange over the bound keeps its question, answer and ledger but
+// drops its steps, so it is no longer sent as history (Codex review of
+// 5d8003e).
 func (s *ChatService) retainLocked(c *conversation) {
 	size := func() int {
 		n := 0
@@ -356,29 +385,33 @@ func (s *ChatService) retainLocked(c *conversation) {
 		c.exchanges = c.exchanges[1:]
 		c.removed++
 	}
+	if len(c.exchanges) == 1 && size() > chatRetainBytes {
+		e := c.exchanges[0]
+		e.msgs, e.noHistory = nil, true
+		e.note = "this exchange was too large to keep for follow-ups"
+		if exchangeBytes(e) > chatRetainBytes {
+			c.exchanges = nil
+			c.removed++
+		}
+	}
 }
 
 func exchangeBytes(e *exchange) int {
-	n := len(e.question) + len(e.answer) + len(e.err)
+	n := len(e.question) + len(e.answer) + len(e.err) + len(e.note)
 	for _, m := range e.msgs {
 		n += msgBytes(m)
 	}
-	b, _ := json.Marshal(e.reads)
-	return n + len(b)
+	for _, s := range e.snapshot {
+		n += len(s)
+	}
+	reads, _ := json.Marshal(e.reads)
+	calls, _ := json.Marshal(e.calls)
+	return n + len(reads) + len(calls)
 }
 
 func msgBytes(m ai.ConvMessage) int {
-	n := len(m.Text)
-	if m.Continuation != nil {
-		n += len(m.Continuation.Raw)
-	}
-	for _, c := range m.Calls {
-		n += len(c.Args) + len(c.Name) + len(c.ID)
-	}
-	for _, r := range m.Results {
-		n += len(r.Content) + len(r.CallID)
-	}
-	return n
+	b, _ := json.Marshal(m)
+	return len(b)
 }
 
 // emit pushes one ledger entry while the turn runs.

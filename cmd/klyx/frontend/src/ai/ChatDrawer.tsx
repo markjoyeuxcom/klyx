@@ -176,6 +176,7 @@ function Exchange({ cluster, ex }: { cluster: string; ex: ChatExchange }) {
         </>
       )}
       {ex.outcome === "failed" && <div className="chat-err">▲ {ex.error}</div>}
+      {ex.note && <div className="chat-small">{ex.note}</div>}
       {ex.outcome === "cancelled" && <div className="chat-small">Stopped.</div>}
     </div>
   );
@@ -249,7 +250,7 @@ function logTurn(cluster: string, st: ChatState): void {
   const ex = st.exchanges[st.exchanges.length - 1];
   if (!ex) return;
   const status = useFleet.getState().setActionStatus;
-  const calls = ex.calls.map((c) => `${providerLabel(c.provider)}${c.model ? ` (${c.model})` : ""}${c.tools && c.tools.length > 0 ? `: ${c.tools.join(", ")}` : ""}`).join("; ");
+  const calls = ex.calls.map((c) => `${providerLabel(c.provider)}${c.model ? ` (${c.model})` : ""}${c.tools && c.tools.length > 0 ? `: ${c.tools.join(", ")}` : ""}${c.outcome && c.outcome !== "completed" ? ` - ${c.outcome}` : ""}`).join("; ");
   const redacted = ex.reads.reduce((n, r) => n + (r.redacted ?? 0), 0);
   const what = `AI chat - ${cluster} · ${st.mode} · ${ex.calls.length} model call${ex.calls.length === 1 ? "" : "s"}${calls ? ` [${calls}]` : ""}${redacted ? ` · ${redacted} redacted` : ""}`;
   if (ex.outcome === "answered") status({ kind: "success", message: what });
