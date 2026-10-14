@@ -34,7 +34,7 @@
   - the position glyph.
 - **A healthy object carries no mark.**
 
-Revised after Codex's design reviews of 4c654fc (nine findings), 3fdd4f7 (ten), fe9ced4 (nine) and c1268b1 (four), all folded into §§0-14.
+Revised after Codex's design reviews of 4c654fc (nine findings), 3fdd4f7 (ten), fe9ced4 (nine), c1268b1 (four) and 9d24e15 (two), all folded into §§0-14.
 
 ## 0. What exists
 
@@ -648,7 +648,9 @@ It is **pinned to its object's cluster and UID**. Every verb, follow-up and Expl
 | `git init --bare --template=` | create the cache, or a staging repo |
 | `git fetch --atomic --no-tags --filter=blob:none origin +<ref>:refs/klyx/staging/<ref>` | history acquisition, into a staging repo only, with explicit refspecs for the tracked refs |
 | `git fetch --no-tags --no-write-fetch-head --filter=blob:none --stdin origin` | content acquisition: named blob ids on stdin, into a staging repo only |
-| `git rev-list --objects --missing=print <rev> -- <path>` | list the blobs a preview needs that the cache lacks |
+| `git ls-tree -r -z <rev> -- <path>` | list a snapshot's blobs: tree objects only, no history walk |
+| `git diff-tree -r --no-renames -z <a> <b> -- <path>` | list a content diff's endpoint blobs: trees only |
+| `git cat-file --batch-check` | report which listed ids are missing (under `GIT_NO_LAZY_FETCH`) |
 | `git verify-pack -v <staging pack>.idx` | validate only the packs this acquisition created |
 | `git update-ref --stdin` | publish refs, in one transaction |
 | `git log --no-renames`, `git rev-list --count`, `git merge-base [--is-ancestor]` | metadata reads |
@@ -679,23 +681,35 @@ Every download goes through these steps, under one fleet-wide acquisition lock. 
 2. **Stage.**
    - A fresh staging repo is created beside the cache. It borrows the cache's objects through an alternates file that Klyx writes, never an environment variable.
    - **A history refresh** fetches `--atomic` into `refs/klyx/staging/*`.
-   - **A content acquisition:**
-     - first lists the missing blobs with `rev-list --objects --missing=print`, run with `GIT_NO_LAZY_FETCH` against the cache;
-     - then fetches exactly those ids through `--stdin`;
-     - and is refused when there are more than 5,000.
+   - **A content acquisition** lists exactly the blobs its consumer needs, from trees only, never by walking history:
+     - **a snapshot** (the cache diff's input): `ls-tree -r` of the requested paths at the one revision;
+     - **a content diff:** `diff-tree -r` between the two endpoint revisions, limited to the requested paths. It lists the old and new blob of each changed path, and nothing older.
+
+     It then checks those ids with `cat-file --batch-check` under `GIT_NO_LAZY_FETCH`, fetches only the missing ones through `--stdin`, and is refused above 5,000 ids.
 3. **Validate the new packs only.**
    - The staging repo's *own* packs are enumerated with `verify-pack -v`. Alternates are never enumerated, so blobs already in the cache neither fail validation nor hide an incoming one. The unpack limits keep every object in a pack.
    - **A history refresh** must bring no blob. A server that ignored the filter is refused ("this server does not support partial clone").
    - **A content acquisition** must bring only the blob ids it asked for.
    - The refs resolve, and the size is within the reservation.
-4. **Publish, journaled.**
-   - **The journal first.** Klyx writes a journal into the cache that lists every file it is about to move, and syncs it to disk.
-   - **The pack files.** For each new pack, Klyx moves every file the pack has, including the `.promisor` marker a filtered fetch creates: `.pack`, `.rev` and `.promisor` first, `.idx` last.
-   - **The refs.** A history refresh then runs one `update-ref --stdin` transaction (prepare, then commit).
-   - **The commit mark.** The journal is marked committed and removed.
-5. **Roll back.** On any failure before the commit mark, Klyx deletes exactly the files in the journal, then the staging repo. Failures include a kill, a cap, a validation refusal, a failed ref prepare or commit, and cancellation.
-   - On start, and before every acquisition, Klyx replays any leftover journal the same way. An interruption between moving files and the ref transaction therefore never leaves orphan packs or leaks the budget.
-   - The last good history stays.
+4. **Publish, journaled.** Each step is made durable (the file, then its directory, fsynced) before the next begins:
+   1. **Journal.** Klyx writes a journal into the cache. It records every file it is about to create, and every ref update as `{ref, old, new}`, with `old` read at the start of publication.
+   2. **Files.** For each new pack, Klyx moves every file it has, including the `.promisor` marker a filtered fetch creates: `.pack`, `.rev` and `.promisor` first, `.idx` last.
+   3. **Refs.** A history refresh runs one `update-ref --stdin` transaction. Each update names its expected old value (`update <ref> <new> <old>`), so the transaction fails if anything else moved the ref.
+   4. **Mark.** The journal is marked committed.
+   5. **Remove.** The journal is removed.
+5. **Recovery reads the refs, never just the mark.** It runs on start, and before every acquisition, for any journal left behind. It decides by what the refs show now:
+
+| Refs now | Meaning | Recovery |
+|---|---|---|
+| every journaled ref at `new` (a mark is optional) | the transaction committed | **finalize:** keep the files, remove the journal |
+| every journaled ref at `old`, and no mark | it never committed | **roll back:** delete exactly the journaled files, then remove the journal |
+| some at `new` and some at `old` (outside interference only, since the transaction is atomic) | mixed | every journaled file still present: move the rest to `new` in one transaction, then finalize. Otherwise: restore all to `old` in one transaction, then roll back. |
+| any ref at a value that is neither `old` nor `new` | uncertain | **delete nothing.** Mark the cache "needs repair", stop using it, and offer "Clear cache" to rebuild it from scratch |
+| a content acquisition (no refs) | the new blobs are never ref targets | finalize if every file is present and the mark exists; otherwise roll back. Either way the cache stays a valid partial clone. |
+
+   - **Failures before step 3** (a kill, a cap, a validation refusal, cancellation) roll back directly.
+   - **The staging repo** is always deleted afterwards.
+   - **The last good history stays,** and the budget is released in every branch.
 6. **Size while staging.**
    - The staging repo is sampled every 250ms, and the fetch is killed when it passes its reservation.
    - Overshoot is bounded to one interval's transfer. It lives only in staging, and is deleted.
@@ -713,7 +727,11 @@ A published cache passes `git fsck --connectivity-only` with its blobs missing, 
 
 **The cache diff** (slice 6b, replacing the M10-f `flux diff --path` follow-up) is a separate authorisation from reading history. The build must be confined, not just the extraction: a Kustomize generator, patch, schema or nested base can otherwise read outside the tree. Codex reproduced exactly that with the flux CLI, which builds without confinement.
 - **Klyx does not run the flux CLI for cache builds.** It builds in-process:
-  1. `git archive` of the Kustomization's literal `spec.path` *and* the repo root's tree, so relative bases inside the repo resolve.
+  1. **The input set is computed in rounds.**
+     - It starts from the literal `spec.path`.
+     - Each round's `kustomization.yaml` files are acquired as content and parsed. The in-repo relative paths they reference (`resources`, `components`, `patches`, generator `files`) add their subtrees. A reference that leaves the repo root is refused.
+     - Rounds repeat until no new path is added: at most 10 rounds, within the 5,000-file and 64 MiB caps.
+     - The final set is acquired as content, then exported with `git archive` of exactly those paths.
   2. Klyx's tar reader loads it into an **in-memory filesystem**, refusing absolute paths, `..`, and links that leave the root. Caps: 5,000 files and 64 MiB.
   3. The Kustomize API builds over that filesystem only:
      - root-only load restrictions;
@@ -1123,10 +1141,18 @@ Each source below is new, and each declares where its claims come from.
   - Acquisition:
     - a server ignoring the filter (blob found in the new pack, staging deleted, nothing published);
     - a preview followed by a normal refresh (an alternate blob does not fail validation);
+    - a file with many old versions and a small current tree (only current blobs listed and fetched);
+    - a two-endpoint content diff (only the two endpoints' blobs);
+    - in-repo bases across rounds, and a reference escaping the repo refused;
     - an incoming unfiltered blob with alternates present (still caught);
     - a two-ref fetch where one ref fails (no ref published);
     - failure injected after each file move, and at ref prepare and commit (exactly the journaled files removed, no orphan pack);
     - a crash between moving files and the ref transaction, replayed on restart;
+    - interruption during the ref commit;
+    - interruption after a successful commit but before the mark (finalized, never deleted; fsck passes);
+    - a mark-write failure (finalized from the refs);
+    - interruption after the mark but before the journal is removed;
+    - a ref moved by something else (needs repair, nothing deleted);
     - `.promisor` published, with `fsck --connectivity-only` passing with blobs missing and after a restart;
     - a kill at the cap (staging deleted, cache unchanged);
     - an over-budget preview refused before download;
