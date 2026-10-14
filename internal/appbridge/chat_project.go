@@ -629,7 +629,8 @@ func (p *projector) kustomize(k map[string]any) map[string]any {
 		var list []any
 		for _, r := range reps {
 			if rm, ok := r.(map[string]any); ok {
-				list = append(list, map[string]any{"name": rm["name"], "count": rm["count"]})
+				name, _ := rm["name"].(string)
+				list = append(list, map[string]any{"name": p.str(name, chatStringMax), "count": rm["count"]})
 			}
 		}
 		out["replicas"] = list

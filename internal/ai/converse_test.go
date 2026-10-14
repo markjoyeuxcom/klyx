@@ -236,3 +236,52 @@ func mustJSON(v any) string {
 	b, _ := json.Marshal(v)
 	return string(b)
 }
+
+// ---- Codex review of 1390061 ----------------------------------------------------
+
+func TestToolsUnsupportedIgnoresSchemaErrors(t *testing.T) {
+	for _, c := range []struct {
+		reply string
+		want  bool
+	}{
+		{`HTTP400{"error":"Invalid schema for function get_resource: unsupported keyword pattern"}`, false},
+		{`HTTP422{"detail":"tools[0].function.parameters: unsupported schema type"}`, false},
+		{`HTTP400{"error":"this model does not support tools"}`, true},
+		{`HTTP400{"error":"function calling is not supported"}`, true},
+	} {
+		srv, _ := script(t, c.reply)
+		p := NewOpenAICompatible(srv.URL, "", "llama", NewHTTPClient(false)).(Converser)
+		_, err := p.Converse(context.Background(), ConvRequest{System: "S", Messages: []ConvMessage{{Role: "user", Text: "q"}}, Tools: convTools})
+		if got := errors.Is(err, ErrToolsUnsupported); got != c.want {
+			t.Errorf("%s: tools-unsupported = %v, want %v", c.reply, got, c.want)
+		}
+	}
+}
+
+func TestGeminiPartsAreCheckedWhole(t *testing.T) {
+	for name, parts := range map[string]string{
+		"an unexpected payload beside a call":  `[{"functionCall":{"name":"cluster_overview","args":{}},"executableCode":{"code":"x"}}]`,
+		"a thought flag that is not a boolean": `[{"text":"secret reasoning","thought":"true"}]`,
+	} {
+		srv, _ := script(t, `{"candidates":[{"finishReason":"STOP","content":{"role":"model","parts":`+parts+`}}]}`)
+		p := NewGemini("AIzaTestKey12345678901234567", srv.URL, "gemini-3-pro", NewHTTPClient(false)).(Converser)
+		if _, err := p.Converse(context.Background(), ConvRequest{System: "S", Messages: []ConvMessage{{Role: "user", Text: "q"}}, Tools: convTools}); !errors.Is(err, ErrUnexpectedOutput) {
+			t.Errorf("%s: want ErrUnexpectedOutput, got %v", name, err)
+		}
+	}
+}
+
+func TestConverseNeverInventsArguments(t *testing.T) {
+	openai := `{"status":"completed","output":[{"type":"function_call","call_id":"c1","name":"cluster_overview","arguments":""}]}`
+	srv, _ := script(t, openai)
+	p := NewOpenAI("sk-test-key-123456789012", srv.URL, "gpt-5", NewHTTPClient(false)).(Converser)
+	if _, err := p.Converse(context.Background(), ConvRequest{System: "S", Messages: []ConvMessage{{Role: "user", Text: "q"}}, Tools: convTools}); !errors.Is(err, ErrUnexpectedOutput) {
+		t.Errorf("OpenAI: an empty arguments string is malformed: %v", err)
+	}
+	compat := `{"choices":[{"finish_reason":"tool_calls","message":{"role":"assistant","tool_calls":[{"id":"c1","type":"function","function":{"name":"cluster_overview","arguments":""}}]}}]}`
+	srv, _ = script(t, compat)
+	q := NewOpenAICompatible(srv.URL, "", "llama", NewHTTPClient(false)).(Converser)
+	if _, err := q.Converse(context.Background(), ConvRequest{System: "S", Messages: []ConvMessage{{Role: "user", Text: "q"}}, Tools: convTools}); !errors.Is(err, ErrUnexpectedOutput) {
+		t.Errorf("compat: an empty arguments string is malformed: %v", err)
+	}
+}

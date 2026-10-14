@@ -569,6 +569,13 @@ func shrink(d any) any {
 		return v[:len(v)/2]
 	case []chatAttention:
 		return v[:len(v)/2]
+	case chatAttentionData:
+		if len(v.Rows) > 0 {
+			v.Rows = v.Rows[:len(v.Rows)/2]
+		} else {
+			v.Parts = v.Parts[:len(v.Parts)/2]
+		}
+		return v
 	case []map[string]any:
 		return v[:len(v)/2]
 	case ChatObject:
@@ -604,14 +611,87 @@ func shrink(d any) any {
 
 // ---- tools ------------------------------------------------------------------
 
+// chatKindCov is one watched kind or snapshot as a part saw it, with the
+// same provenance Explain's anchor carries (spec §3.3; Codex review of
+// 4456049): live is also the state of a successful periodic snapshot, so
+// its read time, cadence, truncation and object count travel with it.
+type chatKindCov struct {
+	Kind       string `json:"kind"`
+	Role       string `json:"role"`
+	Coverage   string `json:"coverage"`
+	Class      string `json:"class,omitempty"`
+	Error      string `json:"error,omitempty"`
+	Objects    int    `json:"objects"`
+	Truncated  bool   `json:"truncated,omitempty"`
+	AsOf       string `json:"asOf,omitempty"`
+	LastGoodAt string `json:"lastGoodAt,omitempty"`
+	CadenceSec int64  `json:"cadenceSec,omitempty"`
+	Discovery  string `json:"discovery,omitempty"`
+}
+
+func rfc(t *time.Time) string {
+	if t == nil {
+		return ""
+	}
+	return t.UTC().Format(time.RFC3339)
+}
+
+func chatKinds(ks []observe.KindCoverage, n *int) []chatKindCov {
+	out := make([]chatKindCov, 0, len(ks))
+	for _, k := range ks {
+		out = append(out, chatKindCov{Kind: k.Kind, Role: k.Role, Coverage: string(k.Coverage), Class: k.Class, Error: chatScrub(k.Error, n),
+			Objects: k.Objects, Truncated: k.Truncated, AsOf: rfc(k.AsOf), LastGoodAt: rfc(k.LastGoodAt), CadenceSec: k.CadenceSec, Discovery: chatScrub(k.Discovery, n)})
+	}
+	return out
+}
+
+// chatPart is one counted part with its provenance: verdict counts, a
+// native part's inclusion count and wording kept apart from its roles, or
+// an evidence count, plus its version and kinds.
 type chatPart struct {
-	ID         string          `json:"id"`
-	Entity     string          `json:"entity"`
-	Classifier string          `json:"classifier"`
-	Coverage   string          `json:"coverage"`
-	Counts     *observe.Counts `json:"counts,omitempty"`
-	Included   *int            `json:"needAttention,omitempty"`
-	KindIssues []string        `json:"kindIssues,omitempty"`
+	Area          string          `json:"area,omitempty"`
+	ID            string          `json:"id"`
+	Entity        string          `json:"entity"`
+	Classifier    string          `json:"classifier"`
+	Coverage      string          `json:"coverage"`
+	Ver           uint64          `json:"ver"`
+	AsOf          string          `json:"asOf,omitempty"`
+	Counts        *observe.Counts `json:"counts,omitempty"`
+	NativeRoles   *observe.Counts `json:"nativeRoles,omitempty"`
+	NeedAttention *int            `json:"needAttention,omitempty"`
+	Word          string          `json:"word,omitempty"`
+	Evidence      *int            `json:"evidence,omitempty"`
+	Kinds         []chatKindCov   `json:"kinds"`
+}
+
+func toChatPart(area string, part observe.Part, n *int) chatPart {
+	cp := chatPart{Area: area, ID: part.ID, Entity: part.Entity, Classifier: part.Classifier, Coverage: string(part.Coverage),
+		Ver: part.Ver, AsOf: rfc(part.AsOf), Counts: part.Counts, Evidence: part.Evidence, Kinds: chatKinds(part.Kinds, n)}
+	if part.Native != nil {
+		inc := part.Native.Included
+		roles := part.Native.Roles
+		cp.NeedAttention, cp.NativeRoles, cp.Word = &inc, &roles, part.Native.Word
+	}
+	return cp
+}
+
+// partProblems states what limits a part's counts: coverage that is not
+// live, and capped snapshots (a sample, read at a time of its own).
+func partProblems(area string, part observe.Part) []string {
+	var out []string
+	if part.Coverage != observe.Live {
+		out = append(out, area+"/"+part.ID+": coverage "+string(part.Coverage)+" - its counts may be stale or incomplete")
+	}
+	for _, k := range part.Kinds {
+		if k.Truncated {
+			msg := fmt.Sprintf("%s/%s: %s is a capped snapshot of %d objects - a sample", area, part.ID, k.Kind, k.Objects)
+			if k.AsOf != nil {
+				msg += ", read at " + rfc(k.AsOf)
+			}
+			out = append(out, msg)
+		}
+	}
+	return out
 }
 
 type chatTask struct {
@@ -638,31 +718,17 @@ func (t *chatTools) overview() ChatToolResult {
 			}
 		}
 		for _, part := range task.Parts {
-			cp := chatPart{ID: part.ID, Entity: part.Entity, Classifier: part.Classifier, Coverage: string(part.Coverage), Counts: part.Counts}
-			if part.Native != nil {
-				n := part.Native.Included
-				cp.Included = &n
-				c := part.Native.Roles
-				cp.Counts = &c
-			}
-			for _, k := range part.Kinds {
-				if k.Error != "" || k.Coverage != observe.Live {
-					cp.KindIssues = append(cp.KindIssues, k.Kind+": "+string(k.Coverage)+errSuffix(k.Class))
-				}
-			}
-			if part.Coverage != observe.Live {
-				problems = append(problems, task.ID+"/"+part.ID+": coverage "+string(part.Coverage)+" - its counts may be stale or incomplete")
-			}
-			ct.Parts = append(ct.Parts, cp)
+			ct.Parts = append(ct.Parts, toChatPart("", part, &p.redacted))
+			problems = append(problems, partProblems(task.ID, part)...)
 		}
 		tasks = append(tasks, ct)
 	}
-	data := map[string]any{"connection": p.str(sum.Connection, chatStringMax), "tasks": tasks}
+	data := map[string]any{"connection": p.str(sum.Connection, chatStringMax), "incarnation": sum.Incarnation, "seq": sum.Seq, "tasks": tasks}
 	if sum.Namespaces != nil {
 		data["namespaces"] = *sum.Namespaces
 	}
 	env := chatEnvelope{Tool: toolOverview, Source: "observer", ReadAt: sum.EvaluatedAt.UTC().Format(time.RFC3339), Complete: len(problems) == 0, Data: data,
-		Errors: problems, Note: "coverage other than live means a count may be stale or unverified"}
+		Errors: problems, Note: "readAt is when Klyx evaluated the summary; a snapshot kind's asOf is when it was read"}
 	return t.finish(env, ChatRead{Tool: toolOverview, Outcome: "completed", Redacted: p.redacted})
 }
 
@@ -671,6 +737,11 @@ func errSuffix(class string) string {
 		return ""
 	}
 	return " (" + class + ")"
+}
+
+type chatAttentionData struct {
+	Parts []chatPart      `json:"parts"`
+	Rows  []chatAttention `json:"rows"`
 }
 
 type chatAttention struct {
@@ -692,6 +763,7 @@ func (t *chatTools) attention(area string) ChatToolResult {
 	var rows []chatAttention
 	var refs []ChatRef
 	var problems []string
+	var parts []chatPart
 	total, found := 0, area == ""
 	for _, task := range sum.Tasks {
 		if area != "" && task.ID != area {
@@ -699,11 +771,10 @@ func (t *chatTools) attention(area string) ChatToolResult {
 		}
 		found = true
 		for _, part := range task.Parts {
-			if part.Coverage != observe.Live {
-				// An unreadable or stale part's count is not proof of
-				// absence (Codex review of aea77e7).
-				problems = append(problems, task.ID+"/"+part.ID+": coverage "+string(part.Coverage)+" - objects needing attention may be missing")
-			}
+			// An unreadable, stale or capped part's count is not proof of
+			// absence (Codex reviews of aea77e7 and 4456049).
+			problems = append(problems, partProblems(task.ID, part)...)
+			parts = append(parts, toChatPart(task.ID, part, &p.redacted))
 			switch {
 			case part.Native != nil:
 				total += part.Native.Included
@@ -724,7 +795,7 @@ func (t *chatTools) attention(area string) ChatToolResult {
 	}
 	exact := len(problems) == 0
 	env := chatEnvelope{Tool: toolAttention, Source: "observer", ReadAt: sum.EvaluatedAt.UTC().Format(time.RFC3339), Complete: exact && len(rows) >= total,
-		Total: &chatTotal{Count: total, Exact: exact}, Errors: problems, Data: rows,
+		Total: &chatTotal{Count: total, Exact: exact}, Errors: problems, Data: chatAttentionData{Parts: parts, Rows: rows},
 		Note: "total counts every object needing attention; the listed objects are the worst few per area"}
 	return t.finish(env, ChatRead{Tool: toolAttention, Target: area, Outcome: "completed", Redacted: p.redacted, Refs: capRefs(refs)})
 }
@@ -874,17 +945,18 @@ func ageText(d time.Duration) string {
 // came from (spec §3.3): a verdict part's kind, or a native part's role and,
 // separately, whether the lens counts it for attention.
 type chatVerdict struct {
-	Classifier          string `json:"classifier"`
-	Kind                string `json:"kind,omitempty"`
-	Role                string `json:"role,omitempty"`
-	IncludedInAttention *bool  `json:"includedInAttention,omitempty"`
-	Label               string `json:"label,omitempty"`
-	Reason              string `json:"reason,omitempty"`
-	Generation          int64  `json:"generation,omitempty"`
-	EvaluatedAt         string `json:"evaluatedAt"`
-	Incarnation         uint64 `json:"incarnation"`
-	PartVer             uint64 `json:"partVer"`
-	Coverage            string `json:"coverage"`
+	Classifier          string        `json:"classifier"`
+	Kind                string        `json:"kind,omitempty"`
+	Role                string        `json:"role,omitempty"`
+	IncludedInAttention *bool         `json:"includedInAttention,omitempty"`
+	Label               string        `json:"label,omitempty"`
+	Reason              string        `json:"reason,omitempty"`
+	Generation          int64         `json:"generation,omitempty"`
+	EvaluatedAt         string        `json:"evaluatedAt"`
+	Incarnation         uint64        `json:"incarnation"`
+	PartVer             uint64        `json:"partVer"`
+	Coverage            string        `json:"coverage"`
+	Kinds               []chatKindCov `json:"kinds,omitempty"`
 }
 
 // chatVerdicts is one part's verdicts by UID, with the part's coverage
@@ -903,6 +975,7 @@ func verdictOf(rows observe.Rows, r capturedRow, n *int) (chatVerdict, bool) {
 		Classifier: v.Classifier, Kind: v.Kind, Role: v.Role, IncludedInAttention: v.IncludedInAttention,
 		Label: chatScrub(v.Label, n), Reason: chatScrub(v.Reason, n), Generation: r.ref.Generation,
 		EvaluatedAt: v.EvaluatedAt, Incarnation: rows.Incarnation, PartVer: rows.Part.Ver, Coverage: string(rows.Part.Coverage),
+		Kinds: chatKinds(rows.Part.Kinds, n),
 	}, true
 }
 
@@ -1093,7 +1166,7 @@ func (t *chatTools) get(ctx context.Context, kind, group, ns, name string) ChatT
 		}
 	}
 	if evs, _, complete, err := t.eventsFor(ctx, ns, k.Kind, name, o.UID, true, 10, p); err != nil {
-		env.Errors = append(env.Errors, "events: "+readError(err))
+		env.Errors = append(env.Errors, "events: "+chatScrub(readError(err), &p.redacted))
 		env.Complete = false
 	} else {
 		data.Events = evs

@@ -386,3 +386,40 @@ func TestChatAttentionNeverClaimsExactAbsenceFromUnreadableParts(t *testing.T) {
 		t.Fatalf("an unreadable part's zero is not proof of absence: %+v", env)
 	}
 }
+
+// ---- Codex review of 4456049 ----------------------------------------------------
+
+func TestChatScrubsComponentErrorsAndReplicaNames(t *testing.T) {
+	f := newFakeChat()
+	f.objects[key(podsGVR, "shop", "web")] = uobj(map[string]any{"apiVersion": "v1", "kind": "Pod", "metadata": map[string]any{"name": "web", "namespace": "shop", "uid": "u"}})
+	f.eventsErr = errors.New(`Get "https://owner:` + sentArbitrary + `@events.invalid/api"`)
+	res := newChatTools(f, fixedNow).Run(context.Background(), toolGet, json.RawMessage(`{"kind":"pod","namespace":"shop","name":"web"}`))
+	if strings.Contains(string(res.JSON), sentArbitrary) || res.Read.Redacted == 0 {
+		t.Fatalf("a component error beside a successful read is scrubbed and counted: %s", res.JSON)
+	}
+	o := chatProject(schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "applications"}, uobj(map[string]any{
+		"apiVersion": "argoproj.io/v1alpha1", "kind": "Application", "metadata": map[string]any{"name": "a", "namespace": "argocd", "uid": "u"},
+		"spec": map[string]any{"source": map[string]any{"kustomize": map[string]any{"replicas": []any{map[string]any{"name": "password=" + sentArbitrary, "count": int64(2)}}}}},
+	}))
+	mustNotLeak(t, "kustomize replicas", o, sentArbitrary)
+}
+
+func TestChatOverviewKeepsSnapshotProvenance(t *testing.T) {
+	f := newFakeChat()
+	readAt := fixedNow().Add(-90 * time.Second)
+	ev := 500
+	f.summary = &observe.Summary{EvaluatedAt: fixedNow(), Incarnation: 4, Seq: 9, Tasks: []observe.Task{{ID: "events", Parts: []observe.Part{{
+		ID: "warnings", Classifier: "evidence", Coverage: observe.Live, Ver: 12, Evidence: &ev,
+		Kinds: []observe.KindCoverage{{Kind: "Event", Role: "counted", Coverage: observe.Live, Objects: 500, Truncated: true, AsOf: &readAt, CadenceSec: 60}},
+	}}}}}
+	env, _ := run(t, f, toolOverview, `{}`)
+	b, _ := json.Marshal(env)
+	for _, want := range []string{`"evidence":500`, `"truncated":true`, `"cadenceSec":60`, `"asOf":"` + readAt.UTC().Format(time.RFC3339) + `"`, `"ver":12`, `"incarnation":4`, "capped snapshot of 500 objects - a sample"} {
+		if !strings.Contains(string(b), want) {
+			t.Fatalf("the overview keeps %s: %s", want, b)
+		}
+	}
+	if env.Complete {
+		t.Fatal("a capped snapshot is never complete")
+	}
+}

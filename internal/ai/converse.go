@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/anthropics/anthropic-sdk-go"
@@ -115,8 +116,8 @@ func checkTurn(t Turn, offered []Tool) (Turn, error) {
 		if !names[c.Name] {
 			return Turn{}, fmt.Errorf("%w (a call to a tool Klyx did not offer)", ErrUnexpectedOutput)
 		}
-		if !json.Valid(c.Args) {
-			return Turn{}, fmt.Errorf("%w (tool arguments that are not JSON)", ErrUnexpectedOutput)
+		if a := strings.TrimSpace(string(c.Args)); a == "" || a[0] != '{' || !json.Valid(c.Args) {
+			return Turn{}, fmt.Errorf("%w (tool arguments that are not a JSON object)", ErrUnexpectedOutput)
 		}
 	}
 	if len(t.Calls) == 0 {
@@ -361,11 +362,10 @@ func openaiTurn(body []byte, configured, key string, offered []Tool) (Turn, erro
 			}
 		case "reasoning":
 		case "function_call":
-			args := json.RawMessage(item.Arguments)
-			if strings.TrimSpace(item.Arguments) == "" {
-				args = json.RawMessage("{}")
-			}
-			t.Calls = append(t.Calls, ToolCall{ID: item.CallID, Name: item.Name, Args: args})
+			// The arguments string must be present and valid JSON; an empty
+			// one is malformed, never a call with no arguments (Codex review
+			// of 1390061).
+			t.Calls = append(t.Calls, ToolCall{ID: item.CallID, Name: item.Name, Args: json.RawMessage(item.Arguments)})
 		default:
 			// A built-in tool call (web search, code interpreter) Klyx
 			// never offered.
@@ -490,6 +490,20 @@ func geminiTurn(body []byte, configured, key string, offered []Tool) (Turn, erro
 	t := Turn{ModelUsed: model, Continuation: &Continuation{Provider: ProviderGemini, Raw: c.Content}}
 	var parts []string
 	for i, part := range content.Parts {
+		// The whole part is checked before it is read: only the reviewed
+		// fields, a thought flag that is a boolean (Codex review of
+		// 1390061).
+		for field := range part {
+			if !geminiAllowedPartFields[field] && field != "functionCall" {
+				return Turn{}, ErrUnexpectedOutput
+			}
+		}
+		var thought bool
+		if raw, ok := part["thought"]; ok {
+			if err := json.Unmarshal(raw, &thought); err != nil {
+				return Turn{}, ErrUnexpectedOutput
+			}
+		}
 		if fc, ok := part["functionCall"]; ok {
 			var call struct {
 				ID   string          `json:"id"`
@@ -505,19 +519,12 @@ func geminiTurn(body []byte, configured, key string, offered []Tool) (Turn, erro
 				call.ID = fmt.Sprintf("%s%d", geminiLocalCallID, i)
 			}
 			if len(call.Args) == 0 {
+				// Gemini omits args for a function with no parameters: an
+				// explicit, documented provider omission, read as {}.
 				call.Args = json.RawMessage("{}")
 			}
 			t.Calls = append(t.Calls, ToolCall{ID: call.ID, Name: call.Name, Args: call.Args})
 			continue
-		}
-		for field := range part {
-			if !geminiAllowedPartFields[field] {
-				return Turn{}, ErrUnexpectedOutput
-			}
-		}
-		var thought bool
-		if raw, ok := part["thought"]; ok {
-			_ = json.Unmarshal(raw, &thought)
 		}
 		if thought {
 			continue
@@ -583,17 +590,25 @@ func (p *compatProvider) Converse(ctx context.Context, req ConvRequest) (Turn, e
 	return compatTurn(body, p.model, p.key, req.Tools)
 }
 
+// toolsUnsupportedRe matches a server saying it lacks the capability -
+// "does not support tools", "function calling is not supported" - never a
+// schema or parameter validation error ("unsupported keyword pattern",
+// "parameters: unsupported schema type"), which stays an error (Codex
+// review of 1390061).
+var toolsUnsupportedRe = regexp.MustCompile(`(?i)(does not support (tools|tool calling|tool use|tool calls|function calling)\b|\b(tools|tool calling|tool use|tool calls|function calling) (are |is )?(not supported|unsupported)\b)`)
+
 // toolsUnsupported positively identifies a server refusing tools: HTTP 400
-// or 422 whose body names tools, tool_choice or function as unsupported.
+// or 422 whose body says the server or model does not support tools.
 func toolsUnsupported(err error) bool {
 	var se *HTTPStatusError
 	if !errors.As(err, &se) || (se.Code != 400 && se.Code != 422) {
 		return false
 	}
 	b := strings.ToLower(se.Body)
-	names := strings.Contains(b, "tool") || strings.Contains(b, "function")
-	says := strings.Contains(b, "not supported") || strings.Contains(b, "unsupported") || strings.Contains(b, "does not support")
-	return names && says
+	if strings.Contains(b, "schema") || strings.Contains(b, "parameter") {
+		return false
+	}
+	return toolsUnsupportedRe.MatchString(b)
 }
 
 func compatTurn(body []byte, configured, key string, offered []Tool) (Turn, error) {
@@ -646,11 +661,7 @@ func compatTurn(body []byte, configured, key string, offered []Tool) (Turn, erro
 		if tc.Type != "" && tc.Type != "function" {
 			return Turn{}, ErrUnexpectedOutput
 		}
-		args := json.RawMessage(tc.Function.Arguments)
-		if strings.TrimSpace(tc.Function.Arguments) == "" {
-			args = json.RawMessage("{}")
-		}
-		t.Calls = append(t.Calls, ToolCall{ID: tc.ID, Name: tc.Function.Name, Args: args})
+		t.Calls = append(t.Calls, ToolCall{ID: tc.ID, Name: tc.Function.Name, Args: json.RawMessage(tc.Function.Arguments)})
 	}
 	switch {
 	case len(t.Calls) > 0:
