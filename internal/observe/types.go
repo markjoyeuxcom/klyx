@@ -108,6 +108,11 @@ type Ref struct {
 	Label      string `json:"label"`
 	Generation int64  `json:"generation,omitempty"`
 	Route      string `json:"route,omitempty"` // nav registry destination id
+	// Since is when the current role began, when the rule backs it with a
+	// timestamp (health.NativeEval.Since); Reason the rule's capped reason
+	// and message (The Line §8.1). Absent otherwise.
+	Since  *time.Time `json:"since,omitempty"`
+	Reason string     `json:"reason,omitempty"`
 }
 
 // Part is one counted entity set inside a task.

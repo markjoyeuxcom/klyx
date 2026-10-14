@@ -38,8 +38,23 @@ type FluxResourceDTO struct {
 	SourceKind         string `json:"sourceKind"`
 	SourceName         string `json:"sourceName"`
 	SourceNamespace    string `json:"sourceNamespace"`
+	// LastAttemptedRevision and History are The Line's attempted and
+	// deployment facts (§3.2): the revision last tried, and a HelmRelease's
+	// history newest first (only a "deployed" entry is deployment evidence).
+	LastAttemptedRevision string           `json:"lastAttemptedRevision,omitempty"`
+	History               []HelmHistoryDTO `json:"history,omitempty"`
 	// Rule is the relocated lens rule (1c addendum §2).
 	Rule RuleDTO `json:"rule"`
+}
+
+// HelmHistoryDTO is one HelmRelease status.history snapshot.
+type HelmHistoryDTO struct {
+	Version          int64  `json:"version"`
+	ChartName        string `json:"chartName,omitempty"`
+	ChartVersion     string `json:"chartVersion,omitempty"`
+	ConfigDigest     string `json:"configDigest,omitempty"`
+	Status           string `json:"status,omitempty"`
+	LastDeployedUnix int64  `json:"lastDeployedUnix,omitempty"`
 }
 
 func ToFluxDTO(r flux.Resource, now time.Time) FluxResourceDTO {
@@ -60,23 +75,40 @@ func fluxResourceFields(r flux.Resource, now time.Time) FluxResourceDTO {
 		since = r.ReadySince.Unix()
 	}
 	return FluxResourceDTO{
-		Kind:               string(r.Kind),
-		Namespace:          r.Namespace,
-		Name:               r.Name,
-		Ready:              string(r.Ready),
-		Reason:             r.Reason,
-		Message:            r.Message,
-		Revision:           r.Revision,
-		ReadySinceSeconds:  age,
-		ReadySinceUnix:     since,
-		Stale:              r.Stale,
-		Generation:         r.Generation,
-		ObservedGeneration: r.ObservedGeneration,
-		Suspended:          r.Suspended,
-		SourceKind:         r.SourceKind,
-		SourceName:         r.SourceName,
-		SourceNamespace:    r.SourceNamespace,
+		Kind:                  string(r.Kind),
+		Namespace:             r.Namespace,
+		Name:                  r.Name,
+		Ready:                 string(r.Ready),
+		Reason:                r.Reason,
+		Message:               r.Message,
+		Revision:              r.Revision,
+		ReadySinceSeconds:     age,
+		ReadySinceUnix:        since,
+		Stale:                 r.Stale,
+		Generation:            r.Generation,
+		ObservedGeneration:    r.ObservedGeneration,
+		Suspended:             r.Suspended,
+		SourceKind:            r.SourceKind,
+		SourceName:            r.SourceName,
+		SourceNamespace:       r.SourceNamespace,
+		LastAttemptedRevision: r.LastAttemptedRevision,
+		History:               helmHistoryDTOs(r.History),
 	}
+}
+
+func helmHistoryDTOs(h []flux.HelmHistory) []HelmHistoryDTO {
+	if len(h) == 0 {
+		return nil
+	}
+	out := make([]HelmHistoryDTO, 0, len(h))
+	for _, e := range h {
+		d := HelmHistoryDTO{Version: e.Version, ChartName: e.ChartName, ChartVersion: e.ChartVersion, ConfigDigest: e.ConfigDigest, Status: e.Status}
+		if !e.LastDeployed.IsZero() {
+			d.LastDeployedUnix = e.LastDeployed.Unix()
+		}
+		out = append(out, d)
+	}
+	return out
 }
 
 // GitLinkDTO is a resolved Git navigation target for a Flux resource.
@@ -103,6 +135,13 @@ type FluxSourceDTO struct {
 	Revision   string `json:"revision"`
 	URL        string `json:"url"`
 	Suspended  bool   `json:"suspended"`
+	// RefKind/RefName are the tracked reference (branch, tag, semver, commit,
+	// name or digest); ArtifactUpdatedUnix the artifact's lastUpdateTime and
+	// ReadySinceUnix the Ready condition's transition time, 0 when absent.
+	RefKind             string `json:"refKind,omitempty"`
+	RefName             string `json:"refName,omitempty"`
+	ArtifactUpdatedUnix int64  `json:"artifactUpdatedUnix,omitempty"`
+	ReadySinceUnix      int64  `json:"readySinceUnix,omitempty"`
 	// Rule is the relocated lens rule (1c addendum §2).
 	Rule RuleDTO `json:"rule"`
 }
@@ -116,15 +155,19 @@ func toSourceDTO(s flux.Source) FluxSourceDTO {
 // sourceFields is the pure field conversion (no rule).
 func sourceFields(s flux.Source) FluxSourceDTO {
 	return FluxSourceDTO{
-		Kind:      string(s.Kind),
-		Namespace: s.Namespace,
-		Name:      s.Name,
-		Ready:     string(s.Ready),
-		Reason:    s.Reason,
-		Message:   s.Message,
-		Revision:  s.Revision,
-		URL:       s.URL,
-		Suspended: s.Suspended,
+		Kind:                string(s.Kind),
+		Namespace:           s.Namespace,
+		Name:                s.Name,
+		Ready:               string(s.Ready),
+		Reason:              s.Reason,
+		Message:             s.Message,
+		Revision:            s.Revision,
+		URL:                 s.URL,
+		Suspended:           s.Suspended,
+		RefKind:             s.RefKind,
+		RefName:             s.RefName,
+		ArtifactUpdatedUnix: unixOrZero(s.ArtifactUpdated),
+		ReadySinceUnix:      unixOrZero(s.ReadySince),
 	}
 }
 

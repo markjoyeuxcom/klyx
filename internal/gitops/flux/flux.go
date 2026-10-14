@@ -3,6 +3,7 @@
 package flux
 
 import (
+	"sort"
 	"strings"
 	"time"
 
@@ -66,7 +67,28 @@ type Resource struct {
 	Stale              bool
 	Generation         int64
 	ObservedGeneration int64
+	// LastAttemptedRevision is status.lastAttemptedRevision: the revision the
+	// controller last tried to apply, successful or not (The Line §3.2's
+	// "attempted" fact, kept apart from the applied Revision).
+	LastAttemptedRevision string
+	// History is a HelmRelease's status.history, newest (highest version)
+	// first, at most HistoryMax entries; nil for a Kustomization. Only an
+	// entry whose Status is "deployed" is deployment evidence.
+	History []HelmHistory
 }
+
+// HelmHistory is one HelmRelease status.history snapshot.
+type HelmHistory struct {
+	Version      int64
+	ChartName    string
+	ChartVersion string
+	ConfigDigest string
+	Status       string // deployed | superseded | failed | ...
+	LastDeployed time.Time
+}
+
+// HistoryMax bounds the history kept per object (The Line §8.1).
+const HistoryMax = 5
 
 // staleness compares metadata.generation with status.observedGeneration. found
 // is false when status carries no observedGeneration (brand-new object, or a
@@ -116,6 +138,39 @@ func ParseKustomization(u *unstructured.Unstructured) Resource {
 	return r
 }
 
+// parseHelmHistory reads status.history newest-first by version, at most
+// HistoryMax entries.
+func parseHelmHistory(u *unstructured.Unstructured) []HelmHistory {
+	raw, _, _ := unstructured.NestedSlice(u.Object, "status", "history")
+	var out []HelmHistory
+	for _, h := range raw {
+		hm, ok := h.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		e := HelmHistory{}
+		switch v := hm["version"].(type) {
+		case int64:
+			e.Version = v
+		case float64:
+			e.Version = int64(v)
+		}
+		e.ChartName, _ = hm["chartName"].(string)
+		e.ChartVersion, _ = hm["chartVersion"].(string)
+		e.ConfigDigest, _ = hm["configDigest"].(string)
+		e.Status, _ = hm["status"].(string)
+		if t, ok := hm["lastDeployed"].(string); ok {
+			e.LastDeployed, _ = time.Parse(time.RFC3339, t)
+		}
+		out = append(out, e)
+	}
+	sort.SliceStable(out, func(a, b int) bool { return out[a].Version > out[b].Version })
+	if len(out) > HistoryMax {
+		out = out[:HistoryMax]
+	}
+	return out
+}
+
 func ParseHelmRelease(u *unstructured.Unstructured) Resource {
 	r := common(u, HelmReleaseKind)
 	if rev, ok, _ := unstructured.NestedString(u.Object, "status", "lastAppliedRevision"); ok && rev != "" {
@@ -123,6 +178,7 @@ func ParseHelmRelease(u *unstructured.Unstructured) Resource {
 	} else if cv := currentHelmChartVersion(u); cv != "" {
 		r.Revision = cv
 	}
+	r.History = parseHelmHistory(u)
 	if r.SourceName == "" {
 		if n, ok, _ := unstructured.NestedString(u.Object, "spec", "chart", "spec", "sourceRef", "name"); ok && n != "" {
 			r.SourceName = n
@@ -200,9 +256,16 @@ func common(u *unstructured.Unstructured, kind Kind) Resource {
 	r.Ready, r.Reason, r.Message = readyFromConditions(u)
 	r.DependsOn = parseDependsOn(u)
 	r.Stale, r.Generation, r.ObservedGeneration = staleness(u)
+	r.LastAttemptedRevision, _, _ = unstructured.NestedString(u.Object, "status", "lastAttemptedRevision")
 	// ReadySince <- the Ready condition's lastTransitionTime, i.e. the moment
 	// the ready STATE last flipped - see the field doc for why that is the
 	// honest best Flux offers (no per-apply timestamp exists in status).
+	r.ReadySince = readySince(u)
+	return r
+}
+
+// readySince is the Ready condition's lastTransitionTime, zero when absent.
+func readySince(u *unstructured.Unstructured) time.Time {
 	conds, _, _ := unstructured.NestedSlice(u.Object, "status", "conditions")
 	for _, c := range conds {
 		cm, ok := c.(map[string]interface{})
@@ -212,12 +275,12 @@ func common(u *unstructured.Unstructured, kind Kind) Resource {
 		if t, _ := cm["type"].(string); t == "Ready" {
 			if lt, ok := cm["lastTransitionTime"].(string); ok {
 				if ts, err := time.Parse(time.RFC3339, lt); err == nil {
-					r.ReadySince = ts
+					return ts
 				}
 			}
 		}
 	}
-	return r
+	return time.Time{}
 }
 
 // readyFromConditions derives the aggregate Ready state, the Ready condition's
@@ -268,6 +331,23 @@ type Source struct {
 	Revision  string
 	URL       string
 	Suspended bool
+	// RefKind/RefName are the tracked reference (The Line §3.2's comparison
+	// key): a GitRepository's spec.ref (commit > name > semver > tag >
+	// branch, Flux's precedence) or an OCIRepository's (digest > semver >
+	// tag); empty when the kind tracks none or spec.ref is unset.
+	RefKind string // branch | tag | semver | commit | name | digest
+	RefName string
+	// ArtifactUpdated is status.artifact.lastUpdateTime (a disclosed
+	// tie-break only, never commit order); ReadySince the Ready condition's
+	// lastTransitionTime. Zero when absent.
+	ArtifactUpdated time.Time
+	ReadySince      time.Time
+}
+
+// refPrecedence is the order a source's spec.ref fields win in, per kind.
+var refPrecedence = map[Kind][]string{
+	"GitRepository": {"commit", "name", "semver", "tag", "branch"},
+	"OCIRepository": {"digest", "semver", "tag"},
 }
 
 // ParseSource extracts a source's fetch state from a watched source CR.
@@ -277,6 +357,16 @@ func ParseSource(u *unstructured.Unstructured) Source {
 	s.URL, _, _ = unstructured.NestedString(u.Object, "spec", "url")
 	s.Revision, _, _ = unstructured.NestedString(u.Object, "status", "artifact", "revision")
 	s.Ready, s.Reason, s.Message = readyFromConditions(u)
+	for _, f := range refPrecedence[s.Kind] {
+		if v, ok, _ := unstructured.NestedString(u.Object, "spec", "ref", f); ok && v != "" {
+			s.RefKind, s.RefName = f, v
+			break
+		}
+	}
+	if t, ok, _ := unstructured.NestedString(u.Object, "status", "artifact", "lastUpdateTime"); ok {
+		s.ArtifactUpdated, _ = time.Parse(time.RFC3339, t)
+	}
+	s.ReadySince = readySince(u)
 	return s
 }
 

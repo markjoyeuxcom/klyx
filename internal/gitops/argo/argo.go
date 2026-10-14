@@ -61,7 +61,55 @@ type App struct {
 	Resources      []Resource
 	ReconciledAt   time.Time
 	CreatedAt      time.Time
+
+	// The Line §3.2 / §8.1: the three revision facts, kept apart. Sources is
+	// every spec source (spec.source, or spec.sources in order). Compared is
+	// status.sync - the revision(s) Argo compared, paired with
+	// sync.comparedTo's own sources (desired, not deployed). History is
+	// status.history newest first (at most HistoryMax), each entry with the
+	// source(s) recorded in it - the deployment evidence. Operation is
+	// status.operationState: a running or failed operation's attempt.
+	Sources   []Source
+	Compared  Revisions
+	History   []HistoryEntry
+	Operation Operation
 }
+
+// Source is one Application source as written.
+type Source struct {
+	RepoURL        string
+	Path           string
+	Chart          string
+	TargetRevision string
+	Ref            string
+}
+
+// Revisions pairs revisions with the sources they belong to, index for index.
+type Revisions struct {
+	Sources   []Source
+	Revisions []string
+}
+
+// HistoryEntry is one status.history record: a completed deployment.
+type HistoryEntry struct {
+	ID         int64
+	DeployedAt time.Time
+	Revisions
+}
+
+// Operation is status.operationState.
+type Operation struct {
+	Phase      string
+	Message    string
+	StartedAt  time.Time
+	FinishedAt time.Time
+	// SyncRevisions are syncResult.revision(s), paired with
+	// syncResult.source(s).
+	Sync Revisions
+}
+
+// HistoryMax bounds the history kept per Application (The Line §8.1).
+const HistoryMax = 5
 
 type SyncStrategy string
 
@@ -239,7 +287,110 @@ func Parse(u *unstructured.Unstructured) App {
 			a.ReconciledAt = t
 		}
 	}
+	a.Sources = sourcesAt(u.Object, "spec")
+	if sync, ok, _ := unstructured.NestedMap(u.Object, "status", "sync"); ok {
+		a.Compared = revisionsOf(sync, "revision", "revisions", nested(sync, "comparedTo"))
+	}
+	if hist, ok, _ := unstructured.NestedSlice(u.Object, "status", "history"); ok {
+		for _, h := range hist {
+			hm, ok := h.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			e := HistoryEntry{Revisions: revisionsOf(hm, "revision", "revisions", hm)}
+			switch v := hm["id"].(type) {
+			case int64:
+				e.ID = v
+			case float64:
+				e.ID = int64(v)
+			}
+			e.DeployedAt = timeAt(hm, "deployedAt")
+			a.History = append(a.History, e)
+		}
+		sort.SliceStable(a.History, func(i, j int) bool { return a.History[i].ID > a.History[j].ID })
+		if len(a.History) > HistoryMax {
+			a.History = a.History[:HistoryMax]
+		}
+	}
+	if op, ok, _ := unstructured.NestedMap(u.Object, "status", "operationState"); ok {
+		a.Operation.Phase, _ = op["phase"].(string)
+		a.Operation.Message, _ = op["message"].(string)
+		a.Operation.StartedAt = timeAt(op, "startedAt")
+		a.Operation.FinishedAt = timeAt(op, "finishedAt")
+		if sr := nested(op, "syncResult"); sr != nil {
+			a.Operation.Sync = revisionsOf(sr, "revision", "revisions", sr)
+		}
+	}
 	return a
+}
+
+// nested returns m[key] as a map, or nil.
+func nested(m map[string]interface{}, key string) map[string]interface{} {
+	v, _ := m[key].(map[string]interface{})
+	return v
+}
+
+func timeAt(m map[string]interface{}, key string) time.Time {
+	if s, ok := m[key].(string); ok && s != "" {
+		if t, err := time.Parse(time.RFC3339, s); err == nil {
+			return t
+		}
+	}
+	return time.Time{}
+}
+
+// sourcesAt reads holder.source, or holder.sources in order.
+func sourcesAt(obj map[string]interface{}, path ...string) []Source {
+	holder := obj
+	for _, p := range path {
+		holder = nested(holder, p)
+		if holder == nil {
+			return nil
+		}
+	}
+	return sourcesIn(holder)
+}
+
+func sourcesIn(holder map[string]interface{}) []Source {
+	if holder == nil {
+		return nil
+	}
+	if one := nested(holder, "source"); one != nil {
+		return []Source{sourceOf(one)}
+	}
+	raw, _ := holder["sources"].([]interface{})
+	var out []Source
+	for _, r := range raw {
+		if m, ok := r.(map[string]interface{}); ok {
+			out = append(out, sourceOf(m))
+		}
+	}
+	return out
+}
+
+func sourceOf(m map[string]interface{}) Source {
+	s := Source{}
+	s.RepoURL, _ = m["repoURL"].(string)
+	s.Path, _ = m["path"].(string)
+	s.Chart, _ = m["chart"].(string)
+	s.TargetRevision, _ = m["targetRevision"].(string)
+	s.Ref, _ = m["ref"].(string)
+	return s
+}
+
+// revisionsOf reads a single revision or a revisions list from m, paired with
+// the source(s) recorded in srcHolder - never with the current spec.
+func revisionsOf(m map[string]interface{}, one, many string, srcHolder map[string]interface{}) Revisions {
+	r := Revisions{Sources: sourcesIn(srcHolder)}
+	if raw, ok := m[many].([]interface{}); ok && len(raw) > 0 {
+		for _, v := range raw {
+			s, _ := v.(string)
+			r.Revisions = append(r.Revisions, s)
+		}
+	} else if s, ok := m[one].(string); ok && s != "" {
+		r.Revisions = []string{s}
+	}
+	return r
 }
 
 func ParseProject(u *unstructured.Unstructured) Project {

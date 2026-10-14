@@ -95,6 +95,10 @@
         "conditions": [],
         "resources": [],
         "reconciledUnix": 0,
+        "compared": {},
+        "operation": {
+          "sync": {}
+        },
         "rule": {
           "included": false,
           "role": "ok",
@@ -133,6 +137,10 @@
         "conditions": [],
         "resources": [],
         "reconciledUnix": 0,
+        "compared": {},
+        "operation": {
+          "sync": {}
+        },
         "rule": {
           "included": true,
           "role": "degraded",
@@ -171,6 +179,10 @@
         "conditions": [],
         "resources": [],
         "reconciledUnix": 0,
+        "compared": {},
+        "operation": {
+          "sync": {}
+        },
         "rule": {
           "included": true,
           "role": "unknown",
@@ -209,6 +221,10 @@
         "conditions": [],
         "resources": [],
         "reconciledUnix": 0,
+        "compared": {},
+        "operation": {
+          "sync": {}
+        },
         "rule": {
           "included": false,
           "role": "progressing",
@@ -247,6 +263,10 @@
         "conditions": [],
         "resources": [],
         "reconciledUnix": 0,
+        "compared": {},
+        "operation": {
+          "sync": {}
+        },
         "rule": {
           "included": true,
           "role": "degraded",
@@ -285,6 +305,10 @@
         "conditions": [],
         "resources": [],
         "reconciledUnix": 0,
+        "compared": {},
+        "operation": {
+          "sync": {}
+        },
         "rule": {
           "included": true,
           "role": "progressing",
@@ -323,6 +347,10 @@
         "conditions": [],
         "resources": [],
         "reconciledUnix": 0,
+        "compared": {},
+        "operation": {
+          "sync": {}
+        },
         "rule": {
           "included": true,
           "role": "fault",
@@ -361,6 +389,10 @@
         "conditions": [],
         "resources": [],
         "reconciledUnix": 0,
+        "compared": {},
+        "operation": {
+          "sync": {}
+        },
         "rule": {
           "included": true,
           "role": "fault",
@@ -399,6 +431,10 @@
         "conditions": [],
         "resources": [],
         "reconciledUnix": 0,
+        "compared": {},
+        "operation": {
+          "sync": {}
+        },
         "rule": {
           "included": true,
           "role": "fault",
@@ -437,6 +473,10 @@
         "conditions": [],
         "resources": [],
         "reconciledUnix": 0,
+        "compared": {},
+        "operation": {
+          "sync": {}
+        },
         "rule": {
           "included": false,
           "role": "paused",
@@ -475,6 +515,10 @@
         "conditions": [],
         "resources": [],
         "reconciledUnix": 0,
+        "compared": {},
+        "operation": {
+          "sync": {}
+        },
         "rule": {
           "included": true,
           "role": "paused",
@@ -513,6 +557,10 @@
         "conditions": [],
         "resources": [],
         "reconciledUnix": 0,
+        "compared": {},
+        "operation": {
+          "sync": {}
+        },
         "rule": {
           "included": true,
           "role": "paused",
@@ -551,6 +599,10 @@
         "conditions": [],
         "resources": [],
         "reconciledUnix": 0,
+        "compared": {},
+        "operation": {
+          "sync": {}
+        },
         "rule": {
           "included": true,
           "role": "fault",
@@ -589,6 +641,10 @@
         "conditions": [],
         "resources": [],
         "reconciledUnix": 0,
+        "compared": {},
+        "operation": {
+          "sync": {}
+        },
         "rule": {
           "included": true,
           "role": "fault",
@@ -627,6 +683,10 @@
         "conditions": [],
         "resources": [],
         "reconciledUnix": 0,
+        "compared": {},
+        "operation": {
+          "sync": {}
+        },
         "rule": {
           "included": true,
           "role": "fault",
@@ -665,6 +725,10 @@
         "conditions": [],
         "resources": [],
         "reconciledUnix": 0,
+        "compared": {},
+        "operation": {
+          "sync": {}
+        },
         "rule": {
           "included": true,
           "role": "unknown",
@@ -703,6 +767,10 @@
         "conditions": [],
         "resources": [],
         "reconciledUnix": 0,
+        "compared": {},
+        "operation": {
+          "sync": {}
+        },
         "rule": {
           "included": true,
           "role": "degraded",
@@ -741,6 +809,10 @@
         "conditions": [],
         "resources": [],
         "reconciledUnix": 0,
+        "compared": {},
+        "operation": {
+          "sync": {}
+        },
         "rule": {
           "included": true,
           "role": "unknown",
@@ -779,6 +851,10 @@
         "conditions": [],
         "resources": [],
         "reconciledUnix": 0,
+        "compared": {},
+        "operation": {
+          "sync": {}
+        },
         "rule": {
           "included": true,
           "role": "unknown",
@@ -817,6 +893,10 @@
         "conditions": [],
         "resources": [],
         "reconciledUnix": 0,
+        "compared": {},
+        "operation": {
+          "sync": {}
+        },
         "rule": {
           "included": true,
           "role": "degraded",
@@ -855,6 +935,10 @@
         "conditions": [],
         "resources": [],
         "reconciledUnix": 0,
+        "compared": {},
+        "operation": {
+          "sync": {}
+        },
         "rule": {
           "included": true,
           "role": "unknown",

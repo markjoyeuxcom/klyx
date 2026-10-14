@@ -126,8 +126,61 @@ type ArgoAppDTO struct {
 	Conditions     []ArgoConditionDTO `json:"conditions"`
 	Resources      []ArgoResourceDTO  `json:"resources"`
 	ReconciledUnix int64              `json:"reconciledUnix"` // 0 = never
+	// The Line §3.2: every source, the compared revisions (desired, paired
+	// with sync.comparedTo's sources), the deployment history newest first
+	// (each entry with its own sources), and the running or last operation.
+	Sources   []ArgoSourceDTO  `json:"sources,omitempty"`
+	Compared  ArgoRevisionsDTO `json:"compared"`
+	History   []ArgoHistoryDTO `json:"history,omitempty"`
+	Operation ArgoOperationDTO `json:"operation"`
 	// Rule is the relocated lens rule (1c addendum §2).
 	Rule RuleDTO `json:"rule"`
+}
+
+// ArgoSourceDTO is one Application source as written.
+type ArgoSourceDTO struct {
+	RepoURL        string `json:"repoURL"`
+	Path           string `json:"path,omitempty"`
+	Chart          string `json:"chart,omitempty"`
+	TargetRevision string `json:"targetRevision,omitempty"`
+	Ref            string `json:"ref,omitempty"`
+}
+
+// ArgoRevisionsDTO pairs revisions with their sources, index for index.
+type ArgoRevisionsDTO struct {
+	Sources   []ArgoSourceDTO `json:"sources,omitempty"`
+	Revisions []string        `json:"revisions,omitempty"`
+}
+
+// ArgoHistoryDTO is one completed deployment.
+type ArgoHistoryDTO struct {
+	ID             int64 `json:"id"`
+	DeployedAtUnix int64 `json:"deployedAtUnix,omitempty"`
+	ArgoRevisionsDTO
+}
+
+// ArgoOperationDTO is status.operationState.
+type ArgoOperationDTO struct {
+	Phase          string           `json:"phase,omitempty"`
+	Message        string           `json:"message,omitempty"`
+	StartedAtUnix  int64            `json:"startedAtUnix,omitempty"`
+	FinishedAtUnix int64            `json:"finishedAtUnix,omitempty"`
+	Sync           ArgoRevisionsDTO `json:"sync"`
+}
+
+func argoSourceDTOs(ss []argo.Source) []ArgoSourceDTO {
+	if len(ss) == 0 {
+		return nil
+	}
+	out := make([]ArgoSourceDTO, 0, len(ss))
+	for _, s := range ss {
+		out = append(out, ArgoSourceDTO{RepoURL: s.RepoURL, Path: s.Path, Chart: s.Chart, TargetRevision: s.TargetRevision, Ref: s.Ref})
+	}
+	return out
+}
+
+func argoRevisionsDTO(r argo.Revisions) ArgoRevisionsDTO {
+	return ArgoRevisionsDTO{Sources: argoSourceDTOs(r.Sources), Revisions: append([]string(nil), r.Revisions...)}
 }
 
 type ArgoProjectsResultDTO struct {
@@ -318,6 +371,13 @@ func argoAppFields(a argo.App) ArgoAppDTO {
 	if !a.ReconciledAt.IsZero() {
 		dto.ReconciledUnix = a.ReconciledAt.Unix()
 	}
+	dto.Sources = argoSourceDTOs(a.Sources)
+	dto.Compared = argoRevisionsDTO(a.Compared)
+	for _, h := range a.History {
+		dto.History = append(dto.History, ArgoHistoryDTO{ID: h.ID, DeployedAtUnix: unixOrZero(h.DeployedAt), ArgoRevisionsDTO: argoRevisionsDTO(h.Revisions)})
+	}
+	dto.Operation = ArgoOperationDTO{Phase: a.Operation.Phase, Message: a.Operation.Message,
+		StartedAtUnix: unixOrZero(a.Operation.StartedAt), FinishedAtUnix: unixOrZero(a.Operation.FinishedAt), Sync: argoRevisionsDTO(a.Operation.Sync)}
 	return dto
 }
 

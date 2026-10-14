@@ -14,7 +14,9 @@ export type KindCoverage = {
 };
 export type Counts = { total: number; fault: number; degraded: number; unknown: number; progressing: number; paused: number; ok: number };
 export type NativeCounts = { total: number; roles: Counts; included: number; word: string };
-export type HealthRef = { cluster: string; gvr: string; namespace?: string; name: string; uid?: string; parent?: string; role: string; label: string; generation?: number; route?: string };
+// since and reason are The Line §8.1's rule-backed start time (RFC 3339) and
+// the rule's capped reason; absent when no rule backs them.
+export type HealthRef = { cluster: string; gvr: string; namespace?: string; name: string; uid?: string; parent?: string; role: string; label: string; generation?: number; route?: string; since?: string; reason?: string };
 export type HealthPart = {
   id: string; entity: string; scope: string; classifier: "verdict" | "native" | "evidence"; coverage: Coverage;
   kinds: KindCoverage[]; counts?: Counts; native?: NativeCounts; evidence?: number; top?: HealthRef[];

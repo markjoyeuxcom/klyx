@@ -174,7 +174,8 @@ func nativeResult(cluster, route, word string, items []nativeItem) observe.PartR
 			break
 		}
 		top = append(top, observe.Ref{Cluster: cluster, GVR: it.ref.gvr, Namespace: it.ref.ns, Name: it.ref.name, UID: it.ref.uid,
-			Role: it.eval.Role.String(), Label: it.eval.Label, Generation: it.ref.generation, Route: route})
+			Role: it.eval.Role.String(), Label: it.eval.Label, Generation: it.ref.generation, Route: route,
+			Since: it.eval.Since, Reason: it.eval.Reason})
 	}
 	return observe.PartResult{Native: &nc, Top: top, Next: next}
 }

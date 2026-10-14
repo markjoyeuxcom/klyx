@@ -1,6 +1,10 @@
 package flux
 
-import "github.com/moomora/klyx/internal/health"
+import (
+	"time"
+
+	"github.com/moomora/klyx/internal/health"
+)
 
 // fluxRole is the Flux lens's presentation role, relocated verbatim
 // (GitOps.tsx fluxHealth): Suspended = paused (intended, never broken); an
@@ -39,12 +43,33 @@ func fluxRole(ready ReadyState, suspended, stale bool, reason string) (health.Ki
 // includes progressing (Suspended is an intended pause, never attention).
 func ReconciliationRule(r Resource) health.NativeEval {
 	role, label := fluxRole(r.Ready, r.Suspended, r.Stale, r.Reason)
-	return health.NativeEval{Included: !r.Suspended && r.Ready != Ready, Role: role, Label: label}
+	e := health.NativeEval{Included: !r.Suspended && r.Ready != Ready, Role: role, Label: label}
+	readyBacked(&e, r.Suspended, r.Stale, r.Ready, r.ReadySince, r.Reason, r.Message)
+	return e
+}
+
+// readyBacked fills Since and Reason when the role comes from the Ready
+// condition itself (fault, degraded, unknown, ok): Ready's lastTransitionTime
+// then dates the role. A pause, an unobserved spec or a reconcile in flight
+// is not what Ready's time records, so those keep Since nil (The Line §8.1).
+func readyBacked(e *health.NativeEval, suspended, stale bool, ready ReadyState, since time.Time, reason, message string) {
+	if suspended || stale || ready == Reconciling || e.Role == health.Progressing {
+		return
+	}
+	if !since.IsZero() {
+		t := since
+		e.Since = &t
+	}
+	if e.Role != health.OK && e.Role != health.Unknown {
+		e.Reason = health.CapReason(reason, message)
+	}
 }
 
 // SourceRule is the Sources view rule, relocated verbatim
 // (sourceNeedsAttention / fluxHealth). Sources carry no generation-lag flag.
 func SourceRule(s Source) health.NativeEval {
 	role, label := fluxRole(s.Ready, s.Suspended, false, s.Reason)
-	return health.NativeEval{Included: !s.Suspended && s.Ready != Ready, Role: role, Label: label}
+	e := health.NativeEval{Included: !s.Suspended && s.Ready != Ready, Role: role, Label: label}
+	readyBacked(&e, s.Suspended, false, s.Ready, s.ReadySince, s.Reason, s.Message)
+	return e
 }
