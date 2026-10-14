@@ -1,6 +1,10 @@
 package health
 
-import "time"
+import (
+	"time"
+
+	"github.com/moomora/klyx/internal/scrub"
+)
 
 // NativeEval is a relocated lens rule's verdict for one object (1c addendum
 // §2). A native lens has two rules that disagree on purpose: an inclusion
@@ -28,8 +32,10 @@ type NativeEval struct {
 // ReasonMax caps NativeEval.Reason (and the Ref that carries it).
 const ReasonMax = 200
 
-// CapReason joins a condition's reason and message and caps the result at
-// ReasonMax runes, marking a cut with an ellipsis.
+// CapReason joins a condition's reason and message, scrubs credential shapes
+// from the whole text, then caps it at ReasonMax runes with an ellipsis. The
+// scrub runs first, so a secret crossing the cap is replaced whole, never
+// left as a readable prefix (The Line §8.1).
 func CapReason(reason, message string) string {
 	s := reason
 	switch {
@@ -38,6 +44,7 @@ func CapReason(reason, message string) string {
 	case message != "":
 		s = reason + ": " + message
 	}
+	s, _ = scrub.Credentials(s)
 	if r := []rune(s); len(r) > ReasonMax {
 		return string(r[:ReasonMax-1]) + "…"
 	}

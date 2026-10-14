@@ -202,15 +202,17 @@ func Parse(u *unstructured.Unstructured) App {
 	}
 	a.Project, _, _ = unstructured.NestedString(u.Object, "spec", "project")
 
-	// Source: single spec.source, or first of spec.sources for multi-source apps.
-	src, found, _ := unstructured.NestedMap(u.Object, "spec", "source")
-	if !found {
-		if srcs, ok, _ := unstructured.NestedSlice(u.Object, "spec", "sources"); ok && len(srcs) > 0 {
-			if first, ok := srcs[0].(map[string]interface{}); ok {
-				src = first
-				a.ExtraSources = len(srcs) - 1
-			}
+	// Source: the first of a non-empty spec.sources (multi-source apps -
+	// Argo gives the list precedence over spec.source), else spec.source.
+	var src map[string]interface{}
+	if srcs, ok, _ := unstructured.NestedSlice(u.Object, "spec", "sources"); ok && len(srcs) > 0 {
+		if first, ok := srcs[0].(map[string]interface{}); ok {
+			src = first
+			a.ExtraSources = len(srcs) - 1
 		}
+	}
+	if src == nil {
+		src, _, _ = unstructured.NestedMap(u.Object, "spec", "source")
 	}
 	if src != nil {
 		a.RepoURL, _ = src["repoURL"].(string)
@@ -351,21 +353,31 @@ func sourcesAt(obj map[string]interface{}, path ...string) []Source {
 	return sourcesIn(holder)
 }
 
+// sourcesIn reads holder.sources when it is a non-empty list - Argo gives
+// the list precedence, and status records keep a singular source field that
+// may be empty or stale beside it (Codex review of b547e60) - else a
+// non-empty singular holder.source.
 func sourcesIn(holder map[string]interface{}) []Source {
 	if holder == nil {
 		return nil
 	}
-	if one := nested(holder, "source"); one != nil {
-		return []Source{sourceOf(one)}
-	}
-	raw, _ := holder["sources"].([]interface{})
-	var out []Source
-	for _, r := range raw {
-		if m, ok := r.(map[string]interface{}); ok {
-			out = append(out, sourceOf(m))
+	if raw, _ := holder["sources"].([]interface{}); len(raw) > 0 {
+		var out []Source
+		for _, r := range raw {
+			if m, ok := r.(map[string]interface{}); ok {
+				out = append(out, sourceOf(m))
+			}
+		}
+		if len(out) > 0 {
+			return out
 		}
 	}
-	return out
+	if one := nested(holder, "source"); one != nil {
+		if s := sourceOf(one); s != (Source{}) {
+			return []Source{s}
+		}
+	}
+	return nil
 }
 
 func sourceOf(m map[string]interface{}) Source {

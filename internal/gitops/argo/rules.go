@@ -8,6 +8,12 @@ import "github.com/moomora/klyx/internal/health"
 // in Argo's own vocabulary - Degraded/Missing = fault, Suspended = paused,
 // OutOfSync = degraded (drift), Progressing = progressing, Healthy+Synced =
 // ok, anything else = unknown.
+//
+// Since stays nil for now. Argo does expose times (health.lastTransitionTime,
+// condition times), but only a timestamp that matches the rule may date a
+// role: a health transition never dates an OutOfSync role, and "ok" needs both
+// health and sync. Ages for Argo come from Klyx's observation until a
+// rule-matched time is wired (The Line §8.1).
 func AppRule(a App) health.NativeEval {
 	e := health.NativeEval{Included: a.Broken()}
 	switch {

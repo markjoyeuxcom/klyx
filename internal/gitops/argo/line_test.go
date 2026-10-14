@@ -52,3 +52,41 @@ func TestParseSingleSourceAndCappedHistory(t *testing.T) {
 		t.Fatalf("no history is no history, never an invented deployment: %+v", b)
 	}
 }
+
+// Codex review of b547e60: Argo gives a non-empty sources list precedence;
+// status records keep a singular source that may be empty or stale beside it.
+func TestParseSourcesListWinsOverSingular(t *testing.T) {
+	two := []interface{}{map[string]interface{}{"repoURL": "https://a"}, map[string]interface{}{"repoURL": "https://b"}}
+	for name, single := range map[string]map[string]interface{}{
+		"empty singular": {},
+		"stale singular": {"repoURL": "https://stale"},
+	} {
+		block := func() map[string]interface{} { return map[string]interface{}{"source": single, "sources": two} }
+		sync := block()
+		sync["revisions"] = []interface{}{"r-a", "r-b"}
+		sync["comparedTo"] = block()
+		hist := block()
+		hist["id"], hist["revisions"] = int64(1), []interface{}{"r-a", "r-b"}
+		sr := block()
+		sr["revisions"] = []interface{}{"r-a", "r-b"}
+		a := Parse(app(block(), map[string]interface{}{
+			"sync": sync, "history": []interface{}{hist},
+			"operationState": map[string]interface{}{"phase": "Succeeded", "syncResult": sr},
+		}))
+		check := func(where string, ss []Source, revs []string) {
+			if len(ss) != 2 || ss[0].RepoURL != "https://a" || ss[1].RepoURL != "https://b" {
+				t.Errorf("%s %s: sources %+v", name, where, ss)
+			}
+			if revs != nil && (len(revs) != 2 || revs[1] != "r-b") {
+				t.Errorf("%s %s: revisions %v", name, where, revs)
+			}
+		}
+		check("spec", a.Sources, nil)
+		check("compared", a.Compared.Sources, a.Compared.Revisions)
+		check("history", a.History[0].Sources, a.History[0].Revisions.Revisions)
+		check("syncResult", a.Operation.Sync.Sources, a.Operation.Sync.Revisions)
+		if a.RepoURL != "https://a" || a.ExtraSources != 1 {
+			t.Errorf("%s headline: %s +%d", name, a.RepoURL, a.ExtraSources)
+		}
+	}
+}
