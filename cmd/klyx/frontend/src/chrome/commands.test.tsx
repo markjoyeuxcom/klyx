@@ -521,3 +521,16 @@ describe("views from every route (redesign step 7c)", () => {
     expect(q).not.toContain("view:flux@aks-prd-weu-platform-01");
   });
 });
+
+describe("cluster chat entry (spec 2026-10-14 §8)", () => {
+  it("offers Ask about <cluster> inside a cluster, and opens its drawer", async () => {
+    const { useChat } = await import("../ai/chatStore");
+    useChat.setState({ open: false, cluster: null });
+    const s = makeStore({ route: { name: "cluster", cluster: "dev", section: "overview" } as never });
+    const cmd = buildCommands(s).find((c) => c.id === "chat:dev");
+    expect(cmd?.title).toBe("Ask about dev");
+    cmd!.run();
+    expect(useChat.getState()).toMatchObject({ open: true, cluster: "dev" });
+    expect(buildCommands(makeStore({})).some((c) => c.id.startsWith("chat:"))).toBe(false);
+  });
+});

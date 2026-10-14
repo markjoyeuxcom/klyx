@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { openChat } from "./chatStore";
 import { create } from "zustand";
 import { aiAvailability, aiEgressAllowed, explain, type ExplainTarget } from "../bridge/ai";
 import { useFleet, type AIResultDTO, type AIAvailabilityDTO } from "../store/fleet";
@@ -138,7 +139,7 @@ export function aiExplainMenuItem(readiness: AIReadiness, state: AIExplainState,
 }
 
 /** AIExplainBlock renders the explanation, with what it rests on. */
-export function AIExplainBlock({ state, onDismiss }: { state: AIExplainState; onDismiss: () => void }) {
+export function AIExplainBlock({ state, onDismiss, onFollowUp }: { state: AIExplainState; onDismiss: () => void; onFollowUp?: () => void }) {
   if (state.status === "idle") return null;
   const r = state.result;
   return (
@@ -156,6 +157,9 @@ export function AIExplainBlock({ state, onDismiss }: { state: AIExplainState; on
               {r.redacted ? ` · ${r.redacted} value${r.redacted === 1 ? "" : "s"} masked` : ""}
             </div>
             <div className="t-legend" style={{ color: "var(--color-text-tertiary)" }}>AI-generated from Klyx's resolved state - verify before acting.</div>
+            {onFollowUp && (
+              <div><button type="button" className="l-btn" onClick={onFollowUp}>Ask a follow-up</button></div>
+            )}
           </>
         )}
       </div>
@@ -183,7 +187,9 @@ export function useInspectorAI(target: ExplainTarget | null, describe: string, e
   const { state, run, dismiss } = useAIExplain(cluster, active ? target : null, readiness, describe);
   return {
     menu: active ? aiExplainMenuItem(readiness, state, run) : [],
-    block: <AIExplainBlock state={state} onDismiss={dismiss} />,
+    // "Ask a follow-up" opens this cluster's chat with the object named, so
+    // the conversation reads it by its explicit reference.
+    block: <AIExplainBlock state={state} onDismiss={dismiss} onFollowUp={cluster ? () => openChat(cluster, `About ${describe}: `) : undefined} />,
     readiness,
     state,
     run,

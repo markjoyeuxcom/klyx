@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from "react";
-import { IconArrowLeft, IconArrowRight, IconArrowsLeftRight, IconClock, IconCommand, IconHistory, IconSettings, IconTerminal2 } from "@tabler/icons-react";
+import { IconArrowLeft, IconArrowRight, IconArrowsLeftRight, IconClock, IconCommand, IconHistory, IconMessageChatbot, IconSettings, IconTerminal2 } from "@tabler/icons-react";
+import { openChat } from "../ai/chatStore";
 import { ThemeToggle } from "./ThemeToggle";
 import { KlyxMark } from "./KlyxMark";
 import { useFleet } from "../store/fleet";
@@ -68,6 +69,11 @@ export function TopBar() {
         {/* App utilities (spec §4): icon buttons whose names live in their
             accessible labels and tooltips - context outranks utility text. */}
         <ForwardsIndicator />
+        {route.name === "cluster" && (
+          <UtilityButton label={`Ask about ${route.cluster}`} title="Ask about this cluster - read-only AI chat" onClick={() => openChat(route.cluster)}>
+            <IconMessageChatbot size={15} stroke={1.5} />
+          </UtilityButton>
+        )}
         <UtilityButton label="Activity" title="Activity - recent action outcomes" current={route.name === "activity"} onClick={() => useFleet.getState().openActivity()}>
           <IconHistory size={15} stroke={1.5} />
         </UtilityButton>

@@ -284,3 +284,46 @@ button.ov-area-label:hover, button.ov-area-label:focus-visible { text-decoration
 .mast-attention { flex: 0 10 auto; min-width: 5ch; overflow: hidden; text-overflow: ellipsis; height: 24px; padding: 0 8px; border: 0; border-radius: 4px; background: transparent; cursor: pointer; white-space: nowrap;
   font: 600 11px/16px var(--font-sans); }
 .mast-attention:hover, .mast-attention:focus-visible { background: var(--color-background-secondary); outline: none; }
+
+/* ---- Cluster chat drawer (spec 2026-10-14 §8) ---------------------------- */
+.chat-drawer {
+  position: fixed;
+  top: 52px;
+  right: 8px;
+  bottom: 8px;
+  width: min(460px, calc(100vw - 32px));
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  background: var(--color-background-primary);
+  border: 0.5px solid var(--color-border-secondary);
+  border-radius: var(--border-radius-md);
+  box-shadow: 0 8px 28px color-mix(in srgb, #000 28%, transparent);
+}
+.chat-head { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 0.5px solid var(--color-border-tertiary); }
+.chat-title { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-sub { color: var(--color-text-secondary); }
+.chat-guarantee { padding: 6px 12px; color: var(--color-text-secondary); border-bottom: 0.5px solid var(--color-border-tertiary); }
+.chat-body { flex: 1; min-height: 0; overflow-y: auto; padding: 10px 12px; display: flex; flex-direction: column; gap: 14px; }
+.chat-exchange { display: flex; flex-direction: column; gap: 6px; }
+.chat-q { align-self: flex-end; max-width: 90%; padding: 6px 10px; border-radius: var(--border-radius-md); background: var(--color-background-secondary); white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
+.chat-err { color: var(--color-text-danger); overflow-wrap: anywhere; font-size: 12px; }
+.chat-notice { padding: 8px 10px; border-radius: var(--border-radius-md); border: 0.5px solid var(--color-border-warning); color: var(--color-text-warning); font-size: 12px; display: flex; flex-direction: column; gap: 6px; overflow-wrap: anywhere; }
+.chat-reads summary { cursor: pointer; }
+.chat-reads ul { margin: 4px 0 0; padding-left: 16px; }
+.chat-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.chat-input { border-top: 0.5px solid var(--color-border-tertiary); padding: 8px 12px; display: flex; flex-direction: column; gap: 6px; }
+.chat-input textarea { resize: vertical; min-height: 54px; max-height: 200px; font: inherit; font-size: 12px; padding: 6px 8px; color: var(--color-text-primary); background: var(--color-background-secondary); border: 0.5px solid var(--color-border-tertiary); border-radius: 4px; }
+.chat-actions { display: flex; gap: 6px; justify-content: flex-end; }
+@media (max-width: 640px) { .chat-drawer { left: 8px; width: auto; } }
+
+/* SafeMarkdown: the answer's small Markdown subset */
+.md { display: flex; flex-direction: column; gap: 6px; font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.md-para { margin: 0; white-space: pre-wrap; }
+.md-heading { font-weight: 600; margin-top: 4px; }
+.md-list { margin: 0; padding-left: 18px; }
+.md-quote { margin: 0; padding-left: 8px; border-left: 2px solid var(--color-border-secondary); color: var(--color-text-secondary); }
+.md-code { font-family: var(--font-mono); font-size: 11px; padding: 0 3px; border-radius: 3px; background: var(--color-background-secondary); }
+.md-pre { margin: 0; padding: 8px; overflow-x: auto; font-family: var(--font-mono); font-size: 11px; background: var(--color-background-secondary); border-radius: 4px; white-space: pre; }
+.md-link { background: none; border: 0; padding: 0; font: inherit; color: var(--color-text-info); text-decoration: underline; cursor: pointer; }
+.chat-small { font-size: 11px; line-height: 1.45; color: var(--color-text-secondary); }

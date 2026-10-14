@@ -13,6 +13,7 @@ import { SettingsView } from "./SettingsView";
 import { ClusterDetail } from "../cluster/ClusterDetail";
 import { CommandPalette, getPaletteOpen } from "../chrome/CommandPalette";
 import { ActionToast } from "../chrome/ActionToast";
+import { ChatDrawer } from "../ai/ChatDrawer";
 import { back, forward } from "../nav/history";
 import { handleZoomKey } from "./zoom";
 import { startSummaries } from "../bridge/healthRows";
@@ -92,6 +93,7 @@ export function AppShell() {
           </main>
         </div>
       </div>
+      <ChatDrawer />
       <ActionToast />
     </div>
   );

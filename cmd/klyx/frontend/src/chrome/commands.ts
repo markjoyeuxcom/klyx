@@ -5,6 +5,7 @@
 // jump-to-resource bridge call) as a side effect.
 
 import { useFleet, ClusterSection } from "../store/fleet";
+import { openChat } from "../ai/chatStore";
 import type { ClusterDTO, GatewayRefDTO, NavIntent, ResourceRef, RevealRef, RouteNodeDTO, WorkloadKind } from "../store/fleet";
 import { bestSub, useHealth } from "../store/health";
 import { labelOf } from "../health/verdict";
@@ -142,6 +143,10 @@ export function buildCommands(s: FleetStore): Command[] {
   cmds.push({ id: "activity", group: "Application", title: "Activity log", hint: "recent action outcomes", run: () => s.openActivity() });
   cmds.push({ id: "settings", group: "Application", title: "Settings", hint: "fleet config · kubeconfig contexts", run: () => s.openSettings() });
   cmds.push({ id: "terminal", group: "Application", title: "Terminal", hint: "a shell with this fleet's kubeconfig", run: () => void openTerminal() });
+  // Cluster chat (spec 2026-10-14 §8): the open cluster's conversation.
+  if (cluster) {
+    cmds.push({ id: `chat:${cluster}`, group: "Application", title: `Ask about ${cluster}`, hint: "read-only AI chat about this cluster", keywords: ["chat", "ai", "question", "explain"], run: () => openChat(cluster) });
+  }
   cmds.push({ id: "zoom:in", group: "Application", title: "Zoom in", hint: `now ${zoomPercent()} · ⌘=`, run: () => zoomIn() });
   cmds.push({ id: "zoom:out", group: "Application", title: "Zoom out", hint: `now ${zoomPercent()} · ⌘-`, run: () => zoomOut() });
   cmds.push({ id: "zoom:reset", group: "Application", title: "Actual size", hint: `zoom ${zoomPercent()} · ⌘0`, run: () => zoomReset() });
