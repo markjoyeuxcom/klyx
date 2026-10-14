@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { openChat } from "./chatStore";
+import type { ChatSeed } from "../bridge/chat";
 import { create } from "zustand";
 import { aiAvailability, aiEgressAllowed, explain, type ExplainTarget } from "../bridge/ai";
 import { useFleet, type AIResultDTO, type AIAvailabilityDTO } from "../store/fleet";
@@ -187,9 +188,10 @@ export function useInspectorAI(target: ExplainTarget | null, describe: string, e
   const { state, run, dismiss } = useAIExplain(cluster, active ? target : null, readiness, describe);
   return {
     menu: active ? aiExplainMenuItem(readiness, state, run) : [],
-    // "Ask a follow-up" opens this cluster's chat with the object named, so
-    // the conversation reads it by its explicit reference.
-    block: <AIExplainBlock state={state} onDismiss={dismiss} onFollowUp={cluster ? () => openChat(cluster, `About ${describe}: `) : undefined} />,
+    // "Ask a follow-up" opens this cluster's chat seeded with Explain's own
+    // target - the row, object or release it explained - so the backend
+    // reads that exact object and refuses a replacement by UID.
+    block: <AIExplainBlock state={state} onDismiss={dismiss} onFollowUp={cluster && active && target ? () => openChat(cluster, { seed: target as ChatSeed, label: describe }) : undefined} />,
     readiness,
     state,
     run,

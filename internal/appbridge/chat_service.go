@@ -46,8 +46,9 @@ type ChatService struct {
 	em    Emitter
 	now   func() time.Time
 
-	mu    sync.Mutex
-	convs map[string]*conversation // by cluster
+	mu      sync.Mutex
+	convs   map[string]*conversation // by cluster
+	version uint64                   // bumped on every change; orders state replies
 }
 
 // NewChatService wires the chat to the registry and the AI snapshot.
@@ -97,6 +98,8 @@ type exchange struct {
 	// again as history (its steps were dropped by the retention bound).
 	noHistory bool
 	note      string
+	seed      *ChatSeedDTO
+	seedData  string // the seeded object's envelope, sent as data with the question
 }
 
 // ChatModelCallDTO is one attempted model call, for the Activity log: never
@@ -139,6 +142,28 @@ type ChatStateDTO struct {
 	Removed        int               `json:"removed"`
 	Active         bool              `json:"active"`
 	Exchanges      []ChatExchangeDTO `json:"exchanges"`
+	// Notice is a recoverable problem with the last request (a question too
+	// long, one already running): the conversation stays usable.
+	Notice string `json:"notice,omitempty"`
+	// Version orders replies: the drawer applies a state only when it is
+	// not older than the one it shows (Codex review of 143dc6d).
+	Version uint64 `json:"version"`
+}
+
+// ChatSeedDTO names the object an "Ask a follow-up" is about, as Explain
+// targeted it: an Observer row (task, part, uid), a generic object (GVR,
+// namespace, name, uid) or a Helm release. The backend resolves and reads
+// it, and refuses a same-name replacement by UID (spec §§7, 10).
+type ChatSeedDTO struct {
+	Kind      string `json:"kind"` // row | object | helm
+	Task      string `json:"task,omitempty"`
+	Part      string `json:"part,omitempty"`
+	UID       string `json:"uid,omitempty"`
+	Group     string `json:"group,omitempty"`
+	Version   string `json:"version,omitempty"`
+	Plural    string `json:"plural,omitempty"`
+	Namespace string `json:"namespace,omitempty"`
+	Name      string `json:"name,omitempty"`
 }
 
 // ChatReadEventDTO is pushed on "chat:<conversationId>" as each read
@@ -180,6 +205,7 @@ func (s *ChatService) Start(cluster string) ChatStateDTO {
 	}
 	c := &conversation{id: newID(), cluster: cluster, conn: conn, rev: st.Rev, provider: st.ProviderID, model: st.Model, origin: st.Origin, mode: mode}
 	s.convs[cluster] = c
+	s.version++
 	return s.stateLocked(c)
 }
 
@@ -206,31 +232,37 @@ func (s *ChatService) State(cluster string) ChatStateDTO {
 	defer s.mu.Unlock()
 	c := s.convs[cluster]
 	if c == nil {
-		return ChatStateDTO{Cluster: cluster, Protected: s.ai.protected(cluster), Exchanges: []ChatExchangeDTO{}}
+		return ChatStateDTO{Cluster: cluster, Protected: s.ai.protected(cluster), Exchanges: []ChatExchangeDTO{}, Version: s.version}
 	}
 	return s.stateLocked(c)
 }
 
 func (s *ChatService) stateLocked(c *conversation) ChatStateDTO {
 	out := ChatStateDTO{ConversationID: c.id, Cluster: c.cluster, Mode: c.mode, Provider: string(c.provider), Model: c.model, Origin: c.origin,
-		Protected: s.ai.protected(c.cluster), Ended: c.ended, Trimmed: c.trimmed, Removed: c.removed, Active: c.active != nil, Exchanges: []ChatExchangeDTO{}}
+		Protected: s.ai.protected(c.cluster), Ended: c.ended, Trimmed: c.trimmed, Removed: c.removed, Active: c.active != nil, Exchanges: []ChatExchangeDTO{},
+		Version: s.version}
 	for _, e := range c.exchanges {
 		out.Exchanges = append(out.Exchanges, e.dto())
 	}
 	return out
 }
 
+// dto is a detached copy: a running turn keeps appending reads and
+// updating call records, so nothing returned may alias them (Codex review
+// of 7b57456). Called under the service lock.
 func (e *exchange) dto() ChatExchangeDTO {
-	reads := e.reads
-	if reads == nil {
-		reads = []ChatRead{}
+	reads := make([]ChatRead, 0, len(e.reads))
+	for _, r := range e.reads {
+		r.Refs = append([]ChatRef(nil), r.Refs...)
+		reads = append(reads, r)
 	}
-	calls := e.calls
-	if calls == nil {
-		calls = []ChatModelCallDTO{}
+	calls := make([]ChatModelCallDTO, 0, len(e.calls))
+	for _, c := range e.calls {
+		c.Tools = append([]string(nil), c.Tools...)
+		calls = append(calls, c)
 	}
 	return ChatExchangeDTO{ID: e.id, Question: e.question, Answer: e.answer, Outcome: e.outcome, Error: e.err, Reads: reads, Calls: calls,
-		Snapshot: e.snapshot, Note: e.note, At: e.at.UTC().Format(time.RFC3339)}
+		Snapshot: append([]string(nil), e.snapshot...), Note: e.note, At: e.at.UTC().Format(time.RFC3339)}
 }
 
 // Stop cancels the conversation's active turn, if it is that conversation's.
@@ -240,6 +272,7 @@ func (s *ChatService) Stop(cluster, conversationID string) {
 	if c := s.convs[cluster]; c != nil && c.id == conversationID && c.active != nil {
 		c.active.stopped = true
 		c.active.cancel()
+		s.version++
 	}
 }
 
@@ -254,45 +287,50 @@ func (s *ChatService) Clear(cluster, conversationID string) {
 			c.active.cancel()
 		}
 		delete(s.convs, cluster)
+		s.version++
 	}
 }
 
 // Ask runs one turn for the operator's question and returns the
 // conversation afterwards. It blocks until the turn ends (at most the turn
 // deadline); Stop and Clear end it sooner.
-func (s *ChatService) Ask(cluster, conversationID, question string) ChatStateDTO {
+func (s *ChatService) Ask(cluster, conversationID, question string, seed *ChatSeedDTO) ChatStateDTO {
 	question = strings.TrimSpace(question)
 	s.mu.Lock()
 	c := s.convs[cluster]
+	notice := func(msg string) ChatStateDTO {
+		st := s.stateLocked(c)
+		st.Notice = msg
+		s.mu.Unlock()
+		return st
+	}
 	switch {
 	case c == nil || c.id != conversationID:
+		v := s.version
 		s.mu.Unlock()
-		return ChatStateDTO{Cluster: cluster, Error: "this conversation has ended; start a new one"}
+		return ChatStateDTO{Cluster: cluster, Error: "this conversation has ended; start a new one", Exchanges: []ChatExchangeDTO{}, Version: v}
 	case c.ended != "":
 		st := s.stateLocked(c)
 		s.mu.Unlock()
 		return st
 	case c.active != nil:
-		st := s.stateLocked(c)
-		st.Error = "a question is already being answered; stop it or wait"
-		s.mu.Unlock()
-		return st
+		return notice("a question is already being answered; stop it or wait")
 	case question == "":
-		st := s.stateLocked(c)
-		st.Error = "ask a question"
-		s.mu.Unlock()
-		return st
+		return notice("ask a question")
 	case len(question) > chatQuestionMax:
-		st := s.stateLocked(c)
-		st.Error = fmt.Sprintf("the question is longer than %d KiB", chatQuestionMax>>10)
-		s.mu.Unlock()
-		return st
+		return notice(fmt.Sprintf("the question is longer than %d KiB (UTF-8); shorten it", chatQuestionMax>>10))
+	}
+	if seed != nil {
+		if err := checkSeed(seed); err != nil {
+			return notice("the follow-up target is not valid: " + err.Error())
+		}
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), chatTurnDeadline)
 	turn := &activeTurn{id: newID(), cancel: cancel}
 	c.active = turn
-	ex := &exchange{id: newID(), question: question, at: s.now()}
+	ex := &exchange{id: newID(), question: question, at: s.now(), seed: seed}
 	c.exchanges = append(c.exchanges, ex)
+	s.version++
 	s.mu.Unlock()
 
 	defer cancel()
@@ -333,7 +371,35 @@ func (s *ChatService) Ask(cluster, conversationID, question string) ChatStateDTO
 		c.ended = ended.reason
 	}
 	s.retainLocked(c)
+	s.version++
 	return s.stateLocked(c)
+}
+
+// checkSeed validates a follow-up target before anything is read.
+func checkSeed(sd *ChatSeedDTO) error {
+	switch sd.Kind {
+	case "row":
+		if !idRe.MatchString(sd.Task) || !idRe.MatchString(sd.Part) || sd.UID == "" {
+			return errors.New("a row target needs its area, part and UID")
+		}
+	case "object":
+		if sd.UID == "" || sd.Version == "" || !kindRe.MatchString(sd.Plural) {
+			return errors.New("an object target needs its resource and UID")
+		}
+		if err := firstErr(checkGroup(sd.Group), checkName("namespace", sd.Namespace, false), checkName("name", sd.Name, true)); err != nil {
+			return err
+		}
+	case "helm":
+		if err := firstErr(checkName("namespace", sd.Namespace, true), checkName("name", sd.Name, true)); err != nil {
+			return err
+		}
+	default:
+		return errors.New("unknown target kind")
+	}
+	if len(sd.UID) > 64 {
+		return errors.New("the UID is not valid")
+	}
+	return nil
 }
 
 func capAnswer(a string) string {

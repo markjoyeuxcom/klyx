@@ -1,40 +1,59 @@
 import { create } from "zustand";
-import type { ChatRead, ChatState } from "../bridge/chat";
+import type { ChatSeed, ChatState } from "../bridge/chat";
 
 // The chat drawer's UI state. The conversation itself lives in the backend;
-// this keeps only what the drawer shows: which cluster it is open for, the
-// last state read back, the operator's unsent draft, and reads that arrive
-// while a turn runs.
+// this keeps what the drawer shows: which cluster it is open for, the newest
+// state read back per cluster (replies are ordered by the backend's
+// version, never by arrival - Codex review of 143dc6d), the unsent draft,
+// a follow-up's target, a question in flight, and whether the operator
+// cleared the conversation (Clear never starts another by itself).
+export type ChatAsking = { conversationId: string; question: string };
+export type ChatFollowUp = { seed: ChatSeed; label: string };
+
 type ChatUI = {
   open: boolean;
   cluster: string | null;
   states: Record<string, ChatState>;
   drafts: Record<string, string>;
-  live: Record<string, ChatRead[]>; // exchange id -> reads so far
-  openFor: (cluster: string, draft?: string) => void;
+  seeds: Record<string, ChatFollowUp | undefined>;
+  asking: Record<string, ChatAsking | undefined>;
+  cleared: Record<string, boolean>;
+  openFor: (cluster: string, followUp?: ChatFollowUp) => void;
   close: () => void;
-  setState: (cluster: string, st: ChatState) => void;
+  apply: (cluster: string, st: ChatState) => boolean;
   setDraft: (cluster: string, text: string) => void;
-  addLive: (exchangeId: string, read: ChatRead) => void;
-  clearLive: () => void;
+  setSeed: (cluster: string, f: ChatFollowUp | undefined) => void;
+  setAsking: (cluster: string, a: ChatAsking | undefined) => void;
+  setCleared: (cluster: string, v: boolean) => void;
 };
 
-export const useChat = create<ChatUI>((set) => ({
+export const useChat = create<ChatUI>((set, get) => ({
   open: false,
   cluster: null,
   states: {},
   drafts: {},
-  live: {},
-  openFor: (cluster, draft) =>
-    set((s) => ({ open: true, cluster, drafts: draft !== undefined ? { ...s.drafts, [cluster]: draft } : s.drafts })),
+  seeds: {},
+  asking: {},
+  cleared: {},
+  openFor: (cluster, followUp) =>
+    set((s) => ({ open: true, cluster, seeds: followUp ? { ...s.seeds, [cluster]: followUp } : s.seeds })),
   close: () => set({ open: false }),
-  setState: (cluster, st) => set((s) => ({ states: { ...s.states, [cluster]: st } })),
+  // apply keeps the newest state per cluster: an older reply (a lower
+  // version) is dropped whatever order replies arrive in.
+  apply: (cluster, st) => {
+    const cur = get().states[cluster];
+    if (cur && (st.version ?? 0) < (cur.version ?? 0)) return false;
+    set((s) => ({ states: { ...s.states, [cluster]: st } }));
+    return true;
+  },
   setDraft: (cluster, text) => set((s) => ({ drafts: { ...s.drafts, [cluster]: text } })),
-  addLive: (exchangeId, read) => set((s) => ({ live: { ...s.live, [exchangeId]: [...(s.live[exchangeId] ?? []), read] } })),
-  clearLive: () => set({ live: {} }),
+  setSeed: (cluster, f) => set((s) => ({ seeds: { ...s.seeds, [cluster]: f } })),
+  setAsking: (cluster, a) => set((s) => ({ asking: { ...s.asking, [cluster]: a } })),
+  setCleared: (cluster, v) => set((s) => ({ cleared: { ...s.cleared, [cluster]: v } })),
 }));
 
-// openChat opens the drawer for a cluster, optionally with a seeded draft.
-export function openChat(cluster: string, draft?: string): void {
-  useChat.getState().openFor(cluster, draft);
+// openChat opens the drawer for a cluster, optionally as a follow-up about
+// one object.
+export function openChat(cluster: string, followUp?: ChatFollowUp): void {
+  useChat.getState().openFor(cluster, followUp);
 }

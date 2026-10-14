@@ -1001,6 +1001,9 @@ type FleetState = {
   actionToasts: ActionEvent[];
   actionLog: ActionEvent[];
   setActionStatus: (s: ActionStatus) => void;
+  // logActivity records an Activity entry without a toast (per-call AI chat
+  // records: metadata only, never question or answer text).
+  logActivity: (s: ActionStatus) => void;
   dismissActionToast: (id: number) => void;
   clearActionStatus: () => void;
   clearActionLog: () => void;
@@ -1207,6 +1210,13 @@ export const useFleet = create<FleetState>((set) => ({
         actionToasts: [...s.actionToasts, event].slice(-MAX_VISIBLE_TOASTS),
         actionLog,
       };
+    }),
+  logActivity: (entry) =>
+    set((s) => {
+      const event: ActionEvent = { ...entry, id: nextActionId++, at: Date.now() };
+      const actionLog = [event, ...s.actionLog].slice(0, ACTION_LOG_MAX);
+      saveActionLog(actionLog);
+      return { actionLog };
     }),
   dismissActionToast: (id) => set((s) => ({ actionToasts: s.actionToasts.filter((t) => t.id !== id) })),
   clearActionStatus: () => set({ actionStatus: null, actionToasts: [] }),

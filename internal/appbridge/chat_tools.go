@@ -1137,17 +1137,31 @@ func (t *chatTools) get(ctx context.Context, kind, group, ns, name string) ChatT
 	if !k.Namespaced {
 		ns = ""
 	}
+	return t.getResolved(ctx, k.GVR, ns, name, "")
+}
+
+// getGVR reads an object Klyx already identified (a follow-up seed): no
+// discovery, and wantUID fences a same-name replacement - a different UID
+// returns no object data at all.
+func (t *chatTools) getGVR(ctx context.Context, gvr schema.GroupVersionResource, ns, name, wantUID string) ChatToolResult {
+	return t.getResolved(ctx, gvr, ns, name, wantUID)
+}
+
+func (t *chatTools) getResolved(ctx context.Context, gvr schema.GroupVersionResource, ns, name, wantUID string) ChatToolResult {
 	target := strings.TrimPrefix(ns+"/"+name, "/")
-	u, err := t.conn.ChatGet(ctx, k.GVR, ns, name)
+	u, err := t.conn.ChatGet(ctx, gvr, ns, name)
 	if err != nil {
-		return t.failed(toolGet, "api", k.Kind+" "+target, err)
+		return t.failed(toolGet, "api", gvr.Resource+" "+target, err)
 	}
-	o := chatProject(k.GVR, u)
+	if wantUID != "" && string(u.GetUID()) != wantUID {
+		return t.refuse(toolGet, gvr.Resource+" "+target, errors.New("the object was replaced since you asked about it (its UID changed); nothing about the new object was read"))
+	}
+	o := chatProject(gvr, u)
 	p := &projector{redacted: o.Redacted}
 	data := chatGetData{Object: o}
 	env := chatEnvelope{Tool: toolGet, Source: "api", ReadAt: t.stamp(), Complete: true,
-		Identity: &chatIdentity{GVR: gvrString(k.GVR), Namespace: ns, Name: name, UID: o.UID, Generation: o.Generation}}
-	if vs := t.verdictsFor(ctx, k.GVR, &p.redacted); vs != nil {
+		Identity: &chatIdentity{GVR: gvrString(gvr), Namespace: ns, Name: name, UID: o.UID, Generation: o.Generation}}
+	if vs := t.verdictsFor(ctx, gvr, &p.redacted); vs != nil {
 		if v, ok := vs.byUID[o.UID]; ok {
 			data.Verdict = &v
 			if v.Generation != 0 && o.Generation != 0 && v.Generation != o.Generation {
@@ -1158,7 +1172,7 @@ func (t *chatTools) get(ctx context.Context, kind, group, ns, name string) ChatT
 			env.Errors = append(env.Errors, vs.problem)
 		}
 	}
-	if evs, _, complete, err := t.eventsFor(ctx, ns, k.Kind, name, o.UID, true, 10, p); err != nil {
+	if evs, _, complete, err := t.eventsFor(ctx, ns, o.Kind, name, o.UID, true, 10, p); err != nil {
 		env.Errors = append(env.Errors, "events: "+chatScrub(readError(err), &p.redacted))
 		env.Complete = false
 	} else {
@@ -1168,8 +1182,8 @@ func (t *chatTools) get(ctx context.Context, kind, group, ns, name string) ChatT
 		}
 	}
 	env.Data = data
-	ref := ChatRef{GVR: gvrString(k.GVR), Namespace: ns, Name: name, UID: o.UID}
-	return t.finish(env, ChatRead{Tool: toolGet, Target: k.Kind + " " + target, Outcome: "completed", Redacted: p.redacted, Refs: []ChatRef{ref}})
+	ref := ChatRef{GVR: gvrString(gvr), Namespace: ns, Name: name, UID: o.UID}
+	return t.finish(env, ChatRead{Tool: toolGet, Target: o.Kind + " " + target, Outcome: "completed", Redacted: p.redacted, Refs: []ChatRef{ref}})
 }
 
 type chatLogData struct {

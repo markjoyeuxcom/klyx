@@ -34,10 +34,19 @@ export type ChatState = {
   removed: number;
   active: boolean;
   exchanges: ChatExchange[];
+  notice?: string; // a recoverable problem with the last request
+  version: number; // orders replies: an older state is never applied over a newer one
 };
 
+// ChatSeed is what an Explain follow-up is about, as Explain targeted it.
+// The backend resolves and reads it, fenced by its UID.
+export type ChatSeed =
+  | { kind: "row"; task: string; part: string; uid: string }
+  | { kind: "object"; group: string; version: string; plural: string; namespace?: string; name: string; uid: string }
+  | { kind: "helm"; namespace: string; name: string };
+
 function failed(cluster: string, e: unknown): ChatState {
-  return { cluster, protected: false, trimmed: false, removed: 0, active: false, exchanges: [], error: e instanceof Error ? e.message : String(e) };
+  return { cluster, protected: false, trimmed: false, removed: 0, active: false, exchanges: [], version: 0, error: e instanceof Error ? e.message : String(e) };
 }
 
 export async function chatStart(cluster: string): Promise<ChatState> {
@@ -56,9 +65,9 @@ export async function chatState(cluster: string): Promise<ChatState> {
   }
 }
 
-export async function chatAsk(cluster: string, conversationId: string, question: string): Promise<ChatState> {
+export async function chatAsk(cluster: string, conversationId: string, question: string, seed?: ChatSeed): Promise<ChatState> {
   try {
-    return (await ChatService.Ask(cluster, conversationId, question)) as ChatState;
+    return (await ChatService.Ask(cluster, conversationId, question, (seed ?? null) as never)) as ChatState;
   } catch (e) {
     return failed(cluster, e);
   }

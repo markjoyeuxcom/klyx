@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import { IconX, IconMessageChatbot } from "@tabler/icons-react";
 import { useFleet, type ResourceRef } from "../store/fleet";
 import { chatAsk, chatClear, chatStart, chatState, chatStop, onChatRead, type ChatExchange, type ChatRead, type ChatRef, type ChatState } from "../bridge/chat";
@@ -10,7 +10,10 @@ import { useChat } from "./chatStore";
 // cluster, read-only, docked on the right. The backend owns the
 // conversation; the drawer sends only the question text.
 
-const QUESTION_MAX = 4096;
+// The backend caps a question at 4 KiB of UTF-8; the editor counts the same
+// bytes, so a valid-looking CJK question is never refused after sending.
+const QUESTION_MAX_BYTES = 4096;
+const utf8Bytes = (s: string) => new TextEncoder().encode(s).length;
 
 export function ChatDrawer() {
   const open = useChat((s) => s.open);
@@ -19,57 +22,91 @@ export function ChatDrawer() {
   return <ChatPanel key={cluster} cluster={cluster} />;
 }
 
+// refresh reads the conversation back; the store keeps it only if it is not
+// older than what the drawer shows.
+async function refresh(cluster: string): Promise<ChatState> {
+  const st = await chatState(cluster);
+  useChat.getState().apply(cluster, st);
+  logCalls(cluster, useChat.getState().states[cluster]);
+  return st;
+}
+
 function ChatPanel({ cluster }: { cluster: string }) {
   const st = useChat((s) => s.states[cluster]);
   const draft = useChat((s) => s.drafts[cluster] ?? "");
-  const live = useChat((s) => s.live);
-  const [pending, setPending] = useState<string | null>(null);
+  const followUp = useChat((s) => s.seeds[cluster]);
+  const asking = useChat((s) => s.asking[cluster]);
+  const cleared = useChat((s) => s.cleared[cluster] ?? false);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
-  const { setState, setDraft, addLive, clearLive, close } = useChat.getState();
+  const { setDraft, setSeed, setAsking, setCleared, close, apply } = useChat.getState();
 
   useEffect(() => {
     let alive = true;
     void (async () => {
-      let s = await chatState(cluster);
-      if (!s.conversationId && !s.error) s = await chatStart(cluster);
-      if (alive) setState(cluster, s);
+      const s = await refresh(cluster);
+      // Opening the drawer starts a conversation - unless the operator
+      // cleared it, which never starts another by itself.
+      if (alive && !s.conversationId && !s.error && !useChat.getState().cleared[cluster]) {
+        const started = await chatStart(cluster);
+        apply(cluster, started);
+      }
     })();
     inputRef.current?.focus();
     return () => {
       alive = false;
     };
-  }, [cluster, setState]);
+  }, [cluster, apply]);
 
   const conversationId = st?.conversationId;
   useEffect(() => {
     if (!conversationId) return;
-    return onChatRead(conversationId, (ex, r) => addLive(ex, r));
-  }, [conversationId, addLive]);
+    return onChatRead(conversationId, () => void refresh(cluster));
+  }, [conversationId, cluster]);
 
   useEffect(() => {
     endRef.current?.scrollIntoView?.({ block: "end" });
-  }, [st?.exchanges.length, pending, live]);
+  }, [st?.exchanges.length, asking]);
+
+  const bytes = utf8Bytes(draft);
+  const tooLong = bytes > QUESTION_MAX_BYTES;
 
   const ask = async () => {
     const q = draft.trim();
-    if (!q || !conversationId || pending) return;
+    if (!q || !conversationId || asking || tooLong) return;
+    const seed = followUp?.seed;
     setDraft(cluster, "");
-    setPending(q);
-    clearLive();
-    const next = await chatAsk(cluster, conversationId, q);
-    setPending(null);
-    clearLive();
-    setState(cluster, next);
-    logTurn(cluster, next);
+    setSeed(cluster, undefined);
+    setAsking(cluster, { conversationId, question: q });
+    const pending = chatAsk(cluster, conversationId, q, seed);
+    void refresh(cluster); // shows the question as soon as the backend has it
+    const next = await pending;
+    apply(cluster, next);
+    logCalls(cluster, useChat.getState().states[cluster]);
+    if (useChat.getState().asking[cluster]?.question === q) setAsking(cluster, undefined);
+    if (next.notice && !next.exchanges.some((e) => e.question === q) && !useChat.getState().drafts[cluster]) {
+      // A recoverable refusal (too long, one already running): the question
+      // comes back to the editor, and its follow-up target too.
+      setDraft(cluster, q);
+      if (seed && followUp) setSeed(cluster, followUp);
+    }
   };
 
-  const restart = async () => {
+  const clear = async () => {
+    if (!conversationId) return;
+    await chatClear(cluster, conversationId);
+    setCleared(cluster, true);
+    await refresh(cluster);
+  };
+
+  const start = async () => {
     if (conversationId) await chatClear(cluster, conversationId);
-    setState(cluster, await chatStart(cluster));
+    setCleared(cluster, false);
+    apply(cluster, await chatStart(cluster));
   };
 
-  const busy = pending !== null || !!st?.active;
+  const inFlight = st?.exchanges.find((e) => e.outcome === "");
+  const busy = !!asking || !!st?.active;
   const available = !!st && !st.error && !st.ended && !!conversationId;
 
   return (
@@ -105,34 +142,44 @@ function ChatPanel({ cluster }: { cluster: string }) {
             )}
           </div>
         )}
+        {st && !st.conversationId && !st.error && cleared && (
+          <div className="chat-notice" role="status">
+            The conversation was cleared.
+            <div><button type="button" className="l-btn" onClick={() => void start()}>Start a conversation</button></div>
+          </div>
+        )}
         {st && st.removed > 0 && <div className="chat-small">{st.removed} earlier exchange{st.removed === 1 ? " was" : "s were"} removed.</div>}
         {st?.trimmed && <div className="chat-small">Earlier messages are no longer sent to the model.</div>}
-        {st?.mode === "snapshot" && st.exchanges.length === 0 && !pending && (
+        {st?.mode === "snapshot" && st.exchanges.length === 0 && !asking && (
           <div className="chat-small">This provider answers from a snapshot Klyx assembles per question. Name objects as kind/name or namespace/name to bring them in.</div>
         )}
         {st?.exchanges.map((ex) => <Exchange key={ex.id} cluster={cluster} ex={ex} />)}
-        {pending && (
+        {asking && asking.conversationId === conversationId && !inFlight && !st?.exchanges.some((e) => e.question === asking.question) && (
           <div className="chat-exchange" aria-busy="true">
-            <div className="chat-q">{pending}</div>
-            <Reads reads={Object.values(live).flat()} open />
+            <div className="chat-q">{asking.question}</div>
             <div className="chat-small">Answering…</div>
           </div>
         )}
         {st?.ended && (
           <div className="chat-notice" role="status">
             {st.ended}
-            <div><button type="button" className="l-btn" onClick={() => void restart()}>Start a new conversation</button></div>
+            <div><button type="button" className="l-btn" onClick={() => void start()}>Start a new conversation</button></div>
           </div>
         )}
         <div ref={endRef} />
       </div>
 
       <div className="chat-input">
+        {followUp && (
+          <div className="chat-chips" data-testid="chat-followup">
+            <span className="l-chip">About {followUp.label}</span>
+            <button type="button" className="l-btn" aria-label="remove follow-up target" onClick={() => setSeed(cluster, undefined)}><IconX size={11} stroke={1.5} /></button>
+          </div>
+        )}
         <textarea
           ref={inputRef}
           aria-label="question"
           value={draft}
-          maxLength={QUESTION_MAX}
           disabled={!available}
           placeholder={available ? "Ask about this cluster… (Enter to send, Shift+Enter for a new line)" : ""}
           onChange={(e) => setDraft(cluster, e.target.value)}
@@ -143,11 +190,16 @@ function ChatPanel({ cluster }: { cluster: string }) {
             }
           }}
         />
+        {(tooLong || st?.notice) && (
+          <div className="chat-small" role="status" style={{ color: "var(--color-text-warning)" }} data-testid="chat-input-notice">
+            {tooLong ? `The question is ${bytes} bytes; the limit is ${QUESTION_MAX_BYTES} (UTF-8). Shorten it.` : st?.notice}
+          </div>
+        )}
         <div className="chat-actions">
           {busy && conversationId
             ? <button type="button" className="l-btn" onClick={() => void chatStop(cluster, conversationId)}>Stop</button>
-            : <button type="button" className="l-btn" disabled={!available || draft.trim() === ""} onClick={() => void ask()}>Ask</button>}
-          <button type="button" className="l-btn" disabled={!conversationId || busy} onClick={() => void restart()}>Clear</button>
+            : <button type="button" className="l-btn" disabled={!available || draft.trim() === "" || tooLong} onClick={() => void ask()}>Ask</button>}
+          <button type="button" className="l-btn" disabled={!conversationId || busy} onClick={() => void clear()}>Clear</button>
         </div>
       </div>
     </aside>
@@ -178,6 +230,7 @@ function Exchange({ cluster, ex }: { cluster: string; ex: ChatExchange }) {
       {ex.outcome === "failed" && <div className="chat-err">▲ {ex.error}</div>}
       {ex.note && <div className="chat-small">{ex.note}</div>}
       {ex.outcome === "cancelled" && <div className="chat-small">Stopped.</div>}
+      {ex.outcome === "" && <div className="chat-small" aria-busy="true">Answering…</div>}
     </div>
   );
 }
@@ -243,16 +296,27 @@ function openRef(cluster: string, ref: ChatRef): void {
   nav.openInstance(ref.namespace ?? "", ref.name);
 }
 
-// logTurn writes one Activity entry per turn naming each model call:
-// provider, model, mode and the tools it asked for - never question or
-// answer text.
-function logTurn(cluster: string, st: ChatState): void {
-  const ex = st.exchanges[st.exchanges.length - 1];
-  if (!ex) return;
-  const status = useFleet.getState().setActionStatus;
-  const calls = ex.calls.map((c) => `${providerLabel(c.provider)}${c.model ? ` (${c.model})` : ""}${c.tools && c.tools.length > 0 ? `: ${c.tools.join(", ")}` : ""}${c.outcome && c.outcome !== "completed" ? ` - ${c.outcome}` : ""}`).join("; ");
-  const redacted = ex.reads.reduce((n, r) => n + (r.redacted ?? 0), 0);
-  const what = `AI chat - ${cluster} · ${st.mode} · ${ex.calls.length} model call${ex.calls.length === 1 ? "" : "s"}${calls ? ` [${calls}]` : ""}${redacted ? ` · ${redacted} redacted` : ""}`;
-  if (ex.outcome === "answered") status({ kind: "success", message: what });
-  else if (ex.outcome === "failed") status({ kind: "error", message: `${what} - failed: ${ex.error ?? ""}` });
+// logCalls writes one Activity entry per attempted model call once it has
+// an outcome - completed, failed, cancelled or tools-unsupported - and
+// never twice. Metadata only: never question, answer or error text (Codex
+// review of 143dc6d); the conversation keeps the diagnostics.
+const logged = new Set<string>();
+
+export function logCalls(cluster: string, st: ChatState | undefined): void {
+  if (!st?.conversationId) return;
+  const log = useFleet.getState().logActivity;
+  for (const ex of st.exchanges) {
+    ex.calls.forEach((c, i) => {
+      if (c.outcome === "sent") return;
+      const k = `${st.conversationId}:${ex.id}:${i}`;
+      if (logged.has(k)) return;
+      logged.add(k);
+      if (logged.size > 2000) logged.delete(logged.values().next().value as string);
+      const tools = c.tools && c.tools.length > 0 ? ` · tools: ${c.tools.join(", ")}` : "";
+      log({
+        kind: c.outcome === "completed" ? "success" : "error",
+        message: `AI chat call - ${cluster} · ${c.mode} · ${providerLabel(c.provider)}${c.model ? ` (${c.model})` : ""}${tools} · ${c.outcome}`,
+      });
+    });
+  }
 }

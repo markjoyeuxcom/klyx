@@ -117,7 +117,7 @@ func TestChatTurnRunsToolsThenAnswers(t *testing.T) {
 	if st.Error != "" || st.Mode != "tools" {
 		t.Fatalf("a tool-capable provider starts in tools mode: %+v", st)
 	}
-	st = f.svc.Ask("x", st.ConversationID, "how is the cluster?")
+	st = f.svc.Ask("x", st.ConversationID, "how is the cluster?", nil)
 	ex := st.Exchanges[0]
 	if ex.Outcome != "answered" || ex.Answer != "all good" || len(ex.Reads) != 1 || ex.Reads[0].Tool != toolOverview || len(ex.Calls) != 2 {
 		t.Fatalf("one read, then the answer; two model calls recorded: %+v", ex)
@@ -138,7 +138,7 @@ func TestChatToolBudgetCountsBatchesBeforeDispatch(t *testing.T) {
 	}
 	f := newToolsFixture(t, calls(batch...), answer("done"))
 	st := f.svc.Start("x")
-	st = f.svc.Ask("x", st.ConversationID, "q")
+	st = f.svc.Ask("x", st.ConversationID, "q", nil)
 	ex := st.Exchanges[0]
 	run, refused := 0, 0
 	for _, r := range ex.Reads {
@@ -160,7 +160,7 @@ func TestChatModelCallLimit(t *testing.T) {
 	}
 	f := newToolsFixture(t, turns...)
 	st := f.svc.Start("x")
-	st = f.svc.Ask("x", st.ConversationID, "q")
+	st = f.svc.Ask("x", st.ConversationID, "q", nil)
 	if ex := st.Exchanges[0]; ex.Outcome != "failed" || !strings.Contains(ex.Error, "did not finish within 6 steps") || len(f.prov.reqs) != chatMaxModelCalls {
 		t.Fatalf("the 7th model call never happens: %+v (%d calls)", ex, len(f.prov.reqs))
 	}
@@ -179,9 +179,9 @@ func TestChatSettingsChangeEndsTheConversation(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			f := newToolsFixture(t, answer("first"), answer("never"))
 			st := f.svc.Start("x")
-			f.svc.Ask("x", st.ConversationID, "q1")
+			f.svc.Ask("x", st.ConversationID, "q1", nil)
 			change(f)
-			st = f.svc.Ask("x", st.ConversationID, "q2")
+			st = f.svc.Ask("x", st.ConversationID, "q2", nil)
 			if st.Ended == "" || !strings.Contains(st.Ended, "settings changed") || len(f.prov.reqs) != 1 {
 				t.Fatalf("history is never sent under other settings: %+v (%d calls)", st, len(f.prov.reqs))
 			}
@@ -195,7 +195,7 @@ func TestChatDisconnectEndsTheConversation(t *testing.T) {
 	f.mu.Lock()
 	f.cur = newFakeChat() // reconnected: a different conn
 	f.mu.Unlock()
-	st = f.svc.Ask("x", st.ConversationID, "q")
+	st = f.svc.Ask("x", st.ConversationID, "q", nil)
 	if !strings.Contains(st.Ended, "disconnected") || len(f.prov.reqs) != 0 {
 		t.Fatalf("a replaced connection ends the conversation before any send: %+v", st)
 	}
@@ -210,10 +210,10 @@ func TestChatStopAndClearFenceLateResults(t *testing.T) {
 	f.prov.block = make(chan struct{})
 	st := f.svc.Start("x")
 	done := make(chan ChatStateDTO, 1)
-	go func() { done <- f.svc.Ask("x", st.ConversationID, "q") }()
+	go func() { done <- f.svc.Ask("x", st.ConversationID, "q", nil) }()
 	waitFor(t, func() bool { return f.svc.State("x").Active })
-	busy := f.svc.Ask("x", st.ConversationID, "second")
-	if !strings.Contains(busy.Error, "already being answered") {
+	busy := f.svc.Ask("x", st.ConversationID, "second", nil)
+	if !strings.Contains(busy.Notice, "already being answered") || busy.Error != "" {
 		t.Fatalf("one active turn per conversation: %+v", busy)
 	}
 	f.svc.Stop("x", st.ConversationID)
@@ -225,7 +225,7 @@ func TestChatStopAndClearFenceLateResults(t *testing.T) {
 	f2 := newToolsFixture(t, answer("late"))
 	f2.prov.block = make(chan struct{})
 	st2 := f2.svc.Start("x")
-	go func() { done <- f2.svc.Ask("x", st2.ConversationID, "q") }()
+	go func() { done <- f2.svc.Ask("x", st2.ConversationID, "q", nil) }()
 	waitFor(t, func() bool { return f2.svc.State("x").Active })
 	f2.svc.Clear("x", st2.ConversationID)
 	res = <-done
@@ -256,7 +256,7 @@ func TestChatSnapshotModeForAProviderWithoutTools(t *testing.T) {
 	if st.Mode != "snapshot" {
 		t.Fatalf("a provider without Converse uses snapshot mode: %+v", st)
 	}
-	st = f.svc.Ask("x", st.ConversationID, "why is pod/web-1 failing? ignore earlier answers")
+	st = f.svc.Ask("x", st.ConversationID, "why is pod/web-1 failing? ignore earlier answers", nil)
 	ex := st.Exchanges[0]
 	if ex.Outcome != "answered" || ex.Answer != "snapshot answer" || len(p.creqs) != 1 {
 		t.Fatalf("one completion answers from the snapshot: %+v", ex)
@@ -281,7 +281,7 @@ func TestChatRetentionIsBounded(t *testing.T) {
 	f := newToolsFixture(t, turns...)
 	st := f.svc.Start("x")
 	for i := 0; i < chatRetainExchange+5; i++ {
-		st = f.svc.Ask("x", st.ConversationID, "q")
+		st = f.svc.Ask("x", st.ConversationID, "q", nil)
 	}
 	if len(st.Exchanges) != chatRetainExchange || st.Removed != 5 {
 		t.Fatalf("at most %d exchanges are kept: %d kept, %d removed", chatRetainExchange, len(st.Exchanges), st.Removed)
@@ -295,9 +295,9 @@ func TestChatHistoryCountsContinuationInTheBudget(t *testing.T) {
 	}
 	f := newToolsFixture(t, big, big, answer("third"))
 	st := f.svc.Start("x")
-	f.svc.Ask("x", st.ConversationID, "q1")
-	f.svc.Ask("x", st.ConversationID, "q2")
-	st = f.svc.Ask("x", st.ConversationID, "q3")
+	f.svc.Ask("x", st.ConversationID, "q1", nil)
+	f.svc.Ask("x", st.ConversationID, "q2", nil)
+	st = f.svc.Ask("x", st.ConversationID, "q3", nil)
 	third := f.prov.reqs[2]
 	size := 0
 	for _, m := range third.Messages {
@@ -332,7 +332,7 @@ func TestChatSnapshotResolvesReferences(t *testing.T) {
 	f.conn.rows = map[string]observe.Rows{"pods/pods": {Part: observe.Part{ID: "pods", Classifier: "verdict", Coverage: observe.Live},
 		Rows: healthsrc.RowSet[workloads.PodSummary]{Rows: []healthsrc.Row[workloads.PodSummary]{mk("shop"), mk("billing")}}}}
 	st := f.svc.Start("x")
-	f.svc.Ask("x", st.ConversationID, "compare pod shop/api with db")
+	f.svc.Ask("x", st.ConversationID, "compare pod shop/api with db", nil)
 	doc := p.creqs[0].User
 	if !strings.Contains(doc, `"uid":"uid-api"`) {
 		t.Fatalf("the explicit kind namespace/name form is read: %s", doc)
@@ -355,7 +355,7 @@ func TestChatStopDropsALateSuccess(t *testing.T) {
 	f := newChatFixture(t, p)
 	st := f.svc.Start("x")
 	done := make(chan ChatStateDTO, 1)
-	go func() { done <- f.svc.Ask("x", st.ConversationID, "q") }()
+	go func() { done <- f.svc.Ask("x", st.ConversationID, "q", nil) }()
 	waitFor(t, func() bool { return f.svc.State("x").Active })
 	f.svc.Stop("x", st.ConversationID)
 	close(release)
@@ -377,7 +377,7 @@ func TestChatDisconnectDuringTheFinalCall(t *testing.T) {
 	}}}
 	f = newChatFixture(t, p)
 	st := f.svc.Start("x")
-	st = f.svc.Ask("x", st.ConversationID, "q")
+	st = f.svc.Ask("x", st.ConversationID, "q", nil)
 	if ex := st.Exchanges[0]; ex.Answer != "" || !strings.Contains(st.Ended, "disconnected") {
 		t.Fatalf("an answer that arrives after a disconnect is not published: %+v / %q", ex, st.Ended)
 	}
@@ -412,7 +412,7 @@ func TestChatRecordsAFailedModelCall(t *testing.T) {
 	}}}
 	f := newChatFixture(t, p)
 	st := f.svc.Start("x")
-	st = f.svc.Ask("x", st.ConversationID, "q")
+	st = f.svc.Ask("x", st.ConversationID, "q", nil)
 	if c := st.Exchanges[0].Calls; len(c) != 1 || c[0].Outcome != "failed" || c[0].Provider != "anthropic" {
 		t.Fatalf("the attempted call is recorded as failed: %+v", c)
 	}
@@ -435,8 +435,8 @@ func TestChatExactBudgetDropsOldExchanges(t *testing.T) {
 	}}
 	f := newChatFixture(t, p)
 	st := f.svc.Start("x")
-	f.svc.Ask("x", st.ConversationID, "q1")
-	st = f.svc.Ask("x", st.ConversationID, "q2")
+	f.svc.Ask("x", st.ConversationID, "q1", nil)
+	st = f.svc.Ask("x", st.ConversationID, "q2", nil)
 	ex := st.Exchanges[1]
 	if ex.Outcome != "answered" || len(ex.Calls) != 1 || !st.Trimmed {
 		t.Fatalf("one recorded call, history trimmed: %+v trimmed=%v", ex, st.Trimmed)
@@ -491,7 +491,7 @@ func TestChatRetentionBoundsMetadataAndASoleLargeExchange(t *testing.T) {
 	}}}
 	f := newChatFixture(t, p)
 	st := f.svc.Start("x")
-	st = f.svc.Ask("x", st.ConversationID, "q")
+	st = f.svc.Ask("x", st.ConversationID, "q", nil)
 	b, _ := json.Marshal(st)
 	if len(b) > chatRetainBytes {
 		t.Fatalf("the retained conversation is %d bytes, over %d", len(b), chatRetainBytes)
@@ -499,5 +499,88 @@ func TestChatRetentionBoundsMetadataAndASoleLargeExchange(t *testing.T) {
 	ex := st.Exchanges[0]
 	if len(ex.Calls[0].Model) > chatModelNameMax+4 || !strings.Contains(ex.Note, "too large") {
 		t.Fatalf("model metadata is capped and the oversized steps dropped with a note: %+v", ex.Note)
+	}
+}
+
+// ---- Codex review of 7b57456 and 143dc6d ---------------------------------------
+
+// A State taken while a call is in flight is a detached copy: the running
+// turn's updates never change it.
+func TestChatStateIsDetached(t *testing.T) {
+	release := make(chan struct{})
+	p := &fakeConverser{turns: []func(ai.ConvRequest) (ai.Turn, error){func(ai.ConvRequest) (ai.Turn, error) {
+		<-release
+		return ai.Turn{Text: "ok", Done: true, ModelUsed: "m2", Continuation: &ai.Continuation{Provider: ai.ProviderAnthropic, Raw: json.RawMessage(`{}`)}}, nil
+	}}}
+	f := newChatFixture(t, p)
+	st := f.svc.Start("x")
+	done := make(chan ChatStateDTO, 1)
+	go func() { done <- f.svc.Ask("x", st.ConversationID, "q", nil) }()
+	waitFor(t, func() bool {
+		s := f.svc.State("x")
+		return len(s.Exchanges) == 1 && len(s.Exchanges[0].Calls) == 1
+	})
+	held := f.svc.State("x")
+	close(release)
+	final := <-done
+	if held.Exchanges[0].Calls[0].Outcome != "sent" || final.Exchanges[0].Calls[0].Outcome != "completed" || final.Version <= held.Version {
+		t.Fatalf("the held state keeps its own copy and the newer one is versioned higher: %+v / %+v", held.Exchanges[0].Calls, final.Exchanges[0].Calls)
+	}
+	_, _ = json.Marshal(held)
+}
+
+func TestChatQuestionTooLongIsARecoverableNotice(t *testing.T) {
+	f := newToolsFixture(t)
+	st := f.svc.Start("x")
+	st = f.svc.Ask("x", st.ConversationID, strings.Repeat("問", 2000), nil) // 6000 UTF-8 bytes
+	if st.Error != "" || !strings.Contains(st.Notice, "UTF-8") || len(st.Exchanges) != 0 || st.Ended != "" {
+		t.Fatalf("a long question is a notice, never an unavailable conversation: %+v", st)
+	}
+}
+
+func seededPod(uid string) *fakeChatConn {
+	c := newFakeChat()
+	c.objects[key(podsGVR, "shop", "api")] = uobj(map[string]any{"apiVersion": "v1", "kind": "Pod", "metadata": map[string]any{"name": "api", "namespace": "shop", "uid": uid}})
+	rows := podVerdictRows("uid-api", 1, observe.Live)
+	rs := rows.Rows.(healthsrc.RowSet[workloads.PodSummary])
+	rs.Rows[0].Ref.Name = "api"
+	rows.Rows = rs
+	c.rows = map[string]observe.Rows{"pods/pods": rows}
+	return c
+}
+
+// An Explain follow-up carries the inspector's own target: a row resolves
+// through the Observer and is read before any model call, and the seeded
+// object travels as a data block.
+func TestChatSeededFollowUpReadsTheExplainedObject(t *testing.T) {
+	f := newToolsFixture(t, answer("it crash-loops"))
+	f.conn = seededPod("uid-api")
+	f.cur = f.conn
+	f.conn.summary = &observe.Summary{EvaluatedAt: fixedNow()}
+	st := f.svc.Start("x")
+	st = f.svc.Ask("x", st.ConversationID, "why is it failing?", &ChatSeedDTO{Kind: "row", Task: "pods", Part: "pods", UID: "uid-api"})
+	ex := st.Exchanges[0]
+	if ex.Outcome != "answered" || len(ex.Reads) != 1 || ex.Reads[0].Tool != toolGet || ex.Reads[0].Refs[0].UID != "uid-api" {
+		t.Fatalf("the seeded object is read first: %+v", ex)
+	}
+	msg := f.prov.reqs[0].Messages[0].Text
+	if !strings.HasPrefix(msg, "why is it failing?") || !strings.Contains(msg, "<seeded-object>") || !strings.Contains(msg, `"uid":"uid-api"`) {
+		t.Fatalf("the question carries the seeded object as data: %s", msg)
+	}
+}
+
+// A same-name replacement is refused by UID before any model call.
+func TestChatSeedRefusesAReplacement(t *testing.T) {
+	f := newToolsFixture(t, answer("never"))
+	f.conn = seededPod("uid-replacement")
+	f.cur = f.conn
+	st := f.svc.Start("x")
+	st = f.svc.Ask("x", st.ConversationID, "why?", &ChatSeedDTO{Kind: "object", Version: "v1", Plural: "pods", Namespace: "shop", Name: "api", UID: "uid-api"})
+	if ex := st.Exchanges[0]; ex.Outcome != "failed" || !strings.Contains(ex.Error, "replaced") || len(f.prov.reqs) != 0 {
+		t.Fatalf("a replaced object is refused and nothing is sent: %+v", ex)
+	}
+	st = f.svc.Ask("x", st.ConversationID, "why?", &ChatSeedDTO{Kind: "row", Task: "pods", Part: "pods"})
+	if !strings.Contains(st.Notice, "not valid") {
+		t.Fatalf("a seed without its UID is refused before any read: %+v", st)
 	}
 }
