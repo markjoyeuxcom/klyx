@@ -343,7 +343,7 @@ A transient helper failure, such as a timeout, fails that call only. A new model
   - `permission_denials` empty;
   - no `errors`, `api_error_status`, `api_error`, `api_error_code`, `deferred_tool_use` or `structured_output`;
   - `safety_stops` absent or empty;
-  - `subagent_stats` absent, or counters in which nothing was counted: Claude Code 2.1.296 writes running totals on every result, all zero when no subagent ran (`spawned`, `requested.{background,foreground,unset}`, `killed.*`, `refused.*`, `by_type` and the rest). Only `0` leaves and objects of them pass; any other value revokes;
+  - `subagent_stats` absent (a top-level `null` counts as absent), or counters in which nothing was counted: Claude Code 2.1.296 writes running totals on every result, all zero when no subagent ran (`spawned`, `requested.{background,foreground,unset}`, `killed.*`, `refused.*`, `by_type` and the rest). Only `0` leaves and objects of them pass; any other value revokes;
   - every `modelUsage` key is the requested model;
   - `session_id` equals the init's;
   - `result` is non-empty and equals the concatenated text blocks of the assistant events.

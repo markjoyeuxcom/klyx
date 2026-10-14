@@ -240,6 +240,11 @@ Merged to `main` — do not re-add to the backlog:
   staleness, scheduler-effective headroom, numbered CRD reads,
   reserved log-stream slots and a discarded-answer error for Claude Code.
   Each slice Codex-reviewed; live-cluster smoke pending (§0)
+- v0.12.1 (same day): the owner's first real Claude Code Test reached the
+  final result and was refused as "subagent use". Claude Code 2.1.296 writes
+  all-zero subagent running totals on every result; the contract now accepts
+  zero counters only (read from the shipped binary). A full real-run capture
+  is still pending
 
 **2026-10-13 — AI providers and Explain everywhere (v0.11.0, spec
 `docs/superpowers/specs/2026-10-13-klyx-ai-providers-and-explain.md`):**
