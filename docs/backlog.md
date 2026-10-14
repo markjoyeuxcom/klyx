@@ -77,7 +77,11 @@ real-cluster smoke is on the v1.0.0 gate below.
       against fake vendors and a no-login check of the real Claude Code binary.
       Cluster chat (v0.13.0, spec 2026-10-14 §9 slice 6) joins this smoke on the
       kind lab: a tools conversation per API-key provider, the snapshot mode on
-      the Claude Code CLI, an Explain follow-up, a pod-log read, Stop and Clear
+      the Claude Code CLI, an Explain follow-up, a pod-log read, Stop and Clear.
+      Done so far (2026-10-14): one chat question on an Anthropic key (Haiku
+      5.5, tools mode: overview and attention reads), which found the chip
+      defects fixed in v0.13.1. After v0.13.1, the Claude Code Test also
+      admits the auto-updated build (2.1.300 passes the offline contract)
 - [ ] **Live-cluster smoke of the write paths** (nothing destructive committed
       blind): a Force:false apply against a Flux-owned object should 409 naming
       kustomize-controller; a create into a namespace a pruning unit deploys into should state that the unit leaves an untracked object alone (amber; red only for an object carrying the Argo app's tracking metadata - semantics corrected in the 2026-10-03 review remediation);
@@ -228,6 +232,16 @@ See `docs/brainstorm-questions.md` (Q16 pinned resources, etc.).
 ## Recently shipped (so it's not mistaken for open)
 
 Merged to `main` — do not re-add to the backlog:
+
+**2026-10-14 — Claude Code any build, chat chips (v0.13.1, notes
+`docs/release-notes-0.13.1.md`):**
+- The Claude Code CLI admits any build at or above 2.1.296 once Test has
+  checked it on this machine (owner decision after 2.1.299 and 2.1.300
+  shipped hours apart): tested builds in `claude-builds.json` beside
+  fleet.yaml, atomic with revocation, a broken build dropped whatever the
+  record's permissions. AI spec §1.5 revision 2026-10-14
+- Chat chips name their kind and say how many they hold back. Found by the
+  owner's first real-model chat run (Anthropic, Haiku 5.5, tools, kind lab)
 
 **2026-10-14 — Cluster chat (v0.13.0, spec
 `docs/superpowers/specs/2026-10-14-klyx-cluster-chat.md`, notes
