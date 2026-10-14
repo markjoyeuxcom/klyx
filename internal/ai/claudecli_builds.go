@@ -29,8 +29,10 @@ const claudeBuildsKept = 8
 // an auto-update pauses the CLI until Test once instead of until a Klyx
 // release. With a path it lives in a 0600 file beside fleet.yaml; without
 // one, in memory (tests, or a run with no config dir). A file that is
-// missing or cannot be read holds no builds: the answer is always "press
-// Test", never a build admitted by default.
+// missing, cannot be read, or cannot be written holds no builds: the answer
+// is always "press Test", never a build admitted by default - and a record
+// Klyx could not drop a broken build from is never trusted (Codex review of
+// b0b977b).
 type claudeBuildStore struct {
 	mu   sync.Mutex
 	path string
@@ -55,6 +57,12 @@ func (s *claudeBuildStore) loadLocked() []testedBuild {
 	if s.path == "" {
 		return append([]testedBuild(nil), s.mem...)
 	}
+	// Writable or nothing: a revocation must be able to reach this file.
+	w, err := os.OpenFile(s.path, os.O_WRONLY, 0)
+	if err != nil {
+		return nil
+	}
+	_ = w.Close()
 	b, err := os.ReadFile(s.path)
 	if err != nil {
 		return nil
@@ -75,6 +83,24 @@ func (s *claudeBuildStore) saveLocked(builds []testedBuild) error {
 	if err != nil {
 		return err
 	}
+	data := append(b, '\n')
+	if err := s.replaceLocked(data); err != nil {
+		// The directory refused the atomic replace (read-only, say): rewrite
+		// the existing file in place, which needs only the file to be
+		// writable. A torn write reads as no builds, which is safe.
+		if _, serr := os.Stat(s.path); serr != nil {
+			return err
+		}
+		if werr := os.WriteFile(s.path, data, 0o600); werr != nil {
+			return fmt.Errorf("%v; rewriting in place: %v", err, werr)
+		}
+	}
+	return nil
+}
+
+// replaceLocked writes data to a temp file beside the record and renames it
+// over the record.
+func (s *claudeBuildStore) replaceLocked(data []byte) error {
 	if err := os.MkdirAll(filepath.Dir(s.path), 0o700); err != nil {
 		return err
 	}
@@ -87,7 +113,7 @@ func (s *claudeBuildStore) saveLocked(builds []testedBuild) error {
 		_ = tmp.Close()
 		return err
 	}
-	if _, err := tmp.Write(append(b, '\n')); err != nil {
+	if _, err := tmp.Write(data); err != nil {
 		_ = tmp.Close()
 		return err
 	}
@@ -131,8 +157,8 @@ func (s *claudeBuildStore) record(t testedBuild) error {
 }
 
 // forget drops a build that broke the contract, so it needs Test again even
-// after a restart. A record that cannot be rewritten is reported; the
-// in-memory revocation holds for this run either way.
+// after a restart. A record that cannot be rewritten is reported, naming the
+// file to delete; the in-memory revocation holds for this run either way.
 func (s *claudeBuildStore) forget(sha string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -147,7 +173,7 @@ func (s *claudeBuildStore) forget(sha string) error {
 		return nil
 	}
 	if err := s.saveLocked(kept); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return err
+		return fmt.Errorf("Klyx could not drop this build from its tested record (%v); delete %s before restarting Klyx", err, s.path)
 	}
 	return nil
 }

@@ -436,6 +436,82 @@ func TestClaudeCLI_TestAdmitsANewBuild(t *testing.T) {
 	}
 }
 
+// A build distrusted while a passing Test is about to record it is never
+// written back: Test fails, and a restarted Klyx still needs Test (Codex
+// review of b0b977b).
+func TestClaudeCLI_DistrustDuringTestIsNeverRecorded(t *testing.T) {
+	t.Parallel() // each fake owns its HOME, temp dir and admission store
+	f := newFakeCLI(t)
+	path := filepath.Join(t.TempDir(), "claude-builds.json")
+	f.p.builds = &claudeBuildStore{path: path}
+	paused, resume := make(chan struct{}), make(chan struct{})
+	f.p.beforeRecord = func() { close(paused); <-resume }
+	done := make(chan error, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		_, err := f.p.Probe(ctx)
+		done <- err
+	}()
+	<-paused
+	// Another call on the same build breaks the contract meanwhile.
+	if err := f.sibling(tModel).distrust(exeIdentity{SHA256: f.sha}, "Claude Code attempted a tool"); err != nil {
+		t.Fatal(err)
+	}
+	close(resume)
+	if err := <-done; err == nil {
+		t.Fatal("a Test whose build was distrusted meanwhile must fail")
+	}
+	if _, ok := (&claudeBuildStore{path: path}).lookup(f.sha, fakePlatform); ok {
+		t.Fatal("a distrusted build was written back to the record")
+	}
+}
+
+// A distrust reaches the record on disk even when its directory refuses the
+// atomic replace, and a record Klyx could not write is never trusted.
+func TestClaudeCLI_DistrustSurvivesAReadOnlyDirectory(t *testing.T) {
+	t.Parallel() // each fake owns its HOME, temp dir and admission store
+	if os.Geteuid() == 0 {
+		t.Skip("permissions do not bind root")
+	}
+	f := newFakeCLI(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "claude-builds.json")
+	f.p.builds = &claudeBuildStore{path: path}
+	if err := f.p.builds.record(testedBuild{SHA256: f.sha, Version: fakeVersion, Platform: fakePlatform, TestedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+	events := cleanEvents()
+	events[0]["cwd"], events[0]["claude_code_version"] = "{{CWD}}", fakeVersion
+	events[2] = assistantEvent(map[string]any{"type": "tool_use", "id": "t1", "name": "Read", "input": map[string]any{"file_path": "/etc/hosts"}})
+	f.spec.Stream = string(stream(t, events))
+	f.write()
+	if _, err := f.complete(); !errors.Is(err, ErrUnexpectedOutput) || strings.Contains(err.Error(), "could not drop") {
+		t.Fatalf("the tool event revokes and the record is rewritten in place: %v", err)
+	}
+	if _, ok := (&claudeBuildStore{path: path}).lookup(f.sha, fakePlatform); ok {
+		t.Fatal("a restarted Klyx trusts the build that attempted a tool")
+	}
+
+	// A record that is not writable holds no builds at all.
+	if err := os.Chmod(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.p.builds.record(testedBuild{SHA256: f.sha, Version: fakeVersion, Platform: fakePlatform, TestedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o400); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := (&claudeBuildStore{path: path}).lookup(f.sha, fakePlatform); ok {
+		t.Fatal("a record Klyx could not revoke from is trusted")
+	}
+}
+
 // Test refuses a build older than the floor, or one whose version line is
 // not Claude Code's, and records nothing.
 func TestClaudeCLI_TestRefusesAnOldBuild(t *testing.T) {
@@ -796,7 +872,7 @@ func TestClaudeCLI_Status(t *testing.T) {
 // provider are.
 func (f *fakeCLI) sibling(model string) *claudeCLIProvider {
 	q := *f.p
-	q.model, q.afterHelpers, q.beforePublish, q.afterLaunch = model, nil, nil, nil
+	q.model, q.afterHelpers, q.beforePublish, q.afterLaunch, q.beforeRecord = model, nil, nil, nil, nil
 	return &q
 }
 

@@ -211,6 +211,11 @@ Codex's design review (274535f) required four changes before implementation. The
 - **An untested build** (a new install or an auto-update) runs nothing outside Test: "This Claude Code build (<file>, sha256 <short>) has not been checked by Klyx on this machine yet. Press Test in Settings > AI to check and admit it". Explain and chat show that reason.
 - **Test on an untested build** reads its version first, then runs every check below, the flag probe, the init check and the canary. A pass records the build; a recording failure fails the Test. A tested build is admitted automatically at the first call of a Klyx run, as before.
 - **A build that breaks the contract** (a tool or unknown event, a bad init, output over the cap, a canary that quotes a local file) is revoked and dropped from the record, so even a restarted Klyx needs Test before it runs again.
+  - Test's record write and a distrust run under the admission lock (admission, then record), so a distrust lands either before the write (Test fails) or after it (and removes the record). A broken build is never written back (Codex review of b0b977b).
+  - The record must be writable to be trusted: a record Klyx could not revoke from holds no builds. When the directory refuses the atomic replace, the file is rewritten in place; a removal that still fails is reported with the file to delete.
+- **Switching between tested builds** (editing the CLI path mid-run) is still an identity change for the running admission and needs Test once in that run. After a restart, the first call admits whichever tested build the path names.
+- **New `auth status` members** pass unless their name suggests policy. That filter is a compatibility heuristic, not a classifier; the known sign-in, first-party and doctor no-policy checks hold the line.
+- **New built-in plugins** pass in their exact built-in shape. Empty init lists do not prove a new built-in has no startup or memory behaviour; accepting one rests on Test's canary and this decision.
 
 **Pinned binary:**
 - Resolve the executable through symlinks. It must be a native Mach-O, ELF or PE file, and it is hashed.

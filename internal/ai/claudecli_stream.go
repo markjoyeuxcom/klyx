@@ -169,9 +169,11 @@ func checkInit(m map[string]json.RawMessage, w streamWant) (string, error) {
 // exactly {name, path "builtin", source "<name>@builtin"}, plus an optional
 // version, at most once. They ship inside the hashed build that Test
 // checked, and init must still report no tools, skills, commands, agents or
-// MCP servers, so a built-in contributes nothing the lockdown lets through.
-// Anything else - an installed or claude.ai-synced plugin, a plugin load
-// error or warning - revokes admission.
+// MCP servers. That does not prove a new built-in has no startup or memory
+// behaviour; accepting one rests on Test's canary and the owner's
+// any-build decision (spec §1.5, 2026-10-14). Anything else - an installed
+// or claude.ai-synced plugin, a plugin load error or warning - revokes
+// admission.
 func checkPlugins(m map[string]json.RawMessage) error {
 	for _, k := range []string{"plugin_errors", "plugin_warnings"} {
 		if !rawEmpty(m, k) {

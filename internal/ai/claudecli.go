@@ -196,6 +196,34 @@ func (s *claudeAdmissionStore) publish(epoch uint64, exe exeIdentity, account, a
 	return nil
 }
 
+// commit runs a passing Test's record write under the admission lock, and
+// only while that Test's admission still holds. distrust revokes and drops
+// the record under the same lock, so a distrust lands either before the
+// write (the Test fails) or after it (and removes the record) - a build that
+// broke the contract is never written back (Codex review of b0b977b). Lock
+// order: the admission lock, then the build record's.
+func (s *claudeAdmissionStore) commit(t callTicket, write func() error) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.validLocked(t); err != nil {
+		return err
+	}
+	return write()
+}
+
+// distrust revokes with reason and runs forget under the admission lock. A
+// forget that fails is added to the revocation's reason and returned.
+func (s *claudeAdmissionStore) distrust(reason string, forget func() error) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.revokeLocked(reason)
+	if err := forget(); err != nil {
+		s.revoked = reason + "; " + err.Error()
+		return err
+	}
+	return nil
+}
+
 // validLocked: the call's epoch is current and its binary, account and
 // configuration are the admitted ones.
 func (s *claudeAdmissionStore) validLocked(t callTicket) error {
@@ -362,11 +390,12 @@ type claudeCLIProvider struct {
 	// network (claudeOffline); tests replace it.
 	offline func(exe string, args []string) (string, []string)
 	// Tests only: afterHelpers runs after doctor, beforePublish before an
-	// admission is published, and afterLaunch between starting the CLI and
-	// the final checks.
+	// admission is published, afterLaunch between starting the CLI and the
+	// final checks, and beforeRecord before a passing Test records its build.
 	afterHelpers  func()
 	beforePublish func()
 	afterLaunch   func()
+	beforeRecord  func()
 }
 
 // NewClaudeCLI builds the Claude Code provider. Nothing runs until a call.
@@ -460,13 +489,20 @@ func untested(exe exeIdentity) error {
 		filepath.Base(exe.Path), exe.SHA256[:12])
 }
 
-// distrust revokes admission and drops the build from the tested record: a
-// build that broke the contract needs Test again, even after a restart. The
-// revocation holds for this run whether or not the record could be
-// rewritten.
-func (p *claudeCLIProvider) distrust(exe exeIdentity, reason string) {
-	p.store.revoke(reason)
-	_ = p.builds.forget(exe.SHA256)
+// distrust revokes admission and drops the build from the tested record,
+// atomically with any Test that would record it: a build that broke the
+// contract needs Test again, even after a restart. A record that could not
+// be rewritten is reported, never swallowed (Codex review of b0b977b).
+func (p *claudeCLIProvider) distrust(exe exeIdentity, reason string) error {
+	return p.store.distrust(reason, func() error { return p.builds.forget(exe.SHA256) })
+}
+
+// withDistrust is cause, plus a failure to drop the build from the record.
+func withDistrust(cause, ferr error) error {
+	if ferr == nil {
+		return cause
+	}
+	return fmt.Errorf("%w; %v", cause, ferr)
 }
 
 // checkPolicy is spec §1.5 checks 2 and 3: no managed-policy location and no
@@ -881,7 +917,7 @@ func (p *claudeCLIProvider) initCheck(ctx context.Context, exe exeIdentity) erro
 	if verr != nil {
 		var ce *cliContractError
 		if errors.As(verr, &ce) && ce.revoke {
-			p.distrust(exe, ce.msg)
+			return withDistrust(verr, p.distrust(exe, ce.msg))
 		}
 		return verr
 	}
@@ -1031,14 +1067,13 @@ func (p *claudeCLIProvider) run(ctx context.Context, t callTicket, req Request, 
 		}
 		return "", context.DeadlineExceeded
 	case r.stdoutOver:
-		p.distrust(exe, "Claude Code printed more output than its contract allows")
-		return "", contractBreak("output over the 4 MiB cap")
+		ferr := p.distrust(exe, "Claude Code printed more output than its contract allows")
+		return "", withDistrust(contractBreak("output over the 4 MiB cap"), ferr)
 	}
 	text, perr := parseClaudeStream(r.stdout, streamWant{Version: exe.Build.Version, Model: p.model, Cwd: dir})
 	var ce *cliContractError
 	if errors.As(perr, &ce) && ce.revoke {
-		p.distrust(exe, ce.msg)
-		return "", perr
+		return "", withDistrust(perr, p.distrust(exe, ce.msg))
 	}
 	if r.exitCode != 0 {
 		return "", fmt.Errorf("Claude Code exited with status %d: %s", r.exitCode, Scrub(string(r.stderr)))
@@ -1103,10 +1138,17 @@ func (p *claudeCLIProvider) Probe(ctx context.Context) (Result, error) {
 	}
 	if strings.Contains(text, token) || strings.Contains(text, marker) {
 		err := toolEvent("the Test answer quotes a local file")
-		p.distrust(t.exe, err.Error())
-		return Result{}, err
+		return Result{}, withDistrust(err, p.distrust(t.exe, err.Error()))
 	}
-	if err := p.builds.record(testedBuild{SHA256: t.exe.SHA256, Version: t.exe.Build.Version, Platform: t.exe.Build.platform(), TestedAt: time.Now().UTC()}); err != nil {
+	if p.beforeRecord != nil {
+		p.beforeRecord()
+	}
+	rec := testedBuild{SHA256: t.exe.SHA256, Version: t.exe.Build.Version, Platform: t.exe.Build.platform(), TestedAt: time.Now().UTC()}
+	if err := p.store.commit(t, func() error { return p.builds.record(rec) }); err != nil {
+		var r *CLIRefusedError
+		if errors.As(err, &r) {
+			return Result{}, err // revoked or replaced while Test ran
+		}
 		return Result{}, cliRefused("%v; Explain and chat stay paused until Test can record it", err)
 	}
 	return Result{Text: text, ModelUsed: p.model}, nil

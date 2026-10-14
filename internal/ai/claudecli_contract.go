@@ -40,7 +40,7 @@ const (
 	claudeOrgPolicyLine    = "Organization policy: not applicable to Pro and Max accounts"
 )
 
-func (c claudeBuild) platform() string    { return c.GOOS + "/" + c.GOARCH }
+func (c claudeBuild) platform() string { return c.GOOS + "/" + c.GOARCH }
 
 // doctorLines are the lines doctor must print exactly once each.
 func (c claudeBuild) doctorLines() []string {

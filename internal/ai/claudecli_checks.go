@@ -16,8 +16,10 @@ import (
 // claude.ai login (read on 2.1.296), and every one is required (spec §1.5
 // check 4). apiKeySource, forcedLoginMethod and allowedProviders are absent
 // by requirement - the last two come from admin policy. A newer build may add
-// members: one whose name speaks of policy or administration refuses, any
-// other is ignored (owner decision 2026-10-14: any build that passes Test).
+// members (owner decision 2026-10-14: any build that passes Test). The name
+// filter below is a compatibility heuristic, not a classifier of what a new
+// member means: the known sign-in, first-party and doctor no-policy checks
+// are what hold the line.
 var claudeAuthKeys = []string{
 	"loggedIn", "authMethod", "apiProvider", "analyticsDisabled", "projectsDirectory",
 	"configDirectory", "email", "orgId", "orgName", "subscriptionType",
@@ -29,8 +31,8 @@ type claudeAccount struct {
 	identity string
 }
 
-// claudeAuthPolicyKey matches a member name that could carry administrator
-// policy or a sign-in restriction.
+// claudeAuthPolicyKey matches a new member whose name suggests administrator
+// policy or a sign-in restriction; it refuses rather than guess.
 var claudeAuthPolicyKey = regexp.MustCompile(`(?i)polic|managed|forced|allowed|restrict|admin|enterprise|enforce|require`)
 
 // parseClaudeAuth checks `auth status` output against the known schema and
