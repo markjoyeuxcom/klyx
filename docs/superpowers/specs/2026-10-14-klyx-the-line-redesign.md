@@ -1205,7 +1205,10 @@ Each source below is new, and each declares where its claims come from.
 - Changes to write-path guards.
 - Phone or tablet layouts beyond "nothing breaks when narrow".
 
-## 14. Open decisions for the owner
+## 14. Owner decisions
+
+**Decided 2026-10-14:** the owner accepted every proposal below as written ("go with your proposals on all decisions"). They are now part of the spec.
+
 
 1. **The other themes.** Proposal:
    - Keep `light` and `dark` as "classic", flat through `var()` fallbacks.
