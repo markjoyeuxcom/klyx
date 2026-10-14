@@ -4,6 +4,8 @@ import (
 	"time"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+
+	"github.com/moomora/klyx/internal/kmeta"
 )
 
 // condTrue reports whether status.conditions has an entry of the given type with
@@ -68,6 +70,7 @@ func ParseGateway(u *unstructured.Unstructured) GatewayNode {
 	g.AcceptedCond = condOf(statusConds(u.Object), "Accepted")
 	g.ProgrammedCond = condOf(statusConds(u.Object), "Programmed")
 	g.Generation = u.GetGeneration()
+	g.Writes = kmeta.WritesOf(u)
 	g.Listeners = parseListeners(u.Object)
 	g.Addresses = parseAddresses(u.Object)
 	return g
@@ -151,6 +154,7 @@ func ParseGatewayRef(u *unstructured.Unstructured) GatewayRef {
 		Listeners: parseListeners(u.Object),
 		Stale:     stale, Generation: gen, ObservedGeneration: observed,
 		AcceptedCond: condOf(statusConds(u.Object), "Accepted"), ProgrammedCond: condOf(statusConds(u.Object), "Programmed"),
+		Writes: kmeta.WritesOf(u),
 	}
 }
 

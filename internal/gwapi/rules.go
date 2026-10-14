@@ -6,6 +6,7 @@ import (
 	discoveryv1 "k8s.io/api/discovery/v1"
 
 	"github.com/moomora/klyx/internal/health"
+	"github.com/moomora/klyx/internal/kmeta"
 )
 
 // The Gateway API lens rules, relocated verbatim from frontend
@@ -36,10 +37,11 @@ func condState(c Cond, generation int64) condEvidence {
 // status is unverified; a pending decision is progressing; an explicit
 // not-programmed is degraded; a last-observed negative is degraded "(last
 // observed)". Included = fault or degraded (GatewayApiView's attention count).
-func GatewayRule(accepted, programmed Cond, generation int64) health.NativeEval {
+// w dates the object's writes, for Since only.
+func GatewayRule(accepted, programmed Cond, generation int64, w kmeta.Writes) health.NativeEval {
 	role, label, by, current := gatewayRole(accepted, programmed, generation)
 	e := health.NativeEval{Included: role == health.Fault || role == health.Degraded, Role: role, Label: label}
-	gatewayDated(&e, by, current, accepted, programmed)
+	gatewayDated(&e, by, current, accepted, programmed, generation, w)
 	return e
 }
 
@@ -90,8 +92,11 @@ func gatewayRole(accepted, programmed Cond, generation int64) (health.Kind, stri
 // Programmed was reached once Accepted was True, so it began at the later of
 // the two (both must be known, or the earlier one would overstate the age).
 // A last-observed condition (an older generation) keeps its reason but no
-// Since: the role began when the spec changed, which nothing dates.
-func gatewayDated(e *health.NativeEval, by gatewayBasis, current bool, accepted, programmed Cond) {
+// Since: the role began when the spec changed, which nothing dates. And the
+// last-observed overlay itself ends without changing a condition's time when
+// the controller re-observes with the same status, so a current role is dated
+// only when kmeta.Undisturbed proves no overlay followed its time.
+func gatewayDated(e *health.NativeEval, by gatewayBasis, current bool, accepted, programmed Cond, generation int64, w kmeta.Writes) {
 	var c Cond
 	switch by {
 	case byAccepted:
@@ -116,7 +121,9 @@ func gatewayDated(e *health.NativeEval, by gatewayBasis, current bool, accepted,
 			since = accepted.LastTransitionTime
 		}
 	}
-	e.Since = &since
+	if kmeta.Undisturbed(generation, w, since) {
+		e.Since = &since
+	}
 }
 
 // lensRank is gatewayModel.RANK: progressing ranks BEFORE unknown here (the

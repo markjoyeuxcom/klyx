@@ -8,6 +8,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/moomora/klyx/internal/health"
+	"github.com/moomora/klyx/internal/kmeta"
 )
 
 // The Line §8.1: the parser keeps each condition's lastTransitionTime.
@@ -38,7 +39,7 @@ func TestCertificateRuleSinceAndReason(t *testing.T) {
 	ready := now.Add(-3 * time.Hour)
 	issuing := now.Add(-2 * time.Hour)
 
-	failed := Certificate{Ready: Failed, Reason: "DoesNotExist", Message: "secret missing", ReadySince: ready, IssuingChanged: issuing}
+	failed := Certificate{Ready: Failed, Reason: "DoesNotExist", Message: "secret missing", ReadySince: ready, IssuingChanged: issuing, Generation: 1}
 	if e := CertificateRule(failed, now); e.Role != health.Fault || e.Since == nil || !e.Since.Equal(issuing) || e.Reason != "DoesNotExist: secret missing" {
 		t.Errorf("failed after an issuance: the later Issuing time dates the role, got %+v", e)
 	}
@@ -46,7 +47,7 @@ func TestCertificateRuleSinceAndReason(t *testing.T) {
 	if e := CertificateRule(failed, now); e.Since == nil || !e.Since.Equal(ready) {
 		t.Errorf("failed, no Issuing condition: Ready's time, got %+v", e)
 	}
-	unknown := Certificate{Ready: Unknown, Reason: "Pending", ReadySince: ready}
+	unknown := Certificate{Ready: Unknown, Reason: "Pending", ReadySince: ready, Generation: 1}
 	if e := CertificateRule(unknown, now); e.Since == nil || e.Reason != "" {
 		t.Errorf("unknown with a Ready condition: dated, no reason, got %+v", e)
 	}
@@ -81,5 +82,49 @@ func TestIssuerRuleSinceAndReason(t *testing.T) {
 	}
 	if e := IssuerRule(Issuer{}); e.Since != nil {
 		t.Errorf("no Ready condition: no Since, got %+v", e)
+	}
+}
+
+// Codex review of 75b3990: Ready=False since 09:00; a spec edit at 10:00
+// makes the certificate Syncing...; cert-manager re-observes it at 11:00
+// without changing Ready (it keeps the transition time when the status is
+// unchanged). The fault that follows is not dated 09:00.
+func TestCertificateSinceAcrossASpecOverlay(t *testing.T) {
+	at := time.Date(2026, 10, 14, 9, 0, 0, 0, time.UTC)
+	c := Certificate{Ready: Failed, Reason: "DoesNotExist", ReadySince: at, Generation: 1, ObservedGeneration: 1}
+	if e := CertificateRule(c, at); e.Since == nil || !e.Since.Equal(at) {
+		t.Fatalf("never edited: dated, got %+v", e)
+	}
+	c.Generation, c.Stale = 2, true
+	c.Writes = kmeta.Writes{Main: at.Add(time.Hour), Status: at, Known: true}
+	if e := CertificateRule(c, at.Add(time.Hour)); e.Role != health.Progressing {
+		t.Fatalf("the overlay: progressing, got %+v", e)
+	}
+	c.Stale, c.ObservedGeneration = false, 2
+	c.Writes.Status = at.Add(2 * time.Hour)
+	if e := CertificateRule(c, at.Add(2*time.Hour)); e.Role != health.Fault || e.Since != nil || e.Reason == "" {
+		t.Fatalf("after the overlay: fault, undated, reason kept, got %+v", e)
+	}
+	// Edited before the failure and nothing written since: dated.
+	c.Writes = kmeta.Writes{Main: at.Add(-time.Hour), Status: at, Known: true}
+	if e := CertificateRule(c, at.Add(2*time.Hour)); e.Since == nil || !e.Since.Equal(at) {
+		t.Fatalf("no write after the failure: dated, got %+v", e)
+	}
+}
+
+// Codex review of 75b3990: a missing or invalid time leaves Since nil but
+// never drops a known failure reason.
+func TestCertificateReasonWithoutTime(t *testing.T) {
+	now := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC) // before the fixture's notAfter
+	for name, lt := range map[string]any{"missing": nil, "invalid": "yesterday"} {
+		u := certObj("False", "DoesNotExist", false)
+		if lt != nil {
+			u.Object["status"].(map[string]interface{})["conditions"].([]interface{})[0].(map[string]interface{})["lastTransitionTime"] = lt
+		}
+		u.SetGeneration(1)
+		e := CertificateRule(ParseCertificate(u), now)
+		if e.Role != health.Fault || e.Since != nil || e.Reason != "DoesNotExist: the cert is False" {
+			t.Errorf("%s time: got %+v", name, e)
+		}
 	}
 }

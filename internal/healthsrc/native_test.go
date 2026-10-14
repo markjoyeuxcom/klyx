@@ -21,8 +21,9 @@ import (
 
 func cr(apiVersion, kind, ns, name string, spec map[string]any, conds []any, status map[string]any) *unstructured.Unstructured {
 	meta := map[string]any{"name": name, "uid": "uid-" + name, "generation": int64(1),
-		"annotations":   map[string]any{"kubectl.kubernetes.io/last-applied-configuration": `{"huge":"json"}`, "team": "shop"},
-		"managedFields": []any{map[string]any{"manager": "kubectl", "operation": "Apply"}}}
+		"annotations": map[string]any{"kubectl.kubernetes.io/last-applied-configuration": `{"huge":"json"}`, "team": "shop"},
+		"managedFields": []any{map[string]any{"manager": "kubectl", "operation": "Apply", "time": "2026-10-14T09:00:00Z",
+			"fieldsType": "FieldsV1", "fieldsV1": map[string]any{"f:spec": map[string]any{}}}}}
 	if ns != "" {
 		meta["namespace"] = ns
 	}
@@ -141,8 +142,8 @@ func TestNativeTasksOnFixtures(t *testing.T) {
 	})
 }
 
-// The projection drops managedFields and the last-applied annotation and
-// nothing any parser reads.
+// The projection drops managedFields' field sets (keeping their times, which
+// date writes) and the last-applied annotation, and nothing any parser reads.
 func TestUnstructuredProjectionParity(t *testing.T) {
 	now := time.Now()
 	for _, obj := range nativeFixture(now) {
@@ -156,8 +157,13 @@ func TestUnstructuredProjectionParity(t *testing.T) {
 		if !reflect.DeepEqual(raw, before) {
 			t.Fatal("the projection mutated its input")
 		}
-		if proj.GetManagedFields() != nil || proj.GetAnnotations()["kubectl.kubernetes.io/last-applied-configuration"] != "" {
-			t.Fatal("the projection keeps the bulk it should drop")
+		if proj.GetAnnotations()["kubectl.kubernetes.io/last-applied-configuration"] != "" || len(proj.GetManagedFields()) != len(raw.GetManagedFields()) {
+			t.Fatal("the projection keeps the bulk it should drop, or loses write times")
+		}
+		for _, e := range proj.GetManagedFields() {
+			if e.FieldsV1 != nil || e.FieldsType != "" {
+				t.Fatal("the projection keeps managedFields' field sets")
+			}
 		}
 		var a, b any
 		switch raw.GetKind() {

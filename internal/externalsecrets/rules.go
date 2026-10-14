@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/moomora/klyx/internal/health"
+	"github.com/moomora/klyx/internal/kmeta"
 )
 
 // ExternalSecretRule is the External Secrets lens rule, relocated verbatim
@@ -32,30 +33,40 @@ func ExternalSecretRule(e ExternalSecret) health.NativeEval {
 	return ev
 }
 
-// secretDated fills Since and Reason (The Line §8.1). Stale is derived: the
-// role began at the first stale instant (or when Ready last turned True, if
-// later). The other roles are read from the Ready condition, so its
-// lastTransitionTime dates them - except a periodically refreshed Synced
-// secret: it may have been stale in between, and a refresh that ended that
-// leaves no time but refreshTime, so Ready's time would overstate the age.
+// secretDated fills Since and Reason (The Line §8.1); Reason never depends on
+// a time. Stale is derived: the role began at the first stale instant (or
+// when Ready last turned True, if later) - but the threshold is computed from
+// the CURRENT interval and policy, so it dates the role only when the spec
+// has not changed since (kmeta.SpecSettled): an interval shortened just now
+// made the secret stale now, not at the recomputed instant. Failed and
+// unknown are read from the Ready condition alone, so its time dates them.
+// Synced is dated by Ready only when it cannot have been stale in between: a
+// non-periodic secret whose spec has not changed since Ready's time (a
+// periodic one may have been stale, and a refresh that ended it leaves no
+// time but refreshTime; a policy switched from periodic just now ended a
+// stale role then).
 func secretDated(ev *health.NativeEval, e ExternalSecret) {
-	if e.State == Synced && e.Stale {
+	switch {
+	case e.State == Synced && e.Stale:
+		ev.Reason = health.CapReason("", fmt.Sprintf("refresh overdue: last refresh %s, interval %s",
+			e.RefreshTime.UTC().Format(time.RFC3339), e.RefreshInterval))
 		since := e.StaleAt()
 		if e.ReadySince.After(since) {
 			since = e.ReadySince
 		}
-		ev.Since = &since
-		ev.Reason = health.CapReason("", fmt.Sprintf("refresh overdue: last refresh %s, interval %s",
-			e.RefreshTime.UTC().Format(time.RFC3339), e.RefreshInterval))
+		if kmeta.SpecSettled(e.Generation, e.Writes, since) {
+			ev.Since = &since
+		}
 		return
-	}
-	if e.ReadySince.IsZero() || (ev.Role == health.OK && e.RefreshesPeriodically()) {
-		return
-	}
-	since := e.ReadySince
-	ev.Since = &since
-	if ev.Role != health.OK && ev.Role != health.Unknown {
+	case ev.Role == health.Fault || ev.Role == health.Degraded:
 		ev.Reason = health.CapReason(e.Reason, e.Message)
+	}
+	switch {
+	case e.ReadySince.IsZero():
+	case ev.Role == health.OK && (e.RefreshesPeriodically() || !kmeta.SpecSettled(e.Generation, e.Writes, e.ReadySince)):
+	default:
+		since := e.ReadySince
+		ev.Since = &since
 	}
 }
 

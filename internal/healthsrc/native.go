@@ -92,15 +92,22 @@ func Native(d NativeDeps) ([]observe.KindSpec, []observe.DomainSpec) {
 	return kinds, domains
 }
 
-// ProjectUnstructured drops what no parser reads: managedFields and the
-// kubectl last-applied annotation (often the largest field). It copies.
+// ProjectUnstructured drops what no parser reads: each managedFields entry's
+// field set (its manager, operation, subresource and time stay - they date
+// writes, kmeta.WritesOf) and the kubectl last-applied annotation (often the
+// largest field). It copies.
 func ProjectUnstructured(obj any) (any, error) {
 	u, ok := obj.(*unstructured.Unstructured)
 	if !ok {
 		return nil, errWant("*Unstructured", obj)
 	}
 	out := u.DeepCopy()
-	out.SetManagedFields(nil)
+	if mf := out.GetManagedFields(); len(mf) > 0 {
+		for i := range mf {
+			mf[i].FieldsType, mf[i].FieldsV1 = "", nil
+		}
+		out.SetManagedFields(mf)
+	}
 	if ann := out.GetAnnotations(); ann != nil {
 		if _, big := ann["kubectl.kubernetes.io/last-applied-configuration"]; big {
 			delete(ann, "kubectl.kubernetes.io/last-applied-configuration")

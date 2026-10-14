@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/moomora/klyx/internal/health"
+	"github.com/moomora/klyx/internal/kmeta"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
@@ -83,7 +84,7 @@ func TestParseAttemptedRevisionAndHelmHistory(t *testing.T) {
 // a role that is neither ok nor unknown.
 func TestRuleSinceAndReasonAreReadyBacked(t *testing.T) {
 	at := time.Date(2026, 10, 14, 9, 0, 0, 0, time.UTC)
-	base := Resource{Kind: KustomizationKind, Ready: Failed, Reason: "BuildFailed", Message: "kustomize build failed", ReadySince: at}
+	base := Resource{Kind: KustomizationKind, Ready: Failed, Reason: "BuildFailed", Message: "kustomize build failed", ReadySince: at, Generation: 1}
 	if e := ReconciliationRule(base); e.Role != health.Fault || e.Since == nil || !e.Since.Equal(at) || e.Reason != "BuildFailed: kustomize build failed" {
 		t.Fatalf("a failure is dated by Ready and carries its reason: %+v", e)
 	}
@@ -101,12 +102,50 @@ func TestRuleSinceAndReasonAreReadyBacked(t *testing.T) {
 			t.Errorf("%s: Ready's time does not date this role: %+v", name, e)
 		}
 	}
-	src := Source{Ready: Failed, Reason: "GitOperationFailed", Message: "auth", ReadySince: at}
+	src := Source{Ready: Failed, Reason: "GitOperationFailed", Message: "auth", ReadySince: at, Generation: 1}
 	if e := SourceRule(src); e.Since == nil || e.Reason != "GitOperationFailed: auth" {
 		t.Fatalf("a failing source is dated: %+v", e)
 	}
 	long := health.CapReason("R", string(make([]rune, 500)))
 	if n := len([]rune(long)); n != health.ReasonMax {
 		t.Fatalf("reason capped at %d runes, got %d", health.ReasonMax, n)
+	}
+}
+
+// Codex review of 75b3990: an overlay that ends without changing Ready (a
+// spec edit the controller re-observes, a suspend and resume) must not leave
+// Ready's older time dating the role that follows it.
+func TestRuleSinceNeedsAnUndisturbedReady(t *testing.T) {
+	at := time.Date(2026, 10, 14, 9, 0, 0, 0, time.UTC)
+	edited := Resource{Kind: KustomizationKind, Ready: Failed, Reason: "BuildFailed", ReadySince: at, Generation: 3}
+	if e := ReconciliationRule(edited); e.Since != nil || e.Reason == "" {
+		t.Errorf("edited, no managedFields: no Since, reason kept: %+v", e)
+	}
+	edited.Writes = kmeta.Writes{Main: at.Add(-time.Hour), Status: at, Known: true}
+	if e := ReconciliationRule(edited); e.Since == nil || !e.Since.Equal(at) {
+		t.Errorf("edited before Ready changed, no write since: dated: %+v", e)
+	}
+	// Failed at 09:00, edited at 10:00 (Syncing...), re-observed at 11:00
+	// with Ready still False and its time unchanged.
+	edited.Writes = kmeta.Writes{Main: at.Add(time.Hour), Status: at.Add(2 * time.Hour), Known: true}
+	if e := ReconciliationRule(edited); e.Since != nil || e.Reason == "" {
+		t.Errorf("an overlay ended after Ready's time: no Since: %+v", e)
+	}
+	// Re-observed without a spec edit after Ready's time (a status write
+	// alone): still a possible overlay end.
+	edited.Writes = kmeta.Writes{Main: at.Add(-time.Hour), Status: at.Add(time.Hour), Known: true}
+	if e := ReconciliationRule(edited); e.Since != nil {
+		t.Errorf("a status write after Ready's time: no Since: %+v", e)
+	}
+
+	// A source suspended and resumed after Ready's time.
+	src := Source{Ready: Failed, Reason: "GitOperationFailed", ReadySince: at, Generation: 2,
+		Writes: kmeta.Writes{Main: at.Add(time.Hour), Known: true}}
+	if e := SourceRule(src); e.Since != nil || e.Reason == "" {
+		t.Errorf("a resumed source: no Since, reason kept: %+v", e)
+	}
+	src.Writes = kmeta.Writes{Main: at.Add(-time.Hour), Status: at.Add(time.Hour), Known: true}
+	if e := SourceRule(src); e.Since == nil {
+		t.Errorf("a source's later status writes do not matter (no generation overlay): %+v", e)
 	}
 }

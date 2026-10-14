@@ -93,7 +93,7 @@ func evalGateways(cluster string) func(observe.Capture) observe.PartResult {
 		var rows []Row[gwapi.GatewayRef]
 		for _, u := range unstructuredOf(c.Objects[KindGateways]) {
 			g := gwapi.ParseGatewayRef(u)
-			it := nativeItem{gwapi.GatewayRule(g.AcceptedCond, g.ProgrammedCond, g.Generation), refOf(u, KindGateways)}
+			it := nativeItem{gwapi.GatewayRule(g.AcceptedCond, g.ProgrammedCond, g.Generation, g.Writes), refOf(u, KindGateways)}
 			items = append(items, it)
 			rows = append(rows, nativeRow(it, g))
 		}
@@ -161,7 +161,7 @@ func evalRoutes(cluster string) func(observe.Capture) observe.PartResult {
 				e := gwapi.RouteRule(rn, gw.Listeners)
 				uid := string(u.GetUID())
 				atts = append(atts, observe.Attachment{UID: uid, Namespace: u.GetNamespace(), Name: u.GetName(),
-					Parent: gw.Namespace + "/" + gw.Name, Role: e.Role.String(), Label: e.Label, Included: e.Included})
+					Parent: gw.Namespace + "/" + gw.Name, Role: e.Role.String(), Label: e.Label, Reason: e.Reason, Included: e.Included})
 				uidOf[uid] = &nativeRouteRef{ref: refOf(u, KindHTTPRoutes)}
 			}
 		}
@@ -197,7 +197,7 @@ func evalRoutes(cluster string) func(observe.Capture) observe.PartResult {
 			}
 			ref := uidOf[a.UID].ref
 			top = append(top, observe.Ref{Cluster: cluster, GVR: ref.gvr, Namespace: a.Namespace, Name: a.Name, UID: a.UID,
-				Parent: a.Parent, Role: a.Role, Label: a.Label, Generation: ref.generation, Route: TaskGateway})
+				Parent: a.Parent, Role: a.Role, Label: a.Label, Reason: a.Reason, Generation: ref.generation, Route: TaskGateway})
 		}
 		res := observe.PartResult{Native: &nc, Top: top}
 		if c.Rows {

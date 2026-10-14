@@ -20,15 +20,17 @@ type Attachment struct {
 	UID, Namespace, Name string
 	Parent               string // "namespace/name" of the parent
 	Role, Label          string
+	Reason               string // the rule's capped reason, when it names one
 	Included             bool
 }
 
 // Attached is one counted object reduced from its attachments: counted once
-// by UID, with its worst attachment's role and parent (ties: parent name),
-// Included when any attachment is.
+// by UID, with its worst attachment's role, label, reason and parent (ties:
+// parent name), Included when any attachment is.
 type Attached struct {
 	UID, Namespace, Name string
 	Role, Label, Parent  string
+	Reason               string
 	Included             bool
 	Attachments          []Attachment // sorted by parent
 }
@@ -59,7 +61,7 @@ func ReduceAttachments(atts []Attachment) []Attached {
 				worst = a
 			}
 		}
-		e.Role, e.Label, e.Parent = worst.Role, worst.Label, worst.Parent
+		e.Role, e.Label, e.Parent, e.Reason = worst.Role, worst.Label, worst.Parent, worst.Reason
 		out = append(out, *e)
 	}
 	sort.Slice(out, func(i, j int) bool {

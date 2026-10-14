@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/moomora/klyx/internal/health"
+	"github.com/moomora/klyx/internal/kmeta"
 )
 
 // The Line §8.1: condOf keeps lastTransitionTime.
@@ -18,6 +19,7 @@ func TestCondOfKeepsTransitionTime(t *testing.T) {
 func TestGatewayRuleSinceAndReason(t *testing.T) {
 	t1 := time.Date(2026, 10, 14, 9, 0, 0, 0, time.UTC)
 	t2 := t1.Add(time.Hour)
+
 	cond := func(status string, observed int64, at time.Time) Cond {
 		return Cond{Status: status, Reason: "R" + status, Message: "m", ObservedGeneration: observed, LastTransitionTime: at}
 	}
@@ -41,7 +43,13 @@ func TestGatewayRuleSinceAndReason(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			e := GatewayRule(c.accepted, c.programd, 2)
+			// Edited (generation 2) before t1, and the last status write is
+			// the dated transition itself: no overlay can have followed it.
+			settled := kmeta.Writes{Main: t1.Add(-time.Hour), Status: t1, Known: true}
+			if c.since != nil {
+				settled.Status = *c.since
+			}
+			e := GatewayRule(c.accepted, c.programd, 2, settled)
 			if e.Role != c.role || e.Reason != c.reason {
 				t.Fatalf("role %s reason %q, want %s %q", e.Role, e.Reason, c.role, c.reason)
 			}
@@ -66,5 +74,27 @@ func TestRouteRuleReasonWithoutSince(t *testing.T) {
 	}
 	if e := RouteRule(acceptedRoute(svc("a", 0, 0)), nil); e.Role != health.Fault || e.Since != nil || e.Reason != "" {
 		t.Errorf("an observed-only issue has no reason: got %+v", e)
+	}
+}
+
+// Codex review of 75b3990: Accepted=False at 09:00 (fault), the spec edited at
+// 10:00 (last observed, degraded), re-observed at 11:00 with the same status
+// and time. The fault that follows is not dated 09:00.
+func TestGatewaySinceAcrossALastObservedOverlay(t *testing.T) {
+	at := time.Date(2026, 10, 14, 9, 0, 0, 0, time.UTC)
+	c := Cond{Status: "False", Reason: "Invalid", ObservedGeneration: 1, LastTransitionTime: at}
+	if e := GatewayRule(c, Cond{}, 1, kmeta.Writes{}); e.Role != health.Fault || e.Since == nil || !e.Since.Equal(at) {
+		t.Fatalf("never edited: dated, got %+v", e)
+	}
+	w := kmeta.Writes{Main: at.Add(time.Hour), Status: at, Known: true}
+	if e := GatewayRule(c, Cond{}, 2, w); e.Role != health.Degraded || e.Since != nil {
+		t.Fatalf("the overlay: last observed, undated, got %+v", e)
+	}
+	c.ObservedGeneration, w.Status = 2, at.Add(2*time.Hour)
+	if e := GatewayRule(c, Cond{}, 2, w); e.Role != health.Fault || e.Since != nil || e.Reason == "" {
+		t.Fatalf("after the overlay: fault, undated, reason kept, got %+v", e)
+	}
+	if e := GatewayRule(c, Cond{}, 2, kmeta.Writes{}); e.Since != nil {
+		t.Fatalf("edited, no managedFields: undated, got %+v", e)
 	}
 }

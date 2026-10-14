@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/moomora/klyx/internal/health"
+	"github.com/moomora/klyx/internal/kmeta"
 )
 
 // Expired: a known NotAfter at or before now, at the second granularity the
@@ -42,32 +43,37 @@ func CertificateRule(c Certificate, now time.Time) health.NativeEval {
 	return e
 }
 
-// certificateDated fills Since and Reason (The Line §8.1). Expiry is derived:
-// the role began at notAfter. A role read from the Ready condition (failed,
+// certificateDated fills Since and Reason (The Line §8.1); Reason never
+// depends on a time. Expiry is derived: the role began at notAfter, and it
+// overrides every other role. A role read from the Ready condition (failed,
 // degraded, unknown) began at Ready's lastTransitionTime, or at the Issuing
 // condition's if later - a failed issuance flips Issuing to False while Ready
-// stays False - so the later time never overstates the age. An unobserved
-// spec or an issuance in flight is not what either time records. Ready=True
-// keeps Since nil too: a successful renewal removes the Issuing condition
-// without a timestamp, so Ready's time would overstate how long the
-// certificate has read Ready rather than Issuing.
+// stays False - so the later time never overstates the age. Even then an
+// unobserved spec (Syncing...) can have followed it and ended without changing
+// either condition, so the time dates the role only when kmeta.Undisturbed
+// proves no such overlay. An issuance in flight is not what either time
+// records. Ready=True keeps Since nil too: a successful renewal removes the
+// Issuing condition without a timestamp, so Ready's time would overstate how
+// long the certificate has read Ready rather than Issuing.
 func certificateDated(e *health.NativeEval, c Certificate, expired bool) {
-	switch {
-	case expired:
-		at := time.Unix(c.NotAfter.Unix(), 0)
+	if expired {
+		at := time.Unix(c.NotAfter.Unix(), 0).UTC()
 		e.Since = &at
 		e.Reason = health.CapReason("Expired", "notAfter "+at.UTC().Format(time.RFC3339))
 		return
-	case e.Role == health.Progressing || e.Role == health.OK || c.ReadySince.IsZero():
+	}
+	if e.Role == health.Fault || e.Role == health.Degraded {
+		e.Reason = health.CapReason(c.Reason, c.Message)
+	}
+	if e.Role == health.Progressing || e.Role == health.OK || c.ReadySince.IsZero() {
 		return
 	}
 	since := c.ReadySince
 	if c.IssuingChanged.After(since) {
 		since = c.IssuingChanged
 	}
-	e.Since = &since
-	if e.Role != health.Unknown {
-		e.Reason = health.CapReason(c.Reason, c.Message)
+	if kmeta.Undisturbed(c.Generation, c.Writes, since) {
+		e.Since = &since
 	}
 }
 

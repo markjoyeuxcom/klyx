@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+
+	"github.com/moomora/klyx/internal/kmeta"
 )
 
 type Kind string
@@ -75,6 +77,9 @@ type Resource struct {
 	// first, at most HistoryMax entries; nil for a Kustomization. Only an
 	// entry whose Status is "deployed" is deployment evidence.
 	History []HelmHistory
+	// Writes date the object's latest spec and status writes (managedFields):
+	// whether Ready's time still dates the role (kmeta.Undisturbed).
+	Writes kmeta.Writes
 }
 
 // HelmHistory is one HelmRelease status.history snapshot.
@@ -261,6 +266,7 @@ func common(u *unstructured.Unstructured, kind Kind) Resource {
 	// the ready STATE last flipped - see the field doc for why that is the
 	// honest best Flux offers (no per-apply timestamp exists in status).
 	r.ReadySince = readySince(u)
+	r.Writes = kmeta.WritesOf(u)
 	return r
 }
 
@@ -342,6 +348,10 @@ type Source struct {
 	// lastTransitionTime. Zero when absent.
 	ArtifactUpdated time.Time
 	ReadySince      time.Time
+	// Generation and Writes date spec changes (a suspension is one): whether
+	// Ready's time still dates the role (kmeta.SpecSettled).
+	Generation int64
+	Writes     kmeta.Writes
 }
 
 // refPrecedence is the order a source's spec.ref fields win in, per kind.
@@ -367,6 +377,8 @@ func ParseSource(u *unstructured.Unstructured) Source {
 		s.ArtifactUpdated, _ = time.Parse(time.RFC3339, t)
 	}
 	s.ReadySince = readySince(u)
+	s.Generation = u.GetGeneration()
+	s.Writes = kmeta.WritesOf(u)
 	return s
 }
 

@@ -3,6 +3,7 @@ package healthsrc
 import (
 	"context"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -164,5 +165,29 @@ func TestEndpointSliceProjectionParity(t *testing.T) {
 	}
 	if proj[0].Endpoints[0].Addresses != nil {
 		t.Fatal("the projection keeps addresses it should drop")
+	}
+}
+
+// Codex review of 75b3990: the worst attachment's reason - scrubbed by the
+// rule - reaches the reduced route and its Top ref.
+func TestRouteReasonReachesTop(t *testing.T) {
+	r := httpRoute("web", []string{"a", "b"}, "web", map[string]string{"b": "False"})
+	parents := r.Object["status"].(map[string]any)["parents"].([]any)
+	bad := parents[1].(map[string]any)["conditions"].([]any)[0].(map[string]any)
+	bad["reason"], bad["message"] = "NotAllowedByListeners", "denied token=secret-value"
+	c := observe.Capture{Rows: true, Objects: map[string][]any{
+		KindHTTPRoutes: {r}, KindGateways: {gw("a", "True"), gw("b", "True")},
+		KindGatewayServices: {serviceMeta("web")}, KindGatewayEndpoints: {slice("web", true)},
+	}}
+	res := evalRoutes("test")(c)
+	if len(res.Top) != 1 || res.Top[0].Parent != "infra/b" {
+		t.Fatalf("bad fixture: %+v", res.Top)
+	}
+	if got := res.Top[0].Reason; !strings.HasPrefix(got, "NotAllowedByListeners: denied ") || strings.Contains(got, "secret-value") {
+		t.Fatalf("Top reason: got %q", got)
+	}
+	rows := res.Rows.(RowSet[observe.Attached]).Rows
+	if len(rows) != 1 || rows[0].Data.Reason != res.Top[0].Reason {
+		t.Fatalf("the reduced row carries the same reason: %+v", rows)
 	}
 }
