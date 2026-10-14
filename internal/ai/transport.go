@@ -141,7 +141,19 @@ func readBody(resp *http.Response, secrets ...string) ([]byte, error) {
 		return nil, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("AI endpoint returned HTTP %d: %s", resp.StatusCode, Scrub(string(body), secrets...))
+		return nil, &HTTPStatusError{Code: resp.StatusCode, Body: Scrub(string(body), secrets...)}
 	}
 	return body, nil
+}
+
+// HTTPStatusError is a non-2xx response: the status and a scrubbed body. It
+// lets a caller positively identify one failure (a server that does not
+// support tools) without parsing message text.
+type HTTPStatusError struct {
+	Code int
+	Body string
+}
+
+func (e *HTTPStatusError) Error() string {
+	return fmt.Sprintf("AI endpoint returned HTTP %d: %s", e.Code, e.Body)
 }
