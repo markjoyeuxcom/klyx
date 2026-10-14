@@ -22,6 +22,8 @@ type KarpenterPoolDTO struct {
 	MemLimit   *float64 `json:"memLimit"`
 	MemUsed    *float64 `json:"memUsed"`
 	Nodes      int      `json:"nodes"`
+	// ReadySince is the Ready condition's transition time (unix), 0 when absent.
+	ReadySince int64 `json:"readySinceUnix,omitempty"`
 	// Rule is the relocated lens rule (1c addendum §2).
 	Rule RuleDTO `json:"rule"`
 }
@@ -48,6 +50,8 @@ type KarpenterClaimDTO struct {
 	// Rule is the relocated lens rule (1c addendum §2).
 	Rule    RuleDTO `json:"rule"`
 	Created int64   `json:"createdUnix"` // creation time (unix): the launch-deadline anchor
+	// ReadySince is the Ready condition's transition time (unix), 0 when absent.
+	ReadySince int64 `json:"readySinceUnix,omitempty"`
 }
 
 // KarpenterEventDTO is one row of the disruption feed.
@@ -135,7 +139,7 @@ func karpenterPoolFields(p karpenter.NodePool) KarpenterPoolDTO {
 	return KarpenterPoolDTO{
 		Name: p.Name, Ready: p.Ready, Reason: p.Reason, Message: p.Message, Weight: p.Weight,
 		CPULimit: p.CPULimit, CPUUsed: p.CPUUsed, MemLimit: p.MemLimit, MemUsed: p.MemUsed,
-		Nodes: p.Nodes,
+		Nodes: p.Nodes, ReadySince: unixOrZero(p.ReadySince),
 	}
 }
 
@@ -152,6 +156,6 @@ func karpenterClaimFields(cl karpenter.NodeClaim) KarpenterClaimDTO {
 		FailingType: cl.FailingType, FailingStatus: cl.FailingStatus, FailingReason: cl.FailingReason, FailingMessage: cl.FailingMessage,
 		Drifted: cl.Drifted, Consolidatable: cl.Consolidatable,
 		CapacityType: cl.CapacityType, InstanceType: cl.InstanceType, AgeSeconds: cl.AgeSeconds,
-		Created: cl.Created.Unix(),
+		Created: cl.Created.Unix(), ReadySince: unixOrZero(cl.ReadySince),
 	}
 }

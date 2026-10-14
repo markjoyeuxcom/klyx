@@ -58,6 +58,9 @@ type ExternalSecret struct {
 	// stopped refreshing even though Ready may still describe the last good
 	// sync. Distinct from Failed (which is a reported error).
 	Stale bool
+	// ReadySince is the Ready condition's lastTransitionTime, zero when
+	// absent (The Line §8.1).
+	ReadySince time.Time
 }
 
 // Store is a SecretStore or ClusterSecretStore's validation state. Namespace
@@ -73,6 +76,8 @@ type Store struct {
 	// Provider is the single key under spec.provider (azurekv, vault, aws,
 	// gcpsm, kubernetes, ...) - display-only.
 	Provider string
+	// ReadySince is the Ready condition's lastTransitionTime, zero when absent.
+	ReadySince time.Time
 }
 
 // RefreshPolicyPeriodic is ESO's default refresh policy: re-sync every
@@ -86,6 +91,12 @@ const RefreshPolicyPeriodic = "Periodic"
 // know) makes no time-based promise.
 func (e ExternalSecret) RefreshesPeriodically() bool {
 	return (e.RefreshPolicy == "" || e.RefreshPolicy == RefreshPolicyPeriodic) && e.RefreshInterval > 0
+}
+
+// StaleAt is the first instant a periodically refreshed secret is stale:
+// staleness is now - refreshTime > 2x interval.
+func (e ExternalSecret) StaleAt() time.Time {
+	return e.RefreshTime.Add(staleGraceFactor*e.RefreshInterval + time.Nanosecond)
 }
 
 // esoDefaultRefreshInterval mirrors ESO's API default for
@@ -102,6 +113,7 @@ const staleGraceFactor = 2
 func ParseExternalSecret(u *unstructured.Unstructured, now time.Time) ExternalSecret {
 	e := ExternalSecret{UID: string(u.GetUID()), Namespace: u.GetNamespace(), Name: u.GetName()}
 	e.State, e.Reason, e.Message = readyFromConditions(u)
+	e.ReadySince = readySince(u)
 
 	e.StoreName, _, _ = unstructured.NestedString(u.Object, "spec", "secretStoreRef", "name")
 	kind, _, _ := unstructured.NestedString(u.Object, "spec", "secretStoreRef", "kind")
@@ -149,6 +161,7 @@ func parseRefreshInterval(u *unstructured.Unstructured) time.Duration {
 func ParseStore(u *unstructured.Unstructured) Store {
 	s := Store{UID: string(u.GetUID()), Kind: Kind(u.GetKind()), Namespace: u.GetNamespace(), Name: u.GetName()}
 	s.State, s.Reason, s.Message = readyFromConditions(u)
+	s.ReadySince = readySince(u)
 	if prov, ok, _ := unstructured.NestedMap(u.Object, "spec", "provider"); ok {
 		for k := range prov {
 			if s.Provider == "" || k < s.Provider {
@@ -184,6 +197,30 @@ func readyFromConditions(u *unstructured.Unstructured) (SyncState, string, strin
 		message, _ = cm["message"].(string)
 	}
 	return state, reason, message
+}
+
+// readySince is the Ready condition's lastTransitionTime, zero when the
+// condition or its time is absent or invalid. The last match wins, as in
+// readyFromConditions.
+func readySince(u *unstructured.Unstructured) time.Time {
+	conds, _, _ := unstructured.NestedSlice(u.Object, "status", "conditions")
+	var since time.Time
+	for _, c := range conds {
+		cm, ok := c.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if t, _ := cm["type"].(string); t != "Ready" {
+			continue
+		}
+		since = time.Time{}
+		if lt, ok := cm["lastTransitionTime"].(string); ok {
+			if ts, err := time.Parse(time.RFC3339, lt); err == nil {
+				since = ts
+			}
+		}
+	}
+	return since
 }
 
 // parseTime reads an RFC3339 timestamp at the given path, zero on missing/invalid.

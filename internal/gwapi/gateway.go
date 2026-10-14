@@ -1,6 +1,10 @@
 package gwapi
 
-import "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+import (
+	"time"
+
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+)
 
 // condTrue reports whether status.conditions has an entry of the given type with
 // status "True".
@@ -39,6 +43,11 @@ func condOf(conds []interface{}, condType string) Cond {
 			out.ObservedGeneration = og
 		case float64:
 			out.ObservedGeneration = int64(og)
+		}
+		if lt, ok := m["lastTransitionTime"].(string); ok {
+			if ts, err := time.Parse(time.RFC3339, lt); err == nil {
+				out.LastTransitionTime = ts
+			}
 		}
 		return out
 	}

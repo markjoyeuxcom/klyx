@@ -38,7 +38,37 @@ func CertificateRule(c Certificate, now time.Time) health.NativeEval {
 	if !expired && !c.NotAfter.IsZero() {
 		e.Next = health.At(time.Unix(c.NotAfter.Unix(), 0))
 	}
+	certificateDated(&e, c, expired)
 	return e
+}
+
+// certificateDated fills Since and Reason (The Line §8.1). Expiry is derived:
+// the role began at notAfter. A role read from the Ready condition (failed,
+// degraded, unknown) began at Ready's lastTransitionTime, or at the Issuing
+// condition's if later - a failed issuance flips Issuing to False while Ready
+// stays False - so the later time never overstates the age. An unobserved
+// spec or an issuance in flight is not what either time records. Ready=True
+// keeps Since nil too: a successful renewal removes the Issuing condition
+// without a timestamp, so Ready's time would overstate how long the
+// certificate has read Ready rather than Issuing.
+func certificateDated(e *health.NativeEval, c Certificate, expired bool) {
+	switch {
+	case expired:
+		at := time.Unix(c.NotAfter.Unix(), 0)
+		e.Since = &at
+		e.Reason = health.CapReason("Expired", "notAfter "+at.UTC().Format(time.RFC3339))
+		return
+	case e.Role == health.Progressing || e.Role == health.OK || c.ReadySince.IsZero():
+		return
+	}
+	since := c.ReadySince
+	if c.IssuingChanged.After(since) {
+		since = c.IssuingChanged
+	}
+	e.Since = &since
+	if e.Role != health.Unknown {
+		e.Reason = health.CapReason(c.Reason, c.Message)
+	}
 }
 
 // IssuerRule is the issuers view rule, relocated verbatim (issuerHealth; the
@@ -54,6 +84,15 @@ func IssuerRule(i Issuer) health.NativeEval {
 		e.Role, e.Label = health.Unknown, "Unknown"
 	default:
 		e.Role, e.Label = health.Degraded, string(i.Ready)
+	}
+	// Every issuer role is read from the Ready condition alone, so Ready's
+	// lastTransitionTime dates it (The Line §8.1).
+	if !i.ReadySince.IsZero() {
+		since := i.ReadySince
+		e.Since = &since
+	}
+	if e.Role != health.OK && e.Role != health.Unknown {
+		e.Reason = health.CapReason(i.Reason, i.Message)
 	}
 	return e
 }

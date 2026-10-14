@@ -95,6 +95,8 @@ type IssuerDTO struct {
 	Ready      string `json:"ready"`
 	Reason     string `json:"reason"`
 	Message    string `json:"message"`
+	// ReadySince is the Ready condition's transition time (unix), 0 when absent.
+	ReadySince int64 `json:"readySinceUnix,omitempty"`
 	// Rule is the relocated lens rule (1c addendum §2).
 	Rule RuleDTO `json:"rule"`
 }
@@ -108,13 +110,14 @@ func toIssuerDTO(i certmanager.Issuer) IssuerDTO {
 // issuerFields is the pure field conversion (no rule; see certificateFields).
 func issuerFields(i certmanager.Issuer) IssuerDTO {
 	return IssuerDTO{
-		UID:       i.UID,
-		Kind:      string(i.Kind),
-		Namespace: i.Namespace,
-		Name:      i.Name,
-		Ready:     string(i.Ready),
-		Reason:    i.Reason,
-		Message:   i.Message,
+		UID:        i.UID,
+		Kind:       string(i.Kind),
+		Namespace:  i.Namespace,
+		Name:       i.Name,
+		Ready:      string(i.Ready),
+		Reason:     i.Reason,
+		Message:    i.Message,
+		ReadySince: unixOrZero(i.ReadySince),
 	}
 }
 

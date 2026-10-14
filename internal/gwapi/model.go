@@ -4,6 +4,8 @@
 // unstructured. Policy attachment is M5-b (the Policies fields stay empty here).
 package gwapi
 
+import "time"
+
 // Topology is the per-Gateway data path.
 type Topology struct {
 	Gateway         GatewayNode
@@ -21,10 +23,12 @@ type Topology struct {
 // Cond is one status condition as observed. Status is "True", "False",
 // "Unknown", or "" when no controller has written the condition - a boolean
 // cannot tell a rejection from a status nobody has reported yet.
-// ObservedGeneration is the generation the condition describes.
+// ObservedGeneration is the generation the condition describes;
+// LastTransitionTime is when its status last changed (zero when absent).
 type Cond struct {
 	Status, Reason, Message string
 	ObservedGeneration      int64
+	LastTransitionTime      time.Time
 }
 
 type GatewayNode struct {

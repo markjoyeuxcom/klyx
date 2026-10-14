@@ -52,6 +52,11 @@ type Certificate struct {
 	Stale              bool
 	Generation         int64
 	ObservedGeneration int64
+	// ReadySince is the Ready condition's lastTransitionTime and
+	// IssuingChanged the Issuing condition's, zero when absent: the times
+	// that can date the rule's role (The Line §8.1).
+	ReadySince     time.Time
+	IssuingChanged time.Time
 }
 
 // ParseCertificate extracts a Certificate's issuance state from a watched CR.
@@ -69,6 +74,8 @@ func ParseCertificate(u *unstructured.Unstructured) Certificate {
 	c.NotBefore = parseTime(u, "status", "notBefore")
 	c.NotAfter = parseTime(u, "status", "notAfter")
 	c.RenewalTime = parseTime(u, "status", "renewalTime")
+	c.ReadySince = conditionSince(u, "Ready")
+	c.IssuingChanged = conditionSince(u, "Issuing")
 	return c
 }
 
@@ -82,12 +89,15 @@ type Issuer struct {
 	Ready     ReadyState
 	Reason    string
 	Message   string
+	// ReadySince is the Ready condition's lastTransitionTime, zero when absent.
+	ReadySince time.Time
 }
 
 // ParseIssuer extracts an Issuer/ClusterIssuer's Ready state from a watched CR.
 func ParseIssuer(u *unstructured.Unstructured) Issuer {
 	i := Issuer{UID: string(u.GetUID()), Kind: Kind(u.GetKind()), Namespace: u.GetNamespace(), Name: u.GetName()}
 	i.Ready, i.Reason, i.Message = readyFromConditions(u)
+	i.ReadySince = conditionSince(u, "Ready")
 	return i
 }
 
@@ -165,6 +175,30 @@ func readyFromConditions(u *unstructured.Unstructured) (ReadyState, string, stri
 		}
 	}
 	return state, reason, message
+}
+
+// conditionSince is the named condition's lastTransitionTime, zero when the
+// condition or its time is absent or invalid. The last match wins, as in
+// readyFromConditions.
+func conditionSince(u *unstructured.Unstructured, ctype string) time.Time {
+	conds, _, _ := unstructured.NestedSlice(u.Object, "status", "conditions")
+	var since time.Time
+	for _, c := range conds {
+		cm, ok := c.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if t, _ := cm["type"].(string); t != ctype {
+			continue
+		}
+		since = time.Time{}
+		if lt, ok := cm["lastTransitionTime"].(string); ok {
+			if ts, err := time.Parse(time.RFC3339, lt); err == nil {
+				since = ts
+			}
+		}
+	}
+	return since
 }
 
 // parseTime reads an RFC3339 timestamp at the given path, zero on missing/invalid.

@@ -43,6 +43,9 @@ type NodePool struct {
 	MemLimit *float64
 	MemUsed  *float64
 	Nodes    int // NodeClaims currently attributed to this pool (assembled by the caller)
+	// ReadySince is the Ready condition's lastTransitionTime, zero when
+	// absent (The Line §8.1).
+	ReadySince time.Time
 }
 
 // NodeClaim is one claim's lifecycle row. FailingCondition names the first
@@ -65,12 +68,16 @@ type NodeClaim struct {
 	InstanceType   string
 	AgeSeconds     int
 	Created        time.Time // creation timestamp: the launch-deadline boundary
+	// ReadySince is the Ready condition's lastTransitionTime, zero when
+	// absent (The Line §8.1).
+	ReadySince time.Time
 }
 
 type condition struct {
 	Status  string
 	Reason  string
 	Message string
+	Since   time.Time // lastTransitionTime, zero when absent or invalid
 }
 
 func conditionsOf(u *unstructured.Unstructured) map[string]condition {
@@ -88,7 +95,13 @@ func conditionsOf(u *unstructured.Unstructured) map[string]condition {
 		st, _ := m["status"].(string)
 		reason, _ := m["reason"].(string)
 		msg, _ := m["message"].(string)
-		out[t] = condition{Status: st, Reason: reason, Message: msg}
+		var since time.Time
+		if lt, ok := m["lastTransitionTime"].(string); ok {
+			if ts, err := time.Parse(time.RFC3339, lt); err == nil {
+				since = ts
+			}
+		}
+		out[t] = condition{Status: st, Reason: reason, Message: msg, Since: since}
 	}
 	return out
 }
@@ -125,6 +138,7 @@ func ParseNodePool(u *unstructured.Unstructured) NodePool {
 	ready, found := conds[condReady]
 	out.Ready = readyString(ready, found)
 	out.Reason, out.Message = ready.Reason, ready.Message
+	out.ReadySince = ready.Since
 
 	out.Weight, _, _ = unstructured.NestedInt64(u.Object, "spec", "weight")
 
@@ -161,6 +175,7 @@ func ParseNodeClaim(u *unstructured.Unstructured, now time.Time) NodeClaim {
 	conds := conditionsOf(u)
 	ready, found := conds[condReady]
 	out.Ready = readyString(ready, found)
+	out.ReadySince = ready.Since
 
 	if out.Ready != "ready" {
 		// A confirmed False link is the diagnosis; failing that, the first

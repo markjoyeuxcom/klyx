@@ -37,39 +37,86 @@ func condState(c Cond, generation int64) condEvidence {
 // not-programmed is degraded; a last-observed negative is degraded "(last
 // observed)". Included = fault or degraded (GatewayApiView's attention count).
 func GatewayRule(accepted, programmed Cond, generation int64) health.NativeEval {
-	role, label := gatewayRole(accepted, programmed, generation)
-	return health.NativeEval{Included: role == health.Fault || role == health.Degraded, Role: role, Label: label}
+	role, label, by, current := gatewayRole(accepted, programmed, generation)
+	e := health.NativeEval{Included: role == health.Fault || role == health.Degraded, Role: role, Label: label}
+	gatewayDated(&e, by, current, accepted, programmed)
+	return e
 }
 
-func gatewayRole(accepted, programmed Cond, generation int64) (health.Kind, string) {
+// gatewayBasis is the condition a Gateway role was read from.
+type gatewayBasis int
+
+const (
+	byNothing    gatewayBasis = iota // absent, pending or syncing: no condition dates the role
+	byAccepted                       // Accepted decided it
+	byProgrammed                     // Programmed decided it, once Accepted was True
+)
+
+// gatewayRole returns the role, its label, the condition it was read from,
+// and whether that condition is current (observed for this generation).
+func gatewayRole(accepted, programmed Cond, generation int64) (health.Kind, string, gatewayBasis, bool) {
 	a := condState(accepted, generation)
 	switch a.status {
 	case "absent":
-		return health.Unknown, "no status reported"
+		return health.Unknown, "no status reported", byNothing, false
 	case "Unknown":
-		return health.Progressing, "acceptance pending"
+		return health.Progressing, "acceptance pending", byNothing, false
 	case "False":
 		if a.stale {
-			return health.Degraded, "not accepted (last observed)"
+			return health.Degraded, "not accepted (last observed)", byAccepted, false
 		}
-		return health.Fault, "not accepted"
+		return health.Fault, "not accepted", byAccepted, true
 	}
 	p := condState(programmed, generation)
 	switch p.status {
 	case "absent":
-		return health.Unknown, "programming not reported"
+		return health.Unknown, "programming not reported", byNothing, false
 	case "Unknown":
-		return health.Progressing, "programming"
+		return health.Progressing, "programming", byNothing, false
 	case "False":
 		if p.stale {
-			return health.Degraded, "not programmed (last observed)"
+			return health.Degraded, "not programmed (last observed)", byProgrammed, false
 		}
-		return health.Degraded, "not programmed"
+		return health.Degraded, "not programmed", byProgrammed, true
 	}
 	if a.stale || p.stale {
-		return health.Progressing, "syncing"
+		return health.Progressing, "syncing", byNothing, false
 	}
-	return health.OK, "programmed"
+	return health.OK, "programmed", byProgrammed, true
+}
+
+// gatewayDated fills Since and Reason (The Line §8.1). A role read from a
+// current Accepted condition began at its lastTransitionTime; one read from
+// Programmed was reached once Accepted was True, so it began at the later of
+// the two (both must be known, or the earlier one would overstate the age).
+// A last-observed condition (an older generation) keeps its reason but no
+// Since: the role began when the spec changed, which nothing dates.
+func gatewayDated(e *health.NativeEval, by gatewayBasis, current bool, accepted, programmed Cond) {
+	var c Cond
+	switch by {
+	case byAccepted:
+		c = accepted
+	case byProgrammed:
+		c = programmed
+	default:
+		return
+	}
+	if e.Role != health.OK {
+		e.Reason = health.CapReason(c.Reason, c.Message)
+	}
+	since := c.LastTransitionTime
+	if !current || since.IsZero() {
+		return
+	}
+	if by == byProgrammed {
+		if accepted.LastTransitionTime.IsZero() {
+			return
+		}
+		if accepted.LastTransitionTime.After(since) {
+			since = accepted.LastTransitionTime
+		}
+	}
+	e.Since = &since
 }
 
 // lensRank is gatewayModel.RANK: progressing ranks BEFORE unknown here (the
@@ -79,6 +126,7 @@ var lensRank = map[health.Kind]int{health.Fault: 0, health.Degraded: 1, health.P
 type routeIssue struct {
 	role  health.Kind
 	short string
+	cond  *Cond // the condition that raised it, nil for observed issues
 }
 
 // RouteRule is one route attachment's verdict (route x parent Gateway):
@@ -88,7 +136,10 @@ type routeIssue struct {
 // (the lens has no route predicate of its own yet).
 func RouteRule(rn RouteNode, listeners []Listener) health.NativeEval {
 	var issues []routeIssue
-	add := func(role health.Kind, short string) { issues = append(issues, routeIssue{role, short}) }
+	add := func(role health.Kind, short string) { issues = append(issues, routeIssue{role: role, short: short}) }
+	addCond := func(role health.Kind, short string, c Cond) {
+		issues = append(issues, routeIssue{role: role, short: short, cond: &c})
+	}
 	if !rn.ParentFound {
 		add(health.Unknown, "no status for this Gateway")
 	} else {
@@ -96,9 +147,9 @@ func RouteRule(rn RouteNode, listeners []Listener) health.NativeEval {
 		switch a.status {
 		case "False":
 			if a.stale {
-				add(health.Degraded, "not accepted (last observed)")
+				addCond(health.Degraded, "not accepted (last observed)", rn.AcceptedCond)
 			} else {
-				add(health.Fault, "not accepted")
+				addCond(health.Fault, "not accepted", rn.AcceptedCond)
 			}
 		case "Unknown":
 			add(health.Progressing, "acceptance pending")
@@ -109,9 +160,9 @@ func RouteRule(rn RouteNode, listeners []Listener) health.NativeEval {
 		switch rr.status {
 		case "False":
 			if rr.stale {
-				add(health.Degraded, "unresolved refs (last observed)")
+				addCond(health.Degraded, "unresolved refs (last observed)", rn.ResolvedRefsCond)
 			} else {
-				add(health.Fault, "unresolved refs")
+				addCond(health.Fault, "unresolved refs", rn.ResolvedRefsCond)
 			}
 		case "Unknown":
 			add(health.Progressing, "refs pending")
@@ -182,7 +233,7 @@ func RouteRule(rn RouteNode, listeners []Listener) health.NativeEval {
 				if named {
 					short = b.Name + ": " + short
 				}
-				found = append(found, routeIssue{role, short})
+				found = append(found, routeIssue{role: role, short: short})
 			}
 			for _, is := range found {
 				if len(rc) > 1 && is.role == health.Fault && faults < len(rc) {
@@ -201,7 +252,14 @@ func RouteRule(rn RouteNode, listeners []Listener) health.NativeEval {
 			worst = is
 		}
 	}
-	return health.NativeEval{Included: worst.role == health.Fault || worst.role == health.Degraded, Role: worst.role, Label: worst.short}
+	e := health.NativeEval{Included: worst.role == health.Fault || worst.role == health.Degraded, Role: worst.role, Label: worst.short}
+	// A route keeps Since nil: its role is the worst of several issues, some
+	// observed only (endpoints, weights), so no one condition's time dates it
+	// (The Line §8.1). A condition-raised worst issue still names its reason.
+	if worst.cond != nil {
+		e.Reason = health.CapReason(worst.cond.Reason, worst.cond.Message)
+	}
+	return e
 }
 
 // BackendIssue is one backend's own verdict: OK when Klyx found nothing
