@@ -34,7 +34,7 @@
   - the position glyph.
 - **A healthy object carries no mark.**
 
-Revised after Codex's design review of 4c654fc (nine findings, folded into §§0-14).
+Revised after Codex's design reviews of 4c654fc (nine findings) and 3fdd4f7 (ten findings), all folded into §§0-14.
 
 ## 0. What exists
 
@@ -146,7 +146,7 @@ Revised after Codex's design review of 4c654fc (nine findings, folded into §§0
 | `--line-sunk` | `#0A0E10` | `#E6E8E2` | list wells, inputs, the board |
 | `--line-hair` | `rgba(203,216,222,.08)` | `rgba(20,30,36,.10)` | default border |
 | `--line-hair-2` | `rgba(203,216,222,.15)` | `rgba(20,30,36,.18)` | emphasised border |
-| `--line-control` | `rgba(203,216,222,.34)` | `rgba(20,30,36,.42)` | control outline (≥ 3:1) |
+| `--line-control` | `#66747B` | `#737E79` | control outline (solid, ≥ 3.4:1 on every surface) |
 | `--line-ink-1` | `#E3E8E9` | `#131B20` | primary text |
 | `--line-ink-2` | `#A6B1B6` | `#44515A` | secondary text |
 | `--line-ink-3` | `#7F8C93` | `#56636B` | tertiary text, meta |
@@ -157,8 +157,8 @@ Revised after Codex's design review of 4c654fc (nine findings, folded into §§0
 | `--line-route-wash` | `rgba(121,194,228,.10)` | `rgba(26,97,144,.08)` | selected row |
 | `--line-danger` | `#F0565B` | `#B42A30` | fault |
 | `--line-caution` | `#E9A23B` | `#8A5100` | look at |
-| `--line-danger-line`, `-wash` | danger at .55 / .10 alpha | danger at .45 / .07 alpha | fault border / fill |
-| `--line-caution-line`, `-wash` | caution at .50 / .10 alpha | caution at .40 / .08 alpha | look-at border / fill |
+| `--line-danger-line`, `-wash` | danger at .55 / .10 alpha | danger at .45 / .07 alpha | decorative fault tint only |
+| `--line-caution-line`, `-wash` | caution at .50 / .10 alpha | caution at .40 / .08 alpha | decorative look-at tint only |
 | `--line-diff-add`, `-add-bg` | `#7FCB9B`, `rgba(127,203,155,.10)` | `#1F6B3A`, `rgba(31,107,58,.08)` | added line |
 | `--line-diff-del`, `-del-bg` | `#F08A8D`, `rgba(240,138,141,.10)` | `#9E2B30`, `rgba(158,43,48,.07)` | removed line |
 | `--line-lift` | 1px ring plus `0 24px 60px` black at .5 | 1px ring plus two soft layers | overlays only |
@@ -166,7 +166,9 @@ Revised after Codex's design review of 4c654fc (nine findings, folded into §§0
 **Contrast** (`contrast.test.ts`, both themes; measured on the values above):
 - **Text at 4.5:1 or better on ground, raised and sunk:** ink-1 to ink-3, danger, caution, route, and the diff foregrounds.
 - **Route-ink on route: 4.5:1 or better.**
-- **Meaningful strokes at 3:1 or better on the surfaces they are drawn on:** track, route, danger and caution lines, and control outlines.
+- **Meaningful strokes at 3:1 or better on the surfaces they are drawn on**, measured on the composited colour. They are track, route, control, and the solid `--line-danger` and `--line-caution`.
+  - **A stroke that carries meaning is always solid:** a fault outline, a look-at outline, a control boundary, or a track.
+  - The alpha `-line` and `-wash` tokens are decoration. They always sit beside an `Aspect` and text that carry the meaning.
 - **Exempt:** ink-4 (disabled only) and the hairlines (decoration).
 
 **Semantic mapping:**
@@ -253,42 +255,46 @@ Revised after Codex's design review of 4c654fc (nine findings, folded into §§0
 
 ### 3.2 What is compared
 
-**The comparison unit (v1).** Klyx compares units it can identify by type:
+**Comparison units:**
 - **Flux Kustomizations** whose `sourceRef` is a GitRepository.
-- **Argo CD Applications** with a single `spec.source` that is a Git repo (no `chart`).
-- **Argo CD multi-source Applications** (`spec.sources`): each source is its own unit, paired with `status.sync.revisions[i]`. The parser keeps every pair (§8.1).
-- **Chart comparisons** are a second key type, never mixed with Git keys:
-  - Flux HelmReleases compare by chart: the key is the chart source plus the chart name, and the revision is `status.history[0].chartVersion`.
-  - A differing `configDigest` adds the flag "values differ".
-  - Argo Helm-chart sources compare the same way, by `targetRevision` as the chart version.
-- **Not compared,** and listed on the station as exclusions with counts:
-  - Kustomizations sourced from an OCIRepository or a Bucket. Their digests are shown, but not ordered.
-  - Revision strings Klyx cannot parse.
+- **Argo CD Applications:** each Git source is its own unit, whether the Application has one `spec.source` or several `spec.sources`.
+- **Chart units:** Flux HelmReleases, and Argo Helm-chart sources. They form a second key type, never mixed with Git keys.
+- **Not compared,** and listed per station with counts:
+  - Kustomizations sourced from an OCIRepository or a Bucket (their digests are shown, unordered);
+  - revisions Klyx cannot parse.
 
-**The revision identity** is a typed triple, `{repo, ref, sha}`:
-- **Flux:**
-  - `repo` is the normalised `spec.url`: scheme, user, `.git` and the host's case removed.
-  - `ref` is the GitRepository's `spec.ref`: its kind (branch, tag, semver or commit) and name.
-  - The fetched sha is parsed from `status.artifact.revision` (`<ref>@sha1:<hex>`, `sha1:<hex>`, or `sha256` forms).
-  - The applied and attempted shas are parsed from `lastAppliedRevision` and `lastAttemptedRevision`.
-- **Argo:**
-  - `repo` is the normalised `spec.source.repoURL`.
-  - `ref` is `targetRevision`, kept as written, with its kind "argo-ref".
-  - The applied sha is `status.sync.revision`.
-- **A string Klyx cannot parse** is "unrecognised revision", and that unit is not compared.
+**Each unit carries three revision facts,** never merged (§8.1):
 
-**The comparison key** is `(repo, ref)`.
-- Units compare only when their keys are equal. Flux and Argo units can share a key only when the ref names match exactly and the kinds are compatible: a Flux branch `main` against an Argo `main`, never against a tag `main`.
+| Fact | Flux Kustomization | Argo source | Chart unit |
+|---|---|---|---|
+| **applied** (deployment evidence) | `lastAppliedRevision` | the latest `status.history[]` entry, paired with the source(s) recorded *in that entry* | Flux: the newest `status.history[]` entry whose status is `deployed`. Argo: the latest history entry's chart revision |
+| **attempted** | `lastAttemptedRevision` | `status.operationState.syncResult.revision(s)` while an operation is running or has failed, with its phase | Flux: `history[0]` when its status is not `deployed`. Argo: the running operation |
+| **compared** (desired, not deployed) | the source's fetched artifact | `status.sync.revision(s)`, paired with `status.sync.comparedTo.source(s)`, never with the current `spec.sources` order | Argo: `targetRevision`, which may be a range such as `1.*`; never treated as a version |
+
+- **Pairing:** Argo revisions are always paired with the source definitions recorded in the same status block or history entry. A source reorder or edit since then is flagged "source changed since last deployment".
+- **"Never applied":** a unit with no applied fact (no history, or none deployed) is eligible but never applied.
+- **Chart units** compare the chart version (`chartVersion` for Flux, the history entry's revision for Argo). A differing Flux `configDigest` adds "values differ".
+
+**Revision identity:**
+- Git units carry `{repo, ref, sha}`:
+  - `repo` is the normalised URL (scheme, user, `.git` and host case removed), used for matching only (§7).
+  - The sha is parsed from the `<ref>@sha1:<hex>`, `sha1:<hex>` and `sha256` forms.
+- **The ref keeps its kind:**
+  - **Flux:** branch, tag, semver or commit, from `spec.ref`.
+  - **Argo:** `targetRevision` is "unqualified" unless it is fully qualified (`refs/heads/…`, `refs/tags/…`) or a sha. Argo can resolve a bare `main` to a tag of that name, so an unqualified Argo ref never shares a key with a Flux branch.
+- Chart units carry `{chart source, chart name, version}`.
+
+**The comparison key:**
+- `(repo, ref kind, ref name)` for Git units.
+- `(chart source, chart name)` for chart units.
+- Units compare only within one key.
 
 **The line source:**
-- By default, it is the Git key held by the most stations, each station counted once.
-- A selector on the board switches to any other key, Git or chart, with each key's station count shown.
-- **Ties** go to the lexically first `repo`, then the first `ref`.
-- The choice is always shown: "Comparing github.com/acme/fleet @ main · on 6 of 7 stations · chosen by most stations".
-- `fleet.yaml` may set it: `line: { source: { url: …, ref: main } }`.
-- When no key is held by two or more stations, nothing is compared, and the board says "No shared GitOps source: set line.source in fleet.yaml".
-
-**A station counts every eligible unit for the key,** including units bound to different source objects that share the key (two GitRepositories in two namespaces, for example).
+- **Default:** the Git key held by the most stations, each station counted once. Ties go to the lexically first key.
+- **Selector:** the board can switch to any other key, Git or chart, with each key's station count shown.
+- **Always shown:** "Comparing github.com/acme/fleet @ branch main · on 6 of 7 stations · chosen by most stations".
+- **Override:** `fleet.yaml` may set `line: { source: { url: …, ref: { kind: branch, name: main } } }`.
+- **No shared key:** nothing is compared, and the board says so.
 
 ### 3.3 Station facts and states
 
@@ -297,70 +303,81 @@ Revised after Codex's design review of 4c654fc (nine findings, folded into §§0
 | Fact | Meaning |
 |---|---|
 | **E** | the eligible units |
-| **A** | the set of their applied shas |
-| **F** | the set of their sources' fetched shas |
-| **failing** | an eligible unit or its bound source has Ready False, excluding suspended units |
-| **syncing** | a unit has `generation > observedGeneration`, or its attempted ≠ applied with no failure |
+| **A** | the applied revisions of the units that have one |
+| **N** | the units that were never applied |
+| **failing** | an eligible unit or its bound source is Ready False or its sync failed (suspended units excluded) |
+| **syncing** | `generation > observedGeneration`, or an attempted fact differs from applied with no failure |
 | **suspended** | a unit is suspended |
-| **read** | ok, partial, stale (last good kept, current read failed), error, or checking |
+| **read** | ok, partial, stale, error, or checking, per unit and for the station |
 
-**The comparison revision R** (no Git history):
-- R is the sha that is the station's *only* applied sha (|A| = 1) on the most stations.
-- Ties are broken by the newest source artifact `lastUpdateTime`, labelled "tie broken by fetch time, not commit order".
-- R is a comparison reference, never a rollout target (§14).
+**State precedence.** The first row that applies wins.
 
-**Comparison state, one per station:**
-
-| State | When | Drawn as |
+| Order | State | When |
 |---|---|---|
-| **matches R** | \|A\| = 1, A = {R}, read ok | lit |
-| **differs** | \|A\| = 1, A ≠ {R}, read ok | dashed track, the station's sha shown |
-| **mixed** | \|A\| > 1 | dashed, "units at 2 revisions", expandable |
-| **not compared** | \|E\| = 0 | no track to it; the card is hollow and lists what is excluded |
-| **checking** | read is partial, stale, error or checking | dashed grey; the last good facts as "as of …", never counted as a match |
+| 1 | **checking** | the station read is not ok, or any eligible unit is unread or stale. Last good facts show as "as of …". It can never match or be at target. |
+| 2 | **not compared** | \|E\| = 0. The card lists what was excluded. |
+| 3 | **never applied** | every eligible unit is never applied |
+| 4 | **mixed** | \|A\| > 1, or some units are applied and some never applied |
+| 5 | **matches R / differs** | \|A\| = 1, compared to R (below) |
+| 6 | **(Git)** at target, behind, ahead, diverged, unrelated, not in history | §3.4, replacing step 5 when Git ordering applies to this station |
 
-**Flags, independent of the state, shown on the card:**
-- "failing for Nm": the age of the earliest failing condition among E and its sources. It is a failure age, never a hold age.
-- "fetched X, applied Y": when F ≠ A.
-- "syncing" and "suspended".
+**The comparison revision R** (no Git ordering):
+- R is the revision that is the only applied revision (\|A\| = 1, read ok) on the most stations.
+- Ties are broken by the newest source artifact time, disclosed: "tie broken by fetch time, not commit order".
+- When no station has a single applied revision, there is no R. Nothing is lit, and the board says "no comparison revision".
+- R is a comparison reference, never a rollout target.
 
-**"Held" needs a reason tied to R.**
-- Without Git, a station is "held" only when an eligible unit's `lastAttemptedRevision` sha equals R and that unit is Ready False: "attempted R, failing".
-- "differs" plus some other failure is "differs · failing for Nm", never held.
-- **A held station shows "held since <time> (observed)":** the time Klyx first observed the hold in its observation log (§8.2). When the log began after the hold, it reads "held since before <log start>".
-- With Git, see §3.4.
+**Flags,** independent of the state:
+- "failing since <time>": the earliest failure time among E and its sources, using each rule's `since` semantics (§8.1).
+- "compared X, applied Y": when a compared fact differs from applied, for example an Argo app that is OutOfSync with a desired revision.
+- "syncing", "suspended", and "source changed since last deployment".
 
-**The headline counts only proven applied matches, and names the denominator.** For example: "a1b9e3c is applied on 5 of 6 compared stations · 1 not compared". It adds a held station only when one exists.
+**"Held" requires evidence tied to R:**
+- Without Git, a station is held only when an eligible unit's attempted revision equals R and that unit is failing: "attempted R, failing".
+- A station that differs and has an unrelated failure is "differs · failing since …".
+- **The time on a hold** comes from the observation log (§8.2), worded by its continuity:
+  - "first observed held at <time>; start unknown" when Klyx first saw it on a baseline read;
+  - "held since <time> (observed)" only when Klyx saw it go from not held to held with continuous coverage.
+
+**The headline** counts only proven applied matches, and names its denominator: "a1b9e3c is applied on 5 of 6 compared stations · 1 not compared".
 
 **Lighting:**
-- A segment is lit when the stations at both its ends match R. The segment into a track's first station is lit when that station matches.
+- A segment is lit when the stations at both its ends match R, or are at target T.
 - The legend reads: "Lit: matches the comparison revision. A comparison, not a delivery path."
 
 ### 3.4 With Git history (§7)
 
-**Applies when** the key's repo is allowed and fetched, the ref resolves in the fetched history, and every compared station's sha is in that history.
+**Applies per station.** A station is ordered when all of these hold:
+- the key's repo is allowed and fetched;
+- the key's ref resolves to a target T;
+- the station is in state 5 (single applied revision);
+- its sha is in the fetched history.
 
-- **The rollout target T** is Klyx's fetched tip of the ref:
-  - the branch tip;
-  - the tag's commit;
-  - or the pinned commit.
+Every other station keeps its §3.3 state. One unknown sha qualifies only its own station.
 
-  Whether T replaces R in the headline is an owner decision (§14). The proposal is yes.
-- **The states become:**
+**The target T** is Klyx's fetched tip of the ref:
+- a Flux branch tip, a tag's commit, or a pinned commit;
+- an Argo ref only when it is fully qualified, or a sha.
 
-| State | When | Drawn as |
-|---|---|---|
-| **at target** | the station's sha is T | lit |
-| **behind by N** | an ancestor of T (N = `rev-list --count`) | dashed, labelled |
-| **ahead by N** | T is an ancestor of the station's sha | dashed, labelled |
-| **diverged** | neither is an ancestor of the other | dashed, "diverged at <merge-base>" |
-| **not in fetched history** | Klyx's history lacks the sha | dashed, labelled; never ordered |
+Semver ranges, `HEAD` and unqualified Argo refs have no T: they stay comparison-only and say why. T always shows its freshness: "main at a1b9e3c · fetched 20:31".
 
-- **"Held · N behind"** needs one of these, tied to T:
-  - the station's source fails to fetch while the station is behind T;
-  - an eligible unit attempted T and is failing;
-  - an eligible unit reports `DependencyNotReady` while it is behind T. This is labelled "blocked by dependency <name>", which is the controller's own report.
-- **The headline** may say "prd · North Europe is held, 3 commits behind main".
+**Ordered states:**
+
+| State | When |
+|---|---|
+| **at target** | the sha is T |
+| **behind by N** | an ancestor of T; N = `rev-list --count sha..T` |
+| **ahead by N** | T is an ancestor of the sha |
+| **diverged** | they share a merge-base, and neither is an ancestor of the other: "diverged at <merge-base>" |
+| **unrelated history** | there is no merge-base |
+| **not in fetched history** | Klyx's history lacks the sha |
+
+**"Held · N behind"** needs evidence tied to T:
+- the station's source fails to fetch while the station is behind T;
+- an eligible unit attempted T and is failing;
+- an eligible unit reports `DependencyNotReady` while it is behind T. This is labelled "blocked by dependency <name>", the controller's own report.
+
+**The headline** may then say "prd · North Europe is held, 3 commits behind main".
 
 ### 3.5 Mesh on the board
 
@@ -401,10 +418,7 @@ Revised after Codex's design review of 4c654fc (nine findings, folded into §§0
   - controller-only issues and coverage gaps as rows of their own, even with no object ref ("kustomize-controller not found: status from objects only"; "Events unreadable").
 - **Samples:** `Top` is at most five refs per part, so each area's rows end in "+N more in <lens>", from the task counts, linked to the lens.
 - **A row shows:** its aspect, kind, name, the verdict label, a `LinePos` station tag, and its area.
-  - **Age and reason are new data (§8.1).**
-    - Every attention `Ref` carries `since`, the lastTransitionTime of its failing or attention condition.
-    - It also carries `reason`: the condition's reason and message, scrubbed and capped at 200 characters.
-    - A source with no condition shows the observation log's first-seen time, marked "(observed)".
+  - **Age and reason are new data (§8.1).** Each `Ref` carries `since` and `reason`, with per-rule meaning (§8.1). An age with no rule-backed source shows the observation log's wording: "first observed …".
 - **Folding:** rows fold under another only along **reported-blocker** edges (§5.1), labelled "reported blocker". They never fold under a "root cause".
 - **Order:** environment rank (prd first), then role, then area.
 - **Filters:** All, Prd only, Faults. They are kept for the session.
@@ -412,7 +426,10 @@ Revised after Codex's design review of 4c654fc (nine findings, folded into §§0
 **The aside:**
 - **Ledger:**
   - Without Git history, it is "revisions on the line now": each distinct station sha with its per-track dots and artifact time.
-  - With history (§7), it lists the commits from the oldest compared sha to T, newest first, at most 20: short sha, subject, author, time, and dots for which stations contain each commit.
+  - **With history (§7), "commits not yet everywhere":**
+    - the commits reachable from T but not from every ordered station (`git log T --not <merge-bases>`), newest first, at most 20;
+    - each with its short sha, subject, author and time, and dots for which ordered stations contain it.
+    - Commits that exist only on a diverged or ahead station are listed under that station, never merged into one order.
   - "Open in Git" links to the commit, on known hosts or through `git.repos[].web`.
 - **Horizon:** the next 30 days, from `FleetExpiry`.
 
@@ -446,8 +463,8 @@ History (mod+[ and mod+]) stays.
 - Clicking it lists the affected clusters, each with its axis and reason, and links to them.
 - It is always visible inside a cluster.
 - **Given up:** the blink and the per-cluster lamp column. This is an owner trade-off (§14).
-- **The dock badge and notifications stay as they are.** They are not counted as replacing the spine.
-- **Observer health notifications are not part of this spec** (§14).
+- **The dock badge and action notifications stay as they are.** They are not counted as replacing the spine.
+- **Health notifications are new behaviour,** specified in §8.6.
 
 **Every current function gets a named home:**
 
@@ -514,7 +531,7 @@ It is **pinned to its object's cluster and UID**. Every verb, follow-up and Expl
   - a stale read;
   - a node whose UID was replaced mid-walk.
 - **Supply facts are stated without causality.** "Credential supplied by ExternalSecret flux-system/github-deploy-key" comes from the typed `secretRef` → Secret → ExternalSecret link. Nothing claims the credential is the cause.
-- **Change proximity (§8.3):** each node and supply object shows when it was last written, and by which manager. When that write falls within 10 minutes before a failing node's `since`, the graph says so. For example: "Secret platform-auth last written 20:20 by external-secrets, 1 minute before this source began failing". It is a time fact, never a cause.
+- **Change proximity (§8.3):** each node and supply object shows its last recorded managed-field update: time, manager, operation and subresource. When a main-resource update (never a status-only one) falls within 10 minutes before a failing node's rule-backed `since`, the graph places the two side by side. For example: "Secret platform-auth: last managed-field update 20:20 (external-secrets, Update). Source Ready=False since 20:21 (condition time)." Both are qualified observations; nothing claims which field changed, or a cause.
 - **The end of a reported chain** lists its evidence: the failing condition, the supply facts, the change proximity, and the Git "not here yet".
 - **The inventory line** is "last applied <sha>; inventory 38 objects (14 workloads)". It never claims the workloads run that revision.
 - **With Git (§7)**, a node behind T gains "not here yet":
@@ -530,10 +547,16 @@ It is **pinned to its object's cluster and UID**. Every verb, follow-up and Expl
   3. One branch per rule, with a bar per backend for its **configured weight** (an unset weight counts as 1), labelled "configured".
   4. The Service, with its ready endpoints.
 - **A backend the per-rule verdict marks failing** has a danger branch.
-- **Measured traffic (§8.5), per rule:** the request rate, the 5xx share and the 503 share, with a 30-minute sparkline, retries per second, and the measured split per backend where the gateway exposes it. Each value carries its window.
+- **Measured traffic (§8.5), per rule,** only where attribution is verified:
+  - the request rate;
+  - the 5xx and 503 shares, with a 30-minute sparkline;
+  - retries;
+  - the split per backend.
+
+  Each metric shows separately as available or unavailable. Each value carries its window, and a missing series is "no samples", never zero.
 - **Configured weight and measured split** are shown side by side, never merged.
-- **Onset:** "first above 1% at 20:29, in the last 30 minutes", read from the range query.
-- **Revision proximity:** "a1b9e3c applied at 20:28 (observed)", when the observation log saw the bound unit's applied revision change within 10 minutes before onset. It is a time fact, never a cause.
+- **Onset** is the "first sampled crossing of 1% at 20:29 (1-minute rate, 30-second step)". When the window's first sample is already above the threshold, it reads "already above 1% at window start". A gap in the samples restarts the search.
+- **Revision proximity** places two qualified times side by side: "a1b9e3c applied change observed 20:28; first sampled crossing 20:29". It appears only when the observation log has continuous coverage over that span. It is never a cause.
 - **No metrics endpoint:** "no route metrics: configure a metrics endpoint", and nothing is estimated.
 - **Below the drawing:** the rules and policies table, and the mesh note for global Services.
 
@@ -557,7 +580,7 @@ It is **pinned to its object's cluster and UID**. Every verb, follow-up and Expl
   3. The verbs for the current selection.
 - **Groups:** Objects, Run, Go to, Ask.
 - **Object scope** is the fleet metadata index (§8.4): every indexed kind on every connected cluster, by name, namespace and kind.
-  - Aspects are joined from the summaries by UID.
+  - Aspects come from the Observer's full evaluated state, by UID (§8.2). An object of a kind the Observer does not evaluate shows "health unverified", never healthy.
   - The console states its coverage: "Searching 7 clusters · 14 kinds". Any cluster whose index is building, partial, capped or forbidden for a kind says so in the results, with the lens to search instead.
 - **A row:** its `Aspect`, kind, name, `LinePos` and a note.
   - Same-name objects on different clusters are separate rows. Each is pinned to its cluster and UID.
@@ -579,59 +602,90 @@ It is **pinned to its object's cluster and UID**. Every verb, follow-up and Expl
 - give `flux diff --path` a local clone root, closing the M10-f follow-up.
 
 **The binary.**
-- Klyx runs the system `git`, resolved through `internal/clibin` like kubectl, helm and flux.
-- It uses no hosting API and stores no tokens. Authentication is the owner's own: the SSH agent, `~/.ssh/config`, or Git's credential helper.
-- If git is missing, every Git feature is off, with one note ("Git not found: install git to order revisions"), and the comparison rules of §3.3 hold.
+- Klyx runs the system `git`, resolved through `internal/clibin`.
+- **Git 2.44 or newer is required,** for `GIT_NO_LAZY_FETCH`. Older or missing git turns every Git feature off, with one note naming the reason, and the §3.3 rules hold.
+- No hosting API. Klyx stores no tokens.
 
-**What it may run.** Klyx builds every argv itself, and only these subcommands are allowed:
+**The transport boundary:**
+- **What runs is always the owner's approved string.** Klyx executes the `git.repos[].url` exactly as the owner approved it.
+  - A URL read from a cluster is only *matched*, after normalisation, to select an approved entry. It is never executed.
+  - Several cluster URLs may map to one approved entry. The owner sees each mapping in Settings > Git.
+- **No URL rewriting:**
+  - Git runs with an isolated config, so the owner's `url.<base>.insteadOf` rewrites do not apply. The owner approves the final URL instead.
+  - `http.followRedirects=false`: a redirect fails, and names the URL it pointed at for approval.
+  - An SSH host alias in an approved URL resolves through the owner's own `~/.ssh/config`, which Klyx does not interpret. The approval dialog shows the alias as written.
+- **Authentication paths kept:**
+  - the SSH agent and `~/.ssh/config`, through `ssh` with `-o BatchMode=yes`;
+  - the owner's credential helper, read once from their git config and passed explicitly as `credential.helper`.
+  - Nothing else from the owner's git config is used.
+- **Prompts are off:**
+  - `GIT_TERMINAL_PROMPT=0`.
+  - `GIT_ASKPASS=/usr/bin/false`, `SSH_ASKPASS=/usr/bin/false` and `SSH_ASKPASS_REQUIRE=never`.
+  - `GCM_INTERACTIVE=never` for Git Credential Manager.
+  - A credential helper that shows its own window anyway is outside Klyx's control. Settings > Git says so.
+
+**The environment is an allowlist, built from scratch:**
+- **Passed through:** `HOME`, `PATH`, `USER`, `LANG`/`LC_*`, `TMPDIR` and `SSH_AUTH_SOCK`.
+- **Set by Klyx:**
+  - `GIT_CONFIG_NOSYSTEM=1`;
+  - `GIT_CONFIG_GLOBAL=<a Klyx-generated file>`;
+  - `GIT_DIR=<the cache dir>`, with the working directory also set to it;
+  - `GIT_NO_LAZY_FETCH=1` for metadata reads;
+  - `GIT_PAGER=cat` and `PAGER=cat`;
+  - the prompt variables above.
+- **Never passed:** every other `GIT_*` variable (exec path, alternates, config overrides), cloud credentials, and KUBECONFIG.
+- **The existing shell-outs** (`execenv`, `fluxcli`) inherit the parent environment today. Git does not follow them.
+
+**Allowed commands.** Klyx builds every argv:
 
 | Command | Purpose |
 |---|---|
-| `git clone --bare --filter=blob:none --no-tags --template= <url> <cache>` | once per allowed repo |
-| `git fetch --prune --filter=blob:none origin <tracked refs>` | refresh |
-| `git log`, `git rev-list --count`, `git merge-base [--is-ancestor]`, `git diff --name-status` | commits and trees only, no file contents |
-| `git diff <a> <b> -- <path>` | only on an explicit "show changes" click; it fetches the blobs it needs, within the caps |
-| `git archive <rev> -- <path>` | into a temp dir, for `flux diff --path` |
+| `git init --bare --template=` | create the cache |
+| `git fetch --no-tags --filter=blob:none origin +<ref>:<ref>` | explicit refspecs, only for the refs compared sources track (no other heads) |
+| `git log --no-renames`, `git rev-list --count`, `git merge-base [--is-ancestor]` | metadata reads |
+| `git diff --name-status --no-renames --no-ext-diff --no-textconv` | metadata reads |
+| `git diff --no-ext-diff --no-textconv <a> <b> -- <path>` | only on an explicit "show changes" click; it may fetch blobs, within the caps |
+| `git archive --format=tar <rev> -- <path>` | for `flux diff --path` (below) |
 
-Never allowed: `push`, `commit`, `tag`, `branch`, a checkout into the owner's working trees, `config --global`, hooks or submodules.
-
-**Hardening on every call.**
-- **Config flags:**
-  - `-c core.hooksPath=/dev/null`, and the clone's empty `--template=` leaves no sample hooks;
-  - `-c protocol.allow=never -c protocol.https.allow=always -c protocol.ssh.allow=always`: no `file`, no `ext`, no local paths;
-  - `-c core.fsmonitor=false` and `-c submodule.recurse=false`.
-- **Environment:**
-  - It is the owner's environment, minus what other shell-outs already drop (KUBECONFIG and cloud credentials).
-  - Plus `GIT_TERMINAL_PROMPT=0`, and `GIT_SSH_COMMAND` adding `-o BatchMode=yes` to the owner's ssh.
-  - Klyx never shows or waits on a prompt, so a passphrase-protected key works only through the agent.
+- **On every call:**
+  - `--no-pager`;
+  - `-c core.hooksPath=/dev/null`;
+  - `-c protocol.allow=never -c protocol.https.allow=always -c protocol.ssh.allow=always`;
+  - `-c core.fsmonitor=false -c submodule.recurse=false -c diff.external= -c http.followRedirects=false`.
 - **Arguments:**
-  - Revisions must be hex shas (`[0-9a-f]{7,64}`) or the exact ref a source tracks, placed after `--end-of-options`.
-  - Paths come after `--`.
-  - Nothing read from a cluster object ever becomes an option.
-- **Deadlines:** 60s for clone and fetch, 10s for local queries. The process group is killed on a deadline or a cancel, and output is capped.
+  - Revisions are hex shas or the tracked ref, placed after `--end-of-options`.
+  - Paths come after `--`, under `--literal-pathspecs` (`GIT_LITERAL_PATHSPECS=1`).
+- **Never allowed:** `push`, `commit`, `tag`, `branch`, a checkout into the owner's working trees, `config --global`, hooks, submodules.
+- **A server that does not support `--filter=blob:none`:** the fetch is refused ("this server does not support partial clone"). Klyx never falls back to a full clone.
 
-**Which repos.** Repo URLs come from cluster objects, which Klyx treats as untrusted. A mistaken or malicious GitRepository could point Klyx's fetch, and with it the owner's credentials, at any host. So Klyx fetches only repos the owner has allowed:
-- **Listed in `fleet.yaml`** under `git.repos`. Each entry has a `url`, plus an optional `web` for commit links on hosts Klyx does not know.
-- **Or allowed once in Settings > Git,** which writes the same list, so there is one source of truth. The allow dialog shows the exact URL and which clusters reference it.
-- **Matching:** URLs are compared normalised (§3.2).
-- **A source whose URL is not allowed** shows "Allow <url> in Settings > Git to read its history" and keeps the §3.3 rules.
-- **Never automatic:** a new URL seen on a cluster never triggers a fetch.
+**`flux diff --path` from the cache** (slice 6b) is a separate authorisation from reading history:
+- **Extraction:**
+  - `git archive` of the Kustomization's literal `spec.path` only.
+  - Klyx's own tar reader extracts it into a fresh 0700 temp dir, and refuses absolute paths, `..`, and symlinks or hardlinks leaving the root.
+  - Caps: 5,000 files and 64 MiB, after which it is refused.
+  - The temp dir is removed afterwards.
+- **Remote bases:** a `kustomization.yaml` naming a remote base (`http(s)://`, `git::`, `github.com/…`) is refused by default ("remote base: not allowed"), unless the owner enables remote bases for that repo in Settings > Git.
+- **No exec plugins.** Klyx passes no decryption keys. SOPS-encrypted files are diffed as stored, and the result says so.
 
-**The cache.**
-- **Location:** `<config dir>/git-cache/<sha256 of the normalised URL>.git`, mode 0700.
-- **Contents:** only the refs the compared sources track, with full commit and tree history and no file contents.
-- **Settings > Git** shows each repo's size and last fetch, with "Fetch now" and "Clear cache".
-- **Size limit:** a cache over 1 GiB stops fetching, and says so.
+**The cache and its bounds:**
+- **Location:** `<config dir>/git-cache/<sha256 of the approved URL>.git`, 0700.
+- **Contents:** commits and trees for the tracked refs. Blobs appear only after an explicit "show changes" or a `flux diff` extraction, and "Clear cache" removes them.
+- **Caps:**
+  - 1 GiB per repo, and 2 GiB across all repos (§14).
+  - They are enforced *during* acquisition: Klyx watches the cache directory and kills a fetch that would pass a cap.
+  - After a killed or failed fetch, Klyx removes `objects/pack/tmp_*` and any other temporaries.
+  - Refs update only on success, so the last good history stays.
+- **Settings > Git** shows each repo's size, last fetch, the cluster URLs mapped to it, and "Fetch now" and "Clear cache".
 
 **When it fetches.**
 - When the fleet view opens.
-- At most every 5 minutes while the fleet view stays open.
+- At most every 5 minutes while it stays open.
 - On "Fetch now".
 - One fetch per repo at a time.
 
 **Failing honestly.**
-- A failed fetch keeps the last good history, labelled "history as of <time>; fetch failed: <scrubbed error>".
-- With no good history, the §3.3 rules apply, with that note.
+- A failed or capped fetch keeps the last good history, labelled "history as of <time>; fetch failed: <scrubbed error>".
+- With no good history, the §3.3 rules apply.
 
 **Untrusted text.**
 - Commit subjects, author names and file paths are plain text, never markdown or HTML.
@@ -646,72 +700,134 @@ Each source below is new, and each declares where its claims come from.
 
 - **Flux rows add:**
   - the `sourceRef` (kind, namespace, name);
-  - `lastAppliedRevision` and `lastAttemptedRevision`;
-  - for a HelmRelease, `history[0].chartVersion` and `configDigest`.
-- **Source rows add:**
-  - `spec.url` and `spec.ref`;
-  - the artifact revision and its `lastUpdateTime`.
-- **Argo rows** keep every `(source, revision)` pair.
-- **Attention refs** carry `since` and `reason`, from the object's own condition.
-- **All of these are additive.** Existing lens rules and the parity gate are unchanged.
+  - `lastAppliedRevision` and `lastAttemptedRevision`.
+- **HelmRelease rows add:** the `status.history[]` entries, at most 5, each with its chart version, `configDigest` and status.
+- **Source rows add:** `spec.url`, `spec.ref`, the artifact revision and its `lastUpdateTime`.
+- **Argo rows** keep every source pair from `spec.sources`, `status.sync.comparedTo` with `sync.revision(s)`, `status.operationState` (phase plus `syncResult` revisions), and `status.history[]` (at most 5 entries, each with its own source(s)).
+- **Refs carry `since` and `reason`,** with per-rule meaning:
 
-### 8.2 The observation log
+| Rule kind | `since` comes from |
+|---|---|
+| **Condition-backed** (Flux Ready, Argo health and sync, cert-manager Ready, Gateway Accepted/Programmed) | the matching condition's `lastTransitionTime` |
+| **Derived** | a time computed from fields. ESO overdue: last refresh + 2 × interval. Expiry: `notAfter` minus the warning window. |
+| **Observed only** (CrashLoopBackOff, restart counts, zero endpoints, and any rule without a matching timestamp) | the observation log's wording, never an unrelated condition's age |
 
-- **What it records:** in-process, per cluster, the transitions Klyx itself observes:
-  - object role changes, from the summaries;
-  - station comparison states, from `LineService`;
-  - a unit's applied-revision changes;
-  - connection states.
-- **Each entry:** `{at, cluster, kind/namespace/name/UID, from, to}`.
-- **Bounds:** the last 24 hours, or 20,000 entries per cluster.
-- **Every time it backs is labelled "(observed)".** When an event predates the log, the time reads "before <log start>".
-- **Persisting it** to the config dir so it survives a restart is an owner decision (§14).
+  `reason` is the condition's reason and message, scrubbed and capped at 200 characters.
+- **All of this is additive.** Existing lens rules and the parity gate are unchanged.
 
-### 8.3 Object write times
+### 8.2 The observation log and the transition stream
 
-- `metadata.managedFields[].time` gives each manager's last write time and operation, from the API, with no stored history.
-- Klyx reads it for dependency-graph nodes and their supply objects. For a Secret, it reads the metadata only.
-- **Absent `managedFields`:** no fact is shown.
+- **The source:**
+  - The Observer emits a bounded **transition stream** from its complete, UID-keyed evaluated state, not from summary `Top` samples. `Top` stays a UI sample.
+  - Each transition is `{at, cluster, incarnation, GVR, UID, namespace/name, role from → to, coverage}`.
+  - A buffer overflow or a coverage change emits an explicit **loss marker** for the kinds affected.
+- **The log** records:
+  - transitions;
+  - `LineService` station states, with the comparison key and R or T at the time;
+  - applied-revision changes;
+  - connection states;
+  - loss markers and gaps.
+  - **A change of reference** (R recomputed, a new key chosen) is recorded as "reference changed", never as a deployment or a hold.
+- **Continuity wording:**
+  - A state seen on a baseline (the first complete read, or after a reconnect or gap) is "first observed at <time>; start unknown".
+  - A change seen after a gap is "observed at <time>, after a gap from <t0> to <t1>".
+  - "Since <time> (observed)" is used only with continuous coverage from before the change.
+  - "Already present by <time>" is used only when other evidence, such as a condition time, proves it.
+- **Bounds:** 24 hours, or 20,000 entries per cluster.
+  - On eviction, each object keeps a **continuity watermark**: the earliest time of continuous observation.
+  - Ages beyond the trimmed log read "at least since <watermark> (log trimmed)".
+- **The console join:** an object's aspect comes from this evaluated state. A kind the Observer does not evaluate is "health unverified".
+- **On disk:** persistence is an owner decision (§14).
+
+### 8.3 Last recorded managed-field updates
+
+- From `metadata.managedFields[]`, Klyx shows "last recorded managed-field update", with its `time`, `manager`, `operation` and `subresource`. It is not an audit log:
+  - Manager names are workflow identifiers, not authenticated writers.
+  - Status-subresource entries are labelled "status update" and never used for change proximity.
+  - Klyx never claims which field changed.
+- **Read for:** dependency-graph nodes and their supply objects, metadata only.
+- **No record:** absent or reset `managedFields` read "no managed-field record".
 
 ### 8.4 The fleet metadata index
 
-- **What it is:** per cluster, metadata-only informers (`PartialObjectMetadata`) over a configured set of kinds. The default set:
-  - namespaces and nodes;
-  - workloads and pods;
-  - services, ingresses, Gateways and routes;
-  - config maps and secrets, by name only;
-  - PVCs;
-  - the Flux, Argo, cert-manager and ESO kinds.
-- **Lifecycle:** it starts after the cluster's Observer is live and shares the cluster's informer factory. It is fenced by the same incarnation.
-- **Caps:** 50,000 objects per cluster, with Pods capped first.
-- **States are shown, never hidden:**
-  - "building";
-  - "capped at N";
-  - "forbidden: <kind>", when list or watch is denied.
-- **What it holds:** names, namespaces, kinds, UIDs and labels. Never object contents.
+- **Acquisition:**
+  - Per cluster, metadata-only (`PartialObjectMetadata`) list and watch, for the configured kinds that the Observer does not already watch. Kinds the Observer does watch are indexed from its model, never with a second watch.
+  - Lists paginate at 500.
+- **Projection before retention:**
+  - An informer transform keeps `{GVR, UID, namespace, name, labels, creationTimestamp}`. Labels are capped at 2 KiB per object, with a truncation marker.
+  - Annotations and `managedFields` are dropped before anything is stored or queued.
+- **Bounds** across the store, the buffers and the search index:
+  - 50,000 objects and 32 MiB per cluster;
+  - 200,000 objects and 128 MiB across the fleet (§14).
+  - At a cap, that kind's list stops and its watch is not started. The kind reads "capped: first N". Vacancies are not refilled, and the index never claims to be complete.
+- **Per-kind states:**
+
+| State | Meaning |
+|---|---|
+| **indexing** | the first list is in progress |
+| **live** | listed, and the watch is running |
+| **capped** | stopped at a cap (above) |
+| **denied** | list refused (403) |
+| **watch denied** | the watch was refused after a good list: the last list is kept, labelled stale |
+| **metadata unsupported** | a 406. Klyx never falls back to a content read, Secrets included. |
+| **stale / recovering** | watch errors, retried with backoff |
+
+- **Lifecycle:** it starts after the Observer is live, is fenced by the same incarnation, and is cancelled on disconnect.
+- **What it holds:** never object contents.
 
 ### 8.5 Route metrics, per rule
 
-`internal/routemetrics` gains per-rule queries over Envoy Gateway's metrics, keyed by each rule's upstream cluster:
-- the request rate;
-- the share by response class and by code (503);
-- retries;
-- a range query (30 minutes at a 30-second step) for the sparkline and the onset.
-
-The per-backend split shows when the gateway exposes per-backend clusters; otherwise it says "per-backend split not exposed".
+- **Supported mapping (v1):**
+  - Envoy Gateway's default per-rule cluster stat names (`httproute/<ns>/<name>/rule/<n>`);
+  - scoped to the Gateway's Envoy pods by their owning-gateway labels.
+- **Treated as unattributable,** shown "unavailable (shared or custom cluster names)":
+  - a custom `clusterStatName`;
+  - `MergeBackends`;
+  - several parents sharing clusters;
+  - any ambiguity.
+- **Queries per rule:**
+  - the request rate;
+  - shares by response class and by code (503);
+  - retries;
+  - a range query over 30 minutes at a 30-second step, using a 1-minute rate.
+- **Availability is tracked per metric,** each separately:
+  - the request rate;
+  - the class and code shares;
+  - retries;
+  - the per-backend split.
+- **The per-backend split** only where the gateway exposes per-backend clusters for that rule.
+- **Rule indices are tied to the route's current generation.** When the rule list changed inside the window (seen by the generation, or by the observation log), the sparkline is cut at the change: "rules changed at <time>". A recreated or reordered route never joins history to today's backends.
+- **`internal/routemetrics` parsing** keeps the rule index (today it discards it).
+- **Captured-metric fixtures:**
+  - dedicated and shared clusters;
+  - custom names;
+  - several parents;
+  - retries;
+  - direct and local responses.
 
 ### 8.6 Health notifications
 
 - **Opt-in,** in Settings > Notifications. The OS permission is requested lazily, through `ShellService`.
-- **Triggers:**
-  - a new fault on a protected cluster (the default, when enabled);
-  - optionally, new faults on any cluster, and recoveries.
+- **Driven by** the transition stream (§8.2). Never driven by summaries.
+- **The episode state machine,** per cluster and UID:
+
+| Phase | What happens |
+|---|---|
+| **Baseline** | at connect or reconnect, or after a loss marker, faults already present are listed once in the app ("3 faults present at connect"). They never become notifications (§14). |
+| **New episode** | a non-fault → fault transition with continuous coverage. It notifies, subject to the triggers below. |
+| **Coverage lost** | the episode is suspended. No recovery is claimed. |
+| **Recovered** | fault → non-fault with live coverage. It notifies only if recoveries are enabled. |
+| **Deleted** | the UID is gone. The episode closes as "deleted", with no recovery. |
+| **Replaced** | a new UID under the same name starts a new episode. |
+| **Incarnation change** | everything is re-baselined. |
+
+- **Triggers:** new faults on protected clusters (the default once enabled); optionally, any cluster, and recoveries.
 - **De-duplication:**
-  - one notification per object and role per 30 minutes;
-  - bursts coalesced to one per cluster per minute ("3 new faults on prd · North Europe").
-  - None is sent while the app is focused on that cluster.
-- **Content:** cluster, kind/name and the verdict label only.
-- **Clicking one** opens the object, pinned to its cluster and UID.
+  - one notification per UID and role per 30 minutes;
+  - bursts coalesced per cluster over 60 seconds ("3 new faults on prd · North Europe"). Items that recover before the burst is sent are dropped from it.
+  - Nothing is sent while the app is focused on that cluster.
+- **Content:** cluster, kind/name and the verdict label.
+- **Click:** opens the object, pinned to its cluster and UID.
 
 ## 9. Applying it to every lens
 
@@ -743,13 +859,13 @@ The per-backend split shows when the gateway exposes per-backend clusters; other
    - The migration.
    - `Aspect` replaces lamp physics.
    - No layout change.
-2. **New data, part 1** (Go): the Observer row extensions (§8.1) and the observation log (§8.2).
+2. **New data, part 1** (Go): the Observer row extensions with per-rule `since` (§8.1), the Observer's transition stream with loss markers, and the observation log with continuity wording (§8.2).
 3. **The line model** (Go, no UI).
    - Placement.
    - The comparison unit and revision parsing.
    - Key selection, R, the states and flags, and "held" evidence.
    - `LineService` on the extended Observer rows, with `LineDTO`, versions, incarnation fencing and push.
-   - The adversarial fixtures of §11.
+   - The adversarial fixtures of §12.
 4. **Chrome.**
    - The location bar and the fleet indicator.
    - The parity table, implemented.
@@ -798,8 +914,13 @@ The per-backend split shows when the gateway exposes per-backend clusters; other
     - two sources sharing a key in different namespaces;
     - several units on one station;
     - mixed Flux and Argo with compatible and incompatible refs;
-    - a HelmRelease with a chart version (excluded);
-    - an Argo multi-source Application (excluded, but parsed);
+    - a HelmRelease: chart unit, the deployed history entry, a failed latest entry, missing history;
+    - an Argo app whose sync.revision B is compared but unsynced over a deployed A;
+    - a failed or partial Argo sync;
+    - an Argo source reorder or edit since the last deployment;
+    - an Argo chart range in `targetRevision`;
+    - an Argo multi-source app (one unit per source);
+    - an unqualified Argo ref against a Flux branch of the same name (separate keys);
     - an unrecognised revision string.
   - Key selection:
     - each station counted once;
@@ -811,12 +932,16 @@ The per-backend split shows when the gateway exposes per-backend clusters; other
     - the disclosed tie-break;
     - mixed stations kept out of the vote.
   - States and flags:
-    - every combination of fetched and applied, matching or differing;
+    - the precedence table;
+    - eligible but never applied;
+    - an empty A;
+    - every station mixed (no R);
     - mixed;
     - zero eligible units;
     - suspended;
     - stale generation;
-    - partial, stale and failed reads.
+    - partial, stale and failed reads never matching or being at target;
+    - compared ≠ applied.
   - "Held": only with attempted R and failing; "differs" with an unrelated failure stays "differs".
   - Failure age shown as failure age.
   - Mesh rules.
@@ -856,14 +981,33 @@ The per-backend split shows when the gateway exposes per-backend clusters; other
   - onset detection (a flat series; a step; noise below 1%);
   - revision proximity both inside and outside the 10-minute window.
 - **New data:**
-  - Observation log: its bounds, "before <log start>", and incarnation fencing.
-  - Write times: `managedFields` absent; several managers.
+  - Transition stream and log:
+    - more than 5 faults in one part;
+    - `Top` eviction;
+    - stale → live;
+    - reconnect;
+    - replacement;
+    - failure → unknown → recovery;
+    - loss markers;
+    - baseline wording;
+    - gap wording;
+    - watermarks after eviction;
+    - a reference change never logged as a deployment;
+    - rule-specific `since` (condition, derived, observed).
+  - Managed-field updates:
+    - a status-only update (no proximity);
+    - a metadata-only change;
+    - absent or reset records;
+    - several managers;
+    - a missing condition time.
   - The index:
-    - building, capped and forbidden states;
+    - every per-kind state;
+    - large annotations and labels dropped or capped before retention;
     - Pods capped first;
-    - no object contents held;
-    - fencing on reconnect;
-    - a memory check at 50,000 objects.
+    - no content fallback on a 406;
+    - Observer kinds never watched twice;
+    - fencing, cancellation and recovery;
+    - peak memory across several clusters at the caps.
   - Chart comparison:
     - chart version and values digest;
     - never mixed with Git keys.
@@ -871,9 +1015,11 @@ The per-backend split shows when the gateway exposes per-backend clusters; other
   - Notifications:
     - off by default;
     - permission refused;
-    - de-duplication and bursts;
+    - every episode phase;
+    - existing faults at connect never notified;
+    - de-duplication;
+    - bursts, including recovery before sending;
     - focus suppression;
-    - recovery;
     - a click opening the pinned object.
 - **Git:**
   - The allowlist, and the matching of normalised URLs.
@@ -881,7 +1027,25 @@ The per-backend split shows when the gateway exposes per-backend clusters; other
   - No hooks; no prompt (a passphrase key fails fast).
   - Option-shaped values refused.
   - Deadlines and caps.
-  - The orderings: behind, ahead, diverged, not in history.
+  - The orderings:
+    - behind, ahead, diverged;
+    - unrelated history;
+    - not in history, qualifying only its station;
+    - semver, `HEAD` and unqualified Argo refs without T;
+    - target freshness.
+  - The transport boundary:
+    - a cluster URL variant never executed;
+    - `insteadOf` rewrites ignored;
+    - a redirect refused;
+    - askpass and external-diff sentinels never run;
+    - pathspec magic refused;
+    - a server without filter support refused;
+    - the cap enforced mid-fetch, with temporaries cleaned and last good kept.
+  - `flux diff` extraction:
+    - an archive escape (`..`, absolute, symlink) refused;
+    - the file and size caps;
+    - an unapproved remote base refused;
+    - no decryption.
   - The Ledger's dots.
   - A failed fetch keeping the last good history.
   - Missing git.
@@ -893,7 +1057,7 @@ The per-backend split shows when the gateway exposes per-backend clusters; other
 - **Visual:**
   - headless captures of every screen in night and day;
   - the contrast tests;
-  - the native WKWebView smoke (slice 9).
+  - the native WKWebView smoke (slice 12).
 - **Parity:** the health 1c gate stays green. The line, the queue and the dependency-graph claims are covered by the fixtures above, not by the gate.
 
 ## 13. Non-goals
@@ -915,11 +1079,19 @@ The per-backend split shows when the gateway exposes per-backend clusters; other
 3. **The default comparison source.** Proposal: the key most stations share, with `line.source` as the override.
 4. **The spine's trade-off.** Proposal: the fleet indicator (per-axis counts of clusters, with the list) replaces the per-cluster lamp column and the blink.
 5. **Allowing a repo.** Proposal: Settings > Git writes `git.repos` in `fleet.yaml`, and nothing else ever adds to it.
-6. **Fetch cadence and history.** Proposal:
+6. **Fetch cadence and the Git budget.** Proposal:
    - Fetch when the fleet view opens, every 5 minutes while it is open, and on "Fetch now".
-   - Keep the full commit and tree history of the tracked refs, with a 1 GiB limit.
+   - Keep the tracked refs' full commit and tree history.
+   - Limits: 1 GiB per repo and 2 GiB in total. Git 2.44 or newer is required.
 7. **Comparison reference or rollout target.** Proposal: with Git history, the fetched tip T is the target, and the headline speaks of it; without Git, R is only a comparison and never a target.
 8. **A fleet with several repos or refs.** Proposal: one selected comparison, with every other key shown as an exclusion count per station. The alternative is one line per key, stacked.
-9. **Notification defaults.** Proposal: off until enabled; once enabled, new faults on protected clusters only; recoveries off.
+9. **Notification defaults.** Proposal:
+   - Off until enabled. Once enabled, new episodes on protected clusters only; recoveries off.
+   - Faults already present at connect are never notified, only listed once in the app.
 10. **The observation log on disk.** Proposal: in memory only (the last 24 hours), with persistence to the config dir as an opt-in.
-11. **The index's kinds and caps.** Proposal: the §8.4 default set, 50,000 objects per cluster, Pods capped first, each configurable in `fleet.yaml`.
+11. **The index's kinds and memory budget.** Proposal:
+    - The §8.4 kinds.
+    - 50,000 objects and 32 MiB per cluster; 200,000 objects and 128 MiB across the fleet.
+    - Pods capped first.
+    - Each configurable in `fleet.yaml`.
+12. **Git previews and builds.** Proposal: reading an allowed repo never authorises remote Kustomize bases, exec plugins or decryption. Remote bases can be enabled per repo, explicitly. Decryption is never offered.
