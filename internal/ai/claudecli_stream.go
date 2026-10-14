@@ -292,7 +292,10 @@ func checkResult(m map[string]json.RawMessage, w streamWant, sessionID, streamed
 	if !rawEmpty(m, "permission_denials") {
 		return "", toolEvent("permission denials")
 	}
-	if !rawEmpty(m, "subagent_stats") {
+	// Claude Code 2.1.296 writes subagent_stats on every result, as running
+	// totals that are all zero when no subagent ran (read from the shipped
+	// binary, 2026-10-14). Only a non-zero counter is subagent use.
+	if !rawNull(m, "subagent_stats") && !allZero(m["subagent_stats"]) {
 		return "", toolEvent("subagent use")
 	}
 	if !rawNull(m, "deferred_tool_use") {
@@ -352,4 +355,27 @@ func checkResult(m map[string]json.RawMessage, w streamWant, sessionID, streamed
 		return "", contractBreak("the result text differs from the streamed answer")
 	}
 	return joinText([]string{text})
+}
+
+// allZero reports whether raw is null, zero, an empty string or array, or an
+// object whose every member is itself allZero: counters that record nothing.
+func allZero(raw json.RawMessage) bool {
+	t := bytes.TrimSpace(raw)
+	switch string(t) {
+	case "null", "0", `""`, "[]", "{}":
+		return true
+	}
+	if len(t) == 0 || t[0] != '{' {
+		return false
+	}
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(t, &obj); err != nil {
+		return false
+	}
+	for _, v := range obj {
+		if !allZero(v) {
+			return false
+		}
+	}
+	return true
 }

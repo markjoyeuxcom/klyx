@@ -113,6 +113,19 @@ func TestParseClaudeStream_Clean(t *testing.T) {
 	if strings.Contains(got, "Looking at the probe") {
 		t.Fatal("thinking is reasoning, never part of the answer")
 	}
+	// Claude Code 2.1.296 writes all-zero subagent running totals on every
+	// result (read from the shipped binary): no subagent ran, so it passes.
+	e := cleanEvents()
+	e[len(e)-1]["subagent_stats"] = map[string]any{
+		"spawned": 0, "requested": map[string]any{"background": 0, "foreground": 0, "unset": 0},
+		"started_in_background": 0, "max_depth": 0, "spawned_by_subagents": 0, "completed": 0, "failed": 0,
+		"killed":  map[string]any{"parent": 0, "user": 0, "system": 0},
+		"refused": map[string]any{"depth_limit": 0, "concurrency_limit": 0, "budget": 0},
+		"by_type": map[string]any{},
+	}
+	if got, err := parseClaudeStream(stream(t, e), tWant); err != nil || got != answer {
+		t.Fatalf("all-zero subagent stats are no subagent use: (%q, %v)", got, err)
+	}
 }
 
 func TestParseClaudeStream_Refusals(t *testing.T) {
@@ -187,6 +200,8 @@ func TestParseClaudeStream_Refusals(t *testing.T) {
 		{"unknown type", insert(1, map[string]any{"type": "novel_thing"}), ErrUnexpectedOutput, true},
 		{"permission denials", set(last, "permission_denials", []any{map[string]any{"tool_name": "Bash"}}), ErrUnexpectedOutput, true},
 		{"subagent stats", set(last, "subagent_stats", map[string]any{"count": 1}), ErrUnexpectedOutput, true},
+		{"a spawned subagent in the 2.1.296 shape", set(last, "subagent_stats", map[string]any{"spawned": 1, "requested": map[string]any{"background": 0, "foreground": 1, "unset": 0}, "by_type": map[string]any{"general": 1}}), ErrUnexpectedOutput, true},
+		{"a refused subagent", set(last, "subagent_stats", map[string]any{"spawned": 0, "refused": map[string]any{"depth_limit": 1}}), ErrUnexpectedOutput, true},
 		{"subagent message", func(e []map[string]any) []map[string]any {
 			e[2]["parent_tool_use_id"] = "toolu_1"
 			return e
