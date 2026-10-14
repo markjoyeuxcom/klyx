@@ -3,76 +3,81 @@ package ai
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 )
 
-// claudeContract is one reviewed Claude Code build (spec §1.5): an exact
-// version, platform and binary hash, and the version's pinned diagnostic
-// text. Klyx admits only a binary that matches one of these. A recognised
-// flag set on any other binary proves neither what the flags mean nor the
-// shape of the output and policy diagnostics, so a new release is refused
-// until a reviewed entry - with its fixtures - is added here.
-type claudeContract struct {
+// claudeBuild is the Claude Code build a call runs: the version the binary
+// reports and the platform it runs on. Since 2026-10-14 (owner decision,
+// spec §1.5) Klyx no longer pins exact reviewed builds - Claude Code updates
+// itself every day or two, and every update broke the provider. Klyx accepts
+// any build at or above claudeMinVersion on a supported platform once Test
+// has checked that build on this machine (claudeBuildStore); a build that
+// misbehaves loses that standing.
+type claudeBuild struct {
 	Version string
 	GOOS    string
 	GOARCH  string
-	SHA256  string
-	// The doctor lines that say no remote or organization policy applies,
-	// verbatim for this version (doctor is a diagnostic, not a documented
-	// machine interface).
-	RemotePolicyLine string
-	OrgPolicyLine    string
-	// BuiltinPlugins are the plugins bundled in this binary that its init
-	// event may list under the lockdown. They ship inside the hashed binary,
-	// and the version's review established that none of them exposes
-	// anything: init reports no tools, skills, commands, agents or MCP
-	// servers. Any other plugin - installed, synced from claude.ai, or a
-	// built-in not reviewed here - refuses.
-	BuiltinPlugins []string
 }
 
-// reviewedClaudeContracts are the builds Klyx has reviewed. 2.1.296 was
-// reviewed on 2026-10-13 from its help, its string table and helper runs in a
-// throwaway config dir, with no model call (spec §1.5).
-var reviewedClaudeContracts = []claudeContract{{
-	Version:          "2.1.296",
-	GOOS:             "darwin",
-	GOARCH:           "arm64",
-	SHA256:           "c9b5341637becbd423ddffc5b254afb645682a3868cb708bbc6cc0e7bb419937",
-	RemotePolicyLine: "Managed settings (remote): not fetched — requires an Enterprise or Team subscription",
-	OrgPolicyLine:    "Organization policy: not applicable to Pro and Max accounts",
-	// Captured from the real init on 2026-10-13, network blocked (the slice 5
-	// smoke's first finding). agents-md only changes which memory files are
-	// read, and every memory loader returns early under
-	// CLAUDE_CODE_DISABLE_CLAUDE_MDS, which Klyx sets and --safe-mode sets
-	// too. plugin-authoring only contributes a skill, and skills is empty.
-	BuiltinPlugins: []string{"cc-plugin-agents-md", "cc-plugin-plugin-authoring"},
-}}
+// claudeMinVersion is the oldest build Klyx accepts: the first one whose
+// flags, environment switches and output were read (2026-10-13).
+const claudeMinVersion = "2.1.296"
 
-func (c claudeContract) platform() string    { return c.GOOS + "/" + c.GOARCH }
-func (c claudeContract) versionLine() string { return c.Version + " (Claude Code)" }
+// claudePlatforms are the platforms whose policy locations and doctor output
+// Klyx has checked. Others are refused before anything runs.
+var claudePlatforms = []string{"darwin/arm64"}
+
+// The doctor lines that say no remote or organization policy applies to a
+// personal Pro or Max sign-in, verbatim as 2.1.296 prints them (U+2014).
+// Doctor is a diagnostic, not a documented machine interface: a build that
+// rewords them is refused until Klyx learns the new wording.
+const (
+	claudeRemotePolicyLine = "Managed settings (remote): not fetched — requires an Enterprise or Team subscription"
+	claudeOrgPolicyLine    = "Organization policy: not applicable to Pro and Max accounts"
+)
+
+func (c claudeBuild) platform() string    { return c.GOOS + "/" + c.GOARCH }
 
 // doctorLines are the lines doctor must print exactly once each.
-func (c claudeContract) doctorLines() []string {
+func (c claudeBuild) doctorLines() []string {
 	return []string{
 		"Running: native (" + c.Version + ")",
 		"Platform: " + c.GOOS + "-" + c.GOARCH,
-		c.RemotePolicyLine,
-		c.OrgPolicyLine,
+		claudeRemotePolicyLine,
+		claudeOrgPolicyLine,
 	}
 }
 
-// reviewedList names the reviewed builds for a refusal message.
-func reviewedList(cs []claudeContract) string {
-	var parts []string
-	for _, c := range cs {
-		parts = append(parts, c.Version+" "+c.platform())
+// parseClaudeVersion reads `claude --version`: exactly "X.Y.Z (Claude
+// Code)", at or above claudeMinVersion.
+func parseClaudeVersion(out string) (string, error) {
+	m := claudeVersionRe.FindStringSubmatch(strings.TrimRight(out, "\n"))
+	if m == nil {
+		return "", fmt.Errorf("claude --version printed %q, not a Claude Code version", label(strings.TrimSpace(out)))
 	}
-	if len(parts) == 0 {
-		return "none"
+	if versionLess(m[1], claudeMinVersion) {
+		return "", fmt.Errorf("Claude Code %s is older than %s, the oldest build Klyx runs; update Claude Code", m[1], claudeMinVersion)
 	}
-	return strings.Join(parts, ", ")
+	return m[1], nil
+}
+
+var claudeVersionRe = regexp.MustCompile(`^(\d{1,4}\.\d{1,4}\.\d{1,6}) \(Claude Code\)$`)
+
+// versionLess compares two X.Y.Z versions numerically.
+func versionLess(a, b string) bool {
+	pa, pb := strings.Split(a, "."), strings.Split(b, ".")
+	for i := 0; i < 3; i++ {
+		x, _ := strconv.Atoi(pa[i])
+		y, _ := strconv.Atoi(pb[i])
+		if x != y {
+			return x < y
+		}
+	}
+	return false
 }
 
 // claudeLockdown are the switches that turn Claude Code into a plain
@@ -145,7 +150,7 @@ func claudeEnv(environ []string) []string {
 
 // claudePolicyPaths are the managed-policy locations for a platform (spec
 // §1.5 check 2). Any of them existing, or any that cannot be checked, refuses
-// the call. Only reviewed platforms reach this.
+// the call. Only supported platforms (claudePlatforms) reach this.
 func claudePolicyPaths(goos, user string) []string {
 	switch goos {
 	case "darwin":

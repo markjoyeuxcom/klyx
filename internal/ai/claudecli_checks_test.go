@@ -50,6 +50,12 @@ func TestParseClaudeAuth(t *testing.T) {
 	if other.identity == acct.identity {
 		t.Fatal("another account must have another identity")
 	}
+	// A newer build may add a member; one that names no policy is ignored
+	// and changes nothing about the identity.
+	newer, err := parseClaudeAuth(authWith(t, map[string]any{"billingTier": "standard"}), home)
+	if err != nil || newer.identity != acct.identity {
+		t.Fatalf("a new non-policy member is admitted, got (%+v, %v)", newer, err)
+	}
 
 	refused := []struct {
 		name string
@@ -66,7 +72,8 @@ func TestParseClaudeAuth(t *testing.T) {
 		{"signed out", authWith(t, map[string]any{"loggedIn": false}), "not signed in"},
 		{"policy-forced login", authWith(t, map[string]any{"forcedLoginMethod": "claudeai"}), "administrator"},
 		{"policy-limited providers", authWith(t, map[string]any{"allowedProviders": []string{"firstParty"}}), "administrator"},
-		{"unknown field", authWith(t, map[string]any{"teamPolicy": "x"}), "outside the reviewed contract"},
+		{"a new field that names policy", authWith(t, map[string]any{"teamPolicy": "x"}), "may be administrator policy"},
+		{"a new field that names a restriction", authWith(t, map[string]any{"loginRestrictions": []string{"x"}}), "may be administrator policy"},
 		{"missing field", authWith(t, map[string]any{"orgId": nil}), "missing"},
 		{"another config dir", authWith(t, map[string]any{"configDirectory": "/elsewhere"}), "configuration directory"},
 		{"no account id", authWith(t, map[string]any{"orgId": ""}), "identified"},
@@ -95,7 +102,7 @@ func TestParseClaudeAuth(t *testing.T) {
 }
 
 func TestParseClaudeDoctor(t *testing.T) {
-	c := reviewedClaudeContracts[0]
+	c := claudeBuild{Version: "2.1.296", GOOS: "darwin", GOARCH: "arm64"}
 	good := string(fixture(t, "doctor-promax.synth.txt"))
 	if err := parseClaudeDoctor([]byte(good), c); err != nil {
 		t.Fatalf("the Pro/Max doctor output is admitted: %v", err)
@@ -105,14 +112,14 @@ func TestParseClaudeDoctor(t *testing.T) {
 		out  string
 		want string
 	}{
-		{"captured: no credentials", string(fixture(t, "doctor-locked-nologin.captured.txt")), "outside the reviewed contract"},
-		{"remote policy loaded", strings.Replace(good, c.RemotePolicyLine, "Managed settings (remote): loaded (3 keys)", 1), "outside the reviewed contract"},
-		{"remote policy checking", strings.Replace(good, c.RemotePolicyLine, "Managed settings (remote): checking…", 1), "outside the reviewed contract"},
-		{"org policy applies", strings.Replace(good, c.OrgPolicyLine, "Organization policy: applied", 1), "outside the reviewed contract"},
-		{"remote line missing", strings.Replace(good, c.RemotePolicyLine+"\n", "", 1), "did not confirm"},
-		{"remote line twice", strings.Replace(good, c.RemotePolicyLine, c.RemotePolicyLine+"\n"+c.RemotePolicyLine, 1), "more than once"},
-		{"hyphen instead of em dash", strings.Replace(good, "—", "-", 1), "outside the reviewed contract"},
-		{"a new local policy line", good + "Managed settings (local): /Library/Application Support/ClaudeCode\n", "outside the reviewed contract"},
+		{"captured: no credentials", string(fixture(t, "doctor-locked-nologin.captured.txt")), "does not know"},
+		{"remote policy loaded", strings.Replace(good, claudeRemotePolicyLine, "Managed settings (remote): loaded (3 keys)", 1), "does not know"},
+		{"remote policy checking", strings.Replace(good, claudeRemotePolicyLine, "Managed settings (remote): checking…", 1), "does not know"},
+		{"org policy applies", strings.Replace(good, claudeOrgPolicyLine, "Organization policy: applied", 1), "does not know"},
+		{"remote line missing", strings.Replace(good, claudeRemotePolicyLine+"\n", "", 1), "did not confirm"},
+		{"remote line twice", strings.Replace(good, claudeRemotePolicyLine, claudeRemotePolicyLine+"\n"+claudeRemotePolicyLine, 1), "more than once"},
+		{"hyphen instead of em dash", strings.Replace(good, "—", "-", 1), "does not know"},
+		{"a new local policy line", good + "Managed settings (local): /Library/Application Support/ClaudeCode\n", "does not know"},
 		{"another version", strings.Replace(good, "Running: native (2.1.296)", "Running: native (2.1.297)", 1), "did not confirm"},
 		{"another platform", strings.Replace(good, "Platform: darwin-arm64", "Platform: linux-x64", 1), "did not confirm"},
 		{"truncated", good[:len(good)/3], "cannot confirm"},

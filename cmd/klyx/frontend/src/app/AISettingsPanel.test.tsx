@@ -213,7 +213,7 @@ describe("AISettingsPanel draft fencing (Codex review of c488e34)", () => {
 });
 
 describe("AISettingsPanel: Claude Code CLI", () => {
-  const reviewed = { path: "/Users/o/.local/share/claude/versions/2.1.296", version: "2.1.296", sha256: "c9b5341637be", reviewed: true, admitted: false };
+  const reviewed = { path: "/Users/o/.local/share/claude/versions/2.1.296", version: "2.1.296", sha256: "c9b5341637be", tested: true, admitted: false };
 
   it("sets up the CLI with no key and no origin, and shows what Klyx found", async () => {
     bridge.getAISettings.mockResolvedValue(state());
@@ -243,12 +243,13 @@ describe("AISettingsPanel: Claude Code CLI", () => {
     expect(screen.getByTestId("ai-cli-status").textContent).not.toContain("first call");
   });
 
-  it("shows why an installed build is refused", async () => {
+  it("says a new build needs one Test", async () => {
     bridge.getAISettings.mockResolvedValue(state());
-    bridge.getCLIStatus.mockResolvedValue({ path: "/x/claude", version: "", sha256: "", reviewed: false, admitted: false, problem: "This Claude Code build (2.1.300, sha256 0123456789ab) has no reviewed Klyx contract" });
+    bridge.getCLIStatus.mockResolvedValue({ path: "/x/claude", version: "", sha256: "0123456789ab", tested: false, admitted: false, problem: "This Claude Code build (2.1.300, sha256 0123456789ab) has not been checked by Klyx on this machine yet. Press Test in Settings > AI to check and admit it" });
     render(<AISettingsPanel />);
     fireEvent.change(await screen.findByLabelText("AI provider"), { target: { value: "claudeCLI" } });
-    await waitFor(() => expect(screen.getByTestId("ai-cli-status").textContent).toContain("no reviewed Klyx contract"));
+    await waitFor(() => expect(screen.getByTestId("ai-cli-status").textContent).toContain("Press Test"));
+    expect(screen.getByTestId("ai-settings").textContent).toContain("each Claude Code update needs one Test");
   });
 
   it("drops a status reply for an older path, and re-reads after Test", async () => {

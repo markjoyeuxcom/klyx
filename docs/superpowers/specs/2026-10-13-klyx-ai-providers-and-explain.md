@@ -131,7 +131,7 @@ Managed (admin policy) settings that the CLI cannot override make the adapter fa
 - its identity is computed (sha256 of the resolved file, version string, platform);
 - its help is parsed for every required flag, and the effective lockdown argv is assembled.
 
-An unknown version, a missing flag, an unknown output schema or an unknown event type fails closed. Admission (§1.4) binds to the executable identity and the effective lockdown configuration, and is invalidated by any change.
+A version below the floor, a build Test has not checked, a missing flag, an unknown output schema or an unknown event type fails closed (for Claude Code, see §1.5's 2026-10-14 revision). Admission (§1.4) binds to the executable identity and the effective lockdown configuration, and is invalidated by any change.
 
 **Invocation** (all adapters):
 - **Working directory:** a fresh `0700` temp dir per call, removed afterwards.
@@ -199,21 +199,24 @@ Sources: the Claude Code docs (cli-reference, managed-settings, server-managed-s
 
 Codex's design review (274535f) required four changes before implementation. They are folded in below:
 - per-call account and policy checks;
-- exact reviewed versions;
+- exact reviewed versions (superseded on 2026-10-14, below);
 - locked-down preflight helpers;
 - a confirmed-completion output contract.
 
-**Reviewed contracts (exact, not a range):**
-- A contract is one reviewed tuple `{version, GOOS/GOARCH, sha256 of the binary}`. Today there is exactly one: Claude Code `2.1.296`, `darwin/arm64`, sha256 `c9b5341637becbd423ddffc5b254afb645682a3868cb708bbc6cc0e7bb419937`.
-- Any other version, platform or hash is refused before any helper runs: "Claude Code <v> on <platform> has no reviewed Klyx contract (reviewed: 2.1.296 darwin/arm64)". A recognised flag set on a new binary proves neither its meaning nor its output or policy contract.
-- Adding a version is a reviewed change that carries the version's bounded fixtures (`auth status`, `doctor`, the sentinel probe, and a captured stream-json run).
-- Claude Code updates itself often. Until Klyx ships a reviewed entry, the owner can point `ai.cliPath` at a reviewed binary that is still in `~/.local/share/claude/versions/`.
+**Revision 2026-10-14: any build, Test once per build (owner decision).** Claude Code updates itself every day or two (2.1.299 and 2.1.300 shipped hours apart on 2026-10-14), and the exact pin turned every update into a broken provider until a Klyx release. The owner chose to accept any build at or above `2.1.296` on a supported platform, admitted by Test once per build:
+- **What still holds on every build:** the flag-recognition probe; the allowlisted environment (attachments off); endpoint policy and caches before and after the helpers and before stdin; a personal Pro or Max sign-in with no remote or organization policy (doctor); an init that lists no tools, MCP servers, skills, slash commands or agents and only built-in plugins; the full per-call output contract, where any tool, hook or unknown event discards the answer and revokes; and Test's canary probe.
+- **What is traded away:** an exact pin proved that each flag meant what Klyx relies on. A build Klyx has not read could change a flag's meaning; Klyx would then detect tool use only after it happened, by which time a local file could already have gone to Anthropic over the owner's sign-in. The canary in Test is the per-build check against that, run before any cluster data goes through the new build.
+- **Builds:** a build is `{version, GOOS/GOARCH}` plus its binary's sha256. Supported platforms: `darwin/arm64` (the platform whose policy locations and doctor output were read). Another platform is refused before anything runs.
+- **The tested record:** `claude-builds.json` beside `fleet.yaml` (0600, written atomically, the 8 most recently tested builds) holds `{sha256, version, platform, testedAt}` for each build that passed Test. A missing or unreadable record holds nothing.
+- **An untested build** (a new install or an auto-update) runs nothing outside Test: "This Claude Code build (<file>, sha256 <short>) has not been checked by Klyx on this machine yet. Press Test in Settings > AI to check and admit it". Explain and chat show that reason.
+- **Test on an untested build** reads its version first, then runs every check below, the flag probe, the init check and the canary. A pass records the build; a recording failure fails the Test. A tested build is admitted automatically at the first call of a Klyx run, as before.
+- **A build that breaks the contract** (a tool or unknown event, a bad init, output over the cap, a canary that quotes a local file) is revoked and dropped from the record, so even a restarted Klyx needs Test before it runs again.
 
 **Pinned binary:**
 - Resolve the executable through symlinks. It must be a native Mach-O, ELF or PE file, and it is hashed.
 - A cache keyed on path, size, mtime and inode avoids re-hashing 240 MB per call. Any change to the key forces a re-hash.
-- The sha256 must equal the reviewed tuple's.
-- `--version` must print exactly `2.1.296 (Claude Code)`.
+- The sha256 must be on the tested record for this platform, except under Test.
+- `--version` must print exactly `X.Y.Z (Claude Code)` with `X.Y.Z` at or above `2.1.296`; for a tested build, exactly the version Test recorded.
 
 **Flag-recognition probe (no model call):**
 - `--version` short-circuits even unknown flags, so it proves nothing.
@@ -259,27 +262,27 @@ Codex's design review (274535f) required four changes before implementation. The
 
    The Linux (`/etc/claude-code/`) and Windows (`C:\Program Files\ClaudeCode\`, the `HKLM`/`HKCU\SOFTWARE\Policies\ClaudeCode` `Settings` value, and the WSL `/mnt/c/...` equivalents) locations join the check when a contract for those platforms is reviewed.
 3. **Policy caches:** `~/.claude/remote-settings.json` and `~/.claude/policy-limits.json` must be absent. "Missing" is the only accepted error.
-4. **Account** (`auth status`, pinned schema for 2.1.296):
-   - The JSON object must have exactly the known keys: `loggedIn`, `authMethod`, `apiProvider`, `analyticsDisabled`, `projectsDirectory`, `configDirectory`, `email`, `orgId`, `orgName`, `subscriptionType`.
+4. **Account** (`auth status`, schema read on 2.1.296):
+   - The JSON object must have every known key: `loggedIn`, `authMethod`, `apiProvider`, `analyticsDisabled`, `projectsDirectory`, `configDirectory`, `email`, `orgId`, `orgName`, `subscriptionType`. A key a newer build adds is ignored unless its name speaks of policy (`polic`, `managed`, `forced`, `allowed`, `restrict`, `admin`, `enterprise`, `enforce`, `require`), which refuses (2026-10-14).
    - It must show `loggedIn: true`, `authMethod: "claude.ai"`, `apiProvider: "firstParty"`, and `subscriptionType` `"pro"` or `"max"`.
    - It must not have `apiKeySource`, `forcedLoginMethod` or `allowedProviders`; the last two come from policy.
    - `configDirectory` must be `~/.claude`.
-   - An unknown key, a duplicate key, unparseable output, trailing data or a non-zero exit refuses.
+   - A policy-named new key, a duplicate key, unparseable output, trailing data or a non-zero exit refuses.
    - Team and Enterprise accounts are refused. Their organisation can push server-managed policy, delivered at startup and hourly, which can include hooks and applies inside the `-p` run after Klyx's check.
    - API-key auth is refused as well; a Klyx API provider covers that case.
 5. **Account identity binding:** the identity is `sha256(authMethod, apiProvider, subscriptionType, orgId, email)`.
    - Admission records it.
    - A call whose identity differs from the admitted one, or is disallowed, or cannot be determined, is refused and revokes admission until the next Test. That covers a Team, Enterprise or API-key sign-in, malformed output, and a non-zero exit. So returning to the admitted account does not resume without Test.
    - A helper timeout, a cancel or a process that did not start says nothing about the identity. It fails that call only.
-6. **Remote policy** (`doctor`, pinned lines for 2.1.296):
+6. **Remote policy** (`doctor`, lines read on 2.1.296):
    - The output must contain, each exactly once, these lines:
-     - `Running: native (2.1.296)`;
+     - `Running: native (<the build's version>)`;
      - `Platform: darwin-arm64`;
      - `Managed settings (remote): not fetched — requires an Enterprise or Team subscription`, with an em dash, from the reason `unsupported_subscription`;
      - `Organization policy: not applicable to Pro and Max accounts`, from the reason `prosumer_oauth`.
    - Any other line whose label mentions "managed" or "polic" refuses.
    - So do a missing or duplicate pinned line, a "checking", "loaded", "cached" or "fetch failed" value, truncated output, a deadline hit, or a non-zero exit.
-   - Doctor is a diagnostic, not a documented machine interface, so this parse is pinned per reviewed version and never generalised.
+   - Doctor is a diagnostic, not a documented machine interface. Only the version in the first line follows the build; the two policy lines stay verbatim, and a build that rewords them is refused until Klyx learns the new wording.
 7. **Re-check after the helpers:** the endpoint policy and the caches again.
 8. **Launch, then re-check before releasing stdin.**
    - Write `system.txt` (`0600`) into a fresh `0700` call dir, and start the production argv with stdin held open and empty.
@@ -293,7 +296,7 @@ Check-to-launch race (documented, accepted for Pro and Max only):
 - Between check 6 and the CLI's own startup, the owner could switch the login, or Anthropic could start delivering policy to a personal account. The re-check in step 8 narrows that window, but Klyx cannot observe the CLI's own policy load.
 - The output contract below catches some after-the-fact signs: a hook event, or a changed init. Rejecting the output after a hook ran is detection, not prevention. That is why Team and Enterprise accounts, which have a policy channel, are refused outright.
 
-**Admission** is established on Settings "Test", or automatically before the first call in a Klyx run. It runs steps 1-7 plus the flag-recognition probe. It records `CLIAdmission{ExeSHA256, Version, Platform, ArgvHash, AccountHash, CheckedAt}`, in memory only.
+**Admission** is established on Settings "Test", or, for a build on the tested record, automatically before the first call in a Klyx run. It runs steps 1-7 plus the flag-recognition probe. It records `CLIAdmission{ExeSHA256, Version, Platform, ArgvHash, AccountHash, CheckedAt}`, in memory only.
 
 Admission is revoked until the next Test by any of:
 - an identity change;
@@ -309,7 +312,7 @@ Admission and revocation are atomic across concurrent calls (Codex review of 09c
 
 A transient helper failure, such as a timeout, fails that call only. A new model changes the argv hash, so it re-runs admission rather than revoking it.
 
-**Per-call output contract** (stream-json, verbose, pinned for 2.1.296). The answer is accepted only as an explicitly confirmed, complete, non-refusal, text-only answer. Everything else discards it.
+**Per-call output contract** (stream-json, verbose, read on 2.1.296 and held on every build). The answer is accepted only as an explicitly confirmed, complete, non-refusal, text-only answer. Everything else discards it.
 
 - **Framing:**
   - stdout is newline-delimited JSON, capped at 4 MiB, and every line is exactly one JSON object, with no key repeated in any object at any depth.
@@ -326,8 +329,8 @@ A transient helper failure, such as a timeout, fails that call only. A new model
   - `system/model_refusal_no_fallback` maps to `RefusedError`.
 - **`system/init`:**
   - `tools`, `mcp_servers`, `slash_commands`, `skills` and `agents` are empty or absent;
-  - `plugins` is empty, absent, or lists only the reviewed version's own built-in plugins, at most once each. Each entry must be exactly `{name, path: "builtin", source: "<name>@builtin"}`, plus an optional `version`. For 2.1.296 those are `cc-plugin-agents-md` and `cc-plugin-plugin-authoring`. An installed plugin, a plugin synced from claude.ai, or an unreviewed built-in revokes admission, and so do `plugin_errors` or `plugin_warnings`;
-  - `claude_code_version` is `2.1.296`;
+  - `plugins` is empty, absent, or lists only plugins built into the binary, at most once each. Each entry must be exactly `{name, path: "builtin", source: "<name>@builtin"}`, plus an optional `version`; a built-in ships inside the hashed build Test checked, and the empty lists above still bind it (2026-10-14; 2.1.296 bundles `cc-plugin-agents-md` and `cc-plugin-plugin-authoring`). An installed plugin or a plugin synced from claude.ai revokes admission, and so do `plugin_errors` or `plugin_warnings`;
+  - `claude_code_version` is the build's version;
   - `cwd` is the call dir;
   - `model` is the requested model;
   - `apiKeySource` is `"none"`.

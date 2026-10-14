@@ -49,10 +49,9 @@ func unconfirmed(what string) error {
 
 // streamWant is what a run must report about itself.
 type streamWant struct {
-	Version        string   // the reviewed claude_code_version
-	Model          string   // the model asked for
-	Cwd            string   // the call dir, symlinks resolved
-	BuiltinPlugins []string // the reviewed version's built-in plugins
+	Version string // the build's claude_code_version
+	Model   string // the model asked for
+	Cwd     string // the call dir, symlinks resolved
 }
 
 // emptyInitLists are the init members that must be absent or empty: what the
@@ -144,7 +143,7 @@ func checkInit(m map[string]json.RawMessage, w streamWant) (string, error) {
 			return "", toolEvent("init lists " + k)
 		}
 	}
-	if err := checkPlugins(m, w.BuiltinPlugins); err != nil {
+	if err := checkPlugins(m); err != nil {
 		return "", err
 	}
 	if v, _ := rawString(m, "claude_code_version"); v != w.Version {
@@ -166,11 +165,14 @@ func checkInit(m map[string]json.RawMessage, w streamWant) (string, error) {
 	return id, nil
 }
 
-// checkPlugins allows only the reviewed version's own built-in plugins in
-// init: each exactly {name, path "builtin", source "<name>@builtin"}, at most
-// once. Anything else - an installed or claude.ai-synced plugin, an
-// unreviewed built-in, a plugin load error or warning - revokes admission.
-func checkPlugins(m map[string]json.RawMessage, builtins []string) error {
+// checkPlugins allows only plugins built into the binary in init: each
+// exactly {name, path "builtin", source "<name>@builtin"}, plus an optional
+// version, at most once. They ship inside the hashed build that Test
+// checked, and init must still report no tools, skills, commands, agents or
+// MCP servers, so a built-in contributes nothing the lockdown lets through.
+// Anything else - an installed or claude.ai-synced plugin, a plugin load
+// error or warning - revokes admission.
+func checkPlugins(m map[string]json.RawMessage) error {
 	for _, k := range []string{"plugin_errors", "plugin_warnings"} {
 		if !rawEmpty(m, k) {
 			return toolEvent("init reports " + k)
@@ -182,10 +184,6 @@ func checkPlugins(m map[string]json.RawMessage, builtins []string) error {
 	var list []json.RawMessage
 	if err := json.Unmarshal(m["plugins"], &list); err != nil {
 		return contractBreak("init plugins is not a list")
-	}
-	allowed := map[string]bool{}
-	for _, b := range builtins {
-		allowed[b] = true
 	}
 	seen := map[string]bool{}
 	for _, raw := range list {
@@ -200,7 +198,7 @@ func checkPlugins(m map[string]json.RawMessage, builtins []string) error {
 		for k := range p {
 			extra = extra || (k != "name" && k != "path" && k != "source" && k != "version")
 		}
-		if !allowed[name] || path != "builtin" || source != name+"@builtin" || extra || seen[name] {
+		if name == "" || path != "builtin" || source != name+"@builtin" || extra || seen[name] {
 			return toolEvent("init lists plugin " + label(name))
 		}
 		seen[name] = true
@@ -292,9 +290,9 @@ func checkResult(m map[string]json.RawMessage, w streamWant, sessionID, streamed
 	if !rawEmpty(m, "permission_denials") {
 		return "", toolEvent("permission denials")
 	}
-	// Claude Code 2.1.296 writes subagent_stats on every result, as running
-	// totals that are all zero when no subagent ran (read from the shipped
-	// binary, 2026-10-14). Only a non-zero counter is subagent use.
+	// Claude Code (from 2.1.296) writes subagent_stats on every result, as
+	// running totals that are all zero when no subagent ran (read from the
+	// shipped binary, 2026-10-14). Only a non-zero counter is subagent use.
 	if !rawNull(m, "subagent_stats") && !zeroCounters(m["subagent_stats"]) {
 		return "", toolEvent("subagent use")
 	}

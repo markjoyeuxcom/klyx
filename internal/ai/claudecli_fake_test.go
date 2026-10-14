@@ -188,14 +188,15 @@ func fakeClaude() (int, bool) {
 }
 
 // fakeCLI is one test's fake Claude Code: a private HOME, policy root and
-// temp dir, and a provider whose only reviewed contract is this test binary.
+// temp dir, and a provider on this platform whose one tested build is this
+// test binary.
 type fakeCLI struct {
 	t          *testing.T
 	home       string
 	policyRoot string
 	spec       fakeSpec
 	p          *claudeCLIProvider
-	contract   claudeContract
+	sha        string
 }
 
 const fakeVersion = "9.9.9"
@@ -226,14 +227,9 @@ func newFakeCLI(t *testing.T) *fakeCLI {
 		t.Fatal(err)
 	}
 	sum := sha256.Sum256(b)
-	c := claudeContract{
-		Version: fakeVersion, GOOS: runtime.GOOS, GOARCH: runtime.GOARCH, SHA256: hex.EncodeToString(sum[:]),
-		RemotePolicyLine: reviewedClaudeContracts[0].RemotePolicyLine, OrgPolicyLine: reviewedClaudeContracts[0].OrgPolicyLine,
-		BuiltinPlugins: reviewedClaudeContracts[0].BuiltinPlugins,
-	}
 	home := t.TempDir()
 	home, _ = filepath.EvalSymlinks(home)
-	f := &fakeCLI{t: t, home: home, policyRoot: t.TempDir(), contract: c}
+	f := &fakeCLI{t: t, home: home, policyRoot: t.TempDir(), sha: hex.EncodeToString(sum[:])}
 	doctor := strings.NewReplacer("Running: native (2.1.296)", "Running: native ("+fakeVersion+")",
 		"Platform: darwin-arm64", "Platform: "+runtime.GOOS+"-"+runtime.GOARCH).Replace(string(fixture(t, "doctor-promax.synth.txt")))
 	f.spec = fakeSpec{
@@ -253,9 +249,10 @@ func newFakeCLI(t *testing.T) *fakeCLI {
 				"KLYX_SECRET=1", "NODE_OPTIONS=--require /x.js", "HTTPS_PROXY=http://proxy:1", "AWS_SECRET_ACCESS_KEY=a"}
 		},
 		lookPath:  exec.LookPath,
-		contracts: []claudeContract{c},
+		platforms: []string{fakePlatform},
 		goos:      runtime.GOOS, goarch: runtime.GOARCH,
 		store:      &claudeAdmissionStore{},
+		builds:     &claudeBuildStore{},
 		hashes:     &exeHashCache{m: map[string]exeHashEntry{}},
 		tmpDir:     tmp,
 		policyRoot: f.policyRoot,
@@ -264,8 +261,19 @@ func newFakeCLI(t *testing.T) *fakeCLI {
 		authDeadline: 20 * time.Second, doctorDeadline: 20 * time.Second, initDeadline: 20 * time.Second, stdinDeadline: 20 * time.Second,
 		offline: func(exe string, args []string) (string, []string) { return exe, args }, // no sandbox-exec on Linux CI
 	}
+	if err := f.p.builds.record(testedBuild{SHA256: f.sha, Version: fakeVersion, Platform: fakePlatform, TestedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
 	f.write()
 	return f
+}
+
+var fakePlatform = runtime.GOOS + "/" + runtime.GOARCH
+
+// tested reports whether the fake's build is on the tested record.
+func (f *fakeCLI) tested() bool {
+	_, ok := f.p.builds.lookup(f.sha, fakePlatform)
+	return ok
 }
 
 func (f *fakeCLI) write() {
@@ -353,7 +361,7 @@ func TestClaudeCLI_CleanCall(t *testing.T) {
 		t.Fatalf("the call dir %s outlived the call", rec.Cwd)
 	}
 	rec2, _, _ := f.p.store.snapshot()
-	if rec2 == nil || rec2.ExeSHA256 != f.contract.SHA256 || rec2.Version != fakeVersion {
+	if rec2 == nil || rec2.ExeSHA256 != f.sha || rec2.Version != fakeVersion {
 		t.Fatalf("admission = %+v", rec2)
 	}
 
@@ -367,25 +375,87 @@ func TestClaudeCLI_CleanCall(t *testing.T) {
 	}
 }
 
-func TestClaudeCLI_UnreviewedBinaryRunsNothing(t *testing.T) {
+// A build Test has not checked on this machine (a new install, an
+// auto-update) runs nothing outside Test, and says to press Test.
+func TestClaudeCLI_UntestedBuildRunsNothing(t *testing.T) {
 	t.Parallel() // each fake owns its HOME, temp dir and admission store
 	f := newFakeCLI(t)
-	f.p.contracts = []claudeContract{{Version: "2.1.296", GOOS: runtime.GOOS, GOARCH: runtime.GOARCH, SHA256: strings.Repeat("0", 64)}}
+	f.p.builds = &claudeBuildStore{}
 	_, err := f.complete()
-	wantRefused(t, err, "no reviewed Klyx contract")
+	wantRefused(t, err, "has not been checked by Klyx on this machine yet. Press Test")
 	if len(f.calls()) != 0 {
-		t.Fatalf("an unreviewed binary must not run: %v", f.calls())
+		t.Fatalf("an untested build must not run: %v", f.calls())
 	}
-	if err := f.p.Ready(); err == nil {
-		t.Fatal("Ready reports the unreviewed binary")
+	if err := f.p.Ready(); err == nil || !strings.Contains(err.Error(), "Press Test") {
+		t.Fatalf("Ready reports the untested build: %v", err)
+	}
+	if st := f.p.Status(); st.Tested || st.Version != "" || !strings.Contains(st.Problem, "Press Test") {
+		t.Fatalf("status of an untested build: %+v", st)
 	}
 
 	f = newFakeCLI(t)
 	f.p.goarch = "riscv64"
 	_, err = f.complete()
-	wantRefused(t, err, "on "+runtime.GOOS+"/riscv64 has no reviewed Klyx contract")
+	wantRefused(t, err, "Claude Code on "+runtime.GOOS+"/riscv64 is not supported by Klyx yet")
 	if len(f.calls()) != 0 {
-		t.Fatalf("an unreviewed platform must not run anything: %v", f.calls())
+		t.Fatalf("an unsupported platform must not run anything: %v", f.calls())
+	}
+}
+
+// Test admits a build it has not seen: it reads the version first, runs
+// every check and the canary, and records the build - in a 0600 file that a
+// restarted Klyx reads, so calls then run without another Test.
+func TestClaudeCLI_TestAdmitsANewBuild(t *testing.T) {
+	t.Parallel() // each fake owns its HOME, temp dir and admission store
+	f := newFakeCLI(t)
+	path := filepath.Join(t.TempDir(), "klyx", "claude-builds.json")
+	f.p.builds = &claudeBuildStore{path: path}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	if _, err := f.p.Probe(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(f.calls(), " "); !strings.HasPrefix(got, "version auth_") || strings.Count(got, "version") != 1 {
+		t.Fatalf("Test reads the version once, before the helpers: %s", got)
+	}
+	fi, err := os.Stat(path)
+	if err != nil || fi.Mode().Perm() != 0o600 {
+		t.Fatalf("the record is a 0600 file: %v %v", fi, err)
+	}
+	if !f.tested() {
+		t.Fatal("a passing Test records the build")
+	}
+	if _, err := f.complete(); err != nil {
+		t.Fatalf("a call after Test runs: %v", err)
+	}
+	// A restart: fresh admission and a store that reads the same file.
+	q := f.sibling(tModel)
+	q.store, q.builds = &claudeAdmissionStore{}, &claudeBuildStore{path: path}
+	if _, err := callWith(q); err != nil {
+		t.Fatalf("a tested build runs after a restart without Test: %v", err)
+	}
+}
+
+// Test refuses a build older than the floor, or one whose version line is
+// not Claude Code's, and records nothing.
+func TestClaudeCLI_TestRefusesAnOldBuild(t *testing.T) {
+	t.Parallel() // each fake owns its HOME, temp dir and admission store
+	for line, want := range map[string]string{
+		"2.1.295 (Claude Code)":      "older than 2.1.296",
+		"2.1.300":                    "not a Claude Code version",
+		"2.1.300-beta (Claude Code)": "not a Claude Code version",
+	} {
+		f := newFakeCLI(t)
+		f.p.builds = &claudeBuildStore{}
+		f.spec.Version = line
+		f.write()
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		_, err := f.p.Probe(ctx)
+		cancel()
+		wantRefused(t, err, want)
+		if f.tested() || f.prompts() != 0 {
+			t.Fatalf("%s: nothing is recorded or sent (prompts %d)", line, f.prompts())
+		}
 	}
 }
 
@@ -493,8 +563,8 @@ func TestClaudeCLI_AccountChecksEveryCall(t *testing.T) {
 		{"undeterminable auth", func(f *fakeCLI) { f.spec.Auth, f.spec.AuthExit = "Not logged in\n", 1 }, "could not be read"},
 		{"auth exits non-zero", func(f *fakeCLI) { f.spec.AuthExit = 1 }, "exited with status 1"},
 		{"remote policy now loaded", func(f *fakeCLI) {
-			f.spec.Doctor = strings.Replace(f.spec.Doctor, f.contract.RemotePolicyLine, "Managed settings (remote): loaded", 1)
-		}, "outside the reviewed contract"},
+			f.spec.Doctor = strings.Replace(f.spec.Doctor, claudeRemotePolicyLine, "Managed settings (remote): loaded", 1)
+		}, "does not know"},
 		{"cache appears", func(f *fakeCLI) {
 			os.MkdirAll(filepath.Join(f.home, ".claude"), 0o700)
 			os.WriteFile(filepath.Join(f.home, ".claude", "remote-settings.json"), []byte("{}"), 0o600)
@@ -587,7 +657,7 @@ func TestClaudeCLI_WrongVersionLine(t *testing.T) {
 	f.spec.Version = "9.9.10 (Claude Code)"
 	f.write()
 	_, err := f.complete()
-	wantRefused(t, err, "reviewed version")
+	wantRefused(t, err, "reports 9.9.10, not the 9.9.9 that Test checked")
 }
 
 func TestClaudeCLI_ToolEventRevokes(t *testing.T) {
@@ -601,6 +671,11 @@ func TestClaudeCLI_ToolEventRevokes(t *testing.T) {
 	_, err := f.complete()
 	if !errors.Is(err, ErrUnexpectedOutput) || !strings.Contains(err.Error(), "revoked") {
 		t.Fatalf("got %v", err)
+	}
+	// The build broke the contract: it is off the tested record, so even a
+	// restarted Klyx needs Test before it runs again.
+	if f.tested() {
+		t.Fatal("a build that attempted a tool stays on the tested record")
 	}
 	f.spec.Stream = fakeStream(t)
 	f.write()
@@ -696,8 +771,8 @@ func TestClaudeCLI_ProbeCatchesALocalRead(t *testing.T) {
 	f.spec.EchoFile = true
 	f.write()
 	_, err = f.p.Probe(ctx)
-	if !errors.Is(err, ErrUnexpectedOutput) || f.p.Ready() == nil {
-		t.Fatalf("a probe that read a file revokes admission, got %v", err)
+	if !errors.Is(err, ErrUnexpectedOutput) || f.p.Ready() == nil || f.tested() {
+		t.Fatalf("a probe that read a file revokes admission and drops the build, got %v (tested %v)", err, f.tested())
 	}
 }
 
@@ -705,7 +780,7 @@ func TestClaudeCLI_Status(t *testing.T) {
 	t.Parallel() // each fake owns its HOME, temp dir and admission store
 	f := newFakeCLI(t)
 	st := f.p.Status()
-	if !st.Reviewed || st.Admitted || st.Version != fakeVersion || len(st.SHA256) != 12 {
+	if !st.Tested || st.Admitted || st.Version != fakeVersion || len(st.SHA256) != 12 {
 		t.Fatalf("before admission: %+v", st)
 	}
 	if _, err := f.complete(); err != nil {
@@ -968,7 +1043,7 @@ func TestClaudeCLI_AccountFailuresRevokeUntilTest(t *testing.T) {
 func TestClaudeAdmissionStore_Valid(t *testing.T) {
 	s := &claudeAdmissionStore{}
 	epoch := s.reset()
-	exe := exeIdentity{SHA256: "exe-1", Contract: reviewedClaudeContracts[0]}
+	exe := exeIdentity{SHA256: "exe-1", Build: claudeBuild{Version: "2.1.296", GOOS: "darwin", GOARCH: "arm64"}, Tested: true}
 	if err := s.publish(epoch, exe, "acct-1", "argv-1"); err != nil {
 		t.Fatal(err)
 	}
@@ -1009,7 +1084,7 @@ func TestClaudeAdmissionStore_ReleaseIsAtomic(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			s := &claudeAdmissionStore{}
 			epoch := s.reset()
-			exe := exeIdentity{SHA256: "exe-1", Contract: reviewedClaudeContracts[0]}
+			exe := exeIdentity{SHA256: "exe-1", Build: claudeBuild{Version: "2.1.296", GOOS: "darwin", GOARCH: "arm64"}, Tested: true}
 			if err := s.publish(epoch, exe, "acct", "argv"); err != nil {
 				t.Fatal(err)
 			}

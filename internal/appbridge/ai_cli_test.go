@@ -31,20 +31,20 @@ func cliState(p *fakeCLIProvider) *AIState {
 	return &AIState{ProviderID: ai.ProviderClaudeCLI, Provider: p, Model: "claude-opus-5-5", Origin: ai.ClaudeCLIOrigin}
 }
 
-// A CLI that would refuse - an unreviewed build, a revoked admission - is
+// A CLI that would refuse - an untested build, a revoked admission - is
 // shown as unavailable with its reason, and Explain stops before building
 // any evidence or calling it.
 func TestAI_CLINotReady(t *testing.T) {
-	p := &fakeCLIProvider{ready: &ai.CLIRefusedError{Reason: "This Claude Code build (2.1.300, sha256 0123456789ab) has no reviewed Klyx contract"}}
+	p := &fakeCLIProvider{ready: &ai.CLIRefusedError{Reason: "This Claude Code build (2.1.300, sha256 0123456789ab) has not been checked by Klyx on this machine yet"}}
 	conn := &fakeExplainConn{rows: map[string]observe.Rows{"pods/pods": podRows("pod-uid", 1)}, details: map[string]crd.InstanceDetail{"/pods/shop/api-7f9": podDetail("pod-uid", 1)}}
 	s := NewAIService(func(string) (AIConn, bool) { return conn, true }, cliState(p), func(string) bool { return false }, nil)
 
 	av := s.Available()
-	if av.Ready || !strings.Contains(av.Problem, "no reviewed Klyx contract") || av.Origin != ai.ClaudeCLIOrigin {
+	if av.Ready || !strings.Contains(av.Problem, "has not been checked by Klyx") || av.Origin != ai.ClaudeCLIOrigin {
 		t.Fatalf("availability: %+v", av)
 	}
 	r := s.Explain("c", rowTarget())
-	if r.OK || !strings.Contains(r.Error, "no reviewed Klyx contract") || p.calls != 0 {
+	if r.OK || !strings.Contains(r.Error, "has not been checked by Klyx") || p.calls != 0 {
 		t.Fatalf("Explain must stop before the call: %+v (calls %d)", r, p.calls)
 	}
 
@@ -87,15 +87,15 @@ func TestAISettings_TestProbesACLI(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Status describes the draft's binary without running it: a launcher
-	// script is never a reviewed build.
+	// script is never a tested build.
 	st := f.svc.CLIStatus(AISettingsDTO{Provider: "claudeCLI", KeySource: "none", CLIPath: shim})
-	if st.Reviewed || st.Admitted || st.Problem == "" {
+	if st.Tested || st.Admitted || st.Problem == "" {
 		t.Fatalf("status: %+v", st)
 	}
 	if st := f.svc.CLIStatus(AISettingsDTO{Provider: "openaiCompatible", Model: "m", BaseURL: "http://localhost:11434", KeySource: "none"}); !strings.Contains(st.Problem, "not a CLI") {
 		t.Fatalf("status of a non-CLI provider: %+v", st)
 	}
-	// Test of an unreviewed CLI refuses without running it.
+	// Test of a launcher script refuses without running it.
 	r := f.svc.TestProvider(AISettingsDTO{Provider: "claudeCLI", KeySource: "none", CLIPath: shim})
 	if r.OK || r.Error == "" {
 		t.Fatalf("test: %+v", r)

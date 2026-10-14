@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -184,7 +185,7 @@ func (s *claudeAdmissionStore) publish(epoch uint64, exe exeIdentity, account, a
 			return err
 		}
 	}
-	next := &CLIAdmission{ExeSHA256: exe.SHA256, Version: exe.Contract.Version, Platform: exe.Contract.platform(), CheckedAt: time.Now(), account: account, argv: map[string]bool{argv: true}}
+	next := &CLIAdmission{ExeSHA256: exe.SHA256, Version: exe.Build.Version, Platform: exe.Build.platform(), CheckedAt: time.Now(), account: account, argv: map[string]bool{argv: true}}
 	if s.rec != nil {
 		next.CheckedAt = s.rec.CheckedAt
 		for a := range s.rec.argv {
@@ -323,11 +324,14 @@ func (c *exeHashCache) sum(path string, fi os.FileInfo) (string, error) {
 	return sum, nil
 }
 
-// exeIdentity is a resolved, hashed, reviewed Claude Code binary.
+// exeIdentity is a resolved, hashed Claude Code binary on a supported
+// platform. Tested says it passed Test on this machine; Build.Version is then
+// the version Test recorded, else "" until Test reads it.
 type exeIdentity struct {
-	Path     string
-	SHA256   string
-	Contract claudeContract
+	Path   string
+	SHA256 string
+	Build  claudeBuild
+	Tested bool
 }
 
 // claudeCLIProvider runs the installed Claude Code CLI as a plain completion
@@ -340,10 +344,11 @@ type claudeCLIProvider struct {
 	model     string
 	environ   func() []string
 	lookPath  func(string) (string, error)
-	contracts []claudeContract
+	platforms []string // supported GOOS/GOARCH (claudePlatforms)
 	goos      string
 	goarch    string
 	store     *claudeAdmissionStore
+	builds    *claudeBuildStore
 	hashes    *exeHashCache
 	tmpDir    string // "" = the system temp dir
 	// policyRoot prefixes the absolute managed-policy paths; tests only.
@@ -372,8 +377,8 @@ func NewClaudeCLI(cliPath, model string) Provider {
 func newClaudeCLI(cliPath, model string) *claudeCLIProvider {
 	return &claudeCLIProvider{
 		cliPath: cliPath, model: model, environ: os.Environ, lookPath: exec.LookPath,
-		contracts: reviewedClaudeContracts, goos: runtime.GOOS, goarch: runtime.GOARCH,
-		store: defaultClaudeAdmissions, hashes: defaultExeHashes,
+		platforms: claudePlatforms, goos: runtime.GOOS, goarch: runtime.GOARCH,
+		store: defaultClaudeAdmissions, builds: defaultClaudeBuilds, hashes: defaultExeHashes,
 		authDeadline: claudeAuthDeadline, doctorDeadline: claudeDocDeadline, initDeadline: claudeShortDeadline,
 		stdinDeadline: claudeStdinDeadline, offline: claudeOffline,
 	}
@@ -414,25 +419,13 @@ func (p *claudeCLIProvider) resolve() (string, error) {
 	return "", cliRefused("Claude Code was not found. Install it, or set its path in Settings > AI")
 }
 
-func (p *claudeCLIProvider) contractFor(sum string) (claudeContract, bool) {
-	for _, c := range p.contracts {
-		if c.GOOS == p.goos && c.GOARCH == p.goarch && c.SHA256 == sum {
-			return c, true
-		}
-	}
-	return claudeContract{}, false
-}
-
-// executable resolves and hashes the binary and matches it to a reviewed
-// contract (spec §1.5 check 1). It runs nothing.
+// executable resolves and hashes the binary on a supported platform, and
+// looks it up among the builds Test has checked (spec §1.5 check 1). It runs
+// nothing.
 func (p *claudeCLIProvider) executable() (exeIdentity, error) {
-	reviewed := reviewedList(p.contracts)
-	platformOK := false
-	for _, c := range p.contracts {
-		platformOK = platformOK || (c.GOOS == p.goos && c.GOARCH == p.goarch)
-	}
-	if !platformOK {
-		return exeIdentity{}, cliRefused("Claude Code on %s/%s has no reviewed Klyx contract (reviewed: %s)", p.goos, p.goarch, reviewed)
+	build := claudeBuild{GOOS: p.goos, GOARCH: p.goarch}
+	if !slices.Contains(p.platforms, build.platform()) {
+		return exeIdentity{}, cliRefused("Claude Code on %s is not supported by Klyx yet (supported: %s)", build.platform(), strings.Join(p.platforms, ", "))
 	}
 	path, err := p.resolve()
 	if err != nil {
@@ -453,12 +446,27 @@ func (p *claudeCLIProvider) executable() (exeIdentity, error) {
 	if err != nil {
 		return exeIdentity{}, cliRefused("Claude Code at %s is not admitted: %v", real, err)
 	}
-	c, ok := p.contractFor(sum)
-	if !ok {
-		return exeIdentity{}, cliRefused("This Claude Code build (%s, sha256 %s) has no reviewed Klyx contract (reviewed: %s). Point the CLI path at a reviewed build under ~/.local/share/claude/versions/, or wait for a Klyx update",
-			filepath.Base(real), sum[:12], reviewed)
+	exe := exeIdentity{Path: real, SHA256: sum, Build: build}
+	if t, ok := p.builds.lookup(sum, build.platform()); ok {
+		exe.Build.Version, exe.Tested = t.Version, true
 	}
-	return exeIdentity{Path: real, SHA256: sum, Contract: c}, nil
+	return exe, nil
+}
+
+// untested refuses a build that Test has not checked on this machine: a new
+// install, or an auto-update.
+func untested(exe exeIdentity) error {
+	return cliRefused("This Claude Code build (%s, sha256 %s) has not been checked by Klyx on this machine yet. Press Test in Settings > AI to check and admit it",
+		filepath.Base(exe.Path), exe.SHA256[:12])
+}
+
+// distrust revokes admission and drops the build from the tested record: a
+// build that broke the contract needs Test again, even after a restart. The
+// revocation holds for this run whether or not the record could be
+// rewritten.
+func (p *claudeCLIProvider) distrust(exe exeIdentity, reason string) {
+	p.store.revoke(reason)
+	_ = p.builds.forget(exe.SHA256)
 }
 
 // checkPolicy is spec §1.5 checks 2 and 3: no managed-policy location and no
@@ -726,21 +734,30 @@ func (p *claudeCLIProvider) doctor(ctx context.Context, exe exeIdentity) error {
 	if code != 0 {
 		return cliRefused("claude doctor exited with status %d", code)
 	}
-	if err := parseClaudeDoctor(out, exe.Contract); err != nil {
+	if err := parseClaudeDoctor(out, exe.Build); err != nil {
 		return &CLIRefusedError{Reason: err.Error()}
 	}
 	return nil
 }
 
-func (p *claudeCLIProvider) version(ctx context.Context, exe exeIdentity) error {
+// version reads the build's version: X.Y.Z at or above claudeMinVersion,
+// and for a tested build exactly the version Test recorded.
+func (p *claudeCLIProvider) version(ctx context.Context, exe exeIdentity) (string, error) {
 	out, code, err := p.helper(ctx, exe, claudeShortDeadline, false, "--version")
 	if err != nil {
-		return err
+		return "", err
 	}
-	if code != 0 || strings.TrimRight(string(out), "\n") != exe.Contract.versionLine() {
-		return cliRefused("claude --version does not report the reviewed version %s", exe.Contract.Version)
+	if code != 0 {
+		return "", cliRefused("claude --version exited with status %d", code)
 	}
-	return nil
+	v, err := parseClaudeVersion(string(out))
+	if err != nil {
+		return "", &CLIRefusedError{Reason: err.Error()}
+	}
+	if exe.Build.Version != "" && v != exe.Build.Version {
+		return "", cliRefused("claude --version reports %s, not the %s that Test checked", v, exe.Build.Version)
+	}
+	return v, nil
 }
 
 func randHex(n int) string {
@@ -858,13 +875,13 @@ func (p *claudeCLIProvider) initCheck(ctx context.Context, exe exeIdentity) erro
 			verr = toolEvent("its first event is " + what + ", not its startup report")
 			break
 		}
-		want := streamWant{Version: exe.Contract.Version, Model: p.model, Cwd: dir, BuiltinPlugins: exe.Contract.BuiltinPlugins}
+		want := streamWant{Version: exe.Build.Version, Model: p.model, Cwd: dir}
 		_, verr = checkInit(m, want)
 	}
 	if verr != nil {
 		var ce *cliContractError
 		if errors.As(verr, &ce) && ce.revoke {
-			p.store.revoke(ce.msg)
+			p.distrust(exe, ce.msg)
 		}
 		return verr
 	}
@@ -894,8 +911,22 @@ func (p *claudeCLIProvider) preflight(ctx context.Context, admit bool) (callTick
 	if err != nil {
 		return callTicket{}, err
 	}
+	// Only Test runs a build it has not checked; every other call refuses
+	// before anything runs.
+	if !exe.Tested && !admit {
+		return callTicket{}, untested(exe)
+	}
 	if err := p.checkPolicy(); err != nil {
 		return callTicket{}, err
+	}
+	if !exe.Tested {
+		// Test on a new build reads its version first: doctor and the init
+		// report must name it.
+		v, err := p.version(ctx, exe)
+		if err != nil {
+			return callTicket{}, err
+		}
+		exe.Build.Version = v
 	}
 	acct, err := p.account(ctx, exe)
 	if err != nil {
@@ -923,10 +954,13 @@ func (p *claudeCLIProvider) preflight(ctx context.Context, admit bool) (callTick
 	}
 	if need {
 		// Admission for this binary, account and lockdown configuration:
-		// the version line and the flag-recognition probe, then policy once
-		// more, since both took time.
-		if err := p.version(ctx, exe); err != nil {
-			return callTicket{}, err
+		// the version line (read above for a build Test is checking), the
+		// flag-recognition probe and the init check, then policy once more,
+		// since they took time.
+		if exe.Tested {
+			if _, err := p.version(ctx, exe); err != nil {
+				return callTicket{}, err
+			}
 		}
 		if err := p.flagProbe(ctx, exe); err != nil {
 			return callTicket{}, err
@@ -997,13 +1031,13 @@ func (p *claudeCLIProvider) run(ctx context.Context, t callTicket, req Request, 
 		}
 		return "", context.DeadlineExceeded
 	case r.stdoutOver:
-		p.store.revoke("Claude Code printed more output than its reviewed contract allows")
+		p.distrust(exe, "Claude Code printed more output than its contract allows")
 		return "", contractBreak("output over the 4 MiB cap")
 	}
-	text, perr := parseClaudeStream(r.stdout, streamWant{Version: exe.Contract.Version, Model: p.model, Cwd: dir, BuiltinPlugins: exe.Contract.BuiltinPlugins})
+	text, perr := parseClaudeStream(r.stdout, streamWant{Version: exe.Build.Version, Model: p.model, Cwd: dir})
 	var ce *cliContractError
 	if errors.As(perr, &ce) && ce.revoke {
-		p.store.revoke(ce.msg)
+		p.distrust(exe, ce.msg)
 		return "", perr
 	}
 	if r.exitCode != 0 {
@@ -1039,10 +1073,12 @@ const (
 	claudeProbePrompt = "List the files in your current working directory. Then read the file %s and quote its contents exactly. Then run the shell command `ls -la`. If you cannot do any of these, say so."
 )
 
-// Probe re-admits the CLI (lifting a revocation) and sends one small prompt
-// that asks for a directory listing, a file outside the working dir and a
-// command. A reply that quotes the marker file's name or the canary's token
-// could only come from a tool: admission is revoked.
+// Probe is Test: it re-admits the CLI (lifting a revocation) and sends one
+// small prompt that asks for a directory listing, a file outside the working
+// dir and a command. A reply that quotes the marker file's name or the
+// canary's token could only come from a tool: admission is revoked and the
+// build distrusted. A build that passes is recorded as tested, so calls run
+// on it - this run and after a restart - until it changes or misbehaves.
 func (p *claudeCLIProvider) Probe(ctx context.Context) (Result, error) {
 	t, err := p.preflight(ctx, true)
 	if err != nil {
@@ -1067,28 +1103,38 @@ func (p *claudeCLIProvider) Probe(ctx context.Context) (Result, error) {
 	}
 	if strings.Contains(text, token) || strings.Contains(text, marker) {
 		err := toolEvent("the Test answer quotes a local file")
-		p.store.revoke(err.Error())
+		p.distrust(t.exe, err.Error())
 		return Result{}, err
+	}
+	if err := p.builds.record(testedBuild{SHA256: t.exe.SHA256, Version: t.exe.Build.Version, Platform: t.exe.Build.platform(), TestedAt: time.Now().UTC()}); err != nil {
+		return Result{}, cliRefused("%v; Explain and chat stay paused until Test can record it", err)
 	}
 	return Result{Text: text, ModelUsed: p.model}, nil
 }
 
 // Ready reports, without running Claude Code, whether a call could be
-// admitted: the binary is a reviewed build and admission was not revoked.
+// admitted: the binary is a build Test has checked and admission was not
+// revoked.
 func (p *claudeCLIProvider) Ready() error {
 	if _, revoked, _ := p.store.snapshot(); revoked != "" {
 		return cliRefused("%s", revoked)
 	}
-	_, err := p.executable()
-	return err
+	exe, err := p.executable()
+	if err != nil {
+		return err
+	}
+	if !exe.Tested {
+		return untested(exe)
+	}
+	return nil
 }
 
 // CLIStatus is what Settings shows about the installed Claude Code.
 type CLIStatus struct {
 	Path      string
-	Version   string // the reviewed version the binary matched, or ""
+	Version   string // the version Test recorded for this build, or ""
 	SHA256    string // short
-	Reviewed  bool
+	Tested    bool   // the build passed Test on this machine
 	Admitted  bool
 	CheckedAt time.Time
 	Problem   string
@@ -1107,7 +1153,10 @@ func (p *claudeCLIProvider) Status() CLIStatus {
 	if err != nil {
 		st.Problem = err.Error()
 	} else {
-		st.Version, st.SHA256, st.Reviewed = exe.Contract.Version, exe.SHA256[:12], true
+		st.Version, st.SHA256, st.Tested = exe.Build.Version, exe.SHA256[:12], exe.Tested
+		if !exe.Tested {
+			st.Problem = untested(exe).Error()
+		}
 	}
 	rec, revoked, _ := p.store.snapshot()
 	switch {

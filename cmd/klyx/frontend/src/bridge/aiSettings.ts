@@ -33,7 +33,7 @@ export type AIModel = { id: string; displayName?: string };
 export type AIModels = { models: AIModel[]; error?: string };
 export type AITest = { ok: boolean; model?: string; origin?: string; reply?: string; error?: string };
 // What Settings knows about an installed CLI without running it.
-export type AICLIStatus = { path: string; version: string; sha256: string; reviewed: boolean; admitted: boolean; checkedAt?: string; problem?: string };
+export type AICLIStatus = { path: string; version: string; sha256: string; tested: boolean; admitted: boolean; checkedAt?: string; problem?: string };
 
 // The phrase the backend's one-shot egress grant expects.
 export const AI_EGRESS_PHRASE = "allow protected egress";
@@ -112,6 +112,6 @@ export async function getCLIStatus(draft: AISettings): Promise<AICLIStatus> {
   try {
     return (await AISettingsService.CLIStatus(draft)) as AICLIStatus;
   } catch (e) {
-    return { path: "", version: "", sha256: "", reviewed: false, admitted: false, problem: failed(e).error };
+    return { path: "", version: "", sha256: "", tested: false, admitted: false, problem: failed(e).error };
   }
 }

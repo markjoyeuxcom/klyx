@@ -14,7 +14,8 @@ import (
 )
 
 // TestClaudeContract_RealBinary repeats the 2026-10-13 review evidence
-// against the installed reviewed binary (spec §1.5). It is opt-in
+// against the installed Claude Code (spec §1.5) - whatever build the native
+// installer points at, since Klyx no longer pins one. It is opt-in
 // (KLYX_CLAUDE_CONTRACT=1; KLYX_CLAUDE_BIN overrides the binary) because it
 // runs the owner's Claude Code. It makes no model call and uses no login:
 // HOME is a throwaway dir, and the helper runs get a throwaway
@@ -22,31 +23,34 @@ import (
 // found.
 func TestClaudeContract_RealBinary(t *testing.T) {
 	if os.Getenv("KLYX_CLAUDE_CONTRACT") != "1" {
-		t.Skip("set KLYX_CLAUDE_CONTRACT=1 to check the installed Claude Code against its reviewed contract")
+		t.Skip("set KLYX_CLAUDE_CONTRACT=1 to check the installed Claude Code against Klyx's contract")
 	}
 	bin := os.Getenv("KLYX_CLAUDE_BIN")
 	if bin == "" {
 		home, _ := os.UserHomeDir()
-		bin = filepath.Join(home, ".local", "share", "claude", "versions", reviewedClaudeContracts[0].Version)
+		bin = filepath.Join(home, ".local", "bin", "claude")
 	}
 	home := t.TempDir()
 	tmp := t.TempDir()
 	p := newClaudeCLI(bin, DefaultAnthropicModel)
 	p.hashes = &exeHashCache{m: map[string]exeHashEntry{}}
 	p.store = &claudeAdmissionStore{}
+	p.builds = &claudeBuildStore{}
 	p.tmpDir = tmp
 	p.environ = func() []string {
 		return []string{"HOME=" + home, "PATH=/usr/bin:/bin", "USER=" + os.Getenv("USER"), "TMPDIR=" + tmp, "LANG=C"}
 	}
 	exe, err := p.executable()
 	if err != nil {
-		t.Fatalf("the installed binary is not the reviewed build: %v", err)
+		t.Fatalf("the installed binary is not admissible: %v", err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	if err := p.version(ctx, exe); err != nil {
+	v, err := p.version(ctx, exe)
+	if err != nil {
 		t.Fatal(err)
 	}
+	exe.Build.Version = v
 	if err := p.flagProbe(ctx, exe); err != nil {
 		t.Fatal(err)
 	}
@@ -109,7 +113,7 @@ func TestClaudeContract_RealBinary(t *testing.T) {
 	}
 	doc := run("--restricted", "--safe-mode", "doctor")
 	run("doctor")
-	c := exe.Contract
+	c := exe.Build
 	for _, want := range []string{"Running: native (" + c.Version + ")", "Platform: " + c.GOOS + "-" + c.GOARCH, "Managed settings (remote): ", "Organization policy: "} {
 		if !strings.Contains(string(doc), want) {
 			t.Fatalf("doctor no longer prints %q:\n%s", want, doc)
@@ -120,8 +124,8 @@ func TestClaudeContract_RealBinary(t *testing.T) {
 	}
 	// The production run's init, with no sign-in and all outbound network
 	// denied by sandbox-exec (macOS), so nothing can leave the machine: it
-	// must meet the reviewed init contract - including the built-in plugin
-	// list - and the "not logged in" reply that follows must be refused.
+	// must meet the init contract - only built-in plugins, no tools - and
+	// the "not logged in" reply that follows must be refused.
 	if runtime.GOOS == "darwin" {
 		dir, err := p.callDir()
 		if err != nil {
@@ -142,9 +146,9 @@ func TestClaudeContract_RealBinary(t *testing.T) {
 		if err != nil {
 			t.Fatalf("offline run printed no init: %v\n%s", err, r.stdout)
 		}
-		want := streamWant{Version: c.Version, Model: DefaultAnthropicModel, Cwd: dir, BuiltinPlugins: c.BuiltinPlugins}
+		want := streamWant{Version: c.Version, Model: DefaultAnthropicModel, Cwd: dir}
 		if _, err := checkInit(m, want); err != nil {
-			t.Fatalf("the real init no longer meets the reviewed contract: %v\n%s", err, first)
+			t.Fatalf("the real init no longer meets the contract: %v\n%s", err, first)
 		}
 		if _, err := parseClaudeStream(r.stdout, want); err == nil {
 			t.Fatal("a reply with no sign-in must be refused")

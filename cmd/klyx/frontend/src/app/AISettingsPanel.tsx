@@ -276,13 +276,13 @@ export function AISettingsPanel() {
                 ) : (
                   <>
                     {cli.path && <span style={{ fontFamily: "var(--font-mono)" }}>{cli.path}</span>}
-                    {cli.reviewed && <> · Claude Code {cli.version} · sha256 {cli.sha256}… · {cli.admitted ? "admitted" : cli.problem ? "not admitted (Test admits it)" : "not admitted yet (Test or the first call admits it)"}</>}
+                    {cli.tested && <> · Claude Code {cli.version} · sha256 {cli.sha256}… · {cli.admitted ? "admitted" : cli.problem ? "not admitted (Test admits it)" : "not admitted yet (Test or the first call admits it)"}</>}
                     {cli.problem && <div>{cli.problem}</div>}
                   </>
                 )}
               </div>
               <div style={{ ...hint, marginLeft: 118 }}>
-                Klyx runs only a Claude Code build it has reviewed, signed in to a personal Pro or Max account, with no tools, MCP servers, hooks or settings. Before every call it re-checks the sign-in and administrator policy, and refuses if either changed.
+                Klyx runs a Claude Code build (2.1.296 or later) only after Test has checked it on this machine, so each Claude Code update needs one Test. It runs signed in to a personal Pro or Max account, with no tools, MCP servers, hooks or settings. Before every call it re-checks the sign-in and administrator policy, and refuses if either changed.
               </div>
             </>
           )}
@@ -369,7 +369,7 @@ export function AISettingsPanel() {
       )}
       <div style={{ ...hint, marginTop: 6 }}>
         {provider.id === "claudeCLI"
-          ? "Test re-checks the Claude Code build, sign-in and policy, then sends one short prompt with no cluster data on your Claude sign-in. The prompt asks Claude Code to read a file and run a command; an answer that shows it could fails the Test and revokes the CLI."
+          ? "Test re-checks the Claude Code build, sign-in and policy, then sends one short prompt with no cluster data on your Claude sign-in. The prompt asks Claude Code to read a file and run a command; an answer that shows it could fails the Test and revokes the CLI. A passing Test admits this Claude Code build until it changes."
           : "Test sends one short prompt with no cluster data."}{" "}
         Saving writes the ai block of fleet.yaml; keys stay in the keychain.
       </div>

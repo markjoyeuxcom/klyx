@@ -49,6 +49,12 @@ func windowStatePath() string {
 	return filepath.Join(filepath.Dir(configPath()), "window.json")
 }
 
+// claudeBuildsPath records the Claude Code builds that passed Test, beside
+// the fleet config like the window state.
+func claudeBuildsPath() string {
+	return filepath.Join(filepath.Dir(configPath()), "claude-builds.json")
+}
+
 func main() {
 	execenv.ApplyDesktopToolPath()
 
@@ -297,6 +303,7 @@ func main() {
 	// the key comes from exactly the configured source (the OS keychain by
 	// default), and a problem leaves AI unavailable with that reason. The egress
 	// gate reuses configSvc.IsProtected (live) exactly like the ProtectGuard.
+	ai.UseClaudeBuildsFile(claudeBuildsPath())
 	aiState := appbridge.BuildAIState(cfg.AI, ai.OSKeyStore{}, os.Getenv)
 	if aiState.Problem != "" {
 		log.Printf("klyx: AI (%s) unavailable: %s", aiState.ProviderID, aiState.Problem)

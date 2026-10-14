@@ -104,9 +104,9 @@ func (s *AIService) Available() AIAvailabilityDTO {
 }
 
 // notReady is why a built provider would refuse a call before it starts -
-// a CLI whose binary is not a reviewed build, or whose admission was
-// revoked - so the UI disables Explain with that reason instead of failing
-// on click. It runs nothing.
+// a CLI build that Test has not checked on this machine, or whose admission
+// was revoked - so the UI disables Explain with that reason instead of
+// failing on click. It runs nothing.
 func notReady(st *AIState) string {
 	if r, ok := st.Provider.(ai.ReadinessReporter); ok {
 		if err := r.Ready(); err != nil {

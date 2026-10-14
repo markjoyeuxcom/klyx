@@ -19,7 +19,7 @@ const (
 	tSess  = "5d7b7d0e-1a51-4e1e-9d44-000000000001"
 )
 
-var tWant = streamWant{Version: "2.1.296", Model: tModel, Cwd: tCwd, BuiltinPlugins: reviewedClaudeContracts[0].BuiltinPlugins}
+var tWant = streamWant{Version: "2.1.296", Model: tModel, Cwd: tCwd}
 
 func ev(m map[string]any) map[string]any { return m }
 
@@ -222,14 +222,13 @@ func TestParseClaudeStream_Refusals(t *testing.T) {
 		}, ErrUnexpectedOutput, true},
 		{"init lists skills", set(0, "skills", []any{"pdf"}), ErrUnexpectedOutput, true},
 		{"init lists agents", set(0, "agents", []any{"general-purpose"}), ErrUnexpectedOutput, true},
-		// Plugins: only the reviewed version's own built-ins (the slice 5
-		// smoke's first finding).
+		// Plugins: only built-ins, each in the exact built-in shape (the
+		// slice 5 smoke's first finding).
 		{"a plugin synced from claude.ai", plugins(map[string]any{"name": "cowork-plugin-management", "path": "/Users/o/.claude/plugins/synced/x/cowork-plugin-management", "source": "cowork-plugin-management@synced"}), ErrUnexpectedOutput, true},
 		{"an installed plugin", plugins(map[string]any{"name": "superpowers", "path": "/Users/o/.claude/plugins/cache/superpowers", "source": "superpowers@marketplace"}), ErrUnexpectedOutput, true},
-		{"an unreviewed built-in", plugins(map[string]any{"name": "cc-plugin-tips", "path": "builtin", "source": "cc-plugin-tips@builtin"}), ErrUnexpectedOutput, true},
 		// These replace the list, so only the path or source is wrong.
-		{"a reviewed name from elsewhere", set(0, "plugins", []any{map[string]any{"name": "cc-plugin-agents-md", "path": "/tmp/evil", "source": "cc-plugin-agents-md@builtin"}}), ErrUnexpectedOutput, true},
-		{"a reviewed name from a marketplace", set(0, "plugins", []any{map[string]any{"name": "cc-plugin-agents-md", "path": "builtin", "source": "cc-plugin-agents-md@evil"}}), ErrUnexpectedOutput, true},
+		{"a built-in name from elsewhere", set(0, "plugins", []any{map[string]any{"name": "cc-plugin-agents-md", "path": "/tmp/evil", "source": "cc-plugin-agents-md@builtin"}}), ErrUnexpectedOutput, true},
+		{"a built-in name from a marketplace", set(0, "plugins", []any{map[string]any{"name": "cc-plugin-agents-md", "path": "builtin", "source": "cc-plugin-agents-md@evil"}}), ErrUnexpectedOutput, true},
 		{"a built-in listed twice", plugins(map[string]any{"name": "cc-plugin-agents-md", "path": "builtin", "source": "cc-plugin-agents-md@builtin"}), ErrUnexpectedOutput, true},
 		{"a built-in with extra members", func(e []map[string]any) []map[string]any { // replaces the list
 			e[0]["plugins"] = []any{map[string]any{"name": "cc-plugin-agents-md", "path": "builtin", "source": "cc-plugin-agents-md@builtin", "hooks": map[string]any{"SessionStart": 1}}}
@@ -367,8 +366,26 @@ func TestCapturedInitPasses(t *testing.T) {
 			t.Fatalf("unexpected captured event %s", l)
 		}
 	}
-	want.BuiltinPlugins = nil
-	if _, err := checkInit(m, want); err == nil {
-		t.Fatal("built-ins a contract has not reviewed must refuse")
+}
+
+// Any build may bundle built-ins Klyx has not seen: they ship inside the
+// tested binary, and init must still list no tools, skills, commands, agents
+// or MCP servers. An unnamed one still refuses.
+func TestCheckInit_AnyBuiltinPlugin(t *testing.T) {
+	init := func(plugins ...any) map[string]json.RawMessage {
+		e := cleanEvents()[0]
+		e["plugins"] = plugins
+		b, _ := json.Marshal(e)
+		m, err := strictObject(b)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return m
+	}
+	if _, err := checkInit(init(map[string]any{"name": "cc-plugin-tips", "path": "builtin", "source": "cc-plugin-tips@builtin", "version": "1.0.0"}), tWant); err != nil {
+		t.Fatalf("a new built-in passes: %v", err)
+	}
+	if _, err := checkInit(init(map[string]any{"name": "", "path": "builtin", "source": "@builtin"}), tWant); !errors.Is(err, ErrUnexpectedOutput) {
+		t.Fatalf("an unnamed built-in refuses: %v", err)
 	}
 }

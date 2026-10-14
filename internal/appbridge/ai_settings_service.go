@@ -410,13 +410,13 @@ func (s *AISettingsService) TestProvider(d AISettingsDTO) AITestDTO {
 }
 
 // AICLIStatusDTO is what Settings shows about an installed CLI: where it is,
-// whether it is a build Klyx has reviewed, and whether it is admitted. It
-// never runs the CLI.
+// whether this build passed Test on this machine, and whether it is
+// admitted. It never runs the CLI.
 type AICLIStatusDTO struct {
 	Path      string `json:"path"`
 	Version   string `json:"version"`
 	SHA256    string `json:"sha256"` // short
-	Reviewed  bool   `json:"reviewed"`
+	Tested    bool   `json:"tested"`
 	Admitted  bool   `json:"admitted"`
 	CheckedAt string `json:"checkedAt,omitempty"` // RFC 3339
 	Problem   string `json:"problem,omitempty"`
@@ -435,7 +435,7 @@ func (s *AISettingsService) CLIStatus(d AISettingsDTO) AICLIStatusDTO {
 		return AICLIStatusDTO{Problem: "this provider is not a CLI"}
 	}
 	st := r.Status()
-	out := AICLIStatusDTO{Path: st.Path, Version: st.Version, SHA256: st.SHA256, Reviewed: st.Reviewed, Admitted: st.Admitted, Problem: st.Problem}
+	out := AICLIStatusDTO{Path: st.Path, Version: st.Version, SHA256: st.SHA256, Tested: st.Tested, Admitted: st.Admitted, Problem: st.Problem}
 	if !st.CheckedAt.IsZero() {
 		out.CheckedAt = st.CheckedAt.UTC().Format(time.RFC3339)
 	}
