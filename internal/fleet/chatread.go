@@ -32,19 +32,21 @@ type ChatKind struct {
 // short name, case-insensitive, optionally within one group - to the served
 // top-level resources that support get and list, each group's preferred
 // version first. Several results mean the name is ambiguous; none means it is
-// not served. Subresources are never returned (spec §3.2).
-func (c *ClusterConn) ChatResolveKind(ctx context.Context, kind, group string) ([]ChatKind, error) {
+// not served - unless incomplete names group versions whose discovery failed,
+// in which case neither absence nor a unique match is proven (Codex review
+// of aea77e7). Subresources are never returned (spec §3.2).
+func (c *ClusterConn) ChatResolveKind(ctx context.Context, kind, group string) (kinds []ChatKind, incomplete []string, err error) {
 	if c.typed == nil {
-		return nil, errors.New("discovery unavailable: no cluster connection")
+		return nil, nil, errors.New("discovery unavailable: no cluster connection")
 	}
 	want := strings.ToLower(strings.TrimSpace(kind))
 	if want == "" {
-		return nil, errors.New("no kind given")
+		return nil, nil, errors.New("no kind given")
 	}
 	d := c.probeDiscovery()
 	groups, err := d.ServerGroupsCtx(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("discovery failed: %w", err)
+		return nil, nil, fmt.Errorf("discovery failed: %w", err)
 	}
 	var out []ChatKind
 	seen := map[string]bool{}
@@ -69,8 +71,9 @@ func (c *ClusterConn) ChatResolveKind(ctx context.Context, kind, group string) (
 			rl, err := d.ServerResourcesForGroupVersionCtx(ctx, gvStr)
 			if err != nil {
 				if ctx.Err() != nil {
-					return nil, ctx.Err()
+					return nil, nil, ctx.Err()
 				}
+				incomplete = append(incomplete, gvStr)
 				continue
 			}
 			for _, r := range rl.APIResources {
@@ -89,7 +92,7 @@ func (c *ClusterConn) ChatResolveKind(ctx context.Context, kind, group string) (
 			}
 		}
 	}
-	return out, nil
+	return out, incomplete, nil
 }
 
 func chatKindMatches(r metav1.APIResource, want string) bool {

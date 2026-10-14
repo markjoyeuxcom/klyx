@@ -14,32 +14,36 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/moomora/klyx/internal/fleet"
+	"github.com/moomora/klyx/internal/health"
+	"github.com/moomora/klyx/internal/healthsrc"
 	"github.com/moomora/klyx/internal/observe"
 	"github.com/moomora/klyx/internal/workloads"
 )
 
 type fakeChatConn struct {
-	kinds     map[string][]fleet.ChatKind
-	objects   map[string]*unstructured.Unstructured // gvr|ns|name
-	lists     map[string]*unstructured.UnstructuredList
-	listErr   error
-	summary   *observe.Summary
-	events    []workloads.EventSummary
-	eventsCap bool
-	eventsErr error
-	logs      fleet.LogSnapshot
-	logsErr   error
-	logCalls  int
+	kinds      map[string][]fleet.ChatKind
+	incomplete []string
+	rows       map[string]observe.Rows               // task/part
+	objects    map[string]*unstructured.Unstructured // gvr|ns|name
+	lists      map[string]*unstructured.UnstructuredList
+	listErr    error
+	summary    *observe.Summary
+	events     []workloads.EventSummary
+	eventsCap  bool
+	eventsErr  error
+	logs       fleet.LogSnapshot
+	logsErr    error
+	logCalls   int
 }
 
-func (f *fakeChatConn) ChatResolveKind(_ context.Context, kind, group string) ([]fleet.ChatKind, error) {
+func (f *fakeChatConn) ChatResolveKind(_ context.Context, kind, group string) ([]fleet.ChatKind, []string, error) {
 	var out []fleet.ChatKind
 	for _, k := range f.kinds[strings.ToLower(kind)] {
 		if group == "" || k.GVR.Group == group {
 			out = append(out, k)
 		}
 	}
-	return out, nil
+	return out, f.incomplete, nil
 }
 
 func key(gvr schema.GroupVersionResource, ns, name string) string {
@@ -70,8 +74,9 @@ func (f *fakeChatConn) ChatSummary() (observe.Summary, bool) {
 	return *f.summary, true
 }
 
-func (f *fakeChatConn) HealthRowsNow(context.Context, string, string) (observe.Rows, bool) {
-	return observe.Rows{}, false
+func (f *fakeChatConn) HealthRowsNow(_ context.Context, task, part string) (observe.Rows, bool) {
+	r, ok := f.rows[task+"/"+part]
+	return r, ok
 }
 
 func (f *fakeChatConn) ListEvents(context.Context, string) ([]workloads.EventSummary, bool, error) {
@@ -189,7 +194,7 @@ func TestChatToolsGetKeepsAnEventErrorBesideTheObject(t *testing.T) {
 	if env.Identity == nil || env.Identity.UID != "uid-web" || env.Identity.Generation != 4 {
 		t.Fatalf("the envelope names the exact object read: %+v", env.Identity)
 	}
-	if env.Complete || len(env.Errors) != 1 || !strings.Contains(env.Errors[0], "events:") || env.Data == nil {
+	if env.Complete || !strings.Contains(strings.Join(env.Errors, "|"), "events: events are unreadable") || env.Data == nil {
 		t.Fatalf("an unreadable component sits beside a successful read: %+v", env)
 	}
 	if len(read.Refs) != 1 || read.Refs[0].UID != "uid-web" {
@@ -267,5 +272,117 @@ func TestChatToolsOverviewWithoutSummaryIsAnError(t *testing.T) {
 	env, _ = run(t, f, toolAttention, `{"area":"flux"}`)
 	if len(env.Errors) == 0 || !strings.Contains(env.Errors[0], "no area") {
 		t.Fatalf("an unknown area says so: %+v", env)
+	}
+}
+
+// ---- Codex review of aea77e7 --------------------------------------------------
+
+func TestChatStrictArgsRefusesNullAndDuplicates(t *testing.T) {
+	f := newFakeChat()
+	for _, args := range []string{
+		`null`,
+		`[]`,
+		`{"kind":"pods","namespace":null}`,
+		`{"kind":"pods","limit":null}`,
+		`{"kind":"secrets","kind":"pods"}`,
+		`{"kind":"pods","label_selector":"a=b","label_selector":"c=d"}`,
+	} {
+		env, read := run(t, f, toolList, args)
+		if len(env.Errors) == 0 || !strings.Contains(env.Errors[0], "invalid arguments") || read.Outcome != "failed" {
+			t.Errorf("%s must be refused before any read: %+v", args, env)
+		}
+	}
+}
+
+func TestChatScrubsReadErrorsAndConnectionReasons(t *testing.T) {
+	f := newFakeChat()
+	f.listErr = errors.New(`Get "https://admin:` + sentArbitrary + `@10.0.0.1/api": dial tcp: password=` + sentArbitrary)
+	res := newChatTools(f, fixedNow).Run(context.Background(), toolList, json.RawMessage(`{"kind":"pods"}`))
+	if strings.Contains(string(res.JSON), sentArbitrary) || strings.Contains(res.Read.Detail, sentArbitrary) || res.Read.Redacted == 0 {
+		t.Fatalf("a read error is evidence-scrubbed in the result and the ledger: %s / %+v", res.JSON, res.Read)
+	}
+	f.summary = &observe.Summary{EvaluatedAt: fixedNow(), Connection: "degraded: token=" + sentArbitrary}
+	res = newChatTools(f, fixedNow).Run(context.Background(), toolOverview, json.RawMessage(`{}`))
+	if strings.Contains(string(res.JSON), sentArbitrary) {
+		t.Fatalf("a connection reason is scrubbed: %s", res.JSON)
+	}
+}
+
+func TestChatIncompleteDiscoveryResolvesNothing(t *testing.T) {
+	f := newFakeChat()
+	f.incomplete = []string{"cert-manager.io/v1"}
+	env, _ := run(t, f, toolGet, `{"kind":"pods","namespace":"shop","name":"web"}`)
+	if len(env.Errors) == 0 || !strings.Contains(env.Errors[0], "discovery failed for cert-manager.io/v1") {
+		t.Fatalf("incomplete discovery proves neither absence nor a unique match: %+v", env)
+	}
+}
+
+func podVerdictRows(uid string, gen int64, cov observe.Coverage) observe.Rows {
+	return observe.Rows{Task: "pods", Incarnation: 3, EvaluatedAt: fixedNow(),
+		Part: observe.Part{ID: "pods", Classifier: "verdict", Coverage: cov, Ver: 7},
+		Rows: healthsrc.RowSet[workloads.PodSummary]{Rows: []healthsrc.Row[workloads.PodSummary]{{
+			Ref:  healthsrc.RowRef{UID: uid, GVR: "v1/pods", Namespace: "shop", Name: "web", Generation: gen},
+			Data: workloads.PodSummary{Health: health.Verdict{Kind: health.Fault, Label: "CrashLoopBackOff"}},
+		}}}}
+}
+
+func TestChatGetJoinsTheVerdictByUIDAndKeepsOnlyItsEvents(t *testing.T) {
+	f := newFakeChat()
+	f.objects[key(podsGVR, "shop", "web")] = uobj(map[string]any{"apiVersion": "v1", "kind": "Pod",
+		"metadata": map[string]any{"name": "web", "namespace": "shop", "uid": "uid-new", "generation": int64(2)}})
+	f.rows = map[string]observe.Rows{"pods/pods": podVerdictRows("uid-old", 1, observe.Live)}
+	f.events = []workloads.EventSummary{
+		{Type: "Warning", Reason: "OldCrash", Kind: "Pod", Name: "web", UID: "uid-old", LastSeenUnix: 2},
+		{Type: "Warning", Reason: "NewCrash", Kind: "Pod", Name: "web", UID: "uid-new", LastSeenUnix: 1},
+	}
+	env, _ := run(t, f, toolGet, `{"kind":"pod","namespace":"shop","name":"web"}`)
+	b, _ := json.Marshal(env.Data)
+	if strings.Contains(string(b), "OldCrash") || !strings.Contains(string(b), "NewCrash") {
+		t.Fatalf("only the fetched object's events attach: %s", b)
+	}
+	if strings.Contains(string(b), "CrashLoopBackOff") {
+		t.Fatalf("an old UID's verdict never attaches to a replacement: %s", b)
+	}
+
+	f.rows = map[string]observe.Rows{"pods/pods": podVerdictRows("uid-new", 1, observe.Stale)}
+	env, _ = run(t, f, toolGet, `{"kind":"pod","namespace":"shop","name":"web"}`)
+	b, _ = json.Marshal(env)
+	for _, want := range []string{`"classifier":"verdict"`, `"kind":"fault"`, `"incarnation":3`, `"partVer":7`, `"coverage":"stale"`, "generation 1; the object is now at 2", "coverage stale"} {
+		if !strings.Contains(string(b), want) {
+			t.Fatalf("the joined verdict carries %s: %s", want, b)
+		}
+	}
+}
+
+type nativeData struct{ Sync string }
+
+func TestChatGitOpsKeepsNativeRoleAndReportsMissingParts(t *testing.T) {
+	f := newFakeChat()
+	f.summary = &observe.Summary{EvaluatedAt: fixedNow(), Tasks: []observe.Task{{ID: "flux"}, {ID: "argo"}}}
+	f.rows = map[string]observe.Rows{"argo/applications": {Task: "argo", Incarnation: 1, EvaluatedAt: fixedNow(),
+		Part: observe.Part{ID: "applications", Classifier: "native", Coverage: observe.Stale, Ver: 2},
+		Rows: healthsrc.RowSet[nativeData]{Rows: []healthsrc.Row[nativeData]{{
+			Ref:  healthsrc.RowRef{UID: "uid-app", GVR: "argoproj.io/v1alpha1/applications", Namespace: "argocd", Name: "shop"},
+			Eval: health.NativeEval{Included: true, Role: health.Fault, Label: "Degraded"},
+			Data: nativeData{Sync: "OutOfSync"},
+		}}}}}
+	env, _ := run(t, f, toolGitOps, `{}`)
+	b, _ := json.Marshal(env)
+	for _, want := range []string{`"role":"fault"`, `"includedInAttention":true`, `"label":"Degraded"`, "flux/reconciliations: Klyx's rows are not available", "argo/applications: coverage stale"} {
+		if !strings.Contains(string(b), want) {
+			t.Fatalf("gitops keeps %s: %s", want, b)
+		}
+	}
+	if env.Complete || env.Total == nil || env.Total.Exact {
+		t.Fatalf("a missing or stale part is never complete: %+v", env)
+	}
+}
+
+func TestChatAttentionNeverClaimsExactAbsenceFromUnreadableParts(t *testing.T) {
+	f := newFakeChat()
+	f.summary = &observe.Summary{EvaluatedAt: fixedNow(), Tasks: []observe.Task{{ID: "pods", Parts: []observe.Part{{ID: "pods", Classifier: "verdict", Coverage: observe.Unreadable}}}}}
+	env, _ := run(t, f, toolAttention, `{"area":"pods"}`)
+	if env.Complete || env.Total == nil || env.Total.Exact || len(env.Errors) == 0 || !strings.Contains(env.Errors[0], "unreadable") {
+		t.Fatalf("an unreadable part's zero is not proof of absence: %+v", env)
 	}
 }

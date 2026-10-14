@@ -201,3 +201,37 @@ func TestChatFactsInputStripsWhatBuildersCopy(t *testing.T) {
 	}
 	mustNotLeak(t, "facts from the sanitized copy", crd.BuildFacts("", "configmaps", factsInput(u)), sentArbitrary)
 }
+
+// Argo Kustomize patches and annotations never cross, in a single source, in
+// multiple sources and in an ApplicationSet template; generators send only
+// their kinds (Codex review of aea77e7).
+func TestChatProjectArgoKustomizeAndGenerators(t *testing.T) {
+	kz := map[string]any{
+		"namePrefix":        "prod-",
+		"images":            []any{"web=ghcr.io/shop/web:1.3"},
+		"patches":           []any{map[string]any{"patch": "apiVersion: v1\nkind: ConfigMap\ndata:\n  tenant: " + sentArbitrary}},
+		"commonAnnotations": map[string]any{"example.com/owner": sentArbitrary, "argocd.argoproj.io/sync-wave": "2"},
+	}
+	src := map[string]any{"repoURL": "https://git.example.com/shop.git", "path": "apps/web", "kustomize": kz}
+	for name, spec := range map[string]map[string]any{
+		"single source": {"source": src},
+		"multi source":  {"sources": []any{src}},
+	} {
+		o := chatProject(schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "applications"},
+			uobj(map[string]any{"apiVersion": "argoproj.io/v1alpha1", "kind": "Application", "metadata": meta("web", nil), "spec": spec}))
+		mustNotLeak(t, "Application "+name, o, sentArbitrary)
+		b, _ := json.Marshal(o)
+		if !strings.Contains(string(b), `"patchesCount":1`) || !strings.Contains(string(b), "sync-wave") || !strings.Contains(string(b), "prod-") {
+			t.Fatalf("%s keeps the safe kustomize fields and counts the patches: %s", name, b)
+		}
+	}
+	set := chatProject(schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "applicationsets"},
+		uobj(map[string]any{"apiVersion": "argoproj.io/v1alpha1", "kind": "ApplicationSet", "metadata": meta("web", nil), "spec": map[string]any{
+			"generators": []any{map[string]any{"list": map[string]any{"elements": []any{map[string]any{"tenant": sentArbitrary}}}}},
+			"template":   map[string]any{"spec": map[string]any{"source": src}},
+		}}))
+	mustNotLeak(t, "ApplicationSet", set, sentArbitrary)
+	if b, _ := json.Marshal(set); !strings.Contains(string(b), `"generators":["list"]`) {
+		t.Fatalf("generators send their kinds only: %s", b)
+	}
+}

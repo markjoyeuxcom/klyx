@@ -33,7 +33,7 @@ import (
 
 // ChatConn is the narrow read surface chat needs from a cluster.
 type ChatConn interface {
-	ChatResolveKind(ctx context.Context, kind, group string) ([]fleet.ChatKind, error)
+	ChatResolveKind(ctx context.Context, kind, group string) ([]fleet.ChatKind, []string, error)
 	ChatGet(ctx context.Context, gvr schema.GroupVersionResource, ns, name string) (*unstructured.Unstructured, error)
 	ChatList(ctx context.Context, gvr schema.GroupVersionResource, ns, selector string, limit int64) (*unstructured.UnstructuredList, error)
 	ChatSummary() (observe.Summary, bool)
@@ -319,8 +319,10 @@ var (
 	idRe    = regexp.MustCompile(`^[a-z][a-z0-9-]{0,40}$`)
 )
 
-// strictArgs decodes a tool's JSON arguments, refusing unknown members,
-// wrong types and trailing data. Empty arguments are an empty object.
+// strictArgs decodes a tool's JSON arguments: exactly one object, no null
+// anywhere, no duplicate member at any depth, no unknown member, no wrong
+// type and no trailing data (Codex review of aea77e7: a null or a repeated
+// member must never silently widen a read). Empty arguments are {}.
 func strictArgs(raw json.RawMessage, into any) error {
 	b := bytes.TrimSpace(raw)
 	if len(b) == 0 {
@@ -329,15 +331,91 @@ func strictArgs(raw json.RawMessage, into any) error {
 	if len(b) > 4096 {
 		return errors.New("arguments are too large")
 	}
+	if err := strictShape(b); err != nil {
+		return fmt.Errorf("invalid arguments: %s", err.Error())
+	}
 	dec := json.NewDecoder(bytes.NewReader(b))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(into); err != nil {
-		return fmt.Errorf("invalid arguments: %s", ai.Scrub(err.Error()))
+		return fmt.Errorf("invalid arguments: %s", chatScrub(err.Error(), nil))
 	}
 	if _, err := dec.Token(); err != io.EOF {
 		return errors.New("invalid arguments: trailing data")
 	}
 	return nil
+}
+
+// strictShape walks the JSON once: the root is an object, and no value is
+// null or a duplicate member.
+func strictShape(b []byte) error {
+	dec := json.NewDecoder(bytes.NewReader(b))
+	tok, err := dec.Token()
+	if err != nil {
+		return errors.New("not JSON")
+	}
+	if d, ok := tok.(json.Delim); !ok || d != '{' {
+		return errors.New("arguments must be one JSON object")
+	}
+	return walkObject(dec, 0)
+}
+
+func walkObject(dec *json.Decoder, depth int) error {
+	if depth > 8 {
+		return errors.New("arguments nest too deeply")
+	}
+	seen := map[string]bool{}
+	for dec.More() {
+		tok, err := dec.Token()
+		if err != nil {
+			return errors.New("not JSON")
+		}
+		k, _ := tok.(string)
+		if seen[k] {
+			return fmt.Errorf("member %q appears twice", label(k))
+		}
+		seen[k] = true
+		if err := walkValue(dec, depth, k); err != nil {
+			return err
+		}
+	}
+	_, err := dec.Token()
+	return err
+}
+
+func walkValue(dec *json.Decoder, depth int, member string) error {
+	tok, err := dec.Token()
+	if err != nil {
+		return errors.New("not JSON")
+	}
+	switch v := tok.(type) {
+	case nil:
+		return fmt.Errorf("member %q is null; omit it instead", label(member))
+	case json.Delim:
+		switch v {
+		case '{':
+			return walkObject(dec, depth+1)
+		case '[':
+			for dec.More() {
+				if err := walkValue(dec, depth+1, member); err != nil {
+					return err
+				}
+			}
+			_, err := dec.Token()
+			return err
+		}
+	}
+	return nil
+}
+
+// chatScrub is the one scrubber for every free-text field chat sends or
+// records - cluster text, read errors, connection reasons - adding its
+// redactions to n when n is not nil (Codex review of aea77e7).
+func chatScrub(s string, n *int) string {
+	out, c := ai.ScrubEvidence(s, chatStringMax)
+	if n != nil {
+		*n += c
+	}
+	return out
 }
 
 func firstErr(errs ...error) error {
@@ -421,14 +499,19 @@ func label(s string) string {
 func (t *chatTools) stamp() string { return t.now().UTC().Format(time.RFC3339) }
 
 func (t *chatTools) refuse(tool, target string, err error) ChatToolResult {
-	return t.finish(chatEnvelope{Tool: tool, Source: "klyx", ReadAt: t.stamp(), Errors: []string{err.Error()}},
-		ChatRead{Tool: tool, Target: target, Outcome: "failed", Detail: err.Error()})
+	n := 0
+	msg := chatScrub(err.Error(), &n)
+	target = chatScrub(target, &n)
+	return t.finish(chatEnvelope{Tool: tool, Source: "klyx", ReadAt: t.stamp(), Errors: []string{msg}},
+		ChatRead{Tool: tool, Target: target, Outcome: "failed", Detail: msg, Redacted: n})
 }
 
 func (t *chatTools) failed(tool, source, target string, err error) ChatToolResult {
-	msg := readError(err)
+	n := 0
+	msg := chatScrub(readError(err), &n)
+	target = chatScrub(target, &n)
 	return t.finish(chatEnvelope{Tool: tool, Source: source, ReadAt: t.stamp(), Errors: []string{msg}},
-		ChatRead{Tool: tool, Target: target, Outcome: outcomeOf(err), Detail: msg})
+		ChatRead{Tool: tool, Target: target, Outcome: outcomeOf(err), Detail: msg, Redacted: n})
 }
 
 func outcomeOf(err error) string {
@@ -451,7 +534,7 @@ func readError(err error) string {
 	case errors.Is(err, context.DeadlineExceeded):
 		return "timed out"
 	}
-	return ai.Scrub(err.Error())
+	return err.Error() // the caller scrubs it with chatScrub
 }
 
 // finish serializes an envelope within chatResultMax, shrinking its data
@@ -545,6 +628,7 @@ func (t *chatTools) overview() ChatToolResult {
 	}
 	p := &projector{}
 	var tasks []chatTask
+	var problems []string
 	for _, task := range sum.Tasks {
 		ct := chatTask{ID: task.ID, Coverage: string(task.Coverage)}
 		if task.Controller != nil {
@@ -566,16 +650,19 @@ func (t *chatTools) overview() ChatToolResult {
 					cp.KindIssues = append(cp.KindIssues, k.Kind+": "+string(k.Coverage)+errSuffix(k.Class))
 				}
 			}
+			if part.Coverage != observe.Live {
+				problems = append(problems, task.ID+"/"+part.ID+": coverage "+string(part.Coverage)+" - its counts may be stale or incomplete")
+			}
 			ct.Parts = append(ct.Parts, cp)
 		}
 		tasks = append(tasks, ct)
 	}
-	data := map[string]any{"connection": sum.Connection, "tasks": tasks}
+	data := map[string]any{"connection": p.str(sum.Connection, chatStringMax), "tasks": tasks}
 	if sum.Namespaces != nil {
 		data["namespaces"] = *sum.Namespaces
 	}
-	env := chatEnvelope{Tool: toolOverview, Source: "observer", ReadAt: sum.EvaluatedAt.UTC().Format(time.RFC3339), Complete: true, Data: data,
-		Note: "coverage other than live means a count may be stale or unverified"}
+	env := chatEnvelope{Tool: toolOverview, Source: "observer", ReadAt: sum.EvaluatedAt.UTC().Format(time.RFC3339), Complete: len(problems) == 0, Data: data,
+		Errors: problems, Note: "coverage other than live means a count may be stale or unverified"}
 	return t.finish(env, ChatRead{Tool: toolOverview, Outcome: "completed", Redacted: p.redacted})
 }
 
@@ -604,6 +691,7 @@ func (t *chatTools) attention(area string) ChatToolResult {
 	p := &projector{}
 	var rows []chatAttention
 	var refs []ChatRef
+	var problems []string
 	total, found := 0, area == ""
 	for _, task := range sum.Tasks {
 		if area != "" && task.ID != area {
@@ -611,6 +699,11 @@ func (t *chatTools) attention(area string) ChatToolResult {
 		}
 		found = true
 		for _, part := range task.Parts {
+			if part.Coverage != observe.Live {
+				// An unreadable or stale part's count is not proof of
+				// absence (Codex review of aea77e7).
+				problems = append(problems, task.ID+"/"+part.ID+": coverage "+string(part.Coverage)+" - objects needing attention may be missing")
+			}
 			switch {
 			case part.Native != nil:
 				total += part.Native.Included
@@ -629,17 +722,28 @@ func (t *chatTools) attention(area string) ChatToolResult {
 	if !found {
 		return t.refuse(toolAttention, area, fmt.Errorf("no area %q; see cluster_overview for area ids", area))
 	}
-	env := chatEnvelope{Tool: toolAttention, Source: "observer", ReadAt: sum.EvaluatedAt.UTC().Format(time.RFC3339), Complete: len(rows) >= total,
-		Total: &chatTotal{Count: total, Exact: true}, Data: rows,
+	exact := len(problems) == 0
+	env := chatEnvelope{Tool: toolAttention, Source: "observer", ReadAt: sum.EvaluatedAt.UTC().Format(time.RFC3339), Complete: exact && len(rows) >= total,
+		Total: &chatTotal{Count: total, Exact: exact}, Errors: problems, Data: rows,
 		Note: "total counts every object needing attention; the listed objects are the worst few per area"}
 	return t.finish(env, ChatRead{Tool: toolAttention, Target: area, Outcome: "completed", Redacted: p.redacted, Refs: capRefs(refs)})
 }
 
 // resolve maps a model-named kind to exactly one served resource.
 func (t *chatTools) resolve(ctx context.Context, kind, group string) (fleet.ChatKind, error) {
-	ks, err := t.conn.ChatResolveKind(ctx, kind, group)
+	ks, incomplete, err := t.conn.ChatResolveKind(ctx, kind, group)
 	if err != nil {
 		return fleet.ChatKind{}, err
+	}
+	// Failed discovery proves neither absence nor a unique match: the kind
+	// may also be served by a group Klyx could not read (Codex review of
+	// aea77e7).
+	if len(incomplete) > 0 {
+		sort.Strings(incomplete)
+		if len(incomplete) > 5 {
+			incomplete = append(incomplete[:5], "…")
+		}
+		return fleet.ChatKind{}, fmt.Errorf("discovery failed for %s, so Klyx cannot tell which resource %q names; give its group if you know it", strings.Join(incomplete, ", "), label(kind))
 	}
 	switch len(ks) {
 	case 0:
@@ -663,11 +767,11 @@ func groupOrCore(g string) string {
 }
 
 type chatRow struct {
-	Namespace string `json:"namespace,omitempty"`
-	Name      string `json:"name"`
-	Age       string `json:"age,omitempty"`
-	Status    string `json:"status,omitempty"`
-	Verdict   string `json:"verdict,omitempty"`
+	Namespace string       `json:"namespace,omitempty"`
+	Name      string       `json:"name"`
+	Age       string       `json:"age,omitempty"`
+	Status    string       `json:"status,omitempty"`
+	Verdict   *chatVerdict `json:"verdict,omitempty"`
 }
 
 func (t *chatTools) list(ctx context.Context, kind, group, ns, selector string, limit int) ChatToolResult {
@@ -684,8 +788,8 @@ func (t *chatTools) list(ctx context.Context, kind, group, ns, selector string, 
 	if err != nil {
 		return t.failed(toolList, "api", kind, err)
 	}
-	verdicts := t.verdictsFor(ctx, k.GVR)
 	p := &projector{}
+	verdicts := t.verdictsFor(ctx, k.GVR, &p.redacted)
 	now := t.now()
 	rows := make([]chatRow, 0, len(l.Items))
 	var refs []ChatRef
@@ -695,8 +799,10 @@ func (t *chatTools) list(ctx context.Context, kind, group, ns, selector string, 
 		if ts := u.GetCreationTimestamp(); !ts.IsZero() {
 			row.Age = ageText(now.Sub(ts.Time))
 		}
-		if v, ok := verdicts[string(u.GetUID())]; ok {
-			row.Verdict = p.str(v, chatStringMax)
+		if verdicts != nil {
+			if v, ok := verdicts.byUID[string(u.GetUID())]; ok {
+				row.Verdict = &v // joined by UID only, never by name
+			}
 		}
 		rows = append(rows, row)
 		refs = append(refs, ChatRef{GVR: gvrString(k.GVR), Namespace: u.GetNamespace(), Name: u.GetName(), UID: string(u.GetUID())})
@@ -706,6 +812,9 @@ func (t *chatTools) list(ctx context.Context, kind, group, ns, selector string, 
 		Complete: !more, Total: &chatTotal{Count: len(rows), Exact: !more}, Data: rows}
 	if more {
 		env.Note = fmt.Sprintf("more than %d exist; narrow by namespace or label_selector", len(rows))
+	}
+	if verdicts != nil && verdicts.problem != "" {
+		env.Errors = append(env.Errors, verdicts.problem)
 	}
 	return t.finish(env, ChatRead{Tool: toolList, Target: kindTarget(k, ns), Outcome: "completed", Redacted: p.redacted, Refs: capRefs(refs)})
 }
@@ -761,6 +870,55 @@ func ageText(d time.Duration) string {
 	return fmt.Sprintf("%dd", int(d.Hours()/24))
 }
 
+// chatVerdict is Klyx's verdict for one object, joined by UID, with where it
+// came from (spec §3.3): a verdict part's kind, or a native part's role and,
+// separately, whether the lens counts it for attention.
+type chatVerdict struct {
+	Classifier          string `json:"classifier"`
+	Kind                string `json:"kind,omitempty"`
+	Role                string `json:"role,omitempty"`
+	IncludedInAttention *bool  `json:"includedInAttention,omitempty"`
+	Label               string `json:"label,omitempty"`
+	Reason              string `json:"reason,omitempty"`
+	Generation          int64  `json:"generation,omitempty"`
+	EvaluatedAt         string `json:"evaluatedAt"`
+	Incarnation         uint64 `json:"incarnation"`
+	PartVer             uint64 `json:"partVer"`
+	Coverage            string `json:"coverage"`
+}
+
+// chatVerdicts is one part's verdicts by UID, with the part's coverage
+// problem when it is not live.
+type chatVerdicts struct {
+	byUID   map[string]chatVerdict
+	problem string
+}
+
+func verdictOf(rows observe.Rows, r capturedRow, n *int) (chatVerdict, bool) {
+	v, err := anchorVerdict(rows, r)
+	if err != nil {
+		return chatVerdict{}, false
+	}
+	return chatVerdict{
+		Classifier: v.Classifier, Kind: v.Kind, Role: v.Role, IncludedInAttention: v.IncludedInAttention,
+		Label: chatScrub(v.Label, n), Reason: chatScrub(v.Reason, n), Generation: r.ref.Generation,
+		EvaluatedAt: v.EvaluatedAt, Incarnation: rows.Incarnation, PartVer: rows.Part.Ver, Coverage: string(rows.Part.Coverage),
+	}, true
+}
+
+func partProblem(task string, rows observe.Rows) string {
+	if rows.Part.Coverage == observe.Live {
+		return ""
+	}
+	msg := task + "/" + rows.Part.ID + ": coverage " + string(rows.Part.Coverage)
+	for _, k := range rows.Part.Kinds {
+		if k.Class != "" {
+			msg += " (" + k.Kind + ": " + k.Class + ")"
+		}
+	}
+	return msg + " - Klyx's verdicts may be stale or missing"
+}
+
 // chatParts maps a served resource to the Observer part that classifies it.
 var chatParts = map[string][2]string{
 	"apps/deployments":  {healthsrc.TaskWorkloads, "workloads"},
@@ -781,25 +939,21 @@ var chatParts = map[string][2]string{
 	"karpenter.sh/nodepools":                     {healthsrc.TaskKarpenter, "nodepools"},
 }
 
-// verdictsFor reads Klyx's verdict per UID for a kind the Observer
-// classifies; empty when it does not.
-func (t *chatTools) verdictsFor(ctx context.Context, gvr schema.GroupVersionResource) map[string]string {
+// verdictsFor reads Klyx's verdicts by UID for a kind the Observer
+// classifies; nil when it does not. A part that is not live says so.
+func (t *chatTools) verdictsFor(ctx context.Context, gvr schema.GroupVersionResource, n *int) *chatVerdicts {
 	tp, ok := chatParts[gvr.Group+"/"+gvr.Resource]
 	if !ok {
 		return nil
 	}
 	rows, ok := t.conn.HealthRowsNow(ctx, tp[0], tp[1])
 	if !ok {
-		return nil
+		return &chatVerdicts{problem: tp[0] + "/" + tp[1] + ": Klyx's verdicts are not available"}
 	}
-	out := map[string]string{}
+	out := &chatVerdicts{byUID: map[string]chatVerdict{}, problem: partProblem(tp[0], rows)}
 	forEachRow(rows.Rows, func(r capturedRow) {
-		if v, err := anchorVerdict(rows, r); err == nil {
-			s := v.Kind
-			if v.Label != "" {
-				s += ": " + v.Label
-			}
-			out[r.ref.UID] = s
+		if v, ok := verdictOf(rows, r, n); ok {
+			out.byUID[r.ref.UID] = v
 		}
 	})
 	return out
@@ -835,13 +989,18 @@ type chatEvent struct {
 	Message   string `json:"message"`
 	Count     int32  `json:"count,omitempty"`
 	Object    string `json:"object"`
+	ObjectUID string `json:"objectUID,omitempty"`
 	Namespace string `json:"namespace,omitempty"`
 	LastSeen  string `json:"lastSeen,omitempty"`
 }
 
 // eventsFor reads events in a namespace (all when ""), filtered and sorted
 // newest first. complete is false when the read was capped.
-func (t *chatTools) eventsFor(ctx context.Context, ns, kind, name string, warnings bool, limit int, p *projector) ([]chatEvent, int, bool, error) {
+// eventsFor reads events in a namespace (all when ""), filtered and sorted
+// newest first; complete is false when the read was capped. uid, when set,
+// keeps only events about that exact object: a same-name replacement's
+// events never attach to it (Codex review of aea77e7).
+func (t *chatTools) eventsFor(ctx context.Context, ns, kind, name, uid string, warnings bool, limit int, p *projector) ([]chatEvent, int, bool, error) {
 	evs, capped, err := t.conn.ListEvents(ctx, ns)
 	if err != nil {
 		return nil, 0, false, err
@@ -854,6 +1013,9 @@ func (t *chatTools) eventsFor(ctx context.Context, ns, kind, name string, warnin
 		if kind != "" && (!strings.EqualFold(e.Kind, kind) || e.Name != name) {
 			continue
 		}
+		if uid != "" && e.UID != uid {
+			continue
+		}
 		keep = append(keep, e)
 	}
 	sort.SliceStable(keep, func(i, j int) bool { return keep[i].LastSeenUnix > keep[j].LastSeenUnix })
@@ -863,7 +1025,7 @@ func (t *chatTools) eventsFor(ctx context.Context, ns, kind, name string, warnin
 	}
 	out := make([]chatEvent, 0, len(keep))
 	for _, e := range keep {
-		ce := chatEvent{Type: e.Type, Reason: p.str(e.Reason, chatStringMax), Message: p.str(e.Message, chatStringMax), Count: e.Count, Object: e.Kind + "/" + e.Name, Namespace: e.Namespace}
+		ce := chatEvent{Type: e.Type, Reason: p.str(e.Reason, chatStringMax), Message: p.str(e.Message, chatStringMax), Count: e.Count, Object: e.Kind + "/" + e.Name, ObjectUID: e.UID, Namespace: e.Namespace}
 		if e.LastSeenUnix > 0 {
 			ce.LastSeen = time.Unix(e.LastSeenUnix, 0).UTC().Format(time.RFC3339)
 		}
@@ -874,13 +1036,16 @@ func (t *chatTools) eventsFor(ctx context.Context, ns, kind, name string, warnin
 
 func (t *chatTools) events(ctx context.Context, ns, kind, name string, warnings bool, limit int) ChatToolResult {
 	p := &projector{}
-	evs, total, complete, err := t.eventsFor(ctx, ns, kind, name, warnings, limit, p)
+	evs, total, complete, err := t.eventsFor(ctx, ns, kind, name, "", warnings, limit, p)
 	if err != nil {
 		return t.failed(toolEvents, "api", ns, err)
 	}
 	env := chatEnvelope{Tool: toolEvents, Source: "api", ReadAt: t.stamp(), Complete: complete, Total: &chatTotal{Count: total, Exact: complete}, Data: evs}
 	if !complete {
 		env.Note = "the event read was capped: this is a sample, newest first among what was read"
+	}
+	if kind != "" {
+		env.Note = strings.TrimSpace(env.Note + " events are matched by kind and name, so they can include a deleted object of the same name; objectUID tells them apart")
 	}
 	target := ns
 	if kind != "" {
@@ -890,8 +1055,9 @@ func (t *chatTools) events(ctx context.Context, ns, kind, name string, warnings 
 }
 
 type chatGetData struct {
-	Object ChatObject  `json:"object"`
-	Events []chatEvent `json:"warningEvents,omitempty"`
+	Object  ChatObject   `json:"object"`
+	Verdict *chatVerdict `json:"verdict,omitempty"`
+	Events  []chatEvent  `json:"warningEvents,omitempty"`
 }
 
 func (t *chatTools) get(ctx context.Context, kind, group, ns, name string) ChatToolResult {
@@ -915,13 +1081,24 @@ func (t *chatTools) get(ctx context.Context, kind, group, ns, name string) ChatT
 	data := chatGetData{Object: o}
 	env := chatEnvelope{Tool: toolGet, Source: "api", ReadAt: t.stamp(), Complete: true,
 		Identity: &chatIdentity{GVR: gvrString(k.GVR), Namespace: ns, Name: name, UID: o.UID, Generation: o.Generation}}
-	if evs, _, complete, err := t.eventsFor(ctx, ns, k.Kind, name, true, 10, p); err != nil {
+	if vs := t.verdictsFor(ctx, k.GVR, &p.redacted); vs != nil {
+		if v, ok := vs.byUID[o.UID]; ok {
+			data.Verdict = &v
+			if v.Generation != 0 && o.Generation != 0 && v.Generation != o.Generation {
+				env.Note = strings.TrimSpace(env.Note + fmt.Sprintf(" Klyx's verdict is for generation %d; the object is now at %d, so it may be out of date.", v.Generation, o.Generation))
+			}
+		}
+		if vs.problem != "" {
+			env.Errors = append(env.Errors, vs.problem)
+		}
+	}
+	if evs, _, complete, err := t.eventsFor(ctx, ns, k.Kind, name, o.UID, true, 10, p); err != nil {
 		env.Errors = append(env.Errors, "events: "+readError(err))
 		env.Complete = false
 	} else {
 		data.Events = evs
 		if !complete {
-			env.Note = "the event read was capped: warning events may be a sample"
+			env.Note = strings.TrimSpace(env.Note + " The event read was capped: warning events may be a sample.")
 		}
 	}
 	env.Data = data
@@ -980,24 +1157,34 @@ func (t *chatTools) gitops(ctx context.Context, ns, name string) ChatToolResult 
 	var rows []map[string]any
 	var errs []string
 	var refs []ChatRef
+	observed := map[string]bool{}
+	if sum, ok := t.conn.ChatSummary(); ok {
+		for _, task := range sum.Tasks {
+			observed[task.ID] = true
+		}
+	}
 	read := false
 	for _, tp := range [][2]string{{healthsrc.TaskFlux, "reconciliations"}, {healthsrc.TaskArgo, "applications"}} {
 		rs, ok := t.conn.HealthRowsNow(ctx, tp[0], tp[1])
 		if !ok {
+			if observed[tp[0]] {
+				// Observed but unreadable is an error, never "not installed"
+				// (Codex review of aea77e7).
+				errs = append(errs, tp[0]+"/"+tp[1]+": Klyx's rows are not available")
+			}
 			continue
 		}
 		read = true
-		if rs.Part.Coverage != observe.Live {
-			errs = append(errs, tp[0]+": coverage "+string(rs.Part.Coverage))
+		if pr := partProblem(tp[0], rs); pr != "" {
+			errs = append(errs, pr)
 		}
 		forEachRow(rs.Rows, func(r capturedRow) {
 			if (ns != "" && r.ref.Namespace != ns) || (name != "" && r.ref.Name != name) {
 				return
 			}
-			row := map[string]any{"tool": tp[0], "gvr": r.ref.GVR, "namespace": r.ref.Namespace, "name": r.ref.Name}
-			if v, err := anchorVerdict(rs, r); err == nil {
-				row["verdict"] = v.Kind
-				row["label"] = p.str(v.Label, chatStringMax)
+			row := map[string]any{"tool": tp[0], "gvr": r.ref.GVR, "namespace": r.ref.Namespace, "name": r.ref.Name, "uid": r.ref.UID}
+			if v, ok := verdictOf(rs, r, &p.redacted); ok {
+				row["verdict"] = v
 			}
 			if d := p.tree(rowData(r.data), ".row", 0, 2, chatStringMax, false); d != nil {
 				row["detail"] = d
@@ -1006,7 +1193,7 @@ func (t *chatTools) gitops(ctx context.Context, ns, name string) ChatToolResult 
 			refs = append(refs, ChatRef{GVR: r.ref.GVR, Namespace: r.ref.Namespace, Name: r.ref.Name, UID: r.ref.UID})
 		})
 	}
-	if !read {
+	if !read && len(errs) == 0 {
 		return t.failed(toolGitOps, "observer", ns, errors.New("Klyx observes no Flux or Argo CD on this cluster"))
 	}
 	env := chatEnvelope{Tool: toolGitOps, Source: "observer", ReadAt: t.stamp(), Complete: len(errs) == 0, Total: &chatTotal{Count: len(rows), Exact: len(errs) == 0}, Errors: errs, Data: rows}

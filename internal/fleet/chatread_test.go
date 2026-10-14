@@ -3,6 +3,8 @@ package fleet
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -11,7 +13,9 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	discoveryfake "k8s.io/client-go/discovery/fake"
+	"k8s.io/client-go/kubernetes"
 	k8sfake "k8s.io/client-go/kubernetes/fake"
+	"k8s.io/client-go/rest"
 	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/moomora/klyx/internal/clock"
@@ -94,18 +98,52 @@ func TestChatResolveKind(t *testing.T) {
 	}
 	c := NewClusterConn("x", typed, nil, nil, nil, clock.Real{}, config.MetricsConfig{})
 	for _, name := range []string{"Pod", "pods", "po", "POD"} {
-		ks, err := c.ChatResolveKind(context.Background(), name, "")
+		ks, _, err := c.ChatResolveKind(context.Background(), name, "")
 		if err != nil || len(ks) != 1 || ks[0].GVR.Resource != "pods" {
 			t.Fatalf("%q resolves to pods only (no subresource): %+v %v", name, ks, err)
 		}
 	}
-	if ks, _ := c.ChatResolveKind(context.Background(), "Binding", ""); len(ks) != 0 {
+	if ks, _, _ := c.ChatResolveKind(context.Background(), "Binding", ""); len(ks) != 0 {
 		t.Fatalf("a kind without get and list is not resolvable: %+v", ks)
 	}
-	if ks, _ := c.ChatResolveKind(context.Background(), "certificate", ""); len(ks) != 2 {
+	if ks, _, _ := c.ChatResolveKind(context.Background(), "certificate", ""); len(ks) != 2 {
 		t.Fatalf("a kind served by two groups is ambiguous: %+v", ks)
 	}
-	if ks, _ := c.ChatResolveKind(context.Background(), "certificate", "cert-manager.io"); len(ks) != 1 || ks[0].GVR.Group != "cert-manager.io" {
+	if ks, _, _ := c.ChatResolveKind(context.Background(), "certificate", "cert-manager.io"); len(ks) != 1 || ks[0].GVR.Group != "cert-manager.io" {
 		t.Fatalf("a group disambiguates: %+v", ks)
+	}
+}
+
+// A group whose discovery fails is reported, so a kind it may also serve is
+// never resolved as unique or absent (Codex review of aea77e7).
+func TestChatResolveKindReportsIncompleteDiscovery(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api":
+			_, _ = w.Write([]byte(`{"kind":"APIVersions","versions":[]}`))
+		case "/apis":
+			_, _ = w.Write([]byte(`{"kind":"APIGroupList","groups":[
+				{"name":"cert-manager.io","versions":[{"groupVersion":"cert-manager.io/v1","version":"v1"}],"preferredVersion":{"groupVersion":"cert-manager.io/v1","version":"v1"}},
+				{"name":"networking.internal.knative.dev","versions":[{"groupVersion":"networking.internal.knative.dev/v1alpha1","version":"v1alpha1"}],"preferredVersion":{"groupVersion":"networking.internal.knative.dev/v1alpha1","version":"v1alpha1"}}]}`))
+		case "/apis/cert-manager.io/v1":
+			_, _ = w.Write([]byte(`{"kind":"APIResourceList","groupVersion":"cert-manager.io/v1","resources":[{"name":"certificates","singularName":"certificate","kind":"Certificate","namespaced":true,"verbs":["get","list"]}]}`))
+		default:
+			statusReply(w, 403, "Forbidden")
+		}
+	}))
+	defer srv.Close()
+	cs, err := kubernetes.NewForConfig(&rest.Config{Host: srv.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := NewClusterConn("x", cs, nil, nil, nil, clock.Real{}, config.MetricsConfig{})
+	ks, incomplete, err := c.ChatResolveKind(context.Background(), "Certificate", "")
+	if err != nil || len(ks) != 1 || len(incomplete) != 1 || incomplete[0] != "networking.internal.knative.dev/v1alpha1" {
+		t.Fatalf("one match plus the failed group: %+v %v %v", ks, incomplete, err)
+	}
+	ks, incomplete, err = c.ChatResolveKind(context.Background(), "Certificate", "cert-manager.io")
+	if err != nil || len(ks) != 1 || len(incomplete) != 0 {
+		t.Fatalf("an explicit group needs only its own discovery: %+v %v %v", ks, incomplete, err)
 	}
 }

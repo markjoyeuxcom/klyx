@@ -314,7 +314,19 @@ func (p *projector) kindSpec(gvr schema.GroupVersionResource, u *unstructured.Un
 		spec := nestedMap(obj, "spec")
 		out := p.pick(spec, "syncPolicy", "goTemplate")
 		if gens, ok := spec["generators"].([]any); ok {
-			out["generators"] = p.tree(gens, ".spec.generators", 0, chatCRDDepth, chatCRDStringMax, false)
+			// Generator kinds only: list elements, plugin parameters and
+			// matrix inputs are arbitrary values (Codex review of aea77e7).
+			var kinds []string
+			for _, g := range gens {
+				if gm, ok := g.(map[string]any); ok {
+					for k := range gm {
+						kinds = append(kinds, k)
+					}
+				}
+			}
+			sort.Strings(kinds)
+			out["generators"] = kinds
+			p.drop(".spec.generators (values)")
 		}
 		if tmpl := nestedMap(spec, "template", "spec"); tmpl != nil {
 			out["template"] = p.argoAppSpec(tmpl)
@@ -557,7 +569,7 @@ func (p *projector) argoAppSpec(spec map[string]any) map[string]any {
 			o["helm"] = hm
 		}
 		if k := nestedMap(s, "kustomize"); k != nil {
-			o["kustomize"] = p.tree(k, ".kustomize", 0, 3, chatStringMax, false)
+			o["kustomize"] = p.kustomize(k)
 		}
 		if pl := nestedMap(s, "plugin"); pl != nil {
 			if n, ok := pl["name"].(string); ok {
@@ -578,6 +590,77 @@ func (p *projector) argoAppSpec(spec map[string]any) map[string]any {
 			}
 		}
 		out["sources"] = srcs
+	}
+	return out
+}
+
+// kustomize is an Argo source's Kustomize block by explicit allowlist:
+// patches and inline manifests are opaque payloads (a ConfigMap patch can
+// carry any value) and never cross; commonAnnotations pass the annotation
+// allowlist (Codex review of aea77e7).
+func (p *projector) kustomize(k map[string]any) map[string]any {
+	out := map[string]any{}
+	for _, key := range []string{"namePrefix", "nameSuffix", "namespace", "version", "forceCommonLabels", "forceCommonAnnotations"} {
+		if v, ok := k[key]; ok {
+			if x := p.tree(v, ".kustomize."+key, 0, 1, chatStringMax, false); x != nil {
+				out[key] = x
+			}
+		}
+	}
+	if imgs, ok := k["images"].([]any); ok {
+		var list []any
+		for _, i := range imgs {
+			if s, ok := i.(string); ok {
+				list = append(list, p.str(s, chatStringMax))
+			}
+		}
+		out["images"] = list
+	}
+	if comps, ok := k["components"].([]any); ok {
+		var list []any
+		for _, c := range comps {
+			if s, ok := c.(string); ok {
+				list = append(list, p.str(s, chatStringMax))
+			}
+		}
+		out["components"] = list
+	}
+	if reps, ok := k["replicas"].([]any); ok {
+		var list []any
+		for _, r := range reps {
+			if rm, ok := r.(map[string]any); ok {
+				list = append(list, map[string]any{"name": rm["name"], "count": rm["count"]})
+			}
+		}
+		out["replicas"] = list
+	}
+	if labels, ok := k["commonLabels"].(map[string]any); ok {
+		lm := map[string]any{}
+		for lk, lv := range labels {
+			if s, ok := lv.(string); ok {
+				lm[lk] = p.str(s, chatStringMax)
+			}
+		}
+		out["commonLabels"] = lm
+	}
+	if ann, ok := k["commonAnnotations"].(map[string]any); ok {
+		am := map[string]any{}
+		for ak, av := range ann {
+			if s, ok := av.(string); ok && chatAnnotationAllowlist[ak] {
+				am[ak] = p.str(s, chatStringMax)
+			} else {
+				p.drop(".kustomize.commonAnnotations")
+			}
+		}
+		if len(am) > 0 {
+			out["commonAnnotations"] = am
+		}
+	}
+	for _, opaque := range []string{"patches", "patchesStrategicMerge", "patchesJson6902"} {
+		if v, ok := k[opaque].([]any); ok && len(v) > 0 {
+			out[opaque+"Count"] = len(v)
+			p.drop(".kustomize." + opaque)
+		}
 	}
 	return out
 }

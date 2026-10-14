@@ -15,6 +15,9 @@ type EventSummary struct {
 	Namespace string
 	// Involved object identity for cross-linking:
 	Kind, Name string
+	// UID is the involved object's UID: a same-name replacement's events
+	// are told apart from the current object's by it.
+	UID string
 	// LastSeenUnix for sorting/display (unix seconds; 0 if unknown)
 	LastSeenUnix  int64
 	FirstSeenUnix int64
@@ -37,6 +40,7 @@ func SummarizeEvents(events []corev1.Event) []EventSummary {
 			Namespace:     e.Namespace,
 			Kind:          e.InvolvedObject.Kind,
 			Name:          e.InvolvedObject.Name,
+			UID:           string(e.InvolvedObject.UID),
 			LastSeenUnix:  eventLastSeen(e),
 			FirstSeenUnix: eventFirstSeen(e),
 		})
