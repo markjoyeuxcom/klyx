@@ -261,9 +261,10 @@ No lens changes its content in slice 4. The lens sweep is slice 11.
 
 **`InspectorLayout` takes a required `pin`:** `{ cluster, uid?, kind, namespace?, name }`. `uid` is omitted for the objects with none (above).
 
-**Consumers read the pin from `InspectorPin` context:**
-- `useInspectorAI` uses the pin's cluster when its caller passes none, and the route fallback is removed. That fixes the seven callers by construction.
-- "Ask a follow-up" opens the chat on the pin's cluster.
+**Consumers:**
+- `useInspectorAI` runs in the inspector component, above `InspectorLayout`, so it cannot read a context the layout provides. Its cluster argument is required instead, and the route fallback is removed. The seven inspectors that omitted it now receive their lens's cluster. TypeScript rejects any new caller without one.
+- "Ask a follow-up" opens the chat on that same cluster.
+- What renders inside the layout reads the pin from `InspectorPin` context.
 - Confirmations keep their pinned clusters. Their typed name already comes from the lens or inspector, never the route.
 
 **Local selections carry their cluster:** a local key becomes `{ cluster, key }`, and a lens reads it only when `sel.cluster === cluster`. The one-render overlap goes; the reset effects stay as cleanup. Store-held selections are already fenced by their slice.
@@ -274,9 +275,17 @@ No lens changes its content in slice 4. The lens sweep is slice 11.
 
 **Open point for review (6.3a):** "Replaced" changes behaviour in Pods, Nodes and Workloads, which follow a same-name replacement today. The parent pins the inspector to its UID (parent §4), which this follows. The alternative keeps following by name, and marks the inspector "Replaced at <time>" while it reads the new object afresh.
 
+### 6.3b As built (4d, part 1)
+
+- `InspectorLayout` takes `pin={{ cluster, uid }}` (kind, namespace and name are its existing props) at all 24 sites. It provides the full pin as context and publishes it to `nav/inspectorPin.ts` while mounted. An earlier inspector's release never clears a later one's pin.
+- The five UID-less inspectors without a cluster prop gained one: Access grants, Argo projects, the topology's routes, Karpenter events and Upgrade's deprecated APIs.
+- `cluster/useClusterKey.ts` holds a local selection as `{ cluster, key }` and returns the key only on that cluster. Its setter is stable and records the cluster current when it runs, so memoised handlers stay correct. It is used in all eleven local-selection lenses.
+- `aspect` and `drawing` render as specified; no lens passes them until the slice 11 sweep.
+- "Replaced" waits for open point 6.3a.
+
 ### 6.4 The object crumb
 
-A small `inspectorPin` store, set while an inspector is mounted, gives the location bar its fourth crumb: kind and name. Clicking it focuses the inspector.
+A small `inspectorPin` store, set while an inspector is mounted, gives the location bar its fourth crumb: kind and name, only while the pin's cluster is the one shown. Clicking it focuses the inspector's identity. The lens crumb then names the lens alone, since an instance route's place also carries its object.
 
 ## 7. Tests
 
