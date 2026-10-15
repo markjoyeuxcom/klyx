@@ -466,6 +466,15 @@ button.locbar-crumb:hover { background: var(--color-background-secondary); }
 
 /* ---- cluster overview (redesign step 7e) ---- */
 .ov-section { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+/* The station page (The Line slice 11c): its verdict leads, as the fleet's
+   does - the health reading at the fleet headline's size, the line clause
+   below it in the clause's size - then its "Needs you" rows. */
+.station-verdict { display: flex; flex-direction: column; gap: 6px; padding-bottom: 8px; min-width: 0; }
+.station-verdict-health { display: flex; align-items: center; gap: 10px; margin: 0; font: 600 20px/26px var(--font-sans); letter-spacing: -0.005em;
+  color: var(--color-text-primary); overflow-wrap: anywhere; }
+.station-verdict-health[data-tone="danger"] { color: var(--color-text-danger); }
+.station-verdict-health[data-tone="warning"] { color: var(--color-text-warning); }
+.station-verdict-line { display: flex; align-items: center; gap: 8px; margin: 0; font: 400 13px/18px var(--font-sans); color: var(--color-text-secondary); overflow-wrap: anywhere; }
 .ov-columns { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr)); gap: 16px; align-items: start; }
 /* Areas flow in columns: a quiet area keeps its own height instead of
    stretching to a long neighbour's, and its label sits above its lines so the

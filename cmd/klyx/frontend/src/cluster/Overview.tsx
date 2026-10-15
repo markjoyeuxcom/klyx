@@ -15,6 +15,9 @@ import { useHealth } from "../store/health";
 import { checkingText, lineText, mastReading, provenance, type Area, type ClusterAttention, type Line } from "../nav/clusterAttention";
 import { useAttentionModel } from "../nav/useAttentionModel";
 import { reveal, selectsOnReveal } from "../nav/reveal";
+import { StationVerdict } from "./StationVerdict";
+import { clusterDisplayName } from "../fleet/clusterName";
+import { NeedsYou } from "../fleet/NeedsYou";
 
 
 // Overview on the workspace template (redesign step 7e). Its attention
@@ -23,7 +26,9 @@ import { reveal, selectsOnReveal } from "../nav/reveal";
 // and nothing here is a second ledger with its own fetch. Nothing is green:
 // a quiet area is a neutral fact scoped to what was read.
 export function Overview({ c }: { c: ClusterDTO }) {
-  const tags = [c.env, c.region, c.provider, c.group].filter(Boolean);
+  // what the station is; where it stands on the line is the verdict's
+  // second line (The Line slice 11c)
+  const where = [c.provider, c.region, c.group].filter(Boolean).join(" · ");
   const metrics = useFleet((s) => s.metrics);
   const loading = useFleet((s) => s.metrics.loading);
   const model = useAttentionModel(c.name);
@@ -57,12 +62,13 @@ export function Overview({ c }: { c: ClusterDTO }) {
   return (
     <LensLayout
       label="Overview"
-      title="Overview"
+      // The station page's title is the station (slice 11 ruling 5); the
+      // destination stays Overview. Its state leads the verdict below.
+      title={clusterDisplayName(c.name)}
       summary={
         <>
-          <span className="t-status" style={{ color: stateTone }}>{c.state === "Failed" ? "▲ " : ""}{stateWord(c)}</span>
           {c.version && <span className="t-secondary">{c.version}</span>}
-          {tags.length > 0 && <span className="t-secondary">{tags.join(" · ")}</span>}
+          {where && <span className="t-secondary">{where}</span>}
         </>
       }
       headerEnd={
@@ -71,24 +77,16 @@ export function Overview({ c }: { c: ClusterDTO }) {
           <button className="l-btn" onClick={refresh}>Refresh</button>
         </>
       }
-      notice={c.reason ? <ConnectionNotice c={c} m={model} tone={stateTone} /> : undefined}
       state="ready"
       body={
+        // The station page (The Line slice 11c): the station's verdict and
+        // its "Needs you" rows, then the Overview's sections in the parent's
+        // order - utilisation, monitoring, warning events, risks, the areas,
+        // and the connection's notes last.
         <div className="lens-canvas" data-testid="overview">
-          <AttentionSection cluster={c.name} m={model} />
+          <StationVerdict c={c} m={model} />
+          <NeedsYou station clusters={[c]} models={model ? { [c.name]: model } : {}} />
           <div className="ov-columns">
-            <section aria-label="Cluster facts" className="ov-section">
-              <h3 className="t-section-label">Cluster</h3>
-              <div className="insp-kv">
-                <span>connection</span><span style={{ color: stateTone }}>{freshnessText(c)}</span>
-                <span>nodes</span><span>{c.nodesReady}/{c.nodesTotal} ready</span>
-                <span>pods</span><span>{podsText(c)}</span>
-                <span>namespaces</span><span>{summary?.namespaces != null ? summary.namespaces : "—"}</span>
-                <span>flux</span><span>{toolFact(model, "flux")}</span>
-                <span>argo cd</span><span>{toolFact(model, "argo")}</span>
-                <span>gateway</span><span>{toolFact(model, "gateway")}</span>
-              </div>
-            </section>
             <section aria-label="Resources" className="ov-section">
               <h3 className="t-section-label">Resources</h3>
               <div className="insp-kv">
@@ -105,9 +103,28 @@ export function Overview({ c }: { c: ClusterDTO }) {
               </div>
               <MonitoringLine dto={m} loading={loading} onRefresh={() => getClusterMetrics(c.name, true)} />
             </section>
+            <section aria-label="Cluster facts" className="ov-section">
+              <h3 className="t-section-label">Cluster</h3>
+              <div className="insp-kv">
+                <span>connection</span><span style={{ color: stateTone }}>{freshnessText(c)}</span>
+                <span>nodes</span><span>{c.nodesReady}/{c.nodesTotal} ready</span>
+                <span>pods</span><span>{podsText(c)}</span>
+                <span>namespaces</span><span>{summary?.namespaces != null ? summary.namespaces : "—"}</span>
+                <span>flux</span><span>{toolFact(model, "flux")}</span>
+                <span>argo cd</span><span>{toolFact(model, "argo")}</span>
+                <span>gateway</span><span>{toolFact(model, "gateway")}</span>
+              </div>
+            </section>
           </div>
           <CriticalEvents cluster={c.name} />
           <ClusterRisks cluster={c.name} />
+          <AttentionSection cluster={c.name} m={model} />
+          {c.reason && (
+            <section aria-label="Connection" className="ov-section" data-testid="ov-connection">
+              <h3 className="t-section-label">Connection</h3>
+              <ConnectionNotice c={c} m={model} tone={stateTone} />
+            </section>
+          )}
         </div>
       }
     />
@@ -144,13 +161,6 @@ function ConnectionNotice({ c, m, tone }: { c: ClusterDTO; m: ClusterAttention |
       <ul className="ov-notice-notes t-secondary">{notes.map((n) => <li key={n}>{n}</li>)}</ul>
     </details>
   );
-}
-
-function stateWord(c: ClusterDTO): string {
-  if (c.state === "Synced") return "Connected";
-  if (c.state === "Degraded") return "Connected with notes";
-  if (c.state === "Stale") return "Stale";
-  return c.state;
 }
 
 // ---- attention ---------------------------------------------------------------------
@@ -191,8 +201,8 @@ function AttentionSection({ cluster, m }: { cluster: string; m: ClusterAttention
   const r = mastReading(m);
   const clock = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
   return (
-    <section aria-label="Attention" className="ov-section">
-      <h3 className="t-section-label">Attention</h3>
+    <section aria-label="By area" className="ov-section">
+      <h3 className="t-section-label">By area</h3>
       {m.ended ? (
         <span className="t-secondary" data-testid="ov-ended">Observation ended at {clock(m.ended)} - nothing here is current.</span>
       ) : r.state === "checking" ? <span className="t-secondary">Reading {cluster}…</span> : (

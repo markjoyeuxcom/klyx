@@ -42,9 +42,10 @@ export function moreText(row: Extract<QueueRow, { kind: "more" }>): string {
 }
 
 // Where a row is: its LinePos station tag (parent §3.7, slice 8a) and its
-// area; a cluster the line does not place keeps its place and name.
-function Row({ row, pos }: { row: QueueRow; pos: LinePosModel | null }) {
-  const station = pos ? <LinePos pos={pos} /> : <><span>{row.place || "no environment"}</span><span className="queue-cluster">{clusterDisplayName(row.cluster)}</span></>;
+// area; a cluster the line does not place keeps its place and name. On the
+// station page every row is here: the area alone.
+function Row({ row, pos, here }: { row: QueueRow; pos: LinePosModel | null; here: boolean }) {
+  const station = here ? null : pos ? <LinePos pos={pos} /> : <><span>{row.place || "no environment"}</span><span className="queue-cluster">{clusterDisplayName(row.cluster)}</span></>;
   const where = <span className="queue-where">{station}<span>{row.area}</span></span>;
   if (row.kind === "object") {
     const name = `${row.ref.namespace ? `${row.ref.namespace}/` : ""}${row.ref.name}`;
@@ -70,8 +71,11 @@ function Row({ row, pos }: { row: QueueRow; pos: LinePosModel | null }) {
   );
 }
 
-export function NeedsYou({ clusters, models }: { clusters: ClusterDTO[]; models: Record<string, ClusterAttention> }) {
-  const filter = useQueueFilter((s) => s.filter);
+// station: the station page's queue (The Line slice 11c) - one cluster, no
+// filters (All, Prd only and Faults are fleet questions), no station tag.
+export function NeedsYou({ clusters, models, station = false }: { clusters: ClusterDTO[]; models: Record<string, ClusterAttention>; station?: boolean }) {
+  const sessionFilter = useQueueFilter((s) => s.filter);
+  const filter: QueueFilter = station ? "all" : sessionFilter;
   const q = fleetQueue(clusters, models, filter);
   const line = useLine((s) => s.dto);
   const codes = useMemo(() => clusterCodes(clusters.map((c) => c.name)), [clusters]);
@@ -80,21 +84,29 @@ export function NeedsYou({ clusters, models }: { clusters: ClusterDTO[]; models:
   const plus = q.lower ? "+" : "";
   const counts = [q.faults > 0 ? `${q.faults}${plus} fault${q.faults === 1 && !plus ? "" : "s"}` : "", q.attention > 0 ? `${q.attention}${plus} to look at` : ""].filter(Boolean).join(" · ");
   return (
-    <section className="queue" aria-labelledby="queue-h">
+    <section className="queue" aria-labelledby={station ? "station-queue-h" : "queue-h"} data-testid={station ? "station-queue" : undefined}>
       <div className="queue-head">
-        <h2 id="queue-h" className="queue-title">Needs you</h2>
+        <h2 id={station ? "station-queue-h" : "queue-h"} className="queue-title">Needs you</h2>
         {counts && <span className="queue-counts">{counts}</span>}
-        <div role="group" aria-label="Filter" className="queue-filters">
-          {FILTERS.map((f) => (
-            <button key={f.id} type="button" className="l-chip" aria-pressed={filter === f.id} onClick={() => useQueueFilter.setState({ filter: f.id })}>{f.label}</button>
-          ))}
-        </div>
+        {!station && (
+          <div role="group" aria-label="Filter" className="queue-filters">
+            {FILTERS.map((f) => (
+              <button key={f.id} type="button" className="l-chip" aria-pressed={filter === f.id} onClick={() => useQueueFilter.setState({ filter: f.id })}>{f.label}</button>
+            ))}
+          </div>
+        )}
       </div>
       <div className="queue-rows">
-        {q.rows.map((row) => <Row key={row.key} row={row} pos={linePosOf(line, row.cluster, codes, faults.has(row.cluster))} />)}
-        {q.rows.length === 0 && <p className="queue-empty">{filter === "all" ? "Nothing in the clusters read needs attention." : "Nothing in this filter, in the clusters read."}</p>}
+        {q.rows.map((row) => <Row key={row.key} row={row} here={station} pos={station ? null : linePosOf(line, row.cluster, codes, faults.has(row.cluster))} />)}
+        {/* an unread station claims nothing: its not-read line stands alone */}
+        {q.rows.length === 0 && !(station && q.notRead.length > 0) && (
+          <p className="queue-empty">{station ? "Nothing on this station needs attention, in what was read." : filter === "all" ? "Nothing in the clusters read needs attention." : "Nothing in this filter, in the clusters read."}</p>
+        )}
       </div>
-      {q.notRead.length > 0 && (
+      {q.notRead.length > 0 && station && (
+        <p className="queue-notread" data-testid="station-queue-notread">Not read yet: {q.notRead[0].why}. Nothing is claimed about what needs you here.</p>
+      )}
+      {q.notRead.length > 0 && !station && (
         <p className="queue-notread">
           Not read: {q.notRead.map((n, i) => (
             <span key={n.cluster} title={n.why}>{i > 0 ? ", " : ""}{clusterDisplayName(n.cluster)} ({n.why.split(":")[0]})</span>

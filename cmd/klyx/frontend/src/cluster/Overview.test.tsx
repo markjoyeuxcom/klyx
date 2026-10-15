@@ -46,21 +46,29 @@ beforeEach(() => {
 });
 
 describe("Overview on the workspace template (redesign step 7e)", () => {
-  it("header carries state, version and tags; the mast already names the cluster", () => {
+  it("the station page: titled by the station, then its verdict, Needs you and the sections in the parent's order", () => {
     seed();
     render(<Overview c={dto} />);
-    expect(screen.getByRole("heading", { name: "Overview" })).toBeTruthy();
-    expect(screen.getByText("Connected")).toBeTruthy();
+    expect(screen.getByRole("heading", { name: NELLI })).toBeTruthy(); // the station; the destination stays Overview
     expect(screen.getByText("v1.36.1")).toBeTruthy();
-    expect(screen.getByText("homelab · k3s")).toBeTruthy();
+    expect(screen.getByText("k3s")).toBeTruthy();
     expect(screen.getByText("1/1 ready")).toBeTruthy();
     expect(screen.getByText("58")).toBeTruthy();
+    const order = [...screen.getByTestId("overview").children].map((el) => el.getAttribute("aria-label") ?? el.getAttribute("data-testid") ?? el.className);
+    expect(order).toEqual(["Station verdict", "station-queue", "ov-columns", "Recent warning events", "Resource risks", "By area"]);
+    // utilisation and monitoring lead the two columns, the facts follow
+    expect([...document.querySelectorAll(".ov-columns > section")].map((x) => x.getAttribute("aria-label"))).toEqual(["Resources", "Cluster facts"]);
   });
 
-  it("a failed cluster's reason is a notice, shaped", () => {
+  it("a failed cluster leads with its connection, never healthy; the reason's notes come last, shaped", () => {
     render(<Overview c={{ ...dto, state: "Failed", reason: "connect timed out" }} />);
-    expect(screen.getByText("▲ connect timed out")).toBeTruthy();
-    expect(screen.getByText("▲ Failed")).toBeTruthy();
+    const verdict = screen.getByTestId("station-verdict");
+    expect(verdict.querySelector("h2")?.textContent).toBe("failed: connect timed out");
+    expect(verdict.querySelector('h2 [data-aspect="checking"]')).toBeTruthy();
+    const connection = screen.getByTestId("ov-connection");
+    expect(connection.textContent).toContain("▲ connect timed out");
+    const kids = [...screen.getByTestId("overview").children];
+    expect(kids[kids.length - 1]).toBe(connection);
   });
 
   it("Refresh re-reads what is still fetched - the metrics; the attention is pushed", () => {

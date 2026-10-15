@@ -93,9 +93,15 @@ Each is Codex-reviewed on its own, in this order.
 The Overview destination becomes the station page.
 - **Its header:** the title is the station (`clusterDisplayName`), and the summary is "<env> on <track> · <version> · <provider, region>" in ink-2. The protected tag stays with the location bar's station crumb.
 - **Its body,** top to bottom:
-  1. **The station's verdict** (`StationVerdict`):
-     - **The headline** is `stationReading(c, m)`: the health reading in the fleet's words ("2 areas need attention · 1 unverified", "nothing raised", "health checking…", or the connection's words when the cluster is unreachable). It is led by the station's `Aspect`, which is `markOf` merged with the reading's tone the way `StationCell` merges them.
-     - **The line clause** comes from `LineDTO`: "<env> on <track> · <comparison>", plus "held …" and "failing …" times. It uses `comparisonText` and `timeText`, which move from `LineBoard.tsx` to `line/station.ts` so the board and the page share them. A siding station says "siding", and a cluster the line does not place says "not on the line".
+  1. **The station's verdict** (`StationVerdict`): two lines, each with its own mark.
+     - **The health line** (the headline) is `stationReading(c, m)`: the health reading in the fleet's words ("2 areas need attention · 1 unverified", "nothing raised", "health checking…", or the connection's words when the cluster is unreachable).
+       - Its mark comes from the reading alone: fault for a danger tone, attention for a warning tone, checking when it cannot be read or is unverified, none otherwise.
+       - It never inherits the line's failure.
+     - **The line line** comes from `LineDTO`, fenced to the line's Git ordering as the board is (`useLineGitFor`).
+       - It reads "<env> on <track> · <comparison>", plus "held …" and "failing …" times, with `markOf`'s mark and the board's held-behind rule.
+       - It keeps the board's guards: an unreachable cluster shows its place but no comparison, times or mark.
+       - Before a first `LineDTO` it says "the line is being read…", never "not on the line". A siding station says so, and only a cluster absent from a `LineDTO` says "not on the line".
+       - `comparisonText` and `timeText` move from `LineBoard.tsx` to `line/station.ts`, so the board and the page share them.
      - **No new claim:** every word already exists on the fleet board's station cell.
   2. **"Needs you" for this station:** `NeedsYou` gains a `station` mode.
      - It shows `fleetQueue([c], {c: model}, "all")`.
@@ -142,12 +148,46 @@ The Overview destination becomes the station page.
   - the board and the page sharing `comparisonText` and `timeText`.
 - **11d:** the source test, the captures and the parity gate.
 
-## 7. Open points (for review)
+## 7. Rulings (design review of 558e190)
 
-1. **The row mark is size 10** in 40px rows. The console, the fleet queue, inspector lists and the topology's nodes keep size 8.
-2. **A healthy row's empty mark is `aria-hidden`.** The verdict word in its own column is what a screen reader hears.
-3. **A stale ok row takes the dashed `syncing` mark,** with the "Syncing…" chip. The mark's dim is retired, since a mark keeps its contrast. A stale row with any other verdict keeps that verdict's mark.
-4. **Events take no mark.** An event is evidence rather than an object's verdict, which keeps the step-5 ruling. Access grants take none either.
-5. **The station page's title is the station.** The destination keeps the name "Overview" (mod+1, the registry, the console, parity).
-6. **The station's "Needs you" has no filters and no station tag.**
-7. **The bench themes stay selectable but lose their machining** in this slice; their removal follows §14.1.
+Codex accepted the design, with these rulings:
+1. **Size 10** in 40px verdict-table rows; size 8 on the other named surfaces.
+2. **A healthy row's empty mark is `aria-hidden`,** and its readable status word stays.
+3. **A stale ok row is dashed `syncing`;** other verdict marks keep full stroke contrast. Generation lag stays distinct from a failed or stale read.
+4. **Events and Access grants are unmarked:** evidence and a simulation's answers do not become object-health verdicts.
+5. **The page title is the station's name.** Overview stays the destination, with its keyboard and parity identity.
+6. **The station's "Needs you" has no fleet filters and no station tag,** with the existing UID-pinned opening and not-read wording.
+7. **The bench themes stay selectable but lose their machining,** keeping usable colour fallbacks until their removal one release later.
+
+For 11c, the verdict is two independently marked lines, health and line (§4). The health line never inherits `markOf`'s line failure, and the board's unreachable and read guards and the `LineDTO`/`LineGit` version fence hold.
+
+Codex accepted 11a at e7af6d0. Its P3 (the `InspectorStatus` danger prefix beside its `Aspect`) is fixed in 11d part 1, and so is the staleness comment that still described the retired dim.
+
+## 8. As built: 11a and 11d part 1
+
+- **11a** (accepted at e7af6d0) follows §2.
+- **11d part 1** (2aeeae5) retires the machining. Each component use now reads its `--line-*` token with the classic fallback it had:
+  - wells: `--line-sunk` and `--line-well-ring`;
+  - selection: `--line-route-wash` and `--line-route`;
+  - modules: `--line-module-ring`;
+  - an idle mark: `--line-track`.
+
+  Night and day define `--line-well-ring` and `--line-module-ring` in place of the flattened bench extras. Bevels and glows are gone, and a pressed filter chip reads as a selection. `InspectorStatus` drops the danger prefix beside its `Aspect`, and the `.klyx-danger-prefix` rule goes with its last user. A source test fails on any component reading `--bench-` or `--lamp-`.
+
+## 9. As built: 11c
+
+- **`cluster/StationVerdict.tsx`** follows §4's two lines.
+  - **The health line:** an `h2` with the reading's `Aspect` at size 12 and `data-tone`.
+  - **The line line:** `markOf`'s `Aspect` at size 10 and the board's words, from `line/station.ts`: `comparisonText`, `timeText` and `stationTimes`, which the board's `StationCell` now shares.
+- **`NeedsYou station`:**
+  - one cluster, `filter` fixed to all;
+  - no filter group and no station tag;
+  - "Nothing on this station needs attention, in what was read.";
+  - an unread station's one line, "Not read yet: <why>. Nothing is claimed about what needs you here.", which stands alone.
+- **`Overview`** is the station page:
+  - **The title** is the station's display name; **the summary** is the version and the provider, region and group. The station's place on the line is the verdict's second line, not repeated in the header.
+  - **The body:** the verdict, the station's queue, Resources beside the cluster facts, recent warning events, resource risks, "By area", and Connection last, holding the connection notice that was in the notice slot.
+- **Tests:**
+  - `StationVerdict.test.tsx`: the board's words with separate marks; health never inheriting the line's failure; a fault reading; before a first `LineDTO`; a siding; not on the line; the unreachable guard; the station queue's shape and UID-pinned opening; an unread station claiming nothing. Mutation-checked.
+  - `Overview.test.tsx`: the title, the section order, and a failed cluster leading with its connection with its notes last.
+- **Captures:** `pw/s11c.mjs`, `<scratchpad>/cap11c/{night,day}-1440-station{,-lower}.png`, against the kind lab.

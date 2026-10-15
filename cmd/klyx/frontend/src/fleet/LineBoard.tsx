@@ -3,11 +3,11 @@ import { useFleet, type ClusterDTO } from "../store/fleet";
 import type { LineDTO, LineStationDTO } from "../store/line";
 import type { ClusterAttention } from "../nav/clusterAttention";
 import { lineVerdict, trackLabel } from "../line/verdict";
-import { gitStation, orderedText } from "../line/history";
+import { gitStation } from "../line/history";
+import { comparisonText, stationTimes } from "../line/station";
 import type { LineGitDTO } from "../store/lineGit";
 import { lineBoard, RANK_LABEL, type Board } from "../line/board";
-import { markOf, short } from "../line/stationStrip";
-import { proofText } from "../line/proof";
+import { markOf } from "../line/stationStrip";
 import { Aspect } from "../chrome/primitives";
 import { clusterDisplayName } from "./clusterName";
 import { stationReading } from "./stationReading";
@@ -42,23 +42,6 @@ export function LineVerdictView({ dto, git = null }: { dto: LineDTO; git?: LineG
   );
 }
 
-// comparisonText: what the station runs on the chosen key, in §3.3's words,
-// or where it stands against T when the line is ordered (slice 6d).
-function comparisonText(s: LineStationDTO, git: LineGitDTO | null): string {
-  const g = gitStation(git, s.cluster);
-  if (g && git) return orderedText(g, git);
-  if (s.state === "matches" && s.single) return short(s.single);
-  if (s.state === "differs" && s.single) return `${short(s.single)} · differs`;
-  return s.state;
-}
-
-// timeText puts a proof's words after what it dates: "held since 20:21",
-// "failing · first observed 20:19; start unknown".
-function timeText(what: string, proof: Parameters<typeof proofText>[0]): string | null {
-  const t = proofText(proof);
-  if (!t) return null;
-  return /^(since|between|by) /.test(t) ? `${what} ${t}` : `${what} · ${t}`;
-}
 
 export function StationCell({ s, dto, git = null, c, m, peers }: { s: LineStationDTO; dto: LineDTO; git?: LineGitDTO | null; c: ClusterDTO | undefined; m: ClusterAttention | undefined; peers: string[] }) {
   const reading = stationReading(c, m);
@@ -66,7 +49,7 @@ export function StationCell({ s, dto, git = null, c, m, peers }: { s: LineStatio
   const own = markOf(s);
   const mark = reading.unreachable ? "none" : own === "none" && heldBehind ? "attention" : own;
   const comparison = reading.unreachable ? null : comparisonText(s, git);
-  const times = reading.unreachable ? [] : [s.held ? timeText("held", s.heldSince ?? null) : null, s.flags?.failing ? timeText("failing", s.failingSince ?? null) : null].filter((x): x is string => !!x);
+  const times = reading.unreachable ? [] : stationTimes(s);
   const track = trackLabel(s, dto);
   const prot = c?.protected ? (c.protectedInferred ? "protected (inferred)" : "protected") : null;
   // "aks-prd-neu, prd on westeurope, protected, 9f2c11d · differs, failing since 20:21; 2 areas need attention"
