@@ -346,10 +346,53 @@ button.locbar-crumb:hover { background: var(--color-background-secondary); }
 .appearance-choice { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; font: 400 12px/16px var(--font-sans); color: var(--color-text-primary); }
 .appearance-note { flex-basis: 100%; margin: 4px 0 0; font-size: 11px; color: var(--color-text-tertiary); }
 
-/* ---- fleet board (redesign spec §1, step 7d) ---- */
-.fleet-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(360px, 100%), 480px)); gap: 8px; justify-content: start; align-items: stretch; min-width: 0; }
-.fleet-mesh { display: flex; flex-direction: column; gap: 4px; padding: 8px 12px; border-radius: 4px;
-  background: var(--bench-well-bg, var(--color-background-secondary)); box-shadow: var(--bench-well-shadow, none); }
+/* ---- The Line fleet screen (slice 5) ---- */
+.fleet-screen { display: flex; flex-direction: column; gap: 16px; }
+.line-verdict { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 10px 24px; }
+.line-verdict-text { min-width: 0; display: flex; flex-direction: column; gap: 4px; max-width: 900px; }
+.line-verdict-key { font: 500 11px/14px var(--font-label); letter-spacing: 0.12em; text-transform: uppercase; color: var(--color-text-tertiary); overflow-wrap: anywhere; }
+.line-verdict-headline { margin: 0; font: 600 20px/26px var(--font-sans); letter-spacing: -0.005em; color: var(--color-text-primary); overflow-wrap: anywhere; }
+.line-verdict-asof { font: 400 13px/18px var(--font-sans); color: var(--color-text-tertiary); }
+.line-verdict-clause { margin: 0; font: 400 13px/18px var(--font-sans); color: var(--color-text-secondary); overflow-wrap: anywhere; }
+.line-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; font: 400 12px/16px var(--font-sans); color: var(--color-text-tertiary); }
+.line-legend > span { display: inline-flex; align-items: center; gap: 6px; }
+.line-legend-seg { width: 18px; height: 2px; background: var(--line-track, var(--color-border-secondary)); }
+.line-legend-seg[data-lit] { background: var(--line-route, var(--color-text-info)); }
+.line-legend-mesh { width: 2px; height: 12px; background: var(--color-text-info); }
+.line-legend-mesh[data-oneway] { background: none; border-left: 2px dashed var(--line-caution, var(--color-text-warning)); }
+
+.line-board-well { overflow-x: auto; padding: 14px; border-radius: 6px; background: var(--line-sunk, var(--bench-well-bg, var(--color-background-secondary)));
+  box-shadow: inset 0 0 0 1px var(--color-border-tertiary); display: flex; flex-direction: column; gap: 14px; }
+.line-board { display: grid; align-items: stretch; row-gap: 6px; width: 100%; min-width: min-content; } /* fills the well; scrolls only below the cells' 184px floor */
+.line-board-rank { padding: 0 2px 2px; font: 500 11px/14px var(--font-label); letter-spacing: 0.16em; text-transform: uppercase; color: var(--color-text-tertiary); }
+.line-board-track { align-self: center; padding-right: 12px; font: 600 12px/16px var(--font-label); letter-spacing: 0.12em; text-transform: uppercase; color: var(--color-text-secondary); white-space: nowrap; }
+.line-board-cell { display: flex; gap: 8px; min-width: 0; }
+.line-board-seg { align-self: center; height: 2px; background: var(--line-track, var(--color-border-secondary)); }
+.line-board-seg[data-lit] { background: var(--line-route, var(--color-text-info)); }
+.line-board-link { display: flex; align-items: center; gap: 6px; min-height: 18px; padding-left: 14px; }
+.line-board-link-line { width: 2px; align-self: stretch; background: var(--color-text-info); }
+.line-board-link[data-oneway] .line-board-link-line { background: none; border-left: 2px dashed var(--line-caution, var(--color-text-warning)); }
+.line-board-link-text { font: 400 11px/14px var(--font-sans); color: var(--color-text-tertiary); }
+.line-board-link[data-oneway] .line-board-link-text { color: var(--color-text-warning); }
+.line-board-row { display: flex; flex-wrap: wrap; gap: 8px; }
+.line-board-siding { padding-top: 12px; border-top: 1px solid var(--color-border-tertiary); display: flex; flex-direction: column; gap: 8px; }
+.line-board-siding-head, .line-board-note { margin: 0; font: 400 12px/16px var(--font-sans); color: var(--color-text-tertiary); }
+.line-board-notes { display: flex; flex-direction: column; gap: 2px; font: 400 12px/16px var(--font-sans); color: var(--color-text-tertiary); }
+.line-board-notes p { margin: 0; overflow-wrap: anywhere; }
+
+.station-cell { flex: 1 1 184px; min-width: 184px; max-width: 320px; display: flex; flex-direction: column; align-items: flex-start; gap: 3px; padding: 10px 12px; border: 0; border-radius: 6px;
+  text-align: left; cursor: pointer; background: var(--color-background-primary); box-shadow: inset 0 0 0 1px var(--color-border-tertiary); color: var(--color-text-primary); }
+.station-cell:hover { box-shadow: inset 0 0 0 1px var(--color-border-secondary); }
+.station-cell[data-mark="fault"] { box-shadow: inset 0 0 0 1px var(--line-danger-line, var(--color-border-danger)); }
+.station-cell[data-mark="attention"] { box-shadow: inset 0 0 0 1px var(--line-caution-line, var(--color-border-warning)); }
+.station-cell[data-unreachable] { background: transparent; box-shadow: none; outline: 1px dashed var(--color-border-secondary); outline-offset: -1px; }
+.station-cell-head { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; }
+.station-cell-env { font: 600 13px/18px var(--font-label); letter-spacing: 0.12em; text-transform: uppercase; }
+.station-cell-name { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 400 12px/16px var(--font-mono); color: var(--color-text-secondary); }
+.station-cell-rev { font: 500 12px/16px var(--font-mono); color: var(--color-text-primary); }
+.station-cell-reading, .station-cell-time, .station-cell-mesh { font: 400 12px/16px var(--font-sans); color: var(--color-text-tertiary); overflow-wrap: anywhere; }
+.station-cell-reading[data-tone="danger"] { color: var(--color-text-danger); }
+.station-cell-reading[data-tone="warning"] { color: var(--color-text-warning); }
 
 /* ---- cluster overview (redesign step 7e) ---- */
 .ov-section { display: flex; flex-direction: column; gap: 8px; min-width: 0; }

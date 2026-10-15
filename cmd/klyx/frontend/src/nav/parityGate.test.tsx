@@ -28,7 +28,6 @@ vi.mock("../../bindings/github.com/moomora/klyx/internal/appbridge/index.js", ()
   GatewayService: { GetGatewayTopology: spy("GetGatewayTopology") },
   MetricsService: { GetClusterMetrics: spy("GetClusterMetrics") },
 }));
-vi.mock("../bridge/mesh", () => ({ getMeshGraph: vi.fn(async () => {}) }));
 vi.mock("../bridge/healthRows", () => ({ startSummaries: vi.fn() }));
 vi.mock("../bridge/metrics", () => ({ getClusterMetrics: vi.fn(), getClusterSparklines: vi.fn(async () => ({ available: false, cpu: [], mem: [] })) }));
 vi.mock("../bridge/events", () => ({ fetchEventsSnapshot: vi.fn(async () => ({ namespaces: [], events: [] })) }));
@@ -42,7 +41,9 @@ import { useHealth, resetHealthStore, applySummary, applyRows, addSub, openStart
 import { TASKS, clusterAttention, lineText, mastReading, type Area, type ClusterAttention, type Line } from "./clusterAttention";
 import { spineLamp, connectionText } from "./fleetAttention";
 import { NAV_GROUPS } from "./registry";
-import { clusterDiagnosticScore, ClusterCard } from "../fleet/ClusterCard";
+import { StationCell } from "../fleet/LineBoard";
+import { stationReading } from "../fleet/stationReading";
+import type { LineDTO, LineStationDTO } from "../store/line";
 import { LensIndex } from "../chrome/LensIndex";
 import { lensIndex } from "./lensIndex";
 import { navCounts } from "./useNavCounts";
@@ -85,7 +86,7 @@ function captures(): Capture[] {
 // the summary's incarnation and Ver.
 function load(c: Capture, withRows: boolean) {
   resetHealthStore();
-  useFleet.setState({ clusters: [c.cluster], route: { name: "cluster", cluster: c.cluster.name, section: "overview" }, forwards: [], mesh: null });
+  useFleet.setState({ clusters: [c.cluster], route: { name: "cluster", cluster: c.cluster.name, section: "overview" }, forwards: [] });
   const now = Date.parse(c.summary.evaluatedAt);
   applySummary(c.summary, now);
   if (!withRows) return;
@@ -195,7 +196,7 @@ function assertModel(c: Capture, m: ClusterAttention) {
   const lamp = spineLamp(c.cluster, m);
   const ok = c.case === "B";
   expect(lamp.kind === "healthy", `${c.case} lamp ${lamp.kind}`).toBe(ok);
-  expect(clusterDiagnosticScore(c.cluster, m) === 0, `${c.case} band`).toBe(ok);
+  expect(stationReading(c.cluster, m).text === "nothing raised", `${c.case} station reading`).toBe(ok);
   expect(r.state === "quiet" && r.gaps === 0, `${c.case} mast`).toBe(ok);
 }
 
@@ -223,7 +224,7 @@ suite("the parity gate's frontend stage (slice 6 §3)", () => {
     }
   });
 
-  it("the fleet indicator, the lens index, the card and Overview render each case - and call no list endpoint", () => {
+  it("the fleet indicator, the lens index, the station cell and Overview render each case - and call no list endpoint", () => {
     for (const c of captures()) {
       load(c, true);
       const m = model(c);
@@ -286,16 +287,17 @@ suite("the parity gate's frontend stage (slice 6 §3)", () => {
       }
       ix.unmount();
 
-      // the card
-      const card = render(<ClusterCard c={c.cluster} />);
-      const text = card.container.textContent ?? "";
-      const conn = card.getByText("connection").nextElementSibling?.textContent;
-      expect(conn, `${c.case} connection row`).toBe(c.expect.state === "Degraded" ? "connected · notes" : "connected");
+      // the board's station cell (The Line slice 5a, replacing the card):
+      // areas never objects, "nothing raised" for B alone, the connection
+      // named apart. The per-line words moved to "Needs you" (5b).
+      const station = { cluster: c.cluster.name, track: "fleet", rank: 0, env: "dev", state: "not compared", e: 0, a: [], u: 0, flags: { failing: false }, read: "ok", units: [] } as unknown as LineStationDTO;
+      const lineDto = { version: 1, tracks: [{ name: "fleet", kind: "fleet", label: "Fleet" }], stations: [station], siding: [], keys: [] } as unknown as LineDTO;
+      const cell = render(<StationCell s={station} dto={lineDto} c={c.cluster} m={m} peers={[]} />);
+      const text = cell.container.querySelector(".station-cell-reading")?.textContent ?? "";
       if (r.state === "attention") expect(text, c.case).toContain(`${r.areas} area${r.areas === 1 ? "" : "s"} need${r.areas === 1 ? "s" : ""} attention`);
       else expect(text, c.case).toContain(c.case === "B" ? "nothing raised" : "health partly unverified");
-      for (const { l } of [...litLines, ...gapLines]) expect(text, `${c.case} ${l.part}`).toContain(lineText(l));
-      if (ctl.length > 0) expect(text, c.case).toContain("controller not ready");
-      card.unmount();
+      expect(text.includes("connected with notes"), `${c.case} connection`).toBe(c.expect.state === "Degraded");
+      cell.unmount();
 
       // Overview
       useFleet.setState({ route: { name: "cluster", cluster: c.cluster.name, section: "overview" } });

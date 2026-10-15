@@ -25,7 +25,7 @@ export type Strip =
 export const short = (rev: string) => (/^[0-9a-f]{40}$/.test(rev) ? rev.slice(0, 7) : rev);
 
 // markOf: failing, then held, then checking, then syncing, else none.
-function markOf(s: LineStationDTO): AspectKind {
+export function markOf(s: LineStationDTO): AspectKind {
   if (s.flags?.failing) return "fault";
   if (s.held) return "attention";
   if (s.state === "checking") return "checking";

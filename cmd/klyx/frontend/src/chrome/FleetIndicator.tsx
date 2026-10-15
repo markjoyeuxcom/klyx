@@ -4,7 +4,7 @@ import { useFleet, type ClusterDTO } from "../store/fleet";
 import { useFleetAttention } from "../nav/fleetAttention";
 import { AXIS_TITLE, FLEET_AXES, fleetAxes, fleetAxesLabel, type FleetAxes, type FleetAxis } from "../nav/fleetAxes";
 import { stationLabel } from "../nav/stationOrder";
-import { clusterDisplayName } from "../fleet/ClusterCard";
+import { clusterDisplayName } from "../fleet/clusterName";
 import { vh } from "../app/zoom";
 import { Aspect } from "./primitives";
 import { useMenuPopover } from "./useMenuPopover";

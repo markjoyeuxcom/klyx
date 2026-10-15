@@ -4,7 +4,7 @@ import { openChat } from "../ai/chatStore";
 import { KlyxMark } from "./KlyxMark";
 import { useFleet, type ClusterDTO } from "../store/fleet";
 import { back, backTarget, entryKey, entryLabel, forward, forwardTarget, go, recentPlaces, useHistory, type HistoryEntry } from "../nav/history";
-import { clusterDisplayName } from "../fleet/ClusterCard";
+import { clusterDisplayName } from "../fleet/clusterName";
 import { stopAllForwards } from "../bridge/forwards";
 import { openCommandPalette } from "./CommandPalette";
 import { openTerminal } from "../bridge/configsvc";

@@ -747,10 +747,6 @@ export type NetworkSlice = {
   routeMetricsStale: boolean;
 };
 
-// readNote: this member's mesh facts could not be READ - peerings unknown, not none.
-export type MeshNodeDTO = { cluster: string; name: string; clusterId: number | null; state: string; present: boolean; readNote?: string };
-export type MeshEdgeDTO = { a: string; b: string; mutual: boolean; from?: string };
-export type MeshGraphDTO = { nodes: MeshNodeDTO[]; edges: MeshEdgeDTO[] };
 
 export type MetricsDTO = { available: boolean; mode: string; source: string; warning: string; reason: string; cpuFraction: number | null; memFraction: number | null };
 export type MetricsSlice = { cluster: string | null; dto: MetricsDTO | null; loading: boolean };
@@ -1031,8 +1027,6 @@ type FleetState = {
   selectRoute: (key: string | null) => void;
   clearNetwork: () => void;
   setRouteMetrics: (result: RouteMetricsResultDTO) => void;
-  mesh: MeshGraphDTO | null;
-  setMesh: (m: MeshGraphDTO) => void;
   metrics: MetricsSlice;
   setMetricsLoading: (cluster: string) => void;
   setMetrics: (cluster: string, dto: MetricsDTO) => void;
@@ -1301,8 +1295,6 @@ export const useFleet = create<FleetState>((set) => ({
         },
       };
     }),
-  mesh: null,
-  setMesh: (mesh) => set({ mesh }),
   metrics: { cluster: null, dto: null, loading: false },
   setMetricsLoading: (cluster) => set((s) => ({ metrics: { cluster, dto: s.metrics.cluster === cluster ? s.metrics.dto : null, loading: true } })),
   setMetrics: (cluster, dto) => set({ metrics: { cluster, dto, loading: false } }),

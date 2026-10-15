@@ -1,62 +1,119 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
-import { useFleet } from "../store/fleet";
-import type { ClusterDTO } from "../store/fleet";
+import { describe, it, expect, beforeEach } from "vitest";
+import { render, screen, fireEvent, within } from "@testing-library/react";
+import { useFleet, type ClusterDTO } from "../store/fleet";
 import { applySummary, resetHealthStore } from "../store/health";
+import { applyLine, resetLineStore, type LineDTO, type LineStationDTO } from "../store/line";
 import { core, kind, replace, summary, task, verdict } from "../test/healthFixtures";
+import { FleetView } from "./FleetView";
 
-vi.mock("../bridge/mesh", () => ({ getMeshGraph: vi.fn(async () => {}) }));
-vi.mock("./ClusterCard", () => ({
-  ClusterCard: ({ c }: { c: ClusterDTO }) => <div data-testid="card">{c.name}</div>,
-  clusterDiagnosticScore: () => 0,
-}));
-import { FleetView, fleetColumns } from "./FleetView";
+// The Line slice 5a: the fleet screen is the line's verdict and the board,
+// from LineDTO and each cluster's summary; it fetches nothing of its own.
 
-const c = (name: string, state = "Synced"): ClusterDTO => ({ name, state, nodesTotal: 1, pods: 10 } as unknown as ClusterDTO);
+const SHA = "a1b9e3c0a1b2c3d4e5f60718293a4b5c6d7e8f90";
+const OLD = "9f2c11d0a1b2c3d4e5f60718293a4b5c6d7e8f90";
+const c = (name: string, state = "Synced", over: Partial<ClusterDTO> = {}): ClusterDTO => ({ name, state, reason: "", nodesTotal: 1, pods: 10, env: "", region: "", ...over } as unknown as ClusterDTO);
+const st = (cluster: string, env: string, rank: number, over: Partial<LineStationDTO> = {}): LineStationDTO =>
+  ({ cluster, env, track: "westeurope", rank, state: "matches", single: SHA, e: 1, a: [SHA], u: 0, read: "ok", units: [], flags: { failing: false }, ...over } as unknown as LineStationDTO);
+const line = (stations: LineStationDTO[], over: Partial<LineDTO> = {}): LineDTO => ({
+  version: 1, key: { kind: "git", repo: "github.com/acme/fleet", refKind: "branch", refName: "main", label: "github.com/acme/fleet @ branch main" },
+  keyHow: "most stations", keyStations: stations.length, keys: [], r: SHA, rStations: 2, applied: 2, compared: 3, notCompared: 0, checking: 0,
+  tracks: [{ name: "westeurope", kind: "region", label: "westeurope" }], fallback: false, stations, siding: [], mesh: { drawn: [], card: {}, offFleet: [] }, ...over,
+} as unknown as LineDTO);
 
-beforeEach(() => { useFleet.setState({ clusters: [], mesh: null, route: { name: "fleet" } }); resetHealthStore(); });
+beforeEach(() => {
+  useFleet.setState({ clusters: [], route: { name: "fleet" } });
+  resetHealthStore();
+  resetLineStore();
+});
 
-describe("FleetView on the workspace template (redesign step 7d)", () => {
+describe("the fleet screen (slice 5a)", () => {
   it("no clusters: one empty state with the way forward", () => {
     render(<FleetView />);
     expect(screen.getByText("No clusters connected yet.")).toBeTruthy();
-    expect(screen.queryByTestId("fleet-board")).toBeNull();
+    expect(screen.getByRole("button", { name: "Open Settings" })).toBeTruthy();
   });
 
-  it("header facts replace the meter strip: clusters counted, zero neutral, faults shaped, nothing green", () => {
-    useFleet.setState({ clusters: [c("a"), c("b"), c("d"), c("c", "Failed")] });
-    applySummary(summary(replace(core(), task("workloads", [verdict("workloads", { fault: 1, ok: 4 }, [kind("deployments")])])), {}, "a"));
-    applySummary(summary(core(), {}, "b"));
+  it("before the first LineDTO the board is reading, never empty or quiet", () => {
+    useFleet.setState({ clusters: [c("a")] });
+    render(<FleetView />);
+    expect(screen.getByRole("status", { name: "reading the line" })).toBeTruthy();
+    expect(screen.queryByText(/nothing raised/)).toBeNull();
+  });
+
+  it("the verdict, the legend and the board: lit only between two matching stations", () => {
+    useFleet.setState({ clusters: [c("d"), c("s"), c("p", "Synced", { protected: true })] });
+    applyLine(line([st("d", "dev", 0), st("s", "stg", 2), st("p", "prd", 3, { state: "differs", single: OLD, flags: { failing: true } as never })]));
     const { container } = render(<FleetView />);
-    expect(screen.getByText("4")).toBeTruthy();
-    expect(screen.getByText(/clusters · 3 connected/)).toBeTruthy();
-    expect(screen.getByText("▲ 1 unreachable")).toBeTruthy();
-    expect(screen.getByTestId("fleet-attention").textContent).toBe("▲ 1 needs attention");
-    expect(screen.getByTestId("fleet-unknown").textContent).toBe("1 partly unverified"); // d: no summary yet
-    expect(container.innerHTML).not.toMatch(/color-text-success/);
+    expect(screen.getByRole("heading", { level: 2, name: /a1b9e3c is applied on 2 of 3 compared stations/ })).toBeTruthy();
+    expect(screen.getByText(/Comparing github\.com\/acme\/fleet @ branch main · on 3 of 3 stations · chosen by most stations/)).toBeTruthy();
+    expect(screen.getByLabelText("Legend").textContent).toContain("Lit: matches the comparison revision. A comparison, not a delivery path.");
+    const segs = [...container.querySelectorAll(".line-board-seg")].map((e) => e.hasAttribute("data-lit"));
+    expect(segs).toEqual([true, false]);
+    const prd = screen.getByRole("button", { name: /^p, prd on westeurope/ });
+    expect(prd.getAttribute("aria-label")).toBe("p, prd on westeurope, protected, 9f2c11d · differs; health checking…");
+    expect(prd.getAttribute("data-mark")).toBe("fault");
   });
 
-  it("cards sit in the bounded grid; ClusterMesh only when a cluster participates", () => {
-    useFleet.setState({ clusters: [c("a")], mesh: { nodes: [{ name: "a", state: "unavailable" }], edges: [] } as never });
-    const { container, rerender } = render(<FleetView />);
-    expect(container.querySelector(".fleet-grid")?.children).toHaveLength(1);
-    expect(screen.queryByRole("region", { name: "ClusterMesh" })).toBeNull();
-    useFleet.setState({ mesh: { nodes: [{ name: "a", state: "ok", peers: [] }], edges: [] } as never });
-    rerender(<FleetView />);
-    expect(screen.getByRole("region", { name: "ClusterMesh" })).toBeTruthy();
+  it("a cell carries its cluster's reading, in areas; clicking it opens the cluster", () => {
+    useFleet.setState({ clusters: [c("d"), c("p")] });
+    applySummary(summary(replace(core(), task("workloads", [verdict("workloads", { fault: 2, ok: 1 }, [kind("deployments")])])), {}, "p"));
+    applySummary(summary(core(), {}, "d"));
+    applyLine(line([st("d", "dev", 0), st("p", "prd", 3)]));
+    render(<FleetView />);
+    const p = screen.getByRole("button", { name: /^p, prd on westeurope/ });
+    expect(within(p).getByText("1 area needs attention").getAttribute("data-tone")).toBe("danger");
+    expect(within(screen.getByRole("button", { name: /^d, dev on westeurope/ })).getByText("nothing raised")).toBeTruthy();
+    fireEvent.click(p);
+    expect(useFleet.getState().route).toEqual({ name: "cluster", cluster: "p", section: "overview" });
   });
-});
 
-describe("fleetColumns (spec §1 bounded grid)", () => {
-  it("fits as many >=360px columns as the width allows, each capped at 480px", () => {
-    expect(fleetColumns(1420)).toEqual({ count: 3, width: 468 });
-    expect(fleetColumns(2400)).toEqual({ count: 6, width: 393 });
-    expect(fleetColumns(1000)).toEqual({ count: 2, width: 480 });
-    expect(fleetColumns(728)).toEqual({ count: 2, width: 360 });
-    expect(fleetColumns(727)).toEqual({ count: 1, width: 480 });
+  it("an unreachable cluster is a dashed cell stating its connection, never its line facts as current", () => {
+    useFleet.setState({ clusters: [c("d"), c("p", "Failed", { reason: "dial tcp" })] });
+    applyLine(line([st("d", "dev", 0), st("p", "prd", 3, { state: "checking", read: "error" })]));
+    render(<FleetView />);
+    const p = screen.getByRole("button", { name: /^p, prd on westeurope/ });
+    expect(p.hasAttribute("data-unreachable")).toBe(true);
+    expect(p.textContent).toContain("failed: dial tcp");
+    expect(p.querySelector(".station-cell-rev")).toBeNull();
   });
-  it("below 360px one card takes the full width; unmeasured falls back to CSS", () => {
-    expect(fleetColumns(300)).toEqual({ count: 1, width: 300 });
-    expect(fleetColumns(0)).toEqual({ count: 1, width: 0 });
+
+  it("held and failing times use the proof's words", () => {
+    useFleet.setState({ clusters: [c("p")] });
+    applyLine(line([st("d", "dev", 0), st("p", "prd", 3, {
+      held: true, heldWhy: "attempted a1b9e3c, failing", flags: { failing: true } as never,
+      heldSince: { basis: "unknown", capped: true } as never, failingSince: { basis: "rule", since: new Date(2026, 9, 15, 20, 21).toISOString() } as never,
+    })]));
+    render(<FleetView />);
+    const p = screen.getByRole("button", { name: /^p, prd on westeurope/ });
+    expect(p.textContent).toContain("held · start unknown (proof capped)");
+    expect(p.textContent).toContain("failing since 20:21");
+    expect(screen.getByText(/prd · westeurope is held: attempted a1b9e3c, failing - start unknown \(proof capped\)/)).toBeTruthy();
+  });
+
+  it("the siding, the fallback, and mesh notes under the board", () => {
+    useFleet.setState({ clusters: [c("a"), c("b"), c("lab")] });
+    applyLine(line([st("a", "prd", 3), st("b", "prd", 3, { track: "northeurope" })], {
+      fallback: true, siding: [st("lab", "", -1, { state: "not compared" })],
+      tracks: [{ name: "westeurope", kind: "region", label: "westeurope" }, { name: "northeurope", kind: "region", label: "northeurope" }] as never,
+      mesh: { drawn: [], card: {}, offFleet: [{ a: "a", b: "elsewhere", mutual: false }], unknown: ["b"] } as never,
+    }));
+    const { container } = render(<FleetView />);
+    expect(screen.getByText(/Fewer than two environment ranks/)).toBeTruthy();
+    expect(container.querySelectorAll(".line-board-seg")).toHaveLength(0);
+    expect(screen.getByText("Siding · no environment")).toBeTruthy();
+    expect(screen.getByText("Off-fleet mesh peers: a ↔ elsewhere (one-way)")).toBeTruthy();
+    expect(screen.getByText("Mesh unverified for b")).toBeTruthy();
+  });
+
+  it("a drawn one-way peering is drawn between adjacent tracks, naming the configuring side", () => {
+    useFleet.setState({ clusters: [c("pw"), c("pn"), c("dw")] });
+    applyLine(line([st("dw", "dev", 0), st("pw", "prd", 3), st("pn", "prd", 3, { track: "northeurope" })], {
+      tracks: [{ name: "westeurope", kind: "region", label: "westeurope" }, { name: "northeurope", kind: "region", label: "northeurope" }] as never,
+      mesh: { drawn: [{ a: "pw", b: "pn", mutual: false, from: "pn" }], card: {}, offFleet: [] } as never,
+    }));
+    const { container } = render(<FleetView />);
+    const link = container.querySelector(".line-board-link") as HTMLElement;
+    expect(link.hasAttribute("data-oneway")).toBe(true);
+    expect(link.textContent).toBe("one-way · pn");
   });
 });

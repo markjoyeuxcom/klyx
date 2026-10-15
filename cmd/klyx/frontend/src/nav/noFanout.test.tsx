@@ -15,7 +15,6 @@ vi.mock("../../bindings/github.com/moomora/klyx/internal/appbridge/index.js", ()
   GatewayService: { GetGatewayTopology: spy("GetGatewayTopology") },
   MetricsService: { GetClusterMetrics: spy("GetClusterMetrics") },
 }));
-vi.mock("../bridge/mesh", () => ({ getMeshGraph: vi.fn(async () => {}) }));
 vi.mock("../bridge/healthRows", () => ({ startSummaries: vi.fn() }));
 vi.mock("../bridge/metrics", () => ({ getClusterMetrics: vi.fn(), getClusterSparklines: vi.fn(async () => ({ available: false, cpu: [], mem: [] })) }));
 vi.mock("../bridge/events", () => ({ fetchEventsSnapshot: vi.fn(async () => ({ namespaces: [], events: [] })) }));
@@ -53,7 +52,7 @@ describe("no attention fan-out on cluster entry", () => {
 
 describe("no health fan-out on the fleet board (slice 5)", () => {
   it("the board, its cards and the fleet indicator read summaries and call no list endpoint", async () => {
-    useFleet.setState({ clusters: [c, { ...c, name: "prd" }], route: { name: "fleet" }, mesh: null });
+    useFleet.setState({ clusters: [c, { ...c, name: "prd" }], route: { name: "fleet" } });
     applySummary(summary(core(), {}, "dev"));
     render(<><FleetIndicator /><FleetView /></>);
     await new Promise((r) => setTimeout(r, 20));
