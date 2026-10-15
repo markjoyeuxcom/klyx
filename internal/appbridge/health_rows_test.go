@@ -469,6 +469,9 @@ func certObj(name, ready string) *unstructured.Unstructured {
 	}}
 }
 
+// harnessRoleCap is the harness Observer's RoleCap (0: the default).
+var harnessRoleCap = 0
+
 type obsHarness struct {
 	o      *observe.Observer
 	rec    *rowsSinkRec
@@ -489,7 +492,7 @@ func startCertObserver(t *testing.T, cluster string, gate chan struct{}) *obsHar
 
 // startCertObserverServed: served switches cert-manager's discovery, and
 // kinds are re-probed every 20ms, so absence and reappearance are observed.
-func startCertObserverServed(t *testing.T, cluster string, gate chan struct{}, servedFlag *atomic.Bool) *obsHarness {
+func startCertObserverServed(t *testing.T, cluster string, gate chan struct{}, servedFlag *atomic.Bool, listeners ...HealthListener) *obsHarness {
 	t.Helper()
 	listKinds := map[schema.GroupVersionResource]string{}
 	for _, r := range []string{"certificates", "issuers", "clusterissuers"} {
@@ -530,7 +533,10 @@ func startCertObserverServed(t *testing.T, cluster string, gate chan struct{}, s
 	}
 	rec := &rowsSinkRec{rows: map[string][]RowsDTO{}}
 	sink := NewHealthSink(rec)
-	o := observe.New(observe.Config{Cluster: cluster, Sink: sink, Kinds: kinds, Domains: domains, Throttle: 10 * time.Millisecond, ReprobeEvery: 20 * time.Millisecond})
+	for _, l := range listeners {
+		sink.AddListener(l) // before the first evaluation: every baseline is seen
+	}
+	o := observe.New(observe.Config{Cluster: cluster, Sink: sink, Kinds: kinds, Domains: domains, Throttle: 10 * time.Millisecond, ReprobeEvery: 20 * time.Millisecond, RoleCap: harnessRoleCap})
 	ctx, cancel := context.WithCancel(context.Background())
 	o.Start(ctx)
 	h := &obsHarness{o: o, rec: rec, sink: sink, cancel: cancel, dyn: dyn}

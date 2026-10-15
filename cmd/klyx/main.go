@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/moomora/klyx/internal/ai"
@@ -101,6 +103,41 @@ func main() {
 	index := fleetindex.New(ixSettings)
 	defer index.Stop()
 	reg.SetIndex(index)
+	// Health notifications (The Line slice 10): the listener is in place
+	// before any cluster starts, so every connect's baseline is seen. The
+	// cluster lookups resolve once configSvc is published: they run on the
+	// Observer loops, which start before it exists.
+	notifySvc := notifications.New()
+	var liveConfig atomic.Pointer[appbridge.ConfigService]
+	// mainWin is assigned after window creation below; the closures are
+	// nil-safe until then.
+	var mainWin application.Window
+	healthNotify := appbridge.NewNotificationsService(configPath(), cfg,
+		func(name string) (config.ClusterConfig, bool) {
+			cs := liveConfig.Load()
+			if cs == nil {
+				return config.ClusterConfig{}, false
+			}
+			return appbridge.LiveClusterConfig(cs)(name)
+		},
+		func(id, title, body string, data map[string]any) error {
+			return notifySvc.SendNotification(notifications.NotificationOptions{ID: id, Title: title, Body: body, Data: data})
+		},
+		notifySvc.RequestNotificationAuthorization,
+		em.Emit)
+	healthSink.AddListener(appbridge.NotificationsListener(healthNotify))
+	appbridge.RunNotifications(healthNotify)
+	defer appbridge.StopNotifications(healthNotify)
+	notifySvc.OnNotificationResponse(func(r notifications.NotificationResult) {
+		if r.Error != nil || !strings.HasPrefix(r.Response.ID, "klyx-health-") {
+			return
+		}
+		if mainWin != nil {
+			mainWin.Show()
+			mainWin.Focus()
+		}
+		appbridge.NotificationClicked(healthNotify, r.Response.UserInfo)
+	})
 	reg.Start(ctx)
 
 	// configSvc is built before the fleet service: the fleet DTOs resolve each
@@ -114,6 +151,7 @@ func main() {
 		}
 		return err
 	})
+	liveConfig.Store(configSvc)
 
 	svc := appbridge.NewFleetService(reg, appbridge.LiveClusterConfig(configSvc), time.Now)
 	healthSvc := appbridge.NewHealthService(func() []*observe.Observer {
@@ -485,14 +523,10 @@ func main() {
 	})
 
 	// Native shell: window title context, dock/taskbar badge, OS notifications.
-	// mainWin is assigned after window creation below; the closures are nil-safe
-	// until then.
-	var mainWin application.Window
 	// The bounds the window was created with (zero on first launch), for
 	// winstate.Settle at shutdown.
 	var requestedBounds winstate.Bounds
 	dockSvc := dock.New()
-	notifySvc := notifications.New()
 	shellSvc := appbridge.NewShellService(
 		func(title string) {
 			if mainWin != nil {
@@ -530,6 +564,7 @@ func main() {
 			application.NewService(gatewaySvc),
 			application.NewService(meshSvc),
 			application.NewService(lineSvc),
+			application.NewService(healthNotify),
 			application.NewService(appbridge.NewIndexService(index)),
 			application.NewService(gitSvc),
 			application.NewService(writesSvc),

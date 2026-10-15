@@ -227,3 +227,53 @@ The review's five design findings are answered in §2.1 (sampled sources, derive
 The re-review of 066ca6b found two more gaps, answered here:
 - **A recovery during an in-flight onset send** (§3.3): the onset counts as sent at dispatch, a failure withdraws it along with any recovery queued since, and flushes are serialized.
 - **Engine-local saturation had no obtainable checkpoint** (§3.4): the engine's bounds are now the Observer's own, so the Observer's after-cap baseline is the checkpoint, and the cluster-wide pause is gone.
+
+## 7. As built: 10a
+
+- **`internal/healthnotify`** (`Engine`: pure, clock-injected, safe for concurrent use):
+  - **`New(clock, hooks, partitionCap)`.** `partitionCap` is the Observer's `RoleCap`; 0 means `observe.DefaultRoleCap`, which the fleet's Observers use.
+  - **`Apply(batch)`** follows §2:
+    - It ignores `sampled` batches, items with an empty key, and restated and derived items.
+    - It keeps each partition's non-ok roles and its coverage, folds them per UID, and settles each touched UID's episode.
+    - It only records: nothing is sent or listed on an Observer loop.
+    - A partition's bound is checked on the state a batch leaves, since a full turnover's delta carries up to twice the cap.
+  - **`Flush()`** follows §3.3:
+    - Flushes are serialized.
+    - Under the lock, it emits due listings and dispatches each cluster's items once its 60 seconds have passed. At dispatch it re-checks each item, consumes the de-duplication allowance and composes the notification.
+    - After releasing the lock, it calls `List` and `Send`.
+    - An onset counts as sent from dispatch. A failed `Send` withdraws it: the open episode is marked not sent, and any recovery queued for it is removed, in the dispatching state only.
+  - **`SetSettings`** (disabling cancels pending items) and **`SetFocus`**.
+  - **Hooks:** `Send` (returns an error), `List`, `Protected` and `Place`.
+  - **Listings:** `connect`, `after-cap`, `after-gap` and `dropped` (items de-duplication had no room for).
+- **`appbridge.NotificationsService`:**
+  - **Bound:** `Settings`, `SetSettings`, `SetFocus` and `RecentBaselines`. `SetSettings` writes the block through `config.SaveNotifications` and requests the OS permission when enabling; a refusal keeps the setting and says so.
+  - **Package functions, never bound:** `NotificationsListener`, `RunNotifications`/`StopNotifications` (a one-second tick of `Flush`) and `NotificationClicked`.
+  - **Sending:** through the OS notification service, with the object in `Data` and the send's error returned to the engine. The title is "<cluster> · <env> · <region>".
+- **Wiring** (`main`):
+  - The listener is added before any cluster starts, so every connect's baseline is seen.
+  - The cluster lookup reads the config service through an `atomic.Pointer` published once it exists, since it runs on the Observer loops.
+  - A click (a response whose id starts `klyx-health-`) shows and focuses the window, then emits `health:notification-open`.
+- **`config`:** `NotificationsConfig` (`enabled`, `scope`, `recoveries`) and `SaveNotifications`.
+- **Tests** (`healthnotify/engine_test.go`):
+  - baseline listed and never notified;
+  - coalescing and the single-object `Data`;
+  - the ignored inputs;
+  - unknown and quiet keeping the episode;
+  - recovery from retained state, via unknown, via degraded, and direct;
+  - no recovery for a queued, focus-suppressed, failed or de-duplicated onset;
+  - dispatch re-checks (recover or delete before send, a mixed notification, a recovery dropped when the UID breaks again);
+  - a suspended onset sent as history;
+  - partitions (conflicting parts, one-part loss, one-part replacement);
+  - loss and after-gap, including a retained unknown kept by an empty delta and a later fault opening a new episode;
+  - scope, disabled with no backlog, disabling and narrowing the scope during the window;
+  - de-duplication across 30 minutes, and focus consuming the allowance;
+  - end and reincarnation cancelling pending items;
+  - replacement and a repeated UID;
+  - three names and "+K more", with withdrawn items subtracted;
+  - a partition over its cap lost until its after-cap baseline, with a full turnover that fits not taken as over;
+  - a full de-duplication map dropping rather than evicting;
+  - in flight: a recovery during a blocked `Send` goes when it succeeds and is withdrawn when it fails; end, reincarnation and disabling during the call revive nothing; a blocked `Send` never blocks `Apply`.
+- **Service tests** (`appbridge/notifications_service_test.go`):
+  - the settings round trip, refusal, sending, a click and recent listings;
+  - end to end, a real Observer over certificates through `HealthSink`;
+  - a real Observer with `RoleCap` 3 crossing its cap and falling back under it. A recording listener asserts the `capped` loss and the after-cap baseline, and a later onset notifies, which it could not if the partition were still lost.

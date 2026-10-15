@@ -19,6 +19,18 @@ type Config struct {
 	Line     *LineConfig     `yaml:"line"`
 	Git      *GitConfig      `yaml:"git"`
 	Index    *IndexConfig    `yaml:"index"`
+	// Notifications are the health notifications (The Line slice 10): only
+	// Settings > Notifications writes them.
+	Notifications *NotificationsConfig `yaml:"notifications"`
+}
+
+// NotificationsConfig is the notifications block. Absent, notifications
+// are off (parent §14.9); once enabled, protected clusters only and no
+// recoveries unless chosen.
+type NotificationsConfig struct {
+	Enabled    bool   `yaml:"enabled"`
+	Scope      string `yaml:"scope,omitempty"` // "protected" (the default) or "all"
+	Recoveries bool   `yaml:"recoveries,omitempty"`
 }
 
 // IndexConfig configures the fleet metadata index (The Line slice 9 note
