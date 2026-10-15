@@ -5,6 +5,8 @@ import { render, screen, act, within, fireEvent } from "@testing-library/react";
 // health store - only the transport is stubbed (slice 3 §5.3, held to the
 // Certificates and External Secrets migrations' reviews).
 vi.mock("../bridge/healthRows", () => ({ openRows: vi.fn(() => () => {}) }));
+vi.mock("../bridge/depGraph", () => ({ dependencyGraph: () => Object.assign(Promise.resolve({ start: "", nodes: [], edges: [], incomplete: [], proximity: [], reads: 0 }), { cancel: () => {} }) }));
+vi.mock("../bridge/notHereYet", () => ({ notHereYet: () => Object.assign(Promise.resolve({ results: [] }), { cancel: () => {} }) }));
 vi.mock("../bridge/gitops", () => ({
   getResourceDetail: vi.fn(async () => {}),
   reconcile: vi.fn(), reconcileWithSource: vi.fn(), setSuspend: vi.fn(), resolveGitLink: vi.fn(), fluxDiff: vi.fn(),

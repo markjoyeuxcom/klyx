@@ -212,6 +212,16 @@ Each is Codex-reviewed on its own, in this order.
 - **Route units:** the per-rule read records each route's Flux unit from its labels (`kustomize.toolkit.fluxcd.io/name` and `namespace`, else `helm.toolkit.fluxcd.io/...`). `RuleMetricsDTO.routes` carries each route with that unit, its UID when the rows name a single one, and its applied value. Nothing says when the unit began to manage the route.
 - **Wiring:** `SetAppliedChanges` is a package function, so the webview binds no setter.
 
+### 5.2 As built in 8d-2 (the drawing)
+
+- **Where:** the route inspector's first block, "Data path" (`cluster/DataPath.tsx`), on `Rail`: the Gateway (the route's listeners and the Gateway's policy count), the HTTPRoute (hostnames), one branch per rule (its matches, its verdict as a tag when not ok), and one branch per backend to its Service and ready endpoints. A backend whose own verdict is fault or degraded is a danger branch (the `failed` segment) worded with that verdict.
+- **Configured and measured, apart:** each rule shows a "configured" bar per backend (its effective weight and its share of the rule's weights), then "measured · 30 min · 1-minute rate · 30-second step": request rate, 5xx share, 503 share and retries, each with its own availability ("no samples (no series)", "failed: …") and a `Sparkline` over the whole window (an explicit domain, the unattributable span hatched). "unattributable before <time>", or "unattributable: no proven interval", is said; an unattributable rule reads "measured: unavailable (…)". The per-backend split, the uptake note and the pod-scope note sit once below the drawing.
+- **Onset and revision proximity** come from the pure `line/dataPath.ts`: the typed onset over the 5xx share's attributed points, and proximity only beside a crossing, with an observed change at most 10 minutes before it and coverage live since before the change, naming the unit ("… (manages this route now): applied a1b9e3c, change observed …; first sampled crossing …"; "artifact sha256:…"; "chart podinfo 6.7.1").
+- **No metrics endpoint** reads "no route metrics: configure a metrics endpoint"; any other unavailable read says its reason. Nothing is estimated.
+- **Polling:** `GatewayTopology` reads the per-rule metrics every 30 seconds, single-flight (a read still running is not doubled), cancelled with the read in Go when the view leaves; `bridge/ruleMetrics.ts` now returns the generated cancellable call.
+- **The route-level poll retires:** a lane's traffic line is now its rules - "N rules · rule K 5xx X%", one rule's latest attributed share, never a sum. The route-level numbers (rate, p50/p99, 5xx) are read once for the selected route, for its inspector's "Observed traffic" block, so latency stays.
+- **Captures** (kind lab, both themes): the `checkout` route's data path shows its missing backend as a danger branch and "no route metrics: Envoy Gateway not detected" (the lab has no Envoy).
+
 ## 6. Testing
 
 - **8a:**

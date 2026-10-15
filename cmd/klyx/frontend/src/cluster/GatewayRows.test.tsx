@@ -5,6 +5,7 @@ import { render, screen, act, within, fireEvent } from "@testing-library/react";
 // and health store - only the transport is stubbed (slice 3 §5.6). The
 // topology stays a fetch (stubbed).
 vi.mock("../bridge/healthRows", () => ({ openRows: vi.fn(() => () => {}) }));
+vi.mock("../bridge/ruleMetrics", () => ({ ruleMetrics: () => Object.assign(Promise.resolve({ status: { available: false, message: "", updatedAt: "" }, scope: "", start: "", end: "", stepSeconds: 30, rateSeconds: 60, routes: [], rules: [], backendSplit: "", notes: [] }), { cancel: () => {} }) }));
 vi.mock("../bridge/gateway", () => ({ getGatewayTopology: vi.fn(async () => {}), getRouteMetrics: vi.fn(async () => {}), abandonRouteMetrics: vi.fn() }));
 import { GatewayApiView } from "./GatewayApiView";
 import { buildCommands } from "../chrome/commands";

@@ -1,3 +1,4 @@
+import type { CancellablePromise } from "@wailsio/runtime";
 import { GatewayService } from "../../bindings/github.com/moomora/klyx/internal/appbridge/index.js";
 
 // Per-rule route metrics (The Line slice 7c, parent §8.5): one Gateway's
@@ -32,6 +33,12 @@ export type RuleMetric = {
   retries: RuleSeries; // per second
   backends: RuleBackendSeries[]; // empty for Envoy Gateway (see backendSplit)
 };
+// The Flux unit a route's labels say manages it now (slice 8d), with its
+// typed applied value: observedAt only when its change was observed.
+export type AppliedValue = { kind: "git" | "artifact" | "chart" | string; value: string; observedAt?: string; basis: "observed" | "unknown" | string; liveSince: string };
+export type RouteUnit = { kind: string; namespace: string; name: string; uid?: string; applied?: AppliedValue };
+export type RuleRoute = { namespace: string; name: string; uid: string; unit?: RouteUnit };
+
 export type RuleMetrics = {
   status: { available: boolean; message: string; updatedAt: string };
   scope: "owning-gateway" | "pod" | "kubernetes-pod" | "";
@@ -41,28 +48,15 @@ export type RuleMetrics = {
   end: string;
   stepSeconds: number;
   rateSeconds: number;
+  routes: RuleRoute[];
   rules: RuleMetric[];
   backendSplit: string;
   notes: string[];
   error?: string;
 };
 
-export async function ruleMetrics(cluster: string, gwNamespace: string, gwName: string): Promise<RuleMetrics> {
-  try {
-    return (await GatewayService.GetRuleMetrics(cluster, gwNamespace, gwName)) as RuleMetrics;
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    return {
-      status: { available: false, message: msg, updatedAt: "" },
-      scope: "",
-      start: "",
-      end: "",
-      stepSeconds: 30,
-      rateSeconds: 60,
-      rules: [],
-      backendSplit: "",
-      notes: [],
-      error: msg,
-    };
-  }
+// ruleMetrics is returned as generated, never wrapped in an async function:
+// its cancel() stops the read in Go, so a single-flight poll can drop it.
+export function ruleMetrics(cluster: string, gwNamespace: string, gwName: string): CancellablePromise<RuleMetrics> {
+  return GatewayService.GetRuleMetrics(cluster, gwNamespace, gwName) as unknown as CancellablePromise<RuleMetrics>;
 }

@@ -11,6 +11,7 @@ vi.mock("../bridge/gateway", () => ({
 // The Gateways are rows (health/useGatewayRows): these tests hand the list a
 // read with its coverage; the mounted transport tests are GatewayRows.test.
 let rowsValue: GatewayRows;
+vi.mock("../bridge/ruleMetrics", () => ({ ruleMetrics: () => Object.assign(Promise.resolve({ status: { available: false, message: "", updatedAt: "" }, scope: "", start: "", end: "", stepSeconds: 30, rateSeconds: 60, routes: [], rules: [], backendSplit: "", notes: [] }), { cancel: () => {} }) }));
 vi.mock("../health/useGatewayRows", () => ({ useGatewayRows: () => rowsValue }));
 vi.mock("../health/useGatewayRouteRows", () => ({ useGatewayRouteRows: () => ({ routes: [], coverage: [], dependencies: [], watchError: null, loading: true, rowsState: { updating: false, refreshing: false, evaluatedAt: null }, partCounts: null }) }));
 import type { GatewayRows } from "../health/useGatewayRows";

@@ -12,6 +12,7 @@ vi.mock("../bridge/ai", () => ({
   aiEgressAllowed: vi.fn(async () => false),
   explainCertificate: vi.fn(),
 }));
+vi.mock("../bridge/ruleMetrics", () => ({ ruleMetrics: () => Object.assign(Promise.resolve({ status: { available: false, message: "", updatedAt: "" }, scope: "", start: "", end: "", stepSeconds: 30, rateSeconds: 60, routes: [], rules: [], backendSplit: "", notes: [] }), { cancel: () => {} }) }));
 vi.mock("../bridge/gateway", () => ({ getGatewayTopology: vi.fn(async () => {}), getRouteMetrics: vi.fn(async () => {}), abandonRouteMetrics: vi.fn() }));
 import { getCertificateChain } from "../bridge/certmanager";
 import { CertsView } from "./CertsView";

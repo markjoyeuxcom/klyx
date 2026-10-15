@@ -6,6 +6,13 @@ import type { CertificateDTO, CondDTO, GatewayRef, RouteNodeDTO, TopologyDTO } f
 // The rows hook is the transport; these tests seed the certmanager slice it fills.
 vi.mock("../health/useCertManagerRows", () => ({ useCertManagerRows: () => {} }));
 vi.mock("../bridge/gateway", () => ({ getGatewayTopology: vi.fn(async () => {}), getRouteMetrics: vi.fn(async () => {}), abandonRouteMetrics: vi.fn() }));
+// The per-rule read (slice 8d): a cancellable call these tests answer.
+const ruleMetricsCall = vi.fn();
+vi.mock("../bridge/ruleMetrics", () => ({ ruleMetrics: (...a: unknown[]) => ruleMetricsCall(...a) }));
+const cancellable = <T,>(v: T) => Object.assign(Promise.resolve(v), { cancel: vi.fn() });
+const ruleRead = (over: object = {}) => ({ status: { available: true, message: "", updatedAt: "" }, scope: "owning-gateway", start: "2026-10-15T20:00:00Z", end: "2026-10-15T20:30:00Z",
+  stepSeconds: 30, rateSeconds: 60, routes: [], rules: [], backendSplit: "", notes: [], ...over });
+ruleMetricsCall.mockImplementation(() => cancellable(ruleRead()));
 import { GatewayTopology } from "./GatewayTopology";
 import { certStatus, routeIssues, sortWarnings } from "./gatewayModel";
 import { gatewayRule, routeRule } from "../test/backendRules";
@@ -238,7 +245,7 @@ describe("GatewayTopology (redesign step 6, canvas-detail)", () => {
     expect(useFleet.getState().network.selectedRoute).toBe("apps/cart");
     act(() => { useFleet.getState().setTopology(topo([], { routesComplete: false, routesError: "could not list HTTPRoutes: forbidden" })); });
     expect(screen.getByText(/HTTPRoute list failed - the lanes are from the complete read/)).toBeTruthy();
-    expect(screen.getAllByRole("listitem")).toHaveLength(2);
+    expect(within(screen.getByRole("list", { name: "HTTPRoute lanes" })).getAllByRole("listitem")).toHaveLength(2);
     expect(screen.queryByText("No longer attached.")).toBeNull();
     expect(screen.getByText(/\(last complete read\)/)).toBeTruthy();
   });
@@ -285,24 +292,56 @@ describe("GatewayTopology (redesign step 6, canvas-detail)", () => {
     render(<GatewayTopology cluster="x" gateway={gateway} />);
     expect(within(screen.getByTestId("route-panel")).getByText(/Last good read from .* - the latest poll failed \(timeout\)/)).toBeTruthy();
   });
-  it("a healthy route's error rate stays neutral", () => {
-    seed(topo([route("apps", "share")]), { routeMetrics: { "apps/share": { rps: 3, p50: 12, p99: 80, errRate: 0 } }, routeMetricsStatus: { available: true, message: "", updatedAt: "now" } });
+  // The lane reads its rules (slice 8d): one rule's latest attributed 5xx
+  // share, never a sum, in the neutral colour when healthy.
+  it("a healthy route's error rate stays neutral", async () => {
+    const pts = [{ t: 1792079970, v: 0 }, { t: 1792080000, v: 0 }];
+    ruleMetricsCall.mockImplementationOnce(() => cancellable(ruleRead({ rules: [{ namespace: "apps", name: "share", uid: "r", rule: 0, fingerprint: "f", attribution: { proven: true },
+      requests: { availability: "available", points: pts }, classes: { availability: "available", classes: { "2xx": pts, "5xx": pts } }, share503: { availability: "absent", points: [] },
+      retries: { availability: "available", points: pts }, backends: [] }] })));
+    seed(topo([route("apps", "share", { rules: [{ index: 0, rule: { included: false, role: "ok", label: "resolved" }, matches: [], backends: [] }] })]));
     render(<GatewayTopology cluster="x" gateway={gateway} />);
-    expect(screen.getByText(/^5xx 0\.0%$/).style.color).toBe("var(--color-text-secondary)");
+    expect((await screen.findByText("0%")).style.color).toBe("var(--color-text-secondary)");
+    expect(screen.getByText(/1 rule · rule 1 5xx/)).toBeTruthy();
   });
 
-  it("no metrics source is said on the lane and in the footer, never drawn as dashes", () => {
+  it("no metrics source is said on the lane and in the footer, never drawn as dashes", async () => {
+    ruleMetricsCall.mockImplementationOnce(() => cancellable(ruleRead({ status: { available: false, message: "Envoy Gateway not detected", updatedAt: "" } })));
     seed(topo([route("apps", "share")]), { routeMetricsStatus: { available: false, message: "Envoy Gateway not detected", updatedAt: "" } });
     render(<GatewayTopology cluster="x" gateway={gateway} />);
-    expect(screen.getByText("no metrics source")).toBeTruthy();
+    expect(await screen.findByText(/no route metrics/)).toBeTruthy();
     expect(screen.getByText(/route traffic unavailable: Envoy Gateway not detected/)).toBeTruthy();
   });
 
+  // The route-level numbers are the selected route's, in its inspector.
   it("a failed metrics refresh keeps the last numbers, labelled", () => {
-    seed(topo([route("apps", "share")]), { routeMetrics: { "apps/share": { rps: 3, p50: 12, p99: 80, errRate: 0 } }, routeMetricsStatus: { available: false, message: "timeout", updatedAt: "then" }, routeMetricsStale: true });
+    seed(topo([route("apps", "share")]), { selectedRoute: "apps/share", routeMetrics: { "apps/share": { rps: 3, p50: 12, p99: 80, errRate: 0 } }, routeMetricsStatus: { available: false, message: "timeout", updatedAt: "then" }, routeMetricsStale: true });
     render(<GatewayTopology cluster="x" gateway={gateway} />);
-    expect(screen.getByText(/3 rps/)).toBeTruthy();
+    expect(within(screen.getByTestId("route-panel")).getByText(/3 rps/)).toBeTruthy();
     expect(screen.getByText(/route traffic: last good read - the latest failed \(timeout\)/)).toBeTruthy();
+  });
+
+  // The per-rule poll (slice 8d): single-flight - a read still running is not
+  // doubled - and cancelled when the view leaves.
+  it("polls the per-rule read single-flight and cancels it on leaving", () => {
+    vi.useFakeTimers();
+    try {
+      const pending = Object.assign(new Promise(() => {}), { cancel: vi.fn() });
+      ruleMetricsCall.mockReset();
+      ruleMetricsCall.mockImplementation(() => pending);
+      seed(topo([route("apps", "share")]));
+      const { unmount } = render(<GatewayTopology cluster="x" gateway={gateway} />);
+      expect(ruleMetricsCall).toHaveBeenCalledTimes(1);
+      expect(ruleMetricsCall).toHaveBeenCalledWith("x", gateway.namespace, gateway.name);
+      vi.advanceTimersByTime(90000);
+      expect(ruleMetricsCall).toHaveBeenCalledTimes(1); // still in flight: no second read
+      unmount();
+      expect(pending.cancel).toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+      ruleMetricsCall.mockReset();
+      ruleMetricsCall.mockImplementation(() => cancellable(ruleRead()));
+    }
   });
 
   it("Back to Gateways closes the topology", () => {

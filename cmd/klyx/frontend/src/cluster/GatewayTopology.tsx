@@ -4,6 +4,9 @@ import { IconAlertTriangle, IconRoute } from "@tabler/icons-react";
 import { useFleet } from "../store/fleet";
 import type { GatewayNodeDTO, GatewayRef, ListenerDTO, PolicyRefDTO, ResourceRef, RouteMetricDTO, RouteNodeDTO, TopologyDTO } from "../store/fleet";
 import { abandonRouteMetrics, getGatewayTopology, getRouteMetrics } from "../bridge/gateway";
+import { ruleMetrics, type RuleMetrics } from "../bridge/ruleMetrics";
+import { DataPath } from "./DataPath";
+import { fmtShare, latest } from "../line/dataPath";
 import { EmptyState } from "../chrome/EmptyState";
 import { SkeletonRows } from "../chrome/SkeletonRows";
 import { UpdatedAt, absoluteTime, useNow } from "../chrome/Age";
@@ -74,16 +77,28 @@ export function GatewayTopology({ cluster, gateway }: { cluster: string; gateway
   const metrics = current ? net.routeMetrics : {};
   const warnings = useMemo(() => sortWarnings(t?.warnings), [t]);
 
-  // route numbers poll while the topology is open; the structure does not
-  const routeKeysJoined = routes.map(routeKey).join(",");
+  // Per-rule metrics (The Line slice 8d) poll every 30 seconds (the step)
+  // while the topology is open: single-flight - a poll still running is not
+  // doubled - and cancelled, with the read in Go, when the view leaves.
+  const rmKey = `${cluster}\u0000${gateway.namespace}\u0000${gateway.name}`;
+  const [rm, setRm] = useState<{ key: string; m: RuleMetrics } | null>(null);
   useEffect(() => {
-    if (!routeKeysJoined) return;
-    const keys = routeKeysJoined.split(",");
-    const tick = () => void getRouteMetrics(cluster, gateway.namespace, gateway.name, keys);
+    let live = true;
+    let inflight: ReturnType<typeof ruleMetrics> | null = null;
+    const tick = () => {
+      if (inflight) return;
+      const p = ruleMetrics(cluster, gateway.namespace, gateway.name);
+      inflight = p;
+      p.then(
+        (m) => { if (live) setRm({ key: rmKey, m }); },
+        (e: unknown) => { if (live) setRm({ key: rmKey, m: failedRuleMetrics(e) }); },
+      ).finally(() => { if (inflight === p) inflight = null; });
+    };
     tick();
-    const id = setInterval(tick, 20000);
-    return () => { clearInterval(id); abandonRouteMetrics(); };
-  }, [cluster, gateway.namespace, gateway.name, routeKeysJoined]);
+    const id = setInterval(tick, 30000);
+    return () => { live = false; clearInterval(id); inflight?.cancel(); };
+  }, [cluster, gateway.namespace, gateway.name, rmKey]);
+  const ruleM = rm && rm.key === rmKey ? rm.m : null;
 
   const rmStatus = current ? net.routeMetricsStatus : null;
   const metricsObs: MetricsObs = !rmStatus ? { state: "reading", message: "", at: null }
@@ -122,6 +137,15 @@ export function GatewayTopology({ cluster, gateway }: { cluster: string; gateway
 
   const selKey = current ? net.selectedRoute : null;
   const selected = selKey ? routes.find((r) => routeKey(r) === selKey) : undefined;
+
+  // The route-level numbers (rate, p50/p99, 5xx) are read once for the
+  // selected route, for its inspector: the per-rule read replaced the
+  // lanes' poll (slice 8d).
+  useEffect(() => {
+    if (!selKey) return;
+    void getRouteMetrics(cluster, gateway.namespace, gateway.name, [selKey]);
+    return () => abandonRouteMetrics();
+  }, [cluster, gateway.namespace, gateway.name, selKey]);
 
   // Selections this view made itself; any other key arrived by navigation
   // (the palette) and must be revealed - clear filters once, after the
@@ -286,7 +310,7 @@ export function GatewayTopology({ cluster, gateway }: { cluster: string; gateway
           <GatewayStrip g={t.gateway} clusterPolicies={t.clusterPolicies ?? []} absentKinds={warnings.absentKinds} />
           <div role="list" aria-label="HTTPRoute lanes" style={{ display: "grid", gap: 8 }}>
             {visible.map((r) => (
-              <RouteLane key={routeKey(r)} route={r} role={healthOf.get(routeKey(r))!} metric={metrics[routeKey(r)]} metricsObs={metricsObs}
+              <RouteLane key={routeKey(r)} route={r} role={healthOf.get(routeKey(r))!} ruleMetrics={ruleM}
                 selected={routeKey(r) === selKey} onSelect={() => pick(routeKey(r) === selKey ? null : routeKey(r))} />
             ))}
           </div>
@@ -295,7 +319,7 @@ export function GatewayTopology({ cluster, gateway }: { cluster: string; gateway
       footer={<span className="t-legend">j k select · esc close · / search</span>}
       footerEnd={<span className="t-secondary">{visible.length !== routes.length ? `${visible.length} of ${routes.length} routes · ` : ""}broken first · {metricsCaption}</span>}
       inspector={selKey && inspected && t ? (
-        <RouteInspector key={selKey} cluster={cluster} route={inspected} gone={missing && routesNow} unproven={missing && !routesNow} gateway={t.gateway} listeners={listeners} notes={warnings.byRoute.get(selKey) ?? []}
+        <RouteInspector key={selKey} cluster={cluster} route={inspected} gone={missing && routesNow} unproven={missing && !routesNow} gateway={t.gateway} listeners={listeners} notes={warnings.byRoute.get(selKey) ?? []} ruleMetrics={ruleM}
           metric={metrics[selKey]} metricsObs={metricsObs} certLookup={certLookup} certEvidence={certEvidence} certLastGood={certLastGood} certGap={certGap} nowS={nowS} onOpenObject={openObject} onClose={() => pick(null)} />
       ) : undefined}
       inspectorLabel="Route details"
@@ -356,19 +380,28 @@ function Lamp({ role }: { role: Role }) {
   return <span role="img" aria-label={role.label} style={{ display: "inline-flex", flexShrink: 0 }}><VerdictLamp health={role} size={8} /></span>;
 }
 
-function TrafficLine({ metric, obs }: { metric: RouteMetricDTO | undefined; obs: MetricsObs }) {
-  if (obs.state === "unavailable") return <span className="t-secondary">no metrics source</span>;
-  if (obs.state === "reading" && !metric) return <span className="t-secondary">reading…</span>;
-  if (!metric) return <span className="t-secondary">no traffic series for this route</span>;
+// RuleSummary is a lane's per-rule reading: how many rules, and the rule
+// with the highest latest attributed 5xx share - one rule's value, never a
+// sum across rules (slice 7c).
+function RuleSummary({ route, metrics }: { route: RouteNodeDTO; metrics: RuleMetrics | null }) {
+  const n = route.rules?.length ?? 0;
+  const count = `${n} rule${n === 1 ? "" : "s"}`;
+  if (!metrics) return <span className="t-secondary">{count} · reading…</span>;
+  if (!metrics.status.available) return <span className="t-secondary">{count} · no route metrics</span>;
+  let worst: { rule: number; v: number } | null = null;
+  for (const r of metrics.rules) {
+    if (r.namespace !== route.namespace || r.name !== route.name || r.unattributable || r.classes.availability !== "available") continue;
+    const v = latest(r.classes.classes["5xx"] ?? []);
+    if (v !== undefined && (!worst || v > worst.v)) worst = { rule: r.rule, v };
+  }
   return (
-    <>
-      <span className="t-identifier">{fmtRps(metric.rps)} rps · p99 {fmtMs(metric.p99)}</span>
-      <span className="t-secondary gw-line">p50 {fmtMs(metric.p50)} · <span style={{ color: errColor(metric.errRate) }}>5xx {fmtErr(metric.errRate)}</span>{obs.state === "stale" ? " · last good" : ""}</span>
-    </>
+    <span className="t-secondary gw-line">
+      {count} · {worst ? <>rule {worst.rule + 1} 5xx <span style={{ color: errColor(worst.v) }}>{fmtShare(worst.v)}</span></> : "no attributed samples"}
+    </span>
   );
 }
 
-function RouteLane({ route, role, metric, metricsObs, selected, onSelect }: { route: RouteNodeDTO; role: Role; metric: RouteMetricDTO | undefined; metricsObs: MetricsObs; selected: boolean; onSelect: () => void }) {
+function RouteLane({ route, role, ruleMetrics, selected, onSelect }: { route: RouteNodeDTO; role: Role; ruleMetrics: RuleMetrics | null; selected: boolean; onSelect: () => void }) {
   const b = route.backends[0];
   const svc = b ? route.services.find((s) => s.namespace === b.namespace && s.name === b.name) : undefined;
   const ref = useRef<HTMLButtonElement>(null);
@@ -399,15 +432,16 @@ function RouteLane({ route, role, metric, metricsObs, selected, onSelect }: { ro
       </div>
       <span className="gw-edge" aria-hidden="true">›</span>
       <div className="gw-node">
-        <span className="t-legend">observed traffic</span>
-        <TrafficLine metric={metric} obs={metricsObs} />
+        <span className="t-legend">rules</span>
+        <RuleSummary route={route} metrics={ruleMetrics} />
       </div>
     </div>
   );
 }
 
-function RouteInspector({ cluster, route, gone, unproven, gateway, listeners, notes, metric, metricsObs, certLookup, certEvidence, certLastGood, certGap, nowS, onOpenObject, onClose }: {
+function RouteInspector({ cluster, route, gone, unproven, gateway, listeners, notes, ruleMetrics: ruleM, metric, metricsObs, certLookup, certEvidence, certLastGood, certGap, nowS, onOpenObject, onClose }: {
   cluster: string;
+  ruleMetrics: RuleMetrics | null;
   route: RouteNodeDTO;
   gone: boolean;
   unproven: boolean;
@@ -470,6 +504,9 @@ function RouteInspector({ cluster, route, gone, unproven, gateway, listeners, no
             {notes.map((n, i) => <div key={i} className="t-body" style={{ color: "var(--color-text-secondary)", overflowWrap: "anywhere" }}>{n.charAt(0).toUpperCase() + n.slice(1)}.</div>)}
           </InspectorBlock>
         )}
+        <InspectorBlock title="Data path" count={route.rules?.length}>
+          <DataPath gateway={gateway} route={route} listeners={listeners} metrics={ruleM} />
+        </InspectorBlock>
         <InspectorBlock title="Matches" count={route.matches.length}>
           <div className="insp-kv">
             {route.matches.map((m, i) => <Fragment key={i}><span>{m.method || "any"}</span><span>{m.pathType} {m.pathValue}</span></Fragment>)}
@@ -564,4 +601,10 @@ function PolicyDetail({ p, inferred = false }: { p: PolicyRefDTO; inferred?: boo
       {p.details.map((d, i) => <span key={i} className="t-identifier" style={{ color: "var(--color-text-secondary)", overflowWrap: "anywhere" }}>{d.key}: {d.value}</span>)}
     </div>
   );
+}
+
+// failedRuleMetrics is a poll that failed: no metrics, the reason said.
+function failedRuleMetrics(e: unknown): RuleMetrics {
+  const message = e instanceof Error ? e.message : String(e);
+  return { status: { available: false, message, updatedAt: "" }, scope: "", start: "", end: "", stepSeconds: 30, rateSeconds: 60, routes: [], rules: [], backendSplit: "", notes: [], error: message };
 }
