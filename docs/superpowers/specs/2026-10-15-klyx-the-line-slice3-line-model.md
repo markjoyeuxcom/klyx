@@ -24,6 +24,13 @@ This note fixes the implementation shape the parent leaves open. The rules thems
 | 3. Bootstraps as cancellable jobs, never blocking the worker | §2.2 |
 | 4. Mesh status and freshness publish, and the provider is context-aware | §6 |
 
+**Revision 4** answers Codex's review of 5a66408:
+
+- **Partition state replaces the batch list:** the tap keeps the latest fenced state per partition, so nothing can overflow (§2.1, §2.3).
+- **Mesh placement follows station placement too** (§6).
+- **The superseded worker-bootstrap sentences are removed** (§2.1).
+- **The observation log gains an incarnation-fenced partition snapshot** (§2.3).
+
 ## 1. Packages
 
 - **`internal/line` (pure, slice 3a):**
@@ -46,12 +53,21 @@ This note fixes the implementation shape the parent leaves open. The rules thems
   - **summary:** the latest per cluster;
   - **rows:** the latest `observe.Rows` per (cluster, part), for the three parts the line reads;
   - **overwritten:** a sticky per-(cluster, part) flag. It is set when a new `Rows` replaces an unconsumed one with a different `Part.Ver`. A discarded row set may have shown a predicate flip and flip-back, so the worker treats this as a history gap for that part (§5). Presentation may coalesce; history discloses what it did not see;
-  - **batches:** the transition batches of the three parts, per (cluster, part, source), each reduced to its kind, loss reason, `PartVer` and incarnation, in arrival order. This list is bounded: past 64 unconsumed batches it collapses to a single sticky gap;
+  - **partitions:** per (cluster, part, source), fenced by incarnation, the **latest state** a batch set:
+    - `lost`, `absent` or `available`;
+    - for `available`, its recovery `PartVer`;
+    - a sticky **history-gap** bit, set by any loss and cleared only when the worker drains it.
+
+    This is bounded by the partition count, never by the number of batches, so nothing overflows. However many batches arrive between two drains, the worker sees the last state and its recovery `PartVer`, and learns from the bit that continuity broke;
   - **end:** a sticky flag set by Final.
 - **A one-slot channel wakes the worker.** Nothing in a listener blocks.
-- **The service worker is one goroutine, cancelled with the app context.** It drains the slots, does every subscription and bootstrap, recomputes and emits.
-  - `RowsNowCtx` runs on the worker with a 10 s deadline, never under the service's state lock.
-  - The worker owns all line state, so no lock is held across I/O.
+- **The service worker is one goroutine, cancelled with the app context.** It owns all line state:
+  - it drains the slots;
+  - it does every subscription and lease;
+  - it starts bootstrap jobs (§2.2) and applies their results;
+  - it recomputes and emits.
+
+  It never waits on I/O itself.
 - **The tap sees raw `RowSet[flux.Resource]`, `RowSet[flux.Source]` and `RowSet[argo.App]`,** before the webview conversion. The line never reads or changes the rows lineage.
 
 ### 2.2 Initialise from current state, then reconcile
@@ -98,12 +114,13 @@ This note fixes the implementation shape the parent leaves open. The rules thems
 | after-gap | **available** from that batch's `PartVer` |
 | changes | unchanged |
 
-    - **Two facts are kept apart.** A partition's current availability (above) is one. "A gap occurred since the last drain" is a sticky flag for history (§5), set by any loss.
+    - **Two facts are kept apart.** A partition's current availability (above, the latest state the tap recorded) is one. "A gap occurred since the last drain" is the sticky history-gap bit (§5), set by any loss.
+    - **No sequence of batches can mislead the worker:** it sees the latest state and its recovery `PartVer`, and the history bit. Tests cover a burst of batches between two drains ending in a loss, an after-gap, a baseline and an absence, each followed by quiet with no further event.
     - **A partition becomes current only once the worker holds that part's rows at or after the recovery batch's `PartVer`.** Until then its retained facts stay "as of".
     - **Only needed partitions gate the read** (§2.4). A lost Bucket partition never blocks a station that needs only GitRepository. A GitRepository recovery never clears a Bucket loss.
   - **Seeding at attach:** losses that predate the listener are not replayed by `RowsNowCtx`. So when a bootstrap lands, each source partition is seeded:
     - from the bootstrap reply's per-kind coverage (`Part.Kinds`): live is available, absent is absent, anything else is lost;
-    - and, under the same incarnation, from the observation log's `Partitions`, which holds a loss still awaiting its recovery.
+    - and from the observation log's new **fenced snapshot**, `obslog.PartitionSnapshot(cluster) (incarnation, []PartitionState)`, where each state carries its `PartVer`. It is used only when its incarnation equals the attachment's, and it holds a loss still awaiting its recovery.
 - **Recovery recomputes even with identical rows:** a connection becoming usable again, a baseline or after-gap that makes a partition current, or an unchanged relist (its loss and after-gap pair) each trigger a recompute.
 - **Tests:**
   - cap, then a baseline;
@@ -219,8 +236,9 @@ This note fixes the implementation shape the parent leaves open. The rules thems
   - a member whose station is not connected has unknown peerings, never "no peers".
 - **Publishing:**
   - Every sample outcome that changes anything the DTO shows publishes a new DTO version: status (ok, error, recovered), node facts, or the refreshed `readAt` of a successful sample.
-  - Topology placement (`line.Mesh`) is recomputed only when the edge set changed. A metadata-only change republishes without re-placing.
+  - **Mesh placement (`line.Mesh`)** depends on the edges and on station placement: membership, ranks, tracks and their adjacency. An environment, region or group edit, or a track inserted or removed, can move an unchanged edge between "drawn" and "station card only". So `line.Mesh` runs in every full line recompute, which already rebuilds placement. A sample with a changed edge set triggers a recompute. A metadata-only sample (readAt, status, node facts) republishes without re-placing.
 - **Tests:**
+  - the same edge set across an environment edit, a track edit, and a track inserted or removed (the drawn and card-only lists follow);
   - unchanged edges with a failure;
   - failure, then success;
   - a node-only change;
