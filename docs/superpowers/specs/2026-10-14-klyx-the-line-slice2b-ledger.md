@@ -270,9 +270,13 @@ type Transition struct {
 ### 6.1 Entries
 
 - **Consumes the stream** through `HealthSink`. Batches are accepted per cluster in incarnation order (§3), and applied whole under obslog's lock.
-- **An entry** is `{at, prevAt, cluster, incarnation, part, source, GVR, key, ns/name, from → to, label, reason, kind, mode, readAt, restated, derived, loss?}`.
+- **An entry** is `{at, prevAt, prevReadAt, cluster, incarnation, part, source, GVR, key, ns/name, from → to, label, reason, kind, mode, readAt, boundary, restated, derived, loss?}`.
   - A baseline or a replacement is one entry ("baseline: N objects, F faults"), not one per item.
+  - An after-gap is always one marker entry with its gap bounds, even with no changed items, followed by its items.
   - Loss and end batches are entries too.
+- **Storage:** an amortized deque per cluster. A push and a trim are O(1), and a batch logs at most the entry bound.
+- **Expiry:** against the log's clock, on every write and read, so a quiet log still expires. After an end, partitions are terminally marked "ended". Once an ended cluster's history expires, only its incarnation fence remains.
+- **Capped proof markers** carry their partition, are bounded by the proof cap, and are cleared with their partition (replacement, drop, end).
   - LineService's station states and reference changes join in slice 3.
 - **Bounds:** 24 hours, or 20,000 entries per cluster, whichever comes first (§7).
 - **On disk:** none. The log is in memory only (owner decision 10).

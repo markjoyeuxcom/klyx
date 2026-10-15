@@ -193,8 +193,52 @@ func TestEntryAndProofBounds(t *testing.T) {
 	if _, ok, capped := l.ProofOf("c1", "e"); ok || !capped {
 		t.Fatalf("a proof past the cap is marked capped, not kept")
 	}
+	now := at(24*60 + 10)
+	l.now = func() time.Time { return now }
 	l.Apply(batch(observe.BatchChanges, 24*60+10, item("z", "ok", "ok")))
 	if oldest, _ := l.OldestEntry("c1"); oldest.Before(at(10)) {
 		t.Fatalf("entries older than 24h are trimmed: oldest %v", oldest)
+	}
+	// A quiet log expires on reads, against the clock, with no new batch.
+	now = at(3 * 24 * 60)
+	if es := l.Recent("c1", 0); len(es) != 0 {
+		t.Fatalf("a quiet log keeps expired entries: %+v", es)
+	}
+}
+
+// Review of a0c5cf9: an ended cluster terminally marks its partitions and,
+// once its history expires, keeps only the incarnation fence.
+func TestEndMarksPartitionsAndExpiresToAFence(t *testing.T) {
+	l := New()
+	now := at(0)
+	l.now = func() time.Time { return now }
+	l.Apply(batch(observe.BatchBaseline, 0, item("a", observe.StateAbsent, "fault")))
+	l.Apply(batch(observe.BatchEnd, 1))
+	ps := l.Partitions("c1", "flux", "sources")
+	if len(ps) != 1 || ps[0].Live || ps[0].Loss == nil || ps[0].Loss.Reason != LossEnded {
+		t.Fatalf("ended partitions: %+v", ps)
+	}
+	now = at(25 * 60)
+	if es := l.Recent("c1", 0); len(es) != 0 || len(l.Partitions("c1", "flux", "sources")) != 0 {
+		t.Fatal("an expired ended cluster keeps nothing but its fence")
+	}
+	late := batch(observe.BatchChanges, 2, item("z", "ok", "fault"))
+	l.Apply(late) // same incarnation, after end: still rejected
+	noProof(t, l, "z")
+}
+
+// Review of a0c5cf9: an after-gap is recorded even with no changed items, so
+// the history keeps when coverage returned.
+func TestAfterGapIsAlwaysLogged(t *testing.T) {
+	l := New()
+	l.Apply(batch(observe.BatchBaseline, 0))
+	loss := batch(observe.BatchLoss, 1)
+	loss.Loss = &observe.Loss{Reason: observe.LossCoverage}
+	l.Apply(loss)
+	gap := batch(observe.BatchAfterGap, 3)
+	gap.PrevAt = ptr(at(1))
+	l.Apply(gap)
+	if es := l.Recent("c1", 1); len(es) != 1 || es[0].Kind != observe.BatchAfterGap || !es[0].PrevAt.Equal(at(1)) {
+		t.Fatalf("after-gap marker: %+v", es)
 	}
 }

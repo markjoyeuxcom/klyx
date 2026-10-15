@@ -48,10 +48,13 @@ type Proof struct {
 	AfterGap           bool // downgraded at an after-gap: seen before and after a gap
 }
 
-// Entry is one logged event: an item, a loss, a baseline or an end.
+// Entry is one logged event: an item, a loss, a baseline, an after-gap (one
+// marker, even with no changed items) or an end.
 type Entry struct {
 	At          time.Time
 	PrevAt      *time.Time
+	PrevReadAt  *time.Time // sampled: the read the previous commit used
+	Boundary    *time.Time // an item's time-only threshold (a derived change)
 	Incarnation uint64
 	Task, Part  string
 	Source, GVR string
@@ -81,11 +84,18 @@ type PartitionState struct {
 type partitionKey struct{ task, part, source string }
 
 type cluster struct {
-	incarnation  uint64
-	ended        bool
-	entries      []Entry // oldest first
-	proofs       map[string]*Proof
-	proofsCapped map[string]bool // keys whose proof was not kept (the cap)
+	incarnation uint64
+	ended       bool
+	// entries[head:] are the live entries, oldest first: an amortized deque,
+	// so a push and an age or count trim are O(1) - never a copy of the
+	// whole log per entry.
+	entries []Entry
+	head    int
+	proofs  map[string]*Proof
+	// proofsCapped are non-ok keys whose proof was not kept (the cap), each
+	// with its partition so a replacement or drop clears them. Bounded by
+	// maxProofs too.
+	proofsCapped map[string]partitionKey
 	partitions   map[partitionKey]*PartitionState
 }
 
@@ -93,6 +103,7 @@ type cluster struct {
 type Log struct {
 	mu       sync.Mutex
 	clusters map[string]*cluster
+	now      func() time.Time // the expiry clock
 	// Bounds, overridable in tests.
 	maxEntries, maxProofs int
 	maxAge                time.Duration
@@ -100,12 +111,29 @@ type Log struct {
 
 // New returns an empty log with the §7 bounds.
 func New() *Log {
-	return &Log{clusters: map[string]*cluster{}, maxEntries: MaxEntries, maxProofs: MaxProofs, maxAge: MaxAge}
+	return &Log{clusters: map[string]*cluster{}, now: time.Now, maxEntries: MaxEntries, maxProofs: MaxProofs, maxAge: MaxAge}
 }
 
 func newCluster(inc uint64) *cluster {
-	return &cluster{incarnation: inc, proofs: map[string]*Proof{}, proofsCapped: map[string]bool{},
+	return &cluster{incarnation: inc, proofs: map[string]*Proof{}, proofsCapped: map[string]partitionKey{},
 		partitions: map[partitionKey]*PartitionState{}}
+}
+
+// live is the retained entries, oldest first.
+func (c *cluster) live() []Entry { return c.entries[c.head:] }
+
+// dropPartitionProofs removes a partition's proofs and capped markers.
+func (c *cluster) dropPartitionProofs(pk partitionKey) {
+	for k, p := range c.proofs {
+		if p.Task == pk.task && p.Part == pk.part && p.Source == pk.source {
+			delete(c.proofs, k)
+		}
+	}
+	for k, cp := range c.proofsCapped {
+		if cp == pk {
+			delete(c.proofsCapped, k)
+		}
+	}
 }
 
 // Apply consumes one batch, whole, under the log's lock. A batch from an
@@ -122,10 +150,9 @@ func (l *Log) Apply(b observe.TransitionBatch) {
 	case b.Incarnation < c.incarnation:
 		return
 	case b.Incarnation > c.incarnation:
-		l.endProofs(c)
-		old := c.entries
+		old, head := c.entries, c.head
 		c = newCluster(b.Incarnation)
-		c.entries = old
+		c.entries, c.head = old, head // history is kept; proofs and partitions start afresh
 		l.clusters[b.Cluster] = c
 	case c.ended:
 		return
@@ -135,16 +162,20 @@ func (l *Log) Apply(b observe.TransitionBatch) {
 	case observe.BatchEnd:
 		l.add(c, entryOf(b))
 		l.endProofs(c)
+		// Coverage ends with the Observer: every partition is terminally not
+		// live. Only the incarnation fence and the bounded history remain.
+		for _, ps := range c.partitions {
+			ps.Live, ps.Since, ps.Loss = false, b.At, &observe.Loss{Reason: LossEnded}
+		}
 		c.ended = true
 	case observe.BatchLoss:
 		l.add(c, entryOf(b))
 		c.partitions[pk] = &PartitionState{Task: b.Task, Part: b.Part, Source: b.Source, Since: b.At, Loss: b.Loss}
-		drop := b.Loss != nil && (b.Loss.Reason == observe.LossCapped || b.Loss.Reason == observe.LossAbsent)
-		for k, p := range c.proofs {
-			if p.Task == b.Task && p.Part == b.Part && p.Source == b.Source {
-				if drop {
-					delete(c.proofs, k)
-				} else {
+		if b.Loss != nil && (b.Loss.Reason == observe.LossCapped || b.Loss.Reason == observe.LossAbsent) {
+			c.dropPartitionProofs(pk)
+		} else {
+			for _, p := range c.proofs {
+				if p.Task == b.Task && p.Part == b.Part && p.Source == b.Source {
 					p.Suspended = true
 				}
 			}
@@ -158,12 +189,9 @@ func (l *Log) Apply(b observe.TransitionBatch) {
 			}
 		}
 		l.add(c, e)
-		// A replacement checkpoint: the partition's proofs end first (§5.2).
-		for k, p := range c.proofs {
-			if p.Task == b.Task && p.Part == b.Part && p.Source == b.Source {
-				delete(c.proofs, k)
-			}
-		}
+		// A replacement checkpoint: the partition's proofs and capped
+		// markers end first (§5.2).
+		c.dropPartitionProofs(pk)
 		for _, it := range b.Items {
 			l.firstSight(c, b, it)
 		}
@@ -179,16 +207,37 @@ func (l *Log) Apply(b observe.TransitionBatch) {
 				}
 			}
 		}
+		// One marker records the coverage's return and its gap bounds, even
+		// when nothing changed; items follow it.
+		e := entryOf(b)
+		e.Count = len(b.Items)
+		l.add(c, e)
+		l.addItems(c, b)
 		for _, it := range b.Items {
-			l.add(c, itemEntry(b, it))
 			l.apply(c, b, it, true)
 		}
 		c.partitions[pk] = &PartitionState{Task: b.Task, Part: b.Part, Source: b.Source, Live: true, Since: b.At}
 	case observe.BatchChanges:
+		l.addItems(c, b)
 		for _, it := range b.Items {
-			l.add(c, itemEntry(b, it))
 			l.apply(c, b, it, false)
 		}
+	}
+}
+
+// LossEnded is the partition loss after the Observer's end batch.
+const LossEnded = "ended"
+
+// addItems logs a batch's items. Items beyond the entry bound would be
+// trimmed at once, so only the last maxEntries are logged: a batch's work is
+// bounded by the log, not by the batch.
+func (l *Log) addItems(c *cluster, b observe.TransitionBatch) {
+	items := b.Items
+	if len(items) > l.maxEntries {
+		items = items[len(items)-l.maxEntries:]
+	}
+	for _, it := range items {
+		l.add(c, itemEntry(b, it))
 	}
 }
 
@@ -223,7 +272,14 @@ func (l *Log) apply(c *cluster, b observe.TransitionBatch, it observe.Transition
 	case !nonOK(it.To):
 		delete(c.proofs, it.Key) // ok, gone or unevaluated: the episode's proof closes
 		delete(c.proofsCapped, it.Key)
-	case it.Restated && old != nil:
+	case it.Restated:
+		// No role changed: a restatement only replaces the rule's start.
+		// Without a stored proof (it was capped), it starts one that is
+		// rule-backed or unknown - never an observed start.
+		if old == nil {
+			l.firstSight(c, b, it)
+			return
+		}
 		if it.Since != nil {
 			old.Basis, old.Since, old.NotBefore = ProofRule, copyTime(it.Since), nil
 		} else {
@@ -256,10 +312,13 @@ func proofOf(b observe.TransitionBatch, it observe.Transition) *Proof {
 }
 
 // keep stores a proof under the per-cluster cap; beyond it the key is
-// marked so its query reads "start unknown (proof capped)".
+// marked (with its partition, bounded by the same cap) so its query reads
+// "start unknown (proof capped)".
 func (l *Log) keep(c *cluster, key string, p *Proof) {
 	if _, ok := c.proofs[key]; !ok && len(c.proofs) >= l.maxProofs {
-		c.proofsCapped[key] = true
+		if _, marked := c.proofsCapped[key]; marked || len(c.proofsCapped) < l.maxProofs {
+			c.proofsCapped[key] = partitionKey{p.Task, p.Part, p.Source}
+		}
 		return
 	}
 	delete(c.proofsCapped, key)
@@ -268,33 +327,51 @@ func (l *Log) keep(c *cluster, key string, p *Proof) {
 
 func (l *Log) endProofs(c *cluster) {
 	c.proofs = map[string]*Proof{}
-	c.proofsCapped = map[string]bool{}
+	c.proofsCapped = map[string]partitionKey{}
 }
 
 func entryOf(b observe.TransitionBatch) Entry {
-	return Entry{At: b.At, PrevAt: copyTime(b.PrevAt), Incarnation: b.Incarnation, Task: b.Task, Part: b.Part,
+	return Entry{At: b.At, PrevAt: copyTime(b.PrevAt), PrevReadAt: copyTime(b.PrevReadAt), Incarnation: b.Incarnation, Task: b.Task, Part: b.Part,
 		Source: b.Source, GVR: b.GVR, Kind: b.Kind, Mode: b.Mode, ReadAt: copyTime(b.ReadAt), Loss: b.Loss}
 }
 
 func itemEntry(b observe.TransitionBatch, it observe.Transition) Entry {
 	e := entryOf(b)
 	e.Key, e.NS, e.Name, e.From, e.To, e.Label, e.Reason = it.Key, it.NS, it.Name, it.From, it.To, it.Label, it.Reason
-	e.Restated, e.Derived = it.Restated, it.Derived
+	e.Restated, e.Derived, e.Boundary = it.Restated, it.Derived, copyTime(it.Boundary)
 	if it.GVR != "" {
 		e.GVR = it.GVR
 	}
 	return e
 }
 
-// add appends an entry and trims the oldest beyond the count and age bounds.
+// add appends an entry and trims the oldest beyond the count bound and the
+// age window. Amortized O(1).
 func (l *Log) add(c *cluster, e Entry) {
 	c.entries = append(c.entries, e)
-	cut := 0
-	for cut < len(c.entries) && (len(c.entries)-cut > l.maxEntries || e.At.Sub(c.entries[cut].At) > l.maxAge) {
-		cut++
+	for len(c.entries)-c.head > l.maxEntries {
+		c.entries[c.head] = Entry{}
+		c.head++
 	}
-	if cut > 0 {
-		c.entries = append([]Entry(nil), c.entries[cut:]...)
+	l.expire(c)
+}
+
+// expire drops entries older than the age window against the log's clock,
+// and compacts the deque once its dead prefix outgrows the live part. An
+// ended cluster whose history has all expired keeps only its incarnation
+// fence.
+func (l *Log) expire(c *cluster) {
+	cutoff := l.now().Add(-l.maxAge)
+	for c.head < len(c.entries) && c.entries[c.head].At.Before(cutoff) {
+		c.entries[c.head] = Entry{}
+		c.head++
+	}
+	if c.head > 0 && c.head >= len(c.entries)-c.head {
+		c.entries = append([]Entry(nil), c.entries[c.head:]...)
+		c.head = 0
+	}
+	if c.ended && len(c.entries) == 0 {
+		c.entries, c.partitions = nil, map[partitionKey]*PartitionState{}
 	}
 }
 
@@ -310,7 +387,8 @@ func (l *Log) ProofOf(clusterName, key string) (p Proof, ok, capped bool) {
 	if pr := c.proofs[key]; pr != nil {
 		return *pr, true, false
 	}
-	return Proof{}, false, c.proofsCapped[key]
+	_, capped = c.proofsCapped[key]
+	return Proof{}, false, capped
 }
 
 // Recent returns up to limit entries, newest first.
@@ -321,13 +399,15 @@ func (l *Log) Recent(clusterName string, limit int) []Entry {
 	if c == nil {
 		return nil
 	}
-	n := len(c.entries)
+	l.expire(c)
+	live := c.live()
+	n := len(live)
 	if limit > n || limit <= 0 {
 		limit = n
 	}
 	out := make([]Entry, 0, limit)
 	for i := n - 1; i >= n-limit; i-- {
-		out = append(out, c.entries[i])
+		out = append(out, live[i])
 	}
 	return out
 }
@@ -356,10 +436,14 @@ func (l *Log) OldestEntry(clusterName string) (time.Time, bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	c := l.clusters[clusterName]
-	if c == nil || len(c.entries) == 0 {
+	if c == nil {
 		return time.Time{}, false
 	}
-	return c.entries[0].At, true
+	l.expire(c)
+	if len(c.live()) == 0 {
+		return time.Time{}, false
+	}
+	return c.live()[0].At, true
 }
 
 func copyTime(t *time.Time) *time.Time {
