@@ -15,11 +15,14 @@ import { kindOfRef } from "../nav/reveal";
 type Base = { key: string; cluster: string; place: string; rank: number; tone: "danger" | "warning" | undefined; area: string; areaOrder: number; task: string; part: string };
 export type QueueRow =
   | (Base & { kind: "object"; ref: HealthRef; objectKind: string; label: string; time: string | null; reason: string | null })
-  | (Base & { kind: "more"; count: number; lower: boolean; destinationId: string; lens: string })
+  // the hidden fault and attention objects past the samples, by role
+  | (Base & { kind: "more"; faults: number; attention: number; lower: boolean; destinationId: string; lens: string })
   | (Base & { kind: "controller"; text: string; destinationId: string })
   | (Base & { kind: "coverage"; text: string; destinationId: string });
 export type QueueFilter = "all" | "prd" | "faults";
-export type Queue = { rows: QueueRow[]; notRead: { cluster: string; why: string }[]; faults: number; attention: number };
+// faults and attention count the whole queue's model - every lit line's
+// role counts, not the samples - and lower says a count is a lower bound.
+export type Queue = { rows: QueueRow[]; notRead: { cluster: string; why: string }[]; faults: number; attention: number; lower: boolean };
 
 // Environment rank, as station order ranks it (one table, pinned to Go's by
 // the parity test); prd sorts first, an unrecognised environment last.
@@ -58,32 +61,42 @@ const taskOrder = (id: string) => { const i = TASKS.findIndex((t) => t.task === 
 export function fleetQueue(clusters: ClusterDTO[], models: Record<string, ClusterAttention>, filter: QueueFilter = "all"): Queue {
   const rows: QueueRow[] = [];
   const notRead: Queue["notRead"] = [];
+  let faults = 0, attention = 0, lower = false;
   for (const c of clusters) {
     const { place } = stationLabel(c);
     const rank = envRankOf(c.env);
     const m = models[c.name];
     if (unreachable(c)) { notRead.push({ cluster: c.name, why: connectionText(c) }); continue; }
+    // connecting or reconnecting: a summary held from before is not this
+    // connection's reading (Codex review of 087e5e2)
+    if (c.state !== "Synced" && c.state !== "Degraded" && c.state !== "Stale") { notRead.push({ cluster: c.name, why: String(c.state).toLowerCase() || "connecting" }); continue; }
     if (!m) { notRead.push({ cluster: c.name, why: "health checking…" }); continue; }
     if (m.ended) { notRead.push({ cluster: c.name, why: healthReading(m)[0] }); continue; }
     const r = mastReading(m);
-    if (r.state === "checking") { notRead.push({ cluster: c.name, why: c.state === "Synced" || c.state === "Degraded" || c.state === "Stale" ? "health checking…" : c.state.toLowerCase() }); continue; }
+    if (r.state === "checking") { notRead.push({ cluster: c.name, why: "health checking…" }); continue; }
     for (const a of m.areas) {
       const base = (part: string, tone: Base["tone"], k: string): Base => ({ key: `${c.name}/${k}`, cluster: c.name, place, rank, tone, area: a.label, areaOrder: taskOrder(a.id), task: a.id, part });
       if (a.controller?.state === "not ready") {
+        faults++;
         rows.push({ ...base("", "danger", `${a.id}/controller`), kind: "controller", text: `${a.label}: controller not ready${a.controller.reason ? ` - ${a.controller.reason}` : ""}`, destinationId: a.destinationId });
       }
       for (const l of a.lines) {
         if (l.state === "attention") {
-          let shown = 0;
+          faults += l.fault;
+          attention += l.degraded;
+          if (l.bound === "lower") lower = true;
+          let shownF = 0, shownD = 0;
           for (const ref of l.top) {
             const tone = ROLE_TONE[ref.role];
             if (!tone) continue; // paused, progressing, unknown or ok: never a row
-            shown++;
+            if (tone === "danger") shownF++; else shownD++;
             rows.push({ ...base(l.part, tone, `${l.task}/${l.part}/${ref.uid || `${ref.namespace ?? ""}/${ref.name}`}`), kind: "object", ref,
               objectKind: objectKindOf(ref.gvr), label: ref.label, time: refTime(ref), reason: ref.reason || null });
           }
-          const more = l.n - shown;
-          if (more > 0) rows.push({ ...base(l.part, l.tone, `${l.task}/${l.part}/more`), kind: "more", count: more, lower: l.bound === "lower", destinationId: l.destinationId ?? a.destinationId, lens: lineName(a, l) });
+          // past the samples: the hidden faults and attention objects only -
+          // never a tool's wider Included (a syncing object is not a row)
+          const hf = Math.max(0, l.fault - shownF), hd = Math.max(0, l.degraded - shownD);
+          if (hf + hd > 0) rows.push({ ...base(l.part, hf > 0 ? "danger" : "warning", `${l.task}/${l.part}/more`), kind: "more", faults: hf, attention: hd, lower: l.bound === "lower", destinationId: l.destinationId ?? a.destinationId, lens: lineName(a, l) });
         }
         if (covered(l)) {
           rows.push({ ...base(l.part, undefined, `${l.task}/${l.part}/coverage`), kind: "coverage", text: `${lineName(a, l)}: ${l.state === "unreadable" || l.state === "checking" ? lineText(l) : l.gaps.filter((g) => /could not be read|last good|not read yet/.test(g)).join(" · ")}`, destinationId: l.destinationId ?? a.destinationId });
@@ -95,11 +108,13 @@ export function fleetQueue(clusters: ClusterDTO[], models: Record<string, Cluste
   // prd first; then role; then area in task order; refs keep their order
   const ordered = rows.map((row, i) => ({ row, i })).sort((x, y) =>
     (y.row.rank - x.row.rank) || (toneOrder(x.row.tone) - toneOrder(y.row.tone)) || (x.row.areaOrder - y.row.areaOrder) || (x.i - y.i)).map((x) => x.row);
-  const filtered = ordered.filter((row) => filter === "all" || (filter === "prd" ? row.rank === PRD : row.tone === "danger"));
+  const filtered = ordered
+    .filter((row) => filter === "all" || (filter === "prd" ? row.rank === PRD : row.tone === "danger"))
+    // under Faults a "+N more" row keeps only its hidden faults
+    .map((row) => (filter === "faults" && row.kind === "more" ? { ...row, attention: 0 } : row));
   return {
     rows: filtered,
     notRead: filter === "prd" ? notRead.filter((n) => envRankOf(clusters.find((c) => c.name === n.cluster)?.env ?? "") === PRD) : notRead,
-    faults: ordered.filter((r) => (r.kind === "object" || r.kind === "controller") && r.tone === "danger").length,
-    attention: ordered.filter((r) => r.kind === "object" && r.tone === "warning").length,
+    faults, attention, lower,
   };
 }

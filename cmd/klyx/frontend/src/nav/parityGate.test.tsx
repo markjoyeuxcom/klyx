@@ -308,8 +308,10 @@ suite("the parity gate's frontend stage (slice 6 §3)", () => {
       for (const { a, l } of litLines) {
         const shown = l.top.filter((t) => t.role === "fault" || t.role === "degraded");
         for (const t of shown) expect(qm.rows.some((row) => row.kind === "object" && row.task === a.id && row.part === l.part && row.ref.name === t.name && row.label === t.label), `${c.case} ${a.id}/${l.part} ${t.name}`).toBe(true);
+        // "+N more" is the hidden faults and attention objects, by role
         const more = qm.rows.find((row) => row.kind === "more" && row.task === a.id && row.part === l.part);
-        expect(more?.kind === "more" ? more.count : 0, `${c.case} ${a.id}/${l.part} more`).toBe(Math.max(0, l.n - shown.length));
+        const hf = Math.max(0, l.fault - shown.filter((t) => t.role === "fault").length), hd = Math.max(0, l.degraded - shown.filter((t) => t.role === "degraded").length);
+        expect(more?.kind === "more" ? [more.faults, more.attention] : [0, 0], `${c.case} ${a.id}/${l.part} more`).toEqual([hf, hd]);
       }
       for (const a of ctl) expect(qm.rows.some((row) => row.kind === "controller" && row.task === a.id), `${c.case} ${a.id} controller row`).toBe(true);
       for (const { a, l } of gapLines) {

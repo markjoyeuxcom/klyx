@@ -61,6 +61,11 @@ export type Line = {
   classifier: "verdict" | "native" | "evidence";
   state: LineState;
   n: number; // attention (verdict), Included (native), warnings (evidence); 0 without a count
+  // the role counts behind a lit line: faults and degraded objects (verdict
+  // counts, or native roles); 0 elsewhere. The fleet queue counts and
+  // completes its samples from these, never from a tool's wider Included.
+  fault: number;
+  degraded: number;
   // "as-read": the counts as read (a stale read says so in its gaps);
   // "lower": a lower bound on current attention (live kinds, some missing);
   // "mixed": current and last-observed objects (live and stale kinds) -
@@ -120,7 +125,7 @@ function line(meta: TaskMeta, pm: PartMeta, sel: SelectedCounts, capUnknown: boo
   if (sel.refreshError) qualify.push(`last re-read failed: ${sel.refreshError}`);
   const p = sel.part;
   if (!p) {
-    return { ...base, classifier: CLASSIFIER[meta.task] ?? "native", state: "checking", n: 0, bound: "as-read", tone: undefined, text: "checking…", gaps: capUnknown ? [CAP_UNKNOWN, ...qualify] : qualify, asOf: null, top: [] };
+    return { ...base, classifier: CLASSIFIER[meta.task] ?? "native", state: "checking", n: 0, fault: 0, degraded: 0, bound: "as-read", tone: undefined, text: "checking…", gaps: capUnknown ? [CAP_UNKNOWN, ...qualify] : qualify, asOf: null, top: [] };
   }
   if (p.coverage === "absent") return null;
   const member = MEMBERSHIP[`${meta.task}/${pm.part}`] ?? [];
@@ -143,7 +148,7 @@ function line(meta: TaskMeta, pm: PartMeta, sel: SelectedCounts, capUnknown: boo
   if (read.length === 0 || memberMissing.length > 0) {
     const un = memberMissing.find((k) => k.coverage === "unreadable") ?? missing.find((k) => k.coverage === "unreadable");
     return {
-      ...base, classifier: p.classifier, state: un ? "unreadable" : "checking", n: 0, bound: "as-read", tone: undefined,
+      ...base, classifier: p.classifier, state: un ? "unreadable" : "checking", n: 0, fault: 0, degraded: 0, bound: "as-read", tone: undefined,
       text: memberMissing.length > 0 ? `attachment membership not established - ${kindLabel(memberMissing[0].kind)} ${un ? "could not be read" : "not read yet"}`
         : un ? `could not be read${un.class ? ` (${un.class})` : ""}` : "checking…",
       gaps: [...missing.filter((k) => k !== un).map((k) => kindGap(k, false)), ...qualify],
@@ -164,11 +169,15 @@ function line(meta: TaskMeta, pm: PartMeta, sel: SelectedCounts, capUnknown: boo
   const mixed = bound === "mixed" ? " - current and last observed" : "";
   let state: LineState;
   let n: number;
+  let fault = 0;
+  let degraded = 0;
   let tone: Line["tone"];
   let text: string;
   if (p.classifier === "verdict") {
     const c = p.counts ?? { total: 0, fault: 0, degraded: 0, unknown: 0, progressing: 0, paused: 0, ok: 0 };
     n = c.fault + c.degraded;
+    fault = c.fault;
+    degraded = c.degraded;
     if (c.unknown > 0) gaps.unshift(`${c.unknown} unverified`);
     state = n > 0 ? "attention" : "quiet";
     tone = n > 0 ? (c.fault > 0 ? "danger" : "warning") : undefined;
@@ -176,6 +185,8 @@ function line(meta: TaskMeta, pm: PartMeta, sel: SelectedCounts, capUnknown: boo
   } else if (p.classifier === "native") {
     const nat = p.native ?? { total: 0, included: 0, word: "need attention", roles: { total: 0, fault: 0, degraded: 0, unknown: 0, progressing: 0, paused: 0, ok: 0 } };
     const lit = nat.roles.fault + nat.roles.degraded;
+    fault = nat.roles.fault;
+    degraded = nat.roles.degraded;
     if (nat.roles.unknown > 0) gaps.unshift(`${nat.roles.unknown} unknown`);
     n = nat.included;
     if (lit > 0 && n === 0) n = lit; // a fault outside the tool's predicate is still named
@@ -188,7 +199,7 @@ function line(meta: TaskMeta, pm: PartMeta, sel: SelectedCounts, capUnknown: boo
     tone = undefined;
     text = n > 0 ? `${n}${plus} warning event${n === 1 && !plus ? "" : "s"}${mixed}` : `no warning events${mixed}`;
   }
-  return { ...base, classifier: p.classifier, state, n, bound, tone, text, gaps: [...gaps, ...qualify], asOf: p.asOf ?? null, top: p.top ?? [] };
+  return { ...base, classifier: p.classifier, state, n, fault, degraded, bound, tone, text, gaps: [...gaps, ...qualify], asOf: p.asOf ?? null, top: p.top ?? [] };
 }
 
 function areaOf(meta: TaskMeta, lines: Line[], task: HealthTask | undefined): Area {

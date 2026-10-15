@@ -28,6 +28,14 @@ function Mark({ row }: { row: QueueRow }) {
   return <Aspect kind={row.tone === "danger" ? "fault" : "attention"} />;
 }
 
+// moreText: "+3 more in Pods (1 fault, 2 to look at)"; a lower bound reads
+// "+3 or more in Pods".
+export function moreText(row: Extract<QueueRow, { kind: "more" }>): string {
+  const total = row.faults + row.attention;
+  const split = row.faults > 0 && row.attention > 0 ? ` (${row.faults} fault${row.faults === 1 ? "" : "s"}, ${row.attention} to look at)` : "";
+  return `+${total} ${row.lower ? "or more" : "more"} in ${row.lens}${split}`;
+}
+
 function Row({ row }: { row: QueueRow }) {
   const where = <span className="queue-where"><span>{row.place || "no environment"}</span><span className="queue-cluster">{clusterDisplayName(row.cluster)}</span><span>{row.area}</span></span>;
   if (row.kind === "object") {
@@ -44,7 +52,7 @@ function Row({ row }: { row: QueueRow }) {
       </button>
     );
   }
-  const text = row.kind === "more" ? `+${row.count}${row.lower ? " or more" : ""} more in ${row.lens}` : row.text;
+  const text = row.kind === "more" ? moreText(row) : row.text;
   return (
     <button type="button" className="queue-row" data-kind={row.kind} data-tone={row.tone} onClick={() => open(row)} aria-label={`${text}, on ${row.cluster}`}>
       <span className="queue-mark">{row.kind !== "more" && <Mark row={row} />}</span>
@@ -57,7 +65,9 @@ function Row({ row }: { row: QueueRow }) {
 export function NeedsYou({ clusters, models }: { clusters: ClusterDTO[]; models: Record<string, ClusterAttention> }) {
   const filter = useQueueFilter((s) => s.filter);
   const q = fleetQueue(clusters, models, filter);
-  const counts = [q.faults > 0 ? `${q.faults} fault${q.faults === 1 ? "" : "s"}` : "", q.attention > 0 ? `${q.attention} to look at` : ""].filter(Boolean).join(" · ");
+  // the whole queue's counts, never the samples; "+" on a lower bound
+  const plus = q.lower ? "+" : "";
+  const counts = [q.faults > 0 ? `${q.faults}${plus} fault${q.faults === 1 && !plus ? "" : "s"}` : "", q.attention > 0 ? `${q.attention}${plus} to look at` : ""].filter(Boolean).join(" · ");
   return (
     <section className="queue" aria-labelledby="queue-h">
       <div className="queue-head">

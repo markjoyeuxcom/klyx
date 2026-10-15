@@ -13,7 +13,7 @@ const ref = (gvr: string, name: string, namespace?: string, label = "CrashLoopBa
   ({ cluster: "x", gvr, namespace, name, role, label, uid: `uid-${name}`, ...over });
 const queue = (clusters: ClusterDTO[], filter: "all" | "prd" | "faults" = "all") =>
   fleetQueue(clusters, Object.fromEntries(clusters.map((c) => [c.name, clusterAttention(useHealth.getState(), c.name, c)])), filter);
-const brief = (r: QueueRow) => r.kind === "object" ? `${r.cluster} ${r.objectKind} ${r.ref.namespace ? `${r.ref.namespace}/` : ""}${r.ref.name} ${r.label}` : `${r.cluster} ${r.kind === "more" ? `+${r.count} ${r.lens}` : r.text}`;
+const brief = (r: QueueRow) => r.kind === "object" ? `${r.cluster} ${r.objectKind} ${r.ref.namespace ? `${r.ref.namespace}/` : ""}${r.ref.name} ${r.label}` : `${r.cluster} ${r.kind === "more" ? `+${r.faults + r.attention} ${r.lens}` : r.text}`;
 const pods = (cluster: string, n: number, names: string[]) =>
   applySummary(summary(replace(core(), task("pods", [verdict("pods", { fault: n, ok: 1 }, [kind("pods")], { top: names.map((x) => ref("v1/pods", x, "shop")) })])), {}, cluster));
 
@@ -27,7 +27,7 @@ describe("fleetQueue rows (parent §12)", () => {
       "a Pod shop/p1 CrashLoopBackOff", "a Pod shop/p2 CrashLoopBackOff", "a Pod shop/p3 CrashLoopBackOff", "a Pod shop/p4 CrashLoopBackOff", "a Pod shop/p5 CrashLoopBackOff",
       "a +2 Pods",
     ]);
-    expect(q.faults).toBe(5);
+    expect(q.faults).toBe(7); // the model's count, not the samples
   });
 
   it("a paused native ref is never a row; a degraded one is a look-at row", () => {
@@ -104,5 +104,42 @@ describe("words, order and filters", () => {
     expect(q.notRead.map((n) => [n.cluster, n.why.replace(/ at .*/, " at T")])).toEqual([
       ["x", "failed: dial tcp"], ["n", "connecting"], ["e", "observation ended at T"], ["c", "health checking…"],
     ]);
+  });
+});
+
+// Codex review of 087e5e2: a reconnecting cluster's held summary is not
+// read; "+N more" and the counts follow role counts, never the samples.
+describe("review of 087e5e2", () => {
+  it("a connecting cluster with a retained faulty summary is not read, and gives no rows", () => {
+    pods("x", 2, ["a", "b"]);
+    const q = queue([cl("x", "prd", "Connecting")]);
+    expect(q.rows).toEqual([]);
+    expect(q.notRead).toEqual([{ cluster: "x", why: "connecting" }]);
+    expect([q.faults, q.attention]).toEqual([0, 0]);
+  });
+
+  it("the counts are the whole model's; a lower bound is said", () => {
+    pods("a", 7, ["p1", "p2", "p3", "p4", "p5"]);
+    expect([queue([cl("a")]).faults, queue([cl("a")]).lower]).toEqual([7, false]);
+    applySummary(summary(replace(core(), task("pods", [verdict("pods", { fault: 2 }, [kind("pods"), kind("replicasets", { coverage: "unreadable" })], { top: [ref("v1/pods", "x", "shop")] })])), {}, "b"));
+    expect(queue([cl("b")]).lower).toBe(true);
+  });
+
+  it("+N more counts hidden faults and attention by role; under Faults only hidden faults remain", () => {
+    // one fault and six degraded; the fault is among the five samples
+    applySummary(summary(replace(core(), task("pods", [verdict("pods", { fault: 1, degraded: 6 }, [kind("pods")], {
+      top: [ref("v1/pods", "f", "shop"), ...["d1", "d2", "d3", "d4"].map((n) => ref("v1/pods", n, "shop", "NotReady", "degraded"))] })])), {}, "c"));
+    const all = queue([cl("c")]).rows.find((r) => r.kind === "more");
+    expect(all?.kind === "more" && [all.faults, all.attention, all.tone]).toEqual([0, 2, "warning"]);
+    expect(queue([cl("c")], "faults").rows.some((r) => r.kind === "more")).toBe(false);
+  });
+
+  it("a syncing object a tool counts as not ready is never a hidden row", () => {
+    applySummary(summary([...core(), task("flux", [
+      native("reconciliations", { fault: 1, progressing: 2 }, 3, "not ready", [kind("kustomizations")], { top: [ref("kustomize.toolkit.fluxcd.io/v1/kustomizations", "apps", "flux-system", "Failed")] }),
+      native("sources", { ok: 1 }, 0, "not ready", [kind("gitrepositories")])])], {}, "f"));
+    const q = queue([cl("f", "dev", "Synced", { fluxPresent: true })]);
+    expect(q.rows.some((r) => r.kind === "more")).toBe(false);
+    expect(q.faults).toBe(1);
   });
 });

@@ -26,7 +26,7 @@ describe("Needs you", () => {
     applySummary(summary(replace(core(), task("pods", [verdict("pods", { fault: 7 }, [kind("pods")], { top: ["a", "b", "c", "d", "e"].map(ref) })])), {}, "prd1"));
     mount([cl("prd1", "prd")]);
     expect(screen.getByRole("heading", { name: "Needs you" })).toBeTruthy();
-    expect(screen.getByText("5 faults")).toBeTruthy();
+    expect(screen.getByText("7 faults")).toBeTruthy(); // the model's count, not the five samples
     fireEvent.click(screen.getByRole("button", { name: /^Fault: Pod shop\/a, CrashLoopBackOff, on prd1/ }));
     expect(useFleet.getState().route).toMatchObject({ name: "cluster", cluster: "prd1", section: "pods" });
     expect(useFleet.getState().navIntent).toMatchObject({ kind: "select-pod", cluster: "prd1", namespace: "shop", name: "a" });
@@ -55,5 +55,15 @@ describe("Needs you", () => {
     mount([cl("q"), cl("x", "prd", "Failed")]);
     expect(screen.getByText("Nothing in the clusters read needs attention.")).toBeTruthy();
     expect(screen.getByText(/^Not read:/).textContent).toBe("Not read: x (failed)");
+  });
+});
+
+describe("moreText (review of 087e5e2)", () => {
+  it("a lower bound reads '+N or more in', never 'or more more'; both roles are split", async () => {
+    const { moreText } = await import("./NeedsYou");
+    const base = { key: "k", cluster: "c", place: "", rank: 0, tone: "danger" as const, area: "Pods", areaOrder: 0, task: "pods", part: "pods", kind: "more" as const, destinationId: "pods", lens: "Pods" };
+    expect(moreText({ ...base, faults: 2, attention: 0, lower: false })).toBe("+2 more in Pods");
+    expect(moreText({ ...base, faults: 2, attention: 0, lower: true })).toBe("+2 or more in Pods");
+    expect(moreText({ ...base, faults: 1, attention: 2, lower: false })).toBe("+3 more in Pods (1 fault, 2 to look at)");
   });
 });
