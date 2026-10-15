@@ -130,3 +130,35 @@ The report is compared with 12a's log for the same lab state: the same pages, he
 4. **OS notifications stay off in the automation.** Their native delivery and click-through are the owner's checklist work, never an automated pass.
 
 Review findings answered: the single-instance lock (§3.1), bounded progress and explicit failure (§3.3), and font loading (§3.3).
+
+## 7. As built: 12b
+
+- **`internal/smoke`:**
+  - `Watchdog`: `Arm`, `Started`, `Report`. A clock seam stands behind the deadlines, `StartWithin` (30s) and `ReportWithin` (5m).
+  - The first result is the only one, written with the settings and provenance, then the app quits.
+  - A report that is not JSON or names no result is written as incomplete.
+  - `BuildProvenance` takes the commit and modified flag from the build's VCS stamp, and a SHA-256 of the embedded `frontend/dist`, by path and content.
+- **`cmd/klyx`:**
+  - `smokehook.go` declares a nil `smokeHook`.
+  - `smoke.go` (`//go:build smoke`) requires `KLYX_SMOKE_OUT` and `KLYX_CONFIG`, and supplies four things:
+    - `UniqueID` `com.moomora.klyx.smoke`;
+    - `SmokeService` (`Settings`, `Started`, `Report`);
+    - a hidden window at the run's size whose `JS` raises the flag and dispatches `klyx-smoke`;
+    - `Start`, which arms the watchdog with `app.Quit`.
+  - `main` builds its service list and identity before `application.New`, consults the hook only when set, and leaves window state alone in a smoke run.
+- **Frontend:**
+  - `smoke/boot.ts` starts the runner once, from the flag at the shell's mount or the event, by dynamic import. A production build puts the runner in its own chunk (`run-*.js`, 4.6 kB), the only one naming `SmokeService`. The main bundle carries only the listener.
+  - `smoke/run.ts` walks in this order:
+    - the theme and its three tokens;
+    - the web platform (`ResizeObserver`, `structuredClone`, container queries);
+    - every declared font face, loaded;
+    - the lab cluster connecting;
+    - the fleet board;
+    - every registry destination, by `navigate`: the page and its location bar or kind, with a measurable body. A destination absent on the lab is named so;
+    - the inspector at this width: a drawer when narrow, split when wide, with focus inside the drawer.
+  - Each step is bounded, fails on a console error or overflow, and is unmeasurable (incomplete) when a box has no size.
+- **The bundle:** `<scratchpad>/smoke/KlyxSmoke.app`, with `CFBundleIdentifier` `com.moomora.klyx.smoke` and `LSUIElement` (no Dock icon), and the lab's fleet config in `<scratchpad>/smoke/cfg`. WebKit keeps its stores per bundle identity, apart from the installed app's (`io.moomora.klyx`).
+- **Tests:**
+  - **Go:** the watchdog's four outcomes (never started, never reported, first result only, no result never passes), the asset hash, and the build constraint (`smoke.go` only under the tag).
+  - **Frontend:** the handshake in both orders and never without the signal; the bounded wait; unmeasurable geometry; the tokens; a face that does not load; the verdict; every registry destination stepped; a run with nothing laid out reporting a non-pass.
+- **A trial run** found that a row picked up before its page had mounted measured 0×0. The step now waits for the page, then for a row with a measurable box.

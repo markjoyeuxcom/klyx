@@ -543,6 +543,53 @@ func main() {
 		notifySvc.RequestNotificationAuthorization,
 	)
 
+	services := []application.Service{
+		application.NewService(svc),
+		application.NewService(healthSvc),
+		application.NewService(gitopsSvc),
+		application.NewService(certManagerSvc),
+		application.NewService(crdSvc),
+		application.NewService(gatewaySvc),
+		application.NewService(meshSvc),
+		application.NewService(lineSvc),
+		application.NewService(healthNotify),
+		application.NewService(appbridge.NewIndexService(index)),
+		application.NewService(gitSvc),
+		application.NewService(writesSvc),
+		application.NewService(metricsSvc),
+		application.NewService(workloadsSvc),
+		application.NewService(podsSvc),
+		application.NewService(logsSvc),
+		application.NewService(eventsSvc),
+		application.NewService(nodesSvc),
+		application.NewService(nodeOpsSvc),
+		application.NewService(forwardsSvc),
+		application.NewService(execSvc),
+		application.NewService(helmSvc),
+		application.NewService(windowsSvc),
+		application.NewService(configSvc),
+		application.NewService(argoSvc),
+		application.NewService(rbacSvc),
+		application.NewService(promotionSvc),
+		application.NewService(upgradeSvc),
+		application.NewService(connectivitySvc),
+		application.NewService(expirySvc),
+		application.NewService(karpenterSvc),
+		application.NewService(aiSvc),
+		application.NewService(aiSettingsSvc),
+		application.NewService(chatSvc),
+		application.NewService(dockSvc),
+		application.NewService(notifySvc),
+		application.NewService(shellSvc),
+	}
+	// The native smoke (The Line slice 12b) is its own app: its own
+	// single-instance key and its bound service, only under the smoke tag.
+	uniqueID := "com.moomora.klyx"
+	if smoke != nil {
+		uniqueID = smoke.UniqueID()
+		services = append(services, smoke.Service())
+	}
+
 	app := application.New(application.Options{
 		Name:        "Klyx",
 		Description: "Platform-engineer-grade Kubernetes desktop client",
@@ -550,50 +597,12 @@ func main() {
 		// load on every cluster and race the first on fleet.yaml writes. The
 		// second launch exits after waking the running instance.
 		SingleInstance: &application.SingleInstanceOptions{
-			UniqueID: "com.moomora.klyx",
+			UniqueID: uniqueID,
 			OnSecondInstanceLaunch: func(application.SecondInstanceData) {
 				log.Printf("second Klyx launch redirected to this instance")
 			},
 		},
-		Services: []application.Service{
-			application.NewService(svc),
-			application.NewService(healthSvc),
-			application.NewService(gitopsSvc),
-			application.NewService(certManagerSvc),
-			application.NewService(crdSvc),
-			application.NewService(gatewaySvc),
-			application.NewService(meshSvc),
-			application.NewService(lineSvc),
-			application.NewService(healthNotify),
-			application.NewService(appbridge.NewIndexService(index)),
-			application.NewService(gitSvc),
-			application.NewService(writesSvc),
-			application.NewService(metricsSvc),
-			application.NewService(workloadsSvc),
-			application.NewService(podsSvc),
-			application.NewService(logsSvc),
-			application.NewService(eventsSvc),
-			application.NewService(nodesSvc),
-			application.NewService(nodeOpsSvc),
-			application.NewService(forwardsSvc),
-			application.NewService(execSvc),
-			application.NewService(helmSvc),
-			application.NewService(windowsSvc),
-			application.NewService(configSvc),
-			application.NewService(argoSvc),
-			application.NewService(rbacSvc),
-			application.NewService(promotionSvc),
-			application.NewService(upgradeSvc),
-			application.NewService(connectivitySvc),
-			application.NewService(expirySvc),
-			application.NewService(karpenterSvc),
-			application.NewService(aiSvc),
-			application.NewService(aiSettingsSvc),
-			application.NewService(chatSvc),
-			application.NewService(dockSvc),
-			application.NewService(notifySvc),
-			application.NewService(shellSvc),
-		},
+		Services: services,
 		Assets: application.AssetOptions{
 			Handler: application.AssetFileServerFS(assets),
 		},
@@ -604,8 +613,9 @@ func main() {
 		// sockets/SPDY tunnels, log tails hold apiserver streams, and drains own
 		// child kubectl processes - none may outlive the app.
 		OnShutdown: func() {
-			// Remember the window geometry for the next launch (best-effort).
-			if mainWin != nil {
+			// Remember the window geometry for the next launch (best-effort);
+			// a smoke run leaves it alone.
+			if mainWin != nil && smoke == nil {
 				x, y := mainWin.Position()
 				w, h := mainWin.Size()
 				// Only darwin's windowNew creates the window one point small.
@@ -640,13 +650,18 @@ func main() {
 	}
 	// Restore the last run's geometry: a daily driver that forgets its window
 	// every morning reads as a prototype. Insane/missing state -> defaults.
-	if b, ok := winstate.Load(windowStatePath()); ok {
+	if smoke != nil {
+		smoke.Window(&mainOpts)
+	} else if b, ok := winstate.Load(windowStatePath()); ok {
 		mainOpts.Width, mainOpts.Height = b.Width, b.Height
 		mainOpts.X, mainOpts.Y = b.X, b.Y
 		mainOpts.InitialPosition = application.WindowXY
 		requestedBounds = b
 	}
 	mainWin = app.Window.NewWithOptions(mainOpts)
+	if smoke != nil {
+		smoke.Start(app)
+	}
 
 	if err := app.Run(); err != nil {
 		log.Fatal(err)
