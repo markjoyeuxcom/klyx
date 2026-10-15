@@ -211,3 +211,142 @@ func TestRegress3bAbsentFromStartClearsABootstrapLoss(t *testing.T) {
 		t.Fatal("a loss newer than the absent rows reads ok")
 	}
 }
+
+// Codex's review of bd385e7: cross-part order within a drain, per-partition
+// evidence times, HelmRelease source failure inputs, the absence fence and
+// station-state history.
+
+func regress3bSource(s *LineService, at time.Time, v uint64, failed bool) observe.Rows {
+	r := s.stations["c1"].rows["flux/sources"]
+	r.Part.Ver = v
+	r.EvaluatedAt = at
+	rs := r.Rows.(healthsrc.RowSet[flux.Source])
+	rs.Rows = append([]healthsrc.Row[flux.Source](nil), rs.Rows...)
+	rs.Rows[0].Data.Ready = flux.Ready
+	if failed {
+		rs.Rows[0].Data.Ready = flux.Failed
+	}
+	r.Rows = rs
+	return r
+}
+func TestRegress3bBDSameDrainAcrossPartsDoesNotPreserveOldProof(t *testing.T) {
+	now := time.Now()
+	s := regress3bSvc(&now)
+	s.recompute()
+	now = now.Add(time.Second)
+	s.tap.OnRows(regress3bSource(s, now, 2, true))
+	s.applyDrain()
+	s.recompute()
+	before, _ := stationIn(s.Line(), "c1")
+	if before.FailingSince == nil || before.FailingSince.Basis != obslog.ProofObserved {
+		t.Fatalf("fixture: %+v", before)
+	}
+	now = now.Add(2 * time.Second)
+	s.tap.OnRows(regress3bSource(s, now, 3, false))
+	now = now.Add(100 * time.Millisecond)
+	s.tap.OnRows(regress3bRecon(now, 2, true))
+	s.applyDrain()
+	s.recompute()
+	after, _ := stationIn(s.Line(), "c1")
+	if p := after.FailingSince; p != nil && p.Basis == obslog.ProofObserved && p.Since.Equal(*before.FailingSince.Since) {
+		t.Fatalf("healed source and then failed unit coalesced across parts; original proof survives: %+v", p)
+	}
+}
+func TestRegress3bBDUnrelatedCaptureDoesNotDateFailureProof(t *testing.T) {
+	now := time.Now()
+	base := now
+	s := regress3bSvc(&now)
+	ar := s.stations["c1"].rows["argo/applications"]
+	ar.EvaluatedAt = base.Add(20 * time.Second)
+	s.stations["c1"].rows["argo/applications"] = ar
+	now = base.Add(21 * time.Second)
+	s.recompute()
+	captured := base.Add(15 * time.Second)
+	now = base.Add(22 * time.Second)
+	s.tap.OnRows(regress3bRecon(captured, 2, true))
+	s.applyDrain()
+	s.recompute()
+	ds, _ := stationIn(s.Line(), "c1")
+	p := ds.FailingSince
+	if p == nil {
+		t.Fatal("no failure proof")
+	}
+	if p.NotBefore != nil && p.NotBefore.After(captured) {
+		t.Fatalf("Argo capture dates Flux interval after already-failing Flux evidence: %+v; capture %v", p, captured)
+	}
+}
+func TestRegress3bBDChartSourceFailureLosesProofOnSourceGap(t *testing.T) {
+	now := time.Now()
+	s := regress3bSvc(&now)
+	st := s.stations["c1"]
+	r := st.rows["flux/reconciliations"]
+	r.Rows = healthsrc.RowSet[flux.Resource]{Rows: []healthsrc.Row[flux.Resource]{{Ref: healthsrc.RowRef{UID: "hr"}, Data: flux.Resource{Kind: flux.HelmReleaseKind, Name: "web", Namespace: "ns", Ready: flux.Ready, SourceKind: "GitRepository", SourceNamespace: "ns", SourceName: "repo", History: []flux.HelmHistory{{ChartName: "web", ChartVersion: "1", Status: "deployed"}}}}}}
+	st.rows["flux/reconciliations"] = r
+	s.selector = &line.Key{Kind: line.KeyChartName, RefName: "web"}
+	s.recompute()
+	now = now.Add(time.Second)
+	s.tap.OnRows(regress3bSource(s, now, 2, true))
+	s.applyDrain()
+	s.recompute()
+	before, _ := stationIn(s.Line(), "c1")
+	if before.FailingSince == nil || before.FailingSince.Basis != obslog.ProofObserved {
+		t.Fatalf("fixture: source alone makes release failing: %+v", before)
+	}
+	now = now.Add(time.Second)
+	s.tap.OnTransitions(batchOn(observe.BatchLoss, 1, 2, observe.LossRelist))
+	s.applyDrain()
+	s.recompute()
+	after, _ := stationIn(s.Line(), "c1")
+	if after.Read != line.ReadOK {
+		t.Fatalf("chart comparison must remain available: %+v", after)
+	}
+	p, ok, _ := s.d.Sink.ObservationLog().ProofOf("c1", "line/unit/hr#0")
+	if ok && !p.Suspended && p.Basis == obslog.ProofObserved {
+		t.Fatalf("source-derived failure remains proven through an unread source: %+v", p)
+	}
+}
+func TestRegress3bBDAbsenceDoesNotPromoteRetainedRows(t *testing.T) {
+	now := time.Now()
+	s := regress3bSvc(&now)
+	s.recompute()
+	before, _ := stationIn(s.Line(), "c1")
+	if before.State != line.StateMatches {
+		t.Fatalf("fixture: %+v", before)
+	}
+	b := batchOn(observe.BatchLoss, 1, 2, observe.LossAbsent)
+	b.Part = "reconciliations"
+	b.Source = "kustomizations"
+	s.tap.OnTransitions(b)
+	s.applyDrain()
+	s.recompute()
+	after, _ := stationIn(s.Line(), "c1")
+	if after.State == line.StateMatches || s.Line().Applied > 0 {
+		t.Fatalf("absent kind's v1 retained objects still count while waiting for v2 rows: %+v", after)
+	}
+}
+func TestRegress3bBDStationStateStillEntersObservationLog(t *testing.T) {
+	now := time.Now()
+	s := regress3bSvc(&now)
+	s.recompute()
+	now = now.Add(time.Second)
+	r := regress3bRecon(now, 2, false)
+	rs := r.Rows.(healthsrc.RowSet[flux.Resource])
+	rs.Rows[0].Data.Revision = ""
+	r.Rows = rs
+	s.tap.OnRows(r)
+	s.applyDrain()
+	s.recompute()
+	ds, _ := stationIn(s.Line(), "c1")
+	if ds.State != line.StateAppliedUnknown {
+		t.Fatalf("fixture: expected state change: %+v", ds)
+	}
+	found := false
+	for _, e := range s.d.Sink.ObservationLog().Recent("c1", 100) {
+		if e.Task == lineTask && e.Key == "line/state" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("station state is no longer recorded by line history")
+	}
+}

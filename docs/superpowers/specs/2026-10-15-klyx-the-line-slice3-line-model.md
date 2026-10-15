@@ -217,7 +217,19 @@ This note fixes the implementation shape the parent leaves open. The rules thems
   - the connection was not lost.
 
   Any break emits a line loss, and after it each predicate is re-baselined as start unknown. For example, the worker held failing=true since 09:00 while v2 (recovered) and v3 (failing) arrived. v2 was overwritten unseen, so 09:00 is not kept: the predicate is re-baselined.
-- **A reference change** (a new key, R changing, or the selector) is recorded as "reference changed", never as a deployment or a hold. It ends every held proof, because held is tied to R. A changed attempted revision likewise restarts that unit's held evidence.
+- **Evidence order** (revised after the review of bd385e7):
+  - **Partitions:** each unit kind's failing predicates (Kustomizations, HelmReleases, Argo applications), held, and state. Each partition reads its own input parts and kinds.
+    - A Kustomization's or HelmRelease's failure needs its bound source kind. A recorded-name chart *comparison* never does (§2.4).
+    - A gap breaks only the partitions whose inputs need the gapped kind.
+  - **Capture order:**
+    - Accepted row sets are installed and committed one at a time, in capture order, so distinct parts published in one drain cannot hide the composite state between them.
+    - Gaps and overwritten rows are applied before any of the drain's commits.
+  - **Dating:**
+    - A partition's commit is dated by the newest capture among its own input parts, never by an unrelated part or the worker's clock.
+    - Only a real change moves that watermark.
+  - **Out of order:** a row set captured before a partition's last change but arriving after it is a break, as is another part captured at the same instant. Composite changes are ordered by the Observer's capture clock and nothing finer.
+  - **Absence:** an absence is fenced by its version, like a recovery. Rows older than it read checking: their old objects are never known-empty.
+- **A reference change** (a new key, R changing, or the selector) is recorded as "reference changed", never as a deployment or a hold. It ends every held and state proof, because both are tied to the key and R. A changed attempted revision likewise restarts that unit's held evidence.
 - **Rule-proven `since`** (parent §8.1 as revised) dates a failing predicate only where the rule's role is exactly that predicate: a Flux source or Kustomization Ready=False with no overlay. Since no Flux role is proven today, line failure ages come from the line's own history. The deciding condition's age is shown beside them as evidence.
 - **Fencing:**
   - Proofs are read only from the line's own history, under the station's current incarnation.

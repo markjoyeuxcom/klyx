@@ -361,9 +361,14 @@ func (s *LineService) applyResult(r any) {
 		if !r.ok || r.rows.Incarnation != st.inc || st.ended {
 			return // retried on the next scan
 		}
-		s.applyRows(st, r.part.key(), r.rows, false)
+		applied := s.applyRows(st, r.part.key(), r.rows)
 		s.seed(r.cluster, st, r.rows)
-		st.histDirty, s.dirty = true, true
+		s.dirty = true
+		if applied {
+			s.commitStation(r.cluster, st, &rowTrigger{part: r.part.key(), at: r.rows.EvaluatedAt})
+		} else {
+			st.histDirty = true // seeding may have changed continuity
+		}
 		s.commitDirty()
 	case meshResult:
 		s.applyMesh(r)
@@ -405,14 +410,9 @@ func (s *LineService) applyDrain() {
 		if st.ended {
 			continue
 		}
-		for k, r := range d.rows {
-			if r.Incarnation != st.inc {
-				continue
-			}
-			if s.applyRows(st, k, r, d.overwrite[k]) || d.overwrite[k] {
-				st.histDirty, s.dirty = true, true
-			}
-		}
+		// Partition states and every gap first: a gap or overwritten rows
+		// may predate any row set in this drain, so no commit below may
+		// claim continuity across them.
 		for pr, p := range d.partitions {
 			if p.inc != st.inc {
 				continue
@@ -426,6 +426,36 @@ func (s *LineService) applyDrain() {
 			if p.gap {
 				st.gapKind(pr.source)
 				st.histDirty, s.dirty = true, true
+			}
+		}
+		var keys []string
+		for k, r := range d.rows {
+			if r.Incarnation != st.inc {
+				continue
+			}
+			keys = append(keys, k)
+			if d.overwrite[k] {
+				for _, kind := range partKinds[k] {
+					st.gapKind(kind) // a discarded row set may have shown a flip (note §5)
+				}
+				st.histDirty, s.dirty = true, true
+			}
+		}
+		// Each accepted row set is installed and committed on its own, in
+		// capture order: distinct parts published inside one drain cannot
+		// hide the composite state between them.
+		sort.Slice(keys, func(i, j int) bool {
+			a, b := d.rows[keys[i]].EvaluatedAt, d.rows[keys[j]].EvaluatedAt
+			if !a.Equal(b) {
+				return a.Before(b)
+			}
+			return keys[i] < keys[j]
+		})
+		for _, k := range keys {
+			r := d.rows[k]
+			if s.applyRows(st, k, r) {
+				s.dirty = true
+				s.commitStation(cluster, st, &rowTrigger{part: k, at: r.EvaluatedAt})
 			}
 		}
 	}
@@ -449,12 +479,7 @@ func (st *lineStation) gapKind(kind string) {
 
 // applyRows keeps a part's rows when they are newer than the ones held, and
 // reports whether it did.
-func (s *LineService) applyRows(st *lineStation, key string, r observe.Rows, overwritten bool) bool {
-	if overwritten {
-		for _, k := range partKinds[key] {
-			st.gapKind(k) // a discarded row set may have shown a flip (note §5)
-		}
-	}
+func (s *LineService) applyRows(st *lineStation, key string, r observe.Rows) bool {
 	if held, ok := st.rows[key]; ok && held.Part.Ver >= r.Part.Ver {
 		return false
 	}
@@ -615,6 +640,10 @@ func (s *LineService) input(st *lineStation) (line.StationInput, string, []strin
 					cov = "absent"
 				case sp.state == partitionLost:
 					cov = "checking"
+				case sp.state == partitionAbsent && r.Part.Ver < sp.ver:
+					// Rows from before the absence still hold the kind's old
+					// objects: never known-empty until rows at or after it.
+					cov = "checking"
 				case sp.state == partitionAbsent:
 					cov = "absent"
 				case sp.state == partitionAvailable && r.Part.Ver < sp.ver:
@@ -659,8 +688,8 @@ func (s *LineService) recompute() {
 		}
 	}
 	l := line.Build(in)
+	refChanged := lineRef(l.Key, l.R) != lineRef(s.lastKey, s.lastR)
 	s.lastKey, s.lastR = l.Key, l.R
-	ref := lineRef(l.Key, l.R)
 	proofs := map[string]*stationProofs{}
 	for _, sls := range [][]line.StationLine{l.Stations, l.Siding} {
 		for _, sl := range sls {
@@ -668,12 +697,12 @@ func (s *LineService) recompute() {
 			if st.inc == 0 {
 				continue
 			}
-			if st.histDirty || !s.hist.committed(sl.Cluster, st.inc) {
-				s.commitStation(sl.Cluster, st)
+			// A new reference re-settles every station's held and state
+			// (ending their proofs); unchanged ones were committed with
+			// their accepted changes.
+			if refChanged || st.histDirty || !s.hist.committed(sl.Cluster, st.inc) {
+				s.commitStation(sl.Cluster, st, nil)
 			}
-			// Held under this build's reference: a reference change ends it;
-			// an unchanged value advances nothing.
-			s.hist.commitHeld(sl.Cluster, st.inc, sl.Held, ref, sl.Read == line.ReadOK && s.attached(st), false, latestEvaluated(st, now))
 			proofs[sl.Cluster] = s.hist.proofsOf(l, sl)
 		}
 	}
@@ -730,7 +759,7 @@ func (s *LineService) recompute() {
 func (s *LineService) commitDirty() {
 	for name, st := range s.stations {
 		if st.histDirty && st.inc != 0 {
-			s.commitStation(name, st)
+			s.commitStation(name, st, nil)
 		}
 	}
 }
@@ -749,96 +778,142 @@ func (s *LineService) attached(st *lineStation) bool {
 	return true
 }
 
-// commitStation commits a station's unit failing predicates, per unit kind,
-// and its held predicate under the last build's reference, at the station's
-// capture time. A gap breaks only the partitions whose inputs need it.
-func (s *LineService) commitStation(cluster string, st *lineStation) {
+// rowTrigger is the accepted row set a history commit follows.
+type rowTrigger struct {
+	part string    // its part key
+	at   time.Time // its capture time
+}
+
+var (
+	partFluxRecon   = partRef{healthsrc.TaskFlux, "reconciliations"}.key()
+	partFluxSources = partRef{healthsrc.TaskFlux, "sources"}.key()
+	partArgoApps    = partRef{healthsrc.TaskArgo, "applications"}.key()
+)
+
+// histInputs are the parts each history partition reads: its evidence time
+// is the newest capture among them, never an unrelated part's.
+var histInputs = map[string][]string{
+	unitsKustomizations: {partFluxRecon, partFluxSources},
+	unitsHelmReleases:   {partFluxRecon, partFluxSources},
+	unitsApplications:   {partArgoApps},
+	linePartHeld:        {partFluxRecon, partFluxSources, partArgoApps},
+	linePartState:       {partFluxRecon, partFluxSources, partArgoApps},
+}
+
+// commitStation commits a station's history partitions (note §5): each unit
+// kind's failing predicates, then its held predicate and state under the
+// last build's reference. Each partition is dated by its own inputs'
+// newest capture and broken only by the gaps its own inputs need; trig is
+// the accepted row set this commit follows (nil for a lifecycle change).
+func (s *LineService) commitStation(cluster string, st *lineStation, trig *rowTrigger) {
 	in, read, _ := s.input(st)
-	units, _ := line.Units(in)
-	at := latestEvaluated(st, s.d.Now())
 	attached := s.attached(st)
+	needed := neededByPartition(in)
+	kindsOK := func(kinds []string) bool {
+		for _, k := range kinds {
+			if r := in.KindRead[k]; r != line.ReadOK && r != line.KindAbsent {
+				return false
+			}
+		}
+		return true
+	}
+	gapped := func(kinds []string) bool {
+		for _, k := range kinds {
+			if st.gapKinds[k] {
+				return true
+			}
+		}
+		return false
+	}
+	evidence := func(part string, kinds []string, readable bool) histCommit {
+		c := histCommit{readable: readable, broken: st.allGap || gapped(kinds), at: evidenceAt(st, histInputs[part], s.d.Now())}
+		if trig != nil {
+			for _, p := range histInputs[part] {
+				if p == trig.part {
+					t := trig.at
+					c.trigger, c.part = &t, trig.part
+				}
+			}
+		}
+		return c
+	}
+	sl := line.Settle(in, read, s.lastKey, s.lastR)
 	preds := map[string]map[string]string{}
 	for _, p := range unitPartitions {
 		preds[p] = map[string]string{}
 	}
-	for _, u := range units {
+	for _, u := range sl.Units {
 		v := predOK
 		if u.Failing {
 			v = predFault
 		}
 		preds[unitPartitionOf(u)][unitPredKey(u)] = v
 	}
-	needed := neededByPartition(in)
-	anyBroken := st.allGap
+	var all []string
 	for _, p := range unitPartitions {
-		readable := attached
-		broken := st.allGap
-		for _, k := range needed[p] {
-			if r := in.KindRead[k]; r != line.ReadOK && r != line.KindAbsent {
-				readable = false
-			}
-			if st.gapKinds[k] {
-				broken = true
-			}
-		}
-		anyBroken = anyBroken || broken
-		s.hist.commitUnits(cluster, st.inc, p, preds[p], readable, broken, at)
+		s.hist.commit(cluster, st.inc, linePartUnits, p, preds[p], evidence(p, needed[p], attached && kindsOK(needed[p])))
+		all = append(all, needed[p]...)
 	}
-	held := false
-	if s.lastKey != nil && s.lastKey.Kind != line.KeyChartName && s.lastR != "" {
-		for _, u := range units {
-			if u.Key == *s.lastKey && u.Failing && u.Attempted != nil && revID(u.Attempted) == s.lastR {
-				held = true
-			}
-		}
+	// Held and state are relative to the last build's key and R.
+	s.hist.reference(cluster, st.inc, lineRef(s.lastKey, s.lastR), evidenceAt(st, histInputs[linePartState], s.d.Now()))
+	whole := attached && read == line.ReadOK
+	held := map[string]string{keyHeld: predOK}
+	if sl.Held {
+		held[keyHeld] = predHeld
 	}
-	s.hist.commitHeld(cluster, st.inc, held, lineRef(s.lastKey, s.lastR), attached && read == line.ReadOK, anyBroken, at)
+	s.hist.commit(cluster, st.inc, linePartHeld, lineTask, held, evidence(linePartHeld, all, whole))
+	s.hist.commit(cluster, st.inc, linePartState, lineTask, map[string]string{keyState: sl.State}, evidence(linePartState, all, whole))
 	st.allGap, st.gapKinds, st.histDirty = false, map[string]bool{}, false
 }
 
-// neededByPartition is each unit partition's input kinds (note §2.4): Git
-// units need their own kind and the source kinds they reference (every
-// Kustomization-capable source kind while their kind is unread); recorded-
-// name chart units and Argo applications need only their own kind.
+// neededByPartition is each unit partition's input kinds (note §2.4, §5): a
+// unit kind needs its own kind and the source kinds its failing predicate
+// reads - a Kustomization's or a HelmRelease's bound source, every source
+// kind it could reference while its kind is unread. A recorded-name chart
+// comparison never needs the source, but its failure does. Argo
+// applications need only their own kind.
 func neededByPartition(in line.StationInput) map[string][]string {
-	ks := []string{"kustomizations"}
-	seen := map[string]bool{}
-	add := func(k string) {
-		if k != "" && !seen[k] {
-			seen[k] = true
-			ks = append(ks, k)
+	needs := func(kind string, could []string, refs []string) []string {
+		out := []string{kind}
+		seen := map[string]bool{kind: true}
+		add := func(k string) {
+			if k != "" && !seen[k] {
+				seen[k] = true
+				out = append(out, k)
+			}
 		}
-	}
-	if r := in.KindRead["kustomizations"]; r != line.ReadOK && r != line.KindAbsent {
-		for _, k := range []string{"gitrepositories", "ocirepositories", "buckets"} {
+		if r := in.KindRead[kind]; r != line.ReadOK && r != line.KindAbsent {
+			for _, k := range could {
+				add(k)
+			}
+		}
+		for _, k := range refs {
 			add(k)
 		}
+		return out
 	}
-	srcKinds := map[string]string{"GitRepository": "gitrepositories", "OCIRepository": "ocirepositories", "Bucket": "buckets"}
+	srcKinds := map[string]string{"GitRepository": "gitrepositories", "OCIRepository": "ocirepositories", "Bucket": "buckets",
+		"HelmRepository": "helmrepositories", "HelmChart": "helmcharts"}
+	var ksRefs, hrRefs []string
 	for _, o := range in.Kustomizations {
-		add(srcKinds[o.Data.SourceKind])
+		ksRefs = append(ksRefs, srcKinds[o.Data.SourceKind])
+	}
+	for _, o := range in.HelmReleases {
+		hrRefs = append(hrRefs, srcKinds[o.Data.SourceKind])
 	}
 	return map[string][]string{
-		unitsKustomizations: ks,
-		unitsHelmReleases:   {"helmreleases"},
+		unitsKustomizations: needs("kustomizations", []string{"gitrepositories", "ocirepositories", "buckets"}, ksRefs),
+		unitsHelmReleases:   needs("helmreleases", []string{"helmrepositories", "gitrepositories", "buckets", "ocirepositories", "helmcharts"}, hrRefs),
 		unitsApplications:   {"applications"},
 	}
 }
 
-func lineRef(k *line.Key, r string) string {
-	if k == nil {
-		return ""
-	}
-	return k.String() + "@" + r
-}
-
-// latestEvaluated is the newest capture time among a station's line parts:
-// the evidence time of a history commit (never the worker's clock, unless
-// the station holds no rows yet).
-func latestEvaluated(st *lineStation, fallback time.Time) time.Time {
+// evidenceAt is the newest capture among the given parts: a partition's
+// evidence time (the worker's clock only while it holds none of them).
+func evidenceAt(st *lineStation, parts []string, fallback time.Time) time.Time {
 	var out time.Time
-	for _, r := range st.rows {
-		if r.EvaluatedAt.After(out) {
+	for _, p := range parts {
+		if r, ok := st.rows[p]; ok && r.EvaluatedAt.After(out) {
 			out = r.EvaluatedAt
 		}
 	}
@@ -846,6 +921,13 @@ func latestEvaluated(st *lineStation, fallback time.Time) time.Time {
 		return fallback
 	}
 	return out
+}
+
+func lineRef(k *line.Key, r string) string {
+	if k == nil {
+		return ""
+	}
+	return k.String() + "@" + r
 }
 
 // oldestEvaluated is the oldest evaluation time among a station's line parts.

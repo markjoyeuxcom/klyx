@@ -302,40 +302,59 @@ func chooseR(sls []StationLine, key *Key) (string, int, bool) {
 	return best, n, tie && n > 0
 }
 
-// finish settles matches/differs against R, held, values-differ and the
-// headline counts.
-func finish(sl *StationLine, l *Line) {
-	if sl.State == StateMatches && sl.Single != l.R {
+// Settle computes one station against a given key and comparison revision
+// R: its units, facts, state and held, as Build would with that reference.
+// The line's own history commits a station's state on every accepted change
+// against the last build's reference (slice 3 note §5).
+func Settle(in StationInput, read string, key *Key, r string) StationLine {
+	sl := StationLine{Placed: Placed{Station: in.Station}, Read: read}
+	sl.Units, sl.Excluded = Units(in)
+	facts(&sl, key)
+	settle(&sl, key, r, "")
+	return sl
+}
+
+// settle settles matches/differs against R, held and values-differ (rd: the
+// configDigest most stations at R carry, or "").
+func settle(sl *StationLine, key *Key, r, rd string) {
+	if sl.State == StateMatches && sl.Single != r {
 		sl.State = StateDiffers
 	}
-	if l.R == "" && sl.State == StateMatches {
+	if r == "" && sl.State == StateMatches {
 		sl.State = StateDiffers // no comparison revision: nothing is lit
 	}
-	if l.Key != nil && l.R != "" {
-		var rDigest string
-		for _, u := range sl.Units {
-			if u.Key != *l.Key {
-				continue
-			}
-			// Held needs evidence tied to R: an eligible unit attempted R and
-			// is failing (§3.3). An unrelated failure stays "differs". Never
-			// for a recorded-name chart: a historical failed attempt plus a
-			// current failure does not prove the current rollout is held.
-			if l.Key.Kind != KeyChartName && u.Failing && u.Attempted != nil && u.Attempted.id() == l.R {
-				sl.Held, sl.HeldWhy = true, "attempted "+l.R+", failing"
-			}
-			if u.Applied != nil && u.Applied.id() == l.R && u.Applied.Digest != "" {
-				if rDigest == "" {
-					rDigest = u.Applied.Digest
-				} else if rDigest != u.Applied.Digest {
-					sl.Flags.ValuesDiffer = true
-				}
-			}
+	if key == nil || r == "" {
+		return
+	}
+	var rDigest string
+	for _, u := range sl.Units {
+		if u.Key != *key {
+			continue
 		}
-		if rd := l.rDigest(); rDigest != "" && rd != "" && rDigest != rd {
-			sl.Flags.ValuesDiffer = true
+		// Held needs evidence tied to R: an eligible unit attempted R and
+		// is failing (§3.3). An unrelated failure stays "differs". Never
+		// for a recorded-name chart: a historical failed attempt plus a
+		// current failure does not prove the current rollout is held.
+		if key.Kind != KeyChartName && u.Failing && u.Attempted != nil && u.Attempted.id() == r {
+			sl.Held, sl.HeldWhy = true, "attempted "+r+", failing"
+		}
+		if u.Applied != nil && u.Applied.id() == r && u.Applied.Digest != "" {
+			if rDigest == "" {
+				rDigest = u.Applied.Digest
+			} else if rDigest != u.Applied.Digest {
+				sl.Flags.ValuesDiffer = true
+			}
 		}
 	}
+	if rDigest != "" && rd != "" && rDigest != rd {
+		sl.Flags.ValuesDiffer = true
+	}
+}
+
+// finish settles a station against the line's R and adds it to the
+// headline counts.
+func finish(sl *StationLine, l *Line) {
+	settle(sl, l.Key, l.R, l.rDigest())
 	switch sl.State {
 	case StateMatches:
 		l.Applied++

@@ -15,27 +15,34 @@ import (
 // predicates as batches into the observation log under Task "line", sharing
 // its bounds, wording and incarnation fence.
 //
-//   - Each unit's failing predicate is committed on every accepted change -
-//     each drain or bootstrap result that touches the station - never only
-//     when the presentation recomputes, so coalescing cannot hide a flip.
-//     Units are partitioned by kind (Kustomizations, HelmReleases, Argo
-//     applications): a gap breaks only the partitions whose inputs need the
-//     gapped kind.
-//   - The held predicate (tied to the key and R) is committed when the line
-//     recomputes, and ends on a reference change.
-//
-// Evidence times are the rows' capture times, never the worker's clock, and
-// only a real change commits: a quiet recompute never advances a proof's
-// lower bound. A break - unreadable inputs, a gap, overwritten rows, a lost
-// connection - is a loss; read again, it is re-baselined at once (loss and
-// after-gap in one commit), so no proof outlives it.
+//   - Partitions: each unit kind's failing predicates (Kustomizations,
+//     HelmReleases, Argo applications), the station's held predicate and
+//     its state. Each partition reads its own input parts and kinds; a gap
+//     breaks only the partitions whose inputs need the gapped kind.
+//   - Commits follow every accepted change, one row set at a time in
+//     capture order, never the presentation's coalesced recompute.
+//   - Evidence times are capture times: a partition's commit is dated by
+//     the newest capture among its own input parts, never an unrelated
+//     part's or the worker's clock, and only a real change commits, so a
+//     quiet commit never advances a proof's lower bound. Evidence captured
+//     before a partition's last change but arriving after it shows that
+//     change came from superseded inputs: a break.
+//   - A break - unreadable inputs, a gap, overwritten rows, a lost
+//     connection, out-of-order evidence - is a loss; read again, the
+//     partition is re-baselined at once (loss and after-gap in one commit),
+//     so no proof outlives it.
+//   - Held and state are tied to the build's reference (key and R): a
+//     reference change ends their proofs ("reference changed") and they are
+//     baselined afresh under the new reference.
 
 const (
 	lineTask      = "line"
 	linePartUnits = "units"
 	linePartHeld  = "held"
+	linePartState = "state"
 	lineMode      = "line"
 	keyHeld       = "line/held"
+	keyState      = "line/state"
 	predFault     = "fault"
 	predOK        = "ok"
 	predHeld      = "held"
@@ -65,17 +72,26 @@ func unitPredKey(u line.Unit) string {
 }
 
 type histPartition struct {
-	prev   map[string]string
-	live   bool
-	seen   bool
-	lastAt time.Time // the capture time of the last commit
+	prev     map[string]string
+	live     bool
+	seen     bool
+	lastAt   time.Time // the evidence time of the last real change
+	lastPart string    // the input part whose row set made it ("" for a lifecycle commit)
 }
 
 type histStation struct {
 	inc   uint64
-	units map[string]*histPartition
-	held  histPartition
-	ref   string
+	parts map[string]*histPartition // by part/source
+	ref   string                    // the reference held and state are under
+}
+
+// histCommit is one partition commit's evidence.
+type histCommit struct {
+	readable bool       // every input kind is read
+	broken   bool       // continuity broke since the last commit
+	at       time.Time  // the newest capture among the partition's input parts
+	trigger  *time.Time // the capture time of the row set that prompted it, when an input
+	part     string     // that row set's part
 }
 
 type lineHistory struct {
@@ -90,53 +106,65 @@ func newLineHistory(log *obslog.Log) *lineHistory {
 func (h *lineHistory) station(cluster string, inc uint64) *histStation {
 	hs := h.st[cluster]
 	if hs == nil || hs.inc != inc {
-		hs = &histStation{inc: inc, units: map[string]*histPartition{}}
+		hs = &histStation{inc: inc, parts: map[string]*histPartition{}}
 		h.st[cluster] = hs
 	}
 	return hs
 }
 
-// committed reports whether a station's unit history has its baseline.
+// committed reports whether a station's history has its baseline.
 func (h *lineHistory) committed(cluster string, inc uint64) bool {
 	hs := h.st[cluster]
-	return hs != nil && hs.inc == inc && len(hs.units) > 0
+	return hs != nil && hs.inc == inc && len(hs.parts) > 0
 }
 
-// commitUnits records one unit partition's failing predicates.
-func (h *lineHistory) commitUnits(cluster string, inc uint64, part string, preds map[string]string, readable, broken bool, at time.Time) {
+// commit records one partition's predicates.
+func (h *lineHistory) commit(cluster string, inc uint64, part, source string, preds map[string]string, c histCommit) {
 	hs := h.station(cluster, inc)
-	hp := hs.units[part]
+	k := part + "/" + source
+	hp := hs.parts[k]
 	if hp == nil {
 		hp = &histPartition{}
-		hs.units[part] = hp
+		hs.parts[k] = hp
 	}
-	h.step(cluster, inc, linePartUnits, part, hp, preds, readable, broken, at)
+	h.step(cluster, inc, part, source, hp, preds, c)
 }
 
-// commitHeld records the station's held predicate under the reference ref.
-// A reference change ends every held proof: held is tied to R.
-func (h *lineHistory) commitHeld(cluster string, inc uint64, held bool, ref string, readable, broken bool, at time.Time) {
+// reference records the reference a station's held and state are under. A
+// change ends their proofs: both are tied to the key and R.
+func (h *lineHistory) reference(cluster string, inc uint64, ref string, at time.Time) {
 	hs := h.station(cluster, inc)
-	if hs.held.live && ref != hs.ref {
-		h.apply(observe.TransitionBatch{Cluster: cluster, Incarnation: inc, Task: lineTask, Part: linePartHeld, Source: lineTask,
-			Mode: lineMode, Kind: observe.BatchLoss, At: at, Loss: &observe.Loss{Reason: "reference changed"}})
-		hs.held = histPartition{}
+	if ref == hs.ref {
+		return
+	}
+	for _, part := range []string{linePartHeld, linePartState} {
+		k := part + "/" + lineTask
+		if hp := hs.parts[k]; hp != nil && hp.live {
+			when := at
+			if when.Before(hp.lastAt) {
+				when = hp.lastAt
+			}
+			h.apply(observe.TransitionBatch{Cluster: cluster, Incarnation: inc, Task: lineTask, Part: part, Source: lineTask,
+				Mode: lineMode, Kind: observe.BatchLoss, At: when, Loss: &observe.Loss{Reason: "reference changed"}})
+		}
+		delete(hs.parts, k) // baselined afresh under the new reference
 	}
 	hs.ref = ref
-	v := map[string]string{keyHeld: predOK}
-	if held {
-		v[keyHeld] = predHeld
-	}
-	h.step(cluster, inc, linePartHeld, lineTask, &hs.held, v, readable, broken, at)
 }
 
-// step commits one partition at the capture time at.
-func (h *lineHistory) step(cluster string, inc uint64, part, source string, hp *histPartition, cur map[string]string, readable, broken bool, at time.Time) {
+// step commits one partition.
+func (h *lineHistory) step(cluster string, inc uint64, part, source string, hp *histPartition, cur map[string]string, c histCommit) {
+	at := c.at
 	if at.Before(hp.lastAt) {
-		at = hp.lastAt // capture times only move forward
+		at = hp.lastAt // evidence times only move forward
 	}
+	// Evidence captured before the last change, arriving after it, shows
+	// that change was computed from superseded inputs; another part captured
+	// at the same instant has no order against it. Either way continuity is
+	// unproven.
+	broken := c.broken || (c.trigger != nil && (c.trigger.Before(hp.lastAt) || (c.trigger.Equal(hp.lastAt) && c.part != hp.lastPart)))
 	b := observe.TransitionBatch{Cluster: cluster, Incarnation: inc, Task: lineTask, Part: part, Source: source, Mode: lineMode, At: at}
-	if hp.live && (!readable || broken) {
+	if hp.live && (!c.readable || broken) {
 		loss := b
 		loss.Kind, loss.Loss = observe.BatchLoss, &observe.Loss{Reason: observe.LossCoverage}
 		prev := hp.lastAt
@@ -144,7 +172,7 @@ func (h *lineHistory) step(cluster string, inc uint64, part, source string, hp *
 		h.apply(loss)
 		hp.live = false
 	}
-	if !readable {
+	if !c.readable {
 		return
 	}
 	switch {
@@ -165,7 +193,10 @@ func (h *lineHistory) step(cluster string, inc uint64, part, source string, hp *
 		return
 	}
 	h.apply(b)
-	hp.prev, hp.live, hp.seen, hp.lastAt = cur, true, true, at
+	hp.prev, hp.live, hp.seen, hp.lastAt, hp.lastPart = cur, true, true, at, ""
+	if c.trigger != nil {
+		hp.lastPart = c.part
+	}
 }
 
 func (h *lineHistory) apply(b observe.TransitionBatch) {
@@ -227,6 +258,11 @@ func (h *lineHistory) proof(cluster, key string) *LineProofDTO {
 		return nil
 	}
 	d := &LineProofDTO{Basis: p.Basis, AfterGap: p.AfterGap}
+	if p.Suspended {
+		// A loss holds: the start is no longer proven to continue.
+		fs := p.FirstSeen
+		return &LineProofDTO{Basis: obslog.ProofUnknown, FirstSeen: &fs, AfterGap: true}
+	}
 	switch p.Basis {
 	case obslog.ProofRule, obslog.ProofObserved, obslog.ProofSampled:
 		d.Since, d.NotBefore = copyTimePtr(p.Since), copyTimePtr(p.NotBefore)

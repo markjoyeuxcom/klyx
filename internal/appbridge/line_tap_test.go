@@ -119,7 +119,16 @@ func failing(v bool) map[string]string {
 }
 
 func unitsAt(h *lineHistory, fault bool, min int, readable, broken bool) {
-	h.commitUnits("c1", 1, unitsKustomizations, failing(fault), readable, broken, at0(min))
+	h.commit("c1", 1, linePartUnits, unitsKustomizations, failing(fault), histCommit{readable: readable, broken: broken, at: at0(min)})
+}
+
+func heldAt(h *lineHistory, held bool, ref string, min int) {
+	h.reference("c1", 1, ref, at0(min))
+	v := map[string]string{keyHeld: predOK}
+	if held {
+		v[keyHeld] = predHeld
+	}
+	h.commit("c1", 1, linePartHeld, lineTask, v, histCommit{readable: true, at: at0(min)})
 }
 
 func TestLineHistoryObservedFailureAndFirstSight(t *testing.T) {
@@ -168,14 +177,55 @@ func TestLineHistoryBreaksReBaselineAtOnce(t *testing.T) {
 
 func TestLineHistoryHeldEndsOnAReferenceChange(t *testing.T) {
 	h := newLineHistory(obslog.New())
-	h.commitHeld("c1", 1, false, "a", true, false, at0(0))
-	h.commitHeld("c1", 1, true, "a", true, false, at0(2))
+	heldAt(h, false, "a", 0)
+	heldAt(h, true, "a", 2)
 	if p := h.proof("c1", keyHeld); p == nil || p.Basis != obslog.ProofObserved || !p.Since.Equal(at0(2)) {
 		t.Fatalf("held: %+v", p)
 	}
-	h.commitHeld("c1", 1, true, "b", true, false, at0(4)) // R changed
+	heldAt(h, true, "b", 4) // R changed
 	if p := h.proof("c1", keyHeld); p == nil || p.Basis != obslog.ProofUnknown || !p.FirstSeen.Equal(at0(4)) {
 		t.Fatalf("a held proof ends with its R: %+v", p)
+	}
+}
+
+// Review of bd385e7: the station state is a line predicate too, tied to the
+// reference like held.
+func TestLineHistoryStateEndsOnAReferenceChange(t *testing.T) {
+	h := newLineHistory(obslog.New())
+	state := func(v, ref string, min int) {
+		h.reference("c1", 1, ref, at0(min))
+		h.commit("c1", 1, linePartState, lineTask, map[string]string{keyState: v}, histCommit{readable: true, at: at0(min)})
+	}
+	state(line.StateMatches, "a", 0)
+	state(line.StateDiffers, "a", 3)
+	if p := h.proof("c1", keyState); p == nil || p.Basis != obslog.ProofObserved || !p.Since.Equal(at0(3)) {
+		t.Fatalf("state change observed: %+v", p)
+	}
+	state(line.StateDiffers, "b", 5)
+	if p := h.proof("c1", keyState); p == nil || p.Basis != obslog.ProofUnknown {
+		t.Fatalf("a reference change re-baselines the state: %+v", p)
+	}
+}
+
+// Review of bd385e7: evidence captured before a partition's last change but
+// delivered after it shows that change came from superseded inputs.
+func TestLineHistoryOutOfOrderEvidenceBreaks(t *testing.T) {
+	h := newLineHistory(obslog.New())
+	unitsAt(h, false, 0, true, false)
+	unitsAt(h, true, 5, true, false)
+	late := at0(3)
+	h.commit("c1", 1, linePartUnits, unitsKustomizations, failing(true), histCommit{readable: true, at: at0(5), trigger: &late})
+	if p := h.proof("c1", u1); p == nil || p.Basis != obslog.ProofUnknown || !p.AfterGap {
+		t.Fatalf("a 09:03 capture after the 09:05 change re-baselines: %+v", p)
+	}
+	// Two parts captured at the same instant have no order between them.
+	h = newLineHistory(obslog.New())
+	unitsAt(h, false, 0, true, false)
+	t5 := at0(5)
+	h.commit("c1", 1, linePartUnits, unitsKustomizations, failing(true), histCommit{readable: true, at: t5, trigger: &t5, part: "flux/sources"})
+	h.commit("c1", 1, linePartUnits, unitsKustomizations, failing(true), histCommit{readable: true, at: t5, trigger: &t5, part: "flux/reconciliations"})
+	if p := h.proof("c1", u1); p == nil || p.Basis != obslog.ProofUnknown {
+		t.Fatalf("simultaneous captures of two parts re-baseline: %+v", p)
 	}
 }
 
@@ -188,7 +238,7 @@ func TestLineHistoryIsFencedByIncarnation(t *testing.T) {
 	if p := h.proof("c1", u1); p != nil {
 		t.Fatalf("a newer incarnation ends the old line proofs: %+v", p)
 	}
-	h.commitUnits("c1", 2, unitsKustomizations, failing(true), true, false, at0(7))
+	h.commit("c1", 2, linePartUnits, unitsKustomizations, failing(true), histCommit{readable: true, at: at0(7)})
 	if p := h.proof("c1", u1); p == nil || p.Basis != obslog.ProofUnknown {
 		t.Fatalf("a new incarnation re-baselines: %+v", p)
 	}
