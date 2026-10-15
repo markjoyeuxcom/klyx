@@ -41,6 +41,13 @@ Each is Codex-reviewed on its own, in this order.
   - **Bounds:** at most 200 references per call, 8 at a time, 10s for the whole call.
 - **The binding:** a bound batch method returning one result per reference. Slice 8's dependency graph calls it for its nodes and their supply objects.
 
+### 2.1 As built in 7a
+
+- **The reader** is `internal/lastwrite` (`Read` gives `Last` and `LastSpec`).
+- **The read** is `ClusterConn.ObjectWrites`, on the fleet `Conn` interface. The resource comes from the cached discovery's group-version list: a top-level resource of that kind, never a subresource. An empty version takes the group's preferred one.
+- **The binding** is `ObjectWritesService.ObjectWrites(cluster, refs)`, with `bridge/writes.ts` for slice 8. A refused batch (over 200) is an error for the whole call; every other failure is per reference.
+- **Live:** `TestLabObjectWrites` reads the kind lab, read-only.
+
 ## 3. 7b: rule fingerprints and proven intervals
 
 - **The fingerprint** of a rule index is a hash (sha256, hex) of its matches and its backends with their weights, in rule order:

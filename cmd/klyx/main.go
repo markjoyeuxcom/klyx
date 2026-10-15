@@ -253,6 +253,15 @@ func main() {
 		OnLine:   appbridge.GitLineSink(gitSvc),
 	})
 
+	// The Line slice 7a: each object's last recorded managed-field update.
+	writesSvc := appbridge.NewObjectWritesService(func(name string) (appbridge.ObjectWritesConn, bool) {
+		c, ok := reg.Conn(name)
+		if !ok {
+			return nil, false
+		}
+		return c, true
+	})
+
 	metricsSvc := appbridge.NewMetricsService(func(name string) (appbridge.MetricsConn, bool) {
 		c, ok := reg.Conn(name)
 		if !ok {
@@ -500,6 +509,7 @@ func main() {
 			application.NewService(meshSvc),
 			application.NewService(lineSvc),
 			application.NewService(gitSvc),
+			application.NewService(writesSvc),
 			application.NewService(metricsSvc),
 			application.NewService(workloadsSvc),
 			application.NewService(podsSvc),

@@ -24,6 +24,7 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/cache"
 
+	"github.com/moomora/klyx/internal/cachediff"
 	"github.com/moomora/klyx/internal/capability"
 	"github.com/moomora/klyx/internal/certmanager"
 	"github.com/moomora/klyx/internal/clock"
@@ -32,7 +33,6 @@ import (
 	"github.com/moomora/klyx/internal/config"
 	"github.com/moomora/klyx/internal/crd"
 	"github.com/moomora/klyx/internal/execenv"
-	"github.com/moomora/klyx/internal/cachediff"
 	"github.com/moomora/klyx/internal/fluxcli"
 	"github.com/moomora/klyx/internal/gitops/argo"
 	"github.com/moomora/klyx/internal/gwapi"
@@ -57,6 +57,9 @@ type Conn interface {
 	FluxAvailable() bool
 	FluxDiffKustomization(ctx context.Context, ns, name, path string) (fluxcli.DiffResult, error)
 	ServerSideDiff(ctx context.Context, objs []*unstructured.Unstructured, inventory []string, prune bool) ([]cachediff.Change, error)
+	// ObjectWrites reads each object's last recorded managed-field update
+	// (The Line slice 7a): metadata only, UID-pinned.
+	ObjectWrites(ctx context.Context, refs []ObjectRef) ([]WriteResult, error)
 	Reconcile(ctx context.Context, kind, ns, name, uid string) error
 	ReconcileWithSource(ctx context.Context, kind, ns, name, uid string) error
 	SetSuspend(ctx context.Context, kind, ns, name, uid string, suspend bool) error

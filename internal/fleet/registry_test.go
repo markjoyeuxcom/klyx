@@ -50,7 +50,9 @@ func (f *fakeConn) GetCertificateChain(ctx context.Context, ns, name string) (ce
 func (f *fakeConn) FluxEvents(ctx context.Context, kind, ns, name string) ([]workloads.EventSummary, error) {
 	return nil, nil
 }
-func (f *fakeConn) FluxAvailable() bool { return false }
+func (f *fakeConn) FluxAvailable() bool                                              { return false }
+func (f *fakeConn) ObjectWrites(context.Context, []ObjectRef) ([]WriteResult, error) { return nil, nil }
+
 func (f *fakeConn) ServerSideDiff(context.Context, []*unstructured.Unstructured, []string, bool) ([]cachediff.Change, error) {
 	return nil, nil
 }
