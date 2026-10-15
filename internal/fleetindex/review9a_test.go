@@ -412,3 +412,59 @@ func TestReaderFollowsCARotation(t *testing.T) {
 		t.Fatal("an oversized header passed the rotated transport")
 	}
 }
+
+// Re-review of 312db52: the holder's roots and committed bytes come from one
+// read - a client-go transport cached with an older CA, while the file
+// already holds the new one, never leaves the reader trusting the old.
+func TestReaderTrustsTheCAFileItRead(t *testing.T) {
+	defer func(d time.Duration) { caRefresh = d }(caRefresh)
+	certA, keyA, _ := certutil.GenerateSelfSignedCertKey("127.0.0.1", nil, nil)
+	certB, keyB, _ := certutil.GenerateSelfSignedCertKey("127.0.0.1", nil, nil)
+	pairA, _ := tls.X509KeyPair(certA, keyA)
+	pairB, _ := tls.X509KeyPair(certB, keyB)
+	var current atomic.Pointer[tls.Certificate]
+	current.Store(&pairA)
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"kind":"PartialObjectMetadataList","metadata":{"resourceVersion":"1"},"items":[]}`)
+	}))
+	srv.Config.ErrorLog = log.New(io.Discard, "", 0)
+	srv.TLS = &tls.Config{GetConfigForClient: func(*tls.ClientHelloInfo) (*tls.Config, error) {
+		return &tls.Config{Certificates: []tls.Certificate{*current.Load()}}, nil
+	}}
+	srv.StartTLS()
+	defer srv.Close()
+	caFile := filepath.Join(t.TempDir(), "ca.pem")
+	if err := os.WriteFile(caFile, certA, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rc := &rest.Config{Host: srv.URL, TLSClientConfig: rest.TLSClientConfig{CAFile: caFile, NextProtos: []string{"http/1.1"}}}
+	// client-go caches a transport trusting A ...
+	warm, err := rest.HTTPClientFor(rc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp, err := warm.Get(srv.URL); err != nil {
+		t.Fatal(err)
+	} else {
+		_ = resp.Body.Close()
+	}
+	// ... then the file and the server move to B before the reader is built
+	if err := os.WriteFile(caFile, certB, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	current.Store(&pairB)
+	for _, refresh := range []time.Duration{time.Hour, 0} {
+		caRefresh = refresh
+		rd, err := NewReader(rc)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i := 0; i < 2; i++ {
+			if _, _, err := rd.ListPage(context.Background(), cmGVR, "", func(Source) error { return nil }); err != nil {
+				t.Fatalf("refresh %v, list %d: %v", refresh, i, err)
+			}
+		}
+	}
+	runtime.KeepAlive(warm)
+}

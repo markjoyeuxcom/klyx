@@ -33,9 +33,21 @@ type caHolder struct {
 
 var _ utilnet.RoundTripperWrapper = &caHolder{}
 
+// newCAHolder takes the roots and their committed bytes from one read of
+// the CA file: client-go's cached transport is keyed by the file's path and
+// may still trust an older CA than the file now holds (re-review of
+// 312db52). Unreadable or unparseable at start, it keeps client-go's roots
+// with no committed bytes, so the first request re-reads the file. t is the
+// index's own clone, its TLS config a clone too.
 func newCAHolder(caFile string, t *http.Transport) *caHolder {
-	data, _ := os.ReadFile(caFile) // what client-go loaded at start; a mismatch only reloads early
-	return &caHolder{caFile: caFile, transport: t, caData: data, checked: time.Now()}
+	h := &caHolder{caFile: caFile, transport: t}
+	if data, err := os.ReadFile(caFile); err == nil && len(data) > 0 {
+		if pool, err := rootPool(data); err == nil {
+			t.TLSClientConfig.RootCAs = pool
+			h.caData, h.checked = data, time.Now()
+		}
+	}
+	return h
 }
 
 func (h *caHolder) RoundTrip(req *http.Request) (*http.Response, error) {
