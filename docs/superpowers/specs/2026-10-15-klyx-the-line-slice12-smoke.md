@@ -163,6 +163,29 @@ Review findings answered: the single-instance lock (§3.1), bounded progress and
   - **Frontend:** the handshake in both orders and never without the signal; the bounded wait; unmeasurable geometry; the tokens; a face that does not load; the verdict; every registry destination stepped; a run with nothing laid out reporting a non-pass.
 - **A trial run** found that a row picked up before its page had mounted measured 0×0. The step now waits for the page, then for a row with a measurable box.
 
+### 7.1 Review of 4ef8c0b
+
+Codex requested changes. Each is answered below, and the runs in §8 were repeated afterwards.
+- **A destination's page is proven,** never assumed:
+  - **Its title:** each task's own title (`TITLES`); a kind shortcut such as Deployments shows its owning lens's title; a raw kind shows the kind.
+  - **Settled:** the body leaves loading.
+  - **Measurable:** the body has a size.
+  - **Recorded:** the title and rows.
+  - A wrong header, or a body that never leaves loading, fails (the review's probe is ported).
+- **The native walk covers the planned flows,** through DOM events and the store, never OS keys:
+  - the queue's three filters, the Ledger and Horizon, and a queue row opening its object pinned (no `data-pinned-gone`);
+  - the station page's two verdict lines and queue;
+  - the four drawings, each asserted as drawn: the dependency graph, the issuance chain's rail, the ExternalSecret chain's rail and the data path;
+  - the console: focus in it on open, a fleet search with hits, verbs only, open beside (aside, the inspector opened, focus kept in the console, not opened as gone), and Escape focusing the inspector's identity;
+  - Settings' Appearance, Git and Notifications;
+  - the chat drawer, opened and closed without a question.
+- **A null or non-object report is incomplete.**
+- **Two product defects** were found by the smoke and fixed on their own:
+  - **d1f9f31:** `servedGVR` inserted a probed version into a spec that already named one, so Gateway API's Services and EndpointSlices were served as `v1/v1/services` and an indexed Service opened as removed.
+  - **bdeb16a:** at a narrow width, opening an object beside from the console opened the inspector as a drawer whose open effect took focus from the still-open console. The drawer now takes focus only when the console is not open.
+- **A lab fixture** gives the issuance chain something to draw: `<scratchpad>/smoke/lab-chain.yaml`, one CertificateRequest owned by the Issuing certificate on `kind-klyx` only, labelled `klyx.dev/lab=smoke` for removal.
+- **The eyeball checklist** stays on `kind-klyx`, with named lab objects and the right actions (`set image`, not scale).
+
 ## 8. The runs (2026-10-15, kind lab)
 
 - **12a, Go lab tests:**
@@ -173,17 +196,12 @@ Review findings answered: the single-instance lock (§3.1), bounded progress and
   - `klyx-parity.sh up` took 40s.
   - `TestParityGate` passed in 80.7s (run `ddaa4964ff399cd3`, commit `9c72ca5`, clean, capability re-probe 10s).
   - The frontend stage passed 2/2 on that output, then `down`.
-- **12a, the walk** (`pw/s12.mjs`, server-mode Klyx on the lab fleet config): night and day at 1440×900 pass 35/35; at 1024×768, 36/36 (the drawer's Escape step runs only narrow).
-  - **Steps:** the fleet board, its three queue filters and its aside; the station page and its queue opening a row pinned; every lens; the four drawings; the console's search, verbs only, open beside and Escape; Escape over a drawer; Settings; the chat drawer opened without a question.
-  - **One script correction:** at the narrow width the modal drawer covers the list, so the walk closes it before acting on the list, as a person would.
-- **12b, the native smoke:** `KlyxSmoke.app` built at clean commit `4ef8c0b` from fresh assets (hash recorded in each report), hidden window. Night and day at 1440×900 and 1024×768 all `pass`, 97/97 steps:
-  - the tokens;
-  - the web platform;
-  - all seven font faces loaded;
-  - the lab connecting;
-  - the fleet board;
-  - every registry destination;
-  - the inspector split at 1440 and a drawer at 1024, with focus inside it.
+- **12a, the walk** (`pw/s12.mjs`, server-mode Klyx at `bdeb16a` on the lab fleet config): night and day at 1440×900 pass 35/35; at 1024×768, 36/36.
+  - Each lens is asserted by its own title, settled.
+  - The two chains and the data path are asserted as drawn.
+  - The console's beside step keeps focus in the console and does not open as gone. It opens the Service `shop/web`, which the GVR defect had opened as removed.
+  - The station page waits, within a bound, for a just-connected cluster's summary to arrive.
+- **12b, the native smoke:** `KlyxSmoke.app` built at clean commit `bdeb16a` from fresh assets (hash recorded in each report), hidden window. Night and day at 1440×900 and 1024×768 all `pass`, 113/113 steps, with the inspector split at 1440 and a drawer at 1024.
 
   The installed Klyx (`/Applications/klyx.app`) held the ordinary `com.moomora.klyx` lock throughout, observed read-only with `lsof`, so the separate identity is proven in use. The owner's app and data were not touched.
 - **12c:** `docs/eyeball-checklist-2026-10-15-the-line.md`.
