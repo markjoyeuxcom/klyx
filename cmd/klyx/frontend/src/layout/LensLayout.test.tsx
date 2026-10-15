@@ -63,6 +63,23 @@ describe("LensLayout drawer is a modal dialog", () => {
     expect(document.activeElement).toBe(row);
   });
 
+  it("a drawer opened beside the open console leaves focus in the console", () => {
+    const console = document.createElement("div");
+    console.setAttribute("data-testid", "command-palette");
+    const input = document.createElement("input");
+    console.appendChild(input);
+    document.body.appendChild(console);
+    try {
+      const { rerender, getByRole } = render(<Harness open={false} onClose={() => {}} />);
+      input.focus();
+      rerender(<Harness open onClose={() => {}} />);
+      expect(getByRole("dialog")).toBeTruthy();
+      expect(document.activeElement).toBe(input);
+    } finally {
+      console.remove();
+    }
+  });
+
   it("Tab cycles inside the drawer", () => {
     const { getByText } = render(<Harness open onClose={() => {}} />);
     const only = getByText("inspector action");

@@ -140,7 +140,10 @@ export function LensLayout({
     const aside = asideRef.current;
     returnFocus.current = document.activeElement as HTMLElement | null;
     main?.setAttribute("inert", "");
-    (focusables(aside)[0] ?? aside)?.focus();
+    // The command console, open over a drawer it opened beside, keeps focus:
+    // the drawer takes it only when nothing above it holds it. The console's
+    // own close then focuses the inspector (The Line slice 12 smoke).
+    if (!document.querySelector('[data-testid="command-palette"]')) (focusables(aside)[0] ?? aside)?.focus();
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape" && !e.defaultPrevented) { onCloseInspector?.(); return; }
       if (e.key !== "Tab" || !aside) return;

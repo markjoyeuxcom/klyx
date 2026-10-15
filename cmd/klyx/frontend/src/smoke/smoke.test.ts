@@ -133,6 +133,12 @@ describe("a destination's page", () => {
     await expect(page(pods(), "lab")).resolves.toEqual({ title: "Pods", rows: 1 });
   });
 
+  it("a kind shortcut shows the page of the task that owns its section", async () => {
+    document.body.innerHTML = '<div class="lens-header"><h1>Workloads</h1></div><div class="lens-body"></div>';
+    const deployments = destinations().find((x) => x.d.id === "workloads:Deployment")!.d;
+    await expect(page(deployments, "lab")).resolves.toMatchObject({ title: "Workloads" });
+  });
+
   it("a wrong header, or a body that never leaves loading, fails", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {

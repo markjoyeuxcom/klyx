@@ -146,8 +146,11 @@ async function closeDrawer(): Promise<void> {
 // out of loading, with a measurable body - and what it showed.
 export async function page(d: Destination, cluster: string): Promise<Record<string, unknown>> {
   const t = d.target;
-  const want = d.type === "task" ? TITLES[d.id] : undefined;
-  if (d.type === "task" && want === undefined) throw new Error(`no expected title for ${d.id}`);
+  // a section target - a task, or a kind shortcut such as Deployments into
+  // the Workloads lens - shows the page of the task that owns its section
+  const owner = t.kind === "section" ? (d.type === "task" ? d : destinations().find((x) => x.d.type === "task" && x.d.target.kind === "section" && x.d.target.section === t.section)?.d) : undefined;
+  const want = owner ? TITLES[owner.id] : undefined;
+  if (t.kind === "section" && want === undefined) throw new Error(`no expected title for ${d.id}`);
   const expected = typeof want === "function" ? want(cluster) : want;
   await within(8000, `${d.label}'s page`, () => header() && (t.kind === "resource" ? title().includes(t.ref.kind) || header()?.textContent?.includes(t.ref.kind) : title() === expected));
   await within(15000, `${d.label} to settle`, () => !loading());
@@ -231,8 +234,11 @@ export async function walk(settings: SmokeSettings): Promise<Step[]> {
     await open("gateway");
     await closeDrawer();
     (await within(4000, "the Routes view", () => byText(".lens-controls button", /^Routes/))).click();
-    (await within(8000, "a route row", () => $<HTMLElement>(".lens-row"))).click();
-    (await within(8000, "Open topology", () => byText("button", /^Open topology/))).click();
+    // the routes list, not the Gateways list still on screen
+    await within(8000, "the HTTPRoutes page", () => title() === "HTTPRoutes" && !loading());
+    if (!$("[data-testid='route-row-panel']")) (await within(8000, "a route row", () => $<HTMLElement>(".lens-row"))).click();
+    const panel = await within(8000, "the route's inspector", () => $("[data-testid='route-row-panel']"));
+    (await within(8000, "Open topology", () => [...panel.querySelectorAll<HTMLElement>("button")].find((b) => /^Open topology/.test(b.textContent ?? "")))).click();
     sized(await within(10_000, "the data path", () => $("[data-testid='data-path']")), "the data path");
   });
 
