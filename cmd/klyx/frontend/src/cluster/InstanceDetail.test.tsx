@@ -1001,3 +1001,28 @@ describe("an instance opened by UID", () => {
     expect(gone()).toBe("unverified");
   });
 });
+
+// Review of ff41862: adopting the replacement reads it, at the same name.
+describe("Resources adoption", () => {
+  it("Open the new object re-reads, at the same name", async () => {
+    const expected = { ...instance, expectUid: "old-uid" };
+    useFleet.setState({ route: { name: "cluster", cluster: "x", section: "resources", resource, instance: expected } });
+    seed({ detail: { ...detail, uid: "new-uid" } }, expected);
+    function Routed() {
+      const r = useFleet((s) => s.route);
+      return r.name === "cluster" && r.resource && r.instance ? <InstanceDetail cluster={r.cluster} resource={r.resource} instance={r.instance} /> : null;
+    }
+    await act(async () => { render(<Routed />); });
+    expect(getInstanceDetail).toHaveBeenCalledTimes(1);
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Open the new object" })); });
+    expect(getInstanceDetail).toHaveBeenCalledTimes(2);
+  });
+
+  it("opened by UID, a list that omits the name never makes it removed", () => {
+    const expected = { ...instance, expectUid: "web-tls-uid" };
+    seed({}, expected);
+    render(<InstanceDetail cluster="x" resource={resource} instance={expected} removed />);
+    expect(screen.queryByText("Certificate removed.")).toBeNull();
+    expect(screen.getByRole("button", { name: "Describe" })).toBeTruthy();
+  });
+});

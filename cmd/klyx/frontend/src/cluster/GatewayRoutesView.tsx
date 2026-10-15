@@ -105,8 +105,8 @@ export function RouteList({ cluster, rows, toggle }: { cluster: string; rows: Ga
     const row = routes.find((r) => keyOf(r) === key);
     // An opening by UID (slice 9 note §4.2): pinned to that UID at once; a
     // different or missing route is said, never substituted.
+    if (intent.ref.uid) expectPin(cluster, key, intent.ref.uid);
     if (expectsOther(row, intent.ref.uid)) {
-      expectPin(cluster, key, intent.ref.uid!);
       setMode("all"); setQuery("");
       setCursorKey(key);
       setSelKey(key);

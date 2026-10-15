@@ -574,3 +574,27 @@ describe("an opening by UID", () => {
     expect(inspector().queryByRole("button", { name: "Open the new object" })).toBeNull();
   });
 });
+
+// Review of ff41862: a later opening by UID of an already-selected name
+// establishes its own object, in both directions.
+describe("repeated openings of a selected pod name", () => {
+  it("an opening of the old UID over the selected new pod says replaced", () => {
+    seed([pod("a", "ok", { uid: "uid-current" })]);
+    render(<PodsView cluster="x" />);
+    select("a");
+    act(() => useFleet.getState().requestNavIntent({ kind: "select-pod", cluster: "x", namespace: "app", name: "a", uid: "uid-old" }));
+    expect(document.querySelector("[data-pinned-gone]")?.getAttribute("data-pinned-gone")).toBe("replaced");
+    expect(inspector().queryByRole("button", { name: /^Logs/ })).toBeNull();
+  });
+
+  it("an opening of the current UID over a replaced pin opens it", () => {
+    seed([pod("a", "ok", { uid: "uid-old" })]);
+    render(<PodsView cluster="x" />);
+    select("a");
+    push(2, [pod("a", "ok", { uid: "uid-current" })]);
+    expect(inspector().getByText("Replaced.")).toBeTruthy();
+    act(() => useFleet.getState().requestNavIntent({ kind: "select-pod", cluster: "x", namespace: "app", name: "a", uid: "uid-current" }));
+    expect(inspector().queryByText("Replaced.")).toBeNull();
+    expect(inspector().queryByRole("button", { name: "Open the new object" })).toBeNull();
+  });
+});

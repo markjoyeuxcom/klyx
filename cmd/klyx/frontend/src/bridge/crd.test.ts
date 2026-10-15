@@ -129,3 +129,17 @@ describe("CRD bridge read ordering", () => {
     expect(s.error).toBeNull();
   });
 });
+
+// Review of ff41862: a rejected detail read is recorded as the read's
+// outcome, so an object opened by UID reads "not verified".
+describe("a failed detail read", () => {
+  it("is recorded as an error, never the last good detail", async () => {
+    useFleet.getState().clearInstanceDetail();
+    vi.mocked(CRDService.GetInstanceDetail).mockRejectedValueOnce(new Error("bridge disconnected"));
+    await getInstanceDetail("c", ref, { namespace: "ns", name: "cert", expectUid: "old-uid" });
+    const d = useFleet.getState().instanceDetail.detail;
+    expect(d?.error).toBe("bridge disconnected");
+    expect(d?.notFound).toBeFalsy();
+    expect(useFleet.getState().instanceDetail.loading).toBe(false);
+  });
+});

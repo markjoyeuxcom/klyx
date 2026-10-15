@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { render, act } from "@testing-library/react";
 import { usePinnedSubject, type Gone } from "./usePinnedSubject";
 import { expectPin, takeExpectedPin } from "../nav/inspectorPin";
@@ -111,5 +111,30 @@ describe("usePinnedSubject with an expected UID", () => {
     r.rerender(<Expecting sel={null} />);
     r.rerender(<Expecting sel="ns/api" live={row("u2")} />);
     expect([res.subject?.uid, res.gone]).toEqual(["u2", null]); // consumed: a later plain selection pins as usual
+  });
+});
+
+// Review of ff41862: an opening by UID establishes its object even where
+// the key already has one; an expectation expires.
+describe("a later opening at the same key", () => {
+  it("a new expected UID replaces the subject the key had", () => {
+    const r = render(<Lens sel="ns/api" live={row("current")} />);
+    expectPin("c", "ns/api", "expected-old");
+    r.rerender(<Lens sel="ns/api" live={row("current")} />);
+    expect([out.gone, out.subject]).toEqual(["replaced", null]);
+    // and the reverse: an opening of the current UID over a replaced pin
+    expectPin("c", "ns/api", "current");
+    r.rerender(<Lens sel="ns/api" live={row("current", 5)} />);
+    expect([out.gone, out.subject?.v]).toEqual([null, 5]);
+  });
+
+  it("an expectation older than its TTL is ignored", () => {
+    const now = Date.now();
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    expectPin("c", "ns/stale", "u-old");
+    vi.spyOn(Date, "now").mockReturnValue(now + 11_000);
+    render(<Lens sel="ns/stale" live={row("u-new")} />);
+    expect([out.gone, out.subject?.uid]).toEqual([null, "u-new"]);
+    vi.restoreAllMocks();
   });
 });

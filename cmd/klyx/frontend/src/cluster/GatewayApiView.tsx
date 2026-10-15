@@ -23,7 +23,7 @@ import { useInspectorAI } from "../ai/AIExplain";
 import { staleProps } from "./staleness";
 import { useClusterKey } from "./useClusterKey";
 import { usePinnedSubject } from "./usePinnedSubject";
-import { PinnedGone, expectsOther } from "./PinnedGone";
+import { PinnedGone } from "./PinnedGone";
 import { expectPin } from "../nav/inspectorPin";
 
 // GatewayApiView - the Gateway API lens on the workspace template (spec §6
@@ -137,7 +137,7 @@ function GatewayList({ cluster, rows, toggle }: { cluster: string; rows: Gateway
     const row = gateways.find((g) => keyOf(g) === key);
     // An opening by UID (slice 9 note §4.2): pinned to that UID at once; a
     // different or missing row is said, never substituted.
-    if (expectsOther(row, intent.ref.uid)) expectPin(cluster, key, intent.ref.uid!);
+    if (intent.ref.uid) expectPin(cluster, key, intent.ref.uid);
     else if (!row) return ev === "complete" ? "missing" : "wait";
     setMode("all"); setQuery("");
     setCursorKey(key);

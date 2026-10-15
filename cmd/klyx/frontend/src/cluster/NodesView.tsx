@@ -596,9 +596,9 @@ export function NodesView({ cluster }: { cluster: string }) {
     const n = scopedNodes.find((x) => x.name === name);
     // An opening by UID (slice 9 note §4.2) selects at once, pinned to that
     // UID: a different or missing row is said, never substituted.
+    if (intent.kind === "select-node" && intent.uid) expectPin(cluster, name, intent.uid);
     if (intent.kind === "select-node" && expectsOther(n, intent.uid)) {
       autoSelect.current = "done";
-      expectPin(cluster, name, intent.uid!);
       setKbName(name);
       useFleet.getState().selectNode({ name, uid: intent.uid! });
       return "consumed";

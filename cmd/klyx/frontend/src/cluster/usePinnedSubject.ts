@@ -34,9 +34,13 @@ export function usePinnedSubject<T extends { uid?: string }>(cluster: string, ke
     return { subject: null, gone: null, next: null, adopt: () => {} };
   }
   let h = held.current && held.current.cluster === cluster && held.current.key === key ? held.current : null;
-  if (!h) {
-    const uid = takeExpectedPin(cluster, key);
-    if (uid) h = held.current = { cluster, key, uid, row: null };
+  // An opening by UID establishes its object whatever was pinned at the key
+  // before: the same object keeps its evidence, another starts from none
+  // (review of ff41862).
+  const uid = takeExpectedPin(cluster, key);
+  if (uid) {
+    const row = h && h.uid === uid ? h.row : live && live.uid === uid ? live : null;
+    h = held.current = { cluster, key, uid, row };
   }
   const expected = h && h.row === null ? h.uid : undefined;
   if (live) {

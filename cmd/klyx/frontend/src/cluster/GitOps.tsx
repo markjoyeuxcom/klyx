@@ -240,10 +240,10 @@ export function GitOps({ cluster }: { cluster: string }) {
     const r = rows.find((x) => x.kind === intent.fluxKind && x.namespace === intent.namespace && x.name === intent.name);
     // An opening by UID (slice 9 note §4.2) selects at once, pinned to that
     // UID: a different or missing row is said, never substituted.
+    if (intent.kind === "select-flux" && intent.uid) expectPin(cluster, keyOf({ kind: intent.fluxKind, namespace: intent.namespace, name: intent.name }), intent.uid);
     if (intent.kind === "select-flux" && expectsOther(r, intent.uid)) {
       autoSelect.current = "done";
       const key = keyOf({ kind: intent.fluxKind, namespace: intent.namespace, name: intent.name });
-      expectPin(cluster, key, intent.uid!);
       setView("reconciliation");
       setCursorKey(key);
       expand(key);
@@ -270,9 +270,8 @@ export function GitOps({ cluster }: { cluster: string }) {
     const kind = kindOfRef(intent.ref);
     const key = `${kind}/${intent.ref.namespace ?? ""}/${intent.ref.name}`;
     const found = allSources.find((x) => keyOf(x) === key);
-    if (expectsOther(found, intent.ref.uid)) {
-      expectPin(cluster, key, intent.ref.uid!);
-    } else if (!found) return evidenceOf(kind) === "complete" ? "missing" : "wait";
+    if (intent.ref.uid) expectPin(cluster, key, intent.ref.uid);
+    else if (!found) return evidenceOf(kind) === "complete" ? "missing" : "wait";
     setView("sources");
     setStatus("all"); setSourceKind(""); setQuery("");
     setCursorKey(key);

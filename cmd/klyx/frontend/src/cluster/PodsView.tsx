@@ -238,9 +238,9 @@ export function PodsView({ cluster }: { cluster: string }) {
     const p = allItems.find((x) => x.namespace === intent.namespace && x.name === intent.name);
     // An opening by UID (slice 9 note §4.2) selects at once, pinned to that
     // UID: a different or missing row is said, never substituted.
+    if (intent.kind === "select-pod" && intent.uid) expectPin(cluster, keyOf(intent), intent.uid);
     if (intent.kind === "select-pod" && expectsOther(p, intent.uid)) {
       autoSelect.current = "done";
-      expectPin(cluster, keyOf(intent), intent.uid!);
       useFleet.getState().selectPod({ namespace: intent.namespace, name: intent.name, uid: intent.uid! });
       return "consumed";
     }

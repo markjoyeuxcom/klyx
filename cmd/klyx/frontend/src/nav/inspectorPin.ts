@@ -26,21 +26,24 @@ export const INSPECTOR_IDENTITY_ID = "inspector-identity";
 // the lens's pin starts from it before any row is seen, so a same-name
 // replacement or an absence is said - never the current same-name row
 // silently substituted. Consumed by the first pin that reads the key.
-const expectations = new Map<string, string>();
+// An expectation is for the opening that parked it: it expires, so a later
+// plain selection of the same key never inherits it.
+const expectations = new Map<string, { uid: string; at: number }>();
 const EXPECT_MAX = 32;
+export const EXPECT_TTL_MS = 10_000;
 const expectKey = (cluster: string, key: string) => `${cluster}\u0000${key}`;
 
 export function expectPin(cluster: string, key: string, uid: string): void {
   const k = expectKey(cluster, key);
   expectations.delete(k);
-  expectations.set(k, uid);
+  expectations.set(k, { uid, at: Date.now() });
   while (expectations.size > EXPECT_MAX) expectations.delete(expectations.keys().next().value as string);
 }
 
 /** takeExpectedPin returns and forgets the UID parked for a selection key. */
 export function takeExpectedPin(cluster: string, key: string): string | undefined {
   const k = expectKey(cluster, key);
-  const uid = expectations.get(k);
+  const e = expectations.get(k);
   expectations.delete(k);
-  return uid;
+  return e && Date.now() - e.at <= EXPECT_TTL_MS ? e.uid : undefined;
 }

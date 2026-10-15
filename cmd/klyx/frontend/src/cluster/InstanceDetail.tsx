@@ -723,7 +723,11 @@ function ServiceBackingSection({
 // and refresh live in More. Overview orders the data path first (facts), then
 // typed sections, conditions, related objects and events; Manifest is the
 // guarded YAML editor. A removed instance keeps its last evidence, read-only.
-export function InstanceDetail({ cluster, resource, instance, removed = false }: { cluster: string; resource: ResourceRef; instance: InstanceRef; removed?: boolean }) {
+export function InstanceDetail({ cluster, resource, instance, removed: listRemoved = false }: { cluster: string; resource: ResourceRef; instance: InstanceRef; removed?: boolean }) {
+  // Opened by UID, presence is the direct read's to settle: a list that
+  // omits the name (read before it was created) never contradicts a read
+  // that found it (review of ff41862).
+  const removed = instance.expectUid ? false : listRemoved;
   const id = useFleet((s) => s.instanceDetail);
   const closeInstance = useFleet((s) => s.closeInstance);
   const [copied, setCopied] = useState(false);
@@ -735,9 +739,10 @@ export function InstanceDetail({ cluster, resource, instance, removed = false }:
     setDescribing(false);
     void getInstanceDetail(cluster, resource, instance);
     return () => useFleet.getState().clearInstanceDetail();
-    // Keyed by the identity fields, not the ref objects (new each render).
+    // Keyed by the identity fields, not the ref objects (new each render);
+    // an opening by UID (or its adoption) reads afresh, even at the same name.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cluster, resource.group, resource.version, resource.plural, instance.namespace, instance.name]);
+  }, [cluster, resource.group, resource.version, resource.plural, instance.namespace, instance.name, instance.expectUid]);
 
   // Evidence belongs to the full recorded identity (cluster + GVR + ns/name):
   // DEV/STG/PRD and v1/v2 share names, so ns/name alone could show another

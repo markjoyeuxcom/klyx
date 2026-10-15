@@ -24,7 +24,7 @@ import { fitColumns, type ColumnDef } from "../layout/columns";
 import { clock, combineEvidence, coverageGaps, joinCoverage, kindEvidence, lastGoodAt, type JoinCoverage, type KindEvidence } from "../layout/coverage";
 import { useClusterKey } from "./useClusterKey";
 import { usePinnedSubject } from "./usePinnedSubject";
-import { PinnedGone, expectsOther } from "./PinnedGone";
+import { PinnedGone } from "./PinnedGone";
 import { expectPin } from "../nav/inspectorPin";
 
 const keyOf = (c: { namespace: string; name: string }) => `${c.namespace}/${c.name}`;
@@ -298,7 +298,7 @@ export function CertsView({ cluster }: { cluster: string }) {
     const row = issuer ? issuers.find((i) => issuerKey(i) === key) : certs.find((c) => keyOf(c) === key);
     // An opening by UID (slice 9 note §4.2): pinned to that UID at once; a
     // different or missing row is said, never substituted.
-    if (expectsOther(row, intent.ref.uid)) expectPin(cluster, key, intent.ref.uid!);
+    if (intent.ref.uid) expectPin(cluster, key, intent.ref.uid);
     else if (!row) return (issuer ? issuersEv : certsEv) === "complete" ? "missing" : "wait";
     autoSelect.current = "done";
     setView(issuer ? "issuers" : "certificates"); setStatus("all"); setQuery(""); setNamespace("");

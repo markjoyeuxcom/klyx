@@ -653,3 +653,24 @@ describe("InstanceList search over partial pages (live pass)", () => {
     expect(loadInstances).toHaveBeenCalledWith("x", nsRef, "tok-2");
   });
 });
+
+// Review of ff41862: opened by UID, the direct read settles presence - a
+// list read before the object was created never makes it removed.
+import { getInstanceDetail as getDetailForUID } from "../bridge/crd";
+describe("an instance opened by UID", () => {
+  it("is not removed by a list that omits it when its direct read finds that UID", async () => {
+    const inst = { namespace: "new", name: "arrived-after-list", expectUid: "uid-current" };
+    seed(nsRef, { rows: [] });
+    useFleet.getState().clearInstanceDetail();
+    useFleet.setState({ route: { name: "cluster", cluster: "x", section: "resources", resource: nsRef, instance: inst } });
+    vi.mocked(getDetailForUID).mockImplementationOnce(async (c, res, i) => {
+      useFleet.getState().setInstanceDetailLoading(c, res, i);
+      useFleet.getState().setInstanceDetail({ kind: res.kind, namespace: i.namespace, name: i.name, uid: "uid-current", created: "", labels: {}, conditions: [], events: [], yaml: "kind: CiliumEndpoint" });
+    });
+    let r!: ReturnType<typeof render>;
+    await act(async () => { r = render(<InstanceList cluster="x" resource={nsRef} />); });
+    expect(getDetailForUID).toHaveBeenCalled();
+    expect(r.queryByText("CiliumEndpoint removed.")).toBeNull();
+    expect(r.queryByRole("button", { name: "Describe" })).toBeTruthy();
+  });
+});

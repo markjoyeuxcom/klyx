@@ -141,9 +141,12 @@ export async function getInstanceDetail(cluster: string, resource: ResourceRef, 
     useFleet.getState().setInstanceDetail(d);
   } catch (e) {
     console.error("getInstanceDetail", e);
-    // Clear the loading flag so the panel doesn't get stuck on "Loading…".
+    // A failed read is the read's outcome, never the last good detail: the
+    // panel says it could not load, and an object opened by UID reads "not
+    // verified" (review of ff41862).
     if (current()) {
-      useFleet.setState((s) => ({ instanceDetail: { ...s.instanceDetail, loading: false } }));
+      useFleet.getState().setInstanceDetail({ kind: resource.kind, namespace: instance.namespace, name: instance.name, created: "", labels: {}, conditions: [], events: [], yaml: "",
+        error: e instanceof Error ? e.message : String(e) });
     }
   }
 }

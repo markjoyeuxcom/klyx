@@ -248,10 +248,10 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
     const w = allItems.find((x) => x.kind === intent.workloadKind && x.namespace === intent.namespace && x.name === intent.name);
     // An opening by UID (slice 9 note §4.2) selects at once, pinned to that
     // UID: a different or missing row is said, never substituted.
+    if (intent.kind === "select-workload" && intent.uid) expectPin(cluster, `${intent.workloadKind}/${intent.namespace}/${intent.name}`, intent.uid);
     if (intent.kind === "select-workload" && expectsOther(w, intent.uid)) {
       autoSelect.current = "done";
       const key = `${intent.workloadKind}/${intent.namespace}/${intent.name}`;
-      expectPin(cluster, key, intent.uid!);
       setCursorKey(key);
       setSelectedKey(key);
       return "consumed";

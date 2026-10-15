@@ -23,7 +23,7 @@ import { clock, combineEvidence, coverageGaps, joinCoverage, kindEvidence, lastG
 import { useInspectorAI } from "../ai/AIExplain";
 import { useClusterKey } from "./useClusterKey";
 import { usePinnedSubject } from "./usePinnedSubject";
-import { PinnedGone, expectsOther } from "./PinnedGone";
+import { PinnedGone } from "./PinnedGone";
 import { expectPin } from "../nav/inspectorPin";
 
 const keyOf = (e: { namespace: string; name: string }) => `${e.namespace}/${e.name}`;
@@ -260,7 +260,7 @@ export function ExternalSecretsView({ cluster }: { cluster: string }) {
     const row = store ? stores.find((x) => storeKey(x) === key) : secrets.find((e) => keyOf(e) === key);
     // An opening by UID (slice 9 note §4.2): pinned to that UID at once; a
     // different or missing row is said, never substituted.
-    if (expectsOther(row, intent.ref.uid)) expectPin(cluster, key, intent.ref.uid!);
+    if (intent.ref.uid) expectPin(cluster, key, intent.ref.uid);
     else if (!row) return (store ? storesEv : secretsEv) === "complete" ? "missing" : "wait";
     autoSelect.current = "done";
     setView(store ? "stores" : "secrets"); setStatus("all"); setQuery(""); setNamespace("");

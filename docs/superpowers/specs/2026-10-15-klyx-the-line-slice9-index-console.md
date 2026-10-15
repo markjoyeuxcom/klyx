@@ -283,6 +283,14 @@ Five findings, all taken:
   - per lens: Pods (same UID, replaced and adopted, absent on incomplete then complete reads, then arriving), Workloads, Nodes, Flux (both), Certificates, ESO, Argo, Gateways and Routes (detached wording), Karpenter;
   - Resources (`InstanceDetail.test.tsx`), and `notFound` in Go (`TestGetInstanceDetailNotFound`).
 
+### 11.1 Review of ff41862
+
+Four findings, all taken:
+- **A later opening at a selected key:** every opening that carries a UID parks its expectation, a matching row included, and `usePinnedSubject` honours an expectation whatever was pinned at the key. The same object keeps its evidence; another starts from none. Opening the old UID over the selected new pod reads replaced, and opening the current UID over a replaced pin opens it. Expectations expire after 10 seconds, so a later plain selection of the key never inherits one.
+- **Resources adoption:** the instance read also runs when the expected UID changes, so "Open the new object" (the same name, no expectation) reads the replacement, fenced as every read is.
+- **The list never contradicts the read:** opened by UID, presence is the direct read's to settle. The list's `removed` (absence from a list read before the object existed) is ignored.
+- **A failed read:** a rejected detail read is recorded as an error DTO, never the last good detail, so an object opened by UID reads not verified and any other instance says it could not be loaded.
+
 ## 12. As built: 9c-2 (the console)
 
 - **Structure:** `CommandPalette` keeps only the open state, the hotkeys and focus restore; the console itself mounts per open, so each open is a fresh session (its state and its search fence its own) and nothing subscribes while it is closed.

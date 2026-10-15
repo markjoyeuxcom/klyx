@@ -24,7 +24,7 @@ import { useInspectorAI } from "../ai/AIExplain";
 import { ClampedText } from "../chrome/ClampedText";
 import { useClusterKey } from "./useClusterKey";
 import { usePinnedSubject } from "./usePinnedSubject";
-import { PinnedGone, expectsOther } from "./PinnedGone";
+import { PinnedGone } from "./PinnedGone";
 import { expectPin } from "../nav/inspectorPin";
 
 // ArgoView is the Argo CD lens, speaking Argo's vocabulary (synced/degraded,
@@ -275,7 +275,7 @@ export function ArgoView({ cluster, mode = "applications" }: { cluster: string; 
     const row = sets ? appSets.find((a) => appSetKey(a) === key) : apps.find((a) => keyOf(a) === key);
     // An opening by UID (slice 9 note §4.2): pinned to that UID at once; a
     // different or missing row is said, never substituted.
-    if (expectsOther(row, intent.ref.uid)) expectPin(cluster, key, intent.ref.uid!);
+    if (intent.ref.uid) expectPin(cluster, key, intent.ref.uid);
     else if (!row) return (sets ? appSetsCov : appsCov) === "complete" ? "missing" : "wait";
     autoSelect.current = "done";
     clearFilters();
