@@ -1,6 +1,7 @@
 package appbridge
 
 import (
+	"context"
 	"testing"
 
 	"github.com/moomora/klyx/internal/clustermesh"
@@ -12,7 +13,7 @@ func TestMeshServiceGraph(t *testing.T) {
 		{Cluster: "ctx-orange", Identity: clustermesh.Identity{Name: "homelab-orange"}, Peers: []string{"homelab-blue"}, Present: true, Installed: true},
 		{Cluster: "ctx-nelli", Identity: clustermesh.Identity{Name: "homelab-nelli"}, Present: true, Installed: true},
 	}
-	svc := NewMeshService(func() []clustermesh.Member { return members })
+	svc := NewMeshService(func(context.Context) []clustermesh.Member { return members })
 	g := svc.GetMeshGraph()
 
 	if len(g.Nodes) != 3 {
@@ -36,9 +37,26 @@ func TestMeshServiceGraph(t *testing.T) {
 }
 
 func TestMeshServiceEmpty(t *testing.T) {
-	svc := NewMeshService(func() []clustermesh.Member { return nil })
+	svc := NewMeshService(func(context.Context) []clustermesh.Member { return nil })
 	g := svc.GetMeshGraph()
 	if len(g.Nodes) != 0 || len(g.Edges) != 0 {
 		t.Fatalf("empty: %+v", g)
+	}
+}
+
+// The Line slice 3 note §6: the reader's context reaches the member reads,
+// so a deadline or cancellation stops them.
+func TestMeshServiceGraphPassesItsContext(t *testing.T) {
+	var got context.Context
+	svc := NewMeshService(func(ctx context.Context) []clustermesh.Member { got = ctx; return nil })
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	svc.graph(ctx)
+	if got == nil || got.Err() == nil {
+		t.Fatal("the caller's cancelled context must reach the member reads")
+	}
+	svc.GetMeshGraph()
+	if _, ok := got.Deadline(); !ok {
+		t.Fatal("an on-demand read is bounded")
 	}
 }

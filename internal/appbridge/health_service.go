@@ -23,6 +23,36 @@ type HealthSink struct {
 	lineage *rowsLineage
 	trace   *rowsTrace  // nil unless KLYX_ROWS_TRACE names a file (the 1c §6a lab gate)
 	log     *obslog.Log // the observation log every Observer's transition stream feeds (The Line slice 2b)
+
+	lmu       sync.RWMutex
+	listeners []HealthListener
+}
+
+// HealthListener receives every Observer publication in Go, before the
+// webview conversion (The Line slice 3 note §2.1). Its methods run on the
+// publishing Observer's loop goroutine: they must only record and signal -
+// never subscribe, bootstrap (RowsNow waits on that same loop), compute or
+// block.
+type HealthListener interface {
+	OnSummary(observe.Summary)
+	OnRows(observe.Rows)
+	OnTransitions(observe.TransitionBatch)
+}
+
+// AddListener registers a Go listener for every later publication.
+func (h *HealthSink) AddListener(l HealthListener) {
+	h.lmu.Lock()
+	defer h.lmu.Unlock()
+	h.listeners = append(h.listeners, l)
+}
+
+func (h *HealthSink) each(f func(HealthListener)) {
+	h.lmu.RLock()
+	ls := h.listeners
+	h.lmu.RUnlock()
+	for _, l := range ls {
+		f(l)
+	}
 }
 
 func NewHealthSink(em Emitter) *HealthSink {
@@ -36,12 +66,16 @@ func NewHealthSink(em Emitter) *HealthSink {
 func (h *HealthSink) Summary(s observe.Summary) {
 	h.lineage.summary(s)
 	h.em.Emit(HealthSummaryEvent, s)
+	h.each(func(l HealthListener) { l.OnSummary(s) })
 }
 
 // Transitions feed the observation log (The Line slice 2b §6): each batch
 // is applied whole, at its commit, on the Observer's loop goroutine. Nothing
 // is emitted to the webview yet.
-func (h *HealthSink) Transitions(b observe.TransitionBatch) { h.log.Apply(b) }
+func (h *HealthSink) Transitions(b observe.TransitionBatch) {
+	h.log.Apply(b)
+	h.each(func(l HealthListener) { l.OnTransitions(b) })
+}
 
 // ObservationLog is the log the sink feeds.
 func (h *HealthSink) ObservationLog() *obslog.Log { return h.log }
@@ -50,6 +84,7 @@ func (h *HealthSink) ObservationLog() *obslog.Log { return h.log }
 // no lens reads yet has no converter and is not emitted. A delta part with
 // a subscribed lineage is sent as a delta against it (addendum §3.3).
 func (h *HealthSink) Rows(r observe.Rows) {
+	h.each(func(l HealthListener) { l.OnRows(r) }) // raw rows, before any webview conversion or delta
 	dto, ok := toRowsDTO(r)
 	if !ok {
 		return

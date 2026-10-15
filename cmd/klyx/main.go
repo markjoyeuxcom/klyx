@@ -191,9 +191,7 @@ func main() {
 		return peers, unconfirmed
 	})
 
-	meshSvc := appbridge.NewMeshService(func() []clustermesh.Member {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
+	meshSvc := appbridge.NewMeshService(func(ctx context.Context) []clustermesh.Member {
 		var members []clustermesh.Member
 		for _, snap := range reg.Snapshots() {
 			c, ok := reg.Conn(snap.Name)
