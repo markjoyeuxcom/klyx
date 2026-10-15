@@ -149,3 +149,32 @@ func parentConds(obj map[string]interface{}, gwNamespace, gwName, routeNS, wantS
 	}
 	return nil, false
 }
+
+// ParentRefCount counts the route's spec.parentRefs that name the Gateway
+// (group and kind defaulted as the Gateway API does, namespace defaulted to
+// the route's). More than one is a route attached to the same Gateway twice.
+func ParentRefCount(u *unstructured.Unstructured, gwNamespace, gwName string) int {
+	parents, _, _ := unstructured.NestedSlice(u.Object, "spec", "parentRefs")
+	n := 0
+	for _, p := range parents {
+		m, ok := p.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if g, _ := m["group"].(string); g != "" && g != "gateway.networking.k8s.io" {
+			continue
+		}
+		if kind, _ := m["kind"].(string); kind != "" && kind != "Gateway" {
+			continue
+		}
+		name, _ := m["name"].(string)
+		ns, _ := m["namespace"].(string)
+		if ns == "" {
+			ns = u.GetNamespace()
+		}
+		if name == gwName && ns == gwNamespace {
+			n++
+		}
+	}
+	return n
+}

@@ -23,6 +23,9 @@ func (f fakeRMConn) GetGatewayTopology(context.Context, string, string) (gwapi.T
 func (f fakeRMConn) RouteMetrics(context.Context, []string) (map[string]routemetrics.RouteMetrics, routemetrics.Status) {
 	return f.m, f.st
 }
+func (f fakeRMConn) RuleMetrics(context.Context, string, string) (routemetrics.GatewayRules, error) {
+	return routemetrics.GatewayRules{}, nil
+}
 func (f fakeRMConn) HubbleFlowStats(context.Context) (hubble.FlowStats, hubble.Status) {
 	return f.hubbleStats, f.hubbleStatus
 }

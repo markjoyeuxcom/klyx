@@ -101,3 +101,24 @@ func TestRangeSeriesPassesWindowThrough(t *testing.T) {
 		t.Fatalf("window not passed through: q=%q start=%v end=%v step=%v", fq.lastQ, fq.lastStart, fq.lastEnd, fq.lastStep)
 	}
 }
+
+func TestRangeMatrixKeepsEverySeries(t *testing.T) {
+	body := `{"status":"success","data":{"resultType":"matrix","result":[
+		{"metric":{"envoy_cluster_name":"httproute/a/web/rule/0"},"values":[[1000,"2"],[1060,"NaN"],[1120,"3"]]},
+		{"metric":{"envoy_cluster_name":"httproute/a/web/rule/1"},"values":[]}
+	]}}`
+	c := NewClient(&fakeRangeQuerier{fakeQuerier: fakeQuerier{status: 200, body: body}})
+	out, err := c.RangeMatrix(context.Background(), "q", rangeWindow.start, rangeWindow.end, rangeWindow.step)
+	if err != nil || len(out) != 2 {
+		t.Fatalf("got %+v %v", out, err)
+	}
+	if out[0].Labels["envoy_cluster_name"] != "httproute/a/web/rule/0" || len(out[0].Points) != 2 || out[0].Points[1] != (Point{1120, 3}) {
+		t.Fatalf("first series: %+v", out[0])
+	}
+	if len(out[1].Points) != 0 {
+		t.Fatalf("second series: %+v", out[1])
+	}
+	if _, err := c.RangeSeries(context.Background(), "q", rangeWindow.start, rangeWindow.end, rangeWindow.step); err == nil {
+		t.Fatal("RangeSeries accepted two series")
+	}
+}

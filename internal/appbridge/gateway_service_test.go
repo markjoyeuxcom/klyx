@@ -19,6 +19,9 @@ type fakeGatewayConn struct {
 func (f *fakeGatewayConn) GetGatewayTopology(ctx context.Context, namespace, name string) (gwapi.Topology, error) {
 	return f.topo, f.err
 }
+func (f *fakeGatewayConn) RuleMetrics(context.Context, string, string) (routemetrics.GatewayRules, error) {
+	return routemetrics.GatewayRules{}, nil
+}
 func (f *fakeGatewayConn) HubbleFlowStats(context.Context) (hubble.FlowStats, hubble.Status) {
 	return f.hubbleStats, f.hubbleStatus
 }

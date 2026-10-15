@@ -1,0 +1,40 @@
+{
+ "data": {
+  "result": [
+   {
+    "metric": {
+     "__name__": "envoy_cluster_upstream_rq_total",
+     "cluster": "aks-weu-stg",
+     "envoy_cluster_name": "httproute/default/web/rule/0",
+     "gateway_envoyproxy_io_owning_gateway_name": "eg",
+     "gateway_envoyproxy_io_owning_gateway_namespace": "infra",
+     "instance": "10.244.0.12:19001",
+     "namespace": "envoy-gateway-system",
+     "pod": "envoy-infra-eg-5f6d7c9b8-abcde"
+    },
+    "value": [
+     1792080000,
+     "10"
+    ]
+   },
+   {
+    "metric": {
+     "__name__": "envoy_cluster_upstream_rq_total",
+     "cluster": "aks-weu-prd",
+     "envoy_cluster_name": "httproute/default/web/rule/0",
+     "gateway_envoyproxy_io_owning_gateway_name": "eg",
+     "gateway_envoyproxy_io_owning_gateway_namespace": "infra",
+     "instance": "10.244.0.12:19001",
+     "namespace": "envoy-gateway-system",
+     "pod": "envoy-infra-eg-77aa88bb9-zzzzz"
+    },
+    "value": [
+     1792080000,
+     "10"
+    ]
+   }
+  ],
+  "resultType": "vector"
+ },
+ "status": "success"
+}

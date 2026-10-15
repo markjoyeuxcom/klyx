@@ -1,0 +1,80 @@
+{
+ "data": {
+  "result": [
+   {
+    "metric": {
+     "envoy_cluster_name": "httproute/default/web/rule/0",
+     "envoy_response_code_class": "2"
+    },
+    "values": [
+     [
+      1792079910,
+      "11.4"
+     ],
+     [
+      1792079940,
+      "12.5"
+     ],
+     [
+      1792079970,
+      "12.0"
+     ],
+     [
+      1792080000,
+      "12.35"
+     ]
+    ]
+   },
+   {
+    "metric": {
+     "envoy_cluster_name": "httproute/default/web/rule/0",
+     "envoy_response_code_class": "5"
+    },
+    "values": [
+     [
+      1792079910,
+      "0.6"
+     ],
+     [
+      1792079940,
+      "0"
+     ],
+     [
+      1792079970,
+      "1.0"
+     ],
+     [
+      1792080000,
+      "0.65"
+     ]
+    ]
+   },
+   {
+    "metric": {
+     "envoy_cluster_name": "httproute/default/api/rule/0",
+     "envoy_response_code_class": "2"
+    },
+    "values": [
+     [
+      1792079910,
+      "0.4"
+     ],
+     [
+      1792079940,
+      "0.4"
+     ],
+     [
+      1792079970,
+      "0.5"
+     ],
+     [
+      1792080000,
+      "0.5"
+     ]
+    ]
+   }
+  ],
+  "resultType": "matrix"
+ },
+ "status": "success"
+}

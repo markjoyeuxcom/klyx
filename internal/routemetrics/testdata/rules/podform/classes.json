@@ -1,0 +1,32 @@
+{
+ "data": {
+  "result": [
+   {
+    "metric": {
+     "envoy_cluster_name": "httproute/default/web/rule/0",
+     "envoy_response_code_class": "2"
+    },
+    "values": [
+     [
+      1792079910,
+      "1"
+     ],
+     [
+      1792079940,
+      "1"
+     ],
+     [
+      1792079970,
+      "1"
+     ],
+     [
+      1792080000,
+      "1"
+     ]
+    ]
+   }
+  ],
+  "resultType": "matrix"
+ },
+ "status": "success"
+}

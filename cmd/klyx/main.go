@@ -224,8 +224,8 @@ func main() {
 		lineOverride = &k
 	}
 	// The Line slice 7b: each HTTPRoute rule's fingerprint history, the
-	// proof a rule's metrics are attributable.
-	appbridge.RouteRuleHistory(healthSink)
+	// proof a rule's metrics are attributable; 7c attributes them with it.
+	appbridge.SetRuleIntervals(gatewaySvc, appbridge.RouteRuleHistory(healthSink).Interval)
 
 	// The Line slice 6: read-only Git access through the system git, only
 	// from fleet.yaml's approved git.repos (Settings > Git); it orders the

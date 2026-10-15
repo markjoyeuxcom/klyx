@@ -101,6 +101,46 @@ Each is Codex-reviewed on its own, in this order.
 - **The binding:** a bound per-Gateway method returning, for each of its routes' rules, the four series with their availability and attribution. The route-level metrics the topology shows today stay as they are until slice 8.
 - **Captured-metric fixtures:** Prometheus JSON responses for dedicated clusters, merged backends (shared), a custom stat name, several parents, retries, and direct and local responses.
 
+### 4.1 As built in 7c
+
+- **The reader** is `routemetrics.EnvoyRuleSource.QueryRules`, on a new multi-series range read, `metrics.Client.RangeMatrix` (`RangeSeries` now wraps it). `ParseRuleCluster` keeps the rule index; the queries name each rule's exact cluster.
+- **The order of reads:** the shared-cluster check, the scope probe, then the four range queries. Nothing past a failed or ambiguous step is read.
+- **Scoping:**
+  - A probe, `last_over_time(envoy_cluster_upstream_rq_total{<the rules>}[30m])`, reads the label sets over the whole window. The scope is the first pair every series carries: the owner labels as a Prometheus labelmap writes them (`gateway_envoyproxy_io_owning_gateway_name` and `_namespace`), else `pod` with `namespace`, else `kubernetes_pod_name` with `kubernetes_namespace`.
+  - The owner labels are one matcher pair. A pod pair uses the Gateway's proxy pods running now (listed by the owner labels, in every namespace), one matcher set per namespace, joined by `or`.
+  - With a pod pair, a replaced pod's earlier samples are left out, and the result says so. With the owner labels they are kept.
+- **Two checks added in building** (fail closed; for this review). Inside the scope:
+  - each proxy's series for a rule must be one series: a pod scraped by both a PodMonitor and the annotation job would count twice;
+  - the series must not carry more than one value of a `cluster` label.
+
+  Klyx's metrics assume one cluster per Prometheus endpoint, as every Klyx metric does. The second check catches a shared store only when it labels clusters that way.
+- **Unattributable:**
+  - **The EnvoyProxy** at both levels, the Gateway's `infrastructure.parametersRef` and its GatewayClass's `parametersRef`. Either one setting a listed field counts, whatever Envoy Gateway's merge makes of them. A reference that is not an `EnvoyProxy`, an EnvoyProxy that is unserved or unreadable, and an unreadable GatewayClass all count too.
+  - **Same-Gateway multi-attachment** is counted from `spec.parentRefs`.
+  - **Added:** shared (merged) clusters seen on the Gateway's proxies during the window. Envoy Gateway v1.9.2 names them `<kind>/<ns>/<name>/<port>[/<protocol>]` (`irBackendClusterName`); only merging produces that name. A per-pod `count by` of them is matched to the Gateway on the client side, by the owner pair or a current proxy pod. A sample with no pair, or a check that fails, counts.
+    - This check runs first, because a fully merged rule has no series of its own.
+    - It catches `mergeBackends` set by the controller's default EnvoyProxy, which Klyx does not read.
+  - **The controller's other defaults** fail closed by themselves: `mergeGateways` labels the proxies by GatewayClass, so the owning-gateway scoping finds nothing; a custom stat name stops the cluster names parsing ("no series").
+- **The queries** are as listed in §4.
+  - The 503 share's denominator is the response-class total, which comes from the same per-code counters.
+  - A class counter and the 503 counter are created at their first response, so a missing one is zero wherever the total exists. A point with a zero total has no share.
+  - The 503 share also fails when the classes fail.
+- **Attribution** happens in appbridge: `GatewayService.GetRuleMetrics(cluster, ns, name)` returns `RuleMetricsDTO`.
+  - `routeHistory.Interval` now takes the fingerprint read with the rule. When the log's fingerprint differs (the log has not caught up), there is no interval.
+  - Points at or after the cut-off, rounded up to the second, are kept; earlier points are left out. With no interval, none are kept.
+  - The window's end is truncated to the second.
+- **Open question for review:** the interval starts when Klyx observes the change, and Envoy applies it after the xDS push. A point just after the cut-off can therefore still hold a few seconds of the previous rule's traffic. This is not corrected, because the lag cannot be observed from the API. An allowance of one step would cover typical lag; it is proposed here, not built.
+- **Fixtures** (`internal/routemetrics/testdata/rules/`) are Prometheus API responses in the shape a scrape of Envoy Gateway's proxies gives (the kubernetes-pods job's labels). They are not captured from a live Envoy, since the kind lab has none. They cover:
+  - dedicated clusters with retries and a direct-response rule;
+  - merged backends, matched by the owner labels and by a pod pair;
+  - a pod-pair scope across two namespaces;
+  - a pod name without a namespace;
+  - a proxy scraped twice;
+  - several clusters in one store.
+
+  A live capture belongs with slice 12's smoke.
+- **The wiring:** `SetRuleIntervals` is a package function, so the webview binds no setter. `bridge/ruleMetrics.ts` is for slice 8.
+
 ## 5. Testing
 
 - **7a:** the reader over real `managedFields` (apply, update, status subresource, missing time, empty); the read against a fake metadata client (found, replaced, gone, forbidden, bounds); the kind lab, read-only.

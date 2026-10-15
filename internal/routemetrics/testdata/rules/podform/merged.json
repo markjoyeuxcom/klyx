@@ -1,0 +1,18 @@
+{
+ "data": {
+  "result": [
+   {
+    "metric": {
+     "namespace": "team-b",
+     "pod": "envoy-team-b-gw-1a2b3c4d5-uvwxy"
+    },
+    "value": [
+     1792080000,
+     "1"
+    ]
+   }
+  ],
+  "resultType": "vector"
+ },
+ "status": "success"
+}

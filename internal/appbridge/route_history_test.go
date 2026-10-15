@@ -35,53 +35,57 @@ func TestRuleIntervals(t *testing.T) {
 
 	// First sight: the interval starts there, basis unknown.
 	h.OnRows(routeRows(1, at(0), true, map[string][]string{"r1": {"fpA", "fpB"}}))
-	iv, ok := h.Interval("prd", "r1", 0)
+	iv, ok := h.Interval("prd", "r1", 0, "fpA")
 	if !ok || !iv.Start.Equal(at(0)) || !iv.Cutoff.Equal(at(1)) || iv.Basis != obslog.ProofUnknown {
 		t.Fatalf("first sight: %+v %v", iv, ok)
 	}
 	// A fingerprint change starts that rule's interval at the change, observed.
 	h.OnRows(routeRows(1, at(5), true, map[string][]string{"r1": {"fpA", "fpB2"}}))
-	if iv, ok := h.Interval("prd", "r1", 1); !ok || !iv.Start.Equal(at(5)) || iv.Basis != obslog.ProofObserved {
+	if iv, ok := h.Interval("prd", "r1", 1, "fpB2"); !ok || !iv.Start.Equal(at(5)) || iv.Basis != obslog.ProofObserved {
 		t.Fatalf("after a change: %+v %v", iv, ok)
 	}
-	if iv, ok := h.Interval("prd", "r1", 0); !ok || !iv.Start.Equal(at(0)) {
+	if iv, ok := h.Interval("prd", "r1", 0, "fpA"); !ok || !iv.Start.Equal(at(0)) {
 		t.Fatalf("the unchanged rule keeps its start: %+v %v", iv, ok)
+	}
+	// A caller that read a fingerprint the log has not reached gets none.
+	if _, ok := h.Interval("prd", "r1", 1, "fpB3"); ok {
+		t.Fatal("an interval for a fingerprint the log has not recorded")
 	}
 	// A coverage gap: no interval while lost; afterwards it starts at the
 	// after-gap, for every rule.
 	h.OnRows(routeRows(1, at(8), false, map[string][]string{"r1": {"fpA", "fpB2"}}))
-	if _, ok := h.Interval("prd", "r1", 0); ok {
+	if _, ok := h.Interval("prd", "r1", 0, "fpA"); ok {
 		t.Fatal("an interval during a loss")
 	}
 	h.OnRows(routeRows(1, at(10), true, map[string][]string{"r1": {"fpA", "fpB2"}}))
-	if iv, ok := h.Interval("prd", "r1", 0); !ok || !iv.Start.Equal(at(10)) || !iv.Cutoff.Equal(at(11)) {
+	if iv, ok := h.Interval("prd", "r1", 0, "fpA"); !ok || !iv.Start.Equal(at(10)) || !iv.Cutoff.Equal(at(11)) {
 		t.Fatalf("after the gap: %+v %v", iv, ok)
 	}
 	// The Observer's own routes partition losing coverage breaks it too.
 	h.OnTransitions(observe.TransitionBatch{Cluster: "prd", Incarnation: 1, Task: healthsrc.TaskGateway, Part: "routes",
 		Kind: observe.BatchLoss, At: at(12), Loss: &observe.Loss{Reason: observe.LossCoverage}})
-	if _, ok := h.Interval("prd", "r1", 0); ok {
+	if _, ok := h.Interval("prd", "r1", 0, "fpA"); ok {
 		t.Fatal("an interval after the routes partition was lost")
 	}
 	h.OnRows(routeRows(1, at(14), true, map[string][]string{"r1": {"fpA", "fpB2"}}))
 	// A recreated route is a new UID: the old one's rules are gone.
 	h.OnRows(routeRows(1, at(20), true, map[string][]string{"r2": {"fpA", "fpB2"}}))
-	if _, ok := h.Interval("prd", "r1", 0); ok {
+	if _, ok := h.Interval("prd", "r1", 0, "fpA"); ok {
 		t.Fatal("a gone route kept its interval")
 	}
-	if iv, ok := h.Interval("prd", "r2", 0); !ok || !iv.Start.Equal(at(20)) {
+	if iv, ok := h.Interval("prd", "r2", 0, "fpA"); !ok || !iv.Start.Equal(at(20)) {
 		t.Fatalf("the recreated route: %+v %v", iv, ok)
 	}
 	// A new incarnation re-baselines.
 	h.OnRows(routeRows(2, at(30), true, map[string][]string{"r2": {"fpA", "fpB2"}}))
-	if iv, ok := h.Interval("prd", "r2", 0); !ok || !iv.Start.Equal(at(30)) {
+	if iv, ok := h.Interval("prd", "r2", 0, "fpA"); !ok || !iv.Start.Equal(at(30)) {
 		t.Fatalf("a new incarnation: %+v %v", iv, ok)
 	}
 	// Unknown keys and clusters.
-	if _, ok := h.Interval("prd", "r2", 7); ok {
+	if _, ok := h.Interval("prd", "r2", 7, "fpA"); ok {
 		t.Fatal("an unknown rule index")
 	}
-	if _, ok := h.Interval("stg", "r2", 0); ok {
+	if _, ok := h.Interval("stg", "r2", 0, "fpA"); ok {
 		t.Fatal("an unknown cluster")
 	}
 }
@@ -91,7 +95,7 @@ func TestRuleHistoryNeedsTheGatewaysLive(t *testing.T) {
 	r := routeRows(1, t0, true, map[string][]string{"r1": {"fpA"}})
 	r.Part.Kinds[1].Coverage = observe.Checking // the Gateways not read: rows are not the truth yet
 	h.OnRows(r)
-	if _, ok := h.Interval("prd", "r1", 0); ok {
+	if _, ok := h.Interval("prd", "r1", 0, "fpA"); ok {
 		t.Fatal("an interval with the Gateways unread")
 	}
 }
@@ -118,11 +122,11 @@ func TestRuleHistoryEnd(t *testing.T) {
 	if c := h.st["prd"]; c.prev != nil || c.seen {
 		t.Fatalf("a late row of the ended incarnation: %+v", c)
 	}
-	if _, ok := h.Interval("prd", "r1", 0); ok {
+	if _, ok := h.Interval("prd", "r1", 0, "fpA"); ok {
 		t.Fatal("an interval after the end")
 	}
 	h.OnRows(routeRows(3, t0.Add(5*time.Minute), true, map[string][]string{"r1": {"fpA"}}))
-	if iv, ok := h.Interval("prd", "r1", 0); !ok || !iv.Start.Equal(t0.Add(5*time.Minute)) {
+	if iv, ok := h.Interval("prd", "r1", 0, "fpA"); !ok || !iv.Start.Equal(t0.Add(5*time.Minute)) {
 		t.Fatalf("a new incarnation after the end: %+v %v", iv, ok)
 	}
 }

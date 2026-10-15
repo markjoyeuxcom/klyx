@@ -1,0 +1,20 @@
+{
+ "data": {
+  "result": [
+   {
+    "metric": {
+     "__name__": "envoy_cluster_upstream_rq_total",
+     "envoy_cluster_name": "httproute/default/web/rule/0",
+     "instance": "10.244.0.9:19001",
+     "kubernetes_pod_name": "envoy-infra-eg-5f6d7c9b8-abcde"
+    },
+    "value": [
+     1792080000,
+     "10"
+    ]
+   }
+  ],
+  "resultType": "vector"
+ },
+ "status": "success"
+}

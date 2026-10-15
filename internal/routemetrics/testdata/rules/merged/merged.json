@@ -1,0 +1,20 @@
+{
+ "data": {
+  "result": [
+   {
+    "metric": {
+     "gateway_envoyproxy_io_owning_gateway_name": "eg",
+     "gateway_envoyproxy_io_owning_gateway_namespace": "infra",
+     "namespace": "envoy-gateway-system",
+     "pod": "envoy-infra-eg-5f6d7c9b8-abcde"
+    },
+    "value": [
+     1792080000,
+     "2"
+    ]
+   }
+  ],
+  "resultType": "vector"
+ },
+ "status": "success"
+}

@@ -1,0 +1,54 @@
+{
+ "data": {
+  "result": [
+   {
+    "metric": {
+     "envoy_cluster_name": "httproute/default/web/rule/0"
+    },
+    "values": [
+     [
+      1792079910,
+      "0.2"
+     ],
+     [
+      1792079940,
+      "0.1"
+     ],
+     [
+      1792079970,
+      "0.3"
+     ],
+     [
+      1792080000,
+      "0.2"
+     ]
+    ]
+   },
+   {
+    "metric": {
+     "envoy_cluster_name": "httproute/default/api/rule/0"
+    },
+    "values": [
+     [
+      1792079910,
+      "0"
+     ],
+     [
+      1792079940,
+      "0"
+     ],
+     [
+      1792079970,
+      "0"
+     ],
+     [
+      1792080000,
+      "0"
+     ]
+    ]
+   }
+  ],
+  "resultType": "matrix"
+ },
+ "status": "success"
+}

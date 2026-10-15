@@ -185,8 +185,9 @@ type RuleInterval struct {
 // Interval reads a rule's proven interval back from the log: the latest of
 // its last fingerprint change, its first sighting and the start of the
 // partition's current live span. None while the partition is lost, the
-// rule gone, never seen, or trimmed.
-func (h *routeHistory) Interval(cluster, uid string, index int) (RuleInterval, bool) {
+// rule gone, never seen, or trimmed, or when the log's fingerprint is not
+// the one the caller read (the log has not caught up with that rule).
+func (h *routeHistory) Interval(cluster, uid string, index int, fingerprint string) (RuleInterval, bool) {
 	if h.log == nil {
 		return RuleInterval{}, false
 	}
@@ -201,7 +202,7 @@ func (h *routeHistory) Interval(cluster, uid string, index int) (RuleInterval, b
 		return RuleInterval{}, false
 	}
 	p, ok, _ := h.log.ProofOf(cluster, ruleKey(uid, index))
-	if !ok || p.Suspended {
+	if !ok || p.Suspended || p.Role != fingerprint {
 		return RuleInterval{}, false
 	}
 	start, basis := p.FirstSeen, obslog.ProofUnknown

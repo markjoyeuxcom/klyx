@@ -100,6 +100,7 @@ type Conn interface {
 	HasGlobalService(ctx context.Context, ns, name string) bool
 	ClusterMetrics(ctx context.Context, forceReprobe bool) (metrics.ClusterMetrics, metrics.MetricsCapability)
 	RouteMetrics(ctx context.Context, routeKeys []string) (map[string]routemetrics.RouteMetrics, routemetrics.Status)
+	RuleMetrics(ctx context.Context, namespace, name string) (routemetrics.GatewayRules, error)
 	HubbleFlowStats(ctx context.Context) (hubble.FlowStats, hubble.Status)
 	SetCordon(ctx context.Context, nodeName, uid string, cordon bool) error
 	CheckNodeArmed(ctx context.Context, nodeName, uid string) error

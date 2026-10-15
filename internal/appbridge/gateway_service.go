@@ -12,14 +12,16 @@ import (
 type GatewayConn interface {
 	GetGatewayTopology(ctx context.Context, namespace, name string) (gwapi.Topology, error)
 	RouteMetrics(ctx context.Context, routeKeys []string) (map[string]routemetrics.RouteMetrics, routemetrics.Status)
+	RuleMetrics(ctx context.Context, namespace, name string) (routemetrics.GatewayRules, error)
 	HubbleFlowStats(ctx context.Context) (hubble.FlowStats, hubble.Status)
 }
 
 const gatewayTimeout = 30 * time.Second
 
 type GatewayService struct {
-	lookup      func(string) (GatewayConn, bool)
-	globalReach func(cluster, ns, name string) (peers []string, unconfirmed bool)
+	lookup        func(string) (GatewayConn, bool)
+	globalReach   func(cluster, ns, name string) (peers []string, unconfirmed bool)
+	ruleIntervals func(cluster, uid string, index int, fingerprint string) (RuleInterval, bool)
 }
 
 func NewGatewayService(lookup func(string) (GatewayConn, bool)) *GatewayService {

@@ -1,0 +1,27 @@
+{
+ "data": {
+  "result": [
+   {
+    "metric": {
+     "__name__": "envoy_cluster_upstream_rq_total",
+     "app_kubernetes_io_component": "proxy",
+     "app_kubernetes_io_managed_by": "envoy-gateway",
+     "app_kubernetes_io_name": "envoy",
+     "envoy_cluster_name": "httproute/default/web/rule/0",
+     "gateway_envoyproxy_io_owning_gateway_name": "eg",
+     "gateway_envoyproxy_io_owning_gateway_namespace": "infra",
+     "instance": "10.244.0.206:19001",
+     "job": "kubernetes-pods",
+     "namespace": "envoy-gateway-system",
+     "pod": "envoy-infra-eg-5f6d7c9b8-abcde"
+    },
+    "value": [
+     1792080000,
+     "5"
+    ]
+   }
+  ],
+  "resultType": "vector"
+ },
+ "status": "success"
+}

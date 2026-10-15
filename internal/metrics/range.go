@@ -33,6 +33,30 @@ type matrixElem struct {
 // matrix returns an empty slice and nil error; >1 series is an error.
 // Non-finite (NaN/Inf) points are skipped, leaving a gap.
 func (c *Client) RangeSeries(ctx context.Context, promql string, start, end time.Time, step time.Duration) ([]Point, error) {
+	series, err := c.RangeMatrix(ctx, promql, start, end, step)
+	if err != nil {
+		return nil, err
+	}
+	if len(series) == 0 {
+		return []Point{}, nil
+	}
+	if len(series) > 1 {
+		return nil, fmt.Errorf("expected single series, got %d (aggregate the query)", len(series))
+	}
+	return series[0].Points, nil
+}
+
+// LabeledSeries is one element of a range query's matrix: its labels and its
+// points, gaps kept.
+type LabeledSeries struct {
+	Labels map[string]string
+	Points []Point
+}
+
+// RangeMatrix runs a range query and returns every series with its labels.
+// Non-finite points are skipped, leaving a gap. An empty matrix returns an
+// empty slice and nil error.
+func (c *Client) RangeMatrix(ctx context.Context, promql string, start, end time.Time, step time.Duration) ([]LabeledSeries, error) {
 	rq, ok := c.q.(RangeQuerier)
 	if !ok {
 		return nil, fmt.Errorf("transport does not support range queries")
@@ -61,22 +85,20 @@ func (c *Client) RangeSeries(ctx context.Context, promql string, start, end time
 	if err := json.Unmarshal(env.Data.Result, &elems); err != nil {
 		return nil, fmt.Errorf("parse matrix: %w", err)
 	}
-	if len(elems) == 0 {
-		return []Point{}, nil
-	}
-	if len(elems) > 1 {
-		return nil, fmt.Errorf("expected single series, got %d (aggregate the query)", len(elems))
-	}
-	out := make([]Point, 0, len(elems[0].Values))
-	for _, raw := range elems[0].Values {
-		ts, v, err := parseRangePoint(raw)
-		if errors.Is(err, errNonFinite) {
-			continue // skip NaN/Inf — the gap is the honest signal
+	out := make([]LabeledSeries, 0, len(elems))
+	for _, e := range elems {
+		pts := make([]Point, 0, len(e.Values))
+		for _, raw := range e.Values {
+			ts, v, err := parseRangePoint(raw)
+			if errors.Is(err, errNonFinite) {
+				continue // skip NaN/Inf — the gap is the honest signal
+			}
+			if err != nil {
+				return nil, fmt.Errorf("parse matrix value: %w", err)
+			}
+			pts = append(pts, Point{Unix: ts, Value: v})
 		}
-		if err != nil {
-			return nil, fmt.Errorf("parse matrix value: %w", err)
-		}
-		out = append(out, Point{Unix: ts, Value: v})
+		out = append(out, LabeledSeries{Labels: e.Metric, Points: pts})
 	}
 	return out, nil
 }

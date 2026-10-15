@@ -146,6 +146,9 @@ func (f *fakeConn) ClusterMetrics(ctx context.Context, forceReprobe bool) (metri
 func (f *fakeConn) RouteMetrics(context.Context, []string) (map[string]routemetrics.RouteMetrics, routemetrics.Status) {
 	return nil, routemetrics.Status{}
 }
+func (f *fakeConn) RuleMetrics(context.Context, string, string) (routemetrics.GatewayRules, error) {
+	return routemetrics.GatewayRules{}, nil
+}
 func (f *fakeConn) HubbleFlowStats(context.Context) (hubble.FlowStats, hubble.Status) {
 	return hubble.FlowStats{}, hubble.Status{}
 }
