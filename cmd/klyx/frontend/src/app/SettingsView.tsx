@@ -9,6 +9,7 @@ import { btn, ellipsis } from "../chrome/primitives";
 import { AISettingsPanel } from "./AISettingsPanel";
 import { AppearancePanel } from "./AppearancePanel";
 import { GitSettingsPanel } from "./GitSettingsPanel";
+import { NotificationSettingsPanel } from "./NotificationSettingsPanel";
 
 // SettingsView is the fleet-configuration surface: the loaded fleet.yaml
 // (path, clusters, load warnings) and a fresh kubeconfig context scan with
@@ -118,6 +119,10 @@ export function SettingsView() {
 
       <Section title="Git history">
         <GitSettingsPanel />
+      </Section>
+
+      <Section title="Notifications">
+        <NotificationSettingsPanel />
       </Section>
 
       <Section title="Kubeconfig contexts">

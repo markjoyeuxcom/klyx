@@ -47,8 +47,8 @@ export function ActivityView() {
         <div className="lens-canvas" style={{ fontFamily: "var(--font-mono)", fontSize: 12, gap: 0 }}>
           {log.map((e) => (
             <div key={e.id} data-testid="activity-row" style={{ display: "flex", gap: 10, alignItems: "baseline", padding: "6px 8px", borderBottom: "1px solid var(--color-border-tertiary)" }}>
-              <span aria-label={e.kind === "error" ? "failed" : "succeeded"} style={{ width: 12, flexShrink: 0, color: e.kind === "error" ? "var(--color-text-danger)" : "var(--color-text-tertiary)" }}>
-                {e.kind === "error" ? "▲" : "✓"}
+              <span aria-label={e.kind === "error" ? "failed" : e.kind === "info" ? "noted" : "succeeded"} style={{ width: 12, flexShrink: 0, color: e.kind === "error" ? "var(--color-text-danger)" : "var(--color-text-tertiary)" }}>
+                {e.kind === "error" ? "▲" : e.kind === "info" ? "•" : "✓"}
               </span>
               <span style={{ color: "var(--color-text-tertiary)", flexShrink: 0, width: 150 }} title={new Date(e.at).toISOString()}>
                 {fmtTime(e.at)}

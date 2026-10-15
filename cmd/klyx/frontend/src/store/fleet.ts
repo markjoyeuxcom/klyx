@@ -877,7 +877,9 @@ const ARGO_EMPTY_ROWS = {
 
 // ---- / Helm types -------------------------------------------------------------
 
-export type ActionStatus = { kind: "success" | "error"; message: string };
+// info: a fact to note, neither an outcome nor a failure (faults listed at
+// connect, The Line slice 10).
+export type ActionStatus = { kind: "success" | "error" | "info"; message: string };
 // One toast on screen / one row in the activity log. `at` is epoch ms.
 export type ActionEvent = ActionStatus & { id: number; at: number };
 

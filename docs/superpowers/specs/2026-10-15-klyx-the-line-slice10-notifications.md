@@ -277,3 +277,14 @@ The re-review of 066ca6b found two more gaps, answered here:
   - the settings round trip, refusal, sending, a click and recent listings;
   - end to end, a real Observer over certificates through `HealthSink`;
   - a real Observer with `RoleCap` 3 crossing its cap and falling back under it. A recording listener asserts the `capped` loss and the after-cap baseline, and a later onset notifies, which it could not if the partition were still lost.
+
+## 8. As built: 10b
+
+- **`bridge/notifications.ts`:**
+  - `startHealthNotifications()` runs once from the app shell. It subscribes to the baseline and open events, then reads `RecentBaselines()`; each listing is said once, by its number, as an `info` Activity entry and toast. A `dropped` listing says how many notifications de-duplication had no room for.
+  - It reports `{focused, cluster}` on window focus and blur and on every route change, only when it changes.
+  - `openNotified` reveals a notified object in its part's lens with its UID (a burst opens its cluster).
+- **Settings > Notifications** (`app/NotificationSettingsPanel.tsx`): "Notify me about new faults" (off), the cluster scope and "Also notify recoveries", the latter two disabled until enabled. A failed save reverts and says why; an OS refusal is kept and said.
+- **Activity:** an `info` kind (•, "noted") beside success and failure.
+- **Tests:** the bridge (wording, opening pinned, events, focus reporting, a late webview listing each number once) and the panel (default off, enabling with a refusal said, a failed save reverting).
+- **Captures** (`pw/s10b.mjs`, server-mode Klyx, 1440×900, both themes): the panel off and enabled; in server mode the OS permission is refused, and the panel says so.
