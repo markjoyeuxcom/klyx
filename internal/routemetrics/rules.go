@@ -80,7 +80,8 @@ const (
 	ReasonSeveralClusters = ReasonCannotScope + ": the series come from more than one cluster"
 	NoteDirectResponses   = "Direct and local responses (a directResponse, a redirect, a 404 with no route) never reach an upstream cluster, so they are not in these series."
 	NoteBackendSplit      = "unavailable: a rule's backends share its one Envoy cluster"
-	NoteCurrentPods       = "Only the proxy pods running now are counted: samples from proxies that have since gone are left out."
+	NoteCurrentPods       = "Only the proxy pods listed now are counted, whatever their phase: samples from proxies already gone are left out."
+	NoteUptake            = "A rule's interval starts when Klyx observed it in the API; when Envoy took the change up is not verified."
 )
 
 // RouteRules is one HTTPRoute attached to the Gateway: its rules by index.
@@ -173,7 +174,7 @@ func NewEnvoyRuleSource(c *metrics.Client) *EnvoyRuleSource { return &EnvoyRuleS
 // names, and the cluster names of those it can read.
 func base(q RuleQuery) (GatewayRules, []string) {
 	out := GatewayRules{Status: Status{Available: true}, Start: q.End.Add(-RuleWindow), End: q.End,
-		BackendSplit: NoteBackendSplit, Notes: []string{NoteDirectResponses}, Unattributable: q.Unattributable}
+		BackendSplit: NoteBackendSplit, Notes: []string{NoteDirectResponses, NoteUptake}, Unattributable: q.Unattributable}
 	var names []string
 	for _, r := range q.Routes {
 		for i, fp := range r.Fingerprints {
@@ -239,24 +240,53 @@ func (s *EnvoyRuleSource) QueryRules(ctx context.Context, q RuleQuery) GatewayRu
 		return out
 	}
 
-	// Which labels the series carry, over the whole window: the scope.
-	probe, err := s.client.InstantVector(ctx, fmt.Sprintf("last_over_time(%s{%s}[%s])", mRqTotal, sel, ruleWindow))
-	if err != nil {
-		out.Status = Status{Available: false, Message: "route metrics query failed: " + err.Error()}
+	// Which labels the series carry, over the whole window: the scope. Each
+	// metric is probed on its own, so one filtered out or failing never
+	// hides the others.
+	reads := map[string]*metricRead{}
+	var union []metrics.LabeledSample
+	failed := 0
+	var firstErr error
+	for _, m := range ruleMetrics {
+		rd := &metricRead{}
+		reads[m] = rd
+		probe, err := s.client.InstantVector(ctx, fmt.Sprintf("last_over_time(%s{%s}[%s])", m, sel, ruleWindow))
+		switch {
+		case err != nil:
+			rd.err = err
+			failed++
+			if firstErr == nil {
+				firstErr = err
+			}
+		case len(probe) == 0:
+			rd.absent = true
+		default:
+			for _, smp := range probe {
+				l := make(map[string]string, len(smp.Labels)+1)
+				for k, v := range smp.Labels {
+					l[k] = v
+				}
+				l[probeMetric] = m
+				union = append(union, metrics.LabeledSample{Labels: l, Value: smp.Value})
+			}
+		}
+	}
+	if failed == len(ruleMetrics) {
+		out.Status = Status{Available: false, Message: "route metrics query failed: " + firstErr.Error()}
 		return out
 	}
-	if len(probe) == 0 {
-		absentAll(&out)
+	if len(union) == 0 {
+		reduceRules(&out, reads)
 		return out
 	}
-	form, ok := detectForm(probe)
+	form, ok := detectForm(union)
 	if !ok {
 		out.Status = Status{Available: false, Message: ReasonCannotScope}
 		return out
 	}
 	scopes, note, reason := scopesFor(ctx, q, form, pods)
 	if reason == "" {
-		reason = scopedOnce(ctx, probe, form, q, pods)
+		reason = scopedOnce(ctx, union, form, q, pods)
 	}
 	if reason != "" {
 		out.Status = Status{Available: false, Message: reason}
@@ -264,18 +294,37 @@ func (s *EnvoyRuleSource) QueryRules(ctx context.Context, q RuleQuery) GatewayRu
 	}
 	out.Scope, out.ScopeNote = form, note
 
-	rangeOf := func(metric, extra, by string) ([]metrics.LabeledSeries, error) {
+	rangeOf := func(metric, extra, by string) {
+		rd := reads[metric]
+		if rd.err != nil || rd.absent {
+			return
+		}
 		inner := orEach(scopes, func(sc string) string {
 			return fmt.Sprintf("rate(%s{%s,%s%s}[%s])", metric, sel, sc, extra, ruleRate)
 		})
-		return s.client.RangeMatrix(ctx, fmt.Sprintf("sum by (%s%s) (%s)", lClusterName, by, inner), out.Start, out.End, RuleStep)
+		rd.series, rd.err = s.client.RangeMatrix(ctx, fmt.Sprintf("sum by (%s%s) (%s)", lClusterName, by, inner), out.Start, out.End, RuleStep)
 	}
-	reqs, reqErr := rangeOf(mRqTotal, "", "")
-	classes, clsErr := rangeOf(mRqXX, "", ", "+lRespClass)
-	r503, r503Err := rangeOf(mRq, ","+metrics.Equals(lRespCode, "503"), "")
-	retries, retryErr := rangeOf(mRqRetry, "", "")
-	reduceRules(&out, reqs, reqErr, classes, clsErr, r503, r503Err, retries, retryErr)
+	rangeOf(mRqTotal, "", "")
+	rangeOf(mRqXX, "", ", "+lRespClass)
+	rangeOf(mRq, ","+metrics.Equals(lRespCode, "503"), "")
+	rangeOf(mRqRetry, "", "")
+	reduceRules(&out, reads)
 	return out
+}
+
+// ruleMetrics are the four metric families read per rule; probeMetric
+// tags a probed series with its family (the probes drop no labels, but the
+// families share label sets).
+var ruleMetrics = []string{mRqTotal, mRqXX, mRq, mRqRetry}
+
+const probeMetric = "__klyx_metric"
+
+// metricRead is one family's read: failed, absent from the window, or its
+// range series.
+type metricRead struct {
+	series []metrics.LabeledSeries
+	err    error
+	absent bool
 }
 
 // detectForm picks the first label pair every probed series carries.
@@ -363,7 +412,7 @@ func scopedOnce(ctx context.Context, probe []metrics.LabeledSample, form ScopeFo
 			}
 			id = l[nsL] + "/" + l[nameL]
 		}
-		key := l[lClusterName] + "\x00" + id
+		key := strings.Join([]string{l[probeMetric], l[lClusterName], l[lRespClass], l[lRespCode], id}, "\x00")
 		if seen[key] {
 			return ReasonScrapedTwice
 		}
@@ -399,8 +448,12 @@ func (s *EnvoyRuleSource) sharedClusters(ctx context.Context, q RuleQuery, pods 
 	for _, p := range scopePairs {
 		by = append(by, p.name, p.ns)
 	}
-	samples, err := s.client.InstantVector(ctx, fmt.Sprintf("count by (%s) (last_over_time(%s{%s=~%s}[%s]))",
-		strings.Join(by, ", "), mRqTotal, lClusterName, strconv.Quote(mergedCluster), ruleWindow))
+	// Every family, so one filtered out never hides a merged cluster; "or"
+	// keeps one sample per label set where the families share them.
+	inner := orEach(ruleMetrics, func(m string) string {
+		return fmt.Sprintf("last_over_time(%s{%s=~%s}[%s])", m, lClusterName, strconv.Quote(mergedCluster), ruleWindow)
+	})
+	samples, err := s.client.InstantVector(ctx, fmt.Sprintf("count by (%s) (%s)", strings.Join(by, ", "), inner))
 	if err != nil {
 		return "could not check for shared clusters: " + err.Error()
 	}
@@ -472,19 +525,6 @@ func orEach(scopes []string, f func(string) string) string {
 	return strings.Join(parts, " or ")
 }
 
-func absentAll(out *GatewayRules) {
-	for i := range out.Rules {
-		r := &out.Rules[i]
-		if r.Unattributable != "" {
-			continue
-		}
-		r.Requests = Series{Availability: MetricAbsent}
-		r.Classes = ClassSeries{Availability: MetricAbsent}
-		r.Share503 = Series{Availability: MetricAbsent}
-		r.Retries = Series{Availability: MetricAbsent}
-	}
-}
-
 // byCluster indexes a matrix by its rule cluster name; other shapes are skipped.
 func byCluster(series []metrics.LabeledSeries) map[string][]metrics.LabeledSeries {
 	m := map[string][]metrics.LabeledSeries{}
@@ -497,18 +537,18 @@ func byCluster(series []metrics.LabeledSeries) map[string][]metrics.LabeledSerie
 	return m
 }
 
-func reduceRules(out *GatewayRules, reqs []metrics.LabeledSeries, reqErr error, classes []metrics.LabeledSeries, clsErr error,
-	r503 []metrics.LabeledSeries, r503Err error, retries []metrics.LabeledSeries, retryErr error) {
-	reqM, clsM, r503M, retryM := byCluster(reqs), byCluster(classes), byCluster(r503), byCluster(retries)
+func reduceRules(out *GatewayRules, reads map[string]*metricRead) {
+	by := func(m string) map[string][]metrics.LabeledSeries { return byCluster(reads[m].series) }
+	reqM, clsM, r503M, retryM := by(mRqTotal), by(mRqXX), by(mRq), by(mRqRetry)
 	for i := range out.Rules {
 		r := &out.Rules[i]
 		if r.Unattributable != "" {
 			continue
 		}
 		name := RuleCluster(r.Namespace, r.Name, r.Rule)
-		r.Requests = single(reqM[name], reqErr)
-		r.Retries = single(retryM[name], retryErr)
-		r.Classes, r.Share503 = shares(clsM[name], clsErr, r503M[name], r503Err)
+		r.Requests = single(reqM[name], reads[mRqTotal].err)
+		r.Retries = single(retryM[name], reads[mRqRetry].err)
+		r.Classes, r.Share503 = shares(clsM[name], reads[mRqXX].err, r503M[name], reads[mRq].err)
 	}
 }
 
@@ -525,38 +565,64 @@ func single(s []metrics.LabeledSeries, err error) Series {
 	return Series{Availability: MetricAvailable, Points: s[0].Points}
 }
 
-// shares turns the per-class rates into each class's share of all coded
-// responses, per point, and the 503 rate into its share of the same total.
-// A class or the 503 counter is created at its first response, so a missing
-// one at a point where the total exists is zero. A point whose total is zero
-// has no share (not meaningful).
+// shares turns the per-class rates into each class's share of the coded
+// responses, and the 503 rate into its share of the same total. Nothing
+// missing is taken as zero: a point has shares only where every class
+// series of the rule has a sample there and the total is above zero, and
+// the 503 share only where the 503 series has a sample too. A rule with no
+// 503 series has no 503 share (absent), whatever the classes say.
 func shares(cls []metrics.LabeledSeries, clsErr error, r503 []metrics.LabeledSeries, r503Err error) (ClassSeries, Series) {
 	if clsErr != nil {
 		return ClassSeries{Availability: MetricFailed, Error: clsErr.Error()}, Series{Availability: MetricFailed, Error: "the response classes could not be read: " + clsErr.Error()}
 	}
-	if len(cls) == 0 {
-		return ClassSeries{Availability: MetricAbsent}, Series{Availability: MetricAbsent}
+	var s503 Series
+	switch {
+	case r503Err != nil:
+		s503 = Series{Availability: MetricFailed, Error: r503Err.Error()}
+	case len(r503) == 0:
+		s503 = Series{Availability: MetricAbsent}
+	case len(r503) > 1:
+		s503 = Series{Availability: MetricFailed, Error: fmt.Sprintf("expected one 503 series per rule, got %d", len(r503))}
 	}
-	total := map[int64]float64{}
+	if len(cls) == 0 {
+		if s503.Availability == "" {
+			s503 = Series{Availability: MetricAbsent} // no total to divide by
+		}
+		return ClassSeries{Availability: MetricAbsent}, s503
+	}
 	byClass := map[string]map[int64]float64{}
 	for _, s := range cls {
 		c := s.Labels[lRespClass]
 		if len(c) != 1 || c[0] < '1' || c[0] > '5' {
-			continue // not a response class Envoy writes
+			return ClassSeries{Availability: MetricFailed, Error: fmt.Sprintf("unexpected response class %q", c)},
+				Series{Availability: MetricFailed, Error: "the response classes could not be read"}
 		}
 		key := c + "xx"
-		if byClass[key] == nil {
-			byClass[key] = map[int64]float64{}
+		if byClass[key] != nil {
+			return ClassSeries{Availability: MetricFailed, Error: "more than one series for class " + key},
+				Series{Availability: MetricFailed, Error: "the response classes could not be read"}
 		}
+		byClass[key] = map[int64]float64{}
 		for _, p := range s.Points {
-			byClass[key][p.Unix] += p.Value
-			total[p.Unix] += p.Value
+			byClass[key][p.Unix] = p.Value
 		}
 	}
-	ts := make([]int64, 0, len(total))
-	for t, v := range total {
-		if v > 0 {
+	// The timestamps every class has a sample at, with a total above zero.
+	var ts []int64
+	total := map[int64]float64{}
+	for t := range byClass[firstKey(byClass)] {
+		sum, all := 0.0, true
+		for _, pts := range byClass {
+			v, ok := pts[t]
+			if !ok {
+				all = false
+				break
+			}
+			sum += v
+		}
+		if all && sum > 0 {
 			ts = append(ts, t)
+			total[t] = sum
 		}
 	}
 	sort.Slice(ts, func(i, j int) bool { return ts[i] < ts[j] })
@@ -568,26 +634,27 @@ func shares(cls []metrics.LabeledSeries, clsErr error, r503 []metrics.LabeledSer
 		}
 		cs.Classes[key] = series
 	}
-	var s503 Series
-	switch {
-	case r503Err != nil:
-		s503 = Series{Availability: MetricFailed, Error: r503Err.Error()}
-	case len(r503) > 1:
-		s503 = Series{Availability: MetricFailed, Error: fmt.Sprintf("expected one 503 series per rule, got %d", len(r503))}
-	default:
+	if s503.Availability == "" {
 		at := map[int64]float64{}
-		if len(r503) == 1 {
-			for _, p := range r503[0].Points {
-				at[p.Unix] = p.Value
-			}
+		for _, p := range r503[0].Points {
+			at[p.Unix] = p.Value
 		}
 		pts := make([]metrics.Point, 0, len(ts))
 		for _, t := range ts {
-			pts = append(pts, metrics.Point{Unix: t, Value: clamp01(at[t] / total[t])})
+			if v, ok := at[t]; ok {
+				pts = append(pts, metrics.Point{Unix: t, Value: clamp01(v / total[t])})
+			}
 		}
 		s503 = Series{Availability: MetricAvailable, Points: pts}
 	}
 	return cs, s503
+}
+
+func firstKey(m map[string]map[int64]float64) string {
+	for k := range m {
+		return k
+	}
+	return ""
 }
 
 // clamp01: rates of counters scraped apart can momentarily disagree.

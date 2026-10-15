@@ -41,7 +41,7 @@ func kindOf(promql string) string {
 	case strings.HasPrefix(promql, "count by ("):
 		return "merged"
 	case strings.HasPrefix(promql, "last_over_time("):
-		return "probe"
+		return "probe-" + promql[len("last_over_time("):strings.Index(promql, "{")]
 	case strings.Contains(promql, `envoy_response_code="503"`):
 		return "r503"
 	case strings.Contains(promql, "envoy_response_code_class) ("):
@@ -61,6 +61,9 @@ func (f *fixtureQ) answer(promql, empty string) (int, []byte, error) {
 		return 0, nil, err
 	}
 	b, err := os.ReadFile(filepath.Join(f.dir, k+".json"))
+	if errors.Is(err, os.ErrNotExist) && strings.HasPrefix(k, "probe-") {
+		b, err = os.ReadFile(filepath.Join(f.dir, "probe.json")) // one probe file answers every family
+	}
 	if errors.Is(err, os.ErrNotExist) {
 		return 200, []byte(empty), nil
 	}
@@ -151,7 +154,7 @@ func TestRulesDedicated(t *testing.T) {
 	if !g.Start.Equal(fixEnd.Add(-30*time.Minute)) || !g.End.Equal(fixEnd) {
 		t.Fatalf("window %v..%v", g.Start, g.End)
 	}
-	if g.BackendSplit != NoteBackendSplit || len(g.Notes) != 1 || g.Notes[0] != NoteDirectResponses {
+	if g.BackendSplit != NoteBackendSplit || len(g.Notes) != 2 || g.Notes[0] != NoteDirectResponses || g.Notes[1] != NoteUptake {
 		t.Fatalf("notes: %q %q", g.BackendSplit, g.Notes)
 	}
 	// Every query is scoped to this Gateway's owner pair and its rules, at a
@@ -201,9 +204,9 @@ func TestRulesDedicated(t *testing.T) {
 	if r := web0.Retries; r.Availability != MetricAvailable || len(r.Points) != 4 || r.Points[2].Value != 0.3 {
 		t.Fatalf("web#0 retries: %+v", r)
 	}
-	// No 503 counter yet: the share is zero wherever the total exists.
+	// No 503 series: no 503 share, never a measured zero.
 	api0 := ruleOf(t, g, "api", 0)
-	if s := api0.Share503; s.Availability != MetricAvailable || len(s.Points) != 4 || s.Points[3].Value != 0 {
+	if s := api0.Share503; s.Availability != MetricAbsent || len(s.Points) != 0 {
 		t.Fatalf("api#0 503 share: %+v", s)
 	}
 	if _, ok := api0.Classes.Classes["5xx"]; ok {
@@ -259,7 +262,7 @@ func TestRulesSharedClusters(t *testing.T) {
 			t.Fatalf("rule: %+v", r)
 		}
 	}
-	if _, ok := f.queries["probe"]; ok {
+	if _, ok := f.queries["probe-"+mRqTotal]; ok {
 		t.Fatal("read past a shared cluster")
 	}
 	// Known by its pod pair: the pod is a current proxy of this Gateway.
@@ -298,7 +301,7 @@ func TestRulesPodScope(t *testing.T) {
 	if !strings.Contains(q, want) {
 		t.Fatalf("pod-scoped query:\n%s\nwant within it:\n%s", q, want)
 	}
-	if web0 := ruleOf(t, g, "web", 0); web0.Requests.Availability != MetricAvailable || web0.Share503.Availability != MetricAvailable {
+	if web0 := ruleOf(t, g, "web", 0); web0.Requests.Availability != MetricAvailable || web0.Share503.Availability != MetricAbsent {
 		t.Fatalf("web#0: %+v", web0)
 	}
 	// No proxy pods: cannot scope.
@@ -423,4 +426,72 @@ func TestRulesScrapedOnce(t *testing.T) {
 	if r := scopedOnce(context.Background(), probe, ScopePod, egQuery(nil), onceList(pods(egPod2))); r != "" {
 		t.Fatalf("out of scope: %q", r)
 	}
+}
+
+// Nothing missing is taken as zero (design review of a6d5c4e): a missing 503
+// series is absent, a missing class sample is a gap for every class, and a
+// 503 gap is a gap.
+func TestSharesKeepGaps(t *testing.T) {
+	cls := []metrics.LabeledSeries{{Labels: map[string]string{lRespClass: "2"}, Points: []metrics.Point{{Unix: 100, Value: 10}}}}
+	if _, got := shares(cls, nil, nil, nil); got.Availability != MetricAbsent || len(got.Points) != 0 {
+		t.Fatalf("a missing 503 series became a measured zero: %+v", got)
+	}
+	cls = []metrics.LabeledSeries{
+		{Labels: map[string]string{lRespClass: "2"}, Points: []metrics.Point{{Unix: 100, Value: 10}, {Unix: 130, Value: 10}, {Unix: 160, Value: 10}}},
+		{Labels: map[string]string{lRespClass: "5"}, Points: []metrics.Point{{Unix: 100, Value: 1}, {Unix: 160, Value: 1}}},
+	}
+	r503 := []metrics.LabeledSeries{{Points: []metrics.Point{{Unix: 160, Value: 1}}}}
+	got, s503 := shares(cls, nil, r503, nil)
+	for k, pts := range got.Classes {
+		if len(pts) != 2 || pts[0].Unix != 100 || pts[1].Unix != 160 {
+			t.Fatalf("%s: a missing class sample was filled: %+v", k, pts)
+		}
+	}
+	if s503.Availability != MetricAvailable || len(s503.Points) != 1 || s503.Points[0].Unix != 160 || s503.Points[0].Value < 0.0908 || s503.Points[0].Value > 0.0910 {
+		t.Fatalf("503 share: %+v", s503)
+	}
+	// Two series for one class cannot be divided honestly.
+	cls = append(cls, metrics.LabeledSeries{Labels: map[string]string{lRespClass: "5"}})
+	if c, s := shares(cls, nil, r503, nil); c.Availability != MetricFailed || s.Availability != MetricFailed {
+		t.Fatalf("a repeated class: %+v %+v", c, s)
+	}
+}
+
+// One family filtered out of the scrape, or failing, never hides the
+// others (design review of a6d5c4e).
+func TestRulesFamiliesApart(t *testing.T) {
+	f := newFixture(t, "nototal")
+	g := NewEnvoyRuleSource(metrics.NewClient(f)).QueryRules(context.Background(), egQuery(nil))
+	web0 := ruleOf(t, g, "web", 0)
+	if !g.Status.Available || web0.Requests.Availability != MetricAbsent || web0.Classes.Availability != MetricAvailable || web0.Retries.Availability != MetricAvailable {
+		t.Fatalf("no request total: %+v / %+v", g.Status, web0)
+	}
+	if _, ok := f.queries["requests"]; ok {
+		t.Fatal("a range query for an absent family")
+	}
+	f = newFixture(t, "dedicated")
+	f.fail["probe-"+mRqRetry] = errors.New("boom")
+	g = NewEnvoyRuleSource(metrics.NewClient(f)).QueryRules(context.Background(), egQuery(nil))
+	web0 = ruleOf(t, g, "web", 0)
+	if !g.Status.Available || web0.Retries.Availability != MetricFailed || web0.Requests.Availability != MetricAvailable {
+		t.Fatalf("a failing probe: %+v / %+v", g.Status, web0)
+	}
+	// Every probe failing leaves nothing readable.
+	f = newFixture(t, "dedicated")
+	for _, m := range ruleMetrics {
+		f.fail["probe-"+m] = errors.New("down")
+	}
+	if g = NewEnvoyRuleSource(metrics.NewClient(f)).QueryRules(context.Background(), egQuery(nil)); g.Status.Available {
+		t.Fatalf("every probe failing: %+v", g.Status)
+	}
+	// The merged check reads every family.
+	if q := newFixtureQueries(t); !strings.Contains(q, mRqRetry+"{") || !strings.Contains(q, mRqXX+"{") || !strings.Contains(q, " or ") {
+		t.Fatalf("merged check: %s", q)
+	}
+}
+
+func newFixtureQueries(t *testing.T) string {
+	f := newFixture(t, "dedicated")
+	NewEnvoyRuleSource(metrics.NewClient(f)).QueryRules(context.Background(), egQuery(nil))
+	return f.queries["merged"]
 }

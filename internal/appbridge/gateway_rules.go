@@ -33,7 +33,8 @@ type RuleClassesDTO struct {
 // RuleAttributionDTO is the rule's proven interval: Start is the proof (a
 // fingerprint change, or the first sighting or after-gap when Basis is
 // unknown) and Cutoff is one rate window later. Points before Cutoff are not
-// this rule's. With no proven interval, no point is.
+// this rule's. With no proven interval, no point is. Start is when Klyx
+// observed the rule in the API; when Envoy took it up is not verified.
 type RuleAttributionDTO struct {
 	Proven bool   `json:"proven"`
 	Start  string `json:"start,omitempty"`  // RFC3339
