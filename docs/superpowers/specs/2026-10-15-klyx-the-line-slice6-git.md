@@ -260,6 +260,50 @@ The parent's contract, with the modules it needs:
 - **The UI:** the Flux inspector's "Compute diff" uses the cache when its repo is approved and fetched, and says which (cache or none) it used. The flux CLI path stays for unapproved repos.
 - **Fixtures:** a generator reading `../outside.txt` fails, a nested base escaping the root fails, and a remote base is refused.
 
+### 7.1 Design addendum for 6e (for review before it is built)
+
+Surveying kustomize api v0.21.3 and `fluxcd/pkg/ssa` showed six points §7 does not settle. Each is proposed here for a ruling before any 6e code.
+
+1. **The build runs in a contained child process.**
+   - **Why not in-process:** `krusty.Kustomizer.Run` builds its own loader (`internal/loader.NewLoader`), and neither of its remote paths can be switched off through the public API:
+     - it fetches an `http(s)` resource with a bare `http.Client` (the default transport);
+     - it clones a repository spec by running `git` (`ClonerUsingGitExec`) with the inherited environment.
+
+     Inside Klyx's process, either would run outside the transport boundary.
+   - **The child:** a hidden mode of Klyx's own binary (`klyx --kustomize-build`, dispatched before the app starts), run under `internal/procrun`:
+     - an empty environment: no `PATH`, so a `git` exec cannot resolve; no `HOME`, no proxies;
+     - inside it, `http.DefaultTransport` refuses every dial;
+     - the input set arrives on stdin as a tar of at most 64 MiB; the built YAML stream leaves on stdout, capped at 64 MiB; stderr is capped;
+     - a 60s deadline, and the process group killed on deadline or cancel.
+   - **Inside the child:** kustomize's in-memory filesystem, loaded from the tar, refuses absolute paths, `..` and links. The build uses `LoadRestrictionsRootOnly`, `types.DisabledPluginConfig()` (no exec functions, no network, statically linked builtins only), and no Helm.
+   - **Windows:** no reviewed containment, so the cache diff is off and the flux CLI path stays.
+2. **Remote references are refused before the build.** The rounds parse every kustomization file. Any `resources`, `bases` or `components` entry kustomize would load remotely is refused, naming it: an `http(s)` URL, or a repository spec as kustomize reads one (`git::`, `ssh://`, `https://`, `git@host:`, or `host/org/repo?ref=`). The child's refusing transport and missing `PATH` are the second line.
+   - **`remoteBases` is deferred.** §7 allows remote bases per repo, but only from approved URLs through the same acquisition, and that needs a resolver mapping a base URL onto an approved cache and an in-memory mount. In 6e every remote base is refused ("remote bases are not supported yet"), and Settings > Git shows no toggle.
+3. **The revision built** is the Kustomization's own `status.lastAttemptedRevision`, the commit Flux is trying to apply. When absent, it is the GitRepository's artifact revision. Either is a full commit id.
+   - When the cache lacks that commit, Klyx fetches exactly it (a commit ref, `+<sha>:refs/klyx/staging/commit/<sha>`) through the acquisition contract, then acquires content.
+   - This adds a third source of a tracked ref to §3.6, beside the line key and the override: a Flux Kustomization's attempted revision, a validated full commit id read from the cluster, fetched only when the owner asks for a cache diff.
+4. **The input set and its export.**
+   - **Rounds** start at the literal `spec.path`. Each round reads the kustomization file (`kustomization.yaml`, `kustomization.yml` or `Kustomization`) of each newly added directory and adds what it references, resolved against that directory and refused if it leaves the repository:
+     - `resources`, `bases` and `components` directories (their subtrees) or files;
+     - patch files (`patches[].path`, `patchesStrategicMerge`, `patchesJson6902[].path`);
+     - generator `files`, `envs` and `env` (a `key=path` entry reads its path);
+     - `crds`, `configurations`, `replacements[].path` and `openapi.path`.
+   - **Refused** in a kustomization: `helmCharts` and `helmGlobals` (no Helm), and plugin `generators`, `transformers` or `validators` that are not builtin.
+   - **Caps:** at most 10 rounds, 5,000 files and 64 MiB.
+   - **The export reads exact blobs,** not `git archive`. As §3.7 records, an archive takes whole subtrees, while a referenced file needs its blob alone. This adds `cat-file --batch` to §7's allowed commands:
+     - the listed blob ids on stdin, under `GIT_NO_LAZY_FETCH`;
+     - streamed with a 64 MiB total cap, so a missing blob is "content incomplete";
+     - the tar built in Go from (path, mode, blob).
+   - **Refused** in the tree: symbolic links (120000), which kustomize's in-memory filesystem cannot hold, and submodules (160000).
+5. **What Flux adds is applied too.** kustomize-controller wraps `spec.path` in a generated overlay, so a bare build would not be what Flux applies. The child gets that overlay from the Kustomization's spec, as Flux's own generator writes it: `targetNamespace`, `namePrefix`, `nameSuffix`, `commonMetadata`, `images`, `patches` and `components`.
+   - Not applied, and said in the result: `postBuild` substitution ("variables shown unsubstituted") and SOPS ("encrypted files diffed as stored").
+6. **The diff.** In Klyx's process, each built object is dry-run applied server-side on the station's pinned connection (`ssa.ResourceManager.Diff`), with Flux's field manager (`kustomize-controller`), so the diff is what Flux would change.
+   - **The output:** per object "created", "configured" with a YAML diff, or "unchanged". When `spec.prune` is on, an object in the Kustomization's inventory and not in the build reads "would be pruned". Secret `data` and `stringData` values are always masked.
+   - **The modules:**
+     - `sigs.k8s.io/kustomize/api` and `kyaml` v0.21.3.
+     - `github.com/fluxcd/pkg/ssa` v0.77.0, the last release built on client-go v0.36.2 (v0.78+ would move the whole app to k8s 0.37, controller-runtime 0.25, kubectl and cli-runtime). It brings controller-runtime v0.24.1.
+     - The indirect bumps are `kube-openapi`, `go-openapi`, `gnostic-models`, `oauth2` and `protobuf`, checked by the whole Go suite.
+
 ## 8. Testing
 
 - **The transport in tests is the production one.** An `httptest` TLS server runs `git http-backend` over a fixture repo; the test's generated global config adds `http.sslCAInfo` for the test CA. File and plain-HTTP protocols stay forbidden. A fixture server with `uploadpack.allowFilter=false` proves a history refresh that receives blobs is refused.
