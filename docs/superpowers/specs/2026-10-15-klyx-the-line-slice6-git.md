@@ -231,6 +231,26 @@ git:
 - **Recomputed** after every LineDTO, fetch, approval change and Clear; published as `line:git`. `LineGit()` bootstraps it.
 - **The cadence.** `FetchDue()` returns at once. It fetches, in the background, each approved repository the line tracks whose last attempt is at least 5 minutes old. "Fetch now" and the cadence share one per-repository guard.
 
+### 6.5 As built in 6d-2 (the fleet screen)
+
+- **The fence.** `line:git` is kept in its own store, newer versions only. `lineGitFor` hands a view an ordering only when its `lineVersion` is the shown LineDTO's version. `startLineGit` subscribes, then reads, alongside `startLine`.
+- **The verdict:**
+  - T has its own line under the key: "main at a1b9e3c · fetched 20:31", or "history as of 20:31; fetch failed: <error>" beside a failed fetch.
+  - When every compared station (matches, differs, mixed, applied unknown) is ordered (at, behind, ahead, diverged or unrelated, not "not in fetched history"), the headline speaks of T: "1 of 3 compared stations at main · 2 behind". The R tie disclosure is then dropped. Otherwise the headline stays on R.
+  - A station behind T with evidence gets "prd · westeurope is held, 3 commits behind main: blocked by dependency flux-system/infra", in place of its held-at-R clause.
+  - With no ordering, a "Git history: …" line says why; an unapproved repository names the key to approve.
+- **Cells and the strip:**
+  - A cell gives its ordered words: "a1b9e3c · at main", "9f2c11d · 2 behind main", "· held · 2 behind", "· 2 ahead of main", "· diverged at 4c1d2e0", "· unrelated history", "· not in fetched history".
+  - A station held behind T is marked for attention.
+  - The station strip's box for this station says the same.
+- **The Ledger with history:** "commits not yet everywhere · main".
+  - Each row shows the short id, which opens the commit through the runtime's browser when the link template is known.
+  - Then the subject (plain text, one line, clipped), the author and time, and the dots of the ordered stations per track, with the siding as its own row.
+  - "Older commits not shown" when more exist; "Only on <stations> · ahead of main / diverged" lists with "+N more".
+  - With no ordering, the revisions-on-the-line-now Ledger stays, with the "Git history" line.
+- **The cadence:** the fleet screen calls `FetchDue` when it mounts and every 5 minutes while it is open.
+- **Not eyeballed live:** the kind lab has one connected station, so no key is shared and nothing is ordered. The ordered views are covered by tests, and added to the owner's eyeball list.
+
 ## 7. The cache diff (6e)
 
 The parent's contract, with the modules it needs:

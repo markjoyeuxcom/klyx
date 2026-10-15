@@ -1,11 +1,13 @@
 import type { AspectKind } from "../chrome/primitives/Aspect";
 import type { LineDTO, LineStationDTO } from "../store/line";
+import type { LineGitDTO } from "../store/lineGit";
+import { gitStation, orderedText } from "./history";
 
 // The station strip (The Line slice 4 §5.2): the open cluster's own track
 // from the LineDTO - its stations in DTO order (rank, then fleet order),
 // this one boxed with its state word in the tool-neutral §3.3 wording. A
-// segment is lit only when the stations at both ends match R. The strip
-// draws no behind, ahead or held order: that is Git's (slice 6).
+// segment is lit only when the stations at both ends match R. With Git
+// history (slice 6d) this station's box says where it stands against T.
 
 export type StripStation = {
   cluster: string;
@@ -42,8 +44,9 @@ function phrase(s: LineStationDTO, label: string, here: boolean, protection: str
 }
 
 // protection: the open cluster's "protected" word, said with this station
-// (the visible tag is the station crumb's).
-export function stationStrip(dto: LineDTO | null, cluster: string, protection?: string): Strip | null {
+// (the visible tag is the station crumb's). git is the ordering fenced to
+// dto (slice 6d): this station's box then says where it stands against T.
+export function stationStrip(dto: LineDTO | null, cluster: string, protection?: string, git: LineGitDTO | null = null): Strip | null {
   if (!dto) return null;
   if ((dto.siding ?? []).some((s) => s.cluster === cluster)) return { kind: "siding", text: "siding" };
   const me = (dto.stations ?? []).find((s) => s.cluster === cluster);
@@ -53,7 +56,9 @@ export function stationStrip(dto: LineDTO | null, cluster: string, protection?: 
   const stations = track.map((s): StripStation => {
     const label = s.env && envs.filter((e) => e === s.env).length === 1 ? s.env : s.cluster;
     const here = s.cluster === cluster;
-    return { cluster: s.cluster, label, mark: markOf(s), here, state: s.state, box: here ? (s.read === "checking" ? "checking…" : s.state === "differs" && s.single ? `differs at ${short(s.single)}` : s.state) : null, text: phrase(s, label, here, protection) };
+    const g = here ? gitStation(git, s.cluster) : null;
+    const box = !here ? null : s.read === "checking" ? "checking…" : g && git ? orderedText(g, git) : s.state === "differs" && s.single ? `differs at ${short(s.single)}` : s.state;
+    return { cluster: s.cluster, label, mark: markOf(s), here, state: s.state, box, text: g && git ? `${phrase(s, label, here, protection)}, ${orderedText(g, git)}` : phrase(s, label, here, protection) };
   });
   const lit = track.slice(1).map((s, i) => track[i].state === "matches" && s.state === "matches");
   return { kind: "track", stations, lit, text: stations.map((s) => s.text).join("; ") };

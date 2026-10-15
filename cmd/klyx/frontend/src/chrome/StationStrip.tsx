@@ -1,4 +1,5 @@
 import { useLine } from "../store/line";
+import { useLineGitFor } from "../store/lineGit";
 import { stationStrip } from "../line/stationStrip";
 import { Aspect } from "./primitives";
 
@@ -9,7 +10,8 @@ import { Aspect } from "./primitives";
 // The protected tag is drawn once, on the station crumb; the phrase says it.
 export function StationStrip({ cluster, protection }: { cluster: string; protection?: string }) {
   const dto = useLine((s) => s.dto);
-  const strip = stationStrip(dto, cluster, protection);
+  const git = useLineGitFor(dto);
+  const strip = stationStrip(dto, cluster, protection, git);
   if (!strip) return null;
   if (strip.kind === "siding") {
     return (

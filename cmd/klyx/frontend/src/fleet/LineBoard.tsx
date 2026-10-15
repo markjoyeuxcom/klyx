@@ -3,6 +3,8 @@ import { useFleet, type ClusterDTO } from "../store/fleet";
 import type { LineDTO, LineStationDTO } from "../store/line";
 import type { ClusterAttention } from "../nav/clusterAttention";
 import { lineVerdict, trackLabel } from "../line/verdict";
+import { gitStation, orderedText } from "../line/history";
+import type { LineGitDTO } from "../store/lineGit";
 import { lineBoard, RANK_LABEL, type Board } from "../line/board";
 import { markOf, short } from "../line/stationStrip";
 import { proofText } from "../line/proof";
@@ -16,14 +18,16 @@ import { stationReading } from "./stationReading";
 // each cluster's attention model; nothing claims a cause, a delivery path or
 // that the line is live.
 
-export function LineVerdictView({ dto }: { dto: LineDTO }) {
-  const v = lineVerdict(dto);
+export function LineVerdictView({ dto, git = null }: { dto: LineDTO; git?: LineGitDTO | null }) {
+  const v = lineVerdict(dto, git);
   return (
     <section className="line-verdict" aria-labelledby="line-verdict-h">
       <div className="line-verdict-text">
         {v.key && <div className="line-verdict-key">{v.key}</div>}
+        {v.target && <div className="line-verdict-target" data-testid="line-target">{v.target}</div>}
         <h2 id="line-verdict-h" className="line-verdict-headline">{v.headline}{v.asOf && <span className="line-verdict-asof"> · {v.asOf}</span>}</h2>
         {v.clauses.map((c) => <p key={c} className="line-verdict-clause">{c}</p>)}
+        {v.history && <p className="line-verdict-history" data-testid="line-history">{v.history}</p>}
       </div>
       <div className="line-legend" aria-label="Legend">
         <span className="line-legend-lit"><span className="line-legend-seg" data-lit="" aria-hidden />Lit: matches the comparison revision. A comparison, not a delivery path.</span>
@@ -38,8 +42,11 @@ export function LineVerdictView({ dto }: { dto: LineDTO }) {
   );
 }
 
-// comparisonText: what the station runs on the chosen key, in §3.3's words.
-function comparisonText(s: LineStationDTO): string {
+// comparisonText: what the station runs on the chosen key, in §3.3's words,
+// or where it stands against T when the line is ordered (slice 6d).
+function comparisonText(s: LineStationDTO, git: LineGitDTO | null): string {
+  const g = gitStation(git, s.cluster);
+  if (g && git) return orderedText(g, git);
   if (s.state === "matches" && s.single) return short(s.single);
   if (s.state === "differs" && s.single) return `${short(s.single)} · differs`;
   return s.state;
@@ -53,10 +60,12 @@ function timeText(what: string, proof: Parameters<typeof proofText>[0]): string 
   return /^(since|between|by) /.test(t) ? `${what} ${t}` : `${what} · ${t}`;
 }
 
-export function StationCell({ s, dto, c, m, peers }: { s: LineStationDTO; dto: LineDTO; c: ClusterDTO | undefined; m: ClusterAttention | undefined; peers: string[] }) {
+export function StationCell({ s, dto, git = null, c, m, peers }: { s: LineStationDTO; dto: LineDTO; git?: LineGitDTO | null; c: ClusterDTO | undefined; m: ClusterAttention | undefined; peers: string[] }) {
   const reading = stationReading(c, m);
-  const mark = reading.unreachable ? "none" : markOf(s);
-  const comparison = reading.unreachable ? null : comparisonText(s);
+  const heldBehind = !!gitStation(git, s.cluster)?.held;
+  const own = markOf(s);
+  const mark = reading.unreachable ? "none" : own === "none" && heldBehind ? "attention" : own;
+  const comparison = reading.unreachable ? null : comparisonText(s, git);
   const times = reading.unreachable ? [] : [s.held ? timeText("held", s.heldSince ?? null) : null, s.flags?.failing ? timeText("failing", s.failingSince ?? null) : null].filter((x): x is string => !!x);
   const track = trackLabel(s, dto);
   const prot = c?.protected ? (c.protectedInferred ? "protected (inferred)" : "protected") : null;
@@ -82,11 +91,11 @@ export function StationCell({ s, dto, c, m, peers }: { s: LineStationDTO; dto: L
 
 const col = (i: number) => 2 + i * 2; // the label is column 1; a segment column sits between ranks
 
-export function LineBoard({ dto, clusters, models }: { dto: LineDTO; clusters: ClusterDTO[]; models: Record<string, ClusterAttention> }) {
+export function LineBoard({ dto, git = null, clusters, models }: { dto: LineDTO; git?: LineGitDTO | null; clusters: ClusterDTO[]; models: Record<string, ClusterAttention> }) {
   const b: Board = lineBoard(dto);
   const byName = new Map(clusters.map((c) => [c.name, c]));
   const peersOf = (name: string) => (b.card[name] ?? []).map((l) => (l.a === name ? l.b : l.a));
-  const cell = (s: LineStationDTO) => <StationCell key={s.cluster} s={s} dto={dto} c={byName.get(s.cluster)} m={models[s.cluster]} peers={peersOf(s.cluster)} />;
+  const cell = (s: LineStationDTO) => <StationCell key={s.cluster} s={s} dto={dto} git={git} c={byName.get(s.cluster)} m={models[s.cluster]} peers={peersOf(s.cluster)} />;
   const template = ["minmax(96px, max-content)", ...b.ranks.flatMap((_, i) => (i === 0 ? ["minmax(184px, 1fr)"] : ["28px", "minmax(184px, 1fr)"]))].join(" ");
   return (
     <section className="line-board-section" aria-label="The line">

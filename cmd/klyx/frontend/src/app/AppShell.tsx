@@ -19,6 +19,7 @@ import { back, forward } from "../nav/history";
 import { handleZoomKey } from "./zoom";
 import { startSummaries } from "../bridge/healthRows";
 import { startLine } from "../bridge/line";
+import { startLineGit } from "../bridge/lineGit";
 
 // AppShell owns the frame (The Line slice 4): an 8px inset, the location
 // bar, then the lens index beside the workspace, separated by 4px gaps. The
@@ -76,7 +77,7 @@ export function AppShell() {
   // idempotent.
   useEffect(() => { startSummaries(); }, []);
   // The line from app start (slice 4 §5.1): the station strip reads it.
-  useEffect(() => { startLine(); }, []);
+  useEffect(() => { startLine(); startLineGit(); }, []);
 
   useEffect(() => {
     window.addEventListener("keydown", handleShellKey);

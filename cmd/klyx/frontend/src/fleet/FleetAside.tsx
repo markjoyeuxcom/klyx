@@ -1,5 +1,9 @@
+import { Browser } from "@wailsio/runtime";
 import type { ClusterDTO, ExpiryItemDTO } from "../store/fleet";
 import type { LineDTO } from "../store/line";
+import type { LineGitCommitDTO, LineGitDTO } from "../store/lineGit";
+import { commitHref, historyNote } from "../line/history";
+import { short } from "../line/stationStrip";
 import { useExpiryScans } from "../store/expiry";
 import { lineLedger } from "../line/ledger";
 import { stationLabel } from "../nav/stationOrder";
@@ -8,19 +12,23 @@ import { UpdatedAt } from "../chrome/Age";
 import { clusterDisplayName } from "./clusterName";
 
 // The fleet screen's aside (The Line slice 5c): the Ledger - the revisions
-// on the line now - and the Horizon - what expires in the next 30 days, from
-// the session's shared expiry scans.
+// on the line now, or with Git history the commits not yet everywhere
+// (slice 6d) - and the Horizon - what expires in the next 30 days, from the
+// session's shared expiry scans.
 
 const hhmm = (iso: string) => { const d = new Date(iso); const p = (n: number) => String(n).padStart(2, "0"); return `${p(d.getHours())}:${p(d.getMinutes())}`; };
 
-export function Ledger({ dto }: { dto: LineDTO | null }) {
+export function Ledger({ dto, git = null }: { dto: LineDTO | null; git?: LineGitDTO | null }) {
+  if (dto && git?.state === "ready") return <CommitLedger dto={dto} git={git} />;
   const revs = dto ? lineLedger(dto) : [];
+  const note = historyNote(git);
   return (
     <section className="aside-section" aria-labelledby="ledger-h">
       <div className="aside-head">
         <h2 id="ledger-h" className="aside-title">Ledger</h2>
         <span className="aside-sub">{dto?.key ? "revisions on the line now" : "no key compared"}</span>
       </div>
+      {note && <p className="aside-note" data-testid="ledger-history-note">{note}</p>}
       {!dto ? <p className="aside-note">Reading the line…</p>
         : revs.length === 0 ? <p className="aside-note">{dto.key ? "No station has a single applied revision." : "Nothing is compared, so no revision is on the line."}</p>
         : (
@@ -44,6 +52,70 @@ export function Ledger({ dto }: { dto: LineDTO | null }) {
             ))}
           </ul>
         )}
+    </section>
+  );
+}
+
+const when = (iso: string) => {
+  const d = new Date(iso);
+  return `${d.toLocaleDateString([], { month: "short", day: "numeric" })} ${hhmm(iso)}`;
+};
+
+// The Ledger with Git history (The Line slice 6d, parent §3.7): "commits
+// not yet everywhere" - newest first, each with dots for the ordered
+// stations that contain it - and, apart, the commits only on an ahead or
+// diverged station. Subjects and authors are plain text.
+function CommitLedger({ dto, git }: { dto: LineDTO; git: LineGitDTO }) {
+  const ordered = new Set(git.stations.filter((s) => s.state !== "unknown" && s.state !== "unrelated").map((s) => s.cluster));
+  const all = [...(dto.stations ?? []), ...(dto.siding ?? [])];
+  const tracks = [
+    ...(dto.tracks ?? []).map((t) => ({ label: t.label, stops: (dto.stations ?? []).filter((s) => s.track === t.name && ordered.has(s.cluster)).sort((a, b) => a.rank - b.rank) })),
+    { label: "siding", stops: (dto.siding ?? []).filter((s) => ordered.has(s.cluster)) },
+  ].filter((t) => t.stops.length > 0);
+  const place = (cluster: string) => {
+    const s = all.find((x) => x.cluster === cluster);
+    return s ? `${s.env || "siding"} · ${clusterDisplayName(cluster)}` : clusterDisplayName(cluster);
+  };
+  const t = git.target?.name ?? "the target";
+  const row = (c: LineGitCommitDTO, has: string[]) => {
+    const href = commitHref(git, c.sha);
+    return (
+      <li key={c.sha} className="ledger-commit" aria-label={`${short(c.sha)} ${c.subject}, by ${c.author}, ${when(c.time)}; on ${has.length} of ${ordered.size} ordered station${ordered.size === 1 ? "" : "s"}`}>
+        <span className="ledger-id">
+          {href
+            ? <button type="button" className="ledger-sha ledger-link" title="Open in Git" onClick={() => void Browser.OpenURL(href)}>{short(c.sha)}</button>
+            : <span className="ledger-sha">{short(c.sha)}</span>}
+          <span className="ledger-subject" title={c.subject}>{c.subject}</span>
+        </span>
+        <span className="ledger-at">{c.author} · {when(c.time)}</span>
+        <span className="ledger-tracks" aria-hidden>
+          {tracks.map((tr) => (
+            <span key={tr.label} className="ledger-track">
+              <span className="ledger-track-label">{tr.label}</span>
+              {tr.stops.map((s) => <span key={s.cluster} className="ledger-dot" data-holds={has.includes(s.cluster) ? "" : undefined} title={`${place(s.cluster)}${has.includes(s.cluster) ? " has it" : " does not have it yet"}`} />)}
+            </span>
+          ))}
+        </span>
+      </li>
+    );
+  };
+  return (
+    <section className="aside-section" aria-labelledby="ledger-h">
+      <div className="aside-head">
+        <h2 id="ledger-h" className="aside-title">Ledger</h2>
+        <span className="aside-sub">commits not yet everywhere · {t}</span>
+      </div>
+      {git.ledger.length === 0
+        ? <p className="aside-note">Every ordered station has every commit up to {t}.</p>
+        : <ul className="ledger" data-testid="ledger-commits">{git.ledger.map((c) => row(c, c.has ?? []))}</ul>}
+      {git.ledgerMore && <p className="aside-note">Older commits not shown.</p>}
+      {git.only.map((o) => (
+        <div key={o.sha} className="ledger-only" data-testid="ledger-only">
+          <h3 className="ledger-only-head">Only on {o.clusters.map(place).join(", ")} · {o.state === "ahead" ? `ahead of ${t}` : "diverged"}</h3>
+          <ul className="ledger">{o.commits.map((c) => row(c, c.has ?? []))}</ul>
+          {(o.more ?? 0) > 0 && <p className="aside-note">+{o.more} more</p>}
+        </div>
+      ))}
     </section>
   );
 }

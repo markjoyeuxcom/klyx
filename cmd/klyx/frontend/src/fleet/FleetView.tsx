@@ -1,6 +1,9 @@
+import { useEffect } from "react";
 import { IconLayoutGrid } from "@tabler/icons-react";
 import { useFleet } from "../store/fleet";
 import { useLine } from "../store/line";
+import { useLineGitFor } from "../store/lineGit";
+import { fetchDue } from "../bridge/lineGit";
 import { EmptyState } from "../chrome/EmptyState";
 import { SkeletonRows } from "../chrome/SkeletonRows";
 import { LensLayout } from "../layout/LensLayout";
@@ -16,6 +19,14 @@ import { Horizon, Ledger } from "./FleetAside";
 export function FleetView() {
   const clusters = useFleet((s) => s.clusters);
   const dto = useLine((s) => s.dto);
+  const git = useLineGitFor(dto);
+  // The fetch cadence (slice 6 note §6.3): on mount, then every 5 minutes
+  // while the fleet screen is open; the backend fetches only what is due.
+  useEffect(() => {
+    fetchDue();
+    const t = setInterval(fetchDue, 5 * 60 * 1000);
+    return () => clearInterval(t);
+  }, []);
   const models = useFleetAttention();
   const nodes = clusters.reduce((n, c) => n + c.nodesTotal, 0);
   // Unknown counts are never summed as zero: the total says how many are out.
@@ -51,14 +62,14 @@ export function FleetView() {
         <div className="lens-canvas fleet-screen" data-testid="fleet-board">
           {dto ? (
             <>
-              <LineVerdictView dto={dto} />
-              <LineBoard dto={dto} clusters={clusters} models={models} />
+              <LineVerdictView dto={dto} git={git} />
+              <LineBoard dto={dto} git={git} clusters={clusters} models={models} />
             </>
           ) : <SkeletonRows rows={3} label="reading the line" />}
           <div className="fleet-lower">
             <NeedsYou clusters={clusters} models={models} />
             <aside className="fleet-aside" aria-label="Ledger and Horizon">
-              <Ledger dto={dto} />
+              <Ledger dto={dto} git={git} />
               <Horizon clusters={clusters} />
             </aside>
           </div>
