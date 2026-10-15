@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"net/url"
+	"regexp"
 	"strings"
 
 	"github.com/moomora/klyx/internal/gitcli"
@@ -23,7 +24,7 @@ func (c *Config) ApprovedGitRepos() ([]GitRepoConfig, []string) {
 	for i, r := range c.Git.Repos {
 		u := strings.TrimSpace(r.URL)
 		if err := gitcli.ValidateApprovedURL(u); err != nil {
-			notes = append(notes, fmt.Sprintf("git.repos[%d] %s is ignored, never fetched: %v", i, gitcli.Scrub(u), err))
+			notes = append(notes, fmt.Sprintf("git.repos[%d] %s is ignored, never fetched: %v", i, RedactURL(u), err))
 			continue
 		}
 		if seen[u] {
@@ -39,10 +40,11 @@ func (c *Config) ApprovedGitRepos() ([]GitRepoConfig, []string) {
 				e.Web = strings.TrimRight(w, "/")
 			}
 		}
-		for _, m := range r.Matches {
+		for k, m := range r.Matches {
 			m = strings.TrimSpace(m)
 			if err := ValidRepoKey(m); err != nil {
-				notes = append(notes, fmt.Sprintf("git.repos[%d] match %q ignored: %v", i, m, err))
+				// The rejected value is never repeated: it may hold a token.
+				notes = append(notes, fmt.Sprintf("git.repos[%d].matches[%d] ignored: %v", i, k, err))
 				continue
 			}
 			e.Matches = append(e.Matches, m)
@@ -52,12 +54,27 @@ func (c *Config) ApprovedGitRepos() ([]GitRepoConfig, []string) {
 	return ok, notes
 }
 
+var scpHostPath = regexp.MustCompile(`^(?:[^@/]*@)?([^:/@]+):(.+)$`)
+
+// RedactURL names a refused URL without anything that could be a
+// credential: scheme, host and path only, a scp-like URL as host:path,
+// anything else not at all.
+func RedactURL(s string) string {
+	if u, err := url.Parse(s); err == nil && u.Scheme != "" && u.Host != "" {
+		return u.Scheme + "://" + u.Host + u.Path
+	}
+	if m := scpHostPath.FindStringSubmatch(s); m != nil {
+		return m[1] + ":" + m[2]
+	}
+	return "(an unrecognised URL)"
+}
+
 // ValidWebLink accepts an https link base with no credential, query or
-// fragment.
+// fragment. Its errors never repeat the value.
 func ValidWebLink(s string) error {
 	u, err := url.Parse(s)
 	if err != nil || u.Scheme != "https" || u.Host == "" {
-		return fmt.Errorf("%s is not an https link", gitcli.Scrub(s))
+		return fmt.Errorf("not an https link")
 	}
 	if u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
 		return fmt.Errorf("a web link must not carry a user, query or fragment")

@@ -53,6 +53,7 @@ const gitFleet = `clusters:
 git:
   repos:
     - url: git@github.com:acme/fleet.git
+      matches: ["https://ghp_matchtok@github.com/acme/alias"]
     - url: work-gh:acme/platform.git
       matches: [github.com/acme/platform]
     - url: https://ghp_tok@github.com/acme/leak.git
@@ -88,6 +89,7 @@ func newGitHarness(t *testing.T, fleet string, startErr error) *gitHarness {
 				{Cluster: "prd", Origin: "GitRepository", Namespace: "flux-system", Name: "infra", URL: "http://git.internal/infra.git"},
 				{Cluster: "stg", Origin: "GitRepository", Namespace: "flux-system", Name: "infra", URL: "https://deploy:s3cr3t@git.internal/infra.git"},
 				{Cluster: "stg", Origin: "Application", Namespace: "argocd", Name: "tools", URL: "https://github.com/acme/tools.git"},
+				{Cluster: "stg", Origin: "Application", Namespace: "argocd", Name: "scp", URL: "scpuser:scp-cluster-secret@git.internal:infra.git"},
 			}
 		},
 		StartGit: func(context.Context) (gitcli.Runner, gitcli.Helpers, error) {
@@ -147,7 +149,7 @@ func TestGitSettingsShowsApprovedUnapprovedAndWhy(t *testing.T) {
 		t.Fatalf("unapproved %+v", d.Unapproved)
 	}
 	infra, tools := d.Unapproved[0], d.Unapproved[1]
-	if infra.Key != "git.internal/infra" || infra.Suggest != "" || infra.Refused == "" || len(infra.Sources) != 2 {
+	if infra.Key != "git.internal/infra" || infra.Suggest != "" || infra.Refused == "" || len(infra.Sources) != 3 {
 		t.Fatalf("infra %+v", infra)
 	}
 	if tools.Suggest != "https://github.com/acme/tools.git" || tools.Refused != "" {
@@ -157,7 +159,9 @@ func TestGitSettingsShowsApprovedUnapprovedAndWhy(t *testing.T) {
 	for _, src := range infra.Sources {
 		all += src.URL
 	}
-	if strings.Contains(all, "s3cr3t") || strings.Contains(all, "ghp_tok") || !strings.Contains(all, "never fetched") {
+	if strings.Contains(all, "s3cr3t") || strings.Contains(all, "ghp_tok") || strings.Contains(all, "ghp_matchtok") ||
+		strings.Contains(all, "scp-cluster-secret") || strings.Contains(all, "scpuser") ||
+		!strings.Contains(all, "never fetched") {
 		t.Fatalf("a credential leaked or the ignored entry is not noted:\n%s", all)
 	}
 }
@@ -205,7 +209,7 @@ func TestMatchesAndRemoval(t *testing.T) {
 	if r := h.svc.SetGitRepoMatch("git@github.com:acme/fleet.git", "git.internal/infra", true); !r.OK {
 		t.Fatal(r.Error)
 	}
-	if d := h.svc.GetGitSettings(); len(d.Repos[0].Sources) != 4 || len(d.Unapproved) != 1 {
+	if d := h.svc.GetGitSettings(); len(d.Repos[0].Sources) != 5 || len(d.Unapproved) != 1 {
 		t.Fatalf("after mapping: %+v / %+v", d.Repos[0].Sources, d.Unapproved)
 	}
 	for _, bad := range []string{"https://git.internal/infra", "GIT.internal/infra", "git.internal/infra.git"} {

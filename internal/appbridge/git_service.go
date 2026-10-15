@@ -214,7 +214,7 @@ func (s *GitService) GetGitSettings() GitSettingsDTO {
 	raw := map[string][]string{}
 	for _, src := range s.d.Sources() {
 		key := line.NormalizeRepo(src.URL)
-		d := GitSourceDTO{Cluster: src.Cluster, Origin: src.Origin, Namespace: src.Namespace, Name: src.Name, URL: gitcli.Scrub(src.URL)}
+		d := GitSourceDTO{Cluster: src.Cluster, Origin: src.Origin, Namespace: src.Namespace, Name: src.Name, URL: shownURL(src.URL)}
 		if e, ok := owner[key]; ok {
 			byEntry[e] = append(byEntry[e], d)
 			continue
@@ -264,6 +264,16 @@ func (s *GitService) GetGitSettings() GitSettingsDTO {
 		dto.Unapproved = append(dto.Unapproved, u)
 	}
 	return dto
+}
+
+// shownURL is a cluster's URL as Settings shows it: as written when it
+// could be approved as it stands (so it carries no credential), else
+// redacted to its scheme, host and path.
+func shownURL(raw string) string {
+	if gitcli.ValidateApprovedURL(raw) == nil {
+		return raw
+	}
+	return config.RedactURL(raw)
 }
 
 func copyFlags(m map[string]bool) map[string]bool {

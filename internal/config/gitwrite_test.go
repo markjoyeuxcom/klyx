@@ -77,6 +77,8 @@ git:
     - url: ssh://git:pw@github.com/acme/x.git
     - url: http://github.com/acme/plain.git
     - url: file:///srv/fleet.git
+    - url: "scpuser:scp-secret@github.com:acme/scp.git"
+    - url: ghp_bare_url_secret@github.com/acme/bare
     - url: git@github.com:acme/fleet.git
       web: http://github.com/acme/fleet
       matches: [github.com/acme/fleet, "https://github.com/acme/fleet", GitHub.com/acme/fleet, github.com/acme/fleet.git]
@@ -97,13 +99,13 @@ git:
 		t.Fatalf("approved %+v", repos)
 	}
 	all := strings.Join(notes, "\n")
-	for _, leak := range []string{"ghp_secrettoken", "hunter2", "abc", ":pw@"} {
+	for _, leak := range []string{"ghp_secrettoken", "hunter2", "abc", ":pw@", "scp-secret", "scpuser", "ghp_bare_url_secret"} {
 		if strings.Contains(all, leak) {
 			t.Fatalf("a note repeats a credential (%q):\n%s", leak, all)
 		}
 	}
-	// six refused URLs, the web link, three matches, the duplicate
-	if len(notes) != 11 || !strings.Contains(all, "listed twice") {
+	// eight refused URLs, the web link, three matches, the duplicate
+	if len(notes) != 13 || !strings.Contains(all, "listed twice") || !strings.Contains(all, "github.com:acme/scp.git") {
 		t.Fatalf("notes:\n%s", all)
 	}
 	if w := strings.Join(cfg.Warnings(), "\n"); !strings.Contains(w, "never fetched") {
@@ -122,5 +124,33 @@ func TestValidRepoKey(t *testing.T) {
 		if err := ValidRepoKey(k); err == nil {
 			t.Errorf("%q accepted", k)
 		}
+	}
+}
+
+// A rejected match or web link is never repeated in a note: it may hold a
+// token (design review of 28a8bff).
+func TestApprovedGitRepos_NotesNeverRepeatARejectedValue(t *testing.T) {
+	path := writeFleet(t, `clusters:
+  - name: a
+git:
+  repos:
+    - url: git@github.com:acme/fleet.git
+      web: ftp://webuser:webpw-secret@git.example.com/x
+      matches: ["https://ghp_matchsecret@github.com/acme/alias", "ghp_bare_secret@github.com/acme", "github.com/acme/ok"]
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repos, notes := cfg.ApprovedGitRepos()
+	all := strings.Join(notes, "\n")
+	for _, leak := range []string{"ghp_matchsecret", "ghp_bare_secret", "webpw-secret", "webuser"} {
+		if strings.Contains(all, leak) {
+			t.Fatalf("a note repeats %q:\n%s", leak, all)
+		}
+	}
+	if len(notes) != 3 || len(repos) != 1 || !reflect.DeepEqual(repos[0].Matches, []string{"github.com/acme/ok"}) ||
+		!strings.Contains(all, "git.repos[0].matches[0] ignored") {
+		t.Fatalf("repos %+v notes:\n%s", repos, all)
 	}
 }
