@@ -299,10 +299,31 @@ describe("GatewayTopology (redesign step 6, canvas-detail)", () => {
     ruleMetricsCall.mockImplementationOnce(() => cancellable(ruleRead({ rules: [{ namespace: "apps", name: "share", uid: "r", rule: 0, fingerprint: "f", attribution: { proven: true },
       requests: { availability: "available", points: pts }, classes: { availability: "available", classes: { "2xx": pts, "5xx": pts } }, share503: { availability: "absent", points: [] },
       retries: { availability: "available", points: pts }, backends: [] }] })));
-    seed(topo([route("apps", "share", { rules: [{ index: 0, rule: { included: false, role: "ok", label: "resolved" }, matches: [], backends: [] }] })]));
+    seed(topo([route("apps", "share", { uid: "r", rules: [{ index: 0, fingerprint: "f", rule: { included: false, role: "ok", label: "resolved" }, matches: [], backends: [] }] })]));
     render(<GatewayTopology cluster="x" gateway={gateway} />);
     expect((await screen.findByText("0%")).style.color).toBe("var(--color-text-secondary)");
     expect(screen.getByText(/1 rule · rule 1 5xx/)).toBeTruthy();
+  });
+
+  // Design review of 1078084: a reading of a rule the shown topology lacks
+  // (or of another fingerprint) is never joined; the lane asks for a refresh.
+  it("a lane joins readings only to the rules it shows", async () => {
+    const pts = [{ t: 1792080000, v: 0.1 }];
+    ruleMetricsCall.mockImplementationOnce(() => cancellable(ruleRead({ rules: [{ namespace: "apps", name: "share", uid: "r", rule: 1, fingerprint: "new-second-rule", attribution: { proven: true },
+      requests: { availability: "available", points: [] }, classes: { availability: "available", classes: { "5xx": pts } }, share503: { availability: "absent", points: [] },
+      retries: { availability: "absent", points: [] }, backends: [] }] })));
+    seed(topo([route("apps", "share", { uid: "r", rules: [{ index: 0, fingerprint: "f", rule: { included: false, role: "ok", label: "resolved" }, matches: [], backends: [] }] })]));
+    render(<GatewayTopology cluster="x" gateway={gateway} />);
+    expect(await screen.findByText(/1 rule · rules changed since the topology was read/)).toBeTruthy();
+    expect(screen.queryByText(/rule 2 5xx/)).toBeNull();
+  });
+
+  it("the snapshot's freshness says what refreshes", () => {
+    seed(topo([route("apps", "share")]));
+    const { container } = render(<GatewayTopology cluster="x" gateway={gateway} />);
+    const help = [...container.querySelectorAll("[title]")].map((x) => x.getAttribute("title")).join(" ");
+    expect(help).not.toContain("every 20s");
+    expect(help).toContain("Per-rule traffic refreshes every 30s");
   });
 
   it("no metrics source is said on the lane and in the footer, never drawn as dashes", async () => {

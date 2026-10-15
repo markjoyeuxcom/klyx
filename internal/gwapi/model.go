@@ -52,9 +52,13 @@ type RouteNode struct {
 	// RuleCount is len(spec.rules): a rule with no backendRefs (a direct
 	// response or a redirect) is still a rule.
 	RuleCount int
-	Policies  []PolicyRef   // M5-b; empty in M5-a
-	Services  []ServiceNode // resolved Service backends; lane shows primary
-	Pods      PodCount      // for the first RESOLVED Service backend (legacy lane)
+	// UID and Fingerprints (by rule index) identify what was read, so a
+	// reading taken apart from this snapshot can be checked against it.
+	UID          string
+	Fingerprints []string
+	Policies     []PolicyRef   // M5-b; empty in M5-a
+	Services     []ServiceNode // resolved Service backends; lane shows primary
+	Pods         PodCount      // for the first RESOLVED Service backend (legacy lane)
 
 	// ParentFound reports a status.parents entry for THIS Gateway (and
 	// listener); without one the conditions below are absent, not False.

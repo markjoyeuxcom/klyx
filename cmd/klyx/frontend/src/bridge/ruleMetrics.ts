@@ -41,6 +41,7 @@ export type RuleRoute = { namespace: string; name: string; uid: string; unit?: R
 
 export type RuleMetrics = {
   status: { available: boolean; message: string; updatedAt: string };
+  noEndpoint?: boolean; // no metrics endpoint configured or discovered
   scope: "owning-gateway" | "pod" | "kubernetes-pod" | "";
   scopeNote?: string;
   unattributable?: string;

@@ -3466,6 +3466,7 @@
       "nowUnix": 1791720000,
       "dto": {
         "route": {
+          "uid": "",
           "namespace": "shop",
           "name": "resolved",
           "hostnames": [],
@@ -3493,6 +3494,7 @@
           "rules": [
             {
               "index": 0,
+              "fingerprint": "",
               "rule": {
                 "included": false,
                 "role": "ok",
@@ -3571,6 +3573,7 @@
       "nowUnix": 1791720000,
       "dto": {
         "route": {
+          "uid": "",
           "namespace": "shop",
           "name": "no status for this Gateway",
           "hostnames": [],
@@ -3598,6 +3601,7 @@
           "rules": [
             {
               "index": 0,
+              "fingerprint": "",
               "rule": {
                 "included": false,
                 "role": "ok",
@@ -3676,6 +3680,7 @@
       "nowUnix": 1791720000,
       "dto": {
         "route": {
+          "uid": "",
           "namespace": "shop",
           "name": "not accepted",
           "hostnames": [],
@@ -3703,6 +3708,7 @@
           "rules": [
             {
               "index": 0,
+              "fingerprint": "",
               "rule": {
                 "included": false,
                 "role": "ok",
@@ -3781,6 +3787,7 @@
       "nowUnix": 1791720000,
       "dto": {
         "route": {
+          "uid": "",
           "namespace": "shop",
           "name": "not accepted, last observed",
           "hostnames": [],
@@ -3808,6 +3815,7 @@
           "rules": [
             {
               "index": 0,
+              "fingerprint": "",
               "rule": {
                 "included": false,
                 "role": "ok",
@@ -3886,6 +3894,7 @@
       "nowUnix": 1791720000,
       "dto": {
         "route": {
+          "uid": "",
           "namespace": "shop",
           "name": "acceptance pending outranks refs not reported",
           "hostnames": [],
@@ -3913,6 +3922,7 @@
           "rules": [
             {
               "index": 0,
+              "fingerprint": "",
               "rule": {
                 "included": false,
                 "role": "ok",
@@ -3991,6 +4001,7 @@
       "nowUnix": 1791720000,
       "dto": {
         "route": {
+          "uid": "",
           "namespace": "shop",
           "name": "acceptance not reported",
           "hostnames": [],
@@ -4018,6 +4029,7 @@
           "rules": [
             {
               "index": 0,
+              "fingerprint": "",
               "rule": {
                 "included": false,
                 "role": "ok",
@@ -4096,6 +4108,7 @@
       "nowUnix": 1791720000,
       "dto": {
         "route": {
+          "uid": "",
           "namespace": "shop",
           "name": "unresolved refs",
           "hostnames": [],
@@ -4123,6 +4136,7 @@
           "rules": [
             {
               "index": 0,
+              "fingerprint": "",
               "rule": {
                 "included": false,
                 "role": "ok",
@@ -4201,6 +4215,7 @@
       "nowUnix": 1791720000,
       "dto": {
         "route": {
+          "uid": "",
           "namespace": "shop",
           "name": "unresolved refs, last observed",
           "hostnames": [],
@@ -4228,6 +4243,7 @@
           "rules": [
             {
               "index": 0,
+              "fingerprint": "",
               "rule": {
                 "included": false,
                 "role": "ok",
@@ -4306,6 +4322,7 @@
       "nowUnix": 1791720000,
       "dto": {
         "route": {
+          "uid": "",
           "namespace": "shop",
           "name": "refs pending",
           "hostnames": [],
@@ -4333,6 +4350,7 @@
           "rules": [
             {
               "index": 0,
+              "fingerprint": "",
               "rule": {
                 "included": false,
                 "role": "ok",
@@ -4411,6 +4429,7 @@
       "nowUnix": 1791720000,
       "dto": {
         "route": {
+          "uid": "",
           "namespace": "shop",
           "name": "status syncing",
           "hostnames": [],
@@ -4438,6 +4457,7 @@
           "rules": [
             {
               "index": 0,
+              "fingerprint": "",
               "rule": {
                 "included": false,
                 "role": "ok",
@@ -4516,6 +4536,7 @@
       "nowUnix": 1791720000,
       "dto": {
         "route": {
+          "uid": "",
           "namespace": "shop",
           "name": "listener missing",
           "hostnames": [],
@@ -4543,6 +4564,7 @@
           "rules": [
             {
               "index": 0,
+              "fingerprint": "",
               "rule": {
                 "included": false,
                 "role": "ok",
@@ -4621,6 +4643,7 @@
       "nowUnix": 1791720000,
       "dto": {
         "route": {
+          "uid": "",
           "namespace": "shop",
           "name": "listener present",
           "hostnames": [],
@@ -4648,6 +4671,7 @@
           "rules": [
             {
               "index": 0,
+              "fingerprint": "",
               "rule": {
                 "included": false,
                 "role": "ok",
@@ -4726,6 +4750,7 @@
       "nowUnix": 1791720000,
       "dto": {
         "route": {
+          "uid": "",
           "namespace": "shop",
           "name": "no backendRefs",
           "hostnames": [],
@@ -4790,6 +4815,7 @@
       "nowUnix": 1791720000,
       "dto": {
         "route": {
+          "uid": "",
           "namespace": "shop",
           "name": "unsupported backend kind",
           "hostnames": [],
@@ -4812,6 +4838,7 @@
           "rules": [
             {
               "index": 0,
+              "fingerprint": "",
               "rule": {
                 "included": false,
                 "role": "unknown",
@@ -4890,6 +4917,7 @@
       "nowUnix": 1791720000,
       "dto": {
         "route": {
+          "uid": "",
           "namespace": "shop",
           "name": "backend with no state",
           "hostnames": [],
@@ -4912,6 +4940,7 @@
           "rules": [
             {
               "index": 0,
+              "fingerprint": "",
               "rule": {
                 "included": false,
                 "role": "unknown",
@@ -4990,6 +5019,7 @@
       "nowUnix": 1791720000,
       "dto": {
         "route": {
+          "uid": "",
           "namespace": "shop",
           "name": "backend not found",
           "hostnames": [],
@@ -5012,6 +5042,7 @@
           "rules": [
             {
               "index": 0,
+              "fingerprint": "",
               "rule": {
                 "included": true,
                 "role": "fault",
@@ -5090,6 +5121,7 @@
       "nowUnix": 1791720000,
       "dto": {
         "route": {
+          "uid": "",
           "namespace": "shop",
           "name": "primary backend not found of several",
           "hostnames": [],
@@ -5127,6 +5159,7 @@
           "rules": [
             {
               "index": 0,
+              "fingerprint": "",
               "rule": {
                 "included": true,
                 "role": "degraded",
@@ -5218,6 +5251,7 @@
       "nowUnix": 1791720000,
       "dto": {
         "route": {
+          "uid": "",
           "namespace": "shop",
           "name": "backend unreadable",
           "hostnames": [],
@@ -5241,6 +5275,7 @@
           "rules": [
             {
               "index": 0,
+              "fingerprint": "",
               "rule": {
                 "included": false,
                 "role": "unknown",
@@ -5319,6 +5354,7 @@
       "nowUnix": 1791720000,
       "dto": {
         "route": {
+          "uid": "",
           "namespace": "shop",
           "name": "endpoints not read",
           "hostnames": [],
@@ -5341,6 +5377,7 @@
           "rules": [
             {
               "index": 0,
+              "fingerprint": "",
               "rule": {
                 "included": false,
                 "role": "unknown",
@@ -5419,6 +5456,7 @@
       "nowUnix": 1791720000,
       "dto": {
         "route": {
+          "uid": "",
           "namespace": "shop",
           "name": "endpoints unreadable",
           "hostnames": [],
@@ -5447,6 +5485,7 @@
           "rules": [
             {
               "index": 0,
+              "fingerprint": "",
               "rule": {
                 "included": false,
                 "role": "unknown",
@@ -5525,6 +5564,7 @@
       "nowUnix": 1791720000,
       "dto": {
         "route": {
+          "uid": "",
           "namespace": "shop",
           "name": "no endpoints",
           "hostnames": [],
@@ -5552,6 +5592,7 @@
           "rules": [
             {
               "index": 0,
+              "fingerprint": "",
               "rule": {
                 "included": true,
                 "role": "fault",
@@ -5630,6 +5671,7 @@
       "nowUnix": 1791720000,
       "dto": {
         "route": {
+          "uid": "",
           "namespace": "shop",
           "name": "no endpoints, primary of several",
           "hostnames": [],
@@ -5687,6 +5729,7 @@
           "rules": [
             {
               "index": 0,
+              "fingerprint": "",
               "rule": {
                 "included": true,
                 "role": "degraded",
@@ -5791,6 +5834,7 @@
       "nowUnix": 1791720000,
       "dto": {
         "route": {
+          "uid": "",
           "namespace": "shop",
           "name": "no ready endpoints",
           "hostnames": [],
@@ -5818,6 +5862,7 @@
           "rules": [
             {
               "index": 0,
+              "fingerprint": "",
               "rule": {
                 "included": true,
                 "role": "fault",
@@ -5896,6 +5941,7 @@
       "nowUnix": 1791720000,
       "dto": {
         "route": {
+          "uid": "",
           "namespace": "shop",
           "name": "some endpoints ready",
           "hostnames": [],
@@ -5923,6 +5969,7 @@
           "rules": [
             {
               "index": 0,
+              "fingerprint": "",
               "rule": {
                 "included": true,
                 "role": "degraded",
@@ -6001,6 +6048,7 @@
       "nowUnix": 1791720000,
       "dto": {
         "route": {
+          "uid": "",
           "namespace": "shop",
           "name": "second backend of two has no endpoints",
           "hostnames": [],
@@ -6043,6 +6091,7 @@
           "rules": [
             {
               "index": 0,
+              "fingerprint": "",
               "rule": {
                 "included": true,
                 "role": "degraded",
@@ -6134,6 +6183,7 @@
       "nowUnix": 1791720000,
       "dto": {
         "route": {
+          "uid": "",
           "namespace": "shop",
           "name": "every carrying backend has no endpoints",
           "hostnames": [],
@@ -6176,6 +6226,7 @@
           "rules": [
             {
               "index": 0,
+              "fingerprint": "",
               "rule": {
                 "included": true,
                 "role": "fault",
@@ -6267,6 +6318,7 @@
       "nowUnix": 1791720000,
       "dto": {
         "route": {
+          "uid": "",
           "namespace": "shop",
           "name": "a weight-0 backend is not diagnosed",
           "hostnames": [],
@@ -6309,6 +6361,7 @@
           "rules": [
             {
               "index": 0,
+              "fingerprint": "",
               "rule": {
                 "included": false,
                 "role": "ok",
@@ -6400,6 +6453,7 @@
       "nowUnix": 1791720000,
       "dto": {
         "route": {
+          "uid": "",
           "namespace": "shop",
           "name": "every backend has weight 0",
           "hostnames": [],
@@ -6442,6 +6496,7 @@
           "rules": [
             {
               "index": 0,
+              "fingerprint": "",
               "rule": {
                 "included": true,
                 "role": "fault",
@@ -6533,6 +6588,7 @@
       "nowUnix": 1791720000,
       "dto": {
         "route": {
+          "uid": "",
           "namespace": "shop",
           "name": "a zero-weight-only rule beside a healthy rule",
           "hostnames": [],
@@ -6575,6 +6631,7 @@
           "rules": [
             {
               "index": 0,
+              "fingerprint": "",
               "rule": {
                 "included": true,
                 "role": "fault",
@@ -6599,6 +6656,7 @@
             },
             {
               "index": 1,
+              "fingerprint": "",
               "rule": {
                 "included": false,
                 "role": "ok",
@@ -6677,6 +6735,7 @@
       "nowUnix": 1791720000,
       "dto": {
         "route": {
+          "uid": "",
           "namespace": "shop",
           "name": "a sole backend failing in the second rule",
           "hostnames": [],
@@ -6719,6 +6778,7 @@
           "rules": [
             {
               "index": 0,
+              "fingerprint": "",
               "rule": {
                 "included": false,
                 "role": "ok",
@@ -6743,6 +6803,7 @@
             },
             {
               "index": 1,
+              "fingerprint": "",
               "rule": {
                 "included": true,
                 "role": "fault",
@@ -6821,6 +6882,7 @@
       "nowUnix": 1791720000,
       "dto": {
         "route": {
+          "uid": "",
           "namespace": "shop",
           "name": "second backend partly ready",
           "hostnames": [],
@@ -6863,6 +6925,7 @@
           "rules": [
             {
               "index": 0,
+              "fingerprint": "",
               "rule": {
                 "included": true,
                 "role": "degraded",
@@ -6954,6 +7017,7 @@
       "nowUnix": 1791720000,
       "dto": {
         "route": {
+          "uid": "",
           "namespace": "shop",
           "name": "not accepted and no endpoints (fault first)",
           "hostnames": [],
@@ -6981,6 +7045,7 @@
           "rules": [
             {
               "index": 0,
+              "fingerprint": "",
               "rule": {
                 "included": true,
                 "role": "fault",

@@ -714,7 +714,7 @@ export type MatchDTO = { pathType: string; pathValue: string; method: string; ru
 // One spec.rules entry with its verdict and each backend's own (The Line
 // slice 8d): weight is the effective configured weight (1 when unset).
 export type RouteRuleBackendDTO = { kind: string; namespace: string; name: string; port: number; weight: number; weightSet: boolean; rule: RuleDTO };
-export type RouteRuleDTO = { index: number; rule: RuleDTO; matches: MatchDTO[]; backends: RouteRuleBackendDTO[] };
+export type RouteRuleDTO = { index: number; fingerprint?: string; rule: RuleDTO; matches: MatchDTO[]; backends: RouteRuleBackendDTO[] };
 // Endpoints, not pods: nonPod counts endpoints without a pod TargetRef.
 export type EndpointCountDTO = { ready: number; total: number; nonPod: number; error?: string };
 // weightSet false: the backendRef wrote no weight (the Gateway API default
@@ -724,7 +724,7 @@ export type BackendDTO = { kind: string; name: string; namespace: string; port: 
 export type PodCountDTO = { ready: number; total: number; unknown: boolean };
 export type ServiceNodeDTO = { namespace: string; name: string; type: string; port: number; resolved: boolean; global: boolean; meshClusters: string[]; meshUnconfirmed: boolean; policies: PolicyRefDTO[]; cnps: PolicyRefDTO[] };
 export type GatewayNodeDTO = { rule: RuleDTO; namespace: string; name: string; className: string; listeners: ListenerDTO[]; addresses?: GatewayAddressDTO[]; accepted: boolean; programmed: boolean; policies: PolicyRefDTO[]; acceptedCond?: CondDTO; programmedCond?: CondDTO; generation?: number };
-export type RouteNodeDTO = { rule: RuleDTO; namespace: string; name: string; hostnames: string[]; matches: MatchDTO[]; parentSectionName?: string; accepted: boolean; resolvedRefs: boolean; backends: BackendDTO[]; rules?: RouteRuleDTO[]; services: ServiceNodeDTO[]; pods: PodCountDTO; policies: PolicyRefDTO[]; parentFound?: boolean; acceptedCond?: CondDTO; resolvedRefsCond?: CondDTO; generation?: number };
+export type RouteNodeDTO = { uid?: string; rule: RuleDTO; namespace: string; name: string; hostnames: string[]; matches: MatchDTO[]; parentSectionName?: string; accepted: boolean; resolvedRefs: boolean; backends: BackendDTO[]; rules?: RouteRuleDTO[]; services: ServiceNodeDTO[]; pods: PodCountDTO; policies: PolicyRefDTO[]; parentFound?: boolean; acceptedCond?: CondDTO; resolvedRefsCond?: CondDTO; generation?: number };
 // error = the topology could not be read at all (never a snapshot);
 // routesComplete = the HTTPRoute list succeeded (absence is then proof).
 export type TopologyDTO = { gateway: GatewayNodeDTO; routes: RouteNodeDTO[]; clusterPolicies?: PolicyRefDTO[]; warnings?: string[]; error?: string; routesComplete?: boolean; routesError?: string };

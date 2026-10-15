@@ -105,11 +105,13 @@ function ruleStep(route: RouteNodeDTO, r: RouteRuleDTO, metrics: RuleMetrics | n
 function Measured({ route, index, metrics }: { route: RouteNodeDTO; index: number; metrics: RuleMetrics | null }) {
   if (!metrics) return <span className="t-secondary">measured: reading…</span>;
   if (!metrics.status.available) {
-    const msg = metrics.status.message;
-    return <span className="t-secondary" data-no-metrics>{/^metrics unavailable/.test(msg) ? "no route metrics: configure a metrics endpoint" : `no route metrics: ${msg}`}</span>;
+    return <span className="t-secondary" data-no-metrics>{metrics.noEndpoint ? "no route metrics: configure a metrics endpoint" : `no route metrics: ${metrics.status.message}`}</span>;
   }
   const rm = metrics.rules.find((x) => x.namespace === route.namespace && x.name === route.name && x.rule === index);
   if (!rm) return <span className="t-secondary">measured: this rule was not in the read</span>;
+  // The topology is a snapshot and the metrics poll apart: a reading joins
+  // this rule only for the same route UID and rule fingerprint.
+  if (!sameRule(route, index, rm)) return <span className="t-secondary" data-withheld>measured: withheld - the route or this rule changed since the topology was read; refresh the topology</span>;
   if (rm.unattributable) return <span className="t-secondary" data-unattributable>measured: unavailable ({rm.unattributable})</span>;
   const start = Date.parse(metrics.start) / 1000;
   const end = Date.parse(metrics.end) / 1000;
@@ -117,7 +119,7 @@ function Measured({ route, index, metrics }: { route: RouteNodeDTO; index: numbe
   const hatch: [number, number] | undefined = cutoff > start ? [start, Math.min(cutoff, end)] : undefined;
   const fiveXX = rm.classes.classes?.["5xx"] ?? [];
   const o = onset(fiveXX, metrics.stepSeconds);
-  const unit = metrics.routes?.find((x) => x.namespace === route.namespace && x.name === route.name)?.unit;
+  const unit = metrics.routes?.find((x) => x.uid === route.uid && x.namespace === route.namespace && x.name === route.name)?.unit;
   const proximity = proximityText(unit, o);
   const window = `30 min · ${metrics.rateSeconds / 60}-minute rate · ${metrics.stepSeconds}-second step`;
   return (
@@ -134,6 +136,13 @@ function Measured({ route, index, metrics }: { route: RouteNodeDTO; index: numbe
       {proximity && <span className="t-secondary" data-proximity>{proximity}</span>}
     </div>
   );
+}
+
+// sameRule: a reading is this rule's only for the route UID and the rule
+// fingerprint the topology shows; an unverifiable join is no join.
+export function sameRule(route: RouteNodeDTO, index: number, rm: RuleMetric): boolean {
+  const fp = route.rules?.find((r) => r.index === index)?.fingerprint;
+  return !!route.uid && !!fp && rm.uid === route.uid && rm.fingerprint === fp;
 }
 
 const clock = (unix: number) => new Date(unix * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });

@@ -69,7 +69,9 @@ func (c *ClusterConn) RuleMetrics(ctx context.Context, namespace, name string) (
 		if mcap.Reason != "" {
 			msg += ": " + mcap.Reason
 		}
-		return routemetrics.Unavailable(q, msg), nil
+		res := routemetrics.Unavailable(q, msg)
+		res.Status.NoEndpoint = mcap.Mode == metrics.ModeUnavailable && mcap.Reason == metrics.ReasonNoService
+		return res, nil
 	}
 	q.Pods = func(ctx context.Context) ([]routemetrics.ProxyPod, error) {
 		sel := labels.SelectorFromSet(labels.Set{labelOwningGatewayName: name, labelOwningGatewayNamespace: namespace})

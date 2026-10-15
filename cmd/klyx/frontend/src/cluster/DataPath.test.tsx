@@ -13,14 +13,14 @@ const ok = { included: false, role: "ok", label: "resolved" };
 const gateway = { namespace: "infra", name: "eg", className: "eg", listeners: [], accepted: true, programmed: true, policies: [], rule: ok } as unknown as GatewayNodeDTO;
 const listeners: ListenerDTO[] = [{ name: "http", protocol: "HTTP", port: 80 } as ListenerDTO];
 const route = {
-  namespace: "shop", name: "web", hostnames: ["web.example.com"], matches: [], accepted: true, resolvedRefs: true, services: [], pods: { ready: 0, total: 0, unknown: false }, policies: [],
+  uid: "r1", namespace: "shop", name: "web", hostnames: ["web.example.com"], matches: [], accepted: true, resolvedRefs: true, services: [], pods: { ready: 0, total: 0, unknown: false }, policies: [],
   rule: { included: true, role: "degraded", label: "web: no ready endpoints" },
   backends: [
     { kind: "Service", namespace: "shop", name: "web", port: 80, weight: 90, weightSet: true, rule: 0, state: "resolved", endpoints: { ready: 0, total: 2, nonPod: 0 } },
     { kind: "Service", namespace: "shop", name: "web-canary", port: 80, weight: 10, weightSet: true, rule: 0, state: "resolved", endpoints: { ready: 1, total: 1, nonPod: 0 } },
   ],
   rules: [{
-    index: 0, rule: { included: true, role: "degraded", label: "web: no ready endpoints" }, matches: [{ pathType: "PathPrefix", pathValue: "/", method: "", rule: 0 }],
+    index: 0, fingerprint: "f", rule: { included: true, role: "degraded", label: "web: no ready endpoints" }, matches: [{ pathType: "PathPrefix", pathValue: "/", method: "", rule: 0 }],
     backends: [
       { kind: "Service", namespace: "shop", name: "web", port: 80, weight: 90, weightSet: true, rule: { included: true, role: "fault", label: "no ready endpoints" } },
       { kind: "Service", namespace: "shop", name: "web-canary", port: 80, weight: 10, weightSet: true, rule: ok },
@@ -96,8 +96,27 @@ describe("DataPath", () => {
   it("an unattributable rule and a missing metrics endpoint are said, nothing estimated", () => {
     const u = render(<DataPath gateway={gateway} route={route} listeners={listeners} metrics={metrics({ rules: [rule({ unattributable: "shared or custom cluster names" })] })} />);
     expect(u.container.querySelector("[data-unattributable]")?.textContent).toBe("measured: unavailable (shared or custom cluster names)");
-    const none = render(<DataPath gateway={gateway} route={route} listeners={listeners} metrics={metrics({ status: { available: false, message: "metrics unavailable: no Prometheus found", updatedAt: "" } })} />);
+    const none = render(<DataPath gateway={gateway} route={route} listeners={listeners} metrics={metrics({ noEndpoint: true, status: { available: false, message: "metrics unavailable: no Prometheus Service found", updatedAt: "" } })} />);
     expect(within(none.container).getByText("no route metrics: configure a metrics endpoint")).toBeTruthy();
     expect(none.container.querySelector("[data-metric]")).toBeNull();
+    // a configured endpoint that fails keeps its reason (design review of 1078084)
+    const denied = render(<DataPath gateway={gateway} route={route} listeners={listeners} metrics={metrics({ status: { available: false, message: "metrics unavailable: HTTP 403 Forbidden", updatedAt: "" } })} />);
+    expect(denied.container.querySelector("[data-no-metrics]")?.textContent).toBe("no route metrics: metrics unavailable: HTTP 403 Forbidden");
+  });
+
+  // Design review of 1078084: the topology is a snapshot and the metrics
+  // poll apart, so a reading joins a rule only by route UID and fingerprint.
+  it("withholds a reading of another rule fingerprint or route UID", () => {
+    for (const m of [metrics({ rules: [rule({ fingerprint: "edited" })] }), metrics({ rules: [rule({ uid: "replacement" })], routes: [{ namespace: "shop", name: "web", uid: "replacement" }] })]) {
+      const { container, unmount } = render(<DataPath gateway={gateway} route={route} listeners={listeners} metrics={m} />);
+      expect(container.querySelector("[data-withheld]")?.textContent).toContain("refresh the topology");
+      expect(container.querySelector("[data-metric]")).toBeNull();
+      expect(container.querySelector("[data-onset]")).toBeNull();
+      expect(container.querySelector("[data-proximity]")).toBeNull();
+      unmount();
+    }
+    // a route without identity cannot be joined at all
+    const { container } = render(<DataPath gateway={gateway} route={{ ...route, uid: undefined }} listeners={listeners} metrics={metrics()} />);
+    expect(container.querySelector("[data-withheld]")).not.toBeNull();
   });
 });

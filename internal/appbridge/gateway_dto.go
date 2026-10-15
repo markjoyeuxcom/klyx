@@ -86,10 +86,11 @@ type MatchDTO struct {
 // own (The Line slice 8d): the data path draws a branch per rule, a bar per
 // backend for its configured weight, and a failing backend in danger.
 type RouteRuleDTO struct {
-	Index    int                   `json:"index"`
-	Rule     RuleDTO               `json:"rule"`
-	Matches  []MatchDTO            `json:"matches"`
-	Backends []RouteRuleBackendDTO `json:"backends"`
+	Index       int                   `json:"index"`
+	Fingerprint string                `json:"fingerprint"` // matches, backends and weights (slice 7b): joins measured traffic to this rule
+	Rule        RuleDTO               `json:"rule"`
+	Matches     []MatchDTO            `json:"matches"`
+	Backends    []RouteRuleBackendDTO `json:"backends"`
 }
 
 // RouteRuleBackendDTO is a backendRef of one rule: its configured weight
@@ -135,6 +136,7 @@ type ServiceNodeDTO struct {
 	CNPs            []PolicyRefDTO `json:"cnps"`
 }
 type RouteNodeDTO struct {
+	UID               string           `json:"uid"` // the route read: measured traffic joins only this UID
 	Namespace         string           `json:"namespace"`
 	Name              string           `json:"name"`
 	Hostnames         []string         `json:"hostnames"`
@@ -277,7 +279,7 @@ func toTopologyDTO(t gwapi.Topology) TopologyDTO {
 // toRouteNodeDTO maps one route as it attaches to a Gateway; listeners are
 // that Gateway's (the route rule checks the parent section exists).
 func toRouteNodeDTO(r gwapi.RouteNode, listeners []gwapi.Listener) RouteNodeDTO {
-	rd := RouteNodeDTO{Namespace: r.Namespace, Name: r.Name, Hostnames: r.Hostnames, ParentSectionName: r.ParentSectionName, Accepted: r.Accepted, ResolvedRefs: r.ResolvedRefs, Pods: PodCountDTO{Ready: r.Pods.Ready, Total: r.Pods.Total, Unknown: r.Pods.Unknown}, Policies: policyDTOs(r.Policies),
+	rd := RouteNodeDTO{UID: r.UID, Namespace: r.Namespace, Name: r.Name, Hostnames: r.Hostnames, ParentSectionName: r.ParentSectionName, Accepted: r.Accepted, ResolvedRefs: r.ResolvedRefs, Pods: PodCountDTO{Ready: r.Pods.Ready, Total: r.Pods.Total, Unknown: r.Pods.Unknown}, Policies: policyDTOs(r.Policies),
 		ParentFound: r.ParentFound, AcceptedCond: condDTO(r.AcceptedCond), ResolvedRefsCond: condDTO(r.ResolvedRefsCond), Generation: r.Generation,
 		Rule: toRuleDTO(gwapi.RouteRule(r, listeners))}
 	// Slices always serialize as arrays: a route with no backendRefs (a
@@ -293,6 +295,9 @@ func toRouteNodeDTO(r gwapi.RouteNode, listeners []gwapi.Listener) RouteNodeDTO 
 	rd.Rules = make([]RouteRuleDTO, 0, r.RuleCount)
 	for _, rv := range gwapi.RuleVerdicts(r) {
 		rr := RouteRuleDTO{Index: rv.Index, Rule: toRuleDTO(rv.Eval), Matches: []MatchDTO{}, Backends: make([]RouteRuleBackendDTO, 0, len(rv.Backends))}
+		if rv.Index < len(r.Fingerprints) {
+			rr.Fingerprint = r.Fingerprints[rv.Index]
+		}
 		for _, m := range rd.Matches {
 			if m.Rule == rv.Index {
 				rr.Matches = append(rr.Matches, m)

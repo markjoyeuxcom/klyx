@@ -99,7 +99,8 @@ type RuleRouteDTO struct {
 // RuleMetricsDTO is one Gateway's per-rule read.
 type RuleMetricsDTO struct {
 	Status         RouteMetricsStatusDTO `json:"status"`
-	Scope          string                `json:"scope"` // owning-gateway | pod | kubernetes-pod | "" (nothing scoped)
+	NoEndpoint     bool                  `json:"noEndpoint"` // no metrics endpoint configured or discovered
+	Scope          string                `json:"scope"`      // owning-gateway | pod | kubernetes-pod | "" (nothing scoped)
 	ScopeNote      string                `json:"scopeNote,omitempty"`
 	Unattributable string                `json:"unattributable,omitempty"` // Gateway-wide
 	Start          string                `json:"start"`                    // RFC3339 window
@@ -134,12 +135,13 @@ func SetRuleIntervals(s *GatewayService, f func(cluster, uid string, index int, 
 
 // GetRuleMetrics returns one Gateway's per-rule metrics, attributed. On
 // demand; the route-level metrics the topology shows are unchanged.
-func (s *GatewayService) GetRuleMetrics(cluster, namespace, name string) RuleMetricsDTO {
+func (s *GatewayService) GetRuleMetrics(ctx context.Context, cluster, namespace, name string) RuleMetricsDTO {
 	conn, ok := s.lookup(cluster)
 	if !ok {
 		return RuleMetricsDTO{Status: RouteMetricsStatusDTO{Message: "cluster not connected"}, Routes: []RuleRouteDTO{}, Rules: []RuleMetricDTO{}, Notes: []string{}}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), gatewayTimeout)
+	// the caller's context: cancelling the generated call stops the reads
+	ctx, cancel := context.WithTimeout(ctx, gatewayTimeout)
 	defer cancel()
 	res, err := conn.RuleMetrics(ctx, namespace, name)
 	if err != nil {
@@ -151,6 +153,7 @@ func (s *GatewayService) GetRuleMetrics(cluster, namespace, name string) RuleMet
 func (s *GatewayService) ruleMetricsDTO(cluster string, res routemetrics.GatewayRules) RuleMetricsDTO {
 	dto := RuleMetricsDTO{
 		Status:         RouteMetricsStatusDTO{Available: res.Status.Available, Message: res.Status.Message, UpdatedAt: rfc3339(res.Status.UpdatedAt)},
+		NoEndpoint:     res.Status.NoEndpoint,
 		Scope:          string(res.Scope),
 		ScopeNote:      res.ScopeNote,
 		Unattributable: res.Unattributable,

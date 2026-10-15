@@ -19,10 +19,28 @@ type fakeRuleConn struct {
 	fakeGatewayConn
 	res routemetrics.GatewayRules
 	err error
+	ctx context.Context
 }
 
-func (f *fakeRuleConn) RuleMetrics(context.Context, string, string) (routemetrics.GatewayRules, error) {
+func (f *fakeRuleConn) RuleMetrics(ctx context.Context, _, _ string) (routemetrics.GatewayRules, error) {
+	f.ctx = ctx
 	return f.res, f.err
+}
+
+// Design review of 1078084: the caller's context reaches the read, so
+// cancelling the generated call stops it; a missing endpoint is flagged.
+func TestGetRuleMetricsCallerContext(t *testing.T) {
+	conn := &fakeRuleConn{res: routemetrics.GatewayRules{Status: routemetrics.Status{NoEndpoint: true}}}
+	s := NewGatewayService(func(string) (GatewayConn, bool) { return conn, true })
+	ctx, cancel := context.WithCancel(context.Background())
+	dto := s.GetRuleMetrics(ctx, "prd", "infra", "eg")
+	cancel()
+	if conn.ctx.Err() == nil {
+		t.Fatal("the caller's cancellation does not reach the read")
+	}
+	if !dto.NoEndpoint {
+		t.Fatal("noEndpoint lost")
+	}
 }
 
 func rulePts(ts ...int64) []metrics.Point {
@@ -60,7 +78,7 @@ func TestGetRuleMetricsAttribution(t *testing.T) {
 		}
 		return RuleInterval{}, false
 	})
-	dto := s.GetRuleMetrics("prd", "infra", "eg")
+	dto := s.GetRuleMetrics(context.Background(), "prd", "infra", "eg")
 	if !dto.Status.Available || dto.Scope != "owning-gateway" || dto.StepSeconds != 30 || dto.RateSeconds != 60 || len(dto.Rules) != 3 {
 		t.Fatalf("dto: %+v", dto)
 	}
@@ -94,16 +112,16 @@ func TestGetRuleMetricsAttribution(t *testing.T) {
 
 	// Without the history wired, nothing is attributable.
 	s2 := NewGatewayService(func(string) (GatewayConn, bool) { return conn, true })
-	if d := s2.GetRuleMetrics("prd", "infra", "eg"); d.Rules[0].Attribution.Proven || len(d.Rules[0].Requests.Points) != 0 {
+	if d := s2.GetRuleMetrics(context.Background(), "prd", "infra", "eg"); d.Rules[0].Attribution.Proven || len(d.Rules[0].Requests.Points) != 0 {
 		t.Fatalf("no history: %+v", d.Rules[0])
 	}
 	// An unreadable Gateway, and an unknown cluster.
 	conn.err = errors.New("get gateway infra/eg: not found")
-	if d := s.GetRuleMetrics("prd", "infra", "eg"); d.Error == "" || d.Status.Available || d.Rules == nil {
+	if d := s.GetRuleMetrics(context.Background(), "prd", "infra", "eg"); d.Error == "" || d.Status.Available || d.Rules == nil {
 		t.Fatalf("error: %+v", d)
 	}
 	s3 := NewGatewayService(func(string) (GatewayConn, bool) { return nil, false })
-	if d := s3.GetRuleMetrics("x", "infra", "eg"); d.Status.Message != "cluster not connected" {
+	if d := s3.GetRuleMetrics(context.Background(), "x", "infra", "eg"); d.Status.Message != "cluster not connected" {
 		t.Fatalf("not connected: %+v", d)
 	}
 }
@@ -139,7 +157,7 @@ func TestRuleMetricsRouteUnits(t *testing.T) {
 	conn := &fakeRuleConn{res: res}
 	s := NewGatewayService(func(string) (GatewayConn, bool) { return conn, true })
 	SetAppliedChanges(s, fakeApplied{})
-	dto := s.GetRuleMetrics("prd", "infra", "eg")
+	dto := s.GetRuleMetrics(context.Background(), "prd", "infra", "eg")
 	if len(dto.Routes) != 3 {
 		t.Fatalf("routes: %+v", dto.Routes)
 	}
@@ -155,7 +173,7 @@ func TestRuleMetricsRouteUnits(t *testing.T) {
 	}
 	// Without the history wired, the unit is named and nothing more.
 	s2 := NewGatewayService(func(string) (GatewayConn, bool) { return conn, true })
-	if u := s2.GetRuleMetrics("prd", "infra", "eg").Routes[0].Unit; u == nil || u.UID != "" || u.Applied != nil {
+	if u := s2.GetRuleMetrics(context.Background(), "prd", "infra", "eg").Routes[0].Unit; u == nil || u.UID != "" || u.Applied != nil {
 		t.Fatalf("no history: %+v", u)
 	}
 }

@@ -26,6 +26,9 @@ type Status struct {
 	Available bool
 	Message   string
 	UpdatedAt time.Time
+	// NoEndpoint: no metrics endpoint is configured or discovered (slice
+	// 8d-2): the one case worded "configure a metrics endpoint".
+	NoEndpoint bool
 }
 
 // Source produces per-route metrics for a set of route keys ("<ns>/<name>").

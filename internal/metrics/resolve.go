@@ -41,5 +41,9 @@ func Resolve(cfg config.MetricsConfig, disco DiscoveryResult, tf TransportFactor
 		c.Scheme = schemeOr(c.Scheme)
 		return Resolution{Mode: ModeDiscovered, Source: sourceStr(c), Transport: tf.Proxy(c)}
 	}
-	return Resolution{Mode: ModeUnavailable, Reason: "no Prometheus Service found"}
+	return Resolution{Mode: ModeUnavailable, Reason: ReasonNoService}
 }
+
+// ReasonNoService: no endpoint or Service is configured and discovery found
+// none - the one case where the remedy is to configure a metrics endpoint.
+const ReasonNoService = "no Prometheus Service found"

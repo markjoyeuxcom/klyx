@@ -5,7 +5,7 @@ import { useFleet } from "../store/fleet";
 import type { GatewayNodeDTO, GatewayRef, ListenerDTO, PolicyRefDTO, ResourceRef, RouteMetricDTO, RouteNodeDTO, TopologyDTO } from "../store/fleet";
 import { abandonRouteMetrics, getGatewayTopology, getRouteMetrics } from "../bridge/gateway";
 import { ruleMetrics, type RuleMetrics } from "../bridge/ruleMetrics";
-import { DataPath } from "./DataPath";
+import { DataPath, sameRule } from "./DataPath";
 import { fmtShare, latest } from "../line/dataPath";
 import { EmptyState } from "../chrome/EmptyState";
 import { SkeletonRows } from "../chrome/SkeletonRows";
@@ -273,7 +273,7 @@ export function GatewayTopology({ cluster, gateway }: { cluster: string; gateway
       )}
       headerEnd={
         <>
-          <span className="t-secondary" title="Read on demand - not a live watch. Route traffic refreshes every 20s.">snapshot</span>
+          <span className="t-secondary" title="Read on demand - not a live watch. Per-rule traffic refreshes every 30s; the selected route's numbers are read once when it is selected.">snapshot</span>
           <UpdatedAt at={current && net.topologyAt ? net.topologyAt : null} />
           <button className="l-btn" onClick={refresh} disabled={loading}>{loading ? "Reading…" : "Refresh"}</button>
         </>
@@ -389,8 +389,11 @@ function RuleSummary({ route, metrics }: { route: RouteNodeDTO; metrics: RuleMet
   if (!metrics) return <span className="t-secondary">{count} · reading…</span>;
   if (!metrics.status.available) return <span className="t-secondary">{count} · no route metrics</span>;
   let worst: { rule: number; v: number } | null = null;
-  for (const r of metrics.rules) {
-    if (r.namespace !== route.namespace || r.name !== route.name || r.unattributable || r.classes.availability !== "available") continue;
+  const mine = metrics.rules.filter((r) => r.namespace === route.namespace && r.name === route.name);
+  // the readings join the shown rules only by route UID and rule fingerprint
+  if (mine.some((r) => !sameRule(route, r.rule, r))) return <span className="t-secondary gw-line">{count} · rules changed since the topology was read</span>;
+  for (const r of mine) {
+    if (r.unattributable || r.classes.availability !== "available") continue;
     const v = latest(r.classes.classes["5xx"] ?? []);
     if (v !== undefined && (!worst || v > worst.v)) worst = { rule: r.rule, v };
   }
