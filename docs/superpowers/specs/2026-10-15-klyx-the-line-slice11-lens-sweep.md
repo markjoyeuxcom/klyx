@@ -37,7 +37,7 @@ Design note for slice 11 of `2026-10-14-klyx-the-line-redesign.md` (the parent).
 
 | | Builds |
 |---|---|
-| **11a** | Rows: 40px, one row mark (`RowAspect`) in every table's first column, the dashed mark for not-yet-realized rows, Events and Upgrade and InstanceList onto `Aspect` |
+| **11a** | Rows: 40px, one row mark (`VerdictMark`) in every verdict table's first column, the dashed mark for not-yet-realized rows, Upgrade and InstanceList onto `Aspect`, `▲` off status words |
 | **11b** | Headers: one `CountSentence` for every lens summary, in each tool's vocabulary, with `Aspect` replacing the header `▲` |
 | **11c** | The station page: the Overview's body becomes the station's verdict, its "Needs you" rows, then the Overview's sections in the parent's order |
 | **11d** | The bench remnants retired from components; headless captures of every lens in both themes; the parity gate re-run |
@@ -46,19 +46,28 @@ Each is Codex-reviewed on its own, in this order.
 
 ## 2. 11a: rows
 
-- **Height:** `TABLE_ROW_HEIGHT` becomes 40, and so does the CSS default; `PodsView` reads the constant. Cell text stays 13px, centred vertically. Inner padding is unchanged, so a 40px row gains its height as air rather than larger text.
+- **Height:** `TABLE_ROW_HEIGHT` becomes 40, and so does the CSS default. `PodsView` reads the constant, and its CSS grid widens its mark column to 20px, with the breakpoints recomputed. Cell text stays 12-13px, centred vertically: a 40px row gains its height as air, not as larger text.
 - **The mark column:**
-  - Every table's first column is `{ id: "mark", width: 20, priority: 0 }`, replacing `lamp`. It draws `RowAspect`, and a header cell with no visible label.
-  - **`RowAspect`** (`health/VerdictView.tsx`): `<span role="img" aria-label={label}>` around `Aspect` at size 10, with the verdict's label. It replaces every local `Lamp` and `RowLamp`, and InstanceList's dot.
-  - **A healthy row draws nothing and is not announced:** `aria-hidden` on an empty mark. Its verdict word stays in its own column.
-- **Precedence, one rule for rows:** fault, then attention, then checking, then syncing, then paused, else none. It is the verdict's mark, except that a not-yet-realized row (`data-stale`) whose verdict mark is `none` takes `syncing`, the dashed square. The dim and the "Syncing…" chip stay; they are the ratified staleness language.
-- **Events:** a Warning event takes `attention` ("Warning"); a Normal event draws nothing. The Type and Reason text keep their caution colour.
+  - Every verdict table's first column is `ROW_MARK` (`{ id: "mark", width: 20, priority: 0 }`), replacing `lamp`. Its header cell has no visible label.
+  - **`VerdictMark`** (`health/VerdictView.tsx`) draws the column's cell: `<span class="row-mark" role="img" aria-label>` around the verdict's `Aspect` at size 10.
+  - It replaces every local `Lamp` and `RowLamp`, and InstanceList's dot. Inspector lists and the topology's nodes use it at size 8.
+  - **A healthy row's empty mark is `aria-hidden`:** it is not announced. Its verdict word stays in its own column.
+- **Evidence and simulations take no mark.** Events (the Events lens and Karpenter's events) are evidence, not an object's verdict; this keeps the step-5 ruling "warnings are evidence: amber text, no lamp". Access grants are a simulation's answer.
+- **Precedence, one rule for rows:** a row's mark is its verdict's (fault, attention, checking, syncing, paused, or none). A not-yet-realized row (`data-stale`) whose verdict mark would be none takes `syncing`, the dashed square, named "Syncing: changes not yet realized".
+  - **The 0.45 dim on a stale row's mark is retired:** a mark carries meaning, so it keeps its 3:1 stroke contrast (parent §2.1).
+  - The "Syncing…" chip stays.
 - **Upgrade:**
-  - an API removed at or before the target version takes `fault`, and one removed later or unscheduled takes `attention`;
+  - an API removed at or before the target takes `fault`, and one removed later or unscheduled takes `attention`;
   - a kubelet skew violation takes `fault`, and a skew warning takes `attention`.
-- **`▲` in a status cell goes:** the mark column carries the shape. Danger dialogs keep their `▲` and hazard tape; they mark danger verbs, not health.
-- **InstanceList:** its mark follows its rows' existing "needs attention" test, and draws `attention`.
-- **Quiet healthy rows:** no code change in `night` and `day` (success is ink-2). Captures confirm it in 11d.
+- **InstanceList:** its mark follows its rows' existing "needs attention" test, drawn as `attention` and named with the reason.
+- **`▲` comes off status words** wherever an `Aspect` is drawn beside them:
+  - the row status cells of Certs, ESO, Gateways, HTTPRoutes, Flux, Helm, Karpenter, Argo and Upgrade, and the topology's nodes;
+  - `VerdictLabel`, the row status word of Pods, Workloads and Nodes;
+  - the inspector verdict chip (`VerdictStatus`), which draws its `Aspect`;
+  - Flux's `klyx-danger-prefix` in its row.
+
+  Danger dialogs keep their `▲` and hazard tape: they mark danger verbs, not health. Headers lose theirs in 11b.
+- **Quiet healthy rows:** no code change in `night` and `day` (success is ink-2). Captures confirm it.
 
 ## 3. 11b: header count sentences
 
@@ -120,11 +129,10 @@ The Overview destination becomes the station page.
 ## 6. Testing
 
 - **11a:**
-  - the row height reaches `--table-row-height` as 40px;
-  - `RowAspect` labels, with healthy rows unannounced;
-  - the precedence (a stale ok row is dashed; a stale fault stays a fault);
-  - Events' Warning mark, Upgrade's marks and InstanceList's mark;
-  - every lens's column set starts with `mark`.
+  - `VerdictMark` units: labels, healthy rows unannounced, a stale ok row dashed, a stale fault kept, the label override;
+  - source rules: rows are 40px in the constant and the CSS, with no list passing its own height; a stale mark is never dimmed; every verdict table starts with `ROW_MARK` (evidence and simulations exempt by name); no status cell repeats `▲`;
+  - Upgrade's marks and InstanceList's mark;
+  - the lens tests updated from `▲` text to the row's mark.
 - **11b:** `CountSentence` units (noun agreement, lower bound, fault versus attention mark, all-clear and not-known words), and each lens's header test updated to the sentence with unchanged numbers.
 - **11c:**
   - the section order;
@@ -136,10 +144,10 @@ The Overview destination becomes the station page.
 
 ## 7. Open points (for review)
 
-1. **The row mark is size 10** in 40px rows. The console and the fleet queue keep size 8.
+1. **The row mark is size 10** in 40px rows. The console, the fleet queue, inspector lists and the topology's nodes keep size 8.
 2. **A healthy row's empty mark is `aria-hidden`.** The verdict word in its own column is what a screen reader hears.
-3. **A stale ok row takes the dashed `syncing` mark,** alongside the dim and the "Syncing…" chip. A stale row with any other verdict keeps that verdict's mark.
-4. **A Warning event takes the `attention` mark.** An event is evidence rather than an object's verdict, so it never takes `fault`.
+3. **A stale ok row takes the dashed `syncing` mark,** with the "Syncing…" chip. The mark's dim is retired, since a mark keeps its contrast. A stale row with any other verdict keeps that verdict's mark.
+4. **Events take no mark.** An event is evidence rather than an object's verdict, which keeps the step-5 ruling. Access grants take none either.
 5. **The station page's title is the station.** The destination keeps the name "Overview" (mod+1, the registry, the console, parity).
 6. **The station's "Needs you" has no filters and no station tag.**
 7. **The bench themes stay selectable but lose their machining** in this slice; their removal follows §14.1.
