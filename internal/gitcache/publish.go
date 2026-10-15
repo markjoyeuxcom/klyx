@@ -28,12 +28,15 @@ type journal struct {
 	Committed bool               `json:"committed"`
 }
 
-// errCrash marks an acquisition the crash hook abandoned.
-var errCrash = errors.New("abandoned at a test crash point")
+// errCrash marks an acquisition the test hook abandoned at a recovery
+// point, leaving the disk as it stands.
+var errCrash = errors.New("abandoned at a test recovery point")
 
-func (s *Store) crashAt(step string) error {
-	if s.crash != nil && s.crash(step) != nil {
-		return errCrash
+// at is a recovery point between journaled steps. The test hook may abandon
+// the publication there (errCrash) or fail the step (any other error).
+func (s *Store) at(step string) error {
+	if s.crash != nil {
+		return s.crash(step)
 	}
 	return nil
 }
@@ -77,34 +80,47 @@ func (s *Store) publish(ctx context.Context, dir, kind string, packs []pack, ref
 		return nil
 	}
 	j := journal{Kind: kind, Files: files, Refs: updates}
-	if err := writeJournal(dir, j); err != nil {
-		return err
-	}
-	if err := s.crashAt("journal"); err != nil {
-		return err
-	}
-	if err := s.moveFiles(stgPack, dstPack, moving); err != nil {
+	// From the journal on, every failure goes to recovery at once - one
+	// decision path, from the refs - keeping its own error. Only a test's
+	// abandoned publication (errCrash) is left for the next start.
+	fail := func(err error) error {
 		if errors.Is(err, errCrash) {
 			return err
 		}
 		return s.undo(ctx, dir, err)
 	}
+	if err := writeJournal(dir, j); err != nil {
+		return fail(err)
+	}
+	if err := s.at("journal"); err != nil {
+		return fail(err)
+	}
+	if err := s.moveFiles(stgPack, dstPack, moving); err != nil {
+		return fail(err)
+	}
 	if len(updates) > 0 {
 		if err := s.run.Repo(dir).UpdateRefs(ctx, updates); err != nil {
-			return s.undo(ctx, dir, err)
+			return fail(err)
 		}
-		if err := s.crashAt("refs"); err != nil {
-			return err
+		if err := s.at("refs"); err != nil {
+			return fail(err)
 		}
 	}
 	j.Committed = true
 	if err := writeJournal(dir, j); err != nil {
-		return s.undo(ctx, dir, err)
+		return fail(err)
 	}
-	if err := s.crashAt("mark"); err != nil {
-		return err
+	if err := s.at("mark"); err != nil {
+		return fail(err)
 	}
-	return removeJournal(dir)
+	err := s.at("remove")
+	if err == nil {
+		err = removeJournal(dir)
+	}
+	if err != nil {
+		return fail(err)
+	}
+	return nil
 }
 
 // undo hands a failed publication to recovery, which reads the refs.
@@ -137,12 +153,12 @@ func (s *Store) moveFiles(src, dst string, packs []pack) error {
 			return err
 		}
 		if i == 0 {
-			if err := s.crashAt("files-partial"); err != nil {
+			if err := s.at("files-partial"); err != nil {
 				return err
 			}
 		}
 	}
-	return s.crashAt("files")
+	return s.at("files")
 }
 
 func syncFile(path string) error {

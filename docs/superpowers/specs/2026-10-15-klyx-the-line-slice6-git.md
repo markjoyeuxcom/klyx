@@ -118,10 +118,13 @@ The parent's §7 contract, built as one `acquire` function with two callers (his
   - a journal that fails validation (a file that is not a pack file by name, a ref outside `refs/klyx/`, a short id) is uncertain too.
 
   Both mark the cache "needs repair" and delete nothing.
-- **A failure during publication** (not a crash) goes to the same recovery code at once, so there is one decision path.
+- **A failure during publication** (not a crash) goes to the same recovery code at once, so there is one decision path, and the failure's own error is returned. That includes a failure to remove the journal after the refs committed (design review of 2a4d790).
 - **After a content publication,** the listed ids are checked again; any still missing is "content incomplete".
 - **The status** (`klyx-status.json` in the cache) keeps the last good refresh time, the last attempt, and the last scrubbed error, so "history as of <time>; fetch failed: <error>" survives a restart.
-- **The tests** abandon an acquisition at each journaled step (a test hook), as a killed process would leave it, then start a fresh store over the same disk. A real kill leaves the same disk state, because recovery reads only the disk.
+- **The tests are recovery-point simulations** (design review of 2a4d790):
+  - A test hook abandons the publication at each journaled step boundary, leaving the durable cache state as it stands, then a fresh store starts over the same disk. Recovery reads only the disk.
+  - The same hook fails a step instead, to show recovery running at once.
+  - They do not terminate a process, and do not fail an fsync or the filesystem.
 
 ## 5. `git.repos` and Settings > Git (6c)
 

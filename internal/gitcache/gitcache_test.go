@@ -478,7 +478,7 @@ func TestRecoveryRollsBackWhatNeverCommitted(t *testing.T) {
 }
 
 func TestRecoveryFinalizesWhatCommitted(t *testing.T) {
-	for _, step := range []string{"refs", "mark"} {
+	for _, step := range []string{"refs", "mark", "remove"} {
 		t.Run(step, func(t *testing.T) {
 			f, files := crashFirstPublication(t, step)
 			if err := f.restart(); err != nil {
@@ -651,5 +651,39 @@ func TestValidationRefusesWhatItCannotEnumerate(t *testing.T) {
 		if _, err := s.validate(context.Background(), stg, 1<<20, func(gitcli.PackObjects) error { return nil }); err == nil {
 			t.Errorf("%s was accepted", name)
 		}
+	}
+}
+
+// A step that fails (rather than a process that dies) goes to recovery at
+// once: rolled back before the refs commit, finalized after - and the
+// step's own error is returned either way.
+func TestAFailedStepIsRecoveredAtOnce(t *testing.T) {
+	injected := errors.New("injected step failure")
+	for step, committed := range map[string]bool{
+		"journal": false, "files-partial": false, "files": false, "refs": true, "mark": true, "remove": true,
+	} {
+		t.Run(step, func(t *testing.T) {
+			f := newFixture(t)
+			f.store.crash = func(s string) error {
+				if s == step {
+					return injected
+				}
+				return nil
+			}
+			err := f.store.RefreshHistory(context.Background(), f.url, []gitcli.Ref{ref(t, "branch", "main"), ref(t, "tag", "v1")})
+			if !errors.Is(err, injected) {
+				t.Fatalf("the step's error was not kept: %v", err)
+			}
+			if exists(filepath.Join(f.cache(), journalName)) || exists(filepath.Join(f.cache(), repairName)) {
+				t.Fatal("recovery did not run at once")
+			}
+			if n := len(f.tracked()); (n == 2) != committed || (n != 0 && n != 2) {
+				t.Fatalf("refs after a failure at %s: %v", step, f.tracked())
+			}
+			if (len(f.packFiles()) > 0) != committed {
+				t.Fatalf("packs after a failure at %s: %v", step, f.packFiles())
+			}
+			f.fsck()
+		})
 	}
 }

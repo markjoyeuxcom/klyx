@@ -44,9 +44,9 @@ type Store struct {
 	// publication, recovery, Clear - so reads never wait behind a fetch.
 	pub sync.RWMutex
 
-	// crash, set only by tests, is called between journaled steps; a
-	// non-nil return abandons the acquisition on the spot, as a killed
-	// process would.
+	// crash, set only by tests, is called at each recovery point between
+	// journaled steps: errCrash abandons the publication there, leaving the
+	// disk as a killed process would; any other error fails that step.
 	crash func(step string) error
 }
 
