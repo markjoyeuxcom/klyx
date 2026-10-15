@@ -245,28 +245,36 @@ The "protected" tag is drawn once, on the station crumb (4a); the strip's phrase
 
 No lens changes its content in slice 4. The lens sweep is slice 11.
 
-### 6.2 Pinning
+### 6.2 What exists (surveyed 2026-10-15)
 
-**`InspectorLayout` takes a required `pin`:**
-- `{ cluster, uid?, kind, namespace?, name }`;
-- `uid` is omitted only for objects without one (Helm releases, which use the release identity).
+- **The cluster:** `ClusterDetail` reads the route's cluster and passes it to every lens as `cluster`. No lens or inspector reads the route itself; the only other reader is `useInspectorAI`'s fallback.
+- **Selections:**
+  - Store-held selections (Pods, Nodes, Helm, Flux reconciliations, certificates, external secrets, topology routes) sit in a cluster-fenced slice: the lens reads them only when `slice.cluster === cluster`.
+  - Local selections (Workloads, Events, Access, Upgrade, Argo, Gateways, Gateway routes, Karpenter, Flux sources, issuers, secret stores) are keys in `useState`, reset by an effect when the cluster changes. That effect runs after a render, so for one render an old key meets the new cluster.
+  - CRD instances are selected through the route (`route.instance`), so they carry the route's cluster.
+- **UIDs:** most inspectors have one. Seven have none in their DTO: Events, the topology's routes, Access grants, Upgrade's deprecated APIs and node skew, Argo projects, Karpenter events. Helm releases use the release identity.
+- **AI:** `useInspectorAI` takes the cluster from its caller, else the route. Seven callers omit it: the external secret and its store, the Flux source, the ApplicationSet, the Gateway, the issuer and the NodePool. "Ask a follow-up" uses the hook's cluster.
+- **Confirmations:** every `ConfirmDialog` and `OperationDialog` takes the lens's or inspector's `cluster`; Nodes, Flux, Argo and the workload pod delete pin it when armed and drop the dialog if the cluster changes.
+- **Gone objects:** Pods, Nodes, Workloads, Gateways, Gateway routes and Karpenter already say **"removed"** only after a complete read of the kind and **"unverified"** otherwise, keep the last row as evidence, and disable actions. Pods, Nodes and Workloads select by namespace/name and run verbs by UID, so a same-name replacement becomes the selected object and is read afresh.
+
+### 6.3 Pinning (revised from the survey)
+
+**`InspectorLayout` takes a required `pin`:** `{ cluster, uid?, kind, namespace?, name }`. `uid` is omitted for the objects with none (above).
 
 **Consumers read the pin from `InspectorPin` context:**
-- `useInspectorAI` uses the pin's cluster and UID whenever its caller passes none. That fixes the seven route-cluster fallbacks by construction.
+- `useInspectorAI` uses the pin's cluster when its caller passes none, and the route fallback is removed. That fixes the seven callers by construction.
 - "Ask a follow-up" opens the chat on the pin's cluster.
-- Actions built inside an inspector take the pin's cluster. `ConfirmDialog`'s typed cluster name is the pin's.
+- Confirmations keep their pinned clusters. Their typed name already comes from the lens or inspector, never the route.
 
-**Selections carry their cluster:**
-- Each lens's selection type gains `cluster`.
-- A lens renders an inspector only when `selection.cluster` equals its own cluster. Any other selection is dropped on render, never re-targeted.
+**Local selections carry their cluster:** a local key becomes `{ cluster, key }`, and a lens reads it only when `sel.cluster === cluster`. The one-render overlap goes; the reset effects stay as cleanup. Store-held selections are already fenced by their slice.
 
-**UID fencing:**
-- Each lens passes the UID it currently finds at the pinned name (`liveUid`).
-- **Replaced** (a different UID): the inspector says "Replaced: this object was deleted and created again", offers "Open the new object", and disables every action.
-- **Missing:** it says "Deleted", and actions are disabled.
-- Explain and follow-ups stay fenced to the pinned UID, as today.
+**Gone and replaced:**
+- `InspectorLayout` gains one `gone` presentation, `"removed" | "unverified" | "replaced"`. The lenses' existing removed/unverified rule (by read completeness) stays the source; "Deleted" from the earlier draft is dropped, since it ignored whether the read was complete.
+- **Replaced** is new, and only where a UID exists: the lens finds the object at the pinned namespace/name with a different UID. The inspector says "Replaced: this object was deleted and created again", offers "Open the new object", and disables every action. Explain and follow-ups stay on the pinned UID.
 
-### 6.3 The object crumb
+**Open point for review (6.3a):** "Replaced" changes behaviour in Pods, Nodes and Workloads, which follow a same-name replacement today. The parent pins the inspector to its UID (parent §4), which this follows. The alternative keeps following by name, and marks the inspector "Replaced at <time>" while it reads the new object afresh.
+
+### 6.4 The object crumb
 
 A small `inspectorPin` store, set while an inspector is mounted, gives the location bar its fourth crumb: kind and name. Clicking it focuses the inspector.
 
@@ -277,7 +285,7 @@ A small `inspectorPin` store, set while an inspector is mounted, gives the locat
 | 4a | `fleetAxes` cases from parent §12 while inside another cluster: a remote warning, a controller-only fault, a failed connection, a lost watch, plus overlaps and the all-zero wording. Popover keyboard and focus return. The station switcher. mod+1..9 targets unchanged. Settings > Appearance. Ported `TopBar` and `FleetSpine` tests. |
 | 4b | `lensIndex` cases: ordering by severity and count, sub-entries, checking and unknown listed, absent named once, fleet routes. Collapse and persistence. Every registry destination reachable through the index's browsers or ⌘K. Ported `NavBand` tests. The parity gate and `noFanout`. |
 | 4c | The bridge keeps only newer versions: a reply older than an event, and duplicate events. `stationStrip` cases: siding, absent, checking, lighting at both ends only, held, failing. Accessible text. |
-| 4d | A route-cluster change with an inspector open drops the selection. AI and chat use the pin's cluster. Replaced and deleted UIDs disable actions. The object crumb. |
+| 4d | A cluster change with an inspector open drops the selection on the same render. AI and chat use the pin's cluster; no route fallback remains. Removed, unverified and replaced disable actions; replaced offers the new object. UID-less inspectors never read as replaced. The object crumb. |
 
 **Every sub-slice also passes:**
 - tsc, eslint and vitest;
@@ -290,3 +298,6 @@ A small `inspectorPin` store, set while an inspector is mounted, gives the locat
 2. **Order stays env rank in TS (§2.2),** rather than the DTO's placement, so mod+1..9 keep their targets before the line loads.
 3. **Tool groups as one lens with sub-entries (§4.1),** rather than every task destination at the top level. This follows the mockup.
 4. **No theme shortcut is added (§2).** The parent's "existing shortcut" never existed.
+5. **Replaced versus following by name (§6.3a).**
+6. **One "protected" tag (§5.2).** It is drawn on the station crumb only; the strip's phrase says it.
+7. **The strip on narrow windows (§5.4).** Below 1180px its drawing is hidden and only its phrase remains.
