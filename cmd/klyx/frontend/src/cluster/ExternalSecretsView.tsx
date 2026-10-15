@@ -108,6 +108,10 @@ type EsoStatus = "all" | "attention" | "stale";
 // overdue), rule.role/label the presentation.
 const roleOf = (x: { rule: RuleDTO }) => ({ kind: x.rule.role, label: x.rule.label });
 const included = (x: { rule: RuleDTO }) => x.rule.included;
+// faultsOf: the counted rows that are faults - the rows' reading, used only
+// where no summary count is current (slice 11b review).
+const faultsOf = (xs: { rule: RuleDTO }[]) => xs.filter((x) => x.rule.included && x.rule.role === "fault").length;
+
 const ROLE_TEXT: Record<string, string> = {
   fault: "var(--color-text-danger)",
   degraded: "var(--color-text-warning)",
@@ -292,6 +296,9 @@ export function ExternalSecretsView({ cluster }: { cluster: string }) {
   const storeTotal = globalCounts?.stores?.total ?? stores.length;
   const storesNotReady = globalCounts?.stores?.included ?? stores.filter(included).length;
   const failed = secrets.filter((e) => e.state === "Failed").length;
+  // each header's mark from the reading that gave its count
+  const secretFault = globalCounts?.secrets ? globalCounts.secrets.fault : faultsOf(secrets);
+  const storeFault = globalCounts?.stores ? globalCounts.stores.fault : faultsOf(stores);
   const stale = secrets.filter((e) => e.stale).length;
   const storeProblems = secrets.filter((e) => { if (kindCov(e.storeKind) === "unknown") return false; const st = resolveStore(e, stores); return !st || st.rule.included; }).length;
   const asOf = rowsRefreshing ? ` (as of ${rowsAsOf})` : "";
@@ -336,13 +343,13 @@ export function ExternalSecretsView({ cluster }: { cluster: string }) {
       summary={state === "loading" || state === "unreadable" || absent ? null : view === "stores" ? (
         <>
           <CountSentence total={storeTotal} marker={partial} noun={["store", "stores"]}
-            attention={{ count: storesNotReady, phrase: "not ready", fault: false }}
+            attention={{ count: storesNotReady, phrase: "not ready", fault: storeFault > 0 }}
             clear={storesEv === "complete" ? "all stores ready" : storesEv === "stale" ? "none known not ready (last observed)" : "store list incomplete"} />
         </>
       ) : (
         <>
           <CountSentence total={secretTotal} marker={partial} noun={["external secret", "external secrets"]}
-            attention={{ count: attention, phrase: "not synced or stale", fault: failed > 0 }}
+            attention={{ count: attention, phrase: "not synced or stale", fault: secretFault > 0 }}
             clear={secretsEv === "complete" ? "all synced and refreshing" : secretsEv === "stale" ? "none known not synced (last observed)" : "ExternalSecret list incomplete"} />
           <span className="t-secondary" data-testid="eso-breakdown">{[failed ? `${failed} failed` : "", stale ? `${stale} stale` : "", storeProblems ? `${storeProblems} with store problem` : ""].filter(Boolean).join(" · ")}{(failed || stale || storeProblems) ? asOf : ""}</span>
         </>

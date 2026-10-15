@@ -146,6 +146,10 @@ const SOURCE_COLUMNS: (ColumnDef & { label: string })[] = [
 // rule.role/label the presentation (Suspended = paused, never attention).
 const roleOf = (x: { rule: RuleDTO }) => ({ kind: x.rule.role, label: x.rule.label });
 const included = (x: { rule: RuleDTO }) => x.rule.included;
+// faultsOf: the counted rows that are faults - the rows' reading, used only
+// where no summary count is current (slice 11b review).
+const faultsOf = (xs: { rule: RuleDTO }[]) => xs.filter((x) => x.rule.included && x.rule.role === "fault").length;
+
 const STATUS_COLOR: Record<string, string> = {
   fault: "var(--color-text-danger)",
   degraded: "var(--color-text-warning)",
@@ -416,6 +420,9 @@ export function GitOps({ cluster }: { cluster: string }) {
   const attention = globalCounts?.reconciliations?.included ?? rows.filter(included).length;
   const srcTotal = globalCounts?.sources?.total ?? allSources.length;
   const srcAttention = globalCounts?.sources?.included ?? allSources.filter(included).length;
+  // each header's mark from the reading that gave its count
+  const recFault = globalCounts?.reconciliations ? globalCounts.reconciliations.fault : faultsOf(rows);
+  const srcFault = globalCounts?.sources ? globalCounts.sources.fault : faultsOf(allSources);
   const ks = rows.filter((r) => r.kind === "Kustomization").length;
   const hr = rows.filter((r) => r.kind === "HelmRelease").length;
   const failed = rows.filter((r) => !r.suspended && r.ready === "Failed").length;
@@ -469,7 +476,7 @@ export function GitOps({ cluster }: { cluster: string }) {
         summary={state === "loading" || state === "unreadable" || absent ? null : view === "sources" ? (
           <>
             <CountSentence total={srcTotal} marker={partial} noun={["source", "sources"]}
-              attention={{ count: srcAttention, phrase: "not ready", fault: false }}
+              attention={{ count: srcAttention, phrase: "not ready", fault: srcFault > 0 }}
               clear={srcEv !== "complete" ? notKnown(srcEv) : srcSuspended > 0 ? "all active sources ready" : "all sources ready"} />
             {srcSuspended > 0 && <span className="t-secondary">{srcSuspended} suspended{asOf}</span>}
           </>
@@ -479,7 +486,7 @@ export function GitOps({ cluster }: { cluster: string }) {
                 includes neutral progressing/stale/unknown rows until the shared
                 Flux health slice aligns backend summary, tape and lens together. */}
             <CountSentence total={recTotal} marker={partial} noun={["reconciliation", "reconciliations"]}
-              attention={{ count: attention, phrase: "not ready", fault: failed > 0 }}
+              attention={{ count: attention, phrase: "not ready", fault: recFault > 0 }}
               clear={recsEv !== "complete" ? notKnown(recsEv) : "all ready"} />
             <span className="t-secondary" data-testid="flux-breakdown">
               {[`${ks} Kustomization${ks === 1 ? "" : "s"} · ${hr} HelmRelease${hr === 1 ? "" : "s"}`, failed ? `${failed} failed` : "", reconciling ? `${reconciling} reconciling` : "", syncing ? `${syncing} syncing` : "", suspended ? `${suspended} suspended` : ""].filter(Boolean).join(" · ")}{asOf}

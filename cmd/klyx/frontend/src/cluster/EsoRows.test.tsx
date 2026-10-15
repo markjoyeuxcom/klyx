@@ -226,3 +226,12 @@ describe("an ESO reveal by UID", () => {
     expect(gone()).toBe("removed");
   });
 });
+
+it("a counted failed store marks the header as fault", () => {
+ open();
+ applyRows("s",rowsDTO(1,"externalsecrets",1,[secret("db")],SECRET_KINDS()));
+ applyRows("t",rowsDTO(1,"stores",1,[store("bad",{state:"Failed"})],STORE_KINDS()));
+ render(<ExternalSecretsView cluster="x" />);fireEvent.click(screen.getByRole("button",{name:/^Stores/}));
+ expect(document.querySelector('.lens-row .row-mark [data-aspect]')?.getAttribute('data-aspect')).toBe('fault');
+ expect(document.querySelector('.lens-header-summary .t-status [data-aspect]')?.getAttribute('data-aspect')).toBe('fault');
+});

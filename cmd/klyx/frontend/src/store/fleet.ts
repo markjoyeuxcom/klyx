@@ -289,7 +289,10 @@ export type CertManagerSlice = {
 // ahead, inside the deadline; refreshing - past it, the rows are shown as of
 // evaluatedAt while a fenced re-read runs (refreshError: its last failure).
 export type RowsStateDTO = { updating: boolean; refreshing: boolean; evaluatedAt: string | null; refreshError?: string | null };
-export type PartCountsDTO = { total: number; included: number };
+// fault: how many counted objects are faults, from the same reading as
+// included - a header's mark never mixes the summary's count with the
+// rows' roles (slice 11b review).
+export type PartCountsDTO = { total: number; included: number; fault: number };
 
 // What the cert-manager rows adapter (health/useCertManagerRows) writes.
 export type CertManagerRowsPayload = Pick<CertManagerSlice, "certificates" | "issuers" | "coverage" | "watchError" | "loading" | "rowsState" | "partCounts">;

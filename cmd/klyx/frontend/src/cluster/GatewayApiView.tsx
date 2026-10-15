@@ -116,6 +116,8 @@ function GatewayList({ cluster, rows, toggle }: { cluster: string; rows: Gateway
   const total = rows.partCounts?.total ?? gateways.length;
   const attention = rows.partCounts?.included ?? gateways.filter((g) => g.rule.included).length;
   const notAccepted = gateways.filter((g) => gatewayRole(g).kind === "fault").length;
+  // the header's mark from the reading that gave its count (slice 11b review)
+  const gwFault = rows.partCounts ? rows.partCounts.fault : gateways.filter((g) => g.rule.included && gatewayRole(g).kind === "fault").length;
   const unverified = gateways.filter((g) => ["unknown", "progressing"].includes(gatewayRole(g).kind)).length;
   // "all programmed" is a claim about the present: a complete, current read
   const allOk = gateways.length > 0 && ev === "complete" && !rows.rowsState.updating && !rowsRefreshing && gateways.every((g) => gatewayRole(g).kind === "ok");
@@ -213,7 +215,7 @@ function GatewayList({ cluster, rows, toggle }: { cluster: string; rows: Gateway
       summary={state === "loading" || state === "unreadable" || absent ? null : (
         <>
           <CountSentence total={total} marker={mark} noun={["gateway", "gateways"]}
-            attention={{ count: attention, phrase: "", fault: !rowsRefreshing && notAccepted > 0, testid: "gw-attention",
+            attention={{ count: attention, phrase: "", fault: gwFault > 0, testid: "gw-attention",
               text: rowsRefreshing ? `${attention} need attention` : [notAccepted ? `${notAccepted}${mark} not accepted` : "", attention > notAccepted ? `${attention - notAccepted}${mark} need${attention - notAccepted === 1 ? "s" : ""} attention` : ""].filter(Boolean).join(" · ") }} />
           {unverified > 0 && <span className="t-secondary">{unverified}{mark} unverified{asOf}</span>}
           {allOk && <span className="t-secondary">all programmed</span>}

@@ -202,6 +202,19 @@ Codex accepted 11a at e7af6d0. Its P3 (the `InspectorStatus` danger prefix besid
   - **`MarkedPhrase`** is also used alone where a check lens's header said `▲`: Upgrade's EOL past, APIs removed and kubelet skew violations, Hubble's drops, and Karpenter's list of not-ready, stuck and NodePools.
 - **Nouns:** Pods "pod", Workloads "workload", Nodes "node", Events "event", Argo "application", "project" and "ApplicationSet", Flux "reconciliation" and "source", cert-manager "certificate" and "issuer", ESO "external secret" and "store", Helm "release", Gateways "gateway", HTTPRoutes "HTTPRoute", Karpenter "NodeClaim", and Resources the kind's lower-case name and its plural resource.
 - **No count changed.** Each lens passes its existing numbers, markers, phrases, all-clear and not-known words, and breakdowns. Events keep their warnings as amber text with no mark (evidence).
+- **The mark comes from the reading that gave the count** (review of d92fdee).
+  - `PartCountsDTO` carries `fault`, the summary's role count for the part, beside `total` and `included`.
+  - Each native lens's header takes its fault bit from the same part's counts when they are current, else from its counted rows (`faultsOf`: included rows whose role is fault). This covers Flux reconciliations and sources, certificates and issuers, external secrets and stores, Argo applications and ApplicationSets, and Gateways.
+  - So a summary ahead of healthy rows marks its own fault, a newer summary with only progressing attention never inherits an old row's fault, and a failed source, issuer or store marks its header as it does its row.
+  - Row-scoped breakdowns stay row-scoped. Helm and Karpenter take both their count and their fault from rows, so they already agreed.
 - **Tests:**
   - `CountSentence.test.tsx`: noun agreement and markers, the fault and look-at marks, a list's text, the detail, clear words with no mark, and `MarkedPhrase`.
   - Lens tests updated from `▲` text and bare counts to the sentence. The Rows suites read the sentence's leading number, so their count assertions are unchanged.
+
+## 11. As built: 11d part 2
+
+- **Captures:** `pw/s11d.mjs` opens every lens by the name the lens index shows it, through the console, at 1440×900 in night and in day: the fleet board, Overview, Pods, Workloads, Nodes, Events, the three checks, Flux CD and Sources, Argo CD and ApplicationSets, Helm, cert-manager, External Secrets, Gateways and routes, Karpenter, the API browser, Resources, Activity and Settings. Every lens opened its own page, with no console error and no horizontal overflow, in both themes.
+- **Two console findings** came out of the pass, each fixed with a test:
+  - "Workloads" opened Pods (9377030, accepted): an index label now ranks as an exact title.
+  - "Helm" opened a Namespaces list (9612148): a tool lens's first task carries the tool's name, as the index shows it, so it ranks first and leads the console ahead of objects that merely contain the word.
+- **Parity:** the frontend stage of the health 1c gate passes against the saved Go capture (`KLYX_PARITY_OUT=…/parity-out`, 2 tests). The Go stage needs its own kind cluster (`scripts/lab/klyx-parity.sh`) and exercises the Observer, which slice 11 does not touch. It is re-run in slice 12's smoke.

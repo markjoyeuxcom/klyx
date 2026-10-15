@@ -76,6 +76,10 @@ type AppSetFilter = "all" | "attention" | "missing";
 // ApplicationSet, not healthy - and rule.role/label the presentation in Argo's
 // own vocabulary.
 const roleOf = (x: { rule: RuleDTO }) => ({ kind: x.rule.role, label: x.rule.label });
+// faultsOf: the counted rows that are faults - the rows' reading, used only
+// where no summary count is current (slice 11b review).
+const faultsOf = (xs: { rule: RuleDTO }[]) => xs.filter((x) => x.rule.included && x.rule.role === "fault").length;
+
 const ROLE_COLOR: Record<string, string> = {
   fault: "var(--color-text-danger)",
   degraded: "var(--color-text-warning)",
@@ -332,6 +336,9 @@ export function ArgoView({ cluster, mode = "applications" }: { cluster: string; 
   const unusedProjects = appsCov === "unknown" ? null : projects.filter((p) => appsForProject(apps, p.name).length === 0).length;
   const setTotal = globalCounts?.applicationsets?.total ?? appSets.length;
   const unhealthySets = globalCounts?.applicationsets?.included ?? appSets.filter((a) => a.rule.included).length;
+  // each header's mark from the reading that gave its count
+  const appFault = globalCounts?.applications ? globalCounts.applications.fault : faultsOf(apps);
+  const setFault = globalCounts?.applicationsets ? globalCounts.applicationsets.fault : faultsOf(appSets);
   const missingSets = appsCov === "unknown" ? null : appSets.filter((a) => missingGeneratedNames(a, apps).length > 0).length;
 
   const view = mode === "projects"
@@ -380,7 +387,7 @@ export function ArgoView({ cluster, mode = "applications" }: { cluster: string; 
         summary={state === "loading" || state === "unreadable" ? null : mode === "applications" ? (
           <>
             <CountSentence total={appTotal} marker={partial} noun={["application", "applications"]}
-              attention={{ count: broken, phrase: "out of sync or unhealthy", fault: byHealth("Degraded") + byHealth("Missing") > 0 }}
+              attention={{ count: broken, phrase: "out of sync or unhealthy", fault: appFault > 0 }}
               clear={apps.length === 0 ? null : view.error ? "none known out of sync or unhealthy" : "none out of sync or unhealthy reported"} />
             <span className="t-secondary" data-testid="argo-breakdown">
               {[byHealth("Degraded") ? `${byHealth("Degraded")} degraded` : "", byHealth("Missing") ? `${byHealth("Missing")} missing` : "", outOfSync ? `${outOfSync} out of sync` : "", byHealth("Progressing") ? `${byHealth("Progressing")} progressing` : "", byHealth("Suspended") ? `${byHealth("Suspended")} suspended` : ""].filter(Boolean).join(" · ")}{apps.length ? asOf : ""}
@@ -394,7 +401,7 @@ export function ArgoView({ cluster, mode = "applications" }: { cluster: string; 
         ) : (
           <>
             <CountSentence total={setTotal} marker={partial} noun={["ApplicationSet", "ApplicationSets"]}
-              attention={{ count: unhealthySets, phrase: "need attention", fault: false }} clear="none need attention" />
+              attention={{ count: unhealthySets, phrase: "need attention", fault: setFault > 0 }} clear="none need attention" />
             {missingSets === null ? <span className="t-secondary">generated apps unverified (Application read unavailable)</span> : missingSets > 0 && <span className="t-secondary">{missingSets} missing generated apps{appsCov === "stale" ? " (last good Application read)" : ""}</span>}
           </>
         )}

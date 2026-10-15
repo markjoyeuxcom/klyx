@@ -107,6 +107,10 @@ type CertStatus = "all" | "attention" | "expiring" | "issuing" | "issuerProblem"
 // renews it; the expiry cell carries it in amber text.
 const roleOf = (x: { rule: RuleDTO }) => ({ kind: x.rule.role, label: x.rule.label });
 const included = (x: { rule: RuleDTO }) => x.rule.included;
+// faultsOf: the counted rows that are faults - the rows' reading, used only
+// where no summary count is current (slice 11b review).
+const faultsOf = (xs: { rule: RuleDTO }[]) => xs.filter((x) => x.rule.included && x.rule.role === "fault").length;
+
 const ROLE_TEXT: Record<string, string> = {
   fault: "var(--color-text-danger)",
   degraded: "var(--color-text-warning)",
@@ -331,6 +335,9 @@ export function CertsView({ cluster }: { cluster: string }) {
   const issuerTotal = globalCounts?.issuers?.total ?? issuers.length;
   const issuersNotReady = globalCounts?.issuers?.included ?? issuers.filter(included).length;
   const failedOrExpired = certs.filter((c) => c.ready === "Failed" || expired(c)).length;
+  // each header's mark from the reading that gave its count
+  const certFault = globalCounts?.certificates ? globalCounts.certificates.fault : faultsOf(certs);
+  const issuerFault = globalCounts?.issuers ? globalCounts.issuers.fault : faultsOf(issuers);
   const issuing = certs.filter((c) => c.ready === "Issuing").length;
   const renewing = certs.filter((c) => expiringSoon(c)).length;
   const issuerProblems = certs.filter((c) => issuerCovOf(c.issuerKind) !== "unknown" && issuerProblem(c, issuers)).length;
@@ -376,13 +383,13 @@ export function CertsView({ cluster }: { cluster: string }) {
       summary={state === "loading" || state === "unreadable" || absent ? null : view === "issuers" ? (
         <>
           <CountSentence total={issuerTotal} marker={partial} noun={["issuer", "issuers"]}
-            attention={{ count: issuersNotReady, phrase: "not ready", fault: false }}
+            attention={{ count: issuersNotReady, phrase: "not ready", fault: issuerFault > 0 }}
             clear={issuersEv === "complete" ? "all issuers ready" : issuersEv === "stale" ? "none known not ready (last observed)" : "issuer list incomplete"} />
         </>
       ) : (
         <>
           <CountSentence total={certTotal} marker={partial} noun={["certificate", "certificates"]}
-            attention={{ count: attention, phrase: "not ready or expired", fault: failedOrExpired > 0 }}
+            attention={{ count: attention, phrase: "not ready or expired", fault: certFault > 0 }}
             clear={certsEv === "complete" ? "all ready" : certsEv === "stale" ? "none known not ready (last observed)" : "Certificate list incomplete"} />
           <span className="t-secondary" data-testid="cert-breakdown">{[failedOrExpired ? `${failedOrExpired} failed or expired` : "", issuing ? `${issuing} issuing` : "", renewing ? `${renewing} in renewal window` : "", issuerProblems ? `${issuerProblems} with issuer problem` : ""].filter(Boolean).join(" · ")}{(failedOrExpired || issuing || renewing || issuerProblems) ? asOf : ""}</span>
         </>

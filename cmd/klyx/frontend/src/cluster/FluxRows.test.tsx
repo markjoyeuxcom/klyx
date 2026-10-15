@@ -422,3 +422,32 @@ describe("Flux openings by UID", () => {
     expect(gone()).toBe("removed");
   });
 });
+
+describe("the header mark follows the reading that gave its count (slice 11b review)", () => {
+ it("a failed source counted in the header carries a fault, like its row", () => {
+   seed([res("apps")],[src("bad",{ready:"Failed"})]);
+   render(<GitOps cluster="x" />);setView("sources");
+   expect(document.querySelector('.lens-row .row-mark [data-aspect]')?.getAttribute('data-aspect')).toBe('fault');
+   expect(document.querySelector('.lens-header-summary .t-status [data-aspect]')?.getAttribute('data-aspect')).toBe('fault');
+ });
+ it("a summary ahead of healthy rows supplies the severity of its own fault count", () => {
+   vi.useFakeTimers({now:0});try {
+   seed([res("apps")]);render(<GitOps cluster="x" />);
+   act(()=>{applySummary(summary(1,2,[2,3,1],[1,1,0]),0);dueForBootstrap(1500);});
+   expect(headline()).toBe("3");
+   expect(document.querySelector('.lens-header-summary')?.textContent).toContain('1 not ready');
+   expect(document.querySelector('.lens-header-summary .t-status [data-aspect]')?.getAttribute('data-aspect')).toBe('fault');
+   }finally{vi.useRealTimers();}
+ });
+ it("a summary with only progressing attention does not inherit an old row's fault", () => {
+   vi.useFakeTimers({now:0});try {
+   seed([res("apps",{ready:"Failed"})]);render(<GitOps cluster="x" />);
+   const newer=summary(1,2,[2,3,1],[1,1,0]);
+   newer.tasks[0].parts[0].native!.roles={total:3,fault:0,degraded:0,unknown:0,progressing:1,paused:0,ok:2};
+   act(()=>{applySummary(newer,0);dueForBootstrap(1500);});
+   expect(headline()).toBe("3");
+   expect(document.querySelector('.lens-header-summary')?.textContent).toContain('1 not ready');
+   expect(document.querySelector('.lens-header-summary .t-status [data-aspect]')?.getAttribute('data-aspect')).toBe('attention');
+   }finally{vi.useRealTimers();}
+ });
+});

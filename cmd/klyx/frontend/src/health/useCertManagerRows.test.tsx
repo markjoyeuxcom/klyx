@@ -117,6 +117,6 @@ describe("useCertManagerRows", () => {
     });
     const cm = useFleet.getState().certmanager;
     expect(cm.rowsState).toMatchObject({ refreshing: true, evaluatedAt: "2026-10-11T11:55:00Z" }); // the issuers' rows, not the certificates'
-    expect(cm.partCounts?.issuers).toEqual({ total: 7, included: 2 });
+    expect(cm.partCounts?.issuers).toEqual({ total: 7, included: 2, fault: 2 }); // the fault count travels with the count (slice 11b review);
   });
 });

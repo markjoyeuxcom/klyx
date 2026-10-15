@@ -43,7 +43,7 @@ export const answered = (r: LensRows<unknown>) => r.part !== null || r.error !==
  * summary's past the A4 deadline); none while nothing current is known. */
 export function partCounts<T>(r: LensRows<T>): PartCountsDTO | null {
   const n = r.counts.part?.native;
-  return n ? { total: n.total, included: n.included } : null;
+  return n ? { total: n.total, included: n.included, fault: n.roles?.fault ?? 0 } : null;
 }
 
 /** rowsState: the lens's A4 state across its parts. A refreshing view names

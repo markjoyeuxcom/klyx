@@ -347,3 +347,12 @@ describe("a reveal by UID", () => {
     expect(gone()).toBe("removed");
   });
 });
+
+it("a counted failed issuer marks the header as fault", () => {
+ open();
+ applyRows("c",rowsDTO(1,"certificates",1,[cert("web")],CERT_KINDS()));
+ applyRows("i",rowsDTO(1,"issuers",1,[issuer("bad",{ready:"Failed"})],ISSUER_KINDS()));
+ render(<CertsView cluster="x" />);fireEvent.click(screen.getByRole("button",{name:/^Issuers/}));
+ expect(document.querySelector('.lens-row .row-mark [data-aspect]')?.getAttribute('data-aspect')).toBe('fault');
+ expect(document.querySelector('.lens-header-summary .t-status [data-aspect]')?.getAttribute('data-aspect')).toBe('fault');
+});
