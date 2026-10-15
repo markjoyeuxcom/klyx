@@ -17,6 +17,7 @@ import (
 	"github.com/moomora/klyx/internal/config"
 	"github.com/moomora/klyx/internal/execenv"
 	"github.com/moomora/klyx/internal/fleet"
+	"github.com/moomora/klyx/internal/line"
 	"github.com/moomora/klyx/internal/observe"
 	"github.com/moomora/klyx/internal/winstate"
 	"github.com/wailsapp/wails/v3/pkg/application"
@@ -84,8 +85,13 @@ func main() {
 	// configSvc is built before the fleet service: the fleet DTOs resolve each
 	// cluster's config (env, group, EFFECTIVE protection) from its live fleet,
 	// which includes clusters hot-added through Settings.
+	var lineSvc *appbridge.LineService // set below; a hot-add rescans the line at once
 	configSvc := appbridge.NewConfigService(configPath(), cfg, func(cc config.ClusterConfig) error {
-		return reg.Add(ctx, cc)
+		err := reg.Add(ctx, cc)
+		if lineSvc != nil {
+			lineSvc.Rescan()
+		}
+		return err
 	})
 
 	svc := appbridge.NewFleetService(reg, appbridge.LiveClusterConfig(configSvc), time.Now)
@@ -202,6 +208,32 @@ func main() {
 			members = append(members, m)
 		}
 		return members
+	})
+
+	// The Line (slice 3): one acquisition point over the Observers' shared
+	// Flux and Argo rows, pushed as line:dto.
+	var lineOverride *line.Key
+	if cfg.Line != nil && cfg.Line.Source != nil {
+		k := line.OverrideKey(cfg.Line.Source.URL, cfg.Line.Source.Ref.Kind, cfg.Line.Source.Ref.Name)
+		lineOverride = &k
+	}
+	lineSvc = appbridge.NewLineService(ctx, appbridge.LineDeps{
+		Emitter:   em,
+		Sink:      healthSink,
+		Clusters:  appbridge.LiveFleetClusters(configSvc),
+		Snapshots: reg.Snapshots,
+		Observer: func(name string) *observe.Observer {
+			c, ok := reg.Conn(name)
+			if !ok {
+				return nil
+			}
+			if h, ok := c.(interface{ Health() *observe.Observer }); ok {
+				return h.Health()
+			}
+			return nil
+		},
+		Mesh:     meshSvc,
+		Override: lineOverride,
 	})
 
 	metricsSvc := appbridge.NewMetricsService(func(name string) (appbridge.MetricsConn, bool) {
@@ -449,6 +481,7 @@ func main() {
 			application.NewService(crdSvc),
 			application.NewService(gatewaySvc),
 			application.NewService(meshSvc),
+			application.NewService(lineSvc),
 			application.NewService(metricsSvc),
 			application.NewService(workloadsSvc),
 			application.NewService(podsSvc),

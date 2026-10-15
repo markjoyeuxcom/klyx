@@ -16,6 +16,23 @@ import (
 type Config struct {
 	Clusters []ClusterConfig `yaml:"clusters"`
 	AI       *AIConfig       `yaml:"ai"`
+	Line     *LineConfig     `yaml:"line"`
+}
+
+// LineConfig configures The Line (spec 2026-10-14 §3.2): Source overrides the
+// comparison key, which otherwise is the Git key most stations share.
+type LineConfig struct {
+	Source *LineSourceConfig `yaml:"source"`
+}
+
+// LineSourceConfig names a Git comparison key: a repository URL and a ref
+// in Flux's terms (branch, tag, semver, commit or name).
+type LineSourceConfig struct {
+	URL string `yaml:"url"`
+	Ref struct {
+		Kind string `yaml:"kind"`
+		Name string `yaml:"name"`
+	} `yaml:"ref"`
 }
 
 // AIConfig is the global (not per-cluster) AI-assist settings (spec

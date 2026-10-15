@@ -129,6 +129,13 @@ func LiveClusterConfig(s *ConfigService) func(string) (config.ClusterConfig, boo
 	return s.clusterConfig
 }
 
+// LiveFleetClusters returns the live fleet (startup clusters plus hot-adds,
+// in fleet.yaml order) as a function: a package-level accessor, so it is not
+// bound to the webview.
+func LiveFleetClusters(s *ConfigService) func() []config.ClusterConfig {
+	return s.fleetClusters
+}
+
 // fleetClusters returns the startup clusters plus this session's hot-added
 // ones - the live fleet as Settings should report it.
 func (s *ConfigService) fleetClusters() []config.ClusterConfig {
