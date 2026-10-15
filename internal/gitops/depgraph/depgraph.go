@@ -221,6 +221,9 @@ func Build(ctx context.Context, r Reader, start Ref, startUID string, now func()
 		b.g.Start = b.stub(start, kind, why)
 	} else {
 		b.g.Start = b.visit(start, startUID, 0)
+		if b.g.Start == "" { // cancelled during its own read
+			b.g.Start = b.stub(start, StubCancelled, "cancelled")
+		}
 	}
 	b.g.Reads = b.reads
 	b.summarize()
@@ -343,7 +346,9 @@ func (b *builder) follow(id string, targets []target, depth int) {
 		if _, seen := b.idx[tid]; seen {
 			if b.onPath[tid] {
 				b.incomplete("cycle: %s → %s, cut", id, tid)
-				b.g.Edges = append(b.g.Edges, Edge{From: id, To: tid, Type: t.typ, Cycle: true})
+				// cut, but still the controller's report when it is one: a
+				// reported cycle never ends a chain
+				b.g.Edges = append(b.g.Edges, Edge{From: id, To: tid, Type: t.typ, Cycle: true, Reported: b.reported(id, t, tid)})
 				continue
 			}
 			b.g.Edges = append(b.g.Edges, Edge{From: id, To: tid, Type: t.typ, Reported: b.reported(id, t, tid)})

@@ -582,3 +582,38 @@ func TestGraphReviewOfd0ca1d2(t *testing.T) {
 		t.Fatal("a missing chart a HelmRelease reports")
 	}
 }
+
+// Design review of eb6a10e: a cycle edge keeps the controller's report (a
+// reported cycle ends no chain), and a walk cancelled during its first read
+// still names its start.
+type cancellingReader struct {
+	fakeReader
+	cancel context.CancelFunc
+}
+
+func (c *cancellingReader) Get(ctx context.Context, ref Ref) (*unstructured.Unstructured, error) {
+	c.cancel()
+	return nil, ctx.Err()
+}
+
+func TestGraphReviewOfeb6a10e(t *testing.T) {
+	r := chain(2)
+	r.objs["Kustomization/flux-system/k0"].Object["status"] = map[string]any{"conditions": []any{ready("False", "DependencyNotReady", "dependency 'flux-system/k1' is not ready", t0)}}
+	r.objs["Kustomization/flux-system/k1"].Object["spec"] = map[string]any{"dependsOn": []any{map[string]any{"name": "k0"}}}
+	r.objs["Kustomization/flux-system/k1"].Object["status"] = map[string]any{"conditions": []any{ready("False", "DependencyNotReady", "dependency 'flux-system/k0' is not ready", t0)}}
+	g := Build(context.Background(), r, Ref{GroupKustomize, "Kustomization", "flux-system", "k0"}, "", time.Now)
+	back, ok := edge(g, "Kustomization/flux-system/k1", "Kustomization/flux-system/k0")
+	if !ok || !back.Cycle || !back.Reported {
+		t.Fatalf("the reported cycle edge: %+v", back)
+	}
+	if node(t, g, "Kustomization/flux-system/k1").ChainEnd || node(t, g, "Kustomization/flux-system/k0").ChainEnd {
+		t.Fatal("a reported cycle ended a chain")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	g = Build(ctx, &cancellingReader{cancel: cancel}, appsRef, "", time.Now)
+	if g.Start == "" || node(t, g, g.Start).Stub != StubCancelled || node(t, g, g.Start).Ref != appsRef || !containsPrefix(g.Incomplete, "cancelled") {
+		t.Fatalf("cancelled during the first read: %+v", g)
+	}
+}
