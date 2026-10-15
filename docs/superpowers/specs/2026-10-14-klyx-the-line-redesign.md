@@ -669,7 +669,7 @@ It is **pinned to its object's cluster and UID**. Every verb, follow-up and Expl
 | `git log --no-renames`, `git rev-list --count`, `git merge-base [--is-ancestor]` | metadata reads |
 | `git diff --name-status --no-renames --no-ext-diff --no-textconv` | metadata reads |
 | `git diff --no-ext-diff --no-textconv <a> <b> -- <path>` | a content diff, only after its blobs were acquired (below) |
-| `git archive --format=tar <rev> -- <path>` | the cache diff's input, only after its blobs were acquired |
+| `git cat-file --batch` | the cache diff's input: exactly the listed blobs (ids on stdin), only after they were acquired; streamed and capped at 64 MiB (revised 2026-10-15, slice 6 note §7.1: replaces `git archive`) |
 
 - **On every call:**
   - `--no-pager`;
@@ -736,23 +736,23 @@ Every download goes through these steps, under one fleet-wide acquisition lock. 
 
 A published cache passes `git fsck --connectivity-only` with its blobs missing, including after a restart. This is a test check, not something the app runs.
 
-**Content for previews and the cache diff.** `git diff` with content, and `git archive`, run only after a content acquisition has brought every blob they need. They run with `GIT_NO_LAZY_FETCH`, so a blob still missing fails the preview ("content incomplete") and never downloads behind the budget.
+**Content for previews and the cache diff.** `git diff` with content, and `git cat-file --batch`, run only after a content acquisition has brought every blob they need. They run with `GIT_NO_LAZY_FETCH`, so a blob still missing fails the preview ("content incomplete") and never downloads behind the budget.
 
 **The cache diff** (slice 6b, replacing the M10-f `flux diff --path` follow-up) is a separate authorisation from reading history. The build must be confined, not just the extraction: a Kustomize generator, patch, schema or nested base can otherwise read outside the tree. Codex reproduced exactly that with the flux CLI, which builds without confinement.
-- **Klyx does not run the flux CLI for cache builds.** It builds in-process:
+- **Klyx does not run the flux CLI for cache builds.** It builds in a contained child process of its own binary (revised 2026-10-15, slice 6 note §7.1: kustomize's loader fetches http(s) content and runs `git` for remote bases inside whatever process builds, so the build is isolated with no `PATH` and a transport that refuses every dial):
   1. **The input set is computed in rounds.**
      - It starts from the literal `spec.path`.
      - Each round's `kustomization.yaml` files are acquired as content and parsed. The in-repo relative paths they reference (`resources`, `components`, `patches`, generator `files`) add their subtrees. A reference that leaves the repo root is refused.
      - Rounds repeat until no new path is added: at most 10 rounds, within the 5,000-file and 64 MiB caps.
-     - The final set is acquired as content, then exported with `git archive` of exactly those paths.
-  2. Klyx's tar reader loads it into an **in-memory filesystem**, refusing absolute paths, `..`, and links that leave the root. Caps: 5,000 files and 64 MiB.
-  3. The Kustomize API builds over that filesystem only:
+     - The final set is acquired as content, then read as exactly those blobs (`cat-file --batch`) into a tar Klyx writes. Symbolic links and submodules are refused.
+  2. The child loads the tar into an **in-memory filesystem**, refusing absolute paths, `..` and links. Caps: 5,000 files and 64 MiB.
+  3. The Kustomize API builds, in the child, over that filesystem only:
      - root-only load restrictions;
      - plugins and exec functions off;
      - a loader that refuses every remote URL.
 
-     Because nothing outside the archive exists in that filesystem, no generator, patch, schema or nested base can read the owner's disk.
-  4. The objects built are diffed against the cluster with a server-side dry-run, through Flux's `ssa` package, which is what `flux diff` itself uses. It runs on the station's pinned connection.
+     Because nothing outside the tar exists in that filesystem, no generator, patch, schema or nested base can read the owner's disk.
+  4. Klyx, not the child, diffs the objects built against the cluster with a server-side dry-run, through Flux's `ssa` package, which is what `flux diff` itself uses. It runs on the station's pinned connection.
 - **Remote bases** are refused. (Revised 2026-10-15, slice 6 note §7.1: the per-repo setting that would allow them from approved `git.repos` URLs, through the same staged acquisition, is deferred beyond slice 6.)
 - **Not done:**
   - **Decryption:** never. SOPS-encrypted files are diffed as stored, and the result says so.

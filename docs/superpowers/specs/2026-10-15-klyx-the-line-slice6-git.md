@@ -254,8 +254,12 @@ git:
 ## 7. The cache diff (6e)
 
 The parent's contract, with the modules it needs:
-- **New dependencies:** `sigs.k8s.io/kustomize/api` and `kyaml` for the in-process build, and `github.com/fluxcd/pkg/ssa` for the server-side dry-run diff `flux diff` itself uses.
-- **The build:** the input set in rounds (at most 10, 5,000 files, 64 MiB), acquired as content, exported with `git archive`, loaded into an in-memory filesystem that refuses absolute paths, `..` and escaping links, and built with root-only load restrictions, no plugins, no exec functions, and a loader that refuses every remote URL (§7.1: remote bases are refused; the per-repo setting is deferred).
+- **New dependencies:** `sigs.k8s.io/kustomize/api` and `kyaml` for the confined build, and `github.com/fluxcd/pkg/ssa` for the server-side dry-run diff `flux diff` itself uses (versions in §7.1).
+- **The build** (§7.1 is the detail):
+  - the input set in rounds (at most 10, 5,000 files, 64 MiB), acquired as content and read as exact blobs (`cat-file --batch`) into a tar;
+  - built in a contained child process of Klyx's own binary, with no `PATH` and a refusing transport, over an in-memory filesystem that refuses absolute paths, `..` and links;
+  - root-only load restrictions, no plugins, no exec functions;
+  - every remote reference refused before the build (remote bases stay refused; the per-repo setting is deferred).
 - **The diff:** server-side dry-run on the station's pinned connection, as `flux diff` does. SOPS files are diffed as stored and the result says so; post-build substitution is not applied and the result says "variables shown unsubstituted".
 - **The UI:** the Flux inspector's "Compute diff" uses the cache when its repo is approved and fetched, and says which (cache or none) it used. The flux CLI path stays for unapproved repos.
 - **Fixtures:** a generator reading `../outside.txt` fails, a nested base escaping the root fails, and a remote base is refused.
@@ -288,7 +292,7 @@ Surveying kustomize api v0.21.3 and `fluxcd/pkg/ssa` showed six points §7 does 
      - the GitRepository is Ready, with an artifact naming a revision.
 
      An artifact or attempted revision from before a URL, ref, path or source edit could otherwise be built under today's paths and overlay.
-   - **Parsed, never passed through.** Flux's revision syntax (`<ref>@sha1:<id>`, `sha1:<id>`, `<ref>/<id>`) is parsed to a full commit id and validated as 40 or 64 hex. Raw cluster text is never used as a ref.
+   - **Parsed, never passed through.** The artifact revision is parsed by the line's own `line.ParseGitRevision`: `<ref>@sha1:<hex>`, `<ref>@sha256:<hex>`, `sha1:<hex>` or `sha256:<hex>`. The result is a full commit id, validated as 40 or 64 hex. Any other form is refused, and raw cluster text is never used as a ref (design review of d74bc38).
    - **Fetched when missing.** When the cache lacks the commit, Klyx fetches exactly it (a commit ref, `+<sha>:refs/klyx/staging/commit/<sha>`) through the acquisition contract, then acquires content. This adds a third source of a tracked ref to §3.6, beside the line key and the override: the validated commit id of a fenced GitRepository artifact, fetched only when the owner asks for a cache diff.
    - **Sources other than a GitRepository** (OCIRepository, Bucket) are refused: the cache holds Git history only.
 4. **The input set and its export.**
@@ -299,7 +303,7 @@ Surveying kustomize api v0.21.3 and `fluxcd/pkg/ssa` showed six points §7 does 
      - `crds`, `configurations`, `replacements[].path` and `openapi.path`.
    - **Refused** in a kustomization: `helmCharts` and `helmGlobals` (no Helm), and plugin `generators`, `transformers` or `validators` that are not builtin.
    - **Caps:** at most 10 rounds, 5,000 files and 64 MiB.
-   - **The export reads exact blobs,** not `git archive`. As §3.7 records, an archive takes whole subtrees, while a referenced file needs its blob alone. This adds `cat-file --batch` to §7's allowed commands:
+   - **The export reads exact blobs,** not `git archive`. As §3.7 records, an archive takes whole subtrees, while a referenced file needs its blob alone. This replaces `git archive` with `cat-file --batch` in §7's allowed commands (the parent's table is revised), and 6e removes `Repo.Archive`:
      - the listed blob ids on stdin, under `GIT_NO_LAZY_FETCH`;
      - streamed with a 64 MiB total cap, so a missing blob is "content incomplete";
      - the tar built in Go from (path, mode, blob).
