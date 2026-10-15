@@ -188,8 +188,8 @@ const utilityBtn = (current: boolean): React.CSSProperties => ({
   display: "inline-flex", alignItems: "center", gap: 4, height: 28, minWidth: 28, padding: "0 6px", borderRadius: 4, border: "none", cursor: "pointer",
   justifyContent: "center", fontFamily: "var(--font-mono)", fontSize: 11,
   color: current ? "var(--color-text-primary)" : "var(--color-text-secondary)",
-  background: current ? "var(--bench-well-bg, var(--color-background-secondary))" : "transparent",
-  boxShadow: current ? "var(--bench-well-shadow, inset 0 0 0 1px var(--color-border-tertiary))" : undefined,
+  background: current ? "var(--line-sunk, var(--color-background-secondary))" : "transparent",
+  boxShadow: current ? "var(--line-well-ring, inset 0 0 0 1px var(--color-border-tertiary))" : undefined,
 });
 
 function UtilityButton({ label, title, current = false, onClick, children }: { label: string; title: string; current?: boolean; onClick: () => void; children: React.ReactNode }) {

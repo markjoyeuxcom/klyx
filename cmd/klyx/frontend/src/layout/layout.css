@@ -41,8 +41,8 @@
 .lens-controls { height: var(--workspace-controls-height); flex-shrink: 0; display: flex; align-items: center; gap: 8px; padding: 0 var(--workspace-inline-padding); min-width: 0; }
 .lens-notice { min-height: var(--workspace-notice-height); flex-shrink: 0; margin: 4px 8px 0; }
 .lens-body { flex: 1; min-height: 0; margin: 0 8px; display: flex; flex-direction: column; overflow: hidden; container-type: inline-size; container-name: lens-body;
-  background: var(--bench-well-bg, var(--color-background-secondary)); border-radius: var(--radius-sm, 4px);
-  box-shadow: var(--bench-well-shadow, inset 0 0 0 1px var(--color-border-tertiary)); }
+  background: var(--line-sunk, var(--color-background-secondary)); border-radius: var(--radius-sm, 4px);
+  box-shadow: var(--line-well-ring, inset 0 0 0 1px var(--color-border-tertiary)); }
 .lens-body-state { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; padding: 24px; }
 .lens-footer { height: var(--workspace-footer-height); flex-shrink: 0; display: flex; align-items: center; gap: 14px; padding: 0 var(--workspace-inline-padding);
   border-top: 1px solid var(--color-border-tertiary); }
@@ -55,7 +55,7 @@
 
 .lens-inspector { flex-shrink: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden;
   background: var(--color-background-primary); border-radius: var(--radius-sm, 4px);
-  box-shadow: var(--bench-well-shadow, inset 0 0 0 1px var(--color-border-tertiary)); }
+  box-shadow: var(--line-well-ring, inset 0 0 0 1px var(--color-border-tertiary)); }
 
 /* drawer: below the breakpoint the inspector overlays the body */
 .lens-scrim { position: absolute; inset: 0; background: rgba(0, 0, 0, 0.5); z-index: 30; }
@@ -71,8 +71,8 @@
 .lens-row { display: grid; align-items: center; gap: 12px; height: var(--table-row-height); padding: 0 8px; cursor: pointer; outline: none;
   font: 400 12px/16px var(--font-mono); color: var(--color-text-primary); border-bottom: 1px solid var(--color-border-tertiary); }
 .lens-row:hover { background: var(--color-background-secondary); }
-.lens-row[data-cursor="true"] { box-shadow: inset 2px 0 0 var(--bench-selection-edge, var(--color-text-info)); }
-.lens-row[data-selected="true"] { background: var(--bench-selection-bg, var(--color-background-secondary)); }
+.lens-row[data-cursor="true"] { box-shadow: inset 2px 0 0 var(--line-route, var(--color-text-info)); }
+.lens-row[data-selected="true"] { background: var(--line-route-wash, var(--color-background-secondary)); }
 .lens-row:focus-visible { box-shadow: inset 0 0 0 2px var(--color-text-info); }
 /* Staleness (ratified 2026-07-02, refined 2026-10-13, The Line slice 11a): a
    row whose changes are not yet realized carries the dashed syncing mark when
@@ -118,7 +118,7 @@
 .gw-edge { display: flex; align-items: center; justify-content: center; color: var(--color-text-tertiary); }
 .gw-route { border: 0; cursor: pointer; font: inherit; }
 .gw-route:hover { background: var(--color-background-secondary); }
-.gw-route[data-selected="true"] { background: var(--bench-selection-bg, var(--color-background-secondary)); box-shadow: inset 0 0 0 1px var(--color-text-info); }
+.gw-route[data-selected="true"] { background: var(--line-route-wash, var(--color-background-secondary)); box-shadow: inset 0 0 0 1px var(--color-text-info); }
 .gw-route:focus-visible { outline: none; box-shadow: inset 0 0 0 2px var(--color-text-info); }
 .gw-lane[data-role="fault"] .gw-route { box-shadow: inset 2px 0 0 var(--color-text-danger), inset 0 0 0 1px var(--color-border-tertiary); }
 .gw-lane[data-role="fault"] .gw-route[data-selected="true"] { box-shadow: inset 2px 0 0 var(--color-text-danger), inset 0 0 0 1px var(--color-text-info); }
@@ -136,7 +136,7 @@
 .l-dialog-head { flex-shrink: 0; display: flex; align-items: flex-start; gap: 12px; justify-content: space-between; padding: 12px 16px 8px; }
 .l-dialog-summary { flex-shrink: 0; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 0 16px 8px; }
 .l-dialog-body { flex: 1; min-height: 0; overflow: auto; padding: 8px 16px; border-top: 1px solid var(--color-border-tertiary); border-bottom: 1px solid var(--color-border-tertiary);
-  background: var(--bench-well-bg, var(--color-background-secondary)); }
+  background: var(--line-sunk, var(--color-background-secondary)); }
 .l-dialog-foot { flex-shrink: 0; display: flex; align-items: center; gap: 12px; justify-content: space-between; padding: 8px 16px; }
 
 /* ---- InspectorLayout ---------------------------------------------------- */
@@ -162,16 +162,18 @@
 /* ---- buttons and menus --------------------------------------------------- */
 .l-btn { height: 24px; padding: 0 10px; border-radius: 4px; border: 0; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap;
   font: 400 12px/16px var(--font-sans); color: var(--color-text-primary); background: var(--color-background-secondary);
-  border-top: 1px solid var(--bench-edge-hi, transparent); box-shadow: 0 1px 0 var(--bench-edge-lo, transparent), inset 0 0 0 1px var(--color-border-tertiary); }
+  box-shadow: inset 0 0 0 1px var(--color-border-tertiary); }
 .l-btn:disabled { opacity: 0.5; cursor: default; }
 .l-btn-primary { background: var(--color-background-info); color: var(--color-text-info); box-shadow: inset 0 0 0 1px var(--color-border-info); border-top: 0; }
 .l-btn-danger { color: var(--color-text-danger); }
 .l-chip { height: 24px; padding: 0 9px; border-radius: 4px; border: 0; background: transparent; cursor: pointer; display: inline-flex; align-items: center; gap: 6px;
   font: 400 12px/16px var(--font-sans); color: var(--color-text-secondary); white-space: nowrap; }
-.l-chip[aria-pressed="true"] { background: var(--bench-well-bg, var(--color-background-secondary)); color: var(--color-text-primary);
-  box-shadow: var(--bench-well-shadow, inset 0 0 0 1px var(--color-border-tertiary)); }
+/* a pressed filter reads as a selection, the route wash with a route edge -
+   no longer a pressed well (The Line slice 11d) */
+.l-chip[aria-pressed="true"] { background: var(--line-route-wash, var(--color-background-secondary)); color: var(--color-text-primary);
+  box-shadow: inset 0 0 0 1px var(--line-route, var(--color-border-tertiary)); }
 .l-input { height: 24px; border: 0; border-radius: 4px; padding: 0 8px; font: 400 12px var(--font-sans); color: var(--color-text-primary);
-  background: var(--bench-well-bg, var(--color-background-secondary)); box-shadow: inset 0 0 0 1px var(--color-border-tertiary); min-width: 0; }
+  background: var(--line-sunk, var(--color-background-secondary)); box-shadow: inset 0 0 0 1px var(--color-border-tertiary); min-width: 0; }
 /* a placeholder is an example, never mistakable for a typed value */
 .l-input::placeholder { color: var(--color-text-tertiary); opacity: 1; }
 .l-menu { position: absolute; z-index: 40; min-width: 200px; padding: 4px; border-radius: 6px; background: var(--color-background-primary);
@@ -192,9 +194,9 @@
 .shell-body { flex: 1; display: flex; min-height: 0; min-width: 0; gap: var(--shell-band-gap); }
 .shell-main { flex: 1; display: flex; flex-direction: column; min-width: 0; gap: var(--shell-band-gap); }
 .shell-workspace { flex: 1; min-height: 0; min-width: 0; display: flex; flex-direction: column; overflow: hidden; box-sizing: border-box;
-  background: var(--color-background-primary); border-radius: 6px; box-shadow: var(--bench-module-shadow, inset 0 0 0 1px var(--color-border-tertiary)); }
+  background: var(--color-background-primary); border-radius: 6px; box-shadow: var(--line-module-ring, inset 0 0 0 1px var(--color-border-tertiary)); }
 .mast { height: var(--mast-height); flex-shrink: 0; display: flex; align-items: center; gap: 12px; padding: 0 8px 0 80px; box-sizing: border-box; min-width: 0;
-  background: var(--color-background-primary); border-radius: 6px; box-shadow: var(--bench-module-shadow, inset 0 0 0 1px var(--color-border-tertiary)); }
+  background: var(--color-background-primary); border-radius: 6px; box-shadow: var(--line-module-ring, inset 0 0 0 1px var(--color-border-tertiary)); }
 .mast *, .mast *::before, .mast *::after { box-sizing: border-box; }
 .mast-left { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 8px; }
 .mast-history { display: flex; align-items: center; gap: 2px; flex-shrink: 0; }
@@ -214,7 +216,7 @@
 .mast-right { flex: 0 1000 auto; min-width: 0; display: flex; align-items: center; gap: 4px; }
 .mast-palette { flex: 0 1 230px; min-width: 32px; overflow: hidden; height: 24px; display: flex; align-items: center; gap: 8px; padding: 0 10px; border: 0; border-radius: 4px; cursor: pointer;
   font: 400 11px/16px var(--font-sans); color: var(--color-text-secondary); text-align: left;
-  background: var(--bench-well-bg, var(--color-background-secondary)); box-shadow: var(--bench-well-shadow, inset 0 0 0 1px var(--color-border-tertiary)); }
+  background: var(--line-sunk, var(--color-background-secondary)); box-shadow: var(--line-well-ring, inset 0 0 0 1px var(--color-border-tertiary)); }
 .mast-palette-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mast-palette kbd { font: 400 10px/14px var(--font-mono); color: var(--color-text-tertiary); flex-shrink: 0; }
 
@@ -256,7 +258,7 @@ button.locbar-crumb:hover { background: var(--color-background-secondary); }
 .locbar-right > .locbar-well { flex: 0 1000 300px; }
 .locbar-well { min-width: 32px; height: 28px; overflow: hidden; display: flex; align-items: center; gap: 8px; padding: 0 10px;
   border: 0; border-radius: 6px; cursor: pointer; text-align: left; font: 400 12px/16px var(--font-sans); color: var(--color-text-tertiary);
-  background: var(--line-sunk, var(--bench-well-bg, var(--color-background-secondary))); box-shadow: inset 0 0 0 1px var(--color-border-tertiary); }
+  background: var(--line-sunk, var(--line-sunk, var(--color-background-secondary))); box-shadow: inset 0 0 0 1px var(--color-border-tertiary); }
 .locbar-well-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .locbar-well kbd { flex-shrink: 0; padding: 1px 5px; border-radius: 4px; font: 400 10px/14px var(--font-mono); color: var(--color-text-tertiary);
   box-shadow: inset 0 0 0 1px var(--color-border-secondary); }
@@ -325,7 +327,7 @@ button.locbar-crumb:hover { background: var(--color-background-secondary); }
 
 /* ---- The Line lens index (slice 4 §4) ---- */
 .lens-index { width: 232px; flex-shrink: 0; min-height: 0; overflow: auto; box-sizing: border-box; padding: 14px 10px; display: flex; flex-direction: column; gap: 18px;
-  background: var(--color-background-primary); border-radius: 6px; box-shadow: var(--bench-module-shadow, inset 0 0 0 1px var(--color-border-tertiary)); }
+  background: var(--color-background-primary); border-radius: 6px; box-shadow: var(--line-module-ring, inset 0 0 0 1px var(--color-border-tertiary)); }
 .lens-index-section { display: flex; flex-direction: column; gap: 1px; }
 .lens-index-head { margin: 0; padding: 0 10px 6px; font: 500 11px/14px var(--font-label); letter-spacing: 0.16em; text-transform: uppercase; color: var(--color-text-tertiary); }
 .lens-entry { display: flex; align-items: center; gap: 10px; min-height: 30px; padding: 0 10px 0 28px; border: 0; border-radius: 6px; background: transparent; cursor: pointer;
@@ -361,7 +363,7 @@ button.locbar-crumb:hover { background: var(--color-background-secondary); }
 .line-legend-mesh { width: 2px; height: 12px; background: var(--color-text-info); }
 .line-legend-mesh[data-oneway] { background: none; border-left: 2px dashed var(--line-caution, var(--color-text-warning)); }
 
-.line-board-well { overflow-x: auto; padding: 14px; border-radius: 6px; background: var(--line-sunk, var(--bench-well-bg, var(--color-background-secondary)));
+.line-board-well { overflow-x: auto; padding: 14px; border-radius: 6px; background: var(--line-sunk, var(--line-sunk, var(--color-background-secondary)));
   box-shadow: inset 0 0 0 1px var(--color-border-tertiary); display: flex; flex-direction: column; gap: 14px; }
 .line-board { display: grid; align-items: stretch; row-gap: 6px; width: 100%; min-width: min-content; } /* fills the well; scrolls only below the cells' 184px floor */
 .line-board-rank { padding: 0 2px 2px; font: 500 11px/14px var(--font-label); letter-spacing: 0.16em; text-transform: uppercase; color: var(--color-text-tertiary); }

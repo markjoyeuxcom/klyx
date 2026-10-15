@@ -178,7 +178,7 @@ export function OperationDialog({
                   // Enter dispatches once armed; before that it must do nothing.
                   if (e.key === "Enter" && canConfirm) void confirm();
                 }}
-                style={{ width: "100%", boxSizing: "border-box", padding: "7px 11px", fontFamily: "var(--font-mono)", fontSize: 12, background: "var(--bench-well-bg, var(--color-background-secondary))", border: "none", boxShadow: "var(--bench-well-shadow, inset 0 0 0 1px var(--color-border-tertiary))", borderRadius: 4, color: "var(--color-text-primary)" }}
+                style={{ width: "100%", boxSizing: "border-box", padding: "7px 11px", fontFamily: "var(--font-mono)", fontSize: 12, background: "var(--line-sunk, var(--color-background-secondary))", border: "none", boxShadow: "var(--line-well-ring, inset 0 0 0 1px var(--color-border-tertiary))", borderRadius: 4, color: "var(--color-text-primary)" }}
               />
               {/* LED interlock: one segment per typed-correct character - the
                   arming state is visible progress, not a silent gate. */}
@@ -186,7 +186,7 @@ export function OperationDialog({
                 <span style={{ display: "flex", gap: 3 }}>
                   {Array.from({ length: cluster.length }, (_, i) => {
                     const lit = i < typed.length && cluster.startsWith(typed.slice(0, i + 1));
-                    return <i key={i} style={{ width: 10, height: 4, borderRadius: 1, background: lit ? "var(--color-text-warning)" : "var(--lamp-off, var(--color-border-secondary))", boxShadow: lit ? "var(--lamp-glow-warning, none)" : undefined }} />;
+                    return <i key={i} style={{ width: 10, height: 4, borderRadius: 1, background: lit ? "var(--color-text-warning)" : "var(--line-track, var(--color-border-secondary))" }} />;
                   })}
                 </span>
                 {armed ? "armed" : "interlock engaged"}
@@ -235,8 +235,8 @@ export function OptionTile({ title, body, active = false, disabled = false, onCl
             can read at a glance, not just a tinted border. */}
         <span aria-hidden style={{
           width: 26, height: 14, borderRadius: 7, position: "relative", flexShrink: 0,
-          background: active ? "var(--color-background-info)" : "var(--bench-well-bg, var(--color-background-primary))",
-          boxShadow: active ? "inset 0 0 0 1px var(--color-border-info)" : "var(--bench-well-shadow, inset 0 0 0 1px var(--color-border-secondary))",
+          background: active ? "var(--color-background-info)" : "var(--line-sunk, var(--color-background-primary))",
+          boxShadow: active ? "inset 0 0 0 1px var(--color-border-info)" : "var(--line-well-ring, inset 0 0 0 1px var(--color-border-secondary))",
         }}>
           <span style={{
             position: "absolute", top: 2, width: 10, height: 10, borderRadius: "50%",

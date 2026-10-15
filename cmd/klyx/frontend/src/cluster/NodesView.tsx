@@ -911,7 +911,7 @@ function SurvivabilityModule({ cluster, nodes }: { cluster: string; nodes: NodeR
   const r = report?.result;
   const fits = r ? r.unplaced.length === 0 : false;
   return (
-    <div data-testid="survivability" style={{ display: "flex", flexDirection: "column", gap: 6, flexShrink: 0, padding: "8px 10px", background: "var(--bench-well-bg, var(--color-background-secondary))", borderRadius: "var(--radius-sm)", boxShadow: "var(--bench-well-shadow, inset 0 0 0 1px var(--color-border-tertiary))" }}>
+    <div data-testid="survivability" style={{ display: "flex", flexDirection: "column", gap: 6, flexShrink: 0, padding: "8px 10px", background: "var(--line-sunk, var(--color-background-secondary))", borderRadius: "var(--radius-sm)", boxShadow: "var(--line-well-ring, inset 0 0 0 1px var(--color-border-tertiary))" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
         <span style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5, color: "var(--color-text-tertiary)" }}>survivability</span>
         <span style={{ fontSize: 10, color: "var(--color-text-tertiary)" }}>if we lose</span>

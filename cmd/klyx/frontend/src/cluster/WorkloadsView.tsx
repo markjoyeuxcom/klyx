@@ -1075,7 +1075,7 @@ function ReloadChip({ kind, name, namespace }: { kind: "ConfigMap" | "Secret"; n
     <button
       onClick={open}
       title={`open ${kind} ${namespace}/${name} in Resources`}
-      style={{ display: "inline-flex", alignItems: "center", gap: 5, fontFamily: "var(--font-mono)", fontSize: 11, padding: "2px 7px", borderRadius: 3, cursor: "pointer", border: "none", color: "var(--color-text-info)", maxWidth: "100%", overflow: "hidden", background: "var(--bench-well-bg, var(--color-background-secondary))", boxShadow: "var(--bench-well-shadow, inset 0 0 0 1px var(--color-border-tertiary))" }}
+      style={{ display: "inline-flex", alignItems: "center", gap: 5, fontFamily: "var(--font-mono)", fontSize: 11, padding: "2px 7px", borderRadius: 3, cursor: "pointer", border: "none", color: "var(--color-text-info)", maxWidth: "100%", overflow: "hidden", background: "var(--line-sunk, var(--color-background-secondary))", boxShadow: "var(--line-well-ring, inset 0 0 0 1px var(--color-border-tertiary))" }}
     >
       <span style={{ fontSize: 8, textTransform: "uppercase", letterSpacing: 0.5, color: "var(--color-text-tertiary)", flexShrink: 0 }}>{kind === "ConfigMap" ? "cm" : "sec"}</span>
       <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{name}</span>

@@ -73,3 +73,13 @@ describe("lens tables (parent §2.3, §9)", () => {
     }
   });
 });
+
+describe("the Signal Bench machining is retired (slice 11d)", () => {
+  it("no component reads a --bench- or --lamp- token; only the retiring themes define them", () => {
+    const walk = (dir: string): string[] => readdirSync(new URL(`file://${cwd}/src/${dir}/`)).flatMap((f) =>
+      f.includes(".") ? [`${dir}/${f}`] : walk(`${dir}/${f}`));
+    const offenders = walk("").filter((p) => /\.(tsx?|css)$/.test(p) && !p.endsWith("theme/tokens.css") && !p.includes(".test."))
+      .filter((p) => /var\(--(bench|lamp)-/.test(src(p.replace(/^\//, ""))));
+    expect(offenders).toEqual([]);
+  });
+});

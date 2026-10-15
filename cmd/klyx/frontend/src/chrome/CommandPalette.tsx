@@ -500,7 +500,7 @@ function Console({ close, besideRef }: { close: () => void; besideRef: React.Mut
       >
         <div style={{ display: "flex", alignItems: "center", gap: 8, margin: 12 }}>
           {/* The input sits IN a well: data surfaces are inset. */}
-          <div style={{ flex: 1, minWidth: 0, borderRadius: "var(--radius-sm)", background: "var(--bench-well-bg, transparent)", boxShadow: "var(--bench-well-shadow, none)", borderBottom: "0.5px solid var(--color-border-tertiary)" }}>
+          <div style={{ flex: 1, minWidth: 0, borderRadius: "var(--radius-sm)", background: "var(--line-sunk, transparent)", boxShadow: "var(--line-well-ring, none)", borderBottom: "0.5px solid var(--color-border-tertiary)" }}>
             <input
               ref={inputRef}
               data-palette-input="true"
@@ -601,8 +601,8 @@ function ConsoleRow({ r, selected, onHover, onRun, pos, code }: { r: Row; select
     padding: "7px 16px",
     cursor: "pointer",
     fontSize: 13,
-    background: selected ? "var(--bench-selection-bg, var(--color-background-secondary))" : "transparent",
-    boxShadow: selected ? "inset 2px 0 0 var(--bench-selection-edge, var(--color-text-info))" : undefined,
+    background: selected ? "var(--line-route-wash, var(--color-background-secondary))" : "transparent",
+    boxShadow: selected ? "inset 2px 0 0 var(--line-route, var(--color-text-info))" : undefined,
   } as const;
   const common = {
     id: rowId(r),

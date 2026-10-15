@@ -195,7 +195,7 @@ function Direction({ title, d }: { title: string; d: DirectionVerdictDTO }) {
       <span style={{ color: d.allowed ? "var(--color-text-secondary)" : "var(--color-text-danger)", overflowWrap: "anywhere" }}>{d.explain}</span>
       {d.policies.map((p) => (
         <button key={`${p.namespace}/${p.name}`} type="button" className="lens-row" onClick={() => openPolicy(p.namespace, p.name)} aria-label={`open NetworkPolicy ${p.namespace}/${p.name}`}
-          style={{ display: "flex", gap: 8, alignItems: "baseline", textAlign: "left", padding: "4px 8px", borderRadius: 4, cursor: "pointer", border: 0, font: "inherit", color: "var(--color-text-primary)", background: "var(--bench-well-bg, var(--color-background-primary))", boxShadow: "inset 0 0 0 1px var(--color-border-tertiary)" }}>
+          style={{ display: "flex", gap: 8, alignItems: "baseline", textAlign: "left", padding: "4px 8px", borderRadius: 4, cursor: "pointer", border: 0, font: "inherit", color: "var(--color-text-primary)", background: "var(--line-sunk, var(--color-background-primary))", boxShadow: "inset 0 0 0 1px var(--color-border-tertiary)" }}>
           <span style={{ fontFamily: "var(--font-mono)", color: p.admits ? "var(--color-text-success)" : "var(--color-text-secondary)", flexShrink: 0 }}>{p.admits ? "admits" : "selects"}</span>
           <span style={{ fontFamily: "var(--font-mono)", overflowWrap: "anywhere" }}>{p.namespace}/{p.name}</span>
         </button>

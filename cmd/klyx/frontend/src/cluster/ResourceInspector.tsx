@@ -123,8 +123,8 @@ export function InspectorFacts({ facts }: {
             fontWeight: 600,
             color: f.tone ? toneColor[f.tone] : "var(--color-text-primary)",
             borderRadius: "var(--radius-sm)",
-            background: "var(--bench-well-bg, var(--color-background-secondary))",
-            boxShadow: "var(--bench-well-shadow, inset 0 0 0 1px var(--color-border-tertiary))",
+            background: "var(--line-sunk, var(--color-background-secondary))",
+            boxShadow: "var(--line-well-ring, inset 0 0 0 1px var(--color-border-tertiary))",
             overflow: "hidden",
             textOverflow: "ellipsis",
             whiteSpace: "nowrap",
@@ -195,8 +195,8 @@ export function InspectorMeters({ meters }: {
               height: 5,
               borderRadius: "var(--radius-sm)",
               overflow: "hidden",
-              background: "var(--bench-well-bg, var(--color-background-secondary))",
-              boxShadow: "var(--bench-well-shadow, inset 0 0 0 1px var(--color-border-tertiary))",
+              background: "var(--line-sunk, var(--color-background-secondary))",
+              boxShadow: "var(--line-well-ring, inset 0 0 0 1px var(--color-border-tertiary))",
             }}>
               <span style={{ display: "block", height: "100%", width: `${fill}%`, background: m.tone ? toneColor[m.tone] : "var(--color-text-success)" }} />
             </span>
@@ -226,8 +226,8 @@ export function InspectorIdle({ subject, attention, hint, width }: {
         minHeight: 0,
         boxSizing: "border-box",
         // grid-hosted callers pass width="100%" and own the gutter themselves
-        background: "var(--bench-well-bg, var(--color-background-secondary))",
-        boxShadow: "var(--bench-well-shadow, inset 0 0 0 1px var(--color-border-tertiary))",
+        background: "var(--line-sunk, var(--color-background-secondary))",
+        boxShadow: "var(--line-well-ring, inset 0 0 0 1px var(--color-border-tertiary))",
         borderRadius: "var(--radius-sm)",
         padding: "12px 16px",
         marginLeft: width ? 0 : 8,
@@ -242,7 +242,7 @@ export function InspectorIdle({ subject, attention, hint, width }: {
         color: "var(--color-text-secondary)",
       }}
     >
-      <span aria-hidden style={{ width: 12, height: 12, borderRadius: "50%", background: attention > 0 ? "var(--color-text-warning)" : "var(--lamp-off, var(--color-border-secondary))", boxShadow: attention > 0 ? "var(--lamp-glow-warning, none)" : "inset 0 1px 1px rgba(0,0,0,0.35)" }} />
+      <span aria-hidden style={{ width: 12, height: 12, borderRadius: "50%", background: attention > 0 ? "var(--color-text-warning)" : "var(--line-track, var(--color-border-secondary))", boxShadow: attention > 0 ? "none" : "inset 0 1px 1px rgba(0,0,0,0.35)" }} />
       <div style={{ fontWeight: 600, color: attention > 0 ? "var(--color-text-warning)" : "var(--color-text-secondary)" }}>
         {attention > 0 ? `${attention} ${subject} need attention` : `all ${subject} quiet`}
       </div>
@@ -285,7 +285,7 @@ export function InspectorStatus({ tone, kind, label, reason, detail }: {
         whiteSpace: "nowrap",
       }}>
         {kind ? <Aspect kind={aspectOfVerdict(kind)} size={8} /> : <StatusDot size={8} tone={tone} />}
-        <span className={tone === "danger" ? "klyx-danger-prefix" : undefined}>{label}</span>
+        <span>{label}</span>
       </span>
       {sub && (
         <span style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--color-text-secondary)", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={sub}>
@@ -398,7 +398,6 @@ export function Kbd({ k }: { k: string }) {
       padding: "0 4px",
       background: "var(--color-background-secondary)",
       border: "1px solid var(--color-border-secondary)",
-      borderBottom: "2px solid var(--bench-edge-lo, var(--color-border-secondary))",
       borderRadius: 3,
       color: "var(--color-text-tertiary)",
     }}>{k}</kbd>

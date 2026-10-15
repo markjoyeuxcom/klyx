@@ -49,9 +49,9 @@ export const mono: CSSProperties = { fontFamily: "var(--font-mono)" };
 // well: the inset data surface (Signal Bench) — lists, log panes, counter
 // windows, command previews and inputs sit IN the bench, not on it.
 export const well: CSSProperties = {
-  background: "var(--bench-well-bg, var(--color-background-secondary))",
+  background: "var(--line-sunk, var(--color-background-secondary))",
   borderRadius: "var(--radius-sm)",
-  boxShadow: "var(--bench-well-shadow, inset 0 0 0 1px var(--color-border-tertiary))",
+  boxShadow: "var(--line-well-ring, inset 0 0 0 1px var(--color-border-tertiary))",
 };
 
 // btn: the small secondary control (filter inputs, row actions), machined as
@@ -63,8 +63,6 @@ export const btn: CSSProperties = {
   borderRadius: "var(--radius-sm)",
   cursor: "pointer",
   border: "var(--border-hairline) solid var(--color-border-tertiary)",
-  borderTop: "1px solid var(--bench-edge-hi, var(--color-border-tertiary))",
-  borderBottom: "1px solid var(--bench-edge-lo, var(--color-border-tertiary))",
   background: "var(--color-background-primary)",
   color: "var(--color-text-secondary)",
 };

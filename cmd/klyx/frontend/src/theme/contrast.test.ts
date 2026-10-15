@@ -87,8 +87,9 @@ describe("the line themes", () => {
       const body = css.slice(start, css.indexOf("}", start));
       expect(body).toMatch(/--color-text-success:\s*var\(--line-ink-2\)/);
       expect(body).toMatch(/--color-background-success:\s*transparent/);
-      expect(body).toMatch(/--lamp-glow-danger:\s*none/);
-      expect(body).toMatch(/--lamp-glow-warning:\s*none/);
+      // the Signal Bench machining is retired (slice 11d): no glow, no bevel
+      expect(body).not.toMatch(/--lamp-|--bench-/);
+      expect(body).toMatch(/--line-module-ring:\s*none/);
     });
   }
   it("no lamp blinks anywhere", () => {

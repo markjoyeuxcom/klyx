@@ -367,18 +367,11 @@ div[role="button"]:hover {
   --color-border-success: var(--line-hair-2);
   --color-border-warning: var(--line-caution);
 
-  /* Signal Bench extras, flattened: wells are sunk with a hairline, modules
-     carry no shadow, nothing glows. */
-  --bench-edge-hi: transparent;
-  --bench-edge-lo: transparent;
-  --bench-well-bg: var(--line-sunk);
-  --bench-well-shadow: inset 0 0 0 1px var(--line-hair);
-  --bench-module-shadow: none;
-  --lamp-off: var(--line-track);
-  --lamp-glow-warning: none;
-  --lamp-glow-danger: none;
-  --bench-selection-bg: var(--line-route-wash);
-  --bench-selection-edge: var(--line-route);
+  /* Wells are sunk with a hairline ring; modules carry none. The Signal
+     Bench machining (bevels, module shadows, glows) is retired: components
+     read only these and the --line-* tokens (The Line slice 11d). */
+  --line-well-ring: inset 0 0 0 1px var(--line-hair);
+  --line-module-ring: none;
 }
 
 [data-theme="day"] {
@@ -437,16 +430,8 @@ div[role="button"]:hover {
   --color-border-success: var(--line-hair-2);
   --color-border-warning: var(--line-caution);
 
-  --bench-edge-hi: transparent;
-  --bench-edge-lo: transparent;
-  --bench-well-bg: var(--line-sunk);
-  --bench-well-shadow: inset 0 0 0 1px var(--line-hair);
-  --bench-module-shadow: none;
-  --lamp-off: var(--line-track);
-  --lamp-glow-warning: none;
-  --lamp-glow-danger: none;
-  --bench-selection-bg: var(--line-route-wash);
-  --bench-selection-edge: var(--line-route);
+  --line-well-ring: inset 0 0 0 1px var(--line-hair);
+  --line-module-ring: none;
 }
 
 /* Focus in the line themes: a 2px route ring, 2px out (spec §10). */
@@ -456,11 +441,6 @@ div[role="button"]:hover {
   outline-offset: 2px;
 }
 
-/* Danger gets shape, not just colour: status text carrying this class leads
-   with a triangle, so red vs amber survives colour-blindness. Dialogs
-   additionally keep the alert-triangle icon. The triangle matches the text
-   form "▲ " used by the verdict labels - the same size and a full space - so
-   "▲ Failed" reads the same in every lens (UI review 2026-10-13). */
-.klyx-danger-prefix::before {
-  content: "\25B2\00a0";
-}
+/* Danger's shape is the Aspect beside a verdict (a filled square for a
+   fault, The Line slice 11a); the text never repeats it as a triangle.
+   Dialogs keep their alert-triangle icon: they mark danger verbs. */
