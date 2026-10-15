@@ -81,7 +81,7 @@ A pure `line/proof.ts` words a `LineProofDTO`, after parent §8.2:
 | `derived` | "start unknown" |
 | `unknown` | "first observed 20:21; start unknown"; after a gap, "observed 20:21, after a gap" |
 
-- `capped` adds "(log trimmed)" and reads "at least since …".
+- **A capped proof** (basis unknown, `capped`, no times) reads "start unknown (proof capped)". The proof store held no lower bound for it, and a proof cap is not the entry log's trimming, so nothing reads "at least since".
 - A proof the DTO marks suspended (basis unknown) never shows a time as a start.
 
 ### 3.4 Mesh
@@ -141,6 +141,7 @@ The parent shows each revision's artifact time. The backend holds one, but it is
 
 The next 30 days, from `ExpiryService`:
 - **Acquisition:** one scan per cluster when the fleet screen first opens in a session, kept in the store with its "as of" time and a Refresh. Later visits reuse it; the Expiry view shares the same results. It is never re-run on every visit.
+- **Membership changes:** a cluster that joins the fleet mid-session (Settings adds clusters live) is scanned once when it joins, while the fleet screen or the Expiry view holds the cache; existing clusters are never rescanned for it. Until its scan returns it reads "aks-new: not scanned yet". A cluster that leaves the fleet drops its rows.
 - **A row:** days left ("6d", or "expired 2d ago"), the source kind, the object, and the station ("stg · West Europe"). Rows inside 14 days carry the attention mark.
 - **A failed scan** names its cluster ("aks-prd-neu: could not be scanned"). It is never an empty horizon.
 
@@ -148,12 +149,15 @@ The next 30 days, from `ExpiryService`:
 
 Connection counts only: "7 clusters · 5 connected · 1 failed · 1 connecting". It never says the line, or the fleet, is live.
 
-## 8. Open points for review
+## 8. Open points (ruled in design review d25f7275)
+
+All eight are accepted. Point 4 carries the condition written into it, and review findings changed §3.3 (a capped proof) and §6 (membership changes).
+
 
 1. **No per-object observation wording yet.** The parent wants "first observed …" for refs without a rule-backed `since`. The observation log's per-object proofs do not reach the frontend; only stations' proofs do. Slice 5 shows `since`, else `condition` evidence, else no time. Proposal: per-object proof wording arrives with the console join (slice 9), which needs the same data.
 2. **No folding.** Rows fold only along reported-blocker edges, which come with the dependency graph (slice 8).
 3. **Station text, not `LinePos`,** in rows until slice 8.
-4. **`comparedAt` (§5.1)** is a small Go addition in 5c, so the Ledger never dates a revision by a newer artifact.
+4. **`comparedAt` (§5.1)** is a small Go addition in 5c, so the Ledger never dates a revision by a newer artifact. It is emitted only on a unit whose compared revision is exactly the revision being dated, never applied to an older applied revision.
 5. **The Horizon's acquisition (§6):** once per session, not per visit, so the fleet screen adds no per-visit fan-out.
 6. **"Prd only"** means the stations of rank prd, not every protected cluster.
 7. **`ClusterCard` retires.** The station cell keeps its honest readings (areas, connection, gaps). The parity gate's card stage moves to the cell, with the same expectations.
@@ -163,8 +167,8 @@ Connection counts only: "7 clusters · 5 connected · 1 failed · 1 connecting".
 
 | Sub-slice | Tests |
 |---|---|
-| 5a | The verdict sentence: R, a tie, held (one and two), no R, no key, the chart-name key, "as of". The board: placement by rank and track, a group track, the siding, the fallback, lighting at both ends only, an unreachable cell, the proof wording table, mesh drawn/listed/off-fleet/unknown. The cell's accessible name. The parity gate's cell stage. |
+| 5a | The verdict sentence: R, a tie, held (one and two), no R, no key, the chart-name key, "as of". The board: placement by rank and track, a group track, the siding, the fallback, lighting at both ends only, an unreachable cell, the proof wording table (a capped proof included), mesh drawn/listed/off-fleet/unknown. The cell's accessible name. The parity gate's cell stage. |
 | 5b | Parent §12: more than five faults in a part ("+N more" and the samples), a paused native ref (not a row), a controller-only failure, an unreadable kind (a coverage row), same-name objects on two clusters (two rows, each revealing its own). The time wording (since, condition, none). Order and filters. The "not read yet" line. `noFanout`. |
-| 5c | The Ledger's dots and R mark; `comparedAt` shown only for a compared revision (Go and TS). The Horizon: 30-day window, expired rows, a failed scan, one scan per session. The footer counts. |
+| 5c | The Ledger's dots and R mark; `comparedAt` shown only for a compared revision (Go and TS). The Horizon: 30-day window, expired rows, a failed scan, one scan per session, a cluster joining mid-session scanned once without rescanning the rest, a leaving cluster's rows dropped. The footer counts. |
 
 **Every sub-slice also passes** tsc, eslint, vitest, vite build, and headless captures of the fleet screen in night and day at 1440×900 and 1024×768.
