@@ -226,7 +226,7 @@ export function CertsView({ cluster }: { cluster: string }) {
   // with a new UID on a complete read is "replaced", never silently
   // followed. Missing without a complete read of its own kind it is kept
   // with its last row, unverified - never removed (slice 3 §5a).
-  const certPin = usePinnedSubject(cluster, selKey, selectedCert, certsEv === "complete");
+  const certPin = usePinnedSubject(cluster, selKey, selectedCert, certsEv === "complete", "Certificate");
   const certReplaced = certPin.gone === "replaced";
   const certRemoved = certPin.gone === "removed" || certReplaced; // the inspector gates on removed
   const certUnverified = certPin.gone === "unverified";
@@ -259,7 +259,7 @@ export function CertsView({ cluster }: { cluster: string }) {
   }, [selKey, selUID, resolveChain]);
   const selectedIssuer = issuerSel ? issuers.find((i) => issuerKey(i) === issuerSel) : undefined;
   // an issuer is removed (or replaced) only when ITS kind's read is complete
-  const issuerPin = usePinnedSubject(cluster, issuerSel, selectedIssuer, !!issuerSel && evidenceOf(issuerSel.split("/")[0]) === "complete");
+  const issuerPin = usePinnedSubject(cluster, issuerSel, selectedIssuer, !!issuerSel && evidenceOf(issuerSel.split("/")[0]) === "complete", "Issuer");
   const issuerReplaced = issuerPin.gone === "replaced";
   const issuerRemoved = issuerPin.gone === "removed" || issuerReplaced;
   const issuerUnverified = issuerPin.gone === "unverified";
@@ -298,7 +298,7 @@ export function CertsView({ cluster }: { cluster: string }) {
     const row = issuer ? issuers.find((i) => issuerKey(i) === key) : certs.find((c) => keyOf(c) === key);
     // An opening by UID (slice 9 note §4.2): pinned to that UID at once; a
     // different or missing row is said, never substituted.
-    if (intent.ref.uid) expectPin(cluster, key, intent.ref.uid);
+    if (intent.ref.uid) expectPin(cluster, issuer ? "Issuer" : "Certificate", key, intent.ref.uid);
     else if (!row) return (issuer ? issuersEv : certsEv) === "complete" ? "missing" : "wait";
     autoSelect.current = "done";
     setView(issuer ? "issuers" : "certificates"); setStatus("all"); setQuery(""); setNamespace("");

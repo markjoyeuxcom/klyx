@@ -972,6 +972,9 @@ type FleetState = {
   toggleInstanceRiskOnly: () => void;
   clearInstances: () => void;
   openInstance: (namespace: string, name: string, expectUid?: string) => void;
+  // instanceOpens counts openings: the instance inspector reads on each one,
+  // an identical reopening included (review of efbfb31)
+  instanceOpens: number;
   closeInstance: () => void;
   instanceDetail: InstanceDetailSlice;
   setInstanceDetailLoading: (cluster: string, resource: ResourceRef, ref: InstanceRef) => void;
@@ -1152,12 +1155,14 @@ export const useFleet = create<FleetState>((set) => ({
   setInstanceRiskOnly: (riskOnly) => set((s) => ({ instances: { ...s.instances, riskOnly } })),
   toggleInstanceRiskOnly: () => set((s) => ({ instances: { ...s.instances, riskOnly: !s.instances.riskOnly } })),
   clearInstances: () => set({ instances: { cluster: null, ref: null, rows: [], nextToken: "", loading: false, filter: "", riskOnly: false } }),
+  instanceOpens: 0,
   openInstance: (namespace, name, expectUid) =>
     set((s) => {
       if (s.route.name !== "cluster" || !s.route.resource) return {};
       const section: ClusterSection = (s.route.section === "crds" || s.route.section === "resources") ? s.route.section : "resources";
       return {
         route: { name: "cluster", cluster: s.route.cluster, section, resource: s.route.resource, instance: expectUid ? { namespace, name, expectUid } : { namespace, name } },
+        instanceOpens: s.instanceOpens + 1,
         instanceDetail: { cluster: s.route.cluster, resource: s.route.resource, ref: { namespace, name }, detail: null, loading: true },
       };
     }),

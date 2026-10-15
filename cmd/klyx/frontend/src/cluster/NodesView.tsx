@@ -549,7 +549,7 @@ export function NodesView({ cluster }: { cluster: string }) {
   // Pinned to the node's UID (The Line slice 4 §6.3): a same-name node with
   // a new UID on a complete read is "replaced", never silently followed.
   const found = sel ? scopedNodes.find((n) => n.name === sel.name) : undefined;
-  const pin = usePinnedSubject(cluster, sel ? sel.name : null, found, ev === "complete");
+  const pin = usePinnedSubject(cluster, sel ? sel.name : null, found, ev === "complete", "Node");
   const subject = pin.subject;
   const live = pin.gone ? undefined : found; // the pinned node, while the rows hold it
   // the inspector gates on "removed": a replaced node runs no action either
@@ -596,7 +596,7 @@ export function NodesView({ cluster }: { cluster: string }) {
     const n = scopedNodes.find((x) => x.name === name);
     // An opening by UID (slice 9 note §4.2) selects at once, pinned to that
     // UID: a different or missing row is said, never substituted.
-    if (intent.kind === "select-node" && intent.uid) expectPin(cluster, name, intent.uid);
+    if (intent.kind === "select-node" && intent.uid) expectPin(cluster, "Node", name, intent.uid);
     if (intent.kind === "select-node" && expectsOther(n, intent.uid)) {
       autoSelect.current = "done";
       setKbName(name);

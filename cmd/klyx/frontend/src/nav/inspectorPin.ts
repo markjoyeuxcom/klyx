@@ -31,18 +31,21 @@ export const INSPECTOR_IDENTITY_ID = "inspector-identity";
 const expectations = new Map<string, { uid: string; at: number }>();
 const EXPECT_MAX = 32;
 export const EXPECT_TTL_MS = 10_000;
-const expectKey = (cluster: string, key: string) => `${cluster}\u0000${key}`;
+// An expectation is scoped to the pin it is for (its kind): two pins of one
+// lens can share a key (Argo's Application and ApplicationSet), and neither
+// may take the other's (review of efbfb31).
+const expectKey = (cluster: string, scope: string, key: string) => `${cluster}\u0000${scope}\u0000${key}`;
 
-export function expectPin(cluster: string, key: string, uid: string): void {
-  const k = expectKey(cluster, key);
+export function expectPin(cluster: string, scope: string, key: string, uid: string): void {
+  const k = expectKey(cluster, scope, key);
   expectations.delete(k);
   expectations.set(k, { uid, at: Date.now() });
   while (expectations.size > EXPECT_MAX) expectations.delete(expectations.keys().next().value as string);
 }
 
-/** takeExpectedPin returns and forgets the UID parked for a selection key. */
-export function takeExpectedPin(cluster: string, key: string): string | undefined {
-  const k = expectKey(cluster, key);
+/** takeExpectedPin returns and forgets the UID parked for a pin's key. */
+export function takeExpectedPin(cluster: string, scope: string, key: string): string | undefined {
+  const k = expectKey(cluster, scope, key);
   const e = expectations.get(k);
   expectations.delete(k);
   return e && Date.now() - e.at <= EXPECT_TTL_MS ? e.uid : undefined;

@@ -212,7 +212,7 @@ export function KarpenterView({ cluster }: { cluster: string }) {
     const row = pool ? pools.find((p) => p.name === intent.ref.name) : claims.find((c) => c.name === intent.ref.name);
     // An opening by UID (slice 9 note §4.2): pinned to that UID at once; a
     // different or missing row is said, never substituted.
-    if (intent.ref.uid) expectPin(cluster, intent.ref.name, intent.ref.uid);
+    if (intent.ref.uid) expectPin(cluster, pool ? "NodePool" : "NodeClaim", intent.ref.name, intent.ref.uid);
     else if (!row) return (pool ? poolsEv : claimsEv) === "complete" ? "missing" : "wait";
     setView(pool ? "pools" : "claims");
     setCursorKey(intent.ref.name);
@@ -270,8 +270,8 @@ export function KarpenterView({ cluster }: { cluster: string }) {
   // own kind, otherwise unverified (slice 3 §5a) - and are pinned to their
   // UID: a same-name object with a new UID on a complete read is "replaced"
   // (The Line slice 4 §6.3), never silently followed.
-  const claimPin = usePinnedSubject(cluster, view === "claims" ? selKey : null, view === "claims" && selKey ? claims.find((c) => c.name === selKey) : undefined, claimsEv === "complete");
-  const poolPin = usePinnedSubject(cluster, view === "pools" ? selKey : null, view === "pools" && selKey ? pools.find((p) => p.name === selKey) : undefined, poolsEv === "complete");
+  const claimPin = usePinnedSubject(cluster, view === "claims" ? selKey : null, view === "claims" && selKey ? claims.find((c) => c.name === selKey) : undefined, claimsEv === "complete", "NodeClaim");
+  const poolPin = usePinnedSubject(cluster, view === "pools" ? selKey : null, view === "pools" && selKey ? pools.find((p) => p.name === selKey) : undefined, poolsEv === "complete", "NodePool");
   const selClaim = claimPin.subject ?? undefined;
   // Notices stack: each is its own evidence, none hides another.
   const notices: React.ReactNode[] = [];

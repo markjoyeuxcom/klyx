@@ -290,6 +290,9 @@ Four findings, all taken:
 - **Resources adoption:** the instance read also runs when the expected UID changes, so "Open the new object" (the same name, no expectation) reads the replacement, fenced as every read is.
 - **The list never contradicts the read:** opened by UID, presence is the direct read's to settle. The list's `removed` (absence from a list read before the object existed) is ignored.
 - **A failed read:** a rejected detail read is recorded as an error DTO, never the last good detail, so an object opened by UID reads not verified and any other instance says it could not be loaded.
+- **Re-review of efbfb31:**
+  - **Scoped expectations:** expectations are scoped to the pin they are for, by kind (`expectPin(cluster, scope, key, uid)`, `usePinnedSubject(..., scope)`). Two pins of one lens that share a key, Argo's Application and ApplicationSet, never take each other's; a hook without a scope takes none.
+  - **Identical reopenings:** the store counts openings (`instanceOpens`), and the instance inspector reads on each one, so the same object opened again reads and settles instead of being left loading.
 
 ## 12. As built: 9c-2 (the console)
 

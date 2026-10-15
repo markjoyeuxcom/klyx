@@ -240,7 +240,7 @@ export function GitOps({ cluster }: { cluster: string }) {
     const r = rows.find((x) => x.kind === intent.fluxKind && x.namespace === intent.namespace && x.name === intent.name);
     // An opening by UID (slice 9 note §4.2) selects at once, pinned to that
     // UID: a different or missing row is said, never substituted.
-    if (intent.kind === "select-flux" && intent.uid) expectPin(cluster, keyOf({ kind: intent.fluxKind, namespace: intent.namespace, name: intent.name }), intent.uid);
+    if (intent.kind === "select-flux" && intent.uid) expectPin(cluster, "Flux", keyOf({ kind: intent.fluxKind, namespace: intent.namespace, name: intent.name }), intent.uid);
     if (intent.kind === "select-flux" && expectsOther(r, intent.uid)) {
       autoSelect.current = "done";
       const key = keyOf({ kind: intent.fluxKind, namespace: intent.namespace, name: intent.name });
@@ -270,7 +270,7 @@ export function GitOps({ cluster }: { cluster: string }) {
     const kind = kindOfRef(intent.ref);
     const key = `${kind}/${intent.ref.namespace ?? ""}/${intent.ref.name}`;
     const found = allSources.find((x) => keyOf(x) === key);
-    if (intent.ref.uid) expectPin(cluster, key, intent.ref.uid);
+    if (intent.ref.uid) expectPin(cluster, "FluxSource", key, intent.ref.uid);
     else if (!found) return evidenceOf(kind) === "complete" ? "missing" : "wait";
     setView("sources");
     setStatus("all"); setSourceKind(""); setQuery("");
@@ -305,7 +305,7 @@ export function GitOps({ cluster }: { cluster: string }) {
   // Pinned to the source's UID (The Line slice 4 §6.3): removed (or
   // replaced) only on a complete read of the source's own kind; otherwise
   // kept with its last row, unverified (slice 3 §5a).
-  const sourcePin = usePinnedSubject(cluster, sourceKey, selectedSource, !!sourceKey && evidenceOf(sourceKey.split("/")[0]) === "complete");
+  const sourcePin = usePinnedSubject(cluster, sourceKey, selectedSource, !!sourceKey && evidenceOf(sourceKey.split("/")[0]) === "complete", "FluxSource");
   const sourceReplaced = sourcePin.gone === "replaced";
   const sourceRemoved = sourcePin.gone === "removed" || sourceReplaced; // the inspector gates on removed
   const sourceUnverified = sourcePin.gone === "unverified";
@@ -327,7 +327,7 @@ export function GitOps({ cluster }: { cluster: string }) {
   // Pinned to the resource's UID (The Line slice 4 §6.3): a same-name
   // resource with a new UID on a complete read is "replaced", never
   // silently followed or read into the pinned inspector.
-  const fluxPin = usePinnedSubject(cluster, selKey, selected, !!selKey && evidenceOf(selKey.split("/")[0]) === "complete");
+  const fluxPin = usePinnedSubject(cluster, selKey, selected, !!selKey && evidenceOf(selKey.split("/")[0]) === "complete", "Flux");
   const replaced = fluxPin.gone === "replaced";
   const removed = fluxPin.gone === "removed" || replaced; // the inspector gates on removed
   const unverified = fluxPin.gone === "unverified";

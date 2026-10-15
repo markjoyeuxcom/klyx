@@ -175,7 +175,7 @@ export function PodsView({ cluster }: { cluster: string }) {
   // silently followed. Its detail and verbs follow the pinned UID.
   const sel = mine ? pods.selected : null;
   const found = sel ? allItems.find((p) => p.namespace === sel.namespace && p.name === sel.name) : undefined;
-  const pin = usePinnedSubject(cluster, sel ? keyOf(sel) : null, found, ev === "complete");
+  const pin = usePinnedSubject(cluster, sel ? keyOf(sel) : null, found, ev === "complete", "Pod");
   const subject = pin.subject;
   const live = pin.gone ? undefined : found; // the pinned pod, while the rows hold it
   // the inspector gates on "removed": a replaced pod runs no action either
@@ -238,7 +238,7 @@ export function PodsView({ cluster }: { cluster: string }) {
     const p = allItems.find((x) => x.namespace === intent.namespace && x.name === intent.name);
     // An opening by UID (slice 9 note §4.2) selects at once, pinned to that
     // UID: a different or missing row is said, never substituted.
-    if (intent.kind === "select-pod" && intent.uid) expectPin(cluster, keyOf(intent), intent.uid);
+    if (intent.kind === "select-pod" && intent.uid) expectPin(cluster, "Pod", keyOf(intent), intent.uid);
     if (intent.kind === "select-pod" && expectsOther(p, intent.uid)) {
       autoSelect.current = "done";
       useFleet.getState().selectPod({ namespace: intent.namespace, name: intent.name, uid: intent.uid! });

@@ -105,7 +105,7 @@ export function RouteList({ cluster, rows, toggle }: { cluster: string; rows: Ga
     const row = routes.find((r) => keyOf(r) === key);
     // An opening by UID (slice 9 note §4.2): pinned to that UID at once; a
     // different or missing route is said, never substituted.
-    if (intent.ref.uid) expectPin(cluster, key, intent.ref.uid);
+    if (intent.ref.uid) expectPin(cluster, "HTTPRoute", key, intent.ref.uid);
     if (expectsOther(row, intent.ref.uid)) {
       setMode("all"); setQuery("");
       setCursorKey(key);
@@ -130,7 +130,7 @@ export function RouteList({ cluster, rows, toggle }: { cluster: string; rows: Ga
   // Pinned to the route's UID (The Line slice 4 §6.3): a same-name route
   // with a new UID on a complete read is "replaced", never followed.
   const found = selKey ? routes.find((r) => keyOf(r) === selKey) : undefined;
-  const pin = usePinnedSubject(cluster, selKey, found, memberEv === "complete");
+  const pin = usePinnedSubject(cluster, selKey, found, memberEv === "complete", "HTTPRoute");
   const selected = pin.subject ?? undefined;
   const gone: "detached" | "unverified" | null = pin.gone === "replaced" || pin.gone === "removed" ? "detached" : pin.gone;
   const close = () => setSelKey(null);

@@ -248,7 +248,7 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
     const w = allItems.find((x) => x.kind === intent.workloadKind && x.namespace === intent.namespace && x.name === intent.name);
     // An opening by UID (slice 9 note §4.2) selects at once, pinned to that
     // UID: a different or missing row is said, never substituted.
-    if (intent.kind === "select-workload" && intent.uid) expectPin(cluster, `${intent.workloadKind}/${intent.namespace}/${intent.name}`, intent.uid);
+    if (intent.kind === "select-workload" && intent.uid) expectPin(cluster, "Workload", `${intent.workloadKind}/${intent.namespace}/${intent.name}`, intent.uid);
     if (intent.kind === "select-workload" && expectsOther(w, intent.uid)) {
       autoSelect.current = "done";
       const key = `${intent.workloadKind}/${intent.namespace}/${intent.name}`;
@@ -303,7 +303,7 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
   // silently followed. Verbs follow the pinned UID.
   const selected = selectedKey ? allItems.find((w) => keyOf(w) === selectedKey) : undefined;
   const selKind = selectedKey ? selectedKey.split("/")[0] : "";
-  const pin = usePinnedSubject(cluster, selectedKey, selected, kindEv(selKind) === "complete");
+  const pin = usePinnedSubject(cluster, selectedKey, selected, kindEv(selKind) === "complete", "Workload");
   const subject = pin.subject;
   // the inspector gates on "removed": a replaced workload runs no action either
   const gone: "removed" | "unverified" | null = pin.gone === "replaced" ? "removed" : pin.gone;

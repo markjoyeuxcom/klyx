@@ -269,3 +269,20 @@ describe("an Argo reveal by UID", () => {
     expect(gone()).toBeNull();
   });
 });
+
+// Review of efbfb31: an expectation is the pin's it was parked for - a
+// hidden same-name Application never takes the ApplicationSet's.
+describe("expectations belong to their kind", () => {
+  it("an ApplicationSet revealed by an old UID reads replaced; the Application at the same name is untouched", () => {
+    seed([app("shared", { uid: "uid-app" })], [appSet("shared", { uid: "uid-set-current" })]);
+    const r = render(<ArgoView cluster="x" mode="applications" />);
+    selectApp("shared");
+    r.rerender(<ArgoView cluster="x" mode="applicationsets" />);
+    act(() => useFleet.getState().requestNavIntent({ kind: "reveal", cluster: "x", task: "argo", part: "applicationsets",
+      ref: { gvr: "argoproj.io/v1alpha1/applicationsets", namespace: "argocd", name: "shared", uid: "uid-set-old" } }));
+    const setGone = document.querySelector("[data-pinned-gone]")?.getAttribute("data-pinned-gone") ?? null;
+    r.rerender(<ArgoView cluster="x" mode="applications" />);
+    const appGone = document.querySelector("[data-pinned-gone]")?.getAttribute("data-pinned-gone") ?? null;
+    expect({ setGone, appGone }).toEqual({ setGone: "replaced", appGone: null });
+  });
+});

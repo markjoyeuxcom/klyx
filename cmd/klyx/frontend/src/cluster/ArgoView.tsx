@@ -220,8 +220,8 @@ export function ArgoView({ cluster, mode = "applications" }: { cluster: string; 
   // their last row by name.
   const lastProject = useRef<{ cluster: string; v: ArgoProjectDTO } | null>(null);
   if (selectedProject) lastProject.current = { cluster, v: selectedProject };
-  const appPin = usePinnedSubject(cluster, appKey, selectedApp, appsComplete);
-  const setPin = usePinnedSubject(cluster, setKey, selectedSet, mine && !argo.applicationSetsLoading && !argo.applicationSetsError);
+  const appPin = usePinnedSubject(cluster, appKey, selectedApp, appsComplete, "Application");
+  const setPin = usePinnedSubject(cluster, setKey, selectedSet, mine && !argo.applicationSetsLoading && !argo.applicationSetsError, "ApplicationSet");
   const appReplaced = appPin.gone === "replaced";
   const setReplaced = setPin.gone === "replaced";
   // the inspectors gate on removed: a replaced object runs no action either
@@ -275,7 +275,7 @@ export function ArgoView({ cluster, mode = "applications" }: { cluster: string; 
     const row = sets ? appSets.find((a) => appSetKey(a) === key) : apps.find((a) => keyOf(a) === key);
     // An opening by UID (slice 9 note §4.2): pinned to that UID at once; a
     // different or missing row is said, never substituted.
-    if (intent.ref.uid) expectPin(cluster, key, intent.ref.uid);
+    if (intent.ref.uid) expectPin(cluster, sets ? "ApplicationSet" : "Application", key, intent.ref.uid);
     else if (!row) return (sets ? appSetsCov : appsCov) === "complete" ? "missing" : "wait";
     autoSelect.current = "done";
     clearFilters();

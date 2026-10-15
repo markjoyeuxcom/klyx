@@ -729,6 +729,7 @@ export function InstanceDetail({ cluster, resource, instance, removed: listRemov
   // that found it (review of ff41862).
   const removed = instance.expectUid ? false : listRemoved;
   const id = useFleet((s) => s.instanceDetail);
+  const opens = useFleet((s) => s.instanceOpens);
   const closeInstance = useFleet((s) => s.closeInstance);
   const [copied, setCopied] = useState(false);
   const [describing, setDescribing] = useState(false);
@@ -740,9 +741,10 @@ export function InstanceDetail({ cluster, resource, instance, removed: listRemov
     void getInstanceDetail(cluster, resource, instance);
     return () => useFleet.getState().clearInstanceDetail();
     // Keyed by the identity fields, not the ref objects (new each render);
-    // an opening by UID (or its adoption) reads afresh, even at the same name.
+    // every opening reads afresh - by UID, its adoption, or the same object
+    // opened again.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cluster, resource.group, resource.version, resource.plural, instance.namespace, instance.name, instance.expectUid]);
+  }, [cluster, resource.group, resource.version, resource.plural, instance.namespace, instance.name, instance.expectUid, opens]);
 
   // Evidence belongs to the full recorded identity (cluster + GVR + ns/name):
   // DEV/STG/PRD and v1/v2 share names, so ns/name alone could show another

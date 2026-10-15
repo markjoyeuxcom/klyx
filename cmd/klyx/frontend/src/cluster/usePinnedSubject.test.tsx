@@ -10,7 +10,7 @@ import { expectPin, takeExpectedPin } from "../nav/inspectorPin";
 type Row = { uid?: string; name: string; v: number };
 let out: { subject: Row | null; gone: Gone | null; next: Row | null; adopt: () => void };
 function Lens({ cluster = "c", sel, live, complete = true }: { cluster?: string; sel: string | null; live?: Row; complete?: boolean }) {
-  out = usePinnedSubject(cluster, sel, live, complete);
+  out = usePinnedSubject(cluster, sel, live, complete, "T");
   return null;
 }
 const row = (uid: string | undefined, v = 1): Row => ({ uid, name: "api", v });
@@ -71,18 +71,18 @@ describe("usePinnedSubject", () => {
 describe("usePinnedSubject with an expected UID", () => {
   let res: ReturnType<typeof usePinnedSubject<Row>>;
   function Expecting({ sel, live, complete = true }: { sel: string | null; live?: Row; complete?: boolean }) {
-    res = usePinnedSubject("c", sel, live, complete);
+    res = usePinnedSubject("c", sel, live, complete, "T");
     return null;
   }
 
   it("the expected row pins as usual", () => {
-    expectPin("c", "ns/api", "u1");
+    expectPin("c", "T", "ns/api", "u1");
     render(<Expecting sel="ns/api" live={row("u1", 4)} />);
     expect([res.subject?.v, res.gone, res.expected]).toEqual([4, null, undefined]);
   });
 
   it("another UID at the key: replaced on a complete read (no subject, the new one offered), unverified otherwise", () => {
-    expectPin("c", "ns/api", "u1");
+    expectPin("c", "T", "ns/api", "u1");
     const r = render(<Expecting sel="ns/api" live={row("u2", 9)} complete={false} />);
     expect([res.subject, res.gone, res.next, res.expected]).toEqual([null, "unverified", null, "u1"]);
     r.rerender(<Expecting sel="ns/api" live={row("u2", 9)} />);
@@ -92,7 +92,7 @@ describe("usePinnedSubject with an expected UID", () => {
   });
 
   it("absent: removed on a complete read, unverified otherwise; the row arriving later pins", () => {
-    expectPin("c", "ns/api", "u1");
+    expectPin("c", "T", "ns/api", "u1");
     const r = render(<Expecting sel="ns/api" live={undefined} complete={false} />);
     expect([res.subject, res.gone, res.expected]).toEqual([null, "unverified", "u1"]);
     r.rerender(<Expecting sel="ns/api" live={undefined} />);
@@ -102,8 +102,8 @@ describe("usePinnedSubject with an expected UID", () => {
   });
 
   it("an expectation is consumed once, and only for its cluster and key", () => {
-    expectPin("c", "ns/api", "u1");
-    expect(takeExpectedPin("d", "ns/api")).toBeUndefined();
+    expectPin("c", "T", "ns/api", "u1");
+    expect(takeExpectedPin("d", "T", "ns/api")).toBeUndefined();
     const r = render(<Expecting sel="ns/web" live={row("u5")} />);
     expect(res.gone).toBeNull();
     r.rerender(<Expecting sel="ns/api" live={row("u2")} />);
@@ -119,11 +119,11 @@ describe("usePinnedSubject with an expected UID", () => {
 describe("a later opening at the same key", () => {
   it("a new expected UID replaces the subject the key had", () => {
     const r = render(<Lens sel="ns/api" live={row("current")} />);
-    expectPin("c", "ns/api", "expected-old");
+    expectPin("c", "T", "ns/api", "expected-old");
     r.rerender(<Lens sel="ns/api" live={row("current")} />);
     expect([out.gone, out.subject]).toEqual(["replaced", null]);
     // and the reverse: an opening of the current UID over a replaced pin
-    expectPin("c", "ns/api", "current");
+    expectPin("c", "T", "ns/api", "current");
     r.rerender(<Lens sel="ns/api" live={row("current", 5)} />);
     expect([out.gone, out.subject?.v]).toEqual([null, 5]);
   });
@@ -131,10 +131,35 @@ describe("a later opening at the same key", () => {
   it("an expectation older than its TTL is ignored", () => {
     const now = Date.now();
     vi.spyOn(Date, "now").mockReturnValue(now);
-    expectPin("c", "ns/stale", "u-old");
+    expectPin("c", "T", "ns/stale", "u-old");
     vi.spyOn(Date, "now").mockReturnValue(now + 11_000);
     render(<Lens sel="ns/stale" live={row("u-new")} />);
     expect([out.gone, out.subject?.uid]).toEqual([null, "u-new"]);
     vi.restoreAllMocks();
+  });
+});
+
+// Review of efbfb31: an expectation is the pin's it was parked for - two
+// pins with the same key never take each other's.
+describe("scoped expectations", () => {
+  it("an ApplicationSet's expectation is never taken by the Application pin at the same key", () => {
+    let app!: ReturnType<typeof usePinnedSubject<Row>>, set!: ReturnType<typeof usePinnedSubject<Row>>;
+    function Two({ live }: { live: Row }) {
+      app = usePinnedSubject("c", "argocd/shared", live, true, "Application");
+      set = usePinnedSubject("c", "argocd/shared", live, true, "ApplicationSet");
+      return null;
+    }
+    const r = render(<Two live={row("current")} />);
+    expectPin("c", "ApplicationSet", "argocd/shared", "old");
+    r.rerender(<Two live={row("current")} />);
+    expect([app.gone, set.gone]).toEqual([null, "replaced"]);
+  });
+  it("a hook without a scope takes none", () => {
+    expectPin("c", "T", "ns/x", "old");
+    let res!: ReturnType<typeof usePinnedSubject<Row>>;
+    function Unscoped() { res = usePinnedSubject("c", "ns/x", row("current"), true); return null; }
+    render(<Unscoped />);
+    expect(res.gone).toBeNull();
+    expect(takeExpectedPin("c", "T", "ns/x")).toBe("old");
   });
 });

@@ -137,7 +137,7 @@ function GatewayList({ cluster, rows, toggle }: { cluster: string; rows: Gateway
     const row = gateways.find((g) => keyOf(g) === key);
     // An opening by UID (slice 9 note §4.2): pinned to that UID at once; a
     // different or missing row is said, never substituted.
-    if (intent.ref.uid) expectPin(cluster, key, intent.ref.uid);
+    if (intent.ref.uid) expectPin(cluster, "Gateway", key, intent.ref.uid);
     else if (!row) return ev === "complete" ? "missing" : "wait";
     setMode("all"); setQuery("");
     setCursorKey(key);
@@ -150,7 +150,7 @@ function GatewayList({ cluster, rows, toggle }: { cluster: string; rows: Gateway
   // a same-name Gateway with a new UID on a complete read is "replaced"
   // (The Line slice 4 §6.3), never silently followed.
   const found = selKey ? gateways.find((g) => keyOf(g) === selKey) : undefined;
-  const pin = usePinnedSubject(cluster, selKey, found, ev === "complete");
+  const pin = usePinnedSubject(cluster, selKey, found, ev === "complete", "Gateway");
   const selected = pin.subject ?? undefined;
   const gone: "removed" | "unverified" | null = pin.gone === "replaced" ? "removed" : pin.gone;
   const close = () => setSelKey(null);

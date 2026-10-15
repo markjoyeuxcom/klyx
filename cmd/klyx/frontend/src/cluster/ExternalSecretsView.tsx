@@ -214,14 +214,14 @@ export function ExternalSecretsView({ cluster }: { cluster: string }) {
   // without a complete read of its own kind it is kept with its last row,
   // unverified - never removed (slice 3 §5a).
   const selectedSecret = selKey ? secrets.find((e) => keyOf(e) === selKey) : undefined;
-  const secretPin = usePinnedSubject(cluster, selKey, selectedSecret, secretsEv === "complete");
+  const secretPin = usePinnedSubject(cluster, selKey, selectedSecret, secretsEv === "complete", "ExternalSecret");
   const secretReplaced = secretPin.gone === "replaced";
   const secretRemoved = secretPin.gone === "removed" || secretReplaced; // the inspector gates on removed
   const secretUnverified = secretPin.gone === "unverified";
   const secretSubject = secretPin.subject;
   const selectedStore = storeSel ? stores.find((s) => storeKey(s) === storeSel) : undefined;
   // a store is removed (or replaced) only when ITS kind's read is complete
-  const storePin = usePinnedSubject(cluster, storeSel, selectedStore, !!storeSel && evidenceOf(storeSel.split("/")[0]) === "complete");
+  const storePin = usePinnedSubject(cluster, storeSel, selectedStore, !!storeSel && evidenceOf(storeSel.split("/")[0]) === "complete", "SecretStore");
   const storeReplaced = storePin.gone === "replaced";
   const storeRemoved = storePin.gone === "removed" || storeReplaced;
   const storeUnverified = storePin.gone === "unverified";
@@ -260,7 +260,7 @@ export function ExternalSecretsView({ cluster }: { cluster: string }) {
     const row = store ? stores.find((x) => storeKey(x) === key) : secrets.find((e) => keyOf(e) === key);
     // An opening by UID (slice 9 note §4.2): pinned to that UID at once; a
     // different or missing row is said, never substituted.
-    if (intent.ref.uid) expectPin(cluster, key, intent.ref.uid);
+    if (intent.ref.uid) expectPin(cluster, store ? "SecretStore" : "ExternalSecret", key, intent.ref.uid);
     else if (!row) return (store ? storesEv : secretsEv) === "complete" ? "missing" : "wait";
     autoSelect.current = "done";
     setView(store ? "stores" : "secrets"); setStatus("all"); setQuery(""); setNamespace("");

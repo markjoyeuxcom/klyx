@@ -1026,3 +1026,24 @@ describe("Resources adoption", () => {
     expect(screen.getByRole("button", { name: "Describe" })).toBeTruthy();
   });
 });
+
+// Review of efbfb31: every opening reads, the same object opened again
+// included - never a cleared detail left loading.
+describe("an identical reopening", () => {
+  it("reads again and settles", async () => {
+    const expected = { ...instance, expectUid: "web-tls-uid" };
+    useFleet.setState({ route: { name: "cluster", cluster: "x", section: "resources", resource, instance: expected } });
+    seed({}, expected);
+    vi.mocked(getInstanceDetail).mockImplementation(async () => { useFleet.getState().setInstanceDetail({ ...detail }); });
+    function Routed() {
+      const r = useFleet((s) => s.route);
+      return r.name === "cluster" && r.resource && r.instance ? <InstanceDetail cluster={r.cluster} resource={r.resource} instance={r.instance} /> : null;
+    }
+    await act(async () => { render(<Routed />); });
+    expect(getInstanceDetail).toHaveBeenCalledTimes(1);
+    await act(async () => { useFleet.getState().openInstance(instance.namespace, instance.name, expected.expectUid); });
+    expect(getInstanceDetail).toHaveBeenCalledTimes(2);
+    expect(useFleet.getState().instanceDetail).toMatchObject({ loading: false, detail: { uid: "web-tls-uid" } });
+    vi.mocked(getInstanceDetail).mockReset();
+  });
+});

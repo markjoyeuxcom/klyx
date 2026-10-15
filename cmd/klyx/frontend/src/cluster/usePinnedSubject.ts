@@ -20,7 +20,9 @@ import { takeExpectedPin } from "../nav/inspectorPin";
 export type Gone = "removed" | "unverified" | "replaced";
 type Held<T> = { cluster: string; key: string; uid: string; row: T | null };
 
-export function usePinnedSubject<T extends { uid?: string }>(cluster: string, key: string | null, live: T | undefined, complete: boolean): {
+// scope names the pin (its kind) for expectations: only an expectation
+// parked for this scope is taken; without one, none is.
+export function usePinnedSubject<T extends { uid?: string }>(cluster: string, key: string | null, live: T | undefined, complete: boolean, scope?: string): {
   subject: T | null;
   gone: Gone | null;
   next: T | null;
@@ -37,7 +39,7 @@ export function usePinnedSubject<T extends { uid?: string }>(cluster: string, ke
   // An opening by UID establishes its object whatever was pinned at the key
   // before: the same object keeps its evidence, another starts from none
   // (review of ff41862).
-  const uid = takeExpectedPin(cluster, key);
+  const uid = scope ? takeExpectedPin(cluster, scope, key) : undefined;
   if (uid) {
     const row = h && h.uid === uid ? h.row : live && live.uid === uid ? live : null;
     h = held.current = { cluster, key, uid, row };
