@@ -9,7 +9,7 @@ import (
 
 var t0 = time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
 
-func at(min int) time.Time       { return t0.Add(time.Duration(min) * time.Minute) }
+func at(min int) time.Time { return t0.Add(time.Duration(min) * time.Minute) }
 
 // newLog is a log on a fixture clock at t0: expiry never depends on the
 // calendar. Tests that test expiry move the clock themselves.
