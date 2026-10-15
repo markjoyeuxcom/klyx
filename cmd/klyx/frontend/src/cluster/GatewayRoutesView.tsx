@@ -86,6 +86,8 @@ export function RouteList({ cluster, rows, toggle }: { cluster: string; rows: Ga
   // count equal the part's Included
   const total = rows.partCounts?.total ?? routes.length;
   const attention = rows.partCounts?.included ?? routes.filter((r) => r.rule.included).length;
+  // the header's mark from the reading that gave its count (slice 11b review)
+  const routeFault = rows.partCounts ? rows.partCounts.fault : routes.filter((r) => r.rule.included && routeRole(r).kind === "fault").length;
 
   const ordered = useMemo(() => [...routes].sort((a, b) =>
     RANK[routeRole(a).kind] - RANK[routeRole(b).kind] || a.namespace.localeCompare(b.namespace) || a.name.localeCompare(b.name)), [routes]);
@@ -194,7 +196,7 @@ export function RouteList({ cluster, rows, toggle }: { cluster: string; rows: Ga
       summary={state === "loading" || state === "unreadable" || absent ? null : (
         <>
           <CountSentence total={total} marker={mark} noun={["HTTPRoute", "HTTPRoutes"]}
-            attention={{ count: attention, phrase: "with a failing attachment", fault: false, detail: dep.word || undefined, testid: "route-attention" }} />
+            attention={{ count: attention, phrase: "with a failing attachment", fault: routeFault > 0, detail: dep.word || undefined, testid: "route-attention" }} />
         </>
       )}
       controls={(

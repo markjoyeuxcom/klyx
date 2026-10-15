@@ -163,6 +163,29 @@ describe("the Routes part view", () => {
   };
   const toRoutes = () => fireEvent.click(screen.getByRole("button", { name: /^Routes/ }));
 
+  // the header mark follows the reading that gave its count (slice 11b review)
+  it("a counted route fault marks the header as a fault", () => {
+    open(); applyRows("g", rowsDTO(1, 1, [gw("eg")]));
+    openRoutes(); applyRows("r", routesDTO(1, 1, [route("web", [att("infra/eg", "fault", "no ready endpoints", true)])]));
+    render(<GatewayApiView cluster="x" />); toRoutes();
+    expect(screen.getByTestId("route-attention").textContent).toBe("1 with a failing attachment");
+    expect(screen.getByTestId("route-attention").querySelector("[data-aspect]")?.getAttribute("data-aspect")).toBe("fault");
+  });
+  it("a summary fault marks the header even over healthy old rows", () => {
+    vi.useFakeTimers({now:0});
+    try {
+      open(); applyRows("g", rowsDTO(1, 1, [gw("eg")]));
+      openRoutes(); applyRows("r", routesDTO(1, 1, [route("web", [att("infra/eg", "ok", "attached")])]), 0);
+      render(<GatewayApiView cluster="x" />); toRoutes();
+      act(() => {
+        applySummary({cluster:"x",incarnation:1,seq:2,evaluatedAt:"",connection:"connected",tasks:[{id:"gateway",coverage:"live",parts:[{...part(2,routeKinds(),{total:5,included:3}),id:"routes",entity:"routes"}]}]},0);
+        dueForBootstrap(1500);
+      });
+      expect(screen.getByTestId("route-attention").textContent).toBe("3 with a failing attachment");
+      expect(screen.getByTestId("route-attention").querySelector("[data-aspect]")?.getAttribute("data-aspect")).toBe("fault");
+    } finally { vi.useRealTimers(); }
+  });
+
   it("a healthy Gateway with a broken route: the Routes view carries the route's own count", () => {
     open(); applyRows("g", rowsDTO(1, 1, [gw("eg")]));
     openRoutes(); applyRows("r", routesDTO(1, 1, [route("web", [att("infra/eg", "fault", "no ready endpoints", true)])]));

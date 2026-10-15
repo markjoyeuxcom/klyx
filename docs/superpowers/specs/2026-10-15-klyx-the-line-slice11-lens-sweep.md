@@ -204,7 +204,7 @@ Codex accepted 11a at e7af6d0. Its P3 (the `InspectorStatus` danger prefix besid
 - **No count changed.** Each lens passes its existing numbers, markers, phrases, all-clear and not-known words, and breakdowns. Events keep their warnings as amber text with no mark (evidence).
 - **The mark comes from the reading that gave the count** (review of d92fdee).
   - `PartCountsDTO` carries `fault`, the summary's role count for the part, beside `total` and `included`.
-  - Each native lens's header takes its fault bit from the same part's counts when they are current, else from its counted rows (`faultsOf`: included rows whose role is fault). This covers Flux reconciliations and sources, certificates and issuers, external secrets and stores, Argo applications and ApplicationSets, and Gateways.
+  - Each native lens's header takes its fault bit from the same part's counts when they are current, else from its counted rows (`faultsOf`: included rows whose role is fault). This covers Flux reconciliations and sources, certificates and issuers, external secrets and stores, Argo applications and ApplicationSets, Gateways, and HTTPRoutes (re-review of b3cd5c5). Resources' risk marks only ever look-at, in its rows and its header alike.
   - So a summary ahead of healthy rows marks its own fault, a newer summary with only progressing attention never inherits an old row's fault, and a failed source, issuer or store marks its header as it does its row.
   - Row-scoped breakdowns stay row-scoped. Helm and Karpenter take both their count and their fault from rows, so they already agreed.
 - **Tests:**
