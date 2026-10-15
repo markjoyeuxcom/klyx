@@ -71,14 +71,22 @@ describe("the station verdict", () => {
     expect(mark(health())).toBe("checking");
   });
 
-  it("a siding, and a cluster the line does not place", () => {
-    applyLine(line([], { siding: [st()] }));
+  it("a siding station is read like any other - its mark, revision and times - only its place differs", () => {
+    applyLine(line([], { siding: [st({ track: "", state: "differs", flags: { failing: true } } as Partial<LineStationDTO>)] }));
     const { unmount } = render(<Page c={cl()} />);
-    expect(lineEl().textContent).toBe("on the siding: not compared on a track");
+    expect(lineEl().textContent).toBe("prd on the siding · a1b9e3c · differs");
+    expect(mark(lineEl())).toBe("fault");
     unmount();
-    applyLine(line([st({ cluster: "other" })], { version: 2 }));
+    applyLine(line([], { version: 2, siding: [st({ track: "", state: "checking", read: "checking", single: "" } as Partial<LineStationDTO>)] }));
+    render(<Page c={cl()} />);
+    expect(mark(lineEl())).toBe("checking");
+  });
+
+  it("a cluster the line does not place", () => {
+    applyLine(line([st({ cluster: "other" })]));
     render(<Page c={cl()} />);
     expect(lineEl().textContent).toBe("not on the line");
+    expect(mark(lineEl())).toBe("none");
   });
 
   it("an unreachable cluster says its connection and keeps the board's guard: its place, no comparison, no line mark", () => {

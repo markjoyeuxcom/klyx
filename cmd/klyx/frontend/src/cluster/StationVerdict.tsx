@@ -31,15 +31,19 @@ export function StationVerdict({ c, m }: { c: ClusterDTO; m: ClusterAttention | 
 
   let lineMark: AspectKind = "none";
   let lineText: string;
-  const station = dto?.stations?.find((s) => s.cluster === c.name);
+  // A siding station carries the same facts as one on a track - its state,
+  // failure, hold and proofs, compared to R and T - so it is read the same
+  // way; the siding only changes where it is said to be.
+  const siding = dto?.siding?.find((s) => s.cluster === c.name);
+  const station = dto?.stations?.find((s) => s.cluster === c.name) ?? siding;
   if (!dto) lineText = "the line is being read…";
-  else if ((dto.siding ?? []).some((s) => s.cluster === c.name)) lineText = "on the siding: not compared on a track";
   else if (!station) lineText = "not on the line";
   else {
     const own = markOf(station);
     lineMark = reading.unreachable ? "none" : own === "none" && gitStation(git, station.cluster)?.held ? "attention" : own;
-    const track = trackLabel(station, dto);
-    const place = track ? `${station.env || "no environment"} on ${track}` : station.env || "no environment";
+    const env = station.env || "no environment";
+    const track = siding ? null : trackLabel(station, dto);
+    const place = siding ? `${env} on the siding` : track ? `${env} on ${track}` : env;
     lineText = [place, reading.unreachable ? null : comparisonText(station, git), ...(reading.unreachable ? [] : stationTimes(station))].filter(Boolean).join(" · ");
   }
 

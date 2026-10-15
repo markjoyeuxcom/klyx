@@ -172,11 +172,11 @@ Codex accepted 11a at e7af6d0. Its P3 (the `InspectorStatus` danger prefix besid
   - modules: `--line-module-ring`;
   - an idle mark: `--line-track`.
 
-  Night and day define `--line-well-ring` and `--line-module-ring` in place of the flattened bench extras. Bevels and glows are gone, and a pressed filter chip reads as a selection. `InspectorStatus` drops the danger prefix beside its `Aspect`, and the `.klyx-danger-prefix` rule goes with its last user. A source test fails on any component reading `--bench-` or `--lamp-`.
+  Night and day define `--line-well-ring` and `--line-module-ring` in place of the flattened bench extras. The idle marker's literal inset shadow, the last machining a token test cannot see, goes too. Bevels and glows are gone, and a pressed filter chip reads as a selection. `InspectorStatus` drops the danger prefix beside its `Aspect`, and the `.klyx-danger-prefix` rule goes with its last user. A source test fails on any component reading `--bench-` or `--lamp-`.
 
 ## 9. As built: 11c
 
-- **`cluster/StationVerdict.tsx`** follows §4's two lines.
+- **`cluster/StationVerdict.tsx`** follows §4's two lines. A siding station is read like one on a track (its mark, revision, held and failing times, and Git ordering); only its place says "<env> on the siding" (review of c9740dc).
   - **The health line:** an `h2` with the reading's `Aspect` at size 12 and `data-tone`.
   - **The line line:** `markOf`'s `Aspect` at size 10 and the board's words, from `line/station.ts`: `comparisonText`, `timeText` and `stationTimes`, which the board's `StationCell` now shares.
 - **`NeedsYou station`:**

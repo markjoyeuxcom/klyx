@@ -242,7 +242,7 @@ export function InspectorIdle({ subject, attention, hint, width }: {
         color: "var(--color-text-secondary)",
       }}
     >
-      <span aria-hidden style={{ width: 12, height: 12, borderRadius: "50%", background: attention > 0 ? "var(--color-text-warning)" : "var(--line-track, var(--color-border-secondary))", boxShadow: attention > 0 ? "none" : "inset 0 1px 1px rgba(0,0,0,0.35)" }} />
+      <span aria-hidden style={{ width: 12, height: 12, borderRadius: "50%", background: attention > 0 ? "var(--color-text-warning)" : "var(--line-track, var(--color-border-secondary))" }} />
       <div style={{ fontWeight: 600, color: attention > 0 ? "var(--color-text-warning)" : "var(--color-text-secondary)" }}>
         {attention > 0 ? `${attention} ${subject} need attention` : `all ${subject} quiet`}
       </div>
