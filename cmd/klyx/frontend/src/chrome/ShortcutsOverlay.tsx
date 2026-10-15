@@ -26,6 +26,7 @@ const GROUPS: { title: string; rows: [string, string][] }[] = [
     rows: [
       [`${MOD} K`, "command palette - jump anywhere, run actions"],
       [`${MOD} 1…9`, "switch to the nth cluster (station order)"],
+      [`${MOD} \\`, "show or hide the lens index"],
       [`${MOD} [  ·  ${MOD} ]`, "back / forward between places (never re-runs an action)"],
       [`${MOD} =  ·  ${MOD} -  ·  ${MOD} 0`, "zoom in / out / actual size (80-200%)"],
       ["?", "this cheatsheet"],

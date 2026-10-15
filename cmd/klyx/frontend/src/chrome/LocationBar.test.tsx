@@ -205,3 +205,18 @@ describe("location bar crumbs and history", () => {
   });
 });
 
+describe("location bar lens index toggle (slice 4 §4.3)", () => {
+  it("is a disclosure for the index: aria-expanded, aria-controls, and it toggles", async () => {
+    const { useLensIndexOpen } = await import("../nav/lensIndexOpen");
+    useLensIndexOpen.setState({ open: true });
+    useFleet.setState({ route: { name: "fleet" } });
+    const { getByRole } = render(<LocationBar />);
+    const btn = getByRole("button", { name: "Lens index" });
+    expect(btn.getAttribute("aria-expanded")).toBe("true");
+    expect(btn.getAttribute("aria-controls")).toBe("lens-index");
+    fireEvent.click(btn);
+    expect(useLensIndexOpen.getState().open).toBe(false);
+    expect(btn.getAttribute("aria-expanded")).toBe("false");
+    expect(btn.getAttribute("aria-controls")).toBeNull();
+  });
+});

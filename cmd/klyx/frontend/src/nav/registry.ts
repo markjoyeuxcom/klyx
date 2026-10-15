@@ -22,9 +22,14 @@ export type Destination = {
   cap?: CapKey;
   // Palette aliases; the label is always searchable.
   keywords?: string[];
+  // The lens index's label when it differs (The Line slice 4 §4.1); the
+  // palette keeps the label and keywords.
+  indexLabel?: string;
 };
 
-export type NavGroup = { id: string; label: string; cap?: CapKey; destinations: Destination[] };
+// lens "group": a tool group is one lens in the lens index, labelled with
+// the group's name; its other task destinations are its sub-entries.
+export type NavGroup = { id: string; label: string; cap?: CapKey; lens?: "group"; destinations: Destination[] };
 
 const r = (group: string, version: string, plural: string, kind: string, scope: "Namespaced" | "Cluster"): ResourceRef =>
   ({ group, version, plural, kind, scope });
@@ -50,7 +55,7 @@ export const NAV_GROUPS: NavGroup[] = [
   },
   {
     id: "workloads", label: "Workloads", destinations: [
-      task("workloads", "All workloads", section("workloads", { workloadKinds: WORKLOAD_KINDS })),
+      task("workloads", "All workloads", section("workloads", { workloadKinds: WORKLOAD_KINDS }), { indexLabel: "Workloads" }),
       task("pods", "Pods", section("pods")),
       kindLink("Deployment", "Deployments"),
       kindLink("StatefulSet", "StatefulSets"),
@@ -128,7 +133,7 @@ export const NAV_GROUPS: NavGroup[] = [
     ],
   },
   {
-    id: "flux", label: "Flux CD", cap: "flux", destinations: [
+    id: "flux", label: "Flux CD", cap: "flux", lens: "group", destinations: [
       task("flux", "Reconciliation", section("gitops", { fluxView: "reconciliation" }), { keywords: ["flux", "kustomizations", "helmreleases", "gitops"] }),
       task("flux-sources", "Sources", section("gitops", { fluxView: "sources" }), { keywords: ["flux", "gitrepositories", "ocirepositories"] }),
       res("Kustomizations", r("kustomize.toolkit.fluxcd.io", "v1", "kustomizations", "Kustomization", "Namespaced")),
@@ -144,7 +149,7 @@ export const NAV_GROUPS: NavGroup[] = [
     ],
   },
   {
-    id: "argo", label: "Argo CD", cap: "argo", destinations: [
+    id: "argo", label: "Argo CD", cap: "argo", lens: "group", destinations: [
       task("argo", "Applications", section("argo", { argoView: "applications" }), { keywords: ["argo", "sync"] }),
       task("argo-projects", "Projects", section("argo", { argoView: "projects" }), { keywords: ["argo", "appprojects"] }),
       task("argo-appsets", "ApplicationSets", section("argo", { argoView: "applicationsets" }), { keywords: ["argo"] }),
@@ -154,7 +159,7 @@ export const NAV_GROUPS: NavGroup[] = [
     ],
   },
   {
-    id: "certs", label: "cert-manager", cap: "certManager", destinations: [
+    id: "certs", label: "cert-manager", cap: "certManager", lens: "group", destinations: [
       task("certs", "Certificates", section("certs"), { keywords: ["cert-manager", "tls", "issuance"] }),
       res("Certificates", r("cert-manager.io", "v1", "certificates", "Certificate", "Namespaced")),
       res("CertificateRequests", r("cert-manager.io", "v1", "certificaterequests", "CertificateRequest", "Namespaced")),
@@ -165,7 +170,7 @@ export const NAV_GROUPS: NavGroup[] = [
     ],
   },
   {
-    id: "eso", label: "External Secrets", cap: "externalSecrets", destinations: [
+    id: "eso", label: "External Secrets", cap: "externalSecrets", lens: "group", destinations: [
       task("eso", "External secrets", section("externalsecrets"), { keywords: ["eso", "secret sync"] }),
       res("ExternalSecrets", r("external-secrets.io", "v1", "externalsecrets", "ExternalSecret", "Namespaced")),
       res("SecretStores", r("external-secrets.io", "v1", "secretstores", "SecretStore", "Namespaced")),
@@ -173,14 +178,14 @@ export const NAV_GROUPS: NavGroup[] = [
     ],
   },
   {
-    id: "helm", label: "Helm", destinations: [
+    id: "helm", label: "Helm", lens: "group", destinations: [
       task("helm", "Releases", section("helm"), { keywords: ["helm", "charts", "rollback"] }),
     ],
   },
   {
     id: "api", label: "API browser", destinations: [
-      task("crds", "CRDs by API group", section("crds"), { keywords: ["custom resources", "crd"] }),
-      task("builtins", "Built-in resources", section("resources"), { keywords: ["kinds", "gvr"] }),
+      task("crds", "CRDs by API group", section("crds"), { keywords: ["custom resources", "crd"], indexLabel: "API browser" }),
+      task("builtins", "Built-in resources", section("resources"), { keywords: ["kinds", "gvr"], indexLabel: "Resources" }),
     ],
   },
 ];

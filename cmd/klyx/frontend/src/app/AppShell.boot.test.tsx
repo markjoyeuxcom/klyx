@@ -4,7 +4,7 @@ import { render } from "@testing-library/react";
 // Health 1c slice 5 §1: every cluster's summary is read from app start - the
 // fleet board, the fleet indicator and Settings never wait for a lens or a cluster.
 vi.mock("../bridge/healthRows", () => ({ startSummaries: vi.fn() }));
-vi.mock("../chrome/NavBand", () => ({ NavBand: () => null }));
+vi.mock("../chrome/LensIndex", () => ({ LensIndex: () => null }));
 vi.mock("../chrome/ShortcutsOverlay", () => ({ ShortcutsOverlay: () => null }));
 vi.mock("../chrome/LocationBar", () => ({ LocationBar: () => null }));
 vi.mock("../fleet/FleetView", () => ({ FleetView: () => null }));

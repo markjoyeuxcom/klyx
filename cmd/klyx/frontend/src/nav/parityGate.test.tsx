@@ -43,7 +43,9 @@ import { TASKS, clusterAttention, lineText, mastReading, type Area, type Cluster
 import { spineLamp, connectionText } from "./fleetAttention";
 import { NAV_GROUPS } from "./registry";
 import { clusterDiagnosticScore, ClusterCard } from "../fleet/ClusterCard";
-import { NavBand } from "../chrome/NavBand";
+import { LensIndex } from "../chrome/LensIndex";
+import { lensIndex } from "./lensIndex";
+import { navCounts } from "./useNavCounts";
 import { FleetIndicator } from "../chrome/FleetIndicator";
 import { fleetAxes, fleetAxesLabel } from "./fleetAxes";
 import { Overview } from "../cluster/Overview";
@@ -221,7 +223,7 @@ suite("the parity gate's frontend stage (slice 6 §3)", () => {
     }
   });
 
-  it("the fleet indicator, the tree, the card and Overview render each case - and call no list endpoint", () => {
+  it("the fleet indicator, the lens index, the card and Overview render each case - and call no list endpoint", () => {
     for (const c of captures()) {
       load(c, true);
       const m = model(c);
@@ -253,22 +255,36 @@ suite("the parity gate's frontend stage (slice 6 §3)", () => {
       for (const e of [...f.axes.fault, ...f.axes.warning]) expect(litReasons.some((x) => e.reason.startsWith(x)), `${c.case} ${e.reason}`).toBe(true);
       ind.unmount();
 
-      // the tree: each lit group shows its count, a controller-only light and
-      // a gap their words
-      const tree = render(<NavBand />);
-      act(() => { window.dispatchEvent(new Event("klyx:open-nav-tree")); });
-      const dialog = tree.getByRole("dialog", { name: "All views" });
-      // a group's own header row (its label, count and note) - never the list
-      const group = (id: string) => {
-        const label = NAV_GROUPS.find((g) => g.id === id)?.label;
-        const row = Array.from(dialog.querySelectorAll(".navtree-group")).find((e) => e.querySelector("span")?.textContent === label);
-        expect(row, `${c.case} tree group ${id}`).toBeTruthy();
-        return row?.textContent ?? "";
+      // the lens index (slice 4 §4): every lit line's lens, and a
+      // controller-only light, is in "Needs you" with its mark; every gap is
+      // named on its lens - a tool group's on the tool's one lens
+      const st = useFleet.getState();
+      const im = lensIndex(c.cluster, navCounts(m), st.route, st.workloads.kindFilter);
+      const ix = render(<LensIndex />);
+      const needs = ix.container.querySelector('[aria-labelledby="lens-index-needs"]');
+      const tool = (g: string) => NAV_GROUPS.find((x) => x.id === g)?.lens === "group";
+      const needsRow = (id: string) => {
+        const e = im.needsYou.find((x) => x.id === id);
+        expect(e, `${c.case} needs you ${id}`).toBeTruthy();
+        const row = needs?.querySelector(`[data-entry="${e!.key}"]`);
+        expect(row, `${c.case} needs-you row ${id}`).toBeTruthy();
+        return { e: e!, row: row as HTMLElement };
       };
-      for (const { a, l } of litLines) expect(group(a.groupId), `${c.case} ${a.id}`).toMatch(new RegExp(`${l.tone === "danger" ? "▲ " : ""}\\d`));
-      for (const a of ctl) expect(group(a.groupId), `${c.case} ${a.id}`).toContain("controller not ready");
-      for (const { a, l } of gapLines) expect(group(a.groupId), `${c.case} ${a.id}`).toContain(l.state === "unreadable" ? "unreadable" : l.gaps.some((g) => g.includes("last good")) ? "last good" : "unverified");
-      tree.unmount();
+      for (const { a, l } of litLines) {
+        const { e, row } = needsRow(l.destinationId ?? a.destinationId);
+        if (l.destinationId && l.tone === "danger") expect([e.tone, row.querySelector('[data-aspect="fault"]') !== null], `${c.case} ${a.id}/${l.part}`).toEqual(["danger", true]);
+      }
+      for (const a of ctl) {
+        const { e, row } = needsRow(a.destinationId);
+        expect([e.tone, row.textContent?.includes("controller not ready")], `${c.case} ${a.id} controller`).toEqual(["danger", true]);
+      }
+      for (const { a, l } of gapLines) {
+        const key = tool(a.groupId) ? `lens:${a.groupId}` : `dest:${l.destinationId ?? a.destinationId}`;
+        const row = ix.container.querySelector(`[data-entry="${key}"]`);
+        expect(row, `${c.case} ${key}`).toBeTruthy();
+        expect(row?.textContent, `${c.case} ${a.id}/${l.part}`).toContain(l.state === "unreadable" ? "unreadable" : l.gaps.some((g) => g.includes("last good")) ? "last good" : "unverified");
+      }
+      ix.unmount();
 
       // the card
       const card = render(<ClusterCard c={c.cluster} />);

@@ -28,7 +28,7 @@ import { useFleet, type ClusterDTO } from "../store/fleet";
 import { applySummary, resetHealthStore } from "../store/health";
 import { core, summary } from "../test/healthFixtures";
 import { LocationBar } from "../chrome/LocationBar";
-import { NavBand } from "../chrome/NavBand";
+import { LensIndex } from "../chrome/LensIndex";
 import { Overview } from "../cluster/Overview";
 import { FleetView } from "../fleet/FleetView";
 import { FleetIndicator } from "../chrome/FleetIndicator";
@@ -43,9 +43,9 @@ beforeEach(() => {
 });
 
 describe("no attention fan-out on cluster entry", () => {
-  it("the location bar, the tree and Overview read the summary and call no list endpoint", async () => {
+  it("the location bar, the lens index and Overview read the summary and call no list endpoint", async () => {
     applySummary(summary(core(), {}, "dev"));
-    render(<><LocationBar /><NavBand /><Overview c={c} /></>);
+    render(<><LocationBar /><LensIndex /><Overview c={c} /></>);
     await new Promise((r) => setTimeout(r, 20));
     expect(calls).toEqual([]);
   });

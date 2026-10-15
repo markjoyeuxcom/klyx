@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { useFleet } from "../store/fleet";
-import { NavBand } from "../chrome/NavBand";
+import { LensIndex } from "../chrome/LensIndex";
+import { toggleLensIndex } from "../nav/lensIndexOpen";
 import { ShortcutsOverlay } from "../chrome/ShortcutsOverlay";
 import { stationOrder } from "../nav/stationOrder";
 import { LocationBar } from "../chrome/LocationBar";
@@ -19,8 +20,8 @@ import { handleZoomKey } from "./zoom";
 import { startSummaries } from "../bridge/healthRows";
 
 // AppShell owns the frame (The Line slice 4): an 8px inset, the location
-// bar, then the navigation band and the workspace, separated by 4px band
-// gaps. The geometry lives in layout.css tokens.
+// bar, then the lens index beside the workspace, separated by 4px gaps. The
+// geometry lives in layout.css tokens.
 // Shell shortcuts yield to whatever owns the keyboard: a handler that already
 // took the event, a text field or editor (ctrl+[ is an editing key there), the
 // palette, and any open dialog - a confirmation must never lose its cluster
@@ -43,11 +44,14 @@ export function handleShellKey(e: KeyboardEvent): void {
   if (handleZoomKey(e)) return;
   if (!(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey) return;
   const history = e.key === "[" || e.key === "]";
+  const index = e.key === "\\";
   const n = Number(e.key);
   const cluster = Number.isInteger(n) && n >= 1 && n <= 9;
-  if (!history && !cluster) return;
+  if (!history && !cluster && !index) return;
   if (shellKeysOwnedElsewhere(e)) return;
   e.preventDefault();
+  // mod+\ shows or hides the lens index (slice 4 §4.3).
+  if (index) { toggleLensIndex(); return; }
   // mod+[ / mod+] move through history - places only, never actions.
   if (history) { if (e.key === "[") back(); else forward(); return; }
   // mod+1..9 hops to the nth cluster in station order.
@@ -83,8 +87,8 @@ export function AppShell() {
       <ShortcutsOverlay />
       <LocationBar />
       <div className="shell-body">
+        <LensIndex />
         <div className="shell-main">
-          <NavBand />
           <main className="shell-workspace" aria-label="Workspace">
             <div style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
               {route.name === "fleet" ? (route.view === "promotion" ? <FleetPromotion /> : route.view === "expiry" ? <FleetExpiry /> : <FleetView />) : route.name === "forwards" ? <ForwardsView /> : route.name === "activity" ? <ActivityView /> : route.name === "settings" ? <SettingsView /> : <ClusterDetail />}

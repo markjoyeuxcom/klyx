@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { IconArrowLeft, IconArrowRight, IconArrowsLeftRight, IconClock, IconHistory, IconMessageChatbot, IconSearch, IconSettings, IconTerminal2 } from "@tabler/icons-react";
+import { IconArrowLeft, IconArrowRight, IconArrowsLeftRight, IconClock, IconHistory, IconLayoutSidebarLeftCollapse, IconLayoutSidebarLeftExpand, IconMessageChatbot, IconSearch, IconSettings, IconTerminal2 } from "@tabler/icons-react";
 import { openChat } from "../ai/chatStore";
 import { KlyxMark } from "./KlyxMark";
 import { useFleet, type ClusterDTO } from "../store/fleet";
@@ -14,6 +14,8 @@ import { StationSwitcher } from "./StationSwitcher";
 import { useMenuPopover } from "./useMenuPopover";
 import { MOD } from "./modKey";
 import { drag, noDrag } from "./drag";
+import { LENS_INDEX_ID } from "./LensIndex";
+import { toggleLensIndex, useLensIndexOpen } from "../nav/lensIndexOpen";
 
 
 // LocationBar (The Line slice 4 §2): history, the mark, the crumbs
@@ -28,9 +30,10 @@ export function LocationBar() {
   const where = entryLabel({ route, kindFilter });
   const onBoard = route.name === "fleet" && !route.view;
   return (
-    // data-list-keys="ignore": a focused bar control keeps its keys (see NavBand).
+    // data-list-keys="ignore": a focused bar control keeps its keys (useListKeys).
     <header className="mast locbar" style={drag} data-list-keys="ignore">
       <div className="locbar-left">
+        <IndexToggle />
         <HistoryControls />
         <button type="button" className="locbar-mark" style={noDrag} aria-label="Klyx fleet board" title="Fleet board" onClick={() => useFleet.getState().openFleet()}>
           <KlyxMark size={18} />
@@ -76,6 +79,17 @@ export function LocationBar() {
 }
 
 const Sep = () => <span className="locbar-sep" aria-hidden="true">/</span>;
+
+// IndexToggle shows or hides the lens index (mod+\), as a disclosure.
+function IndexToggle() {
+  const open = useLensIndexOpen((s) => s.open);
+  return (
+    <button type="button" className="mast-icon" style={noDrag} aria-label="Lens index" aria-expanded={open} aria-controls={open ? LENS_INDEX_ID : undefined}
+      title={`${open ? "Hide" : "Show"} the lens index (${MOD}\\)`} onClick={toggleLensIndex}>
+      {open ? <IconLayoutSidebarLeftCollapse size={15} stroke={1.6} /> : <IconLayoutSidebarLeftExpand size={15} stroke={1.6} />}
+    </button>
+  );
+}
 
 // The protected cue (parity: the "prd lock" chip) is a persistent tag on
 // the station crumb, never clipped; "inferred" when the environment name
