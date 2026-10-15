@@ -67,7 +67,8 @@ function seed(rows: NodeSummaryDTO[], k: KindCoverage = kind(), ver = 1) {
 }
 const push = (ver: number, rows: NodeSummaryDTO[], k: KindCoverage = kind()) => act(() => { applyRows("n", rowsDTO(ver, rows, k), 0); });
 
-const headline = () => screen.getByTestId("nodes-total").textContent;
+// the count sentence's number and marker (slice 11b): its noun follows
+const headline = () => screen.getByTestId("nodes-total").textContent?.split(" ")[0];
 const rowNames = () => [...document.querySelectorAll(".lens-row .lens-cell-name")].map((n) => n.textContent);
 const select = (name: string) => fireEvent.click(screen.getAllByText(name)[0]);
 const inspector = () => within(screen.getByTestId("lens-inspector"));
@@ -90,7 +91,7 @@ describe("Nodes rows, mounted end to end (slice 3 §5.7)", () => {
     render(<NodesView cluster="x" />);
     expect(rowNames()).toEqual(["z-down", "a-ok", "b-ok"]);
     expect(headline()).toBe("3");
-    expect(screen.getByTestId("nodes-attention").textContent).toBe("▲ 1 need attention");
+    expect(screen.getByTestId("nodes-attention").textContent).toBe("1 need attention");
   });
 
   it("A4 moves the global counts with the notice; the breakdown stays row-scoped, as of its capture", () => {
@@ -104,7 +105,7 @@ describe("Nodes rows, mounted end to end (slice 3 §5.7)", () => {
       expect(screen.getByTestId("rows-refreshing").textContent).toMatch(/Rows as of .* refreshing; the totals are the cluster summary's/);
       expect(screen.getByRole("alert").textContent).toMatch(/read failed - showing the last good read from .*dial tcp/);
       expect(headline()).toBe("9*");
-      expect(screen.getByTestId("nodes-attention").textContent).toBe("▲ 5* need attention");
+      expect(screen.getByTestId("nodes-attention").textContent).toBe("5* need attention");
       expect(screen.getByText(/4\* not ready · 1\* under pressure · 1\* cordoned \(as of /)).toBeTruthy();
       // the filter chips describe the rows the list can show
       expect(screen.getByRole("button", { name: /^Attention/ }).textContent).toBe("Attention 1");

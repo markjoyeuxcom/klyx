@@ -14,6 +14,7 @@ import { riskFor, supportsRiskFilter } from "./resourceRisk";
 import { LensLayout, LensTable, TABLE_ROW_HEIGHT, type DatasetState } from "../layout/LensLayout";
 import { fitColumns, type ColumnDef } from "../layout/columns";
 import { ROW_MARK, VerdictMark } from "../health/VerdictView";
+import { CountSentence } from "../layout/CountSentence";
 
 // The generic GVR lens behind every Resources and CRD destination, on the
 // workspace template (spec §6 step 3). Same contract as Pods/Nodes/Workloads:
@@ -294,10 +295,9 @@ export function InstanceList({ cluster, resource }: { cluster: string; resource:
       }
       summary={state === "loading" || state === "unreadable" ? null : (
         <>
-          <span className="t-number" style={{ color: "var(--color-text-secondary)" }}>{all.length}{more}</span>
-          {riskSupported && (attentionCount > 0
-            ? <span className="t-status" style={{ color: "var(--color-text-warning)" }}>{attentionCount}{more} need attention</span>
-            : <span className="t-secondary">{partial ? "no known attention in what was read" : "none need attention"}</span>)}
+          <CountSentence total={all.length} marker={more} noun={[resource.kind.toLowerCase(), resource.plural]}
+            attention={riskSupported ? { count: attentionCount, marker: more, phrase: "need attention", fault: false } : null}
+            clear={riskSupported ? (partial ? "no known attention in what was read" : "none need attention") : null} />
           <span className="t-secondary">{resource.scope === "Cluster" ? "cluster-scoped" : "namespaced"} · {resource.group || "core"}/{resource.version} · resource list</span>
         </>
       )}

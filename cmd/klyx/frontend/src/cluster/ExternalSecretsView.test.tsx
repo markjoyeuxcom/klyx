@@ -300,7 +300,7 @@ describe("ExternalSecretsView per-kind dataset + selection lifecycle (Codex c923
     setCov(cov({ ClusterSecretStore: { synced: false } }));
     const { getByRole } = render(<ExternalSecretsView cluster="x" />);
     fireEvent.click(getByRole("button", { name: /^Stores/ }));
-    expect(screen.getByText("1+")).toBeTruthy();
+    expect(screen.getByText("1+ stores")).toBeTruthy();
     expect(screen.getByText("store list incomplete")).toBeTruthy();
     expect(screen.queryByText("all stores ready")).toBeNull();
   });
@@ -362,7 +362,7 @@ describe("ExternalSecretsView count markers (Codex d607e454 polish)", () => {
     useFleet.setState((s) => ({ externalsecrets: { ...s.externalsecrets, coverage: cov({ ClusterSecretStore: { error: "forbidden" } }) } }));
     const { getByRole } = render(<ExternalSecretsView cluster="x" />);
     fireEvent.click(getByRole("button", { name: /^Stores/ }));
-    expect(screen.getByText("1*")).toBeTruthy();
+    expect(screen.getByText("1* stores")).toBeTruthy();
     expect(screen.getAllByText("ExternalSecrets").length).toBeGreaterThan(1); // view toggle + the count column names controller objects, not target Secrets
   });
 });

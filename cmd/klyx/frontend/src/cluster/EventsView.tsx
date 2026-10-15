@@ -17,6 +17,7 @@ import { WELL_KNOWN_RESOURCE_REFS } from "./resourceRefs";
 import { LensLayout, LensTable, TABLE_ROW_HEIGHT, type DatasetState } from "../layout/LensLayout";
 import { InspectorBlock, InspectorLayout, type MenuItem } from "../layout/InspectorLayout";
 import { fitColumns, type ColumnDef } from "../layout/columns";
+import { CountSentence } from "../layout/CountSentence";
 import { useClusterKey } from "./useClusterKey";
 
 // EventsView - Kubernetes events on the workspace template (spec §6 step 5).
@@ -174,7 +175,7 @@ export function EventsView({ cluster }: { cluster: string }) {
       title="Events"
       summary={state === "loading" || state === "unreadable" ? null : (
         <>
-          <span className="t-number" style={{ color: "var(--color-text-secondary)" }}>{items.length}{marker}</span>
+          <CountSentence total={items.length} marker={marker} noun={["event", "events"]} />
           <span className="t-secondary">{scopeName}</span>
           {/* warnings are evidence: amber text, never a lamp */}
           {warnings > 0 && <span className="t-status" style={{ color: "var(--color-text-warning)" }}>{warnings}{marker} warnings</span>}

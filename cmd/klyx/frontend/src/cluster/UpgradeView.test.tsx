@@ -35,14 +35,14 @@ describe("UpgradeView (redesign step 5)", () => {
   it("frames removals against the target and re-frames on change; a removal's mark is a fault, a later one look-at", async () => {
     vi.mocked(getUpgradeReadiness).mockResolvedValue(report({ deprecated: [api(), api({ resource: "x", kind: "Later", removedInMinor: 34 })] }));
     render(<UpgradeView cluster="x" />);
-    expect(await screen.findByText("▲ 1 API removed by 1.32")).toBeTruthy();
+    expect(await screen.findByText("1 API removed by 1.32")).toBeTruthy();
     const mark = (kind: string) => ([...document.querySelectorAll(".lens-row")].find((r) => r.textContent?.includes(kind)) as HTMLElement).querySelector(".row-mark") as HTMLElement;
     expect(mark("FlowSchema").querySelector('[data-aspect="fault"]')).toBeTruthy();
     expect(mark("FlowSchema").getAttribute("aria-label")).toBe("removed in 1.32");
     expect(mark("Later").querySelector('[data-aspect="attention"]')).toBeTruthy();
     expect(document.querySelector(".lens-row")?.textContent).not.toContain("▲"); // the mark carries the shape
     fireEvent.change(screen.getByLabelText("target minor"), { target: { value: "34" } });
-    expect(screen.getByText("▲ 2 APIs removed by 1.34")).toBeTruthy();
+    expect(screen.getByText("2 APIs removed by 1.34")).toBeTruthy();
     expect(mark("Later").querySelector('[data-aspect="fault"]')).toBeTruthy();
   });
 
@@ -62,7 +62,7 @@ describe("UpgradeView (redesign step 5)", () => {
       { node: "b-bad", version: "v1.27.0", delta: 4, level: "danger", detail: "outside the supported skew" },
     ] }));
     render(<UpgradeView cluster="x" />);
-    await screen.findByText("▲ 1 kubelet skew violation now");
+    await screen.findByText("1 kubelet skew violation now");
     fireEvent.click(screen.getByRole("button", { name: /^Node skew/ }));
     const rows = [...document.querySelectorAll(".lens-row")].map((r) => r.textContent ?? "");
     expect(rows[0]).toContain("b-bad");
@@ -77,7 +77,8 @@ describe("UpgradeView (redesign step 5)", () => {
     expect(await screen.findByText("Could not read upgrade readiness.")).toBeTruthy();
     vi.mocked(getUpgradeReadiness).mockResolvedValueOnce(report({ eolDate: "2000-01-01" }));
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
-    expect(await screen.findByText(/▲ upstream EOL \d+d ago/)).toBeTruthy();
+    const eol = await screen.findByText(/^upstream EOL \d+d ago$/);
+    expect(eol.closest(".t-status")?.querySelector('[data-aspect="fault"]')).toBeTruthy(); // a danger shape, the Aspect
   });
 
   it("a late report for a previous cluster never lands on the new one", async () => {

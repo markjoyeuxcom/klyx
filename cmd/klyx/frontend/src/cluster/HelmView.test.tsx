@@ -105,7 +105,7 @@ describe("HelmView (redesign step 5)", () => {
   it("a failed re-read keeps the last snapshot: '*' count, banner, no unqualified claim", () => {
     seed([rel({})], { error: "context deadline exceeded" });
     render(<HelmView cluster="x" />);
-    expect(screen.getByText("1*")).toBeTruthy();
+    expect(screen.getByText("1* releases")).toBeTruthy();
     expect(screen.getByText(/showing the last good snapshot/)).toBeTruthy();
     expect(screen.getByText("none known failed (last snapshot)")).toBeTruthy();
     expect(screen.queryByText("all deployed")).toBeNull();
@@ -124,7 +124,7 @@ describe("HelmView (redesign step 5)", () => {
     expect(rows[1]).toContain("pending-upgrade, appears stuck");
     expect(rows[2]).toContain("fresh");
     expect(rows[3]).toContain("ok");
-    expect(screen.getByText("▲ 1 failed · 1 pending, appears stuck")).toBeTruthy();
+    expect(screen.getByText("1 failed · 1 pending, appears stuck")).toBeTruthy();
     expect(screen.getByText("1 in progress")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: /^Pending/ }));
     expect(rowsText().length).toBe(2);

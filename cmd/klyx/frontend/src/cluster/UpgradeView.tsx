@@ -11,6 +11,7 @@ import { LensLayout, LensTable, TABLE_ROW_HEIGHT, type DatasetState } from "../l
 import { InspectorBlock, InspectorLayout } from "../layout/InspectorLayout";
 import { fitColumns, type ColumnDef } from "../layout/columns";
 import { ROW_MARK, VerdictMark } from "../health/VerdictView";
+import { MarkedPhrase } from "../layout/CountSentence";
 import { useClusterKey } from "./useClusterKey";
 
 // UpgradeView - "can I upgrade this cluster today?" on the workspace template
@@ -139,16 +140,14 @@ export function UpgradeView({ cluster }: { cluster: string }) {
       summary={!ok ? null : (
         <>
           <span className="t-number" style={{ color: "var(--color-text-secondary)" }}>{ok.serverVersion || "?"}</span>
-          {eolDays !== null && (
-            <span className={eolDays < 60 ? "t-status" : "t-secondary"} style={{ color: eolDays < 0 ? "var(--color-text-danger)" : eolDays < 60 ? "var(--color-text-warning)" : undefined }}>
-              {eolDays < 0 ? `▲ upstream EOL ${-eolDays}d ago` : `upstream EOL in ${eolDays}d`}
-            </span>
-          )}
-          {removedAtTarget.length > 0 && <span className="t-status" style={{ color: "var(--color-text-danger)" }}>▲ {removedAtTarget.length} API{removedAtTarget.length === 1 ? "" : "s"} removed by 1.{targetMinor}</span>}
+          {eolDays !== null && (eolDays < 0
+            ? <MarkedPhrase fault>upstream EOL {-eolDays}d ago</MarkedPhrase>
+            : <span className={eolDays < 60 ? "t-status" : "t-secondary"} style={{ color: eolDays < 60 ? "var(--color-text-warning)" : undefined }}>upstream EOL in {eolDays}d</span>)}
+          {removedAtTarget.length > 0 && <MarkedPhrase fault>{removedAtTarget.length} API{removedAtTarget.length === 1 ? "" : "s"} removed by 1.{targetMinor}</MarkedPhrase>}
           {removedAtTarget.length === 0 && <span className="t-secondary">{partial ? `no API removal found for 1.${targetMinor} in what could be read` : `no API removal blocker for 1.${targetMinor} (curated table)`}</span>}
           {/* skew is measured against the CURRENT control plane, never the
               target: it is a prerequisite, not target readiness */}
-          {skewDanger > 0 && <span className="t-status" style={{ color: "var(--color-text-danger)" }}>▲ {skewDanger} kubelet skew violation{skewDanger === 1 ? "" : "s"} now</span>}
+          {skewDanger > 0 && <MarkedPhrase fault>{skewDanger} kubelet skew violation{skewDanger === 1 ? "" : "s"} now</MarkedPhrase>}
           {skewWarn > 0 && <span className="t-status" style={{ color: "var(--color-text-warning)" }}>{skewWarn} node{skewWarn === 1 ? "" : "s"} to upgrade before the next control-plane bump</span>}
         </>
       )}

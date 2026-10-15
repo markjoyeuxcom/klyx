@@ -36,6 +36,7 @@ import { UpdatedAt, useReceivedAt } from "../chrome/Age";
 import { LensLayout, LensTable, TABLE_ROW_HEIGHT, type DatasetState } from "../layout/LensLayout";
 import { InspectorBlock, InspectorLayout, type MenuItem } from "../layout/InspectorLayout";
 import { fitColumns, type ColumnDef } from "../layout/columns";
+import { CountSentence } from "../layout/CountSentence";
 import { useClusterKey } from "./useClusterKey";
 import { usePinnedSubject } from "./usePinnedSubject";
 import { PinnedGone, expectsOther } from "./PinnedGone";
@@ -404,12 +405,9 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
           title="Workloads"
           summary={state === "loading" || state === "unreadable" ? null : (
             <>
-              <span className="t-number" data-testid="workloads-total" style={{ color: "var(--color-text-secondary)" }}>{counts.total}{mark}</span>
-              {counts.attention > 0 ? (
-                <span className="t-status" data-testid="workloads-attention" style={{ color: tone === "danger" ? "var(--color-text-danger)" : "var(--color-text-warning)" }}>
-                  {tone === "danger" ? "▲ " : ""}{counts.attention}{mark} need attention
-                </span>
-              ) : <span className="t-secondary">{counts.unknown > 0 || !current ? "no known attention" : "none need attention"}</span>}
+              <CountSentence total={counts.total} marker={mark} noun={["workload", "workloads"]} totalTestid="workloads-total"
+                attention={{ count: counts.attention, marker: mark, phrase: "need attention", fault: tone === "danger", testid: "workloads-attention" }}
+                clear={counts.unknown > 0 || !current ? "no known attention" : "none need attention"} />
               <span className="t-secondary">
                 {[counts.fault ? `${counts.fault}${mark} fault` : "", counts.degraded ? `${counts.degraded}${mark} degraded` : "", counts.unknown ? `${counts.unknown}${mark} unverified` : "", counts.progressing ? `${counts.progressing}${mark} rolling out` : "", counts.paused ? `${counts.paused}${mark} paused` : ""].filter(Boolean).join(" · ")}
               </span>

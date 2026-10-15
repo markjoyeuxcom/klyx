@@ -95,7 +95,8 @@ function seed(rows: PodSummaryDTO[], kinds = kindsOf()) {
 }
 const push = (ver: number, rows: PodSummaryDTO[], kinds = kindsOf()) => act(() => { applyRows("p", rowsDTO(ver, rows, kinds), 0); });
 
-const headline = () => screen.getByTestId("pods-total").textContent;
+// the count sentence's number and marker (slice 11b): its noun follows
+const headline = () => screen.getByTestId("pods-total").textContent?.split(" ")[0];
 const rowNames = () => [...document.querySelectorAll(".lens-row .lens-cell-name")].map((n) => n.textContent);
 const select = (name: string) => fireEvent.click(screen.getAllByText(name)[0]);
 const inspector = () => within(screen.getByTestId("lens-inspector"));
@@ -123,7 +124,7 @@ describe("Pods rows, mounted end to end (slice 3 §5.9)", () => {
     render(<PodsView cluster="x" />);
     expect(rowNames()).toEqual(["app / z-crash", "app / b-ok", "data / a-ok"]);
     expect(headline()).toBe("3");
-    expect(screen.getByTestId("pods-attention").textContent).toBe("▲ 1 need attention");
+    expect(screen.getByTestId("pods-attention").textContent).toBe("1 need attention");
     fireEvent.change(screen.getByLabelText("Namespace"), { target: { value: "data" } });
     expect(rowNames()).toEqual(["data / a-ok"]);
     expect(headline()).toBe("3"); // the global count stays the cluster's
@@ -139,7 +140,7 @@ describe("Pods rows, mounted end to end (slice 3 §5.9)", () => {
       act(() => { applySummary(summary(2, 2, { total: 9, fault: 4, degraded: 0, unknown: 0, progressing: 0, paused: 0, ok: 5 }), 0); dueForBootstrap(1500); });
       expect(screen.getByTestId("rows-refreshing").textContent).toMatch(/Rows as of .* refreshing; the totals are the cluster summary's/);
       expect(headline()).toBe("9");
-      expect(screen.getByTestId("pods-attention").textContent).toBe("▲ 4 need attention");
+      expect(screen.getByTestId("pods-attention").textContent).toBe("4 need attention");
       expect(screen.getByTestId("pods-scoped").textContent).toMatch(/^in app: 2 · 1 need attention \(as of /);
       const gen = useHealth.getState().subs.p.requestGen;
       act(() => bootstrapSettled("p", gen, { error: "capture timed out" }, 1600));

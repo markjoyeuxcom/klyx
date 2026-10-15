@@ -13,6 +13,7 @@ import { useKarpenterRows } from "../health/useKarpenterRows";
 import { clock, coverageGaps, joinCoverage, kindEvidence, lastGoodAt, type JoinCoverage, type KindEvidence } from "../layout/coverage";
 import { useListKeys } from "../chrome/useListKeys";
 import { ROW_MARK, VerdictMark } from "../health/VerdictView";
+import { CountSentence, MarkedPhrase } from "../layout/CountSentence";
 import { InspectorStatus } from "./ResourceInspector";
 import { LensLayout, LensTable, TABLE_ROW_HEIGHT, type DatasetState } from "../layout/LensLayout";
 import { InspectorBlock, InspectorLayout } from "../layout/InspectorLayout";
@@ -298,11 +299,10 @@ export function KarpenterView({ cluster }: { cluster: string }) {
       title="Karpenter"
       summary={rowsAbsent || claimsEv === "pending" && claims.length === 0 || claimsEv === "failed" && claims.length === 0 ? null : (
         <>
-          <span className="t-number" style={{ color: "var(--color-text-secondary)" }}>{claimTotal}{claimsEv === "complete" ? "" : claimsEv === "stale" ? "*" : "+"}</span>
-          <span className="t-secondary">NodeClaims</span>
+          <CountSentence total={claimTotal} marker={claimsEv === "complete" ? "" : claimsEv === "stale" ? "*" : "+"} noun={["NodeClaim", "NodeClaims"]} />
           {rowsRefreshing && claimAttention > 0 && <span className="t-status" style={{ color: "var(--color-text-warning)" }} data-testid="karp-global-attention">{claimAttention} not ready or appear stuck</span>}
           {failed + stuck + poolsDown > 0
-            ? <span className="t-status" style={{ color: failed + poolsDown > 0 ? "var(--color-text-danger)" : "var(--color-text-warning)" }}>{failed + poolsDown > 0 ? "▲ " : ""}{[failed ? `${failed} not ready` : "", stuck ? `${stuck} appear${stuck === 1 ? "s" : ""} stuck` : "", poolsDown ? `${poolsDown} NodePool${poolsDown === 1 ? "" : "s"} not ready` : ""].filter(Boolean).join(" · ")}</span>
+            ? <MarkedPhrase fault={failed + poolsDown > 0}>{[failed ? `${failed} not ready` : "", stuck ? `${stuck} appear${stuck === 1 ? "s" : ""} stuck` : "", poolsDown ? `${poolsDown} NodePool${poolsDown === 1 ? "" : "s"} not ready` : ""].filter(Boolean).join(" · ")}</MarkedPhrase>
             : launching > 0 ? <span className="t-secondary">{launching} in progress</span>
             : allReady ? <span className="t-secondary">all ready</span>
             : claims.length > 0 && poolsUnknown === 0 ? <span className="t-secondary" data-testid="karp-not-all-ready">{claimsEv === "stale" || poolsEv === "stale" ? "none known not ready (last observed)" : rowsRefreshing || rows.rowsState.updating ? "none known not ready (summary changed - re-reading)" : "none known not ready (reads incomplete)"}</span> : null}

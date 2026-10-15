@@ -41,7 +41,8 @@ function open(incarnation = 1, cluster = "x", h = "g") {
   openStarted(h, `tok-${h}-${incarnation}`);
   openSucceeded(h, `tok-${h}-${incarnation}`, incarnation);
 }
-const headline = () => document.querySelector(".lens-header .t-number")?.textContent;
+// the count sentence's number and marker (slice 11b): its noun follows
+const headline = () => document.querySelector(".lens-header .t-number")?.textContent?.split(" ")[0];
 const rowNames = () => [...document.querySelectorAll(".lens-row .lens-cell-name")].map((n) => n.textContent);
 
 beforeEach(() => {

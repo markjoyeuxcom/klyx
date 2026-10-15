@@ -23,6 +23,7 @@ import { StatusDot, ellipsis, type Tone } from "../chrome/primitives";
 import { compactCount } from "../chrome/format";
 import { InspectorConditions, InspectorStatus } from "./ResourceInspector";
 import { ROW_MARK, VerdictLamp, VerdictMark } from "../health/VerdictView";
+import { CountSentence } from "../layout/CountSentence";
 import { SyncingChip, staleProps } from "./staleness";
 import { LensLayout, LensTable, TABLE_ROW_HEIGHT, type DatasetState } from "../layout/LensLayout";
 import { InspectorBlock, InspectorLayout, type MenuItem } from "../layout/InspectorLayout";
@@ -467,21 +468,19 @@ export function GitOps({ cluster }: { cluster: string }) {
         title={view === "sources" ? "Flux sources" : "Flux reconciliation"}
         summary={state === "loading" || state === "unreadable" || absent ? null : view === "sources" ? (
           <>
-            <span className="t-number" style={{ color: "var(--color-text-secondary)" }}>{srcTotal}{partial}</span>
-            {srcAttention > 0
-              ? <span className="t-status" style={{ color: "var(--color-text-warning)" }}>{srcAttention} not ready</span>
-              : <span className="t-secondary">{srcEv !== "complete" ? notKnown(srcEv) : srcSuspended > 0 ? "all active sources ready" : "all sources ready"}</span>}
+            <CountSentence total={srcTotal} marker={partial} noun={["source", "sources"]}
+              attention={{ count: srcAttention, phrase: "not ready", fault: false }}
+              clear={srcEv !== "complete" ? notKnown(srcEv) : srcSuspended > 0 ? "all active sources ready" : "all sources ready"} />
             {srcSuspended > 0 && <span className="t-secondary">{srcSuspended} suspended{asOf}</span>}
           </>
         ) : (
           <>
-            <span className="t-number" style={{ color: "var(--color-text-secondary)" }}>{recTotal}{partial}</span>
-            {attention > 0
-              // "not ready", not "need attention": this legacy count still
-              // includes neutral progressing/stale/unknown rows until the shared
-              // Flux health slice aligns backend summary, tape and lens together.
-              ? <span className="t-status" style={{ color: failed > 0 ? "var(--color-text-danger)" : "var(--color-text-warning)" }}>{failed > 0 ? "▲ " : ""}{attention} not ready</span>
-              : <span className="t-secondary">{recsEv !== "complete" ? notKnown(recsEv) : "all ready"}</span>}
+            {/* "not ready", not "need attention": this legacy count still
+                includes neutral progressing/stale/unknown rows until the shared
+                Flux health slice aligns backend summary, tape and lens together. */}
+            <CountSentence total={recTotal} marker={partial} noun={["reconciliation", "reconciliations"]}
+              attention={{ count: attention, phrase: "not ready", fault: failed > 0 }}
+              clear={recsEv !== "complete" ? notKnown(recsEv) : "all ready"} />
             <span className="t-secondary" data-testid="flux-breakdown">
               {[`${ks} Kustomization${ks === 1 ? "" : "s"} · ${hr} HelmRelease${hr === 1 ? "" : "s"}`, failed ? `${failed} failed` : "", reconciling ? `${reconciling} reconciling` : "", syncing ? `${syncing} syncing` : "", suspended ? `${suspended} suspended` : ""].filter(Boolean).join(" · ")}{asOf}
             </span>

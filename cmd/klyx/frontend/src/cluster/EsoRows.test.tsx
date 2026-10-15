@@ -48,7 +48,8 @@ function open(incarnation = 1) {
   }
 }
 
-const headline = () => document.querySelector(".lens-header .t-number")?.textContent;
+// the count sentence's number and marker (slice 11b): its noun follows
+const headline = () => document.querySelector(".lens-header .t-number")?.textContent?.split(" ")[0];
 const chip = (re: RegExp) => screen.getByRole("button", { name: re }).textContent;
 const row = (name: string) => screen.getByText(name).closest(".lens-row")!.textContent ?? "";
 
@@ -74,7 +75,7 @@ describe("External Secrets rows, mounted end to end (slice 3 §5.2)", () => {
       expect(screen.getByTestId("rows-refreshing").textContent).toMatch(/Rows as of .* refreshing; the totals are the cluster summary's/);
       expect(screen.getByRole("alert").textContent).toMatch(/watch failed - showing the last good state from .*rbac/);
       expect(headline()).toBe("6");
-      expect(screen.getByText(/^▲ 4 not synced or stale$/)).toBeTruthy();
+      expect(screen.getByText(/^4 not synced or stale$/)).toBeTruthy();
       expect(chip(/^Not synced or refresh overdue/)).toBe("Not synced or refresh overdue 4");
       expect(chip(/^Stores/)).toBe("Stores 3");
       expect(screen.getByTestId("eso-breakdown").textContent).toMatch(/^1 failed \(as of /);

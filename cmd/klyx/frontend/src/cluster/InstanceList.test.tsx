@@ -527,11 +527,11 @@ describe("InstanceList Codex rework (Resources review)", () => {
     const { getByRole, getByText, findByText } = render(<InstanceList cluster="blue" resource={serviceRef} />);
     fireEvent.click(getByRole("button", { name: "Fleet" }));
     expect(await findByText(/First page only for blue/)).toBeTruthy();
-    expect(getByText(/^2\+$/)).toBeTruthy();
+    expect(getByText(/^2\+ \w+$/)).toBeTruthy();
     fireEvent.click(getByRole("button", { name: "Load next page" }));
     await waitFor(() => expect(getByText("b2")).toBeTruthy());
     expect(listInstancePage).toHaveBeenCalledWith("blue", serviceRef, "blue-2");
-    expect(getByText(/^3$/)).toBeTruthy(); // complete now: exact
+    expect(getByText(/^3 \w+$/)).toBeTruthy(); // complete now: exact
   });
 
   it("3b. a mixed fleet read names the unreadable cluster and counts as a lower bound", async () => {
@@ -543,7 +543,7 @@ describe("InstanceList Codex rework (Resources review)", () => {
     const { getByRole, findByText, getByText, queryByText } = render(<InstanceList cluster="blue" resource={serviceRef} />);
     fireEvent.click(getByRole("button", { name: "Fleet" }));
     expect(await findByText(/1 cluster unreadable: orange/)).toBeTruthy();
-    expect(getByText(/^1\+$/)).toBeTruthy();
+    expect(getByText(/^1\+ \w+$/)).toBeTruthy();
     expect(queryByText(/^none need attention$/)).toBeNull();
   });
 

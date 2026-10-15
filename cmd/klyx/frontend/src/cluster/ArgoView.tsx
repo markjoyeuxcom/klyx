@@ -17,6 +17,7 @@ import { Age, UpdatedAt, useReceivedAt } from "../chrome/Age";
 import { InspectorSection, InspectorStatus } from "./ResourceInspector";
 import { wellKnownResourceRef } from "./resourceRefs";
 import { ROW_MARK, VerdictMark } from "../health/VerdictView";
+import { CountSentence } from "../layout/CountSentence";
 import { LensLayout, LensTable, TABLE_ROW_HEIGHT, type DatasetState } from "../layout/LensLayout";
 import { InspectorBlock, InspectorLayout, type MenuItem } from "../layout/InspectorLayout";
 import { fitColumns, type ColumnDef } from "../layout/columns";
@@ -378,26 +379,22 @@ export function ArgoView({ cluster, mode = "applications" }: { cluster: string; 
         title={mode === "projects" ? "Argo CD projects" : mode === "applicationsets" ? "Argo CD ApplicationSets" : "Argo CD applications"}
         summary={state === "loading" || state === "unreadable" ? null : mode === "applications" ? (
           <>
-            <span className="t-number" style={{ color: "var(--color-text-secondary)" }}>{appTotal}{partial}</span>
-            {broken > 0
-              ? <span className="t-status" style={{ color: byHealth("Degraded") + byHealth("Missing") > 0 ? "var(--color-text-danger)" : "var(--color-text-warning)" }}>{byHealth("Degraded") + byHealth("Missing") > 0 ? "▲ " : ""}{broken} out of sync or unhealthy</span>
-              : apps.length === 0 ? null
-              : <span className="t-secondary">{view.error ? "none known out of sync or unhealthy" : "none out of sync or unhealthy reported"}</span>}
+            <CountSentence total={appTotal} marker={partial} noun={["application", "applications"]}
+              attention={{ count: broken, phrase: "out of sync or unhealthy", fault: byHealth("Degraded") + byHealth("Missing") > 0 }}
+              clear={apps.length === 0 ? null : view.error ? "none known out of sync or unhealthy" : "none out of sync or unhealthy reported"} />
             <span className="t-secondary" data-testid="argo-breakdown">
               {[byHealth("Degraded") ? `${byHealth("Degraded")} degraded` : "", byHealth("Missing") ? `${byHealth("Missing")} missing` : "", outOfSync ? `${outOfSync} out of sync` : "", byHealth("Progressing") ? `${byHealth("Progressing")} progressing` : "", byHealth("Suspended") ? `${byHealth("Suspended")} suspended` : ""].filter(Boolean).join(" · ")}{apps.length ? asOf : ""}
             </span>
           </>
         ) : mode === "projects" ? (
           <>
-            <span className="t-number" style={{ color: "var(--color-text-secondary)" }}>{projects.length}{partial}</span>
+            <CountSentence total={projects.length} marker={partial} noun={["project", "projects"]} />
             <span className="t-secondary">{[riskyProjects ? `${riskyProjects} with policy risk` : "no policy risk", unusedProjects === null ? "app usage unverified (Application read unavailable)" : unusedProjects ? `${unusedProjects} unused${appsCov === "stale" ? " (last good Application read)" : ""}` : ""].filter(Boolean).join(" · ")}</span>
           </>
         ) : (
           <>
-            <span className="t-number" style={{ color: "var(--color-text-secondary)" }}>{setTotal}{partial}</span>
-            {unhealthySets > 0
-              ? <span className="t-status" style={{ color: "var(--color-text-warning)" }}>{unhealthySets} need attention</span>
-              : <span className="t-secondary">none need attention</span>}
+            <CountSentence total={setTotal} marker={partial} noun={["ApplicationSet", "ApplicationSets"]}
+              attention={{ count: unhealthySets, phrase: "need attention", fault: false }} clear="none need attention" />
             {missingSets === null ? <span className="t-secondary">generated apps unverified (Application read unavailable)</span> : missingSets > 0 && <span className="t-secondary">{missingSets} missing generated apps{appsCov === "stale" ? " (last good Application read)" : ""}</span>}
           </>
         )}

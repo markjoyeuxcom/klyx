@@ -64,7 +64,10 @@ describe("GatewayApiView (redesign step 6)", () => {
     expect(rows.map((r) => r.textContent)).toEqual([expect.stringContaining("broken"), expect.stringContaining("pending"), expect.stringContaining("ok")]);
     const panel = screen.getByTestId("gateway-panel");
     expect(within(panel).getByText(/Accepted is False - InvalidParameters/)).toBeTruthy();
-    expect(screen.getByText("▲ 1 not accepted · 1 needs attention")).toBeTruthy();
+    // the header's count sentence: its Aspect carries the fault's shape (slice 11b)
+    const attention = screen.getByTestId("gw-attention");
+    expect(attention.textContent).toBe("1 not accepted · 1 needs attention");
+    expect(attention.querySelector('[data-aspect="fault"]')).toBeTruthy();
   });
 
   it("the inspector's primary action opens the topology", () => {
@@ -147,7 +150,7 @@ describe("GatewayApiView (redesign step 6)", () => {
     expect(screen.getByText("eg")).toBeTruthy();
     expect(screen.getByRole("alert").textContent).toMatch(/Gateways read failed - showing the last good list.*forbidden/);
     expect(screen.queryByText(/all programmed/)).toBeNull();
-    expect(document.querySelector(".lens-header .t-number")?.textContent).toBe("1*");
+    expect(document.querySelector(".lens-header .t-number")?.textContent).toBe("1* gateways");
   });
 
   it("a filter edit that hides the selection closes it", () => {

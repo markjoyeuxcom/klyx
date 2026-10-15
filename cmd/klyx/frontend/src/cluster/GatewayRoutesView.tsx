@@ -10,6 +10,7 @@ import { WatchErrorBanner } from "../chrome/WatchErrorBanner";
 import { VirtualList, type VirtualListHandle } from "../chrome/VirtualList";
 import { useListKeys } from "../chrome/useListKeys";
 import { ROW_MARK, VerdictMark } from "../health/VerdictView";
+import { CountSentence } from "../layout/CountSentence";
 import { InspectorStatus } from "./ResourceInspector";
 import { LensLayout, LensTable, TABLE_ROW_HEIGHT, type DatasetState } from "../layout/LensLayout";
 import { InspectorBlock, InspectorLayout } from "../layout/InspectorLayout";
@@ -192,9 +193,8 @@ export function RouteList({ cluster, rows, toggle }: { cluster: string; rows: Ga
       title="HTTPRoutes"
       summary={state === "loading" || state === "unreadable" || absent ? null : (
         <>
-          <span className="t-number" style={{ color: "var(--color-text-secondary)" }}>{total}{mark}</span>
-          <span className="t-secondary">HTTPRoute{total === 1 ? "" : "s"}</span>
-          {attention > 0 && <span className="t-status" data-testid="route-attention" style={{ color: "var(--color-text-warning)" }}>{attention} with a failing attachment{dep.word ? ` (${dep.word})` : ""}</span>}
+          <CountSentence total={total} marker={mark} noun={["HTTPRoute", "HTTPRoutes"]}
+            attention={{ count: attention, phrase: "with a failing attachment", fault: false, detail: dep.word || undefined, testid: "route-attention" }} />
         </>
       )}
       controls={(

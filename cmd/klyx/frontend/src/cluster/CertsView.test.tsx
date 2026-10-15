@@ -491,7 +491,7 @@ describe("CertsView per-kind dataset + selection lifecycle (Codex c9231c13)", ()
     setCov(cov({ ClusterIssuer: { synced: false } }));
     render(<CertsView cluster="x" />);
     issuersTab();
-    expect(screen.getByText("1+")).toBeTruthy();
+    expect(screen.getByText("1+ issuers")).toBeTruthy();
     expect(screen.getByText("issuer list incomplete")).toBeTruthy();
     expect(screen.queryByText("all issuers ready")).toBeNull();
   });

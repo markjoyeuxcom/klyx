@@ -51,7 +51,7 @@ describe("EventsView (redesign step 5)", () => {
     first.unmount();
     seed([ev({})], { error: "timeout", live: false });
     render(<EventsView cluster="x" />);
-    expect(screen.getByText("1*")).toBeTruthy();
+    expect(screen.getByText("1* events")).toBeTruthy();
     expect(screen.getByText(/showing the last good read/)).toBeTruthy();
   });
 
@@ -64,7 +64,7 @@ describe("EventsView (redesign step 5)", () => {
   it("the 500-event cap is stated in words with a lower-bound count", () => {
     seed([ev({})], { truncated: true });
     render(<EventsView cluster="x" />);
-    expect(screen.getByText("1+")).toBeTruthy();
+    expect(screen.getByText("1+ events")).toBeTruthy();
     expect(screen.getByText(/First 500 events only/)).toBeTruthy();
   });
 

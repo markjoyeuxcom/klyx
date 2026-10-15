@@ -83,7 +83,8 @@ function seedFleet(secret = "web-tls") {
 
 // the listener's TLS line: the Secret ref and its certificate status
 const tls = () => screen.getByText(/^Secret payments\//).parentElement!.textContent ?? "";
-const headline = () => document.querySelector(".lens-header .t-number")?.textContent;
+// the count sentence's number and marker (slice 11b): its noun follows
+const headline = () => document.querySelector(".lens-header .t-number")?.textContent?.split(" ")[0];
 const chip = (re: RegExp) => screen.getByRole("button", { name: re }).textContent;
 
 beforeEach(() => {
@@ -112,7 +113,7 @@ describe("cert-manager rows, mounted end to end (Codex review of 9de9d73)", () =
       expect(screen.getByTestId("rows-refreshing").textContent).toMatch(/Rows as of .* refreshing; the totals are the cluster summary's/);
       expect(screen.getByRole("alert").textContent).toMatch(/watch failed - showing the last good state from .*rbac/); // stacked, not replaced
       expect(headline()).toBe("5"); // the headline total
-      expect(screen.getByText(/^▲ 3 not ready or expired$/)).toBeTruthy();
+      expect(screen.getByText(/^3 not ready or expired$/)).toBeTruthy();
       expect(chip(/^Not ready/)).toBe("Not ready 3");
       expect(chip(/^Issuers/)).toBe("Issuers 2");
       expect(screen.getByTestId("cert-breakdown").textContent).toMatch(/^1 failed or expired \(as of /);

@@ -14,6 +14,7 @@ import { YamlBlock } from "../chrome/YamlBlock";
 import { Age, UpdatedAt, formatAge, useNow } from "../chrome/Age";
 import { InspectorStatus } from "./ResourceInspector";
 import { ROW_MARK, VerdictMark } from "../health/VerdictView";
+import { CountSentence } from "../layout/CountSentence";
 import { LensLayout, LensTable, TABLE_ROW_HEIGHT, type DatasetState } from "../layout/LensLayout";
 import { InspectorBlock, InspectorLayout, type MenuItem } from "../layout/InspectorLayout";
 import { fitColumns, type ColumnDef } from "../layout/columns";
@@ -220,11 +221,10 @@ export function HelmView({ cluster }: { cluster: string }) {
       title="Helm releases"
       summary={state === "loading" || state === "unreadable" ? null : (
         <>
-          <span className="t-number" style={{ color: "var(--color-text-secondary)" }}>{releases.length}{marker}</span>
-          {attention > 0
-            ? <span className="t-status" style={{ color: failed > 0 ? "var(--color-text-danger)" : "var(--color-text-warning)" }}>{failed > 0 ? "▲ " : ""}{[failed ? `${failed} failed` : "", stuck ? `${stuck} pending, ${stuck === 1 ? "appears" : "appear"} stuck` : ""].filter(Boolean).join(" · ")}</span>
-            : pending > 0 ? <span className="t-secondary">{pending} in progress</span>
-            : <span className="t-secondary">{evidence === "complete" ? (releases.length > 0 ? "all deployed" : "") : "none known failed (last snapshot)"}</span>}
+          <CountSentence total={releases.length} marker={marker} noun={["release", "releases"]}
+            attention={{ count: attention, phrase: "", fault: failed > 0,
+              text: [failed ? `${failed} failed` : "", stuck ? `${stuck} pending, ${stuck === 1 ? "appears" : "appear"} stuck` : ""].filter(Boolean).join(" · ") }}
+            clear={pending > 0 ? `${pending} in progress` : evidence === "complete" ? (releases.length > 0 ? "all deployed" : "") : "none known failed (last snapshot)"} />
           {attention > 0 && pending - stuck > 0 && <span className="t-secondary">{pending - stuck} in progress</span>}
         </>
       )}

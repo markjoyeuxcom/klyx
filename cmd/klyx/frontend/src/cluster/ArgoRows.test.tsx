@@ -56,7 +56,8 @@ function seed(apps: ArgoAppDTO[], sets: ArgoApplicationSetDTO[] = [appSet("set")
   applyRows("s", rowsDTO(1, "applicationsets", 1, sets, kind("applicationsets")), 0);
 }
 
-const headline = () => document.querySelector(".lens-header .t-number")?.textContent;
+// the count sentence's number and marker (slice 11b): its noun follows
+const headline = () => document.querySelector(".lens-header .t-number")?.textContent?.split(" ")[0];
 const rowNames = () => [...document.querySelectorAll(".lens-row .lens-cell-name")].map((n) => n.textContent);
 const selectApp = (name: string) => fireEvent.click(screen.getAllByText(name)[0]);
 const inspector = () => within(screen.getByTestId("lens-inspector"));

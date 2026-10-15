@@ -13,6 +13,7 @@ import { clock, coverageGaps, kindEvidence, lastGoodAt } from "../layout/coverag
 import { VirtualList, type VirtualListHandle } from "../chrome/VirtualList";
 import { useListKeys } from "../chrome/useListKeys";
 import { ROW_MARK, VerdictMark } from "../health/VerdictView";
+import { CountSentence } from "../layout/CountSentence";
 import { InspectorStatus } from "./ResourceInspector";
 import { GatewayTopology } from "./GatewayTopology";
 import { LensLayout, LensTable, TABLE_ROW_HEIGHT, type DatasetState } from "../layout/LensLayout";
@@ -211,8 +212,9 @@ function GatewayList({ cluster, rows, toggle }: { cluster: string; rows: Gateway
       title="Gateways"
       summary={state === "loading" || state === "unreadable" || absent ? null : (
         <>
-          <span className="t-number" style={{ color: "var(--color-text-secondary)" }}>{total}{mark}</span>
-          {attention > 0 && <span className="t-status" data-testid="gw-attention" style={{ color: notAccepted > 0 ? "var(--color-text-danger)" : "var(--color-text-warning)" }}>{rowsRefreshing ? `${attention} need attention` : [notAccepted ? `▲ ${notAccepted}${mark} not accepted` : "", attention > notAccepted ? `${attention - notAccepted}${mark} need${attention - notAccepted === 1 ? "s" : ""} attention` : ""].filter(Boolean).join(" · ")}</span>}
+          <CountSentence total={total} marker={mark} noun={["gateway", "gateways"]}
+            attention={{ count: attention, phrase: "", fault: !rowsRefreshing && notAccepted > 0, testid: "gw-attention",
+              text: rowsRefreshing ? `${attention} need attention` : [notAccepted ? `${notAccepted}${mark} not accepted` : "", attention > notAccepted ? `${attention - notAccepted}${mark} need${attention - notAccepted === 1 ? "s" : ""} attention` : ""].filter(Boolean).join(" · ") }} />
           {unverified > 0 && <span className="t-secondary">{unverified}{mark} unverified{asOf}</span>}
           {allOk && <span className="t-secondary">all programmed</span>}
         </>

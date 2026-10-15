@@ -31,6 +31,7 @@ import { wellKnownResourceRef } from "./resourceRefs";
 import { LensLayout, LensTable, type DatasetState } from "../layout/LensLayout";
 import { InspectorBlock, InspectorLayout, type MenuItem } from "../layout/InspectorLayout";
 import { fitColumns, type ColumnDef } from "../layout/columns";
+import { CountSentence } from "../layout/CountSentence";
 import { WatchErrorBanner } from "../chrome/WatchErrorBanner";
 import { vh } from "../app/zoom";
 import { useInspectorAI } from "../ai/AIExplain";
@@ -702,12 +703,9 @@ export function NodesView({ cluster }: { cluster: string }) {
         title="Nodes"
         summary={state === "loading" || state === "unreadable" ? null : (
           <>
-            <span className="t-number" data-testid="nodes-total" style={{ color: "var(--color-text-secondary)" }}>{counts.total}{mark}</span>
-            {counts.attention > 0 ? (
-              <span className="t-status" data-testid="nodes-attention" style={{ color: tone === "danger" ? "var(--color-text-danger)" : "var(--color-text-warning)" }}>
-                {tone === "danger" ? "▲ " : ""}{counts.attention}{mark} need attention
-              </span>
-            ) : <span className="t-secondary">{counts.unknown > 0 ? "no known attention" : current ? "none need attention" : "none known to need attention"}</span>}
+            <CountSentence total={counts.total} marker={mark} noun={["node", "nodes"]} totalTestid="nodes-total"
+              attention={{ count: counts.attention, marker: mark, phrase: "need attention", fault: tone === "danger", testid: "nodes-attention" }}
+              clear={counts.unknown > 0 ? "no known attention" : current ? "none need attention" : "none known to need attention"} />
             <span className="t-secondary">
               {[counts.fault ? `${counts.fault}${mark} not ready` : "", counts.degraded ? `${counts.degraded}${mark} under pressure` : "", counts.unknown ? `${counts.unknown}${mark} unverified` : "", cordonedCount ? `${cordonedCount}${mark} cordoned${asOf}` : ""].filter(Boolean).join(" · ")}
             </span>

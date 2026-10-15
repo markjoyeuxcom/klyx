@@ -191,3 +191,17 @@ Codex accepted 11a at e7af6d0. Its P3 (the `InspectorStatus` danger prefix besid
   - `StationVerdict.test.tsx`: the board's words with separate marks; health never inheriting the line's failure; a fault reading; before a first `LineDTO`; a siding; not on the line; the unreachable guard; the station queue's shape and UID-pinned opening; an unread station claiming nothing. Mutation-checked.
   - `Overview.test.tsx`: the title, the section order, and a failed cluster leading with its connection with its notes last.
 - **Captures:** `pw/s11c.mjs`, `<scratchpad>/cap11c/{night,day}-1440-station{,-lower}.png`, against the kind lab.
+
+## 10. As built: 11b
+
+- **`layout/CountSentence.tsx`:**
+  - **`CountSentence`** renders the total with its noun. A marked count ("+", "*") is always plural.
+  - Then **the attention part** through `MarkedPhrase`: its `Aspect` (fault when any counted object is a fault, else look-at) and its words, "N<marker> <phrase>", or the lens's own `text` when its words are a list. A `detail` follows in brackets.
+  - Or **the lens's `clear` words,** in ink-2 with no mark.
+  - Then the lens's **secondary facts,** as children.
+  - **`MarkedPhrase`** is also used alone where a check lens's header said `▲`: Upgrade's EOL past, APIs removed and kubelet skew violations, Hubble's drops, and Karpenter's list of not-ready, stuck and NodePools.
+- **Nouns:** Pods "pod", Workloads "workload", Nodes "node", Events "event", Argo "application", "project" and "ApplicationSet", Flux "reconciliation" and "source", cert-manager "certificate" and "issuer", ESO "external secret" and "store", Helm "release", Gateways "gateway", HTTPRoutes "HTTPRoute", Karpenter "NodeClaim", and Resources the kind's lower-case name and its plural resource.
+- **No count changed.** Each lens passes its existing numbers, markers, phrases, all-clear and not-known words, and breakdowns. Events keep their warnings as amber text with no mark (evidence).
+- **Tests:**
+  - `CountSentence.test.tsx`: noun agreement and markers, the fault and look-at marks, a list's text, the detail, clear words with no mark, and `MarkedPhrase`.
+  - Lens tests updated from `▲` text and bare counts to the sentence. The Rows suites read the sentence's leading number, so their count assertions are unchanged.

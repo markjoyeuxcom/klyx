@@ -61,7 +61,8 @@ function seed(recs: FluxResourceDTO[], srcs: FluxSourceDTO[] = [src("repo")]) {
 }
 const setView = (v: "reconciliation" | "sources") => act(() => useFleet.setState({ route: { name: "cluster", cluster: "x", section: "gitops", fluxView: v } }));
 
-const headline = () => document.querySelector(".lens-header .t-number")?.textContent;
+// the count sentence's number and marker (slice 11b): its noun follows
+const headline = () => document.querySelector(".lens-header .t-number")?.textContent?.split(" ")[0];
 const chip = (re: RegExp) => screen.getByRole("button", { name: re }).textContent;
 const panel = () => within(screen.getByTestId("flux-detail-panel"));
 const detailFor = (name: string, over: Partial<ResourceDetailDTO> = {}): ResourceDetailDTO => ({
@@ -93,7 +94,7 @@ describe("Flux rows, mounted end to end (slice 3 §5.3)", () => {
       expect(screen.getByTestId("rows-refreshing").textContent).toMatch(/Rows as of .* refreshing; the totals are the cluster summary's/);
       expect(screen.getByRole("alert").textContent).toMatch(/watch failed - showing the last good state from .*rbac/);
       expect(headline()).toBe("7");
-      expect(screen.getByText(/^▲ 4 not ready$/)).toBeTruthy();
+      expect(screen.getByText(/^4 not ready$/)).toBeTruthy();
       expect(chip(/^Not ready/)).toBe("Not ready 4");
       expect(screen.getByTestId("flux-breakdown").textContent).toMatch(/2 Kustomizations · 0 HelmReleases · 1 failed \(as of /);
       setView("sources");

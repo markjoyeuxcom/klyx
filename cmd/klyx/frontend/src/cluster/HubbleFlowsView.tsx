@@ -8,6 +8,7 @@ import { UpdatedAt } from "../chrome/Age";
 import { useFleet } from "../store/fleet";
 import { capState } from "../nav/registry";
 import { LensLayout, type DatasetState } from "../layout/LensLayout";
+import { MarkedPhrase } from "../layout/CountSentence";
 
 // HubbleFlowsView - Cilium Hubble flow triage as a Network destination of its
 // own (redesign step 7a). It was a second view inside the Gateway lens, which
@@ -76,7 +77,7 @@ function FlowsLayout({ flows }: { flows: Flows }) {
       summary={state !== "ready" || !s ? null : (
         <>
           {drops !== null && drops > 0
-            ? <span className="t-status" style={{ color: "var(--color-text-danger)" }}>▲ {fmtRate(drops)} dropped/s</span>
+            ? <MarkedPhrase fault>{fmtRate(drops)} dropped/s</MarkedPhrase>
             : drops !== null ? <span className="t-secondary">no drops</span> : null}
           {s.forwardRate !== null && <span className="t-secondary">{fmtRate(s.forwardRate)} forwarded/s</span>}
           <span className="t-secondary">5m rates</span>

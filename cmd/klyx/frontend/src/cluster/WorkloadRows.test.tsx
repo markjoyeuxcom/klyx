@@ -73,7 +73,8 @@ function seed(rows: WorkloadDTO[], kinds = kindsOf(), facts?: Record<string, unk
 }
 const push = (ver: number, rows: WorkloadDTO[], kinds = kindsOf(), facts?: Record<string, unknown>) => act(() => { applyRows("w", rowsDTO(ver, rows, kinds, facts), 0); });
 
-const headline = () => screen.getByTestId("workloads-total").textContent;
+// the count sentence's number and marker (slice 11b): its noun follows
+const headline = () => screen.getByTestId("workloads-total").textContent?.split(" ")[0];
 const rowNames = () => [...document.querySelectorAll(".lens-row .lens-cell-name")].map((n) => n.textContent);
 const select = (name: string) => fireEvent.click(screen.getAllByText(name)[0]);
 const inspector = () => within(screen.getByTestId("lens-inspector"));
@@ -94,7 +95,7 @@ describe("Workloads rows, mounted end to end (slice 3 §5.8)", () => {
     render(<WorkloadsView cluster="x" />);
     expect(rowNames()).toEqual(["app / crash", "app / api", "data / db"]);
     expect(headline()).toBe("3");
-    expect(screen.getByTestId("workloads-attention").textContent).toBe("▲ 1 need attention");
+    expect(screen.getByTestId("workloads-attention").textContent).toBe("1 need attention");
     fireEvent.change(screen.getByLabelText("Namespace"), { target: { value: "data" } });
     expect(rowNames()).toEqual(["data / db"]);
     expect(headline()).toBe("3"); // the global count stays the cluster's
@@ -111,7 +112,7 @@ describe("Workloads rows, mounted end to end (slice 3 §5.8)", () => {
       act(() => { applySummary(summary(2, 2, { total: 9, fault: 4, degraded: 0, unknown: 0, progressing: 0, paused: 0, ok: 5 }), 0); dueForBootstrap(1500); });
       expect(screen.getByTestId("rows-refreshing").textContent).toMatch(/Rows as of .* refreshing; the totals are the cluster summary's/);
       expect(headline()).toBe("9");
-      expect(screen.getByTestId("workloads-attention").textContent).toBe("▲ 4 need attention");
+      expect(screen.getByTestId("workloads-attention").textContent).toBe("4 need attention");
       expect(screen.getByTestId("workloads-scoped").textContent).toMatch(/^in app: 2 · 1 need attention \(as of /);
     } finally {
       vi.useRealTimers();

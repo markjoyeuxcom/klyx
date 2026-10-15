@@ -15,6 +15,7 @@ import { IconAlertTriangle, IconShieldLock } from "@tabler/icons-react";
 import { SECRET_REF, wellKnownResourceRef } from "./resourceRefs";
 import { InspectorStatus } from "./ResourceInspector";
 import { ROW_MARK, VerdictLamp, VerdictMark } from "../health/VerdictView";
+import { CountSentence } from "../layout/CountSentence";
 import { LensLayout, LensTable, TABLE_ROW_HEIGHT, type DatasetState } from "../layout/LensLayout";
 import { InspectorBlock, InspectorLayout, type MenuItem } from "../layout/InspectorLayout";
 import { fitColumns, type ColumnDef } from "../layout/columns";
@@ -334,16 +335,15 @@ export function ExternalSecretsView({ cluster }: { cluster: string }) {
       title={view === "stores" ? "Secret stores" : "External secrets"}
       summary={state === "loading" || state === "unreadable" || absent ? null : view === "stores" ? (
         <>
-          <span className="t-number" style={{ color: "var(--color-text-secondary)" }}>{storeTotal}{partial}</span>
-          {storesNotReady > 0 ? <span className="t-status" style={{ color: "var(--color-text-warning)" }}>{storesNotReady} not ready</span>
-            : <span className="t-secondary">{storesEv === "complete" ? "all stores ready" : storesEv === "stale" ? "none known not ready (last observed)" : "store list incomplete"}</span>}
+          <CountSentence total={storeTotal} marker={partial} noun={["store", "stores"]}
+            attention={{ count: storesNotReady, phrase: "not ready", fault: false }}
+            clear={storesEv === "complete" ? "all stores ready" : storesEv === "stale" ? "none known not ready (last observed)" : "store list incomplete"} />
         </>
       ) : (
         <>
-          <span className="t-number" style={{ color: "var(--color-text-secondary)" }}>{secretTotal}{partial}</span>
-          {attention > 0
-            ? <span className="t-status" style={{ color: failed > 0 ? "var(--color-text-danger)" : "var(--color-text-warning)" }}>{failed > 0 ? "▲ " : ""}{attention} not synced or stale</span>
-            : <span className="t-secondary">{secretsEv === "complete" ? "all synced and refreshing" : secretsEv === "stale" ? "none known not synced (last observed)" : "ExternalSecret list incomplete"}</span>}
+          <CountSentence total={secretTotal} marker={partial} noun={["external secret", "external secrets"]}
+            attention={{ count: attention, phrase: "not synced or stale", fault: failed > 0 }}
+            clear={secretsEv === "complete" ? "all synced and refreshing" : secretsEv === "stale" ? "none known not synced (last observed)" : "ExternalSecret list incomplete"} />
           <span className="t-secondary" data-testid="eso-breakdown">{[failed ? `${failed} failed` : "", stale ? `${stale} stale` : "", storeProblems ? `${storeProblems} with store problem` : ""].filter(Boolean).join(" · ")}{(failed || stale || storeProblems) ? asOf : ""}</span>
         </>
       )}

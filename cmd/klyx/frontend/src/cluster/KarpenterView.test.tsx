@@ -53,7 +53,7 @@ describe("KarpenterView (redesign step 5)", () => {
       claim({ name: "backend-clears", ready: "not-ready", failingType: "Launched", failingStatus: "False", rule: { included: false, role: "ok", label: "ready" } }),
     ] }));
     render(<KarpenterView cluster="x" />);
-    expect(await screen.findByText("▲ 1 not ready")).toBeTruthy();
+    expect(await screen.findByText("1 not ready")).toBeTruthy();
     expect(rows()[0]).toContain("flagged by backend"); // ordered by the rule's role
   });
 
@@ -65,7 +65,7 @@ describe("KarpenterView (redesign step 5)", () => {
       claim({ name: "bad", ready: "not-ready", failingType: "Launched", failingStatus: "False", failingReason: "InsufficientCapacity" }),
     ] }));
     render(<KarpenterView cluster="x" />);
-    expect(await screen.findByText("▲ 1 not ready · 1 appears stuck")).toBeTruthy();
+    expect(await screen.findByText("1 not ready · 1 appears stuck")).toBeTruthy();
     const r = rows();
     expect(r[0]).toContain("bad");
     expect(r[1]).toContain("old");

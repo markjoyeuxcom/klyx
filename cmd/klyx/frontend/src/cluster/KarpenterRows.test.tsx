@@ -49,7 +49,8 @@ function seed(claims: KarpenterClaimDTO[], pools: KarpenterPoolDTO[] = [pool("de
   applyRows("p", rowsDTO(1, "nodepools", 1, pools, kind("nodepools")), 0);
   applyRows("c", rowsDTO(1, "nodeclaims", 1, claims, kind("nodeclaims")), 0);
 }
-const headline = () => document.querySelector(".lens-header .t-number")?.textContent;
+// the count sentence's number and marker (slice 11b): its noun follows
+const headline = () => document.querySelector(".lens-header .t-number")?.textContent?.split(" ")[0];
 const rowNames = () => [...document.querySelectorAll(".lens-row .lens-cell-name")].map((n) => n.textContent);
 const row = (name: string) => screen.getByText(name).closest(".lens-row")!.textContent ?? "";
 const inspector = () => within(screen.getByTestId("lens-inspector"));

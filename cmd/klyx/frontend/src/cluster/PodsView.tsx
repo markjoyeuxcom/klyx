@@ -28,6 +28,7 @@ import { WatchErrorBanner } from "../chrome/WatchErrorBanner";
 import { UpdatedAt, formatAge, useNow, useReceivedAt } from "../chrome/Age";
 import { wellKnownResourceRef } from "./resourceRefs";
 import { LensLayout, LensTable, TABLE_ROW_HEIGHT, type DatasetState } from "../layout/LensLayout";
+import { CountSentence } from "../layout/CountSentence";
 import { InspectorBlock, InspectorLayout, type MenuItem } from "../layout/InspectorLayout";
 import { VerdictLabel, VerdictMark, VerdictStatus } from "../health/VerdictView";
 import { type VerdictCounts, attentionTone, isAttention, kindOf, labelOf, orderOf, summarize } from "../health/verdict";
@@ -355,14 +356,9 @@ export function PodsView({ cluster }: { cluster: string }) {
   const rowTone = attentionTone(rowCounts);
   const summary = state === "loading" || state === "unreadable" ? null : (
     <>
-      <span className="t-number" data-testid="pods-total" style={{ color: "var(--color-text-secondary)" }}>{counts.total}{mark}</span>
-      {counts.attention > 0 ? (
-        <span className="t-status" data-testid="pods-attention" style={{ color: tone === "danger" ? "var(--color-text-danger)" : "var(--color-text-warning)" }}>
-          {tone === "danger" ? "▲ " : ""}{counts.attention}{mark} need attention
-        </span>
-      ) : (
-        <span className="t-secondary">{counts.unknown > 0 || !current ? "no known attention" : "none need attention"}</span>
-      )}
+      <CountSentence total={counts.total} marker={mark} noun={["pod", "pods"]} totalTestid="pods-total"
+        attention={{ count: counts.attention, marker: mark, phrase: "need attention", fault: tone === "danger", testid: "pods-attention" }}
+        clear={counts.unknown > 0 || !current ? "no known attention" : "none need attention"} />
       {(counts.fault > 0 || counts.degraded > 0 || counts.unknown > 0) && (
         <span className="t-secondary">
           {[counts.fault ? `${counts.fault}${mark} fault` : "", counts.degraded ? `${counts.degraded}${mark} degraded` : "", counts.unknown ? `${counts.unknown}${mark} unverified` : ""].filter(Boolean).join(" · ")}

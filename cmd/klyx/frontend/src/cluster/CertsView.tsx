@@ -18,6 +18,7 @@ import { IconCertificate, IconAlertTriangle } from "@tabler/icons-react";
 import { SECRET_REF, wellKnownResourceRef } from "./resourceRefs";
 import { SyncingChip, staleProps } from "./staleness";
 import { ROW_MARK, VerdictLamp, VerdictMark } from "../health/VerdictView";
+import { CountSentence } from "../layout/CountSentence";
 import { LensLayout, LensTable, TABLE_ROW_HEIGHT, type DatasetState } from "../layout/LensLayout";
 import { InspectorBlock, InspectorLayout, type MenuItem } from "../layout/InspectorLayout";
 import { fitColumns, type ColumnDef } from "../layout/columns";
@@ -374,16 +375,15 @@ export function CertsView({ cluster }: { cluster: string }) {
       title={view === "issuers" ? "cert-manager issuers" : "Certificates"}
       summary={state === "loading" || state === "unreadable" || absent ? null : view === "issuers" ? (
         <>
-          <span className="t-number" style={{ color: "var(--color-text-secondary)" }}>{issuerTotal}{partial}</span>
-          {issuersNotReady > 0 ? <span className="t-status" style={{ color: "var(--color-text-warning)" }}>{issuersNotReady} not ready</span>
-            : <span className="t-secondary">{issuersEv === "complete" ? "all issuers ready" : issuersEv === "stale" ? "none known not ready (last observed)" : "issuer list incomplete"}</span>}
+          <CountSentence total={issuerTotal} marker={partial} noun={["issuer", "issuers"]}
+            attention={{ count: issuersNotReady, phrase: "not ready", fault: false }}
+            clear={issuersEv === "complete" ? "all issuers ready" : issuersEv === "stale" ? "none known not ready (last observed)" : "issuer list incomplete"} />
         </>
       ) : (
         <>
-          <span className="t-number" style={{ color: "var(--color-text-secondary)" }}>{certTotal}{partial}</span>
-          {attention > 0
-            ? <span className="t-status" style={{ color: failedOrExpired > 0 ? "var(--color-text-danger)" : "var(--color-text-warning)" }}>{failedOrExpired > 0 ? "▲ " : ""}{attention} not ready or expired</span>
-            : <span className="t-secondary">{certsEv === "complete" ? "all ready" : certsEv === "stale" ? "none known not ready (last observed)" : "Certificate list incomplete"}</span>}
+          <CountSentence total={certTotal} marker={partial} noun={["certificate", "certificates"]}
+            attention={{ count: attention, phrase: "not ready or expired", fault: failedOrExpired > 0 }}
+            clear={certsEv === "complete" ? "all ready" : certsEv === "stale" ? "none known not ready (last observed)" : "Certificate list incomplete"} />
           <span className="t-secondary" data-testid="cert-breakdown">{[failedOrExpired ? `${failedOrExpired} failed or expired` : "", issuing ? `${issuing} issuing` : "", renewing ? `${renewing} in renewal window` : "", issuerProblems ? `${issuerProblems} with issuer problem` : ""].filter(Boolean).join(" · ")}{(failedOrExpired || issuing || renewing || issuerProblems) ? asOf : ""}</span>
         </>
       )}
