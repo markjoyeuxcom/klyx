@@ -2,8 +2,6 @@ package fleet
 
 import (
 	"context"
-	"github.com/moomora/klyx/internal/cluster"
-	"k8s.io/client-go/kubernetes"
 	"os"
 	"strings"
 	"testing"
@@ -14,13 +12,16 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	discoveryfake "k8s.io/client-go/discovery/fake"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
 	metadatafake "k8s.io/client-go/metadata/fake"
 	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/moomora/klyx/internal/capability"
 	"github.com/moomora/klyx/internal/clock"
+	"github.com/moomora/klyx/internal/cluster"
 	"github.com/moomora/klyx/internal/config"
+	"github.com/moomora/klyx/internal/gitops/depgraph"
 )
 
 // The Line slice 7a: the last recorded managed-field update, one metadata
@@ -140,4 +141,32 @@ func labConn(t *testing.T) Conn {
 		t.Fatal(err)
 	}
 	return conn
+}
+
+// The Line slice 8b: the dependency graph over the kind lab, read-only. The
+// observability stack's Kustomization reads its GitRepository, which the
+// lab keeps failing: the walk reads both, within its bounds.
+func TestLabDependencyGraph(t *testing.T) {
+	c := labConn(t)
+	g := c.DependencyGraph(context.Background(), "Kustomization", "flux-system", "apps-production-west-europe-observability-stack", "")
+	ids := map[string]depgraph.Node{}
+	for _, n := range g.Nodes {
+		ids[n.ID] = n
+	}
+	start, src := ids["Kustomization/flux-system/apps-production-west-europe-observability-stack"], ids["GitRepository/flux-system/platform"]
+	if start.UID == "" || start.ReadAt.IsZero() || start.Inventory == nil {
+		t.Fatalf("start: %+v", start)
+	}
+	if src.UID == "" || src.Ready != "False" || !src.UpstreamFailure {
+		t.Fatalf("source: %+v", src)
+	}
+	if g.Reads < 2 || g.Reads > depgraph.MaxReads {
+		t.Fatalf("reads %d", g.Reads)
+	}
+	for _, s := range g.Incomplete {
+		if strings.HasPrefix(s, "unreadable") {
+			t.Fatalf("incomplete: %v", g.Incomplete)
+		}
+	}
+	t.Logf("%d nodes, %d edges, %d reads, incomplete %v, proximity %d", len(g.Nodes), len(g.Edges), g.Reads, g.Incomplete, len(g.Proximity))
 }

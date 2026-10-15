@@ -15,6 +15,7 @@ import (
 
 	"github.com/moomora/klyx/internal/fleet"
 	"github.com/moomora/klyx/internal/fluxcli"
+	"github.com/moomora/klyx/internal/gitops/depgraph"
 	"github.com/moomora/klyx/internal/workloads"
 )
 
@@ -92,6 +93,9 @@ func (f *fakeGitOpsConn) ReconcileWithSource(ctx context.Context, kind, ns, name
 	f.reconcileCalls++
 	f.mu.Unlock()
 	return f.reconcileErr
+}
+func (f *fakeGitOpsConn) DependencyGraph(context.Context, string, string, string, string) depgraph.Graph {
+	return depgraph.Graph{}
 }
 func (f *fakeGitOpsConn) SetSuspend(ctx context.Context, kind, ns, name, uid string, suspend bool) error {
 	f.mu.Lock()

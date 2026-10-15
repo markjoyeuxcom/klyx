@@ -19,6 +19,7 @@ import (
 	"github.com/moomora/klyx/internal/crd"
 	"github.com/moomora/klyx/internal/fluxcli"
 	"github.com/moomora/klyx/internal/gitops/argo"
+	"github.com/moomora/klyx/internal/gitops/depgraph"
 	"github.com/moomora/klyx/internal/gwapi"
 	"github.com/moomora/klyx/internal/helmcli"
 	"github.com/moomora/klyx/internal/hubble"
@@ -148,6 +149,9 @@ func (f *fakeConn) RouteMetrics(context.Context, []string) (map[string]routemetr
 }
 func (f *fakeConn) RuleMetrics(context.Context, string, string) (routemetrics.GatewayRules, error) {
 	return routemetrics.GatewayRules{}, nil
+}
+func (f *fakeConn) DependencyGraph(context.Context, string, string, string, string) depgraph.Graph {
+	return depgraph.Graph{}
 }
 func (f *fakeConn) HubbleFlowStats(context.Context) (hubble.FlowStats, hubble.Status) {
 	return hubble.FlowStats{}, hubble.Status{}

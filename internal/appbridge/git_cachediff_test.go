@@ -19,6 +19,7 @@ import (
 	"github.com/moomora/klyx/internal/fluxcli"
 	"github.com/moomora/klyx/internal/gitcache"
 	"github.com/moomora/klyx/internal/gitcli"
+	"github.com/moomora/klyx/internal/gitops/depgraph"
 	"github.com/moomora/klyx/internal/workloads"
 )
 
@@ -74,6 +75,9 @@ func (d *diffConn) FluxEvents(context.Context, string, string, string) ([]worklo
 	return nil, nil
 }
 func (d *diffConn) FluxAvailable() bool { return false }
+func (d *diffConn) DependencyGraph(context.Context, string, string, string, string) depgraph.Graph {
+	return depgraph.Graph{}
+}
 func (d *diffConn) FluxDiffKustomization(context.Context, string, string, string) (fluxcli.DiffResult, error) {
 	return fluxcli.DiffResult{}, errors.New("the flux CLI path ran")
 }

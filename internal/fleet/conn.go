@@ -35,6 +35,7 @@ import (
 	"github.com/moomora/klyx/internal/execenv"
 	"github.com/moomora/klyx/internal/fluxcli"
 	"github.com/moomora/klyx/internal/gitops/argo"
+	"github.com/moomora/klyx/internal/gitops/depgraph"
 	"github.com/moomora/klyx/internal/gwapi"
 	"github.com/moomora/klyx/internal/healthsrc"
 	"github.com/moomora/klyx/internal/helmcli"
@@ -101,6 +102,7 @@ type Conn interface {
 	ClusterMetrics(ctx context.Context, forceReprobe bool) (metrics.ClusterMetrics, metrics.MetricsCapability)
 	RouteMetrics(ctx context.Context, routeKeys []string) (map[string]routemetrics.RouteMetrics, routemetrics.Status)
 	RuleMetrics(ctx context.Context, namespace, name string) (routemetrics.GatewayRules, error)
+	DependencyGraph(ctx context.Context, kind, ns, name, uid string) depgraph.Graph
 	HubbleFlowStats(ctx context.Context) (hubble.FlowStats, hubble.Status)
 	SetCordon(ctx context.Context, nodeName, uid string, cordon bool) error
 	CheckNodeArmed(ctx context.Context, nodeName, uid string) error

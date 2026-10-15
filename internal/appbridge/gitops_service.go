@@ -10,6 +10,7 @@ import (
 
 	"github.com/moomora/klyx/internal/cachediff"
 	"github.com/moomora/klyx/internal/fluxcli"
+	"github.com/moomora/klyx/internal/gitops/depgraph"
 	"github.com/moomora/klyx/internal/gitops/flux"
 	"github.com/moomora/klyx/internal/workloads"
 )
@@ -31,6 +32,8 @@ type GitOpsConn interface {
 	Reconcile(ctx context.Context, kind, ns, name, uid string) error
 	ReconcileWithSource(ctx context.Context, kind, ns, name, uid string) error
 	SetSuspend(ctx context.Context, kind, ns, name, uid string, suspend bool) error
+	// DependencyGraph walks the GitOps dependency graph (The Line slice 8b).
+	DependencyGraph(ctx context.Context, kind, ns, name, uid string) depgraph.Graph
 }
 
 // GitOpsService is bound to JS: the Flux lens's on-demand reads (detail, Git

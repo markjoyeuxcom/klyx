@@ -2,7 +2,6 @@ package line
 
 import (
 	"fmt"
-	"regexp"
 	"strings"
 	"time"
 
@@ -269,13 +268,11 @@ func argoRef(target string) (string, string) {
 	return RefUnqualified, t
 }
 
-var dependencyName = regexp.MustCompile(`dependency '([^']+)'`)
-
 // blockedBy reads the dependency a DependencyNotReady message names, as
 // Flux words it ("dependency 'flux-system/infra' is not ready").
 func blockedBy(msg string) string {
-	if m := dependencyName.FindStringSubmatch(msg); m != nil {
-		return m[1]
+	if dep, ok := flux.DependencyNamed(msg); ok {
+		return dep
 	}
 	return "a dependency"
 }

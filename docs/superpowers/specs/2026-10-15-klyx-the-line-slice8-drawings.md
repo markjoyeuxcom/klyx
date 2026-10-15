@@ -101,6 +101,21 @@ Each is Codex-reviewed on its own, in this order.
     - the commits in T ^applied that touch the path (`gitcli.Repo.Log` gains a pathspec), at most 50, and the changed files between them (`DiffNames`, name-status from trees only), with T's fetch freshness;
     - or an explicit unavailable state: a different or unsupported key, applied ahead of T, diverged, or history missing from the cache.
 
+### 3.1 As built in 8b-1 (the graph; Git's "not here yet" is 8b-2)
+
+- **The builder** is `internal/gitops/depgraph` (pure, over a `Reader`); the fleet reader (`ClusterConn.DependencyGraph`) reads each kind at its served version through the cached discovery, and Secrets through the metadata client.
+- **The controllers' words** were read from kustomize-controller v1.9.6 and helm-controller v1.6.5: both use `DependencyNotReady` with "dependency '<ns>/<name>' …" (is not ready, not found, not ready according to readyExpr) and `ArtifactFailed`. `ArtifactFailed` also covers a missing `spec.path`, so a source edge is reported only when the source is not Ready or not found. The parser moved to `flux.DependencyNamed`, which the line now uses too.
+- **A HelmRelease's source** is its `chartRef`, else the HelmChart its `status.helmChart` records, else the chart template's `sourceRef`; a HelmChart's source is its own `sourceRef`.
+- **Supply** follows a GitRepository's, OCIRepository's, Bucket's or HelmRepository's `spec.secretRef`, and a Kustomization's `spec.decryption.secretRef`.
+- **The 24 reads** count node GETs, Secret metadata GETs and ExternalSecret GETs alike.
+- **Not found** is a stub that is a fact, not incomplete evidence: it can end a reported chain ("dependency '…' not found").
+- **Replaced** applies to the selection: Flux's references carry no UID. A Secret's owner reference whose ExternalSecret now has another UID names nobody, with a note.
+- **Each node carries** its Ready condition with the condition's own `observedGeneration`, the object's generations, and its last update and last main-resource update.
+- **Workloads** in the inventory line are apps Deployments, StatefulSets and DaemonSets, and batch Jobs and CronJobs.
+- **Git facts** come only from a Kustomization bound to a GitRepository that was read, with an applied revision that parses as Git.
+- **The binding:** `GitOpsService.DependencyGraph(ctx, cluster, kind, ns, name, uid)`, with the 30-second action timeout derived from the caller's context. `bridge/depGraph.ts` returns the generated `CancellablePromise` unwrapped.
+- **Live:** `TestLabDependencyGraph` walks the kind lab, read-only.
+
 ## 4. 8c: the dependency graph drawing
 
 - **Where:** the Flux inspector gains a "Dependencies" section that replaces "blocked by". The source section stays.

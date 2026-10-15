@@ -3,6 +3,7 @@
 package flux
 
 import (
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -115,6 +116,25 @@ func staleness(u *unstructured.Unstructured) (stale bool, gen, observed int64) {
 type DependencyRef struct {
 	Namespace string
 	Name      string
+}
+
+// Flux's reasons for a reconcile blocked upstream, the same in the
+// kustomize- and helm-controllers (v1.9.6 / v1.6.5).
+const (
+	ReasonDependencyNotReady = "DependencyNotReady"
+	ReasonArtifactFailed     = "ArtifactFailed"
+)
+
+var dependencyName = regexp.MustCompile(`dependency '([^']+)'`)
+
+// DependencyNamed reads the dependency a DependencyNotReady message names,
+// as both controllers word it: "dependency '<ns>/<name>' is not ready", "...
+// not found: ..." or "... is not ready according to readyExpr eval".
+func DependencyNamed(msg string) (string, bool) {
+	if m := dependencyName.FindStringSubmatch(msg); m != nil {
+		return m[1], true
+	}
+	return "", false
 }
 
 // parseDependsOn reads spec.dependsOn; namespace defaults to the object's own.
