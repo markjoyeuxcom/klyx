@@ -160,7 +160,11 @@ git:
 ### 5.4 As built in 6c
 
 - **Loading** (`config.ApprovedGitRepos`) ignores an entry whose URL fails §5.1, and a second entry with the same URL. A bad `web` link or `matches` key is dropped on its own; the entry stays. The notes join fleet.yaml's load warnings.
-- **No note repeats a credential** (revised in design review of 28a8bff). A refused URL is named only redacted (`config.RedactURL`): scheme, host and path, a scp-like URL as host:path, anything else not at all. A rejected match or web link is named by its index and reason, never its value.
+- **No note repeats a credential** (revised in design reviews of 28a8bff and 3770529).
+  - A refused URL is named only redacted (`config.RedactURL`): a scheme URL as scheme, host and path when it parses, else not at all; a scp-like URL as host:path; anything else not at all.
+  - A rejected match or web link is named by its index and reason, never its value. `ValidateApprovedURL` no longer repeats the URL in its parse error.
+  - `line.NormalizeRepo` reads an unparsable scheme URL by hand, without its user info, query or fragment, and drops a bare `user@` prefix, since a key is shown on the board.
+  - An unapproved row with no valid key is named redacted and serves nothing (`serves` is empty); it is approved by typing the URL that will run.
 - **The writer** (`config.SaveGit`, through the generalised `saveTopLevelBlock`) writes the entries it is given, as given. An entry the owner wrote that loading ignores stays in the file untouched. `GitService` validates every entry it adds: the URL (§5.1), the web link (https, no user, query or fragment) and each key (a normalised `host/path`).
 - **One key, two entries:** the first in fleet.yaml order serves it, and a note says so.
 - **The clusters' URLs** come from `LineService`, recorded beside each LineDTO from the rows it already holds: Flux `GitRepository` URLs, and Argo sources without a chart (values-only `ref` sources included). They are matched by `NormalizeRepo`. Settings shows one as written only when it passes §5.1 as it stands, so it carries no credential; otherwise it is redacted like a refused entry. `Scrub`, for error text, keeps an SSH user (`git@`), since it is not a secret. It drops all http(s) userinfo, any other URL's password, and every query.

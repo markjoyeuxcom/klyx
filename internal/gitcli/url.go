@@ -33,7 +33,7 @@ func ValidateApprovedURL(raw string) error {
 	}
 	u, err := url.Parse(s)
 	if err != nil {
-		return fmt.Errorf("not a URL: %v", err)
+		return fmt.Errorf("not a parsable URL") // the parse error repeats the URL
 	}
 	if u.Host == "" {
 		return fmt.Errorf("no host")

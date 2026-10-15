@@ -41,11 +41,13 @@ function state(over: Partial<GitSettings> = {}): GitSettings {
     unapproved: [
       {
         key: "git.internal/infra",
+        serves: "git.internal/infra",
         sources: [{ cluster: "stg", origin: "GitRepository", namespace: "flux-system", name: "infra", url: "https://git.internal/infra.git" }],
         refused: "only https and ssh run, not \"http\"",
       },
       {
         key: "github.com/acme/tools",
+        serves: "github.com/acme/tools",
         sources: [{ cluster: "stg", origin: "Application", namespace: "argocd", name: "tools", url: "https://github.com/acme/tools.git" }],
         suggest: "https://github.com/acme/tools.git",
       },
@@ -150,5 +152,20 @@ describe("GitSettingsPanel", () => {
     render(<GitSettingsPanel />);
     expect((await screen.findByTestId("git-refused-helpers")).textContent).toContain("shell snippet");
     expect(screen.getByTestId("git-note").textContent).toContain("never fetched");
+  });
+});
+
+describe("GitSettingsPanel without a repository key", () => {
+  it("approves with no serves when the clusters' URL names no repository", async () => {
+    bridge.getGitSettings.mockResolvedValue(state({
+      unapproved: [{ key: "(an unrecognised URL)", serves: "", sources: [{ cluster: "stg", origin: "Application", namespace: "argocd", name: "x", url: "(an unrecognised URL)" }], refused: "not a parsable URL" }],
+    }));
+    render(<GitSettingsPanel />);
+    fireEvent.click(within(await screen.findByTestId("git-unapproved")).getByRole("button", { name: "Approve…" }));
+    const dialog = screen.getByRole("dialog");
+    expect(dialog.textContent).toContain("serves only its own");
+    fireEvent.change(within(dialog).getByLabelText("URL to approve"), { target: { value: "git@github.com:acme/x.git" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Approve" }));
+    await waitFor(() => expect(bridge.approveGitRepo).toHaveBeenCalledWith("git@github.com:acme/x.git", "", ""));
   });
 });

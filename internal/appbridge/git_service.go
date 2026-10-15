@@ -175,7 +175,8 @@ type GitSourceDTO struct {
 
 // GitUnapprovedDTO is a repository the clusters use that no entry serves.
 type GitUnapprovedDTO struct {
-	Key     string         `json:"key"`
+	Key     string         `json:"key"`    // the repository key, or a redacted URL when there is no valid key
+	Serves  string         `json:"serves"` // the key an approval from this row serves; "" when there is none
 	Sources []GitSourceDTO `json:"sources"`
 	// Suggest is the cluster's URL, scrubbed, when it could be approved as
 	// it stands; Refused says why it could not be.
@@ -248,7 +249,12 @@ func (s *GitService) GetGitSettings() GitSettingsDTO {
 	}
 	sort.Strings(keys)
 	for _, k := range keys {
-		u := GitUnapprovedDTO{Key: k, Sources: unapproved[k]}
+		u := GitUnapprovedDTO{Key: k, Serves: k, Sources: unapproved[k]}
+		if config.ValidRepoKey(k) != nil {
+			// No valid key (an unparsable URL): named redacted, approvable
+			// only by typing the URL that will run.
+			u.Key, u.Serves = config.RedactURL(raw[k][0]), ""
+		}
 		// The first of the clusters' spellings that could run as written.
 		for _, rawURL := range raw[k] {
 			if err := gitcli.ValidateApprovedURL(rawURL); err == nil {

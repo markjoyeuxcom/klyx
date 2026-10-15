@@ -2,6 +2,7 @@ package appbridge
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -306,5 +307,40 @@ func TestGitSourcesAreFluxGitRepositoriesAndArgoGitSources(t *testing.T) {
 		"Application https://github.com/acme/values.git"}
 	if !reflect.DeepEqual(urls, want) {
 		t.Fatalf("git sources %q", urls)
+	}
+}
+
+// No credential in a malformed URL - from a cluster or from fleet.yaml -
+// reaches anything Settings > Git is given (design review of 3770529).
+func TestNoSentinelReachesTheSettingsDTO(t *testing.T) {
+	fleet := gitFleet + `    - url: https://ghp_SENTINEL_A@github.com/acme/repo%zz
+    - url: "u:SENTINEL_B@github.com:acme/x.git"
+    - url: SENTINEL_C@github.com/acme/bare
+`
+	h := newGitHarness(t, fleet, nil)
+	extra := []LineGitSource{
+		{Cluster: "prd", Origin: "Application", Namespace: "argocd", Name: "a", URL: "https://ghp_SENTINEL_D@github.com/acme/repo%zz"},
+		{Cluster: "prd", Origin: "Application", Namespace: "argocd", Name: "b", URL: "https://SENTINEL_E:pw@git.internal/r%zz?SENTINEL_F"},
+		{Cluster: "prd", Origin: "Application", Namespace: "argocd", Name: "c", URL: "SENTINEL_G@github.com/acme/bare"},
+		{Cluster: "prd", Origin: "Application", Namespace: "argocd", Name: "d", URL: "u:SENTINEL_H@git.internal:infra.git"},
+	}
+	base := h.svc.d.Sources
+	h.svc.d.Sources = func() []LineGitSource { return append(base(), extra...) }
+	d := h.svc.GetGitSettings()
+	b, err := json.Marshal(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), "SENTINEL") {
+		t.Fatalf("a sentinel reached the settings DTO:\n%s", b)
+	}
+	// The malformed URLs still appear, redacted, so the owner can act.
+	if !strings.Contains(string(b), "(an unrecognised URL)") || !strings.Contains(string(b), "github.com/acme/repo") {
+		t.Fatalf("the redacted rows are missing:\n%s", b)
+	}
+	for _, u := range d.Unapproved {
+		if u.Serves != "" && config.ValidRepoKey(u.Serves) != nil {
+			t.Fatalf("an approval would serve an invalid key %q", u.Serves)
+		}
 	}
 }

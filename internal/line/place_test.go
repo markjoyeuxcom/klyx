@@ -102,6 +102,17 @@ func TestNormalizeRepo(t *testing.T) {
 	if got := NormalizeRepo("https://git.example:8443/Acme/Fleet"); got != "git.example:8443/Acme/Fleet" {
 		t.Errorf("a non-default port and the path's case stay: %q", got)
 	}
+	// A key is shown: an unparsable URL, or a bare user@ prefix, never keeps
+	// its user info, query or fragment (slice 6c design review).
+	for in, want := range map[string]string{
+		"https://ghp_tok@github.com/acme/fleet%zz":    "github.com/acme/fleet%zz",
+		"https://u:pw@GitHub.com/acme/fleet%zz?t=1#x": "github.com/acme/fleet%zz",
+		"ghp_tok@github.com/acme/fleet":               "github.com/acme/fleet",
+	} {
+		if got := NormalizeRepo(in); got != want {
+			t.Errorf("%q: %q, want %q", in, got, want)
+		}
+	}
 }
 
 func TestMeshRules(t *testing.T) {

@@ -163,9 +163,9 @@ export function GitSettingsPanel() {
           item={approving}
           onCancel={() => setApproving(null)}
           onApprove={(url, web) => {
-            const key = approving.key;
+            const serves = approving.serves;
             setApproving(null);
-            void run(url, () => approveGitRepo(url, web, key), `Approved ${url}. Fetch it now, or let the fleet screen fetch it.`);
+            void run(url, () => approveGitRepo(url, web, serves), `Approved ${url}. Fetch it now, or let the fleet screen fetch it.`);
           }}
         />
       )}
@@ -300,7 +300,8 @@ function ApproveDialog({ item, onCancel, onApprove }: { item: GitUnapproved; onC
       )}
       <div style={{ ...hint, lineHeight: 1.5 }}>
         It runs through your system git, with your SSH agent and ~/.ssh/config or your credential helper. An SSH host alias resolves through your own
-        ~/.ssh/config, as written. This entry will serve <span style={mono}>{item.key}</span>, the repository these clusters use.
+        ~/.ssh/config, as written.{" "}
+        {item.serves ? <>This entry will serve <span style={mono}>{item.serves}</span>, the repository these clusters use.</> : "The clusters' URL names no repository Klyx can match, so this entry serves only its own."}
       </div>
       <label style={{ display: "grid", gap: 4 }}>
         <span style={{ fontSize: 11, color: "var(--color-text-secondary)" }}>&quot;Open in Git&quot; link (optional, https) for a host Klyx does not know</span>

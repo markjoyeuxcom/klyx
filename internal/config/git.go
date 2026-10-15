@@ -60,8 +60,13 @@ var scpHostPath = regexp.MustCompile(`^(?:[^@/]*@)?([^:/@]+):(.+)$`)
 // credential: scheme, host and path only, a scp-like URL as host:path,
 // anything else not at all.
 func RedactURL(s string) string {
-	if u, err := url.Parse(s); err == nil && u.Scheme != "" && u.Host != "" {
-		return u.Scheme + "://" + u.Host + u.Path
+	if strings.Contains(s, "://") {
+		// A scheme URL is named only when it parses; the scp form never
+		// applies to one (a bad escape would read "https" as a host).
+		if u, err := url.Parse(s); err == nil && u.Scheme != "" && u.Host != "" {
+			return u.Scheme + "://" + u.Host + u.Path
+		}
+		return "(an unrecognised URL)"
 	}
 	if m := scpHostPath.FindStringSubmatch(s); m != nil {
 		return m[1] + ":" + m[2]

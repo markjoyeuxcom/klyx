@@ -24,7 +24,7 @@ export type GitRepo = {
   fetching: boolean;
 };
 
-export type GitUnapproved = { key: string; sources: GitSource[]; suggest?: string; refused?: string };
+export type GitUnapproved = { key: string; serves: string; sources: GitSource[]; suggest?: string; refused?: string };
 
 export type GitSettings = {
   path: string;

@@ -61,19 +61,44 @@ func NormalizeRepo(raw string) string {
 		return ""
 	}
 	var host, path string
-	if u, err := url.Parse(s); err == nil && u.Scheme != "" && u.Host != "" {
+	u, err := url.Parse(s)
+	switch {
+	case err == nil && u.Scheme != "" && u.Host != "":
 		host, path = u.Hostname(), u.Path
 		if p := u.Port(); p != "" && !defaultPort(u.Scheme, p) {
 			host += ":" + p
 		}
-	} else if m := scpLike.FindStringSubmatch(s); m != nil {
-		host, path = m[1], m[2]
-	} else {
+	case err != nil && strings.Contains(s, "://"):
+		// A scheme URL url.Parse refused (a bad escape): host and path read
+		// by hand, never its user info, query or fragment - a key is shown.
+		host, path = schemeHostPath(s)
+	default:
+		if m := scpLike.FindStringSubmatch(s); m != nil {
+			host, path = m[1], m[2]
+			break
+		}
+		if at := strings.IndexByte(s, '@'); at >= 0 && !strings.ContainsAny(s[:at], "/:") {
+			s = s[at+1:] // a user@ prefix is never part of a key
+		}
 		return strings.TrimSuffix(strings.TrimRight(s, "/"), ".git")
 	}
 	path = strings.Trim(path, "/")
 	path = strings.TrimSuffix(path, ".git")
 	return strings.ToLower(host) + "/" + path
+}
+
+// schemeHostPath reads scheme://[userinfo@]host/path[?query][#fragment]
+// without parsing escapes, dropping the userinfo, query and fragment.
+func schemeHostPath(s string) (string, string) {
+	rest := s[strings.Index(s, "://")+3:]
+	if j := strings.IndexAny(rest, "?#"); j >= 0 {
+		rest = rest[:j]
+	}
+	auth, path, _ := strings.Cut(rest, "/")
+	if at := strings.LastIndexByte(auth, '@'); at >= 0 {
+		auth = auth[at+1:]
+	}
+	return auth, path
 }
 
 func defaultPort(scheme, port string) bool {
