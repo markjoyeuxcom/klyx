@@ -211,6 +211,19 @@ Rulings on the seven open points:
   - a 60,000-pod Observer kind stops at 40,000 entries, retaining 11 MiB against 23 MiB charged (the entries share the Observer's strings);
   - the kind lab: every default kind settles live in 149 ms, 412 entries.
 
+### 9.1 Review of c03308d
+
+Nine findings, all taken:
+- **Transport buffers:** the index reads over HTTP/1.1 only (`fleetindex.NewReader` sets `NextProtos`): over HTTP/2 client-go's transport buffers up to a 4 MiB stream window ahead of the scanner. The reader closes its idle connections after every stream, through client-go's wrappers (`CloseIdleConnectionsFor`), so only open streams hold buffers; an unread body holds about 100 KiB, inside the 256 KiB reserve.
+- **Map capacity:** a kind's map slots are charged at their high-water mark (64 B each; an entry itself is 192 B), because a Go map never shrinks. A kind whose entries fall to a quarter of at least 1,024 slots is compacted, admitting the new map before the old capacity is released.
+- **No input-sized copies:** `VisitKind`'s state carries no tally (computing one copies the model). An Observer object's labels are chosen with a bounded heap of the 64 smallest keys, never by sorting every key.
+- **Label count:** at most 64 labels are kept (`MaxLabels`) as well as 2 KiB; empty keys are never kept.
+- **An expired continue** restarts the list under a fresh mark, so the abandoned snapshot's objects are swept.
+- **Recovery:** an accepted watch restores the kind to live.
+- **Counts:** coverage reports the entries the store holds now, watch events included.
+- **Validation:** a page completes only with its whole envelope (the list's kind first, metadata with a resourceVersion, items) and nothing after it. Items and events need a UID, and an unknown event type is malformed. Every skipped value is validated as it streams (grammar, escapes, control characters, nesting at most 512 deep).
+- **Continue tokens** are kept whole up to 4 KiB (the scratch is sized to the largest bound) and refused past it as oversize.
+
 ## 10. As built: 9b
 
 - **The role view:** `Observer.RolesNow(ctx, []RoleQuery{UID, Source}) ([]RoleView, bool)` is served on the loop goroutine through its own request channel, beside the rows bootstrap. A query names the Observer kind the object came from, so a capped source and a kind with no ledger are told apart from an object not observed:

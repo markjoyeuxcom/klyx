@@ -33,7 +33,7 @@ type scanner struct {
 	r        io.Reader
 	buf      [scanBuffer]byte
 	pos, end int
-	scratch  [fieldBytes + 4]byte // a kept string, decoded
+	scratch  [continueBytes + 4]byte // a kept string, decoded: the largest bound a read declares
 }
 
 func newScanner(r io.Reader) *scanner { return &scanner{r: r} }
@@ -110,6 +110,9 @@ func (s *scanner) str(limit int) (string, bool, error) {
 		return "", false, err
 	}
 	n, over := 0, false
+	if limit > continueBytes {
+		limit = continueBytes
+	}
 	put := func(b ...byte) {
 		if over || n+len(b) > limit {
 			over = true
@@ -226,7 +229,8 @@ func (s *scanner) hex4() (rune, error) {
 	return r, nil
 }
 
-// skipString consumes a string without keeping it.
+// skipString consumes a string without keeping it, validating it as
+// encoding/json would: known escapes only, no control characters.
 func (s *scanner) skipString() error {
 	if err := s.expect('"'); err != nil {
 		return err
@@ -236,19 +240,40 @@ func (s *scanner) skipString() error {
 		if err != nil {
 			return err
 		}
-		switch c {
-		case '"':
+		switch {
+		case c == '"':
 			return nil
-		case '\\':
-			if _, err := s.byte(); err != nil {
+		case c == '\\':
+			e, err := s.byte()
+			if err != nil {
 				return err
 			}
+			switch e {
+			case '"', '\\', '/', 'b', 'f', 'n', 'r', 't':
+			case 'u':
+				if _, err := s.hex4(); err != nil {
+					return err
+				}
+			default:
+				return fmt.Errorf("fleetindex: bad escape %q", e)
+			}
+		case c < 0x20:
+			return fmt.Errorf("fleetindex: control character in string")
 		}
 	}
 }
 
-// skip consumes one value of any size without keeping it.
-func (s *scanner) skip() error {
+// maxDepth bounds a skipped value's nesting (the scanner's recursion).
+const maxDepth = 512
+
+// skip consumes one value of any size without keeping it, validating its
+// grammar as it streams past.
+func (s *scanner) skip() error { return s.skipAt(0) }
+
+func (s *scanner) skipAt(depth int) error {
+	if depth > maxDepth {
+		return fmt.Errorf("fleetindex: a value nested deeper than %d", maxDepth)
+	}
 	c, err := s.peek()
 	if err != nil {
 		return err
@@ -256,62 +281,143 @@ func (s *scanner) skip() error {
 	switch c {
 	case '"':
 		return s.skipString()
-	case '{', '[':
+	case '{':
 		s.pos++
-		depth := 1
-		for depth > 0 {
+		if c, err := s.peek(); err != nil {
+			return err
+		} else if c == '}' {
+			s.pos++
+			return nil
+		}
+		for {
+			if err := s.skipString(); err != nil {
+				return err
+			}
+			if err := s.expect(':'); err != nil {
+				return err
+			}
+			if err := s.skipAt(depth + 1); err != nil {
+				return err
+			}
 			c, err := s.peek()
 			if err != nil {
 				return err
 			}
+			s.pos++
 			switch c {
-			case '"':
-				if err := s.skipString(); err != nil {
-					return err
-				}
-				continue
-			case '{', '[':
-				depth++
-			case '}', ']':
-				depth--
+			case ',':
+			case '}':
+				return nil
+			default:
+				return fmt.Errorf("fleetindex: want ',' or '}', got %q", c)
+			}
+		}
+	case '[':
+		s.pos++
+		if c, err := s.peek(); err != nil {
+			return err
+		} else if c == ']' {
+			s.pos++
+			return nil
+		}
+		for {
+			if err := s.skipAt(depth + 1); err != nil {
+				return err
+			}
+			c, err := s.peek()
+			if err != nil {
+				return err
 			}
 			s.pos++
+			switch c {
+			case ',':
+			case ']':
+				return nil
+			default:
+				return fmt.Errorf("fleetindex: want ',' or ']', got %q", c)
+			}
 		}
-		return nil
 	default:
 		_, err := s.literal()
 		return err
 	}
 }
 
-// literal reads a number, true, false or null (bounded: a literal has no
-// legitimate reason to be long).
+// literal reads a number, true, false or null, validated (bounded: a
+// literal has no legitimate reason to be long).
 func (s *scanner) literal() (string, error) {
 	if _, err := s.peek(); err != nil {
 		return "", err
 	}
+	var b [64]byte
 	n := 0
 	for {
 		if err := s.fill(); err != nil {
 			if n > 0 && errors.Is(err, io.ErrUnexpectedEOF) {
-				return string(s.scratch[:n]), nil
+				break
 			}
 			return "", err
 		}
 		c := s.buf[s.pos]
-		if c == ',' || c == '}' || c == ']' || c == ' ' || c == '\t' || c == '\n' || c == '\r' {
-			if n == 0 {
-				return "", fmt.Errorf("fleetindex: want a value, got %q", c)
-			}
-			return string(s.scratch[:n]), nil
+		if c == ',' || c == '}' || c == ']' || c == ':' || c == ' ' || c == '\t' || c == '\n' || c == '\r' {
+			break
 		}
-		if n >= 64 {
+		if n >= len(b) {
 			return "", fmt.Errorf("fleetindex: literal too long")
 		}
-		s.scratch[n] = c
+		b[n] = c
 		n++
 		s.pos++
 	}
+	lit := b[:n]
+	switch string(lit) {
+	case "true", "false", "null":
+		return string(lit), nil
+	}
+	if !validNumber(lit) {
+		return "", fmt.Errorf("fleetindex: not a JSON value: %q", lit)
+	}
+	return string(lit), nil
+}
+
+// validNumber is JSON's number grammar.
+func validNumber(b []byte) bool {
+	i := 0
+	if i < len(b) && b[i] == '-' {
+		i++
+	}
+	switch {
+	case i < len(b) && b[i] == '0':
+		i++
+	case i < len(b) && b[i] >= '1' && b[i] <= '9':
+		for i < len(b) && b[i] >= '0' && b[i] <= '9' {
+			i++
+		}
+	default:
+		return false
+	}
+	if i < len(b) && b[i] == '.' {
+		i++
+		if i >= len(b) || b[i] < '0' || b[i] > '9' {
+			return false
+		}
+		for i < len(b) && b[i] >= '0' && b[i] <= '9' {
+			i++
+		}
+	}
+	if i < len(b) && (b[i] == 'e' || b[i] == 'E') {
+		i++
+		if i < len(b) && (b[i] == '+' || b[i] == '-') {
+			i++
+		}
+		if i >= len(b) || b[i] < '0' || b[i] > '9' {
+			return false
+		}
+		for i < len(b) && b[i] >= '0' && b[i] <= '9' {
+			i++
+		}
+	}
+	return i == len(b)
 }
 
 // fields calls f with each key of an object; f must consume its value. A
@@ -463,13 +569,14 @@ func (s *scanner) meta(src *Source, rv *string) error {
 	return nil
 }
 
-// labels keeps the first LabelBytes of labels in the order sent (key order
-// from a Kubernetes API server) and hashes every one. A key or value over
-// fieldBytes is oversize; a null value reads as "", as encoding/json reads
-// it into a map.
+// labels keeps the first MaxLabels labels, at most LabelBytes, in the order
+// sent (key order from a Kubernetes API server), and hashes every one. An
+// empty key (never a valid label) is hashed but not kept. A key or value
+// over fieldBytes is oversize; a null value reads as "", as encoding/json
+// reads it into a map.
 func (s *scanner) labels(src *Source) error {
 	src.scanned, src.kept, src.truncated, src.hash = true, nil, false, 0
-	total := 0
+	total, full := 0, false
 	return s.fieldsWith(fieldBytes, func(k string, over bool) error {
 		if over {
 			return ErrOversize
@@ -490,11 +597,14 @@ func (s *scanner) labels(src *Source) error {
 			return err
 		}
 		src.hash += pairHash(k, v)
-		if !src.truncated && total+len(k)+len(v) <= LabelBytes {
+		switch {
+		case k == "":
+			src.truncated = true
+		case !full && len(src.kept) < MaxLabels && total+len(k)+len(v) <= LabelBytes:
 			src.kept = append(src.kept, Label{Key: k, Value: v})
 			total += len(k) + len(v)
-		} else {
-			src.truncated = true
+		default:
+			full, src.truncated = true, true
 		}
 		return nil
 	})

@@ -40,10 +40,13 @@ type kindStore struct {
 	desc    kindDesc
 	class   Class
 	entries map[string]*Entry // by UID
-	bytes   int64             // charged, the kind's overhead included
-	status  KindStatus
-	frozen  bool
-	mark    uint64 // the read in progress
+	bytes   int64             // charged, the kind's overhead and map slots included
+	// slots is the map's charged capacity: its high-water entry count, kept
+	// after deletions (a Go map never shrinks) until a compaction.
+	slots  int
+	status KindStatus
+	frozen bool
+	mark   uint64 // the read in progress
 }
 
 // clusterStore is one cluster's index. Every write names the acquisition
@@ -167,15 +170,45 @@ func (c *clusterStore) put(gen uint64, kind string, mark uint64, s Source) int {
 		return putApplied
 	}
 	size := estimate(s)
-	if !c.budget.Admit(c.cluster, k.class, 1, size) {
+	slot := int64(0)
+	if len(k.entries) >= k.slots {
+		slot = mapSlot // the map grows past its charged capacity
+	}
+	if !c.budget.Admit(c.cluster, k.class, 1, size+slot) {
 		c.freezeLocked(k)
 		return putCapped
+	}
+	if slot > 0 {
+		k.slots++
+		k.bytes += slot
 	}
 	e := build(s, hash, size)
 	e.mark = max(mark, k.mark)
 	k.entries[s.UID] = e
 	k.bytes += size
 	return putApplied
+}
+
+// compactLocked rebuilds a kind's map once most of its charged capacity is
+// empty: the new map's slots are admitted first (the old map is live until
+// the swap), then the old capacity is released. Refused, it waits.
+func (c *clusterStore) compactLocked(k *kindStore) {
+	n := len(k.entries)
+	if k.slots < 1024 || n > k.slots/4 {
+		return
+	}
+	scratch := int64(n) * mapSlot
+	if !c.budget.Admit(c.cluster, k.class, 0, scratch) {
+		return
+	}
+	next := make(map[string]*Entry, n)
+	for uid, e := range k.entries {
+		next[uid] = e
+	}
+	k.entries = next
+	c.budget.Release(c.cluster, 0, int64(k.slots)*mapSlot)
+	k.bytes += scratch - int64(k.slots)*mapSlot
+	k.slots = n
 }
 
 // remove applies a watch deletion.
@@ -190,6 +223,7 @@ func (c *clusterStore) remove(gen uint64, kind, uid string) bool {
 		delete(k.entries, uid)
 		k.bytes -= e.size
 		c.budget.Release(c.cluster, 1, e.size)
+		c.compactLocked(k)
 	}
 	return true
 }
@@ -211,7 +245,7 @@ func (c *clusterStore) endRead(gen uint64, kind string, mark uint64, st KindStat
 			c.budget.Release(c.cluster, 1, e.size)
 		}
 	}
-	st.Entries = len(k.entries)
+	c.compactLocked(k)
 	k.status = st
 	return true
 }
@@ -305,7 +339,9 @@ func (c *clusterStore) status() map[string]KindStatus {
 	defer c.mu.RUnlock()
 	out := make(map[string]KindStatus, len(c.kinds))
 	for name, k := range c.kinds {
-		out[name] = k.status
+		st := k.status
+		st.Entries = len(k.entries) // what the store holds now, watch events included
+		out[name] = st
 	}
 	return out
 }

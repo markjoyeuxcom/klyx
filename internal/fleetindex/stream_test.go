@@ -140,7 +140,7 @@ func TestWatchAppliesEventsInOrder(t *testing.T) {
 	defer srv.Close()
 	r := &Reader{Client: srv.Client(), Host: srv.URL}
 	var evs []string
-	rv, err := r.Watch(context.Background(), cmGVR, "77", time.Minute, func(ev string, s Source) error { evs = append(evs, ev+" "+s.Name); return nil })
+	rv, err := r.Watch(context.Background(), cmGVR, "77", time.Minute, nil, func(ev string, s Source) error { evs = append(evs, ev+" "+s.Name); return nil })
 	if err != nil || rv != "101" {
 		t.Fatalf("rv %q err %v", rv, err)
 	}
@@ -159,7 +159,7 @@ func TestWatchErrorEventAndCancel(t *testing.T) {
 	}))
 	defer srv.Close()
 	r := &Reader{Client: srv.Client(), Host: srv.URL}
-	if _, err := r.Watch(context.Background(), cmGVR, "1", time.Minute, func(string, Source) error { return nil }); codeOf(err) != 410 {
+	if _, err := r.Watch(context.Background(), cmGVR, "1", time.Minute, nil, func(string, Source) error { return nil }); codeOf(err) != 410 {
 		t.Fatalf("err %v", err)
 	}
 	// a cancelled context ends an open watch at once
@@ -178,7 +178,7 @@ func TestWatchErrorEventAndCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		_, err := (&Reader{Client: open.Client(), Host: open.URL}).Watch(ctx, cmGVR, "1", time.Minute, func(string, Source) error { return nil })
+		_, err := (&Reader{Client: open.Client(), Host: open.URL}).Watch(ctx, cmGVR, "1", time.Minute, nil, func(string, Source) error { return nil })
 		done <- err
 	}()
 	time.Sleep(50 * time.Millisecond)
@@ -286,7 +286,7 @@ func TestWatchesRetainNoLargeBuffers(t *testing.T) {
 	for w := 0; w < watches; w++ {
 		go func() {
 			n := 0
-			r.Watch(ctx, cmGVR, "0", time.Minute, func(_ string, s Source) error {
+			r.Watch(ctx, cmGVR, "0", time.Minute, nil, func(_ string, s Source) error {
 				size := estimate(s)
 				e := build(s, s.labelsHash(), size)
 				mu.Lock()

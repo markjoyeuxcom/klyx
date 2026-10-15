@@ -525,7 +525,13 @@ func (c *coord) acquire(ctx context.Context, gen uint64, acq Acquire, p planned,
 				c.store.capKind(gen, key)
 				return
 			}
-			next, werr := acq.Reader.Watch(ctx, gvr, rv, s.WatchTimeout, func(ev string, src Source) error {
+			opened := func() {
+				// an accepted watch is live again, whatever failed before it
+				now := s.Clock()
+				lastGood = &now
+				c.store.setStatus(gen, key, p.class, KindStatus{State: StateLive})
+			}
+			next, werr := acq.Reader.Watch(ctx, gvr, rv, s.WatchTimeout, opened, func(ev string, src Source) error {
 				if ev == EvDeleted {
 					if !c.store.remove(gen, key, src.UID) {
 						return errStop
@@ -623,7 +629,12 @@ func (c *coord) list(ctx context.Context, gen uint64, rd *Reader, p planned, gvr
 		c.ix.budget.Release(c.name, 0, StreamReserve)
 		if err != nil {
 			if codeOf(err) == http.StatusGone && cont != "" {
-				cont = "" // the continue token expired: restart, same mark
+				// the continue token expired: a fresh snapshot under a fresh
+				// mark, so what only the abandoned one held is swept
+				cont = ""
+				if mark, ok = c.store.beginRead(gen, key, p.class); !ok {
+					return "", errStop
+				}
 				continue
 			}
 			if codeOf(err) == http.StatusForbidden {

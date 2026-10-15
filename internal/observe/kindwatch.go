@@ -132,7 +132,12 @@ func (o *Observer) notifyKindLocked(ks *kindState) {
 }
 
 // kindStateLocked captures ks's state. Caller holds o.mu.
-func (o *Observer) kindStateLocked(ks *kindState) KindState {
+func (o *Observer) kindStateLocked(ks *kindState) KindState { return o.kindStateWith(ks, true) }
+
+// kindStateWith captures ks's state, with its tally when asked: a tally
+// walks the whole model, which VisitKind's caller never needs. Caller holds
+// o.mu.
+func (o *Observer) kindStateWith(ks *kindState, tally bool) KindState {
 	st := KindState{Kind: ks.spec.Name, GVR: ks.servedGVR, Seq: ks.stateSeq}
 	g := ks.gen
 	if g == nil {
@@ -144,7 +149,7 @@ func (o *Observer) kindStateLocked(ks *kindState) KindState {
 	st.Coverage, st.Class, st.Err = f.cov, f.class, f.err
 	if f.cov == Live || f.cov == Stale {
 		st.CountKnown, st.Objects = true, len(g.model)
-		if ks.spec.Tally != nil {
+		if tally && ks.spec.Tally != nil {
 			objs := make([]any, 0, len(g.model))
 			for _, o := range g.model {
 				objs = append(objs, o)
@@ -180,7 +185,8 @@ func (o *Observer) Kinds() []KindInfo {
 // VisitKind calls visit with each object of kind's current model, under
 // the Observer's lock, and returns the kind's state captured in the same
 // critical section, so what was visited and its generation, seq and
-// coverage agree (The Line slice 9 note §2.4). Objects are visited only
+// coverage agree (The Line slice 9 note §2.4). The state carries no Tally:
+// computing one copies the model. Objects are visited only
 // while a count is known (Live or Stale). visit must not retain obj, call
 // the Observer, or take a lock that is held while calling it; it returns
 // false to stop. complete reports whether every object was visited. ok is
@@ -192,7 +198,7 @@ func (o *Observer) VisitKind(kind string, visit func(obj any) bool) (st KindStat
 	if ks == nil || !o.started {
 		return KindState{}, false, false
 	}
-	st = o.kindStateLocked(ks)
+	st = o.kindStateWith(ks, false) // no tally: nothing of the kind is copied
 	if !st.CountKnown {
 		return st, false, true
 	}

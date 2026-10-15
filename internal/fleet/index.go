@@ -3,8 +3,6 @@ package fleet
 import (
 	"context"
 
-	"k8s.io/client-go/rest"
-
 	"github.com/moomora/klyx/internal/fleetindex"
 	"github.com/moomora/klyx/internal/healthsrc"
 )
@@ -27,13 +25,7 @@ func (c *ClusterConn) indexAcquire() (fleetindex.Acquire, bool) {
 	if c.restConfig == nil {
 		return fleetindex.Acquire{}, false
 	}
-	rc := rest.CopyConfig(c.restConfig)
-	rc.Timeout = 0 // a watch is long by design; every read is bounded by its context
-	hc, err := rest.HTTPClientFor(rc)
-	if err != nil {
-		return fleetindex.Acquire{}, false
-	}
-	base, _, err := rest.DefaultServerUrlFor(rc)
+	rd, err := fleetindex.NewReader(c.restConfig)
 	if err != nil {
 		return fleetindex.Acquire{}, false
 	}
@@ -48,7 +40,7 @@ func (c *ClusterConn) indexAcquire() (fleetindex.Acquire, bool) {
 			}
 			return p.Version, p.Served, nil
 		},
-		Reader: &fleetindex.Reader{Client: hc, Host: base.String()},
+		Reader: rd,
 	}, true
 }
 

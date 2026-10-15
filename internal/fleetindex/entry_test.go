@@ -86,7 +86,7 @@ func TestEstimateCoversRetainedHeap(t *testing.T) {
 				// the source's label map is garbage once the entry is built
 				s := src(i, labels)
 				size := estimate(s)
-				charged += size
+				charged += size + mapSlot // the store charges each entry's map slot too
 				store[s.UID] = build(s, labelHash(s.Labels), size)
 			}
 			after := heapNow()

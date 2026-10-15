@@ -1681,3 +1681,29 @@ func TestVisitKind(t *testing.T) {
 	}
 	close(stop)
 }
+
+// Review of 9a: VisitKind copies nothing of the kind - not even for a kind
+// with a tally, whose tally walks the model - before its visitor stops.
+func TestVisitKindCopiesNothing(t *testing.T) {
+	src := newSource()
+	for i := 0; i < 5000; i++ {
+		src.put(fmt.Sprintf("cm-%04d", i), nil)
+	}
+	k := cmKind("cms", src)
+	k.Tally = func(objs []any) map[string]int { return map[string]int{"n": len(objs)} }
+	h := start(t, Config{Kinds: []KindSpec{k}, Domains: []DomainSpec{{ID: "things", Parts: []PartSpec{cmPart("cms", "cms")}}}})
+	h.eventually(h.partIs("things", "cms", live), "live")
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	for i := 0; i < 5; i++ {
+		st, _, _ := h.o.VisitKind("cms", func(any) bool { return false })
+		if st.Tally != nil {
+			t.Fatal("a visit's state carries no tally")
+		}
+	}
+	runtime.ReadMemStats(&after)
+	// a copy of the model would be 5 x 5,000 x 16 bytes
+	if b := after.TotalAlloc - before.TotalAlloc; b > 64<<10 {
+		t.Fatalf("five stopped visits of 5,000 objects allocated %d bytes", b)
+	}
+}

@@ -126,7 +126,7 @@ func TestFleetContention(t *testing.T) {
 // A label-only growth at a cap is refused, and the kind freezes.
 func TestLabelGrowthAtCap(t *testing.T) {
 	src := sources(0, 1)[0]
-	b := NewBudget(Limits{ClusterEntries: 10, ClusterBytes: kindOverhead + estimate(src), FleetEntries: 10, FleetBytes: 1 << 30, PodPercent: 100})
+	b := NewBudget(Limits{ClusterEntries: 10, ClusterBytes: kindOverhead + estimate(src) + mapSlot, FleetEntries: 10, FleetBytes: 1 << 30, PodPercent: 100})
 	c := newClusterStore("a", b, func() time.Time { return t0 })
 	c.begin(1)
 	if !read(t, c, 1, "configmaps", ClassOther, []Source{src}) {

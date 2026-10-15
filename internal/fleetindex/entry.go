@@ -1,17 +1,24 @@
 package fleetindex
 
 import (
+	"container/heap"
 	"sort"
 	"time"
 )
 
-// LabelBytes caps an entry's labels (keys plus values, parent §8.4).
-const LabelBytes = 2048
+// LabelBytes caps an entry's labels (keys plus values, parent §8.4), and
+// MaxLabels their count: an empty or one-byte label costs nothing by bytes,
+// so the count bounds the projection on its own.
+const (
+	LabelBytes = 2048
+	MaxLabels  = 64
+)
 
 // The estimate's constants (slice 9 note §2.6): conservative, calibrated by
 // TestEstimateCoversRetainedHeap against the heap an entry actually keeps.
 const (
-	entryOverhead  = 256  // the Entry, its pointer and its share of the kind's map
+	entryOverhead  = 192  // the Entry and its pointer
+	mapSlot        = 64   // a slot of the kind's map, charged at its high-water mark (a map never shrinks)
 	labelsOverhead = 32   // the label slice's allocation
 	perLabel       = 64   // a label's two string headers and their allocations' rounding
 	kindOverhead   = 4096 // a kind's store: its map header and state
@@ -96,13 +103,25 @@ func (e *Entry) same(s Source, hash uint64) bool {
 		e.NoCreated == s.NoCreated && e.Created.Equal(s.Created) && e.labelHash == hash
 }
 
-// keptLabels returns the label keys an entry keeps, sorted, and whether the
-// cap truncated them. Under the cap (the common case) every key is kept.
+// keptLabels returns the label keys an entry keeps from a map, in key
+// order: the smallest MaxLabels keys, then the prefix within LabelBytes,
+// and whether that left any out. Its scratch is bounded by MaxLabels,
+// whatever the map's size.
 func keptLabels(l map[string]string) ([]string, bool) {
-	keys := make([]string, 0, len(l))
+	h := make(keyHeap, 0, min(len(l), MaxLabels))
 	for k := range l {
-		keys = append(keys, k)
+		if k == "" {
+			continue // never a valid label: not kept
+		}
+		switch {
+		case len(h) < MaxLabels:
+			heap.Push(&h, k)
+		case k < h[0]:
+			h[0] = k
+			heap.Fix(&h, 0)
+		}
 	}
+	keys := []string(h)
 	sort.Strings(keys)
 	n := 0
 	for i, k := range keys {
@@ -111,7 +130,21 @@ func keptLabels(l map[string]string) ([]string, bool) {
 			return keys[:i], true
 		}
 	}
-	return keys, false
+	return keys, len(keys) < len(l)
+}
+
+// keyHeap keeps the smallest keys, the largest at the root.
+type keyHeap []string
+
+func (h keyHeap) Len() int           { return len(h) }
+func (h keyHeap) Less(i, j int) bool { return h[i] > h[j] }
+func (h keyHeap) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
+func (h *keyHeap) Push(x any)        { *h = append(*h, x.(string)) }
+func (h *keyHeap) Pop() any {
+	old := *h
+	x := old[len(old)-1]
+	*h = old[:len(old)-1]
+	return x
 }
 
 // estimate is the budget's charge for an entry built from s (§2.6), computed
@@ -135,8 +168,10 @@ func estimate(s Source) int64 {
 	for k, v := range s.Labels {
 		total += len(k) + len(v)
 	}
-	if total <= LabelBytes {
-		return n + labelsOverhead + int64(perLabel*len(s.Labels)+total)
+	if total <= LabelBytes && len(s.Labels) <= MaxLabels {
+		if _, empty := s.Labels[""]; !empty {
+			return n + labelsOverhead + int64(perLabel*len(s.Labels)+total)
+		}
 	}
 	keys, _ := keptLabels(s.Labels)
 	n += labelsOverhead

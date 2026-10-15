@@ -104,13 +104,14 @@ func (r *Reader) ListPage(ctx context.Context, gvr schema.GroupVersionResource, 
 	if cont != "" {
 		q.Set("continue", cont)
 	}
+	defer r.closeIdle() // after the body is closed: only open streams hold buffers
 	body, err := r.get(ctx, gvr, q, acceptList)
 	if err != nil {
 		return "", "", err
 	}
 	defer func() { _ = body.Close() }()
 	sc := newScanner(body)
-	isList := false
+	isList, sawMeta, sawItems := false, false, false
 	err = sc.fields(func(key string) error {
 		switch key {
 		case "kind":
@@ -121,6 +122,7 @@ func (r *Reader) ListPage(ctx context.Context, gvr schema.GroupVersionResource, 
 			isList = err == nil
 			return err
 		case "metadata":
+			sawMeta = true
 			return sc.fields(func(key string) (err error) {
 				switch key {
 				case "resourceVersion":
@@ -139,6 +141,7 @@ func (r *Reader) ListPage(ctx context.Context, gvr schema.GroupVersionResource, 
 			if !isList {
 				return notMetadata("a list that does not name its kind before its items")
 			}
+			sawItems = true
 			return sc.elements(func() error {
 				var it scanned
 				if err := sc.object(&it); err != nil {
@@ -146,6 +149,9 @@ func (r *Reader) ListPage(ctx context.Context, gvr schema.GroupVersionResource, 
 				}
 				if it.kind != "PartialObjectMetadata" {
 					return notMetadata(orNone(it.kind))
+				}
+				if it.src.UID == "" {
+					return errMalformed("an object without a UID")
 				}
 				return apply(it.src)
 			})
@@ -156,8 +162,19 @@ func (r *Reader) ListPage(ctx context.Context, gvr schema.GroupVersionResource, 
 	if err != nil {
 		return "", "", err
 	}
+	// A complete page is the whole envelope and nothing after it: a read
+	// completes only on one (a 200 with "{}" never sweeps a kind empty).
+	if !isList || !sawMeta || !sawItems || rv == "" {
+		return "", "", errMalformed("a list page without its kind, metadata, resourceVersion or items")
+	}
+	if eof, err := sc.atEOF(); err != nil || !eof {
+		return "", "", errMalformed("data after the list")
+	}
 	return rv, next, nil
 }
+
+// errMalformed: a response that is not the JSON it must be.
+func errMalformed(what string) error { return fmt.Errorf("fleetindex: malformed response: %s", what) }
 
 func orNone(kind string) string {
 	if kind == "" {
@@ -179,13 +196,18 @@ const (
 )
 
 // Watch reads one watch from rv, applying each event before decoding the
-// next, until the server closes it (nil), ctx ends, or it fails. It returns
-// the last resourceVersion seen, so a closed watch resumes from it.
-func (r *Reader) Watch(ctx context.Context, gvr schema.GroupVersionResource, rv string, timeout time.Duration, apply func(ev string, s Source) error) (string, error) {
+// next, until the server closes it (nil), ctx ends, or it fails. opened runs
+// once the server accepted it. It returns the last resourceVersion seen, so
+// a closed watch resumes from it.
+func (r *Reader) Watch(ctx context.Context, gvr schema.GroupVersionResource, rv string, timeout time.Duration, opened func(), apply func(ev string, s Source) error) (string, error) {
 	q := url.Values{"watch": {"1"}, "resourceVersion": {rv}, "allowWatchBookmarks": {"true"}, "timeoutSeconds": {strconv.Itoa(int(timeout / time.Second))}}
+	defer r.closeIdle()
 	body, err := r.get(ctx, gvr, q, acceptWatch)
 	if err != nil {
 		return rv, err
+	}
+	if opened != nil {
+		opened()
 	}
 	defer func() { _ = body.Close() }()
 	stop := context.AfterFunc(ctx, func() { _ = body.Close() })
@@ -200,11 +222,13 @@ func (r *Reader) Watch(ctx context.Context, gvr schema.GroupVersionResource, rv 
 		}
 		var typ string
 		var obj scanned
+		sawObject := false
 		err := sc.fields(func(key string) (err error) {
 			switch key {
 			case "type":
 				typ, _, err = sc.str(keyBytes)
 			case "object":
+				sawObject = true
 				err = sc.object(&obj)
 			default:
 				err = sc.skip()
@@ -217,6 +241,9 @@ func (r *Reader) Watch(ctx context.Context, gvr schema.GroupVersionResource, rv 
 			}
 			return rv, err
 		}
+		if !sawObject {
+			return rv, errMalformed("a watch event without its object")
+		}
 		switch typ {
 		case "ERROR":
 			return rv, &StatusError{Code: obj.code, Reason: obj.reason, Message: obj.message}
@@ -227,10 +254,13 @@ func (r *Reader) Watch(ctx context.Context, gvr schema.GroupVersionResource, rv 
 			continue
 		case EvAdded, EvModified, EvDeleted:
 		default:
-			continue
+			return rv, errMalformed(fmt.Sprintf("a watch event of type %q", typ))
 		}
 		if obj.kind != "PartialObjectMetadata" {
 			return rv, notMetadata(orNone(obj.kind))
+		}
+		if obj.src.UID == "" {
+			return rv, errMalformed("an object without a UID")
 		}
 		if err := apply(typ, obj.src); err != nil {
 			return rv, err
