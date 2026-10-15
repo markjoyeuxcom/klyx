@@ -25,6 +25,16 @@ const (
 	StateDiffers        = "differs"
 )
 
+// How a tie for R was broken: Git and Argo chart keys by the newest source
+// artifact ("tie broken by fetch time, not commit order"); a recorded-name
+// Flux chart key by the version string's lexical order - deterministic, not
+// version recency (the current source's fetch time says nothing about a
+// historical record).
+const (
+	TieByFetchTime     = "fetch time"
+	TieByVersionString = "lexical version string"
+)
+
 // How the comparison key was chosen.
 const (
 	KeyByMostStations = "most stations"
@@ -86,7 +96,8 @@ type Line struct {
 	// that have one. A reference, never a rollout target.
 	R          string
 	RStations  int
-	RTieBroken bool // "tie broken by fetch time, not commit order"
+	RTieBroken bool   // a tie was broken, by RTieBy
+	RTieBy     string // TieByFetchTime or TieByVersionString
 	Stations   []StationLine
 	Siding     []StationLine
 	// The headline: R applied on Applied of Compared stations, plus the
@@ -124,6 +135,12 @@ func Build(in Input) Line {
 		l.Siding = append(l.Siding, build(p))
 	}
 	l.R, l.RStations, l.RTieBroken = chooseR(append(append([]StationLine(nil), l.Stations...), l.Siding...), l.Key)
+	if l.RTieBroken {
+		l.RTieBy = TieByFetchTime
+		if l.Key.Kind == KeyChartName {
+			l.RTieBy = TieByVersionString
+		}
+	}
 	for _, sls := range [][]StationLine{l.Stations, l.Siding} {
 		for i := range sls {
 			finish(&sls[i], &l)
@@ -276,7 +293,8 @@ func chooseR(sls []StationLine, key *Key) (string, int, bool) {
 			best, n, tie = rev, c, false
 		case c == n:
 			tie = true
-			if newest[rev].After(newest[best]) || (newest[rev].Equal(newest[best]) && rev < best) {
+			byVersion := key != nil && key.Kind == KeyChartName
+			if (byVersion && rev < best) || (!byVersion && (newest[rev].After(newest[best]) || (newest[rev].Equal(newest[best]) && rev < best))) {
 				best = rev
 			}
 		}
@@ -300,8 +318,10 @@ func finish(sl *StationLine, l *Line) {
 				continue
 			}
 			// Held needs evidence tied to R: an eligible unit attempted R and
-			// is failing (§3.3). An unrelated failure stays "differs".
-			if u.Failing && u.Attempted != nil && u.Attempted.id() == l.R {
+			// is failing (§3.3). An unrelated failure stays "differs". Never
+			// for a recorded-name chart: a historical failed attempt plus a
+			// current failure does not prove the current rollout is held.
+			if l.Key.Kind != KeyChartName && u.Failing && u.Attempted != nil && u.Attempted.id() == l.R {
 				sl.Held, sl.HeldWhy = true, "attempted "+l.R+", failing"
 			}
 			if u.Applied != nil && u.Applied.id() == l.R && u.Applied.Digest != "" {
@@ -332,7 +352,9 @@ func finish(sl *StationLine, l *Line) {
 // rDigest is the configDigest most stations at R carry (ties lexically
 // first): the values a chart unit at R's version is compared against.
 func (l *Line) rDigest() string {
-	if l.Key == nil || l.Key.Kind != KeyChart {
+	// Chart keys compare configDigest: for a recorded-name key it reads
+	// "recorded values differ", never equal chart content or desired values.
+	if l.Key == nil || (l.Key.Kind != KeyChart && l.Key.Kind != KeyChartName) {
 		return ""
 	}
 	count := map[string]int{}

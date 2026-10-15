@@ -83,15 +83,6 @@ func TestRegress3aArgoSuccessfulOperationIsNotAnAttempt(t *testing.T) {
 		t.Fatalf("successful old operation became attempted: phase=%s attempted=%+v", us[0].AttemptPhase, us[0].Attempted)
 	}
 }
-func TestRegress3aHelmChartHasNoRepositoryIdentity(t *testing.T) {
-	chart := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "source.toolkit.fluxcd.io/v1", "kind": "HelmChart", "metadata": map[string]any{"namespace": "shop", "name": "web"}, "spec": map[string]any{"chart": "web", "sourceRef": map[string]any{"kind": "HelmRepository", "name": "repo"}}}}
-	source := Object[flux.Source]{Data: flux.ParseSource(chart)}
-	r := flux.Resource{Kind: flux.HelmReleaseKind, Namespace: "shop", Name: "web", SourceKind: "HelmChart", SourceNamespace: "shop", SourceName: "web", History: []flux.HelmHistory{{ChartName: "web", ChartVersion: "1.0.0", Status: "deployed"}}}
-	us, _ := Units(reviewHelm(r, source))
-	if len(us) > 0 && us[0].Key.Repo == "" {
-		t.Fatalf("chartRef compares under an empty repository: %+v", us[0].Key)
-	}
-}
 func TestRegress3aHelmChangedChartDoesNotClaimOldVersion(t *testing.T) {
 	source := Object[flux.Source]{Data: flux.Source{Generation: 1, ObservedGeneration: 1, Kind: flux.HelmRepositoryKind, Namespace: "shop", Name: "repo", URL: "https://charts.example"}}
 	r := flux.Resource{Kind: flux.HelmReleaseKind, Namespace: "shop", Name: "cache", Chart: "new-chart", SourceKind: "HelmRepository", SourceNamespace: "shop", SourceName: "repo", History: []flux.HelmHistory{{ChartName: "old-chart", ChartVersion: "1.0.0", Status: "deployed"}}}
@@ -147,59 +138,6 @@ func TestRegress3aFixHelmPathIsNotChartName(t *testing.T) {
 // Regression from Codex's review of 89f8b8f: a newest history record does
 // not prove an edited path-sourced chart.
 
-func TestRegress3aFix2HistoryDoesNotProveCurrentChartPath(t *testing.T) {
-	for _, kind := range []flux.Kind{flux.GitRepositoryKind, flux.BucketKind} {
-		for _, observed := range []int64{1, 2} {
-			name := string(kind)
-			if observed == 1 {
-				name += "/pending"
-			} else {
-				name += "/terminal-failure"
-			}
-			t.Run(name, func(t *testing.T) {
-				source := Object[flux.Source]{Data: flux.Source{Generation: 1, ObservedGeneration: 1, Kind: kind, Namespace: "shop", Name: "repo", URL: "https://example.com/charts", Ready: flux.Ready}}
-				changed := flux.Resource{Kind: flux.HelmReleaseKind, Namespace: "shop", Name: "release", Chart: "./charts/new", SourceKind: string(kind), SourceNamespace: "shop", SourceName: "repo", Generation: 2, ObservedGeneration: observed, Stale: observed < 2, Ready: flux.Failed,
-					History: []flux.HelmHistory{{Version: 1, ChartName: "old", ChartVersion: "1.0.0", Status: "deployed"}}}
-				before := changed
-				before.Chart = "./charts/old"
-				before.Generation = 1
-				before.ObservedGeneration = 1
-				before.Stale = false
-				before.Ready = flux.Ready
-				oldUnits, _ := Units(reviewHelm(before, source))
-				if len(oldUnits) != 1 || oldUnits[0].Applied == nil {
-					t.Fatal("precondition: old path had a deployed release")
-				}
-				staleUnits, _ := Units(reviewHelm(changed, source))
-				if len(staleUnits) != 1 {
-					t.Fatalf("units=%d", len(staleUnits))
-				}
-				if staleUnits[0].Applied != nil {
-					t.Errorf("old deployment assigned to edited path %s: %+v", staleUnits[0].Key.RefName, staleUnits[0].Applied)
-				}
-				stale := reviewHelm(changed, source)
-				stale.Cluster = "stale"
-				stale.Env = "dev"
-				good := changed
-				good.Generation = 1
-				good.ObservedGeneration = 1
-				good.Stale = false
-				good.Ready = flux.Ready
-				good.History = []flux.HelmHistory{{Version: 1, ChartName: "new", ChartVersion: "1.0.0", Status: "deployed"}}
-				current := reviewHelm(good, source)
-				current.Cluster = "good"
-				current.Env = "prd"
-				key := staleUnits[0].Key
-				l := Build(Input{Stations: []StationInput{stale, current}, Read: allOK(stale, current), Selector: &key})
-				got := stateOf(l, "stale")
-				if got.State != StateAppliedUnknown || l.Applied != 1 {
-					t.Errorf("unapplied new chart counted as deployed: state=%q headline=%d/%d R=%s", got.State, l.Applied, l.Compared, l.R)
-				}
-			})
-		}
-	}
-}
-
 // Regressions from Codex's review of 3528d95: a suspension and a source URL
 // edit must not prove a Flux chart record's provenance.
 
@@ -224,60 +162,4 @@ func regress3528Source(url string, generation int64) Object[flux.Source] {
 		"status":   map[string]any{"observedGeneration": int64(1), "conditions": []any{map[string]any{"type": "Ready", "status": "True", "observedGeneration": int64(1)}}, "artifact": map[string]any{"revision": "main@sha1:" + sha('a')}},
 	}}
 	return Object[flux.Source]{UID: "repo-uid", Data: flux.ParseSource(u)}
-}
-
-func TestRegress3aFix3SuspendedEditDoesNotProveInSync(t *testing.T) {
-	source := regress3528Source("https://example.com/repo", 1)
-	r := regress3528HR(2, 2, "./charts/new", true)
-	if r.Ready != flux.Ready || r.Stale || !r.Suspended {
-		t.Fatalf("fixture: %+v", r)
-	}
-	us, _ := Units(reviewHelm(r, source))
-	if len(us) != 1 {
-		t.Fatalf("units=%d", len(us))
-	}
-	if us[0].Applied != nil {
-		t.Fatalf("suspend fast-path inherited Ready from generation 1 but proves generation 2 deployment: key=%+v applied=%+v", us[0].Key, us[0].Applied)
-	}
-}
-
-func TestRegress3aFix3ReleaseGenerationDoesNotFenceSourceURL(t *testing.T) {
-	r := regress3528HR(1, 1, "./charts/web", false)
-	oldSource := regress3528Source("https://example.com/old", 1)
-	before, _ := Units(reviewHelm(r, oldSource))
-	if len(before) != 1 || before[0].Applied == nil {
-		t.Fatal("precondition: original source deployed")
-	}
-	// Only the bound GitRepository was edited. The HelmRelease itself is still
-	// generation 1 and Ready=True; its stored release came from the old URL.
-	newSource := regress3528Source("https://example.com/new", 2)
-	after, _ := Units(reviewHelm(r, newSource))
-	if len(after) != 1 {
-		t.Fatalf("units=%d", len(after))
-	}
-	if before[0].Key == after[0].Key {
-		t.Fatal("precondition: source URL edit must change the comparison key")
-	}
-	if after[0].Applied != nil {
-		t.Fatalf("old-repository release became evidence for new repository without a Helm action: key=%+v applied=%+v", after[0].Key, after[0].Applied)
-	}
-}
-
-// The positive side of the source fence: an edited source proves provenance
-// when the record was deployed after its current artifact was fetched.
-func TestRegress3aFix3DeployedAfterTheCurrentArtifactIsProven(t *testing.T) {
-	r := regress3528HR(1, 1, "./charts/web", false)
-	r.History[0].ChartName = "web"
-	src := regress3528Source("https://example.com/new", 2)
-	src.Data.ObservedGeneration = 2
-	src.Data.ArtifactUpdated = time.Date(2026, 10, 15, 9, 0, 0, 0, time.UTC)
-	r.History[0].LastDeployed = src.Data.ArtifactUpdated.Add(time.Minute)
-	us, _ := Units(reviewHelm(r, src))
-	if len(us) != 1 || us[0].Applied == nil || us[0].Applied.Version != "1.0.0" {
-		t.Fatalf("deployed after the current artifact: %+v", us)
-	}
-	r.History[0].LastDeployed = src.Data.ArtifactUpdated.Add(-time.Minute)
-	if us, _ := Units(reviewHelm(r, src)); us[0].Applied != nil {
-		t.Fatalf("deployed before the current artifact: unproven: %+v", us[0].Applied)
-	}
 }

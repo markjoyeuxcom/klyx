@@ -20,7 +20,8 @@ type LineDTO struct {
 	Keys        []LineKeyCountDTO `json:"keys"`
 	R           string            `json:"r,omitempty"`
 	RStations   int               `json:"rStations"`
-	RTieBroken  bool              `json:"rTieBroken,omitempty"` // "tie broken by fetch time, not commit order"
+	RTieBroken  bool              `json:"rTieBroken,omitempty"`
+	RTieBy      string            `json:"rTieBy,omitempty"` // "fetch time" (not commit order) | "lexical version string" (not version recency)
 	Applied     int               `json:"applied"`
 	Compared    int               `json:"compared"`
 	NotCompared int               `json:"notCompared"`
@@ -34,7 +35,7 @@ type LineDTO struct {
 }
 
 type LineKeyDTO struct {
-	Kind    string `json:"kind"` // git | chart
+	Kind    string `json:"kind"` // git | chart (Argo: repository and chart) | chart-name (Flux: by recorded name; repository not recorded)
 	Repo    string `json:"repo"`
 	RefKind string `json:"refKind,omitempty"`
 	RefName string `json:"refName"`
@@ -89,7 +90,10 @@ type LineUnitDTO struct {
 	Syncing       bool   `json:"syncing,omitempty"`
 	Suspended     bool   `json:"suspended,omitempty"`
 	SourceChanged bool   `json:"sourceChanged,omitempty"`
-	Read          string `json:"read"`
+	// ConfiguredChartDiffers: "configured chart name differs from recorded
+	// deployed chart" - current context, never a provenance claim.
+	ConfiguredChartDiffers bool   `json:"configuredChartDiffers,omitempty"`
+	Read                   string `json:"read"`
 }
 
 type LineExclusionDTO struct {
@@ -182,7 +186,8 @@ func stationDTO(sl line.StationLine, key *line.Key) LineStationDTO {
 		}
 		d.Units = append(d.Units, LineUnitDTO{Origin: u.Origin, Namespace: u.Namespace, Name: u.Name, SourceIndex: u.SourceIndex, UID: u.UID,
 			Applied: revID(u.Applied), Attempted: revID(u.Attempted), AttemptPhase: u.AttemptPhase, Compared: revID(u.Compared),
-			Failing: u.Failing, Syncing: u.Syncing, Suspended: u.Suspended, SourceChanged: u.SourceChanged, Read: u.Read})
+			Failing: u.Failing, Syncing: u.Syncing, Suspended: u.Suspended, SourceChanged: u.SourceChanged,
+			ConfiguredChartDiffers: u.ConfiguredChartDiffers, Read: u.Read})
 	}
 	for _, x := range sl.Excluded {
 		d.Excluded = append(d.Excluded, LineExclusionDTO{Origin: x.Origin, Namespace: x.Namespace, Name: x.Name, Reason: x.Reason, Digest: x.Digest})
@@ -192,7 +197,7 @@ func stationDTO(sl line.StationLine, key *line.Key) LineStationDTO {
 
 // lineDTO maps the computed line; stations are completed by the service.
 func lineDTO(l line.Line) LineDTO {
-	d := LineDTO{KeyHow: l.KeyHow, KeyStations: l.KeyStations, R: l.R, RStations: l.RStations, RTieBroken: l.RTieBroken,
+	d := LineDTO{KeyHow: l.KeyHow, KeyStations: l.KeyStations, R: l.R, RStations: l.RStations, RTieBroken: l.RTieBroken, RTieBy: l.RTieBy,
 		Applied: l.Applied, Compared: l.Compared, NotCompared: l.NotCompared, Checking: l.Checking,
 		Fallback: l.Placement.Fallback, Keys: []LineKeyCountDTO{}, Tracks: []LineTrackDTO{}, Stations: []LineStationDTO{}, Siding: []LineStationDTO{}}
 	if l.Key != nil {

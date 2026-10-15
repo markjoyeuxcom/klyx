@@ -191,6 +191,10 @@ This note fixes the implementation shape the parent leaves open. The rules thems
   - `incarnation`, `readAt`, the read state with its per-kind reasons, and the last good facts' `asOf`;
   - `excluded`.
 - **Git ordering (parent §3.4)** is slice 6. Its fields are reserved and empty here.
+- **Flux chart units (revised 2026-10-15):**
+  - The key kind `chart-name` (by recorded name; repository not recorded), as parent §3.2 now specifies. `LineKeyDTO.kind` names it, and `label` carries the qualification so every view shows it on the selected comparison.
+  - `rTieBy` discloses how a tie for R was broken: "fetch time" (Git and Argo charts) or "lexical version string" (Flux charts).
+  - Units carry `configuredChartDiffers` as current context.
 
 ## 5. The line's own predicate history (finding 5; parent §8.2)
 

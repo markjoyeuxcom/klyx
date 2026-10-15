@@ -278,7 +278,20 @@ Revised after Codex's design reviews of 4c654fc (nine findings), 3fdd4f7 (ten), 
   - Flux with an empty `lastAppliedRevision`.
 
   Such a unit counts toward no match.
-- **Chart units** compare the chart version (`chartVersion` for Flux, the history entry's revision for Argo). A differing Flux `configDigest` adds "values differ".
+- **Chart units** compare the chart version (`chartVersion` for Flux, the history entry's revision for Argo).
+- **Flux chart units are keyed by their recorded chart name only** (revised 2026-10-15, Codex's verdict on the slice 3a provenance reviews).
+  - **Why:** Flux's history records the chart name and version a Helm action deployed, but never the repository or path it came from. And Helm actions write the history, not spec edits.
+  - **The key:** a separate `chart-name` kind with no repository, labelled "Flux chart web - by recorded name; repository not recorded". It never mixes with Argo chart keys or Git keys, and is selector-only.
+  - **Matching:** a match means the same recorded name and version, not the same artifact, repository or desired deployment. The headline reads "recorded deployed version 1.2.3 on N of M compared stations". Same-name charts sharing a key is a disclosed limit.
+  - **Applied:** the newest deployed record sets both the name-key and the version.
+    - With no deployed record, a newest record that names a chart gives the key, with applied unknown and a historical attempt.
+    - Otherwise: "chart identity unknown".
+    - There is never a fallback to the spec or to an older deployment.
+    - A failed attempt of another chart stays raw history.
+  - **Current context only:** the spec and the source are context, never provenance. A configured chart name that differs from the record reads "configured chart name differs from recorded deployed chart".
+  - **A differing `configDigest`** reads "recorded values differ".
+  - **R's tie-break** for this key is the version string's lexical order, disclosed as such and never read as version recency.
+  - **Held** is never inferred for this key.
 
 **Revision identity:**
 - Git units carry `{repo, ref, sha}`:
@@ -287,11 +300,11 @@ Revised after Codex's design reviews of 4c654fc (nine findings), 3fdd4f7 (ten), 
 - **The ref keeps its kind:**
   - **Flux:** branch, tag, semver or commit, from `spec.ref`.
   - **Argo:** `targetRevision` is "unqualified" unless it is fully qualified (`refs/heads/…`, `refs/tags/…`) or a sha. Argo can resolve a bare `main` to a tag of that name, so an unqualified Argo ref never shares a key with a Flux branch.
-- Chart units carry `{chart source, chart name, version}`.
+- Argo chart units carry `{chart source, chart name, version}`, paired with the sources recorded in each history entry. Flux chart units carry `{recorded chart name, version}` (above).
 
 **The comparison key:**
 - `(repo, ref kind, ref name)` for Git units.
-- `(chart source, chart name)` for chart units.
+- `(chart source, chart name)` for Argo chart units; `(recorded chart name)` for Flux chart units (the `chart-name` kind).
 - Units compare only within one key.
 
 **The line source:**

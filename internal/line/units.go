@@ -59,11 +59,19 @@ func worseRead(a, b string) string {
 	return a
 }
 
-// Key kinds: units compare only within one key, and Git and chart keys
-// never mix (§3.2).
+// Key kinds: units compare only within one key, and kinds never mix
+// (§3.2).
 const (
 	KeyGit   = "git"
-	KeyChart = "chart"
+	KeyChart = "chart" // an Argo chart source: (repository, chart), recorded per deployment
+	// KeyChartName is a Flux HelmRelease's chart by its RECORDED name only.
+	// Flux's history records the chart name and version a Helm action
+	// deployed, never the repository or path it came from, so the key
+	// claims no repository (Repo is empty) and a match means the same
+	// recorded name and version - not the same artifact, repository or
+	// desired deployment. Same-name charts share a key: a disclosed limit.
+	// Selector-only, like every chart key.
+	KeyChartName = "chart-name"
 )
 
 // Ref kinds beside Flux's own (branch, tag, semver, commit, name).
@@ -82,8 +90,11 @@ type Key struct {
 }
 
 func (k Key) String() string {
-	if k.Kind == KeyChart {
+	switch k.Kind {
+	case KeyChart:
 		return "chart " + k.Repo + " " + k.RefName
+	case KeyChartName:
+		return "Flux chart " + k.RefName + " - by recorded name; repository not recorded"
 	}
 	return k.Repo + " @ " + k.RefKind + " " + k.RefName
 }
@@ -126,6 +137,10 @@ type Unit struct {
 	Suspended       bool
 	SourceChanged   bool // Argo: the source was reordered or edited since its last deployment
 	SourceName      string
+	// ConfiguredChartDiffers: a Flux release's configured chart name (a
+	// HelmRepository source) differs from its recorded deployed chart -
+	// current context, never a provenance claim.
+	ConfiguredChartDiffers bool
 	// Read is the worse of its own kind's read and its source kind's (§2.4
 	// of the slice 3 note): a unit that is not read ok keeps its station
 	// checking.
@@ -149,7 +164,8 @@ const (
 	ExcludedSourceKind  = "unsupported source kind"
 	ExcludedValuesOnly  = "values-only source"
 	ExcludedNoChartName = "chart name unknown"
-	ExcludedNoIdentity  = "source identity unknown" // no repository URL to compare on (a HelmChart chartRef)
+	ExcludedNoIdentity  = "source identity unknown" // no repository URL to compare on
+	ExcludedNoChartID   = "chart identity unknown"  // no history record names a chart
 )
 
 // Units extracts a station's comparison units and exclusions (§3.2).
@@ -317,105 +333,72 @@ func kustomizationUnit(o Object[flux.Resource], lookup func(kind, ns, name strin
 	return u, nil
 }
 
+// helmReleaseUnit reads a Flux HelmRelease as a recorded-name chart unit
+// (KeyChartName): every fact compared is one Flux's history records - the
+// chart name and version a Helm action deployed. Nothing is attached to the
+// current spec or source: Flux records neither the repository nor the path a
+// release came from, and its history changes only with Helm actions, so a
+// spec edit, a source edit or recreation, or a suspension leaves the recorded
+// chart under its old name-key until history itself changes.
 func helmReleaseUnit(o Object[flux.Resource], lookup func(kind, ns, name string) (Object[flux.Source], bool)) (*Unit, *Exclusion) {
 	r := o.Data
 	x := &Exclusion{Origin: "HelmRelease", Namespace: r.Namespace, Name: r.Name}
-	s, ok := lookup(r.SourceKind, r.SourceNamespace, r.SourceName)
-	if !ok {
-		x.Reason = ExcludedNoSource
+	// The newest deployed record sets both the key's chart name and the
+	// applied version. With no deployed record, a newest record naming a
+	// chart gives the key with applied unknown and a historical attempt.
+	// No fallback to the spec, or to an older and convenient deployment.
+	var deployed *flux.HelmHistory
+	for i := range r.History {
+		if r.History[i].Status == "deployed" {
+			deployed = &r.History[i]
+			break
+		}
+	}
+	name := ""
+	switch {
+	case deployed != nil:
+		name = deployed.ChartName
+	case len(r.History) > 0:
+		name = r.History[0].ChartName
+	}
+	if name == "" {
+		x.Reason = ExcludedNoChartID
 		return nil, x
 	}
-	// A chart key needs the repository it comes from. A HelmChart chartRef
-	// names its upstream only in its own sourceRef, which the shared rows do
-	// not carry: never compare it under an empty identity.
-	repoID := NormalizeRepo(s.Data.URL)
-	if repoID == "" {
-		x.Reason = ExcludedNoIdentity
-		return nil, x
+	u := &Unit{Origin: "HelmRelease", Namespace: r.Namespace, Name: r.Name, UID: o.UID,
+		Key: Key{Kind: KeyChartName, RefName: name}, Suspended: r.Suspended}
+	if deployed != nil && deployed.ChartVersion != "" {
+		u.Applied = &Revision{Version: deployed.ChartVersion, Digest: deployed.ConfigDigest, Raw: deployed.ChartVersion}
 	}
-	// The key's chart: spec.chart.spec.chart is a chart NAME for a
-	// HelmRepository source, but a PATH for a GitRepository or Bucket source
-	// (./charts/web, or a packaged .tgz), and absent for a chartRef. Flux's
-	// history records the chart's metadata name and version, and is written
-	// by Helm actions - not by every spec edit - and records neither the
-	// repository nor the path a release came from. So a deployed record is
-	// this key's evidence only when both of these are provable:
-	//   - it names the current chart: by name (a HelmRepository source), or
-	//     the release was never edited (generation 1), or its current
-	//     generation reconciled successfully - the Ready condition's own
-	//     observedGeneration is the current generation, Ready=True, and the
-	//     release is not suspended (a suspension advances the top-level
-	//     observedGeneration without a reconcile);
-	//   - it came from the current source: the source has fetched its
-	//     current spec (generation observed), and either was never edited
-	//     (generation 1) or the record was deployed after the source's
-	//     current artifact was fetched.
-	// Otherwise the correspondence is unknown: applied unknown, never the
-	// old chart's or the old source's record.
-	chart := r.Chart
-	current := ""
-	byName := r.SourceKind == "HelmRepository" && r.Chart != ""
-	inSync := r.Generation > 0 && r.ReadyObservedGeneration == r.Generation && r.Ready == flux.Ready && !r.Suspended
-	namesCurrent := byName || r.Generation == 1 || inSync
-	if byName {
-		current = r.Chart
-	} else if len(r.History) > 0 && namesCurrent {
-		current = r.History[0].ChartName
+	// A historical attempt: the newest record when it is not deployed and
+	// names this key's chart. A failed attempt of another chart stays raw
+	// history, never an attempt for this key.
+	if h := r.History; len(h) > 0 && h[0].Status != "deployed" && h[0].ChartName == name && h[0].ChartVersion != "" {
+		u.Attempted = &Revision{Version: h[0].ChartVersion, Digest: h[0].ConfigDigest, Raw: h[0].ChartVersion}
+		u.AttemptPhase = h[0].Status
 	}
-	if chart == "" {
-		chart = current
+	// Current context, optional: the configured chart name (a HelmRepository
+	// source names it) and the release's and its bound source's failure.
+	if r.SourceKind == "HelmRepository" && r.Chart != "" && r.Chart != name {
+		u.ConfiguredChartDiffers = true
 	}
-	if chart == "" {
-		x.Reason = ExcludedNoChartName
-		return nil, x
-	}
-	u := &Unit{Origin: "HelmRelease", Namespace: r.Namespace, Name: r.Name, UID: o.UID, SourceName: s.Data.Name,
-		Key: Key{Kind: KeyChart, Repo: repoID, RefName: chart}, Suspended: r.Suspended, ArtifactTime: s.Data.ArtifactUpdated}
-	src := s.Data
-	sourceCurrent := src.Generation > 0 && src.ObservedGeneration == src.Generation
-	fromCurrentSource := func(h flux.HelmHistory) bool {
-		return sourceCurrent && (src.Generation == 1 || (!h.LastDeployed.IsZero() && !src.ArtifactUpdated.IsZero() && !h.LastDeployed.Before(src.ArtifactUpdated)))
-	}
-	ofCurrent := func(h flux.HelmHistory) bool {
-		if !namesCurrent {
-			return false
-		}
-		return h.ChartName == "" || current == "" || h.ChartName == current
-	}
-	// Applied: the newest deployed history entry - of the current chart,
-	// from the current source. A proven record of another chart is source
-	// changed; an unproven one stays unknown.
-	for _, h := range r.History {
-		if h.Status != "deployed" {
-			continue
-		}
-		switch {
-		case !ofCurrent(h):
-			u.SourceChanged = namesCurrent // a proven other chart; unproven stays unknown
-		case fromCurrentSource(h):
-			u.Applied = &Revision{Version: h.ChartVersion, Digest: h.ConfigDigest, Raw: h.ChartVersion}
-		}
-		break
-	}
-	// Attempted: the latest entry when it is not deployed, of this chart.
-	if len(r.History) > 0 && r.History[0].Status != "deployed" && ofCurrent(r.History[0]) && fromCurrentSource(r.History[0]) {
-		h := r.History[0]
-		u.Attempted = &Revision{Version: h.ChartVersion, Digest: h.ConfigDigest, Raw: h.ChartVersion}
-		u.AttemptPhase = h.Status
-	}
-	// Failing: the release or its bound source (parent §3.3), as for a
-	// Kustomization.
+	var a, b *time.Time
 	unitFailing := r.Ready == flux.Failed
-	sourceFailing := s.Data.Ready == flux.Failed && !s.Data.Suspended
+	sourceFailing := false
+	if s, ok := lookup(r.SourceKind, r.SourceNamespace, r.SourceName); ok {
+		u.SourceName = s.Data.Name
+		sourceFailing = s.Data.Ready == flux.Failed && !s.Data.Suspended
+		if sourceFailing {
+			b = s.FailSince
+		}
+	}
 	u.Failing = !r.Suspended && (unitFailing || sourceFailing)
 	if u.Failing {
-		var a, b *time.Time
 		if unitFailing {
 			a, u.FailBasis = o.FailSince, o.FailBasis
 		}
-		if sourceFailing {
-			b = s.FailSince
-			if a == nil || (b != nil && b.Before(*a)) {
+		if sourceFailing && (a == nil || (b != nil && b.Before(*a))) {
+			if s, ok := lookup(r.SourceKind, r.SourceNamespace, r.SourceName); ok {
 				u.FailBasis = s.FailBasis
 			}
 		}

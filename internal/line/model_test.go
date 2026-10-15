@@ -133,11 +133,11 @@ func TestHelmReleaseChartUnit(t *testing.T) {
 	us, _ := Units(hr(flux.HelmHistory{Version: 3, ChartName: "redis", ChartVersion: "18.1.0", Status: "failed"},
 		flux.HelmHistory{Version: 2, ChartName: "redis", ChartVersion: "18.0.0", ConfigDigest: "sha256:aa", Status: "deployed"}))
 	u := us[0]
-	if u.Key.Kind != KeyChart || u.Key.RefName != "redis" || u.Applied.Version != "18.0.0" || u.Attempted.Version != "18.1.0" || u.AttemptPhase != "failed" {
-		t.Fatalf("deployed entry applied, failed latest attempted: %+v", u)
+	if u.Key.Kind != KeyChartName || u.Key.Repo != "" || u.Key.RefName != "redis" || u.Applied.Version != "18.0.0" || u.Attempted.Version != "18.1.0" || u.AttemptPhase != "failed" {
+		t.Fatalf("recorded name and versions, no repository: %+v", u)
 	}
-	if us, _ := Units(hr()); us[0].Applied != nil {
-		t.Fatal("missing history: applied unknown")
+	if us, ex := Units(hr()); len(us) != 0 || len(ex) != 1 || ex[0].Reason != ExcludedNoChartID {
+		t.Fatal("no history: chart identity unknown")
 	}
 }
 
