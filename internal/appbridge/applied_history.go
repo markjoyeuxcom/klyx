@@ -180,14 +180,15 @@ func (h *appliedHistory) OnTransitions(b observe.TransitionBatch) {
 	c.units = nil
 }
 
-// unitsReadable: every reconciliation kind is live; otherwise a missing row
-// could be a gap, not a gone unit.
+// unitsReadable: every reconciliation kind is read - live, or absent (not
+// installed: a successful discovery lacks it, so it holds no unit). Any
+// other coverage could hide a unit, so a missing row could be a gap.
 func unitsReadable(p observe.Part) bool {
 	if len(p.Kinds) == 0 {
 		return false
 	}
 	for _, k := range p.Kinds {
-		if k.Coverage != observe.Live {
+		if k.Coverage != observe.Live && k.Coverage != observe.Absent {
 			return false
 		}
 	}

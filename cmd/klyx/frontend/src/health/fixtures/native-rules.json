@@ -5143,7 +5143,7 @@
                   "weightSet": false,
                   "rule": {
                     "included": true,
-                    "role": "degraded",
+                    "role": "fault",
                     "label": "backend not found"
                   }
                 },
@@ -5703,7 +5703,7 @@
                   "weightSet": false,
                   "rule": {
                     "included": true,
-                    "role": "degraded",
+                    "role": "fault",
                     "label": "no endpoints"
                   }
                 },
@@ -6072,7 +6072,7 @@
                   "weightSet": false,
                   "rule": {
                     "included": true,
-                    "role": "degraded",
+                    "role": "fault",
                     "label": "no endpoints"
                   }
                 }

@@ -272,8 +272,9 @@ func rulesBackends(all []Backend, rule int) []Backend {
 type backendJudgment struct {
 	b       Backend
 	carries bool
-	role    health.Kind
-	short   string // "" when OK
+	own     health.Kind // the backend's own verdict
+	role    health.Kind // its weight in the rule's verdict: a fault softened while a sibling carries
+	short   string      // "" when OK
 }
 
 // judgeRule judges one rule's backends. Weights split traffic within one
@@ -296,6 +297,7 @@ func judgeRule(bs []Backend) (allZero bool, js []backendJudgment) {
 	faults := 0
 	for _, i := range carrying {
 		js[i].role, js[i].short = BackendIssue(bs[i])
+		js[i].own = js[i].role
 		if js[i].role == health.Fault {
 			faults++
 		}
@@ -360,7 +362,9 @@ func RuleVerdicts(rn RouteNode) []RuleVerdict {
 			case j.role == health.OK:
 				bv.Eval = health.NativeEval{Role: health.OK, Label: "resolved"}
 			default:
-				bv.Eval = health.NativeEval{Role: j.role, Label: j.short, Included: j.role == health.Fault || j.role == health.Degraded}
+				// the backend keeps its own verdict (a Service with no ready
+				// endpoints is a fault); the rule takes the softened one
+				bv.Eval = health.NativeEval{Role: j.own, Label: j.short, Included: j.own == health.Fault || j.own == health.Degraded}
 				if worst == nil || lensRank[j.role] < lensRank[worst.role] {
 					worst = &js[k]
 				}

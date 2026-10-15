@@ -98,3 +98,29 @@ func TestAppliedHistory(t *testing.T) {
 		t.Fatalf("end: %+v", c)
 	}
 }
+
+// Design review of 2be2059: a reconciliation kind that is not installed is
+// read (it holds no unit), so a Kustomize-only Flux still has a history.
+func TestAppliedHistoryAbsentCompanionKind(t *testing.T) {
+	h := newAppliedHistory(obslog.New())
+	rows := func(at time.Time, rev string) observe.Rows {
+		r := unitRows(1, at, true, unitRow{"u1", "apps", rev})
+		r.Part.Kinds[1].Coverage = observe.Absent // HelmReleases not installed
+		return r
+	}
+	h.OnRows(rows(t0, "main@sha1:"+shaA))
+	h.OnRows(rows(t0.Add(time.Minute), "main@sha1:"+shaB))
+	if uid, ok := h.UnitFor("prd", "Kustomization", "flux-system", "apps"); !ok || uid != "u1" {
+		t.Fatalf("UnitFor: %q %v", uid, ok)
+	}
+	if c, ok := h.Change("prd", "u1"); !ok || c.Basis != obslog.ProofObserved {
+		t.Fatalf("an observed change with HelmReleases absent: %+v %v", c, ok)
+	}
+	// Checking (not yet read) is still a gap.
+	r := rows(t0.Add(2*time.Minute), "main@sha1:"+shaB)
+	r.Part.Kinds[1].Coverage = observe.Checking
+	h.OnRows(r)
+	if _, ok := h.Change("prd", "u1"); ok {
+		t.Fatal("an unread kind kept the history live")
+	}
+}

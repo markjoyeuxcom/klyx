@@ -91,7 +91,7 @@ func TestRuleVerdicts(t *testing.T) {
 		label string
 		bs    []string
 	}{
-		{health.Degraded, "web: no ready endpoints", []string{"degraded no ready endpoints", "ok resolved"}},
+		{health.Degraded, "web: no ready endpoints", []string{"fault no ready endpoints", "ok resolved"}}, // the backend keeps its fault; the rule is degraded
 		{health.Fault, "every backend has weight 0", []string{"ok no traffic (weight 0)", "ok no traffic (weight 0)"}},
 		{health.Unknown, "no backendRefs", nil},
 		{health.OK, "resolved", []string{"ok resolved", "ok no traffic (weight 0)"}},
