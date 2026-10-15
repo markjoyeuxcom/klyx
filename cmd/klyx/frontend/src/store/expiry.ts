@@ -8,20 +8,23 @@ import { envRank } from "../nav/stationOrder";
 // the fleet screen's Horizon and the Expiry view: each cluster is scanned
 // once; a cluster that joins mid-session is scanned once when it joins, and
 // the others are never rescanned for it; a cluster that leaves drops its
-// result. Refresh starts over. A late reply from before a Refresh, or for a
-// cluster that left, never lands.
-type State = { results: Record<string, ExpiryScanResultDTO>; asked: Record<string, number>; gen: number; readAt: number | null };
-export const useExpiry = create<State>(() => ({ results: {}, asked: {}, gen: 0, readAt: null }));
+// result. Refresh starts over. Every request carries its own token, so a
+// late reply from before a Refresh, or from a membership that left - even
+// one that rejoined under the same name - never lands (Codex review of
+// c20ef32).
+type State = { results: Record<string, ExpiryScanResultDTO>; asked: Record<string, number>; readAt: number | null };
+export const useExpiry = create<State>(() => ({ results: {}, asked: {}, readAt: null }));
+let tokens = 0;
 
 export function resetExpiryStore(): void {
-  useExpiry.setState({ results: {}, asked: {}, gen: 0, readAt: null });
+  useExpiry.setState({ results: {}, asked: {}, readAt: null });
 }
 
-function scan(name: string, gen: number) {
+function scan(name: string, token: number) {
   // a rejected scan is a named failure, never a hang
   void getExpiryScan(name).catch((e: unknown): ExpiryScanResultDTO => ({ items: [], warnings: [], error: e instanceof Error ? e.message : "expiry scan failed" })).then((r) => {
     const st = useExpiry.getState();
-    if (st.gen !== gen || st.asked[name] !== gen) return;
+    if (st.asked[name] !== token) return;
     useExpiry.setState({ results: { ...st.results, [name]: r }, readAt: Date.now() });
   });
 }
@@ -34,15 +37,15 @@ export function ensureExpiryScans(names: string[]): void {
   const results = Object.fromEntries(Object.entries(st.results).filter(([n]) => keep.has(n)));
   const asked = Object.fromEntries(Object.entries(st.asked).filter(([n]) => keep.has(n)));
   const fresh = names.filter((n) => !(n in asked));
-  for (const n of fresh) asked[n] = st.gen;
+  for (const n of fresh) asked[n] = ++tokens;
   useExpiry.setState({ results, asked });
-  for (const n of fresh) scan(n, st.gen);
+  for (const n of fresh) scan(n, asked[n]);
 }
 
 export function refreshExpiryScans(names: string[]): void {
-  const gen = useExpiry.getState().gen + 1;
-  useExpiry.setState({ results: {}, asked: Object.fromEntries(names.map((n) => [n, gen])), gen, readAt: null });
-  for (const n of names) scan(n, gen);
+  const asked = Object.fromEntries(names.map((n) => [n, ++tokens]));
+  useExpiry.setState({ results: {}, asked, readAt: null });
+  for (const n of names) scan(n, asked[n]);
 }
 
 export type ExpiryMember = { name: string; env: string; region: string };

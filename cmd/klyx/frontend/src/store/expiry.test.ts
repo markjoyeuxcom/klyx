@@ -52,6 +52,17 @@ describe("the session's expiry scans", () => {
     expect(useExpiry.getState().results.a?.items).toHaveLength(1);
   });
 
+  it("leave, then rejoin under the same name: the old reply never lands, the new one does (review of c20ef32)", async () => {
+    ensureExpiryScans(["a"]);
+    ensureExpiryScans([]); // a leaves while its scan is out
+    ensureExpiryScans(["a"]); // and rejoins: a new scan
+    expect(calls()).toEqual(["a", "a"]);
+    await answer("a", 0, ok(5)); // the departed membership's reply
+    expect(useExpiry.getState().results).toEqual({});
+    await answer("a", 1, ok(1));
+    expect(useExpiry.getState().results.a?.items).toHaveLength(1);
+  });
+
   it("a rejected scan is a named failure", async () => {
     vi.mocked(getExpiryScan).mockRejectedValueOnce(new Error("timeout"));
     ensureExpiryScans(["a"]);
