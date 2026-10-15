@@ -2,6 +2,7 @@ package fleet
 
 import (
 	"context"
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -169,4 +170,70 @@ func TestLabDependencyGraph(t *testing.T) {
 		}
 	}
 	t.Logf("%d nodes, %d edges, %d reads, incomplete %v, proximity %d", len(g.Nodes), len(g.Edges), g.Reads, g.Incomplete, len(g.Proximity))
+}
+
+// Design review of 06f7f47: the graph's reader finds a kind at whichever
+// advertised version serves it, and its discovery reads end with the
+// caller's context.
+type perKindDiscovery struct{}
+
+func (perKindDiscovery) ServerGroups() (*metav1.APIGroupList, error) {
+	return &metav1.APIGroupList{Groups: []metav1.APIGroup{{Name: "source.toolkit.fluxcd.io",
+		PreferredVersion: metav1.GroupVersionForDiscovery{GroupVersion: "source.toolkit.fluxcd.io/v1", Version: "v1"},
+		Versions:         []metav1.GroupVersionForDiscovery{{GroupVersion: "source.toolkit.fluxcd.io/v1", Version: "v1"}, {GroupVersion: "source.toolkit.fluxcd.io/v1beta2", Version: "v1beta2"}}}}}, nil
+}
+
+func (perKindDiscovery) ServerResourcesForGroupVersion(gv string) (*metav1.APIResourceList, error) {
+	r := &metav1.APIResourceList{GroupVersion: gv}
+	switch gv {
+	case "source.toolkit.fluxcd.io/v1":
+		r.APIResources = []metav1.APIResource{{Name: "gitrepositories", Kind: "GitRepository", Namespaced: true}}
+	case "source.toolkit.fluxcd.io/v1beta2":
+		r.APIResources = []metav1.APIResource{{Name: "ocirepositories", Kind: "OCIRepository", Namespaced: true}}
+	}
+	return r, nil
+}
+
+type heldDiscovery struct{ started chan struct{} }
+
+func (d heldDiscovery) groups(ctx context.Context) (*metav1.APIGroupList, error) {
+	close(d.started)
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func (d heldDiscovery) resources(ctx context.Context, _ string) (*metav1.APIResourceList, error) {
+	return nil, ctx.Err()
+}
+
+func TestGraphReaderResolvesPerKind(t *testing.T) {
+	c := &ClusterConn{disc: perKindDiscovery{}}
+	gvr, namespaced, err := c.resourceFor(context.Background(), ObjectRef{Group: "source.toolkit.fluxcd.io", Kind: "OCIRepository"})
+	if err != nil || gvr.Version != "v1beta2" || gvr.Resource != "ocirepositories" || !namespaced {
+		t.Fatalf("OCIRepository: %v %v %v", gvr, namespaced, err)
+	}
+	if _, _, err := c.resourceFor(context.Background(), ObjectRef{Group: "source.toolkit.fluxcd.io", Kind: "Bucket"}); err == nil || !strings.Contains(err.Error(), "is not served") {
+		t.Fatalf("an unserved kind: %v", err)
+	}
+
+	started := make(chan struct{})
+	cd := newCachedDiscovery(perKindDiscovery{}, clock.Real{})
+	cd.ctxd = heldDiscovery{started}
+	c = &ClusterConn{disc: cd}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := (depReader{c}).Get(ctx, depgraph.Ref{Group: "source.toolkit.fluxcd.io", Kind: "OCIRepository", Namespace: "flux-system", Name: "web"})
+		done <- err
+	}()
+	<-started
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("cancelled read: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("a cancelled read is still held in discovery")
+	}
 }

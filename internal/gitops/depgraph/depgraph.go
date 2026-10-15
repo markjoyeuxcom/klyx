@@ -12,6 +12,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -68,7 +69,10 @@ type Edge struct {
 }
 
 // Stub kinds: a node whose evidence stops. Every kind but NotFound is
-// incomplete evidence and is named in the graph's header.
+// incomplete evidence and is named in the graph's header. NotFound,
+// unreadable and replaced stand for the object itself (its ID, read once);
+// the limits, depth, cycle and cancelled are per edge, and a limit or depth
+// stub sums up every target it stands for, so the graph stays bounded.
 type Stub string
 
 const (
@@ -98,8 +102,12 @@ type Node struct {
 	ConditionGeneration int64     // the condition's observedGeneration; 0 when it carries none
 	Generation          int64
 	ObservedGeneration  int64
-	Stale               bool // status.observedGeneration behind metadata.generation
+	Stale               bool // status.observedGeneration present and behind metadata.generation
 	Suspended           bool
+	// A source's readiness as helm-controller judges it: no artifact, or
+	// Stalled=True, is not ready whatever Ready says.
+	HasArtifact bool
+	Stalled     bool
 
 	Failing         bool // Ready=False and not suspended
 	UpstreamFailure bool // failing, and not the selected node
@@ -183,13 +191,28 @@ type builder struct {
 	// ref, a Kustomization's spec.path
 	sourceFacts map[string]flux.Source
 	paths       map[string]string
+	// every read once: a Secret's metadata and an ExternalSecret's read are
+	// shared by the nodes that name them
+	secrets map[string]Supply
+	ess     map[string]esRead
+}
+
+type esRead struct {
+	u   *unstructured.Unstructured
+	err error
+	at  time.Time
 }
 
 // Build walks from start. startUID pins the selection: a different UID read
 // for it is "replaced".
 func Build(ctx context.Context, r Reader, start Ref, startUID string, now func() time.Time) Graph {
-	b := &builder{ctx: ctx, r: r, now: now, idx: map[string]int{}, onPath: map[string]bool{}, sourceFacts: map[string]flux.Source{}, paths: map[string]string{}}
-	b.g.Start = b.visit(start, startUID, 0, "")
+	b := &builder{ctx: ctx, r: r, now: now, idx: map[string]int{}, onPath: map[string]bool{}, sourceFacts: map[string]flux.Source{}, paths: map[string]string{},
+		secrets: map[string]Supply{}, ess: map[string]esRead{}}
+	if kind, why := b.exhausted(); kind != "" {
+		b.g.Start = b.stub(start, kind, why)
+	} else {
+		b.g.Start = b.visit(start, startUID, 0)
+	}
 	b.g.Reads = b.reads
 	b.label()
 	b.proximity()
@@ -233,25 +256,34 @@ func (b *builder) spend() bool {
 	return true
 }
 
-func (b *builder) visit(ref Ref, wantUID string, depth int, from string) string {
-	id := ref.ID()
-	if _, ok := b.idx[id]; ok {
-		if b.onPath[id] {
-			b.incomplete("cycle: %s → %s, cut", from, id)
-			return b.stub(ref, StubCycle, fmt.Sprintf("cycle: %s leads back to %s", from, id))
-		}
-		return id // a diamond: read once
-	}
-	if b.cancelled() {
-		return b.stub(ref, StubCancelled, "cancelled")
-	}
-	if len(b.g.Nodes)-b.stubs >= MaxNodes {
+// object adds a node standing for the object itself (indexed by its ID, so
+// a diamond reuses it, failed reads included).
+func (b *builder) object(n Node) string {
+	b.g.Nodes = append(b.g.Nodes, n)
+	b.idx[n.ID] = len(b.g.Nodes) - 1
+	return n.ID
+}
+
+// exhausted names the budget that stops the walk, or "".
+func (b *builder) exhausted() (Stub, string) {
+	switch {
+	case b.ctx.Err() != nil:
+		b.incomplete("cancelled")
+		return StubCancelled, "cancelled"
+	case len(b.g.Nodes) >= MaxNodes:
 		b.incomplete("node limit: %d nodes", MaxNodes)
-		return b.stub(ref, StubNodes, fmt.Sprintf("not read: the %d-node limit", MaxNodes))
+		return StubNodes, fmt.Sprintf("the %d-node limit", MaxNodes)
+	case b.reads >= MaxReads:
+		b.incomplete("read limit: %d reads", MaxReads)
+		return StubReads, fmt.Sprintf("the %d-read limit", MaxReads)
 	}
-	if !b.spend() {
-		return b.stub(ref, StubReads, fmt.Sprintf("not read: the %d-read limit", MaxReads))
-	}
+	return "", ""
+}
+
+// visit reads ref once (the caller checked the budget) and follows it.
+func (b *builder) visit(ref Ref, wantUID string, depth int) string {
+	id := ref.ID()
+	b.reads++
 	u, err := b.r.Get(b.ctx, ref)
 	at := b.now()
 	switch {
@@ -259,21 +291,20 @@ func (b *builder) visit(ref Ref, wantUID string, depth int, from string) string 
 		b.incomplete("cancelled")
 		return b.stub(ref, StubCancelled, "cancelled")
 	case apierrors.IsNotFound(err):
-		return b.stub(ref, StubNotFound, "not found")
+		return b.object(Node{ID: id, Ref: ref, ReadAt: at, Stub: StubNotFound, Note: "not found"})
 	case err != nil:
 		b.incomplete("unreadable: %s: %v", id, err)
-		return b.stub(ref, StubUnreadable, err.Error())
+		return b.object(Node{ID: id, Ref: ref, ReadAt: at, Stub: StubUnreadable, Note: err.Error()})
 	}
 	if wantUID != "" && string(u.GetUID()) != wantUID {
 		b.incomplete("replaced: %s now has UID %s, not %s", id, u.GetUID(), wantUID)
-		return b.stub(ref, StubReplaced, fmt.Sprintf("replaced: UID %s, not %s", u.GetUID(), wantUID))
+		return b.object(Node{ID: id, Ref: ref, ReadAt: at, Stub: StubReplaced, Note: fmt.Sprintf("replaced: UID %s, not %s", u.GetUID(), wantUID)})
 	}
 	n := nodeOf(ref, u, at)
 	if n.Stale {
 		b.incomplete("stale: %s status describes generation %d of %d", id, n.ObservedGeneration, n.Generation)
 	}
-	b.g.Nodes = append(b.g.Nodes, n)
-	b.idx[id] = len(b.g.Nodes) - 1
+	b.object(n)
 	switch ref.Kind {
 	case string(flux.GitRepositoryKind):
 		b.sourceFacts[id] = flux.ParseSource(u)
@@ -281,25 +312,61 @@ func (b *builder) visit(ref Ref, wantUID string, depth int, from string) string 
 		b.paths[id], _, _ = unstructured.NestedString(u.Object, "spec", "path")
 	}
 	b.supply(id, u)
+	b.follow(id, outgoing(ref, u), depth)
+	return id
+}
 
-	targets := outgoing(ref, u)
+// follow walks a node's targets: a node already read (a diamond) is linked
+// at no cost, a cycle is cut per edge, and once a budget runs out the rest
+// is summed up in one stub.
+func (b *builder) follow(id string, targets []target, depth int) {
 	if len(targets) == 0 {
-		return id
+		return
 	}
 	if depth >= MaxDepth {
 		b.incomplete("depth: not followed past depth %d", MaxDepth)
-		for _, t := range targets {
-			b.g.Edges = append(b.g.Edges, Edge{From: id, To: b.stub(t.ref, StubDepth, fmt.Sprintf("not followed past depth %d", MaxDepth)), Type: t.typ})
-		}
-		return id
+		b.summary(id, targets, StubDepth, fmt.Sprintf("not followed past depth %d", MaxDepth))
+		return
 	}
 	b.onPath[id] = true
+	defer func() { b.onPath[id] = false }()
+	var omitted []target
+	var kind Stub
+	var why string
 	for _, t := range targets {
-		to := b.visit(t.ref, "", depth+1, id)
+		tid := t.ref.ID()
+		if _, seen := b.idx[tid]; seen {
+			to := tid
+			if b.onPath[tid] {
+				b.incomplete("cycle: %s → %s, cut", id, tid)
+				to = b.stub(t.ref, StubCycle, fmt.Sprintf("cycle: %s leads back to %s", id, tid))
+			}
+			b.g.Edges = append(b.g.Edges, Edge{From: id, To: to, Type: t.typ, Reported: b.reported(id, t, to)})
+			continue
+		}
+		if kind == "" {
+			kind, why = b.exhausted()
+		}
+		if kind != "" {
+			omitted = append(omitted, t)
+			continue
+		}
+		to := b.visit(t.ref, "", depth+1)
 		b.g.Edges = append(b.g.Edges, Edge{From: id, To: to, Type: t.typ, Reported: b.reported(id, t, to)})
 	}
-	b.onPath[id] = false
-	return id
+	if len(omitted) > 0 {
+		b.summary(id, omitted, kind, "not read: "+why)
+	}
+}
+
+// summary is one stub for every target a budget or the depth stopped.
+func (b *builder) summary(from string, ts []target, kind Stub, why string) {
+	note := fmt.Sprintf("%s %s", ts[0].ref.ID(), why)
+	if len(ts) > 1 {
+		note = fmt.Sprintf("%d more (first %s) %s", len(ts), ts[0].ref.ID(), why)
+	}
+	to := b.stub(ts[0].ref, kind, note)
+	b.g.Edges = append(b.g.Edges, Edge{From: from, To: to, Type: ts[0].typ})
 }
 
 type target struct {
@@ -333,7 +400,16 @@ func outgoing(ref Ref, u *unstructured.Unstructured) []target {
 			out = append(out, target{Ref{ref.Group, ref.Kind, d.Namespace, d.Name}, EdgeDependsOn})
 		}
 	}
-	return out
+	seen := map[string]bool{}
+	uniq := out[:0]
+	for _, t := range out {
+		k := string(t.typ) + " " + t.ref.ID()
+		if !seen[k] {
+			seen[k] = true
+			uniq = append(uniq, t)
+		}
+	}
+	return uniq
 }
 
 // helmSource is what a HelmRelease's controller reads: its chartRef, else
@@ -366,34 +442,65 @@ func dependsOn(u *unstructured.Unstructured) []flux.DependencyRef {
 	return flux.ParseDetail(u).DependsOn
 }
 
-// reported: the downstream node's controller reports this edge blocks it.
-// dependsOn: Ready=False, DependencyNotReady, and the message names this
-// dependency. source: Ready=False, ArtifactFailed, and the source is not
-// Ready (Ready=False, or not found) - the reason alone also covers a
-// missing path, which is not the source's.
+// reported: the downstream node's controller reports this edge blocks it,
+// in a condition that describes its current spec (a condition from an
+// older generation is evidence about that generation, never about today's
+// edges).
+//   - dependsOn: DependencyNotReady, the message naming this dependency.
+//   - source: ArtifactFailed (kustomize- and helm-controller) with a source
+//     that is not ready - the reason alone also covers a missing path - or
+//     SourceNotReady (helm-controller), the message naming this source,
+//     which is still not ready by helm-controller's own rules.
 func (b *builder) reported(from string, t target, to string) bool {
 	n := b.g.Nodes[b.idx[from]]
-	if n.Ready != "False" || n.Suspended {
+	if n.Ready != "False" || n.Suspended || !current(n) {
 		return false
 	}
+	s := b.g.Nodes[b.idx[to]]
 	switch t.typ {
 	case EdgeDependsOn:
 		dep, ok := flux.DependencyNamed(n.Message)
 		return n.Reason == flux.ReasonDependencyNotReady && ok && dep == t.ref.Namespace+"/"+t.ref.Name
 	case EdgeSource:
-		if n.Reason != flux.ReasonArtifactFailed {
-			return false
+		switch n.Reason {
+		case flux.ReasonArtifactFailed:
+			return sourceNotReady(s)
+		case flux.ReasonSourceNotReady:
+			kind, ns, name, ok := flux.SourceNamed(n.Message)
+			return ok && kind == t.ref.Kind && ns == t.ref.Namespace && name == t.ref.Name && sourceNotReady(s)
 		}
-		s := b.g.Nodes[b.idx[to]]
-		return s.Stub == StubNotFound || (s.Stub == "" && s.Ready == "False")
+	}
+	return false
+}
+
+// current: the Ready condition describes the object's current generation -
+// its own observedGeneration when it carries one, else the status's.
+func current(n Node) bool {
+	if n.ConditionGeneration > 0 {
+		return n.ConditionGeneration == n.Generation
+	}
+	return !n.Stale
+}
+
+// sourceNotReady is helm-controller's isReady, inverted: not found, a
+// generation not yet reconciled, Stalled, or no artifact - or Ready=False.
+func sourceNotReady(s Node) bool {
+	switch s.Stub {
+	case StubNotFound:
+		return true
+	case "":
+		return s.Ready == "False" || s.Stale || s.Stalled || !s.HasArtifact
 	}
 	return false
 }
 
 func nodeOf(ref Ref, u *unstructured.Unstructured, at time.Time) Node {
 	n := Node{ID: ref.ID(), Ref: ref, UID: string(u.GetUID()), ReadAt: at, Generation: u.GetGeneration()}
-	n.ObservedGeneration, _, _ = unstructured.NestedInt64(u.Object, "status", "observedGeneration")
-	n.Stale = n.ObservedGeneration > 0 && n.Generation > n.ObservedGeneration
+	observed, found, _ := unstructured.NestedInt64(u.Object, "status", "observedGeneration")
+	n.ObservedGeneration = observed
+	n.Stale = found && n.Generation > 0 && n.Generation > observed // a recorded 0 is lag; an absent field is not
+	_, n.HasArtifact, _ = unstructured.NestedMap(u.Object, "status", "artifact")
+	n.Stalled = conditionTrue(u, "Stalled")
 	n.Suspended, _, _ = unstructured.NestedBool(u.Object, "spec", "suspend")
 	readyCondition(u, &n)
 	n.Failing = n.Ready == "False" && !n.Suspended
@@ -414,6 +521,16 @@ func nodeOf(ref Ref, u *unstructured.Unstructured, at time.Time) Node {
 var workloadKinds = map[string]bool{
 	"apps/Deployment": true, "apps/StatefulSet": true, "apps/DaemonSet": true,
 	"batch/Job": true, "batch/CronJob": true,
+}
+
+func conditionTrue(u *unstructured.Unstructured, typ string) bool {
+	conds, _, _ := unstructured.NestedSlice(u.Object, "status", "conditions")
+	for _, c := range conds {
+		if cm, ok := c.(map[string]any); ok && cm["type"] == typ {
+			return cm["status"] == "True"
+		}
+	}
+	return false
 }
 
 func readyCondition(u *unstructured.Unstructured, n *Node) {
@@ -477,7 +594,20 @@ func joinPath(p []string) string {
 	return out
 }
 
+// readSecret reads a Secret's metadata, and its supplier, once per walk:
+// every node that names it shares the same read (and the same facts).
 func (b *builder) readSecret(s *Supply) {
+	field := s.Field
+	if done, ok := b.secrets[s.Secret.ID()]; ok {
+		*s = done
+		s.Field = field
+		return
+	}
+	defer func() {
+		if s.Error != "cancelled" && !strings.HasPrefix(s.Error, "not read") {
+			b.secrets[s.Secret.ID()] = *s
+		}
+	}()
 	if b.cancelled() {
 		s.Error = "cancelled"
 		return
@@ -504,25 +634,29 @@ func (b *builder) readSecret(s *Supply) {
 			continue
 		}
 		ref := Ref{GroupESO, "ExternalSecret", s.Secret.Namespace, o.Name}
-		if b.cancelled() {
-			s.SupplierNote = "cancelled"
-			return
+		es, ok := b.ess[ref.ID()]
+		if !ok {
+			if b.cancelled() {
+				s.SupplierNote = "cancelled"
+				return
+			}
+			if !b.spend() {
+				s.SupplierNote = fmt.Sprintf("its owner ExternalSecret %s was not read: the %d-read limit", o.Name, MaxReads)
+				return
+			}
+			u, err := b.r.Get(b.ctx, ref)
+			es = esRead{u: u, err: err, at: b.now()}
+			b.ess[ref.ID()] = es
 		}
-		if !b.spend() {
-			s.SupplierNote = fmt.Sprintf("its owner ExternalSecret %s was not read: the %d-read limit", o.Name, MaxReads)
-			return
-		}
-		u, err := b.r.Get(b.ctx, ref)
-		at := b.now()
 		switch {
-		case err != nil:
-			s.SupplierNote = fmt.Sprintf("its owner ExternalSecret %s could not be read: %v", o.Name, err)
-		case string(u.GetUID()) != string(o.UID):
-			s.SupplierNote = fmt.Sprintf("its owner reference names ExternalSecret %s with UID %s, but that name now has UID %s", o.Name, o.UID, u.GetUID())
+		case es.err != nil:
+			s.SupplierNote = fmt.Sprintf("its owner ExternalSecret %s could not be read: %v", o.Name, es.err)
+		case string(es.u.GetUID()) != string(o.UID):
+			s.SupplierNote = fmt.Sprintf("its owner reference names ExternalSecret %s with UID %s, but that name now has UID %s", o.Name, o.UID, es.u.GetUID())
 		default:
 			var n Node
-			readyCondition(u, &n)
-			s.Supplier = &Supplier{Ref: ref, UID: string(u.GetUID()), ReadAt: at, Ready: n.Ready, Reason: n.Reason, Message: n.Message, Writes: lastwrite.Read(u.GetManagedFields())}
+			readyCondition(es.u, &n)
+			s.Supplier = &Supplier{Ref: ref, UID: string(es.u.GetUID()), ReadAt: es.at, Ready: n.Ready, Reason: n.Reason, Message: n.Message, Writes: lastwrite.Read(es.u.GetManagedFields())}
 		}
 		return
 	}

@@ -241,7 +241,8 @@ func TestGraphReportedNeedsTheControllersWords(t *testing.T) {
 	}
 	// ArtifactFailed with a Ready source is not the source's (a missing path).
 	r = world()
-	r.objs["GitRepository/flux-system/platform"].Object["status"] = map[string]any{"conditions": []any{ready("True", "Succeeded", "", t0)}}
+	r.objs["GitRepository/flux-system/platform"].Object["status"] = map[string]any{"conditions": []any{ready("True", "Succeeded", "", t0)},
+		"artifact": map[string]any{"revision": "main@sha1:" + sha}}
 	r.objs["Kustomization/flux-system/infra"].Object["status"] = map[string]any{"conditions": []any{ready("False", "ArtifactFailed", "kustomization path not found", t0)}}
 	if e, _ := edge(build(t, r, ""), "Kustomization/flux-system/infra", "GitRepository/flux-system/platform"); e.Reported {
 		t.Fatal("a Ready source reported as the blocker")
@@ -382,4 +383,130 @@ func containsPrefix(xs []string, p string) bool {
 		}
 	}
 	return false
+}
+
+// Design review of 06f7f47: the graph stays bounded with its stubs, every
+// object is read once (failures and supply included), a condition reports
+// only for the generation it describes, helm-controller's SourceNotReady is
+// its own report, and a recorded zero observedGeneration is lag.
+func TestGraphReviewOf06f7f47(t *testing.T) {
+	// 1,000 dependencies: 24 nodes read in all, the rest one summary stub.
+	r := chain(1)
+	var deps []any
+	for i := 0; i < 1000; i++ {
+		deps = append(deps, map[string]any{"name": fmt.Sprintf("d%d", i)})
+	}
+	r.objs["Kustomization/flux-system/k0"].Object["spec"] = map[string]any{"dependsOn": deps}
+	g := Build(context.Background(), r, Ref{GroupKustomize, "Kustomization", "flux-system", "k0"}, "", time.Now)
+	if len(g.Nodes) != MaxNodes+1 || len(g.Edges) != MaxNodes || g.Reads != MaxNodes {
+		t.Fatalf("1,000 dependencies: %d nodes, %d edges, %d reads", len(g.Nodes), len(g.Edges), g.Reads)
+	}
+	last := g.Nodes[len(g.Nodes)-1]
+	if last.Stub != StubNodes || !strings.HasPrefix(last.Note, "977 more (first Kustomization/flux-system/d23) not read: the 24-node limit") {
+		t.Fatalf("summary: %+v", last)
+	}
+	// Depth: one summary per node, whatever its fan-out.
+	r = chain(7)
+	r.objs["Kustomization/flux-system/k6"].Object["spec"] = map[string]any{"dependsOn": []any{map[string]any{"name": "x"}, map[string]any{"name": "y"}, map[string]any{"name": "z"}}}
+	g = Build(context.Background(), r, Ref{GroupKustomize, "Kustomization", "flux-system", "k0"}, "", time.Now)
+	depth := 0
+	for _, n := range g.Nodes {
+		if n.Stub == StubDepth {
+			depth++
+			if !strings.HasPrefix(n.Note, "3 more") {
+				t.Fatalf("depth summary: %+v", n)
+			}
+		}
+	}
+	if depth != 1 {
+		t.Fatalf("%d depth stubs", depth)
+	}
+
+	// A missing source reached twice is read once, one node.
+	r = world()
+	delete(r.objs, "GitRepository/flux-system/platform")
+	g = build(t, r, "")
+	reads := 0
+	for _, id := range r.gets {
+		if id == "GitRepository/flux-system/platform" {
+			reads++
+		}
+	}
+	if reads != 1 || node(t, g, "GitRepository/flux-system/platform").Stub != StubNotFound {
+		t.Fatalf("missing diamond: %d reads", reads)
+	}
+	// A Secret (and its ExternalSecret) shared by two nodes is read once.
+	r = world()
+	r.objs["Kustomization/flux-system/infra"].Object["spec"].(map[string]any)["decryption"] = map[string]any{"secretRef": map[string]any{"name": "sops-age"}}
+	g = build(t, r, "")
+	reads = 0
+	for _, id := range r.gets {
+		if id == "Secret/flux-system/sops-age" {
+			reads++
+		}
+	}
+	if reads != 1 || node(t, g, "Kustomization/flux-system/infra").Supply[0].SecretUID != "sec-2" {
+		t.Fatalf("shared Secret read %d times", reads)
+	}
+
+	// A condition from generation 1 does not report generation 2's edge.
+	r = world()
+	u := r.objs["Kustomization/flux-system/apps"]
+	u.SetGeneration(2)
+	u.Object["spec"] = map[string]any{"sourceRef": map[string]any{"kind": "GitRepository", "name": "new"}}
+	c := ready("False", "ArtifactFailed", "Source artifact not found, retrying in 30s", t0)
+	c["observedGeneration"] = int64(1)
+	u.Object["status"] = map[string]any{"observedGeneration": int64(1), "conditions": []any{c}}
+	r.objs["GitRepository/flux-system/new"] = obj("GitRepository", "flux-system", "new", "new", map[string]any{}, map[string]any{"conditions": []any{ready("False", "GitOperationFailed", "auth failed", t0)}})
+	g = build(t, r, "")
+	if e, _ := edge(g, "Kustomization/flux-system/apps", "GitRepository/flux-system/new"); e.Reported {
+		t.Fatal("an old generation's condition reported today's edge")
+	}
+	// The same, current: reported.
+	c["observedGeneration"] = int64(2)
+	u.Object["status"] = map[string]any{"observedGeneration": int64(2), "conditions": []any{c}}
+	if e, _ := edge(build(t, r, ""), "Kustomization/flux-system/apps", "GitRepository/flux-system/new"); !e.Reported {
+		t.Fatal("a current condition did not report")
+	}
+
+	// A recorded observedGeneration of 0 behind generation 1 is lag.
+	r = world()
+	u = r.objs["Kustomization/flux-system/apps"]
+	u.SetGeneration(1)
+	u.Object["status"].(map[string]any)["observedGeneration"] = int64(0)
+	if !node(t, build(t, r, ""), "Kustomization/flux-system/apps").Stale {
+		t.Fatal("observedGeneration 0 behind generation 1 is not stale")
+	}
+}
+
+// helm-controller's SourceNotReady: reported when the message names this
+// source and the source is still not ready by the controller's own rules.
+func TestGraphHelmSourceNotReady(t *testing.T) {
+	hr := func(msg string) *unstructured.Unstructured {
+		return obj("HelmRelease", "apps", "web", "hr", map[string]any{"chartRef": map[string]any{"kind": "HelmChart", "name": "web"}},
+			map[string]any{"conditions": []any{ready("False", "SourceNotReady", msg, t0)}})
+	}
+	chart := func(status map[string]any) *unstructured.Unstructured {
+		return obj("HelmChart", "apps", "web", "hc", map[string]any{}, status)
+	}
+	reported := func(h, c *unstructured.Unstructured) bool {
+		r := &fakeReader{objs: map[string]*unstructured.Unstructured{"HelmRelease/apps/web": h, "HelmChart/apps/web": c}, fail: map[string]error{}}
+		e, _ := edge(Build(context.Background(), r, Ref{GroupHelm, "HelmRelease", "apps", "web"}, "", time.Now), "HelmRelease/apps/web", "HelmChart/apps/web")
+		return e.Reported
+	}
+	noArtifact := map[string]any{"conditions": []any{ready("False", "FetchFailed", "chart fetch failed", t0)}}
+	if !reported(hr("HelmChart 'apps/web' is not ready: does not have an artifact"), chart(noArtifact)) {
+		t.Fatal("the controller's SourceNotReady naming this chart")
+	}
+	if reported(hr("HelmChart 'apps/other' is not ready: does not have an artifact"), chart(noArtifact)) {
+		t.Fatal("a message naming another source")
+	}
+	recovered := map[string]any{"conditions": []any{ready("True", "Succeeded", "", t0)}, "artifact": map[string]any{"revision": "1.0.0"}}
+	if reported(hr("HelmChart 'apps/web' is not ready: does not have an artifact"), chart(recovered)) {
+		t.Fatal("a source that has recovered since")
+	}
+	stalled := map[string]any{"conditions": []any{ready("True", "Succeeded", "", t0), map[string]any{"type": "Stalled", "status": "True"}}, "artifact": map[string]any{"revision": "1.0.0"}}
+	if !reported(hr("HelmChart 'apps/web' is not ready: invalid chart"), chart(stalled)) {
+		t.Fatal("a Stalled source is not ready by the controller's rules")
+	}
 }

@@ -118,12 +118,26 @@ type DependencyRef struct {
 	Name      string
 }
 
-// Flux's reasons for a reconcile blocked upstream, the same in the
-// kustomize- and helm-controllers (v1.9.6 / v1.6.5).
+// Flux's reasons for a reconcile blocked upstream (kustomize-controller
+// v1.9.6, helm-controller v1.6.5): DependencyNotReady and ArtifactFailed in
+// both; SourceNotReady in helm-controller, when its isReady judges the
+// source not ready (generation not reconciled, Stalled, or no artifact).
 const (
 	ReasonDependencyNotReady = "DependencyNotReady"
 	ReasonArtifactFailed     = "ArtifactFailed"
+	ReasonSourceNotReady     = "SourceNotReady"
 )
+
+var sourceName = regexp.MustCompile(`^(\w+) '([^'/]+)/([^']+)' is not ready`)
+
+// SourceNamed reads the source a SourceNotReady message names, as
+// helm-controller words it: "<Kind> '<ns>/<name>' is not ready: <why>".
+func SourceNamed(msg string) (kind, ns, name string, ok bool) {
+	if m := sourceName.FindStringSubmatch(msg); m != nil {
+		return m[1], m[2], m[3], true
+	}
+	return "", "", "", false
+}
 
 var dependencyName = regexp.MustCompile(`dependency '([^']+)'`)
 

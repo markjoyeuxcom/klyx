@@ -80,7 +80,7 @@ func (c *ClusterConn) objectWrites(ctx context.Context, ref ObjectRef) WriteResu
 		r.State, r.Error = WritesError, "no UID to pin the read to"
 		return r
 	}
-	gvr, namespaced, err := c.resourceFor(ref)
+	gvr, namespaced, err := c.resourceFor(ctx, ref)
 	if err != nil {
 		r.State, r.Error = WritesError, err.Error()
 		return r
@@ -111,22 +111,59 @@ func (c *ClusterConn) objectWrites(ctx context.Context, ref ObjectRef) WriteResu
 }
 
 // resourceFor resolves a reference's kind to its served resource through the
-// cached discovery.
-func (c *ClusterConn) resourceFor(ref ObjectRef) (schema.GroupVersionResource, bool, error) {
-	disc := c.discovery()
-	version := ref.Version
-	if version == "" {
-		version = preferredVersion(disc, ref.Group, "v1")
-	}
-	gv := schema.GroupVersion{Group: ref.Group, Version: version}
-	list, err := disc.ServerResourcesForGroupVersion(gv.String())
-	if err != nil {
-		return schema.GroupVersionResource{}, false, fmt.Errorf("%s is not served: %w", gv, err)
-	}
-	for _, r := range list.APIResources {
-		if r.Kind == ref.Kind && !strings.Contains(r.Name, "/") {
-			return gv.WithResource(r.Name), r.Namespaced, nil
+// cached, context-aware discovery: the requested version, else the group's
+// preferred version, else any other advertised version that serves the kind
+// (the Flux source group prefers v1 while OCIRepository is served only at
+// v1beta2; servedVersion's rule, per kind). The caller's context ends the
+// discovery reads too, so a cancelled walk is never held by a cold cache.
+func (c *ClusterConn) resourceFor(ctx context.Context, ref ObjectRef) (schema.GroupVersionResource, bool, error) {
+	d := c.probeDiscovery()
+	versions := []string{}
+	if ref.Version != "" {
+		versions = append(versions, ref.Version)
+	} else {
+		groups, err := d.ServerGroupsCtx(ctx)
+		if ctx.Err() != nil {
+			return schema.GroupVersionResource{}, false, ctx.Err()
+		}
+		if err == nil && groups != nil {
+			for _, g := range groups.Groups {
+				if g.Name != ref.Group {
+					continue
+				}
+				if g.PreferredVersion.Version != "" {
+					versions = append(versions, g.PreferredVersion.Version)
+				}
+				for _, v := range g.Versions {
+					if v.Version != g.PreferredVersion.Version {
+						versions = append(versions, v.Version)
+					}
+				}
+			}
+		}
+		if len(versions) == 0 {
+			versions = append(versions, "v1") // the group is not advertised (fake discovery in tests)
 		}
 	}
-	return schema.GroupVersionResource{}, false, fmt.Errorf("%s %s is not served", gv, ref.Kind)
+	var unreadable []string
+	for _, v := range versions {
+		gv := schema.GroupVersion{Group: ref.Group, Version: v}
+		list, err := d.ServerResourcesForGroupVersionCtx(ctx, gv.String())
+		if ctx.Err() != nil {
+			return schema.GroupVersionResource{}, false, ctx.Err()
+		}
+		if err != nil || list == nil {
+			unreadable = append(unreadable, fmt.Sprintf("%s: %v", gv, err))
+			continue
+		}
+		for _, r := range list.APIResources {
+			if r.Kind == ref.Kind && !strings.Contains(r.Name, "/") {
+				return gv.WithResource(r.Name), r.Namespaced, nil
+			}
+		}
+	}
+	if len(unreadable) > 0 {
+		return schema.GroupVersionResource{}, false, fmt.Errorf("%s %s is not served by any readable version (%s)", ref.Group, ref.Kind, strings.Join(unreadable, "; "))
+	}
+	return schema.GroupVersionResource{}, false, fmt.Errorf("%s %s is not served", ref.Group, ref.Kind)
 }

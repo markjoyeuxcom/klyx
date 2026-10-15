@@ -30,7 +30,7 @@ func (c *ClusterConn) DependencyGraph(ctx context.Context, kind, ns, name, uid s
 type depReader struct{ c *ClusterConn }
 
 func (r depReader) Get(ctx context.Context, ref depgraph.Ref) (*unstructured.Unstructured, error) {
-	gvr, namespaced, err := r.c.resourceFor(ObjectRef{Group: ref.Group, Kind: ref.Kind})
+	gvr, namespaced, err := r.c.resourceFor(ctx, ObjectRef{Group: ref.Group, Kind: ref.Kind})
 	if err != nil {
 		return nil, err
 	}
@@ -41,7 +41,7 @@ func (r depReader) Get(ctx context.Context, ref depgraph.Ref) (*unstructured.Uns
 }
 
 func (r depReader) GetMeta(ctx context.Context, ref depgraph.Ref) (*metav1.PartialObjectMetadata, error) {
-	gvr, namespaced, err := r.c.resourceFor(ObjectRef{Group: ref.Group, Kind: ref.Kind})
+	gvr, namespaced, err := r.c.resourceFor(ctx, ObjectRef{Group: ref.Group, Kind: ref.Kind})
 	if err != nil {
 		return nil, err
 	}
