@@ -33,6 +33,9 @@ type Attached struct {
 	Reason               string
 	Included             bool
 	Attachments          []Attachment // sorted by parent
+	// Rules are a route's per-rule fingerprints, by rule index (The Line
+	// slice 7b): what proves a rule's metric history attributable.
+	Rules []string
 }
 
 // ReduceAttachments turns attachments into counted objects, sorted by

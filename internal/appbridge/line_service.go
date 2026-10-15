@@ -304,6 +304,10 @@ func (s *LineService) attach(cluster string, st *lineStation, obs *observe.Obser
 	for _, p := range lineParts {
 		att.releases = append(att.releases, obs.SubscribeRows(p.task, p.part, lineOwner))
 	}
+	// The rule history (slice 7b) rides the same attachment: the route rows
+	// flow on every station's Observer for as long as the station is attached.
+	att.releases = append(att.releases, obs.Acquire(healthsrc.TaskGateway, routesOwner),
+		obs.SubscribeRows(healthsrc.TaskGateway, "routes", routesOwner))
 	st.att = att
 	s.retryBootstraps(cluster, st)
 }

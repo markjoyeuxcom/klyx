@@ -151,7 +151,9 @@ func evalRoutes(cluster string) func(observe.Capture) observe.PartResult {
 		}
 		var atts []observe.Attachment
 		uidOf := map[string]*nativeRouteRef{}
+		rulesOf := map[string][]string{} // route UID -> its rule fingerprints
 		for _, u := range unstructuredOf(c.Objects[KindHTTPRoutes]) {
+			rulesOf[string(u.GetUID())] = gwapi.RuleFingerprints(u)
 			for _, gw := range parents {
 				rn, ok := gwapi.RouteForGateway(u, gw.Namespace, gw.Name)
 				if !ok {
@@ -166,6 +168,9 @@ func evalRoutes(cluster string) func(observe.Capture) observe.PartResult {
 			}
 		}
 		reduced := observe.ReduceAttachments(atts)
+		for i := range reduced {
+			reduced[i].Rules = rulesOf[reduced[i].UID]
+		}
 		nc := observe.NativeCounts{Word: "with a failing attachment"}
 		var incl []observe.Attached
 		for _, a := range reduced {

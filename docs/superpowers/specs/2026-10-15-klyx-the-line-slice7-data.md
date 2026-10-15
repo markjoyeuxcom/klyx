@@ -66,6 +66,14 @@ Each is Codex-reviewed on its own, in this order.
   It returns no interval when the key is unknown, suspended by a loss, or past the log's trim.
 - **A recreated route** has a new UID and so a new key. A reordered route changes the fingerprints at each index. Neither joins history to today's backends.
 
+### 3.1 As built in 7b
+
+- **The fingerprint** is `gwapi.RuleFingerprints`, full sha256 hex over canonical JSON (map keys sorted by `encoding/json`). The Observer's `evalRoutes` sets it on each reduced route row (`observe.Attached.Rules`, by rule index), so it is the same whichever Gateway the reduction picked.
+- **The writer** is `routeHistory`, a health-sink listener registered at startup (`RouteRuleHistory`). It diffs and appends under its own lock on the Observer's loop, mirroring the line's `step`: baseline, after-gap, changes only when something changed, loss.
+- **Readability:** rows count only when both the HTTPRoute and Gateway kinds are live. A route is a row only while attached to a Gateway the capture read, so with the Gateways unread a vanished row could be a gap, not a gone rule. The Observer's own routes-partition loss also breaks continuity.
+- **The subscription** rides `LineService`'s per-station attachment: the gateway domain's lease and the routes rows, owned by `routes/rules`, released with it. Subscribing makes the Observer publish the current rows at once, so the baseline needs no separate bootstrap.
+- **The interval** (`routeHistory.Interval`) reads the log's own proof and partition: the latest of the observed change (`Since`), the first sighting (`FirstSeen`) and the partition's live-since. The basis is "observed" only when the change is the start. There is no interval while the partition is lost, or when the rule is gone, never seen, or trimmed.
+
 ## 4. 7c: route metrics per rule
 
 - **Parsing** keeps the rule index: `httproute/<ns>/<name>/rule/<n>` reads as (route, rule). Every other shape is skipped, never guessed.

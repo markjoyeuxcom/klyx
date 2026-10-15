@@ -191,3 +191,18 @@ func TestRouteReasonReachesTop(t *testing.T) {
 		t.Fatalf("the reduced row carries the same reason: %+v", rows)
 	}
 }
+
+// The Line slice 7b: a route row carries its rule fingerprints, by rule
+// index, the same whatever Gateway the reduction picked.
+func TestRouteRowsCarryRuleFingerprints(t *testing.T) {
+	r := httpRoute("web", []string{"a", "b"}, "web", nil)
+	c := observe.Capture{Rows: true, Objects: map[string][]any{
+		KindHTTPRoutes: {r}, KindGateways: {gw("a", "True"), gw("b", "True")},
+		KindGatewayServices: {serviceMeta("web")}, KindGatewayEndpoints: {slice("web", true)},
+	}}
+	rows := evalRoutes("test")(c).Rows.(RowSet[observe.Attached]).Rows
+	want := gwapi.RuleFingerprints(r)
+	if len(rows) != 1 || len(want) == 0 || !reflect.DeepEqual(rows[0].Data.Rules, want) {
+		t.Fatalf("rules %v, want %v", rows, want)
+	}
+}

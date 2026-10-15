@@ -223,6 +223,10 @@ func main() {
 		k := line.OverrideKey(cfg.Line.Source.URL, cfg.Line.Source.Ref.Kind, cfg.Line.Source.Ref.Name)
 		lineOverride = &k
 	}
+	// The Line slice 7b: each HTTPRoute rule's fingerprint history, the
+	// proof a rule's metrics are attributable.
+	appbridge.RouteRuleHistory(healthSink)
+
 	// The Line slice 6: read-only Git access through the system git, only
 	// from fleet.yaml's approved git.repos (Settings > Git); it orders the
 	// line against its history after every LineDTO (line:git).
