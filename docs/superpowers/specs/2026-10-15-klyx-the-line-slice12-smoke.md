@@ -40,21 +40,47 @@ The walk produces captures and a JSON log. A step that errors, overflows or land
 
 ## 3. 12b: the native WKWebView smoke
 
-- **The tag.** `cmd/klyx/smoke.go` (`//go:build smoke`) registers a smoke hook. Release builds never carry it, and `main` calls the hook only when it is set. With `KLYX_SMOKE_OUT=<file>`, the hook does three things:
-  - starts the main window hidden (WKWebView still lays out and runs script in a hidden window; the report says if a step could not measure);
-  - injects `window.__KLYX_SMOKE__ = true` before the page loads;
-  - binds a smoke-only `SmokeService` with one method, `Report(json)`, which writes the file and quits the app.
-- **The runner.** `src/smoke/run.ts` is a dynamic import, loaded only when the flag is set, so it is its own chunk and never runs in a normal launch. It drives the same walk as 12a through the app's own navigation:
-  - the registry's `navigate` and the store's intents, never typed keys or the OS;
-  - for each step, the same facts as 12a, plus WKWebView-specific ones:
-    - the computed font family of the mono and sans text (the bundled fonts loaded);
-    - the resolved values of `--line-ground`, `--line-route` and `--line-danger` in each theme;
-    - container-query layout at the inspector breakpoint (the drawer at the narrow window size);
-    - that `ResizeObserver` and `structuredClone` exist.
-- **The build and run:**
-  - `go build -tags smoke -o <scratchpad>/KlyxSmoke.app/...` (the review app bundle), run once per theme against the kind lab's fleet config.
-  - The report is compared with 12a's log: the same pages, headers and counts at the same lab state, and no step erroring.
-- **What it cannot see,** and why the checklist exists: pixels, motion, focus-ring appearance, OS notifications and native window chrome.
+### 3.1 The smoke build is its own app
+
+- **The tag.** `cmd/klyx/smoke.go` (`//go:build smoke`) sets a package-level smoke hook. Ordinary builds leave it nil, and `main` consults it only when it is set.
+- **A separate identity, set before `application.New`:**
+  - The Wails single-instance lock is keyed by `UniqueID`, and a collision notifies the running instance and exits with status 0. The smoke build therefore runs as `com.moomora.klyx.smoke`, so it starts and reports while ordinary Klyx is open.
+  - Its bundle (`<scratchpad>/KlyxSmoke.app`) has its own `CFBundleIdentifier`.
+  - Its config is the lab's fleet config, passed explicitly. Its window state, activity log and every other per-app store live under a smoke-only directory, so the owner's normal app is never read or written.
+- **Provenance:** the frontend assets are built fresh from the commit before they are embedded. The report records the commit, a clean-tree flag and the asset bundle's hash.
+- **Release builds never carry it:** `SmokeService` and the hook exist only under the tag.
+
+### 3.2 Starting the runner, race-free
+
+This Wails version runs `WebviewWindowOptions.JS` after `WebViewDidFinishNavigation`, so the hook cannot set a flag before the page loads. It uses a post-load handshake instead:
+- The hook's window `JS` sets `window.__KLYX_SMOKE__ = true` and dispatches a `klyx-smoke` event.
+- The app shell checks the flag when it mounts and listens for the event, so it starts the runner whichever happens first. It loads the runner by dynamic import, as a chunk of its own; an ordinary launch never imports it.
+- The runner calls `SmokeService.Report` by name through the Wails runtime, not through generated bindings, which ordinary builds do not have.
+
+### 3.3 Bounded, and failing on anything unmeasured
+
+- **A Go-side watchdog**, independent of the page, writes a failure result (`{"result":"incomplete","why":…}`) and quits:
+  - if the runner has not called `SmokeService.Started` within 30 seconds of the window opening;
+  - if `Report` has not arrived within 5 minutes.
+- **Every runner step is bounded:** each wait (readiness, a lens's header, a drawing) has its own timeout, and a timeout fails the step with its name.
+- **Every check is an assertion with an expected value,** never a recorded value alone:
+  - **Pages:** the location bar names the expected lens; the header is present; no console error; no horizontal overflow.
+  - **Focus** after each keyboard-equivalent action is the expected element: the inspector's identity after opening beside, the console input while open.
+  - **Layout:** at the narrow window the inspector is a drawer (`.lens-drawer` present); at the wide one it is split.
+  - **Tokens:** in each theme `--line-ground`, `--line-route` and `--line-danger` resolve to the spec's values (parent §2.1).
+  - **APIs:** `ResizeObserver`, `structuredClone` and `CSS.supports('container-type: inline-size')` are present.
+  - **Geometry:** the lens body, rows and inspector have non-zero sizes. Zero or unmeasurable sizes, as a hidden window might give, fail the step as "unmeasurable", never pass.
+  - **Fonts:** `document.fonts.load()` is awaited for each face and weight the themes use (Barlow 400/500/600, Barlow Condensed 600, DM Mono 400/500), then each matching `FontFace` must have `status === "loaded"` and `document.fonts.check()` must be true. A missing or blocked font asset fails the check. The computed families are recorded besides.
+- **The result** is `pass` only when every step passed. Any failed, timed-out or unmeasurable step makes it `fail` or `incomplete`, with each reason listed.
+- **Hidden first.** If the hidden window proves unmeasurable, the smoke is not passed. A visible run happens only with the owner's consent.
+
+### 3.4 The run
+
+`go build -tags smoke` into the smoke bundle, then run once per theme (the theme passed by environment) at a wide and a narrow window size against the kind lab:
+- first while ordinary Klyx is not running;
+- once with it running, to prove the separate identity.
+
+The report is compared with 12a's log for the same lab state: the same pages, headers and counts.
 
 ## 4. 12c: the eyeball checklist
 
@@ -83,15 +109,24 @@ The walk produces captures and a JSON log. A step that errors, overflows or land
 ## 5. Testing
 
 - **12a** is itself the test. Its scripts live in the scratchpad (`pw/`), as the earlier captures' do, and the note records the run.
-- **12b** adds:
-  - a Go test that the `smoke` tag's hook is absent from a default build: a `go list -tags ''` check that `smoke.go` is excluded, plus a build-constraint test;
-  - a frontend test that the runner chunk is not imported without the flag;
-  - a unit test of the runner's step list against the registry, so a new destination is never silently skipped.
+- **12b:**
+  - **Go:**
+    - the hook and `SmokeService` are absent from a default build (a build-constraint test);
+    - the smoke identity differs from the release one;
+    - the watchdog writes an `incomplete` result and quits when the runner never starts, and when `Report` never arrives, with a fake clock.
+  - **Frontend:**
+    - the runner chunk is not imported without the flag or event;
+    - the handshake starts it from either order of flag and mount;
+    - the step list covers every registry destination, so a new one is never silently skipped;
+    - a deliberately failed assertion, a timed-out step and an unmeasurable geometry each yield a non-pass result;
+    - the font check fails when a face does not load.
 - **12c** is a document.
 
-## 6. Open points (for review)
+## 6. Rulings (design review of 9c72ca5)
 
-1. **The native smoke runs in a hidden window,** so the owner's desktop is not disturbed. If WKWebView in a hidden window does not lay out (no measurable sizes), the runner reports it, and the smoke falls back to a visible window only with the owner's consent.
-2. **The runner navigates through the app's own registry and intents,** not simulated keys: the keyboard paths are covered by 12a's headless walk and the frontend tests.
-3. **The smoke build is a separate bundle in the scratchpad,** never the release app, and its `SmokeService` exists only under the tag.
-4. **OS notifications stay off in the automated smoke.** Their delivery and click-through are checked by the owner (12c).
+1. **The hidden window is accepted,** with §3.3's rule: unmeasurable is never a pass. A visible fallback happens only with the owner's explicit consent.
+2. **Navigation through the registry and intents is accepted** for the native smoke. Keyboard coverage stays with the Chromium walk and the frontend tests. The start is race-free through §3.2's post-load handshake, since this Wails version runs the window's `JS` after navigation finishes.
+3. **The smoke tag and its separate bundle are accepted,** with §3.1's separate identity, fresh assets and recorded provenance. `SmokeService` is absent from ordinary builds, and a normal launch never imports or runs the runner.
+4. **OS notifications stay off in the automation.** Their native delivery and click-through are the owner's checklist work, never an automated pass.
+
+Review findings answered: the single-instance lock (§3.1), bounded progress and explicit failure (§3.3), and font loading (§3.3).
