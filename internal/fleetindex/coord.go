@@ -21,6 +21,7 @@ type Observed interface {
 	Kinds() []observe.KindInfo
 	WatchKind(kind string, f func(observe.KindState)) (cancel func())
 	VisitKind(kind string, visit func(obj any) bool) (st observe.KindState, complete, ok bool)
+	RolesNow(ctx context.Context, qs []observe.RoleQuery) ([]observe.RoleView, bool)
 	Done() <-chan struct{}
 }
 
@@ -60,6 +61,7 @@ type Index struct {
 	order    []string
 	clusters map[string]*coord
 	genSeq   uint64
+	searchMu sync.Mutex // one search at a time
 	wg       sync.WaitGroup
 	stopped  bool
 	quit     chan struct{} // closed by Stop
@@ -432,6 +434,10 @@ func (c *coord) visit(gen uint64, obs Observed, p planned) {
 		}
 		return true
 	})
+	if ok {
+		// the served API, as the Observer resolved it
+		c.store.describe(gen, key, p.class, kindDesc{ref: p.ref, gvr: st.GVR, observer: p.observer})
+	}
 	switch {
 	case !ok || stopped:
 	case !st.CountKnown:
@@ -499,6 +505,7 @@ func (c *coord) acquire(ctx context.Context, gen uint64, acq Acquire, p planned,
 			continue
 		}
 		gvr := schema.GroupVersionResource{Group: p.ref.Group, Version: version, Resource: p.ref.Resource}
+		c.store.describe(gen, key, p.class, kindDesc{ref: p.ref, gvr: gvrString(gvr)})
 		rv, err := c.list(ctx, gen, acq.Reader, p, gvr, sem)
 		once()
 		if done := c.settle(gen, p, err, fail); done {
@@ -711,4 +718,11 @@ func (ix *Index) Coverage() []ClusterCoverage {
 // Used reports a cluster's and the fleet's admitted entries and bytes.
 func (ix *Index) Used(cluster string) (clusterEntries int, clusterBytes int64, fleetEntries int, fleetBytes int64) {
 	return ix.budget.Used(cluster)
+}
+
+func gvrString(g schema.GroupVersionResource) string {
+	if g.Group == "" {
+		return g.Version + "/" + g.Resource
+	}
+	return g.Group + "/" + g.Version + "/" + g.Resource
 }

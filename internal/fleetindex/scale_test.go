@@ -72,12 +72,12 @@ func TestObserverKindPeakMemory(t *testing.T) {
 		t.Skip("allocates")
 	}
 	obs := bigObs(60_000)
-	base := heap()
+	base := heapNow()
 	ix := New(Settings{Kinds: []KindRef{refPods}})
 	c := ix.coordFor("a")
 	c.store.begin(1)
 	visitOnce(t, c, 1, obs)
-	after := heap()
+	after := heapNow()
 	_, charged, _, _ := ix.budget.Used("a")
 	st := c.store.status()["/pods"]
 	growth := int64(after) - int64(base)

@@ -27,8 +27,17 @@ type KindStatus struct {
 	Err     string
 }
 
+// kindDesc says what a kind is on its cluster: its display name, its
+// served API and, when the Observer holds it, the Observer's kind name.
+type kindDesc struct {
+	ref      KindRef
+	gvr      string // group/version/resource, as served
+	observer string
+}
+
 // kindStore is one kind's entries on one cluster.
 type kindStore struct {
+	desc    kindDesc
 	class   Class
 	entries map[string]*Entry // by UID
 	bytes   int64             // charged, the kind's overhead included
@@ -78,6 +87,18 @@ func (c *clusterStore) kindLocked(kind string, class Class) *kindStore {
 	k := &kindStore{class: class, entries: map[string]*Entry{}, bytes: kindOverhead, status: KindStatus{State: StateIndexing}}
 	c.kinds[kind] = k
 	return k
+}
+
+// describe records what kind is on this cluster for generation gen.
+func (c *clusterStore) describe(gen uint64, kind string, class Class, d kindDesc) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if gen == 0 || gen != c.gen {
+		return
+	}
+	if k := c.kindLocked(kind, class); k != nil {
+		k.desc = d
+	}
 }
 
 // beginRead starts a complete read of kind (a list or a visit) and returns
@@ -287,4 +308,16 @@ func (c *clusterStore) status() map[string]KindStatus {
 		out[name] = k.status
 	}
 	return out
+}
+
+// scan calls f with each kind under the read lock, with the generation its
+// entries belong to; f returns false to stop. f must not retain the kind.
+func (c *clusterStore) scan(f func(kind string, k *kindStore, gen uint64) bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	for name, k := range c.kinds {
+		if !f(name, k, c.gen) {
+			return
+		}
+	}
 }

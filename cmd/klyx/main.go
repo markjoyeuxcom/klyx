@@ -530,6 +530,7 @@ func main() {
 			application.NewService(gatewaySvc),
 			application.NewService(meshSvc),
 			application.NewService(lineSvc),
+			application.NewService(appbridge.NewIndexService(index)),
 			application.NewService(gitSvc),
 			application.NewService(writesSvc),
 			application.NewService(metricsSvc),

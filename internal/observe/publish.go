@@ -64,6 +64,8 @@ func (o *Observer) loop() {
 			if o.serveRows(req) {
 				schedule(o.clk.Now())
 			}
+		case req := <-o.roleReqs:
+			o.serveRoles(req)
 		}
 		if t != nil {
 			t.Stop()

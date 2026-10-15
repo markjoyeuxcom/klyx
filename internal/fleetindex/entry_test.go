@@ -79,7 +79,7 @@ func TestEstimateCoversRetainedHeap(t *testing.T) {
 		t.Run(fmt.Sprintf("labels=%d", labels), func(t *testing.T) {
 			const n = 20000
 			var charged int64 = kindOverhead
-			before := heap()
+			before := heapNow()
 			store := make(map[string]*Entry)
 			for i := 0; i < n; i++ {
 				// fresh strings per source, as a decoded object's are its own;
@@ -89,7 +89,7 @@ func TestEstimateCoversRetainedHeap(t *testing.T) {
 				charged += size
 				store[s.UID] = build(s, labelHash(s.Labels), size)
 			}
-			after := heap()
+			after := heapNow()
 			runtime.KeepAlive(store)
 			used := int64(after) - int64(before)
 			t.Logf("labels=%d: retained %d B/entry, charged %d B/entry", labels, used/n, charged/n)
@@ -103,7 +103,7 @@ func TestEstimateCoversRetainedHeap(t *testing.T) {
 	}
 }
 
-func heap() uint64 {
+func heapNow() uint64 {
 	runtime.GC()
 	runtime.GC()
 	var m runtime.MemStats

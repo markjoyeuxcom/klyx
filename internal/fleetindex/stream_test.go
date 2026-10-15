@@ -205,7 +205,7 @@ func TestListPeakMemory(t *testing.T) {
 	srv := listServer(t, n, annotation, &accepts)
 	defer srv.Close()
 	r := &Reader{Client: srv.Client(), Host: srv.URL}
-	base := heap()
+	base := heapNow()
 	var peak uint64
 	var kept []Source
 	cont := ""
@@ -275,7 +275,7 @@ func TestWatchesRetainNoLargeBuffers(t *testing.T) {
 	defer srv.Close()
 	r := &Reader{Client: srv.Client(), Host: srv.URL}
 
-	base := heap()
+	base := heapNow()
 	var mu sync.Mutex
 	var kept []*Entry
 	var charged int64
@@ -304,7 +304,7 @@ func TestWatchesRetainNoLargeBuffers(t *testing.T) {
 	applied.Wait()
 	// every watch is open, waiting for its next event; the large values
 	// are gone
-	after := heap()
+	after := heapNow()
 	growth := int64(after) - int64(base)
 	limit := charged + watches*StreamReserve
 	t.Logf("heap growth %d KiB with %d watches open; entries charged %d KiB, reserves %d KiB", growth>>10, watches, charged>>10, (watches*StreamReserve)>>10)

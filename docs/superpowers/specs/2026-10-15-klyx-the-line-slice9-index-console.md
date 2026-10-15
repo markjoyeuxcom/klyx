@@ -210,3 +210,19 @@ Rulings on the seven open points:
   - eight open watches, each after an 11 MiB object and 1,000 small events, retain 2.4 MiB against 4.9 MiB charged;
   - a 60,000-pod Observer kind stops at 40,000 entries, retaining 11 MiB against 23 MiB charged (the entries share the Observer's strings);
   - the kind lab: every default kind settles live in 149 ms, 412 entries.
+
+## 10. As built: 9b
+
+- **The role view:** `Observer.RolesNow(ctx, []RoleQuery{UID, Source}) ([]RoleView, bool)` is served on the loop goroutine through its own request channel, beside the rows bootstrap. A query names the Observer kind the object came from, so a capped source and a kind with no ledger are told apart from an object not observed:
+  - **current:** an evaluated entry in a live partition, with its role, label and commit time;
+  - **lastObserved:** an evaluated entry in a frozen partition, with its last commit time;
+  - **unverified**, with its reason: `not evaluated` (an unevaluated member), `the role list is capped`, `no ledger for this kind`, `not observed`.
+  - Across ledger parts counting the same source, current beats last observed beats unverified, and among current entries the worst role wins (`RoleRank`).
+- **The search:** `Index.Search(ctx, query, limit)`, one at a time.
+  - Each kind records what it is on its cluster (display name, served GVR, the Observer kind when visited).
+  - A query is lower-cased and its spaces collapsed. A first word followed by more restricts the kind ("pod web"); a slash matches namespace/name.
+  - Scores: an exact name 1000, a name prefix 800 less the extra length, a substring 600 less its position, namespace/name 1000, 700 or 500, and a kind alone 100 (every object of the kind, after every name match).
+  - Ties break by fleet order, kind, namespace, name and UID. A top-K heap holds at most `limit` (at most 200) hits, and `Total` counts every match.
+  - Each hit records the Observer incarnation and acquisition generation it was read under. Roles are read with one `RolesNow` per cluster, only while that cluster's Observer is the incarnation the hit was indexed under; otherwise, or when the Observer does not answer, the hit is unverified. A kind the Observer does not visit is unverified ("no ledger for this kind").
+- **`IndexService.Search(ctx, query, limit)`** (bound) returns the hits (cluster, kind, group/version/resource, namespace, name, UID, the kind's state and as-of time, the role word), `Total`, the coverage of every cluster (connection word, indexed or not, each kind's state, entries, as-of and error), and the counts for the coverage line: indexed clusters, and configured kinds readable on at least one of them. A cancelled search answers "search cancelled".
+- **Measured:** 50,000 entries searched in about 17 ms under `-race`.

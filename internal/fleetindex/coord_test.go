@@ -32,11 +32,12 @@ type fakeObs struct {
 	kinds    map[string]*fakeKind
 	watchers map[string][]func(observe.KindState)
 	visits   map[string]int
+	roles    map[string]observe.RoleView // source/uid
 	done     chan struct{}
 }
 
 func newFakeObs(inc uint64) *fakeObs {
-	return &fakeObs{inc: inc, kinds: map[string]*fakeKind{}, watchers: map[string][]func(observe.KindState){}, visits: map[string]int{}, done: make(chan struct{})}
+	return &fakeObs{inc: inc, kinds: map[string]*fakeKind{}, watchers: map[string][]func(observe.KindState){}, visits: map[string]int{}, roles: map[string]observe.RoleView{}, done: make(chan struct{})}
 }
 
 func meta1(uid, ns, name string, labels map[string]string) any {
@@ -53,7 +54,7 @@ func (f *fakeObs) set(name, gvr string, cov observe.Coverage, objs ...any) {
 	}
 	k.objs = objs
 	k.st.Seq++
-	k.st.Kind, k.st.Coverage = name, cov
+	k.st.Kind, k.st.Coverage, k.st.GVR = name, cov, gvr
 	k.st.CountKnown = cov == observe.Live || cov == observe.Stale
 	k.st.Objects = len(objs)
 	st, ws := k.st, append([]func(observe.KindState){}, f.watchers[name]...)
@@ -63,7 +64,25 @@ func (f *fakeObs) set(name, gvr string, cov observe.Coverage, objs ...any) {
 	}
 }
 
-func (f *fakeObs) Incarnation() uint64   { return f.inc }
+func (f *fakeObs) Incarnation() uint64 { return f.inc }
+
+// RolesNow answers from roles set by the test; any other UID is unverified.
+func (f *fakeObs) RolesNow(ctx context.Context, qs []observe.RoleQuery) ([]observe.RoleView, bool) {
+	if ctx.Err() != nil {
+		return nil, false
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]observe.RoleView, len(qs))
+	for i, q := range qs {
+		v, ok := f.roles[q.Source+"/"+q.UID]
+		if !ok {
+			v = observe.RoleView{State: observe.RoleUnverified, Reason: observe.ReasonNotObserved}
+		}
+		out[i] = v
+	}
+	return out, true
+}
 func (f *fakeObs) Done() <-chan struct{} { return f.done }
 func (f *fakeObs) Kinds() []observe.KindInfo {
 	f.mu.Lock()

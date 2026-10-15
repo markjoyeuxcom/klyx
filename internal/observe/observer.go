@@ -176,8 +176,9 @@ type Observer struct {
 	statLastEval  atomic.Int64
 	started       bool
 
-	wake chan struct{}
-	reqs chan rowsReq
+	wake     chan struct{}
+	reqs     chan rowsReq
+	roleReqs chan rolesReq // RolesNow, served on the loop (The Line slice 9)
 }
 
 // New builds an Observer. It panics on a spec that names an unregistered
@@ -207,7 +208,7 @@ func New(cfg Config) *Observer {
 	}
 	o := &Observer{cfg: cfg, clk: clk, incarnation: incarnations.Add(1),
 		kinds: map[string]*kindState{}, snaps: map[string]*snapState{}, byTask: map[string]*domainState{},
-		dirty: map[partKey]bool{}, done: make(chan struct{}), wake: make(chan struct{}, 1), reqs: make(chan rowsReq), connUsable: true}
+		dirty: map[partKey]bool{}, done: make(chan struct{}), wake: make(chan struct{}, 1), reqs: make(chan rowsReq), roleReqs: make(chan rolesReq), connUsable: true}
 	o.tsink, _ = cfg.Sink.(TransitionSink)
 	for _, k := range cfg.Kinds {
 		if _, dup := o.kinds[k.Name]; dup {
