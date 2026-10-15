@@ -32,6 +32,7 @@ import (
 	"github.com/moomora/klyx/internal/config"
 	"github.com/moomora/klyx/internal/crd"
 	"github.com/moomora/klyx/internal/execenv"
+	"github.com/moomora/klyx/internal/cachediff"
 	"github.com/moomora/klyx/internal/fluxcli"
 	"github.com/moomora/klyx/internal/gitops/argo"
 	"github.com/moomora/klyx/internal/gwapi"
@@ -55,6 +56,7 @@ type Conn interface {
 	FluxEvents(ctx context.Context, kind, ns, name string) ([]workloads.EventSummary, error)
 	FluxAvailable() bool
 	FluxDiffKustomization(ctx context.Context, ns, name, path string) (fluxcli.DiffResult, error)
+	ServerSideDiff(ctx context.Context, objs []*unstructured.Unstructured, inventory []string, prune bool) ([]cachediff.Change, error)
 	Reconcile(ctx context.Context, kind, ns, name, uid string) error
 	ReconcileWithSource(ctx context.Context, kind, ns, name, uid string) error
 	SetSuspend(ctx context.Context, kind, ns, name, uid string, suspend bool) error

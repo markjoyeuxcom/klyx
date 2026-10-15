@@ -202,6 +202,25 @@ type FluxDiffDTO struct {
 	HasChanges bool   `json:"hasChanges"`
 	Output     string `json:"output"`
 	Error      string `json:"error"`
+	// Via says which path computed it: "cache" (built from the Git cache,
+	// The Line slice 6e) or "flux CLI". Revision is the commit the cache
+	// diff built; Notes say what was not applied; Changes are its
+	// per-object results.
+	Via      string              `json:"via,omitempty"`
+	Revision string              `json:"revision,omitempty"`
+	Notes    []string            `json:"notes,omitempty"`
+	Changes  []FluxDiffChangeDTO `json:"changes,omitempty"`
+}
+
+// FluxDiffChangeDTO is one object's diff result: never a claim about
+// delivery or cause.
+type FluxDiffChangeDTO struct {
+	Action    string `json:"action"`
+	Kind      string `json:"kind"`
+	Namespace string `json:"namespace,omitempty"`
+	Name      string `json:"name"`
+	Diff      string `json:"diff,omitempty"`
+	Error     string `json:"error,omitempty"`
 }
 
 type ResourceDetailDTO struct {

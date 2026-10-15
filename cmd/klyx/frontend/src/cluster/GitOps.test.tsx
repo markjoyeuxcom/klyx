@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, fireEvent, act, within, screen } from "@testing-library/react";
 import { useFleet, FluxResourceDTO, FluxSourceDTO, ClusterDTO } from "../store/fleet";
-import { reconcile, reconcileWithSource, setSuspend, resolveGitLink } from "../bridge/gitops";
+import { reconcile, reconcileWithSource, setSuspend, resolveGitLink, fluxDiff } from "../bridge/gitops";
 import { GitOps } from "./GitOps";
 import { fluxRule, fluxSourceRule, withRule } from "../test/backendRules";
 
@@ -339,6 +339,24 @@ describe("GitOps view", () => {
     useFleet.setState({ clusters: [cluster("Healthy")], gitops: expandedDetail({ suspended: true }) });
     const { getByText } = render(<GitOps cluster="x" />);
     expect(getByText("Compute diff")).toBeTruthy();
+  });
+
+  it("says which path computed the diff: the Git cache at a commit, with what was not applied", async () => {
+    vi.mocked(fluxDiff).mockResolvedValueOnce({
+      available: true, hasChanges: true, error: "", via: "cache", revision: "a1b9e3c0a1b2c3d4e5f60718293a4b5c6d7e8f90",
+      output: "► Deployment shop/web configured", notes: ["variables shown unsubstituted: postBuild substitution is not applied"],
+    });
+    useFleet.setState({ clusters: [cluster("Healthy")], gitops: expandedDetail({ suspended: true }) });
+    render(<GitOps cluster="x" />);
+    expect(screen.getByTestId("diff-via").textContent).toContain("builds from the Git cache when the repository is approved");
+    await act(async () => { fireEvent.click(screen.getByText("Compute diff")); });
+    expect(screen.getByTestId("diff-via").textContent).toBe("built from the Git cache at a1b9e3c, dry-run on this cluster's connection");
+    expect(screen.getByText("variables shown unsubstituted: postBuild substitution is not applied")).toBeTruthy();
+    expect(screen.getByText("► Deployment shop/web configured")).toBeTruthy();
+
+    vi.mocked(fluxDiff).mockResolvedValueOnce({ available: true, hasChanges: false, error: "", output: "", via: "flux CLI" });
+    await act(async () => { fireEvent.click(screen.getByText("Compute diff")); });
+    expect(screen.getByTestId("diff-via").textContent).toBe("computed by flux diff with your local credentials");
   });
 
   it("lists sources under the sources filter", () => {

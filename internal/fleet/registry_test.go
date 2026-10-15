@@ -3,6 +3,7 @@ package fleet
 import (
 	"context"
 	"errors"
+	"github.com/moomora/klyx/internal/cachediff"
 	"github.com/moomora/klyx/internal/observe"
 	"io"
 	"os/exec"
@@ -50,6 +51,10 @@ func (f *fakeConn) FluxEvents(ctx context.Context, kind, ns, name string) ([]wor
 	return nil, nil
 }
 func (f *fakeConn) FluxAvailable() bool { return false }
+func (f *fakeConn) ServerSideDiff(context.Context, []*unstructured.Unstructured, []string, bool) ([]cachediff.Change, error) {
+	return nil, nil
+}
+
 func (f *fakeConn) FluxDiffKustomization(ctx context.Context, ns, name, path string) (fluxcli.DiffResult, error) {
 	return fluxcli.DiffResult{}, nil
 }

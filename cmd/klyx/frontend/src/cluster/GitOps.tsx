@@ -1013,18 +1013,27 @@ function DiffSection({ cluster, namespace, name }: { cluster: string; namespace:
       .finally(() => setRunning(false));
   };
   return (
-    <InspectorBlock title="Live diff (flux diff)">
+    <InspectorBlock title="Live diff">
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
         <button className="l-btn" onClick={run} disabled={running} style={{ opacity: running ? 0.6 : 1 }}>
           {running ? "Computing…" : "Compute diff"}
         </button>
-        <span style={{ color: "var(--color-text-tertiary)", fontSize: 10 }}>shells out to <span style={{ fontFamily: "var(--font-mono)" }}>flux diff</span> with your local credentials</span>
+        <span data-testid="diff-via" style={{ color: "var(--color-text-tertiary)", fontSize: 10 }}>
+          {!result || !result.via
+            ? <>builds from the Git cache when the repository is approved in Settings &gt; Git, else shells out to <span style={{ fontFamily: "var(--font-mono)" }}>flux diff</span></>
+            : result.via === "cache"
+              ? <>built from the Git cache{result.revision ? <> at <span style={{ fontFamily: "var(--font-mono)" }}>{result.revision.slice(0, 7)}</span></> : null}, dry-run on this cluster&apos;s connection</>
+              : <>computed by <span style={{ fontFamily: "var(--font-mono)" }}>flux diff</span> with your local credentials</>}
+        </span>
       </div>
+      {result?.notes?.map((n) => (
+        <div key={n} style={{ color: "var(--color-text-tertiary)", fontSize: 11, marginTop: 4 }}>{n}</div>
+      ))}
       {result && result.error && (
-        <div style={{ color: "var(--color-text-danger)", marginTop: 6, ...ellipsis }} title={result.error}>{result.error}</div>
+        <div style={{ color: "var(--color-text-danger)", marginTop: 6, overflowWrap: "anywhere" }} title={result.error}>{result.error}</div>
       )}
       {result && !result.error && !result.hasChanges && (
-        <div style={{ color: "var(--color-text-success)", marginTop: 6 }}>no changes - live matches Git</div>
+        <div style={{ color: "var(--color-text-success)", marginTop: 6 }}>{result.via === "cache" ? "no changes - the dry-run matches the live objects" : "no changes - live matches Git"}</div>
       )}
       {result && result.hasChanges && (
         <pre style={{ marginTop: 6, padding: 8, maxHeight: 280, overflow: "auto", background: "var(--color-background-secondary)", border: "0.5px solid var(--color-border-tertiary)", borderRadius: 4, fontFamily: "var(--font-mono)", fontSize: 11, whiteSpace: "pre", lineHeight: 1.4 }}>{result.output}</pre>

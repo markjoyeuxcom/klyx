@@ -8,6 +8,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
+	"github.com/moomora/klyx/internal/cachediff"
 	"github.com/moomora/klyx/internal/fluxcli"
 	"github.com/moomora/klyx/internal/gitops/flux"
 	"github.com/moomora/klyx/internal/workloads"
@@ -23,6 +24,8 @@ type GitOpsConn interface {
 	FluxEvents(ctx context.Context, kind, ns, name string) ([]workloads.EventSummary, error)
 	FluxAvailable() bool
 	FluxDiffKustomization(ctx context.Context, ns, name, path string) (fluxcli.DiffResult, error)
+	// ServerSideDiff dry-runs objects built from the Git cache (slice 6e).
+	ServerSideDiff(ctx context.Context, objs []*unstructured.Unstructured, inventory []string, prune bool) ([]cachediff.Change, error)
 	// The verbs write only the armed object (uid): a same-name replacement
 	// is refused (fleet.ErrReplaced), never written (design §5b).
 	Reconcile(ctx context.Context, kind, ns, name, uid string) error
@@ -35,6 +38,15 @@ type GitOpsConn interface {
 type GitOpsService struct {
 	lookup func(string) (GitOpsConn, bool)
 	now    func() time.Time
+	// cacheDiff is the Git cache's diff (The Line slice 6e): it answers when
+	// the Kustomization's repository is approved, else the flux CLI does.
+	cacheDiff func(ctx context.Context, conn GitOpsConn, ns, name string) (FluxDiffDTO, bool)
+}
+
+// SetGitOpsCacheDiff wires the Git cache's diff into the Flux lens's
+// "Compute diff". A package-level setter, so it is not bound to the webview.
+func SetGitOpsCacheDiff(s *GitOpsService, g *GitService) {
+	s.cacheDiff = g.cacheDiff
 }
 
 func NewGitOpsService(lookup func(string) (GitOpsConn, bool), now func() time.Time) *GitOpsService {
@@ -99,16 +111,21 @@ func (s *GitOpsService) FluxDiff(cluster, namespace, name, path string) FluxDiff
 	if !ok {
 		return FluxDiffDTO{Error: "cluster not connected: " + cluster}
 	}
-	if !conn.FluxAvailable() {
-		return FluxDiffDTO{Available: false, Error: "the flux CLI was not found on PATH"}
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), diffTimeout)
 	defer cancel()
+	if s.cacheDiff != nil && path == "" {
+		if d, ok := s.cacheDiff(ctx, conn, namespace, name); ok {
+			return d
+		}
+	}
+	if !conn.FluxAvailable() {
+		return FluxDiffDTO{Available: false, Error: "the flux CLI was not found on PATH", Via: "flux CLI"}
+	}
 	res, err := conn.FluxDiffKustomization(ctx, namespace, name, path)
 	if err != nil {
-		return FluxDiffDTO{Available: true, Error: err.Error()}
+		return FluxDiffDTO{Available: true, Error: err.Error(), Via: "flux CLI"}
 	}
-	return FluxDiffDTO{Available: true, HasChanges: res.HasChanges, Output: res.Output, Error: res.Err}
+	return FluxDiffDTO{Available: true, HasChanges: res.HasChanges, Output: res.Output, Error: res.Err, Via: "flux CLI"}
 }
 
 func (s *GitOpsService) SetSuspend(cluster, kind, namespace, name, uid string, suspend bool) ActionResultDTO {

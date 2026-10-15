@@ -270,19 +270,17 @@ func TestContentAcquisitionBringsOnlyWhatItNeeds(t *testing.T) {
 	if m := f.missing(aOld, aNew, b, k); !slices.Equal(m, []string{k}) {
 		t.Fatalf("after the snapshot acquisition, missing %v", m)
 	}
-	out := filepath.Join(t.TempDir(), "apps.tar")
-	if err := f.store.Read(f.url, func(p gitcli.Repo) error { return p.Archive(ctx, main.Tracked(), "apps", out) }); err != nil {
-		t.Fatal(err)
+	read := func(id string) error {
+		return f.store.Read(f.url, func(p gitcli.Repo) error {
+			return p.Blobs(ctx, []string{id}, 1<<20, func(string, []byte) error { return nil })
+		})
 	}
-	if list, err := exec.Command("/usr/bin/tar", "-tf", out).Output(); err != nil ||
-		!strings.Contains(string(list), "apps/b.yaml") || strings.Contains(string(list), "base/") {
-		t.Fatalf("the snapshot archive holds %q %v", list, err)
+	if err := read(b); err != nil {
+		t.Fatalf("an acquired blob: %v", err)
 	}
-	// The whole tree is not acquired: archiving it fails, never downloads.
-	if err := f.store.Read(f.url, func(p gitcli.Repo) error {
-		return p.Archive(ctx, main.Tracked(), "", filepath.Join(t.TempDir(), "all.tar"))
-	}); err == nil || !strings.Contains(err.Error(), "lazy fetching disabled") {
-		t.Fatalf("archiving unacquired content: %v", err)
+	// Not acquired: an exact read fails, never downloads.
+	if err := read(k); !errors.Is(err, gitcli.ErrContentMissing) {
+		t.Fatalf("reading unacquired content: %v", err)
 	}
 	// Acquired already: nothing is fetched or published again.
 	packs := f.packFiles()

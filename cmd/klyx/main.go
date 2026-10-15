@@ -11,6 +11,7 @@ import (
 
 	"github.com/moomora/klyx/internal/ai"
 	"github.com/moomora/klyx/internal/appbridge"
+	"github.com/moomora/klyx/internal/cachediff"
 	"github.com/moomora/klyx/internal/capability"
 	"github.com/moomora/klyx/internal/clock"
 	"github.com/moomora/klyx/internal/clustermesh"
@@ -57,6 +58,11 @@ func claudeBuildsPath() string {
 }
 
 func main() {
+	// The cache diff's confined build (The Line slice 6 note §7.1): Klyx's
+	// own binary in a contained child, before anything else starts.
+	if len(os.Args) == 2 && os.Args[1] == cachediff.ChildFlag {
+		os.Exit(cachediff.RunChild(os.Stdin, os.Stdout, os.Stderr))
+	}
 	execenv.ApplyDesktopToolPath()
 
 	cfg, err := config.Load(configPath())
@@ -225,6 +231,8 @@ func main() {
 		Override:   lineOverride,
 		Emitter:    em,
 	})
+	// "Compute diff" builds from the Git cache when the repository is approved.
+	appbridge.SetGitOpsCacheDiff(gitopsSvc, gitSvc)
 	lineSvc = appbridge.NewLineService(ctx, appbridge.LineDeps{
 		Emitter:   em,
 		Sink:      healthSink,

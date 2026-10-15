@@ -63,7 +63,13 @@ export async function setSuspend(cluster: string, kind: string, namespace: strin
   );
 }
 
-export type FluxDiffDTO = { available: boolean; hasChanges: boolean; output: string; error: string };
+// via: "cache" - built from the Git cache at revision, dry-run on the
+// station's own connection (The Line slice 6e) - or "flux CLI".
+export type FluxDiffChangeDTO = { action: string; kind: string; namespace?: string; name: string; diff?: string; error?: string };
+export type FluxDiffDTO = {
+  available: boolean; hasChanges: boolean; output: string; error: string;
+  via?: string; revision?: string; notes?: string[]; changes?: FluxDiffChangeDTO[];
+};
 
 export async function fluxDiff(cluster: string, namespace: string, name: string, path: string): Promise<FluxDiffDTO> {
   return (await GitOpsService.FluxDiff(cluster, namespace, name, path)) as FluxDiffDTO;

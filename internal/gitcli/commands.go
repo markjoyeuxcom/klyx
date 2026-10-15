@@ -197,6 +197,18 @@ func catFileCheck(gitDir string, ids []string) (cmd, error) {
 	return cmd{args: []string{"cat-file", "--batch-check"}, stdin: in, gitDir: gitDir}, nil
 }
 
+// catFileBatch reads exactly the listed objects' content, in order (6e: the
+// cache diff's export reads exact blobs; slice 6 note §7.1). The
+// environment holds GIT_NO_LAZY_FETCH, so a missing blob is reported as
+// missing, never fetched.
+func catFileBatch(gitDir string, ids []string) (cmd, error) {
+	in, err := idLines(ids)
+	if err != nil {
+		return cmd{}, err
+	}
+	return cmd{args: []string{"cat-file", "--batch"}, stdin: in, gitDir: gitDir}, nil
+}
+
 // verifyPack validates one pack the acquisition created: its index must sit
 // in the staging repo's own objects/pack, never in an alternate.
 func verifyPack(stagingDir, idx string) (cmd, error) {
@@ -356,31 +368,4 @@ func diffContent(gitDir string, a, b Rev, paths []string) (cmd, error) {
 	}
 	args := append([]string{"diff", "--no-renames", "--no-ext-diff", "--no-textconv", "--no-color", "--end-of-options"}, rs...)
 	return cmd{args: append(append(args, "--"), ps...), gitDir: gitDir}, nil
-}
-
-// archiveTar exports one subtree at rev to a tar file Klyx names, run only
-// after its blobs were acquired. The subtree is the tree-ish <rev>:<path>
-// with --prefix=<path>/, never a pathspec: in a partial clone, `git archive
-// <rev> <path>` prefetches every blob of the whole tree whatever the
-// pathspec (probed on 2.56), so a pathspec would read outside what was
-// acquired. Output goes to the file, never through the captured stdout.
-func archiveTar(gitDir string, rev Rev, path, output string) (cmd, error) {
-	if !filepath.IsAbs(output) || strings.ContainsFunc(output, func(r rune) bool { return r < 0x20 }) {
-		return cmd{}, fmt.Errorf("archive output %q is not an absolute path", output)
-	}
-	p, err := CleanPath(path)
-	if err != nil {
-		return cmd{}, err
-	}
-	rs, err := revArgs([]Rev{rev}, nil)
-	if err != nil {
-		return cmd{}, err
-	}
-	args := []string{"archive", "--format=tar", "--output=" + output}
-	treeish := rs[0]
-	if p != "" {
-		args = append(args, "--prefix="+p+"/")
-		treeish += ":" + p
-	}
-	return cmd{args: append(args, "--end-of-options", treeish), gitDir: gitDir}, nil
 }

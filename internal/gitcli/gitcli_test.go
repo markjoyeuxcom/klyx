@@ -4,6 +4,7 @@ package gitcli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -233,32 +234,28 @@ func TestTheTypedArgv(t *testing.T) {
 	c, err = diffContent("/k/c.git", ra, rb, []string{"apps/a.yaml"})
 	check("diff", c, err, []string{"diff", "--no-renames", "--no-ext-diff", "--no-textconv", "--no-color", "--end-of-options",
 		a, b, "--", "apps/a.yaml"}, "/k/c.git", "", false)
-	c, err = archiveTar("/k/c.git", ra, "./clusters/prd/", "/k/out.tar")
-	check("archive", c, err, []string{"archive", "--format=tar", "--output=/k/out.tar", "--prefix=clusters/prd/",
-		"--end-of-options", a + ":clusters/prd"}, "/k/c.git", "", false)
-	c, err = archiveTar("/k/c.git", main.Tracked(), ".", "/k/out.tar")
-	check("archive root", c, err, []string{"archive", "--format=tar", "--output=/k/out.tar", "--end-of-options",
-		"refs/klyx/tracked/refs/heads/main"}, "/k/c.git", "", false)
+	c, err = catFileBatch("/k/c.git", []string{a, b})
+	check("cat-file --batch", c, err, []string{"cat-file", "--batch"}, "/k/c.git", a+"\n"+b+"\n", false)
 }
 
 func TestTheConstructorsRefuseUnvalidatedInput(t *testing.T) {
 	const a = "1111111111111111111111111111111111111111"
 	ra := Rev{a}
 	for name, err := range map[string]error{
-		"no revision":      func() error { _, err := revListCount("/c", nil, nil); return err }(),
-		"zero Rev":         func() error { _, err := mergeBase("/c", ra, Rev{}); return err }(),
-		"parent path":      func() error { _, err := lsTree("/c", ra, []string{"apps/../../etc"}); return err }(),
-		"absolute path":    func() error { _, err := diffTree("/c", ra, ra, []string{"/etc/passwd"}); return err }(),
-		"dash path":        func() error { _, err := archiveTar("/c", ra, "-x", "/o.tar"); return err }(),
-		"control path":     func() error { _, err := diffContent("/c", ra, ra, []string{"a\nb"}); return err }(),
-		"relative archive": func() error { _, err := archiveTar("/c", ra, "", "out.tar"); return err }(),
-		"short id":         func() error { _, err := catFileCheck("/c", []string{"abc123"}); return err }(),
-		"option id":        func() error { _, err := fetchContent("/s", []string{"--upload-pack=evil"}); return err }(),
-		"too many ids":     func() error { _, err := fetchContent("/s", slices.Repeat([]string{a}, MaxContentIDs+1)); return err }(),
-		"no refs":          func() error { _, err := fetchHistory("/s", nil); return err }(),
-		"foreign pack":     func() error { _, err := verifyPack("/s", "/c/objects/pack/pack-1.idx"); return err }(),
-		"not a pack":       func() error { _, err := verifyPack("/s", "/s/objects/pack/../../config"); return err }(),
-		"foreign ref":      func() error { _, err := updateRefs("/c", []RefUpdate{{Name: "refs/heads/main", New: a}}); return err }(),
+		"no revision":    func() error { _, err := revListCount("/c", nil, nil); return err }(),
+		"zero Rev":       func() error { _, err := mergeBase("/c", ra, Rev{}); return err }(),
+		"parent path":    func() error { _, err := lsTree("/c", ra, []string{"apps/../../etc"}); return err }(),
+		"absolute path":  func() error { _, err := diffTree("/c", ra, ra, []string{"/etc/passwd"}); return err }(),
+		"dash path":      func() error { _, err := lsTree("/c", ra, []string{"-x"}); return err }(),
+		"control path":   func() error { _, err := diffContent("/c", ra, ra, []string{"a\nb"}); return err }(),
+		"short batch id": func() error { _, err := catFileBatch("/c", []string{"abc"}); return err }(),
+		"short id":       func() error { _, err := catFileCheck("/c", []string{"abc123"}); return err }(),
+		"option id":      func() error { _, err := fetchContent("/s", []string{"--upload-pack=evil"}); return err }(),
+		"too many ids":   func() error { _, err := fetchContent("/s", slices.Repeat([]string{a}, MaxContentIDs+1)); return err }(),
+		"no refs":        func() error { _, err := fetchHistory("/s", nil); return err }(),
+		"foreign pack":   func() error { _, err := verifyPack("/s", "/c/objects/pack/pack-1.idx"); return err }(),
+		"not a pack":     func() error { _, err := verifyPack("/s", "/s/objects/pack/../../config"); return err }(),
+		"foreign ref":    func() error { _, err := updateRefs("/c", []RefUpdate{{Name: "refs/heads/main", New: a}}); return err }(),
 		"pattern ref": func() error {
 			_, err := updateRefs("/c", []RefUpdate{{Name: "refs/klyx/tracked/refs/heads/*", New: a}})
 			return err
@@ -580,13 +577,9 @@ func TestTheReadQueries(t *testing.T) {
 	if err != nil || truncated || !strings.Contains(text, "+replicas: 3") {
 		t.Fatalf("diff %q %v %v", text, truncated, err)
 	}
-	out := filepath.Join(t.TempDir(), "snap.tar")
-	if err := p.Archive(ctx, main.Tracked(), "apps", out); err != nil {
-		t.Fatal(err)
-	}
-	tarList, err := exec.Command("/usr/bin/tar", "-tf", out).Output()
-	if err != nil || !strings.Contains(string(tarList), "apps/a.yaml") || strings.Contains(string(tarList), "base/") {
-		t.Fatalf("archive holds %q %v", tarList, err)
+	var content string
+	if err := p.Blobs(ctx, []string{f.aNew}, 1<<20, func(_ string, d []byte) error { content = string(d); return nil }); err != nil || content != "replicas: 3\n" {
+		t.Fatalf("blobs %q %v", content, err)
 	}
 
 	idx, _ := filepath.Glob(filepath.Join(p.Dir(), "objects", "pack", "pack-*.idx"))
@@ -648,8 +641,8 @@ func TestAPartialCacheNeverLazyFetches(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "lazy fetching disabled") {
 		t.Fatalf("a content diff with missing blobs: %v", err)
 	}
-	if err := p.Archive(ctx, sha(f.c2), "", filepath.Join(t.TempDir(), "x.tar")); err == nil {
-		t.Fatal("an archive with missing blobs succeeded")
+	if err := p.Blobs(ctx, []string{f.aNew}, 1<<20, func(string, []byte) error { return nil }); !errors.Is(err, ErrContentMissing) {
+		t.Fatalf("an exact read of a missing blob: %v", err)
 	}
 }
 
@@ -785,5 +778,56 @@ func TestParsersRefuseMalformedOutput(t *testing.T) {
 	}
 	if got := plainText("a\x1b[31mred\x00\n"+strings.Repeat("é", 300), 10); got != "a [31mred…" {
 		t.Fatalf("plainText %q", got)
+	}
+}
+
+// The cache diff's export reads exact blobs (slice 6 note §7.1): in order,
+// streamed, capped; a missing blob is "content incomplete", never fetched.
+func TestBlobsReadsExactBlobs(t *testing.T) {
+	r := realRunner(t)
+	f := newFixture(t, r.Git)
+	p := fullCache(t, r, f)
+	ctx := context.Background()
+	got := map[string]string{}
+	var order []string
+	read := func(id string, data []byte) error { got[id] = string(data); order = append(order, id); return nil }
+	if err := p.Blobs(ctx, []string{f.aNew, f.aOld}, 1<<20, read); err != nil {
+		t.Fatal(err)
+	}
+	if got[f.aNew] != "replicas: 3\n" || got[f.aOld] != "replicas: 1\n" || !reflect.DeepEqual(order, []string{f.aNew, f.aOld}) {
+		t.Fatalf("blobs %q in order %v", got, order)
+	}
+	if err := p.Blobs(ctx, []string{f.aNew}, 4, read); err == nil || !strings.Contains(err.Error(), "cap") {
+		t.Fatalf("over the cap: %v", err)
+	}
+	tree := plain(t, r.Git, f.src, "rev-parse", f.c1+"^{tree}")
+	if err := p.Blobs(ctx, []string{tree}, 1<<20, read); err == nil || !strings.Contains(err.Error(), "not a blob") {
+		t.Fatalf("a tree: %v", err)
+	}
+	if err := p.Blobs(ctx, []string{strings.Repeat("e", 40)}, 1<<20, read); !errors.Is(err, ErrContentMissing) {
+		t.Fatalf("a missing blob: %v", err)
+	}
+}
+
+func TestBlobScanReadsChunkedReplies(t *testing.T) {
+	a, b := strings.Repeat("a", 40), strings.Repeat("b", 40)
+	reply := a + " blob 5\nhello\n" + b + " blob 0\n\n"
+	got := map[string]string{}
+	s := &blobScan{want: []string{a, b}, left: 100, max: 100, fn: func(id string, d []byte) error { got[id] = string(d); return nil }}
+	for i := 0; i < len(reply); i += 3 {
+		if _, err := s.Write([]byte(reply[i:min(i+3, len(reply))])); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if s.next != 2 || got[a] != "hello" || got[b] != "" {
+		t.Fatalf("got %q next %d", got, s.next)
+	}
+	bad := &blobScan{want: []string{a}, left: 100, max: 100, fn: func(string, []byte) error { return nil }}
+	if _, err := bad.Write([]byte(b + " blob 1\nx\n")); err == nil {
+		t.Fatal("a reply for another id was accepted")
+	}
+	unterminated := &blobScan{want: []string{a}, left: 100, max: 100, fn: func(string, []byte) error { return nil }}
+	if _, err := unterminated.Write([]byte(a + " blob 1\nxy")); err == nil {
+		t.Fatal("unterminated content was accepted")
 	}
 }

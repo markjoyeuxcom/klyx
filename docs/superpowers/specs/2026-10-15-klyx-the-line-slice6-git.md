@@ -317,6 +317,35 @@ Surveying kustomize api v0.21.3 and `fluxcd/pkg/ssa` showed six points §7 does 
      - `github.com/fluxcd/pkg/ssa` v0.77.0, the last release built on client-go v0.36.2 (v0.78+ would move the whole app to k8s 0.37, controller-runtime 0.25, kubectl and cli-runtime). It brings controller-runtime v0.24.1.
      - The indirect bumps are `kube-openapi`, `go-openapi`, `gnostic-models`, `oauth2` and `protobuf`, checked by the whole Go suite.
 
+### 7.2 As built in 6e
+
+`internal/cachediff` holds the scan (`Compute`), the cache source, the child (`RunChild`, `Build`) and the dry-run (`ServerSideDiff`). `GitService.cacheDiff` composes them, and `GitOpsService.FluxDiff` asks it first.
+
+What 6e makes precise:
+- **The pins.** kustomize api and kyaml are at **v0.21.1**, not the v0.21.3 §7.1 named.
+  - v0.21.2+ require a `kube-openapi` whose structured-merge-diff v7 types break apimachinery 0.36.2. v0.21.1 is what `ssa` v0.77.0 itself builds with.
+  - `ssa` adds `kubectl`, `cli-runtime` and `component-base` at 0.36.2. It also bumps go-openapi, easyjson, oauth2, `x/time` and `k8s.io/utils`.
+  - The whole Go suite passes under `-race` with them.
+- **Load restrictions are "none" inside the in-memory filesystem,** not kustomize's root-only. kustomize's root-only refuses a generator or patch file in a parent directory, which Flux loads (Flux builds unrestricted on a filesystem confined to the repository). The child's filesystem holds only the input set, so "none" there is exactly that repository-root confinement. The confinement fixtures pass.
+- **The child** is dispatched at the top of `main`, before anything else. Its environment is empty; inside it, `http.DefaultTransport` and `net.DefaultResolver` refuse every dial. Every build leaves through `procrun`.
+- **Flux's overlay** mirrors `fluxcd/pkg/kustomize` v1.43.0 `GenerateManifest`, read for this, not imported:
+  - it finds the root's kustomization file or generates one as Flux's `scanManifests` does;
+  - it applies `targetNamespace`, `namePrefix`, `nameSuffix`, `patches`, `components` (`ignoreMissingComponents`), `patchesStrategicMerge`, `patchesJson6902`, `images` (Flux's merge rules) and `buildMetadata`;
+  - `commonMetadata` is applied after the build with `ssa`'s `SetCommonMetadata`, as the controller does.
+- **The dry-run:**
+  - The built objects are normalised (`normalize.UnstructuredList`) and sorted in `ssa`'s kind order.
+  - Each live object is read first. A read that fails is that object's "unread" result, so an RBAC refusal never shows as "configured"; a refused dry-run is "failed".
+  - Objects labelled or annotated `kustomize.toolkit.fluxcd.io/reconcile: disabled` are skipped, as Flux skips them.
+  - Secret values are masked with `ssa.SanitizeUnstructuredData` before a unified YAML diff (`go-difflib`).
+  - "Would be pruned" comes from `status.inventory` when `spec.prune` is on.
+- **The routing.** The cache answers when the Kustomization's source is a GitRepository whose URL maps to an approved entry and Git is on. Otherwise, as before, the flux CLI answers.
+  - The lens still offers "Compute diff" only for suspended or failing Kustomizations (the M10-f gate).
+  - The result names its path ("cache" or "flux CLI"), the revision built, and what was not applied (SOPS when `spec.decryption` is set, substitution when `spec.postBuild` is set, a generated kustomization).
+- **The cache.** `EnsureCommit` fetches a missing commit through the acquisition contract without touching the history status the line's T reads. `AcquireIDs` acquires exactly the input set's blobs. `Repo.Archive` is removed.
+- **Live:**
+  - The dry-run is tested against the kind lab (`TestLabServerSideDiff`, dry-run only): "created", "configured" with a diff, "would be pruned", and nothing created.
+  - The whole path in the app is not eyeballed, since the lab's repositories are not fetchable. It is covered end to end by tests over a real cache with the test binary as the child.
+
 ## 8. Testing
 
 - **The transport in tests is the production one.** An `httptest` TLS server runs `git http-backend` over a fixture repo; the test's generated global config adds `http.sslCAInfo` for the test CA. File and plain-HTTP protocols stay forbidden. A fixture server with `uploadpack.allowFilter=false` proves a history refresh that receives blobs is refused.

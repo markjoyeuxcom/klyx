@@ -108,6 +108,38 @@ func (s *Store) refreshHistory(ctx context.Context, url, dir string, refs []gitc
 	})
 }
 
+// EnsureCommit makes sure the cache holds one commit, a validated full id:
+// when it does not, exactly that commit (a commit ref) is fetched through the
+// acquisition contract (slice 6 note §7.1 point 3, the cache diff's
+// revision). It never touches the history status the line reads.
+func (s *Store) EnsureCommit(ctx context.Context, url, sha string) error {
+	ref, err := gitcli.RefFromKey("commit", sha)
+	if err != nil {
+		return err
+	}
+	if err := gitcli.ValidateApprovedURL(url); err != nil {
+		return err
+	}
+	if err := s.lock(ctx); err != nil {
+		return err
+	}
+	defer s.unlock()
+	dir := s.cacheDir(url)
+	if err := s.prepare(ctx, url, dir, true); err != nil {
+		return err
+	}
+	if missing, err := s.run.Repo(dir).Missing(ctx, []string{sha}); err != nil || len(missing) == 0 {
+		return err
+	}
+	return s.refreshHistory(ctx, url, dir, []gitcli.Ref{ref})
+}
+
+// AcquireIDs acquires exactly these blob ids - the cache diff's input set,
+// listed from trees by its caller.
+func (s *Store) AcquireIDs(ctx context.Context, url string, ids []string) error {
+	return s.acquireContent(ctx, url, func(gitcli.Repo) ([]string, error) { return ids, nil })
+}
+
 // AcquireSnapshot acquires every blob under paths at rev, listed from trees
 // only, so the cache diff's archive can export them.
 func (s *Store) AcquireSnapshot(ctx context.Context, url string, rev gitcli.Rev, paths []string) error {

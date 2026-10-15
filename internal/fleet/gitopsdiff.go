@@ -7,6 +7,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
+	"github.com/moomora/klyx/internal/cachediff"
 	"github.com/moomora/klyx/internal/fluxcli"
 	"github.com/moomora/klyx/internal/gitops/flux"
 )
@@ -42,4 +43,14 @@ func (c *ClusterConn) FluxDiffKustomization(ctx context.Context, ns, name, path 
 		path, _, _ = unstructured.NestedString(u.Object, "spec", "path")
 	}
 	return fluxcli.DiffKustomization(ctx, newFluxRunner(c.cliEnv()), c.kubeContext, ns, name, path), nil
+}
+
+// ServerSideDiff dry-runs objects built from the Git cache on this
+// station's own pinned connection, with Flux's field manager (The Line
+// slice 6 note §7.1 point 6).
+func (c *ClusterConn) ServerSideDiff(ctx context.Context, objs []*unstructured.Unstructured, inventory []string, prune bool) ([]cachediff.Change, error) {
+	if c.restConfig == nil {
+		return nil, fmt.Errorf("no connection for a server-side dry-run")
+	}
+	return cachediff.ServerSideDiff(ctx, c.restConfig, objs, inventory, prune)
 }

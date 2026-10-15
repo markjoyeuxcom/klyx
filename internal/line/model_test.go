@@ -453,7 +453,9 @@ func TestHeldEvidenceFacts(t *testing.T) {
 	// Argo never reports either.
 	us, _ = Units(station("b", "dev", func(in *StationInput) {
 		in.Apps = append(in.Apps, argoApp("app", []argo.Source{gitSource("main")}, deployed([]argo.Source{gitSource("main")}, sha('b')),
-			func(a *argo.App) { a.Conditions = []argo.Condition{{Type: "ComparisonError", Message: "repository not found"}} }))
+			func(a *argo.App) {
+				a.Conditions = []argo.Condition{{Type: "ComparisonError", Message: "repository not found"}}
+			}))
 	}))
 	if len(us) != 1 || us[0].SourceNotReady || us[0].BlockedBy != "" {
 		t.Fatalf("argo: %+v", us)

@@ -3,6 +3,7 @@ package appbridge
 import (
 	"context"
 	"errors"
+	"github.com/moomora/klyx/internal/cachediff"
 	"strings"
 	"sync"
 	"testing"
@@ -69,6 +70,10 @@ func (f *fakeGitOpsConn) FluxEvents(ctx context.Context, kind, ns, name string) 
 	return f.events, nil
 }
 func (f *fakeGitOpsConn) FluxAvailable() bool { return f.fluxAvailable }
+func (f *fakeGitOpsConn) ServerSideDiff(context.Context, []*unstructured.Unstructured, []string, bool) ([]cachediff.Change, error) {
+	return nil, errors.New("no dry-run in this fake")
+}
+
 func (f *fakeGitOpsConn) FluxDiffKustomization(ctx context.Context, ns, name, path string) (fluxcli.DiffResult, error) {
 	return f.diff, f.diffErr
 }

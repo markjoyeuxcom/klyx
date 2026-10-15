@@ -3,6 +3,7 @@ package gitcli
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -241,6 +242,109 @@ func (s *packScan) take(line []byte) {
 	}
 }
 
+// ErrContentMissing: a blob the read needs is not in the cache.
+var ErrContentMissing = errors.New("content incomplete")
+
+// Blobs reads exactly the listed blobs, in order, handing each to fn as it
+// completes. The total content is capped at max bytes; a missing object, an
+// object that is not a blob, or a reply for another id stops the read.
+func (p Repo) Blobs(ctx context.Context, ids []string, max int64, fn func(id string, data []byte) error) error {
+	c, err := catFileBatch(p.dir, ids)
+	if err != nil {
+		return err
+	}
+	sc := &blobScan{want: ids, left: max, max: max, fn: fn}
+	c.stdout = sc
+	_, err = p.r.run(ctx, c)
+	if sc.err != nil {
+		return sc.err // the scan's refusal, not the broken pipe it caused
+	}
+	if err != nil {
+		return err
+	}
+	if sc.next != len(ids) || sc.body != nil {
+		return fmt.Errorf("cat-file answered %d of %d blobs", sc.next, len(ids))
+	}
+	return nil
+}
+
+// blobScan parses cat-file --batch as it arrives: "<id> blob <size>\n",
+// size bytes, "\n" - or "<id> missing\n".
+type blobScan struct {
+	want      []string
+	next      int
+	left, max int64
+	fn        func(string, []byte) error
+	head      []byte
+	body      []byte // the current object's content so far; nil between objects
+	size      int
+	err       error
+}
+
+func (s *blobScan) Write(b []byte) (int, error) {
+	n := len(b)
+	for len(b) > 0 && s.err == nil {
+		if s.body == nil { // a header
+			i := bytes.IndexByte(b, '\n')
+			if i < 0 {
+				s.head = append(s.head, b...)
+				if len(s.head) > 256 {
+					s.err = fmt.Errorf("cat-file header longer than 256 bytes")
+				}
+				break
+			}
+			s.head = append(s.head, b[:i]...)
+			b = b[i+1:]
+			s.header(string(s.head))
+			s.head = s.head[:0]
+			continue
+		}
+		need := s.size + 1 - len(s.body) // the content and its trailing newline
+		take := min(need, len(b))
+		s.body = append(s.body, b[:take]...)
+		b = b[take:]
+		if len(s.body) == s.size+1 {
+			if s.body[s.size] != '\n' {
+				s.err = fmt.Errorf("cat-file content for %s is not terminated", s.want[s.next])
+				break
+			}
+			if err := s.fn(s.want[s.next], s.body[:s.size]); err != nil {
+				s.err = err
+				break
+			}
+			s.body, s.next = nil, s.next+1
+		}
+	}
+	return n, s.err
+}
+
+func (s *blobScan) header(h string) {
+	if s.next >= len(s.want) {
+		s.err = fmt.Errorf("cat-file answered more than was asked")
+		return
+	}
+	id := s.want[s.next]
+	f := strings.Fields(h)
+	switch {
+	case len(f) == 2 && f[0] == id && f[1] == "missing":
+		s.err = fmt.Errorf("%w: blob %s is not in the cache", ErrContentMissing, id[:12])
+	case len(f) != 3 || f[0] != id:
+		s.err = fmt.Errorf("unexpected cat-file header %q", truncate(h, 80))
+	case f[1] != "blob":
+		s.err = fmt.Errorf("%s is a %s, not a blob", id[:12], truncate(f[1], 20))
+	default:
+		size, err := strconv.Atoi(f[2])
+		switch {
+		case err != nil || size < 0:
+			s.err = fmt.Errorf("unexpected cat-file size %q", truncate(f[2], 20))
+		case int64(size) > s.left:
+			s.err = fmt.Errorf("the content passes its %d KiB cap", s.max>>10)
+		default:
+			s.size, s.left, s.body = size, s.left-int64(size), make([]byte, 0, size+1)
+		}
+	}
+}
+
 // UpdateRefs applies updates in one transaction.
 func (p Repo) UpdateRefs(ctx context.Context, updates []RefUpdate) error {
 	c, err := updateRefs(p.dir, updates)
@@ -465,16 +569,6 @@ func (p Repo) Diff(ctx context.Context, a, b Rev, paths []string) (text string, 
 		return "", false, err
 	}
 	return string(res.Stdout), res.StdoutOver, nil
-}
-
-// Archive writes a tar of one subtree at rev ("" for the whole tree) to
-// output, its entries under path/.
-func (p Repo) Archive(ctx context.Context, rev Rev, path, output string) error {
-	c, err := archiveTar(p.dir, rev, path, output)
-	if err == nil {
-		_, err = p.r.run(ctx, c)
-	}
-	return err
 }
 
 // splitNul splits NUL-terminated records.
