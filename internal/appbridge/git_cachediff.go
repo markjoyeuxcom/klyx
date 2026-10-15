@@ -11,6 +11,7 @@ import (
 
 	"github.com/moomora/klyx/internal/cachediff"
 	"github.com/moomora/klyx/internal/gitcli"
+	"github.com/moomora/klyx/internal/gitops/flux"
 	"github.com/moomora/klyx/internal/line"
 )
 
@@ -35,6 +36,12 @@ func (s *GitService) cacheDiff(ctx context.Context, conn GitOpsConn, ns, name st
 	ks, err := conn.FluxObject(ctx, "Kustomization", ns, name)
 	if err != nil {
 		return FluxDiffDTO{}, false
+	}
+	// The M10-f gate, enforced here as the flux CLI path enforces it: a
+	// healthy, unsuspended Kustomization heals drift each interval, so its
+	// diff is empty or misleading. Nothing is fetched or built for it.
+	if r := flux.ParseKustomization(ks); !r.Suspended && r.Ready != flux.Failed {
+		return FluxDiffDTO{Available: true, Via: "cache", Error: "diff is only available for suspended or failing Kustomizations"}, true
 	}
 	srcKind, _, _ := unstructured.NestedString(ks.Object, "spec", "sourceRef", "kind")
 	srcName, _, _ := unstructured.NestedString(ks.Object, "spec", "sourceRef", "name")

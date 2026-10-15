@@ -25,7 +25,7 @@ Design note for slice 6 of `2026-10-14-klyx-the-line-redesign.md` (parent).
 | **6b** | Acquisition (§4): the lock, reservations, staging, validation, journaled publication and recovery, size sampling. History refresh first; content acquisition with it |
 | **6c** | `git.repos` in fleet.yaml and Settings > Git (§5): approval, URL mapping, sizes, "Fetch now", "Clear cache" |
 | **6d** | The line with history (§6): the target T, the ordered states, "held · N behind", the Ledger's commits, "Open in Git", the fetch cadence |
-| **6e** | The cache diff (§7), the parent's "6b": the in-process confined Kustomize build and the server-side dry-run diff |
+| **6e** | The cache diff (§7), the parent's "6b": the confined Kustomize build in a contained child process (§7.1) and the server-side dry-run diff |
 
 Each is Codex-reviewed on its own, in this order.
 
@@ -339,7 +339,7 @@ What 6e makes precise:
   - Secret values are masked with `ssa.SanitizeUnstructuredData` before a unified YAML diff (`go-difflib`).
   - "Would be pruned" comes from `status.inventory` when `spec.prune` is on.
 - **The routing.** The cache answers when the Kustomization's source is a GitRepository whose URL maps to an approved entry and Git is on. Otherwise, as before, the flux CLI answers.
-  - The lens still offers "Compute diff" only for suspended or failing Kustomizations (the M10-f gate).
+  - "Compute diff" is offered only for suspended or failing Kustomizations (the M10-f gate). The backend enforces it on the cache path too, before anything is fetched or built (design review of 49232be).
   - The result names its path ("cache" or "flux CLI"), the revision built, and what was not applied (SOPS when `spec.decryption` is set, substitution when `spec.postBuild` is set, a generated kustomization).
 - **The cache.** `EnsureCommit` fetches a missing commit through the acquisition contract without touching the history status the line's T reads. `AcquireIDs` acquires exactly the input set's blobs. `Repo.Archive` is removed.
 - **Live:**

@@ -178,7 +178,7 @@ func fluxObjects(sha string, mod func(ks, src map[string]any)) map[string]*unstr
 		"apiVersion": "kustomize.toolkit.fluxcd.io/v1", "kind": "Kustomization",
 		"metadata": map[string]any{"name": "apps", "namespace": "flux-system", "generation": int64(3)},
 		"spec": map[string]any{"path": "./clusters/prd", "sourceRef": map[string]any{"kind": "GitRepository", "name": "fleet"},
-			"prune": true, "targetNamespace": "shop", "commonMetadata": map[string]any{"labels": map[string]any{"team": "a"}},
+			"suspend": true, "prune": true, "targetNamespace": "shop", "commonMetadata": map[string]any{"labels": map[string]any{"team": "a"}},
 			"postBuild": map[string]any{"substitute": map[string]any{"x": "y"}}, "decryption": map[string]any{"provider": "sops"}},
 		"status": map[string]any{"observedGeneration": int64(3),
 			"inventory": map[string]any{"entries": []any{map[string]any{"id": "shop_old_apps_Deployment", "v": "v1"}}}},
@@ -293,5 +293,29 @@ func TestComputeDiffLeavesUnapprovedRepositoriesToTheFluxCLI(t *testing.T) {
 	conn.objs = fluxObjects(sha, nil)
 	if d := gs.FluxDiff("prd", "flux-system", "apps", ""); d.Via != "cache" || d.Error != "" {
 		t.Fatalf("approved through the lens: %+v", d)
+	}
+}
+
+// The M10-f gate holds on the cache path (design review of 49232be): a
+// healthy, unsuspended Kustomization gets no fetch, build or dry-run.
+func TestComputeDiffKeepsTheSuspendedOrFailingGate(t *testing.T) {
+	store, sha := newDiffFixture(t)
+	svc := newDiffService(t, store)
+	healthy := func(ks, _ map[string]any) {
+		delete(ks["spec"].(map[string]any), "suspend")
+		ks["status"].(map[string]any)["conditions"] = []any{map[string]any{"type": "Ready", "status": "True"}}
+	}
+	conn := &diffConn{objs: fluxObjects(sha, healthy)}
+	d, ok := svc.cacheDiff(context.Background(), conn, "flux-system", "apps")
+	if !ok || !strings.Contains(d.Error, "only available for suspended or failing") || conn.dryRun != nil || len(store.ensured) != 0 {
+		t.Fatalf("a healthy Kustomization: ok=%v %+v ensured %v", ok, d, store.ensured)
+	}
+	failing := func(ks, _ map[string]any) {
+		delete(ks["spec"].(map[string]any), "suspend")
+		ks["status"].(map[string]any)["conditions"] = []any{map[string]any{"type": "Ready", "status": "False", "reason": "BuildFailed"}}
+	}
+	conn = &diffConn{objs: fluxObjects(sha, failing)}
+	if d, ok := svc.cacheDiff(context.Background(), conn, "flux-system", "apps"); !ok || d.Error != "" || conn.dryRun == nil {
+		t.Fatalf("a failing Kustomization: ok=%v %+v", ok, d)
 	}
 }
