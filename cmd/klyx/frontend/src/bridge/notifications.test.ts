@@ -9,7 +9,7 @@ vi.mock("../../bindings/github.com/moomora/klyx/internal/appbridge/index.js", ()
 vi.mock("./helm", () => ({ openHelmRelease: vi.fn() }));
 
 import { useFleet } from "../store/fleet";
-import { BASELINE_EVENT, OPEN_EVENT, baselineMessage, openNotified, startHealthNotifications, _resetHealthNotificationsForTest } from "./notifications";
+import { BASELINE_EVENT, OPEN_EVENT, baselineMessage, openNotified, startHealthNotifications, _listedForTest, _resetHealthNotificationsForTest } from "./notifications";
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -62,5 +62,22 @@ describe("a webview that subscribes after a connect", () => {
     rt.handlers[BASELINE_EVENT]({ data: { seq: 7, cluster: "prd", reason: "connect", count: 1, items: [] } }); // the same listing again
     unsub();
     expect(logged).toEqual(["1 fault present at connect on prd"]);
+  });
+  it("remembers a bounded window of numbers, and a newer event before older unseen ones still lists them", async () => {
+    // a newer listing's event arrives before the start-up read returns older ones
+    let read!: (v: unknown[]) => void;
+    svc.RecentBaselines.mockReturnValueOnce(new Promise((r) => { read = r as never; }) as never);
+    const logged: string[] = [];
+    const unsub = useFleet.subscribe((st) => { if (st.actionStatus) logged.push(st.actionStatus.message); });
+    startHealthNotifications();
+    await new Promise((r) => setTimeout(r, 0));
+    rt.handlers[BASELINE_EVENT]({ data: { seq: 21, cluster: "c21", reason: "connect", count: 1, items: [] } });
+    read([2, 3, 21].map((seq) => ({ seq, cluster: `c${seq}`, reason: "connect", count: 1, items: [] })));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(logged).toEqual(["1 fault present at connect on c21", "1 fault present at connect on c2", "1 fault present at connect on c3"]);
+    // 400 more: the remembered set stays bounded
+    for (let seq = 22; seq < 422; seq++) rt.handlers[BASELINE_EVENT]({ data: { seq, cluster: "x", reason: "connect", count: 1, items: [] } });
+    unsub();
+    expect(_listedForTest()).toBeLessThanOrEqual(64);
   });
 });

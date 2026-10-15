@@ -651,10 +651,11 @@ func TestPendingWorkEndsWithItsEpisode(t *testing.T) {
 	}
 	r.e.Apply(batch(observe.BatchChanges, item("a", "ok", "fault")))
 	r.e.mu.Lock()
-	n := len(r.e.clusters["prd"].pending)
+	cs := r.e.clusters["prd"]
+	n, owed := len(cs.pending), len(cs.owedOn)+len(cs.owedRec)
 	r.e.mu.Unlock()
-	if n != 1 {
-		t.Fatalf("closed episodes' onsets accumulate: %d pending", n)
+	if owed != 1 || n > 2*owed+32 {
+		t.Fatalf("closed episodes' onsets accumulate: %d queued, %d owed", n, owed)
 	}
 	r.step(BurstWindow)
 	if len(r.sent) != 1 {
@@ -697,5 +698,52 @@ func TestCheckpointsListTheFaultsTheyHold(t *testing.T) {
 	}
 	if len(r.sent) != 1 {
 		t.Fatalf("a checkpoint notified: %v", r.bodies())
+	}
+}
+
+func TestALossIsNotACheckpoint(t *testing.T) {
+	r := newRig(t, on)
+	r.e.Apply(batch(observe.BatchChanges, item("a", "ok", "fault")))
+	r.e.Apply(in("other", batch(observe.BatchChanges, item("a", "ok", "fault"))))
+	r.step(BurstWindow)
+	r.e.Apply(batch(observe.BatchLoss)) // the other part still covers a
+	r.step(BaselineWindow)
+	if len(r.lists) != 0 {
+		t.Fatalf("a loss listed: %+v", r.lists)
+	}
+	r.e.Apply(batch(observe.BatchAfterGap))
+	r.step(BaselineWindow)
+	if len(r.lists) != 1 || r.lists[0].Reason != ListAfterGap {
+		t.Fatalf("the after-gap lists: %+v", r.lists)
+	}
+}
+
+// onsetBatch opens n episodes in one batch: linear work, never a scan of the
+// pending queue per episode (slice 10a review).
+func onsetBatch(n int) {
+	e := New(func() time.Time { return time.Unix(0, 0) }, Hooks{Protected: func(string) bool { return true }}, 0)
+	e.SetSettings(on)
+	items := make([]observe.Transition, n)
+	for i := range items {
+		items[i] = item(fmt.Sprint(i), "ok", "fault")
+	}
+	e.Apply(batch(observe.BatchChanges, items...))
+	for i := range items {
+		items[i] = item(fmt.Sprint(i), "fault", "ok")
+	}
+	e.Apply(batch(observe.BatchChanges, items...))
+}
+
+func TestAFullPartitionOfOnsetsIsLinear(t *testing.T) {
+	start := time.Now()
+	onsetBatch(observe.DefaultRoleCap)
+	if d := time.Since(start); d > 5*time.Second {
+		t.Fatalf("%d onsets and closes took %v", observe.DefaultRoleCap, d)
+	}
+}
+
+func BenchmarkOnsetBatch(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		onsetBatch(observe.DefaultRoleCap)
 	}
 }

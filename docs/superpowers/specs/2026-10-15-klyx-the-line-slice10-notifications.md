@@ -70,7 +70,7 @@ An episode is per UID. It opens when the fold becomes **fault**, and the batch t
 | **quiet** | nothing | stays open and quiet: not a recovery. A return to fault is the same episode |
 | **clear** | nothing | **closes**: see below |
 
-**A checkpoint lists what it holds.** A `baseline` (connect or after a cap) or an `after-gap` lists, once in the app, every fault its fold holds afterwards: an episode it opened, and one it resumed. Each object appears once per listing, across the checkpoint's parts. A checkpoint never notifies.
+**A checkpoint lists what it holds.** A `baseline` (connect or after a cap) or an `after-gap`, never a `loss`, lists, once in the app, every fault its fold holds afterwards: an episode it opened, and one it resumed. Each object appears once per listing, across the checkpoint's parts. A checkpoint never notifies.
 
 **Closing an episode:**
 - **Recovered:** the fold clears through a `changes` item into ok. Recovery eligibility is checked as usual, whatever the episode passed through: fault → unknown → ok and fault → degraded → ok both recover on the final ok.
@@ -250,8 +250,10 @@ The re-review of 066ca6b found two more gaps, answered here:
     - `connect`, `after-cap`, `after-gap` and `dropped` (items de-duplication had no room for).
     - A checkpoint lists every fault it holds, including resumed episodes, once per listing across parts.
   - **Pending work ends with its episode:**
-    - a closed episode's onset is removed at once;
-    - a new episode for a UID removes, for good, any recovery still pending for its earlier one.
+    - a closed episode's onset is no longer owed;
+    - a new episode for a UID ends, for good, any recovery still owed for its earlier one.
+    - What each item still owes is indexed (onsets by episode, recoveries by UID), so ending one is O(1).
+    - Items no longer owed stay in the queue until they are the majority (past 32), then are compacted in one pass. The queue holds at most twice what is owed plus 32, and a full partition of onsets is linear (50,000 onsets and closes in about 50 ms).
 - **`appbridge.NotificationsService`:**
   - **Bound:** `Settings`, `SetSettings`, `SetFocus` and `RecentBaselines`.
     - `SetSettings` writes the block through `config.SaveNotifications` and requests the OS permission when enabling; a refusal keeps the setting and says so.
@@ -282,7 +284,8 @@ The re-review of 066ca6b found two more gaps, answered here:
   - a partition over its cap lost until its after-cap baseline, with a full turnover that fits not taken as over;
   - a full de-duplication map dropping rather than evicting;
   - pending work ending with its episode: a UID flapping 2,000 times before one dispatch leaves one onset, and a later episode, even one deleted before dispatch, ends an older recovery;
-  - checkpoints listing the faults they hold: an empty after-gap of two parts lists a retained fault once, and an after-cap baseline lists it again;
+  - checkpoints listing the faults they hold: an empty after-gap of two parts lists a retained fault once, an after-cap baseline lists it again, and a loss lists nothing;
+  - a full partition of onsets and closes finishing in linear time, with a benchmark;
   - in flight: a recovery during a blocked `Send` goes when it succeeds and is withdrawn when it fails; end, reincarnation and disabling during the call revive nothing; a blocked `Send` never blocks `Apply`.
 - **Service tests** (`appbridge/notifications_service_test.go`):
   - the settings round trip, refusal, sending, a click and recent listings;
@@ -294,6 +297,7 @@ The re-review of 066ca6b found two more gaps, answered here:
 
 - **`bridge/notifications.ts`:**
   - `startHealthNotifications()` runs once from the app shell. It subscribes to the baseline and open events, then reads `RecentBaselines()`; each listing is said once, by its number, as an `info` Activity entry and toast. A `dropped` listing says how many notifications de-duplication had no room for.
+  - **Remembered numbers are bounded.** The service keeps its last 20 listings, numbered in order, so only the 64 numbers below the highest seen are remembered, and an older one is taken as said. A newer event that arrives before the start-up read still lets the read's older, unseen listings through.
   - It reports `{focused, cluster}` on window focus and blur and on every route change, only when it changes.
   - `openNotified` reveals a notified object in its part's lens with its UID (a burst opens its cluster).
 - **Settings > Notifications** (`app/NotificationSettingsPanel.tsx`): "Notify me about new faults" (off), the cluster scope and "Also notify recoveries", the latter two disabled until enabled. A failed save reverts and says why; an OS refusal is kept and said.

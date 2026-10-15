@@ -58,14 +58,26 @@ export function openNotified(o: NotificationObject): void {
 
 let started = false;
 let lastFocus = "";
-// each listing is said once, whether its event or the start-up read delivers it
+// Each listing is said once, whether its event or the start-up read
+// delivers it. The service keeps its last 20, numbered in order, so a number
+// more than LISTED_WINDOW below the highest seen can never arrive unsaid:
+// only that window is remembered (an older number is taken as said).
+const LISTED_WINDOW = 64;
 const listed = new Set<number>();
+let highest = 0;
 
 function listBaseline(b: HealthBaseline | undefined): void {
-  if (!b || b.count <= 0 || listed.has(b.seq)) return;
+  if (!b || b.count <= 0 || listed.has(b.seq) || b.seq <= highest - LISTED_WINDOW) return;
   listed.add(b.seq);
+  if (b.seq > highest) {
+    highest = b.seq;
+    for (const n of listed) if (n <= highest - LISTED_WINDOW) listed.delete(n);
+  }
   useFleet.getState().setActionStatus({ kind: "info", message: baselineMessage(b) });
 }
+
+/** _listedForTest: how many listing numbers are remembered. */
+export const _listedForTest = () => listed.size;
 
 function reportFocus(): void {
   const r = useFleet.getState().route;
@@ -101,6 +113,7 @@ export function _resetHealthNotificationsForTest(): void {
   started = false;
   lastFocus = "";
   listed.clear();
+  highest = 0;
   window.removeEventListener("focus", reportFocus);
   window.removeEventListener("blur", reportFocus);
 }

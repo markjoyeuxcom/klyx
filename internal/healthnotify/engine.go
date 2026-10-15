@@ -126,7 +126,7 @@ func (e *Engine) SetSettings(s Settings) {
 	e.settings = s
 	if !s.Enabled {
 		for _, cs := range e.clusters {
-			cs.pending = nil
+			cs.clearPending()
 		}
 	}
 }
@@ -203,7 +203,13 @@ type clusterState struct {
 	parts    map[partKey]*partition
 	episodes map[string]*episode
 	dedupe   map[dedupeKey]time.Time
+	// pending items in queue order. What each still owes is indexed, so an
+	// episode's end invalidates its work in O(1); invalid items are
+	// compacted away once they are the majority.
 	pending  []pendingItem
+	owedOn   map[uint64]bool   // episodes whose onset is still owed
+	owedRec  map[string]uint64 // per UID, the episode whose recovery is still owed
+	dead     int
 	windowAt time.Time
 	listings []listing
 	dropped  int
@@ -213,7 +219,8 @@ func newClusterState(inc uint64, dedupe map[dedupeKey]time.Time) *clusterState {
 	if dedupe == nil {
 		dedupe = map[dedupeKey]time.Time{}
 	}
-	return &clusterState{inc: inc, parts: map[partKey]*partition{}, episodes: map[string]*episode{}, dedupe: dedupe}
+	return &clusterState{inc: inc, parts: map[partKey]*partition{}, episodes: map[string]*episode{}, dedupe: dedupe,
+		owedOn: map[uint64]bool{}, owedRec: map[string]uint64{}}
 }
 
 // clusterLocked returns the cluster's state for inc. A newer incarnation
@@ -387,7 +394,7 @@ func (e *Engine) settleLocked(cs *clusterState, b observe.TransitionBatch, uid s
 		cs.episodes[uid] = ep
 		// a new episode ends, for good, any recovery still pending for the
 		// UID's earlier one - even if this one closes before dispatch
-		cs.dropPending(func(p pendingItem) bool { return p.recovery && p.obj.UID == uid })
+		cs.dropRecovery(uid)
 		switch b.Kind {
 		case observe.BatchChanges:
 			ep.opened = openedOnset
@@ -405,7 +412,7 @@ func (e *Engine) settleLocked(cs *clusterState, b observe.TransitionBatch, uid s
 	default:
 		delete(cs.episodes, uid)
 		// its onset will never go: pending work ends with the episode
-		cs.dropPending(func(p pendingItem) bool { return !p.recovery && p.ep == ep.id })
+		cs.dropOnset(ep.id)
 		// a continuous change into ok recovers; gone deletes; a baseline or
 		// an after-gap clears silently (its moment is unknown)
 		if b.Kind == observe.BatchChanges && it != nil && it.To == ok && ep.sent && e.settings.Recoveries && e.eligibleLocked(cs, b.Cluster) {
@@ -416,7 +423,7 @@ func (e *Engine) settleLocked(cs *clusterState, b observe.TransitionBatch, uid s
 	}
 	// a checkpoint - a connect, an after-cap baseline, an after-gap - lists
 	// the faults it holds once in the app, a resumed episode's too (§4)
-	if open := cs.episodes[uid]; open != nil && f == foldFault && b.Kind != observe.BatchChanges {
+	if open := cs.episodes[uid]; open != nil && f == foldFault && (b.Kind == observe.BatchBaseline || b.Kind == observe.BatchAfterGap) {
 		reason := ListAfterGap
 		if b.Kind == observe.BatchBaseline {
 			reason = ListConnect
@@ -432,15 +439,52 @@ func (e *Engine) settleLocked(cs *clusterState, b observe.TransitionBatch, uid s
 	}
 }
 
-// dropPending removes the pending items drop matches.
-func (cs *clusterState) dropPending(drop func(pendingItem) bool) {
+// owed says whether a pending item is still owed.
+func (cs *clusterState) owed(it pendingItem) bool {
+	if it.recovery {
+		ep, ok := cs.owedRec[it.obj.UID]
+		return ok && ep == it.ep
+	}
+	return cs.owedOn[it.ep]
+}
+
+// dropOnset ends an episode's pending onset; dropRecovery a UID's pending
+// recovery. Each is O(1): the item stays in the queue, no longer owed.
+func (cs *clusterState) dropOnset(ep uint64) {
+	if cs.owedOn[ep] {
+		delete(cs.owedOn, ep)
+		cs.died()
+	}
+}
+
+func (cs *clusterState) dropRecovery(uid string) {
+	if _, ok := cs.owedRec[uid]; ok {
+		delete(cs.owedRec, uid)
+		cs.died()
+	}
+}
+
+// died counts an item no longer owed and compacts the queue once such items
+// are the majority (past 32), so it holds at most twice what is owed plus 32.
+func (cs *clusterState) died() {
+	cs.dead++
+	if cs.dead <= 32 || cs.dead*2 <= len(cs.pending) {
+		return
+	}
 	kept := cs.pending[:0]
-	for _, p := range cs.pending {
-		if !drop(p) {
-			kept = append(kept, p)
+	for _, it := range cs.pending {
+		if cs.owed(it) {
+			kept = append(kept, it)
 		}
 	}
-	cs.pending = kept
+	clear(cs.pending[len(kept):])
+	cs.pending, cs.dead = kept, 0
+}
+
+func (cs *clusterState) clearPending() {
+	cs.pending, cs.dead = nil, 0
+	clear(cs.owedOn)
+	clear(cs.owedRec)
 }
 
 // observedAt is the batch's capture time, else now.
@@ -474,6 +518,12 @@ func (e *Engine) enqueueLocked(cs *clusterState, it pendingItem) {
 	}
 	if len(cs.pending) == 0 {
 		cs.windowAt = now
+	}
+	if it.recovery {
+		cs.dropRecovery(it.obj.UID) // one owed per UID: the latest
+		cs.owedRec[it.obj.UID] = it.ep
+	} else {
+		cs.owedOn[it.ep] = true
 	}
 	cs.pending = append(cs.pending, it)
 }
@@ -583,14 +633,14 @@ func (e *Engine) failed(out outgoing) {
 		if cs != out.cs {
 			continue
 		}
-		withdrawn := map[uint64]bool{}
 		for uid, id := range out.onsets {
-			withdrawn[id] = true
 			if ep := cs.episodes[uid]; ep != nil && ep.id == id {
 				ep.sent = false
 			}
+			if rec, ok := cs.owedRec[uid]; ok && rec == id {
+				cs.dropRecovery(uid)
+			}
 		}
-		cs.dropPending(func(p pendingItem) bool { return p.recovery && withdrawn[p.ep] })
 	}
 }
 
@@ -598,8 +648,13 @@ func (e *Engine) failed(out outgoing) {
 // state and settings (§3.3), consumes their de-duplication allowance and
 // composes what remains.
 func (e *Engine) dispatchLocked(name string, cs *clusterState, now time.Time) (outgoing, bool) {
-	items := cs.pending
-	cs.pending = nil
+	items := make([]pendingItem, 0, len(cs.pending)-cs.dead)
+	for _, it := range cs.pending {
+		if cs.owed(it) {
+			items = append(items, it)
+		}
+	}
+	cs.clearPending()
 	if !e.eligibleLocked(cs, name) {
 		return outgoing{}, false
 	}
