@@ -62,6 +62,11 @@ The parent reads the owner's helper "once from their git config". That needs rea
 - **Inputs are validated before they reach argv:** a sha is 40 or 64 hex; a path is repo-relative, with no `..` segment and no leading `/`; a ref follows §3.6.
 - **Reads** (`log`, `rev-list --count`, `merge-base [--is-ancestor]`, `diff --name-status`) run against the published cache with `GIT_NO_LAZY_FETCH=1` and the 10s deadline.
 
+### 3.5 The cache
+
+- `<config dir>/git-cache/<sha256 of the approved URL>.git`, 0700, created with `init --bare --template=` and the parent's partial-clone config.
+- A test proves a published cache passes `git fsck --connectivity-only` with its blobs missing, after a restart.
+
 ### 3.6 Tracked refs (revised after design review e48a108c)
 
 - **The source of a tracked ref** is the line's own key, never free text: the chosen key's ref, and the `line.source` override's, when that key's repo maps to an approved entry (§5.2). `git.repos` holds no refs.
@@ -73,11 +78,6 @@ The parent reads the owner's helper "once from their git config". That needs rea
   - Semver ranges, the default branch, `HEAD` and unqualified Argo refs are not fetched; they have no T (§6.1).
 - **Validation, before any refspec is built:** the full ref must sit exactly in `refs/heads/` or `refs/tags/`, and its name must pass git's `check-ref-format` rules, implemented in Go: no `*`, `?`, `[`, `\`, `^`, `~`, `:`, space or control character; no `..`, `@{` or `//`; no component starting with `.` or ending in `.lock`; not ending in `/` or `.`; not `@`; no leading `-`.
 - **The refspec** is then `+<full ref>:refs/klyx/staging/<full ref>` (a sha: `+<sha>:refs/klyx/staging/commit/<sha>`), one per tracked ref, never a pattern. A refused ref leaves that key with no T and says why.
-
-### 3.5 The cache
-
-- `<config dir>/git-cache/<sha256 of the approved URL>.git`, 0700, created with `init --bare --template=` and the parent's partial-clone config.
-- A test proves a published cache passes `git fsck --connectivity-only` with its blobs missing, after a restart.
 
 ## 4. Acquisition (6b)
 
