@@ -383,6 +383,9 @@ describe("Codex UI review 2026-10-13: palette order and ranking", () => {
     expect(options(list)[0].dataset.testid).toBe("command-row-view:workloads");
     type(input, "Resources");
     expect(options(list)[0].dataset.testid).toBe("command-row-view:builtins");
+    // a tool lens is shown by the tool's name: "Helm" is its Releases
+    type(input, "Helm");
+    expect(options(list)[0].dataset.testid).toBe("command-row-view:helm");
     // The raw kinds stay findable by their own names.
     type(input, "poddisruption");
     expect(options(list)[0].dataset.testid).toBe("command-row-resource:res:policy/v1/poddisruptionbudgets");

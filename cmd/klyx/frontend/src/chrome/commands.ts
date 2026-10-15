@@ -672,7 +672,10 @@ function destinationCommands(s: FleetStore, g: NavGroup, d: Destination, here: s
   // A lens is findable by its tool's name too: "helm" finds Helm's Releases,
   // "network" its Gateways and routes (Codex UI review 2026-10-13).
   const keywords = d.type === "task" ? [g.label, ...(d.keywords ?? [])] : d.keywords;
-  const shownAs = d.type === "task" ? d.indexLabel : undefined;
+  // The name the lens index shows it by: its index label, or - the first
+  // task of a tool lens - the tool's name ("Helm" for its Releases).
+  const firstTask = g.destinations.find((x) => x.type === "task");
+  const shownAs = d.type !== "task" ? undefined : d.indexLabel ?? (g.lens === "group" && firstTask === d ? g.label : undefined);
   const out: Command[] = [];
   if (here) {
     const mine = states.find((x) => x.c.name === here);

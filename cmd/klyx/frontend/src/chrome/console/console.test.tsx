@@ -126,6 +126,18 @@ describe("object rows from the fleet index", () => {
     expect(sections()[0]).toBe("Objects");
   });
 
+  it("the lens index's name for a lens leads, ahead of objects that merely contain it", async () => {
+    index.state.data = () => search([hit({ kind: "Namespace", resource: "namespaces", namespace: "", name: "helm-system", uid: "ns1" })]) as never;
+    useFleet.setState({ route: { name: "cluster", cluster: "prd", section: "pods" } });
+    render(<CommandPalette />);
+    pressCmdK();
+    type("Helm");
+    await flush();
+    expect(sections()[0]).toBe("Go to");
+    fireEvent.keyDown(input(), { key: "Enter" });
+    expect(useFleet.getState().route).toMatchObject({ name: "cluster", section: "helm" });
+  });
+
   it("a query that starts a command's title leads with its group", async () => {
     index.state.data = () => search([hit({ name: "fleet-agent" })]) as never;
     render(<CommandPalette />);
