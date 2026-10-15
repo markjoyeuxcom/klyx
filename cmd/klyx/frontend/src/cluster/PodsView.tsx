@@ -36,6 +36,8 @@ import { useCommitProbe } from "../health/perfHooks";
 import { clock, coverageGaps, kindEvidence, lastGoodAt, type KindEvidence } from "../layout/coverage";
 import { useInspectorAI } from "../ai/AIExplain";
 import { usePinnedSubject } from "./usePinnedSubject";
+import { PinnedGone, expectsOther } from "./PinnedGone";
+import { expectPin } from "../nav/inspectorPin";
 
 // Pods lens on the shared workspace template (2026-10 redesign pilot). The
 // template owns geometry; this file owns pod data, filters, selection and the
@@ -232,9 +234,17 @@ export function PodsView({ cluster }: { cluster: string }) {
   // Cross-links name a pod: resolve it to its row's object, revealing it past
   // the filters.
   useNavIntent(cluster, ["logs-pod", "select-pod"], (intent) => {
-    if (allItems.length === 0) return ev === "complete" ? "missing" : "wait";
     if (!("namespace" in intent)) return "missing";
     const p = allItems.find((x) => x.namespace === intent.namespace && x.name === intent.name);
+    // An opening by UID (slice 9 note §4.2) selects at once, pinned to that
+    // UID: a different or missing row is said, never substituted.
+    if (intent.kind === "select-pod" && expectsOther(p, intent.uid)) {
+      autoSelect.current = "done";
+      expectPin(cluster, keyOf(intent), intent.uid!);
+      useFleet.getState().selectPod({ namespace: intent.namespace, name: intent.name, uid: intent.uid! });
+      return "consumed";
+    }
+    if (allItems.length === 0) return ev === "complete" ? "missing" : "wait";
     if (!p) return ev === "complete" ? "missing" : "wait";
     if (intent.kind === "logs-pod") { setLogsTarget({ namespace: p.namespace, name: p.name, containers: p.containers }); return "consumed"; }
     autoSelect.current = "done";
@@ -480,6 +490,9 @@ export function PodsView({ cluster }: { cluster: string }) {
               onClose={closeInspector}
               onOpenLogs={setLogsTarget}
             />
+          ) : sel && pin.expected && pin.gone ? (
+            <PinnedGone cluster={cluster} kind="Pod" namespace={sel.namespace} name={sel.name} uid={pin.expected} gone={pin.gone}
+              onAdopt={pin.next ? () => { const n = pin.next as PodRowDTO; pin.adopt(); openRow(n); } : undefined} onClose={closeInspector} />
           ) : undefined}
           inspectorLabel="Pod details"
           onCloseInspector={closeInspector}

@@ -211,6 +211,10 @@ type InstanceDetailDTO struct {
 	Facts []FactDTO `json:"facts,omitempty"`
 	// Error is set when the detail read failed; the zero DTO is never an object.
 	Error string `json:"error,omitempty"`
+	// NotFound: the read failed because the object does not exist (an
+	// authoritative absence, The Line slice 9 note §4.2); any other failure
+	// proves nothing either way.
+	NotFound bool `json:"notFound,omitempty"`
 }
 
 // RevealResultDTO is returned by RevealSecretKey. On success Value is the

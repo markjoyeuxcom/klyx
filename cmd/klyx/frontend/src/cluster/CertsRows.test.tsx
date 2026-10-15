@@ -310,3 +310,39 @@ describe("a Top link reveals its object", () => {
     expect(useFleet.getState().actionStatus).toMatchObject({ kind: "error", message: expect.stringMatching(/gone is no longer present/) });
   });
 });
+
+// The Line slice 9 note §4.2: a reveal naming its object by UID pins that
+// UID; another object at the name, or none, is said - never shown.
+describe("a reveal by UID", () => {
+  const reveal = (part: string, ref: { gvr: string; namespace?: string; name: string; uid: string }) =>
+    act(() => { useFleet.getState().requestNavIntent({ kind: "reveal", cluster: "x", task: "certs", part, ref }); });
+  const gone = () => document.querySelector("[data-pinned-gone]")?.getAttribute("data-pinned-gone") ?? null;
+
+  it("a Certificate with that UID opens; another UID at the name is Replaced, with the new one offered", () => {
+    open();
+    applyRows("c", rowsDTO(1, "certificates", 1, [cert("web"), cert("api", { uid: "uid-api-2" })], CERT_KINDS()), 0);
+    applyRows("i", rowsDTO(1, "issuers", 1, [issuer("le")], ISSUER_KINDS()), 0);
+    render(<CertsView cluster="x" />);
+    reveal("certificates", { gvr: "cert-manager.io/v1/certificates", namespace: "payments", name: "web", uid: "uid-web" });
+    expect(gone()).toBeNull();
+    expect(useFleet.getState().certmanager.selectedKey).toBe("payments/web");
+    reveal("certificates", { gvr: "cert-manager.io/v1/certificates", namespace: "payments", name: "api", uid: "uid-api" });
+    expect(gone()).toBe("replaced");
+    expect(useFleet.getState().navIntent).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Open the new object" }));
+    expect(gone()).toBeNull();
+  });
+
+  it("absent: unverified on an incomplete read, removed on a complete one - never a toast", () => {
+    useFleet.setState({ actionStatus: null });
+    open();
+    applyRows("c", rowsDTO(1, "certificates", 1, [cert("web")], [kind("certificates", { coverage: "stale", error: "dial tcp" })]), 0);
+    applyRows("i", rowsDTO(1, "issuers", 1, [issuer("le")], ISSUER_KINDS()), 0);
+    render(<CertsView cluster="x" />);
+    reveal("certificates", { gvr: "cert-manager.io/v1/certificates", namespace: "payments", name: "gone", uid: "uid-gone" });
+    expect(gone()).toBe("unverified");
+    expect(useFleet.getState().actionStatus).toBeNull();
+    act(() => { applyRows("c", rowsDTO(1, "certificates", 2, [cert("web")], CERT_KINDS()), 0); });
+    expect(gone()).toBe("removed");
+  });
+});

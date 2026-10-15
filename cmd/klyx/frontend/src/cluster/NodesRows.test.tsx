@@ -369,3 +369,24 @@ describe("select-node reveals through the filters and waits for evidence", () =>
     expect(useFleet.getState().actionStatus).toMatchObject({ kind: "error", message: expect.stringMatching(/b is no longer present/) });
   });
 });
+
+// The Line slice 9 note §4.2: an opening by UID pins that UID.
+describe("select-node by UID", () => {
+  const want = (name: string, uid: string) => act(() => { useFleet.getState().requestNavIntent({ kind: "select-node", cluster: "x", node: name, uid }); });
+  const gone = () => document.querySelector("[data-pinned-gone]")?.getAttribute("data-pinned-gone") ?? null;
+
+  it("another UID at the name is Replaced; an absent node waits as unverified on a stale read", () => {
+    seed([node("a", "ok", { uid: "uid-a-2" })]);
+    const { unmount } = render(<NodesView cluster="x" />);
+    want("a", "uid-a");
+    expect(gone()).toBe("replaced");
+    unmount();
+    resetHealthStore();
+    useFleet.setState({ navIntent: null });
+    useFleet.getState().selectNode(null);
+    seed([node("b")], kind({ coverage: "stale", lastGoodAt: "2026-10-12T11:00:00Z" }));
+    render(<NodesView cluster="x" />);
+    want("z", "uid-z");
+    expect(gone()).toBe("unverified");
+  });
+});

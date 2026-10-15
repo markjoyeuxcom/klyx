@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { render, act } from "@testing-library/react";
 import { usePinnedSubject, type Gone } from "./usePinnedSubject";
+import { expectPin, takeExpectedPin } from "../nav/inspectorPin";
 
 // The Line slice 4 §6.3 (ruled in design review 37f00bc3): a selection is
 // pinned to its first UID; a same-name object with a new UID on a complete
@@ -61,5 +62,54 @@ describe("usePinnedSubject", () => {
     expect([out.subject?.uid, out.gone]).toEqual(["u8", null]);
     r.rerender(<Lens sel={null} />);
     expect([out.subject, out.gone]).toEqual([null, null]);
+  });
+});
+
+// The Line slice 9 note §4.2: an opening that names its object by UID pins
+// the selection before any row is seen; a replacement or an absence is said,
+// never substituted.
+describe("usePinnedSubject with an expected UID", () => {
+  let res: ReturnType<typeof usePinnedSubject<Row>>;
+  function Expecting({ sel, live, complete = true }: { sel: string | null; live?: Row; complete?: boolean }) {
+    res = usePinnedSubject("c", sel, live, complete);
+    return null;
+  }
+
+  it("the expected row pins as usual", () => {
+    expectPin("c", "ns/api", "u1");
+    render(<Expecting sel="ns/api" live={row("u1", 4)} />);
+    expect([res.subject?.v, res.gone, res.expected]).toEqual([4, null, undefined]);
+  });
+
+  it("another UID at the key: replaced on a complete read (no subject, the new one offered), unverified otherwise", () => {
+    expectPin("c", "ns/api", "u1");
+    const r = render(<Expecting sel="ns/api" live={row("u2", 9)} complete={false} />);
+    expect([res.subject, res.gone, res.next, res.expected]).toEqual([null, "unverified", null, "u1"]);
+    r.rerender(<Expecting sel="ns/api" live={row("u2", 9)} />);
+    expect([res.subject, res.gone, res.next?.uid, res.expected]).toEqual([null, "replaced", "u2", "u1"]);
+    act(() => res.adopt());
+    expect([res.subject?.uid, res.gone, res.expected]).toEqual(["u2", null, undefined]);
+  });
+
+  it("absent: removed on a complete read, unverified otherwise; the row arriving later pins", () => {
+    expectPin("c", "ns/api", "u1");
+    const r = render(<Expecting sel="ns/api" live={undefined} complete={false} />);
+    expect([res.subject, res.gone, res.expected]).toEqual([null, "unverified", "u1"]);
+    r.rerender(<Expecting sel="ns/api" live={undefined} />);
+    expect([res.subject, res.gone, res.expected]).toEqual([null, "removed", "u1"]);
+    r.rerender(<Expecting sel="ns/api" live={row("u1", 2)} />);
+    expect([res.subject?.v, res.gone]).toEqual([2, null]);
+  });
+
+  it("an expectation is consumed once, and only for its cluster and key", () => {
+    expectPin("c", "ns/api", "u1");
+    expect(takeExpectedPin("d", "ns/api")).toBeUndefined();
+    const r = render(<Expecting sel="ns/web" live={row("u5")} />);
+    expect(res.gone).toBeNull();
+    r.rerender(<Expecting sel="ns/api" live={row("u2")} />);
+    expect(res.gone).toBe("replaced");
+    r.rerender(<Expecting sel={null} />);
+    r.rerender(<Expecting sel="ns/api" live={row("u2")} />);
+    expect([res.subject?.uid, res.gone]).toEqual(["u2", null]); // consumed: a later plain selection pins as usual
   });
 });

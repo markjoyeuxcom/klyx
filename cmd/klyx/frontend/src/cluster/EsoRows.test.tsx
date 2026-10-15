@@ -210,3 +210,18 @@ describe("a Top link reveals its object", () => {
     expect(useFleet.getState().externalsecrets.selectedKey).toBe("payments/db");
   });
 });
+
+// The Line slice 9 note §4.2: a reveal by UID pins that UID.
+describe("an ESO reveal by UID", () => {
+  const gone = () => document.querySelector("[data-pinned-gone]")?.getAttribute("data-pinned-gone") ?? null;
+  it("an ExternalSecret replaced at its name, and a store gone from a complete read, are said", () => {
+    open();
+    applyRows("s", rowsDTO(1, "externalsecrets", 1, [secret("db", { uid: "uid-db-2" })], SECRET_KINDS()), 0);
+    applyRows("t", rowsDTO(1, "stores", 1, [store("vault")], STORE_KINDS()), 0);
+    render(<ExternalSecretsView cluster="x" />);
+    act(() => { useFleet.getState().requestNavIntent({ kind: "reveal", cluster: "x", task: "eso", part: "externalsecrets", ref: { gvr: "external-secrets.io/v1/externalsecrets", namespace: "payments", name: "db", uid: "uid-db" } }); });
+    expect(gone()).toBe("replaced");
+    act(() => { useFleet.getState().requestNavIntent({ kind: "reveal", cluster: "x", task: "eso", part: "stores", ref: { gvr: "external-secrets.io/v1/clustersecretstores", name: "gone", uid: "uid-gone" } }); });
+    expect(gone()).toBe("removed");
+  });
+});

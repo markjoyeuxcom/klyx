@@ -964,3 +964,40 @@ describe("InstanceDetail cross-lens Explain (AI)", () => {
     expect(vi.mocked(suggestFix)).toHaveBeenCalledWith("x", "cert-manager.io", "v1", "certificates", "default", "web-tls", "web-tls-uid");
   });
 });
+
+// The Line slice 9 note §4.2: opened by UID, the generic inspector shows the
+// object only when the read is that UID; another object at the name is
+// Replaced, an authoritative NotFound is Removed, any other failure proves
+// nothing (Not verified).
+describe("an instance opened by UID", () => {
+  const byUID: InstanceRef = { ...instance, expectUid: "web-tls-uid" };
+  const gone = () => document.querySelector("[data-pinned-gone]")?.getAttribute("data-pinned-gone") ?? null;
+
+  it("the read with that UID is the object", () => {
+    seed({}, byUID);
+    render(<InstanceDetail cluster="x" resource={resource} instance={byUID} />);
+    expect(gone()).toBeNull();
+    expect(screen.getByText("web-tls")).toBeTruthy();
+  });
+
+  it("another UID is Replaced; Open the new object re-opens the name without the expectation", () => {
+    useFleet.setState({ route: { name: "cluster", cluster: "x", section: "resources", resource, instance: byUID } });
+    seed({ detail: { ...detail, uid: "web-tls-uid-2" } }, byUID);
+    render(<InstanceDetail cluster="x" resource={resource} instance={byUID} />);
+    expect(gone()).toBe("replaced");
+    expect(screen.queryByText("order failed")).toBeNull(); // nothing of the new object is shown
+    fireEvent.click(screen.getByRole("button", { name: "Open the new object" }));
+    const r = useFleet.getState().route;
+    expect(r.name === "cluster" && r.instance).toEqual({ namespace: "default", name: "web-tls" });
+  });
+
+  it("a NotFound read is Removed; any other failure is Not verified", () => {
+    seed({ detail: { ...detail, uid: undefined, error: "certificates.cert-manager.io \"web-tls\" not found", notFound: true } }, byUID);
+    const r = render(<InstanceDetail cluster="x" resource={resource} instance={byUID} />);
+    expect(gone()).toBe("removed");
+    r.unmount();
+    seed({ detail: { ...detail, uid: undefined, error: "connection refused" } }, byUID);
+    render(<InstanceDetail cluster="x" resource={resource} instance={byUID} />);
+    expect(gone()).toBe("unverified");
+  });
+});

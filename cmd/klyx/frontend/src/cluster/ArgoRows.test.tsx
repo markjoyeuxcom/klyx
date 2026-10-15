@@ -256,3 +256,16 @@ describe("a Top link reveals its object", () => {
     expect(useFleet.getState().navIntent).toBeNull();
   });
 });
+
+// The Line slice 9 note §4.2: a reveal by UID pins that UID.
+describe("an Argo reveal by UID", () => {
+  const gone = () => document.querySelector("[data-pinned-gone]")?.getAttribute("data-pinned-gone") ?? null;
+  it("an Application replaced at its name is said, never shown", () => {
+    seed([app("web", { uid: "uid-web-2" })], [appSet("set")]);
+    render(<ArgoView cluster="x" />);
+    act(() => { useFleet.getState().requestNavIntent({ kind: "reveal", cluster: "x", task: "argo", part: "applications", ref: { gvr: "argoproj.io/v1alpha1/applications", namespace: "argocd", name: "web", uid: "uid-web" } }); });
+    expect(gone()).toBe("replaced");
+    fireEvent.click(screen.getByRole("button", { name: "Open the new object" }));
+    expect(gone()).toBeNull();
+  });
+});

@@ -72,3 +72,20 @@ describe("reveal routes a Top ref to its part's view", () => {
     expect(kindOfRef({ gvr: "source.toolkit.fluxcd.io/v1/ocirepositories" })).toBe("OCIRepository");
   });
 });
+
+// The Line slice 9 note §4.2: a ref's UID travels into the selection
+// intents, so the lens pins the object meant.
+describe("reveal carries the ref's UID", () => {
+  it("into every selection intent", () => {
+    reveal("c", "pods", "pods", { gvr: "v1/pods", namespace: "shop", name: "api-1", uid: "u-pod" });
+    expect(intent()).toMatchObject({ kind: "select-pod", uid: "u-pod" });
+    reveal("c", "workloads", "workloads", { gvr: "apps/v1/deployments", namespace: "shop", name: "api", uid: "u-wl" });
+    expect(intent()).toMatchObject({ kind: "select-workload", uid: "u-wl" });
+    reveal("c", "nodes", "nodes", { gvr: "v1/nodes", name: "n1", uid: "u-node" });
+    expect(intent()).toMatchObject({ kind: "select-node", uid: "u-node" });
+    reveal("c", "flux", "reconciliations", { gvr: "kustomize.toolkit.fluxcd.io/v1/kustomizations", namespace: "flux-system", name: "apps", uid: "u-ks" });
+    expect(intent()).toMatchObject({ kind: "select-flux", uid: "u-ks" });
+    reveal("c", "certs", "certificates", { gvr: "cert-manager.io/v1/certificates", namespace: "shop", name: "tls", uid: "u-cert" });
+    expect(intent()).toMatchObject({ kind: "reveal", ref: { uid: "u-cert" } });
+  });
+});

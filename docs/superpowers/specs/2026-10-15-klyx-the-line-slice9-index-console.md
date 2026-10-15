@@ -239,3 +239,31 @@ Nine findings, all taken:
   - Each hit records the Observer incarnation and acquisition generation it was read under. Roles are read with one `RolesNow` per cluster, only while that cluster's Observer is the incarnation the hit was indexed under; otherwise, or when the Observer does not answer, the hit is unverified. A kind the Observer does not visit is unverified ("no ledger for this kind").
 - **`IndexService.Search(ctx, query, limit)`** (bound) returns the hits (cluster, kind, group/version/resource, namespace, name, UID, the kind's state and as-of time, the role word), `Total`, the coverage of every cluster (connection word, indexed or not, each kind's state, entries, as-of and error), and the counts for the coverage line: indexed clusters, and configured kinds readable on at least one of them. A cancelled search answers "search cancelled".
 - **Measured:** 50,000 entries searched in about 17 ms under `-race`.
+
+## 11. As built: 9c-1 (the expected UID)
+
+9c is reviewed in two parts: 9c-1 carries the UID through navigation; 9c-2 is the console on top of it.
+- **Intents:** `select-pod`, `select-workload`, `select-node` and `select-flux` carry an optional `uid`. `reveal` forwards `ref.uid` into them, and the `reveal` intent already carries the ref.
+  - Summary Top links carry their evaluated object's UID, so they now pin too. This is a deliberate change from §4.2's "behaviour unchanged": a Top link names an object the Observer evaluated, and a replacement there is now said rather than followed. Links without a UID are unchanged.
+- **The expectation:** `expectPin(cluster, key, uid)` (`nav/inspectorPin.ts`) parks the UID for a lens's selection key (at most 32, newest kept). `usePinnedSubject` consumes it the first time it reads that key and pins it before any row is seen. While no row with that UID has been seen there is no subject, and the hook returns the UID as `expected`.
+- **Lenses:** an intent with a UID whose row is different or absent selects its key at once with the expectation: no wait and no "no longer present" toast, so an incomplete read reads unverified. A matching row takes the existing path. This covers:
+  - Pods, Workloads, Nodes;
+  - Flux reconciliations and sources;
+  - Argo Applications and ApplicationSets;
+  - Certificates and Issuers;
+  - ExternalSecrets and stores;
+  - Gateways and HTTPRoutes;
+  - Karpenter NodeClaims and NodePools.
+- **`PinnedGone`** is the shared inspector for an expected object with no row: kind, namespace/name, the short UID and the state. It reads:
+  - removed: "not in a complete read of its kind";
+  - replaced: "a different object now has this name", with "Open the new object", which re-pins and, where the lens reads detail, reads the new object;
+  - unverified: "neither confirmed nor ruled out".
+  - An HTTPRoute absent from a complete attached-set read is "No longer attached to a Gateway … it may still exist", never removed.
+- **Resources:** `InstanceRef.expectUid` comes from `openInstance(ns, name, expectUid)`. The instance read is authoritative:
+  - a different UID is replaced, and "Open the new object" re-opens the name without the expectation;
+  - a NotFound is removed (`InstanceDetailDTO.notFound`, from `apierrors.IsNotFound`);
+  - any other failure is unverified.
+- **Tests:**
+  - the hook (`usePinnedSubject.test.tsx`), `PinnedGone`, and `reveal` forwarding;
+  - per lens: Pods (same UID, replaced and adopted, absent on incomplete then complete reads, then arriving), Workloads, Nodes, Flux (both), Certificates, ESO, Argo, Gateways and Routes (detached wording), Karpenter;
+  - Resources (`InstanceDetail.test.tsx`), and `notFound` in Go (`TestGetInstanceDetailNotFound`).

@@ -24,6 +24,8 @@ import { fitColumns, type ColumnDef } from "../layout/columns";
 import { clock, combineEvidence, coverageGaps, joinCoverage, kindEvidence, lastGoodAt, type JoinCoverage, type KindEvidence } from "../layout/coverage";
 import { useClusterKey } from "./useClusterKey";
 import { usePinnedSubject } from "./usePinnedSubject";
+import { PinnedGone, expectsOther } from "./PinnedGone";
+import { expectPin } from "../nav/inspectorPin";
 
 const keyOf = (c: { namespace: string; name: string }) => `${c.namespace}/${c.name}`;
 const arrayOf = <T,>(value: T[] | null | undefined): T[] => (Array.isArray(value) ? value : []);
@@ -293,8 +295,11 @@ export function CertsView({ cluster }: { cluster: string }) {
     if (intent.kind !== "reveal" || intent.task !== "certs") return "wait";
     const issuer = intent.part === "issuers";
     const key = issuer ? `${kindOfRef(intent.ref)}/${intent.ref.namespace ?? ""}/${intent.ref.name}` : `${intent.ref.namespace ?? ""}/${intent.ref.name}`;
-    const found = issuer ? issuers.some((i) => issuerKey(i) === key) : certs.some((c) => keyOf(c) === key);
-    if (!found) return (issuer ? issuersEv : certsEv) === "complete" ? "missing" : "wait";
+    const row = issuer ? issuers.find((i) => issuerKey(i) === key) : certs.find((c) => keyOf(c) === key);
+    // An opening by UID (slice 9 note §4.2): pinned to that UID at once; a
+    // different or missing row is said, never substituted.
+    if (expectsOther(row, intent.ref.uid)) expectPin(cluster, key, intent.ref.uid!);
+    else if (!row) return (issuer ? issuersEv : certsEv) === "complete" ? "missing" : "wait";
     autoSelect.current = "done";
     setView(issuer ? "issuers" : "certificates"); setStatus("all"); setQuery(""); setNamespace("");
     setCursorKey(key);
@@ -508,6 +513,9 @@ export function CertsView({ cluster }: { cluster: string }) {
           onResolve={() => selKey && resolveChain(selKey)}
           onOpenIssuer={(i) => { setView("issuers"); setStatus("all"); setIssuerSel(issuerKey(i)); setCursorKey(issuerKey(i)); }}
         />
+      ) : view === "certificates" && selKey && certPin.expected && certPin.gone ? (
+        <PinnedGone cluster={cluster} kind="Certificate" namespace={selKey.split("/")[0]} name={selKey.split("/").slice(1).join("/")} uid={certPin.expected} gone={certPin.gone}
+          onAdopt={certPin.next ? certPin.adopt : undefined} onClose={() => { autoSelect.current = "done"; selectCert(null); }} />
       ) : view === "issuers" && issuerSel && issuerSubject ? (
         <IssuerInspector
           cluster={cluster}
@@ -521,6 +529,9 @@ export function CertsView({ cluster }: { cluster: string }) {
           onClose={() => setIssuerSel(null)}
           onOpenCert={(c) => { setView("certificates"); setStatus("all"); setNamespace(""); setQuery(""); setCursorKey(keyOf(c)); autoSelect.current = "done"; selectCert(keyOf(c)); }}
         />
+      ) : view === "issuers" && issuerSel && issuerPin.expected && issuerPin.gone ? (
+        <PinnedGone cluster={cluster} kind={issuerSel.split("/")[0]} namespace={issuerSel.split("/")[1] || undefined} name={issuerSel.split("/").slice(2).join("/")} uid={issuerPin.expected} gone={issuerPin.gone}
+          onAdopt={issuerPin.next ? issuerPin.adopt : undefined} onClose={() => setIssuerSel(null)} />
       ) : undefined}
       inspectorLabel={view === "issuers" ? "Issuer details" : "Certificate details"}
       onCloseInspector={closeSelected}

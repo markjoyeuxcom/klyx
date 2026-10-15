@@ -89,7 +89,7 @@ func (s *CRDService) GetInstanceDetail(cluster, group, version, plural, namespac
 	defer cancel()
 	d, err := conn.GetInstanceDetail(ctx, group, version, plural, namespace, name)
 	if err != nil {
-		return InstanceDetailDTO{Error: err.Error()}
+		return InstanceDetailDTO{Error: err.Error(), NotFound: apierrors.IsNotFound(err)}
 	}
 	labels := d.Labels
 	if labels == nil {

@@ -24,6 +24,8 @@ import { useInspectorAI } from "../ai/AIExplain";
 import { ClampedText } from "../chrome/ClampedText";
 import { useClusterKey } from "./useClusterKey";
 import { usePinnedSubject } from "./usePinnedSubject";
+import { PinnedGone, expectsOther } from "./PinnedGone";
+import { expectPin } from "../nav/inspectorPin";
 
 // ArgoView is the Argo CD lens, speaking Argo's vocabulary (synced/degraded,
 // never translated into Flux terms). Applications and ApplicationSets are the
@@ -270,8 +272,11 @@ export function ArgoView({ cluster, mode = "applications" }: { cluster: string; 
     if (intent.kind !== "reveal" || intent.task !== "argo") return "wait";
     const sets = intent.part === "applicationsets";
     const key = `${intent.ref.namespace ?? ""}/${intent.ref.name}`;
-    const found = sets ? appSets.some((a) => appSetKey(a) === key) : apps.some((a) => keyOf(a) === key);
-    if (!found) return (sets ? appSetsCov : appsCov) === "complete" ? "missing" : "wait";
+    const row = sets ? appSets.find((a) => appSetKey(a) === key) : apps.find((a) => keyOf(a) === key);
+    // An opening by UID (slice 9 note §4.2): pinned to that UID at once; a
+    // different or missing row is said, never substituted.
+    if (expectsOther(row, intent.ref.uid)) expectPin(cluster, key, intent.ref.uid!);
+    else if (!row) return (sets ? appSetsCov : appsCov) === "complete" ? "missing" : "wait";
     autoSelect.current = "done";
     clearFilters();
     setCursorKey(key);
@@ -549,6 +554,9 @@ export function ArgoView({ cluster, mode = "applications" }: { cluster: string; 
               onRefresh={(a) => setPinned({ verb: "refresh", app: a })}
               onSync={(a) => setPinned({ verb: "sync", app: a })}
             />
+          ) : mode === "applications" && appKey && appPin.expected && appPin.gone ? (
+            <PinnedGone cluster={cluster} kind="Application" namespace={appKey.split("/")[0]} name={appKey.split("/").slice(1).join("/")} uid={appPin.expected} gone={appPin.gone}
+              onAdopt={appPin.next ? appPin.adopt : undefined} onClose={() => { autoSelect.current = "done"; setAppKey(null); }} />
           ) : mode === "projects" && projKey && projectSubject ? (
             <ProjectInspector
               cluster={cluster}
@@ -575,6 +583,9 @@ export function ArgoView({ cluster, mode = "applications" }: { cluster: string; 
               project={projectFor(setSubject.project)}
               onClose={() => setSetKey(null)}
             />
+          ) : mode === "applicationsets" && setKey && setPin.expected && setPin.gone ? (
+            <PinnedGone cluster={cluster} kind="ApplicationSet" namespace={setKey.split("/")[0]} name={setKey.split("/").slice(1).join("/")} uid={setPin.expected} gone={setPin.gone}
+              onAdopt={setPin.next ? setPin.adopt : undefined} onClose={() => setSetKey(null)} />
           ) : undefined
         }
         inspectorLabel={mode === "projects" ? "Argo CD project details" : mode === "applicationsets" ? "ApplicationSet details" : "Argo CD application details"}

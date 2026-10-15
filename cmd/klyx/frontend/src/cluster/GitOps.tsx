@@ -32,6 +32,8 @@ import { DependencyGraphSection } from "./DependencyGraph";
 import { ClampedText } from "../chrome/ClampedText";
 import { useClusterKey } from "./useClusterKey";
 import { usePinnedSubject } from "./usePinnedSubject";
+import { PinnedGone, expectsOther } from "./PinnedGone";
+import { expectPin } from "../nav/inspectorPin";
 
 const keyOf = (r: { kind: string; namespace: string; name: string }) => `${r.kind}/${r.namespace}/${r.name}`;
 
@@ -236,6 +238,17 @@ export function GitOps({ cluster }: { cluster: string }) {
   useNavIntent(cluster, ["reconcile-flux", "suspend-flux", "select-flux"], (intent) => {
     if (!("fluxKind" in intent)) return "missing";
     const r = rows.find((x) => x.kind === intent.fluxKind && x.namespace === intent.namespace && x.name === intent.name);
+    // An opening by UID (slice 9 note §4.2) selects at once, pinned to that
+    // UID: a different or missing row is said, never substituted.
+    if (intent.kind === "select-flux" && expectsOther(r, intent.uid)) {
+      autoSelect.current = "done";
+      const key = keyOf({ kind: intent.fluxKind, namespace: intent.namespace, name: intent.name });
+      expectPin(cluster, key, intent.uid!);
+      setView("reconciliation");
+      setCursorKey(key);
+      expand(key);
+      return "consumed";
+    }
     if (!r) return evidenceOf(intent.fluxKind) === "complete" ? "missing" : "wait";
     autoSelect.current = "done";
     setView("reconciliation");
@@ -256,7 +269,10 @@ export function GitOps({ cluster }: { cluster: string }) {
     if (intent.kind !== "reveal" || intent.task !== "flux" || intent.part !== "sources") return "wait";
     const kind = kindOfRef(intent.ref);
     const key = `${kind}/${intent.ref.namespace ?? ""}/${intent.ref.name}`;
-    if (!allSources.some((x) => keyOf(x) === key)) return evidenceOf(kind) === "complete" ? "missing" : "wait";
+    const found = allSources.find((x) => keyOf(x) === key);
+    if (expectsOther(found, intent.ref.uid)) {
+      expectPin(cluster, key, intent.ref.uid!);
+    } else if (!found) return evidenceOf(kind) === "complete" ? "missing" : "wait";
     setView("sources");
     setStatus("all"); setSourceKind(""); setQuery("");
     setCursorKey(key);
@@ -629,6 +645,9 @@ export function GitOps({ cluster }: { cluster: string }) {
             onClose={() => setSourceKey(null)}
             onOpenResource={(r) => { setView("reconciliation"); setSourceKey(null); openRow(r); }}
           />
+        ) : sourceKey && sourcePin.expected && sourcePin.gone ? (
+          <PinnedGone cluster={cluster} kind={sourceKey.split("/")[0]} namespace={sourceKey.split("/")[1]} name={sourceKey.split("/").slice(2).join("/")} uid={sourcePin.expected} gone={sourcePin.gone}
+            onAdopt={sourcePin.next ? sourcePin.adopt : undefined} onClose={() => setSourceKey(null)} />
         ) : undefined) : view === "reconciliation" && selKey && subject ? (
           <FluxInspector
             key={`${cluster}/${selKey}`}
@@ -647,6 +666,9 @@ export function GitOps({ cluster }: { cluster: string }) {
             onReconcile={(r) => setPinned({ kind: "reconcile", r })}
             onToggleSuspend={(r, isSuspended) => setPinned({ kind: isSuspended ? "resume" : "suspend", r })}
           />
+        ) : view === "reconciliation" && selKey && fluxPin.expected && fluxPin.gone ? (
+          <PinnedGone cluster={cluster} kind={selKey.split("/")[0]} namespace={selKey.split("/")[1]} name={selKey.split("/").slice(2).join("/")} uid={fluxPin.expected} gone={fluxPin.gone}
+            onAdopt={fluxPin.next ? fluxPin.adopt : undefined} onClose={close} />
         ) : undefined}
         inspectorLabel={view === "sources" ? "Flux source details" : "Flux resource details"}
         onCloseInspector={view === "sources" ? () => setSourceKey(null) : close}

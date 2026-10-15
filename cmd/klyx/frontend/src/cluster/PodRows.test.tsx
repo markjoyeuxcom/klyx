@@ -526,3 +526,51 @@ describe("bounded rows and deltas through the Pods lens", () => {
     }
   });
 });
+
+// The Line slice 9 note §4.2: an opening by UID (the console) pins that UID
+// at once; another object at the name, or none, is said - never shown.
+describe("an opening by UID", () => {
+  const open = (name: string, uid: string) => act(() => useFleet.getState().requestNavIntent({ kind: "select-pod", cluster: "x", namespace: "app", name, uid }));
+
+  it("the row with that UID opens as usual", () => {
+    seed([pod("a")]);
+    render(<PodsView cluster="x" />);
+    open("a", "uid-a");
+    expect(openPodDetail).toHaveBeenLastCalledWith("x", "app", "a", "uid-a");
+    expect(screen.queryByTestId("lens-inspector")).toBeTruthy();
+    expect(document.querySelector("[data-pinned-gone]")).toBeNull();
+  });
+
+  it("another UID at the name is Replaced, on a complete read; Open the new object reads it", () => {
+    seed([pod("a", "ok", { uid: "uid-a-2" })]);
+    render(<PodsView cluster="x" />);
+    open("a", "uid-a");
+    expect(openPodDetail).not.toHaveBeenCalled(); // the new pod is never read in its place
+    const gone = document.querySelector('[data-pinned-gone="replaced"]');
+    expect(gone?.textContent).toContain("UID uid-a");
+    expect(inspector().queryByRole("button", { name: /^Logs/ })).toBeNull();
+    fireEvent.click(inspector().getByRole("button", { name: "Open the new object" }));
+    expect(openPodDetail).toHaveBeenLastCalledWith("x", "app", "a", "uid-a-2");
+    expect(document.querySelector("[data-pinned-gone]")).toBeNull();
+  });
+
+  it("absent: unverified on an incomplete read, removed on a complete one; arriving later, it pins", () => {
+    seed([pod("b")], kindsOf({ coverage: "stale", class: "transport", error: "dial tcp" }));
+    render(<PodsView cluster="x" />);
+    open("a", "uid-a");
+    expect(document.querySelector('[data-pinned-gone="unverified"]')).toBeTruthy();
+    push(2, [pod("b")]);
+    expect(document.querySelector('[data-pinned-gone="removed"]')).toBeTruthy();
+    push(3, [pod("a"), pod("b")]);
+    expect(document.querySelector("[data-pinned-gone]")).toBeNull();
+    expect(inspector().getByRole("button", { name: /^Logs/ })).toBeTruthy();
+  });
+
+  it("another UID on an incomplete read claims nothing", () => {
+    seed([pod("a", "ok", { uid: "uid-a-2" })], kindsOf({ coverage: "stale", class: "transport", error: "dial tcp" }));
+    render(<PodsView cluster="x" />);
+    open("a", "uid-a");
+    expect(document.querySelector('[data-pinned-gone="unverified"]')).toBeTruthy();
+    expect(inspector().queryByRole("button", { name: "Open the new object" })).toBeNull();
+  });
+});

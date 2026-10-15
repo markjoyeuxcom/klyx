@@ -342,3 +342,23 @@ describe("a Top link reveals its object", () => {
   });
 });
 
+
+// The Line slice 9 note §4.2: a reveal by UID pins that UID; a route absent
+// from the attached set reads detached, not removed.
+describe("Gateway API reveals by UID", () => {
+  const gone = () => document.querySelector("[data-pinned-gone]")?.getAttribute("data-pinned-gone") ?? null;
+  it("a Gateway replaced at its name is said; an absent route is no longer attached", () => {
+    open(); applyRows("g", rowsDTO(1, 1, [gw("eg", { uid: "uid-eg-2" })]));
+    if (!useHealth.getState().subs.r) addSub("r", "x", "gateway", "routes");
+    openStarted("r", "tok-r"); openSucceeded("r", "tok-r", 1);
+    applyRows("r", { cluster: "x", incarnation: 1, task: "gateway", evaluatedAt: "x", rows: [],
+      part: { ...part(1, [kind("httproutes"), ...["gateways", "services", "endpointslices"].map((k) => kind(k, { role: "dependency" }))], { total: 0, included: 0 }), id: "routes" } });
+    render(<GatewayApiView cluster="x" />);
+    act(() => { useFleet.getState().requestNavIntent({ kind: "reveal", cluster: "x", task: "gateway", part: "gateways", ref: { gvr: "gateway.networking.k8s.io/v1/gateways", namespace: "infra", name: "eg", uid: "uid-eg" } }); });
+    expect(gone()).toBe("replaced");
+    act(() => { useFleet.getState().requestNavIntent({ kind: "reveal", cluster: "x", task: "gateway", part: "routes", ref: { gvr: "gateway.networking.k8s.io/v1/httproutes", namespace: "apps", name: "old", uid: "uid-old" } }); });
+    expect(screen.getByRole("button", { name: /^Routes/ }).getAttribute("aria-pressed")).toBe("true");
+    expect(gone()).toBe("removed");
+    expect(document.querySelector("[data-pinned-gone]")?.textContent).toContain("No longer attached to a Gateway.");
+  });
+});

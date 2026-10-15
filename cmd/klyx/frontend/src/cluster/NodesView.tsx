@@ -35,6 +35,8 @@ import { WatchErrorBanner } from "../chrome/WatchErrorBanner";
 import { vh } from "../app/zoom";
 import { useInspectorAI } from "../ai/AIExplain";
 import { usePinnedSubject } from "./usePinnedSubject";
+import { PinnedGone, expectsOther } from "./PinnedGone";
+import { expectPin } from "../nav/inspectorPin";
 
 // columns: dot | name | roles | status | version | cpu alloc/cap | mem alloc/cap | taints | age
 type NodeFilter = "all" | "attention" | "unknown" | "cordoned" | "tainted";
@@ -592,6 +594,15 @@ export function NodesView({ cluster }: { cluster: string }) {
   useNavIntent(cluster, ["drain-node", "cordon-node", "select-node"], (intent) => {
     const name = "node" in intent ? intent.node : "";
     const n = scopedNodes.find((x) => x.name === name);
+    // An opening by UID (slice 9 note §4.2) selects at once, pinned to that
+    // UID: a different or missing row is said, never substituted.
+    if (intent.kind === "select-node" && expectsOther(n, intent.uid)) {
+      autoSelect.current = "done";
+      expectPin(cluster, name, intent.uid!);
+      setKbName(name);
+      useFleet.getState().selectNode({ name, uid: intent.uid! });
+      return "consumed";
+    }
     if (!n) return ev === "complete" ? "missing" : "wait";
     const target = { cluster, node: n.name, uid: n.uid ?? "" };
     if (intent.kind === "drain-node") setDrainPending(target);
@@ -809,6 +820,9 @@ export function NodesView({ cluster }: { cluster: string }) {
             onDrain={() => setDrainPending({ cluster, node: subject.name, uid: subject.uid ?? "" })}
             onClose={closeInspector}
           />
+        ) : sel && pin.expected && pin.gone ? (
+          <PinnedGone cluster={cluster} kind="Node" name={sel.name} uid={pin.expected} gone={pin.gone}
+            onAdopt={pin.next ? () => { const n = pin.next as NodeRowDTO; pin.adopt(); openRow(n); } : undefined} onClose={closeInspector} />
         ) : undefined}
         inspectorLabel="Node details"
         onCloseInspector={closeInspector}

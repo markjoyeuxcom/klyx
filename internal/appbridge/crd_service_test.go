@@ -553,3 +553,17 @@ func TestListInstances_NotServedIsNotAnError(t *testing.T) {
 		t.Fatalf("want NotServed with no error, got %+v", r)
 	}
 }
+
+// The Line slice 9 note §4.2: an authoritative absence is told apart from
+// a read that failed - an object opened by UID is removed only on NotFound.
+func TestGetInstanceDetailNotFound(t *testing.T) {
+	conn := &fakeCRDConn{detailErr: apierrors.NewNotFound(schema.GroupResource{Resource: "configmaps"}, "web")}
+	svc := NewCRDService(func(string) (CRDConn, bool) { return conn, true })
+	if d := svc.GetInstanceDetail("x", "", "v1", "configmaps", "shop", "web"); d.Error == "" || !d.NotFound {
+		t.Fatalf("NotFound: %+v", d)
+	}
+	conn.detailErr = errors.New("connection refused")
+	if d := svc.GetInstanceDetail("x", "", "v1", "configmaps", "shop", "web"); d.Error == "" || d.NotFound {
+		t.Fatalf("another failure: %+v", d)
+	}
+}

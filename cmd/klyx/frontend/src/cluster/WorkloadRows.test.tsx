@@ -379,3 +379,26 @@ describe("select-workload decides 'missing' from the target's own kind", () => {
     expect(useFleet.getState().actionStatus).toMatchObject({ kind: "error" });
   });
 });
+
+// The Line slice 9 note §4.2: an opening by UID pins that UID; another
+// object at the name, or none, is said - never shown.
+describe("select-workload by UID", () => {
+  const want = (name: string, uid: string) =>
+    act(() => { useFleet.getState().requestNavIntent({ kind: "select-workload", cluster: "x", workloadKind: "Deployment", namespace: "app", name, uid }); });
+  const gone = () => document.querySelector("[data-pinned-gone]")?.getAttribute("data-pinned-gone") ?? null;
+
+  it("the same UID opens; another is Replaced with the new one offered; none is removed on a complete read", () => {
+    seed([wl("web"), wl("api", "ok", { uid: "uid-api-2" })]);
+    render(<WorkloadsView cluster="x" />);
+    want("web", "uid-web");
+    expect(gone()).toBeNull();
+    expect(inspector().getAllByText("web").length).toBeGreaterThan(0);
+    want("api", "uid-api");
+    expect(gone()).toBe("replaced");
+    fireEvent.click(screen.getByRole("button", { name: "Open the new object" }));
+    expect(gone()).toBeNull();
+    want("gone", "uid-gone");
+    expect(gone()).toBe("removed");
+    expect(useFleet.getState().navIntent).toBeNull();
+  });
+});

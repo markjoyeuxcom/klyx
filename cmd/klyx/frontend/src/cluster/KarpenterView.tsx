@@ -21,6 +21,8 @@ import { fmtCpu, fmtMem } from "./saturation";
 import { useInspectorAI } from "../ai/AIExplain";
 import { useClusterKey } from "./useClusterKey";
 import { usePinnedSubject } from "./usePinnedSubject";
+import { PinnedGone, expectsOther } from "./PinnedGone";
+import { expectPin } from "../nav/inspectorPin";
 
 // KarpenterView - the node-autoscaling diagnosis lens on the workspace
 // template (spec §6 step 5), in Karpenter's vocabulary. Read-only. NodePools
@@ -207,8 +209,11 @@ export function KarpenterView({ cluster }: { cluster: string }) {
   useNavIntent(cluster, ["reveal"], (intent) => {
     if (intent.kind !== "reveal" || intent.task !== "karpenter") return "wait";
     const pool = intent.part === "nodepools";
-    const found = pool ? pools.some((p) => p.name === intent.ref.name) : claims.some((c) => c.name === intent.ref.name);
-    if (!found) return (pool ? poolsEv : claimsEv) === "complete" ? "missing" : "wait";
+    const row = pool ? pools.find((p) => p.name === intent.ref.name) : claims.find((c) => c.name === intent.ref.name);
+    // An opening by UID (slice 9 note §4.2): pinned to that UID at once; a
+    // different or missing row is said, never substituted.
+    if (expectsOther(row, intent.ref.uid)) expectPin(cluster, intent.ref.name, intent.ref.uid!);
+    else if (!row) return (pool ? poolsEv : claimsEv) === "complete" ? "missing" : "wait";
     setView(pool ? "pools" : "claims");
     setCursorKey(intent.ref.name);
     setSelKey(intent.ref.name);
@@ -377,6 +382,8 @@ export function KarpenterView({ cluster }: { cluster: string }) {
       inspector={selClaim ? <ClaimInspector cluster={cluster} c={selClaim} nowS={nowS} gone={claimGone} replaced={claimPin.gone === "replaced" ? claimPin.adopt : undefined} onClose={() => setSelKey(null)} />
         : selPool ? <PoolInspector cluster={cluster} p={selPool} gone={poolGone} replaced={poolPin.gone === "replaced" ? poolPin.adopt : undefined} claimsCov={claimsCov} onClose={() => setSelKey(null)} />
         : selEvent ? <EventPanel cluster={cluster} e={selEvent} onClose={() => setSelKey(null)} />
+        : selKey && view === "claims" && claimPin.expected && claimPin.gone ? <PinnedGone cluster={cluster} kind="NodeClaim" name={selKey} uid={claimPin.expected} gone={claimPin.gone} onAdopt={claimPin.next ? claimPin.adopt : undefined} onClose={() => setSelKey(null)} />
+        : selKey && view === "pools" && poolPin.expected && poolPin.gone ? <PinnedGone cluster={cluster} kind="NodePool" name={selKey} uid={poolPin.expected} gone={poolPin.gone} onAdopt={poolPin.next ? poolPin.adopt : undefined} onClose={() => setSelKey(null)} />
         : undefined}
       inspectorLabel={view === "claims" ? "NodeClaim details" : view === "pools" ? "NodePool details" : "Event details"}
       onCloseInspector={() => setSelKey(null)}

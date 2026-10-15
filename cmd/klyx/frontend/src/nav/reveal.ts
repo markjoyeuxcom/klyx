@@ -40,15 +40,15 @@ export function reveal(cluster: string, task: string, part: string, ref: RevealR
   switch (`${task}/${part}`) {
     case "pods/pods":
       nav.setSection("pods");
-      nav.requestNavIntent({ kind: "select-pod", cluster, namespace, name: ref.name });
+      nav.requestNavIntent({ kind: "select-pod", cluster, namespace, name: ref.name, uid: ref.uid });
       return;
     case "workloads/workloads":
       nav.setSection("workloads");
-      nav.requestNavIntent({ kind: "select-workload", cluster, workloadKind: WORKLOAD_KINDS[last(ref.gvr)] ?? "Deployment", namespace, name: ref.name });
+      nav.requestNavIntent({ kind: "select-workload", cluster, workloadKind: WORKLOAD_KINDS[last(ref.gvr)] ?? "Deployment", namespace, name: ref.name, uid: ref.uid });
       return;
     case "nodes/nodes":
       nav.setSection("nodes");
-      nav.requestNavIntent({ kind: "select-node", cluster, node: ref.name });
+      nav.requestNavIntent({ kind: "select-node", cluster, node: ref.name, uid: ref.uid });
       return;
     case "helm/releases":
       nav.setSection("helm");
@@ -56,7 +56,7 @@ export function reveal(cluster: string, task: string, part: string, ref: RevealR
       return;
     case "flux/reconciliations":
       nav.openFlux("reconciliation");
-      nav.requestNavIntent({ kind: "select-flux", cluster, fluxKind: kindOfRef(ref), namespace, name: ref.name });
+      nav.requestNavIntent({ kind: "select-flux", cluster, fluxKind: kindOfRef(ref), namespace, name: ref.name, uid: ref.uid });
       return;
     case "flux/sources":
       nav.openFlux("sources");

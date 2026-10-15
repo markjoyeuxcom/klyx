@@ -23,6 +23,8 @@ import { useInspectorAI } from "../ai/AIExplain";
 import { staleProps } from "./staleness";
 import { useClusterKey } from "./useClusterKey";
 import { usePinnedSubject } from "./usePinnedSubject";
+import { PinnedGone, expectsOther } from "./PinnedGone";
+import { expectPin } from "../nav/inspectorPin";
 
 // GatewayApiView - the Gateway API lens on the workspace template (spec §6
 // step 6). Without a selected Gateway it is the Gateways table (not accepted
@@ -132,7 +134,11 @@ function GatewayList({ cluster, rows, toggle }: { cluster: string; rows: Gateway
   useNavIntent(cluster, ["reveal"], (intent) => {
     if (intent.kind !== "reveal" || intent.task !== "gateway" || intent.part !== "gateways") return "wait";
     const key = `${intent.ref.namespace ?? ""}/${intent.ref.name}`;
-    if (!gateways.some((g) => keyOf(g) === key)) return ev === "complete" ? "missing" : "wait";
+    const row = gateways.find((g) => keyOf(g) === key);
+    // An opening by UID (slice 9 note §4.2): pinned to that UID at once; a
+    // different or missing row is said, never substituted.
+    if (expectsOther(row, intent.ref.uid)) expectPin(cluster, key, intent.ref.uid!);
+    else if (!row) return ev === "complete" ? "missing" : "wait";
     setMode("all"); setQuery("");
     setCursorKey(key);
     setSelKey(key);
@@ -266,7 +272,9 @@ function GatewayList({ cluster, rows, toggle }: { cluster: string; rows: Gateway
       }
       footer={<span className="t-legend">j k navigate · ↵ inspect · double-click opens topology · / search</span>}
       footerEnd={<span className="t-secondary">{visible.length !== gateways.length ? `${visible.length} of ${gateways.length}${mark} · ` : ""}needs attention first{asOf}</span>}
-      inspector={selected ? <GatewayInspector key={selKey} cluster={cluster} g={selected} stale={ev === "stale"} gone={gone} replaced={pin.gone === "replaced" ? pin.adopt : undefined} onOpen={() => openGateway(selected.namespace, selected.name)} onClose={close} /> : undefined}
+      inspector={selected ? <GatewayInspector key={selKey} cluster={cluster} g={selected} stale={ev === "stale"} gone={gone} replaced={pin.gone === "replaced" ? pin.adopt : undefined} onOpen={() => openGateway(selected.namespace, selected.name)} onClose={close} />
+        : selKey && pin.expected && pin.gone ? <PinnedGone cluster={cluster} kind="Gateway" namespace={selKey.split("/")[0]} name={selKey.split("/").slice(1).join("/")} uid={pin.expected} gone={pin.gone} onAdopt={pin.next ? pin.adopt : undefined} onClose={close} />
+        : undefined}
       inspectorLabel="Gateway details"
       onCloseInspector={close}
     />

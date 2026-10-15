@@ -239,3 +239,16 @@ describe("a Top link reveals its object", () => {
     expect(selectedRow()).toContain("b");
   });
 });
+
+// The Line slice 9 note §4.2: a reveal by UID pins that UID.
+describe("a Karpenter reveal by UID", () => {
+  const gone = () => document.querySelector("[data-pinned-gone]")?.getAttribute("data-pinned-gone") ?? null;
+  it("a NodePool replaced at its name is said; an absent NodeClaim is removed on a complete read", () => {
+    seed([claim("a")], [pool("gpu", { uid: "uid-gpu-2" })]);
+    render(<KarpenterView cluster="x" />);
+    act(() => { useFleet.getState().requestNavIntent({ kind: "reveal", cluster: "x", task: "karpenter", part: "nodepools", ref: { gvr: "karpenter.sh/v1/nodepools", name: "gpu", uid: "uid-gpu" } }); });
+    expect(gone()).toBe("replaced");
+    act(() => { useFleet.getState().requestNavIntent({ kind: "reveal", cluster: "x", task: "karpenter", part: "nodeclaims", ref: { gvr: "karpenter.sh/v1/nodeclaims", name: "zz", uid: "uid-zz" } }); });
+    expect(gone()).toBe("removed");
+  });
+});

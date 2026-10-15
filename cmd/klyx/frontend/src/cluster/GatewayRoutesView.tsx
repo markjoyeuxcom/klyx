@@ -19,6 +19,8 @@ import { RANK, ROLE_TEXT, roleTone, routeRole, type Role } from "./gatewayModel"
 import { useInspectorAI } from "../ai/AIExplain";
 import { useClusterKey } from "./useClusterKey";
 import { usePinnedSubject } from "./usePinnedSubject";
+import { PinnedGone, expectsOther } from "./PinnedGone";
+import { expectPin } from "../nav/inspectorPin";
 
 // RouteList - the Gateways task's routes part (1c slice 3 §4a): every
 // HTTPRoute attached to a Gateway, counted once by UID with the role, label
@@ -100,7 +102,17 @@ export function RouteList({ cluster, rows, toggle }: { cluster: string; rows: Ga
   useNavIntent(cluster, ["reveal"], (intent) => {
     if (intent.kind !== "reveal" || intent.task !== "gateway" || intent.part !== "routes") return "wait";
     const key = `${intent.ref.namespace ?? ""}/${intent.ref.name}`;
-    if (!routes.some((r) => keyOf(r) === key)) {
+    const row = routes.find((r) => keyOf(r) === key);
+    // An opening by UID (slice 9 note §4.2): pinned to that UID at once; a
+    // different or missing route is said, never substituted.
+    if (expectsOther(row, intent.ref.uid)) {
+      expectPin(cluster, key, intent.ref.uid!);
+      setMode("all"); setQuery("");
+      setCursorKey(key);
+      setSelKey(key);
+      return "consumed";
+    }
+    if (!row) {
       if (ev !== "complete" || parentsEv !== "complete") return "wait";
       // absent from a complete membership read: detached, not proven deleted
       useFleet.getState().setActionStatus({ kind: "error", message: `route ${key} is no longer attached to a Gateway - it may still exist` });
@@ -269,6 +281,10 @@ export function RouteList({ cluster, rows, toggle }: { cluster: string; rows: Ga
             </InspectorBlock>
           </InspectorLayout>
         </div>
+      ) : selKey && pin.expected && pin.gone ? (
+        <PinnedGone cluster={cluster} kind="HTTPRoute" namespace={selKey.split("/")[0]} name={selKey.split("/").slice(1).join("/")} uid={pin.expected} gone={pin.gone}
+          removedWords={<><span className="t-status">No longer attached to a Gateway.</span> The HTTPRoute you opened is not in a complete read of the attached routes - it may still exist.</>}
+          onAdopt={pin.next ? pin.adopt : undefined} onClose={close} />
       ) : undefined}
       inspectorLabel="HTTPRoute details"
       onCloseInspector={close}

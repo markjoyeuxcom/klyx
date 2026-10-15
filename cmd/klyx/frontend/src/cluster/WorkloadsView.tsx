@@ -38,6 +38,8 @@ import { InspectorBlock, InspectorLayout, type MenuItem } from "../layout/Inspec
 import { fitColumns, type ColumnDef } from "../layout/columns";
 import { useClusterKey } from "./useClusterKey";
 import { usePinnedSubject } from "./usePinnedSubject";
+import { PinnedGone, expectsOther } from "./PinnedGone";
+import { expectPin } from "../nav/inspectorPin";
 const KINDS: WorkloadKind[] = ["Deployment", "StatefulSet", "DaemonSet"];
 const kindShort: Record<WorkloadKind, string> = { Deployment: "deploy", StatefulSet: "sts", DaemonSet: "daemonset" };
 const keyOf = (w: WorkloadDTO) => `${w.kind}/${w.namespace}/${w.name}`;
@@ -244,6 +246,16 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
   useNavIntent(cluster, ["restart-workload", "scale-workload", "select-workload", "compare-workload"], (intent) => {
     if (!("workloadKind" in intent)) return "missing";
     const w = allItems.find((x) => x.kind === intent.workloadKind && x.namespace === intent.namespace && x.name === intent.name);
+    // An opening by UID (slice 9 note §4.2) selects at once, pinned to that
+    // UID: a different or missing row is said, never substituted.
+    if (intent.kind === "select-workload" && expectsOther(w, intent.uid)) {
+      autoSelect.current = "done";
+      const key = `${intent.workloadKind}/${intent.namespace}/${intent.name}`;
+      expectPin(cluster, key, intent.uid!);
+      setCursorKey(key);
+      setSelectedKey(key);
+      return "consumed";
+    }
     if (!w) return kindEv(intent.workloadKind) === "complete" ? "missing" : "wait";
     autoSelect.current = "done";
     if (!rows.some((x) => keyOf(x) === keyOf(w))) {
@@ -556,6 +568,9 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
               onUndo={(w, rev) => setPending({ kind: "undo", w, rev })}
               onPause={(w, pause) => setPending({ kind: "pause", w, pause })}
             />
+          ) : selectedKey && mine && pin.expected && pin.gone ? (
+            <PinnedGone cluster={cluster} kind={selKind} namespace={selectedKey.split("/")[1]} name={selectedKey.split("/").slice(2).join("/")} uid={pin.expected} gone={pin.gone}
+              onAdopt={pin.next ? pin.adopt : undefined} onClose={closeInspector} />
           ) : undefined}
           inspectorLabel="Workload details"
           onCloseInspector={closeInspector}

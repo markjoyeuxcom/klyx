@@ -545,7 +545,9 @@ export type InstanceDTO = { namespace: string; name: string; created: string; fi
 // cluster/GVR is dropped (review 2026-10-03 #5).
 export type InstancesSlice = { cluster: string | null; ref: ResourceRef | null; rows: InstanceDTO[]; nextToken: string; loading: boolean; filter: string; riskOnly: boolean; error?: string | null };
 
-export type InstanceRef = { namespace: string; name: string };
+// expectUid: the object meant, by UID (The Line slice 9 note §4.2) - the
+// inspector says replaced, removed or unverified rather than show another.
+export type InstanceRef = { namespace: string; name: string; expectUid?: string };
 export type EventDTO = { type: string; reason: string; message: string; count: number; lastSeen: string };
 export type SecretKeyDTO = { key: string; bytes: number };
 export type ServicePortDTO = { name: string; port: number; protocol: string };
@@ -628,7 +630,7 @@ export type GitOpsOwnershipDTO = {
 // prompt went.
 export type AIResultDTO = { ok: boolean; explanation: string; model: string; backend: string; origin?: string; groundedOn: string; error: string; redacted?: number; scrubbed?: number };
 export type AIAvailabilityDTO = { backend: string; ready: boolean; model?: string; origin?: string; problem?: string };
-export type InstanceDetailDTO = { kind: string; namespace: string; name: string; uid?: string; generation?: number; created: string; labels: Record<string, string>; annotations?: Record<string, string>; conditions: ConditionDTO[]; events: EventDTO[]; yaml: string; secretKeys?: SecretKeyDTO[]; serviceBacking?: ServiceBackingDTO | null; hpaScaling?: HPAScalingDTO | null; related?: RelatedRefDTO[]; facts?: FactDTO[]; error?: string };
+export type InstanceDetailDTO = { kind: string; namespace: string; name: string; uid?: string; generation?: number; created: string; labels: Record<string, string>; annotations?: Record<string, string>; conditions: ConditionDTO[]; events: EventDTO[]; yaml: string; secretKeys?: SecretKeyDTO[]; serviceBacking?: ServiceBackingDTO | null; hpaScaling?: HPAScalingDTO | null; related?: RelatedRefDTO[]; facts?: FactDTO[]; error?: string; notFound?: boolean };
 // cluster + resource + ref identify the object a detail belongs to: DEV/STG/PRD
 // share namespace/name, so ns/name alone let a late DEV detail render under the
 // PRD header (review 2026-10-03 #5).
@@ -928,10 +930,13 @@ export type NavIntent =
   | { kind: "sync-argo"; cluster: string; namespace: string; name: string }
   | { kind: "refresh-argo"; cluster: string; namespace: string; name: string }
   | { kind: "logs-pod"; cluster: string; namespace: string; name: string }
-  | { kind: "select-pod"; cluster: string; namespace: string; name: string }
-  | { kind: "select-workload"; cluster: string; workloadKind: string; namespace: string; name: string }
-  | { kind: "select-node"; cluster: string; node: string }
-  | { kind: "select-flux"; cluster: string; fluxKind: string; namespace: string; name: string }
+  // select-*: a uid names the object meant (The Line slice 9 note §4.2):
+  // the lens pins it, and a replacement or an absence is said, never the
+  // current same-name row substituted
+  | { kind: "select-pod"; cluster: string; namespace: string; name: string; uid?: string }
+  | { kind: "select-workload"; cluster: string; workloadKind: string; namespace: string; name: string; uid?: string }
+  | { kind: "select-node"; cluster: string; node: string; uid?: string }
+  | { kind: "select-flux"; cluster: string; fluxKind: string; namespace: string; name: string; uid?: string }
   | { kind: "access-check"; cluster: string; namespace: string; name: string }
   // open-scratch opens the Scratch panel (Pods); compare-workload opens a
   // workload's fleet compare. Both only open existing read-first surfaces.
@@ -966,7 +971,7 @@ type FleetState = {
   setInstanceRiskOnly: (v: boolean) => void;
   toggleInstanceRiskOnly: () => void;
   clearInstances: () => void;
-  openInstance: (namespace: string, name: string) => void;
+  openInstance: (namespace: string, name: string, expectUid?: string) => void;
   closeInstance: () => void;
   instanceDetail: InstanceDetailSlice;
   setInstanceDetailLoading: (cluster: string, resource: ResourceRef, ref: InstanceRef) => void;
@@ -1147,12 +1152,12 @@ export const useFleet = create<FleetState>((set) => ({
   setInstanceRiskOnly: (riskOnly) => set((s) => ({ instances: { ...s.instances, riskOnly } })),
   toggleInstanceRiskOnly: () => set((s) => ({ instances: { ...s.instances, riskOnly: !s.instances.riskOnly } })),
   clearInstances: () => set({ instances: { cluster: null, ref: null, rows: [], nextToken: "", loading: false, filter: "", riskOnly: false } }),
-  openInstance: (namespace, name) =>
+  openInstance: (namespace, name, expectUid) =>
     set((s) => {
       if (s.route.name !== "cluster" || !s.route.resource) return {};
       const section: ClusterSection = (s.route.section === "crds" || s.route.section === "resources") ? s.route.section : "resources";
       return {
-        route: { name: "cluster", cluster: s.route.cluster, section, resource: s.route.resource, instance: { namespace, name } },
+        route: { name: "cluster", cluster: s.route.cluster, section, resource: s.route.resource, instance: expectUid ? { namespace, name, expectUid } : { namespace, name } },
         instanceDetail: { cluster: s.route.cluster, resource: s.route.resource, ref: { namespace, name }, detail: null, loading: true },
       };
     }),

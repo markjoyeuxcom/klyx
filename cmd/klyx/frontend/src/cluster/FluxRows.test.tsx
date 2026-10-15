@@ -402,3 +402,22 @@ describe("The Line aspects in the Flux inspector", () => {
     });
   }
 });
+
+// The Line slice 9 note §4.2: an opening by UID pins that UID, for
+// reconciliations and sources alike.
+describe("Flux openings by UID", () => {
+  const gone = () => document.querySelector("[data-pinned-gone]")?.getAttribute("data-pinned-gone") ?? null;
+
+  it("a Kustomization replaced at its name is said, never shown; a source likewise", () => {
+    open();
+    applyRows("r", rowsDTO(1, "reconciliations", 1, [res("app", { uid: "uid-app-2" })], REC_KINDS()), 0);
+    applyRows("s", rowsDTO(1, "sources", 1, [src("repo")], SRC_KINDS()), 0);
+    setView("reconciliation");
+    render(<GitOps cluster="x" />);
+    act(() => { useFleet.getState().requestNavIntent({ kind: "select-flux", cluster: "x", fluxKind: "Kustomization", namespace: "flux-system", name: "app", uid: "uid-app" }); });
+    expect(gone()).toBe("replaced");
+    act(() => { useFleet.getState().requestNavIntent({ kind: "reveal", cluster: "x", task: "flux", part: "sources", ref: { gvr: "source.toolkit.fluxcd.io/v1/gitrepositories", namespace: "flux-system", name: "gone", uid: "uid-gone" } }); });
+    expect(useFleet.getState().route).toMatchObject({ fluxView: "sources" });
+    expect(gone()).toBe("removed");
+  });
+});

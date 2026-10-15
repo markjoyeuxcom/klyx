@@ -12,6 +12,8 @@ import { IconAlertTriangle } from "@tabler/icons-react";
 import { InspectorBlock, InspectorLayout, type MenuItem } from "../layout/InspectorLayout";
 import { YamlBlock } from "../chrome/YamlBlock";
 import { vh } from "../app/zoom";
+import { PinnedGone } from "./PinnedGone";
+import type { Gone } from "./usePinnedSubject";
 
 const TONE_SET = new Set<string>(["success", "warning", "danger", "info", "muted", "neutral"]);
 function asTone(s: string): Tone | undefined {
@@ -818,6 +820,23 @@ export function InstanceDetail({ cluster, resource, instance, removed = false }:
     const tone = color.includes("success") ? ("success" as const) : color.includes("danger") ? ("danger" as const) : ("info" as const);
     return <InspectorStatus tone={tone} label={`${primary.type} ${primary.status}`} reason={primary.reason || undefined} />;
   })();
+
+  // Opened by UID (slice 9 note §4.2): a different object at the name, or a
+  // read that proves its absence, is said - never shown in its place. A
+  // failed read proves nothing either way.
+  const expected = instance.expectUid;
+  const goneByUID: Gone | null = !expected || !d ? null
+    : d.error ? (d.notFound ? "removed" : "unverified")
+    : d.uid && d.uid !== expected ? "replaced" : null;
+  if (expected && goneByUID) {
+    return (
+      <div data-testid="instance-detail-panel" style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
+        <PinnedGone cluster={cluster} kind={resource.kind} namespace={instance.namespace || undefined} name={instance.name} uid={expected} gone={goneByUID}
+          onAdopt={goneByUID === "replaced" ? () => useFleet.getState().openInstance(instance.namespace, instance.name) : undefined}
+          onClose={closeInstance} />
+      </div>
+    );
+  }
 
   const body = id.loading && !d ? (
     <div className="t-body" style={{ color: "var(--color-text-tertiary)" }}>Loading {resource.kind} detail…</div>

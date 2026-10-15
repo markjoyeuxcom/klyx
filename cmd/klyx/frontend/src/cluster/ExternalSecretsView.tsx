@@ -23,6 +23,8 @@ import { clock, combineEvidence, coverageGaps, joinCoverage, kindEvidence, lastG
 import { useInspectorAI } from "../ai/AIExplain";
 import { useClusterKey } from "./useClusterKey";
 import { usePinnedSubject } from "./usePinnedSubject";
+import { PinnedGone, expectsOther } from "./PinnedGone";
+import { expectPin } from "../nav/inspectorPin";
 
 const keyOf = (e: { namespace: string; name: string }) => `${e.namespace}/${e.name}`;
 
@@ -255,8 +257,11 @@ export function ExternalSecretsView({ cluster }: { cluster: string }) {
     if (intent.kind !== "reveal" || intent.task !== "eso") return "wait";
     const store = intent.part === "stores";
     const key = store ? `${kindOfRef(intent.ref)}/${intent.ref.namespace ?? ""}/${intent.ref.name}` : `${intent.ref.namespace ?? ""}/${intent.ref.name}`;
-    const found = store ? stores.some((x) => storeKey(x) === key) : secrets.some((e) => keyOf(e) === key);
-    if (!found) return (store ? storesEv : secretsEv) === "complete" ? "missing" : "wait";
+    const row = store ? stores.find((x) => storeKey(x) === key) : secrets.find((e) => keyOf(e) === key);
+    // An opening by UID (slice 9 note §4.2): pinned to that UID at once; a
+    // different or missing row is said, never substituted.
+    if (expectsOther(row, intent.ref.uid)) expectPin(cluster, key, intent.ref.uid!);
+    else if (!row) return (store ? storesEv : secretsEv) === "complete" ? "missing" : "wait";
     autoSelect.current = "done";
     setView(store ? "stores" : "secrets"); setStatus("all"); setQuery(""); setNamespace("");
     setCursorKey(key);
@@ -453,6 +458,9 @@ export function ExternalSecretsView({ cluster }: { cluster: string }) {
           onClose={() => { autoSelect.current = "done"; selectSecret(null); }}
           onOpenStore={(s) => { setView("stores"); setStatus("all"); setStoreSel(storeKey(s)); setCursorKey(storeKey(s)); }}
         />
+      ) : view === "secrets" && selKey && secretPin.expected && secretPin.gone ? (
+        <PinnedGone cluster={cluster} kind="ExternalSecret" namespace={selKey.split("/")[0]} name={selKey.split("/").slice(1).join("/")} uid={secretPin.expected} gone={secretPin.gone}
+          onAdopt={secretPin.next ? secretPin.adopt : undefined} onClose={() => { autoSelect.current = "done"; selectSecret(null); }} />
       ) : view === "stores" && storeSel && storeSubject ? (
         <StoreInspector
           cluster={cluster}
@@ -466,6 +474,9 @@ export function ExternalSecretsView({ cluster }: { cluster: string }) {
           onClose={() => setStoreSel(null)}
           onOpenSecret={(e) => { setView("secrets"); setStatus("all"); setNamespace(""); setQuery(""); setCursorKey(keyOf(e)); autoSelect.current = "done"; selectSecret(keyOf(e)); }}
         />
+      ) : view === "stores" && storeSel && storePin.expected && storePin.gone ? (
+        <PinnedGone cluster={cluster} kind={storeSel.split("/")[0]} namespace={storeSel.split("/")[1] || undefined} name={storeSel.split("/").slice(2).join("/")} uid={storePin.expected} gone={storePin.gone}
+          onAdopt={storePin.next ? storePin.adopt : undefined} onClose={() => setStoreSel(null)} />
       ) : undefined}
       inspectorLabel={view === "stores" ? "Secret store details" : "ExternalSecret details"}
       onCloseInspector={closeSelected}
