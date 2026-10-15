@@ -21,11 +21,11 @@ describe("the station strip", () => {
     expect(stationStrip(line([], [st("lab", "", "not compared", { rank: -1 })]), "lab")).toEqual({ kind: "siding", text: "siding" });
   });
 
-  it("its own track only, in DTO order; this station boxed with its state word", () => {
+  it("its own track only, in DTO order; this station boxed with its state words", () => {
     const s = stationStrip(line([st("d", "dev", "matches"), st("s", "stg", "matches"), st("p", "prd", "differs", { single: SHA }), st("x", "dev", "matches", { track: "neu" })]), "p");
     expect(s?.kind).toBe("track");
     if (s?.kind !== "track") return;
-    expect(s.stations.map((x) => [x.label, x.here, x.box])).toEqual([["dev", false, null], ["stg", false, null], ["prd", true, "differs"]]);
+    expect(s.stations.map((x) => [x.label, x.here, x.box])).toEqual([["dev", false, null], ["stg", false, null], ["prd", true, "differs at 9f2c11d"]]);
     expect(s.text).toBe("dev matches; stg matches; prd, this station, differs at 9f2c11d");
   });
 

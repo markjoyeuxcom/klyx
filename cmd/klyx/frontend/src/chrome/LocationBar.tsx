@@ -117,7 +117,7 @@ function IndexToggle() {
 function ProtectedTag({ c }: { c: ClusterDTO }) {
   return (
     <span className="locbar-protected" title={c.protectedInferred ? "Protected - inferred from the cluster's environment name; operations need typed confirmation" : "Protected - operations need typed confirmation"}>
-      {c.protectedInferred ? "protected (inferred)" : "protected"}
+      protected{c.protectedInferred && <span className="locbar-protected-why"> (inferred)</span>}
     </span>
   );
 }

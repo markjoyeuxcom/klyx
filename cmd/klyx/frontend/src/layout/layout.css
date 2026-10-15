@@ -225,14 +225,17 @@
 .locbar-left { flex: 1 1 auto; min-width: 0; margin-right: 10px; display: flex; align-items: center; gap: 10px; }
 .locbar-mark { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; flex-shrink: 0;
   border: 0; padding: 0; border-radius: 4px; background: transparent; cursor: pointer; }
-.locbar-crumbs { min-width: 0; display: flex; align-items: center; gap: 6px; white-space: nowrap; } /* no overflow clip: the switcher's menu hangs below */
+/* The crumbs take the squeeze after the well: each truncates to its floor,
+   and past the floors they clip, never running under the strip (the
+   switcher's menu hangs from a portal, so the clip cannot cut it). */
+.locbar-crumbs { min-width: 0; overflow: hidden; display: flex; align-items: center; gap: 6px; white-space: nowrap; }
 .locbar-crumb { min-width: 0; overflow: hidden; text-overflow: ellipsis; padding: 2px 4px; border: 0; border-radius: 4px; background: transparent;
   font: 600 13px/18px var(--font-label); letter-spacing: 0.12em; text-transform: uppercase; color: var(--color-text-primary); }
 button.locbar-crumb { cursor: pointer; }
 button.locbar-crumb:hover { background: var(--color-background-secondary); }
 .locbar-fleet { flex-shrink: 0; color: var(--color-text-tertiary); }
 .locbar-fleet[aria-current="page"] { color: var(--color-text-primary); }
-.locbar-lens { flex-shrink: 1; min-width: 7ch; }
+.locbar-lens { flex-shrink: 20; min-width: 3ch; } /* named again by the lens index and the page header: it gives way first */
 .locbar-object { flex-shrink: 2; min-width: 6ch; text-transform: none; letter-spacing: 0; font: 400 12px/16px var(--font-mono); color: var(--color-text-secondary); }
 .locbar-object-kind { font: 600 11px/16px var(--font-label); letter-spacing: 0.12em; text-transform: uppercase; color: var(--color-text-tertiary); }
 .insp-identity:focus-visible { outline: 1px solid var(--color-border-info); outline-offset: -1px; }
@@ -285,7 +288,7 @@ button.locbar-crumb:hover { background: var(--color-background-secondary); }
 .fleet-ind-menu .station-place, .station-menu .station-place { font-size: 12px; }
 
 /* the station switcher (slice 4 §2.1) */
-.station-menu { top: calc(100% + 6px); left: 0; width: 340px; overflow: auto; }
+.station-menu { width: 340px; overflow: auto; z-index: 60; }
 .station-row .station-name { flex: 1; }
 .station-row[aria-current="page"] { background: var(--color-background-info); }
 .station-row-mark { width: 13px; flex-shrink: 0; display: inline-flex; justify-content: center; }
@@ -303,16 +306,21 @@ button.locbar-crumb:hover { background: var(--color-background-secondary); }
 .strip-box[data-mark="attention"] { box-shadow: inset 0 0 0 1px var(--line-caution-line, var(--color-border-warning)); }
 .strip-state { font: 400 11px/14px var(--font-sans); color: var(--color-text-secondary); }
 .strip-siding { font: 500 11px/14px var(--font-label); letter-spacing: 0.12em; text-transform: uppercase; color: var(--color-text-tertiary); }
-/* Narrow windows: the crumbs win. Below 1280px only the boxed station is
-   drawn; below 1180px nothing is. The phrase (sr-only) always names the
-   whole track. */
+/* Narrow windows: the crumbs win. Below 1280px only this station's box is
+   drawn; below 1180px it stays, compact - its words ellipsize and Ask keeps
+   only its icon (its name is unchanged). The phrase (sr-only) always names
+   the whole track. */
 @media (max-width: 1279px) {
   .strip-stop:not([data-here]) { display: none; }
   .strip-stop[data-here] .strip-seg { display: none; }
 }
 @media (max-width: 1179px) {
-  .strip-stop { display: none; }
   .strip { padding: 0; }
+  .strip-box { max-width: 22ch; overflow: hidden; }
+  .strip-state { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .locbar-ask > span { display: none; }
+  /* "(inferred)" stays in the title and for assistive tech */
+  .locbar-protected-why { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 }
 
 /* ---- The Line lens index (slice 4 §4) ---- */

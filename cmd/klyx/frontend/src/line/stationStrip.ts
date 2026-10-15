@@ -13,7 +13,7 @@ export type StripStation = {
   mark: AspectKind;
   here: boolean;
   state: string; // the station's state word ("matches", "differs", ...)
-  box: string | null; // this station's boxed word; null for the others
+  box: string | null; // this station's boxed words ("differs at 9f2c11d"); null for the others
   text: string; // its accessible phrase
 };
 export type Strip =
@@ -53,7 +53,7 @@ export function stationStrip(dto: LineDTO | null, cluster: string, protection?: 
   const stations = track.map((s): StripStation => {
     const label = s.env && envs.filter((e) => e === s.env).length === 1 ? s.env : s.cluster;
     const here = s.cluster === cluster;
-    return { cluster: s.cluster, label, mark: markOf(s), here, state: s.state, box: here ? (s.read === "checking" ? "checking…" : s.state) : null, text: phrase(s, label, here, protection) };
+    return { cluster: s.cluster, label, mark: markOf(s), here, state: s.state, box: here ? (s.read === "checking" ? "checking…" : s.state === "differs" && s.single ? `differs at ${short(s.single)}` : s.state) : null, text: phrase(s, label, here, protection) };
   });
   const lit = track.slice(1).map((s, i) => track[i].state === "matches" && s.state === "matches");
   return { kind: "track", stations, lit, text: stations.map((s) => s.text).join("; ") };

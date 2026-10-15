@@ -158,8 +158,10 @@ describe("location bar crumbs and history", () => {
   it("an inferred protection says so", () => {
     useFleet.setState({ clusters: [{ name: "aks-prd-weu-platform-01", state: "Synced", protected: true, protectedInferred: true } as never],
       route: { name: "cluster", cluster: "aks-prd-weu-platform-01", section: "overview" } });
-    const { getByText } = render(<LocationBar />);
-    expect(getByText("protected (inferred)")).toBeTruthy();
+    const { container } = render(<LocationBar />);
+    const tag = container.querySelector(".locbar-protected") as HTMLElement;
+    expect(tag.textContent).toBe("protected (inferred)"); // narrow windows hide "(inferred)" visually only
+    expect(tag.getAttribute("title")).toMatch(/^Protected - inferred from the cluster's environment name/);
   });
 
   it("the station crumb names env · region beside the cluster", () => {

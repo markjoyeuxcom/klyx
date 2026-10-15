@@ -1,3 +1,5 @@
+import { useLayoutEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { IconSelector } from "@tabler/icons-react";
 import { useFleet, type ClusterDTO } from "../store/fleet";
 import { AXIS_TITLE } from "../nav/fleetAxes";
@@ -17,6 +19,17 @@ export function StationSwitcher({ current }: { current: ClusterDTO }) {
   const f = useFleetAxes();
   const { open, setOpen, close, wrapRef, triggerRef, menuRef } = useMenuPopover();
   const order = stationOrder(clusters);
+  // The crumbs clip to truncate, so the menu hangs from a portal, placed
+  // under the crumb; a resize or scroll closes it rather than leave it adrift.
+  const [at, setAt] = useState<{ top: number; left: number } | null>(null);
+  useLayoutEffect(() => {
+    if (!open) return;
+    const b = triggerRef.current?.getBoundingClientRect();
+    setAt(b ? { top: b.bottom + 6, left: b.left } : null);
+    const shut = () => setOpen(false);
+    window.addEventListener("resize", shut);
+    return () => window.removeEventListener("resize", shut);
+  }, [open, triggerRef, setOpen]);
   return (
     <div ref={wrapRef} className="locbar-pop">
       <button ref={triggerRef} type="button" className="locbar-crumb locbar-station" aria-haspopup="menu" aria-expanded={open}
@@ -24,8 +37,8 @@ export function StationSwitcher({ current }: { current: ClusterDTO }) {
         <StationName c={current} />
         <IconSelector aria-hidden size={12} stroke={1.6} style={{ flexShrink: 0, color: "var(--color-text-tertiary)" }} />
       </button>
-      {open && (
-        <div ref={menuRef} role="menu" aria-label="Stations" className="l-menu station-menu" style={{ maxHeight: vh(70) }}>
+      {open && createPortal((
+        <div ref={menuRef} role="menu" aria-label="Stations" className="l-menu station-menu" style={{ position: "fixed", top: at?.top ?? 0, left: at?.left ?? 0, maxHeight: vh(70), visibility: at ? undefined : "hidden" }}>
           {order.map((c, i) => {
             const axis = firstAxis(f, c.name);
             const here = c.name === current.name;
@@ -40,7 +53,7 @@ export function StationSwitcher({ current }: { current: ClusterDTO }) {
             );
           })}
         </div>
-      )}
+      ), document.body)}
     </div>
   );
 }

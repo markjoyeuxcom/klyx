@@ -25,7 +25,7 @@ describe("StationStrip", () => {
     for (const stop of g.querySelectorAll(".strip-stop")) expect(stop.getAttribute("aria-hidden")).toBe("true");
     const box = g.querySelector(".strip-box") as HTMLElement;
     expect(box.getAttribute("data-mark")).toBe("fault");
-    expect(box.textContent).toBe("prddiffers");
+    expect(box.textContent).toBe("prddiffers at 9f2c11d");
     expect(g.querySelector(".locbar-protected")).toBeNull(); // drawn once, on the station crumb
     expect(g.querySelector("[data-here]")?.contains(box)).toBe(true);
     expect(g.querySelector(".strip-seg")?.hasAttribute("data-lit")).toBe(false);
