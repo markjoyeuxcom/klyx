@@ -22,6 +22,7 @@ import { InspectorBlock, InspectorLayout, type MenuItem } from "../layout/Inspec
 import { fitColumns, type ColumnDef } from "../layout/columns";
 import { useInspectorAI } from "../ai/AIExplain";
 import { ClampedText } from "../chrome/ClampedText";
+import { useClusterKey } from "./useClusterKey";
 
 // ArgoView is the Argo CD lens, speaking Argo's vocabulary (synced/degraded,
 // never translated into Flux terms). Applications and ApplicationSets are the
@@ -124,9 +125,9 @@ export function ArgoView({ cluster, mode = "applications" }: { cluster: string; 
   const openArgo = useFleet((s) => s.openArgo);
   const isProtected = useFleet((s) => s.clusters.find((c) => c.name === cluster)?.protected ?? false);
   const [pinned, setPinnedState] = useState<ArgoPinned | null>(null);
-  const [appKey, setAppKey] = useState<string | null>(null);
-  const [projKey, setProjKey] = useState<string | null>(null);
-  const [setKey, setSetKey] = useState<string | null>(null);
+  const [appKey, setAppKey] = useClusterKey(cluster);
+  const [projKey, setProjKey] = useClusterKey(cluster);
+  const [setKey, setSetKey] = useClusterKey(cluster);
   const [cursorKey, setCursorKey] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [appFilter, setAppFilter] = useState<AppFilter>("all");
@@ -230,9 +231,9 @@ export function ArgoView({ cluster, mode = "applications" }: { cluster: string; 
   const appUnverified = !!appKey && !selectedApp && !appRemoved && !!priorApp;
   const projUnverified = !!projKey && !selectedProject && !projRemoved && !!priorProject;
   const setUnverified = !!setKey && !selectedSet && !setRemoved && !!priorSet;
-  useEffect(() => { if (selectedApp && !visibleApps.includes(selectedApp)) setAppKey(null); }, [selectedApp, visibleApps]);
-  useEffect(() => { if (selectedProject && !visibleProjects.includes(selectedProject)) setProjKey(null); }, [selectedProject, visibleProjects]);
-  useEffect(() => { if (selectedSet && !visibleAppSets.includes(selectedSet)) setSetKey(null); }, [selectedSet, visibleAppSets]);
+  useEffect(() => { if (selectedApp && !visibleApps.includes(selectedApp)) setAppKey(null); }, [selectedApp, visibleApps, setAppKey]);
+  useEffect(() => { if (selectedProject && !visibleProjects.includes(selectedProject)) setProjKey(null); }, [selectedProject, visibleProjects, setProjKey]);
+  useEffect(() => { if (selectedSet && !visibleAppSets.includes(selectedSet)) setSetKey(null); }, [selectedSet, visibleAppSets, setSetKey]);
   const enteredCluster = useRef(cluster);
   useEffect(() => {
     if (enteredCluster.current === cluster) return;
@@ -240,7 +241,7 @@ export function ArgoView({ cluster, mode = "applications" }: { cluster: string; 
     setAppKey(null); setProjKey(null); setSetKey(null); setCursorKey(null);
     autoSelect.current = "pending";
     entryApps.current = useFleet.getState().argo.apps;
-  }, [cluster]);
+  }, [cluster, setAppKey, setProjKey, setSetKey]);
 
   // Palette verbs / cross-links: select the app, reveal it past stale
   // filters, then open its confirm - never bypassing the composer.
@@ -285,7 +286,7 @@ export function ArgoView({ cluster, mode = "applications" }: { cluster: string; 
     if (appKey) return;
     const a = visibleApps.find((x) => x.rule.included);
     if (a) { setCursorKey(keyOf(a)); setAppKey(keyOf(a)); }
-  }, [freshRead, visibleApps, appKey, mode]);
+  }, [freshRead, visibleApps, appKey, mode, setAppKey]);
 
   // Keyboard: j/k/Enter/Esc in every view; r/s (refresh/sync) on apps only.
   const nav: { key: string; open: () => void }[] = mode === "projects"
@@ -545,6 +546,7 @@ export function ArgoView({ cluster, mode = "applications" }: { cluster: string; 
             />
           ) : mode === "projects" && projKey && projectSubject ? (
             <ProjectInspector
+              cluster={cluster}
               key={`${cluster}/${projKey}`}
               project={projectSubject}
               removed={projRemoved}
@@ -557,6 +559,7 @@ export function ArgoView({ cluster, mode = "applications" }: { cluster: string; 
             />
           ) : mode === "applicationsets" && setKey && setSubject ? (
             <ApplicationSetInspector
+              cluster={cluster}
               key={`${cluster}/${setKey}`}
               appSet={setSubject}
               removed={setRemoved}
@@ -693,7 +696,7 @@ function ApplicationInspector({ cluster, app, removed, unverified, isProtected, 
   const opFailed = !!app.opPhase && app.opPhase !== "Succeeded" && app.opPhase !== "Running";
   return (
     <div data-testid="argo-app-panel" style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
-      <InspectorLayout
+      <InspectorLayout pin={{ cluster: cluster, uid: app.uid || undefined }}
         kind="Application"
         namespace={app.namespace}
         name={app.name}
@@ -766,12 +769,12 @@ function ApplicationInspector({ cluster, app, removed, unverified, isProtected, 
   );
 }
 
-function ProjectInspector({ project, removed, unverified, apps, appsCov, appSets, appSetsCov, onClose }: { project: ArgoProjectDTO; removed: boolean; unverified: boolean; apps: ArgoAppDTO[]; appsCov: AppCoverage; appSets: ArgoApplicationSetDTO[]; appSetsCov: AppCoverage; onClose: () => void }) {
+function ProjectInspector({ cluster, project, removed, unverified, apps, appsCov, appSets, appSetsCov, onClose }: { cluster: string; project: ArgoProjectDTO; removed: boolean; unverified: boolean; apps: ArgoAppDTO[]; appsCov: AppCoverage; appSets: ArgoApplicationSetDTO[]; appSetsCov: AppCoverage; onClose: () => void }) {
   const risks = projectRiskBadges(project, apps, appsCov);
   const role = riskRole(risks);
   return (
     <div data-testid="argo-project-panel" style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
-      <InspectorLayout
+      <InspectorLayout pin={{ cluster: cluster }}
         kind="AppProject"
         namespace={project.namespace}
         name={project.name}
@@ -840,8 +843,8 @@ function unverifiedAppSetConditions(appSet: ArgoApplicationSetDTO) {
   return arrayOf(appSet.conditions).filter((c) => APPSET_POLARITY[c.type] && c.status !== "True" && c.status !== "False");
 }
 
-function ApplicationSetInspector({ appSet, removed, unverified: selectionUnverified, allApps, appsCov, project, onClose }: { appSet: ArgoApplicationSetDTO; removed: boolean; unverified: boolean; allApps: ArgoAppDTO[]; appsCov: AppCoverage; project: ArgoProjectDTO | null; onClose: () => void }) {
-  const ai = useInspectorAI(appSet.uid ? { kind: "row" as const, task: "argo", part: "applicationsets", uid: appSet.uid } : null, `ApplicationSet/${appSet.namespace}/${appSet.name}`, !removed && !selectionUnverified);
+function ApplicationSetInspector({ cluster, appSet, removed, unverified: selectionUnverified, allApps, appsCov, project, onClose }: { cluster: string; appSet: ArgoApplicationSetDTO; removed: boolean; unverified: boolean; allApps: ArgoAppDTO[]; appsCov: AppCoverage; project: ArgoProjectDTO | null; onClose: () => void }) {
+  const ai = useInspectorAI(appSet.uid ? { kind: "row" as const, task: "argo", part: "applicationsets", uid: appSet.uid } : null, `ApplicationSet/${appSet.namespace}/${appSet.name}`, !removed && !selectionUnverified, cluster);
   const known = appsCov !== "unknown";
   const adverse = adverseAppSetConditions(appSet);
   const unverified = unverifiedAppSetConditions(appSet);
@@ -854,7 +857,7 @@ function ApplicationSetInspector({ appSet, removed, unverified: selectionUnverif
   const expected = generatedNames.length > 0 ? generatedNames.length : appSet.generatedApps;
   return (
     <div data-testid="argo-appset-panel" style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
-      <InspectorLayout
+      <InspectorLayout pin={{ cluster: cluster, uid: appSet.uid || undefined }}
         kind="ApplicationSet"
         namespace={appSet.namespace}
         name={appSet.name}

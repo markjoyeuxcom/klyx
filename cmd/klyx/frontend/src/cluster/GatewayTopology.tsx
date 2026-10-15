@@ -295,7 +295,7 @@ export function GatewayTopology({ cluster, gateway }: { cluster: string; gateway
       footer={<span className="t-legend">j k select · esc close · / search</span>}
       footerEnd={<span className="t-secondary">{visible.length !== routes.length ? `${visible.length} of ${routes.length} routes · ` : ""}broken first · {metricsCaption}</span>}
       inspector={selKey && inspected && t ? (
-        <RouteInspector key={selKey} route={inspected} gone={missing && routesNow} unproven={missing && !routesNow} gateway={t.gateway} listeners={listeners} notes={warnings.byRoute.get(selKey) ?? []}
+        <RouteInspector key={selKey} cluster={cluster} route={inspected} gone={missing && routesNow} unproven={missing && !routesNow} gateway={t.gateway} listeners={listeners} notes={warnings.byRoute.get(selKey) ?? []}
           metric={metrics[selKey]} metricsObs={metricsObs} certLookup={certLookup} certEvidence={certEvidence} certLastGood={certLastGood} certGap={certGap} nowS={nowS} onOpenObject={openObject} onClose={() => pick(null)} />
       ) : undefined}
       inspectorLabel="Route details"
@@ -406,7 +406,8 @@ function RouteLane({ route, role, metric, metricsObs, selected, onSelect }: { ro
   );
 }
 
-function RouteInspector({ route, gone, unproven, gateway, listeners, notes, metric, metricsObs, certLookup, certEvidence, certLastGood, certGap, nowS, onOpenObject, onClose }: {
+function RouteInspector({ cluster, route, gone, unproven, gateway, listeners, notes, metric, metricsObs, certLookup, certEvidence, certLastGood, certGap, nowS, onOpenObject, onClose }: {
+  cluster: string;
   route: RouteNodeDTO;
   gone: boolean;
   unproven: boolean;
@@ -441,7 +442,7 @@ function RouteInspector({ route, gone, unproven, gateway, listeners, notes, metr
 
   return (
     <div data-testid="route-panel" style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
-      <InspectorLayout kind="HTTPRoute" namespace={route.namespace} name={route.name}
+      <InspectorLayout pin={{ cluster: cluster }} kind="HTTPRoute" namespace={route.namespace} name={route.name}
         meta={`${route.parentSectionName ? `listener ${route.parentSectionName}` : "all listeners"}${route.hostnames.length > 0 ? ` · ${route.hostnames.join(", ")}` : ""}`}
         onClose={onClose}
         verdict={

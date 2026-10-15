@@ -17,6 +17,7 @@ import { fitColumns, type ColumnDef } from "../layout/columns";
 import { clock, combineEvidence, coverageGaps, kindEvidence, lastGoodAt, type KindEvidence } from "../layout/coverage";
 import { RANK, ROLE_TEXT, roleTone, routeRole, type Role } from "./gatewayModel";
 import { useInspectorAI } from "../ai/AIExplain";
+import { useClusterKey } from "./useClusterKey";
 
 // RouteList - the Gateways task's routes part (1c slice 3 §4a): every
 // HTTPRoute attached to a Gateway, counted once by UID with the role, label
@@ -57,7 +58,7 @@ export function RouteList({ cluster, rows, toggle }: { cluster: string; rows: Ga
   const [mode, setMode] = useState<Mode>("all");
   const [query, setQuery] = useState("");
   const [cursorKey, setCursorKey] = useState<string | null>(null);
-  const [selKey, setSelKey] = useState<string | null>(null);
+  const [selKey, setSelKey] = useClusterKey(cluster);
   const [bodyWidth, setBodyWidth] = useState(1100);
   const searchRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<VirtualListHandle>(null);
@@ -235,7 +236,7 @@ export function RouteList({ cluster, rows, toggle }: { cluster: string; rows: Ga
       footerEnd={<span className="t-secondary">{visible.length !== routes.length ? `${visible.length} of ${routes.length}${mark} · ` : ""}counted once per route, by its worst parent{asOf}</span>}
       inspector={selected ? (
         <div data-testid="route-row-panel" style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
-          <InspectorLayout kind="HTTPRoute" namespace={selected.namespace} name={selected.name} meta={`worst parent ${selected.parent}`} onClose={close}
+          <InspectorLayout pin={{ cluster: cluster, uid: selected.uid || undefined }} kind="HTTPRoute" namespace={selected.namespace} name={selected.name} meta={`worst parent ${selected.parent}`} onClose={close}
             verdict={gone === "detached" ? (
               <div role="status" data-testid="route-detached" className="t-body" style={{ padding: "8px 10px", borderRadius: 4, background: "var(--color-background-secondary)", boxShadow: "inset 0 0 0 1px var(--color-border-secondary)" }}>
                 <span className="t-status">No longer attached to a Gateway.</span> The route and its parent Gateways were both read in full and it is not in the attached set - it may still exist. The details below are its last evidence.

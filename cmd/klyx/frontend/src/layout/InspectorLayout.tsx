@@ -1,6 +1,8 @@
-import { createContext, useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { IconChevronDown, IconChevronRight, IconX } from "@tabler/icons-react";
 import { CopyButton } from "../chrome/CopyButton";
+import { Aspect, type AspectKind } from "../chrome/primitives/Aspect";
+import { INSPECTOR_IDENTITY_ID, publishPin, type InspectorPinValue } from "../nav/inspectorPin";
 import "./layout.css";
 
 // InspectorLayout owns the detail panel's anatomy (spec §3): sticky identity,
@@ -14,6 +16,12 @@ import "./layout.css";
 // section anatomy instead of their legacy header style.
 export const InspectorTemplate = createContext(false);
 
+// InspectorPin carries the inspector's pin to what renders inside it (The
+// Line slice 4 §6.3). Hooks that run in the inspector component itself,
+// above the layout, take the cluster as an argument instead.
+export const InspectorPin = createContext<InspectorPinValue | null>(null);
+export const useInspectorPinContext = () => useContext(InspectorPin);
+
 export type MenuItem =
   | { kind?: "item"; label: string; onSelect: () => void; danger?: boolean; disabled?: boolean; hint?: string }
   | { kind: "choose"; label: string; options: { label: string; onSelect: () => void }[]; danger?: boolean; hint?: string }
@@ -22,12 +30,15 @@ export type MenuItem =
 export type InspectorAction = { label: string; onSelect: () => void; kbd?: string; options?: { label: string; onSelect: () => void }[] };
 
 export function InspectorLayout({
+  pin,
   kind,
   namespace,
   name,
   meta,
   onClose,
   verdict,
+  aspect,
+  drawing,
   primary,
   secondary,
   more,
@@ -36,12 +47,19 @@ export function InspectorLayout({
   manifest,
   children,
 }: {
+  // The cluster this inspector is pinned to, and the object's UID where it
+  // has one (slice 4 §6.3). Required: no inspector takes the route's cluster.
+  pin: { cluster: string; uid?: string };
   kind: string;
   namespace?: string;
   name: string;
   meta?: ReactNode;
   onClose: () => void;
   verdict?: ReactNode;
+  // The verdict's mark (slice 4 §6.1); lenses adopt it in the slice 11 sweep.
+  aspect?: AspectKind;
+  // A drawing of the object's place, between the verdict and the actions.
+  drawing?: ReactNode;
   primary?: InspectorAction;
   secondary?: InspectorAction;
   more?: MenuItem[];
@@ -52,9 +70,11 @@ export function InspectorLayout({
   manifest?: ReactNode;
   children: ReactNode;
 }) {
+  const full: InspectorPinValue = { cluster: pin.cluster, uid: pin.uid, kind, namespace, name };
+  useEffect(() => publishPin({ cluster: pin.cluster, uid: pin.uid, kind, namespace, name }), [pin.cluster, pin.uid, kind, namespace, name]);
   return (
-    <>
-      <div className="insp-identity">
+    <InspectorPin.Provider value={full}>
+      <div className="insp-identity" id={INSPECTOR_IDENTITY_ID} tabIndex={-1} data-pin-cluster={pin.cluster} data-pin-uid={pin.uid}>
         <div className="insp-identity-text">
           <div className="insp-meta">{kind}{namespace ? ` in ${namespace}` : ""}</div>
           <h2 className="t-object-title">{name}</h2>
@@ -69,7 +89,10 @@ export function InspectorLayout({
           the actions or sections out of reach; the action band and tabs
           stick once the verdict has scrolled away. */}
       <div className="insp-scroll">
-        {verdict && <div className="insp-verdict">{verdict}</div>}
+        {verdict && (aspect && aspect !== "none"
+          ? <div className="insp-verdict insp-verdict-marked"><Aspect kind={aspect} size={10} /><div>{verdict}</div></div>
+          : <div className="insp-verdict">{verdict}</div>)}
+        {drawing && <div className="insp-drawing">{drawing}</div>}
         <div className="insp-sticky">
           {(primary || secondary || (more && more.length > 0)) && (
             <div className="insp-actions" role="group" aria-label="actions">
@@ -89,7 +112,7 @@ export function InspectorLayout({
           <InspectorTemplate.Provider value={true}>{tab === "manifest" ? manifest : children}</InspectorTemplate.Provider>
         </div>
       </div>
-    </>
+    </InspectorPin.Provider>
   );
 }
 

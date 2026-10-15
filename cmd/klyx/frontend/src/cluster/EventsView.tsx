@@ -17,6 +17,7 @@ import { WELL_KNOWN_RESOURCE_REFS } from "./resourceRefs";
 import { LensLayout, LensTable, TABLE_ROW_HEIGHT, type DatasetState } from "../layout/LensLayout";
 import { InspectorBlock, InspectorLayout, type MenuItem } from "../layout/InspectorLayout";
 import { fitColumns, type ColumnDef } from "../layout/columns";
+import { useClusterKey } from "./useClusterKey";
 
 // EventsView - Kubernetes events on the workspace template (spec §6 step 5).
 // Events are evidence, never verdicts (health spec decision record): a
@@ -64,7 +65,7 @@ export function EventsView({ cluster }: { cluster: string }) {
   const events = useFleet((s) => s.events);
   const nowS = Math.floor(useNow() / 1000);
   const [cursorKey, setCursorKey] = useState<string | null>(null);
-  const [selKey, setSelKey] = useState<string | null>(null);
+  const [selKey, setSelKey] = useClusterKey(cluster);
   const [bodyWidth, setBodyWidth] = useState(1100);
   const searchRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<VirtualListHandle>(null);
@@ -122,7 +123,7 @@ export function EventsView({ cluster }: { cluster: string }) {
   const lastEvent = useRef<EventRowDTO | null>(null);
   const enteredCluster = useRef(cluster);
   if (enteredCluster.current !== cluster) { enteredCluster.current = cluster; lastEvent.current = null; }
-  useEffect(() => { setSelKey(null); setCursorKey(null); }, [cluster]);
+  useEffect(() => { setSelKey(null); setCursorKey(null); }, [cluster, setSelKey]);
 
   const selected = selKey ? items.find((e) => keyOf(e) === selKey) : undefined;
   if (selected) lastEvent.current = selected;
@@ -136,7 +137,7 @@ export function EventsView({ cluster }: { cluster: string }) {
   const inspected = selected ?? (missing ? lastEvent.current : null);
   const close = () => setSelKey(null);
   // later operator edits win: a filter that excludes the selection closes it
-  useEffect(() => { if (selected && !visible.includes(selected)) setSelKey(null); }, [selected, visible]);
+  useEffect(() => { if (selected && !visible.includes(selected)) setSelKey(null); }, [selected, visible, setSelKey]);
 
   const cursorIdx = cursorKey === null ? -1 : visible.findIndex((e) => keyOf(e) === cursorKey);
   useListKeys({
@@ -266,7 +267,7 @@ function EventInspector({ cluster, e, removed, partialMiss, stale, nowS, onClose
   const more: MenuItem[] = [{ label: "Copy message", onSelect: () => void navigator.clipboard?.writeText(e.message) }];
   return (
     <div data-testid="event-panel" style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
-      <InspectorLayout
+      <InspectorLayout pin={{ cluster: cluster }}
         kind="Event"
         namespace={e.namespace || undefined}
         name={e.reason}

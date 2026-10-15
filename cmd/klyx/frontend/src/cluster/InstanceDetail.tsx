@@ -833,7 +833,7 @@ export function InstanceDetail({ cluster, resource, instance, removed = false }:
 
   return (
     <div data-testid="instance-detail-panel" style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
-      <InspectorLayout
+      <InspectorLayout pin={{ cluster: cluster, uid: d?.uid || undefined }}
         kind={resource.kind}
         namespace={instance.namespace || undefined}
         name={instance.name}

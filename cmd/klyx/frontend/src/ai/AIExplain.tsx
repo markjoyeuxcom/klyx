@@ -171,18 +171,17 @@ export function AIExplainBlock({ state, onDismiss, onFollowUp }: { state: AIExpl
 /**
  * useInspectorAI is the one-line integration for a lens inspector: it returns
  * the More-menu entry and the block to render. The cluster is the inspector's
- * own when it has one, else the open route's. Pass enabled=false for a removed
- * or unverified selection.
+ * own, always: there is no route fallback (The Line slice 4 §6.3), so an
+ * inspector never explains or follows up on the open cluster by mistake.
+ * Pass enabled=false for a removed or unverified selection.
  */
-export function useInspectorAI(target: ExplainTarget | null, describe: string, enabled: boolean, clusterProp?: string): {
+export function useInspectorAI(target: ExplainTarget | null, describe: string, enabled: boolean, cluster: string): {
   menu: MenuItem[];
   block: ReactNode;
   readiness: AIReadiness;
   state: AIExplainState;
   run: () => void;
 } {
-  const routeCluster = useFleet((s) => (s.route.name === "cluster" ? s.route.cluster : ""));
-  const cluster = clusterProp ?? routeCluster;
   const readiness = useAIReadiness(cluster);
   const active = enabled && !!cluster && !!target;
   const { state, run, dismiss } = useAIExplain(cluster, active ? target : null, readiness, describe);

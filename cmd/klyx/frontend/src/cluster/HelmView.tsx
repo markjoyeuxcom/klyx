@@ -391,7 +391,7 @@ function ReleaseInspector({ cluster, release: r, role, removed, stale, history, 
 
   return (
     <div data-testid="helm-release-panel" style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
-      <InspectorLayout
+      <InspectorLayout pin={{ cluster: cluster }}
         kind="Helm release"
         namespace={r.namespace}
         name={r.name}

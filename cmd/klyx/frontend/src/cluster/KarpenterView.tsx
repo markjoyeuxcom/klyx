@@ -19,6 +19,7 @@ import { InspectorBlock, InspectorLayout } from "../layout/InspectorLayout";
 import { fitColumns, type ColumnDef } from "../layout/columns";
 import { fmtCpu, fmtMem } from "./saturation";
 import { useInspectorAI } from "../ai/AIExplain";
+import { useClusterKey } from "./useClusterKey";
 
 // KarpenterView - the node-autoscaling diagnosis lens on the workspace
 // template (spec §6 step 5), in Karpenter's vocabulary. Read-only. NodePools
@@ -106,7 +107,7 @@ export function KarpenterView({ cluster }: { cluster: string }) {
   const [loading, setLoading] = useState(false);
   const [view, setView] = useState<View>("claims");
   const [cursorKey, setCursorKey] = useState<string | null>(null);
-  const [selKey, setSelKeyRaw] = useState<string | null>(null);
+  const [selKey, setSelKeyRaw] = useClusterKey(cluster);
   // One-shot auto-select of the first NodeClaim needing attention, like the
   // other lenses (UI review 2026-10-13): once, from the first complete read,
   // never over a selection the operator made, a dismissal, a view switch or a
@@ -203,7 +204,7 @@ export function KarpenterView({ cluster }: { cluster: string }) {
     autoSelect.current = "done";
     const c = claims.find((x) => x.rule.included);
     if (c) { setCursorKey(c.name); setSelKeyRaw(c.name); }
-  }, [view, claimsEv, claims]);
+  }, [view, claimsEv, claims, setSelKeyRaw]);
   // A summary Top link (health 1c slice 4 §5.4): open the part's view and
   // select the object - selection only, never an action.
   useNavIntent(cluster, ["reveal"], (intent) => {
@@ -377,8 +378,8 @@ export function KarpenterView({ cluster }: { cluster: string }) {
       footer={<span className="t-legend">j k navigate · ↵ inspect</span>}
       footerEnd={<span className="t-secondary">{view === "claims" ? `stuck first · drift and consolidation are intended behaviour, not faults${asOf}` : view === "pools" ? `broken first${asOf}` : feedIncomplete ? "incomplete read · newest among the events read" : "newest first"}</span>}
       inspector={selClaim ? <ClaimInspector cluster={cluster} c={selClaim} nowS={nowS} gone={claimGone} onClose={() => setSelKey(null)} />
-        : selPool ? <PoolInspector p={selPool} gone={poolGone} claimsCov={claimsCov} onClose={() => setSelKey(null)} />
-        : selEvent ? <EventPanel e={selEvent} onClose={() => setSelKey(null)} />
+        : selPool ? <PoolInspector cluster={cluster} p={selPool} gone={poolGone} claimsCov={claimsCov} onClose={() => setSelKey(null)} />
+        : selEvent ? <EventPanel cluster={cluster} e={selEvent} onClose={() => setSelKey(null)} />
         : undefined}
       inspectorLabel={view === "claims" ? "NodeClaim details" : view === "pools" ? "NodePool details" : "Event details"}
       onCloseInspector={() => setSelKey(null)}
@@ -416,7 +417,7 @@ function ClaimInspector({ cluster, c, nowS, gone, onClose }: { cluster: string; 
       : role.kind === "progressing" ? `${c.nodeName ? "Initializing" : "Launching"} for ${age}${pending ? ` - ${pending}` : " - the launch chain has not finished yet"}.` : null;
   return (
     <div data-testid="karp-claim-panel" style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
-      <InspectorLayout kind="NodeClaim" name={c.name} meta={[c.pool && `pool ${c.pool}`, c.instanceType, c.capacityType].filter(Boolean).join(" · ")} onClose={onClose}
+      <InspectorLayout pin={{ cluster: cluster, uid: c.uid || undefined }} kind="NodeClaim" name={c.name} meta={[c.pool && `pool ${c.pool}`, c.instanceType, c.capacityType].filter(Boolean).join(" · ")} onClose={onClose}
         verdict={gone ? <GoneNotice kind="NodeClaim" gone={gone} /> : (
           <div>
             <InspectorStatus tone={roleTone(role.kind)} kind={role.kind} label={role.label} />
@@ -449,14 +450,14 @@ function ClaimInspector({ cluster, c, nowS, gone, onClose }: { cluster: string; 
   );
 }
 
-function PoolInspector({ p, gone, claimsCov, onClose }: { p: KarpenterPoolDTO; gone: "removed" | "unverified" | null; claimsCov: JoinCoverage; onClose: () => void }) {
-  const ai = useInspectorAI(p.uid ? { kind: "row" as const, task: "karpenter", part: "nodepools", uid: p.uid } : null, `NodePool/${p.name}`, !gone);
+function PoolInspector({ cluster, p, gone, claimsCov, onClose }: { cluster: string; p: KarpenterPoolDTO; gone: "removed" | "unverified" | null; claimsCov: JoinCoverage; onClose: () => void }) {
+  const ai = useInspectorAI(p.uid ? { kind: "row" as const, task: "karpenter", part: "nodepools", uid: p.uid } : null, `NodePool/${p.name}`, !gone, cluster);
   const role = roleOf(p);
   const cpu = capText(p.cpuUsed, p.cpuLimit, fmtCpu);
   const mem = capText(p.memUsed, p.memLimit, fmtMem);
   return (
     <div data-testid="karp-pool-panel" style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
-      <InspectorLayout kind="NodePool" name={p.name} meta={`${claimsCov === "unknown" ? "nodes unverified (NodeClaim read unavailable)" : `${countText(p.nodes, claimsCov)} node${p.nodes === 1 ? "" : "s"}`} · weight ${p.weight}`} onClose={onClose}
+      <InspectorLayout pin={{ cluster: cluster, uid: p.uid || undefined }} kind="NodePool" name={p.name} meta={`${claimsCov === "unknown" ? "nodes unverified (NodeClaim read unavailable)" : `${countText(p.nodes, claimsCov)} node${p.nodes === 1 ? "" : "s"}`} · weight ${p.weight}`} onClose={onClose}
         verdict={gone ? <GoneNotice kind="NodePool" gone={gone} /> : (
           <div>
             <InspectorStatus tone={roleTone(role.kind)} kind={role.kind} label={role.label} reason={p.ready === "not-ready" ? p.reason || undefined : undefined} />
@@ -478,10 +479,10 @@ function PoolInspector({ p, gone, claimsCov, onClose }: { p: KarpenterPoolDTO; g
   );
 }
 
-function EventPanel({ e, onClose }: { e: KarpenterEventDTO; onClose: () => void }) {
+function EventPanel({ cluster, e, onClose }: { cluster: string; e: KarpenterEventDTO; onClose: () => void }) {
   return (
     <div data-testid="karp-event-panel" style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
-      <InspectorLayout kind="Event" name={e.reason} meta={`${e.kind}/${e.name}`} onClose={onClose}
+      <InspectorLayout pin={{ cluster: cluster }} kind="Event" name={e.reason} meta={`${e.kind}/${e.name}`} onClose={onClose}
         verdict={<div className="t-body"><span className="t-status" style={{ color: e.type === "Warning" ? "var(--color-text-warning)" : "var(--color-text-secondary)" }}>{e.type}</span><span className="t-secondary"> · last <Age unixSeconds={e.lastSeenUnix} suffix=" ago" /></span></div>}>
         <InspectorBlock title="Message">
           <div className="t-body" style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{e.message || "No message."}</div>

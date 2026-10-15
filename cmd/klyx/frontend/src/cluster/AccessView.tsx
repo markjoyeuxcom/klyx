@@ -9,6 +9,7 @@ import { useListKeys } from "../chrome/useListKeys";
 import { LensLayout, LensTable, TABLE_ROW_HEIGHT, type DatasetState } from "../layout/LensLayout";
 import { InspectorBlock, InspectorLayout } from "../layout/InspectorLayout";
 import { fitColumns, type ColumnDef } from "../layout/columns";
+import { useClusterKey } from "./useClusterKey";
 
 // AccessView - the RBAC access-review lens on the workspace template (spec
 // §6 step 5). A query tool, not a dataset: the controls row is the question,
@@ -77,7 +78,7 @@ export function AccessView({ cluster }: { cluster: string }) {
   const [grants, setGrants] = useState<Pinned<AccessWhoCanDTO> | null>(null);
   const [busy, setBusy] = useState<"cani" | "whocan" | null>(null);
   const [cursorKey, setCursorKey] = useState<string | null>(null);
-  const [selKey, setSelKey] = useState<string | null>(null);
+  const [selKey, setSelKey] = useClusterKey(cluster);
   const [bodyWidth, setBodyWidth] = useState(1100);
   const gen = useRef(0);
 
@@ -88,7 +89,7 @@ export function AccessView({ cluster }: { cluster: string }) {
     enteredCluster.current = cluster;
     gen.current++;
     setVerdict(null); setGrants(null); setBusy(null); setSelKey(null); setCursorKey(null);
-  }, [cluster]);
+  }, [cluster, setSelKey]);
 
   // A ServiceAccount inspector's "check access" cross-link lands here.
   useNavIntent(cluster, ["access-check"], (intent) => {
@@ -246,7 +247,7 @@ export function AccessView({ cluster }: { cluster: string }) {
           )}
         </div>
       }
-      inspector={selected ? <GrantInspector g={selected} onClose={() => setSelKey(null)} /> : undefined}
+      inspector={selected ? <GrantInspector cluster={cluster} g={selected} onClose={() => setSelKey(null)} /> : undefined}
       inspectorLabel="Grant path details"
       onCloseInspector={() => setSelKey(null)}
     />
@@ -297,10 +298,10 @@ function VerdictPanel({ pinned, outdated }: { pinned: Pinned<AccessVerdictDTO>; 
   );
 }
 
-function GrantInspector({ g, onClose }: { g: AccessGrantDTO; onClose: () => void }) {
+function GrantInspector({ cluster, g, onClose }: { cluster: string; g: AccessGrantDTO; onClose: () => void }) {
   return (
     <div data-testid="access-grant-panel" style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
-      <InspectorLayout
+      <InspectorLayout pin={{ cluster: cluster }}
         kind={g.subjectKind}
         namespace={g.subjectNamespace || undefined}
         name={g.subjectName}

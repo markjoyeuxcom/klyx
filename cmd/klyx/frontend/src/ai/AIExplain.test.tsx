@@ -83,6 +83,20 @@ describe("useInspectorAI", () => {
     }
   });
 
+  it("explains and follows up on the inspector's own cluster, never the route's (slice 4 §6.3)", async () => {
+    const { useChat } = await import("./chatStore");
+    useFleet.setState({ route: { name: "cluster", cluster: "other", section: "pods" } });
+    render(<Harness target={pod} cluster="c1" />);
+    fireEvent.click(await screen.findByRole("button", { name: "Explain with AI" }));
+    await waitFor(() => expect(screen.getByTestId("ai-explain").textContent).toContain("keeps exiting"));
+    expect(bridge.explain).toHaveBeenCalledWith("c1", pod);
+    expect(bridge.aiAvailability.mock.calls.every((c: unknown[]) => c[0] !== "other")).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Ask a follow-up" }));
+    expect(useChat.getState().cluster).toBe("c1");
+    expect(useChat.getState().seeds.c1?.seed).toEqual(pod);
+    useChat.getState().close();
+  });
+
   it("shows a failure as an error, never as an explanation", async () => {
     bridge.explain.mockResolvedValue({ ...ok(), ok: false, explanation: "", error: "The model declined to answer (cyber)." });
     render(<Harness target={pod} />);

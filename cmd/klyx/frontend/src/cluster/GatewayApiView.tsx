@@ -21,6 +21,7 @@ import { fitColumns, type ColumnDef } from "../layout/columns";
 import { RANK, REFS, ROLE_TEXT, addressText, gatewayRole, gatewayVerdictDetail, listenerText, roleTone, type Role } from "./gatewayModel";
 import { useInspectorAI } from "../ai/AIExplain";
 import { staleProps } from "./staleness";
+import { useClusterKey } from "./useClusterKey";
 
 // GatewayApiView - the Gateway API lens on the workspace template (spec §6
 // step 6). Without a selected Gateway it is the Gateways table (not accepted
@@ -90,7 +91,7 @@ function GatewayList({ cluster, rows, toggle }: { cluster: string; rows: Gateway
   const [mode, setMode] = useState<Mode>("all");
   const [query, setQuery] = useState("");
   const [cursorKey, setCursorKey] = useState<string | null>(null);
-  const [selKey, setSelKey] = useState<string | null>(null);
+  const [selKey, setSelKey] = useClusterKey(cluster);
   const [bodyWidth, setBodyWidth] = useState(1100);
   const searchRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<VirtualListHandle>(null);
@@ -154,7 +155,7 @@ function GatewayList({ cluster, rows, toggle }: { cluster: string; rows: Gateway
     autoDone.current = true;
     const first = visible[0];
     if (first && first.rule.included && selKey === null) { setSelKey(keyOf(first)); setCursorKey(keyOf(first)); }
-  }, [ev, visible, selKey]);
+  }, [ev, visible, selKey, setSelKey]);
   // Later operator filter edits win: one that hides the selection closes it.
   const filterEdits = useRef(0);
   useEffect(() => {
@@ -264,15 +265,15 @@ function GatewayList({ cluster, rows, toggle }: { cluster: string; rows: Gateway
       }
       footer={<span className="t-legend">j k navigate · ↵ inspect · double-click opens topology · / search</span>}
       footerEnd={<span className="t-secondary">{visible.length !== gateways.length ? `${visible.length} of ${gateways.length}${mark} · ` : ""}needs attention first{asOf}</span>}
-      inspector={selected ? <GatewayInspector key={selKey} g={selected} stale={ev === "stale"} gone={gone} onOpen={() => openGateway(selected.namespace, selected.name)} onClose={close} /> : undefined}
+      inspector={selected ? <GatewayInspector key={selKey} cluster={cluster} g={selected} stale={ev === "stale"} gone={gone} onOpen={() => openGateway(selected.namespace, selected.name)} onClose={close} /> : undefined}
       inspectorLabel="Gateway details"
       onCloseInspector={close}
     />
   );
 }
 
-function GatewayInspector({ g, stale, gone, onOpen, onClose }: { g: GatewayRefDTO; stale: boolean; gone: "removed" | "unverified" | null; onOpen: () => void; onClose: () => void }) {
-  const ai = useInspectorAI(g.uid ? { kind: "row" as const, task: "gateway", part: "gateways", uid: g.uid } : null, `Gateway/${g.namespace}/${g.name}`, !gone);
+function GatewayInspector({ cluster, g, stale, gone, onOpen, onClose }: { cluster: string; g: GatewayRefDTO; stale: boolean; gone: "removed" | "unverified" | null; onOpen: () => void; onClose: () => void }) {
+  const ai = useInspectorAI(g.uid ? { kind: "row" as const, task: "gateway", part: "gateways", uid: g.uid } : null, `Gateway/${g.namespace}/${g.name}`, !gone, cluster);
   const role = gatewayRole(g);
   const open = (ref: typeof REFS.gateway | typeof REFS.gatewayClass, ns: string, name: string) => {
     const nav = useFleet.getState();
@@ -283,7 +284,7 @@ function GatewayInspector({ g, stale, gone, onOpen, onClose }: { g: GatewayRefDT
   const addresses = g.addresses ?? [];
   return (
     <div data-testid="gateway-panel" style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
-      <InspectorLayout kind="Gateway" namespace={g.namespace} name={g.name} meta={g.className ? `class ${g.className}` : "no class"} onClose={onClose}
+      <InspectorLayout pin={{ cluster: cluster, uid: g.uid || undefined }} kind="Gateway" namespace={g.namespace} name={g.name} meta={g.className ? `class ${g.className}` : "no class"} onClose={onClose}
         verdict={gone === "removed" ? (
           <div role="status" className="t-body" style={{ padding: "8px 10px", borderRadius: 4, background: "var(--color-background-secondary)", boxShadow: "inset 0 0 0 1px var(--color-border-secondary)" }}>
             <span className="t-status">Gateway removed.</span> It is no longer in the current read. The details below are its last evidence.

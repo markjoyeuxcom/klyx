@@ -36,6 +36,7 @@ import { UpdatedAt, useReceivedAt } from "../chrome/Age";
 import { LensLayout, LensTable, TABLE_ROW_HEIGHT, type DatasetState } from "../layout/LensLayout";
 import { InspectorBlock, InspectorLayout, type MenuItem } from "../layout/InspectorLayout";
 import { fitColumns, type ColumnDef } from "../layout/columns";
+import { useClusterKey } from "./useClusterKey";
 const KINDS: WorkloadKind[] = ["Deployment", "StatefulSet", "DaemonSet"];
 const kindShort: Record<WorkloadKind, string> = { Deployment: "deploy", StatefulSet: "sts", DaemonSet: "daemonset" };
 const keyOf = (w: WorkloadDTO) => `${w.kind}/${w.namespace}/${w.name}`;
@@ -135,7 +136,7 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
   // Cursor and selection are stable keys (kind/namespace/name), never indexes:
   // live emits re-rank the rows.
   const [cursorKey, setCursorKey] = useState<string | null>(null);
-  const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const [selectedKey, setSelectedKey] = useClusterKey(cluster);
   const [unknownOnly, setUnknownOnly] = useState(false);
   const [logsPinned, setLogsPinned] = useState<{ cluster: string; namespace: string; name: string; kind: WorkloadKind } | null>(null);
   const setLogsTarget = useCallback((t: { namespace: string; name: string; kind: WorkloadKind } | null) => setLogsPinned(t ? { ...t, cluster } : null), [cluster]);
@@ -223,8 +224,8 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
   // read - of the workloads and of the attribution evidence their verdicts need
   const current = ev === "complete" && attributionComplete && !wl.rowsState?.updating && !rowsRefreshing;
 
-  const closeInspector = useCallback(() => { autoSelect.current = "done"; setSelectedKey(null); }, []);
-  const open = useCallback((w: WorkloadDTO) => { setCursorKey(keyOf(w)); setSelectedKey(keyOf(w)); }, []);
+  const closeInspector = useCallback(() => { autoSelect.current = "done"; setSelectedKey(null); }, [setSelectedKey]);
+  const open = useCallback((w: WorkloadDTO) => { setCursorKey(keyOf(w)); setSelectedKey(keyOf(w)); }, [setSelectedKey]);
   useListKeys({
     count: rows.length,
     selected: cursorIdx,
@@ -272,7 +273,7 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
     setCursorKey(null);
     setLogsPinned(null);
     setCompareTarget(null);
-  }, [cluster]);
+  }, [cluster, setSelectedKey]);
   const freshRead = mine && ev === "complete" && wl.items !== itemsAtEntry.current;
   useEffect(() => {
     if (autoSelect.current === "done" || !freshRead) return;
@@ -706,7 +707,7 @@ function WorkloadInspector({
 
   return (
     <div data-testid="workload-detail-panel" style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
-      <InspectorLayout
+      <InspectorLayout pin={{ cluster: cluster, uid: w.uid || undefined }}
         kind={w.kind}
         namespace={w.namespace}
         name={w.name}

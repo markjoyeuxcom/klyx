@@ -20,6 +20,7 @@ import { InspectorBlock, InspectorLayout, type MenuItem } from "../layout/Inspec
 import { fitColumns, type ColumnDef } from "../layout/columns";
 import { clock, combineEvidence, coverageGaps, joinCoverage, kindEvidence, lastGoodAt, type JoinCoverage, type KindEvidence } from "../layout/coverage";
 import { useInspectorAI } from "../ai/AIExplain";
+import { useClusterKey } from "./useClusterKey";
 
 const keyOf = (e: { namespace: string; name: string }) => `${e.namespace}/${e.name}`;
 
@@ -142,7 +143,7 @@ export function ExternalSecretsView({ cluster }: { cluster: string }) {
   const [query, setQuery] = useState("");
   const [namespace, setNamespace] = useState("");
   const [cursorKey, setCursorKey] = useState<string | null>(null);
-  const [storeSel, setStoreSel] = useState<string | null>(null);
+  const [storeSel, setStoreSel] = useClusterKey(cluster);
   const [bodyWidth, setBodyWidth] = useState(1100);
   const searchRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<VirtualListHandle>(null);
@@ -222,7 +223,7 @@ export function ExternalSecretsView({ cluster }: { cluster: string }) {
   const storeUnverified = !!storeSel && !selectedStore && !storeRemoved && !!priorStore;
   const storeSubject = selectedStore ?? priorStore;
   useEffect(() => { if (selectedSecret && view === "secrets" && !visibleSecrets.includes(selectedSecret)) selectSecret(null); }, [selectedSecret, visibleSecrets, view, selectSecret]);
-  useEffect(() => { if (selectedStore && view === "stores" && !visibleStores.includes(selectedStore)) setStoreSel(null); }, [selectedStore, visibleStores, view]);
+  useEffect(() => { if (selectedStore && view === "stores" && !visibleStores.includes(selectedStore)) setStoreSel(null); }, [selectedStore, visibleStores, view, setStoreSel]);
   const enteredCluster = useRef(cluster);
   useEffect(() => {
     if (enteredCluster.current === cluster) return;
@@ -230,7 +231,7 @@ export function ExternalSecretsView({ cluster }: { cluster: string }) {
     setStoreSel(null); setCursorKey(null);
     autoSelect.current = "pending";
     entrySecrets.current = useFleet.getState().externalsecrets.secrets;
-  }, [cluster]);
+  }, [cluster, setStoreSel]);
 
   // One-shot auto-select of the first secret needing attention.
   const autoSelect = useRef<"pending" | "done">("pending");
@@ -438,6 +439,7 @@ export function ExternalSecretsView({ cluster }: { cluster: string }) {
       footerEnd={<span className="t-secondary">{shown} of {total}{partial} {noun}{asOf}{view === "secrets" ? " · broken first, then staleness" : ""}</span>}
       inspector={view === "secrets" && selKey && secretSubject ? (
         <SecretInspector
+          cluster={cluster}
           key={`${cluster}/${selKey}`}
           e={secretSubject}
           nowS={nowS}
@@ -450,6 +452,7 @@ export function ExternalSecretsView({ cluster }: { cluster: string }) {
         />
       ) : view === "stores" && storeSel && storeSubject ? (
         <StoreInspector
+          cluster={cluster}
           key={`${cluster}/${storeSel}`}
           store={storeSubject}
           removed={storeRemoved}
@@ -484,7 +487,8 @@ function RemovedNotice({ kind }: { kind: string }) {
   );
 }
 
-function SecretInspector({ e, nowS, removed, unverified, store, storeCov, onClose, onOpenStore }: {
+function SecretInspector({ cluster, e, nowS, removed, unverified, store, storeCov, onClose, onOpenStore }: {
+  cluster: string;
   e: ExternalSecretDTO;
   nowS: number;
   removed: boolean;
@@ -494,7 +498,7 @@ function SecretInspector({ e, nowS, removed, unverified, store, storeCov, onClos
   onClose: () => void;
   onOpenStore: (s: ExternalSecretStoreDTO) => void;
 }) {
-  const ai = useInspectorAI(e.uid ? { kind: "row" as const, task: "eso", part: "externalsecrets", uid: e.uid } : null, `ExternalSecret/${e.namespace}/${e.name}`, !removed && !unverified);
+  const ai = useInspectorAI(e.uid ? { kind: "row" as const, task: "eso", part: "externalsecrets", uid: e.uid } : null, `ExternalSecret/${e.namespace}/${e.name}`, !removed && !unverified, cluster);
   // store surfaces derive from the store's rule: only CONFIRMED adverse store
   // health is a diagnosed root cause; Unknown is unverified evidence
   const storeRole = store ? roleOf(store) : null;
@@ -506,7 +510,7 @@ function SecretInspector({ e, nowS, removed, unverified, store, storeCov, onClos
   const more: MenuItem[] = manifestRef ? [{ label: "View manifest in Resources", onSelect: () => { const nav = useFleet.getState(); nav.openResource(manifestRef); nav.openInstance(e.namespace, e.name); } }] : [];
   return (
     <div data-testid="eso-secret-panel" style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
-      <InspectorLayout
+      <InspectorLayout pin={{ cluster: cluster, uid: e.uid || undefined }}
         kind="ExternalSecret"
         namespace={e.namespace}
         name={e.name}
@@ -567,15 +571,15 @@ function SecretInspector({ e, nowS, removed, unverified, store, storeCov, onClos
   );
 }
 
-function StoreInspector({ store, removed, unverified, secrets, secretsCov, onClose, onOpenSecret }: { store: ExternalSecretStoreDTO; removed: boolean; unverified: boolean; secrets: ExternalSecretDTO[]; secretsCov: JoinCoverage; onClose: () => void; onOpenSecret: (e: ExternalSecretDTO) => void }) {
-  const ai = useInspectorAI(store.uid ? { kind: "row" as const, task: "eso", part: "stores", uid: store.uid } : null, `${store.kind}/${store.namespace ? `${store.namespace}/` : ""}${store.name}`, !removed && !unverified);
+function StoreInspector({ cluster, store, removed, unverified, secrets, secretsCov, onClose, onOpenSecret }: { cluster: string; store: ExternalSecretStoreDTO; removed: boolean; unverified: boolean; secrets: ExternalSecretDTO[]; secretsCov: JoinCoverage; onClose: () => void; onOpenSecret: (e: ExternalSecretDTO) => void }) {
+  const ai = useInspectorAI(store.uid ? { kind: "row" as const, task: "eso", part: "stores", uid: store.uid } : null, `${store.kind}/${store.namespace ? `${store.namespace}/` : ""}${store.name}`, !removed && !unverified, cluster);
   const role = roleOf(store);
   const ref = wellKnownResourceRef("external-secrets.io", store.kind);
   const view = ref ? () => { const nav = useFleet.getState(); nav.openResource(ref); nav.openInstance(store.kind === "ClusterSecretStore" ? "" : store.namespace, store.name); } : null;
   const blocked = secrets.filter(included);
   return (
     <div data-testid="eso-store-panel" style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
-      <InspectorLayout
+      <InspectorLayout pin={{ cluster: cluster, uid: store.uid || undefined }}
         kind={store.kind}
         namespace={store.namespace || undefined}
         name={store.name}

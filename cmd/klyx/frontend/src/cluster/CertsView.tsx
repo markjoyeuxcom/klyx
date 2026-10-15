@@ -22,6 +22,7 @@ import { LensLayout, LensTable, TABLE_ROW_HEIGHT, type DatasetState } from "../l
 import { InspectorBlock, InspectorLayout, type MenuItem } from "../layout/InspectorLayout";
 import { fitColumns, type ColumnDef } from "../layout/columns";
 import { clock, combineEvidence, coverageGaps, joinCoverage, kindEvidence, lastGoodAt, type JoinCoverage, type KindEvidence } from "../layout/coverage";
+import { useClusterKey } from "./useClusterKey";
 
 const keyOf = (c: { namespace: string; name: string }) => `${c.namespace}/${c.name}`;
 const arrayOf = <T,>(value: T[] | null | undefined): T[] => (Array.isArray(value) ? value : []);
@@ -140,7 +141,7 @@ export function CertsView({ cluster }: { cluster: string }) {
   const [query, setQuery] = useState("");
   const [namespace, setNamespace] = useState("");
   const [cursorKey, setCursorKey] = useState<string | null>(null);
-  const [issuerSel, setIssuerSel] = useState<string | null>(null);
+  const [issuerSel, setIssuerSel] = useClusterKey(cluster);
   const [bodyWidth, setBodyWidth] = useState(1100);
   const searchRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<VirtualListHandle>(null);
@@ -260,7 +261,7 @@ export function CertsView({ cluster }: { cluster: string }) {
   const issuerUnverified = !!issuerSel && !selectedIssuer && !issuerRemoved && !!priorIssuer;
   const issuerSubject = selectedIssuer ?? priorIssuer;
   useEffect(() => { if (selectedCert && view === "certificates" && !visibleCerts.includes(selectedCert)) selectCert(null); }, [selectedCert, visibleCerts, view, selectCert]);
-  useEffect(() => { if (selectedIssuer && view === "issuers" && !visibleIssuers.includes(selectedIssuer)) setIssuerSel(null); }, [selectedIssuer, visibleIssuers, view]);
+  useEffect(() => { if (selectedIssuer && view === "issuers" && !visibleIssuers.includes(selectedIssuer)) setIssuerSel(null); }, [selectedIssuer, visibleIssuers, view, setIssuerSel]);
   const enteredCluster = useRef(cluster);
   useEffect(() => {
     if (enteredCluster.current === cluster) return;
@@ -268,7 +269,7 @@ export function CertsView({ cluster }: { cluster: string }) {
     setIssuerSel(null); setCursorKey(null);
     autoSelect.current = "pending";
     entryCerts.current = useFleet.getState().certmanager.certificates;
-  }, [cluster]);
+  }, [cluster, setIssuerSel]);
 
   // One-shot auto-select of the first certificate needing attention.
   const autoSelect = useRef<"pending" | "done">("pending");
@@ -506,6 +507,7 @@ export function CertsView({ cluster }: { cluster: string }) {
         />
       ) : view === "issuers" && issuerSel && issuerSubject ? (
         <IssuerInspector
+          cluster={cluster}
           key={`${cluster}/${issuerSel}`}
           issuer={issuerSubject}
           removed={issuerRemoved}
@@ -597,7 +599,7 @@ function CertInspector({ c, cluster, removed, unverified, issuer, issuersKnown, 
 
   return (
     <div data-testid="cert-panel" style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
-      <InspectorLayout
+      <InspectorLayout pin={{ cluster: cluster, uid: c.uid || undefined }}
         kind="Certificate"
         namespace={c.namespace}
         name={c.name}
@@ -689,15 +691,15 @@ function CertInspector({ c, cluster, removed, unverified, issuer, issuersKnown, 
   );
 }
 
-function IssuerInspector({ issuer, removed, unverified, certs, certsCov, onClose, onOpenCert }: { issuer: IssuerDTO; removed: boolean; unverified: boolean; certs: CertificateDTO[]; certsCov: JoinCoverage; onClose: () => void; onOpenCert: (c: CertificateDTO) => void }) {
-  const ai = useInspectorAI(issuer.uid ? { kind: "row" as const, task: "certs", part: "issuers", uid: issuer.uid } : null, `${issuer.kind}/${issuer.namespace ? `${issuer.namespace}/` : ""}${issuer.name}`, !removed && !unverified);
+function IssuerInspector({ cluster, issuer, removed, unverified, certs, certsCov, onClose, onOpenCert }: { cluster: string; issuer: IssuerDTO; removed: boolean; unverified: boolean; certs: CertificateDTO[]; certsCov: JoinCoverage; onClose: () => void; onOpenCert: (c: CertificateDTO) => void }) {
+  const ai = useInspectorAI(issuer.uid ? { kind: "row" as const, task: "certs", part: "issuers", uid: issuer.uid } : null, `${issuer.kind}/${issuer.namespace ? `${issuer.namespace}/` : ""}${issuer.name}`, !removed && !unverified, cluster);
   const role = roleOf(issuer);
   const ref = wellKnownResourceRef("cert-manager.io", issuer.kind);
   const view = ref ? () => { const nav = useFleet.getState(); nav.openResource(ref); nav.openInstance(issuer.kind === "ClusterIssuer" ? "" : issuer.namespace, issuer.name); } : null;
   const blocked = certs.filter(included);
   return (
     <div data-testid="issuer-panel" style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
-      <InspectorLayout
+      <InspectorLayout pin={{ cluster: cluster, uid: issuer.uid || undefined }}
         kind={issuer.kind}
         namespace={issuer.namespace || undefined}
         name={issuer.name}

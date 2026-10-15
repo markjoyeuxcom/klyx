@@ -1041,7 +1041,7 @@ function NodeInspector({ cluster, row, uid, nowS, detail, loading, gone, onCordo
 
   return (
     <div data-testid="node-detail-panel" style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
-      <InspectorLayout
+      <InspectorLayout pin={{ cluster: cluster, uid: uid || undefined }}
         kind="Node"
         name={name}
         meta={[row.roles.join(", "), row.version, `${ageText(row, nowS)} old`, row.pool ? `pool ${row.pool}` : "", row.zone ? `zone ${row.zone}` : ""].filter(Boolean).join(" · ")}

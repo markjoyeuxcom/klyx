@@ -17,6 +17,7 @@ import { MOD } from "./modKey";
 import { drag, noDrag } from "./drag";
 import { LENS_INDEX_ID } from "./LensIndex";
 import { toggleLensIndex, useLensIndexOpen } from "../nav/lensIndexOpen";
+import { INSPECTOR_IDENTITY_ID, useInspectorPin } from "../nav/inspectorPin";
 
 
 // LocationBar (The Line slice 4 §2): history, the mark, the crumbs
@@ -30,6 +31,12 @@ export function LocationBar() {
   const current = useFleet((s) => (s.route.name === "cluster" ? s.clusters.find((c) => c.name === (s.route as { cluster: string }).cluster) : undefined));
   const where = entryLabel({ route, kindFilter });
   const onBoard = route.name === "fleet" && !route.view;
+  // The object crumb (slice 4 §6.4): the open inspector's object, only while
+  // it is pinned to the cluster shown. The lens crumb then names the lens
+  // alone (an instance route's place carries its object too).
+  const held = useInspectorPin((s) => s.held);
+  const object = route.name === "cluster" && held?.pin.cluster === route.cluster ? held.pin : null;
+  const lens = object ? where.place.split(" › ")[0] : where.place;
   return (
     // data-list-keys="ignore": a focused bar control keeps its keys (useListKeys).
     <header className="mast locbar" style={drag} data-list-keys="ignore">
@@ -47,7 +54,16 @@ export function LocationBar() {
               {current ? <StationSwitcher current={current} /> : <span className="locbar-crumb">{clusterDisplayName(route.cluster)}</span>}
               {current?.protected && <ProtectedTag c={current} />}
               <Sep />
-              <span className="locbar-crumb locbar-lens" aria-current="page" title={where.place}>{where.place}</span>
+              <span className="locbar-crumb locbar-lens" aria-current="page" title={lens}>{lens}</span>
+              {object && (
+                <>
+                  <Sep />
+                  <button type="button" className="locbar-crumb locbar-object" title={`${object.kind} ${object.namespace ? `${object.namespace}/` : ""}${object.name} - go to its details`}
+                    aria-label={`${object.kind} ${object.name}: go to its details`} onClick={() => document.getElementById(INSPECTOR_IDENTITY_ID)?.focus()}>
+                    <span className="locbar-object-kind">{object.kind}</span> {object.name}
+                  </button>
+                </>
+              )}
             </>
           ) : !onBoard && (
             <>

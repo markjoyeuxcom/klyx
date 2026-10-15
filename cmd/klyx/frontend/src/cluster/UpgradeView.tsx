@@ -10,6 +10,7 @@ import { useListKeys } from "../chrome/useListKeys";
 import { LensLayout, LensTable, TABLE_ROW_HEIGHT, type DatasetState } from "../layout/LensLayout";
 import { InspectorBlock, InspectorLayout } from "../layout/InspectorLayout";
 import { fitColumns, type ColumnDef } from "../layout/columns";
+import { useClusterKey } from "./useClusterKey";
 
 // UpgradeView - "can I upgrade this cluster today?" on the workspace template
 // (spec §6 step 5): control-plane version + upstream EOL runway, deprecated
@@ -57,7 +58,7 @@ export function UpgradeView({ cluster }: { cluster: string }) {
   const [target, setTarget] = useState<number | null>(null);
   const [view, setView] = useState<View>("apis");
   const [cursorKey, setCursorKey] = useState<string | null>(null);
-  const [selKey, setSelKey] = useState<string | null>(null);
+  const [selKey, setSelKey] = useClusterKey(cluster);
   const [bodyWidth, setBodyWidth] = useState(1100);
   const gen = useRef(0);
 
@@ -216,7 +217,7 @@ export function UpgradeView({ cluster }: { cluster: string }) {
       }
       footer={<span className="t-legend">j k navigate · ↵ inspect</span>}
       footerEnd={<span className="t-secondary">{view === "apis" ? "removed at target first" : "against the current control plane, not the target · violations first"}</span>}
-      inspector={selectedApi ? <ApiInspector d={selectedApi} targetMinor={targetMinor} onClose={() => setSelKey(null)} />
+      inspector={selectedApi ? <ApiInspector cluster={cluster} d={selectedApi} targetMinor={targetMinor} onClose={() => setSelKey(null)} />
         : selectedSkew ? <SkewInspector cluster={cluster} s={selectedSkew} serverVersion={ok?.serverVersion ?? ""} onClose={() => setSelKey(null)} />
         : undefined}
       inspectorLabel={view === "apis" ? "Deprecated API details" : "Node skew details"}
@@ -225,11 +226,11 @@ export function UpgradeView({ cluster }: { cluster: string }) {
   );
 }
 
-function ApiInspector({ d, targetMinor, onClose }: { d: DeprecatedUseDTO; targetMinor: number; onClose: () => void }) {
+function ApiInspector({ cluster, d, targetMinor, onClose }: { cluster: string; d: DeprecatedUseDTO; targetMinor: number; onClose: () => void }) {
   const gone = d.removedInMinor > 0 && targetMinor >= d.removedInMinor;
   return (
     <div data-testid="upgrade-api-panel" style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
-      <InspectorLayout kind="Deprecated API" name={`${d.kind} ${d.group}/${d.version}`} meta={`resource ${d.resource}`} onClose={onClose}
+      <InspectorLayout pin={{ cluster: cluster }} kind="Deprecated API" name={`${d.kind} ${d.group}/${d.version}`} meta={`resource ${d.resource}`} onClose={onClose}
         verdict={
           <div className="t-body" style={{ display: "grid", gap: 4 }}>
             <span className="t-status" style={{ color: gone ? "var(--color-text-danger)" : "var(--color-text-warning)" }}>
@@ -255,7 +256,7 @@ function SkewInspector({ cluster, s, serverVersion, onClose }: { cluster: string
   const openNode = () => { const nav = useFleet.getState(); nav.setSection("nodes"); nav.requestNavIntent({ kind: "select-node", cluster, node: s.node }); };
   return (
     <div data-testid="upgrade-skew-panel" style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
-      <InspectorLayout kind="Node" name={s.node} meta={`kubelet ${s.version} · control plane ${serverVersion || "?"}`} onClose={onClose}
+      <InspectorLayout pin={{ cluster: cluster }} kind="Node" name={s.node} meta={`kubelet ${s.version} · control plane ${serverVersion || "?"}`} onClose={onClose}
         verdict={<div className="t-body" style={{ color: danger ? "var(--color-text-danger)" : "var(--color-text-warning)", overflowWrap: "anywhere" }}><span className="t-status">{danger ? "▲ Skew violation" : "Skew warning"}</span> - {s.detail}</div>}
         primary={{ label: "Open node", onSelect: openNode }}>
         <InspectorBlock title="Versions">

@@ -713,7 +713,7 @@ function PodInspector({ cluster, row, uid, nowS, gone, rsEv, detail, loading, is
 
   return (
     <div data-testid="pod-detail-panel" style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
-      <InspectorLayout
+      <InspectorLayout pin={{ cluster: cluster, uid: uid || undefined }}
         kind="Pod"
         namespace={namespace}
         name={name}

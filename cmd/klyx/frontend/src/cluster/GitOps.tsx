@@ -29,6 +29,7 @@ import { InspectorBlock, InspectorLayout, type MenuItem } from "../layout/Inspec
 import { fitColumns, type ColumnDef } from "../layout/columns";
 import { useInspectorAI } from "../ai/AIExplain";
 import { ClampedText } from "../chrome/ClampedText";
+import { useClusterKey } from "./useClusterKey";
 
 const keyOf = (r: { kind: string; namespace: string; name: string }) => `${r.kind}/${r.namespace}/${r.name}`;
 
@@ -173,7 +174,7 @@ export function GitOps({ cluster }: { cluster: string }) {
   const [cursorKey, setCursorKey] = useState<string | null>(null);
   const [bodyWidth, setBodyWidth] = useState(1100);
   const [pinned, setPinnedState] = useState<PinnedVerb | null>(null);
-  const [sourceKey, setSourceKey] = useState<string | null>(null);
+  const [sourceKey, setSourceKey] = useClusterKey(cluster);
   const sourceListRef = useRef<VirtualListHandle>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<VirtualListHandle>(null);
@@ -282,7 +283,7 @@ export function GitOps({ cluster }: { cluster: string }) {
     const q = query.trim().toLowerCase();
     return !q || [s.kind, s.namespace, s.name, s.message, s.revision].some((v) => v.toLowerCase().includes(q));
   }), [orderedSources, sourceKind, status, query]);
-  const openSource = useCallback((s: FluxSourceDTO) => { setCursorKey(keyOf(s)); setSourceKey(keyOf(s)); }, []);
+  const openSource = useCallback((s: FluxSourceDTO) => { setCursorKey(keyOf(s)); setSourceKey(keyOf(s)); }, [setSourceKey]);
   const selectedSource = sourceKey ? allSources.find((x) => keyOf(x) === sourceKey) : undefined;
   const lastSource = useRef<{ cluster: string; s: FluxSourceDTO } | null>(null);
   if (selectedSource) lastSource.current = { cluster, s: selectedSource };
@@ -294,8 +295,8 @@ export function GitOps({ cluster }: { cluster: string }) {
   const sourceSubject = selectedSource ?? priorSource;
   useEffect(() => {
     if (selectedSource && !visibleSources.includes(selectedSource)) setSourceKey(null);
-  }, [selectedSource, visibleSources]);
-  useEffect(() => { setSourceKey(null); }, [cluster]);
+  }, [selectedSource, visibleSources, setSourceKey]);
+  useEffect(() => { setSourceKey(null); }, [cluster, setSourceKey]);
   const byKey = useMemo(() => {
     const m = new Map<string, FluxResourceDTO>();
     for (const r of rows) m.set(keyOf(r), r);
@@ -612,6 +613,7 @@ export function GitOps({ cluster }: { cluster: string }) {
         }
         inspector={view === "sources" ? (sourceKey && sourceSubject ? (
           <SourceInspector
+            cluster={cluster}
             key={`${cluster}/${sourceKey}`}
             source={sourceSubject}
             removed={sourceRemoved}
@@ -678,7 +680,8 @@ export function GitOps({ cluster }: { cluster: string }) {
 // SourceInspector - a source's full diagnosis (wrapped message, URL,
 // revision) and the resources bound to it, which is how a source failure
 // reaches the operator's attention. Manifest opens the guarded editor.
-function SourceInspector({ source, removed, unverified, usedBy, usageCov, onClose, onOpenResource }: {
+function SourceInspector({ cluster, source, removed, unverified, usedBy, usageCov, onClose, onOpenResource }: {
+  cluster: string;
   source: FluxSourceDTO;
   removed: boolean;
   unverified: boolean;
@@ -689,7 +692,7 @@ function SourceInspector({ source, removed, unverified, usedBy, usageCov, onClos
   onClose: () => void;
   onOpenResource: (r: FluxResourceDTO) => void;
 }) {
-  const ai = useInspectorAI(source.uid ? { kind: "row" as const, task: "flux", part: "sources", uid: source.uid } : null, `${source.kind}/${source.namespace}/${source.name}`, !removed && !unverified);
+  const ai = useInspectorAI(source.uid ? { kind: "row" as const, task: "flux", part: "sources", uid: source.uid } : null, `${source.kind}/${source.namespace}/${source.name}`, !removed && !unverified, cluster);
   const s = source;
   const h = roleOf(s);
   const usage = usageQualifier(usageCov);
@@ -697,7 +700,7 @@ function SourceInspector({ source, removed, unverified, usedBy, usageCov, onClos
   const view = ref ? () => { const nav = useFleet.getState(); nav.openResource(ref); nav.openInstance(s.namespace, s.name); } : null;
   return (
     <div data-testid="flux-source-panel" style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
-      <InspectorLayout
+      <InspectorLayout pin={{ cluster: cluster, uid: s.uid || undefined }}
         kind={s.kind}
         namespace={s.namespace}
         name={s.name}
@@ -843,7 +846,7 @@ function FluxInspector({ cluster, resource, nowS, removed, unverified, isProtect
 
   return (
     <div data-testid="flux-detail-panel" style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
-      <InspectorLayout
+      <InspectorLayout pin={{ cluster: cluster, uid: r.uid || undefined }}
         kind={r.kind}
         namespace={r.namespace}
         name={r.name}
