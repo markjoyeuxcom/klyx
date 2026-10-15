@@ -229,7 +229,12 @@ The "protected" tag is drawn once, on the station crumb (4a); the strip's phrase
 
 - **Start:** `AppShell` starts the line bridge beside the summaries, so the strip is ready before any cluster opens.
 - **Placement:** the strip sits after the crumbs. A segment is 22px of track, lit in the route colour only between two "matches".
-- **Narrow windows:** the crumbs win. Below 1280px only the boxed station is drawn; below 1180px no drawing is shown. The spoken phrase always names the whole track.
+- **Narrow windows** (revised after the design review: the current station's state always stays visible):
+  - below 1280px only this station's box is drawn ("PRD · differs at 9f2c11d", "PRD · checking"); the rest of the track is in the spoken phrase only;
+  - below 1180px the box stays, its words ellipsize, Ask keeps only its icon, and the protected tag shows "protected" with "(inferred)" kept in its title and for assistive tech;
+  - the bar gives way in this order: the ⌘K well's words, the lens crumb (also named by the lens index and the page header), the station crumb to its floor, then the crumbs clip. The station switcher's menu hangs from a portal, so the clip never cuts it;
+  - checked headless at 1024, 1100, 1240 and 1440px on a protected, inferred station: no overlap between the crumbs, the strip and the fleet indicator.
+- **The box's words:** the state, with the revision when it differs ("differs at 9f2c11d"), as the spoken phrase says it.
 - **Labels:** a station is named by its environment, or by its cluster when two stations on the track share one. A git SHA is shortened to seven characters; a chart version is not.
 
 ## 6. The inspector (4d)
@@ -273,7 +278,7 @@ No lens changes its content in slice 4. The lens sweep is slice 11.
 - `InspectorLayout` gains one `gone` presentation, `"removed" | "unverified" | "replaced"`. The lenses' existing removed/unverified rule (by read completeness) stays the source; "Deleted" from the earlier draft is dropped, since it ignored whether the read was complete.
 - **Replaced** is new, and only where a UID exists: the lens finds the object at the pinned namespace/name with a different UID. The inspector says "Replaced: this object was deleted and created again", offers "Open the new object", and disables every action. Explain and follow-ups stay on the pinned UID.
 
-**Open point for review (6.3a):** "Replaced" changes behaviour in Pods, Nodes and Workloads, which follow a same-name replacement today. The parent pins the inspector to its UID (parent §4), which this follows. The alternative keeps following by name, and marks the inspector "Replaced at <time>" while it reads the new object afresh.
+**Ruled (6.3a, design review 37f00bc3): "Replaced" is accepted.** Pods, Nodes and Workloads stop following a same-name replacement: the inspector keeps showing the pinned object, disables its actions and offers "Open the new object". Replacement is detected only on a complete read of the kind, and only for objects with a UID; a UID-less inspector never claims replacement.
 
 ### 6.3b As built (4d, part 1)
 
@@ -301,7 +306,10 @@ A small `inspectorPin` store, set while an inspector is mounted, gives the locat
 - vite build;
 - headless Chromium captures of the cluster screen in `night` and `day` at 1440×900 and 1024×768, for the review.
 
-## 8. Open points for review
+## 8. Open points (ruled in design review 37f00bc3)
+
+Points 1-6 are accepted as written. Point 7 was changed: the current station's box always stays visible (§5.4).
+
 
 1. **The station switcher (§2.1).** It is additive to the parent. Without it, a healthy cluster is reached only through the fleet board or ⌘K.
 2. **Order stays env rank in TS (§2.2),** rather than the DTO's placement, so mod+1..9 keep their targets before the line loads.
