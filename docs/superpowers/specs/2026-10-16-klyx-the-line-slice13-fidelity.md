@@ -70,11 +70,14 @@ Nothing changes a count, a verdict, a gate or a data path. Each item is a presen
    - The table header is 36px.
    - The mast is 52px.
    - In the inspector: identity padding 20/24, verdict padding 4/24/20, body padding 0/24/32, and a 22px gap between sections.
-3. **Controls** (§2.3, 36px):
+3. **Controls** (§2.3: 36px visual, a hit area of at least 40px):
    - `l-btn` is 36px, 14px text, radius 6, with a 1px solid `--line-control` ring: a control boundary is solid (§2.1).
    - `l-btn-primary` is a route fill with route-ink text at 600.
-   - `l-input` and the selects are 36px sunk wells with a hair ring and 13px text.
-   - **Filter chips become a segmented control:** a sunk group, padded 3px, with 30px buttons, and the pressed one raised in ink-1 at 500.
+   - `l-input` and the selects are 36px sunk wells with a 1px solid `--line-control` ring and 13px text: a meaningful boundary is never a hairline (review 1).
+     - Their box is 40px, with transparent 2px top and bottom borders and the background clipped to the padding box. The ring and fill read 36px; the hit area is 40px.
+   - **Filter chips become a segmented control** (`l-seg`, a labelled `role="group"`): a sunk group with a hair ring, padded 3px, with 30px buttons.
+     - The pressed button is raised, in ink-1 at 500, *with* a 1px solid `--line-control` ring. A lightness step alone never carries the selection (review 1).
+   - Buttons and segment buttons extend their hit area to 40px with a transparent `::after`.
    - This replaces slice 11d's route-wash-and-edge pressed style, because the mockup uses the segmented control. `aria-pressed` and the keyboard are unchanged.
 4. **Location bar:**
    - **The mark:** the mockup's rails-and-sleeper mark plus the condensed "KLYX" wordmark.
@@ -86,7 +89,13 @@ Nothing changes a count, a verdict, a gate or a data path. Each item is a presen
      The rank and the lens never truncate. This reverses slice 4's "lens gives way first".
    - **Regions read as places:** `placeName()` turns Azure ids into "West Europe" and "UK South". AWS and GCP codes, and anything unknown, are shown as given. One helper serves the crumb, the station line, the board's track labels and the console.
 5. **Lens index:**
-   - A tool lens's lit sub-task sits indented under its lens in Needs you ("Sources 1" under "Flux CD 3"), never as a "Lens · Sub" top-level row. Its ordering, tone and count are unchanged.
+   - A tool lens's lit sub-task sits indented under its lens in Needs you ("Sources 1" under "Flux CD 3"), never as a "Lens · Sub" top-level row.
+   - **Grouping rules** (review 1). This is the one exception to the flat ordering:
+     - A group is placed by its highest-priority lit member, under the existing comparator: danger before warning, then count, then registry order.
+     - Inside a group, the lens comes first, and its lit subs follow in the same order.
+     - Every member keeps its own count, tone and Aspect. Nothing is summed.
+     - **When only a sub-task is lit,** the lens row is context: its label alone, with no Aspect, no count and never an invented attention count. The lit sub carries the mark and the count.
+     - **A sub at danger under a lens at attention** ranks the group as danger, and each row keeps its own tone.
    - Part notes ("routes: 3 with a failing attachment") leave the row and stay in its title. The lens states them.
    - Coverage words ("unverified", "unreadable", "controller not ready", "last good", "checking…") stay on the row, at 11px ink-3: they qualify the count, so they must stay visible.
    - Rows are 34px with 14px labels, as in the mockup.
@@ -96,11 +105,14 @@ Nothing changes a count, a verdict, a gate or a data path. Each item is a presen
 1. **The title is the lens's index label:** "Flux CD", "cert-manager", "Gateways and routes".
    - A tool lens with several tasks shows a part switch in its header, a segmented control with each part's nav count: "Reconciliations | Sources 1".
    - The part switch replaces view-specific titles like "Flux reconciliation" and "Flux sources", and the cert-manager lens's existing Certificates and Issuers tabs.
+   - Its counts are navCounts' attention counts, with their markers and qualifiers.
+   - Both parts now share one h1, so the title alone can no longer show which part is on screen. The headless walk and the native smoke therefore prove the active part: the pressed part and its own content. A negative case covers a switch that leaves the wrong part showing (review 1).
 2. **Count sentence:**
    - Barlow 13 ink-3 with tabular numbers.
    - The attention phrase keeps its Aspect and colour.
    - Lens text and numbers are unchanged.
 3. **The table panel** (`LensTable` and `LensLayout`):
+   - The panel is raised, as the mockup draws it. Parent §2.1's token table names sunk for "list wells"; sunk stays for inputs, the board, canvases and inset evidence panels.
    - A raised panel with a hair ring and radius 10.
    - It is sized to its rows, and scrolls inside when the rows are taller than the space.
    - The header row is 12px ink-3 with a hair rule, and rows have hair separators.
@@ -111,7 +123,9 @@ Nothing changes a count, a verdict, a gate or a data path. Each item is a presen
    - **Name:** stays "namespace / name". The namespace is mono 12 ink-3 and the name mono 13/500 ink-1.
      - This is a deliberate deviation from the mockup's separate Name and Namespace columns: the responsive column folding (`columns.ts`) depends on the one cell.
    - **Status:** Barlow 13/400.
-     - A fault or look-at row shows its reason word in danger or caution ("HealthCheckFailed", not "Failed · HealthCheckFailed"), with the state word kept in the title and the aria label.
+     - The cell keeps the lens's evaluated label word for word, with its qualifiers ("last observed", "unverified", generations). Only the typography changes.
+     - There is no reason-only rule: it could hide a Certificate's "Expired" while its Ready is still True, or a Gateway's "last observed" (review 1).
+     - A fault or look-at label is in danger or caution.
      - A healthy row keeps its word ("Ready", "Running") in ink-3, as §2.1 requires.
      - Syncing is ink-3 text, "Syncing… generation 12, observed 11", with no chip.
    - **Ages:** compact everywhere in tables: "40s", "18m", "3h", then days from 48h ("5d"), with no "ago".
@@ -127,7 +141,7 @@ Nothing changes a count, a verdict, a gate or a data path. Each item is a presen
    - meta in mono 12 ink-3.
 2. **Verdict:**
    - The Aspect at 12px, then a 19-20px/600 ink-1 headline, balanced.
-   - The headline is the state and reason the lens already has ("Failed · HealthCheckFailed", "CrashLoopBackOff", "No ready endpoints").
+   - The headline is the evaluated label the lens already shows, with every qualifier it carries: "Failed · HealthCheckFailed", "CrashLoopBackOff", "No ready endpoints", a Gateway's "last observed". No raw condition replaces it (review 1).
    - The controller's message follows in ink-2 14px, clamped to three lines with "Show full message".
    - The chip with a danger outline is retired from the verdict.
    - No new sentence is synthesised: the mockup's "Held: waiting on infra-controllers" needs reasoning we do not claim (§5.1).
@@ -179,11 +193,24 @@ Nothing changes a count, a verdict, a gate or a data path. Each item is a presen
 
 ## 4. Testing
 
+**Review 1** (Codex, on 761858c):
+- **Changes requested, folded in above:**
+  - the control boundaries and hit areas (13a.3);
+  - the grouping rules (13a.5);
+  - the evaluated label kept in status cells and verdicts (13b.4, 13c.2).
+- **Accepted:** 13a.3, 13a.4, 13a.5, 13b.1 and 13c.3, as amended.
+- **Conditions on 13a.4:**
+  - the protected cue and the fleet indicator stay at narrow widths;
+  - a truncated crumb keeps its full value accessible;
+  - long crumbs are tested at 1024px.
+
+
 1. **Unit tests:**
    - `placeName`;
    - the compact age;
    - the lens index's indented subs and the notes moved to the title;
-   - the status cell's reason word, with the state word kept in its label;
+   - the grouping cases in Needs you: a sub-task lit alone, and a sub at danger under a lens at attention;
+   - the active part in the walk and the smoke, including a failed switch;
    - the inspector drawing order for the four drawings;
    - the part switch's counts, which match navCounts.
 2. **Existing suites updated** where they assert old words.
