@@ -149,6 +149,7 @@ const (
 	ExcludedSourceKind  = "unsupported source kind"
 	ExcludedValuesOnly  = "values-only source"
 	ExcludedNoChartName = "chart name unknown"
+	ExcludedNoIdentity  = "source identity unknown" // no repository URL to compare on (a HelmChart chartRef)
 )
 
 // Units extracts a station's comparison units and exclusions (§3.2).
@@ -214,6 +215,13 @@ func fluxRef(kind, name string) (string, string) {
 	return kind, name
 }
 
+// OverrideKey is the Git key a fleet.yaml line.source names, normalised as
+// a Flux ref is.
+func OverrideKey(url, refKind, refName string) Key {
+	kind, name := fluxRef(refKind, refName)
+	return Key{Kind: KeyGit, Repo: NormalizeRepo(url), RefKind: kind, RefName: name}
+}
+
 // argoRef maps an Argo targetRevision: unqualified unless it is fully
 // qualified or a sha - Argo can resolve a bare "main" to a tag, so it never
 // shares a key with a Flux branch (§3.2).
@@ -264,8 +272,13 @@ func kustomizationUnit(o Object[flux.Resource], lookup func(kind, ns, name strin
 		return nil, x
 	}
 	kind, name := fluxRef(s.Data.RefKind, s.Data.RefName)
+	repoID := NormalizeRepo(s.Data.URL)
+	if repoID == "" {
+		x.Reason = ExcludedNoIdentity
+		return nil, x
+	}
 	u := &Unit{Origin: "Kustomization", Namespace: r.Namespace, Name: r.Name, UID: o.UID, SourceName: s.Data.Name,
-		Key: Key{Kind: KeyGit, Repo: NormalizeRepo(s.Data.URL), RefKind: kind, RefName: name}, Suspended: r.Suspended}
+		Key: Key{Kind: KeyGit, Repo: repoID, RefKind: kind, RefName: name}, Suspended: r.Suspended}
 	if r.Revision != "" {
 		rev, ok := ParseGitRevision(r.Revision)
 		if !ok {
@@ -312,6 +325,14 @@ func helmReleaseUnit(o Object[flux.Resource], lookup func(kind, ns, name string)
 		x.Reason = ExcludedNoSource
 		return nil, x
 	}
+	// A chart key needs the repository it comes from. A HelmChart chartRef
+	// names its upstream only in its own sourceRef, which the shared rows do
+	// not carry: never compare it under an empty identity.
+	repoID := NormalizeRepo(s.Data.URL)
+	if repoID == "" {
+		x.Reason = ExcludedNoIdentity
+		return nil, x
+	}
 	chart := r.Chart
 	for _, h := range r.History {
 		if chart == "" {
@@ -323,24 +344,44 @@ func helmReleaseUnit(o Object[flux.Resource], lookup func(kind, ns, name string)
 		return nil, x
 	}
 	u := &Unit{Origin: "HelmRelease", Namespace: r.Namespace, Name: r.Name, UID: o.UID, SourceName: s.Data.Name,
-		Key: Key{Kind: KeyChart, Repo: NormalizeRepo(s.Data.URL), RefName: chart}, Suspended: r.Suspended,
-		ArtifactTime: s.Data.ArtifactUpdated}
-	// Applied: the newest history entry whose status is deployed; attempted:
-	// the latest entry when it is not deployed (§3.2).
+		Key: Key{Kind: KeyChart, Repo: repoID, RefName: chart}, Suspended: r.Suspended, ArtifactTime: s.Data.ArtifactUpdated}
+	// Applied: the newest deployed history entry - of this chart. A deployed
+	// record of another chart (the spec changed charts since) is not
+	// deployment evidence for this key: applied unknown, source changed.
 	for _, h := range r.History {
-		if h.Status == "deployed" {
-			u.Applied = &Revision{Version: h.ChartVersion, Digest: h.ConfigDigest, Raw: h.ChartVersion}
+		if h.Status != "deployed" {
+			continue
+		}
+		if h.ChartName != "" && h.ChartName != chart {
+			u.SourceChanged = true
 			break
 		}
+		u.Applied = &Revision{Version: h.ChartVersion, Digest: h.ConfigDigest, Raw: h.ChartVersion}
+		break
 	}
-	if len(r.History) > 0 && r.History[0].Status != "deployed" {
+	// Attempted: the latest entry when it is not deployed, of this chart.
+	if len(r.History) > 0 && r.History[0].Status != "deployed" && (r.History[0].ChartName == "" || r.History[0].ChartName == chart) {
 		h := r.History[0]
 		u.Attempted = &Revision{Version: h.ChartVersion, Digest: h.ConfigDigest, Raw: h.ChartVersion}
 		u.AttemptPhase = h.Status
 	}
-	u.Failing = !r.Suspended && r.Ready == flux.Failed
+	// Failing: the release or its bound source (parent §3.3), as for a
+	// Kustomization.
+	unitFailing := r.Ready == flux.Failed
+	sourceFailing := s.Data.Ready == flux.Failed && !s.Data.Suspended
+	u.Failing = !r.Suspended && (unitFailing || sourceFailing)
 	if u.Failing {
-		u.FailSince, u.FailBasis = o.FailSince, o.FailBasis
+		var a, b *time.Time
+		if unitFailing {
+			a, u.FailBasis = o.FailSince, o.FailBasis
+		}
+		if sourceFailing {
+			b = s.FailSince
+			if a == nil || (b != nil && b.Before(*a)) {
+				u.FailBasis = s.FailBasis
+			}
+		}
+		u.FailSince = earliest(a, b)
 	}
 	u.Syncing = !u.Failing && (r.Stale || u.Attempted != nil)
 	return u, nil
@@ -352,17 +393,55 @@ func sourceID(s argo.Source) string {
 	return NormalizeRepo(s.RepoURL) + "|" + s.Path + "|" + s.Chart
 }
 
-// pair finds a source's revision in a status block that records its own
-// sources (§3.2: never paired with the current spec order). changed reports
-// an index or targetRevision that differs from what was recorded.
-func pair(rs argo.Revisions, s argo.Source, i int) (rev string, found, changed bool) {
-	for j, rec := range rs.Sources {
-		if sourceID(rec) != sourceID(s) || j >= len(rs.Revisions) {
-			continue
-		}
-		return rs.Revisions[j], true, j != i || rec.TargetRevision != s.TargetRevision
+// pairing is one source's revision in a status block.
+type pairing struct {
+	rev            string
+	found, changed bool
+}
+
+// pairAll pairs every source with the revisions a status block records for
+// its own sources (§3.2: never with the current spec order), one to one.
+// An exact match (same repository, path, chart, ref and targetRevision) is
+// preferred; otherwise a unique identity match, flagged as changed. An
+// ambiguous match is refused - applied unknown, never a guess. changed also
+// flags a reorder.
+func pairAll(rs argo.Revisions, srcs []argo.Source) []pairing {
+	out := make([]pairing, len(srcs))
+	used := make([]bool, len(rs.Sources))
+	exact := func(a, b argo.Source) bool {
+		return sourceID(a) == sourceID(b) && a.TargetRevision == b.TargetRevision && a.Ref == b.Ref
 	}
-	return "", false, true
+	assign := func(i, j int) {
+		used[j] = true
+		out[i] = pairing{rev: rs.Revisions[j], found: true, changed: j != i || !exact(rs.Sources[j], srcs[i])}
+	}
+	for pass := 0; pass < 2; pass++ {
+		for i, s := range srcs {
+			if out[i].found {
+				continue
+			}
+			match := -1
+			n := 0
+			for j, rec := range rs.Sources {
+				if used[j] || j >= len(rs.Revisions) {
+					continue
+				}
+				if (pass == 0 && exact(rec, s)) || (pass == 1 && sourceID(rec) == sourceID(s)) {
+					match = j
+					n++
+				}
+			}
+			if n == 1 {
+				assign(i, match)
+			}
+		}
+	}
+	for i := range out {
+		if !out[i].found {
+			out[i].changed = true
+		}
+	}
+	return out
 }
 
 func argoRevision(chart bool, raw string) (*Revision, bool) {
@@ -385,11 +464,26 @@ func appUnits(o Object[argo.App]) ([]Unit, []Exclusion) {
 	a := o.Data
 	var units []Unit
 	var excl []Exclusion
-	failing := argoFailedPhases[a.Operation.Phase]
+	// Suspended is an intended pause: never a failure (parent §3.3; the
+	// native Argo rule's paused state).
+	suspended := a.HealthStatus == "Suspended"
+	opFailed := argoFailedPhases[a.Operation.Phase]
+	failing := opFailed
 	for _, c := range a.Conditions {
 		if strings.HasSuffix(c.Type, "Error") {
 			failing = true
 		}
+	}
+	failing = failing && !suspended
+	var applied, compared, attempted []pairing
+	if len(a.History) > 0 {
+		applied = pairAll(a.History[0].Revisions, a.Sources)
+	}
+	compared = pairAll(a.Compared, a.Sources)
+	// Attempted evidence is the operation's own: a running or failed
+	// operation, never a succeeded one because another condition fails.
+	if a.Operation.Phase == "Running" || opFailed {
+		attempted = pairAll(a.Operation.Sync, a.Sources)
 	}
 	for i, s := range a.Sources {
 		x := Exclusion{Origin: "Application", Namespace: a.Namespace, Name: fmt.Sprintf("%s source %d", a.Name, i+1)}
@@ -399,20 +493,26 @@ func appUnits(o Object[argo.App]) ([]Unit, []Exclusion) {
 			continue
 		}
 		chart := s.Chart != ""
-		u := Unit{Origin: "Application", Namespace: a.Namespace, Name: a.Name, SourceIndex: i, UID: o.UID, Failing: failing}
+		repoID := NormalizeRepo(s.RepoURL)
+		if repoID == "" {
+			x.Reason = ExcludedNoIdentity
+			excl = append(excl, x)
+			continue
+		}
+		u := Unit{Origin: "Application", Namespace: a.Namespace, Name: a.Name, SourceIndex: i, UID: o.UID, Failing: failing, Suspended: suspended}
 		if chart {
-			u.Key = Key{Kind: KeyChart, Repo: NormalizeRepo(s.RepoURL), RefName: s.Chart}
+			u.Key = Key{Kind: KeyChart, Repo: repoID, RefName: s.Chart}
 		} else {
 			kind, name := argoRef(s.TargetRevision)
-			u.Key = Key{Kind: KeyGit, Repo: NormalizeRepo(s.RepoURL), RefKind: kind, RefName: name}
+			u.Key = Key{Kind: KeyGit, Repo: repoID, RefKind: kind, RefName: name}
 		}
 		// Applied: the latest history entry, paired with the source(s)
 		// recorded in that entry. No history is applied unknown.
-		if len(a.History) > 0 {
-			raw, found, changed := pair(a.History[0].Revisions, s, i)
-			u.SourceChanged = changed
-			if found {
-				rev, ok := argoRevision(chart, raw)
+		if applied != nil {
+			p := applied[i]
+			u.SourceChanged = p.changed
+			if p.found {
+				rev, ok := argoRevision(chart, p.rev)
 				if !ok {
 					x.Reason = ExcludedUnparsable
 					excl = append(excl, x)
@@ -421,19 +521,19 @@ func appUnits(o Object[argo.App]) ([]Unit, []Exclusion) {
 				u.Applied = rev
 			}
 		}
-		if raw, found, _ := pair(a.Compared, s, i); found {
-			u.Compared, _ = argoRevision(chart, raw)
+		if p := compared[i]; p.found {
+			u.Compared, _ = argoRevision(chart, p.rev)
 		}
-		if a.Operation.Phase == "Running" || failing {
-			if raw, found, _ := pair(a.Operation.Sync, s, i); found {
-				u.Attempted, _ = argoRevision(chart, raw)
+		if attempted != nil {
+			if p := attempted[i]; p.found {
+				u.Attempted, _ = argoRevision(chart, p.rev)
 				u.AttemptPhase = a.Operation.Phase
 			}
 		}
 		if u.Failing {
 			u.FailSince, u.FailBasis = o.FailSince, o.FailBasis
 		}
-		u.Syncing = !u.Failing && (a.Operation.Phase == "Running" || (u.Attempted != nil && !sameRev(u.Attempted, u.Applied)))
+		u.Syncing = !u.Failing && !suspended && (a.Operation.Phase == "Running" || (u.Attempted != nil && !sameRev(u.Attempted, u.Applied)))
 		units = append(units, u)
 	}
 	return units, excl

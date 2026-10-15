@@ -123,7 +123,7 @@ func Build(in Input) Line {
 	for _, p := range l.Placement.Siding {
 		l.Siding = append(l.Siding, build(p))
 	}
-	l.R, l.RStations, l.RTieBroken = chooseR(append(append([]StationLine(nil), l.Stations...), l.Siding...))
+	l.R, l.RStations, l.RTieBroken = chooseR(append(append([]StationLine(nil), l.Stations...), l.Siding...), l.Key)
 	for _, sls := range [][]StationLine{l.Stations, l.Siding} {
 		for i := range sls {
 			finish(&sls[i], &l)
@@ -253,16 +253,18 @@ func facts(sl *StationLine, key *Key) {
 // chooseR: the single revision of the most stations with one; mixed,
 // unknown, checking and not-compared stations never vote. Ties go to the
 // newest source artifact time, disclosed (§3.3).
-func chooseR(sls []StationLine) (string, int, bool) {
+func chooseR(sls []StationLine, key *Key) (string, int, bool) {
 	votes := map[string]int{}
 	newest := map[string]time.Time{}
 	for _, sl := range sls {
-		if sl.Single == "" || sl.Read != ReadOK {
+		if sl.Single == "" || sl.Read != ReadOK || key == nil {
 			continue
 		}
 		votes[sl.Single]++
 		for _, u := range sl.Units {
-			if u.Applied != nil && u.Applied.id() == sl.Single && u.ArtifactTime.After(newest[sl.Single]) {
+			// Only the key's eligible units break a tie: an unrelated unit
+			// with the same revision string says nothing about this key.
+			if u.Key == *key && u.Applied != nil && u.Applied.id() == sl.Single && u.ArtifactTime.After(newest[sl.Single]) {
 				newest[sl.Single] = u.ArtifactTime
 			}
 		}
