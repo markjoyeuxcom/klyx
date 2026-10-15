@@ -16,8 +16,9 @@ vi.mock("@wailsio/runtime", () => ({
 }));
 
 import { startSmokeWhenAsked, _resetSmokeBootForTest } from "./boot";
-import { FACES, Unmeasurable, checkFonts, checkTokens, destinations, runSmoke, sized, verdict, within } from "./run";
+import { FACES, TITLES, Unmeasurable, checkFonts, checkTokens, destinations, page, runSmoke, sized, verdict, walk, within } from "./run";
 import { NAV_GROUPS } from "../nav/registry";
+import { useFleet } from "../store/fleet";
 
 beforeEach(() => {
   _resetSmokeBootForTest();
@@ -88,8 +89,9 @@ describe("the runner's checks", () => {
     expect(verdict([])).toBe("fail");
   });
 
-  it("the step list is every registry destination, so a new one is never skipped", () => {
+  it("the step list is every registry destination, so a new one is never skipped, and every task has its expected title", () => {
     expect(destinations().length).toBe(NAV_GROUPS.reduce((n, g) => n + g.destinations.length, 0));
+    for (const { d } of destinations()) if (d.type === "task") expect(TITLES[d.id], d.id).toBeTruthy();
   });
 });
 
@@ -110,4 +112,55 @@ describe("a run with nothing laid out", () => {
     expect(r.result).not.toBe("pass");
     expect(r.steps.some((s: { ok: boolean }) => !s.ok)).toBe(true);
   }, 20_000);
+});
+
+// The slice 12 review: a page that keeps a wrong header, or never leaves
+// loading, never passes as its destination.
+const advance = async <T,>(p: Promise<T>) => {
+  let done = false;
+  const out = p.finally(() => { done = true; });
+  out.catch(() => {}); // the caller's expect handles it; never unhandled meanwhile
+  while (!done) await vi.advanceTimersByTimeAsync(5_000);
+  return out;
+};
+const pods = () => destinations().find((x) => x.d.id === "pods")!.d;
+
+describe("a destination's page", () => {
+  beforeEach(() => vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({ width: 800, height: 40, x: 0, y: 0, top: 0, left: 0, bottom: 40, right: 800, toJSON: () => ({}) } as DOMRect));
+
+  it("is its own title, settled, with a measurable body", async () => {
+    document.body.innerHTML = '<div class="lens-header"><h1>Pods</h1></div><div class="lens-body"><div class="lens-row">a</div></div>';
+    await expect(page(pods(), "lab")).resolves.toEqual({ title: "Pods", rows: 1 });
+  });
+
+  it("a wrong header, or a body that never leaves loading, fails", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      document.body.innerHTML = '<div class="lens-header"><h1>WRONG SCREEN</h1></div><div class="lens-body">Loading forever</div>';
+      await expect(advance(page(pods(), "lab"))).rejects.toThrow("waiting for Pods's page");
+      document.body.innerHTML = '<div class="lens-header"><h1>Pods</h1></div><div class="lens-body"><div class="lens-body-state" data-state="loading"></div></div>';
+      await expect(advance(page(pods(), "lab"))).rejects.toThrow("waiting for Pods to settle");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a walk over a wrong, permanently loading screen never passes (the review's probe)", async () => {
+    vi.stubGlobal("ResizeObserver", class {});
+    vi.stubGlobal("CSS", { supports: () => true });
+    const faces = FACES.map(([family, weight]) => ({ family, weight: String(weight), status: "loaded" }));
+    Object.defineProperty(document, "fonts", { configurable: true, value: { load: async () => faces, check: () => true, [Symbol.iterator]: () => faces[Symbol.iterator]() } });
+    for (const [k, v] of Object.entries({ "--line-ground": "#0E1316", "--line-route": "#79C2E4", "--line-danger": "#F0565B" })) document.documentElement.style.setProperty(k, v);
+    document.body.innerHTML = '<div class="locbar"></div><div class="line-verdict">fake</div><div class="lens-header">WRONG SCREEN</div><div class="lens-body">Loading forever</div><div class="lens-row">old row</div><div data-testid="lens-inspector">old inspector</div>';
+    useFleet.setState({ clusters: [{ name: "lab", state: "Synced" } as never], openFleet: () => {} } as never);
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const steps = await advance(walk({ theme: "night", width: 1440, height: 900, cluster: "lab" }));
+      expect(steps.find((x) => x.name.endsWith(" / Pods"))?.ok).toBe(false);
+      expect(verdict(steps)).not.toBe("pass");
+    } finally {
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+    }
+  }, 30_000);
 });

@@ -106,6 +106,9 @@ func (w *Watchdog) Report(report string) error {
 	if err := json.Unmarshal([]byte(report), &r); err != nil {
 		return w.write(map[string]any{"result": Incomplete, "why": "the report is not JSON: " + err.Error()})
 	}
+	if r == nil {
+		return w.write(map[string]any{"result": Incomplete, "why": "the report is not an object"})
+	}
 	switch r["result"] {
 	case Pass, Fail, Incomplete:
 	default:

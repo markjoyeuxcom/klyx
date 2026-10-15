@@ -89,7 +89,7 @@ func TestTheFirstResultIsTheOnlyOne(t *testing.T) {
 }
 
 func TestAReportWithoutAResultNeverPasses(t *testing.T) {
-	for _, report := range []string{`not json`, `{"steps":[]}`, `{"result":"green"}`} {
+	for _, report := range []string{`not json`, `null`, `[]`, `{"steps":[]}`, `{"result":"green"}`} {
 		w, _, _, out := rig(t)
 		w.Arm()
 		w.Started()

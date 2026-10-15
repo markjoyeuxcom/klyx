@@ -7,7 +7,7 @@ Automation already covers what can be asserted (slice 12 note §7 and §8):
 - the native WKWebView smoke: every destination, tokens, fonts loaded, the inspector layout;
 - the parity gate.
 
-What follows is for a person at the native app. Run it in **night** and again in **day** (Settings > Appearance), against the kind lab or a cluster you choose. Each item is an action, then what you should see.
+What follows is for a person at the native app. Run it in **night** and again in **day** (Settings > Appearance), against the **kind lab (`kind-klyx`) only**: every step that changes something names a disposable lab object and puts it back. Each item is an action, then what you should see.
 
 ## The fleet board
 - [ ] **Open Fleet.** One sentence leads the page and says what is compared, and the legend reads "Lit: matches the comparison revision. A comparison, not a delivery path."
@@ -30,11 +30,11 @@ What follows is for a person at the native app. Run it in **night** and again in
 - [ ] **No ▲ sits beside a mark,** in a row or a header. Danger dialogs still carry their triangle and hazard tape.
 - [ ] **Headers read as sentences,** for example "17 pods ■ 4 need attention" or "4 sources ■ 1 not ready". A header's mark agrees with the rows it counts.
 - [ ] **Events have no mark column:** warnings are amber text.
-- [ ] **A pending change** (edit a Deployment's replicas) shows the dashed mark and "Syncing…", never undimmed green, and returns to quiet once reconciled.
+- [ ] **A pending change** (`kubectl --context kind-klyx -n shop scale deployment/web --replicas=4`, then back to 3) shows the dashed mark and "Syncing…" while it is pending, never a confirmed healthy row, and returns to quiet once reconciled.
 
 ## Inspectors
 - [ ] **Open any object.** The inspector names the kind, the name and the meta. The verdict leads with its mark (no ▲), then the drawing (Flux Dependencies, the cert-manager or ESO chain, the Gateway data path), then the actions, then the evidence.
-- [ ] **Delete and recreate a Pod** whose inspector is open. The inspector says Replaced, and offers the new object rather than silently showing it.
+- [ ] **Open one of the `shop/web` pods, then delete it** (`kubectl --context kind-klyx -n shop delete pod <that pod>`; the `web` Deployment recreates it under a new UID). Its open inspector says Removed, and never silently shows the replacement.
 - [ ] **Narrow the window** below about 1100px. The inspector becomes a drawer over the list, and Escape closes it.
 
 ## The console (⌘K)
@@ -46,9 +46,9 @@ What follows is for a person at the native app. Run it in **night** and again in
 ## Health notifications
 These are not automated: they show real OS notifications.
 - [ ] **Settings > Notifications: turn them on.** macOS asks for permission once, and if you refuse, the panel says so.
-- [ ] **On a protected cluster, break an object** (scale a Deployment to an image that does not exist). Within about a minute, one notification arrives, titled with the cluster's place. Nothing arrives while Klyx shows that cluster.
+- [ ] **Set the scope to every cluster** (`kind-klyx` is not protected). Then, with Klyx showing another page or in the background, **break the lab's `shop/web`** by changing its image to one that does not exist: `kubectl --context kind-klyx -n shop set image deployment/web nginx=nginx:does-not-exist`. Within about a minute, one notification arrives, titled with the cluster's place. Nothing arrives while Klyx shows `kind-klyx`.
 - [ ] **Click the notification.** Klyx comes forward with the object open and pinned.
-- [ ] **With "Also notify recoveries" on, fix the object.** A recovery notification arrives; with the option off, none does.
+- [ ] **With "Also notify recoveries" on, restore it** (`kubectl --context kind-klyx -n shop rollout undo deployment/web`). A recovery notification arrives; with the option off, none does. Leave `shop/web` on `nginx:1.27`.
 - [ ] **Reconnect a cluster** (or restart Klyx). The faults already present are listed once in Activity, never notified.
 
 ## Themes and accessibility

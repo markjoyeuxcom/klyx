@@ -111,55 +111,201 @@ export function verdict(steps: Step[]): SmokeResult["result"] {
 }
 
 const header = () => document.querySelector(".lens-header");
-const crumb = () => document.querySelector(".locbar")?.textContent ?? "";
+const title = () => document.querySelector(".lens-header h1")?.textContent?.trim() ?? "";
+const loading = () => !!document.querySelector('.lens-body-state[data-state="loading"]');
+const rows = () => document.querySelectorAll(".lens-row").length;
+const $ = <T extends Element = HTMLElement>(sel: string) => document.querySelector<T>(sel);
+
+// Each task destination's own page title: a page that keeps an old or wrong
+// header never passes (slice 12 review).
+export const TITLES: Record<string, string | ((cluster: string) => string)> = {
+  overview: (cluster) => cluster, nodes: "Nodes", events: "Events", upgrade: "Upgrade check", workloads: "Workloads", pods: "Pods",
+  karpenter: "Karpenter", connectivity: "Connectivity check", gateway: "Gateways", flows: "Hubble flows", access: "Access check",
+  flux: "Flux reconciliation", "flux-sources": "Flux sources", argo: "Argo CD applications", "argo-projects": "Argo CD projects",
+  "argo-appsets": "Argo CD ApplicationSets", certs: "Certificates", eso: "External secrets", helm: "Helm releases",
+  crds: "Custom resources", builtins: "Built-in resources",
+};
+
+// The DOM's own events: no OS key or pointer, as the note's ruling 2 asks.
+function key(target: EventTarget, init: KeyboardEventInit): void {
+  target.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init }));
+}
+function typeInto(input: HTMLInputElement, value: string): void {
+  Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, value);
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+}
+function byText<T extends HTMLElement = HTMLElement>(sel: string, text: RegExp): T | undefined {
+  return [...document.querySelectorAll<T>(sel)].find((el) => text.test(el.textContent?.trim() ?? ""));
+}
+const settle = (ms = 300) => new Promise((r) => setTimeout(r, ms));
+async function closeDrawer(): Promise<void> {
+  if ($(".lens-drawer")) { key(window, { key: "Escape" }); await settle(); }
+}
+
+// page: a destination's own page, mounted and settled - its expected title,
+// out of loading, with a measurable body - and what it showed.
+export async function page(d: Destination, cluster: string): Promise<Record<string, unknown>> {
+  const t = d.target;
+  const want = d.type === "task" ? TITLES[d.id] : undefined;
+  if (d.type === "task" && want === undefined) throw new Error(`no expected title for ${d.id}`);
+  const expected = typeof want === "function" ? want(cluster) : want;
+  await within(8000, `${d.label}'s page`, () => header() && (t.kind === "resource" ? title().includes(t.ref.kind) || header()?.textContent?.includes(t.ref.kind) : title() === expected));
+  await within(15000, `${d.label} to settle`, () => !loading());
+  sized($(".lens-body, .lens-canvas, [data-testid='overview']"), `${d.label}'s body`);
+  return { title: title(), rows: rows() };
+}
 
 export async function walk(settings: SmokeSettings): Promise<Step[]> {
   const steps: Step[] = [];
   const cluster = settings.cluster;
-  await step(steps, "theme and tokens", async () => { setThemeChoice(settings.theme as never); await new Promise((r) => setTimeout(r, 300)); checkTokens(settings.theme); });
+  const dests = destinations();
+  const dest = (id: string) => dests.find((x) => x.d.id === id)?.d;
+  const open = async (id: string) => { const d = dest(id); if (!d) throw new Error(`no ${id} destination`); navigate(cluster, d); return page(d, cluster); };
+
+  await step(steps, "theme and tokens", async () => { setThemeChoice(settings.theme as never); await settle(); checkTokens(settings.theme); });
   await step(steps, "web platform", async () => { checkApis(); });
   await step(steps, "fonts loaded", async () => ({ faces: await checkFonts() }));
   await step(steps, "the lab cluster connects", async () => {
     await within(60_000, `${cluster} to connect`, () => useFleet.getState().clusters.find((c) => c.name === cluster && (c.state === "Synced" || c.state === "Degraded")));
   });
+
+  // ---- the fleet board ----
   await step(steps, "fleet board", async () => {
     useFleet.getState().openFleet();
-    const v = await within(8000, "the line verdict", () => document.querySelector(".line-verdict"));
-    sized(v, "the line verdict");
+    sized(await within(8000, "the line verdict", () => $(".line-verdict")), "the line verdict");
+    return { verdict: $(".line-verdict h2")?.textContent?.trim() };
   });
-  for (const { g, d } of destinations()) {
+  for (const f of ["All", "Prd only", "Faults"]) {
+    await step(steps, `queue filter ${f}`, async () => {
+      const b = await within(4000, `the ${f} filter`, () => byText(".queue-filters button", new RegExp(`^${f}$`)));
+      b.click();
+      await within(2000, `${f} pressed`, () => b.getAttribute("aria-pressed") === "true");
+      return { rows: document.querySelectorAll(".queue-row").length };
+    });
+  }
+  byText(".queue-filters button", /^All$/)?.click();
+  await step(steps, "Ledger and Horizon", async () => {
+    await within(8000, "the Ledger and the Horizon", () => [...document.querySelectorAll("aside")].find((a) => /Ledger/.test(a.textContent ?? "") && /Horizon/.test(a.textContent ?? "")));
+  });
+  await step(steps, "a queue row opens its object, pinned", async () => {
+    const row = await within(8000, "a fault row", () => [...document.querySelectorAll<HTMLElement>(".queue-row")].find((r) => r.getAttribute("aria-label")?.startsWith("Fault:")));
+    const name = /^Fault: \S+ ([^,]+),/.exec(row.getAttribute("aria-label") ?? "")?.[1] ?? "";
+    row.click();
+    const identity = await within(10_000, "the opened object's inspector", () => $("#inspector-identity"));
+    if (!identity.textContent?.includes(name.split("/").pop() ?? "\u0000")) throw new Error(`the inspector shows ${identity.textContent}, not ${name}`);
+    if ($("[data-pinned-gone]")) throw new Error(`${name} opened as gone`);
+    return { opened: name };
+  });
+
+  // ---- the station page and every destination ----
+  await step(steps, "station page", async () => {
+    const facts = await open("overview");
+    const verdict = await within(8000, "the station verdict", () => $("[data-testid='station-verdict']"));
+    if (!verdict.querySelector("h2")?.textContent || !$("[data-testid='station-verdict-line']")?.textContent) throw new Error("the verdict misses a line");
+    return { ...facts, queue: document.querySelectorAll("[data-testid='station-queue'] .queue-row").length };
+  });
+  for (const { g, d } of dests) {
     const c = useFleet.getState().clusters.find((x) => x.name === cluster);
     const state = destState(c, g, d);
     await step(steps, `${g.label} / ${d.label}`, async () => {
       if (state === "absent") return { absent: true }; // named, never skipped silently
       navigate(cluster, d);
-      // a task names itself in the location bar; a raw kind's list names the kind
-      const t = d.target;
-      await within(8000, `${d.label}'s page`, () => header() && (t.kind === "resource" ? header()?.textContent?.includes(t.ref.kind) : crumb().includes(d.label)));
-      sized(document.querySelector(".lens-body, .lens-canvas, [data-testid='overview']"), `${d.label}'s body`);
-      return { state };
+      return { state, ...(await page(d, cluster)) };
     });
   }
+
+  // ---- the drawings ----
+  await step(steps, "Flux dependencies", async () => {
+    await open("flux");
+    sized(await within(10_000, "the dependency drawing", () => $("[data-testid='dep-graph']")), "the dependency drawing");
+  });
+  await step(steps, "cert-manager issuance chain", async () => {
+    await open("certs");
+    sized(await within(10_000, "the issuance chain", () => $("ol[data-rail][aria-label='Issuance chain']")), "the issuance chain");
+  });
+  await step(steps, "External Secrets chain", async () => {
+    await open("eso");
+    sized(await within(10_000, "the ExternalSecret chain", () => $("ol[data-rail][aria-label='Store, ExternalSecret and target Secret']")), "the ExternalSecret chain");
+  });
+  await step(steps, "Gateway data path", async () => {
+    await open("gateway");
+    await closeDrawer();
+    (await within(4000, "the Routes view", () => byText(".lens-controls button", /^Routes/))).click();
+    (await within(8000, "a route row", () => $<HTMLElement>(".lens-row"))).click();
+    (await within(8000, "Open topology", () => byText("button", /^Open topology/))).click();
+    sized(await within(10_000, "the data path", () => $("[data-testid='data-path']")), "the data path");
+  });
+
+  // ---- the console ----
+  await step(steps, "console: search the fleet", async () => {
+    await open("pods");
+    await closeDrawer();
+    key(window, { key: "k", metaKey: true });
+    const input = await within(3000, "the console", () => $<HTMLInputElement>("[data-testid='command-palette-input']"));
+    await within(1000, "focus in the console", () => document.activeElement === input);
+    typeInto(input, "web");
+    await within(8000, "object hits", () => document.querySelector("[data-testid^='console-hit-']"));
+    return { hits: document.querySelectorAll("[data-testid^='console-hit-']").length };
+  });
+  await step(steps, "console: verbs only", async () => {
+    const input = $<HTMLInputElement>("[data-testid='command-palette-input']")!;
+    key(input, { key: "v", code: "KeyV", altKey: true });
+    await settle();
+    const groups = [...document.querySelectorAll("#command-palette-list [role='group']")].map((x) => x.getAttribute("aria-label") ?? "");
+    key(input, { key: "v", code: "KeyV", altKey: true });
+    if (!groups.every((x) => x.startsWith("Run"))) throw new Error(`groups ${groups.join(", ")}`);
+    return { groups };
+  });
+  await step(steps, "console: open beside", async () => {
+    const input = $<HTMLInputElement>("[data-testid='command-palette-input']")!;
+    await within(4000, "a hit selected", () => $("[data-testid^='console-hit-'][data-selected='true']"));
+    key(input, { key: "Enter", metaKey: true });
+    await within(4000, "the console aside", () => $("[data-testid='command-palette']")?.style.justifyContent === "flex-start");
+    await within(10_000, "the opened object's inspector", () => $("#inspector-identity"));
+    await within(1000, "focus kept in the console", () => document.activeElement === input);
+    await settle(1500);
+    if ($("[data-pinned-gone]")) throw new Error(`the hit opened as ${$("[data-pinned-gone]")?.getAttribute("data-pinned-gone")}`);
+  });
+  await step(steps, "console: Escape returns to the inspector", async () => {
+    key($("[data-testid='command-palette-input']")!, { key: "Escape" });
+    await within(2000, "the console closed", () => !$("[data-testid='command-palette']"));
+    await within(2000, "focus on the inspector's identity", () => document.activeElement?.id === "inspector-identity");
+  });
+
+  // ---- settings and the chat drawer ----
+  await step(steps, "Settings", async () => {
+    useFleet.getState().openSettings();
+    await within(8000, "the Notifications panel", () => $("[data-testid='notification-settings']"));
+    const text = document.body.textContent ?? "";
+    for (const s of ["Appearance", "Git", "Notifications"]) if (!text.includes(s)) throw new Error(`no ${s} section`);
+  });
+  await step(steps, "chat drawer opens and closes, asked nothing", async () => {
+    await open("overview");
+    (await within(4000, "Ask", () => $<HTMLButtonElement>(".locbar-ask"))).click();
+    const drawer = await within(4000, "the chat drawer", () => $("[data-testid='chat-drawer']"));
+    sized(drawer, "the chat drawer");
+    key(drawer, { key: "Escape" });
+    await within(2000, "the chat drawer closed", () => !$("[data-testid='chat-drawer']"));
+  });
+
+  // ---- the inspector at this width ----
   await step(steps, "inspector layout at this width", async () => {
-    const pods = destinations().find((x) => x.d.id === "pods");
-    if (!pods) throw new Error("no Pods destination");
-    navigate(cluster, pods.d);
-    // the Pods page first - a row still in the DOM from the page before is
-    // being unmounted - then a row with a measurable box
-    await within(8000, "the Pods page", () => header() && crumb().includes(pods.d.label));
+    const pods = dest("pods")!;
+    navigate(cluster, pods);
+    await page(pods, cluster);
     let row: HTMLElement | undefined;
     try {
       row = await within(8000, "a measurable pod row", () => [...document.querySelectorAll<HTMLElement>(".lens-row")].find((r) => r.getBoundingClientRect().height > 0));
     } catch {
       throw new Unmeasurable("no pod row has a measurable size");
     }
+    await closeDrawer();
     row.click();
-    const panel = await within(5000, "the inspector", () => document.querySelector("[data-testid='lens-inspector']"));
-    sized(panel, "the inspector");
-    const drawer = !!document.querySelector(".lens-drawer");
+    sized(await within(5000, "the inspector", () => $("[data-testid='lens-inspector']")), "the inspector");
+    const drawer = !!$(".lens-drawer");
     const narrow = settings.width <= 1100;
     if (drawer !== narrow) throw new Error(`the inspector is ${drawer ? "a drawer" : "split"} at ${settings.width}px`);
-    if (drawer && !document.querySelector(".lens-drawer")?.contains(document.activeElement)) throw new Error("focus did not move into the drawer");
+    if (drawer && !$(".lens-drawer")?.contains(document.activeElement)) throw new Error("focus did not move into the drawer");
     return { drawer };
   });
   return steps;
