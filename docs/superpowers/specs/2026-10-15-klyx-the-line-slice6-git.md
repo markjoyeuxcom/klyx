@@ -51,15 +51,28 @@ Exactly the parent's allowlist, built from scratch: `HOME`, `PATH`, `USER`, `LAN
 
 ### 3.3 The credential helper
 
-The parent reads the owner's helper "once from their git config". That needs one command outside §7's table:
-- `git config --global --get-all credential.helper`, run **once at startup** with the owner's own `HOME` and no isolated config, `GIT_CONFIG_NOSYSTEM` unset so a system helper (`osxkeychain`) is found, and a 10s deadline.
-- Only the helper values are kept. A helper given as a shell snippet (`!...`) is refused, and Settings > Git says so (§9, open point 2).
+The parent reads the owner's helper "once from their git config". That needs reads outside §7's table, run **once at startup** with the owner's own `HOME`, no isolated config, and a 10s deadline (revised after design review e48a108c: `--global` alone never sees a system helper such as `osxkeychain`):
+- `git config --system --includes --get-all credential.helper`, then `git config --global --includes --get-all credential.helper`. An explicit scope never reads a repository's local config, whatever the working directory; `--includes` follows `include.*` as git itself does at run time.
+- **Precedence, as git applies it:** system values first, then global (git's global scope covers `$XDG_CONFIG_HOME/git/config` and `~/.gitconfig`). An empty value clears every helper before it.
+- Only the resulting helper values are kept, in order, and written to the generated config. A helper given as a shell snippet (`!...`) is refused, and Settings > Git says so.
 
 ### 3.4 Typed commands
 
 - Each allowed command of parent §7 is one Go function that builds its own argv. No function takes a free-form argv, and no other command can be built.
-- **Inputs are validated before they reach argv:** a sha is 40 or 64 hex; the tracked ref is the approved entry's ref; a path is repo-relative, with no `..` segment and no leading `/`.
+- **Inputs are validated before they reach argv:** a sha is 40 or 64 hex; a path is repo-relative, with no `..` segment and no leading `/`; a ref follows §3.6.
 - **Reads** (`log`, `rev-list --count`, `merge-base [--is-ancestor]`, `diff --name-status`) run against the published cache with `GIT_NO_LAZY_FETCH=1` and the 10s deadline.
+
+### 3.6 Tracked refs (revised after design review e48a108c)
+
+- **The source of a tracked ref** is the line's own key, never free text: the chosen key's ref, and the `line.source` override's, when that key's repo maps to an approved entry (§5.2). `git.repos` holds no refs.
+- **What is fetched, by key ref kind:**
+  - a Flux branch: `refs/heads/<name>`;
+  - a Flux tag: `refs/tags/<name>`;
+  - a Flux commit, or an Argo sha: that 40- or 64-hex object id;
+  - an Argo ref only when fully qualified (`refs/heads/…`, `refs/tags/…`), taken as written.
+  - Semver ranges, the default branch, `HEAD` and unqualified Argo refs are not fetched; they have no T (§6.1).
+- **Validation, before any refspec is built:** the full ref must sit exactly in `refs/heads/` or `refs/tags/`, and its name must pass git's `check-ref-format` rules, implemented in Go: no `*`, `?`, `[`, `\`, `^`, `~`, `:`, space or control character; no `..`, `@{` or `//`; no component starting with `.` or ending in `.lock`; not ending in `/` or `.`; not `@`; no leading `-`.
+- **The refspec** is then `+<full ref>:refs/klyx/staging/<full ref>` (a sha: `+<sha>:refs/klyx/staging/commit/<sha>`), one per tracked ref, never a pattern. A refused ref leaves that key with no T and says why.
 
 ### 3.5 The cache
 
@@ -90,6 +103,11 @@ git:
 
 - **The writer** generalises the AI block writer: `replaceTopLevelBlock(doc, key, block)` and `onlyKeyChanged(before, after, key)`, used by `SaveAI` and the new `SaveGit`, under the same lock and `replaceUnchanged`.
 - **Nothing else ever adds to `git.repos`** (§14.5): only Settings > Git writes it.
+- **No credential is ever stored** (revised after design review e48a108c; parent §7: "Klyx stores no tokens"). Approval and loading both refuse a URL that could carry one:
+  - an `https` URL with any userinfo (`https://token@host/…`, `https://user:pass@host/…`), a query or a fragment;
+  - an `ssh://` URL with a password (`ssh://user:pass@host/…`); an SSH user alone (`git@host:org/repo`, `ssh://git@host/…`) is allowed;
+  - any other scheme (`file`, `http`, `git`, `ext`) - only `https` and `ssh` run (§7's protocol allowlist).
+  - A refused entry already in fleet.yaml is ignored with a note naming it, never executed; the owner's credentials belong to the SSH agent or the credential helper.
 
 ### 5.2 Mapping cluster URLs
 
@@ -139,16 +157,21 @@ The parent's contract, with the modules it needs:
 
 - **The transport in tests is the production one.** An `httptest` TLS server runs `git http-backend` over a fixture repo; the test's generated global config adds `http.sslCAInfo` for the test CA. File and plain-HTTP protocols stay forbidden. A fixture server with `uploadpack.allowFilter=false` proves a history refresh that receives blobs is refused.
 - **6a:** the version parser (Homebrew, Apple, Windows, too old, garbage); the environment holds exactly the allowlist (a planted `GIT_EXEC_PATH`, `GIT_ALTERNATE_OBJECT_DIRECTORIES`, `KUBECONFIG` and a cloud credential never reach git); every typed command's argv; validation refusing a short sha, `..`, an option-looking revision; deadlines kill the process group; output caps.
+- **Refs (§3.6):** `*`, `refs/*`, `refs/heads/*`, `a:b`, `-x`, `main..dev`, `x@{1}`, `.hidden`, `x.lock`, `refs/remotes/origin/main` and a control character are refused; branch, tag, sha and fully qualified Argo refs build exactly one non-pattern refspec each.
+- **The credential helper (§3.3):** with isolated system and global configs - a system-only `osxkeychain`; a global helper after a system one; an empty global value clearing the system helper; an `include.path` file honoured; a shell-snippet helper refused; a repository-local helper never read.
+- **Credential-bearing URLs (§5.1):** each refused form is refused at approval and ignored at load, never executed.
 - **6b:** every row of the parent's recovery table, by killing the process between journaled steps; a cap mid-fetch; cancellation in the queue; the content contract (only the listed ids, refusal above 5,000); `fsck --connectivity-only` after restart.
 - **6c:** the writer changes only `git`; matching by normalised URL; an alias entry mapped explicitly; an unapproved URL never executed.
 - **6d:** each ordered state and its reason; "held · N behind" for each evidence kind; the Ledger's union and its diverged/ahead listing; caps on untrusted text; a `line:git` for an older LineDTO is not shown.
 - **6e:** the confinement fixtures; SOPS and substitution wording; a remote base refused, then allowed per repo.
 
-## 9. Open points for review
+## 9. Open points (ruled in design review e48a108c)
 
-1. **`internal/procrun` extracted from the AI path (§2),** moving the Claude CLI onto it with its tests unchanged, rather than a second copy of the containment code.
-2. **The credential helper (§3.3)** needs one command outside §7's table: `git config --global --get-all credential.helper`, once at startup, with the owner's config. A shell-snippet helper is refused.
-3. **SSH aliases (§5.2)** map by an explicit owner-made `matches` entry, since an alias never normalises to the cluster's host.
-4. **`line:git` is a separate event (§6.1)** fenced by the LineDTO version it answers, so ordering never blocks or rewrites `LineService`.
-5. **6e adds three modules** (`kustomize/api`, `kyaml`, `fluxcd/pkg/ssa`), per decision 12's in-process build.
-6. **Tests use an HTTPS `git http-backend` fixture (§8)** instead of any test-only protocol allowance.
+1. **`internal/procrun` extracted from the AI path (§2):** accepted, with the Claude CLI's tests kept.
+2. **The credential helper (§3.3):** changed - system then global scopes with git's precedence, not `--global` alone.
+3. **SSH aliases (§5.2)** mapped by an explicit owner-made `matches` entry: accepted.
+4. **`line:git` as a separate event (§6.1)** fenced by the LineDTO version it answers: accepted.
+5. **6e's three modules** (`kustomize/api`, `kyaml`, `fluxcd/pkg/ssa`): accepted.
+6. **The HTTPS `git http-backend` fixture (§8):** accepted; the test CA needs no loosening of `protocol.allow`.
+
+The review also added §3.6 (tracked refs: their source and exact validation) and the credential-bearing URL refusals in §5.1.
