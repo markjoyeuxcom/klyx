@@ -2,7 +2,7 @@
 
 Design note for slice 9 of `2026-10-14-klyx-the-line-redesign.md` (parent).
 - **Parent sections:** §8.4 (the fleet metadata index) and §6 (the command console), with §14's bounds. The parent is the contract; this note records what exists, how the slice is cut and the points the parent leaves open.
-- **Revision 2** answers the design review of f152e87 (five findings, seven rulings; §8).
+- **Revision 2** answers the design review of f152e87 (five findings, seven rulings; §8). **Revision 3** answers the re-review of 13417b2: a bounded scanner replaces JSON decoding, so the stream reserve is enforced (§2.5, §2.6, §8).
 
 ## 0. What exists (surveyed 2026-10-15)
 
@@ -75,9 +75,13 @@ Each is Codex-reviewed on its own, in this order.
 
 - **No Reflector and no DeltaFIFO.** The index runs its own list and watch per kind, so nothing accumulates pages or queues events:
   - **A strict Accept header.** Both are plain REST requests whose Accept names only the metadata forms (`application/json;as=PartialObjectMetadataList;g=meta.k8s.io;v=v1` for lists, `...;as=PartialObjectMetadata;...` for watches). The metadata client is not used: its Accept ends with a bare `application/json` fallback, under which a server that cannot serve metadata would send whole objects, Secret data included. A server that cannot answers 406, which reads "metadata unsupported".
-  - **Lists** are paginated at 500 and stream-decoded: the response is walked token by token, and each item is decoded, projected, admitted and applied before the next is read. A page never exists whole; the list's `resourceVersion` and `continue` come from its metadata, wherever it appears. An expired `continue` (410) restarts the list in place (mark-and-sweep).
-  - **Watches** are stream-decoded the same way, one event at a time, each applied before the next is read; nothing is queued.
-  - **The projection** keeps the entry's fields and drops everything else, annotations and `managedFields` included, before the event is applied.
+  - **A bounded scanner, not a JSON decoder.** `encoding/json`'s Decoder buffers a whole value before decoding it and keeps the enlarged buffer afterwards (a 1 MiB annotation leaves a 2 MiB buffer behind), and client-go's decoders do the same. The index reads every response through its own scanner instead:
+    - a fixed 32 KiB read buffer, never grown;
+    - it walks the JSON byte by byte and keeps only the entry's fields: name, namespace, UID, resourceVersion and creationTimestamp (each at most 1 KiB), and labels (the first 2 KiB in the order sent, which is key order from a Kubernetes API server; every label is hashed, whatever is kept);
+    - every other value (annotations, `managedFields`, `kind`, any status) is skipped as it streams past, never buffered, however large;
+    - a kept field over its bound (no valid Kubernetes object has one) stops that read: the kind reads "oversize", keeping what it admitted, like a cap.
+  - **Lists** are paginated at 500 and scanned item by item: each item is projected, admitted and applied before the next is read. A page never exists whole; the list's `resourceVersion` and `continue` come from its metadata, wherever it appears. An expired `continue` (410) restarts the list in place (mark-and-sweep).
+  - **Watches** are scanned the same way, one event at a time, each applied before the next is read; nothing is queued. An `ERROR` event's status (code, reason, message, each bounded) is scanned the same way.
 - **One list at a time per cluster**, in the §2.3 order; each kind's watch starts when its first list completes.
 - **Relists** (watch expiry, recovery) are in place: mark, apply, sweep; there is no second copy of the kind during replacement. A relist admits new objects before it can release vanished ones, so it can read capped where a settled kind would not, and says so.
 
@@ -86,10 +90,10 @@ Each is Codex-reviewed on its own, in this order.
 - **What it counts** (a documented, conservative estimate; the estimate is the accounting):
   - per entry, a fixed overhead covering the entry struct and its share of the per-kind map, plus its strings (UID, namespace, name) and labels (a fixed per-label overhead plus key and value bytes);
   - per kind, a fixed container overhead;
-  - per active stream (a list or a watch), a fixed decode reserve of 256 KiB, charged when it opens and released when it closes;
+  - per active stream (a list or a watch), a fixed reserve of 256 KiB, admitted before the request is sent and released when it closes: the scanner's 32 KiB buffer and its bounded scratch (about 8 KiB), and the transport's fixed per-connection buffers (TLS records, HTTP framing, a gzip window). A stream that cannot be admitted is not opened, and its kind reads capped;
   - the search's working set (§3), a fixed reserve charged once.
 - **Constants** are calibrated by test: the retained heap after GC per entry, per label and per kind must stay at or under the constants.
-- **What it cannot bound by count:** one decoded object per active stream; the API server's object size limit bounds it, and an object larger than the reserve exceeds it transiently. The note says this rather than claiming it.
+- **Nothing outside it:** no read grows a buffer with the size of an object, so the reserve is a bound, not an allowance.
 
 ### 2.7 Lifecycle and connection
 
@@ -104,7 +108,7 @@ Each is Codex-reviewed on its own, in this order.
 
 ### 2.8 Per-kind states
 
-indexing (the first read), live, capped (frozen, as of), denied (403 on list), watch denied (403 on watch after a good list: the list kept, stale), metadata unsupported (406; never a content read, Secrets included), stale / recovering (watch errors, retried with backoff; or the connection is down), not served, configured out. Each carries its as-of time where it holds entries.
+indexing (the first read), live, capped (frozen, as of), oversize (frozen at an object over the scanner's bounds, as of), denied (403 on list), watch denied (403 on watch after a good list: the list kept, stale), metadata unsupported (406; never a content read, Secrets included), stale / recovering (watch errors, retried with backoff; or the connection is down), not served, configured out. Each carries its as-of time where it holds entries.
 
 ## 3. 9b: the search and the role view
 
@@ -158,7 +162,8 @@ indexing (the first read), live, capped (frozen, as of), denied (403 on list), w
   - streaming lists and watches: a fake API server (httptest) serving paginated metadata lists with large annotations, an expired `continue`, 403, 406, and the request's Accept header carrying no bare `application/json`;
   - per-kind states, watch denied, errors with backoff;
   - the lifecycle: disconnect and reconnect without replacing the Observer (cancellation, stale wording, fresh list in place, late replies from the cancelled generation dropped), a new incarnation, Final, never-ready clusters;
-  - peak memory: a 60,000-object Observer kind with labels, a 120,000-object paginated list with 100 KiB annotations per object, label-only growth, fleet contention; retained heap after GC at or under the estimate, and heap growth sampled during acquisition at or under admitted entries plus the stream reserves plus one object;
+  - the scanner: equivalence with `encoding/json` on generated metadata (fuzzed), escapes and unicode in kept and skipped strings, nested skipped values, a kept field over its bound (oversize, evidence kept), truncated and malformed input;
+  - peak memory: a 60,000-object Observer kind with labels, a 120,000-object paginated list with 100 KiB annotations per object, label-only growth, fleet contention; and eight open watches each delivering one object with a 1 MiB annotation and 10 MiB of `managedFields`, then many small events: heap after GC, with the large values gone and the watches still open, at or under the admitted entries plus the charged reserves; retained heap after GC at or under the estimate throughout;
   - the config block (absent, empty, replacement, deduplication, malformed);
   - the kind lab, read-only.
 - **9b:** ranking and determinism, same-name hits across clusters, top-K bounds, cancellation; `RolesNow` under `-race` against concurrent commits: current, healthy before a gap then last observed, relisting, capped, unevaluated, end, recovery; the incarnation fence; coverage notes including never-ready clusters.
@@ -175,7 +180,7 @@ The first revision said ReplicaSets and Services keep no creation time. They kee
 ## 8. Design review of f152e87
 
 Five findings, all taken:
-1. **Bounded acquisition:** no full-kind copy (the visit feed, §2.4), no accumulated pages or queued events (streaming lists, unbuffered watches, in-place relists, §2.5), and an estimate that covers entries, containers, stream reserves and the search's working set, validated by peak-memory tests (§2.6, §5).
+1. **Bounded acquisition:** no full-kind copy (the visit feed, §2.4), no accumulated pages or queued events (scanned lists and watches, in-place relists, §2.5), and an estimate that covers entries, containers, stream reserves and the search's working set, validated by peak-memory tests (§2.6, §5). Re-review of 13417b2: the uncharged one-object exception is gone - a fixed-buffer scanner skips what it does not keep, so the 256 KiB reserve is enforced (§2.5, §2.6).
 2. **Disconnect:** acquisition generations cancelled on a down connection, last-good stale coverage, a fresh in-place read on recovery within the same incarnation, and never-ready clusters named (§2.7).
 3. **Roles:** `RolesNow` served on the loop, with current, last observed and unverified kept apart and fenced by incarnation (§3).
 4. **The UID through navigation:** intents, `openInstance` and `usePinnedSubject` carry the expected UID; a replacement or absence is said, never substituted (§4.2).
