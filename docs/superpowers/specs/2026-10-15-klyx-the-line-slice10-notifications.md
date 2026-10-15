@@ -36,7 +36,7 @@ Each is Codex-reviewed on its own, 10a first.
 
 | Batch / transition | Effect |
 |---|---|
-| `baseline` (connect, reconnect, after a cap) | each item that is a fault opens a **baseline** episode: listed once in the app with the batch's other faults, never notified |
+| `baseline` (connect, reconnect, after a cap) | a replacement: an episode of the source it does not show as a fault closes silently; each fault opens a **baseline** episode (or keeps its open one), listed once in the app with the connect's other faults, never notified |
 | `changes`: non-fault → fault | an open episode for the UID stays as it is (one source may be counted by several parts); a suspended one **resumes** silently; otherwise a **new episode**, eligible to notify (§3) |
 | `changes`: fault → `unknown` or `unevaluated` | **suspended (unknown)**; a return to fault resumes the same episode, silently |
 | `changes`: fault → `ok` | **recovered**: closes the episode; notifies only if recoveries are enabled and the episode's onset was notified |
@@ -60,7 +60,7 @@ Each is Codex-reviewed on its own, 10a first.
 - **De-duplication:** at most one notification per cluster, UID and role per 30 minutes (a bounded map, pruned by age).
 - **Coalescing:**
   - The first eligible item on a cluster opens a 60-second window, and items accumulate in it.
-  - At its end, items that have since recovered, been deleted or been suspended are dropped. What remains is sent as one notification: one item as itself, several as "N new faults on <cluster place>" with the first names.
+  - At its end, items that have since recovered or been deleted are dropped. An onset suspended since (coverage lost, unknown) was still seen with continuous coverage, and stays. What remains is sent as one notification: one item as itself, several as "N new faults on <cluster place>" with the first names.
 - **Focus:** nothing is sent while the app is focused on that cluster. Suppressed items count as sent for de-duplication, so losing focus never releases a stale notification.
 - **Content:** title `<cluster place>`; body `<Kind> <namespace/name>: <verdict label>` (several: the count and the first three names).
 - **Click:** a single item's notification carries `{cluster, task, part, gvr, namespace, name, uid}` in `Data`. A click emits `health:notification-open` with it, and the frontend reveals the object in its part's lens (`reveal`, with the UID). A burst's click opens the cluster.
@@ -74,7 +74,8 @@ Each is Codex-reviewed on its own, 10a first.
   - "Also notify recoveries".
   - Enabling requests the OS permission at that moment, through `ShellService`. When it is refused, the setting is kept and the panel says the OS has notifications off for Klyx.
 - **Focus:** the frontend reports `{focused, cluster}` on window focus and blur and on every route change (`NotificationsService.SetFocus`).
-- **The baseline listing:** a `health:baseline` event per cluster and batch ("3 faults present at connect on prd", "2 faults present after reconnect") becomes one Activity entry and one info toast. It is never an OS notification.
+- **The baseline listing:** a connect's partitions are gathered over 2 seconds into one listing per cluster ("3 faults present at connect on prd: Pod shop/a, …"). It becomes one Activity entry and one toast of a new `info` kind (neither a success nor a failure). It is never an OS notification.
+  - The service keeps the last 20 listings, numbered. The webview subscribes to `health:baseline`, then reads `RecentBaselines()`, and lists each number once, so a cluster that connected before the webview loaded is still listed.
 - **A click** (`health:notification-open`) brings the window forward and reveals the object in its part's lens with its UID, which pins it (slice 9c-1).
 
 ## 5. Testing
