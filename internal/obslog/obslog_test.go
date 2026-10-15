@@ -289,3 +289,28 @@ func TestFixturesNeverExpireByTheCalendar(t *testing.T) {
 		t.Fatalf("an old fixture expired by the calendar: %+v", es)
 	}
 }
+
+// The Line slice 3 note §2.3: a fenced snapshot of the partitions, each with
+// the PartVer that set its state.
+func TestPartitionSnapshotIsFenced(t *testing.T) {
+	l := newLog()
+	b := batch(observe.BatchBaseline, 0)
+	b.PartVer = 4
+	l.Apply(b)
+	loss := batch(observe.BatchLoss, 1)
+	loss.PartVer, loss.Loss = 5, &observe.Loss{Reason: observe.LossCoverage}
+	l.Apply(loss)
+	inc, states, ok := l.PartitionSnapshot("c1")
+	if !ok || inc != 1 || len(states) != 1 || states[0].Live || states[0].PartVer != 5 {
+		t.Fatalf("snapshot: %d %+v", inc, states)
+	}
+	newer := batch(observe.BatchBaseline, 2)
+	newer.Incarnation, newer.PartVer = 2, 1
+	l.Apply(newer)
+	if inc, states, _ := l.PartitionSnapshot("c1"); inc != 2 || len(states) != 1 || !states[0].Live || states[0].PartVer != 1 {
+		t.Fatalf("a newer incarnation's snapshot: %d %+v", inc, states)
+	}
+	if _, _, ok := l.PartitionSnapshot("nope"); ok {
+		t.Fatal("an unknown cluster has no snapshot")
+	}
+}

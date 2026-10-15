@@ -79,6 +79,7 @@ type PartitionState struct {
 	Live               bool
 	Since              time.Time     // live since (its last baseline or after-gap), or lost at
 	Loss               *observe.Loss // when not live
+	PartVer            uint64        // the part version of the batch that set this state
 }
 
 type partitionKey struct{ task, part, source string }
@@ -175,7 +176,7 @@ func (l *Log) Apply(b observe.TransitionBatch) {
 		c.ended = true
 	case observe.BatchLoss:
 		l.add(c, entryOf(b))
-		c.partitions[pk] = &PartitionState{Task: b.Task, Part: b.Part, Source: b.Source, Since: b.At, Loss: b.Loss}
+		c.partitions[pk] = &PartitionState{Task: b.Task, Part: b.Part, Source: b.Source, Since: b.At, Loss: b.Loss, PartVer: b.PartVer}
 		if b.Loss != nil && (b.Loss.Reason == observe.LossCapped || b.Loss.Reason == observe.LossAbsent) {
 			c.dropPartitionProofs(pk)
 		} else {
@@ -200,7 +201,7 @@ func (l *Log) Apply(b observe.TransitionBatch) {
 		for _, it := range b.Items {
 			l.firstSight(c, b, it)
 		}
-		c.partitions[pk] = &PartitionState{Task: b.Task, Part: b.Part, Source: b.Source, Live: true, Since: b.At}
+		c.partitions[pk] = &PartitionState{Task: b.Task, Part: b.Part, Source: b.Source, Live: true, Since: b.At, PartVer: b.PartVer}
 	case observe.BatchAfterGap:
 		// Every observed, sampled or derived proof is downgraded: the start
 		// is no longer proven. Rule proofs stay while their Since holds.
@@ -221,7 +222,7 @@ func (l *Log) Apply(b observe.TransitionBatch) {
 		for _, it := range b.Items {
 			l.apply(c, b, it, true)
 		}
-		c.partitions[pk] = &PartitionState{Task: b.Task, Part: b.Part, Source: b.Source, Live: true, Since: b.At}
+		c.partitions[pk] = &PartitionState{Task: b.Task, Part: b.Part, Source: b.Source, Live: true, Since: b.At, PartVer: b.PartVer}
 	case observe.BatchChanges:
 		l.addItems(c, b)
 		for _, it := range b.Items {
@@ -441,6 +442,34 @@ func (l *Log) Partitions(clusterName, task, part string) []PartitionState {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Source < out[j].Source })
 	return out
+}
+
+// PartitionSnapshot returns every partition state of a cluster with the
+// incarnation they belong to (The Line slice 3 note §2.3): a consumer seeds
+// its continuity only when that incarnation is the one it attached to. ok is
+// false when the log holds nothing for the cluster.
+func (l *Log) PartitionSnapshot(clusterName string) (incarnation uint64, states []PartitionState, ok bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	c := l.clusters[clusterName]
+	if c == nil {
+		return 0, nil, false
+	}
+	l.expire(c)
+	for _, s := range c.partitions {
+		states = append(states, *s)
+	}
+	sort.Slice(states, func(i, j int) bool {
+		a, b := states[i], states[j]
+		if a.Task != b.Task {
+			return a.Task < b.Task
+		}
+		if a.Part != b.Part {
+			return a.Part < b.Part
+		}
+		return a.Source < b.Source
+	})
+	return c.incarnation, states, true
 }
 
 // OldestEntry is the trim bound: an age older than it reads "at least since
