@@ -15,8 +15,7 @@ import { StationStrip } from "./StationStrip";
 import { useMenuPopover } from "./useMenuPopover";
 import { MOD } from "./modKey";
 import { drag, noDrag } from "./drag";
-import { LENS_INDEX_ID } from "./LensIndex";
-import { toggleLensIndex, useLensIndexOpen } from "../nav/lensIndexOpen";
+import { LENS_INDEX_ID, LENS_INDEX_TOGGLE_ID, toggleLensIndex, useLensIndexOpen } from "../nav/lensIndexOpen";
 import { INSPECTOR_IDENTITY_ID, useInspectorPin } from "../nav/inspectorPin";
 
 
@@ -104,7 +103,7 @@ const Sep = () => <span className="locbar-sep" aria-hidden="true">/</span>;
 function IndexToggle() {
   const open = useLensIndexOpen((s) => s.open);
   return (
-    <button type="button" className="mast-icon" style={noDrag} aria-label="Lens index" aria-expanded={open} aria-controls={open ? LENS_INDEX_ID : undefined}
+    <button type="button" id={LENS_INDEX_TOGGLE_ID} className="mast-icon" style={noDrag} aria-label="Lens index" aria-expanded={open} aria-controls={open ? LENS_INDEX_ID : undefined}
       title={`${open ? "Hide" : "Show"} the lens index (${MOD}\\)`} onClick={toggleLensIndex}>
       {open ? <IconLayoutSidebarLeftCollapse size={15} stroke={1.6} /> : <IconLayoutSidebarLeftExpand size={15} stroke={1.6} />}
     </button>

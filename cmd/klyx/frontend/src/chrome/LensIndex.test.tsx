@@ -138,3 +138,29 @@ describe("collapse (§4.3)", () => {
     expect(localStorage.getItem("klyx.layout.v1.lensIndex")).toBe("1");
   });
 });
+
+describe("focus on collapse (Codex review of 4b)", () => {
+  it("hiding the index with mod+\\ while an entry has focus moves focus to the disclosure", async () => {
+    const { LocationBar } = await import("./LocationBar");
+    at("pods");
+    const r = render(<><LocationBar /><LensIndex /></>);
+    const pods = entry("Pods");
+    pods.focus();
+    expect(document.activeElement).toBe(pods);
+    act(() => { handleShellKey(new KeyboardEvent("keydown", { key: "\\", metaKey: true })); });
+    expect(r.container.querySelector("#lens-index")).toBeNull();
+    const toggle = screen.getByRole("button", { name: "Lens index" });
+    expect(document.activeElement).toBe(toggle);
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("hiding it with focus elsewhere leaves focus where it is", async () => {
+    const { LocationBar } = await import("./LocationBar");
+    at("pods");
+    render(<><LocationBar /><LensIndex /><input aria-label="elsewhere" /></>);
+    const other = screen.getByRole("textbox", { name: "elsewhere" });
+    other.focus();
+    act(() => { toggleLensIndex(); });
+    expect(document.activeElement).toBe(other);
+  });
+});

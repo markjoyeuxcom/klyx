@@ -2,7 +2,7 @@ import { useFleet } from "../store/fleet";
 import { navigate } from "../nav/registry";
 import { useNavCounts } from "../nav/useNavCounts";
 import { FLEET_VIEWS, absentLine, lensIndex, type IndexEntry } from "../nav/lensIndex";
-import { useLensIndexOpen } from "../nav/lensIndexOpen";
+import { LENS_INDEX_ID, useLensIndexOpen } from "../nav/lensIndexOpen";
 import { toneColor } from "./primitives/styles";
 import { Aspect } from "./primitives";
 
@@ -11,7 +11,7 @@ import { Aspect } from "./primitives";
 // is not installed; on fleet routes, the fleet views. It replaces NavBand.
 // Every number is navCounts'; capability checking or unknown stays listed,
 // disabled; only a confirmed absence hides a lens.
-export const LENS_INDEX_ID = "lens-index";
+export { LENS_INDEX_ID };
 
 export function LensIndex() {
   const open = useLensIndexOpen((s) => s.open);
