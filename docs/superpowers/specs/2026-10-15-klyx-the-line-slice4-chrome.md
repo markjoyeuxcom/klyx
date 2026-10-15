@@ -180,6 +180,15 @@ A pure `nav/lensIndex.ts` turns the registry, `navCounts` and `capState` into th
   - no Tab hijacking.
 - **Counts:** read through `useNavCounts` only. The parity gate and `noFanout` stay green.
 
+### 4.4 As built (4b)
+
+- **Tone in "Needs you":** danger when the entry's own badge is danger or its note names a not-ready controller (its area's tone); otherwise warning.
+- **Notes:** a capability's own word ("checking…", "unknown") wins over the parts' words on an unavailable lens. On a row, the label wins: a long note (a secondary part's, such as "routes: 3 with a failing attachment") truncates, and its full text is the row's title.
+- **Layout:** rows in "Needs you" lead with their `Aspect`; every label lines up after the mark column; counts sit at the row's right edge. A tool lens's indented sub-entries never repeat one already in "Needs you".
+- **The current entry:** a raw kind of a tool group marks that tool's lens; any other raw kind marks the browser it was opened from (API browser for `crds`, else Resources); a kind shortcut or a custom kind mix marks Workloads.
+- **The parity gate's tree stage** now checks the index: every lit line's lens and every not-ready controller in "Needs you" with its mark, and every gap word on its lens. The captured cases exercise the "unverified" and "last good" words; none has a whole part unreadable.
+- **Retired:** `NavBand`, its tab fitting, `nav/navTree.ts` and the `klyx:open-nav-tree` event.
+
 ## 5. The station strip (4c)
 
 ### 5.1 Acquisition
