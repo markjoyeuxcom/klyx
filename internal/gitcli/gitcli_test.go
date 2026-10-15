@@ -218,11 +218,21 @@ func TestTheTypedArgv(t *testing.T) {
 		"update refs/klyx/tracked/refs/heads/main "+b+" "+a+"\n"+
 			"update refs/klyx/tracked/refs/tags/v1.2 "+a+" "+strings.Repeat("0", 40)+"\n"+
 			"delete refs/klyx/tracked/commit/"+b+" "+b+"\n", false)
-	c, err = logCommits("/k/c.git", []Rev{main.Tracked()}, []Rev{ra, rb}, 20)
+	c, err = logCommits("/k/c.git", []Rev{main.Tracked()}, []Rev{ra, rb}, 20, nil)
 	check("log", c, err, []string{"log", "--no-renames", "--no-mailmap", "--no-notes", "--no-show-signature", "--no-color",
 		"--max-count=20", "--format=%H%x1f%an%x1f%at%x1f%ct%x1f%s%x1e", "--end-of-options", "refs/klyx/tracked/refs/heads/main",
 		"^" + a, "^" + b, "--"}, "/k/c.git", "", false)
-	c, err = revListCount("/k/c.git", []Rev{rb}, []Rev{ra})
+	// A path-limited log (slice 8b-2): the path cleaned, after "--"; the root means the whole tree.
+	c, err = logCommits("/k/c.git", []Rev{rb}, []Rev{ra}, 20, []string{"./apps/prod/"})
+	check("log path", c, err, []string{"log", "--no-renames", "--no-mailmap", "--no-notes", "--no-show-signature", "--no-color",
+		"--max-count=20", "--format=%H%x1f%an%x1f%at%x1f%ct%x1f%s%x1e", "--end-of-options", b, "^" + a, "--", "apps/prod"}, "/k/c.git", "", false)
+	c, err = logCommits("/k/c.git", []Rev{rb}, []Rev{ra}, 20, []string{"./"})
+	check("log root", c, err, []string{"log", "--no-renames", "--no-mailmap", "--no-notes", "--no-show-signature", "--no-color",
+		"--max-count=20", "--format=%H%x1f%an%x1f%at%x1f%ct%x1f%s%x1e", "--end-of-options", b, "^" + a, "--"}, "/k/c.git", "", false)
+	if _, err := logCommits("/k/c.git", []Rev{rb}, nil, 20, []string{"../escape"}); err == nil {
+		t.Error("a path leaving the repository was accepted")
+	}
+	c, err = revListCount("/k/c.git", []Rev{rb}, []Rev{ra}, nil)
 	check("rev-list", c, err, []string{"rev-list", "--count", "--end-of-options", b, "^" + a, "--"}, "/k/c.git", "", false)
 	c, err = mergeBase("/k/c.git", ra, rb)
 	check("merge-base", c, err, []string{"merge-base", "--end-of-options", a, b}, "/k/c.git", "", false)
@@ -242,7 +252,7 @@ func TestTheConstructorsRefuseUnvalidatedInput(t *testing.T) {
 	const a = "1111111111111111111111111111111111111111"
 	ra := Rev{a}
 	for name, err := range map[string]error{
-		"no revision":    func() error { _, err := revListCount("/c", nil, nil); return err }(),
+		"no revision":    func() error { _, err := revListCount("/c", nil, nil, nil); return err }(),
 		"zero Rev":       func() error { _, err := mergeBase("/c", ra, Rev{}); return err }(),
 		"parent path":    func() error { _, err := lsTree("/c", ra, []string{"apps/../../etc"}); return err }(),
 		"absolute path":  func() error { _, err := diffTree("/c", ra, ra, []string{"/etc/passwd"}); return err }(),
@@ -264,7 +274,7 @@ func TestTheConstructorsRefuseUnvalidatedInput(t *testing.T) {
 			_, err := updateRefs("/c", []RefUpdate{{Name: "refs/klyx/tracked/commit/" + a, New: "abc"}})
 			return err
 		}(),
-		"log over 20":       func() error { _, err := logCommits("/c", []Rev{ra}, nil, 21); return err }(),
+		"log over 20":       func() error { _, err := logCommits("/c", []Rev{ra}, nil, 21, nil); return err }(),
 		"uppercase sha rev": func() error { _, err := SHA(strings.ToUpper("abcdef1111111111111111111111111111111111")); return err }(),
 		"relative init":     func() error { _, err := initBare("c.git"); return err }(),
 	} {

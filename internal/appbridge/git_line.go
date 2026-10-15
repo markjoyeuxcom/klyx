@@ -160,6 +160,11 @@ func (s *GitService) lineLoop() {
 		s.lineVer++
 		out.Version = s.lineVer
 		s.lineGit = out
+		s.lineGitKey = nil
+		if dto.Key != nil {
+			k := *dto.Key
+			s.lineGitKey = &k
+		}
 		s.mu.Unlock()
 		if s.d.Emitter != nil {
 			s.d.Emitter.Emit(LineGitEvent, out)

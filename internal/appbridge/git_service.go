@@ -39,12 +39,13 @@ type GitService struct {
 	fetching map[string]bool
 	// The line, as LineService last pushed it (GitLineSink), and the
 	// ordering computed from it (6d).
-	line    LineDTO
-	sources []LineGitSource
-	lineGit LineGitDTO
-	lineVer uint64
-	lineFP  string
-	wake    chan struct{}
+	line       LineDTO
+	sources    []LineGitSource
+	lineGit    LineGitDTO
+	lineGitKey *LineKeyDTO // the key lineGit was ordered for (slice 8b-2)
+	lineVer    uint64
+	lineFP     string
+	wake       chan struct{}
 }
 
 // gitStore is the cache store (internal/gitcache) as the service uses it.

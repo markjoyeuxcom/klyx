@@ -415,7 +415,13 @@ const (
 
 // Log lists up to max commits in include and not in exclude, newest first.
 func (p Repo) Log(ctx context.Context, include, exclude []Rev, max int) ([]Commit, error) {
-	c, err := logCommits(p.dir, include, exclude, max)
+	return p.LogPath(ctx, include, exclude, max, nil)
+}
+
+// LogPath is Log limited to the commits that touch paths (literal
+// pathspecs, trees only: the cache holds no blobs and never fetches them).
+func (p Repo) LogPath(ctx context.Context, include, exclude []Rev, max int, paths []string) ([]Commit, error) {
+	c, err := logCommits(p.dir, include, exclude, max, paths)
 	if err != nil {
 		return nil, err
 	}
@@ -470,7 +476,12 @@ func plainText(s string, max int) string {
 
 // Count counts commits in include and not in exclude.
 func (p Repo) Count(ctx context.Context, include, exclude []Rev) (int, error) {
-	c, err := revListCount(p.dir, include, exclude)
+	return p.CountPath(ctx, include, exclude, nil)
+}
+
+// CountPath is Count limited to the commits that touch paths.
+func (p Repo) CountPath(ctx context.Context, include, exclude []Rev, paths []string) (int, error) {
+	c, err := revListCount(p.dir, include, exclude, paths)
 	if err != nil {
 		return 0, err
 	}

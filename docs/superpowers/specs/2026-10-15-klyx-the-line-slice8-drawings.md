@@ -121,6 +121,15 @@ Each is Codex-reviewed on its own, in this order.
 - **The binding:** `GitOpsService.DependencyGraph(ctx, cluster, kind, ns, name, uid)`, with the 30-second action timeout derived from the caller's context. `bridge/depGraph.ts` returns the generated `CancellablePromise` unwrapped.
 - **Live:** `TestLabDependencyGraph` walks the kind lab, read-only.
 
+### 3.2 As built in 8b-2 (Git's "not here yet")
+
+- **The call** is `GitService.NotHereYet(ctx, nodes)`, at most 24 nodes. It takes no cluster: T is the line's, fleet-wide, and each node's facts name their own repository and ref.
+- **T** is the GitService's last ordering: its target's sha and fetch time, and the line key that ordering was computed for, now recorded with it. With no ready ordering, every node reads "the line has no T".
+- **Identity:** a node's URL and ref are normalised as the line normalises a Flux ref (`line.OverrideKey`). Its repository must map, through the approved `matches`, to the approved URL that served T, and its ref kind and name must equal T's key. Only that approved URL is read.
+- **"Behind" is proved:** the applied sha must be in the fetched history, then an ancestor of T. Otherwise the node reads ahead, diverged (a merge base exists) or unrelated; at T it reads "at".
+- **The lists:** `gitcli.Repo.LogPath` (new: a path-limited log, trees only, since the cache is `blob:none` and never fetches lazily) gives at most 20 commits, gitcli's log bound rather than the note's 50. "More" is proved by a path-limited count (`CountPath`, new). `DiffNames` gives the name-status. Pathspecs are literal (`GIT_LITERAL_PATHSPECS`), so a cluster's path is never pathspec magic. An empty path is the whole tree.
+- **The bridge:** `bridge/notHereYet.ts` returns the generated cancellable call.
+
 ## 4. 8c: the dependency graph drawing
 
 - **Where:** the Flux inspector gains a "Dependencies" section that replaces "blocked by". The source section stays.

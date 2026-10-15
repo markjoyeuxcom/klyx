@@ -299,9 +299,13 @@ const MaxLogCommits = 20
 const logFormat = "--format=%H%x1f%an%x1f%at%x1f%ct%x1f%s%x1e"
 
 // logCommits lists commits in include and not in exclude, newest first.
-func logCommits(gitDir string, include, exclude []Rev, max int) (cmd, error) {
+func logCommits(gitDir string, include, exclude []Rev, max int, paths []string) (cmd, error) {
 	if max < 1 || max > MaxLogCommits {
 		return cmd{}, fmt.Errorf("a log reads 1 to %d commits, not %d", MaxLogCommits, max)
+	}
+	ps, err := pathArgs(paths)
+	if err != nil {
+		return cmd{}, err
 	}
 	rs, err := revArgs(include, exclude)
 	if err != nil {
@@ -309,17 +313,21 @@ func logCommits(gitDir string, include, exclude []Rev, max int) (cmd, error) {
 	}
 	args := append([]string{"log", "--no-renames", "--no-mailmap", "--no-notes", "--no-show-signature", "--no-color",
 		"--max-count=" + strconv.Itoa(max), logFormat, "--end-of-options"}, rs...)
-	return cmd{args: append(args, "--"), gitDir: gitDir}, nil
+	return cmd{args: append(append(args, "--"), ps...), gitDir: gitDir}, nil
 }
 
 // revListCount counts commits in include and not in exclude.
-func revListCount(gitDir string, include, exclude []Rev) (cmd, error) {
+func revListCount(gitDir string, include, exclude []Rev, paths []string) (cmd, error) {
+	ps, err := pathArgs(paths)
+	if err != nil {
+		return cmd{}, err
+	}
 	rs, err := revArgs(include, exclude)
 	if err != nil {
 		return cmd{}, err
 	}
 	args := append([]string{"rev-list", "--count", "--end-of-options"}, rs...)
-	return cmd{args: append(args, "--"), gitDir: gitDir}, nil
+	return cmd{args: append(append(args, "--"), ps...), gitDir: gitDir}, nil
 }
 
 // mergeBase finds the best common ancestor (exit 1: none).
