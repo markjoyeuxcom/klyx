@@ -2,11 +2,15 @@ package fleetindex
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -15,6 +19,7 @@ import (
 	"time"
 
 	"k8s.io/client-go/rest"
+	certutil "k8s.io/client-go/util/cert"
 )
 
 // The design review of c03308d (slice 9a): each finding, as a regression.
@@ -343,5 +348,67 @@ func TestReaderRefusesOversizedHeaders(t *testing.T) {
 	rd2, _ := NewReader(&rest.Config{Host: ok.URL, TLSClientConfig: rest.TLSClientConfig{Insecure: true}})
 	if _, _, err := rd2.ListPage(context.Background(), cmGVR, "", func(Source) error { return nil }); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// Re-review of e76155a: the bounded transport keeps CA-file rotation - the
+// reader follows a rotated CA file (as client-go would) and its rotated
+// transport keeps the header bound.
+func TestReaderFollowsCARotation(t *testing.T) {
+	defer func(d time.Duration) { caRefresh = d }(caRefresh)
+	caRefresh = 0 // check on every request
+	certA, keyA, err := certutil.GenerateSelfSignedCertKey("127.0.0.1", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	certB, keyB, err := certutil.GenerateSelfSignedCertKey("127.0.0.1", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pairA, _ := tls.X509KeyPair(certA, keyA)
+	pairB, _ := tls.X509KeyPair(certB, keyB)
+	var current atomic.Pointer[tls.Certificate]
+	current.Store(&pairA)
+	big := false
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if big {
+			w.Header().Set("X-Test", strings.Repeat("x", 1<<20))
+		}
+		fmt.Fprint(w, `{"kind":"PartialObjectMetadataList","metadata":{"resourceVersion":"1"},"items":[]}`)
+	}))
+	srv.Config.ErrorLog = log.New(io.Discard, "", 0)
+	srv.TLS = &tls.Config{GetConfigForClient: func(*tls.ClientHelloInfo) (*tls.Config, error) {
+		return &tls.Config{Certificates: []tls.Certificate{*current.Load()}}, nil
+	}}
+	srv.StartTLS()
+	defer srv.Close()
+	caFile := filepath.Join(t.TempDir(), "ca.pem")
+	if err := os.WriteFile(caFile, certA, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rd, err := NewReader(&rest.Config{Host: srv.URL, TLSClientConfig: rest.TLSClientConfig{CAFile: caFile}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	list := func() error {
+		_, _, err := rd.ListPage(context.Background(), cmGVR, "", func(Source) error { return nil })
+		return err
+	}
+	if err := list(); err != nil {
+		t.Fatalf("initial: %v", err)
+	}
+	// the server and the CA file rotate together
+	if err := os.WriteFile(caFile, certB, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	current.Store(&pairB)
+	if err := list(); err != nil {
+		t.Fatalf("after the CA rotated: %v", err)
+	}
+	// the rotated transport keeps the header bound
+	big = true
+	if err := list(); err == nil {
+		t.Fatal("an oversized header passed the rotated transport")
 	}
 }

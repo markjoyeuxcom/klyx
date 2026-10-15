@@ -29,6 +29,10 @@ func NewReader(rc *rest.Config) (*Reader, error) {
 	c.Timeout = 0
 	c.NextProtos = []string{"http/1.1"}
 	bounded := false
+	caFile := ""
+	if len(c.CAData) == 0 {
+		caFile = c.CAFile // client-go rotates only a CA read from a file
+	}
 	own := func(rt http.RoundTripper) http.RoundTripper {
 		// the cache hands back its transport inside a tracking wrapper
 		base := rt
@@ -48,6 +52,11 @@ func NewReader(rc *rest.Config) (*Reader, error) {
 		t = t.Clone()
 		t.MaxResponseHeaderBytes = HeaderBytes
 		bounded = true
+		// unwrapping left client-go's CA-file rotation behind: a CA read
+		// from a file is rotated by the index's own holder instead
+		if caFile != "" && t.TLSClientConfig != nil {
+			return newCAHolder(caFile, t)
+		}
 		return t
 	}
 	c.WrapTransport = transport.Wrappers(own, c.WrapTransport)
