@@ -306,3 +306,42 @@ func TestDeletionKeepsMapCapacityCharged(t *testing.T) {
 		t.Fatalf("retained %d > charged %d", growth, charged)
 	}
 }
+
+// Re-review of 06eb92e: response headers are bounded too - an oversized
+// header fails the watch before it is opened, and holds nothing after.
+func TestReaderRefusesOversizedHeaders(t *testing.T) {
+	value := strings.Repeat("x", 1<<20)
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("X-Test", value)
+		w.WriteHeader(200)
+		w.(http.Flusher).Flush()
+		<-r.Context().Done()
+	}))
+	defer srv.Close()
+	rd, err := NewReader(&rest.Config{Host: srv.URL, TLSClientConfig: rest.TLSClientConfig{Insecure: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := heapNow()
+	opened := false
+	_, err = rd.Watch(context.Background(), cmGVR, "1", time.Minute, func() { opened = true }, func(string, Source) error { return nil })
+	if err == nil || opened {
+		t.Fatalf("an oversized header: err %v, opened %v", err, opened)
+	}
+	if growth := int64(heapNow()) - int64(before); growth > StreamReserve {
+		t.Fatalf("a refused watch retains %d bytes", growth)
+	}
+	runtime.KeepAlive(value)
+	// an ordinary header still works
+	ok := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Audit-Id", "c0f86a1b-87a5-4d0d-a283-95a62f94931f")
+		fmt.Fprint(w, `{"kind":"PartialObjectMetadataList","metadata":{"resourceVersion":"1"},"items":[]}`)
+	}))
+	defer ok.Close()
+	rd2, _ := NewReader(&rest.Config{Host: ok.URL, TLSClientConfig: rest.TLSClientConfig{Insecure: true}})
+	if _, _, err := rd2.ListPage(context.Background(), cmGVR, "", func(Source) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+}
