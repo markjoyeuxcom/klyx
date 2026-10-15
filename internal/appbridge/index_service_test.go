@@ -61,10 +61,17 @@ func TestIndexServiceCancelAndNil(t *testing.T) {
 	defer ix.Stop()
 	ix.SetClusters([]string{"prd"})
 	s := NewIndexService(ix)
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	d, err := s.Search(ctx, "w", 50)
+	// a short query answers the coverage alone
+	d, err := s.Search(context.Background(), "w", 50)
 	if err != nil || len(d.Hits) != 0 || len(d.Coverage) != 1 {
 		t.Fatalf("a short query answers coverage only: %+v %v", d, err)
+	}
+	// a cancelled search is cancelled, deterministically, whatever its query
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	for i := 0; i < 50; i++ {
+		if _, err := s.Search(ctx, "w", 50); err == nil || err.Error() != "search cancelled" {
+			t.Fatalf("run %d: %v", i, err)
+		}
 	}
 }

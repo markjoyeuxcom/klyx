@@ -79,6 +79,9 @@ const (
 	searchFixedPart = SearchReserve
 )
 
+// beforeScan runs before each cluster's scan: a test seam, nil otherwise.
+var beforeScan func(cluster string)
+
 // ErrSearchBudget: the index's budget cannot hold a search's working set now.
 var ErrSearchBudget = errors.New("fleetindex: the index's memory budget cannot hold a search now")
 
@@ -91,13 +94,16 @@ func searchReserve(limit int, cov []ClusterCoverage) int64 {
 }
 
 // candidate is a scanned match, compact: the Hit is built only for the
-// best limit of them.
+// best limit of them. It keeps the entry's identity strings, never the
+// entry - its labels would outlive a concurrent deletion uncharged (review
+// of 3436289) - and those strings' bytes are admitted while it is held.
 type candidate struct {
-	e        *Entry
-	desc     int32 // into the search's kind descriptions
-	order    int32
-	score    int32
-	gen, inc uint64
+	ns, name, uid string
+	bytes         int64
+	desc          int32 // into the search's kind descriptions
+	order         int32
+	score         int32
+	gen, inc      uint64
 }
 
 // scannedKind is one kind's description as the scan read it.
@@ -110,6 +116,9 @@ type scannedKind struct {
 // Search runs one search. Searches run one at a time; waiting for the slot
 // honours ctx, so a cancelled search never waits behind another.
 func (ix *Index) Search(ctx context.Context, query string, limit int) (Result, error) {
+	if err := ctx.Err(); err != nil {
+		return Result{}, err // decided before the slot, so it never races a free one
+	}
 	select {
 	case ix.searchSlot <- struct{}{}:
 	case <-ctx.Done():
@@ -125,10 +134,11 @@ func (ix *Index) Search(ctx context.Context, query string, limit int) (Result, e
 		return Result{}, ErrSearchBudget
 	}
 	released := false
+	var held int64 // the held candidates' identity bytes, admitted as they enter
 	res := Result{Coverage: cov, release: func() {
 		if !released {
 			released = true
-			ix.budget.Release("", 0, reserve)
+			ix.budget.Release("", 0, reserve+held)
 		}
 	}}
 	fail := func(err error) (Result, error) {
@@ -170,8 +180,12 @@ func (ix *Index) Search(ctx context.Context, query string, limit int) (Result, e
 	})
 	var kinds []scannedKind
 	top := &candHeap{c: make([]candidate, 0, limit), kinds: &kinds}
+	overBudget := false
 	scanned := 0
 	for i, name := range names {
+		if beforeScan != nil {
+			beforeScan(name)
+		}
 		cs[name].store.scan(func(kind string, k *kindStore, _ uint64) bool {
 			if !m.kindOK(k.desc.ref) {
 				return true
@@ -194,16 +208,31 @@ func (ix *Index) Search(ctx context.Context, query string, limit int) (Result, e
 					kinds = append(kinds, sk)
 					d = int32(len(kinds) - 1)
 				}
-				c := candidate{e: e, desc: d, order: int32(i), score: int32(score), gen: e.gen, inc: e.inc}
-				if top.Len() < limit {
+				c := candidate{ns: e.Namespace, name: e.Name, uid: e.UID, desc: d, order: int32(i), score: int32(score), gen: e.gen, inc: e.inc}
+				c.bytes = int64(len(c.ns) + len(c.name) + len(c.uid))
+				full := top.Len() >= limit
+				if full && !top.better(c, top.c[0]) {
+					continue
+				}
+				if !ix.budget.Admit("", ClassOther, 0, c.bytes) {
+					overBudget = true
+					return false
+				}
+				held += c.bytes
+				if !full {
 					heap.Push(top, c)
-				} else if top.better(c, top.c[0]) {
+				} else {
+					ix.budget.Release("", 0, top.c[0].bytes)
+					held -= top.c[0].bytes
 					top.c[0] = c
 					heap.Fix(top, 0)
 				}
 			}
 			return true
 		})
+		if overBudget {
+			return fail(ErrSearchBudget)
+		}
 		if ctx.Err() != nil {
 			return fail(ctx.Err())
 		}
@@ -212,7 +241,7 @@ func (ix *Index) Search(ctx context.Context, query string, limit int) (Result, e
 	for i := len(hits) - 1; i >= 0; i-- {
 		c := heap.Pop(top).(candidate)
 		k := kinds[c.desc]
-		hits[i] = Hit{Cluster: k.cluster, Kind: k.kind, Key: k.key, GVR: k.gvr, Namespace: c.e.Namespace, Name: c.e.Name, UID: c.e.UID,
+		hits[i] = Hit{Cluster: k.cluster, Kind: k.kind, Key: k.key, GVR: k.gvr, Namespace: c.ns, Name: c.name, UID: c.uid,
 			Incarnation: c.inc, Gen: c.gen, KindState: k.state, AsOf: k.asOf, score: int(c.score), order: int(c.order), observer: k.observer}
 	}
 	if err := ix.roles(ctx, cs, hits); err != nil {
@@ -297,8 +326,7 @@ func (h *candHeap) Pop() any {
 }
 
 // better orders matches: score, then fleet order, kind, namespace, name,
-// UID. An entry's identity fields never change once built, so they are read
-// outside the store's lock.
+// UID.
 func (h *candHeap) better(a, b candidate) bool {
 	switch {
 	case a.score != b.score:
@@ -310,12 +338,12 @@ func (h *candHeap) better(a, b candidate) bool {
 		return ka < kb
 	}
 	switch {
-	case a.e.Namespace != b.e.Namespace:
-		return a.e.Namespace < b.e.Namespace
-	case a.e.Name != b.e.Name:
-		return a.e.Name < b.e.Name
+	case a.ns != b.ns:
+		return a.ns < b.ns
+	case a.name != b.name:
+		return a.name < b.name
 	}
-	return a.e.UID < b.e.UID
+	return a.uid < b.uid
 }
 
 // matcher is one query: a name (and namespace/name) needle, and an

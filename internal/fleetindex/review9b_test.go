@@ -150,12 +150,17 @@ func TestSearchWorkingSetFitsItsReservation(t *testing.T) {
 	<-g.entered
 	growth := int64(heapNow()) - int64(before)
 	_, _, _, held := ix.budget.Used("a")
-	t.Logf("working set %d KiB held, %d KiB reserved", growth>>10, reserve>>10)
-	if growth > reserve {
-		t.Fatalf("a search holds %d bytes, reserved %d", growth, reserve)
+	// the 200 best candidates' identity strings are admitted as they enter
+	var ids int64
+	for i := 0; i < 200; i++ { // the shortest names win: web-000 to web-199
+		ids += int64(len("ns") + len(fmt.Sprintf("web-%03d", i)) + len(fmt.Sprint(i)))
 	}
-	if held-base != reserve {
-		t.Fatalf("the reservation is admitted: %d", held-base)
+	t.Logf("working set %d KiB held, %d KiB reserved", growth>>10, (reserve+ids)>>10)
+	if growth > reserve+ids {
+		t.Fatalf("a search holds %d bytes, reserved %d", growth, reserve+ids)
+	}
+	if held-base != reserve+ids {
+		t.Fatalf("admitted %d, want %d", held-base, reserve+ids)
 	}
 	close(g.release)
 	res := <-done
@@ -196,5 +201,59 @@ func TestSearchRefusedOverBudget(t *testing.T) {
 	defer ix.Stop()
 	if _, err := ix.Search(context.Background(), "web", MaxHits); err != ErrSearchBudget {
 		t.Fatalf("err %v", err)
+	}
+}
+
+// Re-review of 3436289: candidates keep identity strings, never entries -
+// a scan paused on one cluster while another cluster's scanned objects are
+// deleted holds no more than the budget still admits.
+func TestCandidatesKeepNoDeletedEntries(t *testing.T) {
+	before := heapNow()
+	ix := New(Settings{Kinds: []KindRef{refPods}, Limits: Limits{ClusterEntries: 1e6, ClusterBytes: 1 << 40, FleetEntries: 1e6, FleetBytes: 1 << 40, PodPercent: 100}})
+	defer ix.Stop()
+	ix.SetClusters([]string{"a", "b"})
+	for _, name := range []string{"a", "b"} {
+		c := ix.coordFor(name)
+		c.obs, c.ran, c.usable, c.word, c.gen = newFakeObs(1), true, true, "connected", 1
+		c.store.begin(1, 1)
+		m, _ := c.store.beginRead(1, "/pods", ClassPods)
+		c.store.describe(1, "/pods", ClassPods, kindDesc{ref: refPods, gvr: "v1/pods"})
+		n := 200
+		if name == "b" {
+			n = 1
+		}
+		for i := 0; i < n; i++ {
+			labels := map[string]string{}
+			for j := 0; j < 40; j++ {
+				labels[fmt.Sprintf("label-%02d", j)] = strings.Repeat("v", 40)
+			}
+			c.store.put(1, "/pods", m, Source{UID: fmt.Sprintf("%s-%d", name, i), Name: fmt.Sprintf("web-%03d", i), Namespace: "ns", Labels: labels})
+		}
+		c.store.endRead(1, "/pods", m, KindStatus{State: StateLive})
+	}
+	// the scan pauses before b, having scanned a, while a's objects go
+	paused, resume := make(chan struct{}), make(chan struct{})
+	beforeScan = func(name string) {
+		if name == "b" {
+			close(paused)
+			<-resume
+		}
+	}
+	defer func() { beforeScan = nil }()
+	done := make(chan Result, 1)
+	go func() { r, _ := ix.Search(context.Background(), "web", MaxHits); done <- r }()
+	<-paused
+	a := ix.clusters["a"]
+	for i := 0; i < 200; i++ {
+		a.store.remove(1, "/pods", fmt.Sprintf("a-%d", i))
+	}
+	growth := int64(heapNow()) - int64(before)
+	_, _, _, admitted := ix.budget.Used("a")
+	close(resume)
+	res := <-done
+	defer res.Release()
+	t.Logf("held %d KiB with %d KiB admitted", growth>>10, admitted>>10)
+	if growth > admitted+64<<10 { // the deleted entries' labels must not be kept
+		t.Fatalf("held %d bytes with %d admitted", growth, admitted)
 	}
 }

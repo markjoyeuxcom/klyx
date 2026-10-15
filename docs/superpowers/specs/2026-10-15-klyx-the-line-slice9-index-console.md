@@ -251,6 +251,9 @@ Five findings, all taken:
   - Matches are kept as compact candidates in a heap preallocated to `limit`; Hits are built only for the winners.
   - A query over 512 bytes (`MaxQueryBytes`) can match no name and searches nothing, before it is normalized.
   - Measured: a 200-hit search holds 69 KiB while waiting on roles, against 264 KiB reserved.
+- **Re-review of 3436289:**
+  - A candidate keeps its entry's identity strings, never the entry: an entry's labels would outlive a concurrent deletion uncharged. The strings' bytes are admitted to the search's reservation as a candidate enters the top-K, released when it is evicted, and the rest with the result.
+  - A search already cancelled returns its cancellation before contending for the slot, never at random against a free one.
 
 ## 11. As built: 9c-1 (the expected UID)
 
