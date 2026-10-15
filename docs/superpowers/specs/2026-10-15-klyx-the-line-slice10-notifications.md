@@ -94,7 +94,7 @@ An `end` batch, or a batch from a newer incarnation:
 - **The machine runs while disabled,** so enabling notifies only onsets after it. Disabling cancels every pending notification at once.
 - **Eligible:**
   - **an onset:** a new episode (§2.3) on a cluster in scope. Protected means the cluster's effective protection, as the destructive-verb guard reads it.
-  - **a recovery:** a recovered episode whose onset was **successfully sent**, when recoveries are on and the cluster is in scope. A queued onset, a focus-suppressed one, one that failed to send, and one withheld by de-duplication do not count as sent.
+  - **a recovery:** a recovered episode whose onset was **successfully sent**, when recoveries are on and the cluster is in scope. A queued onset, a focus-suppressed one, one that failed to send, and one withheld by de-duplication do not count as sent. An onset whose send is still in flight counts as sent until it fails (§3.3).
 
 ### 3.2 De-duplication
 
@@ -128,27 +128,31 @@ An `end` batch, or a batch from a newer incarnation:
 
 **Off the Observer loop:**
 - `Apply` runs on each cluster's Observer loop and only records state and signals.
-- A one-second tick composes what is due under the engine's lock, then sends and lists **after releasing it**, so a blocking OS call never holds up a loop.
-- Send outcomes are recorded afterwards, against the episode that queued the item.
+- A one-second tick runs `Flush`. Flushes are serialized: one at a time.
+- `Flush` composes what is due under the engine's lock, then sends and lists **after releasing it**, so a blocking OS call never holds up a loop.
 
-### 3.4 Bounds and saturation
+**An onset in flight:**
+- **At dispatch,** an onset counts as sent: its episode is marked sent before `Send` is called. A continuous ok that arrives while the call is blocked therefore queues the recovery as usual.
+- **When `Send` returns,** its outcome is recorded against the cluster state that dispatched it:
+  - **success:** nothing more;
+  - **failure:** the episode, if still open, is marked not sent, and any recovery queued for that episode since is removed.
+- **No completion is ever lost.** A queued recovery waits for its cluster's window, and the next `Flush` cannot start until this one has recorded its outcomes. So a recovery is never dispatched for an onset whose send later fails.
+- **No cancelled work is ever revived.** A failure only removes. End and reincarnation replace the cluster state, so an outcome recorded against the old state touches nothing current. Disabling has already cancelled the pending items.
+- **The in-flight state** is the current `Flush`'s outgoing list, bounded by the items it dispatched.
 
-Every retained map is bounded per cluster. A full one fails closed.
+### 3.4 Bounds
 
-| State | Bound | When full |
+The engine's state is bounded by the Observer's own ledger, so it cannot saturate on its own. Its only engine-local bound is de-duplication, which expires by itself.
+
+| State | Bound | Why it holds |
 |---|---|---|
-| **open episodes** (the only retained episodes: a closed episode is dropped at once) | 10,000 | a fault that would open another episode does not open one and is never notified. The cluster is **saturated** |
-| **evidence** (non-ok entries, summed over partitions) | 20,000 | the partition that cannot record an entry is marked saturated until a baseline of it fits. The cluster is **saturated** |
-| **de-duplication** (expired entries pruned first) | 10,000 unexpired | an item that would need a new entry is dropped, never evicting an unexpired guard. It is counted in the saturation listing |
-| **pending items** | bounded by the two above: at most one onset per open episode, and one recovery per de-duplication entry | - |
-| **in-app listings** | the last 20 | the oldest is dropped |
+| **evidence** | per partition, the Observer's `RoleCap` (50,000 by default), and only the non-ok entries | a committed ledger partition never holds more than `RoleCap` entries. Over the cap, the Observer emits a `capped` loss and drops the partition, and its next capture that fits commits a baseline marked after-cap. That baseline is the replacement checkpoint: it replaces the partition's evidence, silently. If the engine ever sees more than `RoleCap` non-ok entries in a partition, it treats the partition as lost until its next baseline, as the Observer does |
+| **open episodes** (a closed episode is dropped at once) | at most one per UID with evidence | an episode exists only while its UID's fold is not clear |
+| **pending items** | at most one onset per open episode, and one recovery per de-duplication entry | - |
+| **de-duplication** (expired entries pruned first) | 10,000 unexpired per cluster | when full, an item that would need a new entry is dropped, never evicting an unexpired guard. The drops are listed once in the app ("N notifications on <cluster> not sent: the de-duplication limit is full"). Entries expire within 30 minutes, so this heals by itself |
+| **in-app listings** | the last 20, each naming at most 20 objects | the oldest is dropped |
 
-**A saturated cluster** sends nothing:
-- its pending items are cancelled;
-- it is listed once in the app: "Health notifications paused on <cluster>: more than 10,000 open faults" (or "…objects not ok");
-- it resumes when every saturated partition has had a baseline that fits and the open episodes are below the bound.
-
-A paused fold could be missing evidence. Sending from it could claim a false recovery or repeat an onset, so a saturated cluster sends nothing.
+There is no cluster-wide pause: a partition the Observer cannot hold is a `capped` loss, handled like any other loss (§2.2), and its after-cap baseline settles it silently.
 
 ## 4. 10b: the frontend
 
@@ -160,7 +164,7 @@ A paused fold could be missing evidence. Sending from it could claim a false rec
 - **Focus:** the frontend reports `{focused, cluster}` on window focus and blur and on every route change (`NotificationsService.SetFocus`).
 - **The listings:**
   - a connect's partitions are gathered over 2 seconds into one listing per cluster ("3 faults present at connect on prd: Pod shop/a, …"), and likewise after a cap or a gap;
-  - a saturated cluster's pause (§3.4) is listed too.
+  - de-duplication drops (§3.4) are listed too.
   - Each listing becomes one Activity entry and one toast of a new `info` kind (neither a success nor a failure). It is never an OS notification.
   - The service keeps the last 20 listings, numbered. The webview subscribes to `health:baseline`, then reads `RecentBaselines()`, and lists each number once, so a cluster that connected before the webview loaded is still listed.
 - **A click** (`health:notification-open`) brings the window forward and reveals the object in its part's lens with its UID, which pins it (slice 9c-1). A multi-object notification opens its cluster.
@@ -191,8 +195,16 @@ A paused fold could be missing evidence. Sending from it could claim a false rec
     - end and reincarnation before the flush;
     - disabling, and narrowing the scope, during the window.
   - **De-duplication** across 30 minutes, and focus suppression consuming the allowance without counting as sent.
-  - **Bounds:** turnover past each bound; a full episode map and a full evidence map pausing the cluster and resuming after a fitting baseline; a full de-duplication map dropping rather than evicting; a repeated UID.
-  - **Off the loop:** a `Send` that blocks never blocks `Apply`.
+  - **Bounds:**
+    - a full de-duplication map drops rather than evicts, and is listed;
+    - a repeated UID;
+    - a partition over its cap is treated as lost until its baseline;
+    - end to end, a real Observer with a small `RoleCap` crossing it (a `capped` loss suspends) and falling back under it (the after-cap baseline settles silently, and later onsets notify).
+  - **Off the loop and in flight:**
+    - a blocked `Send` never blocks `Apply`;
+    - blocked `Send`, then a continuous ok, then `Send` succeeds: the recovery goes;
+    - the same with `Send` failing: no recovery;
+    - end, reincarnation or disabling during the call revive nothing.
   - **The service:** sending with `Data`, the click event, and the config block.
   - **End to end:** fed by a real Observer through `HealthSink`.
 - **10b:** the Settings panel (lazy authorization, refusal shown), focus reporting, the listings, click handling (opens pinned to the UID; a multi-object notification opens the cluster), and headless captures of the panel in both themes.
@@ -210,4 +222,8 @@ Codex accepted the seven open points, with these clarifications:
 
 **A suspended onset** that was genuinely observed before its coverage was lost, or before it became unknown, is still sent: as a historical observation, with its observation time and its qualification (§3.3). This never covers an onset discovered after a gap.
 
-The review's five design findings are answered in §2.1 (sampled sources, derived items), §2.2 (evidence per partition), §2.3 (settling from retained state), §3.3 (the pending items' kinds, lifecycle and cancellation) and §3.4 (bounds and saturation).
+The review's five design findings are answered in §2.1 (sampled sources, derived items), §2.2 (evidence per partition), §2.3 (settling from retained state), §3.3 (the pending items' kinds, lifecycle and cancellation) and §3.4 (bounds).
+
+The re-review of 066ca6b found two more gaps, answered here:
+- **A recovery during an in-flight onset send** (§3.3): the onset counts as sent at dispatch, a failure withdraws it along with any recovery queued since, and flushes are serialized.
+- **Engine-local saturation had no obtainable checkpoint** (§3.4): the engine's bounds are now the Observer's own, so the Observer's after-cap baseline is the checkpoint, and the cluster-wide pause is gone.
