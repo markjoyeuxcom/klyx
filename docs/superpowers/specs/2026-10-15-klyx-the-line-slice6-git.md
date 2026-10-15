@@ -217,7 +217,11 @@ git:
   - diverged at the merge base, or unrelated.
 - **The Ledger:**
   - The union of each behind or diverged station's newest 20 missing commits (`log T ^sha`), newest first by committer time (`log` gains `%ct`), capped at 20, with a flag when there are more.
-  - A commit's dots are the ordered stations whose list lacks it; at-target and ahead stations contain every one, and unknown or unrelated stations get none. A commit in the union's newest 20 that a station lacks is within that station's own newest 20, since both follow committer-time order, so the lists suffice.
+  - **A commit's dots are exact** (revised in design review of cbef8e4):
+    - At-target and ahead stations contain every commit; unknown or unrelated stations get no dots.
+    - A behind or diverged station lacks the commits in its list. Its list is complete when its missing count (`rev-list --count T ^sha`) fits in it, and then any commit absent from the list is one the station has.
+    - Otherwise each displayed commit absent from the list is checked with `merge-base --is-ancestor`. Git's walk order and committer-time ties mean a truncated list's absences prove nothing.
+    - "More" is set when the union passes 20, or when any station's list is truncated.
   - Commits only on an ahead or diverged station are its newest 5 of `log sha ^T`, with the rest counted by `rev-list --count`.
 - **"Open in Git"** is a `{sha}` link template:
   - GitHub, GitLab.com, Bitbucket and Azure DevOps (https and ssh forms);

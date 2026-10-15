@@ -396,8 +396,16 @@ func heldEvidence(s LineStationDTO, t string) *LineGitHeldDTO {
 // station's missing set (rev-list T ^sha), newest first by commit time,
 // capped; each with the ordered stations that contain it. Commits only on a
 // diverged or ahead station are listed under that station.
+//
+// Containment is exact (design review of cbef8e4): a station's list of its
+// newest missing commits is complete when its missing count fits in it, and
+// then absence from the list proves the station has the commit; otherwise
+// each displayed commit absent from the list is checked with
+// merge-base --is-ancestor. An at-target or ahead station contains every
+// commit of T's.
 func ledger(ctx context.Context, repo gitcli.Repo, tRev gitcli.Rev, shas []string, state map[string]string, clusters map[string][]string, out *LineGitDTO) error {
-	missing := map[string]map[string]bool{} // station sha -> the commits it lacks (its newest 20)
+	missing := map[string]map[string]bool{} // station sha -> its newest missing commits
+	complete := map[string]bool{}           // station sha -> that list is its whole missing set
 	union := map[string]gitcli.Commit{}
 	for _, sha := range shas {
 		if state[sha] != GitBehind && state[sha] != GitDiverged {
@@ -408,7 +416,11 @@ func ledger(ctx context.Context, repo gitcli.Repo, tRev gitcli.Rev, shas []strin
 		if err != nil {
 			return err
 		}
-		missing[sha] = map[string]bool{}
+		n, err := repo.Count(ctx, []gitcli.Rev{tRev}, []gitcli.Rev{r})
+		if err != nil {
+			return err
+		}
+		missing[sha], complete[sha] = map[string]bool{}, n <= len(cs)
 		for _, c := range cs {
 			missing[sha][c.SHA] = true
 			union[c.SHA] = c
@@ -427,13 +439,31 @@ func ledger(ctx context.Context, repo gitcli.Repo, tRev gitcli.Rev, shas []strin
 	if len(all) > ledgerMax {
 		all, out.LedgerMore = all[:ledgerMax], true
 	}
+	for _, ok := range complete {
+		out.LedgerMore = out.LedgerMore || !ok // a station misses more than its list holds
+	}
 	for _, c := range all {
 		d := commitDTO(c)
+		cRev, _ := gitcli.SHA(c.SHA)
 		for _, sha := range shas {
-			if st := state[sha]; st == GitUnknown || st == GitUnrelated || missing[sha][c.SHA] {
-				continue
+			has := false
+			switch st := state[sha]; {
+			case st == GitAt || st == GitAhead:
+				has = true
+			case st != GitBehind && st != GitDiverged, missing[sha][c.SHA]:
+			case complete[sha]:
+				has = true
+			default: // beyond the station's list: ask git
+				r, _ := gitcli.SHA(sha)
+				anc, err := repo.IsAncestor(ctx, cRev, r)
+				if err != nil {
+					return err
+				}
+				has = anc
 			}
-			d.Has = append(d.Has, clusters[sha]...)
+			if has {
+				d.Has = append(d.Has, clusters[sha]...)
+			}
 		}
 		out.Ledger = append(out.Ledger, d)
 	}

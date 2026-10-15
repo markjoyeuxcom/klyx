@@ -4,10 +4,12 @@ package appbridge
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -348,6 +350,87 @@ func TestCommitLinks(t *testing.T) {
 	} {
 		if got := commitLink(c.key, c.web); got != c.want {
 			t.Errorf("%s %s: %q, want %q", c.key, c.web, got, c.want)
+		}
+	}
+}
+
+// Ledger containment is exact even when a station misses more than 20
+// commits and commit times tie (design review of cbef8e4): every displayed
+// commit's dots match git's own ancestry.
+func TestLedgerContainmentIsExact(t *testing.T) {
+	env := gitcli.OwnerEnv(os.Getenv, os.Environ())
+	env.Home = t.TempDir()
+	g, err := gitcli.Locate(context.Background(), env)
+	if err != nil {
+		t.Skipf("no usable git: %v", err)
+	}
+	work := t.TempDir()
+	run := func(args ...string) string {
+		t.Helper()
+		c := exec.Command(g.Path, args...)
+		c.Dir = work
+		// One timestamp for every commit: git's walk order and the Ledger's
+		// time-then-id order disagree at every tie.
+		c.Env = []string{"HOME=" + work, "PATH=/usr/bin:/bin", "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null",
+			"GIT_AUTHOR_NAME=Ada", "GIT_AUTHOR_EMAIL=ada@example.test", "GIT_COMMITTER_NAME=Ada", "GIT_COMMITTER_EMAIL=ada@example.test",
+			"GIT_AUTHOR_DATE=2026-10-01T10:00:00Z", "GIT_COMMITTER_DATE=2026-10-01T10:00:00Z"}
+		out, err := c.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	run("init", "-q", "-b", "main")
+	run("commit", "-q", "--allow-empty", "-m", "base")
+	base := run("rev-parse", "HEAD")
+	run("checkout", "-qb", "y")
+	for i := 1; i <= 3; i++ {
+		run("commit", "-q", "--allow-empty", "-m", fmt.Sprintf("y%d", i))
+	}
+	yTip := run("rev-parse", "HEAD")
+	run("checkout", "-q", "main")
+	for i := 1; i <= 25; i++ {
+		run("commit", "-q", "--allow-empty", "-m", fmt.Sprintf("x%d", i))
+	}
+	run("merge", "-q", "--no-ff", "-m", "merge y", "y")
+	run("commit", "-q", "--allow-empty", "-m", "after merge")
+	base2 := gitcli.CacheBase(t.TempDir())
+	if err := gitcli.EnsureBase(base2); err != nil {
+		t.Fatal(err)
+	}
+	cfg := gitcli.GlobalConfigPath(base2)
+	if err := gitcli.WriteGlobalConfig(cfg, gitcli.Helpers{}, ""); err != nil {
+		t.Fatal(err)
+	}
+	runner := gitcli.Runner{Git: g, Env: env, GlobalConfig: cfg}
+	cache := gitcli.CacheDir(base2, "https://github.com/acme/fleet.git")
+	if err := runner.InitRepo(context.Background(), cache, "https://github.com/acme/fleet.git"); err != nil {
+		t.Fatal(err)
+	}
+	run("push", "-q", cache, "main:refs/klyx/tracked/refs/heads/main")
+
+	h := newGitHarness(t, lineFleet, nil)
+	h.store.mu.Lock()
+	h.store.status["https://github.com/acme/fleet.git"] = gitcache.Status{FetchedAt: time.Now(), AttemptedAt: time.Now()}
+	h.store.read = func(url string, fn func(gitcli.Repo) error) error { return fn(runner.Repo(cache)) }
+	h.store.mu.Unlock()
+	h.push(LineDTO{Version: 9, Key: h.key, Stations: []LineStationDTO{
+		// Both miss more than 20 commits, and git walks them differently:
+		// the y side misses x commits deep in base's walk, past its 20.
+		gitStation("far", "differs", base),
+		gitStation("side", "differs", yTip),
+	}})
+	got := h.waitLine(9)
+	if got.State != LineGitReady || len(got.Ledger) != 20 || !got.LedgerMore {
+		t.Fatalf("ledger %d commits, more %v, state %s %s", len(got.Ledger), got.LedgerMore, got.State, got.Reason)
+	}
+	for _, c := range got.Ledger {
+		for cluster, sha := range map[string]string{"far": base, "side": yTip} {
+			truth := exec.Command(g.Path, "--git-dir="+cache, "merge-base", "--is-ancestor", c.SHA, sha).Run() == nil
+			has := slices.Contains(c.Has, cluster)
+			if has != truth {
+				t.Errorf("%s %q: the Ledger says %s has it = %v; git says %v", c.SHA[:7], c.Subject, cluster, has, truth)
+			}
 		}
 	}
 }
