@@ -237,13 +237,20 @@ describe("the detail is fenced by UID", () => {
     expect(inspector().getByTestId("node-detail-asof").textContent).toMatch(/^Last read .* - the latest read found another object with this name \(UID uid-a-2, not uid-a\)\.$/);
   });
 
-  it("a same-name replacement is read afresh; the old object's detail never becomes the new one's", () => {
+  // The Line slice 4 §6.3 (design review 37f00bc3): pinned to the node's
+  // UID - a same-name replacement is "Replaced", never followed; only "Open
+  // the new object" reads it, and the old detail never becomes the new one's.
+  it("a same-name replacement is Replaced, not followed; Open the new object reads it afresh", () => {
     seed([node("a")]);
     render(<NodesView cluster="x" />);
     select("a");
     landDetail(detail(node("a")));
     vi.mocked(openNodeDetail).mockClear();
     push(2, [node("a", "ok", { uid: "uid-a-2" })]);
+    expect(openNodeDetail).not.toHaveBeenCalled();
+    expect(inspector().getByText("Replaced.")).toBeTruthy();
+    expect(inspector().queryByRole("button", { name: "Cordon" })).toBeNull();
+    fireEvent.click(inspector().getByRole("button", { name: "Open the new object" }));
     expect(openNodeDetail).toHaveBeenCalledTimes(1);
     expect(openNodeDetail).toHaveBeenCalledWith("x", "a", "uid-a-2");
     expect(inspector().queryByText("pod-on-a")).toBeNull();
@@ -284,6 +291,8 @@ describe("verbs are pinned to the armed node", () => {
     expect(screen.getByRole("dialog")).toBeTruthy();
     recreate(2, "uid-a-2");
     expect(screen.queryByRole("dialog")).toBeNull();
+    expect(inspector().queryByRole("button", { name: /^More/ })).toBeNull(); // replaced: no action runs on it
+    fireEvent.click(inspector().getByRole("button", { name: "Open the new object" }));
     fireEvent.click(inspector().getByRole("button", { name: /^More/ }));
     fireEvent.click(screen.getByRole("menuitem", { name: /^Drain/ }));
     expect(screen.getByRole("dialog", { name: "Drain node a" })).toBeTruthy();

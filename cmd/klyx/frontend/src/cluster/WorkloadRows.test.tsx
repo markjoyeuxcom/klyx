@@ -296,7 +296,10 @@ describe("rollout history is fenced by UID", () => {
     return { promise, resolve };
   }
 
-  it("a recreation drops the loaded history and its undo; the new object's history is read", async () => {
+  // The Line slice 4 §6.3 (design review 37f00bc3): a recreation is
+  // "Replaced" - the pinned object keeps its evidence, no undo runs on it,
+  // and only "Open the new object" reads the new object's history.
+  it("a recreation is Replaced: no undo on it; Open the new object reads the new history", async () => {
     vi.mocked(rolloutHistory).mockResolvedValueOnce(hist("uid-api", "old-object-image"));
     seed([wl("api")]);
     render(<WorkloadsView cluster="x" />);
@@ -305,8 +308,11 @@ describe("rollout history is fenced by UID", () => {
     const next = deferred<RolloutHistoryResultDTO>();
     vi.mocked(rolloutHistory).mockReturnValueOnce(next.promise);
     push(2, [wl("api", "ok", { uid: "uid-api-2" })]);
-    expect(inspector().queryByText(/old-object-image/)).toBeNull();
+    expect(inspector().getByText("Replaced.")).toBeTruthy();
     expect(inspector().queryByText("undo →")).toBeNull();
+    expect(vi.mocked(rolloutHistory).mock.calls.some((c) => c.includes("uid-api-2"))).toBe(false);
+    fireEvent.click(inspector().getByRole("button", { name: "Open the new object" }));
+    expect(inspector().queryByText(/old-object-image/)).toBeNull();
     await act(async () => { next.resolve(hist("uid-api-2", "new-object-image")); });
     expect(inspector().getByText(/new-object-image:v1/)).toBeTruthy();
     fireEvent.click(inspector().getByText("undo →"));
@@ -314,13 +320,14 @@ describe("rollout history is fenced by UID", () => {
     expect(rolloutUndo).toHaveBeenCalledWith("x", "Deployment", "app", "api", "uid-api-2", 1);
   });
 
-  it("a deferred reply for the earlier object never lands on the replacement", async () => {
+  it("a deferred reply for the earlier object never lands on the replacement once it is opened", async () => {
     const old = deferred<RolloutHistoryResultDTO>();
     vi.mocked(rolloutHistory).mockReturnValueOnce(old.promise).mockResolvedValueOnce(hist("uid-api-2", "new-object-image"));
     seed([wl("api")]);
     render(<WorkloadsView cluster="x" />);
     select("api");
     push(2, [wl("api", "ok", { uid: "uid-api-2" })]);
+    fireEvent.click(inspector().getByRole("button", { name: "Open the new object" }));
     await act(async () => { old.resolve(hist("uid-api", "old-object-image")); });
     expect(inspector().queryByText(/old-object-image/)).toBeNull();
     expect(await inspector().findByText(/new-object-image:v1/)).toBeTruthy();

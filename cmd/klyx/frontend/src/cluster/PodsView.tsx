@@ -35,6 +35,7 @@ import { usePodRows } from "../health/usePodRows";
 import { useCommitProbe } from "../health/perfHooks";
 import { clock, coverageGaps, kindEvidence, lastGoodAt, type KindEvidence } from "../layout/coverage";
 import { useInspectorAI } from "../ai/AIExplain";
+import { usePinnedSubject } from "./usePinnedSubject";
 
 // Pods lens on the shared workspace template (2026-10 redesign pilot). The
 // template owns geometry; this file owns pod data, filters, selection and the
@@ -165,16 +166,18 @@ export function PodsView({ cluster }: { cluster: string }) {
 
   const effectiveCursor = filtered.length === 0 ? -1 : Math.min(cursor, filtered.length - 1);
 
-  // Selection follows namespace/name; its detail and verbs follow the UID. A
-  // pod missing from the rows keeps its last row: removed only on a complete
-  // read of the Pod kind, otherwise unverified (slice 3 §5a).
+  // The selection is pinned to its pod's UID (The Line slice 4 §6.3): a pod
+  // missing from the rows keeps its last row - removed only on a complete
+  // read of the Pod kind, otherwise unverified (slice 3 §5a) - and a
+  // same-name pod with a new UID on a complete read is "replaced", never
+  // silently followed. Its detail and verbs follow the pinned UID.
   const sel = mine ? pods.selected : null;
-  const live = sel ? allItems.find((p) => p.namespace === sel.namespace && p.name === sel.name) : undefined;
-  const lastRow = useRef<{ cluster: string; p: PodRowDTO } | null>(null);
-  if (live) lastRow.current = { cluster, p: live };
-  const prior = sel && lastRow.current?.cluster === cluster && keyOf(lastRow.current.p) === keyOf(sel) ? lastRow.current.p : null;
-  const subject = live ?? prior;
-  const gone: "removed" | "unverified" | null = sel && !live ? (ev === "complete" ? "removed" : "unverified") : null;
+  const found = sel ? allItems.find((p) => p.namespace === sel.namespace && p.name === sel.name) : undefined;
+  const pin = usePinnedSubject(cluster, sel ? keyOf(sel) : null, found, ev === "complete");
+  const subject = pin.subject;
+  const live = pin.gone ? undefined : found; // the pinned pod, while the rows hold it
+  // the inspector gates on "removed": a replaced pod runs no action either
+  const gone: "removed" | "unverified" | null = pin.gone === "replaced" ? "removed" : pin.gone;
 
   // Opening a row reads its detail; the row's later changes re-read it, and a
   // same-name replacement is read afresh - the old object's detail never
@@ -469,6 +472,7 @@ export function PodsView({ cluster }: { cluster: string }) {
               uid={subject.uid ?? sel.uid}
               nowS={nowS}
               gone={gone}
+              replaced={pin.gone === "replaced" && pin.next ? () => { const n = pin.next as PodRowDTO; pin.adopt(); openRow(n); } : undefined}
               rsEv={rsEv}
               detail={pods.detail}
               loading={pods.detailLoading}
@@ -607,12 +611,13 @@ type Pending = { verb: "restart" | "delete"; summary: PodRowDTO } | { verb: "deb
 // placement, then collapsed metadata. The row (live, or the selection's last)
 // is the verdict and the facts; the detail is shown only for the row's UID
 // (design §5b) - a same-name replacement's detail never becomes this one's.
-function PodInspector({ cluster, row, uid, nowS, gone, rsEv, detail, loading, isProtected, onClose, onOpenLogs }: {
+function PodInspector({ cluster, row, uid, nowS, gone, replaced, rsEv, detail, loading, isProtected, onClose, onOpenLogs }: {
   cluster: string;
   row: PodRowDTO;
   uid: string;
   nowS: number;
   gone: "removed" | "unverified" | null;
+  replaced?: () => void;
   rsEv: KindEvidence; // what owner resolution read
   detail: PodDetailDTO | null;
   loading: boolean;
@@ -713,7 +718,7 @@ function PodInspector({ cluster, row, uid, nowS, gone, rsEv, detail, loading, is
 
   return (
     <div data-testid="pod-detail-panel" style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
-      <InspectorLayout pin={{ cluster: cluster, uid: uid || undefined }}
+      <InspectorLayout pin={{ cluster: cluster, uid: uid || undefined }} replaced={replaced}
         kind="Pod"
         namespace={namespace}
         name={name}

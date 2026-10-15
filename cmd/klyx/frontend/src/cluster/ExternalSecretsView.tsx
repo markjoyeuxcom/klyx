@@ -21,6 +21,7 @@ import { fitColumns, type ColumnDef } from "../layout/columns";
 import { clock, combineEvidence, coverageGaps, joinCoverage, kindEvidence, lastGoodAt, type JoinCoverage, type KindEvidence } from "../layout/coverage";
 import { useInspectorAI } from "../ai/AIExplain";
 import { useClusterKey } from "./useClusterKey";
+import { usePinnedSubject } from "./usePinnedSubject";
 
 const keyOf = (e: { namespace: string; name: string }) => `${e.namespace}/${e.name}`;
 
@@ -204,24 +205,24 @@ export function ExternalSecretsView({ cluster }: { cluster: string }) {
 
   // Selection lifecycle (secrets keyed in the store, stores local).
   const selKey = mine ? eso.selectedKey : null;
-  // the selection's last evidence, for this cluster and key only
+  // The selection's last evidence, for this cluster and key only, pinned to
+  // its object's UID (The Line slice 4 §6.3): a same-name object with a new
+  // UID on a complete read is "replaced", never silently followed. Missing
+  // without a complete read of its own kind it is kept with its last row,
+  // unverified - never removed (slice 3 §5a).
   const selectedSecret = selKey ? secrets.find((e) => keyOf(e) === selKey) : undefined;
-  const lastSecret = useRef<{ cluster: string; e: ExternalSecretDTO } | null>(null);
-  if (selectedSecret) lastSecret.current = { cluster, e: selectedSecret };
-  const secretRemoved = !!selKey && secretsEv === "complete" && !selectedSecret;
-  const priorSecret = lastSecret.current?.cluster === cluster && keyOf(lastSecret.current.e) === selKey ? lastSecret.current.e : null;
-  // missing without a complete read of its own kind: kept with its last row,
-  // unverified - never removed (slice 3 §5a)
-  const secretUnverified = !!selKey && !selectedSecret && !secretRemoved && !!priorSecret;
-  const secretSubject = selectedSecret ?? priorSecret;
+  const secretPin = usePinnedSubject(cluster, selKey, selectedSecret, secretsEv === "complete");
+  const secretReplaced = secretPin.gone === "replaced";
+  const secretRemoved = secretPin.gone === "removed" || secretReplaced; // the inspector gates on removed
+  const secretUnverified = secretPin.gone === "unverified";
+  const secretSubject = secretPin.subject;
   const selectedStore = storeSel ? stores.find((s) => storeKey(s) === storeSel) : undefined;
-  const lastStore = useRef<{ cluster: string; s: ExternalSecretStoreDTO } | null>(null);
-  if (selectedStore) lastStore.current = { cluster, s: selectedStore };
-  // a store is removed only when ITS kind's read is complete
-  const storeRemoved = !!storeSel && !selectedStore && evidenceOf(storeSel.split("/")[0]) === "complete";
-  const priorStore = lastStore.current?.cluster === cluster && storeKey(lastStore.current.s) === storeSel ? lastStore.current.s : null;
-  const storeUnverified = !!storeSel && !selectedStore && !storeRemoved && !!priorStore;
-  const storeSubject = selectedStore ?? priorStore;
+  // a store is removed (or replaced) only when ITS kind's read is complete
+  const storePin = usePinnedSubject(cluster, storeSel, selectedStore, !!storeSel && evidenceOf(storeSel.split("/")[0]) === "complete");
+  const storeReplaced = storePin.gone === "replaced";
+  const storeRemoved = storePin.gone === "removed" || storeReplaced;
+  const storeUnverified = storePin.gone === "unverified";
+  const storeSubject = storePin.subject;
   useEffect(() => { if (selectedSecret && view === "secrets" && !visibleSecrets.includes(selectedSecret)) selectSecret(null); }, [selectedSecret, visibleSecrets, view, selectSecret]);
   useEffect(() => { if (selectedStore && view === "stores" && !visibleStores.includes(selectedStore)) setStoreSel(null); }, [selectedStore, visibleStores, view, setStoreSel]);
   const enteredCluster = useRef(cluster);
@@ -445,6 +446,7 @@ export function ExternalSecretsView({ cluster }: { cluster: string }) {
           nowS={nowS}
           removed={secretRemoved}
           unverified={secretUnverified}
+          replaced={secretReplaced ? secretPin.adopt : undefined}
           store={kindCov(secretSubject.storeKind) !== "unknown" ? resolveStore(secretSubject, stores) : undefined}
           storeCov={kindCov(secretSubject.storeKind)}
           onClose={() => { autoSelect.current = "done"; selectSecret(null); }}
@@ -457,6 +459,7 @@ export function ExternalSecretsView({ cluster }: { cluster: string }) {
           store={storeSubject}
           removed={storeRemoved}
           unverified={storeUnverified}
+          replaced={storeReplaced ? storePin.adopt : undefined}
           secrets={secretsFor(storeSubject)}
           secretsCov={secretsCov}
           onClose={() => setStoreSel(null)}
@@ -487,12 +490,13 @@ function RemovedNotice({ kind }: { kind: string }) {
   );
 }
 
-function SecretInspector({ cluster, e, nowS, removed, unverified, store, storeCov, onClose, onOpenStore }: {
+function SecretInspector({ cluster, e, nowS, removed, unverified, replaced, store, storeCov, onClose, onOpenStore }: {
   cluster: string;
   e: ExternalSecretDTO;
   nowS: number;
   removed: boolean;
   unverified: boolean;
+  replaced?: () => void;
   store: ExternalSecretStoreDTO | undefined;
   storeCov: JoinCoverage;
   onClose: () => void;
@@ -510,7 +514,7 @@ function SecretInspector({ cluster, e, nowS, removed, unverified, store, storeCo
   const more: MenuItem[] = manifestRef ? [{ label: "View manifest in Resources", onSelect: () => { const nav = useFleet.getState(); nav.openResource(manifestRef); nav.openInstance(e.namespace, e.name); } }] : [];
   return (
     <div data-testid="eso-secret-panel" style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
-      <InspectorLayout pin={{ cluster: cluster, uid: e.uid || undefined }}
+      <InspectorLayout pin={{ cluster: cluster, uid: e.uid || undefined }} replaced={replaced}
         kind="ExternalSecret"
         namespace={e.namespace}
         name={e.name}
@@ -571,7 +575,7 @@ function SecretInspector({ cluster, e, nowS, removed, unverified, store, storeCo
   );
 }
 
-function StoreInspector({ cluster, store, removed, unverified, secrets, secretsCov, onClose, onOpenSecret }: { cluster: string; store: ExternalSecretStoreDTO; removed: boolean; unverified: boolean; secrets: ExternalSecretDTO[]; secretsCov: JoinCoverage; onClose: () => void; onOpenSecret: (e: ExternalSecretDTO) => void }) {
+function StoreInspector({ cluster, store, removed, unverified, replaced, secrets, secretsCov, onClose, onOpenSecret }: { cluster: string; store: ExternalSecretStoreDTO; removed: boolean; unverified: boolean; replaced?: () => void; secrets: ExternalSecretDTO[]; secretsCov: JoinCoverage; onClose: () => void; onOpenSecret: (e: ExternalSecretDTO) => void }) {
   const ai = useInspectorAI(store.uid ? { kind: "row" as const, task: "eso", part: "stores", uid: store.uid } : null, `${store.kind}/${store.namespace ? `${store.namespace}/` : ""}${store.name}`, !removed && !unverified, cluster);
   const role = roleOf(store);
   const ref = wellKnownResourceRef("external-secrets.io", store.kind);
@@ -579,7 +583,7 @@ function StoreInspector({ cluster, store, removed, unverified, secrets, secretsC
   const blocked = secrets.filter(included);
   return (
     <div data-testid="eso-store-panel" style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
-      <InspectorLayout pin={{ cluster: cluster, uid: store.uid || undefined }}
+      <InspectorLayout pin={{ cluster: cluster, uid: store.uid || undefined }} replaced={replaced}
         kind={store.kind}
         namespace={store.namespace || undefined}
         name={store.name}

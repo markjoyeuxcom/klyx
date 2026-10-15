@@ -20,6 +20,7 @@ import { fitColumns, type ColumnDef } from "../layout/columns";
 import { fmtCpu, fmtMem } from "./saturation";
 import { useInspectorAI } from "../ai/AIExplain";
 import { useClusterKey } from "./useClusterKey";
+import { usePinnedSubject } from "./usePinnedSubject";
 
 // KarpenterView - the node-autoscaling diagnosis lens on the workspace
 // template (spec §6 step 5), in Karpenter's vocabulary. Read-only. NodePools
@@ -179,10 +180,6 @@ export function KarpenterView({ cluster }: { cluster: string }) {
   // list's (Codex review of 442d42a #1).
   const claimsCov = joinCoverage(rows.poolNodesDep ? kindEvidence(true, [rows.poolNodesDep], "NodeClaim", null) : "pending");
 
-  // Selections keep their last row: removed only on a complete read of their
-  // own kind, otherwise unverified (slice 3 §5a).
-  const lastClaim = useRef<{ cluster: string; c: KarpenterClaimDTO } | null>(null);
-  const lastPool = useRef<{ cluster: string; p: KarpenterPoolDTO } | null>(null);
 
   const keys: string[] = view === "claims" ? claims.map((c) => c.name) : view === "pools" ? pools.map((p) => p.name) : events.map(eventKey);
   const cursorIdx = cursorKey === null ? -1 : keys.indexOf(cursorKey);
@@ -264,13 +261,13 @@ export function KarpenterView({ cluster }: { cluster: string }) {
     </div>
   ) : null;
 
-  const liveClaim = view === "claims" && selKey ? claims.find((c) => c.name === selKey) : undefined;
-  const livePool = view === "pools" && selKey ? pools.find((p) => p.name === selKey) : undefined;
-  if (liveClaim) lastClaim.current = { cluster, c: liveClaim };
-  if (livePool) lastPool.current = { cluster, p: livePool };
-  const priorClaim = view === "claims" && lastClaim.current?.cluster === cluster && lastClaim.current.c.name === selKey ? lastClaim.current.c : null;
-  const priorPool = view === "pools" && lastPool.current?.cluster === cluster && lastPool.current.p.name === selKey ? lastPool.current.p : null;
-  const selClaim = liveClaim ?? priorClaim ?? undefined;
+  // Selections keep their last row - removed only on a complete read of their
+  // own kind, otherwise unverified (slice 3 §5a) - and are pinned to their
+  // UID: a same-name object with a new UID on a complete read is "replaced"
+  // (The Line slice 4 §6.3), never silently followed.
+  const claimPin = usePinnedSubject(cluster, view === "claims" ? selKey : null, view === "claims" && selKey ? claims.find((c) => c.name === selKey) : undefined, claimsEv === "complete");
+  const poolPin = usePinnedSubject(cluster, view === "pools" ? selKey : null, view === "pools" && selKey ? pools.find((p) => p.name === selKey) : undefined, poolsEv === "complete");
+  const selClaim = claimPin.subject ?? undefined;
   // Notices stack: each is its own evidence, none hides another.
   const notices: React.ReactNode[] = [];
   if (snap?.error) notices.push(<div key="snap" role="status" data-testid="karp-snapshot-error" className="t-body" style={{ color: "var(--color-text-tertiary)", padding: "4px 0", overflowWrap: "anywhere" }}><span className="t-status" style={{ color: "var(--color-text-secondary)" }}>Controller health and disruption activity could not be read.</span> {snap.error}</div>);
@@ -279,9 +276,9 @@ export function KarpenterView({ cluster }: { cluster: string }) {
   if (rowsRefreshing) notices.push(<div key="a4" role="status" data-testid="rows-refreshing" className="t-secondary" style={{ padding: "4px 0" }}>Rows as of {rowsAsOf} - refreshing; the totals are the cluster summary's.{rows.rowsState.refreshError ? ` Last re-read failed: ${rows.rowsState.refreshError}` : ""}</div>);
   if (discoveryGap) notices.push(<div key="gap" role="status" data-testid="discovery-gap" className="t-secondary" style={{ padding: "4px 0", color: "var(--color-text-warning)", overflowWrap: "anywhere" }}>Discovery re-check failing - {discoveryGap}. A capability gap only; the rows keep their own state.</div>);
   if (activityNotice) notices.push(<div key="feed">{activityNotice}</div>);
-  const selPool = livePool ?? priorPool ?? undefined;
-  const claimGone: "removed" | "unverified" | null = !liveClaim && selClaim ? (claimsEv === "complete" ? "removed" : "unverified") : null;
-  const poolGone: "removed" | "unverified" | null = !livePool && selPool ? (poolsEv === "complete" ? "removed" : "unverified") : null;
+  const selPool = poolPin.subject ?? undefined;
+  const claimGone: "removed" | "unverified" | null = claimPin.gone === "replaced" ? "removed" : claimPin.gone;
+  const poolGone: "removed" | "unverified" | null = poolPin.gone === "replaced" ? "removed" : poolPin.gone;
   const selEvent = view === "activity" && selKey ? events.find((e) => eventKey(e) === selKey) : undefined;
 
   const row = (k: string, children: React.ReactNode) => (
@@ -377,8 +374,8 @@ export function KarpenterView({ cluster }: { cluster: string }) {
       }
       footer={<span className="t-legend">j k navigate · ↵ inspect</span>}
       footerEnd={<span className="t-secondary">{view === "claims" ? `stuck first · drift and consolidation are intended behaviour, not faults${asOf}` : view === "pools" ? `broken first${asOf}` : feedIncomplete ? "incomplete read · newest among the events read" : "newest first"}</span>}
-      inspector={selClaim ? <ClaimInspector cluster={cluster} c={selClaim} nowS={nowS} gone={claimGone} onClose={() => setSelKey(null)} />
-        : selPool ? <PoolInspector cluster={cluster} p={selPool} gone={poolGone} claimsCov={claimsCov} onClose={() => setSelKey(null)} />
+      inspector={selClaim ? <ClaimInspector cluster={cluster} c={selClaim} nowS={nowS} gone={claimGone} replaced={claimPin.gone === "replaced" ? claimPin.adopt : undefined} onClose={() => setSelKey(null)} />
+        : selPool ? <PoolInspector cluster={cluster} p={selPool} gone={poolGone} replaced={poolPin.gone === "replaced" ? poolPin.adopt : undefined} claimsCov={claimsCov} onClose={() => setSelKey(null)} />
         : selEvent ? <EventPanel cluster={cluster} e={selEvent} onClose={() => setSelKey(null)} />
         : undefined}
       inspectorLabel={view === "claims" ? "NodeClaim details" : view === "pools" ? "NodePool details" : "Event details"}
@@ -399,7 +396,7 @@ function GoneNotice({ kind, gone }: { kind: string; gone: "removed" | "unverifie
   );
 }
 
-function ClaimInspector({ cluster, c, nowS, gone, onClose }: { cluster: string; c: KarpenterClaimDTO; nowS: number; gone: "removed" | "unverified" | null; onClose: () => void }) {
+function ClaimInspector({ cluster, c, nowS, gone, replaced, onClose }: { cluster: string; c: KarpenterClaimDTO; nowS: number; gone: "removed" | "unverified" | null; replaced?: () => void; onClose: () => void }) {
   const ai = useInspectorAI(c.uid ? { kind: "row" as const, task: "karpenter", part: "nodeclaims", uid: c.uid } : null, `NodeClaim/${c.name}`, !gone, cluster);
   const role = roleOf(c);
   const age = formatAge(ageOf(c, nowS));
@@ -417,7 +414,7 @@ function ClaimInspector({ cluster, c, nowS, gone, onClose }: { cluster: string; 
       : role.kind === "progressing" ? `${c.nodeName ? "Initializing" : "Launching"} for ${age}${pending ? ` - ${pending}` : " - the launch chain has not finished yet"}.` : null;
   return (
     <div data-testid="karp-claim-panel" style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
-      <InspectorLayout pin={{ cluster: cluster, uid: c.uid || undefined }} kind="NodeClaim" name={c.name} meta={[c.pool && `pool ${c.pool}`, c.instanceType, c.capacityType].filter(Boolean).join(" · ")} onClose={onClose}
+      <InspectorLayout pin={{ cluster: cluster, uid: c.uid || undefined }} replaced={replaced} kind="NodeClaim" name={c.name} meta={[c.pool && `pool ${c.pool}`, c.instanceType, c.capacityType].filter(Boolean).join(" · ")} onClose={onClose}
         verdict={gone ? <GoneNotice kind="NodeClaim" gone={gone} /> : (
           <div>
             <InspectorStatus tone={roleTone(role.kind)} kind={role.kind} label={role.label} />
@@ -450,14 +447,14 @@ function ClaimInspector({ cluster, c, nowS, gone, onClose }: { cluster: string; 
   );
 }
 
-function PoolInspector({ cluster, p, gone, claimsCov, onClose }: { cluster: string; p: KarpenterPoolDTO; gone: "removed" | "unverified" | null; claimsCov: JoinCoverage; onClose: () => void }) {
+function PoolInspector({ cluster, p, gone, replaced, claimsCov, onClose }: { cluster: string; p: KarpenterPoolDTO; gone: "removed" | "unverified" | null; replaced?: () => void; claimsCov: JoinCoverage; onClose: () => void }) {
   const ai = useInspectorAI(p.uid ? { kind: "row" as const, task: "karpenter", part: "nodepools", uid: p.uid } : null, `NodePool/${p.name}`, !gone, cluster);
   const role = roleOf(p);
   const cpu = capText(p.cpuUsed, p.cpuLimit, fmtCpu);
   const mem = capText(p.memUsed, p.memLimit, fmtMem);
   return (
     <div data-testid="karp-pool-panel" style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
-      <InspectorLayout pin={{ cluster: cluster, uid: p.uid || undefined }} kind="NodePool" name={p.name} meta={`${claimsCov === "unknown" ? "nodes unverified (NodeClaim read unavailable)" : `${countText(p.nodes, claimsCov)} node${p.nodes === 1 ? "" : "s"}`} · weight ${p.weight}`} onClose={onClose}
+      <InspectorLayout pin={{ cluster: cluster, uid: p.uid || undefined }} replaced={replaced} kind="NodePool" name={p.name} meta={`${claimsCov === "unknown" ? "nodes unverified (NodeClaim read unavailable)" : `${countText(p.nodes, claimsCov)} node${p.nodes === 1 ? "" : "s"}`} · weight ${p.weight}`} onClose={onClose}
         verdict={gone ? <GoneNotice kind="NodePool" gone={gone} /> : (
           <div>
             <InspectorStatus tone={roleTone(role.kind)} kind={role.kind} label={role.label} reason={p.ready === "not-ready" ? p.reason || undefined : undefined} />

@@ -23,6 +23,7 @@ import { InspectorBlock, InspectorLayout, type MenuItem } from "../layout/Inspec
 import { fitColumns, type ColumnDef } from "../layout/columns";
 import { clock, combineEvidence, coverageGaps, joinCoverage, kindEvidence, lastGoodAt, type JoinCoverage, type KindEvidence } from "../layout/coverage";
 import { useClusterKey } from "./useClusterKey";
+import { usePinnedSubject } from "./usePinnedSubject";
 
 const keyOf = (c: { namespace: string; name: string }) => `${c.namespace}/${c.name}`;
 const arrayOf = <T,>(value: T[] | null | undefined): T[] => (Array.isArray(value) ? value : []);
@@ -218,15 +219,16 @@ export function CertsView({ cluster }: { cluster: string }) {
   // reader keys on it); issuers are local. Filter exclusion closes; absent
   // from a complete read = removed (last evidence, read-only).
   const selectedCert = selKey ? certs.find((c) => keyOf(c) === selKey) : undefined;
-  // the selection's last evidence, for this cluster and key only
-  const lastCert = useRef<{ cluster: string; cert: CertificateDTO } | null>(null);
-  if (selectedCert) lastCert.current = { cluster, cert: selectedCert };
-  const priorCert = lastCert.current && lastCert.current.cluster === cluster && keyOf(lastCert.current.cert) === selKey ? lastCert.current.cert : null;
-  const certRemoved = !!selKey && certsEv === "complete" && !selectedCert;
-  // missing without a complete read of its own kind: kept with its last row,
-  // unverified - never removed (slice 3 §5a)
-  const certUnverified = !!selKey && !selectedCert && !certRemoved && !!priorCert;
-  const subject = selectedCert ?? priorCert;
+  // The selection's last evidence, for this cluster and key only, pinned to
+  // its certificate's UID (The Line slice 4 §6.3): a same-name certificate
+  // with a new UID on a complete read is "replaced", never silently
+  // followed. Missing without a complete read of its own kind it is kept
+  // with its last row, unverified - never removed (slice 3 §5a).
+  const certPin = usePinnedSubject(cluster, selKey, selectedCert, certsEv === "complete");
+  const certReplaced = certPin.gone === "replaced";
+  const certRemoved = certPin.gone === "removed" || certReplaced; // the inspector gates on removed
+  const certUnverified = certPin.gone === "unverified";
+  const subject = certPin.subject;
   // A chain is the selected row's only when it is the same object: with a
   // known UID the chain must carry that UID, so a same-name recreation's chain
   // never becomes the old row's detail, nor the old chain the new row's (§5b).
@@ -243,8 +245,9 @@ export function CertsView({ cluster }: { cluster: string }) {
   const chainOfOther = !!forSelection && !forSelection.error && !liveChain;
   const priorChain = !liveChain && (certRemoved || chainError) && subject?.uid && lastChain.current?.cluster === cluster && lastChain.current.uid === subject.uid ? lastChain.current.chain : null;
   const shownChain = liveChain ?? priorChain;
-  // a same-name recreation is another object: read its chain as well
-  const selUID = selectedCert?.uid;
+  // an opened same-name recreation is another object: read its chain as
+  // well - never while it is only "replaced", which keeps the pinned chain
+  const selUID = certPin.gone ? undefined : selectedCert?.uid;
   const resolvedObject = useRef<{ key: string; uid: string } | null>(null);
   useEffect(() => {
     if (!selKey || !selUID) return;
@@ -253,13 +256,12 @@ export function CertsView({ cluster }: { cluster: string }) {
     if (prev && prev.key === selKey && prev.uid !== selUID) resolveChain(selKey);
   }, [selKey, selUID, resolveChain]);
   const selectedIssuer = issuerSel ? issuers.find((i) => issuerKey(i) === issuerSel) : undefined;
-  const lastIssuer = useRef<{ cluster: string; i: IssuerDTO } | null>(null);
-  if (selectedIssuer) lastIssuer.current = { cluster, i: selectedIssuer };
-  // an issuer is removed only when ITS kind's read is complete
-  const issuerRemoved = !!issuerSel && !selectedIssuer && evidenceOf(issuerSel.split("/")[0]) === "complete";
-  const priorIssuer = lastIssuer.current?.cluster === cluster && issuerKey(lastIssuer.current.i) === issuerSel ? lastIssuer.current.i : null;
-  const issuerUnverified = !!issuerSel && !selectedIssuer && !issuerRemoved && !!priorIssuer;
-  const issuerSubject = selectedIssuer ?? priorIssuer;
+  // an issuer is removed (or replaced) only when ITS kind's read is complete
+  const issuerPin = usePinnedSubject(cluster, issuerSel, selectedIssuer, !!issuerSel && evidenceOf(issuerSel.split("/")[0]) === "complete");
+  const issuerReplaced = issuerPin.gone === "replaced";
+  const issuerRemoved = issuerPin.gone === "removed" || issuerReplaced;
+  const issuerUnverified = issuerPin.gone === "unverified";
+  const issuerSubject = issuerPin.subject;
   useEffect(() => { if (selectedCert && view === "certificates" && !visibleCerts.includes(selectedCert)) selectCert(null); }, [selectedCert, visibleCerts, view, selectCert]);
   useEffect(() => { if (selectedIssuer && view === "issuers" && !visibleIssuers.includes(selectedIssuer)) setIssuerSel(null); }, [selectedIssuer, visibleIssuers, view, setIssuerSel]);
   const enteredCluster = useRef(cluster);
@@ -493,6 +495,7 @@ export function CertsView({ cluster }: { cluster: string }) {
           cluster={cluster}
           removed={certRemoved}
           unverified={certUnverified}
+          replaced={certReplaced ? certPin.adopt : undefined}
           issuer={issuerCovOf(subject.issuerKind) !== "unknown" ? resolveIssuer(subject, issuers) : undefined}
           issuersKnown={issuerCovOf(subject.issuerKind) !== "unknown"}
           issuerCov={issuerCovOf(subject.issuerKind)}
@@ -512,6 +515,7 @@ export function CertsView({ cluster }: { cluster: string }) {
           issuer={issuerSubject}
           removed={issuerRemoved}
           unverified={issuerUnverified}
+          replaced={issuerReplaced ? issuerPin.adopt : undefined}
           certs={certsFor(issuerSubject)}
           certsCov={certsCov}
           onClose={() => setIssuerSel(null)}
@@ -545,11 +549,12 @@ function RemovedNotice({ kind }: { kind: string }) {
 // CertInspector - investigation order: the cert verdict; the bound issuer
 // (headline when not ready), the likely cause, the issuance chain with the
 // deepest stuck node flagged; then secret, validity, DNS names, message.
-function CertInspector({ c, cluster, removed, unverified, issuer, issuersKnown, issuerCov, chain, chainPrior, chainError, chainOfOther, chainLoading, onClose, onResolve, onOpenIssuer }: {
+function CertInspector({ c, cluster, removed, unverified, replaced, issuer, issuersKnown, issuerCov, chain, chainPrior, chainError, chainOfOther, chainLoading, onClose, onResolve, onOpenIssuer }: {
   c: CertificateDTO;
   cluster: string;
   removed: boolean;
   unverified: boolean;
+  replaced?: () => void;
   issuer: IssuerDTO | undefined;
   issuersKnown: boolean;
   issuerCov: JoinCoverage;
@@ -599,7 +604,7 @@ function CertInspector({ c, cluster, removed, unverified, issuer, issuersKnown, 
 
   return (
     <div data-testid="cert-panel" style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
-      <InspectorLayout pin={{ cluster: cluster, uid: c.uid || undefined }}
+      <InspectorLayout pin={{ cluster: cluster, uid: c.uid || undefined }} replaced={replaced}
         kind="Certificate"
         namespace={c.namespace}
         name={c.name}
@@ -691,7 +696,7 @@ function CertInspector({ c, cluster, removed, unverified, issuer, issuersKnown, 
   );
 }
 
-function IssuerInspector({ cluster, issuer, removed, unverified, certs, certsCov, onClose, onOpenCert }: { cluster: string; issuer: IssuerDTO; removed: boolean; unverified: boolean; certs: CertificateDTO[]; certsCov: JoinCoverage; onClose: () => void; onOpenCert: (c: CertificateDTO) => void }) {
+function IssuerInspector({ cluster, issuer, removed, unverified, replaced, certs, certsCov, onClose, onOpenCert }: { cluster: string; issuer: IssuerDTO; removed: boolean; unverified: boolean; replaced?: () => void; certs: CertificateDTO[]; certsCov: JoinCoverage; onClose: () => void; onOpenCert: (c: CertificateDTO) => void }) {
   const ai = useInspectorAI(issuer.uid ? { kind: "row" as const, task: "certs", part: "issuers", uid: issuer.uid } : null, `${issuer.kind}/${issuer.namespace ? `${issuer.namespace}/` : ""}${issuer.name}`, !removed && !unverified, cluster);
   const role = roleOf(issuer);
   const ref = wellKnownResourceRef("cert-manager.io", issuer.kind);
@@ -699,7 +704,7 @@ function IssuerInspector({ cluster, issuer, removed, unverified, certs, certsCov
   const blocked = certs.filter(included);
   return (
     <div data-testid="issuer-panel" style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
-      <InspectorLayout pin={{ cluster: cluster, uid: issuer.uid || undefined }}
+      <InspectorLayout pin={{ cluster: cluster, uid: issuer.uid || undefined }} replaced={replaced}
         kind={issuer.kind}
         namespace={issuer.namespace || undefined}
         name={issuer.name}

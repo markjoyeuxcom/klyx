@@ -34,6 +34,7 @@ import { fitColumns, type ColumnDef } from "../layout/columns";
 import { WatchErrorBanner } from "../chrome/WatchErrorBanner";
 import { vh } from "../app/zoom";
 import { useInspectorAI } from "../ai/AIExplain";
+import { usePinnedSubject } from "./usePinnedSubject";
 
 // columns: dot | name | roles | status | version | cpu alloc/cap | mem alloc/cap | taints | age
 type NodeFilter = "all" | "attention" | "unknown" | "cordoned" | "tainted";
@@ -543,12 +544,14 @@ export function NodesView({ cluster }: { cluster: string }) {
   // node missing from the rows keeps its last row: removed only on a complete
   // read of the Node kind, otherwise unverified (slice 3 §5a).
   const sel = mine ? nodes.selected : null;
-  const live = sel ? scopedNodes.find((n) => n.name === sel.name) : undefined;
-  const lastRow = useRef<{ cluster: string; n: NodeRowDTO } | null>(null);
-  if (live) lastRow.current = { cluster, n: live };
-  const prior = sel && lastRow.current?.cluster === cluster && lastRow.current.n.name === sel.name ? lastRow.current.n : null;
-  const subject = live ?? prior;
-  const gone: "removed" | "unverified" | null = sel && !live ? (ev === "complete" ? "removed" : "unverified") : null;
+  // Pinned to the node's UID (The Line slice 4 §6.3): a same-name node with
+  // a new UID on a complete read is "replaced", never silently followed.
+  const found = sel ? scopedNodes.find((n) => n.name === sel.name) : undefined;
+  const pin = usePinnedSubject(cluster, sel ? sel.name : null, found, ev === "complete");
+  const subject = pin.subject;
+  const live = pin.gone ? undefined : found; // the pinned node, while the rows hold it
+  // the inspector gates on "removed": a replaced node runs no action either
+  const gone: "removed" | "unverified" | null = pin.gone === "replaced" ? "removed" : pin.gone;
 
   // Opening a row reads its detail; the row's later changes re-read it, and a
   // same-name replacement is read afresh - the old object's detail never
@@ -801,6 +804,7 @@ export function NodesView({ cluster }: { cluster: string }) {
             detail={nodes.detail}
             loading={nodes.detailLoading}
             gone={gone}
+            replaced={pin.gone === "replaced" && pin.next ? () => { const n = pin.next as NodeRowDTO; pin.adopt(); openRow(n); } : undefined}
             onCordon={(cordon) => setCordonPending({ cluster, node: subject.name, uid: subject.uid ?? "", cordon })}
             onDrain={() => setDrainPending({ cluster, node: subject.name, uid: subject.uid ?? "" })}
             onClose={closeInspector}
@@ -991,7 +995,7 @@ function CapacityCell({ value, total, format }: { value: number; total: number; 
 // then taints and collapsed metadata. The row (live, or the selection's last)
 // is the verdict and the facts; the detail is shown only for the row's UID
 // (design §5b) - a same-name replacement's detail never becomes this one's.
-function NodeInspector({ cluster, row, uid, nowS, detail, loading, gone, onCordon, onDrain, onClose }: {
+function NodeInspector({ cluster, row, uid, nowS, detail, loading, gone, replaced, onCordon, onDrain, onClose }: {
   cluster: string;
   row: NodeRowDTO;
   uid: string;
@@ -999,6 +1003,7 @@ function NodeInspector({ cluster, row, uid, nowS, detail, loading, gone, onCordo
   detail: NodeDetailDTO | null;
   loading: boolean;
   gone: "removed" | "unverified" | null;
+  replaced?: () => void;
   onCordon: (cordon: boolean) => void;
   onDrain: () => void;
   onClose: () => void;
@@ -1041,7 +1046,7 @@ function NodeInspector({ cluster, row, uid, nowS, detail, loading, gone, onCordo
 
   return (
     <div data-testid="node-detail-panel" style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
-      <InspectorLayout pin={{ cluster: cluster, uid: uid || undefined }}
+      <InspectorLayout pin={{ cluster: cluster, uid: uid || undefined }} replaced={replaced}
         kind="Node"
         name={name}
         meta={[row.roles.join(", "), row.version, `${ageText(row, nowS)} old`, row.pool ? `pool ${row.pool}` : "", row.zone ? `zone ${row.zone}` : ""].filter(Boolean).join(" · ")}

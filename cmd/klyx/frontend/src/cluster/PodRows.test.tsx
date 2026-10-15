@@ -272,7 +272,7 @@ describe("the detail is fenced by UID", () => {
     expect(inspector().getByTestId("pod-detail-asof").textContent).toMatch(/- the latest read found another object with this name \(UID uid-a-2, not uid-a\)\.$/);
   });
 
-  it("a same-name replacement is read afresh; a capture that changes nothing the detail explains re-reads nothing", () => {
+  it("a capture that changes nothing the detail explains re-reads nothing; one that does re-reads the same pod", () => {
     seed([pod("a")]);
     render(<PodsView cluster="x" />);
     select("a");
@@ -282,9 +282,26 @@ describe("the detail is fenced by UID", () => {
     expect(openPodDetail).toHaveBeenCalledTimes(1);
     push(3, [pod("a", "ok", { restarts: 1 })]);
     expect(openPodDetail).toHaveBeenCalledTimes(2);
-    push(4, [pod("a", "ok", { uid: "uid-a-2", restarts: 1 })]);
+  });
+
+  // The Line slice 4 §6.3 (design review 37f00bc3): the inspector is pinned
+  // to its pod's UID. A same-name pod with a new UID is "replaced": the
+  // pinned pod's last evidence stays, nothing is read or run for the new
+  // one, and only "Open the new object" moves the selection to it.
+  it("a same-name replacement is shown as Replaced, never followed; Open the new object reads it", () => {
+    seed([pod("a")]);
+    render(<PodsView cluster="x" />);
+    select("a");
+    landDetail(detail(pod("a")));
+    push(2, [pod("a", "ok", { uid: "uid-a-2", restarts: 1 })]);
+    expect(openPodDetail).toHaveBeenCalledTimes(1); // the new pod is not read into the pinned inspector
+    const insp = inspector();
+    expect(insp.getByText("Replaced.")).toBeTruthy();
+    expect(insp.queryByRole("button", { name: /^Logs/ })).toBeNull();
+    expect(insp.queryByRole("button", { name: /^More/ })).toBeNull();
+    fireEvent.click(insp.getByRole("button", { name: "Open the new object" }));
     expect(openPodDetail).toHaveBeenLastCalledWith("x", "app", "a", "uid-a-2");
-    expect(inspector().queryByText("Event-of-uid-a")).toBeNull();
+    expect(inspector().queryByText("Replaced.")).toBeNull();
   });
 });
 

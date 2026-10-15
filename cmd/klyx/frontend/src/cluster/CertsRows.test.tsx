@@ -250,7 +250,11 @@ describe("cert-manager rows, mounted end to end (Codex review of 9de9d73)", () =
       expect(panel().getByText(/^Last resolved /)).toBeTruthy();
     });
 
-    it("a removal keeps the last chain by UID; a recreation is read afresh, never shown the old chain", () => {
+    // The Line slice 4 §6.3 (design review 37f00bc3): a recreation is
+    // "Replaced" - the pinned certificate keeps its last chain and nothing is
+    // read for the new one until "Open the new object"; then the old chain is
+    // never shown as the new object's.
+    it("a removal keeps the last chain by UID; a recreation is Replaced, and opening it reads its chain afresh", () => {
       mount([cert("web")]);
       act(() => useFleet.getState().setCertChain(chainOf("uid-web", "first-objects-chain"), "x"));
       act(() => { applyRows("c", rowsDTO(1, "certificates", 2, [], CERT_KINDS())); }); // removed
@@ -260,6 +264,10 @@ describe("cert-manager rows, mounted end to end (Codex review of 9de9d73)", () =
 
       const before = (getCertificateChain as ReturnType<typeof vi.fn>).mock.calls.length;
       act(() => { applyRows("c", rowsDTO(1, "certificates", 3, [cert("web", { uid: "uid-web-2" })], CERT_KINDS())); }); // recreated
+      expect(panel().getByText("Replaced.")).toBeTruthy();
+      expect(panel().getAllByText("first-objects-chain").length).toBeGreaterThan(0); // the pinned object's last evidence
+      expect((getCertificateChain as ReturnType<typeof vi.fn>).mock.calls.length).toBe(before); // nothing read for the new one
+      fireEvent.click(panel().getByRole("button", { name: "Open the new object" }));
       expect(panel().queryAllByText("first-objects-chain")).toHaveLength(0);
       expect(panel().getByTestId("chain-unresolved").textContent).toMatch(/earlier object with this name/);
       expect((getCertificateChain as ReturnType<typeof vi.fn>).mock.calls.length).toBe(before + 1); // the new object's chain is requested

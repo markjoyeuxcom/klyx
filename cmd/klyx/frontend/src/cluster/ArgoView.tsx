@@ -23,6 +23,7 @@ import { fitColumns, type ColumnDef } from "../layout/columns";
 import { useInspectorAI } from "../ai/AIExplain";
 import { ClampedText } from "../chrome/ClampedText";
 import { useClusterKey } from "./useClusterKey";
+import { usePinnedSubject } from "./usePinnedSubject";
 
 // ArgoView is the Argo CD lens, speaking Argo's vocabulary (synced/degraded,
 // never translated into Flux terms). Applications and ApplicationSets are the
@@ -211,26 +212,29 @@ export function ArgoView({ cluster, mode = "applications" }: { cluster: string; 
   const selectedProject = projKey ? projects.find((p) => projectKey(p) === projKey) : undefined;
   const selectedSet = setKey ? appSets.find((a) => appSetKey(a) === setKey) : undefined;
   // the selection's last evidence, for this cluster and key only
-  const lastApp = useRef<{ cluster: string; v: ArgoAppDTO } | null>(null);
+  // Applications and ApplicationSets are pinned to their UID (The Line
+  // slice 4 §6.3): a same-name object with a new UID on a complete read is
+  // "replaced", never silently followed. Projects carry no UID and keep
+  // their last row by name.
   const lastProject = useRef<{ cluster: string; v: ArgoProjectDTO } | null>(null);
-  const lastSet = useRef<{ cluster: string; v: ArgoApplicationSetDTO } | null>(null);
-  if (selectedApp) lastApp.current = { cluster, v: selectedApp };
   if (selectedProject) lastProject.current = { cluster, v: selectedProject };
-  if (selectedSet) lastSet.current = { cluster, v: selectedSet };
-  const appRemoved = !!appKey && appsComplete && !selectedApp;
+  const appPin = usePinnedSubject(cluster, appKey, selectedApp, appsComplete);
+  const setPin = usePinnedSubject(cluster, setKey, selectedSet, mine && !argo.applicationSetsLoading && !argo.applicationSetsError);
+  const appReplaced = appPin.gone === "replaced";
+  const setReplaced = setPin.gone === "replaced";
+  // the inspectors gate on removed: a replaced object runs no action either
+  const appRemoved = appPin.gone === "removed" || appReplaced;
   const projRemoved = !!projKey && mine && !argo.projectsLoading && !argo.projectsError && !selectedProject;
-  const setRemoved = !!setKey && mine && !argo.applicationSetsLoading && !argo.applicationSetsError && !selectedSet;
+  const setRemoved = setPin.gone === "removed" || setReplaced;
   // missing without a complete read of its own kind: kept with its last row,
   // unverified - never removed (slice 3 §5a)
-  const priorApp = lastApp.current?.cluster === cluster && keyOf(lastApp.current.v) === appKey ? lastApp.current.v : null;
   const priorProject = lastProject.current?.cluster === cluster && projectKey(lastProject.current.v) === projKey ? lastProject.current.v : null;
-  const priorSet = lastSet.current?.cluster === cluster && appSetKey(lastSet.current.v) === setKey ? lastSet.current.v : null;
-  const appSubject = selectedApp ?? priorApp;
+  const appSubject = appPin.subject;
   const projectSubject = selectedProject ?? priorProject;
-  const setSubject = selectedSet ?? priorSet;
-  const appUnverified = !!appKey && !selectedApp && !appRemoved && !!priorApp;
+  const setSubject = setPin.subject;
+  const appUnverified = appPin.gone === "unverified";
   const projUnverified = !!projKey && !selectedProject && !projRemoved && !!priorProject;
-  const setUnverified = !!setKey && !selectedSet && !setRemoved && !!priorSet;
+  const setUnverified = setPin.gone === "unverified";
   useEffect(() => { if (selectedApp && !visibleApps.includes(selectedApp)) setAppKey(null); }, [selectedApp, visibleApps, setAppKey]);
   useEffect(() => { if (selectedProject && !visibleProjects.includes(selectedProject)) setProjKey(null); }, [selectedProject, visibleProjects, setProjKey]);
   useEffect(() => { if (selectedSet && !visibleAppSets.includes(selectedSet)) setSetKey(null); }, [selectedSet, visibleAppSets, setSetKey]);
@@ -535,6 +539,7 @@ export function ArgoView({ cluster, mode = "applications" }: { cluster: string; 
               app={appSubject}
               removed={appRemoved}
               unverified={appUnverified}
+              replaced={appReplaced ? appPin.adopt : undefined}
               isProtected={isProtected}
               project={projectFor(appSubject.project)}
               projectsCov={projectsCov}
@@ -564,6 +569,7 @@ export function ArgoView({ cluster, mode = "applications" }: { cluster: string; 
               appSet={setSubject}
               removed={setRemoved}
               unverified={setUnverified}
+              replaced={setReplaced ? setPin.adopt : undefined}
               allApps={apps}
               appsCov={appsCov}
               project={projectFor(setSubject.project)}
@@ -655,11 +661,12 @@ function RemovedNotice({ kind }: { kind: string }) {
 // with prune off by default), More = View manifest; then source, destination,
 // operation, conditions, and the live resource inventory (each resolvable
 // resource opens in Resources).
-function ApplicationInspector({ cluster, app, removed, unverified, isProtected, project, projectsCov, appSet, appSetsCov, onClose, onRefresh, onSync }: {
+function ApplicationInspector({ cluster, app, removed, unverified, replaced, isProtected, project, projectsCov, appSet, appSetsCov, onClose, onRefresh, onSync }: {
   cluster: string;
   app: ArgoAppDTO;
   removed: boolean;
   unverified: boolean;
+  replaced?: () => void;
   isProtected: boolean;
   project: ArgoProjectDTO | null;
   projectsCov: AppCoverage;
@@ -696,7 +703,7 @@ function ApplicationInspector({ cluster, app, removed, unverified, isProtected, 
   const opFailed = !!app.opPhase && app.opPhase !== "Succeeded" && app.opPhase !== "Running";
   return (
     <div data-testid="argo-app-panel" style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
-      <InspectorLayout pin={{ cluster: cluster, uid: app.uid || undefined }}
+      <InspectorLayout pin={{ cluster: cluster, uid: app.uid || undefined }} replaced={replaced}
         kind="Application"
         namespace={app.namespace}
         name={app.name}
@@ -843,7 +850,7 @@ function unverifiedAppSetConditions(appSet: ArgoApplicationSetDTO) {
   return arrayOf(appSet.conditions).filter((c) => APPSET_POLARITY[c.type] && c.status !== "True" && c.status !== "False");
 }
 
-function ApplicationSetInspector({ cluster, appSet, removed, unverified: selectionUnverified, allApps, appsCov, project, onClose }: { cluster: string; appSet: ArgoApplicationSetDTO; removed: boolean; unverified: boolean; allApps: ArgoAppDTO[]; appsCov: AppCoverage; project: ArgoProjectDTO | null; onClose: () => void }) {
+function ApplicationSetInspector({ cluster, appSet, removed, unverified: selectionUnverified, replaced, allApps, appsCov, project, onClose }: { cluster: string; appSet: ArgoApplicationSetDTO; removed: boolean; unverified: boolean; replaced?: () => void; allApps: ArgoAppDTO[]; appsCov: AppCoverage; project: ArgoProjectDTO | null; onClose: () => void }) {
   const ai = useInspectorAI(appSet.uid ? { kind: "row" as const, task: "argo", part: "applicationsets", uid: appSet.uid } : null, `ApplicationSet/${appSet.namespace}/${appSet.name}`, !removed && !selectionUnverified, cluster);
   const known = appsCov !== "unknown";
   const adverse = adverseAppSetConditions(appSet);
@@ -857,7 +864,7 @@ function ApplicationSetInspector({ cluster, appSet, removed, unverified: selecti
   const expected = generatedNames.length > 0 ? generatedNames.length : appSet.generatedApps;
   return (
     <div data-testid="argo-appset-panel" style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
-      <InspectorLayout pin={{ cluster: cluster, uid: appSet.uid || undefined }}
+      <InspectorLayout pin={{ cluster: cluster, uid: appSet.uid || undefined }} replaced={replaced}
         kind="ApplicationSet"
         namespace={appSet.namespace}
         name={appSet.name}

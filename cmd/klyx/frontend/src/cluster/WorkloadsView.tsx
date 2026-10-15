@@ -37,6 +37,7 @@ import { LensLayout, LensTable, TABLE_ROW_HEIGHT, type DatasetState } from "../l
 import { InspectorBlock, InspectorLayout, type MenuItem } from "../layout/InspectorLayout";
 import { fitColumns, type ColumnDef } from "../layout/columns";
 import { useClusterKey } from "./useClusterKey";
+import { usePinnedSubject } from "./usePinnedSubject";
 const KINDS: WorkloadKind[] = ["Deployment", "StatefulSet", "DaemonSet"];
 const kindShort: Record<WorkloadKind, string> = { Deployment: "deploy", StatefulSet: "sts", DaemonSet: "daemonset" };
 const keyOf = (w: WorkloadDTO) => `${w.kind}/${w.namespace}/${w.name}`;
@@ -283,16 +284,17 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
     if (w) open(w);
   }, [freshRead, rows, selectedKey, open]);
 
-  // Selection follows the key; verbs follow the UID. A workload missing from
-  // the rows keeps its last row: removed only on a complete read of its own
-  // kind, otherwise unverified (slice 3 §5a).
+  // The selection is pinned to its workload's UID (The Line slice 4 §6.3): a
+  // workload missing from the rows keeps its last row - removed only on a
+  // complete read of its own kind, otherwise unverified (slice 3 §5a) - and a
+  // same-key workload with a new UID on a complete read is "replaced", never
+  // silently followed. Verbs follow the pinned UID.
   const selected = selectedKey ? allItems.find((w) => keyOf(w) === selectedKey) : undefined;
-  const lastSelected = useRef<{ cluster: string; w: WorkloadDTO } | null>(null);
-  if (selected) lastSelected.current = { cluster, w: selected };
-  const prior = selectedKey && lastSelected.current?.cluster === cluster && keyOf(lastSelected.current.w) === selectedKey ? lastSelected.current.w : null;
-  const subject = selected ?? prior;
   const selKind = selectedKey ? selectedKey.split("/")[0] : "";
-  const gone: "removed" | "unverified" | null = selectedKey && !selected && subject ? (kindEv(selKind) === "complete" ? "removed" : "unverified") : null;
+  const pin = usePinnedSubject(cluster, selectedKey, selected, kindEv(selKind) === "complete");
+  const subject = pin.subject;
+  // the inspector gates on "removed": a replaced workload runs no action either
+  const gone: "removed" | "unverified" | null = pin.gone === "replaced" ? "removed" : pin.gone;
   // Operator filter edits win: one that hides the selection closes it. A
   // read change never does - the selection keeps its last evidence.
   const filterEdits = useRef(0);
@@ -526,6 +528,7 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
               cluster={cluster}
               workload={subject}
               gone={gone}
+              replaced={pin.gone === "replaced" ? pin.adopt : undefined}
               podsEv={podsEv}
               showMetrics={showMetrics}
               isProtected={isProtected}
@@ -658,12 +661,13 @@ function attributionText(kind: "Pod" | "ReplicaSet", ev: KindEvidence, deps: Kin
 // (secondary), More (scale, pause/resume, compare, manifest, delete a pod);
 // pods, rollout history (undo), usage, reloads-on, then controller facts.
 function WorkloadInspector({
-  cluster, workload, gone, podsEv, showMetrics, isProtected, reloaderPresent, reloaderHealthy, pending,
+  cluster, workload, gone, replaced, podsEv, showMetrics, isProtected, reloaderPresent, reloaderHealthy, pending,
   onClose, onLogs, onRestart, onScale, onScaleConfirm, onCancelScale, onDeletePod, onOpenPod, onOpenNode, onOpenFluxOwner, onCompare, onUndo, onPause,
 }: {
   cluster: string;
   workload: WorkloadDTO;
   gone: "removed" | "unverified" | null;
+  replaced?: () => void;
   podsEv: KindEvidence; // what the pod list was read from
   showMetrics: boolean;
   isProtected: boolean;
@@ -707,7 +711,7 @@ function WorkloadInspector({
 
   return (
     <div data-testid="workload-detail-panel" style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
-      <InspectorLayout pin={{ cluster: cluster, uid: w.uid || undefined }}
+      <InspectorLayout pin={{ cluster: cluster, uid: w.uid || undefined }} replaced={replaced}
         kind={w.kind}
         namespace={w.namespace}
         name={w.name}

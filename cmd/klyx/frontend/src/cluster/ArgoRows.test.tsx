@@ -210,6 +210,10 @@ describe("Argo CD rows, mounted end to end (slice 3 §5.4)", () => {
       expect(screen.getByRole("dialog")).toBeTruthy();
       recreate();
       expect(screen.queryByRole("dialog")).toBeNull();
+      // the replaced Application runs no verb (The Line slice 4 §6.3); opening
+      // the new object pins its UID
+      expect(inspector().queryByRole("button", { name: /^Sync/ })).toBeNull();
+      fireEvent.click(inspector().getByRole("button", { name: "Open the new object" }));
       fireEvent.click(inspector().getByRole("button", { name: /^Sync/ }));
       expect(screen.getByRole("dialog")).toBeTruthy();
       act(() => { applyRows("a", rowsDTO(1, "applications", 3, [app("demo", { uid: "uid-demo-3" })], kind("applications"))); });

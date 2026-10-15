@@ -310,13 +310,19 @@ describe("Flux rows, mounted end to end (slice 3 §5.3)", () => {
       expect(panel().getByText(/^Last read /)).toBeTruthy();
     });
 
-    it("a recreation is read afresh and never shown the old object's detail", () => {
+    // The Line slice 4 §6.3 (design review 37f00bc3): a recreation is
+    // "Replaced" - nothing is read for it until "Open the new object", and
+    // the old object's detail is never shown as the new one's.
+    it("a recreation is Replaced; opened, it is read afresh and never shown the old object's detail", () => {
       seed([res("apps")]);
       render(<GitOps cluster="x" />);
       select("apps");
       land(detailFor("apps", { applyFailed: true, attemptedRevision: "main@oldobject" }));
       const before = (getResourceDetail as ReturnType<typeof vi.fn>).mock.calls.length;
       act(() => { applyRows("r", rowsDTO(1, "reconciliations", 2, [res("apps", { uid: "uid-apps-2" })], REC_KINDS())); });
+      expect(panel().getByText("Replaced.")).toBeTruthy();
+      expect((getResourceDetail as ReturnType<typeof vi.fn>).mock.calls.length).toBe(before);
+      fireEvent.click(panel().getByRole("button", { name: "Open the new object" }));
       expect(panel().queryByText(/Apply failed at/)).toBeNull();
       expect(panel().getByTestId("detail-unloaded").textContent).toMatch(/earlier object with this name/);
       expect((getResourceDetail as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThan(before);

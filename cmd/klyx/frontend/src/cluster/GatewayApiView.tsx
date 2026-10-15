@@ -22,6 +22,7 @@ import { RANK, REFS, ROLE_TEXT, addressText, gatewayRole, gatewayVerdictDetail, 
 import { useInspectorAI } from "../ai/AIExplain";
 import { staleProps } from "./staleness";
 import { useClusterKey } from "./useClusterKey";
+import { usePinnedSubject } from "./usePinnedSubject";
 
 // GatewayApiView - the Gateway API lens on the workspace template (spec §6
 // step 6). Without a selected Gateway it is the Gateways table (not accepted
@@ -138,14 +139,14 @@ function GatewayList({ cluster, rows, toggle }: { cluster: string; rows: Gateway
     return "consumed";
   }, [gateways, ev]);
 
-  // A selection keeps its last row: removed only on a complete read,
-  // otherwise unverified (slice 3 §5a).
-  const live = selKey ? gateways.find((g) => keyOf(g) === selKey) : undefined;
-  const lastSel = useRef<GatewayRefDTO | null>(null);
-  if (live) lastSel.current = live;
-  const prior = lastSel.current && keyOf(lastSel.current) === selKey ? lastSel.current : null;
-  const selected = live ?? prior ?? undefined;
-  const gone: "removed" | "unverified" | null = !live && selected ? (ev === "complete" ? "removed" : "unverified") : null;
+  // A selection keeps its last row - removed only on a complete read,
+  // otherwise unverified (slice 3 §5a) - and is pinned to its Gateway's UID:
+  // a same-name Gateway with a new UID on a complete read is "replaced"
+  // (The Line slice 4 §6.3), never silently followed.
+  const found = selKey ? gateways.find((g) => keyOf(g) === selKey) : undefined;
+  const pin = usePinnedSubject(cluster, selKey, found, ev === "complete");
+  const selected = pin.subject ?? undefined;
+  const gone: "removed" | "unverified" | null = pin.gone === "replaced" ? "removed" : pin.gone;
   const close = () => setSelKey(null);
 
   // First fresh read: select the first Gateway needing attention, once.
@@ -265,14 +266,14 @@ function GatewayList({ cluster, rows, toggle }: { cluster: string; rows: Gateway
       }
       footer={<span className="t-legend">j k navigate · ↵ inspect · double-click opens topology · / search</span>}
       footerEnd={<span className="t-secondary">{visible.length !== gateways.length ? `${visible.length} of ${gateways.length}${mark} · ` : ""}needs attention first{asOf}</span>}
-      inspector={selected ? <GatewayInspector key={selKey} cluster={cluster} g={selected} stale={ev === "stale"} gone={gone} onOpen={() => openGateway(selected.namespace, selected.name)} onClose={close} /> : undefined}
+      inspector={selected ? <GatewayInspector key={selKey} cluster={cluster} g={selected} stale={ev === "stale"} gone={gone} replaced={pin.gone === "replaced" ? pin.adopt : undefined} onOpen={() => openGateway(selected.namespace, selected.name)} onClose={close} /> : undefined}
       inspectorLabel="Gateway details"
       onCloseInspector={close}
     />
   );
 }
 
-function GatewayInspector({ cluster, g, stale, gone, onOpen, onClose }: { cluster: string; g: GatewayRefDTO; stale: boolean; gone: "removed" | "unverified" | null; onOpen: () => void; onClose: () => void }) {
+function GatewayInspector({ cluster, g, stale, gone, replaced, onOpen, onClose }: { cluster: string; g: GatewayRefDTO; stale: boolean; gone: "removed" | "unverified" | null; replaced?: () => void; onOpen: () => void; onClose: () => void }) {
   const ai = useInspectorAI(g.uid ? { kind: "row" as const, task: "gateway", part: "gateways", uid: g.uid } : null, `Gateway/${g.namespace}/${g.name}`, !gone, cluster);
   const role = gatewayRole(g);
   const open = (ref: typeof REFS.gateway | typeof REFS.gatewayClass, ns: string, name: string) => {
@@ -284,7 +285,7 @@ function GatewayInspector({ cluster, g, stale, gone, onOpen, onClose }: { cluste
   const addresses = g.addresses ?? [];
   return (
     <div data-testid="gateway-panel" style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
-      <InspectorLayout pin={{ cluster: cluster, uid: g.uid || undefined }} kind="Gateway" namespace={g.namespace} name={g.name} meta={g.className ? `class ${g.className}` : "no class"} onClose={onClose}
+      <InspectorLayout pin={{ cluster: cluster, uid: g.uid || undefined }} replaced={replaced} kind="Gateway" namespace={g.namespace} name={g.name} meta={g.className ? `class ${g.className}` : "no class"} onClose={onClose}
         verdict={gone === "removed" ? (
           <div role="status" className="t-body" style={{ padding: "8px 10px", borderRadius: 4, background: "var(--color-background-secondary)", boxShadow: "inset 0 0 0 1px var(--color-border-secondary)" }}>
             <span className="t-status">Gateway removed.</span> It is no longer in the current read. The details below are its last evidence.

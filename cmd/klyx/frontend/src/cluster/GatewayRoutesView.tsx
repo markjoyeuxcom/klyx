@@ -18,6 +18,7 @@ import { clock, combineEvidence, coverageGaps, kindEvidence, lastGoodAt, type Ki
 import { RANK, ROLE_TEXT, roleTone, routeRole, type Role } from "./gatewayModel";
 import { useInspectorAI } from "../ai/AIExplain";
 import { useClusterKey } from "./useClusterKey";
+import { usePinnedSubject } from "./usePinnedSubject";
 
 // RouteList - the Gateways task's routes part (1c slice 3 §4a): every
 // HTTPRoute attached to a Gateway, counted once by UID with the role, label
@@ -114,12 +115,12 @@ export function RouteList({ cluster, rows, toggle }: { cluster: string; rows: Ga
   // A selection keeps its last row. Missing from a membership read that is
   // complete (routes AND parent Gateways current) it is no longer attached -
   // not necessarily deleted; otherwise unverified (slice 3 §5a).
-  const live = selKey ? routes.find((r) => keyOf(r) === selKey) : undefined;
-  const lastSel = useRef<GatewayRouteRowDTO | null>(null);
-  if (live) lastSel.current = live;
-  const prior = lastSel.current && keyOf(lastSel.current) === selKey ? lastSel.current : null;
-  const selected = live ?? prior ?? undefined;
-  const gone: "detached" | "unverified" | null = !live && selected ? (memberEv === "complete" ? "detached" : "unverified") : null;
+  // Pinned to the route's UID (The Line slice 4 §6.3): a same-name route
+  // with a new UID on a complete read is "replaced", never followed.
+  const found = selKey ? routes.find((r) => keyOf(r) === selKey) : undefined;
+  const pin = usePinnedSubject(cluster, selKey, found, memberEv === "complete");
+  const selected = pin.subject ?? undefined;
+  const gone: "detached" | "unverified" | null = pin.gone === "replaced" || pin.gone === "removed" ? "detached" : pin.gone;
   const close = () => setSelKey(null);
   // Operator filter edits win: one that hides the selection closes it; a
   // read change never does (Codex review of b2eff54 #2).
@@ -236,7 +237,7 @@ export function RouteList({ cluster, rows, toggle }: { cluster: string; rows: Ga
       footerEnd={<span className="t-secondary">{visible.length !== routes.length ? `${visible.length} of ${routes.length}${mark} · ` : ""}counted once per route, by its worst parent{asOf}</span>}
       inspector={selected ? (
         <div data-testid="route-row-panel" style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
-          <InspectorLayout pin={{ cluster: cluster, uid: selected.uid || undefined }} kind="HTTPRoute" namespace={selected.namespace} name={selected.name} meta={`worst parent ${selected.parent}`} onClose={close}
+          <InspectorLayout pin={{ cluster: cluster, uid: selected.uid || undefined }} replaced={pin.gone === "replaced" ? pin.adopt : undefined} kind="HTTPRoute" namespace={selected.namespace} name={selected.name} meta={`worst parent ${selected.parent}`} onClose={close}
             verdict={gone === "detached" ? (
               <div role="status" data-testid="route-detached" className="t-body" style={{ padding: "8px 10px", borderRadius: 4, background: "var(--color-background-secondary)", boxShadow: "inset 0 0 0 1px var(--color-border-secondary)" }}>
                 <span className="t-status">No longer attached to a Gateway.</span> The route and its parent Gateways were both read in full and it is not in the attached set - it may still exist. The details below are its last evidence.

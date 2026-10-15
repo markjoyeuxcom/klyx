@@ -30,6 +30,7 @@ import { fitColumns, type ColumnDef } from "../layout/columns";
 import { useInspectorAI } from "../ai/AIExplain";
 import { ClampedText } from "../chrome/ClampedText";
 import { useClusterKey } from "./useClusterKey";
+import { usePinnedSubject } from "./usePinnedSubject";
 
 const keyOf = (r: { kind: string; namespace: string; name: string }) => `${r.kind}/${r.namespace}/${r.name}`;
 
@@ -285,14 +286,14 @@ export function GitOps({ cluster }: { cluster: string }) {
   }), [orderedSources, sourceKind, status, query]);
   const openSource = useCallback((s: FluxSourceDTO) => { setCursorKey(keyOf(s)); setSourceKey(keyOf(s)); }, [setSourceKey]);
   const selectedSource = sourceKey ? allSources.find((x) => keyOf(x) === sourceKey) : undefined;
-  const lastSource = useRef<{ cluster: string; s: FluxSourceDTO } | null>(null);
-  if (selectedSource) lastSource.current = { cluster, s: selectedSource };
-  // removed only on a complete read of the source's own kind; otherwise kept
-  // with its last row, unverified (slice 3 §5a)
-  const sourceRemoved = !!sourceKey && evidenceOf(sourceKey.split("/")[0]) === "complete" && !selectedSource;
-  const priorSource = lastSource.current?.cluster === cluster && keyOf(lastSource.current.s) === sourceKey ? lastSource.current.s : null;
-  const sourceUnverified = !!sourceKey && !selectedSource && !sourceRemoved && !!priorSource;
-  const sourceSubject = selectedSource ?? priorSource;
+  // Pinned to the source's UID (The Line slice 4 §6.3): removed (or
+  // replaced) only on a complete read of the source's own kind; otherwise
+  // kept with its last row, unverified (slice 3 §5a).
+  const sourcePin = usePinnedSubject(cluster, sourceKey, selectedSource, !!sourceKey && evidenceOf(sourceKey.split("/")[0]) === "complete");
+  const sourceReplaced = sourcePin.gone === "replaced";
+  const sourceRemoved = sourcePin.gone === "removed" || sourceReplaced; // the inspector gates on removed
+  const sourceUnverified = sourcePin.gone === "unverified";
+  const sourceSubject = sourcePin.subject;
   useEffect(() => {
     if (selectedSource && !visibleSources.includes(selectedSource)) setSourceKey(null);
   }, [selectedSource, visibleSources, setSourceKey]);
@@ -307,12 +308,15 @@ export function GitOps({ cluster }: { cluster: string }) {
   // the selection closes it; a resource gone from a complete read is removed.
   const selKey = mine ? gitops.expandedKey : null;
   const selected = selKey ? byKey.get(selKey) : undefined;
-  const lastSelected = useRef<{ cluster: string; r: FluxResourceDTO } | null>(null);
-  if (selected) lastSelected.current = { cluster, r: selected };
-  const removed = !!selKey && evidenceOf(selKey.split("/")[0]) === "complete" && !selected;
-  const priorSelected = lastSelected.current?.cluster === cluster && keyOf(lastSelected.current.r) === selKey ? lastSelected.current.r : null;
-  const unverified = !!selKey && !selected && !removed && !!priorSelected;
-  const subject = selected ?? priorSelected;
+  // Pinned to the resource's UID (The Line slice 4 §6.3): a same-name
+  // resource with a new UID on a complete read is "replaced", never
+  // silently followed or read into the pinned inspector.
+  const fluxPin = usePinnedSubject(cluster, selKey, selected, !!selKey && evidenceOf(selKey.split("/")[0]) === "complete");
+  const replaced = fluxPin.gone === "replaced";
+  const removed = fluxPin.gone === "removed" || replaced; // the inspector gates on removed
+  const unverified = fluxPin.gone === "unverified";
+  const subject = fluxPin.subject;
+  const livePinned = fluxPin.gone ? undefined : selected;
   // Detail is evidence for the selection only with matching cluster AND key,
   // and - with a known UID - the same object: a same-name recreation's
   // detail never becomes the old row's, nor the old detail the new row's
@@ -332,10 +336,10 @@ export function GitOps({ cluster }: { cluster: string }) {
     if (selected && view === "reconciliation" && !visibleRows.includes(selected)) collapse();
   }, [selected, visibleRows, view, collapse]);
   useEffect(() => {
-    if (!selected) return;
-    void getResourceDetail(cluster, selected.kind, selected.namespace, selected.name);
-    // re-read on every live emit of the selected resource
-  }, [cluster, selected]);
+    if (!livePinned) return;
+    void getResourceDetail(cluster, livePinned.kind, livePinned.namespace, livePinned.name);
+    // re-read on every live emit of the pinned resource
+  }, [cluster, livePinned]);
 
   // One-shot auto-select of the first attention row from a fresh read.
   const autoSelect = useRef<"pending" | "done">("pending");
@@ -618,6 +622,7 @@ export function GitOps({ cluster }: { cluster: string }) {
             source={sourceSubject}
             removed={sourceRemoved}
             unverified={sourceUnverified}
+            replaced={sourceReplaced ? sourcePin.adopt : undefined}
             usedBy={rows.filter((r) => boundTo(r, sourceSubject))}
             usageCov={{ Kustomization: joinCoverage(evidenceOf("Kustomization")), HelmRelease: joinCoverage(evidenceOf("HelmRelease")) }}
             onClose={() => setSourceKey(null)}
@@ -631,6 +636,7 @@ export function GitOps({ cluster }: { cluster: string }) {
             nowS={nowS}
             removed={removed}
             unverified={unverified}
+            replaced={replaced ? fluxPin.adopt : undefined}
             isProtected={isProtected}
             detail={shownDetail}
             detailPrior={shownDetail !== null && (removed || shownDetail === priorDetail)}
@@ -680,11 +686,12 @@ export function GitOps({ cluster }: { cluster: string }) {
 // SourceInspector - a source's full diagnosis (wrapped message, URL,
 // revision) and the resources bound to it, which is how a source failure
 // reaches the operator's attention. Manifest opens the guarded editor.
-function SourceInspector({ cluster, source, removed, unverified, usedBy, usageCov, onClose, onOpenResource }: {
+function SourceInspector({ cluster, source, removed, unverified, replaced, usedBy, usageCov, onClose, onOpenResource }: {
   cluster: string;
   source: FluxSourceDTO;
   removed: boolean;
   unverified: boolean;
+  replaced?: () => void;
   usedBy: FluxResourceDTO[];
   // the consumer join is qualified by the reconciliation kinds it reads:
   // unknown is unverified (never zero), stale is last observed
@@ -700,7 +707,7 @@ function SourceInspector({ cluster, source, removed, unverified, usedBy, usageCo
   const view = ref ? () => { const nav = useFleet.getState(); nav.openResource(ref); nav.openInstance(s.namespace, s.name); } : null;
   return (
     <div data-testid="flux-source-panel" style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
-      <InspectorLayout pin={{ cluster: cluster, uid: s.uid || undefined }}
+      <InspectorLayout pin={{ cluster: cluster, uid: s.uid || undefined }} replaced={replaced}
         kind={s.kind}
         namespace={s.namespace}
         name={s.name}
@@ -780,12 +787,13 @@ function sinceWord(r: FluxResourceDTO): string {
 // full message; Reconcile (primary), Suspend/Resume (secondary), More (view in
 // Git, manifest); then the bound source (the usual root cause), dependsOn
 // blockers, drift/events, conditions, inventory, and the gated live diff.
-function FluxInspector({ cluster, resource, nowS, removed, unverified, isProtected, detail, detailPrior, detailError, detailOfOther, deps, onClose, onReconcile, onToggleSuspend }: {
+function FluxInspector({ cluster, resource, nowS, removed, unverified, replaced, isProtected, detail, detailPrior, detailError, detailOfOther, deps, onClose, onReconcile, onToggleSuspend }: {
   cluster: string;
   resource: FluxResourceDTO;
   nowS: number;
   removed: boolean;
   unverified: boolean;
+  replaced?: () => void;
   isProtected: boolean;
   detail: ResourceDetailDTO | null;
   // detailPrior: the detail is this object's last good read, not the current one
@@ -846,7 +854,7 @@ function FluxInspector({ cluster, resource, nowS, removed, unverified, isProtect
 
   return (
     <div data-testid="flux-detail-panel" style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
-      <InspectorLayout pin={{ cluster: cluster, uid: r.uid || undefined }}
+      <InspectorLayout pin={{ cluster: cluster, uid: r.uid || undefined }} replaced={replaced}
         kind={r.kind}
         namespace={r.namespace}
         name={r.name}

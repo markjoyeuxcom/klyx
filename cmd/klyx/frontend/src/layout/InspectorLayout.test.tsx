@@ -67,3 +67,24 @@ describe("the object crumb (§6.4)", () => {
     expect(r.queryByRole("button", { name: /go to its details/ })).toBeNull();
   });
 });
+
+describe("Replaced (§6.3, design review 37f00bc3)", () => {
+  it("says Replaced in place of the verdict, runs no action, and offers only Open the new object", () => {
+    const onNew = vi.fn();
+    const act1 = vi.fn();
+    const r = render(
+      <InspectorLayout pin={{ cluster: "dev", uid: "u1" }} kind="Pod" namespace="shop" name="api-1" onClose={() => {}} verdict={<span>Failing.</span>}
+        primary={{ label: "Logs", onSelect: act1 }} more={[{ label: "Delete pod", onSelect: act1 }]} replaced={onNew}>
+        <span>last evidence</span>
+      </InspectorLayout>,
+    );
+    expect(r.getByText("Replaced.")).toBeTruthy();
+    expect(r.queryByText("Failing.")).toBeNull();
+    expect(r.queryByRole("button", { name: /^Logs/ })).toBeNull();
+    expect(r.queryByRole("button", { name: /^More/ })).toBeNull();
+    expect(r.getByText("last evidence")).toBeTruthy();
+    fireEvent.click(r.getByRole("button", { name: "Open the new object" }));
+    expect(onNew).toHaveBeenCalledTimes(1);
+    expect(act1).not.toHaveBeenCalled();
+  });
+});

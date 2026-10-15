@@ -39,6 +39,7 @@ export function InspectorLayout({
   verdict,
   aspect,
   drawing,
+  replaced,
   primary,
   secondary,
   more,
@@ -60,6 +61,10 @@ export function InspectorLayout({
   aspect?: AspectKind;
   // A drawing of the object's place, between the verdict and the actions.
   drawing?: ReactNode;
+  // The pinned object was deleted and created again under its name (slice 4
+  // §6.3): the inspector keeps its last evidence, says so in place of the
+  // verdict, offers only "Open the new object", and runs no action on it.
+  replaced?: () => void;
   primary?: InspectorAction;
   secondary?: InspectorAction;
   more?: MenuItem[];
@@ -89,12 +94,22 @@ export function InspectorLayout({
           the actions or sections out of reach; the action band and tabs
           stick once the verdict has scrolled away. */}
       <div className="insp-scroll">
-        {verdict && (aspect && aspect !== "none"
+        {replaced ? (
+          <div className="insp-verdict" data-replaced="">
+            <div className="t-body" style={{ overflowWrap: "anywhere" }}>
+              <span className="t-status">Replaced.</span> This object was deleted and created again under the same name. The details below are its last evidence; no action runs on it.
+            </div>
+          </div>
+        ) : verdict && (aspect && aspect !== "none"
           ? <div className="insp-verdict insp-verdict-marked"><Aspect kind={aspect} size={10} /><div>{verdict}</div></div>
           : <div className="insp-verdict">{verdict}</div>)}
         {drawing && <div className="insp-drawing">{drawing}</div>}
         <div className="insp-sticky">
-          {(primary || secondary || (more && more.length > 0)) && (
+          {replaced ? (
+            <div className="insp-actions" role="group" aria-label="actions">
+              <button className="l-btn l-btn-primary" onClick={replaced}>Open the new object</button>
+            </div>
+          ) : (primary || secondary || (more && more.length > 0)) && (
             <div className="insp-actions" role="group" aria-label="actions">
               {primary && <ActionButton action={primary} primary />}
               {secondary && <ActionButton action={secondary} />}
