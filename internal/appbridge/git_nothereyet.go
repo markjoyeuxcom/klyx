@@ -39,7 +39,13 @@ type NotHereYetResultDTO struct {
 	Commits []LineGitCommitDTO `json:"commits"`
 	More    bool               `json:"more"` // more commits touch the path than are listed
 	Files   []NameStatusDTO    `json:"files"`
+	// FilesOmitted counts the changed paths past the view's cap (parent §7:
+	// at most 200 paths per view); 0 when all are listed.
+	FilesOmitted int `json:"filesOmitted"`
 }
+
+// maxViewPaths is the parent's bound on the untrusted paths one view shows.
+const maxViewPaths = 200
 
 // NotHereYetDTO carries T with its fetch freshness.
 type NotHereYetDTO struct {
@@ -130,18 +136,27 @@ func (s *GitService) NotHereYet(ctx context.Context, nodes []NotHereYetNodeDTO) 
 		if err != nil {
 			return all(err.Error())
 		}
+		// A node's own failure is that node's answer; only a cancelled call
+		// or the store itself stops the rest, and answers already given stay.
 		err = store.Read(url, func(repo gitcli.Repo) error {
 			for _, w := range todo {
-				if err := notHereYet(ctx, repo, w.applied, tRev, w.path, &res[w.i]); err != nil {
+				if err := ctx.Err(); err != nil {
 					return err
+				}
+				if err := notHereYet(ctx, repo, w.applied, tRev, w.path, &res[w.i]); err != nil {
+					if ctx.Err() != nil {
+						return ctx.Err()
+					}
+					res[w.i] = NotHereYetResultDTO{ID: res[w.i].ID, State: NotHereUnavailable, Reason: gitcli.Scrub(err.Error()),
+						Commits: []LineGitCommitDTO{}, Files: []NameStatusDTO{}}
 				}
 			}
 			return nil
 		})
 		if err != nil {
 			for _, w := range todo {
-				if res[w.i].State != NotHereBehind {
-					res[w.i].Reason = gitcli.Scrub(err.Error())
+				if r := &res[w.i]; r.State == NotHereUnavailable && r.Reason == "" { // not answered yet
+					r.Reason = gitcli.Scrub(err.Error())
 				}
 			}
 		}
@@ -202,7 +217,11 @@ func notHereYet(ctx context.Context, repo gitcli.Repo, applied, t gitcli.Rev, pa
 	for _, c := range cs {
 		r.Commits = append(r.Commits, commitDTO(c))
 	}
-	for _, f := range files {
+	for i, f := range files {
+		if i == maxViewPaths {
+			r.FilesOmitted = len(files) - maxViewPaths
+			break
+		}
 		r.Files = append(r.Files, NameStatusDTO{Status: f.Status, Path: f.Path})
 	}
 	return nil

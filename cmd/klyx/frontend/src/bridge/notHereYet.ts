@@ -17,6 +17,7 @@ export type NotHereYetResult = {
   commits: NotHereYetCommit[];
   more: boolean; // more commits touch the path than are listed
   files: { status: string; path: string }[];
+  filesOmitted: number; // changed paths past the view's 200-path cap
 };
 export type NotHereYet = {
   target?: { ref: string; name: string; sha?: string; fetchedAt?: string; error?: string };

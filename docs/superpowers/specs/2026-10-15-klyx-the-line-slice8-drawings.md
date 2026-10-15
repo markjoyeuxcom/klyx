@@ -130,6 +130,8 @@ Each is Codex-reviewed on its own, in this order.
 - **Identity:** a node's URL and ref are normalised as the line normalises a Flux ref (`line.OverrideKey`). Its repository must map, through the approved `matches`, to the approved URL that served T, and its ref kind and name must equal T's key. Only that approved URL is read.
 - **"Behind" is proved:** the applied sha must be in the fetched history, then an ancestor of T. Otherwise the node reads ahead, diverged (a merge base exists) or unrelated; at T it reads "at".
 - **The lists:** `gitcli.Repo.LogPath` (new: a path-limited log, trees only, since the cache is `blob:none` and never fetches lazily) gives at most 20 commits, gitcli's log bound rather than the note's 50. "More" is proved by a path-limited count (`CountPath`, new). `DiffNames` gives the name-status. Pathspecs are literal (`GIT_LITERAL_PATHSPECS`), so a cluster's path is never pathspec magic. An empty path is the whole tree.
+- **The view cap** (design review of 09f961f): at most 200 changed paths per node (parent §7's untrusted-text bound); `filesOmitted` counts the rest, apart from the commits' "more".
+- **A node's own failure is its own:** a Git error for one node (a full id that names a tree, say) makes that node unavailable with the error, and the others are still answered. Only a cancelled call or a failed store stops the rest, and answers already given stay.
 - **The bridge:** `bridge/notHereYet.ts` returns the generated cancellable call.
 
 ## 4. 8c: the dependency graph drawing

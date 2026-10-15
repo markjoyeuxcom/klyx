@@ -207,3 +207,50 @@ func TestNotHereYetWithoutT(t *testing.T) {
 		t.Fatal("more nodes than a graph holds")
 	}
 }
+
+// cacheGit runs git against the fixture's cache (to add history the way a
+// fetch would).
+func cacheGit(t *testing.T, f pathHistory, in string, args ...string) string {
+	t.Helper()
+	c := exec.Command(f.runner.Git.Path, args...)
+	c.Dir = f.cache
+	c.Env = []string{"HOME=" + t.TempDir(), "PATH=/usr/bin:/bin", "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null"}
+	c.Stdin = strings.NewReader(in)
+	b, err := c.CombinedOutput()
+	if err != nil {
+		t.Fatalf("fixture git %v: %v: %s", args, err, b)
+	}
+	return strings.TrimSpace(string(b))
+}
+
+// Design review of 09f961f: one view lists at most 200 changed paths and
+// says how many it left out; a node's own failure answers only that node.
+func TestNotHereYetReviewOf09f961f(t *testing.T) {
+	h, f := newNotHereHarness(t)
+	// A tree id is a full hex id that is no commit: its own node is
+	// unavailable, and its siblings keep their answers.
+	tree := cacheGit(t, f, "", "rev-parse", f.c1+"^{tree}")
+	got := h.svc.NotHereYet(context.Background(), []NotHereYetNodeDTO{node("ahead", f.ahead, "apps"), node("not-a-commit", tree, "apps"), node("healthy", f.c1, "apps")})
+	if !strings.Contains(got.Results[0].Reason, "ahead of T") || got.Results[1].State != NotHereUnavailable || got.Results[1].Reason == "" ||
+		got.Results[2].State != NotHereBehind || len(got.Results[2].Commits) != 1 {
+		t.Fatalf("siblings: %+v", got.Results)
+	}
+
+	// 201 paths changed in one commit: 200 listed, 1 omitted.
+	var script strings.Builder
+	fmt.Fprintf(&script, "commit refs/klyx/tracked/refs/heads/main\ncommitter Ada <ada@example.test> 1791030000 +0000\ndata 4\ncaps\nfrom %s\n", f.t)
+	for i := 0; i < 201; i++ {
+		fmt.Fprintf(&script, "M 100644 inline caps/f%03d.yaml\ndata 1\nx\n", i)
+	}
+	script.WriteString("\n")
+	cacheGit(t, f, script.String(), "fast-import", "--quiet")
+	capT := cacheGit(t, f, "", "rev-parse", "refs/klyx/tracked/refs/heads/main")
+	h.push(LineDTO{Version: 10, Stations: []LineStationDTO{gitStation("prd-a", "matches", capT)}})
+	if g := h.waitLine(10); g.State != LineGitReady || g.Target.SHA != capT {
+		t.Fatalf("target %+v", g)
+	}
+	got = h.svc.NotHereYet(context.Background(), []NotHereYetNodeDTO{node("caps", f.t, "caps")})
+	if r := got.Results[0]; r.State != NotHereBehind || len(r.Files) != 200 || r.FilesOmitted != 1 || len(r.Commits) != 1 {
+		t.Fatalf("the view cap: %d files, %d omitted, %+v", len(r.Files), r.FilesOmitted, r.State)
+	}
+}
