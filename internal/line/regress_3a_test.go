@@ -100,3 +100,46 @@ func TestRegress3aHelmChangedChartDoesNotClaimOldVersion(t *testing.T) {
 		t.Fatalf("old-chart deployment attributed to new-chart: %+v", us[0])
 	}
 }
+
+// Regressions from Codex's review of 599091d: a contested historical
+// source, and a chart path that is not a chart name.
+
+func TestRegress3aFixArgoContestedHistoricalSource(t *testing.T) {
+	old := gitSource("refs/heads/release")
+	a, b := gitSource("refs/heads/main"), gitSource("refs/heads/develop")
+	for _, sources := range [][]argo.Source{{a, b}, {b, a}} {
+		app := argoApp("edited", sources, deployed([]argo.Source{old}, sha('a')), func(app *argo.App) {
+			app.Compared = argo.Revisions{Sources: []argo.Source{old}, Revisions: []string{sha('b')}}
+			app.Operation = argo.Operation{Phase: "Failed", Sync: argo.Revisions{Sources: []argo.Source{old}, Revisions: []string{sha('c')}}}
+		})
+		us, _ := Units(station("c", "dev", func(in *StationInput) { in.Apps = []Object[argo.App]{app} }))
+		if len(us) != 2 {
+			t.Fatalf("units=%d", len(us))
+		}
+		for _, u := range us {
+			if u.Applied != nil || u.Compared != nil || u.Attempted != nil {
+				t.Errorf("source %s was arbitrarily assigned the one old release source: applied=%+v compared=%+v attempted=%+v", u.Key.RefName, u.Applied, u.Compared, u.Attempted)
+			}
+		}
+	}
+}
+
+func TestRegress3aFixHelmPathIsNotChartName(t *testing.T) {
+	for _, kind := range []flux.Kind{flux.GitRepositoryKind, flux.BucketKind} {
+		for _, path := range []string{"./charts/web", "./charts/web-1.1.0.tgz"} {
+			t.Run(string(kind)+"/"+path, func(t *testing.T) {
+				s := Object[flux.Source]{Data: flux.Source{Kind: kind, Namespace: "shop", Name: "repo", URL: "https://example.com/charts", Ready: flux.Ready}}
+				r := flux.Resource{Kind: flux.HelmReleaseKind, Namespace: "shop", Name: "web", Chart: path, SourceKind: string(kind), SourceNamespace: "shop", SourceName: "repo", Generation: 1, ObservedGeneration: 1,
+					History: []flux.HelmHistory{{Version: 2, ChartName: "web", ChartVersion: "1.1.0", Status: "failed"}, {Version: 1, ChartName: "web", ChartVersion: "1.0.0", Status: "deployed"}}}
+				us, _ := Units(reviewHelm(r, s))
+				if len(us) != 1 {
+					t.Fatalf("units=%d", len(us))
+				}
+				u := us[0]
+				if u.SourceChanged || u.Applied == nil || u.Attempted == nil {
+					t.Fatalf("chart path mistaken for changed metadata.name: key=%+v changed=%v applied=%+v attempted=%+v", u.Key, u.SourceChanged, u.Applied, u.Attempted)
+				}
+			})
+		}
+	}
+}

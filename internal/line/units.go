@@ -333,11 +333,22 @@ func helmReleaseUnit(o Object[flux.Resource], lookup func(kind, ns, name string)
 		x.Reason = ExcludedNoIdentity
 		return nil, x
 	}
+	// The key's chart: spec.chart.spec.chart is a chart NAME for a
+	// HelmRepository source, but a PATH for a GitRepository or Bucket source
+	// (./charts/web, or a packaged .tgz), and absent for a chartRef. The
+	// history records the chart's metadata name. So the current chart's
+	// name is the spec's for a HelmRepository source, and otherwise the
+	// newest history record's - Flux writes it from the current spec.
 	chart := r.Chart
-	for _, h := range r.History {
-		if chart == "" {
-			chart = h.ChartName
-		}
+	current := ""
+	byName := r.SourceKind == "HelmRepository" && r.Chart != ""
+	if byName {
+		current = r.Chart
+	} else if len(r.History) > 0 {
+		current = r.History[0].ChartName
+	}
+	if chart == "" {
+		chart = current
 	}
 	if chart == "" {
 		x.Reason = ExcludedNoChartName
@@ -345,14 +356,15 @@ func helmReleaseUnit(o Object[flux.Resource], lookup func(kind, ns, name string)
 	}
 	u := &Unit{Origin: "HelmRelease", Namespace: r.Namespace, Name: r.Name, UID: o.UID, SourceName: s.Data.Name,
 		Key: Key{Kind: KeyChart, Repo: repoID, RefName: chart}, Suspended: r.Suspended, ArtifactTime: s.Data.ArtifactUpdated}
-	// Applied: the newest deployed history entry - of this chart. A deployed
-	// record of another chart (the spec changed charts since) is not
-	// deployment evidence for this key: applied unknown, source changed.
+	ofCurrent := func(h flux.HelmHistory) bool { return h.ChartName == "" || current == "" || h.ChartName == current }
+	// Applied: the newest deployed history entry - of the current chart. A
+	// deployed record of another chart (the spec changed charts since) is
+	// not deployment evidence for this key: applied unknown, source changed.
 	for _, h := range r.History {
 		if h.Status != "deployed" {
 			continue
 		}
-		if h.ChartName != "" && h.ChartName != chart {
+		if !ofCurrent(h) {
 			u.SourceChanged = true
 			break
 		}
@@ -360,7 +372,7 @@ func helmReleaseUnit(o Object[flux.Resource], lookup func(kind, ns, name string)
 		break
 	}
 	// Attempted: the latest entry when it is not deployed, of this chart.
-	if len(r.History) > 0 && r.History[0].Status != "deployed" && (r.History[0].ChartName == "" || r.History[0].ChartName == chart) {
+	if len(r.History) > 0 && r.History[0].Status != "deployed" && ofCurrent(r.History[0]) {
 		h := r.History[0]
 		u.Attempted = &Revision{Version: h.ChartVersion, Digest: h.ConfigDigest, Raw: h.ChartVersion}
 		u.AttemptPhase = h.Status
@@ -415,23 +427,39 @@ func pairAll(rs argo.Revisions, srcs []argo.Source) []pairing {
 		used[j] = true
 		out[i] = pairing{rev: rs.Revisions[j], found: true, changed: j != i || !exact(rs.Sources[j], srcs[i])}
 	}
+	matches := func(pass int, rec, s argo.Source) bool {
+		if pass == 0 {
+			return exact(rec, s)
+		}
+		return sourceID(rec) == sourceID(s)
+	}
 	for pass := 0; pass < 2; pass++ {
+		// Count each unused record's claimants among the unpaired sources:
+		// a record two sources could both be paired with is contested, and
+		// left to neither (one to one on both sides).
+		claimants := make([]int, len(rs.Sources))
 		for i, s := range srcs {
 			if out[i].found {
 				continue
 			}
-			match := -1
-			n := 0
 			for j, rec := range rs.Sources {
-				if used[j] || j >= len(rs.Revisions) {
-					continue
+				if !used[j] && j < len(rs.Revisions) && matches(pass, rec, s) {
+					claimants[j]++
 				}
-				if (pass == 0 && exact(rec, s)) || (pass == 1 && sourceID(rec) == sourceID(s)) {
+			}
+		}
+		for i, s := range srcs {
+			if out[i].found {
+				continue
+			}
+			match, n := -1, 0
+			for j, rec := range rs.Sources {
+				if !used[j] && j < len(rs.Revisions) && matches(pass, rec, s) {
 					match = j
 					n++
 				}
 			}
-			if n == 1 {
+			if n == 1 && claimants[match] == 1 {
 				assign(i, match)
 			}
 		}
