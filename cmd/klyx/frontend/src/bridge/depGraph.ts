@@ -29,8 +29,10 @@ export type DepNode = {
   name: string;
   uid?: string;
   readAt?: string;
-  // where evidence stops, or "not found" (a read that answered)
-  stub?: "depth" | "node limit" | "read limit" | "cycle" | "unreadable" | "replaced" | "cancelled" | "not found";
+  // where evidence stops (unreadable, replaced, or the walk's one summary of
+  // what was not followed: depth, node limit, read limit, cancelled), or
+  // "not found" (a read that answered)
+  stub?: "depth" | "node limit" | "read limit" | "unreadable" | "replaced" | "cancelled" | "not found";
   note?: string;
   ready: string;
   reason?: string;
@@ -50,7 +52,8 @@ export type DepNode = {
   inventory?: { lastApplied: string; entries: number; workloads: number };
   git?: { url: string; refKind: string; refName: string; applied: string; path: string };
 };
-export type DepEdge = { from: string; to: string; type: "source" | "dependsOn"; reported: boolean };
+// cycle: the edge leads back to a node on its own path - cut here, and named.
+export type DepEdge = { from: string; to: string; type: "source" | "dependsOn"; reported: boolean; cycle: boolean };
 export type DepPair = { failing: string; conditionTime: string; object: string; write: DepWrite };
 export type DepGraph = { start: string; nodes: DepNode[]; edges: DepEdge[]; incomplete: string[]; proximity: DepPair[]; reads: number; error?: string };
 

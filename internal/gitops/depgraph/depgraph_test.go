@@ -363,7 +363,7 @@ func TestGraphIncompleteEvidence(t *testing.T) {
 // chart's own source follows.
 func TestGraphHelmRelease(t *testing.T) {
 	hr := obj("HelmRelease", "apps", "podinfo", "uid-hr", map[string]any{"chart": map[string]any{"spec": map[string]any{"sourceRef": map[string]any{"kind": "HelmRepository", "name": "podinfo", "namespace": "flux-system"}}}},
-		map[string]any{"helmChart": "flux-system/apps-podinfo", "conditions": []any{ready("False", "ArtifactFailed", "HelmChart 'flux-system/apps-podinfo' is not ready", t0)}})
+		map[string]any{"helmChart": "flux-system/apps-podinfo", "conditions": []any{ready("False", "SourceNotReady", "HelmChart 'flux-system/apps-podinfo' is not ready: does not have an artifact", t0)}})
 	chart := obj("HelmChart", "flux-system", "apps-podinfo", "uid-hc", map[string]any{"sourceRef": map[string]any{"kind": "HelmRepository", "name": "podinfo"}},
 		map[string]any{"conditions": []any{ready("False", "IndexationFailed", "", t0)}})
 	repo := obj("HelmRepository", "flux-system", "podinfo", "uid-repo", map[string]any{}, map[string]any{"conditions": []any{ready("False", "IndexationFailed", "", t0)}})
@@ -402,7 +402,7 @@ func TestGraphReviewOf06f7f47(t *testing.T) {
 		t.Fatalf("1,000 dependencies: %d nodes, %d edges, %d reads", len(g.Nodes), len(g.Edges), g.Reads)
 	}
 	last := g.Nodes[len(g.Nodes)-1]
-	if last.Stub != StubNodes || !strings.HasPrefix(last.Note, "977 more (first Kustomization/flux-system/d23) not read: the 24-node limit") {
+	if last.Stub != StubNodes || last.Note != "977 not read: the 24-node limit" {
 		t.Fatalf("summary: %+v", last)
 	}
 	// Depth: one summary per node, whatever its fan-out.
@@ -413,7 +413,7 @@ func TestGraphReviewOf06f7f47(t *testing.T) {
 	for _, n := range g.Nodes {
 		if n.Stub == StubDepth {
 			depth++
-			if !strings.HasPrefix(n.Note, "3 more") {
+			if n.Note != "3 not followed past depth 6" {
 				t.Fatalf("depth summary: %+v", n)
 			}
 		}
@@ -501,12 +501,84 @@ func TestGraphHelmSourceNotReady(t *testing.T) {
 	if reported(hr("HelmChart 'apps/other' is not ready: does not have an artifact"), chart(noArtifact)) {
 		t.Fatal("a message naming another source")
 	}
-	recovered := map[string]any{"conditions": []any{ready("True", "Succeeded", "", t0)}, "artifact": map[string]any{"revision": "1.0.0"}}
+	recovered := map[string]any{"observedGeneration": int64(0), "conditions": []any{ready("True", "Succeeded", "", t0)}, "artifact": map[string]any{"revision": "1.0.0"}}
 	if reported(hr("HelmChart 'apps/web' is not ready: does not have an artifact"), chart(recovered)) {
 		t.Fatal("a source that has recovered since")
 	}
-	stalled := map[string]any{"conditions": []any{ready("True", "Succeeded", "", t0), map[string]any{"type": "Stalled", "status": "True"}}, "artifact": map[string]any{"revision": "1.0.0"}}
+	stalled := map[string]any{"observedGeneration": int64(0), "conditions": []any{ready("True", "Succeeded", "", t0), map[string]any{"type": "Stalled", "status": "True"}}, "artifact": map[string]any{"revision": "1.0.0"}}
 	if !reported(hr("HelmChart 'apps/web' is not ready: invalid chart"), chart(stalled)) {
 		t.Fatal("a Stalled source is not ready by the controller's rules")
+	}
+}
+
+// Design review of d0ca1d2: one global bound, cycles included, and each
+// controller's own source readiness.
+func TestGraphReviewOfd0ca1d2(t *testing.T) {
+	// A six-deep chain whose nodes each name every ancestor (cycles) and a
+	// hundred more: at most 24 nodes read and the one summary.
+	r := chain(6)
+	for i := 0; i < 6; i++ {
+		var deps []any
+		if i < 5 {
+			deps = append(deps, map[string]any{"name": fmt.Sprintf("k%d", i+1)})
+		}
+		for j := 0; j < i; j++ {
+			deps = append(deps, map[string]any{"name": fmt.Sprintf("k%d", j)})
+		}
+		for j := 0; j < 100; j++ {
+			deps = append(deps, map[string]any{"name": fmt.Sprintf("extra-%d-%d", i, j)})
+		}
+		r.objs[fmt.Sprintf("Kustomization/flux-system/k%d", i)].Object["spec"] = map[string]any{"dependsOn": deps}
+	}
+	g := Build(context.Background(), r, Ref{GroupKustomize, "Kustomization", "flux-system", "k0"}, "", time.Now)
+	summaries, cycles := 0, 0
+	for _, n := range g.Nodes {
+		if strings.HasPrefix(n.ID, "stub:") {
+			summaries++
+		}
+	}
+	for _, e := range g.Edges {
+		if e.Cycle {
+			cycles++
+			if n := node(t, g, e.To); n.Stub != "" || n.UID == "" {
+				t.Fatalf("a cycle edge leads to %+v, not to the node it closes on", n)
+			}
+		}
+	}
+	if len(g.Nodes) > MaxNodes+1 || summaries != 1 || cycles == 0 || !containsPrefix(g.Incomplete, "cycle: ") {
+		t.Fatalf("nested bounds: %d nodes, %d summaries, %d cycles, %v", len(g.Nodes), summaries, cycles, g.Incomplete)
+	}
+
+	// kustomize-controller uses a source's artifact whatever its generation:
+	// a missing path with a stale but artifact-holding source is not the source's.
+	r = world()
+	u := r.objs["Kustomization/flux-system/apps"]
+	u.SetGeneration(1)
+	c := ready("False", "ArtifactFailed", "kustomization path not found: stat /tmp/build/missing: no such file or directory", t0)
+	c["observedGeneration"] = int64(1)
+	u.Object["status"] = map[string]any{"observedGeneration": int64(1), "conditions": []any{c}}
+	src := r.objs["GitRepository/flux-system/platform"]
+	src.SetGeneration(2)
+	src.Object["status"] = map[string]any{"observedGeneration": int64(1), "artifact": map[string]any{"revision": "main@sha1:" + sha}, "conditions": []any{ready("True", "Succeeded", "stored artifact", t0)}}
+	if e, _ := edge(build(t, r, "uid-apps"), "Kustomization/flux-system/apps", "GitRepository/flux-system/platform"); e.Reported {
+		t.Fatal("a Kustomization's missing path attributed to a source with an artifact")
+	}
+	// The same Kustomization with the source's artifact gone: reported.
+	delete(src.Object["status"].(map[string]any), "artifact")
+	c["message"] = "Source artifact not found, retrying in 30s"
+	if e, _ := edge(build(t, r, "uid-apps"), "Kustomization/flux-system/apps", "GitRepository/flux-system/platform"); !e.Reported {
+		t.Fatal("a source with no artifact")
+	}
+	// helm-controller's ArtifactFailed names a source only when it is missing.
+	hr := obj("HelmRelease", "apps", "web", "hr", map[string]any{"chartRef": map[string]any{"kind": "HelmChart", "name": "web"}},
+		map[string]any{"conditions": []any{ready("False", "ArtifactFailed", "Could not load chart: bad tgz", t0)}})
+	hc := obj("HelmChart", "apps", "web", "hc", map[string]any{}, map[string]any{"conditions": []any{ready("False", "FetchFailed", "", t0)}})
+	hrr := &fakeReader{objs: map[string]*unstructured.Unstructured{"HelmRelease/apps/web": hr, "HelmChart/apps/web": hc}, fail: map[string]error{}}
+	if e, _ := edge(Build(context.Background(), hrr, Ref{GroupHelm, "HelmRelease", "apps", "web"}, "", time.Now), "HelmRelease/apps/web", "HelmChart/apps/web"); e.Reported {
+		t.Fatal("a HelmRelease's chart load failure attributed to its chart")
+	}
+	delete(hrr.objs, "HelmChart/apps/web")
+	if e, _ := edge(Build(context.Background(), hrr, Ref{GroupHelm, "HelmRelease", "apps", "web"}, "", time.Now), "HelmRelease/apps/web", "HelmChart/apps/web"); !e.Reported {
+		t.Fatal("a missing chart a HelmRelease reports")
 	}
 }

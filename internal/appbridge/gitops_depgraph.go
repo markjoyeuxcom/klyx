@@ -15,6 +15,7 @@ type DepEdgeDTO struct {
 	To       string `json:"to"`
 	Type     string `json:"type"`     // source | dependsOn
 	Reported bool   `json:"reported"` // the downstream controller reports this edge blocks it
+	Cycle    bool   `json:"cycle"`    // leads back to a node on its own path: cut here, and named
 }
 
 type DepSupplierDTO struct {
@@ -68,8 +69,9 @@ type DepNodeDTO struct {
 	Name      string `json:"name"`
 	UID       string `json:"uid,omitempty"`
 	ReadAt    string `json:"readAt,omitempty"`
-	// Stub: where evidence stops (depth, node limit, read limit, cycle,
-	// unreadable, replaced, cancelled), or "not found" (a read that answered).
+	// Stub: where evidence stops - unreadable, replaced, or the walk's one
+	// summary of what was not followed (depth, node limit, read limit,
+	// cancelled) - or "not found" (a read that answered).
 	Stub string `json:"stub,omitempty"`
 	Note string `json:"note,omitempty"`
 
@@ -159,7 +161,7 @@ func depGraphDTO(g depgraph.Graph) DepGraphDTO {
 		out.Nodes = append(out.Nodes, d)
 	}
 	for _, e := range g.Edges {
-		out.Edges = append(out.Edges, DepEdgeDTO{From: e.From, To: e.To, Type: string(e.Type), Reported: e.Reported})
+		out.Edges = append(out.Edges, DepEdgeDTO{From: e.From, To: e.To, Type: string(e.Type), Reported: e.Reported, Cycle: e.Cycle})
 	}
 	for _, p := range g.Proximity {
 		w := p.Write

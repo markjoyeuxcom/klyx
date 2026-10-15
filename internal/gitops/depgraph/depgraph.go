@@ -61,25 +61,27 @@ const (
 )
 
 // Edge leads from a node to what it declares it needs. Reported: the
-// downstream node's controller reports this edge is what blocks it.
+// downstream node's controller reports this edge is what blocks it. Cycle:
+// the edge leads back to a node on its own path - cut here, and named.
 type Edge struct {
 	From, To string
 	Type     EdgeType
 	Reported bool
+	Cycle    bool
 }
 
 // Stub kinds: a node whose evidence stops. Every kind but NotFound is
 // incomplete evidence and is named in the graph's header. NotFound,
-// unreadable and replaced stand for the object itself (its ID, read once);
-// the limits, depth, cycle and cancelled are per edge, and a limit or depth
-// stub sums up every target it stands for, so the graph stays bounded.
+// unreadable and replaced stand for the object itself (its ID, read once).
+// Whatever a budget, the depth or a cancellation stops is summed up in one
+// summary node for the whole walk, so the graph holds at most MaxNodes
+// nodes and that summary. A cycle is an edge, not a node.
 type Stub string
 
 const (
 	StubDepth      Stub = "depth"
 	StubNodes      Stub = "node limit"
 	StubReads      Stub = "read limit"
-	StubCycle      Stub = "cycle"
 	StubUnreadable Stub = "unreadable"
 	StubReplaced   Stub = "replaced"
 	StubCancelled  Stub = "cancelled"
@@ -108,6 +110,7 @@ type Node struct {
 	// Stalled=True, is not ready whatever Ready says.
 	HasArtifact bool
 	Stalled     bool
+	ObservedSet bool // status.observedGeneration is recorded
 
 	Failing         bool // Ready=False and not suspended
 	UpstreamFailure bool // failing, and not the selected node
@@ -187,6 +190,12 @@ type builder struct {
 	onPath map[string]bool
 	reads  int
 	stubs  int
+	// nodes counts the objects read (MaxNodes bounds it); the one summary
+	// stands for everything not followed, by reason
+	nodes     int
+	summaryID string
+	omitted   map[Stub]int
+	omitOrder []Stub
 	// what Git's facts need, kept from the reads: a GitRepository's URL and
 	// ref, a Kustomization's spec.path
 	sourceFacts map[string]flux.Source
@@ -207,13 +216,14 @@ type esRead struct {
 // for it is "replaced".
 func Build(ctx context.Context, r Reader, start Ref, startUID string, now func() time.Time) Graph {
 	b := &builder{ctx: ctx, r: r, now: now, idx: map[string]int{}, onPath: map[string]bool{}, sourceFacts: map[string]flux.Source{}, paths: map[string]string{},
-		secrets: map[string]Supply{}, ess: map[string]esRead{}}
+		secrets: map[string]Supply{}, ess: map[string]esRead{}, omitted: map[Stub]int{}}
 	if kind, why := b.exhausted(); kind != "" {
 		b.g.Start = b.stub(start, kind, why)
 	} else {
 		b.g.Start = b.visit(start, startUID, 0)
 	}
 	b.g.Reads = b.reads
+	b.summarize()
 	b.label()
 	b.proximity()
 	return b.g
@@ -261,6 +271,7 @@ func (b *builder) spend() bool {
 func (b *builder) object(n Node) string {
 	b.g.Nodes = append(b.g.Nodes, n)
 	b.idx[n.ID] = len(b.g.Nodes) - 1
+	b.nodes++
 	return n.ID
 }
 
@@ -270,7 +281,7 @@ func (b *builder) exhausted() (Stub, string) {
 	case b.ctx.Err() != nil:
 		b.incomplete("cancelled")
 		return StubCancelled, "cancelled"
-	case len(b.g.Nodes) >= MaxNodes:
+	case b.nodes >= MaxNodes:
 		b.incomplete("node limit: %d nodes", MaxNodes)
 		return StubNodes, fmt.Sprintf("the %d-node limit", MaxNodes)
 	case b.reads >= MaxReads:
@@ -289,7 +300,7 @@ func (b *builder) visit(ref Ref, wantUID string, depth int) string {
 	switch {
 	case err != nil && b.ctx.Err() != nil:
 		b.incomplete("cancelled")
-		return b.stub(ref, StubCancelled, "cancelled")
+		return "" // the caller sums it up
 	case apierrors.IsNotFound(err):
 		return b.object(Node{ID: id, Ref: ref, ReadAt: at, Stub: StubNotFound, Note: "not found"})
 	case err != nil:
@@ -317,56 +328,90 @@ func (b *builder) visit(ref Ref, wantUID string, depth int) string {
 }
 
 // follow walks a node's targets: a node already read (a diamond) is linked
-// at no cost, a cycle is cut per edge, and once a budget runs out the rest
-// is summed up in one stub.
+// at no cost, a cycle is an edge back, cut and named, and whatever the
+// depth, a budget or a cancellation stops joins the walk's one summary,
+// linked once from this node.
 func (b *builder) follow(id string, targets []target, depth int) {
 	if len(targets) == 0 {
 		return
 	}
-	if depth >= MaxDepth {
-		b.incomplete("depth: not followed past depth %d", MaxDepth)
-		b.summary(id, targets, StubDepth, fmt.Sprintf("not followed past depth %d", MaxDepth))
-		return
-	}
 	b.onPath[id] = true
 	defer func() { b.onPath[id] = false }()
-	var omitted []target
-	var kind Stub
-	var why string
+	var omittedType EdgeType
 	for _, t := range targets {
 		tid := t.ref.ID()
 		if _, seen := b.idx[tid]; seen {
-			to := tid
 			if b.onPath[tid] {
 				b.incomplete("cycle: %s → %s, cut", id, tid)
-				to = b.stub(t.ref, StubCycle, fmt.Sprintf("cycle: %s leads back to %s", id, tid))
+				b.g.Edges = append(b.g.Edges, Edge{From: id, To: tid, Type: t.typ, Cycle: true})
+				continue
 			}
-			b.g.Edges = append(b.g.Edges, Edge{From: id, To: to, Type: t.typ, Reported: b.reported(id, t, to)})
+			b.g.Edges = append(b.g.Edges, Edge{From: id, To: tid, Type: t.typ, Reported: b.reported(id, t, tid)})
 			continue
 		}
-		if kind == "" {
-			kind, why = b.exhausted()
+		var why Stub
+		if depth >= MaxDepth {
+			b.incomplete("depth: not followed past depth %d", MaxDepth)
+			why = StubDepth
+		} else {
+			why, _ = b.exhausted()
 		}
-		if kind != "" {
-			omitted = append(omitted, t)
-			continue
+		if why == "" {
+			if to := b.visit(t.ref, "", depth+1); to != "" {
+				b.g.Edges = append(b.g.Edges, Edge{From: id, To: to, Type: t.typ, Reported: b.reported(id, t, to)})
+				continue
+			}
+			why = StubCancelled
 		}
-		to := b.visit(t.ref, "", depth+1)
-		b.g.Edges = append(b.g.Edges, Edge{From: id, To: to, Type: t.typ, Reported: b.reported(id, t, to)})
+		b.omit(why)
+		if omittedType == "" {
+			omittedType = t.typ
+		}
 	}
-	if len(omitted) > 0 {
-		b.summary(id, omitted, kind, "not read: "+why)
+	if omittedType != "" {
+		b.g.Edges = append(b.g.Edges, Edge{From: id, To: b.summary(), Type: omittedType})
 	}
 }
 
-// summary is one stub for every target a budget or the depth stopped.
-func (b *builder) summary(from string, ts []target, kind Stub, why string) {
-	note := fmt.Sprintf("%s %s", ts[0].ref.ID(), why)
-	if len(ts) > 1 {
-		note = fmt.Sprintf("%d more (first %s) %s", len(ts), ts[0].ref.ID(), why)
+func (b *builder) omit(why Stub) {
+	if b.omitted[why] == 0 {
+		b.omitOrder = append(b.omitOrder, why)
 	}
-	to := b.stub(ts[0].ref, kind, note)
-	b.g.Edges = append(b.g.Edges, Edge{From: from, To: to, Type: ts[0].typ})
+	b.omitted[why]++
+}
+
+// summary is the walk's one node for everything not followed.
+func (b *builder) summary() string {
+	if b.summaryID == "" {
+		b.summaryID = "stub:not-followed"
+		b.g.Nodes = append(b.g.Nodes, Node{ID: b.summaryID})
+		b.idx[b.summaryID] = len(b.g.Nodes) - 1
+	}
+	return b.summaryID
+}
+
+// summarize words the summary once the walk is done: how many were not
+// followed, and why.
+func (b *builder) summarize() {
+	if b.summaryID == "" {
+		return
+	}
+	var parts []string
+	for _, why := range b.omitOrder {
+		n := b.omitted[why]
+		switch why {
+		case StubDepth:
+			parts = append(parts, fmt.Sprintf("%d not followed past depth %d", n, MaxDepth))
+		case StubNodes:
+			parts = append(parts, fmt.Sprintf("%d not read: the %d-node limit", n, MaxNodes))
+		case StubReads:
+			parts = append(parts, fmt.Sprintf("%d not read: the %d-read limit", n, MaxReads))
+		case StubCancelled:
+			parts = append(parts, fmt.Sprintf("%d not read: cancelled", n))
+		}
+	}
+	sn := &b.g.Nodes[b.idx[b.summaryID]]
+	sn.Stub, sn.Note = b.omitOrder[0], strings.Join(parts, "; ")
 }
 
 type target struct {
@@ -445,12 +490,16 @@ func dependsOn(u *unstructured.Unstructured) []flux.DependencyRef {
 // reported: the downstream node's controller reports this edge blocks it,
 // in a condition that describes its current spec (a condition from an
 // older generation is evidence about that generation, never about today's
-// edges).
-//   - dependsOn: DependencyNotReady, the message naming this dependency.
-//   - source: ArtifactFailed (kustomize- and helm-controller) with a source
-//     that is not ready - the reason alone also covers a missing path - or
-//     SourceNotReady (helm-controller), the message naming this source,
-//     which is still not ready by helm-controller's own rules.
+// edges). The source's readiness is judged by the controller that reported
+// it, as that controller judges it:
+//   - dependsOn (both): DependencyNotReady, the message naming this dependency.
+//   - a Kustomization's source (kustomize-controller): ArtifactFailed with
+//     the source not found, or without an artifact. A source that has one is
+//     used as it is, whatever its generation, so the same reason then means
+//     a fetch or a missing path, not the source.
+//   - a HelmRelease's source (helm-controller): ArtifactFailed with the
+//     source not found; or SourceNotReady naming this source while its
+//     isReady still fails (generation not reconciled, Stalled, no artifact).
 func (b *builder) reported(from string, t target, to string) bool {
 	n := b.g.Nodes[b.idx[from]]
 	if n.Ready != "False" || n.Suspended || !current(n) {
@@ -462,12 +511,14 @@ func (b *builder) reported(from string, t target, to string) bool {
 		dep, ok := flux.DependencyNamed(n.Message)
 		return n.Reason == flux.ReasonDependencyNotReady && ok && dep == t.ref.Namespace+"/"+t.ref.Name
 	case EdgeSource:
-		switch n.Reason {
-		case flux.ReasonArtifactFailed:
-			return sourceNotReady(s)
-		case flux.ReasonSourceNotReady:
+		switch {
+		case n.Ref.Kind == string(flux.KustomizationKind) && n.Reason == flux.ReasonArtifactFailed:
+			return s.Stub == StubNotFound || (s.Stub == "" && !s.HasArtifact)
+		case n.Ref.Kind == string(flux.HelmReleaseKind) && n.Reason == flux.ReasonArtifactFailed:
+			return s.Stub == StubNotFound
+		case n.Ref.Kind == string(flux.HelmReleaseKind) && n.Reason == flux.ReasonSourceNotReady:
 			kind, ns, name, ok := flux.SourceNamed(n.Message)
-			return ok && kind == t.ref.Kind && ns == t.ref.Namespace && name == t.ref.Name && sourceNotReady(s)
+			return ok && kind == t.ref.Kind && ns == t.ref.Namespace && name == t.ref.Name && helmNotReady(s)
 		}
 	}
 	return false
@@ -482,14 +533,15 @@ func current(n Node) bool {
 	return !n.Stale
 }
 
-// sourceNotReady is helm-controller's isReady, inverted: not found, a
-// generation not yet reconciled, Stalled, or no artifact - or Ready=False.
-func sourceNotReady(s Node) bool {
+// helmNotReady is helm-controller's isReady (v1.6.5), inverted: not found,
+// no recorded observedGeneration or one other than the generation,
+// Stalled, or no artifact. Ready=False alone is not it.
+func helmNotReady(s Node) bool {
 	switch s.Stub {
 	case StubNotFound:
 		return true
 	case "":
-		return s.Ready == "False" || s.Stale || s.Stalled || !s.HasArtifact
+		return !s.ObservedSet || s.Generation != s.ObservedGeneration || s.Stalled || !s.HasArtifact
 	}
 	return false
 }
@@ -497,7 +549,7 @@ func sourceNotReady(s Node) bool {
 func nodeOf(ref Ref, u *unstructured.Unstructured, at time.Time) Node {
 	n := Node{ID: ref.ID(), Ref: ref, UID: string(u.GetUID()), ReadAt: at, Generation: u.GetGeneration()}
 	observed, found, _ := unstructured.NestedInt64(u.Object, "status", "observedGeneration")
-	n.ObservedGeneration = observed
+	n.ObservedGeneration, n.ObservedSet = observed, found
 	n.Stale = found && n.Generation > 0 && n.Generation > observed // a recorded 0 is lag; an absent field is not
 	_, n.HasArtifact, _ = unstructured.NestedMap(u.Object, "status", "artifact")
 	n.Stalled = conditionTrue(u, "Stalled")
