@@ -335,29 +335,33 @@ func helmReleaseUnit(o Object[flux.Resource], lookup func(kind, ns, name string)
 	}
 	// The key's chart: spec.chart.spec.chart is a chart NAME for a
 	// HelmRepository source, but a PATH for a GitRepository or Bucket source
-	// (./charts/web, or a packaged .tgz), and absent for a chartRef. The
-	// history records the chart's metadata name, and is written by Helm
-	// actions - not by every spec edit (a pending edit, or a terminal failure
-	// before any Helm action, leaves the old chart's record on top). So:
-	//   - by name (a HelmRepository source), the spec's chart name is the
-	//     current chart's, compared against each record's name;
-	//   - by path or chartRef, the records are the current spec's only when
-	//     that is provable: the spec was never edited (generation 1, so every
-	//     record is of the current chart), or the current generation
-	//     reconciled successfully (observed, not stale, Ready=True: the
-	//     release is in sync with the spec). Otherwise the correspondence is
-	//     unknown: applied unknown, never the old chart's record.
+	// (./charts/web, or a packaged .tgz), and absent for a chartRef. Flux's
+	// history records the chart's metadata name and version, and is written
+	// by Helm actions - not by every spec edit - and records neither the
+	// repository nor the path a release came from. So a deployed record is
+	// this key's evidence only when both of these are provable:
+	//   - it names the current chart: by name (a HelmRepository source), or
+	//     the release was never edited (generation 1), or its current
+	//     generation reconciled successfully - the Ready condition's own
+	//     observedGeneration is the current generation, Ready=True, and the
+	//     release is not suspended (a suspension advances the top-level
+	//     observedGeneration without a reconcile);
+	//   - it came from the current source: the source has fetched its
+	//     current spec (generation observed), and either was never edited
+	//     (generation 1) or the record was deployed after the source's
+	//     current artifact was fetched.
+	// Otherwise the correspondence is unknown: applied unknown, never the
+	// old chart's or the old source's record.
 	chart := r.Chart
 	current := ""
 	byName := r.SourceKind == "HelmRepository" && r.Chart != ""
-	inSync := r.Generation > 0 && r.ObservedGeneration == r.Generation && !r.Stale && r.Ready == flux.Ready
-	proven := byName || r.Generation == 1 || inSync
+	inSync := r.Generation > 0 && r.ReadyObservedGeneration == r.Generation && r.Ready == flux.Ready && !r.Suspended
+	namesCurrent := byName || r.Generation == 1 || inSync
 	if byName {
 		current = r.Chart
-	} else if len(r.History) > 0 && proven {
+	} else if len(r.History) > 0 && namesCurrent {
 		current = r.History[0].ChartName
 	}
-	unproven := !proven
 	if chart == "" {
 		chart = current
 	}
@@ -367,28 +371,34 @@ func helmReleaseUnit(o Object[flux.Resource], lookup func(kind, ns, name string)
 	}
 	u := &Unit{Origin: "HelmRelease", Namespace: r.Namespace, Name: r.Name, UID: o.UID, SourceName: s.Data.Name,
 		Key: Key{Kind: KeyChart, Repo: repoID, RefName: chart}, Suspended: r.Suspended, ArtifactTime: s.Data.ArtifactUpdated}
+	src := s.Data
+	sourceCurrent := src.Generation > 0 && src.ObservedGeneration == src.Generation
+	fromCurrentSource := func(h flux.HelmHistory) bool {
+		return sourceCurrent && (src.Generation == 1 || (!h.LastDeployed.IsZero() && !src.ArtifactUpdated.IsZero() && !h.LastDeployed.Before(src.ArtifactUpdated)))
+	}
 	ofCurrent := func(h flux.HelmHistory) bool {
-		if unproven {
-			return false // the record's correspondence to the current spec is unknown
+		if !namesCurrent {
+			return false
 		}
 		return h.ChartName == "" || current == "" || h.ChartName == current
 	}
-	// Applied: the newest deployed history entry - of the current chart. A
-	// deployed record of another chart (the spec changed charts since) is
-	// not deployment evidence for this key: applied unknown, source changed.
+	// Applied: the newest deployed history entry - of the current chart,
+	// from the current source. A proven record of another chart is source
+	// changed; an unproven one stays unknown.
 	for _, h := range r.History {
 		if h.Status != "deployed" {
 			continue
 		}
-		if !ofCurrent(h) {
-			u.SourceChanged = !unproven // a proven other chart; unproven stays unknown
-			break
+		switch {
+		case !ofCurrent(h):
+			u.SourceChanged = namesCurrent // a proven other chart; unproven stays unknown
+		case fromCurrentSource(h):
+			u.Applied = &Revision{Version: h.ChartVersion, Digest: h.ConfigDigest, Raw: h.ChartVersion}
 		}
-		u.Applied = &Revision{Version: h.ChartVersion, Digest: h.ConfigDigest, Raw: h.ChartVersion}
 		break
 	}
 	// Attempted: the latest entry when it is not deployed, of this chart.
-	if len(r.History) > 0 && r.History[0].Status != "deployed" && ofCurrent(r.History[0]) {
+	if len(r.History) > 0 && r.History[0].Status != "deployed" && ofCurrent(r.History[0]) && fromCurrentSource(r.History[0]) {
 		h := r.History[0]
 		u.Attempted = &Revision{Version: h.ChartVersion, Digest: h.ConfigDigest, Raw: h.ChartVersion}
 		u.AttemptPhase = h.Status

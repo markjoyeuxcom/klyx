@@ -26,7 +26,7 @@ func ks(name, rev string, mod ...func(*flux.Resource)) Object[flux.Resource] {
 }
 
 func gitSrc(name, url, refKind, refName, rev string) Object[flux.Source] {
-	return Object[flux.Source]{UID: "uid-src-" + name, Data: flux.Source{Kind: "GitRepository", Namespace: "flux-system", Name: name, Ready: flux.Ready,
+	return Object[flux.Source]{UID: "uid-src-" + name, Data: flux.Source{Generation: 1, ObservedGeneration: 1, Kind: "GitRepository", Namespace: "flux-system", Name: name, Ready: flux.Ready,
 		URL: url, RefKind: refKind, RefName: refName, Revision: rev}}
 }
 
@@ -122,7 +122,7 @@ func TestExclusionsAreCounted(t *testing.T) {
 }
 
 func TestHelmReleaseChartUnit(t *testing.T) {
-	src := Object[flux.Source]{Data: flux.Source{Kind: "HelmRepository", Namespace: "flux-system", Name: "bitnami", URL: "https://charts.bitnami.com/bitnami"}}
+	src := Object[flux.Source]{Data: flux.Source{Generation: 1, ObservedGeneration: 1, Kind: "HelmRepository", Namespace: "flux-system", Name: "bitnami", URL: "https://charts.bitnami.com/bitnami"}}
 	hr := func(hist ...flux.HelmHistory) StationInput {
 		return station("a", "dev", func(in *StationInput) {
 			in.Sources = append(in.Sources, src)
@@ -365,7 +365,7 @@ func TestHeldNeedsAttemptedRAndFailing(t *testing.T) {
 func TestChartValuesDiffer(t *testing.T) {
 	chartStation := func(cluster, env, version, digest string) StationInput {
 		return station(cluster, env, func(in *StationInput) {
-			in.Sources = append(in.Sources, Object[flux.Source]{Data: flux.Source{Kind: "HelmRepository", Namespace: "flux-system", Name: "repo", URL: "https://charts.example"}})
+			in.Sources = append(in.Sources, Object[flux.Source]{Data: flux.Source{Generation: 1, ObservedGeneration: 1, Kind: "HelmRepository", Namespace: "flux-system", Name: "repo", URL: "https://charts.example"}})
 			in.HelmReleases = append(in.HelmReleases, Object[flux.Resource]{Data: flux.Resource{Kind: flux.HelmReleaseKind, Namespace: "shop", Name: "web", Chart: "web",
 				SourceKind: "HelmRepository", SourceName: "repo", SourceNamespace: "flux-system",
 				History: []flux.HelmHistory{{ChartName: "web", ChartVersion: version, ConfigDigest: digest, Status: "deployed"}}}})

@@ -54,7 +54,7 @@ func reviewHelm(r flux.Resource, s Object[flux.Source]) StationInput {
 }
 func TestRegress3aHelmSourceFailure(t *testing.T) {
 	since := time.Date(2026, 10, 15, 9, 0, 0, 0, time.UTC)
-	s := Object[flux.Source]{UID: "repo", FailSince: &since, FailBasis: "observed", Data: flux.Source{Kind: flux.HelmRepositoryKind, Namespace: "shop", Name: "repo", URL: "https://charts.example", Ready: flux.Failed}}
+	s := Object[flux.Source]{UID: "repo", FailSince: &since, FailBasis: "observed", Data: flux.Source{Generation: 1, ObservedGeneration: 1, Kind: flux.HelmRepositoryKind, Namespace: "shop", Name: "repo", URL: "https://charts.example", Ready: flux.Failed}}
 	r := flux.Resource{Kind: flux.HelmReleaseKind, Namespace: "shop", Name: "web", Ready: flux.Ready, Chart: "web", SourceKind: "HelmRepository", SourceNamespace: "shop", SourceName: "repo", History: []flux.HelmHistory{{ChartName: "web", ChartVersion: "1.0.0", Status: "deployed"}}}
 	us, _ := Units(reviewHelm(r, s))
 	if len(us) != 1 || !us[0].Failing || us[0].FailSince == nil || !us[0].FailSince.Equal(since) {
@@ -93,7 +93,7 @@ func TestRegress3aHelmChartHasNoRepositoryIdentity(t *testing.T) {
 	}
 }
 func TestRegress3aHelmChangedChartDoesNotClaimOldVersion(t *testing.T) {
-	source := Object[flux.Source]{Data: flux.Source{Kind: flux.HelmRepositoryKind, Namespace: "shop", Name: "repo", URL: "https://charts.example"}}
+	source := Object[flux.Source]{Data: flux.Source{Generation: 1, ObservedGeneration: 1, Kind: flux.HelmRepositoryKind, Namespace: "shop", Name: "repo", URL: "https://charts.example"}}
 	r := flux.Resource{Kind: flux.HelmReleaseKind, Namespace: "shop", Name: "cache", Chart: "new-chart", SourceKind: "HelmRepository", SourceNamespace: "shop", SourceName: "repo", History: []flux.HelmHistory{{ChartName: "old-chart", ChartVersion: "1.0.0", Status: "deployed"}}}
 	us, _ := Units(reviewHelm(r, source))
 	if len(us) > 0 && us[0].Key.RefName == "new-chart" && us[0].Applied != nil {
@@ -128,7 +128,7 @@ func TestRegress3aFixHelmPathIsNotChartName(t *testing.T) {
 	for _, kind := range []flux.Kind{flux.GitRepositoryKind, flux.BucketKind} {
 		for _, path := range []string{"./charts/web", "./charts/web-1.1.0.tgz"} {
 			t.Run(string(kind)+"/"+path, func(t *testing.T) {
-				s := Object[flux.Source]{Data: flux.Source{Kind: kind, Namespace: "shop", Name: "repo", URL: "https://example.com/charts", Ready: flux.Ready}}
+				s := Object[flux.Source]{Data: flux.Source{Generation: 1, ObservedGeneration: 1, Kind: kind, Namespace: "shop", Name: "repo", URL: "https://example.com/charts", Ready: flux.Ready}}
 				r := flux.Resource{Kind: flux.HelmReleaseKind, Namespace: "shop", Name: "web", Chart: path, SourceKind: string(kind), SourceNamespace: "shop", SourceName: "repo", Generation: 1, ObservedGeneration: 1,
 					History: []flux.HelmHistory{{Version: 2, ChartName: "web", ChartVersion: "1.1.0", Status: "failed"}, {Version: 1, ChartName: "web", ChartVersion: "1.0.0", Status: "deployed"}}}
 				us, _ := Units(reviewHelm(r, s))
@@ -157,7 +157,7 @@ func TestRegress3aFix2HistoryDoesNotProveCurrentChartPath(t *testing.T) {
 				name += "/terminal-failure"
 			}
 			t.Run(name, func(t *testing.T) {
-				source := Object[flux.Source]{Data: flux.Source{Kind: kind, Namespace: "shop", Name: "repo", URL: "https://example.com/charts", Ready: flux.Ready}}
+				source := Object[flux.Source]{Data: flux.Source{Generation: 1, ObservedGeneration: 1, Kind: kind, Namespace: "shop", Name: "repo", URL: "https://example.com/charts", Ready: flux.Ready}}
 				changed := flux.Resource{Kind: flux.HelmReleaseKind, Namespace: "shop", Name: "release", Chart: "./charts/new", SourceKind: string(kind), SourceNamespace: "shop", SourceName: "repo", Generation: 2, ObservedGeneration: observed, Stale: observed < 2, Ready: flux.Failed,
 					History: []flux.HelmHistory{{Version: 1, ChartName: "old", ChartVersion: "1.0.0", Status: "deployed"}}}
 				before := changed
@@ -197,5 +197,87 @@ func TestRegress3aFix2HistoryDoesNotProveCurrentChartPath(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// Regressions from Codex's review of 3528d95: a suspension and a source URL
+// edit must not prove a Flux chart record's provenance.
+
+func regress3528HR(generation, observed int64, path string, suspended bool) flux.Resource {
+	u := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "helm.toolkit.fluxcd.io/v2", "kind": "HelmRelease",
+		"metadata": map[string]any{"namespace": "shop", "name": "web", "generation": generation},
+		"spec":     map[string]any{"suspend": suspended, "chart": map[string]any{"spec": map[string]any{"chart": path, "sourceRef": map[string]any{"kind": "GitRepository", "name": "repo"}}}},
+		"status": map[string]any{"observedGeneration": observed,
+			"conditions": []any{map[string]any{"type": "Ready", "status": "True", "observedGeneration": int64(1), "reason": "UpgradeSucceeded"}},
+			"history":    []any{map[string]any{"version": int64(1), "chartName": "old", "chartVersion": "1.0.0", "status": "deployed"}},
+		},
+	}}
+	return flux.ParseHelmRelease(u)
+}
+
+func regress3528Source(url string, generation int64) Object[flux.Source] {
+	u := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "source.toolkit.fluxcd.io/v1", "kind": "GitRepository",
+		"metadata": map[string]any{"namespace": "shop", "name": "repo", "generation": generation},
+		"spec":     map[string]any{"url": url},
+		"status":   map[string]any{"observedGeneration": int64(1), "conditions": []any{map[string]any{"type": "Ready", "status": "True", "observedGeneration": int64(1)}}, "artifact": map[string]any{"revision": "main@sha1:" + sha('a')}},
+	}}
+	return Object[flux.Source]{UID: "repo-uid", Data: flux.ParseSource(u)}
+}
+
+func TestRegress3aFix3SuspendedEditDoesNotProveInSync(t *testing.T) {
+	source := regress3528Source("https://example.com/repo", 1)
+	r := regress3528HR(2, 2, "./charts/new", true)
+	if r.Ready != flux.Ready || r.Stale || !r.Suspended {
+		t.Fatalf("fixture: %+v", r)
+	}
+	us, _ := Units(reviewHelm(r, source))
+	if len(us) != 1 {
+		t.Fatalf("units=%d", len(us))
+	}
+	if us[0].Applied != nil {
+		t.Fatalf("suspend fast-path inherited Ready from generation 1 but proves generation 2 deployment: key=%+v applied=%+v", us[0].Key, us[0].Applied)
+	}
+}
+
+func TestRegress3aFix3ReleaseGenerationDoesNotFenceSourceURL(t *testing.T) {
+	r := regress3528HR(1, 1, "./charts/web", false)
+	oldSource := regress3528Source("https://example.com/old", 1)
+	before, _ := Units(reviewHelm(r, oldSource))
+	if len(before) != 1 || before[0].Applied == nil {
+		t.Fatal("precondition: original source deployed")
+	}
+	// Only the bound GitRepository was edited. The HelmRelease itself is still
+	// generation 1 and Ready=True; its stored release came from the old URL.
+	newSource := regress3528Source("https://example.com/new", 2)
+	after, _ := Units(reviewHelm(r, newSource))
+	if len(after) != 1 {
+		t.Fatalf("units=%d", len(after))
+	}
+	if before[0].Key == after[0].Key {
+		t.Fatal("precondition: source URL edit must change the comparison key")
+	}
+	if after[0].Applied != nil {
+		t.Fatalf("old-repository release became evidence for new repository without a Helm action: key=%+v applied=%+v", after[0].Key, after[0].Applied)
+	}
+}
+
+// The positive side of the source fence: an edited source proves provenance
+// when the record was deployed after its current artifact was fetched.
+func TestRegress3aFix3DeployedAfterTheCurrentArtifactIsProven(t *testing.T) {
+	r := regress3528HR(1, 1, "./charts/web", false)
+	r.History[0].ChartName = "web"
+	src := regress3528Source("https://example.com/new", 2)
+	src.Data.ObservedGeneration = 2
+	src.Data.ArtifactUpdated = time.Date(2026, 10, 15, 9, 0, 0, 0, time.UTC)
+	r.History[0].LastDeployed = src.Data.ArtifactUpdated.Add(time.Minute)
+	us, _ := Units(reviewHelm(r, src))
+	if len(us) != 1 || us[0].Applied == nil || us[0].Applied.Version != "1.0.0" {
+		t.Fatalf("deployed after the current artifact: %+v", us)
+	}
+	r.History[0].LastDeployed = src.Data.ArtifactUpdated.Add(-time.Minute)
+	if us, _ := Units(reviewHelm(r, src)); us[0].Applied != nil {
+		t.Fatalf("deployed before the current artifact: unproven: %+v", us[0].Applied)
 	}
 }

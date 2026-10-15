@@ -78,6 +78,10 @@ type Resource struct {
 	// Chart is a HelmRelease's spec.chart.spec.chart (empty for a chartRef
 	// release, whose source names the chart): The Line's chart key.
 	Chart string
+	// ReadyObservedGeneration is the Ready condition's own observedGeneration:
+	// the generation the Ready verdict was computed for. The top-level
+	// observedGeneration can advance without a reconcile (a suspension).
+	ReadyObservedGeneration int64
 }
 
 // HelmHistory is one HelmRelease status.history snapshot.
@@ -265,7 +269,30 @@ func common(u *unstructured.Unstructured, kind Kind) Resource {
 	// the ready STATE last flipped - see the field doc for why that is the
 	// honest best Flux offers (no per-apply timestamp exists in status).
 	r.ReadySince = readySince(u)
+	r.ReadyObservedGeneration = conditionObservedGeneration(u, "Ready")
 	return r
+}
+
+// conditionObservedGeneration is the named condition's own
+// observedGeneration, 0 when absent.
+func conditionObservedGeneration(u *unstructured.Unstructured, condType string) int64 {
+	conds, _, _ := unstructured.NestedSlice(u.Object, "status", "conditions")
+	for _, c := range conds {
+		cm, ok := c.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if t, _ := cm["type"].(string); t != condType {
+			continue
+		}
+		switch og := cm["observedGeneration"].(type) {
+		case int64:
+			return og
+		case float64:
+			return int64(og)
+		}
+	}
+	return 0
 }
 
 // readySince is the Ready condition's lastTransitionTime, zero when absent.
@@ -346,6 +373,9 @@ type Source struct {
 	// lastTransitionTime. Zero when absent.
 	ArtifactUpdated time.Time
 	ReadySince      time.Time
+	// Generation and ObservedGeneration: whether the source's current spec
+	// (its URL among it) has been fetched, and whether it was ever edited.
+	Generation, ObservedGeneration int64
 }
 
 // refPrecedence is the order a source's spec.ref fields win in, per kind.
@@ -371,6 +401,7 @@ func ParseSource(u *unstructured.Unstructured) Source {
 		s.ArtifactUpdated, _ = time.Parse(time.RFC3339, t)
 	}
 	s.ReadySince = readySince(u)
+	_, s.Generation, s.ObservedGeneration = staleness(u)
 	return s
 }
 
