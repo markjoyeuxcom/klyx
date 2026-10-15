@@ -8,6 +8,7 @@ import (
 
 	"github.com/moomora/klyx/internal/cluster"
 	"github.com/moomora/klyx/internal/config"
+	"github.com/moomora/klyx/internal/fleetindex"
 	"github.com/moomora/klyx/internal/observe"
 )
 
@@ -28,6 +29,7 @@ type Registry struct {
 	mu         sync.RWMutex
 	entries    []entry
 	healthSink observe.Sink
+	index      *fleetindex.Index
 }
 
 func NewRegistry(cfg *config.Config, factory ConnFactory) *Registry {
@@ -42,6 +44,7 @@ func (r *Registry) Start(ctx context.Context) {
 	if len(r.entries) > 0 {
 		return // already started
 	}
+	defer r.indexClustersLocked()
 	for _, cc := range r.cfg.Clusters {
 		conn, err := r.factory(cc)
 		if err != nil {
@@ -82,6 +85,7 @@ func (r *Registry) Add(ctx context.Context, cc config.ClusterConfig) error {
 	r.wireHealth(conn)
 	conn.Start(ctx)
 	r.entries = append(r.entries, entry{conn: conn})
+	r.indexClustersLocked()
 	return nil
 }
 
@@ -93,11 +97,50 @@ func (r *Registry) SetHealthSink(s observe.Sink) {
 	r.healthSink = s
 }
 
-// wireHealth hands a conn the sink before it starts. Caller holds r.mu.
+// SetIndex gives every conn the fleet metadata index (The Line slice 9).
+// Call before Start; conns added later get it too.
+func (r *Registry) SetIndex(ix *fleetindex.Index) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.index = ix
+}
+
+// wireHealth hands a conn the sink and the index before it starts. Caller
+// holds r.mu.
 func (r *Registry) wireHealth(conn Conn) {
 	if hs, ok := conn.(interface{ SetHealthSink(observe.Sink) }); ok && r.healthSink != nil {
 		hs.SetHealthSink(r.healthSink)
 	}
+	if is, ok := conn.(interface{ SetIndex(*fleetindex.Index) }); ok && r.index != nil {
+		is.SetIndex(r.index)
+	}
+}
+
+// indexClustersLocked tells the index every configured cluster, in fleet
+// order, so coverage names the ones never ready. Caller holds r.mu.
+func (r *Registry) indexClustersLocked() {
+	if r.index == nil {
+		return
+	}
+	names := make([]string, 0, len(r.cfg.Clusters))
+	for _, cc := range r.cfg.Clusters {
+		names = append(names, cc.Name)
+	}
+	seen := map[string]bool{}
+	for _, n := range names {
+		seen[n] = true
+	}
+	for _, e := range r.entries {
+		n := e.failName
+		if e.conn != nil {
+			n = e.conn.Name()
+		}
+		if !seen[n] {
+			names = append(names, n)
+			seen[n] = true
+		}
+	}
+	r.index.SetClusters(names)
 }
 
 // Conn returns the live Conn for a cluster by name (nil,false if absent or failed).

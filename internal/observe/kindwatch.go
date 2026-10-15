@@ -1,6 +1,7 @@
 package observe
 
 import (
+	"sort"
 	"sync"
 	"time"
 )
@@ -11,6 +12,9 @@ import (
 // latest state alone, never from the edges between states.
 type KindState struct {
 	Kind string
+	// GVR is the kind's effective served API (group/version/resource), kept
+	// across an absence; empty before discovery first resolved it.
+	GVR string
 	// Generation is the kind generation the state belongs to (0: none
 	// running, e.g. not served or no reader).
 	Generation uint64
@@ -129,7 +133,7 @@ func (o *Observer) notifyKindLocked(ks *kindState) {
 
 // kindStateLocked captures ks's state. Caller holds o.mu.
 func (o *Observer) kindStateLocked(ks *kindState) KindState {
-	st := KindState{Kind: ks.spec.Name, Seq: ks.stateSeq}
+	st := KindState{Kind: ks.spec.Name, GVR: ks.servedGVR, Seq: ks.stateSeq}
 	g := ks.gen
 	if g == nil {
 		st.Coverage, st.Class, st.Err = o.kindCoverageLocked(ks)
@@ -155,4 +159,47 @@ func (o *Observer) kindStateLocked(ks *kindState) KindState {
 		st.LastGoodAt = copyTime(f.lastGoodAt)
 	}
 	return st
+}
+
+// KindInfo is one declared kind: its name and its spec GVR (a CRD kind's
+// is group/resource; a core kind's is complete).
+type KindInfo struct{ Name, GVR string }
+
+// Kinds lists the Observer's declared kinds, by name.
+func (o *Observer) Kinds() []KindInfo {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	out := make([]KindInfo, 0, len(o.kinds))
+	for name, ks := range o.kinds {
+		out = append(out, KindInfo{Name: name, GVR: ks.spec.GVR})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}
+
+// VisitKind calls visit with each object of kind's current model, under
+// the Observer's lock, and returns the kind's state captured in the same
+// critical section, so what was visited and its generation, seq and
+// coverage agree (The Line slice 9 note §2.4). Objects are visited only
+// while a count is known (Live or Stale). visit must not retain obj, call
+// the Observer, or take a lock that is held while calling it; it returns
+// false to stop. complete reports whether every object was visited. ok is
+// false for an unknown kind or an Observer not started.
+func (o *Observer) VisitKind(kind string, visit func(obj any) bool) (st KindState, complete, ok bool) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	ks := o.kinds[kind]
+	if ks == nil || !o.started {
+		return KindState{}, false, false
+	}
+	st = o.kindStateLocked(ks)
+	if !st.CountKnown {
+		return st, false, true
+	}
+	for _, obj := range ks.gen.model {
+		if !visit(obj) {
+			return st, false, true
+		}
+	}
+	return st, true, true
 }

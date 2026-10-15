@@ -1628,3 +1628,56 @@ func TestNoTallyBeforeACompleteRead(t *testing.T) {
 		t.Fatalf("an unread kind has neither count nor tally: %+v", st)
 	}
 }
+
+// The Line slice 9 note §2.4: VisitKind walks the kind's model under the
+// lock - no copy - and returns the state captured in the same section;
+// visit can stop early; nothing is visited without a known count.
+func TestVisitKind(t *testing.T) {
+	src := newSource()
+	for i := 0; i < 50; i++ {
+		src.put(fmt.Sprintf("cm-%02d", i), nil)
+	}
+	h := start(t, Config{Kinds: []KindSpec{cmKind("cms", src)}, Domains: []DomainSpec{{ID: "things", Parts: []PartSpec{cmPart("cms", "cms")}}}})
+	h.eventually(h.partIs("things", "cms", live), "live")
+	seen := map[string]bool{}
+	st, complete, ok := h.o.VisitKind("cms", func(obj any) bool {
+		seen[obj.(cmView).Name] = true // the projected model value, as kept
+		return true
+	})
+	if !ok || !complete || len(seen) != 50 || st.Objects != 50 || !st.CountKnown || st.Coverage != Live || st.Generation == 0 {
+		t.Fatalf("visit: ok %v complete %v seen %d state %+v", ok, complete, len(seen), st)
+	}
+	n := 0
+	if _, complete, _ := h.o.VisitKind("cms", func(any) bool { n++; return n < 10 }); complete || n != 10 {
+		t.Fatalf("an early stop: complete %v after %d", complete, n)
+	}
+	if _, _, ok := h.o.VisitKind("nope", func(any) bool { return true }); ok {
+		t.Fatal("an unknown kind")
+	}
+	if ks := h.o.Kinds(); len(ks) != 1 || ks[0].Name != "cms" {
+		t.Fatalf("kinds %+v", ks)
+	}
+	// concurrent writes and visits under -race: every visit sees one
+	// consistent model whose size matches the state captured with it
+	stop := make(chan struct{})
+	go func() {
+		for i := 0; ; i++ {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			src.put(fmt.Sprintf("x-%d", i%20), nil)
+			time.Sleep(200 * time.Microsecond) // the fake watch's channel is bounded
+		}
+	}()
+	for i := 0; i < 200; i++ {
+		c := 0
+		st, complete, _ := h.o.VisitKind("cms", func(any) bool { c++; return true })
+		if complete && c != st.Objects {
+			close(stop)
+			t.Fatalf("visited %d, state says %d", c, st.Objects)
+		}
+	}
+	close(stop)
+}

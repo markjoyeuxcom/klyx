@@ -18,6 +18,19 @@ type Config struct {
 	AI       *AIConfig       `yaml:"ai"`
 	Line     *LineConfig     `yaml:"line"`
 	Git      *GitConfig      `yaml:"git"`
+	Index    *IndexConfig    `yaml:"index"`
+}
+
+// IndexConfig configures the fleet metadata index (The Line slice 9 note
+// §2.2). Kinds replaces the default kinds: absent (nil) keeps them, an
+// explicit empty list indexes none. Each entry is group/resource or
+// group/version/resource. A zero limit keeps its default.
+type IndexConfig struct {
+	Kinds             []string `yaml:"kinds"`
+	EntriesPerCluster int      `yaml:"entriesPerCluster"`
+	MiBPerCluster     int      `yaml:"mibPerCluster"`
+	EntriesFleet      int      `yaml:"entriesFleet"`
+	MiBFleet          int      `yaml:"mibFleet"`
 }
 
 // GitConfig is The Line's read-only Git access (parent spec §7, slice 6

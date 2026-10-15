@@ -33,6 +33,7 @@ import (
 	"github.com/moomora/klyx/internal/config"
 	"github.com/moomora/klyx/internal/crd"
 	"github.com/moomora/klyx/internal/execenv"
+	"github.com/moomora/klyx/internal/fleetindex"
 	"github.com/moomora/klyx/internal/fluxcli"
 	"github.com/moomora/klyx/internal/gitops/argo"
 	"github.com/moomora/klyx/internal/gitops/depgraph"
@@ -179,6 +180,7 @@ type ClusterConn struct {
 	health         *observe.Observer         // the cluster's health observation (1c), from Start
 	healthSyncMu   sync.Mutex                // serializes state->Observer handoffs (see syncHealth)
 	healthSyncHook func()                    // test seam: runs between reading state and handing it over
+	index          *fleetindex.Index         // the fleet metadata index (The Line slice 9); nil without one
 
 	// metricsMu guards the metrics cache. Note: ClusterMetrics holds it across
 	// the probe + sample network I/O (up to a few seconds). This serializes
@@ -770,6 +772,7 @@ func (c *ClusterConn) startHealth(ctx context.Context) {
 	c.health = o
 	c.mu.Unlock()
 	o.Start(ctx)
+	c.attachIndex()
 	c.syncHealth()
 }
 
@@ -782,7 +785,7 @@ func (c *ClusterConn) syncHealth() {
 	c.healthSyncMu.Lock()
 	defer c.healthSyncMu.Unlock()
 	c.mu.RLock()
-	h, st, reason, caps, hook := c.health, c.state, c.reason, c.caps, c.healthSyncHook
+	h, st, reason, caps, hook, ix := c.health, c.state, c.reason, c.caps, c.healthSyncHook, c.index
 	c.mu.RUnlock()
 	if h == nil {
 		return
@@ -790,7 +793,11 @@ func (c *ClusterConn) syncHealth() {
 	if hook != nil {
 		hook()
 	}
-	h.SetConnection(connectionWord(st, reason))
+	word := connectionWord(st, reason)
+	h.SetConnection(word)
+	if ix != nil {
+		ix.SetConnection(c.name, word) // the same word, in the same handoff
+	}
 	h.SetFact(healthsrc.FactFluxPresent, caps.GitOps.Flux.Present)
 	issues := healthsrc.ControllerIssues(caps)
 	for _, task := range healthsrc.ControllerTasks {

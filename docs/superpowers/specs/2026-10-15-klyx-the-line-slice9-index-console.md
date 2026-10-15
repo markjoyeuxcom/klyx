@@ -194,3 +194,19 @@ Rulings on the seven open points:
 5. Accepted: search in Go, cancellable, bounded top-K, and replies fenced by session and sequence (§3, §4.1).
 6. Accepted: ⌘↵ keeps the console open as a preview; focus stays in it, and on close goes to the inspector's identity (§4.2).
 7. Accepted: `kinds:` replaces the defaults; absent and empty are distinct, and equivalent resources are deduplicated so configuration cannot add a second Observer watch (§2.1, §2.2).
+
+## 9. As built: 9a
+
+- **Package** `internal/fleetindex`: `budget.go` (the shared budget, `Class` and the Pod ceiling, `PodPercent` 80), `entry.go` (entries, the estimate, the label cap and an order-independent label hash), `scan.go` (the bounded scanner), `stream.go` (`Reader`: `ListPage` and `Watch`), `store.go` (a cluster's store: mark-and-sweep, freezing, the generation fence), `kinds.go` (`DefaultKinds`, `ParseKinds`, `FromConfig`), `coord.go` (`Index` and the per-cluster coordinator).
+- **The Observer** gained `VisitKind(kind, visit) (state, complete, ok)`, `Kinds()` and `KindState.GVR` (the effective served GVR).
+- **Wiring:** `main` builds the index from fleet.yaml's `index` block (`kinds`, `entriesPerCluster`, `mibPerCluster`, `entriesFleet`, `mibFleet`; malformed kinds are logged as config warnings at start) and hands it to the registry (`Registry.SetIndex`), which gives it to every conn and tells it the fleet's clusters in order. A conn attaches its Observer when it builds it and hands the index its connection word in `syncHealth`, right after the Observer. The index has no consumer until 9b.
+- **The read path** (`ClusterConn.indexAcquire`): the conn's REST config, copied with no client timeout (every read is bounded by its context), through `rest.HTTPClientFor`. Discovery is the conn's CRD probe; the core group is always `v1`, unprobed.
+- **What the API server sends** (checked against the kind lab): the Content-Type of a metadata answer is a bare `application/json`; the metadata form is named in the body. So the scanner requires the list's `kind` (`PartialObjectMetadataList`) before its `items`, and `PartialObjectMetadata` as the kind of every item and every watch event; anything else is "metadata unsupported" before an item is applied. A non-JSON Content-Type is unsupported too.
+- **Hand-over:** an Observer kind becoming served or absent (Services with the Gateway API, a CRD installed or removed) starts a new acquisition generation, which re-plans and re-reads in place.
+- **The estimate's constants**, calibrated (`TestEstimateCoversRetainedHeap`): 256 B per entry, 32 B per label list, 64 B per label, 4 KiB per kind; the charge exceeds the retained heap by 15-35% across 0 to 40 labels.
+- **Measured:**
+  - a steady-state visit of 50,000 objects takes 5.6 ms with 3 allocations; the first fill 22 ms;
+  - streaming 1,000 objects of 100 KiB (50 MiB pages) peaks at 3.5 MiB of heap growth;
+  - eight open watches, each after an 11 MiB object and 1,000 small events, retain 2.4 MiB against 4.9 MiB charged;
+  - a 60,000-pod Observer kind stops at 40,000 entries, retaining 11 MiB against 23 MiB charged (the entries share the Observer's strings);
+  - the kind lab: every default kind settles live in 149 ms, 412 entries.

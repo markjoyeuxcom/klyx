@@ -18,6 +18,7 @@ import (
 	"github.com/moomora/klyx/internal/config"
 	"github.com/moomora/klyx/internal/execenv"
 	"github.com/moomora/klyx/internal/fleet"
+	"github.com/moomora/klyx/internal/fleetindex"
 	"github.com/moomora/klyx/internal/line"
 	"github.com/moomora/klyx/internal/observe"
 	"github.com/moomora/klyx/internal/winstate"
@@ -86,6 +87,20 @@ func main() {
 	reg := fleet.NewRegistry(cfg, fleet.DefaultConnFactory(clock.Real{}))
 	healthSink := appbridge.NewHealthSink(em)
 	reg.SetHealthSink(healthSink)
+	// The fleet metadata index (The Line slice 9): each cluster's Observer
+	// and connection word reach it from its conn.
+	var ixSettings fleetindex.Settings
+	if ic := cfg.Index; ic != nil {
+		var warnings []string
+		ixSettings, warnings = fleetindex.FromConfig(ic.Kinds, ic.Kinds != nil, ic.EntriesPerCluster, ic.MiBPerCluster, ic.EntriesFleet, ic.MiBFleet)
+		for _, w := range warnings {
+			log.Printf("config warning: %s", w)
+		}
+	}
+	ixSettings.Gaps = fleet.IndexGaps()
+	index := fleetindex.New(ixSettings)
+	defer index.Stop()
+	reg.SetIndex(index)
 	reg.Start(ctx)
 
 	// configSvc is built before the fleet service: the fleet DTOs resolve each
