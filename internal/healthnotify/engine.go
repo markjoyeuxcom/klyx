@@ -193,8 +193,9 @@ type pendingItem struct {
 type dedupeKey struct{ uid, role string }
 
 type listing struct {
-	b  Baseline
-	at time.Time
+	b    Baseline
+	at   time.Time
+	uids map[string]bool // each object once, across the checkpoint's parts
 }
 
 type clusterState struct {
@@ -384,6 +385,9 @@ func (e *Engine) settleLocked(cs *clusterState, b observe.TransitionBatch, uid s
 		e.nextEp++
 		ep = &episode{id: e.nextEp, obj: objectOf(b, *it), openedAt: e.observedAt(b), fold: f}
 		cs.episodes[uid] = ep
+		// a new episode ends, for good, any recovery still pending for the
+		// UID's earlier one - even if this one closes before dispatch
+		cs.dropPending(func(p pendingItem) bool { return p.recovery && p.obj.UID == uid })
 		switch b.Kind {
 		case observe.BatchChanges:
 			ep.opened = openedOnset
@@ -392,20 +396,16 @@ func (e *Engine) settleLocked(cs *clusterState, b observe.TransitionBatch, uid s
 			}
 		case observe.BatchBaseline:
 			ep.opened = openedBaseline
-			reason := ListConnect
-			if b.AfterCap {
-				reason = ListAfterCap
-			}
-			e.listLocked(cs, b.Cluster, reason, ep.obj)
 		default:
 			ep.opened = openedAfterGap
-			e.listLocked(cs, b.Cluster, ListAfterGap, ep.obj)
 		}
 	case ep == nil:
 	case f != foldClear:
 		ep.fold = f // fault resumes; coverage or unknown suspend; quiet stays open
 	default:
 		delete(cs.episodes, uid)
+		// its onset will never go: pending work ends with the episode
+		cs.dropPending(func(p pendingItem) bool { return !p.recovery && p.ep == ep.id })
 		// a continuous change into ok recovers; gone deletes; a baseline or
 		// an after-gap clears silently (its moment is unknown)
 		if b.Kind == observe.BatchChanges && it != nil && it.To == ok && ep.sent && e.settings.Recoveries && e.eligibleLocked(cs, b.Cluster) {
@@ -414,6 +414,33 @@ func (e *Engine) settleLocked(cs *clusterState, b observe.TransitionBatch, uid s
 			e.enqueueLocked(cs, pendingItem{recovery: true, ep: ep.id, obj: obj, at: e.observedAt(b)})
 		}
 	}
+	// a checkpoint - a connect, an after-cap baseline, an after-gap - lists
+	// the faults it holds once in the app, a resumed episode's too (§4)
+	if open := cs.episodes[uid]; open != nil && f == foldFault && b.Kind != observe.BatchChanges {
+		reason := ListAfterGap
+		if b.Kind == observe.BatchBaseline {
+			reason = ListConnect
+			if b.AfterCap {
+				reason = ListAfterCap
+			}
+		}
+		o := open.obj
+		if it != nil {
+			o.Label = it.Label
+		}
+		e.listLocked(cs, b.Cluster, reason, o)
+	}
+}
+
+// dropPending removes the pending items drop matches.
+func (cs *clusterState) dropPending(drop func(pendingItem) bool) {
+	kept := cs.pending[:0]
+	for _, p := range cs.pending {
+		if !drop(p) {
+			kept = append(kept, p)
+		}
+	}
+	cs.pending = kept
 }
 
 // observedAt is the batch's capture time, else now.
@@ -462,9 +489,13 @@ func objectOf(b observe.TransitionBatch, it observe.Transition) Object {
 func (e *Engine) listLocked(cs *clusterState, cluster, reason string, o Object) {
 	n := len(cs.listings)
 	if n == 0 || cs.listings[n-1].b.Reason != reason {
-		cs.listings = append(cs.listings, listing{b: Baseline{Cluster: cluster, Reason: reason}, at: e.clk()})
+		cs.listings = append(cs.listings, listing{b: Baseline{Cluster: cluster, Reason: reason}, at: e.clk(), uids: map[string]bool{}})
 		n++
 	}
+	if cs.listings[n-1].uids[o.UID] {
+		return
+	}
+	cs.listings[n-1].uids[o.UID] = true
 	l := &cs.listings[n-1].b
 	l.Count++
 	if len(l.Items) < MaxListItems {
@@ -559,13 +590,7 @@ func (e *Engine) failed(out outgoing) {
 				ep.sent = false
 			}
 		}
-		kept := cs.pending[:0]
-		for _, it := range cs.pending {
-			if !(it.recovery && withdrawn[it.ep]) {
-				kept = append(kept, it)
-			}
-		}
-		cs.pending = kept
+		cs.dropPending(func(p pendingItem) bool { return p.recovery && withdrawn[p.ep] })
 	}
 }
 

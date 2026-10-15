@@ -70,6 +70,8 @@ An episode is per UID. It opens when the fold becomes **fault**, and the batch t
 | **quiet** | nothing | stays open and quiet: not a recovery. A return to fault is the same episode |
 | **clear** | nothing | **closes**: see below |
 
+**A checkpoint lists what it holds.** A `baseline` (connect or after a cap) or an `after-gap` lists, once in the app, every fault its fold holds afterwards: an episode it opened, and one it resumed. Each object appears once per listing, across the checkpoint's parts. A checkpoint never notifies.
+
 **Closing an episode:**
 - **Recovered:** the fold clears through a `changes` item into ok. Recovery eligibility is checked as usual, whatever the episode passed through: fault → unknown → ok and fault → degraded → ok both recover on the final ok.
 - **Deleted:** the fold clears through a `gone` item. It closes silently, with no recovery.
@@ -244,9 +246,16 @@ The re-review of 066ca6b found two more gaps, answered here:
     - An onset counts as sent from dispatch. A failed `Send` withdraws it: the open episode is marked not sent, and any recovery queued for it is removed, in the dispatching state only.
   - **`SetSettings`** (disabling cancels pending items) and **`SetFocus`**.
   - **Hooks:** `Send` (returns an error), `List`, `Protected` and `Place`.
-  - **Listings:** `connect`, `after-cap`, `after-gap` and `dropped` (items de-duplication had no room for).
+  - **Listings:**
+    - `connect`, `after-cap`, `after-gap` and `dropped` (items de-duplication had no room for).
+    - A checkpoint lists every fault it holds, including resumed episodes, once per listing across parts.
+  - **Pending work ends with its episode:**
+    - a closed episode's onset is removed at once;
+    - a new episode for a UID removes, for good, any recovery still pending for its earlier one.
 - **`appbridge.NotificationsService`:**
-  - **Bound:** `Settings`, `SetSettings`, `SetFocus` and `RecentBaselines`. `SetSettings` writes the block through `config.SaveNotifications` and requests the OS permission when enabling; a refusal keeps the setting and says so.
+  - **Bound:** `Settings`, `SetSettings`, `SetFocus` and `RecentBaselines`.
+    - `SetSettings` writes the block through `config.SaveNotifications` and requests the OS permission when enabling; a refusal keeps the setting and says so.
+    - The write, the live settings and the engine's are one serialized operation, so a later change never lands under an earlier one.
   - **Package functions, never bound:** `NotificationsListener`, `RunNotifications`/`StopNotifications` (a one-second tick of `Flush`) and `NotificationClicked`.
   - **Sending:** through the OS notification service, with the object in `Data` and the send's error returned to the engine. The title is "<cluster> · <env> · <region>".
 - **Wiring** (`main`):
@@ -272,11 +281,14 @@ The re-review of 066ca6b found two more gaps, answered here:
   - three names and "+K more", with withdrawn items subtracted;
   - a partition over its cap lost until its after-cap baseline, with a full turnover that fits not taken as over;
   - a full de-duplication map dropping rather than evicting;
+  - pending work ending with its episode: a UID flapping 2,000 times before one dispatch leaves one onset, and a later episode, even one deleted before dispatch, ends an older recovery;
+  - checkpoints listing the faults they hold: an empty after-gap of two parts lists a retained fault once, and an after-cap baseline lists it again;
   - in flight: a recovery during a blocked `Send` goes when it succeeds and is withdrawn when it fails; end, reincarnation and disabling during the call revive nothing; a blocked `Send` never blocks `Apply`.
 - **Service tests** (`appbridge/notifications_service_test.go`):
   - the settings round trip, refusal, sending, a click and recent listings;
+  - an enable paused after its write cannot land under a later disable (a write seam);
   - end to end, a real Observer over certificates through `HealthSink`;
-  - a real Observer with `RoleCap` 3 crossing its cap and falling back under it. A recording listener asserts the `capped` loss and the after-cap baseline, and a later onset notifies, which it could not if the partition were still lost.
+  - a real Observer with `RoleCap` 3 crossing its cap and falling back under it. A recording listener asserts the `capped` loss and the after-cap baseline. The after-cap baseline lists the fault it still holds, and a later onset notifies, which it could not if the partition were still lost.
 
 ## 8. As built: 10b
 

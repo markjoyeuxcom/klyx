@@ -521,8 +521,8 @@ func TestAPartitionOverItsCapIsLostUntilItsBaseline(t *testing.T) {
 	}
 	r.step(BaselineWindow)
 	r.step(BurstWindow)
-	if len(r.sent) != 1 || len(r.lists) != 0 {
-		// a was already open: the baseline resumes it, listing nothing new
+	if len(r.sent) != 1 || len(r.lists) != 1 || r.lists[0].Reason != ListAfterCap || r.lists[0].Items[0].UID != "a" {
+		// a was already open: the baseline resumes it, and lists the fault it holds
 		t.Fatalf("sent %v lists %+v", r.bodies(), r.lists)
 	}
 }
@@ -640,4 +640,62 @@ func TestSendingNeverBlocksApply(t *testing.T) {
 		t.Fatal("Apply waited on a blocked Send")
 	}
 	close(release)
+}
+
+func TestPendingWorkEndsWithItsEpisode(t *testing.T) {
+	// a flapping UID before one dispatch leaves at most its live episode's onset
+	r := newRig(t, on)
+	for i := 0; i < 2000; i++ {
+		r.e.Apply(batch(observe.BatchChanges, item("a", "ok", "fault")))
+		r.e.Apply(batch(observe.BatchChanges, item("a", "fault", "ok")))
+	}
+	r.e.Apply(batch(observe.BatchChanges, item("a", "ok", "fault")))
+	r.e.mu.Lock()
+	n := len(r.e.clusters["prd"].pending)
+	r.e.mu.Unlock()
+	if n != 1 {
+		t.Fatalf("closed episodes' onsets accumulate: %d pending", n)
+	}
+	r.step(BurstWindow)
+	if len(r.sent) != 1 {
+		t.Fatalf("%v", r.bodies())
+	}
+	// a new episode ends an older recovery for good, even if it closes before dispatch
+	r2 := newRig(t, recs)
+	r2.e.Apply(batch(observe.BatchChanges, item("a", "ok", "fault")))
+	r2.step(BurstWindow)
+	r2.e.Apply(batch(observe.BatchChanges, item("a", "fault", "ok")))
+	r2.e.Apply(batch(observe.BatchChanges, item("a", "ok", "fault")))
+	r2.e.Apply(batch(observe.BatchChanges, item("a", "fault", observe.StateGone)))
+	r2.step(BurstWindow)
+	if got := r2.bodies(); len(got) != 1 {
+		t.Fatalf("an older recovery outlived a later episode: %q", got)
+	}
+}
+
+func TestCheckpointsListTheFaultsTheyHold(t *testing.T) {
+	r := newRig(t, on)
+	r.e.Apply(batch(observe.BatchChanges, item("a", "ok", "fault")))
+	r.e.Apply(in("other", batch(observe.BatchChanges, item("a", "ok", "fault"))))
+	r.step(BurstWindow)
+	// an empty after-gap of each part: a, retained, listed once across both
+	r.e.Apply(batch(observe.BatchLoss))
+	r.e.Apply(in("other", batch(observe.BatchLoss)))
+	r.e.Apply(batch(observe.BatchAfterGap))
+	r.e.Apply(in("other", batch(observe.BatchAfterGap)))
+	r.step(BaselineWindow)
+	if len(r.lists) != 1 || r.lists[0].Reason != ListAfterGap || r.lists[0].Count != 1 || r.lists[0].Items[0].UID != "a" {
+		t.Fatalf("after-gap listing %+v", r.lists)
+	}
+	// an after-cap baseline holding the same fault lists it too
+	after := batch(observe.BatchBaseline, item("a", observe.StateAbsent, "fault"))
+	after.AfterCap = true
+	r.e.Apply(after)
+	r.step(BaselineWindow)
+	if len(r.lists) != 2 || r.lists[1].Reason != ListAfterCap || r.lists[1].Count != 1 {
+		t.Fatalf("after-cap listing %+v", r.lists)
+	}
+	if len(r.sent) != 1 {
+		t.Fatalf("a checkpoint notified: %v", r.bodies())
+	}
 }

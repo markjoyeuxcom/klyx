@@ -108,7 +108,12 @@ func TestNotificationsEndToEnd(t *testing.T) {
 	var lists []HealthBaselineDTO
 	s := NewNotificationsService(filepath.Join(t.TempDir(), "fleet.yaml"), &config.Config{Notifications: &config.NotificationsConfig{Enabled: true, Scope: "all"}},
 		func(string) (config.ClusterConfig, bool) { return config.ClusterConfig{}, false },
-		func(_, _, body string, _ map[string]any) error { mu.Lock(); sent = append(sent, body); mu.Unlock(); return nil },
+		func(_, _, body string, _ map[string]any) error {
+			mu.Lock()
+			sent = append(sent, body)
+			mu.Unlock()
+			return nil
+		},
 		nil,
 		func(name string, d any) {
 			if b, ok := d.(HealthBaselineDTO); ok {
@@ -168,7 +173,12 @@ func TestNotificationsAfterTheObserversCap(t *testing.T) {
 	var lists []HealthBaselineDTO
 	s := NewNotificationsService(filepath.Join(t.TempDir(), "fleet.yaml"), &config.Config{Notifications: &config.NotificationsConfig{Enabled: true, Scope: "all"}},
 		func(string) (config.ClusterConfig, bool) { return config.ClusterConfig{}, false },
-		func(_, _, body string, _ map[string]any) error { mu.Lock(); sent = append(sent, body); mu.Unlock(); return nil },
+		func(_, _, body string, _ map[string]any) error {
+			mu.Lock()
+			sent = append(sent, body)
+			mu.Unlock()
+			return nil
+		},
 		nil,
 		func(_ string, d any) {
 			if b, ok := d.(HealthBaselineDTO); ok {
@@ -212,7 +222,8 @@ func TestNotificationsAfterTheObserversCap(t *testing.T) {
 	flush(time.Hour)
 	mu.Lock()
 	defer mu.Unlock()
-	if len(sent) != 1 || !strings.HasPrefix(sent[0], "Certificate shop/ok") || len(lists) != 1 {
+	// the after-cap baseline lists the fault it still holds, once; it never notifies
+	if len(sent) != 1 || !strings.HasPrefix(sent[0], "Certificate shop/ok") || len(lists) != 2 || lists[1].Reason != "after-cap" || lists[1].Items[0].UID != "uid-bad" {
 		t.Fatalf("sent %v lists %+v", sent, lists)
 	}
 	if k := seen.list(); !strings.Contains(k, "loss:capped") || !strings.Contains(k, "baseline:after-cap") {
@@ -247,4 +258,40 @@ func (b *batchKinds) list() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return strings.Join(b.kinds, ",")
+}
+
+// A settings change is one operation (slice 10a review): an earlier enable
+// that pauses after its write can never land its live state under a later
+// disable.
+func TestNotificationSettingsChangesAreSerialized(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "fleet.yaml")
+	if err := os.WriteFile(path, []byte("clusters:\n  - name: prd\n    context: prd\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	paused, release := make(chan struct{}), make(chan struct{})
+	defer func(f func(string, config.NotificationsConfig) error) { saveNotifications = f }(saveNotifications)
+	saveNotifications = func(p string, c config.NotificationsConfig) error {
+		err := config.SaveNotifications(p, c)
+		if c.Enabled {
+			close(paused)
+			<-release
+		}
+		return err
+	}
+	s := NewNotificationsService(path, &config.Config{}, func(string) (config.ClusterConfig, bool) { return config.ClusterConfig{}, false }, nil, nil, nil)
+	done := make(chan struct{}, 2)
+	go func() { s.SetSettings(NotificationSettingsDTO{Enabled: true}); done <- struct{}{} }()
+	<-paused
+	go func() { s.SetSettings(NotificationSettingsDTO{Enabled: false}); done <- struct{}{} }()
+	time.Sleep(50 * time.Millisecond)
+	close(release)
+	<-done
+	<-done
+	c, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if live := s.Settings().Enabled; c.Notifications == nil || live != c.Notifications.Enabled || live {
+		t.Fatalf("live %v, written %+v: the later disable must win both", live, c.Notifications)
+	}
 }

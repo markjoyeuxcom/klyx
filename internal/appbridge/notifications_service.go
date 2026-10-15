@@ -21,12 +21,13 @@ const (
 	HealthNotificationOpenEvent = "health:notification-open"
 )
 
-// notifyClock is the engine's clock, and notifyRoleCap the Observer's
-// RoleCap the engine's evidence is bounded by (0: the Observer's default):
-// test seams.
+// notifyClock is the engine's clock, notifyRoleCap the Observer's RoleCap
+// the engine's evidence is bounded by (0: the Observer's default), and
+// saveNotifications the block's writer: test seams.
 var (
-	notifyClock   = time.Now
-	notifyRoleCap = 0
+	notifyClock       = time.Now
+	notifyRoleCap     = 0
+	saveNotifications = config.SaveNotifications
 )
 
 // NotificationsService runs health notifications (The Line slice 10, parent
@@ -41,6 +42,10 @@ type NotificationsService struct {
 	authorize func() (bool, error)
 	emit      func(name string, data any)
 
+	// setMu makes a settings change one operation: the write, the live
+	// settings and the engine, so a later change never lands under an
+	// earlier one.
+	setMu    sync.Mutex
 	mu       sync.Mutex
 	settings config.NotificationsConfig
 	stop     chan struct{}
@@ -178,13 +183,16 @@ func (s *NotificationsService) SetSettings(d NotificationSettingsDTO) ActionResu
 	if c.Scope != "all" {
 		c.Scope = "protected"
 	}
-	if err := config.SaveNotifications(s.path, c); err != nil {
+	s.setMu.Lock()
+	if err := saveNotifications(s.path, c); err != nil {
+		s.setMu.Unlock()
 		return ActionResultDTO{OK: false, Error: err.Error()}
 	}
 	s.mu.Lock()
 	s.settings = c
 	s.mu.Unlock()
 	s.engine.SetSettings(engineSettings(c))
+	s.setMu.Unlock()
 	if c.Enabled && s.authorize != nil {
 		if ok, err := s.authorize(); err != nil || !ok {
 			return ActionResultDTO{OK: true, Error: "the OS has notifications off for Klyx: nothing will be shown until they are allowed"}
