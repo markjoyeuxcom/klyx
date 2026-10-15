@@ -52,9 +52,12 @@ Exactly the parent's allowlist, built from scratch: `HOME`, `PATH`, `USER`, `LAN
 ### 3.3 The credential helper
 
 The parent reads the owner's helper "once from their git config". That needs reads outside §7's table, run **once at startup** with the owner's own `HOME`, no isolated config, and a 10s deadline (revised after design review e48a108c: `--global` alone never sees a system helper such as `osxkeychain`):
-- `git config --system --includes --get-all credential.helper`, then `git config --global --includes --get-all credential.helper`. An explicit scope never reads a repository's local config, whatever the working directory; `--includes` follows `include.*` as git itself does at run time.
-- **Precedence, as git applies it:** system values first, then global (git's global scope covers `$XDG_CONFIG_HOME/git/config` and `~/.gitconfig`). An empty value clears every helper before it.
+- **One read, scope-tagged (revised in 6a):** `git config --includes --show-scope -z --get-all credential.helper`, run from `/`, so no repository is ever discovered and no local config is read. Only the `unknown`, `system` and `global` scopes are kept; `local`, `worktree` and `command` never are. `--includes` follows `include.*` as git itself does at run time.
+  - **Why not `--system` then `--global`,** as first drafted: probed on git 2.56 and Apple Git 2.54, `--global` reads only `~/.gitconfig` when it exists and skips `$XDG_CONFIG_HOME/git/config`, which git still applies at run time. And Apple Git's `osxkeychain` comes from Xcode's bundled gitconfig, which `--show-scope` reports as `unknown` and `--system` never reads.
+  - **Isolation still holds:** under `GIT_CONFIG_NOSYSTEM=1`, Apple Git skips that bundled file too (probed), so Klyx's own commands see only the generated config.
+- **Precedence, as git applies it:** values in git's read order (a vendor default, then system, then `$XDG_CONFIG_HOME/git/config`, then `~/.gitconfig`). An empty value clears every helper before it, a refused snippet included.
 - Only the resulting helper values are kept, in order, and written to the generated config. A helper given as a shell snippet (`!...`) is refused, and Settings > Git says so.
+- **Not carried over:** a helper set only under `includeIf "gitdir:…"`, since Klyx's commands run in its own cache, not the owner's repositories.
 
 ### 3.4 Typed commands
 
@@ -78,6 +81,19 @@ The parent reads the owner's helper "once from their git config". That needs rea
   - Semver ranges, the default branch, `HEAD` and unqualified Argo refs are not fetched; they have no T (§6.1).
 - **Validation, before any refspec is built:** the full ref must sit exactly in `refs/heads/` or `refs/tags/`, and its name must pass git's `check-ref-format` rules, implemented in Go: no `*`, `?`, `[`, `\`, `^`, `~`, `:`, space or control character; no `..`, `@{` or `//`; no component starting with `.` or ending in `.lock`; not ending in `/` or `.`; not `@`; no leading `-`.
 - **The refspec** is then `+<full ref>:refs/klyx/staging/<full ref>` (a sha: `+<sha>:refs/klyx/staging/commit/<sha>`), one per tracked ref, never a pattern. A refused ref leaves that key with no T and says why.
+
+### 3.7 As built in 6a
+
+What 6a adds to, or makes precise in, parent §7's command contract:
+- **A ref read:** `for-each-ref --format=%(refname)%00%(objectname)%00%(*objectname) refs/klyx/`. Publication needs each ref's `old` value and the target T its tip, and §7's table had no ref read. It reads only `refs/klyx/`, and peels an annotated tag through the tag object only.
+- **Two more `-c` flags on every call:** `gc.auto=0` and `maintenance.auto=false`, so no command repacks a cache or a staging repo behind the acquisition's pack enumeration. The cache's own config also sets `gc.auto=0` and `core.logAllRefUpdates=false`.
+- **Where paths go:** `ls-tree` and `archive` read a `--` after `--end-of-options` as a literal path (probed on 2.56), so their paths follow the revision directly. Every path is validated anyway: repo-relative, no `..`, no leading `-`, no backslash or control character.
+- **`archive` writes to a file:** `--output=<an absolute path Klyx names>`. Its size is bounded by the acquired content (64 MiB), while captured output stays capped at 1 MiB.
+- **`verify-pack` streams:** a history pack lists one line per object, so a 1 MiB capture would refuse any real repository. Its listing goes through a line parser instead, which counts each type and keeps blob ids up to 5,001. `internal/procrun` gained one optional field for this, a stdout writer; the Claude CLI path does not use it.
+- **The content fetch mirrors git's own lazy fetch:** `-c fetch.negotiationAlgorithm=noop fetch --no-tags --no-write-fetch-head --recurse-submodules=no --filter=blob:none --stdin origin`. The history fetch adds `--no-write-fetch-head --recurse-submodules=no`.
+- **`log`** adds `--no-mailmap --no-notes --no-show-signature --no-color`. Subjects and author names become plain text as they are parsed: valid UTF-8, control characters as spaces, capped at 200 characters.
+- **Ref kinds** follow `internal/line`'s: `branch`, `tag` and `commit` are fetched; `semver`, `default`, `unqualified` and a Flux `name` ref outside `refs/heads`/`refs/tags` are refused with their reason.
+- **Probed for 6b:** against a server without filter support, git only warns ("filtering not recognized by server, ignoring") and sends every blob. 6b's validation of the staging packs is what refuses it.
 
 ## 4. Acquisition (6b)
 

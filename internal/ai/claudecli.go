@@ -18,6 +18,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/moomora/klyx/internal/procrun"
 )
 
 // ClaudeCLIOrigin is where a Claude Code call's prompt goes, as Settings and
@@ -606,112 +608,23 @@ type runResult struct {
 	startErr, gateErr      error
 }
 
-// cappedBuffer keeps at most max bytes and records that more arrived. With
-// firstLine set, it closes the channel once the first newline has arrived.
-type cappedBuffer struct {
-	buf       bytes.Buffer
-	max       int
-	over      bool
-	firstLine chan struct{}
-	sawLine   bool
-}
-
-func (c *cappedBuffer) Write(b []byte) (int, error) {
-	if c.firstLine != nil && !c.sawLine && bytes.IndexByte(b, '\n') >= 0 {
-		defer func() { c.sawLine = true; close(c.firstLine) }()
-	}
-	room := c.max - c.buf.Len()
-	if len(b) > room {
-		c.over = true
-		if room > 0 {
-			c.buf.Write(b[:room])
-		}
-		return len(b), nil
-	}
-	c.buf.Write(b)
-	return len(b), nil
-}
-
 // runContained runs one process in its own process group with capped output
 // and a deadline; the whole group is killed on deadline, on cancel, and when
-// the process exits.
+// the process exits. The containment itself is internal/procrun (extracted
+// unchanged, The Line slice 6 note §2); this keeps the adapter's names.
 func runContained(ctx context.Context, s runSpec) runResult {
 	if runtime.GOOS == "windows" {
 		return runResult{startErr: errors.New("no reviewed Claude Code contract for Windows")}
 	}
-	ctx, cancel := context.WithTimeout(ctx, s.deadline)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, s.exe, s.args...)
-	cmd.Dir, cmd.Env = s.dir, s.env
-	setProcGroup(cmd)
-	cmd.Cancel = func() error { return killGroup(cmd) }
-	cmd.WaitDelay = claudeWaitDelay
-	so, se := &cappedBuffer{max: s.stdoutMax}, &cappedBuffer{max: s.stderrMax}
-	if s.stopAtFirstLine {
-		so.firstLine = make(chan struct{})
+	r := procrun.Run(ctx, procrun.Spec{
+		Exe: s.exe, Args: s.args, Env: s.env, Dir: s.dir, Stdin: s.stdin,
+		StdoutMax: s.stdoutMax, StderrMax: s.stderrMax, Deadline: s.deadline, WaitDelay: claudeWaitDelay,
+		StdinDeadline: s.stdinDeadline, Release: s.release, StopAtFirstLine: s.stopAtFirstLine,
+	})
+	return runResult{
+		stdout: r.Stdout, stderr: r.Stderr, stdoutOver: r.StdoutOver, stderrOver: r.StderrOver,
+		exitCode: r.ExitCode, timedOut: r.TimedOut, startErr: r.StartErr, gateErr: r.GateErr,
 	}
-	cmd.Stdout, cmd.Stderr = so, se
-	// stdin is a pipe Klyx owns, so the hand-over can carry a deadline and
-	// happen synchronously inside the release gate.
-	var pr, pw *os.File
-	if s.stdin != nil {
-		r, w, err := os.Pipe()
-		if err != nil {
-			return runResult{startErr: err}
-		}
-		pr, pw = r, w
-		cmd.Stdin = pr
-	}
-	if err := cmd.Start(); err != nil {
-		if pr != nil {
-			_ = pr.Close()
-			_ = pw.Close()
-		}
-		return runResult{startErr: err}
-	}
-	if pr != nil {
-		_ = pr.Close() // the child holds its own copy of the read end
-		write := func() error {
-			if err := pw.SetWriteDeadline(time.Now().Add(s.stdinDeadline)); err != nil {
-				return err
-			}
-			if _, err := pw.Write(s.stdin); err != nil {
-				return err
-			}
-			return pw.Close()
-		}
-		release := s.release
-		if release == nil {
-			release = func(w func() error) error { return w() }
-		}
-		if err := release(write); err != nil {
-			_ = pw.Close()
-			_ = killGroup(cmd)
-			_ = cmd.Wait()
-			return runResult{gateErr: err}
-		}
-	}
-	if s.stopAtFirstLine {
-		exited := make(chan struct{})
-		defer close(exited)
-		go func() {
-			select {
-			case <-so.firstLine:
-				_ = killGroup(cmd)
-			case <-exited:
-			}
-		}()
-	}
-	_ = cmd.Wait()
-	_ = killGroup(cmd) // anything the CLI left running in its group
-	r := runResult{
-		stdout: so.buf.Bytes(), stderr: se.buf.Bytes(), stdoutOver: so.over, stderrOver: se.over,
-		exitCode: -1, timedOut: ctx.Err() != nil,
-	}
-	if cmd.ProcessState != nil {
-		r.exitCode = cmd.ProcessState.ExitCode()
-	}
-	return r
 }
 
 // helper runs a no-prompt Claude Code command under the full lockdown: the
