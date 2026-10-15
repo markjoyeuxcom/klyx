@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { useState } from "react";
 import { render, fireEvent, act, screen, within } from "@testing-library/react";
 
 // The Line slice 9c (parent §6, slice 9 note §4): the command console.
@@ -29,6 +30,7 @@ import { useLine, type LineDTO } from "../../store/line";
 import type { IndexHit, IndexSearch } from "../../bridge/fleetIndex";
 import { openHit, lensOf } from "./openHit";
 import { coverageNotes } from "./consoleModel";
+import { LensLayout } from "../../layout/LensLayout";
 
 const cluster = (name: string, over: Partial<ClusterDTO> = {}): ClusterDTO => ({ name, env: "", region: "", state: "Synced", reason: "", ...over } as ClusterDTO);
 const hit = (over: Partial<IndexHit> = {}): IndexHit => ({
@@ -214,5 +216,133 @@ describe("opening a hit", () => {
 
   it("coverage notes skip kinds that are simply not served", () => {
     expect(coverageNotes([{ cluster: "a", indexed: true, connection: "connected · flux degraded", kinds: [{ key: "x/y", kind: "Y", state: "notServed", entries: 0 }] }])).toEqual([]);
+  });
+});
+
+describe("hits belong to the visible query", () => {
+  it("an old query's hit can be neither shown nor opened while the new query is pending", async () => {
+    index.state.data = () => search([hit({ name: "aaa-pod", uid: "old-query" })]) as never;
+    render(<CommandPalette />);
+    pressCmdK();
+    type("aaa");
+    await flush();
+    expect(screen.getByTestId("console-hit-prd-old-query")).toBeTruthy();
+    index.state.auto = false;
+    type("bbb");
+    expect(screen.queryByTestId("console-hit-prd-old-query")).toBeNull(); // at once, not after the debounce
+    await flush();
+    fireEvent.keyDown(input(), { key: "Enter" });
+    expect(useFleet.getState().navIntent).toBeNull();
+    // the index's coverage stays readable while the new query is pending
+    expect(screen.getByTestId("console-coverage").textContent).toContain("Searching 2 clusters · 30 kinds · searching…");
+  });
+
+  it("a failed replacement search is shown, never hidden behind the old result", async () => {
+    index.state.data = () => search([hit({ name: "aaa-pod", uid: "old-query" })]) as never;
+    render(<CommandPalette />);
+    pressCmdK();
+    type("aaa");
+    await flush();
+    index.searchIndex.mockImplementationOnce(() => Object.assign(Promise.reject(new Error("index unavailable")), { cancel: () => {} }) as never);
+    type("bbb");
+    await flush();
+    expect(screen.getByTestId("console-coverage").textContent).toBe("The fleet index could not be searched: index unavailable");
+    expect(screen.queryByTestId("console-hit-prd-old-query")).toBeNull();
+  });
+});
+
+describe("verbs follow the inspector's current evidence", () => {
+  const podRows = (name: string, uid: string) => ({ items: [{ namespace: "shop", name, uid, health: { kind: "ok", label: "Running" } } as PodRowDTO], namespaces: ["shop"], loading: false });
+
+  it("offers the verbs of an inspector whose rows arrive while the console is open", () => {
+    useFleet.setState({ route: { name: "cluster", cluster: "stg", section: "pods" } });
+    useFleet.getState().setPodsVisit("stg");
+    render(<CommandPalette />);
+    pressCmdK();
+    let release = () => {};
+    act(() => {
+      useFleet.getState().setPodsFromRows("stg", podRows("fresh", "uid-fresh"));
+      release = publishPin({ cluster: "stg", kind: "Pod", namespace: "shop", name: "fresh", uid: "uid-fresh" });
+    });
+    expect(screen.getByText("logs shop/fresh")).toBeTruthy();
+    act(() => release());
+  });
+
+  it("drops the old pin's verbs when the loaded name is now another object", () => {
+    useFleet.setState({ route: { name: "cluster", cluster: "stg", section: "pods" } });
+    useFleet.getState().setPodsVisit("stg");
+    useFleet.getState().setPodsFromRows("stg", podRows("same", "uid-old"));
+    const release = publishPin({ cluster: "stg", kind: "Pod", namespace: "shop", name: "same", uid: "uid-old" });
+    render(<CommandPalette />);
+    pressCmdK();
+    expect(screen.getByText("logs shop/same")).toBeTruthy();
+    act(() => useFleet.getState().setPodsFromRows("stg", podRows("same", "uid-new")));
+    expect(screen.queryByText("logs shop/same")).toBeNull();
+    act(() => release());
+  });
+
+  it("a verb whose object changed before the list caught up runs nothing and says why", () => {
+    useFleet.setState({ route: { name: "cluster", cluster: "stg", section: "pods" } });
+    useFleet.getState().setPodsVisit("stg");
+    useFleet.getState().setPodsFromRows("stg", podRows("same", "uid-old"));
+    render(<CommandPalette />);
+    pressCmdK();
+    type("logs shop/same");
+    // the object is replaced and Enter lands in the same tick, before a render
+    act(() => {
+      useFleet.getState().setPodsFromRows("stg", podRows("same", "uid-new"));
+      fireEvent.keyDown(input(), { key: "Enter" });
+    });
+    expect(useFleet.getState().navIntent).toBeNull();
+    expect(screen.getByRole("status").textContent).toContain("its object changed while the console was open");
+  });
+
+  it("rows that change nothing a verb names leave the commands as they are", () => {
+    useFleet.setState({ route: { name: "cluster", cluster: "stg", section: "pods" } });
+    useFleet.getState().setPodsVisit("stg");
+    useFleet.getState().setPodsFromRows("stg", podRows("same", "uid-1"));
+    render(<CommandPalette />);
+    pressCmdK();
+    type("logs shop/same");
+    const before = screen.getByTestId("command-row-verb:logs:stg/shop/same");
+    act(() => useFleet.getState().setPodsFromRows("stg", podRows("same", "uid-1")));
+    expect(screen.getByTestId("command-row-verb:logs:stg/shop/same")).toBe(before);
+  });
+});
+
+describe("Escape belongs to the console above a drawer", () => {
+  it("closes the console and keeps the inspector open", () => {
+    vi.stubGlobal("ResizeObserver", class {
+      cb: ResizeObserverCallback;
+      constructor(cb: ResizeObserverCallback) { this.cb = cb; }
+      observe() { this.cb([{ contentRect: { width: 900 } } as ResizeObserverEntry], this as unknown as ResizeObserver); }
+      unobserve() {}
+      disconnect() {}
+    });
+    const closed = vi.fn();
+    function Page() {
+      const [shown, setShown] = useState(true);
+      return (
+        <>
+          <LensLayout label="Pods" state="ready" title="Pods" body={<div>rows</div>}
+            inspector={shown ? <div id={INSPECTOR_IDENTITY_ID} tabIndex={-1}>identity</div> : undefined}
+            onCloseInspector={() => { closed(); setShown(false); }} />
+          <CommandPalette />
+        </>
+      );
+    }
+    try {
+      render(<Page />);
+      pressCmdK();
+      fireEvent.keyDown(input(), { key: "Escape" });
+      expect(screen.queryByTestId("command-palette")).toBeNull();
+      expect(closed).not.toHaveBeenCalled();
+      expect(screen.getByTestId("lens-inspector")).toBeTruthy();
+      // the next Escape is the drawer's again
+      fireEvent.keyDown(window, { key: "Escape" });
+      expect(closed).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

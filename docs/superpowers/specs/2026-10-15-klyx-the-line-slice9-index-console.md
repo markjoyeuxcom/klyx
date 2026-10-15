@@ -318,3 +318,14 @@ Four findings, all taken:
 - **The coverage line:** "Searching N clusters · M kinds", then the gaps, the first two shown and all of them in the tooltip: clusters not indexed or not connected, and kinds partial, refused or stale, each with the lens to search instead. "+N more objects" when the index matched more than it returned.
 - **Tests:** `console/console.test.tsx` covers the frame and focus trap, the empty query's three parts, verbs only, object rows (aspect, LinePos, notes), group lead, ↵ and ⌘↵ (aside, focus to the inspector), coverage notes, the A → B → A fence, and hit opening. The palette's existing tests are updated for the console.
 - **Captures** (`pw/s9c.mjs`, kind lab, 1440×900, both themes): the empty query, a search, verbs only, an object opened beside, and the inspector after closing.
+
+### 12.1 Review of b90da19
+
+Codex requested changes with three P2 findings. All three are fixed, and each has a test that fails without the fix:
+
+- **Hits belong to the visible query.** `useIndexSearch` tags each reply with the query it answers. Hits and errors are returned only for what is typed now, so typing B withholds A's hits at once: they can be neither listed nor opened while B is pending. B's failure takes the footer ("The fleet index could not be searched: …"), never hidden behind A's result. Coverage describes the index rather than the query, so the last reply's coverage stays in the footer, with "· searching…" while a query is pending.
+- **Verbs follow their object's evidence.** Besides route and eligibility, a change to the slices verbs come from (pods, nodes, workloads, Flux, Argo, Helm) rebuilds the commands. The rebuild applies only when a verb's id, wording or object UID changed, so pushes that change nothing a verb names do not churn the list. As a result:
+  - rows that arrive while the console is open bring their inspector's verbs;
+  - an object replaced at the same name drops the old pin's verbs.
+  - Activation also re-reads the verb against live state (`targetMoved`). A verb whose object is gone, or is now another object, runs nothing and says why.
+- **Escape belongs to the console.** While open, the console takes Escape in the capture phase on window, before anything underneath. A drawer's close, a menu or a confirm never sees the Escape that closes the console, and the next Escape is the drawer's again.

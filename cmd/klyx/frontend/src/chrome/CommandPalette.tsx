@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { useFleet } from "../store/fleet";
 import type { ClusterDTO } from "../store/fleet";
-import { buildCommands, Command } from "./commands";
+import { buildCommands, Command, type FleetStore } from "./commands";
 import { fuzzyMatch } from "./fuzzy";
 import { loadBoosts, recordUse } from "./frecency";
 import { vh, vw } from "../app/zoom";
@@ -44,6 +44,24 @@ type Ranked = { cmd: Command; positions: number[] };
 
 const eligibilityKey = (cs: ClusterDTO[]) => cs.map((c) => [c.name, c.state, c.protected, c.fluxPresent, c.argoPresent, c.certManagerPresent,
   c.externalSecretsPresent, c.gatewayAPIVersion, c.karpenterPresent, c.hasHubble, c.ciliumPresent].join("|")).join("\n");
+
+// The slices a verb's object comes from (commands.ts): a change there may add,
+// drop or re-target a verb.
+const evidenceChanged = (st: FleetStore, prev: FleetStore) =>
+  st.pods !== prev.pods || st.nodes !== prev.nodes || st.workloads !== prev.workloads ||
+  st.gitops !== prev.gitops || st.argo !== prev.argo || st.helm !== prev.helm;
+// Each verb's identity, wording and object: the rebuild happens only when one
+// of these changes, so rows do not churn under the cursor on every push.
+const targetKey = (cs: Command[]) => cs.filter((c) => c.target).map((c) => `${c.id}|${c.title}|${c.target?.uid ?? ""}`).join("\n");
+
+// targetMoved re-reads a verb against live state at activation: a verb whose
+// object is gone, or is now another object at the same name, runs nothing.
+function targetMoved(cmd: Command): string | null {
+  const fresh = buildCommands(useFleet.getState()).find((c) => c.id === cmd.id);
+  if (!fresh) return "its object is no longer listed";
+  if ((fresh.target?.uid ?? "") !== (cmd.target?.uid ?? "") || fresh.title !== cmd.title) return "its object changed while the console was open";
+  return null;
+}
 
 const LIMIT = 50;
 
@@ -211,16 +229,23 @@ export function CommandPalette() {
         }
         return;
       }
-      if (e.key === "Escape" && open) {
-        e.preventDefault();
-        close();
-      }
+    };
+    // Escape belongs to the console while it is open: the top dialog takes it
+    // in the capture phase on window, before any handler underneath (a
+    // drawer's close, a menu, a confirm) can see it.
+    const onEscape = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || !open) return;
+      e.preventDefault();
+      e.stopPropagation();
+      close();
     };
     const onOpen = () => openPalette();
     window.addEventListener("keydown", onKey);
+    window.addEventListener("keydown", onEscape, true);
     window.addEventListener(OPEN_EVENT, onOpen);
     return () => {
       window.removeEventListener("keydown", onKey);
+      window.removeEventListener("keydown", onEscape, true);
       window.removeEventListener(OPEN_EVENT, onOpen);
     };
   }, [open, close, openPalette]);
@@ -239,6 +264,8 @@ function Console({ close, besideRef }: { close: () => void; besideRef: React.Mut
   const [aside, setAside] = useState(false);
   // On open it reads buildCommands fresh - no stale index.
   const [commands, setCommands] = useState<Command[]>(() => buildCommands(useFleet.getState()));
+  const commandsRef = useRef(commands);
+  commandsRef.current = commands;
   // A second step (Choose cluster): its options replace the results; the
   // first step's query comes back with Back.
   const [step, setStep] = useState<{ title: string; options: Command[]; parentQuery: string; parentId: string } | null>(null);
@@ -265,7 +292,14 @@ function Console({ close, besideRef }: { close: () => void; besideRef: React.Mut
       // Fleet pushes arrive every few seconds; only what decides a result's
       // eligibility (membership, connection, capabilities, protection) or
       // the route rebuilds the index, so rows do not churn under the cursor.
-      if (st.route === prev.route && eligibilityKey(st.clusters) === eligibilityKey(prev.clusters)) return;
+      if (st.route === prev.route && eligibilityKey(st.clusters) === eligibilityKey(prev.clusters)) {
+        // A verb names its object: rows that arrive, or an object replaced at
+        // the same name, change the verbs - only then do the commands rebuild.
+        if (!evidenceChanged(st, prev)) return;
+        const next = buildCommands(st);
+        if (targetKey(next) !== targetKey(commandsRef.current)) setCommands(next);
+        return;
+      }
       const next = buildCommands(st);
       setCommands(next);
       setStep((cur) => {
@@ -374,7 +408,7 @@ function Console({ close, besideRef }: { close: () => void; besideRef: React.Mut
         inputRef.current?.focus();
         return;
       }
-      const why = cmd.guard?.();
+      const why = cmd.guard?.() ?? (cmd.target ? targetMoved(cmd) : null);
       if (why) { setBlocked({ id: cmd.id, why }); return; }
       // Frecency records the destination that completed, not the step.
       recordUse(cmd.id);
@@ -421,7 +455,7 @@ function Console({ close, besideRef }: { close: () => void; besideRef: React.Mut
     if (last && last.section === r.section) last.rows.push({ r, idx });
     else sections.push({ section: r.section, rows: [{ r, idx }] });
   });
-  const notes = search.data ? coverageNotes(search.data.coverage) : [];
+  const notes = search.coverage ? coverageNotes(search.coverage.coverage) : [];
   const noResults = step ? "No eligible cluster remains for this view." : query.trim() === "" ? (verbsOnly ? "No verbs for the current selection." : "Nothing recent, and nothing in the fleet needs you.") : "No matches.";
 
   return (
@@ -538,9 +572,11 @@ function Console({ close, besideRef }: { close: () => void; besideRef: React.Mut
           }}
         >
           <div data-testid="console-coverage">
-            {search.data
-              ? <>{coverageLine(search.data.searchedClusters, search.data.searchedKinds)}{notes.length > 0 && <span title={notes.join("\n")}> · {notes.slice(0, 2).join(" · ")}{notes.length > 2 ? ` · +${notes.length - 2} more` : ""}</span>}</>
-              : search.error ? `The fleet index could not be searched: ${search.error}` : "Reading the fleet index…"}
+            {search.error
+              ? `The fleet index could not be searched: ${search.error}`
+              : search.coverage
+                ? <>{coverageLine(search.coverage.searchedClusters, search.coverage.searchedKinds)}{notes.length > 0 && <span title={notes.join("\n")}> · {notes.slice(0, 2).join(" · ")}{notes.length > 2 ? ` · +${notes.length - 2} more` : ""}</span>}{search.pending && query.trim().length >= 2 && !step ? " · searching…" : ""}</>
+                : "Reading the fleet index…"}
           </div>
           <div>
             {blocked && <span role="status" style={{ color: "var(--color-text-warning)" }}>Unavailable: {blocked.why} · </span>}
