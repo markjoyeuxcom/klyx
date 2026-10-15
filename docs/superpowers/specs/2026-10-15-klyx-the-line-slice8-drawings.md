@@ -118,11 +118,13 @@ Each is Codex-reviewed on its own, in this order.
 - **Go, per-rule verdicts:** `TopologyDTO` routes gain `rules: [{index, verdict, backends}]`, from `gwapi.RouteRule`. A backend's issue is its own, so a failing backend gets a danger branch.
 - **Go, the applied-revision history** (typed, design review of 9705575):
   - **The writer:** a predicate partition modelled on 7b's, under task `units`, part `applied`, written from the Observer's Flux rows and riding the rows `LineService` already subscribes. One key per unit **UID**, fenced by incarnation and coverage like 7b, so a same-name replacement never borrows history.
-  - **The value:**
-    - a Kustomization's `status.lastAppliedRevision`;
-    - a HelmRelease's newest **deployed** history entry's recorded chart name and version, as the line's units read it (slice 3a). Never the Helm `Resource.Revision`, which can come from the newest failed snapshot.
-  - **Observed only when seen:** basis observed only for a change between two sightings of the same UID. A first sighting, an after-gap or a replacement never reads as an observed applied change.
-  - **The query:** `AppliedChange(cluster, uid)` returns the current value, its kind (Git sha or chart version), when its change was observed with the basis, and the partition's live-since.
+  - **The value is typed by the unit's source kind**, never by the revision's shape (design review of 5d6a35a):
+    - **git:** a Kustomization bound to a GitRepository whose `status.lastAppliedRevision` parses as a Git revision (`line.ParseGitRevision`);
+    - **artifact:** a Kustomization bound to an OCIRepository or a Bucket: its applied revision kept as the artifact's digest, never read as a commit even when hex-shaped;
+    - **chart:** a HelmRelease's newest **deployed** history entry's recorded chart name and version, as the line's units read it (slice 3a). Never the Helm `Resource.Revision`, which can come from the newest failed snapshot;
+    - **unknown:** anything else (no applied revision yet, an unparsable one, an unsupported source kind). Unknown is a value of its own and is never compared.
+  - **Observed only between two known values:** basis observed only when the previous and the current value are both known, of the same UID, and differ. Unknown → known is first evidence (a baseline, basis unknown). Known → unknown breaks the key's proof, and the next known value is a fresh baseline. A first sighting, an after-gap or a replacement never reads as an observed applied change.
+  - **The query:** `AppliedChange(cluster, uid)` returns the current typed value, when its change was observed with the basis, and the partition's live-since.
 - **The route's unit** comes from the route's Flux labels (`kustomize.toolkit.fluxcd.io/name` and `namespace`, else `helm.toolkit.fluxcd.io/name` and `namespace`), resolved to the unit's UID through the Observer's Flux rows. Without them, or without a single matching row, there is no revision proximity. The binding is today's labels: the sentence says the unit manages the route now and claims nothing about when it began to.
 - **The drawing** (§5.2), in order:
   1. the Gateway: listener, hostnames, attached policies;
@@ -140,7 +142,7 @@ Each is Codex-reviewed on its own, in this order.
   - **crossing:** a sample at or below 1% followed, inside one uninterrupted segment, by one above it: "first sampled crossing of 1% at <time> (1-minute rate, 30-second step)";
   - **above at first sample:** a segment's first sample (the first attributable one, or the first after a gap) is already above 1%: "already above 1% at <time>, the first sample (after a gap)". It has no crossing time;
   - **none:** no sample above 1%; **no samples:** nothing attributable.
-- **Revision proximity** names the unit: "Kustomization flux-system/apps (manages this route now): applied a1b9e3c, change observed 20:28; first sampled crossing 20:29". A HelmRelease's value reads as a chart version ("chart podinfo 6.7.1"), never as a sha.
+- **Revision proximity** names the unit: "Kustomization flux-system/apps (manages this route now): applied a1b9e3c, change observed 20:28; first sampled crossing 20:29". Each value type has its own words: a commit's short sha (git), "artifact sha256:1a2b3c4d" (artifact, never linked to Git), "chart podinfo 6.7.1" (chart).
   - **It appears only when:**
     - the onset is a witnessed crossing;
     - the applied change was observed (basis observed);
@@ -172,6 +174,7 @@ Each is Codex-reviewed on its own, in this order.
 - **8d:**
   - The topology's per-rule verdicts.
   - The applied partition: baseline, change, gap and end; keyed by UID (a same-name replacement starts afresh); the Helm value from the newest deployed entry, never a failed snapshot.
+  - The value types: a GitRepository-backed sha, an OCIRepository- and a Bucket-backed digest (hex-shaped, still an artifact), a chart, unknown. Unknown → known is a baseline, not a change; known → unknown → known re-baselines; known → known (different) is the only observed change.
   - Onset: a crossing, above at the first sample, above at the first sample after a gap, none, no samples.
   - Revision proximity shown and withheld (above at first sample, unobserved basis, too far, a coverage break, no single matching unit); the Helm wording.
   - The drawing from fixtures; captures in both themes.
