@@ -218,12 +218,19 @@ A pure `line/stationStrip.ts` derives the open cluster's strip from the DTO:
 | No DTO yet | Nothing |
 | Station read is checking | Its marks, plus "checking…" in its box |
 
-The "protected" tag is drawn beside the boxed station.
+The "protected" tag is drawn once, on the station crumb (4a); the strip's phrase says it with this station ("prd, this station, protected, differs at 9f2c11d").
 
 ### 5.3 Accessibility
 
 - **The group is labelled** "Position on the line". Its accessible text reads, for example, "dev matches; stg matches; prd, this station, differs at 9f2c11d, failing".
 - Segments are `aria-hidden`.
+
+### 5.4 As built (4c)
+
+- **Start:** `AppShell` starts the line bridge beside the summaries, so the strip is ready before any cluster opens.
+- **Placement:** the strip sits after the crumbs. A segment is 22px of track, lit in the route colour only between two "matches".
+- **Narrow windows:** the crumbs win. Below 1280px only the boxed station is drawn; below 1180px no drawing is shown. The spoken phrase always names the whole track.
+- **Labels:** a station is named by its environment, or by its cluster when two stations on the track share one. A git SHA is shortened to seven characters; a chart version is not.
 
 ## 6. The inspector (4d)
 
